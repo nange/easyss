@@ -3,7 +3,8 @@ package main
 import (
 	"log"
 	"net/http"
-	"proxy/handler"
+
+	"github.com/nange/webproxy/handler"
 )
 
 const port = ":8080"
