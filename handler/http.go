@@ -11,8 +11,6 @@ var httpClient = &http.Client{}
 func handleHttp(rw http.ResponseWriter, req *http.Request) {
 	log.Printf("host: %s, scheme: %s, path: %s, url.Host: %s", req.Host, req.URL.Scheme, req.URL.Path, req.URL.Host)
 
-	log.Println("request method:", req.Method)
-
 	req.RequestURI = ""
 
 	res, err := httpClient.Do(req)

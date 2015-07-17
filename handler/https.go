@@ -19,13 +19,13 @@ func handleHttps(rw http.ResponseWriter, req *http.Request) {
 		panic("Cannot hijack connection " + err.Error())
 	}
 
-	reqHost := req.Host
-
-	targetConn, err := net.Dial("tcp", reqHost)
+	targetConn, err := net.Dial("tcp", req.Host)
 	if err != nil {
 		if _, err := io.WriteString(rw, "HTTP/1.1 502 Bad Gateway\r\n\r\n"); err != nil {
 			log.Printf("Error responding to client: %s", err)
 		}
+		proxyConn.Close()
+		return
 	}
 
 	proxyConn.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
