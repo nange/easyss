@@ -4,7 +4,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/nange/webproxy/handler"
+	"github.com/nange/webproxy/http/handler"
 )
 
 const port = ":8080"
