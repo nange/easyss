@@ -11,6 +11,7 @@ import (
 
 const (
 	SERVER_PORT = 1080
+	SERVER_ADDR = "nange.me"
 )
 
 const (
@@ -63,6 +64,7 @@ func handleRequest(conn net.Conn) {
 		targetHost = net.IP(b[4:20]).String()
 	}
 	targetPort = strconv.Itoa(int(b[n-2])<<8 | int(b[n-1]))
+	log.Printf("targetHost:%v, targetPort:%v, b[n-2]:%v, b[n-1]:%v\n", targetHost, targetHost, b[n-2], b[n-1])
 
 	targetConn, err := net.Dial("tcp", net.JoinHostPort(targetHost, targetPort))
 	if err != nil {
@@ -71,7 +73,10 @@ func handleRequest(conn net.Conn) {
 	}
 	defer targetConn.Close()
 
-	if _, err := conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}); err != nil {
+	var succ = []byte{0x05, 0x00, 0x00, 0x03, byte(len(SERVER_ADDR))}
+	succ = append(succ, SERVER_ADDR[:]...)
+	succ = append(succ, b[n-2], b[n-1])
+	if _, err := conn.Write(succ); err != nil {
 		log.Println("client cannot arrived, err:", err.Error())
 		return
 	}
