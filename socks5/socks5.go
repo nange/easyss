@@ -64,7 +64,7 @@ func handleRequest(conn net.Conn) {
 		targetHost = net.IP(b[4:20]).String()
 	}
 	targetPort = strconv.Itoa(int(b[n-2])<<8 | int(b[n-1]))
-	log.Printf("targetHost:%v, targetPort:%v, b[n-2]:%v, b[n-1]:%v\n", targetHost, targetHost, b[n-2], b[n-1])
+	log.Printf("targetHost:%v, targetPort:%v, b[n-2]:%v, b[n-1]:%v\n", targetHost, targetPort, b[n-2], b[n-1])
 
 	targetConn, err := net.Dial("tcp", net.JoinHostPort(targetHost, targetPort))
 	if err != nil {
