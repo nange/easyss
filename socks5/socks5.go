@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -81,10 +82,11 @@ func handleRequest(conn net.Conn) {
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	l, err := net.Listen("tcp", ":1080")
+	l, err := net.Listen("tcp", fmt.Sprintf(":%d", SERVER_PORT))
 	if err != nil {
 		log.Panic(err)
 	}
+	log.Println("socks5 server listen on:", SERVER_PORT)
 
 	for {
 		conn, err := l.Accept()
