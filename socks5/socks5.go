@@ -60,7 +60,7 @@ func handleRequest(conn net.Conn) {
 	case 0x03:
 		targetHost = string(b[5 : n-2])
 	case 0x04:
-		targetHost = net.IP{b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15], b[16], b[17], b[18], b[19]}.String()
+		targetHost = net.IP(b[4:20]).String()
 	}
 	targetPort = strconv.Itoa(int(b[n-2])<<8 | int(b[n-1]))
 
