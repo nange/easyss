@@ -95,3 +95,7 @@ func FileExists(path string) (bool, error) {
 	}
 	return false, errors.WithStack(err)
 }
+
+func ConfigValid(config *Config) bool {
+
+}
