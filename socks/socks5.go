@@ -1,4 +1,4 @@
-package main
+package socks
 
 import (
 	"io"
@@ -19,7 +19,7 @@ const (
 	WRITE_DEADLINE = 2 * time.Minute
 )
 
-func handleRequest(conn net.Conn) {
+func HandleRequest(conn net.Conn) {
 	if conn == nil {
 		return
 	}

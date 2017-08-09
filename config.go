@@ -6,7 +6,6 @@ import (
 	"os"
 	"reflect"
 	"strings"
-	"time"
 
 	"github.com/pkg/errors"
 )
@@ -40,7 +39,6 @@ func ParseConfig(path string) (config *Config, err error) {
 		err = errors.WithStack(err)
 		return nil, err
 	}
-	readTimeout = time.Duration(config.Timeout) * time.Second
 	if strings.HasSuffix(strings.ToLower(config.Method), "-auth") {
 		config.Method = config.Method[:len(config.Method)-5]
 		config.Auth = true

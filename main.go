@@ -3,10 +3,13 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 
+	"github.com/nange/easyss/socks"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -22,21 +25,21 @@ func PrintVersion() {
 }
 
 func main() {
-	var configFile, cmdLocal string
-	var printVer, debug bool
+	var configFile string
+	var printVer, debug, serverModel bool
 	var cmdConfig Config
 
 	flag.BoolVar(&printVer, "version", false, "print version")
 	flag.StringVar(&configFile, "c", "config.json", "specify config file")
 	flag.StringVar(&cmdConfig.Server, "s", "", "server address")
-	flag.StringVar(&cmdLocal, "b", "", "local address, listen only to this address if specified")
 	flag.StringVar(&cmdConfig.Password, "k", "", "password")
 	flag.IntVar(&cmdConfig.ServerPort, "p", 0, "server port")
 	flag.IntVar(&cmdConfig.Timeout, "t", 300, "timeout in seconds")
-	flag.IntVar(&cmdConfig.LocalPort, "l", 0, "local socks5 proxy port")
+	flag.IntVar(&cmdConfig.LocalPort, "l", 1080, "local socks5 proxy port")
 	flag.StringVar(&cmdConfig.Method, "m", "", "encryption method, default: aes-256-cfb")
 	flag.BoolVar(&debug, "d", false, "print debug message")
 	flag.BoolVar(&cmdConfig.Auth, "A", false, "one time auth")
+	flag.BoolVar(&serverModel, "server", false, "server model")
 
 	flag.Parse()
 
@@ -80,12 +83,48 @@ func main() {
 		config.Method = "aes-256-gcm"
 	}
 
+	if serverModel {
+		if config.ServerPort == 0 || config.Password == "" {
+			log.Fatalln("server port and password should not empty")
+		}
+
+		runServer(config)
+	} else {
+		if config.Password == "" || config.Server == "" || config.ServerPort == 0 {
+			log.Fatalln("server address, server port and password should not empty")
+		}
+
+		runLocal(config)
+	}
+
+}
+
+func runLocal(config *Config) {
+	listenAddr := ":" + strconv.Itoa(config.LocalPort)
+	ln, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Infof("starting local socks5 server at %v ...\n", listenAddr)
+
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			log.Error("accept:", err)
+			continue
+		}
+		go socks.HandleRequest(conn)
+	}
+}
+
+func runServer(config *Config) {
+
 }
 
 func FileExists(path string) (bool, error) {
-	f, err := os.Stat(path)
+	fi, err := os.Stat(path)
 	if err == nil {
-		if stat.Mode()&os.ModeType == 0 {
+		if fi.Mode()&os.ModeType == 0 {
 			return true, nil
 		}
 		return false, errors.WithStack(errors.New(path + " exists but is not regular file"))
@@ -94,8 +133,4 @@ func FileExists(path string) (bool, error) {
 		return false, nil
 	}
 	return false, errors.WithStack(err)
-}
-
-func ConfigValid(config *Config) bool {
-
 }
