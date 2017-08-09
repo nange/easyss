@@ -11,7 +11,7 @@ import (
 
 const (
 	SERVER_PORT = 1080
-	SERVER_ADDR = "nange.me"
+	SERVER_ADDR = ""
 )
 
 const (
