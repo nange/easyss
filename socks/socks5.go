@@ -19,13 +19,15 @@ const (
 	WRITE_DEADLINE = 2 * time.Minute
 )
 
+func handShake(conn net.Conn) error {
+	buf := make([]byte, 258)
+
+}
+
 func HandleRequest(conn net.Conn) {
-	if conn == nil {
-		return
-	}
 	defer conn.Close()
-	conn.SetReadDeadline(time.Now().Add(READ_DEADLINE))
-	conn.SetWriteDeadline(time.Now().Add(WRITE_DEADLINE))
+	conn.(*net.TCPConn).SetKeepAlive(true)
+	handShake(conn)
 
 	var b [1024]byte
 	if _, err := conn.Read(b[:]); err != nil {
