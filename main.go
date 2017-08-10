@@ -8,6 +8,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nange/easyss/socks"
 	"github.com/pkg/errors"
@@ -88,18 +89,18 @@ func main() {
 			log.Fatalln("server port and password should not empty")
 		}
 
-		runServer(config)
+		serverTCP(config)
 	} else {
 		if config.Password == "" || config.Server == "" || config.ServerPort == 0 {
 			log.Fatalln("server address, server port and password should not empty")
 		}
 
-		runLocal(config)
+		localTCP(config)
 	}
 
 }
 
-func runLocal(config *Config) {
+func localTCP(config *Config) {
 	listenAddr := ":" + strconv.Itoa(config.LocalPort)
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
@@ -113,11 +114,14 @@ func runLocal(config *Config) {
 			log.Error("accept:", err)
 			continue
 		}
-		go socks.HandleRequest(conn)
+		conn.(*net.TCPConn).SetKeepAlive(true)
+		conn.(*net.TCPConn).SetKeepAlivePeriod(30 * time.Second)
+
+		go socks.HandleConnection(conn)
 	}
 }
 
-func runServer(config *Config) {
+func serverTCP(config *Config) {
 
 }
 

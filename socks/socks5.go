@@ -4,85 +4,162 @@ import (
 	"io"
 	"net"
 	"strconv"
-	"time"
 
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
+// SOCKS request commands as defined in RFC 1928 section 4
 const (
-	SERVER_PORT = 1080
-	SERVER_ADDR = ""
+	CmdConnect      = 1
+	CmdBind         = 2
+	CmdUDPAssociate = 3
 )
 
+// SOCKS address types as defined in RFC 1928 section 5.
 const (
-	READ_DEADLINE  = time.Minute
-	WRITE_DEADLINE = 2 * time.Minute
+	AtypIPv4       = 1
+	AtypDomainName = 3
+	AtypIPv6       = 4
 )
 
-func handShake(conn net.Conn) error {
-	buf := make([]byte, 258)
+type SocksError int
 
+func (se SocksError) Error() string {
+	return ""
 }
 
-func HandleRequest(conn net.Conn) {
-	defer conn.Close()
-	conn.(*net.TCPConn).SetKeepAlive(true)
-	handShake(conn)
+// SOCKS errors as defined in RFC 1928 section 6
+const (
+	ErrGeneralFailure SocksError = iota + 1
+	ErrConnectionNotAllowed
+	ErrNetworkUnreachable
+	ErrHostUnreachable
+	ErrConnectionRefused
+	ErrTTLExpired
+	ErrCommandNotSupported
+	ErrAddressNotSupported
+)
 
-	var b [1024]byte
-	if _, err := conn.Read(b[:]); err != nil {
-		log.Println("conn read err:", err.Error())
-		return
+// MaxAddrLen is the max size of SOCKS address in bytes:
+// ATYP(1) + DST.ADDR(1 + 253) + DST.PORT(2)
+const MaxAddrLen = 1 + 1 + 253 + 2
+
+// Addr represents a SOCKS address as defined in RFC 1928 section 5.
+type Addr []byte
+
+// String serializes SOCKS address a to string form.
+func (a Addr) String() string {
+	var host, port string
+
+	switch a[0] { // address type
+	case AtypDomainName:
+		host = string(a[2 : 2+int(a[1])])
+		port = strconv.Itoa((int(a[2+int(a[1])]) << 8) | int(a[2+int(a[1])+1]))
+	case AtypIPv4:
+		host = net.IP(a[1 : 1+net.IPv4len]).String()
+		port = strconv.Itoa((int(a[1+net.IPv4len]) << 8) | int(a[1+net.IPv4len+1]))
+	case AtypIPv6:
+		host = net.IP(a[1 : 1+net.IPv6len]).String()
+		port = strconv.Itoa((int(a[1+net.IPv6len]) << 8) | int(a[1+net.IPv6len+1]))
+	}
+
+	return net.JoinHostPort(host, port)
+}
+
+func handShake(conn net.Conn) (Addr, error) {
+	buf := make([]byte, MaxAddrLen)
+
+	// read VER, NMETHODS, METHODS
+	if _, err := io.ReadFull(conn, buf[:2]); err != nil {
+		return nil, errors.WithStack(err)
 	}
 
 	// only handle socks5 protocol
-	if b[0] != 0x05 {
-		log.Println("server do not support client version:", b[0])
-		return
+	if buf[0] != 0x05 {
+		log.Error("server do not support client version:", buf[0])
+		return nil, errors.WithStack(errors.New("socks version is unsupported"))
 	}
 
+	nmethods := buf[1]
+	if _, err := io.ReadFull(conn, buf[:nmethods]); err != nil {
+		log.Errorf("read methods err: %v, nmethods: %v", err, nmethods)
+		return nil, errors.WithStack(err)
+	}
+
+	// reply: use socks5 and no authentication required
 	if _, err := conn.Write([]byte{0x05, 0x00}); err != nil {
-		log.Println("client cannot arrived, err:", err.Error())
-		return
+		return nil, errors.WithStack(err)
 	}
 
-	n, err := conn.Read(b[:])
+	// read VER CMD RSV ATYP DST.ADDR DST.PORT
+	if _, err := io.ReadFull(conn, buf[:3]); err != nil {
+		return nil, errors.WithStack(err)
+	}
+	if buf[1] != CmdConnect {
+		return nil, ErrCommandNotSupported
+	}
+
+	addr, err := readAddr(conn, buf)
 	if err != nil {
-		log.Println("conn read err:", err.Error())
-		return
-	}
-	if b[0] != 0x05 || b[1] != 0x01 || b[2] != 0x00 {
-		log.Println("client cmd param is not supported:", b[0], b[1], b[2])
-		return
+		return nil, errors.WithStack(err)
 	}
 
-	var targetHost, targetPort string
-	switch b[3] {
-	case 0x01: // ipv4
-		targetHost = net.IPv4(b[4], b[5], b[6], b[7]).String()
-	case 0x03:
-		targetHost = string(b[5 : n-2])
-	case 0x04:
-		targetHost = net.IP(b[4:20]).String()
-	}
-	targetPort = strconv.Itoa(int(b[n-2])<<8 | int(b[n-1]))
-	log.Printf("targetHost:%v, targetPort:%v, b[n-2]:%v, b[n-1]:%v\n", targetHost, targetPort, b[n-2], b[n-1])
+	// write VER REP RSV ATYP BND.ADDR BND.PORT
+	_, err = conn.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
 
-	targetConn, err := net.Dial("tcp", net.JoinHostPort(targetHost, targetPort))
+	return addr, err
+}
+
+func readAddr(r io.Reader, buf []byte) (Addr, error) {
+	if len(buf) < MaxAddrLen {
+		return nil, errors.WithStack(io.ErrShortBuffer)
+	}
+
+	// read atyp(1 byte): address type of following address
+	_, err := io.ReadFull(r, buf[:1])
 	if err != nil {
-		log.Printf("net dial host:%v, port:%v, err:%v\n", targetHost, targetPort, err)
-		return
-	}
-	defer targetConn.Close()
-
-	var succ = []byte{0x05, 0x00, 0x00, 0x03, byte(len(SERVER_ADDR))}
-	succ = append(succ, SERVER_ADDR[:]...)
-	succ = append(succ, b[n-2], b[n-1])
-	if _, err := conn.Write(succ); err != nil {
-		log.Println("client cannot arrived, err:", err.Error())
-		return
+		return nil, errors.WithStack(err)
 	}
 
-	go io.Copy(targetConn, conn)
-	io.Copy(conn, targetConn)
+	switch buf[0] {
+	case AtypDomainName:
+		// 2nd byte represents domain length
+		_, err = io.ReadFull(r, buf[1:2])
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+
+		_, err = io.ReadFull(r, buf[2:2+int(buf[1])+2])
+		return buf[:1+1+int(buf[1])+2], errors.WithStack(err)
+
+	case AtypIPv4:
+		_, err = io.ReadFull(r, buf[1:1+net.IPv4len+2])
+		return buf[:1+net.IPv4len+2], errors.WithStack(err)
+
+	case AtypIPv6:
+		_, err = io.ReadFull(r, buf[1:1+net.IPv6len+2])
+		return buf[:1+net.IPv6len+2], errors.WithStack(err)
+	}
+
+	return nil, errors.WithStack(ErrAddressNotSupported)
+}
+
+func HandleConnection(conn net.Conn) {
+	defer conn.Close()
+
+	addr, err := handShake(conn)
+	if err != nil {
+		log.Errorf("handshake err:%+v", err)
+		return
+	}
+
+	log.Infof("connecting to:%v", addr.String())
+
+	_, err = conn.Write([]byte{5, 0, 0, addr[0], 0, 0, 0, 0, 0, 0})
+	if err != nil {
+		log.Errorf("conn write err:%v", err)
+		return
+	}
+
 }
