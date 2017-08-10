@@ -1,0 +1,8 @@
+{
+    "server":"",
+    "server_port":8338,
+    "local_port":1080,
+    "password":"barfoo!",
+    "method": "aes-128-cfb",
+    "timeout":600
+}

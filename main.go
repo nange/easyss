@@ -106,7 +106,7 @@ func localTCP(config *Config) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Infof("starting local socks5 server at %v ...\n", listenAddr)
+	log.Infof("starting local socks5 server at %v ...", listenAddr)
 
 	for {
 		conn, err := ln.Accept()
@@ -118,6 +118,19 @@ func localTCP(config *Config) {
 		conn.(*net.TCPConn).SetKeepAlivePeriod(30 * time.Second)
 
 		go socks.HandleConnection(conn)
+
+		go func() {
+			rconn, err := net.Dial("tcp", config.Server+":"+strconv.Itoa(config.ServerPort))
+			if err != nil {
+				log.Error("net.Dial err:%v, server:%v, port:%v", err, config.Server, config.ServerPort)
+				return
+			}
+			defer rconn.Close()
+
+			conn.(*net.TCPConn).SetKeepAlive(true)
+			conn.(*net.TCPConn).SetKeepAlivePeriod(30 * time.Second)
+		}()
+
 	}
 }
 

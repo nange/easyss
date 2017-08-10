@@ -106,7 +106,7 @@ func handShake(conn net.Conn) (Addr, error) {
 	}
 
 	// write VER REP RSV ATYP BND.ADDR BND.PORT
-	_, err = conn.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+	_, err = conn.Write([]byte{5, 0, 0, addr[0], 0, 0, 0, 0, 0, 0})
 
 	return addr, err
 }
@@ -117,28 +117,26 @@ func readAddr(r io.Reader, buf []byte) (Addr, error) {
 	}
 
 	// read atyp(1 byte): address type of following address
-	_, err := io.ReadFull(r, buf[:1])
-	if err != nil {
+	if _, err := io.ReadFull(r, buf[:1]); err != nil {
 		return nil, errors.WithStack(err)
 	}
 
 	switch buf[0] {
 	case AtypDomainName:
 		// 2nd byte represents domain length
-		_, err = io.ReadFull(r, buf[1:2])
-		if err != nil {
+		if _, err := io.ReadFull(r, buf[1:2]); err != nil {
 			return nil, errors.WithStack(err)
 		}
 
-		_, err = io.ReadFull(r, buf[2:2+int(buf[1])+2])
+		_, err := io.ReadFull(r, buf[2:2+int(buf[1])+2])
 		return buf[:1+1+int(buf[1])+2], errors.WithStack(err)
 
 	case AtypIPv4:
-		_, err = io.ReadFull(r, buf[1:1+net.IPv4len+2])
+		_, err := io.ReadFull(r, buf[1:1+net.IPv4len+2])
 		return buf[:1+net.IPv4len+2], errors.WithStack(err)
 
 	case AtypIPv6:
-		_, err = io.ReadFull(r, buf[1:1+net.IPv6len+2])
+		_, err := io.ReadFull(r, buf[1:1+net.IPv6len+2])
 		return buf[:1+net.IPv6len+2], errors.WithStack(err)
 	}
 
@@ -155,11 +153,5 @@ func HandleConnection(conn net.Conn) {
 	}
 
 	log.Infof("connecting to:%v", addr.String())
-
-	_, err = conn.Write([]byte{5, 0, 0, addr[0], 0, 0, 0, 0, 0, 0})
-	if err != nil {
-		log.Errorf("conn write err:%v", err)
-		return
-	}
 
 }
