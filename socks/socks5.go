@@ -25,8 +25,22 @@ const (
 
 type SocksError int
 
+var errMap = map[SocksError]string{
+	ErrGeneralFailure:       "general SOCKS server failure(01)",
+	ErrConnectionNotAllowed: "connection not allowed by ruleset(02)",
+	ErrNetworkUnreachable:   "Network unreachable(03)",
+	ErrHostUnreachable:      "Host unreachable(04)",
+	ErrConnectionRefused:    "Connection refused(05)",
+	ErrTTLExpired:           "TTL expired(06)",
+	ErrCommandNotSupported:  "Command not supported(07)",
+	ErrAddressNotSupported:  "Address type not supported(08)",
+}
+
 func (se SocksError) Error() string {
-	return ""
+	if str, ok := errMap[se]; ok {
+		return str
+	}
+	return "unkonow error"
 }
 
 // SOCKS errors as defined in RFC 1928 section 6
@@ -78,7 +92,7 @@ func handShake(conn net.Conn) (Addr, error) {
 	// only handle socks5 protocol
 	if buf[0] != 0x05 {
 		log.Error("server do not support client version:", buf[0])
-		return nil, errors.WithStack(errors.New("socks version is unsupported"))
+		return nil, errors.WithStack(ErrCommandNotSupported)
 	}
 
 	nmethods := buf[1]
@@ -97,7 +111,7 @@ func handShake(conn net.Conn) (Addr, error) {
 		return nil, errors.WithStack(err)
 	}
 	if buf[1] != CmdConnect {
-		return nil, ErrCommandNotSupported
+		return nil, errors.WithStack(ErrCommandNotSupported)
 	}
 
 	addr, err := readAddr(conn, buf)
