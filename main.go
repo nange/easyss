@@ -117,9 +117,14 @@ func localTCP(config *Config) {
 		conn.(*net.TCPConn).SetKeepAlive(true)
 		conn.(*net.TCPConn).SetKeepAlivePeriod(30 * time.Second)
 
-		go socks.HandleConnection(conn)
-
 		go func() {
+			defer conn.Close()
+
+			addr, err := socks.HandShake(conn)
+			if err != nil {
+				log.Errorf("local handshake err:%+v, remote:%v", err, addr)
+				return
+			}
 			rconn, err := net.Dial("tcp", config.Server+":"+strconv.Itoa(config.ServerPort))
 			if err != nil {
 				log.Error("net.Dial err:%v, server:%v, port:%v", err, config.Server, config.ServerPort)

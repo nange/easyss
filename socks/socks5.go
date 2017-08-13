@@ -81,7 +81,7 @@ func (a Addr) String() string {
 	return net.JoinHostPort(host, port)
 }
 
-func handShake(conn net.Conn) (Addr, error) {
+func HandShake(conn net.Conn) (Addr, error) {
 	buf := make([]byte, MaxAddrLen)
 
 	// read VER, NMETHODS, METHODS
@@ -155,17 +155,4 @@ func readAddr(r io.Reader, buf []byte) (Addr, error) {
 	}
 
 	return nil, errors.WithStack(ErrAddressNotSupported)
-}
-
-func HandleConnection(conn net.Conn) {
-	defer conn.Close()
-
-	addr, err := handShake(conn)
-	if err != nil {
-		log.Errorf("handshake err:%+v", err)
-		return
-	}
-
-	log.Infof("connecting to:%v", addr.String())
-
 }
