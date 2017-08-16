@@ -15,6 +15,12 @@
 
 [[projects]]
   branch = "master"
+  name = "golang.org/x/crypto"
+  packages = ["pbkdf2"]
+  revision = "b176d7def5d71bdd214203491f89843ed217f420"
+
+[[projects]]
+  branch = "master"
   name = "golang.org/x/sys"
   packages = ["unix"]
   revision = "7a4fde3fda8ef580a89dbae8138c26041be14299"

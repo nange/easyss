@@ -4,6 +4,6 @@ import (
 	"net"
 )
 
-type CipherStreamConn struct {
+type CipherStream struct {
 	net.Conn
 }
