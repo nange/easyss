@@ -21,6 +21,16 @@ func NewGCMKey(password []byte) *[32]byte {
 	return &key
 }
 
+func NewGCM(password []byte) (cipher.AEAD, err) {
+	key := NewGCMKey(password)
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, err
+	}
+
+	return cipher.NewGCM(block)
+}
+
 // GCMEncrypt encrypts data using 256-bit AES-GCM.  This both hides the content of
 // the data and provides a check that it hasn't been altered. Output takes the
 // form nonce|ciphertext|tag where '|' indicates concatenation.
