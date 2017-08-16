@@ -7,10 +7,10 @@ import (
 	"os"
 	"path"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/nange/easyss/socks"
+	"github.com/nange/easyss/utils"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -39,7 +39,6 @@ func main() {
 	flag.IntVar(&cmdConfig.LocalPort, "l", 1080, "local socks5 proxy port")
 	flag.StringVar(&cmdConfig.Method, "m", "", "encryption method, default: aes-256-cfb")
 	flag.BoolVar(&debug, "d", false, "print debug message")
-	flag.BoolVar(&cmdConfig.Auth, "A", false, "one time auth")
 	flag.BoolVar(&serverModel, "server", false, "server model")
 
 	flag.Parse()
@@ -53,13 +52,7 @@ func main() {
 		log.SetLevel(log.DebugLevel)
 	}
 
-	if strings.HasSuffix(cmdConfig.Method, "-auth") {
-		log.Debugln("use one time auth")
-		cmdConfig.Method = cmdConfig.Method[:len(cmdConfig.Method)-5]
-		cmdConfig.Auth = true
-	}
-
-	exists, err := FileExists(configFile)
+	exists, err := utils.FileExists(configFile)
 	if !exists || err != nil {
 		log.Debugf("config file err:%v", err)
 
@@ -141,18 +134,4 @@ func localTCP(config *Config) {
 
 func serverTCP(config *Config) {
 
-}
-
-func FileExists(path string) (bool, error) {
-	fi, err := os.Stat(path)
-	if err == nil {
-		if fi.Mode()&os.ModeType == 0 {
-			return true, nil
-		}
-		return false, errors.WithStack(errors.New(path + " exists but is not regular file"))
-	}
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	return false, errors.WithStack(err)
 }

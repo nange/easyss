@@ -5,7 +5,6 @@ import (
 	"io/ioutil"
 	"os"
 	"reflect"
-	"strings"
 
 	"github.com/pkg/errors"
 )
@@ -16,7 +15,6 @@ type Config struct {
 	LocalPort  int    `json:"local_port"`
 	Password   string `json:"password"`
 	Method     string `json:"method"` // encryption method
-	Auth       bool   `json:"auth"`   // one time auth
 	Timeout    int    `json:"timeout"`
 }
 
@@ -39,10 +37,7 @@ func ParseConfig(path string) (config *Config, err error) {
 		err = errors.WithStack(err)
 		return nil, err
 	}
-	if strings.HasSuffix(strings.ToLower(config.Method), "-auth") {
-		config.Method = config.Method[:len(config.Method)-5]
-		config.Auth = true
-	}
+
 	return
 }
 
