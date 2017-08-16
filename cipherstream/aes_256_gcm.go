@@ -11,8 +11,12 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 )
 
-// NewGCMKey generates a random 256-bit key for GCMEncrypt() and GCMDecrypt()
-func NewGCMKey(password []byte) *[32]byte {
+type Aes256GCM struct {
+	aead cipher.AEAD
+}
+
+// aes256GCMKey generates a random 256-bit key for GCMEncrypt() and GCMDecrypt()
+func aes256GCMKey(password []byte) *[32]byte {
 	key := [32]byte{}
 
 	enkey := pbkdf2.Key(password, "easyss-subkey", 4096, 32, sha256.New)
@@ -21,60 +25,46 @@ func NewGCMKey(password []byte) *[32]byte {
 	return &key
 }
 
-func NewGCM(password []byte) (cipher.AEAD, err) {
-	key := NewGCMKey(password)
+// NewAes256GCM creates a aes-gcm AEAD instance
+func NewAes256GCM(password []byte) (*Aes256GCM, err) {
+	key := aes256GCMKey(password)
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
 		return nil, err
 	}
 
-	return cipher.NewGCM(block)
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Aes256GCM{aead: aead}, nil
 }
 
-// GCMEncrypt encrypts data using 256-bit AES-GCM.  This both hides the content of
+// Encrypt encrypts data using 256-bit AES-GCM.  This both hides the content of
 // the data and provides a check that it hasn't been altered. Output takes the
 // form nonce|ciphertext|tag where '|' indicates concatenation.
-func GCMEncrypt(plaintext []byte, key *[32]byte) (ciphertext []byte, err error) {
-	block, err := aes.NewCipher(key[:])
-	if err != nil {
-		return nil, err
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-
-	nonce := make([]byte, gcm.NonceSize())
+func (aes *Aes256GCM) Encrypt(plaintext []byte) (ciphertext []byte, err error) {
+	nonce := make([]byte, aes.aead.NonceSize())
 	_, err = io.ReadFull(rand.Reader, nonce)
 	if err != nil {
 		return nil, err
 	}
 
-	return gcm.Seal(nonce, nonce, plaintext, nil), nil
+	return aes.aead.Seal(nonce, nonce, plaintext, nil), nil
 }
 
-// GCMDecrypt decrypts data using 256-bit AES-GCM.  This both hides the content of
+// Decrypt decrypts data using 256-bit AES-GCM.  This both hides the content of
 // the data and provides a check that it hasn't been altered. Expects input
 // form nonce|ciphertext|tag where '|' indicates concatenation.
-func GCMDecrypt(ciphertext []byte, key *[32]byte) (plaintext []byte, err error) {
-	block, err := aes.NewCipher(key[:])
-	if err != nil {
-		return nil, err
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(ciphertext) < gcm.NonceSize() {
+func (aes *Aes256GCM) Decrypt(ciphertext []byte) (plaintext []byte, err error) {
+	if len(ciphertext) < aes.aead.NonceSize() {
 		return nil, errors.New("malformed ciphertext")
 	}
 
-	return gcm.Open(nil,
-		ciphertext[:gcm.NonceSize()],
-		ciphertext[gcm.NonceSize():],
+	return aes.aead.Open(nil,
+		ciphertext[:aes.aead.NonceSize()],
+		ciphertext[aes.aead.NonceSize():],
 		nil,
 	)
 }
