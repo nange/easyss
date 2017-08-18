@@ -1,7 +1,6 @@
 package cipherstream
 
 import (
-	"crypto/cipher"
 	"net"
 
 	"github.com/pkg/errors"
