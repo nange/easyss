@@ -1,11 +1,15 @@
 package main
 
 import (
+	"io"
 	"net"
 	"strconv"
 	"time"
 
 	"github.com/nange/easyss/cipherstream"
+	"github.com/nange/easyss/socks"
+	"github.com/nange/easyss/utils"
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -36,7 +40,26 @@ func tcpRemote(config *Config) {
 			}
 
 			buf := make([]byte, 3+1+1+4+1+257+gcm.NonceSize()+gcm.Overhead())
-			conn.Read(buf)
+			_, err = io.ReadFull(conn, buf)
+			if err != nil {
+				log.Errorf("io.ReadFull err:%+v", errors.WithStack(err))
+				return
+			}
+
+			dataframe, err := gcm.Decrypt(buf)
+			if err != nil {
+				log.Errorf("gcm.Decrypt err:%+v", err)
+				return
+			}
+
+			addrbytes, err := utils.GetAddrFromHTTP2DataFrame(dataframe)
+			if err != nil {
+				log.Errorf("utils.GetAddrFromHTTP2DataFrame err:%+v", err)
+				return
+			}
+
+			addr := socks.Addr(addrbytes)
+			log.Info("target addr is:%v", addr.String())
 
 		}()
 
