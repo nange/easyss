@@ -21,7 +21,11 @@ func New(conn net.Conn, password, method string) (net.Conn, error) {
 
 	switch method {
 	case "aes-256-gcm":
-		cs.Cipher = NewAes256GCM([]byte(password))
+		var err error
+		cs.Cipher, err = NewAes256GCM([]byte(password))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	default:
 		return nil, errors.WithStack(errors.New("cipher method unsupported, method:" + method))
 	}
@@ -31,8 +35,10 @@ func New(conn net.Conn, password, method string) (net.Conn, error) {
 
 func (cs *CipherStream) Write(b []byte) (int, error) {
 
+	return 0, nil
 }
 
 func (cs *CipherStream) Read(b []byte) (int, error) {
 
+	return 0, nil
 }

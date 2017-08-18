@@ -3,13 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"path"
-	"strconv"
-	"time"
 
-	"github.com/nange/easyss/socks"
 	"github.com/nange/easyss/utils"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -82,56 +78,13 @@ func main() {
 			log.Fatalln("server port and password should not empty")
 		}
 
-		serverTCP(config)
+		tcpRemote(config)
 	} else {
 		if config.Password == "" || config.Server == "" || config.ServerPort == 0 {
 			log.Fatalln("server address, server port and password should not empty")
 		}
 
-		localTCP(config)
+		tcpLocal(config)
 	}
-
-}
-
-func localTCP(config *Config) {
-	listenAddr := ":" + strconv.Itoa(config.LocalPort)
-	ln, err := net.Listen("tcp", listenAddr)
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Infof("starting local socks5 server at %v ...", listenAddr)
-
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			log.Error("accept:", err)
-			continue
-		}
-		conn.(*net.TCPConn).SetKeepAlive(true)
-		conn.(*net.TCPConn).SetKeepAlivePeriod(30 * time.Second)
-
-		go func() {
-			defer conn.Close()
-
-			addr, err := socks.HandShake(conn)
-			if err != nil {
-				log.Errorf("local handshake err:%+v, remote:%v", err, addr)
-				return
-			}
-			rconn, err := net.Dial("tcp", config.Server+":"+strconv.Itoa(config.ServerPort))
-			if err != nil {
-				log.Error("net.Dial err:%v, server:%v, port:%v", err, config.Server, config.ServerPort)
-				return
-			}
-			defer rconn.Close()
-
-			conn.(*net.TCPConn).SetKeepAlive(true)
-			conn.(*net.TCPConn).SetKeepAlivePeriod(30 * time.Second)
-		}()
-
-	}
-}
-
-func serverTCP(config *Config) {
 
 }

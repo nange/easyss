@@ -14,7 +14,8 @@ const maxaddr = 257
 
 func NewHTTP2DataFrame(data []byte) []byte {
 	// max http2 dataframe: 3 + 1 + 1 + 4 + 1 + 257)
-	frame := make([]byte, 3+1+1+4+1+maxaddr)
+	const maxframelen = 3 + 1 + 1 + 4 + 1 + maxaddr
+	frame := make([]byte, maxframelen)
 
 	datalen := len(data)
 	paddinglen := maxaddr - datalen
