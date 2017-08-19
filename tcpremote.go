@@ -59,7 +59,7 @@ func tcpRemote(config *Config) {
 			}
 
 			addr := socks.Addr(addrbytes).String()
-			log.Info("target addr is:%v", addr)
+			log.Infof("target addr is:%v", addr)
 
 			tconn, err := net.Dial("tcp", addr)
 			if err != nil {
@@ -77,10 +77,10 @@ func tcpRemote(config *Config) {
 
 			go func() {
 				n, err := io.Copy(csConn, tconn)
-				log.Info("reciveve %v bytes from %v, err:%v", n, addr, err)
+				log.Warnf("reciveve %v bytes from %v, err:%v", n, addr, err)
 			}()
 			n, err := io.Copy(tconn, csConn)
-			log.Info("send %v bytes to %v, err:%v", n, addr, err)
+			log.Warnf("send %v bytes to %v, err:%v", n, addr, err)
 		}()
 
 	}
