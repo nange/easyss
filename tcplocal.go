@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"net"
 	"strconv"
 	"time"
@@ -70,6 +71,20 @@ func tcpLocal(config *Config) {
 				log.Errorf("rconn.Write err:%+v", errors.WithStack(err))
 				return
 			}
+
+			csConn, err := cipherstream.New(rconn, config.Password, config.Method)
+			if err != nil {
+				log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
+					err, config.Password, config.Method)
+				return
+			}
+
+			go func() {
+				n, err := io.Copy(conn, csConn)
+				log.Info("reciveve %v bytes from %v, err:%v", n, addr.String(), err)
+			}()
+			n, err := io.Copy(csConn, conn)
+			log.Info("send %v bytes to %v, err:%v", n, addr.String(), err)
 		}()
 
 	}

@@ -48,7 +48,7 @@ func (cs *CipherStream) Write(b []byte) (int, error) {
 				return 0, errors.WithStack(err)
 			}
 
-			_, err = cs.Conn.Write(ciphertxt)
+			n, err = cs.Conn.Write(ciphertxt)
 			if err != nil {
 				return 0, errors.WithStack(err)
 			}
@@ -64,6 +64,26 @@ func (cs *CipherStream) Write(b []byte) (int, error) {
 }
 
 func (cs *CipherStream) Read(b []byte) (int, error) {
+	wb := bytes.NewBuffer(b)
+	buf := make([]byte, bufSize)
+	total := 0
+	for {
+		n, err := cs.Conn.Read(buf)
+		if n > 0 {
+			plaintxt, err := cs.Decrypt(buf[:n])
+			if err != nil {
+				return 0, errors.WithStack(err)
+			}
+			n, err = wb.Write(plaintxt)
+			if err != nil {
+				return 0, errors.WithStack(err)
+			}
+			total += n
+		}
+		if err != nil {
+			return total, errors.WithStack(err)
+		}
+	}
 
-	return 0, nil
+	return total, nil
 }

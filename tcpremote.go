@@ -58,9 +58,29 @@ func tcpRemote(config *Config) {
 				return
 			}
 
-			addr := socks.Addr(addrbytes)
-			log.Info("target addr is:%v", addr.String())
+			addr := socks.Addr(addrbytes).String()
+			log.Info("target addr is:%v", addr)
 
+			tconn, err := net.Dial("tcp", addr)
+			if err != nil {
+				log.Errorf("net.Dial %v err:%v", addr, err)
+				return
+			}
+			defer tconn.Close()
+
+			csConn, err := cipherstream.New(conn, config.Password, config.Method)
+			if err != nil {
+				log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
+					err, config.Password, config.Method)
+				return
+			}
+
+			go func() {
+				n, err := io.Copy(csConn, tconn)
+				log.Info("reciveve %v bytes from %v, err:%v", n, addr, err)
+			}()
+			n, err := io.Copy(tconn, csConn)
+			log.Info("send %v bytes to %v, err:%v", n, addr, err)
 		}()
 
 	}
