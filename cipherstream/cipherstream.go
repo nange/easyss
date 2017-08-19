@@ -1,10 +1,13 @@
 package cipherstream
 
 import (
+	"bytes"
 	"net"
 
 	"github.com/pkg/errors"
 )
+
+const bufSize = 512
 
 type CipherStream struct {
 	net.Conn
@@ -34,8 +37,30 @@ func New(conn net.Conn, password, method string) (net.Conn, error) {
 }
 
 func (cs *CipherStream) Write(b []byte) (int, error) {
+	buf := make([]byte, bufSize)
+	total := 0
+	r := bytes.NewReader(b)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			ciphertxt, err := cs.Encrypt(buf[:n])
+			if err != nil {
+				return 0, errors.WithStack(err)
+			}
 
-	return 0, nil
+			_, err = cs.Conn.Write(ciphertxt)
+			if err != nil {
+				return 0, errors.WithStack(err)
+			}
+
+			total += n
+		}
+		if err != nil {
+			return total, errors.WithStack(err)
+		}
+	}
+
+	return total, nil
 }
 
 func (cs *CipherStream) Read(b []byte) (int, error) {

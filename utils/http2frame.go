@@ -6,7 +6,6 @@ import (
 	"math/rand"
 
 	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
 )
 
 // max addr: see socks5.go define
@@ -59,8 +58,7 @@ func GetAddrFromHTTP2DataFrame(frame []byte) ([]byte, error) {
 		paddinglen = int(frame[9])
 	}
 
-	identifier := binary.BigEndian.Uint32(frame[5:9])
-
+	//	identifier := binary.BigEndian.Uint32(frame[5:9])
 	if padding {
 		return frame[10 : len(frame)-paddinglen], nil
 	}
