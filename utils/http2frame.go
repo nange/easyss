@@ -60,10 +60,9 @@ func GetAddrFromHTTP2DataFrame(frame []byte) ([]byte, error) {
 	}
 
 	identifier := binary.BigEndian.Uint32(frame[5:9])
-	log.Debugf("http2 data frame identifier: %v", identifier)
 
 	if padding {
-		return frame[10 : length-paddinglen], nil
+		return frame[10 : len(frame)-paddinglen], nil
 	}
 
 	return frame[9:length], nil

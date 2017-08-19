@@ -18,7 +18,8 @@ func tcpLocal(config *Config) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Infof("starting local socks5 server at %v ...", listenAddr)
+	log.Infof("starting local socks5 server at %v", listenAddr)
+	log.Debugf("config:%v", *config)
 
 	for {
 		conn, err := ln.Accept()
@@ -37,9 +38,11 @@ func tcpLocal(config *Config) {
 				log.Errorf("local handshake err:%+v, remote:%v", err, addr)
 				return
 			}
+			log.Debugf("target addr:%v", addr.String())
+
 			rconn, err := net.Dial("tcp", config.Server+":"+strconv.Itoa(config.ServerPort))
 			if err != nil {
-				log.Error("net.Dial err:%v, server:%v, port:%v", err, config.Server, config.ServerPort)
+				log.Errorf("net.Dial err:%v, server:%v, port:%v", errors.WithStack(err), config.Server, config.ServerPort)
 				return
 			}
 			defer rconn.Close()
@@ -48,6 +51,7 @@ func tcpLocal(config *Config) {
 			rconn.(*net.TCPConn).SetKeepAlivePeriod(30 * time.Second)
 
 			dataframe := utils.NewHTTP2DataFrame(addr)
+			log.Debugf("dataframe:%v, len:%v", dataframe, len(dataframe))
 
 			gcm, err := cipherstream.NewAes256GCM([]byte(config.Password))
 			if err != nil {
