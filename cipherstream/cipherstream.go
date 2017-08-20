@@ -67,10 +67,10 @@ func (cs *CipherStream) Write(b []byte) (int, error) {
 
 func (cs *CipherStream) Read(b []byte) (int, error) {
 	wb := bytes.NewBuffer(b)
-	buf := make([]byte, bufSize)
+	buf := make([]byte, bufSize+cs.NonceSize()+cs.Overhead())
 	total := 0
 	for {
-		n, err := cs.Conn.Read(buf + cs.NonceSize() + cs.Overhead())
+		n, err := cs.Conn.Read(buf)
 		if n > 0 {
 			plaintxt, err := cs.Decrypt(buf[:n])
 			if err != nil {
