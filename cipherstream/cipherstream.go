@@ -40,6 +40,7 @@ func New(conn net.Conn, password, method string) (net.Conn, error) {
 }
 
 func (cs *CipherStream) Write(b []byte) (int, error) {
+	log.Debugf("CipherStream Write b:%v, len:%v", b, len(b))
 	buf := make([]byte, bufSize)
 	total := 0
 	r := bytes.NewReader(b)
@@ -70,6 +71,7 @@ func (cs *CipherStream) Write(b []byte) (int, error) {
 }
 
 func (cs *CipherStream) Read(b []byte) (int, error) {
+	log.Debugf("CipherStream Read b len:%v", len(b))
 	wb := bytes.NewBuffer(b)
 	buf := make([]byte, bufSize+cs.NonceSize()+cs.Overhead())
 	total := 0

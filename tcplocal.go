@@ -52,7 +52,7 @@ func tcpLocal(config *Config) {
 			rconn.(*net.TCPConn).SetKeepAlivePeriod(30 * time.Second)
 
 			dataframe := utils.NewHTTP2DataFrame(addr)
-			log.Debugf("dataframe:%v, len:%v", dataframe, len(dataframe))
+			//log.Debugf("dataframe:%v, len:%v", dataframe, len(dataframe))
 
 			gcm, err := cipherstream.NewAes256GCM([]byte(config.Password))
 			if err != nil {

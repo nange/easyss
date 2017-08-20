@@ -120,7 +120,7 @@ func HandShake(conn net.Conn) (Addr, error) {
 	}
 
 	// write VER REP RSV ATYP BND.ADDR BND.PORT
-	_, err = conn.Write([]byte{5, 0, 0, addr[0], 0, 0, 0, 0, 0, 0})
+	_, err = conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x08, 0x43})
 
 	return addr, err
 }
