@@ -61,7 +61,7 @@ func (cs *CipherStream) Write(b []byte) (int, error) {
 			total += n2
 		}
 		if err != nil {
-			log.Debugf("read, err:%+v, n:%v", errors.WithStack(err), n)
+			log.Debugf("read buf err:%+v, n:%v", errors.WithStack(err), n)
 			return total, errors.WithStack(err)
 		}
 	}
@@ -78,15 +78,18 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 		if n > 0 {
 			plaintxt, err := cs.Decrypt(buf[:n])
 			if err != nil {
+				log.Debugf("decrypt buf:%v, err:%+v, n:%v", buf[:n], err, n)
 				return 0, errors.WithStack(err)
 			}
-			n, err = wb.Write(plaintxt)
+			n2, err := wb.Write(plaintxt)
 			if err != nil {
+				log.Debugf("write plaintxt:%v, err:%+v, n:%v", plaintxt, errors.WithStack(err), n2)
 				return 0, errors.WithStack(err)
 			}
-			total += n
+			total += n2
 		}
 		if err != nil {
+			log.Debugf("conn read buf, err:%+v, n:%v", errors.WithStack(err), n)
 			return total, errors.WithStack(err)
 		}
 	}
