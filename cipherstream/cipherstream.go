@@ -55,14 +55,14 @@ func (cs *CipherStream) Write(b []byte) (int, error) {
 			n2, err := cs.Conn.Write(ciphertxt)
 			if err != nil {
 				log.Debugf("conn write ciphertxt:%v, n2:%v, err:%+v", ciphertxt, n2, errors.WithStack(err))
-				return 0, errors.WithStack(err)
+				return 0, err
 			}
 
 			total += n2
 		}
 		if err != nil {
 			log.Debugf("read buf err:%+v, n:%v", errors.WithStack(err), n)
-			return total, errors.WithStack(err)
+			return total, err
 		}
 	}
 
@@ -79,18 +79,18 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 			plaintxt, err := cs.Decrypt(buf[:n])
 			if err != nil {
 				log.Debugf("decrypt buf:%v, err:%+v, n:%v", buf[:n], err, n)
-				return 0, errors.WithStack(err)
+				return 0, err
 			}
 			n2, err := wb.Write(plaintxt)
 			if err != nil {
 				log.Debugf("write plaintxt:%v, err:%+v, n:%v", plaintxt, errors.WithStack(err), n2)
-				return 0, errors.WithStack(err)
+				return 0, err
 			}
 			total += n2
 		}
 		if err != nil {
 			log.Debugf("conn read buf, err:%+v, n:%v", errors.WithStack(err), n)
-			return total, errors.WithStack(err)
+			return total, err
 		}
 	}
 
