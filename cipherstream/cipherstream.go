@@ -11,12 +11,14 @@ const bufSize = 512
 
 type CipherStream struct {
 	net.Conn
-	Cipher
+	AEADCipher
 }
 
-type Cipher interface {
+type AEADCipher interface {
 	Encrypt(plaintext []byte) (ciphertext []byte, err error)
 	Decrypt(ciphertext []byte) (plaintext []byte, err error)
+	NonceSize() int
+	Overhead() int
 }
 
 func New(conn net.Conn, password, method string) (net.Conn, error) {
@@ -25,7 +27,7 @@ func New(conn net.Conn, password, method string) (net.Conn, error) {
 	switch method {
 	case "aes-256-gcm":
 		var err error
-		cs.Cipher, err = NewAes256GCM([]byte(password))
+		cs.AEADCipher, err = NewAes256GCM([]byte(password))
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -68,7 +70,7 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 	buf := make([]byte, bufSize)
 	total := 0
 	for {
-		n, err := cs.Conn.Read(buf)
+		n, err := cs.Conn.Read(buf + cs.NonceSize() + cs.Overhead())
 		if n > 0 {
 			plaintxt, err := cs.Decrypt(buf[:n])
 			if err != nil {

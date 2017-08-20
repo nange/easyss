@@ -26,7 +26,7 @@ func aes256GCMKey(password []byte) *[32]byte {
 }
 
 // NewAes256GCM creates a aes-gcm AEAD instance
-func NewAes256GCM(password []byte) (*Aes256GCM, error) {
+func NewAes256GCM(password []byte) (AEADCipher, error) {
 	key := aes256GCMKey(password)
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
