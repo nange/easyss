@@ -81,10 +81,10 @@ func tcpLocal(config *Config) {
 
 			go func() {
 				n, err := io.Copy(conn, csConn)
-				log.Warnf("reciveve %v bytes from %v, err:%v", n, addr.String(), err)
+				log.Warnf("reciveve %v bytes from %v, err:%+v", n, addr.String(), err)
 			}()
 			n, err := io.Copy(csConn, conn)
-			log.Warnf("send %v bytes to %v, err:%v", n, addr.String(), err)
+			log.Warnf("send %v bytes to %v, err:%+v", n, addr.String(), err)
 		}()
 
 	}

@@ -5,6 +5,7 @@ import (
 	"net"
 
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 const bufSize = 512
@@ -47,17 +48,20 @@ func (cs *CipherStream) Write(b []byte) (int, error) {
 		if n > 0 {
 			ciphertxt, err := cs.Encrypt(buf[:n])
 			if err != nil {
-				return 0, errors.WithStack(err)
+				log.Debugf("encrypt buf:%v, err:%+v", buf[:n], err)
+				return 0, err
 			}
 
-			n, err = cs.Conn.Write(ciphertxt)
+			n2, err := cs.Conn.Write(ciphertxt)
 			if err != nil {
+				log.Debugf("conn write ciphertxt:%v, n2:%v, err:%+v", ciphertxt, n2, errors.WithStack(err))
 				return 0, errors.WithStack(err)
 			}
 
-			total += n
+			total += n2
 		}
 		if err != nil {
+			log.Debugf("read, err:%+v, n:%v", errors.WithStack(err), n)
 			return total, errors.WithStack(err)
 		}
 	}
