@@ -1,6 +1,7 @@
 package cipherstream
 
 import (
+	"io"
 	"net"
 
 	"github.com/pkg/errors"
@@ -74,6 +75,27 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 	return total, nil
 }
 
-func Copy(dst net.Conn, src net.Conn) (int64, error) {
-	return 0, nil
+func Copy(dst net.Conn, src net.Conn) (written int64, err error) {
+	buf := make([]byte, 512)
+	for {
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			nw, ew := dst.Write(buf[:nr])
+			if nw > 0 {
+				written += int64(nw)
+			}
+			if ew != nil {
+				err = ew
+				break
+			}
+		}
+		if er != nil {
+			if er != io.EOF {
+				err = er
+			}
+			break
+		}
+	}
+
+	return written, err
 }
