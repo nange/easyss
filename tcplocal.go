@@ -50,22 +50,30 @@ func tcpLocal(config *Config) {
 			rconn.(*net.TCPConn).SetKeepAlive(true)
 			rconn.(*net.TCPConn).SetKeepAlivePeriod(30 * time.Second)
 
-			dataframe := utils.NewHTTP2DataFrame(addr)
-			//log.Debugf("dataframe:%v, len:%v", dataframe, len(dataframe))
-
+			header, payload := utils.NewHTTP2DataFrame(addr)
 			gcm, err := cipherstream.NewAes256GCM([]byte(config.Password))
 			if err != nil {
 				log.Errorf("cipherstream.NewAes256GCM err:%+v", err)
 				return
 			}
 
-			ciphertext, err := gcm.Encrypt(dataframe)
+			headercipher, err := gcm.Encrypt(header)
 			if err != nil {
 				log.Errorf("gcm.Encrypt err:%+v", err)
 				return
 			}
+			_, err = rconn.Write(headercipher)
+			if err != nil {
+				log.Errorf("rconn.Write err:%+v", errors.WithStack(err))
+				return
+			}
 
-			_, err = rconn.Write(ciphertext)
+			payloadcipher, err := gcm.Encrypt(payload)
+			if err != nil {
+				log.Errorf("gcm.Encrypt err:%+v", err)
+				return
+			}
+			_, err = rconn.Write(payloadcipher)
 			if err != nil {
 				log.Errorf("rconn.Write err:%+v", errors.WithStack(err))
 				return

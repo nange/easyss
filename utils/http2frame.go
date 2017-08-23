@@ -8,7 +8,7 @@ import (
 func NewHTTP2DataFrame(data []byte) (header []byte, payload []byte) {
 	header = make([]byte, 9)
 	length := make([]byte, 4)
-	binary.BigEndian.PutUint32(length, len(data))
+	binary.BigEndian.PutUint32(length, uint32(len(data)))
 	// set length field
 	copy(header[:3], length[1:])
 	// set frame type to data
