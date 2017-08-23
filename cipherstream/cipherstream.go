@@ -1,6 +1,7 @@
 package cipherstream
 
 import (
+	"bytes"
 	"io"
 	"net"
 
@@ -8,11 +9,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const bufSize = 512
+// MAX_PAYLOAD_SIZE is the maximum size of payload in bytes.
+const MAX_PAYLOAD_SIZE = 0x3FFF // 16*1024 - 1
 
 type CipherStream struct {
 	net.Conn
 	AEADCipher
+	reader
+	writer
 }
 
 type AEADCipher interface {
@@ -20,6 +24,15 @@ type AEADCipher interface {
 	Decrypt(ciphertext []byte) (plaintext []byte, err error)
 	NonceSize() int
 	Overhead() int
+}
+
+type reader struct {
+	rbuf     []byte
+	leftover []byte
+}
+
+type writer struct {
+	wbuf []byte
 }
 
 func New(conn net.Conn, password, method string) (net.Conn, error) {
@@ -36,43 +49,74 @@ func New(conn net.Conn, password, method string) (net.Conn, error) {
 		return nil, errors.WithStack(errors.New("cipher method unsupported, method:" + method))
 	}
 
+	cs.reader.rbuf = make([]byte, MAX_PAYLOAD_SIZE+cs.NonceSize()+cs.Overhead())
+	cs.writer.wbuf = make([]byte, 9+cs.NonceSize()+cs.Overhead()+MAX_PAYLOAD_SIZE+cs.NonceSize()+cs.Overhead())
+
 	return cs, nil
 }
 
 func (cs *CipherStream) Write(b []byte) (int, error) {
-	ciphertxt, err := cs.Encrypt(b)
-	if err != nil {
-		log.Debugf("encrypt buf:%v, err:%+v", b, err)
-		return 0, err
-	}
+	n, err := cs.ReadFrom(bytes.NewBuffer(b))
+	return int(n), err
+}
 
-	n, err := cs.Conn.Write(ciphertxt)
-	if err != nil {
-		log.Debugf("conn write ciphertxt:%v, n:%v, err:%+v", ciphertxt, n, errors.WithStack(err))
-		return n, err
-	}
-	return n, nil
+func (cs *CipherStream) ReadFrom(r io.Reader) (int64, error) {
+
+	return 0, nil
 }
 
 func (cs *CipherStream) Read(b []byte) (int, error) {
-	cipherbuf := make([]byte, len(b)+cs.NonceSize()+cs.Overhead())
+	if len(cs.leftover) > 0 {
+		cn := copy(b, cs.leftover)
+		cs.leftover = cs.leftover[cn:]
+		return cn, nil
+	}
 
-	total := 0
-	n, err := cs.Conn.Read(cipherbuf)
-	if n > 0 {
-		plaintxt, err := cs.Decrypt(cipherbuf[:n])
-		if err != nil {
-			log.Debugf("decrypt buf:%v, err:%+v, n:%v", cipherbuf[:n], err, n)
-			return 0, err
-		}
-		copy(b, plaintxt)
-		total += len(plaintxt)
-	}
+	payloadplain, err := cs.read()
 	if err != nil {
-		log.Debugf("conn read buf, err:%+v, n:%v", errors.WithStack(err), n)
-		return total, err
+		return 0, err
 	}
-	return total, nil
+
+	cn := copy(b, payloadplain)
+	if cn < len(payloadplain) {
+		cs.leftover = payloadplain[cn:len(payloadplain)]
+	}
+
+	return cn, nil
+}
+
+func (cs *CipherStream) read() ([]byte, error) {
+	lenbuf := cs.rbuf[:9+cs.NonceSize()+cs.Overhead()]
+	if _, err := io.ReadFull(cs.Conn, lenbuf); err != nil {
+		log.Errorf("read cipher stream payload len err:%v", err)
+		return nil, err
+	}
+
+	lenplain, err := cs.Decrypt(lenbuf)
+	if err != nil {
+		log.Errorf("decrypt payload length err:%v", err)
+		return nil, err
+	}
+	size := int(lenplain[0])<<16 | int(lenplain[1])<<8 | int(lenplain[2])
+
+	if (size & MAX_PAYLOAD_SIZE) != size {
+		log.Errorf("payload size:%v is invalid", size)
+		return nil, errors.New("payload size is invalid")
+	}
+
+	lenpayload := size + cs.NonceSize() + cs.Overhead()
+	if _, err := io.ReadFull(cs.Conn, cs.rbuf[:lenpayload]); err != nil {
+		log.Errorf("read cipher stream payload err:%v", err)
+		return nil, err
+	}
+
+	payloadplain, err := cs.Decrypt(cs.rbuf[:lenpayload])
+	if err != nil {
+		log.Errorf("decrypt payload cipher err:%+v", err)
+		return nil, err
+	}
+
+	return payloadplain, nil
 }
 
 func Copy(dst net.Conn, src net.Conn) (written int64, err error) {
