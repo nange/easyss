@@ -38,7 +38,7 @@ func tcpRemote(config *Config) {
 				log.Errorf("get target addr err:%+v", err)
 				return
 			}
-			log.Infof("target addr is:%v", addr.String())
+			log.Debugf("target proxy addr is:%v", addr.String())
 
 			tconn, err := net.Dial("tcp", addr.String())
 			if err != nil {
@@ -56,10 +56,10 @@ func tcpRemote(config *Config) {
 
 			go func() {
 				n, err := io.Copy(csConn, tconn)
-				log.Warnf("reciveve %v bytes from %v, err:%+v", n, addr, err)
+				log.Warnf("reciveve %v bytes from %v, err:%v", n, addr, err)
 			}()
 			n, err := io.Copy(tconn, csConn)
-			log.Warnf("send %v bytes to %v, err:%+v", n, addr, err)
+			log.Warnf("send %v bytes to %v, err:%v", n, addr, err)
 		}()
 
 	}

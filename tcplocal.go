@@ -39,7 +39,7 @@ func tcpLocal(config *Config) {
 				log.Errorf("local handshake err:%+v, remote:%v", err, addr)
 				return
 			}
-			log.Debugf("target addr:%v", addr.String())
+			log.Debugf("target proxy addr is:%v", addr.String())
 
 			rconn, err := net.Dial("tcp", config.Server+":"+strconv.Itoa(config.ServerPort))
 			if err != nil {
@@ -89,10 +89,10 @@ func tcpLocal(config *Config) {
 
 			go func() {
 				n, err := io.Copy(conn, csConn)
-				log.Warnf("reciveve %v bytes from %v, err:%+v", n, addr.String(), err)
+				log.Warnf("reciveve %v bytes from %v, err:%v", n, addr.String(), err)
 			}()
 			n, err := io.Copy(csConn, conn)
-			log.Warnf("send %v bytes to %v, err:%+v", n, addr.String(), err)
+			log.Warnf("send %v bytes to %v, err:%v", n, addr.String(), err)
 		}()
 
 	}

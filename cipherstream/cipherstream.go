@@ -68,7 +68,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 
 		if nr > 0 {
 			n += int64(nr)
-
+			log.Debugf("read from normal stream, frame payload size:%v ", nr)
 			headerBuf, _ := utils.NewHTTP2DataFrame(payloadBuf[:nr])
 			headercipher, er := cs.Encrypt(headerBuf)
 			if err != nil {
@@ -130,15 +130,15 @@ func (cs *CipherStream) read() ([]byte, error) {
 		log.Errorf("decrypt payload length err:%+v", err)
 		return nil, err
 	}
-	size := int(lenplain[0])<<16 | int(lenplain[1])<<8 | int(lenplain[2])
 
-	//	if (size & MAX_PAYLOAD_SIZE) != size {
-	//		log.Errorf("payload size:%v is invalid", size)
-	//		return nil, errors.New("payload size is invalid")
-	//	}
+	size := int(lenplain[0])<<16 | int(lenplain[1])<<8 | int(lenplain[2])
+	log.Debugf("read from cipher stream, frame payload size:%v", size)
+	if (size & MAX_PAYLOAD_SIZE) != size {
+		log.Errorf("read from cipherstream payload size:%v is invalid", size)
+		return nil, errors.New("payload size is invalid")
+	}
 
 	lenpayload := size + cs.NonceSize() + cs.Overhead()
-	log.Debugf("lenpayload:%v", lenpayload)
 	if _, err := io.ReadFull(cs.Conn, cs.rbuf[:lenpayload]); err != nil {
 		log.Errorf("read cipher stream payload err:%+v, lenpayload:%v", errors.WithStack(err), lenpayload)
 		return nil, err
@@ -151,29 +151,4 @@ func (cs *CipherStream) read() ([]byte, error) {
 	}
 
 	return payloadplain, nil
-}
-
-func Copy(dst net.Conn, src net.Conn) (written int64, err error) {
-	buf := make([]byte, 512)
-	for {
-		nr, er := src.Read(buf)
-		if nr > 0 {
-			nw, ew := dst.Write(buf[:nr])
-			if nw > 0 {
-				written += int64(nw)
-			}
-			if ew != nil {
-				err = ew
-				break
-			}
-		}
-		if er != nil {
-			if er != io.EOF {
-				err = er
-			}
-			break
-		}
-	}
-
-	return written, err
 }
