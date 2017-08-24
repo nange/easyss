@@ -63,7 +63,7 @@ func (cs *CipherStream) Write(b []byte) (int, error) {
 
 func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 	for {
-		payloadBuf := cs.wbuf
+		payloadBuf := cs.wbuf[:MAX_PAYLOAD_SIZE]
 		nr, er := r.Read(payloadBuf)
 
 		if nr > 0 {
