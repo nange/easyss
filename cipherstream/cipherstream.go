@@ -51,7 +51,7 @@ func New(conn net.Conn, password, method string) (net.Conn, error) {
 	}
 
 	cs.reader.rbuf = make([]byte, MAX_PAYLOAD_SIZE+cs.NonceSize()+cs.Overhead())
-	cs.writer.wbuf = make([]byte, 9+cs.NonceSize()+cs.Overhead()+MAX_PAYLOAD_SIZE+cs.NonceSize()+cs.Overhead())
+	cs.writer.wbuf = make([]byte, MAX_PAYLOAD_SIZE+cs.NonceSize()+cs.Overhead())
 
 	return cs, nil
 }
@@ -63,7 +63,7 @@ func (cs *CipherStream) Write(b []byte) (int, error) {
 
 func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 	for {
-		payloadBuf := cs.wbuf[9+cs.NonceSize()+cs.Overhead():]
+		payloadBuf := cs.wbuf
 		nr, er := r.Read(payloadBuf)
 
 		if nr > 0 {
@@ -132,14 +132,15 @@ func (cs *CipherStream) read() ([]byte, error) {
 	}
 	size := int(lenplain[0])<<16 | int(lenplain[1])<<8 | int(lenplain[2])
 
-	if (size & MAX_PAYLOAD_SIZE) != size {
-		log.Errorf("payload size:%v is invalid", size)
-		return nil, errors.New("payload size is invalid")
-	}
+	//	if (size & MAX_PAYLOAD_SIZE) != size {
+	//		log.Errorf("payload size:%v is invalid", size)
+	//		return nil, errors.New("payload size is invalid")
+	//	}
 
 	lenpayload := size + cs.NonceSize() + cs.Overhead()
+	log.Debugf("lenpayload:%v", lenpayload)
 	if _, err := io.ReadFull(cs.Conn, cs.rbuf[:lenpayload]); err != nil {
-		log.Errorf("read cipher stream payload err:%v", err)
+		log.Errorf("read cipher stream payload err:%+v, lenpayload:%v", errors.WithStack(err), lenpayload)
 		return nil, err
 	}
 
