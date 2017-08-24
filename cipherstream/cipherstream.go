@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 
+	"github.com/nange/easyss/utils"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -60,9 +61,41 @@ func (cs *CipherStream) Write(b []byte) (int, error) {
 	return int(n), err
 }
 
-func (cs *CipherStream) ReadFrom(r io.Reader) (int64, error) {
+func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
+	for {
+		payloadBuf := cs.wbuf[9+cs.NonceSize()+cs.Overhead():]
+		nr, er := r.Read(payloadBuf)
 
-	return 0, nil
+		if nr > 0 {
+			n += int64(nr)
+
+			headerBuf, _ := utils.NewHTTP2DataFrame(payloadBuf[:nr])
+			headercipher, er := cs.Encrypt(headerBuf)
+			if err != nil {
+				log.Errorf("encrypt header buf err:%+v", err)
+				return 0, er
+			}
+			payloadcipher, er := cs.Encrypt(payloadBuf[:nr])
+			if err != nil {
+				log.Errorf("encrypt payload buf err:%+v", err)
+				return 0, er
+			}
+
+			dataframe := append(headercipher, payloadcipher...)
+			if _, ew := cs.Conn.Write(dataframe); ew != nil {
+				err = ew
+				break
+			}
+		}
+		if er != nil {
+			if er != io.EOF {
+				err = er
+			}
+			break
+		}
+
+	}
+	return n, err
 }
 
 func (cs *CipherStream) Read(b []byte) (int, error) {
@@ -88,13 +121,13 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 func (cs *CipherStream) read() ([]byte, error) {
 	lenbuf := cs.rbuf[:9+cs.NonceSize()+cs.Overhead()]
 	if _, err := io.ReadFull(cs.Conn, lenbuf); err != nil {
-		log.Errorf("read cipher stream payload len err:%v", err)
+		log.Errorf("read cipher stream payload len err:%+v", errors.WithStack(err))
 		return nil, err
 	}
 
 	lenplain, err := cs.Decrypt(lenbuf)
 	if err != nil {
-		log.Errorf("decrypt payload length err:%v", err)
+		log.Errorf("decrypt payload length err:%+v", err)
 		return nil, err
 	}
 	size := int(lenplain[0])<<16 | int(lenplain[1])<<8 | int(lenplain[2])

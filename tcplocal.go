@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"net"
 	"strconv"
 	"time"
@@ -87,10 +88,10 @@ func tcpLocal(config *Config) {
 			}
 
 			go func() {
-				n, err := cipherstream.Copy(conn, csConn)
+				n, err := io.Copy(conn, csConn)
 				log.Warnf("reciveve %v bytes from %v, err:%+v", n, addr.String(), err)
 			}()
-			n, err := cipherstream.Copy(csConn, conn)
+			n, err := io.Copy(csConn, conn)
 			log.Warnf("send %v bytes to %v, err:%+v", n, addr.String(), err)
 		}()
 

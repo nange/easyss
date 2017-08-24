@@ -55,10 +55,10 @@ func tcpRemote(config *Config) {
 			}
 
 			go func() {
-				n, err := cipherstream.Copy(csConn, tconn)
+				n, err := io.Copy(csConn, tconn)
 				log.Warnf("reciveve %v bytes from %v, err:%+v", n, addr, err)
 			}()
-			n, err := cipherstream.Copy(tconn, csConn)
+			n, err := io.Copy(tconn, csConn)
 			log.Warnf("send %v bytes to %v, err:%+v", n, addr, err)
 		}()
 
