@@ -84,6 +84,7 @@ func main() {
 			log.Fatalln("server address, server port and password should not empty")
 		}
 
+		go servePAC(config)
 		tcpLocal(config)
 	}
 
