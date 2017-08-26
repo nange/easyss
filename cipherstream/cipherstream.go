@@ -10,8 +10,9 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// MAX_PAYLOAD_SIZE is the maximum size of payload in bytes.
-const MAX_PAYLOAD_SIZE = 0x3FFF // 16*1024 - 1
+// MAX_PAYLOAD_SIZE is the maximum size of payload
+// set to 64KB.
+const MAX_PAYLOAD_SIZE = 1<<16 - 1
 
 type CipherStream struct {
 	net.Conn
