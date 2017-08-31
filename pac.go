@@ -4,7 +4,10 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"net/http"
+	"strconv"
+	"text/template"
 
 	"github.com/getlantern/pac"
 	_ "github.com/nange/easyss/statik"
@@ -13,16 +16,33 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func servePAC(config *Config) {
+const pacpath = "/pac.txt"
+
+func ServePAC(config *Config) {
 	statikFS, err := fs.New()
 	if err != nil {
 		log.Fatal(err)
 	}
+	file, err := statikFS.Open(pacpath)
+	if err != nil {
+		log.Fatal("open pac.txt err:", err)
+	}
+	buf, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	http.Handle("/pac/", http.StripPrefix("/pac/", http.FileServer(statikFS)))
+	tpl, err := template.New(pacpath).Parse(string(buf))
+	if err != nil {
+		log.Fatalf("template parse pac err:%v", err)
+	}
+	http.HandleFunc(pacpath, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=UTF-8")
+		tpl.Execute(w, map[string]string{"Port": strconv.Itoa(config.LocalPort)})
+	})
 	addr := fmt.Sprintf(":%d", config.LocalPort+1)
 
-	pacpath := fmt.Sprintf("http://localhost:%d/pac/pac.txt", config.LocalPort+1)
+	pacpath := fmt.Sprintf("http://localhost:%d/pac.txt", config.LocalPort+1)
 	if err := pacOn(pacpath); err != nil {
 		log.Fatalf("set system pac err:%v", err)
 	}

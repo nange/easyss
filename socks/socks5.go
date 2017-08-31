@@ -91,7 +91,7 @@ func HandShake(conn net.Conn) (Addr, error) {
 
 	// only handle socks5 protocol
 	if buf[0] != 0x05 {
-		log.Error("server do not support client version:", buf[0])
+		log.Errorf("server do not support client version:%v", buf[0])
 		return nil, errors.WithStack(ErrCommandNotSupported)
 	}
 
