@@ -84,7 +84,14 @@ func main() {
 			log.Fatalln("server address, server port and password should not empty")
 		}
 
-		go servePAC(config)
+		pacChan := make(chan PACStatus, 1)
+
+		t := NewTray(pacChan)
+		go t.Run()
+
+		p := NewPAC(config.LocalPort, pacChan)
+		go p.Serve()
+
 		tcpLocal(config)
 	}
 

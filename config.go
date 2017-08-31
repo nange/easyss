@@ -9,6 +9,15 @@ import (
 	"github.com/pkg/errors"
 )
 
+type PACStatus int
+
+const (
+	PACON PACStatus = iota + 1
+	PACOFF
+	PACONGLOBAL
+	PACOFFGLOBAL
+)
+
 type Config struct {
 	Server     string `json:"server"`
 	ServerPort int    `json:"server_port"`
