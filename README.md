@@ -1,16 +1,76 @@
 ## easyss
 
+easyss是一款基于socks5的科学学习上网工具，目标是使访问国外技术网站更流畅免受干扰。
+
 有报道表明访问国外技术网站正变得越来越困难，即使用了SS代理技术也面临被干扰的可能性。 
 为了以防万一，提前准备，在我看了SS协议后，想在SS协议基础上做一些改进以对抗干扰和嗅探。
 
-## TODO
+## 特性
 
-* 重新实现精简版的SS协议，致力于无障碍访问国外技术网站，只考虑支持高强度的加密算法，如：aes-256-gcm, chacha20poly1305 (aes-256-gcm done)
+* 基于SOCKS5代理
 
-* 客户端在和服务器交互部分协议，改为http2的帧格式传输 ，所有交互高强度加密传输 (done)
+* (只)支持(AEAD类型)高强度加密通信, 如aes-256-gcm(done), chacha20poly1305(will done in Version 1.0)
 
-* 加入客户端和服务器之间随机间隔随机数据大小的随机数据交互，达到初级的干扰嗅探的目的 (undo)
+* http2帧格式交互(更灵活通用, 更易扩展)
 
-## Current status
+* tcp流多路复用(will done in Version 1.0)
 
-Beta
+* 自动pac代理, (可选)支持全局模式, 支持系统托盘图标管理 (thanks [lantern](https://github.com/getlantern))
+
+* 抗嗅探机制(will done in Version 1.0)
+
+## 当前版本
+
+Beta2
+
+
+## 安装
+
+#### go get 安装最新开发版
+
+```sh
+go get -u -v github.com/nange/easyss
+```
+
+#### 在release页面直接下载(各平台)编译好的二进制文件
+
+[点我去下载](https://github.com/nange/easyss/releases)
+
+
+## 用法
+
+#### 客户端
+
+copy本项目中的config.json文件和上面下载的二进制文件放同一目录.
+打开config.json文件, 修改里面对应的项:
+* server: 服务器ip或者域名(必填)
+* server_port: 服务器对应端口(必填)
+* local_port: 本地监听端口(默认1080)
+* password: 通信加密密钥(必填)
+* method: 通信加密方式(默认aes-256-gcm)
+* timeout: 超时时间,单位秒
+
+修改完成后, 双击二进制文件，程序会自动启动，托盘会出现easyss的图标，如下:
+
+![托盘图标](https://raw.githubusercontent.com/nange/easyss/master/img/tray.png)
+
+右键图标可选择全局模式. 
+
+
+#### 服务器端
+
+和客户端一样, 先把二进制和config.json文件放同一目录. 
+修改config.json文件, 其中server_port和password必填, 执行:
+```sh
+./easyss -server 
+```
+
+
+
+
+
+
+
+
+
+

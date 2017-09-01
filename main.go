@@ -17,8 +17,8 @@ func init() {
 }
 
 func PrintVersion() {
-	const version = "Alpha"
-	fmt.Println("easyss version:", version)
+	const version = "Beta2"
+	fmt.Println("easyss version", version)
 }
 
 func main() {
@@ -87,10 +87,10 @@ func main() {
 		pacChan := make(chan PACStatus, 1)
 
 		t := NewTray(pacChan)
-		go t.Run()
+		go t.Run() // system tray management
 
 		p := NewPAC(config.LocalPort, pacChan)
-		go p.Serve()
+		go p.Serve() // system pac configuration
 
 		tcpLocal(config)
 	}
