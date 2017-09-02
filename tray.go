@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"runtime"
 
 	"github.com/getlantern/systray"
 	"github.com/nange/easyss/icon"
@@ -19,6 +20,7 @@ func NewTray(pacChan chan<- PACStatus) *Tray {
 }
 
 func (t *Tray) Run() {
+	runtime.LockOSThread()
 	systray.Run(t.onReady)
 }
 
