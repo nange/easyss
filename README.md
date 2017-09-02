@@ -65,10 +65,9 @@ copy本项目中的config.json文件和上面下载的二进制文件放同一�
 ./easyss -server 
 ```
 
+##### docker部署
 
-
-
-
+docker run -it -d --name easyss -p yourport:yourport nange/docker-easyss:beta2 -p yourport -k yourpassword
 
 
 
