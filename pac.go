@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"runtime"
 	"strconv"
 	"text/template"
 
@@ -37,7 +36,6 @@ func NewPAC(localport int, pacChan <-chan PACStatus) *PAC {
 }
 
 func (p *PAC) Serve() {
-	runtime.LockOSThread()
 	statikFS, err := fs.New()
 	if err != nil {
 		log.Fatal(err)
