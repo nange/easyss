@@ -22,11 +22,6 @@ func PrintVersion() {
 }
 
 func main() {
-	pacChan := make(chan PACStatus, 1)
-
-	t := NewTray(pacChan)
-	t.Run() // system tray management
-
 	var configFile string
 	var printVer, debug, serverModel bool
 	var cmdConfig Config
@@ -89,10 +84,14 @@ func main() {
 			log.Fatalln("server address, server port and password should not empty")
 		}
 
+		pacChan := make(chan PACStatus, 1)
+
+		t := NewTray(pacChan)
 		p := NewPAC(config.LocalPort, pacChan)
 		go p.Serve() // system pac configuration
+		go tcpLocal(config)
 
-		tcpLocal(config)
+		t.Run() // system tray management
 	}
 
 }
