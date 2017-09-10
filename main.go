@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"runtime"
 
 	"github.com/nange/easyss/utils"
 	"github.com/pkg/errors"
@@ -23,6 +22,11 @@ func PrintVersion() {
 }
 
 func main() {
+	pacChan := make(chan PACStatus, 1)
+
+	t := NewTray(pacChan)
+	t.Run() // system tray management
+
 	var configFile string
 	var printVer, debug, serverModel bool
 	var cmdConfig Config
@@ -84,13 +88,6 @@ func main() {
 		if config.Password == "" || config.Server == "" || config.ServerPort == 0 {
 			log.Fatalln("server address, server port and password should not empty")
 		}
-		runtime.LockOSThread()
-		runtime.GOMAXPROCS(1)
-
-		pacChan := make(chan PACStatus, 1)
-
-		t := NewTray(pacChan)
-		go t.Run() // system tray management
 
 		p := NewPAC(config.LocalPort, pacChan)
 		go p.Serve() // system pac configuration
