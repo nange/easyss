@@ -33,7 +33,7 @@ func main() {
 	flag.IntVar(&cmdConfig.ServerPort, "p", 0, "server port")
 	flag.IntVar(&cmdConfig.Timeout, "t", 300, "timeout in seconds")
 	flag.IntVar(&cmdConfig.LocalPort, "l", 0, "local socks5 proxy port")
-	flag.StringVar(&cmdConfig.Method, "m", "", "encryption method, default: aes-256-cfb")
+	flag.StringVar(&cmdConfig.Method, "m", "", "encryption method, default: aes-256-gcm")
 	flag.BoolVar(&debug, "d", false, "print debug message")
 	flag.BoolVar(&serverModel, "server", false, "server model")
 
@@ -86,13 +86,13 @@ func main() {
 
 		pacChan := make(chan PACStatus, 1)
 
-		t := NewTray(pacChan)
-		go t.Run() // system tray management
-
 		p := NewPAC(config.LocalPort, pacChan)
 		go p.Serve() // system pac configuration
 
-		tcpLocal(config)
+		go tcpLocal(config) // start local server
+
+		t := NewTray(pacChan)
+		t.Run() // system tray management
 	}
 
 }
