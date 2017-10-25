@@ -2,25 +2,35 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
+	"time"
+
 	"github.com/getlantern/systray"
 	"github.com/getlantern/systray/example/icon"
 	"github.com/skratchdot/open-golang/open"
 )
 
 func main() {
+	onExit := func() {
+		fmt.Println("Starting onExit")
+		now := time.Now()
+		ioutil.WriteFile(fmt.Sprintf(`on_exit_%d.txt`, now.UnixNano()), []byte(now.String()), 0644)
+		fmt.Println("Finished onExit")
+	}
 	// Should be called at the very beginning of main().
-	systray.Run(onReady)
+	systray.Run(onReady, onExit)
 }
 
 func onReady() {
 	systray.SetIcon(icon.Data)
 	systray.SetTitle("Awesome App")
 	systray.SetTooltip("Lantern")
-	mQuit := systray.AddMenuItem("Quit", "Quit the whole app")
+	mQuitOrig := systray.AddMenuItem("Quit", "Quit the whole app")
 	go func() {
-		<-mQuit.ClickedCh
+		<-mQuitOrig.ClickedCh
+		fmt.Println("Requesting quit")
 		systray.Quit()
-		fmt.Println("Quit now...")
+		fmt.Println("Finished quitting")
 	}()
 
 	// We can manipulate the systray in other goroutines
@@ -34,6 +44,9 @@ func onReady() {
 		systray.AddMenuItem("Ignored", "Ignored")
 		mUrl := systray.AddMenuItem("Open Lantern.org", "my home")
 		mQuit := systray.AddMenuItem("退出", "Quit the whole app")
+		systray.AddSeparator()
+		mToggle := systray.AddMenuItem("Toggle", "Toggle the Quit button")
+		shown := true
 		for {
 			select {
 			case <-mChange.ClickedCh:
@@ -51,6 +64,16 @@ func onReady() {
 				mEnabled.Disable()
 			case <-mUrl.ClickedCh:
 				open.Run("https://www.getlantern.org")
+			case <-mToggle.ClickedCh:
+				if shown {
+					mQuitOrig.Hide()
+					mEnabled.Hide()
+					shown = false
+				} else {
+					mQuitOrig.Show()
+					mEnabled.Show()
+					shown = true
+				}
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				fmt.Println("Quit2 now...")

@@ -19,7 +19,7 @@ func NewTray(pacChan chan<- PACStatus) *Tray {
 }
 
 func (t *Tray) Run() {
-	systray.Run(t.onReady)
+	systray.Run(t.onReady, t.onExit)
 }
 
 func (t *Tray) onReady() {
@@ -68,3 +68,8 @@ func (t *Tray) onReady() {
 		}
 	}
 }
+
+func (t *Tray) onExit() {
+	log.Info("easyss exited...")
+}
+

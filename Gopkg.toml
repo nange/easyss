@@ -19,3 +19,28 @@
 # [[override]]
 #  name = "github.com/x/y"
 #  version = "2.4.0"
+
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/getlantern/pac"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/getlantern/systray"
+
+[[constraint]]
+  name = "github.com/pkg/errors"
+  version = "0.8.0"
+
+[[constraint]]
+  name = "github.com/rakyll/statik"
+  version = "0.1.1"
+
+[[constraint]]
+  name = "github.com/sirupsen/logrus"
+  version = "1.0.3"
+
+[[constraint]]
+  branch = "master"
+  name = "golang.org/x/crypto"

@@ -37,6 +37,14 @@ func TestSuccess(t *testing.T) {
 }
 
 func TestFailure(t *testing.T) {
+	doTestFailure(t, false)
+}
+
+func TestCancel(t *testing.T) {
+	doTestFailure(t, true)
+}
+
+func doTestFailure(t *testing.T, cancel bool) {
 	var reportedFailure error
 	var reportedCtx map[string]interface{}
 	report := func(failure error, ctx map[string]interface{}) {
@@ -53,8 +61,16 @@ func TestFailure(t *testing.T) {
 		wg.Done()
 	})
 	wg.Wait()
+	if cancel {
+		op.Cancel()
+	}
 	op.End()
 
-	assert.Contains(t, reportedFailure.Error(), "I failed")
-	assert.Equal(t, 5, reportedCtx["errorcontext"])
+	if cancel {
+		assert.Nil(t, reportedFailure)
+		assert.Nil(t, reportedCtx)
+	} else {
+		assert.Contains(t, reportedFailure.Error(), "I failed")
+		assert.Equal(t, 5, reportedCtx["errorcontext"])
+	}
 }

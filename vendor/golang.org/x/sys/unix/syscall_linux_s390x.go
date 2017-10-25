@@ -46,8 +46,6 @@ import (
 //sysnb	getgroups(n int, list *_Gid_t) (nn int, err error)
 //sysnb	setgroups(n int, list *_Gid_t) (err error)
 
-func Getpagesize() int { return 4096 }
-
 //sysnb	Gettimeofday(tv *Timeval) (err error)
 
 func Time(t *Time_t) (tt Time_t, err error) {
@@ -63,8 +61,6 @@ func Time(t *Time_t) (tt Time_t, err error) {
 }
 
 //sys	Utime(path string, buf *Utimbuf) (err error)
-
-func TimespecToNsec(ts Timespec) int64 { return int64(ts.Sec)*1e9 + int64(ts.Nsec) }
 
 func NsecToTimespec(nsec int64) (ts Timespec) {
 	ts.Sec = nsec / 1e9

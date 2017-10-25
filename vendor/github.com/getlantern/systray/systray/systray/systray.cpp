@@ -12,6 +12,7 @@ static NOTIFYICONDATA nid;
 static HWND hWnd;
 static HMENU hTrayMenu;
 
+void (*systray_on_exit)(int ignored);
 void (*systray_menu_item_selected)(int menu_id);
 
 void reportWindowsError(const char* action) {
@@ -26,7 +27,7 @@ void reportWindowsError(const char* action) {
 			pErrMsg,
 			0,
 			NULL);
-	printf("Systray error %s: %d %s\n", action, errCode, pErrMsg);
+	printf("Systray error %s: %d %ls\n", action, errCode, pErrMsg);
 }
 
 void ShowMenu(HWND hWnd) {
@@ -40,29 +41,28 @@ void ShowMenu(HWND hWnd) {
 
 }
 
-int GetMenuItemId(int index) {
-	MENUITEMINFO menuItemInfo;
-	menuItemInfo.cbSize = sizeof(MENUITEMINFO);
-	menuItemInfo.fMask = MIIM_DATA;
-	if (0 == GetMenuItemInfo(hTrayMenu, index, TRUE, &menuItemInfo)) {
-		reportWindowsError("get menu item id");
-		return -1;
-	}
-	return menuItemInfo.dwItemData;
-}
-
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
 	switch (message) {
-		case WM_MENUCOMMAND:
+		case WM_COMMAND:
 			{
-				int menuId = GetMenuItemId(wParam);
+				int menuId = LOWORD(wParam);
 				if (menuId != -1) {
 					systray_menu_item_selected(menuId);
 				}
 			}
 			break;
 		case WM_DESTROY:
+			printf("Window destroyed\n");
+			systray_on_exit(0/*ignored*/);
+			Shell_NotifyIcon(NIM_DELETE, &nid);
 			PostQuitMessage(0);
+			break;
+		case WM_ENDSESSION:
+			printf("Session ending\n");
+			// When the system shuts down (or logs off), we don't receive WM_DESTROY,
+			// so we capture WM_ENDSESSION instead and call on_exit here too.
+			systray_on_exit(0/*ignored*/);
+			Shell_NotifyIcon(NIM_DELETE, &nid);
 			break;
 		case WM_SYSTRAY_MESSAGE:
 			switch(lParam) {
@@ -117,10 +117,13 @@ HWND InitInstance(HINSTANCE hInstance, int nCmdShow, TCHAR* szWindowClass) {
 
 BOOL createMenu() {
 	hTrayMenu = CreatePopupMenu();
+	if (!hTrayMenu) {
+		printf("Couldn't create hTrayMenu\n");
+		return FALSE;
+	}
 	MENUINFO menuInfo;
 	menuInfo.cbSize = sizeof(MENUINFO);
-	menuInfo.fMask = MIM_APPLYTOSUBMENUS | MIM_STYLE;
-	menuInfo.dwStyle = MNS_NOTIFYBYPOS;
+	menuInfo.fMask = MIM_APPLYTOSUBMENUS;
 	return SetMenuInfo(hTrayMenu, &menuInfo);
 }
 
@@ -133,7 +136,10 @@ BOOL addNotifyIcon() {
 	return Shell_NotifyIcon(NIM_ADD, &nid);
 }
 
-int nativeLoop(void (*systray_ready)(int ignored), void (*_systray_menu_item_selected)(int menu_id)) {
+int nativeLoop(void (*systray_ready)(int ignored),
+	void (*_systray_on_exit)(int ignored),
+    void (*_systray_menu_item_selected)(int menu_id)) {
+	systray_on_exit = _systray_on_exit;
 	systray_menu_item_selected = _systray_menu_item_selected;
 
 	HINSTANCE hInstance = GetModuleHandle(NULL);
@@ -141,9 +147,15 @@ int nativeLoop(void (*systray_ready)(int ignored), void (*_systray_menu_item_sel
 	MyRegisterClass(hInstance, szWindowClass);
 	hWnd = InitInstance(hInstance, FALSE, szWindowClass); // Don't show window
 	if (!hWnd) {
+		reportWindowsError("create window");
 		return EXIT_FAILURE;
 	}
-	if (!createMenu() || !addNotifyIcon()) {
+	if (!createMenu()) {
+		reportWindowsError("create menu");
+		return EXIT_FAILURE;
+	}
+	if (!addNotifyIcon()) {
+		reportWindowsError("add notify icon");
 		return EXIT_FAILURE;
 	}
 	systray_ready(0);
@@ -152,7 +164,7 @@ int nativeLoop(void (*systray_ready)(int ignored), void (*_systray_menu_item_sel
 	while (GetMessage(&msg, NULL, 0, 0)) {
 		TranslateMessage(&msg);
 		DispatchMessage(&msg);
-	}   
+	}
 	return EXIT_SUCCESS;
 }
 
@@ -177,11 +189,11 @@ void setTooltip(const wchar_t* tooltip) {
 void add_or_update_menu_item(int menuId, wchar_t* title, wchar_t* tooltip, short disabled, short checked) {
 	MENUITEMINFO menuItemInfo;
 	menuItemInfo.cbSize = sizeof(MENUITEMINFO);
-	menuItemInfo.fMask = MIIM_FTYPE | MIIM_STRING | MIIM_DATA | MIIM_STATE;
+	menuItemInfo.fMask = MIIM_FTYPE | MIIM_STRING | MIIM_ID | MIIM_STATE;
 	menuItemInfo.fType = MFT_STRING;
 	menuItemInfo.dwTypeData = title;
 	menuItemInfo.cch = wcslen(title) + 1;
-	menuItemInfo.dwItemData = (ULONG_PTR)menuId;
+	menuItemInfo.wID = menuId;
 	menuItemInfo.fState = 0;
 	if (disabled == 1) {
 		menuItemInfo.fState |= MFS_DISABLED;
@@ -190,23 +202,28 @@ void add_or_update_menu_item(int menuId, wchar_t* title, wchar_t* tooltip, short
 		menuItemInfo.fState |= MFS_CHECKED;
 	}
 
-	int itemCount = GetMenuItemCount(hTrayMenu);
-	int i;
-	for (i = 0; i < itemCount; i++) {
-		int id = GetMenuItemId(i);
-		if (-1 == id) {
-			continue;
-		}
-		if (menuId == id) {
-			SetMenuItemInfo(hTrayMenu, i, TRUE, &menuItemInfo);
-			break;
-		}
-	}
-	if (i == itemCount) {
-		InsertMenuItem(hTrayMenu, -1, TRUE, &menuItemInfo);
+	// We set the menu item info based on the menuID
+	BOOL setOK = SetMenuItemInfo(hTrayMenu, menuId, FALSE, &menuItemInfo);
+	if (!setOK) {
+		// We insert the menu item using the menuID as a position. This is important
+		// because hidden items will end up here when shown again, so this ensures
+		// that their position stays consistent.
+		InsertMenuItem(hTrayMenu, menuId, TRUE, &menuItemInfo);
 	}
 }
 
+void add_separator(int menuId) {
+	InsertMenu(hTrayMenu, // parent menu
+	           menuId,    // position
+						 MF_BYPOSITION | MF_SEPARATOR,
+						 menuId,    // identifier
+						 NULL);
+}
+
+void hide_menu_item(int menuId) {
+	DeleteMenu(hTrayMenu, menuId, MF_BYCOMMAND);
+}
+
 void quit() {
-	Shell_NotifyIcon(NIM_DELETE, &nid);
+	PostMessage(hWnd, WM_CLOSE, 0, 0);
 }
