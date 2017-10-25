@@ -3,6 +3,12 @@
 
 [[projects]]
   branch = "master"
+  name = "github.com/aead/chacha20"
+  packages = [".","chacha"]
+  revision = "8d6ce0550041f9d97e7f15ec27ed489f8bbbb0fb"
+
+[[projects]]
+  branch = "master"
   name = "github.com/getlantern/byteexec"
   packages = ["."]
   revision = "4cfb26ec74f460fda433dc06fddfbad7ddee3072"
@@ -75,6 +81,36 @@
 
 [[projects]]
   branch = "master"
+  name = "github.com/hashicorp/golang-lru"
+  packages = [".","simplelru"]
+  revision = "0a025b7e63adc15a622f29b0b2c4c3848243bbf6"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/lucas-clemente/aes12"
+  packages = ["."]
+  revision = "25700e67be5c860bcc999137275b9ef8b65932bd"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/lucas-clemente/fnv128a"
+  packages = ["."]
+  revision = "393af48d391698c6ae4219566bfbdfef67269997"
+
+[[projects]]
+  name = "github.com/lucas-clemente/quic-go"
+  packages = [".","ackhandler","congestion","crypto","flowcontrol","frames","handshake","protocol","qerr","utils"]
+  revision = "d51a4a1ba70df8c2d5c4522c071aaa225690a11d"
+  version = "v0.5.0"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/lucas-clemente/quic-go-certificates"
+  packages = ["."]
+  revision = "d2f86524cced5186554df90d92529757d22c1cb6"
+
+[[projects]]
+  branch = "master"
   name = "github.com/oxtoacart/bpool"
   packages = ["."]
   revision = "4e1c5567d7c2dd59fa4c7c83d34c2f3528b025d6"
@@ -100,7 +136,7 @@
 [[projects]]
   branch = "master"
   name = "golang.org/x/crypto"
-  packages = ["pbkdf2","ssh/terminal"]
+  packages = ["curve25519","hkdf","pbkdf2","ssh/terminal"]
   revision = "2509b142fb2b797aa7587dad548f113b2c0f20ce"
 
 [[projects]]
@@ -112,6 +148,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "076dc711900b1473766e616e31febe0eca7f4c0d4bfd3a4f75521be4cbf5adf2"
+  inputs-digest = "4f34c872ae72de81f5396fcdfadba97f12426730556126ea42245e851c8ecd77"
   solver-name = "gps-cdcl"
   solver-version = 1
