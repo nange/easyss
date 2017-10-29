@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/tls"
 	"fmt"
+	"time"
 
 	quic "github.com/lucas-clemente/quic-go"
 	"github.com/pkg/errors"
@@ -20,7 +22,9 @@ type sessOpts struct {
 }
 
 func NewSession(addr string) (quic.Session, error) {
-	return quic.DialAddr(addr, nil)
+	return quic.DialAddr(addr,
+		&tls.Config{InsecureSkipVerify: true},
+		&quic.Config{IdleTimeout: time.Minute})
 }
 
 func (ss *Easyss) sessManage() {
