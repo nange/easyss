@@ -13,8 +13,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func tcpRemote(config *Config) {
-	listenAddr := ":" + strconv.Itoa(config.ServerPort)
+func (ss *Easyss) Remote() {
+	listenAddr := ":" + strconv.Itoa(ss.config.ServerPort)
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		log.Fatal(err)
@@ -33,7 +33,7 @@ func tcpRemote(config *Config) {
 		go func() {
 			defer conn.Close()
 
-			addr, err := getTargetAddr(conn, config.Password)
+			addr, err := getTargetAddr(conn, ss.config.Password)
 			if err != nil {
 				log.Errorf("get target addr err:%+v", err)
 				return
@@ -47,10 +47,10 @@ func tcpRemote(config *Config) {
 			}
 			defer tconn.Close()
 
-			csConn, err := cipherstream.New(conn, config.Password, config.Method)
+			csConn, err := cipherstream.New(conn, ss.config.Password, ss.config.Method)
 			if err != nil {
 				log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
-					err, config.Password, config.Method)
+					err, ss.config.Password, ss.config.Method)
 				return
 			}
 

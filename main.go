@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 
+	quic "github.com/lucas-clemente/quic-go"
 	"github.com/nange/easyss/utils"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -19,6 +20,26 @@ func init() {
 func PrintVersion() {
 	const version = "Beta2"
 	fmt.Println("easyss version", version)
+}
+
+type Easyss struct {
+	config    *Config
+	localSess quic.Session
+	sessChan  chan sessOpts
+}
+
+func New(config *Config) (*Easyss, error) {
+	addr := fmt.Sprintf("%s:%d", config.Server, config.ServerPort)
+	sess, err := NewSession(addr)
+	if err != nil {
+		return nil, errors.Wrap(err, "new session error")
+	}
+
+	return &Easyss{
+		config:    config,
+		localSess: sess,
+		sessChan:  make(chan sessOpts, 10),
+	}, nil
 }
 
 func main() {
@@ -73,12 +94,16 @@ func main() {
 		config.Method = "aes-256-gcm"
 	}
 
+	ss, err := New(config)
+	if err != nil {
+		log.Fatalf("err:%+v", err)
+	}
 	if serverModel {
 		if config.ServerPort == 0 || config.Password == "" {
 			log.Fatalln("server port and password should not empty")
 		}
 
-		tcpRemote(config)
+		ss.Remote()
 	} else {
 		if config.Password == "" || config.Server == "" || config.ServerPort == 0 {
 			log.Fatalln("server address, server port and password should not empty")
@@ -89,7 +114,7 @@ func main() {
 		p := NewPAC(config.LocalPort, pacChan)
 		go p.Serve() // system pac configuration
 
-		go tcpLocal(config) // start local server
+		go ss.Local() // start local server
 
 		t := NewTray(pacChan)
 		t.Run() // system tray management
