@@ -29,16 +29,9 @@ type Easyss struct {
 }
 
 func New(config *Config) (*Easyss, error) {
-	addr := fmt.Sprintf("%s:%d", config.Server, config.ServerPort)
-	sess, err := NewSession(addr)
-	if err != nil {
-		return nil, errors.Wrap(err, "new session error")
-	}
-
 	return &Easyss{
-		config:    config,
-		localSess: sess,
-		sessChan:  make(chan sessOpts, 10),
+		config:   config,
+		sessChan: make(chan sessOpts, 10),
 	}, nil
 }
 
