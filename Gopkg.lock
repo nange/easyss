@@ -9,6 +9,12 @@
 
 [[projects]]
   branch = "master"
+  name = "github.com/bifurcation/mint"
+  packages = [".","syntax"]
+  revision = "8c88abfa791682796b74de8e661dfba248fc5c02"
+
+[[projects]]
+  branch = "master"
   name = "github.com/getlantern/byteexec"
   packages = ["."]
   revision = "4cfb26ec74f460fda433dc06fddfbad7ddee3072"
@@ -89,7 +95,7 @@
   branch = "master"
   name = "github.com/lucas-clemente/aes12"
   packages = ["."]
-  revision = "25700e67be5c860bcc999137275b9ef8b65932bd"
+  revision = "cd47fb39b79f867c6e4e5cd39cf7abd799f71670"
 
 [[projects]]
   branch = "master"
@@ -98,10 +104,10 @@
   revision = "393af48d391698c6ae4219566bfbdfef67269997"
 
 [[projects]]
+  branch = "master"
   name = "github.com/lucas-clemente/quic-go"
-  packages = [".","ackhandler","congestion","crypto","flowcontrol","frames","handshake","protocol","qerr","utils"]
-  revision = "d51a4a1ba70df8c2d5c4522c071aaa225690a11d"
-  version = "v0.5.0"
+  packages = [".","ackhandler","congestion","internal/crypto","internal/flowcontrol","internal/handshake","internal/protocol","internal/utils","internal/wire","qerr"]
+  revision = "fcc380187a928f70185dc6dc0403f0ea789703f5"
 
 [[projects]]
   branch = "master"
@@ -143,11 +149,11 @@
   branch = "master"
   name = "golang.org/x/sys"
   packages = ["unix","windows"]
-  revision = "a1a1f1746d156bbc9954f29134b20ed4ce2752f1"
+  revision = "661970f62f5897bc0cd5fdca7e087ba8a98a8fa1"
 
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "4f34c872ae72de81f5396fcdfadba97f12426730556126ea42245e851c8ecd77"
+  inputs-digest = "2217e98b478501b4d9bef1c8e794e85d6a9c9d857603099ec513bbb4cc36168b"
   solver-name = "gps-cdcl"
   solver-version = 1

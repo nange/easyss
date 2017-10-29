@@ -16,11 +16,11 @@ As Google's QUIC versions are expected to converge towards the [IETF QUIC draft]
 
 ## Guides
 
-We currently support Go 1.7+.
+We currently support Go 1.9+.
 
-Installing deps:
+Installing and updating dependencies:
 
-    go get -t
+    go get -t -u ./...
 
 Running tests:
 
@@ -37,6 +37,10 @@ Using the `quic_client` from chromium:
 Using Chrome:
 
     /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --user-data-dir=/tmp/chrome --no-proxy-server --enable-quic --origin-to-force-quic-on=quic.clemente.io:443 --host-resolver-rules='MAP quic.clemente.io:443 127.0.0.1:6121' https://quic.clemente.io
+
+### QUIC without HTTP/2
+
+Take a look at [this echo example](example/echo/echo.go).
 
 ### Using the example client
 
@@ -55,14 +59,14 @@ h2quic.ListenAndServeQUIC("localhost:4242", "/path/to/cert/chain.pem", "/path/to
 
 ### As a client
 
-See the [example client](example/client/main.go). Use a `QuicRoundTripper` as a `Transport` in a `http.Client`.
+See the [example client](example/client/main.go). Use a `h2quic.RoundTripper` as a `Transport` in a `http.Client`.
 
 ```go
 http.Client{
-  Transport: &h2quic.QuicRoundTripper{},
+  Transport: &h2quic.RoundTripper{},
 }
 ```
 
 ## Contributing
 
-We are always happy to welcome new contributors! We have a number of self-contained issues that are suitable for first-time contributors, they are tagged with [want-help](https://github.com/lucas-clemente/quic-go/issues?q=is%3Aopen+is%3Aissue+label%3Awant-help). If you have any questions, please feel free to reach out by opening an issue or leaving a comment.
+We are always happy to welcome new contributors! We have a number of self-contained issues that are suitable for first-time contributors, they are tagged with [help wanted](https://github.com/lucas-clemente/quic-go/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22). If you have any questions, please feel free to reach out by opening an issue or leaving a comment.

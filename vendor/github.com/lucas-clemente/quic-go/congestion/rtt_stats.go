@@ -3,10 +3,11 @@ package congestion
 import (
 	"time"
 
-	"github.com/lucas-clemente/quic-go/utils"
+	"github.com/lucas-clemente/quic-go/internal/utils"
 )
 
 const (
+	// Note: This constant is also defined in the ackhandler package.
 	initialRTTus          = 100 * 1000
 	rttAlpha      float32 = 0.125
 	oneMinusAlpha float32 = (1 - rttAlpha)
