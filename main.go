@@ -29,10 +29,13 @@ type Easyss struct {
 }
 
 func New(config *Config) (*Easyss, error) {
-	return &Easyss{
+	ss := &Easyss{
 		config:   config,
 		sessChan: make(chan sessOpts, 10),
-	}, nil
+	}
+	go ss.sessManage()
+
+	return ss, nil
 }
 
 func main() {

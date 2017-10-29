@@ -9,8 +9,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// MAX_PAYLOAD_SIZE is the maximum size of payload, set to 32KB.
-const MAX_PAYLOAD_SIZE = 1<<15 - 1
+// MAX_PAYLOAD_SIZE is the maximum size of payload, set to 16KB.
+const MAX_PAYLOAD_SIZE = 1<<14 - 1
 
 type CipherStream struct {
 	io.ReadWriter
