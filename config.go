@@ -70,6 +70,11 @@ func UpdateConfig(old, ne *Config) {
 			if i != 0 {
 				oldField.SetInt(i)
 			}
+		case reflect.Bool:
+			b := newField.Bool()
+			if b {
+				oldField.SetBool(b)
+			}
 		}
 	}
 
