@@ -41,9 +41,14 @@ func (ss *Easyss) Local() {
 			}
 			log.Debugf("target proxy addr is:%v", addr.String())
 
-			stream := ss.getStream()
-			if stream == nil {
-				log.Warnf("stream is nil, so close the local request direct")
+			var stream io.ReadWriteCloser
+			if ss.config.EnableQuic {
+				stream, err = ss.getStream()
+			} else {
+				stream, err = net.Dial("tcp", ss.config.Server+":"+strconv.Itoa(ss.config.ServerPort))
+			}
+			if err != nil {
+				log.Errorf("get stream err:%+v", err)
 				return
 			}
 			defer stream.Close()
@@ -85,6 +90,8 @@ func (ss *Easyss) Local() {
 			}
 
 			go func() {
+				defer conn.Close()
+				defer stream.Close()
 				n, err := io.Copy(conn, csStream)
 				log.Infof("reciveve %v bytes from %v, message:%v", n, addr.String(), err)
 			}()

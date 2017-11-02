@@ -21,12 +21,20 @@ import (
 )
 
 func (ss *Easyss) Remote() {
-	listenAddr := ":" + strconv.Itoa(ss.config.ServerPort)
-	ln, err := quic.ListenAddr(listenAddr, generateTLSConfig(), &quic.Config{IdleTimeout: time.Minute})
+	if ss.config.EnableQuic {
+		ss.quicServer()
+	} else {
+		ss.tcpServer()
+	}
+}
+
+func (ss *Easyss) quicServer() {
+	addr := ":" + strconv.Itoa(ss.config.ServerPort)
+	ln, err := quic.ListenAddr(addr, generateTLSConfig(), &quic.Config{IdleTimeout: time.Minute})
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Infof("starting remote quic server at %v ...", listenAddr)
+	log.Infof("starting remote quic server at %v ...", addr)
 
 	for {
 		sess, err := ln.Accept()
@@ -72,6 +80,8 @@ func (ss *Easyss) Remote() {
 					}
 
 					go func() {
+						defer stream.Close()
+						defer tconn.Close()
 						n, err := io.Copy(csStream, tconn)
 						log.Infof("reciveve %v bytes from %v, message:%v", n, addr, err)
 					}()
@@ -81,6 +91,62 @@ func (ss *Easyss) Remote() {
 
 			}
 		}(sess)
+	}
+}
+
+func (ss *Easyss) tcpServer() {
+	addr := ":" + strconv.Itoa(ss.config.ServerPort)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Infof("starting remote socks5 server at %v ...", addr)
+
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			log.Error("accept:", err)
+			continue
+		}
+		log.Infof("a new connection(ip) is accepted. remote addr:%v\n", conn.RemoteAddr())
+
+		conn.(*net.TCPConn).SetKeepAlive(true)
+		conn.(*net.TCPConn).SetKeepAlivePeriod(30 * time.Second)
+
+		go func() {
+			defer conn.Close()
+
+			addr, err := getTargetAddr(conn, ss.config.Password)
+			if err != nil {
+				log.Errorf("get target addr err:%+v", err)
+				return
+			}
+			log.Debugf("target proxy addr is:%v", addr.String())
+
+			tconn, err := net.Dial("tcp", addr.String())
+			if err != nil {
+				log.Errorf("net.Dial %v err:%v", addr, err)
+				return
+			}
+			defer tconn.Close()
+
+			csStream, err := cipherstream.New(conn, ss.config.Password, ss.config.Method)
+			if err != nil {
+				log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
+					err, ss.config.Password, ss.config.Method)
+				return
+			}
+
+			go func() {
+				defer conn.Close()
+				defer tconn.Close()
+				n, err := io.Copy(csStream, tconn)
+				log.Infof("reciveve %v bytes from %v, err:%v", n, addr, err)
+			}()
+			n, err := io.Copy(tconn, csStream)
+			log.Infof("send %v bytes to %v, err:%v", n, addr, err)
+		}()
+
 	}
 }
 

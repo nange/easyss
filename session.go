@@ -60,9 +60,12 @@ func (ss *Easyss) sessManage() {
 	}
 }
 
-func (ss *Easyss) getStream() quic.Stream {
-	ret := make(chan quic.Stream, 1)
-	ss.sessChan <- sessOpts{action: GET_STREAM, ret: ret}
-
-	return <-ret
+func (ss *Easyss) getStream() (quic.Stream, error) {
+	retChan := make(chan quic.Stream, 1)
+	ss.sessChan <- sessOpts{action: GET_STREAM, ret: retChan}
+	stream := <-retChan
+	if stream == nil {
+		return nil, errors.New("can not get stream")
+	}
+	return stream, nil
 }
