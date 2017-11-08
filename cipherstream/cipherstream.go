@@ -133,7 +133,7 @@ func (cs *CipherStream) read() ([]byte, error) {
 	size := int(lenplain[0])<<16 | int(lenplain[1])<<8 | int(lenplain[2])
 	log.Debugf("read from cipher stream, frame payload size:%v", size)
 	if (size & MAX_PAYLOAD_SIZE) != size {
-		log.Errorf("read from cipherstream payload size:%v is invalid", size)
+		log.Errorf("read from cipherstream payload size:%+v is invalid", size)
 		return nil, errors.New("payload size is invalid")
 	}
 
