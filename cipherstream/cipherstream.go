@@ -3,18 +3,17 @@ package cipherstream
 import (
 	"bytes"
 	"io"
-	"net"
 
 	"github.com/nange/easyss/utils"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
-// MAX_PAYLOAD_SIZE is the maximum size of payload, set to 32KB.
-const MAX_PAYLOAD_SIZE = 1<<15 - 1
+// MAX_PAYLOAD_SIZE is the maximum size of payload, set to 16KB.
+const MAX_PAYLOAD_SIZE = 1<<14 - 1
 
 type CipherStream struct {
-	net.Conn
+	io.ReadWriter
 	AEADCipher
 	reader
 	writer
@@ -36,8 +35,8 @@ type writer struct {
 	wbuf []byte
 }
 
-func New(conn net.Conn, password, method string) (net.Conn, error) {
-	cs := &CipherStream{Conn: conn}
+func New(stream io.ReadWriter, password, method string) (io.ReadWriter, error) {
+	cs := &CipherStream{ReadWriter: stream}
 
 	switch method {
 	case "aes-256-gcm":
@@ -82,7 +81,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 			}
 
 			dataframe := append(headercipher, payloadcipher...)
-			if _, ew := cs.Conn.Write(dataframe); ew != nil {
+			if _, ew := cs.ReadWriter.Write(dataframe); ew != nil {
 				err = ew
 				break
 			}
@@ -120,8 +119,8 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 
 func (cs *CipherStream) read() ([]byte, error) {
 	lenbuf := cs.rbuf[:9+cs.NonceSize()+cs.Overhead()]
-	if _, err := io.ReadFull(cs.Conn, lenbuf); err != nil {
-		log.Errorf("read cipher stream payload len err:%+v", errors.WithStack(err))
+	if _, err := io.ReadFull(cs.ReadWriter, lenbuf); err != nil {
+		log.Warnf("read cipher stream payload len err:%+v", errors.WithStack(err))
 		return nil, err
 	}
 
@@ -134,12 +133,12 @@ func (cs *CipherStream) read() ([]byte, error) {
 	size := int(lenplain[0])<<16 | int(lenplain[1])<<8 | int(lenplain[2])
 	log.Debugf("read from cipher stream, frame payload size:%v", size)
 	if (size & MAX_PAYLOAD_SIZE) != size {
-		log.Errorf("read from cipherstream payload size:%v is invalid", size)
+		log.Errorf("read from cipherstream payload size:%+v is invalid", size)
 		return nil, errors.New("payload size is invalid")
 	}
 
 	lenpayload := size + cs.NonceSize() + cs.Overhead()
-	if _, err := io.ReadFull(cs.Conn, cs.rbuf[:lenpayload]); err != nil {
+	if _, err := io.ReadFull(cs.ReadWriter, cs.rbuf[:lenpayload]); err != nil {
 		log.Errorf("read cipher stream payload err:%+v, lenpayload:%v", errors.WithStack(err), lenpayload)
 		return nil, err
 	}

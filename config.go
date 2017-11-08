@@ -25,6 +25,7 @@ type Config struct {
 	Password   string `json:"password"`
 	Method     string `json:"method"` // encryption method
 	Timeout    int    `json:"timeout"`
+	EnableQuic bool   `json:"quic"`
 }
 
 func ParseConfig(path string) (config *Config, err error) {
@@ -68,6 +69,11 @@ func UpdateConfig(old, ne *Config) {
 			i := newField.Int()
 			if i != 0 {
 				oldField.SetInt(i)
+			}
+		case reflect.Bool:
+			b := newField.Bool()
+			if b {
+				oldField.SetBool(b)
 			}
 		}
 	}

@@ -13,14 +13,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func tcpLocal(config *Config) {
-	listenAddr := ":" + strconv.Itoa(config.LocalPort)
+func (ss *Easyss) Local() {
+	listenAddr := ":" + strconv.Itoa(ss.config.LocalPort)
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		log.Fatal(err)
 	}
 	log.Infof("starting local socks5 server at %v", listenAddr)
-	log.Debugf("config:%v", *config)
+	log.Debugf("config:%v", *ss.config)
 
 	for {
 		conn, err := ln.Accept()
@@ -29,7 +29,7 @@ func tcpLocal(config *Config) {
 			continue
 		}
 		conn.(*net.TCPConn).SetKeepAlive(true)
-		conn.(*net.TCPConn).SetKeepAlivePeriod(30 * time.Second)
+		conn.(*net.TCPConn).SetKeepAlivePeriod(10 * time.Second)
 
 		go func() {
 			defer conn.Close()
@@ -41,18 +41,20 @@ func tcpLocal(config *Config) {
 			}
 			log.Debugf("target proxy addr is:%v", addr.String())
 
-			rconn, err := net.Dial("tcp", config.Server+":"+strconv.Itoa(config.ServerPort))
+			var stream io.ReadWriteCloser
+			if ss.config.EnableQuic {
+				stream, err = ss.getStream()
+			} else {
+				stream, err = net.Dial("tcp", ss.config.Server+":"+strconv.Itoa(ss.config.ServerPort))
+			}
 			if err != nil {
-				log.Errorf("net.Dial err:%v, server:%v, port:%v", errors.WithStack(err), config.Server, config.ServerPort)
+				log.Errorf("get stream err:%+v", err)
 				return
 			}
-			defer rconn.Close()
-
-			rconn.(*net.TCPConn).SetKeepAlive(true)
-			rconn.(*net.TCPConn).SetKeepAlivePeriod(30 * time.Second)
+			defer stream.Close()
 
 			header, payload := utils.NewHTTP2DataFrame(addr)
-			gcm, err := cipherstream.NewAes256GCM([]byte(config.Password))
+			gcm, err := cipherstream.NewAes256GCM([]byte(ss.config.Password))
 			if err != nil {
 				log.Errorf("cipherstream.NewAes256GCM err:%+v", err)
 				return
@@ -63,9 +65,9 @@ func tcpLocal(config *Config) {
 				log.Errorf("gcm.Encrypt err:%+v", err)
 				return
 			}
-			_, err = rconn.Write(headercipher)
+			_, err = stream.Write(headercipher)
 			if err != nil {
-				log.Errorf("rconn.Write err:%+v", errors.WithStack(err))
+				log.Errorf("stream.Write err:%+v", errors.WithStack(err))
 				return
 			}
 
@@ -74,25 +76,27 @@ func tcpLocal(config *Config) {
 				log.Errorf("gcm.Encrypt err:%+v", err)
 				return
 			}
-			_, err = rconn.Write(payloadcipher)
+			_, err = stream.Write(payloadcipher)
 			if err != nil {
-				log.Errorf("rconn.Write err:%+v", errors.WithStack(err))
+				log.Errorf("stream.Write err:%+v", errors.WithStack(err))
 				return
 			}
 
-			csConn, err := cipherstream.New(rconn, config.Password, config.Method)
+			csStream, err := cipherstream.New(stream, ss.config.Password, ss.config.Method)
 			if err != nil {
 				log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
-					err, config.Password, config.Method)
+					err, ss.config.Password, ss.config.Method)
 				return
 			}
 
 			go func() {
-				n, err := io.Copy(conn, csConn)
-				log.Warnf("reciveve %v bytes from %v, err:%v", n, addr.String(), err)
+				defer conn.Close()
+				defer stream.Close()
+				n, err := io.Copy(conn, csStream)
+				log.Infof("reciveve %v bytes from %v, message:%v", n, addr.String(), err)
 			}()
-			n, err := io.Copy(csConn, conn)
-			log.Warnf("send %v bytes to %v, err:%v", n, addr.String(), err)
+			n, err := io.Copy(csStream, conn)
+			log.Infof("send %v bytes to %v, message:%v", n, addr.String(), err)
 		}()
 
 	}
