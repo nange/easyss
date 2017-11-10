@@ -7,6 +7,7 @@ import (
 	"path"
 
 	quic "github.com/lucas-clemente/quic-go"
+	"github.com/nange/easypool"
 	"github.com/nange/easyss/utils"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -26,6 +27,7 @@ type Easyss struct {
 	config    *Config
 	localSess quic.Session
 	sessChan  chan sessOpts
+	tcpPool   easypool.Pool
 }
 
 func New(config *Config) (*Easyss, error) {
