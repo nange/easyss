@@ -49,6 +49,9 @@
   branch = "master"
   name = "github.com/lucas-clemente/quic-go"
 
+[[constraint]]
+  name = "github.com/nange/easypool"
+  version = "1.0"
 
 
 
