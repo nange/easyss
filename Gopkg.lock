@@ -116,6 +116,12 @@
   revision = "d2f86524cced5186554df90d92529757d22c1cb6"
 
 [[projects]]
+  name = "github.com/nange/easypool"
+  packages = ["."]
+  revision = "5ad858aac69a377ff8ba1b4984e334c3e8c1730f"
+  version = "1.0"
+
+[[projects]]
   branch = "master"
   name = "github.com/oxtoacart/bpool"
   packages = ["."]
@@ -154,6 +160,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "2217e98b478501b4d9bef1c8e794e85d6a9c9d857603099ec513bbb4cc36168b"
+  inputs-digest = "7d0c059aaa46f1387337acd91614676aa6ef3d19619264172b512461175cf75c"
   solver-name = "gps-cdcl"
   solver-version = 1
