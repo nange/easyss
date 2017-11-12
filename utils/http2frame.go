@@ -5,10 +5,10 @@ import (
 	"math/rand"
 )
 
-func NewHTTP2DataFrame(data []byte) (header []byte, payload []byte) {
+func NewHTTP2DataFrameHeader(datalen int) (header []byte) {
 	header = make([]byte, 9)
 	length := make([]byte, 4)
-	binary.BigEndian.PutUint32(length, uint32(len(data)))
+	binary.BigEndian.PutUint32(length, uint32(datalen))
 	// set length field
 	copy(header[:3], length[1:])
 	// set frame type to data
@@ -19,5 +19,5 @@ func NewHTTP2DataFrame(data []byte) (header []byte, payload []byte) {
 	// set stream identifier. note: this is temporary, will update in future
 	binary.BigEndian.PutUint32(header[5:9], uint32(rand.Int31()))
 
-	return header, data
+	return header
 }

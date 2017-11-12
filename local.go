@@ -53,7 +53,7 @@ func (ss *Easyss) Local() {
 			}
 			defer stream.Close()
 
-			header, payload := utils.NewHTTP2DataFrame(addr)
+			header := utils.NewHTTP2DataFrameHeader(len(addr))
 			gcm, err := cipherstream.NewAes256GCM([]byte(ss.config.Password))
 			if err != nil {
 				log.Errorf("cipherstream.NewAes256GCM err:%+v", err)
@@ -71,7 +71,7 @@ func (ss *Easyss) Local() {
 				return
 			}
 
-			payloadcipher, err := gcm.Encrypt(payload)
+			payloadcipher, err := gcm.Encrypt([]byte(addr))
 			if err != nil {
 				log.Errorf("gcm.Encrypt err:%+v", err)
 				return
