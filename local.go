@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nange/easypool"
 	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/socks"
 	"github.com/nange/easyss/utils"
@@ -45,7 +46,7 @@ func (ss *Easyss) Local() {
 			if ss.config.EnableQuic {
 				stream, err = ss.getStream()
 			} else {
-				stream, err = net.Dial("tcp", ss.config.Server+":"+strconv.Itoa(ss.config.ServerPort))
+				stream, err = ss.tcpPool.Get()
 			}
 			if err != nil {
 				log.Errorf("get stream err:%+v", err)
@@ -89,15 +90,53 @@ func (ss *Easyss) Local() {
 				return
 			}
 
-			go func() {
-				defer conn.Close()
-				defer stream.Close()
-				n, err := io.Copy(conn, csStream)
-				log.Infof("reciveve %v bytes from %v, message:%v", n, addr.String(), err)
-			}()
-			n, err := io.Copy(csStream, conn)
-			log.Infof("send %v bytes to %v, message:%v", n, addr.String(), err)
+			n1, n2, needclose := relay(csStream, conn, true)
+			log.Infof("send %v bytes to %v, and recive %v bytes, needclose:%v", n1, addr, n2, needclose)
 		}()
-
 	}
+}
+
+// relay copies between cipherstream and plaintxtstream.
+// return the number of bytes copies
+// from plaintxtstream to cipherstream, from cipherstream to plaintxtstream, and any error occurred.
+func relay(cipher, plaintxt io.ReadWriteCloser, islocal bool) (int64, int64, bool) {
+	needclose := false
+	ch := make(chan int64, 1)
+
+	go func() {
+		n, err := io.Copy(plaintxt, cipher)
+		if err == cipherstream.ErrDecrypt || err == cipherstream.ErrReadCipher {
+			log.Warnf("io.Copy err:%+v, maybe underline connection have been closed", err)
+			if pc, ok := cipher.(*easypool.PoolConn); ok {
+				log.Debug("mark cipher stream unusable")
+				pc.MarkUnusable()
+				needclose = true
+			}
+		}
+		if conn, ok := plaintxt.(*net.TCPConn); ok {
+			log.Debugf("set tcp connection deadline to now, and free other goroutine")
+			conn.SetDeadline(time.Now()) // wake up the other goroutine blocking on plaintxt conn
+		}
+		ch <- n
+	}()
+
+	n1, err := io.Copy(cipher, plaintxt)
+	if err == cipherstream.ErrEncrypt || err == cipherstream.ErrWriteCipher {
+		log.Warnf("io.Copy err:%+v, maybe underline connection have been closed", err)
+		if pc, ok := cipher.(*easypool.PoolConn); ok {
+			log.Debug("mark cipher stream unusable")
+			pc.MarkUnusable()
+			needclose = true
+		}
+	} else if islocal {
+		rstHeader := utils.NewHTTP2RstStreamHeader()
+		cipher.Write(rstHeader)
+	}
+	if conn, ok := plaintxt.(*net.TCPConn); ok {
+		log.Debugf("set tcp connection deadline to now, and free other goroutine")
+		conn.SetDeadline(time.Now()) // wake up the other goroutine blocking on plaintxt conn
+	}
+	n2 := <-ch
+
+	return n1, n2, needclose
 }

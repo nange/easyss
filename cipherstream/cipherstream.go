@@ -18,10 +18,11 @@ var (
 	ErrWriteCipher  = errors.New("write cipher data to writer error")
 	ErrReadPlaintxt = errors.New("read plaintext data from reader error")
 	ErrReadCipher   = errors.New("read cipher data from reader error")
+	ErrRSTStream    = errors.New("receive RST_STREAM frame")
 )
 
 type CipherStream struct {
-	io.ReadWriter
+	io.ReadWriteCloser
 	AEADCipher
 	reader
 	writer
@@ -43,8 +44,8 @@ type writer struct {
 	wbuf []byte
 }
 
-func New(stream io.ReadWriter, password, method string) (io.ReadWriter, error) {
-	cs := &CipherStream{ReadWriter: stream}
+func New(stream io.ReadWriteCloser, password, method string) (io.ReadWriteCloser, error) {
+	cs := &CipherStream{ReadWriteCloser: stream}
 
 	switch method {
 	case "aes-256-gcm":
@@ -89,7 +90,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 			}
 
 			dataframe := append(headercipher, payloadcipher...)
-			if _, ew := cs.ReadWriter.Write(dataframe); ew != nil {
+			if _, ew := cs.ReadWriteCloser.Write(dataframe); ew != nil {
 				log.Warnf("write cipher data to cipher stream failed, msg:%+v", errors.WithStack(ew))
 				err = ErrWriteCipher
 				break
@@ -128,27 +129,32 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 }
 
 func (cs *CipherStream) read() ([]byte, error) {
-	lenbuf := cs.rbuf[:9+cs.NonceSize()+cs.Overhead()]
-	if _, err := io.ReadFull(cs.ReadWriter, lenbuf); err != nil {
+	hbuf := cs.rbuf[:9+cs.NonceSize()+cs.Overhead()]
+	if _, err := io.ReadFull(cs.ReadWriteCloser, hbuf); err != nil {
 		log.Warnf("read cipher stream payload len err:%+v", errors.WithStack(err))
 		return nil, ErrReadCipher
 	}
 
-	lenplain, err := cs.Decrypt(lenbuf)
+	hplain, err := cs.Decrypt(hbuf)
 	if err != nil {
 		log.Errorf("decrypt payload length err:%+v", err)
 		return nil, ErrDecrypt
 	}
 
-	size := int(lenplain[0])<<16 | int(lenplain[1])<<8 | int(lenplain[2])
+	size := int(hplain[0])<<16 | int(hplain[1])<<8 | int(hplain[2])
 	log.Debugf("read from cipher stream, frame payload size:%v", size)
 	if (size & MAX_PAYLOAD_SIZE) != size {
 		log.Errorf("read from cipherstream payload size:%+v is invalid", size)
 		return nil, errors.New("payload size is invalid")
 	}
 
+	if size == 4 && hplain[3] == 0x7 {
+		log.Debugf("receive RST_STREAM frame, we should stop reading immediately")
+		return nil, ErrRSTStream
+	}
+
 	lenpayload := size + cs.NonceSize() + cs.Overhead()
-	if _, err := io.ReadFull(cs.ReadWriter, cs.rbuf[:lenpayload]); err != nil {
+	if _, err := io.ReadFull(cs.ReadWriteCloser, cs.rbuf[:lenpayload]); err != nil {
 		log.Warnf("read cipher stream payload err:%+v, lenpayload:%v", errors.WithStack(err), lenpayload)
 		return nil, ErrReadCipher
 	}

@@ -3,8 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"path"
+	"time"
 
 	quic "github.com/lucas-clemente/quic-go"
 	"github.com/nange/easypool"
@@ -35,6 +37,24 @@ func New(config *Config) (*Easyss, error) {
 		config:   config,
 		sessChan: make(chan sessOpts, 10),
 	}
+
+	factory := func() (net.Conn, error) {
+		return net.Dial("tcp", fmt.Sprintf("%s:%d", config.Server, config.ServerPort))
+	}
+	pconfig := &easypool.PoolConfig{
+		InitialCap:  5,
+		MaxCap:      50,
+		MaxIdle:     10,
+		Idletime:    2 * time.Minute,
+		MaxLifetime: 15 * time.Minute,
+		Factory:     factory,
+	}
+	tcppool, err := easypool.NewHeapPool(pconfig)
+	if err != nil {
+		return nil, err
+	}
+	ss.tcpPool = tcppool
+
 	go ss.sessManage()
 
 	return ss, nil
@@ -95,7 +115,7 @@ func main() {
 
 	ss, err := New(config)
 	if err != nil {
-		log.Fatalf("err:%+v", err)
+		log.Fatalf("init Easyss err:%+v", err)
 	}
 	if serverModel {
 		if config.ServerPort == 0 || config.Password == "" {

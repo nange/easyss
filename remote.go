@@ -115,38 +115,36 @@ func (ss *Easyss) tcpServer() {
 
 		go func() {
 			defer conn.Close()
+			for {
+				addr, err := getTargetAddr(conn, ss.config.Password)
+				if err != nil {
+					log.Errorf("get target addr err:%+v", err)
+					return
+				}
+				log.Debugf("target proxy addr is:%v", addr.String())
 
-			addr, err := getTargetAddr(conn, ss.config.Password)
-			if err != nil {
-				log.Errorf("get target addr err:%+v", err)
-				return
+				tconn, err := net.Dial("tcp", addr.String())
+				if err != nil {
+					log.Errorf("net.Dial %v err:%v", addr, err)
+					return
+				}
+
+				csStream, err := cipherstream.New(conn, ss.config.Password, ss.config.Method)
+				if err != nil {
+					log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
+						err, ss.config.Password, ss.config.Method)
+					return
+				}
+
+				n1, n2, needclose := relay(csStream, tconn, false)
+				log.Infof("send %v bytes to %v, and recive %v bytes, needclose:%v", n2, addr, n1, needclose)
+
+				tconn.Close()
+				if needclose {
+					break
+				}
 			}
-			log.Debugf("target proxy addr is:%v", addr.String())
-
-			tconn, err := net.Dial("tcp", addr.String())
-			if err != nil {
-				log.Errorf("net.Dial %v err:%v", addr, err)
-				return
-			}
-			defer tconn.Close()
-
-			csStream, err := cipherstream.New(conn, ss.config.Password, ss.config.Method)
-			if err != nil {
-				log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
-					err, ss.config.Password, ss.config.Method)
-				return
-			}
-
-			go func() {
-				defer conn.Close()
-				defer tconn.Close()
-				n, err := io.Copy(csStream, tconn)
-				log.Infof("reciveve %v bytes from %v, err:%v", n, addr, err)
-			}()
-			n, err := io.Copy(tconn, csStream)
-			log.Infof("send %v bytes to %v, err:%v", n, addr, err)
 		}()
-
 	}
 }
 
