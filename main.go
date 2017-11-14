@@ -37,23 +37,24 @@ func New(config *Config) (*Easyss, error) {
 		config:   config,
 		sessChan: make(chan sessOpts, 10),
 	}
-
-	factory := func() (net.Conn, error) {
-		return net.Dial("tcp", fmt.Sprintf("%s:%d", config.Server, config.ServerPort))
+	if !config.ServerModel {
+		factory := func() (net.Conn, error) {
+			return net.Dial("tcp", fmt.Sprintf("%s:%d", config.Server, config.ServerPort))
+		}
+		pconfig := &easypool.PoolConfig{
+			InitialCap:  5,
+			MaxCap:      50,
+			MaxIdle:     10,
+			Idletime:    2 * time.Minute,
+			MaxLifetime: 15 * time.Minute,
+			Factory:     factory,
+		}
+		tcppool, err := easypool.NewHeapPool(pconfig)
+		if err != nil {
+			return nil, err
+		}
+		ss.tcpPool = tcppool
 	}
-	pconfig := &easypool.PoolConfig{
-		InitialCap:  5,
-		MaxCap:      50,
-		MaxIdle:     10,
-		Idletime:    2 * time.Minute,
-		MaxLifetime: 15 * time.Minute,
-		Factory:     factory,
-	}
-	tcppool, err := easypool.NewHeapPool(pconfig)
-	if err != nil {
-		return nil, err
-	}
-	ss.tcpPool = tcppool
 
 	go ss.sessManage()
 
@@ -62,7 +63,7 @@ func New(config *Config) (*Easyss, error) {
 
 func main() {
 	var configFile string
-	var printVer, debug, serverModel bool
+	var printVer, debug bool
 	var cmdConfig Config
 
 	flag.BoolVar(&printVer, "version", false, "print version")
@@ -75,7 +76,7 @@ func main() {
 	flag.StringVar(&cmdConfig.Method, "m", "", "encryption method, default: aes-256-gcm")
 	flag.BoolVar(&cmdConfig.EnableQuic, "quic", false, "enable quic if set this value to be true")
 	flag.BoolVar(&debug, "d", false, "print debug message")
-	flag.BoolVar(&serverModel, "server", false, "server model")
+	flag.BoolVar(&cmdConfig.ServerModel, "server", false, "server model")
 
 	flag.Parse()
 
@@ -117,7 +118,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("init Easyss err:%+v", err)
 	}
-	if serverModel {
+	if config.ServerModel {
 		if config.ServerPort == 0 || config.Password == "" {
 			log.Fatalln("server port and password should not empty")
 		}

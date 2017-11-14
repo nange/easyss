@@ -19,13 +19,14 @@ const (
 )
 
 type Config struct {
-	Server     string `json:"server"`
-	ServerPort int    `json:"server_port"`
-	LocalPort  int    `json:"local_port"`
-	Password   string `json:"password"`
-	Method     string `json:"method"` // encryption method
-	Timeout    int    `json:"timeout"`
-	EnableQuic bool   `json:"quic"`
+	Server      string `json:"server"`
+	ServerPort  int    `json:"server_port"`
+	LocalPort   int    `json:"local_port"`
+	Password    string `json:"password"`
+	Method      string `json:"method"` // encryption method
+	Timeout     int    `json:"timeout"`
+	EnableQuic  bool   `json:"quic"`
+	ServerModel bool   `json:"server_model"`
 }
 
 func ParseConfig(path string) (config *Config, err error) {
