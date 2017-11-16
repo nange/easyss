@@ -139,12 +139,17 @@ func relay(cipher, plaintxt io.ReadWriteCloser, islocal bool) (int64, int64, boo
 	}
 	n2 := <-ch
 
-	// TODO: if islocal && pc is not unusable, write RST_STREAM to remote server
-	//	if islocal {
-	//		log.Debug("write RST_STREAM to remote server")
-	//		rstHeader := utils.NewHTTP2RstStreamHeader()
-	//		cipher.Write(rstHeader)
-	//	}
+	if islocal {
+		if cs, ok := cipher.(*cipherstream.CipherStream); ok {
+			if pc, ok := cs.ReadWriteCloser.(*easypool.PoolConn); ok {
+				if pc.IsUnusable() {
+					log.Debug("write RST_STREAM to remote server")
+					rstHeader := utils.NewHTTP2RstStreamHeader()
+					cipher.Write(rstHeader)
+				}
+			}
+		}
+	}
 
 	return n1, n2, needclose
 }
