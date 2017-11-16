@@ -101,16 +101,18 @@ func (ss *Easyss) Local() {
 // from plaintxtstream to cipherstream, from cipherstream to plaintxtstream, and any error occurred.
 func relay(cipher, plaintxt io.ReadWriteCloser, islocal bool) (int64, int64, bool) {
 	needclose := false
-	ch := make(chan int64, 1)
+	ch := make(chan int64)
 
 	go func() {
 		n, err := io.Copy(plaintxt, cipher)
 		if err == cipherstream.ErrDecrypt || err == cipherstream.ErrReadCipher {
 			log.Warnf("io.Copy err:%+v, maybe underline connection have been closed", err)
-			if pc, ok := cipher.(*easypool.PoolConn); ok {
-				log.Debug("mark cipher stream unusable")
-				pc.MarkUnusable()
-				needclose = true
+			if cs, ok := cipher.(*cipherstream.CipherStream); ok {
+				if pc, ok := cs.ReadWriteCloser.(*easypool.PoolConn); ok {
+					log.Debug("mark cipher stream unusable")
+					pc.MarkUnusable()
+					needclose = true
+				}
 			}
 		}
 		if conn, ok := plaintxt.(*net.TCPConn); ok {
@@ -123,20 +125,26 @@ func relay(cipher, plaintxt io.ReadWriteCloser, islocal bool) (int64, int64, boo
 	n1, err := io.Copy(cipher, plaintxt)
 	if err == cipherstream.ErrEncrypt || err == cipherstream.ErrWriteCipher {
 		log.Warnf("io.Copy err:%+v, maybe underline connection have been closed", err)
-		if pc, ok := cipher.(*easypool.PoolConn); ok {
-			log.Debug("mark cipher stream unusable")
-			pc.MarkUnusable()
-			needclose = true
+		if cs, ok := cipher.(*cipherstream.CipherStream); ok {
+			if pc, ok := cs.ReadWriteCloser.(*easypool.PoolConn); ok {
+				log.Debug("mark cipher stream unusable")
+				pc.MarkUnusable()
+				needclose = true
+			}
 		}
-	} else if islocal {
-		rstHeader := utils.NewHTTP2RstStreamHeader()
-		cipher.Write(rstHeader)
 	}
 	if conn, ok := plaintxt.(*net.TCPConn); ok {
 		log.Debugf("set tcp connection deadline to now, and free other goroutine")
 		conn.SetDeadline(time.Now()) // wake up the other goroutine blocking on plaintxt conn
 	}
 	n2 := <-ch
+
+	// TODO: if islocal && pc is not unusable, write RST_STREAM to remote server
+	//	if islocal {
+	//		log.Debug("write RST_STREAM to remote server")
+	//		rstHeader := utils.NewHTTP2RstStreamHeader()
+	//		cipher.Write(rstHeader)
+	//	}
 
 	return n1, n2, needclose
 }

@@ -141,8 +141,10 @@ func (ss *Easyss) tcpServer() {
 
 				tconn.Close()
 				if needclose {
+					log.Debugf("maybe underline connection have been closed, need close the proxy conn")
 					break
 				}
+				log.Debugf("underline connection is health, so reuse it")
 			}
 		}()
 	}
