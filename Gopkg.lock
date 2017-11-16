@@ -118,8 +118,8 @@
 [[projects]]
   name = "github.com/nange/easypool"
   packages = ["."]
-  revision = "5ad858aac69a377ff8ba1b4984e334c3e8c1730f"
-  version = "1.0"
+  revision = "7946adfd9fc36297dea663be450866bf645d8e5a"
+  version = "1.1"
 
 [[projects]]
   branch = "master"
@@ -160,6 +160,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "7d0c059aaa46f1387337acd91614676aa6ef3d19619264172b512461175cf75c"
+  inputs-digest = "0ca5ef0a0c7d4ce00cb5a1c0cf16facbed6ce34b5182713fb034613494fa956c"
   solver-name = "gps-cdcl"
   solver-version = 1

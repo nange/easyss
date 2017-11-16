@@ -31,6 +31,10 @@ func (pc *PoolConn) MarkUnusable() {
 	pc.unusable = true
 }
 
+func (pc *PoolConn) IsUnusable() bool {
+	return pc.unusable
+}
+
 func (pc *PoolConn) close() error {
 	return pc.Conn.Close()
 }

@@ -117,6 +117,9 @@ func TestPoolConcurrent2(t *testing.T) {
 			time.Sleep(time.Second)
 			if i >= MaxCap-10 {
 				conn.(*PoolConn).MarkUnusable()
+				if !conn.(*PoolConn).IsUnusable() {
+					t.Errorf("after mark unusable, IsUnusable() should return true")
+				}
 			}
 			conn.Close()
 		}(conn, i)

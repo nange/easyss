@@ -39,6 +39,9 @@ conn.Close()
 conn.(*PoolConn).MarkUnusable()
 conn.Close()
 
+// 调用MarkUnusable()后，会返回true
+conn.(*PoolConn).IsUnusable()
+
 // 释放当前连接池中所有连接
 pool.Close()
 
