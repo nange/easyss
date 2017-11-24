@@ -99,57 +99,115 @@ func (ss *Easyss) Local() {
 // relay copies between cipherstream and plaintxtstream.
 // return the number of bytes copies
 // from plaintxtstream to cipherstream, from cipherstream to plaintxtstream, and any error occurred.
-func relay(cipher, plaintxt io.ReadWriteCloser, islocal bool) (int64, int64, bool) {
-	needclose := false
-	ch := make(chan int64)
+func relay(cipher, plaintxt io.ReadWriteCloser, islocal bool) (n1 int64, n2 int64, needclose bool) {
+	type res struct {
+		N   int64
+		Err error
+	}
+	ch1 := make(chan res, 1)
+	ch2 := make(chan res, 1)
 
 	go func() {
 		n, err := io.Copy(plaintxt, cipher)
-		if err == cipherstream.ErrDecrypt || err == cipherstream.ErrReadCipher {
-			log.Warnf("io.Copy err:%+v, maybe underline connection have been closed", err)
-			if cs, ok := cipher.(*cipherstream.CipherStream); ok {
-				if pc, ok := cs.ReadWriteCloser.(*easypool.PoolConn); ok {
-					log.Debug("mark cipher stream unusable")
-					pc.MarkUnusable()
-					needclose = true
-				}
-			}
-		}
-		if conn, ok := plaintxt.(*net.TCPConn); ok {
-			log.Debugf("set tcp connection deadline to now, and free other goroutine")
-			conn.SetDeadline(time.Now()) // wake up the other goroutine blocking on plaintxt conn
-		}
-		ch <- n
+		ch2 <- res{N: n, Err: err}
+	}()
+	go func() {
+		n, err := io.Copy(cipher, plaintxt)
+		ch1 <- res{N: n, Err: err}
 	}()
 
-	n1, err := io.Copy(cipher, plaintxt)
-	if err == cipherstream.ErrEncrypt || err == cipherstream.ErrWriteCipher {
-		log.Warnf("io.Copy err:%+v, maybe underline connection have been closed", err)
-		if cs, ok := cipher.(*cipherstream.CipherStream); ok {
-			if pc, ok := cs.ReadWriteCloser.(*easypool.PoolConn); ok {
-				log.Debug("mark cipher stream unusable")
-				pc.MarkUnusable()
-				needclose = true
+	var state *ConnState
+RELAY:
+	for i := 0; i < 2; i++ {
+		select {
+		case res1 := <-ch1:
+			n1 = res1.N
+			err := res1.Err
+			if err == cipherstream.ErrEncrypt || err == cipherstream.ErrWriteCipher {
+				log.Warnf("io.Copy err:%+v, maybe underline connection have been closed", err)
+				markCipherStreamUnusable(cipher)
+				break RELAY
 			}
-		}
-	}
-	if conn, ok := plaintxt.(*net.TCPConn); ok {
-		log.Debugf("set tcp connection deadline to now, and free other goroutine")
-		conn.SetDeadline(time.Now()) // wake up the other goroutine blocking on plaintxt conn
-	}
-	n2 := <-ch
+			if i == 0 {
+				log.Infof("read plaintxt stream error, set start state. details:%+v", err)
+				state = NewConnState(FIN_WAIT1)
+				setDeadline2Now(cipher, plaintxt)
+			} else {
+				if err != cipherstream.ErrTimeout {
+					log.Infof("execpt error is net: io timeout. but get:%+v", err)
+				}
+			}
 
-	if islocal {
-		if cs, ok := cipher.(*cipherstream.CipherStream); ok {
-			if pc, ok := cs.ReadWriteCloser.(*easypool.PoolConn); ok {
-				if pc.IsUnusable() {
-					log.Debug("write RST_STREAM to remote server")
-					rstHeader := utils.NewHTTP2RstStreamHeader()
-					cipher.Write(rstHeader)
+		case res2 := <-ch2:
+			n2 = res2.N
+			err := res2.Err
+			if err == cipherstream.ErrDecrypt || err == cipherstream.ErrReadCipher {
+				log.Warnf("io.Copy err:%+v, maybe underline connection have been closed", err)
+				markCipherStreamUnusable(cipher)
+				break RELAY
+			}
+			if i == 0 {
+				if err == cipherstream.ErrFINRSTStream {
+					log.Infof("read cipher stream ErrFINRSTStream, set start state")
+					state = NewConnState(CLOSE_WAIT)
+					setDeadline2Now(cipher, plaintxt)
+				} else {
+					log.Errorf("execpt error is ErrFINRSTStream, but get:%+v", err)
+					markCipherStreamUnusable(cipher)
+					break RELAY
 				}
 			}
 		}
 	}
 
-	return n1, n2, needclose
+	if cipherStreamUnusable(cipher) {
+		needclose = true
+		return
+	}
+
+	for statefn := state.fn; statefn != nil; {
+		statefn = statefn(cipher).fn
+	}
+	if state.err != nil {
+		log.Warnf("state err:%+v", state.err)
+		markCipherStreamUnusable(cipher)
+		needclose = true
+	}
+
+	return
+}
+
+// mark the cipher stream unusable, return mark result
+func markCipherStreamUnusable(cipher io.ReadWriteCloser) bool {
+	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
+		if pc, ok := cs.ReadWriteCloser.(*easypool.PoolConn); ok {
+			log.Infof("mark cipher stream unusable")
+			pc.MarkUnusable()
+			return true
+		}
+	}
+	return false
+}
+
+// return true if the cipher stream is unusable
+func cipherStreamUnusable(cipher io.ReadWriteCloser) bool {
+	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
+		if pc, ok := cs.ReadWriteCloser.(*easypool.PoolConn); ok {
+			return pc.IsUnusable()
+		}
+	}
+	return false
+}
+
+func setDeadline2Now(cipher, plaintxt io.ReadWriteCloser) {
+	if conn, ok := plaintxt.(net.Conn); ok {
+		log.Infof("set plaintxt tcp connection deadline to now")
+		conn.SetDeadline(time.Now())
+	}
+	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
+		if conn, ok := cs.ReadWriteCloser.(net.Conn); ok {
+			log.Infof("set cipher tcp connection deadline to now")
+			conn.SetDeadline(time.Now())
+		}
+	}
 }

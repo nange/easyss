@@ -108,7 +108,7 @@ func (ss *Easyss) tcpServer() {
 			log.Error("accept:", err)
 			continue
 		}
-		log.Infof("a new connection(ip) is accepted. remote addr:%v\n", conn.RemoteAddr())
+		log.Infof("a new connection(ip) is accepted. remote addr:%v", conn.RemoteAddr())
 
 		conn.(*net.TCPConn).SetKeepAlive(true)
 		conn.(*net.TCPConn).SetKeepAlivePeriod(30 * time.Second)
@@ -141,10 +141,10 @@ func (ss *Easyss) tcpServer() {
 
 				tconn.Close()
 				if needclose {
-					log.Debugf("maybe underline connection have been closed, need close the proxy conn")
+					log.Infof("maybe underline connection have been closed, need close the proxy conn")
 					break
 				}
-				log.Debugf("underline connection is health, so reuse it")
+				log.Infof("underline connection is health, so reuse it")
 			}
 		}()
 	}

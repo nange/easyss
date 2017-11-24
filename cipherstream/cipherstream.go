@@ -3,6 +3,7 @@ package cipherstream
 import (
 	"bytes"
 	"io"
+	"net"
 
 	"github.com/nange/easyss/utils"
 	"github.com/pkg/errors"
@@ -18,7 +19,10 @@ var (
 	ErrWriteCipher  = errors.New("write cipher data to writer error")
 	ErrReadPlaintxt = errors.New("read plaintext data from reader error")
 	ErrReadCipher   = errors.New("read cipher data from reader error")
-	ErrRSTStream    = errors.New("receive RST_STREAM frame")
+	ErrFINRSTStream = errors.New("receive FIN_RST_STREAM frame")
+	ErrACKRSTStream = errors.New("receive ACK_RST_STREAM frame")
+	ErrTimeout      = errors.New("net: io timeout error")
+	ErrPayloadSize  = errors.New("payload size is invalid")
 )
 
 type CipherStream struct {
@@ -92,7 +96,11 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 			dataframe := append(headercipher, payloadcipher...)
 			if _, ew := cs.ReadWriteCloser.Write(dataframe); ew != nil {
 				log.Warnf("write cipher data to cipher stream failed, msg:%+v", errors.WithStack(ew))
-				err = ErrWriteCipher
+				if timeout(ew) {
+					err = ErrTimeout
+				} else {
+					err = ErrWriteCipher
+				}
 				break
 			}
 		}
@@ -132,6 +140,9 @@ func (cs *CipherStream) read() ([]byte, error) {
 	hbuf := cs.rbuf[:9+cs.NonceSize()+cs.Overhead()]
 	if _, err := io.ReadFull(cs.ReadWriteCloser, hbuf); err != nil {
 		log.Warnf("read cipher stream payload len err:%+v", errors.WithStack(err))
+		if timeout(err) {
+			return nil, ErrTimeout
+		}
 		return nil, ErrReadCipher
 	}
 
@@ -145,17 +156,26 @@ func (cs *CipherStream) read() ([]byte, error) {
 	log.Debugf("read from cipher stream, frame payload size:%v", size)
 	if (size & MAX_PAYLOAD_SIZE) != size {
 		log.Errorf("read from cipherstream payload size:%+v is invalid", size)
-		return nil, errors.New("payload size is invalid")
+		return nil, ErrPayloadSize
 	}
 
 	if size == 4 && hplain[3] == 0x7 {
-		log.Debugf("receive RST_STREAM frame, we should stop reading immediately")
-		return nil, ErrRSTStream
+		if hplain[4] == 0x0 {
+			log.Debugf("receive FIN_RST_STREAM frame, we should stop reading immediately")
+			return nil, ErrFINRSTStream
+		}
+		if hplain[4] == 0x1 {
+			log.Debugf("receive ACK_RST_STREAM frame, we should stop reading immediately")
+			return nil, ErrACKRSTStream
+		}
 	}
 
 	lenpayload := size + cs.NonceSize() + cs.Overhead()
 	if _, err := io.ReadFull(cs.ReadWriteCloser, cs.rbuf[:lenpayload]); err != nil {
 		log.Warnf("read cipher stream payload err:%+v, lenpayload:%v", errors.WithStack(err), lenpayload)
+		if timeout(err) {
+			return nil, ErrTimeout
+		}
 		return nil, ErrReadCipher
 	}
 
@@ -166,4 +186,13 @@ func (cs *CipherStream) read() ([]byte, error) {
 	}
 
 	return payloadplain, nil
+}
+
+func timeout(err error) bool {
+	if err != nil {
+		if er, ok := err.(net.Error); ok {
+			return er.Timeout()
+		}
+	}
+	return false
 }
