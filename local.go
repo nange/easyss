@@ -165,6 +165,8 @@ RELAY:
 		return
 	}
 
+	setCipherDeadline(cipher)
+
 	for statefn := state.fn; statefn != nil; {
 		statefn = statefn(cipher).fn
 	}
@@ -208,6 +210,15 @@ func setDeadline2Now(cipher, plaintxt io.ReadWriteCloser) {
 		if conn, ok := cs.ReadWriteCloser.(net.Conn); ok {
 			log.Infof("set cipher tcp connection deadline to now")
 			conn.SetDeadline(time.Now())
+		}
+	}
+}
+
+func setCipherDeadline(cipher io.ReadWriteCloser) {
+	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
+		if conn, ok := cs.ReadWriteCloser.(net.Conn); ok {
+			log.Infof("set cipher tcp connection deadline to ten second later")
+			conn.SetDeadline(time.Now().Add(10 * time.Second))
 		}
 	}
 }
