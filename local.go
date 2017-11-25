@@ -121,42 +121,43 @@ RELAY:
 	for i := 0; i < 2; i++ {
 		select {
 		case res1 := <-ch1:
+			setDeadline2Now(cipher, plaintxt)
 			n1 = res1.N
 			err := res1.Err
-			if err == cipherstream.ErrEncrypt || err == cipherstream.ErrWriteCipher {
+			if cipherstream.EncryptErr(err) || cipherstream.WriteCipherErr(err) {
 				log.Warnf("io.Copy err:%+v, maybe underline connection have been closed", err)
 				markCipherStreamUnusable(cipher)
 				break RELAY
 			}
 			if i == 0 {
-				log.Infof("read plaintxt stream error, set start state. details:%+v", err)
+				log.Infof("read plaintxt stream error, set start state. details:%v", err)
 				state = NewConnState(FIN_WAIT1)
-				setDeadline2Now(cipher, plaintxt)
 			} else {
-				if err != cipherstream.ErrTimeout {
-					log.Infof("execpt error is net: io timeout. but get:%+v", err)
+				if !cipherstream.TimeoutErr(err) {
+					log.Infof("execpt error is net: io timeout. but get:%v", err)
 				}
 			}
 
 		case res2 := <-ch2:
+			setDeadline2Now(cipher, plaintxt)
 			n2 = res2.N
 			err := res2.Err
-			if err == cipherstream.ErrDecrypt || err == cipherstream.ErrReadCipher {
+			if cipherstream.DecryptErr(err) || cipherstream.ReadCipherErr(err) {
 				log.Warnf("io.Copy err:%+v, maybe underline connection have been closed", err)
 				markCipherStreamUnusable(cipher)
 				break RELAY
 			}
 			if i == 0 {
-				if err == cipherstream.ErrFINRSTStream {
+				if cipherstream.FINRSTStreamErr(err) {
 					log.Infof("read cipher stream ErrFINRSTStream, set start state")
 					state = NewConnState(CLOSE_WAIT)
-					setDeadline2Now(cipher, plaintxt)
 				} else {
-					log.Errorf("execpt error is ErrFINRSTStream, but get:%+v", err)
+					log.Errorf("execpt error is ErrFINRSTStream, but get:%v", err)
 					markCipherStreamUnusable(cipher)
 					break RELAY
 				}
 			}
+
 		}
 	}
 
@@ -166,7 +167,11 @@ RELAY:
 	}
 
 	setCipherDeadline(cipher)
-
+	if state == nil {
+		log.Errorf("unexcepted state, some unexcepted error occor")
+		needclose = true
+		return
+	}
 	for statefn := state.fn; statefn != nil; {
 		statefn = statefn(cipher).fn
 	}
@@ -217,8 +222,8 @@ func setDeadline2Now(cipher, plaintxt io.ReadWriteCloser) {
 func setCipherDeadline(cipher io.ReadWriteCloser) {
 	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
 		if conn, ok := cs.ReadWriteCloser.(net.Conn); ok {
-			log.Infof("set cipher tcp connection deadline to ten second later")
-			conn.SetDeadline(time.Now().Add(10 * time.Second))
+			log.Infof("set cipher tcp connection deadline to 15 second later")
+			conn.SetDeadline(time.Now().Add(15 * time.Second))
 		}
 	}
 }

@@ -13,6 +13,8 @@ import (
 // MAX_PAYLOAD_SIZE is the maximum size of payload, set to 16KB.
 const MAX_PAYLOAD_SIZE = 1<<14 - 1
 
+const FRAME_HEADER_SIZE = 9
+
 var (
 	ErrEncrypt      = errors.New("encrypt data error")
 	ErrDecrypt      = errors.New("decrypt data error")
@@ -137,7 +139,7 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 }
 
 func (cs *CipherStream) read() ([]byte, error) {
-	hbuf := cs.rbuf[:9+cs.NonceSize()+cs.Overhead()]
+	hbuf := cs.rbuf[:FRAME_HEADER_SIZE+cs.NonceSize()+cs.Overhead()]
 	if _, err := io.ReadFull(cs.ReadWriteCloser, hbuf); err != nil {
 		log.Warnf("read cipher stream payload len err:%+v", errors.WithStack(err))
 		if timeout(err) {
@@ -159,17 +161,6 @@ func (cs *CipherStream) read() ([]byte, error) {
 		return nil, ErrPayloadSize
 	}
 
-	if size == 4 && hplain[3] == 0x7 {
-		if hplain[4] == 0x0 {
-			log.Debugf("receive FIN_RST_STREAM frame, we should stop reading immediately")
-			return nil, ErrFINRSTStream
-		}
-		if hplain[4] == 0x1 {
-			log.Debugf("receive ACK_RST_STREAM frame, we should stop reading immediately")
-			return nil, ErrACKRSTStream
-		}
-	}
-
 	lenpayload := size + cs.NonceSize() + cs.Overhead()
 	if _, err := io.ReadFull(cs.ReadWriteCloser, cs.rbuf[:lenpayload]); err != nil {
 		log.Warnf("read cipher stream payload err:%+v, lenpayload:%v", errors.WithStack(err), lenpayload)
@@ -185,13 +176,191 @@ func (cs *CipherStream) read() ([]byte, error) {
 		return nil, ErrDecrypt
 	}
 
+	if isRSTStream, err := rstStream(payloadplain); isRSTStream {
+		log.Infof("receive RST_STREAM frame, we should stop reading immediately")
+		return nil, err
+	}
+
 	return payloadplain, nil
 }
 
+// rstStream check the payload is RST_STREAM
+func rstStream(payload []byte) (bool, error) {
+	if len(payload) != FRAME_HEADER_SIZE {
+		return false, nil
+	}
+	size := int(payload[0])<<16 | int(payload[1])<<8 | int(payload[2])
+	if size == 4 && payload[3] == 0x7 {
+		if payload[4] == 0x0 {
+			log.Infof("receive FIN_RST_STREAM frame")
+			return true, ErrFINRSTStream
+		}
+		if payload[4] == 0x1 {
+			log.Infof("receive ACK_RST_STREAM frame")
+			return true, ErrACKRSTStream
+		}
+	}
+	return false, nil
+}
+
+// timeout return true if err is net.Error timeout
 func timeout(err error) bool {
 	if err != nil {
 		if er, ok := err.(net.Error); ok {
 			return er.Timeout()
+		}
+	}
+	return false
+}
+
+// EncryptErr return true if err is ErrEncrypt
+func EncryptErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if err == ErrEncrypt {
+		return true
+	}
+
+	if er, ok := err.(*net.OpError); ok {
+		if er.Err == ErrEncrypt {
+			return true
+		}
+	}
+	return false
+}
+
+// DecryptErr return true if err is ErrDecrypt
+func DecryptErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if err == ErrDecrypt {
+		return true
+	}
+
+	if er, ok := err.(*net.OpError); ok {
+		if er.Err == ErrDecrypt {
+			return true
+		}
+	}
+	return false
+}
+
+// WriteCipherErr return true if err is ErrWriteCipher
+func WriteCipherErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if err == ErrWriteCipher {
+		return true
+	}
+
+	if er, ok := err.(*net.OpError); ok {
+		if er.Err == ErrWriteCipher {
+			return true
+		}
+	}
+	return false
+}
+
+// ReadPlaintxtErr return true if err is ErrReadPlaintxt
+func ReadPlaintxtErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if err == ErrReadPlaintxt {
+		return true
+	}
+
+	if er, ok := err.(*net.OpError); ok {
+		if er.Err == ErrReadPlaintxt {
+			return true
+		}
+	}
+	return false
+}
+
+// ReadCipherErr return true if err is ErrReadCipher
+func ReadCipherErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if err == ErrReadCipher {
+		return true
+	}
+
+	if er, ok := err.(*net.OpError); ok {
+		if er.Err == ErrReadCipher {
+			return true
+		}
+	}
+	return false
+}
+
+// FINRSTStreamErr return true if err is ErrFINRSTStream
+func FINRSTStreamErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if err == ErrFINRSTStream {
+		return true
+	}
+
+	if er, ok := err.(*net.OpError); ok {
+		if er.Err == ErrFINRSTStream {
+			return true
+		}
+	}
+	return false
+}
+
+// ACKRSTStreamErr return true if err is ErrACKRSTStream
+func ACKRSTStreamErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if err == ErrACKRSTStream {
+		return true
+	}
+
+	if er, ok := err.(*net.OpError); ok {
+		if er.Err == ErrACKRSTStream {
+			return true
+		}
+	}
+	return false
+}
+
+// TimeoutErr return true if err is ErrTimeout
+func TimeoutErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if err == ErrTimeout {
+		return true
+	}
+
+	if er, ok := err.(*net.OpError); ok {
+		if er.Err == ErrTimeout {
+			return true
+		}
+	}
+	return false
+}
+
+// PayloadSizeErr return true if err is ErrPayloadSize
+func PayloadSizeErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if err == ErrPayloadSize {
+		return true
+	}
+
+	if er, ok := err.(*net.OpError); ok {
+		if er.Err == ErrPayloadSize {
+			return true
 		}
 	}
 	return false

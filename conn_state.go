@@ -87,11 +87,12 @@ func (cs *ConnState) FINWait1(conn io.ReadWriteCloser) *ConnState {
 
 	for {
 		_, err = conn.Read(cs.buf)
+		log.Infof("FINWAIT1 conn.Read, err:%v, buf:%v", err)
 		if err != nil {
 			break
 		}
 	}
-	if err == cipherstream.ErrFINRSTStream {
+	if cipherstream.FINRSTStreamErr(err) {
 		ack := utils.NewACKRstStreamHeader()
 		_, err := conn.Write(ack)
 		if err != nil {
@@ -103,12 +104,13 @@ func (cs *ConnState) FINWait1(conn io.ReadWriteCloser) *ConnState {
 		cs.fn = cs.Closing
 		return cs
 	}
-	if err == cipherstream.ErrACKRSTStream {
+
+	if cipherstream.ACKRSTStreamErr(err) {
 		cs.fn = cs.FINWait2
 		return cs
 	}
 
-	log.Errorf("except get ErrFINRSTStream or ErrACKRSTStream, but get: %+v", errors.WithStack(err))
+	log.Errorf("except get ErrFINRSTStream or ErrACKRSTStream, but get: %v", err)
 	cs.err = err
 	cs.fn = nil
 	return cs
@@ -125,8 +127,8 @@ func (cs *ConnState) FINWait2(conn io.ReadWriteCloser) *ConnState {
 			break
 		}
 	}
-	if err != cipherstream.ErrFINRSTStream {
-		log.Errorf("except get ErrFINRSTStream, but get: %+v", errors.WithStack(err))
+	if !cipherstream.FINRSTStreamErr(err) {
+		log.Errorf("except get ErrFINRSTStream, but get: %+v", err)
 		cs.err = err
 		cs.fn = nil
 		return cs
@@ -159,7 +161,8 @@ func (cs *ConnState) LastACK(conn io.ReadWriteCloser) *ConnState {
 		return cs
 	}
 
-	return nil
+	cs.fn = cs.Closed
+	return cs
 }
 
 func (cs *ConnState) Closing(conn io.ReadWriteCloser) *ConnState {
@@ -174,8 +177,8 @@ func (cs *ConnState) Closing(conn io.ReadWriteCloser) *ConnState {
 			break
 		}
 	}
-	if err != cipherstream.ErrFINRSTStream {
-		log.Errorf("except get ErrFINRSTStream, but get: %+v", errors.WithStack(err))
+	if !cipherstream.FINRSTStreamErr(err) {
+		log.Errorf("except get ErrFINRSTStream, but get: %+v", err)
 		cs.err = err
 		cs.fn = nil
 		return cs
@@ -230,9 +233,11 @@ func (cs *ConnState) TimeWait(conn io.ReadWriteCloser) *ConnState {
 
 	// if conn is tcp connection, set the deadline to default
 	var err error
-	if c, ok := conn.(*net.TCPConn); ok {
-		log.Info("set tcp connection deadline to default")
-		err = c.SetDeadline(time.Time{})
+	if cs, ok := conn.(*cipherstream.CipherStream); ok {
+		if c, ok := cs.ReadWriteCloser.(net.Conn); ok {
+			err = c.SetDeadline(time.Time{})
+			log.Info("set tcp connection deadline to default")
+		}
 	}
 	if err != nil {
 		log.Errorf("conn.SetDeadline to default err:%+v", errors.WithStack(err))
@@ -254,8 +259,8 @@ func (cs *ConnState) Closed(conn io.ReadWriteCloser) *ConnState {
 			break
 		}
 	}
-	if err != cipherstream.ErrACKRSTStream {
-		log.Errorf("except get ErrACKRSTStream, but get: %+v", errors.WithStack(err))
+	if !cipherstream.ACKRSTStreamErr(err) {
+		log.Errorf("except get ErrACKRSTStream, but get: %+v", err)
 		cs.err = err
 		cs.fn = nil
 		return cs
