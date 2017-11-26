@@ -163,7 +163,7 @@ func (cs *ConnState) Closing(conn io.ReadWriteCloser) *ConnState {
 
 	cs.state = CLOSING
 	ack := utils.NewACKRstStreamHeader()
-	_, err = conn.Write(ack)
+	_, err := conn.Write(ack)
 	if err != nil {
 		log.Errorf("conn.Write ACK err:%+v", errors.WithStack(err))
 		cs.err = err
