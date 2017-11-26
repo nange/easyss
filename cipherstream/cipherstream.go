@@ -61,7 +61,7 @@ func New(stream io.ReadWriteCloser, password, method string) (io.ReadWriteCloser
 			return nil, errors.WithStack(err)
 		}
 	default:
-		return nil, errors.WithStack(errors.New("cipher method unsupported, method:" + method))
+		return nil, errors.New("cipher method unsupported, method:" + method)
 	}
 
 	cs.reader.rbuf = make([]byte, MAX_PAYLOAD_SIZE+cs.NonceSize()+cs.Overhead())
@@ -97,7 +97,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 
 			dataframe := append(headercipher, payloadcipher...)
 			if _, ew := cs.ReadWriteCloser.Write(dataframe); ew != nil {
-				log.Warnf("write cipher data to cipher stream failed, msg:%+v", errors.WithStack(ew))
+				log.Warnf("write cipher data to cipher stream failed, msg:%+v", ew)
 				if timeout(ew) {
 					err = ErrTimeout
 				} else {
@@ -168,7 +168,7 @@ func (cs *CipherStream) read() ([]byte, error) {
 
 	lenpayload := size + cs.NonceSize() + cs.Overhead()
 	if _, err := io.ReadFull(cs.ReadWriteCloser, cs.rbuf[:lenpayload]); err != nil {
-		log.Warnf("read cipher stream payload err:%+v, lenpayload:%v", errors.WithStack(err), lenpayload)
+		log.Warnf("read cipher stream payload err:%+v, lenpayload:%v", err, lenpayload)
 		if timeout(err) {
 			return nil, ErrTimeout
 		}

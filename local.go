@@ -134,7 +134,7 @@ RELAY:
 			if i == 0 {
 				log.Infof("read plaintxt stream error, set start state. details:%v", err)
 				state = NewConnState(FIN_WAIT1)
-			} else {
+			} else if err != nil {
 				if !cipherstream.TimeoutErr(err) {
 					log.Errorf("execpt error is net: io timeout. but get:%v", err)
 				}
