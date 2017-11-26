@@ -60,6 +60,12 @@ func New(stream io.ReadWriteCloser, password, method string) (io.ReadWriteCloser
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
+	case "chacha20-poly1305":
+		var err error
+		cs.AEADCipher, err = NewChaCha20Poly1305([]byte(password))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	default:
 		return nil, errors.New("cipher method unsupported, method:" + method)
 	}
