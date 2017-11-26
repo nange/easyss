@@ -109,7 +109,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		if er != nil {
 			if er != io.EOF {
-				log.Warnf("read plaintext from reader failed, msg:%+v", errors.WithStack(er))
+				log.Warnf("read plaintext from reader failed, msg:%+v", err)
 				if timeout(er) {
 					err = ErrTimeout
 				} else {
