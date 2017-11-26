@@ -87,20 +87,12 @@ func (cs *ConnState) FINWait1(conn io.ReadWriteCloser) *ConnState {
 
 	for {
 		_, err = conn.Read(cs.buf)
-		log.Infof("FINWAIT1 conn.Read, err:%v, buf:%v", err)
+		log.Infof("FINWAIT1 conn.Read, err:%v", err)
 		if err != nil {
 			break
 		}
 	}
 	if cipherstream.FINRSTStreamErr(err) {
-		ack := utils.NewACKRstStreamHeader()
-		_, err := conn.Write(ack)
-		if err != nil {
-			log.Errorf("conn.Write ACK err:%+v", errors.WithStack(err))
-			cs.err = err
-			cs.fn = nil
-			return cs
-		}
 		cs.fn = cs.Closing
 		return cs
 	}
@@ -170,20 +162,6 @@ func (cs *ConnState) Closing(conn io.ReadWriteCloser) *ConnState {
 	defer log.Info("end Closing state")
 
 	cs.state = CLOSING
-	var err error
-	for {
-		_, err = conn.Read(cs.buf)
-		if err != nil {
-			break
-		}
-	}
-	if !cipherstream.FINRSTStreamErr(err) {
-		log.Errorf("except get ErrFINRSTStream, but get: %+v", err)
-		cs.err = err
-		cs.fn = nil
-		return cs
-	}
-
 	ack := utils.NewACKRstStreamHeader()
 	_, err = conn.Write(ack)
 	if err != nil {
@@ -206,15 +184,6 @@ func (cs *ConnState) CloseWait(conn io.ReadWriteCloser) *ConnState {
 	_, err := conn.Write(ack)
 	if err != nil {
 		log.Errorf("conn.Write ack err:%+v", errors.WithStack(err))
-		cs.err = err
-		cs.fn = nil
-		return cs
-	}
-
-	fin := utils.NewFINRstStreamHeader()
-	_, err = conn.Write(fin)
-	if err != nil {
-		log.Errorf("conn.Write fin err:%+v", errors.WithStack(err))
 		cs.err = err
 		cs.fn = nil
 		return cs

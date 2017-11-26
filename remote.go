@@ -121,7 +121,7 @@ func (ss *Easyss) tcpServer() {
 					log.Errorf("get target addr err:%+v", err)
 					return
 				}
-				log.Debugf("target proxy addr is:%v", addr.String())
+				log.Infof("target proxy addr is:%v", addr.String())
 
 				tconn, err := net.Dial("tcp", addr.String())
 				if err != nil {

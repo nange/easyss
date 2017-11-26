@@ -134,7 +134,7 @@ RELAY:
 				state = NewConnState(FIN_WAIT1)
 			} else {
 				if !cipherstream.TimeoutErr(err) {
-					log.Infof("execpt error is net: io timeout. but get:%v", err)
+					log.Errorf("execpt error is net: io timeout. but get:%v", err)
 				}
 			}
 
@@ -176,7 +176,7 @@ RELAY:
 		statefn = statefn(cipher).fn
 	}
 	if state.err != nil {
-		log.Warnf("state err:%+v", state.err)
+		log.Warnf("state err:%+v, state:%v", state.err, state.state)
 		markCipherStreamUnusable(cipher)
 		needclose = true
 	}

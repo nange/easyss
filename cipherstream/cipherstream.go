@@ -105,11 +105,16 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 				}
 				break
 			}
+			log.Debugf("write to cipher stream, frame payload size:%v", nr)
 		}
 		if er != nil {
 			if er != io.EOF {
 				log.Warnf("read plaintext from reader failed, msg:%+v", errors.WithStack(er))
-				err = ErrReadPlaintxt
+				if timeout(er) {
+					err = ErrTimeout
+				} else {
+					err = ErrReadPlaintxt
+				}
 			}
 			break
 		}

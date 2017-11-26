@@ -64,8 +64,10 @@ type Addr []byte
 
 // String serializes SOCKS address a to string form.
 func (a Addr) String() string {
+	if len(a) == 0 {
+		return ""
+	}
 	var host, port string
-
 	switch a[0] { // address type
 	case AtypDomainName:
 		host = string(a[2 : 2+int(a[1])])
