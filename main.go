@@ -42,7 +42,7 @@ func New(config *Config) (*Easyss, error) {
 			return net.Dial("tcp", fmt.Sprintf("%s:%d", config.Server, config.ServerPort))
 		}
 		pconfig := &easypool.PoolConfig{
-			InitialCap:  5,
+			InitialCap:  10,
 			MaxCap:      50,
 			MaxIdle:     10,
 			Idletime:    2 * time.Minute,

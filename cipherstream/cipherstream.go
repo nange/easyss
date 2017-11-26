@@ -146,7 +146,7 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 func (cs *CipherStream) read() ([]byte, error) {
 	hbuf := cs.rbuf[:FRAME_HEADER_SIZE+cs.NonceSize()+cs.Overhead()]
 	if _, err := io.ReadFull(cs.ReadWriteCloser, hbuf); err != nil {
-		log.Warnf("read cipher stream payload len err:%+v", errors.WithStack(err))
+		log.Warnf("read cipher stream payload len err:%+v", err)
 		if timeout(err) {
 			return nil, ErrTimeout
 		}
