@@ -37,7 +37,7 @@ func (ss *Easyss) Local() {
 
 			addr, err := socks.HandShake(conn)
 			if err != nil {
-				log.Errorf("local handshake err:%+v, remote:%v", err, addr)
+				log.Warnf("local handshake err:%+v, remote:%v", err, addr)
 				return
 			}
 			log.Debugf("target proxy addr is:%v", addr.String())
@@ -68,18 +68,13 @@ func (ss *Easyss) Local() {
 				log.Errorf("gcm.Encrypt err:%+v", err)
 				return
 			}
-			_, err = stream.Write(headercipher)
-			if err != nil {
-				log.Errorf("stream.Write err:%+v", errors.WithStack(err))
-				return
-			}
-
 			payloadcipher, err := gcm.Encrypt([]byte(addr))
 			if err != nil {
 				log.Errorf("gcm.Encrypt err:%+v", err)
 				return
 			}
-			_, err = stream.Write(payloadcipher)
+			addrframe := append(headercipher, payloadcipher...)
+			_, err = stream.Write(addrframe)
 			if err != nil {
 				log.Errorf("stream.Write err:%+v", errors.WithStack(err))
 				return
