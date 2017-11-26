@@ -1,27 +1,32 @@
 ## easyss
 
-easyss是一款基于socks5的科学学习上网工具，目标是使访问国外技术网站更流畅免受干扰。
+easyss是一款兼容socks5的科学学习上网工具，目标是使访问国外技术网站更流畅免受干扰。
 
 有报道表明访问国外技术网站正变得越来越困难，即使用了SS代理技术也面临被干扰的可能性。 
-为了以防万一，提前准备，在我看了SS协议后，想在SS协议基础上做一些改进以对抗干扰和嗅探。
+为了以防万一，提前准备，在我看了SS协议后，想重新实现一套协议以加快访问速度和对抗嗅探。
 
 ## 特性
 
-* 基于SOCKS5代理
+* 兼容SOCKS5
 
-* (只)支持(AEAD类型)高强度加密通信, 如aes-256-gcm(done), chacha20poly1305(will done in Version 1.0)
+* (只)支持(AEAD类型)高强度加密通信, 如aes-256-gcm, chacha20-poly1305
 
 * http2帧格式交互(更灵活通用, 更易扩展)
 
-* tcp流多路复用(will done in Version 1.0)
+* 基于QUIC协议的流多路复用(实验性支持，默认关闭，可以通过指定-quic参数开启。thanks [quic-go](https://github.com/lucas-clemente/quic-go))
+
+* 支持tcp连接池(默认启用，大幅降低请求延迟)
 
 * 自动pac代理, (可选)支持全局模式, 支持系统托盘图标管理 (thanks [lantern](https://github.com/getlantern))
 
 * 抗嗅探机制(will done in Version 1.0)
 
+注: 由于QUIC基于UDP协议，由于运营商会限制出口UDP流量，稍微大一点的流量都会出现严重丢包，
+所以目前QUIC协议不适合用于大流量应用，如下载大文件，在线观看高清视频等。 
+
 ## 当前版本
 
-Beta2
+RC1
 
 
 ## 安装
@@ -70,6 +75,8 @@ copy本项目中的config.json文件和上面下载的二进制文件放同一�
 docker run -it -d --name easyss -p yourport:yourport nange/docker-easyss:beta2 -p yourport -k yourpassword
 
 
+#### LICENSE
 
+MIT License
 
 
