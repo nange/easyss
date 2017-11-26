@@ -47,6 +47,7 @@ func (ss *Easyss) Local() {
 				stream, err = ss.getStream()
 			} else {
 				stream, err = ss.tcpPool.Get()
+				log.Infof("current tcp pool have %v connections", ss.tcpPool.Len())
 			}
 			if err != nil {
 				log.Errorf("get stream err:%+v", err)

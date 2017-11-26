@@ -118,7 +118,7 @@ func (ss *Easyss) tcpServer() {
 			for {
 				addr, err := getTargetAddr(conn, ss.config.Password)
 				if err != nil {
-					log.Errorf("get target addr err:%+v", err)
+					log.Warnf("get target addr err:%+v", err)
 					return
 				}
 				log.Infof("target proxy addr is:%v", addr.String())

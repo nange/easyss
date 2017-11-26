@@ -45,7 +45,7 @@ func New(config *Config) (*Easyss, error) {
 			InitialCap:  10,
 			MaxCap:      50,
 			MaxIdle:     10,
-			Idletime:    2 * time.Minute,
+			Idletime:    5 * time.Minute,
 			MaxLifetime: 15 * time.Minute,
 			Factory:     factory,
 		}
