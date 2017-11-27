@@ -56,7 +56,7 @@ func (ss *Easyss) Local() {
 			}
 			defer stream.Close()
 
-			header := utils.NewHTTP2DataFrameHeader(len(addr))
+			header := utils.NewHTTP2DataFrameHeader(len(addr) + 1)
 			gcm, err := cipherstream.NewAes256GCM([]byte(ss.config.Password))
 			if err != nil {
 				log.Errorf("cipherstream.NewAes256GCM err:%+v", err)
@@ -68,13 +68,19 @@ func (ss *Easyss) Local() {
 				log.Errorf("gcm.Encrypt err:%+v", err)
 				return
 			}
-			payloadcipher, err := gcm.Encrypt([]byte(addr))
+			ciphermethod := EncodeCipherMethod(ss.config.Method)
+			if ciphermethod == 0 {
+				log.Errorf("unsupported cipher method:%+v", ss.config.Method)
+				return
+			}
+			payloadcipher, err := gcm.Encrypt(append([]byte(addr), ciphermethod))
 			if err != nil {
 				log.Errorf("gcm.Encrypt err:%+v", err)
 				return
 			}
-			addrframe := append(headercipher, payloadcipher...)
-			_, err = stream.Write(addrframe)
+
+			handshake := append(headercipher, payloadcipher...)
+			_, err = stream.Write(handshake)
 			if err != nil {
 				log.Errorf("stream.Write err:%+v", errors.WithStack(err))
 				return
@@ -179,6 +185,17 @@ RELAY:
 	}
 
 	return
+}
+
+func EncodeCipherMethod(m string) byte {
+	methodMap := map[string]byte{
+		"aes-256-gcm":       1,
+		"chacha20-poly1305": 2,
+	}
+	if b, ok := methodMap[m]; ok {
+		return b
+	}
+	return 0
 }
 
 // mark the cipher stream unusable, return mark result

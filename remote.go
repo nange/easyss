@@ -58,12 +58,17 @@ func (ss *Easyss) quicServer() {
 					defer stream.Close()
 					log.Infof("a new stream is accepted. stream id:%v\n", stream.StreamID())
 
-					addr, err := getTargetAddr(stream, ss.config.Password)
+					addr, ciphermethod, err := handShake(stream, ss.config.Password)
 					if err != nil {
-						log.Errorf("get target addr err:%+v", err)
+						log.Warnf("get target addr err:%+v", err)
 						return
 					}
-					log.Debugf("target proxy addr is:%v", addr.String())
+					if addr.String() == "" || ciphermethod == "" {
+						log.Errorf("after handshake with client, but get empty addr:%v or ciphermethod:%v",
+							addr.String(), ciphermethod)
+						return
+					}
+					log.Infof("target proxy addr is:%v", addr.String())
 
 					tconn, err := net.Dial("tcp", addr.String())
 					if err != nil {
@@ -72,7 +77,7 @@ func (ss *Easyss) quicServer() {
 					}
 					defer tconn.Close()
 
-					csStream, err := cipherstream.New(stream, ss.config.Password, ss.config.Method)
+					csStream, err := cipherstream.New(stream, ss.config.Password, ciphermethod)
 					if err != nil {
 						log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
 							err, ss.config.Password, ss.config.Method)
@@ -116,9 +121,14 @@ func (ss *Easyss) tcpServer() {
 		go func() {
 			defer conn.Close()
 			for {
-				addr, err := getTargetAddr(conn, ss.config.Password)
+				addr, ciphermethod, err := handShake(conn, ss.config.Password)
 				if err != nil {
 					log.Warnf("get target addr err:%+v", err)
+					return
+				}
+				if addr.String() == "" || ciphermethod == "" {
+					log.Errorf("after handshake with client, but get empty addr:%v or ciphermethod:%v",
+						addr.String(), ciphermethod)
 					return
 				}
 				log.Infof("target proxy addr is:%v", addr.String())
@@ -129,7 +139,7 @@ func (ss *Easyss) tcpServer() {
 					return
 				}
 
-				csStream, err := cipherstream.New(conn, ss.config.Password, ss.config.Method)
+				csStream, err := cipherstream.New(conn, ss.config.Password, ciphermethod)
 				if err != nil {
 					log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
 						err, ss.config.Password, ss.config.Method)
@@ -150,7 +160,7 @@ func (ss *Easyss) tcpServer() {
 	}
 }
 
-func getTargetAddr(stream io.ReadWriter, password string) (addr socks.Addr, err error) {
+func handShake(stream io.ReadWriter, password string) (addr socks.Addr, ciphermethod string, err error) {
 	gcm, err := cipherstream.NewAes256GCM([]byte(password))
 	if err != nil {
 		return
@@ -164,31 +174,48 @@ func getTargetAddr(stream io.ReadWriter, password string) (addr socks.Addr, err 
 
 	headerplain, err := gcm.Decrypt(headerbuf)
 	if err != nil {
-		log.Debugf("gcm.Decrypt decrypt headerbuf:%v, err:%+v", headerbuf, err)
+		log.Errorf("gcm.Decrypt decrypt headerbuf:%v, err:%+v", headerbuf, err)
 		return
 	}
 
 	payloadlen := int(headerplain[0])<<16 | int(headerplain[1])<<8 | int(headerplain[2])
 	if headerplain[3] != 0x0 || headerplain[4] != 0x0 {
-		err = errors.WithStack(errors.New(fmt.Sprintf("http2 data frame type:%v is invalid or flag:%v is invalid, both should be 0x0",
-			headerplain[3], headerplain[4])))
+		err = errors.New(fmt.Sprintf("http2 data frame type:%v is invalid or flag:%v is invalid, both should be 0x0",
+			headerplain[3], headerplain[4]))
 		return
 	}
 
 	payloadbuf := make([]byte, payloadlen+gcm.NonceSize()+gcm.Overhead())
 	if _, err = io.ReadFull(stream, payloadbuf); err != nil {
 		err = errors.WithStack(err)
-		log.Debugf("io.ReadFull read payloadbuf err:%+v, len:%v", err, len(payloadbuf))
+		log.Warnf("io.ReadFull read payloadbuf err:%+v, len:%v", err, len(payloadbuf))
 		return
 	}
 
 	payloadplain, err := gcm.Decrypt(payloadbuf)
 	if err != nil {
-		log.Debugf("gcm.Decrypt decrypt payloadbuf:%v, err:%+v", payloadbuf, err)
+		log.Errorf("gcm.Decrypt decrypt payloadbuf:%v, err:%+v", payloadbuf, err)
 		return
 	}
+	length := len(payloadplain)
+	if length <= 1 {
+		err = errors.New("handshake: payload length is invalid")
+		return
+	}
+	ciphermethod = DecodeCipherMethod(payloadplain[length-1])
 
-	return payloadplain, nil
+	return payloadplain[:length-1], ciphermethod, nil
+}
+
+func DecodeCipherMethod(b byte) string {
+	methodMap := map[byte]string{
+		1: "aes-256-gcm",
+		2: "chacha20-poly1305",
+	}
+	if m, ok := methodMap[b]; ok {
+		return m
+	}
+	return ""
 }
 
 // Setup a bare-bones TLS config for the server

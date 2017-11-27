@@ -87,7 +87,6 @@ func (cs *ConnState) FINWait1(conn io.ReadWriteCloser) *ConnState {
 
 	for {
 		_, err = conn.Read(cs.buf)
-		log.Infof("FINWAIT1 conn.Read, err:%v", err)
 		if err != nil {
 			break
 		}
