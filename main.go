@@ -21,7 +21,7 @@ func init() {
 }
 
 func PrintVersion() {
-	const version = "Beta2"
+	const version = "RC1"
 	fmt.Println("easyss version", version)
 }
 
