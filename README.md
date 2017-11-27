@@ -30,7 +30,7 @@ RC1
 
 ## 安装
 
-#### go get 安装最新开发版
+#### go get 安装最新开发版(version 1.9+ is required)
 
 ```sh
 go get -u -v github.com/nange/easyss
