@@ -33,10 +33,7 @@ type Easyss struct {
 }
 
 func New(config *Config) (*Easyss, error) {
-	ss := &Easyss{
-		config:   config,
-		sessChan: make(chan sessOpts, 10),
-	}
+	ss := &Easyss{config: config}
 	if !config.ServerModel {
 		factory := func() (net.Conn, error) {
 			return net.Dial("tcp", fmt.Sprintf("%s:%d", config.Server, config.ServerPort))
@@ -55,8 +52,10 @@ func New(config *Config) (*Easyss, error) {
 		}
 		ss.tcpPool = tcppool
 	}
-
-	go ss.sessManage()
+	if config.EnableQuic {
+		ss.sessChan = make(chan sessOpts, 10)
+		go ss.sessManage()
+	}
 
 	return ss, nil
 }
