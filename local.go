@@ -83,6 +83,10 @@ func (ss *Easyss) Local() {
 			_, err = stream.Write(handshake)
 			if err != nil {
 				log.Errorf("stream.Write err:%+v", errors.WithStack(err))
+				if pc, ok := stream.(*easypool.PoolConn); ok {
+					log.Infof("mark pool conn stream unusable")
+					pc.MarkUnusable()
+				}
 				return
 			}
 
