@@ -8,21 +8,17 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type Tray struct {
-	pacChan chan<- PACStatus
+func (ss *Easyss) SysTray() {
+	systray.Run(ss.trayReady, ss.trayExit)
 }
 
-func NewTray(pacChan chan<- PACStatus) *Tray {
-	return &Tray{
-		pacChan: pacChan,
+func (ss *Easyss) trayReady() {
+	go ss.SysPAC() // system pac configuration
+	go ss.Local()  // start local server
+	if ss.config.EnableQuic {
+		go ss.sessManage() // start quic session manage
 	}
-}
 
-func (t *Tray) Run() {
-	systray.Run(t.onReady, t.onExit)
-}
-
-func (t *Tray) onReady() {
 	systray.SetIcon(icon.Data)
 	systray.SetTitle("Easyss APP")
 	systray.SetTooltip("Easyss")
@@ -41,12 +37,12 @@ func (t *Tray) onReady() {
 				cGlobal.Uncheck()
 				cGlobal.Disable()
 
-				t.pacChan <- PACOFF
+				ss.pac.ch <- PACOFF
 			} else {
 				cPAC.Check()
 				cGlobal.Enable()
 
-				t.pacChan <- PACON
+				ss.pac.ch <- PACON
 			}
 			log.Infof("pac btn clicked...is checked:%v", cPAC.Checked())
 		case <-cGlobal.ClickedCh:
@@ -55,10 +51,10 @@ func (t *Tray) onReady() {
 			}
 			if cGlobal.Checked() {
 				cGlobal.Uncheck()
-				t.pacChan <- PACOFFGLOBAL
+				ss.pac.ch <- PACOFFGLOBAL
 			} else {
 				cGlobal.Check()
-				t.pacChan <- PACONGLOBAL
+				ss.pac.ch <- PACONGLOBAL
 			}
 			log.Infof("global btn clicked... is checked:%v", cGlobal.Checked())
 		case <-cQuit.ClickedCh:
@@ -69,7 +65,6 @@ func (t *Tray) onReady() {
 	}
 }
 
-func (t *Tray) onExit() {
+func (ss *Easyss) trayExit() {
 	log.Info("easyss exited...")
 }
-
