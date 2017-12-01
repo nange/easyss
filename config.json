@@ -1,8 +1,0 @@
-{
-    "server":"yourhost",
-    "server_port":8338,
-    "local_port":1080,
-    "password":"barfoo!",
-    "method": "aes-256-gcm",
-    "timeout":600
-}
