@@ -30,10 +30,10 @@ func NewSession(addr string) (quic.Session, error) {
 func (ss *Easyss) sessManage() {
 	for {
 		select {
-		case opts := <-ss.sessChan:
+		case opts := <-ss.quic.sessChan:
 			if opts.action == GET_STREAM {
 			Again:
-				if ss.localSess == nil {
+				if ss.quic.localSess == nil {
 					addr := fmt.Sprintf("%s:%d", ss.config.Server, ss.config.ServerPort)
 					sess, err := NewSession(addr)
 					if err != nil {
@@ -42,14 +42,14 @@ func (ss *Easyss) sessManage() {
 						opts.ret <- nil
 						break
 					}
-					ss.localSess = sess
+					ss.quic.localSess = sess
 				}
 
-				stream, err := ss.localSess.OpenStreamSync()
+				stream, err := ss.quic.localSess.OpenStreamSync()
 				if err != nil {
 					log.Warnf("local session open stream failed, maybe session have been closed, create a new seesion, message:%v",
 						errors.WithStack(err))
-					ss.localSess = nil
+					ss.quic.localSess = nil
 					goto Again
 				}
 
@@ -62,7 +62,7 @@ func (ss *Easyss) sessManage() {
 
 func (ss *Easyss) getStream() (quic.Stream, error) {
 	retChan := make(chan quic.Stream, 1)
-	ss.sessChan <- sessOpts{action: GET_STREAM, ret: retChan}
+	ss.quic.sessChan <- sessOpts{action: GET_STREAM, ret: retChan}
 	stream := <-retChan
 	if stream == nil {
 		return nil, errors.New("can not get stream")
