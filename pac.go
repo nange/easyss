@@ -18,24 +18,7 @@ import (
 
 const pacpath = "/pac.txt"
 
-type PAC struct {
-	localport int
-	pacChan   <-chan PACStatus
-	pacURL    string
-	pacGURL   string
-}
-
-func NewPAC(localport int, pacChan <-chan PACStatus) *PAC {
-	p := &PAC{
-		localport: localport,
-		pacChan:   pacChan,
-		pacURL:    fmt.Sprintf("http://localhost:%d%s", localport+1, pacpath),
-		pacGURL:   fmt.Sprintf("http://localhost:%d%s?global=true", localport+1, pacpath),
-	}
-	return p
-}
-
-func (p *PAC) Serve() {
+func (ss *Easyss) SysPAC() {
 	statikFS, err := fs.New()
 	if err != nil {
 		log.Fatal(err)
@@ -65,24 +48,24 @@ func (p *PAC) Serve() {
 
 		w.Header().Set("Content-Type", "text/javascript; charset=UTF-8")
 		tpl.Execute(w, map[string]interface{}{
-			"Port":   strconv.Itoa(p.localport),
+			"Port":   strconv.Itoa(ss.config.LocalPort),
 			"Global": gloabl,
 		})
 	})
 
-	if err := p.pacOn(p.pacURL); err != nil {
+	if err := ss.pacOn(ss.pac.url); err != nil {
 		log.Fatalf("set system pac err:%v", err)
 	}
-	defer p.pacOff(p.pacURL)
+	defer ss.pacOff(ss.pac.url)
 
-	go p.pacManage(p.pacChan)
+	go ss.pacManage()
 
-	addr := fmt.Sprintf(":%d", p.localport+1)
+	addr := fmt.Sprintf(":%d", ss.config.LocalPort+1)
 	log.Infof("pac server started on :%v", addr)
 	http.ListenAndServe(addr, nil)
 }
 
-func (p *PAC) pacOn(path string) error {
+func (ss *Easyss) pacOn(path string) error {
 	if err := pac.EnsureHelperToolPresent("pac-cmd", "Set proxy auto config", ""); err != nil {
 		return errors.WithStack(err)
 	}
@@ -93,22 +76,23 @@ func (p *PAC) pacOn(path string) error {
 	return nil
 }
 
-func (p *PAC) pacOff(path string) error {
+func (ss *Easyss) pacOff(path string) error {
 	return errors.WithStack(pac.Off(path))
 }
 
-func (p *PAC) pacManage(pacChan <-chan PACStatus) {
-	for status := range pacChan {
+func (ss *Easyss) pacManage() {
+	for status := range ss.pac.ch {
 		switch status {
 		case PACON:
-			p.pacOn(p.pacURL)
+			ss.pacOn(ss.pac.url)
 		case PACOFF:
-			p.pacOff(p.pacURL)
+			ss.pacOff(ss.pac.url)
 		case PACONGLOBAL:
-			p.pacOn(p.pacGURL)
+			ss.pacOn(ss.pac.gurl)
 		case PACOFFGLOBAL:
-			p.pacOn(p.pacURL)
+			ss.pacOff(ss.pac.gurl)
+		default:
+			log.Errorf("unknown pac status:%v", status)
 		}
-
 	}
 }

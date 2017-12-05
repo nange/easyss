@@ -8,6 +8,7 @@ import (
 	"path"
 	"time"
 
+	"github.com/getlantern/systray"
 	quic "github.com/lucas-clemente/quic-go"
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/utils"
@@ -26,10 +27,17 @@ func PrintVersion() {
 }
 
 type Easyss struct {
-	config    *Config
-	localSess quic.Session
-	sessChan  chan sessOpts
-	tcpPool   easypool.Pool
+	config *Config
+	quic   struct {
+		localSess quic.Session
+		sessChan  chan sessOpts
+	}
+	pac struct {
+		ch   chan PACStatus
+		url  string
+		gurl string
+	}
+	tcpPool easypool.Pool
 }
 
 func New(config *Config) (*Easyss, error) {
@@ -51,10 +59,13 @@ func New(config *Config) (*Easyss, error) {
 			return nil, err
 		}
 		ss.tcpPool = tcppool
+
+		ss.pac.ch = make(chan PACStatus, 1)
+		ss.pac.url = fmt.Sprintf("http://localhost:%d%s", ss.config.LocalPort+1, pacpath)
+		ss.pac.gurl = fmt.Sprintf("http://localhost:%d%s?global=true", ss.config.LocalPort+1, pacpath)
 	}
 	if config.EnableQuic {
-		ss.sessChan = make(chan sessOpts, 10)
-		go ss.sessManage()
+		ss.quic.sessChan = make(chan sessOpts, 10)
 	}
 
 	return ss, nil
@@ -128,15 +139,7 @@ func main() {
 			log.Fatalln("server address, server port and password should not empty")
 		}
 
-		pacChan := make(chan PACStatus, 1)
-
-		p := NewPAC(config.LocalPort, pacChan)
-		go p.Serve() // system pac configuration
-
-		go ss.Local() // start local server
-
-		t := NewTray(pacChan)
-		t.Run() // system tray management
+		systray.Run(ss.trayReady, ss.trayExit) // system tray management
 	}
 
 }
