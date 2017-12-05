@@ -2,6 +2,9 @@ package main
 
 import (
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/getlantern/systray"
 	"github.com/nange/easyss/icon"
@@ -17,6 +20,13 @@ func (ss *Easyss) trayReady() {
 	if ss.config.EnableQuic {
 		go ss.sessManage() // start quic session manage
 	}
+
+	go func() {
+		c := make(chan os.Signal)
+		signal.Notify(c, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+		log.Infof("receive exit signal:%v", <-c)
+		ss.trayExit()
+	}()
 
 	systray.SetIcon(icon.Data)
 	systray.SetTitle("Easyss APP")
@@ -59,11 +69,13 @@ func (ss *Easyss) trayReady() {
 		case <-cQuit.ClickedCh:
 			log.Infof("quit btn clicked quit now...")
 			systray.Quit()
-			os.Exit(0)
 		}
 	}
 }
 
 func (ss *Easyss) trayExit() {
+	ss.pac.ch <- PACOFF
+	time.Sleep(time.Second) // ensure the pac settings to default value
 	log.Info("easyss exited...")
+	os.Exit(0)
 }

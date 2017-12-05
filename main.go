@@ -43,7 +43,7 @@ type Easyss struct {
 func New(config *Config) (*Easyss, error) {
 	ss := &Easyss{config: config}
 	if !config.ServerModel {
-		ss.pac.ch = make(chan PACStatus, 1)
+		ss.pac.ch = make(chan PACStatus)
 		ss.pac.url = fmt.Sprintf("http://localhost:%d%s", ss.config.LocalPort+1, pacpath)
 		ss.pac.gurl = fmt.Sprintf("http://localhost:%d%s?global=true", ss.config.LocalPort+1, pacpath)
 	}
