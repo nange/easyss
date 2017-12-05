@@ -8,10 +8,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func (ss *Easyss) SysTray() {
-	systray.Run(ss.trayReady, ss.trayExit)
-}
-
 func (ss *Easyss) trayReady() {
 	go ss.SysPAC() // system pac configuration
 	go ss.Local()  // start local server

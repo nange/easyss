@@ -8,6 +8,7 @@ import (
 	"path"
 	"time"
 
+	"github.com/getlantern/systray"
 	quic "github.com/lucas-clemente/quic-go"
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/utils"
@@ -138,7 +139,7 @@ func main() {
 			log.Fatalln("server address, server port and password should not empty")
 		}
 
-		ss.SysTray() // system tray management
+		systray.Run(ss.trayReady, ss.trayExit) // system tray management
 	}
 
 }
