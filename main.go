@@ -43,23 +43,6 @@ type Easyss struct {
 func New(config *Config) (*Easyss, error) {
 	ss := &Easyss{config: config}
 	if !config.ServerModel {
-		factory := func() (net.Conn, error) {
-			return net.Dial("tcp", fmt.Sprintf("%s:%d", config.Server, config.ServerPort))
-		}
-		pconfig := &easypool.PoolConfig{
-			InitialCap:  10,
-			MaxCap:      50,
-			MaxIdle:     10,
-			Idletime:    3 * time.Minute,
-			MaxLifetime: 15 * time.Minute,
-			Factory:     factory,
-		}
-		tcppool, err := easypool.NewHeapPool(pconfig)
-		if err != nil {
-			return nil, err
-		}
-		ss.tcpPool = tcppool
-
 		ss.pac.ch = make(chan PACStatus, 1)
 		ss.pac.url = fmt.Sprintf("http://localhost:%d%s", ss.config.LocalPort+1, pacpath)
 		ss.pac.gurl = fmt.Sprintf("http://localhost:%d%s?global=true", ss.config.LocalPort+1, pacpath)
@@ -69,6 +52,26 @@ func New(config *Config) (*Easyss, error) {
 	}
 
 	return ss, nil
+}
+
+func (ss *Easyss) InitTcpPool() error {
+	factory := func() (net.Conn, error) {
+		return net.Dial("tcp", fmt.Sprintf("%s:%d", ss.config.Server, ss.config.ServerPort))
+	}
+	pconfig := &easypool.PoolConfig{
+		InitialCap:  10,
+		MaxCap:      50,
+		MaxIdle:     10,
+		Idletime:    3 * time.Minute,
+		MaxLifetime: 15 * time.Minute,
+		Factory:     factory,
+	}
+	tcppool, err := easypool.NewHeapPool(pconfig)
+	if err != nil {
+		return err
+	}
+	ss.tcpPool = tcppool
+	return nil
 }
 
 func main() {
