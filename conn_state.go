@@ -54,7 +54,7 @@ type ConnState struct {
 func NewConnState(s state) *ConnState {
 	cs := &ConnState{
 		state: s,
-		buf:   make([]byte, 64),
+		buf:   make([]byte, 32),
 	}
 	statefnMap := map[state]ConnStateFn{
 		FIN_WAIT1:  cs.FINWait1,
