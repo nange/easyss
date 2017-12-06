@@ -118,8 +118,8 @@
 [[projects]]
   name = "github.com/nange/easypool"
   packages = ["."]
-  revision = "7946adfd9fc36297dea663be450866bf645d8e5a"
-  version = "1.1"
+  revision = "658b1f85e022db4a4274629f5598d744b2fcfc61"
+  version = "1.2"
 
 [[projects]]
   branch = "master"
@@ -148,7 +148,7 @@
 [[projects]]
   branch = "master"
   name = "golang.org/x/crypto"
-  packages = ["curve25519","hkdf","pbkdf2","ssh/terminal"]
+  packages = ["chacha20poly1305","chacha20poly1305/internal/chacha20","curve25519","hkdf","pbkdf2","poly1305","ssh/terminal"]
   revision = "2509b142fb2b797aa7587dad548f113b2c0f20ce"
 
 [[projects]]
@@ -160,6 +160,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "0ca5ef0a0c7d4ce00cb5a1c0cf16facbed6ce34b5182713fb034613494fa956c"
+  inputs-digest = "34c5fb2c1cf8ed56b2255f0b11a436be0448e8114014952b86f9c2fa74b8c07c"
   solver-name = "gps-cdcl"
   solver-version = 1

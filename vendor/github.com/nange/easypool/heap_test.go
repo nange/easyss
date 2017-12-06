@@ -99,10 +99,16 @@ func TestPoolConcurrent(t *testing.T) {
 		t.Errorf("Pool length should equals:, but get:%v", MaxCap, p.Len())
 	}
 
-	time.Sleep(time.Minute)
+	time.Sleep(30 * time.Second)
 	if p.Len() != MaxIdle {
 		t.Errorf("Pool length should equals MaxIdle, but get:%v", p.Len())
 	}
+
+	time.Sleep(30 * time.Second)
+	if p.Len() != 0 {
+		t.Errorf("Pool length should equals 0, but get:%v", p.Len())
+	}
+
 	p.Close()
 }
 

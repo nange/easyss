@@ -1,5 +1,8 @@
+[![Build Status](https://travis-ci.org/nange/easypool.svg?branch=master)](https://travis-ci.org/nange/easypool)
+
 # easypool
-tcp连接池，最初是为[easyss](http://github.com/nange/easyss)设计使用，作为其tcp连接池管理使用。
+tcp连接池，最初是为[easyss](http://github.com/nange/easyss)设计，作为其tcp连接池管理使用。
+也可用于其他需要tcp连接池的场景。
 
 
 ## 特性
@@ -52,4 +55,4 @@ pool.Len()
 
 ## License
 
-The MIT License (MIT) - see LICENSE for more details
+The MIT License (MIT) 

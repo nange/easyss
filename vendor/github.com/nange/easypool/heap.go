@@ -53,11 +53,11 @@ func NewHeapPool(config *PoolConfig) (Pool, error) {
 		return nil, ErrConfigInvalid
 	}
 
-	initialCap := 0
+	initialCap := 5
 	if config.InitialCap > 0 {
 		initialCap = config.InitialCap
 	}
-	maxCap := 20
+	maxCap := 50
 	if config.MaxCap > 0 {
 		maxCap = config.MaxCap
 	}
@@ -87,12 +87,25 @@ func NewHeapPool(config *PoolConfig) (Pool, error) {
 	pq := make(PriorityQueue, 0, maxCap)
 	heap.Init(&pq)
 	hp.freeConn = &pq
+
+	type res struct {
+		conn net.Conn
+		err  error
+	}
+	ch := make(chan res, initialCap)
 	for i := 0; i < initialCap; i++ {
-		conn, err := hp.factory()
-		if err != nil {
-			return nil, err
+		go func() {
+			conn, err := hp.factory()
+			ch <- res{conn: conn, err: err}
+		}()
+	}
+
+	for i := 0; i < initialCap; i++ {
+		ret := <-ch
+		if ret.err != nil {
+			return nil, ret.err
 		}
-		heap.Push(hp.freeConn, hp.wrapConn(conn))
+		heap.Push(hp.freeConn, hp.wrapConn(ret.conn))
 	}
 
 	go hp.cleaner()
@@ -164,7 +177,7 @@ func (hp *heapPool) Len() int {
 }
 
 func (hp *heapPool) cleaner() {
-	ticker := time.NewTicker(time.Minute)
+	ticker := time.NewTicker(hp.idletime / 2)
 	defer ticker.Stop()
 	for {
 		select {
