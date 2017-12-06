@@ -23,7 +23,8 @@ func (ss *Easyss) trayReady() {
 
 	go func() {
 		c := make(chan os.Signal)
-		signal.Notify(c, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+		signal.Notify(c, os.Kill, os.Interrupt, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM,
+			syscall.SIGQUIT)
 		log.Infof("receive exit signal:%v", <-c)
 		ss.trayExit()
 	}()
