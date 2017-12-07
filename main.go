@@ -8,7 +8,6 @@ import (
 	"path"
 	"time"
 
-	"github.com/VividCortex/godaemon"
 	"github.com/getlantern/systray"
 	quic "github.com/lucas-clemente/quic-go"
 	"github.com/nange/easypool"
@@ -75,6 +74,8 @@ func (ss *Easyss) InitTcpPool() error {
 	return nil
 }
 
+var godaemon = flag.Bool("daemon", true, "run app as a non-daemon with -daemon=false")
+
 func main() {
 	var configFile string
 	var printVer, debug bool
@@ -93,11 +94,12 @@ func main() {
 	flag.BoolVar(&cmdConfig.ServerModel, "server", false, "server model")
 
 	flag.Parse()
-
+	log.Infof("args:%+v", os.Args)
 	if printVer {
 		PrintVersion()
 		os.Exit(0)
 	}
+	daemon()
 
 	if debug {
 		log.SetLevel(log.DebugLevel)
@@ -142,8 +144,6 @@ func main() {
 		if config.Password == "" || config.Server == "" || config.ServerPort == 0 {
 			log.Fatalln("server address, server port and password should not empty")
 		}
-
-		godaemon.MakeDaemon(&godaemon.DaemonAttr{})
 
 		systray.Run(ss.trayReady, ss.trayExit) // system tray management
 	}
