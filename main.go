@@ -8,6 +8,7 @@ import (
 	"path"
 	"time"
 
+	"github.com/VividCortex/godaemon"
 	"github.com/getlantern/systray"
 	quic "github.com/lucas-clemente/quic-go"
 	"github.com/nange/easypool"
@@ -141,6 +142,8 @@ func main() {
 		if config.Password == "" || config.Server == "" || config.ServerPort == 0 {
 			log.Fatalln("server address, server port and password should not empty")
 		}
+
+		godaemon.MakeDaemon(&godaemon.DaemonAttr{})
 
 		systray.Run(ss.trayReady, ss.trayExit) // system tray management
 	}
