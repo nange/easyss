@@ -72,6 +72,7 @@ func (ss *Easyss) trayReady() {
 		case <-cQuit.ClickedCh:
 			log.Infof("quit btn clicked quit now...")
 			systray.Quit()
+			ss.trayExit() // on linux there have some bugs, we should invoke trayExit() again
 		}
 	}
 }
