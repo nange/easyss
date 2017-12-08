@@ -74,11 +74,9 @@ func (ss *Easyss) InitTcpPool() error {
 	return nil
 }
 
-var godaemon = flag.Bool("daemon", true, "run app as a non-daemon with -daemon=false")
-
 func main() {
 	var configFile string
-	var printVer, debug bool
+	var printVer, debug, godaemon bool
 	var cmdConfig Config
 
 	flag.BoolVar(&printVer, "version", false, "print version")
@@ -92,14 +90,15 @@ func main() {
 	flag.BoolVar(&cmdConfig.EnableQuic, "quic", false, "enable quic if set this value to be true")
 	flag.BoolVar(&debug, "d", false, "print debug message")
 	flag.BoolVar(&cmdConfig.ServerModel, "server", false, "server model")
+	flag.BoolVar(&godaemon, "daemon", true, "run app as a non-daemon with -daemon=false")
 
 	flag.Parse()
-	log.Infof("args:%+v", os.Args)
+
 	if printVer {
 		PrintVersion()
 		os.Exit(0)
 	}
-	daemon()
+	daemon(godaemon)
 
 	if debug {
 		log.SetLevel(log.DebugLevel)
