@@ -63,7 +63,11 @@ func (ss *Easyss) trayReady() {
 			}
 			if cGlobal.Checked() {
 				cGlobal.Uncheck()
-				ss.pac.ch <- PACOFFGLOBAL
+				if cPAC.Checked() {
+					ss.pac.ch <- PACON
+				} else {
+					ss.pac.ch <- PACOFFGLOBAL
+				}
 			} else {
 				cGlobal.Check()
 				ss.pac.ch <- PACONGLOBAL
