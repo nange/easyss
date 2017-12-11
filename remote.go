@@ -16,6 +16,7 @@ import (
 	quic "github.com/lucas-clemente/quic-go"
 	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/socks"
+	"github.com/nange/easyss/utils"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -131,6 +132,15 @@ func (ss *Easyss) tcpServer() {
 						addr.String(), ciphermethod)
 					return
 				}
+				if addr.String() == "localhost" || addr.String() == "127.0.0.1" {
+					log.Warnf("target addr should not be localhost, close the connection directly")
+					return
+				}
+				if utils.IsPrivateIP(addr.String()) {
+					log.Warnf("target addr should not be private ip, close the connection directly")
+					return
+				}
+
 				log.Infof("target proxy addr is:%v", addr.String())
 
 				tconn, err := net.Dial("tcp", addr.String())
