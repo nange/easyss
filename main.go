@@ -98,10 +98,7 @@ func main() {
 		PrintVersion()
 		os.Exit(0)
 	}
-	// if not server model, we don't startup as daemon
-	if !cmdConfig.ServerModel {
-		daemon(godaemon)
-	}
+	daemon(godaemon)
 
 	if debug {
 		log.SetLevel(log.DebugLevel)
