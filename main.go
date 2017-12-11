@@ -98,9 +98,15 @@ func main() {
 		PrintVersion()
 		os.Exit(0)
 	}
-	// with server model, we don't need startup as daemon
+	// we starting easyss as daemon only in client model, and save logs to file
 	if !cmdConfig.ServerModel {
 		daemon(godaemon)
+		fileout, err := utils.GetFileOutputWriter(os.Args[0])
+		if err != nil {
+			log.Errorf("get log file output writer err:%v", err)
+		} else {
+			log.SetOutput(fileout)
+		}
 	}
 
 	if debug {
