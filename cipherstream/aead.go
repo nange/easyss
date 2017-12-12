@@ -10,6 +10,13 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 )
 
+type AEADCipher interface {
+	Encrypt(plaintext []byte) (ciphertext []byte, err error)
+	Decrypt(ciphertext []byte) (plaintext []byte, err error)
+	NonceSize() int
+	Overhead() int
+}
+
 // secretKey generates a random 256-bit key
 func secretKey(password []byte) *[32]byte {
 	key := [32]byte{}
