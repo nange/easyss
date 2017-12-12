@@ -12,14 +12,15 @@ import (
 )
 
 func (ss *Easyss) trayReady() {
-	if err := ss.InitTcpPool(); err != nil {
-		log.Fatalf("init tcp pool error:%v", err)
+	if ss.config.EnableQuic {
+		go ss.sessManage() // start quic session manage
+	} else {
+		if err := ss.InitTcpPool(); err != nil {
+			log.Fatalf("init tcp pool error:%v", err)
+		}
 	}
 	go ss.SysPAC() // system pac configuration
 	go ss.Local()  // start local server
-	if ss.config.EnableQuic {
-		go ss.sessManage() // start quic session manage
-	}
 
 	go func() {
 		c := make(chan os.Signal)
