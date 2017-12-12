@@ -79,4 +79,10 @@ func UpdateConfig(old, ne *Config) {
 		}
 	}
 
+	if old.Method == "" {
+		old.Method = "aes-256-gcm"
+	}
+	if old.Timeout <= 0 || old.Timeout > 600 {
+		old.Timeout = 600
+	}
 }

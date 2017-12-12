@@ -71,7 +71,7 @@ copy本项目中的config.json文件和上面下载的二进制文件放同一�
 
 ##### docker部署
 
-docker run -it -d --name easyss -p yourport:yourport nange/docker-easyss:rc1 -p yourport -k yourpassword
+docker run -d --name easyss -p yourport:yourport nange/docker-easyss:latest -p yourport -k yourpassword
 
 
 ### LICENSE

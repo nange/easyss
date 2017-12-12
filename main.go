@@ -134,10 +134,6 @@ func main() {
 		UpdateConfig(config, &cmdConfig)
 	}
 
-	if config.Method == "" {
-		config.Method = "aes-256-gcm"
-	}
-
 	ss, err := New(config)
 	if err != nil {
 		log.Fatalf("init Easyss err:%+v", err)

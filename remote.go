@@ -117,7 +117,7 @@ func (ss *Easyss) tcpServer() {
 		log.Infof("a new connection(ip) is accepted. remote addr:%v", conn.RemoteAddr())
 
 		conn.(*net.TCPConn).SetKeepAlive(true)
-		conn.(*net.TCPConn).SetKeepAlivePeriod(10 * time.Second)
+		conn.(*net.TCPConn).SetKeepAlivePeriod(time.Duration(ss.config.Timeout) * time.Second)
 
 		go func() {
 			defer conn.Close()
