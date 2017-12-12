@@ -156,7 +156,7 @@ func (ss *Easyss) tcpServer() {
 					return
 				}
 
-				n1, n2, needclose := relay(csStream, tconn, false)
+				n1, n2, needclose := relay(csStream, tconn)
 				log.Infof("send %v bytes to %v, and recive %v bytes, needclose:%v", n2, addr, n1, needclose)
 
 				tconn.Close()

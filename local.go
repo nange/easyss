@@ -97,7 +97,7 @@ func (ss *Easyss) Local() {
 				return
 			}
 
-			n1, n2, needclose := relay(csStream, conn, true)
+			n1, n2, needclose := relay(csStream, conn)
 			log.Infof("send %v bytes to %v, and recive %v bytes", n1, addr, n2)
 			if !needclose {
 				log.Infof("underline connection is health, so reuse it")

@@ -13,7 +13,7 @@ import (
 // relay copies between cipherstream and plaintxtstream.
 // return the number of bytes copies
 // from plaintxtstream to cipherstream, from cipherstream to plaintxtstream, and needclose on server conn
-func relay(cipher, plaintxt io.ReadWriteCloser, islocal bool) (n1 int64, n2 int64, needclose bool) {
+func relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needclose bool) {
 	type res struct {
 		N   int64
 		Err error
