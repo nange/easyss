@@ -34,10 +34,10 @@ func (ss *Easyss) trayReady() {
 	systray.SetTitle("Easyss APP")
 	systray.SetTooltip("Easyss")
 
-	cPAC := systray.AddMenuItem("启用PAC", "启用PAC")
+	cPAC := systray.AddMenuItem("启用PAC(自动代理)", "启用PAC")
 	systray.AddSeparator()
 	cPAC.Check() // checked as default
-	cGlobal := systray.AddMenuItem("全局模式", "全局模式")
+	cGlobal := systray.AddMenuItem("全局代理模式", "全局模式")
 	systray.AddSeparator()
 	cQuit := systray.AddMenuItem("退出", "退出Easyss APP")
 
