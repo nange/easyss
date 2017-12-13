@@ -2,7 +2,9 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -39,6 +41,8 @@ func (ss *Easyss) trayReady() {
 	cPAC.Check() // checked as default
 	cGlobal := systray.AddMenuItem("全局代理模式", "全局模式")
 	systray.AddSeparator()
+	cCatLog := systray.AddMenuItem("查看Easyss运行日志", "查看日志")
+	systray.AddSeparator()
 	cQuit := systray.AddMenuItem("退出", "退出Easyss APP")
 
 	for {
@@ -74,12 +78,28 @@ func (ss *Easyss) trayReady() {
 				ss.pac.ch <- PACONGLOBAL
 			}
 			log.Infof("global btn clicked... is checked:%v", cGlobal.Checked())
+		case <-cCatLog.ClickedCh:
+			log.Infof("cat log btn clicked...")
+			if err := ss.catLog(); err != nil {
+				log.Errorf("cat log err:%v", err)
+			}
+
 		case <-cQuit.ClickedCh:
 			log.Infof("quit btn clicked quit now...")
 			systray.Quit()
 			ss.trayExit() // on linux there have some bugs, we should invoke trayExit() again
 		}
 	}
+}
+
+func (ss *Easyss) catLog() error {
+	cmdmap := map[string][]string{
+		"windows": []string{"notepad", ss.logFilePath},
+		"linux":   []string{"gnome-terminal", "--full-screen", "-x", "tail", "-50f", ss.logFilePath},
+		"darwin":  []string{""},
+	}
+	cmd := exec.Command(cmdmap[runtime.GOOS][0], cmdmap[runtime.GOOS][1:]...)
+	return cmd.Start()
 }
 
 func (ss *Easyss) trayExit() {

@@ -38,6 +38,8 @@ type Easyss struct {
 		gurl string
 	}
 	tcpPool easypool.Pool
+
+	logFilePath string
 }
 
 func New(config *Config) (*Easyss, error) {
@@ -50,7 +52,7 @@ func New(config *Config) (*Easyss, error) {
 	if config.EnableQuic {
 		ss.quic.sessChan = make(chan sessOpts, 10)
 	}
-
+	ss.logFilePath = utils.GetLogFilePath(os.Args[0])
 	return ss, nil
 }
 
@@ -101,7 +103,7 @@ func main() {
 	// we starting easyss as daemon only in client model, and save logs to file
 	if !cmdConfig.ServerModel {
 		daemon(godaemon)
-		fileout, err := utils.GetFileOutputWriter(os.Args[0])
+		fileout, err := utils.GetLogFileWriter(os.Args[0])
 		if err != nil {
 			log.Errorf("get log file output writer err:%v", err)
 		} else {
