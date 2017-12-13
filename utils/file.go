@@ -33,5 +33,5 @@ func GetLogFilePath(binpath string) string {
 
 func GetLogFileWriter(binpath string) (io.Writer, error) {
 	logfile := GetLogFilePath(binpath)
-	return os.OpenFile(logfile, os.O_APPEND|os.O_CREATE, os.ModeAppend)
+	return os.OpenFile(logfile, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0666)
 }
