@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -93,8 +94,10 @@ func (ss *Easyss) trayReady() {
 }
 
 func (ss *Easyss) catLog() error {
+	win := fmt.Sprintf(`-FilePath powershell  -ArgumentList "-Command Get-Content %s -Wait -Tail 50"`, ss.logFilePath)
+	fmt.Println(win)
 	cmdmap := map[string][]string{
-		"windows": []string{"notepad", ss.logFilePath},
+		"windows": []string{"powershell", "-Command", "Start-Process", win},
 		"linux":   []string{"gnome-terminal", "--geometry=150x40+20+20", "-x", "tail", "-50f", ss.logFilePath},
 		"darwin":  []string{""},
 	}
