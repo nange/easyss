@@ -95,7 +95,7 @@ func (ss *Easyss) trayReady() {
 func (ss *Easyss) catLog() error {
 	cmdmap := map[string][]string{
 		"windows": []string{"notepad", ss.logFilePath},
-		"linux":   []string{"gnome-terminal", "--geometry=150x50+20+20", "-x", "tail", "-50f", ss.logFilePath},
+		"linux":   []string{"gnome-terminal", "--geometry=150x40+20+20", "-x", "tail", "-50f", ss.logFilePath},
 		"darwin":  []string{""},
 	}
 	cmd := exec.Command(cmdmap[runtime.GOOS][0], cmdmap[runtime.GOOS][1:]...)
