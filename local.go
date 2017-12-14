@@ -46,6 +46,12 @@ func (ss *Easyss) Local() {
 			if ss.config.EnableQuic {
 				stream, err = ss.getStream()
 			} else {
+				if ss.tcpPool == nil {
+					if err := ss.InitTcpPool(); err != nil {
+						log.Errorf("Easyss init tcp pool err:%v", err)
+						return
+					}
+				}
 				stream, err = ss.tcpPool.Get()
 				log.Infof("after pool get: current tcp pool have %v connections", ss.tcpPool.Len())
 				defer log.Infof("after stream close: current tcp pool have %v connections", ss.tcpPool.Len())

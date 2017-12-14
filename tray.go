@@ -20,7 +20,7 @@ func (ss *Easyss) trayReady() {
 		go ss.sessManage() // start quic session manage
 	} else {
 		if err := ss.InitTcpPool(); err != nil {
-			log.Fatalf("init tcp pool error:%v", err)
+			log.Errorf("init tcp pool error:%v", err)
 		}
 	}
 	go ss.SysPAC() // system pac configuration
@@ -95,7 +95,7 @@ func (ss *Easyss) trayReady() {
 }
 
 func (ss *Easyss) catLog() error {
-	win := `-FilePath powershell  -WorkingDirectory "%s" -ArgumentList "-NoExit -Command Get-Content %s -Wait %s"`
+	win := `-FilePath powershell  -WorkingDirectory "%s" -ArgumentList "-Command Get-Content %s -Wait %s"`
 	if runtime.GOOS == "windows" && utils.SysSupportPowershell() {
 		if utils.SysPowershellMajorVersion() >= 3 {
 			win = fmt.Sprintf(win, utils.GetCurrentDir(), ss.logFileName, "-Tail 100")
