@@ -28,10 +28,14 @@ func GetCurrentDir() string {
 	return filepath.Dir(os.Args[0])
 }
 
+func GetLogFileName() string {
+	y, m, d := time.Now().Date()
+	return fmt.Sprintf("easyss-%d%d%d.log", y, m, d)
+}
+
 func GetLogFilePath() string {
 	dir := GetCurrentDir()
-	y, m, d := time.Now().Date()
-	filename := fmt.Sprintf("easyss-%d%d%d.log", y, m, d)
+	filename := GetLogFileName()
 	return filepath.Join(dir, filename)
 }
 

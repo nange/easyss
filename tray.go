@@ -11,6 +11,7 @@ import (
 
 	"github.com/getlantern/systray"
 	"github.com/nange/easyss/icon"
+	"github.com/nange/easyss/utils"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -93,13 +94,13 @@ func (ss *Easyss) trayReady() {
 	}
 }
 
-// Start-Process 指定目录运行
 func (ss *Easyss) catLog() error {
-	win := fmt.Sprintf(`-FilePath powershell  -ArgumentList "-Command Get-Content %s -Wait -Tail 50"`, ss.logFilePath)
+	win := fmt.Sprintf(`-FilePath powershell  -WorkingDirectory %s -ArgumentList "-Command Get-Content %s -Wait -Tail 50"`,
+		utils.GetCurrentDir(), ss.logFileName)
 	fmt.Println(win)
 	cmdmap := map[string][]string{
 		"windows": []string{"powershell", "-Command", "Start-Process", win},
-		"linux":   []string{"gnome-terminal", "--geometry=150x40+20+20", "-x", "tail", "-50f", ss.logFilePath},
+		"linux":   []string{"gnome-terminal", "--geometry=150x40+20+20", "-x", "tail", "-50f", ss.logFileName},
 		"darwin":  []string{""},
 	}
 	cmd := exec.Command(cmdmap[runtime.GOOS][0], cmdmap[runtime.GOOS][1:]...)

@@ -39,7 +39,7 @@ type Easyss struct {
 	}
 	tcpPool easypool.Pool
 
-	logFilePath string
+	logFileName string
 }
 
 func New(config *Config) (*Easyss, error) {
@@ -52,7 +52,7 @@ func New(config *Config) (*Easyss, error) {
 	if config.EnableQuic {
 		ss.quic.sessChan = make(chan sessOpts, 10)
 	}
-	ss.logFilePath = utils.GetLogFilePath()
+	ss.logFileName = utils.GetLogFileName()
 	return ss, nil
 }
 
