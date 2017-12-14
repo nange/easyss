@@ -93,6 +93,7 @@ func (ss *Easyss) trayReady() {
 	}
 }
 
+// Start-Process 指定目录运行
 func (ss *Easyss) catLog() error {
 	win := fmt.Sprintf(`-FilePath powershell  -ArgumentList "-Command Get-Content %s -Wait -Tail 50"`, ss.logFilePath)
 	fmt.Println(win)
@@ -107,6 +108,9 @@ func (ss *Easyss) catLog() error {
 
 func (ss *Easyss) trayExit() {
 	ss.pac.ch <- PACOFF
+	if ss.tcpPool != nil {
+		ss.tcpPool.Close()
+	}
 	time.Sleep(time.Second) // ensure the pac settings to default value
 	log.Info("easyss exited...")
 	os.Exit(0)

@@ -52,7 +52,7 @@ func New(config *Config) (*Easyss, error) {
 	if config.EnableQuic {
 		ss.quic.sessChan = make(chan sessOpts, 10)
 	}
-	ss.logFilePath = utils.GetLogFilePath(os.Args[0])
+	ss.logFilePath = utils.GetLogFilePath()
 	return ss, nil
 }
 
@@ -103,7 +103,7 @@ func main() {
 	// we starting easyss as daemon only in client model, and save logs to file
 	if !cmdConfig.ServerModel {
 		daemon(godaemon)
-		fileout, err := utils.GetLogFileWriter(os.Args[0])
+		fileout, err := utils.GetLogFileWriter()
 		if err != nil {
 			log.Errorf("get log file output writer err:%v", err)
 		} else {
@@ -119,7 +119,7 @@ func main() {
 	if !exists || err != nil {
 		log.Debugf("config file err:%v", err)
 
-		binDir := path.Dir(os.Args[0])
+		binDir := utils.GetCurrentDir()
 		configFile = path.Join(binDir, "config.json")
 
 		log.Debugf("config file not found, try config file %s", configFile)
