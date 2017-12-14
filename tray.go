@@ -95,9 +95,15 @@ func (ss *Easyss) trayReady() {
 }
 
 func (ss *Easyss) catLog() error {
-	win := fmt.Sprintf(`-FilePath powershell  -WorkingDirectory %s -ArgumentList "-Command Get-Content %s -Wait -Tail 50"`,
-		utils.GetCurrentDir(), ss.logFileName)
-	fmt.Println(win)
+	win := `-FilePath powershell  -WorkingDirectory "%s" -ArgumentList "-NoExit -Command Get-Content %s -Wait %s"`
+	if runtime.GOOS == "windows" && utils.SysSupportPowershell() {
+		if utils.SysPowershellMajorVersion() >= 3 {
+			win = fmt.Sprintf(win, utils.GetCurrentDir(), ss.logFileName, "-Tail 100")
+		} else {
+			win = fmt.Sprintf(win, utils.GetCurrentDir(), ss.logFileName, "-ReadCount 100")
+		}
+	}
+
 	cmdmap := map[string][]string{
 		"windows": []string{"powershell", "-Command", "Start-Process", win},
 		"linux":   []string{"gnome-terminal", "--geometry=150x40+20+20", "-x", "tail", "-50f", ss.logFileName},
