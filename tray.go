@@ -107,7 +107,7 @@ func (ss *Easyss) catLog() error {
 	cmdmap := map[string][]string{
 		"windows": []string{"powershell", "-Command", "Start-Process", win},
 		"linux":   []string{"gnome-terminal", "--geometry=150x40+20+20", "-x", "tail", "-50f", ss.logFileName},
-		"darwin":  []string{""},
+		"darwin":  []string{"open", "/Applications/Utilities/Terminal.app", "tail", "-50f", ss.logFileName},
 	}
 	cmd := exec.Command(cmdmap[runtime.GOOS][0], cmdmap[runtime.GOOS][1:]...)
 	return cmd.Start()
