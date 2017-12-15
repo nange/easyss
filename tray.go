@@ -1,25 +1,30 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
 	"github.com/getlantern/systray"
 	"github.com/nange/easyss/icon"
+	"github.com/nange/easyss/utils"
 	log "github.com/sirupsen/logrus"
 )
 
 func (ss *Easyss) trayReady() {
-	if err := ss.InitTcpPool(); err != nil {
-		log.Fatalf("init tcp pool error:%v", err)
+	if ss.config.EnableQuic {
+		go ss.sessManage() // start quic session manage
+	} else {
+		if err := ss.InitTcpPool(); err != nil {
+			log.Errorf("init tcp pool error:%v", err)
+		}
 	}
 	go ss.SysPAC() // system pac configuration
 	go ss.Local()  // start local server
-	if ss.config.EnableQuic {
-		go ss.sessManage() // start quic session manage
-	}
 
 	go func() {
 		c := make(chan os.Signal)
@@ -33,10 +38,12 @@ func (ss *Easyss) trayReady() {
 	systray.SetTitle("Easyss APP")
 	systray.SetTooltip("Easyss")
 
-	cPAC := systray.AddMenuItem("启用PAC", "启用PAC")
+	cPAC := systray.AddMenuItem("启用PAC(自动代理)", "启用PAC")
 	systray.AddSeparator()
 	cPAC.Check() // checked as default
-	cGlobal := systray.AddMenuItem("全局模式", "全局模式")
+	cGlobal := systray.AddMenuItem("全局代理模式", "全局模式")
+	systray.AddSeparator()
+	cCatLog := systray.AddMenuItem("查看Easyss运行日志", "查看日志")
 	systray.AddSeparator()
 	cQuit := systray.AddMenuItem("退出", "退出Easyss APP")
 
@@ -73,6 +80,12 @@ func (ss *Easyss) trayReady() {
 				ss.pac.ch <- PACONGLOBAL
 			}
 			log.Infof("global btn clicked... is checked:%v", cGlobal.Checked())
+		case <-cCatLog.ClickedCh:
+			log.Infof("cat log btn clicked...")
+			if err := ss.catLog(); err != nil {
+				log.Errorf("cat log err:%v", err)
+			}
+
 		case <-cQuit.ClickedCh:
 			log.Infof("quit btn clicked quit now...")
 			systray.Quit()
@@ -81,8 +94,30 @@ func (ss *Easyss) trayReady() {
 	}
 }
 
+func (ss *Easyss) catLog() error {
+	win := `-FilePath powershell  -WorkingDirectory "%s" -ArgumentList "-Command Get-Content %s -Wait %s"`
+	if runtime.GOOS == "windows" && utils.SysSupportPowershell() {
+		if utils.SysPowershellMajorVersion() >= 3 {
+			win = fmt.Sprintf(win, utils.GetCurrentDir(), ss.logFileName, "-Tail 100")
+		} else {
+			win = fmt.Sprintf(win, utils.GetCurrentDir(), ss.logFileName, "-ReadCount 100")
+		}
+	}
+
+	cmdmap := map[string][]string{
+		"windows": []string{"powershell", "-Command", "Start-Process", win},
+		"linux":   []string{"gnome-terminal", "--geometry=150x40+20+20", "-x", "tail", "-50f", ss.logFileName},
+		"darwin":  []string{""},
+	}
+	cmd := exec.Command(cmdmap[runtime.GOOS][0], cmdmap[runtime.GOOS][1:]...)
+	return cmd.Start()
+}
+
 func (ss *Easyss) trayExit() {
 	ss.pac.ch <- PACOFF
+	if ss.tcpPool != nil {
+		ss.tcpPool.Close()
+	}
 	time.Sleep(time.Second) // ensure the pac settings to default value
 	log.Info("easyss exited...")
 	os.Exit(0)

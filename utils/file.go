@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
+	"path/filepath"
 	"time"
 
 	"github.com/pkg/errors"
@@ -24,10 +24,22 @@ func FileExists(path string) (bool, error) {
 	return false, errors.WithStack(err)
 }
 
-func GetFileOutputWriter(binpath string) (io.Writer, error) {
-	dir, _ := path.Split(binpath)
-	y, m, d := time.Now().Date()
-	filename := fmt.Sprintf("easyss-%d%d%d.log", y, m, d)
+func GetCurrentDir() string {
+	return filepath.Dir(os.Args[0])
+}
 
-	return os.OpenFile(path.Join(dir, filename), os.O_APPEND|os.O_CREATE, os.ModeAppend)
+func GetLogFileName() string {
+	y, m, d := time.Now().Date()
+	return fmt.Sprintf("easyss-%d%d%d.log", y, m, d)
+}
+
+func GetLogFilePath() string {
+	dir := GetCurrentDir()
+	filename := GetLogFileName()
+	return filepath.Join(dir, filename)
+}
+
+func GetLogFileWriter() (io.Writer, error) {
+	logfile := GetLogFilePath()
+	return os.OpenFile(logfile, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0666)
 }

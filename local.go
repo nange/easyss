@@ -46,6 +46,12 @@ func (ss *Easyss) Local() {
 			if ss.config.EnableQuic {
 				stream, err = ss.getStream()
 			} else {
+				if ss.tcpPool == nil {
+					if err := ss.InitTcpPool(); err != nil {
+						log.Errorf("Easyss init tcp pool err:%v", err)
+						return
+					}
+				}
 				stream, err = ss.tcpPool.Get()
 				log.Infof("after pool get: current tcp pool have %v connections", ss.tcpPool.Len())
 				defer log.Infof("after stream close: current tcp pool have %v connections", ss.tcpPool.Len())
@@ -97,8 +103,11 @@ func (ss *Easyss) Local() {
 				return
 			}
 
-			n1, n2, needclose := relay(csStream, conn, true)
-			log.Infof("send %v bytes to %v, and recive %v bytes, needclose:%v", n1, addr, n2, needclose)
+			n1, n2, needclose := relay(csStream, conn)
+			log.Infof("send %v bytes to %v, and recive %v bytes", n1, addr, n2)
+			if !needclose {
+				log.Infof("underline connection is health, so reuse it")
+			}
 		}()
 	}
 }
