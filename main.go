@@ -69,11 +69,8 @@ func (ss *Easyss) InitTcpPool() error {
 		Factory:     factory,
 	}
 	tcppool, err := easypool.NewHeapPool(pconfig)
-	if err != nil {
-		return err
-	}
 	ss.tcpPool = tcppool
-	return nil
+	return err
 }
 
 func main() {
