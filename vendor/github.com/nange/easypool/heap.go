@@ -99,18 +99,19 @@ func NewHeapPool(config *PoolConfig) (Pool, error) {
 			ch <- res{conn: conn, err: err}
 		}()
 	}
-
+	var err error
 	for i := 0; i < initialCap; i++ {
 		ret := <-ch
 		if ret.err != nil {
-			return nil, ret.err
+			err = ret.err
+			continue
 		}
 		heap.Push(hp.freeConn, hp.wrapConn(ret.conn))
 	}
 
 	go hp.cleaner()
 
-	return hp, nil
+	return hp, err
 }
 
 func (hp *heapPool) Get() (net.Conn, error) {
