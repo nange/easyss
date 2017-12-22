@@ -35,9 +35,14 @@ func (ss *Easyss) Local() {
 		go func() {
 			defer conn.Close()
 
-			addr, err := socks.HandShake(conn)
+			addr, cmd, err := socks.HandShake(conn)
 			if err != nil {
 				log.Warnf("local handshake err:%+v, remote:%v", err, addr)
+				return
+			}
+			if cmd == socks.CmdUDPAssociate {
+				log.Infof("current request is for CmdUDPAssociate")
+				time.Sleep(10 * time.Second)
 				return
 			}
 			log.Debugf("target proxy addr is:%v", addr.String())

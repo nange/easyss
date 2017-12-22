@@ -23,8 +23,9 @@ func (ss *Easyss) trayReady() {
 			log.Errorf("init tcp pool error:%v", err)
 		}
 	}
-	go ss.SysPAC() // system pac configuration
-	go ss.Local()  // start local server
+	go ss.SysPAC()   // system pac configuration
+	go ss.Local()    // start local server
+	go ss.UDPLocal() // start local udp server
 
 	go func() {
 		c := make(chan os.Signal)
