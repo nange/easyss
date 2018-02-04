@@ -36,7 +36,7 @@ func (ss *Easyss) trayReady() {
 	}()
 
 	systray.SetIcon(icon.Data)
-	systray.SetTitle("Easyss APP")
+	systray.SetTitle("Easyss")
 	systray.SetTooltip("Easyss")
 
 	cPAC := systray.AddMenuItem("启用PAC(自动代理)", "启用PAC")
@@ -108,7 +108,7 @@ func (ss *Easyss) catLog() error {
 	cmdmap := map[string][]string{
 		"windows": []string{"powershell", "-Command", "Start-Process", win},
 		"linux":   []string{"gnome-terminal", "--geometry=150x40+20+20", "-x", "tail", "-50f", ss.logFileName},
-		"darwin":  []string{"open", "/Applications/Utilities/Terminal.app", "tail", "-50f", ss.logFileName},
+		"darwin":  []string{"open", "-a", "Console", ss.logFileName},
 	}
 	cmd := exec.Command(cmdmap[runtime.GOOS][0], cmdmap[runtime.GOOS][1:]...)
 	return cmd.Start()
