@@ -5,8 +5,14 @@ import (
 	"io/ioutil"
 	"os"
 	"reflect"
+	"time"
 
 	"github.com/pkg/errors"
+)
+
+const (
+	LOG_MAX_AGE       = 48 * time.Hour
+	LOG_ROTATION_TIME = 24 * time.Hour
 )
 
 type PACStatus int

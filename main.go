@@ -11,7 +11,7 @@ import (
 	"github.com/getlantern/systray"
 	quic "github.com/lucas-clemente/quic-go"
 	"github.com/nange/easypool"
-	"github.com/nange/easyss/utils"
+	"github.com/nange/easyss/util"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -52,7 +52,7 @@ func New(config *Config) (*Easyss, error) {
 	if config.EnableQuic {
 		ss.quic.sessChan = make(chan sessOpts, 10)
 	}
-	ss.logFileName = utils.GetLogFileName()
+	ss.logFileName = util.GetLogFileName()
 	return ss, nil
 }
 
@@ -61,11 +61,11 @@ func (ss *Easyss) InitTcpPool() error {
 		return net.Dial("tcp", fmt.Sprintf("%s:%d", ss.config.Server, ss.config.ServerPort))
 	}
 	pconfig := &easypool.PoolConfig{
-		InitialCap:  10,
-		MaxCap:      50,
-		MaxIdle:     10,
-		Idletime:    3 * time.Minute,
-		MaxLifetime: 15 * time.Minute,
+		InitialCap:  5,
+		MaxCap:      30,
+		MaxIdle:     5,
+		Idletime:    time.Minute,
+		MaxLifetime: 5 * time.Minute,
 		Factory:     factory,
 	}
 	tcppool, err := easypool.NewHeapPool(pconfig)
@@ -100,7 +100,7 @@ func main() {
 	// we starting easyss as daemon only in client model, and save logs to file
 	if !cmdConfig.ServerModel {
 		daemon(godaemon)
-		fileout, err := utils.GetLogFileWriter()
+		fileout, err := util.GetLogFileWriter(LOG_MAX_AGE, LOG_ROTATION_TIME)
 		if err != nil {
 			log.Errorf("get log file output writer err:%v", err)
 		} else {
@@ -112,11 +112,11 @@ func main() {
 		log.SetLevel(log.DebugLevel)
 	}
 
-	exists, err := utils.FileExists(configFile)
+	exists, err := util.FileExists(configFile)
 	if !exists || err != nil {
 		log.Debugf("config file err:%v", err)
 
-		binDir := utils.GetCurrentDir()
+		binDir := util.GetCurrentDir()
 		configFile = path.Join(binDir, "config.json")
 
 		log.Debugf("config file not found, try config file %s", configFile)

@@ -9,7 +9,7 @@ import (
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/socks"
-	"github.com/nange/easyss/utils"
+	"github.com/nange/easyss/util"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -61,7 +61,7 @@ func (ss *Easyss) Local() {
 			}
 			defer stream.Close()
 
-			header := utils.NewHTTP2DataFrameHeader(len(addr) + 1)
+			header := util.NewHTTP2DataFrameHeader(len(addr) + 1)
 			gcm, err := cipherstream.NewAes256GCM([]byte(ss.config.Password))
 			if err != nil {
 				log.Errorf("cipherstream.NewAes256GCM err:%+v", err)

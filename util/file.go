@@ -1,4 +1,4 @@
-package utils
+package util
 
 import (
 	"io"
@@ -38,11 +38,11 @@ func GetLogFilePath() string {
 	return filepath.Join(dir, filename)
 }
 
-func GetLogFileWriter() (io.Writer, error) {
+func GetLogFileWriter(maxAge time.Duration, rotationTime time.Duration) (io.Writer, error) {
 	return rotatelogs.New(
 		GetLogFilePath()+".%Y%m%d%H%M",
 		rotatelogs.WithLinkName(GetLogFilePath()),
-		rotatelogs.WithMaxAge(48*time.Hour),
-		rotatelogs.WithRotationTime(24*time.Hour),
+		rotatelogs.WithMaxAge(maxAge),
+		rotatelogs.WithRotationTime(rotationTime),
 	)
 }

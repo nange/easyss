@@ -11,7 +11,7 @@ import (
 
 	"github.com/getlantern/systray"
 	"github.com/nange/easyss/icon"
-	"github.com/nange/easyss/utils"
+	"github.com/nange/easyss/util"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -97,11 +97,11 @@ func (ss *Easyss) trayReady() {
 
 func (ss *Easyss) catLog() error {
 	win := `-FilePath powershell  -WorkingDirectory "%s" -ArgumentList "-Command Get-Content %s -Wait %s"`
-	if runtime.GOOS == "windows" && utils.SysSupportPowershell() {
-		if utils.SysPowershellMajorVersion() >= 3 {
-			win = fmt.Sprintf(win, utils.GetCurrentDir(), ss.logFileName, "-Tail 100")
+	if runtime.GOOS == "windows" && util.SysSupportPowershell() {
+		if util.SysPowershellMajorVersion() >= 3 {
+			win = fmt.Sprintf(win, util.GetCurrentDir(), ss.logFileName, "-Tail 100")
 		} else {
-			win = fmt.Sprintf(win, utils.GetCurrentDir(), ss.logFileName, "-ReadCount 100")
+			win = fmt.Sprintf(win, util.GetCurrentDir(), ss.logFileName, "-ReadCount 100")
 		}
 	}
 

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/nange/easyss/cipherstream"
-	"github.com/nange/easyss/utils"
+	"github.com/nange/easyss/util"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -76,7 +76,7 @@ func (cs *ConnState) FINWait1(conn io.ReadWriteCloser) *ConnState {
 	defer log.Info("end FINWait1 state")
 
 	cs.state = FIN_WAIT1
-	fin := utils.NewFINRstStreamHeader()
+	fin := util.NewFINRstStreamHeader()
 	_, err := conn.Write(fin)
 	if err != nil {
 		log.Errorf("conn.Write FIN err:%+v", errors.WithStack(err))
@@ -125,7 +125,7 @@ func (cs *ConnState) FINWait2(conn io.ReadWriteCloser) *ConnState {
 		return cs
 	}
 
-	ack := utils.NewACKRstStreamHeader()
+	ack := util.NewACKRstStreamHeader()
 	_, err = conn.Write(ack)
 	if err != nil {
 		log.Errorf("conn.Write ACK err:%+v", errors.WithStack(err))
@@ -143,7 +143,7 @@ func (cs *ConnState) LastACK(conn io.ReadWriteCloser) *ConnState {
 	defer log.Info("end LastACK state")
 
 	cs.state = LAST_ACK
-	fin := utils.NewFINRstStreamHeader()
+	fin := util.NewFINRstStreamHeader()
 	_, err := conn.Write(fin)
 	if err != nil {
 		log.Errorf("conn.Write FIN err:%+v", errors.WithStack(err))
@@ -161,7 +161,7 @@ func (cs *ConnState) Closing(conn io.ReadWriteCloser) *ConnState {
 	defer log.Info("end Closing state")
 
 	cs.state = CLOSING
-	ack := utils.NewACKRstStreamHeader()
+	ack := util.NewACKRstStreamHeader()
 	_, err := conn.Write(ack)
 	if err != nil {
 		log.Errorf("conn.Write ACK err:%+v", errors.WithStack(err))
@@ -179,7 +179,7 @@ func (cs *ConnState) CloseWait(conn io.ReadWriteCloser) *ConnState {
 	defer log.Info("end CloseWait state")
 
 	cs.state = CLOSE_WAIT
-	ack := utils.NewACKRstStreamHeader()
+	ack := util.NewACKRstStreamHeader()
 	_, err := conn.Write(ack)
 	if err != nil {
 		log.Errorf("conn.Write ack err:%+v", errors.WithStack(err))

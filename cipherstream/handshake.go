@@ -4,13 +4,13 @@ import (
 	"io"
 
 	"github.com/nange/easypool"
-	"github.com/nange/easyss/utils"
+	"github.com/nange/easyss/util"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
 func HandShake(stream io.ReadWriteCloser, addr []byte, method, password string) error {
-	header := utils.NewHTTP2DataFrameHeader(len(addr) + 1)
+	header := util.NewHTTP2DataFrameHeader(len(addr) + 1)
 	gcm, err := NewAes256GCM([]byte(password))
 	if err != nil {
 		log.Errorf("cipherstream.NewAes256GCM err:%+v", err)

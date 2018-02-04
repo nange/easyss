@@ -16,7 +16,7 @@ import (
 	quic "github.com/lucas-clemente/quic-go"
 	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/socks"
-	"github.com/nange/easyss/utils"
+	"github.com/nange/easyss/util"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -136,7 +136,7 @@ func (ss *Easyss) tcpServer() {
 					log.Warnf("target addr should not be localhost, close the connection directly")
 					return
 				}
-				if utils.IsPrivateIP(addr.String()) {
+				if util.IsPrivateIP(addr.String()) {
 					log.Warnf("target addr should not be private ip, close the connection directly")
 					return
 				}

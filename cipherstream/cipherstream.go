@@ -5,7 +5,7 @@ import (
 	"io"
 	"net"
 
-	"github.com/nange/easyss/utils"
+	"github.com/nange/easyss/util"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -70,7 +70,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 		if nr > 0 {
 			n += int64(nr)
 			log.Debugf("read from normal stream, frame payload size:%v ", nr)
-			headerBuf := utils.NewHTTP2DataFrameHeader(nr)
+			headerBuf := util.NewHTTP2DataFrameHeader(nr)
 			headercipher, er := cs.Encrypt(headerBuf)
 			if er != nil {
 				log.Errorf("encrypt header buf err:%+v", err)
