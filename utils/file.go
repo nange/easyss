@@ -1,12 +1,12 @@
 package utils
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"time"
 
+	rotatelogs "github.com/lestrrat/go-file-rotatelogs"
 	"github.com/pkg/errors"
 )
 
@@ -29,8 +29,7 @@ func GetCurrentDir() string {
 }
 
 func GetLogFileName() string {
-	y, m, d := time.Now().Date()
-	return fmt.Sprintf("easyss-%d%d%d.log", y, m, d)
+	return "easyss.log"
 }
 
 func GetLogFilePath() string {
@@ -40,6 +39,10 @@ func GetLogFilePath() string {
 }
 
 func GetLogFileWriter() (io.Writer, error) {
-	logfile := GetLogFilePath()
-	return os.OpenFile(logfile, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0666)
+	return rotatelogs.New(
+		GetLogFilePath()+".%Y%m%d%H%M",
+		rotatelogs.WithLinkName(GetLogFilePath()),
+		rotatelogs.WithMaxAge(48*time.Hour),
+		rotatelogs.WithRotationTime(24*time.Hour),
+	)
 }

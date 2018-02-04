@@ -4,13 +4,19 @@
 [[projects]]
   branch = "master"
   name = "github.com/aead/chacha20"
-  packages = [".","chacha"]
+  packages = [
+    ".",
+    "chacha"
+  ]
   revision = "8d6ce0550041f9d97e7f15ec27ed489f8bbbb0fb"
 
 [[projects]]
   branch = "master"
   name = "github.com/bifurcation/mint"
-  packages = [".","syntax"]
+  packages = [
+    ".",
+    "syntax"
+  ]
   revision = "8c88abfa791682796b74de8e661dfba248fc5c02"
 
 [[projects]]
@@ -28,7 +34,10 @@
 [[projects]]
   branch = "master"
   name = "github.com/getlantern/elevate"
-  packages = [".","bin"]
+  packages = [
+    ".",
+    "bin"
+  ]
   revision = "a1e4813b4e263a37d95b569a21cf5a2943acfd26"
 
 [[projects]]
@@ -88,8 +97,23 @@
 [[projects]]
   branch = "master"
   name = "github.com/hashicorp/golang-lru"
-  packages = [".","simplelru"]
+  packages = [
+    ".",
+    "simplelru"
+  ]
   revision = "0a025b7e63adc15a622f29b0b2c4c3848243bbf6"
+
+[[projects]]
+  name = "github.com/lestrrat/go-file-rotatelogs"
+  packages = ["."]
+  revision = "9df8b44f21785240553882138c5df2e9cc1db910"
+  version = "v2.1.0"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/lestrrat/go-strftime"
+  packages = ["."]
+  revision = "04ef93e285313c8978cbc7cad26d2aa7a9927451"
 
 [[projects]]
   branch = "master"
@@ -106,7 +130,18 @@
 [[projects]]
   branch = "master"
   name = "github.com/lucas-clemente/quic-go"
-  packages = [".","ackhandler","congestion","internal/crypto","internal/flowcontrol","internal/handshake","internal/protocol","internal/utils","internal/wire","qerr"]
+  packages = [
+    ".",
+    "ackhandler",
+    "congestion",
+    "internal/crypto",
+    "internal/flowcontrol",
+    "internal/handshake",
+    "internal/protocol",
+    "internal/utils",
+    "internal/wire",
+    "qerr"
+  ]
   revision = "fcc380187a928f70185dc6dc0403f0ea789703f5"
 
 [[projects]]
@@ -148,18 +183,29 @@
 [[projects]]
   branch = "master"
   name = "golang.org/x/crypto"
-  packages = ["chacha20poly1305","chacha20poly1305/internal/chacha20","curve25519","hkdf","pbkdf2","poly1305","ssh/terminal"]
+  packages = [
+    "chacha20poly1305",
+    "chacha20poly1305/internal/chacha20",
+    "curve25519",
+    "hkdf",
+    "pbkdf2",
+    "poly1305",
+    "ssh/terminal"
+  ]
   revision = "2509b142fb2b797aa7587dad548f113b2c0f20ce"
 
 [[projects]]
   branch = "master"
   name = "golang.org/x/sys"
-  packages = ["unix","windows"]
+  packages = [
+    "unix",
+    "windows"
+  ]
   revision = "661970f62f5897bc0cd5fdca7e087ba8a98a8fa1"
 
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "d400e01d4a1819b248d605bdcc534d970ff855ae4114154cda09e2a3068d9090"
+  inputs-digest = "72958b6b184bdf22f8aaf33564dc1b2b8700ab9e31a82249a6db49e66e79c652"
   solver-name = "gps-cdcl"
   solver-version = 1
