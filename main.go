@@ -3,12 +3,14 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path"
 	"time"
 
 	"github.com/getlantern/systray"
+	rotatelogs "github.com/lestrrat/go-file-rotatelogs"
 	quic "github.com/lucas-clemente/quic-go"
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/util"
@@ -39,7 +41,7 @@ type Easyss struct {
 	}
 	tcpPool easypool.Pool
 
-	logFileName string
+	logFileWriter io.Writer
 }
 
 func New(config *Config) (*Easyss, error) {
@@ -52,8 +54,15 @@ func New(config *Config) (*Easyss, error) {
 	if config.EnableQuic {
 		ss.quic.sessChan = make(chan sessOpts, 10)
 	}
-	ss.logFileName = util.GetLogFileName()
 	return ss, nil
+}
+
+func (ss *Easyss) GetLogFileFullPathName() string {
+	if rl, ok := ss.logFileWriter.(*rotatelogs.RotateLogs); ok {
+		return rl.CurrentFileName()
+	}
+	log.Errorf("get log file name failed!")
+	return ""
 }
 
 func (ss *Easyss) InitTcpPool() error {
@@ -98,13 +107,16 @@ func main() {
 		os.Exit(0)
 	}
 	// we starting easyss as daemon only in client model, and save logs to file
+	var writer io.Writer
 	if !cmdConfig.ServerModel {
 		daemon(godaemon)
-		fileout, err := util.GetLogFileWriter(LOG_MAX_AGE, LOG_ROTATION_TIME)
+		var err error
+		writer, err = util.GetLogFileWriter(LOG_MAX_AGE, LOG_ROTATION_TIME)
 		if err != nil {
 			log.Errorf("get log file output writer err:%v", err)
 		} else {
-			log.SetOutput(fileout)
+			log.SetOutput(writer)
+
 		}
 	}
 
@@ -137,6 +149,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("init Easyss err:%+v", err)
 	}
+	ss.logFileWriter = writer
 	if config.ServerModel {
 		if config.ServerPort == 0 || config.Password == "" {
 			log.Fatalln("server port and password should not empty")

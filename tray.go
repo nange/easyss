@@ -99,16 +99,16 @@ func (ss *Easyss) catLog() error {
 	win := `-FilePath powershell  -WorkingDirectory "%s" -ArgumentList "-Command Get-Content %s -Wait %s"`
 	if runtime.GOOS == "windows" && util.SysSupportPowershell() {
 		if util.SysPowershellMajorVersion() >= 3 {
-			win = fmt.Sprintf(win, util.GetCurrentDir(), ss.logFileName, "-Tail 100")
+			win = fmt.Sprintf(win, util.GetCurrentDir(), ss.GetLogFileFullPathName(), "-Tail 100")
 		} else {
-			win = fmt.Sprintf(win, util.GetCurrentDir(), ss.logFileName, "-ReadCount 100")
+			win = fmt.Sprintf(win, util.GetCurrentDir(), ss.GetLogFileFullPathName(), "-ReadCount 100")
 		}
 	}
 
 	cmdmap := map[string][]string{
 		"windows": []string{"powershell", "-Command", "Start-Process", win},
-		"linux":   []string{"gnome-terminal", "--geometry=150x40+20+20", "-x", "tail", "-50f", ss.logFileName},
-		"darwin":  []string{"open", "-a", "Console", ss.logFileName},
+		"linux":   []string{"gnome-terminal", "--geometry=150x40+20+20", "-x", "tail", "-50f", ss.GetLogFileFullPathName()},
+		"darwin":  []string{"open", "-a", "Console", ss.GetLogFileFullPathName()},
 	}
 	cmd := exec.Command(cmdmap[runtime.GOOS][0], cmdmap[runtime.GOOS][1:]...)
 	return cmd.Start()
