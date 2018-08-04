@@ -32,82 +32,85 @@ func (ss *Easyss) Local() {
 		conn.(*net.TCPConn).SetKeepAlive(true)
 		conn.(*net.TCPConn).SetKeepAlivePeriod(time.Duration(ss.config.Timeout) * time.Second)
 
-		go func() {
-			defer conn.Close()
+		addr, cmd, err := socks.HandShake(conn)
+		if err != nil {
+			log.Warnf("local handshake err:%+v, remote:%v", err, addr)
+			return
+		}
+		if cmd == socks.CmdUDPAssociate {
+			log.Infof("current request is for CmdUDPAssociate")
+			time.Sleep(10 * time.Second)
+			return
+		}
+		log.Debugf("target proxy addr is:%v", addr.String())
 
-			addr, cmd, err := socks.HandShake(conn)
-			if err != nil {
-				log.Warnf("local handshake err:%+v, remote:%v", err, addr)
-				return
-			}
-			if cmd == socks.CmdUDPAssociate {
-				log.Infof("current request is for CmdUDPAssociate")
-				time.Sleep(10 * time.Second)
-				return
-			}
-			log.Debugf("target proxy addr is:%v", addr.String())
+		go ss.localRelay(conn, addr.String())
+	}
+}
 
-			var stream io.ReadWriteCloser
-			if ss.config.EnableQuic {
-				stream, err = ss.getStream()
-			} else {
-				stream, err = ss.tcpPool.Get()
-				log.Infof("after pool get: current tcp pool have %v connections", ss.tcpPool.Len())
-				defer log.Infof("after stream close: current tcp pool have %v connections", ss.tcpPool.Len())
-			}
-			if err != nil {
-				log.Errorf("get stream err:%+v", err)
-				return
-			}
-			defer stream.Close()
+func (ss *Easyss) localRelay(localConn net.Conn, addr string) {
+	defer localConn.Close()
 
-			header := util.NewHTTP2DataFrameHeader(len(addr) + 1)
-			gcm, err := cipherstream.NewAes256GCM([]byte(ss.config.Password))
-			if err != nil {
-				log.Errorf("cipherstream.NewAes256GCM err:%+v", err)
-				return
-			}
+	var stream io.ReadWriteCloser
+	var err error
+	if ss.config.EnableQuic {
+		stream, err = ss.getStream()
+	} else {
+		stream, err = ss.tcpPool.Get()
+		log.Infof("after pool get: current tcp pool have %v connections", ss.tcpPool.Len())
+		defer log.Infof("after stream close: current tcp pool have %v connections", ss.tcpPool.Len())
+	}
+	if err != nil {
+		log.Errorf("get stream err:%+v", err)
+		return
+	}
+	defer stream.Close()
 
-			headercipher, err := gcm.Encrypt(header)
-			if err != nil {
-				log.Errorf("gcm.Encrypt err:%+v", err)
-				return
-			}
-			ciphermethod := EncodeCipherMethod(ss.config.Method)
-			if ciphermethod == 0 {
-				log.Errorf("unsupported cipher method:%+v", ss.config.Method)
-				return
-			}
-			payloadcipher, err := gcm.Encrypt(append([]byte(addr), ciphermethod))
-			if err != nil {
-				log.Errorf("gcm.Encrypt err:%+v", err)
-				return
-			}
+	header := util.NewHTTP2DataFrameHeader(len(addr) + 1)
+	gcm, err := cipherstream.NewAes256GCM([]byte(ss.config.Password))
+	if err != nil {
+		log.Errorf("cipherstream.NewAes256GCM err:%+v", err)
+		return
+	}
 
-			handshake := append(headercipher, payloadcipher...)
-			_, err = stream.Write(handshake)
-			if err != nil {
-				log.Errorf("stream.Write err:%+v", errors.WithStack(err))
-				if pc, ok := stream.(*easypool.PoolConn); ok {
-					log.Infof("mark pool conn stream unusable")
-					pc.MarkUnusable()
-				}
-				return
-			}
+	headercipher, err := gcm.Encrypt(header)
+	if err != nil {
+		log.Errorf("gcm.Encrypt err:%+v", err)
+		return
+	}
+	ciphermethod := EncodeCipherMethod(ss.config.Method)
+	if ciphermethod == 0 {
+		log.Errorf("unsupported cipher method:%+v", ss.config.Method)
+		return
+	}
+	payloadcipher, err := gcm.Encrypt(append([]byte(addr), ciphermethod))
+	if err != nil {
+		log.Errorf("gcm.Encrypt err:%+v", err)
+		return
+	}
 
-			csStream, err := cipherstream.New(stream, ss.config.Password, ss.config.Method)
-			if err != nil {
-				log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
-					err, ss.config.Password, ss.config.Method)
-				return
-			}
+	handshake := append(headercipher, payloadcipher...)
+	_, err = stream.Write(handshake)
+	if err != nil {
+		log.Errorf("stream.Write err:%+v", errors.WithStack(err))
+		if pc, ok := stream.(*easypool.PoolConn); ok {
+			log.Infof("mark pool conn stream unusable")
+			pc.MarkUnusable()
+		}
+		return
+	}
 
-			n1, n2, needclose := relay(csStream, conn)
-			log.Infof("send %v bytes to %v, and recive %v bytes", n1, addr, n2)
-			if !needclose {
-				log.Infof("underline connection is health, so reuse it")
-			}
-		}()
+	csStream, err := cipherstream.New(stream, ss.config.Password, ss.config.Method)
+	if err != nil {
+		log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
+			err, ss.config.Password, ss.config.Method)
+		return
+	}
+
+	n1, n2, needclose := relay(csStream, localConn)
+	log.Infof("send %v bytes to %v, and recive %v bytes", n1, addr, n2)
+	if !needclose {
+		log.Infof("underline connection is health, so reuse it")
 	}
 }
 

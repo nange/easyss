@@ -13,9 +13,8 @@ import (
 	"strconv"
 	"time"
 
-	quic "github.com/lucas-clemente/quic-go"
+	"github.com/lucas-clemente/quic-go"
 	"github.com/nange/easyss/cipherstream"
-	"github.com/nange/easyss/socks"
 	"github.com/nange/easyss/util"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -64,14 +63,15 @@ func (ss *Easyss) quicServer() {
 						log.Warnf("get target addr err:%+v", err)
 						return
 					}
-					if addr.String() == "" || ciphermethod == "" {
+					addrStr := string(addr)
+					if addrStr == "" || ciphermethod == "" {
 						log.Errorf("after handshake with client, but get empty addr:%v or ciphermethod:%v",
-							addr.String(), ciphermethod)
+							addrStr, ciphermethod)
 						return
 					}
-					log.Infof("target proxy addr is:%v", addr.String())
+					log.Infof("target proxy addr is:%v", addrStr)
 
-					tconn, err := net.Dial("tcp", addr.String())
+					tconn, err := net.Dial("tcp", addrStr)
 					if err != nil {
 						log.Errorf("net.Dial %v err:%v", addr, err)
 						return
@@ -127,25 +127,26 @@ func (ss *Easyss) tcpServer() {
 					log.Warnf("get target addr err:%+v", err)
 					return
 				}
-				if addr.String() == "" || ciphermethod == "" {
+				addrStr := string(addr)
+				if addrStr == "" || ciphermethod == "" {
 					log.Errorf("after handshake with client, but get empty addr:%v or ciphermethod:%v",
-						addr.String(), ciphermethod)
+						addrStr, ciphermethod)
 					return
 				}
-				if addr.String() == "localhost" || addr.String() == "127.0.0.1" {
+				if addrStr == "localhost" || addrStr == "127.0.0.1" {
 					log.Warnf("target addr should not be localhost, close the connection directly")
 					return
 				}
-				if util.IsPrivateIP(addr.String()) {
+				if util.IsPrivateIP(addrStr) {
 					log.Warnf("target addr should not be private ip, close the connection directly")
 					return
 				}
 
-				log.Infof("target proxy addr is:%v", addr.String())
+				log.Infof("target proxy addr is:%v", addrStr)
 
-				tconn, err := net.Dial("tcp", addr.String())
+				tconn, err := net.Dial("tcp", addrStr)
 				if err != nil {
-					log.Errorf("net.Dial %v err:%v", addr, err)
+					log.Errorf("net.Dial %v err:%v", addrStr, err)
 					return
 				}
 
@@ -157,7 +158,7 @@ func (ss *Easyss) tcpServer() {
 				}
 
 				n1, n2, needclose := relay(csStream, tconn)
-				log.Infof("send %v bytes to %v, and recive %v bytes, needclose:%v", n2, addr, n1, needclose)
+				log.Infof("send %v bytes to %v, and recive %v bytes, needclose:%v", n2, addrStr, n1, needclose)
 
 				tconn.Close()
 				if needclose {
@@ -170,7 +171,7 @@ func (ss *Easyss) tcpServer() {
 	}
 }
 
-func handShake(stream io.ReadWriter, password string) (addr socks.Addr, ciphermethod string, err error) {
+func handShake(stream io.ReadWriter, password string) (addr []byte, ciphermethod string, err error) {
 	gcm, err := cipherstream.NewAes256GCM([]byte(password))
 	if err != nil {
 		return
