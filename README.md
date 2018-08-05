@@ -7,7 +7,7 @@ easyss是一款兼容socks5的安全上网工具，目标是使访问国外技�
 
 ## 特性
 
-* 兼容SOCKS5,HTTP(S)
+* 支持SOCKS5,HTTP(S)代理协议
 
 * (只)支持(AEAD类型)高强度加密通信, 如aes-256-gcm, chacha20-poly1305
 
