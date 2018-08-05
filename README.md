@@ -7,7 +7,7 @@ easyss是一款兼容socks5的安全上网工具，目标是使访问国外技�
 
 ## 特性
 
-* 兼容SOCKS5
+* 兼容SOCKS5,HTTP(S)
 
 * (只)支持(AEAD类型)高强度加密通信, 如aes-256-gcm, chacha20-poly1305
 
@@ -25,7 +25,12 @@ easyss是一款兼容socks5的安全上网工具，目标是使访问国外技�
 
 ## 当前版本
 
-1.0 正式版 (还未正式发布, 正在做最后的优化，添加UDP转发支持和对手机端的支持)
+RC3 
+
+
+### TODO
+* 添加UDP转发支持
+* 支持手机端
 
 
 ## 安装
@@ -72,6 +77,7 @@ copy本项目中的config.json文件和上面下载的二进制文件放同一�
 ##### docker部署
 
 docker run -d --name easyss -p yourport:yourport nange/docker-easyss:latest -p yourport -k yourpassword
+
 
 
 ### LICENSE
