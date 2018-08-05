@@ -42,17 +42,16 @@ func (ss *Easyss) Local() {
 			time.Sleep(10 * time.Second)
 			return
 		}
-		log.Debugf("target proxy addr is:%v", addr.String())
+		log.Infof("target proxy addr is:%v", addr.String())
 
 		go ss.localRelay(conn, addr.String())
 	}
 }
 
-func (ss *Easyss) localRelay(localConn net.Conn, addr string) {
+func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	defer localConn.Close()
 
 	var stream io.ReadWriteCloser
-	var err error
 	if ss.config.EnableQuic {
 		stream, err = ss.getStream()
 	} else {
@@ -112,6 +111,8 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) {
 	if !needclose {
 		log.Infof("underline connection is health, so reuse it")
 	}
+
+	return
 }
 
 func EncodeCipherMethod(m string) byte {

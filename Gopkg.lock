@@ -157,6 +157,12 @@
   version = "1.2.1"
 
 [[projects]]
+  name = "github.com/nange/httpproxy"
+  packages = ["."]
+  revision = "981f79e1f29c43fdc8f5bc2b1b4e3bd96168a9e0"
+  version = "v1.4"
+
+[[projects]]
   branch = "master"
   name = "github.com/oxtoacart/bpool"
   packages = ["."]
@@ -206,6 +212,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "72958b6b184bdf22f8aaf33564dc1b2b8700ab9e31a82249a6db49e66e79c652"
+  inputs-digest = "da04fe3bdb7800557c2b9d297ced7f087853e2a011b348a87d609e1bc3643779"
   solver-name = "gps-cdcl"
   solver-version = 1

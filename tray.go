@@ -25,6 +25,7 @@ func (ss *Easyss) trayReady() {
 	}
 	go ss.SysPAC()   // system pac configuration
 	go ss.Local()    // start local server
+	go ss.HttpLocal() // start local http proxy server
 	go ss.UDPLocal() // start local udp server
 
 	go func() {
