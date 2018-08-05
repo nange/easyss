@@ -157,10 +157,10 @@
   version = "1.2.1"
 
 [[projects]]
+  branch = "master"
   name = "github.com/nange/httpproxy"
   packages = ["."]
-  revision = "981f79e1f29c43fdc8f5bc2b1b4e3bd96168a9e0"
-  version = "v1.4"
+  revision = "ff2c9c785a5ddf4ced52e28f22bfa671bc31a3ad"
 
 [[projects]]
   branch = "master"
@@ -212,6 +212,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "da04fe3bdb7800557c2b9d297ced7f087853e2a011b348a87d609e1bc3643779"
+  inputs-digest = "60abbdaa6ed02b50960fb754e55affa02ee5a7d6239f5225c6c84a9884e16202"
   solver-name = "gps-cdcl"
   solver-version = 1

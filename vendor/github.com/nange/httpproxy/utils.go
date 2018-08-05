@@ -23,7 +23,7 @@ func InMemoryResponse(code int, header http.Header, body []byte) *http.Response 
 		st = " " + st
 	}
 	var bodyReadCloser io.ReadCloser
-	var bodyContentLength = int64(-1)
+	var bodyContentLength = int64(0)
 	if body != nil {
 		bodyReadCloser = ioutil.NopCloser(bytes.NewBuffer(body))
 		bodyContentLength = int64(len(body))
@@ -52,10 +52,9 @@ func ServeResponse(w http.ResponseWriter, resp *http.Response) error {
 		}
 	}
 	if h.Get("Date") == "" {
-		//h.Set("Date", time.Now().UTC().Format(time.RFC1123))
 		h.Set("Date", time.Now().UTC().Format("Mon, 2 Jan 2006 15:04:05")+" GMT")
 	}
-	if h.Get("Content-Type") == "" {
+	if h.Get("Content-Type") == "" && resp.ContentLength != 0 {
 		h.Set("Content-Type", "text/plain; charset=utf-8")
 	}
 	if resp.ContentLength >= 0 {
@@ -71,6 +70,25 @@ func ServeResponse(w http.ResponseWriter, resp *http.Response) error {
 		}
 		te = resp.TransferEncoding[0]
 	}
+	h.Del("Connection")
+	clientConnection := ""
+	if resp.Request != nil {
+		clientConnection = resp.Request.Header.Get("Connection")
+	}
+	switch clientConnection {
+	case "close":
+		h.Set("Connection", "close")
+	case "keep-alive":
+		if h.Get("Content-Length") != "" || te == "chunked" {
+			h.Set("Connection", "keep-alive")
+		} else {
+			h.Set("Connection", "close")
+		}
+	default:
+		if te == "chunked" {
+			h.Set("Connection", "close")
+		}
+	}
 	switch te {
 	case "":
 		w.WriteHeader(resp.StatusCode)
@@ -80,9 +98,7 @@ func ServeResponse(w http.ResponseWriter, resp *http.Response) error {
 			}
 		}
 	case "chunked":
-		h.Add("Transfer-Encoding", "chunked")
-		//h.Del("Content-Length")
-		h.Set("Connection", "close")
+		h.Set("Transfer-Encoding", "chunked")
 		w.WriteHeader(resp.StatusCode)
 		w2 := httputil.NewChunkedWriter(w)
 		if resp.Body != nil {
@@ -115,22 +131,4 @@ func stripPort(s string) string {
 		return s
 	}
 	return s[:ix]
-}
-
-func removeProxyHeaders(r *http.Request) {
-	// If no Accept-Encoding header exists, Transport will add the headers it can accept
-	// and would wrap the response body with the relevant reader.
-	r.Header.Del("Accept-Encoding")
-	// curl can add that, see
-	// https://jdebp.eu./FGA/web-proxy-connection-header.html
-	r.Header.Del("Proxy-Connection")
-	r.Header.Del("Proxy-Authenticate")
-	r.Header.Del("Proxy-Authorization")
-	// Connection, Authenticate and Authorization are single hop Header:
-	// http://www.w3.org/Protocols/rfc2616/rfc2616.txt
-	// 14.10 Connection
-	//   The Connection general-header field allows the sender to specify
-	//   options that are desired for that particular connection and MUST NOT
-	//   be communicated by proxies over further connections.
-	r.Header.Del("Connection")
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"net/http"
 	"sync/atomic"
+	"net/url"
 )
 
 // Proxy defines parameters for running an HTTP Proxy. It implements
@@ -40,6 +41,9 @@ type Proxy struct {
 	OnConnect func(ctx *Context, host string) (ConnectAction ConnectAction,
 		newHost string)
 
+	// Forward callback. It forward the underline hijack connection
+	OnForward func(ctx *Context, host string) error
+
 	// Request callback. It greets remote request.
 	// If it returns non-nil response, stops processing remote request.
 	OnRequest func(ctx *Context, req *http.Request) (resp *http.Response)
@@ -68,7 +72,9 @@ func NewProxy() (*Proxy, error) {
 func NewProxyCert(caCert, caKey []byte) (*Proxy, error) {
 	prx := &Proxy{
 		Rt: &http.Transport{TLSClientConfig: &tls.Config{},
-			Proxy: http.ProxyFromEnvironment},
+			Proxy: func(request *http.Request) (*url.URL, error) {
+				return url.Parse("socks5://127.0.0.1:1080")
+			}},
 		MitmChunked: true,
 		signer:      NewCaSignerCache(1024),
 	}
@@ -108,31 +114,32 @@ func (prx *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if ctx.doAuth(w, r) {
 		return
 	}
-	removeProxyHeaders(r)
+	r.Header.Del("Proxy-Connection")
+	r.Header.Del("Proxy-Authenticate")
+	r.Header.Del("Proxy-Authorization")
 
-	if w2 := ctx.doConnect(w, r); w2 != nil {
-		if w != w2 {
-			w = w2
-			r = nil
-		}
-	} else {
+	if b := ctx.doConnect(w, r); b {
 		return
 	}
 
 	for {
+		var w2 = w
+		var r2 = r
 		var cyclic = false
 		switch ctx.ConnectAction {
 		case ConnectMitm:
 			if prx.MitmChunked {
 				cyclic = true
 			}
-			r = ctx.doMitm(w)
+			w2, r2 = ctx.doMitm()
 		}
-		if r == nil {
+		if w2 == nil || r2 == nil {
 			break
 		}
+		//r.Header.Del("Accept-Encoding")
+		//r.Header.Del("Connection")
 		ctx.SubSessionNo++
-		if b, err := ctx.doRequest(w, r); err != nil {
+		if b, err := ctx.doRequest(w2, r2); err != nil {
 			break
 		} else {
 			if b {
@@ -143,12 +150,12 @@ func (prx *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		if err := ctx.doResponse(w, r); err != nil || !cyclic {
+		if err := ctx.doResponse(w2, r2); err != nil || !cyclic {
 			break
 		}
 	}
 
-	if w2, ok := w.(*ConnResponseWriter); ok {
-		w2.Close()
+	if ctx.hijTLSConn != nil {
+		ctx.hijTLSConn.Close()
 	}
 }

@@ -1,7 +1,5 @@
 # Go HTTP proxy server library
 
-[![GoDoc](https://godoc.org/github.com/go-httpproxy/httpproxy?status.svg)](https://godoc.org/github.com/go-httpproxy/httpproxy)
-
 Package httpproxy provides a customizable HTTP proxy; supports HTTP, HTTPS through
 CONNECT. And also provides HTTPS connection using "Man in the Middle" style
 attack.
@@ -12,9 +10,8 @@ package to offer `http.ListenAndServe` function.
 ## Installing
 
 ```sh
-go get -u github.com/go-httpproxy/httpproxy
-# or
-go get -u gopkg.in/httpproxy.v1
+go get -u github.com/nange/httpproxy
+
 ```
 
 ## Usage

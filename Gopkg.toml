@@ -56,3 +56,7 @@
 [[constraint]]
   name = "github.com/lestrrat/go-file-rotatelogs"
   version = "2.1.0"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/nange/httpproxy"
