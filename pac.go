@@ -16,7 +16,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const pacpath = "/pac.txt"
+const pacpath = "/proxy.pac"
 
 func (ss *Easyss) SysPAC() {
 	statikFS, err := fs.New()
