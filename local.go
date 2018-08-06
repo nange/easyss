@@ -35,7 +35,7 @@ func (ss *Easyss) Local() {
 		addr, cmd, err := socks.HandShake(conn)
 		if err != nil {
 			log.Warnf("local handshake err:%+v, remote:%v", err, addr)
-			return
+			continue
 		}
 		if cmd == socks.CmdUDPAssociate {
 			log.Infof("current request is for CmdUDPAssociate")
