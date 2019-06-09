@@ -38,6 +38,7 @@ RC3
 #### go get 安装最新开发版(version 1.9+ is required)
 
 ```sh
+apt-get install libgtk-3-dev libappindicator3-dev -y
 go get -u -v github.com/nange/easyss
 ```
 
