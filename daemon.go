@@ -1,4 +1,4 @@
-package main
+package easyss
 
 import (
 	"os"
@@ -7,7 +7,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func daemon(godaemon bool) {
+func Daemon(godaemon bool) {
 	if godaemon {
 		args := os.Args[1:]
 		args = append(args, "-daemon=false")

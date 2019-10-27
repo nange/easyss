@@ -1,4 +1,6 @@
-package main
+// +build !mips,!mipsle,!mips64,!mips64le
+
+package easyss
 
 import (
 	"fmt"
@@ -15,25 +17,21 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func (ss *Easyss) trayReady() {
-	if ss.config.EnableQuic {
-		go ss.sessManage() // start quic session manage
-	} else {
-		if err := ss.InitTcpPool(); err != nil {
-			log.Errorf("init tcp pool error:%v", err)
-		}
+func (ss *Easyss) TrayReady() {
+	if err := ss.InitTcpPool(); err != nil {
+		log.Errorf("init tcp pool error:%v", err)
 	}
-	go ss.SysPAC()   // system pac configuration
-	go ss.Local()    // start local server
+	go ss.SysPAC()    // system pac configuration
+	go ss.Local()     // start local server
 	go ss.HttpLocal() // start local http proxy server
-	go ss.UDPLocal() // start local udp server
+	go ss.UDPLocal()  // start local udp server
 
 	go func() {
 		c := make(chan os.Signal)
 		signal.Notify(c, os.Kill, os.Interrupt, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM,
 			syscall.SIGQUIT)
 		log.Infof("receive exit signal:%v", <-c)
-		ss.trayExit()
+		ss.TrayExit()
 	}()
 
 	systray.SetIcon(icon.Data)
@@ -91,7 +89,7 @@ func (ss *Easyss) trayReady() {
 		case <-cQuit.ClickedCh:
 			log.Infof("quit btn clicked quit now...")
 			systray.Quit()
-			ss.trayExit() // on linux there have some bugs, we should invoke trayExit() again
+			ss.TrayExit() // on linux there have some bugs, we should invoke trayExit() again
 		}
 	}
 }
@@ -115,7 +113,7 @@ func (ss *Easyss) catLog() error {
 	return cmd.Start()
 }
 
-func (ss *Easyss) trayExit() {
+func (ss *Easyss) TrayExit() {
 	ss.pac.ch <- PACOFF
 	if ss.tcpPool != nil {
 		ss.tcpPool.Close()

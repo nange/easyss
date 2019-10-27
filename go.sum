@@ -1,5 +1,3 @@
-github.com/bifurcation/mint v0.0.0-20170911194624-8c88abfa7916 h1:n+l/sULLTvcngbnQfuEGMeydUOGJQCuDkfGfPRTTXTk=
-github.com/bifurcation/mint v0.0.0-20170911194624-8c88abfa7916/go.mod h1:zVt7zX3K/aDCk9Tj+VM7YymsX66ERvzCJzw8rFCX2JU=
 github.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/fastly/go-utils v0.0.0-20180712184237-d95a45783239 h1:Ghm4eQYC0nEPnSJdVkTrXpu9KtoVCSo1hg7mtI7G9KU=
@@ -32,12 +30,8 @@ github.com/getlantern/systray v0.0.0-20190727060347-6f0e5a3c556c h1:okydU7ZqJYYR
 github.com/getlantern/systray v0.0.0-20190727060347-6f0e5a3c556c/go.mod h1:7Splj4WBQSps8jODnMgrIV6goKL0N1HR+mhCAEVWlA0=
 github.com/go-stack/stack v1.8.0 h1:5SgMzNM5HxrEjV0ww2lTmX6E2Izsfxas4+YHWRs3Lsk=
 github.com/go-stack/stack v1.8.0/go.mod h1:v0f6uXyyMGvRgIKkXu+yp6POWl0qKG85gN/melR3HDY=
-github.com/golang/mock v1.3.1 h1:qGJ6qTW+x6xX/my+8YUVl4WNpX9B7+/l2tRsHGZ7f2s=
-github.com/golang/mock v1.3.1/go.mod h1:sBzyDLLjw3U8JLTeZvSv8jJB+tU5PVekmnlKIyFUx0Y=
 github.com/golang/protobuf v1.2.0 h1:P3YflyNX/ehuJFLhxviNdFxQPkGK5cDcApsge1SqnvM=
 github.com/golang/protobuf v1.2.0/go.mod h1:6lQm79b+lXiMfvg/cZm0SGofjICqVBUtrP5yJMmIC1U=
-github.com/hashicorp/golang-lru v0.0.0-20160813221303-0a025b7e63ad h1:eMxs9EL0PvIGS9TTtxg4R+JxuPGav82J8rA+GFnY7po=
-github.com/hashicorp/golang-lru v0.0.0-20160813221303-0a025b7e63ad/go.mod h1:/m3WP610KZHVQ1SGc6re/UDhFvYD7pJ4Ao+sR/qLZy8=
 github.com/hpcloud/tail v1.0.0 h1:nfCOvKYfkgYP8hkirhJocXT2+zOD8yUNjXaWfTlyFKI=
 github.com/hpcloud/tail v1.0.0/go.mod h1:ab1qPbhIpdTxEkNHXyeSf5vhxWSCs/tWer42PpOxQnU=
 github.com/jehiah/go-strftime v0.0.0-20171201141054-1d33003b3869 h1:IPJ3dvxmJ4uczJe5YQdrYB16oTJlGSC/OyZDqUk9xX4=
@@ -50,14 +44,6 @@ github.com/lestrrat/go-file-rotatelogs v0.0.0-20180223000712-d3151e2a480f h1:sgU
 github.com/lestrrat/go-file-rotatelogs v0.0.0-20180223000712-d3151e2a480f/go.mod h1:UGmTpUd3rjbtfIpwAPrcfmGf/Z1HS95TATB+m57TPB8=
 github.com/lestrrat/go-strftime v0.0.0-20170113112000-04ef93e28531 h1:qA9RB9NobSxHKYfJrOcqHFL8uanRWCG3+rN4CibuNPc=
 github.com/lestrrat/go-strftime v0.0.0-20170113112000-04ef93e28531/go.mod h1:TPpsiPUEh0zFL1Snz4crhMlBe60PYxRHr5oFF3rRYg0=
-github.com/lucas-clemente/aes12 v0.0.0-20171027163421-cd47fb39b79f h1:sSeNEkJrs+0F9TUau0CgWTTNEwF23HST3Eq0A+QIx+A=
-github.com/lucas-clemente/aes12 v0.0.0-20171027163421-cd47fb39b79f/go.mod h1:JpH9J1c9oX6otFSgdUHwUBUizmKlrMjxWnIAjff4m04=
-github.com/lucas-clemente/fnv128a v0.0.0-20160504152609-393af48d3916 h1:BBilz74EccNZJD5AWJKb5j1TK1F5WbloW9dyD9WQ5oY=
-github.com/lucas-clemente/fnv128a v0.0.0-20160504152609-393af48d3916/go.mod h1:31qAbuTRFIJASrl34sBxFDAVzDF22dO/GV7Lxw+Kmi8=
-github.com/lucas-clemente/quic-go v0.5.1-0.20171027155204-fcc380187a92 h1:K4HjT9PBGOCmMotBv3H1/6NsZlWdUDU5fgS0G6RGlQ0=
-github.com/lucas-clemente/quic-go v0.5.1-0.20171027155204-fcc380187a92/go.mod h1:wuD+2XqEx8G9jtwx5ou2BEYBsE+whgQmlj0Vz/77PrY=
-github.com/lucas-clemente/quic-go-certificates v0.0.0-20160823095156-d2f86524cced h1:zqEC1GJZFbGZA0tRyNZqRjep92K5fujFtFsu5ZW7Aug=
-github.com/lucas-clemente/quic-go-certificates v0.0.0-20160823095156-d2f86524cced/go.mod h1:NCcRLrOTZbzhZvixZLlERbJtDtYsmMw8Jc4vS8Z0g58=
 github.com/nange/easypool v0.0.0-20171214144419-9a3141943d02 h1:LNZ7PjLAPJ0zpdFmk3afKS3XAltmNh0HBg3XPVITsxw=
 github.com/nange/easypool v0.0.0-20171214144419-9a3141943d02/go.mod h1:rRyKnX5GpYLNbB+ZVHw/RJiTvrFZeMQESiIX9e/E7Cs=
 github.com/nange/httpproxy v0.0.0-20180805034305-ff2c9c785a5d h1:fjUvopDETMhlPw9eNRu1UjqGApvM9EYKV227WCowJG8=
@@ -95,7 +81,6 @@ golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a h1:1BGLXjeY4akVXGgbC9HugT3Jv
 golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
 golang.org/x/text v0.3.0 h1:g61tztE5qeGQ89tm6NTjjM9VPIm088od1l6aSorWRWg=
 golang.org/x/text v0.3.0/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
-golang.org/x/tools v0.0.0-20190425150028-36563e24a262/go.mod h1:RgjU9mgBXZiqYHBnxXauZ1Gv1EHHAz9KjViQ78xBX0Q=
 gopkg.in/airbrake/gobrake.v2 v2.0.9 h1:7z2uVWwn7oVeeugY1DtlPAy5H+KYgB1KeKTnqjNatLo=
 gopkg.in/airbrake/gobrake.v2 v2.0.9/go.mod h1:/h5ZAUhDkGaJfjzjKLSjv6zCL6O0LLBxU4K+aSYdM/U=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=

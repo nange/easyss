@@ -1,4 +1,4 @@
-package main
+package easyss
 
 import (
 	"net/http"

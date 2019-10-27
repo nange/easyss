@@ -1,4 +1,4 @@
-package main
+package easyss
 
 import (
 	"io"
@@ -52,13 +52,10 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	defer localConn.Close()
 
 	var stream io.ReadWriteCloser
-	if ss.config.EnableQuic {
-		stream, err = ss.getStream()
-	} else {
-		stream, err = ss.tcpPool.Get()
-		log.Infof("after pool get: current tcp pool have %v connections", ss.tcpPool.Len())
-		defer log.Infof("after stream close: current tcp pool have %v connections", ss.tcpPool.Len())
-	}
+	stream, err = ss.tcpPool.Get()
+	log.Infof("after pool get: current tcp pool have %v connections", ss.tcpPool.Len())
+	defer log.Infof("after stream close: current tcp pool have %v connections", ss.tcpPool.Len())
+
 	if err != nil {
 		log.Errorf("get stream err:%+v", err)
 		return

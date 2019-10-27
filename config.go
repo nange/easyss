@@ -1,4 +1,4 @@
-package main
+package easyss
 
 import (
 	"encoding/json"
@@ -31,7 +31,6 @@ type Config struct {
 	Password    string `json:"password"`
 	Method      string `json:"method"` // encryption method
 	Timeout     int    `json:"timeout"`
-	EnableQuic  bool   `json:"quic"`
 	ServerModel bool   `json:"server_model"`
 }
 

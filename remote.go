@@ -1,19 +1,12 @@
-package main
+package easyss
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"io"
-	"math/big"
 	"net"
 	"strconv"
 	"time"
 
-	"github.com/lucas-clemente/quic-go"
 	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/util"
 	"github.com/pkg/errors"
@@ -21,83 +14,7 @@ import (
 )
 
 func (ss *Easyss) Remote() {
-	if ss.config.EnableQuic {
-		ss.quicServer()
-	} else {
-		ss.tcpServer()
-	}
-}
-
-func (ss *Easyss) quicServer() {
-	addr := ":" + strconv.Itoa(ss.config.ServerPort)
-	ln, err := quic.ListenAddr(addr, generateTLSConfig(), &quic.Config{IdleTimeout: time.Minute})
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Infof("starting remote quic server at %v ...", addr)
-
-	for {
-		sess, err := ln.Accept()
-		if err != nil {
-			log.Error("accept:", err)
-			continue
-		}
-		log.Infof("a new session(ip) is accepted. remote addr:%v\n", sess.RemoteAddr())
-
-		go func(sess quic.Session) {
-			for {
-				stream, err := sess.AcceptStream()
-				if err != nil {
-					log.Warnf("session accept stream err, remote addr:%v, message: %+v\n",
-						sess.RemoteAddr(), errors.WithStack(err))
-					sess.Close(err)
-					return
-				}
-
-				go func(stream quic.Stream) {
-					defer stream.Close()
-					log.Infof("a new stream is accepted. stream id:%v\n", stream.StreamID())
-
-					addr, ciphermethod, err := handShake(stream, ss.config.Password)
-					if err != nil {
-						log.Warnf("get target addr err:%+v", err)
-						return
-					}
-					addrStr := string(addr)
-					if addrStr == "" || ciphermethod == "" {
-						log.Errorf("after handshake with client, but get empty addr:%v or ciphermethod:%v",
-							addrStr, ciphermethod)
-						return
-					}
-					log.Infof("target proxy addr is:%v", addrStr)
-
-					tconn, err := net.Dial("tcp", addrStr)
-					if err != nil {
-						log.Errorf("net.Dial %v err:%v", addr, err)
-						return
-					}
-					defer tconn.Close()
-
-					csStream, err := cipherstream.New(stream, ss.config.Password, ciphermethod)
-					if err != nil {
-						log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
-							err, ss.config.Password, ss.config.Method)
-						return
-					}
-
-					go func() {
-						defer stream.Close()
-						defer tconn.Close()
-						n, err := io.Copy(csStream, tconn)
-						log.Infof("reciveve %v bytes from %v, message:%v", n, addr, err)
-					}()
-					n, err := io.Copy(tconn, csStream)
-					log.Infof("send %v bytes to %v, message:%v", n, addr, err)
-				}(stream)
-
-			}
-		}(sess)
-	}
+	ss.tcpServer()
 }
 
 func (ss *Easyss) tcpServer() {
@@ -227,25 +144,4 @@ func DecodeCipherMethod(b byte) string {
 		return m
 	}
 	return ""
-}
-
-// Setup a bare-bones TLS config for the server
-func generateTLSConfig() *tls.Config {
-	key, err := rsa.GenerateKey(rand.Reader, 1024)
-	if err != nil {
-		panic(err)
-	}
-	template := x509.Certificate{SerialNumber: big.NewInt(1)}
-	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
-	if err != nil {
-		panic(err)
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-
-	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		panic(err)
-	}
-	return &tls.Config{Certificates: []tls.Certificate{tlsCert}}
 }

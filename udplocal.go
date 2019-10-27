@@ -1,9 +1,8 @@
-package main
+package easyss
 
 import (
 	"net"
 
-	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/socks"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -32,47 +31,7 @@ func (ss *Easyss) UDPLocal() {
 }
 
 func (ss *Easyss) udprelay(data []byte, uc *net.UDPConn, ludpaddr *net.UDPAddr) {
-	header, addr, body, err := udpDatagramDecomposition(data)
-	if err != nil {
-		log.Errorf("udpDatagramDecomposition err:%+v", err)
-		return
-	}
-	log.Infof("udp target addr:%v", addr.String())
-
-	stream, err := ss.getStream()
-	if err != nil {
-		log.Errorf("get stream err:%+v", err)
-		return
-	}
-	if err := cipherstream.HandShake(stream, []byte(addr), ss.config.Method, ss.config.Password); err != nil {
-		log.Errorf("cipherstream.HandShake err:%+v", err)
-		return
-	}
-
-	csStream, err := cipherstream.New(stream, ss.config.Password, ss.config.Method)
-	if err != nil {
-		log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
-			err, ss.config.Password, ss.config.Method)
-		return
-	}
-	if _, err := csStream.Write(body); err != nil {
-		log.Errorf("csStream.Write err:%+v", err)
-		return
-	}
-
-	datarelay := make([]byte, 1734)
-	n, err := csStream.Read(datarelay)
-	if err != nil {
-		log.Errorf("csStream.Read err:%+v", err)
-		return
-	}
-
-	udprelayData := append(header, datarelay[:n]...)
-	if _, err := uc.WriteToUDP(udprelayData, ludpaddr); err != nil {
-		log.Errorf("uc.WriteToUDP err:%v", err)
-		return
-	}
-	log.Debugf("udp relay completed")
+	// TODO: add code
 }
 
 func udpDatagramDecomposition(data []byte) (header []byte, addr socks.Addr, body []byte, err error) {

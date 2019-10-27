@@ -1,6 +1,8 @@
+// +build !mips,!mipsle,!mips64,!mips64le
+
 //go:generate statik -src=./pac
 
-package main
+package easyss
 
 import (
 	"fmt"
@@ -16,14 +18,12 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const pacpath = "/proxy.pac"
-
 func (ss *Easyss) SysPAC() {
 	statikFS, err := fs.New()
 	if err != nil {
 		log.Fatal(err)
 	}
-	file, err := statikFS.Open(pacpath)
+	file, err := statikFS.Open(PacPath)
 	if err != nil {
 		log.Fatal("open pac.txt err:", err)
 	}
@@ -32,12 +32,12 @@ func (ss *Easyss) SysPAC() {
 		log.Fatal("read pac.txt err:", err)
 	}
 
-	tpl, err := template.New(pacpath).Parse(string(buf))
+	tpl, err := template.New(PacPath).Parse(string(buf))
 	if err != nil {
 		log.Fatalf("template parse pac err:%v", err)
 	}
 
-	http.HandleFunc(pacpath, func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc(PacPath, func(w http.ResponseWriter, r *http.Request) {
 		gloabl := false
 
 		r.ParseForm()
