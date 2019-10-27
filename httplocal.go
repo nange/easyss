@@ -1,6 +1,7 @@
 package easyss
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/nange/httpproxy"
@@ -9,7 +10,8 @@ import (
 )
 
 func (ss *Easyss) HttpLocal() {
-	log.Infof("starting http local proxy server :8080")
+	httpPort := ss.config.LocalPort + 1000
+	log.Infof("starting http local proxy server :%d", httpPort)
 	prx, err := httpproxy.NewProxy()
 	if err != nil {
 		log.Errorf("new http proxy err:%+v", errors.WithStack(err))
@@ -31,7 +33,7 @@ func (ss *Easyss) HttpLocal() {
 	}
 	prx.OnForward = onForward
 
-	if err := http.ListenAndServe(":8080", prx); err != nil {
+	if err := http.ListenAndServe(fmt.Sprintf(":%d", httpPort), prx); err != nil {
 		log.Errorf("http server start err:%+v", errors.WithStack(err))
 	}
 }
