@@ -23,8 +23,7 @@ _testmain.go
 *.test
 *.prof
 easyss
-easyss.*
-easyss-*
+easyss.log*
 config.json
 
 pac/*
