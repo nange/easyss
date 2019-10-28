@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	rotatelogs "github.com/lestrrat/go-file-rotatelogs"
+	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
 	"github.com/pkg/errors"
 )
 

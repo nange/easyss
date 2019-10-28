@@ -6,7 +6,7 @@ import (
 	"net"
 	"time"
 
-	rotatelogs "github.com/lestrrat/go-file-rotatelogs"
+	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
 	"github.com/nange/easypool"
 	log "github.com/sirupsen/logrus"
 )
