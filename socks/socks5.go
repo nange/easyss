@@ -4,6 +4,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"sync"
 
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -83,50 +84,58 @@ func (a Addr) String() string {
 	return net.JoinHostPort(host, port)
 }
 
-func HandShake(conn net.Conn) (Addr, int, error) {
-	buf := make([]byte, MaxAddrLen)
+var bufPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, MaxAddrLen)
+		return buf
+	},
+}
+
+func HandShake(conn net.Conn) (string, int, error) {
+	buf := bufPool.Get().([]byte)
+	defer bufPool.Put(buf)
 
 	// read VER, NMETHODS, METHODS
 	if _, err := io.ReadFull(conn, buf[:2]); err != nil {
-		return nil, 0, errors.WithStack(err)
+		return "", 0, errors.WithStack(err)
 	}
 
 	// only handle socks5 protocol
 	if buf[0] != 0x05 {
 		log.Errorf("server do not support client version:%v", buf[0])
-		return nil, 0, errors.WithStack(ErrCommandNotSupported)
+		return "", 0, errors.WithStack(ErrCommandNotSupported)
 	}
 
 	nmethods := buf[1]
 	if _, err := io.ReadFull(conn, buf[:nmethods]); err != nil {
 		log.Errorf("read methods err: %v, nmethods: %v", err, nmethods)
-		return nil, 0, errors.WithStack(err)
+		return "", 0, errors.WithStack(err)
 	}
 
 	// reply: use socks5 and no authentication required
 	if _, err := conn.Write([]byte{0x05, 0x00}); err != nil {
-		return nil, 0, errors.WithStack(err)
+		return "", 0, errors.WithStack(err)
 	}
 
 	// read VER CMD RSV ATYP DST.ADDR DST.PORT
 	if _, err := io.ReadFull(conn, buf[:3]); err != nil {
-		return nil, 0, errors.WithStack(err)
+		return "", 0, errors.WithStack(err)
 	}
 	// now we only support CONNECT and UDPASSOCIATE
 	cmd := int(buf[1])
 	if cmd != CmdConnect && cmd != CmdUDPAssociate {
-		return nil, 0, errors.WithStack(ErrCommandNotSupported)
+		return "", 0, errors.WithStack(ErrCommandNotSupported)
 	}
 
 	addr, err := readAddr(conn, buf)
 	if err != nil {
-		return nil, 0, errors.WithStack(err)
+		return "", 0, errors.WithStack(err)
 	}
 
 	// write VER REP RSV ATYP BND.ADDR BND.PORT
 	_, err = conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x08, 0x43})
 
-	return addr, cmd, err
+	return addr.String(), cmd, err
 }
 
 func readAddr(r io.Reader, buf []byte) (Addr, error) {

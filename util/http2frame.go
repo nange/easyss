@@ -22,30 +22,38 @@ func NewHTTP2DataFrameHeader(datalen int) (header []byte) {
 	return header
 }
 
-func NewFINRstStreamHeader() (header []byte) {
-	header = make([]byte, 9)
-	binary.BigEndian.PutUint16(header[1:3], uint16(4))
+func EncodeFINRstStreamHeader(dst []byte) (header []byte) {
+	if len(dst) < 9 {
+		dst = make([]byte, 9)
+	} else if len(dst) > 9 {
+		dst = dst[:9]
+	}
+	binary.BigEndian.PutUint16(dst[1:3], uint16(4))
 	// set frame type to RST_STREAM
-	header[3] = 0x7
+	dst[3] = 0x7
 	// set default flag
-	header[4] = 0x0
+	dst[4] = 0x0
 
 	// set stream identifier. note: this is temporary, will update in future
-	binary.BigEndian.PutUint32(header[5:9], uint32(rand.Int31()))
+	binary.BigEndian.PutUint32(dst[5:9], uint32(rand.Int31()))
 
-	return header
+	return dst
 }
 
-func NewACKRstStreamHeader() (header []byte) {
-	header = make([]byte, 9)
-	binary.BigEndian.PutUint16(header[1:3], uint16(4))
+func EncodeACKRstStreamHeader(dst []byte) (header []byte) {
+	if len(dst) < 9 {
+		dst = make([]byte, 9)
+	} else if len(dst) > 9 {
+		dst = dst[:9]
+	}
+	binary.BigEndian.PutUint16(dst[1:3], uint16(4))
 	// set frame type to RST_STREAM
-	header[3] = 0x7
+	dst[3] = 0x7
 	// set default flag
-	header[4] = 0x1
+	dst[4] = 0x1
 
 	// set stream identifier. note: this is temporary, will update in future
-	binary.BigEndian.PutUint32(header[5:9], uint32(rand.Int31()))
+	binary.BigEndian.PutUint32(dst[5:9], uint32(rand.Int31()))
 
-	return header
+	return dst
 }

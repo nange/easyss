@@ -42,9 +42,9 @@ func (ss *Easyss) Local() {
 			time.Sleep(10 * time.Second)
 			return
 		}
-		log.Infof("target proxy addr is:%v", addr.String())
+		log.Infof("target proxy addr is:%v", addr)
 
-		go ss.localRelay(conn, addr.String())
+		go ss.localRelay(conn, addr)
 	}
 }
 

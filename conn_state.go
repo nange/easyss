@@ -3,6 +3,7 @@ package easyss
 import (
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/nange/easyss/cipherstream"
@@ -23,6 +24,13 @@ const (
 	TIME_WAIT
 	CLOSED
 )
+
+var headerPool = sync.Pool{
+	New: func() interface{} {
+		header := make([]byte, 9)
+		return header
+	},
+}
 
 var stateMap = map[state]string{
 	ESTABLISHED: "state: ESTABLISHED",
@@ -76,7 +84,11 @@ func (cs *ConnState) FINWait1(conn io.ReadWriteCloser) *ConnState {
 	defer log.Info("end FINWait1 state")
 
 	cs.state = FIN_WAIT1
-	fin := util.NewFINRstStreamHeader()
+
+	header := headerPool.Get().([]byte)
+	defer headerPool.Put(header)
+
+	fin := util.EncodeFINRstStreamHeader(header)
 	_, err := conn.Write(fin)
 	if err != nil {
 		log.Errorf("conn.Write FIN err:%+v", errors.WithStack(err))
@@ -125,7 +137,10 @@ func (cs *ConnState) FINWait2(conn io.ReadWriteCloser) *ConnState {
 		return cs
 	}
 
-	ack := util.NewACKRstStreamHeader()
+	header := headerPool.Get().([]byte)
+	defer headerPool.Put(header)
+
+	ack := util.EncodeACKRstStreamHeader(header)
 	_, err = conn.Write(ack)
 	if err != nil {
 		log.Errorf("conn.Write ACK err:%+v", errors.WithStack(err))
@@ -143,7 +158,11 @@ func (cs *ConnState) LastACK(conn io.ReadWriteCloser) *ConnState {
 	defer log.Info("end LastACK state")
 
 	cs.state = LAST_ACK
-	fin := util.NewFINRstStreamHeader()
+
+	header := headerPool.Get().([]byte)
+	defer headerPool.Put(header)
+
+	fin := util.EncodeFINRstStreamHeader(header)
 	_, err := conn.Write(fin)
 	if err != nil {
 		log.Errorf("conn.Write FIN err:%+v", errors.WithStack(err))
@@ -161,7 +180,11 @@ func (cs *ConnState) Closing(conn io.ReadWriteCloser) *ConnState {
 	defer log.Info("end Closing state")
 
 	cs.state = CLOSING
-	ack := util.NewACKRstStreamHeader()
+
+	header := headerPool.Get().([]byte)
+	defer headerPool.Put(header)
+
+	ack := util.EncodeACKRstStreamHeader(header)
 	_, err := conn.Write(ack)
 	if err != nil {
 		log.Errorf("conn.Write ACK err:%+v", errors.WithStack(err))
@@ -179,7 +202,11 @@ func (cs *ConnState) CloseWait(conn io.ReadWriteCloser) *ConnState {
 	defer log.Info("end CloseWait state")
 
 	cs.state = CLOSE_WAIT
-	ack := util.NewACKRstStreamHeader()
+
+	header := headerPool.Get().([]byte)
+	defer headerPool.Put(header)
+
+	ack := util.EncodeACKRstStreamHeader(header)
 	_, err := conn.Write(ack)
 	if err != nil {
 		log.Errorf("conn.Write ack err:%+v", errors.WithStack(err))
