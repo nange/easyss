@@ -18,13 +18,9 @@ func StartEasyss(ss *easyss.Easyss) {
 	go ss.HttpLocal() // start local http proxy server
 	go ss.UDPLocal()  // start local udp server
 
-	c := make(chan os.Signal)
-	go func() {
-		signal.Notify(c, os.Kill, os.Interrupt, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM,
-			syscall.SIGQUIT)
-		log.Infof("receive exit signal:%v", <-c)
-	}()
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Kill, os.Interrupt, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM,
+		syscall.SIGQUIT)
 
-	<-c
-	log.Infof("exits easyss...")
+	log.Infof("got signal to exit: %v", <-c)
 }

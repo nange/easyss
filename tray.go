@@ -27,10 +27,10 @@ func (ss *Easyss) TrayReady() {
 	go ss.UDPLocal()  // start local udp server
 
 	go func() {
-		c := make(chan os.Signal)
+		c := make(chan os.Signal, 1)
 		signal.Notify(c, os.Kill, os.Interrupt, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM,
 			syscall.SIGQUIT)
-		log.Infof("receive exit signal:%v", <-c)
+		log.Infof("got signal to exit: %v", <-c)
 		ss.TrayExit()
 	}()
 
