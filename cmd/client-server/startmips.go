@@ -14,6 +14,10 @@ import (
 func StartEasyss(ss *easyss.Easyss) {
 	log.Infof("on mips arch, we should ignore systray")
 
+	if err := ss.InitTcpPool(); err != nil {
+		log.Errorf("init tcp pool error:%v", err)
+	}
+
 	go ss.Local()     // start local server
 	go ss.HttpLocal() // start local http proxy server
 	go ss.UDPLocal()  // start local udp server
