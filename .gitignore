@@ -26,6 +26,8 @@ easyss
 easyss.log*
 config.json
 
+cmd/client-server/client-server
+
 pac/*
 
 .idea*
