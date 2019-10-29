@@ -3,23 +3,38 @@ package util
 import (
 	"encoding/binary"
 	"math/rand"
+	"sync"
 )
 
-func NewHTTP2DataFrameHeader(datalen int) (header []byte) {
-	header = make([]byte, 9)
-	length := make([]byte, 4)
+var lenPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, 4)
+		return buf
+	},
+}
+
+func EncodeHTTP2DataFrameHeader(datalen int, dst []byte) (header []byte) {
+	if len(dst) < 9 {
+		dst = make([]byte, 9)
+	} else if len(dst) > 9 {
+		dst = dst[:9]
+	}
+
+	length := lenPool.Get().([]byte)
+	defer lenPool.Put(length)
+
 	binary.BigEndian.PutUint32(length, uint32(datalen))
 	// set length field
-	copy(header[:3], length[1:])
+	copy(dst[:3], length[1:])
 	// set frame type to data
-	header[3] = 0x0
+	dst[3] = 0x0
 	// set default flag
-	header[4] = 0x0
+	dst[4] = 0x0
 
 	// set stream identifier. note: this is temporary, will update in future
-	binary.BigEndian.PutUint32(header[5:9], uint32(rand.Int31()))
+	binary.BigEndian.PutUint32(dst[5:9], uint32(rand.Int31()))
 
-	return header
+	return dst
 }
 
 func EncodeFINRstStreamHeader(dst []byte) (header []byte) {

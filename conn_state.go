@@ -59,10 +59,10 @@ type ConnState struct {
 	buf   []byte
 }
 
-func NewConnState(s state) *ConnState {
+func NewConnState(s state, buf []byte) *ConnState {
 	cs := &ConnState{
 		state: s,
-		buf:   make([]byte, 32),
+		buf:   buf,
 	}
 	statefnMap := map[state]ConnStateFn{
 		FIN_WAIT1:  cs.FINWait1,

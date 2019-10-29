@@ -13,6 +13,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+var remoteBytespool = util.NewBytes(512)
+
 func (ss *Easyss) Remote() {
 	ss.tcpServer()
 }
@@ -94,7 +96,9 @@ func handShake(stream io.ReadWriter, password string) (addr []byte, ciphermethod
 		return
 	}
 
-	headerbuf := make([]byte, 9+gcm.NonceSize()+gcm.Overhead())
+	headerbuf := remoteBytespool.Get(9 + gcm.NonceSize() + gcm.Overhead())
+	defer remoteBytespool.Put(headerbuf)
+
 	if _, err = io.ReadFull(stream, headerbuf); err != nil {
 		err = errors.WithStack(err)
 		return
@@ -113,7 +117,9 @@ func handShake(stream io.ReadWriter, password string) (addr []byte, ciphermethod
 		return
 	}
 
-	payloadbuf := make([]byte, payloadlen+gcm.NonceSize()+gcm.Overhead())
+	payloadbuf := remoteBytespool.Get(payloadlen + gcm.NonceSize() + gcm.Overhead())
+	defer remoteBytespool.Put(payloadbuf)
+
 	if _, err = io.ReadFull(stream, payloadbuf); err != nil {
 		err = errors.WithStack(err)
 		log.Warnf("io.ReadFull read payloadbuf err:%+v, len:%v", err, len(payloadbuf))

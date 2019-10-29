@@ -3,12 +3,20 @@ package easyss
 import (
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/cipherstream"
 	log "github.com/sirupsen/logrus"
 )
+
+var connStateBuf = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, 32)
+		return buf
+	},
+}
 
 // relay copies between cipherstream and plaintxtstream.
 // return the number of bytes copies
@@ -45,7 +53,9 @@ RELAY:
 			}
 			if i == 0 {
 				log.Infof("read plaintxt stream error, set start state. details:%v", err)
-				state = NewConnState(FIN_WAIT1)
+				buf := connStateBuf.Get().([]byte)
+				defer connStateBuf.Put(buf)
+				state = NewConnState(FIN_WAIT1, buf)
 			} else if err != nil {
 				if !cipherstream.TimeoutErr(err) {
 					log.Errorf("execpt error is net: io timeout. but get:%v", err)
@@ -64,7 +74,9 @@ RELAY:
 			if i == 0 {
 				if cipherstream.FINRSTStreamErr(err) {
 					log.Infof("read cipher stream ErrFINRSTStream, set start state")
-					state = NewConnState(CLOSE_WAIT)
+					buf := connStateBuf.Get().([]byte)
+					defer connStateBuf.Put(buf)
+					state = NewConnState(CLOSE_WAIT, buf)
 				} else {
 					log.Errorf("execpt error is ErrFINRSTStream, but get:%v", err)
 					markCipherStreamUnusable(cipher)

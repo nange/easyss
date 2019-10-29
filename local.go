@@ -4,6 +4,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/nange/easypool"
@@ -13,6 +14,13 @@ import (
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
+
+var dataHeaderPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, 9)
+		return buf
+	},
+}
 
 func (ss *Easyss) Local() {
 	listenAddr := ":" + strconv.Itoa(ss.config.LocalPort)
@@ -62,7 +70,10 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	}
 	defer stream.Close()
 
-	header := util.NewHTTP2DataFrameHeader(len(addr) + 1)
+	header := dataHeaderPool.Get().([]byte)
+	defer dataHeaderPool.Put(header)
+
+	header = util.EncodeHTTP2DataFrameHeader(len(addr)+1, header)
 	gcm, err := cipherstream.NewAes256GCM([]byte(ss.config.Password))
 	if err != nil {
 		log.Errorf("cipherstream.NewAes256GCM err:%+v", err)
