@@ -1,4 +1,4 @@
-// +build !mips,!mipsle,!mips64,!mips64le
+// +build !mips,!mipsle,!mips64,!mips64le,!arm
 
 //go:generate statik -src=./pac
 
