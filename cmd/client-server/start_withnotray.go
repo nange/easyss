@@ -23,7 +23,7 @@ func StartEasyss(ss *easyss.Easyss) {
 	go ss.UDPLocal()  // start local udp server
 
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Kill, os.Interrupt, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM,
+	signal.Notify(c, os.Kill, os.Interrupt, syscall.SIGINT, syscall.SIGTERM,
 		syscall.SIGQUIT)
 
 	log.Infof("got signal to exit: %v", <-c)
