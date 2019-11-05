@@ -13,15 +13,10 @@ easyss是一款兼容socks5的安全上网工具，目标是使访问国外技�
 
 * http2帧格式交互 (更灵活通用, 更易扩展)
 
-* 基于QUIC协议的流多路复用 (实验性支持，默认关闭，可以通过指定-quic参数开启。thanks [quic-go](https://github.com/lucas-clemente/quic-go))
-
 * 支持tcp连接池 (默认启用，大幅降低请求延迟)
 
 * 自动pac代理, (可选)支持全局模式, 支持系统托盘图标管理 (thanks [lantern](https://github.com/getlantern))
 
-
-注: 由于QUIC基于UDP协议，由于运营商会限制出口UDP流量，稍微大一点的流量都会出现严重丢包，
-所以目前QUIC协议不适合用于大流量应用，如下载大文件，在线观看高清视频等。 
 
 ## 当前版本
 
