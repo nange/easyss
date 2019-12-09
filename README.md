@@ -20,7 +20,7 @@ easyss是一款兼容socks5的安全上网工具，目标是使访问国外技�
 
 ## 当前版本
 
-RC3 
+v1.0
 
 
 ### TODO
@@ -28,18 +28,24 @@ RC3
 * 支持手机端
 
 
-## 安装
-
-#### go get 安装最新开发版(version 1.9+ is required)
-
-```sh
-apt-get install libgtk-3-dev libappindicator3-dev -y
-go get -u -v github.com/nange/easyss
-```
+## 下载安装
 
 #### 在release页面直接下载(各平台)编译好的二进制文件
 
 [点我去下载](https://github.com/nange/easyss/releases)
+
+
+#### 或者 go get 安装最新开发版(version 1.11+ is required)
+
+```sh
+apt-get install libgtk-3-dev libappindicator3-dev -y
+
+# 安装客户端程序
+go get github.com/nange/easyss/cmd/client-server 
+
+# 安装服务端程序
+go get github.com/nange/easyss/cmd/remote-server 
+```
 
 
 ## 用法
@@ -67,7 +73,7 @@ copy本项目中的config.json文件和上面下载的二进制文件放同一�
 和客户端一样, 先把二进制和config.json文件放同一目录. 
 修改config.json文件, 其中server_port和password必填, 执行:
 ```sh
-./easyss -server 
+./remote-server
 ```
 
 ##### docker部署
