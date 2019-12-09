@@ -55,7 +55,6 @@ func main() {
 	} else {
 		easyss.UpdateConfig(config, &cmdConfig)
 	}
-	config.ServerModel = true
 
 	ss, err := easyss.New(config)
 	if err != nil {

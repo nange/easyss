@@ -1,6 +1,6 @@
 // +build !mips,!mipsle,!mips64,!mips64le,!arm
 
-package easyss
+package main
 
 import (
 	"fmt"
@@ -12,26 +12,39 @@ import (
 	"time"
 
 	"github.com/getlantern/systray"
+	"github.com/nange/easyss"
 	"github.com/nange/easyss/icon"
 	"github.com/nange/easyss/util"
 	log "github.com/sirupsen/logrus"
 )
 
-func (ss *Easyss) TrayReady() {
-	if err := ss.InitTcpPool(); err != nil {
+type SysTray struct {
+	ss  *easyss.Easyss
+	pac *PAC
+}
+
+func NewSysTray(ss *easyss.Easyss, pac *PAC) *SysTray {
+	return &SysTray{
+		ss:  ss,
+		pac: pac,
+	}
+}
+
+func (st *SysTray) TrayReady() {
+	if err := st.ss.InitTcpPool(); err != nil {
 		log.Errorf("init tcp pool error:%v", err)
 	}
-	go ss.SysPAC()    // system pac configuration
-	go ss.Local()     // start local server
-	go ss.HttpLocal() // start local http proxy server
-	go ss.UDPLocal()  // start local udp server
+	go st.pac.SysPAC()   // system pac configuration
+	go st.ss.Local()     // start local server
+	go st.ss.HttpLocal() // start local http proxy server
+	go st.ss.UDPLocal()  // start local udp server
 
 	go func() {
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, os.Kill, os.Interrupt, syscall.SIGINT, syscall.SIGTERM,
 			syscall.SIGQUIT)
 		log.Infof("got signal to exit: %v", <-c)
-		ss.TrayExit()
+		st.TrayExit()
 	}()
 
 	systray.SetIcon(icon.Data)
@@ -56,12 +69,12 @@ func (ss *Easyss) TrayReady() {
 				cGlobal.Uncheck()
 				cGlobal.Disable()
 
-				ss.pac.ch <- PACOFF
+				st.pac.ch <- PACOFF
 			} else {
 				cPAC.Check()
 				cGlobal.Enable()
 
-				ss.pac.ch <- PACON
+				st.pac.ch <- PACON
 			}
 			log.Infof("pac btn clicked...is checked:%v", cPAC.Checked())
 		case <-cGlobal.ClickedCh:
@@ -71,53 +84,51 @@ func (ss *Easyss) TrayReady() {
 			if cGlobal.Checked() {
 				cGlobal.Uncheck()
 				if cPAC.Checked() {
-					ss.pac.ch <- PACON
+					st.pac.ch <- PACON
 				} else {
-					ss.pac.ch <- PACOFFGLOBAL
+					st.pac.ch <- PACOFFGLOBAL
 				}
 			} else {
 				cGlobal.Check()
-				ss.pac.ch <- PACONGLOBAL
+				st.pac.ch <- PACONGLOBAL
 			}
 			log.Infof("global btn clicked... is checked:%v", cGlobal.Checked())
 		case <-cCatLog.ClickedCh:
 			log.Infof("cat log btn clicked...")
-			if err := ss.catLog(); err != nil {
+			if err := st.catLog(); err != nil {
 				log.Errorf("cat log err:%v", err)
 			}
 
 		case <-cQuit.ClickedCh:
 			log.Infof("quit btn clicked quit now...")
 			systray.Quit()
-			ss.TrayExit() // on linux there have some bugs, we should invoke trayExit() again
+			st.TrayExit() // on linux there have some bugs, we should invoke trayExit() again
 		}
 	}
 }
 
-func (ss *Easyss) catLog() error {
+func (st *SysTray) catLog() error {
 	win := `-FilePath powershell  -WorkingDirectory "%s" -ArgumentList "-Command Get-Content %s -Wait %s"`
 	if runtime.GOOS == "windows" && util.SysSupportPowershell() {
 		if util.SysPowershellMajorVersion() >= 3 {
-			win = fmt.Sprintf(win, util.GetCurrentDir(), ss.GetLogFileFullPathName(), "-Tail 100")
+			win = fmt.Sprintf(win, util.GetCurrentDir(), st.ss.GetLogFileFullPathName(), "-Tail 100")
 		} else {
-			win = fmt.Sprintf(win, util.GetCurrentDir(), ss.GetLogFileFullPathName(), "-ReadCount 100")
+			win = fmt.Sprintf(win, util.GetCurrentDir(), st.ss.GetLogFileFullPathName(), "-ReadCount 100")
 		}
 	}
 
 	cmdmap := map[string][]string{
-		"windows": []string{"powershell", "-Command", "Start-Process", win},
-		"linux":   []string{"gnome-terminal", "--geometry=150x40+20+20", "-x", "tail", "-50f", ss.GetLogFileFullPathName()},
-		"darwin":  []string{"open", "-a", "Console", ss.GetLogFileFullPathName()},
+		"windows": {"powershell", "-Command", "Start-Process", win},
+		"linux":   {"gnome-terminal", "--geometry=150x40+20+20", "-x", "tail", "-50f", st.ss.GetLogFileFullPathName()},
+		"darwin":  {"open", "-a", "Console", st.ss.GetLogFileFullPathName()},
 	}
 	cmd := exec.Command(cmdmap[runtime.GOOS][0], cmdmap[runtime.GOOS][1:]...)
 	return cmd.Start()
 }
 
-func (ss *Easyss) TrayExit() {
-	ss.pac.ch <- PACOFF
-	if ss.tcpPool != nil {
-		ss.tcpPool.Close()
-	}
+func (st *SysTray) TrayExit() {
+	st.pac.ch <- PACOFF
+	st.ss.Close()
 	time.Sleep(time.Second) // ensure the pac settings to default value
 	log.Info("easyss exited...")
 	os.Exit(0)

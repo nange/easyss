@@ -1,8 +1,8 @@
 // +build !mips,!mipsle,!mips64,!mips64le,!arm
 
-//go:generate statik -src=./pac
+//go:generate statik -src=../pac
 
-package easyss
+package main
 
 import (
 	"fmt"
@@ -18,12 +18,41 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func (ss *Easyss) SysPAC() {
+type PACStatus int
+
+const (
+	PACON PACStatus = iota + 1
+	PACOFF
+	PACONGLOBAL
+	PACOFFGLOBAL
+)
+
+const PacPath = "/proxy.pac"
+
+type PAC struct {
+	path      string
+	localPort int
+	ch        chan PACStatus
+	url       string
+	gurl      string
+}
+
+func NewPAC(localPort int, path, url, grul string) *PAC {
+	return &PAC{
+		path:      path,
+		localPort: localPort,
+		ch:        make(chan PACStatus, 1),
+		url:       url,
+		gurl:      grul,
+	}
+}
+
+func (p *PAC) SysPAC() {
 	statikFS, err := fs.New()
 	if err != nil {
 		log.Fatal(err)
 	}
-	file, err := statikFS.Open(PacPath)
+	file, err := statikFS.Open(p.path)
 	if err != nil {
 		log.Fatal("open pac.txt err:", err)
 	}
@@ -32,12 +61,12 @@ func (ss *Easyss) SysPAC() {
 		log.Fatal("read pac.txt err:", err)
 	}
 
-	tpl, err := template.New(PacPath).Parse(string(buf))
+	tpl, err := template.New(p.path).Parse(string(buf))
 	if err != nil {
 		log.Fatalf("template parse pac err:%v", err)
 	}
 
-	http.HandleFunc(PacPath, func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc(p.path, func(w http.ResponseWriter, r *http.Request) {
 		gloabl := false
 
 		r.ParseForm()
@@ -48,24 +77,24 @@ func (ss *Easyss) SysPAC() {
 
 		w.Header().Set("Content-Type", "text/javascript; charset=UTF-8")
 		tpl.Execute(w, map[string]interface{}{
-			"Port":   strconv.Itoa(ss.config.LocalPort),
+			"Port":   strconv.Itoa(p.localPort),
 			"Global": gloabl,
 		})
 	})
 
-	if err := ss.pacOn(ss.pac.url); err != nil {
+	if err := p.pacOn(p.url); err != nil {
 		log.Fatalf("set system pac err:%v", err)
 	}
-	defer ss.pacOff(ss.pac.url)
+	defer p.pacOff(p.url)
 
-	go ss.pacManage()
+	go p.pacManage()
 
-	addr := fmt.Sprintf(":%d", ss.config.LocalPort+1)
+	addr := fmt.Sprintf(":%d", p.localPort+1)
 	log.Infof("pac server started on :%v", addr)
 	http.ListenAndServe(addr, nil)
 }
 
-func (ss *Easyss) pacOn(path string) error {
+func (p *PAC) pacOn(path string) error {
 	if err := pac.EnsureHelperToolPresent("pac-cmd", "Set proxy auto config", ""); err != nil {
 		return errors.WithStack(err)
 	}
@@ -76,21 +105,21 @@ func (ss *Easyss) pacOn(path string) error {
 	return nil
 }
 
-func (ss *Easyss) pacOff(path string) error {
+func (p *PAC) pacOff(path string) error {
 	return errors.WithStack(pac.Off(path))
 }
 
-func (ss *Easyss) pacManage() {
-	for status := range ss.pac.ch {
+func (p *PAC) pacManage() {
+	for status := range p.ch {
 		switch status {
 		case PACON:
-			ss.pacOn(ss.pac.url)
+			p.pacOn(p.url)
 		case PACOFF:
-			ss.pacOff(ss.pac.url)
+			p.pacOff(p.url)
 		case PACONGLOBAL:
-			ss.pacOn(ss.pac.gurl)
+			p.pacOn(p.gurl)
 		case PACOFFGLOBAL:
-			ss.pacOff(ss.pac.gurl)
+			p.pacOff(p.gurl)
 		default:
 			log.Errorf("unknown pac status:%v", status)
 		}

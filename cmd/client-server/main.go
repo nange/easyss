@@ -38,7 +38,7 @@ func main() {
 	var writer io.Writer
 	easyss.Daemon(godaemon)
 	var err error
-	writer, err = util.GetLogFileWriter(easyss.LOG_MAX_AGE, easyss.LOG_ROTATION_TIME)
+	writer, err = util.GetLogFileWriter(easyss.LogMaxAge, easyss.LogRotationTime)
 	if err != nil {
 		log.Errorf("get log file output writer err:%v", err)
 	} else {

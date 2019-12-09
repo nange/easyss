@@ -11,27 +11,17 @@ import (
 )
 
 const (
-	LOG_MAX_AGE       = 48 * time.Hour
-	LOG_ROTATION_TIME = 12 * time.Hour
-)
-
-type PACStatus int
-
-const (
-	PACON PACStatus = iota + 1
-	PACOFF
-	PACONGLOBAL
-	PACOFFGLOBAL
+	LogMaxAge       = 24 * time.Hour
+	LogRotationTime = 12 * time.Hour
 )
 
 type Config struct {
-	Server      string `json:"server"`
-	ServerPort  int    `json:"server_port"`
-	LocalPort   int    `json:"local_port"`
-	Password    string `json:"password"`
-	Method      string `json:"method"` // encryption method
-	Timeout     int    `json:"timeout"`
-	ServerModel bool   `json:"server_model"`
+	Server     string `json:"server"`
+	ServerPort int    `json:"server_port"`
+	LocalPort  int    `json:"local_port"`
+	Password   string `json:"password"`
+	Method     string `json:"method"` // encryption method
+	Timeout    int    `json:"timeout"`
 }
 
 func ParseConfig(path string) (config *Config, err error) {

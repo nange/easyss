@@ -11,8 +11,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const PacPath = "/proxy.pac"
-
 func init() {
 	log.SetFormatter(&log.JSONFormatter{TimestampFormat: "2006-01-02 15:04:05.000"})
 	log.SetLevel(log.InfoLevel)
@@ -24,12 +22,7 @@ func PrintVersion() {
 }
 
 type Easyss struct {
-	config *Config
-	pac    struct {
-		ch   chan PACStatus
-		url  string
-		gurl string
-	}
+	config  *Config
 	tcpPool easypool.Pool
 
 	LogFileWriter io.Writer
@@ -37,11 +30,6 @@ type Easyss struct {
 
 func New(config *Config) (*Easyss, error) {
 	ss := &Easyss{config: config}
-	if !config.ServerModel {
-		ss.pac.ch = make(chan PACStatus)
-		ss.pac.url = fmt.Sprintf("http://localhost:%d%s", ss.config.LocalPort+1, PacPath)
-		ss.pac.gurl = fmt.Sprintf("http://localhost:%d%s?global=true", ss.config.LocalPort+1, PacPath)
-	}
 
 	return ss, nil
 }
@@ -69,4 +57,18 @@ func (ss *Easyss) InitTcpPool() error {
 	tcppool, err := easypool.NewHeapPool(pconfig)
 	ss.tcpPool = tcppool
 	return err
+}
+
+func (ss *Easyss) LocalPort() int {
+	return ss.config.LocalPort
+}
+
+func (ss *Easyss) ServerPort() int {
+	return ss.config.ServerPort
+}
+
+func (ss *Easyss) Close() {
+	if ss.tcpPool != nil {
+		ss.tcpPool.Close()
+	}
 }
