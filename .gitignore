@@ -27,6 +27,7 @@ easyss.log*
 config.json
 
 cmd/client-server/client-server
+cmd/remote-server/remote-server
 
 pac/*
 
