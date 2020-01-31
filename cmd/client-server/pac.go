@@ -1,6 +1,6 @@
 // +build !mips,!mipsle,!mips64,!mips64le,!arm
 
-//go:generate statik -src=../pac
+//go:generate statik -src=./pac
 
 package main
 
@@ -12,7 +12,7 @@ import (
 	"text/template"
 
 	"github.com/getlantern/pac"
-	_ "github.com/nange/easyss/statik"
+	_ "github.com/nange/easyss/cmd/client-server/statik"
 	"github.com/pkg/errors"
 	"github.com/rakyll/statik/fs"
 	log "github.com/sirupsen/logrus"
@@ -77,8 +77,9 @@ func (p *PAC) SysPAC() {
 
 		w.Header().Set("Content-Type", "text/javascript; charset=UTF-8")
 		tpl.Execute(w, map[string]interface{}{
-			"Port":   strconv.Itoa(p.localPort),
-			"Global": gloabl,
+			"Socks5Port": strconv.Itoa(p.localPort),
+			"HttpPort":   strconv.Itoa(p.localPort + 1000),
+			"Global":     gloabl,
 		})
 	})
 
