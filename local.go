@@ -5,14 +5,13 @@ import (
 	"net"
 	"strconv"
 	"sync"
-	"time"
 
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/cipherstream"
-	"github.com/nange/easyss/socks"
 	"github.com/nange/easyss/util"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	"github.com/txthinking/socks5"
 )
 
 var dataHeaderPool = sync.Pool{
@@ -23,42 +22,52 @@ var dataHeaderPool = sync.Pool{
 }
 
 func (ss *Easyss) Local() {
-	listenAddr := ":" + strconv.Itoa(ss.config.LocalPort)
-	ln, err := net.Listen("tcp", listenAddr)
-	if err != nil {
-		log.Fatal(err)
-	}
+	listenAddr := ":" + strconv.Itoa(ss.LocalPort())
 	log.Infof("starting local socks5 server at %v", listenAddr)
 	log.Debugf("config:%v", *ss.config)
 
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			log.Error("accept:", err)
-			continue
-		}
-		conn.(*net.TCPConn).SetKeepAlive(true)
-		conn.(*net.TCPConn).SetKeepAlivePeriod(time.Duration(ss.config.Timeout) * time.Second)
-
-		addr, cmd, err := socks.HandShake(conn)
-		if err != nil {
-			log.Warnf("local handshake err:%+v, remote:%v", err, addr)
-			continue
-		}
-		if cmd == socks.CmdUDPAssociate {
-			log.Infof("current request is for CmdUDPAssociate")
-			time.Sleep(10 * time.Second)
-			return
-		}
-		log.Infof("target proxy addr is:%v", addr)
-
-		go ss.localRelay(conn, addr)
+	socks5.Debug = true
+	server, err := socks5.NewClassicServer(listenAddr, "127.0.0.1", "", "", 0, 0, 0, 60)
+	if err != nil {
+		log.Fatalf("new socks5 server err: %+v", err)
 	}
+	if err := server.Run(ss); err != nil {
+		log.Fatalf("socks5 server run err: %+v", err)
+	}
+
+}
+
+func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Request) error {
+	targetAddr := r.Address()
+	log.Infof("target addr:%v", targetAddr)
+
+	if r.Cmd == socks5.CmdConnect {
+		a, addr, port, err := socks5.ParseAddress(ss.LocalAddr())
+		if err != nil {
+			log.Errorf("socks5 ParseAddress err:%+v", err)
+			return err
+		}
+		p := socks5.NewReply(socks5.RepSuccess, a, addr, port)
+		if err := p.WriteTo(conn); err != nil {
+			return err
+		}
+
+		return ss.localRelay(conn, targetAddr)
+	}
+
+	if r.Cmd == socks5.CmdUDP {
+		// TODO:
+	}
+
+	return socks5.ErrUnsupportCmd
+}
+
+func (ss *Easyss) UDPHandle(*socks5.Server, *net.UDPAddr, *socks5.Datagram) error {
+	// TODO:
+	return nil
 }
 
 func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
-	defer localConn.Close()
-
 	var stream io.ReadWriteCloser
 	stream, err = ss.tcpPool.Get()
 	log.Infof("after pool get: current tcp pool have %v connections", ss.tcpPool.Len())

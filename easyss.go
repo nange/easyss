@@ -67,6 +67,10 @@ func (ss *Easyss) ServerPort() int {
 	return ss.config.ServerPort
 }
 
+func (ss *Easyss) LocalAddr() string {
+	return fmt.Sprintf("%s:%d", "127.0.0.1", ss.LocalPort())
+}
+
 func (ss *Easyss) Close() {
 	if ss.tcpPool != nil {
 		ss.tcpPool.Close()

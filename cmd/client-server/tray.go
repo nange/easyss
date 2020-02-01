@@ -37,7 +37,6 @@ func (st *SysTray) TrayReady() {
 	go st.pac.SysPAC()   // system pac configuration
 	go st.ss.Local()     // start local server
 	go st.ss.HttpLocal() // start local http proxy server
-	go st.ss.UDPLocal()  // start local udp server
 
 	go func() {
 		c := make(chan os.Signal, 1)
