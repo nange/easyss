@@ -9,6 +9,7 @@ import (
 	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
 	"github.com/nange/easypool"
 	log "github.com/sirupsen/logrus"
+	"github.com/txthinking/socks5"
 )
 
 func init() {
@@ -22,14 +23,17 @@ func PrintVersion() {
 }
 
 type Easyss struct {
-	config  *Config
-	tcpPool easypool.Pool
-
+	config        *Config
+	tcpPool       easypool.Pool
+	handle        *socks5.DefaultHandle
 	LogFileWriter io.Writer
 }
 
 func New(config *Config) (*Easyss, error) {
-	ss := &Easyss{config: config}
+	ss := &Easyss{
+		config: config,
+		handle: &socks5.DefaultHandle{},
+	}
 
 	return ss, nil
 }

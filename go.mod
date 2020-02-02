@@ -17,7 +17,7 @@ require (
 	github.com/nange/httpproxy v0.0.0-20180805034305-ff2c9c785a5d
 	github.com/onsi/ginkgo v1.10.2 // indirect
 	github.com/onsi/gomega v1.7.0 // indirect
-	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
+	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/pkg/errors v0.8.1
 	github.com/rakyll/statik v0.1.1
 	github.com/shurcooL/sanitized_anchor_name v1.0.0 // indirect

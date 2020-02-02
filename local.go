@@ -5,10 +5,12 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/util"
+	"github.com/patrickmn/go-cache"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
@@ -56,15 +58,29 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 	}
 
 	if r.Cmd == socks5.CmdUDP {
-		// TODO:
+		caddr, err := r.UDP(conn, s.ServerAddr)
+		if err != nil {
+			return err
+		}
+		_, p, err := net.SplitHostPort(caddr.String())
+		if err != nil {
+			return err
+		}
+		if p == "0" {
+			time.Sleep(time.Duration(s.UDPSessionTime) * time.Second)
+			return nil
+		}
+		ch := make(chan byte)
+		s.TCPUDPAssociate.Set(caddr.String(), ch, cache.DefaultExpiration)
+		<-ch
+		return nil
 	}
 
 	return socks5.ErrUnsupportCmd
 }
 
-func (ss *Easyss) UDPHandle(*socks5.Server, *net.UDPAddr, *socks5.Datagram) error {
-	// TODO:
-	return nil
+func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) error {
+	return ss.handle.UDPHandle(s, addr, d)
 }
 
 func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
