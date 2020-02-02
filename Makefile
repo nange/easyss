@@ -1,6 +1,11 @@
-PROJECT=tidb
+PROJECT=easyss
 
 GO := GO111MODULE=on go
+
+.PHONY: vet client-server-with-tray client-server-with-notray remote-server
+
+echo:
+	@echo "${PROJECT}"
 
 client-server-with-tray:
 	cd cmd/client-server; \
@@ -17,5 +22,3 @@ remote-server:
 vet:
 	$(GO) vet -tags "with_tray " ./...; \
 	$(GO) vet -tags "with_notray " ./...
-
-.PHONY: vet client-server-with-tray client-server-with-notray remote-server
