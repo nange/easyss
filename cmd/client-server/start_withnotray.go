@@ -1,4 +1,4 @@
-// +build mips mipsle mips64 mips64le arm
+// +build with_notray
 
 package main
 
