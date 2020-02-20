@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nange/easypool"
@@ -144,6 +145,8 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	if !needclose {
 		log.Infof("underline connection is health, so reuse it")
 	}
+	atomic.AddInt64(&ss.stat.BytesSend, n1)
+	atomic.AddInt64(&ss.stat.BytesRecive, n2)
 
 	return
 }

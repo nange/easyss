@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync/atomic"
 	"time"
 
 	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
@@ -22,18 +23,26 @@ func PrintVersion() {
 	fmt.Println("easyss version", version)
 }
 
+type Statistics struct {
+	BytesSend   int64
+	BytesRecive int64
+}
+
 type Easyss struct {
 	config        *Config
 	tcpPool       easypool.Pool
 	handle        *socks5.DefaultHandle
 	LogFileWriter io.Writer
+	stat          *Statistics
 }
 
 func New(config *Config) (*Easyss, error) {
 	ss := &Easyss{
 		config: config,
 		handle: &socks5.DefaultHandle{},
+		stat:   &Statistics{},
 	}
+	go ss.printStatistics()
 
 	return ss, nil
 }
@@ -78,5 +87,16 @@ func (ss *Easyss) LocalAddr() string {
 func (ss *Easyss) Close() {
 	if ss.tcpPool != nil {
 		ss.tcpPool.Close()
+	}
+}
+
+func (ss *Easyss) printStatistics() {
+	for {
+		select {
+		case <-time.After(5 * time.Second):
+			sendSize := atomic.LoadInt64(&ss.stat.BytesSend) / (1024 * 1024)
+			reciveSize := atomic.LoadInt64(&ss.stat.BytesRecive) / (1024 * 1024)
+			log.Infof("easyss send data size: %vMB, recive data size: %vMB", sendSize, reciveSize)
+		}
 	}
 }
