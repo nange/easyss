@@ -11,10 +11,16 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// MAX_PAYLOAD_SIZE is the maximum size of payload, set to 16KB.
-const MAX_PAYLOAD_SIZE = 1<<14 - 1
+const (
+	// MAX_PAYLOAD_SIZE is the maximum size of payload, set to 16KB.
+	MaxPayloadSize = 1<<14 - 1
 
-const FRAME_HEADER_SIZE = 9
+	// FrameHeaderSize is the http2 frame header size
+	FrameHeaderSize = 9
+
+	// PaddingSize is the http2 payload padding size
+	PaddingSize = 256
+)
 
 type CipherStream struct {
 	io.ReadWriteCloser
@@ -52,8 +58,8 @@ func New(stream io.ReadWriteCloser, password, method string) (io.ReadWriteCloser
 		return nil, errors.New("cipher method unsupported, method:" + method)
 	}
 
-	cs.reader.rbuf = make([]byte, MAX_PAYLOAD_SIZE+cs.NonceSize()+cs.Overhead())
-	cs.writer.wbuf = make([]byte, MAX_PAYLOAD_SIZE+cs.NonceSize()+cs.Overhead())
+	cs.reader.rbuf = make([]byte, MaxPayloadSize+cs.NonceSize()+cs.Overhead())
+	cs.writer.wbuf = make([]byte, MaxPayloadSize+cs.NonceSize()+cs.Overhead())
 
 	return cs, nil
 }
@@ -70,17 +76,29 @@ var dataHeaderPool = sync.Pool{
 	},
 }
 
+var paddingPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, PaddingSize)
+		return buf
+	},
+}
+
 func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 	for {
-		payloadBuf := cs.wbuf[:MAX_PAYLOAD_SIZE]
+		payloadBuf := cs.wbuf[:MaxPayloadSize]
 		nr, er := r.Read(payloadBuf)
 
 		if nr > 0 {
 			n += int64(nr)
 			log.Debugf("read from normal stream, frame payload size:%v ", nr)
 
+			var padding bool
 			headerBuf := dataHeaderPool.Get().([]byte)
 			headerBuf = util.EncodeHTTP2DataFrameHeader(nr, headerBuf)
+			if headerBuf[4] == 0x1 {
+				padding = true
+			}
+
 			headercipher, er := cs.Encrypt(headerBuf)
 			dataHeaderPool.Put(headerBuf)
 			if er != nil {
@@ -95,6 +113,17 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 			}
 
 			dataframe := append(headercipher, payloadcipher...)
+			if padding {
+				padBytes := paddingPool.Get().([]byte)
+				padcipher, err := cs.Encrypt(padBytes)
+				paddingPool.Put(padBytes)
+				if err != nil {
+					log.Errorf("encrypt padding buf err:%+v", err)
+					return 0, ErrEncrypt
+				}
+				dataframe = append(dataframe, padcipher...)
+			}
+
 			if _, ew := cs.ReadWriteCloser.Write(dataframe); ew != nil {
 				log.Warnf("write cipher data to cipher stream failed, msg:%+v", ew)
 				if timeout(ew) {
@@ -136,14 +165,14 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 
 	cn := copy(b, payloadplain)
 	if cn < len(payloadplain) {
-		cs.leftover = payloadplain[cn:len(payloadplain)]
+		cs.leftover = payloadplain[cn:]
 	}
 
 	return cn, nil
 }
 
 func (cs *CipherStream) read() ([]byte, error) {
-	hbuf := cs.rbuf[:FRAME_HEADER_SIZE+cs.NonceSize()+cs.Overhead()]
+	hbuf := cs.rbuf[:FrameHeaderSize+cs.NonceSize()+cs.Overhead()]
 	if _, err := io.ReadFull(cs.ReadWriteCloser, hbuf); err != nil {
 		log.Warnf("read cipher stream payload len err:%+v", err)
 		if timeout(err) {
@@ -160,7 +189,7 @@ func (cs *CipherStream) read() ([]byte, error) {
 
 	size := int(hplain[0])<<16 | int(hplain[1])<<8 | int(hplain[2])
 	log.Debugf("read from cipher stream, frame payload size:%v", size)
-	if (size & MAX_PAYLOAD_SIZE) != size {
+	if (size & MaxPayloadSize) != size {
 		log.Errorf("read from cipherstream payload size:%+v is invalid", size)
 		return nil, ErrPayloadSize
 	}
@@ -185,12 +214,23 @@ func (cs *CipherStream) read() ([]byte, error) {
 		return nil, err
 	}
 
+	if hplain[4] == 0x1 { // has padding field
+		lenpadding := PaddingSize + cs.NonceSize() + cs.Overhead()
+		if _, err := io.ReadFull(cs.ReadWriteCloser, cs.rbuf[:lenpadding]); err != nil {
+			log.Warnf("read cipher stream payload padding err:%+v, lenpadding:%v", err, lenpadding)
+			if timeout(err) {
+				return nil, ErrTimeout
+			}
+			return nil, ErrReadCipher
+		}
+	}
+
 	return payloadplain, nil
 }
 
 // rstStream check the payload is RST_STREAM
 func rstStream(payload []byte) (bool, error) {
-	if len(payload) != FRAME_HEADER_SIZE {
+	if len(payload) != FrameHeaderSize {
 		return false, nil
 	}
 	size := int(payload[0])<<16 | int(payload[1])<<8 | int(payload[2])

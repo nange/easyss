@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"math/rand"
 	"sync"
+
+	log "github.com/sirupsen/logrus"
 )
 
 var lenPool = sync.Pool{
@@ -30,6 +32,10 @@ func EncodeHTTP2DataFrameHeader(datalen int, dst []byte) (header []byte) {
 	dst[3] = 0x0
 	// set default flag
 	dst[4] = 0x0
+	if datalen < 512 { // data has padding field
+		log.Debugf("data payload size:%v, less than 512 bytes, we add padding field", datalen)
+		dst[4] = 0x1
+	}
 
 	// set stream identifier. note: this is temporary, will update in future
 	binary.BigEndian.PutUint32(dst[5:9], uint32(rand.Int31()))

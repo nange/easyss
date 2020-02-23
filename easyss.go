@@ -93,7 +93,7 @@ func (ss *Easyss) Close() {
 func (ss *Easyss) printStatistics() {
 	for {
 		select {
-		case <-time.After(5 * time.Second):
+		case <-time.After(15 * time.Second):
 			sendSize := atomic.LoadInt64(&ss.stat.BytesSend) / (1024 * 1024)
 			reciveSize := atomic.LoadInt64(&ss.stat.BytesRecive) / (1024 * 1024)
 			log.Infof("easyss send data size: %vMB, recive data size: %vMB", sendSize, reciveSize)

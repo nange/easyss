@@ -84,6 +84,13 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	return ss.handle.UDPHandle(s, addr, d)
 }
 
+var paddingPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, cipherstream.PaddingSize)
+		return buf
+	},
+}
+
 func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	var stream io.ReadWriteCloser
 	stream, err = ss.tcpPool.Get()
@@ -123,6 +130,18 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	}
 
 	handshake := append(headercipher, payloadcipher...)
+	if header[4] == 0x1 { // has padding field
+		padBytes := paddingPool.Get().([]byte)
+		defer paddingPool.Put(padBytes)
+
+		var padcipher []byte
+		padcipher, err = gcm.Encrypt(padBytes)
+		if err != nil {
+			log.Errorf("encrypt padding buf err:%+v", err)
+			return
+		}
+		handshake = append(handshake, padcipher...)
+	}
 	_, err = stream.Write(handshake)
 	if err != nil {
 		log.Errorf("stream.Write err:%+v", errors.WithStack(err))

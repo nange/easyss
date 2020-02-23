@@ -115,9 +115,8 @@ func handShake(stream io.ReadWriter, password string) (addr []byte, ciphermethod
 	}
 
 	payloadlen := int(headerplain[0])<<16 | int(headerplain[1])<<8 | int(headerplain[2])
-	if headerplain[3] != 0x0 || headerplain[4] != 0x0 {
-		err = errors.New(fmt.Sprintf("http2 data frame type:%v is invalid or flag:%v is invalid, both should be 0x0",
-			headerplain[3], headerplain[4]))
+	if headerplain[3] != 0x0 {
+		err = errors.New(fmt.Sprintf("http2 data frame type:%v is invalid, should be 0x0", headerplain[3]))
 		return
 	}
 
@@ -141,6 +140,22 @@ func handShake(stream io.ReadWriter, password string) (addr []byte, ciphermethod
 		return
 	}
 	ciphermethod = DecodeCipherMethod(payloadplain[length-1])
+
+	if headerplain[4] == 0x1 { // has padding field
+		paddingbuf := remoteBytespool.Get(cipherstream.PaddingSize + gcm.NonceSize() + gcm.Overhead())
+		defer remoteBytespool.Put(paddingbuf)
+
+		if _, err = io.ReadFull(stream, paddingbuf); err != nil {
+			err = errors.WithStack(err)
+			log.Warnf("io.ReadFull read paddingbuf err:%+v, len:%v", err, len(paddingbuf))
+			return
+		}
+		_, err = gcm.Decrypt(paddingbuf)
+		if err != nil {
+			log.Errorf("gcm.Decrypt decrypt paddingbuf:%v, err:%+v", paddingbuf, err)
+			return
+		}
+	}
 
 	return payloadplain[:length-1], ciphermethod, nil
 }
