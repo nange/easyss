@@ -1,6 +1,7 @@
 package easyss
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -57,7 +58,7 @@ func (ss *Easyss) GetLogFileFullPathName() string {
 
 func (ss *Easyss) InitTcpPool() error {
 	factory := func() (net.Conn, error) {
-		return net.Dial("tcp", fmt.Sprintf("%s:%d", ss.config.Server, ss.config.ServerPort))
+		return tls.Dial("tcp", fmt.Sprintf("%s:%d", ss.config.Server, ss.config.ServerPort), nil)
 	}
 	pconfig := &easypool.PoolConfig{
 		InitialCap:  5,

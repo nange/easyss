@@ -1,13 +1,14 @@
 package easyss
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
 	"strconv"
 	"sync/atomic"
-	"time"
 
+	"github.com/mholt/certmagic"
 	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/util"
 	"github.com/pkg/errors"
@@ -22,7 +23,11 @@ func (ss *Easyss) Remote() {
 
 func (ss *Easyss) tcpServer() {
 	addr := ":" + strconv.Itoa(ss.config.ServerPort)
-	ln, err := net.Listen("tcp", addr)
+	tlsConfig, err := certmagic.TLS([]string{ss.config.Server})
+	if err != nil {
+		log.Fatal(err)
+	}
+	ln, err := tls.Listen("tcp", addr, tlsConfig)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -35,9 +40,6 @@ func (ss *Easyss) tcpServer() {
 			continue
 		}
 		log.Infof("a new connection(ip) is accepted. remote addr:%v", conn.RemoteAddr())
-
-		conn.(*net.TCPConn).SetKeepAlive(true)
-		conn.(*net.TCPConn).SetKeepAlivePeriod(time.Duration(ss.config.Timeout) * time.Second)
 
 		go func() {
 			defer conn.Close()

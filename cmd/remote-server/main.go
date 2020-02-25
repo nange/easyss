@@ -20,6 +20,7 @@ func main() {
 	flag.BoolVar(&printVer, "version", false, "print version")
 	flag.StringVar(&configFile, "c", "config.json", "specify config file")
 	flag.StringVar(&cmdConfig.Password, "k", "", "password")
+	flag.StringVar(&cmdConfig.Server, "s", "", "server address")
 	flag.IntVar(&cmdConfig.ServerPort, "p", 0, "server port")
 	flag.IntVar(&cmdConfig.Timeout, "t", 300, "timeout in seconds")
 	flag.StringVar(&cmdConfig.Method, "m", "", "encryption method, default: aes-256-gcm")
@@ -60,8 +61,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("init Easyss err:%+v", err)
 	}
-	if config.ServerPort == 0 || config.Password == "" {
-		log.Fatalln("server port and password should not empty")
+	if config.ServerPort == 0 || config.Password == "" || config.Server == "" {
+		log.Fatalln("server, port and password should not empty")
 	}
 
 	ss.Remote()
