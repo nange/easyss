@@ -130,7 +130,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	}
 
 	handshake := append(headercipher, payloadcipher...)
-	if header[4] == 0x1 { // has padding field
+	if header[4] == 0x8 { // has padding field
 		padBytes := paddingPool.Get().([]byte)
 		defer paddingPool.Put(padBytes)
 

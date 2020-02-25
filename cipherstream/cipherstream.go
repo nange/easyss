@@ -95,7 +95,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 			var padding bool
 			headerBuf := dataHeaderPool.Get().([]byte)
 			headerBuf = util.EncodeHTTP2DataFrameHeader(nr, headerBuf)
-			if headerBuf[4] == 0x1 {
+			if headerBuf[4] == 0x8 {
 				padding = true
 			}
 
@@ -209,12 +209,7 @@ func (cs *CipherStream) read() ([]byte, error) {
 		return nil, ErrDecrypt
 	}
 
-	if isRSTStream, err := rstStream(payloadplain); isRSTStream {
-		log.Infof("receive RST_STREAM frame, we should stop reading immediately")
-		return nil, err
-	}
-
-	if hplain[4] == 0x1 { // has padding field
+	if hplain[4] == 0x8 { // has padding field
 		lenpadding := PaddingSize + cs.NonceSize() + cs.Overhead()
 		if _, err := io.ReadFull(cs.ReadWriteCloser, cs.rbuf[:lenpadding]); err != nil {
 			log.Warnf("read cipher stream payload padding err:%+v, lenpadding:%v", err, lenpadding)
@@ -223,6 +218,11 @@ func (cs *CipherStream) read() ([]byte, error) {
 			}
 			return nil, ErrReadCipher
 		}
+	}
+
+	if isRSTStream, err := rstStream(payloadplain); isRSTStream {
+		log.Infof("receive RST_STREAM frame, we should stop reading immediately")
+		return nil, err
 	}
 
 	return payloadplain, nil

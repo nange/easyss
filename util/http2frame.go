@@ -34,7 +34,7 @@ func EncodeHTTP2DataFrameHeader(datalen int, dst []byte) (header []byte) {
 	dst[4] = 0x0
 	if datalen < 512 { // data has padding field
 		log.Debugf("data payload size:%v, less than 512 bytes, we add padding field", datalen)
-		dst[4] = 0x1
+		dst[4] = 0x8
 	}
 
 	// set stream identifier. note: this is temporary, will update in future

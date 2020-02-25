@@ -143,7 +143,7 @@ func handShake(stream io.ReadWriter, password string) (addr []byte, ciphermethod
 	}
 	ciphermethod = DecodeCipherMethod(payloadplain[length-1])
 
-	if headerplain[4] == 0x1 { // has padding field
+	if headerplain[4] == 0x8 { // has padding field
 		paddingbuf := remoteBytespool.Get(cipherstream.PaddingSize + gcm.NonceSize() + gcm.Overhead())
 		defer remoteBytespool.Put(paddingbuf)
 
