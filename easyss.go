@@ -14,13 +14,14 @@ import (
 	"github.com/txthinking/socks5"
 )
 
+const version = "1.1"
+
 func init() {
 	log.SetFormatter(&log.JSONFormatter{TimestampFormat: "2006-01-02 15:04:05.000"})
 	log.SetLevel(log.InfoLevel)
 }
 
 func PrintVersion() {
-	const version = "1.0"
 	fmt.Println("easyss version", version)
 }
 

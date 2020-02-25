@@ -24,7 +24,6 @@ v1.0
 
 
 ### TODO
-* 添加UDP转发支持
 * 支持手机端
 
 
@@ -54,7 +53,7 @@ go get github.com/nange/easyss/cmd/remote-server
 
 copy本项目中的config.json文件和上面下载的二进制文件放同一目录.
 打开config.json文件, 修改里面对应的项:
-* server: 服务器ip或者域名(必填)
+* server: 服务器域名(必填)
 * server_port: 服务器对应端口(必填)
 * local_port: 本地监听端口(默认1080)
 * password: 通信加密密钥(必填)
