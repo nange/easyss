@@ -85,8 +85,8 @@ github.com/getlantern/ops v0.0.0-20190325191751-d70cb0d6f85f h1:wrYrQttPS8FHIRSl
 github.com/getlantern/ops v0.0.0-20190325191751-d70cb0d6f85f/go.mod h1:D5ao98qkA6pxftxoqzibIBBrLSUli+kYnJqrgBf9cIA=
 github.com/getlantern/pac v0.0.0-20161019162755-5534aa917168 h1:l/tyruTv3xnv0p9N2vHGleN8YJ2AQItATUAc2LFGKyQ=
 github.com/getlantern/pac v0.0.0-20161019162755-5534aa917168/go.mod h1:mbY1zpumNawT2dv/bnPe5lM3GVSjOqx5H2/ODmBoRmY=
-github.com/getlantern/systray v0.0.0-20200109124156-9abdfb6448b3 h1:2MdGh70ni2gKLWFkuWU3DBQ5N1I+Mso9dGwfxG8xONc=
-github.com/getlantern/systray v0.0.0-20200109124156-9abdfb6448b3/go.mod h1:4yRvwNSBNJtSOi3dRLNxhG40wXg9nEwdDjX2IrGZJo8=
+github.com/getlantern/systray v0.0.0-20200224203903-0de639be684d h1:GhAfXfckAMc1YOQ37OcmytoSQNa1k/Z3+vbzQ6/ZpTE=
+github.com/getlantern/systray v0.0.0-20200224203903-0de639be684d/go.mod h1:4yRvwNSBNJtSOi3dRLNxhG40wXg9nEwdDjX2IrGZJo8=
 github.com/ghodss/yaml v1.0.0/go.mod h1:4dBDuWmgqj2HViK6kFavaiC9ZROes6MMH2rRYeMEF04=
 github.com/go-acme/lego/v3 v3.3.0 h1:6BePZsOiYA4/w+M7QDytxQtMfCipMPGnWAHs9pWks98=
 github.com/go-acme/lego/v3 v3.3.0/go.mod h1:iGSY2vQrvQs3WezicSB/oVbO2eCrD88dpWPwb1qLqu0=
