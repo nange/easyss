@@ -11,6 +11,10 @@ client-server-with-tray:
 	cd cmd/client-server; \
 	$(GO) build -tags "with_tray " -o client-server-with-tray
 
+client-server-with-tray-windows:
+	cd cmd/client-server; \
+	$(GO) build -ldflags -H=windowsgui -tags "with_tray " -o client-server-with-tray
+
 client-server-with-notray:
 	cd cmd/client-server; \
     $(GO) build -tags "with_notray " -o client-server-with-notray

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"runtime"
 
 	"github.com/nange/easyss"
 	"github.com/nange/easyss/util"
@@ -36,7 +37,9 @@ func main() {
 	}
 	// we starting easyss as daemon only in client model, and save logs to file
 	var writer io.Writer
-	easyss.Daemon(godaemon)
+	if runtime.GOOS != "windows" {
+		easyss.Daemon(godaemon)
+	}
 	var err error
 	writer, err = util.GetLogFileWriter(easyss.LogMaxAge, easyss.LogRotationTime)
 	if err != nil {
