@@ -29,16 +29,16 @@ easyss是一款兼容socks5的安全上网工具，目标是使访问国外技�
 [点我去下载](https://github.com/nange/easyss/releases)
 
 
-#### 或者 go get 安装最新开发版(version 1.11+ is required)
+#### 或者 通过源码安装(version 1.11+ is required)
 
 ```sh
 apt-get install libgtk-3-dev libappindicator3-dev -y
 
 # 安装客户端程序
-go get github.com/nange/easyss/cmd/client-server 
+make client-server-with-tray
 
 # 安装服务端程序
-go get github.com/nange/easyss/cmd/remote-server 
+make remote-server
 ```
 
 
