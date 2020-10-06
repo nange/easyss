@@ -9,7 +9,7 @@ echo:
 
 client-server-with-tray:
 	cd cmd/client-server; \
-	$(GO) build -tags "with_tray " -o client-server-with-tray
+	$(GO) build -tags "with_tray " -o client-server-with-tray main.go start.go pac.go tray.go
 
 client-server-with-tray-windows:
 	cd cmd/client-server; \
