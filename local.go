@@ -30,11 +30,12 @@ func (ss *Easyss) Local() {
 	log.Debugf("config:%v", *ss.config)
 
 	socks5.Debug = true
-	server, err := socks5.NewClassicServer(listenAddr, "127.0.0.1", "", "", 0, 0, 0, 60)
+	server, err := socks5.NewClassicServer(listenAddr, "127.0.0.1", "", "", 30, 30)
 	if err != nil {
 		log.Fatalf("new socks5 server err: %+v", err)
 	}
-	if err := server.Run(ss); err != nil {
+
+	if err := server.ListenAndServe(ss); err != nil {
 		log.Fatalf("socks5 server run err: %+v", err)
 	}
 
@@ -51,7 +52,7 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 			return err
 		}
 		p := socks5.NewReply(socks5.RepSuccess, a, addr, port)
-		if err := p.WriteTo(conn); err != nil {
+		if _, err := p.WriteTo(conn); err != nil {
 			return err
 		}
 
@@ -68,11 +69,11 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 			return err
 		}
 		if p == "0" {
-			time.Sleep(time.Duration(s.UDPSessionTime) * time.Second)
+			time.Sleep(time.Duration(s.UDPTimeout) * time.Second)
 			return nil
 		}
 		ch := make(chan byte)
-		s.TCPUDPAssociate.Set(caddr.String(), ch, cache.DefaultExpiration)
+		s.AssociatedUDP.Set(caddr.String(), ch, cache.DefaultExpiration)
 		<-ch
 		return nil
 	}

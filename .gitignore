@@ -22,7 +22,6 @@ _testmain.go
 *.exe
 *.test
 *.prof
-easyss
 easyss.log*
 config.json
 
