@@ -32,3 +32,4 @@ cmd/remote-server/remote-server*
 cmd/client-server/pac/*
 
 .idea*
+easyss.apk
