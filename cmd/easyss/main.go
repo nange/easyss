@@ -36,12 +36,15 @@ func newMainForm(w fyne.Window) *widget.Form {
 	serverPort.SetPlaceHolder("server port")
 	localPort := widget.NewEntry()
 	localPort.SetPlaceHolder("local server port")
+	localPort.SetText("2080")
 	password := widget.NewPasswordEntry()
-	password.SetPlaceHolder("Password")
+	password.SetPlaceHolder("password")
 	method := widget.NewEntry()
 	method.SetPlaceHolder("aes-256-gcm, chacha20-poly1305")
+	method.SetText("chacha20-poly1305")
 	timeout := widget.NewEntry()
 	timeout.SetPlaceHolder("timeout, default 60s")
+	timeout.SetText("60")
 
 	form := &widget.Form{
 		Items: []*widget.FormItem{
@@ -53,7 +56,7 @@ func newMainForm(w fyne.Window) *widget.Form {
 			{Text: "Timeout", Widget: timeout},
 		},
 		OnCancel: func() {
-			cnf := dialog.NewConfirm("Stop", "Contine to stop?", func(b bool) {
+			cnf := dialog.NewConfirm("Stop", "Continue to stop?", func(b bool) {
 				mu.Lock()
 				defer mu.Unlock()
 				if b && ss != nil {
