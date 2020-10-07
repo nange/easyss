@@ -46,7 +46,7 @@ make remote-server
 
 copy本项目中的config.json文件和上面下载的二进制文件放同一目录.
 打开config.json文件, 修改里面对应的项:
-* server: 服务器域名(必填)
+* server: 服务器域名(必填，必须是域名，不能是IP)
 * server_port: 服务器对应端口(必填)
 * local_port: 本地监听端口(默认1080)
 * password: 通信加密密钥(必填)
@@ -70,15 +70,16 @@ Easyss的手机客户端只是在本地启动一个Socks5 Server，然后再将�
 #### 服务器端
 
 和客户端一样, 先把二进制和config.json文件放同一目录. 
-修改config.json文件, 其中server_port和password必填, 执行:
+修改config.json文件, 其中server(必须是服务器的域名)、server_port和password必填, 执行:
 ```sh
 ./remote-server
 ```
 
+注意：服务器的443端口必须对外可访问，用于TLS校验使用。
+
 ##### docker部署
 
 docker run -d --name easyss --network host nange/docker-easyss:latest -p yourport -k yourpassword -s yourdomain.com
-
 
 
 ### LICENSE

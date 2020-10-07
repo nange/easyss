@@ -23,6 +23,10 @@ remote-server:
 	cd cmd/remote-server; \
 	$(GO) build -o remote-server
 
+easyss-android:
+	cd cmd/easyss; \
+	fyne package -appID easyss -os android
+
 vet:
 	$(GO) vet -tags "with_tray " ./...; \
 	$(GO) vet -tags "with_notray " ./...

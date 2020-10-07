@@ -79,7 +79,7 @@ func newMainForm(w fyne.Window) *widget.Form {
 			mu.Lock()
 			defer mu.Unlock()
 			if ss != nil {
-				log.Info("Easyss already started...")
+				showInfo(w, "Easyss already started!")
 				return
 			}
 			var err error
