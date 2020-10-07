@@ -33,7 +33,10 @@ func (ss *Easyss) HttpLocal() error {
 	}
 	prx.OnForward = onForward
 
-	if err := http.ListenAndServe(fmt.Sprintf(":%d", httpPort), prx); err != nil {
+	server := &http.Server{Addr: fmt.Sprintf(":%d", httpPort), Handler: prx}
+	ss.httpProxyServer = server
+
+	if err := server.ListenAndServe(); err != nil {
 		log.Errorf("http server start err:%+v", errors.WithStack(err))
 		return err
 	}

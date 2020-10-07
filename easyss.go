@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"sync/atomic"
 	"time"
 
@@ -36,6 +37,9 @@ type Easyss struct {
 	handle        *socks5.DefaultHandle
 	LogFileWriter io.Writer
 	stat          *Statistics
+
+	socksServer     *socks5.Server
+	httpProxyServer *http.Server
 }
 
 func New(config *Config) (*Easyss, error) {
@@ -89,6 +93,15 @@ func (ss *Easyss) LocalAddr() string {
 func (ss *Easyss) Close() {
 	if ss.tcpPool != nil {
 		ss.tcpPool.Close()
+		ss.tcpPool = nil
+	}
+	if ss.httpProxyServer != nil {
+		ss.httpProxyServer.Close()
+		ss.httpProxyServer = nil
+	}
+	if ss.socksServer != nil {
+		ss.socksServer.Shutdown()
+		ss.socksServer = nil
 	}
 }
 
