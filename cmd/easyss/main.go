@@ -2,27 +2,34 @@ package main
 
 import (
 	"strconv"
+	"sync"
+	"time"
 
+	"fyne.io/fyne"
 	"fyne.io/fyne/app"
+	"fyne.io/fyne/dialog"
+	"fyne.io/fyne/theme"
 	"fyne.io/fyne/widget"
 	"github.com/nange/easyss"
 	log "github.com/sirupsen/logrus"
 )
 
 var ss *easyss.Easyss
+var mu sync.Mutex
 
 func main() {
 	a := app.New()
 	w := a.NewWindow("Easyss")
 	w.SetFullScreen(false)
 	w.SetContent(widget.NewVBox(
-		newMainForm(),
+		newMainForm(w),
 	))
+	a.Settings().SetTheme(theme.DarkTheme())
 
 	w.ShowAndRun()
 }
 
-func newMainForm() *widget.Form {
+func newMainForm(w fyne.Window) *widget.Form {
 	host := widget.NewEntry()
 	host.SetPlaceHolder("server host addr")
 	serverPort := widget.NewEntry()
@@ -46,30 +53,66 @@ func newMainForm() *widget.Form {
 			{Text: "Timeout", Widget: timeout},
 		},
 		OnCancel: func() {
-			if ss != nil {
-				ss.Close()
-			}
+			cnf := dialog.NewConfirm("Stop", "Contine to stop?", func(b bool) {
+				mu.Lock()
+				defer mu.Unlock()
+				if b && ss != nil {
+					ss.Close()
+					ss = nil
+					host.Enable()
+					serverPort.Enable()
+					localPort.Enable()
+					password.Enable()
+					method.Enable()
+					timeout.Enable()
+					showInfo(w, "Easyss stoped!")
+				}
+			}, w)
+			cnf.SetDismissText("No")
+			cnf.SetConfirmText("Yes")
+			cnf.Show()
 		},
 		OnSubmit: func() {
+			mu.Lock()
+			defer mu.Unlock()
 			if ss != nil {
 				log.Info("Easyss already started...")
 				return
 			}
-
 			var err error
+			defer func() {
+				if err != nil {
+					showErrorInfo(w, err)
+					return
+				}
+				showInfo(w, "Easyss started!")
+				host.Disable()
+				serverPort.Disable()
+				localPort.Disable()
+				password.Disable()
+				method.Disable()
+				timeout.Disable()
+			}()
+
+			prog := showProcess(w)
+			defer prog.Hide()
+
 			serverPortInt, err := strconv.ParseInt(serverPort.Text, 10, 64)
 			if err != nil {
 				log.Errorf("server port is invalid")
+				showErrorInfo(w, err)
 				return
 			}
 			localPortInt, err := strconv.ParseInt(localPort.Text, 10, 64)
 			if err != nil {
 				log.Errorf("local port is invalid")
+				showErrorInfo(w, err)
 				return
 			}
 			timeoutInt, err := strconv.ParseInt(timeout.Text, 10, 64)
 			if err != nil {
 				log.Errorf("timeout is invalid")
+				showErrorInfo(w, err)
 				return
 			}
 			ss, err = easyss.New(&easyss.Config{
@@ -82,9 +125,13 @@ func newMainForm() *widget.Form {
 			})
 			if err != nil {
 				log.Errorf("new easyss:%v", err)
+				showErrorInfo(w, err)
 				return
 			}
-			StartEasyss(ss)
+			if err := StartEasyss(ss); err != nil {
+				log.Errorf("start easyss failed:%v", err)
+				showErrorInfo(w, err)
+			}
 		},
 	}
 	form.CancelText = "Stop"
@@ -93,12 +140,42 @@ func newMainForm() *widget.Form {
 	return form
 }
 
-func StartEasyss(ss *easyss.Easyss) {
+func StartEasyss(ss *easyss.Easyss) error {
 	log.Infof("on mobile arch, we should ignore systray")
 
 	if err := ss.InitTcpPool(); err != nil {
 		log.Errorf("init tcp pool error:%v", err)
+		return err
 	}
 
-	ss.Local() // start local server
+	go ss.Local()     // start local server
+	go ss.HttpLocal() // start http proxy server
+
+	return nil
+}
+
+func showProcess(w fyne.Window) *dialog.ProgressDialog {
+	prog := dialog.NewProgress("Processing", "Starting...", w)
+
+	go func() {
+		num := 0.0
+		for num < 1.0 {
+			time.Sleep(20 * time.Millisecond)
+			prog.SetValue(num)
+			num += 0.01
+		}
+
+		prog.SetValue(1)
+	}()
+
+	prog.Show()
+	return prog
+}
+
+func showErrorInfo(w fyne.Window, err error) {
+	dialog.ShowError(err, w)
+}
+
+func showInfo(w fyne.Window, info string) {
+	dialog.ShowInformation("Info", info, w)
 }

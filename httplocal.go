@@ -9,13 +9,13 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func (ss *Easyss) HttpLocal() {
+func (ss *Easyss) HttpLocal() error {
 	httpPort := ss.config.LocalPort + 1000
 	log.Infof("starting http local proxy server :%d", httpPort)
 	prx, err := httpproxy.NewProxy()
 	if err != nil {
 		log.Errorf("new http proxy err:%+v", errors.WithStack(err))
-		return
+		return err
 	}
 
 	onForward := func(ctx *httpproxy.Context, host string) error {
@@ -35,5 +35,8 @@ func (ss *Easyss) HttpLocal() {
 
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", httpPort), prx); err != nil {
 		log.Errorf("http server start err:%+v", errors.WithStack(err))
+		return err
 	}
+
+	return nil
 }
