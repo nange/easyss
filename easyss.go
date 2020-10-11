@@ -15,7 +15,7 @@ import (
 	"github.com/txthinking/socks5"
 )
 
-const version = "1.1.2"
+const version = "1.2.0"
 
 func init() {
 	log.SetFormatter(&log.JSONFormatter{TimestampFormat: "2006-01-02 15:04:05.000"})
