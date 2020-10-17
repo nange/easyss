@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -14,8 +16,13 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-var ss *easyss.Easyss
-var mu sync.Mutex
+var (
+	ss      *easyss.Easyss
+	mu      sync.Mutex
+	logFile string
+	logF    *os.File
+)
+
 
 func main() {
 	a := app.New()
@@ -79,10 +86,35 @@ func newMainForm(w fyne.Window) *widget.Form {
 			mu.Lock()
 			defer mu.Unlock()
 			if ss != nil {
+				b := make([]byte, 64)
+				_, err := logF.ReadAt(b, 0)
+				if err != nil {
+					showErrorInfo(w, err)
+					return
+				}
+				showInfo(w, string(b))
 				showInfo(w, "Easyss already started!")
 				return
 			}
+
 			var err error
+			if logFile == "" {
+				filesDir := os.Getenv("FILESDIR")
+				esDir := filepath.Join(filesDir, "easyss")
+				if err := os.MkdirAll(esDir, 0777); err != nil {
+					showErrorInfo(w, err)
+					return
+				}
+				logFile = filepath.Join(esDir, "easyss.log")
+				logF, err = os.OpenFile(logFile, os.O_RDWR|os.O_CREATE, 0666)
+				if err != nil {
+					showErrorInfo(w, err)
+					return
+				}
+
+				log.SetOutput(logF)
+			}
+
 			defer func() {
 				if err != nil {
 					showErrorInfo(w, err)
