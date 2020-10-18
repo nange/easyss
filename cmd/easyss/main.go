@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,10 +22,15 @@ import (
 var (
 	ss      *easyss.Easyss
 	mu      sync.Mutex
+	esDir   string
 	logFile string
 	logF    *os.File
 )
 
+const (
+	confFilename = "config.json"
+	logFilename = "easyss.log"
+)
 
 func main() {
 	a := app.New()
@@ -37,25 +45,47 @@ func main() {
 }
 
 func newMainForm(w fyne.Window) *widget.Form {
-	host := widget.NewEntry()
-	host.SetPlaceHolder("server host addr")
+	conf, err := loadConfFromFile(filepath.Join(esDir, confFilename))
+	if err != nil {
+		log.Warnf("load config from file err:%v", err)
+	}
+
+	server := widget.NewEntry()
+	server.SetPlaceHolder("server host addr")
+	server.SetText(conf.Server)
+
 	serverPort := widget.NewEntry()
 	serverPort.SetPlaceHolder("server port")
+	serverPort.SetText(fmt.Sprint(conf.ServerPort))
+
 	localPort := widget.NewEntry()
 	localPort.SetPlaceHolder("local server port")
 	localPort.SetText("2080")
+	if conf.LocalPort != 0 {
+		localPort.SetText(fmt.Sprint(conf.LocalPort))
+	}
+
 	password := widget.NewPasswordEntry()
 	password.SetPlaceHolder("password")
+	password.SetText(conf.Password)
+
 	method := widget.NewEntry()
 	method.SetPlaceHolder("aes-256-gcm, chacha20-poly1305")
 	method.SetText("chacha20-poly1305")
+	if conf.Method != "" {
+		method.SetText(conf.Method)
+	}
+
 	timeout := widget.NewEntry()
 	timeout.SetPlaceHolder("timeout, default 60s")
 	timeout.SetText("60")
+	if conf.Timeout != 0 {
+		timeout.SetText(fmt.Sprint(conf.Timeout))
+	}
 
 	form := &widget.Form{
 		Items: []*widget.FormItem{
-			{Text: "Host", Widget: host},
+			{Text: "Server", Widget: server},
 			{Text: "Server Port", Widget: serverPort},
 			{Text: "Local Port", Widget: localPort},
 			{Text: "Password", Widget: password},
@@ -69,13 +99,16 @@ func newMainForm(w fyne.Window) *widget.Form {
 				if b && ss != nil {
 					ss.Close()
 					ss = nil
-					host.Enable()
+					server.Enable()
 					serverPort.Enable()
 					localPort.Enable()
 					password.Enable()
 					method.Enable()
 					timeout.Enable()
 					showInfo(w, "Easyss stoped!")
+				}
+				if logF != nil {
+					logF.Close()
 				}
 			}, w)
 			cnf.SetDismissText("No")
@@ -100,12 +133,12 @@ func newMainForm(w fyne.Window) *widget.Form {
 			var err error
 			if logFile == "" {
 				filesDir := os.Getenv("FILESDIR")
-				esDir := filepath.Join(filesDir, "easyss")
-				if err := os.MkdirAll(esDir, 0777); err != nil {
+				esDir = filepath.Join(filesDir, "easyss")
+				if err = os.MkdirAll(esDir, 0777); err != nil {
 					showErrorInfo(w, err)
 					return
 				}
-				logFile = filepath.Join(esDir, "easyss.log")
+				logFile = filepath.Join(esDir, logFilename)
 				logF, err = os.OpenFile(logFile, os.O_RDWR|os.O_CREATE, 0666)
 				if err != nil {
 					showErrorInfo(w, err)
@@ -121,7 +154,7 @@ func newMainForm(w fyne.Window) *widget.Form {
 					return
 				}
 				showInfo(w, "Easyss started!")
-				host.Disable()
+				server.Disable()
 				serverPort.Disable()
 				localPort.Disable()
 				password.Disable()
@@ -150,14 +183,15 @@ func newMainForm(w fyne.Window) *widget.Form {
 				showErrorInfo(w, err)
 				return
 			}
-			ss, err = easyss.New(&easyss.Config{
-				Server:     host.Text,
+			conf := &easyss.Config{
+				Server:     server.Text,
 				ServerPort: int(serverPortInt),
 				LocalPort:  int(localPortInt),
 				Password:   password.Text,
 				Method:     method.Text,
 				Timeout:    int(timeoutInt),
-			})
+			}
+			ss, err = easyss.New(conf)
 			if err != nil {
 				log.Errorf("new easyss:%v", err)
 				showErrorInfo(w, err)
@@ -165,6 +199,10 @@ func newMainForm(w fyne.Window) *widget.Form {
 			}
 			if err := StartEasyss(ss); err != nil {
 				log.Errorf("start easyss failed:%v", err)
+				showErrorInfo(w, err)
+			}
+			if err := writeConfToFile(filepath.Join(esDir, confFilename), *conf); err != nil {
+				log.Errorf("write config to file err:%v", err)
 				showErrorInfo(w, err)
 			}
 		},
@@ -213,4 +251,26 @@ func showErrorInfo(w fyne.Window, err error) {
 
 func showInfo(w fyne.Window, info string) {
 	dialog.ShowInformation("Info", info, w)
+}
+
+func loadConfFromFile(file string) (easyss.Config, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		return easyss.Config{}, err
+	}
+	defer f.Close()
+
+	var conf easyss.Config
+	if err := json.NewDecoder(f).Decode(&conf); err != nil {
+		return easyss.Config{}, err
+	}
+	return conf, nil
+}
+
+func writeConfToFile(file string, conf easyss.Config) error {
+	b, err := json.Marshal(conf)
+	if err != nil {
+		return err
+	}
+	return ioutil.WriteFile(file, b, 0666)
 }
