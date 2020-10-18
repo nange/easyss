@@ -29,7 +29,7 @@ var (
 
 const (
 	confFilename = "config.json"
-	logFilename = "easyss.log"
+	logFilename  = "easyss.log"
 )
 
 func main() {
@@ -45,9 +45,29 @@ func main() {
 }
 
 func newMainForm(w fyne.Window) *widget.Form {
+	mu.Lock()
+	defer mu.Unlock()
+
+	filesDir := os.Getenv("FILESDIR")
+	esDir = filepath.Join(filesDir, "easyss")
+	if logFile == "" {
+		var err error
+		if err := os.MkdirAll(esDir, 0777); err != nil {
+			showErrorInfo(w, err)
+		}
+
+		logFile = filepath.Join(esDir, logFilename)
+		logF, err = os.OpenFile(logFile, os.O_RDWR|os.O_CREATE, 0666)
+		if err != nil {
+			showErrorInfo(w, err)
+		}
+		log.SetOutput(logF)
+	}
+
 	conf, err := loadConfFromFile(filepath.Join(esDir, confFilename))
 	if err != nil {
 		log.Warnf("load config from file err:%v", err)
+		showErrorInfo(w, err)
 	}
 
 	server := widget.NewEntry()
@@ -56,7 +76,10 @@ func newMainForm(w fyne.Window) *widget.Form {
 
 	serverPort := widget.NewEntry()
 	serverPort.SetPlaceHolder("server port")
-	serverPort.SetText(fmt.Sprint(conf.ServerPort))
+	serverPort.SetText("9999")
+	if conf.ServerPort != 0 {
+		serverPort.SetText(fmt.Sprint(conf.ServerPort))
+	}
 
 	localPort := widget.NewEntry()
 	localPort.SetPlaceHolder("local server port")
@@ -119,35 +142,11 @@ func newMainForm(w fyne.Window) *widget.Form {
 			mu.Lock()
 			defer mu.Unlock()
 			if ss != nil {
-				b := make([]byte, 64)
-				_, err := logF.ReadAt(b, 0)
-				if err != nil {
-					showErrorInfo(w, err)
-					return
-				}
-				showInfo(w, string(b))
 				showInfo(w, "Easyss already started!")
 				return
 			}
 
 			var err error
-			if logFile == "" {
-				filesDir := os.Getenv("FILESDIR")
-				esDir = filepath.Join(filesDir, "easyss")
-				if err = os.MkdirAll(esDir, 0777); err != nil {
-					showErrorInfo(w, err)
-					return
-				}
-				logFile = filepath.Join(esDir, logFilename)
-				logF, err = os.OpenFile(logFile, os.O_RDWR|os.O_CREATE, 0666)
-				if err != nil {
-					showErrorInfo(w, err)
-					return
-				}
-
-				log.SetOutput(logF)
-			}
-
 			defer func() {
 				if err != nil {
 					showErrorInfo(w, err)
