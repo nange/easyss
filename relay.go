@@ -134,12 +134,12 @@ func cipherStreamUnusable(cipher io.ReadWriteCloser) bool {
 
 func setDeadline2Now(cipher, plaintxt io.ReadWriteCloser) {
 	if conn, ok := plaintxt.(net.Conn); ok {
-		log.Infof("set plaintxt tcp connection deadline to now")
+		log.Debugf("set plaintxt tcp connection deadline to now")
 		conn.SetDeadline(time.Now())
 	}
 	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
 		if conn, ok := cs.ReadWriteCloser.(net.Conn); ok {
-			log.Infof("set cipher tcp connection deadline to now")
+			log.Debugf("set cipher tcp connection deadline to now")
 			conn.SetDeadline(time.Now())
 		}
 	}
@@ -148,7 +148,7 @@ func setDeadline2Now(cipher, plaintxt io.ReadWriteCloser) {
 func setCipherDeadline(cipher io.ReadWriteCloser) {
 	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
 		if conn, ok := cs.ReadWriteCloser.(net.Conn); ok {
-			log.Infof("set cipher tcp connection deadline to 15 second later")
+			log.Debugf("set cipher tcp connection deadline to 15 second later")
 			conn.SetDeadline(time.Now().Add(15 * time.Second))
 		}
 	}

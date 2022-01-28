@@ -221,7 +221,7 @@ func (cs *CipherStream) read() ([]byte, error) {
 	}
 
 	if isRSTStream, err := rstStream(payloadplain); isRSTStream {
-		log.Infof("receive RST_STREAM frame, we should stop reading immediately")
+		log.Warnf("receive RST_STREAM frame, we should stop reading immediately")
 		return nil, err
 	}
 
@@ -236,11 +236,11 @@ func rstStream(payload []byte) (bool, error) {
 	size := int(payload[0])<<16 | int(payload[1])<<8 | int(payload[2])
 	if size == 4 && payload[3] == 0x7 {
 		if payload[4] == 0x0 {
-			log.Infof("receive FIN_RST_STREAM frame")
+			log.Debugf("receive FIN_RST_STREAM frame")
 			return true, ErrFINRSTStream
 		}
 		if payload[4] == 0x1 {
-			log.Infof("receive ACK_RST_STREAM frame")
+			log.Debugf("receive ACK_RST_STREAM frame")
 			return true, ErrACKRSTStream
 		}
 	}
