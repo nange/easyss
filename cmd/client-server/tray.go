@@ -1,3 +1,4 @@
+//go:build with_tray
 // +build with_tray
 
 package main
@@ -118,7 +119,7 @@ func (st *SysTray) catLog() error {
 
 	cmdmap := map[string][]string{
 		"windows": {"powershell", "-Command", "Start-Process", win},
-		"linux":   {"gnome-terminal", "--geometry=150x40+20+20", "-x", "tail", "-50f", st.ss.GetLogFileFullPathName()},
+		"linux":   {"x-terminal-emulator", "-e", "tail", "-50f", st.ss.GetLogFileFullPathName()},
 		"darwin":  {"open", "-a", "Console", st.ss.GetLogFileFullPathName()},
 	}
 	cmd := exec.Command(cmdmap[runtime.GOOS][0], cmdmap[runtime.GOOS][1:]...)
