@@ -80,8 +80,8 @@ func NewConnState(s state, buf []byte) *ConnState {
 }
 
 func (cs *ConnState) FINWait1(conn io.ReadWriteCloser) *ConnState {
-	log.Info("start FINWait1 state")
-	defer log.Info("end FINWait1 state")
+	log.Debug("start FINWait1 state")
+	defer log.Debug("end FINWait1 state")
 
 	cs.state = FIN_WAIT1
 
@@ -120,8 +120,8 @@ func (cs *ConnState) FINWait1(conn io.ReadWriteCloser) *ConnState {
 }
 
 func (cs *ConnState) FINWait2(conn io.ReadWriteCloser) *ConnState {
-	log.Info("start FINWait2 state")
-	defer log.Info("end FINWait2 state")
+	log.Debug("start FINWait2 state")
+	defer log.Debug("end FINWait2 state")
 	cs.state = FIN_WAIT2
 	var err error
 	for {
@@ -154,8 +154,8 @@ func (cs *ConnState) FINWait2(conn io.ReadWriteCloser) *ConnState {
 }
 
 func (cs *ConnState) LastACK(conn io.ReadWriteCloser) *ConnState {
-	log.Info("start LastACK state")
-	defer log.Info("end LastACK state")
+	log.Debug("start LastACK state")
+	defer log.Debug("end LastACK state")
 
 	cs.state = LAST_ACK
 
@@ -176,8 +176,8 @@ func (cs *ConnState) LastACK(conn io.ReadWriteCloser) *ConnState {
 }
 
 func (cs *ConnState) Closing(conn io.ReadWriteCloser) *ConnState {
-	log.Info("start Closing state")
-	defer log.Info("end Closing state")
+	log.Debug("start Closing state")
+	defer log.Debug("end Closing state")
 
 	cs.state = CLOSING
 
@@ -198,8 +198,8 @@ func (cs *ConnState) Closing(conn io.ReadWriteCloser) *ConnState {
 }
 
 func (cs *ConnState) CloseWait(conn io.ReadWriteCloser) *ConnState {
-	log.Info("start CloseWait state")
-	defer log.Info("end CloseWait state")
+	log.Debug("start CloseWait state")
+	defer log.Debug("end CloseWait state")
 
 	cs.state = CLOSE_WAIT
 
@@ -220,18 +220,18 @@ func (cs *ConnState) CloseWait(conn io.ReadWriteCloser) *ConnState {
 }
 
 func (cs *ConnState) TimeWait(conn io.ReadWriteCloser) *ConnState {
-	log.Info("start TimeWait state")
-	defer log.Info("end TimeWait state")
+	log.Debug("start TimeWait state")
+	defer log.Debug("end TimeWait state")
 
 	cs.state = TIME_WAIT
-	log.Info("in our TimeWait state, we should end our state machine immediately")
+	log.Debug("in TimeWait state, we should end state machine immediately")
 
 	// if conn is tcp connection, set the deadline to default
 	var err error
 	if cs, ok := conn.(*cipherstream.CipherStream); ok {
 		if c, ok := cs.ReadWriteCloser.(net.Conn); ok {
 			err = c.SetDeadline(time.Time{})
-			log.Info("set tcp connection deadline to default")
+			log.Debug("set tcp connection deadline to default")
 		}
 	}
 	if err != nil {
@@ -243,8 +243,8 @@ func (cs *ConnState) TimeWait(conn io.ReadWriteCloser) *ConnState {
 }
 
 func (cs *ConnState) Closed(conn io.ReadWriteCloser) *ConnState {
-	log.Info("start Closed state")
-	defer log.Info("end Closed state")
+	log.Debug("start Closed state")
+	defer log.Debug("end Closed state")
 
 	cs.state = CLOSED
 	var err error
@@ -265,7 +265,7 @@ func (cs *ConnState) Closed(conn io.ReadWriteCloser) *ConnState {
 	if cs, ok := conn.(*cipherstream.CipherStream); ok {
 		if c, ok := cs.ReadWriteCloser.(net.Conn); ok {
 			err = c.SetDeadline(time.Time{})
-			log.Info("set tcp connection deadline to default")
+			log.Debug("set tcp connection deadline to default")
 		}
 	}
 	if err != nil {
