@@ -9,7 +9,7 @@ require (
 	github.com/getlantern/elevate v0.0.0-20160317154340-a1e4813b4e26 // indirect
 	github.com/getlantern/filepersist v0.0.0-20160317154340-c5f0cd24e799 // indirect
 	github.com/getlantern/pac v0.0.0-20161019162755-5534aa917168
-	github.com/getlantern/systray v1.0.5-0.20200914092014-7a15ebe76a11
+	github.com/getlantern/systray v1.2.0
 	github.com/jehiah/go-strftime v0.0.0-20171201141054-1d33003b3869 // indirect
 	github.com/jonboulle/clockwork v0.1.0 // indirect
 	github.com/lestrrat-go/file-rotatelogs v2.2.0+incompatible
@@ -27,3 +27,5 @@ require (
 	github.com/txthinking/x v0.0.0-20200813135806-2c9a7191ffb3 // indirect
 	golang.org/x/crypto v0.0.0-20191011191535-87dc89f01550
 )
+
+replace github.com/getlantern/systray => github.com/nange/systray v1.2.1-0.20220228075726-f27acadb37a9
