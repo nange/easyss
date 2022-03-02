@@ -7,20 +7,19 @@ require (
 	github.com/caddyserver/certmagic v0.15.3
 	github.com/getlantern/pac v0.0.0-20161019162755-5534aa917168
 	github.com/getlantern/systray v1.2.0
-	github.com/lestrrat-go/file-rotatelogs v2.2.0+incompatible
 	github.com/nange/easypool v0.0.0-20171214144419-9a3141943d02
 	github.com/nange/httpproxy v0.0.0-20180805034305-ff2c9c785a5d
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/pkg/errors v0.9.1
 	github.com/rakyll/statik v0.1.1
-	github.com/sirupsen/logrus v1.4.2
+	github.com/sirupsen/logrus v1.8.1
+	github.com/snowzach/rotatefilehook v0.0.0-20220211133110-53752135082d
 	github.com/txthinking/socks5 v0.0.0-20200811154444-70230f68ccaf
 	golang.org/x/crypto v0.0.0-20210513164829-c07d793c2f9a
 )
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/fastly/go-utils v0.0.0-20180712184237-d95a45783239 // indirect
 	github.com/fsnotify/fsnotify v1.4.9 // indirect
 	github.com/fyne-io/mobile v0.0.2 // indirect
 	github.com/getlantern/byteexec v0.0.0-20170405023437-4cfb26ec74f4 // indirect
@@ -37,11 +36,7 @@ require (
 	github.com/go-stack/stack v1.8.0 // indirect
 	github.com/godbus/dbus/v5 v5.0.3 // indirect
 	github.com/goki/freetype v0.0.0-20181231101311-fa8a33aabaff // indirect
-	github.com/jehiah/go-strftime v0.0.0-20171201141054-1d33003b3869 // indirect
-	github.com/jonboulle/clockwork v0.1.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
-	github.com/konsorten/go-windows-terminal-sequences v1.0.1 // indirect
-	github.com/lestrrat-go/strftime v0.0.0-20190725011945-5c849dd2c51d // indirect
 	github.com/libdns/libdns v0.2.1 // indirect
 	github.com/mholt/acmez v1.0.1 // indirect
 	github.com/miekg/dns v1.1.43 // indirect
@@ -50,7 +45,6 @@ require (
 	github.com/srwiley/oksvg v0.0.0-20200311192757-870daf9aa564 // indirect
 	github.com/srwiley/rasterx v0.0.0-20200120212402-85cb7272f5e9 // indirect
 	github.com/stretchr/testify v1.7.0 // indirect
-	github.com/tebeka/strftime v0.1.3 // indirect
 	github.com/txthinking/runnergroup v0.0.0-20200327135940-540a793bb997 // indirect
 	github.com/txthinking/x v0.0.0-20200813135806-2c9a7191ffb3 // indirect
 	go.uber.org/atomic v1.7.0 // indirect
@@ -60,6 +54,7 @@ require (
 	golang.org/x/net v0.0.0-20210525063256-abc453219eb5 // indirect
 	golang.org/x/sys v0.0.0-20210423082822-04245dca01da // indirect
 	golang.org/x/text v0.3.6 // indirect
+	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
 )
 

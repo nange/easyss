@@ -5,14 +5,8 @@ import (
 	"io/ioutil"
 	"os"
 	"reflect"
-	"time"
 
 	"github.com/pkg/errors"
-)
-
-const (
-	LogMaxAge       = 24 * time.Hour
-	LogRotationTime = 12 * time.Hour
 )
 
 type Config struct {

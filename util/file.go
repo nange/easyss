@@ -1,13 +1,19 @@
 package util
 
 import (
-	"io"
 	"os"
 	"path/filepath"
-	"time"
 
-	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
+	rotate "github.com/snowzach/rotatefilehook"
+)
+
+const (
+	LogMaxAge     = 1  // one day
+	LogMaxBackups = 1  // one backup
+	LogMaxSize    = 10 // 10Mb
+	LogFileName   = "easyss.log"
 )
 
 func FileExists(path string) (bool, error) {
@@ -24,25 +30,23 @@ func FileExists(path string) (bool, error) {
 	return false, errors.WithStack(err)
 }
 
-func GetCurrentDir() string {
+func CurrentDir() string {
 	return filepath.Dir(os.Args[0])
 }
 
-func GetLogFileName() string {
-	return "easyss.log"
-}
-
-func GetLogFilePath() string {
-	dir := GetCurrentDir()
-	filename := GetLogFileName()
+func LogFilePath() string {
+	dir := CurrentDir()
+	filename := LogFileName
 	return filepath.Join(dir, filename)
 }
 
-func GetLogFileWriter(maxAge time.Duration, rotationTime time.Duration) (io.Writer, error) {
-	return rotatelogs.New(
-		GetLogFilePath()+".%Y%m%d%H%M",
-		rotatelogs.WithLinkName(GetLogFilePath()),
-		rotatelogs.WithMaxAge(maxAge),
-		rotatelogs.WithRotationTime(rotationTime),
-	)
+func RotateFileHook() (log.Hook, error) {
+	return rotate.NewRotateFileHook(rotate.RotateFileConfig{
+		Filename:   LogFileName,
+		MaxSize:    LogMaxSize,
+		MaxBackups: LogMaxBackups,
+		MaxAge:     LogMaxAge,
+		Level:      log.InfoLevel,
+		Formatter:  &log.JSONFormatter{TimestampFormat: "2006-01-02 15:04:05.000"},
+	})
 }

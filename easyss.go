@@ -9,17 +9,20 @@ import (
 	"sync/atomic"
 	"time"
 
-	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
 	"github.com/nange/easypool"
+	"github.com/nange/easyss/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
 )
 
-const version = "1.2.0"
+const version = "1.3.0"
 
 func init() {
-	log.SetFormatter(&log.JSONFormatter{TimestampFormat: "2006-01-02 15:04:05.000"})
-	log.SetLevel(log.InfoLevel)
+	hook, err := util.RotateFileHook()
+	if err != nil {
+		panic(err)
+	}
+	log.AddHook(hook)
 }
 
 func PrintVersion() {
@@ -51,14 +54,6 @@ func New(config *Config) (*Easyss, error) {
 	go ss.printStatistics()
 
 	return ss, nil
-}
-
-func (ss *Easyss) GetLogFileFullPathName() string {
-	if rl, ok := ss.LogFileWriter.(*rotatelogs.RotateLogs); ok {
-		return rl.CurrentFileName()
-	}
-	log.Errorf("get log file name failed!")
-	return ""
 }
 
 func (ss *Easyss) InitTcpPool() error {

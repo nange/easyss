@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"io"
 	"os"
 	"path"
 	"runtime"
@@ -36,16 +35,8 @@ func main() {
 		os.Exit(0)
 	}
 	// we starting easyss as daemon only in client model, and save logs to file
-	var writer io.Writer
 	if runtime.GOOS != "windows" {
 		easyss.Daemon(godaemon)
-	}
-	var err error
-	writer, err = util.GetLogFileWriter(easyss.LogMaxAge, easyss.LogRotationTime)
-	if err != nil {
-		log.Errorf("get log file output writer err:%v", err)
-	} else {
-		log.SetOutput(writer)
 	}
 
 	if debug {
@@ -56,7 +47,7 @@ func main() {
 	if !exists || err != nil {
 		log.Debugf("config file err:%v", err)
 
-		binDir := util.GetCurrentDir()
+		binDir := util.CurrentDir()
 		configFile = path.Join(binDir, "config.json")
 
 		log.Debugf("config file not found, try config file %s", configFile)
@@ -77,7 +68,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("init Easyss err:%+v", err)
 	}
-	ss.LogFileWriter = writer
 	if config.Password == "" || config.Server == "" || config.ServerPort == 0 {
 		log.Fatalln("server address, server port and password should not empty")
 	}

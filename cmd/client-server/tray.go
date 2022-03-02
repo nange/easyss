@@ -110,16 +110,16 @@ func (st *SysTray) catLog() error {
 	win := `-FilePath powershell  -WorkingDirectory "%s" -ArgumentList "-Command Get-Content %s -Wait %s"`
 	if runtime.GOOS == "windows" && util.SysSupportPowershell() {
 		if util.SysPowershellMajorVersion() >= 3 {
-			win = fmt.Sprintf(win, util.GetCurrentDir(), st.ss.GetLogFileFullPathName(), "-Tail 100")
+			win = fmt.Sprintf(win, util.CurrentDir(), util.LogFilePath(), "-Tail 100")
 		} else {
-			win = fmt.Sprintf(win, util.GetCurrentDir(), st.ss.GetLogFileFullPathName(), "-ReadCount 100")
+			win = fmt.Sprintf(win, util.CurrentDir(), util.LogFilePath(), "-ReadCount 100")
 		}
 	}
 
 	cmdmap := map[string][]string{
 		"windows": {"powershell", "-Command", "Start-Process", win},
-		"linux":   {"x-terminal-emulator", "-e", "tail", "-50f", st.ss.GetLogFileFullPathName()},
-		"darwin":  {"open", "-a", "Console", st.ss.GetLogFileFullPathName()},
+		"linux":   {"x-terminal-emulator", "-e", "tail", "-50f", util.LogFilePath()},
+		"darwin":  {"open", "-a", "Console", util.LogFilePath()},
 	}
 	cmd := exec.Command(cmdmap[runtime.GOOS][0], cmdmap[runtime.GOOS][1:]...)
 	return cmd.Start()
