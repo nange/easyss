@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"sync/atomic"
 
-	"github.com/mholt/certmagic"
+	"github.com/caddyserver/certmagic"
 	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/util"
 	"github.com/pkg/errors"

@@ -1,4 +1,4 @@
-// +build with_notray
+//go:build with_notray
 
 package main
 

@@ -1,4 +1,4 @@
-// +build with_tray
+//go:build with_tray
 
 package main
 

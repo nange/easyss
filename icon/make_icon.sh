@@ -1,4 +1,4 @@
-#/bin/sh
+#!/bin/sh
 
 if [ -z "$GOPATH" ]; then
     echo GOPATH environment variable not set
@@ -26,7 +26,7 @@ fi
 
 OUTPUT=icon_unix.go
 echo Generating $OUTPUT
-echo "//+build linux darwin" > $OUTPUT
+echo "//go:build linux || darwin" > $OUTPUT
 echo >> $OUTPUT
 cat "$1" | $GOPATH/bin/2goarray Data icon >> $OUTPUT
 if [ $? -ne 0 ]; then
