@@ -5,18 +5,19 @@
 package main
 
 import (
+	_ "embed"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"strconv"
 	"text/template"
 
 	"github.com/getlantern/pac"
-	_ "github.com/nange/easyss/cmd/client-server/statik"
 	"github.com/pkg/errors"
-	"github.com/rakyll/statik/fs"
 	log "github.com/sirupsen/logrus"
 )
+
+//go:embed pac.txt
+var pacTxt string
 
 type PACStatus int
 
@@ -26,8 +27,6 @@ const (
 	PACONGLOBAL
 	PACOFFGLOBAL
 )
-
-const PacPath = "/proxy.pac"
 
 type PAC struct {
 	path      string
@@ -48,20 +47,7 @@ func NewPAC(localPort int, path, url, grul string) *PAC {
 }
 
 func (p *PAC) SysPAC() {
-	statikFS, err := fs.New()
-	if err != nil {
-		log.Fatal(err)
-	}
-	file, err := statikFS.Open(p.path)
-	if err != nil {
-		log.Fatal("open pac.txt err:", err)
-	}
-	buf, err := ioutil.ReadAll(file)
-	if err != nil {
-		log.Fatal("read pac.txt err:", err)
-	}
-
-	tpl, err := template.New(p.path).Parse(string(buf))
+	tpl, err := template.New(p.path).Parse(pacTxt)
 	if err != nil {
 		log.Fatalf("template parse pac err:%v", err)
 	}
@@ -77,6 +63,7 @@ func (p *PAC) SysPAC() {
 
 		w.Header().Set("Content-Type", "text/javascript; charset=UTF-8")
 		tpl.Execute(w, map[string]interface{}{
+			"Port":       strconv.Itoa(p.localPort),
 			"Socks5Port": strconv.Itoa(p.localPort),
 			"HttpPort":   strconv.Itoa(p.localPort + 1000),
 			"Global":     gloabl,

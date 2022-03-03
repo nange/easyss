@@ -10,7 +10,6 @@ require (
 	github.com/nange/easypool v0.0.0-20171214144419-9a3141943d02
 	github.com/nange/httpproxy v0.0.0-20180805034305-ff2c9c785a5d
 	github.com/pkg/errors v0.9.1
-	github.com/rakyll/statik v0.1.1
 	github.com/sirupsen/logrus v1.8.1
 	github.com/snowzach/rotatefilehook v0.0.0-20220211133110-53752135082d
 	github.com/txthinking/socks5 v0.0.0-20220212043548-414499347d4a

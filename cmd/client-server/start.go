@@ -9,6 +9,8 @@ import (
 	"github.com/nange/easyss"
 )
 
+const PacPath = "/proxy.pac"
+
 func StartEasyss(ss *easyss.Easyss) {
 	url := fmt.Sprintf("http://localhost:%d%s", ss.LocalPort()+1, PacPath)
 	gurl := fmt.Sprintf("http://localhost:%d%s?global=true", ss.LocalPort()+1, PacPath)
