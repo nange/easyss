@@ -2,7 +2,7 @@ PROJECT=easyss
 
 GO := go
 
-.PHONY: vet client-server-with-tray client-server-with-notray remote-server
+.PHONY: vet client-server client-server-with-notray remote-server
 
 echo:
 	@echo "${PROJECT}"
@@ -28,5 +28,5 @@ easyss-android:
 	fyne package -appID easyss -os android
 
 vet:
-	$(GO) vet -tags "with_tray " ./...; \
+	$(GO) vet ./...; \
 	$(GO) vet -tags "with_notray " ./...
