@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	// MAX_PAYLOAD_SIZE is the maximum size of payload, set to 16KB.
+	// MaxPayloadSize is the maximum size of payload, set to 16KB.
 	MaxPayloadSize = 1<<14 - 1
 
 	// FrameHeaderSize is the http2 frame header size

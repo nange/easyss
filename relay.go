@@ -18,9 +18,9 @@ var connStateBuf = sync.Pool{
 	},
 }
 
-// relay copies between cipherstream and plaintxtstream.
+// relay copies between cipher stream and plaintext stream.
 // return the number of bytes copies
-// from plaintxtstream to cipherstream, from cipherstream to plaintxtstream, and needclose on server conn
+// from plaintext stream to cipher stream, from cipher stream to plaintext stream, and needclose on server conn
 func relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needclose bool) {
 	type res struct {
 		N   int64

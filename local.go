@@ -179,12 +179,12 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 }
 
 func EncodeCipherMethod(m string) byte {
-	methodMap := map[string]byte{
-		"aes-256-gcm":       1,
-		"chacha20-poly1305": 2,
+	switch m {
+	case "aes-256-gcm":
+		return 1
+	case "chacha20-poly1305":
+		return 2
+	default:
+		return 0
 	}
-	if b, ok := methodMap[m]; ok {
-		return b
-	}
-	return 0
 }
