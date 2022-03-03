@@ -37,7 +37,7 @@ apt-get install libgtk-3-dev libayatana-appindicator3-dev
 apt-get install libgtk-3-dev libappindicator3-dev -y
 
 # 安装客户端程序
-make client-server-with-tray
+make client-server
 
 # 安装服务端程序
 make remote-server

@@ -1,4 +1,4 @@
-//go:build with_tray
+//go:build !with_notray
 
 package main
 

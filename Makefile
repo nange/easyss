@@ -1,19 +1,19 @@
 PROJECT=easyss
 
-GO := GO111MODULE=on go
+GO := go
 
 .PHONY: vet client-server-with-tray client-server-with-notray remote-server
 
 echo:
 	@echo "${PROJECT}"
 
-client-server-with-tray:
+client-server:
 	cd cmd/client-server; \
-	$(GO) build -tags "with_tray " -o client-server-with-tray main.go start.go pac.go tray.go
+	$(GO) build -o client-server main.go start.go pac.go tray.go
 
-client-server-with-tray-windows:
+client-server-windows:
 	cd cmd/client-server; \
-	$(GO) build -ldflags -H=windowsgui -tags "with_tray " -o client-server-with-tray
+	$(GO) build -ldflags -H=windowsgui -o client-server-with-tray
 
 client-server-with-notray:
 	cd cmd/client-server; \

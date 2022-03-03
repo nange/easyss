@@ -40,7 +40,7 @@ func main() {
 	if !exists || err != nil {
 		log.Debugf("config file err:%v", err)
 
-		binDir := util.GetCurrentDir()
+		binDir := util.CurrentDir()
 		configFile = path.Join(binDir, "config.json")
 
 		log.Debugf("config file not found, try config file %s", configFile)

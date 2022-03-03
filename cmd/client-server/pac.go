@@ -1,4 +1,4 @@
-//go:build with_tray
+//go:build !with_notray
 
 //go:generate statik -src=./pac
 
