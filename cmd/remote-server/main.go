@@ -57,13 +57,10 @@ func main() {
 		easyss.UpdateConfig(config, &cmdConfig)
 	}
 
-	ss, err := easyss.New(config)
-	if err != nil {
-		log.Fatalf("init Easyss err:%+v", err)
-	}
 	if config.ServerPort == 0 || config.Password == "" || config.Server == "" {
 		log.Fatalln("server, port and password should not empty")
 	}
 
+	ss := easyss.New(config)
 	ss.Remote()
 }

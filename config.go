@@ -16,6 +16,7 @@ type Config struct {
 	Password   string `json:"password"`
 	Method     string `json:"method"` // encryption method
 	Timeout    int    `json:"timeout"`
+	BindALL    bool   `json:"bind_all"`
 }
 
 func ParseConfig(path string) (config *Config, err error) {

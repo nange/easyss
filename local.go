@@ -24,12 +24,16 @@ var dataHeaderPool = sync.Pool{
 }
 
 func (ss *Easyss) Local() error {
-	listenAddr := ":" + strconv.Itoa(ss.LocalPort())
-	log.Infof("starting local socks5 server at %v", listenAddr)
-	log.Debugf("config:%v", *ss.config)
+	var addr string
+	if ss.BindAll() {
+		addr = ":" + strconv.Itoa(ss.LocalPort())
+	} else {
+		addr = "127.0.0.1:" + strconv.Itoa(ss.LocalPort())
+	}
+	log.Infof("starting local socks5 server at %v", addr)
 
 	socks5.Debug = true
-	server, err := socks5.NewClassicServer(listenAddr, "127.0.0.1", "", "", 30, 30)
+	server, err := socks5.NewClassicServer(addr, "127.0.0.1", "", "", 30, 30)
 	if err != nil {
 		log.Errorf("new socks5 server err: %+v", err)
 		return err

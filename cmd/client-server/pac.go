@@ -1,12 +1,9 @@
 //go:build !with_notray
 
-//go:generate statik -src=./pac
-
 package main
 
 import (
 	_ "embed"
-	"fmt"
 	"net/http"
 	"strconv"
 	"text/template"
@@ -34,15 +31,17 @@ type PAC struct {
 	ch        chan PACStatus
 	url       string
 	gurl      string
+	bindAll   bool
 }
 
-func NewPAC(localPort int, path, url, grul string) *PAC {
+func NewPAC(localPort int, path, url string, BindAll bool) *PAC {
 	return &PAC{
 		path:      path,
 		localPort: localPort,
 		ch:        make(chan PACStatus, 1),
 		url:       url,
-		gurl:      grul,
+		gurl:      url + "?global=true",
+		bindAll:   BindAll,
 	}
 }
 
@@ -77,9 +76,15 @@ func (p *PAC) SysPAC() {
 
 	go p.pacManage()
 
-	addr := fmt.Sprintf(":%d", p.localPort+1)
-	log.Infof("pac server started on :%v", addr)
-	http.ListenAndServe(addr, nil)
+	var addr string
+	if p.bindAll {
+		addr = ":" + strconv.Itoa(p.localPort+1)
+	} else {
+		addr = "127.0.0.1:" + strconv.Itoa(p.localPort+1)
+	}
+	log.Infof("starting pac server at :%v", addr)
+
+	log.Fatalln(http.ListenAndServe(addr, nil))
 }
 
 func (p *PAC) pacOn(path string) error {

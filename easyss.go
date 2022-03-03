@@ -45,7 +45,7 @@ type Easyss struct {
 	httpProxyServer *http.Server
 }
 
-func New(config *Config) (*Easyss, error) {
+func New(config *Config) *Easyss {
 	ss := &Easyss{
 		config: config,
 		handle: &socks5.DefaultHandle{},
@@ -53,7 +53,7 @@ func New(config *Config) (*Easyss, error) {
 	}
 	go ss.printStatistics()
 
-	return ss, nil
+	return ss
 }
 
 func (ss *Easyss) InitTcpPool() error {
@@ -83,6 +83,10 @@ func (ss *Easyss) ServerPort() int {
 
 func (ss *Easyss) LocalAddr() string {
 	return fmt.Sprintf("%s:%d", "127.0.0.1", ss.LocalPort())
+}
+
+func (ss *Easyss) BindAll() bool {
+	return ss.config.BindALL
 }
 
 func (ss *Easyss) Close() {

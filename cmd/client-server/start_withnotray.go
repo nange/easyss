@@ -12,8 +12,6 @@ import (
 )
 
 func StartEasyss(ss *easyss.Easyss) {
-	log.Infof("on mips arch, we should ignore systray")
-
 	if err := ss.InitTcpPool(); err != nil {
 		log.Errorf("init tcp pool error:%v", err)
 	}

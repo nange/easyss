@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	_ "net/http/pprof"
 	"os"
 	"path"
 	"runtime"
@@ -27,6 +28,7 @@ func main() {
 	flag.StringVar(&cmdConfig.Method, "m", "", "encryption method, default: aes-256-gcm")
 	flag.BoolVar(&debug, "d", false, "print debug message")
 	flag.BoolVar(&godaemon, "daemon", true, "run app as a non-daemon with -daemon=false")
+	flag.BoolVar(&cmdConfig.BindALL, "bind-all", false, "listens on all available IP addresses of the local system.")
 
 	flag.Parse()
 
@@ -64,13 +66,10 @@ func main() {
 		easyss.UpdateConfig(config, &cmdConfig)
 	}
 
-	ss, err := easyss.New(config)
-	if err != nil {
-		log.Fatalf("init Easyss err:%+v", err)
-	}
 	if config.Password == "" || config.Server == "" || config.ServerPort == 0 {
 		log.Fatalln("server address, server port and password should not empty")
 	}
 
+	ss := easyss.New(config)
 	StartEasyss(ss)
 }
