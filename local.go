@@ -11,7 +11,6 @@ import (
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/util"
-	"github.com/patrickmn/go-cache"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
@@ -77,7 +76,7 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 			return nil
 		}
 		ch := make(chan byte)
-		s.AssociatedUDP.Set(caddr.String(), ch, cache.DefaultExpiration)
+		s.AssociatedUDP.Set(caddr.String(), ch, 5*time.Minute)
 		<-ch
 		return nil
 	}
