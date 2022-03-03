@@ -27,9 +27,13 @@ easyss是一款兼容socks5的安全上网工具，目标是使访问国外技�
 [点我去下载](https://github.com/nange/easyss/releases)
 
 
-#### 或者 通过源码安装(version 1.14+ is required)
+#### 或者 通过源码安装(go version 1.17+ is required)
 
 ```sh
+// Ubuntu20.04 or Debian11 
+apt-get install libgtk-3-dev libayatana-appindicator3-dev
+
+// Ubuntu18.04 or Debian10
 apt-get install libgtk-3-dev libappindicator3-dev -y
 
 # 安装客户端程序
@@ -85,5 +89,3 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 ### LICENSE
 
 MIT License
-
-
