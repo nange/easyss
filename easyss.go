@@ -60,15 +60,15 @@ func (ss *Easyss) InitTcpPool() error {
 	factory := func() (net.Conn, error) {
 		return tls.Dial("tcp", fmt.Sprintf("%s:%d", ss.config.Server, ss.config.ServerPort), nil)
 	}
-	pconfig := &easypool.PoolConfig{
-		InitialCap:  5,
-		MaxCap:      30,
-		MaxIdle:     5,
-		Idletime:    time.Minute,
-		MaxLifetime: 5 * time.Minute,
+	config := &easypool.PoolConfig{
+		InitialCap:  4,
+		MaxCap:      32,
+		MaxIdle:     4,
+		Idletime:    4 * time.Minute,
+		MaxLifetime: 8 * time.Minute,
 		Factory:     factory,
 	}
-	tcppool, err := easypool.NewHeapPool(pconfig)
+	tcppool, err := easypool.NewHeapPool(config)
 	ss.tcpPool = tcppool
 	return err
 }
