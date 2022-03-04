@@ -50,10 +50,9 @@ func (st *SysTray) TrayReady() {
 	systray.SetTitle("Easyss")
 	systray.SetTooltip("Easyss")
 
-	cPAC := systray.AddMenuItem("启用PAC(自动代理)", "启用PAC")
+	cPAC := systray.AddMenuItemCheckbox("启用PAC(自动代理)", "启用PAC", true)
 	systray.AddSeparator()
-	cPAC.Check() // checked as default
-	cGlobal := systray.AddMenuItem("全局代理模式", "全局模式")
+	cGlobal := systray.AddMenuItemCheckbox("全局代理模式", "全局模式", false)
 	systray.AddSeparator()
 	cCatLog := systray.AddMenuItem("查看Easyss运行日志", "查看日志")
 	systray.AddSeparator()
