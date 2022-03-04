@@ -3,7 +3,6 @@ package easyss
 import (
 	"io"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/nange/easyss/cipherstream"
@@ -25,12 +24,7 @@ const (
 	CLOSED
 )
 
-var headerPool = sync.Pool{
-	New: func() interface{} {
-		header := make([]byte, 9)
-		return header
-	},
-}
+var headerBytes = util.NewBytes(util.Http2HeaderLen)
 
 var stateMap = map[state]string{
 	ESTABLISHED: "state: ESTABLISHED",
@@ -85,8 +79,8 @@ func (cs *ConnState) FINWait1(conn io.ReadWriteCloser) *ConnState {
 
 	cs.state = FIN_WAIT1
 
-	header := headerPool.Get().([]byte)
-	defer headerPool.Put(header)
+	header := headerBytes.Get(util.Http2HeaderLen)
+	defer headerBytes.Put(header)
 
 	fin := util.EncodeFINRstStreamHeader(header)
 	_, err := conn.Write(fin)
@@ -137,8 +131,8 @@ func (cs *ConnState) FINWait2(conn io.ReadWriteCloser) *ConnState {
 		return cs
 	}
 
-	header := headerPool.Get().([]byte)
-	defer headerPool.Put(header)
+	header := headerBytes.Get(util.Http2HeaderLen)
+	defer headerBytes.Put(header)
 
 	ack := util.EncodeACKRstStreamHeader(header)
 	_, err = conn.Write(ack)
@@ -159,8 +153,8 @@ func (cs *ConnState) LastACK(conn io.ReadWriteCloser) *ConnState {
 
 	cs.state = LAST_ACK
 
-	header := headerPool.Get().([]byte)
-	defer headerPool.Put(header)
+	header := headerBytes.Get(util.Http2HeaderLen)
+	defer headerBytes.Put(header)
 
 	fin := util.EncodeFINRstStreamHeader(header)
 	_, err := conn.Write(fin)
@@ -181,8 +175,8 @@ func (cs *ConnState) Closing(conn io.ReadWriteCloser) *ConnState {
 
 	cs.state = CLOSING
 
-	header := headerPool.Get().([]byte)
-	defer headerPool.Put(header)
+	header := headerBytes.Get(util.Http2HeaderLen)
+	defer headerBytes.Put(header)
 
 	ack := util.EncodeACKRstStreamHeader(header)
 	_, err := conn.Write(ack)
@@ -203,8 +197,8 @@ func (cs *ConnState) CloseWait(conn io.ReadWriteCloser) *ConnState {
 
 	cs.state = CLOSE_WAIT
 
-	header := headerPool.Get().([]byte)
-	defer headerPool.Put(header)
+	header := headerBytes.Get(util.Http2HeaderLen)
+	defer headerBytes.Put(header)
 
 	ack := util.EncodeACKRstStreamHeader(header)
 	_, err := conn.Write(ack)

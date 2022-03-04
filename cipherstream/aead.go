@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 
+	"github.com/nange/easyss/util"
 	"golang.org/x/crypto/pbkdf2"
 )
 
@@ -31,11 +32,15 @@ type AEADCipherImpl struct {
 	aead cipher.AEAD
 }
 
+var nonceBytes = util.NewBytes(24)
+
 // Encrypt encrypts data using 256-bit AEAD.  This both hides the content of
 // the data and provides a check that it hasn't been altered. Output takes the
 // form nonce|ciphertext|tag where '|' indicates concatenation.
 func (aci *AEADCipherImpl) Encrypt(plaintext []byte) (ciphertext []byte, err error) {
-	nonce := make([]byte, aci.aead.NonceSize())
+	nonce := nonceBytes.Get(aci.aead.NonceSize())
+	defer nonceBytes.Put(nonce)
+
 	_, err = io.ReadFull(rand.Reader, nonce)
 	if err != nil {
 		return nil, err

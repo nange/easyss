@@ -79,14 +79,16 @@ func (ss *Easyss) tcpServer() {
 					return
 				}
 
-				n1, n2, needclose := relay(csStream, tconn)
-				log.Infof("send %v bytes to %v, and recive %v bytes, needclose:%v", n2, addrStr, n1, needclose)
+				n1, n2, needClose := relay(csStream, tconn)
+				csStream.(*cipherstream.CipherStream).Release()
+
+				log.Debugf("send %v bytes to %v, and recive %v bytes, needclose:%v", n2, addrStr, n1, needClose)
 
 				atomic.AddInt64(&ss.stat.BytesSend, n2)
 				atomic.AddInt64(&ss.stat.BytesRecive, n1)
 
 				tconn.Close()
-				if needclose {
+				if needClose {
 					log.Infof("maybe underline connection have been closed, need close the proxy conn")
 					break
 				}

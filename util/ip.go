@@ -6,10 +6,10 @@ import (
 	"strings"
 )
 
-var ipreg = regexp.MustCompile(`^(\d{1,2}|1\d\d|2[0-4]\d|25[0-5])(\.(\d{1,2}|1\d\d|2[0-4]\d|25[0-5])){3}$`)
+var ipRegex = regexp.MustCompile(`^(\d{1,2}|1\d\d|2[0-4]\d|25[0-5])(\.(\d{1,2}|1\d\d|2[0-4]\d|25[0-5])){3}$`)
 
 func IsIP(ip string) bool {
-	return ipreg.MatchString(ip)
+	return ipRegex.MatchString(ip)
 }
 
 func IsPrivateIP(ip string) bool {
@@ -22,14 +22,14 @@ func IsPrivateIP(ip string) bool {
 	return false
 }
 
-// A类ip: 10.0.0.0 - 10.255.255.255
+// IsTypeAIP 10.0.0.0 - 10.255.255.255
 func IsTypeAIP(ip string) bool {
-	ipitems := strings.Split(ip, ".")
-	if len(ipitems) != 4 {
+	ipItems := strings.Split(ip, ".")
+	if len(ipItems) != 4 {
 		return false
 	}
 
-	first, err := strconv.ParseInt(ipitems[0], 10, 64)
+	first, err := strconv.ParseInt(ipItems[0], 10, 64)
 	if err != nil {
 		return false
 	}
@@ -40,18 +40,18 @@ func IsTypeAIP(ip string) bool {
 	return true
 }
 
-// B类ip: 172.16.0.0 - 172.31.255.255
+// IsTypeBIP 172.16.0.0 - 172.31.255.255
 func IsTypeBIP(ip string) bool {
-	ipitems := strings.Split(ip, ".")
-	if len(ipitems) != 4 {
+	ipItems := strings.Split(ip, ".")
+	if len(ipItems) != 4 {
 		return false
 	}
 
-	first, err := strconv.ParseInt(ipitems[0], 10, 64)
+	first, err := strconv.ParseInt(ipItems[0], 10, 64)
 	if err != nil {
 		return false
 	}
-	second, err := strconv.ParseInt(ipitems[1], 10, 64)
+	second, err := strconv.ParseInt(ipItems[1], 10, 64)
 	if err != nil {
 		return false
 	}
@@ -66,18 +66,18 @@ func IsTypeBIP(ip string) bool {
 	return true
 }
 
-// C类ip: 192.168.0.0-192.168.255.255
+// IsTypeCIP 192.168.0.0-192.168.255.255
 func IsTypeCIP(ip string) bool {
-	ipitems := strings.Split(ip, ".")
-	if len(ipitems) != 4 {
+	ipItems := strings.Split(ip, ".")
+	if len(ipItems) != 4 {
 		return false
 	}
 
-	first, err := strconv.ParseInt(ipitems[0], 10, 64)
+	first, err := strconv.ParseInt(ipItems[0], 10, 64)
 	if err != nil {
 		return false
 	}
-	second, err := strconv.ParseInt(ipitems[1], 10, 64)
+	second, err := strconv.ParseInt(ipItems[1], 10, 64)
 	if err != nil {
 		return false
 	}

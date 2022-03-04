@@ -1,30 +1,26 @@
 package util
 
-// Bytes is a pool of byte slices that can be re-used.  Slices in
-// this pool will not be garbage collected when not in use.
+import (
+	"sync"
+)
+
+// Bytes is a pool of byte slices that can be re-used.
 type Bytes struct {
-	pool chan []byte
+	pool *sync.Pool
 }
 
-// NewBytes returns a Bytes pool with capacity for max byte slices
-// to be pool.
-func NewBytes(max int) *Bytes {
+// NewBytes returns a Bytes pool
+func NewBytes(capSize int) *Bytes {
 	return &Bytes{
-		pool: make(chan []byte, max),
+		pool: &sync.Pool{New: func() interface{} {
+			return make([]byte, 0, capSize)
+		}},
 	}
 }
 
-// Get returns a byte slice size with at least sz capacity. Items
-// returned may not be in the zero state and should be reset by the
-// caller.
+// Get returns a byte slice size with at least sz capacity
 func (p *Bytes) Get(sz int) []byte {
-	var c []byte
-	select {
-	case c = <-p.pool:
-	default:
-		return make([]byte, sz)
-	}
-
+	c := p.pool.Get().([]byte)
 	if cap(c) < sz {
 		return make([]byte, sz)
 	}
@@ -32,11 +28,7 @@ func (p *Bytes) Get(sz int) []byte {
 	return c[:sz]
 }
 
-// Put returns a slice back to the pool.  If the pool is full, the byte
-// slice is discarded.
+// Put returns a slice back to the pool
 func (p *Bytes) Put(c []byte) {
-	select {
-	case p.pool <- c:
-	default:
-	}
+	p.pool.Put(c)
 }

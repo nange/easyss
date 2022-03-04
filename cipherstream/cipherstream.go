@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"io"
 	"net"
-	"sync"
 
 	"github.com/nange/easyss/util"
 	"github.com/pkg/errors"
@@ -14,9 +13,6 @@ import (
 const (
 	// MaxPayloadSize is the maximum size of payload, set to 16KB.
 	MaxPayloadSize = 1<<14 - 1
-
-	// FrameHeaderSize is the http2 frame header size
-	FrameHeaderSize = 9
 
 	// PaddingSize is the http2 payload padding size
 	PaddingSize = 256
@@ -38,6 +34,8 @@ type writer struct {
 	wbuf []byte
 }
 
+var rwBufBytes = util.NewBytes(MaxPayloadSize + 64)
+
 func New(stream io.ReadWriteCloser, password, method string) (io.ReadWriteCloser, error) {
 	cs := &CipherStream{ReadWriteCloser: stream}
 
@@ -58,8 +56,8 @@ func New(stream io.ReadWriteCloser, password, method string) (io.ReadWriteCloser
 		return nil, errors.New("cipher method unsupported, method:" + method)
 	}
 
-	cs.reader.rbuf = make([]byte, MaxPayloadSize+cs.NonceSize()+cs.Overhead())
-	cs.writer.wbuf = make([]byte, MaxPayloadSize+cs.NonceSize()+cs.Overhead())
+	cs.reader.rbuf = rwBufBytes.Get(MaxPayloadSize + cs.NonceSize() + cs.Overhead())
+	cs.writer.wbuf = rwBufBytes.Get(MaxPayloadSize + cs.NonceSize() + cs.Overhead())
 
 	return cs, nil
 }
@@ -69,19 +67,9 @@ func (cs *CipherStream) Write(b []byte) (int, error) {
 	return int(n), err
 }
 
-var dataHeaderPool = sync.Pool{
-	New: func() interface{} {
-		buf := make([]byte, 9)
-		return buf
-	},
-}
+var dataHeaderBytes = util.NewBytes(util.Http2HeaderLen)
 
-var paddingPool = sync.Pool{
-	New: func() interface{} {
-		buf := make([]byte, PaddingSize)
-		return buf
-	},
-}
+var paddingBytes = util.NewBytes(PaddingSize)
 
 func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 	for {
@@ -93,14 +81,14 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 			log.Debugf("read from normal stream, frame payload size:%v ", nr)
 
 			var padding bool
-			headerBuf := dataHeaderPool.Get().([]byte)
+			headerBuf := dataHeaderBytes.Get(util.Http2HeaderLen)
 			headerBuf = util.EncodeHTTP2DataFrameHeader(nr, headerBuf)
 			if headerBuf[4] == 0x8 {
 				padding = true
 			}
 
 			headercipher, er := cs.Encrypt(headerBuf)
-			dataHeaderPool.Put(headerBuf)
+			dataHeaderBytes.Put(headerBuf)
 			if er != nil {
 				log.Errorf("encrypt header buf err:%+v", err)
 				return 0, ErrEncrypt
@@ -114,13 +102,14 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 
 			dataframe := append(headercipher, payloadcipher...)
 			if padding {
-				padBytes := paddingPool.Get().([]byte)
+				padBytes := paddingBytes.Get(PaddingSize)
 				padcipher, err := cs.Encrypt(padBytes)
-				paddingPool.Put(padBytes)
+				paddingBytes.Put(padBytes)
 				if err != nil {
 					log.Errorf("encrypt padding buf err:%+v", err)
 					return 0, ErrEncrypt
 				}
+
 				dataframe = append(dataframe, padcipher...)
 			}
 
@@ -172,7 +161,7 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 }
 
 func (cs *CipherStream) read() ([]byte, error) {
-	hbuf := cs.rbuf[:FrameHeaderSize+cs.NonceSize()+cs.Overhead()]
+	hbuf := cs.rbuf[:util.Http2HeaderLen+cs.NonceSize()+cs.Overhead()]
 	if _, err := io.ReadFull(cs.ReadWriteCloser, hbuf); err != nil {
 		log.Warnf("read cipher stream payload len err:%+v", err)
 		if timeout(err) {
@@ -228,9 +217,17 @@ func (cs *CipherStream) read() ([]byte, error) {
 	return payloadplain, nil
 }
 
+func (cs *CipherStream) Release() {
+	rwBufBytes.Put(cs.reader.rbuf)
+	rwBufBytes.Put(cs.writer.wbuf)
+
+	cs.reader.rbuf = nil
+	cs.writer.wbuf = nil
+}
+
 // rstStream check the payload is RST_STREAM
 func rstStream(payload []byte) (bool, error) {
-	if len(payload) != FrameHeaderSize {
+	if len(payload) != util.Http2HeaderLen {
 		return false, nil
 	}
 	size := int(payload[0])<<16 | int(payload[1])<<8 | int(payload[2])

@@ -4,7 +4,6 @@ import (
 	"io"
 	"net"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -16,12 +15,7 @@ import (
 	"github.com/txthinking/socks5"
 )
 
-var dataHeaderPool = sync.Pool{
-	New: func() interface{} {
-		buf := make([]byte, 9)
-		return buf
-	},
-}
+var dataHeaderBytes = util.NewBytes(util.Http2HeaderLen)
 
 func (ss *Easyss) Local() error {
 	var addr string
@@ -92,12 +86,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	return ss.handle.UDPHandle(s, addr, d)
 }
 
-var paddingPool = sync.Pool{
-	New: func() interface{} {
-		buf := make([]byte, cipherstream.PaddingSize)
-		return buf
-	},
-}
+var paddingBytes = util.NewBytes(cipherstream.PaddingSize)
 
 func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	var stream io.ReadWriteCloser
@@ -111,8 +100,8 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	}
 	defer stream.Close()
 
-	header := dataHeaderPool.Get().([]byte)
-	defer dataHeaderPool.Put(header)
+	header := dataHeaderBytes.Get(util.Http2HeaderLen)
+	defer dataHeaderBytes.Put(header)
 
 	header = util.EncodeHTTP2DataFrameHeader(len(addr)+1, header)
 	gcm, err := cipherstream.NewAes256GCM([]byte(ss.config.Password))
@@ -121,26 +110,26 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		return
 	}
 
-	headercipher, err := gcm.Encrypt(header)
+	headerCipher, err := gcm.Encrypt(header)
 	if err != nil {
 		log.Errorf("gcm.Encrypt err:%+v", err)
 		return
 	}
-	ciphermethod := EncodeCipherMethod(ss.config.Method)
-	if ciphermethod == 0 {
+	cipherMethod := EncodeCipherMethod(ss.config.Method)
+	if cipherMethod == 0 {
 		log.Errorf("unsupported cipher method:%+v", ss.config.Method)
 		return
 	}
-	payloadcipher, err := gcm.Encrypt(append([]byte(addr), ciphermethod))
+	payloadCipher, err := gcm.Encrypt(append([]byte(addr), cipherMethod))
 	if err != nil {
 		log.Errorf("gcm.Encrypt err:%+v", err)
 		return
 	}
 
-	handshake := append(headercipher, payloadcipher...)
+	handshake := append(headerCipher, payloadCipher...)
 	if header[4] == 0x8 { // has padding field
-		padBytes := paddingPool.Get().([]byte)
-		defer paddingPool.Put(padBytes)
+		padBytes := paddingBytes.Get(cipherstream.PaddingSize)
+		defer paddingBytes.Put(padBytes)
 
 		var padcipher []byte
 		padcipher, err = gcm.Encrypt(padBytes)
@@ -168,10 +157,14 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	}
 
 	n1, n2, needclose := relay(csStream, localConn)
-	log.Infof("send %v bytes to %v, and recive %v bytes", n1, addr, n2)
+	csStream.(*cipherstream.CipherStream).Release()
+
+	log.Debugf("send %v bytes to %v, and recive %v bytes", n1, addr, n2)
+
 	if !needclose {
 		log.Infof("underline connection is health, so reuse it")
 	}
+
 	atomic.AddInt64(&ss.stat.BytesSend, n1)
 	atomic.AddInt64(&ss.stat.BytesRecive, n2)
 
