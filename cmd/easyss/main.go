@@ -10,11 +10,12 @@ import (
 	"sync"
 	"time"
 
-	"fyne.io/fyne"
-	"fyne.io/fyne/app"
-	"fyne.io/fyne/dialog"
-	"fyne.io/fyne/theme"
-	"fyne.io/fyne/widget"
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 	"github.com/nange/easyss"
 	log "github.com/sirupsen/logrus"
 )
@@ -35,11 +36,15 @@ const (
 func main() {
 	a := app.New()
 	w := a.NewWindow("Easyss")
+	
+	w.CenterOnScreen()
+	w.Resize(fyne.NewSize(400, 400))
 	w.SetFullScreen(false)
-	w.SetContent(widget.NewVBox(
-		newMainForm(w),
-	))
-	a.Settings().SetTheme(theme.DarkTheme())
+	w.SetContent(container.NewVBox(newMainForm(w)))
+
+	defaultTheme := theme.DefaultTheme()
+	defaultTheme.Color(theme.ColorNameBackground, theme.VariantDark)
+	a.Settings().SetTheme(defaultTheme)
 
 	w.ShowAndRun()
 }
