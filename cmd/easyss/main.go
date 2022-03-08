@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -36,11 +39,12 @@ const (
 func main() {
 	a := app.New()
 	w := a.NewWindow("Easyss")
-	
+
 	w.CenterOnScreen()
 	w.Resize(fyne.NewSize(400, 400))
 	w.SetFullScreen(false)
-	w.SetContent(container.NewVBox(newMainForm(w)))
+	box := container.NewVBox(newMainForm(w), showLogsContainer())
+	w.SetContent(box)
 
 	defaultTheme := theme.DefaultTheme()
 	defaultTheme.Color(theme.ColorNameBackground, theme.VariantDark)
@@ -53,8 +57,7 @@ func newMainForm(w fyne.Window) *widget.Form {
 	mu.Lock()
 	defer mu.Unlock()
 
-	filesDir := os.Getenv("FILESDIR")
-	esDir = filepath.Join(filesDir, "easyss")
+	esDir = easyssPath()
 	if logFile == "" {
 		var err error
 		if err := os.MkdirAll(esDir, 0777); err != nil {
@@ -133,7 +136,7 @@ func newMainForm(w fyne.Window) *widget.Form {
 					password.Enable()
 					method.Enable()
 					timeout.Enable()
-					showInfo(w, "Easyss stoped!")
+					showInfo(w, "Easyss stopped!")
 				}
 				if logF != nil {
 					logF.Close()
@@ -212,6 +215,41 @@ func newMainForm(w fyne.Window) *widget.Form {
 	return form
 }
 
+func showLogsContainer() *fyne.Container {
+	e := widget.NewMultiLineEntry()
+	bind := binding.NewString()
+	e.Bind(bind)
+	e.Disable()
+	e.Hide()
+
+	btn := widget.NewButton("Show Logs", func() {
+		if e.Visible() {
+			e.Hide()
+			bind.Set("")
+			return
+		}
+
+		mu.Lock()
+		lp := logFile
+		mu.Unlock()
+
+		str, err := readTailOfLogs(lp)
+		if err != nil {
+			log.Errorf("read tail of logs: %v", err)
+			return
+		}
+		bind.Set(str)
+
+		e.Show()
+	})
+
+	grid := container.NewGridWrap(fyne.NewSize(400, 200), e)
+
+	box := container.NewVBox(btn, grid)
+	box.Resize(fyne.NewSize(400, 200))
+	return box
+}
+
 func StartEasyss(ss *easyss.Easyss) error {
 	log.Infof("on mobile arch, we should ignore systray")
 
@@ -266,10 +304,46 @@ func loadConfFromFile(file string) (easyss.Config, error) {
 	return conf, nil
 }
 
+func easyssPath() string {
+	filesDir := os.Getenv("FILESDIR")
+	return filepath.Join(filesDir, "easyss")
+}
+
 func writeConfToFile(file string, conf easyss.Config) error {
 	b, err := json.Marshal(conf)
 	if err != nil {
 		return err
 	}
 	return ioutil.WriteFile(file, b, 0666)
+}
+
+func readTailOfLogs(lp string) (string, error) {
+	size := int64(2048)
+
+	lf, err := os.Open(lp)
+	if err != nil {
+		return "", err
+	}
+	defer lf.Close()
+
+	st, err := lf.Stat()
+	if err != nil {
+		return "", err
+	}
+	if st.Size() > size {
+		if _, err = lf.Seek(st.Size()-size, io.SeekStart); err != nil {
+			return "", err
+		}
+	}
+
+	reader := bufio.NewReader(lf)
+	// drop the first line, since maybe it is incomplete.
+	_, _, err = reader.ReadLine()
+	if err != nil {
+		return "", err
+	}
+
+	b, err := io.ReadAll(reader)
+
+	return string(b), err
 }
