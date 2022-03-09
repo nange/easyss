@@ -6,7 +6,7 @@ require (
 	fyne.io/fyne/v2 v2.1.3
 	github.com/caddyserver/certmagic v0.15.3
 	github.com/getlantern/pac v0.0.0-20161019162755-5534aa917168
-	github.com/getlantern/systray v1.2.0
+	github.com/getlantern/systray v1.2.1
 	github.com/nange/easypool v0.0.0-20171214144419-9a3141943d02
 	github.com/nange/httpproxy v0.0.0-20180805034305-ff2c9c785a5d
 	github.com/pkg/errors v0.9.1
@@ -57,5 +57,3 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
 )
-
-replace github.com/getlantern/systray => github.com/nange/systray v1.2.1-0.20220228075726-f27acadb37a9
