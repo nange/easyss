@@ -13,7 +13,7 @@ client-server:
 
 client-server-windows:
 	cd cmd/client-server; \
-	$(GO) build -ldflags -H=windowsgui -o client-server-with-tray
+	$(GO) build -ldflags -H=windowsgui -o client-server.exe
 
 client-server-with-notray:
 	cd cmd/client-server; \
@@ -25,7 +25,7 @@ remote-server:
 
 easyss-android:
 	cd cmd/easyss; \
-	fyne package -appID easyss -os android
+	fyne package -os android/arm64
 
 vet:
 	$(GO) vet ./...; \
