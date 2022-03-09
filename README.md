@@ -35,7 +35,7 @@ apt-get install libgtk-3-dev libayatana-appindicator3-dev
 apt-get install libgtk-3-dev libappindicator3-dev -y
 
 // install fyne which deps by mobile client
-go install fyne.io/fyne/v2/cmd/fyne
+go install fyne.io/fyne/v2/cmd/fyne@latest
 
 # build client server
 make client-server
