@@ -37,13 +37,13 @@ apt-get install libgtk-3-dev libappindicator3-dev -y
 // install fyne which deps by mobile client
 go install fyne.io/fyne/v2/cmd/fyne@latest
 
-# build client server
+// build client server
 make client-server
 
-# build remote server
+// build remote server
 make remote-server
 
-# build android apk
+// build android apk
 make easyss-android
 ```
 
