@@ -15,7 +15,6 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -46,9 +45,7 @@ func main() {
 	box := container.NewVBox(newMainForm(w), showLogsContainer())
 	w.SetContent(box)
 
-	defaultTheme := theme.DefaultTheme()
-	defaultTheme.Color(theme.ColorNameBackground, theme.VariantDark)
-	a.Settings().SetTheme(defaultTheme)
+	a.Settings().SetTheme(theme.DarkTheme())
 
 	w.ShowAndRun()
 }
@@ -75,7 +72,6 @@ func newMainForm(w fyne.Window) *widget.Form {
 	conf, err := loadConfFromFile(filepath.Join(esDir, confFilename))
 	if err != nil {
 		log.Warnf("load config from file err:%v", err)
-		showErrorInfo(w, err)
 	}
 
 	server := widget.NewEntry()
@@ -217,15 +213,13 @@ func newMainForm(w fyne.Window) *widget.Form {
 
 func showLogsContainer() *fyne.Container {
 	e := widget.NewMultiLineEntry()
-	bind := binding.NewString()
-	e.Bind(bind)
 	e.Disable()
-	e.Hide()
 
+	hide := true
 	btn := widget.NewButton("Show Logs", func() {
-		if e.Visible() {
-			e.Hide()
-			bind.Set("")
+		if !hide {
+			e.SetText("")
+			hide = true
 			return
 		}
 
@@ -238,15 +232,14 @@ func showLogsContainer() *fyne.Container {
 			log.Errorf("read tail of logs: %v", err)
 			return
 		}
-		bind.Set(str)
+		e.SetText(str)
 
-		e.Show()
+		hide = false
 	})
 
 	grid := container.NewGridWrap(fyne.NewSize(400, 200), e)
 
 	box := container.NewVBox(btn, grid)
-	box.Resize(fyne.NewSize(400, 200))
 	return box
 }
 
@@ -318,7 +311,7 @@ func writeConfToFile(file string, conf easyss.Config) error {
 }
 
 func readTailOfLogs(lp string) (string, error) {
-	size := int64(2048)
+	size := int64(1024)
 
 	lf, err := os.Open(lp)
 	if err != nil {
