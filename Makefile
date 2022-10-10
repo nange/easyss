@@ -17,7 +17,7 @@ client-server-windows:
 
 client-server-with-notray:
 	cd cmd/client-server; \
-    $(GO) build -tags "with_notray " -o client-server-with-notray main.go start_withnotray.go pac.go
+    $(GO) build -tags "with_notray " -o client-server-with-notray main.go start_withnotray.go
 
 remote-server:
 	cd cmd/remote-server; \
