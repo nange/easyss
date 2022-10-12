@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path"
+	"path/filepath"
 
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -13,7 +14,12 @@ import (
 )
 
 func init() {
-	easyss.SetLogFileHook()
+	exec, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+	logDir := filepath.Dir(exec)
+	util.SetLogFileHook(logDir)
 }
 
 func main() {

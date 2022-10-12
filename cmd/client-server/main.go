@@ -5,6 +5,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"path"
+	"path/filepath"
 	"runtime"
 
 	"github.com/nange/easyss"
@@ -14,7 +15,12 @@ import (
 )
 
 func init() {
-	easyss.SetLogFileHook()
+	exec, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+	logDir := filepath.Dir(exec)
+	util.SetLogFileHook(logDir)
 }
 
 func main() {

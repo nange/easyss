@@ -10,20 +10,11 @@ import (
 	"time"
 
 	"github.com/nange/easypool"
-	"github.com/nange/easyss/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
 )
 
 const version = "1.3.0"
-
-func SetLogFileHook() {
-	hook, err := util.RotateFileHook()
-	if err != nil {
-		panic(err)
-	}
-	log.AddHook(hook)
-}
 
 func PrintVersion() {
 	fmt.Println("easyss version", version)

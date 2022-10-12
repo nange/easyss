@@ -50,3 +50,19 @@ func RotateFileHook() (log.Hook, error) {
 		Formatter:  &log.JSONFormatter{TimestampFormat: "2006-01-02 15:04:05.000"},
 	})
 }
+
+func SetLogFileHook(logDir string) {
+	logFilePath := filepath.Join(logDir, LogFileName)
+	hook, err := rotate.NewRotateFileHook(rotate.RotateFileConfig{
+		Filename:   logFilePath,
+		MaxSize:    LogMaxSize,
+		MaxBackups: LogMaxBackups,
+		MaxAge:     LogMaxAge,
+		Level:      log.InfoLevel,
+		Formatter:  &log.JSONFormatter{TimestampFormat: "2006-01-02 15:04:05.000"},
+	})
+	if err != nil {
+		panic(err)
+	}
+	log.AddHook(hook)
+}
