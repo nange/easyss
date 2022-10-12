@@ -17,7 +17,7 @@ import (
 
 const version = "1.3.0"
 
-func init() {
+func SetLogFileHook() {
 	hook, err := util.RotateFileHook()
 	if err != nil {
 		panic(err)

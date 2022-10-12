@@ -13,6 +13,10 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+func init() {
+	easyss.SetLogFileHook()
+}
+
 func main() {
 	var configFile, logLevel string
 	var printVer, godaemon bool

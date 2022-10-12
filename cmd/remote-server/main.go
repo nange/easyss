@@ -12,6 +12,10 @@ import (
 	"github.com/nange/easyss/util"
 )
 
+func init() {
+	easyss.SetLogFileHook()
+}
+
 func main() {
 	var configFile string
 	var printVer, debug bool
