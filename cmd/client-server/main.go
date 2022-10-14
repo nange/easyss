@@ -15,12 +15,14 @@ import (
 )
 
 func init() {
-	exec, err := os.Executable()
-	if err != nil {
-		panic(err)
+	if runtime.GOOS != "android" && runtime.GOOS != "ios" {
+		exec, err := os.Executable()
+		if err != nil {
+			panic(err)
+		}
+		logDir := filepath.Dir(exec)
+		util.SetLogFileHook(logDir)
 	}
-	logDir := filepath.Dir(exec)
-	util.SetLogFileHook(logDir)
 }
 
 func main() {
