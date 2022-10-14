@@ -74,7 +74,7 @@ func (st *SysTray) TrayReady() {
 
 				st.pac.ch <- PACON
 			}
-			log.Infof("pac btn clicked...is checked:%v", cPAC.Checked())
+			log.Debugf("pac btn clicked...is checked:%v", cPAC.Checked())
 		case <-cGlobal.ClickedCh:
 			if cGlobal.Disabled() {
 				break
@@ -90,15 +90,15 @@ func (st *SysTray) TrayReady() {
 				cGlobal.Check()
 				st.pac.ch <- PACONGLOBAL
 			}
-			log.Infof("global btn clicked... is checked:%v", cGlobal.Checked())
+			log.Debugf("global btn clicked... is checked:%v", cGlobal.Checked())
 		case <-cCatLog.ClickedCh:
-			log.Infof("cat log btn clicked...")
+			log.Debugf("cat log btn clicked...")
 			if err := st.catLog(); err != nil {
 				log.Errorf("cat log err:%v", err)
 			}
 
 		case <-cQuit.ClickedCh:
-			log.Infof("quit btn clicked quit now...")
+			log.Debugf("quit btn clicked quit now...")
 			systray.Quit()
 			st.TrayExit() // on linux there have some bugs, we should invoke trayExit() again
 		}

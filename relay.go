@@ -47,7 +47,7 @@ RELAY:
 				break RELAY
 			}
 			if i == 0 {
-				log.Infof("read plaintxt stream error, set start state. details:%v", err)
+				log.Debugf("read plaintxt stream error, set start state. details:%v", err)
 				buf := connStateBytes.Get(32)
 				defer connStateBytes.Put(buf)
 				state = NewConnState(FIN_WAIT1, buf)
@@ -68,7 +68,7 @@ RELAY:
 			}
 			if i == 0 {
 				if cipherstream.FINRSTStreamErr(err) {
-					log.Infof("read cipher stream ErrFINRSTStream, set start state")
+					log.Debugf("read cipher stream ErrFINRSTStream, set start state")
 					buf := connStateBytes.Get(32)
 					defer connStateBytes.Put(buf)
 					state = NewConnState(CLOSE_WAIT, buf)
@@ -109,7 +109,7 @@ RELAY:
 func markCipherStreamUnusable(cipher io.ReadWriteCloser) bool {
 	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
 		if pc, ok := cs.ReadWriteCloser.(*easypool.PoolConn); ok {
-			log.Infof("mark cipher stream unusable")
+			log.Debugf("mark cipher stream unusable")
 			pc.MarkUnusable()
 			return true
 		}

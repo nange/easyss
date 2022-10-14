@@ -91,8 +91,8 @@ var paddingBytes = util.NewBytes(cipherstream.PaddingSize)
 func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	var stream io.ReadWriteCloser
 	stream, err = ss.tcpPool.Get()
-	log.Infof("after pool get: current tcp pool have %v connections", ss.tcpPool.Len())
-	defer log.Infof("after stream close: current tcp pool have %v connections", ss.tcpPool.Len())
+	log.Debugf("after pool get: current tcp pool have %v connections", ss.tcpPool.Len())
+	defer log.Debugf("after stream close: current tcp pool have %v connections", ss.tcpPool.Len())
 
 	if err != nil {
 		log.Errorf("get stream err:%+v", err)
@@ -143,7 +143,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	if err != nil {
 		log.Errorf("stream.Write err:%+v", errors.WithStack(err))
 		if pc, ok := stream.(*easypool.PoolConn); ok {
-			log.Infof("mark pool conn stream unusable")
+			log.Debugf("mark pool conn stream unusable")
 			pc.MarkUnusable()
 		}
 		return
@@ -162,7 +162,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	log.Debugf("send %v bytes to %v, and recive %v bytes", n1, addr, n2)
 
 	if !needclose {
-		log.Infof("underline connection is health, so reuse it")
+		log.Debugf("underline connection is health, so reuse it")
 	}
 
 	atomic.AddInt64(&ss.stat.BytesSend, n1)
