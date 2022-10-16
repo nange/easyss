@@ -5,7 +5,6 @@ import (
 	"net"
 	"strconv"
 	"sync/atomic"
-	"time"
 
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/cipherstream"
@@ -58,25 +57,6 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 		}
 
 		return ss.localRelay(conn, targetAddr)
-	}
-
-	if r.Cmd == socks5.CmdUDP {
-		caddr, err := r.UDP(conn, s.ServerAddr)
-		if err != nil {
-			return err
-		}
-		_, p, err := net.SplitHostPort(caddr.String())
-		if err != nil {
-			return err
-		}
-		if p == "0" {
-			time.Sleep(time.Duration(s.UDPTimeout) * time.Second)
-			return nil
-		}
-		ch := make(chan byte)
-		s.AssociatedUDP.Set(caddr.String(), ch, 5*time.Minute)
-		<-ch
-		return nil
 	}
 
 	return socks5.ErrUnsupportCmd
