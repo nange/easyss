@@ -34,17 +34,16 @@ func relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needclose b
 	}()
 
 	var state *ConnState
-RELAY:
 	for i := 0; i < 2; i++ {
 		select {
 		case res1 := <-ch1:
-			setDeadline2Now(cipher, plaintxt)
+			expireConn(cipher, plaintxt)
 			n1 = res1.N
 			err := res1.Err
 			if cipherstream.EncryptErr(err) || cipherstream.WriteCipherErr(err) {
-				log.Warnf("io.Copy err:%+v, maybe underline connection have been closed", err)
+				log.Debugf("io.Copy err:%+v, maybe underline connection have been closed", err)
 				markCipherStreamUnusable(cipher)
-				break RELAY
+				continue
 			}
 			if i == 0 {
 				log.Debugf("read plaintxt stream error, set start state. details:%v", err)
@@ -58,13 +57,13 @@ RELAY:
 			}
 
 		case res2 := <-ch2:
-			setDeadline2Now(cipher, plaintxt)
+			expireConn(cipher, plaintxt)
 			n2 = res2.N
 			err := res2.Err
 			if cipherstream.DecryptErr(err) || cipherstream.ReadCipherErr(err) {
-				log.Warnf("io.Copy err:%+v, maybe underline connection have been closed", err)
+				log.Debugf("io.Copy err:%+v, maybe underline connection have been closed", err)
 				markCipherStreamUnusable(cipher)
-				break RELAY
+				continue
 			}
 			if i == 0 {
 				if cipherstream.FINRSTStreamErr(err) {
@@ -75,7 +74,7 @@ RELAY:
 				} else {
 					log.Errorf("execpt error is ErrFINRSTStream, but get:%v", err)
 					markCipherStreamUnusable(cipher)
-					break RELAY
+					continue
 				}
 			}
 
@@ -127,15 +126,15 @@ func cipherStreamUnusable(cipher io.ReadWriteCloser) bool {
 	return false
 }
 
-func setDeadline2Now(cipher, plaintxt io.ReadWriteCloser) {
+func expireConn(cipher, plaintxt io.ReadWriteCloser) {
 	if conn, ok := plaintxt.(net.Conn); ok {
 		log.Debugf("set plaintxt tcp connection deadline to now")
-		conn.SetDeadline(time.Now())
+		conn.SetDeadline(time.Time{})
 	}
 	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
 		if conn, ok := cs.ReadWriteCloser.(net.Conn); ok {
 			log.Debugf("set cipher tcp connection deadline to now")
-			conn.SetDeadline(time.Now())
+			conn.SetDeadline(time.Time{})
 		}
 	}
 }

@@ -114,7 +114,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 			}
 
 			if _, ew := cs.ReadWriteCloser.Write(dataframe); ew != nil {
-				log.Warnf("write cipher data to cipher stream failed, msg:%+v", ew)
+				log.Debugf("write cipher data to cipher stream failed, msg:%+v", ew)
 				if timeout(ew) {
 					err = ErrTimeout
 				} else {
@@ -126,7 +126,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		if er != nil {
 			if er != io.EOF {
-				log.Warnf("read plaintext from reader failed, msg:%+v", err)
+				log.Debugf("read plaintext from reader failed, msg:%+v", err)
 				if timeout(er) {
 					err = ErrTimeout
 				} else {
