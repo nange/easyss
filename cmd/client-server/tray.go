@@ -46,8 +46,8 @@ func (st *SysTray) TrayReady() {
 		st.TrayExit()
 	}()
 
-	systray.SetIcon(icon.Data)
-	systray.SetTitle("Easyss")
+	systray.SetTemplateIcon(icon.Data, icon.Data)
+//    systray.SetTitle("Easyss")
 	systray.SetTooltip("Easyss")
 
 	cPAC := systray.AddMenuItemCheckbox("启用PAC(自动代理)", "启用PAC", false)
