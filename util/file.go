@@ -3,7 +3,8 @@ package util
 import (
 	"os"
 	"path/filepath"
-
+	"io/ioutil"
+	
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	rotate "github.com/snowzach/rotatefilehook"
@@ -65,4 +66,16 @@ func SetLogFileHook(logDir string) {
 		panic(err)
 	}
 	log.AddHook(hook)
+}
+
+func DirFileList(dir string) ([]string, error) {
+	var files []string
+	list, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range list {
+		files = append(files, v.Name())
+	}
+	return files, nil
 }

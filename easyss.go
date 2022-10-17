@@ -80,6 +80,15 @@ func (ss *Easyss) BindAll() bool {
 	return ss.config.BindALL
 }
 
+func (ss *Easyss) Server() string {
+	return fmt.Sprintf("%s:%d", ss.config.Server, ss.config.ServerPort)
+}
+
+func (ss *Easyss) UpdateConfig(config *Config) bool {
+	ss.config = config
+	return true
+}
+
 func (ss *Easyss) Close() {
 	if ss.tcpPool != nil {
 		ss.tcpPool.Close()

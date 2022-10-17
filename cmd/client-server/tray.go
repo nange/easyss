@@ -16,7 +16,43 @@ import (
 	"github.com/nange/easyss/icon"
 	"github.com/nange/easyss/util"
 	log "github.com/sirupsen/logrus"
+	"regexp"
 )
+
+type menu struct {
+	Title   string
+	Tips    string
+	Icon    []byte
+	OnClick func(m *systray.MenuItem)
+}
+
+func addRadioMenu(title string, defaultTitle string, sub []*menu) {
+	boot := systray.AddMenuItem(title, "")
+	var miArr []*systray.MenuItem
+	for i, v := range sub {
+		mi := boot.AddSubMenuItemCheckbox(v.Title, v.Title, v.Title == defaultTitle)
+		_v := v
+		_i := i
+		miArr = append(miArr, mi)
+		go func() {
+			for {
+				select {
+				case <-mi.ClickedCh:
+					_v.OnClick(mi)
+					for j, e := range miArr {
+						if j == _i {
+							e.Check()
+						} else {
+							e.Uncheck()
+						}
+					}
+				}
+			}
+		}()
+	}
+}
+
+
 
 type SysTray struct {
 	ss  *easyss.Easyss
@@ -49,6 +85,63 @@ func (st *SysTray) TrayReady() {
 	systray.SetTemplateIcon(icon.Data, icon.Data)
 //    systray.SetTitle("Easyss")
 	systray.SetTooltip("Easyss")
+	
+	startProxy := func() {
+		log.Debugf("current server: %s", st.ss.Server())
+		if err := st.ss.InitTcpPool(); err != nil {
+			log.Errorf("init tcp pool error:%v", err)
+		}
+		go st.ss.Local()     // start local server
+		go st.ss.HttpLocal() // start local http proxy server
+	}
+
+	closeProxy := func() {
+		st.ss.Close()
+	}
+
+	updateProxyConfig  := func(fileName string) {
+		var cmdConfig easyss.Config
+		config, err := easyss.ParseConfig(fileName)
+		if err != nil {
+			config = &cmdConfig
+		} else {
+			easyss.UpdateConfig(config, &cmdConfig)
+		}
+
+		if config.Password == "" || config.Server == "" || config.ServerPort == 0 {
+			log.Fatalln("server address, server port and password should not empty")
+		}
+
+		st.ss.UpdateConfig(config)
+	}
+
+	restartProxy := func() {
+		closeProxy()
+		startProxy()
+	}
+
+	var confList []*menu
+	var ConfDir = util.CurrentDir()
+	var confFileReg = regexp.MustCompile(`^config(\S+)?.json$`)
+	if files, err := util.DirFileList(ConfDir); err == nil {
+		for _, v := range files {
+			fileName := v
+			if confFileReg.MatchString(fileName) == false {
+				continue
+			}
+			confList = append(confList, &menu{
+				Title: fileName,
+				OnClick: func(m *systray.MenuItem) {
+					log.Debugf("change config: %v", fileName)
+					updateProxyConfig(fileName)
+					restartProxy()
+				},
+			})
+		}
+	}
+	
+	addRadioMenu("选择配置", "config.json", confList)
+	systray.AddSeparator()
 
 	cPAC := systray.AddMenuItemCheckbox("启用PAC(自动代理)", "启用PAC", false)
 	systray.AddSeparator()
