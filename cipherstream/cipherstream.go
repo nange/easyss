@@ -210,7 +210,7 @@ func (cs *CipherStream) read() ([]byte, error) {
 	}
 
 	if isRSTStream, err := rstStream(payloadplain); isRSTStream {
-		log.Warnf("receive RST_STREAM frame, we should stop reading immediately")
+		log.Debugf("receive RST_STREAM frame, we should stop reading immediately")
 		return nil, err
 	}
 

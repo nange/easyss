@@ -44,6 +44,9 @@ func (ss *Easyss) Local() error {
 func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Request) error {
 	targetAddr := r.Address()
 	log.Infof("target addr:%v", targetAddr)
+	if targetAddr == ss.Server() {
+		return errors.New("Infinite loop")
+	}
 
 	if r.Cmd == socks5.CmdConnect {
 		a, addr, port, err := socks5.ParseAddress(ss.LocalAddr())
