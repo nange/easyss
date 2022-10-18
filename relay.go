@@ -93,7 +93,7 @@ func relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needClose b
 
 	setCipherDeadline(cipher)
 	if state == nil {
-		log.Errorf("unexcepted state, some unexcepted error occor")
+		log.Warnf("unexcepted state, some unexcepted error occor")
 		needClose = true
 		return
 	}
