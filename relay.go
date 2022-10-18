@@ -15,8 +15,8 @@ var connStateBytes = util.NewBytes(32)
 
 // relay copies between cipher stream and plaintext stream.
 // return the number of bytes copies
-// from plaintext stream to cipher stream, from cipher stream to plaintext stream, and needclose on server conn
-func relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needclose bool) {
+// from plaintext stream to cipher stream, from cipher stream to plaintext stream, and needClose on server conn
+func relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needClose bool) {
 	type res struct {
 		N   int64
 		Err error
@@ -37,7 +37,7 @@ func relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needclose b
 	for i := 0; i < 2; i++ {
 		select {
 		case res1 := <-ch1:
-			expireConn(cipher, plaintxt)
+			expireConn(cipher)
 			n1 = res1.N
 			err := res1.Err
 			if cipherstream.EncryptErr(err) || cipherstream.WriteCipherErr(err) {
@@ -45,6 +45,7 @@ func relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needclose b
 				markCipherStreamUnusable(cipher)
 				continue
 			}
+
 			if i == 0 {
 				log.Debugf("read plaintxt stream error, set start state. details:%v", err)
 				buf := connStateBytes.Get(32)
@@ -57,7 +58,7 @@ func relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needclose b
 			}
 
 		case res2 := <-ch2:
-			expireConn(cipher, plaintxt)
+			expireConn(plaintxt)
 			n2 = res2.N
 			err := res2.Err
 			if cipherstream.DecryptErr(err) || cipherstream.ReadCipherErr(err) {
@@ -65,6 +66,7 @@ func relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needclose b
 				markCipherStreamUnusable(cipher)
 				continue
 			}
+
 			if i == 0 {
 				if cipherstream.FINRSTStreamErr(err) {
 					log.Debugf("read cipher stream ErrFINRSTStream, set start state")
@@ -74,7 +76,10 @@ func relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needclose b
 				} else {
 					log.Errorf("execpt error is ErrFINRSTStream, but get:%v", err)
 					markCipherStreamUnusable(cipher)
-					continue
+				}
+			} else if err != nil {
+				if !cipherstream.TimeoutErr(err) {
+					log.Errorf("execpt error is net: io timeout. but get:%v", err)
 				}
 			}
 
@@ -82,23 +87,23 @@ func relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needclose b
 	}
 
 	if cipherStreamUnusable(cipher) {
-		needclose = true
+		needClose = true
 		return
 	}
 
 	setCipherDeadline(cipher)
 	if state == nil {
-		log.Errorf("unexcepted state, some unexcepted error occor")
-		needclose = true
+		log.Warnf("unexcepted state, some unexcepted error occor")
+		needClose = true
 		return
 	}
-	for statefn := state.fn; statefn != nil; {
-		statefn = statefn(cipher).fn
+	for stateFn := state.fn; stateFn != nil; {
+		stateFn = stateFn(cipher).fn
 	}
 	if state.err != nil {
 		log.Warnf("state err:%+v, state:%v", state.err, state.state)
 		markCipherStreamUnusable(cipher)
-		needclose = true
+		needClose = true
 	}
 
 	return
@@ -126,15 +131,17 @@ func cipherStreamUnusable(cipher io.ReadWriteCloser) bool {
 	return false
 }
 
-func expireConn(cipher, plaintxt io.ReadWriteCloser) {
-	if conn, ok := plaintxt.(net.Conn); ok {
-		log.Debugf("set plaintxt tcp connection deadline to now")
-		conn.SetDeadline(time.Time{})
+func expireConn(conn io.ReadWriteCloser) {
+	if conn, ok := conn.(net.Conn); ok {
+		log.Debugf("expire the plaintxt tcp connection to make the reader to be failed immediately")
+		conn.SetDeadline(time.Unix(0, 0))
+		return
 	}
-	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
+
+	if cs, ok := conn.(*cipherstream.CipherStream); ok {
 		if conn, ok := cs.ReadWriteCloser.(net.Conn); ok {
-			log.Debugf("set cipher tcp connection deadline to now")
-			conn.SetDeadline(time.Time{})
+			log.Debugf("expire the cipher tcp connection to make the reader to be failed immediately")
+			conn.SetDeadline(time.Unix(0, 0))
 		}
 	}
 }
@@ -142,8 +149,8 @@ func expireConn(cipher, plaintxt io.ReadWriteCloser) {
 func setCipherDeadline(cipher io.ReadWriteCloser) {
 	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
 		if conn, ok := cs.ReadWriteCloser.(net.Conn); ok {
-			log.Debugf("set cipher tcp connection deadline to 15 second later")
-			conn.SetDeadline(time.Now().Add(15 * time.Second))
+			log.Debugf("set cipher tcp connection deadline to 30 second later")
+			conn.SetDeadline(time.Now().Add(30 * time.Second))
 		}
 	}
 }

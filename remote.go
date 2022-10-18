@@ -46,7 +46,11 @@ func (ss *Easyss) tcpServer() {
 			for {
 				addr, ciphermethod, err := handShake(conn, ss.config.Password)
 				if err != nil {
-					log.Warnf("get target addr err:%+v", err)
+					if errors.Is(err, io.EOF) {
+						log.Debugf("got EOF error when handShake with client-server, maybe the connection pool closed the idle conn")
+					} else {
+						log.Warnf("get target addr err:%+v", err)
+					}
 					return
 				}
 				addrStr := string(addr)

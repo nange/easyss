@@ -78,7 +78,6 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 
 		if nr > 0 {
 			n += int64(nr)
-			log.Debugf("read from normal stream, frame payload size:%v ", nr)
 
 			var padding bool
 			headerBuf := dataHeaderBytes.Get(util.Http2HeaderLen)
@@ -114,7 +113,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 			}
 
 			if _, ew := cs.ReadWriteCloser.Write(dataframe); ew != nil {
-				log.Debugf("write cipher data to cipher stream failed, msg:%+v", ew)
+				log.Warnf("write cipher data to cipher stream failed, msg:%+v", ew)
 				if timeout(ew) {
 					err = ErrTimeout
 				} else {
@@ -122,7 +121,6 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 				}
 				break
 			}
-			log.Debugf("write to cipher stream, frame payload size:%v", nr)
 		}
 		if er != nil {
 			if er != io.EOF {
@@ -163,10 +161,10 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 func (cs *CipherStream) read() ([]byte, error) {
 	hbuf := cs.rbuf[:util.Http2HeaderLen+cs.NonceSize()+cs.Overhead()]
 	if _, err := io.ReadFull(cs.ReadWriteCloser, hbuf); err != nil {
-		log.Warnf("read cipher stream payload len err:%+v", err)
 		if timeout(err) {
 			return nil, ErrTimeout
 		}
+		log.Warnf("read cipher stream payload len err:%+v", err)
 		return nil, ErrReadCipher
 	}
 
@@ -176,8 +174,8 @@ func (cs *CipherStream) read() ([]byte, error) {
 		return nil, ErrDecrypt
 	}
 
+	// the payload size reading from cipher stream
 	size := int(hplain[0])<<16 | int(hplain[1])<<8 | int(hplain[2])
-	log.Debugf("read from cipher stream, frame payload size:%v", size)
 	if (size & MaxPayloadSize) != size {
 		log.Errorf("read from cipherstream payload size:%+v is invalid", size)
 		return nil, ErrPayloadSize
@@ -185,10 +183,10 @@ func (cs *CipherStream) read() ([]byte, error) {
 
 	lenpayload := size + cs.NonceSize() + cs.Overhead()
 	if _, err := io.ReadFull(cs.ReadWriteCloser, cs.rbuf[:lenpayload]); err != nil {
-		log.Warnf("read cipher stream payload err:%+v, lenpayload:%v", err, lenpayload)
 		if timeout(err) {
 			return nil, ErrTimeout
 		}
+		log.Warnf("read cipher stream payload err:%+v, lenpayload:%v", err, lenpayload)
 		return nil, ErrReadCipher
 	}
 
@@ -201,10 +199,10 @@ func (cs *CipherStream) read() ([]byte, error) {
 	if hplain[4] == 0x8 { // has padding field
 		lenpadding := PaddingSize + cs.NonceSize() + cs.Overhead()
 		if _, err := io.ReadFull(cs.ReadWriteCloser, cs.rbuf[:lenpadding]); err != nil {
-			log.Warnf("read cipher stream payload padding err:%+v, lenpadding:%v", err, lenpadding)
 			if timeout(err) {
 				return nil, ErrTimeout
 			}
+			log.Warnf("read cipher stream payload padding err:%+v, lenpadding:%v", err, lenpadding)
 			return nil, ErrReadCipher
 		}
 	}
