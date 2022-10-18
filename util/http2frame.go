@@ -3,8 +3,6 @@ package util
 import (
 	"encoding/binary"
 	"math/rand"
-
-	log "github.com/sirupsen/logrus"
 )
 
 const Http2HeaderLen = 9
@@ -29,7 +27,7 @@ func EncodeHTTP2DataFrameHeader(datalen int, dst []byte) (header []byte) {
 	// set default flag
 	dst[4] = 0x0
 	if datalen < 512 { // data has padding field
-		log.Debugf("data payload size:%v, less than 512 bytes, we add padding field", datalen)
+		// data payload size less than 512 bytes, we add padding field
 		dst[4] = 0x8
 	}
 
