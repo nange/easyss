@@ -23,8 +23,8 @@ func init() {
 }
 
 func main() {
-	var configFile string
-	var printVer, debug bool
+	var configFile, logLevel string
+	var printVer bool
 	var cmdConfig easyss.Config
 
 	flag.BoolVar(&printVer, "version", false, "print version")
@@ -34,7 +34,7 @@ func main() {
 	flag.IntVar(&cmdConfig.ServerPort, "p", 0, "server port")
 	flag.IntVar(&cmdConfig.Timeout, "t", 300, "timeout in seconds")
 	flag.StringVar(&cmdConfig.Method, "m", "", "encryption method, default: aes-256-gcm")
-	flag.BoolVar(&debug, "d", false, "print debug message")
+	flag.StringVar(&logLevel, "log-level", "info", "set the log-level(debug, info, warn, error), default: info")
 
 	flag.Parse()
 
@@ -42,8 +42,17 @@ func main() {
 		easyss.PrintVersion()
 		os.Exit(0)
 	}
-	if debug {
+
+	log.Infof("set the log-level to: %v", logLevel)
+	switch logLevel {
+	case "debug":
 		log.SetLevel(log.DebugLevel)
+	case "warn":
+		log.SetLevel(log.WarnLevel)
+	case "error":
+		log.SetLevel(log.ErrorLevel)
+	default:
+		log.SetLevel(log.InfoLevel)
 	}
 
 	exists, err := util.FileExists(configFile)

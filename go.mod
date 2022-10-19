@@ -7,7 +7,7 @@ require (
 	github.com/caddyserver/certmagic v0.15.3
 	github.com/getlantern/pac v0.0.0-20161019162755-5534aa917168
 	github.com/getlantern/systray v1.2.1
-	github.com/nange/easypool v0.0.0-20171214144419-9a3141943d02
+	github.com/nange/easypool v1.3.0
 	github.com/nange/httpproxy v0.0.0-20180805034305-ff2c9c785a5d
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.8.1

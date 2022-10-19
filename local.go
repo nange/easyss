@@ -74,14 +74,16 @@ var paddingBytes = util.NewBytes(cipherstream.PaddingSize)
 func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	var stream io.ReadWriteCloser
 	stream, err = ss.tcpPool.Get()
-	log.Debugf("after pool get: current tcp pool have %v connections", ss.tcpPool.Len())
-	defer log.Debugf("after stream close: current tcp pool have %v connections", ss.tcpPool.Len())
-
 	if err != nil {
-		log.Errorf("get stream err:%+v", err)
+		log.Errorf("get stream from pool failed:%+v", err)
 		return
 	}
-	defer stream.Close()
+
+	log.Debugf("after pool get: current tcp pool has %v connections", ss.tcpPool.Len())
+	defer func() {
+		stream.Close()
+		log.Debugf("after stream close: current tcp pool has %v connections", ss.tcpPool.Len())
+	}()
 
 	header := dataHeaderBytes.Get(util.Http2HeaderLen)
 	defer dataHeaderBytes.Put(header)
@@ -139,12 +141,11 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		return
 	}
 
-	n1, n2, needclose := relay(csStream, localConn)
+	n1, n2, needClose := relay(csStream, localConn)
 	csStream.(*cipherstream.CipherStream).Release()
 
 	log.Debugf("send %v bytes to %v, and recive %v bytes", n1, addr, n2)
-
-	if !needclose {
+	if !needClose {
 		log.Debugf("underline connection is health, so reuse it")
 	}
 

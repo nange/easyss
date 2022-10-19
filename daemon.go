@@ -16,7 +16,7 @@ func Daemon(godaemon bool) {
 			log.Errorf("startup easyss failed. err:%v", err)
 			os.Exit(1)
 		}
-		log.Infof("easyss have been started. [PID]:%v, now you can close this window", cmd.Process.Pid)
+		log.Infof("easyss has been started. [PID]:%v, now you can close this window", cmd.Process.Pid)
 		os.Exit(0)
 	}
 }

@@ -85,7 +85,7 @@ func (cs *ConnState) FINWait1(conn io.ReadWriteCloser) *ConnState {
 	fin := util.EncodeFINRstStreamHeader(header)
 	_, err := conn.Write(fin)
 	if err != nil {
-		log.Errorf("conn.Write FIN err:%+v", errors.WithStack(err))
+		log.Debugf("conn.Write FIN err:%+v", errors.WithStack(err))
 		cs.err = err
 		cs.fn = nil
 		return cs
@@ -107,7 +107,7 @@ func (cs *ConnState) FINWait1(conn io.ReadWriteCloser) *ConnState {
 		return cs
 	}
 
-	log.Errorf("except get ErrFINRSTStream or ErrACKRSTStream, but get: %v", err)
+	log.Debugf("except get ErrFINRSTStream or ErrACKRSTStream, but get: %v", err)
 	cs.err = err
 	cs.fn = nil
 	return cs
@@ -125,7 +125,7 @@ func (cs *ConnState) FINWait2(conn io.ReadWriteCloser) *ConnState {
 		}
 	}
 	if !cipherstream.FINRSTStreamErr(err) {
-		log.Errorf("except get ErrFINRSTStream, but get: %+v", err)
+		log.Debugf("except get ErrFINRSTStream, but get: %+v", err)
 		cs.err = err
 		cs.fn = nil
 		return cs
@@ -137,7 +137,7 @@ func (cs *ConnState) FINWait2(conn io.ReadWriteCloser) *ConnState {
 	ack := util.EncodeACKRstStreamHeader(header)
 	_, err = conn.Write(ack)
 	if err != nil {
-		log.Errorf("conn.Write ACK err:%+v", errors.WithStack(err))
+		log.Debugf("conn.Write ACK err:%+v", err)
 		cs.err = err
 		cs.fn = nil
 		return cs
@@ -159,7 +159,7 @@ func (cs *ConnState) LastACK(conn io.ReadWriteCloser) *ConnState {
 	fin := util.EncodeFINRstStreamHeader(header)
 	_, err := conn.Write(fin)
 	if err != nil {
-		log.Errorf("conn.Write FIN err:%+v", errors.WithStack(err))
+		log.Debugf("conn.Write FIN err:%+v", err)
 		cs.err = err
 		cs.fn = nil
 		return cs
@@ -181,7 +181,7 @@ func (cs *ConnState) Closing(conn io.ReadWriteCloser) *ConnState {
 	ack := util.EncodeACKRstStreamHeader(header)
 	_, err := conn.Write(ack)
 	if err != nil {
-		log.Errorf("conn.Write ACK err:%+v", errors.WithStack(err))
+		log.Debugf("conn.Write ACK err:%+v", err)
 		cs.err = err
 		cs.fn = nil
 		return cs
@@ -203,7 +203,7 @@ func (cs *ConnState) CloseWait(conn io.ReadWriteCloser) *ConnState {
 	ack := util.EncodeACKRstStreamHeader(header)
 	_, err := conn.Write(ack)
 	if err != nil {
-		log.Errorf("conn.Write ack err:%+v", errors.WithStack(err))
+		log.Debugf("conn.Write ack err:%+v", err)
 		cs.err = err
 		cs.fn = nil
 		return cs
@@ -249,7 +249,7 @@ func (cs *ConnState) Closed(conn io.ReadWriteCloser) *ConnState {
 		}
 	}
 	if !cipherstream.ACKRSTStreamErr(err) {
-		log.Errorf("except get ErrACKRSTStream, but get: %+v", err)
+		log.Debugf("except get ErrACKRSTStream, but get: %+v", err)
 		cs.err = err
 		cs.fn = nil
 		return cs
@@ -263,7 +263,7 @@ func (cs *ConnState) Closed(conn io.ReadWriteCloser) *ConnState {
 		}
 	}
 	if err != nil {
-		log.Errorf("conn.SetDeadline to default err:%+v", errors.WithStack(err))
+		log.Errorf("conn.SetDeadline to default err:%+v", err)
 		cs.err = err
 	}
 	cs.fn = nil
