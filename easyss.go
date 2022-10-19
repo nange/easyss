@@ -52,15 +52,15 @@ func (ss *Easyss) InitTcpPool() error {
 		return tls.Dial("tcp", fmt.Sprintf("%s:%d", ss.config.Server, ss.config.ServerPort), nil)
 	}
 	config := &easypool.PoolConfig{
-		InitialCap:  4,
-		MaxCap:      32,
-		MaxIdle:     4,
-		Idletime:    4 * time.Minute,
-		MaxLifetime: 8 * time.Minute,
+		InitialCap:  10,
+		MaxCap:      50,
+		MaxIdle:     10,
+		Idletime:    5 * time.Minute,
+		MaxLifetime: 30 * time.Minute,
 		Factory:     factory,
 	}
-	tcppool, err := easypool.NewHeapPool(config)
-	ss.tcpPool = tcppool
+	tcpPool, err := easypool.NewHeapPool(config)
+	ss.tcpPool = tcpPool
 	return err
 }
 
