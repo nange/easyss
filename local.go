@@ -75,7 +75,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	defer log.Debugf("after stream close: current tcp pool have %v connections", ss.tcpPool.Len())
 
 	if err != nil {
-		log.Errorf("get stream err:%+v", err)
+		log.Errorf("get stream from pool failed:%+v", err)
 		return
 	}
 	defer stream.Close()
