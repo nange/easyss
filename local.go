@@ -76,10 +76,10 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		return
 	}
 
-	log.Infof("after pool get: current tcp pool has %v connections", ss.tcpPool.Len())
+	log.Debugf("after pool get: current tcp pool has %v connections", ss.tcpPool.Len())
 	defer func() {
 		stream.Close()
-		log.Infof("after stream close: current tcp pool has %v connections", ss.tcpPool.Len())
+		log.Debugf("after stream close: current tcp pool has %v connections", ss.tcpPool.Len())
 	}()
 
 	header := dataHeaderBytes.Get(util.Http2HeaderLen)
