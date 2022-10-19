@@ -93,7 +93,7 @@ func relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needClose b
 
 	setCipherDeadline(cipher)
 	if state == nil {
-		log.Warnf("unexcepted state, some unexcepted error occor, maybe client connection is closed")
+		log.Infof("unexcepted state, some unexcepted error occor, maybe client connection is closed")
 		needClose = true
 		return
 	}
@@ -101,7 +101,7 @@ func relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needClose b
 		stateFn = stateFn(cipher).fn
 	}
 	if state.err != nil {
-		log.Warnf("state err:%+v, state:%v", state.err, state.state)
+		log.Infof("state err:%v, state:%v", state.err, state.state)
 		markCipherStreamUnusable(cipher)
 		needClose = true
 	}
