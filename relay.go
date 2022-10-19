@@ -41,7 +41,7 @@ func relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needClose b
 			n1 = res1.N
 			err := res1.Err
 			if cipherstream.EncryptErr(err) || cipherstream.WriteCipherErr(err) {
-				log.Debugf("io.Copy err:%+v, maybe underline connection have been closed", err)
+				log.Debugf("io.Copy err:%+v, maybe underline connection has been closed", err)
 				markCipherStreamUnusable(cipher)
 				continue
 			}
@@ -62,7 +62,7 @@ func relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needClose b
 			n2 = res2.N
 			err := res2.Err
 			if cipherstream.DecryptErr(err) || cipherstream.ReadCipherErr(err) {
-				log.Debugf("io.Copy err:%+v, maybe underline connection have been closed", err)
+				log.Debugf("io.Copy err:%+v, maybe underline connection has been closed", err)
 				markCipherStreamUnusable(cipher)
 				continue
 			}
