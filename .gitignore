@@ -33,3 +33,4 @@ cmd/client-server/pac/*
 
 .idea*
 easyss.apk
+.build_android_env
