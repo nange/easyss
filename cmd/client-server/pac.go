@@ -69,9 +69,9 @@ func (p *PAC) SysPAC() {
 		})
 	})
 
-	// if err := p.pacOn(p.url); err != nil {
-	// 	log.Fatalf("set system pac err:%v", err)
-	// }
+	if err := p.pacOn(p.url); err != nil {
+		log.Fatalf("set system pac err:%v", err)
+	}
 	defer p.pacOff(p.url)
 
 	go p.pacManage()
