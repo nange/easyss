@@ -1,9 +1,11 @@
 package easyss
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"github.com/nange/easypool"
@@ -44,8 +46,10 @@ func (ss *Easyss) Local() error {
 func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Request) error {
 	targetAddr := r.Address()
 	log.Infof("target addr:%v", targetAddr)
-	if targetAddr == ss.Server() {
-		return errors.New("Infinite loop")
+
+	if err := ss.ValidateRequest(r); err != nil {
+		log.Errorf("validate socks5 request:%v", err)
+		return err
 	}
 
 	if r.Cmd == socks5.CmdConnect {
@@ -153,6 +157,32 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	atomic.AddInt64(&ss.stat.BytesRecive, n2)
 
 	return
+}
+
+func (ss *Easyss) ValidateRequest(r *socks5.Request) error {
+	addrs := strings.Split(r.Address(), ":")
+	if len(addrs) != 2 {
+		return fmt.Errorf("invalid target address:%v", r.Address())
+	}
+
+	host := addrs[0]
+	if !util.IsIP(host) {
+		if host == ss.config.Server {
+			return fmt.Errorf("target host equals to server host, which may caused infinite-loop")
+		}
+		return nil
+	}
+
+	if util.IsPrivateIP(host) {
+		return fmt.Errorf("target host:%v is private ip, which is invalid", host)
+	}
+	for _, ip := range ss.serverIPs {
+		if host == ip {
+			return fmt.Errorf("target host:%v equals server host ip, which may caused infinite-loop", host)
+		}
+	}
+
+	return nil
 }
 
 func EncodeCipherMethod(m string) byte {

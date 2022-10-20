@@ -194,7 +194,7 @@ func newMainForm(w fyne.Window) *widget.Form {
 				Method:     method.Text,
 				Timeout:    int(timeoutInt),
 			}
-			ss = easyss.New(conf)
+			ss, _ = easyss.New(conf)
 			if err := StartEasyss(ss); err != nil {
 				log.Errorf("start easyss failed:%v", err)
 				showErrorInfo(w, err)

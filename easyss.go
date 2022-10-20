@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nange/easypool"
+	"github.com/nange/easyss/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
 )
@@ -25,22 +26,32 @@ type Statistics struct {
 }
 
 type Easyss struct {
-	config  *Config
-	tcpPool easypool.Pool
-	stat    *Statistics
+	config    *Config
+	tcpPool   easypool.Pool
+	serverIPs []string
+	stat      *Statistics
 
 	socksServer     *socks5.Server
 	httpProxyServer *http.Server
 }
 
-func New(config *Config) *Easyss {
+func New(config *Config) (*Easyss, error) {
 	ss := &Easyss{
 		config: config,
 		stat:   &Statistics{},
 	}
+
+	if !util.IsIP(config.Server) {
+		ips, err := net.LookupHost(config.Server)
+		if err != nil {
+			return nil, err
+		}
+		ss.serverIPs = ips
+	}
+
 	go ss.printStatistics()
 
-	return ss
+	return ss, nil
 }
 
 func (ss *Easyss) InitTcpPool() error {

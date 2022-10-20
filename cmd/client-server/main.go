@@ -91,6 +91,9 @@ func main() {
 		log.Fatalln("server address, server port and password should not empty")
 	}
 
-	ss := easyss.New(config)
+	ss, err := easyss.New(config)
+	if err != nil {
+		log.Fatalf("new easyss server err:%v", err)
+	}
 	StartEasyss(ss)
 }
