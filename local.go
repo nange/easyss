@@ -66,7 +66,7 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 }
 
 func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) error {
-	return ss.handle.UDPHandle(s, addr, d)
+	return socks5.ErrUnsupportCmd
 }
 
 var paddingBytes = util.NewBytes(cipherstream.PaddingSize)

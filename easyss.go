@@ -3,7 +3,6 @@ package easyss
 import (
 	"crypto/tls"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"sync/atomic"
@@ -26,11 +25,9 @@ type Statistics struct {
 }
 
 type Easyss struct {
-	config        *Config
-	tcpPool       easypool.Pool
-	handle        *socks5.DefaultHandle
-	LogFileWriter io.Writer
-	stat          *Statistics
+	config  *Config
+	tcpPool easypool.Pool
+	stat    *Statistics
 
 	socksServer     *socks5.Server
 	httpProxyServer *http.Server
@@ -39,7 +36,6 @@ type Easyss struct {
 func New(config *Config) *Easyss {
 	ss := &Easyss{
 		config: config,
-		handle: &socks5.DefaultHandle{},
 		stat:   &Statistics{},
 	}
 	go ss.printStatistics()
