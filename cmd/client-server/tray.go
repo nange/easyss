@@ -44,17 +44,17 @@ func (st *SysTray) TrayReady() {
 
 	st.StartLocalService()
 
-	st.addSelectConfMenu()
+	st.AddSelectConfMenu()
 	systray.AddSeparator()
-	st.addPACMenu()
+	st.AddPACMenu()
 	systray.AddSeparator()
-	st.addCatLogsMenu()
+	st.AddCatLogsMenu()
 	systray.AddSeparator()
-	st.addExitMenu()
+	st.AddExitMenu()
 
 }
 
-func (st *SysTray) addSelectConfMenu() *systray.MenuItem {
+func (st *SysTray) AddSelectConfMenu() *systray.MenuItem {
 	selectConf := systray.AddMenuItem("选择配置", "请选择")
 
 	var confList []*menu
@@ -107,7 +107,7 @@ func (st *SysTray) addSelectConfMenu() *systray.MenuItem {
 	return selectConf
 }
 
-func (st *SysTray) addPACMenu() (*systray.MenuItem, *systray.MenuItem) {
+func (st *SysTray) AddPACMenu() (*systray.MenuItem, *systray.MenuItem) {
 	pac := systray.AddMenuItemCheckbox("启用PAC(自动代理)", "启用PAC", true)
 	systray.AddSeparator()
 	gPac := systray.AddMenuItemCheckbox("全局代理模式", "全局模式", false)
@@ -163,7 +163,7 @@ func (st *SysTray) addPACMenu() (*systray.MenuItem, *systray.MenuItem) {
 	return pac, gPac
 }
 
-func (st *SysTray) addCatLogsMenu() *systray.MenuItem {
+func (st *SysTray) AddCatLogsMenu() *systray.MenuItem {
 	catLog := systray.AddMenuItem("查看Easyss运行日志", "查看日志")
 
 	go func() {
@@ -181,7 +181,7 @@ func (st *SysTray) addCatLogsMenu() *systray.MenuItem {
 	return catLog
 }
 
-func (st *SysTray) addExitMenu() *systray.MenuItem {
+func (st *SysTray) AddExitMenu() *systray.MenuItem {
 	quit := systray.AddMenuItem("退出", "退出Easyss APP")
 
 	go func() {
