@@ -88,10 +88,6 @@ func (ss *Easyss) BindAll() bool {
 	return ss.config.BindALL
 }
 
-func (ss *Easyss) Server() string {
-	return fmt.Sprintf("%s:%d", ss.config.Server, ss.config.ServerPort)
-}
-
 func (ss *Easyss) ConfigFilename() string {
 	if ss.config.ConfigFile == "" {
 		return ""

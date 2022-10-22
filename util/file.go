@@ -3,8 +3,7 @@ package util
 import (
 	"os"
 	"path/filepath"
-	"io/ioutil"
-	
+
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	rotate "github.com/snowzach/rotatefilehook"
@@ -41,17 +40,6 @@ func LogFilePath() string {
 	return filepath.Join(dir, filename)
 }
 
-func RotateFileHook() (log.Hook, error) {
-	return rotate.NewRotateFileHook(rotate.RotateFileConfig{
-		Filename:   LogFileName,
-		MaxSize:    LogMaxSize,
-		MaxBackups: LogMaxBackups,
-		MaxAge:     LogMaxAge,
-		Level:      log.InfoLevel,
-		Formatter:  &log.JSONFormatter{TimestampFormat: "2006-01-02 15:04:05.000"},
-	})
-}
-
 func SetLogFileHook(logDir string) {
 	logFilePath := filepath.Join(logDir, LogFileName)
 	hook, err := rotate.NewRotateFileHook(rotate.RotateFileConfig{
@@ -69,13 +57,16 @@ func SetLogFileHook(logDir string) {
 }
 
 func DirFileList(dir string) ([]string, error) {
-	var files []string
-	list, err := ioutil.ReadDir(dir)
+	list, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
+
+	var files []string
 	for _, v := range list {
-		files = append(files, v.Name())
+		if !v.IsDir() {
+			files = append(files, v.Name())
+		}
 	}
 	return files, nil
 }
