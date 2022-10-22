@@ -35,10 +35,7 @@ func (ss *Easyss) LocalSocks5() error {
 	}
 	ss.socksServer = server
 
-	if err := server.ListenAndServe(ss); err != nil {
-		log.Errorf("socks5 server run err: %+v", err)
-		return err
-	}
+	log.Warnf("local socks5 server:%s", server.ListenAndServe(ss))
 
 	return nil
 }

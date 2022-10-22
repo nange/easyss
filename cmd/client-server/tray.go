@@ -72,14 +72,16 @@ func (st *SysTray) AddSelectConfMenu() *systray.MenuItem {
 					log.Debugf("change config: %v", fileName)
 					config, err := easyss.ParseConfig(fileName)
 					if err != nil {
-						log.Fatalf("parse config file:%v", err)
+						log.Errorf("parse config file:%v", err)
 					}
 					if err := st.RestartService(config); err != nil {
-						log.Fatalf("restarting systray err:%v", err)
+						log.Errorf("restarting systray err:%v", err)
 					}
 				},
 			})
 		}
+	} else {
+		log.Errorf("read file list err:%v", err)
 	}
 
 	var miArr []*systray.MenuItem

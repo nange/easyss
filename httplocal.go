@@ -43,10 +43,7 @@ func (ss *Easyss) LocalHttp() error {
 	server := &http.Server{Addr: addr, Handler: prx}
 	ss.httpProxyServer = server
 
-	if err := server.ListenAndServe(); err != nil {
-		log.Errorf("http server start err:%+v", errors.WithStack(err))
-		return err
-	}
+	log.Warnf("local http proxy server:%s", server.ListenAndServe())
 
 	return nil
 }

@@ -93,7 +93,7 @@ func (p *PAC) LocalPAC() {
 	server := &http.Server{Addr: addr, Handler: handler}
 	p.server = server
 
-	log.Errorf("pac http server err:%v", server.ListenAndServe())
+	log.Warnf("pac http server err:%s", server.ListenAndServe())
 }
 
 func (p *PAC) pacOn(path string) error {
