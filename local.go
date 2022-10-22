@@ -142,7 +142,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		return
 	}
 
-	n1, n2, needClose := relay(csStream, localConn)
+	n1, n2, needClose := ss.relay(csStream, localConn)
 	csStream.(*cipherstream.CipherStream).Release()
 
 	log.Debugf("send %v bytes to %v, and recive %v bytes", n1, addr, n2)

@@ -16,7 +16,7 @@ var connStateBytes = util.NewBytes(32)
 // relay copies between cipher stream and plaintext stream.
 // return the number of bytes copies
 // from plaintext stream to cipher stream, from cipher stream to plaintext stream, and needClose on server conn
-func relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needClose bool) {
+func (ss *Easyss) relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needClose bool) {
 	type res struct {
 		N   int64
 		Err error
@@ -91,7 +91,7 @@ func relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needClose b
 		return
 	}
 
-	setCipherDeadline(cipher)
+	setCipherDeadline(cipher, ss.config.Timeout)
 	if state == nil {
 		log.Infof("unexcepted state, some unexcepted error occor, maybe client connection is closed")
 		needClose = true
@@ -146,11 +146,11 @@ func expireConn(conn io.ReadWriteCloser) {
 	}
 }
 
-func setCipherDeadline(cipher io.ReadWriteCloser) {
+func setCipherDeadline(cipher io.ReadWriteCloser, sec int) {
 	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
 		if conn, ok := cs.ReadWriteCloser.(net.Conn); ok {
 			log.Debugf("set cipher tcp connection deadline to 30 second later")
-			conn.SetDeadline(time.Now().Add(30 * time.Second))
+			conn.SetDeadline(time.Now().Add(time.Duration(sec) * time.Second))
 		}
 	}
 }

@@ -83,7 +83,7 @@ func (ss *Easyss) tcpServer() {
 					return
 				}
 
-				n1, n2, needClose := relay(csStream, tconn)
+				n1, n2, needClose := ss.relay(csStream, tconn)
 				csStream.(*cipherstream.CipherStream).Release()
 
 				log.Debugf("send %v bytes to %v, and recive %v bytes, needclose:%v", n2, addrStr, n1, needClose)
