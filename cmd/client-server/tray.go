@@ -189,6 +189,7 @@ func (st *SysTray) addExitMenu() *systray.MenuItem {
 			select {
 			case <-quit.ClickedCh:
 				log.Debugf("exit btn clicked quit now...")
+				st.closing <- struct{}{}
 				systray.Quit()
 			}
 		}
@@ -225,7 +226,6 @@ func (st *SysTray) CloseService() {
 }
 
 func (st *SysTray) Exit() {
-	st.closing <- struct{}{}
 	st.CloseService()
 	log.Info("systray exiting...")
 }
