@@ -16,8 +16,8 @@ func StartEasyss(ss *easyss.Easyss) {
 		log.Errorf("init tcp pool error:%v", err)
 	}
 
-	go ss.Local()     // start local server
-	go ss.HttpLocal() // start local http proxy server
+	go ss.LocalSocks5() // start local server
+	go ss.LocalHttp()   // start local http proxy server
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Kill, os.Interrupt, syscall.SIGINT, syscall.SIGTERM,
