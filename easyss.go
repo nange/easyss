@@ -44,17 +44,16 @@ func New(config *Config) (*Easyss, error) {
 		closing: make(chan struct{}, 1),
 	}
 
+	var err error
+	var ips []string
 	if !util.IsIP(config.Server) {
-		ips, err := net.LookupHost(config.Server)
-		if err != nil {
-			return nil, err
-		}
+		ips, err = net.LookupHost(config.Server)
 		ss.serverIPs = ips
 	}
 
 	go ss.printStatistics()
 
-	return ss, nil
+	return ss, err
 }
 
 func (ss *Easyss) InitTcpPool() error {

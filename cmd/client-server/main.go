@@ -93,7 +93,7 @@ func main() {
 
 	ss, err := easyss.New(config)
 	if err != nil {
-		log.Fatalf("new easyss server err:%v", err)
+		log.Errorf("new easyss server err:%v", err)
 	}
 	StartEasyss(ss)
 }
