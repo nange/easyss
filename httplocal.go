@@ -9,7 +9,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func (ss *Easyss) HttpLocal() error {
+func (ss *Easyss) LocalHttp() error {
 	prx, err := httpproxy.NewProxy()
 	if err != nil {
 		log.Errorf("new http proxy err:%+v", errors.WithStack(err))

@@ -2,7 +2,7 @@ package easyss
 
 import (
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"os"
 	"reflect"
 
@@ -17,6 +17,7 @@ type Config struct {
 	Method     string `json:"method"` // encryption method
 	Timeout    int    `json:"timeout"`
 	BindALL    bool   `json:"bind_all"`
+	ConfigFile string
 }
 
 func ParseConfig(path string) (config *Config, err error) {
@@ -27,7 +28,7 @@ func ParseConfig(path string) (config *Config, err error) {
 	}
 	defer file.Close()
 
-	data, err := ioutil.ReadAll(file)
+	data, err := io.ReadAll(file)
 	if err != nil {
 		err = errors.WithStack(err)
 		return

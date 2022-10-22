@@ -4,5 +4,5 @@ import (
 	_ "embed"
 )
 
-//go:embed icon_256_256.ico
+//go:embed icon_32_32.png
 var Data []byte

@@ -40,17 +40,6 @@ func LogFilePath() string {
 	return filepath.Join(dir, filename)
 }
 
-func RotateFileHook() (log.Hook, error) {
-	return rotate.NewRotateFileHook(rotate.RotateFileConfig{
-		Filename:   LogFileName,
-		MaxSize:    LogMaxSize,
-		MaxBackups: LogMaxBackups,
-		MaxAge:     LogMaxAge,
-		Level:      log.InfoLevel,
-		Formatter:  &log.JSONFormatter{TimestampFormat: "2006-01-02 15:04:05.000"},
-	})
-}
-
 func SetLogFileHook(logDir string) {
 	logFilePath := filepath.Join(logDir, LogFileName)
 	hook, err := rotate.NewRotateFileHook(rotate.RotateFileConfig{
@@ -65,4 +54,19 @@ func SetLogFileHook(logDir string) {
 		panic(err)
 	}
 	log.AddHook(hook)
+}
+
+func DirFileList(dir string) ([]string, error) {
+	list, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	var files []string
+	for _, v := range list {
+		if !v.IsDir() {
+			files = append(files, v.Name())
+		}
+	}
+	return files, nil
 }

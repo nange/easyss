@@ -3,13 +3,14 @@ package easyss
 import (
 	"crypto/tls"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
 	"github.com/nange/easypool"
+	"github.com/nange/easyss/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
 )
@@ -26,25 +27,34 @@ type Statistics struct {
 }
 
 type Easyss struct {
-	config        *Config
-	tcpPool       easypool.Pool
-	handle        *socks5.DefaultHandle
-	LogFileWriter io.Writer
-	stat          *Statistics
+	config    *Config
+	tcpPool   easypool.Pool
+	serverIPs []string
+	stat      *Statistics
 
 	socksServer     *socks5.Server
 	httpProxyServer *http.Server
+	closing         chan struct{}
 }
 
-func New(config *Config) *Easyss {
+func New(config *Config) (*Easyss, error) {
 	ss := &Easyss{
-		config: config,
-		handle: &socks5.DefaultHandle{},
-		stat:   &Statistics{},
+		config:  config,
+		stat:    &Statistics{},
+		closing: make(chan struct{}, 1),
 	}
+
+	if !util.IsIP(config.Server) {
+		ips, err := net.LookupHost(config.Server)
+		if err != nil {
+			return nil, err
+		}
+		ss.serverIPs = ips
+	}
+
 	go ss.printStatistics()
 
-	return ss
+	return ss, nil
 }
 
 func (ss *Easyss) InitTcpPool() error {
@@ -80,6 +90,13 @@ func (ss *Easyss) BindAll() bool {
 	return ss.config.BindALL
 }
 
+func (ss *Easyss) ConfigFilename() string {
+	if ss.config.ConfigFile == "" {
+		return ""
+	}
+	return filepath.Base(ss.config.ConfigFile)
+}
+
 func (ss *Easyss) Close() {
 	if ss.tcpPool != nil {
 		ss.tcpPool.Close()
@@ -93,6 +110,10 @@ func (ss *Easyss) Close() {
 		ss.socksServer.Shutdown()
 		ss.socksServer = nil
 	}
+	if ss.closing != nil {
+		close(ss.closing)
+		ss.closing = nil
+	}
 }
 
 func (ss *Easyss) printStatistics() {
@@ -100,8 +121,10 @@ func (ss *Easyss) printStatistics() {
 		select {
 		case <-time.After(time.Minute):
 			sendSize := atomic.LoadInt64(&ss.stat.BytesSend) / (1024 * 1024)
-			reciveSize := atomic.LoadInt64(&ss.stat.BytesRecive) / (1024 * 1024)
-			log.Debugf("easyss send data size: %vMB, recive data size: %vMB", sendSize, reciveSize)
+			receiveSize := atomic.LoadInt64(&ss.stat.BytesRecive) / (1024 * 1024)
+			log.Debugf("easyss send data size: %vMB, recive data size: %vMB", sendSize, receiveSize)
+		case <-ss.closing:
+			return
 		}
 	}
 }
