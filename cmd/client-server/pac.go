@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"text/template"
 
 	"github.com/getlantern/pac"
@@ -32,6 +33,9 @@ type PAC struct {
 	url       string
 	gurl      string
 	bindAll   bool
+	on        atomic.Bool
+
+	server *http.Server
 }
 
 func NewPAC(localPort int, path, url string, BindAll bool) *PAC {
@@ -42,22 +46,24 @@ func NewPAC(localPort int, path, url string, BindAll bool) *PAC {
 		url:       url,
 		gurl:      url + "?global=true",
 		bindAll:   BindAll,
+		on:        atomic.Bool{},
 	}
 }
 
-func (p *PAC) SysPAC() {
+func (p *PAC) LocalPAC() {
 	tpl, err := template.New(p.path).Parse(pacTxt)
 	if err != nil {
 		log.Fatalf("template parse pac err:%v", err)
 	}
 
-	http.HandleFunc(p.path, func(w http.ResponseWriter, r *http.Request) {
-		gloabl := false
+	handler := http.NewServeMux()
+	handler.HandleFunc(p.path, func(w http.ResponseWriter, r *http.Request) {
+		global := false
 
 		r.ParseForm()
 		globalStr := r.Form.Get("global")
 		if globalStr == "true" {
-			gloabl = true
+			global = true
 		}
 
 		w.Header().Set("Content-Type", "text/javascript; charset=UTF-8")
@@ -65,14 +71,14 @@ func (p *PAC) SysPAC() {
 			"Port":       strconv.Itoa(p.localPort),
 			"Socks5Port": strconv.Itoa(p.localPort),
 			"HttpPort":   strconv.Itoa(p.localPort + 1000),
-			"Global":     gloabl,
+			"Global":     global,
 		})
 	})
 
 	if err := p.pacOn(p.url); err != nil {
 		log.Fatalf("set system pac err:%v", err)
 	}
-	defer p.pacOff(p.url)
+	p.on.Store(true)
 
 	go p.pacManage()
 
@@ -84,7 +90,10 @@ func (p *PAC) SysPAC() {
 	}
 	log.Infof("starting pac server at :%v", addr)
 
-	log.Fatalln(http.ListenAndServe(addr, nil))
+	server := &http.Server{Addr: addr, Handler: handler}
+	p.server = server
+
+	log.Errorf("pac http server err:%v", server.ListenAndServe())
 }
 
 func (p *PAC) pacOn(path string) error {
@@ -107,14 +116,25 @@ func (p *PAC) pacManage() {
 		switch status {
 		case PACON:
 			p.pacOn(p.url)
+			p.on.Store(true)
 		case PACOFF:
 			p.pacOff(p.url)
+			p.on.Store(false)
 		case PACONGLOBAL:
 			p.pacOn(p.gurl)
+			p.on.Store(true)
 		case PACOFFGLOBAL:
 			p.pacOff(p.gurl)
 		default:
 			log.Errorf("unknown pac status:%v", status)
 		}
 	}
+}
+
+func (p *PAC) Close() {
+	if p.on.Load() {
+		p.pacOff(p.url)
+	}
+	close(p.ch)
+	p.server.Close()
 }

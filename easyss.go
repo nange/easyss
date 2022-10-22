@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -91,9 +92,11 @@ func (ss *Easyss) Server() string {
 	return fmt.Sprintf("%s:%d", ss.config.Server, ss.config.ServerPort)
 }
 
-func (ss *Easyss) UpdateConfig(config *Config) bool {
-	ss.config = config
-	return true
+func (ss *Easyss) ConfigFilename() string {
+	if ss.config.ConfigFile == "" {
+		return ""
+	}
+	return filepath.Base(ss.config.ConfigFile)
 }
 
 func (ss *Easyss) Close() {

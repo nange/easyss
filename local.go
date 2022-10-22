@@ -18,7 +18,7 @@ import (
 
 var dataHeaderBytes = util.NewBytes(util.Http2HeaderLen)
 
-func (ss *Easyss) Local() error {
+func (ss *Easyss) LocalSocks5() error {
 	var addr string
 	if ss.BindAll() {
 		addr = ":" + strconv.Itoa(ss.LocalPort())

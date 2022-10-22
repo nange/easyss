@@ -26,12 +26,12 @@ func init() {
 }
 
 func main() {
-	var configFile, logLevel string
+	var logLevel string
 	var printVer, godaemon bool
 	var cmdConfig easyss.Config
 
 	flag.BoolVar(&printVer, "version", false, "print version")
-	flag.StringVar(&configFile, "c", "config.json", "specify config file")
+	flag.StringVar(&cmdConfig.ConfigFile, "c", "config.json", "specify config file")
 	flag.StringVar(&cmdConfig.Server, "s", "", "server address")
 	flag.StringVar(&cmdConfig.Password, "k", "", "password")
 	flag.IntVar(&cmdConfig.ServerPort, "p", 0, "server port")
@@ -66,21 +66,21 @@ func main() {
 		log.SetLevel(log.InfoLevel)
 	}
 
-	exists, err := util.FileExists(configFile)
+	exists, err := util.FileExists(cmdConfig.ConfigFile)
 	if !exists || err != nil {
 		log.Debugf("config file err:%v", err)
 
 		binDir := util.CurrentDir()
-		configFile = path.Join(binDir, "config.json")
+		cmdConfig.ConfigFile = path.Join(binDir, "config.json")
 
-		log.Debugf("config file not found, try config file %s", configFile)
+		log.Debugf("config file not found, try config file %s", cmdConfig.ConfigFile)
 	}
 
-	config, err := easyss.ParseConfig(configFile)
+	config, err := easyss.ParseConfig(cmdConfig.ConfigFile)
 	if err != nil {
 		config = &cmdConfig
 		if !os.IsNotExist(errors.Cause(err)) {
-			log.Errorf("error reading %s: %+v", configFile, err)
+			log.Errorf("error reading %s: %+v", cmdConfig.ConfigFile, err)
 			os.Exit(1)
 		}
 	} else {
