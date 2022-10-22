@@ -34,12 +34,14 @@ type Easyss struct {
 
 	socksServer     *socks5.Server
 	httpProxyServer *http.Server
+	closing         chan struct{}
 }
 
 func New(config *Config) (*Easyss, error) {
 	ss := &Easyss{
-		config: config,
-		stat:   &Statistics{},
+		config:  config,
+		stat:    &Statistics{},
+		closing: make(chan struct{}, 1),
 	}
 
 	if !util.IsIP(config.Server) {
@@ -108,6 +110,10 @@ func (ss *Easyss) Close() {
 		ss.socksServer.Shutdown()
 		ss.socksServer = nil
 	}
+	if ss.closing != nil {
+		close(ss.closing)
+		ss.closing = nil
+	}
 }
 
 func (ss *Easyss) printStatistics() {
@@ -115,8 +121,10 @@ func (ss *Easyss) printStatistics() {
 		select {
 		case <-time.After(time.Minute):
 			sendSize := atomic.LoadInt64(&ss.stat.BytesSend) / (1024 * 1024)
-			reciveSize := atomic.LoadInt64(&ss.stat.BytesRecive) / (1024 * 1024)
-			log.Debugf("easyss send data size: %vMB, recive data size: %vMB", sendSize, reciveSize)
+			receiveSize := atomic.LoadInt64(&ss.stat.BytesRecive) / (1024 * 1024)
+			log.Debugf("easyss send data size: %vMB, recive data size: %vMB", sendSize, receiveSize)
+		case <-ss.closing:
+			return
 		}
 	}
 }
