@@ -23,10 +23,6 @@ remote-server:
 	cd cmd/remote-server; \
 	$(GO) build -o remote-server
 
-easyss-android:
-	cd cmd/easyss; \
-	fyne package -os android/arm64
-
 vet:
 	$(GO) vet ./...; \
 	$(GO) vet -tags "with_notray " ./...
