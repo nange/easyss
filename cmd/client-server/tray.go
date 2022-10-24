@@ -112,7 +112,7 @@ func (st *SysTray) AddSelectConfMenu() *systray.MenuItem {
 func (st *SysTray) AddPACMenu() (*systray.MenuItem, *systray.MenuItem) {
 	pac := systray.AddMenuItemCheckbox("启用PAC(自动代理)", "启用PAC", true)
 	systray.AddSeparator()
-	gPac := systray.AddMenuItemCheckbox("全局代理模式", "全局模式", false)
+	gPac := systray.AddMenuItemCheckbox("启用PAC(全局代理)", "全局模式", false)
 
 	go func() {
 		for {
