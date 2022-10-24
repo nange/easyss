@@ -2,11 +2,8 @@ package easyss
 
 import (
 	"fmt"
-	"io"
 	"net"
 	"strconv"
-	"strings"
-	"sync/atomic"
 
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/cipherstream"
@@ -33,7 +30,7 @@ func (ss *Easyss) LocalSocks5() error {
 		log.Errorf("new socks5 server err: %+v", err)
 		return err
 	}
-	ss.socksServer = server
+	ss.SetSocksServer(server)
 
 	log.Warnf("local socks5 server:%s", server.ListenAndServe(ss))
 
@@ -73,24 +70,28 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 var paddingBytes = util.NewBytes(cipherstream.PaddingSize)
 
 func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
-	var stream io.ReadWriteCloser
-	stream, err = ss.tcpPool.Get()
+	pool := ss.Pool()
+	if pool == nil {
+		return errors.New("easyss is closed")
+	}
+
+	stream, err := pool.Get()
 	if err != nil {
 		log.Errorf("get stream from pool failed:%+v", err)
 		return
 	}
 
-	log.Debugf("after pool get: current tcp pool has %v connections", ss.tcpPool.Len())
+	log.Debugf("after pool get: current tcp pool has %v connections", pool.Len())
 	defer func() {
 		stream.Close()
-		log.Debugf("after stream close: current tcp pool has %v connections", ss.tcpPool.Len())
+		log.Debugf("after stream close: current tcp pool has %v connections", pool.Len())
 	}()
 
 	header := dataHeaderBytes.Get(util.Http2HeaderLen)
 	defer dataHeaderBytes.Put(header)
 
 	header = util.EncodeHTTP2DataFrameHeader(len(addr)+1, header)
-	gcm, err := cipherstream.NewAes256GCM([]byte(ss.config.Password))
+	gcm, err := cipherstream.NewAes256GCM([]byte(ss.Password()))
 	if err != nil {
 		log.Errorf("cipherstream.NewAes256GCM err:%+v", err)
 		return
@@ -101,9 +102,9 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		log.Errorf("gcm.Encrypt err:%+v", err)
 		return
 	}
-	cipherMethod := EncodeCipherMethod(ss.config.Method)
+	cipherMethod := EncodeCipherMethod(ss.Method())
 	if cipherMethod == 0 {
-		log.Errorf("unsupported cipher method:%+v", ss.config.Method)
+		log.Errorf("unsupported cipher method:%+v", ss.Method())
 		return
 	}
 	payloadCipher, err := gcm.Encrypt(append([]byte(addr), cipherMethod))
@@ -135,10 +136,10 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		return
 	}
 
-	csStream, err := cipherstream.New(stream, ss.config.Password, ss.config.Method)
+	csStream, err := cipherstream.New(stream, ss.Password(), ss.Method())
 	if err != nil {
 		log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
-			err, ss.config.Password, ss.config.Method)
+			err, ss.Password(), ss.Method())
 		return
 	}
 
@@ -150,21 +151,20 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		log.Debugf("underline connection is health, so reuse it")
 	}
 
-	atomic.AddInt64(&ss.stat.BytesSend, n1)
-	atomic.AddInt64(&ss.stat.BytesRecive, n2)
+	ss.stat.BytesSend.Add(n1)
+	ss.stat.BytesRecive.Add(n2)
 
 	return
 }
 
 func (ss *Easyss) ValidateRequest(r *socks5.Request) error {
-	addrs := strings.Split(r.Address(), ":")
-	if len(addrs) != 2 {
-		return fmt.Errorf("invalid target address:%v", r.Address())
+	host, _, err := net.SplitHostPort(r.Address())
+	if err != nil {
+		return fmt.Errorf("invalid target address:%v, err:%v", r.Address(), err)
 	}
 
-	host := addrs[0]
 	if !util.IsIP(host) {
-		if host == ss.config.Server {
+		if host == ss.Server() {
 			return fmt.Errorf("target host equals to server host, which may caused infinite-loop")
 		}
 		return nil

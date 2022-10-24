@@ -69,7 +69,7 @@ func (st *SysTray) AddSelectConfMenu() *systray.MenuItem {
 			confList = append(confList, &menu{
 				Title: fileName,
 				OnClick: func(m *systray.MenuItem) {
-					log.Debugf("change config: %v", fileName)
+					log.Infof("changing config to: %v", fileName)
 					config, err := easyss.ParseConfig(fileName)
 					if err != nil {
 						log.Errorf("parse config file:%v", err)
@@ -249,12 +249,14 @@ func (st *SysTray) StartLocalService() {
 }
 
 func (st *SysTray) RestartService(config *easyss.Config) error {
+	st.CloseService()
+
 	ss, err := easyss.New(config)
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("http://localhost:%d%s", ss.LocalPort()+1, PacPath)
-	pac := NewPAC(ss.LocalPort(), PacPath, url, ss.BindAll())
+	url := fmt.Sprintf("http://localhost:%d%s", ss.LocalPacPort(), PacPath)
+	pac := NewPAC(ss.LocalPort(), ss.LocalHttpProxyPort(), ss.LocalPacPort(), PacPath, url, ss.BindAll())
 
 	st.SetSS(ss)
 	st.SetPAC(pac)

@@ -91,7 +91,7 @@ func (ss *Easyss) relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64
 		return
 	}
 
-	setCipherDeadline(cipher, ss.config.Timeout)
+	setCipherDeadline(cipher, ss.Timeout())
 	if state == nil {
 		log.Infof("unexcepted state, some unexcepted error occor, maybe client connection is closed")
 		needClose = true

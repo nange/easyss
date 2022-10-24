@@ -32,16 +32,15 @@ func (ss *Easyss) LocalHttp() error {
 	prx.OnForward = onForward
 
 	var addr string
-	var httpPort = ss.config.LocalPort + 1000
 	if ss.BindAll() {
-		addr = ":" + strconv.Itoa(httpPort)
+		addr = ":" + strconv.Itoa(ss.LocalHttpProxyPort())
 	} else {
-		addr = "127.0.0.1:" + strconv.Itoa(httpPort)
+		addr = "127.0.0.1:" + strconv.Itoa(ss.LocalHttpProxyPort())
 	}
 	log.Infof("starting http server at :%v", addr)
 
 	server := &http.Server{Addr: addr, Handler: prx}
-	ss.httpProxyServer = server
+	ss.SetHttpProxyServer(server)
 
 	log.Warnf("local http proxy server:%s", server.ListenAndServe())
 

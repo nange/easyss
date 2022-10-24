@@ -27,26 +27,30 @@ const (
 )
 
 type PAC struct {
-	path      string
-	localPort int
-	ch        chan PACStatus
-	url       string
-	gurl      string
-	bindAll   bool
-	on        atomic.Bool
+	path          string
+	localPort     int
+	localHttpPort int
+	localPacPort  int
+	ch            chan PACStatus
+	url           string
+	gurl          string
+	bindAll       bool
+	on            atomic.Bool
 
 	server *http.Server
 }
 
-func NewPAC(localPort int, path, url string, BindAll bool) *PAC {
+func NewPAC(localPort, localHttpPort, localPacPort int, path, url string, BindAll bool) *PAC {
 	return &PAC{
-		path:      path,
-		localPort: localPort,
-		ch:        make(chan PACStatus, 1),
-		url:       url,
-		gurl:      url + "?global=true",
-		bindAll:   BindAll,
-		on:        atomic.Bool{},
+		path:          path,
+		localPort:     localPort,
+		localHttpPort: localHttpPort,
+		localPacPort:  localPacPort,
+		ch:            make(chan PACStatus, 1),
+		url:           url,
+		gurl:          url + "?global=true",
+		bindAll:       BindAll,
+		on:            atomic.Bool{},
 	}
 }
 
@@ -70,7 +74,7 @@ func (p *PAC) LocalPAC() {
 		tpl.Execute(w, map[string]interface{}{
 			"Port":       strconv.Itoa(p.localPort),
 			"Socks5Port": strconv.Itoa(p.localPort),
-			"HttpPort":   strconv.Itoa(p.localPort + 1000),
+			"HttpPort":   strconv.Itoa(p.localHttpPort),
 			"Global":     global,
 		})
 	})
@@ -84,11 +88,11 @@ func (p *PAC) LocalPAC() {
 
 	var addr string
 	if p.bindAll {
-		addr = ":" + strconv.Itoa(p.localPort+1)
+		addr = ":" + strconv.Itoa(p.localPacPort)
 	} else {
-		addr = "127.0.0.1:" + strconv.Itoa(p.localPort+1)
+		addr = "127.0.0.1:" + strconv.Itoa(p.localPacPort)
 	}
-	log.Infof("starting pac server at :%v", addr)
+	log.Infof("starting pac server at %v", addr)
 
 	server := &http.Server{Addr: addr, Handler: handler}
 	p.server = server

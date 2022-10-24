@@ -16,8 +16,8 @@ import (
 const PacPath = "/proxy.pac"
 
 func StartEasyss(ss *easyss.Easyss) {
-	url := fmt.Sprintf("http://localhost:%d%s", ss.LocalPort()+1, PacPath)
-	pac := NewPAC(ss.LocalPort(), PacPath, url, ss.BindAll())
+	url := fmt.Sprintf("http://localhost:%d%s", ss.LocalPacPort(), PacPath)
+	pac := NewPAC(ss.LocalPort(), ss.LocalHttpProxyPort(), ss.LocalPacPort(), PacPath, url, ss.BindAll())
 	st := NewSysTray(ss, pac)
 
 	go func() {

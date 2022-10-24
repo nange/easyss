@@ -6,7 +6,6 @@ import (
 	"io"
 	"net"
 	"strconv"
-	"sync/atomic"
 
 	"github.com/caddyserver/certmagic"
 	"github.com/nange/easyss/cipherstream"
@@ -22,8 +21,8 @@ func (ss *Easyss) Remote() {
 }
 
 func (ss *Easyss) tcpServer() {
-	addr := ":" + strconv.Itoa(ss.config.ServerPort)
-	tlsConfig, err := certmagic.TLS([]string{ss.config.Server})
+	addr := ":" + strconv.Itoa(ss.ServerPort())
+	tlsConfig, err := certmagic.TLS([]string{ss.Server()})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -44,7 +43,7 @@ func (ss *Easyss) tcpServer() {
 		go func() {
 			defer conn.Close()
 			for {
-				addr, ciphermethod, err := handShake(conn, ss.config.Password)
+				addr, ciphermethod, err := handShake(conn, ss.Password())
 				if err != nil {
 					if errors.Is(err, io.EOF) {
 						log.Debugf("got EOF error when handShake with client-server, maybe the connection pool closed the idle conn")
@@ -76,10 +75,10 @@ func (ss *Easyss) tcpServer() {
 					return
 				}
 
-				csStream, err := cipherstream.New(conn, ss.config.Password, ciphermethod)
+				csStream, err := cipherstream.New(conn, ss.Password(), ciphermethod)
 				if err != nil {
 					log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
-						err, ss.config.Password, ss.config.Method)
+						err, ss.Password(), ss.Method())
 					return
 				}
 
@@ -88,8 +87,8 @@ func (ss *Easyss) tcpServer() {
 
 				log.Debugf("send %v bytes to %v, and recive %v bytes, needclose:%v", n2, addrStr, n1, needClose)
 
-				atomic.AddInt64(&ss.stat.BytesSend, n2)
-				atomic.AddInt64(&ss.stat.BytesRecive, n1)
+				ss.stat.BytesSend.Add(n2)
+				ss.stat.BytesRecive.Add(n1)
 
 				tconn.Close()
 				if needClose {
