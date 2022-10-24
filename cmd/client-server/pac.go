@@ -92,7 +92,7 @@ func (p *PAC) LocalPAC() {
 	} else {
 		addr = "127.0.0.1:" + strconv.Itoa(p.localPacPort)
 	}
-	log.Infof("starting pac server at %v", addr)
+	log.Infof("starting local pac server at %v", addr)
 
 	server := &http.Server{Addr: addr, Handler: handler}
 	p.server = server

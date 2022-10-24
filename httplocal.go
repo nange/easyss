@@ -37,7 +37,7 @@ func (ss *Easyss) LocalHttp() error {
 	} else {
 		addr = "127.0.0.1:" + strconv.Itoa(ss.LocalHttpProxyPort())
 	}
-	log.Infof("starting http server at :%v", addr)
+	log.Infof("starting local http-proxy server at %v", addr)
 
 	server := &http.Server{Addr: addr, Handler: prx}
 	ss.SetHttpProxyServer(server)

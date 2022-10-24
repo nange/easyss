@@ -69,7 +69,7 @@ func (ss *Easyss) tcpServer() {
 
 				log.Infof("target proxy addr is:%v", addrStr)
 
-				tconn, err := net.Dial("tcp", addrStr)
+				tconn, err := net.DialTimeout("tcp", addrStr, ss.Timeout())
 				if err != nil {
 					log.Errorf("net.Dial %v err:%v", addrStr, err)
 					return

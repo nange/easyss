@@ -1,6 +1,7 @@
 package easyss
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -61,7 +62,11 @@ func New(config *Config) (*Easyss, error) {
 
 func (ss *Easyss) InitTcpPool() error {
 	factory := func() (net.Conn, error) {
-		return tls.Dial("tcp", fmt.Sprintf("%s:%d", ss.config.Server, ss.config.ServerPort), nil)
+		ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
+		defer cancel()
+
+		dialer := new(tls.Dialer)
+		return dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", ss.Server(), ss.ServerPort()))
 	}
 	config := &easypool.PoolConfig{
 		InitialCap:  10,
@@ -104,8 +109,8 @@ func (ss *Easyss) Server() string {
 	return ss.config.Server
 }
 
-func (ss *Easyss) Timeout() int {
-	return ss.config.Timeout
+func (ss *Easyss) Timeout() time.Duration {
+	return time.Duration(ss.config.Timeout) * time.Second
 }
 
 func (ss *Easyss) LocalAddr() string {

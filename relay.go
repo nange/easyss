@@ -146,11 +146,11 @@ func expireConn(conn io.ReadWriteCloser) {
 	}
 }
 
-func setCipherDeadline(cipher io.ReadWriteCloser, sec int) {
+func setCipherDeadline(cipher io.ReadWriteCloser, sec time.Duration) {
 	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
 		if conn, ok := cs.ReadWriteCloser.(net.Conn); ok {
 			log.Debugf("set cipher tcp connection deadline to 30 second later")
-			conn.SetDeadline(time.Now().Add(time.Duration(sec) * time.Second))
+			conn.SetDeadline(time.Now().Add(sec))
 		}
 	}
 }
