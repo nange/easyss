@@ -77,3 +77,18 @@ func UpdateConfig(old, ne *Config) {
 		old.Timeout = 60
 	}
 }
+
+func ExampleJSONConfig() string {
+	example := Config{
+		Server:     "example.com",
+		ServerPort: 9999,
+		LocalPort:  2080,
+		Password:   "your-pass",
+		Method:     "aes-256-gcm",
+		Timeout:    30,
+		BindALL:    false,
+	}
+
+	b, _ := json.MarshalIndent(example, "", "    ")
+	return string(b)
+}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	_ "net/http/pprof"
@@ -52,17 +51,7 @@ func main() {
 		os.Exit(0)
 	}
 	if showConfigExample {
-		example := easyss.Config{
-			Server:     "example.com",
-			ServerPort: 9999,
-			LocalPort:  2080,
-			Password:   "your-pass",
-			Method:     "aes-256-gcm",
-			Timeout:    30,
-			BindALL:    false,
-		}
-		b, _ := json.MarshalIndent(example, "", "    ")
-		fmt.Printf("%s\n", string(b))
+		fmt.Printf("%s\n", easyss.ExampleJSONConfig())
 		os.Exit(0)
 	}
 
