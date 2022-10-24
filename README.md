@@ -9,7 +9,7 @@ easyss是一款兼容socks5的安全上网工具，目标是使访问国外技�
 
 * 支持SOCKS5,HTTP(S)代理协议
 
-* 全平台支持(Linux，MacOS，Windows，Android，iOS等)
+* 全平台支持(Linux，MacOS，Windows，Android等)
 
 * (只)支持(AEAD类型)高强度加密通信, 如aes-256-gcm, chacha20-poly1305
 
@@ -25,7 +25,7 @@ easyss是一款兼容socks5的安全上网工具，目标是使访问国外技�
 
 [去下载](https://github.com/nange/easyss/releases)
 
-### 或者 通过源码安装(go version 1.17+ is required)
+### 或者 通过源码安装(go version 1.19+ is required)
 
 ```sh
 // Ubuntu20.04 or Debian11 
@@ -34,25 +34,19 @@ apt-get install libgtk-3-dev libayatana-appindicator3-dev
 // Ubuntu18.04 or Debian10
 apt-get install libgtk-3-dev libappindicator3-dev -y
 
-// install fyne which deps by mobile client
-go install fyne.io/fyne/v2/cmd/fyne@latest
-
 // build client server
 make client-server
 
 // build remote server
 make remote-server
 
-// build android apk
-make easyss-android
 ```
 
 ## 用法
 
 ### 客户端
 
-copy本项目中的config.json文件和上面下载的二进制文件放同一目录.
-打开config.json文件, 修改里面对应的项:
+生成配置文件：`./client-server -show-config-example`
 
 * server: 服务器域名(必填，必须是域名，不能是IP)
 * server_port: 服务器对应端口(必填)
@@ -60,6 +54,7 @@ copy本项目中的config.json文件和上面下载的二进制文件放同一�
 * password: 通信加密密钥(必填)
 * method: 通信加密方式(默认aes-256-gcm)
 * timeout: 超时时间,单位秒
+* bind_all: 是否将监听端口绑定到所有本地IP上(默认false)
 
 修改完成后, 双击二进制文件，程序会自动启动，托盘会出现easyss的图标，如下:
 
