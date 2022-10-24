@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
+	"fmt"
 	_ "net/http/pprof"
 	"os"
 	"path"
@@ -27,10 +29,11 @@ func init() {
 
 func main() {
 	var logLevel string
-	var printVer, godaemon bool
+	var printVer, daemon, showConfigExample bool
 	var cmdConfig easyss.Config
 
 	flag.BoolVar(&printVer, "version", false, "print version")
+	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file")
 	flag.StringVar(&cmdConfig.ConfigFile, "c", "config.json", "specify config file")
 	flag.StringVar(&cmdConfig.Server, "s", "", "server address")
 	flag.StringVar(&cmdConfig.Password, "k", "", "password")
@@ -39,7 +42,7 @@ func main() {
 	flag.IntVar(&cmdConfig.LocalPort, "l", 0, "local socks5 proxy port")
 	flag.StringVar(&cmdConfig.Method, "m", "", "encryption method, default: aes-256-gcm")
 	flag.StringVar(&logLevel, "log-level", "info", "set the log-level(debug, info, warn, error), default: info")
-	flag.BoolVar(&godaemon, "daemon", true, "run app as a non-daemon with -daemon=false")
+	flag.BoolVar(&daemon, "daemon", true, "run app as a non-daemon with -daemon=false")
 	flag.BoolVar(&cmdConfig.BindALL, "bind-all", false, "listens on all available IPs of the local system. default: false")
 
 	flag.Parse()
@@ -48,10 +51,24 @@ func main() {
 		easyss.PrintVersion()
 		os.Exit(0)
 	}
+	if showConfigExample {
+		example := easyss.Config{
+			Server:     "example.com",
+			ServerPort: 9999,
+			LocalPort:  2080,
+			Password:   "your-pass",
+			Method:     "aes-256-gcm",
+			Timeout:    30,
+			BindALL:    false,
+		}
+		b, _ := json.MarshalIndent(example, "", "    ")
+		fmt.Printf("%s\n", string(b))
+		os.Exit(0)
+	}
 
 	if runtime.GOOS != "windows" {
 		// starting easyss as daemon only in client model,` and save logs to file`
-		easyss.Daemon(godaemon)
+		easyss.Daemon(daemon)
 	}
 
 	log.Infof("set the log-level to: %v", logLevel)
