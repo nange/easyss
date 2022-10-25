@@ -1,6 +1,6 @@
 module github.com/nange/easyss
 
-go 1.17
+go 1.19
 
 require (
 	github.com/caddyserver/certmagic v0.15.3
