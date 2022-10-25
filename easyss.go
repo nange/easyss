@@ -17,7 +17,7 @@ import (
 	"github.com/txthinking/socks5"
 )
 
-const version = "1.3.0"
+const version = "1.4.0"
 
 func PrintVersion() {
 	fmt.Println("easyss version", version)
