@@ -66,7 +66,7 @@ make remote-server
 
 手机客户端apk文件可直接在release页面下载。
 
-手机客户端是基于SagerNet扩展修改而来，源代码在[SagerNet](https://github.com/bingooo/SagerNet)，感谢 @bingooo
+手机客户端是基于SagerNet扩展修改而来，源代码在[SagerNet](https://github.com/bingooo/SagerNet)，感谢 [bingooo](https://github.com/bingooo)
 
 ### 服务器端
 
