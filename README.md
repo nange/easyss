@@ -46,7 +46,7 @@ make remote-server
 
 ### 客户端
 
-生成配置文件：`./client-server -show-config-example`
+生成配置文件示例：`./client-server -show-config-example`
 
 * server: 服务器域名(必填，必须是域名，不能是IP)
 * server_port: 服务器对应端口(必填)
@@ -58,16 +58,15 @@ make remote-server
 
 修改完成后, 双击二进制文件，程序会自动启动，托盘会出现easyss的图标，如下:
 
-![托盘图标](https://raw.githubusercontent.com/nange/easyss/master/img/tray.png)
+![托盘图标](./img/tray.png)
 
-右键图标可选择全局模式.
+右键图标可选择PAC全局模式.
 
 ### 手机客户端
 
-Easyss的手机客户端只是在本地启动一个Socks5 Server，然后再将流量加密转发到远端服务器，
-因此还需要一个程序能将系统的流量转换为Socks5协议，再转发到Easyss的Socks5端口。
+手机客户端apk文件可直接在release页面下载。
 
-推荐使用[Kitsunebi](https://github.com/eycorsican/kitsunebi-android) 配合Easyss一起使用。
+手机客户端是基于SagerNet扩展修改而来，源代码在[SagerNet](https://github.com/bingooo/SagerNet)，感谢 @bingooo
 
 ### 服务器端
 
