@@ -46,7 +46,7 @@ make remote-server
 
 ### 客户端
 
-生成配置文件示例：`./client-server -show-config-example`
+生成配置文件示例：`./client-server -show-config-example > config.json`
 
 * server: 服务器域名(必填，必须是域名，不能是IP)
 * server_port: 服务器对应端口(必填)
@@ -67,6 +67,8 @@ make remote-server
 手机客户端apk文件可直接在release页面下载。
 
 手机客户端是基于SagerNet扩展修改而来，源代码在[SagerNet](https://github.com/bingooo/SagerNet)，感谢 [bingooo](https://github.com/bingooo)
+
+创建Easyss配置项：点击右上角+图标 -> 手动输入 -> 自定义配置（配置类型选择EasySS, 将配置文件内容复制到编辑里面，保存）
 
 ### 服务器端
 
