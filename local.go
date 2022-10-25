@@ -41,7 +41,7 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 	targetAddr := r.Address()
 	log.Infof("target addr:%v", targetAddr)
 
-	if err := ss.ValidateRequest(r); err != nil {
+	if err := ss.validateRequest(r); err != nil {
 		log.Errorf("validate socks5 request:%v", err)
 		return err
 	}
@@ -87,48 +87,8 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		log.Debugf("after stream close: current tcp pool has %v connections", pool.Len())
 	}()
 
-	header := dataHeaderBytes.Get(util.Http2HeaderLen)
-	defer dataHeaderBytes.Put(header)
-
-	header = util.EncodeHTTP2DataFrameHeader(len(addr)+1, header)
-	gcm, err := cipherstream.NewAes256GCM([]byte(ss.Password()))
-	if err != nil {
-		log.Errorf("cipherstream.NewAes256GCM err:%+v", err)
-		return
-	}
-
-	headerCipher, err := gcm.Encrypt(header)
-	if err != nil {
-		log.Errorf("gcm.Encrypt err:%+v", err)
-		return
-	}
-	cipherMethod := EncodeCipherMethod(ss.Method())
-	if cipherMethod == 0 {
-		log.Errorf("unsupported cipher method:%+v", ss.Method())
-		return
-	}
-	payloadCipher, err := gcm.Encrypt(append([]byte(addr), cipherMethod))
-	if err != nil {
-		log.Errorf("gcm.Encrypt err:%+v", err)
-		return
-	}
-
-	handshake := append(headerCipher, payloadCipher...)
-	if header[4] == 0x8 { // has padding field
-		padBytes := paddingBytes.Get(cipherstream.PaddingSize)
-		defer paddingBytes.Put(padBytes)
-
-		var padcipher []byte
-		padcipher, err = gcm.Encrypt(padBytes)
-		if err != nil {
-			log.Errorf("encrypt padding buf err:%+v", err)
-			return
-		}
-		handshake = append(handshake, padcipher...)
-	}
-	_, err = stream.Write(handshake)
-	if err != nil {
-		log.Errorf("stream.Write err:%+v", errors.WithStack(err))
+	if err = ss.handShakeWithRemote(stream, addr); err != nil {
+		log.Errorf("hand-shake with remote server err:%v", err)
 		if pc, ok := stream.(*easypool.PoolConn); ok {
 			log.Debugf("mark pool conn stream unusable")
 			pc.MarkUnusable()
@@ -157,7 +117,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	return
 }
 
-func (ss *Easyss) ValidateRequest(r *socks5.Request) error {
+func (ss *Easyss) validateRequest(r *socks5.Request) error {
 	host, _, err := net.SplitHostPort(r.Address())
 	if err != nil {
 		return fmt.Errorf("invalid target address:%v, err:%v", r.Address(), err)
@@ -180,6 +140,46 @@ func (ss *Easyss) ValidateRequest(r *socks5.Request) error {
 	}
 
 	return nil
+}
+
+func (ss *Easyss) handShakeWithRemote(stream net.Conn, addr string) error {
+	header := dataHeaderBytes.Get(util.Http2HeaderLen)
+	defer dataHeaderBytes.Put(header)
+
+	header = util.EncodeHTTP2DataFrameHeader(len(addr)+1, header)
+	gcm, err := cipherstream.NewAes256GCM([]byte(ss.Password()))
+	if err != nil {
+		return fmt.Errorf("cipherstream.NewAes256GCM err:%s", err.Error())
+	}
+
+	headerCipher, err := gcm.Encrypt(header)
+	if err != nil {
+		return fmt.Errorf("gcm.Encrypt err:%s", err.Error())
+	}
+	cipherMethod := EncodeCipherMethod(ss.Method())
+	if cipherMethod == 0 {
+		return fmt.Errorf("unsupported cipher method:%s", ss.Method())
+	}
+	payloadCipher, err := gcm.Encrypt(append([]byte(addr), cipherMethod))
+	if err != nil {
+		return fmt.Errorf("gcm.Encrypt err:%s", err.Error())
+	}
+
+	handshake := append(headerCipher, payloadCipher...)
+	if header[4] == 0x8 { // has padding field
+		padBytes := paddingBytes.Get(cipherstream.PaddingSize)
+		defer paddingBytes.Put(padBytes)
+
+		var padCipher []byte
+		padCipher, err = gcm.Encrypt(padBytes)
+		if err != nil {
+			return fmt.Errorf("encrypt padding buf err:%s", err.Error())
+		}
+		handshake = append(handshake, padCipher...)
+	}
+	_, err = stream.Write(handshake)
+
+	return err
 }
 
 func EncodeCipherMethod(m string) byte {

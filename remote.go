@@ -14,7 +14,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-var remoteBytespool = util.NewBytes(512)
+var remoteBytes = util.NewBytes(512)
 
 func (ss *Easyss) Remote() {
 	ss.tcpServer()
@@ -43,7 +43,7 @@ func (ss *Easyss) tcpServer() {
 		go func() {
 			defer conn.Close()
 			for {
-				addr, ciphermethod, err := handShake(conn, ss.Password())
+				addr, method, err := ss.handShakeWithClient(conn)
 				if err != nil {
 					if errors.Is(err, io.EOF) {
 						log.Debugf("got EOF error when handShake with client-server, maybe the connection pool closed the idle conn")
@@ -52,18 +52,10 @@ func (ss *Easyss) tcpServer() {
 					}
 					return
 				}
+
 				addrStr := string(addr)
-				if addrStr == "" || ciphermethod == "" {
-					log.Errorf("after handshake with client, but get empty addr:%v or ciphermethod:%v",
-						addrStr, ciphermethod)
-					return
-				}
-				if addrStr == "localhost" || addrStr == "127.0.0.1" {
-					log.Warnf("target addr should not be localhost, close the connection directly")
-					return
-				}
-				if util.IsPrivateIP(addrStr) {
-					log.Warnf("target addr should not be private ip, close the connection directly")
+				if err := validateTargetAddr(addrStr); err != nil {
+					log.Warnf("validate target address err:%s, close the connection directly", err.Error())
 					return
 				}
 
@@ -75,7 +67,7 @@ func (ss *Easyss) tcpServer() {
 					return
 				}
 
-				csStream, err := cipherstream.New(conn, ss.Password(), ciphermethod)
+				csStream, err := cipherstream.New(conn, ss.Password(), method)
 				if err != nil {
 					log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
 						err, ss.Password(), ss.Method())
@@ -101,14 +93,14 @@ func (ss *Easyss) tcpServer() {
 	}
 }
 
-func handShake(stream io.ReadWriter, password string) (addr []byte, ciphermethod string, err error) {
-	gcm, err := cipherstream.NewAes256GCM([]byte(password))
+func (ss *Easyss) handShakeWithClient(stream io.ReadWriter) (addr []byte, method string, err error) {
+	gcm, err := cipherstream.NewAes256GCM([]byte(ss.Password()))
 	if err != nil {
 		return
 	}
 
-	headerbuf := remoteBytespool.Get(9 + gcm.NonceSize() + gcm.Overhead())
-	defer remoteBytespool.Put(headerbuf)
+	headerbuf := remoteBytes.Get(9 + gcm.NonceSize() + gcm.Overhead())
+	defer remoteBytes.Put(headerbuf)
 
 	if _, err = io.ReadFull(stream, headerbuf); err != nil {
 		err = errors.WithStack(err)
@@ -127,8 +119,8 @@ func handShake(stream io.ReadWriter, password string) (addr []byte, ciphermethod
 		return
 	}
 
-	payloadbuf := remoteBytespool.Get(payloadlen + gcm.NonceSize() + gcm.Overhead())
-	defer remoteBytespool.Put(payloadbuf)
+	payloadbuf := remoteBytes.Get(payloadlen + gcm.NonceSize() + gcm.Overhead())
+	defer remoteBytes.Put(payloadbuf)
 
 	if _, err = io.ReadFull(stream, payloadbuf); err != nil {
 		err = errors.WithStack(err)
@@ -146,11 +138,11 @@ func handShake(stream io.ReadWriter, password string) (addr []byte, ciphermethod
 		err = errors.New("handshake: payload length is invalid")
 		return
 	}
-	ciphermethod = DecodeCipherMethod(payloadplain[length-1])
+	method = DecodeCipherMethod(payloadplain[length-1])
 
 	if headerplain[4] == 0x8 { // has padding field
-		paddingbuf := remoteBytespool.Get(cipherstream.PaddingSize + gcm.NonceSize() + gcm.Overhead())
-		defer remoteBytespool.Put(paddingbuf)
+		paddingbuf := remoteBytes.Get(cipherstream.PaddingSize + gcm.NonceSize() + gcm.Overhead())
+		defer remoteBytes.Put(paddingbuf)
 
 		if _, err = io.ReadFull(stream, paddingbuf); err != nil {
 			err = errors.WithStack(err)
@@ -164,7 +156,18 @@ func handShake(stream io.ReadWriter, password string) (addr []byte, ciphermethod
 		}
 	}
 
-	return payloadplain[:length-1], ciphermethod, nil
+	return payloadplain[:length-1], method, nil
+}
+
+func validateTargetAddr(addr string) error {
+	if addr == "" {
+		return fmt.Errorf("target address should not be empty")
+	}
+	if util.IsLoopbackIP(addr) || util.IsPrivateIP(addr) {
+		return fmt.Errorf("target address should not be loop-back ip or private ip:%s", addr)
+	}
+
+	return nil
 }
 
 func DecodeCipherMethod(b byte) string {

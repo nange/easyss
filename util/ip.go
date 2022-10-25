@@ -16,3 +16,12 @@ func IsPrivateIP(ip string) bool {
 
 	return _ip.IsPrivate()
 }
+
+func IsLoopbackIP(ip string) bool {
+	_ip := net.ParseIP(ip)
+	if _ip == nil {
+		return false
+	}
+
+	return _ip.IsLoopback()
+}

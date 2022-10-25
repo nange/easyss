@@ -7,7 +7,6 @@ import (
 
 	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/util"
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -85,7 +84,7 @@ func (cs *ConnState) FINWait1(conn io.ReadWriteCloser) *ConnState {
 	fin := util.EncodeFINRstStreamHeader(header)
 	_, err := conn.Write(fin)
 	if err != nil {
-		log.Debugf("conn.Write FIN err:%+v", errors.WithStack(err))
+		log.Debugf("conn.Write FIN err:%v", err)
 		cs.err = err
 		cs.fn = nil
 		return cs
@@ -229,7 +228,7 @@ func (cs *ConnState) TimeWait(conn io.ReadWriteCloser) *ConnState {
 		}
 	}
 	if err != nil {
-		log.Errorf("conn.SetDeadline to default err:%+v", errors.WithStack(err))
+		log.Warnf("conn.SetDeadline to default err:%v", err)
 		cs.err = err
 	}
 	cs.fn = nil
@@ -263,7 +262,7 @@ func (cs *ConnState) Closed(conn io.ReadWriteCloser) *ConnState {
 		}
 	}
 	if err != nil {
-		log.Errorf("conn.SetDeadline to default err:%+v", err)
+		log.Warnf("conn.SetDeadline to default err:%+v", err)
 		cs.err = err
 	}
 	cs.fn = nil
