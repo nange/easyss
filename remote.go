@@ -26,6 +26,7 @@ func (ss *Easyss) tcpServer() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	tlsConfig.NextProtos = []string{"h2", "http/1.1"}
 	ln, err := tls.Listen("tcp", addr, tlsConfig)
 	if err != nil {
 		log.Fatal(err)

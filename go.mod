@@ -9,14 +9,16 @@ require (
 	github.com/nange/easypool v1.3.1
 	github.com/nange/httpproxy v0.0.0-20180805034305-ff2c9c785a5d
 	github.com/pkg/errors v0.9.1
+	github.com/refraction-networking/utls v1.1.5
 	github.com/sirupsen/logrus v1.8.1
 	github.com/snowzach/rotatefilehook v0.0.0-20220211133110-53752135082d
 	github.com/txthinking/socks5 v0.0.0-20220212043548-414499347d4a
-	golang.org/x/crypto v0.0.0-20220722155217-630584e8d5aa
+	golang.org/x/crypto v0.0.0-20220829220503-c86fa9a7ed90
 )
 
 require (
 	github.com/BurntSushi/toml v0.4.1 // indirect
+	github.com/andybalholm/brotli v1.0.4 // indirect
 	github.com/getlantern/byteexec v0.0.0-20170405023437-4cfb26ec74f4 // indirect
 	github.com/getlantern/context v0.0.0-20190109183933-c447772a6520 // indirect
 	github.com/getlantern/elevate v0.0.0-20160317154340-a1e4813b4e26 // indirect
@@ -27,6 +29,7 @@ require (
 	github.com/getlantern/hidden v0.0.0-20190325191715-f02dbb02be55 // indirect
 	github.com/getlantern/ops v0.0.0-20190325191751-d70cb0d6f85f // indirect
 	github.com/go-stack/stack v1.8.0 // indirect
+	github.com/klauspost/compress v1.15.9 // indirect
 	github.com/klauspost/cpuid/v2 v2.1.1 // indirect
 	github.com/libdns/libdns v0.2.1 // indirect
 	github.com/mholt/acmez v1.0.4 // indirect
@@ -39,7 +42,7 @@ require (
 	go.uber.org/multierr v1.6.0 // indirect
 	go.uber.org/zap v1.23.0 // indirect
 	golang.org/x/mod v0.4.2 // indirect
-	golang.org/x/net v0.0.0-20220805013720-a33c5aa5df48 // indirect
+	golang.org/x/net v0.0.0-20220909164309-bea034e7d591 // indirect
 	golang.org/x/sys v0.0.0-20220728004956-3c1f35247d10 // indirect
 	golang.org/x/text v0.3.7 // indirect
 	golang.org/x/tools v0.1.6-0.20210726203631-07bc1bf47fb2 // indirect

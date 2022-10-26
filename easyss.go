@@ -13,6 +13,7 @@ import (
 
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/util"
+	utls "github.com/refraction-networking/utls"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
 )
@@ -61,13 +62,32 @@ func New(config *Config) (*Easyss, error) {
 }
 
 func (ss *Easyss) InitTcpPool() error {
+	if !ss.DisableUTLS() {
+		log.Infof("uTLS is enabled")
+	}
+
 	factory := func() (net.Conn, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
 		defer cancel()
 
-		dialer := new(tls.Dialer)
-		return dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", ss.Server(), ss.ServerPort()))
+		if ss.DisableUTLS() {
+			dialer := new(tls.Dialer)
+			return dialer.DialContext(ctx, "tcp", ss.ServerAddr())
+		}
+
+		conn, err := net.DialTimeout("tcp", ss.ServerAddr(), ss.Timeout())
+		if err != nil {
+			return nil, err
+		}
+
+		uConn := utls.UClient(conn, &utls.Config{ServerName: ss.Server()}, utls.HelloChrome_Auto)
+		if err := uConn.HandshakeContext(ctx); err != nil {
+			return nil, err
+		}
+
+		return uConn, nil
 	}
+	
 	config := &easypool.PoolConfig{
 		InitialCap:  10,
 		MaxCap:      50,
@@ -78,6 +98,7 @@ func (ss *Easyss) InitTcpPool() error {
 	}
 	tcpPool, err := easypool.NewHeapPool(config)
 	ss.SetPool(tcpPool)
+
 	return err
 }
 
@@ -109,6 +130,10 @@ func (ss *Easyss) Server() string {
 	return ss.config.Server
 }
 
+func (ss *Easyss) ServerAddr() string {
+	return fmt.Sprintf("%s:%d", ss.Server(), ss.ServerPort())
+}
+
 func (ss *Easyss) Timeout() time.Duration {
 	return time.Duration(ss.config.Timeout) * time.Second
 }
@@ -119,6 +144,10 @@ func (ss *Easyss) LocalAddr() string {
 
 func (ss *Easyss) BindAll() bool {
 	return ss.config.BindALL
+}
+
+func (ss *Easyss) DisableUTLS() bool {
+	return ss.config.DisableUTLS
 }
 
 func (ss *Easyss) ConfigFilename() string {
