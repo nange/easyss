@@ -62,7 +62,9 @@ func New(config *Config) (*Easyss, error) {
 }
 
 func (ss *Easyss) InitTcpPool() error {
-	if !ss.DisableUTLS() {
+	if ss.DisableUTLS() {
+		log.Infof("uTLS is disabled")
+	} else {
 		log.Infof("uTLS is enabled")
 	}
 
@@ -87,7 +89,7 @@ func (ss *Easyss) InitTcpPool() error {
 
 		return uConn, nil
 	}
-	
+
 	config := &easypool.PoolConfig{
 		InitialCap:  10,
 		MaxCap:      50,
