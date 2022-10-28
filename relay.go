@@ -16,7 +16,7 @@ var connStateBytes = util.NewBytes(32)
 // relay copies between cipher stream and plaintext stream.
 // return the number of bytes copies
 // from plaintext stream to cipher stream, from cipher stream to plaintext stream, and needClose on server conn
-func (ss *Easyss) relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64, needClose bool) {
+func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64, needClose bool) {
 	type res struct {
 		N   int64
 		Err error
@@ -110,9 +110,9 @@ func (ss *Easyss) relay(cipher, plaintxt io.ReadWriteCloser) (n1 int64, n2 int64
 }
 
 // mark the cipher stream unusable, return mark result
-func markCipherStreamUnusable(cipher io.ReadWriteCloser) bool {
+func markCipherStreamUnusable(cipher net.Conn) bool {
 	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
-		if pc, ok := cs.ReadWriteCloser.(*easypool.PoolConn); ok {
+		if pc, ok := cs.Conn.(*easypool.PoolConn); ok {
 			log.Debugf("mark cipher stream unusable")
 			pc.MarkUnusable()
 			return true
@@ -122,35 +122,23 @@ func markCipherStreamUnusable(cipher io.ReadWriteCloser) bool {
 }
 
 // return true if the cipher stream is unusable
-func cipherStreamUnusable(cipher io.ReadWriteCloser) bool {
+func cipherStreamUnusable(cipher net.Conn) bool {
 	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
-		if pc, ok := cs.ReadWriteCloser.(*easypool.PoolConn); ok {
+		if pc, ok := cs.Conn.(*easypool.PoolConn); ok {
 			return pc.IsUnusable()
 		}
 	}
 	return false
 }
 
-func expireConn(conn io.ReadWriteCloser) {
-	if conn, ok := conn.(net.Conn); ok {
-		log.Debugf("expire the plaintxt tcp connection to make the reader to be failed immediately")
-		conn.SetDeadline(time.Unix(0, 0))
-		return
-	}
-
-	if cs, ok := conn.(*cipherstream.CipherStream); ok {
-		if conn, ok := cs.ReadWriteCloser.(net.Conn); ok {
-			log.Debugf("expire the cipher tcp connection to make the reader to be failed immediately")
-			conn.SetDeadline(time.Unix(0, 0))
-		}
-	}
+func expireConn(conn net.Conn) {
+	log.Debugf("expire the connection to make the reader to be failed immediately")
+	conn.SetDeadline(time.Unix(0, 0))
 }
 
-func setCipherDeadline(cipher io.ReadWriteCloser, sec time.Duration) {
+func setCipherDeadline(cipher net.Conn, sec time.Duration) {
 	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
-		if conn, ok := cs.ReadWriteCloser.(net.Conn); ok {
-			log.Debugf("set cipher tcp connection deadline to 30 second later")
-			conn.SetDeadline(time.Now().Add(sec))
-		}
+		log.Debugf("set cipher tcp connection deadline to 30 second later")
+		cs.Conn.SetDeadline(time.Now().Add(sec))
 	}
 }

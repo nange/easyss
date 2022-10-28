@@ -19,10 +19,11 @@ const (
 )
 
 type CipherStream struct {
-	io.ReadWriteCloser
+	net.Conn
 	AEADCipher
 	reader
 	writer
+	protoType string
 }
 
 type reader struct {
@@ -36,8 +37,8 @@ type writer struct {
 
 var rwBufBytes = util.NewBytes(MaxPayloadSize + 64)
 
-func New(stream io.ReadWriteCloser, password, method string) (io.ReadWriteCloser, error) {
-	cs := &CipherStream{ReadWriteCloser: stream}
+func New(stream net.Conn, password, method, protoType string) (net.Conn, error) {
+	cs := &CipherStream{Conn: stream, protoType: protoType}
 
 	switch method {
 	case "aes-256-gcm":
@@ -81,7 +82,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 
 			var padding bool
 			headerBuf := dataHeaderBytes.Get(util.Http2HeaderLen)
-			headerBuf = util.EncodeHTTP2DataFrameHeader(nr, headerBuf)
+			headerBuf = util.EncodeHTTP2DataFrameHeader(cs.protoType, nr, headerBuf)
 			if headerBuf[4] == 0x8 {
 				padding = true
 			}
@@ -112,7 +113,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 				dataframe = append(dataframe, padcipher...)
 			}
 
-			if _, ew := cs.ReadWriteCloser.Write(dataframe); ew != nil {
+			if _, ew := cs.Conn.Write(dataframe); ew != nil {
 				log.Warnf("write cipher data to cipher stream failed, msg:%+v", ew)
 				if timeout(ew) {
 					err = ErrTimeout
@@ -160,7 +161,7 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 
 func (cs *CipherStream) read() ([]byte, error) {
 	hBuf := cs.rbuf[:util.Http2HeaderLen+cs.NonceSize()+cs.Overhead()]
-	if _, err := io.ReadFull(cs.ReadWriteCloser, hBuf); err != nil {
+	if _, err := io.ReadFull(cs.Conn, hBuf); err != nil {
 		if timeout(err) {
 			return nil, ErrTimeout
 		}
@@ -186,7 +187,7 @@ func (cs *CipherStream) read() ([]byte, error) {
 	}
 
 	payloadLen := size + cs.NonceSize() + cs.Overhead()
-	if _, err := io.ReadFull(cs.ReadWriteCloser, cs.rbuf[:payloadLen]); err != nil {
+	if _, err := io.ReadFull(cs.Conn, cs.rbuf[:payloadLen]); err != nil {
 		if timeout(err) {
 			return nil, ErrTimeout
 		}
@@ -206,7 +207,7 @@ func (cs *CipherStream) read() ([]byte, error) {
 
 	if hPlain[4] == 0x8 { // has padding field
 		paddingLen := PaddingSize + cs.NonceSize() + cs.Overhead()
-		if _, err := io.ReadFull(cs.ReadWriteCloser, cs.rbuf[:paddingLen]); err != nil {
+		if _, err := io.ReadFull(cs.Conn, cs.rbuf[:paddingLen]); err != nil {
 			if timeout(err) {
 				return nil, ErrTimeout
 			}

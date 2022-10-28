@@ -2,6 +2,7 @@ package easyss
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 
@@ -60,10 +61,23 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 		return ss.localRelay(conn, targetAddr)
 	}
 
-	return socks5.ErrUnsupportCmd
-}
+	if r.Cmd == socks5.CmdUDP {
+		caddr, err := r.UDP(conn, s.ServerAddr)
+		log.Infof("target request is udp proto")
+		if err != nil {
+			return err
+		}
 
-func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) error {
+		ch := make(chan byte)
+		defer close(ch)
+		s.AssociatedUDP.Set(caddr.String(), ch, -1)
+		defer s.AssociatedUDP.Delete(caddr.String())
+
+		io.Copy(io.Discard, conn)
+		log.Infof("A tcp connection that udp %v associated closed, target addr:%v\n", caddr.String(), targetAddr)
+		return nil
+	}
+
 	return socks5.ErrUnsupportCmd
 }
 
@@ -87,7 +101,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		log.Debugf("after stream close: current tcp pool has %v connections", pool.Len())
 	}()
 
-	if err = ss.handShakeWithRemote(stream, addr); err != nil {
+	if err = ss.handShakeWithRemote(stream, addr, "tcp"); err != nil {
 		log.Errorf("hand-shake with remote server err:%v", err)
 		if pc, ok := stream.(*easypool.PoolConn); ok {
 			log.Debugf("mark pool conn stream unusable")
@@ -96,7 +110,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		return
 	}
 
-	csStream, err := cipherstream.New(stream, ss.Password(), ss.Method())
+	csStream, err := cipherstream.New(stream, ss.Password(), ss.Method(), "tcp")
 	if err != nil {
 		log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
 			err, ss.Password(), ss.Method())
@@ -142,11 +156,11 @@ func (ss *Easyss) validateRequest(r *socks5.Request) error {
 	return nil
 }
 
-func (ss *Easyss) handShakeWithRemote(stream net.Conn, addr string) error {
+func (ss *Easyss) handShakeWithRemote(stream net.Conn, addr, protoType string) error {
 	header := dataHeaderBytes.Get(util.Http2HeaderLen)
 	defer dataHeaderBytes.Put(header)
 
-	header = util.EncodeHTTP2DataFrameHeader(len(addr)+1, header)
+	header = util.EncodeHTTP2DataFrameHeader(protoType, len(addr)+1, header)
 	gcm, err := cipherstream.NewAes256GCM([]byte(ss.Password()))
 	if err != nil {
 		return fmt.Errorf("cipherstream.NewAes256GCM err:%s", err.Error())

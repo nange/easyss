@@ -2,7 +2,6 @@ package easyss
 
 import (
 	"io"
-	"net"
 	"time"
 
 	"github.com/nange/easyss/cipherstream"
@@ -222,10 +221,8 @@ func (cs *ConnState) TimeWait(conn io.ReadWriteCloser) *ConnState {
 	// if conn is tcp connection, set the deadline to default
 	var err error
 	if cs, ok := conn.(*cipherstream.CipherStream); ok {
-		if c, ok := cs.ReadWriteCloser.(net.Conn); ok {
-			err = c.SetDeadline(time.Time{})
-			log.Debug("set tcp connection deadline to default")
-		}
+		err = cs.Conn.SetDeadline(time.Time{})
+		log.Debug("set tcp connection deadline to default")
 	}
 	if err != nil {
 		log.Warnf("conn.SetDeadline to default err:%v", err)
@@ -256,10 +253,8 @@ func (cs *ConnState) Closed(conn io.ReadWriteCloser) *ConnState {
 
 	// if conn is tcp connection, set the deadline to default
 	if cs, ok := conn.(*cipherstream.CipherStream); ok {
-		if c, ok := cs.ReadWriteCloser.(net.Conn); ok {
-			err = c.SetDeadline(time.Time{})
-			log.Debug("set tcp connection deadline to default")
-		}
+		err = cs.Conn.SetDeadline(time.Time{})
+		log.Debug("set tcp connection deadline to default")
 	}
 	if err != nil {
 		log.Warnf("conn.SetDeadline to default err:%+v", err)

@@ -9,7 +9,7 @@ const Http2HeaderLen = 9
 
 var lenBytes = NewBytes(4)
 
-func EncodeHTTP2DataFrameHeader(datalen int, dst []byte) (header []byte) {
+func EncodeHTTP2DataFrameHeader(protoType string, datalen int, dst []byte) (header []byte) {
 	if cap(dst) < Http2HeaderLen {
 		dst = make([]byte, Http2HeaderLen)
 	} else {
@@ -22,8 +22,15 @@ func EncodeHTTP2DataFrameHeader(datalen int, dst []byte) (header []byte) {
 	binary.BigEndian.PutUint32(length, uint32(datalen))
 	// set length field
 	copy(dst[:3], length[1:])
-	// set frame type to data
-	dst[3] = 0x0
+	// set frame type
+	switch protoType {
+	case "tcp":
+		dst[3] = 0x0
+	case "udp":
+		dst[3] = 0x1
+	default:
+		panic("invalid protoType:" + protoType)
+	}
 	// set default flag
 	dst[4] = 0x0
 	if datalen < 512 { // data has padding field

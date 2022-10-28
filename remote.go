@@ -43,8 +43,9 @@ func (ss *Easyss) tcpServer() {
 
 		go func() {
 			defer conn.Close()
+
 			for {
-				addr, method, err := ss.handShakeWithClient(conn)
+				addr, method, protoType, err := ss.handShakeWithClient(conn)
 				if err != nil {
 					if errors.Is(err, io.EOF) {
 						log.Debugf("got EOF error when handShake with client-server, maybe the connection pool closed the idle conn")
@@ -62,39 +63,64 @@ func (ss *Easyss) tcpServer() {
 
 				log.Infof("target proxy addr is:%v", addrStr)
 
-				tconn, err := net.DialTimeout("tcp", addrStr, ss.Timeout())
-				if err != nil {
-					log.Errorf("net.Dial %v err:%v", addrStr, err)
+				switch protoType {
+				case "tcp":
+					needClose, err := ss.remoteTCPHandle(conn, addrStr, method)
+					if err != nil {
+						log.Errorf("remote tcp handle err:%v", err)
+						return
+					}
+					if needClose {
+						log.Debugf("maybe underline connection has been closed, need close the proxy conn")
+						return
+					}
+					log.Debugf("underline connection is health, so reuse it")
+				case "udp":
+					needClose, err := ss.remoteUDPHandle(conn, addrStr, method)
+					if err != nil {
+						log.Errorf("remote udp handle err:%v", err)
+						return
+					}
+					if needClose {
+						log.Debugf("maybe underline connection has been closed, need close the proxy conn")
+						return
+					}
+					log.Debugf("underline connection is health, so reuse it")
+				default:
+					log.Errorf("unsupported protoType:%s", protoType)
 					return
 				}
-
-				csStream, err := cipherstream.New(conn, ss.Password(), method)
-				if err != nil {
-					log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
-						err, ss.Password(), ss.Method())
-					return
-				}
-
-				n1, n2, needClose := ss.relay(csStream, tconn)
-				csStream.(*cipherstream.CipherStream).Release()
-
-				log.Debugf("send %v bytes to %v, and recive %v bytes, needclose:%v", n2, addrStr, n1, needClose)
-
-				ss.stat.BytesSend.Add(n2)
-				ss.stat.BytesRecive.Add(n1)
-
-				tconn.Close()
-				if needClose {
-					log.Debugf("maybe underline connection has been closed, need close the proxy conn")
-					break
-				}
-				log.Debugf("underline connection is health, so reuse it")
 			}
 		}()
 	}
 }
 
-func (ss *Easyss) handShakeWithClient(stream io.ReadWriter) (addr []byte, method string, err error) {
+func (ss *Easyss) remoteTCPHandle(conn net.Conn, addrStr, method string) (needClose bool, err error) {
+	tConn, err := net.DialTimeout("tcp", addrStr, ss.Timeout())
+	if err != nil {
+		return false, fmt.Errorf("net.Dial %v err:%v", addrStr, err)
+	}
+
+	csStream, err := cipherstream.New(conn, ss.Password(), method, "tcp")
+	if err != nil {
+		return false, fmt.Errorf("new cipherstream err:%+v, password:%v, method:%v",
+			err, ss.Password(), ss.Method())
+	}
+
+	n1, n2, needClose := ss.relay(csStream, tConn)
+	csStream.(*cipherstream.CipherStream).Release()
+
+	log.Debugf("send %v bytes to %v, and recive %v bytes, needclose:%v", n2, addrStr, n1, needClose)
+
+	ss.stat.BytesSend.Add(n2)
+	ss.stat.BytesRecive.Add(n1)
+
+	tConn.Close()
+
+	return needClose, nil
+}
+
+func (ss *Easyss) handShakeWithClient(stream io.ReadWriter) (addr []byte, method, protoType string, err error) {
 	gcm, err := cipherstream.NewAes256GCM([]byte(ss.Password()))
 	if err != nil {
 		return
@@ -115,8 +141,13 @@ func (ss *Easyss) handShakeWithClient(stream io.ReadWriter) (addr []byte, method
 	}
 
 	payloadlen := int(headerplain[0])<<16 | int(headerplain[1])<<8 | int(headerplain[2])
-	if headerplain[3] != 0x0 {
-		err = errors.New(fmt.Sprintf("http2 data frame type:%v is invalid, should be 0x0", headerplain[3]))
+	switch headerplain[3] {
+	case 0x0:
+		protoType = "tcp"
+	case 0x1:
+		protoType = "udp"
+	default:
+		err = errors.New(fmt.Sprintf("http2 data frame type:%v is invalid, should be 0x0 or 0x1", headerplain[3]))
 		return
 	}
 
@@ -157,14 +188,18 @@ func (ss *Easyss) handShakeWithClient(stream io.ReadWriter) (addr []byte, method
 		}
 	}
 
-	return payloadplain[:length-1], method, nil
+	return payloadplain[:length-1], method, protoType, nil
 }
 
 func validateTargetAddr(addr string) error {
 	if addr == "" {
 		return fmt.Errorf("target address should not be empty")
 	}
-	if util.IsLoopbackIP(addr) || util.IsPrivateIP(addr) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	if util.IsLoopbackIP(host) || util.IsPrivateIP(host) {
 		return fmt.Errorf("target address should not be loop-back ip or private ip:%s", addr)
 	}
 
