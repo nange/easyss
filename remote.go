@@ -82,10 +82,10 @@ func (ss *Easyss) tcpServer() {
 						return
 					}
 					if needClose {
-						log.Debugf("maybe underline connection has been closed, need close the proxy conn")
+						log.Infof("maybe underline connection has been closed, need close the proxy conn")
 						return
 					}
-					log.Debugf("underline connection is health, so reuse it")
+					log.Infof("underline connection is health, so reuse it")
 				default:
 					log.Errorf("unsupported protoType:%s", protoType)
 					return
