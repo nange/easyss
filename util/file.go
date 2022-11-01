@@ -47,7 +47,7 @@ func SetLogFileHook(logDir string) {
 		MaxSize:    LogMaxSize,
 		MaxBackups: LogMaxBackups,
 		MaxAge:     LogMaxAge,
-		Level:      log.InfoLevel,
+		Level:      log.DebugLevel,
 		Formatter:  &log.JSONFormatter{TimestampFormat: "2006-01-02 15:04:05.000"},
 	})
 	if err != nil {

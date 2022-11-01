@@ -3,10 +3,12 @@ package easyss
 import (
 	"fmt"
 	"net"
+	"os"
 	"time"
 
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/cipherstream"
+	"github.com/nange/easyss/util"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
@@ -19,31 +21,46 @@ type UDPExchange struct {
 }
 
 func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) error {
-	log.Infof("enter udp handdle, local_addr:%v, remote_addr:%v===============", addr.String(), d.Address())
+	log.Debugf("enter udp handdle, local_addr:%v, remote_addr:%v", addr.String(), d.Address())
 
-	src := addr.String()
 	var ch chan byte
-	if s.LimitUDP {
-		any, ok := s.AssociatedUDP.Get(src)
-		if !ok {
-			return fmt.Errorf("This udp address %s is not associated with tcp", src)
-		}
-		ch = any.(chan byte)
+	var hasAssoc bool
+	src := addr.String()
+	asCh, ok := s.AssociatedUDP.Get(src)
+	if ok {
+		hasAssoc = true
+		ch = asCh.(chan byte)
+		log.Infof("found the associate with tcp, src:%s, dst:%s", src, d.Address())
+	} else {
+		log.Infof("the udp addr:%v doesn't associate with tcp, dst addr:%v", src, d.Address())
 	}
+
 	send := func(ue *UDPExchange, data []byte) error {
 		select {
 		case <-ch:
-			return fmt.Errorf("this udp address %s is not associated with tcp", src)
+			return fmt.Errorf("the tcp that udp address %s associated closed", src)
 		default:
-			_, err := ue.RemoteConn.Write(data)
-			if err != nil {
-				return err
-			}
-			log.Debugf("Sent UDP data to remote. client: %#v server: %#v remote: %#v data: %#v\n", ue.ClientAddr.String(), ue.RemoteConn.LocalAddr().String(), ue.RemoteConn.RemoteAddr().String(), data)
 		}
+		_, err := ue.RemoteConn.Write(data)
+		if err != nil {
+			return err
+		}
+		log.Debugf("Sent UDP data to remote. client: %#v", ue.ClientAddr.String())
 		return nil
 	}
+
 	dst := d.Address()
+	host, _, err := net.SplitHostPort(dst)
+	if util.IsPrivateIP(host) {
+		// On Matsuri APP, the rDNS(in-addr.arpa) request may use private ip as dst
+		// One possible solution is rewritten the dst to 8.8.8.8:53
+		log.Debugf("rewrite dst addr to 8.8.8.8:53")
+		dst = "8.8.8.8:53"
+	} else if err := ss.validateAddr(dst); err != nil {
+		log.Warnf("validate udp dst:%v err:%v, data:%s", dst, err, string(d.Data))
+		return errors.New("dst addr is invalid")
+	}
+
 	var ue *UDPExchange
 	iue, ok := s.UDPExchanges.Get(src + dst)
 	if ok {
@@ -53,6 +70,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 
 	pool := ss.Pool()
 	if pool == nil {
+		log.Errorf("failed to get pool, easyss is closed")
 		return errors.New("easyss is closed")
 	}
 
@@ -67,6 +85,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		if pc, ok := stream.(*easypool.PoolConn); ok {
 			log.Debugf("mark pool conn stream unusable")
 			pc.MarkUnusable()
+			stream.Close()
 		}
 		return err
 	}
@@ -83,16 +102,49 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		RemoteConn: csStream,
 	}
 	if err := send(ue, d.Data); err != nil {
+		markCipherStreamUnusable(ue.RemoteConn)
 		ue.RemoteConn.Close()
 		return err
 	}
 	s.UDPExchanges.Set(src+dst, ue, -1)
 
+	var monitorCh = make(chan bool, 1)
+	// monitor the assoc tcp connection to be closed
+	go func() {
+		var tryReuse bool
+		select {
+		case <-ch:
+			tryReuse = true
+		case b := <-monitorCh:
+			tryReuse = b
+		}
+
+		if tryReuse {
+			expireConn(ue.RemoteConn)
+			log.Infof("udp request is finished, try reusing underlying tcp connection")
+			buf := connStateBytes.Get(32)
+			defer connStateBytes.Put(buf)
+
+			state := NewConnState(FIN_WAIT1, buf)
+			setCipherDeadline(ue.RemoteConn, ss.Timeout())
+			for stateFn := state.fn; stateFn != nil; {
+				stateFn = stateFn(ue.RemoteConn).fn
+			}
+			if state.err != nil {
+				log.Infof("state err:%v, state:%v", state.err, state.state)
+				markCipherStreamUnusable(ue.RemoteConn)
+			} else {
+				log.Infof("underlying connection is health, so reuse it")
+			}
+		} else {
+			markCipherStreamUnusable(ue.RemoteConn)
+		}
+		ue.RemoteConn.Close()
+	}()
+
 	go func(ue *UDPExchange, dst string) {
 		defer func() {
-			markCipherStreamUnusable(ue.RemoteConn)
-			ue.RemoteConn.Close()
-			s.UDPExchanges.Delete(ue.ClientAddr.String() + dst)
+			s.UDPExchanges.Delete(src + dst)
 		}()
 
 		var b [65507]byte
@@ -103,28 +155,37 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 				return
 			default:
 			}
-			if s.UDPTimeout != 0 {
+			if !hasAssoc && s.UDPTimeout > 0 {
 				if err := ue.RemoteConn.SetDeadline(time.Now().Add(time.Duration(s.UDPTimeout) * time.Second)); err != nil {
-					log.Println(err)
+					log.Errorf("set the deadline for remote conn err:%v", err)
+					monitorCh <- false
 					return
 				}
 			}
 			n, err := ue.RemoteConn.Read(b[:])
 			if err != nil {
+				if os.IsTimeout(err) {
+					monitorCh <- true
+				} else {
+					monitorCh <- false
+				}
 				return
 			}
-			log.Infof("Got UDP data from remote. client: %#v server: %#v remote: %#v data: %#v\n", ue.ClientAddr.String(), ue.RemoteConn.LocalAddr().String(), ue.RemoteConn.RemoteAddr().String(), b[0:n])
+			log.Debugf("Got UDP data from remote. client: %v  data-len: %v\n", ue.ClientAddr.String(), len(b[0:n]))
 
 			a, addr, port, err := socks5.ParseAddress(dst)
 			if err != nil {
-				log.Println(err)
+				monitorCh <- true
+				log.Errorf("parse dst address err:%v", err)
 				return
 			}
 			d1 := socks5.NewDatagram(a, addr, port, b[0:n])
 			if _, err := s.UDPConn.WriteToUDP(d1.Bytes(), ue.ClientAddr); err != nil {
+				monitorCh <- true
 				return
 			}
-			log.Infof("Sent Datagram. client: %#v server: %#v remote: %#v data: %#v %#v %#v %#v %#v %#v datagram address: %#v\n", ue.ClientAddr.String(), ue.RemoteConn.LocalAddr().String(), ue.RemoteConn.RemoteAddr().String(), d1.Rsv, d1.Frag, d1.Atyp, d1.DstAddr, d1.DstPort, d1.Data, d1.Address())
+			log.Debugf("Write Datagram to client. client: %#v  data: %#v %#v %#v %#v %#v %#v\n",
+				ue.ClientAddr.String(), d1.Rsv, d1.Frag, d1.Atyp, d1.DstAddr, d1.DstPort, len(d1.Data))
 		}
 	}(ue, dst)
 

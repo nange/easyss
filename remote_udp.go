@@ -25,15 +25,21 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) (needCl
 			err, ss.Password(), ss.Method())
 	}
 
-	ch := make(chan struct{})
+	var tryReuse bool
+	var ch1 = make(chan struct{})
 	// send
 	go func() {
 		var b [65507]byte
 		for {
 			n, err := csStream.Read(b[:])
 			if err != nil {
-				close(ch)
-				log.Errorf("read udp data from tcp connection err:%v", err)
+				if cipherstream.FINRSTStreamErr(err) {
+					tryReuse = true
+					log.Debugf("received FIN when reading udp data from client, we can try to reuse the connectio")
+				} else {
+					log.Warnf("read udp data from client connection err:%v", err)
+				}
+				close(ch1)
 				return
 			}
 			_, err = uConn.Write(b[:n])
@@ -44,13 +50,15 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) (needCl
 		}
 	}()
 
+	var ch2 = make(chan struct{})
 	// receive
 	go func() {
+		defer close(ch2)
 		var b [65507]byte
 		for {
 			n, err := uConn.Read(b[:])
 			if err != nil {
-				log.Errorf("read udp data from remote udp connection err:%v", err)
+				log.Debugf("read udp data from remote udp connection err:%v", err)
 				return
 			}
 			_, err = csStream.Write(b[:n])
@@ -61,8 +69,28 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) (needCl
 		}
 	}()
 
-	<-ch
+	<-ch1
 	uConn.Close()
+	<-ch2
 
-	return true, nil
+	if tryReuse {
+		setCipherDeadline(csStream, ss.Timeout())
+
+		buf := connStateBytes.Get(32)
+		defer connStateBytes.Put(buf)
+
+		state := NewConnState(CLOSE_WAIT, buf)
+		for stateFn := state.fn; stateFn != nil; {
+			stateFn = stateFn(csStream).fn
+		}
+		if state.err != nil {
+			log.Infof("state err:%v, state:%v", state.err, state.state)
+			markCipherStreamUnusable(csStream)
+			needClose = true
+		}
+	} else {
+		needClose = true
+	}
+
+	return needClose, nil
 }

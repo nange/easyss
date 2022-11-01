@@ -26,7 +26,7 @@ func (ss *Easyss) LocalSocks5() error {
 	log.Infof("starting local socks5 server at %v", addr)
 
 	//socks5.Debug = true
-	server, err := socks5.NewClassicServer(addr, "127.0.0.1", "", "", 0, 0)
+	server, err := socks5.NewClassicServer(addr, "127.0.0.1", "", "", 0, int(ss.Timeout()))
 	if err != nil {
 		log.Errorf("new socks5 server err: %+v", err)
 		return err
@@ -42,7 +42,7 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 	targetAddr := r.Address()
 	log.Infof("target addr:%v", targetAddr)
 
-	if err := ss.validateRequest(r); err != nil {
+	if err := ss.validateAddr(r.Address()); err != nil {
 		log.Errorf("validate socks5 request:%v", err)
 		return err
 	}
@@ -62,16 +62,20 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 	}
 
 	if r.Cmd == socks5.CmdUDP {
-		caddr, err := r.UDP(conn, s.ServerAddr)
-		log.Infof("target request is udp proto")
+		caddr, err := r.UDP(conn, s.UDPAddr)
+		log.Infof("target request is udp proto, target addr:%v, caddr:%v, conn.LocalAddr:%s, conn.RemoteAddr:%s, s.UDPAddr:%v",
+			targetAddr, caddr.String(), conn.LocalAddr().String(), conn.RemoteAddr().String(), s.ServerAddr)
 		if err != nil {
 			return err
 		}
 
 		ch := make(chan byte)
-		defer close(ch)
 		s.AssociatedUDP.Set(caddr.String(), ch, -1)
-		defer s.AssociatedUDP.Delete(caddr.String())
+		defer func() {
+			log.Infof("exit associate tcp connection, close chan=========")
+			close(ch)
+			s.AssociatedUDP.Delete(caddr.String())
+		}()
 
 		io.Copy(io.Discard, conn)
 		log.Infof("A tcp connection that udp %v associated closed, target addr:%v\n", caddr.String(), targetAddr)
@@ -131,10 +135,10 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	return
 }
 
-func (ss *Easyss) validateRequest(r *socks5.Request) error {
-	host, _, err := net.SplitHostPort(r.Address())
+func (ss *Easyss) validateAddr(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		return fmt.Errorf("invalid target address:%v, err:%v", r.Address(), err)
+		return fmt.Errorf("invalid target address:%v, err:%v", addr, err)
 	}
 
 	if !util.IsIP(host) {
