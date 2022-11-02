@@ -126,7 +126,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 
 	log.Debugf("send %v bytes to %v, and recive %v bytes", n1, addr, n2)
 	if !needClose {
-		log.Debugf("underline connection is health, so reuse it")
+		log.Debugf("underlying connection is health, so reuse it")
 	}
 
 	ss.stat.BytesSend.Add(n1)

@@ -41,7 +41,7 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64, needClos
 			n1 = res1.N
 			err := res1.Err
 			if cipherstream.EncryptErr(err) || cipherstream.WriteCipherErr(err) {
-				log.Debugf("io.Copy err:%+v, maybe underline connection has been closed", err)
+				log.Debugf("io.Copy err:%+v, maybe underlying connection has been closed", err)
 				markCipherStreamUnusable(cipher)
 				continue
 			}
@@ -62,7 +62,7 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64, needClos
 			n2 = res2.N
 			err := res2.Err
 			if cipherstream.DecryptErr(err) || cipherstream.ReadCipherErr(err) {
-				log.Debugf("io.Copy err:%+v, maybe underline connection has been closed", err)
+				log.Debugf("io.Copy err:%+v, maybe underlying connection has been closed", err)
 				markCipherStreamUnusable(cipher)
 				continue
 			}

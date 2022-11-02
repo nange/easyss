@@ -71,10 +71,10 @@ func (ss *Easyss) tcpServer() {
 						return
 					}
 					if needClose {
-						log.Debugf("maybe underline connection has been closed, need close the proxy conn")
+						log.Debugf("maybe underlying connection has been closed, need close the proxy conn")
 						return
 					}
-					log.Debugf("underline connection is health, so reuse it")
+					log.Debugf("underlying connection is health, so reuse it")
 				case "udp":
 					needClose, err := ss.remoteUDPHandle(conn, addrStr, method)
 					if err != nil {
@@ -82,10 +82,10 @@ func (ss *Easyss) tcpServer() {
 						return
 					}
 					if needClose {
-						log.Infof("maybe underline connection has been closed, need close the proxy conn")
+						log.Infof("maybe underlying connection has been closed, need close the proxy conn")
 						return
 					}
-					log.Infof("underline connection is health, so reuse it")
+					log.Infof("underlying connection is health, so reuse it")
 				default:
 					log.Errorf("unsupported protoType:%s", protoType)
 					return
