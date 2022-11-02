@@ -3,7 +3,6 @@ package easyss
 import (
 	"fmt"
 	"net"
-	"os"
 	"time"
 
 	"github.com/nange/easypool"
@@ -109,18 +108,17 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	s.UDPExchanges.Set(src+dst, ue, -1)
 
 	var monitorCh = make(chan bool, 1)
-	// monitor the assoc tcp connection to be closed
+	// monitor the assoc tcp connection to be closed and try to reuse the underlying connection
 	go func() {
 		var tryReuse bool
 		select {
 		case <-ch:
-			tryReuse = true
-		case b := <-monitorCh:
-			tryReuse = b
+			expireConn(ue.RemoteConn)
+			tryReuse = <-monitorCh
+		case tryReuse = <-monitorCh:
 		}
 
 		if tryReuse {
-			expireConn(ue.RemoteConn)
 			log.Infof("udp request is finished, try reusing underlying tcp connection")
 			buf := connStateBytes.Get(32)
 			defer connStateBytes.Put(buf)
@@ -152,6 +150,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			select {
 			case <-ch:
 				log.Infof("The tcp that udp address %s associated closed\n", ue.ClientAddr.String())
+				monitorCh <- true
 				return
 			default:
 			}
@@ -164,7 +163,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			}
 			n, err := ue.RemoteConn.Read(b[:])
 			if err != nil {
-				if os.IsTimeout(err) {
+				if err == cipherstream.ErrTimeout {
 					monitorCh <- true
 				} else {
 					monitorCh <- false
