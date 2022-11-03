@@ -14,6 +14,10 @@ import (
 	"github.com/txthinking/socks5"
 )
 
+const MaxUDPDataSize = 65507
+
+var udpDataBytes = util.NewBytes(MaxUDPDataSize)
+
 // UDPExchange used to store client address and remote connection
 type UDPExchange struct {
 	ClientAddr *net.UDPAddr
@@ -153,7 +157,8 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			s.UDPExchanges.Delete(src + dst)
 		}()
 
-		var b [65507]byte
+		var b = udpDataBytes.Get(MaxUDPDataSize)
+		defer udpDataBytes.Put(b)
 		for {
 			select {
 			case <-ch:

@@ -29,7 +29,8 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) (needCl
 	var ch1 = make(chan struct{})
 	// send
 	go func() {
-		var b [65507]byte
+		var b = udpDataBytes.Get(MaxUDPDataSize)
+		defer udpDataBytes.Put(b)
 		for {
 			n, err := csStream.Read(b[:])
 			if err != nil {
@@ -54,7 +55,9 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) (needCl
 	// receive
 	go func() {
 		defer close(ch2)
-		var b [65507]byte
+
+		var b = udpDataBytes.Get(MaxUDPDataSize)
+		defer udpDataBytes.Put(b)
 		for {
 			n, err := uConn.Read(b[:])
 			if err != nil {
