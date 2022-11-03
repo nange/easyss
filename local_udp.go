@@ -29,9 +29,9 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	if ok {
 		hasAssoc = true
 		ch = asCh.(chan byte)
-		log.Infof("found the associate with tcp, src:%s, dst:%s", src, d.Address())
+		log.Debugf("found the associate with tcp, src:%s, dst:%s", src, d.Address())
 	} else {
-		log.Infof("the udp addr:%v doesn't associate with tcp, dst addr:%v", src, d.Address())
+		log.Debugf("the udp addr:%v doesn't associate with tcp, dst addr:%v", src, d.Address())
 	}
 
 	send := func(ue *UDPExchange, data []byte) error {
@@ -49,12 +49,13 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	}
 
 	dst := d.Address()
+	_rewrittenDst := ""
 	host, _, err := net.SplitHostPort(dst)
 	if util.IsPrivateIP(host) {
 		// On Matsuri APP, the rDNS(in-addr.arpa) request may use private ip as dst
 		// One possible solution is rewritten the dst to 8.8.8.8:53
 		log.Debugf("rewrite dst addr to 8.8.8.8:53")
-		dst = "8.8.8.8:53"
+		_rewrittenDst = "8.8.8.8:53"
 	} else if err := ss.validateAddr(dst); err != nil {
 		log.Warnf("validate udp dst:%v err:%v, data:%s", dst, err, string(d.Data))
 		return errors.New("dst addr is invalid")
@@ -79,7 +80,12 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		return err
 	}
 
-	if err = ss.handShakeWithRemote(stream, dst, "udp"); err != nil {
+	if _rewrittenDst != "" {
+		err = ss.handShakeWithRemote(stream, _rewrittenDst, "udp")
+	} else {
+		err = ss.handShakeWithRemote(stream, dst, "udp")
+	}
+	if err != nil {
 		log.Errorf("hand-shake with remote server err:%v", err)
 		if pc, ok := stream.(*easypool.PoolConn); ok {
 			log.Debugf("mark pool conn stream unusable")
@@ -119,7 +125,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		}
 
 		if tryReuse {
-			log.Infof("udp request is finished, try reusing underlying tcp connection")
+			log.Debugf("udp request is finished, try reusing underlying tcp connection")
 			buf := connStateBytes.Get(32)
 			defer connStateBytes.Put(buf)
 
@@ -132,7 +138,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 				log.Infof("state err:%v, state:%v", state.err, state.state)
 				markCipherStreamUnusable(ue.RemoteConn)
 			} else {
-				log.Infof("underlying connection is health, so reuse it")
+				log.Debugf("underlying connection is health, so reuse it")
 			}
 		} else {
 			markCipherStreamUnusable(ue.RemoteConn)
@@ -154,8 +160,8 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 				return
 			default:
 			}
-			if !hasAssoc && s.UDPTimeout > 0 {
-				if err := ue.RemoteConn.SetDeadline(time.Now().Add(time.Duration(s.UDPTimeout) * time.Second)); err != nil {
+			if !hasAssoc {
+				if err := ue.RemoteConn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
 					log.Errorf("set the deadline for remote conn err:%v", err)
 					monitorCh <- false
 					return

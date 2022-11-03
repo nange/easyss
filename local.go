@@ -69,13 +69,17 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 			return err
 		}
 
-		ch := make(chan byte)
-		s.AssociatedUDP.Set(caddr.String(), ch, -1)
-		defer func() {
-			log.Infof("exit associate tcp connection, close chan=========")
-			close(ch)
-			s.AssociatedUDP.Delete(caddr.String())
-		}()
+		// if client udp addr isn't private ip, we do not set associated udp
+		// this case may be fired by non-standard socks5 implements
+		if caddr.IP.IsLoopback() || caddr.IP.IsPrivate() {
+			ch := make(chan byte)
+			s.AssociatedUDP.Set(caddr.String(), ch, -1)
+			defer func() {
+				log.Debugf("exit associate tcp connection, close chan=========")
+				close(ch)
+				s.AssociatedUDP.Delete(caddr.String())
+			}()
+		}
 
 		io.Copy(io.Discard, conn)
 		log.Infof("A tcp connection that udp %v associated closed, target addr:%v\n", caddr.String(), targetAddr)
