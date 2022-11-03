@@ -3,6 +3,7 @@ package easyss
 import (
 	"fmt"
 	"net"
+	"strconv"
 	"time"
 
 	"github.com/nange/easypool"
@@ -25,7 +26,8 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	var ch chan byte
 	var hasAssoc bool
 	src := addr.String()
-	asCh, ok := s.AssociatedUDP.Get(src)
+	portStr := strconv.FormatInt(int64(addr.Port), 10)
+	asCh, ok := s.AssociatedUDP.Get(portStr)
 	if ok {
 		hasAssoc = true
 		ch = asCh.(chan byte)

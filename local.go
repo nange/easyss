@@ -71,13 +71,14 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 
 		// if client udp addr isn't private ip, we do not set associated udp
 		// this case may be fired by non-standard socks5 implements
-		if caddr.IP.IsLoopback() || caddr.IP.IsPrivate() {
+		if caddr.IP.IsLoopback() || caddr.IP.IsPrivate() || caddr.IP.IsUnspecified() {
 			ch := make(chan byte)
-			s.AssociatedUDP.Set(caddr.String(), ch, -1)
+			portStr := strconv.FormatInt(int64(caddr.Port), 10)
+			s.AssociatedUDP.Set(portStr, ch, -1)
 			defer func() {
 				log.Debugf("exit associate tcp connection, close chan=========")
 				close(ch)
-				s.AssociatedUDP.Delete(caddr.String())
+				s.AssociatedUDP.Delete(portStr)
 			}()
 		}
 
