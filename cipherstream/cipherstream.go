@@ -2,6 +2,7 @@ package cipherstream
 
 import (
 	"bytes"
+	"crypto/rand"
 	"io"
 	"net"
 
@@ -103,6 +104,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 			dataframe := append(headercipher, payloadcipher...)
 			if padding {
 				padBytes := paddingBytes.Get(PaddingSize)
+				_, _ = rand.Read(padBytes)
 				padcipher, err := cs.Encrypt(padBytes)
 				paddingBytes.Put(padBytes)
 				if err != nil {
