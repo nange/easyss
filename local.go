@@ -40,7 +40,7 @@ func (ss *Easyss) LocalSocks5() error {
 
 func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Request) error {
 	targetAddr := r.Address()
-	log.Infof("target addr:%v", targetAddr)
+	log.Infof("target addr:%v, is udp:%v", targetAddr, r.Cmd == socks5.CmdUDP)
 
 	if err := ss.validateAddr(r.Address()); err != nil {
 		log.Errorf("validate socks5 request:%v", err)
@@ -63,7 +63,7 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 
 	if r.Cmd == socks5.CmdUDP {
 		caddr, err := r.UDP(conn, s.UDPAddr)
-		log.Infof("target request is udp proto, target addr:%v, caddr:%v, conn.LocalAddr:%s, conn.RemoteAddr:%s, s.UDPAddr:%v",
+		log.Debugf("target request is udp proto, target addr:%v, caddr:%v, conn.LocalAddr:%s, conn.RemoteAddr:%s, s.UDPAddr:%v",
 			targetAddr, caddr.String(), conn.LocalAddr().String(), conn.RemoteAddr().String(), s.ServerAddr)
 		if err != nil {
 			return err
@@ -83,7 +83,7 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 		}
 
 		io.Copy(io.Discard, conn)
-		log.Infof("A tcp connection that udp %v associated closed, target addr:%v\n", caddr.String(), targetAddr)
+		log.Debugf("A tcp connection that udp %v associated closed, target addr:%v\n", caddr.String(), targetAddr)
 		return nil
 	}
 
