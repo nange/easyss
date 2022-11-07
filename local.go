@@ -48,7 +48,7 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 	}
 
 	if r.Cmd == socks5.CmdConnect {
-		a, addr, port, err := socks5.ParseAddress(ss.LocalAddr())
+		a, addr, port, err := socks5.ParseAddress(conn.LocalAddr().String())
 		if err != nil {
 			log.Errorf("socks5 ParseAddress err:%+v", err)
 			return err
@@ -62,9 +62,10 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 	}
 
 	if r.Cmd == socks5.CmdUDP {
-		caddr, err := r.UDP(conn, s.UDPAddr)
-		log.Debugf("target request is udp proto, target addr:%v, caddr:%v, conn.LocalAddr:%s, conn.RemoteAddr:%s, s.UDPAddr:%v",
-			targetAddr, caddr.String(), conn.LocalAddr().String(), conn.RemoteAddr().String(), s.ServerAddr)
+		uaddr, _ := net.ResolveUDPAddr("udp", conn.LocalAddr().String())
+		caddr, err := r.UDP(conn, uaddr)
+		log.Debugf("target request is udp proto, target addr:%v, caddr:%v, conn.LocalAddr:%s, conn.RemoteAddr:%s",
+			targetAddr, caddr.String(), conn.LocalAddr().String(), conn.RemoteAddr().String())
 		if err != nil {
 			return err
 		}
@@ -76,7 +77,7 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 			portStr := strconv.FormatInt(int64(caddr.Port), 10)
 			s.AssociatedUDP.Set(portStr, ch, -1)
 			defer func() {
-				log.Debugf("exit associate tcp connection, close chan=========")
+				log.Debugf("exit associate tcp connection, closing chan")
 				close(ch)
 				s.AssociatedUDP.Delete(portStr)
 			}()
