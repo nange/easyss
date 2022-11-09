@@ -30,15 +30,18 @@ type Statistics struct {
 }
 
 type Easyss struct {
-	config    *Config
-	serverIPs []string
-	stat      *Statistics
+	config   *Config
+	serverIP string
+	stat     *Statistics
+	localGw  string
+	localDev string
 
-	tcpPool         easypool.Pool
-	socksServer     *socks5.Server
-	httpProxyServer *http.Server
-	closing         chan struct{}
-	mu              *sync.RWMutex
+	tcpPool          easypool.Pool
+	socksServer      *socks5.Server
+	httpProxyServer  *http.Server
+	closing          chan struct{}
+	tun2socksEnabled bool
+	mu               *sync.RWMutex
 }
 
 func New(config *Config) (*Easyss, error) {
@@ -53,8 +56,17 @@ func New(config *Config) (*Easyss, error) {
 	var ips []string
 	if !util.IsIP(config.Server) {
 		ips, err = net.LookupHost(config.Server)
-		ss.serverIPs = ips
+		if len(ips) > 0 {
+			ss.serverIP = ips[0]
+		}
 	}
+
+	gw, dev, err := util.SysGatewayAndDevice()
+	if err != nil {
+		log.Errorf("get system gateway and device err:%s", err.Error())
+	}
+	ss.localGw = gw
+	ss.localDev = dev
 
 	go ss.printStatistics()
 
@@ -132,8 +144,24 @@ func (ss *Easyss) Server() string {
 	return ss.config.Server
 }
 
+func (ss *Easyss) ServerIP() string {
+	return ss.serverIP
+}
+
 func (ss *Easyss) ServerAddr() string {
 	return fmt.Sprintf("%s:%d", ss.Server(), ss.ServerPort())
+}
+
+func (ss *Easyss) Socks5ProxyAddr() string {
+	return fmt.Sprintf("socks5://%s", ss.LocalAddr())
+}
+
+func (ss *Easyss) LocalGateway() string {
+	return ss.localGw
+}
+
+func (ss *Easyss) LocalDevice() string {
+	return ss.localDev
 }
 
 func (ss *Easyss) Timeout() time.Duration {
@@ -202,6 +230,9 @@ func (ss *Easyss) Close() {
 	if ss.closing != nil {
 		close(ss.closing)
 		ss.closing = nil
+	}
+	if ss.tun2socksEnabled {
+		ss.closeTun2socks()
 	}
 }
 

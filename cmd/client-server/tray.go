@@ -27,6 +27,8 @@ type SysTray struct {
 	pac     *PAC
 	closing chan struct{}
 	mu      *sync.RWMutex
+
+	tun2socksMenu *systray.MenuItem
 }
 
 func NewSysTray(ss *easyss.Easyss, pac *PAC) *SysTray {
@@ -46,10 +48,16 @@ func (st *SysTray) TrayReady() {
 
 	st.AddSelectConfMenu()
 	systray.AddSeparator()
+
 	st.AddPACMenu()
 	systray.AddSeparator()
+
+	st.tun2socksMenu = st.AddTun2socksMenu()
+	systray.AddSeparator()
+
 	st.AddCatLogsMenu()
 	systray.AddSeparator()
+
 	st.AddExitMenu()
 
 }
@@ -165,6 +173,33 @@ func (st *SysTray) AddPACMenu() (*systray.MenuItem, *systray.MenuItem) {
 	return pac, gPac
 }
 
+func (st *SysTray) AddTun2socksMenu() *systray.MenuItem {
+	tun2socksMenu := systray.AddMenuItemCheckbox("全局代理(需管理员权限运行)", "全局代理", false)
+
+	go func() {
+		for {
+			select {
+			case <-tun2socksMenu.ClickedCh:
+				if !tun2socksMenu.Checked() {
+					if err := st.ss.InitTun2socks(); err != nil {
+						log.Errorf("init tun2socks err:%s", err.Error())
+						continue
+					}
+					tun2socksMenu.Check()
+				} else {
+					if err := st.ss.CloseTun2socks(); err != nil {
+						log.Errorf("close tun2socks err:%s", err.Error())
+						continue
+					}
+					tun2socksMenu.Uncheck()
+				}
+			}
+		}
+	}()
+
+	return tun2socksMenu
+}
+
 func (st *SysTray) AddCatLogsMenu() *systray.MenuItem {
 	catLog := systray.AddMenuItem("查看Easyss运行日志", "查看日志")
 
@@ -191,7 +226,6 @@ func (st *SysTray) AddExitMenu() *systray.MenuItem {
 			select {
 			case <-quit.ClickedCh:
 				log.Debugf("exit btn clicked quit now...")
-				st.Exit()
 				systray.Quit()
 			}
 		}
@@ -250,6 +284,7 @@ func (st *SysTray) StartLocalService() {
 
 func (st *SysTray) RestartService(config *easyss.Config) error {
 	st.CloseService()
+	st.tun2socksMenu.Uncheck()
 
 	ss, err := easyss.New(config)
 	if err != nil {

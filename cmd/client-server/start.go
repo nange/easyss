@@ -29,10 +29,10 @@ func StartEasyss(ss *easyss.Easyss) {
 		case <-c:
 			log.Infof("got signal to exit: %v", <-c)
 			st.CloseService()
+			os.Exit(0)
 		case <-st.closing:
 			log.Infof("easyss exiting...")
 		}
-		os.Exit(0)
 	}()
 
 	systray.Run(st.TrayReady, st.Exit) // system tray management

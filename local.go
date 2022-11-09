@@ -157,10 +157,8 @@ func (ss *Easyss) validateAddr(addr string) error {
 	if util.IsPrivateIP(host) {
 		return fmt.Errorf("target host:%v is private ip, which is invalid", host)
 	}
-	for _, ip := range ss.serverIPs {
-		if host == ip {
-			return fmt.Errorf("target host:%v equals server host ip, which may caused infinite-loop", host)
-		}
+	if host == ss.ServerIP() {
+		return fmt.Errorf("target host:%v equals server host ip, which may caused infinite-loop", host)
 	}
 
 	return nil

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/miekg/dns"
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/util"
@@ -25,7 +26,18 @@ type UDPExchange struct {
 }
 
 func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) error {
-	log.Debugf("enter udp handdle, local_addr:%v, remote_addr:%v", addr.String(), d.Address())
+	msg := &dns.Msg{}
+	if err := msg.Unpack(d.Data); err == nil && isDNSRequest(msg) {
+		log.Infof("the udp request is dns proto")
+		if msg.Question[0].Name == ss.Server() {
+			err := ss.responseServerIpBack(s.UDPConn, addr, msg, d.Address())
+			if err != nil {
+				log.Errorf("response server ip back err:%v", err)
+			}
+			return err
+		}
+	}
+	log.Infof("enter udp handdle, local_addr:%v, remote_addr:%v", addr.String(), d.Address())
 
 	var ch chan byte
 	var hasAssoc bool
@@ -56,11 +68,11 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 
 	dst := d.Address()
 	_rewrittenDst := ""
-	host, _, err := net.SplitHostPort(dst)
-	if util.IsPrivateIP(host) {
+	log.Infof("dst addr is:%v===================", dst)
+	if isDNSRequest(msg) {
 		// On Matsuri APP, the rDNS(in-addr.arpa) request may use private ip as dst
 		// One possible solution is rewritten the dst to 8.8.8.8:53
-		log.Debugf("rewrite dst addr to 8.8.8.8:53")
+		log.Infof("rewrite dst addr to 8.8.8.8:53")
 		_rewrittenDst = "8.8.8.8:53"
 	} else if err := ss.validateAddr(dst); err != nil {
 		log.Warnf("validate udp dst:%v err:%v, data:%s", dst, err, string(d.Data))
@@ -202,4 +214,39 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	}(ue, dst)
 
 	return nil
+}
+
+func (ss *Easyss) responseServerIpBack(conn *net.UDPConn, localAddr *net.UDPAddr, msg *dns.Msg, remoteAddr string) error {
+	log.Infof("dns request is for Easyss server, send the result back directly=================")
+	if ss.ServerIP() == "" {
+		return errors.New("server ips is empty")
+	}
+
+	msg.MsgHdr.Response = true
+	msg.MsgHdr.RecursionAvailable = true
+	msg.Answer = []dns.RR{
+		&dns.A{
+			Hdr: dns.RR_Header{
+				Name:     ss.Server(),
+				Rrtype:   dns.TypeA,
+				Class:    dns.ClassINET,
+				Ttl:      86400,
+				Rdlength: 4,
+			},
+			A: net.ParseIP(ss.ServerIP()),
+		},
+	}
+
+	a, _addr, port, _ := socks5.ParseAddress(remoteAddr)
+	pack, _ := msg.Pack()
+	d1 := socks5.NewDatagram(a, _addr, port, pack)
+	_, err := conn.WriteToUDP(d1.Bytes(), localAddr)
+	return err
+}
+
+func isDNSRequest(msg *dns.Msg) bool {
+	if len(msg.Question) > 0 {
+		return true
+	}
+	return false
 }
