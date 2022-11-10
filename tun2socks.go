@@ -2,44 +2,50 @@ package easyss
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"os/exec"
 	"time"
 
+	"github.com/nange/easyss/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/xjasonlyu/tun2socks/v2/engine"
 )
 
+//go:embed create_tun_dev.sh
+var createTunDevSh []byte
+
+//go:embed close_tun_dev.sh
+var closeTunDevSh []byte
+
 var (
 	tunDevice = "tun-easyss"
-	tunIP     = "198.18.0.1"
-	tunMask   = "/15"
 )
 
-func (ss *Easyss) InitTun2socks() error {
+func (ss *Easyss) CreateTun2socks() error {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
+	if err := ss.createTunDevAndSetIpRoute(); err != nil {
+		log.Errorf("add tun device and set ip-route err:%s", err.Error())
+		return err
+	}
+
 	key := &engine.Key{
-		MTU:        1500,
 		Proxy:      ss.Socks5ProxyAddr(),
 		Device:     tunDevice,
-		LogLevel:   "info",
+		LogLevel:   "warning",
 		UDPTimeout: ss.Timeout(),
 	}
 	engine.Insert(key)
 	engine.Start()
 
-	if err := ss.addTunDevAndSetIpRoute(); err != nil {
-		log.Errorf("add tun device and set ip-route err:%s", err.Error())
-		return err
-	}
 	ss.tun2socksEnabled = true
 	log.Infof("tun2socks server and tun device init success")
 	return nil
 }
 
-func (ss *Easyss) addTunDevAndSetIpRoute() error {
+func (ss *Easyss) createTunDevAndSetIpRoute() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -47,31 +53,15 @@ func (ss *Easyss) addTunDevAndSetIpRoute() error {
 		return errors.New("server ips is empty")
 	}
 
-	err := exec.CommandContext(ctx, "sudo",
-		"ip", "addr", "add", tunIP+tunMask, "dev", tunDevice).Run()
+	namePath, err := util.WriteToTemp("create_tun_dev.sh", createTunDevSh)
 	if err != nil {
-		log.Errorf("set ip for tun device err:%s", err.Error())
+		log.Errorf("write close_tun_dev.sh to temp file err:%v", err.Error())
 		return err
 	}
 
-	err = exec.CommandContext(ctx, "sudo",
-		"ip", "link", "set", "dev", tunDevice, "up").Run()
-	if err != nil {
-		log.Errorf("set tun device up err:%s", err.Error())
-		return err
-	}
-
-	err = exec.CommandContext(ctx, "sudo",
-		"ip", "route", "add", ss.ServerIP(), "via", ss.LocalGateway(), "dev", ss.LocalDevice()).Run()
-	if err != nil {
-		log.Errorf("set server ip-route err:%s", err.Error())
-		return err
-	}
-
-	err = exec.CommandContext(ctx, "sudo",
-		"ip", "route", "add", "default", "via", tunIP, "dev", tunDevice, "metric", "1").Run()
-	if err != nil {
-		log.Errorf("add default ip-route to tun device err:%s", err.Error())
+	if err := exec.CommandContext(ctx, "pkexec", "bash",
+		namePath, tunDevice, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()).Run(); err != nil {
+		log.Errorf("exec create_tun_dev.sh err:%s", err.Error())
 		return err
 	}
 
@@ -87,16 +77,29 @@ func (ss *Easyss) CloseTun2socks() error {
 
 func (ss *Easyss) closeTun2socks() error {
 	engine.Stop()
+	if err := ss.closeTunDevAndDelIpRoute(); err != nil {
+		return err
+	}
 
+	ss.tun2socksEnabled = false
+	return nil
+}
+
+func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := exec.CommandContext(ctx, "sudo",
-		"ip", "route", "del", ss.ServerIP(), "via", ss.LocalGateway(), "dev", ss.LocalDevice()).Run()
+	namePath, err := util.WriteToTemp("close_tun_dev.sh", closeTunDevSh)
 	if err != nil {
-		log.Errorf("delete server ip-route err:%s", err.Error())
+		log.Errorf("write close_tun_dev.sh to temp file err:%v", err.Error())
 		return err
 	}
-	ss.tun2socksEnabled = false
+
+	if err := exec.CommandContext(ctx, "pkexec", "bash",
+		namePath, tunDevice, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()).Run(); err != nil {
+		log.Errorf("exec close_tun_dev.sh err:%s", err.Error())
+		return err
+	}
+
 	return nil
 }

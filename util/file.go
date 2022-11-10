@@ -70,3 +70,16 @@ func DirFileList(dir string) ([]string, error) {
 	}
 	return files, nil
 }
+
+func WriteToTemp(filename string, content []byte) (namePath string, err error) {
+	tf, err := os.CreateTemp("", filename)
+	if err != nil {
+		return "", err
+	}
+
+	if _, err := tf.Write(content); err != nil {
+		return "", err
+	}
+
+	return tf.Name(), tf.Close()
+}

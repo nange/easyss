@@ -174,14 +174,14 @@ func (st *SysTray) AddPACMenu() (*systray.MenuItem, *systray.MenuItem) {
 }
 
 func (st *SysTray) AddTun2socksMenu() *systray.MenuItem {
-	tun2socksMenu := systray.AddMenuItemCheckbox("全局代理(需管理员权限运行)", "全局代理", false)
+	tun2socksMenu := systray.AddMenuItemCheckbox("全局代理(需管理员权限)", "全局代理", false)
 
 	go func() {
 		for {
 			select {
 			case <-tun2socksMenu.ClickedCh:
 				if !tun2socksMenu.Checked() {
-					if err := st.ss.InitTun2socks(); err != nil {
+					if err := st.ss.CreateTun2socks(); err != nil {
 						log.Errorf("init tun2socks err:%s", err.Error())
 						continue
 					}
