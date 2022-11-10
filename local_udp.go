@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/miekg/dns"
@@ -26,10 +27,13 @@ type UDPExchange struct {
 }
 
 func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) error {
+	log.Debugf("enter udp handdle, local_addr:%v, remote_addr:%v", addr.String(), d.Address())
+
 	msg := &dns.Msg{}
 	if err := msg.Unpack(d.Data); err == nil && isDNSRequest(msg) {
-		log.Infof("the udp request is dns proto")
-		if msg.Question[0].Name == ss.Server() {
+		log.Infof("the udp request is dns proto, domain:%s, ss.Server:%s, serverIP:%s",
+			msg.Question[0].Name, ss.Server(), ss.ServerIP())
+		if strings.TrimSuffix(msg.Question[0].Name, ".") == ss.Server() {
 			err := ss.responseServerIpBack(s.UDPConn, addr, msg, d.Address())
 			if err != nil {
 				log.Errorf("response server ip back err:%v", err)
@@ -37,25 +41,24 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			return err
 		}
 	}
-	log.Infof("enter udp handdle, local_addr:%v, remote_addr:%v", addr.String(), d.Address())
 
 	var ch chan byte
 	var hasAssoc bool
-	src := addr.String()
+
 	portStr := strconv.FormatInt(int64(addr.Port), 10)
 	asCh, ok := s.AssociatedUDP.Get(portStr)
 	if ok {
 		hasAssoc = true
 		ch = asCh.(chan byte)
-		log.Debugf("found the associate with tcp, src:%s, dst:%s", src, d.Address())
+		log.Debugf("found the associate with tcp, src:%s, dst:%s", addr.String(), d.Address())
 	} else {
-		log.Debugf("the udp addr:%v doesn't associate with tcp, dst addr:%v", src, d.Address())
+		log.Debugf("the udp addr:%v doesn't associate with tcp, dst addr:%v", addr.String(), d.Address())
 	}
 
 	send := func(ue *UDPExchange, data []byte) error {
 		select {
 		case <-ch:
-			return fmt.Errorf("the tcp that udp address %s associated closed", src)
+			return fmt.Errorf("the tcp that udp address %s associated closed", addr.String())
 		default:
 		}
 		_, err := ue.RemoteConn.Write(data)
@@ -68,11 +71,19 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 
 	dst := d.Address()
 	_rewrittenDst := ""
-	log.Infof("dst addr is:%v===================", dst)
 	if isDNSRequest(msg) {
-		// On Matsuri APP, the rDNS(in-addr.arpa) request may use private ip as dst
-		// One possible solution is rewritten the dst to 8.8.8.8:53
-		log.Infof("rewrite dst addr to 8.8.8.8:53")
+		// find from dns cache first
+		msgCache := ss.DNSCache(msg.Question[0].Name)
+		if msgCache != nil {
+			log.Infof("find msg from dns cache, write back directly, domain:%s", msg.Question[0].Name)
+			if err := responseDNSMsg(s.UDPConn, addr, msgCache, d.Address()); err != nil {
+				log.Errorf("response dns msg err:%s", err.Error())
+				return err
+			}
+			return nil
+		}
+
+		log.Debugf("rewrite dns dst addr to 8.8.8.8:53")
 		_rewrittenDst = "8.8.8.8:53"
 	} else if err := ss.validateAddr(dst); err != nil {
 		log.Warnf("validate udp dst:%v err:%v, data:%s", dst, err, string(d.Data))
@@ -80,6 +91,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	}
 
 	var ue *UDPExchange
+	var src = addr.String()
 	iue, ok := s.UDPExchanges.Get(src + dst)
 	if ok {
 		ue = iue.(*UDPExchange)
@@ -179,6 +191,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 				return
 			default:
 			}
+
 			if !hasAssoc {
 				if err := ue.RemoteConn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
 					log.Errorf("set the deadline for remote conn err:%v", err)
@@ -197,6 +210,16 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			}
 			log.Debugf("Got UDP data from remote. client: %v  data-len: %v\n", ue.ClientAddr.String(), len(b[0:n]))
 
+			// if is dns response, set result to dns cache
+			msg := &dns.Msg{}
+			if err := msg.Unpack(b[0:n]); err == nil && isDNSResponse(msg) {
+				if err := ss.SetDNSCache(msg); err != nil {
+					log.Warnf("set dns cache err:%s", err.Error())
+				} else {
+					log.Debugf("set dns cache success for domain:%s", msg.Question[0].Name)
+				}
+			}
+
 			a, addr, port, err := socks5.ParseAddress(dst)
 			if err != nil {
 				monitorCh <- true
@@ -208,8 +231,6 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 				monitorCh <- true
 				return
 			}
-			log.Debugf("Write Datagram to client. client: %#v  data: %#v %#v %#v %#v %#v %#v\n",
-				ue.ClientAddr.String(), d1.Rsv, d1.Frag, d1.Atyp, d1.DstAddr, d1.DstPort, len(d1.Data))
 		}
 	}(ue, dst)
 
@@ -217,7 +238,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 }
 
 func (ss *Easyss) responseServerIpBack(conn *net.UDPConn, localAddr *net.UDPAddr, msg *dns.Msg, remoteAddr string) error {
-	log.Infof("dns request is for Easyss server, send the result back directly=================")
+	log.Infof("dns request is for Easyss server, send the result back directly")
 	if ss.ServerIP() == "" {
 		return errors.New("server ips is empty")
 	}
@@ -237,9 +258,14 @@ func (ss *Easyss) responseServerIpBack(conn *net.UDPConn, localAddr *net.UDPAddr
 		},
 	}
 
+	return responseDNSMsg(conn, localAddr, msg, remoteAddr)
+}
+
+func responseDNSMsg(conn *net.UDPConn, localAddr *net.UDPAddr, msg *dns.Msg, remoteAddr string) error {
 	a, _addr, port, _ := socks5.ParseAddress(remoteAddr)
 	pack, _ := msg.Pack()
 	d1 := socks5.NewDatagram(a, _addr, port, pack)
+
 	_, err := conn.WriteToUDP(d1.Bytes(), localAddr)
 	return err
 }
@@ -249,4 +275,11 @@ func isDNSRequest(msg *dns.Msg) bool {
 		return true
 	}
 	return false
+}
+
+func isDNSResponse(msg *dns.Msg) bool {
+	if !msg.MsgHdr.Response || !isDNSRequest(msg) || len(msg.Answer) == 0 {
+		return false
+	}
+	return true
 }

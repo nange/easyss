@@ -4,6 +4,7 @@ go 1.19
 
 require (
 	github.com/caddyserver/certmagic v0.17.2
+	github.com/coocood/freecache v1.2.3
 	github.com/getlantern/pac v0.0.0-20161019162755-5534aa917168
 	github.com/getlantern/systray v1.2.1
 	github.com/miekg/dns v1.1.50
@@ -23,6 +24,7 @@ require (
 	github.com/BurntSushi/toml v0.4.1 // indirect
 	github.com/Dreamacro/go-shadowsocks2 v0.1.7 // indirect
 	github.com/andybalholm/brotli v1.0.4 // indirect
+	github.com/cespare/xxhash/v2 v2.1.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/docker/go-units v0.4.0 // indirect
 	github.com/getlantern/byteexec v0.0.0-20170405023437-4cfb26ec74f4 // indirect

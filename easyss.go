@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/coocood/freecache"
+	"github.com/miekg/dns"
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/util"
 	utls "github.com/refraction-networking/utls"
@@ -35,6 +37,7 @@ type Easyss struct {
 	stat     *Statistics
 	localGw  string
 	localDev string
+	dnsCache *freecache.Cache
 
 	tcpPool          easypool.Pool
 	socksServer      *socks5.Server
@@ -46,10 +49,11 @@ type Easyss struct {
 
 func New(config *Config) (*Easyss, error) {
 	ss := &Easyss{
-		config:  config,
-		stat:    &Statistics{},
-		closing: make(chan struct{}, 1),
-		mu:      &sync.RWMutex{},
+		config:   config,
+		stat:     &Statistics{},
+		dnsCache: freecache.NewCache(2 * 1024 * 1024),
+		closing:  make(chan struct{}, 1),
+		mu:       &sync.RWMutex{},
 	}
 
 	var err error
@@ -209,6 +213,45 @@ func (ss *Easyss) SetPool(pool easypool.Pool) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	ss.tcpPool = pool
+}
+
+func (ss *Easyss) DNSCache(name string) *dns.Msg {
+	v, err := ss.dnsCache.Get([]byte(name))
+	if err != nil || len(v) == 0 {
+		return nil
+	}
+
+	msg := &dns.Msg{}
+	if err := msg.Unpack(v); err != nil {
+		return nil
+	}
+
+	return msg
+}
+
+func (ss *Easyss) RenewDNSCache(name string) {
+	ss.dnsCache.Touch([]byte(name), 8*60*60)
+}
+
+func (ss *Easyss) SetDNSCache(msg *dns.Msg) error {
+	if msg == nil {
+		return nil
+	}
+	if len(msg.Question) == 0 {
+		return nil
+	}
+
+	q := msg.Question[0]
+	if q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA {
+		v, err := msg.Pack()
+		if err != nil {
+			return err
+		}
+
+		return ss.dnsCache.Set([]byte(q.Name), v, 8*60*60)
+	}
+
+	return nil
 }
 
 func (ss *Easyss) Close() {
