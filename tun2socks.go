@@ -33,10 +33,12 @@ func (ss *Easyss) CreateTun2socks() error {
 	}
 
 	key := &engine.Key{
-		Proxy:      ss.Socks5ProxyAddr(),
-		Device:     tunDevice,
-		LogLevel:   "warning",
-		UDPTimeout: ss.Timeout(),
+		Proxy:                ss.Socks5ProxyAddr(),
+		Device:               tunDevice,
+		LogLevel:             "warning",
+		TCPSendBufferSize:    "1m",
+		TCPReceiveBufferSize: "1m",
+		UDPTimeout:           ss.Timeout(),
 	}
 	engine.Insert(key)
 	engine.Start()

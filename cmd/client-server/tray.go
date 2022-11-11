@@ -183,12 +183,14 @@ func (st *SysTray) AddTun2socksMenu() *systray.MenuItem {
 				if !tun2socksMenu.Checked() {
 					if err := st.ss.CreateTun2socks(); err != nil {
 						log.Errorf("init tun2socks err:%s", err.Error())
+						tun2socksMenu.Uncheck()
 						continue
 					}
 					tun2socksMenu.Check()
 				} else {
 					if err := st.ss.CloseTun2socks(); err != nil {
 						log.Errorf("close tun2socks err:%s", err.Error())
+						tun2socksMenu.Check()
 						continue
 					}
 					tun2socksMenu.Uncheck()
