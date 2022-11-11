@@ -216,8 +216,8 @@ func (ss *Easyss) SetPool(pool easypool.Pool) {
 	ss.tcpPool = pool
 }
 
-func (ss *Easyss) DNSCache(name string) *dns.Msg {
-	v, err := ss.dnsCache.Get([]byte(name))
+func (ss *Easyss) DNSCache(name, qtype string) *dns.Msg {
+	v, err := ss.dnsCache.Get([]byte(name + qtype))
 	if err != nil || len(v) == 0 {
 		return nil
 	}
@@ -230,8 +230,8 @@ func (ss *Easyss) DNSCache(name string) *dns.Msg {
 	return msg
 }
 
-func (ss *Easyss) RenewDNSCache(name string) {
-	ss.dnsCache.Touch([]byte(name), 8*60*60)
+func (ss *Easyss) RenewDNSCache(name, qtype string) {
+	ss.dnsCache.Touch([]byte(name+qtype), 8*60*60)
 }
 
 func (ss *Easyss) SetDNSCache(msg *dns.Msg, noExpire bool) error {
@@ -252,7 +252,7 @@ func (ss *Easyss) SetDNSCache(msg *dns.Msg, noExpire bool) error {
 		if noExpire {
 			expireSec = 0
 		}
-		return ss.dnsCache.Set([]byte(q.Name), v, expireSec)
+		return ss.dnsCache.Set([]byte(q.Name+dns.TypeToString[q.Qtype]), v, expireSec)
 	}
 
 	return nil
