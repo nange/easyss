@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"errors"
+	"os"
 	"os/exec"
 	"time"
 
@@ -58,6 +59,7 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 		log.Errorf("write close_tun_dev.sh to temp file err:%v", err.Error())
 		return err
 	}
+	defer os.RemoveAll(namePath)
 
 	if err := exec.CommandContext(ctx, "pkexec", "bash",
 		namePath, tunDevice, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()).Run(); err != nil {
@@ -94,6 +96,7 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 		log.Errorf("write close_tun_dev.sh to temp file err:%v", err.Error())
 		return err
 	}
+	defer os.RemoveAll(namePath)
 
 	if err := exec.CommandContext(ctx, "pkexec", "bash",
 		namePath, tunDevice, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()).Run(); err != nil {
