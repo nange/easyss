@@ -4,9 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"io"
+	"net"
 	"os/exec"
+	runtime "runtime"
 	"strconv"
 	"strings"
+
+	"github.com/miekg/dns"
 )
 
 func SysSupportPowershell() bool {
@@ -94,4 +98,16 @@ func SysGatewayAndDevice() (gw string, dev string, err error) {
 	}
 
 	return
+}
+
+func SysDNSServerAddr() string {
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+		cc, err := dns.ClientConfigFromFile("/etc/resolv.conf")
+		if err != nil {
+			return ""
+		}
+		return net.JoinHostPort(cc.Servers[0], cc.Port)
+	}
+
+	return ""
 }

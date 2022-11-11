@@ -17,6 +17,7 @@ import (
 )
 
 const MaxUDPDataSize = 65507
+const DefaultDNSServer = "8.8.8.8:53"
 
 var udpDataBytes = util.NewBytes(MaxUDPDataSize)
 
@@ -29,17 +30,35 @@ type UDPExchange struct {
 func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) error {
 	log.Debugf("enter udp handdle, local_addr:%v, remote_addr:%v", addr.String(), d.Address())
 
+	dst := d.Address()
+	rewrittenDst := ""
 	msg := &dns.Msg{}
-	if err := msg.Unpack(d.Data); err == nil && isDNSRequest(msg) {
-		log.Infof("the udp request is dns proto, domain:%s, ss.Server:%s, serverIP:%s",
-			msg.Question[0].Name, ss.Server(), ss.ServerIP())
-		if strings.TrimSuffix(msg.Question[0].Name, ".") == ss.Server() {
-			err := ss.responseServerIpBack(s.UDPConn, addr, msg, d.Address())
-			if err != nil {
-				log.Errorf("response server ip back err:%v", err)
+
+	err := msg.Unpack(d.Data)
+	if err == nil && isDNSRequest(msg) {
+		log.Debugf("the udp request is dns proto, domain:%s", msg.Question[0].Name)
+		// find from dns cache first
+		domainName := msg.Question[0].Name
+		msgCache := ss.DNSCache(domainName)
+		if msgCache != nil {
+			msgCache.MsgHdr.Id = msg.MsgHdr.Id
+			log.Debugf("find msg from dns cache, write back directly, domain:%s", domainName)
+			if err := responseDNSMsg(s.UDPConn, addr, msgCache, d.Address()); err != nil {
+				log.Errorf("response dns msg err:%s", err.Error())
+				return err
 			}
-			return err
+			if strings.TrimSuffix(domainName, ".") != ss.Server() {
+				log.Debugf("renew dns cache for domain:%s", domainName)
+				ss.RenewDNSCache(domainName)
+			}
+			return nil
 		}
+
+		log.Debugf("rewrite dns dst addr to %s", DefaultDNSServer)
+		rewrittenDst = DefaultDNSServer
+	} else if err := ss.validateAddr(dst); err != nil {
+		log.Warnf("validate udp dst:%v err:%v, data:%s", dst, err, string(d.Data))
+		return errors.New("dst addr is invalid")
 	}
 
 	var ch chan byte
@@ -69,27 +88,6 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		return nil
 	}
 
-	dst := d.Address()
-	_rewrittenDst := ""
-	if isDNSRequest(msg) {
-		// find from dns cache first
-		msgCache := ss.DNSCache(msg.Question[0].Name)
-		if msgCache != nil {
-			log.Infof("find msg from dns cache, write back directly, domain:%s", msg.Question[0].Name)
-			if err := responseDNSMsg(s.UDPConn, addr, msgCache, d.Address()); err != nil {
-				log.Errorf("response dns msg err:%s", err.Error())
-				return err
-			}
-			return nil
-		}
-
-		log.Debugf("rewrite dns dst addr to 8.8.8.8:53")
-		_rewrittenDst = "8.8.8.8:53"
-	} else if err := ss.validateAddr(dst); err != nil {
-		log.Warnf("validate udp dst:%v err:%v, data:%s", dst, err, string(d.Data))
-		return errors.New("dst addr is invalid")
-	}
-
 	var ue *UDPExchange
 	var src = addr.String()
 	iue, ok := s.UDPExchanges.Get(src + dst)
@@ -110,8 +108,8 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		return err
 	}
 
-	if _rewrittenDst != "" {
-		err = ss.handShakeWithRemote(stream, _rewrittenDst, "udp")
+	if rewrittenDst != "" {
+		err = ss.handShakeWithRemote(stream, rewrittenDst, "udp")
 	} else {
 		err = ss.handShakeWithRemote(stream, dst, "udp")
 	}
@@ -213,7 +211,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			// if is dns response, set result to dns cache
 			msg := &dns.Msg{}
 			if err := msg.Unpack(b[0:n]); err == nil && isDNSResponse(msg) {
-				if err := ss.SetDNSCache(msg); err != nil {
+				if err := ss.SetDNSCache(msg, false); err != nil {
 					log.Warnf("set dns cache err:%s", err.Error())
 				} else {
 					log.Debugf("set dns cache success for domain:%s", msg.Question[0].Name)
@@ -235,30 +233,6 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	}(ue, dst)
 
 	return nil
-}
-
-func (ss *Easyss) responseServerIpBack(conn *net.UDPConn, localAddr *net.UDPAddr, msg *dns.Msg, remoteAddr string) error {
-	log.Infof("dns request is for Easyss server, send the result back directly")
-	if ss.ServerIP() == "" {
-		return errors.New("server ips is empty")
-	}
-
-	msg.MsgHdr.Response = true
-	msg.MsgHdr.RecursionAvailable = true
-	msg.Answer = []dns.RR{
-		&dns.A{
-			Hdr: dns.RR_Header{
-				Name:     ss.Server(),
-				Rrtype:   dns.TypeA,
-				Class:    dns.ClassINET,
-				Ttl:      86400,
-				Rdlength: 4,
-			},
-			A: net.ParseIP(ss.ServerIP()),
-		},
-	}
-
-	return responseDNSMsg(conn, localAddr, msg, remoteAddr)
 }
 
 func responseDNSMsg(conn *net.UDPConn, localAddr *net.UDPAddr, msg *dns.Msg, remoteAddr string) error {

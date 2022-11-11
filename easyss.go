@@ -3,6 +3,7 @@ package easyss
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -56,13 +57,13 @@ func New(config *Config) (*Easyss, error) {
 		mu:       &sync.RWMutex{},
 	}
 
-	var err error
-	var ips []string
-	if !util.IsIP(config.Server) {
-		ips, err = net.LookupHost(config.Server)
-		if len(ips) > 0 {
-			ss.serverIP = ips[0]
-		}
+	msg, err := ss.ServerDNSMsg()
+	if err != nil {
+		log.Errorf("query server dns msg err:%s", err.Error())
+	}
+	if msg != nil {
+		ss.serverIP = msg.Answer[0].(*dns.A).A.String()
+		ss.SetDNSCache(msg, true)
 	}
 
 	gw, dev, err := util.SysGatewayAndDevice()
@@ -233,7 +234,7 @@ func (ss *Easyss) RenewDNSCache(name string) {
 	ss.dnsCache.Touch([]byte(name), 8*60*60)
 }
 
-func (ss *Easyss) SetDNSCache(msg *dns.Msg) error {
+func (ss *Easyss) SetDNSCache(msg *dns.Msg, noExpire bool) error {
 	if msg == nil {
 		return nil
 	}
@@ -247,11 +248,37 @@ func (ss *Easyss) SetDNSCache(msg *dns.Msg) error {
 		if err != nil {
 			return err
 		}
-
-		return ss.dnsCache.Set([]byte(q.Name), v, 8*60*60)
+		expireSec := 8 * 60 * 60
+		if noExpire {
+			expireSec = 0
+		}
+		return ss.dnsCache.Set([]byte(q.Name), v, expireSec)
 	}
 
 	return nil
+}
+
+func (ss *Easyss) ServerDNSMsg() (*dns.Msg, error) {
+	c := new(dns.Client)
+
+	m := new(dns.Msg)
+	m.SetQuestion(dns.Fqdn(ss.Server()), dns.TypeA)
+	m.RecursionDesired = true
+
+	dnsAddr := util.SysDNSServerAddr()
+	if dnsAddr == "" {
+		return nil, errors.New("system dns server addr is empty")
+	}
+	r, _, err := c.Exchange(m, dnsAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	if r.Rcode != dns.RcodeSuccess {
+		return nil, fmt.Errorf("dns query response Rcode:%v not equals RcodeSuccess", r.Rcode)
+	}
+
+	return r, nil
 }
 
 func (ss *Easyss) Close() {
