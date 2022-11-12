@@ -21,6 +21,8 @@ var (
 	createTunDevSh []byte
 	//go:embed scripts/create_tun_dev_windows.bat
 	createTunDevShWindows []byte
+	//go:embed scripts/create_tun_dev_darwin.sh
+	createTunDevShDarwin []byte
 	//go:embed scripts/close_tun_dev.sh
 	closeTunDevSh []byte
 	//go:embed scripts/close_tun_dev_windows.bat
@@ -49,7 +51,7 @@ func (ss *Easyss) CreateTun2socks() error {
 	defer ss.mu.Unlock()
 
 	switch runtime.GOOS {
-	case "linux":
+	case "linux", "darwin":
 		if err := ss.createTunDevAndSetIpRoute(); err != nil {
 			log.Errorf("add tun device and set ip-route err:%s", err.Error())
 			return err
@@ -104,6 +106,9 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 	case "windows":
 		shellFilename = "create_tun_dev_windows.bat"
 		shellContent = createTunDevShWindows
+	case "darwin":
+		shellFilename = "create_tun_dev_darwin.sh"
+		shellContent = createTunDevShDarwin
 	default:
 		return fmt.Errorf("unsupported os:%s", runtime.GOOS)
 	}
@@ -131,6 +136,12 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 		namePath = newNamePath
 		if err := exec.CommandContext(ctx, "cmd.exe", "/C",
 			namePath, TunDevice, TunIP, TunGW, TunMask, ss.ServerIP(), ss.LocalGateway()).Run(); err != nil {
+			log.Errorf("exec %s err:%s", shellFilename, err.Error())
+			return err
+		}
+	case "darwin":
+		if err := exec.CommandContext(ctx, "osascript", "-e",
+			fmt.Sprintf("do shell script \\\"%s\\\" with administrator privileges", namePath)).Run(); err != nil {
 			log.Errorf("exec %s err:%s", shellFilename, err.Error())
 			return err
 		}
