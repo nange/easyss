@@ -16,8 +16,6 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/engine"
 )
 
-//TODO: 1. wintun.dll embed done! 2. bat内部参数通过传入方式  3. 全局代理，不弹黑窗出来
-
 var (
 	//go:embed scripts/create_tun_dev.sh
 	createTunDevSh []byte
@@ -38,7 +36,13 @@ var (
 	wintunArm []byte
 )
 
-const TunDevice = "tun-easyss"
+const (
+	TunDevice = "tun-easyss"
+	TunIP     = "198.18.0.1"
+	TunGW     = "198.18.0.1"
+	TunMask   = "255.255.0.0"
+	TunIPSub  = "198.18.0.1/16"
+)
 
 func (ss *Easyss) CreateTun2socks() error {
 	ss.mu.Lock()
@@ -101,7 +105,7 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 	switch runtime.GOOS {
 	case "linux":
 		if err := exec.CommandContext(ctx, "pkexec", "bash",
-			namePath, TunDevice, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()).Run(); err != nil {
+			namePath, TunDevice, TunIPSub, TunGW, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()).Run(); err != nil {
 			log.Errorf("exec %s err:%s", shellFilename, err.Error())
 			return err
 		}
@@ -113,7 +117,7 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 		}
 		namePath = newNamePath
 		if err := exec.CommandContext(ctx, "cmd.exe", "/C",
-			namePath, TunDevice, ss.ServerIP(), ss.LocalGateway()).Run(); err != nil {
+			namePath, TunDevice, TunIP, TunGW, TunMask, ss.ServerIP(), ss.LocalGateway()).Run(); err != nil {
 			log.Errorf("exec %s err:%s", shellFilename, err.Error())
 			return err
 		}
@@ -180,7 +184,7 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 		}
 		namePath = newNamePath
 		if err := exec.CommandContext(ctx, "cmd.exe", "/C",
-			namePath, ss.ServerIP(), ss.LocalGateway()).Run(); err != nil {
+			namePath, TunGW, ss.ServerIP(), ss.LocalGateway()).Run(); err != nil {
 			log.Errorf("exec %s err:%s", shellFilename, err.Error())
 			return err
 		}
