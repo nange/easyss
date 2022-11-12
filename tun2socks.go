@@ -48,11 +48,33 @@ func (ss *Easyss) CreateTun2socks() error {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
-	if err := writeWinTunToDiskIfNeeded(); err != nil {
-		log.Errorf("write wintun.dll to disk err:%s", err.Error())
-		return err
+	switch runtime.GOOS {
+	case "linux":
+		if err := ss.createTunDevAndSetIpRoute(); err != nil {
+			log.Errorf("add tun device and set ip-route err:%s", err.Error())
+			return err
+		}
+		ss.startTun2socksEngine()
+	case "windows":
+		if err := writeWinTunToDisk(); err != nil {
+			log.Errorf("write wintun.dll to disk err:%s", err.Error())
+			return err
+		}
+		ss.startTun2socksEngine()
+		if err := ss.createTunDevAndSetIpRoute(); err != nil {
+			log.Errorf("add tun device and set ip-route err:%s", err.Error())
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported os:%s", runtime.GOOS)
 	}
 
+	ss.tun2socksEnabled = true
+	log.Infof("tun2socks server and tun device init success")
+	return nil
+}
+
+func (ss *Easyss) startTun2socksEngine() {
 	key := &engine.Key{
 		Proxy:                ss.Socks5ProxyAddr(),
 		Device:               TunDevice,
@@ -63,15 +85,6 @@ func (ss *Easyss) CreateTun2socks() error {
 	}
 	engine.Insert(key)
 	engine.Start()
-
-	if err := ss.createTunDevAndSetIpRoute(); err != nil {
-		log.Errorf("add tun device and set ip-route err:%s", err.Error())
-		return err
-	}
-
-	ss.tun2socksEnabled = true
-	log.Infof("tun2socks server and tun device init success")
-	return nil
 }
 
 func (ss *Easyss) createTunDevAndSetIpRoute() error {
@@ -195,11 +208,7 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 	return nil
 }
 
-func writeWinTunToDiskIfNeeded() error {
-	if runtime.GOOS != "windows" {
-		return nil
-	}
-
+func writeWinTunToDisk() error {
 	writeBytes := func(b []byte) error {
 		path := filepath.Join(util.CurrentDir(), "wintun.dll")
 		return os.WriteFile(path, b, 0666)
