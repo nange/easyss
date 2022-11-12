@@ -31,7 +31,11 @@ func FileExists(path string) (bool, error) {
 }
 
 func CurrentDir() string {
-	return filepath.Dir(os.Args[0])
+	path, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Dir(path)
 }
 
 func LogFilePath() string {

@@ -3,7 +3,6 @@ package easyss
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -265,11 +264,7 @@ func (ss *Easyss) ServerDNSMsg() (*dns.Msg, error) {
 	m.SetQuestion(dns.Fqdn(ss.Server()), dns.TypeA)
 	m.RecursionDesired = true
 
-	dnsAddr := util.SysDNSServerAddr()
-	if dnsAddr == "" {
-		return nil, errors.New("system dns server addr is empty")
-	}
-	r, _, err := c.Exchange(m, dnsAddr)
+	r, _, err := c.Exchange(m, "114.114.114.114:53")
 	if err != nil {
 		return nil, err
 	}
