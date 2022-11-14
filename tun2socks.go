@@ -27,6 +27,8 @@ var (
 	closeTunDevSh []byte
 	//go:embed scripts/close_tun_dev_windows.bat
 	closeTunDevShWindows []byte
+	//go:embed scripts/close_tun_dev_darwin.sh
+	closeTunDevShDarwin []byte
 
 	//go:embed wintun/wintun_amd64.dll
 	wintunAmd64 []byte
@@ -39,24 +41,70 @@ var (
 )
 
 const (
-	TunDevice = "tun-easyss"
-	TunIP     = "198.18.0.1"
-	TunGW     = "198.18.0.1"
-	TunMask   = "255.255.0.0"
-	TunIPSub  = "198.18.0.1/16"
+	TunDevice       = "tun-easyss"
+	TunDeviceDarwin = "utun9"
+	TunIP           = "198.18.0.1"
+	TunGW           = "198.18.0.1"
+	TunMask         = "255.255.0.0"
+	TunIPSub        = "198.18.0.1/16"
 )
+
+var (
+	_TunDevice string
+
+	_createTunFilename string
+	_createTunBytes    []byte
+
+	_closeTunFilename string
+	_closeTunBytes    []byte
+)
+
+func init() {
+	_TunDevice = TunDevice
+
+	switch runtime.GOOS {
+	case "linux":
+		_createTunFilename = "create_tun_dev.sh"
+		_createTunBytes = createTunDevSh
+
+		_closeTunFilename = "close_tun_dev.sh"
+		_closeTunBytes = closeTunDevSh
+	case "windows":
+		_createTunFilename = "create_tun_dev_windows.bat"
+		_createTunBytes = createTunDevShWindows
+
+		_closeTunFilename = "close_tun_dev_windows.bat"
+		_closeTunBytes = closeTunDevShWindows
+	case "darwin":
+		_TunDevice = TunDeviceDarwin
+
+		_createTunFilename = "create_tun_dev_darwin.sh"
+		_createTunBytes = createTunDevShDarwin
+
+		_closeTunFilename = "close_tun_dev_darwin.sh"
+		_closeTunBytes = closeTunDevShDarwin
+	default:
+		log.Errorf("unsupported os:%s, tun2socks service can't be enabled", runtime.GOOS)
+	}
+}
 
 func (ss *Easyss) CreateTun2socks() error {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
 	switch runtime.GOOS {
-	case "linux", "darwin":
+	case "linux":
 		if err := ss.createTunDevAndSetIpRoute(); err != nil {
 			log.Errorf("add tun device and set ip-route err:%s", err.Error())
 			return err
 		}
 		ss.startTun2socksEngine()
+	case "darwin":
+		ss.startTun2socksEngine()
+		if err := ss.createTunDevAndSetIpRoute(); err != nil {
+			log.Errorf("add tun device and set ip-route err:%s", err.Error())
+			return err
+		}
 	case "windows":
 		if err := writeWinTunToDisk(); err != nil {
 			log.Errorf("write wintun.dll to disk err:%s", err.Error())
@@ -72,14 +120,14 @@ func (ss *Easyss) CreateTun2socks() error {
 	}
 
 	ss.tun2socksEnabled = true
-	log.Infof("tun2socks server and tun device init success")
+	log.Infof("tun2socks server and tun device create successfully")
 	return nil
 }
 
 func (ss *Easyss) startTun2socksEngine() {
 	key := &engine.Key{
 		Proxy:                ss.Socks5ProxyAddr(),
-		Device:               TunDevice,
+		Device:               _TunDevice,
 		LogLevel:             "error",
 		TCPSendBufferSize:    "1m",
 		TCPReceiveBufferSize: "1m",
@@ -97,23 +145,7 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 		return errors.New("server ips is empty")
 	}
 
-	var shellFilename string
-	var shellContent []byte
-	switch runtime.GOOS {
-	case "linux":
-		shellFilename = "create_tun_dev.sh"
-		shellContent = createTunDevSh
-	case "windows":
-		shellFilename = "create_tun_dev_windows.bat"
-		shellContent = createTunDevShWindows
-	case "darwin":
-		shellFilename = "create_tun_dev_darwin.sh"
-		shellContent = createTunDevShDarwin
-	default:
-		return fmt.Errorf("unsupported os:%s", runtime.GOOS)
-	}
-
-	namePath, err := util.WriteToTemp(shellFilename, shellContent)
+	namePath, err := util.WriteToTemp(_createTunFilename, _createTunBytes)
 	if err != nil {
 		log.Errorf("write close_tun_dev.sh to temp file err:%v", err.Error())
 		return err
@@ -123,26 +155,27 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 	switch runtime.GOOS {
 	case "linux":
 		if err := exec.CommandContext(ctx, "pkexec", "bash",
-			namePath, TunDevice, TunIPSub, TunGW, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()).Run(); err != nil {
-			log.Errorf("exec %s err:%s", shellFilename, err.Error())
+			namePath, _TunDevice, TunIPSub, TunGW, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()).Run(); err != nil {
+			log.Errorf("exec %s err:%s", _createTunFilename, err.Error())
 			return err
 		}
 	case "windows":
 		dir := filepath.Dir(namePath)
-		newNamePath := filepath.Join(dir, shellFilename)
+		newNamePath := filepath.Join(dir, _createTunFilename)
 		if err := os.Rename(namePath, newNamePath); err != nil {
 			return err
 		}
 		namePath = newNamePath
 		if err := exec.CommandContext(ctx, "cmd.exe", "/C",
-			namePath, TunDevice, TunIP, TunGW, TunMask, ss.ServerIP(), ss.LocalGateway()).Run(); err != nil {
-			log.Errorf("exec %s err:%s", shellFilename, err.Error())
+			namePath, _TunDevice, TunIP, TunGW, TunMask, ss.ServerIP(), ss.LocalGateway()).Run(); err != nil {
+			log.Errorf("exec %s err:%s", _createTunFilename, err.Error())
 			return err
 		}
 	case "darwin":
 		if err := exec.CommandContext(ctx, "osascript", "-e",
-			fmt.Sprintf("do shell script \\\"%s\\\" with administrator privileges", namePath)).Run(); err != nil {
-			log.Errorf("exec %s err:%s", shellFilename, err.Error())
+			fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s\" with administrator privileges",
+				namePath, _TunDevice, TunIP, TunGW, ss.ServerIP(), ss.LocalGateway())).Run(); err != nil {
+			log.Errorf("exec %s err:%s", _createTunFilename, err.Error())
 			return err
 		}
 	default:
@@ -166,6 +199,7 @@ func (ss *Easyss) closeTun2socks() error {
 	}
 
 	ss.tun2socksEnabled = false
+	log.Infof("tun2socks server and tun device close successfully")
 	return nil
 }
 
@@ -173,20 +207,7 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	var shellFilename string
-	var shellContent []byte
-	switch runtime.GOOS {
-	case "linux":
-		shellFilename = "close_tun_dev.sh"
-		shellContent = closeTunDevSh
-	case "windows":
-		shellFilename = "close_tun_dev_windows.bat"
-		shellContent = closeTunDevShWindows
-	default:
-		return fmt.Errorf("unsupported os:%s", runtime.GOOS)
-	}
-
-	namePath, err := util.WriteToTemp(shellFilename, shellContent)
+	namePath, err := util.WriteToTemp(_closeTunFilename, _closeTunBytes)
 	if err != nil {
 		log.Errorf("write close_tun_dev.sh to temp file err:%v", err.Error())
 		return err
@@ -196,20 +217,27 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 	switch runtime.GOOS {
 	case "linux":
 		if err := exec.CommandContext(ctx, "pkexec", "bash",
-			namePath, TunDevice, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()).Run(); err != nil {
-			log.Errorf("exec %s err:%s", shellFilename, err.Error())
+			namePath, _TunDevice, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()).Run(); err != nil {
+			log.Errorf("exec %s err:%s", _closeTunFilename, err.Error())
 			return err
 		}
 	case "windows":
 		dir := filepath.Dir(namePath)
-		newNamePath := filepath.Join(dir, shellFilename)
+		newNamePath := filepath.Join(dir, _closeTunFilename)
 		if err := os.Rename(namePath, newNamePath); err != nil {
 			return err
 		}
 		namePath = newNamePath
 		if err := exec.CommandContext(ctx, "cmd.exe", "/C",
 			namePath, TunGW, ss.ServerIP(), ss.LocalGateway()).Run(); err != nil {
-			log.Errorf("exec %s err:%s", shellFilename, err.Error())
+			log.Errorf("exec %s err:%s", _closeTunFilename, err.Error())
+			return err
+		}
+	case "darwin":
+		if err := exec.CommandContext(ctx, "osascript", "-e",
+			fmt.Sprintf("do shell script \"sh %s %s %s %s\" with administrator privileges",
+				namePath, TunGW, ss.ServerIP(), ss.LocalGateway())).Run(); err != nil {
+			log.Errorf("exec %s err:%s", _closeTunFilename, err.Error())
 			return err
 		}
 	default:
