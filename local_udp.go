@@ -36,13 +36,13 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 
 	err := msg.Unpack(d.Data)
 	if err == nil && isDNSRequest(msg) {
-		log.Debugf("the udp request is dns proto, domain:%s", msg.Question[0].Name)
+		log.Infof("the udp request is dns proto, domain:%s", msg.Question[0].Name)
 		// find from dns cache first
 		question := msg.Question[0]
 		msgCache := ss.DNSCache(question.Name, dns.TypeToString[question.Qtype])
 		if msgCache != nil {
 			msgCache.MsgHdr.Id = msg.MsgHdr.Id
-			log.Debugf("find msg from dns cache, write back directly, domain:%s", question.Name)
+			log.Infof("find msg from dns cache, write back directly, domain:%s", question.Name)
 			if err := responseDNSMsg(s.UDPConn, addr, msgCache, d.Address()); err != nil {
 				log.Errorf("response dns msg err:%s", err.Error())
 				return err
