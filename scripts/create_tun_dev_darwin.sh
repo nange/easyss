@@ -19,3 +19,4 @@ route add -net 128.0.0.0/1 "$tun_gw"
 route add -net 198.18.0.0/15 "$tun_gw"
 
 route add -net "$server_ip" "$local_gateway"
+route add "$local_gateway" "$tun_gw"
