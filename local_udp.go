@@ -16,8 +16,10 @@ import (
 	"github.com/txthinking/socks5"
 )
 
-const MaxUDPDataSize = 65507
-const DefaultDNSServer = "8.8.8.8:53"
+const (
+	MaxUDPDataSize   = 65507
+	DefaultDNSServer = "8.8.8.8:53"
+)
 
 var udpDataBytes = util.NewBytes(MaxUDPDataSize)
 
@@ -37,8 +39,13 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	err := msg.Unpack(d.Data)
 	if err == nil && isDNSRequest(msg) {
 		log.Infof("the udp request is dns proto, domain:%s", msg.Question[0].Name)
-		// find from dns cache first
+
 		question := msg.Question[0]
+		if ss.HostAtCN(strings.TrimSuffix(question.Name, ".")) {
+			return ss.directUDPRelay(s, addr, d, true)
+		}
+
+		// find from dns cache first
 		msgCache := ss.DNSCache(question.Name, dns.TypeToString[question.Qtype])
 		if msgCache != nil {
 			msgCache.MsgHdr.Id = msg.MsgHdr.Id

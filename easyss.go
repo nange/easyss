@@ -1,12 +1,18 @@
 package easyss
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
+	_ "embed"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +21,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/util"
+	"github.com/oschwald/geoip2-golang"
 	utls "github.com/refraction-networking/utls"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
@@ -22,13 +29,92 @@ import (
 
 const version = "v1.5.0"
 
+var (
+	//go:embed geodata/geoip_cn_private.mmdb
+	geoIPCNPrivate []byte
+	//go:embed geodata/geosite_cn.txt
+	geoSiteCN []byte
+)
+
 func PrintVersion() {
 	fmt.Println("easyss version", version)
 }
 
 type Statistics struct {
-	BytesSend   atomic.Int64
-	BytesRecive atomic.Int64
+	BytesSend    atomic.Int64
+	BytesReceive atomic.Int64
+}
+
+type GeoSite struct {
+	domain       map[string]struct{}
+	fullDomain   map[string]struct{}
+	regexpDomain []*regexp.Regexp
+}
+
+func NewGeoSite(data []byte) *GeoSite {
+	gs := &GeoSite{
+		domain:     make(map[string]struct{}),
+		fullDomain: make(map[string]struct{}),
+	}
+
+	r := bufio.NewReader(bytes.NewReader(data))
+	for {
+		line, _, err := r.ReadLine()
+		if err == io.EOF {
+			break
+		}
+
+		if bytes.HasPrefix(line, []byte("full:")) {
+			gs.fullDomain[string(line[5:])] = struct{}{}
+			continue
+		}
+
+		if bytes.HasPrefix(line, []byte("regexp:")) {
+			line = line[7:]
+			re, err := regexp.Compile(string(line))
+			if err != nil {
+				log.Errorf("compile geosite string:%s, err:%s", string(line), err.Error())
+				continue
+			}
+			gs.regexpDomain = append(gs.regexpDomain, re)
+			continue
+		}
+
+		gs.domain[string(line)] = struct{}{}
+	}
+
+	return gs
+}
+
+func (gs *GeoSite) SiteAtCN(domain string) bool {
+	domainRoot := func(_domain string) string {
+		var firstDot, lastDot int
+		for {
+			firstDot = strings.Index(_domain, ".")
+			lastDot = strings.LastIndex(_domain, ".")
+			if firstDot == lastDot {
+				return _domain
+			}
+			_domain = _domain[firstDot+1:]
+		}
+	}
+
+	if _, ok := gs.fullDomain[domain]; ok {
+		return true
+	}
+
+	_domain := domainRoot(domain)
+	if _, ok := gs.domain[_domain]; ok {
+		return true
+	}
+
+	for _, re := range gs.regexpDomain {
+		if re.MatchString(domain) {
+			return true
+		}
+	}
+
+	return false
 }
 
 type Easyss struct {
@@ -37,14 +123,18 @@ type Easyss struct {
 	stat     *Statistics
 	localGw  string
 	localDev string
+	devIndex int
 	dnsCache *freecache.Cache
+	geoipDB  *geoip2.Reader
+	geosite  *GeoSite
 
+	// the mu Mutex to protect below fields
+	mu               *sync.RWMutex
 	tcpPool          easypool.Pool
 	socksServer      *socks5.Server
 	httpProxyServer  *http.Server
 	closing          chan struct{}
 	tun2socksEnabled bool
-	mu               *sync.RWMutex
 }
 
 func New(config *Config) (*Easyss, error) {
@@ -55,6 +145,13 @@ func New(config *Config) (*Easyss, error) {
 		closing:  make(chan struct{}, 1),
 		mu:       &sync.RWMutex{},
 	}
+
+	db, err := geoip2.FromBytes(geoIPCNPrivate)
+	if err != nil {
+		panic(err)
+	}
+	ss.geoipDB = db
+	ss.geosite = NewGeoSite(geoSiteCN)
 
 	msg, err := ss.ServerDNSMsg()
 	if err != nil {
@@ -71,6 +168,13 @@ func New(config *Config) (*Easyss, error) {
 	}
 	ss.localGw = gw
 	ss.localDev = dev
+
+	iface, err := net.InterfaceByName(dev)
+	if err != nil {
+		log.Errorf("interface by name err:%v", err)
+		return nil, err
+	}
+	ss.devIndex = iface.Index
 
 	go ss.printStatistics()
 
@@ -166,6 +270,10 @@ func (ss *Easyss) LocalGateway() string {
 
 func (ss *Easyss) LocalDevice() string {
 	return ss.localDev
+}
+
+func (ss *Easyss) LocalDeviceIndex() int {
+	return ss.devIndex
 }
 
 func (ss *Easyss) Timeout() time.Duration {
@@ -276,6 +384,35 @@ func (ss *Easyss) ServerDNSMsg() (*dns.Msg, error) {
 	return r, nil
 }
 
+func (ss *Easyss) HostAtCN(host string) bool {
+	if host == "" {
+		return false
+	}
+
+	if util.IsIP(host) {
+		return ss.IPAtCN(host)
+	}
+
+	return ss.geosite.SiteAtCN(host)
+}
+
+func (ss *Easyss) IPAtCN(ip string) bool {
+	_ip := net.ParseIP(ip)
+	if _ip == nil {
+		return false
+	}
+	country, err := ss.geoipDB.Country(_ip)
+	if err != nil {
+		return false
+	}
+
+	if country.Country.IsoCode == "CN" {
+		return true
+	}
+
+	return false
+}
+
 func (ss *Easyss) Close() {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
@@ -309,7 +446,7 @@ func (ss *Easyss) printStatistics() {
 		select {
 		case <-time.After(time.Hour):
 			sendSize := ss.stat.BytesSend.Load() / (1024 * 1024)
-			receiveSize := ss.stat.BytesRecive.Load() / (1024 * 1024)
+			receiveSize := ss.stat.BytesReceive.Load() / (1024 * 1024)
 			log.Debugf("easyss send data size: %vMB, recive data size: %vMB", sendSize, receiveSize)
 		case <-closing:
 			return

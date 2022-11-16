@@ -113,7 +113,7 @@ func (ss *Easyss) remoteTCPHandle(conn net.Conn, addrStr, method string) (needCl
 	log.Debugf("send %v bytes to %v, and recive %v bytes, needclose:%v", n2, addrStr, n1, needClose)
 
 	ss.stat.BytesSend.Add(n2)
-	ss.stat.BytesRecive.Add(n1)
+	ss.stat.BytesReceive.Add(n1)
 
 	tConn.Close()
 

@@ -94,6 +94,11 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 var paddingBytes = util.NewBytes(cipherstream.PaddingSize)
 
 func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
+	host, _, _ := net.SplitHostPort(addr)
+	if ss.HostAtCN(host) {
+		return ss.directRelay(localConn, addr)
+	}
+
 	pool := ss.Pool()
 	if pool == nil {
 		return errors.New("easyss is closed")
@@ -136,7 +141,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	}
 
 	ss.stat.BytesSend.Add(n1)
-	ss.stat.BytesRecive.Add(n2)
+	ss.stat.BytesReceive.Add(n2)
 
 	return
 }

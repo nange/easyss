@@ -11,6 +11,7 @@ require (
 	github.com/miekg/dns v1.1.50
 	github.com/nange/easypool v1.3.1
 	github.com/nange/httpproxy v0.0.0-20180805034305-ff2c9c785a5d
+	github.com/oschwald/geoip2-golang v1.8.0
 	github.com/pkg/errors v0.9.1
 	github.com/refraction-networking/utls v1.1.5
 	github.com/sirupsen/logrus v1.8.1
@@ -49,6 +50,7 @@ require (
 	github.com/klauspost/cpuid/v2 v2.1.1 // indirect
 	github.com/libdns/libdns v0.2.1 // indirect
 	github.com/mholt/acmez v1.0.4 // indirect
+	github.com/oschwald/maxminddb-golang v1.10.0 // indirect
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
