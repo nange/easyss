@@ -118,9 +118,9 @@ func (st *SysTray) AddSelectConfMenu() *systray.MenuItem {
 }
 
 func (st *SysTray) AddPACMenu() (*systray.MenuItem, *systray.MenuItem) {
-	pac := systray.AddMenuItemCheckbox("启用PAC(自动代理)", "启用PAC", true)
-	systray.AddSeparator()
-	gPac := systray.AddMenuItemCheckbox("启用PAC(全局代理)", "全局模式", false)
+	pacMenu := systray.AddMenuItem("PAC代理(浏览器)", "请选择")
+	pac := pacMenu.AddSubMenuItemCheckbox("启用PAC(自动代理)", "启用PAC", true)
+	gPac := pacMenu.AddSubMenuItemCheckbox("启用PAC(全局代理)", "全局模式", false)
 
 	go func() {
 		for {
@@ -132,37 +132,28 @@ func (st *SysTray) AddPACMenu() (*systray.MenuItem, *systray.MenuItem) {
 
 				if pac.Checked() {
 					pac.Uncheck()
-					gPac.Uncheck()
-					gPac.Disable()
 					if _pac != nil {
 						_pac.ch <- PACOFF
 					}
 				} else {
 					pac.Check()
-					gPac.Enable()
+					gPac.Uncheck()
 					if _pac != nil {
 						_pac.ch <- PACON
 					}
 				}
 				log.Debugf("pac btn clicked...is checked:%v", pac.Checked())
 			case <-gPac.ClickedCh:
-				if gPac.Disabled() {
-					break
-				}
-
 				st.mu.RLock()
 				_pac := st.pac
 				st.mu.RUnlock()
 
 				if gPac.Checked() {
 					gPac.Uncheck()
-					if pac.Checked() {
-						_pac.ch <- PACON
-					} else {
-						_pac.ch <- PACOFFGLOBAL
-					}
+					_pac.ch <- PACOFFGLOBAL
 				} else {
 					gPac.Check()
+					pac.Uncheck()
 					_pac.ch <- PACONGLOBAL
 				}
 				log.Debugf("global btn clicked... is checked:%v", gPac.Checked())
