@@ -118,15 +118,16 @@ func (gs *GeoSite) SiteAtCN(domain string) bool {
 }
 
 type Easyss struct {
-	config   *Config
-	serverIP string
-	stat     *Statistics
-	localGw  string
-	localDev string
-	devIndex int
-	dnsCache *freecache.Cache
-	geoipDB  *geoip2.Reader
-	geosite  *GeoSite
+	config         *Config
+	serverIP       string
+	stat           *Statistics
+	localGw        string
+	localDev       string
+	devIndex       int
+	dnsCache       *freecache.Cache
+	directDNSCache *freecache.Cache
+	geoipDB        *geoip2.Reader
+	geosite        *GeoSite
 
 	// the mu Mutex to protect below fields
 	mu               *sync.RWMutex
@@ -139,11 +140,12 @@ type Easyss struct {
 
 func New(config *Config) (*Easyss, error) {
 	ss := &Easyss{
-		config:   config,
-		stat:     &Statistics{},
-		dnsCache: freecache.NewCache(2 * 1024 * 1024),
-		closing:  make(chan struct{}, 1),
-		mu:       &sync.RWMutex{},
+		config:         config,
+		stat:           &Statistics{},
+		dnsCache:       freecache.NewCache(1024 * 1024),
+		directDNSCache: freecache.NewCache(1024 * 1024),
+		closing:        make(chan struct{}, 1),
+		mu:             &sync.RWMutex{},
 	}
 
 	db, err := geoip2.FromBytes(geoIPCNPrivate)
@@ -159,7 +161,8 @@ func New(config *Config) (*Easyss, error) {
 	}
 	if msg != nil {
 		ss.serverIP = msg.Answer[0].(*dns.A).A.String()
-		ss.SetDNSCache(msg, true)
+		ss.SetDNSCache(msg, true, true)
+		ss.SetDNSCache(msg, true, false)
 	}
 
 	gw, dev, err := util.SysGatewayAndDevice()
@@ -323,8 +326,14 @@ func (ss *Easyss) SetPool(pool easypool.Pool) {
 	ss.tcpPool = pool
 }
 
-func (ss *Easyss) DNSCache(name, qtype string) *dns.Msg {
-	v, err := ss.dnsCache.Get([]byte(name + qtype))
+func (ss *Easyss) DNSCache(name, qtype string, isDirect bool) *dns.Msg {
+	var v []byte
+	var err error
+	if isDirect {
+		v, err = ss.directDNSCache.Get([]byte(name + qtype))
+	} else {
+		v, err = ss.dnsCache.Get([]byte(name + qtype))
+	}
 	if err != nil || len(v) == 0 {
 		return nil
 	}
@@ -341,7 +350,7 @@ func (ss *Easyss) RenewDNSCache(name, qtype string) {
 	ss.dnsCache.Touch([]byte(name+qtype), 8*60*60)
 }
 
-func (ss *Easyss) SetDNSCache(msg *dns.Msg, noExpire bool) error {
+func (ss *Easyss) SetDNSCache(msg *dns.Msg, noExpire, isDirect bool) error {
 	if msg == nil {
 		return nil
 	}
@@ -359,7 +368,11 @@ func (ss *Easyss) SetDNSCache(msg *dns.Msg, noExpire bool) error {
 		if noExpire {
 			expireSec = 0
 		}
-		return ss.dnsCache.Set([]byte(q.Name+dns.TypeToString[q.Qtype]), v, expireSec)
+		key := []byte(q.Name + dns.TypeToString[q.Qtype])
+		if isDirect {
+			return ss.directDNSCache.Set(key, v, expireSec)
+		}
+		return ss.dnsCache.Set(key, v, expireSec)
 	}
 
 	return nil

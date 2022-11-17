@@ -33,20 +33,18 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	log.Debugf("enter udp handdle, local_addr:%v, remote_addr:%v", addr.String(), d.Address())
 
 	dst := d.Address()
-	rewrittenDst := ""
-	msg := &dns.Msg{}
+	rewrittenDst := dst
 
+	msg := &dns.Msg{}
 	err := msg.Unpack(d.Data)
 	if err == nil && isDNSRequest(msg) {
 		log.Infof("the udp request is dns proto, domain:%s", msg.Question[0].Name)
 
 		question := msg.Question[0]
-		if ss.HostAtCN(strings.TrimSuffix(question.Name, ".")) {
-			return ss.directUDPRelay(s, addr, d, true)
-		}
+		hostAtCN := ss.HostAtCN(strings.TrimSuffix(question.Name, "."))
 
 		// find from dns cache first
-		msgCache := ss.DNSCache(question.Name, dns.TypeToString[question.Qtype])
+		msgCache := ss.DNSCache(question.Name, dns.TypeToString[question.Qtype], hostAtCN)
 		if msgCache != nil {
 			msgCache.MsgHdr.Id = msg.MsgHdr.Id
 			log.Infof("find msg from dns cache, write back directly, domain:%s", question.Name)
@@ -61,11 +59,20 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			return nil
 		}
 
+		if hostAtCN {
+			return ss.directUDPRelay(s, addr, d, true)
+		}
+
 		log.Debugf("rewrite dns dst addr to %s", DefaultDNSServer)
 		rewrittenDst = DefaultDNSServer
 	} else if err := ss.validateAddr(dst); err != nil {
 		log.Warnf("validate udp dst:%v err:%v, data:%s", dst, err, string(d.Data))
 		return errors.New("dst addr is invalid")
+	}
+
+	dstHost, _, _ := net.SplitHostPort(dst)
+	if ss.HostAtCN(dstHost) {
+		return ss.directUDPRelay(s, addr, d, false)
 	}
 
 	var ch chan byte
@@ -84,14 +91,14 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	send := func(ue *UDPExchange, data []byte) error {
 		select {
 		case <-ch:
-			return fmt.Errorf("the tcp that udp address %s associated closed", addr.String())
+			return fmt.Errorf("the tcp that udp address %s associated closed", ue.ClientAddr.String())
 		default:
 		}
 		_, err := ue.RemoteConn.Write(data)
 		if err != nil {
 			return err
 		}
-		log.Debugf("Sent UDP data to remote. client: %#v", ue.ClientAddr.String())
+		log.Debugf("Sent UDP data to remote. client: %s", ue.ClientAddr.String())
 		return nil
 	}
 
@@ -115,13 +122,8 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		return err
 	}
 
-	if rewrittenDst != "" {
-		err = ss.handShakeWithRemote(stream, rewrittenDst, "udp")
-	} else {
-		err = ss.handShakeWithRemote(stream, dst, "udp")
-	}
-	if err != nil {
-		log.Errorf("hand-shake with remote server err:%v", err)
+	if err := ss.handShakeWithRemote(stream, rewrittenDst, "udp"); err != nil {
+		log.Errorf("handshake with remote server err:%v", err)
 		if pc, ok := stream.(*easypool.PoolConn); ok {
 			log.Debugf("mark pool conn stream unusable")
 			pc.MarkUnusable()
@@ -191,7 +193,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		for {
 			select {
 			case <-ch:
-				log.Infof("The tcp that udp address %s associated closed\n", ue.ClientAddr.String())
+				log.Infof("the tcp that udp address %s associated closed", ue.ClientAddr.String())
 				monitorCh <- true
 				return
 			default:
@@ -213,17 +215,10 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 				}
 				return
 			}
-			log.Debugf("Got UDP data from remote. client: %v  data-len: %v\n", ue.ClientAddr.String(), len(b[0:n]))
+			log.Debugf("got UDP data from remote. client: %v, data-len: %v", ue.ClientAddr.String(), len(b[0:n]))
 
 			// if is dns response, set result to dns cache
-			msg := &dns.Msg{}
-			if err := msg.Unpack(b[0:n]); err == nil && isDNSResponse(msg) {
-				if err := ss.SetDNSCache(msg, false); err != nil {
-					log.Warnf("set dns cache err:%s", err.Error())
-				} else {
-					log.Debugf("set dns cache success for domain:%s", msg.Question[0].Name)
-				}
-			}
+			ss.SetDNSCacheIfNeeded(b[0:n], false)
 
 			a, addr, port, err := socks5.ParseAddress(dst)
 			if err != nil {
@@ -240,6 +235,17 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	}(ue, dst)
 
 	return nil
+}
+
+func (ss *Easyss) SetDNSCacheIfNeeded(udpResp []byte, isDirect bool) {
+	msg := &dns.Msg{}
+	if err := msg.Unpack(udpResp); err == nil && isDNSResponse(msg) {
+		if err := ss.SetDNSCache(msg, false, isDirect); err != nil {
+			log.Warnf("set dns cache err:%s", err.Error())
+		} else {
+			log.Debugf("set dns cache success for domain:%s", msg.Question[0].Name)
+		}
+	}
 }
 
 func responseDNSMsg(conn *net.UDPConn, localAddr *net.UDPAddr, msg *dns.Msg, remoteAddr string) error {
