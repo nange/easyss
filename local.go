@@ -94,7 +94,7 @@ var paddingBytes = util.NewBytes(cipherstream.PaddingSize)
 
 func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	host, _, _ := net.SplitHostPort(addr)
-	if ss.HostAtCN(host) {
+	if ss.HostAtCN(host) && ss.Tun2socksStatusAuto() {
 		return ss.directRelay(localConn, addr)
 	}
 

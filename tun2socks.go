@@ -59,6 +59,14 @@ var (
 	_closeTunBytes    []byte
 )
 
+type Tun2socksStatus int
+
+const (
+	Tun2socksStatusOff Tun2socksStatus = iota
+	Tun2socksStatusAuto
+	Tun2socksStatusOn
+)
+
 func init() {
 	_TunDevice = TunDevice
 
@@ -88,9 +96,14 @@ func init() {
 	}
 }
 
-func (ss *Easyss) CreateTun2socks() error {
+func (ss *Easyss) CreateTun2socks(status Tun2socksStatus) error {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
+
+	if ss.tun2socksStatus != Tun2socksStatusOff {
+		ss.tun2socksStatus = status
+		return nil
+	}
 
 	switch runtime.GOOS {
 	case "linux":
@@ -119,7 +132,7 @@ func (ss *Easyss) CreateTun2socks() error {
 		return fmt.Errorf("unsupported os:%s", runtime.GOOS)
 	}
 
-	ss.tun2socksEnabled = true
+	ss.tun2socksStatus = status
 	log.Infof("tun2socks server and tun device create successfully")
 	return nil
 }
@@ -189,6 +202,9 @@ func (ss *Easyss) CloseTun2socks() error {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
+	if ss.tun2socksStatus == Tun2socksStatusOff {
+		return nil
+	}
 	return ss.closeTun2socks()
 }
 
@@ -198,7 +214,7 @@ func (ss *Easyss) closeTun2socks() error {
 		return err
 	}
 
-	ss.tun2socksEnabled = false
+	ss.tun2socksStatus = Tun2socksStatusOff
 	log.Infof("tun2socks server and tun device close successfully")
 	return nil
 }

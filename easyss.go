@@ -130,12 +130,12 @@ type Easyss struct {
 	geosite        *GeoSite
 
 	// the mu Mutex to protect below fields
-	mu               *sync.RWMutex
-	tcpPool          easypool.Pool
-	socksServer      *socks5.Server
-	httpProxyServer  *http.Server
-	closing          chan struct{}
-	tun2socksEnabled bool
+	mu              *sync.RWMutex
+	tcpPool         easypool.Pool
+	socksServer     *socks5.Server
+	httpProxyServer *http.Server
+	closing         chan struct{}
+	tun2socksStatus Tun2socksStatus
 }
 
 func New(config *Config) (*Easyss, error) {
@@ -314,6 +314,36 @@ func (ss *Easyss) SetSocksServer(server *socks5.Server) {
 	ss.socksServer = server
 }
 
+func (ss *Easyss) Tun2socksStatus() Tun2socksStatus {
+	ss.mu.RLock()
+	defer ss.mu.RUnlock()
+	return ss.tun2socksStatus
+}
+
+func (ss *Easyss) SetTun2socksStatus(status Tun2socksStatus) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	ss.tun2socksStatus = status
+}
+
+func (ss *Easyss) Tun2socksStatusAuto() bool {
+	ss.mu.RLock()
+	defer ss.mu.RUnlock()
+	return ss.tun2socksStatus == Tun2socksStatusAuto
+}
+
+func (ss *Easyss) Tun2socksStatusOn() bool {
+	ss.mu.RLock()
+	defer ss.mu.RUnlock()
+	return ss.tun2socksStatus == Tun2socksStatusOn
+}
+
+func (ss *Easyss) Tun2socksStatusOff() bool {
+	ss.mu.RLock()
+	defer ss.mu.RUnlock()
+	return ss.tun2socksStatus == Tun2socksStatusOff
+}
+
 func (ss *Easyss) SetHttpProxyServer(server *http.Server) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
@@ -346,7 +376,11 @@ func (ss *Easyss) DNSCache(name, qtype string, isDirect bool) *dns.Msg {
 	return msg
 }
 
-func (ss *Easyss) RenewDNSCache(name, qtype string) {
+func (ss *Easyss) RenewDNSCache(name, qtype string, isDirect bool) {
+	if isDirect {
+		ss.directDNSCache.Touch([]byte(name+qtype), 8*60*60)
+		return
+	}
 	ss.dnsCache.Touch([]byte(name+qtype), 8*60*60)
 }
 
@@ -446,7 +480,7 @@ func (ss *Easyss) Close() {
 		close(ss.closing)
 		ss.closing = nil
 	}
-	if ss.tun2socksEnabled {
+	if ss.tun2socksStatus != Tun2socksStatusOff {
 		ss.closeTun2socks()
 	}
 }

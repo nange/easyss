@@ -28,7 +28,7 @@ type SysTray struct {
 	closing chan struct{}
 	mu      *sync.RWMutex
 
-	tun2socksMenu *systray.MenuItem
+	tun2socksSubMenus []*systray.MenuItem
 }
 
 func NewSysTray(ss *easyss.Easyss, pac *PAC) *SysTray {
@@ -52,7 +52,8 @@ func (st *SysTray) TrayReady() {
 	st.AddPACMenu()
 	systray.AddSeparator()
 
-	st.tun2socksMenu = st.AddTun2socksMenu()
+	auto, global := st.AddTun2socksMenu()
+	st.tun2socksSubMenus = append(st.tun2socksSubMenus, auto, global)
 	systray.AddSeparator()
 
 	st.AddCatLogsMenu()
@@ -119,78 +120,99 @@ func (st *SysTray) AddSelectConfMenu() *systray.MenuItem {
 
 func (st *SysTray) AddPACMenu() (*systray.MenuItem, *systray.MenuItem) {
 	pacMenu := systray.AddMenuItem("PAC代理(浏览器)", "请选择")
-	pac := pacMenu.AddSubMenuItemCheckbox("启用PAC(自动代理)", "启用PAC", true)
-	gPac := pacMenu.AddSubMenuItemCheckbox("启用PAC(全局代理)", "全局模式", false)
+	auto := pacMenu.AddSubMenuItemCheckbox("启用PAC(自动代理)", "启用PAC", true)
+	global := pacMenu.AddSubMenuItemCheckbox("启用PAC(全局代理)", "全局模式", false)
 
 	go func() {
 		for {
 			select {
-			case <-pac.ClickedCh:
+			case <-auto.ClickedCh:
 				st.mu.RLock()
 				_pac := st.pac
 				st.mu.RUnlock()
 
-				if pac.Checked() {
-					pac.Uncheck()
+				if auto.Checked() {
+					auto.Uncheck()
 					if _pac != nil {
 						_pac.ch <- PACOFF
 					}
 				} else {
-					pac.Check()
-					gPac.Uncheck()
+					auto.Check()
+					global.Uncheck()
 					if _pac != nil {
 						_pac.ch <- PACON
 					}
 				}
-				log.Debugf("pac btn clicked...is checked:%v", pac.Checked())
-			case <-gPac.ClickedCh:
+				log.Debugf("pac btn clicked...is checked:%v", auto.Checked())
+			case <-global.ClickedCh:
 				st.mu.RLock()
 				_pac := st.pac
 				st.mu.RUnlock()
 
-				if gPac.Checked() {
-					gPac.Uncheck()
+				if global.Checked() {
+					global.Uncheck()
 					_pac.ch <- PACOFFGLOBAL
 				} else {
-					gPac.Check()
-					pac.Uncheck()
+					global.Check()
+					auto.Uncheck()
 					_pac.ch <- PACONGLOBAL
 				}
-				log.Debugf("global btn clicked... is checked:%v", gPac.Checked())
+				log.Debugf("global btn clicked... is checked:%v", global.Checked())
 			}
 		}
 	}()
 
-	return pac, gPac
+	return auto, global
 }
 
-func (st *SysTray) AddTun2socksMenu() *systray.MenuItem {
-	tun2socksMenu := systray.AddMenuItemCheckbox("全局代理(需管理员权限)", "全局代理", false)
+func (st *SysTray) AddTun2socksMenu() (*systray.MenuItem, *systray.MenuItem) {
+	tun2socksMenue := systray.AddMenuItem("Tun2socks代理(系统全局)", "全局代理,需管理员权限")
+
+	auto := tun2socksMenue.AddSubMenuItemCheckbox("自动(绕过大陆IP域名)", "自动", false)
+	global := tun2socksMenue.AddSubMenuItemCheckbox("代理系统全局流量", "系统全局", false)
 
 	go func() {
 		for {
 			select {
-			case <-tun2socksMenu.ClickedCh:
-				if !tun2socksMenu.Checked() {
-					if err := st.ss.CreateTun2socks(); err != nil {
-						log.Errorf("init tun2socks err:%s", err.Error())
-						tun2socksMenu.Uncheck()
-						continue
-					}
-					tun2socksMenu.Check()
-				} else {
+			case <-auto.ClickedCh:
+				if auto.Checked() {
 					if err := st.ss.CloseTun2socks(); err != nil {
 						log.Errorf("close tun2socks err:%s", err.Error())
-						tun2socksMenu.Check()
+						auto.Check()
 						continue
 					}
-					tun2socksMenu.Uncheck()
+					auto.Uncheck()
+				} else {
+					if err := st.ss.CreateTun2socks(easyss.Tun2socksStatusAuto); err != nil {
+						log.Errorf("init tun2socks err:%s", err.Error())
+						auto.Uncheck()
+						continue
+					}
+					auto.Check()
+					global.Uncheck()
+				}
+			case <-global.ClickedCh:
+				if global.Checked() {
+					if err := st.ss.CloseTun2socks(); err != nil {
+						log.Errorf("close tun2socks err:%s", err.Error())
+						auto.Check()
+						continue
+					}
+					global.Uncheck()
+				} else {
+					if err := st.ss.CreateTun2socks(easyss.Tun2socksStatusOn); err != nil {
+						log.Errorf("init tun2socks err:%s", err.Error())
+						auto.Uncheck()
+						continue
+					}
+					global.Check()
+					auto.Uncheck()
 				}
 			}
 		}
 	}()
 
-	return tun2socksMenu
+	return auto, global
 }
 
 func (st *SysTray) AddCatLogsMenu() *systray.MenuItem {
@@ -277,7 +299,9 @@ func (st *SysTray) StartLocalService() {
 
 func (st *SysTray) RestartService(config *easyss.Config) error {
 	st.CloseService()
-	st.tun2socksMenu.Uncheck()
+	for _, v := range st.tun2socksSubMenus {
+		v.Uncheck()
+	}
 
 	ss, err := easyss.New(config)
 	if err != nil {

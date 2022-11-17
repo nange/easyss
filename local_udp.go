@@ -42,9 +42,10 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 
 		question := msg.Question[0]
 		hostAtCN := ss.HostAtCN(strings.TrimSuffix(question.Name, "."))
+		isDirect := hostAtCN && ss.Tun2socksStatusAuto()
 
 		// find from dns cache first
-		msgCache := ss.DNSCache(question.Name, dns.TypeToString[question.Qtype], hostAtCN)
+		msgCache := ss.DNSCache(question.Name, dns.TypeToString[question.Qtype], isDirect)
 		if msgCache != nil {
 			msgCache.MsgHdr.Id = msg.MsgHdr.Id
 			log.Infof("find msg from dns cache, write back directly, domain:%s", question.Name)
@@ -54,12 +55,12 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			}
 			if strings.TrimSuffix(question.Name, ".") != ss.Server() {
 				log.Debugf("renew dns cache for domain:%s", question.Name)
-				ss.RenewDNSCache(question.Name, dns.TypeToString[question.Qtype])
+				ss.RenewDNSCache(question.Name, dns.TypeToString[question.Qtype], isDirect)
 			}
 			return nil
 		}
 
-		if hostAtCN {
+		if isDirect {
 			return ss.directUDPRelay(s, addr, d, true)
 		}
 
@@ -71,7 +72,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	}
 
 	dstHost, _, _ := net.SplitHostPort(dst)
-	if ss.HostAtCN(dstHost) {
+	if ss.HostAtCN(dstHost) && ss.Tun2socksStatusAuto() {
 		return ss.directUDPRelay(s, addr, d, false)
 	}
 
