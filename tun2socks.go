@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/nange/easyss/util"
@@ -92,7 +93,7 @@ func init() {
 		_closeTunFilename = "close_tun_dev_darwin.sh"
 		_closeTunBytes = closeTunDevShDarwin
 	default:
-		log.Errorf("unsupported os:%s, tun2socks service can't be enabled", runtime.GOOS)
+		log.Infof("unsupported os:%s, tun2socks service can't be enabled", runtime.GOOS)
 	}
 }
 
@@ -211,7 +212,11 @@ func (ss *Easyss) CloseTun2socks() error {
 func (ss *Easyss) closeTun2socks() error {
 	engine.Stop()
 	if err := ss.closeTunDevAndDelIpRoute(); err != nil {
-		return err
+		if strings.Contains(err.Error(), "exit status 126") {
+			// canceled on linux, restart engine
+			engine.Start()
+			return nil
+		}
 	}
 
 	ss.tun2socksStatus = Tun2socksStatusOff
