@@ -25,13 +25,11 @@ _testmain.go
 easyss.log*
 config.json
 
-cmd/client-server/*.json
-cmd/client-server/wintun.dll
-cmd/client-server/client-server*
-!cmd/client-server/client-server.syso
-cmd/remote-server/remote-server*
-
-cmd/client-server/pac/*
+cmd/easyss/*.json
+cmd/easyss/wintun.dll
+cmd/easyss/easyss*
+!cmd/easyss/easyss.syso
+cmd/easyss-server/easyss-server*
 
 .idea*
 easyss.apk

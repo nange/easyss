@@ -2,26 +2,26 @@ PROJECT=easyss
 
 GO := go
 
-.PHONY: vet client-server client-server-with-notray remote-server
+.PHONY: vet easyss easyss-with-notray easyss-server
 
 echo:
 	@echo "${PROJECT}"
 
-client-server:
-	cd cmd/client-server; \
-	$(GO) build -o client-server main.go start.go pac.go tray.go
+easyss:
+	cd cmd/easyss; \
+	$(GO) build -o easyss main.go start.go pac.go tray.go
 
-client-server-windows:
-	cd cmd/client-server; \
-	$(GO) build -ldflags -H=windowsgui -o client-server.exe
+easyss-windows:
+	cd cmd/easyss; \
+	$(GO) build -ldflags -H=windowsgui -o easyss.exe
 
-client-server-with-notray:
-	cd cmd/client-server; \
-    $(GO) build -tags "with_notray " -o client-server-with-notray main.go start_withnotray.go
+easyss-with-notray:
+	cd cmd/easyss; \
+    $(GO) build -tags "with_notray " -o easyss-with-notray main.go start_withnotray.go
 
-remote-server:
-	cd cmd/remote-server; \
-	$(GO) build -o remote-server
+easyss-server:
+	cd cmd/easyss-server; \
+	$(GO) build -o easyss-server
 
 vet:
 	$(GO) vet ./...; \
