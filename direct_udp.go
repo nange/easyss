@@ -12,6 +12,7 @@ import (
 )
 
 const DefaultDirectDNSServer = "114.114.114.114:53"
+const DirectSuffix = "direct"
 
 // DirectUDPExchange used to store client address and remote connection
 type DirectUDPExchange struct {
@@ -58,7 +59,7 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 
 	var ue *DirectUDPExchange
 	var src = laddr.String()
-	iue, ok := s.UDPExchanges.Get(src + dst)
+	iue, ok := s.UDPExchanges.Get(src + dst + DirectSuffix)
 	if ok {
 		ue = iue.(*DirectUDPExchange)
 		return send(ue, d.Data, uAddr)
@@ -81,13 +82,13 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 		log.Warnf("directly write udp request data to %s, err:%v", uAddr.String(), err)
 		return err
 	}
-	s.UDPExchanges.Set(src+dst, ue, -1)
+	s.UDPExchanges.Set(src+dst+DirectSuffix, ue, -1)
 
 	go func() {
 		var b = udpDataBytes.Get(MaxUDPDataSize)
 		defer func() {
 			udpDataBytes.Put(b)
-			s.UDPExchanges.Delete(src + dst)
+			s.UDPExchanges.Delete(src + dst + DirectSuffix)
 			ue.RemoteConn.Close()
 		}()
 

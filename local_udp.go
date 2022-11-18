@@ -38,7 +38,8 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	msg := &dns.Msg{}
 	err := msg.Unpack(d.Data)
 	if err == nil && isDNSRequest(msg) {
-		log.Infof("the udp request is dns proto, domain:%s", msg.Question[0].Name)
+		log.Infof("the udp request is dns proto, domain:%s, qtype:%s",
+			msg.Question[0].Name, dns.TypeToString[msg.Question[0].Qtype])
 
 		question := msg.Question[0]
 		hostAtCN := ss.HostAtCN(strings.TrimSuffix(question.Name, "."))
@@ -48,7 +49,8 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		msgCache := ss.DNSCache(question.Name, dns.TypeToString[question.Qtype], isDirect)
 		if msgCache != nil {
 			msgCache.MsgHdr.Id = msg.MsgHdr.Id
-			log.Infof("find msg from dns cache, write back directly, domain:%s", question.Name)
+			log.Infof("find msg from dns cache, write back directly, domain:%s, qtype:%s",
+				question.Name, dns.TypeToString[question.Qtype])
 			if err := responseDNSMsg(s.UDPConn, addr, msgCache, d.Address()); err != nil {
 				log.Errorf("response dns msg err:%s", err.Error())
 				return err
@@ -244,7 +246,8 @@ func (ss *Easyss) SetDNSCacheIfNeeded(udpResp []byte, isDirect bool) {
 		if err := ss.SetDNSCache(msg, false, isDirect); err != nil {
 			log.Warnf("set dns cache err:%s", err.Error())
 		} else {
-			log.Debugf("set dns cache success for domain:%s", msg.Question[0].Name)
+			log.Debugf("set dns cache success for domain:%s, qtype:%s, isDirect:%v",
+				msg.Question[0].Name, dns.TypeToString[msg.Question[0].Qtype], isDirect)
 		}
 	}
 }
