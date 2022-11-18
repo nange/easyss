@@ -119,9 +119,9 @@ func (st *SysTray) AddSelectConfMenu() *systray.MenuItem {
 }
 
 func (st *SysTray) AddPACMenu() (*systray.MenuItem, *systray.MenuItem) {
-	pacMenu := systray.AddMenuItem("PAC代理(浏览器)", "请选择")
-	auto := pacMenu.AddSubMenuItemCheckbox("启用PAC(自动代理)", "启用PAC", true)
-	global := pacMenu.AddSubMenuItemCheckbox("启用PAC(全局代理)", "全局模式", false)
+	pacMenu := systray.AddMenuItem("代理浏览器", "请选择")
+	auto := pacMenu.AddSubMenuItemCheckbox("自动(代理国外域名)", "PAC自动代理", true)
+	global := pacMenu.AddSubMenuItemCheckbox("代理浏览器全局", "PAC全局模式", false)
 
 	go func() {
 		for {
@@ -166,10 +166,10 @@ func (st *SysTray) AddPACMenu() (*systray.MenuItem, *systray.MenuItem) {
 }
 
 func (st *SysTray) AddTun2socksMenu() (*systray.MenuItem, *systray.MenuItem) {
-	tun2socksMenue := systray.AddMenuItem("Tun2socks代理(系统全局)", "全局代理,需管理员权限")
+	tun2socksMenue := systray.AddMenuItem("代理系统全局(需管理员权限)", "请选择")
 
-	auto := tun2socksMenue.AddSubMenuItemCheckbox("自动(绕过大陆IP域名)", "自动", false)
-	global := tun2socksMenue.AddSubMenuItemCheckbox("代理系统全局流量", "系统全局", false)
+	auto := tun2socksMenue.AddSubMenuItemCheckbox("自动(绕过大陆IP域名)", "自动模式", false)
+	global := tun2socksMenue.AddSubMenuItemCheckbox("代理系统全局流量", "系统全局模式", false)
 
 	go func() {
 		for {
