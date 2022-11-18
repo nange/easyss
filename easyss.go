@@ -468,6 +468,9 @@ func (ss *Easyss) Close() {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
+	if ss.tun2socksStatus != Tun2socksStatusOff {
+		ss.closeTun2socks()
+	}
 	if ss.tcpPool != nil {
 		ss.tcpPool.Close()
 		ss.tcpPool = nil
@@ -483,9 +486,6 @@ func (ss *Easyss) Close() {
 	if ss.closing != nil {
 		close(ss.closing)
 		ss.closing = nil
-	}
-	if ss.tun2socksStatus != Tun2socksStatusOff {
-		ss.closeTun2socks()
 	}
 }
 
