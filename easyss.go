@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -165,19 +166,22 @@ func New(config *Config) (*Easyss, error) {
 		ss.SetDNSCache(msg, true, false)
 	}
 
-	gw, dev, err := util.SysGatewayAndDevice()
-	if err != nil {
-		log.Errorf("get system gateway and device err:%s", err.Error())
-	}
-	ss.localGw = gw
-	ss.localDev = dev
+	switch runtime.GOOS {
+	case "linux", "windows", "darwin":
+		gw, dev, err := util.SysGatewayAndDevice()
+		if err != nil {
+			log.Errorf("get system gateway and device err:%s", err.Error())
+		}
+		ss.localGw = gw
+		ss.localDev = dev
 
-	iface, err := net.InterfaceByName(dev)
-	if err != nil {
-		log.Errorf("interface by name err:%v", err)
-		return nil, err
+		iface, err := net.InterfaceByName(dev)
+		if err != nil {
+			log.Errorf("interface by name err:%v", err)
+			return nil, err
+		}
+		ss.devIndex = iface.Index
 	}
-	ss.devIndex = iface.Index
 
 	go ss.printStatistics()
 
