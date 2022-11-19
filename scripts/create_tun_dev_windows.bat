@@ -1,3 +1,4 @@
+echo "Please wait a moment... This window will be closed after the operation completed"
 @echo off
 
 set tun_device=%1
