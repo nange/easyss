@@ -73,9 +73,9 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		return errors.New("dst addr is invalid")
 	}
 
-	dstHost, _, _ := net.SplitHostPort(dst)
+	dstHost, _, _ := net.SplitHostPort(rewrittenDst)
 	if ss.HostAtCN(dstHost) && ss.Tun2socksStatusAuto() {
-		return ss.directUDPRelay(s, addr, d, false)
+		return ss.directUDPRelay(s, addr, d, isDNSRequest(msg))
 	}
 
 	var ch chan byte
@@ -262,6 +262,9 @@ func responseDNSMsg(conn *net.UDPConn, localAddr *net.UDPAddr, msg *dns.Msg, rem
 }
 
 func isDNSRequest(msg *dns.Msg) bool {
+	if msg == nil {
+		return false
+	}
 	if len(msg.Question) > 0 {
 		return true
 	}
@@ -269,6 +272,9 @@ func isDNSRequest(msg *dns.Msg) bool {
 }
 
 func isDNSResponse(msg *dns.Msg) bool {
+	if msg == nil {
+		return false
+	}
 	if !msg.MsgHdr.Response || !isDNSRequest(msg) || len(msg.Answer) == 0 {
 		return false
 	}
