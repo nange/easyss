@@ -22,7 +22,7 @@ type DirectUDPExchange struct {
 }
 
 func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5.Datagram, isDNSReq bool) error {
-	log.Infof("directly relay udp proto for addr:%s, isDNSReq:%v", d.Address(), isDNSReq)
+	log.Debugf("directly relay udp proto for addr:%s, isDNSReq:%v", d.Address(), isDNSReq)
 
 	var ch chan byte
 	var hasAssoc bool
@@ -68,7 +68,7 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 
 	udpProto := "udp"
 	if runtime.GOOS == "windows" {
-		//TODO: the are some bugs with udp6 proto on windows
+		//TODO: there are some bugs with udp6 proto on windows
 		//Note: https://github.com/xjasonlyu/tun2socks/pull/192
 		udpProto = "udp4"
 	}
