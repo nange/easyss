@@ -22,7 +22,7 @@ require (
 	golang.org/x/crypto v0.1.0
 )
 
-replace github.com/xjasonlyu/tun2socks/v2 v2.4.1 => github.com/nange/tun2socks/v2 v2.0.0-20221119085419-aa6d7966ad38
+replace github.com/xjasonlyu/tun2socks/v2 v2.4.1 => github.com/nange/tun2socks/v2 v2.0.0-20221122075915-2df3b28105ac
 
 require (
 	github.com/BurntSushi/toml v0.4.1 // indirect
