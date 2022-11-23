@@ -271,6 +271,10 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 func writeWinTunToDisk() error {
 	writeBytes := func(b []byte) error {
 		path := filepath.Join(util.CurrentDir(), "wintun.dll")
+		if _, err := os.Stat(path); err == nil {
+			// already exist the wintun.dll file
+			return nil
+		}
 		return os.WriteFile(path, b, 0666)
 	}
 
