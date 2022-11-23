@@ -11,7 +11,7 @@ import (
 )
 
 func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
-	log.Infof("directly relay tcp proto for addr:%s", addr)
+	log.Debugf("directly relay tcp proto for addr:%s", addr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
 	defer cancel()
