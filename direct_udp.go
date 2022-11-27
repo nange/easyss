@@ -3,7 +3,6 @@ package easyss
 import (
 	"fmt"
 	"net"
-	"runtime"
 	"strconv"
 	"time"
 
@@ -66,13 +65,7 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 		return send(ue, d.Data, uAddr)
 	}
 
-	udpProto := "udp"
-	if runtime.GOOS == "windows" {
-		//TODO: there are some bugs with udp6 proto on windows
-		//Note: https://github.com/xjasonlyu/tun2socks/pull/192
-		udpProto = "udp4"
-	}
-	pc, err := dialer.ListenPacketWithOptions(udpProto, "", &dialer.Options{
+	pc, err := dialer.ListenPacketWithOptions("udp", "", &dialer.Options{
 		InterfaceName:  ss.LocalDevice(),
 		InterfaceIndex: ss.LocalDeviceIndex(),
 	})

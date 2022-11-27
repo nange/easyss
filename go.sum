@@ -78,8 +78,6 @@ github.com/nange/easypool v1.3.1 h1:H08lgMheGnJJtHmj9DQqQJ0ALLYm9YgId88QQcP/8nI=
 github.com/nange/easypool v1.3.1/go.mod h1:thcZ8jRQmaMuhSsmUhbjUUvqQsZOZa6fZFxqnGTNEmw=
 github.com/nange/httpproxy v0.0.0-20180805034305-ff2c9c785a5d h1:fjUvopDETMhlPw9eNRu1UjqGApvM9EYKV227WCowJG8=
 github.com/nange/httpproxy v0.0.0-20180805034305-ff2c9c785a5d/go.mod h1:K4+/aO6HqpJEuxSiBx0hd/dxTJluMf2yiEmGsnr7nBY=
-github.com/nange/tun2socks/v2 v2.0.0-20221122075915-2df3b28105ac h1:FFxiIg3l/r55EjHTcmsb3aUBoa2zTI494QQyROiU0bA=
-github.com/nange/tun2socks/v2 v2.0.0-20221122075915-2df3b28105ac/go.mod h1:DtaEQzn4ImO/oS8rlDFTv2Lcz8LjyGLRBb5SAN7gIFE=
 github.com/oschwald/geoip2-golang v1.8.0 h1:KfjYB8ojCEn/QLqsDU0AzrJ3R5Qa9vFlx3z6SLNcKTs=
 github.com/oschwald/geoip2-golang v1.8.0/go.mod h1:R7bRvYjOeaoenAp9sKRS8GX5bJWcZ0laWO5+DauEktw=
 github.com/oschwald/maxminddb-golang v1.10.0 h1:Xp1u0ZhqkSuopaKmk1WwHtjF0H9Hd9181uj2MQ5Vndg=
@@ -114,6 +112,8 @@ github.com/txthinking/socks5 v0.0.0-20220212043548-414499347d4a h1:BOqgJ4jku0LHP
 github.com/txthinking/socks5 v0.0.0-20220212043548-414499347d4a/go.mod h1:7NloQcrxaZYKURWph5HLxVDlIwMHJXCPkeWPtpftsIg=
 github.com/txthinking/x v0.0.0-20210326105829-476fab902fbe h1:gMWxZxBFRAXqoGkwkYlPX2zvyyKNWJpxOxCrjqJkm5A=
 github.com/txthinking/x v0.0.0-20210326105829-476fab902fbe/go.mod h1:WgqbSEmUYSjEV3B1qmee/PpP2NYEz4bL9/+mF1ma+s4=
+github.com/xjasonlyu/tun2socks/v2 v2.4.2-0.20221126151023-35f6888c30e9 h1:F7yW07be4Y3IOIPr8hXadFvHbZfeZZoBjLTV+IKJEfc=
+github.com/xjasonlyu/tun2socks/v2 v2.4.2-0.20221126151023-35f6888c30e9/go.mod h1:DtaEQzn4ImO/oS8rlDFTv2Lcz8LjyGLRBb5SAN7gIFE=
 github.com/yuin/goldmark v1.3.5/go.mod h1:mwnBkeHKe2W/ZEtQ+71ViKU8L12m81fl3OWwC1Zlc8k=
 go.uber.org/atomic v1.7.0/go.mod h1:fEN4uk6kAWBTFdckzkM89CLk9XfWZrxpCo0nPH17wJc=
 go.uber.org/atomic v1.10.0 h1:9qC72Qh0+3MqyJbAn8YU5xVq1frD8bn3JtD2oXtafVQ=

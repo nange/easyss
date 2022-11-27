@@ -18,7 +18,7 @@ require (
 	github.com/snowzach/rotatefilehook v0.0.0-20220211133110-53752135082d
 	github.com/stretchr/testify v1.8.1
 	github.com/txthinking/socks5 v0.0.0-20220212043548-414499347d4a
-	github.com/xjasonlyu/tun2socks/v2 v2.4.1
+	github.com/xjasonlyu/tun2socks/v2 v2.4.2-0.20221126151023-35f6888c30e9
 	golang.org/x/crypto v0.1.0
 )
 
