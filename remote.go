@@ -20,13 +20,34 @@ func (ss *Easyss) Remote() {
 	ss.tcpServer()
 }
 
-func (ss *Easyss) tcpServer() {
-	addr := ":" + strconv.Itoa(ss.ServerPort())
+func (ss *Easyss) tlsConfig() (*tls.Config, error) {
 	tlsConfig, err := certmagic.TLS([]string{ss.Server()})
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
+
 	tlsConfig.NextProtos = []string{"h2", "http/1.1"}
+	if !ss.DisableUTLS() {
+		tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
+			for _, v := range tlsConfig.NextProtos {
+				if cs.NegotiatedProtocol == v {
+					return nil
+				}
+			}
+			return fmt.Errorf("unsupported ALPN:%s", cs.NegotiatedProtocol)
+		}
+	}
+
+	return tlsConfig, nil
+}
+
+func (ss *Easyss) tcpServer() {
+	addr := ":" + strconv.Itoa(ss.ServerPort())
+	tlsConfig, err := ss.tlsConfig()
+	if err != nil {
+		log.Fatalf("get server tls config err:%v", err)
+	}
+
 	ln, err := tls.Listen("tcp", addr, tlsConfig)
 	if err != nil {
 		log.Fatal(err)
@@ -82,10 +103,10 @@ func (ss *Easyss) tcpServer() {
 						return
 					}
 					if needClose {
-						log.Infof("maybe underlying connection has been closed, need close the proxy conn")
+						log.Debugf("maybe underlying connection has been closed, need close the proxy conn")
 						return
 					}
-					log.Infof("underlying connection is health, so reuse it")
+					log.Debugf("underlying connection is health, so reuse it")
 				default:
 					log.Errorf("unsupported protoType:%s", protoType)
 					return
