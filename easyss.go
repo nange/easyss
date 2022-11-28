@@ -348,6 +348,10 @@ func (ss *Easyss) Tun2socksStatusOff() bool {
 	return ss.tun2socksStatus == Tun2socksStatusOff
 }
 
+func (ss *Easyss) Tun2socksModelFromConfig() string {
+	return ss.config.Tun2socksModel
+}
+
 func (ss *Easyss) SetHttpProxyServer(server *http.Server) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()

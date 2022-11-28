@@ -10,15 +10,16 @@ import (
 )
 
 type Config struct {
-	Server      string `json:"server"`
-	ServerPort  int    `json:"server_port"`
-	LocalPort   int    `json:"local_port"`
-	Password    string `json:"password"`
-	Method      string `json:"method"` // encryption method
-	Timeout     int    `json:"timeout"`
-	BindALL     bool   `json:"bind_all"`
-	DisableUTLS bool   `json:"disable_utls"`
-	ConfigFile  string `json:"-"`
+	Server         string `json:"server"`
+	ServerPort     int    `json:"server_port"`
+	LocalPort      int    `json:"local_port"`
+	Password       string `json:"password"`
+	Method         string `json:"method"` // encryption method
+	Timeout        int    `json:"timeout"`
+	BindALL        bool   `json:"bind_all"`
+	DisableUTLS    bool   `json:"disable_utls"`
+	Tun2socksModel string `json:"tun2socks_model"`
+	ConfigFile     string `json:"-"`
 }
 
 func ParseConfig(path string) (config *Config, err error) {

@@ -68,6 +68,25 @@ const (
 	Tun2socksStatusOn
 )
 
+var T2SSTypeToString = map[Tun2socksStatus]string{
+	Tun2socksStatusOff:  "off",
+	Tun2socksStatusAuto: "auto",
+	Tun2socksStatusOn:   "on",
+}
+
+var T2SSStringToType = map[string]Tun2socksStatus{
+	"off":  Tun2socksStatusOff,
+	"auto": Tun2socksStatusAuto,
+	"on":   Tun2socksStatusOn,
+}
+
+func (t2ss Tun2socksStatus) String() string {
+	if v, ok := T2SSTypeToString[t2ss]; ok {
+		return v
+	}
+	return fmt.Sprintf("unknow Tun2socksStatus:%d", t2ss)
+}
+
 func init() {
 	_TunDevice = TunDevice
 
@@ -101,6 +120,9 @@ func (ss *Easyss) CreateTun2socks(status Tun2socksStatus) error {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
+	if status == Tun2socksStatusOff {
+		return nil
+	}
 	if ss.tun2socksStatus != Tun2socksStatusOff {
 		ss.tun2socksStatus = status
 		return nil

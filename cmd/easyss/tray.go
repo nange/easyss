@@ -170,6 +170,11 @@ func (st *SysTray) AddTun2socksMenu() (*systray.MenuItem, *systray.MenuItem) {
 
 	auto := tun2socksMenue.AddSubMenuItemCheckbox("自动(绕过大陆IP域名)", "自动模式", false)
 	global := tun2socksMenue.AddSubMenuItemCheckbox("代理系统全局流量", "系统全局模式", false)
+	if st.ss.Tun2socksStatusAuto() {
+		auto.Check()
+	} else if st.ss.Tun2socksStatusOn() {
+		global.Check()
+	}
 
 	go func() {
 		for {
@@ -295,6 +300,13 @@ func (st *SysTray) StartLocalService() {
 	go pac.LocalPAC()   // system pac configuration
 	go ss.LocalSocks5() // start local server
 	go ss.LocalHttp()   // start local http proxy server
+
+	model := easyss.T2SSStringToType[st.ss.Tun2socksModelFromConfig()]
+	if model != easyss.Tun2socksStatusOff {
+		if err := st.ss.CreateTun2socks(model); err != nil {
+			log.Fatalf("create tun2socks model:%s err:%s", model, err.Error())
+		}
+	}
 }
 
 func (st *SysTray) RestartService(config *easyss.Config) error {
