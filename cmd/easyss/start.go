@@ -26,8 +26,8 @@ func StartEasyss(ss *easyss.Easyss) {
 			syscall.SIGQUIT)
 
 		select {
-		case <-c:
-			log.Infof("got signal to exit: %v", <-c)
+		case sig := <-c:
+			log.Infof("got signal to exit: %v", sig)
 			st.CloseService()
 			os.Exit(0)
 		case <-st.closing:

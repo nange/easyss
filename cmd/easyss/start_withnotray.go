@@ -30,5 +30,10 @@ func StartEasyss(ss *easyss.Easyss) {
 	signal.Notify(c, os.Kill, os.Interrupt, syscall.SIGINT, syscall.SIGTERM,
 		syscall.SIGQUIT)
 
-	log.Infof("got signal to exit: %v", <-c)
+	select {
+	case sig := <-c:
+		log.Infof("got signal to exit: %v", sig)
+		ss.Close()
+		os.Exit(0)
+	}
 }
