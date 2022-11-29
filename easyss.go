@@ -131,12 +131,13 @@ type Easyss struct {
 	geosite        *GeoSite
 
 	// the mu Mutex to protect below fields
-	mu              *sync.RWMutex
-	tcpPool         easypool.Pool
-	socksServer     *socks5.Server
-	httpProxyServer *http.Server
-	closing         chan struct{}
-	tun2socksStatus Tun2socksStatus
+	mu               *sync.RWMutex
+	tcpPool          easypool.Pool
+	socksServer      *socks5.Server
+	httpProxyServer  *http.Server
+	dnsForwardServer *dns.Server
+	closing          chan struct{}
+	tun2socksStatus  Tun2socksStatus
 }
 
 func New(config *Config) (*Easyss, error) {
@@ -299,6 +300,10 @@ func (ss *Easyss) DisableUTLS() bool {
 	return ss.config.DisableUTLS
 }
 
+func (ss *Easyss) EnableForwardDNS() bool {
+	return ss.config.EnableForwardDNS
+}
+
 func (ss *Easyss) ConfigFilename() string {
 	if ss.config.ConfigFile == "" {
 		return ""
@@ -316,6 +321,12 @@ func (ss *Easyss) SetSocksServer(server *socks5.Server) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	ss.socksServer = server
+}
+
+func (ss *Easyss) SetForwardDNSServer(server *dns.Server) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	ss.dnsForwardServer = server
 }
 
 func (ss *Easyss) Tun2socksStatus() Tun2socksStatus {
@@ -486,6 +497,10 @@ func (ss *Easyss) Close() {
 	if ss.socksServer != nil {
 		ss.socksServer.Shutdown()
 		ss.socksServer = nil
+	}
+	if ss.dnsForwardServer != nil {
+		ss.dnsForwardServer.Shutdown()
+		ss.dnsForwardServer = nil
 	}
 	if ss.closing != nil {
 		close(ss.closing)

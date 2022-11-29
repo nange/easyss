@@ -21,6 +21,8 @@ const (
 	DefaultDNSServer = "8.8.8.8:53"
 )
 
+const DefaultUDPTimeout = 10 * time.Second
+
 var udpDataBytes = util.NewBytes(MaxUDPDataSize)
 
 // UDPExchange used to store client address and remote connection
@@ -203,7 +205,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			}
 
 			if !hasAssoc {
-				if err := ue.RemoteConn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+				if err := ue.RemoteConn.SetDeadline(time.Now().Add(DefaultUDPTimeout)); err != nil {
 					log.Errorf("set the deadline for remote conn err:%v", err)
 					monitorCh <- false
 					return

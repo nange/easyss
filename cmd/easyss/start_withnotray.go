@@ -18,6 +18,9 @@ func StartEasyss(ss *easyss.Easyss) {
 
 	go ss.LocalSocks5() // start local server
 	go ss.LocalHttp()   // start local http proxy server
+	if ss.EnableForwardDNS() {
+		go ss.LocalDNSForward() // start local dns forward server
+	}
 
 	model := easyss.T2SSStringToType[ss.Tun2socksModelFromConfig()]
 	if model != easyss.Tun2socksStatusOff {

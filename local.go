@@ -32,9 +32,10 @@ func (ss *Easyss) LocalSocks5() error {
 	}
 	ss.SetSocksServer(server)
 
-	log.Warnf("local socks5 server:%s", server.ListenAndServe(ss))
+	err = server.ListenAndServe(ss)
+	log.Warnf("local socks5 server:%s", err.Error())
 
-	return nil
+	return err
 }
 
 func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Request) error {
