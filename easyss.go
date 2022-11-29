@@ -450,19 +450,19 @@ func (ss *Easyss) ServerDNSMsg() (*dns.Msg, error) {
 	return r, nil
 }
 
-func (ss *Easyss) HostAtCN(host string) bool {
+func (ss *Easyss) HostAtCNOrPrivate(host string) bool {
 	if host == "" {
 		return false
 	}
 
 	if util.IsIP(host) {
-		return ss.IPAtCN(host)
+		return ss.IPAtCNOrPrivate(host)
 	}
 
 	return ss.geosite.SiteAtCN(host)
 }
 
-func (ss *Easyss) IPAtCN(ip string) bool {
+func (ss *Easyss) IPAtCNOrPrivate(ip string) bool {
 	_ip := net.ParseIP(ip)
 	if _ip == nil {
 		return false
@@ -472,7 +472,7 @@ func (ss *Easyss) IPAtCN(ip string) bool {
 		return false
 	}
 
-	if country.Country.IsoCode == "CN" {
+	if country.Country.IsoCode == "CN" || country.Country.IsoCode == "PRIVATE" {
 		return true
 	}
 

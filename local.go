@@ -33,7 +33,9 @@ func (ss *Easyss) LocalSocks5() error {
 	ss.SetSocksServer(server)
 
 	err = server.ListenAndServe(ss)
-	log.Warnf("local socks5 server:%s", err.Error())
+	if err != nil {
+		log.Warnf("local socks5 server:%s", err.Error())
+	}
 
 	return err
 }
@@ -41,11 +43,6 @@ func (ss *Easyss) LocalSocks5() error {
 func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Request) error {
 	targetAddr := r.Address()
 	log.Infof("target addr:%v, is udp:%v", targetAddr, r.Cmd == socks5.CmdUDP)
-
-	if err := ss.validateAddr(r.Address()); err != nil {
-		log.Errorf("validate socks5 request:%v", err)
-		return err
-	}
 
 	if r.Cmd == socks5.CmdConnect {
 		a, addr, port, err := socks5.ParseAddress(conn.LocalAddr().String())
@@ -95,8 +92,13 @@ var paddingBytes = util.NewBytes(cipherstream.PaddingSize)
 
 func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	host, _, _ := net.SplitHostPort(addr)
-	if ss.HostAtCN(host) && ss.Tun2socksStatusAuto() {
+	if ss.HostAtCNOrPrivate(host) && ss.Tun2socksStatusAuto() {
 		return ss.directRelay(localConn, addr)
+	}
+
+	if err := ss.validateAddr(addr); err != nil {
+		log.Errorf("validate socks5 request:%v", err)
+		return err
 	}
 
 	pool := ss.Pool()

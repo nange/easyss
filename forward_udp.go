@@ -30,7 +30,9 @@ func (ss *Easyss) LocalDNSForward() error {
 
 	log.Infof("starting local dns forward server at :53")
 	err := server.ListenAndServe()
-	log.Warnf("local dns forward server:%s", err.Error())
+	if err != nil {
+		log.Warnf("local dns forward server:%s", err.Error())
+	}
 
 	return err
 }

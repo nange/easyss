@@ -44,8 +44,8 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			msg.Question[0].Name, dns.TypeToString[msg.Question[0].Qtype])
 
 		question := msg.Question[0]
-		hostAtCN := ss.HostAtCN(strings.TrimSuffix(question.Name, "."))
-		isDirect := hostAtCN && ss.Tun2socksStatusAuto()
+		cnOrPrivate := ss.HostAtCNOrPrivate(strings.TrimSuffix(question.Name, "."))
+		isDirect := cnOrPrivate && ss.Tun2socksStatusAuto()
 
 		// find from dns cache first
 		msgCache := ss.DNSCache(question.Name, dns.TypeToString[question.Qtype], isDirect)
@@ -70,14 +70,16 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 
 		log.Debugf("rewrite dns dst addr to %s", DefaultDNSServer)
 		rewrittenDst = DefaultDNSServer
-	} else if err := ss.validateAddr(dst); err != nil {
-		log.Warnf("validate udp dst:%v err:%v, data:%s", dst, err, string(d.Data))
-		return errors.New("dst addr is invalid")
 	}
 
 	dstHost, _, _ := net.SplitHostPort(rewrittenDst)
-	if ss.HostAtCN(dstHost) && ss.Tun2socksStatusAuto() {
+	if ss.HostAtCNOrPrivate(dstHost) && ss.Tun2socksStatusAuto() {
 		return ss.directUDPRelay(s, addr, d, isDNSRequest(msg))
+	}
+
+	if err := ss.validateAddr(rewrittenDst); err != nil {
+		log.Warnf("validate udp dst:%v err:%v, data:%s", dst, err, string(d.Data))
+		return errors.New("dst addr is invalid")
 	}
 
 	var ch chan byte
