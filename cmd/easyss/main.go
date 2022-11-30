@@ -3,13 +3,13 @@ package main
 import (
 	"flag"
 	"fmt"
-	_ "net/http/pprof"
 	"os"
 	"path"
 	"path/filepath"
 	"runtime"
 
 	"github.com/nange/easyss"
+	"github.com/nange/easyss/pprof"
 	"github.com/nange/easyss/util"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -28,7 +28,7 @@ func init() {
 
 func main() {
 	var logLevel string
-	var printVer, daemon, showConfigExample bool
+	var printVer, daemon, showConfigExample, enablePprof bool
 	var cmdConfig easyss.Config
 
 	flag.BoolVar(&printVer, "version", false, "print version")
@@ -45,6 +45,7 @@ func main() {
 	flag.BoolVar(&cmdConfig.BindALL, "bind-all", false, "listens on all available IPs of the local system. default: false")
 	flag.BoolVar(&cmdConfig.EnableForwardDNS, "enable-forward-dns", false, "start a local dns server to forward dns request")
 	flag.StringVar(&cmdConfig.Tun2socksModel, "tun2socks-model", "off", "set tun2socks model(off, auto, on). default: off")
+	flag.BoolVar(&enablePprof, "enable-pprof", false, "enable pprof server. default bind to :6060")
 
 	flag.Parse()
 
@@ -97,6 +98,10 @@ func main() {
 
 	if config.Password == "" || config.Server == "" || config.ServerPort == 0 {
 		log.Fatalln("server address, server port and password should not empty")
+	}
+
+	if enablePprof {
+		go pprof.StartPprof()
 	}
 
 	ss, err := easyss.New(config)
