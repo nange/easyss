@@ -32,14 +32,18 @@ type httpProxy struct {
 }
 
 func (h *httpProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "CONNECT" {
+		http.Error(w, "This is a proxy server. Does not respond to non-proxy requests.", http.StatusBadRequest)
+		return
+	}
+
 	hij, ok := w.(http.Hijacker)
 	if !ok {
 		log.Errorf("Connect: hijacking not supported")
 		if r.Body != nil {
 			defer r.Body.Close()
 		}
-		w.WriteHeader(http.StatusNotAcceptable)
-		w.Write([]byte("Connect: hijacking not supported"))
+		http.Error(w, "Connect: hijacking not supported", http.StatusInternalServerError)
 		return
 	}
 
