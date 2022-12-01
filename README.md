@@ -32,10 +32,10 @@ apt-get install libgtk-3-dev libayatana-appindicator3-dev
 // Ubuntu18.04 or Debian10
 apt-get install libgtk-3-dev libappindicator3-dev -y
 
-// build client server
+// build easyss client
 make easyss
 
-// build remote server
+// build easyss server
 make easyss-server
 
 ```
@@ -48,25 +48,28 @@ make easyss-server
 
 * server: 服务器域名(必填，必须是域名，不能是IP)
 * server_port: 服务器对应端口(必填)
-* local_port: 本地监听端口(默认1080)
+* local_port: 本地监听端口(默认2080)
 * password: 通信加密密钥(必填)
 * method: 通信加密方式(默认aes-256-gcm)
-* timeout: 超时时间,单位秒
+* timeout: 超时时间,单位秒(默认60)
 * bind_all: 是否将监听端口绑定到所有本地IP上(默认false)
+
+其他还有一些参数没有列出，如无必要，无需关心。除了必填的参数，其他都是可选的，甚至可以不要配置文件，全部通过命令行指定即可。
 
 修改完成后, 双击二进制文件，程序会自动启动，托盘会出现easyss的图标，如下:
 
-![托盘图标](./img/tray.png)
+![托盘图标](img/tray.png)
+![托盘图标](img/tray2.png)
 
-右键图标可选择PAC全局模式.
+右键图标可选择代理浏览器和代理系统全局模式。
 
 ### 手机客户端
 
 手机客户端apk文件可直接在release页面下载。
 
-手机客户端是基于SagerNet扩展修改而来，源代码在[SagerNet](https://github.com/bingooo/SagerNet)，感谢 [bingooo](https://github.com/bingooo)
+手机客户端是基于SagerNet扩展修改而来，源代码在[Matsuri](https://github.com/bingooo/Matsuri)，感谢 [bingooo](https://github.com/bingooo)
 
-创建Easyss配置项：点击右上角+图标 -> 手动输入 -> 自定义配置（配置类型选择EasySS, 将配置文件内容复制到编辑里面，保存）
+创建Easyss配置项：点击右上角+图标 -> 手动输入 -> 选择EasySS
 
 ### 服务器端
 
@@ -74,6 +77,7 @@ make easyss-server
 修改config.json文件, 其中server(必须是服务器的域名)、server_port和password必填, 执行:
 
 ```sh
+# 需sudo权限
 ./easyss-server
 ```
 
