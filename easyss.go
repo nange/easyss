@@ -157,10 +157,19 @@ func New(config *Config) (*Easyss, error) {
 	ss.geoipDB = db
 	ss.geosite = NewGeoSite(geoSiteCN)
 
-	msg, err := ss.ServerDNSMsg()
-	if err != nil {
-		log.Errorf("query server dns msg err:%s", err.Error())
+	var msg *dns.Msg
+	for i := 0; i < 3; i++ {
+		msg, err = ss.ServerDNSMsg()
+		if err != nil {
+			log.Warnf("query server dns msg err:%s", err.Error())
+			time.Sleep(time.Second)
+			continue
+		}
+		if msg != nil {
+			break
+		}
 	}
+
 	if msg != nil {
 		ss.serverIP = msg.Answer[0].(*dns.A).A.String()
 		ss.SetDNSCache(msg, true, true)
