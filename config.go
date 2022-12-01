@@ -73,6 +73,9 @@ func UpdateConfig(old, ne *Config) {
 		}
 	}
 
+	if old.LocalPort == 0 {
+		old.LocalPort = 2080
+	}
 	if old.Method == "" {
 		old.Method = "aes-256-gcm"
 	}
