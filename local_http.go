@@ -4,33 +4,10 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/nange/httpproxy"
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
 func (ss *Easyss) LocalHttp() error {
-	prx, err := httpproxy.NewProxy()
-	if err != nil {
-		log.Errorf("new http proxy err:%+v", errors.WithStack(err))
-		return err
-	}
-
-	onForward := func(ctx *httpproxy.Context, host string) error {
-		hijConn, err := ctx.GetHijConn()
-		if err != nil {
-			log.Errorf("get hijack conn, err:%+v", errors.WithStack(err))
-			return err
-		}
-		if _, err := hijConn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n")); err != nil {
-			log.Errorf("write hijack ok err:%+v", errors.WithStack(err))
-			hijConn.Close()
-			return err
-		}
-		return ss.localRelay(hijConn, host)
-	}
-	prx.OnForward = onForward
-
 	var addr string
 	if ss.BindAll() {
 		addr = ":" + strconv.Itoa(ss.LocalHttpProxyPort())
@@ -39,13 +16,45 @@ func (ss *Easyss) LocalHttp() error {
 	}
 	log.Infof("starting local http-proxy server at %v", addr)
 
-	server := &http.Server{Addr: addr, Handler: prx}
+	server := &http.Server{Addr: addr, Handler: &httpProxy{ss: ss}}
 	ss.SetHttpProxyServer(server)
 
-	err = server.ListenAndServe()
+	err := server.ListenAndServe()
 	if err != nil {
 		log.Warnf("local http proxy server:%s", err.Error())
 	}
 
 	return err
+}
+
+type httpProxy struct {
+	ss *Easyss
+}
+
+func (h *httpProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	hij, ok := w.(http.Hijacker)
+	if !ok {
+		log.Errorf("Connect: hijacking not supported")
+		if r.Body != nil {
+			defer r.Body.Close()
+		}
+		w.WriteHeader(http.StatusNotAcceptable)
+		w.Write([]byte("Connect: hijacking not supported"))
+		return
+	}
+
+	hijConn, _, err := hij.Hijack()
+	if err != nil {
+		log.Errorf("get hijack conn, err:%s", err.Error())
+		return
+	}
+	if _, err := hijConn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n")); err != nil {
+		log.Errorf("write hijack ok err:%s", err.Error())
+		hijConn.Close()
+		return
+	}
+
+	if err := h.ss.localRelay(hijConn, r.URL.Host); err != nil {
+		log.Warnf("http local relay err:%s", err.Error())
+	}
 }
