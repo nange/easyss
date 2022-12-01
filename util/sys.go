@@ -34,7 +34,7 @@ func SysPowershellMajorVersion() int {
 
 func SysGatewayAndDevice() (gw string, dev string, err error) {
 	r, _ := netroute.New()
-	iface, gateway, _, err := r.Route(net.IPv4(114, 114, 114, 114))
+	iface, gateway, _, err := r.Route(net.IPv4(119, 29, 29, 29))
 	if err != nil {
 		return "", "", err
 	}

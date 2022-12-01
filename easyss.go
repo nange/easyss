@@ -447,7 +447,7 @@ func (ss *Easyss) ServerDNSMsg() (*dns.Msg, error) {
 	m.SetQuestion(dns.Fqdn(ss.Server()), dns.TypeA)
 	m.RecursionDesired = true
 
-	r, _, err := c.Exchange(m, "114.114.114.114:53")
+	r, _, err := c.Exchange(m, DefaultDirectDNSServer)
 	if err != nil {
 		return nil, err
 	}

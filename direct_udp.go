@@ -11,7 +11,7 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/component/dialer"
 )
 
-const DefaultDirectDNSServer = "114.114.114.114:53"
+const DefaultDirectDNSServer = "119.29.29.29:53"
 const DirectSuffix = "direct"
 
 // DirectUDPExchange used to store client address and remote connection
