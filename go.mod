@@ -18,14 +18,11 @@ require (
 	github.com/snowzach/rotatefilehook v0.0.0-20220211133110-53752135082d
 	github.com/stretchr/testify v1.8.1
 	github.com/txthinking/socks5 v0.0.0-20220212043548-414499347d4a
-	github.com/xjasonlyu/tun2socks/v2 v2.4.2-0.20221126151023-35f6888c30e9
-	golang.org/x/crypto v0.1.0
+	github.com/xjasonlyu/tun2socks/v2 v2.4.2-0.20221201075708-fa3317a94c55
+	golang.org/x/crypto v0.3.0
 )
 
-replace github.com/xjasonlyu/tun2socks/v2 v2.4.1 => github.com/nange/tun2socks/v2 v2.0.0-20221122075915-2df3b28105ac
-
 require (
-	github.com/BurntSushi/toml v0.4.1 // indirect
 	github.com/Dreamacro/go-shadowsocks2 v0.1.8 // indirect
 	github.com/ajg/form v1.5.1 // indirect
 	github.com/andybalholm/brotli v1.0.4 // indirect
@@ -63,7 +60,7 @@ require (
 	go.uber.org/multierr v1.6.0 // indirect
 	go.uber.org/zap v1.23.0 // indirect
 	golang.org/x/mod v0.6.0-dev.0.20220419223038-86c51ed26bb4 // indirect
-	golang.org/x/net v0.1.0 // indirect
+	golang.org/x/net v0.2.0 // indirect
 	golang.org/x/sys v0.2.0 // indirect
 	golang.org/x/text v0.4.0 // indirect
 	golang.org/x/time v0.2.0 // indirect
@@ -72,5 +69,5 @@ require (
 	golang.zx2c4.com/wireguard v0.0.0-20220920152132-bb719d3a6e2c // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	gvisor.dev/gvisor v0.0.0-20221107084555-4793b32eb08b // indirect
+	gvisor.dev/gvisor v0.0.0-20221201030536-bcb64b99e30f // indirect
 )
