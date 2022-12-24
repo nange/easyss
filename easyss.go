@@ -528,6 +528,10 @@ func (ss *Easyss) HostShouldDirect(host string) bool {
 			return false
 		}
 	} else {
+		if _, ok := ss.customDirectDomains[host]; ok {
+			log.Infof("match custom direct domains success for host:%s", host)
+			return true
+		}
 		domain := domainRoot(host)
 		if _, ok := ss.customDirectDomains[domain]; ok {
 			log.Infof("match custom direct domains success for host:%s", host)

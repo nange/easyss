@@ -124,7 +124,10 @@ func ReadFileLinesMap(file string) (map[string]struct{}, error) {
 
 	m := make(map[string]struct{})
 	for _, line := range lines {
-		m[strings.TrimSpace(line)] = struct{}{}
+		line = strings.TrimSpace(line)
+		if line != "" {
+			m[line] = struct{}{}
+		}
 	}
 	return m, nil
 }
