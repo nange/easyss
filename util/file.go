@@ -1,8 +1,11 @@
 package util
 
 import (
+	"bufio"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -86,4 +89,42 @@ func WriteToTemp(filename string, content []byte) (namePath string, err error) {
 	}
 
 	return tf.Name(), tf.Close()
+}
+
+func ReadFileLines(file string) ([]string, error) {
+	if e, err := FileExists(file); !e || err != nil {
+		return nil, err
+	}
+	f, err := os.Open(file)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	lines := make([]string, 0, 16)
+	r := bufio.NewReader(f)
+	for {
+		line, _, err := r.ReadLine()
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			return nil, err
+		}
+		lines = append(lines, string(line))
+	}
+
+	return lines, nil
+}
+
+func ReadFileLinesMap(file string) (map[string]struct{}, error) {
+	lines, err := ReadFileLines(file)
+	if err != nil {
+		return nil, err
+	}
+
+	m := make(map[string]struct{})
+	for _, line := range lines {
+		m[strings.TrimSpace(line)] = struct{}{}
+	}
+	return m, nil
 }

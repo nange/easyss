@@ -10,17 +10,21 @@ import (
 )
 
 type Config struct {
-	Server           string `json:"server"`
-	ServerPort       int    `json:"server_port"`
-	LocalPort        int    `json:"local_port"`
-	Password         string `json:"password"`
-	Method           string `json:"method"` // encryption method
-	Timeout          int    `json:"timeout"`
-	BindALL          bool   `json:"bind_all"`
-	DisableUTLS      bool   `json:"disable_utls"`
-	EnableForwardDNS bool   `json:"enable_forward_dns"`
-	Tun2socksModel   string `json:"tun2socks_model"`
-	ConfigFile       string `json:"-"`
+	Server            string `json:"server"`
+	ServerPort        int    `json:"server_port"`
+	LocalPort         int    `json:"local_port"`
+	Password          string `json:"password"`
+	Method            string `json:"method"` // encryption method
+	Timeout           int    `json:"timeout"`
+	BindALL           bool   `json:"bind_all"`
+	DisableUTLS       bool   `json:"disable_utls"`
+	EnableForwardDNS  bool   `json:"enable_forward_dns"`
+	Tun2socksModel    string `json:"tun2socks_model"`
+	DirectIPsFile     string `json:"direct_ips_file"`
+	DirectDomainsFile string `json:"direct_domains_file"`
+	ProxyIPsFile      string `json:"proxy_ips_file"`
+	ProxyDomainsFile  string `json:"proxy_domains_file"`
+	ConfigFile        string `json:"-"`
 }
 
 func ParseConfig(path string) (config *Config, err error) {
@@ -46,6 +50,7 @@ func ParseConfig(path string) (config *Config, err error) {
 	return
 }
 
+// TODO: rename old, ne to dst, src and rename UpdateConfig to OverrideConfig
 func UpdateConfig(old, ne *Config) {
 	newVal := reflect.ValueOf(ne).Elem()
 	oldVal := reflect.ValueOf(old).Elem()
@@ -81,6 +86,18 @@ func UpdateConfig(old, ne *Config) {
 	}
 	if old.Timeout <= 0 || old.Timeout > 60 {
 		old.Timeout = 60
+	}
+	if old.DirectIPsFile == "" {
+		old.DirectIPsFile = "direct_ips.txt"
+	}
+	if old.DirectDomainsFile == "" {
+		old.DirectDomainsFile = "direct_domains.txt"
+	}
+	if old.ProxyIPsFile == "" {
+		old.ProxyIPsFile = "proxy_ips.txt"
+	}
+	if old.ProxyDomainsFile == "" {
+		old.ProxyDomainsFile = "proxy_domains.txt"
 	}
 }
 

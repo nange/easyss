@@ -87,19 +87,19 @@ func NewGeoSite(data []byte) *GeoSite {
 	return gs
 }
 
-func (gs *GeoSite) SiteAtCN(domain string) bool {
-	domainRoot := func(_domain string) string {
-		var firstDot, lastDot int
-		for {
-			firstDot = strings.Index(_domain, ".")
-			lastDot = strings.LastIndex(_domain, ".")
-			if firstDot == lastDot {
-				return _domain
-			}
-			_domain = _domain[firstDot+1:]
+func domainRoot(domain string) string {
+	var firstDot, lastDot int
+	for {
+		firstDot = strings.Index(domain, ".")
+		lastDot = strings.LastIndex(domain, ".")
+		if firstDot == lastDot {
+			return domain
 		}
+		domain = domain[firstDot+1:]
 	}
+}
 
+func (gs *GeoSite) SiteAtCN(domain string) bool {
 	if _, ok := gs.fullDomain[domain]; ok {
 		return true
 	}
@@ -129,6 +129,11 @@ type Easyss struct {
 	directDNSCache *freecache.Cache
 	geoipDB        *geoip2.Reader
 	geosite        *GeoSite
+	// the user custom ip/domain list which have the highest priority
+	customDirectIPs     map[string]struct{}
+	customDirectDomains map[string]struct{}
+	customProxyIPs      map[string]struct{}
+	customProxyDomains  map[string]struct{}
 
 	// the mu Mutex to protect below fields
 	mu               *sync.RWMutex
@@ -156,6 +161,10 @@ func New(config *Config) (*Easyss, error) {
 	}
 	ss.geoipDB = db
 	ss.geosite = NewGeoSite(geoSiteCN)
+
+	if err := ss.loadCustomIPDomains(); err != nil {
+		log.Errorf("load custom ip/domains err:%s", err.Error())
+	}
 
 	var msg *dns.Msg
 	for i := 0; i < 3; i++ {
@@ -196,6 +205,51 @@ func New(config *Config) (*Easyss, error) {
 	go ss.printStatistics()
 
 	return ss, err
+}
+
+func (ss *Easyss) loadCustomIPDomains() error {
+	ss.customDirectIPs = make(map[string]struct{})
+	ss.customDirectDomains = make(map[string]struct{})
+	ss.customProxyIPs = make(map[string]struct{})
+	ss.customProxyDomains = make(map[string]struct{})
+
+	directIPs, err := util.ReadFileLinesMap(ss.config.DirectIPsFile)
+	if err != nil {
+		return err
+	}
+	if len(directIPs) > 0 {
+		log.Infof("load custom direct ips success, len:%d", len(directIPs))
+		ss.customDirectIPs = directIPs
+	}
+
+	directDomains, err := util.ReadFileLinesMap(ss.config.DirectDomainsFile)
+	if err != nil {
+		return err
+	}
+	if len(directDomains) > 0 {
+		log.Infof("load custom direct domains success, len:%d", len(directDomains))
+		ss.customDirectDomains = directDomains
+	}
+
+	proxyIPs, err := util.ReadFileLinesMap(ss.config.ProxyIPsFile)
+	if err != nil {
+		return err
+	}
+	if len(proxyIPs) > 0 {
+		log.Infof("load custom proxy ips success, len:%d", len(proxyIPs))
+		ss.customProxyIPs = proxyIPs
+	}
+
+	proxyDomains, err := util.ReadFileLinesMap(ss.config.ProxyDomainsFile)
+	if err != nil {
+		return err
+	}
+	if len(proxyDomains) > 0 {
+		log.Infof("load custom proxy domains success, len:%d", len(proxyDomains))
+		ss.customProxyDomains = proxyDomains
+	}
+
+	return nil
 }
 
 func (ss *Easyss) InitTcpPool() error {
@@ -457,6 +511,35 @@ func (ss *Easyss) ServerDNSMsg() (*dns.Msg, error) {
 	}
 
 	return r, nil
+}
+
+func (ss *Easyss) HostShouldDirect(host string) bool {
+	if host == "" {
+		return false
+	}
+
+	if util.IsIP(host) {
+		if _, ok := ss.customDirectIPs[host]; ok {
+			log.Infof("match custom direct ips success for host:%s", host)
+			return true
+		}
+		if _, ok := ss.customProxyIPs[host]; ok {
+			log.Infof("match custom proxy ips success for host:%s", host)
+			return false
+		}
+	} else {
+		domain := domainRoot(host)
+		if _, ok := ss.customDirectDomains[domain]; ok {
+			log.Infof("match custom direct domains success for host:%s", host)
+			return true
+		}
+		if _, ok := ss.customProxyDomains[domain]; ok {
+			log.Infof("match custom proxy domains success for host:%s", host)
+			return false
+		}
+	}
+
+	return ss.HostAtCNOrPrivate(host)
 }
 
 func (ss *Easyss) HostAtCNOrPrivate(host string) bool {
