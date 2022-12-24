@@ -50,54 +50,56 @@ func ParseConfig(path string) (config *Config, err error) {
 	return
 }
 
-// TODO: rename old, ne to dst, src and rename UpdateConfig to OverrideConfig
-func UpdateConfig(old, ne *Config) {
-	newVal := reflect.ValueOf(ne).Elem()
-	oldVal := reflect.ValueOf(old).Elem()
+func OverrideConfig(dst, src *Config) {
+	newVal := reflect.ValueOf(src).Elem()
+	oldVal := reflect.ValueOf(dst).Elem()
 
 	for i := 0; i < newVal.NumField(); i++ {
-		newField := newVal.Field(i)
-		oldField := oldVal.Field(i)
+		srcField := newVal.Field(i)
+		dstField := oldVal.Field(i)
 
-		switch newField.Kind() {
+		switch srcField.Kind() {
 		case reflect.String:
-			s := newField.String()
+			s := srcField.String()
 			if s != "" {
-				oldField.SetString(s)
+				dstField.SetString(s)
 			}
 		case reflect.Int:
-			i := newField.Int()
+			i := srcField.Int()
 			if i != 0 {
-				oldField.SetInt(i)
+				dstField.SetInt(i)
 			}
 		case reflect.Bool:
-			b := newField.Bool()
+			b := srcField.Bool()
 			if b {
-				oldField.SetBool(b)
+				dstField.SetBool(b)
 			}
 		}
 	}
 
-	if old.LocalPort == 0 {
-		old.LocalPort = 2080
+	if dst.LocalPort == 0 {
+		dst.LocalPort = 2080
 	}
-	if old.Method == "" {
-		old.Method = "aes-256-gcm"
+	if dst.Method == "" {
+		dst.Method = "aes-256-gcm"
 	}
-	if old.Timeout <= 0 || old.Timeout > 60 {
-		old.Timeout = 60
+	if dst.Timeout <= 0 || dst.Timeout > 60 {
+		dst.Timeout = 60
 	}
-	if old.DirectIPsFile == "" {
-		old.DirectIPsFile = "direct_ips.txt"
+	if dst.Tun2socksModel == "" {
+		dst.Tun2socksModel = "off"
 	}
-	if old.DirectDomainsFile == "" {
-		old.DirectDomainsFile = "direct_domains.txt"
+	if dst.DirectIPsFile == "" {
+		dst.DirectIPsFile = "direct_ips.txt"
 	}
-	if old.ProxyIPsFile == "" {
-		old.ProxyIPsFile = "proxy_ips.txt"
+	if dst.DirectDomainsFile == "" {
+		dst.DirectDomainsFile = "direct_domains.txt"
 	}
-	if old.ProxyDomainsFile == "" {
-		old.ProxyDomainsFile = "proxy_domains.txt"
+	if dst.ProxyIPsFile == "" {
+		dst.ProxyIPsFile = "proxy_ips.txt"
+	}
+	if dst.ProxyDomainsFile == "" {
+		dst.ProxyDomainsFile = "proxy_domains.txt"
 	}
 }
 

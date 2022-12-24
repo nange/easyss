@@ -73,7 +73,7 @@ func main() {
 			os.Exit(1)
 		}
 	} else {
-		easyss.UpdateConfig(config, &cmdConfig)
+		easyss.OverrideConfig(config, &cmdConfig)
 	}
 
 	if config.ServerPort == 0 || config.Password == "" || config.Server == "" {
