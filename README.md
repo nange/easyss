@@ -68,7 +68,7 @@ make easyss-server
 
 手机客户端apk文件可直接在release页面下载。
 
-手机客户端是基于SagerNet扩展修改而来，源代码在[Matsuri](https://github.com/bingooo/Matsuri)，感谢 [bingooo](https://github.com/bingooo)
+手机客户端是基于Matsuri扩展修改而来，源代码在[Matsuri](https://github.com/bingooo/Matsuri)，感谢 [bingooo](https://github.com/bingooo)
 
 创建Easyss配置项：点击右上角+图标 -> 手动输入 -> 选择EasySS
 
