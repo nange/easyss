@@ -28,7 +28,7 @@ type SysTray struct {
 	closing chan struct{}
 	mu      *sync.RWMutex
 
-	tun2socksSubMenus []*systray.MenuItem
+	tun2socksMenu *systray.MenuItem
 }
 
 func NewSysTray(ss *easyss.Easyss, pac *PAC) *SysTray {
@@ -49,18 +49,14 @@ func (st *SysTray) TrayReady() {
 	st.AddSelectConfMenu()
 	systray.AddSeparator()
 
-	st.AddPACMenu()
+	_, _, tun2socksMenu := st.AddProxyOptsMenu()
 	systray.AddSeparator()
-
-	auto, global := st.AddTun2socksMenu()
-	st.tun2socksSubMenus = append(st.tun2socksSubMenus, auto, global)
-	systray.AddSeparator()
+	st.tun2socksMenu = tun2socksMenu
 
 	st.AddCatLogsMenu()
 	systray.AddSeparator()
 
 	st.AddExitMenu()
-
 }
 
 func (st *SysTray) AddSelectConfMenu() *systray.MenuItem {
@@ -118,110 +114,61 @@ func (st *SysTray) AddSelectConfMenu() *systray.MenuItem {
 	return selectConf
 }
 
-func (st *SysTray) AddPACMenu() (*systray.MenuItem, *systray.MenuItem) {
-	pacMenu := systray.AddMenuItem("代理浏览器", "请选择")
-	auto := pacMenu.AddSubMenuItemCheckbox("自动(代理国外域名)", "PAC自动代理", true)
-	global := pacMenu.AddSubMenuItemCheckbox("代理浏览器全局", "PAC全局模式", false)
+func (st *SysTray) AddProxyOptsMenu() (*systray.MenuItem, *systray.MenuItem, *systray.MenuItem) {
+	proxyMenue := systray.AddMenuItem("代理选项", "请选择")
 
-	go func() {
-		for {
-			select {
-			case <-auto.ClickedCh:
-				st.mu.RLock()
-				_pac := st.pac
-				st.mu.RUnlock()
-
-				if auto.Checked() {
-					auto.Uncheck()
-					if _pac != nil {
-						_pac.ch <- PACOFF
-					}
-				} else {
-					auto.Check()
-					global.Uncheck()
-					if _pac != nil {
-						_pac.ch <- PACON
-					}
-				}
-				log.Debugf("pac btn clicked...is checked:%v", auto.Checked())
-			case <-global.ClickedCh:
-				st.mu.RLock()
-				_pac := st.pac
-				st.mu.RUnlock()
-
-				if global.Checked() {
-					global.Uncheck()
-					_pac.ch <- PACOFFGLOBAL
-				} else {
-					global.Check()
-					auto.Uncheck()
-					_pac.ch <- PACONGLOBAL
-				}
-				log.Debugf("global btn clicked... is checked:%v", global.Checked())
-			}
-		}
-	}()
-
-	return auto, global
-}
-
-func (st *SysTray) AddTun2socksMenu() (*systray.MenuItem, *systray.MenuItem) {
-	tun2socksMenue := systray.AddMenuItem("代理系统全局(需管理员权限)", "请选择")
-
-	auto := tun2socksMenue.AddSubMenuItemCheckbox("自动(绕过大陆IP域名)", "自动模式", false)
-	global := tun2socksMenue.AddSubMenuItemCheckbox("代理系统全局流量", "系统全局模式", false)
-	if st.ss.Tun2socksStatusAuto() {
-		auto.Check()
-	} else if st.ss.Tun2socksStatusOn() {
-		global.Check()
-	}
+	auto := proxyMenue.AddSubMenuItemCheckbox("自动(绕过大陆IP域名)", "自动判断请求是否走代理", true)
+	browser := proxyMenue.AddSubMenuItemCheckbox("代理浏览器", "浏览器模式", true)
+	global := proxyMenue.AddSubMenuItemCheckbox("代理系统全局流量", "系统全局模式", false)
 
 	go func() {
 		for {
 			select {
 			case <-auto.ClickedCh:
 				if auto.Checked() {
-					if err := st.ss.CloseTun2socks(); err != nil {
-						log.Errorf("close tun2socks err:%s", err.Error())
-						auto.Check()
-						continue
-					}
+					st.SS().SetAutoProxy(false)
 					auto.Uncheck()
 				} else {
-					if err := st.ss.CreateTun2socks(easyss.Tun2socksStatusAuto); err != nil {
-						log.Errorf("init tun2socks err:%s", err.Error())
-						auto.Uncheck()
+					st.SS().SetAutoProxy(true)
+					auto.Check()
+				}
+			case <-browser.ClickedCh:
+				if browser.Checked() {
+					if err := st.PAC().PACOff(); err != nil {
+						log.Errorf("pac off err:%s", err.Error())
 						continue
 					}
-					auto.Check()
-					global.Uncheck()
+					browser.Uncheck()
+				} else {
+					if err := st.PAC().PACOn(); err != nil {
+						log.Errorf("pac on err:%s", err.Error())
+						continue
+					}
+					browser.Check()
 				}
 			case <-global.ClickedCh:
 				if global.Checked() {
-					if err := st.ss.CloseTun2socks(); err != nil {
+					if err := st.SS().CloseTun2socks(); err != nil {
 						log.Errorf("close tun2socks err:%s", err.Error())
-						auto.Check()
 						continue
 					}
 					global.Uncheck()
 				} else {
-					if err := st.ss.CreateTun2socks(easyss.Tun2socksStatusOn); err != nil {
-						log.Errorf("init tun2socks err:%s", err.Error())
-						auto.Uncheck()
+					if err := st.ss.CreateTun2socks(); err != nil {
+						log.Errorf("create tun2socks err:%s", err.Error())
 						continue
 					}
 					global.Check()
-					auto.Uncheck()
 				}
 			}
 		}
 	}()
 
-	return auto, global
+	return auto, browser, global
 }
 
 func (st *SysTray) AddCatLogsMenu() *systray.MenuItem {
-	catLog := systray.AddMenuItem("查看Easyss运行日志", "查看日志")
+	catLog := systray.AddMenuItem("查看运行日志", "查看日志")
 
 	go func() {
 		for {
@@ -304,26 +251,22 @@ func (st *SysTray) StartLocalService() {
 		go ss.LocalDNSForward() // start local dns forward server
 	}
 
-	model := easyss.T2SSStringToType[st.ss.Tun2socksModelFromConfig()]
-	if model != easyss.Tun2socksStatusOff {
-		if err := st.ss.CreateTun2socks(model); err != nil {
-			log.Fatalf("create tun2socks model:%s err:%s", model, err.Error())
+	if ss.EnabledTun2socks() {
+		if err := st.ss.CreateTun2socks(); err != nil {
+			log.Fatalf("create tun2socks err:%s", err.Error())
 		}
 	}
 }
 
 func (st *SysTray) RestartService(config *easyss.Config) error {
 	st.CloseService()
-	for _, v := range st.tun2socksSubMenus {
-		v.Uncheck()
-	}
+	st.tun2socksMenu.Uncheck()
 
 	ss, err := easyss.New(config)
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("http://localhost:%d%s", ss.LocalPacPort(), PacPath)
-	pac := NewPAC(ss.LocalPort(), ss.LocalHttpProxyPort(), ss.LocalPacPort(), PacPath, url, ss.BindAll())
+	pac := NewPAC(ss.LocalPort(), ss.LocalPacPort(), ss.BindAll())
 
 	st.SetSS(ss)
 	st.SetPAC(pac)
@@ -339,8 +282,20 @@ func (st *SysTray) SetSS(ss *easyss.Easyss) {
 	st.ss = ss
 }
 
+func (st *SysTray) SS() *easyss.Easyss {
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	return st.ss
+}
+
 func (st *SysTray) SetPAC(pac *PAC) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.pac = pac
+}
+
+func (st *SysTray) PAC() *PAC {
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	return st.pac
 }

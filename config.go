@@ -19,7 +19,7 @@ type Config struct {
 	BindALL           bool   `json:"bind_all"`
 	DisableUTLS       bool   `json:"disable_utls"`
 	EnableForwardDNS  bool   `json:"enable_forward_dns"`
-	Tun2socksModel    string `json:"tun2socks_model"`
+	EnableTun2socks   bool   `json:"enable_tun2socks"`
 	DirectIPsFile     string `json:"direct_ips_file"`
 	DirectDomainsFile string `json:"direct_domains_file"`
 	ConfigFile        string `json:"-"`
@@ -83,9 +83,6 @@ func OverrideConfig(dst, src *Config) {
 	}
 	if dst.Timeout <= 0 || dst.Timeout > 60 {
 		dst.Timeout = 60
-	}
-	if dst.Tun2socksModel == "" {
-		dst.Tun2socksModel = "off"
 	}
 	if dst.DirectIPsFile == "" {
 		dst.DirectIPsFile = "direct_ips.txt"

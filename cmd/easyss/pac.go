@@ -4,6 +4,7 @@ package main
 
 import (
 	_ "embed"
+	"fmt"
 	"net/http"
 	"strconv"
 	"sync/atomic"
@@ -14,77 +15,52 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const PacPath = "/proxy.pac"
+
 //go:embed pac.txt
 var pacTxt string
 
-type PACStatus int
-
-const (
-	PACON PACStatus = iota + 1
-	PACOFF
-	PACONGLOBAL
-	PACOFFGLOBAL
-)
-
 type PAC struct {
-	path          string
-	localPort     int
-	localHttpPort int
-	localPacPort  int
-	ch            chan PACStatus
-	url           string
-	gurl          string
-	bindAll       bool
-	on            atomic.Bool
+	path         string
+	localPort    int
+	localPacPort int
+	url          string
+	bindAll      bool
+	on           atomic.Bool
 
 	server *http.Server
 }
 
-func NewPAC(localPort, localHttpPort, localPacPort int, path, url string, BindAll bool) *PAC {
+func NewPAC(localPort, localPacPort int, BindAll bool) *PAC {
+	url := fmt.Sprintf("http://localhost:%d%s", localPacPort, PacPath)
 	return &PAC{
-		path:          path,
-		localPort:     localPort,
-		localHttpPort: localHttpPort,
-		localPacPort:  localPacPort,
-		ch:            make(chan PACStatus, 1),
-		url:           url,
-		gurl:          url + "?global=true",
-		bindAll:       BindAll,
-		on:            atomic.Bool{},
+		localPort:    localPort,
+		localPacPort: localPacPort,
+		url:          url,
+		bindAll:      BindAll,
+		on:           atomic.Bool{},
 	}
 }
 
 func (p *PAC) LocalPAC() {
-	tpl, err := template.New(p.path).Parse(pacTxt)
+	tpl, err := template.New("pac").Parse(pacTxt)
 	if err != nil {
 		log.Fatalf("template parse pac err:%v", err)
 	}
 
 	handler := http.NewServeMux()
-	handler.HandleFunc(p.path, func(w http.ResponseWriter, r *http.Request) {
-		global := false
-
-		r.ParseForm()
-		globalStr := r.Form.Get("global")
-		if globalStr == "true" {
-			global = true
-		}
-
+	handler.HandleFunc(PacPath, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/javascript; charset=UTF-8")
+
 		tpl.Execute(w, map[string]interface{}{
-			"Port":       strconv.Itoa(p.localPort),
-			"Socks5Port": strconv.Itoa(p.localPort),
-			"HttpPort":   strconv.Itoa(p.localHttpPort),
-			"Global":     global,
+			"Port": strconv.Itoa(p.localPort),
 		})
 	})
 
-	if err := p.pacOn(p.url); err != nil {
+	if err := p.PACOn(); err != nil {
 		log.Fatalf("set system pac err:%v", err)
 	}
 	p.on.Store(true)
-
-	go p.pacManage()
 
 	var addr string
 	if p.bindAll {
@@ -100,45 +76,30 @@ func (p *PAC) LocalPAC() {
 	log.Warnf("pac http server err:%s", server.ListenAndServe())
 }
 
-func (p *PAC) pacOn(path string) error {
+func (p *PAC) PACOn() error {
 	if err := pac.EnsureHelperToolPresent("pac-cmd", "Set proxy auto config", ""); err != nil {
 		return errors.WithStack(err)
 	}
-	if err := pac.On(path); err != nil {
-		return errors.WithStack(err)
+	if err := pac.On(p.url); err != nil {
+		return err
 	}
+	p.on.Store(true)
 
 	return nil
 }
 
-func (p *PAC) pacOff(path string) error {
-	return errors.WithStack(pac.Off(path))
-}
-
-func (p *PAC) pacManage() {
-	for status := range p.ch {
-		switch status {
-		case PACON:
-			p.pacOn(p.url)
-			p.on.Store(true)
-		case PACOFF:
-			p.pacOff(p.url)
-			p.on.Store(false)
-		case PACONGLOBAL:
-			p.pacOn(p.gurl)
-			p.on.Store(true)
-		case PACOFFGLOBAL:
-			p.pacOff(p.gurl)
-		default:
-			log.Errorf("unknown pac status:%v", status)
-		}
+func (p *PAC) PACOff() error {
+	if err := pac.Off(p.url); err != nil {
+		return err
 	}
+	p.on.Store(false)
+
+	return nil
 }
 
 func (p *PAC) Close() {
 	if p.on.Load() {
-		p.pacOff(p.url)
+		p.PACOff()
 	}
-	close(p.ch)
 	p.server.Close()
 }

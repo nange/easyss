@@ -44,7 +44,7 @@ func main() {
 	flag.BoolVar(&daemon, "daemon", true, "run app as a non-daemon with -daemon=false")
 	flag.BoolVar(&cmdConfig.BindALL, "bind-all", false, "listens on all available IPs of the local system. default: false")
 	flag.BoolVar(&cmdConfig.EnableForwardDNS, "enable-forward-dns", false, "start a local dns server to forward dns request")
-	flag.StringVar(&cmdConfig.Tun2socksModel, "tun2socks-model", "", "set tun2socks model(off, auto, on). default: off")
+	flag.BoolVar(&cmdConfig.EnableTun2socks, "enable-tun2socks", false, "enable tun2socks model. default: false")
 	flag.BoolVar(&enablePprof, "enable-pprof", false, "enable pprof server. default bind to :6060")
 
 	flag.Parse()

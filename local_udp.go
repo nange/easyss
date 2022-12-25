@@ -45,7 +45,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 
 		question := msg.Question[0]
 		hostDirect := ss.HostShouldDirect(strings.TrimSuffix(question.Name, "."))
-		isDirect := hostDirect && ss.Tun2socksStatusAuto()
+		isDirect := hostDirect && ss.AutoProxy()
 
 		// find from dns cache first
 		msgCache := ss.DNSCache(question.Name, dns.TypeToString[question.Qtype], isDirect)
@@ -73,7 +73,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	}
 
 	dstHost, _, _ := net.SplitHostPort(rewrittenDst)
-	if ss.HostShouldDirect(dstHost) && ss.Tun2socksStatusAuto() {
+	if ss.HostShouldDirect(dstHost) && ss.AutoProxy() {
 		return ss.directUDPRelay(s, addr, d, isDNSRequest(msg))
 	}
 

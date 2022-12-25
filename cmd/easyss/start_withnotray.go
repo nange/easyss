@@ -22,10 +22,9 @@ func StartEasyss(ss *easyss.Easyss) {
 		go ss.LocalDNSForward() // start local dns forward server
 	}
 
-	model := easyss.T2SSStringToType[ss.Tun2socksModelFromConfig()]
-	if model != easyss.Tun2socksStatusOff {
-		if err := ss.CreateTun2socks(model); err != nil {
-			log.Fatalf("create tun2socks model:%s err:%s", model, err.Error())
+	if ss.EnabledTun2socks() {
+		if err := ss.CreateTun2socks(); err != nil {
+			log.Fatalf("create tun2socks err:%s", err.Error())
 		}
 	}
 

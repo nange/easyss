@@ -64,20 +64,17 @@ type Tun2socksStatus int
 
 const (
 	Tun2socksStatusOff Tun2socksStatus = iota
-	Tun2socksStatusAuto
 	Tun2socksStatusOn
 )
 
 var T2SSTypeToString = map[Tun2socksStatus]string{
-	Tun2socksStatusOff:  "off",
-	Tun2socksStatusAuto: "auto",
-	Tun2socksStatusOn:   "on",
+	Tun2socksStatusOff: "off",
+	Tun2socksStatusOn:  "on",
 }
 
 var T2SSStringToType = map[string]Tun2socksStatus{
-	"off":  Tun2socksStatusOff,
-	"auto": Tun2socksStatusAuto,
-	"on":   Tun2socksStatusOn,
+	"off": Tun2socksStatusOff,
+	"on":  Tun2socksStatusOn,
 }
 
 func (t2ss Tun2socksStatus) String() string {
@@ -116,15 +113,11 @@ func init() {
 	}
 }
 
-func (ss *Easyss) CreateTun2socks(status Tun2socksStatus) error {
+func (ss *Easyss) CreateTun2socks() error {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
-	if status == Tun2socksStatusOff {
-		return nil
-	}
-	if ss.tun2socksStatus != Tun2socksStatusOff {
-		ss.tun2socksStatus = status
+	if ss.enabledTun2socks {
 		return nil
 	}
 
@@ -155,7 +148,7 @@ func (ss *Easyss) CreateTun2socks(status Tun2socksStatus) error {
 		return fmt.Errorf("unsupported os:%s", runtime.GOOS)
 	}
 
-	ss.tun2socksStatus = status
+	ss.enabledTun2socks = true
 	log.Infof("tun2socks server and tun device create successfully")
 	return nil
 }
@@ -225,7 +218,7 @@ func (ss *Easyss) CloseTun2socks() error {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
-	if ss.tun2socksStatus == Tun2socksStatusOff {
+	if !ss.enabledTun2socks {
 		return nil
 	}
 	return ss.closeTun2socks()
@@ -241,7 +234,7 @@ func (ss *Easyss) closeTun2socks() error {
 		}
 	}
 
-	ss.tun2socksStatus = Tun2socksStatusOff
+	ss.enabledTun2socks = false
 	log.Infof("tun2socks server and tun device close successfully")
 	return nil
 }

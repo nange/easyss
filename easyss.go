@@ -140,17 +140,20 @@ type Easyss struct {
 	httpProxyServer  *http.Server
 	dnsForwardServer *dns.Server
 	closing          chan struct{}
-	tun2socksStatus  Tun2socksStatus
+	enabledTun2socks bool
+	autoProxy        bool
 }
 
 func New(config *Config) (*Easyss, error) {
 	ss := &Easyss{
-		config:         config,
-		stat:           &Statistics{},
-		dnsCache:       freecache.NewCache(1024 * 1024),
-		directDNSCache: freecache.NewCache(1024 * 1024),
-		closing:        make(chan struct{}, 1),
-		mu:             &sync.RWMutex{},
+		config:           config,
+		stat:             &Statistics{},
+		dnsCache:         freecache.NewCache(1024 * 1024),
+		directDNSCache:   freecache.NewCache(1024 * 1024),
+		closing:          make(chan struct{}, 1),
+		mu:               &sync.RWMutex{},
+		enabledTun2socks: config.EnableTun2socks,
+		autoProxy:        true,
 	}
 
 	db, err := geoip2.FromBytes(geoIPCNPrivate)
@@ -370,38 +373,28 @@ func (ss *Easyss) SetForwardDNSServer(server *dns.Server) {
 	ss.dnsForwardServer = server
 }
 
-func (ss *Easyss) Tun2socksStatus() Tun2socksStatus {
+func (ss *Easyss) EnabledTun2socks() bool {
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
-	return ss.tun2socksStatus
+	return ss.enabledTun2socks
 }
 
-func (ss *Easyss) SetTun2socksStatus(status Tun2socksStatus) {
+func (ss *Easyss) SetTun2socks(enable bool) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
-	ss.tun2socksStatus = status
+	ss.enabledTun2socks = enable
 }
 
-func (ss *Easyss) Tun2socksStatusAuto() bool {
+func (ss *Easyss) AutoProxy() bool {
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
-	return ss.tun2socksStatus == Tun2socksStatusAuto
+	return ss.autoProxy
 }
 
-func (ss *Easyss) Tun2socksStatusOn() bool {
-	ss.mu.RLock()
-	defer ss.mu.RUnlock()
-	return ss.tun2socksStatus == Tun2socksStatusOn
-}
-
-func (ss *Easyss) Tun2socksStatusOff() bool {
-	ss.mu.RLock()
-	defer ss.mu.RUnlock()
-	return ss.tun2socksStatus == Tun2socksStatusOff
-}
-
-func (ss *Easyss) Tun2socksModelFromConfig() string {
-	return ss.config.Tun2socksModel
+func (ss *Easyss) SetAutoProxy(auto bool) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	ss.autoProxy = auto
 }
 
 func (ss *Easyss) SetHttpProxyServer(server *http.Server) {
@@ -549,7 +542,7 @@ func (ss *Easyss) Close() {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
-	if ss.tun2socksStatus != Tun2socksStatusOff {
+	if ss.enabledTun2socks {
 		ss.closeTun2socks()
 	}
 	if ss.tcpPool != nil {

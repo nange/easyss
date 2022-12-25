@@ -16,10 +16,16 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
 	defer cancel()
 
-	tConn, err := dialer.DialContextWithOptions(ctx, "tcp", addr, &dialer.Options{
-		InterfaceName:  ss.LocalDevice(),
-		InterfaceIndex: ss.LocalDeviceIndex(),
-	})
+	var tConn net.Conn
+	var err error
+	if ss.EnabledTun2socks() {
+		tConn, err = dialer.DialContextWithOptions(ctx, "tcp", addr, &dialer.Options{
+			InterfaceName:  ss.LocalDevice(),
+			InterfaceIndex: ss.LocalDeviceIndex(),
+		})
+	} else {
+		tConn, err = net.DialTimeout("tcp", addr, ss.Timeout())
+	}
 	if err != nil {
 		log.Errorf("directly dial addr:%s err:%v", addr, err)
 		return err

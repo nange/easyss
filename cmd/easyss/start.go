@@ -3,7 +3,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,11 +12,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const PacPath = "/proxy.pac"
-
 func StartEasyss(ss *easyss.Easyss) {
-	url := fmt.Sprintf("http://localhost:%d%s", ss.LocalPacPort(), PacPath)
-	pac := NewPAC(ss.LocalPort(), ss.LocalHttpProxyPort(), ss.LocalPacPort(), PacPath, url, ss.BindAll())
+	pac := NewPAC(ss.LocalPort(), ss.LocalPacPort(), ss.BindAll())
 	st := NewSysTray(ss, pac)
 
 	go func() {
