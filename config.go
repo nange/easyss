@@ -22,8 +22,6 @@ type Config struct {
 	Tun2socksModel    string `json:"tun2socks_model"`
 	DirectIPsFile     string `json:"direct_ips_file"`
 	DirectDomainsFile string `json:"direct_domains_file"`
-	ProxyIPsFile      string `json:"proxy_ips_file"`
-	ProxyDomainsFile  string `json:"proxy_domains_file"`
 	ConfigFile        string `json:"-"`
 }
 
@@ -94,12 +92,6 @@ func OverrideConfig(dst, src *Config) {
 	}
 	if dst.DirectDomainsFile == "" {
 		dst.DirectDomainsFile = "direct_domains.txt"
-	}
-	if dst.ProxyIPsFile == "" {
-		dst.ProxyIPsFile = "proxy_ips.txt"
-	}
-	if dst.ProxyDomainsFile == "" {
-		dst.ProxyDomainsFile = "proxy_domains.txt"
 	}
 }
 

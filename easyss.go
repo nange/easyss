@@ -132,8 +132,6 @@ type Easyss struct {
 	// the user custom ip/domain list which have the highest priority
 	customDirectIPs     map[string]struct{}
 	customDirectDomains map[string]struct{}
-	customProxyIPs      map[string]struct{}
-	customProxyDomains  map[string]struct{}
 
 	// the mu Mutex to protect below fields
 	mu               *sync.RWMutex
@@ -210,8 +208,6 @@ func New(config *Config) (*Easyss, error) {
 func (ss *Easyss) loadCustomIPDomains() error {
 	ss.customDirectIPs = make(map[string]struct{})
 	ss.customDirectDomains = make(map[string]struct{})
-	ss.customProxyIPs = make(map[string]struct{})
-	ss.customProxyDomains = make(map[string]struct{})
 
 	directIPs, err := util.ReadFileLinesMap(ss.config.DirectIPsFile)
 	if err != nil {
@@ -229,24 +225,6 @@ func (ss *Easyss) loadCustomIPDomains() error {
 	if len(directDomains) > 0 {
 		log.Infof("load custom direct domains success, len:%d", len(directDomains))
 		ss.customDirectDomains = directDomains
-	}
-
-	proxyIPs, err := util.ReadFileLinesMap(ss.config.ProxyIPsFile)
-	if err != nil {
-		return err
-	}
-	if len(proxyIPs) > 0 {
-		log.Infof("load custom proxy ips success, len:%d", len(proxyIPs))
-		ss.customProxyIPs = proxyIPs
-	}
-
-	proxyDomains, err := util.ReadFileLinesMap(ss.config.ProxyDomainsFile)
-	if err != nil {
-		return err
-	}
-	if len(proxyDomains) > 0 {
-		log.Infof("load custom proxy domains success, len:%d", len(proxyDomains))
-		ss.customProxyDomains = proxyDomains
 	}
 
 	return nil
@@ -523,10 +501,6 @@ func (ss *Easyss) HostShouldDirect(host string) bool {
 			log.Infof("match custom direct ips success for host:%s", host)
 			return true
 		}
-		if _, ok := ss.customProxyIPs[host]; ok {
-			log.Infof("match custom proxy ips success for host:%s", host)
-			return false
-		}
 	} else {
 		if _, ok := ss.customDirectDomains[host]; ok {
 			log.Infof("match custom direct domains success for host:%s", host)
@@ -536,10 +510,6 @@ func (ss *Easyss) HostShouldDirect(host string) bool {
 		if _, ok := ss.customDirectDomains[domain]; ok {
 			log.Infof("match custom direct domains success for host:%s", host)
 			return true
-		}
-		if _, ok := ss.customProxyDomains[domain]; ok {
-			log.Infof("match custom proxy domains success for host:%s", host)
-			return false
 		}
 	}
 
