@@ -146,14 +146,13 @@ type Easyss struct {
 
 func New(config *Config) (*Easyss, error) {
 	ss := &Easyss{
-		config:           config,
-		stat:             &Statistics{},
-		dnsCache:         freecache.NewCache(1024 * 1024),
-		directDNSCache:   freecache.NewCache(1024 * 1024),
-		closing:          make(chan struct{}, 1),
-		mu:               &sync.RWMutex{},
-		enabledTun2socks: config.EnableTun2socks,
-		autoProxy:        true,
+		config:         config,
+		stat:           &Statistics{},
+		dnsCache:       freecache.NewCache(1024 * 1024),
+		directDNSCache: freecache.NewCache(1024 * 1024),
+		closing:        make(chan struct{}, 1),
+		mu:             &sync.RWMutex{},
+		autoProxy:      true,
 	}
 
 	db, err := geoip2.FromBytes(geoIPCNPrivate)
@@ -383,6 +382,10 @@ func (ss *Easyss) SetTun2socks(enable bool) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	ss.enabledTun2socks = enable
+}
+
+func (ss *Easyss) EnabledTun2socksFromConfig() bool {
+	return ss.config.EnableTun2socks
 }
 
 func (ss *Easyss) AutoProxy() bool {

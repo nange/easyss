@@ -120,6 +120,9 @@ func (st *SysTray) AddProxyOptsMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 	auto := proxyMenue.AddSubMenuItemCheckbox("自动(绕过大陆IP域名)", "自动判断请求是否走代理", true)
 	browser := proxyMenue.AddSubMenuItemCheckbox("代理浏览器", "浏览器模式", true)
 	global := proxyMenue.AddSubMenuItemCheckbox("代理系统全局流量", "系统全局模式", false)
+	if st.SS().EnabledTun2socksFromConfig() {
+		global.Check()
+	}
 
 	go func() {
 		for {
@@ -251,7 +254,7 @@ func (st *SysTray) StartLocalService() {
 		go ss.LocalDNSForward() // start local dns forward server
 	}
 
-	if ss.EnabledTun2socks() {
+	if ss.EnabledTun2socksFromConfig() {
 		if err := st.ss.CreateTun2socks(); err != nil {
 			log.Fatalf("create tun2socks err:%s", err.Error())
 		}
