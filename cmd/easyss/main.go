@@ -41,6 +41,7 @@ func main() {
 	flag.IntVar(&cmdConfig.LocalPort, "l", 0, "local socks5 proxy port")
 	flag.StringVar(&cmdConfig.Method, "m", "", "encryption method, default: aes-256-gcm")
 	flag.StringVar(&logLevel, "log-level", "info", "set the log-level(debug, info, warn, error), default: info")
+	flag.StringVar(&cmdConfig.ProxyRule, "proxy-rule", "", "set the proxy rule(auto, proxy, direct), default: auto")
 	flag.BoolVar(&daemon, "daemon", true, "run app as a non-daemon with -daemon=false")
 	flag.BoolVar(&cmdConfig.BindALL, "bind-all", false, "listens on all available IPs of the local system. default: false")
 	flag.BoolVar(&cmdConfig.EnableForwardDNS, "enable-forward-dns", false, "start a local dns server to forward dns request")
@@ -96,8 +97,8 @@ func main() {
 		easyss.OverrideConfig(config, &cmdConfig)
 	}
 
-	if config.Password == "" || config.Server == "" || config.ServerPort == 0 {
-		log.Fatalln("server address, server port and password should not empty")
+	if err := config.ClientValidate(); err != nil {
+		log.Fatalf("config is invalid:%s", err.Error())
 	}
 
 	if enablePprof {

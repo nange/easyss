@@ -118,6 +118,28 @@ func (gs *GeoSite) SiteAtCN(domain string) bool {
 	return false
 }
 
+type ProxyRule int
+
+const (
+	ProxyRuleUnknown ProxyRule = iota
+	ProxyRuleAuto
+	ProxyRuleProxy
+	ProxyRuleDirect
+)
+
+func ParseProxyRuleFromString(rule string) ProxyRule {
+	m := map[string]ProxyRule{
+		"auto":   ProxyRuleAuto,
+		"proxy":  ProxyRuleProxy,
+		"direct": ProxyRuleDirect,
+	}
+	if r, ok := m[rule]; ok {
+		return r
+	}
+
+	return ProxyRuleUnknown
+}
+
 type Easyss struct {
 	config         *Config
 	serverIP       string
@@ -141,7 +163,7 @@ type Easyss struct {
 	dnsForwardServer *dns.Server
 	closing          chan struct{}
 	enabledTun2socks bool
-	autoProxy        bool
+	proxyRule        ProxyRule
 }
 
 func New(config *Config) (*Easyss, error) {
@@ -152,8 +174,12 @@ func New(config *Config) (*Easyss, error) {
 		directDNSCache: freecache.NewCache(1024 * 1024),
 		closing:        make(chan struct{}, 1),
 		mu:             &sync.RWMutex{},
-		autoProxy:      true,
 	}
+	proxyRule := ParseProxyRuleFromString(config.ProxyRule)
+	if proxyRule == ProxyRuleUnknown {
+		panic("unknown proxy rule:" + config.ProxyRule)
+	}
+	ss.proxyRule = proxyRule
 
 	db, err := geoip2.FromBytes(geoIPCNPrivate)
 	if err != nil {
@@ -388,16 +414,16 @@ func (ss *Easyss) EnabledTun2socksFromConfig() bool {
 	return ss.config.EnableTun2socks
 }
 
-func (ss *Easyss) AutoProxy() bool {
+func (ss *Easyss) ProxyRule() ProxyRule {
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
-	return ss.autoProxy
+	return ss.proxyRule
 }
 
-func (ss *Easyss) SetAutoProxy(auto bool) {
+func (ss *Easyss) SetProxyRule(rule ProxyRule) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
-	ss.autoProxy = auto
+	ss.proxyRule = rule
 }
 
 func (ss *Easyss) SetHttpProxyServer(server *http.Server) {
@@ -488,7 +514,10 @@ func (ss *Easyss) ServerDNSMsg() (*dns.Msg, error) {
 }
 
 func (ss *Easyss) HostShouldDirect(host string) bool {
-	if host == "" {
+	if ss.ProxyRule() == ProxyRuleDirect {
+		return true
+	}
+	if ss.ProxyRule() == ProxyRuleProxy {
 		return false
 	}
 
@@ -505,6 +534,10 @@ func (ss *Easyss) HostShouldDirect(host string) bool {
 		domain := domainRoot(host)
 		if _, ok := ss.customDirectDomains[domain]; ok {
 			log.Infof("match custom direct domains success for host:%s", host)
+			return true
+		}
+		// if the host end with .cn, return true
+		if strings.HasSuffix(host, ".cn") {
 			return true
 		}
 	}

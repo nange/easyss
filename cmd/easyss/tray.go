@@ -49,7 +49,10 @@ func (st *SysTray) TrayReady() {
 	st.AddSelectConfMenu()
 	systray.AddSeparator()
 
-	_, _, tun2socksMenu := st.AddProxyOptsMenu()
+	st.AddProxyRuleMenu()
+	systray.AddSeparator()
+
+	_, tun2socksMenu := st.AddProxyObjectMenu()
 	systray.AddSeparator()
 	st.tun2socksMenu = tun2socksMenu
 
@@ -114,14 +117,20 @@ func (st *SysTray) AddSelectConfMenu() *systray.MenuItem {
 	return selectConf
 }
 
-func (st *SysTray) AddProxyOptsMenu() (*systray.MenuItem, *systray.MenuItem, *systray.MenuItem) {
-	proxyMenue := systray.AddMenuItem("代理选项", "请选择")
+func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *systray.MenuItem) {
+	proxyMenue := systray.AddMenuItem("代理规则", "请选择")
 
-	auto := proxyMenue.AddSubMenuItemCheckbox("自动(绕过大陆IP域名)", "自动判断请求是否走代理", true)
-	browser := proxyMenue.AddSubMenuItemCheckbox("代理浏览器", "浏览器模式", true)
-	global := proxyMenue.AddSubMenuItemCheckbox("代理系统全局流量", "系统全局模式", false)
-	if st.SS().EnabledTun2socksFromConfig() {
-		global.Check()
+	auto := proxyMenue.AddSubMenuItemCheckbox("自动(自定义规则+绕过大陆IP域名)", "自动判断请求是否走代理", false)
+	if st.SS().ProxyRule() == easyss.ProxyRuleAuto {
+		auto.Check()
+	}
+	proxy := proxyMenue.AddSubMenuItemCheckbox("代理全部", "代理所有地址的请求", false)
+	if st.SS().ProxyRule() == easyss.ProxyRuleProxy {
+		proxy.Check()
+	}
+	direct := proxyMenue.AddSubMenuItemCheckbox("直接连接", "所有请求直接连接，不走代理", false)
+	if st.SS().ProxyRule() == easyss.ProxyRuleDirect {
+		direct.Check()
 	}
 
 	go func() {
@@ -129,12 +138,47 @@ func (st *SysTray) AddProxyOptsMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 			select {
 			case <-auto.ClickedCh:
 				if auto.Checked() {
-					st.SS().SetAutoProxy(false)
-					auto.Uncheck()
-				} else {
-					st.SS().SetAutoProxy(true)
-					auto.Check()
+					continue
 				}
+				st.SS().SetProxyRule(easyss.ProxyRuleAuto)
+				auto.Check()
+				proxy.Uncheck()
+				direct.Uncheck()
+			case <-proxy.ClickedCh:
+				if proxy.Checked() {
+					continue
+				}
+				st.SS().SetProxyRule(easyss.ProxyRuleProxy)
+				proxy.Check()
+				auto.Uncheck()
+				direct.Uncheck()
+			case <-direct.ClickedCh:
+				if direct.Checked() {
+					continue
+				}
+				st.SS().SetProxyRule(easyss.ProxyRuleDirect)
+				direct.Check()
+				auto.Uncheck()
+				proxy.Uncheck()
+			}
+		}
+	}()
+
+	return auto, proxy, direct
+}
+
+func (st *SysTray) AddProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
+	proxyMenue := systray.AddMenuItem("代理对象", "请选择")
+
+	browser := proxyMenue.AddSubMenuItemCheckbox("浏览器(设置系统代理)", "设置系统代理配置", true)
+	global := proxyMenue.AddSubMenuItemCheckbox("系统全局流量(Tun2socks)", "Tun2socks代理系统全局", false)
+	if st.SS().EnabledTun2socksFromConfig() {
+		global.Check()
+	}
+
+	go func() {
+		for {
+			select {
 			case <-browser.ClickedCh:
 				if browser.Checked() {
 					if err := st.PAC().PACOff(); err != nil {
@@ -167,7 +211,7 @@ func (st *SysTray) AddProxyOptsMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 		}
 	}()
 
-	return auto, browser, global
+	return browser, global
 }
 
 func (st *SysTray) AddCatLogsMenu() *systray.MenuItem {

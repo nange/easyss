@@ -2,12 +2,24 @@ package easyss
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"reflect"
 
 	"github.com/pkg/errors"
 )
+
+var Methods = map[string]struct{}{
+	"aes-256-gcm":       {},
+	"chacha20-poly1305": {},
+}
+
+var ProxyRules = map[string]struct{}{
+	"auto":   {},
+	"proxy":  {},
+	"direct": {},
+}
 
 type Config struct {
 	Server            string `json:"server"`
@@ -22,7 +34,33 @@ type Config struct {
 	EnableTun2socks   bool   `json:"enable_tun2socks"`
 	DirectIPsFile     string `json:"direct_ips_file"`
 	DirectDomainsFile string `json:"direct_domains_file"`
+	ProxyRule         string `json:"proxy_rule"`
 	ConfigFile        string `json:"-"`
+}
+
+func (c *Config) ClientValidate() error {
+	if c.Server == "" || c.ServerPort == 0 || c.Password == "" {
+		errors.New("server address, server port and password should not empty")
+	}
+	if c.Method != "" {
+		if _, ok := Methods[c.Method]; !ok {
+			return fmt.Errorf("unsupported method:%s, supported methods:[aes-256-gcm, chacha20-poly1305]", c.Method)
+		}
+	}
+	if c.ProxyRule != "" {
+		if _, ok := ProxyRules[c.ProxyRule]; !ok {
+			return fmt.Errorf("unsupported proxy rule:%s, supported rules:[auto, proxy, direct]", c.ProxyRule)
+		}
+	}
+
+	return nil
+}
+
+func (c *Config) ServerValidate() error {
+	if c.Server == "" || c.ServerPort == 0 || c.Password == "" {
+		errors.New("server address, server port and password should not empty")
+	}
+	return nil
 }
 
 func ParseConfig(path string) (config *Config, err error) {
@@ -89,6 +127,9 @@ func OverrideConfig(dst, src *Config) {
 	}
 	if dst.DirectDomainsFile == "" {
 		dst.DirectDomainsFile = "direct_domains.txt"
+	}
+	if dst.ProxyRule == "" {
+		dst.ProxyRule = "auto"
 	}
 }
 
