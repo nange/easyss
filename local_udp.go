@@ -40,7 +40,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	msg := &dns.Msg{}
 	err := msg.Unpack(d.Data)
 	if err == nil && isDNSRequest(msg) {
-		log.Infof("the udp request is dns proto, domain:%s, qtype:%s",
+		log.Infof("dns request for domain:%s, qtype:%s",
 			msg.Question[0].Name, dns.TypeToString[msg.Question[0].Qtype])
 
 		question := msg.Question[0]
@@ -64,7 +64,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		}
 
 		if isDirect {
-			log.Infof("directly relay dns request for domain:%s", question.Name)
+			log.Infof("directly relay dns request for domain:%s, qtype:%s", question.Name, dns.TypeToString[question.Qtype])
 			return ss.directUDPRelay(s, addr, d, true)
 		}
 
