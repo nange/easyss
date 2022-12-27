@@ -64,6 +64,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		}
 
 		if isDirect {
+			log.Infof("directly relay dns request for domain:%s", question.Name)
 			return ss.directUDPRelay(s, addr, d, true)
 		}
 
