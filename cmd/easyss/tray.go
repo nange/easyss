@@ -78,6 +78,7 @@ func (st *SysTray) AddSelectServerMenu() {
 				case <-_item.ClickedCh:
 					func() {
 						if _item.Checked() {
+							_item.Check()
 							return
 						}
 						log.Infof("changing server to:%s", addrs[_i])
