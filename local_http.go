@@ -29,11 +29,17 @@ func (ss *Easyss) LocalHttp() error {
 }
 
 func (ss *Easyss) SetSysProxyOnHTTP() error {
-	return sysproxy.OnHTTP(ss.LocalHttpAddr())
+	if err := sysproxy.OnHTTP(ss.LocalHttpAddr()); err != nil {
+		return err
+	}
+	return sysproxy.OnHTTPS(ss.LocalHttpAddr())
 }
 
 func (ss *Easyss) SetSysProxyOffHTTP() error {
-	return sysproxy.OffHTTP()
+	if err := sysproxy.OffHTTP(); err != nil {
+		return err
+	}
+	return sysproxy.OffHTTPS()
 }
 
 type httpProxy struct {
