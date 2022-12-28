@@ -5,7 +5,6 @@ package main
 import (
 	"fmt"
 	"os/exec"
-	"regexp"
 	"runtime"
 	"sync"
 
@@ -15,12 +14,6 @@ import (
 	"github.com/nange/easyss/util"
 	log "github.com/sirupsen/logrus"
 )
-
-type menu struct {
-	Title   string
-	Tips    string
-	OnClick func(m *systray.MenuItem)
-}
 
 type SysTray struct {
 	ss      *easyss.Easyss
@@ -44,9 +37,7 @@ func (st *SysTray) TrayReady() {
 	systray.SetTemplateIcon(icon.Data, icon.Data)
 	systray.SetTooltip("Easyss")
 
-	st.StartLocalService()
-
-	st.AddSelectConfMenu()
+	st.AddSelectServerMenu()
 	systray.AddSeparator()
 
 	st.AddProxyRuleMenu()
@@ -54,67 +45,64 @@ func (st *SysTray) TrayReady() {
 
 	_, tun2socksMenu := st.AddProxyObjectMenu()
 	systray.AddSeparator()
-	st.tun2socksMenu = tun2socksMenu
+	st.SetTun2socksMenu(tun2socksMenu)
 
 	st.AddCatLogsMenu()
 	systray.AddSeparator()
 
 	st.AddExitMenu()
+
+	st.StartLocalService()
 }
 
-func (st *SysTray) AddSelectConfMenu() *systray.MenuItem {
-	selectConf := systray.AddMenuItem("选择配置", "请选择")
+func (st *SysTray) AddSelectServerMenu() {
+	selectServer := systray.AddMenuItem("选择服务器", "请选择")
 
-	var confList []*menu
-	var ConfDir = util.CurrentDir()
-	var confFileReg = regexp.MustCompile(`^config(\S+)?.json$`)
-	if files, err := util.DirFileList(ConfDir); err == nil {
-		for _, v := range files {
-			fileName := v
-			if confFileReg.MatchString(fileName) == false {
-				continue
-			}
-			confList = append(confList, &menu{
-				Title: fileName,
-				OnClick: func(m *systray.MenuItem) {
-					log.Infof("changing config to: %v", fileName)
-					config, err := easyss.ParseConfig(fileName)
-					if err != nil {
-						log.Errorf("parse config file:%v", err)
-					}
-					if err := st.RestartService(config); err != nil {
-						log.Errorf("restarting systray err:%v", err)
-					}
-				},
-			})
+	var subMenuItems []*systray.MenuItem
+	addrs := st.SS().ServerListAddrs()
+	if len(addrs) > 0 {
+		for _, addr := range addrs {
+			item := selectServer.AddSubMenuItemCheckbox(addr, "服务器地址", false)
+			subMenuItems = append(subMenuItems, item)
 		}
 	} else {
-		log.Errorf("read file list err:%v", err)
+		item := selectServer.AddSubMenuItemCheckbox(st.SS().ServerAddr(), "服务器地址", false)
+		subMenuItems = append(subMenuItems, item)
 	}
+	subMenuItems[0].Check()
 
-	var miArr []*systray.MenuItem
-	st.mu.RLock()
-	configFilename := st.ss.ConfigFilename()
-	st.mu.RUnlock()
-	for _, v := range confList {
-		mi := selectConf.AddSubMenuItemCheckbox(v.Title, v.Title, v.Title == configFilename)
-		_v := v
-		miArr = append(miArr, mi)
-		go func() {
+	for i, item := range subMenuItems {
+		go func(_i int, _item *systray.MenuItem) {
 			for {
 				select {
-				case <-mi.ClickedCh:
-					for _, m := range miArr {
-						m.Uncheck()
-					}
-					mi.Check()
-					_v.OnClick(mi)
+				case <-_item.ClickedCh:
+					func() {
+						if _item.Checked() {
+							return
+						}
+						log.Infof("changing server to:%s", addrs[_i])
+						for _, v := range subMenuItems {
+							v.Uncheck()
+						}
+
+						config := st.SS().ConfigClone()
+						serverConfig := st.SS().ServerList()[_i]
+						config.Server = serverConfig.Server
+						config.ServerPort = serverConfig.ServerPort
+						config.Password = serverConfig.Password
+						config.DisableUTLS = serverConfig.DisableUTLS
+						if err := st.RestartService(config); err != nil {
+							log.Errorf("changing server to:%s err:%v", addrs[_i], err)
+						} else {
+							_item.Check()
+							log.Infof("changes server to:%s success", addrs[_i])
+						}
+					}()
 				}
 			}
-		}()
-	}
 
-	return selectConf
+		}(i, item)
+	}
 }
 
 func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *systray.MenuItem) {
@@ -172,9 +160,6 @@ func (st *SysTray) AddProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 
 	browser := proxyMenue.AddSubMenuItemCheckbox("浏览器(设置系统代理)", "设置系统代理配置", true)
 	global := proxyMenue.AddSubMenuItemCheckbox("系统全局流量(Tun2socks)", "Tun2socks代理系统全局", false)
-	if st.SS().EnabledTun2socksFromConfig() {
-		global.Check()
-	}
 
 	go func() {
 		for {
@@ -301,13 +286,15 @@ func (st *SysTray) StartLocalService() {
 	if ss.EnabledTun2socksFromConfig() {
 		if err := st.ss.CreateTun2socks(); err != nil {
 			log.Fatalf("create tun2socks err:%s", err.Error())
+		} else {
+			st.tun2socksMenu.Check()
 		}
 	}
 }
 
 func (st *SysTray) RestartService(config *easyss.Config) error {
 	st.CloseService()
-	st.tun2socksMenu.Uncheck()
+	st.Tun2socksMenu().Uncheck()
 
 	ss, err := easyss.New(config)
 	if err != nil {
@@ -333,6 +320,18 @@ func (st *SysTray) SS() *easyss.Easyss {
 	st.mu.RLock()
 	defer st.mu.RUnlock()
 	return st.ss
+}
+
+func (st *SysTray) SetTun2socksMenu(t *systray.MenuItem) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.tun2socksMenu = t
+}
+
+func (st *SysTray) Tun2socksMenu() *systray.MenuItem {
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	return st.tun2socksMenu
 }
 
 func (st *SysTray) SetPAC(pac *PAC) {

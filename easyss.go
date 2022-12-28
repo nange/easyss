@@ -301,12 +301,16 @@ func (ss *Easyss) InitTcpPool() error {
 	return err
 }
 
+func (ss *Easyss) ConfigClone() *Config {
+	return ss.config.Clone()
+}
+
 func (ss *Easyss) LocalPort() int {
 	return ss.config.LocalPort
 }
 
 func (ss *Easyss) LocalHttpProxyPort() int {
-	return ss.config.LocalPort + 1000
+	return ss.config.HTTPPort
 }
 
 func (ss *Easyss) LocalPacPort() int {
@@ -327,6 +331,18 @@ func (ss *Easyss) Method() string {
 
 func (ss *Easyss) Server() string {
 	return ss.config.Server
+}
+
+func (ss *Easyss) ServerList() []ServerConfig {
+	return ss.config.ServerList
+}
+
+func (ss *Easyss) ServerListAddrs() []string {
+	var list []string
+	for _, s := range ss.config.ServerList {
+		list = append(list, fmt.Sprintf("%s:%d", s.Server, s.ServerPort))
+	}
+	return list
 }
 
 func (ss *Easyss) ServerIP() string {
