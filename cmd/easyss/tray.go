@@ -17,17 +17,16 @@ import (
 
 type SysTray struct {
 	ss      *easyss.Easyss
-	pac     *PAC
 	closing chan struct{}
 	mu      *sync.RWMutex
 
+	browserMenu   *systray.MenuItem
 	tun2socksMenu *systray.MenuItem
 }
 
-func NewSysTray(ss *easyss.Easyss, pac *PAC) *SysTray {
+func NewSysTray(ss *easyss.Easyss) *SysTray {
 	return &SysTray{
 		ss:      ss,
-		pac:     pac,
 		closing: make(chan struct{}, 1),
 		mu:      &sync.RWMutex{},
 	}
@@ -43,8 +42,9 @@ func (st *SysTray) TrayReady() {
 	st.AddProxyRuleMenu()
 	systray.AddSeparator()
 
-	_, tun2socksMenu := st.AddProxyObjectMenu()
+	browserMenu, tun2socksMenu := st.AddProxyObjectMenu()
 	systray.AddSeparator()
+	st.SetBrowserMenu(browserMenu)
 	st.SetTun2socksMenu(tun2socksMenu)
 
 	st.AddCatLogsMenu()
@@ -167,14 +167,14 @@ func (st *SysTray) AddProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 			select {
 			case <-browser.ClickedCh:
 				if browser.Checked() {
-					if err := st.PAC().PACOff(); err != nil {
-						log.Errorf("pac off err:%s", err.Error())
+					if err := st.SS().SetSysProxyOffHTTP(); err != nil {
+						log.Errorf("set sys proxy off http err:%s", err.Error())
 						continue
 					}
 					browser.Uncheck()
 				} else {
-					if err := st.PAC().PACOn(); err != nil {
-						log.Errorf("pac on err:%s", err.Error())
+					if err := st.SS().SetSysProxyOnHTTP(); err != nil {
+						log.Errorf("set sys proxy on http err:%s", err.Error())
 						continue
 					}
 					browser.Check()
@@ -256,8 +256,9 @@ func (st *SysTray) catLog() error {
 func (st *SysTray) CloseService() {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-
-	st.pac.Close()
+	if st.browserMenu.Checked() {
+		st.ss.SetSysProxyOffHTTP()
+	}
 	st.ss.Close()
 }
 
@@ -271,19 +272,20 @@ func (st *SysTray) StartLocalService() {
 	st.mu.RLock()
 	defer st.mu.RUnlock()
 	ss := st.ss
-	pac := st.pac
 
 	if err := ss.InitTcpPool(); err != nil {
 		log.Errorf("init tcp pool error:%v", err)
 	}
 
-	go pac.LocalPAC()   // system pac configuration
 	go ss.LocalSocks5() // start local server
 	go ss.LocalHttp()   // start local http proxy server
 	if ss.EnableForwardDNS() {
 		go ss.LocalDNSForward() // start local dns forward server
 	}
 
+	if err := ss.SetSysProxyOnHTTP(); err != nil {
+		log.Errorf("set sys proxy on http err:%s", err.Error())
+	}
 	if ss.EnabledTun2socksFromConfig() {
 		if err := st.ss.CreateTun2socks(); err != nil {
 			log.Fatalf("create tun2socks err:%s", err.Error())
@@ -301,10 +303,8 @@ func (st *SysTray) RestartService(config *easyss.Config) error {
 	if err != nil {
 		return err
 	}
-	pac := NewPAC(ss.LocalPort(), ss.LocalPacPort(), ss.BindAll())
 
 	st.SetSS(ss)
-	st.SetPAC(pac)
 
 	st.StartLocalService()
 
@@ -335,14 +335,14 @@ func (st *SysTray) Tun2socksMenu() *systray.MenuItem {
 	return st.tun2socksMenu
 }
 
-func (st *SysTray) SetPAC(pac *PAC) {
+func (st *SysTray) SetBrowserMenu(b *systray.MenuItem) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	st.pac = pac
+	st.browserMenu = b
 }
 
-func (st *SysTray) PAC() *PAC {
+func (st *SysTray) BrowserMenu() *systray.MenuItem {
 	st.mu.RLock()
 	defer st.mu.RUnlock()
-	return st.pac
+	return st.browserMenu
 }

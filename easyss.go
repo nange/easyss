@@ -309,7 +309,7 @@ func (ss *Easyss) LocalPort() int {
 	return ss.config.LocalPort
 }
 
-func (ss *Easyss) LocalHttpProxyPort() int {
+func (ss *Easyss) LocalHTTPPort() int {
 	return ss.config.HTTPPort
 }
 
@@ -375,6 +375,10 @@ func (ss *Easyss) Timeout() time.Duration {
 
 func (ss *Easyss) LocalAddr() string {
 	return fmt.Sprintf("%s:%d", "127.0.0.1", ss.LocalPort())
+}
+
+func (ss *Easyss) LocalHttpAddr() string {
+	return fmt.Sprintf("%s:%d", "127.0.0.1", ss.LocalHTTPPort())
 }
 
 func (ss *Easyss) BindAll() bool {

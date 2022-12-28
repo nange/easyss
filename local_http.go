@@ -5,14 +5,15 @@ import (
 	"strconv"
 
 	log "github.com/sirupsen/logrus"
+	"github.com/wzshiming/sysproxy"
 )
 
 func (ss *Easyss) LocalHttp() error {
 	var addr string
 	if ss.BindAll() {
-		addr = ":" + strconv.Itoa(ss.LocalHttpProxyPort())
+		addr = ":" + strconv.Itoa(ss.LocalHTTPPort())
 	} else {
-		addr = "127.0.0.1:" + strconv.Itoa(ss.LocalHttpProxyPort())
+		addr = "127.0.0.1:" + strconv.Itoa(ss.LocalHTTPPort())
 	}
 	log.Infof("starting local http-proxy server at %v", addr)
 
@@ -25,6 +26,14 @@ func (ss *Easyss) LocalHttp() error {
 	}
 
 	return err
+}
+
+func (ss *Easyss) SetSysProxyOnHTTP() error {
+	return sysproxy.OnHTTP(ss.LocalHttpAddr())
+}
+
+func (ss *Easyss) SetSysProxyOffHTTP() error {
+	return sysproxy.OffHTTP()
 }
 
 type httpProxy struct {

@@ -9,7 +9,7 @@ echo:
 
 easyss:
 	cd cmd/easyss; \
-	$(GO) build -o easyss main.go start.go pac.go tray.go
+	$(GO) build -o easyss main.go start.go tray.go
 
 easyss-windows:
 	cd cmd/easyss; \

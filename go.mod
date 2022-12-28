@@ -5,7 +5,6 @@ go 1.19
 require (
 	github.com/caddyserver/certmagic v0.17.2
 	github.com/coocood/freecache v1.2.3
-	github.com/getlantern/pac v0.0.0-20161019162755-5534aa917168
 	github.com/getlantern/systray v1.2.1
 	github.com/libp2p/go-netroute v0.2.1
 	github.com/miekg/dns v1.1.50
@@ -17,6 +16,7 @@ require (
 	github.com/snowzach/rotatefilehook v0.0.0-20220211133110-53752135082d
 	github.com/stretchr/testify v1.8.1
 	github.com/txthinking/socks5 v0.0.0-20220212043548-414499347d4a
+	github.com/wzshiming/sysproxy v0.2.2
 	github.com/xjasonlyu/tun2socks/v2 v2.4.2-0.20221201075708-fa3317a94c55
 	golang.org/x/crypto v0.3.0
 )
@@ -28,11 +28,8 @@ require (
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
-	github.com/getlantern/byteexec v0.0.0-20170405023437-4cfb26ec74f4 // indirect
 	github.com/getlantern/context v0.0.0-20190109183933-c447772a6520 // indirect
-	github.com/getlantern/elevate v0.0.0-20160317154340-a1e4813b4e26 // indirect
 	github.com/getlantern/errors v0.0.0-20190325191628-abdb3e3e36f7 // indirect
-	github.com/getlantern/filepersist v0.0.0-20160317154340-c5f0cd24e799 // indirect
 	github.com/getlantern/golog v0.0.0-20190830074920-4ef2e798c2d7 // indirect
 	github.com/getlantern/hex v0.0.0-20190417191902-c6586a6fe0b7 // indirect
 	github.com/getlantern/hidden v0.0.0-20190325191715-f02dbb02be55 // indirect

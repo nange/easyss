@@ -13,8 +13,7 @@ import (
 )
 
 func StartEasyss(ss *easyss.Easyss) {
-	pac := NewPAC(ss.LocalPort(), ss.LocalPacPort(), ss.BindAll())
-	st := NewSysTray(ss, pac)
+	st := NewSysTray(ss)
 
 	go func() {
 		c := make(chan os.Signal, 1)
