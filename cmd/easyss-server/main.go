@@ -32,8 +32,6 @@ func main() {
 	flag.StringVar(&cmdConfig.Password, "k", "", "password")
 	flag.StringVar(&cmdConfig.Server, "s", "", "server address")
 	flag.IntVar(&cmdConfig.ServerPort, "p", 0, "server port")
-	flag.IntVar(&cmdConfig.Timeout, "t", 30, "timeout in seconds")
-	flag.StringVar(&cmdConfig.Method, "m", "", "encryption method, default: aes-256-gcm")
 	flag.StringVar(&logLevel, "log-level", "info", "set the log-level(debug, info, warn, error), default: info")
 
 	flag.Parse()
