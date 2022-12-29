@@ -5,12 +5,12 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func NewDNSForwardServer() *dns.Server {
+func NewDNSForwardServer(dnsServer string) *dns.Server {
 	srv := &dns.Server{Addr: ":53", Net: "udp"}
 
 	srv.Handler = dns.HandlerFunc(func(writer dns.ResponseWriter, msg *dns.Msg) {
 		c := &dns.Client{Timeout: DefaultUDPTimeout}
-		r, _, err := c.Exchange(msg, DefaultDirectDNSServer)
+		r, _, err := c.Exchange(msg, dnsServer)
 		if err != nil {
 			log.Errorf("dns exchange err:%s", err.Error())
 			return
@@ -25,7 +25,7 @@ func NewDNSForwardServer() *dns.Server {
 }
 
 func (ss *Easyss) LocalDNSForward() error {
-	server := NewDNSForwardServer()
+	server := NewDNSForwardServer(ss.DirectDNSServer())
 	ss.SetForwardDNSServer(server)
 
 	log.Infof("starting local dns forward server at :53")

@@ -11,7 +11,9 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/component/dialer"
 )
 
-const DefaultDirectDNSServer = "119.29.29.29:53"
+// DefaultDirectDNSServers the servers are dns servers from tencent, aliyun and baidu
+var DefaultDirectDNSServers = [3]string{"119.29.29.29:53", "223.5.5.5:53", "180.76.76.76:53"}
+
 const DirectSuffix = "direct"
 
 // DirectUDPExchange used to store client address and remote connection
@@ -39,7 +41,7 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 	dst := d.Address()
 	rewrittenDst := dst
 	if isDNSReq {
-		rewrittenDst = DefaultDirectDNSServer
+		rewrittenDst = ss.DirectDNSServer()
 	}
 	uAddr, _ := net.ResolveUDPAddr("udp", rewrittenDst)
 

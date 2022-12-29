@@ -141,16 +141,17 @@ func ParseProxyRuleFromString(rule string) ProxyRule {
 }
 
 type Easyss struct {
-	config         *Config
-	serverIP       string
-	stat           *Statistics
-	localGw        string
-	localDev       string
-	devIndex       int
-	dnsCache       *freecache.Cache
-	directDNSCache *freecache.Cache
-	geoipDB        *geoip2.Reader
-	geosite        *GeoSite
+	config          *Config
+	serverIP        string
+	stat            *Statistics
+	localGw         string
+	localDev        string
+	devIndex        int
+	directDNSServer string
+	dnsCache        *freecache.Cache
+	directDNSCache  *freecache.Cache
+	geoipDB         *geoip2.Reader
+	geosite         *GeoSite
 	// the user custom ip/domain list which have the highest priority
 	customDirectIPs     map[string]struct{}
 	customDirectDomains map[string]struct{}
@@ -193,14 +194,17 @@ func New(config *Config) (*Easyss, error) {
 	}
 
 	var msg *dns.Msg
-	for i := 0; i < 3; i++ {
-		msg, err = ss.ServerDNSMsg()
+	for _, server := range DefaultDirectDNSServers {
+		msg, err = ss.ServerDNSMsg(server)
 		if err != nil {
-			log.Warnf("query server dns msg err:%s", err.Error())
-			time.Sleep(time.Second)
+			log.Warnf("query dns cache failed for server:%s from dns-server:%s err:%s",
+				ss.Server(), server, err.Error())
 			continue
 		}
 		if msg != nil {
+			ss.directDNSServer = server
+			log.Infof("query dns cache success for server:%s from dns-server:%s",
+				ss.Server(), server)
 			break
 		}
 	}
@@ -331,6 +335,10 @@ func (ss *Easyss) Method() string {
 
 func (ss *Easyss) Server() string {
 	return ss.config.Server
+}
+
+func (ss *Easyss) DirectDNSServer() string {
+	return ss.directDNSServer
 }
 
 func (ss *Easyss) ServerList() []ServerConfig {
@@ -514,14 +522,14 @@ func (ss *Easyss) SetDNSCache(msg *dns.Msg, noExpire, isDirect bool) error {
 	return nil
 }
 
-func (ss *Easyss) ServerDNSMsg() (*dns.Msg, error) {
+func (ss *Easyss) ServerDNSMsg(dnsServer string) (*dns.Msg, error) {
 	c := new(dns.Client)
 
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(ss.Server()), dns.TypeA)
 	m.RecursionDesired = true
 
-	r, _, err := c.Exchange(m, DefaultDirectDNSServer)
+	r, _, err := c.Exchange(m, dnsServer)
 	if err != nil {
 		return nil, err
 	}
