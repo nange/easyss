@@ -283,9 +283,12 @@ func (st *SysTray) StartLocalService() {
 		go ss.LocalDNSForward() // start local dns forward server
 	}
 
-	if err := ss.SetSysProxyOnHTTP(); err != nil {
-		log.Errorf("set sys proxy on http err:%s", err.Error())
+	if st.SysProxyHTTPIsOn() {
+		if err := ss.SetSysProxyOnHTTP(); err != nil {
+			log.Errorf("set sys proxy on http err:%s", err.Error())
+		}
 	}
+
 	if ss.EnabledTun2socksFromConfig() {
 		if err := st.ss.CreateTun2socks(); err != nil {
 			log.Fatalf("create tun2socks err:%s", err.Error())
@@ -309,6 +312,10 @@ func (st *SysTray) RestartService(config *easyss.Config) error {
 	st.StartLocalService()
 
 	return nil
+}
+
+func (st *SysTray) SysProxyHTTPIsOn() bool {
+	return st.BrowserMenu().Checked()
 }
 
 func (st *SysTray) SetSS(ss *easyss.Easyss) {
