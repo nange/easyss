@@ -1,8 +1,11 @@
 package easyss
 
 import (
+	"io"
 	"net/http"
+	"net/url"
 	"strconv"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/wzshiming/sysproxy"
@@ -46,12 +49,33 @@ type httpProxy struct {
 	ss *Easyss
 }
 
+func (h *httpProxy) client() *http.Client {
+	c := &http.Client{
+		Transport: &http.Transport{
+			Proxy: func(*http.Request) (*url.URL, error) {
+				return url.Parse(h.ss.Socks5ProxyAddr())
+			},
+			DisableKeepAlives:   true,
+			TLSHandshakeTimeout: 10 * time.Second,
+			ForceAttemptHTTP2:   true,
+			MaxConnsPerHost:     1,
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	return c
+}
+
 func (h *httpProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "CONNECT" {
-		http.Error(w, "This is a proxy server. Does not respond to non-proxy requests.", http.StatusBadRequest)
+	if r.Method == "CONNECT" {
+		h.doWithHijack(w, r)
 		return
 	}
+	h.doWithNormal(w, r)
+}
 
+func (h *httpProxy) doWithHijack(w http.ResponseWriter, r *http.Request) {
 	hij, ok := w.(http.Hijacker)
 	if !ok {
 		log.Errorf("Connect: hijacking not supported")
@@ -75,5 +99,44 @@ func (h *httpProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.ss.localRelay(hijConn, r.URL.Host); err != nil {
 		log.Warnf("http local relay err:%s", err.Error())
+	}
+}
+
+func (h *httpProxy) doWithNormal(w http.ResponseWriter, r *http.Request) {
+	// the RequestURI field should be empty for http.Client Do func
+	r.RequestURI = ""
+	// delete some unuseful header
+	r.Header.Del("Proxy-Connection")
+	r.Header.Del("Proxy-Authenticate")
+	r.Header.Del("Proxy-Authorization")
+	if r.Header.Get("Connection") == "close" {
+		r.Close = false
+	}
+	r.Header.Del("Connection")
+
+	client := h.client()
+	resp, err := client.Do(r)
+	if err != nil {
+		log.Warnf("http proxy client do request err:%s", err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	copyHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+
+	if _, err = io.Copy(w, resp.Body); err != nil {
+		log.Warnf("http proxy copy bytes back to client err:%s", err.Error())
+	}
+	if err := resp.Body.Close(); err != nil {
+		log.Warnf("http proxy can't close response body err:%s", err.Error())
+	}
+}
+
+func copyHeaders(dst, src http.Header) {
+	for k, vs := range src {
+		for _, v := range vs {
+			dst.Add(k, v)
+		}
 	}
 }

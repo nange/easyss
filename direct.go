@@ -13,19 +13,7 @@ import (
 func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 	log.Debugf("directly relay tcp proto for addr:%s", addr)
 
-	ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
-	defer cancel()
-
-	var tConn net.Conn
-	var err error
-	if ss.EnabledTun2socks() {
-		tConn, err = dialer.DialContextWithOptions(ctx, "tcp", addr, &dialer.Options{
-			InterfaceName:  ss.LocalDevice(),
-			InterfaceIndex: ss.LocalDeviceIndex(),
-		})
-	} else {
-		tConn, err = net.DialTimeout("tcp", addr, ss.Timeout())
-	}
+	tConn, err := ss.directTCPConn(addr)
 	if err != nil {
 		log.Errorf("directly dial addr:%s err:%v", addr, err)
 		return err
@@ -60,4 +48,21 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 	}
 
 	return nil
+}
+
+func (ss *Easyss) directTCPConn(addr string) (net.Conn, error) {
+	var tConn net.Conn
+	var err error
+	if ss.EnabledTun2socks() {
+		ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
+		defer cancel()
+		tConn, err = dialer.DialContextWithOptions(ctx, "tcp", addr, &dialer.Options{
+			InterfaceName:  ss.LocalDevice(),
+			InterfaceIndex: ss.LocalDeviceIndex(),
+		})
+	} else {
+		tConn, err = net.DialTimeout("tcp", addr, ss.Timeout())
+	}
+
+	return tConn, err
 }

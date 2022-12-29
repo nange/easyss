@@ -65,16 +65,7 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 		return send(ue, d.Data, uAddr)
 	}
 
-	var pc net.PacketConn
-	var err error
-	if ss.EnabledTun2socks() {
-		pc, err = dialer.ListenPacketWithOptions("udp", "", &dialer.Options{
-			InterfaceName:  ss.LocalDevice(),
-			InterfaceIndex: ss.LocalDeviceIndex(),
-		})
-	} else {
-		pc, err = net.ListenPacket("udp", "")
-	}
+	pc, err := ss.directUDPConn()
 	if err != nil {
 		log.Errorf("listen packet err:%v", err)
 		return err
@@ -134,4 +125,19 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 	}()
 
 	return nil
+}
+
+func (ss *Easyss) directUDPConn() (net.PacketConn, error) {
+	var pc net.PacketConn
+	var err error
+	if ss.EnabledTun2socks() {
+		pc, err = dialer.ListenPacketWithOptions("udp", "", &dialer.Options{
+			InterfaceName:  ss.LocalDevice(),
+			InterfaceIndex: ss.LocalDeviceIndex(),
+		})
+	} else {
+		pc, err = net.ListenPacket("udp", "")
+	}
+
+	return pc, err
 }
