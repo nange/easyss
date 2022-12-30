@@ -3,6 +3,7 @@ package easyss
 import (
 	"fmt"
 	"net"
+	"sync"
 
 	"github.com/nange/easyss/cipherstream"
 	log "github.com/sirupsen/logrus"
@@ -26,9 +27,13 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) (needCl
 	}
 
 	var tryReuse bool
-	var ch1 = make(chan struct{})
+
+	wg := sync.WaitGroup{}
+	wg.Add(2)
 	// send
 	go func() {
+		defer wg.Done()
+
 		var b = udpDataBytes.Get(MaxUDPDataSize)
 		defer udpDataBytes.Put(b)
 		for {
@@ -40,7 +45,7 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) (needCl
 				} else {
 					log.Warnf("read udp data from client connection err:%v", err)
 				}
-				close(ch1)
+				uConn.Close()
 				return
 			}
 			_, err = uConn.Write(b[:n])
@@ -51,10 +56,9 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) (needCl
 		}
 	}()
 
-	var ch2 = make(chan struct{})
 	// receive
 	go func() {
-		defer close(ch2)
+		defer wg.Done()
 
 		var b = udpDataBytes.Get(MaxUDPDataSize)
 		defer udpDataBytes.Put(b)
@@ -72,9 +76,7 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) (needCl
 		}
 	}()
 
-	<-ch1
-	uConn.Close()
-	<-ch2
+	wg.Wait()
 
 	if tryReuse {
 		setCipherDeadline(csStream, ss.Timeout())
