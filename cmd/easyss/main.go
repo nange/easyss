@@ -98,7 +98,7 @@ func main() {
 	}
 
 	if err := config.ClientValidate(); err != nil {
-		log.Fatalf("config is invalid:%s", err.Error())
+		log.Fatalf("Easyss starts failed, config is invalid:%s", err.Error())
 	}
 
 	if enablePprof {

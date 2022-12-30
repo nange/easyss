@@ -74,8 +74,8 @@ func main() {
 		easyss.OverrideConfig(config, &cmdConfig)
 	}
 
-	if config.ServerPort == 0 || config.Password == "" || config.Server == "" {
-		log.Fatalln("server, port and password should not empty")
+	if err := config.ServerValidate(); err != nil {
+		log.Fatalf("Easyss server starts failed, config is invalid:%s", err.Error())
 	}
 
 	ss, err := easyss.New(config)
