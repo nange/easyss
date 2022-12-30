@@ -13,7 +13,7 @@ Easyss是一款兼容socks5的安全代理上网工具，目标是使访问国�
 * 支持浏览器级别代理(设置系统代理), 和系统全局代理(基于Tun2socks,thanks [tun2socks](https://github.com/xjasonlyu/tun2socks)); 支持可选代理规则
 * 支持TCP连接池 (默认启用，大幅降低请求延迟)
 * 支持系统托盘图标管理 (thanks [systray](https://github.com/getlantern/systray))
-* 支持可配置多服务器切换
+* 支持可配置多服务器切换, 支持自定义直连白名单(IP/域名)
 * 基于TLS, 支持(AEAD类型)高强度加密通信, 如aes-256-gcm, chacha20-poly1305
 * http2帧格式交互 (更灵活通用, 更易扩展)
 * 内建DNS服务器，支持DNS Forward转发，可用于透明代理部署时使用 (默认关闭，可通过命令行启用)
@@ -102,6 +102,25 @@ make easyss-server
 
 右键图标可选择代理规则和代理对象。
 
+**自定义直连白名单：**
+
+对于少部分国内的IP/域名，或者部分特殊的IP/域名，可能`Easyss`没有正确识别，造成本该直连的IP/域名走了代理，
+这时可在`easyss`所在目录下， 新建`direct_ips.txt`, `direct_domains.txt`， 分别用于存储直连IP列表和直连域名列表，每行一条记录。
+
+`direct_ips.txt`文件示例：
+```text
+39.156.66.10
+110.242.68.66
+106.11.84.3
+```
+
+`direct_domains.txt`文件示例：
+```text
+baidu.com
+taobao.com
+your-custom-domain.com
+```
+
 ### 手机客户端
 
 手机客户端apk文件可直接在release页面下载。
@@ -110,7 +129,7 @@ make easyss-server
 
 用法：创建Easyss配置项：点击右上角+图标 -> 手动输入 -> 选择Easyss
 
-PS: 在菜单路由项里面，把绕过：中国域名规则和中国IP规则，勾选上。这样对于绝大部分国内的APP和网站就不会走代理了。
+注意: 在菜单路由项里面，把绕过：中国域名规则和中国IP规则，勾选上。这样对于绝大部分国内的APP和网站就不会走代理了。
 
 ### 服务器端
 和客户端一样, 同样先创建配置文件`config.json`，并配置文件和二进制`easyss-server`放同一目录中。
