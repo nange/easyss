@@ -74,7 +74,7 @@ func NewGeoSite(data []byte) *GeoSite {
 			line = line[7:]
 			re, err := regexp.Compile(string(line))
 			if err != nil {
-				log.Errorf("compile geosite string:%s, err:%s", string(line), err.Error())
+				log.Errorf("[EASYSS] compile geosite string:%s, err:%s", string(line), err.Error())
 				continue
 			}
 			gs.regexpDomain = append(gs.regexpDomain, re)
@@ -101,6 +101,9 @@ func domainRoot(domain string) string {
 
 func (gs *GeoSite) SiteAtCN(domain string) bool {
 	if _, ok := gs.fullDomain[domain]; ok {
+		return true
+	}
+	if _, ok := gs.domain[domain]; ok {
 		return true
 	}
 
@@ -190,20 +193,20 @@ func New(config *Config) (*Easyss, error) {
 	ss.geosite = NewGeoSite(geoSiteCN)
 
 	if err := ss.loadCustomIPDomains(); err != nil {
-		log.Errorf("load custom ip/domains err:%s", err.Error())
+		log.Errorf("[EASYSS] load custom ip/domains err:%s", err.Error())
 	}
 
 	var msg *dns.Msg
 	for _, server := range DefaultDirectDNSServers {
 		msg, err = ss.ServerDNSMsg(server)
 		if err != nil {
-			log.Warnf("query dns cache failed for server:%s from dns-server:%s err:%s",
+			log.Warnf("[EASYSS] query dns cache failed for server:%s from dns-server:%s err:%s",
 				ss.Server(), server, err.Error())
 			continue
 		}
 		if msg != nil {
 			ss.directDNSServer = server
-			log.Infof("query dns cache success for server:%s from dns-server:%s",
+			log.Infof("[EASYSS] query dns cache success for server:%s from dns-server:%s",
 				ss.Server(), server)
 			break
 		}
@@ -219,14 +222,14 @@ func New(config *Config) (*Easyss, error) {
 	case "linux", "windows", "darwin":
 		gw, dev, err := util.SysGatewayAndDevice()
 		if err != nil {
-			log.Errorf("get system gateway and device err:%s", err.Error())
+			log.Errorf("[EASYSS] get system gateway and device err:%s", err.Error())
 		}
 		ss.localGw = gw
 		ss.localDev = dev
 
 		iface, err := net.InterfaceByName(dev)
 		if err != nil {
-			log.Errorf("interface by name err:%v", err)
+			log.Errorf("[EASYSS] interface by name err:%v", err)
 			return nil, err
 		}
 		ss.devIndex = iface.Index
@@ -246,7 +249,7 @@ func (ss *Easyss) loadCustomIPDomains() error {
 		return err
 	}
 	if len(directIPs) > 0 {
-		log.Infof("load custom direct ips success, len:%d", len(directIPs))
+		log.Infof("[EASYSS] load custom direct ips success, len:%d", len(directIPs))
 		ss.customDirectIPs = directIPs
 	}
 
@@ -255,7 +258,7 @@ func (ss *Easyss) loadCustomIPDomains() error {
 		return err
 	}
 	if len(directDomains) > 0 {
-		log.Infof("load custom direct domains success, len:%d", len(directDomains))
+		log.Infof("[EASYSS] load custom direct domains success, len:%d", len(directDomains))
 		ss.customDirectDomains = directDomains
 	}
 
@@ -264,9 +267,9 @@ func (ss *Easyss) loadCustomIPDomains() error {
 
 func (ss *Easyss) InitTcpPool() error {
 	if ss.DisableUTLS() {
-		log.Infof("uTLS is disabled")
+		log.Infof("[EASYSS] uTLS is disabled")
 	} else {
-		log.Infof("uTLS is enabled")
+		log.Infof("[EASYSS] uTLS is enabled")
 	}
 
 	factory := func() (net.Conn, error) {
@@ -551,17 +554,14 @@ func (ss *Easyss) HostShouldDirect(host string) bool {
 
 	if util.IsIP(host) {
 		if _, ok := ss.customDirectIPs[host]; ok {
-			log.Infof("match custom direct ips success for host:%s", host)
 			return true
 		}
 	} else {
 		if _, ok := ss.customDirectDomains[host]; ok {
-			log.Infof("match custom direct domains success for host:%s", host)
 			return true
 		}
 		domain := domainRoot(host)
 		if _, ok := ss.customDirectDomains[domain]; ok {
-			log.Infof("match custom direct domains success for host:%s", host)
 			return true
 		}
 		// if the host end with .cn, return true
@@ -640,7 +640,7 @@ func (ss *Easyss) printStatistics() {
 		case <-time.After(time.Hour):
 			sendSize := ss.stat.BytesSend.Load() / (1024 * 1024)
 			receiveSize := ss.stat.BytesReceive.Load() / (1024 * 1024)
-			log.Debugf("easyss send data size: %vMB, recive data size: %vMB", sendSize, receiveSize)
+			log.Debugf("[EASYSS] send size: %vMB, recive size: %vMB", sendSize, receiveSize)
 		case <-closing:
 			return
 		}

@@ -41,16 +41,16 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) (needCl
 			if err != nil {
 				if cipherstream.FINRSTStreamErr(err) {
 					tryReuse = true
-					log.Debugf("received FIN when reading udp data from client, we can try to reuse the connectio")
+					log.Debugf("[REMOTE_UDP] received FIN when reading data from client, try to reuse the connectio")
 				} else {
-					log.Warnf("read udp data from client connection err:%v", err)
+					log.Warnf("[REMOTE_UDP] read data from client connection err:%v", err)
 				}
 				uConn.Close()
 				return
 			}
 			_, err = uConn.Write(b[:n])
 			if err != nil {
-				log.Errorf("write data to remote udp connection err:%v", err)
+				log.Errorf("[REMOTE_UDP] write data to remote connection err:%v", err)
 				return
 			}
 		}
@@ -65,12 +65,12 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) (needCl
 		for {
 			n, err := uConn.Read(b[:])
 			if err != nil {
-				log.Debugf("read udp data from remote udp connection err:%v", err)
+				log.Debugf("[REMOTE_UDP] read data from remote connection err:%v", err)
 				return
 			}
 			_, err = csStream.Write(b[:n])
 			if err != nil {
-				log.Errorf("write data to tcp connection err:%v", err)
+				log.Errorf("[REMOTE_UDP] write data to tcp connection err:%v", err)
 				return
 			}
 		}
@@ -89,7 +89,7 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) (needCl
 			stateFn = stateFn(csStream).fn
 		}
 		if state.err != nil {
-			log.Infof("state err:%v, state:%v", state.err, state.state)
+			log.Infof("[REMOTE_UDP] state err:%v, state:%v", state.err, state.state)
 			markCipherStreamUnusable(csStream)
 			needClose = true
 		}

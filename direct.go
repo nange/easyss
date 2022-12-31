@@ -12,11 +12,11 @@ import (
 )
 
 func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
-	log.Infof("directly relay tcp request for addr:%s", addr)
+	log.Infof("[TCP_DIRECT] target:%s", addr)
 
 	tConn, err := ss.directTCPConn(addr)
 	if err != nil {
-		log.Errorf("directly dial addr:%s err:%v", addr, err)
+		log.Errorf("[TCP_DIRECT] dial:%s err:%v", addr, err)
 		return err
 	}
 
@@ -27,7 +27,7 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 		defer wg.Done()
 		_, err := io.Copy(tConn, localConn)
 		if err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
-			log.Warnf("reading from local conn write to remote err:%v", err)
+			log.Warnf("[TCP_DIRECT] copy from local to remote err:%v", err)
 		}
 		tConn.Close()
 	}()
@@ -36,7 +36,7 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 		defer wg.Done()
 		_, err := io.Copy(localConn, tConn)
 		if err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
-			log.Warnf("reading from remote conn write to local err:%v", err)
+			log.Warnf("[TCP_DIRECT] copy from remote to local err:%v", err)
 		}
 		localConn.Close()
 	}()

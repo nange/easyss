@@ -41,7 +41,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	log.Infof("set the log-level to: %v", logLevel)
+	log.Infof("[EASYSS_SERVER] set the log-level to: %v", logLevel)
 	switch logLevel {
 	case "debug":
 		log.SetLevel(log.DebugLevel)
@@ -55,19 +55,19 @@ func main() {
 
 	exists, err := util.FileExists(configFile)
 	if !exists || err != nil {
-		log.Debugf("config file err:%v", err)
+		log.Debugf("[EASYSS_SERVER] config file:%v", err)
 
 		binDir := util.CurrentDir()
 		configFile = path.Join(binDir, "config.json")
 
-		log.Debugf("config file not found, try config file %s", configFile)
+		log.Debugf("[EASYSS_SERVER] config file not found, try config file %s", configFile)
 	}
 
 	config, err := easyss.ParseConfig(configFile)
 	if err != nil {
 		config = &cmdConfig
 		if !os.IsNotExist(errors.Cause(err)) {
-			log.Errorf("error reading %s: %+v", configFile, err)
+			log.Errorf("[EASYSS_SERVER] error reading %s: %+v", configFile, err)
 			os.Exit(1)
 		}
 	} else {
@@ -75,12 +75,12 @@ func main() {
 	}
 
 	if err := config.ServerValidate(); err != nil {
-		log.Fatalf("Easyss server starts failed, config is invalid:%s", err.Error())
+		log.Fatalf("[EASYSS_SERVER] starts failed, config is invalid:%s", err.Error())
 	}
 
 	ss, err := easyss.New(config)
 	if err != nil {
-		log.Errorf("new easyss server err:%v", err)
+		log.Errorf("[EASYSS_SERVER] new easyss err:%v", err)
 	}
 	ss.Remote()
 }

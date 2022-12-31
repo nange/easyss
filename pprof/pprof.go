@@ -17,7 +17,7 @@ func StartPprof() error {
 
 	log.Infof("starting pprof server at :6060")
 	if err := http.ListenAndServe(":6060", mux); err != nil {
-		log.Errorf("start pprof server:%s", err.Error())
+		log.Errorf("[PPROF] start pprof server:%s", err.Error())
 		return err
 	}
 	return nil

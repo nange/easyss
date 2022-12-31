@@ -41,19 +41,19 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64, needClos
 			n1 = res1.N
 			err := res1.Err
 			if cipherstream.EncryptErr(err) || cipherstream.WriteCipherErr(err) {
-				log.Debugf("io.Copy err:%+v, maybe underlying connection has been closed", err)
+				log.Debugf("[REPAY] io.Copy err:%+v, maybe underlying connection has been closed", err)
 				markCipherStreamUnusable(cipher)
 				continue
 			}
 
 			if i == 0 {
-				log.Debugf("read plaintxt stream error, set start state. details:%v", err)
+				log.Debugf("[REPAY] read plaintxt stream error, set start state. details:%v", err)
 				buf := connStateBytes.Get(32)
 				defer connStateBytes.Put(buf)
 				state = NewConnState(FIN_WAIT1, buf)
 			} else if err != nil {
 				if !cipherstream.TimeoutErr(err) {
-					log.Errorf("execpt error is net: io timeout. but get:%v", err)
+					log.Errorf("[REPAY] execpt error is net: io timeout. but get:%v", err)
 				}
 			}
 
@@ -62,24 +62,24 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64, needClos
 			n2 = res2.N
 			err := res2.Err
 			if cipherstream.DecryptErr(err) || cipherstream.ReadCipherErr(err) {
-				log.Debugf("io.Copy err:%+v, maybe underlying connection has been closed", err)
+				log.Debugf("[REPAY] io.Copy err:%+v, maybe underlying connection has been closed", err)
 				markCipherStreamUnusable(cipher)
 				continue
 			}
 
 			if i == 0 {
 				if cipherstream.FINRSTStreamErr(err) {
-					log.Debugf("read cipher stream ErrFINRSTStream, set start state")
+					log.Debugf("[REPAY] read cipher stream ErrFINRSTStream, set start state")
 					buf := connStateBytes.Get(32)
 					defer connStateBytes.Put(buf)
 					state = NewConnState(CLOSE_WAIT, buf)
 				} else {
-					log.Errorf("execpt error is ErrFINRSTStream, but get:%v", err)
+					log.Errorf("[REPAY] execpt error is ErrFINRSTStream, but get:%v", err)
 					markCipherStreamUnusable(cipher)
 				}
 			} else if err != nil {
 				if !cipherstream.TimeoutErr(err) {
-					log.Errorf("execpt error is net: io timeout. but get:%v", err)
+					log.Errorf("[REPAY] execpt error is net: io timeout. but get:%v", err)
 				}
 			}
 
@@ -93,7 +93,7 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64, needClos
 
 	setCipherDeadline(cipher, ss.Timeout())
 	if state == nil {
-		log.Infof("unexcepted state, some unexcepted error occor, maybe client connection is closed")
+		log.Infof("[REPAY] unexcepted state, some unexcepted error occor, maybe client connection is closed")
 		needClose = true
 		return
 	}
@@ -101,7 +101,7 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64, needClos
 		stateFn = stateFn(cipher).fn
 	}
 	if state.err != nil {
-		log.Infof("state err:%v, state:%v", state.err, state.state)
+		log.Infof("[REPAY] state err:%v, state:%v", state.err, state.state)
 		markCipherStreamUnusable(cipher)
 		needClose = true
 	}
@@ -113,7 +113,6 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64, needClos
 func markCipherStreamUnusable(cipher net.Conn) bool {
 	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
 		if pc, ok := cs.Conn.(*easypool.PoolConn); ok {
-			log.Debugf("mark cipher stream unusable")
 			pc.MarkUnusable()
 			return true
 		}
@@ -132,13 +131,11 @@ func cipherStreamUnusable(cipher net.Conn) bool {
 }
 
 func expireConn(conn net.Conn) {
-	log.Debugf("expire the connection to make the reader to be failed immediately")
 	conn.SetDeadline(time.Unix(0, 0))
 }
 
 func setCipherDeadline(cipher net.Conn, sec time.Duration) {
 	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
-		log.Debugf("set cipher tcp connection deadline to 30 second later")
 		cs.Conn.SetDeadline(time.Now().Add(sec))
 	}
 }

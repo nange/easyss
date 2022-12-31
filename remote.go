@@ -45,14 +45,14 @@ func (ss *Easyss) tcpServer() {
 	addr := ":" + strconv.Itoa(ss.ServerPort())
 	tlsConfig, err := ss.tlsConfig()
 	if err != nil {
-		log.Fatalf("get server tls config err:%v", err)
+		log.Fatalf("[REMOTE] get server tls config err:%v", err)
 	}
 
 	ln, err := tls.Listen("tcp", addr, tlsConfig)
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Infof("starting remote socks5 server at %v ...", addr)
+	log.Infof("[REMOTE] starting remote socks5 server at %v ...", addr)
 
 	for {
 		conn, err := ln.Accept()
@@ -60,7 +60,7 @@ func (ss *Easyss) tcpServer() {
 			log.Error("accept:", err)
 			continue
 		}
-		log.Infof("a new connection(ip) is accepted. remote addr:%v", conn.RemoteAddr())
+		log.Infof("[REMOTE] a new connection(ip) is accepted. addr:%v", conn.RemoteAddr())
 
 		go func() {
 			defer conn.Close()
@@ -69,46 +69,46 @@ func (ss *Easyss) tcpServer() {
 				addr, method, protoType, err := ss.handShakeWithClient(conn)
 				if err != nil {
 					if errors.Is(err, io.EOF) {
-						log.Debugf("got EOF error when handShake with client-server, maybe the connection pool closed the idle conn")
+						log.Debugf("[REMOTE] got EOF error when handShake with client-server, maybe the connection pool closed the idle conn")
 					} else {
-						log.Warnf("get target addr err:%+v", err)
+						log.Warnf("[REMOTE] get target addr err:%+v", err)
 					}
 					return
 				}
 
 				addrStr := string(addr)
 				if err := validateTargetAddr(addrStr); err != nil {
-					log.Warnf("validate target address err:%s, close the connection directly", err.Error())
+					log.Warnf("[REMOTE] validate target address err:%s, close the connection directly", err.Error())
 					return
 				}
 
-				log.Infof("target proxy addr is:%v", addrStr)
+				log.Infof("[REMOTE] target:%v", addrStr)
 
 				switch protoType {
 				case "tcp":
 					needClose, err := ss.remoteTCPHandle(conn, addrStr, method)
 					if err != nil {
-						log.Errorf("remote tcp handle err:%v", err)
+						log.Errorf("[REMOTE] tcp handle err:%v", err)
 						return
 					}
 					if needClose {
-						log.Debugf("maybe underlying connection has been closed, need close the proxy conn")
+						log.Debugf("[REMOTE] maybe underlying connection has been closed, need close the proxy conn")
 						return
 					}
-					log.Debugf("underlying connection is health, so reuse it")
+					log.Debugf("[REMOTE] underlying connection is health, so reuse it")
 				case "udp":
 					needClose, err := ss.remoteUDPHandle(conn, addrStr, method)
 					if err != nil {
-						log.Errorf("remote udp handle err:%v", err)
+						log.Errorf("[REMOTE] udp handle err:%v", err)
 						return
 					}
 					if needClose {
-						log.Debugf("maybe underlying connection has been closed, need close the proxy conn")
+						log.Debugf("[REMOTE] maybe underlying connection has been closed, need close the proxy conn")
 						return
 					}
-					log.Debugf("underlying connection is health, so reuse it")
+					log.Debugf("[REMOTE] underlying connection is health, so reuse it")
 				default:
-					log.Errorf("unsupported protoType:%s", protoType)
+					log.Errorf("[REMOTE] unsupported protoType:%s", protoType)
 					return
 				}
 			}
@@ -131,7 +131,7 @@ func (ss *Easyss) remoteTCPHandle(conn net.Conn, addrStr, method string) (needCl
 	n1, n2, needClose := ss.relay(csStream, tConn)
 	csStream.(*cipherstream.CipherStream).Release()
 
-	log.Debugf("send %v bytes to %v, and recive %v bytes, needclose:%v", n2, addrStr, n1, needClose)
+	log.Debugf("[REMOTE] send %v bytes to %v, and recive %v bytes, needclose:%v", n2, addrStr, n1, needClose)
 
 	ss.stat.BytesSend.Add(n2)
 	ss.stat.BytesReceive.Add(n1)
@@ -157,7 +157,7 @@ func (ss *Easyss) handShakeWithClient(stream io.ReadWriter) (addr []byte, method
 
 	headerplain, err := gcm.Decrypt(headerbuf)
 	if err != nil {
-		log.Errorf("gcm.Decrypt decrypt headerbuf:%v, err:%+v", headerbuf, err)
+		log.Errorf("[REMOTE] gcm.Decrypt decrypt headerbuf:%v, err:%+v", headerbuf, err)
 		return
 	}
 
@@ -177,13 +177,13 @@ func (ss *Easyss) handShakeWithClient(stream io.ReadWriter) (addr []byte, method
 
 	if _, err = io.ReadFull(stream, payloadbuf); err != nil {
 		err = errors.WithStack(err)
-		log.Warnf("io.ReadFull read payloadbuf err:%+v, len:%v", err, len(payloadbuf))
+		log.Warnf("[REMOTE] io.ReadFull read payloadbuf err:%+v, len:%v", err, len(payloadbuf))
 		return
 	}
 
 	payloadplain, err := gcm.Decrypt(payloadbuf)
 	if err != nil {
-		log.Errorf("gcm.Decrypt decrypt payloadbuf:%v, err:%+v", payloadbuf, err)
+		log.Errorf("[REMOTE] gcm.Decrypt decrypt payloadbuf:%v, err:%+v", payloadbuf, err)
 		return
 	}
 	length := len(payloadplain)
@@ -199,12 +199,12 @@ func (ss *Easyss) handShakeWithClient(stream io.ReadWriter) (addr []byte, method
 
 		if _, err = io.ReadFull(stream, paddingbuf); err != nil {
 			err = errors.WithStack(err)
-			log.Warnf("io.ReadFull read paddingbuf err:%+v, len:%v", err, len(paddingbuf))
+			log.Warnf("[REMOTE] io.ReadFull read paddingbuf err:%+v, len:%v", err, len(paddingbuf))
 			return
 		}
 		_, err = gcm.Decrypt(paddingbuf)
 		if err != nil {
-			log.Errorf("gcm.Decrypt decrypt paddingbuf:%v, err:%+v", paddingbuf, err)
+			log.Errorf("[REMOTE] gcm.Decrypt decrypt paddingbuf:%v, err:%+v", paddingbuf, err)
 			return
 		}
 	}

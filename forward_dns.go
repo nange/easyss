@@ -12,12 +12,12 @@ func NewDNSForwardServer(dnsServer string) *dns.Server {
 		c := &dns.Client{Timeout: DefaultUDPTimeout}
 		r, _, err := c.Exchange(msg, dnsServer)
 		if err != nil {
-			log.Errorf("dns exchange err:%s", err.Error())
+			log.Errorf("[DNS_FORWARD] exchange err:%s", err.Error())
 			return
 		}
 
 		if err := writer.WriteMsg(r); err != nil {
-			log.Errorf("write dns msg back err:%s", err.Error())
+			log.Errorf("[DNS_FORWARD] write msg back err:%s", err.Error())
 		}
 	})
 
@@ -28,10 +28,10 @@ func (ss *Easyss) LocalDNSForward() error {
 	server := NewDNSForwardServer(ss.DirectDNSServer())
 	ss.SetForwardDNSServer(server)
 
-	log.Infof("starting local dns forward server at :53")
+	log.Infof("[DNS_FORWARD] starting local dns forward server at :53")
 	err := server.ListenAndServe()
 	if err != nil {
-		log.Warnf("local dns forward server:%s", err.Error())
+		log.Warnf("[DNS_FORWARD] local forward server:%s", err.Error())
 	}
 
 	return err

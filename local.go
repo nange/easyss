@@ -23,18 +23,18 @@ func (ss *Easyss) LocalSocks5() error {
 	} else {
 		addr = "127.0.0.1:" + strconv.Itoa(ss.LocalPort())
 	}
-	log.Infof("starting local socks5 server at %v", addr)
+	log.Infof("[SOCKS5] starting local socks5 server at %v", addr)
 
 	server, err := socks5.NewClassicServer(addr, "127.0.0.1", "", "", 0, int(ss.Timeout()))
 	if err != nil {
-		log.Errorf("new socks5 server err: %+v", err)
+		log.Errorf("[SOCKS5] new socks5 server err: %+v", err)
 		return err
 	}
 	ss.SetSocksServer(server)
 
 	err = server.ListenAndServe(ss)
 	if err != nil {
-		log.Warnf("local socks5 server:%s", err.Error())
+		log.Warnf("[SOCKS5] local socks5 server:%s", err.Error())
 	}
 
 	return err
@@ -42,12 +42,12 @@ func (ss *Easyss) LocalSocks5() error {
 
 func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Request) error {
 	targetAddr := r.Address()
-	log.Infof("target addr:%v, is udp:%v", targetAddr, r.Cmd == socks5.CmdUDP)
+	log.Debugf("[SOCKS5] target:%v, udp:%v", targetAddr, r.Cmd == socks5.CmdUDP)
 
 	if r.Cmd == socks5.CmdConnect {
 		a, addr, port, err := socks5.ParseAddress(conn.LocalAddr().String())
 		if err != nil {
-			log.Errorf("socks5 ParseAddress err:%+v", err)
+			log.Errorf("[SOCKS5] socks5 ParseAddress err:%+v", err)
 			return err
 		}
 		p := socks5.NewReply(socks5.RepSuccess, a, addr, port)
@@ -61,8 +61,6 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 	if r.Cmd == socks5.CmdUDP {
 		uaddr, _ := net.ResolveUDPAddr("udp", conn.LocalAddr().String())
 		caddr, err := r.UDP(conn, uaddr)
-		log.Debugf("target request is udp proto, target addr:%v, caddr:%v, conn.LocalAddr:%s, conn.RemoteAddr:%s",
-			targetAddr, caddr.String(), conn.LocalAddr().String(), conn.RemoteAddr().String())
 		if err != nil {
 			return err
 		}
@@ -74,14 +72,14 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 			portStr := strconv.FormatInt(int64(caddr.Port), 10)
 			s.AssociatedUDP.Set(portStr, ch, -1)
 			defer func() {
-				log.Debugf("exit associate tcp connection, closing chan")
+				log.Debugf("[SOCKS5] exit associate tcp connection, closing chan")
 				close(ch)
 				s.AssociatedUDP.Delete(portStr)
 			}()
 		}
 
 		io.Copy(io.Discard, conn)
-		log.Debugf("A tcp connection that udp %v associated closed, target addr:%v\n", caddr.String(), targetAddr)
+		log.Debugf("[SOCKS5] a tcp connection that udp %v associated closed, target addr:%v", caddr.String(), targetAddr)
 		return nil
 	}
 
@@ -96,8 +94,9 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		return ss.directRelay(localConn, addr)
 	}
 
+	log.Infof("[TCP_PROXY] target:%s", addr)
 	if err := ss.validateAddr(addr); err != nil {
-		log.Errorf("validate socks5 request:%v", err)
+		log.Errorf("[TCP_PROXY] validate socks5 request:%v", err)
 		return err
 	}
 
@@ -108,20 +107,20 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 
 	stream, err := pool.Get()
 	if err != nil {
-		log.Errorf("get stream from pool failed:%+v", err)
+		log.Errorf("[TCP_PROXY] get stream from pool failed:%+v", err)
 		return
 	}
 
-	log.Debugf("after pool get: current tcp pool has %v connections", pool.Len())
+	log.Debugf("[TCP_PROXY] after pool get, pool len: %v", pool.Len())
 	defer func() {
 		stream.Close()
-		log.Debugf("after stream close: current tcp pool has %v connections", pool.Len())
+		log.Debugf("[TCP_PROXY] after stream close, pool len: %v", pool.Len())
 	}()
 
 	if err = ss.handShakeWithRemote(stream, addr, "tcp"); err != nil {
-		log.Errorf("hand-shake with remote server err:%v", err)
+		log.Errorf("[TCP_PROXY] handshake with remote server err:%v", err)
 		if pc, ok := stream.(*easypool.PoolConn); ok {
-			log.Debugf("mark pool conn stream unusable")
+			log.Debugf("[TCP_PROXY] mark pool conn stream unusable")
 			pc.MarkUnusable()
 		}
 		return
@@ -129,7 +128,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 
 	csStream, err := cipherstream.New(stream, ss.Password(), ss.Method(), "tcp")
 	if err != nil {
-		log.Errorf("new cipherstream err:%+v, password:%v, method:%v",
+		log.Errorf("[TCP_PROXY] new cipherstream err:%v, password:%v, method:%v",
 			err, ss.Password(), ss.Method())
 		return
 	}
@@ -137,9 +136,9 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	n1, n2, needClose := ss.relay(csStream, localConn)
 	csStream.(*cipherstream.CipherStream).Release()
 
-	log.Debugf("send %v bytes to %v, and recive %v bytes", n1, addr, n2)
+	log.Debugf("[TCP_PROXY] send %v bytes to %v, recive %v bytes", n1, addr, n2)
 	if !needClose {
-		log.Debugf("underlying connection is health, so reuse it")
+		log.Debugf("[TCP_PROXY] underlying connection is health, so reuse it")
 	}
 
 	ss.stat.BytesSend.Add(n1)

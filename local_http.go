@@ -18,14 +18,14 @@ func (ss *Easyss) LocalHttp() error {
 	} else {
 		addr = "127.0.0.1:" + strconv.Itoa(ss.LocalHTTPPort())
 	}
-	log.Infof("starting local http-proxy server at %v", addr)
+	log.Infof("[HTTP_PROXY] starting local http-proxy server at %v", addr)
 
 	server := &http.Server{Addr: addr, Handler: &httpProxy{ss: ss}}
 	ss.SetHttpProxyServer(server)
 
 	err := server.ListenAndServe()
 	if err != nil {
-		log.Warnf("local http proxy server:%s", err.Error())
+		log.Warnf("[HTTP_PROXY] local http-proxy server:%s", err.Error())
 	}
 
 	return err
@@ -78,7 +78,7 @@ func (h *httpProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *httpProxy) doWithHijack(w http.ResponseWriter, r *http.Request) {
 	hij, ok := w.(http.Hijacker)
 	if !ok {
-		log.Errorf("Connect: hijacking not supported")
+		log.Errorf("[HTTP_PROXY] Connect: hijacking not supported")
 		if r.Body != nil {
 			defer r.Body.Close()
 		}
@@ -88,17 +88,17 @@ func (h *httpProxy) doWithHijack(w http.ResponseWriter, r *http.Request) {
 
 	hijConn, _, err := hij.Hijack()
 	if err != nil {
-		log.Errorf("get hijack conn, err:%s", err.Error())
+		log.Errorf("[HTTP_PROXY] get hijack conn, err:%s", err.Error())
 		return
 	}
 	if _, err := hijConn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n")); err != nil {
-		log.Errorf("write hijack ok err:%s", err.Error())
+		log.Errorf("[HTTP_PROXY] write hijack ok err:%s", err.Error())
 		hijConn.Close()
 		return
 	}
 
 	if err := h.ss.localRelay(hijConn, r.URL.Host); err != nil {
-		log.Warnf("http local relay err:%s", err.Error())
+		log.Warnf("[HTTP_PROXY] local relay err:%s", err.Error())
 	}
 }
 
@@ -117,7 +117,7 @@ func (h *httpProxy) doWithNormal(w http.ResponseWriter, r *http.Request) {
 	client := h.client()
 	resp, err := client.Do(r)
 	if err != nil {
-		log.Warnf("http proxy client do request err:%s", err.Error())
+		log.Warnf("[HTTP_PROXY] client do request err:%s", err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -126,10 +126,10 @@ func (h *httpProxy) doWithNormal(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 
 	if _, err = io.Copy(w, resp.Body); err != nil {
-		log.Warnf("http proxy copy bytes back to client err:%s", err.Error())
+		log.Warnf("[HTTP_PROXY] copy bytes back to client err:%s", err.Error())
 	}
 	if err := resp.Body.Close(); err != nil {
-		log.Warnf("http proxy can't close response body err:%s", err.Error())
+		log.Warnf("[HTTP_PROXY] can't close response body err:%s", err.Error())
 	}
 }
 

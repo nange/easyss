@@ -23,7 +23,11 @@ type DirectUDPExchange struct {
 }
 
 func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5.Datagram, isDNSReq bool) error {
-	log.Debugf("directly relay udp proto for addr:%s, isDNSReq:%v", d.Address(), isDNSReq)
+	logPrefix := "[UDP_DIRECT]"
+	if isDNSReq {
+		logPrefix = "[DNS_DIRECT]"
+	}
+	log.Infof("%s target:%s", logPrefix, d.Address())
 
 	var ch chan byte
 	var hasAssoc bool
@@ -33,9 +37,9 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 	if ok {
 		hasAssoc = true
 		ch = asCh.(chan byte)
-		log.Debugf("found the associate with tcp, src:%s, dst:%s", laddr.String(), d.Address())
+		log.Debugf("%s found the associate with tcp, src:%s, dst:%s", logPrefix, laddr.String(), d.Address())
 	} else {
-		log.Debugf("the udp addr:%v doesn't associate with tcp, dst addr:%v", laddr.String(), d.Address())
+		log.Debugf("%s the udp addr:%v doesn't associate with tcp, dst addr:%v", logPrefix, laddr.String(), d.Address())
 	}
 
 	dst := d.Address()
@@ -54,7 +58,7 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 			if err != nil {
 				return err
 			}
-			log.Debugf("directly sent UDP data to remote:%s, client: %s", addr.String(), ue.ClientAddr.String())
+			log.Debugf("%s sent data: %s <--> %s", logPrefix, ue.ClientAddr.String(), addr.String())
 		}
 		return nil
 	}
@@ -69,7 +73,7 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 
 	pc, err := ss.directUDPConn()
 	if err != nil {
-		log.Errorf("listen packet err:%v", err)
+		log.Errorf("%s listen packet err:%v", logPrefix, err)
 		return err
 	}
 
@@ -78,7 +82,7 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 		RemoteConn: pc,
 	}
 	if err := send(ue, d.Data, uAddr); err != nil {
-		log.Warnf("directly write udp request data to %s, err:%v", uAddr.String(), err)
+		log.Warnf("%s send data to %s, err:%v", logPrefix, uAddr.String(), err)
 		return err
 	}
 	s.UDPExchanges.Set(src+dst+DirectSuffix, ue, -1)
@@ -94,13 +98,13 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 		for {
 			select {
 			case <-ch:
-				log.Infof("the tcp that udp address %s associated closed", ue.ClientAddr.String())
+				log.Infof("%s the tcp that udp address %s associated closed", logPrefix, ue.ClientAddr.String())
 				return
 			default:
 			}
 			if !hasAssoc {
 				if err := ue.RemoteConn.SetDeadline(time.Now().Add(DefaultUDPTimeout)); err != nil {
-					log.Errorf("set the deadline for remote conn err:%v", err)
+					log.Errorf("%s set the deadline for remote conn err:%v", logPrefix, err)
 					return
 				}
 			}
@@ -109,14 +113,14 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 			if err != nil {
 				return
 			}
-			log.Debugf("directly got UDP data from remote. client: %v, data-len: %v", ue.ClientAddr.String(), len(b[0:n]))
+			log.Debugf("%s got data from remote. client: %v, data-len: %v", logPrefix, ue.ClientAddr.String(), len(b[0:n]))
 
 			// if is dns response, set result to dns cache
 			ss.SetDNSCacheIfNeeded(b[0:n], true)
 
 			a, addr, port, err := socks5.ParseAddress(dst)
 			if err != nil {
-				log.Errorf("parse dst address err:%v", err)
+				log.Errorf("%s parse dst address err:%v", logPrefix, err)
 				return
 			}
 			d1 := socks5.NewDatagram(a, addr, port, b[0:n])

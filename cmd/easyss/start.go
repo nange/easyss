@@ -22,10 +22,10 @@ func StartEasyss(ss *easyss.Easyss) {
 
 		select {
 		case sig := <-c:
-			log.Infof("got signal to exit: %v", sig)
+			log.Infof("[EASYSS-MAIN] got signal to exit: %v", sig)
 			systray.Quit()
 		case <-st.closing:
-			log.Infof("easyss exiting...")
+			log.Infof("[EASYSS-MAIN] easyss exiting...")
 		}
 	}()
 

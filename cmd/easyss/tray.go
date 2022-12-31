@@ -81,7 +81,7 @@ func (st *SysTray) AddSelectServerMenu() {
 							_item.Check()
 							return
 						}
-						log.Infof("changing server to:%s", addrs[_i])
+						log.Infof("[SYSTRAY] changing server to:%s", addrs[_i])
 						for _, v := range subMenuItems {
 							v.Uncheck()
 						}
@@ -93,10 +93,10 @@ func (st *SysTray) AddSelectServerMenu() {
 						config.Password = serverConfig.Password
 						config.DisableUTLS = serverConfig.DisableUTLS
 						if err := st.RestartService(config); err != nil {
-							log.Errorf("changing server to:%s err:%v", addrs[_i], err)
+							log.Errorf("[SYSTRAY] changing server to:%s err:%v", addrs[_i], err)
 						} else {
 							_item.Check()
-							log.Infof("changes server to:%s success", addrs[_i])
+							log.Infof("[SYSTRAY] changes server to:%s success", addrs[_i])
 						}
 					}()
 				}
@@ -168,13 +168,13 @@ func (st *SysTray) AddProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 			case <-browser.ClickedCh:
 				if browser.Checked() {
 					if err := st.SS().SetSysProxyOffHTTP(); err != nil {
-						log.Errorf("set sys proxy off http err:%s", err.Error())
+						log.Errorf("[SYSTRAY] set sys-proxy off http err:%s", err.Error())
 						continue
 					}
 					browser.Uncheck()
 				} else {
 					if err := st.SS().SetSysProxyOnHTTP(); err != nil {
-						log.Errorf("set sys proxy on http err:%s", err.Error())
+						log.Errorf("[SYSTRAY] set sys-proxy on http err:%s", err.Error())
 						continue
 					}
 					browser.Check()
@@ -182,13 +182,13 @@ func (st *SysTray) AddProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 			case <-global.ClickedCh:
 				if global.Checked() {
 					if err := st.SS().CloseTun2socks(); err != nil {
-						log.Errorf("close tun2socks err:%s", err.Error())
+						log.Errorf("[SYSTRAY] close tun2socks err:%s", err.Error())
 						continue
 					}
 					global.Uncheck()
 				} else {
 					if err := st.ss.CreateTun2socks(); err != nil {
-						log.Errorf("create tun2socks err:%s", err.Error())
+						log.Errorf("[SYSTRAY] create tun2socks err:%s", err.Error())
 						continue
 					}
 					global.Check()
@@ -207,9 +207,8 @@ func (st *SysTray) AddCatLogsMenu() *systray.MenuItem {
 		for {
 			select {
 			case <-catLog.ClickedCh:
-				log.Debugf("cat log btn clicked...")
 				if err := st.catLog(); err != nil {
-					log.Errorf("cat log err:%v", err)
+					log.Errorf("[SYSTRAY] cat log err:%v", err)
 				}
 			}
 		}
@@ -225,7 +224,6 @@ func (st *SysTray) AddExitMenu() *systray.MenuItem {
 		for {
 			select {
 			case <-quit.ClickedCh:
-				log.Debugf("exit btn clicked quit now...")
 				systray.Quit()
 			}
 		}
@@ -265,7 +263,7 @@ func (st *SysTray) CloseService() {
 func (st *SysTray) Exit() {
 	st.closing <- struct{}{}
 	st.CloseService()
-	log.Info("systray exiting...")
+	log.Info("[SYSTRAY] systray exiting...")
 }
 
 func (st *SysTray) StartLocalService() {
@@ -274,7 +272,7 @@ func (st *SysTray) StartLocalService() {
 	ss := st.ss
 
 	if err := ss.InitTcpPool(); err != nil {
-		log.Errorf("init tcp pool error:%v", err)
+		log.Errorf("[SYSTRAY] init tcp pool error:%v", err)
 	}
 
 	go ss.LocalSocks5() // start local server
@@ -285,13 +283,13 @@ func (st *SysTray) StartLocalService() {
 
 	if st.SysProxyHTTPIsOn() {
 		if err := ss.SetSysProxyOnHTTP(); err != nil {
-			log.Errorf("set sys proxy on http err:%s", err.Error())
+			log.Errorf("[SYSTRAY] set sys proxy on http err:%s", err.Error())
 		}
 	}
 
 	if ss.EnabledTun2socksFromConfig() {
 		if err := st.ss.CreateTun2socks(); err != nil {
-			log.Fatalf("create tun2socks err:%s", err.Error())
+			log.Fatalf("[SYSTRAY] create tun2socks err:%s", err.Error())
 		} else {
 			st.tun2socksMenu.Check()
 		}

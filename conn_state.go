@@ -72,8 +72,8 @@ func NewConnState(s state, buf []byte) *ConnState {
 }
 
 func (cs *ConnState) FINWait1(conn io.ReadWriteCloser) *ConnState {
-	log.Debug("start FINWait1 state")
-	defer log.Debug("end FINWait1 state")
+	log.Debug("[CONN_STATE] start FINWait1 state")
+	defer log.Debug("[CONN_STATE] end FINWait1 state")
 
 	cs.state = FIN_WAIT1
 
@@ -83,7 +83,7 @@ func (cs *ConnState) FINWait1(conn io.ReadWriteCloser) *ConnState {
 	fin := util.EncodeFINRstStreamHeader(header)
 	_, err := conn.Write(fin)
 	if err != nil {
-		log.Debugf("conn.Write FIN err:%v", err)
+		log.Debugf("[CONN_STATE] write FIN err:%v", err)
 		cs.err = err
 		cs.fn = nil
 		return cs
@@ -105,15 +105,15 @@ func (cs *ConnState) FINWait1(conn io.ReadWriteCloser) *ConnState {
 		return cs
 	}
 
-	log.Debugf("except get ErrFINRSTStream or ErrACKRSTStream, but get: %v", err)
+	log.Debugf("[CONN_STATE] except get ErrFINRSTStream or ErrACKRSTStream, but get: %v", err)
 	cs.err = err
 	cs.fn = nil
 	return cs
 }
 
 func (cs *ConnState) FINWait2(conn io.ReadWriteCloser) *ConnState {
-	log.Debug("start FINWait2 state")
-	defer log.Debug("end FINWait2 state")
+	log.Debug("[CONN_STATE] start FINWait2 state")
+	defer log.Debug("[CONN_STATE] end FINWait2 state")
 	cs.state = FIN_WAIT2
 	var err error
 	for {
@@ -123,7 +123,7 @@ func (cs *ConnState) FINWait2(conn io.ReadWriteCloser) *ConnState {
 		}
 	}
 	if !cipherstream.FINRSTStreamErr(err) {
-		log.Debugf("except get ErrFINRSTStream, but get: %+v", err)
+		log.Debugf("[CONN_STATE] except get ErrFINRSTStream, but get: %+v", err)
 		cs.err = err
 		cs.fn = nil
 		return cs
@@ -135,7 +135,7 @@ func (cs *ConnState) FINWait2(conn io.ReadWriteCloser) *ConnState {
 	ack := util.EncodeACKRstStreamHeader(header)
 	_, err = conn.Write(ack)
 	if err != nil {
-		log.Debugf("conn.Write ACK err:%+v", err)
+		log.Debugf("[CONN_STATE] write ACK err:%+v", err)
 		cs.err = err
 		cs.fn = nil
 		return cs
@@ -146,8 +146,8 @@ func (cs *ConnState) FINWait2(conn io.ReadWriteCloser) *ConnState {
 }
 
 func (cs *ConnState) LastACK(conn io.ReadWriteCloser) *ConnState {
-	log.Debug("start LastACK state")
-	defer log.Debug("end LastACK state")
+	log.Debug("[CONN_STATE] start LastACK state")
+	defer log.Debug("[CONN_STATE] end LastACK state")
 
 	cs.state = LAST_ACK
 
@@ -157,7 +157,7 @@ func (cs *ConnState) LastACK(conn io.ReadWriteCloser) *ConnState {
 	fin := util.EncodeFINRstStreamHeader(header)
 	_, err := conn.Write(fin)
 	if err != nil {
-		log.Debugf("conn.Write FIN err:%+v", err)
+		log.Debugf("[CONN_STATE] write FIN err:%+v", err)
 		cs.err = err
 		cs.fn = nil
 		return cs
@@ -168,8 +168,8 @@ func (cs *ConnState) LastACK(conn io.ReadWriteCloser) *ConnState {
 }
 
 func (cs *ConnState) Closing(conn io.ReadWriteCloser) *ConnState {
-	log.Debug("start Closing state")
-	defer log.Debug("end Closing state")
+	log.Debug("[CONN_STATE] start Closing state")
+	defer log.Debug("[CONN_STATE] end Closing state")
 
 	cs.state = CLOSING
 
@@ -179,7 +179,7 @@ func (cs *ConnState) Closing(conn io.ReadWriteCloser) *ConnState {
 	ack := util.EncodeACKRstStreamHeader(header)
 	_, err := conn.Write(ack)
 	if err != nil {
-		log.Debugf("conn.Write ACK err:%+v", err)
+		log.Debugf("[CONN_STATE] write ACK err:%+v", err)
 		cs.err = err
 		cs.fn = nil
 		return cs
@@ -190,8 +190,8 @@ func (cs *ConnState) Closing(conn io.ReadWriteCloser) *ConnState {
 }
 
 func (cs *ConnState) CloseWait(conn io.ReadWriteCloser) *ConnState {
-	log.Debug("start CloseWait state")
-	defer log.Debug("end CloseWait state")
+	log.Debug("[CONN_STATE] start CloseWait state")
+	defer log.Debug("[CONN_STATE] end CloseWait state")
 
 	cs.state = CLOSE_WAIT
 
@@ -212,8 +212,8 @@ func (cs *ConnState) CloseWait(conn io.ReadWriteCloser) *ConnState {
 }
 
 func (cs *ConnState) TimeWait(conn io.ReadWriteCloser) *ConnState {
-	log.Debug("start TimeWait state")
-	defer log.Debug("end TimeWait state")
+	log.Debug("[CONN_STATE] start TimeWait state")
+	defer log.Debug("[CONN_STATE] end TimeWait state")
 
 	cs.state = TIME_WAIT
 	log.Debug("in TimeWait state, we should end state machine immediately")
@@ -222,10 +222,10 @@ func (cs *ConnState) TimeWait(conn io.ReadWriteCloser) *ConnState {
 	var err error
 	if cs, ok := conn.(*cipherstream.CipherStream); ok {
 		err = cs.Conn.SetDeadline(time.Time{})
-		log.Debug("set tcp connection deadline to default")
+		log.Debug("[CONN_STATE] set tcp connection deadline to default")
 	}
 	if err != nil {
-		log.Warnf("conn.SetDeadline to default err:%v", err)
+		log.Warnf("[CONN_STATE] setDeadline to default err:%v", err)
 		cs.err = err
 	}
 	cs.fn = nil
@@ -233,8 +233,8 @@ func (cs *ConnState) TimeWait(conn io.ReadWriteCloser) *ConnState {
 }
 
 func (cs *ConnState) Closed(conn io.ReadWriteCloser) *ConnState {
-	log.Debug("start Closed state")
-	defer log.Debug("end Closed state")
+	log.Debug("[CONN_STATE] start Closed state")
+	defer log.Debug("[CONN_STATE] end Closed state")
 
 	cs.state = CLOSED
 	var err error
@@ -245,7 +245,7 @@ func (cs *ConnState) Closed(conn io.ReadWriteCloser) *ConnState {
 		}
 	}
 	if !cipherstream.ACKRSTStreamErr(err) {
-		log.Debugf("except get ErrACKRSTStream, but get: %+v", err)
+		log.Debugf("[CONN_STATE] except get ErrACKRSTStream, but get: %+v", err)
 		cs.err = err
 		cs.fn = nil
 		return cs
@@ -254,10 +254,10 @@ func (cs *ConnState) Closed(conn io.ReadWriteCloser) *ConnState {
 	// if conn is tcp connection, set the deadline to default
 	if cs, ok := conn.(*cipherstream.CipherStream); ok {
 		err = cs.Conn.SetDeadline(time.Time{})
-		log.Debug("set tcp connection deadline to default")
+		log.Debug("[CONN_STATE] set tcp connection deadline to default")
 	}
 	if err != nil {
-		log.Warnf("conn.SetDeadline to default err:%+v", err)
+		log.Warnf("[CONN_STATE] setDeadline to default err:%+v", err)
 		cs.err = err
 	}
 	cs.fn = nil

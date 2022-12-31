@@ -13,7 +13,7 @@ import (
 
 func StartEasyss(ss *easyss.Easyss) {
 	if err := ss.InitTcpPool(); err != nil {
-		log.Errorf("init tcp pool error:%v", err)
+		log.Errorf("[EASYSS-MAIN] init tcp pool error:%v", err)
 	}
 
 	go ss.LocalSocks5() // start local server
@@ -24,7 +24,7 @@ func StartEasyss(ss *easyss.Easyss) {
 
 	if ss.EnabledTun2socksFromConfig() {
 		if err := ss.CreateTun2socks(); err != nil {
-			log.Fatalf("create tun2socks err:%s", err.Error())
+			log.Fatalf("[EASYSS-MAIN] create tun2socks err:%s", err.Error())
 		}
 	}
 
@@ -34,7 +34,7 @@ func StartEasyss(ss *easyss.Easyss) {
 
 	select {
 	case sig := <-c:
-		log.Infof("got signal to exit: %v", sig)
+		log.Infof("[EASYSS-MAIN] got signal to exit: %v", sig)
 		ss.Close()
 		os.Exit(0)
 	}

@@ -91,13 +91,13 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 			headercipher, er := cs.Encrypt(headerBuf)
 			dataHeaderBytes.Put(headerBuf)
 			if er != nil {
-				log.Errorf("encrypt header buf err:%+v", err)
+				log.Errorf("[CIPHERSTREAM] encrypt header buf err:%+v", err)
 				return 0, ErrEncrypt
 			}
 
 			payloadcipher, er := cs.Encrypt(payloadBuf[:nr])
 			if er != nil {
-				log.Errorf("encrypt payload buf err:%+v", err)
+				log.Errorf("[CIPHERSTREAM] encrypt payload buf err:%+v", err)
 				return 0, ErrEncrypt
 			}
 
@@ -108,7 +108,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 				padcipher, err := cs.Encrypt(padBytes)
 				paddingBytes.Put(padBytes)
 				if err != nil {
-					log.Errorf("encrypt padding buf err:%+v", err)
+					log.Errorf("[CIPHERSTREAM] encrypt padding buf err:%+v", err)
 					return 0, ErrEncrypt
 				}
 
@@ -116,7 +116,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 			}
 
 			if _, ew := cs.Conn.Write(dataframe); ew != nil {
-				log.Warnf("write cipher data to cipher stream failed, msg:%+v", ew)
+				log.Warnf("[CIPHERSTREAM] write cipher data to cipher stream failed, msg:%+v", ew)
 				if timeout(ew) {
 					err = ErrTimeout
 				} else {
@@ -127,7 +127,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		if er != nil {
 			if er != io.EOF {
-				log.Debugf("read plaintext from reader failed, msg:%+v", err)
+				log.Debugf("[CIPHERSTREAM] read plaintext from reader failed, msg:%+v", err)
 				if timeout(er) {
 					err = ErrTimeout
 				} else {
@@ -168,23 +168,23 @@ func (cs *CipherStream) read() ([]byte, error) {
 			return nil, ErrTimeout
 		}
 		if errors.Is(err, io.EOF) {
-			log.Debugf("got EOF error when reading cipher stream payload len, maybe the remote-server closed the conn")
+			log.Debugf("[CIPHERSTREAM] got EOF error when reading cipher stream payload len, maybe the remote-server closed the conn")
 		} else {
-			log.Warnf("read cipher stream payload len err:%+v", err)
+			log.Warnf("[CIPHERSTREAM] read cipher stream payload len err:%+v", err)
 		}
 		return nil, ErrReadCipher
 	}
 
 	hPlain, err := cs.Decrypt(hBuf)
 	if err != nil {
-		log.Errorf("decrypt payload length err:%+v", err)
+		log.Errorf("[CIPHERSTREAM] decrypt payload length err:%+v", err)
 		return nil, ErrDecrypt
 	}
 
 	// the payload size reading from cipher stream
 	size := int(hPlain[0])<<16 | int(hPlain[1])<<8 | int(hPlain[2])
 	if (size & MaxPayloadSize) != size {
-		log.Errorf("read from cipherstream payload size:%+v is invalid", size)
+		log.Errorf("[CIPHERSTREAM] read from cipherstream payload size:%+v is invalid", size)
 		return nil, ErrPayloadSize
 	}
 
@@ -194,16 +194,16 @@ func (cs *CipherStream) read() ([]byte, error) {
 			return nil, ErrTimeout
 		}
 		if errors.Is(err, io.EOF) {
-			log.Debugf("got EOF error when reading cipher stream payload, maybe the remote-server closed the conn")
+			log.Debugf("[CIPHERSTREAM] got EOF error when reading cipher stream payload, maybe the remote-server closed the conn")
 		} else {
-			log.Warnf("read cipher stream payload err:%+v, lenpayload:%v", err, payloadLen)
+			log.Warnf("[CIPHERSTREAM] read cipher stream payload err:%+v, lenpayload:%v", err, payloadLen)
 		}
 		return nil, ErrReadCipher
 	}
 
 	payloadPlain, err := cs.Decrypt(cs.rbuf[:payloadLen])
 	if err != nil {
-		log.Errorf("decrypt payload cipher err:%+v", err)
+		log.Errorf("[CIPHERSTREAM] decrypt payload cipher err:%+v", err)
 		return nil, ErrDecrypt
 	}
 
@@ -214,16 +214,16 @@ func (cs *CipherStream) read() ([]byte, error) {
 				return nil, ErrTimeout
 			}
 			if errors.Is(err, io.EOF) {
-				log.Debugf("got EOF error when reading cipher stream payload padding, maybe the remote-server closed the conn")
+				log.Debugf("[CIPHERSTREAM] got EOF error when reading cipher stream payload padding, maybe the remote-server closed the conn")
 			} else {
-				log.Warnf("read cipher stream payload padding err:%+v, lenpadding:%v", err, paddingLen)
+				log.Warnf("[CIPHERSTREAM] read cipher stream payload padding err:%+v, lenpadding:%v", err, paddingLen)
 			}
 			return nil, ErrReadCipher
 		}
 	}
 
 	if isRSTStream, err := rstStream(payloadPlain); isRSTStream {
-		log.Debugf("receive RST_STREAM frame, we should stop reading immediately")
+		log.Debugf("[CIPHERSTREAM] receive RST_STREAM frame, we should stop reading immediately")
 		return nil, err
 	}
 
@@ -246,11 +246,11 @@ func rstStream(payload []byte) (bool, error) {
 	size := int(payload[0])<<16 | int(payload[1])<<8 | int(payload[2])
 	if size == 4 && payload[3] == 0x7 {
 		if payload[4] == 0x0 {
-			log.Debugf("receive FIN_RST_STREAM frame")
+			log.Debugf("[CIPHERSTREAM] receive FIN_RST_STREAM frame")
 			return true, ErrFINRSTStream
 		}
 		if payload[4] == 0x1 {
-			log.Debugf("receive ACK_RST_STREAM frame")
+			log.Debugf("[CIPHERSTREAM] receive ACK_RST_STREAM frame")
 			return true, ErrACKRSTStream
 		}
 	}
