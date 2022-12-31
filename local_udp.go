@@ -60,6 +60,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		}
 
 		if isDirect {
+			log.Infof("[DNS_DIRECT] domain:%s, qtype:%s", question.Name, dns.TypeToString[question.Qtype])
 			return ss.directUDPRelay(s, addr, d, true)
 		}
 
