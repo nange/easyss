@@ -16,7 +16,7 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 
 	tConn, err := ss.directTCPConn(addr)
 	if err != nil {
-		log.Errorf("[TCP_DIRECT] dial:%s err:%v", addr, err)
+		log.Warnf("[TCP_DIRECT] dial:%s err:%v", addr, err)
 		return err
 	}
 
