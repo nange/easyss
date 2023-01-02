@@ -148,14 +148,15 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 }
 
 func (ss *Easyss) validateAddr(addr string) error {
-	host, _, err := net.SplitHostPort(addr)
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return fmt.Errorf("invalid target address:%v, err:%v", addr, err)
 	}
 
+	serverPort := strconv.FormatInt(int64(ss.ServerPort()), 10)
 	if !util.IsIP(host) {
-		if host == ss.Server() {
-			return fmt.Errorf("target host equals to server host, which may caused infinite-loop")
+		if host == ss.Server() && port == serverPort {
+			return fmt.Errorf("target host,port equals to server host,port, which may caused infinite-loop")
 		}
 		return nil
 	}
@@ -163,7 +164,7 @@ func (ss *Easyss) validateAddr(addr string) error {
 	if util.IsPrivateIP(host) {
 		return fmt.Errorf("target host:%v is private ip, which is invalid", host)
 	}
-	if host == ss.ServerIP() {
+	if host == ss.ServerIP() && port == serverPort {
 		return fmt.Errorf("target host:%v equals server host ip, which may caused infinite-loop", host)
 	}
 
