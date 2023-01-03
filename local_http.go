@@ -11,7 +11,7 @@ import (
 	"github.com/wzshiming/sysproxy"
 )
 
-func (ss *Easyss) LocalHttp() error {
+func (ss *Easyss) LocalHttp() {
 	var addr string
 	if ss.BindAll() {
 		addr = ":" + strconv.Itoa(ss.LocalHTTPPort())
@@ -23,12 +23,9 @@ func (ss *Easyss) LocalHttp() error {
 	server := &http.Server{Addr: addr, Handler: &httpProxy{ss: ss}}
 	ss.SetHttpProxyServer(server)
 
-	err := server.ListenAndServe()
-	if err != nil {
+	if err := server.ListenAndServe(); err != nil {
 		log.Warnf("[HTTP_PROXY] local http-proxy server:%s", err.Error())
 	}
-
-	return err
 }
 
 func (ss *Easyss) SetSysProxyOnHTTP() error {

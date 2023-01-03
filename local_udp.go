@@ -161,7 +161,9 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		var tryReuse bool
 		select {
 		case <-ch:
-			expireConn(ue.RemoteConn)
+			if err := expireConn(ue.RemoteConn); err != nil {
+				log.Errorf("[UDP_PROXY] expire remote conn: %s", err.Error())
+			}
 			tryReuse = <-monitorCh
 		case tryReuse = <-monitorCh:
 		}
@@ -172,15 +174,19 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			defer connStateBytes.Put(buf)
 
 			state := NewConnState(FIN_WAIT1, buf)
-			setCipherDeadline(ue.RemoteConn, ss.Timeout())
-			for stateFn := state.fn; stateFn != nil; {
-				stateFn = stateFn(ue.RemoteConn).fn
-			}
-			if state.err != nil {
-				log.Infof("[UDP_PROXY] state err:%v, state:%v", state.err, state.state)
+			if err := setCipherDeadline(ue.RemoteConn, ss.Timeout()); err != nil {
+				log.Errorf("[UDP_PROXY] set deadline for remote conn: %s", err.Error())
 				markCipherStreamUnusable(ue.RemoteConn)
 			} else {
-				log.Debugf("[UDP_PROXY] underlying connection is health, so reuse it")
+				for stateFn := state.fn; stateFn != nil; {
+					stateFn = stateFn(ue.RemoteConn).fn
+				}
+				if state.err != nil {
+					log.Infof("[UDP_PROXY] state err:%v, state:%v", state.err, state.state)
+					markCipherStreamUnusable(ue.RemoteConn)
+				} else {
+					log.Debugf("[UDP_PROXY] underlying connection is health, so reuse it")
+				}
 			}
 		} else {
 			markCipherStreamUnusable(ue.RemoteConn)

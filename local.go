@@ -16,7 +16,7 @@ import (
 
 var dataHeaderBytes = util.NewBytes(util.Http2HeaderLen)
 
-func (ss *Easyss) LocalSocks5() error {
+func (ss *Easyss) LocalSocks5() {
 	var addr string
 	if ss.BindAll() {
 		addr = ":" + strconv.Itoa(ss.LocalPort())
@@ -28,16 +28,13 @@ func (ss *Easyss) LocalSocks5() error {
 	server, err := socks5.NewClassicServer(addr, "127.0.0.1", "", "", 0, int(ss.Timeout()))
 	if err != nil {
 		log.Errorf("[SOCKS5] new socks5 server err: %+v", err)
-		return err
+		return
 	}
 	ss.SetSocksServer(server)
 
-	err = server.ListenAndServe(ss)
-	if err != nil {
+	if err := server.ListenAndServe(ss); err != nil {
 		log.Warnf("[SOCKS5] local socks5 server:%s", err.Error())
 	}
-
-	return err
 }
 
 func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Request) error {
@@ -78,7 +75,7 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 			}()
 		}
 
-		io.Copy(io.Discard, conn)
+		_, _ = io.Copy(io.Discard, conn)
 		log.Debugf("[SOCKS5] a tcp connection that udp %v associated closed, target addr:%v", caddr.String(), targetAddr)
 		return nil
 	}

@@ -7,7 +7,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func StartPprof() error {
+func StartPprof() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
@@ -18,7 +18,5 @@ func StartPprof() error {
 	log.Infof("starting pprof server at :6060")
 	if err := http.ListenAndServe(":6060", mux); err != nil {
 		log.Errorf("[PPROF] start pprof server:%s", err.Error())
-		return err
 	}
-	return nil
 }

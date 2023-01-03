@@ -24,15 +24,12 @@ func NewDNSForwardServer(dnsServer string) *dns.Server {
 	return srv
 }
 
-func (ss *Easyss) LocalDNSForward() error {
+func (ss *Easyss) LocalDNSForward() {
 	server := NewDNSForwardServer(ss.DirectDNSServer())
 	ss.SetForwardDNSServer(server)
 
 	log.Infof("[DNS_FORWARD] starting local dns forward server at :53")
-	err := server.ListenAndServe()
-	if err != nil {
+	if err := server.ListenAndServe(); err != nil {
 		log.Warnf("[DNS_FORWARD] local forward server:%s", err.Error())
 	}
-
-	return err
 }

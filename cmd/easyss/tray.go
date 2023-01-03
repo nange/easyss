@@ -99,6 +99,8 @@ func (st *SysTray) AddSelectServerMenu() {
 							log.Infof("[SYSTRAY] changes server to:%s success", addrs[_i])
 						}
 					}()
+				case <-st.closing:
+					return
 				}
 			}
 
@@ -210,6 +212,8 @@ func (st *SysTray) AddCatLogsMenu() *systray.MenuItem {
 				if err := st.catLog(); err != nil {
 					log.Errorf("[SYSTRAY] cat log err:%v", err)
 				}
+			case <-st.closing:
+				return
 			}
 		}
 	}()
@@ -225,6 +229,8 @@ func (st *SysTray) AddExitMenu() *systray.MenuItem {
 			select {
 			case <-quit.ClickedCh:
 				systray.Quit()
+			case <-st.closing:
+				return
 			}
 		}
 	}()
@@ -255,9 +261,13 @@ func (st *SysTray) CloseService() {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if st.browserMenu.Checked() {
-		st.ss.SetSysProxyOffHTTP()
+		if err := st.ss.SetSysProxyOffHTTP(); err != nil {
+			log.Errorf("[SYSTRAY] close service: set sysproxy off http: %s", err.Error())
+		}
 	}
-	st.ss.Close()
+	if err := st.ss.Close(); err != nil {
+		log.Errorf("[SYSTRAY] close service: close easyss: %s", err.Error())
+	}
 }
 
 func (st *SysTray) Exit() {

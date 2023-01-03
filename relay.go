@@ -26,10 +26,16 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64, needClos
 
 	go func() {
 		n, err := io.Copy(plaintxt, cipher)
+		if err := expireConn(plaintxt); err != nil {
+			log.Errorf("[REPAY] expire plaintxt conn: %s", err.Error())
+		}
 		ch2 <- res{N: n, Err: err}
 	}()
 	go func() {
 		n, err := io.Copy(cipher, plaintxt)
+		if err := expireConn(cipher); err != nil {
+			log.Errorf("[REPAY] expire cipher conn: %s", err.Error())
+		}
 		ch1 <- res{N: n, Err: err}
 	}()
 
@@ -37,7 +43,6 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64, needClos
 	for i := 0; i < 2; i++ {
 		select {
 		case res1 := <-ch1:
-			expireConn(cipher)
 			n1 = res1.N
 			err := res1.Err
 			if cipherstream.EncryptErr(err) || cipherstream.WriteCipherErr(err) {
@@ -58,7 +63,6 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64, needClos
 			}
 
 		case res2 := <-ch2:
-			expireConn(plaintxt)
 			n2 = res2.N
 			err := res2.Err
 			if cipherstream.DecryptErr(err) || cipherstream.ReadCipherErr(err) {
@@ -90,8 +94,10 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64, needClos
 		needClose = true
 		return
 	}
-
-	setCipherDeadline(cipher, ss.Timeout())
+	if err := setCipherDeadline(cipher, ss.Timeout()); err != nil {
+		needClose = true
+		return
+	}
 	if state == nil {
 		log.Infof("[REPAY] unexcepted state, some unexcepted error occor, maybe client connection is closed")
 		needClose = true
@@ -130,12 +136,13 @@ func cipherStreamUnusable(cipher net.Conn) bool {
 	return false
 }
 
-func expireConn(conn net.Conn) {
-	conn.SetDeadline(time.Unix(0, 0))
+func expireConn(conn net.Conn) error {
+	return conn.SetDeadline(time.Unix(0, 0))
 }
 
-func setCipherDeadline(cipher net.Conn, sec time.Duration) {
+func setCipherDeadline(cipher net.Conn, sec time.Duration) error {
 	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
-		cs.Conn.SetDeadline(time.Now().Add(sec))
+		return cs.Conn.SetDeadline(time.Now().Add(sec))
 	}
+	return nil
 }

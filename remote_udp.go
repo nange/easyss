@@ -79,7 +79,12 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) (needCl
 	wg.Wait()
 
 	if tryReuse {
-		setCipherDeadline(csStream, ss.Timeout())
+		if err := setCipherDeadline(csStream, ss.Timeout()); err != nil {
+			log.Errorf("[REMOTE_UDP] set deadline for cipher-stream: %s", err.Error())
+			markCipherStreamUnusable(csStream)
+			needClose = true
+			return needClose, err
+		}
 
 		buf := connStateBytes.Get(32)
 		defer connStateBytes.Put(buf)

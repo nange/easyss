@@ -17,7 +17,7 @@ func StartEasyss(ss *easyss.Easyss) {
 
 	go func() {
 		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Kill, os.Interrupt, syscall.SIGINT, syscall.SIGTERM,
+		signal.Notify(c, os.Interrupt, syscall.SIGINT, syscall.SIGTERM,
 			syscall.SIGQUIT)
 
 		select {

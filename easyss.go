@@ -214,8 +214,8 @@ func New(config *Config) (*Easyss, error) {
 
 	if msg != nil {
 		ss.serverIP = msg.Answer[0].(*dns.A).A.String()
-		ss.SetDNSCache(msg, true, true)
-		ss.SetDNSCache(msg, true, false)
+		_ = ss.SetDNSCache(msg, true, true)
+		_ = ss.SetDNSCache(msg, true, false)
 	}
 
 	switch runtime.GOOS {
@@ -489,12 +489,16 @@ func (ss *Easyss) DNSCache(name, qtype string, isDirect bool) *dns.Msg {
 	return msg
 }
 
-func (ss *Easyss) RenewDNSCache(name, qtype string, isDirect bool) {
+func (ss *Easyss) RenewDNSCache(name, qtype string, isDirect bool) bool {
 	if isDirect {
-		ss.directDNSCache.Touch([]byte(name+qtype), 8*60*60)
-		return
+		if err := ss.directDNSCache.Touch([]byte(name+qtype), 8*60*60); err != nil {
+			return false
+		}
 	}
-	ss.dnsCache.Touch([]byte(name+qtype), 8*60*60)
+	if err := ss.dnsCache.Touch([]byte(name+qtype), 8*60*60); err != nil {
+		return false
+	}
+	return true
 }
 
 func (ss *Easyss) SetDNSCache(msg *dns.Msg, noExpire, isDirect bool) error {
@@ -602,33 +606,35 @@ func (ss *Easyss) IPAtCNOrPrivate(ip string) bool {
 	return false
 }
 
-func (ss *Easyss) Close() {
+func (ss *Easyss) Close() error {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
+	var err error
 	if ss.enabledTun2socks {
-		ss.closeTun2socks()
+		err = ss.closeTun2socks()
 	}
 	if ss.tcpPool != nil {
 		ss.tcpPool.Close()
 		ss.tcpPool = nil
 	}
 	if ss.httpProxyServer != nil {
-		ss.httpProxyServer.Close()
+		err = ss.httpProxyServer.Close()
 		ss.httpProxyServer = nil
 	}
 	if ss.socksServer != nil {
-		ss.socksServer.Shutdown()
+		err = ss.socksServer.Shutdown()
 		ss.socksServer = nil
 	}
 	if ss.dnsForwardServer != nil {
-		ss.dnsForwardServer.Shutdown()
+		err = ss.dnsForwardServer.Shutdown()
 		ss.dnsForwardServer = nil
 	}
 	if ss.closing != nil {
 		close(ss.closing)
 		ss.closing = nil
 	}
+	return err
 }
 
 func (ss *Easyss) printStatistics() {
