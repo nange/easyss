@@ -2,7 +2,7 @@ PROJECT=easyss
 
 GO := go
 
-.PHONY: vet easyss easyss-with-notray easyss-server
+.PHONY: easyss easyss-with-notray easyss-server
 
 echo:
 	@echo "${PROJECT}"
@@ -23,6 +23,5 @@ easyss-server:
 	cd cmd/easyss-server; \
 	$(GO) build -o easyss-server
 
-vet:
-	$(GO) vet ./...; \
-	$(GO) vet -tags "with_notray " ./...
+test:
+	$(GO) test -v ./...

@@ -48,8 +48,8 @@ type Config struct {
 }
 
 func (c *Config) ClientValidate() error {
-	if len(c.ServerList) == 0 && (c.Server == "" || c.ServerPort == 0 || c.Password == "") {
-		return errors.New("server address, server port and password should not empty")
+	if len(c.ServerList) == 0 && (c.Server == "" || c.ServerPort == 0 || c.Password == "" || c.Method == "") {
+		return errors.New("server address, server port, password, method should not empty")
 	}
 	if len(c.ServerList) > 0 {
 		for _, s := range c.ServerList {
