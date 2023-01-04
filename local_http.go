@@ -115,14 +115,16 @@ func (h *httpProxy) doWithNormal(w http.ResponseWriter, r *http.Request) {
 	resp, err := client.Do(r)
 	if err != nil {
 		log.Warnf("[HTTP_PROXY] client do request err:%s", err.Error())
+		code := 500
+		body := ""
 		if resp != nil {
-			var body string
 			if b, er := io.ReadAll(resp.Body); er == nil {
 				body = string(b)
 			}
-			http.Error(w, body, resp.StatusCode)
+			code = resp.StatusCode
 			_ = resp.Body.Close()
 		}
+		http.Error(w, body, code)
 		return
 	}
 
