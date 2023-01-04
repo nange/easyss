@@ -25,3 +25,6 @@ easyss-server:
 
 test:
 	$(GO) test -v ./...
+
+lint:
+	golangci-lint run
