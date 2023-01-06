@@ -67,6 +67,8 @@ github.com/miekg/dns v1.1.50 h1:DQUfb9uc6smULcREF09Uc+/Gd46YWqJd5DbpPE9xkcA=
 github.com/miekg/dns v1.1.50/go.mod h1:e3IlAVfNqAllflbibAZEWOXOQ+Ynzk/dDozDxY7XnME=
 github.com/nange/easypool v1.3.1 h1:H08lgMheGnJJtHmj9DQqQJ0ALLYm9YgId88QQcP/8nI=
 github.com/nange/easypool v1.3.1/go.mod h1:thcZ8jRQmaMuhSsmUhbjUUvqQsZOZa6fZFxqnGTNEmw=
+github.com/nange/tun2socks/v2 v2.0.0-20230106120038-26f22afd7422 h1:pBqKUX2So8hz4lg4bhBr4NWP89xE61LFo+/ovJiOz3A=
+github.com/nange/tun2socks/v2 v2.0.0-20230106120038-26f22afd7422/go.mod h1:tSu39phncys4vn7apA/4HjjgbxHIwQGfYkXPPg2PiRg=
 github.com/oschwald/geoip2-golang v1.8.0 h1:KfjYB8ojCEn/QLqsDU0AzrJ3R5Qa9vFlx3z6SLNcKTs=
 github.com/oschwald/geoip2-golang v1.8.0/go.mod h1:R7bRvYjOeaoenAp9sKRS8GX5bJWcZ0laWO5+DauEktw=
 github.com/oschwald/maxminddb-golang v1.10.0 h1:Xp1u0ZhqkSuopaKmk1WwHtjF0H9Hd9181uj2MQ5Vndg=
@@ -103,8 +105,6 @@ github.com/txthinking/x v0.0.0-20210326105829-476fab902fbe h1:gMWxZxBFRAXqoGkwkY
 github.com/txthinking/x v0.0.0-20210326105829-476fab902fbe/go.mod h1:WgqbSEmUYSjEV3B1qmee/PpP2NYEz4bL9/+mF1ma+s4=
 github.com/wzshiming/sysproxy v0.2.2 h1:OOZ7jRier8qA5U5hnzHwJCLlZleWqdqiNKEhJY+0H1E=
 github.com/wzshiming/sysproxy v0.2.2/go.mod h1:Epx6hex0nK1YhLHDnIhrhusgCtBQFR2NQPhM8WlMDTc=
-github.com/xjasonlyu/tun2socks/v2 v2.4.2-0.20221217085757-39b1406ffaa8 h1:ZOyhecpW07bQv5y5jyzYZY6VNYGdJHzf3Gp+0KBioA4=
-github.com/xjasonlyu/tun2socks/v2 v2.4.2-0.20221217085757-39b1406ffaa8/go.mod h1:sk8bXwQqgpX9WYozohMkJ4sYXIRUUzX5CqftVBD++4g=
 github.com/yuin/goldmark v1.3.5/go.mod h1:mwnBkeHKe2W/ZEtQ+71ViKU8L12m81fl3OWwC1Zlc8k=
 go.uber.org/atomic v1.7.0/go.mod h1:fEN4uk6kAWBTFdckzkM89CLk9XfWZrxpCo0nPH17wJc=
 go.uber.org/atomic v1.10.0 h1:9qC72Qh0+3MqyJbAn8YU5xVq1frD8bn3JtD2oXtafVQ=
@@ -187,5 +187,5 @@ gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C
 gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
-gvisor.dev/gvisor v0.0.0-20221216231429-a78e892a26d2 h1:QN+Xh63jThYFN4CrcD4KXj+rUhevlb0LXEAlZ4m+qXQ=
-gvisor.dev/gvisor v0.0.0-20221216231429-a78e892a26d2/go.mod h1:Dn5idtptoW1dIos9U6A2rpebLs/MtTwFacjKb8jLdQA=
+gvisor.dev/gvisor v0.0.0-20221229220220-8d9dc83e3b96 h1:eKknhKVEQnqoRdBEg3VQMcvfMKs3m2FFjk+ro3THCdA=
+gvisor.dev/gvisor v0.0.0-20221229220220-8d9dc83e3b96/go.mod h1:Dn5idtptoW1dIos9U6A2rpebLs/MtTwFacjKb8jLdQA=

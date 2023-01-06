@@ -29,7 +29,14 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 		if err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
 			log.Warnf("[TCP_DIRECT] copy from local to remote err:%v", err)
 		}
-		tConn.Close()
+
+		if err := localConn.(*net.TCPConn).CloseRead(); err != nil {
+			log.Infof("[TCP_DIRECT] close read for local connection:%v", err)
+		}
+		if err := tConn.(*net.TCPConn).CloseWrite(); err != nil {
+			log.Infof("[TCP_DIRECT] close write for target connection:%v", err)
+		}
+
 	}()
 
 	go func() {
@@ -38,7 +45,13 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 		if err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
 			log.Warnf("[TCP_DIRECT] copy from remote to local err:%v", err)
 		}
-		localConn.Close()
+
+		if err := tConn.(*net.TCPConn).CloseRead(); err != nil {
+			log.Infof("[TCP_DIRECT] close read for target connection:%v", err)
+		}
+		if err := localConn.(*net.TCPConn).CloseWrite(); err != nil {
+			log.Infof("[TCP_DIRECT] close write for local connection:%v", err)
+		}
 	}()
 
 	wg.Wait()

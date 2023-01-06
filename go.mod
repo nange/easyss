@@ -21,6 +21,8 @@ require (
 	golang.org/x/crypto v0.4.0
 )
 
+replace github.com/xjasonlyu/tun2socks/v2 => github.com/nange/tun2socks/v2 v2.0.0-20230106120038-26f22afd7422
+
 require (
 	github.com/Dreamacro/go-shadowsocks2 v0.1.8 // indirect
 	github.com/ajg/form v1.5.1 // indirect
@@ -65,5 +67,5 @@ require (
 	golang.zx2c4.com/wireguard v0.0.0-20220920152132-bb719d3a6e2c // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	gvisor.dev/gvisor v0.0.0-20221216231429-a78e892a26d2 // indirect
+	gvisor.dev/gvisor v0.0.0-20221229220220-8d9dc83e3b96 // indirect
 )
