@@ -14,6 +14,7 @@ import (
 )
 
 var connStateBytes = util.NewBytes(32)
+var headerBytes = util.NewBytes(util.Http2HeaderLen)
 
 // relay copies between cipher stream and plaintext stream.
 // return the number of bytes copies
@@ -30,7 +31,7 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64) {
 
 	go func() {
 		n, err := io.Copy(plaintxt, cipher)
-		if ce := closeWrite(plaintxt); ce != nil {
+		if ce := CloseWrite(plaintxt); ce != nil {
 			log.Warnf("[REPAY] close write for plaintxt stream: %v", ce)
 		}
 
@@ -57,7 +58,7 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64) {
 		}
 
 		tryReuse := true
-		if err := closeWrite(cipher); err != nil {
+		if err := CloseWrite(cipher); err != nil {
 			tryReuse = false
 			log.Warnf("[REPAY] close write for cipher stream: %v", err)
 		}
@@ -76,25 +77,11 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64) {
 
 	reuse := false
 	if res1.TryReuse && res2.TryReuse {
-		reuse = func() bool {
-			if err := setCipherDeadline(cipher, ss.Timeout()); err != nil {
-				return false
-			}
-			if err := writeACK(cipher); err != nil {
-				return false
-			}
-			if !readACK(cipher) {
-				return false
-			}
-			if err := cipher.SetDeadline(time.Time{}); err != nil {
-				return false
-			}
-			return true
-		}()
+		reuse = TryReuse(cipher, ss.Timeout())
 	}
 	if !reuse {
 		markCipherStreamUnusable(cipher)
-		log.Debugf("[REPAY] underlying proxy connection is unhealthy, need close it")
+		log.Infof("[REPAY] underlying proxy connection is unhealthy, need close it")
 	} else {
 		log.Infof("[REPAY] underlying proxy connection is healthy, so reuse it")
 	}
@@ -102,7 +89,23 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64) {
 	return
 }
 
-func closeWrite(conn net.Conn) error {
+func TryReuse(cipher net.Conn, timeout time.Duration) bool {
+	if err := setCipherDeadline(cipher, timeout); err != nil {
+		return false
+	}
+	if err := writeACK(cipher); err != nil {
+		return false
+	}
+	if !readACK(cipher) {
+		return false
+	}
+	if err := cipher.SetDeadline(time.Time{}); err != nil {
+		return false
+	}
+	return true
+}
+
+func CloseWrite(conn net.Conn) error {
 	if csConn, ok := conn.(*cipherstream.CipherStream); ok {
 		finBuf := headerBytes.Get(util.Http2HeaderLen)
 		defer headerBytes.Put(finBuf)
@@ -113,14 +116,14 @@ func closeWrite(conn net.Conn) error {
 	}
 
 	err := conn.(*net.TCPConn).CloseWrite()
-	if errorCanIgnore(err) {
+	if ErrorCanIgnore(err) {
 		return nil
 	}
 
 	return err
 }
 
-func errorCanIgnore(err error) bool {
+func ErrorCanIgnore(err error) bool {
 	if ne, ok := err.(net.Error); ok && ne.Timeout() {
 		return true /* ignore I/O timeout */
 	}
@@ -176,6 +179,21 @@ func readACK(conn net.Conn) bool {
 	}
 
 	return cipherstream.ACKRSTStreamErr(err)
+}
+
+func readFIN(conn net.Conn) bool {
+	buf := connStateBytes.Get(32)
+	defer connStateBytes.Put(buf)
+
+	var err error
+	for {
+		_, err = conn.Read(buf)
+		if err != nil {
+			break
+		}
+	}
+
+	return cipherstream.FINRSTStreamErr(err)
 }
 
 // mark the cipher stream unusable, return mark result

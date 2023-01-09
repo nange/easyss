@@ -167,31 +167,25 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			tryReuse = <-monitorCh
 		case tryReuse = <-monitorCh:
 		}
+		if err := ue.RemoteConn.SetDeadline(time.Time{}); err != nil {
+			tryReuse = false
+		}
 
+		reuse := false
 		if tryReuse {
 			log.Debugf("[UDP_PROXY] request is finished, try to reuse underlying tcp connection")
-			buf := connStateBytes.Get(32)
-			defer connStateBytes.Put(buf)
-
-			state := NewConnState(FIN_WAIT1, buf)
-			if err := setCipherDeadline(ue.RemoteConn, ss.Timeout()); err != nil {
-				log.Errorf("[UDP_PROXY] set deadline for remote conn: %s", err.Error())
-				markCipherStreamUnusable(ue.RemoteConn)
-			} else {
-				for stateFn := state.fn; stateFn != nil; {
-					stateFn = stateFn(ue.RemoteConn).fn
-				}
-				if state.err != nil {
-					log.Infof("[UDP_PROXY] state err:%v, state:%v", state.err, state.state)
-					markCipherStreamUnusable(ue.RemoteConn)
-				} else {
-					log.Debugf("[UDP_PROXY] underlying connection is health, so reuse it")
-				}
-			}
-		} else {
-			markCipherStreamUnusable(ue.RemoteConn)
+			reuse = tryReuseForUDPClient(ue.RemoteConn, ss.Timeout())
 		}
-		ue.RemoteConn.Close()
+
+		if !reuse {
+			markCipherStreamUnusable(ue.RemoteConn)
+			log.Infof("[UDP_PROXY] underlying proxy connection is unhealthy, need close it")
+		} else {
+			log.Infof("[UDP_PROXY] underlying proxy connection is healthy, so reuse it")
+		}
+
+		ue.RemoteConn.(*cipherstream.CipherStream).Release()
+		stream.Close()
 	}()
 
 	go func(ue *UDPExchange, dst string) {
@@ -297,5 +291,28 @@ func isDNSResponse(msg *dns.Msg) bool {
 	if !msg.MsgHdr.Response || !isDNSRequest(msg) || len(msg.Answer) == 0 {
 		return false
 	}
+	return true
+}
+
+func tryReuseForUDPClient(cipher net.Conn, timeout time.Duration) bool {
+	if err := setCipherDeadline(cipher, timeout); err != nil {
+		return false
+	}
+	if err := CloseWrite(cipher); err != nil {
+		return false
+	}
+	if !readACK(cipher) {
+		return false
+	}
+	if !readFIN(cipher) {
+		return false
+	}
+	if err := writeACK(cipher); err != nil {
+		return false
+	}
+	if err := cipher.SetDeadline(time.Time{}); err != nil {
+		return false
+	}
+
 	return true
 }

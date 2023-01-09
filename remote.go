@@ -86,22 +86,15 @@ func (ss *Easyss) tcpServer() {
 
 				switch protoType {
 				case "tcp":
-					err := ss.remoteTCPHandle(conn, addrStr, method)
-					if err != nil {
+					if err := ss.remoteTCPHandle(conn, addrStr, method); err != nil {
 						log.Errorf("[REMOTE] tcp handle err:%v", err)
 						return
 					}
 				case "udp":
-					needClose, err := ss.remoteUDPHandle(conn, addrStr, method)
-					if err != nil {
+					if err := ss.remoteUDPHandle(conn, addrStr, method); err != nil {
 						log.Errorf("[REMOTE] udp handle err:%v", err)
 						return
 					}
-					if needClose {
-						log.Debugf("[REMOTE] maybe underlying connection has been closed, need close the proxy conn")
-						return
-					}
-					log.Debugf("[REMOTE] underlying connection is health, so reuse it")
 				default:
 					log.Errorf("[REMOTE] unsupported protoType:%s", protoType)
 					return

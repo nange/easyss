@@ -4,25 +4,26 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/nange/easyss/cipherstream"
 	log "github.com/sirupsen/logrus"
 )
 
-func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) (needClose bool, err error) {
+func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) error {
 	rAddr, err := net.ResolveUDPAddr("udp", addrStr)
 	if err != nil {
-		return false, fmt.Errorf("net.ResolveUDPAddr %s err:%v", addrStr, err)
+		return fmt.Errorf("net.ResolveUDPAddr %s err:%v", addrStr, err)
 	}
 
 	uConn, err := net.DialUDP("udp", nil, rAddr)
 	if err != nil {
-		return false, fmt.Errorf("net.DialUDP %v err:%v", addrStr, err)
+		return fmt.Errorf("net.DialUDP %v err:%v", addrStr, err)
 	}
 
 	csStream, err := cipherstream.New(conn, ss.Password(), method, "udp")
 	if err != nil {
-		return false, fmt.Errorf("new cipherstream err:%+v, password:%v, method:%v",
+		return fmt.Errorf("new cipherstream err:%+v, password:%v, method:%v",
 			err, ss.Password(), ss.Method())
 	}
 
@@ -45,6 +46,7 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) (needCl
 				} else {
 					log.Warnf("[REMOTE_UDP] read data from client connection err:%v", err)
 				}
+
 				uConn.Close()
 				return
 			}
@@ -78,29 +80,39 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) (needCl
 
 	wg.Wait()
 
+	var reuse bool
 	if tryReuse {
-		if err := setCipherDeadline(csStream, ss.Timeout()); err != nil {
-			log.Errorf("[REMOTE_UDP] set deadline for cipher-stream: %s", err.Error())
-			markCipherStreamUnusable(csStream)
-			needClose = true
-			return needClose, err
-		}
-
-		buf := connStateBytes.Get(32)
-		defer connStateBytes.Put(buf)
-
-		state := NewConnState(CLOSE_WAIT, buf)
-		for stateFn := state.fn; stateFn != nil; {
-			stateFn = stateFn(csStream).fn
-		}
-		if state.err != nil {
-			log.Infof("[REMOTE_UDP] state err:%v, state:%v", state.err, state.state)
-			markCipherStreamUnusable(csStream)
-			needClose = true
-		}
-	} else {
-		needClose = true
+		log.Debugf("[REMOTE_UDP] request is finished, try to reuse underlying tcp connection")
+		reuse = tryReuseForUDPServer(csStream, ss.Timeout())
 	}
 
-	return needClose, nil
+	if !reuse {
+		markCipherStreamUnusable(csStream)
+		log.Infof("[REMOTE_UDP] underlying proxy connection is unhealthy, need close it")
+	} else {
+		log.Infof("[REMOTE_UDP] underlying proxy connection is healthy, so reuse it")
+	}
+	csStream.(*cipherstream.CipherStream).Release()
+
+	return nil
+}
+
+func tryReuseForUDPServer(cipher net.Conn, timeout time.Duration) bool {
+	if err := setCipherDeadline(cipher, timeout); err != nil {
+		return false
+	}
+	if err := writeACK(cipher); err != nil {
+		return false
+	}
+	if err := CloseWrite(cipher); err != nil {
+		return false
+	}
+	if !readACK(cipher) {
+		return false
+	}
+	if err := cipher.SetDeadline(time.Time{}); err != nil {
+		return false
+	}
+
+	return true
 }
