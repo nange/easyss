@@ -234,6 +234,7 @@ func (cs *CipherStream) Release() {
 	rwBufBytes.Put(cs.reader.rbuf)
 	rwBufBytes.Put(cs.writer.wbuf)
 
+	cs.Conn = nil
 	cs.reader.rbuf = nil
 	cs.writer.wbuf = nil
 }

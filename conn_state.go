@@ -77,10 +77,10 @@ func (cs *ConnState) FINWait1(conn io.ReadWriteCloser) *ConnState {
 
 	cs.state = FIN_WAIT1
 
-	header := headerBytes.Get(util.Http2HeaderLen)
-	defer headerBytes.Put(header)
+	finBuf := headerBytes.Get(util.Http2HeaderLen)
+	defer headerBytes.Put(finBuf)
 
-	fin := util.EncodeFINRstStreamHeader(header)
+	fin := util.EncodeFINRstStream(finBuf)
 	_, err := conn.Write(fin)
 	if err != nil {
 		log.Debugf("[CONN_STATE] write FIN err:%v", err)
@@ -129,10 +129,10 @@ func (cs *ConnState) FINWait2(conn io.ReadWriteCloser) *ConnState {
 		return cs
 	}
 
-	header := headerBytes.Get(util.Http2HeaderLen)
-	defer headerBytes.Put(header)
+	ackBuf := headerBytes.Get(util.Http2HeaderLen)
+	defer headerBytes.Put(ackBuf)
 
-	ack := util.EncodeACKRstStreamHeader(header)
+	ack := util.EncodeACKRstStream(ackBuf)
 	_, err = conn.Write(ack)
 	if err != nil {
 		log.Debugf("[CONN_STATE] write ACK err:%+v", err)
@@ -151,10 +151,10 @@ func (cs *ConnState) LastACK(conn io.ReadWriteCloser) *ConnState {
 
 	cs.state = LAST_ACK
 
-	header := headerBytes.Get(util.Http2HeaderLen)
-	defer headerBytes.Put(header)
+	finBuf := headerBytes.Get(util.Http2HeaderLen)
+	defer headerBytes.Put(finBuf)
 
-	fin := util.EncodeFINRstStreamHeader(header)
+	fin := util.EncodeFINRstStream(finBuf)
 	_, err := conn.Write(fin)
 	if err != nil {
 		log.Debugf("[CONN_STATE] write FIN err:%+v", err)
@@ -173,10 +173,10 @@ func (cs *ConnState) Closing(conn io.ReadWriteCloser) *ConnState {
 
 	cs.state = CLOSING
 
-	header := headerBytes.Get(util.Http2HeaderLen)
-	defer headerBytes.Put(header)
+	ackBuf := headerBytes.Get(util.Http2HeaderLen)
+	defer headerBytes.Put(ackBuf)
 
-	ack := util.EncodeACKRstStreamHeader(header)
+	ack := util.EncodeACKRstStream(ackBuf)
 	_, err := conn.Write(ack)
 	if err != nil {
 		log.Debugf("[CONN_STATE] write ACK err:%+v", err)
@@ -195,10 +195,10 @@ func (cs *ConnState) CloseWait(conn io.ReadWriteCloser) *ConnState {
 
 	cs.state = CLOSE_WAIT
 
-	header := headerBytes.Get(util.Http2HeaderLen)
-	defer headerBytes.Put(header)
+	ackBuf := headerBytes.Get(util.Http2HeaderLen)
+	defer headerBytes.Put(ackBuf)
 
-	ack := util.EncodeACKRstStreamHeader(header)
+	ack := util.EncodeACKRstStream(ackBuf)
 	_, err := conn.Write(ack)
 	if err != nil {
 		log.Debugf("conn.Write ack err:%+v", err)

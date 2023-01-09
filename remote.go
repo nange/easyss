@@ -86,16 +86,11 @@ func (ss *Easyss) tcpServer() {
 
 				switch protoType {
 				case "tcp":
-					needClose, err := ss.remoteTCPHandle(conn, addrStr, method)
+					err := ss.remoteTCPHandle(conn, addrStr, method)
 					if err != nil {
 						log.Errorf("[REMOTE] tcp handle err:%v", err)
 						return
 					}
-					if needClose {
-						log.Debugf("[REMOTE] maybe underlying connection has been closed, need close the proxy conn")
-						return
-					}
-					log.Debugf("[REMOTE] underlying connection is health, so reuse it")
 				case "udp":
 					needClose, err := ss.remoteUDPHandle(conn, addrStr, method)
 					if err != nil {
@@ -116,29 +111,29 @@ func (ss *Easyss) tcpServer() {
 	}
 }
 
-func (ss *Easyss) remoteTCPHandle(conn net.Conn, addrStr, method string) (needClose bool, err error) {
+func (ss *Easyss) remoteTCPHandle(conn net.Conn, addrStr, method string) error {
 	tConn, err := net.DialTimeout("tcp", addrStr, ss.Timeout())
 	if err != nil {
-		return false, fmt.Errorf("net.Dial %v err:%v", addrStr, err)
+		return fmt.Errorf("net.Dial %v err:%v", addrStr, err)
 	}
 
 	csStream, err := cipherstream.New(conn, ss.Password(), method, "tcp")
 	if err != nil {
-		return false, fmt.Errorf("new cipherstream err:%+v, password:%v, method:%v",
+		return fmt.Errorf("new cipherstream err:%+v, password:%v, method:%v",
 			err, ss.Password(), ss.Method())
 	}
 
-	n1, n2, needClose := ss.relay(csStream, tConn)
+	n1, n2 := ss.relay(csStream, tConn)
 	csStream.(*cipherstream.CipherStream).Release()
 
-	log.Debugf("[REMOTE] send %v bytes to %v, and recive %v bytes, needclose:%v", n2, addrStr, n1, needClose)
+	log.Debugf("[REMOTE] send %v bytes to %v, and recive %v bytes", n2, addrStr, n1)
 
 	ss.stat.BytesSend.Add(n2)
 	ss.stat.BytesReceive.Add(n1)
 
-	tConn.Close()
+	_ = tConn.Close()
 
-	return needClose, nil
+	return nil
 }
 
 func (ss *Easyss) handShakeWithClient(stream io.ReadWriter) (addr []byte, method, protoType string, err error) {

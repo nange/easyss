@@ -276,6 +276,10 @@ func responseDNSMsg(conn *net.UDPConn, localAddr *net.UDPAddr, msg *dns.Msg, rem
 	return err
 }
 
+func expireConn(conn net.Conn) error {
+	return conn.SetDeadline(time.Unix(0, 0))
+}
+
 func isDNSRequest(msg *dns.Msg) bool {
 	if msg == nil {
 		return false

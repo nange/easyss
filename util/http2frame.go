@@ -44,7 +44,7 @@ func EncodeHTTP2DataFrameHeader(protoType string, datalen int, dst []byte) (head
 	return dst
 }
 
-func EncodeFINRstStreamHeader(dst []byte) (header []byte) {
+func EncodeFINRstStream(dst []byte) (header []byte) {
 	if cap(dst) < Http2HeaderLen {
 		dst = make([]byte, Http2HeaderLen)
 	} else {
@@ -62,7 +62,7 @@ func EncodeFINRstStreamHeader(dst []byte) (header []byte) {
 	return dst
 }
 
-func EncodeACKRstStreamHeader(dst []byte) (header []byte) {
+func EncodeACKRstStream(dst []byte) (header []byte) {
 	if cap(dst) < Http2HeaderLen {
 		dst = make([]byte, Http2HeaderLen)
 	} else {

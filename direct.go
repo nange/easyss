@@ -25,12 +25,12 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 	go func() {
 		defer wg.Done()
 		_, err := io.Copy(tConn, localConn)
-		if err != nil {
+		if err != nil && !errorCanIgnore(err) {
 			log.Warnf("[TCP_DIRECT] copy from local to remote err:%v", err)
 		}
 
-		if err := tConn.(*net.TCPConn).CloseWrite(); err != nil {
-			log.Infof("[TCP_DIRECT] close write for target connection:%v", err)
+		if err := tConn.(*net.TCPConn).CloseWrite(); err != nil && !errorCanIgnore(err) {
+			log.Warnf("[TCP_DIRECT] close write for target connection:%v", err)
 		}
 
 	}()
@@ -38,12 +38,12 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 	go func() {
 		defer wg.Done()
 		_, err := io.Copy(localConn, tConn)
-		if err != nil {
+		if err != nil && !errorCanIgnore(err) {
 			log.Warnf("[TCP_DIRECT] copy from remote to local err:%v", err)
 		}
 
-		if err := localConn.(*net.TCPConn).CloseWrite(); err != nil {
-			log.Infof("[TCP_DIRECT] close write for local connection:%v", err)
+		if err := localConn.(*net.TCPConn).CloseWrite(); err != nil && !errorCanIgnore(err) {
+			log.Warnf("[TCP_DIRECT] close write for local connection:%v", err)
 		}
 	}()
 

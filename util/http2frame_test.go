@@ -19,26 +19,26 @@ func TestEncodeHTTP2DataFrameHeader(t *testing.T) {
 }
 
 func TestEncodeFINRstStreamHeader(t *testing.T) {
-	header := EncodeFINRstStreamHeader(nil)
+	header := EncodeFINRstStream(nil)
 	assert.Len(t, header, 9)
 	assert.Equal(t, uint8(7), header[3])
 	assert.Equal(t, uint8(0), header[4])
 
 	dst := make([]byte, 10)
-	header = EncodeFINRstStreamHeader(dst)
+	header = EncodeFINRstStream(dst)
 	assert.Len(t, header, 9)
 	assert.Equal(t, uint8(7), header[3])
 	assert.Equal(t, uint8(0), header[4])
 }
 
 func TestEncodeACKRstStreamHeader(t *testing.T) {
-	header := EncodeACKRstStreamHeader(nil)
+	header := EncodeACKRstStream(nil)
 	assert.Len(t, header, 9)
 	assert.Equal(t, uint8(7), header[3])
 	assert.Equal(t, uint8(1), header[4])
 
 	dst := make([]byte, 10)
-	header = EncodeACKRstStreamHeader(dst)
+	header = EncodeACKRstStream(dst)
 	assert.Len(t, header, 9)
 	assert.Equal(t, uint8(7), header[3])
 	assert.Equal(t, uint8(1), header[4])
