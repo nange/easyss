@@ -175,10 +175,7 @@ func readACK(conn net.Conn) bool {
 		}
 	}
 
-	if cipherstream.ACKRSTStreamErr(err) {
-		return true
-	}
-	return false
+	return cipherstream.ACKRSTStreamErr(err)
 }
 
 // mark the cipher stream unusable, return mark result
