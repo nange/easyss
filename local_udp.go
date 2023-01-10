@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
@@ -29,6 +30,7 @@ var udpDataBytes = util.NewBytes(MaxUDPDataSize)
 type UDPExchange struct {
 	ClientAddr *net.UDPAddr
 	RemoteConn net.Conn
+	mu         *sync.Mutex
 }
 
 func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) error {
@@ -80,20 +82,23 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		return errors.New("dst addr is invalid")
 	}
 
-	var ch chan byte
+	var ch chan struct{}
 	var hasAssoc bool
 
 	portStr := strconv.FormatInt(int64(addr.Port), 10)
 	asCh, ok := s.AssociatedUDP.Get(portStr)
 	if ok {
 		hasAssoc = true
-		ch = asCh.(chan byte)
+		ch = asCh.(chan struct{})
 		log.Debugf("[UDP_PROXY] found the associate with tcp, src:%s, dst:%s", addr.String(), d.Address())
 	} else {
+		ch = make(chan struct{}, 2)
 		log.Debugf("[UDP_PROXY] the addr:%v doesn't associate with tcp, dst addr:%v", addr.String(), d.Address())
 	}
 
 	send := func(ue *UDPExchange, data []byte) error {
+		ue.mu.Lock()
+		defer ue.mu.Unlock()
 		select {
 		case <-ch:
 			return fmt.Errorf("the tcp that udp address %s associated closed", ue.ClientAddr.String())
@@ -147,6 +152,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	ue = &UDPExchange{
 		ClientAddr: addr,
 		RemoteConn: csStream,
+		mu:         &sync.Mutex{},
 	}
 	if err := send(ue, d.Data); err != nil {
 		MarkCipherStreamUnusable(ue.RemoteConn)
@@ -189,7 +195,14 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	}()
 
 	go func(ue *UDPExchange, dst string) {
+		var tryReuse = true
+
 		defer func() {
+			ue.mu.Lock()
+			defer ue.mu.Unlock()
+
+			monitorCh <- tryReuse
+			ch <- struct{}{}
 			s.UDPExchanges.Delete(src + dst)
 		}()
 
@@ -199,7 +212,6 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			select {
 			case <-ch:
 				log.Infof("[UDP_PROXY] the tcp that udp address %s associated closed", ue.ClientAddr.String())
-				monitorCh <- true
 				return
 			default:
 			}
@@ -207,16 +219,14 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			if !hasAssoc {
 				if err := ue.RemoteConn.SetDeadline(time.Now().Add(DefaultUDPTimeout)); err != nil {
 					log.Errorf("[UDP_PROXY] set the deadline for remote conn err:%v", err)
-					monitorCh <- false
+					tryReuse = false
 					return
 				}
 			}
 			n, err := ue.RemoteConn.Read(b[:])
 			if err != nil {
-				if err == cipherstream.ErrTimeout {
-					monitorCh <- true
-				} else {
-					monitorCh <- false
+				if err != cipherstream.ErrTimeout {
+					tryReuse = false
 				}
 				return
 			}
