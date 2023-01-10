@@ -30,6 +30,9 @@ import (
 
 const version = "v1.6.0"
 
+// DefaultDNSCacheSize set default dns cache size to 2MB
+const DefaultDNSCacheSize = 2 * 1024 * 1024
+
 var (
 	//go:embed geodata/geoip_cn_private.mmdb
 	geoIPCNPrivate []byte
@@ -174,8 +177,8 @@ func New(config *Config) (*Easyss, error) {
 	ss := &Easyss{
 		config:         config,
 		stat:           &Statistics{},
-		dnsCache:       freecache.NewCache(1024 * 1024),
-		directDNSCache: freecache.NewCache(1024 * 1024),
+		dnsCache:       freecache.NewCache(DefaultDNSCacheSize),
+		directDNSCache: freecache.NewCache(DefaultDNSCacheSize),
 		closing:        make(chan struct{}, 1),
 		mu:             &sync.RWMutex{},
 	}

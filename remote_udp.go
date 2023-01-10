@@ -83,11 +83,11 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) error {
 	var reuse bool
 	if tryReuse {
 		log.Debugf("[REMOTE_UDP] request is finished, try to reuse underlying tcp connection")
-		reuse = tryReuseForUDPServer(csStream, ss.Timeout())
+		reuse = tryReuseInUDP(csStream, ss.Timeout())
 	}
 
 	if !reuse {
-		markCipherStreamUnusable(csStream)
+		MarkCipherStreamUnusable(csStream)
 		log.Infof("[REMOTE_UDP] underlying proxy connection is unhealthy, need close it")
 	} else {
 		log.Infof("[REMOTE_UDP] underlying proxy connection is healthy, so reuse it")
@@ -97,17 +97,17 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) error {
 	return nil
 }
 
-func tryReuseForUDPServer(cipher net.Conn, timeout time.Duration) bool {
-	if err := setCipherDeadline(cipher, timeout); err != nil {
+func tryReuseInUDP(cipher net.Conn, timeout time.Duration) bool {
+	if err := SetCipherDeadline(cipher, timeout); err != nil {
 		return false
 	}
-	if err := writeACK(cipher); err != nil {
+	if err := WriteACKToCipher(cipher); err != nil {
 		return false
 	}
 	if err := CloseWrite(cipher); err != nil {
 		return false
 	}
-	if !readACK(cipher) {
+	if !ReadACKFromCipher(cipher) {
 		return false
 	}
 	if err := cipher.SetDeadline(time.Time{}); err != nil {
