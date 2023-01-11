@@ -22,7 +22,7 @@ const (
 	DefaultDNSServer = "8.8.8.8:53"
 )
 
-const DefaultUDPTimeout = 10 * time.Second
+const DefaultDNSTimeout = 5 * time.Second
 
 var udpDataBytes = util.NewBytes(MaxUDPDataSize)
 
@@ -40,7 +40,8 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 
 	msg := &dns.Msg{}
 	err := msg.Unpack(d.Data)
-	if err == nil && isDNSRequest(msg) {
+	isDNSReq := isDNSRequest(msg)
+	if err == nil && isDNSReq {
 		question := msg.Question[0]
 		isDirect := ss.HostShouldDirect(strings.TrimSuffix(question.Name, "."))
 
@@ -73,7 +74,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 
 	dstHost, _, _ := net.SplitHostPort(rewrittenDst)
 	if ss.HostShouldDirect(dstHost) {
-		return ss.directUDPRelay(s, addr, d, isDNSRequest(msg))
+		return ss.directUDPRelay(s, addr, d, isDNSReq)
 	}
 
 	if err := ss.validateAddr(rewrittenDst); err != nil {
@@ -216,7 +217,13 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			}
 
 			if !hasAssoc {
-				if err := ue.RemoteConn.SetDeadline(time.Now().Add(DefaultUDPTimeout)); err != nil {
+				var err error
+				if isDNSReq {
+					err = ue.RemoteConn.SetDeadline(time.Now().Add(DefaultDNSTimeout))
+				} else {
+					err = ue.RemoteConn.SetDeadline(time.Now().Add(ss.Timeout()))
+				}
+				if err != nil {
 					log.Errorf("[UDP_PROXY] set the deadline for remote conn err:%v", err)
 					tryReuse = false
 					return

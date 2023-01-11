@@ -103,7 +103,13 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 			default:
 			}
 			if !hasAssoc {
-				if err := ue.RemoteConn.SetDeadline(time.Now().Add(DefaultUDPTimeout)); err != nil {
+				var err error
+				if isDNSReq {
+					err = ue.RemoteConn.SetDeadline(time.Now().Add(DefaultDNSTimeout))
+				} else {
+					err = ue.RemoteConn.SetDeadline(time.Now().Add(ss.Timeout()))
+				}
+				if err != nil {
 					log.Errorf("%s set the deadline for remote conn err:%v", logPrefix, err)
 					return
 				}
