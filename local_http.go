@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nange/easyss/util/bytespool"
 	log "github.com/sirupsen/logrus"
 	"github.com/wzshiming/sysproxy"
 )
@@ -131,7 +132,9 @@ func (h *httpProxy) doWithNormal(w http.ResponseWriter, r *http.Request) {
 	copyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 
-	if _, err = io.Copy(w, resp.Body); err != nil {
+	buf := bytespool.Get(RelayBufferSize)
+	defer bytespool.MustPut(buf)
+	if _, err = io.CopyBuffer(w, resp.Body, buf); err != nil {
 		log.Warnf("[HTTP_PROXY] copy bytes back to client err:%s", err.Error())
 	}
 	if err := resp.Body.Close(); err != nil {
