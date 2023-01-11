@@ -11,7 +11,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/cipherstream"
-	"github.com/nange/easyss/util"
+	"github.com/nange/easyss/util/bytespool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
@@ -23,8 +23,6 @@ const (
 )
 
 const DefaultDNSTimeout = 5 * time.Second
-
-var udpDataBytes = util.NewBytes(MaxUDPDataSize)
 
 // UDPExchange used to store client address and remote connection
 type UDPExchange struct {
@@ -206,8 +204,8 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			s.UDPExchanges.Delete(exchKey)
 		}()
 
-		var b = udpDataBytes.Get(MaxUDPDataSize)
-		defer udpDataBytes.Put(b)
+		var b = bytespool.Get(MaxUDPDataSize)
+		defer bytespool.MustPut(b)
 		for {
 			select {
 			case <-ch:
@@ -344,8 +342,8 @@ func tryReuseInUDPClient(cipher net.Conn, timeout time.Duration) bool {
 }
 
 func readFINFromCipher(conn net.Conn) bool {
-	buf := connStateBytes.Get(32)
-	defer connStateBytes.Put(buf)
+	buf := bytespool.Get(RelayBufferSize)
+	defer bytespool.MustPut(buf)
 
 	var err error
 	for {

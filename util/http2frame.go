@@ -3,11 +3,11 @@ package util
 import (
 	"encoding/binary"
 	"math/rand"
+
+	"github.com/nange/easyss/util/bytespool"
 )
 
 const Http2HeaderLen = 9
-
-var lenBytes = NewBytes(4)
 
 func EncodeHTTP2DataFrameHeader(protoType string, datalen int, dst []byte) (header []byte) {
 	if cap(dst) < Http2HeaderLen {
@@ -16,8 +16,8 @@ func EncodeHTTP2DataFrameHeader(protoType string, datalen int, dst []byte) (head
 		dst = dst[:Http2HeaderLen]
 	}
 
-	length := lenBytes.Get(4)
-	defer lenBytes.Put(length)
+	length := bytespool.Get(4)
+	defer bytespool.MustPut(length)
 
 	binary.BigEndian.PutUint32(length, uint32(datalen))
 	// set length field

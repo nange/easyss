@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nange/easyss/util/bytespool"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
 	"github.com/xjasonlyu/tun2socks/v2/component/dialer"
@@ -88,9 +89,9 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 	s.UDPExchanges.Set(src+dst+DirectSuffix, ue, -1)
 
 	go func() {
-		var b = udpDataBytes.Get(MaxUDPDataSize)
+		var buf = bytespool.Get(MaxUDPDataSize)
 		defer func() {
-			udpDataBytes.Put(b)
+			bytespool.MustPut(buf)
 			s.UDPExchanges.Delete(src + dst + DirectSuffix)
 			ue.RemoteConn.Close()
 		}()
@@ -115,21 +116,21 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 				}
 			}
 
-			n, _, err := ue.RemoteConn.ReadFrom(b)
+			n, _, err := ue.RemoteConn.ReadFrom(buf)
 			if err != nil {
 				return
 			}
-			log.Debugf("%s got data from remote. client: %v, data-len: %v", logPrefix, ue.ClientAddr.String(), len(b[0:n]))
+			log.Debugf("%s got data from remote. client: %v, data-len: %v", logPrefix, ue.ClientAddr.String(), len(buf[0:n]))
 
 			// if is dns response, set result to dns cache
-			ss.SetDNSCacheIfNeeded(b[0:n], true)
+			ss.SetDNSCacheIfNeeded(buf[0:n], true)
 
 			a, addr, port, err := socks5.ParseAddress(dst)
 			if err != nil {
 				log.Errorf("%s parse dst address err:%v", logPrefix, err)
 				return
 			}
-			d1 := socks5.NewDatagram(a, addr, port, b[0:n])
+			d1 := socks5.NewDatagram(a, addr, port, buf[0:n])
 			if _, err := s.UDPConn.WriteToUDP(d1.Bytes(), laddr); err != nil {
 				return
 			}

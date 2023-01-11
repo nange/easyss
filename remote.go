@@ -10,11 +10,10 @@ import (
 	"github.com/caddyserver/certmagic"
 	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/util"
+	"github.com/nange/easyss/util/bytespool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
-
-var remoteBytes = util.NewBytes(512)
 
 func (ss *Easyss) Remote() {
 	ss.tcpServer()
@@ -135,8 +134,8 @@ func (ss *Easyss) handShakeWithClient(stream io.ReadWriter) (addr []byte, method
 		return
 	}
 
-	headerbuf := remoteBytes.Get(9 + gcm.NonceSize() + gcm.Overhead())
-	defer remoteBytes.Put(headerbuf)
+	headerbuf := bytespool.Get(9 + gcm.NonceSize() + gcm.Overhead())
+	defer bytespool.MustPut(headerbuf)
 
 	if _, err = io.ReadFull(stream, headerbuf); err != nil {
 		err = errors.WithStack(err)
@@ -160,8 +159,8 @@ func (ss *Easyss) handShakeWithClient(stream io.ReadWriter) (addr []byte, method
 		return
 	}
 
-	payloadbuf := remoteBytes.Get(payloadlen + gcm.NonceSize() + gcm.Overhead())
-	defer remoteBytes.Put(payloadbuf)
+	payloadbuf := bytespool.Get(payloadlen + gcm.NonceSize() + gcm.Overhead())
+	defer bytespool.MustPut(payloadbuf)
 
 	if _, err = io.ReadFull(stream, payloadbuf); err != nil {
 		err = errors.WithStack(err)
@@ -182,8 +181,8 @@ func (ss *Easyss) handShakeWithClient(stream io.ReadWriter) (addr []byte, method
 	method = DecodeCipherMethod(payloadplain[length-1])
 
 	if headerplain[4] == 0x8 { // has padding field
-		paddingbuf := remoteBytes.Get(cipherstream.PaddingSize + gcm.NonceSize() + gcm.Overhead())
-		defer remoteBytes.Put(paddingbuf)
+		paddingbuf := bytespool.Get(cipherstream.PaddingSize + gcm.NonceSize() + gcm.Overhead())
+		defer bytespool.MustPut(paddingbuf)
 
 		if _, err = io.ReadFull(stream, paddingbuf); err != nil {
 			err = errors.WithStack(err)

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nange/easyss/cipherstream"
+	"github.com/nange/easyss/util/bytespool"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -35,8 +36,8 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) error {
 	go func() {
 		defer wg.Done()
 
-		var b = udpDataBytes.Get(MaxUDPDataSize)
-		defer udpDataBytes.Put(b)
+		var b = bytespool.Get(MaxUDPDataSize)
+		defer bytespool.MustPut(b)
 		for {
 			n, err := csStream.Read(b[:])
 			if err != nil {
@@ -62,8 +63,8 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) error {
 	go func() {
 		defer wg.Done()
 
-		var b = udpDataBytes.Get(MaxUDPDataSize)
-		defer udpDataBytes.Put(b)
+		var b = bytespool.Get(MaxUDPDataSize)
+		defer bytespool.MustPut(b)
 		for {
 			n, err := uConn.Read(b[:])
 			if err != nil {

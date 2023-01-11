@@ -10,11 +10,13 @@ import (
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/util"
+	"github.com/nange/easyss/util/bytespool"
 	log "github.com/sirupsen/logrus"
 )
 
-var connStateBytes = util.NewBytes(32)
-var headerBytes = util.NewBytes(util.Http2HeaderLen)
+// RelayBufferSize the maximum packet size of easyss is about 16 KB, so define
+// a buffer of 20 KB which is a little large than 16KB to relay
+const RelayBufferSize = 20 * 1024
 
 // relay copies between cipher stream and plaintext stream.
 // return the number of bytes copies
@@ -107,8 +109,8 @@ func tryReuse(cipher net.Conn, timeout time.Duration) bool {
 
 func CloseWrite(conn net.Conn) error {
 	if csConn, ok := conn.(*cipherstream.CipherStream); ok {
-		finBuf := headerBytes.Get(util.Http2HeaderLen)
-		defer headerBytes.Put(finBuf)
+		finBuf := bytespool.Get(util.Http2HeaderLen)
+		defer bytespool.MustPut(finBuf)
 
 		fin := util.EncodeFINRstStream(finBuf)
 		_, err := csConn.Write(fin)
@@ -144,8 +146,8 @@ func ErrorCanIgnore(err error) bool {
 }
 
 func readAllIgnore(conn net.Conn) error {
-	buf := connStateBytes.Get(32)
-	defer connStateBytes.Put(buf)
+	buf := bytespool.Get(RelayBufferSize)
+	defer bytespool.MustPut(buf)
 
 	var err error
 	for {
@@ -158,8 +160,8 @@ func readAllIgnore(conn net.Conn) error {
 }
 
 func WriteACKToCipher(conn net.Conn) error {
-	ackBuf := headerBytes.Get(util.Http2HeaderLen)
-	defer headerBytes.Put(ackBuf)
+	ackBuf := bytespool.Get(util.Http2HeaderLen)
+	defer bytespool.MustPut(ackBuf)
 
 	ack := util.EncodeACKRstStream(ackBuf)
 	_, err := conn.Write(ack)
@@ -167,8 +169,8 @@ func WriteACKToCipher(conn net.Conn) error {
 }
 
 func ReadACKFromCipher(conn net.Conn) bool {
-	buf := connStateBytes.Get(32)
-	defer connStateBytes.Put(buf)
+	buf := bytespool.Get(RelayBufferSize)
+	defer bytespool.MustPut(buf)
 
 	var err error
 	for {

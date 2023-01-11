@@ -7,6 +7,7 @@ import (
 	"net"
 
 	"github.com/nange/easyss/util"
+	"github.com/nange/easyss/util/bytespool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -36,8 +37,6 @@ type writer struct {
 	wbuf []byte
 }
 
-var rwBufBytes = util.NewBytes(MaxPayloadSize + 64)
-
 func New(stream net.Conn, password, method, protoType string) (net.Conn, error) {
 	cs := &CipherStream{Conn: stream, protoType: protoType}
 
@@ -58,8 +57,8 @@ func New(stream net.Conn, password, method, protoType string) (net.Conn, error) 
 		return nil, errors.New("cipher method unsupported, method:" + method)
 	}
 
-	cs.reader.rbuf = rwBufBytes.Get(MaxPayloadSize + cs.NonceSize() + cs.Overhead())
-	cs.writer.wbuf = rwBufBytes.Get(MaxPayloadSize + cs.NonceSize() + cs.Overhead())
+	cs.reader.rbuf = bytespool.Get(MaxPayloadSize + cs.NonceSize() + cs.Overhead())
+	cs.writer.wbuf = bytespool.Get(MaxPayloadSize + cs.NonceSize() + cs.Overhead())
 
 	return cs, nil
 }
@@ -68,10 +67,6 @@ func (cs *CipherStream) Write(b []byte) (int, error) {
 	n, err := cs.ReadFrom(bytes.NewBuffer(b))
 	return int(n), err
 }
-
-var dataHeaderBytes = util.NewBytes(util.Http2HeaderLen)
-
-var paddingBytes = util.NewBytes(PaddingSize)
 
 func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 	for {
@@ -82,14 +77,14 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 			n += int64(nr)
 
 			var padding bool
-			headerBuf := dataHeaderBytes.Get(util.Http2HeaderLen)
+			headerBuf := bytespool.Get(util.Http2HeaderLen)
 			headerBuf = util.EncodeHTTP2DataFrameHeader(cs.protoType, nr, headerBuf)
 			if headerBuf[4] == 0x8 {
 				padding = true
 			}
 
 			headercipher, er := cs.Encrypt(headerBuf)
-			dataHeaderBytes.Put(headerBuf)
+			bytespool.MustPut(headerBuf)
 			if er != nil {
 				log.Errorf("[CIPHERSTREAM] encrypt header buf err:%+v", err)
 				return 0, ErrEncrypt
@@ -103,10 +98,10 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 
 			dataframe := append(headercipher, payloadcipher...)
 			if padding {
-				padBytes := paddingBytes.Get(PaddingSize)
+				padBytes := bytespool.Get(PaddingSize)
 				_, _ = rand.Read(padBytes)
 				padcipher, err := cs.Encrypt(padBytes)
-				paddingBytes.Put(padBytes)
+				bytespool.MustPut(padBytes)
 				if err != nil {
 					log.Errorf("[CIPHERSTREAM] encrypt padding buf err:%+v", err)
 					return 0, ErrEncrypt
@@ -231,8 +226,8 @@ func (cs *CipherStream) read() ([]byte, error) {
 }
 
 func (cs *CipherStream) Release() {
-	rwBufBytes.Put(cs.reader.rbuf)
-	rwBufBytes.Put(cs.writer.wbuf)
+	bytespool.MustPut(cs.reader.rbuf)
+	bytespool.MustPut(cs.writer.wbuf)
 
 	cs.Conn = nil
 	cs.reader.rbuf = nil

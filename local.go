@@ -9,12 +9,11 @@ import (
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/util"
+	"github.com/nange/easyss/util/bytespool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
 )
-
-var dataHeaderBytes = util.NewBytes(util.Http2HeaderLen)
 
 func (ss *Easyss) LocalSocks5() {
 	var addr string
@@ -82,8 +81,6 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 
 	return socks5.ErrUnsupportCmd
 }
-
-var paddingBytes = util.NewBytes(cipherstream.PaddingSize)
 
 func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	host, _, _ := net.SplitHostPort(addr)
@@ -166,8 +163,8 @@ func (ss *Easyss) validateAddr(addr string) error {
 }
 
 func (ss *Easyss) handShakeWithRemote(stream net.Conn, addr, protoType string) error {
-	header := dataHeaderBytes.Get(util.Http2HeaderLen)
-	defer dataHeaderBytes.Put(header)
+	header := bytespool.Get(util.Http2HeaderLen)
+	defer bytespool.MustPut(header)
 
 	header = util.EncodeHTTP2DataFrameHeader(protoType, len(addr)+1, header)
 	gcm, err := cipherstream.NewAes256GCM([]byte(ss.Password()))
@@ -190,8 +187,8 @@ func (ss *Easyss) handShakeWithRemote(stream net.Conn, addr, protoType string) e
 
 	handshake := append(headerCipher, payloadCipher...)
 	if header[4] == 0x8 { // has padding field
-		padBytes := paddingBytes.Get(cipherstream.PaddingSize)
-		defer paddingBytes.Put(padBytes)
+		padBytes := bytespool.Get(cipherstream.PaddingSize)
+		defer bytespool.MustPut(padBytes)
 
 		var padCipher []byte
 		padCipher, err = gcm.Encrypt(padBytes)
