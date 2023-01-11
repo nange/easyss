@@ -204,8 +204,8 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			s.UDPExchanges.Delete(exchKey)
 		}()
 
-		var b = bytespool.Get(MaxUDPDataSize)
-		defer bytespool.MustPut(b)
+		var buf = bytespool.Get(MaxUDPDataSize)
+		defer bytespool.MustPut(buf)
 		for {
 			select {
 			case <-ch:
@@ -227,24 +227,24 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 					return
 				}
 			}
-			n, err := ue.RemoteConn.Read(b[:])
+			n, err := ue.RemoteConn.Read(buf[:])
 			if err != nil {
 				if err != cipherstream.ErrTimeout {
 					tryReuse = false
 				}
 				return
 			}
-			log.Debugf("[UDP_PROXY] got data from remote. client: %v, data-len: %v", ue.ClientAddr.String(), len(b[0:n]))
+			log.Debugf("[UDP_PROXY] got data from remote. client: %v, data-len: %v", ue.ClientAddr.String(), len(buf[0:n]))
 
 			// if is dns response, set result to dns cache
-			ss.SetDNSCacheIfNeeded(b[0:n], false)
+			ss.SetDNSCacheIfNeeded(buf[0:n], false)
 
 			a, addr, port, err := socks5.ParseAddress(dst)
 			if err != nil {
 				log.Errorf("[UDP_PROXY] parse dst address err:%v", err)
 				return
 			}
-			d1 := socks5.NewDatagram(a, addr, port, b[0:n])
+			d1 := socks5.NewDatagram(a, addr, port, buf[0:n])
 			if _, err := s.UDPConn.WriteToUDP(d1.Bytes(), ue.ClientAddr); err != nil {
 				return
 			}

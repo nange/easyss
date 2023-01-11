@@ -36,10 +36,10 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) error {
 	go func() {
 		defer wg.Done()
 
-		var b = bytespool.Get(MaxUDPDataSize)
-		defer bytespool.MustPut(b)
+		var buf = bytespool.Get(MaxUDPDataSize)
+		defer bytespool.MustPut(buf)
 		for {
-			n, err := csStream.Read(b[:])
+			n, err := csStream.Read(buf[:])
 			if err != nil {
 				if cipherstream.FINRSTStreamErr(err) {
 					tryReuse = true
@@ -51,7 +51,7 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) error {
 				uConn.Close()
 				return
 			}
-			_, err = uConn.Write(b[:n])
+			_, err = uConn.Write(buf[:n])
 			if err != nil {
 				log.Errorf("[REMOTE_UDP] write data to remote connection err:%v", err)
 				return
@@ -63,15 +63,15 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) error {
 	go func() {
 		defer wg.Done()
 
-		var b = bytespool.Get(MaxUDPDataSize)
-		defer bytespool.MustPut(b)
+		var buf = bytespool.Get(MaxUDPDataSize)
+		defer bytespool.MustPut(buf)
 		for {
-			n, err := uConn.Read(b[:])
+			n, err := uConn.Read(buf[:])
 			if err != nil {
 				log.Debugf("[REMOTE_UDP] read data from remote connection err:%v", err)
 				return
 			}
-			_, err = csStream.Write(b[:n])
+			_, err = csStream.Write(buf[:n])
 			if err != nil {
 				log.Errorf("[REMOTE_UDP] write data to tcp connection err:%v", err)
 				return

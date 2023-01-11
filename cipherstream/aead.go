@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 
-	"github.com/nange/easyss/util/bytespool"
 	"golang.org/x/crypto/pbkdf2"
 )
 
@@ -36,8 +35,7 @@ type AEADCipherImpl struct {
 // the data and provides a check that it hasn't been altered. Output takes the
 // form nonce|ciphertext|tag where '|' indicates concatenation.
 func (aci *AEADCipherImpl) Encrypt(plaintext []byte) (ciphertext []byte, err error) {
-	nonce := bytespool.Get(aci.aead.NonceSize())
-	defer bytespool.MustPut(nonce)
+	nonce := make([]byte, aci.aead.NonceSize())
 
 	_, err = io.ReadFull(rand.Reader, nonce)
 	if err != nil {

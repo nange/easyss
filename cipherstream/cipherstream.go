@@ -77,14 +77,14 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 			n += int64(nr)
 
 			var padding bool
-			headerBuf := bytespool.Get(util.Http2HeaderLen)
-			headerBuf = util.EncodeHTTP2DataFrameHeader(cs.protoType, nr, headerBuf)
+			buf := bytespool.Get(util.Http2HeaderLen)
+			headerBuf := util.EncodeHTTP2DataFrameHeader(cs.protoType, nr, buf)
 			if headerBuf[4] == 0x8 {
 				padding = true
 			}
 
 			headercipher, er := cs.Encrypt(headerBuf)
-			bytespool.MustPut(headerBuf)
+			bytespool.MustPut(buf)
 			if er != nil {
 				log.Errorf("[CIPHERSTREAM] encrypt header buf err:%+v", err)
 				return 0, ErrEncrypt

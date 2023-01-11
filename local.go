@@ -163,10 +163,10 @@ func (ss *Easyss) validateAddr(addr string) error {
 }
 
 func (ss *Easyss) handShakeWithRemote(stream net.Conn, addr, protoType string) error {
-	header := bytespool.Get(util.Http2HeaderLen)
-	defer bytespool.MustPut(header)
+	buf := bytespool.Get(util.Http2HeaderLen)
+	defer bytespool.MustPut(buf)
 
-	header = util.EncodeHTTP2DataFrameHeader(protoType, len(addr)+1, header)
+	header := util.EncodeHTTP2DataFrameHeader(protoType, len(addr)+1, buf)
 	gcm, err := cipherstream.NewAes256GCM([]byte(ss.Password()))
 	if err != nil {
 		return fmt.Errorf("cipherstream.NewAes256GCM err:%s", err.Error())
