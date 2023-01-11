@@ -19,7 +19,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install Deps
-        run: sudo apt install -y libgtk-3-dev libayatana-appindicator3-dev
+        run: sudo apt update && sudo apt install -y libgtk-3-dev libayatana-appindicator3-dev
 
       - name: Set up Go
         uses: actions/setup-go@v3
