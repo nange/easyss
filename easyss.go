@@ -33,6 +33,11 @@ const version = "v1.6.0"
 // DefaultDNSCacheSize set default dns cache size to 2MB
 const DefaultDNSCacheSize = 2 * 1024 * 1024
 
+const (
+	UDPLocksCount    = 256
+	UDPLocksAndOpVal = 255
+)
+
 var (
 	//go:embed geodata/geoip_cn_private.mmdb
 	geoIPCNPrivate []byte
@@ -161,6 +166,9 @@ type Easyss struct {
 	// the user custom ip/domain list which have the highest priority
 	customDirectIPs     map[string]struct{}
 	customDirectDomains map[string]struct{}
+
+	// locks for udp request
+	udpLocks [UDPLocksCount]sync.Mutex
 
 	// the mu Mutex to protect below fields
 	mu               *sync.RWMutex

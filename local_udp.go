@@ -5,9 +5,9 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/miekg/dns"
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/cipherstream"
@@ -30,7 +30,6 @@ var udpDataBytes = util.NewBytes(MaxUDPDataSize)
 type UDPExchange struct {
 	ClientAddr *net.UDPAddr
 	RemoteConn net.Conn
-	mu         *sync.Mutex
 }
 
 func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) error {
@@ -97,8 +96,6 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	}
 
 	send := func(ue *UDPExchange, data []byte) error {
-		ue.mu.Lock()
-		defer ue.mu.Unlock()
 		select {
 		case <-ch:
 			return fmt.Errorf("the tcp that udp address %s associated closed", ue.ClientAddr.String())
@@ -113,8 +110,11 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	}
 
 	var ue *UDPExchange
-	var src = addr.String()
-	iue, ok := s.UDPExchanges.Get(src + dst)
+	var exchKey = addr.String() + dst
+	ss.lockKey(exchKey)
+	defer ss.lockKey(exchKey)
+
+	iue, ok := s.UDPExchanges.Get(exchKey)
 	if ok {
 		ue = iue.(*UDPExchange)
 		return send(ue, d.Data)
@@ -152,16 +152,15 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	ue = &UDPExchange{
 		ClientAddr: addr,
 		RemoteConn: csStream,
-		mu:         &sync.Mutex{},
 	}
 	if err := send(ue, d.Data); err != nil {
 		MarkCipherStreamUnusable(ue.RemoteConn)
 		ue.RemoteConn.Close()
 		return err
 	}
-	s.UDPExchanges.Set(src+dst, ue, -1)
+	s.UDPExchanges.Set(exchKey, ue, -1)
 
-	var monitorCh = make(chan bool, 1)
+	var monitorCh = make(chan bool)
 	// monitor the assoc tcp connection to be closed and try to reuse the underlying connection
 	go func() {
 		var tryReuse bool
@@ -198,12 +197,12 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		var tryReuse = true
 
 		defer func() {
-			ue.mu.Lock()
-			defer ue.mu.Unlock()
+			ss.lockKey(exchKey)
+			defer ss.unlockKey(exchKey)
 
 			monitorCh <- tryReuse
 			ch <- struct{}{}
-			s.UDPExchanges.Delete(src + dst)
+			s.UDPExchanges.Delete(exchKey)
 		}()
 
 		var b = udpDataBytes.Get(MaxUDPDataSize)
@@ -237,19 +236,29 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 
 			a, addr, port, err := socks5.ParseAddress(dst)
 			if err != nil {
-				monitorCh <- true
 				log.Errorf("[UDP_PROXY] parse dst address err:%v", err)
 				return
 			}
 			d1 := socks5.NewDatagram(a, addr, port, b[0:n])
 			if _, err := s.UDPConn.WriteToUDP(d1.Bytes(), ue.ClientAddr); err != nil {
-				monitorCh <- true
 				return
 			}
 		}
 	}(ue, dst)
 
 	return nil
+}
+
+func (ss *Easyss) lockKey(key string) {
+	hashVal := xxhash.Sum64String(key)
+	lockID := hashVal & UDPLocksAndOpVal
+	ss.udpLocks[lockID].Lock()
+}
+
+func (ss *Easyss) unlockKey(key string) {
+	hashVal := xxhash.Sum64String(key)
+	lockID := hashVal & UDPLocksAndOpVal
+	ss.udpLocks[lockID].Unlock()
 }
 
 func (ss *Easyss) SetDNSCacheIfNeeded(udpResp []byte, isDirect bool) {
