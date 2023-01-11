@@ -83,7 +83,7 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) error {
 	var reuse bool
 	if tryReuse {
 		log.Debugf("[REMOTE_UDP] request is finished, try to reuse underlying tcp connection")
-		reuse = tryReuseInUDP(csStream, ss.Timeout())
+		reuse = tryReuseInUDPServer(csStream, ss.Timeout())
 	}
 
 	if !reuse {
@@ -97,7 +97,7 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) error {
 	return nil
 }
 
-func tryReuseInUDP(cipher net.Conn, timeout time.Duration) bool {
+func tryReuseInUDPServer(cipher net.Conn, timeout time.Duration) bool {
 	if err := SetCipherDeadline(cipher, timeout); err != nil {
 		return false
 	}

@@ -180,7 +180,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		reuse := false
 		if tryReuse {
 			log.Debugf("[UDP_PROXY] request is finished, try to reuse underlying tcp connection")
-			reuse = tryReuseForUDPClient(ue.RemoteConn, ss.Timeout())
+			reuse = tryReuseInUDPClient(ue.RemoteConn, ss.Timeout())
 		}
 
 		if !reuse {
@@ -320,7 +320,7 @@ func isDNSResponse(msg *dns.Msg) bool {
 	return true
 }
 
-func tryReuseForUDPClient(cipher net.Conn, timeout time.Duration) bool {
+func tryReuseInUDPClient(cipher net.Conn, timeout time.Duration) bool {
 	if err := SetCipherDeadline(cipher, timeout); err != nil {
 		return false
 	}
