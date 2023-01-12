@@ -211,9 +211,9 @@ func New(config *Config) (*Easyss, error) {
 		log.Errorf("[EASYSS] load custom ip/domains err:%s", err.Error())
 	}
 
-	var msg *dns.Msg
+	var msg, msgAAAA *dns.Msg
 	for _, server := range DefaultDirectDNSServers {
-		msg, err = ss.ServerDNSMsg(server)
+		msg, msgAAAA, err = ss.ServerDNSMsg(server)
 		if err != nil {
 			log.Warnf("[EASYSS] query dns failed for %s from %s err:%s",
 				ss.Server(), server, err.Error())
@@ -221,16 +221,21 @@ func New(config *Config) (*Easyss, error) {
 		}
 		if msg != nil {
 			ss.directDNSServer = server
-			log.Infof("[EASYSS] query dns success for %s from %s",
-				ss.Server(), server)
+			log.Infof("[EASYSS] query dns success for %s from %s", ss.Server(), server)
 			break
 		}
 	}
 
-	if msg != nil {
-		ss.serverIP = msg.Answer[0].(*dns.A).A.String()
-		_ = ss.SetDNSCache(msg, true, true)
-		_ = ss.SetDNSCache(msg, true, false)
+	if msg != nil && msgAAAA != nil {
+		if len(msg.Answer) > 0 {
+			ss.serverIP = msg.Answer[0].(*dns.A).A.String()
+			_ = ss.SetDNSCache(msg, true, true)
+			_ = ss.SetDNSCache(msg, true, false)
+			_ = ss.SetDNSCache(msgAAAA, true, true)
+			_ = ss.SetDNSCache(msgAAAA, true, false)
+		} else {
+			log.Errorf("[EASYSS] dns result is empty for %s", ss.Server())
+		}
 	}
 
 	switch runtime.GOOS {
@@ -544,7 +549,7 @@ func (ss *Easyss) SetDNSCache(msg *dns.Msg, noExpire, isDirect bool) error {
 	return nil
 }
 
-func (ss *Easyss) ServerDNSMsg(dnsServer string) (*dns.Msg, error) {
+func (ss *Easyss) ServerDNSMsg(dnsServer string) (*dns.Msg, *dns.Msg, error) {
 	c := new(dns.Client)
 
 	m := new(dns.Msg)
@@ -553,14 +558,22 @@ func (ss *Easyss) ServerDNSMsg(dnsServer string) (*dns.Msg, error) {
 
 	r, _, err := c.Exchange(m, dnsServer)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-
 	if r.Rcode != dns.RcodeSuccess {
-		return nil, fmt.Errorf("dns query response Rcode:%v not equals RcodeSuccess", r.Rcode)
+		return nil, nil, fmt.Errorf("dns query response Rcode:%v not equals RcodeSuccess", r.Rcode)
 	}
 
-	return r, nil
+	m.SetQuestion(dns.Fqdn(ss.Server()), dns.TypeAAAA)
+	rAAAA, _, err := c.Exchange(m, dnsServer)
+	if err != nil {
+		return nil, nil, err
+	}
+	if rAAAA.Rcode != dns.RcodeSuccess {
+		return nil, nil, fmt.Errorf("dns query response Rcode:%v not equals RcodeSuccess", r.Rcode)
+	}
+
+	return r, rAAAA, nil
 }
 
 func (ss *Easyss) HostShouldDirect(host string) bool {
