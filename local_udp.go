@@ -60,11 +60,11 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		}
 
 		if isDirect {
-			log.Infof("[DNS_DIRECT] domain:%s, qtype:%s", question.Name, dns.TypeToString[question.Qtype])
+			log.Infof("[DNS_DIRECT] %s, qtype:%s", question.Name, dns.TypeToString[question.Qtype])
 			return ss.directUDPRelay(s, addr, d, true)
 		}
 
-		log.Infof("[DNS_PROXY] domain:%s, qtype:%s", msg.Question[0].Name, dns.TypeToString[msg.Question[0].Qtype])
+		log.Infof("[DNS_PROXY] %s, qtype:%s", msg.Question[0].Name, dns.TypeToString[msg.Question[0].Qtype])
 
 		log.Debugf("[DNS_PROXY] rewrite dns dst to %s", DefaultDNSServer)
 		rewrittenDst = DefaultDNSServer
@@ -273,13 +273,13 @@ func (ss *Easyss) SetDNSCacheIfNeeded(udpResp []byte, isDirect bool) {
 	}
 	msg := &dns.Msg{}
 	if err := msg.Unpack(udpResp); err == nil && isDNSResponse(msg) {
-		log.Infof("%s got result:%s for domain:%s, qtype:%s",
+		log.Infof("%s got result:%s for %s, qtype:%s",
 			logPrefix, msg.Answer, msg.Question[0].Name, dns.TypeToString[msg.Question[0].Qtype])
 
 		if err := ss.SetDNSCache(msg, false, isDirect); err != nil {
 			log.Warnf("%s set dns cache err:%s", logPrefix, err.Error())
 		} else {
-			log.Debugf("%s set cache for domain:%s, qtype:%s",
+			log.Debugf("%s set cache for %s, qtype:%s",
 				logPrefix, msg.Question[0].Name, dns.TypeToString[msg.Question[0].Qtype])
 		}
 	}
@@ -312,7 +312,7 @@ func isDNSResponse(msg *dns.Msg) bool {
 	if msg == nil {
 		return false
 	}
-	if !msg.MsgHdr.Response || !isDNSRequest(msg) || len(msg.Answer) == 0 {
+	if !msg.MsgHdr.Response || !isDNSRequest(msg) {
 		return false
 	}
 	return true

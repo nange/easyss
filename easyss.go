@@ -30,8 +30,12 @@ import (
 
 const version = "v1.6.0"
 
-// DefaultDNSCacheSize set default dns cache size to 2MB
-const DefaultDNSCacheSize = 2 * 1024 * 1024
+const (
+	// DefaultDNSCacheSize set default dns cache size to 2MB
+	DefaultDNSCacheSize = 2 * 1024 * 1024
+	// DefaultDNSCacheSec the default expire time for dns cache
+	DefaultDNSCacheSec = 2 * 60 * 60
+)
 
 const (
 	UDPLocksCount    = 256
@@ -211,13 +215,13 @@ func New(config *Config) (*Easyss, error) {
 	for _, server := range DefaultDirectDNSServers {
 		msg, err = ss.ServerDNSMsg(server)
 		if err != nil {
-			log.Warnf("[EASYSS] query dns cache failed for server:%s from dns-server:%s err:%s",
+			log.Warnf("[EASYSS] query dns failed for %s from %s err:%s",
 				ss.Server(), server, err.Error())
 			continue
 		}
 		if msg != nil {
 			ss.directDNSServer = server
-			log.Infof("[EASYSS] query dns cache success for server:%s from dns-server:%s",
+			log.Infof("[EASYSS] query dns success for %s from %s",
 				ss.Server(), server)
 			break
 		}
@@ -502,11 +506,11 @@ func (ss *Easyss) DNSCache(name, qtype string, isDirect bool) *dns.Msg {
 
 func (ss *Easyss) RenewDNSCache(name, qtype string, isDirect bool) bool {
 	if isDirect {
-		if err := ss.directDNSCache.Touch([]byte(name+qtype), 8*60*60); err != nil {
+		if err := ss.directDNSCache.Touch([]byte(name+qtype), DefaultDNSCacheSec); err != nil {
 			return false
 		}
 	}
-	if err := ss.dnsCache.Touch([]byte(name+qtype), 8*60*60); err != nil {
+	if err := ss.dnsCache.Touch([]byte(name+qtype), DefaultDNSCacheSec); err != nil {
 		return false
 	}
 	return true
@@ -526,7 +530,7 @@ func (ss *Easyss) SetDNSCache(msg *dns.Msg, noExpire, isDirect bool) error {
 		if err != nil {
 			return err
 		}
-		expireSec := 8 * 60 * 60
+		expireSec := DefaultDNSCacheSec
 		if noExpire {
 			expireSec = 0
 		}
