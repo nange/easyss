@@ -25,7 +25,7 @@ type CipherStream struct {
 	AEADCipher
 	reader
 	writer
-	protoType string
+	protoType util.ProtoType
 }
 
 type reader struct {
@@ -37,7 +37,7 @@ type writer struct {
 	wbuf []byte
 }
 
-func New(stream net.Conn, password, method, protoType string) (net.Conn, error) {
+func New(stream net.Conn, password, method string, protoType util.ProtoType) (net.Conn, error) {
 	cs := &CipherStream{Conn: stream, protoType: protoType}
 
 	switch method {
@@ -78,7 +78,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 
 			var padding bool
 			buf := bytespool.Get(util.Http2HeaderLen)
-			headerBuf := util.EncodeHTTP2DataFrameHeader(cs.protoType, nr, buf)
+			headerBuf := util.EncodeHTTP2Header(cs.protoType, nr, buf)
 			if headerBuf[4] == 0x8 {
 				padding = true
 			}

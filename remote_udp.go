@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nange/easyss/cipherstream"
+	"github.com/nange/easyss/util"
 	"github.com/nange/easyss/util/bytespool"
 	log "github.com/sirupsen/logrus"
 )
@@ -22,7 +23,7 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) error {
 		return fmt.Errorf("net.DialUDP %v err:%v", addrStr, err)
 	}
 
-	csStream, err := cipherstream.New(conn, ss.Password(), method, "udp")
+	csStream, err := cipherstream.New(conn, ss.Password(), method, util.ProtoTypeUDP)
 	if err != nil {
 		return fmt.Errorf("new cipherstream err:%+v, password:%v, method:%v",
 			err, ss.Password(), ss.Method())

@@ -109,7 +109,7 @@ func (ss *Easyss) remoteTCPHandle(conn net.Conn, addrStr, method string) error {
 		return fmt.Errorf("net.Dial %v err:%v", addrStr, err)
 	}
 
-	csStream, err := cipherstream.New(conn, ss.Password(), method, "tcp")
+	csStream, err := cipherstream.New(conn, ss.Password(), method, util.ProtoTypeTCP)
 	if err != nil {
 		return fmt.Errorf("new cipherstream err:%+v, password:%v, method:%v",
 			err, ss.Password(), ss.Method())

@@ -8,12 +8,12 @@ import (
 
 func TestEncodeHTTP2DataFrameHeader(t *testing.T) {
 	dst := make([]byte, 0, 10)
-	header := EncodeHTTP2DataFrameHeader("tcp", 20, dst)
+	header := EncodeHTTP2Header(ProtoTypeTCP, 20, dst)
 	assert.Len(t, header, 9)
 	assert.Equal(t, uint8(0), header[3])
 
 	dst = nil
-	header = EncodeHTTP2DataFrameHeader("udp", 20, dst)
+	header = EncodeHTTP2Header(ProtoTypeUDP, 20, dst)
 	assert.Len(t, header, 9)
 	assert.Equal(t, uint8(1), header[3])
 }

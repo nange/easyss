@@ -111,7 +111,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		log.Debugf("[TCP_PROXY] after stream close, pool len: %v", pool.Len())
 	}()
 
-	if err = ss.handShakeWithRemote(stream, addr, "tcp"); err != nil {
+	if err = ss.handShakeWithRemote(stream, addr, util.ProtoTypeTCP); err != nil {
 		log.Errorf("[TCP_PROXY] handshake with remote server err:%v", err)
 		if pc, ok := stream.(*easypool.PoolConn); ok {
 			log.Debugf("[TCP_PROXY] mark pool conn stream unusable")
@@ -120,7 +120,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		return
 	}
 
-	csStream, err := cipherstream.New(stream, ss.Password(), ss.Method(), "tcp")
+	csStream, err := cipherstream.New(stream, ss.Password(), ss.Method(), util.ProtoTypeTCP)
 	if err != nil {
 		log.Errorf("[TCP_PROXY] new cipherstream err:%v, password:%v, method:%v",
 			err, ss.Password(), ss.Method())
@@ -162,11 +162,11 @@ func (ss *Easyss) validateAddr(addr string) error {
 	return nil
 }
 
-func (ss *Easyss) handShakeWithRemote(stream net.Conn, addr, protoType string) error {
+func (ss *Easyss) handShakeWithRemote(stream net.Conn, addr string, protoType util.ProtoType) error {
 	buf := bytespool.Get(util.Http2HeaderLen)
 	defer bytespool.MustPut(buf)
 
-	header := util.EncodeHTTP2DataFrameHeader(protoType, len(addr)+1, buf)
+	header := util.EncodeHTTP2Header(protoType, len(addr)+1, buf)
 	gcm, err := cipherstream.NewAes256GCM([]byte(ss.Password()))
 	if err != nil {
 		return fmt.Errorf("cipherstream.NewAes256GCM err:%s", err.Error())

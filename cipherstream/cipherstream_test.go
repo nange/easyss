@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nange/easyss/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,7 +41,7 @@ func TestCipherStream(t *testing.T) {
 	require.Nil(t, err)
 	defer conn.Close()
 
-	cipherConn, err := New(conn, "test-pass", "aes-256-gcm", "tcp")
+	cipherConn, err := New(conn, "test-pass", "aes-256-gcm", util.ProtoTypeTCP)
 	require.Nil(t, err)
 
 	_, err = cipherConn.Write([]byte("Hello world!"))
@@ -50,7 +51,7 @@ func TestCipherStream(t *testing.T) {
 	require.Nil(t, err)
 	defer serverConn.Close()
 
-	serverCipherConn, err := New(serverConn, "test-pass", "aes-256-gcm", "tcp")
+	serverCipherConn, err := New(serverConn, "test-pass", "aes-256-gcm", util.ProtoTypeTCP)
 	require.Nil(t, err)
 
 	b := make([]byte, 64)

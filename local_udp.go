@@ -11,6 +11,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/cipherstream"
+	"github.com/nange/easyss/util"
 	"github.com/nange/easyss/util/bytespool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -131,7 +132,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		return err
 	}
 
-	if err := ss.handShakeWithRemote(stream, rewrittenDst, "udp"); err != nil {
+	if err := ss.handShakeWithRemote(stream, rewrittenDst, util.ProtoTypeUDP); err != nil {
 		log.Errorf("[UDP_PROXY] handshake with remote server err:%v", err)
 		if pc, ok := stream.(*easypool.PoolConn); ok {
 			log.Debugf("[UDP_PROXY] mark pool conn stream unusable")
@@ -141,7 +142,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		return err
 	}
 
-	csStream, err := cipherstream.New(stream, ss.Password(), ss.Method(), "udp")
+	csStream, err := cipherstream.New(stream, ss.Password(), ss.Method(), util.ProtoTypeUDP)
 	if err != nil {
 		log.Errorf("[UDP_PROXY] new cipherstream err:%+v, password:%v, method:%v",
 			err, ss.Password(), ss.Method())

@@ -9,7 +9,33 @@ import (
 
 const Http2HeaderLen = 9
 
-func EncodeHTTP2DataFrameHeader(protoType string, datalen int, dst []byte) (header []byte) {
+type ProtoType uint8
+
+const (
+	ProtoTypeTCP ProtoType = iota
+	ProtoTypeUDP
+	ProtoTypePing
+	ProtoTypeUnknown
+)
+
+func ParseProtoTypeFrom(i uint8) ProtoType {
+	switch ProtoType(i) {
+	case ProtoTypeTCP:
+		return ProtoTypeTCP
+	case ProtoTypeUDP:
+		return ProtoTypeUDP
+	case ProtoTypePing:
+		return ProtoTypePing
+	default:
+		return ProtoTypeUnknown
+	}
+}
+
+func (pt ProtoType) ToUint8() uint8 {
+	return uint8(pt)
+}
+
+func EncodeHTTP2Header(protoType ProtoType, datalen int, dst []byte) (header []byte) {
 	if cap(dst) < Http2HeaderLen {
 		dst = make([]byte, Http2HeaderLen)
 	} else {
@@ -23,17 +49,10 @@ func EncodeHTTP2DataFrameHeader(protoType string, datalen int, dst []byte) (head
 	// set length field
 	copy(dst[:3], length[1:])
 	// set frame type
-	switch protoType {
-	case "tcp":
-		dst[3] = 0x0
-	case "udp":
-		dst[3] = 0x1
-	default:
-		panic("invalid protoType:" + protoType)
-	}
+	dst[3] = protoType.ToUint8()
 	// set default flag
 	dst[4] = 0x0
-	if datalen < 512 { // data has padding field
+	if datalen < 256 { // data has padding field
 		// data payload size less than 512 bytes, we add padding field
 		dst[4] = 0x8
 	}
