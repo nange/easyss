@@ -3,10 +3,12 @@ package main
 import (
 	"flag"
 	"fmt"
+	"math/rand"
 	"os"
 	"path"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/nange/easyss"
 	"github.com/nange/easyss/pprof"
@@ -24,6 +26,7 @@ func init() {
 		logDir := filepath.Dir(exec)
 		util.SetLogFileHook(logDir)
 	}
+	rand.Seed(time.Now().UnixNano())
 }
 
 func main() {

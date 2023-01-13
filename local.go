@@ -9,7 +9,6 @@ import (
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/util"
-	"github.com/nange/easyss/util/bytespool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
@@ -163,42 +162,17 @@ func (ss *Easyss) validateAddr(addr string) error {
 }
 
 func (ss *Easyss) handShakeWithRemote(stream net.Conn, addr string, protoType util.ProtoType) error {
-	buf := bytespool.Get(util.Http2HeaderLen)
-	defer bytespool.MustPut(buf)
-
-	header := util.EncodeHTTP2Header(protoType, len(addr)+1, buf)
-	gcm, err := cipherstream.NewAes256GCM([]byte(ss.Password()))
+	csStream, err := cipherstream.New(stream, ss.Password(), cipherstream.MethodAes256GCM, protoType)
 	if err != nil {
-		return fmt.Errorf("cipherstream.NewAes256GCM err:%s", err.Error())
+		return err
 	}
+	defer csStream.(*cipherstream.CipherStream).Release()
 
-	headerCipher, err := gcm.Encrypt(header)
-	if err != nil {
-		return fmt.Errorf("gcm.Encrypt err:%s", err.Error())
-	}
 	cipherMethod := EncodeCipherMethod(ss.Method())
 	if cipherMethod == 0 {
 		return fmt.Errorf("unsupported cipher method:%s", ss.Method())
 	}
-	payloadCipher, err := gcm.Encrypt(append([]byte(addr), cipherMethod))
-	if err != nil {
-		return fmt.Errorf("gcm.Encrypt err:%s", err.Error())
-	}
-
-	handshake := append(headerCipher, payloadCipher...)
-	if header[4] == 0x8 { // has padding field
-		padBytes := bytespool.Get(cipherstream.PaddingSize)
-		defer bytespool.MustPut(padBytes)
-
-		var padCipher []byte
-		padCipher, err = gcm.Encrypt(padBytes)
-		if err != nil {
-			return fmt.Errorf("encrypt padding buf err:%s", err.Error())
-		}
-		handshake = append(handshake, padCipher...)
-	}
-	_, err = stream.Write(handshake)
-
+	_, err = csStream.Write(append([]byte(addr), cipherMethod))
 	return err
 }
 

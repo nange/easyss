@@ -8,14 +8,16 @@ import (
 
 func TestEncodeHTTP2DataFrameHeader(t *testing.T) {
 	dst := make([]byte, 0, 10)
-	header := EncodeHTTP2Header(ProtoTypeTCP, 20, dst)
+	header, padSize := EncodeHTTP2Header(ProtoTypeTCP, 20, dst)
 	assert.Len(t, header, 9)
 	assert.Equal(t, uint8(0), header[3])
+	assert.Greater(t, padSize, byte(0))
 
 	dst = nil
-	header = EncodeHTTP2Header(ProtoTypeUDP, 20, dst)
+	header, padSize = EncodeHTTP2Header(ProtoTypeUDP, 200, dst)
 	assert.Len(t, header, 9)
 	assert.Equal(t, uint8(1), header[3])
+	assert.Equal(t, padSize, byte(0))
 }
 
 func TestEncodeFINRstStreamHeader(t *testing.T) {

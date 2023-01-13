@@ -10,7 +10,6 @@ import (
 	"github.com/caddyserver/certmagic"
 	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/util"
-	"github.com/nange/easyss/util/bytespool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -84,12 +83,12 @@ func (ss *Easyss) tcpServer() {
 				log.Infof("[REMOTE] target:%v", addrStr)
 
 				switch protoType {
-				case "tcp":
+				case util.ProtoTypeTCP:
 					if err := ss.remoteTCPHandle(conn, addrStr, method); err != nil {
 						log.Errorf("[REMOTE] tcp handle err:%v", err)
 						return
 					}
-				case "udp":
+				case util.ProtoTypeUDP:
 					if err := ss.remoteUDPHandle(conn, addrStr, method); err != nil {
 						log.Errorf("[REMOTE] udp handle err:%v", err)
 						return
@@ -128,75 +127,27 @@ func (ss *Easyss) remoteTCPHandle(conn net.Conn, addrStr, method string) error {
 	return nil
 }
 
-func (ss *Easyss) handShakeWithClient(stream io.ReadWriter) (addr []byte, method, protoType string, err error) {
-	gcm, err := cipherstream.NewAes256GCM([]byte(ss.Password()))
+func (ss *Easyss) handShakeWithClient(conn net.Conn) (addr []byte, method string, protoType util.ProtoType, err error) {
+	csStream, err := cipherstream.New(conn, ss.Password(), cipherstream.MethodAes256GCM, util.ProtoTypeTCP)
 	if err != nil {
-		return
+		return nil, "", util.ProtoTypeUnknown, err
 	}
+	defer csStream.(*cipherstream.CipherStream).Release()
 
-	headerbuf := bytespool.Get(9 + gcm.NonceSize() + gcm.Overhead())
-	defer bytespool.MustPut(headerbuf)
-
-	if _, err = io.ReadFull(stream, headerbuf); err != nil {
-		err = errors.WithStack(err)
-		return
-	}
-
-	headerplain, err := gcm.Decrypt(headerbuf)
+	header, payload, err := csStream.(*cipherstream.CipherStream).ReadHeaderAndPayload()
 	if err != nil {
-		log.Errorf("[REMOTE] gcm.Decrypt decrypt headerbuf:%v, err:%+v", headerbuf, err)
-		return
+		return nil, "", util.ProtoTypeUnknown, err
 	}
+	protoType = util.ProtoTypeFromHeader(header)
 
-	payloadlen := int(headerplain[0])<<16 | int(headerplain[1])<<8 | int(headerplain[2])
-	switch headerplain[3] {
-	case 0x0:
-		protoType = "tcp"
-	case 0x1:
-		protoType = "udp"
-	default:
-		err = errors.New(fmt.Sprintf("http2 data frame type:%v is invalid, should be 0x0 or 0x1", headerplain[3]))
-		return
-	}
-
-	payloadbuf := bytespool.Get(payloadlen + gcm.NonceSize() + gcm.Overhead())
-	defer bytespool.MustPut(payloadbuf)
-
-	if _, err = io.ReadFull(stream, payloadbuf); err != nil {
-		err = errors.WithStack(err)
-		log.Warnf("[REMOTE] io.ReadFull read payloadbuf err:%+v, len:%v", err, len(payloadbuf))
-		return
-	}
-
-	payloadplain, err := gcm.Decrypt(payloadbuf)
-	if err != nil {
-		log.Errorf("[REMOTE] gcm.Decrypt decrypt payloadbuf:%v, err:%+v", payloadbuf, err)
-		return
-	}
-	length := len(payloadplain)
+	length := len(payload)
 	if length <= 1 {
 		err = errors.New("handshake: payload length is invalid")
 		return
 	}
-	method = DecodeCipherMethod(payloadplain[length-1])
+	method = DecodeCipherMethod(payload[length-1])
 
-	if headerplain[4] == 0x8 { // has padding field
-		paddingbuf := bytespool.Get(cipherstream.PaddingSize + gcm.NonceSize() + gcm.Overhead())
-		defer bytespool.MustPut(paddingbuf)
-
-		if _, err = io.ReadFull(stream, paddingbuf); err != nil {
-			err = errors.WithStack(err)
-			log.Warnf("[REMOTE] io.ReadFull read paddingbuf err:%+v, len:%v", err, len(paddingbuf))
-			return
-		}
-		_, err = gcm.Decrypt(paddingbuf)
-		if err != nil {
-			log.Errorf("[REMOTE] gcm.Decrypt decrypt paddingbuf:%v, err:%+v", paddingbuf, err)
-			return
-		}
-	}
-
-	return payloadplain[:length-1], method, protoType, nil
+	return payload[:length-1], method, protoType, nil
 }
 
 func validateTargetAddr(addr string) error {
@@ -216,8 +167,8 @@ func validateTargetAddr(addr string) error {
 
 func DecodeCipherMethod(b byte) string {
 	methodMap := map[byte]string{
-		1: "aes-256-gcm",
-		2: "chacha20-poly1305",
+		1: cipherstream.MethodAes256GCM,
+		2: cipherstream.MethodChaCha20Poly1305,
 	}
 	if m, ok := methodMap[b]; ok {
 		return m
