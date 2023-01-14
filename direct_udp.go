@@ -30,14 +30,14 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 	}
 	log.Infof("%s target:%s", logPrefix, d.Address())
 
-	var ch chan byte
+	var ch chan struct{}
 	var hasAssoc bool
 
 	portStr := strconv.FormatInt(int64(laddr.Port), 10)
 	asCh, ok := s.AssociatedUDP.Get(portStr)
 	if ok {
 		hasAssoc = true
-		ch = asCh.(chan byte)
+		ch = asCh.(chan struct{})
 		log.Debugf("%s found the associate with tcp, src:%s, dst:%s", logPrefix, laddr.String(), d.Address())
 	} else {
 		log.Debugf("%s the udp addr:%v doesn't associate with tcp, dst addr:%v", logPrefix, laddr.String(), d.Address())
