@@ -75,11 +75,7 @@ func (cs *CipherStream) Write(b []byte) (int, error) {
 }
 
 func (cs *CipherStream) WriteRST(flag uint8) error {
-	headerBuf := bytespool.Get(util.Http2HeaderLen)
-	defer bytespool.MustPut(headerBuf)
-
-	hb, padSize := util.EncodeHTTP2Header(util.FrameTypeRST, flag, 0, headerBuf)
-	hc, err := cs.Encrypt(hb)
+	hc, padSize, err := cs.makeCipherHeader(util.FrameTypeRST, flag, 0)
 	if err != nil {
 		log.Errorf("[CIPHERSTREAM] encrypt header buf err:%+v", err)
 		return ErrEncrypt
@@ -88,25 +84,16 @@ func (cs *CipherStream) WriteRST(flag uint8) error {
 		panic("invalid pad size")
 	}
 
-	padBuf := bytespool.Get(util.MaxPaddingSize)
-	defer bytespool.MustPut(padBuf)
-	padBuf = padBuf[:0]
-	padBuf = append(padBuf, padSize)
-	padBuf = padBuf[:padSize+1]
-
-	_, _ = rand.Read(padBuf[1 : padSize+1])
-	pc, err := cs.Encrypt(padBuf)
+	pc, err := cs.makeCipherPayload(nil, padSize)
 	if err != nil {
-		log.Errorf("[CIPHERSTREAM] encrypt header buf err:%+v", err)
+		log.Errorf("[CIPHERSTREAM] encrypt payload buf err:%+v", err)
 		return ErrEncrypt
 	}
 
-	frame := bytespool.Get(MaxPayloadSize)
-	defer bytespool.MustPut(frame)
-	frame = frame[:0]
-	frame = append(frame, hc...)
-	frame = append(frame, pc...)
+	buf := bytespool.Get(MaxPayloadSize + MaxPayloadSize/2)
+	defer bytespool.MustPut(buf)
 
+	frame := cs.makeCipherFrame(hc, pc, buf)
 	if _, ew := cs.Conn.Write(frame); ew != nil {
 		log.Warnf("[CIPHERSTREAM] write cipher data to cipher stream failed, msg:%+v", ew)
 		if timeout(ew) {
@@ -119,54 +106,114 @@ func (cs *CipherStream) WriteRST(flag uint8) error {
 	return nil
 }
 
-func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
-	frame := bytespool.Get(2 * MaxPayloadSize)
-	defer bytespool.MustPut(frame)
+func (cs *CipherStream) WritePing(b []byte, flag uint8) error {
+	hc, padSize, err := cs.makeCipherHeader(util.FrameTypePing, flag, len(b))
+	if err != nil {
+		log.Errorf("[CIPHERSTREAM] encrypt header buf err:%+v", err)
+		return ErrEncrypt
+	}
+	if padSize <= 0 {
+		panic("invalid pad size")
+	}
 
-	dataframe := bytespool.Get(2 * MaxPayloadSize)
-	defer bytespool.MustPut(dataframe)
+	pc, err := cs.makeCipherPayload(b, padSize)
+	if err != nil {
+		log.Errorf("[CIPHERSTREAM] encrypt payload buf err:%+v", err)
+		return ErrEncrypt
+	}
 
-	padBuf := bytespool.Get(util.MaxPaddingSize)
-	defer bytespool.MustPut(padBuf)
+	buf := bytespool.Get(MaxPayloadSize + MaxPayloadSize/2)
+	defer bytespool.MustPut(buf)
 
+	frame := cs.makeCipherFrame(hc, pc, buf)
+	if _, ew := cs.Conn.Write(frame); ew != nil {
+		log.Warnf("[CIPHERSTREAM] write cipher data to cipher stream failed, msg:%+v", ew)
+		if timeout(ew) {
+			return ErrTimeout
+		} else {
+			return ErrWriteCipher
+		}
+	}
+
+	return nil
+}
+
+func (cs *CipherStream) makeCipherHeader(frameType util.FrameType, flag uint8, rawDataLen int) ([]byte, byte, error) {
 	headerBuf := bytespool.Get(util.Http2HeaderLen)
 	defer bytespool.MustPut(headerBuf)
 
+	hb, padSize := util.EncodeHTTP2Header(frameType, flag, rawDataLen, headerBuf)
+	hc, err := cs.Encrypt(hb)
+	if err != nil {
+		log.Errorf("[CIPHERSTREAM] encrypt header buf err:%+v", err)
+		return nil, 0, ErrEncrypt
+	}
+
+	return hc, padSize, nil
+}
+
+func (cs *CipherStream) makeCipherPayload(rawData []byte, padSize byte) ([]byte, error) {
+	payload := bytespool.Get(MaxPayloadSize + MaxPayloadSize/2)
+	defer bytespool.MustPut(payload)
+
+	payload = payload[:0]
+	if padSize > 0 {
+		payload = append(payload, padSize)
+	}
+	if len(rawData) > 0 {
+		payload = append(payload, rawData...)
+	}
+	if padSize > 0 {
+		padBuf := bytespool.Get(util.MaxPaddingSize)
+		defer bytespool.MustPut(padBuf)
+
+		padBuf = padBuf[:padSize]
+		_, _ = rand.Read(padBuf)
+		payload = append(payload, padBuf...)
+	}
+
+	dc, er := cs.Encrypt(payload)
+	if er != nil {
+		log.Errorf("[CIPHERSTREAM] encrypt dataframe err:%+v", er)
+		return nil, ErrEncrypt
+	}
+
+	return dc, nil
+}
+
+func (cs *CipherStream) makeCipherFrame(cipherHeader []byte, cipherPayload []byte, buf []byte) []byte {
+	buf = buf[:0]
+	buf = append(buf, cipherHeader...)
+	buf = append(buf, cipherPayload...)
+
+	return buf
+}
+
+func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
+	buf := bytespool.Get(MaxPayloadSize + MaxPayloadSize/2)
+	defer bytespool.MustPut(buf)
+
 	for {
-		frame = frame[:0]
-		dataframe = dataframe[:0]
+		buf = buf[:0]
 		payloadBuf := cs.wbuf[:MaxPayloadSize]
 
 		nr, er := r.Read(payloadBuf)
 		if nr > 0 {
 			n += int64(nr)
 
-			hb, padSize := util.EncodeHTTP2Header(cs.frameType, cs.flag, nr, headerBuf)
-			hc, er := cs.Encrypt(hb)
+			hc, padSize, er := cs.makeCipherHeader(cs.frameType, cs.flag, nr)
 			if er != nil {
 				log.Errorf("[CIPHERSTREAM] encrypt header buf err:%+v", er)
 				return 0, ErrEncrypt
 			}
-			frame = append(frame, hc...) // append header
 
-			if padSize > 0 {
-				dataframe = append(dataframe, padSize)
-				dataframe = append(dataframe, payloadBuf[:nr]...)
-
-				padBuf = padBuf[:padSize]
-				_, _ = rand.Read(padBuf)
-				dataframe = append(dataframe, padBuf...)
-			} else {
-				dataframe = append(dataframe, payloadBuf[:nr]...)
-			}
-
-			dc, er := cs.Encrypt(dataframe)
+			dc, er := cs.makeCipherPayload(payloadBuf[:nr], padSize)
 			if er != nil {
 				log.Errorf("[CIPHERSTREAM] encrypt dataframe err:%+v", er)
 				return 0, ErrEncrypt
 			}
-			frame = append(frame, dc...)
 
+			frame := cs.makeCipherFrame(hc, dc, buf)
 			if _, ew := cs.Conn.Write(frame); ew != nil {
 				log.Warnf("[CIPHERSTREAM] write cipher data to cipher stream failed, msg:%+v", ew)
 				if timeout(ew) {
