@@ -27,7 +27,8 @@ type CipherStream struct {
 	AEADCipher
 	reader
 	writer
-	protoType util.ProtoType
+	frameType util.FrameType
+	flag      uint8
 }
 
 type reader struct {
@@ -39,8 +40,11 @@ type writer struct {
 	wbuf []byte
 }
 
-func New(stream net.Conn, password, method string, protoType util.ProtoType) (net.Conn, error) {
-	cs := &CipherStream{Conn: stream, protoType: protoType}
+func New(stream net.Conn, password, method string, frameType util.FrameType, flags ...uint8) (net.Conn, error) {
+	cs := &CipherStream{Conn: stream, frameType: frameType}
+	if len(flags) > 0 {
+		cs.flag = flags[0]
+	}
 
 	switch method {
 	case MethodAes256GCM:
@@ -70,6 +74,51 @@ func (cs *CipherStream) Write(b []byte) (int, error) {
 	return int(n), err
 }
 
+func (cs *CipherStream) WriteRST(flag uint8) error {
+	headerBuf := bytespool.Get(util.Http2HeaderLen)
+	defer bytespool.MustPut(headerBuf)
+
+	hb, padSize := util.EncodeHTTP2Header(util.FrameTypeRST, flag, 0, headerBuf)
+	hc, err := cs.Encrypt(hb)
+	if err != nil {
+		log.Errorf("[CIPHERSTREAM] encrypt header buf err:%+v", err)
+		return ErrEncrypt
+	}
+	if padSize <= 0 {
+		panic("invalid pad size")
+	}
+
+	padBuf := bytespool.Get(util.MaxPaddingSize)
+	defer bytespool.MustPut(padBuf)
+	padBuf = padBuf[:0]
+	padBuf = append(padBuf, padSize)
+	padBuf = padBuf[:padSize+1]
+
+	_, _ = rand.Read(padBuf[1 : padSize+1])
+	pc, err := cs.Encrypt(padBuf)
+	if err != nil {
+		log.Errorf("[CIPHERSTREAM] encrypt header buf err:%+v", err)
+		return ErrEncrypt
+	}
+
+	frame := bytespool.Get(MaxPayloadSize)
+	defer bytespool.MustPut(frame)
+	frame = frame[:0]
+	frame = append(frame, hc...)
+	frame = append(frame, pc...)
+
+	if _, ew := cs.Conn.Write(frame); ew != nil {
+		log.Warnf("[CIPHERSTREAM] write cipher data to cipher stream failed, msg:%+v", ew)
+		if timeout(ew) {
+			return ErrTimeout
+		} else {
+			return ErrWriteCipher
+		}
+	}
+
+	return nil
+}
+
 func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 	frame := bytespool.Get(2 * MaxPayloadSize)
 	defer bytespool.MustPut(frame)
@@ -92,7 +141,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 		if nr > 0 {
 			n += int64(nr)
 
-			hb, padSize := util.EncodeHTTP2Header(cs.protoType, nr, headerBuf)
+			hb, padSize := util.EncodeHTTP2Header(cs.frameType, cs.flag, nr, headerBuf)
 			hc, er := cs.Encrypt(hb)
 			if er != nil {
 				log.Errorf("[CIPHERSTREAM] encrypt header buf err:%+v", er)
@@ -151,9 +200,26 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 		return cn, nil
 	}
 
-	_, payloadPlain, err := cs.read()
-	if err != nil {
-		return 0, err
+	var header, payloadPlain []byte
+	var err error
+	for {
+		header, payloadPlain, err = cs.read()
+		if err != nil {
+			return 0, err
+		}
+		if util.IsRSTFINFrame(header) {
+			log.Debugf("[CIPHERSTREAM] receive RST_FIN frame, stop reading immediately")
+			return 0, ErrFINRSTStream
+		}
+		if util.IsRSTACKFrame(header) {
+			log.Debugf("[CIPHERSTREAM] receive RST_ACK frame, stop reading immediately")
+			return 0, ErrACKRSTStream
+		}
+		if util.IsPingFrame(header) {
+			log.Debugf("[CIPHERSTREAM] receive Ping frame, ignore it and continue to read next frame")
+			continue
+		}
+		break
 	}
 
 	cn := copy(b, payloadPlain)
@@ -214,14 +280,9 @@ func (cs *CipherStream) read() ([]byte, []byte, error) {
 		return header, nil, ErrDecrypt
 	}
 
-	if util.HasPadding(header) {
+	if util.HasPad(header) {
 		padSize := int(payloadPlain[0])
 		payloadPlain = payloadPlain[1 : len(payloadPlain)-padSize]
-	}
-
-	if isRSTStream, err := rstStream(payloadPlain); isRSTStream {
-		log.Debugf("[CIPHERSTREAM] receive RST_STREAM frame, we should stop reading immediately")
-		return header, payloadPlain, err
 	}
 
 	return header, payloadPlain, nil
@@ -234,25 +295,6 @@ func (cs *CipherStream) Release() {
 	cs.Conn = nil
 	cs.reader.rbuf = nil
 	cs.writer.wbuf = nil
-}
-
-// rstStream check the payload is RST_STREAM
-func rstStream(payload []byte) (bool, error) {
-	if len(payload) != util.Http2HeaderLen {
-		return false, nil
-	}
-	size := int(payload[0])<<16 | int(payload[1])<<8 | int(payload[2])
-	if size == 4 && payload[3] == 0x7 {
-		if payload[4] == 0x0 {
-			log.Debugf("[CIPHERSTREAM] receive FIN_RST_STREAM frame")
-			return true, ErrFINRSTStream
-		}
-		if payload[4] == 0x1 {
-			log.Debugf("[CIPHERSTREAM] receive ACK_RST_STREAM frame")
-			return true, ErrACKRSTStream
-		}
-	}
-	return false, nil
 }
 
 // timeout return true if err is net.Error timeout

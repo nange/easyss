@@ -113,12 +113,7 @@ func tryReuse(cipher net.Conn, timeout time.Duration) bool {
 
 func CloseWrite(conn net.Conn) error {
 	if csConn, ok := conn.(*cipherstream.CipherStream); ok {
-		finBuf := bytespool.Get(util.Http2HeaderLen)
-		defer bytespool.MustPut(finBuf)
-
-		fin := util.EncodeFINRstStream(finBuf)
-		_, err := csConn.Write(fin)
-		return err
+		return csConn.WriteRST(util.FlagFIN)
 	}
 
 	err := conn.(*net.TCPConn).CloseWrite()
@@ -164,12 +159,10 @@ func readAllIgnore(conn net.Conn) error {
 }
 
 func WriteACKToCipher(conn net.Conn) error {
-	ackBuf := bytespool.Get(util.Http2HeaderLen)
-	defer bytespool.MustPut(ackBuf)
-
-	ack := util.EncodeACKRstStream(ackBuf)
-	_, err := conn.Write(ack)
-	return err
+	if csConn, ok := conn.(*cipherstream.CipherStream); ok {
+		return csConn.WriteRST(util.FlagACK)
+	}
+	return nil
 }
 
 func ReadACKFromCipher(conn net.Conn) bool {

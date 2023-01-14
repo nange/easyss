@@ -110,7 +110,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		log.Debugf("[TCP_PROXY] after stream close, pool len: %v", pool.Len())
 	}()
 
-	if err = ss.handShakeWithRemote(stream, addr, util.ProtoTypeTCP); err != nil {
+	if err = ss.handShakeWithRemote(stream, addr, util.FlagTCP); err != nil {
 		log.Errorf("[TCP_PROXY] handshake with remote server err:%v", err)
 		if pc, ok := stream.(*easypool.PoolConn); ok {
 			log.Debugf("[TCP_PROXY] mark pool conn stream unusable")
@@ -119,7 +119,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		return
 	}
 
-	csStream, err := cipherstream.New(stream, ss.Password(), ss.Method(), util.ProtoTypeTCP)
+	csStream, err := cipherstream.New(stream, ss.Password(), ss.Method(), util.FrameTypeData, util.FlagTCP)
 	if err != nil {
 		log.Errorf("[TCP_PROXY] new cipherstream err:%v, password:%v, method:%v",
 			err, ss.Password(), ss.Method())
@@ -161,8 +161,8 @@ func (ss *Easyss) validateAddr(addr string) error {
 	return nil
 }
 
-func (ss *Easyss) handShakeWithRemote(stream net.Conn, addr string, protoType util.ProtoType) error {
-	csStream, err := cipherstream.New(stream, ss.Password(), cipherstream.MethodAes256GCM, protoType)
+func (ss *Easyss) handShakeWithRemote(stream net.Conn, addr string, flag uint8) error {
+	csStream, err := cipherstream.New(stream, ss.Password(), cipherstream.MethodAes256GCM, util.FrameTypeData, flag)
 	if err != nil {
 		return err
 	}

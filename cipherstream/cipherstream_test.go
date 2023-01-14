@@ -41,7 +41,7 @@ func TestCipherStream(t *testing.T) {
 	require.Nil(t, err)
 	defer conn.Close()
 
-	cipherConn, err := New(conn, "test-pass", "aes-256-gcm", util.ProtoTypeTCP)
+	cipherConn, err := New(conn, "test-pass", "aes-256-gcm", util.FrameTypeData, util.FlagTCP)
 	require.Nil(t, err)
 
 	_, err = cipherConn.Write([]byte("Hello world!"))
@@ -51,7 +51,7 @@ func TestCipherStream(t *testing.T) {
 	require.Nil(t, err)
 	defer serverConn.Close()
 
-	serverCipherConn, err := New(serverConn, "test-pass", "aes-256-gcm", util.ProtoTypeTCP)
+	serverCipherConn, err := New(serverConn, "test-pass", "aes-256-gcm", util.FrameTypeData, util.FlagTCP)
 	require.Nil(t, err)
 
 	b := make([]byte, 64)

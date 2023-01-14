@@ -83,12 +83,12 @@ func (ss *Easyss) tcpServer() {
 				log.Infof("[REMOTE] target:%v", addrStr)
 
 				switch protoType {
-				case util.ProtoTypeTCP:
+				case "tcp":
 					if err := ss.remoteTCPHandle(conn, addrStr, method); err != nil {
 						log.Errorf("[REMOTE] tcp handle err:%v", err)
 						return
 					}
-				case util.ProtoTypeUDP:
+				case "udp":
 					if err := ss.remoteUDPHandle(conn, addrStr, method); err != nil {
 						log.Errorf("[REMOTE] udp handle err:%v", err)
 						return
@@ -108,7 +108,7 @@ func (ss *Easyss) remoteTCPHandle(conn net.Conn, addrStr, method string) error {
 		return fmt.Errorf("net.Dial %v err:%v", addrStr, err)
 	}
 
-	csStream, err := cipherstream.New(conn, ss.Password(), method, util.ProtoTypeTCP)
+	csStream, err := cipherstream.New(conn, ss.Password(), method, util.FrameTypeData, util.FlagTCP)
 	if err != nil {
 		return fmt.Errorf("new cipherstream err:%+v, password:%v, method:%v",
 			err, ss.Password(), ss.Method())
@@ -127,18 +127,22 @@ func (ss *Easyss) remoteTCPHandle(conn net.Conn, addrStr, method string) error {
 	return nil
 }
 
-func (ss *Easyss) handShakeWithClient(conn net.Conn) (addr []byte, method string, protoType util.ProtoType, err error) {
-	csStream, err := cipherstream.New(conn, ss.Password(), cipherstream.MethodAes256GCM, util.ProtoTypeTCP)
+func (ss *Easyss) handShakeWithClient(conn net.Conn) (addr []byte, method string, protoType string, err error) {
+	csStream, err := cipherstream.New(conn, ss.Password(), cipherstream.MethodAes256GCM, util.FrameTypeUnknown)
 	if err != nil {
-		return nil, "", util.ProtoTypeUnknown, err
+		return nil, "", "", err
 	}
 	defer csStream.(*cipherstream.CipherStream).Release()
 
 	header, payload, err := csStream.(*cipherstream.CipherStream).ReadHeaderAndPayload()
 	if err != nil {
-		return nil, "", util.ProtoTypeUnknown, err
+		return nil, "", "", err
 	}
-	protoType = util.ProtoTypeFromHeader(header)
+	if util.IsTCPProto(header) {
+		protoType = "tcp"
+	} else if util.IsUDPProto(header) {
+		protoType = "udp"
+	}
 
 	length := len(payload)
 	if length <= 1 {
