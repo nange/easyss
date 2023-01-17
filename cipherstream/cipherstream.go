@@ -329,7 +329,13 @@ func (cs *CipherStream) read() ([]byte, []byte, error) {
 
 	if util.HasPad(header) {
 		padSize := int(payloadPlain[0])
-		payloadPlain = payloadPlain[1 : len(payloadPlain)-padSize]
+		ppLen := len(payloadPlain) - padSize - 1
+		if ppLen < 0 {
+			log.Errorf("[CIPHERSTREAM] payload len is negative, payload len:%v, pad size:%v, payloadPlain[0]:%b, header:%b",
+				len(payloadPlain), padSize, payloadPlain[0], header)
+			return header, nil, errors.New("payload len is negative")
+		}
+		payloadPlain = payloadPlain[1 : ppLen+1]
 	}
 
 	return header, payloadPlain, nil
