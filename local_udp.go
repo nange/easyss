@@ -120,13 +120,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		return send(ue, d.Data)
 	}
 
-	pool := ss.Pool()
-	if pool == nil {
-		log.Errorf("[UDP_PROXY] failed to get pool, easyss is closed")
-		return errors.New("easyss is closed")
-	}
-
-	stream, err := pool.Get()
+	stream, err := ss.AvailConnFromPool()
 	if err != nil {
 		log.Errorf("[UDP_PROXY] get stream from pool err:%+v", err)
 		return err

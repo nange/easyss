@@ -132,11 +132,26 @@ func (ss *Easyss) handShakeWithClient(conn net.Conn) (addr []byte, method string
 	if err != nil {
 		return nil, "", "", err
 	}
-	defer csStream.(*cipherstream.CipherStream).Release()
+	cs := csStream.(*cipherstream.CipherStream)
+	defer cs.Release()
 
-	header, payload, err := csStream.(*cipherstream.CipherStream).ReadHeaderAndPayload()
-	if err != nil {
-		return nil, "", "", err
+	var header, payload []byte
+	for {
+		header, payload, err = cs.ReadHeaderAndPayload()
+		if err != nil {
+			return nil, "", "", err
+		}
+
+		if util.IsPingFrame(header) {
+			log.Infof("[REMOTE] got ping message")
+			if util.IsNeedACK(header) {
+				if er := cs.WritePing(payload, util.FlagDefault); er != nil {
+					return nil, "", "", er
+				}
+			}
+			continue
+		}
+		break
 	}
 	if util.IsTCPProto(header) {
 		protoType = "tcp"

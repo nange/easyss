@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	_ "embed"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +23,7 @@ import (
 	"github.com/coocood/freecache"
 	"github.com/miekg/dns"
 	"github.com/nange/easypool"
+	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/util"
 	"github.com/oschwald/geoip2-golang"
 	utls "github.com/refraction-networking/utls"
@@ -315,11 +318,11 @@ func (ss *Easyss) InitTcpPool() error {
 	}
 
 	config := &easypool.PoolConfig{
-		InitialCap:  10,
-		MaxCap:      50,
-		MaxIdle:     10,
-		Idletime:    5 * time.Minute,
-		MaxLifetime: 30 * time.Minute,
+		InitialCap:  5,
+		MaxCap:      40,
+		MaxIdle:     5,
+		Idletime:    time.Minute,
+		MaxLifetime: 15 * time.Minute,
 		Factory:     factory,
 	}
 	tcpPool, err := easypool.NewHeapPool(config)
@@ -435,6 +438,66 @@ func (ss *Easyss) Pool() easypool.Pool {
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
 	return ss.tcpPool
+}
+
+func (ss *Easyss) AvailConnFromPool() (conn net.Conn, err error) {
+	pool := ss.Pool()
+	if pool == nil {
+		return nil, errors.New("pool is closed")
+	}
+
+	poolLen := pool.Len()
+	for i := 0; i < poolLen+1; i++ {
+		conn, err = pool.Get()
+		if err != nil {
+			log.Warnf("[EASYSS] get conn from pool failed:%v", err)
+			continue
+		}
+
+		err = func() (er error) {
+			var csStream net.Conn
+			csStream, er = cipherstream.New(conn, ss.Password(), cipherstream.MethodAes256GCM, util.FrameTypePing)
+			if er != nil {
+				return er
+			}
+
+			cs := csStream.(*cipherstream.CipherStream)
+			defer func() {
+				if er != nil {
+					MarkCipherStreamUnusable(cs)
+					conn.Close()
+				}
+				cs.Release()
+			}()
+
+			ping := []byte(strconv.FormatInt(time.Now().UnixNano(), 10))
+			if er = cs.WritePing(ping, util.FlagNeedACK); er != nil {
+				return
+			}
+			if er = SetCipherDeadline(cs, time.Second); er != nil {
+				return
+			}
+			var payload []byte
+			if payload, er = cs.ReadPing(); er != nil {
+				return
+			} else if !bytes.Equal(ping, payload) {
+				er = errors.New("the payload of ping not equals send value")
+				return
+			}
+			if er = cs.SetDeadline(time.Time{}); er != nil {
+				return
+			}
+			return
+		}()
+		if err != nil {
+			log.Warnf("[EASYSS] write ping to cipher stream:%v", err)
+			continue
+		}
+
+		break
+	}
+
+	return
 }
 
 func (ss *Easyss) SetSocksServer(server *socks5.Server) {

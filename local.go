@@ -9,7 +9,6 @@ import (
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/cipherstream"
 	"github.com/nange/easyss/util"
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
 )
@@ -93,21 +92,17 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		return err
 	}
 
-	pool := ss.Pool()
-	if pool == nil {
-		return errors.New("easyss is closed")
-	}
-
-	stream, err := pool.Get()
+	stream, err := ss.AvailConnFromPool()
 	if err != nil {
-		log.Errorf("[TCP_PROXY] get stream from pool failed:%+v", err)
+		log.Errorf("[TCP_PROXY] get stream from pool failed:%v", err)
 		return
 	}
 
-	log.Debugf("[TCP_PROXY] after pool get, pool len: %v", pool.Len())
 	defer func() {
 		stream.Close()
-		log.Debugf("[TCP_PROXY] after stream close, pool len: %v", pool.Len())
+		if p := ss.Pool(); p != nil {
+			log.Debugf("[TCP_PROXY] after stream close, pool len:%v", p.Len())
+		}
 	}()
 
 	if err = ss.handShakeWithRemote(stream, addr, util.FlagTCP); err != nil {

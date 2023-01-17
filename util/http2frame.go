@@ -49,6 +49,7 @@ func (ft FrameType) String() string {
 	}
 }
 
+const FlagDefault uint8 = 0
 const (
 	FlagTCP uint8 = 1 << iota
 	FlagUDP
@@ -121,61 +122,50 @@ func FrameTypeFromHeader(header []byte) FrameType {
 }
 
 func IsDataFrame(header []byte) bool {
+	if len(header) != Http2HeaderLen {
+		panic("header length is invalid")
+	}
 	return FrameTypeFromHeader(header) == FrameTypeData
 }
 
 func IsPingFrame(header []byte) bool {
+	if len(header) != Http2HeaderLen {
+		panic("header length is invalid")
+	}
 	return FrameTypeFromHeader(header) == FrameTypePing
 }
 
 func IsRSTFINFrame(header []byte) bool {
+	if len(header) != Http2HeaderLen {
+		panic("header length is invalid")
+	}
 	return FrameTypeFromHeader(header) == FrameTypeRST && header[4]&FlagFIN == FlagFIN
 }
 
 func IsRSTACKFrame(header []byte) bool {
+	if len(header) != Http2HeaderLen {
+		panic("header length is invalid")
+	}
 	return FrameTypeFromHeader(header) == FrameTypeRST && header[4]&FlagACK == FlagACK
 }
 
 func IsTCPProto(header []byte) bool {
+	if len(header) != Http2HeaderLen {
+		panic("header length is invalid")
+	}
 	return header[4]&FlagTCP == FlagTCP
 }
 
 func IsUDPProto(header []byte) bool {
+	if len(header) != Http2HeaderLen {
+		panic("header length is invalid")
+	}
 	return header[4]&FlagUDP == FlagUDP
 }
 
-//func EncodeFINRstStream(dst []byte) (header []byte) {
-//	if cap(dst) < Http2HeaderLen {
-//		dst = make([]byte, Http2HeaderLen)
-//	} else {
-//		dst = dst[:Http2HeaderLen]
-//	}
-//	binary.BigEndian.PutUint16(dst[1:3], uint16(4))
-//	// set frame type to RST_STREAM
-//	dst[3] = 0x7
-//	// set default flag
-//	dst[4] = 0x0
-//
-//	// set stream identifier. note: this is temporary, will update in future
-//	binary.BigEndian.PutUint32(dst[5:Http2HeaderLen], uint32(rand.Int31()))
-//
-//	return dst
-//}
-//
-//func EncodeACKRstStream(dst []byte) (header []byte) {
-//	if cap(dst) < Http2HeaderLen {
-//		dst = make([]byte, Http2HeaderLen)
-//	} else {
-//		dst = dst[:Http2HeaderLen]
-//	}
-//	binary.BigEndian.PutUint16(dst[1:3], uint16(4))
-//	// set frame type to RST_STREAM
-//	dst[3] = 0x7
-//	// set default flag
-//	dst[4] = 0x1
-//
-//	// set stream identifier. note: this is temporary, will update in future
-//	binary.BigEndian.PutUint32(dst[5:Http2HeaderLen], uint32(rand.Int31()))
-//
-//	return dst
-//}
+func IsNeedACK(header []byte) bool {
+	if len(header) != Http2HeaderLen {
+		panic("header length is invalid")
+	}
+	return header[4]&FlagNeedACK == FlagNeedACK
+}

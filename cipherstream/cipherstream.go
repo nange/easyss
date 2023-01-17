@@ -138,6 +138,25 @@ func (cs *CipherStream) WritePing(b []byte, flag uint8) error {
 	return nil
 }
 
+func (cs *CipherStream) ReadPing() (payload []byte, err error) {
+	var header []byte
+	header, payload, err = cs.read()
+	if err != nil {
+		return nil, err
+	}
+	if util.IsRSTFINFrame(header) {
+		return nil, ErrFINRSTStream
+	}
+	if util.IsRSTACKFrame(header) {
+		return nil, ErrACKRSTStream
+	}
+	if util.IsPingFrame(header) {
+		return
+	}
+
+	return nil, errors.New("is not ping message")
+}
+
 func (cs *CipherStream) makeCipherHeader(frameType util.FrameType, flag uint8, rawDataLen int) ([]byte, byte, error) {
 	headerBuf := bytespool.Get(util.Http2HeaderLen)
 	defer bytespool.MustPut(headerBuf)
