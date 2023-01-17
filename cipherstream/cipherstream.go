@@ -289,9 +289,9 @@ func (cs *CipherStream) read() ([]byte, []byte, error) {
 		}
 		if errors.Is(err, io.EOF) {
 			log.Debugf("[CIPHERSTREAM] got EOF error when reading cipher stream payload len, maybe the remote-server closed the conn")
-		} else {
-			log.Warnf("[CIPHERSTREAM] read cipher stream payload len err:%+v", err)
+			return nil, nil, io.EOF
 		}
+		log.Warnf("[CIPHERSTREAM] read cipher stream payload len err:%+v", err)
 		return nil, nil, ErrReadCipher
 	}
 

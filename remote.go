@@ -67,9 +67,9 @@ func (ss *Easyss) tcpServer() {
 				addr, method, protoType, err := ss.handShakeWithClient(conn)
 				if err != nil {
 					if errors.Is(err, io.EOF) {
-						log.Debugf("[REMOTE] got EOF error when handShake with client-server, maybe the connection pool closed the idle conn")
+						log.Debugf("[REMOTE] got EOF error when handshake with client-server, maybe the connection pool closed the idle conn")
 					} else {
-						log.Warnf("[REMOTE] get target addr err:%+v", err)
+						log.Warnf("[REMOTE] handshake with client:%+v", err)
 					}
 					return
 				}
