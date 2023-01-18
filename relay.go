@@ -43,7 +43,7 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64) {
 		if err != nil {
 			log.Debugf("[REPAY] copy from cipher to plaintxt: %v", err)
 			if !cipherstream.FINRSTStreamErr(err) {
-				if err := SetCipherDeadline(cipher, ss.Timeout()); err != nil {
+				if err := SetCipherDeadline(cipher, time.Now().Add(ss.Timeout())); err != nil {
 					tryReuse = false
 				} else {
 					if err := readAllIgnore(cipher); !cipherstream.FINRSTStreamErr(err) {
@@ -96,7 +96,7 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64) {
 }
 
 func tryReuse(cipher net.Conn, timeout time.Duration) bool {
-	if err := SetCipherDeadline(cipher, timeout); err != nil {
+	if err := SetCipherDeadline(cipher, time.Now().Add(timeout)); err != nil {
 		return false
 	}
 	if err := WriteACKToCipher(cipher); err != nil {
@@ -105,7 +105,7 @@ func tryReuse(cipher net.Conn, timeout time.Duration) bool {
 	if !ReadACKFromCipher(cipher) {
 		return false
 	}
-	if err := cipher.SetDeadline(time.Time{}); err != nil {
+	if err := SetCipherDeadline(cipher, time.Time{}); err != nil {
 		return false
 	}
 	return true
@@ -191,9 +191,9 @@ func MarkCipherStreamUnusable(cipher net.Conn) bool {
 	return false
 }
 
-func SetCipherDeadline(cipher net.Conn, sec time.Duration) error {
+func SetCipherDeadline(cipher net.Conn, t time.Time) error {
 	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
-		return cs.Conn.SetDeadline(time.Now().Add(sec))
+		return cs.Conn.SetDeadline(t)
 	}
 	return nil
 }

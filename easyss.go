@@ -447,7 +447,7 @@ func (ss *Easyss) AvailConnFromPool() (conn net.Conn, err error) {
 	}
 
 	poolLen := pool.Len()
-	for i := 0; i < poolLen+1; i++ {
+	for i := 0; i < poolLen+2; i++ {
 		conn, err = pool.Get()
 		if err != nil {
 			log.Warnf("[EASYSS] get conn from pool failed:%v", err)
@@ -474,7 +474,7 @@ func (ss *Easyss) AvailConnFromPool() (conn net.Conn, err error) {
 			if er = cs.WritePing(ping, util.FlagNeedACK); er != nil {
 				return
 			}
-			if er = SetCipherDeadline(cs, time.Second); er != nil {
+			if er = SetCipherDeadline(cs, time.Now().Add(time.Second)); er != nil {
 				return
 			}
 			var payload []byte
@@ -484,7 +484,7 @@ func (ss *Easyss) AvailConnFromPool() (conn net.Conn, err error) {
 				er = errors.New("the payload of ping not equals send value")
 				return
 			}
-			if er = cs.SetDeadline(time.Time{}); er != nil {
+			if er = SetCipherDeadline(cs, time.Time{}); er != nil {
 				return
 			}
 			return

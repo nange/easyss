@@ -145,7 +145,7 @@ func (ss *Easyss) handShakeWithClient(conn net.Conn) (addr []byte, method string
 		if util.IsPingFrame(header) {
 			log.Infof("[REMOTE] got ping message")
 			if util.IsNeedACK(header) {
-				if er := cs.WritePing(payload, util.FlagDefault); er != nil {
+				if er := cs.WritePing(payload, util.FlagACK); er != nil {
 					return nil, "", "", er
 				}
 			}
