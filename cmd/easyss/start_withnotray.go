@@ -11,7 +11,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func StartEasyss(ss *easyss.Easyss) {
+func Start(ss *easyss.Easyss) {
 	if err := ss.InitTcpPool(); err != nil {
 		log.Errorf("[EASYSS-MAIN] init tcp pool error:%v", err)
 	}

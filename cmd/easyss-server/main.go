@@ -80,5 +80,5 @@ func main() {
 	}
 
 	ss := easyss.NewServer(config)
-	ss.Remote()
+	ss.Start()
 }

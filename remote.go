@@ -14,7 +14,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func (es *EasyServer) Remote() {
+func (es *EasyServer) Start() {
 	es.startTCPServer()
 }
 

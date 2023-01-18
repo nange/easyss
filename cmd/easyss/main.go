@@ -113,5 +113,5 @@ func main() {
 	if err != nil {
 		log.Errorf("[EASYSS-MAIN] new easyss err:%v", err)
 	}
-	StartEasyss(ss)
+	Start(ss)
 }

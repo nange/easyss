@@ -12,7 +12,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func StartEasyss(ss *easyss.Easyss) {
+func Start(ss *easyss.Easyss) {
 	st := NewSysTray(ss)
 
 	go func() {
