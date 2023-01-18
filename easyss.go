@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	_ "embed"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -214,30 +216,32 @@ func New(config *Config) (*Easyss, error) {
 		log.Errorf("[EASYSS] load custom ip/domains err:%s", err.Error())
 	}
 
-	var msg, msgAAAA *dns.Msg
-	for _, server := range DefaultDirectDNSServers {
-		msg, msgAAAA, err = ss.ServerDNSMsg(server)
-		if err != nil {
-			log.Warnf("[EASYSS] query dns failed for %s from %s err:%s",
-				ss.Server(), server, err.Error())
-			continue
+	if !util.IsIP(ss.Server()) {
+		var msg, msgAAAA *dns.Msg
+		for _, server := range DefaultDirectDNSServers {
+			msg, msgAAAA, err = ss.ServerDNSMsg(server)
+			if err != nil {
+				log.Warnf("[EASYSS] query dns failed for %s from %s err:%s",
+					ss.Server(), server, err.Error())
+				continue
+			}
+			if msg != nil {
+				ss.directDNSServer = server
+				log.Infof("[EASYSS] query dns success for %s from %s", ss.Server(), server)
+				break
+			}
 		}
-		if msg != nil {
-			ss.directDNSServer = server
-			log.Infof("[EASYSS] query dns success for %s from %s", ss.Server(), server)
-			break
-		}
-	}
 
-	if msg != nil && msgAAAA != nil {
-		if len(msg.Answer) > 0 {
-			ss.serverIP = msg.Answer[0].(*dns.A).A.String()
-			_ = ss.SetDNSCache(msg, true, true)
-			_ = ss.SetDNSCache(msg, true, false)
-			_ = ss.SetDNSCache(msgAAAA, true, true)
-			_ = ss.SetDNSCache(msgAAAA, true, false)
-		} else {
-			log.Errorf("[EASYSS] dns result is empty for %s", ss.Server())
+		if msg != nil && msgAAAA != nil {
+			if len(msg.Answer) > 0 {
+				ss.serverIP = msg.Answer[0].(*dns.A).A.String()
+				_ = ss.SetDNSCache(msg, true, true)
+				_ = ss.SetDNSCache(msg, true, false)
+				_ = ss.SetDNSCache(msgAAAA, true, true)
+				_ = ss.SetDNSCache(msgAAAA, true, false)
+			} else {
+				log.Errorf("[EASYSS] dns result is empty for %s", ss.Server())
+			}
 		}
 	}
 
@@ -295,12 +299,27 @@ func (ss *Easyss) InitTcpPool() error {
 		log.Infof("[EASYSS] uTLS is enabled")
 	}
 
+	var certPool *x509.CertPool
+	if ss.CAPath() != "" {
+		log.Infof("[EASYSS] using self-signed cert, ca-path:%s", ss.CAPath())
+		certPool = x509.NewCertPool()
+		caBuf, err := os.ReadFile(ss.CAPath())
+		if err != nil {
+			return err
+		}
+		if ok := certPool.AppendCertsFromPEM(caBuf); !ok {
+			return errors.New("append certs from pem failed")
+		}
+	}
+
 	factory := func() (net.Conn, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
 		defer cancel()
 
 		if ss.DisableUTLS() {
-			dialer := new(tls.Dialer)
+			dialer := &tls.Dialer{
+				Config: &tls.Config{RootCAs: certPool},
+			}
 			return dialer.DialContext(ctx, "tcp", ss.ServerAddr())
 		}
 
@@ -309,7 +328,13 @@ func (ss *Easyss) InitTcpPool() error {
 			return nil, err
 		}
 
-		uConn := utls.UClient(conn, &utls.Config{ServerName: ss.Server()}, utls.HelloChrome_Auto)
+		uConn := utls.UClient(
+			conn,
+			&utls.Config{
+				ServerName: ss.Server(),
+				RootCAs:    certPool,
+			},
+			utls.HelloChrome_Auto)
 		if err := uConn.HandshakeContext(ctx); err != nil {
 			return nil, err
 		}
@@ -425,6 +450,10 @@ func (ss *Easyss) DisableUTLS() bool {
 
 func (ss *Easyss) EnableForwardDNS() bool {
 	return ss.config.EnableForwardDNS
+}
+
+func (ss *Easyss) CAPath() string {
+	return ss.config.CAPath
 }
 
 func (ss *Easyss) ConfigFilename() string {

@@ -19,12 +19,23 @@ func (es *EasyServer) Start() {
 }
 
 func (es *EasyServer) tlsConfig() (*tls.Config, error) {
-	tlsConfig, err := certmagic.TLS([]string{es.Server()})
-	if err != nil {
-		return nil, err
+	var tlsConfig *tls.Config
+	var err error
+	if es.CertPath() != "" && es.KeyPath() != "" {
+		log.Infof("[REMOTE] using self-signed cert, cert-path:%s, key-path:%s", es.CertPath(), es.KeyPath())
+		var cer tls.Certificate
+		if cer, err = tls.LoadX509KeyPair(es.CertPath(), es.KeyPath()); err != nil {
+			return nil, err
+		}
+		tlsConfig = &tls.Config{Certificates: []tls.Certificate{cer}}
+	} else {
+		tlsConfig, err = certmagic.TLS([]string{es.Server()})
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	tlsConfig.NextProtos = []string{"h2", "http/1.1"}
+	tlsConfig.NextProtos = append(tlsConfig.NextProtos, []string{"h2", "http/1.1"}...)
 	if !es.DisableUTLS() {
 		tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
 			for _, v := range tlsConfig.NextProtos {

@@ -27,6 +27,8 @@ type ServerConfig struct {
 	Password    string `json:"password"`
 	Timeout     int    `json:"timeout"`
 	DisableUTLS bool   `json:"disable_utls"`
+	CertPath    string `json:"cert_path"`
+	KeyPath     string `json:"key_path"`
 }
 
 type Config struct {
@@ -45,6 +47,7 @@ type Config struct {
 	DirectIPsFile     string         `json:"direct_ips_file"`
 	DirectDomainsFile string         `json:"direct_domains_file"`
 	ProxyRule         string         `json:"proxy_rule"`
+	CAPath            string         `json:"ca_path"`
 	ConfigFile        string         `json:"-"`
 }
 
