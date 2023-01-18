@@ -25,7 +25,7 @@ func init() {
 func main() {
 	var configFile, logLevel string
 	var printVer bool
-	var cmdConfig easyss.Config
+	var cmdConfig easyss.ServerConfig
 
 	flag.BoolVar(&printVer, "version", false, "print version")
 	flag.StringVar(&configFile, "c", "config.json", "specify config file")
@@ -63,7 +63,7 @@ func main() {
 		log.Debugf("[EASYSS_SERVER] config file not found, try config file %s", configFile)
 	}
 
-	config, err := easyss.ParseConfig(configFile)
+	config, err := easyss.ParseConfig[easyss.ServerConfig](configFile)
 	if err != nil {
 		config = &cmdConfig
 		if !os.IsNotExist(errors.Cause(err)) {
@@ -72,15 +72,13 @@ func main() {
 		}
 	} else {
 		easyss.OverrideConfig(config, &cmdConfig)
+		config.SetDefaultValue()
 	}
 
-	if err := config.ServerValidate(); err != nil {
+	if err := config.Validate(); err != nil {
 		log.Fatalf("[EASYSS_SERVER] starts failed, config is invalid:%s", err.Error())
 	}
 
-	ss, err := easyss.New(config)
-	if err != nil {
-		log.Errorf("[EASYSS_SERVER] new easyss err:%v", err)
-	}
+	ss := easyss.NewServer(config)
 	ss.Remote()
 }

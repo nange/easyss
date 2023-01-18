@@ -12,7 +12,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) error {
+func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string) error {
 	rAddr, err := net.ResolveUDPAddr("udp", addrStr)
 	if err != nil {
 		return fmt.Errorf("net.ResolveUDPAddr %s err:%v", addrStr, err)
@@ -23,10 +23,10 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) error {
 		return fmt.Errorf("net.DialUDP %v err:%v", addrStr, err)
 	}
 
-	csStream, err := cipherstream.New(conn, ss.Password(), method, util.FrameTypeData, util.FlagUDP)
+	csStream, err := cipherstream.New(conn, es.Password(), method, util.FrameTypeData, util.FlagUDP)
 	if err != nil {
 		return fmt.Errorf("new cipherstream err:%+v, password:%v, method:%v",
-			err, ss.Password(), ss.Method())
+			err, es.Password(), method)
 	}
 
 	var tryReuse bool
@@ -85,7 +85,7 @@ func (ss *Easyss) remoteUDPHandle(conn net.Conn, addrStr, method string) error {
 	var reuse bool
 	if tryReuse {
 		log.Debugf("[REMOTE_UDP] request is finished, try to reuse underlying tcp connection")
-		reuse = tryReuseInUDPServer(csStream, ss.Timeout())
+		reuse = tryReuseInUDPServer(csStream, es.Timeout())
 	}
 
 	if !reuse {

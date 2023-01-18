@@ -25,6 +25,7 @@ type ServerConfig struct {
 	Server      string `json:"server"`
 	ServerPort  int    `json:"server_port"`
 	Password    string `json:"password"`
+	Timeout     int    `json:"timeout"`
 	DisableUTLS bool   `json:"disable_utls"`
 }
 
@@ -47,7 +48,7 @@ type Config struct {
 	ConfigFile        string         `json:"-"`
 }
 
-func (c *Config) ClientValidate() error {
+func (c *Config) Validate() error {
 	if len(c.ServerList) == 0 && (c.Server == "" || c.ServerPort == 0 || c.Password == "" || c.Method == "") {
 		return errors.New("server address, server port, password, method should not empty")
 	}
@@ -72,13 +73,6 @@ func (c *Config) ClientValidate() error {
 	return nil
 }
 
-func (c *Config) ServerValidate() error {
-	if c.Server == "" || c.ServerPort == 0 || c.Password == "" {
-		return errors.New("server address, server port and password should not empty")
-	}
-	return nil
-}
-
 func (c *Config) Clone() *Config {
 	b, _ := json.Marshal(c)
 	cc := new(Config)
@@ -86,7 +80,7 @@ func (c *Config) Clone() *Config {
 	return cc
 }
 
-func ParseConfig(path string) (config *Config, err error) {
+func ParseConfig[T any](path string) (config *T, err error) {
 	file, err := os.Open(path) // For read access.
 	if err != nil {
 		err = errors.WithStack(err)
@@ -100,7 +94,7 @@ func ParseConfig(path string) (config *Config, err error) {
 		return
 	}
 
-	config = &Config{}
+	config = new(T)
 	if err = json.Unmarshal(data, config); err != nil {
 		err = errors.WithStack(err)
 		return nil, err
@@ -109,7 +103,7 @@ func ParseConfig(path string) (config *Config, err error) {
 	return
 }
 
-func OverrideConfig(dst, src *Config) {
+func OverrideConfig[T any](dst, src *T) {
 	newVal := reflect.ValueOf(src).Elem()
 	oldVal := reflect.ValueOf(dst).Elem()
 
@@ -136,35 +130,51 @@ func OverrideConfig(dst, src *Config) {
 		}
 	}
 
+}
+
+func (c *Config) SetDefaultValue() {
 	// if server is empty, try to use the first item in server list instead
-	if dst.Server == "" && len(dst.ServerList) > 0 {
-		dst.Server = dst.ServerList[0].Server
-		dst.ServerPort = dst.ServerList[0].ServerPort
-		dst.Password = dst.ServerList[0].Password
-		dst.DisableUTLS = dst.ServerList[0].DisableUTLS
+	if c.Server == "" && len(c.ServerList) > 0 {
+		c.Server = c.ServerList[0].Server
+		c.ServerPort = c.ServerList[0].ServerPort
+		c.Password = c.ServerList[0].Password
+		c.DisableUTLS = c.ServerList[0].DisableUTLS
 	}
 
-	if dst.LocalPort == 0 {
-		dst.LocalPort = 2080
+	if c.LocalPort == 0 {
+		c.LocalPort = 2080
 	}
-	if dst.HTTPPort == 0 {
-		dst.HTTPPort = dst.LocalPort + 1000
+	if c.HTTPPort == 0 {
+		c.HTTPPort = c.LocalPort + 1000
 	}
-	if dst.Method == "" {
-		dst.Method = "aes-256-gcm"
+	if c.Method == "" {
+		c.Method = "aes-256-gcm"
 	}
-	if dst.Timeout <= 0 || dst.Timeout > 60 {
-		dst.Timeout = 60
+	if c.Timeout <= 0 || c.Timeout > 60 {
+		c.Timeout = 60
 	}
-	if dst.DirectIPsFile == "" {
-		dst.DirectIPsFile = "direct_ips.txt"
+	if c.DirectIPsFile == "" {
+		c.DirectIPsFile = "direct_ips.txt"
 	}
-	if dst.DirectDomainsFile == "" {
-		dst.DirectDomainsFile = "direct_domains.txt"
+	if c.DirectDomainsFile == "" {
+		c.DirectDomainsFile = "direct_domains.txt"
 	}
-	if dst.ProxyRule == "" {
-		dst.ProxyRule = "auto"
+	if c.ProxyRule == "" {
+		c.ProxyRule = "auto"
 	}
+}
+
+func (c *ServerConfig) SetDefaultValue() {
+	if c.Timeout <= 0 || c.Timeout > 60 {
+		c.Timeout = 60
+	}
+}
+
+func (c *ServerConfig) Validate() error {
+	if c.Server == "" || c.ServerPort == 0 || c.Password == "" {
+		return errors.New("server address, server port and password should not empty")
+	}
+	return nil
 }
 
 func ExampleJSONConfig() string {

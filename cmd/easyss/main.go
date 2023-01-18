@@ -89,7 +89,7 @@ func main() {
 		log.Debugf("[EASYSS-MAIN] config file not found, try config file %s", cmdConfig.ConfigFile)
 	}
 
-	config, err := easyss.ParseConfig(cmdConfig.ConfigFile)
+	config, err := easyss.ParseConfig[easyss.Config](cmdConfig.ConfigFile)
 	if err != nil {
 		config = &cmdConfig
 		if !os.IsNotExist(errors.Cause(err)) {
@@ -98,9 +98,10 @@ func main() {
 		}
 	} else {
 		easyss.OverrideConfig(config, &cmdConfig)
+		config.SetDefaultValue()
 	}
 
-	if err := config.ClientValidate(); err != nil {
+	if err := config.Validate(); err != nil {
 		log.Fatalf("[EASYSS-MAIN] starts failed, config is invalid:%s", err.Error())
 	}
 

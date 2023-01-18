@@ -121,7 +121,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		return
 	}
 
-	n1, n2 := ss.relay(csStream, localConn)
+	n1, n2 := relay(csStream, localConn, ss.Timeout())
 	csStream.(*cipherstream.CipherStream).Release()
 
 	log.Debugf("[TCP_PROXY] send %v bytes to %v, recive %v bytes", n1, addr, n2)

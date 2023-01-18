@@ -14,42 +14,42 @@ func TestConfig_ClientValidate(t *testing.T) {
 		Password:   "test-pass",
 		Method:     "aes-256-gcm",
 	}
-	assert.Nil(t, c.ClientValidate())
+	assert.Nil(t, c.Validate())
 
 	c.Method = "invalid-method"
-	assert.NotNil(t, c.ClientValidate())
+	assert.NotNil(t, c.Validate())
 
 	c.Method = "aes-256-gcm"
 	c.Server = ""
-	assert.NotNil(t, c.ClientValidate())
+	assert.NotNil(t, c.Validate())
 
 	c.Server = "your-domain.com"
 	c.ServerPort = 0
-	assert.NotNil(t, c.ClientValidate())
+	assert.NotNil(t, c.Validate())
 
 	c.ServerPort = 9999
 	c.Password = ""
-	assert.NotNil(t, c.ClientValidate())
+	assert.NotNil(t, c.Validate())
 }
 
 func TestConfig_ServerValidate(t *testing.T) {
-	c := &Config{
+	c := &ServerConfig{
 		Server:     "your-domain.com",
 		ServerPort: 9999,
 		Password:   "you-pass",
 	}
-	assert.Nil(t, c.ServerValidate())
+	assert.Nil(t, c.Validate())
 
 	c.Server = ""
-	assert.NotNil(t, c.ServerValidate())
+	assert.NotNil(t, c.Validate())
 
 	c.Server = "your-domain.com"
 	c.Password = ""
-	assert.NotNil(t, c.ServerValidate())
+	assert.NotNil(t, c.Validate())
 
 	c.Password = "your-pass"
 	c.ServerPort = 0
-	assert.NotNil(t, c.ServerValidate())
+	assert.NotNil(t, c.Validate())
 }
 
 func TestConfig_Clone(t *testing.T) {

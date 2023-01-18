@@ -14,18 +14,18 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func (ss *Easyss) Remote() {
-	ss.tcpServer()
+func (es *EasyServer) Remote() {
+	es.startTCPServer()
 }
 
-func (ss *Easyss) tlsConfig() (*tls.Config, error) {
-	tlsConfig, err := certmagic.TLS([]string{ss.Server()})
+func (es *EasyServer) tlsConfig() (*tls.Config, error) {
+	tlsConfig, err := certmagic.TLS([]string{es.Server()})
 	if err != nil {
 		return nil, err
 	}
 
 	tlsConfig.NextProtos = []string{"h2", "http/1.1"}
-	if !ss.DisableUTLS() {
+	if !es.DisableUTLS() {
 		tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
 			for _, v := range tlsConfig.NextProtos {
 				if cs.NegotiatedProtocol == v {
@@ -39,9 +39,9 @@ func (ss *Easyss) tlsConfig() (*tls.Config, error) {
 	return tlsConfig, nil
 }
 
-func (ss *Easyss) tcpServer() {
-	addr := ":" + strconv.Itoa(ss.ServerPort())
-	tlsConfig, err := ss.tlsConfig()
+func (es *EasyServer) startTCPServer() {
+	addr := ":" + strconv.Itoa(es.ServerPort())
+	tlsConfig, err := es.tlsConfig()
 	if err != nil {
 		log.Fatalf("[REMOTE] get server tls config err:%v", err)
 	}
@@ -64,7 +64,7 @@ func (ss *Easyss) tcpServer() {
 			defer conn.Close()
 
 			for {
-				addr, method, protoType, err := ss.handShakeWithClient(conn)
+				addr, method, protoType, err := es.handShakeWithClient(conn)
 				if err != nil {
 					if errors.Is(err, io.EOF) {
 						log.Debugf("[REMOTE] got EOF error when handshake with client-server, maybe the connection pool closed the idle conn")
@@ -84,12 +84,12 @@ func (ss *Easyss) tcpServer() {
 
 				switch protoType {
 				case "tcp":
-					if err := ss.remoteTCPHandle(conn, addrStr, method); err != nil {
+					if err := es.remoteTCPHandle(conn, addrStr, method); err != nil {
 						log.Errorf("[REMOTE] tcp handle err:%v", err)
 						return
 					}
 				case "udp":
-					if err := ss.remoteUDPHandle(conn, addrStr, method); err != nil {
+					if err := es.remoteUDPHandle(conn, addrStr, method); err != nil {
 						log.Errorf("[REMOTE] udp handle err:%v", err)
 						return
 					}
@@ -102,33 +102,30 @@ func (ss *Easyss) tcpServer() {
 	}
 }
 
-func (ss *Easyss) remoteTCPHandle(conn net.Conn, addrStr, method string) error {
-	tConn, err := net.DialTimeout("tcp", addrStr, ss.Timeout())
+func (es *EasyServer) remoteTCPHandle(conn net.Conn, addrStr, method string) error {
+	tConn, err := net.DialTimeout("tcp", addrStr, es.Timeout())
 	if err != nil {
 		return fmt.Errorf("net.Dial %v err:%v", addrStr, err)
 	}
 
-	csStream, err := cipherstream.New(conn, ss.Password(), method, util.FrameTypeData, util.FlagTCP)
+	csStream, err := cipherstream.New(conn, es.Password(), method, util.FrameTypeData, util.FlagTCP)
 	if err != nil {
 		return fmt.Errorf("new cipherstream err:%+v, password:%v, method:%v",
-			err, ss.Password(), ss.Method())
+			err, es.Password(), method)
 	}
 
-	n1, n2 := ss.relay(csStream, tConn)
+	n1, n2 := relay(csStream, tConn, es.Timeout())
 	csStream.(*cipherstream.CipherStream).Release()
 
 	log.Debugf("[REMOTE] send %v bytes to %v, and recive %v bytes", n2, addrStr, n1)
-
-	ss.stat.BytesSend.Add(n2)
-	ss.stat.BytesReceive.Add(n1)
 
 	_ = tConn.Close()
 
 	return nil
 }
 
-func (ss *Easyss) handShakeWithClient(conn net.Conn) (addr []byte, method string, protoType string, err error) {
-	csStream, err := cipherstream.New(conn, ss.Password(), cipherstream.MethodAes256GCM, util.FrameTypeUnknown)
+func (es *EasyServer) handShakeWithClient(conn net.Conn) (addr []byte, method string, protoType string, err error) {
+	csStream, err := cipherstream.New(conn, es.Password(), cipherstream.MethodAes256GCM, util.FrameTypeUnknown)
 	if err != nil {
 		return nil, "", "", err
 	}

@@ -21,7 +21,7 @@ const RelayBufferSize = 20 * 1024
 // relay copies between cipher stream and plaintext stream.
 // return the number of bytes copies
 // from plaintext stream to cipher stream, from cipher stream to plaintext stream, and needClose on server conn
-func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64) {
+func relay(cipher, plaintxt net.Conn, timeout time.Duration) (n1 int64, n2 int64) {
 	type res struct {
 		N        int64
 		Err      error
@@ -43,7 +43,7 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64) {
 		if err != nil {
 			log.Debugf("[REPAY] copy from cipher to plaintxt: %v", err)
 			if !cipherstream.FINRSTStreamErr(err) {
-				if err := SetCipherDeadline(cipher, time.Now().Add(ss.Timeout())); err != nil {
+				if err := SetCipherDeadline(cipher, time.Now().Add(timeout)); err != nil {
 					tryReuse = false
 				} else {
 					if err := readAllIgnore(cipher); !cipherstream.FINRSTStreamErr(err) {
@@ -83,7 +83,7 @@ func (ss *Easyss) relay(cipher, plaintxt net.Conn) (n1 int64, n2 int64) {
 
 	reuse := false
 	if res1.TryReuse && res2.TryReuse {
-		reuse = tryReuse(cipher, ss.Timeout())
+		reuse = tryReuse(cipher, timeout)
 	}
 	if !reuse {
 		MarkCipherStreamUnusable(cipher)
