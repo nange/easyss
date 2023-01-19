@@ -27,8 +27,8 @@ type ServerConfig struct {
 	Password    string `json:"password"`
 	Timeout     int    `json:"timeout"`
 	DisableUTLS bool   `json:"disable_utls"`
-	CertPath    string `json:"cert_path"`
-	KeyPath     string `json:"key_path"`
+	CertPath    string `json:"cert_path,omitempty"`
+	KeyPath     string `json:"key_path,omitempty"`
 }
 
 type Config struct {
