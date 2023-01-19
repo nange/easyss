@@ -243,6 +243,9 @@ func New(config *Config) (*Easyss, error) {
 				log.Errorf("[EASYSS] dns result is empty for %s", ss.Server())
 			}
 		}
+	} else {
+		ss.directDNSServer = DefaultDirectDNSServers[0]
+		ss.serverIP = ss.Server()
 	}
 
 	switch runtime.GOOS {
