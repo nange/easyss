@@ -27,12 +27,12 @@ type ServerConfig struct {
 	Password    string `json:"password"`
 	Timeout     int    `json:"timeout"`
 	DisableUTLS bool   `json:"disable_utls"`
-	CertPath    string `json:"cert_path,omitempty"`
-	KeyPath     string `json:"key_path,omitempty"`
+	CertPath    string `json:"cert_path"`
+	KeyPath     string `json:"key_path"`
 }
 
 type Config struct {
-	ServerList        []ServerConfig `json:"server_list"`
+	ServerList        []ServerConfig `json:"server_list,omitempty"`
 	Server            string         `json:"server"`
 	ServerPort        int            `json:"server_port"`
 	LocalPort         int            `json:"local_port"`
@@ -189,6 +189,21 @@ func ExampleJSONConfig() string {
 		Method:     "aes-256-gcm",
 		Timeout:    30,
 		BindALL:    false,
+	}
+
+	b, _ := json.MarshalIndent(example, "", "    ")
+	return string(b)
+}
+
+func ExampleServerJSONConfig() string {
+	example := ServerConfig{
+		Server:      "example.com",
+		ServerPort:  9999,
+		Password:    "your-pass",
+		Timeout:     30,
+		DisableUTLS: false,
+		CertPath:    "",
+		KeyPath:     "",
 	}
 
 	b, _ := json.MarshalIndent(example, "", "    ")

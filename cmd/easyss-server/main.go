@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -24,10 +25,11 @@ func init() {
 
 func main() {
 	var configFile, logLevel string
-	var printVer bool
+	var printVer, showConfigExample bool
 	var cmdConfig easyss.ServerConfig
 
 	flag.BoolVar(&printVer, "version", false, "print version")
+	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file")
 	flag.StringVar(&configFile, "c", "config.json", "specify config file")
 	flag.StringVar(&cmdConfig.Password, "k", "", "password")
 	flag.StringVar(&cmdConfig.Server, "s", "", "server address")
@@ -38,6 +40,10 @@ func main() {
 
 	if printVer {
 		easyss.PrintVersion()
+		os.Exit(0)
+	}
+	if showConfigExample {
+		fmt.Printf("%s\n", easyss.ExampleServerJSONConfig())
 		os.Exit(0)
 	}
 
