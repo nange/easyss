@@ -77,18 +77,20 @@ make easyss-server
   "local_port": 2080,
   "method": "aes-256-gcm",
   "timeout": 60,
-  "bind_all": false
+  "bind_all": false,
+  "ca_path": ""
 }
 ```
 
 **参数说明：**
-* server: 服务器域名(必填，必须是域名，不能是IP)
+* server: 服务器地址(必填，没有配置自定义证书情况下，必须是域名不能是IP，使用自定义证书可以是IP)
 * server_port: 服务器对应端口(必填)
 * password: 通信加密密钥(必填)
 * local_port: 本地监听端口(默认2080)
 * method: 通信加密方式(默认aes-256-gcm)
 * timeout: 超时时间,单位秒(默认60)
 * bind_all: 是否将监听端口绑定到所有本地IP上(默认false)
+* ca_path: 自定义CA证书文件路径(当使用自定义tls证书时才配置)
 
 其他还有一些参数没有列出，如无必要，无需关心。除了3个必填的参数，其他都是可选的，甚至可以不要配置文件，全部通过命令行指定即可。
 
@@ -100,7 +102,10 @@ make easyss-server
 ![托盘图标](img/tray2.png)
 ![托盘图标](img/tray3.png)
 
-右键图标可选择代理规则和代理对象。**注意：代理对象，选择系统全局流量时，需要管理员权限。**
+右键图标可选择代理规则和代理对象。
+
+**注意：代理对象，选择系统全局流量时，需要管理员权限。
+MacOS上如需开启全局代理，需先手动设置系统DNS，默认的空DNS列表，可能造成全局代理在MacOS不生效。**
 
 **自定义直连白名单：**
 
@@ -140,17 +145,21 @@ your-custom-domain.com
     "server": "your-domain.com",
     "server_port": 9999,
     "password": "your-pass",
-    "timeout": 60
+    "timeout": 60,
+    "cert_path": "",
+    "key_path": ""
 }
 ```
-保存config.json文件, 其中server(必须是服务器的域名)、server_port和password必填, 执行:
+保存config.json文件, 其中`server`(在没有使用自定义证书情况下必填且为服务器域名地址)、`server_port`和`password`必填, 
+`cert_path`, `key_path`只有在使用自定义证书时配置，这两参数不为空则表示使用自定义tls证书，而非自动获取。
 
+执行:
 ```sh
 # 需sudo权限
 ./easyss-server
 ```
 
-**注意：服务器的443端口必须对外可访问，用于TLS校验使用。**
+**注意：在没有使用自定义证书情况下，服务器的443端口必须对外可访问，用于自动获取服务器域名证书的TLS校验使用。**
 
 #### docker部署
 
