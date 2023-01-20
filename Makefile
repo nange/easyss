@@ -21,7 +21,7 @@ easyss-windows:
 
 easyss-with-notray:
 	cd cmd/easyss; \
-    $(GO) build -tags "with_notray " -o easyss-with-notray -ldflags '$(LDFLAGS)'
+    $(GO) build -tags "with_notray " -o easyss-with-notray -ldflags '$(LDFLAGS)' main.go start_withnotray.go
 
 easyss-server:
 	cd cmd/easyss-server; \
