@@ -13,6 +13,7 @@ import (
 	"github.com/nange/easyss/v2"
 	"github.com/nange/easyss/v2/pprof"
 	"github.com/nange/easyss/v2/util"
+	"github.com/nange/easyss/v2/version"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -53,8 +54,8 @@ func main() {
 
 	flag.Parse()
 
-	if printVer {
-		easyss.PrintVersion()
+	if printVer || (len(os.Args) > 1 && os.Args[1] == "version") {
+		version.Print()
 		os.Exit(0)
 	}
 	if showConfigExample {

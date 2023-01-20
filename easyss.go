@@ -33,8 +33,6 @@ import (
 	"github.com/txthinking/socks5"
 )
 
-const version = "v1.6.0"
-
 const (
 	// DefaultDNSCacheSize set default dns cache size to 2MB
 	DefaultDNSCacheSize = 2 * 1024 * 1024
@@ -53,10 +51,6 @@ var (
 	//go:embed geodata/geosite_cn.txt
 	geoSiteCN []byte
 )
-
-func PrintVersion() {
-	fmt.Println("easyss version", version)
-}
 
 type Statistics struct {
 	BytesSend    atomic.Int64
