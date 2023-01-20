@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"math/rand"
 
-	"github.com/nange/easyss/util/bytespool"
+	"github.com/nange/easyss/v2/util/bytespool"
 )
 
 const (

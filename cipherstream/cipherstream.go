@@ -6,8 +6,8 @@ import (
 	"io"
 	"net"
 
-	"github.com/nange/easyss/util"
-	"github.com/nange/easyss/util/bytespool"
+	"github.com/nange/easyss/v2/util"
+	"github.com/nange/easyss/v2/util/bytespool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )

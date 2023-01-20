@@ -8,7 +8,7 @@ import (
 	"syscall"
 
 	"github.com/getlantern/systray"
-	"github.com/nange/easyss"
+	"github.com/nange/easyss/v2"
 	log "github.com/sirupsen/logrus"
 )
 

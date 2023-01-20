@@ -7,7 +7,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/nange/easyss"
 	log "github.com/sirupsen/logrus"
 )
 

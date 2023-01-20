@@ -7,11 +7,11 @@ import (
 	"path"
 	"path/filepath"
 
+	"github.com/nange/easyss/v2"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 
-	"github.com/nange/easyss"
-	"github.com/nange/easyss/util"
+	"github.com/nange/easyss/v2/util"
 )
 
 func init() {

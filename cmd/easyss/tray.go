@@ -9,9 +9,9 @@ import (
 	"sync"
 
 	"github.com/getlantern/systray"
-	"github.com/nange/easyss"
-	"github.com/nange/easyss/icon"
-	"github.com/nange/easyss/util"
+	"github.com/nange/easyss/v2"
+	"github.com/nange/easyss/v2/icon"
+	"github.com/nange/easyss/v2/util"
 	log "github.com/sirupsen/logrus"
 )
 

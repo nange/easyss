@@ -8,8 +8,8 @@ import (
 	"strconv"
 
 	"github.com/caddyserver/certmagic"
-	"github.com/nange/easyss/cipherstream"
-	"github.com/nange/easyss/util"
+	"github.com/nange/easyss/v2/cipherstream"
+	"github.com/nange/easyss/v2/util"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )

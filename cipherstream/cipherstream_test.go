@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nange/easyss/util"
+	"github.com/nange/easyss/v2/util"
 	"github.com/stretchr/testify/require"
 )
 

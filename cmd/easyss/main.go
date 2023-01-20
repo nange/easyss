@@ -10,9 +10,9 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/nange/easyss"
-	"github.com/nange/easyss/pprof"
-	"github.com/nange/easyss/util"
+	"github.com/nange/easyss/v2"
+	"github.com/nange/easyss/v2/pprof"
+	"github.com/nange/easyss/v2/util"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )

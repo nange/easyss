@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nange/easyss/util/bytespool"
+	"github.com/nange/easyss/v2/util/bytespool"
 	log "github.com/sirupsen/logrus"
 	"github.com/wzshiming/sysproxy"
 )

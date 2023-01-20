@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nange/easyss/util"
+	"github.com/nange/easyss/v2/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/xjasonlyu/tun2socks/v2/engine"
 )

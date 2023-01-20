@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nange/easyss/cipherstream"
-	"github.com/nange/easyss/util"
-	"github.com/nange/easyss/util/bytespool"
+	"github.com/nange/easyss/v2/cipherstream"
+	"github.com/nange/easyss/v2/util"
+	"github.com/nange/easyss/v2/util/bytespool"
 	log "github.com/sirupsen/logrus"
 )
 

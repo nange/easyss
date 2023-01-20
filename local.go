@@ -7,8 +7,8 @@ import (
 	"strconv"
 
 	"github.com/nange/easypool"
-	"github.com/nange/easyss/cipherstream"
-	"github.com/nange/easyss/util"
+	"github.com/nange/easyss/v2/cipherstream"
+	"github.com/nange/easyss/v2/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
 )
