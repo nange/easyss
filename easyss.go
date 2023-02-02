@@ -169,6 +169,8 @@ type Easyss struct {
 	// the user custom ip/domain list which have the highest priority
 	customDirectIPs     map[string]struct{}
 	customDirectDomains map[string]struct{}
+	// only used on darwin(MacOS)
+	originDNS []string
 
 	// locks for udp request
 	udpLocks [UDPLocksCount]sync.Mutex
@@ -258,6 +260,13 @@ func New(config *Config) (*Easyss, error) {
 		}
 		ss.devIndex = iface.Index
 	}
+
+	// get origin dns on darwin
+	ds, err := util.SysDNS()
+	if err != nil {
+		log.Errorf("[EASYSS] get system dns err:%v", err)
+	}
+	ss.originDNS = ds
 
 	go ss.printStatistics()
 

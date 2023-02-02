@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -130,6 +131,10 @@ func (ss *Easyss) CreateTun2socks() error {
 		ss.startTun2socksEngine()
 	case "darwin":
 		ss.startTun2socksEngine()
+		if err := ss.setDNSIfEmpty(); err != nil {
+			log.Errorf("[TUN2SOCKS] set system dns:%v", err)
+			return err
+		}
 		if err := ss.createTunDevAndSetIpRoute(); err != nil {
 			log.Errorf("[TUN2SOCKS] add tun device and set ip-route err:%s", err.Error())
 			return err
@@ -233,6 +238,9 @@ func (ss *Easyss) closeTun2socks() error {
 			return nil
 		}
 	}
+	if err := ss.setDNSToOrigin(); err != nil {
+		log.Errorf("[TUN2SOCKS] set system dns to origin:%v", err)
+	}
 
 	ss.enabledTun2socks = false
 	log.Infof("[TUN2SOCKS] service and tun device close successfully")
@@ -305,4 +313,35 @@ func writeWinTunToDisk() error {
 	default:
 		return fmt.Errorf("unsupported arch:%s", runtime.GOARCH)
 	}
+}
+
+func (ss *Easyss) setDNSIfEmpty() error {
+	if len(ss.originDNS) == 0 {
+		ip, _, _ := net.SplitHostPort(ss.directDNSServer)
+		return util.SetSysDNS([]string{ip})
+	}
+	return nil
+}
+
+func (ss *Easyss) setDNSToOrigin() error {
+	curr, err := util.SysDNS()
+	if err != nil {
+		return err
+	}
+	if len(ss.originDNS) == 0 {
+		return util.SetSysDNS([]string{"empty"})
+	}
+
+	equals := true
+	for i, item := range ss.originDNS {
+		if item != curr[i] {
+			equals = false
+			break
+		}
+	}
+	if !equals {
+		return util.SetSysDNS(ss.originDNS)
+	}
+
+	return nil
 }
