@@ -1,3 +1,5 @@
+//go:build !darwin
+
 package util
 
 func SetSysDNS(v []string) error {
