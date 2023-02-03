@@ -294,10 +294,11 @@ func expireConn(conn net.Conn) error {
 }
 
 func isDNSRequest(msg *dns.Msg) bool {
-	if msg == nil {
+	if msg == nil || len(msg.Question) == 0 {
 		return false
 	}
-	if len(msg.Question) > 0 {
+	q := msg.Question[0]
+	if q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA {
 		return true
 	}
 	return false
