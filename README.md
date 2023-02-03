@@ -17,6 +17,7 @@ Easyss是一款兼容socks5的安全代理上网工具，目标是使访问国�
 * 基于TLS, 支持(AEAD类型)高强度加密通信, 如aes-256-gcm, chacha20-poly1305
 * http2帧格式交互 (更灵活通用, 更易扩展)
 * 内建DNS服务器，支持DNS Forward转发，可用于透明代理部署时使用 (默认关闭，可通过命令行启用)
+* 无流量特征，不易被嗅探
 
 ## 下载安装
 
@@ -163,6 +164,14 @@ your-custom-domain.com
 #### docker部署
 
 docker run -d --name easyss --network host nange/docker-easyss:latest -p yourport -k yourpassword -s yourdomain.com
+
+### 自定义证书
+默认情况下，`easyss-server`端部署时配置了域名，则会自动从`Let's Encrypt`获取tls证书，用户无需操心证书配置。
+但这要求我们必须有自己的域名，这加大了使用Easyss的难度。如果我们没有自己的域名，也可以通过自定义tls证书来使用Easyss。
+
+#### 生成自定义证书
+可根据自己的需求，使用`openssl`等工具生成自定义证书。也可以参考： ./scripts/self_signed_certs 目录示例生成自定义证书。
+示例就是使用IP而不是域名生成自定义证书，这样就可以无域名使用Easyss了。
 
 ## LICENSE
 
