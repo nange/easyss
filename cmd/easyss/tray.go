@@ -4,7 +4,6 @@ package main
 
 import (
 	"fmt"
-	"os/exec"
 	"runtime"
 	"sync"
 
@@ -253,8 +252,8 @@ func (st *SysTray) catLog() error {
 		"linux":   {"x-terminal-emulator", "-e", "tail", "-50f", util.LogFilePath()},
 		"darwin":  {"open", "-a", "Console", util.LogFilePath()},
 	}
-	cmd := exec.Command(cmdMap[runtime.GOOS][0], cmdMap[runtime.GOOS][1:]...)
-	return cmd.Start()
+	_, err := util.Command(cmdMap[runtime.GOOS][0], cmdMap[runtime.GOOS][1:]...)
+	return err
 }
 
 func (st *SysTray) CloseService() {

@@ -1,7 +1,6 @@
 package util
 
 import (
-	"bytes"
 	"net"
 	"os/exec"
 	"strconv"
@@ -18,13 +17,11 @@ func SysSupportPowershell() bool {
 }
 
 func SysPowershellMajorVersion() int {
-	cmd := exec.Command("powershell", "-Command", "$PSVersionTable.PSVersion")
-	buf := new(bytes.Buffer)
-	cmd.Stdout = buf
-	if err := cmd.Run(); err != nil {
+	buf, err := Command("powershell", "-Command", "$PSVersionTable.PSVersion")
+	if err != nil {
 		return 0
 	}
-	bs := buf.Bytes()
+	bs := []byte(buf)
 	if len(bs) < 64 {
 		return 0
 	}
