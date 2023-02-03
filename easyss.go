@@ -212,53 +212,19 @@ func New(config *Config) (*Easyss, error) {
 		log.Errorf("[EASYSS] load custom ip/domains err:%s", err.Error())
 	}
 
-	if !util.IsIP(ss.Server()) {
-		var msg, msgAAAA *dns.Msg
-		for _, server := range DefaultDirectDNSServers {
-			msg, msgAAAA, err = ss.ServerDNSMsg(server)
-			if err != nil {
-				log.Warnf("[EASYSS] query dns failed for %s from %s err:%s",
-					ss.Server(), server, err.Error())
-				continue
-			}
-			if msg != nil {
-				ss.directDNSServer = server
-				log.Infof("[EASYSS] query dns success for %s from %s", ss.Server(), server)
-				break
-			}
-		}
-
-		if msg != nil && msgAAAA != nil {
-			if len(msg.Answer) > 0 {
-				ss.serverIP = msg.Answer[0].(*dns.A).A.String()
-				_ = ss.SetDNSCache(msg, true, true)
-				_ = ss.SetDNSCache(msg, true, false)
-				_ = ss.SetDNSCache(msgAAAA, true, true)
-				_ = ss.SetDNSCache(msgAAAA, true, false)
-			} else {
-				log.Errorf("[EASYSS] dns result is empty for %s", ss.Server())
-			}
-		}
-	} else {
-		ss.directDNSServer = DefaultDirectDNSServers[0]
-		ss.serverIP = ss.Server()
+	if err := ss.initDirectDNSServer(); err != nil {
+		log.Errorf("[EASYSS] init direct dns server:%v", err)
+		return nil, err
 	}
 
-	switch runtime.GOOS {
-	case "linux", "windows", "darwin":
-		gw, dev, err := util.SysGatewayAndDevice()
-		if err != nil {
-			log.Errorf("[EASYSS] get system gateway and device err:%s", err.Error())
-		}
-		ss.localGw = gw
-		ss.localDev = dev
+	if err := ss.initServerIPAndDNSCache(); err != nil {
+		log.Errorf("[EASYSS] init server ip and dns cache:%v", err)
+		return nil, err
+	}
 
-		iface, err := net.InterfaceByName(dev)
-		if err != nil {
-			log.Errorf("[EASYSS] interface by name err:%v", err)
-			return nil, err
-		}
-		ss.devIndex = iface.Index
+	if err := ss.initLocalGatewayAndDevice(); err != nil {
+		log.Errorf("[EASYSS] init local gateway and device:%v", err)
+		return nil, err
 	}
 
 	// get origin dns on darwin
@@ -293,6 +259,76 @@ func (ss *Easyss) loadCustomIPDomains() error {
 	if len(directDomains) > 0 {
 		log.Infof("[EASYSS] load custom direct domains success, len:%d", len(directDomains))
 		ss.customDirectDomains = directDomains
+	}
+
+	return nil
+}
+
+func (ss *Easyss) initDirectDNSServer() error {
+	for i, server := range DefaultDirectDNSServers {
+		msg, _, err := ss.DNSMsg(server, DefaultDNSServerDomains[i])
+		if err != nil {
+			log.Warnf("[EASYSS] direct dns server %s is unavailable:%s, retry next after 1s",
+				server, err.Error())
+			time.Sleep(time.Second)
+			continue
+		}
+		if msg != nil {
+			ss.directDNSServer = server
+			log.Infof("[EASYSS] set direct dns server to %s", server)
+			return nil
+		}
+	}
+
+	return errors.New("all direct dns server is unavailable, or the network is unavailable on this server")
+}
+
+func (ss *Easyss) initServerIPAndDNSCache() error {
+	if !util.IsIP(ss.Server()) {
+		msg, msgAAAA, err := ss.DNSMsg(ss.directDNSServer, ss.Server())
+		if err != nil {
+			log.Errorf("[EASYSS] query dns failed for %s from %s err:%s",
+				ss.Server(), ss.directDNSServer, err.Error())
+			return err
+		}
+		if msg != nil {
+			log.Infof("[EASYSS] query dns success for %s from %s", ss.Server(), ss.directDNSServer)
+		}
+
+		if msg != nil && msgAAAA != nil {
+			if len(msg.Answer) > 0 {
+				ss.serverIP = msg.Answer[0].(*dns.A).A.String()
+				_ = ss.SetDNSCache(msg, true, true)
+				_ = ss.SetDNSCache(msg, true, false)
+				_ = ss.SetDNSCache(msgAAAA, true, true)
+				_ = ss.SetDNSCache(msgAAAA, true, false)
+			} else {
+				return errors.New("dns result is empty for " + ss.Server())
+			}
+		}
+	} else {
+		ss.serverIP = ss.Server()
+	}
+
+	return nil
+}
+
+func (ss *Easyss) initLocalGatewayAndDevice() error {
+	switch runtime.GOOS {
+	case "linux", "windows", "darwin":
+		gw, dev, err := util.SysGatewayAndDevice()
+		if err != nil {
+			log.Errorf("[EASYSS] get system gateway and device err:%s", err.Error())
+		}
+		ss.localGw = gw
+		ss.localDev = dev
+
+		iface, err := net.InterfaceByName(dev)
+		if err != nil {
+			log.Errorf("[EASYSS] interface by name err:%v", err)
+			return err
+		}
+		ss.devIndex = iface.Index
 	}
 
 	return nil
@@ -647,11 +683,11 @@ func (ss *Easyss) SetDNSCache(msg *dns.Msg, noExpire, isDirect bool) error {
 	return nil
 }
 
-func (ss *Easyss) ServerDNSMsg(dnsServer string) (*dns.Msg, *dns.Msg, error) {
+func (ss *Easyss) DNSMsg(dnsServer, domain string) (*dns.Msg, *dns.Msg, error) {
 	c := new(dns.Client)
 
 	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn(ss.Server()), dns.TypeA)
+	m.SetQuestion(dns.Fqdn(domain), dns.TypeA)
 	m.RecursionDesired = true
 
 	r, _, err := c.Exchange(m, dnsServer)
@@ -662,7 +698,7 @@ func (ss *Easyss) ServerDNSMsg(dnsServer string) (*dns.Msg, *dns.Msg, error) {
 		return nil, nil, fmt.Errorf("dns query response Rcode:%v not equals RcodeSuccess", r.Rcode)
 	}
 
-	m.SetQuestion(dns.Fqdn(ss.Server()), dns.TypeAAAA)
+	m.SetQuestion(dns.Fqdn(domain), dns.TypeAAAA)
 	rAAAA, _, err := c.Exchange(m, dnsServer)
 	if err != nil {
 		return nil, nil, err

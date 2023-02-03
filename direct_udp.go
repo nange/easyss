@@ -14,6 +14,7 @@ import (
 
 // DefaultDirectDNSServers the servers are dns servers from tencent, aliyun and baidu
 var DefaultDirectDNSServers = [3]string{"119.29.29.29:53", "223.5.5.5:53", "180.76.76.76:53"}
+var DefaultDNSServerDomains = [3]string{"dnspod.cn", "alidns.com", "dudns.baidu.com"}
 
 const DirectSuffix = "direct"
 
@@ -28,7 +29,6 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 	if isDNSReq {
 		logPrefix = "[DNS_DIRECT]"
 	}
-	log.Infof("%s target:%s", logPrefix, d.Address())
 
 	var ch chan struct{}
 	var hasAssoc bool
@@ -48,6 +48,8 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 	if isDNSReq {
 		rewrittenDst = ss.DirectDNSServer()
 	}
+	log.Infof("%s target:%s", logPrefix, rewrittenDst)
+
 	uAddr, _ := net.ResolveUDPAddr("udp", rewrittenDst)
 
 	send := func(ue *DirectUDPExchange, data []byte, addr net.Addr) error {
