@@ -29,6 +29,7 @@ type ServerConfig struct {
 	DisableUTLS bool   `json:"disable_utls"`
 	CertPath    string `json:"cert_path"`
 	KeyPath     string `json:"key_path"`
+	CAPath      string `json:"ca_path"`
 }
 
 type Config struct {
@@ -142,6 +143,7 @@ func (c *Config) SetDefaultValue() {
 		c.ServerPort = c.ServerList[0].ServerPort
 		c.Password = c.ServerList[0].Password
 		c.DisableUTLS = c.ServerList[0].DisableUTLS
+		c.CAPath = c.ServerList[0].CAPath
 	}
 
 	if c.LocalPort == 0 {
