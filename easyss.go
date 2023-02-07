@@ -541,11 +541,12 @@ func (ss *Easyss) AvailConnFromPool() (conn net.Conn, err error) {
 				cs.Release()
 			}()
 
-			ping := []byte(strconv.FormatInt(time.Now().UnixNano(), 10))
+			start := time.Now()
+			ping := []byte(strconv.FormatInt(start.UnixNano(), 10))
 			if er = cs.WritePing(ping, util.FlagNeedACK); er != nil {
 				return
 			}
-			if er = SetCipherDeadline(cs, time.Now().Add(time.Second)); er != nil {
+			if er = SetCipherDeadline(cs, time.Now().Add(2*time.Second)); er != nil {
 				return
 			}
 			var payload []byte
@@ -555,13 +556,18 @@ func (ss *Easyss) AvailConnFromPool() (conn net.Conn, err error) {
 				er = errors.New("the payload of ping not equals send value")
 				return
 			}
+			since := time.Since(start)
+			log.Infof("[EASYSS] ping server %s delay:%v", ss.Server(), since)
+			if since > time.Second {
+				log.Warnf("[EASYSS] got high latency:%v of ping %s", since, ss.Server())
+			}
 			if er = SetCipherDeadline(cs, time.Time{}); er != nil {
 				return
 			}
 			return
 		}()
 		if err != nil {
-			log.Warnf("[EASYSS] write ping to cipher stream:%v", err)
+			log.Warnf("[EASYSS] ping test failed:%v for connection %s", err, conn.LocalAddr())
 			continue
 		}
 
