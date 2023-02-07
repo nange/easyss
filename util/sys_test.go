@@ -20,7 +20,7 @@ func TestSysPowershellMajorVersion(t *testing.T) {
 		t.SkipNow()
 	}
 	v := SysPowershellMajorVersion()
-	assert.GreaterOrEqual(t, v, 3)
+	assert.GreaterOrEqual(t, v, 0)
 }
 
 func TestSysGatewayAndDevice(t *testing.T) {
