@@ -17,6 +17,7 @@ import (
 // RelayBufferSize the maximum packet size of easyss is about 16 KB, so define
 // a buffer of 20 KB which is a little large than 16KB to relay
 const RelayBufferSize = 20 * 1024
+const RelayBufferSizeString = "20kb"
 
 // relay copies between cipher stream and plaintext stream.
 // return the number of bytes copies

@@ -162,8 +162,8 @@ func (ss *Easyss) startTun2socksEngine() {
 		Proxy:                ss.Socks5ProxyAddr(),
 		Device:               _TunDevice,
 		LogLevel:             "error",
-		TCPSendBufferSize:    "128kb",
-		TCPReceiveBufferSize: "128kb",
+		TCPSendBufferSize:    RelayBufferSizeString,
+		TCPReceiveBufferSize: RelayBufferSizeString,
 		UDPTimeout:           ss.Timeout(),
 	}
 	engine.Insert(key)
