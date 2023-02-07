@@ -2,12 +2,12 @@ package util
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	rotate "github.com/snowzach/rotatefilehook"
 )
@@ -30,7 +30,7 @@ func FileExists(path string) (bool, error) {
 	if os.IsNotExist(err) {
 		return false, nil
 	}
-	return false, errors.WithStack(err)
+	return false, err
 }
 
 func CurrentDir() string {

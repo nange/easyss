@@ -8,11 +8,9 @@ import (
 	"path/filepath"
 
 	"github.com/nange/easyss/v2"
-	"github.com/nange/easyss/v2/version"
-	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
-
 	"github.com/nange/easyss/v2/util"
+	"github.com/nange/easyss/v2/version"
+	log "github.com/sirupsen/logrus"
 )
 
 func init() {
@@ -73,7 +71,7 @@ func main() {
 	config, err := easyss.ParseConfig[easyss.ServerConfig](configFile)
 	if err != nil {
 		config = &cmdConfig
-		if !os.IsNotExist(errors.Cause(err)) {
+		if !os.IsNotExist(err) {
 			log.Errorf("[EASYSS_SERVER] error reading %s: %+v", configFile, err)
 			os.Exit(1)
 		}

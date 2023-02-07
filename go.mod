@@ -11,7 +11,6 @@ require (
 	github.com/miekg/dns v1.1.50
 	github.com/nange/easypool v1.3.1
 	github.com/oschwald/geoip2-golang v1.8.0
-	github.com/pkg/errors v0.9.1
 	github.com/refraction-networking/utls v1.2.0
 	github.com/sirupsen/logrus v1.9.0
 	github.com/snowzach/rotatefilehook v0.0.0-20220211133110-53752135082d

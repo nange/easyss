@@ -2,12 +2,11 @@ package easyss
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"reflect"
-
-	"github.com/pkg/errors"
 )
 
 var Methods = map[string]struct{}{
@@ -85,24 +84,19 @@ func (c *Config) Clone() *Config {
 }
 
 func ParseConfig[T any](path string) (config *T, err error) {
-	file, err := os.Open(path) // For read access.
+	file, err := os.Open(path)
 	if err != nil {
-		err = errors.WithStack(err)
 		return
 	}
 	defer file.Close()
 
 	data, err := io.ReadAll(file)
 	if err != nil {
-		err = errors.WithStack(err)
 		return
 	}
 
 	config = new(T)
-	if err = json.Unmarshal(data, config); err != nil {
-		err = errors.WithStack(err)
-		return nil, err
-	}
+	err = json.Unmarshal(data, config)
 
 	return
 }

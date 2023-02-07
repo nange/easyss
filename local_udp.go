@@ -1,6 +1,7 @@
 package easyss
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -13,7 +14,6 @@ import (
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/util"
 	"github.com/nange/easyss/v2/util/bytespool"
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
 )

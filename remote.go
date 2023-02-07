@@ -2,6 +2,7 @@ package easyss
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -10,7 +11,6 @@ import (
 	"github.com/caddyserver/certmagic"
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/util"
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 

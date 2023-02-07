@@ -1,9 +1,8 @@
 package cipherstream
 
 import (
+	"errors"
 	"net"
-
-	"github.com/pkg/errors"
 )
 
 var (

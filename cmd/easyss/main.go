@@ -3,18 +3,15 @@ package main
 import (
 	"flag"
 	"fmt"
-	"math/rand"
 	"os"
 	"path"
 	"path/filepath"
 	"runtime"
-	"time"
 
 	"github.com/nange/easyss/v2"
 	"github.com/nange/easyss/v2/pprof"
 	"github.com/nange/easyss/v2/util"
 	"github.com/nange/easyss/v2/version"
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -27,7 +24,6 @@ func init() {
 		logDir := filepath.Dir(exec)
 		util.SetLogFileHook(logDir)
 	}
-	rand.Seed(time.Now().UnixNano())
 }
 
 func main() {
@@ -93,7 +89,7 @@ func main() {
 	config, err := easyss.ParseConfig[easyss.Config](cmdConfig.ConfigFile)
 	if err != nil {
 		config = &cmdConfig
-		if !os.IsNotExist(errors.Cause(err)) {
+		if !os.IsNotExist(err) {
 			log.Errorf("[EASYSS-MAIN] error reading %s: %+v", cmdConfig.ConfigFile, err)
 			os.Exit(1)
 		}

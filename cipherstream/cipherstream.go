@@ -3,12 +3,13 @@ package cipherstream
 import (
 	"bytes"
 	"crypto/rand"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 
 	"github.com/nange/easyss/v2/util"
 	"github.com/nange/easyss/v2/util/bytespool"
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -51,13 +52,13 @@ func New(stream net.Conn, password, method string, frameType util.FrameType, fla
 		var err error
 		cs.AEADCipher, err = NewAes256GCM([]byte(password))
 		if err != nil {
-			return nil, errors.WithStack(err)
+			return nil, fmt.Errorf("new aes-256-gcm:%w", err)
 		}
 	case MethodChaCha20Poly1305:
 		var err error
 		cs.AEADCipher, err = NewChaCha20Poly1305([]byte(password))
 		if err != nil {
-			return nil, errors.WithStack(err)
+			return nil, fmt.Errorf("new chacha20-poly1305:%w", err)
 		}
 	default:
 		return nil, errors.New("cipher method unsupported, method:" + method)
