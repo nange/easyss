@@ -25,8 +25,7 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string) err
 
 	csStream, err := cipherstream.New(conn, es.Password(), method, util.FrameTypeData, util.FlagUDP)
 	if err != nil {
-		return fmt.Errorf("new cipherstream err:%+v, password:%v, method:%v",
-			err, es.Password(), method)
+		return fmt.Errorf("new cipherstream err:%v, method:%v", err, method)
 	}
 
 	var tryReuse bool

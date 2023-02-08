@@ -138,8 +138,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 
 	csStream, err := cipherstream.New(stream, ss.Password(), ss.Method(), util.FrameTypeData, util.FlagUDP)
 	if err != nil {
-		log.Errorf("[UDP_PROXY] new cipherstream err:%+v, password:%v, method:%v",
-			err, ss.Password(), ss.Method())
+		log.Errorf("[UDP_PROXY] new cipherstream err:%v, method:%v", err, ss.Method())
 		return err
 	}
 
