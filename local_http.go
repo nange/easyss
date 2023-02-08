@@ -1,8 +1,8 @@
 package easyss
 
 import (
-	"io"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"strconv"
 	"time"
@@ -11,6 +11,16 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/wzshiming/sysproxy"
 )
+
+type bufferPool struct{}
+
+func (bp *bufferPool) Get() []byte {
+	return bytespool.Get(RelayBufferSize)
+}
+
+func (bp *bufferPool) Put(buf []byte) {
+	bytespool.MustPut(buf)
+}
 
 func (ss *Easyss) LocalHttp() {
 	var addr string
@@ -21,7 +31,7 @@ func (ss *Easyss) LocalHttp() {
 	}
 	log.Infof("[HTTP_PROXY] starting local http-proxy server at %v", addr)
 
-	server := &http.Server{Addr: addr, Handler: &httpProxy{ss: ss}}
+	server := &http.Server{Addr: addr, Handler: newHTTPProxy(ss)}
 	ss.SetHttpProxyServer(server)
 
 	if err := server.ListenAndServe(); err != nil {
@@ -45,24 +55,28 @@ func (ss *Easyss) SetSysProxyOffHTTP() error {
 
 type httpProxy struct {
 	ss *Easyss
+	rp *httputil.ReverseProxy
 }
 
-func (h *httpProxy) client() *http.Client {
-	c := &http.Client{
-		Transport: &http.Transport{
-			Proxy: func(*http.Request) (*url.URL, error) {
-				return url.Parse(h.ss.Socks5ProxyAddr())
+func newHTTPProxy(ss *Easyss) *httpProxy {
+	return &httpProxy{
+		ss: ss,
+		rp: &httputil.ReverseProxy{
+			Rewrite: func(r *httputil.ProxyRequest) {},
+			Transport: &http.Transport{
+				Proxy: func(*http.Request) (*url.URL, error) {
+					return url.Parse(ss.Socks5ProxyAddr())
+				},
+				TLSHandshakeTimeout: 5 * time.Second,
+				ForceAttemptHTTP2:   true,
 			},
-			DisableKeepAlives:   true,
-			TLSHandshakeTimeout: 10 * time.Second,
-			ForceAttemptHTTP2:   true,
-			MaxConnsPerHost:     1,
-		},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
+			BufferPool: &bufferPool{},
+			ErrorHandler: func(rw http.ResponseWriter, r *http.Request, err error) {
+				log.Warnf("[HTTP_PROXY] reverse proxy request: %s", err.Error())
+				http.Error(rw, "Service unavailable", http.StatusServiceUnavailable)
+			},
 		},
 	}
-	return c
 }
 
 func (h *httpProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -70,7 +84,7 @@ func (h *httpProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.doWithHijack(w, r)
 		return
 	}
-	h.doWithNormal(w, r)
+	h.rp.ServeHTTP(w, r)
 }
 
 func (h *httpProxy) doWithHijack(w http.ResponseWriter, r *http.Request) {
@@ -97,55 +111,5 @@ func (h *httpProxy) doWithHijack(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.ss.localRelay(hijConn, r.URL.Host); err != nil {
 		log.Warnf("[HTTP_PROXY] local relay err:%s", err.Error())
-	}
-}
-
-func (h *httpProxy) doWithNormal(w http.ResponseWriter, r *http.Request) {
-	// the RequestURI field should be empty for http.Client Do func
-	r.RequestURI = ""
-	// delete some unuseful header
-	r.Header.Del("Proxy-Connection")
-	r.Header.Del("Proxy-Authenticate")
-	r.Header.Del("Proxy-Authorization")
-	if r.Header.Get("Connection") == "close" {
-		r.Close = false
-	}
-	r.Header.Del("Connection")
-
-	client := h.client()
-	resp, err := client.Do(r)
-	if err != nil {
-		log.Warnf("[HTTP_PROXY] client do request err:%s", err.Error())
-		code := http.StatusServiceUnavailable
-		body := "Service unavailable"
-		if resp != nil {
-			if b, er := io.ReadAll(resp.Body); er == nil {
-				body = string(b)
-			}
-			code = resp.StatusCode
-			_ = resp.Body.Close()
-		}
-		http.Error(w, body, code)
-		return
-	}
-
-	copyHeaders(w.Header(), resp.Header)
-	w.WriteHeader(resp.StatusCode)
-
-	buf := bytespool.Get(RelayBufferSize)
-	defer bytespool.MustPut(buf)
-	if _, err = io.CopyBuffer(w, resp.Body, buf); err != nil {
-		log.Warnf("[HTTP_PROXY] copy bytes back to client err:%s", err.Error())
-	}
-	if err := resp.Body.Close(); err != nil {
-		log.Warnf("[HTTP_PROXY] can't close response body err:%s", err.Error())
-	}
-}
-
-func copyHeaders(dst, src http.Header) {
-	for k, vs := range src {
-		for _, v := range vs {
-			dst.Add(k, v)
-		}
 	}
 }
