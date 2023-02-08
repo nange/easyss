@@ -499,6 +499,10 @@ func (ss *Easyss) DisableUTLS() bool {
 	return ss.config.DisableUTLS
 }
 
+func (ss *Easyss) DisableSysProxy() bool {
+	return ss.config.DisableSysProxy
+}
+
 func (ss *Easyss) EnableForwardDNS() bool {
 	return ss.config.EnableForwardDNS
 }

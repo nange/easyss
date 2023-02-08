@@ -161,7 +161,11 @@ func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 func (st *SysTray) AddProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 	proxyMenue := systray.AddMenuItem("代理对象", "请选择")
 
-	browser := proxyMenue.AddSubMenuItemCheckbox("浏览器(设置系统代理)", "设置系统代理配置", true)
+	browserChecked := true
+	if st.SS().DisableSysProxy() {
+		browserChecked = false
+	}
+	browser := proxyMenue.AddSubMenuItemCheckbox("浏览器(设置系统代理)", "设置系统代理配置", browserChecked)
 	global := proxyMenue.AddSubMenuItemCheckbox("系统全局流量(Tun2socks)", "Tun2socks代理系统全局", false)
 
 	go func() {
@@ -291,9 +295,13 @@ func (st *SysTray) StartLocalService() {
 		go ss.LocalDNSForward() // start local dns forward server
 	}
 
-	if st.SysProxyHTTPIsOn() {
+	if st.SysProxyIsOn() {
 		if err := ss.SetSysProxyOnHTTP(); err != nil {
 			log.Errorf("[SYSTRAY] set sys proxy on http err:%s", err.Error())
+		}
+	} else {
+		if err := ss.SetSysProxyOffHTTP(); err != nil {
+			log.Errorf("[SYSTRAY] set sys proxy off http err:%s", err.Error())
 		}
 	}
 
@@ -322,7 +330,7 @@ func (st *SysTray) RestartService(config *easyss.Config) error {
 	return nil
 }
 
-func (st *SysTray) SysProxyHTTPIsOn() bool {
+func (st *SysTray) SysProxyIsOn() bool {
 	return st.BrowserMenu().Checked()
 }
 
