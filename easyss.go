@@ -818,7 +818,7 @@ func (ss *Easyss) printStatistics() {
 		case <-time.After(time.Hour):
 			sendSize := ss.stat.BytesSend.Load() / (1024 * 1024)
 			receiveSize := ss.stat.BytesReceive.Load() / (1024 * 1024)
-			log.Debugf("[EASYSS] send size: %vMB, recive size: %vMB", sendSize, receiveSize)
+			log.Infof("[EASYSS] send size: %vMB, recive size: %vMB", sendSize, receiveSize)
 		case <-closing:
 			return
 		}

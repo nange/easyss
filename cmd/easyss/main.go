@@ -108,7 +108,7 @@ func main() {
 
 	ss, err := easyss.New(config)
 	if err != nil {
-		log.Errorf("[EASYSS-MAIN] new easyss err:%v", err)
+		log.Fatalf("[EASYSS-MAIN] init easyss: %v", err)
 	}
 	Start(ss)
 }
