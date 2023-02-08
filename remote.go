@@ -121,8 +121,7 @@ func (es *EasyServer) remoteTCPHandle(conn net.Conn, addrStr, method string) err
 
 	csStream, err := cipherstream.New(conn, es.Password(), method, util.FrameTypeData, util.FlagTCP)
 	if err != nil {
-		return fmt.Errorf("new cipherstream err:%+v, password:%v, method:%v",
-			err, es.Password(), method)
+		return fmt.Errorf("new cipherstream err:%v, method:%v", err, method)
 	}
 
 	n1, n2 := relay(csStream, tConn, es.Timeout())

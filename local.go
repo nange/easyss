@@ -116,8 +116,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 
 	csStream, err := cipherstream.New(stream, ss.Password(), ss.Method(), util.FrameTypeData, util.FlagTCP)
 	if err != nil {
-		log.Errorf("[TCP_PROXY] new cipherstream err:%v, password:%v, method:%v",
-			err, ss.Password(), ss.Method())
+		log.Errorf("[TCP_PROXY] new cipherstream err:%v, method:%v", err, ss.Method())
 		return
 	}
 
