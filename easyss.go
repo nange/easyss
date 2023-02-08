@@ -343,14 +343,23 @@ func (ss *Easyss) InitTcpPool() error {
 
 	var certPool *x509.CertPool
 	if ss.CAPath() != "" {
-		log.Infof("[EASYSS] using self-signed cert, ca-path:%s", ss.CAPath())
-		certPool = x509.NewCertPool()
-		caBuf, err := os.ReadFile(ss.CAPath())
+		e, err := util.FileExists(ss.CAPath())
 		if err != nil {
+			log.Errorf("[EASYSS] lookup self-signed ca cert:%v", err)
 			return err
 		}
-		if ok := certPool.AppendCertsFromPEM(caBuf); !ok {
-			return errors.New("append certs from pem failed")
+		if !e {
+			log.Warnf("[EASYSS] ca cert: %s is set but not exists, so self-signed cert is no effect", ss.CAPath())
+		} else {
+			log.Infof("[EASYSS] using self-signed ca cert: %s", ss.CAPath())
+			certPool = x509.NewCertPool()
+			caBuf, err := os.ReadFile(ss.CAPath())
+			if err != nil {
+				return err
+			}
+			if ok := certPool.AppendCertsFromPEM(caBuf); !ok {
+				return errors.New("append certs from pem failed")
+			}
 		}
 	}
 
