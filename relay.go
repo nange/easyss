@@ -33,9 +33,7 @@ func relay(cipher, plaintxt net.Conn, timeout time.Duration) (n1 int64, n2 int64
 	ch2 := make(chan res, 1)
 
 	go func() {
-		buf := bytespool.Get(RelayBufferSize)
-		defer bytespool.MustPut(buf)
-		n, err := io.CopyBuffer(plaintxt, cipher, buf)
+		n, err := io.Copy(plaintxt, cipher)
 		if ce := CloseWrite(plaintxt); ce != nil {
 			log.Warnf("[REPAY] close write for plaintxt stream: %v", ce)
 		}
@@ -57,9 +55,7 @@ func relay(cipher, plaintxt net.Conn, timeout time.Duration) (n1 int64, n2 int64
 	}()
 
 	go func() {
-		buf := bytespool.Get(RelayBufferSize)
-		defer bytespool.MustPut(buf)
-		n, err := io.CopyBuffer(cipher, plaintxt, buf)
+		n, err := io.Copy(cipher, plaintxt)
 		if err != nil {
 			log.Debugf("[REPAY] copy from plaintxt to cipher: %v", err)
 		}

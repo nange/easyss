@@ -6,7 +6,6 @@ import (
 	"net"
 	"sync"
 
-	"github.com/nange/easyss/v2/util/bytespool"
 	log "github.com/sirupsen/logrus"
 	"github.com/xjasonlyu/tun2socks/v2/component/dialer"
 )
@@ -26,9 +25,7 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 	go func() {
 		defer wg.Done()
 
-		buf := bytespool.Get(RelayBufferSize)
-		defer bytespool.MustPut(buf)
-		_, err := io.CopyBuffer(tConn, localConn, buf)
+		_, err := io.Copy(tConn, localConn)
 		if err != nil && !ErrorCanIgnore(err) {
 			log.Warnf("[TCP_DIRECT] copy from local to remote err:%v", err)
 		}
@@ -42,9 +39,7 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 	go func() {
 		defer wg.Done()
 
-		buf := bytespool.Get(RelayBufferSize)
-		defer bytespool.MustPut(buf)
-		_, err := io.CopyBuffer(localConn, tConn, buf)
+		_, err := io.Copy(localConn, tConn)
 		if err != nil && !ErrorCanIgnore(err) {
 			log.Warnf("[TCP_DIRECT] copy from remote to local err:%v", err)
 		}
