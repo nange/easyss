@@ -23,7 +23,6 @@ _testmain.go
 *.test
 *.prof
 easyss.log*
-config.json
 
 cmd/easyss/*.json
 cmd/easyss/*.txt
