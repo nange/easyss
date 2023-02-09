@@ -1,9 +1,6 @@
 {
-    "CN": "easy-ca.net",
-    "hosts": [
-        "easy-ca.net",
-        "www.easy-ca.net"
-    ],
+    "CN": "easy-server.net",
+    "hosts": [],
     "key": {
         "algo": "ecdsa",
         "size": 256

@@ -170,7 +170,7 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 但这要求我们必须有自己的域名，这加大了使用Easyss的难度。如果我们没有自己的域名，也可以通过自定义tls证书来使用Easyss。
 
 #### 生成自定义证书
-可根据自己的需求，使用`openssl`等工具生成自定义证书。也可以参考： ./scripts/self_signed_certs 目录示例生成自定义证书。
+可根据自己的需求，使用`openssl`等工具生成自定义证书。也可以参考： `./scripts/self_signed_certs` 目录示例，使用`cfssl`生成自定义证书。
 示例就是使用IP而不是域名生成自定义证书，这样就可以无域名使用Easyss了。
 
 ## LICENSE
