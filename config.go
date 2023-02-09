@@ -39,6 +39,7 @@ type Config struct {
 	HTTPPort          int            `json:"http_port"`
 	Password          string         `json:"password"`
 	Method            string         `json:"method"` // encryption method
+	LogLevel          string         `json:"log_level"`
 	Timeout           int            `json:"timeout"`
 	BindALL           bool           `json:"bind_all"`
 	DisableUTLS       bool           `json:"disable_utls"`
@@ -67,6 +68,11 @@ func (c *Config) Validate() error {
 		if _, ok := Methods[c.Method]; !ok {
 			return fmt.Errorf("unsupported method:%s, supported methods:[aes-256-gcm, chacha20-poly1305]", c.Method)
 		}
+	}
+	switch c.LogLevel {
+	case "debug", "info", "warn", "error":
+	default:
+		return fmt.Errorf("unsupported log-level:%s, supported log-levels:[debug, info, warn, error]", c.LogLevel)
 	}
 	if c.ProxyRule != "" {
 		if _, ok := ProxyRules[c.ProxyRule]; !ok {
@@ -149,6 +155,9 @@ func (c *Config) SetDefaultValue() {
 	}
 	if c.Method == "" {
 		c.Method = "aes-256-gcm"
+	}
+	if c.LogLevel == "" {
+		c.LogLevel = "info"
 	}
 	if c.Timeout <= 0 || c.Timeout > 60 {
 		c.Timeout = 60

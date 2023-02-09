@@ -27,7 +27,6 @@ func init() {
 }
 
 func main() {
-	var logLevel string
 	var printVer, daemon, showConfigExample, enablePprof bool
 	var cmdConfig easyss.Config
 
@@ -40,7 +39,7 @@ func main() {
 	flag.IntVar(&cmdConfig.Timeout, "t", 0, "timeout in seconds")
 	flag.IntVar(&cmdConfig.LocalPort, "l", 0, "local socks5 proxy port")
 	flag.StringVar(&cmdConfig.Method, "m", "", "encryption method, default: aes-256-gcm")
-	flag.StringVar(&logLevel, "log-level", "info", "set the log-level(debug, info, warn, error), default: info")
+	flag.StringVar(&cmdConfig.LogLevel, "log-level", "", "set the log-level(debug, info, warn, error), default: info")
 	flag.StringVar(&cmdConfig.ProxyRule, "proxy-rule", "", "set the proxy rule(auto, proxy, direct), default: auto")
 	flag.BoolVar(&daemon, "daemon", true, "run app as a non-daemon with -daemon=false")
 	flag.BoolVar(&cmdConfig.BindALL, "bind-all", false, "listens on all available IPs of the local system. default: false")
@@ -62,18 +61,6 @@ func main() {
 	if runtime.GOOS != "windows" {
 		// starting easyss as daemon only in client model,` and save logs to file`
 		easyss.Daemon(daemon)
-	}
-
-	log.Infof("[EASYSS-MAIN] set the log-level to: %v", logLevel)
-	switch logLevel {
-	case "debug":
-		log.SetLevel(log.DebugLevel)
-	case "warn":
-		log.SetLevel(log.WarnLevel)
-	case "error":
-		log.SetLevel(log.ErrorLevel)
-	default:
-		log.SetLevel(log.InfoLevel)
 	}
 
 	exists, err := util.FileExists(cmdConfig.ConfigFile)
@@ -99,7 +86,19 @@ func main() {
 	}
 
 	if err := config.Validate(); err != nil {
-		log.Fatalf("[EASYSS-MAIN] starts failed, config is invalid:%s", err.Error())
+		log.Fatalf("[EASYSS-MAIN] config is invalid:%s", err.Error())
+	}
+
+	log.Infof("[EASYSS-MAIN] set the log-level to: %v", config.LogLevel)
+	switch config.LogLevel {
+	case "debug":
+		log.SetLevel(log.DebugLevel)
+	case "warn":
+		log.SetLevel(log.WarnLevel)
+	case "error":
+		log.SetLevel(log.ErrorLevel)
+	default:
+		log.SetLevel(log.InfoLevel)
 	}
 
 	if enablePprof {
