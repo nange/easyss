@@ -89,9 +89,9 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string) err
 
 	if !reuse {
 		MarkCipherStreamUnusable(csStream)
-		log.Infof("[REMOTE_UDP] underlying proxy connection is unhealthy, need close it")
+		log.Warnf("[REMOTE_UDP] underlying proxy connection is unhealthy, need close it")
 	} else {
-		log.Infof("[REMOTE_UDP] underlying proxy connection is healthy, so reuse it")
+		log.Debugf("[REMOTE_UDP] underlying proxy connection is healthy, so reuse it")
 	}
 	csStream.(*cipherstream.CipherStream).Release()
 

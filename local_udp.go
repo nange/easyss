@@ -177,9 +177,9 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 
 		if !reuse {
 			MarkCipherStreamUnusable(ue.RemoteConn)
-			log.Infof("[UDP_PROXY] underlying proxy connection is unhealthy, need close it")
+			log.Warnf("[UDP_PROXY] underlying proxy connection is unhealthy, need close it")
 		} else {
-			log.Infof("[UDP_PROXY] underlying proxy connection is healthy, so reuse it")
+			log.Debugf("[UDP_PROXY] underlying proxy connection is healthy, so reuse it")
 		}
 
 		ue.RemoteConn.(*cipherstream.CipherStream).Release()
