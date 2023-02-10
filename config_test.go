@@ -14,6 +14,7 @@ func TestConfig_ClientValidate(t *testing.T) {
 		Password:   "test-pass",
 		Method:     "aes-256-gcm",
 	}
+	c.SetDefaultValue()
 	assert.Nil(t, c.Validate())
 
 	c.Method = "invalid-method"

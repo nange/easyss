@@ -130,8 +130,7 @@ func (es *EasyssSuite) TestEasySuit() {
 	}
 	body, err := clientGet(client, "https://baidu.com")
 	es.Require().Nilf(err, "http get baidu.com failed")
-	es.T().Logf("body:%v", string(body))
-	es.Greater(len(body), 100)
+	es.Greater(len(body), 1000)
 
 	client2 := &http.Client{
 		Transport: &http.Transport{
@@ -145,13 +144,11 @@ func (es *EasyssSuite) TestEasySuit() {
 	}
 	body2, err2 := clientGet(client2, "https://baidu.com")
 	es.Require().Nilf(err2, "http get baidu.com failed")
-	es.T().Logf("body2:%v", string(body2))
-	es.Greater(len(body2), 100)
+	es.Greater(len(body2), 1000)
 
 	body3, err3 := clientGet(client2, "http://www.baidu.com")
 	es.Require().Nilf(err3, "http get baidu.com failed")
-	es.T().Logf("body3:%v", string(body3))
-	es.Greater(len(body3), 100)
+	es.Greater(len(body3), 1000)
 }
 
 func clientGet(client *http.Client, url string) (body []byte, err error) {
