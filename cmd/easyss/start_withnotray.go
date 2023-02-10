@@ -29,13 +29,10 @@ func Start(ss *easyss.Easyss) {
 	}
 
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Kill, os.Interrupt, syscall.SIGINT, syscall.SIGTERM,
+	signal.Notify(c, os.Interrupt, syscall.SIGINT, syscall.SIGTERM,
 		syscall.SIGQUIT)
 
-	select {
-	case sig := <-c:
-		log.Infof("[EASYSS-MAIN] got signal to exit: %v", sig)
-		ss.Close()
-		os.Exit(0)
-	}
+	log.Infof("[EASYSS-MAIN] got signal to exit: %v", <-c)
+	ss.Close()
+	os.Exit(0)
 }

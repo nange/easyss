@@ -4,8 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path"
 	"path/filepath"
+	"syscall"
 
 	"github.com/nange/easyss/v2"
 	"github.com/nange/easyss/v2/util"
@@ -85,5 +87,15 @@ func main() {
 	}
 
 	ss := easyss.NewServer(config)
-	ss.Start()
+	go ss.Start()
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGINT, syscall.SIGTERM,
+		syscall.SIGQUIT)
+
+	log.Infof("[EASYSS-SERVER] got signal to exit: %v", <-c)
+	if err := ss.Close(); err != nil {
+		log.Warnf("[EASYSS-SERVER] close easy-server: %v", err)
+	}
+	os.Exit(0)
 }

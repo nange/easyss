@@ -1,11 +1,15 @@
 package easyss
 
 import (
+	"net"
+	"sync"
 	"time"
 )
 
 type EasyServer struct {
 	config *ServerConfig
+	mu     sync.Mutex
+	ln     net.Listener
 }
 
 func NewServer(config *ServerConfig) *EasyServer {
@@ -38,4 +42,13 @@ func (es *EasyServer) CertPath() string {
 
 func (es *EasyServer) KeyPath() string {
 	return es.config.KeyPath
+}
+
+func (es *EasyServer) Close() error {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+	if es.ln != nil {
+		return es.ln.Close()
+	}
+	return nil
 }

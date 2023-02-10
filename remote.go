@@ -61,6 +61,10 @@ func (es *EasyServer) startTCPServer() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	es.mu.Lock()
+	es.ln = ln
+	es.mu.Unlock()
+
 	log.Infof("[REMOTE] starting remote socks5 server at %v ...", addr)
 
 	for {
