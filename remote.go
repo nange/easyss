@@ -70,8 +70,8 @@ func (es *EasyServer) startTCPServer() {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			log.Error("accept:", err)
-			continue
+			log.Error("[REMOTE] accept:", err)
+			break
 		}
 		log.Infof("[REMOTE] a new connection(ip) is accepted. addr:%v", conn.RemoteAddr())
 
