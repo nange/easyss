@@ -182,6 +182,7 @@ type Easyss struct {
 	httpProxyServer  *http.Server
 	dnsForwardServer *dns.Server
 	closing          chan struct{}
+	pingLatency      chan time.Duration
 	enabledTun2socks bool
 	proxyRule        ProxyRule
 }
@@ -193,6 +194,7 @@ func New(config *Config) (*Easyss, error) {
 		dnsCache:       freecache.NewCache(DefaultDNSCacheSize),
 		directDNSCache: freecache.NewCache(DefaultDNSCacheSize),
 		closing:        make(chan struct{}, 1),
+		pingLatency:    make(chan time.Duration, 128),
 		mu:             &sync.RWMutex{},
 	}
 	proxyRule := ParseProxyRuleFromString(config.ProxyRule)
@@ -571,6 +573,7 @@ func (ss *Easyss) AvailConnFromPool() (conn net.Conn, err error) {
 			}
 
 			since := time.Since(start)
+			ss.pingLatency <- since
 			log.Debugf("[EASYSS] ping %s latency:%v", ss.Server(), since)
 			if since > time.Second {
 				log.Warnf("[EASYSS] got high latency:%v of ping %s", since, ss.Server())
@@ -584,7 +587,7 @@ func (ss *Easyss) AvailConnFromPool() (conn net.Conn, err error) {
 			return
 		}()
 		if err != nil {
-			log.Warnf("[EASYSS] ping test failed:%v for connection %s", err, conn.LocalAddr())
+			log.Warnf("[EASYSS] ping easyss-server: %v", err)
 			continue
 		}
 
@@ -825,13 +828,43 @@ func (ss *Easyss) Close() error {
 func (ss *Easyss) printStatistics() {
 	ss.mu.Lock()
 	closing := ss.closing
+	pingLatency := ss.pingLatency
 	ss.mu.Unlock()
+
+	var minLatency, avgLatency, maxLatency, total time.Duration
+	var count int64
+
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	ticker2 := time.NewTicker(30 * time.Second)
+	defer ticker2.Stop()
 	for {
 		select {
-		case <-time.After(time.Hour):
+		case <-ticker.C:
 			sendSize := ss.stat.BytesSend.Load() / (1024 * 1024)
 			receiveSize := ss.stat.BytesReceive.Load() / (1024 * 1024)
 			log.Infof("[EASYSS] send size: %vMB, recive size: %vMB", sendSize, receiveSize)
+		case late := <-pingLatency:
+			count += 1
+			total += late
+			if minLatency == 0 && avgLatency == 0 && maxLatency == 0 {
+				minLatency, avgLatency, maxLatency = late, late, late
+				continue
+			}
+
+			if minLatency > late {
+				minLatency = late
+			} else if maxLatency < late {
+				maxLatency = late
+			}
+			avgLatency = total / time.Duration(count)
+		case <-ticker2.C:
+			if maxLatency == 0 {
+				continue
+			}
+			log.Infof("[EASYSS] ping easyss-server latency: min:%v, avg:%v, max:%v, count:%v",
+				minLatency, avgLatency, maxLatency, count)
+			minLatency, avgLatency, maxLatency, count, total = 0, 0, 0, 0, 0
 		case <-closing:
 			return
 		}
