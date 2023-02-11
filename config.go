@@ -44,6 +44,7 @@ type Config struct {
 	BindALL           bool           `json:"bind_all"`
 	DisableUTLS       bool           `json:"disable_utls"`
 	DisableSysProxy   bool           `json:"disable_sys_proxy"`
+	DisableIPV6       bool           `json:"disable_ipv6"`
 	EnableForwardDNS  bool           `json:"enable_forward_dns"`
 	EnableTun2socks   bool           `json:"enable_tun2socks"`
 	DirectIPsFile     string         `json:"direct_ips_file"`

@@ -125,14 +125,18 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 			log.Debugf("%s got data from remote. client: %v, data-len: %v", logPrefix, ue.ClientAddr.String(), len(buf[0:n]))
 
 			// if is dns response, set result to dns cache
-			ss.SetDNSCacheIfNeeded(buf[0:n], true)
+			_msg := ss.SetDNSCacheIfNeeded(buf[0:n], true)
 
 			a, addr, port, err := socks5.ParseAddress(dst)
 			if err != nil {
 				log.Errorf("%s parse dst address err:%v", logPrefix, err)
 				return
 			}
-			d1 := socks5.NewDatagram(a, addr, port, buf[0:n])
+			data := buf[0:n]
+			if _msg != nil {
+				data, _ = _msg.Pack()
+			}
+			d1 := socks5.NewDatagram(a, addr, port, data)
 			if _, err := s.UDPConn.WriteToUDP(d1.Bytes(), laddr); err != nil {
 				return
 			}

@@ -231,14 +231,18 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			log.Debugf("[UDP_PROXY] got data from remote. client: %v, data-len: %v", ue.ClientAddr.String(), len(buf[0:n]))
 
 			// if is dns response, set result to dns cache
-			ss.SetDNSCacheIfNeeded(buf[0:n], false)
+			_msg := ss.SetDNSCacheIfNeeded(buf[0:n], false)
 
 			a, addr, port, err := socks5.ParseAddress(dst)
 			if err != nil {
 				log.Errorf("[UDP_PROXY] parse dst address err:%v", err)
 				return
 			}
-			d1 := socks5.NewDatagram(a, addr, port, buf[0:n])
+			data := buf[0:n]
+			if _msg != nil {
+				data, _ = _msg.Pack()
+			}
+			d1 := socks5.NewDatagram(a, addr, port, data)
 			if _, err := s.UDPConn.WriteToUDP(d1.Bytes(), ue.ClientAddr); err != nil {
 				return
 			}
@@ -260,7 +264,7 @@ func (ss *Easyss) unlockKey(key string) {
 	ss.udpLocks[lockID].Unlock()
 }
 
-func (ss *Easyss) SetDNSCacheIfNeeded(udpResp []byte, isDirect bool) {
+func (ss *Easyss) SetDNSCacheIfNeeded(udpResp []byte, isDirect bool) *dns.Msg {
 	logPrefix := "[DNS_PROXY]"
 	if isDirect {
 		logPrefix = "[DNS_DIRECT]"
@@ -269,14 +273,19 @@ func (ss *Easyss) SetDNSCacheIfNeeded(udpResp []byte, isDirect bool) {
 	if err := msg.Unpack(udpResp); err == nil && isDNSResponse(msg) {
 		log.Infof("%s got result:%s for %s, qtype:%s",
 			logPrefix, msg.Answer, msg.Question[0].Name, dns.TypeToString[msg.Question[0].Qtype])
-
+		if ss.DisableIPV6() && msg.Question[0].Qtype == dns.TypeAAAA {
+			log.Infof("%s ipv6 is disabled, set TypeAAAA dns answer to nil for %s", logPrefix, msg.Question[0].Name)
+			msg.Answer = nil
+		}
 		if err := ss.SetDNSCache(msg, false, isDirect); err != nil {
 			log.Warnf("%s set dns cache err:%s", logPrefix, err.Error())
 		} else {
 			log.Debugf("%s set cache for %s, qtype:%s",
 				logPrefix, msg.Question[0].Name, dns.TypeToString[msg.Question[0].Qtype])
 		}
+		return msg
 	}
+	return nil
 }
 
 func responseDNSMsg(conn *net.UDPConn, localAddr *net.UDPAddr, msg *dns.Msg, remoteAddr string) error {

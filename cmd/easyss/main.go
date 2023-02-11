@@ -45,6 +45,7 @@ func main() {
 	flag.BoolVar(&cmdConfig.BindALL, "bind-all", false, "listens on all available IPs of the local system. default: false")
 	flag.BoolVar(&cmdConfig.EnableForwardDNS, "enable-forward-dns", false, "start a local dns server to forward dns request")
 	flag.BoolVar(&cmdConfig.EnableTun2socks, "enable-tun2socks", false, "enable tun2socks model. default: false")
+	flag.BoolVar(&cmdConfig.DisableIPV6, "disable-ipv6", true, "disable ipv6 network. default: true")
 	flag.BoolVar(&enablePprof, "enable-pprof", false, "enable pprof server. default bind to :6060")
 
 	flag.Parse()

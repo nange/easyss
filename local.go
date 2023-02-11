@@ -148,6 +148,9 @@ func (ss *Easyss) validateAddr(addr string) error {
 	if util.IsPrivateIP(host) {
 		return fmt.Errorf("target host:%v is private ip, which is invalid", host)
 	}
+	if ss.DisableIPV6() && util.IsIPV6(host) {
+		return fmt.Errorf("target %s is ipv6, but ipv6 network is disabled", host)
+	}
 	if host == ss.ServerIP() && port == serverPort {
 		return fmt.Errorf("target host:%v equals server host ip, which may caused infinite-loop", host)
 	}

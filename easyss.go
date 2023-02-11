@@ -505,6 +505,10 @@ func (ss *Easyss) DisableSysProxy() bool {
 	return ss.config.DisableSysProxy
 }
 
+func (ss *Easyss) DisableIPV6() bool {
+	return ss.config.DisableIPV6
+}
+
 func (ss *Easyss) EnableForwardDNS() bool {
 	return ss.config.EnableForwardDNS
 }
