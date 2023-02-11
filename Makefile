@@ -6,7 +6,7 @@ LDFLAGS += -X "github.com/nange/easyss/v2/version.Name=${PROJECT}"
 LDFLAGS += -X "github.com/nange/easyss/v2/version.BuildDate=$(shell date '+%Y-%m-%d %H:%M:%S')"
 LDFLAGS += -X "github.com/nange/easyss/v2/version.GitTag=$(shell git describe --tags)"
 
-.PHONY: easyss easyss-with-notray easyss-server
+.PHONY: easyss easyss-with-notray easyss-windows easyss-server
 
 echo:
 	@echo "${PROJECT}"
@@ -17,7 +17,7 @@ easyss:
 
 easyss-windows:
 	cd cmd/easyss; \
-	$(GO) build -o easyss.exe -ldflags '-H=windowsgui $(LDFLAGS)'
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=1 $(GO) build -o easyss.exe -ldflags '-H=windowsgui $(LDFLAGS)'
 
 easyss-with-notray:
 	cd cmd/easyss; \
