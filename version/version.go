@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/debug"
+	"strings"
 )
 
 const (
@@ -65,12 +66,17 @@ func init() {
 
 // Print prints out the collected version information.
 func Print() {
+	fmt.Print(String())
+}
+
+func String() string {
+	builder := strings.Builder{}
 	xprintf := func(k string, v string) {
-		fmt.Printf("%s:\t%s\n", k, v)
+		builder.WriteString(fmt.Sprintf("%s:\t%s\n", k, v))
 	}
 
 	if Name != unknownProperty {
-		xprintf("Name", Name)
+		xprintf("App Name", Name)
 	}
 
 	xprintf("Go version", GoVersion)
@@ -95,6 +101,8 @@ func Print() {
 	if GitTag != unknownProperty {
 		xprintf("Git tag", GitTag)
 	}
+
+	return builder.String()
 }
 
 // collectFromBuildInfo tries to set the build information embedded in the running binary via Go module.

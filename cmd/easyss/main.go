@@ -105,6 +105,8 @@ func main() {
 		go pprof.StartPprof()
 	}
 
+	log.Infof(version.String())
+
 	ss, err := easyss.New(config)
 	if err != nil {
 		log.Fatalf("[EASYSS-MAIN] init easyss: %v", err)
