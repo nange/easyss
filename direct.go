@@ -57,15 +57,19 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 func (ss *Easyss) directTCPConn(addr string) (net.Conn, error) {
 	var tConn net.Conn
 	var err error
+	network := "tcp"
+	if ss.DisableIPV6() {
+		network = "tcp4"
+	}
 	if ss.EnabledTun2socks() {
 		ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
 		defer cancel()
-		tConn, err = dialer.DialContextWithOptions(ctx, "tcp", addr, &dialer.Options{
+		tConn, err = dialer.DialContextWithOptions(ctx, network, addr, &dialer.Options{
 			InterfaceName:  ss.LocalDevice(),
 			InterfaceIndex: ss.LocalDeviceIndex(),
 		})
 	} else {
-		tConn, err = net.DialTimeout("tcp", addr, ss.Timeout())
+		tConn, err = net.DialTimeout(network, addr, ss.Timeout())
 	}
 
 	return tConn, err

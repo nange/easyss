@@ -149,13 +149,17 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 func (ss *Easyss) directUDPConn() (net.PacketConn, error) {
 	var pc net.PacketConn
 	var err error
+	network := "udp"
+	if ss.DisableIPV6() {
+		network = "udp4"
+	}
 	if ss.EnabledTun2socks() {
-		pc, err = dialer.ListenPacketWithOptions("udp", "", &dialer.Options{
+		pc, err = dialer.ListenPacketWithOptions(network, "", &dialer.Options{
 			InterfaceName:  ss.LocalDevice(),
 			InterfaceIndex: ss.LocalDeviceIndex(),
 		})
 	} else {
-		pc, err = net.ListenPacket("udp", "")
+		pc, err = net.ListenPacket(network, "")
 	}
 
 	return pc, err

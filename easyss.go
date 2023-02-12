@@ -365,6 +365,10 @@ func (ss *Easyss) InitTcpPool() error {
 		}
 	}
 
+	network := "tcp"
+	if ss.DisableIPV6() {
+		network = "tcp4"
+	}
 	factory := func() (net.Conn, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
 		defer cancel()
@@ -373,10 +377,10 @@ func (ss *Easyss) InitTcpPool() error {
 			dialer := &tls.Dialer{
 				Config: &tls.Config{RootCAs: certPool},
 			}
-			return dialer.DialContext(ctx, "tcp", ss.ServerAddr())
+			return dialer.DialContext(ctx, network, ss.ServerAddr())
 		}
 
-		conn, err := net.DialTimeout("tcp", ss.ServerAddr(), ss.Timeout())
+		conn, err := net.DialTimeout(network, ss.ServerAddr(), ss.Timeout())
 		if err != nil {
 			return nil, err
 		}
