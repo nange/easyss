@@ -46,11 +46,13 @@ jobs:
         run: |
           make easyss
           make easyss-server
+          GOOS=darwin GOARCH=arm64 make easyss-with-notray
       - name: Pack
         run: |
           cd bin
           zip easyss-darwin-amd64.zip ./easyss
           zip easyss-server-darwin-amd64.zip ./easyss-server
+          zip easyss-with-notray-darwin-arm64.zip ./easyss-with-notray
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
