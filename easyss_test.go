@@ -99,6 +99,7 @@ func (es *EasyssSuite) SetupSuite() {
 		LocalPort:  LocalPort,
 		Password:   Password,
 		Method:     Method,
+		ProxyRule:  "proxy",
 		CAPath:     caPath,
 	}
 	config.SetDefaultValue()
@@ -153,6 +154,9 @@ func (es *EasyssSuite) TestEasySuit() {
 
 func clientGet(client *http.Client, url string) (body []byte, err error) {
 	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
 	if resp.Body != nil {
 		defer resp.Body.Close()
 	}
