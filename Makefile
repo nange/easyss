@@ -23,7 +23,7 @@ easyss-windows:
 
 easyss-with-notray:
 	cd cmd/easyss; \
-    $(GO_BUILD) -tags "with_notray " -o ../../bin/easyss-with-notray main.go start_withnotray.go
+    $(GO_BUILD) -tags "with_notray " -o ../../bin/easyss-with-notray
 
 easyss-server:
 	cd cmd/easyss-server; \

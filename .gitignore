@@ -28,7 +28,7 @@ cmd/easyss/*.json
 cmd/easyss/*.txt
 cmd/easyss/wintun.dll
 cmd/easyss/easyss*
-!cmd/easyss/easyss.syso
+!cmd/easyss/easyss*.syso
 cmd/easyss-server/easyss-server*
 
 .idea*
