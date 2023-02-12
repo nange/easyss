@@ -15,7 +15,8 @@ import (
 
 const (
 	// MaxPayloadSize is the maximum size of payload, set to 16KB.
-	MaxPayloadSize = 1<<14 - 1
+	MaxPayloadSize     = 1<<14 - 1
+	MaxCipherRelaySize = MaxPayloadSize + MaxPayloadSize/2
 )
 
 const (
@@ -91,7 +92,7 @@ func (cs *CipherStream) WriteRST(flag uint8) error {
 		return ErrEncrypt
 	}
 
-	buf := bytespool.Get(MaxPayloadSize + MaxPayloadSize/2)
+	buf := bytespool.Get(MaxCipherRelaySize)
 	defer bytespool.MustPut(buf)
 
 	frame := cs.makeCipherFrame(hc, pc, buf)
@@ -123,7 +124,7 @@ func (cs *CipherStream) WritePing(b []byte, flag uint8) error {
 		return ErrEncrypt
 	}
 
-	buf := bytespool.Get(MaxPayloadSize + MaxPayloadSize/2)
+	buf := bytespool.Get(MaxCipherRelaySize)
 	defer bytespool.MustPut(buf)
 
 	frame := cs.makeCipherFrame(hc, pc, buf)
@@ -173,7 +174,7 @@ func (cs *CipherStream) makeCipherHeader(frameType util.FrameType, flag uint8, r
 }
 
 func (cs *CipherStream) makeCipherPayload(rawData []byte, padSize byte) ([]byte, error) {
-	payload := bytespool.Get(MaxPayloadSize + MaxPayloadSize/2)
+	payload := bytespool.Get(MaxCipherRelaySize)
 	defer bytespool.MustPut(payload)
 
 	payload = payload[:0]
@@ -210,7 +211,7 @@ func (cs *CipherStream) makeCipherFrame(cipherHeader []byte, cipherPayload []byt
 }
 
 func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
-	buf := bytespool.Get(MaxPayloadSize + MaxPayloadSize/2)
+	buf := bytespool.Get(MaxCipherRelaySize)
 	defer bytespool.MustPut(buf)
 
 	for {
