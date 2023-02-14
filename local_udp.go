@@ -76,9 +76,11 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		return ss.directUDPRelay(s, addr, d, isDNSReq)
 	}
 
-	if err := ss.validateAddr(rewrittenDst); err != nil {
-		log.Warnf("[UDP_PROXY] validate dst:%v err:%v", dst, err)
-		return errors.New("dst addr is invalid")
+	if !ss.disableValidateAddr {
+		if err := ss.validateAddr(rewrittenDst); err != nil {
+			log.Warnf("[UDP_PROXY] validate dst:%v err:%v", dst, err)
+			return errors.New("dst addr is invalid")
+		}
 	}
 
 	var ch chan struct{}

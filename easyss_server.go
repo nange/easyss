@@ -10,6 +10,9 @@ type EasyServer struct {
 	config *ServerConfig
 	mu     sync.Mutex
 	ln     net.Listener
+
+	// only used for testing
+	disableValidateAddr bool
 }
 
 func NewServer(config *ServerConfig) *EasyServer {

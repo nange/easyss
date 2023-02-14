@@ -3,14 +3,17 @@ package easyss
 import (
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/suite"
+	"golang.org/x/net/proxy"
 )
 
 const (
@@ -58,6 +61,10 @@ const (
 	Method     = "aes-256-gcm"
 )
 
+const (
+	CloseWriteServerPort = "8888"
+)
+
 func TestEasyss(t *testing.T) {
 	suite.Run(t, new(EasyssSuite))
 }
@@ -84,6 +91,7 @@ func (es *EasyssSuite) SetupSuite() {
 		CertPath:   certPath,
 		KeyPath:    keyPath,
 	})
+	server.disableValidateAddr = true
 	es.server = server
 
 	go es.server.Start()
@@ -105,6 +113,7 @@ func (es *EasyssSuite) SetupSuite() {
 	config.SetDefaultValue()
 	ss, err := New(config)
 	es.Nilf(err, "New Easyss failed")
+	ss.disableValidateAddr = true
 	es.ss = ss
 
 	es.Nilf(ss.InitTcpPool(), "init tcp pool failed")
@@ -152,6 +161,15 @@ func (es *EasyssSuite) TestEasySuit() {
 	es.Greater(len(body3), 1000)
 }
 
+func (es *EasyssSuite) TestCloseWrite() {
+	go closeWriteServer()
+	time.Sleep(time.Second)
+
+	msg := "hello"
+	ret := closeWriteClient(msg)
+	es.Equal(msg, ret)
+}
+
 func clientGet(client *http.Client, url string) (body []byte, err error) {
 	resp, err := client.Get(url)
 	if err != nil {
@@ -162,4 +180,71 @@ func clientGet(client *http.Client, url string) (body []byte, err error) {
 	}
 
 	return io.ReadAll(resp.Body)
+}
+
+func closeWriteServer() {
+	lis, err := net.Listen("tcp", ":"+CloseWriteServerPort)
+	if err != nil {
+		panic(err)
+	}
+	for {
+		conn, err := lis.Accept()
+		if err != nil {
+			fmt.Println("accept:", err.Error())
+			break
+		}
+		go handleConn(conn)
+	}
+}
+
+func handleConn(conn net.Conn) {
+	defer conn.Close()
+
+	for {
+		b := make([]byte, 1024)
+		nr, err := conn.Read(b)
+		if err != nil {
+			fmt.Println("read:", err.Error())
+			if nr > 0 {
+				fmt.Println("read err, bug got:", b[:nr])
+			}
+			return
+		}
+		fmt.Println("read:", string(b[:nr]))
+		time.Sleep(6 * time.Second)
+		if _, err := conn.Write(b[:nr]); err != nil {
+			fmt.Println("write to remote:", err.Error())
+		}
+	}
+}
+
+func closeWriteClient(msg string) string {
+	dialer, err := proxy.SOCKS5("tcp", "127.0.0.1:"+strconv.FormatInt(LocalPort, 10), nil, proxy.Direct)
+	if err != nil {
+		panic("create socks5 dialer:" + err.Error())
+	}
+	conn, err := dialer.Dial("tcp", "127.0.0.1:"+CloseWriteServerPort)
+	if err != nil {
+		panic("dial:" + err.Error())
+	}
+	defer conn.Close()
+
+	if _, err := conn.Write([]byte(msg)); err != nil {
+		panic("write greeting message to remote:" + err.Error())
+	}
+
+	if err := conn.(*net.TCPConn).CloseWrite(); err != nil {
+		panic("close write:" + err.Error())
+	}
+
+	ret := make([]byte, 1024)
+	nr, err := conn.Read(ret)
+	if err != nil {
+		fmt.Println("read from remote:", err.Error())
+		if nr > 0 {
+			fmt.Println("read from remote:", string(ret[:nr]))
+		}
+		return ""
+	}
+	return string(ret[:nr])
 }

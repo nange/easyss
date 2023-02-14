@@ -175,6 +175,8 @@ type Easyss struct {
 	// locks for udp request
 	udpLocks [UDPLocksCount]sync.Mutex
 
+	// only used for testing
+	disableValidateAddr bool
 	// the mu Mutex to protect below fields
 	mu               *sync.RWMutex
 	tcpPool          easypool.Pool

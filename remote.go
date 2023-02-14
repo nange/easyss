@@ -90,9 +90,11 @@ func (es *EasyServer) startTCPServer() {
 				}
 
 				addrStr := string(addr)
-				if err := validateTargetAddr(addrStr); err != nil {
-					log.Warnf("[REMOTE] validate target address err:%s, close the connection directly", err.Error())
-					return
+				if !es.disableValidateAddr {
+					if err := validateTargetAddr(addrStr); err != nil {
+						log.Warnf("[REMOTE] validate target address err:%s, close the connection directly", err.Error())
+						return
+					}
 				}
 
 				log.Infof("[REMOTE] target:%v", addrStr)

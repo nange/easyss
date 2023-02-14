@@ -87,9 +87,11 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	}
 
 	log.Infof("[TCP_PROXY] target:%s", addr)
-	if err := ss.validateAddr(addr); err != nil {
-		log.Errorf("[TCP_PROXY] validate socks5 request:%v", err)
-		return err
+	if !ss.disableValidateAddr {
+		if err := ss.validateAddr(addr); err != nil {
+			log.Errorf("[TCP_PROXY] validate socks5 request:%v", err)
+			return err
+		}
 	}
 
 	stream, err := ss.AvailConnFromPool()
