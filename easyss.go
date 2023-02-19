@@ -168,6 +168,7 @@ type Easyss struct {
 	geosite         *GeoSite
 	// the user custom ip/domain list which have the highest priority
 	customDirectIPs     map[string]struct{}
+	customDirectCIDRIPs []*net.IPNet
 	customDirectDomains map[string]struct{}
 	// only used on darwin(MacOS)
 	originDNS []string
@@ -253,6 +254,16 @@ func (ss *Easyss) loadCustomIPDomains() error {
 	}
 	if len(directIPs) > 0 {
 		log.Infof("[EASYSS] load custom direct ips success, len:%d", len(directIPs))
+		for k := range directIPs {
+			_, ipnet, err := net.ParseCIDR(k)
+			if err != nil {
+				continue
+			}
+			if ipnet != nil {
+				ss.customDirectCIDRIPs = append(ss.customDirectCIDRIPs, ipnet)
+				delete(directIPs, k)
+			}
+		}
 		ss.customDirectIPs = directIPs
 	}
 
@@ -757,6 +768,11 @@ func (ss *Easyss) HostShouldDirect(host string) bool {
 	if util.IsIP(host) {
 		if _, ok := ss.customDirectIPs[host]; ok {
 			return true
+		}
+		for _, v := range ss.customDirectCIDRIPs {
+			if v.Contains(net.ParseIP(host)) {
+				return true
+			}
 		}
 	} else {
 		if _, ok := ss.customDirectDomains[host]; ok {
