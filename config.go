@@ -29,6 +29,7 @@ type ServerConfig struct {
 	CertPath    string `json:"cert_path"`
 	KeyPath     string `json:"key_path"`
 	CAPath      string `json:"ca_path"`
+	Default     bool   `json:"default,omitempty"`
 }
 
 type Config struct {
@@ -141,11 +142,14 @@ func OverrideConfig[T any](dst, src *T) {
 func (c *Config) SetDefaultValue() {
 	// if server is empty, try to use the first item in server list instead
 	if c.Server == "" && len(c.ServerList) > 0 {
-		c.Server = c.ServerList[0].Server
-		c.ServerPort = c.ServerList[0].ServerPort
-		c.Password = c.ServerList[0].Password
-		c.DisableUTLS = c.ServerList[0].DisableUTLS
-		c.CAPath = c.ServerList[0].CAPath
+		sc := c.DefaultServerConfigFrom(c.ServerList)
+		if sc != nil {
+			c.Server = sc.Server
+			c.ServerPort = sc.ServerPort
+			c.Password = sc.Password
+			c.DisableUTLS = sc.DisableUTLS
+			c.CAPath = sc.CAPath
+		}
 	}
 
 	if c.LocalPort == 0 {
@@ -172,6 +176,22 @@ func (c *Config) SetDefaultValue() {
 	if c.ProxyRule == "" {
 		c.ProxyRule = "auto"
 	}
+}
+
+func (c *Config) DefaultServerConfigFrom(list []ServerConfig) *ServerConfig {
+	if len(list) == 0 {
+		return nil
+	}
+	if len(list) == 1 {
+		return &list[0]
+	}
+	for _, v := range list {
+		if v.Default {
+			return &v
+		}
+	}
+
+	return &list[0]
 }
 
 func (c *ServerConfig) SetDefaultValue() {

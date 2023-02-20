@@ -63,12 +63,15 @@ func (st *SysTray) AddSelectServerMenu() {
 		for _, addr := range addrs {
 			item := selectServer.AddSubMenuItemCheckbox(addr, "服务器地址", false)
 			subMenuItems = append(subMenuItems, item)
+			if addr == st.SS().ServerAddr() {
+				item.Check()
+			}
 		}
 	} else {
 		item := selectServer.AddSubMenuItemCheckbox(st.SS().ServerAddr(), "服务器地址", false)
 		subMenuItems = append(subMenuItems, item)
+		item.Check()
 	}
-	subMenuItems[0].Check()
 
 	for i, item := range subMenuItems {
 		go func(_i int, _item *systray.MenuItem) {

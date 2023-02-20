@@ -355,6 +355,7 @@ func (ss *Easyss) InitTcpPool() error {
 	} else {
 		log.Infof("[EASYSS] uTLS is enabled")
 	}
+	log.Infof("[EASYSS] initializing tcp pool with easy server: %v", ss.ServerAddr())
 
 	var certPool *x509.CertPool
 	if ss.CAPath() != "" {
