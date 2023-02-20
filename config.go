@@ -28,7 +28,7 @@ type ServerConfig struct {
 	DisableUTLS bool   `json:"disable_utls"`
 	CertPath    string `json:"cert_path"`
 	KeyPath     string `json:"key_path"`
-	CAPath      string `json:"ca_path"`
+	CAPath      string `json:"ca_path,omitempty"`
 	Default     bool   `json:"default,omitempty"`
 }
 
@@ -201,9 +201,16 @@ func (c *ServerConfig) SetDefaultValue() {
 }
 
 func (c *ServerConfig) Validate() error {
-	if c.Server == "" || c.ServerPort == 0 || c.Password == "" {
-		return errors.New("server address, server port and password should not empty")
+	if c.KeyPath != "" && c.CertPath != "" {
+		if c.ServerPort == 0 || c.Password == "" {
+			return errors.New("server port and password should not empty")
+		}
+	} else {
+		if c.Server == "" || c.ServerPort == 0 || c.Password == "" {
+			return errors.New("server address, server port and password should not empty")
+		}
 	}
+
 	return nil
 }
 
