@@ -89,12 +89,8 @@ func (st *SysTray) AddSelectServerMenu() {
 						}
 
 						config := st.SS().ConfigClone()
-						serverConfig := st.SS().ServerList()[_i]
-						config.Server = serverConfig.Server
-						config.ServerPort = serverConfig.ServerPort
-						config.Password = serverConfig.Password
-						config.DisableUTLS = serverConfig.DisableUTLS
-						config.CAPath = serverConfig.CAPath
+						sc := st.SS().ServerList()[_i]
+						config.OverrideFrom(&sc)
 						if err := st.RestartService(config); err != nil {
 							log.Errorf("[SYSTRAY] changing server to:%s err:%v", addrs[_i], err)
 						} else {

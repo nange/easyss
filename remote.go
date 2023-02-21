@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 
 	"github.com/caddyserver/certmagic"
 	"github.com/nange/easyss/v2/cipherstream"
@@ -51,16 +50,24 @@ func (es *EasyServer) tlsConfig() (*tls.Config, error) {
 }
 
 func (es *EasyServer) startTCPServer() {
-	addr := ":" + strconv.Itoa(es.ServerPort())
-	tlsConfig, err := es.tlsConfig()
+	var ln net.Listener
+	var err error
+
+	addr := es.ListenAddr()
+	if es.DisableTLS() {
+		ln, err = net.Listen("tcp", addr)
+	} else {
+		var tlsConfig *tls.Config
+		tlsConfig, err = es.tlsConfig()
+		if err != nil {
+			log.Fatalf("[REMOTE] get server tls config err:%v", err)
+		}
+		ln, err = tls.Listen("tcp", addr, tlsConfig)
+	}
 	if err != nil {
-		log.Fatalf("[REMOTE] get server tls config err:%v", err)
+		log.Fatalf("Listen %v: %v", addr, err)
 	}
 
-	ln, err := tls.Listen("tcp", addr, tlsConfig)
-	if err != nil {
-		log.Fatal(err)
-	}
 	es.mu.Lock()
 	es.ln = ln
 	es.mu.Unlock()

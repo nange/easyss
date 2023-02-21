@@ -350,6 +350,11 @@ func (ss *Easyss) initLocalGatewayAndDevice() error {
 }
 
 func (ss *Easyss) InitTcpPool() error {
+	if ss.DisableTLS() {
+		log.Infof("[EASYSS] TLS is disabled")
+	} else {
+		log.Infof("[EASYSS] TLS is enabled")
+	}
 	if ss.DisableUTLS() {
 		log.Infof("[EASYSS] uTLS is disabled")
 	} else {
@@ -384,9 +389,12 @@ func (ss *Easyss) InitTcpPool() error {
 		network = "tcp4"
 	}
 	factory := func() (net.Conn, error) {
+		if ss.DisableTLS() {
+			return net.DialTimeout(network, ss.ServerAddr(), ss.Timeout())
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
 		defer cancel()
-
 		if ss.DisableUTLS() {
 			dialer := &tls.Dialer{
 				Config: &tls.Config{RootCAs: certPool},
@@ -517,6 +525,10 @@ func (ss *Easyss) BindAll() bool {
 
 func (ss *Easyss) DisableUTLS() bool {
 	return ss.config.DisableUTLS
+}
+
+func (ss *Easyss) DisableTLS() bool {
+	return ss.config.DisableTLS
 }
 
 func (ss *Easyss) DisableSysProxy() bool {

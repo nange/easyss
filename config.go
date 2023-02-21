@@ -26,6 +26,7 @@ type ServerConfig struct {
 	Password    string `json:"password"`
 	Timeout     int    `json:"timeout"`
 	DisableUTLS bool   `json:"disable_utls"`
+	DisableTLS  bool   `json:"disable_tls"`
 	CertPath    string `json:"cert_path"`
 	KeyPath     string `json:"key_path"`
 	CAPath      string `json:"ca_path,omitempty"`
@@ -46,6 +47,7 @@ type Config struct {
 	DisableUTLS       bool           `json:"disable_utls"`
 	DisableSysProxy   bool           `json:"disable_sys_proxy"`
 	DisableIPV6       bool           `json:"disable_ipv6"`
+	DisableTLS        bool           `json:"disable_tls"`
 	EnableForwardDNS  bool           `json:"enable_forward_dns"`
 	EnableTun2socks   bool           `json:"enable_tun2socks"`
 	DirectIPsFile     string         `json:"direct_ips_file"`
@@ -143,13 +145,7 @@ func (c *Config) SetDefaultValue() {
 	// if server is empty, try to use the first item in server list instead
 	if c.Server == "" && len(c.ServerList) > 0 {
 		sc := c.DefaultServerConfigFrom(c.ServerList)
-		if sc != nil {
-			c.Server = sc.Server
-			c.ServerPort = sc.ServerPort
-			c.Password = sc.Password
-			c.DisableUTLS = sc.DisableUTLS
-			c.CAPath = sc.CAPath
-		}
+		c.OverrideFrom(sc)
 	}
 
 	if c.LocalPort == 0 {
@@ -164,8 +160,8 @@ func (c *Config) SetDefaultValue() {
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
 	}
-	if c.Timeout <= 0 || c.Timeout > 60 {
-		c.Timeout = 60
+	if c.Timeout <= 0 || c.Timeout > 30 {
+		c.Timeout = 30
 	}
 	if c.DirectIPsFile == "" {
 		c.DirectIPsFile = "direct_ips.txt"
@@ -175,6 +171,18 @@ func (c *Config) SetDefaultValue() {
 	}
 	if c.ProxyRule == "" {
 		c.ProxyRule = "auto"
+	}
+}
+
+func (c *Config) OverrideFrom(sc *ServerConfig) {
+	if sc != nil {
+		c.Server = sc.Server
+		c.ServerPort = sc.ServerPort
+		c.Password = sc.Password
+		c.Timeout = sc.Timeout
+		c.DisableUTLS = sc.DisableUTLS
+		c.DisableTLS = sc.DisableTLS
+		c.CAPath = sc.CAPath
 	}
 }
 

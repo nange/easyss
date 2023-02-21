@@ -2,6 +2,7 @@ package easyss
 
 import (
 	"net"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -23,8 +24,17 @@ func (es *EasyServer) Server() string {
 	return es.config.Server
 }
 
+func (es *EasyServer) ListenAddr() string {
+	addr := ":" + strconv.Itoa(es.ServerPort())
+	return addr
+}
+
 func (es *EasyServer) DisableUTLS() bool {
 	return es.config.DisableUTLS
+}
+
+func (es *EasyServer) DisableTLS() bool {
+	return es.config.DisableTLS
 }
 
 func (es *EasyServer) ServerPort() int {

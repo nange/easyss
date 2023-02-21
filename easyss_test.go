@@ -75,7 +75,7 @@ type EasyssSuite struct {
 	server *EasyServer
 }
 
-func (es *EasyssSuite) SetupSuite() {
+func (es *EasyssSuite) SetupTest() {
 	tempDir := es.T().TempDir()
 	certPath := filepath.Join(tempDir, "cert.pem")
 	err := os.WriteFile(certPath, []byte(ServerCert), os.ModePerm)
@@ -93,9 +93,6 @@ func (es *EasyssSuite) SetupSuite() {
 	})
 	server.disableValidateAddr = true
 	es.server = server
-
-	go es.server.Start()
-	time.Sleep(time.Second)
 
 	caPath := filepath.Join(tempDir, "ca.pem")
 	err = os.WriteFile(caPath, []byte(CACert), os.ModePerm)
@@ -116,13 +113,24 @@ func (es *EasyssSuite) SetupSuite() {
 	ss.disableValidateAddr = true
 	es.ss = ss
 
-	es.Nilf(ss.InitTcpPool(), "init tcp pool failed")
-	go ss.LocalSocks5()
-	go ss.LocalHttp()
+}
+
+func (es *EasyssSuite) BeforeTest(suiteName, testName string) {
+	if testName == "TestDisableTLS" {
+		es.server.config.DisableTLS = true
+		es.ss.config.DisableTLS = true
+	}
+
+	go es.server.Start()
+	time.Sleep(time.Second)
+
+	es.Nilf(es.ss.InitTcpPool(), "init tcp pool failed")
+	go es.ss.LocalSocks5()
+	go es.ss.LocalHttp()
 	time.Sleep(time.Second)
 }
 
-func (es *EasyssSuite) TearDownSuite() {
+func (es *EasyssSuite) TearDownTest() {
 	es.ss.Close()
 	es.server.Close()
 }
@@ -168,6 +176,10 @@ func (es *EasyssSuite) TestCloseWrite() {
 	msg := "hello"
 	ret := closeWriteClient(msg)
 	es.Equal(msg, ret)
+}
+
+func (es *EasyssSuite) TestDisableTLS() {
+	es.TestEasySuit()
 }
 
 func clientGet(client *http.Client, url string) (body []byte, err error) {
