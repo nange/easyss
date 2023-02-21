@@ -209,14 +209,16 @@ func (c *ServerConfig) SetDefaultValue() {
 }
 
 func (c *ServerConfig) Validate() error {
-	if c.KeyPath != "" && c.CertPath != "" {
-		if c.ServerPort == 0 || c.Password == "" {
-			return errors.New("server port and password should not empty")
+	if !c.DisableTLS && (c.KeyPath == "" || c.CertPath == "") {
+		if c.Server == "" {
+			return errors.New("server address should not empty")
 		}
-	} else {
-		if c.Server == "" || c.ServerPort == 0 || c.Password == "" {
-			return errors.New("server address, server port and password should not empty")
-		}
+	}
+	if c.ServerPort == 0 {
+		return errors.New("server port should not empty")
+	}
+	if c.Password == "" {
+		return errors.New("password should not empty")
 	}
 
 	return nil

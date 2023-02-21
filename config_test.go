@@ -51,6 +51,18 @@ func TestConfig_ServerValidate(t *testing.T) {
 	c.Password = "your-pass"
 	c.ServerPort = 0
 	assert.NotNil(t, c.Validate())
+
+	c.Server = ""
+	c.ServerPort = 9999
+	assert.NotNil(t, c.Validate())
+
+	c.DisableTLS = true
+	assert.Nil(t, c.Validate())
+
+	c.DisableTLS = false
+	c.CertPath = "/test.pem"
+	c.KeyPath = "key.pem"
+	assert.Nil(t, c.Validate())
 }
 
 func TestConfig_Clone(t *testing.T) {
