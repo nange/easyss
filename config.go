@@ -203,8 +203,8 @@ func (c *Config) DefaultServerConfigFrom(list []ServerConfig) *ServerConfig {
 }
 
 func (c *ServerConfig) SetDefaultValue() {
-	if c.Timeout <= 0 || c.Timeout > 60 {
-		c.Timeout = 60
+	if c.Timeout <= 0 || c.Timeout > 30 {
+		c.Timeout = 30
 	}
 }
 
