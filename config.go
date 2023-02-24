@@ -21,16 +21,17 @@ var ProxyRules = map[string]struct{}{
 }
 
 type ServerConfig struct {
-	Server      string `json:"server"`
-	ServerPort  int    `json:"server_port"`
-	Password    string `json:"password"`
-	Timeout     int    `json:"timeout"`
-	DisableUTLS bool   `json:"disable_utls"`
-	DisableTLS  bool   `json:"disable_tls"`
-	CertPath    string `json:"cert_path"`
-	KeyPath     string `json:"key_path"`
-	CAPath      string `json:"ca_path,omitempty"`
-	Default     bool   `json:"default,omitempty"`
+	Server        string `json:"server"`
+	ServerPort    int    `json:"server_port"`
+	Password      string `json:"password"`
+	Timeout       int    `json:"timeout"`
+	DisableUTLS   bool   `json:"disable_utls"`
+	DisableTLS    bool   `json:"disable_tls"`
+	CertPath      string `json:"cert_path"`
+	KeyPath       string `json:"key_path"`
+	CAPath        string `json:"ca_path,omitempty"`
+	Default       bool   `json:"default,omitempty"`
+	OutboundProto string `json:"outbound_proto"`
 }
 
 type Config struct {
@@ -54,6 +55,7 @@ type Config struct {
 	DirectDomainsFile string         `json:"direct_domains_file"`
 	ProxyRule         string         `json:"proxy_rule"`
 	CAPath            string         `json:"ca_path"`
+	OutboundProto     string         `json:"outbound_proto"`
 	ConfigFile        string         `json:"-"`
 }
 
@@ -145,6 +147,7 @@ func (c *Config) SetDefaultValue() {
 	// if server is empty, try to use the first item in server list instead
 	if c.Server == "" && len(c.ServerList) > 0 {
 		sc := c.DefaultServerConfigFrom(c.ServerList)
+		sc.SetDefaultValue()
 		c.OverrideFrom(sc)
 	}
 
@@ -172,6 +175,9 @@ func (c *Config) SetDefaultValue() {
 	if c.ProxyRule == "" {
 		c.ProxyRule = "auto"
 	}
+	if c.OutboundProto == "" {
+		c.OutboundProto = "tcp"
+	}
 }
 
 func (c *Config) OverrideFrom(sc *ServerConfig) {
@@ -183,6 +189,7 @@ func (c *Config) OverrideFrom(sc *ServerConfig) {
 		c.DisableUTLS = sc.DisableUTLS
 		c.DisableTLS = sc.DisableTLS
 		c.CAPath = sc.CAPath
+		c.OutboundProto = sc.OutboundProto
 	}
 }
 
@@ -206,6 +213,9 @@ func (c *ServerConfig) SetDefaultValue() {
 	if c.Timeout <= 0 || c.Timeout > 30 {
 		c.Timeout = 30
 	}
+	if c.OutboundProto == "" {
+		c.OutboundProto = "tcp"
+	}
 }
 
 func (c *ServerConfig) Validate() error {
@@ -219,6 +229,9 @@ func (c *ServerConfig) Validate() error {
 	}
 	if c.Password == "" {
 		return errors.New("password should not empty")
+	}
+	if c.OutboundProto != "tcp" && c.OutboundProto != "http" {
+		return errors.New("outbound proto must be one of [tcp, http]")
 	}
 
 	return nil

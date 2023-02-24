@@ -176,6 +176,10 @@ type Easyss struct {
 	// locks for udp request
 	udpLocks [UDPLocksCount]sync.Mutex
 
+	// once protects httpOutboundClient
+	once               sync.Once
+	httpOutboundClient *http.Client
+
 	// only used for testing
 	disableValidateAddr bool
 	// the mu Mutex to protect below fields
@@ -312,7 +316,7 @@ func (ss *Easyss) initServerIPAndDNSCache() error {
 
 		if msg != nil && msgAAAA != nil {
 			if len(msg.Answer) > 0 {
-				ss.serverIP = msg.Answer[0].(*dns.A).A.String()
+				ss.serverIP = msg.Answer[len(msg.Answer)-1].(*dns.A).A.String()
 				_ = ss.SetDNSCache(msg, true, true)
 				_ = ss.SetDNSCache(msg, true, false)
 				_ = ss.SetDNSCache(msgAAAA, true, true)
@@ -350,6 +354,11 @@ func (ss *Easyss) initLocalGatewayAndDevice() error {
 }
 
 func (ss *Easyss) InitTcpPool() error {
+	if ss.OutboundProto() == "http" {
+		log.Infof("outbound proto is http, don't need init tcp pool")
+		return nil
+	}
+
 	if ss.DisableTLS() {
 		log.Infof("[EASYSS] TLS is disabled")
 	} else {
@@ -545,6 +554,10 @@ func (ss *Easyss) EnableForwardDNS() bool {
 
 func (ss *Easyss) CAPath() string {
 	return ss.config.CAPath
+}
+
+func (ss *Easyss) OutboundProto() string {
+	return ss.config.OutboundProto
 }
 
 func (ss *Easyss) ConfigFilename() string {
