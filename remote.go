@@ -9,12 +9,14 @@ import (
 
 	"github.com/caddyserver/certmagic"
 	"github.com/nange/easyss/v2/cipherstream"
+	http_tunnel "github.com/nange/easyss/v2/http-tunnel"
 	"github.com/nange/easyss/v2/util"
 	log "github.com/sirupsen/logrus"
 )
 
 func (es *EasyServer) Start() {
-	es.startTCPServer()
+	go es.startTCPServer()
+	es.startHTTPTunnelServer()
 }
 
 func (es *EasyServer) tlsConfig() (*tls.Config, error) {
@@ -82,47 +84,65 @@ func (es *EasyServer) startTCPServer() {
 		}
 		log.Infof("[REMOTE] a new connection(ip) is accepted. addr:%v", conn.RemoteAddr())
 
-		go func() {
-			defer conn.Close()
+		go es.handleConn(conn)
+	}
+}
 
-			for {
-				addr, method, protoType, err := es.handShakeWithClient(conn)
-				if err != nil {
-					if errors.Is(err, io.EOF) {
-						log.Debugf("[REMOTE] got EOF error when handshake with client-server, maybe the connection pool closed the idle conn")
-					} else {
-						log.Warnf("[REMOTE] handshake with client:%+v", err)
-					}
-					return
-				}
+func (es *EasyServer) startHTTPTunnelServer() {
+	server := http_tunnel.NewServer(es.ListenHTTPTunnelAddr())
+	go server.Listen()
 
-				addrStr := string(addr)
-				if !es.disableValidateAddr {
-					if err := validateTargetAddr(addrStr); err != nil {
-						log.Warnf("[REMOTE] validate target address err:%s, close the connection directly", err.Error())
-						return
-					}
-				}
+	for {
+		conn, err := server.Accept()
+		if err != nil {
+			log.Error("[REMOTE] http tunnel server accept:", err)
+			break
+		}
+		log.Infof("[REMOTE] a http tunnel connection is accepted")
 
-				log.Infof("[REMOTE] target:%v", addrStr)
+		go es.handleConn(conn)
+	}
+}
 
-				switch protoType {
-				case "tcp":
-					if err := es.remoteTCPHandle(conn, addrStr, method); err != nil {
-						log.Errorf("[REMOTE] tcp handle err:%v", err)
-						return
-					}
-				case "udp":
-					if err := es.remoteUDPHandle(conn, addrStr, method); err != nil {
-						log.Errorf("[REMOTE] udp handle err:%v", err)
-						return
-					}
-				default:
-					log.Errorf("[REMOTE] unsupported protoType:%s", protoType)
-					return
-				}
+func (es *EasyServer) handleConn(conn net.Conn) {
+	defer conn.Close()
+
+	for {
+		addr, method, protoType, err := es.handShakeWithClient(conn)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				log.Debugf("[REMOTE] got EOF error when handshake with client-server, maybe the connection pool closed the idle conn")
+			} else {
+				log.Warnf("[REMOTE] handshake with client:%+v", err)
 			}
-		}()
+			return
+		}
+
+		addrStr := string(addr)
+		if !es.disableValidateAddr {
+			if err := validateTargetAddr(addrStr); err != nil {
+				log.Warnf("[REMOTE] validate target address err:%s, close the connection directly", err.Error())
+				return
+			}
+		}
+
+		log.Infof("[REMOTE] target:%v", addrStr)
+
+		switch protoType {
+		case "tcp":
+			if err := es.remoteTCPHandle(conn, addrStr, method); err != nil {
+				log.Errorf("[REMOTE] tcp handle err:%v", err)
+				return
+			}
+		case "udp":
+			if err := es.remoteUDPHandle(conn, addrStr, method); err != nil {
+				log.Errorf("[REMOTE] udp handle err:%v", err)
+				return
+			}
+		default:
+			log.Errorf("[REMOTE] unsupported protoType:%s", protoType)
+			return
+		}
 	}
 }
 
@@ -137,7 +157,11 @@ func (es *EasyServer) remoteTCPHandle(conn net.Conn, addrStr, method string) err
 		return fmt.Errorf("new cipherstream err:%v, method:%v", err, method)
 	}
 
-	n1, n2 := relay(csStream, tConn, es.Timeout())
+	tryReuse := true
+	if es.config.OutboundProto == "http" {
+		tryReuse = false
+	}
+	n1, n2 := relay(csStream, tConn, es.Timeout(), tryReuse)
 	csStream.(*cipherstream.CipherStream).Release()
 
 	log.Debugf("[REMOTE] send %v bytes to %v, and recive %v bytes", n2, addrStr, n1)

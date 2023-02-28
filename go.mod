@@ -7,6 +7,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.1.2
 	github.com/coocood/freecache v1.2.3
 	github.com/getlantern/systray v1.2.1
+	github.com/gofrs/uuid/v5 v5.0.0
 	github.com/libp2p/go-netroute v0.2.1
 	github.com/miekg/dns v1.1.50
 	github.com/nange/easypool v1.3.1

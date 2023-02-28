@@ -29,6 +29,11 @@ func (es *EasyServer) ListenAddr() string {
 	return addr
 }
 
+func (es *EasyServer) ListenHTTPTunnelAddr() string {
+	addr := ":" + strconv.Itoa(es.ServerPort()+1000)
+	return addr
+}
+
 func (es *EasyServer) DisableUTLS() bool {
 	return es.config.DisableUTLS
 }

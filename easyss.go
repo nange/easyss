@@ -177,8 +177,8 @@ type Easyss struct {
 	udpLocks [UDPLocksCount]sync.Mutex
 
 	// once protects httpOutboundClient
-	once               sync.Once
-	httpOutboundClient *http.Client
+	//once               sync.Once
+	//httpOutboundClient *http.Client
 
 	// only used for testing
 	disableValidateAddr bool

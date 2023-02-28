@@ -371,6 +371,10 @@ func (cs *CipherStream) Release() {
 	cs.writer.wbuf = nil
 }
 
+func (cs *CipherStream) CloseWrite() error {
+	return cs.WriteRST(util.FlagFIN)
+}
+
 // timeout return true if err is net.Error timeout
 func timeout(err error) bool {
 	if err != nil {

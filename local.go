@@ -1,17 +1,14 @@
 package easyss
 
 import (
-	"context"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/v2/cipherstream"
+	http_tunnel "github.com/nange/easyss/v2/http-tunnel"
 	"github.com/nange/easyss/v2/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
@@ -98,11 +95,11 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		}
 	}
 
+	var tryReuse = true
 	var stream net.Conn
-	var stream2 net.Conn
 	if ss.OutboundProto() == "http" {
-		stream, stream2 = net.Pipe()
-		go ss.httpOutbound(stream2)
+		tryReuse = false
+		stream, err = http_tunnel.NewLocalConn("https://" + ss.ServerAddr())
 	} else {
 		stream, err = ss.AvailConnFromPool()
 	}
@@ -133,7 +130,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		return
 	}
 
-	n1, n2 := relay(csStream, localConn, ss.Timeout())
+	n1, n2 := relay(csStream, localConn, ss.Timeout(), tryReuse)
 	csStream.(*cipherstream.CipherStream).Release()
 
 	log.Debugf("[TCP_PROXY] send %v bytes to %v, recive %v bytes", n1, addr, n2)
@@ -186,53 +183,54 @@ func (ss *Easyss) handShakeWithRemote(stream net.Conn, addr string, flag uint8) 
 	return err
 }
 
-func (ss *Easyss) httpOutbound(stream net.Conn) {
-	//defer stream.Close()
-
-	req, err := http.NewRequest(http.MethodPost, "http://"+ss.ServerAddr()+"/easyss", stream)
-	if err != nil {
-		log.Errorf("[HTTP_OUTBOUND] new request:%v", err)
-		return
-	}
-	req.ProtoMajor = 1
-	req.ProtoMinor = 1
-	req.Header.Set("Content-Type", "application/octet-stream")
-
-	ss.once.Do(func() {
-		var defaultTransportDialContext = func(dialer *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
-			return dialer.DialContext
-		}
-		var DefaultTransport = &http.Transport{
-			Proxy: nil,
-			DialContext: defaultTransportDialContext(&net.Dialer{
-				Timeout:   30 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}),
-			//ForceAttemptHTTP2:     true,
-			MaxIdleConns:          10,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
-		}
-		ss.httpOutboundClient = &http.Client{
-			Transport: DefaultTransport,
-			//CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			//	return http.ErrUseLastResponse
-			//},
-		}
-	})
-	resp, err := ss.httpOutboundClient.Do(req)
-	if err != nil {
-		log.Errorf("[HTTP_OUTBOUND] http post %s: %v", ss.ServerAddr(), err)
-		return
-	}
-	defer resp.Body.Close()
-
-	n, err := io.Copy(stream, resp.Body)
-
-	log.Infof("[HTTP_OUTBOUND] write response to steam success, n:%v, err:%v", n, err)
-}
+//func (ss *Easyss) httpOutbound(stream net.Conn) {
+//	//defer stream.Close()
+//
+//	req, err := http.NewRequest(http.MethodPost, "http://"+ss.ServerAddr()+"/easyss", stream)
+//	if err != nil {
+//		log.Errorf("[HTTP_OUTBOUND] new request:%v", err)
+//		return
+//	}
+//	req.ProtoMajor = 1
+//	req.ProtoMinor = 1
+//	req.TransferEncoding = []string{"chunked"}
+//	req.Header.Set("Content-Type", "application/octet-stream")
+//
+//	ss.once.Do(func() {
+//		var defaultTransportDialContext = func(dialer *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
+//			return dialer.DialContext
+//		}
+//		var DefaultTransport = &http.Transport{
+//			Proxy: nil,
+//			DialContext: defaultTransportDialContext(&net.Dialer{
+//				Timeout:   30 * time.Second,
+//				KeepAlive: 30 * time.Second,
+//			}),
+//			//ForceAttemptHTTP2:     true,
+//			MaxIdleConns:          10,
+//			IdleConnTimeout:       90 * time.Second,
+//			TLSHandshakeTimeout:   10 * time.Second,
+//			ExpectContinueTimeout: 1 * time.Second,
+//			TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
+//		}
+//		ss.httpOutboundClient = &http.Client{
+//			Transport: DefaultTransport,
+//			//CheckRedirect: func(req *http.Request, via []*http.Request) error {
+//			//	return http.ErrUseLastResponse
+//			//},
+//		}
+//	})
+//	resp, err := ss.httpOutboundClient.Do(req)
+//	if err != nil {
+//		log.Errorf("[HTTP_OUTBOUND] http post %s: %v", ss.ServerAddr(), err)
+//		return
+//	}
+//	defer resp.Body.Close()
+//
+//	n, err := io.Copy(stream, resp.Body)
+//
+//	log.Infof("[HTTP_OUTBOUND] write response to steam success, n:%v, err:%v", n, err)
+//}
 
 func EncodeCipherMethod(m string) byte {
 	switch m {
