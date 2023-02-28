@@ -122,7 +122,8 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		return send(ue, d.Data)
 	}
 
-	stream, err := ss.AvailConnFromPool()
+	//TODO: support http tunnel
+	stream, err := ss.AvailNativeConnFromPool()
 	if err != nil {
 		log.Errorf("[UDP_PROXY] get stream from pool err:%+v", err)
 		return err

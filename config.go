@@ -20,18 +20,25 @@ var ProxyRules = map[string]struct{}{
 	"direct": {},
 }
 
+const (
+	OutboundProtoNative = "native"
+	OutboundProtoHTTP   = "http"
+	OutboundProtoHTTPS  = "https"
+)
+
 type ServerConfig struct {
-	Server        string `json:"server"`
-	ServerPort    int    `json:"server_port"`
-	Password      string `json:"password"`
-	Timeout       int    `json:"timeout"`
-	DisableUTLS   bool   `json:"disable_utls"`
-	DisableTLS    bool   `json:"disable_tls"`
-	CertPath      string `json:"cert_path"`
-	KeyPath       string `json:"key_path"`
-	CAPath        string `json:"ca_path,omitempty"`
-	Default       bool   `json:"default,omitempty"`
-	OutboundProto string `json:"outbound_proto"`
+	Server            string `json:"server"`
+	ServerPort        int    `json:"server_port"`
+	Password          string `json:"password"`
+	Timeout           int    `json:"timeout"`
+	DisableUTLS       bool   `json:"disable_utls"`
+	DisableTLS        bool   `json:"disable_tls"`
+	CertPath          string `json:"cert_path"`
+	KeyPath           string `json:"key_path"`
+	CAPath            string `json:"ca_path,omitempty"`
+	Default           bool   `json:"default,omitempty"`
+	OutboundProto     string `json:"outbound_proto,omitempty"`
+	EnableHTTPInbound bool   `json:"enable_http_inbound,omitempty"`
 }
 
 type Config struct {
@@ -84,6 +91,11 @@ func (c *Config) Validate() error {
 		if _, ok := ProxyRules[c.ProxyRule]; !ok {
 			return fmt.Errorf("unsupported proxy rule:%s, supported rules:[auto, proxy, direct]", c.ProxyRule)
 		}
+	}
+	if c.OutboundProto != OutboundProtoNative && c.OutboundProto != OutboundProtoHTTP &&
+		c.OutboundProto != OutboundProtoHTTPS {
+		return fmt.Errorf("outbound proto must be one of [%s, %s, %s]",
+			OutboundProtoNative, OutboundProtoHTTP, OutboundProtoHTTPS)
 	}
 
 	return nil
@@ -176,7 +188,7 @@ func (c *Config) SetDefaultValue() {
 		c.ProxyRule = "auto"
 	}
 	if c.OutboundProto == "" {
-		c.OutboundProto = "tcp"
+		c.OutboundProto = OutboundProtoNative
 	}
 }
 
@@ -214,7 +226,7 @@ func (c *ServerConfig) SetDefaultValue() {
 		c.Timeout = 30
 	}
 	if c.OutboundProto == "" {
-		c.OutboundProto = "tcp"
+		c.OutboundProto = OutboundProtoNative
 	}
 }
 
@@ -230,8 +242,10 @@ func (c *ServerConfig) Validate() error {
 	if c.Password == "" {
 		return errors.New("password should not empty")
 	}
-	if c.OutboundProto != "tcp" && c.OutboundProto != "http" {
-		return errors.New("outbound proto must be one of [tcp, http]")
+	if c.OutboundProto != OutboundProtoNative && c.OutboundProto != OutboundProtoHTTP &&
+		c.OutboundProto != OutboundProtoHTTPS {
+		return fmt.Errorf("outbound proto must be one of [%s, %s, %s]",
+			OutboundProtoNative, OutboundProtoHTTP, OutboundProtoHTTPS)
 	}
 
 	return nil

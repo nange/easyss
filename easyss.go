@@ -176,10 +176,6 @@ type Easyss struct {
 	// locks for udp request
 	udpLocks [UDPLocksCount]sync.Mutex
 
-	// once protects httpOutboundClient
-	//once               sync.Once
-	//httpOutboundClient *http.Client
-
 	// only used for testing
 	disableValidateAddr bool
 	// the mu Mutex to protect below fields
@@ -316,7 +312,15 @@ func (ss *Easyss) initServerIPAndDNSCache() error {
 
 		if msg != nil && msgAAAA != nil {
 			if len(msg.Answer) > 0 {
-				ss.serverIP = msg.Answer[len(msg.Answer)-1].(*dns.A).A.String()
+				for _, an := range msg.Answer {
+					if a, ok := an.(*dns.A); ok {
+						ss.serverIP = a.A.String()
+						break
+					}
+				}
+				if ss.serverIP == "" {
+					return errors.New("can't query server ip from dns")
+				}
 				_ = ss.SetDNSCache(msg, true, true)
 				_ = ss.SetDNSCache(msg, true, false)
 				_ = ss.SetDNSCache(msgAAAA, true, true)
@@ -354,8 +358,8 @@ func (ss *Easyss) initLocalGatewayAndDevice() error {
 }
 
 func (ss *Easyss) InitTcpPool() error {
-	if ss.OutboundProto() == "http" {
-		log.Infof("outbound proto is http, don't need init tcp pool")
+	if !ss.IsNativeOutboundProto() {
+		log.Infof("outbound proto is %v, don't need init tcp pool", ss.OutboundProto())
 		return nil
 	}
 
@@ -560,6 +564,18 @@ func (ss *Easyss) OutboundProto() string {
 	return ss.config.OutboundProto
 }
 
+func (ss *Easyss) IsNativeOutboundProto() bool {
+	return ss.config.OutboundProto == OutboundProtoNative
+}
+
+func (ss *Easyss) IsHTTPOutboundProto() bool {
+	return ss.config.OutboundProto == OutboundProtoHTTP
+}
+
+func (ss *Easyss) IsHTTPSOutboundProto() bool {
+	return ss.config.OutboundProto == OutboundProtoHTTPS
+}
+
 func (ss *Easyss) ConfigFilename() string {
 	if ss.config.ConfigFile == "" {
 		return ""
@@ -573,7 +589,7 @@ func (ss *Easyss) Pool() easypool.Pool {
 	return ss.tcpPool
 }
 
-func (ss *Easyss) AvailConnFromPool() (conn net.Conn, err error) {
+func (ss *Easyss) AvailNativeConnFromPool() (conn net.Conn, err error) {
 	pool := ss.Pool()
 	if pool == nil {
 		return nil, errors.New("pool is closed")

@@ -97,11 +97,15 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 
 	var tryReuse = true
 	var stream net.Conn
-	if ss.OutboundProto() == "http" {
+	switch ss.OutboundProto() {
+	case OutboundProtoHTTP:
+		tryReuse = false
+		stream, err = http_tunnel.NewLocalConn("http://" + ss.ServerAddr())
+	case OutboundProtoHTTPS:
 		tryReuse = false
 		stream, err = http_tunnel.NewLocalConn("https://" + ss.ServerAddr())
-	} else {
-		stream, err = ss.AvailConnFromPool()
+	default:
+		stream, err = ss.AvailNativeConnFromPool()
 	}
 	if err != nil {
 		log.Errorf("[TCP_PROXY] get stream from pool failed:%v", err)
