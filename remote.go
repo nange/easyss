@@ -15,8 +15,10 @@ import (
 )
 
 func (es *EasyServer) Start() {
-	go es.startTCPServer()
-	es.startHTTPTunnelServer()
+	if es.EnabledHTTPInbound() {
+		go es.startHTTPTunnelServer()
+	}
+	es.startTCPServer()
 }
 
 func (es *EasyServer) tlsConfig() (*tls.Config, error) {
@@ -89,7 +91,11 @@ func (es *EasyServer) startTCPServer() {
 }
 
 func (es *EasyServer) startHTTPTunnelServer() {
-	server := http_tunnel.NewServer(es.ListenHTTPTunnelAddr())
+	server := http_tunnel.NewServer(es.ListenHTTPTunnelAddr(), es.Timeout())
+	es.mu.Lock()
+	es.httpTunnelServer = server
+	es.mu.Unlock()
+
 	go server.Listen()
 
 	for {

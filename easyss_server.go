@@ -5,12 +5,15 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	http_tunnel "github.com/nange/easyss/v2/http-tunnel"
 )
 
 type EasyServer struct {
-	config *ServerConfig
-	mu     sync.Mutex
-	ln     net.Listener
+	config           *ServerConfig
+	mu               sync.Mutex
+	ln               net.Listener
+	httpTunnelServer *http_tunnel.Server
 
 	// only used for testing
 	disableValidateAddr bool
@@ -62,11 +65,18 @@ func (es *EasyServer) KeyPath() string {
 	return es.config.KeyPath
 }
 
-func (es *EasyServer) Close() error {
+func (es *EasyServer) EnabledHTTPInbound() bool {
+	return es.config.EnableHTTPInbound
+}
+
+func (es *EasyServer) Close() (err error) {
 	es.mu.Lock()
 	defer es.mu.Unlock()
 	if es.ln != nil {
-		return es.ln.Close()
+		err = es.ln.Close()
 	}
-	return nil
+	if es.httpTunnelServer != nil {
+		err = es.httpTunnelServer.Close()
+	}
+	return
 }

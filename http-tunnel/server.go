@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/util/bytespool"
@@ -21,28 +22,40 @@ type Server struct {
 	connMap map[string]*Conn
 	connCh  chan *Conn
 	closing chan struct{}
+
+	server *http.Server
 }
 
-func NewServer(addr string) *Server {
+func NewServer(addr string, timeout time.Duration) *Server {
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           http.DefaultServeMux,
+		ReadHeaderTimeout: timeout,
+		IdleTimeout:       timeout,
+	}
+
 	return &Server{
 		addr:    addr,
 		connMap: make(map[string]*Conn, 128),
 		connCh:  make(chan *Conn, 1),
 		closing: make(chan struct{}, 1),
+		server:  server,
 	}
 }
 
 func (s *Server) Listen() {
 	s.handler()
-	// TODO: 改为server模式，支持手动close
+
 	log.Infof("[HTTP_TUNNEL_SERVER] listen at:%v", s.addr)
-	log.Warnf("[HTTP_TUNNEL_SERVER] listen and serve:%v", http.ListenAndServe(s.addr, nil))
+	log.Warnf("[HTTP_TUNNEL_SERVER] listen and serve:%v", s.server.ListenAndServe())
 }
 
-func (s *Server) Close() {
+func (s *Server) Close() error {
 	s.Lock()
 	defer s.Unlock()
 	close(s.closing)
+
+	return s.server.Close()
 }
 
 func (s *Server) Accept() (net.Conn, error) {
