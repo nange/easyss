@@ -6,14 +6,14 @@ import (
 	"sync"
 	"time"
 
-	http_tunnel "github.com/nange/easyss/v2/http-tunnel"
+	"github.com/nange/easyss/v2/httptunnel"
 )
 
 type EasyServer struct {
 	config           *ServerConfig
 	mu               sync.Mutex
 	ln               net.Listener
-	httpTunnelServer *http_tunnel.Server
+	httpTunnelServer *httptunnel.Server
 
 	// only used for testing
 	disableValidateAddr bool

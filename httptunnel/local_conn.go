@@ -1,4 +1,4 @@
-package http_tunnel
+package httptunnel
 
 import (
 	"bytes"
@@ -59,7 +59,7 @@ func (l *LocalConn) Write(b []byte) (n int, err error) {
 		log.Errorf("[HTTP_TUNNEL_LOACAL] push err:%v, buf:%v", err, string(b))
 		return 0, err
 	}
-	
+
 	return len(b), nil
 }
 

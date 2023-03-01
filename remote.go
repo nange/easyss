@@ -9,7 +9,7 @@ import (
 
 	"github.com/caddyserver/certmagic"
 	"github.com/nange/easyss/v2/cipherstream"
-	http_tunnel "github.com/nange/easyss/v2/http-tunnel"
+	httptunnel "github.com/nange/easyss/v2/httptunnel"
 	"github.com/nange/easyss/v2/util"
 	log "github.com/sirupsen/logrus"
 )
@@ -91,7 +91,7 @@ func (es *EasyServer) startTCPServer() {
 }
 
 func (es *EasyServer) startHTTPTunnelServer() {
-	server := http_tunnel.NewServer(es.ListenHTTPTunnelAddr(), es.Timeout())
+	server := httptunnel.NewServer(es.ListenHTTPTunnelAddr(), es.Timeout())
 	es.mu.Lock()
 	es.httpTunnelServer = server
 	es.mu.Unlock()
@@ -164,6 +164,7 @@ func (es *EasyServer) remoteTCPHandle(conn net.Conn, addrStr, method string) err
 	}
 
 	tryReuse := true
+	//TODO: 需要另外的方式判断
 	if es.config.OutboundProto == "http" {
 		tryReuse = false
 	}

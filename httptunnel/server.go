@@ -1,4 +1,4 @@
-package http_tunnel
+package httptunnel
 
 import (
 	"errors"
@@ -19,8 +19,8 @@ type Server struct {
 	addr string
 
 	sync.Mutex
-	connMap map[string]*Conn
-	connCh  chan *Conn
+	connMap map[string]*ServerConn
+	connCh  chan *ServerConn
 	closing chan struct{}
 
 	server *http.Server
@@ -36,8 +36,8 @@ func NewServer(addr string, timeout time.Duration) *Server {
 
 	return &Server{
 		addr:    addr,
-		connMap: make(map[string]*Conn, 128),
-		connCh:  make(chan *Conn, 1),
+		connMap: make(map[string]*ServerConn, 128),
+		connCh:  make(chan *ServerConn, 1),
 		closing: make(chan struct{}, 1),
 		server:  server,
 	}

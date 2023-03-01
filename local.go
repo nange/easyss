@@ -8,7 +8,7 @@ import (
 
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/v2/cipherstream"
-	http_tunnel "github.com/nange/easyss/v2/http-tunnel"
+	"github.com/nange/easyss/v2/httptunnel"
 	"github.com/nange/easyss/v2/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
@@ -100,10 +100,10 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	switch ss.OutboundProto() {
 	case OutboundProtoHTTP:
 		tryReuse = false
-		stream, err = http_tunnel.NewLocalConn("http://" + ss.ServerAddr())
+		stream, err = httptunnel.NewLocalConn("http://" + ss.ServerAddr())
 	case OutboundProtoHTTPS:
 		tryReuse = false
-		stream, err = http_tunnel.NewLocalConn("https://" + ss.ServerAddr())
+		stream, err = httptunnel.NewLocalConn("https://" + ss.ServerAddr())
 	default:
 		stream, err = ss.AvailNativeConnFromPool()
 	}
@@ -186,55 +186,6 @@ func (ss *Easyss) handShakeWithRemote(stream net.Conn, addr string, flag uint8) 
 	_, err = csStream.Write(append([]byte(addr), cipherMethod))
 	return err
 }
-
-//func (ss *Easyss) httpOutbound(stream net.Conn) {
-//	//defer stream.Close()
-//
-//	req, err := http.NewRequest(http.MethodPost, "http://"+ss.ServerAddr()+"/easyss", stream)
-//	if err != nil {
-//		log.Errorf("[HTTP_OUTBOUND] new request:%v", err)
-//		return
-//	}
-//	req.ProtoMajor = 1
-//	req.ProtoMinor = 1
-//	req.TransferEncoding = []string{"chunked"}
-//	req.Header.Set("Content-Type", "application/octet-stream")
-//
-//	ss.once.Do(func() {
-//		var defaultTransportDialContext = func(dialer *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
-//			return dialer.DialContext
-//		}
-//		var DefaultTransport = &http.Transport{
-//			Proxy: nil,
-//			DialContext: defaultTransportDialContext(&net.Dialer{
-//				Timeout:   30 * time.Second,
-//				KeepAlive: 30 * time.Second,
-//			}),
-//			//ForceAttemptHTTP2:     true,
-//			MaxIdleConns:          10,
-//			IdleConnTimeout:       90 * time.Second,
-//			TLSHandshakeTimeout:   10 * time.Second,
-//			ExpectContinueTimeout: 1 * time.Second,
-//			TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
-//		}
-//		ss.httpOutboundClient = &http.Client{
-//			Transport: DefaultTransport,
-//			//CheckRedirect: func(req *http.Request, via []*http.Request) error {
-//			//	return http.ErrUseLastResponse
-//			//},
-//		}
-//	})
-//	resp, err := ss.httpOutboundClient.Do(req)
-//	if err != nil {
-//		log.Errorf("[HTTP_OUTBOUND] http post %s: %v", ss.ServerAddr(), err)
-//		return
-//	}
-//	defer resp.Body.Close()
-//
-//	n, err := io.Copy(stream, resp.Body)
-//
-//	log.Infof("[HTTP_OUTBOUND] write response to steam success, n:%v, err:%v", n, err)
-//}
 
 func EncodeCipherMethod(m string) byte {
 	switch m {
