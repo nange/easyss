@@ -17,6 +17,11 @@ var localClient = &http.Client{}
 
 var _ net.Conn = (*LocalConn)(nil)
 
+type localConnAddr struct{}
+
+func (localConnAddr) Network() string { return "http outbound" }
+func (localConnAddr) String() string  { return "http outbound" }
+
 type LocalConn struct {
 	uuid       string
 	serverAddr string
@@ -44,10 +49,8 @@ func (l *LocalConn) Read(b []byte) (n int, err error) {
 	}
 	n, err = l.respBody.Read(b)
 	if err != nil {
-		log.Warnf("[HTTP_TUNNEL_LOACAL] read from remote:%v", err)
-		l.respBody.Close()
-		if errors.Is(err, io.EOF) {
-			err = nil
+		if !errors.Is(err, io.EOF) {
+			log.Warnf("[HTTP_TUNNEL_LOACAL] read from remote:%v", err)
 		}
 	}
 
@@ -56,7 +59,7 @@ func (l *LocalConn) Read(b []byte) (n int, err error) {
 
 func (l *LocalConn) Write(b []byte) (n int, err error) {
 	if err := l.push(b); err != nil {
-		log.Errorf("[HTTP_TUNNEL_LOACAL] push err:%v, buf:%v", err, string(b))
+		log.Errorf("[HTTP_TUNNEL_LOACAL] push:%v", err)
 		return 0, err
 	}
 
@@ -64,33 +67,27 @@ func (l *LocalConn) Write(b []byte) (n int, err error) {
 }
 
 func (l *LocalConn) Close() error {
-	log.Errorf("empty implements of LocalConn.Close")
-	return nil
+	return l.respBody.Close()
 }
 
 func (l *LocalConn) LocalAddr() net.Addr {
-	//TODO implement me
-	panic("implement me")
+	return localConnAddr{}
 }
 
 func (l *LocalConn) RemoteAddr() net.Addr {
-	//TODO implement me
-	panic("implement me")
+	return localConnAddr{}
 }
 
 func (l *LocalConn) SetDeadline(t time.Time) error {
-	//TODO implement me
-	panic("implement me")
+	panic("must be unreachable")
 }
 
 func (l *LocalConn) SetReadDeadline(t time.Time) error {
-	//TODO implement me
-	panic("implement me")
+	panic("must be unreachable")
 }
 
 func (l *LocalConn) SetWriteDeadline(t time.Time) error {
-	//TODO implement me
-	panic("implement me")
+	panic("must be unreachable")
 }
 
 func (l *LocalConn) pull() error {
@@ -106,7 +103,6 @@ func (l *LocalConn) pull() error {
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
 		return fmt.Errorf("pull response status code:%v, body:%v", resp.StatusCode, string(body))
 	}
 

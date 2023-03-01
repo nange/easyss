@@ -86,7 +86,7 @@ func (es *EasyServer) startTCPServer() {
 		}
 		log.Infof("[REMOTE] a new connection(ip) is accepted. addr:%v", conn.RemoteAddr())
 
-		go es.handleConn(conn)
+		go es.handleConn(conn, true)
 	}
 }
 
@@ -106,11 +106,11 @@ func (es *EasyServer) startHTTPTunnelServer() {
 		}
 		log.Infof("[REMOTE] a http tunnel connection is accepted")
 
-		go es.handleConn(conn)
+		go es.handleConn(conn, false)
 	}
 }
 
-func (es *EasyServer) handleConn(conn net.Conn) {
+func (es *EasyServer) handleConn(conn net.Conn, tryReuse bool) {
 	defer conn.Close()
 
 	for {
@@ -136,12 +136,12 @@ func (es *EasyServer) handleConn(conn net.Conn) {
 
 		switch protoType {
 		case "tcp":
-			if err := es.remoteTCPHandle(conn, addrStr, method); err != nil {
+			if err := es.remoteTCPHandle(conn, addrStr, method, tryReuse); err != nil {
 				log.Errorf("[REMOTE] tcp handle err:%v", err)
 				return
 			}
 		case "udp":
-			if err := es.remoteUDPHandle(conn, addrStr, method); err != nil {
+			if err := es.remoteUDPHandle(conn, addrStr, method, tryReuse); err != nil {
 				log.Errorf("[REMOTE] udp handle err:%v", err)
 				return
 			}
@@ -149,10 +149,13 @@ func (es *EasyServer) handleConn(conn net.Conn) {
 			log.Errorf("[REMOTE] unsupported protoType:%s", protoType)
 			return
 		}
+		if !tryReuse {
+			return
+		}
 	}
 }
 
-func (es *EasyServer) remoteTCPHandle(conn net.Conn, addrStr, method string) error {
+func (es *EasyServer) remoteTCPHandle(conn net.Conn, addrStr, method string, tryReuse bool) error {
 	tConn, err := net.DialTimeout("tcp", addrStr, es.Timeout())
 	if err != nil {
 		return fmt.Errorf("net.Dial %v err:%v", addrStr, err)
@@ -163,11 +166,6 @@ func (es *EasyServer) remoteTCPHandle(conn net.Conn, addrStr, method string) err
 		return fmt.Errorf("new cipherstream err:%v, method:%v", err, method)
 	}
 
-	tryReuse := true
-	//TODO: 需要另外的方式判断
-	if es.config.OutboundProto == "http" {
-		tryReuse = false
-	}
 	n1, n2 := relay(csStream, tConn, es.Timeout(), tryReuse)
 	csStream.(*cipherstream.CipherStream).Release()
 

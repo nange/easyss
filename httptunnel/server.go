@@ -73,6 +73,11 @@ func (s *Server) handler() {
 }
 
 func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeNotFoundError(w)
+		return
+	}
+
 	reqID := r.Header.Get("X-Request-ID")
 	s.Lock()
 	conn, ok := s.connMap[reqID]
@@ -82,7 +87,7 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 		writeNotFoundError(w)
 		return
 	}
-	log.Infof("[HTTP_TUNNEL_SERVER] pull uuid:%v", reqID)
+	log.Debugf("[HTTP_TUNNEL_SERVER] pull uuid:%v", reqID)
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Transfer-Encoding", "chunked")
@@ -90,7 +95,6 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 	buf := bytespool.Get(RelayBufferSize)
 	defer bytespool.MustPut(buf)
 
-	defer conn.Close()
 	for {
 		n, err := conn.ReadLocal(buf)
 		if n > 0 {
@@ -111,13 +115,18 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) push(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeNotFoundError(w)
+		return
+	}
+
 	reqID := r.Header.Get("X-Request-ID")
 	if reqID == "" {
 		log.Warnf("[HTTP_TUNNEL_SERVER] push uuid is empty")
 		writeNotFoundError(w)
 		return
 	}
-	log.Infof("[HTTP_TUNNEL_SERVER] push uuid:%v", reqID)
+	log.Debugf("[HTTP_TUNNEL_SERVER] push uuid:%v", reqID)
 	s.Lock()
 	conn, ok := s.connMap[reqID]
 	if !ok {

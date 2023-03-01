@@ -12,7 +12,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string) error {
+func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, tryReuse bool) error {
 	rAddr, err := net.ResolveUDPAddr("udp", addrStr)
 	if err != nil {
 		return fmt.Errorf("net.ResolveUDPAddr %s err:%v", addrStr, err)
@@ -28,7 +28,7 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string) err
 		return fmt.Errorf("new cipherstream err:%v, method:%v", err, method)
 	}
 
-	var tryReuse bool
+	var _tryReuse bool
 
 	wg := sync.WaitGroup{}
 	wg.Add(2)
@@ -42,7 +42,7 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string) err
 			n, err := csStream.Read(buf[:])
 			if err != nil {
 				if cipherstream.FINRSTStreamErr(err) {
-					tryReuse = true
+					_tryReuse = true
 					log.Debugf("[REMOTE_UDP] received FIN when reading data from client, try to reuse the connectio")
 				} else {
 					log.Warnf("[REMOTE_UDP] read data from client connection err:%v", err)
@@ -82,7 +82,7 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string) err
 	wg.Wait()
 
 	var reuse bool
-	if tryReuse {
+	if tryReuse && _tryReuse {
 		log.Debugf("[REMOTE_UDP] request is finished, try to reuse underlying tcp connection")
 		reuse = tryReuseInUDPServer(csStream, es.Timeout())
 	}
