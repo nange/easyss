@@ -79,15 +79,15 @@ func (l *LocalConn) RemoteAddr() net.Addr {
 }
 
 func (l *LocalConn) SetDeadline(t time.Time) error {
-	panic("must be unreachable")
+	return errors.New("unsupported SetDeadline for LocalConn")
 }
 
 func (l *LocalConn) SetReadDeadline(t time.Time) error {
-	panic("must be unreachable")
+	return errors.New("unsupported SetReadDeadline for LocalConn")
 }
 
 func (l *LocalConn) SetWriteDeadline(t time.Time) error {
-	panic("must be unreachable")
+	return errors.New("unsupported SetWriteDeadline for LocalConn")
 }
 
 func (l *LocalConn) pull() error {
