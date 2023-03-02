@@ -103,7 +103,7 @@ func (l *LocalConn) SetDeadline(t time.Time) error {
 	l.Lock()
 	defer l.Unlock()
 	if l.timeout == nil {
-		l.timeout = time.NewTimer(t.Sub(time.Now()))
+		l.timeout = time.NewTimer(time.Until(t))
 		go func() {
 			defer l.timeout.Stop()
 			for {
@@ -124,7 +124,7 @@ func (l *LocalConn) SetDeadline(t time.Time) error {
 			<-l.timeout.C
 		}
 		if !t.IsZero() {
-			l.timeout.Reset(t.Sub(time.Now()))
+			l.timeout.Reset(time.Until(t))
 		}
 	}
 
