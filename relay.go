@@ -87,7 +87,9 @@ func relay(cipher, plaintxt net.Conn, timeout time.Duration, tryReuse bool) (n1 
 	}
 	if !reuse {
 		MarkCipherStreamUnusable(cipher)
-		log.Warnf("[REPAY] underlying proxy connection is unhealthy, need close it")
+		if tryReuse {
+			log.Warnf("[REPAY] underlying proxy connection is unhealthy, need close it")
+		}
 	} else {
 		log.Debugf("[REPAY] underlying proxy connection is healthy, so reuse it")
 	}
