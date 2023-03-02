@@ -12,7 +12,7 @@ type ServerConn struct {
 	remote net.Conn
 }
 
-func NewConn() *ServerConn {
+func NewServerConn() *ServerConn {
 	read, write := net.Pipe()
 	return &ServerConn{
 		local:  read,

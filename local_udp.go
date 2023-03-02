@@ -126,9 +126,9 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	var stream net.Conn
 	switch ss.OutboundProto() {
 	case OutboundProtoHTTP:
-		stream, err = httptunnel.NewLocalConn("http://" + ss.ServerAddr())
+		stream, err = httptunnel.NewLocalConn(ss.HTTPOutboundClient(), "http://"+ss.ServerAddr())
 	case OutboundProtoHTTPS:
-		stream, err = httptunnel.NewLocalConn("https://" + ss.ServerAddr())
+		stream, err = httptunnel.NewLocalConn(ss.HTTPOutboundClient(), "https://"+ss.ServerAddr())
 	default:
 		stream, err = ss.AvailNativeConnFromPool()
 	}

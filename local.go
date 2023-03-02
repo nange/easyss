@@ -100,10 +100,10 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	switch ss.OutboundProto() {
 	case OutboundProtoHTTP:
 		tryReuse = false
-		stream, err = httptunnel.NewLocalConn("http://" + ss.ServerAddr())
+		stream, err = httptunnel.NewLocalConn(ss.HTTPOutboundClient(), "http://"+ss.ServerAddr())
 	case OutboundProtoHTTPS:
 		tryReuse = false
-		stream, err = httptunnel.NewLocalConn("https://" + ss.ServerAddr())
+		stream, err = httptunnel.NewLocalConn(ss.HTTPOutboundClient(), "https://"+ss.ServerAddr())
 	default:
 		stream, err = ss.AvailNativeConnFromPool()
 	}

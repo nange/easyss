@@ -178,6 +178,10 @@ type Easyss struct {
 
 	// only used for testing
 	disableValidateAddr bool
+
+	// only used for http outbound proto
+	httpOutboundClient *http.Client
+
 	// the mu Mutex to protect below fields
 	mu               *sync.RWMutex
 	tcpPool          easypool.Pool
@@ -229,6 +233,11 @@ func New(config *Config) (*Easyss, error) {
 
 	if err := ss.initLocalGatewayAndDevice(); err != nil {
 		log.Errorf("[EASYSS] init local gateway and device:%v", err)
+		return nil, err
+	}
+
+	if err := ss.initHTTPOutboundClient(); err != nil {
+		log.Errorf("[EASYSS] init http outbound client:%v", err)
 		return nil, err
 	}
 
@@ -359,7 +368,7 @@ func (ss *Easyss) initLocalGatewayAndDevice() error {
 
 func (ss *Easyss) InitTcpPool() error {
 	if !ss.IsNativeOutboundProto() {
-		log.Infof("outbound proto is %v, don't need init tcp pool", ss.OutboundProto())
+		log.Infof("[EASYSS] outbound proto is %v, don't need init tcp pool", ss.OutboundProto())
 		return nil
 	}
 
@@ -375,26 +384,10 @@ func (ss *Easyss) InitTcpPool() error {
 	}
 	log.Infof("[EASYSS] initializing tcp pool with easy server: %v", ss.ServerAddr())
 
-	var certPool *x509.CertPool
-	if ss.CAPath() != "" {
-		e, err := util.FileExists(ss.CAPath())
-		if err != nil {
-			log.Errorf("[EASYSS] lookup self-signed ca cert:%v", err)
-			return err
-		}
-		if !e {
-			log.Warnf("[EASYSS] ca cert: %s is set but not exists, so self-signed cert is no effect", ss.CAPath())
-		} else {
-			log.Infof("[EASYSS] using self-signed ca cert: %s", ss.CAPath())
-			certPool = x509.NewCertPool()
-			caBuf, err := os.ReadFile(ss.CAPath())
-			if err != nil {
-				return err
-			}
-			if ok := certPool.AppendCertsFromPEM(caBuf); !ok {
-				return errors.New("append certs from pem failed")
-			}
-		}
+	certPool, err := ss.loadCustomCertPool()
+	if err != nil {
+		log.Errorf("[EASYSS] load custom cert pool:%v", err)
+		return err
 	}
 
 	network := "tcp"
@@ -446,6 +439,88 @@ func (ss *Easyss) InitTcpPool() error {
 	ss.SetPool(tcpPool)
 
 	return err
+}
+
+func (ss *Easyss) loadCustomCertPool() (*x509.CertPool, error) {
+	if ss.CAPath() == "" {
+		return nil, nil
+	}
+	var certPool *x509.CertPool
+	e, err := util.FileExists(ss.CAPath())
+	if err != nil {
+		log.Errorf("[EASYSS] lookup self-signed ca cert:%v", err)
+		return certPool, err
+	}
+	if !e {
+		log.Warnf("[EASYSS] ca cert: %s is set but not exists, so self-signed cert is no effect", ss.CAPath())
+	} else {
+		log.Infof("[EASYSS] using self-signed ca cert: %s", ss.CAPath())
+		certPool = x509.NewCertPool()
+		caBuf, err := os.ReadFile(ss.CAPath())
+		if err != nil {
+			return certPool, err
+		}
+		if ok := certPool.AppendCertsFromPEM(caBuf); !ok {
+			return certPool, errors.New("append certs from pem failed")
+		}
+	}
+
+	return certPool, nil
+}
+
+func (ss *Easyss) initHTTPOutboundClient() error {
+	if !ss.IsHTTPOutboundProto() && !ss.IsHTTPSOutboundProto() {
+		return nil
+	}
+	certPool, err := ss.loadCustomCertPool()
+	if err != nil {
+		log.Errorf("[EASYSS] load custom cert pool:%v", err)
+		return err
+	}
+	dialTLSContext := func(ctx context.Context, network string, addr string) (net.Conn, error) {
+		ctx, cancel := context.WithTimeout(ctx, ss.Timeout())
+		defer cancel()
+		if ss.DisableUTLS() {
+			dialer := &tls.Dialer{
+				Config: &tls.Config{RootCAs: certPool},
+			}
+			return dialer.DialContext(ctx, network, addr)
+		}
+
+		conn, err := net.DialTimeout(network, addr, ss.Timeout())
+		if err != nil {
+			return nil, err
+		}
+
+		uConn := utls.UClient(
+			conn,
+			&utls.Config{
+				ServerName: ss.Server(),
+				RootCAs:    certPool,
+			},
+			utls.HelloChrome_Auto)
+		if err := uConn.HandshakeContext(ctx); err != nil {
+			return nil, err
+		}
+
+		return uConn, nil
+	}
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialTLSContext:        dialTLSContext,
+			MaxIdleConns:          5,
+			MaxConnsPerHost:       128,
+			IdleConnTimeout:       ss.Timeout(),
+			ResponseHeaderTimeout: ss.Timeout(),
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	ss.httpOutboundClient = client
+	return nil
 }
 
 func (ss *Easyss) ConfigClone() *Config {
@@ -558,6 +633,10 @@ func (ss *Easyss) EnableForwardDNS() bool {
 
 func (ss *Easyss) CAPath() string {
 	return ss.config.CAPath
+}
+
+func (ss *Easyss) HTTPOutboundClient() *http.Client {
+	return ss.httpOutboundClient
 }
 
 func (ss *Easyss) OutboundProto() string {

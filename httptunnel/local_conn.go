@@ -14,8 +14,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-var localClient = &http.Client{}
-
 var _ net.Conn = (*LocalConn)(nil)
 
 type localConnAddr struct{}
@@ -33,10 +31,14 @@ type LocalConn struct {
 	sync.Mutex
 	timeout *time.Timer
 
+	client   *http.Client
 	respBody io.ReadCloser
 }
 
-func NewLocalConn(serverAddr string) (*LocalConn, error) {
+func NewLocalConn(client *http.Client, serverAddr string) (*LocalConn, error) {
+	if client == nil {
+		return nil, errors.New("http outbound client is nil")
+	}
 	id, err := uuid.NewV7()
 	if err != nil {
 		return nil, err
@@ -45,6 +47,7 @@ func NewLocalConn(serverAddr string) (*LocalConn, error) {
 		uuid:       id.String(),
 		serverAddr: serverAddr,
 		done:       make(chan struct{}),
+		client:     client,
 	}, nil
 }
 
@@ -71,7 +74,7 @@ func (l *LocalConn) Read(b []byte) (n int, err error) {
 func (l *LocalConn) Write(b []byte) (n int, err error) {
 	if err := l.push(b); err != nil {
 		if !errors.Is(err, io.EOF) {
-			log.Errorf("[HTTP_TUNNEL_LOACAL] push:%v", err)
+			log.Warnf("[HTTP_TUNNEL_LOACAL] push:%v", err)
 		}
 		return 0, err
 	}
@@ -146,7 +149,7 @@ func (l *LocalConn) pull() error {
 	}
 	req.Header.Set("X-Request-ID", l.uuid)
 
-	resp, err := localClient.Do(req)
+	resp, err := l.client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -167,8 +170,9 @@ func (l *LocalConn) push(data []byte) error {
 	req.ContentLength = int64(len(data))
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("X-Request-ID", l.uuid)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36")
 
-	resp, err := localClient.Do(req)
+	resp, err := l.client.Do(req)
 	if err != nil {
 		return err
 	}

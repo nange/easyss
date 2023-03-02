@@ -15,30 +15,37 @@ import (
 )
 
 func (es *EasyServer) Start() {
+	if err := es.initTLSConfig(); err != nil {
+		log.Fatalf("[REMOTE] init tls config:%v", err)
+	}
 	if es.EnabledHTTPInbound() {
 		go es.startHTTPTunnelServer()
 	}
 	es.startTCPServer()
 }
 
-func (es *EasyServer) tlsConfig() (*tls.Config, error) {
+func (es *EasyServer) initTLSConfig() error {
+	if es.DisableTLS() {
+		return nil
+	}
+
 	var tlsConfig *tls.Config
 	var err error
 	if es.CertPath() != "" && es.KeyPath() != "" {
 		log.Infof("[REMOTE] using self-signed cert, cert-path:%s, key-path:%s", es.CertPath(), es.KeyPath())
 		var cer tls.Certificate
 		if cer, err = tls.LoadX509KeyPair(es.CertPath(), es.KeyPath()); err != nil {
-			return nil, err
+			return err
 		}
 		tlsConfig = &tls.Config{Certificates: []tls.Certificate{cer}}
 	} else {
 		tlsConfig, err = certmagic.TLS([]string{es.Server()})
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
-	tlsConfig.NextProtos = append(tlsConfig.NextProtos, []string{"h2", "http/1.1"}...)
+	tlsConfig.NextProtos = append([]string{"http/1.1", "h2"}, tlsConfig.NextProtos...)
 	if !es.DisableUTLS() {
 		tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
 			for _, v := range tlsConfig.NextProtos {
@@ -49,8 +56,9 @@ func (es *EasyServer) tlsConfig() (*tls.Config, error) {
 			return fmt.Errorf("unsupported ALPN:%s", cs.NegotiatedProtocol)
 		}
 	}
+	es.tlsConfig = tlsConfig
 
-	return tlsConfig, nil
+	return nil
 }
 
 func (es *EasyServer) startTCPServer() {
@@ -61,12 +69,7 @@ func (es *EasyServer) startTCPServer() {
 	if es.DisableTLS() {
 		ln, err = net.Listen("tcp", addr)
 	} else {
-		var tlsConfig *tls.Config
-		tlsConfig, err = es.tlsConfig()
-		if err != nil {
-			log.Fatalf("[REMOTE] get server tls config err:%v", err)
-		}
-		ln, err = tls.Listen("tcp", addr, tlsConfig)
+		ln, err = tls.Listen("tcp", addr, es.tlsConfig)
 	}
 	if err != nil {
 		log.Fatalf("Listen %v: %v", addr, err)
@@ -91,7 +94,7 @@ func (es *EasyServer) startTCPServer() {
 }
 
 func (es *EasyServer) startHTTPTunnelServer() {
-	server := httptunnel.NewServer(es.ListenHTTPTunnelAddr(), es.Timeout())
+	server := httptunnel.NewServer(es.ListenHTTPTunnelAddr(), es.Timeout(), es.tlsConfig)
 	es.mu.Lock()
 	es.httpTunnelServer = server
 	es.mu.Unlock()

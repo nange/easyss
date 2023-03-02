@@ -1,6 +1,7 @@
 package easyss
 
 import (
+	"crypto/tls"
 	"net"
 	"strconv"
 	"sync"
@@ -14,6 +15,7 @@ type EasyServer struct {
 	mu               sync.Mutex
 	ln               net.Listener
 	httpTunnelServer *httptunnel.Server
+	tlsConfig        *tls.Config
 
 	// only used for testing
 	disableValidateAddr bool

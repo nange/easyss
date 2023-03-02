@@ -1,6 +1,7 @@
 package httptunnel
 
 import (
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -23,10 +24,11 @@ type Server struct {
 	connCh  chan *ServerConn
 	closing chan struct{}
 
-	server *http.Server
+	tlsConfig *tls.Config
+	server    *http.Server
 }
 
-func NewServer(addr string, timeout time.Duration) *Server {
+func NewServer(addr string, timeout time.Duration, tlsConfig *tls.Config) *Server {
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           http.DefaultServeMux,
@@ -35,19 +37,28 @@ func NewServer(addr string, timeout time.Duration) *Server {
 	}
 
 	return &Server{
-		addr:    addr,
-		connMap: make(map[string]*ServerConn, 128),
-		connCh:  make(chan *ServerConn, 1),
-		closing: make(chan struct{}, 1),
-		server:  server,
+		addr:      addr,
+		connMap:   make(map[string]*ServerConn, 128),
+		connCh:    make(chan *ServerConn, 1),
+		closing:   make(chan struct{}, 1),
+		tlsConfig: tlsConfig,
+		server:    server,
 	}
 }
 
 func (s *Server) Listen() {
 	s.handler()
 
+	ln, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		log.Fatalf("[HTTP_TUNNEL_SERVER] net.Listen:%v", err)
+	}
+	if s.tlsConfig != nil {
+		ln = tls.NewListener(ln, s.tlsConfig)
+	}
+
 	log.Infof("[HTTP_TUNNEL_SERVER] listen at:%v", s.addr)
-	log.Warnf("[HTTP_TUNNEL_SERVER] listen and serve:%v", s.server.ListenAndServe())
+	log.Warnf("[HTTP_TUNNEL_SERVER] http serve:%v", s.server.Serve(ln))
 }
 
 func (s *Server) Close() error {
@@ -130,7 +141,7 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	s.Lock()
 	conn, ok := s.connMap[reqID]
 	if !ok {
-		conn = NewConn()
+		conn = NewServerConn()
 		s.connMap[reqID] = conn
 		s.connCh <- conn
 	}
