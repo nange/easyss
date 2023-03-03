@@ -89,7 +89,7 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reqID := r.Header.Get("X-Request-ID")
+	reqID := r.Header.Get(RequestIDHeader)
 	s.Lock()
 	conn, ok := s.connMap[reqID]
 	s.Unlock()
@@ -131,7 +131,7 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reqID := r.Header.Get("X-Request-ID")
+	reqID := r.Header.Get(RequestIDHeader)
 	if reqID == "" {
 		log.Warnf("[HTTP_TUNNEL_SERVER] push uuid is empty")
 		writeNotFoundError(w)

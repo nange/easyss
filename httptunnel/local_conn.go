@@ -15,6 +15,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const RequestIDHeader = "X-Request-UID"
+
 var _ net.Conn = (*LocalConn)(nil)
 
 type localConnAddr struct{}
@@ -148,7 +150,7 @@ func (l *LocalConn) pull() error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("X-Request-ID", l.uuid)
+	req.Header.Set(RequestIDHeader, l.uuid)
 
 	resp, err := l.client.Do(req)
 	if err != nil {
@@ -170,7 +172,7 @@ func (l *LocalConn) push(data []byte) error {
 	}
 	req.ContentLength = int64(len(data))
 	req.Header.Set("Content-Type", "application/octet-stream")
-	req.Header.Set("X-Request-ID", l.uuid)
+	req.Header.Set(RequestIDHeader, l.uuid)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36")
 
 	resp, err := l.client.Do(req)

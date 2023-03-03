@@ -26,6 +26,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/v2/cipherstream"
+	"github.com/nange/easyss/v2/httptunnel"
 	"github.com/nange/easyss/v2/util"
 	"github.com/oschwald/geoip2-golang"
 	utls "github.com/refraction-networking/utls"
@@ -472,54 +473,39 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 	if !ss.IsHTTPOutboundProto() && !ss.IsHTTPSOutboundProto() {
 		return nil
 	}
+
 	certPool, err := ss.loadCustomCertPool()
 	if err != nil {
 		log.Errorf("[EASYSS] load custom cert pool:%v", err)
 		return err
 	}
-	dialTLSContext := func(ctx context.Context, network string, addr string) (net.Conn, error) {
-		ctx, cancel := context.WithTimeout(ctx, ss.Timeout())
-		defer cancel()
+
+	var transport http.RoundTripper
+	if ss.IsHTTPOutboundProto() {
+		transport = &http.Transport{}
+	} else {
 		if ss.DisableUTLS() {
-			dialer := &tls.Dialer{
-				Config: &tls.Config{RootCAs: certPool},
+			transport = &http.Transport{
+				DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					dialer := &tls.Dialer{
+						Config: &tls.Config{RootCAs: certPool},
+					}
+					return dialer.DialContext(ctx, network, ss.ServerAddr())
+				},
 			}
-			return dialer.DialContext(ctx, network, addr)
+		} else {
+			transport = httptunnel.NewRoundTrip(ss.ServerAddr(), utls.HelloChrome_Auto, ss.Timeout(), certPool)
 		}
-
-		conn, err := net.DialTimeout(network, addr, ss.Timeout())
-		if err != nil {
-			return nil, err
-		}
-
-		uConn := utls.UClient(
-			conn,
-			&utls.Config{
-				ServerName: ss.Server(),
-				RootCAs:    certPool,
-			},
-			utls.HelloChrome_Auto)
-		if err := uConn.HandshakeContext(ctx); err != nil {
-			return nil, err
-		}
-
-		return uConn, nil
 	}
 
 	client := &http.Client{
-		Transport: &http.Transport{
-			DialTLSContext:        dialTLSContext,
-			MaxIdleConns:          5,
-			MaxConnsPerHost:       128,
-			IdleConnTimeout:       ss.Timeout(),
-			ResponseHeaderTimeout: ss.Timeout(),
-		},
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
-
 	ss.httpOutboundClient = client
+
 	return nil
 }
 
