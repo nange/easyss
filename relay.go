@@ -18,10 +18,14 @@ import (
 const RelayBufferSize = cipherstream.MaxCipherRelaySize
 const RelayBufferSizeString = "24kb"
 
+type closeWriter interface {
+	CloseWrite() error
+}
+
 // relay copies between cipher stream and plaintext stream.
 // return the number of bytes copies
 // from plaintext stream to cipher stream, from cipher stream to plaintext stream, and needClose on server conn
-func relay(cipher, plaintxt net.Conn, timeout time.Duration) (n1 int64, n2 int64) {
+func relay(cipher, plaintxt net.Conn, timeout time.Duration, tryReuse bool) (n1 int64, n2 int64) {
 	type res struct {
 		N        int64
 		Err      error
@@ -37,20 +41,20 @@ func relay(cipher, plaintxt net.Conn, timeout time.Duration) (n1 int64, n2 int64
 			log.Warnf("[REPAY] close write for plaintxt stream: %v", ce)
 		}
 
-		tryReuse := true
-		if err != nil {
+		_tryReuse := tryReuse
+		if _tryReuse && err != nil {
 			log.Debugf("[REPAY] copy from cipher to plaintxt: %v", err)
 			if !cipherstream.FINRSTStreamErr(err) {
 				if err := SetCipherDeadline(cipher, time.Now().Add(timeout)); err != nil {
-					tryReuse = false
+					_tryReuse = false
 				} else {
 					if err := readAllIgnore(cipher); !cipherstream.FINRSTStreamErr(err) {
-						tryReuse = false
+						_tryReuse = false
 					}
 				}
 			}
 		}
-		ch2 <- res{N: n, Err: err, TryReuse: tryReuse}
+		ch2 <- res{N: n, Err: err, TryReuse: _tryReuse}
 	}()
 
 	go func() {
@@ -59,12 +63,12 @@ func relay(cipher, plaintxt net.Conn, timeout time.Duration) (n1 int64, n2 int64
 			log.Debugf("[REPAY] copy from plaintxt to cipher: %v", err)
 		}
 
-		tryReuse := true
+		_tryReuse := tryReuse
 		if err := CloseWrite(cipher); err != nil {
-			tryReuse = false
+			_tryReuse = false
 			log.Warnf("[REPAY] close write for cipher stream: %v", err)
 		}
-		ch1 <- res{N: n, Err: err, TryReuse: tryReuse}
+		ch1 <- res{N: n, Err: err, TryReuse: _tryReuse}
 	}()
 
 	var res1, res2 res
@@ -79,11 +83,13 @@ func relay(cipher, plaintxt net.Conn, timeout time.Duration) (n1 int64, n2 int64
 
 	reuse := false
 	if res1.TryReuse && res2.TryReuse {
-		reuse = tryReuse(cipher, timeout)
+		reuse = tryReuseFn(cipher, timeout)
 	}
 	if !reuse {
 		MarkCipherStreamUnusable(cipher)
-		log.Warnf("[REPAY] underlying proxy connection is unhealthy, need close it")
+		if tryReuse {
+			log.Warnf("[REPAY] underlying proxy connection is unhealthy, need close it")
+		}
 	} else {
 		log.Debugf("[REPAY] underlying proxy connection is healthy, so reuse it")
 	}
@@ -91,7 +97,7 @@ func relay(cipher, plaintxt net.Conn, timeout time.Duration) (n1 int64, n2 int64
 	return
 }
 
-func tryReuse(cipher net.Conn, timeout time.Duration) bool {
+func tryReuseFn(cipher net.Conn, timeout time.Duration) bool {
 	if err := SetCipherDeadline(cipher, time.Now().Add(timeout)); err != nil {
 		return false
 	}
@@ -108,15 +114,12 @@ func tryReuse(cipher net.Conn, timeout time.Duration) bool {
 }
 
 func CloseWrite(conn net.Conn) error {
-	if csConn, ok := conn.(*cipherstream.CipherStream); ok {
-		return csConn.WriteRST(util.FlagFIN)
+	var err error
+	if cw, ok := conn.(closeWriter); ok {
+		if err = cw.CloseWrite(); err != nil && ErrorCanIgnore(err) {
+			return nil
+		}
 	}
-
-	err := conn.(*net.TCPConn).CloseWrite()
-	if ErrorCanIgnore(err) {
-		return nil
-	}
-
 	return err
 }
 

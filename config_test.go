@@ -39,6 +39,7 @@ func TestConfig_ServerValidate(t *testing.T) {
 		ServerPort: 9999,
 		Password:   "you-pass",
 	}
+	c.SetDefaultValue()
 	assert.Nil(t, c.Validate())
 
 	c.Server = ""

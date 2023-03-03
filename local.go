@@ -8,6 +8,7 @@ import (
 
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/v2/cipherstream"
+	"github.com/nange/easyss/v2/httptunnel"
 	"github.com/nange/easyss/v2/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
@@ -94,7 +95,18 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		}
 	}
 
-	stream, err := ss.AvailConnFromPool()
+	var tryReuse = true
+	var stream net.Conn
+	switch ss.OutboundProto() {
+	case OutboundProtoHTTP:
+		tryReuse = false
+		stream, err = httptunnel.NewLocalConn(ss.HTTPOutboundClient(), "http://"+ss.ServerAddr())
+	case OutboundProtoHTTPS:
+		tryReuse = false
+		stream, err = httptunnel.NewLocalConn(ss.HTTPOutboundClient(), "https://"+ss.ServerAddr())
+	default:
+		stream, err = ss.AvailNativeConnFromPool()
+	}
 	if err != nil {
 		log.Errorf("[TCP_PROXY] get stream from pool failed:%v", err)
 		return
@@ -122,7 +134,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		return
 	}
 
-	n1, n2 := relay(csStream, localConn, ss.Timeout())
+	n1, n2 := relay(csStream, localConn, ss.Timeout(), tryReuse)
 	csStream.(*cipherstream.CipherStream).Release()
 
 	log.Debugf("[TCP_PROXY] send %v bytes to %v, recive %v bytes", n1, addr, n2)

@@ -12,6 +12,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/v2/cipherstream"
+	"github.com/nange/easyss/v2/httptunnel"
 	"github.com/nange/easyss/v2/util"
 	"github.com/nange/easyss/v2/util/bytespool"
 	log "github.com/sirupsen/logrus"
@@ -122,7 +123,15 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		return send(ue, d.Data)
 	}
 
-	stream, err := ss.AvailConnFromPool()
+	var stream net.Conn
+	switch ss.OutboundProto() {
+	case OutboundProtoHTTP:
+		stream, err = httptunnel.NewLocalConn(ss.HTTPOutboundClient(), "http://"+ss.ServerAddr())
+	case OutboundProtoHTTPS:
+		stream, err = httptunnel.NewLocalConn(ss.HTTPOutboundClient(), "https://"+ss.ServerAddr())
+	default:
+		stream, err = ss.AvailNativeConnFromPool()
+	}
 	if err != nil {
 		log.Errorf("[UDP_PROXY] get stream from pool err:%+v", err)
 		return err

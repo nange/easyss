@@ -20,17 +20,25 @@ var ProxyRules = map[string]struct{}{
 	"direct": {},
 }
 
+const (
+	OutboundProtoNative = "native"
+	OutboundProtoHTTP   = "http"
+	OutboundProtoHTTPS  = "https"
+)
+
 type ServerConfig struct {
-	Server      string `json:"server"`
-	ServerPort  int    `json:"server_port"`
-	Password    string `json:"password"`
-	Timeout     int    `json:"timeout"`
-	DisableUTLS bool   `json:"disable_utls"`
-	DisableTLS  bool   `json:"disable_tls"`
-	CertPath    string `json:"cert_path"`
-	KeyPath     string `json:"key_path"`
-	CAPath      string `json:"ca_path,omitempty"`
-	Default     bool   `json:"default,omitempty"`
+	Server            string `json:"server"`
+	ServerPort        int    `json:"server_port"`
+	Password          string `json:"password"`
+	Timeout           int    `json:"timeout"`
+	DisableUTLS       bool   `json:"disable_utls"`
+	DisableTLS        bool   `json:"disable_tls"`
+	CertPath          string `json:"cert_path"`
+	KeyPath           string `json:"key_path"`
+	CAPath            string `json:"ca_path,omitempty"`
+	Default           bool   `json:"default,omitempty"`
+	OutboundProto     string `json:"outbound_proto,omitempty"`
+	EnableHTTPInbound bool   `json:"enable_http_inbound,omitempty"`
 }
 
 type Config struct {
@@ -54,6 +62,7 @@ type Config struct {
 	DirectDomainsFile string         `json:"direct_domains_file"`
 	ProxyRule         string         `json:"proxy_rule"`
 	CAPath            string         `json:"ca_path"`
+	OutboundProto     string         `json:"outbound_proto"`
 	ConfigFile        string         `json:"-"`
 }
 
@@ -82,6 +91,11 @@ func (c *Config) Validate() error {
 		if _, ok := ProxyRules[c.ProxyRule]; !ok {
 			return fmt.Errorf("unsupported proxy rule:%s, supported rules:[auto, proxy, direct]", c.ProxyRule)
 		}
+	}
+	if c.OutboundProto != OutboundProtoNative && c.OutboundProto != OutboundProtoHTTP &&
+		c.OutboundProto != OutboundProtoHTTPS {
+		return fmt.Errorf("outbound proto must be one of [%s, %s, %s]",
+			OutboundProtoNative, OutboundProtoHTTP, OutboundProtoHTTPS)
 	}
 
 	return nil
@@ -145,6 +159,7 @@ func (c *Config) SetDefaultValue() {
 	// if server is empty, try to use the first item in server list instead
 	if c.Server == "" && len(c.ServerList) > 0 {
 		sc := c.DefaultServerConfigFrom(c.ServerList)
+		sc.SetDefaultValue()
 		c.OverrideFrom(sc)
 	}
 
@@ -172,6 +187,9 @@ func (c *Config) SetDefaultValue() {
 	if c.ProxyRule == "" {
 		c.ProxyRule = "auto"
 	}
+	if c.OutboundProto == "" {
+		c.OutboundProto = OutboundProtoNative
+	}
 }
 
 func (c *Config) OverrideFrom(sc *ServerConfig) {
@@ -183,6 +201,7 @@ func (c *Config) OverrideFrom(sc *ServerConfig) {
 		c.DisableUTLS = sc.DisableUTLS
 		c.DisableTLS = sc.DisableTLS
 		c.CAPath = sc.CAPath
+		c.OutboundProto = sc.OutboundProto
 	}
 }
 
@@ -206,6 +225,9 @@ func (c *ServerConfig) SetDefaultValue() {
 	if c.Timeout <= 0 || c.Timeout > 30 {
 		c.Timeout = 30
 	}
+	if c.OutboundProto == "" {
+		c.OutboundProto = OutboundProtoNative
+	}
 }
 
 func (c *ServerConfig) Validate() error {
@@ -219,6 +241,11 @@ func (c *ServerConfig) Validate() error {
 	}
 	if c.Password == "" {
 		return errors.New("password should not empty")
+	}
+	if c.OutboundProto != OutboundProtoNative && c.OutboundProto != OutboundProtoHTTP &&
+		c.OutboundProto != OutboundProtoHTTPS {
+		return fmt.Errorf("outbound proto must be one of [%s, %s, %s]",
+			OutboundProtoNative, OutboundProtoHTTP, OutboundProtoHTTPS)
 	}
 
 	return nil

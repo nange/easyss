@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 
 	"github.com/nange/easyss/v2/util"
 	"github.com/nange/easyss/v2/util/bytespool"
@@ -312,7 +313,9 @@ func (cs *CipherStream) read() ([]byte, []byte, error) {
 			log.Debugf("[CIPHERSTREAM] got EOF error when reading cipher stream payload len, maybe the remote-server closed the conn")
 			return nil, nil, io.EOF
 		}
-		log.Warnf("[CIPHERSTREAM] read cipher stream payload len err:%+v", err)
+		if !strings.Contains(err.Error(), "use of closed network connection") {
+			log.Warnf("[CIPHERSTREAM] read cipher stream payload len err:%v", err)
+		}
 		return nil, nil, ErrReadCipher
 	}
 
@@ -369,6 +372,10 @@ func (cs *CipherStream) Release() {
 	cs.Conn = nil
 	cs.reader.rbuf = nil
 	cs.writer.wbuf = nil
+}
+
+func (cs *CipherStream) CloseWrite() error {
+	return cs.WriteRST(util.FlagFIN)
 }
 
 // timeout return true if err is net.Error timeout
