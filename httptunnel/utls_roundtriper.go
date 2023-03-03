@@ -75,11 +75,6 @@ func NewRoundTrip(serverAddr string, helloID utls.ClientHelloID, timeout time.Du
 }
 
 func (r *roundTrip) RoundTrip(req *http.Request) (*http.Response, error) {
-	port := req.URL.Port()
-	if port == "" {
-		port = "443"
-	}
-
 	if req.URL.Scheme == "http" {
 		return r.h1.RoundTrip(req)
 	}
