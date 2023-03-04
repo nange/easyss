@@ -218,6 +218,8 @@ func New(config *Config) (*Easyss, error) {
 	}
 	ss.proxyRule = proxyRule
 
+	ss.cmdBeforeStartup()
+
 	db, err := geoip2.FromBytes(geoIPCNPrivate)
 	if err != nil {
 		panic(err)
@@ -256,7 +258,7 @@ func New(config *Config) (*Easyss, error) {
 	}
 	ss.originDNS = ds
 
-	go ss.printStatistics()
+	go ss.background()
 
 	return ss, err
 }
@@ -970,50 +972,4 @@ func (ss *Easyss) Close() error {
 		ss.closing = nil
 	}
 	return err
-}
-
-func (ss *Easyss) printStatistics() {
-	ss.mu.Lock()
-	closing := ss.closing
-	pingLatency := ss.pingLatency
-	ss.mu.Unlock()
-
-	var minLatency, avgLatency, maxLatency, total time.Duration
-	var count int64
-
-	ticker := time.NewTicker(time.Hour)
-	defer ticker.Stop()
-	ticker2 := time.NewTicker(30 * time.Second)
-	defer ticker2.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			sendSize := ss.stat.BytesSend.Load() / (1024 * 1024)
-			receiveSize := ss.stat.BytesReceive.Load() / (1024 * 1024)
-			log.Infof("[EASYSS] send size: %vMB, recive size: %vMB", sendSize, receiveSize)
-		case late := <-pingLatency:
-			count += 1
-			total += late
-			if minLatency == 0 && avgLatency == 0 && maxLatency == 0 {
-				minLatency, avgLatency, maxLatency = late, late, late
-				continue
-			}
-
-			if minLatency > late {
-				minLatency = late
-			} else if maxLatency < late {
-				maxLatency = late
-			}
-			avgLatency = total / time.Duration(count)
-		case <-ticker2.C:
-			if maxLatency == 0 {
-				continue
-			}
-			log.Infof("[EASYSS] ping easyss-server latency: min:%v, avg:%v, max:%v, count:%v",
-				minLatency, avgLatency, maxLatency, count)
-			minLatency, avgLatency, maxLatency, count, total = 0, 0, 0, 0, 0
-		case <-closing:
-			return
-		}
-	}
 }
