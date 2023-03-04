@@ -268,13 +268,14 @@ func ExampleJSONConfig() string {
 
 func ExampleServerJSONConfig() string {
 	example := ServerConfig{
-		Server:      "example.com",
-		ServerPort:  9999,
-		Password:    "your-pass",
-		Timeout:     30,
-		DisableUTLS: false,
-		CertPath:    "",
-		KeyPath:     "",
+		Server:            "example.com",
+		ServerPort:        9999,
+		Password:          "your-pass",
+		Timeout:           30,
+		DisableUTLS:       false,
+		CertPath:          "",
+		KeyPath:           "",
+		EnableHTTPInbound: true,
 	}
 
 	b, _ := json.MarshalIndent(example, "", "    ")
