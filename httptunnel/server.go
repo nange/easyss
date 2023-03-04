@@ -150,27 +150,26 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	b, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Warnf("[HTTP_TUNNEL_SERVER] read from body:%v", err)
-		writeServiceUnavailableError(w)
+		writeServiceUnavailableError(w, "read all from body:"+err.Error())
 		return
 	}
 	if _, err = conn.WriteLocal(b); err != nil {
 		log.Warnf("[HTTP_TUNNEL_SERVER] write local:%v", err)
-		writeServiceUnavailableError(w)
+		writeServiceUnavailableError(w, "write local:"+err.Error())
 		return
 	}
 
-	writeNoContent(w, reqID)
+	writeNoContent(w)
 }
 
 func writeNotFoundError(w http.ResponseWriter) {
 	http.Error(w, "404 NOT FOUND", http.StatusNotFound)
 }
 
-// TODO: 支持传入错误消息
-func writeServiceUnavailableError(w http.ResponseWriter) {
-	http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+func writeServiceUnavailableError(w http.ResponseWriter, msg string) {
+	http.Error(w, msg, http.StatusServiceUnavailable)
 }
 
-func writeNoContent(w http.ResponseWriter, msg string) {
+func writeNoContent(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusNoContent)
 }
