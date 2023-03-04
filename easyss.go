@@ -46,6 +46,13 @@ const (
 	UDPLocksAndOpVal = 255
 )
 
+const (
+	MaxCap      int           = 40
+	MaxIdle     int           = 5
+	IdleTime    time.Duration = time.Minute
+	MaxLifetime time.Duration = 15 * time.Minute
+)
+
 var (
 	//go:embed geodata/geoip_cn_private.mmdb
 	geoIPCNPrivate []byte
@@ -429,11 +436,11 @@ func (ss *Easyss) InitTcpPool() error {
 	}
 
 	config := &easypool.PoolConfig{
-		InitialCap:  5,
-		MaxCap:      40,
-		MaxIdle:     5,
-		Idletime:    time.Minute,
-		MaxLifetime: 15 * time.Minute,
+		InitialCap:  MaxIdle,
+		MaxCap:      MaxCap,
+		MaxIdle:     MaxIdle,
+		Idletime:    IdleTime,
+		MaxLifetime: MaxLifetime,
 		Factory:     factory,
 	}
 	tcpPool, err := easypool.NewHeapPool(config)
@@ -482,7 +489,11 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 
 	var transport http.RoundTripper
 	if ss.IsHTTPOutboundProto() {
-		transport = &http.Transport{}
+		transport = &http.Transport{
+			MaxIdleConns:          MaxIdle,
+			IdleConnTimeout:       MaxLifetime,
+			ResponseHeaderTimeout: ss.Timeout(),
+		}
 	} else {
 		if ss.DisableUTLS() {
 			transport = &http.Transport{
@@ -492,6 +503,9 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 					}
 					return dialer.DialContext(ctx, network, ss.ServerAddr())
 				},
+				MaxIdleConns:          MaxIdle,
+				IdleConnTimeout:       MaxLifetime,
+				ResponseHeaderTimeout: ss.Timeout(),
 			}
 		} else {
 			transport = httptunnel.NewRoundTrip(ss.ServerAddr(), utls.HelloChrome_Auto, ss.Timeout(), certPool)

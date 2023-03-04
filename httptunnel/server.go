@@ -166,6 +166,7 @@ func writeNotFoundError(w http.ResponseWriter) {
 	http.Error(w, "404 NOT FOUND", http.StatusNotFound)
 }
 
+// TODO: 支持传入错误消息
 func writeServiceUnavailableError(w http.ResponseWriter) {
 	http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
 }

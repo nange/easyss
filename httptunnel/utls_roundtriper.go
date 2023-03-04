@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -17,7 +18,6 @@ import (
 )
 
 type roundTrip struct {
-	timeout time.Duration
 	helloID utls.ClientHelloID
 	rootCAs *x509.CertPool
 
@@ -25,7 +25,6 @@ type roundTrip struct {
 	negotiatedProtocol string
 
 	dialTLSContext func() (net.Conn, error)
-	h1             *http.Transport
 	h1s            *http.Transport
 	h2s            *http2.Transport
 }
@@ -56,27 +55,28 @@ func NewRoundTrip(serverAddr string, helloID utls.ClientHelloID, timeout time.Du
 
 	return &roundTrip{
 		helloID: helloID,
-		timeout: timeout,
 		rootCAs: rootCAs,
 
 		dialTLSContext: dialTLSContext,
-		h1:             &http.Transport{},
 		h1s: &http.Transport{
 			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				return dialTLSContext()
 			},
+			IdleConnTimeout:       timeout,
+			ResponseHeaderTimeout: timeout,
 		},
 		h2s: &http2.Transport{
 			DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
 				return dialTLSContext()
 			},
+			ReadIdleTimeout: timeout,
 		},
 	}
 }
 
 func (r *roundTrip) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.Scheme == "http" {
-		return r.h1.RoundTrip(req)
+		return nil, errors.New("http request must not in utls round trip")
 	}
 
 	var err error
