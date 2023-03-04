@@ -1,0 +1,4 @@
+{
+  "forwardPorts": [8888],
+  "postCreateCommand": "/workspaces/easyss/bin/easyss-server"
+}
