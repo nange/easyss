@@ -35,13 +35,14 @@ type ServerConfig struct {
 	DisableTLS        bool   `json:"disable_tls"`
 	CertPath          string `json:"cert_path"`
 	KeyPath           string `json:"key_path"`
+	EnableHTTPInbound bool   `json:"enable_http_inbound"`
+	HTTPInboundPort   int    `json:"http_inbound_port"`
 	CAPath            string `json:"ca_path,omitempty"`
 	Default           bool   `json:"default,omitempty"`
 	OutboundProto     string `json:"outbound_proto,omitempty"`
-	EnableHTTPInbound bool   `json:"enable_http_inbound,omitempty"`
 	CMDBeforeStartup  string `json:"cmd_before_startup,omitempty"`
 	CMDInterval       string `json:"cmd_interval,omitempty"`
-	CMDIntervalTime   int    `json:"cmd_interval_time"`
+	CMDIntervalTime   int    `json:"cmd_interval_time,omitempty"`
 }
 
 type Config struct {
@@ -243,6 +244,9 @@ func (c *ServerConfig) SetDefaultValue() {
 	if c.CMDIntervalTime == 0 {
 		c.CMDIntervalTime = 600
 	}
+	if c.HTTPInboundPort == 0 {
+		c.HTTPInboundPort = c.ServerPort + 1000
+	}
 }
 
 func (c *ServerConfig) Validate() error {
@@ -261,6 +265,9 @@ func (c *ServerConfig) Validate() error {
 		c.OutboundProto != OutboundProtoHTTPS {
 		return fmt.Errorf("outbound proto must be one of [%s, %s, %s]",
 			OutboundProtoNative, OutboundProtoHTTP, OutboundProtoHTTPS)
+	}
+	if c.EnableHTTPInbound && c.HTTPInboundPort == 0 {
+		return errors.New("http inbound port should not empty")
 	}
 
 	return nil

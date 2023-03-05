@@ -35,7 +35,7 @@ func (es *EasyServer) ListenAddr() string {
 }
 
 func (es *EasyServer) ListenHTTPTunnelAddr() string {
-	addr := ":" + strconv.Itoa(es.ServerPort()+1000)
+	addr := ":" + strconv.Itoa(es.HTTPInboundPort())
 	return addr
 }
 
@@ -69,6 +69,10 @@ func (es *EasyServer) KeyPath() string {
 
 func (es *EasyServer) EnabledHTTPInbound() bool {
 	return es.config.EnableHTTPInbound
+}
+
+func (es *EasyServer) HTTPInboundPort() int {
+	return es.config.HTTPInboundPort
 }
 
 func (es *EasyServer) Close() (err error) {
