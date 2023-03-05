@@ -24,6 +24,12 @@ type localConnAddr struct{}
 func (localConnAddr) Network() string { return "http outbound" }
 func (localConnAddr) String() string  { return "http outbound" }
 
+type timeoutError struct{}
+
+func (e timeoutError) Error() string   { return "i/o timeout" }
+func (e timeoutError) Timeout() bool   { return true }
+func (e timeoutError) Temporary() bool { return true }
+
 type LocalConn struct {
 	uuid       string
 	serverAddr string
@@ -66,12 +72,13 @@ func (l *LocalConn) Read(b []byte) (n int, err error) {
 	l.Unlock()
 	n, err = l.respBody.Read(b)
 	if err != nil {
+		log.Debugf("[HTTP_TUNNEL_LOACAL] read from remote:%v", err)
 		if strings.Contains(err.Error(), "http2: server sent GOAWAY and closed the connection") {
-			log.Debugf("[HTTP_TUNNEL_LOACAL] read from remote:%v", err)
+			// Ref: https://github.com/golang/go/issues/18639
 			err = io.EOF
-		}
-		if !errors.Is(err, io.EOF) && !strings.Contains(err.Error(), "use of closed network connection") {
-			log.Warnf("[HTTP_TUNNEL_LOACAL] read from remote:%v", err)
+		} else if strings.Contains(err.Error(), "response body closed") {
+			// In LocalConn.SetDeadline func, we'll close the response body
+			err = timeoutError{}
 		}
 	}
 
