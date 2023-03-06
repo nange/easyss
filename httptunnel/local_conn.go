@@ -78,7 +78,11 @@ func (l *LocalConn) Read(b []byte) (n int, err error) {
 			err = io.EOF
 		} else if strings.Contains(err.Error(), "response body closed") {
 			// In LocalConn.SetDeadline func, we'll close the response body
-			err = timeoutError{}
+			select {
+			case <-l.done:
+			default:
+				err = timeoutError{}
+			}
 		}
 	}
 
