@@ -57,7 +57,7 @@ func (s *Server) Listen() {
 		ln = tls.NewListener(ln, s.tlsConfig)
 	}
 
-	log.Infof("[HTTP_TUNNEL_SERVER] listen at:%v", s.addr)
+	log.Infof("[HTTP_TUNNEL_SERVER] listen http tunnel at:%v", s.addr)
 	log.Warnf("[HTTP_TUNNEL_SERVER] http serve:%v", s.server.Serve(ln))
 }
 

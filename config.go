@@ -35,10 +35,14 @@ type ServerConfig struct {
 	DisableTLS        bool   `json:"disable_tls"`
 	CertPath          string `json:"cert_path"`
 	KeyPath           string `json:"key_path"`
+	EnableHTTPInbound bool   `json:"enable_http_inbound"`
+	HTTPInboundPort   int    `json:"http_inbound_port"`
 	CAPath            string `json:"ca_path,omitempty"`
 	Default           bool   `json:"default,omitempty"`
 	OutboundProto     string `json:"outbound_proto,omitempty"`
-	EnableHTTPInbound bool   `json:"enable_http_inbound,omitempty"`
+	CMDBeforeStartup  string `json:"cmd_before_startup,omitempty"`
+	CMDInterval       string `json:"cmd_interval,omitempty"`
+	CMDIntervalTime   int    `json:"cmd_interval_time,omitempty"`
 }
 
 type Config struct {
@@ -63,6 +67,9 @@ type Config struct {
 	ProxyRule         string         `json:"proxy_rule"`
 	CAPath            string         `json:"ca_path"`
 	OutboundProto     string         `json:"outbound_proto"`
+	CMDBeforeStartup  string         `json:"cmd_before_startup"`
+	CMDInterval       string         `json:"cmd_interval"`
+	CMDIntervalTime   int            `json:"cmd_interval_time"`
 	ConfigFile        string         `json:"-"`
 }
 
@@ -175,7 +182,7 @@ func (c *Config) SetDefaultValue() {
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
 	}
-	if c.Timeout <= 0 || c.Timeout > 30 {
+	if c.Timeout <= 0 || c.Timeout > 60 {
 		c.Timeout = 30
 	}
 	if c.DirectIPsFile == "" {
@@ -190,6 +197,9 @@ func (c *Config) SetDefaultValue() {
 	if c.OutboundProto == "" {
 		c.OutboundProto = OutboundProtoNative
 	}
+	if c.CMDIntervalTime == 0 {
+		c.CMDIntervalTime = 600
+	}
 }
 
 func (c *Config) OverrideFrom(sc *ServerConfig) {
@@ -202,6 +212,9 @@ func (c *Config) OverrideFrom(sc *ServerConfig) {
 		c.DisableTLS = sc.DisableTLS
 		c.CAPath = sc.CAPath
 		c.OutboundProto = sc.OutboundProto
+		c.CMDInterval = sc.CMDInterval
+		c.CMDBeforeStartup = sc.CMDBeforeStartup
+		c.CMDIntervalTime = sc.CMDIntervalTime
 	}
 }
 
@@ -222,11 +235,17 @@ func (c *Config) DefaultServerConfigFrom(list []ServerConfig) *ServerConfig {
 }
 
 func (c *ServerConfig) SetDefaultValue() {
-	if c.Timeout <= 0 || c.Timeout > 30 {
+	if c.Timeout <= 0 || c.Timeout > 60 {
 		c.Timeout = 30
 	}
 	if c.OutboundProto == "" {
 		c.OutboundProto = OutboundProtoNative
+	}
+	if c.CMDIntervalTime == 0 {
+		c.CMDIntervalTime = 600
+	}
+	if c.HTTPInboundPort == 0 {
+		c.HTTPInboundPort = c.ServerPort + 1000
 	}
 }
 
@@ -246,6 +265,9 @@ func (c *ServerConfig) Validate() error {
 		c.OutboundProto != OutboundProtoHTTPS {
 		return fmt.Errorf("outbound proto must be one of [%s, %s, %s]",
 			OutboundProtoNative, OutboundProtoHTTP, OutboundProtoHTTPS)
+	}
+	if c.EnableHTTPInbound && c.HTTPInboundPort == 0 {
+		return errors.New("http inbound port should not empty")
 	}
 
 	return nil
