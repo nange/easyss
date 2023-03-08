@@ -670,71 +670,89 @@ func (ss *Easyss) Pool() easypool.Pool {
 	return ss.tcpPool
 }
 
-func (ss *Easyss) AvailNativeConnFromPool() (conn net.Conn, err error) {
-	pool := ss.Pool()
-	if pool == nil {
-		return nil, errors.New("pool is closed")
+func (ss *Easyss) AvailableConn() (conn net.Conn, err error) {
+	var pool easypool.Pool
+	var tryCount int
+	if ss.IsNativeOutboundProto() {
+		if pool = ss.Pool(); pool == nil {
+			return nil, errors.New("pool is closed")
+		}
+		tryCount = pool.Len() + 1
+	} else {
+		tryCount = MaxIdle + 1
 	}
 
-	poolLen := pool.Len()
-	for i := 0; i < poolLen+2; i++ {
-		conn, err = pool.Get()
+	pingTest := func(conn net.Conn) (er error) {
+		var csStream net.Conn
+		csStream, er = cipherstream.New(conn, ss.Password(), cipherstream.MethodAes256GCM, util.FrameTypePing)
+		if er != nil {
+			return er
+		}
+
+		cs := csStream.(*cipherstream.CipherStream)
+		defer func() {
+			if er != nil {
+				MarkCipherStreamUnusable(cs)
+				conn.Close()
+			}
+			cs.Release()
+		}()
+
+		start := time.Now()
+		ping := []byte(strconv.FormatInt(start.UnixNano(), 10))
+		if er = cs.WritePing(ping, util.FlagNeedACK); er != nil {
+			return
+		}
+
+		timeout := ss.Timeout() / 3
+		if timeout < time.Second {
+			timeout = time.Second
+		}
+		if er = SetCipherDeadline(cs, time.Now().Add(timeout)); er != nil {
+			return
+		}
+		var payload []byte
+		if payload, er = cs.ReadPing(); er != nil {
+			return
+		} else if !bytes.Equal(ping, payload) {
+			er = errors.New("the payload of ping not equals send value")
+			return
+		}
+
+		since := time.Since(start)
+		ss.pingLatency <- since
+		log.Debugf("[EASYSS] ping %s latency:%v", ss.Server(), since)
+		if since > time.Second {
+			log.Warnf("[EASYSS] got high latency:%v of ping %s", since, ss.Server())
+		} else if since > 500*time.Millisecond {
+			log.Infof("[EASYSS] got latency:%v of ping %s", since, ss.Server())
+		}
+
+		if er = SetCipherDeadline(cs, time.Time{}); er != nil {
+			return
+		}
+		return
+	}
+
+	for i := 0; i < tryCount; i++ {
+		switch ss.OutboundProto() {
+		case OutboundProtoHTTP:
+			conn, err = httptunnel.NewLocalConn(ss.HTTPOutboundClient(), "http://"+ss.ServerAddr())
+		case OutboundProtoHTTPS:
+			conn, err = httptunnel.NewLocalConn(ss.HTTPOutboundClient(), "https://"+ss.ServerAddr())
+		default:
+			conn, err = pool.Get()
+		}
 		if err != nil {
-			log.Warnf("[EASYSS] get conn from pool failed:%v", err)
+			log.Warnf("[EASYSS] get conn failed:%v", err)
 			continue
 		}
 
-		err = func() (er error) {
-			var csStream net.Conn
-			csStream, er = cipherstream.New(conn, ss.Password(), cipherstream.MethodAes256GCM, util.FrameTypePing)
-			if er != nil {
-				return er
-			}
-
-			cs := csStream.(*cipherstream.CipherStream)
-			defer func() {
-				if er != nil {
-					MarkCipherStreamUnusable(cs)
-					conn.Close()
-				}
-				cs.Release()
-			}()
-
-			start := time.Now()
-			ping := []byte(strconv.FormatInt(start.UnixNano(), 10))
-			if er = cs.WritePing(ping, util.FlagNeedACK); er != nil {
-				return
-			}
-			if er = SetCipherDeadline(cs, time.Now().Add(3*time.Second)); er != nil {
-				return
-			}
-			var payload []byte
-			if payload, er = cs.ReadPing(); er != nil {
-				return
-			} else if !bytes.Equal(ping, payload) {
-				er = errors.New("the payload of ping not equals send value")
-				return
-			}
-
-			since := time.Since(start)
-			ss.pingLatency <- since
-			log.Debugf("[EASYSS] ping %s latency:%v", ss.Server(), since)
-			if since > time.Second {
-				log.Warnf("[EASYSS] got high latency:%v of ping %s", since, ss.Server())
-			} else if since > 500*time.Millisecond {
-				log.Infof("[EASYSS] got latency:%v of ping %s", since, ss.Server())
-			}
-
-			if er = SetCipherDeadline(cs, time.Time{}); er != nil {
-				return
-			}
-			return
-		}()
+		err = pingTest(conn)
 		if err != nil {
 			log.Warnf("[EASYSS] ping easyss-server: %v", err)
 			continue
 		}
-
 		break
 	}
 
