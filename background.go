@@ -60,10 +60,10 @@ func (ss *Easyss) background() {
 	}
 }
 
-func (ss *Easyss) cmdBeforeStartup() {
+func (ss *Easyss) cmdBeforeStartup() error {
 	cmd := ss.config.CMDBeforeStartup
 	if cmd == "" {
-		return
+		return nil
 	}
 	log.Infof("[CMD_BEFORE_STARTUP] exectuing %s", cmd)
 
@@ -73,6 +73,7 @@ func (ss *Easyss) cmdBeforeStartup() {
 	} else {
 		log.Infof("[CMD_BEFORE_STARTUP] %s success, output:%s", cmd, output)
 	}
+	return err
 }
 
 func (ss *Easyss) cmdInterval(cmd string) {

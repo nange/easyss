@@ -218,7 +218,10 @@ func New(config *Config) (*Easyss, error) {
 	}
 	ss.proxyRule = proxyRule
 
-	ss.cmdBeforeStartup()
+	if err := ss.cmdBeforeStartup(); err != nil {
+		log.Errorf("[EASYSS] exectuing command before startup:%v", err)
+		return nil, err
+	}
 
 	db, err := geoip2.FromBytes(geoIPCNPrivate)
 	if err != nil {
