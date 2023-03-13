@@ -14,8 +14,9 @@ Easyss是一款兼容socks5的安全代理上网工具，目标是使访问国�
 * 支持TCP连接池 (默认启用，大幅降低请求延迟)
 * 支持系统托盘图标管理 (thanks [systray](https://github.com/getlantern/systray))
 * 支持可配置多服务器切换, 支持自定义直连白名单(IP/域名)
-* 基于TLS, 支持(AEAD类型)高强度加密通信, 如aes-256-gcm, chacha20-poly1305
+* 基于TLS(可禁用), 支持(AEAD类型)高强度加密通信, 如aes-256-gcm, chacha20-poly1305
 * http2帧格式交互 (更灵活通用, 更易扩展)
+* 支持http(s)出口协议(通过tcp over http(s)技术), 用于easyss-server位于http反向代理之后等特殊场景
 * 内建DNS服务器，支持DNS Forward转发，可用于透明代理部署时使用 (默认关闭，可通过命令行启用)
 * 无流量特征，不易被嗅探
 
@@ -56,7 +57,8 @@ make easyss-server
   "local_port": 2080,
   "method": "aes-256-gcm",
   "timeout": 60,
-  "bind_all": false
+  "bind_all": false,
+  "outbound_proto": "native"
 }
 ```
 
@@ -67,7 +69,8 @@ make easyss-server
     {
       "server": "your-domain.com",
       "server_port": 7878,
-      "password": "your-pass"
+      "password": "your-pass",
+      "default": true
     },
     {
       "server": "your-domain2.com",
@@ -92,6 +95,7 @@ make easyss-server
 * timeout: 超时时间,单位秒(默认60)
 * bind_all: 是否将监听端口绑定到所有本地IP上(默认false)
 * ca_path: 自定义CA证书文件路径(当使用自定义tls证书时才配置)
+* outbound_proto: 出口协议，默认`native`，可选：`native`, `http`, `https`
 
 其他还有一些参数没有列出，如无必要，无需关心。除了3个必填的参数，其他都是可选的，甚至可以不要配置文件，全部通过命令行指定即可。
 
@@ -117,6 +121,7 @@ make easyss-server
 39.156.66.10
 110.242.68.66
 106.11.84.3
+206.0.68.0/23
 ```
 
 `direct_domains.txt`文件示例：
@@ -159,7 +164,7 @@ your-custom-domain.com
 ./easyss-server
 ```
 
-**注意：在没有使用自定义证书情况下，服务器的443端口必须对外可访问，用于自动获取服务器域名证书的TLS校验使用。**
+**注意：在没有使用自定义证书且没有禁用TLS情况下，服务器的443端口必须对外可访问，用于自动获取服务器域名证书的TLS校验使用。**
 
 #### docker部署
 
@@ -172,6 +177,16 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 #### 生成自定义证书
 可根据自己的需求，使用`openssl`等工具生成自定义证书。也可以参考： `./scripts/self_signed_certs` 目录示例，使用`cfssl`生成自定义证书。
 示例就是使用IP而不是域名生成自定义证书，这样就可以无域名使用Easyss了。
+
+### 高级用法
+默认easyss的出口协议为`native`，是基于TCP的一种特有协议。
+但由于各种网络情况的客观复杂性，有可能我们的easyss-server服务器只能部署于HTTP(s)反向代理之后的，
+这时候`native`协议将无法工作，因此easyss支持了三种出口协议可选：`native`, `http`, `https`。
+`http`和`https`出口协议是对`native`的包装，基于tcp over http(s)技术实现。
+
+在配置文件中，指定`outbound_proto: http` 或者 `outbound_proto: https`，即可实现服务器部署在反向代理之后的场景。
+
+同时easyss还支持配置`cmd_before_startup`, `cmd_interval`参数，用于配置一个自定义命令，在easyss启动前执行或者定期的执行。
 
 ## LICENSE
 
