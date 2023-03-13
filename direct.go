@@ -30,7 +30,7 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 			log.Warnf("[TCP_DIRECT] copy from local to remote err:%v", err)
 		}
 
-		if err := tConn.(*net.TCPConn).CloseWrite(); err != nil && !ErrorCanIgnore(err) {
+		if err := CloseWrite(tConn); err != nil {
 			log.Warnf("[TCP_DIRECT] close write for target connection:%v", err)
 		}
 
@@ -44,7 +44,7 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 			log.Warnf("[TCP_DIRECT] copy from remote to local err:%v", err)
 		}
 
-		if err := localConn.(*net.TCPConn).CloseWrite(); err != nil && !ErrorCanIgnore(err) {
+		if err := CloseWrite(localConn); err != nil {
 			log.Warnf("[TCP_DIRECT] close write for local connection:%v", err)
 		}
 	}()
