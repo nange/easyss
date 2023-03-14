@@ -29,7 +29,6 @@ jobs:
           zip easyss-server-windows-amd64.zip ./easyss-server.exe
       - name: Build-Arm64
         run: |
-          cd ..
           GOOS=linux GOARCH=arm64 make easyss-with-notray
           GOOS=linux GOARCH=arm64 make easyss-server
       - name: Pack-Arm64
@@ -63,7 +62,6 @@ jobs:
           zip easyss-server-darwin-amd64.zip ./easyss-server
       - name: Build-Arm64
         run: |
-          cd ..
           GOOS=darwin GOARCH=arm64 make easyss-with-notray
           GOOS=darwin GOARCH=arm64 make easyss-server
       - name: Pack-Arm64
