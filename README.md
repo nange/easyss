@@ -178,15 +178,24 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 可根据自己的需求，使用`openssl`等工具生成自定义证书。也可以参考： `./scripts/self_signed_certs` 目录示例，使用`cfssl`生成自定义证书。
 示例就是使用IP而不是域名生成自定义证书，这样就可以无域名使用Easyss了。
 
-### 高级用法
-默认easyss的出口协议为`native`，是基于TCP的一种特有协议。
-但由于各种网络情况的客观复杂性，有可能我们的easyss-server服务器只能部署于HTTP(s)反向代理之后的，
+## 高级用法
+### 服务器部署在反向代理之后
+默认Easyss的出口协议为`native`，是基于TCP的一种特有协议。
+但由于各种网络情况的客观复杂性，有可能我们的Easyss-server服务器只能部署于HTTP(s)反向代理之后的，
 这时候`native`协议将无法工作，因此easyss支持了三种出口协议可选：`native`, `http`, `https`。
 `http`和`https`出口协议是对`native`的包装，基于tcp over http(s)技术实现。
 
-在配置文件中，指定`outbound_proto: http` 或者 `outbound_proto: https`，即可实现服务器部署在反向代理之后的场景。
+在Easyss配置文件中，指定`outbound_proto: http` 或者 `outbound_proto: https`，
+并在Easyss-server配置文件中，指定`enable_http_inbound: true`，即可实现服务器部署在反向代理之后的场景。
 
-同时easyss还支持配置`cmd_before_startup`, `cmd_interval`参数，用于配置一个自定义命令，在easyss启动前执行或者定期的执行。
+### 启动前或定期执行自定义命令
+同时Easyss还支持配置`cmd_before_startup`, `cmd_interval`参数，用于配置一个自定义命令，在Easyss启动前执行或者定期的执行。
+
+### 作为透明代理将Easyss部署在路由器或者软路由上
+直接将Easyss部署在路由器或这软路由上，可实现家里或公司网络自动透明代理，无需在终端设备上安装Easyss客户端。
+
+只需要在配置文件或者命令行指定`enable_tun2socks: true` 或者 `-enable-tun2socks=true`开启全局代理，
+并同时开启DNS流量转发`enable_forward_dns: true` 或者`-enable-forward-dns=true`，即可实现透明代理。
 
 ## LICENSE
 
