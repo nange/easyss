@@ -8,15 +8,20 @@ import (
 var _ net.Conn = (*ServerConn)(nil)
 
 type ServerConn struct {
+	reqID     string
+	closeConn func(reqID string)
+
 	local  net.Conn
 	remote net.Conn
 }
 
-func NewServerConn() *ServerConn {
+func NewServerConn(reqID string, closeConn func(reqID string)) *ServerConn {
 	read, write := net.Pipe()
 	return &ServerConn{
-		local:  read,
-		remote: write,
+		reqID:     reqID,
+		closeConn: closeConn,
+		local:     read,
+		remote:    write,
 	}
 }
 
@@ -37,6 +42,11 @@ func (c *ServerConn) Write(b []byte) (n int, err error) {
 }
 
 func (c *ServerConn) Close() error {
+	if c.closeConn != nil {
+		c.closeConn(c.reqID)
+	}
+	c.closeConn = nil
+
 	return c.remote.Close()
 }
 

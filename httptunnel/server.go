@@ -141,7 +141,7 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	s.Lock()
 	conn, ok := s.connMap[reqID]
 	if !ok {
-		conn = NewServerConn()
+		conn = NewServerConn(reqID, s.CloseConn)
 		s.connMap[reqID] = conn
 		s.connCh <- conn
 	}
@@ -160,6 +160,13 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeNoContent(w)
+}
+
+func (s *Server) CloseConn(reqID string) {
+	s.Lock()
+	defer s.Unlock()
+	s.connMap[reqID] = nil
+	delete(s.connMap, reqID)
 }
 
 func writeNotFoundError(w http.ResponseWriter) {
