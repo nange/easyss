@@ -133,7 +133,7 @@ your-custom-domain.com
 
 ### 手机客户端
 
-手机客户端apk文件可直接在release页面下载。
+手机客户端apk文件可直接在[release页面](https://github.com/nange/easyss/releases)下载。
 
 手机客户端是基于Matsuri扩展修改而来，源代码在[Matsuri](https://github.com/bingooo/Matsuri/tree/easyss)，感谢 [bingooo](https://github.com/bingooo)
 
@@ -160,11 +160,11 @@ your-custom-domain.com
 
 执行:
 ```sh
-# 需sudo权限
 ./easyss-server
 ```
 
-**注意：在没有使用自定义证书且没有禁用TLS情况下，服务器的443端口必须对外可访问，用于自动获取服务器域名证书的TLS校验使用。**
+**注意：在没有使用自定义证书且没有禁用TLS情况下，服务器的443端口必须对外可访问，用于自动获取服务器域名证书的TLS校验使用。
+并且这种情况需要sudo权限运行easyss-server**
 
 #### docker部署
 
@@ -184,12 +184,14 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 但由于各种网络情况的客观复杂性，有可能我们的Easyss-server服务器只能部署于HTTP(s)反向代理之后的，
 这时候`native`协议将无法工作，因此easyss支持了三种出口协议可选：`native`, `http`, `https`。
 `http`和`https`出口协议是对`native`的包装，基于tcp over http(s)技术实现。
+如果可能的话应该优先使用`native`协议，因为其性能和延迟都有最好的表现。
 
 在Easyss配置文件中，指定`outbound_proto: http` 或者 `outbound_proto: https`，
 并在Easyss-server配置文件中，指定`enable_http_inbound: true`，即可实现服务器部署在反向代理之后的场景。
 
 ### 启动前或定期执行自定义命令
 同时Easyss还支持配置`cmd_before_startup`, `cmd_interval`参数，用于配置一个自定义命令，在Easyss启动前执行或者定期的执行。
+`cmd_interval_time`可用于控制定期执行间隔，默认10分钟执行一次。
 
 ### 作为透明代理将Easyss部署在路由器或者软路由上
 直接将Easyss部署在路由器或这软路由上，可实现家里或公司网络自动透明代理，无需在终端设备上安装Easyss客户端。
