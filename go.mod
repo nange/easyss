@@ -4,15 +4,15 @@ go 1.20
 
 require (
 	github.com/caddyserver/certmagic v0.17.2
-	github.com/cespare/xxhash/v2 v2.1.2
+	github.com/cespare/xxhash/v2 v2.2.0
 	github.com/coocood/freecache v1.2.3
 	github.com/getlantern/systray v1.2.1
 	github.com/gofrs/uuid/v5 v5.0.0
 	github.com/libp2p/go-netroute v0.2.1
-	github.com/miekg/dns v1.1.50
+	github.com/miekg/dns v1.1.52
 	github.com/nange/easypool v1.3.1
 	github.com/oschwald/geoip2-golang v1.8.0
-	github.com/refraction-networking/utls v1.2.2
+	github.com/refraction-networking/utls v1.3.1
 	github.com/sirupsen/logrus v1.9.0
 	github.com/snowzach/rotatefilehook v0.0.0-20220211133110-53752135082d
 	github.com/stretchr/testify v1.8.1

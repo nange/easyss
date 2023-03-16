@@ -22,9 +22,10 @@ jobs:
         run: sudo apt update && sudo apt install -y libgtk-3-dev libayatana-appindicator3-dev
 
       - name: Set up Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v4
         with:
-          go-version: '1.20'
+          go-version: '^1.20'
+          check-latest: true
 
       - name: Cache go module
         uses: actions/cache@v3
@@ -57,9 +58,10 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v4
         with:
-          go-version: '1.20'
+          go-version: '^1.20'
+          check-latest: true
 
       - name: Cache go module
         uses: actions/cache@v3
@@ -92,9 +94,10 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v4
         with:
-          go-version: '1.20'
+          go-version: '^1.20'
+          check-latest: true
 
       - name: Cache go module
         uses: actions/cache@v3

@@ -38,7 +38,9 @@ type LocalConn struct {
 	once sync.Once
 	done chan struct{}
 	sync.Mutex
-	timeout *time.Timer
+	timeout         *time.Timer
+	settingDeadline chan struct{}
+	expired         chan struct{}
 
 	client   *http.Client
 	respBody io.ReadCloser
@@ -53,15 +55,21 @@ func NewLocalConn(client *http.Client, serverAddr string) (*LocalConn, error) {
 		return nil, err
 	}
 	return &LocalConn{
-		uuid:       id.String(),
-		serverAddr: serverAddr,
-		done:       make(chan struct{}),
-		client:     client,
+		uuid:            id.String(),
+		serverAddr:      serverAddr,
+		done:            make(chan struct{}),
+		settingDeadline: make(chan struct{}),
+		expired:         make(chan struct{}),
+		client:          client,
 	}, nil
 }
 
 func (l *LocalConn) Read(b []byte) (n int, err error) {
 	l.Lock()
+	if err := l.checkConn(); err != nil {
+		l.Unlock()
+		return 0, err
+	}
 	if l.respBody == nil {
 		if err = l.pull(); err != nil {
 			log.Warnf("[HTTP_TUNNEL_LOACAL] pull:%v", err)
@@ -90,6 +98,12 @@ func (l *LocalConn) Read(b []byte) (n int, err error) {
 }
 
 func (l *LocalConn) Write(b []byte) (n int, err error) {
+	l.Lock()
+	if err := l.checkConn(); err != nil {
+		l.Unlock()
+		return 0, err
+	}
+	l.Unlock()
 	if err := l.push(b); err != nil {
 		if !errors.Is(err, io.EOF) {
 			log.Warnf("[HTTP_TUNNEL_LOACAL] push:%v", err)
@@ -120,33 +134,49 @@ func (l *LocalConn) RemoteAddr() net.Addr {
 	return localConnAddr{}
 }
 
+// SetDeadline if the deadline time fired, then the LocalConn can't be used anymore
 func (l *LocalConn) SetDeadline(t time.Time) error {
 	l.Lock()
 	defer l.Unlock()
+	if err := l.checkConn(); err != nil {
+		return err
+	}
 	if l.timeout == nil {
 		l.timeout = time.NewTimer(time.Until(t))
 		go func() {
 			defer l.timeout.Stop()
 			for {
 				select {
+				case <-l.settingDeadline:
+					// wait for setting deadline to be done
+					<-l.settingDeadline
 				case <-l.timeout.C:
 					l.Lock()
 					if l.respBody != nil {
 						l.respBody.Close()
 					}
+					close(l.expired)
 					l.Unlock()
+					return
 				case <-l.done:
 					return
 				}
 			}
 		}()
 	} else {
+		// write to settingDeadline chan to prevent others goroutine receives from `l.timeout.C` chan
+		l.settingDeadline <- struct{}{}
 		if !l.timeout.Stop() {
-			<-l.timeout.C
+			select {
+			case <-l.timeout.C:
+			default:
+			}
 		}
 		if !t.IsZero() {
 			l.timeout.Reset(time.Until(t))
 		}
+		// notify others goroutine to continue
+		l.settingDeadline <- struct{}{}
 	}
 
 	return nil
@@ -205,4 +235,15 @@ func (l *LocalConn) push(data []byte) error {
 	}
 
 	return nil
+}
+
+func (l *LocalConn) checkConn() error {
+	select {
+	case <-l.done:
+		return errors.New("LocalConn was closed")
+	case <-l.expired:
+		return errors.New("LocalConn was expired")
+	default:
+		return nil
+	}
 }

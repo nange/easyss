@@ -218,7 +218,10 @@ func New(config *Config) (*Easyss, error) {
 	}
 	ss.proxyRule = proxyRule
 
-	ss.cmdBeforeStartup()
+	if err := ss.cmdBeforeStartup(); err != nil {
+		log.Errorf("[EASYSS] exectuing command before startup:%v", err)
+		return nil, err
+	}
 
 	db, err := geoip2.FromBytes(geoIPCNPrivate)
 	if err != nil {
@@ -319,10 +322,18 @@ func (ss *Easyss) initDirectDNSServer() error {
 
 func (ss *Easyss) initServerIPAndDNSCache() error {
 	if !util.IsIP(ss.Server()) {
-		msg, msgAAAA, err := ss.DNSMsg(ss.directDNSServer, ss.Server())
+		var msg, msgAAAA *dns.Msg
+		var err error
+		for i := 1; i <= 3; i++ {
+			msg, msgAAAA, err = ss.DNSMsg(ss.directDNSServer, ss.Server())
+			if err != nil {
+				log.Warnf("[EASYSS] query dns failed for %s from %s: %s, retry after %ds",
+					ss.Server(), ss.directDNSServer, err.Error(), i)
+				time.Sleep(time.Duration(i) * time.Second)
+				continue
+			}
+		}
 		if err != nil {
-			log.Errorf("[EASYSS] query dns failed for %s from %s err:%s",
-				ss.Server(), ss.directDNSServer, err.Error())
 			return err
 		}
 		if msg != nil {
