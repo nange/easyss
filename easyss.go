@@ -230,13 +230,13 @@ func New(config *Config) (*Easyss, error) {
 	ss.geoipDB = db
 	ss.geosite = NewGeoSite(geoSiteCN)
 
-	if err := ss.loadCustomIPDomains(); err != nil {
-		log.Errorf("[EASYSS] load custom ip/domains err:%s", err.Error())
-	}
-
 	if err := ss.initDirectDNSServer(); err != nil {
 		log.Errorf("[EASYSS] init direct dns server:%v", err)
 		return nil, err
+	}
+
+	if err := ss.loadCustomIPDomains(); err != nil {
+		log.Errorf("[EASYSS] load custom ip/domains err:%s", err.Error())
 	}
 
 	if err := ss.initServerIPAndDNSCache(); err != nil {
@@ -296,6 +296,23 @@ func (ss *Easyss) loadCustomIPDomains() error {
 	if len(directDomains) > 0 {
 		log.Infof("[EASYSS] load custom direct domains success, len:%d", len(directDomains))
 		ss.customDirectDomains = directDomains
+		// not only direct the domains but also the ips of domains
+		for domain := range directDomains {
+			msg, _, err := ss.DNSMsg(ss.directDNSServer, domain)
+			if err != nil {
+				log.Errorf("[EASYSS] query dns for custom direct domain %s: %v", domain, err)
+				continue
+			}
+			if msg == nil {
+				continue
+			}
+			for _, an := range msg.Answer {
+				// TODO: add ipv6 type after implement ipv6 feature
+				if a, ok := an.(*dns.A); ok {
+					ss.customDirectIPs[a.A.String()] = struct{}{}
+				}
+			}
+		}
 	}
 
 	return nil
