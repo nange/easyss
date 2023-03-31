@@ -3,11 +3,13 @@ package easyss
 import (
 	"crypto/tls"
 	"net"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/nange/easyss/v2/httptunnel"
+	"github.com/txthinking/socks5"
 )
 
 type EasyServer struct {
@@ -17,12 +19,23 @@ type EasyServer struct {
 	httpTunnelServer *httptunnel.Server
 	tlsConfig        *tls.Config
 
+	// it will only be init if 'next_proxy_url' in config is not empty
+	nextProxyS5Cli *socks5.Client
+
 	// only used for testing
 	disableValidateAddr bool
 }
 
 func NewServer(config *ServerConfig) *EasyServer {
-	return &EasyServer{config: config}
+	es := &EasyServer{config: config}
+
+	if u := es.NextProxyURL(); u != nil {
+		if u.Scheme == "socks5" {
+			es.nextProxyS5Cli, _ = socks5.NewClient(u.Host, "", "", 0, 0)
+		}
+	}
+
+	return es
 }
 
 func (es *EasyServer) Server() string {
@@ -73,6 +86,18 @@ func (es *EasyServer) EnabledHTTPInbound() bool {
 
 func (es *EasyServer) HTTPInboundPort() int {
 	return es.config.HTTPInboundPort
+}
+
+func (es *EasyServer) NextProxyURL() *url.URL {
+	if es.config.NextProxyURL == "" {
+		return nil
+	}
+	u, _ := url.Parse(es.config.NextProxyURL)
+	return u
+}
+
+func (es *EasyServer) NextProxyUDP() bool {
+	return es.config.NextProxyUDP
 }
 
 func (es *EasyServer) Close() (err error) {

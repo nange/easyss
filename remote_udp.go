@@ -13,12 +13,7 @@ import (
 )
 
 func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, tryReuse bool) error {
-	rAddr, err := net.ResolveUDPAddr("udp", addrStr)
-	if err != nil {
-		return fmt.Errorf("net.ResolveUDPAddr %s err:%v", addrStr, err)
-	}
-
-	uConn, err := net.DialUDP("udp", nil, rAddr)
+	uConn, err := es.targetConn("udp", addrStr)
 	if err != nil {
 		return fmt.Errorf("net.DialUDP %v err:%v", addrStr, err)
 	}

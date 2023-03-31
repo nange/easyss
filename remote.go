@@ -159,7 +159,7 @@ func (es *EasyServer) handleConn(conn net.Conn, tryReuse bool) {
 }
 
 func (es *EasyServer) remoteTCPHandle(conn net.Conn, addrStr, method string, tryReuse bool) error {
-	tConn, err := net.DialTimeout("tcp", addrStr, es.Timeout())
+	tConn, err := es.targetConn("tcp", addrStr)
 	if err != nil {
 		return fmt.Errorf("net.Dial %v err:%v", addrStr, err)
 	}
@@ -219,6 +219,31 @@ func (es *EasyServer) handShakeWithClient(conn net.Conn) (addr []byte, method st
 	method = DecodeCipherMethod(payload[length-1])
 
 	return payload[:length-1], method, protoType, nil
+}
+
+func (es *EasyServer) targetConn(network, addr string) (net.Conn, error) {
+	var tConn net.Conn
+	var err error
+
+	if u := es.NextProxyURL(); u != nil {
+		switch u.Scheme {
+		case "socks5":
+			if network == "udp" && !es.NextProxyUDP() {
+				break
+			}
+			tConn, err = es.nextProxyS5Cli.Dial(network, addr)
+		default:
+			err = fmt.Errorf("unsupported scheme:%s of next proxy url", u.Scheme)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if tConn == nil {
+		tConn, err = net.DialTimeout(network, addr, es.Timeout())
+	}
+
+	return tConn, err
 }
 
 func validateTargetAddr(addr string) error {
