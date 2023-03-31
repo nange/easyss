@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"reflect"
 )
@@ -37,12 +38,15 @@ type ServerConfig struct {
 	KeyPath           string `json:"key_path"`
 	EnableHTTPInbound bool   `json:"enable_http_inbound"`
 	HTTPInboundPort   int    `json:"http_inbound_port"`
-	CAPath            string `json:"ca_path,omitempty"`
-	Default           bool   `json:"default,omitempty"`
-	OutboundProto     string `json:"outbound_proto,omitempty"`
-	CMDBeforeStartup  string `json:"cmd_before_startup,omitempty"`
-	CMDInterval       string `json:"cmd_interval,omitempty"`
-	CMDIntervalTime   int    `json:"cmd_interval_time,omitempty"`
+	NextProxyURL      string `json:"next_proxy_url"`
+	NextProxyUDP      bool   `json:"next_proxy_udp"`
+	// the below fields only be used for easyss client
+	CAPath           string `json:"ca_path,omitempty"`
+	Default          bool   `json:"default,omitempty"`
+	OutboundProto    string `json:"outbound_proto,omitempty"`
+	CMDBeforeStartup string `json:"cmd_before_startup,omitempty"`
+	CMDInterval      string `json:"cmd_interval,omitempty"`
+	CMDIntervalTime  int    `json:"cmd_interval_time,omitempty"`
 }
 
 type Config struct {
@@ -268,6 +272,15 @@ func (c *ServerConfig) Validate() error {
 	}
 	if c.EnableHTTPInbound && c.HTTPInboundPort == 0 {
 		return errors.New("http inbound port should not empty")
+	}
+	if c.NextProxyURL != "" {
+		if u, err := url.Parse(c.NextProxyURL); err != nil {
+			return fmt.Errorf("forward url %s is invalid", c.NextProxyURL)
+		} else {
+			if u.Scheme != "socks5" { // only support 'socks5' for now
+				return fmt.Errorf("%s forward scheme is unsupported", u.Scheme)
+			}
+		}
 	}
 
 	return nil
