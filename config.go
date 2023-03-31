@@ -278,7 +278,7 @@ func (c *ServerConfig) Validate() error {
 			return fmt.Errorf("forward url %s is invalid", c.NextProxyURL)
 		} else {
 			if u.Scheme != "socks5" { // only support 'socks5' for now
-				return fmt.Errorf("%s forward scheme is unsupported", u.Scheme)
+				return fmt.Errorf("%s next proxy scheme is unsupported", u.Scheme)
 			}
 		}
 	}

@@ -231,9 +231,9 @@ func (es *EasyServer) targetConn(network, addr string) (net.Conn, error) {
 			if network == "udp" && !es.NextProxyUDP() {
 				break
 			}
-			tConn, err = es.forwardSocks5Cli.Dial(network, addr)
+			tConn, err = es.nextProxyS5Cli.Dial(network, addr)
 		default:
-			err = fmt.Errorf("unsupported scheme:%s of forward url", u.Scheme)
+			err = fmt.Errorf("unsupported scheme:%s of next proxy url", u.Scheme)
 		}
 	}
 	if err != nil {

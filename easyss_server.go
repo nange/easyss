@@ -20,7 +20,7 @@ type EasyServer struct {
 	tlsConfig        *tls.Config
 
 	// it will only be init if 'next_proxy_url' in config is not empty
-	forwardSocks5Cli *socks5.Client
+	nextProxyS5Cli *socks5.Client
 
 	// only used for testing
 	disableValidateAddr bool
@@ -31,7 +31,7 @@ func NewServer(config *ServerConfig) *EasyServer {
 
 	if u := es.NextProxyURL(); u != nil {
 		if u.Scheme == "socks5" {
-			es.forwardSocks5Cli, _ = socks5.NewClient(u.Host, "", "", 0, 0)
+			es.nextProxyS5Cli, _ = socks5.NewClient(u.Host, "", "", 0, 0)
 		}
 	}
 
