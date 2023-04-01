@@ -112,7 +112,8 @@ func (es *EasyssSuite) BeforeTest(suiteName, testName string) {
 		KeyPath:    es.keyPath,
 	}
 	serverConfig.SetDefaultValue()
-	server := NewServer(serverConfig)
+	server, err := NewServer(serverConfig)
+	es.Nil(err)
 	server.disableValidateAddr = true
 	es.server = server
 

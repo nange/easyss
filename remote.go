@@ -225,13 +225,41 @@ func (es *EasyServer) targetConn(network, addr string) (net.Conn, error) {
 	var tConn net.Conn
 	var err error
 
+	nextProxy := func(host string) bool {
+		if network == "udp" && !es.EnableNextProxyUDP() {
+			return false
+		}
+		if es.EnableNextProxyALLHost() {
+			return true
+		}
+		if util.IsIP(host) {
+			if _, ok := es.nextProxyIPs[host]; ok {
+				return true
+			}
+			for _, v := range es.nextProxyCIDRIPs {
+				if v.Contains(net.ParseIP(host)) {
+					return true
+				}
+			}
+		} else {
+			if _, ok := es.nextProxyDomains[host]; ok {
+				return true
+			}
+			domain := domainRoot(host)
+			if _, ok := es.nextProxyDomains[domain]; ok {
+				return true
+			}
+		}
+		return false
+	}
+
 	if u := es.NextProxyURL(); u != nil {
+		host, _, _ := net.SplitHostPort(addr)
 		switch u.Scheme {
 		case "socks5":
-			if network == "udp" && !es.NextProxyUDP() {
-				break
+			if nextProxy(host) {
+				tConn, err = es.nextProxyS5Cli.Dial(network, addr)
 			}
-			tConn, err = es.nextProxyS5Cli.Dial(network, addr)
 		default:
 			err = fmt.Errorf("unsupported scheme:%s of next proxy url", u.Scheme)
 		}
@@ -239,6 +267,10 @@ func (es *EasyServer) targetConn(network, addr string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	if tConn != nil {
+		log.Infof("[REMOTE] next proxy for %s, network:%s", addr, network)
+	}
+
 	if tConn == nil {
 		tConn, err = net.DialTimeout(network, addr, es.Timeout())
 	}

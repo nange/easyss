@@ -28,18 +28,21 @@ const (
 )
 
 type ServerConfig struct {
-	Server            string `json:"server"`
-	ServerPort        int    `json:"server_port"`
-	Password          string `json:"password"`
-	Timeout           int    `json:"timeout"`
-	DisableUTLS       bool   `json:"disable_utls"`
-	DisableTLS        bool   `json:"disable_tls"`
-	CertPath          string `json:"cert_path"`
-	KeyPath           string `json:"key_path"`
-	EnableHTTPInbound bool   `json:"enable_http_inbound"`
-	HTTPInboundPort   int    `json:"http_inbound_port"`
-	NextProxyURL      string `json:"next_proxy_url"`
-	NextProxyUDP      bool   `json:"next_proxy_udp"`
+	Server                 string `json:"server"`
+	ServerPort             int    `json:"server_port"`
+	Password               string `json:"password"`
+	Timeout                int    `json:"timeout"`
+	DisableUTLS            bool   `json:"disable_utls"`
+	DisableTLS             bool   `json:"disable_tls"`
+	CertPath               string `json:"cert_path"`
+	KeyPath                string `json:"key_path"`
+	EnableHTTPInbound      bool   `json:"enable_http_inbound"`
+	HTTPInboundPort        int    `json:"http_inbound_port"`
+	NextProxyURL           string `json:"next_proxy_url"`
+	NextProxyDomainsFile   string `json:"next_proxy_domains_file"`
+	NextProxyIPsFile       string `json:"next_proxy_ips_file"`
+	EnableNextProxyUDP     bool   `json:"enable_next_proxy_udp"`
+	EnableNextProxyALLHost bool   `json:"enable_next_proxy_all_host"`
 	// the below fields only be used for easyss client
 	CAPath           string `json:"ca_path,omitempty"`
 	Default          bool   `json:"default,omitempty"`
@@ -251,6 +254,12 @@ func (c *ServerConfig) SetDefaultValue() {
 	if c.HTTPInboundPort == 0 {
 		c.HTTPInboundPort = c.ServerPort + 1000
 	}
+	if c.NextProxyDomainsFile == "" {
+		c.NextProxyDomainsFile = "next_proxy_domains.txt"
+	}
+	if c.NextProxyIPsFile == "" {
+		c.NextProxyIPsFile = "next_proxy_ips.txt"
+	}
 }
 
 func (c *ServerConfig) Validate() error {
@@ -275,7 +284,7 @@ func (c *ServerConfig) Validate() error {
 	}
 	if c.NextProxyURL != "" {
 		if u, err := url.Parse(c.NextProxyURL); err != nil {
-			return fmt.Errorf("forward url %s is invalid", c.NextProxyURL)
+			return fmt.Errorf("next proxy url %s is invalid", c.NextProxyURL)
 		} else {
 			if u.Scheme != "socks5" { // only support 'socks5' for now
 				return fmt.Errorf("%s next proxy scheme is unsupported", u.Scheme)

@@ -274,6 +274,7 @@ func (ss *Easyss) loadCustomIPDomains() error {
 	if err != nil {
 		return err
 	}
+
 	if len(directIPs) > 0 {
 		log.Infof("[EASYSS] load custom direct ips success, len:%d", len(directIPs))
 		for k := range directIPs {
@@ -307,9 +308,10 @@ func (ss *Easyss) loadCustomIPDomains() error {
 				continue
 			}
 			for _, an := range msg.Answer {
-				// TODO: add ipv6 type after implement ipv6 feature
 				if a, ok := an.(*dns.A); ok {
 					ss.customDirectIPs[a.A.String()] = struct{}{}
+				} else if aa, ok := an.(*dns.AAAA); ok {
+					ss.customDirectIPs[aa.AAAA.String()] = struct{}{}
 				}
 			}
 		}
