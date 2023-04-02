@@ -12,6 +12,7 @@ import (
 	httptunnel "github.com/nange/easyss/v2/httptunnel"
 	"github.com/nange/easyss/v2/util"
 	log "github.com/sirupsen/logrus"
+	"github.com/txthinking/socks5"
 )
 
 func (es *EasyServer) Start() {
@@ -163,6 +164,7 @@ func (es *EasyServer) remoteTCPHandle(conn net.Conn, addrStr, method string, try
 	if err != nil {
 		return fmt.Errorf("net.Dial %v err:%v", addrStr, err)
 	}
+	defer tConn.Close()
 
 	csStream, err := cipherstream.New(conn, es.Password(), method, util.FrameTypeData, util.FlagTCP)
 	if err != nil {
@@ -173,8 +175,6 @@ func (es *EasyServer) remoteTCPHandle(conn net.Conn, addrStr, method string, try
 	csStream.(*cipherstream.CipherStream).Release()
 
 	log.Debugf("[REMOTE] send %v bytes to %v, and recive %v bytes", n2, addrStr, n1)
-
-	_ = tConn.Close()
 
 	return nil
 }
@@ -257,8 +257,9 @@ func (es *EasyServer) targetConn(network, addr string) (net.Conn, error) {
 		host, _, _ := net.SplitHostPort(addr)
 		switch u.Scheme {
 		case "socks5":
+			cli, _ := socks5.NewClient(u.Host, "", "", 0, 0)
 			if nextProxy(host) {
-				tConn, err = es.nextProxyS5Cli.Dial(network, addr)
+				tConn, err = cli.Dial(network, addr)
 			}
 		default:
 			err = fmt.Errorf("unsupported scheme:%s of next proxy url", u.Scheme)

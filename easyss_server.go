@@ -11,7 +11,6 @@ import (
 	"github.com/nange/easyss/v2/httptunnel"
 	"github.com/nange/easyss/v2/util"
 	log "github.com/sirupsen/logrus"
-	"github.com/txthinking/socks5"
 )
 
 type EasyServer struct {
@@ -21,8 +20,6 @@ type EasyServer struct {
 	httpTunnelServer *httptunnel.Server
 	tlsConfig        *tls.Config
 
-	// it will only be init if 'next_proxy_url' in config is not empty
-	nextProxyS5Cli   *socks5.Client
 	nextProxyIPs     map[string]struct{}
 	nextProxyCIDRIPs []*net.IPNet
 	nextProxyDomains map[string]struct{}
@@ -37,9 +34,6 @@ func NewServer(config *ServerConfig) (*EasyServer, error) {
 	if u := es.NextProxyURL(); u != nil {
 		log.Infof("[EASYSS_SERVER] next proxy is enabled. next_proxy_url: %v, enable_next_proxy_udp: %v, enable_next_proxy_all_host:%v",
 			u.String(), es.EnableNextProxyUDP(), es.EnableNextProxyALLHost())
-		if u.Scheme == "socks5" {
-			es.nextProxyS5Cli, _ = socks5.NewClient(u.Host, "", "", 0, 0)
-		}
 		if err := es.loadNextProxyIPDomains(); err != nil {
 			return nil, err
 		}
