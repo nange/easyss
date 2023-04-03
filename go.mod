@@ -18,12 +18,10 @@ require (
 	github.com/stretchr/testify v1.8.1
 	github.com/txthinking/socks5 v0.0.0-20230325130024-4230056ae301
 	github.com/wzshiming/sysproxy v0.2.2
-	github.com/xjasonlyu/tun2socks/v2 v2.4.2-0.20221217085757-39b1406ffaa8
-	golang.org/x/crypto v0.6.0
-	golang.org/x/net v0.7.0
+	github.com/xjasonlyu/tun2socks/v2 v2.4.2-0.20230403111524-2d0bd1d21999
+	golang.org/x/crypto v0.7.0
+	golang.org/x/net v0.8.0
 )
-
-replace github.com/xjasonlyu/tun2socks/v2 => github.com/nange/tun2socks/v2 v2.0.0-20230221083528-bcf91885779c
 
 require (
 	github.com/Dreamacro/go-shadowsocks2 v0.1.8 // indirect
@@ -57,14 +55,14 @@ require (
 	go.uber.org/atomic v1.10.0 // indirect
 	go.uber.org/multierr v1.6.0 // indirect
 	go.uber.org/zap v1.23.0 // indirect
-	golang.org/x/mod v0.7.0 // indirect
-	golang.org/x/sys v0.5.0 // indirect
-	golang.org/x/text v0.7.0 // indirect
+	golang.org/x/mod v0.8.0 // indirect
+	golang.org/x/sys v0.6.0 // indirect
+	golang.org/x/text v0.8.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
-	golang.org/x/tools v0.5.0 // indirect
+	golang.org/x/tools v0.6.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
-	golang.zx2c4.com/wireguard v0.0.0-20230216153314-c7b76d3d9ecd // indirect
+	golang.zx2c4.com/wireguard v0.0.0-20230325221338-052af4a8072b // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	gvisor.dev/gvisor v0.0.0-20230219185229-4f1045309c43 // indirect
+	gvisor.dev/gvisor v0.0.0-20230401011607-0333bf067633 // indirect
 )
