@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/nange/easyss/v2"
+	"github.com/nange/easyss/v2/pprof"
 	"github.com/nange/easyss/v2/util"
 	"github.com/nange/easyss/v2/version"
 	log "github.com/sirupsen/logrus"
@@ -26,7 +27,7 @@ func init() {
 
 func main() {
 	var configFile, logLevel string
-	var printVer, showConfigExample bool
+	var printVer, showConfigExample, enablePprof bool
 	var cmdConfig easyss.ServerConfig
 
 	flag.BoolVar(&printVer, "version", false, "print version")
@@ -36,6 +37,7 @@ func main() {
 	flag.StringVar(&cmdConfig.Server, "s", "", "server address")
 	flag.IntVar(&cmdConfig.ServerPort, "p", 0, "server port")
 	flag.StringVar(&logLevel, "log-level", "info", "set the log-level(debug, info, warn, error), default: info")
+	flag.BoolVar(&enablePprof, "enable-pprof", false, "enable pprof server. default bind to :6060")
 
 	flag.Parse()
 
@@ -84,6 +86,10 @@ func main() {
 
 	if err := config.Validate(); err != nil {
 		log.Fatalf("[EASYSS_SERVER_MAIN] starts failed, config is invalid:%s", err.Error())
+	}
+
+	if enablePprof {
+		go pprof.StartPprof()
 	}
 
 	ss, err := easyss.NewServer(config)
