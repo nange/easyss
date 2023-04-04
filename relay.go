@@ -40,12 +40,13 @@ func relay(cipher, plaintxt net.Conn, timeout time.Duration, tryReuse bool) (n1 
 		if ce := CloseWrite(plaintxt); ce != nil {
 			log.Warnf("[REPAY] close write for plaintxt stream: %v", ce)
 		}
+		_ = plaintxt.SetReadDeadline(time.Now().Add(2 * timeout))
 
 		_tryReuse := tryReuse
 		if _tryReuse && err != nil {
 			log.Debugf("[REPAY] copy from cipher to plaintxt: %v", err)
 			if !cipherstream.FINRSTStreamErr(err) {
-				if err := SetCipherDeadline(cipher, time.Now().Add(timeout)); err != nil {
+				if err := cipher.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 					_tryReuse = false
 				} else {
 					if err := readAllIgnore(cipher); !cipherstream.FINRSTStreamErr(err) {
@@ -54,6 +55,7 @@ func relay(cipher, plaintxt net.Conn, timeout time.Duration, tryReuse bool) (n1 
 				}
 			}
 		}
+
 		ch2 <- res{N: n, Err: err, TryReuse: _tryReuse}
 	}()
 
@@ -68,6 +70,8 @@ func relay(cipher, plaintxt net.Conn, timeout time.Duration, tryReuse bool) (n1 
 			_tryReuse = false
 			log.Warnf("[REPAY] close write for cipher stream: %v", err)
 		}
+		_ = cipher.SetReadDeadline(time.Now().Add(2 * timeout))
+
 		ch1 <- res{N: n, Err: err, TryReuse: _tryReuse}
 	}()
 
@@ -98,7 +102,7 @@ func relay(cipher, plaintxt net.Conn, timeout time.Duration, tryReuse bool) (n1 
 }
 
 func tryReuseFn(cipher net.Conn, timeout time.Duration) bool {
-	if err := SetCipherDeadline(cipher, time.Now().Add(timeout)); err != nil {
+	if err := cipher.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 		return false
 	}
 	if err := WriteACKToCipher(cipher); err != nil {
@@ -107,7 +111,7 @@ func tryReuseFn(cipher net.Conn, timeout time.Duration) bool {
 	if !ReadACKFromCipher(cipher) {
 		return false
 	}
-	if err := SetCipherDeadline(cipher, time.Time{}); err != nil {
+	if err := cipher.SetReadDeadline(time.Time{}); err != nil {
 		return false
 	}
 	return true
@@ -188,11 +192,4 @@ func MarkCipherStreamUnusable(cipher net.Conn) bool {
 		}
 	}
 	return false
-}
-
-func SetCipherDeadline(cipher net.Conn, t time.Time) error {
-	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
-		return cs.Conn.SetDeadline(t)
-	}
-	return nil
 }

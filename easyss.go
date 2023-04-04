@@ -738,7 +738,7 @@ func (ss *Easyss) AvailableConn() (conn net.Conn, err error) {
 		if timeout < time.Second {
 			timeout = time.Second
 		}
-		if er = SetCipherDeadline(cs, time.Now().Add(timeout)); er != nil {
+		if er = cs.SetReadDeadline(time.Now().Add(timeout)); er != nil {
 			return
 		}
 		var payload []byte
@@ -758,7 +758,7 @@ func (ss *Easyss) AvailableConn() (conn net.Conn, err error) {
 			log.Infof("[EASYSS] got latency:%v of ping %s", since, ss.Server())
 		}
 
-		if er = SetCipherDeadline(cs, time.Time{}); er != nil {
+		if er = cs.SetReadDeadline(time.Time{}); er != nil {
 			return
 		}
 		return

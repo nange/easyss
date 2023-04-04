@@ -167,7 +167,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			tryReuse = <-monitorCh
 		case tryReuse = <-monitorCh:
 		}
-		if err := SetCipherDeadline(ue.RemoteConn, time.Time{}); err != nil {
+		if err := ue.RemoteConn.SetReadDeadline(time.Time{}); err != nil {
 			tryReuse = false
 		}
 
@@ -218,9 +218,9 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			if !hasAssoc {
 				var err error
 				if isDNSReq {
-					err = SetCipherDeadline(ue.RemoteConn, time.Now().Add(DefaultDNSTimeout))
+					err = ue.RemoteConn.SetReadDeadline(time.Now().Add(DefaultDNSTimeout))
 				} else {
-					err = SetCipherDeadline(ue.RemoteConn, time.Now().Add(ss.Timeout()))
+					err = ue.RemoteConn.SetReadDeadline(time.Now().Add(ss.Timeout()))
 				}
 				if err != nil {
 					log.Errorf("[UDP_PROXY] set the deadline for remote conn err:%v", err)
@@ -330,7 +330,7 @@ func isDNSResponse(msg *dns.Msg) bool {
 }
 
 func tryReuseInUDPClient(cipher net.Conn, timeout time.Duration) bool {
-	if err := SetCipherDeadline(cipher, time.Now().Add(timeout)); err != nil {
+	if err := cipher.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 		return false
 	}
 	if err := CloseWrite(cipher); err != nil {
@@ -345,7 +345,7 @@ func tryReuseInUDPClient(cipher net.Conn, timeout time.Duration) bool {
 	if err := WriteACKToCipher(cipher); err != nil {
 		return false
 	}
-	if err := SetCipherDeadline(cipher, time.Time{}); err != nil {
+	if err := cipher.SetReadDeadline(time.Time{}); err != nil {
 		return false
 	}
 

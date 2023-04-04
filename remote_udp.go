@@ -94,7 +94,7 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, try
 }
 
 func tryReuseInUDPServer(cipher net.Conn, timeout time.Duration) bool {
-	if err := SetCipherDeadline(cipher, time.Now().Add(timeout)); err != nil {
+	if err := cipher.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 		return false
 	}
 	if err := WriteACKToCipher(cipher); err != nil {
@@ -106,7 +106,7 @@ func tryReuseInUDPServer(cipher net.Conn, timeout time.Duration) bool {
 	if !ReadACKFromCipher(cipher) {
 		return false
 	}
-	if err := SetCipherDeadline(cipher, time.Time{}); err != nil {
+	if err := cipher.SetReadDeadline(time.Time{}); err != nil {
 		return false
 	}
 
