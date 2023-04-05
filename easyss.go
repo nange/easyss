@@ -631,6 +631,14 @@ func (ss *Easyss) Timeout() time.Duration {
 	return time.Duration(ss.config.Timeout) * time.Second
 }
 
+func (ss *Easyss) AuthUsername() string {
+	return ss.config.AuthUsername
+}
+
+func (ss *Easyss) AuthPassword() string {
+	return ss.config.AuthPassword
+}
+
 func (ss *Easyss) LocalAddr() string {
 	return fmt.Sprintf("%s:%d", "127.0.0.1", ss.LocalPort())
 }

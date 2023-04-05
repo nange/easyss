@@ -257,7 +257,12 @@ func (es *EasyServer) targetConn(network, addr string) (net.Conn, error) {
 		host, _, _ := net.SplitHostPort(addr)
 		switch u.Scheme {
 		case "socks5":
-			cli, _ := socks5.NewClient(u.Host, "", "", 0, 0)
+			var username, password string
+			if u.User != nil {
+				username = u.User.Username()
+				password, _ = u.User.Password()
+			}
+			cli, _ := socks5.NewClient(u.Host, username, password, 0, 0)
 			if nextProxy(host) {
 				tConn, err = cli.Dial(network, addr)
 			}

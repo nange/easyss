@@ -22,7 +22,7 @@ func (ss *Easyss) LocalSocks5() {
 	}
 	log.Infof("[SOCKS5] starting local socks5 server at %v", addr)
 
-	server, err := socks5.NewClassicServer(addr, "127.0.0.1", "", "", 0, 0)
+	server, err := socks5.NewClassicServer(addr, "127.0.0.1", ss.AuthUsername(), ss.AuthPassword(), 0, 0)
 	if err != nil {
 		log.Errorf("[SOCKS5] new socks5 server err: %+v", err)
 		return

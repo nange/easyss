@@ -5,7 +5,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strconv"
-	"time"
 
 	"github.com/nange/easyss/v2/util/bytespool"
 	log "github.com/sirupsen/logrus"
@@ -67,8 +66,7 @@ func newHTTPProxy(ss *Easyss) *httpProxy {
 				Proxy: func(*http.Request) (*url.URL, error) {
 					return url.Parse(ss.Socks5ProxyAddr())
 				},
-				TLSHandshakeTimeout: 5 * time.Second,
-				ForceAttemptHTTP2:   true,
+				TLSHandshakeTimeout: ss.Timeout() / 3,
 			},
 			BufferPool: &bufferPool{},
 			ErrorHandler: func(rw http.ResponseWriter, r *http.Request, err error) {

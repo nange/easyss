@@ -62,6 +62,8 @@ type Config struct {
 	Method            string         `json:"method"` // encryption method
 	LogLevel          string         `json:"log_level"`
 	Timeout           int            `json:"timeout"`
+	AuthUsername      string         `json:"auth_username"`
+	AuthPassword      string         `json:"auth_password"`
 	BindALL           bool           `json:"bind_all"`
 	DisableUTLS       bool           `json:"disable_utls"`
 	DisableSysProxy   bool           `json:"disable_sys_proxy"`
