@@ -262,8 +262,8 @@ func (es *EasyServer) targetConn(network, addr string) (net.Conn, error) {
 				username = u.User.Username()
 				password, _ = u.User.Password()
 			}
-			cli, _ := socks5.NewClient(u.Host, username, password, 0, 0)
 			if nextProxy(host) {
+				cli, _ := socks5.NewClient(u.Host, username, password, 0, 0)
 				tConn, err = cli.Dial(network, addr)
 			}
 		default:
