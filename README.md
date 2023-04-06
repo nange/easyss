@@ -9,14 +9,15 @@ Easyss是一款兼容socks5的安全代理上网工具，目标是使访问国�
 
 * 简单稳定易用, 没有复杂的配置项
 * 全平台支持(Linux, MacOS, Windows, Android等)
-* 支持SOCKS5(TCP/UDP)、HTTP 代理协议
+* 支持SOCKS5(TCP/UDP, thanks [socks5](https://github.com/txthinking/socks5))、HTTP 代理协议
 * 支持浏览器级别代理(设置系统代理), 和系统全局代理(基于Tun2socks,thanks [tun2socks](https://github.com/xjasonlyu/tun2socks)); 支持可选代理规则
 * 支持TCP连接池 (默认启用，大幅降低请求延迟)
 * 支持系统托盘图标管理 (thanks [systray](https://github.com/getlantern/systray))
 * 支持可配置多服务器切换, 支持自定义直连白名单(IP/域名)
-* 基于TLS(可禁用), 支持(AEAD类型)高强度加密通信, 如aes-256-gcm, chacha20-poly1305
+* 基于TLS(可禁用), AEAD类型高强度加密通信, 如aes-256-gcm, chacha20-poly1305
 * http2帧格式交互 (更灵活通用, 更易扩展)
 * 支持http(s)出口协议(通过tcp over http(s)技术), 用于easyss-server位于http反向代理之后等特殊场景
+* 支持服务端(easyss-server)链式代理
 * 内建DNS服务器，支持DNS Forward转发，可用于透明代理部署时使用 (默认关闭，可通过命令行启用)
 * 无流量特征，不易被嗅探
 
