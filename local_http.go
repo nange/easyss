@@ -1,10 +1,12 @@
 package easyss
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/nange/easyss/v2/util/bytespool"
 	log "github.com/sirupsen/logrus"
@@ -78,6 +80,19 @@ func newHTTPProxy(ss *Easyss) *httpProxy {
 }
 
 func (h *httpProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.ss.AuthUsername() != "" && h.ss.AuthPassword() != "" {
+		username, password, ok := basicAuth(r)
+		if !ok {
+			log.Warnf("[HTTP_PROXY] username and password not provided")
+			http.Error(w, "Proxy auth required", http.StatusProxyAuthRequired)
+			return
+		}
+		if username != h.ss.AuthUsername() || password != h.ss.AuthPassword() {
+			log.Warnf("[HTTP_PROXY] username or password is invalid")
+			http.Error(w, "Request unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
 	if r.Method == "CONNECT" {
 		h.doWithHijack(w, r)
 		return
@@ -110,4 +125,34 @@ func (h *httpProxy) doWithHijack(w http.ResponseWriter, r *http.Request) {
 	if err := h.ss.localRelay(hijConn, r.URL.Host); err != nil {
 		log.Warnf("[HTTP_PROXY] local relay err:%s", err.Error())
 	}
+}
+
+func basicAuth(r *http.Request) (username, password string, ok bool) {
+	username, password, ok = r.BasicAuth()
+	if ok {
+		return
+	}
+	auth := r.Header.Get("Proxy-Authorization")
+	if auth == "" {
+		return
+	}
+	return parseBasicAuth(auth)
+}
+
+func parseBasicAuth(auth string) (username, password string, ok bool) {
+	const prefix = "Basic "
+
+	if len(auth) < len(prefix) || !strings.EqualFold(auth[:len(prefix)], prefix) {
+		return "", "", false
+	}
+	c, err := base64.StdEncoding.DecodeString(auth[len(prefix):])
+	if err != nil {
+		return "", "", false
+	}
+	cs := string(c)
+	username, password, ok = strings.Cut(cs, ":")
+	if !ok {
+		return "", "", false
+	}
+	return username, password, true
 }
