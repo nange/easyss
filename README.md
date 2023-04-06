@@ -199,6 +199,18 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 只需要在配置文件或者命令行指定`enable_tun2socks: true` 或者 `-enable-tun2socks=true`开启全局代理，
 并同时开启DNS流量转发`enable_forward_dns: true` 或者`-enable-forward-dns=true`，即可实现透明代理。
 
+### 服务端链式代理
+服务端(`easyss-server`)支持将请求再次转发给下一个代理(目前只支持`socks5`)。
+如服务器IP被ChatGPT屏蔽了，可以在服务器上部署上`Warp`，然后`easyss-server`将ChatGPT相关的请求转发给`Warp`，这样可突破ChatGPT的封锁。
+
+只需要在配置文件中指定`next_proxy_url: "socks5://your-ip:your-port"`，
+然后在`easyss-server`目录下创建`next_proxy_domains.txt`, `next_proxy_ips.txt`文件，用于指定对哪些域名或IP地址走链式代理。
+也可以在配置文件中手动指定自定义文件路径：`next_proxy_domains_file: "your_custom_domain_file.txt`, `next_proxy_ips_file: "your_custom_ip_file.txt"`。
+如果想链式代理所有地址的请求，则可以配置：`enable_next_proxy_all_host: true`。
+
+另外需要注意的是，链式代理默认是不转发`UDP`请求的，主要原因是很多`socks5`代理都不支持`UDP`请求，如`Warp`就不支持。
+如果确定自己的代理是支持`UDP`请求的，又想开启`UDP`请求链式代理，则可以配置: `enable_next_proxy_udp: true`。
+
 ## LICENSE
 
 MIT License
