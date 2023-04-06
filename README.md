@@ -205,7 +205,7 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 
 只需要在配置文件中指定`next_proxy_url: "socks5://your-ip:your-port"`，
 然后在`easyss-server`目录下创建`next_proxy_domains.txt`, `next_proxy_ips.txt`文件，用于指定对哪些域名或IP地址走链式代理。
-也可以在配置文件中手动指定自定义文件路径：`next_proxy_domains_file: "your_custom_domain_file.txt`, `next_proxy_ips_file: "your_custom_ip_file.txt"`。
+也可以在配置文件中手动指定自定义文件路径：`next_proxy_domains_file: "your_custom_domain_file.txt"`, `next_proxy_ips_file: "your_custom_ip_file.txt"`。
 如果想链式代理所有地址的请求，则可以配置：`enable_next_proxy_all_host: true`。
 
 另外需要注意的是，链式代理默认是不转发`UDP`请求的，主要原因是很多`socks5`代理都不支持`UDP`请求，如`Warp`就不支持。
