@@ -122,6 +122,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		log.Errorf("[TCP_PROXY] new cipherstream err:%v, method:%v", err, ss.Method())
 		return
 	}
+	csStream.(*cipherstream.CipherStream).PingHook = ss.PingHook
 
 	tryReuse := true
 	if !ss.IsNativeOutboundProto() {

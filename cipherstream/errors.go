@@ -15,6 +15,7 @@ var (
 	ErrACKRSTStream = errors.New("receive ACK_RST_STREAM frame")
 	ErrTimeout      = errors.New("net: io timeout error")
 	ErrPayloadSize  = errors.New("payload size is invalid")
+	ErrPingHook     = errors.New("ping hook error")
 )
 
 // EncryptErr return true if err is ErrEncrypt

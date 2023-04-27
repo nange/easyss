@@ -1,6 +1,7 @@
 package httptunnel
 
 import (
+	"errors"
 	"net"
 	"time"
 )
@@ -9,19 +10,19 @@ var _ net.Conn = (*ServerConn)(nil)
 
 type ServerConn struct {
 	reqID     string
-	closeConn func(reqID string)
+	closeHook func(reqID string)
 
 	local  net.Conn
 	remote net.Conn
 }
 
-func NewServerConn(reqID string, closeConn func(reqID string)) *ServerConn {
-	read, write := net.Pipe()
+func NewServerConn(reqID string, closeHook func(reqID string)) *ServerConn {
+	local, remote := Pipe()
 	return &ServerConn{
 		reqID:     reqID,
-		closeConn: closeConn,
-		local:     read,
-		remote:    write,
+		closeHook: closeHook,
+		local:     local,
+		remote:    remote,
 	}
 }
 
@@ -42,12 +43,12 @@ func (c *ServerConn) Write(b []byte) (n int, err error) {
 }
 
 func (c *ServerConn) Close() error {
-	if c.closeConn != nil {
-		c.closeConn(c.reqID)
+	if c.closeHook != nil {
+		c.closeHook(c.reqID)
 	}
-	c.closeConn = nil
+	c.closeHook = nil
 
-	return c.remote.Close()
+	return errors.Join(c.local.Close(), c.remote.Close())
 }
 
 func (c *ServerConn) LocalAddr() net.Addr {
