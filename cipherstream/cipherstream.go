@@ -32,6 +32,7 @@ type CipherStream struct {
 	writer
 	frameType util.FrameType
 	flag      uint8
+	PingHook  func(cs net.Conn, b []byte) error
 }
 
 type reader struct {
@@ -285,7 +286,11 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 			return 0, ErrACKRSTStream
 		}
 		if util.IsPingFrame(header) {
-			log.Debugf("[CIPHERSTREAM] receive Ping frame, ignore it and continue to read next frame")
+			log.Debugf("[CIPHERSTREAM] receive Ping frame, exec PingHook and continue to read next frame")
+			if err := cs.PingHook(cs, payloadPlain); err != nil {
+				log.Errorf("[CIPHERSTREAM] ping hook: %v", err)
+				return 0, ErrPingHook
+			}
 			continue
 		}
 		break

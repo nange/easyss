@@ -143,6 +143,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		log.Errorf("[UDP_PROXY] new cipherstream err:%v, method:%v", err, ss.Method())
 		return err
 	}
+	csStream.(*cipherstream.CipherStream).PingHook = ss.PingHook
 
 	ue = &UDPExchange{
 		ClientAddr: addr,

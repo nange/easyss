@@ -631,6 +631,14 @@ func (ss *Easyss) Timeout() time.Duration {
 	return time.Duration(ss.config.Timeout) * time.Second
 }
 
+func (ss *Easyss) PingTimeout() time.Duration {
+	timeout := ss.Timeout() / 3
+	if timeout < time.Second {
+		timeout = time.Second
+	}
+	return timeout
+}
+
 func (ss *Easyss) AuthUsername() string {
 	return ss.config.AuthUsername
 }
@@ -742,33 +750,7 @@ func (ss *Easyss) AvailableConn() (conn net.Conn, err error) {
 			return
 		}
 
-		timeout := ss.Timeout() / 3
-		if timeout < time.Second {
-			timeout = time.Second
-		}
-		if er = cs.SetReadDeadline(time.Now().Add(timeout)); er != nil {
-			return
-		}
-		var payload []byte
-		if payload, er = cs.ReadPing(); er != nil {
-			return
-		} else if !bytes.Equal(ping, payload) {
-			er = errors.New("the payload of ping not equals send value")
-			return
-		}
-
-		since := time.Since(start)
-		ss.pingLatency <- since
-		log.Debugf("[EASYSS] ping %s latency:%v", ss.Server(), since)
-		if since > time.Second {
-			log.Warnf("[EASYSS] got high latency:%v of ping %s", since, ss.Server())
-		} else if since > 500*time.Millisecond {
-			log.Infof("[EASYSS] got latency:%v of ping %s", since, ss.Server())
-		}
-
-		if er = cs.SetReadDeadline(time.Time{}); er != nil {
-			return
-		}
+		er = conn.SetReadDeadline(time.Now().Add(ss.PingTimeout()))
 		return
 	}
 
@@ -795,6 +777,28 @@ func (ss *Easyss) AvailableConn() (conn net.Conn, err error) {
 	}
 
 	return
+}
+
+func (ss *Easyss) PingHook(conn net.Conn, b []byte) error {
+	if len(b) == 0 {
+		return nil
+	}
+
+	ts, err := strconv.ParseInt(string(b), 10, 64)
+	if err != nil {
+		return err
+	}
+	since := time.Since(time.Unix(0, ts))
+	ss.pingLatency <- since
+
+	log.Debugf("[EASYSS] ping %s latency:%v", ss.Server(), since)
+	if since > time.Second {
+		log.Warnf("[EASYSS] got high latency:%v of ping %s", since, ss.Server())
+	} else if since > 500*time.Millisecond {
+		log.Infof("[EASYSS] got latency:%v of ping %s", since, ss.Server())
+	}
+
+	return conn.SetReadDeadline(time.Time{})
 }
 
 func (ss *Easyss) SetSocksServer(server *socks5.Server) {
