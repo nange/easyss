@@ -154,10 +154,10 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 			n += int64(nr)
 
 			frame := NewFrame(FrameTypePing, payloadBuf[:nr], cs.flag, cs.AEADCipher)
-			frameBytes, err := frame.EncodeWithCipher(buf)
-			if err != nil {
-				log.Errorf("[CIPHERSTREAM] encode frame with cipher:%v", err)
-				return 0, err
+			frameBytes, er := frame.EncodeWithCipher(buf)
+			if er != nil {
+				log.Errorf("[CIPHERSTREAM] encode frame with cipher:%v", er)
+				return 0, er
 			}
 
 			if _, ew := cs.Conn.Write(frameBytes); ew != nil {
