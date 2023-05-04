@@ -9,7 +9,6 @@ import (
 
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/v2/cipherstream"
-	"github.com/nange/easyss/v2/util"
 	"github.com/nange/easyss/v2/util/bytespool"
 	log "github.com/sirupsen/logrus"
 )
@@ -163,7 +162,7 @@ func readAllIgnore(conn net.Conn) error {
 
 func WriteACKToCipher(conn net.Conn) error {
 	if csConn, ok := conn.(*cipherstream.CipherStream); ok {
-		return csConn.WriteRST(util.FlagACK)
+		return csConn.WriteRST(cipherstream.FlagACK)
 	}
 	return nil
 }

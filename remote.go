@@ -166,7 +166,7 @@ func (es *EasyServer) remoteTCPHandle(conn net.Conn, addrStr, method string, try
 	}
 	defer tConn.Close()
 
-	csStream, err := cipherstream.New(conn, es.Password(), method, util.FrameTypeData, util.FlagTCP)
+	csStream, err := cipherstream.New(conn, es.Password(), method, cipherstream.FrameTypeData, cipherstream.FlagTCP)
 	if err != nil {
 		return fmt.Errorf("new cipherstream err:%v, method:%v", err, method)
 	}
@@ -180,7 +180,7 @@ func (es *EasyServer) remoteTCPHandle(conn net.Conn, addrStr, method string, try
 }
 
 func (es *EasyServer) handShakeWithClient(conn net.Conn) (addr []byte, method string, protoType string, err error) {
-	csStream, err := cipherstream.New(conn, es.Password(), cipherstream.MethodAes256GCM, util.FrameTypeUnknown)
+	csStream, err := cipherstream.New(conn, es.Password(), cipherstream.MethodAes256GCM, cipherstream.FrameTypeUnknown)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -194,10 +194,10 @@ func (es *EasyServer) handShakeWithClient(conn net.Conn) (addr []byte, method st
 			return nil, "", "", err
 		}
 
-		if util.IsPingFrame(header) {
+		if cipherstream.IsPingFrame(header) {
 			log.Debugf("[REMOTE] got ping message, payload:%s", string(payload))
-			if util.IsNeedACK(header) {
-				if er := cs.WritePing(payload, util.FlagACK); er != nil {
+			if cipherstream.IsNeedACK(header) {
+				if er := cs.WritePing(payload, cipherstream.FlagACK); er != nil {
 					return nil, "", "", er
 				}
 			}
@@ -205,9 +205,9 @@ func (es *EasyServer) handShakeWithClient(conn net.Conn) (addr []byte, method st
 		}
 		break
 	}
-	if util.IsTCPProto(header) {
+	if cipherstream.IsTCPProto(header) {
 		protoType = "tcp"
-	} else if util.IsUDPProto(header) {
+	} else if cipherstream.IsUDPProto(header) {
 		protoType = "udp"
 	}
 

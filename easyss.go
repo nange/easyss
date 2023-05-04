@@ -730,7 +730,7 @@ func (ss *Easyss) AvailableConn() (conn net.Conn, err error) {
 
 	pingTest := func(conn net.Conn) (er error) {
 		var csStream net.Conn
-		csStream, er = cipherstream.New(conn, ss.Password(), cipherstream.MethodAes256GCM, util.FrameTypePing)
+		csStream, er = cipherstream.New(conn, ss.Password(), cipherstream.MethodAes256GCM, cipherstream.FrameTypePing)
 		if er != nil {
 			return er
 		}
@@ -746,7 +746,7 @@ func (ss *Easyss) AvailableConn() (conn net.Conn, err error) {
 
 		start := time.Now()
 		ping := []byte(strconv.FormatInt(start.UnixNano(), 10))
-		if er = cs.WritePing(ping, util.FlagNeedACK); er != nil {
+		if er = cs.WritePing(ping, cipherstream.FlagNeedACK); er != nil {
 			return
 		}
 

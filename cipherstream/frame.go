@@ -1,9 +1,11 @@
-package util
+package cipherstream
 
 import (
+	"crypto/rand"
 	"encoding/binary"
-	"math/rand"
+	mr "math/rand"
 
+	"github.com/nange/easyss/v2/util"
 	"github.com/nange/easyss/v2/util/bytespool"
 )
 
@@ -60,7 +62,7 @@ const (
 	FlagACK
 )
 
-func EncodeHTTP2Header(frameType FrameType, flag uint8, rawDataLen int, dst []byte) (header []byte, padSize byte) {
+func encodeHTTP2Header(frameType FrameType, flag uint8, rawDataLen int, dst []byte) (header []byte, padSize byte) {
 	if cap(dst) < Http2HeaderLen {
 		dst = make([]byte, Http2HeaderLen)
 	} else {
@@ -73,7 +75,7 @@ func EncodeHTTP2Header(frameType FrameType, flag uint8, rawDataLen int, dst []by
 	dataLen := uint32(rawDataLen)
 	needPad := rawDataLen <= PaddingSize
 	if needPad {
-		ps := RandomBetween(MinPaddingSize, MaxPaddingSize)
+		ps := util.RandomBetween(MinPaddingSize, MaxPaddingSize)
 		// padding len + raw data len + padding data len
 		dataLen += 1 + uint32(ps)
 		padSize = byte(ps)
@@ -90,8 +92,7 @@ func EncodeHTTP2Header(frameType FrameType, flag uint8, rawDataLen int, dst []by
 		dst[4] |= FlagPad
 	}
 
-	// set stream identifier. note: this is temporary, will update in future
-	binary.BigEndian.PutUint32(dst[5:Http2HeaderLen], uint32(rand.Int31()))
+	binary.BigEndian.PutUint32(dst[5:Http2HeaderLen], uint32(mr.Int31()))
 
 	return dst, padSize
 }
@@ -168,4 +169,61 @@ func IsNeedACK(header []byte) bool {
 		panic("header length is invalid")
 	}
 	return header[4]&FlagNeedACK == FlagNeedACK
+}
+
+type Frame struct {
+	frameType FrameType
+	flag      uint8
+	payload   []byte
+	cipher    AEADCipher
+}
+
+func NewFrame(ft FrameType, payload []byte, flag uint8, cipher AEADCipher) *Frame {
+	return &Frame{
+		frameType: ft,
+		flag:      flag,
+		payload:   payload,
+		cipher:    cipher,
+	}
+}
+
+func (f *Frame) EncodeWithCipher(buf []byte) ([]byte, error) {
+	headerBuf := bytespool.Get(Http2HeaderLen)
+	defer bytespool.MustPut(headerBuf)
+
+	hb, padSize := encodeHTTP2Header(f.frameType, f.flag, len(f.payload), headerBuf)
+	headerCipher, err := f.cipher.Encrypt(hb)
+	if err != nil {
+		return nil, err
+	}
+
+	payload := bytespool.Get(MaxCipherRelaySize)
+	defer bytespool.MustPut(payload)
+	payload = payload[:0]
+
+	if padSize > 0 {
+		payload = append(payload, padSize)
+	}
+	if len(f.payload) > 0 {
+		payload = append(payload, f.payload...)
+	}
+	if padSize > 0 {
+		padBuf := bytespool.Get(MaxPaddingSize)
+		defer bytespool.MustPut(padBuf)
+
+		padBuf = padBuf[:padSize]
+		_, _ = rand.Read(padBuf)
+		payload = append(payload, padBuf...)
+	}
+
+	payloadCipher, err := f.cipher.Encrypt(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	buf = buf[:0]
+	buf = append(buf, headerCipher...)
+	buf = append(buf, payloadCipher...)
+
+	return buf, nil
 }
