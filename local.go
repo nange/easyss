@@ -108,7 +108,14 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		}
 	}()
 
-	if err = ss.handShakeWithRemote(stream, addr, util.FlagTCP); err != nil {
+	csStream, err := cipherstream.New(stream, ss.Password(), ss.Method(), cipherstream.FrameTypeData, cipherstream.FlagTCP)
+	if err != nil {
+		log.Errorf("[TCP_PROXY] new cipherstream err:%v, method:%v", err, ss.Method())
+		return
+	}
+	csStream.(*cipherstream.CipherStream).PingHook = ss.PingHook
+
+	if err = ss.handShakeWithRemote(csStream, addr, cipherstream.FlagTCP); err != nil {
 		log.Errorf("[TCP_PROXY] handshake with remote server err:%v", err)
 		if pc, ok := stream.(*easypool.PoolConn); ok {
 			log.Debugf("[TCP_PROXY] mark pool conn stream unusable")
@@ -116,13 +123,6 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		}
 		return
 	}
-
-	csStream, err := cipherstream.New(stream, ss.Password(), ss.Method(), util.FrameTypeData, util.FlagTCP)
-	if err != nil {
-		log.Errorf("[TCP_PROXY] new cipherstream err:%v, method:%v", err, ss.Method())
-		return
-	}
-	csStream.(*cipherstream.CipherStream).PingHook = ss.PingHook
 
 	tryReuse := true
 	if !ss.IsNativeOutboundProto() {
@@ -167,18 +167,13 @@ func (ss *Easyss) validateAddr(addr string) error {
 }
 
 func (ss *Easyss) handShakeWithRemote(stream net.Conn, addr string, flag uint8) error {
-	csStream, err := cipherstream.New(stream, ss.Password(), cipherstream.MethodAes256GCM, util.FrameTypeData, flag)
-	if err != nil {
-		return err
-	}
-	defer csStream.(*cipherstream.CipherStream).Release()
+	csStream := stream.(*cipherstream.CipherStream)
 
 	cipherMethod := EncodeCipherMethod(ss.Method())
-	if cipherMethod == 0 {
-		return fmt.Errorf("unsupported cipher method:%s", ss.Method())
-	}
-	_, err = csStream.Write(append([]byte(addr), cipherMethod))
-	return err
+	cipher, _ := cipherstream.NewAes256GCM([]byte(ss.Password()))
+	frame := cipherstream.NewFrame(cipherstream.FrameTypeData, append([]byte(addr), cipherMethod), flag, cipher)
+
+	return csStream.WriteFrame(frame)
 }
 
 func EncodeCipherMethod(m string) byte {

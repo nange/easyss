@@ -166,7 +166,7 @@ func (es *EasyServer) remoteTCPHandle(conn net.Conn, addrStr, method string, try
 	}
 	defer tConn.Close()
 
-	csStream, err := cipherstream.New(conn, es.Password(), method, util.FrameTypeData, util.FlagTCP)
+	csStream, err := cipherstream.New(conn, es.Password(), method, cipherstream.FrameTypeData, cipherstream.FlagTCP)
 	if err != nil {
 		return fmt.Errorf("new cipherstream err:%v, method:%v", err, method)
 	}
@@ -180,24 +180,24 @@ func (es *EasyServer) remoteTCPHandle(conn net.Conn, addrStr, method string, try
 }
 
 func (es *EasyServer) handShakeWithClient(conn net.Conn) (addr []byte, method string, protoType string, err error) {
-	csStream, err := cipherstream.New(conn, es.Password(), cipherstream.MethodAes256GCM, util.FrameTypeUnknown)
+	csStream, err := cipherstream.New(conn, es.Password(), cipherstream.MethodAes256GCM, cipherstream.FrameTypeUnknown)
 	if err != nil {
 		return nil, "", "", err
 	}
 	cs := csStream.(*cipherstream.CipherStream)
 	defer cs.Release()
 
-	var header, payload []byte
+	var frame *cipherstream.Frame
 	for {
-		header, payload, err = cs.ReadHeaderAndPayload()
+		frame, err = cs.ReadFrame()
 		if err != nil {
 			return nil, "", "", err
 		}
 
-		if util.IsPingFrame(header) {
-			log.Debugf("[REMOTE] got ping message, payload:%s", string(payload))
-			if util.IsNeedACK(header) {
-				if er := cs.WritePing(payload, util.FlagACK); er != nil {
+		if frame.IsPingFrame() {
+			log.Debugf("[REMOTE] got ping message, payload:%s", string(frame.RawDataPayload()))
+			if frame.IsNeedACK() {
+				if er := cs.WritePing(frame.RawDataPayload(), cipherstream.FlagACK); er != nil {
 					return nil, "", "", er
 				}
 			}
@@ -205,20 +205,21 @@ func (es *EasyServer) handShakeWithClient(conn net.Conn) (addr []byte, method st
 		}
 		break
 	}
-	if util.IsTCPProto(header) {
+	if frame.IsTCPProto() {
 		protoType = "tcp"
-	} else if util.IsUDPProto(header) {
+	} else if frame.IsUDPProto() {
 		protoType = "udp"
 	}
 
-	length := len(payload)
+	rawData := frame.RawDataPayload()
+	length := len(rawData)
 	if length <= 1 {
 		err = errors.New("handshake: payload length is invalid")
 		return
 	}
-	method = DecodeCipherMethod(payload[length-1])
+	method = DecodeCipherMethod(rawData[length-1])
 
-	return payload[:length-1], method, protoType, nil
+	return rawData[:length-1], method, protoType, nil
 }
 
 func (es *EasyServer) targetConn(network, addr string) (net.Conn, error) {

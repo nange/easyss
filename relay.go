@@ -9,7 +9,6 @@ import (
 
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/v2/cipherstream"
-	"github.com/nange/easyss/v2/util"
 	"github.com/nange/easyss/v2/util/bytespool"
 	log "github.com/sirupsen/logrus"
 )
@@ -45,11 +44,11 @@ func relay(cipher, plaintxt net.Conn, timeout time.Duration, tryReuse bool) (n1 
 		_tryReuse := tryReuse
 		if _tryReuse && err != nil {
 			log.Debugf("[REPAY] copy from cipher to plaintxt: %v", err)
-			if !cipherstream.FINRSTStreamErr(err) {
+			if !errors.Is(err, cipherstream.ErrFINRSTStream) {
 				if err := cipher.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 					_tryReuse = false
 				} else {
-					if err := readAllIgnore(cipher); !cipherstream.FINRSTStreamErr(err) {
+					if err := readAllIgnore(cipher); !errors.Is(err, cipherstream.ErrFINRSTStream) {
 						_tryReuse = false
 					}
 				}
@@ -163,7 +162,7 @@ func readAllIgnore(conn net.Conn) error {
 
 func WriteACKToCipher(conn net.Conn) error {
 	if csConn, ok := conn.(*cipherstream.CipherStream); ok {
-		return csConn.WriteRST(util.FlagACK)
+		return csConn.WriteRST(cipherstream.FlagACK)
 	}
 	return nil
 }
@@ -180,7 +179,7 @@ func ReadACKFromCipher(conn net.Conn) bool {
 		}
 	}
 
-	return cipherstream.ACKRSTStreamErr(err)
+	return errors.Is(err, cipherstream.ErrACKRSTStream)
 }
 
 // MarkCipherStreamUnusable mark the cipher stream unusable, return true if success

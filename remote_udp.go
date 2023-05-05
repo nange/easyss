@@ -1,13 +1,13 @@
 package easyss
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/nange/easyss/v2/cipherstream"
-	"github.com/nange/easyss/v2/util"
 	"github.com/nange/easyss/v2/util/bytespool"
 	log "github.com/sirupsen/logrus"
 )
@@ -18,7 +18,7 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, try
 		return fmt.Errorf("net.DialUDP %v err:%v", addrStr, err)
 	}
 
-	csStream, err := cipherstream.New(conn, es.Password(), method, util.FrameTypeData, util.FlagUDP)
+	csStream, err := cipherstream.New(conn, es.Password(), method, cipherstream.FrameTypeData, cipherstream.FlagUDP)
 	if err != nil {
 		return fmt.Errorf("new cipherstream err:%v, method:%v", err, method)
 	}
@@ -36,7 +36,7 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, try
 		for {
 			n, err := csStream.Read(buf[:])
 			if err != nil {
-				if cipherstream.FINRSTStreamErr(err) {
+				if errors.Is(err, cipherstream.ErrFINRSTStream) {
 					_tryReuse = true
 					log.Debugf("[REMOTE_UDP] received FIN when reading data from client, try to reuse the connectio")
 				} else {
