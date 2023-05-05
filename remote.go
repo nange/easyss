@@ -187,17 +187,17 @@ func (es *EasyServer) handShakeWithClient(conn net.Conn) (addr []byte, method st
 	cs := csStream.(*cipherstream.CipherStream)
 	defer cs.Release()
 
-	var header, payload []byte
+	var frame *cipherstream.Frame
 	for {
-		header, payload, err = cs.ReadHeaderAndPayload()
+		frame, err = cs.ReadFrame()
 		if err != nil {
 			return nil, "", "", err
 		}
 
-		if cipherstream.IsPingFrame(header) {
-			log.Debugf("[REMOTE] got ping message, payload:%s", string(payload))
-			if cipherstream.IsNeedACK(header) {
-				if er := cs.WritePing(payload, cipherstream.FlagACK); er != nil {
+		if frame.IsPingFrame() {
+			log.Debugf("[REMOTE] got ping message, payload:%s", string(frame.RawDataPayload()))
+			if frame.IsNeedACK() {
+				if er := cs.WritePing(frame.RawDataPayload(), cipherstream.FlagACK); er != nil {
 					return nil, "", "", er
 				}
 			}
@@ -205,20 +205,21 @@ func (es *EasyServer) handShakeWithClient(conn net.Conn) (addr []byte, method st
 		}
 		break
 	}
-	if cipherstream.IsTCPProto(header) {
+	if frame.IsTCPProto() {
 		protoType = "tcp"
-	} else if cipherstream.IsUDPProto(header) {
+	} else if frame.IsUDPProto() {
 		protoType = "udp"
 	}
 
-	length := len(payload)
+	rawData := frame.RawDataPayload()
+	length := len(rawData)
 	if length <= 1 {
 		err = errors.New("handshake: payload length is invalid")
 		return
 	}
-	method = DecodeCipherMethod(payload[length-1])
+	method = DecodeCipherMethod(rawData[length-1])
 
-	return payload[:length-1], method, protoType, nil
+	return rawData[:length-1], method, protoType, nil
 }
 
 func (es *EasyServer) targetConn(network, addr string) (net.Conn, error) {

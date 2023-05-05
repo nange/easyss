@@ -240,8 +240,10 @@ func (l *LocalConn) push(data []byte) error {
 func (l *LocalConn) checkConn() error {
 	select {
 	case <-l.done:
+		log.Infof("[LOCAL_CONN] local conn done==========================")
 		return errors.New("LocalConn was closed")
 	case <-l.expired:
+		log.Infof("[LOCAL_CONN] local conn expired==========================")
 		return errors.New("LocalConn was expired")
 	default:
 		return nil

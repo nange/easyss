@@ -127,7 +127,14 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		return err
 	}
 
-	if err := ss.handShakeWithRemote(stream, rewrittenDst, cipherstream.FlagUDP); err != nil {
+	csStream, err := cipherstream.New(stream, ss.Password(), ss.Method(), cipherstream.FrameTypeData, cipherstream.FlagUDP)
+	if err != nil {
+		log.Errorf("[UDP_PROXY] new cipherstream err:%v, method:%v", err, ss.Method())
+		return err
+	}
+	csStream.(*cipherstream.CipherStream).PingHook = ss.PingHook
+
+	if err := ss.handShakeWithRemote(csStream, rewrittenDst, cipherstream.FlagUDP); err != nil {
 		log.Errorf("[UDP_PROXY] handshake with remote server err:%v", err)
 		if pc, ok := stream.(*easypool.PoolConn); ok {
 			log.Debugf("[UDP_PROXY] mark pool conn stream unusable")
@@ -136,13 +143,6 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		}
 		return err
 	}
-
-	csStream, err := cipherstream.New(stream, ss.Password(), ss.Method(), cipherstream.FrameTypeData, cipherstream.FlagUDP)
-	if err != nil {
-		log.Errorf("[UDP_PROXY] new cipherstream err:%v, method:%v", err, ss.Method())
-		return err
-	}
-	csStream.(*cipherstream.CipherStream).PingHook = ss.PingHook
 
 	ue = &UDPExchange{
 		ClientAddr: addr,
