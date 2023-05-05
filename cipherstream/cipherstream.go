@@ -113,39 +113,43 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 
 		nr, er := r.Read(payloadBuf)
 		if nr > 0 {
-			n += int64(nr)
-			//TODO: add frame.Release
-			frame := NewFrame(cs.frameType, payloadBuf[:nr], cs.flag, cs.AEADCipher)
-			frameBytes, er := frame.EncodeWithCipher(buf)
-			if er != nil {
-				log.Errorf("[CIPHERSTREAM] encode frame with cipher:%v", er)
-				return 0, er
-			}
+			err = errors.Join(func() error {
+				frame := NewFrame(cs.frameType, payloadBuf[:nr], cs.flag, cs.AEADCipher)
+				defer frame.Release()
 
-			if _, ew := cs.Conn.Write(frameBytes); ew != nil {
-				log.Warnf("[CIPHERSTREAM] write cipher data to cipher stream failed, msg:%+v", ew)
-				if timeout(ew) {
-					err = ErrTimeout
-				} else {
-					err = ErrWriteCipher
+				frameBytes, er := frame.EncodeWithCipher(buf)
+				if er != nil {
+					log.Errorf("[CIPHERSTREAM] encode frame with cipher:%v", er)
+					return er
 				}
-				break
-			}
+
+				if _, ew := cs.Conn.Write(frameBytes); ew != nil {
+					log.Warnf("[CIPHERSTREAM] write cipher data to cipher stream failed, msg:%+v", ew)
+					if timeout(ew) {
+						return ErrTimeout
+					} else {
+						return ErrWriteCipher
+					}
+				}
+				n += int64(nr)
+
+				return nil
+			}())
 		}
 		if er != nil {
 			if er != io.EOF {
 				log.Debugf("[CIPHERSTREAM] read plaintext from reader failed, msg:%+v", err)
 				if timeout(er) {
-					err = ErrTimeout
+					err = errors.Join(err, ErrTimeout)
 				} else {
-					err = ErrReadPlaintxt
+					err = errors.Join(err, ErrReadPlaintxt)
 				}
 			}
 			break
 		}
-
 	}
-	return n, err
+
+	return
 }
 
 func (cs *CipherStream) Read(b []byte) (int, error) {
@@ -156,11 +160,10 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 	}
 
 	var frame *Frame
-	var err error
 	for {
 		frame = cs.frameIter.Next()
 		if cs.frameIter.Error() != nil {
-			return 0, err
+			return 0, cs.frameIter.Error()
 		}
 
 		if frame.IsRSTFINFrame() {
