@@ -201,6 +201,7 @@ func (cs *CipherStream) ReadFrame() (*Frame, error) {
 
 func (cs *CipherStream) Release() {
 	bytespool.MustPut(cs.wbuf)
+	cs.frameIter.Release()
 
 	cs.Conn = nil
 	cs.wbuf = nil

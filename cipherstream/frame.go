@@ -351,3 +351,10 @@ func (fi *FrameIter) Next() *Frame {
 func (fi *FrameIter) Error() error {
 	return fi.err
 }
+
+func (fi *FrameIter) Release() {
+	if cap(fi.buf) > 0 {
+		bytespool.MustPut(fi.buf)
+		fi.buf = nil
+	}
+}
