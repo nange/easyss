@@ -82,10 +82,10 @@ func (cs *CipherStream) WriteFrame(f *Frame) error {
 		log.Warnf("[CIPHERSTREAM] write cipher data to cipher stream failed, msg:%+v", ew)
 		if timeout(ew) {
 			return ErrTimeout
-		} else {
-			return ErrWriteCipher
 		}
+		return ew
 	}
+
 	return nil
 }
 
@@ -127,9 +127,8 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 					log.Warnf("[CIPHERSTREAM] write cipher data to cipher stream failed, msg:%+v", ew)
 					if timeout(ew) {
 						return ErrTimeout
-					} else {
-						return ErrWriteCipher
 					}
+					return ew
 				}
 				n += int64(nr)
 
@@ -137,12 +136,12 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 			}())
 		}
 		if er != nil {
-			if er != io.EOF {
+			if !errors.Is(er, io.EOF) {
 				log.Debugf("[CIPHERSTREAM] read plaintext from reader failed, msg:%+v", err)
 				if timeout(er) {
 					err = errors.Join(err, ErrTimeout)
 				} else {
-					err = errors.Join(err, ErrReadPlaintxt)
+					err = errors.Join(err, er)
 				}
 			}
 			break

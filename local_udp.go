@@ -230,7 +230,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			}
 			n, err := ue.RemoteConn.Read(buf[:])
 			if err != nil {
-				if err != cipherstream.ErrTimeout {
+				if !errors.Is(err, cipherstream.ErrTimeout) {
 					tryReuse = false
 				}
 				return
@@ -363,5 +363,5 @@ func readFINFromCipher(conn net.Conn) bool {
 			break
 		}
 	}
-	return cipherstream.FINRSTStreamErr(err)
+	return errors.Is(err, cipherstream.ErrFINRSTStream)
 }

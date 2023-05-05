@@ -44,11 +44,11 @@ func relay(cipher, plaintxt net.Conn, timeout time.Duration, tryReuse bool) (n1 
 		_tryReuse := tryReuse
 		if _tryReuse && err != nil {
 			log.Debugf("[REPAY] copy from cipher to plaintxt: %v", err)
-			if !cipherstream.FINRSTStreamErr(err) {
+			if !errors.Is(err, cipherstream.ErrFINRSTStream) {
 				if err := cipher.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 					_tryReuse = false
 				} else {
-					if err := readAllIgnore(cipher); !cipherstream.FINRSTStreamErr(err) {
+					if err := readAllIgnore(cipher); !errors.Is(err, cipherstream.ErrFINRSTStream) {
 						_tryReuse = false
 					}
 				}
@@ -179,7 +179,7 @@ func ReadACKFromCipher(conn net.Conn) bool {
 		}
 	}
 
-	return cipherstream.ACKRSTStreamErr(err)
+	return errors.Is(err, cipherstream.ErrACKRSTStream)
 }
 
 // MarkCipherStreamUnusable mark the cipher stream unusable, return true if success

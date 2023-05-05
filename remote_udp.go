@@ -1,6 +1,7 @@
 package easyss
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -35,7 +36,7 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, try
 		for {
 			n, err := csStream.Read(buf[:])
 			if err != nil {
-				if cipherstream.FINRSTStreamErr(err) {
+				if errors.Is(err, cipherstream.ErrFINRSTStream) {
 					_tryReuse = true
 					log.Debugf("[REMOTE_UDP] received FIN when reading data from client, try to reuse the connectio")
 				} else {
