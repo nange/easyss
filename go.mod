@@ -3,7 +3,6 @@ module github.com/nange/easyss/v2
 go 1.20
 
 require (
-	github.com/acomagu/bufpipe v1.0.4
 	github.com/caddyserver/certmagic v0.17.2
 	github.com/cespare/xxhash/v2 v2.2.0
 	github.com/coocood/freecache v1.2.3

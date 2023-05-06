@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net"
 	"time"
+
+	"github.com/nange/easyss/v2/httptunnel/bufpipe"
 )
 
 var _ net.Conn = (*ServerConn)(nil)
@@ -17,7 +19,7 @@ type ServerConn struct {
 }
 
 func NewServerConn(reqID string, closeHook func(reqID string)) *ServerConn {
-	local, remote := Pipe()
+	local, remote := bufpipe.ConnPipe()
 	return &ServerConn{
 		reqID:     reqID,
 		closeHook: closeHook,
