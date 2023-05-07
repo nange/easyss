@@ -145,15 +145,17 @@ type ProxyRule int
 const (
 	ProxyRuleUnknown ProxyRule = iota
 	ProxyRuleAuto
+	ProxyRuleReverseAuto
 	ProxyRuleProxy
 	ProxyRuleDirect
 )
 
 func ParseProxyRuleFromString(rule string) ProxyRule {
 	m := map[string]ProxyRule{
-		"auto":   ProxyRuleAuto,
-		"proxy":  ProxyRuleProxy,
-		"direct": ProxyRuleDirect,
+		"auto":         ProxyRuleAuto,
+		"reverse_auto": ProxyRuleReverseAuto,
+		"proxy":        ProxyRuleProxy,
+		"direct":       ProxyRuleDirect,
 	}
 	if r, ok := m[rule]; ok {
 		return r
@@ -948,6 +950,16 @@ func (ss *Easyss) HostShouldDirect(host string) bool {
 		return false
 	}
 
+	if ss.HostMatchCustomDirectConfig(host) {
+		return true
+	}
+	if ss.ProxyRule() == ProxyRuleReverseAuto {
+		return !ss.HostAtCNOrPrivate(host)
+	}
+	return ss.HostAtCNOrPrivate(host)
+}
+
+func (ss *Easyss) HostMatchCustomDirectConfig(host string) bool {
 	if util.IsIP(host) {
 		if _, ok := ss.customDirectIPs[host]; ok {
 			return true
@@ -965,13 +977,8 @@ func (ss *Easyss) HostShouldDirect(host string) bool {
 		if _, ok := ss.customDirectDomains[domain]; ok {
 			return true
 		}
-		// if the host end with .cn, return true
-		if strings.HasSuffix(host, ".cn") {
-			return true
-		}
 	}
-
-	return ss.HostAtCNOrPrivate(host)
+	return false
 }
 
 func (ss *Easyss) HostAtCNOrPrivate(host string) bool {
@@ -981,6 +988,10 @@ func (ss *Easyss) HostAtCNOrPrivate(host string) bool {
 
 	if util.IsIP(host) {
 		return ss.IPAtCNOrPrivate(host)
+	}
+	// if the host end with .cn, return true
+	if strings.HasSuffix(host, ".cn") {
+		return true
 	}
 
 	return ss.geosite.SiteAtCN(host)

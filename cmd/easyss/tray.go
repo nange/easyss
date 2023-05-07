@@ -115,6 +115,7 @@ func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 	if st.SS().ProxyRule() == easyss.ProxyRuleAuto {
 		auto.Check()
 	}
+	reverseAuto := proxyMenue.AddSubMenuItemCheckbox("反向自动(国外访问国内)", "适用国外访问国内IP域名", false)
 	proxy := proxyMenue.AddSubMenuItemCheckbox("代理全部", "代理所有地址的请求", false)
 	if st.SS().ProxyRule() == easyss.ProxyRuleProxy {
 		proxy.Check()
@@ -129,27 +130,43 @@ func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 			select {
 			case <-auto.ClickedCh:
 				if auto.Checked() {
+					auto.Check()
 					continue
 				}
 				st.SS().SetProxyRule(easyss.ProxyRuleAuto)
 				auto.Check()
+				reverseAuto.Uncheck()
+				proxy.Uncheck()
+				direct.Uncheck()
+			case <-reverseAuto.ClickedCh:
+				if reverseAuto.Checked() {
+					reverseAuto.Check()
+					continue
+				}
+				st.SS().SetProxyRule(easyss.ProxyRuleReverseAuto)
+				reverseAuto.Check()
+				auto.Uncheck()
 				proxy.Uncheck()
 				direct.Uncheck()
 			case <-proxy.ClickedCh:
 				if proxy.Checked() {
+					proxy.Check()
 					continue
 				}
 				st.SS().SetProxyRule(easyss.ProxyRuleProxy)
 				proxy.Check()
 				auto.Uncheck()
+				reverseAuto.Uncheck()
 				direct.Uncheck()
 			case <-direct.ClickedCh:
 				if direct.Checked() {
+					direct.Check()
 					continue
 				}
 				st.SS().SetProxyRule(easyss.ProxyRuleDirect)
 				direct.Check()
 				auto.Uncheck()
+				reverseAuto.Uncheck()
 				proxy.Uncheck()
 			}
 		}
