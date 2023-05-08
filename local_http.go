@@ -68,7 +68,7 @@ func newHTTPProxy(ss *Easyss) *httpProxy {
 				Proxy: func(*http.Request) (*url.URL, error) {
 					return url.Parse(ss.Socks5ProxyAddr())
 				},
-				TLSHandshakeTimeout: ss.Timeout() / 3,
+				TLSHandshakeTimeout: ss.TLSTimeout(),
 			},
 			BufferPool: &bufferPool{},
 			ErrorHandler: func(rw http.ResponseWriter, r *http.Request, err error) {

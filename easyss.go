@@ -641,6 +641,18 @@ func (ss *Easyss) PingTimeout() time.Duration {
 	return timeout
 }
 
+func (ss *Easyss) TLSTimeout() time.Duration {
+	timeout := ss.Timeout() / 3
+	if timeout < time.Second {
+		timeout = time.Second
+	}
+	return timeout
+}
+
+func (ss *Easyss) CMDTimeout() time.Duration {
+	return ss.Timeout() * 3
+}
+
 func (ss *Easyss) AuthUsername() string {
 	return ss.config.AuthUsername
 }

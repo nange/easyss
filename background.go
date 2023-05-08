@@ -67,7 +67,7 @@ func (ss *Easyss) cmdBeforeStartup() error {
 	}
 	log.Infof("[CMD_BEFORE_STARTUP] exectuing %s", cmd)
 
-	output, err := execConfigCMD(cmd, ss.Timeout()*3)
+	output, err := execConfigCMD(cmd, ss.CMDTimeout())
 	if err != nil {
 		log.Errorf("[CMD_BEFORE_STARTUP] %s: %v, output:%s", cmd, err, output)
 	} else {
@@ -82,7 +82,7 @@ func (ss *Easyss) cmdInterval(cmd string) {
 	}
 	log.Infof("[CMD_INTERVAL] exectuing %s", cmd)
 
-	output, err := execConfigCMD(cmd, ss.Timeout()*3)
+	output, err := execConfigCMD(cmd, ss.CMDTimeout())
 	if err != nil {
 		log.Errorf("[CMD_INTERVAL] %s: %v, output:%s", cmd, err, output)
 	} else {
