@@ -84,14 +84,14 @@ func relay(cipher, plaintxt net.Conn, timeout time.Duration, tryReuse bool) (n1 
 		}
 	}
 
-	reuse := false
+	var reuse error
 	if res1.TryReuse && res2.TryReuse {
 		reuse = tryReuseFn(cipher, timeout)
 	}
-	if !reuse {
+	if reuse != nil {
 		MarkCipherStreamUnusable(cipher)
 		if tryReuse {
-			log.Warnf("[REPAY] underlying proxy connection is unhealthy, need close it")
+			log.Warnf("[REPAY] underlying proxy connection is unhealthy, need close it: %v", reuse)
 		}
 	} else {
 		log.Debugf("[REPAY] underlying proxy connection is healthy, so reuse it")
@@ -100,20 +100,20 @@ func relay(cipher, plaintxt net.Conn, timeout time.Duration, tryReuse bool) (n1 
 	return
 }
 
-func tryReuseFn(cipher net.Conn, timeout time.Duration) bool {
+func tryReuseFn(cipher net.Conn, timeout time.Duration) error {
 	if err := cipher.SetReadDeadline(time.Now().Add(timeout)); err != nil {
-		return false
+		return err
 	}
 	if err := WriteACKToCipher(cipher); err != nil {
-		return false
+		return err
 	}
-	if !ReadACKFromCipher(cipher) {
-		return false
+	if err := ReadACKFromCipher(cipher); err != nil {
+		return err
 	}
 	if err := cipher.SetReadDeadline(time.Time{}); err != nil {
-		return false
+		return err
 	}
-	return true
+	return nil
 }
 
 func CloseWrite(conn net.Conn) error {
@@ -167,7 +167,7 @@ func WriteACKToCipher(conn net.Conn) error {
 	return nil
 }
 
-func ReadACKFromCipher(conn net.Conn) bool {
+func ReadACKFromCipher(conn net.Conn) error {
 	buf := bytespool.Get(RelayBufferSize)
 	defer bytespool.MustPut(buf)
 
@@ -178,8 +178,11 @@ func ReadACKFromCipher(conn net.Conn) bool {
 			break
 		}
 	}
+	if errors.Is(err, cipherstream.ErrACKRSTStream) {
+		return nil
+	}
 
-	return errors.Is(err, cipherstream.ErrACKRSTStream)
+	return err
 }
 
 // MarkCipherStreamUnusable mark the cipher stream unusable, return true if success

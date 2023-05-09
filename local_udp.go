@@ -171,16 +171,16 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			tryReuse = false
 		}
 
-		reuse := false
+		var reuse error
 		if tryReuse {
 			log.Debugf("[UDP_PROXY] request is finished, try to reuse underlying tcp connection")
 			reuse = tryReuseInUDPClient(ue.RemoteConn, ss.Timeout())
 		}
 
-		if !reuse {
+		if reuse != nil {
 			MarkCipherStreamUnusable(ue.RemoteConn)
 			if tryReuse {
-				log.Warnf("[UDP_PROXY] underlying proxy connection is unhealthy, need close it")
+				log.Warnf("[UDP_PROXY] underlying proxy connection is unhealthy, need close it: %v", reuse)
 			}
 		} else {
 			log.Debugf("[UDP_PROXY] underlying proxy connection is healthy, so reuse it")
@@ -305,7 +305,7 @@ func responseDNSMsg(conn *net.UDPConn, localAddr *net.UDPAddr, msg *dns.Msg, rem
 }
 
 func expireConn(conn net.Conn) error {
-	return conn.SetDeadline(time.Unix(0, 0))
+	return conn.SetReadDeadline(time.Unix(0, 0))
 }
 
 func isDNSRequest(msg *dns.Msg) bool {
@@ -329,30 +329,30 @@ func isDNSResponse(msg *dns.Msg) bool {
 	return true
 }
 
-func tryReuseInUDPClient(cipher net.Conn, timeout time.Duration) bool {
+func tryReuseInUDPClient(cipher net.Conn, timeout time.Duration) error {
 	if err := cipher.SetReadDeadline(time.Now().Add(timeout)); err != nil {
-		return false
+		return err
 	}
 	if err := CloseWrite(cipher); err != nil {
-		return false
+		return err
 	}
-	if !ReadACKFromCipher(cipher) {
-		return false
+	if err := ReadACKFromCipher(cipher); err != nil {
+		return err
 	}
-	if !readFINFromCipher(cipher) {
-		return false
+	if err := readFINFromCipher(cipher); err != nil {
+		return err
 	}
 	if err := WriteACKToCipher(cipher); err != nil {
-		return false
+		return err
 	}
 	if err := cipher.SetReadDeadline(time.Time{}); err != nil {
-		return false
+		return err
 	}
 
-	return true
+	return nil
 }
 
-func readFINFromCipher(conn net.Conn) bool {
+func readFINFromCipher(conn net.Conn) error {
 	buf := bytespool.Get(RelayBufferSize)
 	defer bytespool.MustPut(buf)
 
@@ -363,5 +363,8 @@ func readFINFromCipher(conn net.Conn) bool {
 			break
 		}
 	}
-	return errors.Is(err, cipherstream.ErrFINRSTStream)
+	if errors.Is(err, cipherstream.ErrFINRSTStream) {
+		return nil
+	}
+	return err
 }

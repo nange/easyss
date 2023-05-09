@@ -291,14 +291,15 @@ func NewFrameIter(r io.Reader, cipher AEADCipher) *FrameIter {
 
 func (fi *FrameIter) Next() *Frame {
 	hBuf := fi.buf[:Http2HeaderLen+fi.cipher.NonceSize()+fi.cipher.Overhead()]
-	if _, err := io.ReadFull(fi.r, hBuf); err != nil {
-		fi.err = err
+	_, err := io.ReadFull(fi.r, hBuf)
+	fi.err = err
+	if fi.err != nil {
 		return nil
 	}
 
 	header, err := fi.cipher.Decrypt(hBuf)
-	if err != nil {
-		fi.err = err
+	fi.err = err
+	if fi.err != nil {
 		return nil
 	}
 	fHeader := &Header{header: header}
@@ -311,14 +312,15 @@ func (fi *FrameIter) Next() *Frame {
 	}
 
 	payloadLen := size + fi.cipher.NonceSize() + fi.cipher.Overhead()
-	if _, err := io.ReadFull(fi.r, fi.buf[:payloadLen]); err != nil {
-		fi.err = err
+	_, err = io.ReadFull(fi.r, fi.buf[:payloadLen])
+	fi.err = err
+	if err != nil {
 		return nil
 	}
 
 	payloadPlain, err := fi.cipher.Decrypt(fi.buf[:payloadLen])
-	if err != nil {
-		fi.err = err
+	fi.err = err
+	if fi.err != nil {
 		return nil
 	}
 

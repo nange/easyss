@@ -175,7 +175,6 @@ func (c *Config) SetDefaultValue() {
 	// if server is empty, try to use the first item in server list instead
 	if c.Server == "" && len(c.ServerList) > 0 {
 		sc := c.DefaultServerConfigFrom(c.ServerList)
-		sc.SetDefaultValue()
 		c.OverrideFrom(sc)
 	}
 
@@ -216,8 +215,12 @@ func (c *Config) OverrideFrom(sc *ServerConfig) {
 		c.Server = sc.Server
 		c.ServerPort = sc.ServerPort
 		c.Password = sc.Password
-		c.Timeout = sc.Timeout
-		c.DisableUTLS = sc.DisableUTLS
+		if sc.Timeout != 0 {
+			c.Timeout = sc.Timeout
+		}
+		if sc.DisableUTLS {
+			c.DisableUTLS = sc.DisableUTLS
+		}
 		c.DisableTLS = sc.DisableTLS
 		c.CAPath = sc.CAPath
 		c.OutboundProto = sc.OutboundProto

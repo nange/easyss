@@ -162,6 +162,9 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 	for {
 		frame = cs.frameIter.Next()
 		if cs.frameIter.Error() != nil {
+			if timeout(cs.frameIter.Error()) {
+				return 0, errors.Join(cs.frameIter.Error(), ErrTimeout)
+			}
 			return 0, cs.frameIter.Error()
 		}
 

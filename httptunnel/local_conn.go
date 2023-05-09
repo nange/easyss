@@ -30,6 +30,8 @@ func (e timeoutError) Error() string   { return "i/o timeout" }
 func (e timeoutError) Timeout() bool   { return true }
 func (e timeoutError) Temporary() bool { return true }
 
+var _ net.Error = (*timeoutError)(nil)
+
 type LocalConn struct {
 	uuid       string
 	serverAddr string
@@ -242,7 +244,7 @@ func (l *LocalConn) checkConn() error {
 	case <-l.done:
 		return errors.New("LocalConn was closed")
 	case <-l.expired:
-		return errors.New("LocalConn was expired")
+		return timeoutError{}
 	default:
 		return nil
 	}
