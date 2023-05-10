@@ -24,63 +24,23 @@ type closeWriter interface {
 // relay copies between cipher stream and plaintext stream.
 // return the number of bytes copies
 // from plaintext stream to cipher stream, from cipher stream to plaintext stream, and needClose on server conn
-func relay(cipher, plaintxt net.Conn, timeout time.Duration, tryReuse bool) (n1 int64, n2 int64) {
-	type res struct {
-		N        int64
-		Err      error
-		TryReuse bool
-	}
-
+func relay(cipher, plainTxt net.Conn, timeout time.Duration, tryReuse bool) (int64, int64, error) {
 	ch1 := make(chan res, 1)
 	ch2 := make(chan res, 1)
-
-	go func() {
-		n, err := io.Copy(plaintxt, cipher)
-		if ce := CloseWrite(plaintxt); ce != nil {
-			log.Warnf("[REPAY] close write for plaintxt stream: %v", ce)
-		}
-		_ = plaintxt.SetReadDeadline(time.Now().Add(2 * timeout))
-
-		_tryReuse := tryReuse
-		if _tryReuse && err != nil {
-			log.Debugf("[REPAY] copy from cipher to plaintxt: %v", err)
-			if !errors.Is(err, cipherstream.ErrFINRSTStream) {
-				if err := cipher.SetReadDeadline(time.Now().Add(timeout)); err != nil {
-					_tryReuse = false
-				} else {
-					if err := readAllIgnore(cipher); !errors.Is(err, cipherstream.ErrFINRSTStream) {
-						_tryReuse = false
-					}
-				}
-			}
-		}
-
-		ch2 <- res{N: n, Err: err, TryReuse: _tryReuse}
-	}()
-
-	go func() {
-		n, err := io.Copy(cipher, plaintxt)
-		if err != nil {
-			log.Debugf("[REPAY] copy from plaintxt to cipher: %v", err)
-		}
-
-		_tryReuse := tryReuse
-		if err := CloseWrite(cipher); err != nil {
-			_tryReuse = false
-			log.Warnf("[REPAY] close write for cipher stream: %v", err)
-		}
-		_ = cipher.SetReadDeadline(time.Now().Add(2 * timeout))
-
-		ch1 <- res{N: n, Err: err, TryReuse: _tryReuse}
-	}()
+	go copyCipherToPlainTxt(plainTxt, cipher, timeout, tryReuse, ch2)
+	go copyPlainTxtToCipher(cipher, plainTxt, timeout, tryReuse, ch1)
 
 	var res1, res2 res
+	var n1, n2 int64
+	var err error
 	for i := 0; i < 2; i++ {
 		select {
 		case res1 = <-ch1:
 			n1 = res1.N
+			err = errors.Join(err, res1.err)
 		case res2 = <-ch2:
 			n2 = res2.N
+			err = errors.Join(err, res2.err)
 		}
 	}
 
@@ -97,7 +57,56 @@ func relay(cipher, plaintxt net.Conn, timeout time.Duration, tryReuse bool) (n1 
 		log.Debugf("[REPAY] underlying proxy connection is healthy, so reuse it")
 	}
 
-	return
+	return n1, n2, err
+}
+
+type res struct {
+	N        int64
+	err      error
+	TryReuse bool
+}
+
+func copyCipherToPlainTxt(plainTxt, cipher net.Conn, timeout time.Duration, tryReuse bool, ch chan res) {
+	var err error
+	n, er := io.Copy(plainTxt, cipher)
+	if ce := CloseWrite(plainTxt); ce != nil {
+		err = errors.Join(err, ce)
+		log.Warnf("[REPAY] close write for plaintxt stream: %v", ce)
+	}
+	if se := plainTxt.SetReadDeadline(time.Now().Add(2 * timeout)); se != nil {
+		err = errors.Join(err, se)
+	}
+
+	if er != nil && !errors.Is(er, cipherstream.ErrFINRSTStream) {
+		log.Debugf("[REPAY] copy from cipher to plaintxt: %v", err)
+		err = errors.Join(err, er)
+		if tryReuse {
+			if er := readAllIgnore(cipher, timeout); !errors.Is(er, cipherstream.ErrFINRSTStream) {
+				tryReuse = false
+			}
+		}
+	}
+
+	ch <- res{N: n, err: err, TryReuse: tryReuse}
+}
+
+func copyPlainTxtToCipher(cipher, plainTxt net.Conn, timeout time.Duration, tryReuse bool, ch chan res) {
+	var err error
+	n, er := io.Copy(cipher, plainTxt)
+	if er != nil {
+		log.Debugf("[REPAY] copy from plaintxt to cipher: %v", err)
+	}
+
+	if er := CloseWrite(cipher); er != nil {
+		tryReuse = false
+		err = errors.Join(err, er)
+		log.Warnf("[REPAY] close write for cipher stream: %v", err)
+	}
+	if er := cipher.SetReadDeadline(time.Now().Add(2 * timeout)); er != nil {
+		err = errors.Join(err, er)
+	}
+
+	ch <- res{N: n, err: err, TryReuse: tryReuse}
 }
 
 func tryReuseFn(cipher net.Conn, timeout time.Duration) error {
@@ -146,11 +155,14 @@ func ErrorCanIgnore(err error) bool {
 	return false
 }
 
-func readAllIgnore(conn net.Conn) error {
+func readAllIgnore(conn net.Conn, timeout time.Duration) error {
+	err := conn.SetReadDeadline(time.Now().Add(timeout))
+	if err != nil {
+		return err
+	}
+
 	buf := bytespool.Get(RelayBufferSize)
 	defer bytespool.MustPut(buf)
-
-	var err error
 	for {
 		_, err = conn.Read(buf)
 		if err != nil {

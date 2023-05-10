@@ -128,10 +128,10 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	if !ss.IsNativeOutboundProto() {
 		tryReuse = false
 	}
-	n1, n2 := relay(csStream, localConn, ss.Timeout(), tryReuse)
+	n1, n2, err := relay(csStream, localConn, ss.Timeout(), tryReuse)
 	csStream.(*cipherstream.CipherStream).Release()
 
-	log.Debugf("[TCP_PROXY] send %v bytes to %v, recive %v bytes", n1, addr, n2)
+	log.Debugf("[TCP_PROXY] send %v bytes to %v, recive %v bytes, err:%v", n1, addr, n2, err)
 
 	ss.stat.BytesSend.Add(n1)
 	ss.stat.BytesReceive.Add(n2)

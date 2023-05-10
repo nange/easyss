@@ -171,12 +171,12 @@ func (es *EasyServer) remoteTCPHandle(conn net.Conn, addrStr, method string, try
 		return fmt.Errorf("new cipherstream err:%v, method:%v", err, method)
 	}
 
-	n1, n2 := relay(csStream, tConn, es.Timeout(), tryReuse)
+	n1, n2, err := relay(csStream, tConn, es.Timeout(), tryReuse)
 	csStream.(*cipherstream.CipherStream).Release()
 
 	log.Debugf("[REMOTE] send %v bytes to %v, and recive %v bytes", n2, addrStr, n1)
 
-	return nil
+	return err
 }
 
 func (es *EasyServer) handShakeWithClient(conn net.Conn) (addr []byte, method string, protoType string, err error) {
