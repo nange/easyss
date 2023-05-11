@@ -141,12 +141,12 @@ func (es *EasyServer) handleConn(conn net.Conn, tryReuse bool) {
 		switch protoType {
 		case "tcp":
 			if err := es.remoteTCPHandle(conn, addrStr, method, tryReuse); err != nil {
-				log.Errorf("[REMOTE] tcp handle err:%v", err)
+				log.Infof("[REMOTE] tcp handle: %v", err)
 				return
 			}
 		case "udp":
 			if err := es.remoteUDPHandle(conn, addrStr, method, tryReuse); err != nil {
-				log.Errorf("[REMOTE] udp handle err:%v", err)
+				log.Infof("[REMOTE] udp handle: %v", err)
 				return
 			}
 		default:

@@ -178,9 +178,11 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 		}
 		if frame.IsPingFrame() {
 			log.Debugf("[CIPHERSTREAM] receive Ping frame, exec PingHook and continue to read next frame")
-			if err := cs.PingHook(cs, frame.RawDataPayload()); err != nil {
-				log.Errorf("[CIPHERSTREAM] ping hook: %v", err)
-				return 0, ErrPingHook
+			if cs.PingHook != nil {
+				if err := cs.PingHook(cs, frame.RawDataPayload()); err != nil {
+					log.Errorf("[CIPHERSTREAM] ping hook: %v", err)
+					return 0, ErrPingHook
+				}
 			}
 			continue
 		}
