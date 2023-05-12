@@ -157,19 +157,17 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			tryReuse = false
 		}
 
-		var reuse error
 		if tryReuse {
 			log.Debugf("[UDP_PROXY] request is finished, try to reuse underlying tcp connection")
-			reuse = tryReuseInUDPClient(ue.RemoteConn, ss.Timeout())
-		}
-
-		if reuse != nil {
-			MarkCipherStreamUnusable(ue.RemoteConn)
-			if tryReuse {
+			reuse := tryReuseInUDPClient(ue.RemoteConn, ss.Timeout())
+			if reuse != nil {
+				MarkCipherStreamUnusable(ue.RemoteConn)
 				log.Warnf("[UDP_PROXY] underlying proxy connection is unhealthy, need close it: %v", reuse)
+			} else {
+				log.Debugf("[UDP_PROXY] underlying proxy connection is healthy, so reuse it")
 			}
 		} else {
-			log.Debugf("[UDP_PROXY] underlying proxy connection is healthy, so reuse it")
+			MarkCipherStreamUnusable(ue.RemoteConn)
 		}
 
 		ue.RemoteConn.Close()

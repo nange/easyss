@@ -30,7 +30,6 @@ type CipherStream struct {
 	frameIter *FrameIter
 	frameType FrameType
 	flag      uint8
-	PingHook  func(cs net.Conn, b []byte) error
 }
 
 func New(stream net.Conn, password, method string, frameType FrameType, flags ...uint8) (net.Conn, error) {
@@ -178,12 +177,6 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 		}
 		if frame.IsPingFrame() {
 			log.Debugf("[CIPHERSTREAM] receive Ping frame, exec PingHook and continue to read next frame")
-			if cs.PingHook != nil {
-				if err := cs.PingHook(cs, frame.RawDataPayload()); err != nil {
-					log.Errorf("[CIPHERSTREAM] ping hook: %v", err)
-					return 0, ErrPingHook
-				}
-			}
 			continue
 		}
 
@@ -217,7 +210,10 @@ func (cs *CipherStream) Release() {
 }
 
 func (cs *CipherStream) Close() error {
-	err := cs.Conn.Close()
+	var err error
+	if cs.Conn != nil {
+		err = cs.Conn.Close()
+	}
 	cs.Release()
 	return err
 }

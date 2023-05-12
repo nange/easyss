@@ -634,7 +634,7 @@ func (ss *Easyss) Timeout() time.Duration {
 }
 
 func (ss *Easyss) PingTimeout() time.Duration {
-	timeout := ss.Timeout() / 3
+	timeout := ss.Timeout() / 5
 	if timeout < time.Second {
 		timeout = time.Second
 	}
@@ -764,7 +764,6 @@ func (ss *Easyss) AvailableConn() (conn net.Conn, err error) {
 			return
 		}
 
-		er = conn.SetReadDeadline(time.Now().Add(ss.PingTimeout()))
 		return
 	}
 
@@ -793,7 +792,7 @@ func (ss *Easyss) AvailableConn() (conn net.Conn, err error) {
 	return
 }
 
-func (ss *Easyss) PingHook(conn net.Conn, b []byte) error {
+func (ss *Easyss) PingHook(b []byte) error {
 	if len(b) == 0 {
 		return nil
 	}
@@ -812,7 +811,7 @@ func (ss *Easyss) PingHook(conn net.Conn, b []byte) error {
 		log.Infof("[EASYSS] got latency:%v of ping %s", since, ss.Server())
 	}
 
-	return conn.SetReadDeadline(time.Time{})
+	return nil
 }
 
 func (ss *Easyss) SetSocksServer(server *socks5.Server) {

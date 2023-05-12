@@ -154,27 +154,40 @@ func (ss *Easyss) handShakeWithRemote(addr string, flag uint8) (net.Conn, error)
 		return nil, err
 	}
 
-	cs, err := cipherstream.New(stream, ss.Password(), cipherstream.MethodAes256GCM, cipherstream.FrameTypeData, flag)
-	if err != nil {
-		log.Errorf("[TCP_PROXY] new cipherstream:%v", err)
-		return cs, err
-	}
-	csStream := cs.(*cipherstream.CipherStream)
+	csStream, err := func() (*cipherstream.CipherStream, error) {
+		cs, err := cipherstream.New(stream, ss.Password(), cipherstream.MethodAes256GCM, cipherstream.FrameTypeData, flag)
+		csStream := cs.(*cipherstream.CipherStream)
+		if err != nil {
+			log.Errorf("[TCP_PROXY] new cipherstream:%v", err)
+			return csStream, err
+		}
 
-	cipherMethod := EncodeCipherMethod(ss.Method())
-	frame := cipherstream.NewFrame(cipherstream.FrameTypeData, append([]byte(addr), cipherMethod), flag, csStream.AEADCipher)
-	if err := csStream.WriteFrame(frame); err != nil {
-		return cs, err
-	}
+		cipherMethod := EncodeCipherMethod(ss.Method())
+		frame := cipherstream.NewFrame(cipherstream.FrameTypeData, append([]byte(addr), cipherMethod), flag, csStream.AEADCipher)
+		if err := csStream.WriteFrame(frame); err != nil {
+			return csStream, err
+		}
 
-	frame, err = csStream.ReadFrame()
+		if err := csStream.SetReadDeadline(time.Now().Add(ss.PingTimeout())); err != nil {
+			return csStream, err
+		}
+		frame, err = csStream.ReadFrame()
+		if err != nil {
+			return csStream, err
+		}
+		if !frame.IsPingFrame() {
+			return csStream, fmt.Errorf("except got ping frame, but got %v", frame.FrameType())
+		}
+		if err := ss.PingHook(frame.RawDataPayload()); err != nil {
+			return csStream, err
+		}
+
+		return csStream, csStream.SetReadDeadline(time.Time{})
+	}()
 	if err != nil {
-		return cs, err
+		return csStream, err
 	}
-	if !frame.IsPingFrame() {
-		return cs, fmt.Errorf("except got ping frame, but got %v", frame.FrameType())
-	}
-	stream.SetReadDeadline(time.Time{})
+	csStream.Release()
 
 	return cipherstream.New(stream, ss.Password(), ss.Method(), cipherstream.FrameTypeData, flag)
 }
