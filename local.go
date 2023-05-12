@@ -5,8 +5,8 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"time"
 
-	"github.com/nange/easypool"
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/util"
 	log "github.com/sirupsen/logrus"
@@ -95,41 +95,22 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		}
 	}
 
-	stream, err := ss.AvailableConn()
+	csStream, err := ss.handShakeWithRemote(addr, cipherstream.FlagTCP)
 	if err != nil {
-		log.Errorf("[TCP_PROXY] get stream from pool failed:%v", err)
-		return
-	}
-
-	defer func() {
-		stream.Close()
-		if p := ss.Pool(); p != nil {
-			log.Debugf("[TCP_PROXY] after stream close, pool len:%v", p.Len())
-		}
-	}()
-
-	csStream, err := cipherstream.New(stream, ss.Password(), ss.Method(), cipherstream.FrameTypeData, cipherstream.FlagTCP)
-	if err != nil {
-		log.Errorf("[TCP_PROXY] new cipherstream err:%v, method:%v", err, ss.Method())
-		return
-	}
-	csStream.(*cipherstream.CipherStream).PingHook = ss.PingHook
-
-	if err = ss.handShakeWithRemote(csStream, addr, cipherstream.FlagTCP); err != nil {
-		log.Errorf("[TCP_PROXY] handshake with remote server err:%v", err)
-		if pc, ok := stream.(*easypool.PoolConn); ok {
-			log.Debugf("[TCP_PROXY] mark pool conn stream unusable")
-			pc.MarkUnusable()
+		log.Warnf("[TCP_PROXY] handshake with remote server err:%v", err)
+		if csStream != nil {
+			MarkCipherStreamUnusable(csStream)
+			csStream.Close()
 		}
 		return
 	}
+	defer csStream.Close()
 
 	tryReuse := true
 	if !ss.IsNativeOutboundProto() {
 		tryReuse = false
 	}
 	n1, n2, err := relay(csStream, localConn, ss.Timeout(), tryReuse)
-	csStream.(*cipherstream.CipherStream).Release()
 
 	log.Debugf("[TCP_PROXY] send %v bytes to %v, recive %v bytes, err:%v", n1, addr, n2, err)
 
@@ -166,14 +147,36 @@ func (ss *Easyss) validateAddr(addr string) error {
 	return nil
 }
 
-func (ss *Easyss) handShakeWithRemote(stream net.Conn, addr string, flag uint8) error {
-	csStream := stream.(*cipherstream.CipherStream)
+func (ss *Easyss) handShakeWithRemote(addr string, flag uint8) (net.Conn, error) {
+	stream, err := ss.AvailableConn()
+	if err != nil {
+		log.Errorf("[TCP_PROXY] get stream from pool failed:%v", err)
+		return nil, err
+	}
+
+	cs, err := cipherstream.New(stream, ss.Password(), cipherstream.MethodAes256GCM, cipherstream.FrameTypeData, flag)
+	if err != nil {
+		log.Errorf("[TCP_PROXY] new cipherstream:%v", err)
+		return cs, err
+	}
+	csStream := cs.(*cipherstream.CipherStream)
 
 	cipherMethod := EncodeCipherMethod(ss.Method())
-	cipher, _ := cipherstream.NewAes256GCM([]byte(ss.Password()))
-	frame := cipherstream.NewFrame(cipherstream.FrameTypeData, append([]byte(addr), cipherMethod), flag, cipher)
+	frame := cipherstream.NewFrame(cipherstream.FrameTypeData, append([]byte(addr), cipherMethod), flag, csStream.AEADCipher)
+	if err := csStream.WriteFrame(frame); err != nil {
+		return cs, err
+	}
 
-	return csStream.WriteFrame(frame)
+	frame, err = csStream.ReadFrame()
+	if err != nil {
+		return cs, err
+	}
+	if !frame.IsPingFrame() {
+		return cs, fmt.Errorf("except got ping frame, but got %v", frame.FrameType())
+	}
+	stream.SetReadDeadline(time.Time{})
+
+	return cipherstream.New(stream, ss.Password(), ss.Method(), cipherstream.FrameTypeData, flag)
 }
 
 func EncodeCipherMethod(m string) byte {

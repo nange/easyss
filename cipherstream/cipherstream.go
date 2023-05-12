@@ -44,16 +44,16 @@ func New(stream net.Conn, password, method string, frameType FrameType, flags ..
 		var err error
 		cs.AEADCipher, err = NewAes256GCM([]byte(password))
 		if err != nil {
-			return nil, fmt.Errorf("new aes-256-gcm:%w", err)
+			return cs, fmt.Errorf("new aes-256-gcm:%w", err)
 		}
 	case MethodChaCha20Poly1305:
 		var err error
 		cs.AEADCipher, err = NewChaCha20Poly1305([]byte(password))
 		if err != nil {
-			return nil, fmt.Errorf("new chacha20-poly1305:%w", err)
+			return cs, fmt.Errorf("new chacha20-poly1305:%w", err)
 		}
 	default:
-		return nil, errors.New("cipher method unsupported, method:" + method)
+		return cs, errors.New("cipher method unsupported, method:" + method)
 	}
 
 	cs.frameIter = NewFrameIter(stream, cs.AEADCipher)
@@ -205,11 +205,21 @@ func (cs *CipherStream) ReadFrame() (*Frame, error) {
 }
 
 func (cs *CipherStream) Release() {
-	bytespool.MustPut(cs.wbuf)
-	cs.frameIter.Release()
+	if len(cs.wbuf) > 0 {
+		bytespool.MustPut(cs.wbuf)
+	}
+	if cs.frameIter != nil {
+		cs.frameIter.Release()
+	}
 
 	cs.Conn = nil
 	cs.wbuf = nil
+}
+
+func (cs *CipherStream) Close() error {
+	err := cs.Conn.Close()
+	cs.Release()
+	return err
 }
 
 func (cs *CipherStream) CloseWrite() error {

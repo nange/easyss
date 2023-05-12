@@ -44,17 +44,19 @@ func relay(cipher, plainTxt net.Conn, timeout time.Duration, tryReuse bool) (int
 		}
 	}
 
-	var reuse error
 	if res1.TryReuse && res2.TryReuse {
-		reuse = tryReuseFn(cipher, timeout)
-	}
-	if reuse != nil {
-		MarkCipherStreamUnusable(cipher)
-		if tryReuse {
+		reuse := tryReuseFn(cipher, timeout)
+		if reuse != nil {
+			MarkCipherStreamUnusable(cipher)
 			log.Warnf("[REPAY] underlying proxy connection is unhealthy, need close it: %v", reuse)
+		} else {
+			log.Debugf("[REPAY] underlying proxy connection is healthy, so reuse it")
 		}
 	} else {
-		log.Debugf("[REPAY] underlying proxy connection is healthy, so reuse it")
+		if tryReuse {
+			MarkCipherStreamUnusable(cipher)
+			log.Warnf("[REPAY] underlying proxy connection is unhealthy, need close it: %v", err)
+		}
 	}
 
 	return n1, n2, err
@@ -79,9 +81,11 @@ func copyCipherToPlainTxt(plainTxt, cipher net.Conn, timeout time.Duration, tryR
 
 	if er != nil && !errors.Is(er, cipherstream.ErrFINRSTStream) {
 		log.Debugf("[REPAY] copy from cipher to plaintxt: %v", err)
-		err = errors.Join(err, er)
 		if tryReuse {
-			if er := readAllIgnore(cipher, timeout); !errors.Is(er, cipherstream.ErrFINRSTStream) {
+			if er = readAllIgnore(cipher, timeout); er != nil && !errors.Is(er, cipherstream.ErrFINRSTStream) {
+				if !errors.Is(er, cipherstream.ErrTimeout) {
+					err = errors.Join(err, er)
+				}
 				tryReuse = false
 			}
 		}

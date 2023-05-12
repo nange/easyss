@@ -121,7 +121,7 @@ func (h *Header) HasPad() bool {
 	return h.header[4]&FlagPad == FlagPad
 }
 
-func (h *Header) FrameTypeFromHeader() FrameType {
+func (h *Header) FrameType() FrameType {
 	if len(h.header) != Http2HeaderLen {
 		panic("header length is invalid")
 	}
@@ -132,28 +132,28 @@ func (h *Header) IsDataFrame() bool {
 	if len(h.header) != Http2HeaderLen {
 		panic("header length is invalid")
 	}
-	return h.FrameTypeFromHeader() == FrameTypeData
+	return h.FrameType() == FrameTypeData
 }
 
 func (h *Header) IsPingFrame() bool {
 	if len(h.header) != Http2HeaderLen {
 		panic("header length is invalid")
 	}
-	return h.FrameTypeFromHeader() == FrameTypePing
+	return h.FrameType() == FrameTypePing
 }
 
 func (h *Header) IsRSTFINFrame() bool {
 	if len(h.header) != Http2HeaderLen {
 		panic("header length is invalid")
 	}
-	return h.FrameTypeFromHeader() == FrameTypeRST && h.header[4]&FlagFIN == FlagFIN
+	return h.FrameType() == FrameTypeRST && h.header[4]&FlagFIN == FlagFIN
 }
 
 func (h *Header) IsRSTACKFrame() bool {
 	if len(h.header) != Http2HeaderLen {
 		panic("header length is invalid")
 	}
-	return h.FrameTypeFromHeader() == FrameTypeRST && h.header[4]&FlagACK == FlagACK
+	return h.FrameType() == FrameTypeRST && h.header[4]&FlagACK == FlagACK
 }
 
 func (h *Header) IsTCPProto() bool {
