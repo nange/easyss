@@ -9,7 +9,11 @@ func NewDNSForwardServer(dnsServer string) *dns.Server {
 	srv := &dns.Server{Addr: ":53", Net: "udp"}
 
 	srv.Handler = dns.HandlerFunc(func(writer dns.ResponseWriter, msg *dns.Msg) {
-		c := &dns.Client{Timeout: DefaultDNSTimeout, UDPSize: uint16(4096)}
+		if len(msg.Question) > 0 {
+			log.Infof("[DNS_FORWARD] %s", msg.Question[0].Name)
+		}
+
+		c := &dns.Client{Timeout: DefaultDNSTimeout, UDPSize: UDPSize}
 		r, _, err := c.Exchange(msg, dnsServer)
 		if err != nil {
 			log.Errorf("[DNS_FORWARD] exchange err:%s", err.Error())

@@ -44,6 +44,8 @@ const (
 const (
 	UDPLocksCount    = 256
 	UDPLocksAndOpVal = 255
+
+	UDPSize uint16 = 4096
 )
 
 const (
@@ -927,9 +929,9 @@ func (ss *Easyss) SetDNSCache(msg *dns.Msg, noExpire, isDirect bool) error {
 }
 
 func (ss *Easyss) DNSMsg(dnsServer, domain string) (*dns.Msg, *dns.Msg, error) {
-	c := new(dns.Client)
+	c := &dns.Client{Timeout: DefaultDNSTimeout, UDPSize: UDPSize}
 
-	m := new(dns.Msg)
+	m := &dns.Msg{}
 	m.SetQuestion(dns.Fqdn(domain), dns.TypeA)
 	m.RecursionDesired = true
 
