@@ -9,7 +9,7 @@ import (
 	"github.com/nange/easyss/v2/util/bytespool"
 	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
-	"github.com/xjasonlyu/tun2socks/v2/component/dialer"
+	"github.com/xjasonlyu/tun2socks/v2/dialer"
 )
 
 // DefaultDirectDNSServers the servers are dns servers from tencent, aliyun and baidu

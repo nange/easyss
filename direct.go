@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	log "github.com/sirupsen/logrus"
-	"github.com/xjasonlyu/tun2socks/v2/component/dialer"
+	"github.com/xjasonlyu/tun2socks/v2/dialer"
 )
 
 func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
