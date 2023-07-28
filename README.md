@@ -135,7 +135,7 @@ your-custom-domain.com
 
 手机客户端apk文件可直接在[release页面](https://github.com/nange/easyss/releases)下载。
 
-手机客户端是基于Matsuri扩展修改而来，源代码在[Matsuri](https://github.com/bingooo/Matsuri/tree/easyss)，感谢 [bingooo](https://github.com/bingooo)
+手机客户端是基于NekoBoxForAndroid扩展修改而来，源代码在[NekoBoxForAndroid](https://github.com/bingooo/NekoBoxForAndroid/tree/easyss)，感谢 [bingooo](https://github.com/bingooo)
 
 用法：创建Easyss配置项：点击右上角+图标 -> 手动输入 -> 选择Easyss
 
