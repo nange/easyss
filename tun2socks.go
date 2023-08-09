@@ -187,8 +187,12 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 
 	switch runtime.GOOS {
 	case "linux":
-		if _, err := util.CommandContext(ctx, "pkexec", "bash",
-			namePath, _TunDevice, TunIPSub, TunGW, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()); err != nil {
+		cmdArgs := []string{"pkexec", "bash", namePath, _TunDevice, TunIPSub, TunGW, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()}
+		if os.Geteuid() == 0 {
+			log.Infof("[TUN2SOCKS] current user is root, use bash directly")
+			cmdArgs = cmdArgs[1:]
+		}
+		if _, err := util.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...); err != nil {
 			log.Errorf("[TUN2SOCKS] exec %s err:%s", _createTunFilename, err.Error())
 			return err
 		}
