@@ -41,18 +41,7 @@ var (
 	wintunArm []byte
 )
 
-const (
-	TunDevice       = "tun-easyss"
-	TunDeviceDarwin = "utun9"
-	TunIP           = "198.18.0.1"
-	TunGW           = "198.18.0.1"
-	TunMask         = "255.255.0.0"
-	TunIPSub        = "198.18.0.1/16"
-)
-
 var (
-	_TunDevice string
-
 	_createTunFilename string
 	_createTunBytes    []byte
 
@@ -85,8 +74,6 @@ func (t2ss Tun2socksStatus) String() string {
 }
 
 func init() {
-	_TunDevice = TunDevice
-
 	switch runtime.GOOS {
 	case "linux":
 		_createTunFilename = "create_tun_dev.sh"
@@ -101,8 +88,6 @@ func init() {
 		_closeTunFilename = "close_tun_dev_windows.bat"
 		_closeTunBytes = closeTunDevShWindows
 	case "darwin":
-		_TunDevice = TunDeviceDarwin
-
 		_createTunFilename = "create_tun_dev_darwin.sh"
 		_createTunBytes = createTunDevShDarwin
 
@@ -160,7 +145,7 @@ func (ss *Easyss) CreateTun2socks() error {
 func (ss *Easyss) startTun2socksEngine() {
 	key := &engine.Key{
 		Proxy:                ss.Socks5ProxyAddr(),
-		Device:               _TunDevice,
+		Device:               ss.TunConfig().TunDevice,
 		LogLevel:             "error",
 		TCPSendBufferSize:    RelayBufferSizeString,
 		TCPReceiveBufferSize: RelayBufferSizeString,
@@ -185,9 +170,10 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 	}
 	defer os.RemoveAll(namePath)
 
+	tc := ss.TunConfig()
 	switch runtime.GOOS {
 	case "linux":
-		cmdArgs := []string{"pkexec", "bash", namePath, _TunDevice, TunIPSub, TunGW, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()}
+		cmdArgs := []string{"pkexec", "bash", namePath, tc.TunDevice, tc.IPSub(), tc.TunGW, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()}
 		if os.Geteuid() == 0 {
 			log.Infof("[TUN2SOCKS] current user is root, use bash directly")
 			cmdArgs = cmdArgs[1:]
@@ -204,14 +190,14 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 		}
 		namePath = newNamePath
 		if _, err := util.CommandContext(ctx, "cmd.exe", "/C",
-			namePath, _TunDevice, TunIP, TunGW, TunMask, ss.ServerIP(), ss.LocalGateway()); err != nil {
+			namePath, tc.TunDevice, tc.TunIP, tc.TunGW, tc.TunMask, ss.ServerIP(), ss.LocalGateway()); err != nil {
 			log.Errorf("[TUN2SOCKS] exec %s err:%s", _createTunFilename, err.Error())
 			return err
 		}
 	case "darwin":
 		if _, err := util.CommandContext(ctx, "osascript", "-e",
 			fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s\" with administrator privileges",
-				namePath, _TunDevice, TunIP, TunGW, ss.ServerIP(), ss.LocalGateway())); err != nil {
+				namePath, tc.TunDevice, tc.TunIP, tc.TunGW, ss.ServerIP(), ss.LocalGateway())); err != nil {
 			log.Errorf("[TUN2SOCKS] exec %s err:%s", _createTunFilename, err.Error())
 			return err
 		}
@@ -261,10 +247,11 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 	}
 	defer os.RemoveAll(namePath)
 
+	tc := ss.TunConfig()
 	switch runtime.GOOS {
 	case "linux":
 		if _, err := util.CommandContext(ctx, "pkexec", "bash",
-			namePath, _TunDevice, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()); err != nil {
+			namePath, tc.TunDevice, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()); err != nil {
 			log.Errorf("[TUN2SOCKS] exec %s err:%s", _closeTunFilename, err.Error())
 			return err
 		}
@@ -276,14 +263,14 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 		}
 		namePath = newNamePath
 		if _, err := util.CommandContext(ctx, "cmd.exe", "/C",
-			namePath, TunGW, ss.ServerIP(), ss.LocalGateway()); err != nil {
+			namePath, tc.TunGW, ss.ServerIP(), ss.LocalGateway()); err != nil {
 			log.Errorf("[TUN2SOCKS] exec %s err:%s", _closeTunFilename, err.Error())
 			return err
 		}
 	case "darwin":
 		if _, err := util.CommandContext(ctx, "osascript", "-e",
 			fmt.Sprintf("do shell script \"sh %s %s %s %s\" with administrator privileges",
-				namePath, TunGW, ss.ServerIP(), ss.LocalGateway())); err != nil {
+				namePath, tc.TunGW, ss.ServerIP(), ss.LocalGateway())); err != nil {
 			log.Errorf("[TUN2SOCKS] exec %s err:%s", _closeTunFilename, err.Error())
 			return err
 		}

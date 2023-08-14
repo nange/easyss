@@ -842,6 +842,10 @@ func (ss *Easyss) EnabledTun2socksFromConfig() bool {
 	return ss.config.EnableTun2socks
 }
 
+func (ss *Easyss) TunConfig() *TunConfig {
+	return ss.config.TunConfig
+}
+
 func (ss *Easyss) ProxyRule() ProxyRule {
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()

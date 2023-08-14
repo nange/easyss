@@ -5,9 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"reflect"
+	"runtime"
+	"strconv"
+	"strings"
 )
 
 var Methods = map[string]struct{}{
@@ -71,6 +75,7 @@ type Config struct {
 	DisableTLS        bool           `json:"disable_tls"`
 	EnableForwardDNS  bool           `json:"enable_forward_dns"`
 	EnableTun2socks   bool           `json:"enable_tun2socks"`
+	TunConfig         *TunConfig     `json:"tun_config"`
 	DirectIPsFile     string         `json:"direct_ips_file"`
 	DirectDomainsFile string         `json:"direct_domains_file"`
 	ProxyRule         string         `json:"proxy_rule"`
@@ -80,6 +85,34 @@ type Config struct {
 	CMDInterval       string         `json:"cmd_interval"`
 	CMDIntervalTime   int            `json:"cmd_interval_time"`
 	ConfigFile        string         `json:"-"`
+}
+
+type TunConfig struct {
+	TunDevice string `json:"tun_device"`
+	TunIP     string `json:"tun_ip"`
+	TunGW     string `json:"tun_gw"`
+	TunMask   string `json:"tun_mask"`
+}
+
+func (tc *TunConfig) IPSub() string {
+	if tc == nil {
+		return ""
+	}
+	items := strings.Split(tc.TunMask, ".")
+	if len(items) != 4 {
+		return ""
+	}
+
+	m0, _ := strconv.ParseUint(items[0], 10, 8)
+	m1, _ := strconv.ParseUint(items[1], 10, 8)
+	m2, _ := strconv.ParseUint(items[2], 10, 8)
+	m3, _ := strconv.ParseUint(items[3], 10, 8)
+	ipNet := net.IPNet{
+		IP:   net.ParseIP(tc.TunIP),
+		Mask: net.IPv4Mask(byte(m0), byte(m1), byte(m2), byte(m3)),
+	}
+
+	return ipNet.String()
 }
 
 func (c *Config) Validate() error {
@@ -112,6 +145,12 @@ func (c *Config) Validate() error {
 		c.OutboundProto != OutboundProtoHTTPS {
 		return fmt.Errorf("outbound proto must be one of [%s, %s, %s]",
 			OutboundProtoNative, OutboundProtoHTTP, OutboundProtoHTTPS)
+	}
+	if c.TunConfig == nil {
+		return fmt.Errorf("tun config should not be empty")
+	}
+	if c.TunConfig.TunDevice == "" || c.TunConfig.TunIP == "" || c.TunConfig.TunGW == "" || c.TunConfig.TunMask == "" {
+		return fmt.Errorf("any of tun config field should not be empty")
 	}
 
 	return nil
@@ -207,6 +246,24 @@ func (c *Config) SetDefaultValue() {
 	}
 	if c.CMDIntervalTime == 0 {
 		c.CMDIntervalTime = 600
+	}
+	if c.TunConfig == nil {
+		c.TunConfig = &TunConfig{}
+		switch runtime.GOOS {
+		case "linux", "windows":
+			c.TunConfig.TunDevice = "tun-easyss"
+		case "darwin":
+			c.TunConfig.TunDevice = "utun9"
+		}
+		c.TunConfig.TunIP = "198.18.0.1"
+		c.TunConfig.TunGW = "198.18.0.1"
+		c.TunConfig.TunMask = "255.255.0.0"
+	}
+	if c.TunConfig.TunIP == "" && c.TunConfig.TunGW != "" {
+		c.TunConfig.TunIP = c.TunConfig.TunGW
+	}
+	if c.TunConfig.TunMask == "" {
+		c.TunConfig.TunMask = "255.255.0.0"
 	}
 }
 
