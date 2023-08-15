@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/klauspost/compress/gzhttp"
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/util/bytespool"
 	log "github.com/sirupsen/logrus"
@@ -79,8 +80,8 @@ func (s *Server) Accept() (net.Conn, error) {
 }
 
 func (s *Server) handler() {
-	http.HandleFunc("/pull", s.pull)
-	http.HandleFunc("/push", s.push)
+	http.Handle("/pull", gzhttp.GzipHandler(http.HandlerFunc(s.pull)))
+	http.Handle("/push", gzhttp.GzipHandler(http.HandlerFunc(s.push)))
 }
 
 func (s *Server) pull(w http.ResponseWriter, r *http.Request) {

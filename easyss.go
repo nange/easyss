@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/coocood/freecache"
+	"github.com/klauspost/compress/gzhttp"
 	"github.com/miekg/dns"
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/v2/cipherstream"
@@ -523,11 +524,12 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 
 	var transport http.RoundTripper
 	if ss.IsHTTPOutboundProto() {
-		transport = &http.Transport{
+		// enable gzip if it is http outbound proto
+		transport = gzhttp.Transport(&http.Transport{
 			MaxIdleConns:          MaxIdle,
 			IdleConnTimeout:       MaxLifetime,
 			ResponseHeaderTimeout: ss.Timeout(),
-		}
+		})
 	} else {
 		if ss.DisableUTLS() {
 			transport = &http.Transport{

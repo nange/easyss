@@ -8,6 +8,7 @@ require (
 	github.com/coocood/freecache v1.2.3
 	github.com/getlantern/systray v1.2.2
 	github.com/gofrs/uuid/v5 v5.0.0
+	github.com/klauspost/compress v1.16.7
 	github.com/libp2p/go-netroute v0.2.1
 	github.com/miekg/dns v1.1.55
 	github.com/nange/easypool v1.3.1
@@ -44,7 +45,6 @@ require (
 	github.com/google/gopacket v1.1.19 // indirect
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/gorilla/websocket v1.5.0 // indirect
-	github.com/klauspost/compress v1.16.7 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.5 // indirect
 	github.com/kr/pretty v0.1.0 // indirect
 	github.com/libdns/libdns v0.2.1 // indirect
