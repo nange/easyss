@@ -7,6 +7,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.2.0
 	github.com/coocood/freecache v1.2.3
 	github.com/getlantern/systray v1.2.2
+	github.com/go-faker/faker/v4 v4.1.1
 	github.com/gofrs/uuid/v5 v5.0.0
 	github.com/klauspost/compress v1.16.7
 	github.com/libp2p/go-netroute v0.2.1

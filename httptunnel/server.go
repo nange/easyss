@@ -2,6 +2,8 @@ package httptunnel
 
 import (
 	"crypto/tls"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -9,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-faker/faker/v4"
 	"github.com/klauspost/compress/gzhttp"
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/util/bytespool"
@@ -101,7 +104,7 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Debugf("[HTTP_TUNNEL_SERVER] pull uuid:%v", reqID)
 
-	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Transfer-Encoding", "chunked")
 
 	buf := bytespool.Get(RelayBufferSize)
@@ -110,7 +113,16 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 	for {
 		n, err := conn.ReadLocal(buf)
 		if n > 0 {
-			if _, err = w.Write(buf[:n]); err != nil {
+			p := &pullResp{}
+			if err := faker.FakeData(p); err != nil {
+				log.Warnf("[HTTP_TUNNEL_SERVER] fake data:%v", err)
+				writeServiceUnavailableError(w, "fake data:"+err.Error())
+				return
+			}
+			p.Ciphertext = base64.StdEncoding.EncodeToString(buf[:n])
+
+			b, _ := json.Marshal(p)
+			if _, err = w.Write(b); err != nil {
 				log.Warnf("[HTTP_TUNNEL_SERVER] response write:%v", err)
 			}
 			if flusher, ok := w.(http.Flusher); ok {
@@ -154,13 +166,27 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 		writeServiceUnavailableError(w, "read all from body:"+err.Error())
 		return
 	}
-	if _, err = conn.WriteLocal(b); err != nil {
+	p := &pushPayload{}
+	if err := json.Unmarshal(b, p); err != nil {
+		log.Warnf("[HTTP_TUNNEL_SERVER] json.Unmarshal:%v", err)
+		writeServiceUnavailableError(w, "json unmarshal:"+err.Error())
+		return
+	}
+
+	cipher, err := base64.StdEncoding.DecodeString(p.Ciphertext)
+	if err != nil {
+		log.Warnf("[HTTP_TUNNEL_SERVER] decode cipher:%v", err)
+		writeServiceUnavailableError(w, "decode cipher:"+err.Error())
+		return
+	}
+
+	if _, err = conn.WriteLocal(cipher); err != nil {
 		log.Warnf("[HTTP_TUNNEL_SERVER] write local:%v", err)
 		writeServiceUnavailableError(w, "write local:"+err.Error())
 		return
 	}
 
-	writeNoContent(w)
+	writeSuccess(w)
 }
 
 func (s *Server) CloseConn(reqID string) {
@@ -180,4 +206,10 @@ func writeServiceUnavailableError(w http.ResponseWriter, msg string) {
 
 func writeNoContent(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func writeSuccess(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"code":"SUCCESS", "message":"PUSH SUCCESS"}`))
 }

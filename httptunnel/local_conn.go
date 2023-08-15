@@ -2,20 +2,28 @@ package httptunnel
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/go-faker/faker/v4"
 	"github.com/gofrs/uuid/v5"
 	log "github.com/sirupsen/logrus"
 )
 
-const RequestIDHeader = "X-Request-UID"
+const (
+	RequestIDHeader = "X-Request-UID"
+	UserAgent       = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+)
 
 var _ net.Conn = (*LocalConn)(nil)
 
@@ -46,6 +54,7 @@ type LocalConn struct {
 
 	client   *http.Client
 	respBody io.ReadCloser
+	left     []byte
 }
 
 func NewLocalConn(client *http.Client, serverAddr string) (*LocalConn, error) {
@@ -67,6 +76,16 @@ func NewLocalConn(client *http.Client, serverAddr string) (*LocalConn, error) {
 }
 
 func (l *LocalConn) Read(b []byte) (n int, err error) {
+	if len(l.left) > 0 {
+		n = copy(b, l.left)
+		if n < len(l.left) {
+			l.left = l.left[n:]
+		} else {
+			l.left = nil
+		}
+		return
+	}
+
 	l.Lock()
 	if err := l.checkConn(); err != nil {
 		l.Unlock()
@@ -80,7 +99,24 @@ func (l *LocalConn) Read(b []byte) (n int, err error) {
 		}
 	}
 	l.Unlock()
-	n, err = l.respBody.Read(b)
+
+	dec := json.NewDecoder(l.respBody)
+	for {
+		var resp pullResp
+		if err = dec.Decode(&resp); err != nil {
+			break
+		}
+
+		var data []byte
+		if data, err = base64.StdEncoding.DecodeString(resp.Ciphertext); err != nil {
+			break
+		}
+		n = copy(b, data)
+		if n < len(data) {
+			l.left = data[n:]
+		}
+		break
+	}
 	if err != nil {
 		log.Debugf("[HTTP_TUNNEL_LOACAL] read from remote:%v", err)
 		if strings.Contains(err.Error(), "http2: server sent GOAWAY and closed the connection") {
@@ -193,10 +229,19 @@ func (l *LocalConn) SetWriteDeadline(t time.Time) error {
 }
 
 func (l *LocalConn) pull() error {
-	req, err := http.NewRequest(http.MethodGet, l.serverAddr+"/pull", nil)
+	p := &pullParam{}
+	if err := faker.FakeData(p); err != nil {
+		return err
+	}
+
+	v := url.Values{}
+	v.Set("mchid", strconv.FormatInt(int64(p.Mchid), 10))
+	v.Set("transaction_id", p.TransactionID)
+	req, err := http.NewRequest(http.MethodGet, l.serverAddr+"/pull?"+v.Encode(), nil)
 	if err != nil {
 		return err
 	}
+
 	req.Header.Set(RequestIDHeader, l.uuid)
 
 	resp, err := l.client.Do(req)
@@ -213,14 +258,21 @@ func (l *LocalConn) pull() error {
 }
 
 func (l *LocalConn) push(data []byte) error {
-	req, err := http.NewRequest(http.MethodPost, l.serverAddr+"/push", bytes.NewBuffer(data))
+	p := &pushPayload{}
+	if err := faker.FakeData(p); err != nil {
+		return err
+	}
+	p.Ciphertext = base64.StdEncoding.EncodeToString(data)
+	payload, _ := json.Marshal(p)
+
+	req, err := http.NewRequest(http.MethodPost, l.serverAddr+"/push", bytes.NewBuffer(payload))
 	if err != nil {
 		return err
 	}
-	req.ContentLength = int64(len(data))
-	req.Header.Set("Content-Type", "application/octet-stream")
+	req.ContentLength = int64(len(payload))
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(RequestIDHeader, l.uuid)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", UserAgent)
 
 	resp, err := l.client.Do(req)
 	if err != nil {
