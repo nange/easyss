@@ -101,22 +101,17 @@ func (l *LocalConn) Read(b []byte) (n int, err error) {
 	l.Unlock()
 
 	dec := json.NewDecoder(l.respBody)
-	for {
-		var resp pullResp
-		if err = dec.Decode(&resp); err != nil {
-			break
-		}
-
+	var resp pullResp
+	if err = dec.Decode(&resp); err == nil {
 		var data []byte
-		if data, err = base64.StdEncoding.DecodeString(resp.Ciphertext); err != nil {
-			break
+		if data, err = base64.StdEncoding.DecodeString(resp.Ciphertext); err == nil {
+			n = copy(b, data)
+			if n < len(data) {
+				l.left = data[n:]
+			}
 		}
-		n = copy(b, data)
-		if n < len(data) {
-			l.left = data[n:]
-		}
-		break
 	}
+
 	if err != nil {
 		log.Debugf("[HTTP_TUNNEL_LOACAL] read from remote:%v", err)
 		if strings.Contains(err.Error(), "http2: server sent GOAWAY and closed the connection") {

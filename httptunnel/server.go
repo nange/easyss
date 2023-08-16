@@ -204,12 +204,10 @@ func writeServiceUnavailableError(w http.ResponseWriter, msg string) {
 	http.Error(w, msg, http.StatusServiceUnavailable)
 }
 
-func writeNoContent(w http.ResponseWriter) {
-	w.WriteHeader(http.StatusNoContent)
-}
-
 func writeSuccess(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusOK)
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"code":"SUCCESS", "message":"PUSH SUCCESS"}`))
+	if _, err := w.Write([]byte(`{"code":"SUCCESS", "message":"PUSH SUCCESS"}`)); err != nil {
+		log.Warnf("[HTTP_TUNNEL_SERVER] write success:%v", err)
+	}
 }
