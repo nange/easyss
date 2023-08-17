@@ -1,6 +1,6 @@
 module github.com/nange/easyss/v2
 
-go 1.20
+go 1.21
 
 require (
 	github.com/caddyserver/certmagic v0.19.1
@@ -15,14 +15,13 @@ require (
 	github.com/nange/easypool v1.3.1
 	github.com/oschwald/geoip2-golang v1.9.0
 	github.com/refraction-networking/utls v1.4.3
-	github.com/sirupsen/logrus v1.9.3
-	github.com/snowzach/rotatefilehook v0.0.0-20220211133110-53752135082d
 	github.com/stretchr/testify v1.8.4
 	github.com/txthinking/socks5 v0.0.0-20230325130024-4230056ae301
 	github.com/wzshiming/sysproxy v0.2.2
 	github.com/xjasonlyu/tun2socks/v2 v2.5.1
 	golang.org/x/crypto v0.12.0
 	golang.org/x/net v0.14.0
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
 require (
@@ -55,6 +54,7 @@ require (
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/quic-go/quic-go v0.37.4 // indirect
+	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/txthinking/runnergroup v0.0.0-20210608031112-152c7c4432bf // indirect
 	github.com/zeebo/blake3 v0.2.3 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
@@ -67,7 +67,6 @@ require (
 	golang.org/x/tools v0.10.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20230325221338-052af4a8072b // indirect
-	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gvisor.dev/gvisor v0.0.0-20230603040744-5c9219dedd33 // indirect
 )

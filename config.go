@@ -36,6 +36,8 @@ type ServerConfig struct {
 	ServerPort             int    `json:"server_port"`
 	Password               string `json:"password"`
 	Timeout                int    `json:"timeout"`
+	LogLevel               string `json:"log_level"`
+	LogFilePath            string `json:"log_file_path"`
 	DisableUTLS            bool   `json:"disable_utls"`
 	DisableTLS             bool   `json:"disable_tls"`
 	CertPath               string `json:"cert_path"`
@@ -65,6 +67,7 @@ type Config struct {
 	Password          string         `json:"password"`
 	Method            string         `json:"method"` // encryption method
 	LogLevel          string         `json:"log_level"`
+	LogFilePath       string         `json:"log_file_path"`
 	Timeout           int            `json:"timeout"`
 	AuthUsername      string         `json:"auth_username"`
 	AuthPassword      string         `json:"auth_password"`
@@ -306,6 +309,9 @@ func (c *Config) DefaultServerConfigFrom(list []ServerConfig) *ServerConfig {
 func (c *ServerConfig) SetDefaultValue() {
 	if c.Timeout <= 0 || c.Timeout > 60 {
 		c.Timeout = 30
+	}
+	if c.LogLevel == "" {
+		c.LogLevel = "info"
 	}
 	if c.OutboundProto == "" {
 		c.OutboundProto = OutboundProtoNative

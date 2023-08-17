@@ -7,16 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	log "github.com/sirupsen/logrus"
-	rotate "github.com/snowzach/rotatefilehook"
-)
-
-const (
-	LogMaxAge     = 1  // one day
-	LogMaxBackups = 1  // one backup
-	LogMaxSize    = 10 // 10Mb
-	LogFileName   = "easyss.log"
 )
 
 func FileExists(path string) (bool, error) {
@@ -39,28 +29,6 @@ func CurrentDir() string {
 		return ""
 	}
 	return filepath.Dir(path)
-}
-
-func LogFilePath() string {
-	dir := CurrentDir()
-	filename := LogFileName
-	return filepath.Join(dir, filename)
-}
-
-func SetLogFileHook(logDir string) {
-	logFilePath := filepath.Join(logDir, LogFileName)
-	hook, err := rotate.NewRotateFileHook(rotate.RotateFileConfig{
-		Filename:   logFilePath,
-		MaxSize:    LogMaxSize,
-		MaxBackups: LogMaxBackups,
-		MaxAge:     LogMaxAge,
-		Level:      log.DebugLevel,
-		Formatter:  &log.JSONFormatter{TimestampFormat: "2006-01-02 15:04:05.000"},
-	})
-	if err != nil {
-		panic(err)
-	}
-	log.AddHook(hook)
 }
 
 func DirFileList(dir string) ([]string, error) {

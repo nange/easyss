@@ -7,8 +7,8 @@ import (
 	"io"
 	"net"
 
+	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
-	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -73,12 +73,12 @@ func (cs *CipherStream) WriteFrame(f *Frame) error {
 
 	frameBytes, err := f.EncodeWithCipher(buf)
 	if err != nil {
-		log.Errorf("[CIPHERSTREAM] encode frame with cipher:%v", err)
+		log.Error("[CIPHERSTREAM] encode frame with cipher", "err", err)
 		return err
 	}
 
 	if _, ew := cs.Conn.Write(frameBytes); ew != nil {
-		log.Warnf("[CIPHERSTREAM] write cipher data to cipher stream failed, msg:%+v", ew)
+		log.Warn("[CIPHERSTREAM] write cipher data to cipher stream failed", "err", ew)
 		if timeout(ew) {
 			return ErrTimeout
 		}
@@ -118,12 +118,12 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 
 				frameBytes, er := frame.EncodeWithCipher(buf)
 				if er != nil {
-					log.Errorf("[CIPHERSTREAM] encode frame with cipher:%v", er)
+					log.Error("[CIPHERSTREAM] encode frame with cipher", "err", er)
 					return er
 				}
 
 				if _, ew := cs.Conn.Write(frameBytes); ew != nil {
-					log.Warnf("[CIPHERSTREAM] write cipher data to cipher stream failed, msg:%+v", ew)
+					log.Warn("[CIPHERSTREAM] write cipher data to cipher stream failed", "err", ew)
 					if timeout(ew) {
 						return ErrTimeout
 					}
@@ -136,7 +136,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		if er != nil {
 			if !errors.Is(er, io.EOF) {
-				log.Debugf("[CIPHERSTREAM] read plaintext from reader failed, msg:%+v", err)
+				log.Debug("[CIPHERSTREAM] read plaintext from reader failed", "err", err)
 				if timeout(er) {
 					err = errors.Join(err, ErrTimeout)
 				} else {
@@ -168,15 +168,15 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 		}
 
 		if frame.IsRSTFINFrame() {
-			log.Debugf("[CIPHERSTREAM] receive RST_FIN frame, stop reading immediately")
+			log.Debug("[CIPHERSTREAM] receive RST_FIN frame, stop reading immediately")
 			return 0, ErrFINRSTStream
 		}
 		if frame.IsRSTACKFrame() {
-			log.Debugf("[CIPHERSTREAM] receive RST_ACK frame, stop reading immediately")
+			log.Debug("[CIPHERSTREAM] receive RST_ACK frame, stop reading immediately")
 			return 0, ErrACKRSTStream
 		}
 		if frame.IsPingFrame() {
-			log.Debugf("[CIPHERSTREAM] receive Ping frame, exec PingHook and continue to read next frame")
+			log.Debug("[CIPHERSTREAM] receive Ping frame, exec PingHook and continue to read next frame")
 			continue
 		}
 

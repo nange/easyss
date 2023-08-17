@@ -8,14 +8,15 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/go-faker/faker/v4"
 	"github.com/klauspost/compress/gzhttp"
 	"github.com/nange/easyss/v2/cipherstream"
+	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
-	log "github.com/sirupsen/logrus"
 )
 
 const RelayBufferSize = cipherstream.MaxCipherRelaySize
@@ -55,14 +56,15 @@ func (s *Server) Listen() {
 
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {
-		log.Fatalf("[HTTP_TUNNEL_SERVER] net.Listen:%v", err)
+		log.Error("[HTTP_TUNNEL_SERVER] Listen", "err", err)
+		os.Exit(1)
 	}
 	if s.tlsConfig != nil {
 		ln = tls.NewListener(ln, s.tlsConfig)
 	}
 
-	log.Infof("[HTTP_TUNNEL_SERVER] listen http tunnel at:%v", s.addr)
-	log.Warnf("[HTTP_TUNNEL_SERVER] http serve:%v", s.server.Serve(ln))
+	log.Info("[HTTP_TUNNEL_SERVER] listen http tunnel at", "addr", s.addr)
+	log.Warn("[HTTP_TUNNEL_SERVER] http serve:", "err", s.server.Serve(ln))
 }
 
 func (s *Server) Close() error {
@@ -98,11 +100,11 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 	conn, ok := s.connMap[reqID]
 	s.Unlock()
 	if !ok {
-		log.Warnf("[HTTP_TUNNEL_SERVER] pull uuid:%v not found", reqID)
+		log.Warn("[HTTP_TUNNEL_SERVER] pull uuid not found", "uuid", reqID)
 		writeNotFoundError(w)
 		return
 	}
-	log.Debugf("[HTTP_TUNNEL_SERVER] pull uuid:%v", reqID)
+	log.Debug("[HTTP_TUNNEL_SERVER] pull", "uuid", reqID)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Transfer-Encoding", "chunked")
@@ -115,7 +117,7 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 		if n > 0 {
 			p := &pullResp{}
 			if err := faker.FakeData(p); err != nil {
-				log.Warnf("[HTTP_TUNNEL_SERVER] fake data:%v", err)
+				log.Warn("[HTTP_TUNNEL_SERVER] fake data", "err", err)
 				writeServiceUnavailableError(w, "fake data:"+err.Error())
 				return
 			}
@@ -123,7 +125,7 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 
 			b, _ := json.Marshal(p)
 			if _, err = w.Write(b); err != nil {
-				log.Warnf("[HTTP_TUNNEL_SERVER] response write:%v", err)
+				log.Warn("[HTTP_TUNNEL_SERVER] response write", "err", err)
 			}
 			if flusher, ok := w.(http.Flusher); ok {
 				flusher.Flush()
@@ -131,7 +133,7 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				log.Warnf("[HTTP_TUNNEL_SERVER] read from conn:%v", err)
+				log.Warn("[HTTP_TUNNEL_SERVER] read from conn", "err", err)
 			}
 			return
 		}
@@ -146,11 +148,11 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 
 	reqID := r.Header.Get(RequestIDHeader)
 	if reqID == "" {
-		log.Warnf("[HTTP_TUNNEL_SERVER] push uuid is empty")
+		log.Warn("[HTTP_TUNNEL_SERVER] push uuid is empty")
 		writeNotFoundError(w)
 		return
 	}
-	log.Debugf("[HTTP_TUNNEL_SERVER] push uuid:%v", reqID)
+	log.Debug("[HTTP_TUNNEL_SERVER] push uuid:%v", reqID)
 	s.Lock()
 	conn, ok := s.connMap[reqID]
 	if !ok {
@@ -162,26 +164,26 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 
 	b, err := io.ReadAll(r.Body)
 	if err != nil {
-		log.Warnf("[HTTP_TUNNEL_SERVER] read from body:%v", err)
+		log.Warn("[HTTP_TUNNEL_SERVER] read from body", "err", err)
 		writeServiceUnavailableError(w, "read all from body:"+err.Error())
 		return
 	}
 	p := &pushPayload{}
 	if err := json.Unmarshal(b, p); err != nil {
-		log.Warnf("[HTTP_TUNNEL_SERVER] json.Unmarshal:%v", err)
+		log.Warn("[HTTP_TUNNEL_SERVER] json.Unmarshal", "err", err)
 		writeServiceUnavailableError(w, "json unmarshal:"+err.Error())
 		return
 	}
 
 	cipher, err := base64.StdEncoding.DecodeString(p.Ciphertext)
 	if err != nil {
-		log.Warnf("[HTTP_TUNNEL_SERVER] decode cipher:%v", err)
+		log.Warn("[HTTP_TUNNEL_SERVER] decode cipher", "err", err)
 		writeServiceUnavailableError(w, "decode cipher:"+err.Error())
 		return
 	}
 
 	if _, err = conn.WriteLocal(cipher); err != nil {
-		log.Warnf("[HTTP_TUNNEL_SERVER] write local:%v", err)
+		log.Warn("[HTTP_TUNNEL_SERVER] write local", "err", err)
 		writeServiceUnavailableError(w, "write local:"+err.Error())
 		return
 	}
@@ -208,6 +210,6 @@ func writeSuccess(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusOK)
 	w.Header().Set("Content-Type", "application/json")
 	if _, err := w.Write([]byte(`{"code":"SUCCESS", "message":"PUSH SUCCESS"}`)); err != nil {
-		log.Warnf("[HTTP_TUNNEL_SERVER] write success:%v", err)
+		log.Warn("[HTTP_TUNNEL_SERVER] write success", "err", err)
 	}
 }

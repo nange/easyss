@@ -9,8 +9,8 @@ import (
 
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/v2/cipherstream"
+	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
-	log "github.com/sirupsen/logrus"
 )
 
 // RelayBufferSize set to MaxCipherRelaySize
@@ -48,14 +48,14 @@ func relay(cipher, plainTxt net.Conn, timeout time.Duration, tryReuse bool) (int
 		reuse := tryReuseFn(cipher, timeout)
 		if reuse != nil {
 			MarkCipherStreamUnusable(cipher)
-			log.Warnf("[REPAY] underlying proxy connection is unhealthy, need close it: %v", reuse)
+			log.Warn("[REPAY] underlying proxy connection is unhealthy, need close it", "reuse", reuse)
 		} else {
-			log.Debugf("[REPAY] underlying proxy connection is healthy, so reuse it")
+			log.Debug("[REPAY] underlying proxy connection is healthy, so reuse it")
 		}
 	} else {
 		MarkCipherStreamUnusable(cipher)
 		if tryReuse {
-			log.Warnf("[REPAY] underlying proxy connection is unhealthy, need close it: %v", err)
+			log.Warn("[REPAY] underlying proxy connection is unhealthy, need close it", "err", err)
 		}
 	}
 
@@ -73,14 +73,14 @@ func copyCipherToPlainTxt(plainTxt, cipher net.Conn, timeout time.Duration, tryR
 	n, er := io.Copy(plainTxt, cipher)
 	if ce := CloseWrite(plainTxt); ce != nil {
 		err = errors.Join(err, ce)
-		log.Warnf("[REPAY] close write for plaintxt stream: %v", ce)
+		log.Warn("[REPAY] close write for plaintxt stream", "err", ce)
 	}
 	if se := plainTxt.SetReadDeadline(time.Now().Add(2 * timeout)); se != nil {
 		err = errors.Join(err, se)
 	}
 
 	if er != nil && !errors.Is(er, cipherstream.ErrFINRSTStream) {
-		log.Debugf("[REPAY] copy from cipher to plaintxt: %v", err)
+		log.Debug("[REPAY] copy from cipher to plaintxt", "err", err)
 		if tryReuse {
 			if er = readAllIgnore(cipher, timeout); er != nil && !errors.Is(er, cipherstream.ErrFINRSTStream) {
 				if !errors.Is(er, cipherstream.ErrTimeout) {
@@ -98,13 +98,13 @@ func copyPlainTxtToCipher(cipher, plainTxt net.Conn, timeout time.Duration, tryR
 	var err error
 	n, er := io.Copy(cipher, plainTxt)
 	if er != nil {
-		log.Debugf("[REPAY] copy from plaintxt to cipher: %v", err)
+		log.Debug("[REPAY] copy from plaintxt to cipher", "err", err)
 	}
 
 	if er := CloseWrite(cipher); er != nil {
 		tryReuse = false
 		err = errors.Join(err, er)
-		log.Warnf("[REPAY] close write for cipher stream: %v", err)
+		log.Warn("[REPAY] close write for cipher stream", "err", err)
 	}
 	if er := cipher.SetReadDeadline(time.Now().Add(2 * timeout)); er != nil {
 		err = errors.Join(err, er)

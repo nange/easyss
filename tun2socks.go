@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util"
-	log "github.com/sirupsen/logrus"
 	"github.com/xjasonlyu/tun2socks/v2/engine"
 )
 
@@ -94,7 +94,7 @@ func init() {
 		_closeTunFilename = "close_tun_dev_darwin.sh"
 		_closeTunBytes = closeTunDevShDarwin
 	default:
-		log.Infof("[TUN2SOCKS] unsupported os:%s, tun2socks service can't be enabled", runtime.GOOS)
+		log.Info("[TUN2SOCKS] unsupported os, tun2socks service can't be enabled", "os", runtime.GOOS)
 	}
 }
 
@@ -109,28 +109,28 @@ func (ss *Easyss) CreateTun2socks() error {
 	switch runtime.GOOS {
 	case "linux":
 		if err := ss.createTunDevAndSetIpRoute(); err != nil {
-			log.Errorf("[TUN2SOCKS] add tun device and set ip-route err:%s", err.Error())
+			log.Error("[TUN2SOCKS] add tun device and set ip-route", "err", err.Error())
 			return err
 		}
 		ss.startTun2socksEngine()
 	case "darwin":
 		ss.startTun2socksEngine()
 		if err := ss.setDNSIfEmpty(); err != nil {
-			log.Errorf("[TUN2SOCKS] set system dns:%v", err)
+			log.Error("[TUN2SOCKS] set system dns", "err", err)
 			return err
 		}
 		if err := ss.createTunDevAndSetIpRoute(); err != nil {
-			log.Errorf("[TUN2SOCKS] add tun device and set ip-route err:%s", err.Error())
+			log.Error("[TUN2SOCKS] add tun device and set ip-route", "err", err)
 			return err
 		}
 	case "windows":
 		if err := writeWinTunToDisk(); err != nil {
-			log.Errorf("[TUN2SOCKS] write wintun.dll to disk err:%s", err.Error())
+			log.Error("[TUN2SOCKS] write wintun.dll to disk", "err", err)
 			return err
 		}
 		ss.startTun2socksEngine()
 		if err := ss.createTunDevAndSetIpRoute(); err != nil {
-			log.Errorf("[TUN2SOCKS] add tun device and set ip-route err:%s", err.Error())
+			log.Error("[TUN2SOCKS] add tun device and set ip-route", "err", err)
 			return err
 		}
 	default:
@@ -138,7 +138,7 @@ func (ss *Easyss) CreateTun2socks() error {
 	}
 
 	ss.enabledTun2socks = true
-	log.Infof("[TUN2SOCKS] service and tun device create successfully")
+	log.Info("[TUN2SOCKS] service and tun device create successfully")
 	return nil
 }
 
@@ -165,7 +165,7 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 
 	namePath, err := util.WriteToTemp(_createTunFilename, _createTunBytes)
 	if err != nil {
-		log.Errorf("[TUN2SOCKS] write close_tun_dev.sh to temp file err:%v", err.Error())
+		log.Error("[TUN2SOCKS] write close_tun_dev.sh to temp file", "err", err)
 		return err
 	}
 	defer os.RemoveAll(namePath)
@@ -175,11 +175,11 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 	case "linux":
 		cmdArgs := []string{"pkexec", "bash", namePath, tc.TunDevice, tc.IPSub(), tc.TunGW, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()}
 		if os.Geteuid() == 0 {
-			log.Infof("[TUN2SOCKS] current user is root, use bash directly")
+			log.Info("[TUN2SOCKS] current user is root, use bash directly")
 			cmdArgs = cmdArgs[1:]
 		}
 		if _, err := util.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...); err != nil {
-			log.Errorf("[TUN2SOCKS] exec %s err:%s", _createTunFilename, err.Error())
+			log.Error("[TUN2SOCKS] exec", "file", _createTunFilename, "err", err)
 			return err
 		}
 	case "windows":
@@ -191,14 +191,14 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 		namePath = newNamePath
 		if _, err := util.CommandContext(ctx, "cmd.exe", "/C",
 			namePath, tc.TunDevice, tc.TunIP, tc.TunGW, tc.TunMask, ss.ServerIP(), ss.LocalGateway()); err != nil {
-			log.Errorf("[TUN2SOCKS] exec %s err:%s", _createTunFilename, err.Error())
+			log.Error("[TUN2SOCKS] exec", "file", _createTunFilename, "err", err)
 			return err
 		}
 	case "darwin":
 		if _, err := util.CommandContext(ctx, "osascript", "-e",
 			fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s\" with administrator privileges",
 				namePath, tc.TunDevice, tc.TunIP, tc.TunGW, ss.ServerIP(), ss.LocalGateway())); err != nil {
-			log.Errorf("[TUN2SOCKS] exec %s err:%s", _createTunFilename, err.Error())
+			log.Error("[TUN2SOCKS] exec", "file", _createTunFilename, "err", err)
 			return err
 		}
 	default:
@@ -228,11 +228,11 @@ func (ss *Easyss) closeTun2socks() error {
 		}
 	}
 	if err := ss.setDNSToOrigin(); err != nil {
-		log.Errorf("[TUN2SOCKS] set system dns to origin:%v", err)
+		log.Error("[TUN2SOCKS] set system dns to origin", "err", err)
 	}
 
 	ss.enabledTun2socks = false
-	log.Infof("[TUN2SOCKS] service and tun device close successfully")
+	log.Info("[TUN2SOCKS] service and tun device close successfully")
 	return nil
 }
 
@@ -242,7 +242,7 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 
 	namePath, err := util.WriteToTemp(_closeTunFilename, _closeTunBytes)
 	if err != nil {
-		log.Errorf("[TUN2SOCKS] write close_tun_dev.sh to temp file err:%v", err.Error())
+		log.Error("[TUN2SOCKS] write close_tun_dev.sh to temp file", "err", err)
 		return err
 	}
 	defer os.RemoveAll(namePath)
@@ -252,7 +252,7 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 	case "linux":
 		if _, err := util.CommandContext(ctx, "pkexec", "bash",
 			namePath, tc.TunDevice, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()); err != nil {
-			log.Errorf("[TUN2SOCKS] exec %s err:%s", _closeTunFilename, err.Error())
+			log.Error("[TUN2SOCKS] exec", "file", _closeTunFilename, "err", err)
 			return err
 		}
 	case "windows":
@@ -264,14 +264,14 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 		namePath = newNamePath
 		if _, err := util.CommandContext(ctx, "cmd.exe", "/C",
 			namePath, tc.TunGW, ss.ServerIP(), ss.LocalGateway()); err != nil {
-			log.Errorf("[TUN2SOCKS] exec %s err:%s", _closeTunFilename, err.Error())
+			log.Error("[TUN2SOCKS] exec", "file", _closeTunFilename, "err", err)
 			return err
 		}
 	case "darwin":
 		if _, err := util.CommandContext(ctx, "osascript", "-e",
 			fmt.Sprintf("do shell script \"sh %s %s %s %s\" with administrator privileges",
 				namePath, tc.TunGW, ss.ServerIP(), ss.LocalGateway())); err != nil {
-			log.Errorf("[TUN2SOCKS] exec %s err:%s", _closeTunFilename, err.Error())
+			log.Error("[TUN2SOCKS] exec", "file", _closeTunFilename, "err", err)
 			return err
 		}
 	default:

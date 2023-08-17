@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
-	log "github.com/sirupsen/logrus"
 	"github.com/wzshiming/sysproxy"
 )
 
@@ -30,13 +30,13 @@ func (ss *Easyss) LocalHttp() {
 	} else {
 		addr = "127.0.0.1:" + strconv.Itoa(ss.LocalHTTPPort())
 	}
-	log.Infof("[HTTP_PROXY] starting local http-proxy server at %v", addr)
+	log.Info("[HTTP_PROXY] starting local http-proxy server at", "addr", addr)
 
 	server := &http.Server{Addr: addr, Handler: newHTTPProxy(ss)}
 	ss.SetHttpProxyServer(server)
 
 	if err := server.ListenAndServe(); err != nil {
-		log.Warnf("[HTTP_PROXY] local http-proxy server:%s", err.Error())
+		log.Warn("[HTTP_PROXY] local http-proxy server", "err", err)
 	}
 }
 
@@ -72,7 +72,7 @@ func newHTTPProxy(ss *Easyss) *httpProxy {
 			},
 			BufferPool: &bufferPool{},
 			ErrorHandler: func(rw http.ResponseWriter, r *http.Request, err error) {
-				log.Warnf("[HTTP_PROXY] reverse proxy request: %s", err.Error())
+				log.Warn("[HTTP_PROXY] reverse proxy request", "err", err)
 				http.Error(rw, "Service unavailable", http.StatusServiceUnavailable)
 			},
 		},
@@ -83,12 +83,12 @@ func (h *httpProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.ss.AuthUsername() != "" && h.ss.AuthPassword() != "" {
 		username, password, ok := basicAuth(r)
 		if !ok {
-			log.Warnf("[HTTP_PROXY] username and password not provided")
+			log.Warn("[HTTP_PROXY] username and password not provided")
 			http.Error(w, "Proxy auth required", http.StatusProxyAuthRequired)
 			return
 		}
 		if username != h.ss.AuthUsername() || password != h.ss.AuthPassword() {
-			log.Warnf("[HTTP_PROXY] username or password is invalid")
+			log.Warn("[HTTP_PROXY] username or password is invalid")
 			http.Error(w, "Request unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -103,7 +103,7 @@ func (h *httpProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *httpProxy) doWithHijack(w http.ResponseWriter, r *http.Request) {
 	hij, ok := w.(http.Hijacker)
 	if !ok {
-		log.Errorf("[HTTP_PROXY] Connect: hijacking not supported")
+		log.Error("[HTTP_PROXY] Connect: hijacking not supported")
 		if r.Body != nil {
 			defer r.Body.Close()
 		}
@@ -113,17 +113,17 @@ func (h *httpProxy) doWithHijack(w http.ResponseWriter, r *http.Request) {
 
 	hijConn, _, err := hij.Hijack()
 	if err != nil {
-		log.Errorf("[HTTP_PROXY] get hijack conn, err:%s", err.Error())
+		log.Error("[HTTP_PROXY] get hijack conn", "err", err)
 		return
 	}
 	if _, err := hijConn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n")); err != nil {
-		log.Errorf("[HTTP_PROXY] write hijack ok err:%s", err.Error())
+		log.Error("[HTTP_PROXY] write hijack ok", "err", err)
 		hijConn.Close()
 		return
 	}
 
 	if err := h.ss.localRelay(hijConn, r.URL.Host); err != nil {
-		log.Warnf("[HTTP_PROXY] local relay err:%s", err.Error())
+		log.Warn("[HTTP_PROXY] local relay", "err", err)
 	}
 }
 

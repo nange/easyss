@@ -2,7 +2,7 @@ package easyss
 
 import (
 	"github.com/miekg/dns"
-	log "github.com/sirupsen/logrus"
+	"github.com/nange/easyss/v2/log"
 )
 
 func NewDNSForwardServer(dnsServer string) *dns.Server {
@@ -10,18 +10,18 @@ func NewDNSForwardServer(dnsServer string) *dns.Server {
 
 	srv.Handler = dns.HandlerFunc(func(writer dns.ResponseWriter, msg *dns.Msg) {
 		if len(msg.Question) > 0 {
-			log.Infof("[DNS_FORWARD] %s", msg.Question[0].Name)
+			log.Info("[DNS_FORWARD]", "domain", msg.Question[0].Name)
 		}
 
 		c := &dns.Client{Timeout: DefaultDNSTimeout}
 		r, _, err := c.Exchange(msg, dnsServer)
 		if err != nil {
-			log.Errorf("[DNS_FORWARD] exchange err:%s", err.Error())
+			log.Error("[DNS_FORWARD] exchange", "err", err)
 			return
 		}
 
 		if err := writer.WriteMsg(r); err != nil {
-			log.Errorf("[DNS_FORWARD] write msg back err:%s", err.Error())
+			log.Error("[DNS_FORWARD] write msg back", "err", err)
 		}
 	})
 
@@ -32,8 +32,8 @@ func (ss *Easyss) LocalDNSForward() {
 	server := NewDNSForwardServer(ss.DirectDNSServer())
 	ss.SetForwardDNSServer(server)
 
-	log.Infof("[DNS_FORWARD] starting local dns forward server at :53")
+	log.Info("[DNS_FORWARD] starting local dns forward server at :53")
 	if err := server.ListenAndServe(); err != nil {
-		log.Warnf("[DNS_FORWARD] local forward server:%s", err.Error())
+		log.Warn("[DNS_FORWARD] local forward server", "err", err)
 	}
 }

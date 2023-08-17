@@ -4,14 +4,15 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 	"sync"
 
 	"github.com/getlantern/systray"
 	"github.com/nange/easyss/v2"
 	"github.com/nange/easyss/v2/icon"
+	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util"
-	log "github.com/sirupsen/logrus"
 )
 
 type SysTray struct {
@@ -83,7 +84,7 @@ func (st *SysTray) AddSelectServerMenu() {
 							_item.Check()
 							return
 						}
-						log.Infof("[SYSTRAY] changing server to:%s", addrs[_i])
+						log.Info("[SYSTRAY] changing server to", "addr", addrs[_i])
 						for _, v := range subMenuItems {
 							v.Uncheck()
 						}
@@ -93,10 +94,10 @@ func (st *SysTray) AddSelectServerMenu() {
 						config.OverrideFrom(&sc)
 						config.SetDefaultValue()
 						if err := st.RestartService(config); err != nil {
-							log.Errorf("[SYSTRAY] changing server to:%s err:%v", addrs[_i], err)
+							log.Error("[SYSTRAY] changing server to", "addr", addrs[_i], "err", err)
 						} else {
 							_item.Check()
-							log.Infof("[SYSTRAY] changes server to:%s success", addrs[_i])
+							log.Info("[SYSTRAY] changes server success to", "addr", addrs[_i])
 						}
 					}()
 				case <-st.closing:
@@ -191,13 +192,13 @@ func (st *SysTray) AddProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 			case <-browser.ClickedCh:
 				if browser.Checked() {
 					if err := st.SS().SetSysProxyOffHTTP(); err != nil {
-						log.Errorf("[SYSTRAY] set sys-proxy off http err:%s", err.Error())
+						log.Error("[SYSTRAY] set sys-proxy off http", "err", err)
 						continue
 					}
 					browser.Uncheck()
 				} else {
 					if err := st.SS().SetSysProxyOnHTTP(); err != nil {
-						log.Errorf("[SYSTRAY] set sys-proxy on http err:%s", err.Error())
+						log.Error("[SYSTRAY] set sys-proxy on http", "err", err)
 						continue
 					}
 					browser.Check()
@@ -205,13 +206,13 @@ func (st *SysTray) AddProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 			case <-global.ClickedCh:
 				if global.Checked() {
 					if err := st.SS().CloseTun2socks(); err != nil {
-						log.Errorf("[SYSTRAY] close tun2socks err:%s", err.Error())
+						log.Error("[SYSTRAY] close tun2socks", "err", err)
 						continue
 					}
 					global.Uncheck()
 				} else {
 					if err := st.ss.CreateTun2socks(); err != nil {
-						log.Errorf("[SYSTRAY] create tun2socks err:%s", err.Error())
+						log.Error("[SYSTRAY] create tun2socks", "err", err)
 						continue
 					}
 					global.Check()
@@ -231,7 +232,7 @@ func (st *SysTray) AddCatLogsMenu() *systray.MenuItem {
 			select {
 			case <-catLog.ClickedCh:
 				if err := st.catLog(); err != nil {
-					log.Errorf("[SYSTRAY] cat log err:%v", err)
+					log.Error("[SYSTRAY] cat log", "err", err)
 				}
 			case <-st.closing:
 				return
@@ -263,16 +264,16 @@ func (st *SysTray) catLog() error {
 	win := `-FilePath powershell  -WorkingDirectory "%s" -ArgumentList "-Command Get-Content %s -Wait %s"`
 	if runtime.GOOS == "windows" && util.SysSupportPowershell() {
 		if util.SysPowershellMajorVersion() >= 3 {
-			win = fmt.Sprintf(win, util.CurrentDir(), util.LogFilePath(), "-Tail 100")
+			win = fmt.Sprintf(win, util.CurrentDir(), st.ss.LogFilePath(), "-Tail 100")
 		} else {
-			win = fmt.Sprintf(win, util.CurrentDir(), util.LogFilePath(), "-ReadCount 100")
+			win = fmt.Sprintf(win, util.CurrentDir(), st.ss.LogFilePath(), "-ReadCount 100")
 		}
 	}
 
 	cmdMap := map[string][]string{
 		"windows": {"powershell", "-Command", "Start-Process", win},
-		"linux":   {"x-terminal-emulator", "-e", "tail", "-50f", util.LogFilePath()},
-		"darwin":  {"open", "-a", "Console", util.LogFilePath()},
+		"linux":   {"x-terminal-emulator", "-e", "tail", "-50f", st.ss.LogFilePath()},
+		"darwin":  {"open", "-a", "Console", st.ss.LogFilePath()},
 	}
 	_, err := util.Command(cmdMap[runtime.GOOS][0], cmdMap[runtime.GOOS][1:]...)
 	return err
@@ -283,11 +284,11 @@ func (st *SysTray) CloseService() {
 	defer st.mu.Unlock()
 	if st.browserMenu.Checked() {
 		if err := st.ss.SetSysProxyOffHTTP(); err != nil {
-			log.Errorf("[SYSTRAY] close service: set sysproxy off http: %s", err.Error())
+			log.Error("[SYSTRAY] close service: set sysproxy off http", "err", err)
 		}
 	}
 	if err := st.ss.Close(); err != nil {
-		log.Errorf("[SYSTRAY] close service: close easyss: %s", err.Error())
+		log.Error("[SYSTRAY] close service: close easyss", "err", err)
 	}
 }
 
@@ -303,7 +304,7 @@ func (st *SysTray) StartLocalService() {
 	ss := st.ss
 
 	if err := ss.InitTcpPool(); err != nil {
-		log.Errorf("[SYSTRAY] init tcp pool error:%v", err)
+		log.Error("[SYSTRAY] init tcp pool", "err", err)
 	}
 
 	go ss.LocalSocks5() // start local server
@@ -314,17 +315,18 @@ func (st *SysTray) StartLocalService() {
 
 	if st.SysProxyIsOn() {
 		if err := ss.SetSysProxyOnHTTP(); err != nil {
-			log.Errorf("[SYSTRAY] set sys proxy on http err:%s", err.Error())
+			log.Error("[SYSTRAY] set sys proxy on http", "err", err)
 		}
 	} else {
 		if err := ss.SetSysProxyOffHTTP(); err != nil {
-			log.Errorf("[SYSTRAY] set sys proxy off http err:%s", err.Error())
+			log.Error("[SYSTRAY] set sys proxy off http", "err", err)
 		}
 	}
 
 	if ss.EnabledTun2socksFromConfig() {
 		if err := st.ss.CreateTun2socks(); err != nil {
-			log.Fatalf("[SYSTRAY] create tun2socks err:%s", err.Error())
+			log.Error("[SYSTRAY] create tun2socks", "err", err)
+			os.Exit(1)
 		} else {
 			st.tun2socksMenu.Check()
 		}

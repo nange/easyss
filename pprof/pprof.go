@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/nange/easyss/v2/log"
 )
 
 func StartPprof() {
@@ -15,8 +15,8 @@ func StartPprof() {
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
-	log.Infof("starting pprof server at :6060")
+	log.Info("starting pprof server at :6060")
 	if err := http.ListenAndServe(":6060", mux); err != nil {
-		log.Errorf("[PPROF] start pprof server:%s", err.Error())
+		log.Error("[PPROF] start pprof server", "err", err)
 	}
 }

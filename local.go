@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v2/cipherstream"
+	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util"
-	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
 )
 
@@ -20,28 +20,28 @@ func (ss *Easyss) LocalSocks5() {
 	} else {
 		addr = "127.0.0.1:" + strconv.Itoa(ss.LocalPort())
 	}
-	log.Infof("[SOCKS5] starting local socks5 server at %v", addr)
+	log.Info("[SOCKS5] starting local socks5 server at", "addr", addr)
 
 	server, err := socks5.NewClassicServer(addr, "127.0.0.1", ss.AuthUsername(), ss.AuthPassword(), 0, 0)
 	if err != nil {
-		log.Errorf("[SOCKS5] new socks5 server err: %+v", err)
+		log.Error("[SOCKS5] new socks5 server", "err", err)
 		return
 	}
 	ss.SetSocksServer(server)
 
 	if err := server.ListenAndServe(ss); err != nil {
-		log.Warnf("[SOCKS5] local socks5 server:%s", err.Error())
+		log.Warn("[SOCKS5] local socks5 server", "err", err)
 	}
 }
 
 func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Request) error {
 	targetAddr := r.Address()
-	log.Debugf("[SOCKS5] target:%v, udp:%v", targetAddr, r.Cmd == socks5.CmdUDP)
+	log.Debug("[SOCKS5]", "target", targetAddr, "is_udp", r.Cmd == socks5.CmdUDP)
 
 	if r.Cmd == socks5.CmdConnect {
 		a, addr, port, err := socks5.ParseAddress(conn.LocalAddr().String())
 		if err != nil {
-			log.Errorf("[SOCKS5] socks5 ParseAddress err:%+v", err)
+			log.Error("[SOCKS5] socks5 ParseAddress", "err", err)
 			return err
 		}
 		p := socks5.NewReply(socks5.RepSuccess, a, addr, port)
@@ -67,14 +67,15 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 			portStr := strconv.FormatInt(int64(caddr.(*net.UDPAddr).Port), 10)
 			s.AssociatedUDP.Set(portStr, ch, -1)
 			defer func() {
-				log.Debugf("[SOCKS5] exit associate tcp connection, closing chan")
+				log.Debug("[SOCKS5] exit associate tcp connection, closing chan")
 				ch <- struct{}{}
 				s.AssociatedUDP.Delete(portStr)
 			}()
 		}
 
 		_, _ = io.Copy(io.Discard, conn)
-		log.Debugf("[SOCKS5] a tcp connection that udp %v associated closed, target addr:%v", caddr.String(), targetAddr)
+		log.Debug("[SOCKS5] a tcp connection that udp associated closed",
+			"udp_addr", caddr.String(), "target_addr", targetAddr)
 		return nil
 	}
 
@@ -87,17 +88,17 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 		return ss.directRelay(localConn, addr)
 	}
 
-	log.Infof("[TCP_PROXY] target:%s", addr)
+	log.Info("[TCP_PROXY]", "target", addr)
 	if !ss.disableValidateAddr {
 		if err := ss.validateAddr(addr); err != nil {
-			log.Errorf("[TCP_PROXY] validate socks5 request:%v", err)
+			log.Error("[TCP_PROXY] validate socks5 request", "err", err)
 			return err
 		}
 	}
 
 	csStream, err := ss.handShakeWithRemote(addr, cipherstream.FlagTCP)
 	if err != nil {
-		log.Warnf("[TCP_PROXY] handshake with remote server err:%v", err)
+		log.Warn("[TCP_PROXY] handshake with remote server", "err", err)
 		if csStream != nil {
 			MarkCipherStreamUnusable(csStream)
 			csStream.Close()
@@ -112,7 +113,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	}
 	n1, n2, err := relay(csStream, localConn, ss.Timeout(), tryReuse)
 
-	log.Debugf("[TCP_PROXY] send %v bytes to %v, recive %v bytes, err:%v", n1, addr, n2, err)
+	log.Debug("[TCP_PROXY] send bytes to, receive bytes", "send", n1, "to", addr, "receive", n2, "err", err)
 
 	ss.stat.BytesSend.Add(n1)
 	ss.stat.BytesReceive.Add(n2)
@@ -150,7 +151,7 @@ func (ss *Easyss) validateAddr(addr string) error {
 func (ss *Easyss) handShakeWithRemote(addr string, flag uint8) (net.Conn, error) {
 	stream, err := ss.AvailableConn()
 	if err != nil {
-		log.Errorf("[TCP_PROXY] get stream from pool failed:%v", err)
+		log.Error("[TCP_PROXY] get stream from pool failed", "err", err)
 		return nil, err
 	}
 
@@ -158,7 +159,7 @@ func (ss *Easyss) handShakeWithRemote(addr string, flag uint8) (net.Conn, error)
 		cs, err := cipherstream.New(stream, ss.Password(), cipherstream.MethodAes256GCM, cipherstream.FrameTypeData, flag)
 		csStream := cs.(*cipherstream.CipherStream)
 		if err != nil {
-			log.Errorf("[TCP_PROXY] new cipherstream:%v", err)
+			log.Error("[TCP_PROXY] new cipherstream", "err", err)
 			return csStream, err
 		}
 

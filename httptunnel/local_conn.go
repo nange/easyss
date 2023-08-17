@@ -17,7 +17,7 @@ import (
 
 	"github.com/go-faker/faker/v4"
 	"github.com/gofrs/uuid/v5"
-	log "github.com/sirupsen/logrus"
+	"github.com/nange/easyss/v2/log"
 )
 
 const (
@@ -93,7 +93,7 @@ func (l *LocalConn) Read(b []byte) (n int, err error) {
 	}
 	if l.respBody == nil {
 		if err = l.pull(); err != nil {
-			log.Warnf("[HTTP_TUNNEL_LOACAL] pull:%v", err)
+			log.Warn("[HTTP_TUNNEL_LOCAL] pull", "err", err)
 			l.Unlock()
 			return
 		}
@@ -113,7 +113,7 @@ func (l *LocalConn) Read(b []byte) (n int, err error) {
 	}
 
 	if err != nil {
-		log.Debugf("[HTTP_TUNNEL_LOACAL] read from remote:%v", err)
+		log.Debug("[HTTP_TUNNEL_LOCAL] read from remote", "err", err)
 		if strings.Contains(err.Error(), "http2: server sent GOAWAY and closed the connection") {
 			// Ref: https://github.com/golang/go/issues/18639
 			err = io.EOF
@@ -139,7 +139,7 @@ func (l *LocalConn) Write(b []byte) (n int, err error) {
 	l.Unlock()
 	if err := l.push(b); err != nil {
 		if !errors.Is(err, io.EOF) {
-			log.Warnf("[HTTP_TUNNEL_LOACAL] push:%v", err)
+			log.Warn("[HTTP_TUNNEL_LOCAL] push", "err", err)
 		}
 		return 0, err
 	}

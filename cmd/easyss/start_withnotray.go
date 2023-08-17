@@ -8,12 +8,12 @@ import (
 	"syscall"
 
 	"github.com/nange/easyss/v2"
-	log "github.com/sirupsen/logrus"
+	"github.com/nange/easyss/v2/log"
 )
 
 func Start(ss *easyss.Easyss) {
 	if err := ss.InitTcpPool(); err != nil {
-		log.Errorf("[EASYSS-MAIN] init tcp pool error:%v", err)
+		log.Error("[EASYSS-MAIN] init tcp pool", "err", err)
 	}
 
 	go ss.LocalSocks5() // start local server
@@ -24,7 +24,8 @@ func Start(ss *easyss.Easyss) {
 
 	if ss.EnabledTun2socksFromConfig() {
 		if err := ss.CreateTun2socks(); err != nil {
-			log.Fatalf("[EASYSS-MAIN] create tun2socks err:%s", err.Error())
+			log.Error("[EASYSS-MAIN] create tun2socks", "err", err)
+			os.Exit(1)
 		}
 	}
 
@@ -32,7 +33,7 @@ func Start(ss *easyss.Easyss) {
 	signal.Notify(c, os.Interrupt, syscall.SIGINT, syscall.SIGTERM,
 		syscall.SIGQUIT)
 
-	log.Infof("[EASYSS-MAIN] got signal to exit: %v", <-c)
+	log.Info("[EASYSS-MAIN] got signal to exit", "signal", <-c)
 	ss.Close()
 	os.Exit(0)
 }

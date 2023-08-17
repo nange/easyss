@@ -9,7 +9,7 @@ import (
 
 	"github.com/getlantern/systray"
 	"github.com/nange/easyss/v2"
-	log "github.com/sirupsen/logrus"
+	"github.com/nange/easyss/v2/log"
 )
 
 func Start(ss *easyss.Easyss) {
@@ -22,10 +22,10 @@ func Start(ss *easyss.Easyss) {
 
 		select {
 		case sig := <-c:
-			log.Infof("[EASYSS-MAIN] got signal to exit: %v", sig)
+			log.Info("[EASYSS-MAIN] got signal to exit", "signal", sig)
 			systray.Quit()
 		case <-st.closing:
-			log.Infof("[EASYSS-MAIN] easyss exiting...")
+			log.Info("[EASYSS-MAIN] easyss exiting...")
 		}
 	}()
 

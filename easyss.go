@@ -28,10 +28,10 @@ import (
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/httptunnel"
+	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util"
 	"github.com/oschwald/geoip2-golang"
 	utls "github.com/refraction-networking/utls"
-	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
 )
 
@@ -94,7 +94,7 @@ func NewGeoSite(data []byte) *GeoSite {
 			line = line[7:]
 			re, err := regexp.Compile(string(line))
 			if err != nil {
-				log.Errorf("[EASYSS] compile geosite string:%s, err:%s", string(line), err.Error())
+				log.Error("[EASYSS] compile", "geosite", string(line), "err", err.Error())
 				continue
 			}
 			gs.regexpDomain = append(gs.regexpDomain, re)
@@ -222,7 +222,7 @@ func New(config *Config) (*Easyss, error) {
 	ss.proxyRule = proxyRule
 
 	if err := ss.cmdBeforeStartup(); err != nil {
-		log.Errorf("[EASYSS] exectuing command before startup:%v", err)
+		log.Error("[EASYSS] executing command before startup", "err", err)
 		return nil, err
 	}
 
@@ -234,33 +234,33 @@ func New(config *Config) (*Easyss, error) {
 	ss.geosite = NewGeoSite(geoSiteCN)
 
 	if err := ss.initDirectDNSServer(); err != nil {
-		log.Errorf("[EASYSS] init direct dns server:%v", err)
+		log.Error("[EASYSS] init direct dns server", "err", err)
 		return nil, err
 	}
 
 	if err := ss.loadCustomIPDomains(); err != nil {
-		log.Errorf("[EASYSS] load custom ip/domains err:%s", err.Error())
+		log.Error("[EASYSS] load custom ip/domains", "err", err)
 	}
 
 	if err := ss.initServerIPAndDNSCache(); err != nil {
-		log.Errorf("[EASYSS] init server ip and dns cache:%v", err)
+		log.Error("[EASYSS] init server ip and dns cache", "err", err)
 		return nil, err
 	}
 
 	if err := ss.initLocalGatewayAndDevice(); err != nil {
-		log.Errorf("[EASYSS] init local gateway and device:%v", err)
+		log.Error("[EASYSS] init local gateway and device", "err", err)
 		return nil, err
 	}
 
 	if err := ss.initHTTPOutboundClient(); err != nil {
-		log.Errorf("[EASYSS] init http outbound client:%v", err)
+		log.Error("[EASYSS] init http outbound client", "err", err)
 		return nil, err
 	}
 
 	// get origin dns on darwin
 	ds, err := util.SysDNS()
 	if err != nil {
-		log.Errorf("[EASYSS] get system dns err:%v", err)
+		log.Error("[EASYSS] get system dns", "err", err)
 	}
 	ss.originDNS = ds
 
@@ -279,7 +279,7 @@ func (ss *Easyss) loadCustomIPDomains() error {
 	}
 
 	if len(directIPs) > 0 {
-		log.Infof("[EASYSS] load custom direct ips success, len:%d", len(directIPs))
+		log.Info("[EASYSS] load custom direct ips success", "len", len(directIPs))
 		for k := range directIPs {
 			_, ipnet, err := net.ParseCIDR(k)
 			if err != nil {
@@ -298,13 +298,13 @@ func (ss *Easyss) loadCustomIPDomains() error {
 		return err
 	}
 	if len(directDomains) > 0 {
-		log.Infof("[EASYSS] load custom direct domains success, len:%d", len(directDomains))
+		log.Info("[EASYSS] load custom direct domains success", "len", len(directDomains))
 		ss.customDirectDomains = directDomains
 		// not only direct the domains but also the ips of domains
 		for domain := range directDomains {
 			msg, _, err := ss.DNSMsg(ss.directDNSServer, domain)
 			if err != nil {
-				log.Errorf("[EASYSS] query dns for custom direct domain %s: %v", domain, err)
+				log.Error("[EASYSS] query dns for custom direct domain", "domain", domain, "err", err)
 				continue
 			}
 			if msg == nil {
@@ -327,14 +327,14 @@ func (ss *Easyss) initDirectDNSServer() error {
 	for i, server := range DefaultDirectDNSServers {
 		msg, _, err := ss.DNSMsg(server, DefaultDNSServerDomains[i])
 		if err != nil {
-			log.Warnf("[EASYSS] direct dns server %s is unavailable:%s, retry next after 1s",
-				server, err.Error())
+			log.Warn("[EASYSS] direct dns server is unavailable, retry next after 1s",
+				"server", server, "err", err)
 			time.Sleep(time.Second)
 			continue
 		}
 		if msg != nil {
 			ss.directDNSServer = server
-			log.Infof("[EASYSS] set direct dns server to %s", server)
+			log.Info("[EASYSS] set direct dns server to", "server", server)
 			return nil
 		}
 	}
@@ -349,8 +349,8 @@ func (ss *Easyss) initServerIPAndDNSCache() error {
 		for i := 1; i <= 3; i++ {
 			msg, msgAAAA, err = ss.DNSMsg(ss.directDNSServer, ss.Server())
 			if err != nil {
-				log.Warnf("[EASYSS] query dns failed for %s from %s: %s, retry after %ds",
-					ss.Server(), ss.directDNSServer, err.Error(), i)
+				log.Warn("[EASYSS] query dns failed for",
+					"server", ss.Server(), "from", ss.directDNSServer, "err", err, "retry_after(s)", i)
 				time.Sleep(time.Duration(i) * time.Second)
 				continue
 			}
@@ -359,7 +359,7 @@ func (ss *Easyss) initServerIPAndDNSCache() error {
 			return err
 		}
 		if msg != nil {
-			log.Infof("[EASYSS] query dns success for %s from %s", ss.Server(), ss.directDNSServer)
+			log.Info("[EASYSS] query dns success for", "server", ss.Server(), "from", ss.directDNSServer)
 		}
 
 		if msg != nil && msgAAAA != nil {
@@ -393,14 +393,14 @@ func (ss *Easyss) initLocalGatewayAndDevice() error {
 	case "linux", "windows", "darwin":
 		gw, dev, err := util.SysGatewayAndDevice()
 		if err != nil {
-			log.Errorf("[EASYSS] get system gateway and device err:%s", err.Error())
+			log.Error("[EASYSS] get system gateway and device", "err", err.Error())
 		}
 		ss.localGw = gw
 		ss.localDev = dev
 
 		iface, err := net.InterfaceByName(dev)
 		if err != nil {
-			log.Errorf("[EASYSS] interface by name err:%v", err)
+			log.Error("[EASYSS] interface by name", "err", err)
 			return err
 		}
 		ss.devIndex = iface.Index
@@ -411,25 +411,25 @@ func (ss *Easyss) initLocalGatewayAndDevice() error {
 
 func (ss *Easyss) InitTcpPool() error {
 	if !ss.IsNativeOutboundProto() {
-		log.Infof("[EASYSS] outbound proto is %v, don't need init tcp pool", ss.OutboundProto())
+		log.Info("[EASYSS] outbound proto don't need init tcp pool", "proto", ss.OutboundProto())
 		return nil
 	}
 
 	if ss.DisableTLS() {
-		log.Infof("[EASYSS] TLS is disabled")
+		log.Info("[EASYSS] TLS is disabled")
 	} else {
-		log.Infof("[EASYSS] TLS is enabled")
+		log.Info("[EASYSS] TLS is enabled")
 	}
 	if ss.DisableUTLS() {
-		log.Infof("[EASYSS] uTLS is disabled")
+		log.Info("[EASYSS] uTLS is disabled")
 	} else {
-		log.Infof("[EASYSS] uTLS is enabled")
+		log.Info("[EASYSS] uTLS is enabled")
 	}
-	log.Infof("[EASYSS] initializing tcp pool with easy server: %v", ss.ServerAddr())
+	log.Info("[EASYSS] initializing tcp pool with easy server: %v", ss.ServerAddr())
 
 	certPool, err := ss.loadCustomCertPool()
 	if err != nil {
-		log.Errorf("[EASYSS] load custom cert pool:%v", err)
+		log.Error("[EASYSS] load custom cert pool", "err", err)
 		return err
 	}
 
@@ -491,13 +491,13 @@ func (ss *Easyss) loadCustomCertPool() (*x509.CertPool, error) {
 	var certPool *x509.CertPool
 	e, err := util.FileExists(ss.CAPath())
 	if err != nil {
-		log.Errorf("[EASYSS] lookup self-signed ca cert:%v", err)
+		log.Error("[EASYSS] lookup self-signed ca cert", "err", err)
 		return certPool, err
 	}
 	if !e {
-		log.Warnf("[EASYSS] ca cert: %s is set but not exists, so self-signed cert is no effect", ss.CAPath())
+		log.Warn("[EASYSS] ca cert is set but not exists, so self-signed cert is no effect", "cert_path", ss.CAPath())
 	} else {
-		log.Infof("[EASYSS] using self-signed ca cert: %s", ss.CAPath())
+		log.Info("[EASYSS] using self-signed", "cert_path", ss.CAPath())
 		certPool = x509.NewCertPool()
 		caBuf, err := os.ReadFile(ss.CAPath())
 		if err != nil {
@@ -518,7 +518,7 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 
 	certPool, err := ss.loadCustomCertPool()
 	if err != nil {
-		log.Errorf("[EASYSS] load custom cert pool:%v", err)
+		log.Error("[EASYSS] load custom cert pool", "err", err)
 		return err
 	}
 
@@ -675,6 +675,18 @@ func (ss *Easyss) BindAll() bool {
 	return ss.config.BindALL
 }
 
+func (ss *Easyss) LogFilePath() string {
+	if ss.config.LogFilePath != "" {
+		if filepath.IsAbs(ss.config.LogFilePath) {
+			return ss.config.LogFilePath
+		} else {
+			dir := util.CurrentDir()
+			return filepath.Join(dir, ss.config.LogFilePath)
+		}
+	}
+	return ""
+}
+
 func (ss *Easyss) DisableUTLS() bool {
 	return ss.config.DisableUTLS
 }
@@ -779,13 +791,13 @@ func (ss *Easyss) AvailableConn() (conn net.Conn, err error) {
 			conn, err = pool.Get()
 		}
 		if err != nil {
-			log.Warnf("[EASYSS] get conn failed:%v", err)
+			log.Warn("[EASYSS] get conn failed", "err", err)
 			continue
 		}
 
 		err = pingTest(conn)
 		if err != nil {
-			log.Warnf("[EASYSS] ping easyss-server: %v", err)
+			log.Warn("[EASYSS] ping easyss-server", "err", err)
 			continue
 		}
 		break
@@ -806,11 +818,11 @@ func (ss *Easyss) PingHook(b []byte) error {
 	since := time.Since(time.Unix(0, ts))
 	ss.pingLatency <- since
 
-	log.Debugf("[EASYSS] ping %s latency:%v", ss.Server(), since)
+	log.Debug("[EASYSS] ping", "server", ss.Server(), "latency", since)
 	if since > time.Second {
-		log.Warnf("[EASYSS] got high latency:%v of ping %s", since, ss.Server())
+		log.Warn("[EASYSS] got high latency of ping", "latency", since, "server", ss.Server())
 	} else if since > 500*time.Millisecond {
-		log.Infof("[EASYSS] got latency:%v of ping %s", since, ss.Server())
+		log.Info("[EASYSS] got latency of ping", "latency", since, "server", ss.Server())
 	}
 
 	return nil

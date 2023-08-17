@@ -6,16 +6,16 @@ import (
 	"net"
 	"sync"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/nange/easyss/v2/log"
 	"github.com/xjasonlyu/tun2socks/v2/dialer"
 )
 
 func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
-	log.Infof("[TCP_DIRECT] target:%s", addr)
+	log.Info("[TCP_DIRECT]", "target", addr)
 
 	tConn, err := ss.directTCPConn(addr)
 	if err != nil {
-		log.Warnf("[TCP_DIRECT] dial:%s err:%v", addr, err)
+		log.Warn("[TCP_DIRECT]", "dial", addr, "err", err)
 		return err
 	}
 
@@ -27,11 +27,11 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 
 		_, err := io.Copy(tConn, localConn)
 		if err != nil && !ErrorCanIgnore(err) {
-			log.Warnf("[TCP_DIRECT] copy from local to remote err:%v", err)
+			log.Warn("[TCP_DIRECT] copy from local to remote", "err", err)
 		}
 
 		if err := CloseWrite(tConn); err != nil {
-			log.Warnf("[TCP_DIRECT] close write for target connection:%v", err)
+			log.Warn("[TCP_DIRECT] close write for target connection", "err", err)
 		}
 
 	}()
@@ -41,11 +41,11 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 
 		_, err := io.Copy(localConn, tConn)
 		if err != nil && !ErrorCanIgnore(err) {
-			log.Warnf("[TCP_DIRECT] copy from remote to local err:%v", err)
+			log.Warn("[TCP_DIRECT] copy from remote to local", "err", err)
 		}
 
 		if err := CloseWrite(localConn); err != nil {
-			log.Warnf("[TCP_DIRECT] close write for local connection:%v", err)
+			log.Warn("[TCP_DIRECT] close write for local connection", "err", err)
 		}
 	}()
 

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util"
-	log "github.com/sirupsen/logrus"
 )
 
 func (ss *Easyss) background() {
@@ -30,7 +30,7 @@ func (ss *Easyss) background() {
 		case <-ticker.C:
 			sendSize := ss.stat.BytesSend.Load() / (1024 * 1024)
 			receiveSize := ss.stat.BytesReceive.Load() / (1024 * 1024)
-			log.Infof("[EASYSS_BACKGROUND] send size: %vMB, recive size: %vMB", sendSize, receiveSize)
+			log.Info("[EASYSS_BACKGROUND]", "send_size(MB)", sendSize, "receive_size(MB)", receiveSize)
 		case late := <-pingLatency:
 			count += 1
 			total += late
@@ -49,8 +49,8 @@ func (ss *Easyss) background() {
 			if maxLatency == 0 {
 				continue
 			}
-			log.Infof("[EASYSS_BACKGROUND] ping easyss-server latency: min:%v, avg:%v, max:%v, count:%v",
-				minLatency, avgLatency, maxLatency, count)
+			log.Info("[EASYSS_BACKGROUND] ping easyss-server latency",
+				"min", minLatency, "avg", avgLatency, "max", maxLatency, "count", count)
 			minLatency, avgLatency, maxLatency, count, total = 0, 0, 0, 0, 0
 		case <-tickerExec.C:
 			go ss.cmdInterval(ss.config.CMDInterval)
@@ -65,13 +65,13 @@ func (ss *Easyss) cmdBeforeStartup() error {
 	if cmd == "" {
 		return nil
 	}
-	log.Infof("[CMD_BEFORE_STARTUP] exectuing %s", cmd)
+	log.Info("[CMD_BEFORE_STARTUP] executing", "cmd", cmd)
 
 	output, err := execConfigCMD(cmd, ss.CMDTimeout())
 	if err != nil {
-		log.Errorf("[CMD_BEFORE_STARTUP] %s: %v, output:%s", cmd, err, output)
+		log.Error("[CMD_BEFORE_STARTUP] failure", "cmd", cmd, "err", err, "output", output)
 	} else {
-		log.Infof("[CMD_BEFORE_STARTUP] %s success, output:%s", cmd, output)
+		log.Info("[CMD_BEFORE_STARTUP] success", "cmd", cmd, "output", output)
 	}
 	return err
 }
@@ -80,13 +80,13 @@ func (ss *Easyss) cmdInterval(cmd string) {
 	if cmd == "" {
 		return
 	}
-	log.Infof("[CMD_INTERVAL] exectuing %s", cmd)
+	log.Info("[CMD_INTERVAL] executing", "cmd", cmd)
 
 	output, err := execConfigCMD(cmd, ss.CMDTimeout())
 	if err != nil {
-		log.Errorf("[CMD_INTERVAL] %s: %v, output:%s", cmd, err, output)
+		log.Error("[CMD_INTERVAL] failure", "cmd", cmd, "err", err, "output", output)
 	} else {
-		log.Infof("[CMD_INTERVAL] %s success, output:%s", cmd, output)
+		log.Info("[CMD_INTERVAL] success", "cmd", cmd, "output", output)
 	}
 }
 

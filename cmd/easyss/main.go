@@ -5,26 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"path/filepath"
 	"runtime"
 
 	"github.com/nange/easyss/v2"
+	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/pprof"
 	"github.com/nange/easyss/v2/util"
 	"github.com/nange/easyss/v2/version"
-	log "github.com/sirupsen/logrus"
 )
-
-func init() {
-	if runtime.GOOS != "android" && runtime.GOOS != "ios" {
-		exec, err := os.Executable()
-		if err != nil {
-			panic(err)
-		}
-		logDir := filepath.Dir(exec)
-		util.SetLogFileHook(logDir)
-	}
-}
 
 func main() {
 	var printVer, daemon, showConfigExample, enablePprof bool
@@ -40,6 +28,7 @@ func main() {
 	flag.IntVar(&cmdConfig.LocalPort, "l", 0, "local socks5 proxy port")
 	flag.StringVar(&cmdConfig.Method, "m", "", "encryption method, default: aes-256-gcm")
 	flag.StringVar(&cmdConfig.LogLevel, "log-level", "", "set the log-level(debug, info, warn, error), default: info")
+	flag.StringVar(&cmdConfig.LogFilePath, "log-file-path", "", "set the log output location, default: Stdout")
 	flag.StringVar(&cmdConfig.ProxyRule, "proxy-rule", "", "set the proxy rule(auto, reverse_auto, proxy, direct), default: auto")
 	flag.BoolVar(&daemon, "daemon", true, "run app as a non-daemon with -daemon=false")
 	flag.BoolVar(&cmdConfig.BindALL, "bind-all", false, "listens on all available IPs of the local system. default: false")
@@ -66,19 +55,19 @@ func main() {
 
 	exists, err := util.FileExists(cmdConfig.ConfigFile)
 	if !exists || err != nil {
-		log.Debugf("[EASYSS-MAIN] config file err:%v", err)
+		log.Debug("[EASYSS-MAIN] config file", "err", err)
 
 		binDir := util.CurrentDir()
 		cmdConfig.ConfigFile = path.Join(binDir, "config.json")
 
-		log.Debugf("[EASYSS-MAIN] config file not found, try config file %s", cmdConfig.ConfigFile)
+		log.Debug("[EASYSS-MAIN] config file not found, try config file", "file", cmdConfig.ConfigFile)
 	}
 
 	config, err := easyss.ParseConfig[easyss.Config](cmdConfig.ConfigFile)
 	if err != nil {
 		config = &cmdConfig
 		if !os.IsNotExist(err) {
-			log.Errorf("[EASYSS-MAIN] error reading %s: %+v", cmdConfig.ConfigFile, err)
+			log.Error("[EASYSS-MAIN] reading", "file", cmdConfig.ConfigFile, "err", err)
 			os.Exit(1)
 		}
 	} else {
@@ -87,30 +76,22 @@ func main() {
 	}
 
 	if err := config.Validate(); err != nil {
-		log.Fatalf("[EASYSS-MAIN] config is invalid:%s", err.Error())
+		log.Error("[EASYSS-MAIN] config is invalid", "err", err)
+		os.Exit(1)
 	}
 
-	log.Infof("[EASYSS-MAIN] set the log-level to: %v", config.LogLevel)
-	switch config.LogLevel {
-	case "debug":
-		log.SetLevel(log.DebugLevel)
-	case "warn":
-		log.SetLevel(log.WarnLevel)
-	case "error":
-		log.SetLevel(log.ErrorLevel)
-	default:
-		log.SetLevel(log.InfoLevel)
-	}
+	log.Info("[EASYSS-MAIN] set the log-level to", "level", config.LogLevel)
+	log.Init(config.LogFilePath, config.LogLevel)
 
 	if enablePprof {
 		go pprof.StartPprof()
 	}
 
-	log.Infof(version.String())
+	log.Info(version.String())
 
 	ss, err := easyss.New(config)
 	if err != nil {
-		log.Fatalf("[EASYSS-MAIN] init easyss: %v", err)
+		log.Error("[EASYSS-MAIN] init easyss", "err", err)
 	}
 	Start(ss)
 }

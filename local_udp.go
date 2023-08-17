@@ -11,8 +11,8 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/miekg/dns"
 	"github.com/nange/easyss/v2/cipherstream"
+	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
-	log "github.com/sirupsen/logrus"
 	"github.com/txthinking/socks5"
 )
 
@@ -30,7 +30,7 @@ type UDPExchange struct {
 }
 
 func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) error {
-	log.Debugf("[SOCKS5_UDP] enter udp handdle, local_addr:%v, remote_addr:%v", addr.String(), d.Address())
+	log.Debug("[SOCKS5_UDP] enter udp handle", "local_addr", addr.String(), "remote_addr", d.Address())
 
 	dst := d.Address()
 	rewrittenDst := dst
@@ -46,26 +46,26 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		msgCache := ss.DNSCache(question.Name, dns.TypeToString[question.Qtype], isDirect)
 		if msgCache != nil {
 			msgCache.MsgHdr.Id = msg.MsgHdr.Id
-			log.Infof("[DNS_CACHE] find %s from cache, qtype:%s", question.Name, dns.TypeToString[question.Qtype])
+			log.Info("[DNS_CACHE] find from cache", "domain", question.Name, "qtype", dns.TypeToString[question.Qtype])
 			if err := responseDNSMsg(s.UDPConn, addr, msgCache, d.Address()); err != nil {
-				log.Errorf("[DNS_CACHE] write msg back err:%s", err.Error())
+				log.Error("[DNS_CACHE] write msg back", "err", err)
 				return err
 			}
 			if strings.TrimSuffix(question.Name, ".") != ss.Server() {
-				log.Debugf("[DNS_CACHE] renew cache for domain:%s", question.Name)
+				log.Debug("[DNS_CACHE] renew cache for", "domain", question.Name)
 				ss.RenewDNSCache(question.Name, dns.TypeToString[question.Qtype], isDirect)
 			}
 			return nil
 		}
 
 		if isDirect {
-			log.Infof("[DNS_DIRECT] %s, qtype:%s", question.Name, dns.TypeToString[question.Qtype])
+			log.Info("[DNS_DIRECT]", "domain", question.Name, "qtype", dns.TypeToString[question.Qtype])
 			return ss.directUDPRelay(s, addr, d, true)
 		}
 
-		log.Infof("[DNS_PROXY] %s, qtype:%s", msg.Question[0].Name, dns.TypeToString[msg.Question[0].Qtype])
+		log.Info("[DNS_PROXY]", "domain", msg.Question[0].Name, "qtype", dns.TypeToString[msg.Question[0].Qtype])
 
-		log.Debugf("[DNS_PROXY] rewrite dns dst to %s", DefaultDNSServer)
+		log.Debug("[DNS_PROXY] rewrite dns dst to", "server", DefaultDNSServer)
 		rewrittenDst = DefaultDNSServer
 	}
 
@@ -76,7 +76,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 
 	if !ss.disableValidateAddr {
 		if err := ss.validateAddr(rewrittenDst); err != nil {
-			log.Warnf("[UDP_PROXY] validate dst:%v err:%v", dst, err)
+			log.Warn("[UDP_PROXY] validate", "dst", dst, "err", err)
 			return errors.New("dst addr is invalid")
 		}
 	}
@@ -89,10 +89,10 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	if ok {
 		hasAssoc = true
 		ch = asCh.(chan struct{})
-		log.Debugf("[UDP_PROXY] found the associate with tcp, src:%s, dst:%s", addr.String(), d.Address())
+		log.Debug("[UDP_PROXY] found the associate with tcp", "src", addr.String(), "dst", d.Address())
 	} else {
 		ch = make(chan struct{}, 2)
-		log.Debugf("[UDP_PROXY] the addr:%v doesn't associate with tcp, dst addr:%v", addr.String(), d.Address())
+		log.Debug("[UDP_PROXY] the addr doesn't associate with tcp", "addr", addr.String(), "dst", d.Address())
 	}
 
 	send := func(ue *UDPExchange, data []byte) error {
@@ -105,7 +105,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		if err != nil {
 			return err
 		}
-		log.Debugf("[UDP_PROXY] sent data to remote from: %s", ue.ClientAddr.String())
+		log.Debug("[UDP_PROXY] sent data to remote", "from", ue.ClientAddr.String())
 		return nil
 	}
 
@@ -122,7 +122,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 
 	csStream, err := ss.handShakeWithRemote(rewrittenDst, cipherstream.FlagUDP)
 	if err != nil {
-		log.Errorf("[UDP_PROXY] handshake with remote server err:%v", err)
+		log.Error("[UDP_PROXY] handshake with remote server", "err", err)
 		if csStream != nil {
 			MarkCipherStreamUnusable(csStream)
 			csStream.Close()
@@ -148,7 +148,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		select {
 		case <-ch:
 			if err := expireConn(ue.RemoteConn); err != nil {
-				log.Errorf("[UDP_PROXY] expire remote conn: %s", err.Error())
+				log.Error("[UDP_PROXY] expire remote conn", "err", err)
 			}
 			tryReuse = <-monitorCh
 		case tryReuse = <-monitorCh:
@@ -158,13 +158,13 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		}
 
 		if tryReuse {
-			log.Debugf("[UDP_PROXY] request is finished, try to reuse underlying tcp connection")
+			log.Debug("[UDP_PROXY] request is finished, try to reuse underlying tcp connection")
 			reuse := tryReuseInUDPClient(ue.RemoteConn, ss.Timeout())
 			if reuse != nil {
 				MarkCipherStreamUnusable(ue.RemoteConn)
-				log.Warnf("[UDP_PROXY] underlying proxy connection is unhealthy, need close it: %v", reuse)
+				log.Warn("[UDP_PROXY] underlying proxy connection is unhealthy, need close it", "reuse", reuse)
 			} else {
-				log.Debugf("[UDP_PROXY] underlying proxy connection is healthy, so reuse it")
+				log.Debug("[UDP_PROXY] underlying proxy connection is healthy, so reuse it")
 			}
 		} else {
 			MarkCipherStreamUnusable(ue.RemoteConn)
@@ -193,7 +193,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		for {
 			select {
 			case <-ch:
-				log.Infof("[UDP_PROXY] the tcp that udp address %s associated closed", ue.ClientAddr.String())
+				log.Info("[UDP_PROXY] the tcp that udp address associated closed", "udp_addr", ue.ClientAddr.String())
 				return
 			default:
 			}
@@ -206,7 +206,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 					err = ue.RemoteConn.SetReadDeadline(time.Now().Add(ss.Timeout()))
 				}
 				if err != nil {
-					log.Errorf("[UDP_PROXY] set the deadline for remote conn err:%v", err)
+					log.Error("[UDP_PROXY] set the deadline for remote conn err", "err", err)
 					tryReuse = false
 					return
 				}
@@ -215,18 +215,18 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			if err != nil {
 				if !errors.Is(err, cipherstream.ErrTimeout) {
 					tryReuse = false
-					log.Infof("[UDP_PROXY] remote conn read: %v", err)
+					log.Info("[UDP_PROXY] remote conn read", "err", err)
 				}
 				return
 			}
-			log.Debugf("[UDP_PROXY] got data from remote. client: %v, data-len: %v", ue.ClientAddr.String(), len(buf[0:n]))
+			log.Debug("[UDP_PROXY] got data from remote", "client", ue.ClientAddr.String(), "data_len", len(buf[0:n]))
 
 			// if is dns response, set result to dns cache
 			_msg := ss.SetDNSCacheIfNeeded(buf[0:n], false)
 
 			a, addr, port, err := socks5.ParseAddress(dst)
 			if err != nil {
-				log.Errorf("[UDP_PROXY] parse dst address err:%v", err)
+				log.Error("[UDP_PROXY] parse dst address", "err", err)
 				return
 			}
 			data := buf[0:n]
@@ -262,17 +262,16 @@ func (ss *Easyss) SetDNSCacheIfNeeded(udpResp []byte, isDirect bool) *dns.Msg {
 	}
 	msg := &dns.Msg{}
 	if err := msg.Unpack(udpResp); err == nil && isDNSResponse(msg) {
-		log.Infof("%s got result:%s for %s, qtype:%s",
-			logPrefix, msg.Answer, msg.Question[0].Name, dns.TypeToString[msg.Question[0].Qtype])
+		log.Info(logPrefix+" got result for",
+			"domain", msg.Question[0].Name, "answer", msg.Answer, "qtype", dns.TypeToString[msg.Question[0].Qtype])
 		if ss.DisableIPV6() && msg.Question[0].Qtype == dns.TypeAAAA {
-			log.Infof("%s ipv6 is disabled, set TypeAAAA dns answer to nil for %s", logPrefix, msg.Question[0].Name)
+			log.Info(logPrefix+" ipv6 is disabled, set TypeAAAA dns answer to nil for", "domain", msg.Question[0].Name)
 			msg.Answer = nil
 		}
 		if err := ss.SetDNSCache(msg, false, isDirect); err != nil {
-			log.Warnf("%s set dns cache err:%s", logPrefix, err.Error())
+			log.Warn(logPrefix+" set dns cache", logPrefix, "err", err)
 		} else {
-			log.Debugf("%s set cache for %s, qtype:%s",
-				logPrefix, msg.Question[0].Name, dns.TypeToString[msg.Question[0].Qtype])
+			log.Debug(logPrefix+" set cache for", "domain", msg.Question[0].Name, "qtype", dns.TypeToString[msg.Question[0].Qtype])
 		}
 		return msg
 	}

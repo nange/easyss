@@ -6,24 +6,14 @@ import (
 	"os"
 	"os/signal"
 	"path"
-	"path/filepath"
 	"syscall"
 
 	"github.com/nange/easyss/v2"
+	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/pprof"
 	"github.com/nange/easyss/v2/util"
 	"github.com/nange/easyss/v2/version"
-	log "github.com/sirupsen/logrus"
 )
-
-func init() {
-	exec, err := os.Executable()
-	if err != nil {
-		panic(err)
-	}
-	logDir := filepath.Dir(exec)
-	util.SetLogFileHook(logDir)
-}
 
 func main() {
 	var configFile, logLevel string
@@ -36,7 +26,8 @@ func main() {
 	flag.StringVar(&cmdConfig.Password, "k", "", "password")
 	flag.StringVar(&cmdConfig.Server, "s", "", "server address")
 	flag.IntVar(&cmdConfig.ServerPort, "p", 0, "server port")
-	flag.StringVar(&logLevel, "log-level", "info", "set the log-level(debug, info, warn, error), default: info")
+	flag.StringVar(&cmdConfig.LogLevel, "log-level", "", "set the log-level(debug, info, warn, error), default: info")
+	flag.StringVar(&cmdConfig.LogFilePath, "log-file-path", "", "set the log output location, default: Stdout")
 	flag.BoolVar(&enablePprof, "enable-pprof", false, "enable pprof server. default bind to :6060")
 
 	flag.Parse()
@@ -50,33 +41,21 @@ func main() {
 		os.Exit(0)
 	}
 
-	log.Infof("[EASYSS_SERVER_MAIN] set the log-level to: %v", logLevel)
-	switch logLevel {
-	case "debug":
-		log.SetLevel(log.DebugLevel)
-	case "warn":
-		log.SetLevel(log.WarnLevel)
-	case "error":
-		log.SetLevel(log.ErrorLevel)
-	default:
-		log.SetLevel(log.InfoLevel)
-	}
-
 	exists, err := util.FileExists(configFile)
 	if !exists || err != nil {
-		log.Debugf("[EASYSS_SERVER_MAIN] config file:%v", err)
+		log.Debug("[EASYSS_SERVER_MAIN] config file", "err", err)
 
 		binDir := util.CurrentDir()
 		configFile = path.Join(binDir, "config.json")
 
-		log.Debugf("[EASYSS_SERVER_MAIN] config file not found, try config file %s", configFile)
+		log.Debug("[EASYSS_SERVER_MAIN] config file not found, try config file", "file", configFile)
 	}
 
 	config, err := easyss.ParseConfig[easyss.ServerConfig](configFile)
 	if err != nil {
 		config = &cmdConfig
 		if !os.IsNotExist(err) {
-			log.Errorf("[EASYSS_SERVER_MAIN] error reading %s: %+v", configFile, err)
+			log.Error("[EASYSS_SERVER_MAIN] reading", "file", configFile, "err", err)
 			os.Exit(1)
 		}
 	} else {
@@ -85,8 +64,12 @@ func main() {
 	}
 
 	if err := config.Validate(); err != nil {
-		log.Fatalf("[EASYSS_SERVER_MAIN] starts failed, config is invalid:%s", err.Error())
+		log.Error("[EASYSS_SERVER_MAIN] starts failed, config is invalid", "err", err)
+		os.Exit(1)
 	}
+
+	log.Info("[EASYSS_SERVER_MAIN] set the log-level to", "level", logLevel)
+	log.Init(config.LogFilePath, config.LogLevel)
 
 	if enablePprof {
 		go pprof.StartPprof()
@@ -94,7 +77,8 @@ func main() {
 
 	ss, err := easyss.NewServer(config)
 	if err != nil {
-		log.Fatalf("[EASYSS_SERVER_MAIN] new server:%v", err)
+		log.Error("[EASYSS_SERVER_MAIN] new server", "err", err)
+		os.Exit(1)
 	}
 	go ss.Start()
 
@@ -102,9 +86,9 @@ func main() {
 	signal.Notify(c, os.Interrupt, syscall.SIGINT, syscall.SIGTERM,
 		syscall.SIGQUIT)
 
-	log.Infof("[EASYSS_SERVER_MAIN-SERVER] got signal to exit: %v", <-c)
+	log.Info("[EASYSS_SERVER_MAIN-SERVER] got signal to exit", "signal", <-c)
 	if err := ss.Close(); err != nil {
-		log.Warnf("[EASYSS_SERVER_MAIN] close easy-server: %v", err)
+		log.Warn("[EASYSS_SERVER_MAIN] close easy-server", "err", err)
 	}
 	os.Exit(0)
 }
