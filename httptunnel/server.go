@@ -152,7 +152,7 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 		writeNotFoundError(w)
 		return
 	}
-	log.Debug("[HTTP_TUNNEL_SERVER] push uuid:%v", reqID)
+	log.Debug("[HTTP_TUNNEL_SERVER] push", "uuid", reqID)
 	s.Lock()
 	conn, ok := s.connMap[reqID]
 	if !ok {
