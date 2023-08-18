@@ -271,10 +271,10 @@ func (c *Config) SetDefaultValue() {
 	if c.TunConfig == nil {
 		c.TunConfig = &TunConfig{}
 		switch runtime.GOOS {
-		case "linux", "windows":
-			c.TunConfig.TunDevice = "tun-easyss"
 		case "darwin":
 			c.TunConfig.TunDevice = "utun9"
+		default:
+			c.TunConfig.TunDevice = "tun-easyss"
 		}
 		c.TunConfig.TunIP = "198.18.0.1"
 		c.TunConfig.TunGW = "198.18.0.1"
