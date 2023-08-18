@@ -50,7 +50,7 @@ func (ss *Easyss) background() {
 				continue
 			}
 			log.Info("[EASYSS_BACKGROUND] ping easyss-server latency",
-				"min", minLatency, "avg", avgLatency, "max", maxLatency, "count", count)
+				"min", minLatency.String(), "avg", avgLatency.String(), "max", maxLatency.String(), "count", count)
 			minLatency, avgLatency, maxLatency, count, total = 0, 0, 0, 0, 0
 		case <-tickerExec.C:
 			go ss.cmdInterval(ss.config.CMDInterval)

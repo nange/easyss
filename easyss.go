@@ -676,15 +676,7 @@ func (ss *Easyss) BindAll() bool {
 }
 
 func (ss *Easyss) LogFilePath() string {
-	if ss.config.LogFilePath != "" {
-		if filepath.IsAbs(ss.config.LogFilePath) {
-			return ss.config.LogFilePath
-		} else {
-			dir := util.CurrentDir()
-			return filepath.Join(dir, ss.config.LogFilePath)
-		}
-	}
-	return ""
+	return ss.config.GetLogFilePath()
 }
 
 func (ss *Easyss) DisableUTLS() bool {

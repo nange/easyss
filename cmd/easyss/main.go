@@ -81,7 +81,7 @@ func main() {
 	}
 
 	log.Info("[EASYSS-MAIN] set the log-level to", "level", config.LogLevel)
-	log.Init(config.LogFilePath, config.LogLevel)
+	log.Init(config.GetLogFilePath(), config.LogLevel)
 
 	if enablePprof {
 		go pprof.StartPprof()

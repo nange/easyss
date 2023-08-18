@@ -8,10 +8,13 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/nange/easyss/v2/util"
 )
 
 var Methods = map[string]struct{}{
@@ -157,6 +160,21 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+func getLogFilePath(path string) string {
+	if path != "" {
+		if filepath.IsAbs(path) {
+			return path
+		}
+		dir := util.CurrentDir()
+		return filepath.Join(dir, path)
+	}
+	return ""
+}
+
+func (c *Config) GetLogFilePath() string {
+	return getLogFilePath(c.LogFilePath)
 }
 
 func (c *Config) Clone() *Config {
@@ -361,6 +379,10 @@ func (c *ServerConfig) Validate() error {
 	}
 
 	return nil
+}
+
+func (c *ServerConfig) GetLogFilePath() string {
+	return getLogFilePath(c.LogFilePath)
 }
 
 func ExampleJSONConfig() string {
