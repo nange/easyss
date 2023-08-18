@@ -58,7 +58,8 @@ make easyss-server
   "method": "aes-256-gcm",
   "timeout": 60,
   "bind_all": false,
-  "outbound_proto": "native"
+  "outbound_proto": "native",
+  "log_file_path": "easyss.log"
 }
 ```
 
@@ -82,7 +83,8 @@ make easyss-server
   "method": "aes-256-gcm",
   "timeout": 60,
   "bind_all": false,
-  "ca_path": ""
+  "ca_path": "",
+  "log_file_path": "easyss.log"
 }
 ```
 
@@ -96,6 +98,7 @@ make easyss-server
 * bind_all: 是否将监听端口绑定到所有本地IP上(默认false)
 * ca_path: 自定义CA证书文件路径(当使用自定义tls证书时才配置)
 * outbound_proto: 出口协议，默认`native`，可选：`native`, `http`, `https`
+* log_file_path: 日志文件路径，为空则输出到系统标准输出
 
 其他还有一些参数没有列出，如无必要，无需关心。除了3个必填的参数，其他都是可选的，甚至可以不要配置文件，全部通过命令行指定即可。
 
