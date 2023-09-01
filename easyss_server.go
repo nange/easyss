@@ -39,6 +39,7 @@ func NewServer(config *ServerConfig) (*EasyServer, error) {
 		if err := es.loadNextProxyIPDomains(); err != nil {
 			return nil, err
 		}
+		es.printNextProxyInfo()
 	}
 
 	return es, nil
@@ -89,6 +90,24 @@ func (es *EasyServer) loadNextProxyIPDomains() error {
 	}
 
 	return nil
+}
+
+func (es *EasyServer) printNextProxyInfo() {
+	keys := make([]string, 0, len(es.nextProxyDomains))
+
+	for k := range es.nextProxyDomains {
+		keys = append(keys, k)
+	}
+	log.Info("[EASYSS_SERVER] next proxy domains", "domains", keys)
+
+	keys = keys[:0]
+	for k := range es.nextProxyIPs {
+		keys = append(keys, k)
+	}
+	for _, v := range es.nextProxyCIDRIPs {
+		keys = append(keys, v.String())
+	}
+	log.Info("[EASYSS_SERVER] next proxy ips", "ips", keys)
 }
 
 func (es *EasyServer) Server() string {
