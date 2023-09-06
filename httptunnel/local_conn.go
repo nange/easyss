@@ -1,7 +1,6 @@
 package httptunnel
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -9,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +15,7 @@ import (
 
 	"github.com/go-faker/faker/v4"
 	"github.com/gofrs/uuid/v5"
+	"github.com/imroc/req/v3"
 	"github.com/nange/easyss/v2/log"
 )
 
@@ -52,15 +51,17 @@ type LocalConn struct {
 	settingDeadline chan struct{}
 	expired         chan struct{}
 
-	client   *http.Client
+	client   *req.Client
 	respBody io.ReadCloser
 	left     []byte
 }
 
-func NewLocalConn(client *http.Client, serverAddr string) (*LocalConn, error) {
+func NewLocalConn(client *req.Client, serverAddr string) (*LocalConn, error) {
 	if client == nil {
 		return nil, errors.New("http outbound client is nil")
 	}
+	client.SetUserAgent(UserAgent)
+
 	id, err := uuid.NewV7()
 	if err != nil {
 		return nil, err
@@ -229,17 +230,11 @@ func (l *LocalConn) pull() error {
 		return err
 	}
 
-	v := url.Values{}
-	v.Set("mchid", strconv.FormatInt(int64(p.Mchid), 10))
-	v.Set("transaction_id", p.TransactionID)
-	req, err := http.NewRequest(http.MethodGet, l.serverAddr+"/pull?"+v.Encode(), nil)
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set(RequestIDHeader, l.uuid)
-
-	resp, err := l.client.Do(req)
+	resp, err := l.client.R().
+		SetQueryParam("mchid", strconv.FormatInt(int64(p.Mchid), 10)).
+		SetQueryParam("transaction_id", p.TransactionID).
+		SetHeader(RequestIDHeader, l.uuid).
+		Get(l.serverAddr + "/pull")
 	if err != nil {
 		return err
 	}
@@ -260,22 +255,17 @@ func (l *LocalConn) push(data []byte) error {
 	p.Ciphertext = base64.StdEncoding.EncodeToString(data)
 	payload, _ := json.Marshal(p)
 
-	req, err := http.NewRequest(http.MethodPost, l.serverAddr+"/push", bytes.NewBuffer(payload))
+	resp, err := l.client.R().
+		SetHeader("Content-Length", strconv.FormatInt(int64(len(payload)), 10)).
+		SetHeader("Content-Type", "application/json").
+		SetHeader(RequestIDHeader, l.uuid).
+		SetBodyBytes(payload).
+		Post(l.serverAddr + "/push")
 	if err != nil {
 		return err
 	}
-	req.ContentLength = int64(len(payload))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(RequestIDHeader, l.uuid)
-	req.Header.Set("User-Agent", UserAgent)
 
-	resp, err := l.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
+	body, err := resp.ToBytes()
 	if err != nil {
 		return err
 	}
