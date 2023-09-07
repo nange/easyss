@@ -532,7 +532,7 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 	client.SetMaxIdleConns(MaxIdle).
 		SetIdleConnTimeout(MaxLifetime).
 		SetResponseHeaderTimeout(ss.Timeout())
-
+	client.DevMode().EnableDumpAll()
 	if ss.IsHTTPOutboundProto() {
 		// enable gzip if it is http outbound proto
 		// TODO:
@@ -540,11 +540,15 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 		if cert != "" {
 			log.Info("set root cert from string", "cert", cert)
 			client.SetRootCertFromString(cert)
+			client.GetTLSClientConfig().InsecureSkipVerify = true
 		}
 		if !ss.DisableUTLS() {
 			client.SetTLSFingerprintChrome()
 		}
 	}
+	//client.GetTransport().WrapRoundTrip(func(rt http.RoundTripper) http.RoundTripper {
+	//	return gzhttp.Transport(rt)
+	//})
 
 	ss.httpOutboundClient = client
 	return nil

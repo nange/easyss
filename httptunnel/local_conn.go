@@ -234,6 +234,7 @@ func (l *LocalConn) pull() error {
 		SetQueryParam("mchid", strconv.FormatInt(int64(p.Mchid), 10)).
 		SetQueryParam("transaction_id", p.TransactionID).
 		SetHeader(RequestIDHeader, l.uuid).
+		//SetHeader("Accept-Encoding", "gzip").
 		Get(l.serverAddr + "/pull")
 	if err != nil {
 		return err
@@ -259,6 +260,7 @@ func (l *LocalConn) push(data []byte) error {
 		SetHeader("Content-Length", strconv.FormatInt(int64(len(payload)), 10)).
 		SetHeader("Content-Type", "application/json").
 		SetHeader(RequestIDHeader, l.uuid).
+		//SetHeader("Accept-Encoding", "gzip").
 		SetBodyBytes(payload).
 		Post(l.serverAddr + "/push")
 	if err != nil {

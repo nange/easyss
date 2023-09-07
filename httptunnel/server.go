@@ -8,12 +8,10 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
 	"github.com/go-faker/faker/v4"
-	"github.com/klauspost/compress/gzhttp"
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
@@ -54,17 +52,21 @@ func NewServer(addr string, timeout time.Duration, tlsConfig *tls.Config) *Serve
 func (s *Server) Listen() {
 	s.handler()
 
-	ln, err := net.Listen("tcp", s.addr)
-	if err != nil {
-		log.Error("[HTTP_TUNNEL_SERVER] Listen", "err", err)
-		os.Exit(1)
-	}
+	//ln, err := net.Listen("tcp", s.addr)
+	//if err != nil {
+	//	log.Error("[HTTP_TUNNEL_SERVER] Listen", "err", err)
+	//	os.Exit(1)
+	//}
+	//if s.tlsConfig != nil {
+	//	ln = tls.NewListener(ln, s.tlsConfig)
+	//}
+	log.Info("[HTTP_TUNNEL_SERVER] listen http tunnel at", "addr", s.addr)
 	if s.tlsConfig != nil {
-		ln = tls.NewListener(ln, s.tlsConfig)
+		log.Warn("[HTTP_TUNNEL_SERVER] http serve:", "err", s.server.ListenAndServeTLS("./cert/easy-server.pem", "./cert/easy-server-key.pem"))
+	} else {
+		log.Warn("[HTTP_TUNNEL_SERVER] http serve:", "err", s.server.ListenAndServe())
 	}
 
-	log.Info("[HTTP_TUNNEL_SERVER] listen http tunnel at", "addr", s.addr)
-	log.Warn("[HTTP_TUNNEL_SERVER] http serve:", "err", s.server.Serve(ln))
 }
 
 func (s *Server) Close() error {
@@ -85,8 +87,8 @@ func (s *Server) Accept() (net.Conn, error) {
 }
 
 func (s *Server) handler() {
-	http.Handle("/pull", gzhttp.GzipHandler(http.HandlerFunc(s.pull)))
-	http.Handle("/push", gzhttp.GzipHandler(http.HandlerFunc(s.push)))
+	http.Handle("/pull", http.HandlerFunc(s.pull))
+	http.Handle("/push", http.HandlerFunc(s.push))
 }
 
 func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
