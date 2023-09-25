@@ -19,3 +19,9 @@ func TestIP(t *testing.T) {
 	assert.True(t, IsIPV6("::0"))
 	assert.False(t, IsIPV6("127.0.1"))
 }
+
+func TestLookupIPV4From(t *testing.T) {
+	ips, err := LookupIPV4From("8.8.8.8:53", "dnspod.cn")
+	assert.Nil(t, err)
+	assert.Greater(t, len(ips), 0)
+}

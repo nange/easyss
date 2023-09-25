@@ -7,12 +7,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/miekg/dns"
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
 )
 
-func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, tryReuse bool) error {
+func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, isDNSProto, tryReuse bool) error {
 	uConn, err := es.targetConn("udp", addrStr)
 	if err != nil {
 		return fmt.Errorf("net.DialUDP %v err:%v", addrStr, err)
@@ -45,6 +46,13 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, try
 
 				uConn.Close()
 				return
+			}
+			if isDNSProto {
+				// try to parse the dns request
+				msg := &dns.Msg{}
+				if err := msg.Unpack(buf[:n]); err == nil {
+					log.Info("[REMOTE_UDP] doing dns request for", "target", msg.Question[0].Name)
+				}
 			}
 			_, err = uConn.Write(buf[:n])
 			if err != nil {

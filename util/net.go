@@ -53,7 +53,7 @@ func DNSMsgTypeAAAA(dnsServer, domain string) (*dns.Msg, error) {
 }
 
 func dnsMsg(dnsType uint16, dnsServer, domain string) (*dns.Msg, error) {
-	c := &dns.Client{}
+	c := &dns.Client{UDPSize: 8192}
 
 	m := &dns.Msg{}
 	m.SetQuestion(dns.Fqdn(domain), dnsType)
@@ -67,7 +67,7 @@ func dnsMsg(dnsType uint16, dnsServer, domain string) (*dns.Msg, error) {
 		return nil, fmt.Errorf("dns query response Rcode:%v not equals RcodeSuccess", r.Rcode)
 	}
 
-	return m, nil
+	return r, nil
 }
 
 // LookupIPV4From lookup ipv4s for domain from dnsServer
