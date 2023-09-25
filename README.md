@@ -30,10 +30,10 @@ Easyss是一款兼容socks5的安全代理上网工具，目标是使访问国�
 
 ```sh
 // Ubuntu20.04 or Debian11 
-apt-get install libgtk-3-dev libayatana-appindicator3-dev -y
+apt-get install gcc libgtk-3-dev libayatana-appindicator3-dev -y
 
 // Ubuntu18.04 or Debian10
-apt-get install libgtk-3-dev libappindicator3-dev -y
+apt-get install gcc libgtk-3-dev libappindicator3-dev -y
 
 // build easyss client
 make easyss
