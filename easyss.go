@@ -419,7 +419,7 @@ func (ss *Easyss) InitTcpPool() error {
 	} else {
 		log.Info("[EASYSS] uTLS is enabled")
 	}
-	log.Info("[EASYSS] initializing tcp pool with easy server: %v", ss.ServerAddr())
+	log.Info("[EASYSS] initializing tcp pool with", "easy_server", ss.ServerAddr())
 
 	certPool, err := ss.loadCustomCertPool()
 	if err != nil {
