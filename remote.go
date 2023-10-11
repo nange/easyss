@@ -301,8 +301,8 @@ func validateTargetAddr(addr string) error {
 	if err != nil {
 		return err
 	}
-	if util.IsLoopbackIP(host) || util.IsPrivateIP(host) {
-		return fmt.Errorf("target address should not be loop-back ip or private ip:%s", addr)
+	if util.IsLANIP(host) {
+		return fmt.Errorf("target address should not be LAN ip:%s", addr)
 	}
 
 	return nil

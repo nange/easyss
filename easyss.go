@@ -938,7 +938,7 @@ func (ss *Easyss) DNSMsg(dnsServer, domain string) (*dns.Msg, *dns.Msg, error) {
 }
 
 func (ss *Easyss) HostShouldDirect(host string) bool {
-	if ss.ProxyRule() == ProxyRuleDirect {
+	if ss.ProxyRule() == ProxyRuleDirect || ss.IsLANHost(host) {
 		return true
 	}
 	if ss.ProxyRule() == ProxyRuleProxy {
@@ -949,9 +949,9 @@ func (ss *Easyss) HostShouldDirect(host string) bool {
 		return true
 	}
 	if ss.ProxyRule() == ProxyRuleReverseAuto {
-		return !ss.HostAtCNOrPrivate(host)
+		return !ss.HostAtCN(host)
 	}
-	return ss.HostAtCNOrPrivate(host)
+	return ss.HostAtCN(host)
 }
 
 func (ss *Easyss) HostMatchCustomDirectConfig(host string) bool {
@@ -976,13 +976,13 @@ func (ss *Easyss) HostMatchCustomDirectConfig(host string) bool {
 	return false
 }
 
-func (ss *Easyss) HostAtCNOrPrivate(host string) bool {
+func (ss *Easyss) HostAtCN(host string) bool {
 	if host == "" {
 		return false
 	}
 
 	if util.IsIP(host) {
-		return ss.IPAtCNOrPrivate(host)
+		return ss.IPAtCN(host)
 	}
 	// if the host end with .cn, return true
 	if strings.HasSuffix(host, ".cn") {
@@ -992,7 +992,7 @@ func (ss *Easyss) HostAtCNOrPrivate(host string) bool {
 	return ss.geosite.SiteAtCN(host)
 }
 
-func (ss *Easyss) IPAtCNOrPrivate(ip string) bool {
+func (ss *Easyss) IPAtCN(ip string) bool {
 	_ip := net.ParseIP(ip)
 	if _ip == nil {
 		return false
@@ -1002,11 +1002,19 @@ func (ss *Easyss) IPAtCNOrPrivate(ip string) bool {
 		return false
 	}
 
-	if country.Country.IsoCode == "CN" || country.Country.IsoCode == "PRIVATE" {
+	if country.Country.IsoCode == "CN" {
 		return true
 	}
 
 	return false
+}
+
+func (ss *Easyss) IsLANHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+
+	return util.IsLANIP(host)
 }
 
 func (ss *Easyss) Close() error {

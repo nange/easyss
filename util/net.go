@@ -11,13 +11,14 @@ func IsIP(ip string) bool {
 	return net.ParseIP(ip) != nil
 }
 
-func IsPrivateIP(ip string) bool {
+func IsLANIP(ip string) bool {
 	_ip := net.ParseIP(ip)
 	if _ip == nil {
 		return false
 	}
 
-	return _ip.IsPrivate()
+	return _ip.IsPrivate() || _ip.IsLoopback() || _ip.IsLinkLocalMulticast() || _ip.IsLinkLocalUnicast() ||
+		_ip.IsUnspecified() || _ip.IsMulticast() || _ip.IsInterfaceLocalMulticast()
 }
 
 func IsLoopbackIP(ip string) bool {

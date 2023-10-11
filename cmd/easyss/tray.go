@@ -117,7 +117,7 @@ func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 		auto.Check()
 	}
 	reverseAuto := proxyMenue.AddSubMenuItemCheckbox("反向自动(国外访问国内)", "适用国外访问国内IP域名", false)
-	proxy := proxyMenue.AddSubMenuItemCheckbox("代理全部", "代理所有地址的请求", false)
+	proxy := proxyMenue.AddSubMenuItemCheckbox("代理全部(绕过局域网地址)", "代理除局域网地址的所有请求", false)
 	if st.SS().ProxyRule() == easyss.ProxyRuleProxy {
 		proxy.Check()
 	}

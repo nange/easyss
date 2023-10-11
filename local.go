@@ -135,8 +135,8 @@ func (ss *Easyss) validateAddr(addr string) error {
 		return nil
 	}
 
-	if util.IsPrivateIP(host) {
-		return fmt.Errorf("target host:%v is private ip, which is invalid", host)
+	if util.IsLANIP(host) {
+		return fmt.Errorf("target host:%v is LAN ip, which is invalid", host)
 	}
 	if ss.DisableIPV6() && util.IsIPV6(host) {
 		return fmt.Errorf("target %s is ipv6, but ipv6 network is disabled", host)
