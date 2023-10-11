@@ -261,13 +261,10 @@ func (st *SysTray) AddExitMenu() *systray.MenuItem {
 }
 
 func (st *SysTray) catLog() error {
-	win := `-FilePath powershell  -WorkingDirectory "%s" -ArgumentList "-Command Get-Content %s -Wait %s"`
+	// Ref: https://learn.microsoft.com/zh-cn/powershell/module/microsoft.powershell.management/start-process?view=powershell-7.3
+	win := `-FilePath powershell  -ArgumentList "-Command", "Get-Content", "-Wait", "-Tail 100", "%s"`
 	if runtime.GOOS == "windows" && util.SysSupportPowershell() {
-		if util.SysPowershellMajorVersion() >= 3 {
-			win = fmt.Sprintf(win, util.CurrentDir(), st.ss.LogFilePath(), "-Tail 100")
-		} else {
-			win = fmt.Sprintf(win, util.CurrentDir(), st.ss.LogFilePath(), "-ReadCount 100")
-		}
+		win = fmt.Sprintf(win, st.ss.LogFilePath())
 	}
 
 	cmdMap := map[string][]string{
