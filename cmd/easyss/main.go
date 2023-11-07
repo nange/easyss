@@ -35,6 +35,8 @@ func main() {
 	flag.BoolVar(&cmdConfig.EnableForwardDNS, "enable-forward-dns", false, "start a local dns server to forward dns request")
 	flag.BoolVar(&cmdConfig.EnableTun2socks, "enable-tun2socks", false, "enable tun2socks model. default: false")
 	flag.BoolVar(&cmdConfig.DisableIPV6, "disable-ipv6", true, "disable ipv6 network. default: true")
+	flag.StringVar(&cmdConfig.CAPath, "ca-path", "", "set custom CA-Cert file path")
+	flag.StringVar(&cmdConfig.OutboundProto, "outbound-proto", "", "set the outbound proto(native, http, https), default: native")
 	flag.BoolVar(&enablePprof, "enable-pprof", false, "enable pprof server. default bind to :6060")
 
 	flag.Parse()
@@ -72,8 +74,8 @@ func main() {
 		}
 	} else {
 		easyss.OverrideConfig(config, &cmdConfig)
-		config.SetDefaultValue()
 	}
+	config.SetDefaultValue()
 
 	if err := config.Validate(); err != nil {
 		log.Error("[EASYSS-MAIN] config is invalid", "err", err)
