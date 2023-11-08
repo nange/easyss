@@ -40,7 +40,13 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	isDNSReq := isDNSRequest(msg)
 	if err == nil && isDNSReq {
 		question := msg.Question[0]
-		isDirect := ss.HostShouldDirect(strings.TrimSuffix(question.Name, "."))
+
+		check := ss.HostMatch(strings.TrimSuffix(question.Name, "."))
+		if check == "block" {
+			log.Info("[DNS_BLOCK]", "domain", question.Name)
+			return err
+		}
+		isDirect := check == "direct"
 
 		// find from dns cache first
 		msgCache := ss.DNSCache(question.Name, dns.TypeToString[question.Qtype], isDirect)

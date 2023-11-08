@@ -55,10 +55,12 @@ const (
 )
 
 var (
-	//go:embed geodata/geoip_cn_private.mmdb
+	//go:embed geodata/Country-only-cn-private.mmdb
 	geoIPCNPrivate []byte
-	//go:embed geodata/geosite_cn.txt
+	//go:embed geodata/direct-list.txt
 	geoSiteCN []byte
+	//go:embed geodata/reject-list.txt
+	geoSiteBlock []byte
 )
 
 type Statistics struct {
@@ -177,6 +179,7 @@ type Easyss struct {
 	directDNSCache  *freecache.Cache
 	geoipDB         *geoip2.Reader
 	geosite         *GeoSite
+	geositeBlock    *GeoSite
 	// the user custom ip/domain list which have the highest priority
 	customDirectIPs     map[string]struct{}
 	customDirectCIDRIPs []*net.IPNet
@@ -232,6 +235,7 @@ func New(config *Config) (*Easyss, error) {
 	}
 	ss.geoipDB = db
 	ss.geosite = NewGeoSite(geoSiteCN)
+	ss.geositeBlock = NewGeoSite(geoSiteBlock)
 
 	if err := ss.initDirectDNSServer(); err != nil {
 		log.Error("[EASYSS] init direct dns server", "err", err)
@@ -952,6 +956,29 @@ func (ss *Easyss) HostShouldDirect(host string) bool {
 		return !ss.HostAtCN(host)
 	}
 	return ss.HostAtCN(host)
+}
+
+func (ss *Easyss) HostMatch(host string) string {
+	if ss.ProxyRule() == ProxyRuleDirect || ss.IsLANHost(host) {
+		return "direct"
+	}
+	if ss.ProxyRule() == ProxyRuleProxy {
+		return "proxy"
+	}
+	if ss.HostMatchCustomDirectConfig(host) {
+		return "direct"
+	}
+	if _, ok := ss.geositeBlock.domain[host]; ok {
+		return "block"
+	}
+	if ss.ProxyRule() == ProxyRuleReverseAuto && !ss.HostAtCN(host) {
+		return "direct"
+	}
+	if ss.HostAtCN(host) {
+		return "direct"
+	}
+
+	return "proxy"
 }
 
 func (ss *Easyss) HostMatchCustomDirectConfig(host string) bool {
