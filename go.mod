@@ -9,7 +9,7 @@ require (
 	github.com/getlantern/systray v1.2.2
 	github.com/go-faker/faker/v4 v4.1.1
 	github.com/gofrs/uuid/v5 v5.0.0
-	github.com/imroc/req/v3 v3.41.11
+	github.com/imroc/req/v3 v3.42.1
 	github.com/klauspost/compress v1.16.7
 	github.com/libp2p/go-netroute v0.2.1
 	github.com/miekg/dns v1.1.55
