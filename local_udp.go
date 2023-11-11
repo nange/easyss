@@ -44,7 +44,28 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		check := ss.HostMatch(strings.TrimSuffix(question.Name, "."))
 		if check == "block" {
 			log.Info("[DNS_BLOCK]", "domain", question.Name)
-			return err
+			m := new(dns.Msg)
+			m.SetReply(msg)
+			if question.Qtype == dns.TypeA {
+				rr, err := dns.NewRR(fmt.Sprintf("%s A 127.0.0.1", question.Name))
+				if err != nil {
+					log.Error("[DNS_BLOCK] Error creating A record:", err)
+					return err
+				}
+				m.Answer = append(m.Answer, rr)
+			} else if question.Qtype == dns.TypeAAAA {
+				rr, err := dns.NewRR(fmt.Sprintf("%s AAAA ::1", question.Name))
+				if err != nil {
+					log.Error("[DNS_BLOCK] Error creating AAAA record:", err)
+					return err
+				}
+				m.Answer = append(m.Answer, rr)
+			}
+			if err := responseDNSMsg(s.UDPConn, addr, m, d.Address()); err != nil {
+				log.Error("[DNS_BLOCK] Response", "err", err)
+				return err
+			}
+			return nil
 		}
 		isDirect := check == "direct"
 
