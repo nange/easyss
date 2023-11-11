@@ -324,9 +324,12 @@ func expireConn(conn net.Conn) error {
 
 func isDNSRequest(msg *dns.Msg) bool {
 	if msg == nil || len(msg.Question) == 0 {
+		log.Debug("[UDP_INFO]", "Not DNS Request")
 		return false
 	}
 	q := msg.Question[0]
+	log.Debug("[UDP_INFO]", "DNS Request Type", dns.TypeToString[q.Qtype])
+
 	if q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA {
 		return true
 	}
