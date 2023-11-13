@@ -522,7 +522,7 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 		return err
 	}
 
-	client := req.C().EnableForceHTTP1()
+	client := req.C().EnableForceHTTP1().DisableAutoReadResponse()
 	client.SetMaxIdleConns(MaxIdle).
 		SetIdleConnTimeout(MaxLifetime).
 		SetResponseHeaderTimeout(ss.Timeout())
