@@ -15,6 +15,7 @@ require (
 	github.com/nange/easypool v1.3.1
 	github.com/oschwald/geoip2-golang v1.9.0
 	github.com/refraction-networking/utls v1.4.3
+	github.com/smallnest/ringbuffer v0.0.0-20230728150354-35801fa39d0e
 	github.com/stretchr/testify v1.8.4
 	github.com/txthinking/socks5 v0.0.0-20230325130024-4230056ae301
 	github.com/wzshiming/sysproxy v0.2.2
