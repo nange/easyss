@@ -23,12 +23,14 @@ import (
 	"time"
 
 	"github.com/coocood/freecache"
+	"github.com/imroc/req/v3"
 	"github.com/miekg/dns"
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/httptunnel"
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util"
+	"github.com/oschwald/geoip2-golang"
 	utls "github.com/refraction-networking/utls"
 	"github.com/txthinking/socks5"
 )

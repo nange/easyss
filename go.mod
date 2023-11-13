@@ -14,6 +14,7 @@ require (
 	github.com/libp2p/go-netroute v0.2.1
 	github.com/miekg/dns v1.1.55
 	github.com/nange/easypool v1.3.1
+	github.com/oschwald/geoip2-golang v1.9.0
 	github.com/refraction-networking/utls v1.5.3
 	github.com/stretchr/testify v1.8.4
 	github.com/txthinking/socks5 v0.0.0-20230325130024-4230056ae301
@@ -56,6 +57,7 @@ require (
 	github.com/libdns/libdns v0.2.1 // indirect
 	github.com/mholt/acmez v1.2.0 // indirect
 	github.com/onsi/ginkgo/v2 v2.12.0 // indirect
+	github.com/oschwald/maxminddb-golang v1.11.0 // indirect
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
