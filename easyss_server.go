@@ -78,7 +78,7 @@ func (es *EasyServer) loadNextProxyIPDomains() error {
 		es.nextProxyDomains = nextDomains
 		// not only proxy the domains but also the ips of domains
 		for domain := range nextDomains {
-			ips, err := net.LookupIP(domain)
+			ips, err := util.LookupIPV4From(DefaultDNSServer, domain)
 			if err != nil {
 				log.Warn("[EASYSS_SERVER] lookup ip for", "domain", domain, "err", err)
 				continue

@@ -28,6 +28,8 @@ func main() {
 	flag.IntVar(&cmdConfig.ServerPort, "p", 0, "server port")
 	flag.StringVar(&cmdConfig.LogLevel, "log-level", "", "set the log-level(debug, info, warn, error), default: info")
 	flag.StringVar(&cmdConfig.LogFilePath, "log-file-path", "", "set the log output location, default: Stdout")
+	flag.StringVar(&cmdConfig.CertPath, "cert-path", "", "set custom Cert file path")
+	flag.StringVar(&cmdConfig.KeyPath, "key-path", "", "set custom Key file path")
 	flag.BoolVar(&enablePprof, "enable-pprof", false, "enable pprof server. default bind to :6060")
 
 	flag.Parse()
@@ -60,8 +62,8 @@ func main() {
 		}
 	} else {
 		easyss.OverrideConfig(config, &cmdConfig)
-		config.SetDefaultValue()
 	}
+	config.SetDefaultValue()
 
 	if err := config.Validate(); err != nil {
 		log.Error("[EASYSS_SERVER_MAIN] starts failed, config is invalid", "err", err)

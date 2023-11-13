@@ -121,7 +121,7 @@ func (es *EasyServer) handleConn(conn net.Conn, tryReuse bool) {
 	defer conn.Close()
 
 	for {
-		addr, method, protoType, err := es.handShakeWithClient(conn)
+		res, err := es.handShakeWithClient(conn)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				log.Debug("[REMOTE] got EOF error when handshake with client-server, maybe the connection pool closed the idle conn")
@@ -131,7 +131,7 @@ func (es *EasyServer) handleConn(conn net.Conn, tryReuse bool) {
 			return
 		}
 
-		addrStr := string(addr)
+		addrStr := string(res.addr)
 		if !es.disableValidateAddr {
 			if err := validateTargetAddr(addrStr); err != nil {
 				log.Warn("[REMOTE] invalid target address, close the connection directly", "err", err)
@@ -141,21 +141,22 @@ func (es *EasyServer) handleConn(conn net.Conn, tryReuse bool) {
 
 		log.Info("[REMOTE]", "target", addrStr)
 
-		switch protoType {
-		case "tcp":
-			if err := es.remoteTCPHandle(conn, addrStr, method, tryReuse); err != nil {
+		switch {
+		case res.frameHeader.IsTCPProto():
+			if err := es.remoteTCPHandle(conn, addrStr, res.method, tryReuse); err != nil {
 				log.Info("[REMOTE] tcp handle", "err", err)
 				return
 			}
-		case "udp":
-			if err := es.remoteUDPHandle(conn, addrStr, method, tryReuse); err != nil {
+		case res.frameHeader.IsUDPProto():
+			if err := es.remoteUDPHandle(conn, addrStr, res.method, res.frameHeader.IsDNSProto(), tryReuse); err != nil {
 				log.Info("[REMOTE] udp handle", "err", err)
 				return
 			}
 		default:
-			log.Error("[REMOTE] unsupported", "proto_type", protoType)
+			log.Error("[REMOTE] unsupported proto_type")
 			return
 		}
+
 		if !tryReuse {
 			return
 		}
@@ -182,10 +183,17 @@ func (es *EasyServer) remoteTCPHandle(conn net.Conn, addrStr, method string, try
 	return err
 }
 
-func (es *EasyServer) handShakeWithClient(conn net.Conn) (addr []byte, method string, protoType string, err error) {
+type hsRes struct {
+	addr        []byte
+	method      string
+	frameHeader *cipherstream.Header
+}
+
+func (es *EasyServer) handShakeWithClient(conn net.Conn) (hsRes, error) {
+	res := hsRes{}
 	csStream, err := cipherstream.New(conn, es.Password(), cipherstream.MethodAes256GCM, cipherstream.FrameTypeUnknown)
 	if err != nil {
-		return nil, "", "", err
+		return res, err
 	}
 	cs := csStream.(*cipherstream.CipherStream)
 	defer cs.Release()
@@ -194,35 +202,32 @@ func (es *EasyServer) handShakeWithClient(conn net.Conn) (addr []byte, method st
 	for {
 		frame, err = cs.ReadFrame()
 		if err != nil {
-			return nil, "", "", err
+			return res, err
 		}
 
 		if frame.IsPingFrame() {
 			log.Debug("[REMOTE] got ping message", "payload", string(frame.RawDataPayload()))
 			if frame.IsNeedACK() {
 				if er := cs.WritePing(frame.RawDataPayload(), cipherstream.FlagACK); er != nil {
-					return nil, "", "", er
+					return res, er
 				}
 			}
 			continue
 		}
 		break
 	}
-	if frame.IsTCPProto() {
-		protoType = "tcp"
-	} else if frame.IsUDPProto() {
-		protoType = "udp"
-	}
+	res.frameHeader = frame.Header
 
 	rawData := frame.RawDataPayload()
 	length := len(rawData)
 	if length <= 1 {
-		err = errors.New("handshake: payload length is invalid")
-		return
-	}
-	method = DecodeCipherMethod(rawData[length-1])
+		return res, errors.New("handshake: payload length is invalid")
 
-	return rawData[:length-1], method, protoType, nil
+	}
+	res.method = DecodeCipherMethod(rawData[length-1])
+	res.addr = rawData[:length-1]
+
+	return res, nil
 }
 
 func (es *EasyServer) targetConn(network, addr string) (net.Conn, error) {
@@ -296,8 +301,8 @@ func validateTargetAddr(addr string) error {
 	if err != nil {
 		return err
 	}
-	if util.IsLoopbackIP(host) || util.IsPrivateIP(host) {
-		return fmt.Errorf("target address should not be loop-back ip or private ip:%s", addr)
+	if util.IsLANIP(host) {
+		return fmt.Errorf("target address should not be LAN ip:%s", addr)
 	}
 
 	return nil
