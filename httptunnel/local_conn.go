@@ -9,14 +9,14 @@ import (
 	"net"
 	"net/http"
 	"strconv"
-	"strings"
-	"sync"
-	"time"
 
 	"github.com/go-faker/faker/v4"
 	"github.com/gofrs/uuid/v5"
 	"github.com/imroc/req/v3"
+	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/log"
+	"github.com/nange/easyss/v2/util/bytespool"
+	"github.com/nange/easyss/v2/util/netpipe"
 )
 
 const (
@@ -24,39 +24,16 @@ const (
 	UserAgent       = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
 )
 
-var _ net.Conn = (*LocalConn)(nil)
-
-type localConnAddr struct{}
-
-func (localConnAddr) Network() string { return "http outbound" }
-func (localConnAddr) String() string  { return "http outbound" }
-
-type timeoutError struct{}
-
-func (e timeoutError) Error() string   { return "i/o timeout" }
-func (e timeoutError) Timeout() bool   { return true }
-func (e timeoutError) Temporary() bool { return true }
-
-var _ net.Error = (*timeoutError)(nil)
-
 type LocalConn struct {
 	uuid       string
 	serverAddr string
-
-	// once for protecting done
-	once sync.Once
-	done chan struct{}
-	sync.Mutex
-	timeout         *time.Timer
-	settingDeadline chan struct{}
-	expired         chan struct{}
+	conn       net.Conn
 
 	client   *req.Client
 	respBody io.ReadCloser
-	left     []byte
 }
 
-func NewLocalConn(client *req.Client, serverAddr string) (*LocalConn, error) {
+func NewLocalConn(client *req.Client, serverAddr string) (net.Conn, error) {
 	if client == nil {
 		return nil, errors.New("http outbound client is nil")
 	}
@@ -66,162 +43,74 @@ func NewLocalConn(client *req.Client, serverAddr string) (*LocalConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &LocalConn{
-		uuid:            id.String(),
-		serverAddr:      serverAddr,
-		done:            make(chan struct{}),
-		settingDeadline: make(chan struct{}),
-		expired:         make(chan struct{}),
-		client:          client,
-	}, nil
+	conn, conn2 := netpipe.Pipe(2 * cipherstream.MaxPayloadSize)
+	lc := &LocalConn{
+		uuid:       id.String(),
+		serverAddr: serverAddr,
+		conn:       conn2,
+		client:     client,
+	}
+
+	go lc.Push()
+	go lc.Pull()
+
+	return conn, nil
 }
 
-func (l *LocalConn) Read(b []byte) (n int, err error) {
-	if len(l.left) > 0 {
-		n = copy(b, l.left)
-		if n < len(l.left) {
-			l.left = l.left[n:]
-		} else {
-			l.left = nil
-		}
-		return
-	}
-
-	l.Lock()
-	if err := l.checkConn(); err != nil {
-		l.Unlock()
-		return 0, err
-	}
+func (l *LocalConn) Pull() {
 	if l.respBody == nil {
-		if err = l.pull(); err != nil {
+		if err := l.pull(); err != nil {
 			log.Warn("[HTTP_TUNNEL_LOCAL] pull", "err", err)
-			l.Unlock()
 			return
 		}
 	}
-	l.Unlock()
+	defer l.Close()
 
 	dec := json.NewDecoder(l.respBody)
 	var resp pullResp
-	if err = dec.Decode(&resp); err == nil {
-		var data []byte
-		if data, err = base64.StdEncoding.DecodeString(resp.Ciphertext); err == nil {
-			n = copy(b, data)
-			if n < len(data) {
-				l.left = data[n:]
-			}
+
+	for {
+		if err := dec.Decode(&resp); err != nil {
+			log.Error("[HTTP_TUNNEL_LOCAL] decode response", "err", err)
+			break
+		}
+
+		data, err := base64.StdEncoding.DecodeString(resp.Ciphertext)
+		if err != nil {
+			log.Error("[HTTP_TUNNEL_LOCAL] decode cipher text", "err", err)
+			break
+		}
+		if _, err := l.conn.Write(data); err != nil {
+			log.Error("[HTTP_TUNNEL_LOCAL] write text", "err", err)
+			break
 		}
 	}
-
-	if err != nil {
-		log.Debug("[HTTP_TUNNEL_LOCAL] read from remote", "err", err)
-		if strings.Contains(err.Error(), "http2: server sent GOAWAY and closed the connection") {
-			// Ref: https://github.com/golang/go/issues/18639
-			err = io.EOF
-		} else if strings.Contains(err.Error(), "response body closed") {
-			// In LocalConn.SetDeadline func, we'll close the response body
-			select {
-			case <-l.done:
-			default:
-				err = timeoutError{}
-			}
-		}
-	}
-
-	return
+	log.Info("[HTTP_TUNNEL_LOCAL] Pull completed...", "uuid", l.uuid)
 }
 
-func (l *LocalConn) Write(b []byte) (n int, err error) {
-	l.Lock()
-	if err := l.checkConn(); err != nil {
-		l.Unlock()
-		return 0, err
-	}
-	l.Unlock()
-	if err := l.push(b); err != nil {
-		if !errors.Is(err, io.EOF) {
-			log.Warn("[HTTP_TUNNEL_LOCAL] push", "err", err)
+func (l *LocalConn) Push() {
+	buf := bytespool.Get(cipherstream.MaxPayloadSize)
+	defer bytespool.MustPut(buf)
+
+	for {
+		n, err := l.conn.Read(buf)
+		if er := l.push(buf[:n]); er != nil {
+			err = errors.Join(err, er)
 		}
-		return 0, err
+		if err != nil {
+			log.Error("[HTTP_TUNNEL_LOCAL] push", "err", err)
+			break
+		}
 	}
 
-	return len(b), nil
+	log.Info("[HTTP_TUNNEL_LOCAL] Push completed...", "uuid", l.uuid)
 }
 
-func (l *LocalConn) Close() error {
-	l.Lock()
-	defer l.Unlock()
-	l.once.Do(func() {
-		close(l.done)
-	})
+func (l *LocalConn) Close() {
 	if l.respBody != nil {
-		return l.respBody.Close()
+		_ = l.respBody.Close()
 	}
-	return nil
-}
-
-func (l *LocalConn) LocalAddr() net.Addr {
-	return localConnAddr{}
-}
-
-func (l *LocalConn) RemoteAddr() net.Addr {
-	return localConnAddr{}
-}
-
-// SetDeadline if the deadline time fired, then the LocalConn can't be used anymore
-func (l *LocalConn) SetDeadline(t time.Time) error {
-	l.Lock()
-	defer l.Unlock()
-	if err := l.checkConn(); err != nil {
-		return err
-	}
-	if l.timeout == nil {
-		l.timeout = time.NewTimer(time.Until(t))
-		go func() {
-			defer l.timeout.Stop()
-			for {
-				select {
-				case <-l.settingDeadline:
-					// wait for setting deadline to be done
-					<-l.settingDeadline
-				case <-l.timeout.C:
-					l.Lock()
-					if l.respBody != nil {
-						l.respBody.Close()
-					}
-					close(l.expired)
-					l.Unlock()
-					return
-				case <-l.done:
-					return
-				}
-			}
-		}()
-	} else {
-		// write to settingDeadline chan to prevent others goroutine receives from `l.timeout.C` chan
-		l.settingDeadline <- struct{}{}
-		if !l.timeout.Stop() {
-			select {
-			case <-l.timeout.C:
-			default:
-			}
-		}
-		if !t.IsZero() {
-			l.timeout.Reset(time.Until(t))
-		}
-		// notify others goroutine to continue
-		l.settingDeadline <- struct{}{}
-	}
-
-	return nil
-}
-
-func (l *LocalConn) SetReadDeadline(t time.Time) error {
-	return l.SetDeadline(t)
-}
-
-func (l *LocalConn) SetWriteDeadline(t time.Time) error {
-	return l.SetDeadline(t)
+	_ = l.conn.Close()
 }
 
 func (l *LocalConn) pull() error {
@@ -248,6 +137,10 @@ func (l *LocalConn) pull() error {
 }
 
 func (l *LocalConn) push(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+
 	p := &pushPayload{}
 	if err := faker.FakeData(p); err != nil {
 		return err
@@ -274,15 +167,4 @@ func (l *LocalConn) push(data []byte) error {
 	}
 
 	return nil
-}
-
-func (l *LocalConn) checkConn() error {
-	select {
-	case <-l.done:
-		return errors.New("LocalConn was closed")
-	case <-l.expired:
-		return timeoutError{}
-	default:
-		return nil
-	}
 }
