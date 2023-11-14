@@ -12,4 +12,3 @@ ip link set dev "$tun_device" up
 
 ip route add "$server_ip" via "$local_gateway" dev "$local_device"
 ip route add default via "$tun_gw" dev "$tun_device" metric 1
-ip route add "$local_gateway" via "$tun_gw" dev "$tun_device"

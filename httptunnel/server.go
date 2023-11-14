@@ -15,6 +15,7 @@ import (
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
+	"github.com/nange/easyss/v2/util/netpipe"
 )
 
 const RelayBufferSize = cipherstream.MaxCipherRelaySize
@@ -23,8 +24,8 @@ type Server struct {
 	addr string
 
 	sync.Mutex
-	connMap map[string]*ServerConn
-	connCh  chan *ServerConn
+	connMap map[string]net.Conn
+	connCh  chan net.Conn
 	closing chan struct{}
 
 	tlsConfig *tls.Config
@@ -39,8 +40,8 @@ func NewServer(addr string, timeout time.Duration, tlsConfig *tls.Config) *Serve
 
 	return &Server{
 		addr:      addr,
-		connMap:   make(map[string]*ServerConn, 128),
-		connCh:    make(chan *ServerConn, 1),
+		connMap:   make(map[string]net.Conn, 128),
+		connCh:    make(chan net.Conn, 1),
 		closing:   make(chan struct{}, 1),
 		tlsConfig: tlsConfig,
 		server:    server,
@@ -108,35 +109,42 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Transfer-Encoding", "chunked")
+	w.Header().Set(RequestIDHeader, reqID)
 
 	buf := bytespool.Get(RelayBufferSize)
 	defer bytespool.MustPut(buf)
 
+	var err error
+	var n int
 	for {
-		n, err := conn.ReadLocal(buf)
+		n, err = conn.Read(buf)
 		if n > 0 {
 			p := &pullResp{}
-			if err := faker.FakeData(p); err != nil {
-				log.Warn("[HTTP_TUNNEL_SERVER] fake data", "err", err)
-				writeServiceUnavailableError(w, "fake data:"+err.Error())
-				return
+			if er := faker.FakeData(p); er != nil {
+				err = errors.Join(err, er)
+				log.Warn("[HTTP_TUNNEL_SERVER] fake data", "err", er)
+				writeServiceUnavailableError(w, "fake data:"+er.Error())
+				break
 			}
 			p.Ciphertext = base64.StdEncoding.EncodeToString(buf[:n])
 
 			b, _ := json.Marshal(p)
-			if _, err = w.Write(b); err != nil {
-				log.Warn("[HTTP_TUNNEL_SERVER] response write", "err", err)
+			if _, er := w.Write(b); er != nil {
+				err = errors.Join(err, er)
+				log.Warn("[HTTP_TUNNEL_SERVER] response write", "err", er)
+				break
 			}
 			if flusher, ok := w.(http.Flusher); ok {
 				flusher.Flush()
 			}
 		}
-		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				log.Warn("[HTTP_TUNNEL_SERVER] read from conn", "err", err)
-			}
-			return
+	}
+	if err != nil {
+		if !errors.Is(err, io.EOF) {
+			log.Warn("[HTTP_TUNNEL_SERVER] read from conn", "err", err)
 		}
+		s.CloseConn(reqID)
+		return
 	}
 }
 
@@ -156,9 +164,10 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	s.Lock()
 	conn, ok := s.connMap[reqID]
 	if !ok {
-		conn = NewServerConn(reqID, s.CloseConn)
+		var conn2 net.Conn
+		conn, conn2 = netpipe.Pipe(2 * cipherstream.MaxPayloadSize)
 		s.connMap[reqID] = conn
-		s.connCh <- conn
+		s.connCh <- conn2
 	}
 	s.Unlock()
 
@@ -166,12 +175,14 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Warn("[HTTP_TUNNEL_SERVER] read from body", "err", err)
 		writeServiceUnavailableError(w, "read all from body:"+err.Error())
+		_ = conn.Close()
 		return
 	}
 	p := &pushPayload{}
 	if err := json.Unmarshal(b, p); err != nil {
 		log.Warn("[HTTP_TUNNEL_SERVER] json.Unmarshal", "err", err)
 		writeServiceUnavailableError(w, "json unmarshal:"+err.Error())
+		_ = conn.Close()
 		return
 	}
 
@@ -179,12 +190,14 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Warn("[HTTP_TUNNEL_SERVER] decode cipher", "err", err)
 		writeServiceUnavailableError(w, "decode cipher:"+err.Error())
+		_ = conn.Close()
 		return
 	}
 
-	if _, err = conn.WriteLocal(cipher); err != nil {
+	if _, err = conn.Write(cipher); err != nil {
 		log.Warn("[HTTP_TUNNEL_SERVER] write local", "err", err)
 		writeServiceUnavailableError(w, "write local:"+err.Error())
+		_ = conn.Close()
 		return
 	}
 
@@ -194,6 +207,8 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 func (s *Server) CloseConn(reqID string) {
 	s.Lock()
 	defer s.Unlock()
+	conn := s.connMap[reqID]
+	_ = conn.Close()
 	s.connMap[reqID] = nil
 	delete(s.connMap, reqID)
 }

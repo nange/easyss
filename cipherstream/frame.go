@@ -62,6 +62,7 @@ const (
 	FlagNeedACK
 	FlagFIN
 	FlagACK
+	FlagDNS
 )
 
 func encodeHTTP2Header(frameType FrameType, flag uint8, rawDataLen int, dst []byte) (header []byte, padSize byte) {
@@ -168,6 +169,10 @@ func (h *Header) IsUDPProto() bool {
 		panic("header length is invalid")
 	}
 	return h.header[4]&FlagUDP == FlagUDP
+}
+
+func (h *Header) IsDNSProto() bool {
+	return h.IsUDPProto() && (h.header[4]&FlagDNS == FlagDNS)
 }
 
 func (h *Header) IsNeedACK() bool {

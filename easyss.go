@@ -297,25 +297,19 @@ func (ss *Easyss) loadCustomIPDomains() error {
 	if err != nil {
 		return err
 	}
+
 	if len(directDomains) > 0 {
 		log.Info("[EASYSS] load custom direct domains success", "len", len(directDomains))
 		ss.customDirectDomains = directDomains
 		// not only direct the domains but also the ips of domains
 		for domain := range directDomains {
-			msg, _, err := ss.DNSMsg(ss.directDNSServer, domain)
+			ips, err := util.LookupIPV4From(ss.directDNSServer, domain)
 			if err != nil {
 				log.Error("[EASYSS] query dns for custom direct domain", "domain", domain, "err", err)
 				continue
 			}
-			if msg == nil {
-				continue
-			}
-			for _, an := range msg.Answer {
-				if a, ok := an.(*dns.A); ok {
-					ss.customDirectIPs[a.A.String()] = struct{}{}
-				} else if aa, ok := an.(*dns.AAAA); ok {
-					ss.customDirectIPs[aa.AAAA.String()] = struct{}{}
-				}
+			for _, ip := range ips {
+				ss.customDirectIPs[ip.String()] = struct{}{}
 			}
 		}
 	}
@@ -425,7 +419,7 @@ func (ss *Easyss) InitTcpPool() error {
 	} else {
 		log.Info("[EASYSS] uTLS is enabled")
 	}
-	log.Info("[EASYSS] init tcp pool with", "server", ss.ServerAddr())
+	log.Info("[EASYSS] initializing tcp pool with", "easy_server", ss.ServerAddr())
 
 	certPool, err := ss.loadCustomCertPool()
 	if err != nil {
@@ -528,7 +522,7 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 		return err
 	}
 
-	client := req.C().EnableForceHTTP1()
+	client := req.C().EnableForceHTTP1().DisableAutoReadResponse()
 	client.SetMaxIdleConns(MaxIdle).
 		SetIdleConnTimeout(MaxLifetime).
 		SetResponseHeaderTimeout(ss.Timeout())
@@ -932,34 +926,14 @@ func (ss *Easyss) SetDNSCache(msg *dns.Msg, noExpire, isDirect bool) error {
 }
 
 func (ss *Easyss) DNSMsg(dnsServer, domain string) (*dns.Msg, *dns.Msg, error) {
-	c := &dns.Client{Timeout: DefaultDNSTimeout}
+	a, err1 := util.DNSMsgTypeA(dnsServer, domain)
+	aaaa, err2 := util.DNSMsgTypeAAAA(dnsServer, domain)
 
-	m := &dns.Msg{}
-	m.SetQuestion(dns.Fqdn(domain), dns.TypeA)
-	m.RecursionDesired = true
-
-	r, _, err := c.Exchange(m, dnsServer)
-	if err != nil {
-		return nil, nil, err
-	}
-	if r.Rcode != dns.RcodeSuccess {
-		return nil, nil, fmt.Errorf("dns query response Rcode:%v not equals RcodeSuccess", r.Rcode)
-	}
-
-	m.SetQuestion(dns.Fqdn(domain), dns.TypeAAAA)
-	rAAAA, _, err := c.Exchange(m, dnsServer)
-	if err != nil {
-		return nil, nil, err
-	}
-	if rAAAA.Rcode != dns.RcodeSuccess {
-		return nil, nil, fmt.Errorf("dns query response Rcode:%v not equals RcodeSuccess", r.Rcode)
-	}
-
-	return r, rAAAA, nil
+	return a, aaaa, errors.Join(err1, err2)
 }
 
 func (ss *Easyss) HostShouldDirect(host string) bool {
-	if ss.ProxyRule() == ProxyRuleDirect {
+	if ss.ProxyRule() == ProxyRuleDirect || ss.IsLANHost(host) {
 		return true
 	}
 	if ss.ProxyRule() == ProxyRuleProxy {
@@ -970,9 +944,9 @@ func (ss *Easyss) HostShouldDirect(host string) bool {
 		return true
 	}
 	if ss.ProxyRule() == ProxyRuleReverseAuto {
-		return !ss.HostAtCNOrPrivate(host)
+		return !ss.HostAtCN(host)
 	}
-	return ss.HostAtCNOrPrivate(host)
+	return ss.HostAtCN(host)
 }
 
 func (ss *Easyss) HostMatchCustomDirectConfig(host string) bool {
@@ -997,13 +971,13 @@ func (ss *Easyss) HostMatchCustomDirectConfig(host string) bool {
 	return false
 }
 
-func (ss *Easyss) HostAtCNOrPrivate(host string) bool {
+func (ss *Easyss) HostAtCN(host string) bool {
 	if host == "" {
 		return false
 	}
 
 	if util.IsIP(host) {
-		return ss.IPAtCNOrPrivate(host)
+		return ss.IPAtCN(host)
 	}
 	// if the host end with .cn, return true
 	if strings.HasSuffix(host, ".cn") {
@@ -1013,7 +987,7 @@ func (ss *Easyss) HostAtCNOrPrivate(host string) bool {
 	return ss.geosite.SiteAtCN(host)
 }
 
-func (ss *Easyss) IPAtCNOrPrivate(ip string) bool {
+func (ss *Easyss) IPAtCN(ip string) bool {
 	_ip := net.ParseIP(ip)
 	if _ip == nil {
 		return false
@@ -1023,11 +997,19 @@ func (ss *Easyss) IPAtCNOrPrivate(ip string) bool {
 		return false
 	}
 
-	if country.Country.IsoCode == "CN" || country.Country.IsoCode == "PRIVATE" {
+	if country.Country.IsoCode == "CN" {
 		return true
 	}
 
 	return false
+}
+
+func (ss *Easyss) IsLANHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+
+	return util.IsLANIP(host)
 }
 
 func (ss *Easyss) Close() error {

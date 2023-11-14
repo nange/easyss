@@ -120,7 +120,11 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		return send(ue, d.Data)
 	}
 
-	csStream, err := ss.handShakeWithRemote(rewrittenDst, cipherstream.FlagUDP)
+	flag := cipherstream.FlagUDP
+	if isDNSReq {
+		flag |= cipherstream.FlagDNS
+	}
+	csStream, err := ss.handShakeWithRemote(rewrittenDst, flag)
 	if err != nil {
 		log.Error("[UDP_PROXY] handshake with remote server", "err", err)
 		if csStream != nil {
