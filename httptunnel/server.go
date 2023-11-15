@@ -127,7 +127,6 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			p.Ciphertext = base64.StdEncoding.EncodeToString(buf[:n])
-
 			b, _ := json.Marshal(p)
 			if _, er := w.Write(b); er != nil {
 				err = errors.Join(err, er)

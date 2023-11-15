@@ -28,6 +28,7 @@ type LocalConn struct {
 	uuid       string
 	serverAddr string
 	conn       net.Conn
+	pushed     chan struct{}
 
 	client   *req.Client
 	respBody io.ReadCloser
@@ -48,6 +49,7 @@ func NewLocalConn(client *req.Client, serverAddr string) (net.Conn, error) {
 		uuid:       id.String(),
 		serverAddr: serverAddr,
 		conn:       conn2,
+		pushed:     make(chan struct{}, 1),
 		client:     client,
 	}
 
@@ -59,6 +61,7 @@ func NewLocalConn(client *req.Client, serverAddr string) (net.Conn, error) {
 
 func (l *LocalConn) Pull() {
 	if l.respBody == nil {
+		<-l.pushed
 		if err := l.pull(); err != nil {
 			log.Warn("[HTTP_TUNNEL_LOCAL] pull", "err", err)
 			return
@@ -100,6 +103,11 @@ func (l *LocalConn) Push() {
 		if err != nil {
 			log.Error("[HTTP_TUNNEL_LOCAL] push", "err", err)
 			break
+		}
+		// notify pull goroutine
+		select {
+		case l.pushed <- struct{}{}:
+		default:
 		}
 	}
 

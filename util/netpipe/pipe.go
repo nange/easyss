@@ -57,7 +57,11 @@ func (p *pipe) Read(b []byte) (n int, err error) {
 			}
 		}(dur)
 	}
+
+	defer p.cond.Broadcast()
+
 	for p.buf.Length() == 0 && !p.closed && !p.rLate {
+		p.cond.Broadcast()
 		p.cond.Wait()
 	}
 	defer func() {
@@ -115,6 +119,7 @@ func (p *pipe) Write(b []byte) (n int, err error) {
 	defer p.cond.Broadcast()
 
 	for p.buf.Free() < len(b) && !p.closed && !p.wLate {
+		p.cond.Broadcast()
 		p.cond.Wait()
 	}
 	defer func() {
