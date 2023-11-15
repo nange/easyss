@@ -59,8 +59,8 @@ func TestDupPipe_TimeWait(t *testing.T) {
 	p1, p2 := Pipe(11)
 	go func() {
 		time.Sleep(time.Second)
-		p1.Write([]byte("hello"))
-		p2.Write([]byte("hello2"))
+		_, _ = p1.Write([]byte("hello"))
+		_, _ = p2.Write([]byte("hello2"))
 	}()
 
 	b := make([]byte, 10)
