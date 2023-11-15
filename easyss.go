@@ -523,9 +523,7 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 	}
 
 	client := req.C().EnableForceHTTP1().DisableAutoReadResponse()
-	client.SetMaxIdleConns(MaxIdle).
-		SetIdleConnTimeout(MaxLifetime).
-		SetResponseHeaderTimeout(ss.Timeout())
+	client.SetMaxIdleConns(MaxIdle).SetIdleConnTimeout(MaxLifetime)
 
 	if ss.IsHTTPOutboundProto() {
 		// enable gzip if it is http outbound proto

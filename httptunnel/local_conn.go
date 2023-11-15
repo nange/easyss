@@ -63,7 +63,7 @@ func (l *LocalConn) Pull() {
 	if l.respBody == nil {
 		<-l.pushed
 		if err := l.pull(); err != nil {
-			log.Warn("[HTTP_TUNNEL_LOCAL] pull", "err", err)
+			log.Warn("[HTTP_TUNNEL_LOCAL] pull", "err", err, "uuid", l.uuid)
 			return
 		}
 	}
@@ -74,17 +74,19 @@ func (l *LocalConn) Pull() {
 
 	for {
 		if err := dec.Decode(&resp); err != nil {
-			log.Error("[HTTP_TUNNEL_LOCAL] decode response", "err", err)
+			if !errors.Is(err, io.EOF) {
+				log.Error("[HTTP_TUNNEL_LOCAL] decode response", "err", err, "uuid", l.uuid)
+			}
 			break
 		}
 
 		data, err := base64.StdEncoding.DecodeString(resp.Ciphertext)
 		if err != nil {
-			log.Error("[HTTP_TUNNEL_LOCAL] decode cipher text", "err", err)
+			log.Error("[HTTP_TUNNEL_LOCAL] decode cipher text", "err", err, "uuid", l.uuid)
 			break
 		}
 		if _, err := l.conn.Write(data); err != nil {
-			log.Error("[HTTP_TUNNEL_LOCAL] write text", "err", err)
+			log.Error("[HTTP_TUNNEL_LOCAL] write text", "err", err, "uuid", l.uuid)
 			break
 		}
 	}
@@ -101,7 +103,9 @@ func (l *LocalConn) Push() {
 			err = errors.Join(err, er)
 		}
 		if err != nil {
-			log.Error("[HTTP_TUNNEL_LOCAL] push", "err", err)
+			if !errors.Is(err, io.EOF) {
+				log.Error("[HTTP_TUNNEL_LOCAL] push", "err", err, "uuid", l.uuid)
+			}
 			break
 		}
 		// notify pull goroutine

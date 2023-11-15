@@ -133,9 +133,12 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 				log.Warn("[HTTP_TUNNEL_SERVER] response write", "err", er)
 				break
 			}
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
-			}
+		}
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		if err != nil {
+			break
 		}
 	}
 	if err != nil {
