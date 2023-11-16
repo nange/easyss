@@ -140,7 +140,8 @@ func CloseWrite(conn net.Conn) error {
 }
 
 func ErrorCanIgnore(err error) bool {
-	if ne, ok := err.(net.Error); ok && ne.Timeout() {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
 		return true /* ignore I/O timeout */
 	}
 	if errors.Is(err, syscall.EPIPE) {

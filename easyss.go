@@ -54,6 +54,8 @@ const (
 	MaxLifetime time.Duration = 15 * time.Minute
 )
 
+const UserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+
 var (
 	//go:embed geodata/geoip_cn_private.mmdb
 	geoIPCNPrivate []byte
@@ -524,6 +526,8 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 
 	client := req.C().EnableForceHTTP1().DisableAutoReadResponse()
 	client.SetMaxIdleConns(MaxIdle).SetIdleConnTimeout(MaxLifetime)
+	client.SetTimeout(0).SetMaxConnsPerHost(512)
+	client.SetUserAgent(UserAgent)
 
 	if ss.IsHTTPOutboundProto() {
 		// enable gzip if it is http outbound proto

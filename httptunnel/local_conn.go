@@ -21,7 +21,6 @@ import (
 
 const (
 	RequestIDHeader = "X-Request-UID"
-	UserAgent       = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
 )
 
 type LocalConn struct {
@@ -38,7 +37,6 @@ func NewLocalConn(client *req.Client, serverAddr string) (net.Conn, error) {
 	if client == nil {
 		return nil, errors.New("http outbound client is nil")
 	}
-	client.SetUserAgent(UserAgent)
 
 	id, err := uuid.NewV7()
 	if err != nil {
@@ -75,9 +73,11 @@ func (l *LocalConn) Pull() {
 	for {
 		if err := dec.Decode(&resp); err != nil {
 			if !errors.Is(err, io.EOF) {
-				log.Error("[HTTP_TUNNEL_LOCAL] decode response", "err", err, "uuid", l.uuid)
+				log.Warn("[HTTP_TUNNEL_LOCAL] decode response", "err", err, "uuid", l.uuid)
 			}
-			break
+			if resp.Ciphertext == "" {
+				break
+			}
 		}
 
 		data, err := base64.StdEncoding.DecodeString(resp.Ciphertext)
@@ -85,6 +85,7 @@ func (l *LocalConn) Pull() {
 			log.Error("[HTTP_TUNNEL_LOCAL] decode cipher text", "err", err, "uuid", l.uuid)
 			break
 		}
+		resp.Ciphertext = ""
 		if _, err := l.conn.Write(data); err != nil {
 			log.Error("[HTTP_TUNNEL_LOCAL] write text", "err", err, "uuid", l.uuid)
 			break
