@@ -27,6 +27,7 @@ type LocalConn struct {
 	uuid       string
 	serverAddr string
 	conn       net.Conn
+	conn2      net.Conn
 	pushed     chan struct{}
 
 	client   *req.Client
@@ -46,7 +47,8 @@ func NewLocalConn(client *req.Client, serverAddr string) (net.Conn, error) {
 	lc := &LocalConn{
 		uuid:       id.String(),
 		serverAddr: serverAddr,
-		conn:       conn2,
+		conn:       conn,
+		conn2:      conn2,
 		pushed:     make(chan struct{}, 1),
 		client:     client,
 	}
@@ -65,7 +67,7 @@ func (l *LocalConn) Pull() {
 			return
 		}
 	}
-	defer l.Close()
+	defer l.PullClose()
 
 	dec := json.NewDecoder(l.respBody)
 	var resp pullResp
@@ -86,7 +88,7 @@ func (l *LocalConn) Pull() {
 			break
 		}
 		resp.Ciphertext = ""
-		if _, err := l.conn.Write(data); err != nil {
+		if _, err := l.conn2.Write(data); err != nil {
 			log.Error("[HTTP_TUNNEL_LOCAL] write text", "err", err, "uuid", l.uuid)
 			break
 		}
@@ -97,9 +99,9 @@ func (l *LocalConn) Pull() {
 func (l *LocalConn) Push() {
 	buf := bytespool.Get(cipherstream.MaxPayloadSize)
 	defer bytespool.MustPut(buf)
-
+	defer l.PushClose()
 	for {
-		n, err := l.conn.Read(buf)
+		n, err := l.conn2.Read(buf)
 		if er := l.push(buf[:n]); er != nil {
 			err = errors.Join(err, er)
 		}
@@ -119,10 +121,14 @@ func (l *LocalConn) Push() {
 	log.Info("[HTTP_TUNNEL_LOCAL] Push completed...", "uuid", l.uuid)
 }
 
-func (l *LocalConn) Close() {
+func (l *LocalConn) PullClose() {
 	if l.respBody != nil {
 		_ = l.respBody.Close()
 	}
+	_ = l.conn2.Close()
+}
+
+func (l *LocalConn) PushClose() {
 	_ = l.conn.Close()
 }
 
