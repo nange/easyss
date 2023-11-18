@@ -28,10 +28,10 @@ type LocalConn struct {
 	serverAddr string
 	conn       net.Conn
 	conn2      net.Conn
-	pushed     chan struct{}
 
 	client   *req.Client
 	respBody io.ReadCloser
+	left     []byte
 }
 
 func NewLocalConn(client *req.Client, serverAddr string) (net.Conn, error) {
@@ -49,7 +49,6 @@ func NewLocalConn(client *req.Client, serverAddr string) (net.Conn, error) {
 		serverAddr: serverAddr,
 		conn:       conn,
 		conn2:      conn2,
-		pushed:     make(chan struct{}, 1),
 		client:     client,
 	}
 
@@ -61,7 +60,6 @@ func NewLocalConn(client *req.Client, serverAddr string) (net.Conn, error) {
 
 func (l *LocalConn) Pull() {
 	if l.respBody == nil {
-		<-l.pushed
 		if err := l.pull(); err != nil {
 			log.Warn("[HTTP_TUNNEL_LOCAL] pull", "err", err, "uuid", l.uuid)
 			return
@@ -97,24 +95,11 @@ func (l *LocalConn) Pull() {
 }
 
 func (l *LocalConn) Push() {
-	buf := bytespool.Get(cipherstream.MaxPayloadSize)
-	defer bytespool.MustPut(buf)
 	defer l.PushClose()
-	for {
-		n, err := l.conn2.Read(buf)
-		if er := l.push(buf[:n]); er != nil {
-			err = errors.Join(err, er)
-		}
-		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				log.Error("[HTTP_TUNNEL_LOCAL] push", "err", err, "uuid", l.uuid)
-			}
-			break
-		}
-		// notify pull goroutine
-		select {
-		case l.pushed <- struct{}{}:
-		default:
+
+	if err := l.push(); err != nil {
+		if !errors.Is(err, io.EOF) {
+			log.Error("[HTTP_TUNNEL_LOCAL] push", "err", err, "uuid", l.uuid)
 		}
 	}
 
@@ -156,24 +141,13 @@ func (l *LocalConn) pull() error {
 	return nil
 }
 
-func (l *LocalConn) push(data []byte) error {
-	if len(data) == 0 {
-		return nil
-	}
-
-	p := &pushPayload{}
-	if err := faker.FakeData(p); err != nil {
-		return err
-	}
-	p.Ciphertext = base64.StdEncoding.EncodeToString(data)
-	payload, _ := json.Marshal(p)
-
+func (l *LocalConn) push() error {
 	resp, err := l.client.R().
-		SetHeader("Content-Length", strconv.FormatInt(int64(len(payload)), 10)).
 		SetHeader("Content-Type", "application/json").
+		SetHeader("Transfer-Encoding", "chunked").
 		SetHeader(RequestIDHeader, l.uuid).
 		//SetHeader("Accept-Encoding", "gzip").
-		SetBodyBytes(payload).
+		SetBody(l).
 		Post(l.serverAddr + "/push")
 	if err != nil {
 		return err
@@ -188,4 +162,36 @@ func (l *LocalConn) push(data []byte) error {
 	}
 
 	return nil
+}
+
+// Read implements io.Reader
+func (l *LocalConn) Read(b []byte) (int, error) {
+	if len(l.left) > 0 {
+		cn := copy(b, l.left)
+		if cn < len(l.left) {
+			l.left = l.left[cn:]
+		} else {
+			l.left = nil
+		}
+		return cn, nil
+	}
+
+	buf := bytespool.Get(cipherstream.MaxPayloadSize)
+	defer bytespool.MustPut(buf)
+
+	var payload []byte
+	n, err := l.conn2.Read(buf)
+	if n > 0 {
+		p := &pushPayload{}
+		_ = faker.FakeData(p)
+		p.Ciphertext = base64.StdEncoding.EncodeToString(buf[:n])
+		payload, _ = json.Marshal(p)
+	}
+
+	cn := copy(b, payload)
+	if cn < len(payload) {
+		l.left = payload[cn:]
+	}
+
+	return cn, err
 }

@@ -24,9 +24,10 @@ type Server struct {
 	addr string
 
 	sync.Mutex
-	connMap map[string]net.Conn
-	connCh  chan net.Conn
-	closing chan struct{}
+	connMap     map[string][]net.Conn
+	connCh      chan net.Conn
+	closing     chan struct{}
+	pullWaiting map[string]chan struct{}
 
 	tlsConfig *tls.Config
 	server    *http.Server
@@ -39,12 +40,13 @@ func NewServer(addr string, timeout time.Duration, tlsConfig *tls.Config) *Serve
 	}
 
 	return &Server{
-		addr:      addr,
-		connMap:   make(map[string]net.Conn, 128),
-		connCh:    make(chan net.Conn, 1),
-		closing:   make(chan struct{}, 1),
-		tlsConfig: tlsConfig,
-		server:    server,
+		addr:        addr,
+		connMap:     make(map[string][]net.Conn, 256),
+		connCh:      make(chan net.Conn, 1),
+		closing:     make(chan struct{}, 1),
+		pullWaiting: make(map[string]chan struct{}, 256),
+		tlsConfig:   tlsConfig,
+		server:      server,
 	}
 }
 
@@ -90,6 +92,27 @@ func (s *Server) handler() {
 	http.Handle("/push", http.HandlerFunc(s.push))
 }
 
+// pullWait wait push request to arrive
+func (s *Server) pullWait(reqID string) error {
+	s.Lock()
+	if _, ok := s.connMap[reqID]; ok {
+		s.Unlock()
+		return nil
+	}
+	ch := make(chan struct{}, 1)
+	s.pullWaiting[reqID] = ch
+	s.Unlock()
+
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-ch:
+		return nil
+	case <-timer.C:
+		return errors.New("timeout for pull waiting")
+	}
+}
+
 func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeNotFoundError(w)
@@ -97,14 +120,15 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reqID := r.Header.Get(RequestIDHeader)
-	s.Lock()
-	conn, ok := s.connMap[reqID]
-	s.Unlock()
-	if !ok {
+	if err := s.pullWait(reqID); err != nil {
 		log.Warn("[HTTP_TUNNEL_SERVER] pull uuid not found", "uuid", reqID)
 		writeNotFoundError(w)
 		return
 	}
+
+	s.Lock()
+	conns := s.connMap[reqID]
+	s.Unlock()
 	log.Debug("[HTTP_TUNNEL_SERVER] pull", "uuid", reqID)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -116,16 +140,11 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	var n int
+	var p = &pullResp{}
 	for {
-		n, err = conn.Read(buf)
+		n, err = conns[0].Read(buf)
 		if n > 0 {
-			p := &pullResp{}
-			if er := faker.FakeData(p); er != nil {
-				err = errors.Join(err, er)
-				log.Warn("[HTTP_TUNNEL_SERVER] fake data", "err", er)
-				writeServiceUnavailableError(w, "fake data:"+er.Error())
-				break
-			}
+			_ = faker.FakeData(p)
 			p.Ciphertext = base64.StdEncoding.EncodeToString(buf[:n])
 			b, _ := json.Marshal(p)
 			if _, er := w.Write(b); er != nil {
@@ -133,6 +152,7 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 				log.Warn("[HTTP_TUNNEL_SERVER] response write", "err", er)
 				break
 			}
+			p.Ciphertext = ""
 		}
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
@@ -146,8 +166,19 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 			log.Warn("[HTTP_TUNNEL_SERVER] read from conn", "err", err)
 		}
 		s.CloseConn(reqID)
+	}
+	log.Info("[HTTP_TUNNEL_SERVER] Pull completed...", "uuid", reqID)
+}
+
+func (s *Server) notifyPull(reqID string) {
+	ch, ok := s.pullWaiting[reqID]
+	if !ok {
 		return
 	}
+	ch <- struct{}{}
+
+	s.pullWaiting[reqID] = nil
+	delete(s.pullWaiting, reqID)
 }
 
 func (s *Server) push(w http.ResponseWriter, r *http.Request) {
@@ -163,44 +194,47 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Debug("[HTTP_TUNNEL_SERVER] push", "uuid", reqID)
+
 	s.Lock()
-	conn, ok := s.connMap[reqID]
+	conns, ok := s.connMap[reqID]
 	if !ok {
-		var conn2 net.Conn
-		conn, conn2 = netpipe.Pipe(2 * cipherstream.MaxPayloadSize)
-		s.connMap[reqID] = conn
+		conn1, conn2 := netpipe.Pipe(2 * cipherstream.MaxPayloadSize)
+		conns = []net.Conn{conn1, conn2}
+		s.connMap[reqID] = conns
 		s.connCh <- conn2
 	}
+	s.notifyPull(reqID)
 	s.Unlock()
 
-	b, err := io.ReadAll(r.Body)
-	if err != nil {
-		log.Warn("[HTTP_TUNNEL_SERVER] read from body", "err", err)
-		writeServiceUnavailableError(w, "read all from body:"+err.Error())
-		_ = conn.Close()
-		return
-	}
 	p := &pushPayload{}
-	if err := json.Unmarshal(b, p); err != nil {
-		log.Warn("[HTTP_TUNNEL_SERVER] json.Unmarshal", "err", err)
-		writeServiceUnavailableError(w, "json unmarshal:"+err.Error())
-		_ = conn.Close()
-		return
-	}
+	dec := json.NewDecoder(r.Body)
+	var err error
+	for {
+		if err = dec.Decode(p); err != nil {
+			if !errors.Is(err, io.EOF) {
+				log.Warn("[HTTP_TUNNEL_SERVER] decode request body", "err", err, "uuid", reqID)
+			}
+			if p.Ciphertext == "" {
+				break
+			}
+		}
+		var cipher []byte
+		cipher, err = base64.StdEncoding.DecodeString(p.Ciphertext)
+		if err != nil {
+			log.Warn("[HTTP_TUNNEL_SERVER] decode cipher", "err", err)
+			writeServiceUnavailableError(w, "decode cipher:"+err.Error())
+			break
+		}
+		p.Ciphertext = ""
 
-	cipher, err := base64.StdEncoding.DecodeString(p.Ciphertext)
+		if _, err = conns[0].Write(cipher); err != nil {
+			log.Warn("[HTTP_TUNNEL_SERVER] write local", "err", err)
+			writeServiceUnavailableError(w, "write local:"+err.Error())
+			break
+		}
+	}
 	if err != nil {
-		log.Warn("[HTTP_TUNNEL_SERVER] decode cipher", "err", err)
-		writeServiceUnavailableError(w, "decode cipher:"+err.Error())
-		_ = conn.Close()
-		return
-	}
-
-	if _, err = conn.Write(cipher); err != nil {
-		log.Warn("[HTTP_TUNNEL_SERVER] write local", "err", err)
-		writeServiceUnavailableError(w, "write local:"+err.Error())
-		_ = conn.Close()
-		return
+		_ = conns[0].Close()
 	}
 
 	writeSuccess(w)
@@ -209,8 +243,11 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 func (s *Server) CloseConn(reqID string) {
 	s.Lock()
 	defer s.Unlock()
-	conn := s.connMap[reqID]
-	_ = conn.Close()
+	conns := s.connMap[reqID]
+	if len(conns) > 0 {
+		_ = conns[1].Close()
+	}
+
 	s.connMap[reqID] = nil
 	delete(s.connMap, reqID)
 }
