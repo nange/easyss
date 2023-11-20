@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/go-faker/faker/v4"
@@ -76,17 +75,17 @@ func (l *LocalConn) Pull() {
 			if !errors.Is(err, io.EOF) && !strings.Contains(err.Error(), "connection reset by peer") {
 				log.Warn("[HTTP_TUNNEL_LOCAL] decode response", "err", err, "uuid", l.uuid)
 			}
-			if resp.Ciphertext == "" {
+			if resp.Payload == "" {
 				break
 			}
 		}
 
-		data, err := base64.StdEncoding.DecodeString(resp.Ciphertext)
+		data, err := base64.StdEncoding.DecodeString(resp.Payload)
 		if err != nil {
 			log.Error("[HTTP_TUNNEL_LOCAL] decode cipher text", "err", err, "uuid", l.uuid)
 			break
 		}
-		resp.Ciphertext = ""
+		resp.Payload = ""
 		if _, err := l.conn2.Write(data); err != nil {
 			log.Error("[HTTP_TUNNEL_LOCAL] write text", "err", err, "uuid", l.uuid)
 			break
@@ -125,8 +124,9 @@ func (l *LocalConn) pull() error {
 	}
 
 	resp, err := l.client.R().
-		SetQueryParam("mchid", strconv.FormatInt(int64(p.Mchid), 10)).
+		SetQueryParam("account_id", p.AccountID).
 		SetQueryParam("transaction_id", p.TransactionID).
+		SetQueryParam("access_token", p.AccessToken).
 		SetHeader(RequestIDHeader, l.uuid).
 		SetHeader("Accept-Encoding", "gzip").
 		Get(l.serverAddr + "/pull")
@@ -186,7 +186,7 @@ func (l *LocalConn) Read(b []byte) (int, error) {
 	if n > 0 {
 		p := &pushPayload{}
 		_ = faker.FakeData(p)
-		p.Ciphertext = base64.StdEncoding.EncodeToString(buf[:n])
+		p.Payload = base64.StdEncoding.EncodeToString(buf[:n])
 		payload, _ = json.Marshal(p)
 	}
 

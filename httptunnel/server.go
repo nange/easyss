@@ -146,14 +146,14 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 		n, err = conns[0].Read(buf)
 		if n > 0 {
 			_ = faker.FakeData(p)
-			p.Ciphertext = base64.StdEncoding.EncodeToString(buf[:n])
+			p.Payload = base64.StdEncoding.EncodeToString(buf[:n])
 			b, _ := json.Marshal(p)
 			if _, er := w.Write(b); er != nil {
 				err = errors.Join(err, er)
 				log.Warn("[HTTP_TUNNEL_SERVER] response write", "err", er)
 				break
 			}
-			p.Ciphertext = ""
+			p.Payload = ""
 		}
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
@@ -215,18 +215,18 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 			if !errors.Is(err, io.EOF) {
 				log.Warn("[HTTP_TUNNEL_SERVER] decode request body", "err", err, "uuid", reqID)
 			}
-			if p.Ciphertext == "" {
+			if p.Payload == "" {
 				break
 			}
 		}
 		var cipher []byte
-		cipher, err = base64.StdEncoding.DecodeString(p.Ciphertext)
+		cipher, err = base64.StdEncoding.DecodeString(p.Payload)
 		if err != nil {
 			log.Warn("[HTTP_TUNNEL_SERVER] decode cipher", "err", err)
 			writeServiceUnavailableError(w, "decode cipher:"+err.Error())
 			break
 		}
-		p.Ciphertext = ""
+		p.Payload = ""
 
 		if _, err = conns[0].Write(cipher); err != nil {
 			log.Warn("[HTTP_TUNNEL_SERVER] write local", "err", err)
