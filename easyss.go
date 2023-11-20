@@ -24,6 +24,7 @@ import (
 
 	"github.com/coocood/freecache"
 	"github.com/imroc/req/v3"
+	"github.com/klauspost/compress/gzhttp"
 	"github.com/miekg/dns"
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/v2/cipherstream"
@@ -524,15 +525,25 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 		return err
 	}
 
-	client := req.C().EnableForceHTTP1().DisableAutoReadResponse()
-	client.SetMaxIdleConns(MaxIdle).SetIdleConnTimeout(MaxLifetime)
-	client.SetTimeout(0).SetMaxConnsPerHost(512)
-	client.SetUserAgent(UserAgent)
+	client := req.C().
+		EnableForceHTTP1().
+		SetTimeout(0).
+		DisableAutoReadResponse().
+		SetUserAgent(UserAgent)
+	client.
+		SetMaxIdleConns(MaxIdle).
+		SetIdleConnTimeout(MaxLifetime).
+		SetMaxConnsPerHost(512)
+	client.
+		GetTransport().
+		WrapRoundTripFunc(func(rt http.RoundTripper) req.HttpRoundTripFunc {
+			return func(req *http.Request) (resp *http.Response, err error) {
+				resp, err = gzhttp.Transport(rt).RoundTrip(req)
+				return
+			}
+		})
 
-	if ss.IsHTTPOutboundProto() {
-		// enable gzip if it is http outbound proto
-		// TODO:
-	} else {
+	if ss.IsHTTPSOutboundProto() {
 		if cert != "" {
 			log.Info("set root cert from string", "cert", cert)
 			client.SetRootCertFromString(cert)
@@ -542,9 +553,6 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 			client.SetTLSFingerprintChrome()
 		}
 	}
-	//client.GetTransport().WrapRoundTrip(func(rt http.RoundTripper) http.RoundTripper {
-	//	return gzhttp.Transport(rt)
-	//})
 
 	ss.httpOutboundClient = client
 	return nil

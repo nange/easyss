@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-faker/faker/v4"
 	"github.com/gofrs/uuid/v5"
@@ -72,7 +73,7 @@ func (l *LocalConn) Pull() {
 
 	for {
 		if err := dec.Decode(&resp); err != nil {
-			if !errors.Is(err, io.EOF) {
+			if !errors.Is(err, io.EOF) && !strings.Contains(err.Error(), "connection reset by peer") {
 				log.Warn("[HTTP_TUNNEL_LOCAL] decode response", "err", err, "uuid", l.uuid)
 			}
 			if resp.Ciphertext == "" {
@@ -91,7 +92,7 @@ func (l *LocalConn) Pull() {
 			break
 		}
 	}
-	log.Info("[HTTP_TUNNEL_LOCAL] Pull completed...", "uuid", l.uuid)
+	log.Debug("[HTTP_TUNNEL_LOCAL] Pull completed...", "uuid", l.uuid)
 }
 
 func (l *LocalConn) Push() {
@@ -103,7 +104,7 @@ func (l *LocalConn) Push() {
 		}
 	}
 
-	log.Info("[HTTP_TUNNEL_LOCAL] Push completed...", "uuid", l.uuid)
+	log.Debug("[HTTP_TUNNEL_LOCAL] Push completed...", "uuid", l.uuid)
 }
 
 func (l *LocalConn) PullClose() {
@@ -127,7 +128,7 @@ func (l *LocalConn) pull() error {
 		SetQueryParam("mchid", strconv.FormatInt(int64(p.Mchid), 10)).
 		SetQueryParam("transaction_id", p.TransactionID).
 		SetHeader(RequestIDHeader, l.uuid).
-		//SetHeader("Accept-Encoding", "gzip").
+		SetHeader("Accept-Encoding", "gzip").
 		Get(l.serverAddr + "/pull")
 	if err != nil {
 		return err
@@ -146,7 +147,8 @@ func (l *LocalConn) push() error {
 		SetHeader("Content-Type", "application/json").
 		SetHeader("Transfer-Encoding", "chunked").
 		SetHeader(RequestIDHeader, l.uuid).
-		//SetHeader("Accept-Encoding", "gzip").
+		SetHeader("Accept-Encoding", "gzip").
+		SetHeader("Content-Encoding", "gzip").
 		SetBody(l).
 		Post(l.serverAddr + "/push")
 	if err != nil {

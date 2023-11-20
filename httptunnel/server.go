@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-faker/faker/v4"
+	"github.com/klauspost/compress/gzhttp"
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
@@ -88,8 +89,8 @@ func (s *Server) Accept() (net.Conn, error) {
 }
 
 func (s *Server) handler() {
-	http.Handle("/pull", http.HandlerFunc(s.pull))
-	http.Handle("/push", http.HandlerFunc(s.push))
+	http.Handle("/pull", gzhttp.GzipHandler(http.HandlerFunc(s.pull)))
+	http.Handle("/push", gzhttp.GzipHandler(http.HandlerFunc(s.push)))
 }
 
 // pullWait wait push request to arrive
@@ -133,6 +134,7 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Transfer-Encoding", "chunked")
+	w.Header().Set("Content-Encoding", "gzip")
 	w.Header().Set(RequestIDHeader, reqID)
 
 	buf := bytespool.Get(RelayBufferSize)
@@ -263,6 +265,7 @@ func writeServiceUnavailableError(w http.ResponseWriter, msg string) {
 func writeSuccess(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusOK)
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Encoding", "gzip")
 	if _, err := w.Write([]byte(`{"code":"SUCCESS", "message":"PUSH SUCCESS"}`)); err != nil {
 		log.Warn("[HTTP_TUNNEL_SERVER] write success", "err", err)
 	}
