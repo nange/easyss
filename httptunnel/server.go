@@ -37,8 +37,10 @@ type Server struct {
 
 func NewServer(addr string, timeout time.Duration, tlsConfig *tls.Config) *Server {
 	server := &http.Server{
-		Addr:    addr,
-		Handler: http.DefaultServeMux,
+		Addr:              addr,
+		Handler:           http.DefaultServeMux,
+		ReadHeaderTimeout: timeout,
+		IdleTimeout:       5 * timeout,
 	}
 
 	return &Server{

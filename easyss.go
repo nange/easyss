@@ -527,7 +527,8 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 	client.
 		SetMaxIdleConns(MaxIdle).
 		SetIdleConnTimeout(MaxLifetime).
-		SetMaxConnsPerHost(512)
+		SetMaxConnsPerHost(512).
+		SetTLSHandshakeTimeout(ss.TLSTimeout())
 	client.
 		GetTransport().
 		WrapRoundTripFunc(func(rt http.RoundTripper) req.HttpRoundTripFunc {
