@@ -519,12 +519,6 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 		return nil
 	}
 
-	cert, err := ss.loadCustomCertString()
-	if err != nil {
-		log.Error("[EASYSS] load custom cert string", "err", err)
-		return err
-	}
-
 	client := req.C().
 		EnableForceHTTP1().
 		SetTimeout(0).
@@ -544,10 +538,14 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 		})
 
 	if ss.IsHTTPSOutboundProto() {
+		cert, err := ss.loadCustomCertString()
+		if err != nil {
+			log.Error("[EASYSS] load custom cert string", "err", err)
+			return err
+		}
 		if cert != "" {
 			log.Info("set root cert from string", "cert", cert)
 			client.SetRootCertFromString(cert)
-			client.GetTLSClientConfig().InsecureSkipVerify = true
 		}
 		if !ss.DisableUTLS() {
 			client.SetTLSFingerprintChrome()

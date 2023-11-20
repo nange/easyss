@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -54,21 +55,17 @@ func NewServer(addr string, timeout time.Duration, tlsConfig *tls.Config) *Serve
 func (s *Server) Listen() {
 	s.handler()
 
-	//ln, err := net.Listen("tcp", s.addr)
-	//if err != nil {
-	//	log.Error("[HTTP_TUNNEL_SERVER] Listen", "err", err)
-	//	os.Exit(1)
-	//}
-	//if s.tlsConfig != nil {
-	//	ln = tls.NewListener(ln, s.tlsConfig)
-	//}
-	log.Info("[HTTP_TUNNEL_SERVER] listen http tunnel at", "addr", s.addr)
+	ln, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		log.Error("[HTTP_TUNNEL_SERVER] Listen", "err", err)
+		os.Exit(1)
+	}
 	if s.tlsConfig != nil {
-		log.Warn("[HTTP_TUNNEL_SERVER] http serve:", "err", s.server.ListenAndServeTLS("./cert/easy-server.pem", "./cert/easy-server-key.pem"))
-	} else {
-		log.Warn("[HTTP_TUNNEL_SERVER] http serve:", "err", s.server.ListenAndServe())
+		ln = tls.NewListener(ln, s.tlsConfig)
 	}
 
+	log.Info("[HTTP_TUNNEL_SERVER] listen http tunnel at", "addr", s.addr)
+	log.Warn("[HTTP_TUNNEL_SERVER] http serve:", "err", s.server.Serve(ln))
 }
 
 func (s *Server) Close() error {
