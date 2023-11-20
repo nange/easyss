@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/coocood/freecache"
+	"github.com/imroc/req/v3"
 	"github.com/klauspost/compress/gzhttp"
 	"github.com/miekg/dns"
 	"github.com/nange/easypool"
@@ -53,6 +54,8 @@ const (
 	IdleTime    time.Duration = time.Minute
 	MaxLifetime time.Duration = 15 * time.Minute
 )
+
+const UserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
 
 var (
 	//go:embed geodata/geoip_cn_private.mmdb
@@ -191,7 +194,7 @@ type Easyss struct {
 	disableValidateAddr bool
 
 	// only used for http outbound proto
-	httpOutboundClient *http.Client
+	httpOutboundClient *req.Client
 
 	// the mu Mutex to protect below fields
 	mu               *sync.RWMutex
@@ -479,30 +482,36 @@ func (ss *Easyss) InitTcpPool() error {
 }
 
 func (ss *Easyss) loadCustomCertPool() (*x509.CertPool, error) {
-	if ss.CAPath() == "" {
-		return nil, nil
+	caString, err := ss.loadCustomCertString()
+	if err != nil || caString == "" {
+		return nil, err
 	}
-	var certPool *x509.CertPool
-	e, err := util.FileExists(ss.CAPath())
-	if err != nil {
-		log.Error("[EASYSS] lookup self-signed ca cert", "err", err)
-		return certPool, err
-	}
-	if !e {
-		log.Warn("[EASYSS] ca cert is set but not exists, so self-signed cert is no effect", "cert_path", ss.CAPath())
-	} else {
-		log.Info("[EASYSS] using self-signed", "cert_path", ss.CAPath())
-		certPool = x509.NewCertPool()
-		caBuf, err := os.ReadFile(ss.CAPath())
-		if err != nil {
-			return certPool, err
-		}
-		if ok := certPool.AppendCertsFromPEM(caBuf); !ok {
-			return certPool, errors.New("append certs from pem failed")
-		}
+
+	certPool := x509.NewCertPool()
+	if ok := certPool.AppendCertsFromPEM([]byte(caString)); !ok {
+		return certPool, errors.New("append certs from pem failed")
 	}
 
 	return certPool, nil
+}
+
+func (ss *Easyss) loadCustomCertString() (string, error) {
+	if ss.CAPath() == "" {
+		return "", nil
+	}
+	e, err := util.FileExists(ss.CAPath())
+	if err != nil {
+		log.Error("[EASYSS] lookup self-signed ca cert", "err", err)
+		return "", err
+	}
+	if !e {
+		log.Warn("[EASYSS] ca cert is set but not exists, so self-signed cert is no effect", "cert_path", ss.CAPath())
+		return "", nil
+	} else {
+		log.Info("[EASYSS] using self-signed", "cert_path", ss.CAPath())
+		caBuf, err := os.ReadFile(ss.CAPath())
+		return string(caBuf), err
+	}
 }
 
 func (ss *Easyss) initHTTPOutboundClient() error {
@@ -510,46 +519,41 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 		return nil
 	}
 
-	certPool, err := ss.loadCustomCertPool()
-	if err != nil {
-		log.Error("[EASYSS] load custom cert pool", "err", err)
-		return err
-	}
-
-	var transport http.RoundTripper
-	if ss.IsHTTPOutboundProto() {
-		// enable gzip if it is http outbound proto
-		transport = gzhttp.Transport(&http.Transport{
-			MaxIdleConns:          MaxIdle,
-			IdleConnTimeout:       MaxLifetime,
-			ResponseHeaderTimeout: ss.Timeout(),
-		})
-	} else {
-		if ss.DisableUTLS() {
-			transport = &http.Transport{
-				DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					dialer := &tls.Dialer{
-						Config: &tls.Config{RootCAs: certPool},
-					}
-					return dialer.DialContext(ctx, network, ss.ServerAddr())
-				},
-				MaxIdleConns:          MaxIdle,
-				IdleConnTimeout:       MaxLifetime,
-				ResponseHeaderTimeout: ss.Timeout(),
+	client := req.C().
+		EnableForceHTTP1().
+		SetTimeout(0).
+		DisableAutoReadResponse().
+		SetUserAgent(UserAgent)
+	client.
+		SetMaxIdleConns(MaxIdle).
+		SetIdleConnTimeout(MaxLifetime).
+		SetMaxConnsPerHost(512).
+		SetTLSHandshakeTimeout(ss.TLSTimeout())
+	client.
+		GetTransport().
+		WrapRoundTripFunc(func(rt http.RoundTripper) req.HttpRoundTripFunc {
+			return func(req *http.Request) (resp *http.Response, err error) {
+				resp, err = gzhttp.Transport(rt).RoundTrip(req)
+				return
 			}
-		} else {
-			transport = httptunnel.NewRoundTrip(ss.ServerAddr(), utls.HelloChrome_Auto, ss.Timeout(), certPool)
+		})
+
+	if ss.IsHTTPSOutboundProto() {
+		cert, err := ss.loadCustomCertString()
+		if err != nil {
+			log.Error("[EASYSS] load custom cert string", "err", err)
+			return err
+		}
+		if cert != "" {
+			log.Info("set root cert from string", "cert", cert)
+			client.SetRootCertFromString(cert)
+		}
+		if !ss.DisableUTLS() {
+			client.SetTLSFingerprintChrome()
 		}
 	}
 
-	client := &http.Client{
-		Transport: transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
 	ss.httpOutboundClient = client
-
 	return nil
 }
 
@@ -697,7 +701,7 @@ func (ss *Easyss) CAPath() string {
 	return ss.config.CAPath
 }
 
-func (ss *Easyss) HTTPOutboundClient() *http.Client {
+func (ss *Easyss) HTTPOutboundClient() *req.Client {
 	return ss.httpOutboundClient
 }
 

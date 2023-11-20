@@ -57,20 +57,21 @@ func (p *pipe) Read(b []byte) (n int, err error) {
 			}
 		}(dur)
 	}
+
+	defer p.cond.Broadcast()
+
 	for p.buf.Length() == 0 && !p.closed && !p.rLate {
+		p.cond.Broadcast()
 		p.cond.Wait()
 	}
-	defer func() {
-		// we already hold the lock
-		p.rLate = false
-		p.readDeadline = time.Time{}
-	}()
 
-	n, err = p.buf.Read(b)
-	if n == 0 && p.buf.IsEmpty() && p.closed {
-		err = io.EOF
-	} else if p.closed && p.buf.IsEmpty() {
-		err = p.err
+	if p.rLate {
+		err = ErrDeadline
+	} else {
+		n, err = p.buf.Read(b)
+		if p.buf.IsEmpty() && p.closed && n == 0 {
+			err = io.EOF
+		}
 	}
 
 	return
@@ -115,13 +116,13 @@ func (p *pipe) Write(b []byte) (n int, err error) {
 	defer p.cond.Broadcast()
 
 	for p.buf.Free() < len(b) && !p.closed && !p.wLate {
+		p.cond.Broadcast()
 		p.cond.Wait()
 	}
-	defer func() {
-		// we already hold the lock
-		p.wLate = false
-		p.writeDeadline = time.Time{}
-	}()
+
+	if p.wLate {
+		return 0, ErrDeadline
+	}
 
 	return p.buf.Write(b)
 }
@@ -165,6 +166,7 @@ func (p *pipe) SetDeadline(t time.Time) error {
 func (p *pipe) SetWriteDeadline(t time.Time) error {
 	p.cond.L.Lock()
 	p.writeDeadline = t
+	p.wLate = false
 	p.cond.L.Unlock()
 	return nil
 }
@@ -173,6 +175,7 @@ func (p *pipe) SetWriteDeadline(t time.Time) error {
 func (p *pipe) SetReadDeadline(t time.Time) error {
 	p.cond.L.Lock()
 	p.readDeadline = t
+	p.rLate = false
 	p.cond.L.Unlock()
 	return nil
 }

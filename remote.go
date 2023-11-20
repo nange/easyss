@@ -72,7 +72,7 @@ func (es *EasyServer) startTCPServer() {
 	if es.DisableTLS() {
 		ln, err = net.Listen("tcp", addr)
 	} else {
-		ln, err = tls.Listen("tcp", addr, es.tlsConfig)
+		ln, err = tls.Listen("tcp", addr, es.tlsConfig.Clone())
 	}
 	if err != nil {
 		log.Error("Listen", "addr", addr, "err", err)
@@ -98,7 +98,7 @@ func (es *EasyServer) startTCPServer() {
 }
 
 func (es *EasyServer) startHTTPTunnelServer() {
-	server := httptunnel.NewServer(es.ListenHTTPTunnelAddr(), es.Timeout(), es.tlsConfig)
+	server := httptunnel.NewServer(es.ListenHTTPTunnelAddr(), es.Timeout(), es.tlsConfig.Clone())
 	es.mu.Lock()
 	es.httpTunnelServer = server
 	es.mu.Unlock()

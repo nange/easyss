@@ -1,25 +1,19 @@
 package httptunnel
 
 type pushPayload struct {
-	ID           string `faker:"uuid_hyphenated" json:"id"`
-	CreateTime   string `faker:"date" json:"create_time"`
-	ResourceType string `faker:"word" json:"resource_type"`
-	EventType    string `faker:"word" json:"event_type"`
-	Summary      string `faker:"sentence" json:"summary"`
-	OriginalType string `faker:"word" json:"original_type"`
-	Ciphertext   string `faker:"-" json:"ciphertext"`
+	AccountID   string `faker:"uuid_hyphenated" json:"account_id"`
+	AccessToken string `faker:"jwt" json:"access_token"`
+	Payload     string `faker:"-" json:"payload"`
 }
 
 type pullParam struct {
-	Mchid         int32  `json:"mchid"`
-	TransactionID string `faker:"uuid_digit" json:"transaction_id"`
+	AccountID     string `faker:"uuid_hyphenated" json:"account_id"`
+	TransactionID string `faker:"uuid_hyphenated" json:"transaction_id"`
+	AccessToken   string `faker:"jwt" json:"access_token"`
 }
 
 type pullResp struct {
-	Appid         string `faker:"uuid_hyphenated" json:"appid"`
-	Mchid         string `json:"mchid"`
-	OutTradeNO    string `faker:"uuid_digit" json:"out_trade_no"`
-	Openid        string `faker:"uuid_hyphenated" json:"openid"`
+	AccountID     string `faker:"uuid_hyphenated" json:"account_id"`
 	TransactionID string `faker:"uuid_hyphenated" json:"transaction_id"`
-	Ciphertext    string `faker:"-" json:"ciphertext"`
+	Payload       string `faker:"-" json:"payload"`
 }
