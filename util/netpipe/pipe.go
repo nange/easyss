@@ -47,8 +47,10 @@ func (p *pipe) Read(b []byte) (n int, err error) {
 		nextReadDone := make(chan struct{})
 		defer close(nextReadDone)
 		go func(dur time.Duration) {
+			timer := time.NewTimer(dur)
+			defer timer.Stop()
 			select {
-			case <-time.After(dur):
+			case <-timer.C:
 				p.cond.L.Lock()
 				p.rLate = true
 				p.cond.L.Unlock()
@@ -103,8 +105,10 @@ func (p *pipe) Write(b []byte) (n int, err error) {
 		nextWriteDone := make(chan struct{})
 		defer close(nextWriteDone)
 		go func(dur time.Duration) {
+			timer := time.NewTimer(dur)
+			defer timer.Stop()
 			select {
-			case <-time.After(dur):
+			case <-timer.C:
 				p.cond.L.Lock()
 				p.wLate = true
 				p.cond.L.Unlock()

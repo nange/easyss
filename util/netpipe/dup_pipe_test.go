@@ -98,3 +98,54 @@ func TestDupPip_ConReadWrite(t *testing.T) {
 	}
 	assert.Equal(t, count1, count2)
 }
+
+func TestDupPipe_Timeout(t *testing.T) {
+	p1, p2 := Pipe(10)
+	err := p1.SetReadDeadline(time.Now().Add(time.Second))
+	assert.Nil(t, err)
+	err = p2.SetReadDeadline(time.Now().Add(time.Second))
+	assert.Nil(t, err)
+
+	b := make([]byte, 10)
+	n, err := p1.Read(b)
+	assert.Equal(t, 0, n)
+	assert.Equal(t, ErrDeadline, err)
+	n, err = p2.Read(b)
+	assert.Equal(t, 0, n)
+	assert.Equal(t, ErrDeadline, err)
+
+	err = p1.SetReadDeadline(time.Time{})
+	assert.Nil(t, err)
+	err = p2.SetReadDeadline(time.Time{})
+	assert.Nil(t, err)
+
+	n, err = p1.Write([]byte("hellohello"))
+	assert.Equal(t, 10, n)
+	assert.Nil(t, err)
+	n, err = p2.Read(b)
+	assert.Equal(t, 10, n)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte("hellohello"), b[:n])
+
+	err = p1.SetWriteDeadline(time.Now().Add(time.Second))
+	assert.Nil(t, err)
+	n, err = p1.Write([]byte("hello"))
+	assert.Equal(t, 5, n)
+	assert.Nil(t, err)
+	n, err = p1.Write([]byte("hello2"))
+	assert.Equal(t, 0, n)
+	assert.Equal(t, ErrDeadline, err)
+
+	err = p1.SetWriteDeadline(time.Time{})
+	assert.Nil(t, err)
+	n, err = p2.Read(b)
+	assert.Equal(t, 5, n)
+	assert.Nil(t, err)
+
+	n, err = p1.Write([]byte("hello2"))
+	assert.Equal(t, 6, n)
+	assert.Nil(t, err)
+	n, err = p2.Read(b)
+	assert.Equal(t, 6, n)
+	assert.Nil(t, err)
+}
