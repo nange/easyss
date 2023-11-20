@@ -49,7 +49,7 @@ func TestDupPipe_Read_Write(t *testing.T) {
 
 	n, err = p2.Read(b)
 	assert.Equal(t, 6, n)
-	assert.Equal(t, ErrPipeClosed, err)
+	assert.Nil(t, err)
 	n, err = p2.Read(b)
 	assert.Equal(t, 0, n)
 	assert.Equal(t, io.EOF, err)
@@ -92,7 +92,7 @@ func TestDupPip_ConReadWrite(t *testing.T) {
 		n, err := p2.Read(b)
 		count2 += n
 		if err != nil {
-			assert.Equal(t, ErrPipeClosed, err)
+			assert.Equal(t, io.EOF, err)
 			break
 		}
 	}
