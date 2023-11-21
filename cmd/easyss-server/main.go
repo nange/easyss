@@ -16,7 +16,7 @@ import (
 )
 
 func main() {
-	var configFile, logLevel string
+	var configFile string
 	var printVer, showConfigExample, enablePprof bool
 	var cmdConfig easyss.ServerConfig
 
@@ -70,7 +70,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Info("[EASYSS_SERVER_MAIN] set the log-level to", "level", logLevel)
+	log.Info("[EASYSS_SERVER_MAIN] set the log-level to", "level", config.LogLevel)
 	log.Init(config.GetLogFilePath(), config.LogLevel)
 
 	if enablePprof {

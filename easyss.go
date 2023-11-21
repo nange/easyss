@@ -49,10 +49,10 @@ const (
 )
 
 const (
-	MaxCap      int           = 40
-	MaxIdle     int           = 5
-	IdleTime    time.Duration = time.Minute
-	MaxLifetime time.Duration = 15 * time.Minute
+	MaxCap      int = 40
+	MaxIdle     int = 5
+	IdleTime        = time.Minute
+	MaxLifetime     = 15 * time.Minute
 )
 
 const UserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
@@ -757,7 +757,7 @@ func (ss *Easyss) AvailableConn() (conn net.Conn, err error) {
 		defer func() {
 			if er != nil {
 				MarkCipherStreamUnusable(cs)
-				conn.Close()
+				_ = conn.Close()
 			}
 			cs.Release()
 		}()
