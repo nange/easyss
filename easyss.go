@@ -44,8 +44,8 @@ const (
 )
 
 const (
-	UDPLocksCount    = 256
-	UDPLocksAndOpVal = 255
+	UDPLocksCount    = 512
+	UDPLocksAndOpVal = 511
 )
 
 const (
@@ -650,6 +650,10 @@ func (ss *Easyss) TLSTimeout() time.Duration {
 }
 
 func (ss *Easyss) CMDTimeout() time.Duration {
+	return ss.Timeout() * 3
+}
+
+func (ss *Easyss) ReadDeadlineTimeout() time.Duration {
 	return ss.Timeout() * 3
 }
 
