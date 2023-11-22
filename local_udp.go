@@ -76,7 +76,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	}
 
 	dstHost, _, _ := net.SplitHostPort(rewrittenDst)
-	if ss.HostShouldDirect(dstHost) {
+	if ss.MatchHostRule(dstHost) == HostRuleDirect {
 		return ss.directUDPRelay(s, addr, d, isDNSReq)
 	}
 
@@ -335,7 +335,6 @@ func isDNSRequest(msg *dns.Msg) bool {
 		return false
 	}
 	q := msg.Question[0]
-
 	if q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA {
 		return true
 	}

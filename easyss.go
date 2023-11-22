@@ -968,23 +968,6 @@ func (ss *Easyss) DNSMsg(dnsServer, domain string) (*dns.Msg, *dns.Msg, error) {
 	return a, aaaa, errors.Join(err1, err2)
 }
 
-func (ss *Easyss) HostShouldDirect(host string) bool {
-	if ss.ProxyRule() == ProxyRuleDirect || ss.IsLANHost(host) {
-		return true
-	}
-	if ss.ProxyRule() == ProxyRuleProxy {
-		return false
-	}
-
-	if ss.HostMatchCustomDirectConfig(host) {
-		return true
-	}
-	if ss.ProxyRule() == ProxyRuleReverseAuto {
-		return !ss.HostAtCN(host)
-	}
-	return ss.HostAtCN(host)
-}
-
 func (ss *Easyss) MatchHostRule(host string) HostRule {
 	if ss.ProxyRule() == ProxyRuleDirect || ss.IsLANHost(host) {
 		return HostRuleDirect
