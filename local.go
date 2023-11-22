@@ -84,16 +84,16 @@ func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Reque
 
 func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	host, _, _ := net.SplitHostPort(addr)
-	check := ss.HostMatch(host)
-	if check == "block" {
-		log.Error("[TCP_BLOCK] blocked "+host)
+	rule := ss.MatchHostRule(host)
+	if rule == HostRuleBlock {
+		log.Error("[TCP_BLOCK] blocked", "host", host)
 		return err
 	}
 
-	if check == "direct" {
+	if rule == HostRuleDirect {
 		return ss.directRelay(localConn, addr)
 	}
-	
+
 	log.Info("[TCP_PROXY]", "target", addr)
 	if !ss.disableValidateAddr {
 		if err := ss.validateAddr(addr); err != nil {
