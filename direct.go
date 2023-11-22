@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/nange/easyss/v2/log"
 	"github.com/xjasonlyu/tun2socks/v2/dialer"
@@ -34,6 +35,7 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 			log.Warn("[TCP_DIRECT] close write for target connection", "err", err)
 		}
 
+		_ = tConn.SetReadDeadline(time.Now().Add(ss.ReadDeadlineTimeout()))
 	}()
 
 	go func() {
@@ -47,6 +49,8 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 		if err := CloseWrite(localConn); err != nil {
 			log.Warn("[TCP_DIRECT] close write for local connection", "err", err)
 		}
+
+		_ = localConn.SetReadDeadline(time.Now().Add(ss.ReadDeadlineTimeout()))
 	}()
 
 	wg.Wait()

@@ -63,12 +63,18 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 			}
 			log.Debug(logPrefix+" sent data", "from", ue.ClientAddr.String(), "to", addr.String())
 		}
+
 		return nil
 	}
 
 	var ue *DirectUDPExchange
 	var src = laddr.String()
-	iue, ok := s.UDPExchanges.Get(src + dst + DirectSuffix)
+	var exchKey = src + dst + DirectSuffix
+
+	ss.lockKey(exchKey)
+	defer ss.unlockKey(exchKey)
+
+	iue, ok := s.UDPExchanges.Get(exchKey)
 	if ok {
 		ue = iue.(*DirectUDPExchange)
 		return send(ue, d.Data, uAddr)
@@ -88,13 +94,15 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 		log.Warn(logPrefix+" send data", "to", uAddr.String(), "err", err)
 		return err
 	}
-	s.UDPExchanges.Set(src+dst+DirectSuffix, ue, -1)
+	s.UDPExchanges.Set(exchKey, ue, -1)
 
 	go func() {
 		var buf = bytespool.Get(MaxUDPDataSize)
 		defer func() {
+			ss.lockKey(exchKey)
+			defer ss.unlockKey(exchKey)
 			bytespool.MustPut(buf)
-			s.UDPExchanges.Delete(src + dst + DirectSuffix)
+			s.UDPExchanges.Delete(exchKey)
 			ue.RemoteConn.Close()
 		}()
 
