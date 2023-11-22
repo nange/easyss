@@ -116,9 +116,10 @@ func (h *httpProxy) doWithHijack(w http.ResponseWriter, r *http.Request) {
 		log.Error("[HTTP_PROXY] get hijack conn", "err", err)
 		return
 	}
+
+	defer hijConn.Close()
 	if _, err := hijConn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n")); err != nil {
 		log.Error("[HTTP_PROXY] write hijack ok", "err", err)
-		hijConn.Close()
 		return
 	}
 

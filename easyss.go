@@ -58,10 +58,12 @@ const (
 const UserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
 
 var (
-	//go:embed geodata/geoip_cn_private.mmdb
+	//go:embed geodata/Country-only-cn-private.mmdb
 	geoIPCNPrivate []byte
-	//go:embed geodata/geosite_cn.txt
-	geoSiteCN []byte
+	//go:embed geodata/direct-list.txt
+	geoSiteDirect []byte
+	//go:embed geodata/block-list.txt
+	geoSiteBlock []byte
 )
 
 type Statistics struct {
@@ -122,7 +124,7 @@ func domainRoot(domain string) string {
 	}
 }
 
-func (gs *GeoSite) SiteAtCN(domain string) bool {
+func (gs *GeoSite) FullMatch(domain string) bool {
 	if _, ok := gs.fullDomain[domain]; ok {
 		return true
 	}
@@ -139,6 +141,17 @@ func (gs *GeoSite) SiteAtCN(domain string) bool {
 		if re.MatchString(domain) {
 			return true
 		}
+	}
+
+	return false
+}
+
+func (gs *GeoSite) SimpleMatch(domain string) bool {
+	if _, ok := gs.fullDomain[domain]; ok {
+		return true
+	}
+	if _, ok := gs.domain[domain]; ok {
+		return true
 	}
 
 	return false
@@ -168,6 +181,14 @@ func ParseProxyRuleFromString(rule string) ProxyRule {
 	return ProxyRuleUnknown
 }
 
+type HostRule int
+
+const (
+	HostRuleProxy = iota
+	HostRuleDirect
+	HostRuleBlock
+)
+
 type Easyss struct {
 	config          *Config
 	serverIP        string
@@ -178,8 +199,9 @@ type Easyss struct {
 	directDNSServer string
 	dnsCache        *freecache.Cache
 	directDNSCache  *freecache.Cache
-	geoipDB         *geoip2.Reader
-	geosite         *GeoSite
+	geoIPDB         *geoip2.Reader
+	geoSiteDirect   *GeoSite
+	geoSiteBlock    *GeoSite
 	// the user custom ip/domain list which have the highest priority
 	customDirectIPs     map[string]struct{}
 	customDirectCIDRIPs []*net.IPNet
@@ -233,8 +255,9 @@ func New(config *Config) (*Easyss, error) {
 	if err != nil {
 		panic(err)
 	}
-	ss.geoipDB = db
-	ss.geosite = NewGeoSite(geoSiteCN)
+	ss.geoIPDB = db
+	ss.geoSiteDirect = NewGeoSite(geoSiteDirect)
+	ss.geoSiteBlock = NewGeoSite(geoSiteBlock)
 
 	if err := ss.initDirectDNSServer(); err != nil {
 		log.Error("[EASYSS] init direct dns server", "err", err)
@@ -945,21 +968,27 @@ func (ss *Easyss) DNSMsg(dnsServer, domain string) (*dns.Msg, *dns.Msg, error) {
 	return a, aaaa, errors.Join(err1, err2)
 }
 
-func (ss *Easyss) HostShouldDirect(host string) bool {
+func (ss *Easyss) MatchHostRule(host string) HostRule {
 	if ss.ProxyRule() == ProxyRuleDirect || ss.IsLANHost(host) {
-		return true
+		return HostRuleDirect
 	}
 	if ss.ProxyRule() == ProxyRuleProxy {
-		return false
+		return HostRuleProxy
+	}
+	if ss.HostMatchCustomDirectConfig(host) {
+		return HostRuleDirect
+	}
+	if ok := ss.geoSiteBlock.SimpleMatch(host); ok {
+		return HostRuleBlock
+	}
+	if ss.ProxyRule() == ProxyRuleReverseAuto && !ss.HostAtCN(host) {
+		return HostRuleDirect
+	}
+	if ss.HostAtCN(host) {
+		return HostRuleDirect
 	}
 
-	if ss.HostMatchCustomDirectConfig(host) {
-		return true
-	}
-	if ss.ProxyRule() == ProxyRuleReverseAuto {
-		return !ss.HostAtCN(host)
-	}
-	return ss.HostAtCN(host)
+	return HostRuleProxy
 }
 
 func (ss *Easyss) HostMatchCustomDirectConfig(host string) bool {
@@ -997,7 +1026,7 @@ func (ss *Easyss) HostAtCN(host string) bool {
 		return true
 	}
 
-	return ss.geosite.SiteAtCN(host)
+	return ss.geoSiteDirect.FullMatch(host)
 }
 
 func (ss *Easyss) IPAtCN(ip string) bool {
@@ -1005,7 +1034,7 @@ func (ss *Easyss) IPAtCN(ip string) bool {
 	if _ip == nil {
 		return false
 	}
-	country, err := ss.geoipDB.Country(_ip)
+	country, err := ss.geoIPDB.Country(_ip)
 	if err != nil {
 		return false
 	}

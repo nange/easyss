@@ -40,7 +40,13 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	isDNSReq := isDNSRequest(msg)
 	if err == nil && isDNSReq {
 		question := msg.Question[0]
-		isDirect := ss.HostShouldDirect(strings.TrimSuffix(question.Name, "."))
+
+		rule := ss.MatchHostRule(strings.TrimSuffix(question.Name, "."))
+		if rule == HostRuleBlock {
+			return responseBlockedDNSMsg(s.UDPConn, addr, msg, d.Address())
+		}
+
+		isDirect := rule == HostRuleDirect
 
 		// find from dns cache first
 		msgCache := ss.DNSCache(question.Name, dns.TypeToString[question.Qtype], isDirect)
@@ -70,7 +76,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	}
 
 	dstHost, _, _ := net.SplitHostPort(rewrittenDst)
-	if ss.HostShouldDirect(dstHost) {
+	if ss.MatchHostRule(dstHost) == HostRuleDirect {
 		return ss.directUDPRelay(s, addr, d, isDNSReq)
 	}
 
@@ -129,7 +135,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		log.Error("[UDP_PROXY] handshake with remote server", "err", err)
 		if csStream != nil {
 			MarkCipherStreamUnusable(csStream)
-			csStream.Close()
+			_ = csStream.Close()
 		}
 		return err
 	}
@@ -140,7 +146,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	}
 	if err := send(ue, d.Data); err != nil {
 		MarkCipherStreamUnusable(ue.RemoteConn)
-		ue.RemoteConn.Close()
+		_ = ue.RemoteConn.Close()
 		return err
 	}
 	s.UDPExchanges.Set(exchKey, ue, -1)
@@ -174,7 +180,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			MarkCipherStreamUnusable(ue.RemoteConn)
 		}
 
-		ue.RemoteConn.Close()
+		_ = ue.RemoteConn.Close()
 	}()
 
 	go func(ue *UDPExchange, dst string) {
@@ -289,6 +295,35 @@ func responseDNSMsg(conn *net.UDPConn, localAddr *net.UDPAddr, msg *dns.Msg, rem
 
 	_, err := conn.WriteToUDP(d1.Bytes(), localAddr)
 	return err
+}
+
+func responseBlockedDNSMsg(conn *net.UDPConn, localAddr *net.UDPAddr, request *dns.Msg, remoteAddr string) error {
+	question := request.Question[0]
+	log.Info("[DNS_BLOCK]", "domain", question.Name)
+
+	m := new(dns.Msg)
+	m.SetReply(request)
+	if question.Qtype == dns.TypeA {
+		rr, err := dns.NewRR(fmt.Sprintf("%s A 127.0.0.1", question.Name))
+		if err != nil {
+			log.Error("[DNS_BLOCK] creating A record:", "err", err)
+			return err
+		}
+		m.Answer = append(m.Answer, rr)
+	} else if question.Qtype == dns.TypeAAAA {
+		rr, err := dns.NewRR(fmt.Sprintf("%s AAAA ::1", question.Name))
+		if err != nil {
+			log.Error("[DNS_BLOCK] creating AAAA record:", "err", err)
+			return err
+		}
+		m.Answer = append(m.Answer, rr)
+	}
+	if err := responseDNSMsg(conn, localAddr, m, remoteAddr); err != nil {
+		log.Error("[DNS_BLOCK] response", "err", err)
+		return err
+	}
+
+	return nil
 }
 
 func expireConn(conn net.Conn) error {
