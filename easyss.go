@@ -677,7 +677,7 @@ func (ss *Easyss) CMDTimeout() time.Duration {
 }
 
 func (ss *Easyss) ReadDeadlineTimeout() time.Duration {
-	return ss.Timeout() * 3
+	return ss.Timeout() * 5
 }
 
 func (ss *Easyss) AuthUsername() string {
@@ -835,11 +835,11 @@ func (ss *Easyss) PingHook(b []byte) error {
 	since := time.Since(time.Unix(0, ts))
 	ss.pingLatency <- since
 
-	log.Debug("[EASYSS] ping", "server", ss.Server(), "latency", since)
+	log.Debug("[EASYSS] ping", "server", ss.Server(), "latency", since.String())
 	if since > time.Second {
-		log.Warn("[EASYSS] got high latency of ping", "latency", since, "server", ss.Server())
+		log.Warn("[EASYSS] got high latency of ping", "latency", since.String(), "server", ss.Server())
 	} else if since > 500*time.Millisecond {
-		log.Info("[EASYSS] got latency of ping", "latency", since, "server", ss.Server())
+		log.Info("[EASYSS] got latency of ping", "latency", since.String(), "server", ss.Server())
 	}
 
 	return nil

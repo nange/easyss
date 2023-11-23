@@ -75,7 +75,7 @@ func copyCipherToPlainTxt(plainTxt, cipher net.Conn, timeout time.Duration, tryR
 		err = errors.Join(err, ce)
 		log.Warn("[REPAY] close write for plaintxt stream", "err", ce)
 	}
-	if se := plainTxt.SetReadDeadline(time.Now().Add(2 * timeout)); se != nil {
+	if se := plainTxt.SetReadDeadline(time.Now().Add(5 * timeout)); se != nil {
 		err = errors.Join(err, se)
 	}
 
@@ -106,7 +106,7 @@ func copyPlainTxtToCipher(cipher, plainTxt net.Conn, timeout time.Duration, tryR
 		err = errors.Join(err, er)
 		log.Warn("[REPAY] close write for cipher stream", "err", err)
 	}
-	if er := cipher.SetReadDeadline(time.Now().Add(2 * timeout)); er != nil {
+	if er := cipher.SetReadDeadline(time.Now().Add(5 * timeout)); er != nil {
 		err = errors.Join(err, er)
 	}
 

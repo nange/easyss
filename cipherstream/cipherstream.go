@@ -225,7 +225,8 @@ func (cs *CipherStream) CloseWrite() error {
 // timeout return true if err is net.Error timeout
 func timeout(err error) bool {
 	if err != nil {
-		if er, ok := err.(net.Error); ok {
+		var er net.Error
+		if errors.As(err, &er) {
 			return er.Timeout()
 		}
 	}

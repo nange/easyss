@@ -225,7 +225,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			if err != nil {
 				if !errors.Is(err, cipherstream.ErrTimeout) {
 					tryReuse = false
-					log.Info("[UDP_PROXY] remote conn read", "err", err)
+					log.Debug("[UDP_PROXY] remote conn read", "err", err)
 				}
 				return
 			}
