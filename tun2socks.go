@@ -31,13 +31,13 @@ var (
 	//go:embed scripts/close_tun_dev_darwin.sh
 	closeTunDevShDarwin []byte
 
-	//go:embed wintun/wintun_amd64.dll
+	//go:embed assets/wintun/wintun_amd64.dll
 	wintunAmd64 []byte
-	//go:embed wintun/wintun_arm64.dll
+	//go:embed assets/wintun/wintun_arm64.dll
 	wintunArm64 []byte
-	//go:embed wintun/wintun_x86.dll
+	//go:embed assets/wintun/wintun_x86.dll
 	wintunX86 []byte
-	//go:embed wintun/wintun_arm.dll
+	//go:embed assets/wintun/wintun_arm.dll
 	wintunArm []byte
 )
 

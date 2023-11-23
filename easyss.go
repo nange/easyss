@@ -58,11 +58,11 @@ const (
 const UserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
 
 var (
-	//go:embed geodata/Country-only-cn-private.mmdb
+	//go:embed assets/geodata/Country-only-cn-private.mmdb
 	geoIPCNPrivate []byte
-	//go:embed geodata/direct-list.txt
+	//go:embed assets/geodata/direct-list.txt
 	geoSiteDirect []byte
-	//go:embed geodata/block-list.txt
+	//go:embed assets/geodata/block-list.txt
 	geoSiteBlock []byte
 )
 

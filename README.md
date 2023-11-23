@@ -106,9 +106,9 @@ make easyss-server
 
 保存好配置文件后，双击`easyss`，程序会自动启动，托盘会出现Easyss的图标，如下:
 
-![托盘图标](img/tray.png)
-![托盘图标](img/tray2.png)
-![托盘图标](img/tray3.png)
+![托盘图标](assets/img/tray.png)
+![托盘图标](assets/img/tray2.png)
+![托盘图标](assets/img/tray3.png)
 
 右键图标可选择代理规则和代理对象。
 
@@ -137,8 +137,6 @@ your-custom-domain.com
 ### 手机客户端
 
 手机客户端apk文件可直接在[release页面](https://github.com/nange/easyss/releases)下载。
-
-手机客户端是基于NekoBoxForAndroid扩展修改而来，源代码在[NekoBoxForAndroid](https://github.com/bingooo/NekoBoxForAndroid/tree/easyss)，感谢 [bingooo](https://github.com/bingooo)
 
 用法：创建Easyss配置项：点击右上角+图标 -> 手动输入 -> 选择Easyss
 
