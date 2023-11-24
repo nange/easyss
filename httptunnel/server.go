@@ -255,10 +255,12 @@ func (s *Server) CloseConn(reqID string) {
 }
 
 func writeNotFoundError(w http.ResponseWriter) {
+	w.Header().Set("Content-Encoding", "gzip")
 	http.Error(w, "404 NOT FOUND", http.StatusNotFound)
 }
 
 func writeServiceUnavailableError(w http.ResponseWriter, msg string) {
+	w.Header().Set("Content-Encoding", "gzip")
 	http.Error(w, msg, http.StatusServiceUnavailable)
 }
 
