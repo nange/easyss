@@ -40,7 +40,6 @@ func NewServer(addr string, timeout time.Duration, tlsConfig *tls.Config) *Serve
 		Addr:              addr,
 		Handler:           http.DefaultServeMux,
 		ReadHeaderTimeout: timeout,
-		IdleTimeout:       5 * timeout,
 	}
 
 	return &Server{
