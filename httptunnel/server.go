@@ -196,10 +196,11 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Debug("[HTTP_TUNNEL_SERVER] push", "uuid", reqID)
 
+	addr, _ := net.ResolveTCPAddr("tcp", r.RemoteAddr)
 	s.Lock()
 	conns, ok := s.connMap[reqID]
 	if !ok {
-		conn1, conn2 := netpipe.Pipe(2 * cipherstream.MaxPayloadSize)
+		conn1, conn2 := netpipe.Pipe(2*cipherstream.MaxPayloadSize, addr)
 		conns = []net.Conn{conn1, conn2}
 		s.connMap[reqID] = conns
 		s.connCh <- conn2

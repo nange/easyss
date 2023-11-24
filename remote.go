@@ -111,7 +111,7 @@ func (es *EasyServer) startHTTPTunnelServer() {
 			log.Error("[REMOTE] http tunnel server accept:", err)
 			break
 		}
-		log.Info("[REMOTE] a http tunnel connection is accepted")
+		log.Info("[REMOTE] a http tunnel connection is accepted", "remote_addr", conn.RemoteAddr().String())
 
 		go es.handleConn(conn, false)
 	}

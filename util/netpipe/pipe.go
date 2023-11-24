@@ -26,6 +26,8 @@ type pipe struct {
 	err           error
 	readDeadline  time.Time
 	writeDeadline time.Time
+	remoteAddr    net.Addr
+	localAddr     net.Addr
 }
 
 var ErrDeadline = fmt.Errorf("pipe deadline exceeded")
@@ -146,15 +148,25 @@ func (p *pipe) SetErrorAndClose(err error) {
 	}
 }
 
-// Pipe technically fullfills the net.Conn interface
+// Pipe technically implements the net.Conn interface
 
-func (p *pipe) LocalAddr() net.Addr  { return addr{} }
-func (p *pipe) RemoteAddr() net.Addr { return addr{} }
+func (p *pipe) LocalAddr() net.Addr {
+	if p.localAddr != nil {
+		return p.localAddr
+	}
+	return addr{}
+}
+func (p *pipe) RemoteAddr() net.Addr {
+	if p.remoteAddr != nil {
+		return p.remoteAddr
+	}
+	return addr{}
+}
 
 type addr struct{}
 
-func (a addr) String() string  { return "memory.pipe:0" }
-func (a addr) Network() string { return "in-process-internal" }
+func (a addr) String() string  { return "memory:0" }
+func (a addr) Network() string { return "pipe" }
 
 // SetDeadline implements the net.Conn method
 func (p *pipe) SetDeadline(t time.Time) error {

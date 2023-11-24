@@ -52,16 +52,28 @@ func (d dupPipe) SetWriteDeadline(t time.Time) error {
 // both ends implement the Conn interface.
 // Reads on one end are matched with writes on the other, copying data directly between the two;
 // there is an internal buffering of size.
-func Pipe(maxSize int) (net.Conn, net.Conn) {
+func Pipe(maxSize int, addrs ...net.Addr) (net.Conn, net.Conn) {
+	var remoteAddr, localAddr net.Addr
+	if len(addrs) == 1 {
+		remoteAddr = addrs[0]
+	} else if len(addrs) == 2 {
+		remoteAddr = addrs[0]
+		localAddr = addrs[1]
+	}
+
 	sp := &pipe{
-		buf:     ringbuffer.New(maxSize),
-		maxSize: maxSize,
+		buf:        ringbuffer.New(maxSize),
+		maxSize:    maxSize,
+		remoteAddr: remoteAddr,
+		localAddr:  localAddr,
 	}
 	sp.cond = *sync.NewCond(&sp.mu)
 
 	rp := &pipe{
-		buf:     ringbuffer.New(maxSize),
-		maxSize: maxSize,
+		buf:        ringbuffer.New(maxSize),
+		maxSize:    maxSize,
+		remoteAddr: remoteAddr,
+		localAddr:  localAddr,
 	}
 	rp.cond = *sync.NewCond(&rp.mu)
 
