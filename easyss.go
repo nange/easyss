@@ -823,28 +823,6 @@ func (ss *Easyss) AvailableConn() (conn net.Conn, err error) {
 	return
 }
 
-func (ss *Easyss) PingHook(b []byte) error {
-	if len(b) == 0 {
-		return nil
-	}
-
-	ts, err := strconv.ParseInt(string(b), 10, 64)
-	if err != nil {
-		return err
-	}
-	since := time.Since(time.Unix(0, ts))
-	ss.pingLatency <- since
-
-	log.Debug("[EASYSS] ping", "server", ss.Server(), "latency", since.String())
-	if since > time.Second {
-		log.Warn("[EASYSS] got high latency of ping", "latency", since.String(), "server", ss.Server())
-	} else if since > 500*time.Millisecond {
-		log.Info("[EASYSS] got latency of ping", "latency", since.String(), "server", ss.Server())
-	}
-
-	return nil
-}
-
 func (ss *Easyss) SetSocksServer(server *socks5.Server) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
