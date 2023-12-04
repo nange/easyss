@@ -176,7 +176,7 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 			return 0, ErrACKRSTStream
 		}
 		if frame.IsPingFrame() {
-			log.Debug("[CIPHERSTREAM] receive Ping frame, exec PingHook and continue to read next frame")
+			log.Debug("[CIPHERSTREAM] receive Ping frame, continue to read next frame")
 			continue
 		}
 

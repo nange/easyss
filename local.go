@@ -5,7 +5,6 @@ import (
 	"io"
 	"net"
 	"strconv"
-	"time"
 
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/log"
@@ -175,21 +174,7 @@ func (ss *Easyss) handShakeWithRemote(addr string, flag uint8) (net.Conn, error)
 			return csStream, err
 		}
 
-		if err := csStream.SetReadDeadline(time.Now().Add(ss.PingTimeout())); err != nil {
-			return csStream, err
-		}
-		frame, err = csStream.ReadFrame()
-		if err != nil {
-			return csStream, err
-		}
-		if !frame.IsPingFrame() {
-			return csStream, fmt.Errorf("except got ping frame, but got %v", frame.FrameType())
-		}
-		if err := ss.PingHook(frame.RawDataPayload()); err != nil {
-			return csStream, err
-		}
-
-		return csStream, csStream.SetReadDeadline(time.Time{})
+		return csStream, nil
 	}()
 	if err != nil {
 		return csStream, err
