@@ -225,7 +225,6 @@ type Easyss struct {
 	httpProxyServer  *http.Server
 	dnsForwardServer *dns.Server
 	closing          chan struct{}
-	pingLatency      chan time.Duration
 	enabledTun2socks bool
 	proxyRule        ProxyRule
 }
@@ -237,7 +236,6 @@ func New(config *Config) (*Easyss, error) {
 		dnsCache:       freecache.NewCache(DefaultDNSCacheSize),
 		directDNSCache: freecache.NewCache(DefaultDNSCacheSize),
 		closing:        make(chan struct{}, 1),
-		pingLatency:    make(chan time.Duration, 128),
 		mu:             &sync.RWMutex{},
 	}
 	proxyRule := ParseProxyRuleFromString(config.ProxyRule)
@@ -761,7 +759,7 @@ func (ss *Easyss) Pool() easypool.Pool {
 	return ss.tcpPool
 }
 
-func (ss *Easyss) AvailableConn() (conn net.Conn, err error) {
+func (ss *Easyss) AvailableConn(needPingACK ...bool) (conn net.Conn, err error) {
 	var pool easypool.Pool
 	var tryCount int
 	if ss.IsNativeOutboundProto() {
@@ -791,7 +789,11 @@ func (ss *Easyss) AvailableConn() (conn net.Conn, err error) {
 
 		start := time.Now()
 		ping := []byte(strconv.FormatInt(start.UnixNano(), 10))
-		if er = cs.WritePing(ping, cipherstream.FlagNeedACK); er != nil {
+		flag := cipherstream.FlagDefault
+		if len(needPingACK) > 0 && needPingACK[0] {
+			flag |= cipherstream.FlagNeedACK
+		}
+		if er = cs.WritePing(ping, flag); er != nil {
 			return
 		}
 

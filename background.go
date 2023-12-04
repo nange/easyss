@@ -2,9 +2,13 @@ package easyss
 
 import (
 	"context"
+	"errors"
+	"math/rand"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util"
 )
@@ -12,18 +16,19 @@ import (
 func (ss *Easyss) background() {
 	ss.mu.Lock()
 	closing := ss.closing
-	pingLatency := ss.pingLatency
 	ss.mu.Unlock()
 
 	tickerExec := time.NewTicker(time.Duration(ss.config.CMDIntervalTime) * time.Second)
 	defer tickerExec.Stop()
 
-	var minLatency, avgLatency, maxLatency, total time.Duration
-	var count int64
-
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
-	ticker2 := time.NewTicker(30 * time.Second)
+
+	n := rand.Int63n(30)
+	if n < 15 {
+		n = 15
+	}
+	ticker2 := time.NewTicker(time.Duration(n) * time.Second)
 	defer ticker2.Stop()
 	for {
 		select {
@@ -31,33 +36,53 @@ func (ss *Easyss) background() {
 			sendSize := ss.stat.BytesSend.Load() / (1024 * 1024)
 			receiveSize := ss.stat.BytesReceive.Load() / (1024 * 1024)
 			log.Info("[EASYSS_BACKGROUND]", "send_size(MB)", sendSize, "receive_size(MB)", receiveSize)
-		case late := <-pingLatency:
-			count += 1
-			total += late
-			if minLatency == 0 && avgLatency == 0 && maxLatency == 0 {
-				minLatency, avgLatency, maxLatency = late, late, late
-				continue
-			}
-
-			if minLatency > late {
-				minLatency = late
-			} else if maxLatency < late {
-				maxLatency = late
-			}
-			avgLatency = total / time.Duration(count)
 		case <-ticker2.C:
-			if maxLatency == 0 {
+			since, err := ss.pingTest()
+			if err != nil {
 				continue
 			}
-			log.Info("[EASYSS_BACKGROUND] ping easyss-server latency",
-				"min", minLatency.String(), "avg", avgLatency.String(), "max", maxLatency.String(), "count", count)
-			minLatency, avgLatency, maxLatency, count, total = 0, 0, 0, 0, 0
+			log.Info("[EASYSS_BACKGROUND] ping easyss-server", "latency", since.String())
 		case <-tickerExec.C:
 			go ss.cmdInterval(ss.config.CMDInterval)
 		case <-closing:
 			return
 		}
 	}
+}
+
+func (ss *Easyss) pingTest() (time.Duration, error) {
+	conn, err := ss.AvailableConn(true)
+	if err != nil {
+		log.Error("[EASYSS_BACKGROUND] got available conn for ping test", "err", err)
+		return 0, err
+	}
+	conn, _ = cipherstream.New(conn, ss.Password(), cipherstream.MethodAes256GCM, cipherstream.FrameTypePing)
+	csStream := conn.(*cipherstream.CipherStream)
+	defer csStream.Close()
+
+	if err := csStream.SetReadDeadline(time.Now().Add(ss.PingTimeout())); err != nil {
+		log.Error("[EASYSS_BACKGROUND] set read deadline for cipher stream", "err", err)
+		return 0, err
+	}
+	frame, err := csStream.ReadFrame()
+	if err != nil {
+		log.Error("[EASYSS_BACKGROUND] read frame from cipher stream", "err", err)
+		return 0, err
+	}
+	if !frame.IsPingFrame() {
+		log.Error("[EASYSS_BACKGROUND] except got ping frame, bug got", "frame", frame.FrameType().String())
+		return 0, errors.New("isn't ping frame")
+	}
+
+	startStr := frame.RawDataPayload()
+	ts, err := strconv.ParseInt(string(startStr), 10, 64)
+	if err != nil {
+		log.Error("[EASYSS_BACKGROUND] parse start timestamp for ping test", "err", err)
+		return 0, err
+	}
+	since := time.Since(time.Unix(0, ts))
+
+	return since, nil
 }
 
 func (ss *Easyss) cmdBeforeStartup() error {
