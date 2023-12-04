@@ -28,6 +28,7 @@ require (
 )
 
 require (
+	github.com/Kr328/tun2socket v0.0.0-20230614191318-dddbfaa28112 // indirect
 	github.com/ajg/form v1.5.1 // indirect
 	github.com/andybalholm/brotli v1.0.5 // indirect
 	github.com/cloudflare/circl v1.3.3 // indirect

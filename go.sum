@@ -1,3 +1,7 @@
+github.com/Kr328/tun2socket v0.0.0-20220414050025-d07c78d06d34 h1:USCTqih5d1bUXUxWNS9ZD5Tx/lb0jXHEtRIIx/F9dMc=
+github.com/Kr328/tun2socket v0.0.0-20220414050025-d07c78d06d34/go.mod h1:YR9wK13TgI5ww8iKWm91MHiSoHC7Oz0U4beCCmtXqLw=
+github.com/Kr328/tun2socket v0.0.0-20230614191318-dddbfaa28112 h1:t5G3bbYkAATSwz6T1lpnu/13Nhld820vlly59ed8gEE=
+github.com/Kr328/tun2socket v0.0.0-20230614191318-dddbfaa28112/go.mod h1:OiXWFyELCxLtcGoZmRzq9gDYs1QSlJ6FsQ83G9wYGeM=
 github.com/ajg/form v1.5.1 h1:t9c7v8JUKu/XxOGBU0yjNpaMloxGEJhUkqFRq0ibGeU=
 github.com/ajg/form v1.5.1/go.mod h1:uL1WgH+h2mgNtvBq0339dVnzXdBETtL2LeUXaIv25UY=
 github.com/andybalholm/brotli v1.0.5 h1:8uQZIdzKmjc/iuPu7O2ioW48L81FgatrcpfFmiq/cCs=

@@ -117,8 +117,8 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 
 	var ue *UDPExchange
 	var exchKey = addr.String() + dst
-	ss.lockKey(exchKey)
-	defer ss.unlockKey(exchKey)
+	ss.LockKey(exchKey)
+	defer ss.UnlockKey(exchKey)
 
 	iue, ok := s.UDPExchanges.Get(exchKey)
 	if ok {
@@ -190,8 +190,8 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		}
 
 		defer func() {
-			ss.lockKey(exchKey)
-			defer ss.unlockKey(exchKey)
+			ss.LockKey(exchKey)
+			defer ss.UnlockKey(exchKey)
 
 			monitorCh <- tryReuse
 			ch <- struct{}{}
@@ -253,13 +253,13 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	return nil
 }
 
-func (ss *Easyss) lockKey(key string) {
+func (ss *Easyss) LockKey(key string) {
 	hashVal := xxhash.Sum64String(key)
 	lockID := hashVal & UDPLocksAndOpVal
 	ss.udpLocks[lockID].Lock()
 }
 
-func (ss *Easyss) unlockKey(key string) {
+func (ss *Easyss) UnlockKey(key string) {
 	hashVal := xxhash.Sum64String(key)
 	lockID := hashVal & UDPLocksAndOpVal
 	ss.udpLocks[lockID].Unlock()

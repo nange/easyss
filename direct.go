@@ -20,7 +20,7 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 		return err
 	}
 
-	wg := sync.WaitGroup{}
+	wg := &sync.WaitGroup{}
 	wg.Add(2)
 
 	go func() {
