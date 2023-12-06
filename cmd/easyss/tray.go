@@ -116,11 +116,18 @@ func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 	if st.SS().ProxyRule() == easyss.ProxyRuleAuto {
 		auto.Check()
 	}
+
+	autoBlock := proxyMenue.AddSubMenuItemCheckbox("自动+屏蔽广告跟踪", "自动判断请求是否走代理或者屏蔽", false)
+	if st.SS().ProxyRule() == easyss.ProxyRuleAutoBlock {
+		auto.Check()
+	}
+
 	reverseAuto := proxyMenue.AddSubMenuItemCheckbox("反向自动(国外访问国内)", "适用国外访问国内IP域名", false)
 	proxy := proxyMenue.AddSubMenuItemCheckbox("代理全部(绕过局域网地址)", "代理除局域网地址的所有请求", false)
 	if st.SS().ProxyRule() == easyss.ProxyRuleProxy {
 		proxy.Check()
 	}
+
 	direct := proxyMenue.AddSubMenuItemCheckbox("直接连接", "所有请求直接连接，不走代理", false)
 	if st.SS().ProxyRule() == easyss.ProxyRuleDirect {
 		direct.Check()
@@ -136,6 +143,18 @@ func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 				}
 				st.SS().SetProxyRule(easyss.ProxyRuleAuto)
 				auto.Check()
+				autoBlock.Uncheck()
+				reverseAuto.Uncheck()
+				proxy.Uncheck()
+				direct.Uncheck()
+			case <-autoBlock.ClickedCh:
+				if autoBlock.Checked() {
+					autoBlock.Check()
+					continue
+				}
+				st.SS().SetProxyRule(easyss.ProxyRuleAutoBlock)
+				autoBlock.Check()
+				auto.Uncheck()
 				reverseAuto.Uncheck()
 				proxy.Uncheck()
 				direct.Uncheck()
@@ -147,6 +166,7 @@ func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 				st.SS().SetProxyRule(easyss.ProxyRuleReverseAuto)
 				reverseAuto.Check()
 				auto.Uncheck()
+				autoBlock.Uncheck()
 				proxy.Uncheck()
 				direct.Uncheck()
 			case <-proxy.ClickedCh:
@@ -157,6 +177,7 @@ func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 				st.SS().SetProxyRule(easyss.ProxyRuleProxy)
 				proxy.Check()
 				auto.Uncheck()
+				autoBlock.Uncheck()
 				reverseAuto.Uncheck()
 				direct.Uncheck()
 			case <-direct.ClickedCh:
@@ -167,6 +188,7 @@ func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 				st.SS().SetProxyRule(easyss.ProxyRuleDirect)
 				direct.Check()
 				auto.Uncheck()
+				autoBlock.Uncheck()
 				reverseAuto.Uncheck()
 				proxy.Uncheck()
 			}
