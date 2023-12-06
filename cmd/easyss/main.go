@@ -29,7 +29,7 @@ func main() {
 	flag.StringVar(&cmdConfig.Method, "m", "", "encryption method, default: aes-256-gcm")
 	flag.StringVar(&cmdConfig.LogLevel, "log-level", "", "set the log-level(debug, info, warn, error), default: info")
 	flag.StringVar(&cmdConfig.LogFilePath, "log-file-path", "", "set the log output location, default: Stdout")
-	flag.StringVar(&cmdConfig.ProxyRule, "proxy-rule", "", "set the proxy rule(auto, reverse_auto, proxy, direct), default: auto")
+	flag.StringVar(&cmdConfig.ProxyRule, "proxy-rule", "", "set the proxy rule(auto, auto_block, reverse_auto, proxy, direct), default: auto")
 	flag.BoolVar(&daemon, "daemon", true, "run app as a non-daemon with -daemon=false")
 	flag.BoolVar(&cmdConfig.BindALL, "bind-all", false, "listens on all available IPs of the local system. default: false")
 	flag.BoolVar(&cmdConfig.EnableForwardDNS, "enable-forward-dns", false, "start a local dns server to forward dns request")
