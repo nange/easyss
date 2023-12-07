@@ -112,28 +112,27 @@ func NewGeoSite(data []byte) *GeoSite {
 	return gs
 }
 
-func domainRoot(domain string) string {
-	var firstDot, lastDot int
-	for {
-		firstDot = strings.Index(domain, ".")
-		lastDot = strings.LastIndex(domain, ".")
-		if firstDot == lastDot {
-			return domain
-		}
-		domain = domain[firstDot+1:]
+func subDomains(domain string) []string {
+	if domain == "" {
+		return nil
 	}
+	subs := make([]string, 0, 8)
+
+	i := strings.Index(domain, ".")
+	for i > 0 {
+		domain = domain[i+1:]
+		subs = append(subs, domain)
+		i = strings.Index(domain, ".")
+	}
+	if len(subs) > 1 {
+		return subs[:len(subs)-1]
+	}
+
+	return nil
 }
 
 func (gs *GeoSite) FullMatch(domain string) bool {
-	if _, ok := gs.fullDomain[domain]; ok {
-		return true
-	}
-	if _, ok := gs.domain[domain]; ok {
-		return true
-	}
-
-	_domain := domainRoot(domain)
-	if _, ok := gs.domain[_domain]; ok {
+	if gs.SimpleMatch(domain, true) {
 		return true
 	}
 
@@ -146,12 +145,21 @@ func (gs *GeoSite) FullMatch(domain string) bool {
 	return false
 }
 
-func (gs *GeoSite) SimpleMatch(domain string) bool {
+func (gs *GeoSite) SimpleMatch(domain string, matchSub bool) bool {
 	if _, ok := gs.fullDomain[domain]; ok {
 		return true
 	}
 	if _, ok := gs.domain[domain]; ok {
 		return true
+	}
+
+	if matchSub {
+		subs := subDomains(domain)
+		for _, sub := range subs {
+			if _, ok := gs.domain[sub]; ok {
+				return true
+			}
+		}
 	}
 
 	return false
@@ -165,6 +173,7 @@ const (
 	ProxyRuleReverseAuto
 	ProxyRuleProxy
 	ProxyRuleDirect
+	ProxyRuleAutoBlock
 )
 
 func ParseProxyRuleFromString(rule string) ProxyRule {
@@ -173,6 +182,7 @@ func ParseProxyRuleFromString(rule string) ProxyRule {
 		"reverse_auto": ProxyRuleReverseAuto,
 		"proxy":        ProxyRuleProxy,
 		"direct":       ProxyRuleDirect,
+		"auto_block":   ProxyRuleAutoBlock,
 	}
 	if r, ok := m[rule]; ok {
 		return r
@@ -184,7 +194,7 @@ func ParseProxyRuleFromString(rule string) ProxyRule {
 type HostRule int
 
 const (
-	HostRuleProxy = iota
+	HostRuleProxy HostRule = iota
 	HostRuleDirect
 	HostRuleBlock
 )
@@ -958,9 +968,16 @@ func (ss *Easyss) MatchHostRule(host string) HostRule {
 	if ss.HostMatchCustomDirectConfig(host) {
 		return HostRuleDirect
 	}
-	if ok := ss.geoSiteBlock.SimpleMatch(host); ok {
-		return HostRuleBlock
+
+	if ss.ProxyRule() == ProxyRuleAutoBlock && !util.IsIP(host) {
+		if ss.geoSiteDirect.SimpleMatch(host, false) {
+			return HostRuleDirect
+		}
+		if ss.geoSiteBlock.SimpleMatch(host, true) {
+			return HostRuleBlock
+		}
 	}
+
 	if ss.ProxyRule() == ProxyRuleReverseAuto && !ss.HostAtCN(host) {
 		return HostRuleDirect
 	}
@@ -985,9 +1002,11 @@ func (ss *Easyss) HostMatchCustomDirectConfig(host string) bool {
 		if _, ok := ss.customDirectDomains[host]; ok {
 			return true
 		}
-		domain := domainRoot(host)
-		if _, ok := ss.customDirectDomains[domain]; ok {
-			return true
+		subs := subDomains(host)
+		for _, sub := range subs {
+			if _, ok := ss.customDirectDomains[sub]; ok {
+				return true
+			}
 		}
 	}
 	return false

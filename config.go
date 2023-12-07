@@ -23,9 +23,10 @@ var Methods = map[string]struct{}{
 }
 
 var ProxyRules = map[string]struct{}{
-	"auto":   {},
-	"proxy":  {},
-	"direct": {},
+	"auto":       {},
+	"auto_block": {},
+	"proxy":      {},
+	"direct":     {},
 }
 
 const (
@@ -144,7 +145,7 @@ func (c *Config) Validate() error {
 	}
 	if c.ProxyRule != "" {
 		if _, ok := ProxyRules[c.ProxyRule]; !ok {
-			return fmt.Errorf("unsupported proxy rule:%s, supported rules:[auto, proxy, direct]", c.ProxyRule)
+			return fmt.Errorf("unsupported proxy rule:%s, supported rules:[auto, auto_block, proxy, direct]", c.ProxyRule)
 		}
 	}
 	if c.OutboundProto != OutboundProtoNative && c.OutboundProto != OutboundProtoHTTP &&

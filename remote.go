@@ -254,9 +254,11 @@ func (es *EasyServer) targetConn(network, addr string) (net.Conn, error) {
 			if _, ok := es.nextProxyDomains[host]; ok {
 				return true
 			}
-			domain := domainRoot(host)
-			if _, ok := es.nextProxyDomains[domain]; ok {
-				return true
+			subs := subDomains(host)
+			for _, sub := range subs {
+				if _, ok := es.nextProxyDomains[sub]; ok {
+					return true
+				}
 			}
 		}
 		return false

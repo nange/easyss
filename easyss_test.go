@@ -9,9 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/coocood/freecache"
+	"github.com/oschwald/geoip2-golang"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"golang.org/x/net/proxy"
 )
@@ -285,4 +289,82 @@ func closeWriteClient(msg string) string {
 		return ""
 	}
 	return string(ret[:nr])
+}
+
+func getEasyssForBench(config *Config) *Easyss {
+	ss := &Easyss{
+		config:         config,
+		stat:           &Statistics{},
+		dnsCache:       freecache.NewCache(DefaultDNSCacheSize),
+		directDNSCache: freecache.NewCache(DefaultDNSCacheSize),
+		closing:        make(chan struct{}, 1),
+		mu:             &sync.RWMutex{},
+	}
+	proxyRule := ParseProxyRuleFromString(config.ProxyRule)
+	if proxyRule == ProxyRuleUnknown {
+		panic("unknown proxy rule:" + config.ProxyRule)
+	}
+	ss.proxyRule = proxyRule
+
+	db, err := geoip2.FromBytes(geoIPCNPrivate)
+	if err != nil {
+		panic(err)
+	}
+	ss.geoIPDB = db
+	ss.geoSiteDirect = NewGeoSite(geoSiteDirect)
+	ss.geoSiteBlock = NewGeoSite(geoSiteBlock)
+
+	if err := ss.loadCustomIPDomains(); err != nil {
+		panic(err)
+	}
+
+	return ss
+}
+
+func TestSubDomains(t *testing.T) {
+	domain := "as1.m.hao123.com"
+	subs := subDomains(domain)
+	assert.Equal(t, []string{"m.hao123.com", "hao123.com"}, subs)
+}
+
+func BenchmarkEasyss_MatchHostRule_Block(b *testing.B) {
+	host := "googleads.g.doubleclick.net"
+
+	config := &Config{ProxyRule: "auto_block"}
+	config.SetDefaultValue()
+	ss := getEasyssForBench(config)
+
+	assert.Equal(b, HostRuleBlock, ss.MatchHostRule(host))
+
+	for i := 0; i < b.N; i++ {
+		ss.MatchHostRule(host)
+	}
+}
+
+func BenchmarkEasyss_MatchHostRule_Direct(b *testing.B) {
+	host := "baidu.com"
+
+	config := &Config{ProxyRule: "auto_block"}
+	config.SetDefaultValue()
+	ss := getEasyssForBench(config)
+
+	assert.Equal(b, HostRuleDirect, ss.MatchHostRule(host))
+
+	for i := 0; i < b.N; i++ {
+		ss.MatchHostRule(host)
+	}
+}
+
+func BenchmarkEasyss_MatchHostRule_Proxy(b *testing.B) {
+	host := "google.com"
+
+	config := &Config{ProxyRule: "auto_block"}
+	config.SetDefaultValue()
+	ss := getEasyssForBench(config)
+
+	assert.Equal(b, HostRuleProxy, ss.MatchHostRule(host))
+
+	for i := 0; i < b.N; i++ {
+		ss.MatchHostRule(host)
+	}
 }
