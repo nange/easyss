@@ -321,6 +321,12 @@ func getEasyssForBench(config *Config) *Easyss {
 	return ss
 }
 
+func TestSubDomains(t *testing.T) {
+	domain := "as1.m.hao123.com"
+	subs := subDomains(domain)
+	assert.Equal(t, []string{"m.hao123.com", "hao123.com"}, subs)
+}
+
 func BenchmarkEasyss_MatchHostRule_Block(b *testing.B) {
 	host := "googleads.g.doubleclick.net"
 
