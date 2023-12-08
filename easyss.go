@@ -165,32 +165,6 @@ func (gs *GeoSite) SimpleMatch(domain string, matchSub bool) bool {
 	return false
 }
 
-type ProxyRule int
-
-const (
-	ProxyRuleUnknown ProxyRule = iota
-	ProxyRuleAuto
-	ProxyRuleReverseAuto
-	ProxyRuleProxy
-	ProxyRuleDirect
-	ProxyRuleAutoBlock
-)
-
-func ParseProxyRuleFromString(rule string) ProxyRule {
-	m := map[string]ProxyRule{
-		"auto":         ProxyRuleAuto,
-		"reverse_auto": ProxyRuleReverseAuto,
-		"proxy":        ProxyRuleProxy,
-		"direct":       ProxyRuleDirect,
-		"auto_block":   ProxyRuleAutoBlock,
-	}
-	if r, ok := m[rule]; ok {
-		return r
-	}
-
-	return ProxyRuleUnknown
-}
-
 type HostRule int
 
 const (

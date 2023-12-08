@@ -17,16 +17,52 @@ import (
 	"github.com/nange/easyss/v2/util"
 )
 
-var Methods = map[string]struct{}{
+type ProxyRule int
+
+const (
+	ProxyRuleUnknown ProxyRule = iota
+	ProxyRuleAuto
+	ProxyRuleReverseAuto
+	ProxyRuleProxy
+	ProxyRuleDirect
+	ProxyRuleAutoBlock
+)
+
+var proxyRules = map[string]ProxyRule{
+	"auto":         ProxyRuleAuto,
+	"reverse_auto": ProxyRuleReverseAuto,
+	"proxy":        ProxyRuleProxy,
+	"direct":       ProxyRuleDirect,
+	"auto_block":   ProxyRuleAutoBlock,
+}
+
+func ParseProxyRuleFromString(rule string) ProxyRule {
+	if r, ok := proxyRules[rule]; ok {
+		return r
+	}
+
+	return ProxyRuleUnknown
+}
+
+func AllProxyRule() []string {
+	keys := make([]string, 0, len(proxyRules))
+	for k := range proxyRules {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+var methods = map[string]struct{}{
 	"aes-256-gcm":       {},
 	"chacha20-poly1305": {},
 }
 
-var ProxyRules = map[string]struct{}{
-	"auto":       {},
-	"auto_block": {},
-	"proxy":      {},
-	"direct":     {},
+func AllMethod() []string {
+	keys := make([]string, 0, len(methods))
+	for k := range proxyRules {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 const (
@@ -134,8 +170,8 @@ func (c *Config) Validate() error {
 		}
 	}
 	if c.Method != "" {
-		if _, ok := Methods[c.Method]; !ok {
-			return fmt.Errorf("unsupported method:%s, supported methods:[aes-256-gcm, chacha20-poly1305]", c.Method)
+		if _, ok := methods[c.Method]; !ok {
+			return fmt.Errorf("unsupported method:%s, supported methods:%v", c.Method, AllMethod())
 		}
 	}
 	switch c.LogLevel {
@@ -144,8 +180,8 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("unsupported log-level:%s, supported log-levels:[debug, info, warn, error]", c.LogLevel)
 	}
 	if c.ProxyRule != "" {
-		if _, ok := ProxyRules[c.ProxyRule]; !ok {
-			return fmt.Errorf("unsupported proxy rule:%s, supported rules:[auto, auto_block, proxy, direct]", c.ProxyRule)
+		if _, ok := proxyRules[c.ProxyRule]; !ok {
+			return fmt.Errorf("unsupported proxy rule:%s, supported rules:%v", c.ProxyRule, AllProxyRule())
 		}
 	}
 	if c.OutboundProto != OutboundProtoNative && c.OutboundProto != OutboundProtoHTTP &&
