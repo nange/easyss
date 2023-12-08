@@ -119,7 +119,7 @@ func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 
 	autoBlock := proxyMenue.AddSubMenuItemCheckbox("自动+屏蔽广告跟踪", "自动判断请求是否走代理或者屏蔽", false)
 	if st.SS().ProxyRule() == easyss.ProxyRuleAutoBlock {
-		auto.Check()
+		autoBlock.Check()
 	}
 
 	reverseAuto := proxyMenue.AddSubMenuItemCheckbox("反向自动(国外访问国内)", "适用国外访问国内IP域名", false)
