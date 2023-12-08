@@ -138,9 +138,7 @@ your-custom-domain.com
 
 手机客户端apk文件可直接在[release页面](https://github.com/nange/easyss/releases)下载。
 
-用法：创建Easyss配置项：点击右上角+图标 -> 手动输入 -> 选择Easyss
-
-注意: 在菜单路由项里面，把绕过：中国域名规则和中国IP规则，勾选上。这样对于绝大部分国内的APP和网站就不会走代理了。
+注意: 可将常用的国内大流量APP勾选上跳过，这样可减少电量消耗。当然不选也没关系，Easyss会自动判断该直连还是走代理。
 
 ### 服务器端
 和客户端一样, 同样先创建配置文件`config.json`，并配置文件和二进制`easyss-server`放同一目录中。
