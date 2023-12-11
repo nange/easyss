@@ -56,15 +56,24 @@ func (ss *Easyss) pingTest() (time.Duration, error) {
 		log.Error("[EASYSS_BACKGROUND] got available conn for ping test", "err", err)
 		return 0, err
 	}
+
 	conn, _ = cipherstream.New(conn, ss.Password(), cipherstream.MethodAes256GCM, cipherstream.FrameTypePing)
 	csStream := conn.(*cipherstream.CipherStream)
-	defer csStream.Close()
+	defer func() {
+		_ = csStream.SetReadDeadline(time.Time{})
+		if err != nil {
+			MarkCipherStreamUnusable(csStream)
+		}
+		_ = csStream.Close()
+	}()
 
 	if err := csStream.SetReadDeadline(time.Now().Add(ss.PingTimeout())); err != nil {
 		log.Error("[EASYSS_BACKGROUND] set read deadline for cipher stream", "err", err)
 		return 0, err
 	}
-	frame, err := csStream.ReadFrame()
+
+	var frame *cipherstream.Frame
+	frame, err = csStream.ReadFrame()
 	if err != nil {
 		log.Error("[EASYSS_BACKGROUND] read frame from cipher stream", "err", err)
 		return 0, err
@@ -75,7 +84,8 @@ func (ss *Easyss) pingTest() (time.Duration, error) {
 	}
 
 	startStr := frame.RawDataPayload()
-	ts, err := strconv.ParseInt(string(startStr), 10, 64)
+	var ts int64
+	ts, err = strconv.ParseInt(string(startStr), 10, 64)
 	if err != nil {
 		log.Error("[EASYSS_BACKGROUND] parse start timestamp for ping test", "err", err)
 		return 0, err
