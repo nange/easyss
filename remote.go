@@ -206,7 +206,8 @@ func (es *EasyServer) handShakeWithClient(conn net.Conn) (hsRes, error) {
 		}
 
 		if frame.IsPingFrame() {
-			log.Debug("[REMOTE] got ping message", "payload", string(frame.RawDataPayload()))
+			log.Debug("[REMOTE] got ping message",
+				"payload", string(frame.RawDataPayload()), "is_need_ack", frame.IsNeedACK())
 			if frame.IsNeedACK() {
 				if er := cs.WritePing(frame.RawDataPayload(), cipherstream.FlagACK); er != nil {
 					return res, er
