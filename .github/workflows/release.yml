@@ -11,15 +11,30 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Install Deps
         run: sudo apt update && sudo apt install -y libgtk-3-dev libayatana-appindicator3-dev
+
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version: '^1.21'
           check-latest: true
+
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26b
+          add-to-path: false
+
       - name: Build
         run: make .PHONY
+      - name: Build Android
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: make easyss-android
+
       - name: Pack
         run: |
           cd bin
@@ -28,6 +43,9 @@ jobs:
           zip easyss-with-notray-linux-amd64.zip ./easyss-with-notray
           zip easyss-server-linux-amd64.zip ./easyss-server
           zip easyss-server-windows-amd64.zip ./easyss-server.exe
+          mv easyss-android libeasyss.so
+          zip libeasyss.so.zip ./libeasyss.so
+
       - name: Build Arm64
         run: |
           GOOS=linux GOARCH=arm64 make easyss-with-notray
@@ -37,6 +55,7 @@ jobs:
           cd bin
           zip easyss-with-notray-linux-arm64.zip ./easyss-with-notray
           zip easyss-server-linux-arm64.zip ./easyss-server
+
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
