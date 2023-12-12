@@ -3,14 +3,14 @@ module github.com/nange/easyss/v2
 go 1.21
 
 require (
-	github.com/caddyserver/certmagic v0.19.2
+	github.com/caddyserver/certmagic v0.20.0
 	github.com/cespare/xxhash/v2 v2.2.0
 	github.com/coocood/freecache v1.2.4
 	github.com/getlantern/systray v1.2.2
 	github.com/go-faker/faker/v4 v4.2.0
 	github.com/gofrs/uuid/v5 v5.0.0
 	github.com/imroc/req/v3 v3.42.2
-	github.com/klauspost/compress v1.17.3
+	github.com/klauspost/compress v1.17.4
 	github.com/libp2p/go-netroute v0.2.1
 	github.com/miekg/dns v1.1.57
 	github.com/nange/easypool v1.3.1
@@ -21,8 +21,8 @@ require (
 	github.com/txthinking/socks5 v0.0.0-20230325130024-4230056ae301
 	github.com/wzshiming/sysproxy v0.2.2
 	github.com/xjasonlyu/tun2socks/v2 v2.5.3-0.20231112222842-e86b3b7dc56f
-	golang.org/x/crypto v0.15.0
-	golang.org/x/net v0.18.0
+	golang.org/x/crypto v0.16.0
+	golang.org/x/net v0.19.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
@@ -74,7 +74,7 @@ require (
 	go.uber.org/zap v1.24.0 // indirect
 	golang.org/x/exp v0.0.0-20230817173708-d852ddb80c63 // indirect
 	golang.org/x/mod v0.13.0 // indirect
-	golang.org/x/sys v0.14.0 // indirect
+	golang.org/x/sys v0.15.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
 	golang.org/x/tools v0.14.0 // indirect
