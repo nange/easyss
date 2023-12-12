@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-20.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Install Deps
         run: sudo apt update && sudo apt install -y libgtk-3-dev libayatana-appindicator3-dev
       - name: Set up Go
@@ -28,11 +28,11 @@ jobs:
           zip easyss-with-notray-linux-amd64.zip ./easyss-with-notray
           zip easyss-server-linux-amd64.zip ./easyss-server
           zip easyss-server-windows-amd64.zip ./easyss-server.exe
-      - name: Build-Arm64
+      - name: Build Arm64
         run: |
           GOOS=linux GOARCH=arm64 make easyss-with-notray
           GOOS=linux GOARCH=arm64 make easyss-server
-      - name: Pack-Arm64
+      - name: Pack Arm64
         run: |
           cd bin
           zip easyss-with-notray-linux-arm64.zip ./easyss-with-notray
@@ -47,7 +47,7 @@ jobs:
     runs-on: macOS-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
@@ -62,11 +62,11 @@ jobs:
           cd bin
           zip easyss-darwin-amd64.zip ./easyss
           zip easyss-server-darwin-amd64.zip ./easyss-server
-      - name: Build-Arm64
+      - name: Build Arm64
         run: |
           GOOS=darwin GOARCH=arm64 make easyss-with-notray
           GOOS=darwin GOARCH=arm64 make easyss-server
-      - name: Pack-Arm64
+      - name: Pack Arm64
         run: |
           cd bin
           zip easyss-with-notray-darwin-arm64.zip ./easyss-with-notray
