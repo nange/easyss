@@ -105,7 +105,9 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	if err != nil {
 		log.Warn("[TCP_PROXY] handshake with remote server", "err", err)
 		if csStream != nil {
-			MarkCipherStreamUnusable(csStream)
+			if cs, ok := csStream.(*cipherstream.CipherStream); ok {
+				cs.MarkConnUnusable()
+			}
 			csStream.Close()
 		}
 		return

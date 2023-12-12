@@ -62,7 +62,7 @@ func (ss *Easyss) pingTest() (time.Duration, error) {
 	defer func() {
 		_ = csStream.SetReadDeadline(time.Time{})
 		if err != nil {
-			MarkCipherStreamUnusable(csStream)
+			csStream.MarkConnUnusable()
 		}
 		_ = csStream.Close()
 	}()

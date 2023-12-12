@@ -765,7 +765,7 @@ func (ss *Easyss) AvailableConn(needPingACK ...bool) (conn net.Conn, err error) 
 		cs := csStream.(*cipherstream.CipherStream)
 		defer func() {
 			if er != nil {
-				MarkCipherStreamUnusable(cs)
+				cs.MarkConnUnusable()
 				_ = conn.Close()
 			}
 			cs.Release()
