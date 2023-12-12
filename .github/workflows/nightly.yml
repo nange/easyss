@@ -61,6 +61,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           name: Nightly
+          tag_name: nightly
           body: For testing and development only
           files: bin/*.zip
 
@@ -104,5 +105,6 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           name: Nightly
+          tag_name: nightly
           body: For testing and development only
           files: bin/*.zip
