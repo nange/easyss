@@ -1,4 +1,4 @@
-name: NightlyRelease
+name: Nightly Release
 
 on:
   workflow_dispatch:
@@ -57,11 +57,11 @@ jobs:
           zip easyss-with-notray-linux-arm64.zip ./easyss-with-notray
           zip easyss-server-linux-arm64.zip ./easyss-server
 
-      - name: Release
+      - name: Nightly Release
         uses: softprops/action-gh-release@v1
         with:
-          name: Release ${{ github.ref_name }}
-          body: TODO
+          name: Nightly
+          body: For testing and development only
           files: bin/*.zip
 
   macos:
@@ -77,27 +77,32 @@ jobs:
         with:
           go-version: '^1.21'
           check-latest: true
+
       - name: Build
         run: |
           make easyss
           make easyss-server
+
       - name: Pack
         run: |
           cd bin
           zip easyss-darwin-amd64.zip ./easyss
           zip easyss-server-darwin-amd64.zip ./easyss-server
+
       - name: Build Arm64
         run: |
           GOOS=darwin GOARCH=arm64 make easyss-with-notray
           GOOS=darwin GOARCH=arm64 make easyss-server
+
       - name: Pack Arm64
         run: |
           cd bin
           zip easyss-with-notray-darwin-arm64.zip ./easyss-with-notray
           zip easyss-server-darwin-arm64.zip ./easyss-server
-      - name: Release
+
+      - name: Nightly Release
         uses: softprops/action-gh-release@v1
         with:
-          name: Release ${{ github.ref_name }}
-          body: TODO
+          name: Nightly
+          body: For testing and development only
           files: bin/*.zip
