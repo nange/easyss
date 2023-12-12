@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 
+	"github.com/nange/easypool"
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
 )
@@ -216,6 +217,14 @@ func (cs *CipherStream) Close() error {
 	}
 	cs.Release()
 	return err
+}
+
+func (cs *CipherStream) MarkConnUnusable() bool {
+	if pc, ok := cs.Conn.(*easypool.PoolConn); ok {
+		pc.MarkUnusable()
+		return true
+	}
+	return false
 }
 
 func (cs *CipherStream) CloseWrite() error {

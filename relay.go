@@ -7,7 +7,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nange/easypool"
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
@@ -47,13 +46,17 @@ func relay(cipher, plainTxt net.Conn, timeout time.Duration, tryReuse bool) (int
 	if res1.TryReuse && res2.TryReuse {
 		reuse := tryReuseFn(cipher, timeout)
 		if reuse != nil {
-			MarkCipherStreamUnusable(cipher)
+			if cs, ok := cipher.(*cipherstream.CipherStream); ok {
+				cs.MarkConnUnusable()
+			}
 			log.Warn("[REPAY] underlying proxy connection is unhealthy, need close it", "reuse", reuse)
 		} else {
 			log.Debug("[REPAY] underlying proxy connection is healthy, so reuse it")
 		}
 	} else {
-		MarkCipherStreamUnusable(cipher)
+		if cs, ok := cipher.(*cipherstream.CipherStream); ok {
+			cs.MarkConnUnusable()
+		}
 		if tryReuse {
 			log.Warn("[REPAY] underlying proxy connection is unhealthy, need close it", "err", err)
 		}
@@ -200,15 +203,4 @@ func ReadACKFromCipher(conn net.Conn) error {
 	}
 
 	return err
-}
-
-// MarkCipherStreamUnusable mark the cipher stream unusable, return true if success
-func MarkCipherStreamUnusable(cipher net.Conn) bool {
-	if cs, ok := cipher.(*cipherstream.CipherStream); ok {
-		if pc, ok := cs.Conn.(*easypool.PoolConn); ok {
-			pc.MarkUnusable()
-			return true
-		}
-	}
-	return false
 }

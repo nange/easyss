@@ -134,7 +134,9 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	if err != nil {
 		log.Error("[UDP_PROXY] handshake with remote server", "err", err)
 		if csStream != nil {
-			MarkCipherStreamUnusable(csStream)
+			if cs, ok := csStream.(*cipherstream.CipherStream); ok {
+				cs.MarkConnUnusable()
+			}
 			_ = csStream.Close()
 		}
 		return err
@@ -145,7 +147,9 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		RemoteConn: csStream,
 	}
 	if err := send(ue, d.Data); err != nil {
-		MarkCipherStreamUnusable(ue.RemoteConn)
+		if cs, ok := ue.RemoteConn.(*cipherstream.CipherStream); ok {
+			cs.MarkConnUnusable()
+		}
 		_ = ue.RemoteConn.Close()
 		return err
 	}
@@ -171,13 +175,17 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			log.Debug("[UDP_PROXY] request is finished, try to reuse underlying tcp connection")
 			reuse := tryReuseInUDPClient(ue.RemoteConn, ss.Timeout())
 			if reuse != nil {
-				MarkCipherStreamUnusable(ue.RemoteConn)
+				if cs, ok := ue.RemoteConn.(*cipherstream.CipherStream); ok {
+					cs.MarkConnUnusable()
+				}
 				log.Warn("[UDP_PROXY] underlying proxy connection is unhealthy, need close it", "reuse", reuse)
 			} else {
 				log.Debug("[UDP_PROXY] underlying proxy connection is healthy, so reuse it")
 			}
 		} else {
-			MarkCipherStreamUnusable(ue.RemoteConn)
+			if cs, ok := ue.RemoteConn.(*cipherstream.CipherStream); ok {
+				cs.MarkConnUnusable()
+			}
 		}
 
 		_ = ue.RemoteConn.Close()
