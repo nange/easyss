@@ -1,4 +1,4 @@
-module github.com/nange/easyss/v2
+module github.com/nange/easyss/v3
 
 go 1.21
 

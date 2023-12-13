@@ -9,10 +9,10 @@ import (
 	"os"
 
 	"github.com/caddyserver/certmagic"
-	"github.com/nange/easyss/v2/cipherstream"
-	httptunnel "github.com/nange/easyss/v2/httptunnel"
-	"github.com/nange/easyss/v2/log"
-	"github.com/nange/easyss/v2/util"
+	"github.com/nange/easyss/v3/cipherstream"
+	httptunnel "github.com/nange/easyss/v3/httptunnel"
+	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/util"
 	"github.com/txthinking/socks5"
 )
 

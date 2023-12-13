@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nange/easyss/v2/log"
+	"github.com/nange/easyss/v3/log"
 	"github.com/xjasonlyu/tun2socks/v2/dialer"
 )
 

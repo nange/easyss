@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nange/easyss/v2/util"
+	"github.com/nange/easyss/v3/util"
 )
 
 type ProxyRule int

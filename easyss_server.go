@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nange/easyss/v2/httptunnel"
-	"github.com/nange/easyss/v2/log"
-	"github.com/nange/easyss/v2/util"
+	"github.com/nange/easyss/v3/httptunnel"
+	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/util"
 )
 
 type EasyServer struct {

@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nange/easyss/v2/log"
-	"github.com/nange/easyss/v2/util/bytespool"
+	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/txthinking/socks5"
 	"github.com/xjasonlyu/tun2socks/v2/dialer"
 )

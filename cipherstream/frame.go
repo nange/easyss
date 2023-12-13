@@ -7,8 +7,8 @@ import (
 	"io"
 	mr "math/rand"
 
-	"github.com/nange/easyss/v2/util"
-	"github.com/nange/easyss/v2/util/bytespool"
+	"github.com/nange/easyss/v3/util"
+	"github.com/nange/easyss/v3/util/bytespool"
 )
 
 const (

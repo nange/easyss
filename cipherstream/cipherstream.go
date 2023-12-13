@@ -8,8 +8,8 @@ import (
 	"net"
 
 	"github.com/nange/easypool"
-	"github.com/nange/easyss/v2/log"
-	"github.com/nange/easyss/v2/util/bytespool"
+	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/util/bytespool"
 )
 
 const (

@@ -1,8 +1,8 @@
 PROJECT=Easyss
 
-LDFLAGS += -X "github.com/nange/easyss/v2/version.Name=${PROJECT}"
-LDFLAGS += -X "github.com/nange/easyss/v2/version.BuildDate=$(shell date '+%Y-%m-%d %H:%M:%S')"
-LDFLAGS += -X "github.com/nange/easyss/v2/version.GitTag=$(shell git describe --tags)"
+LDFLAGS += -X "github.com/nange/easyss/v3/version.Name=${PROJECT}"
+LDFLAGS += -X "github.com/nange/easyss/v3/version.BuildDate=$(shell date '+%Y-%m-%d %H:%M:%S')"
+LDFLAGS += -X "github.com/nange/easyss/v3/version.GitTag=$(shell git describe --tags)"
 
 GO := go
 GO_BUILD := go build -ldflags '$(LDFLAGS)'

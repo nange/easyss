@@ -10,9 +10,9 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/miekg/dns"
-	"github.com/nange/easyss/v2/cipherstream"
-	"github.com/nange/easyss/v2/log"
-	"github.com/nange/easyss/v2/util/bytespool"
+	"github.com/nange/easyss/v3/cipherstream"
+	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/txthinking/socks5"
 )
 

@@ -7,11 +7,11 @@ import (
 	"path"
 	"runtime"
 
-	"github.com/nange/easyss/v2"
-	"github.com/nange/easyss/v2/log"
-	"github.com/nange/easyss/v2/pprof"
-	"github.com/nange/easyss/v2/util"
-	"github.com/nange/easyss/v2/version"
+	"github.com/nange/easyss/v3"
+	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/pprof"
+	"github.com/nange/easyss/v3/util"
+	"github.com/nange/easyss/v3/version"
 )
 
 func main() {

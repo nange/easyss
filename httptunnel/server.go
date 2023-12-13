@@ -14,10 +14,10 @@ import (
 
 	"github.com/go-faker/faker/v4"
 	"github.com/klauspost/compress/gzhttp"
-	"github.com/nange/easyss/v2/cipherstream"
-	"github.com/nange/easyss/v2/log"
-	"github.com/nange/easyss/v2/util/bytespool"
-	"github.com/nange/easyss/v2/util/netpipe"
+	"github.com/nange/easyss/v3/cipherstream"
+	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/util/bytespool"
+	"github.com/nange/easyss/v3/util/netpipe"
 )
 
 const RelayBufferSize = cipherstream.MaxCipherRelaySize
