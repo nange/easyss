@@ -85,7 +85,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	host, _, _ := net.SplitHostPort(addr)
 	rule := ss.MatchHostRule(host)
 	if rule == HostRuleBlock {
-		log.Error("[TCP_BLOCK] blocked", "host", host)
+		log.Info("[TCP_BLOCK] blocked", "host", host)
 		return err
 	}
 
