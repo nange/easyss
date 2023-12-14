@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	_ "embed"
 	"errors"
@@ -422,11 +421,6 @@ func (ss *Easyss) InitTcpPool() error {
 	} else {
 		log.Info("[EASYSS] TLS is enabled")
 	}
-	if ss.DisableUTLS() {
-		log.Info("[EASYSS] uTLS is disabled")
-	} else {
-		log.Info("[EASYSS] uTLS is enabled")
-	}
 	log.Info("[EASYSS] initializing tcp pool with", "easy_server", ss.ServerAddr())
 
 	certPool, err := ss.loadCustomCertPool()
@@ -446,12 +440,6 @@ func (ss *Easyss) InitTcpPool() error {
 
 		ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
 		defer cancel()
-		if ss.DisableUTLS() {
-			dialer := &tls.Dialer{
-				Config: &tls.Config{RootCAs: certPool},
-			}
-			return dialer.DialContext(ctx, network, ss.ServerAddr())
-		}
 
 		conn, err := net.DialTimeout(network, ss.ServerAddr(), ss.Timeout())
 		if err != nil {
@@ -553,9 +541,7 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 			log.Info("set root cert from string", "cert", cert)
 			client.SetRootCertFromString(cert)
 		}
-		if !ss.DisableUTLS() {
-			client.SetTLSFingerprintChrome()
-		}
+		client.SetTLSFingerprintChrome()
 	}
 
 	ss.httpOutboundClient = client
@@ -684,10 +670,6 @@ func (ss *Easyss) BindAll() bool {
 
 func (ss *Easyss) LogFilePath() string {
 	return ss.config.GetLogFilePath()
-}
-
-func (ss *Easyss) DisableUTLS() bool {
-	return ss.config.DisableUTLS
 }
 
 func (ss *Easyss) DisableTLS() bool {

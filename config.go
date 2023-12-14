@@ -78,7 +78,6 @@ type ServerConfig struct {
 	Timeout                int    `json:"timeout"`
 	LogLevel               string `json:"log_level"`
 	LogFilePath            string `json:"log_file_path"`
-	DisableUTLS            bool   `json:"disable_utls"`
 	DisableTLS             bool   `json:"disable_tls"`
 	CertPath               string `json:"cert_path"`
 	KeyPath                string `json:"key_path"`
@@ -112,7 +111,6 @@ type Config struct {
 	AuthUsername      string         `json:"auth_username"`
 	AuthPassword      string         `json:"auth_password"`
 	BindALL           bool           `json:"bind_all"`
-	DisableUTLS       bool           `json:"disable_utls"`
 	DisableSysProxy   bool           `json:"disable_sys_proxy"`
 	DisableIPV6       bool           `json:"disable_ipv6"`
 	DisableTLS        bool           `json:"disable_tls"`
@@ -333,9 +331,7 @@ func (c *Config) OverrideFrom(sc *ServerConfig) {
 		if sc.Timeout != 0 {
 			c.Timeout = sc.Timeout
 		}
-		if sc.DisableUTLS {
-			c.DisableUTLS = sc.DisableUTLS
-		}
+
 		c.DisableTLS = sc.DisableTLS
 		c.CAPath = sc.CAPath
 		c.OutboundProto = sc.OutboundProto
@@ -443,7 +439,6 @@ func ExampleServerJSONConfig() string {
 		ServerPort:        9999,
 		Password:          "your-pass",
 		Timeout:           30,
-		DisableUTLS:       false,
 		CertPath:          "",
 		KeyPath:           "",
 		EnableHTTPInbound: true,

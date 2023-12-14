@@ -49,15 +49,13 @@ func (es *EasyServer) initTLSConfig() error {
 	}
 
 	tlsConfig.NextProtos = append([]string{"http/1.1", "h2"}, tlsConfig.NextProtos...)
-	if !es.DisableUTLS() {
-		tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
-			for _, v := range tlsConfig.NextProtos {
-				if cs.NegotiatedProtocol == v {
-					return nil
-				}
+	tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
+		for _, v := range tlsConfig.NextProtos {
+			if cs.NegotiatedProtocol == v {
+				return nil
 			}
-			return fmt.Errorf("unsupported ALPN:%s", cs.NegotiatedProtocol)
 		}
+		return fmt.Errorf("unsupported ALPN:%s", cs.NegotiatedProtocol)
 	}
 	es.tlsConfig = tlsConfig
 
