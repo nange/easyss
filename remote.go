@@ -24,6 +24,8 @@ func (es *EasyServer) Start() {
 	if es.EnabledHTTPInbound() {
 		go es.startHTTPTunnelServer()
 	}
+
+	go es.startQUICServer()
 	es.startTCPServer()
 }
 
@@ -48,7 +50,7 @@ func (es *EasyServer) initTLSConfig() error {
 		}
 	}
 
-	tlsConfig.NextProtos = append([]string{"http/1.1", "h2"}, tlsConfig.NextProtos...)
+	tlsConfig.NextProtos = append([]string{"http/1.1", "h2", "h3"}, tlsConfig.NextProtos...)
 	tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
 		for _, v := range tlsConfig.NextProtos {
 			if cs.NegotiatedProtocol == v {
@@ -73,7 +75,7 @@ func (es *EasyServer) startTCPServer() {
 		ln, err = tls.Listen("tcp", addr, es.tlsConfig.Clone())
 	}
 	if err != nil {
-		log.Error("Listen", "addr", addr, "err", err)
+		log.Error("[REMOTE] Listen", "addr", addr, "err", err)
 		os.Exit(1)
 	}
 
@@ -81,7 +83,7 @@ func (es *EasyServer) startTCPServer() {
 	es.ln = ln
 	es.mu.Unlock()
 
-	log.Info("[REMOTE] starting remote socks5 server at", "addr", addr)
+	log.Info("[REMOTE] starting remote server at", "addr", addr)
 
 	for {
 		conn, err := ln.Accept()

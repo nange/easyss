@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	_ "embed"
 	"errors"
@@ -31,6 +32,7 @@ import (
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util"
 	"github.com/oschwald/geoip2-golang"
+	"github.com/quic-go/quic-go"
 	utls "github.com/refraction-networking/utls"
 	"github.com/txthinking/socks5"
 )
@@ -411,8 +413,8 @@ func (ss *Easyss) initLocalGatewayAndDevice() error {
 }
 
 func (ss *Easyss) InitTcpPool() error {
-	if !ss.IsNativeOutboundProto() {
-		log.Info("[EASYSS] outbound proto don't need init tcp pool", "proto", ss.OutboundProto())
+	if !ss.IsNativeOutboundProto() && !ss.IsNativeQuicOutboundProto() {
+		log.Info("[EASYSS] don't need init tcp pool", "outbound_proto", ss.OutboundProto())
 		return nil
 	}
 
@@ -433,31 +435,67 @@ func (ss *Easyss) InitTcpPool() error {
 	if ss.DisableIPV6() {
 		network = "tcp4"
 	}
-	factory := func() (net.Conn, error) {
+
+	var factory func() (net.Conn, error)
+	if ss.IsNativeOutboundProto() {
+		factory = func() (net.Conn, error) {
+			if ss.DisableTLS() {
+				return net.DialTimeout(network, ss.ServerAddr(), ss.Timeout())
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
+			defer cancel()
+
+			conn, err := net.DialTimeout(network, ss.ServerAddr(), ss.Timeout())
+			if err != nil {
+				return nil, err
+			}
+
+			uConn := utls.UClient(
+				conn,
+				&utls.Config{
+					ServerName: ss.Server(),
+					RootCAs:    certPool,
+				},
+				utls.HelloChrome_Auto)
+			if err := uConn.HandshakeContext(ctx); err != nil {
+				return nil, err
+			}
+
+			return uConn, nil
+		}
+	} else if ss.IsNativeQuicOutboundProto() {
+		log.Info("[EASYSS] outbound proto is native-quic")
 		if ss.DisableTLS() {
-			return net.DialTimeout(network, ss.ServerAddr(), ss.Timeout())
+			return fmt.Errorf("can't disable tls when outbound proto is %v", OutboundProtoNativeQuic)
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
 		defer cancel()
 
-		conn, err := net.DialTimeout(network, ss.ServerAddr(), ss.Timeout())
+		conn, err := quic.DialAddr(ctx, ss.ServerAddr(), &tls.Config{
+			ServerName: ss.Server(),
+			RootCAs:    certPool,
+			NextProtos: []string{"http/1.1", "h2", "h3"},
+		}, &quic.Config{
+			MaxIncomingStreams: 65535,
+			KeepAlivePeriod:    15 * time.Second,
+		})
 		if err != nil {
-			return nil, err
+			return err
 		}
+		factory = func() (net.Conn, error) {
+			stream, err := conn.OpenStream()
+			if err != nil {
+				return nil, err
+			}
 
-		uConn := utls.UClient(
-			conn,
-			&utls.Config{
-				ServerName: ss.Server(),
-				RootCAs:    certPool,
-			},
-			utls.HelloChrome_Auto)
-		if err := uConn.HandshakeContext(ctx); err != nil {
-			return nil, err
+			return &quicStream{
+				Stream:     stream,
+				localAddr:  conn.LocalAddr(),
+				remoteAddr: conn.RemoteAddr(),
+			}, nil
 		}
-
-		return uConn, nil
 	}
 
 	config := &easypool.PoolConfig{
@@ -704,6 +742,10 @@ func (ss *Easyss) IsNativeOutboundProto() bool {
 	return ss.config.OutboundProto == OutboundProtoNative
 }
 
+func (ss *Easyss) IsNativeQuicOutboundProto() bool {
+	return ss.config.OutboundProto == OutboundProtoNativeQuic
+}
+
 func (ss *Easyss) IsHTTPOutboundProto() bool {
 	return ss.config.OutboundProto == OutboundProtoHTTP
 }
@@ -728,7 +770,7 @@ func (ss *Easyss) Pool() easypool.Pool {
 func (ss *Easyss) AvailableConn(needPingACK ...bool) (conn net.Conn, err error) {
 	var pool easypool.Pool
 	var tryCount int
-	if ss.IsNativeOutboundProto() {
+	if ss.IsNativeOutboundProto() || ss.IsNativeQuicOutboundProto() {
 		if pool = ss.Pool(); pool == nil {
 			return nil, errors.New("pool is closed")
 		}

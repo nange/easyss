@@ -45,11 +45,7 @@ func ParseProxyRuleFromString(rule string) ProxyRule {
 }
 
 func AllProxyRule() []string {
-	keys := make([]string, 0, len(proxyRules))
-	for k := range proxyRules {
-		keys = append(keys, k)
-	}
-	return keys
+	return util.MapKeys(proxyRules)
 }
 
 var methods = map[string]struct{}{
@@ -58,18 +54,26 @@ var methods = map[string]struct{}{
 }
 
 func AllMethod() []string {
-	keys := make([]string, 0, len(methods))
-	for k := range proxyRules {
-		keys = append(keys, k)
-	}
-	return keys
+	return util.MapKeys(methods)
 }
 
 const (
-	OutboundProtoNative = "native"
-	OutboundProtoHTTP   = "http"
-	OutboundProtoHTTPS  = "https"
+	OutboundProtoNative     = "native"
+	OutboundProtoNativeQuic = "native-quic"
+	OutboundProtoHTTP       = "http"
+	OutboundProtoHTTPS      = "https"
 )
+
+var outboundProtos = map[string]struct{}{
+	OutboundProtoNative:     {},
+	OutboundProtoNativeQuic: {},
+	OutboundProtoHTTP:       {},
+	OutboundProtoHTTPS:      {},
+}
+
+func AllOutboundProto() []string {
+	return util.MapKeys(outboundProtos)
+}
 
 type ServerConfig struct {
 	Server                 string `json:"server"`
@@ -182,10 +186,8 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("unsupported proxy rule:%s, supported rules:%v", c.ProxyRule, AllProxyRule())
 		}
 	}
-	if c.OutboundProto != OutboundProtoNative && c.OutboundProto != OutboundProtoHTTP &&
-		c.OutboundProto != OutboundProtoHTTPS {
-		return fmt.Errorf("outbound proto must be one of [%s, %s, %s]",
-			OutboundProtoNative, OutboundProtoHTTP, OutboundProtoHTTPS)
+	if _, ok := outboundProtos[c.OutboundProto]; !ok {
+		return fmt.Errorf("outbound proto must be one of: %v", AllOutboundProto())
 	}
 	if c.TunConfig == nil {
 		return fmt.Errorf("tun config should not be empty")
@@ -393,10 +395,8 @@ func (c *ServerConfig) Validate() error {
 	if c.Password == "" {
 		return errors.New("password should not empty")
 	}
-	if c.OutboundProto != OutboundProtoNative && c.OutboundProto != OutboundProtoHTTP &&
-		c.OutboundProto != OutboundProtoHTTPS {
-		return fmt.Errorf("outbound proto must be one of [%s, %s, %s]",
-			OutboundProtoNative, OutboundProtoHTTP, OutboundProtoHTTPS)
+	if _, ok := outboundProtos[c.OutboundProto]; !ok {
+		return fmt.Errorf("outbound proto must be one of: %v", AllOutboundProto())
 	}
 	if c.EnableHTTPInbound && c.HTTPInboundPort == 0 {
 		return errors.New("http inbound port should not empty")

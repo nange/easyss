@@ -115,7 +115,7 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 	defer csStream.Close()
 
 	tryReuse := true
-	if !ss.IsNativeOutboundProto() {
+	if !ss.IsNativeOutboundProto() && !ss.IsNativeQuicOutboundProto() {
 		tryReuse = false
 	}
 	n1, n2, err := relay(csStream, localConn, ss.Timeout(), tryReuse)
