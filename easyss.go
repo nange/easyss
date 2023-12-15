@@ -478,8 +478,14 @@ func (ss *Easyss) InitTcpPool() error {
 			RootCAs:    certPool,
 			NextProtos: []string{"http/1.1", "h2", "h3"},
 		}, &quic.Config{
-			MaxIncomingStreams: 65535,
-			KeepAlivePeriod:    15 * time.Second,
+			KeepAlivePeriod:                15 * time.Second,
+			MaxIncomingStreams:             2048,
+			MaxIdleTimeout:                 ss.Timeout(),
+			MaxStreamReceiveWindow:         8388608,
+			MaxConnectionReceiveWindow:     8388608 * 5 / 2,
+			EnableDatagrams:                true,
+			InitialStreamReceiveWindow:     8388608,
+			InitialConnectionReceiveWindow: 8388608 * 5 / 2,
 		})
 		if err != nil {
 			return err

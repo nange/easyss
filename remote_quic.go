@@ -25,8 +25,13 @@ func (es *EasyServer) startQUICServer() {
 	}
 
 	ln, err := tr.Listen(es.tlsConfig.Clone(), &quic.Config{
-		MaxIncomingStreams: 65535,
-		MaxIdleTimeout:     es.Timeout(),
+		MaxIncomingStreams:             2048,
+		MaxIdleTimeout:                 es.Timeout(),
+		MaxStreamReceiveWindow:         8388608,
+		MaxConnectionReceiveWindow:     8388608 * 5 / 2,
+		EnableDatagrams:                true,
+		InitialStreamReceiveWindow:     8388608,
+		InitialConnectionReceiveWindow: 8388608 * 5 / 2,
 	})
 	if err != nil {
 		log.Error("[REMOTE_QUIC] transport listen", "err", err)
