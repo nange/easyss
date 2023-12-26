@@ -186,6 +186,8 @@ type Payload struct {
 	padSize byte
 	rawData []byte
 	pad     []byte
+	// used for reusing bytes when padSize > 0
+	padPayloadBuf []byte
 }
 
 func (p *Payload) PadSize() byte {
@@ -197,7 +199,10 @@ func (p *Payload) FramePayload() []byte {
 		return p.rawData
 	}
 
-	payload := make([]byte, 0, 1+len(p.rawData)+int(p.padSize))
+	if len(p.padPayloadBuf) == 0 {
+		p.padPayloadBuf = bytespool.Get(PaddingSize + MaxPaddingSize + 1)
+	}
+	payload := p.padPayloadBuf[:0]
 	payload = append(payload, p.padSize)
 	payload = append(payload, p.rawData...)
 	payload = append(payload, p.pad...)
@@ -274,6 +279,10 @@ func (f *Frame) Release() {
 	if cap(f.padBuf) > 0 {
 		bytespool.MustPut(f.padBuf)
 		f.padBuf = nil
+	}
+	if f.Payload != nil && cap(f.Payload.padPayloadBuf) > 0 {
+		bytespool.MustPut(f.Payload.padPayloadBuf)
+		f.Payload.padPayloadBuf = nil
 	}
 }
 

@@ -28,21 +28,24 @@ func secretKey(password []byte) *[32]byte {
 }
 
 type AEADCipherImpl struct {
-	aead cipher.AEAD
+	aead  cipher.AEAD
+	nonce []byte
 }
 
 // Encrypt encrypts data using 256-bit AEAD.  This both hides the content of
 // the data and provides a check that it hasn't been altered. Output takes the
 // form nonce|ciphertext|tag where '|' indicates concatenation.
 func (aci *AEADCipherImpl) Encrypt(plaintext []byte) (ciphertext []byte, err error) {
-	nonce := make([]byte, aci.aead.NonceSize())
+	if len(aci.nonce) == 0 {
+		aci.nonce = make([]byte, aci.aead.NonceSize())
+	}
 
-	_, err = io.ReadFull(rand.Reader, nonce)
+	_, err = io.ReadFull(rand.Reader, aci.nonce)
 	if err != nil {
 		return nil, err
 	}
 
-	return aci.aead.Seal(nonce, nonce, plaintext, nil), nil
+	return aci.aead.Seal(aci.nonce, aci.nonce, plaintext, nil), nil
 }
 
 // Decrypt decrypts data using 256-bit AEAD.  This both hides the content of
