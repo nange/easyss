@@ -187,6 +187,7 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 
 在Easyss配置文件中，指定`outbound_proto: http` 或者 `outbound_proto: https`，
 并在Easyss-server配置文件中，指定`enable_http_inbound: true`，即可实现服务器部署在反向代理之后的场景。
+如果`outbound_proto: http`，还需要在Easyss-server配置文件中禁用tls：`disable_tls: true`
 
 ### 启动前或定期执行自定义命令
 同时Easyss还支持配置`cmd_before_startup`, `cmd_interval`参数，用于配置一个自定义命令，在Easyss启动前执行或者定期的执行。
