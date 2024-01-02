@@ -124,10 +124,6 @@ func (es *EasyServer) ListenHTTPTunnelAddr() string {
 	return addr
 }
 
-func (es *EasyServer) DisableUTLS() bool {
-	return es.config.DisableUTLS
-}
-
 func (es *EasyServer) DisableTLS() bool {
 	return es.config.DisableTLS
 }

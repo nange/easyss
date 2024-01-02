@@ -10,7 +10,7 @@ import (
 
 	"github.com/caddyserver/certmagic"
 	"github.com/nange/easyss/v2/cipherstream"
-	httptunnel "github.com/nange/easyss/v2/httptunnel"
+	"github.com/nange/easyss/v2/httptunnel"
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util"
 	"github.com/txthinking/socks5"
@@ -48,16 +48,14 @@ func (es *EasyServer) initTLSConfig() error {
 		}
 	}
 
-	tlsConfig.NextProtos = append([]string{"http/1.1", "h2"}, tlsConfig.NextProtos...)
-	if !es.DisableUTLS() {
-		tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
-			for _, v := range tlsConfig.NextProtos {
-				if cs.NegotiatedProtocol == v {
-					return nil
-				}
+	tlsConfig.NextProtos = append([]string{"http/1.1", "h2", "h3"}, tlsConfig.NextProtos...)
+	tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
+		for _, v := range tlsConfig.NextProtos {
+			if cs.NegotiatedProtocol == v {
+				return nil
 			}
-			return fmt.Errorf("unsupported ALPN:%s", cs.NegotiatedProtocol)
 		}
+		return fmt.Errorf("unsupported ALPN:%s", cs.NegotiatedProtocol)
 	}
 	es.tlsConfig = tlsConfig
 
