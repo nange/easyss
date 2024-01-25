@@ -7,6 +7,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/getlantern/systray"
 	"github.com/nange/easyss/v2"
@@ -60,18 +61,15 @@ func (st *SysTray) AddSelectServerMenu() {
 
 	var subMenuItems []*systray.MenuItem
 	addrs := st.SS().ServerListAddrs()
-	if len(addrs) > 0 {
-		for _, addr := range addrs {
-			item := selectServer.AddSubMenuItemCheckbox(addr, "服务器地址", false)
-			subMenuItems = append(subMenuItems, item)
-			if addr == st.SS().ServerAddr() {
-				item.Check()
-			}
-		}
-	} else {
-		item := selectServer.AddSubMenuItemCheckbox(st.SS().ServerAddr(), "服务器地址", false)
+	if len(addrs) == 0 {
+		addrs = []string{st.SS().ServerAddr()}
+	}
+	for _, addr := range addrs {
+		item := selectServer.AddSubMenuItemCheckbox(addr, "服务器地址", false)
 		subMenuItems = append(subMenuItems, item)
-		item.Check()
+		if addr == st.SS().ServerAddr() {
+			item.Check()
+		}
 	}
 
 	for i, item := range subMenuItems {
@@ -107,28 +105,50 @@ func (st *SysTray) AddSelectServerMenu() {
 
 		}(i, item)
 	}
+
+	// display server ping latency on menu item
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			ch := st.SS().PingLatencyCh()
+			select {
+			case lat := <-ch:
+				for i, subItem := range subMenuItems {
+					if subItem.Checked() {
+						addr := addrs[i]
+						subItem.SetTitle(fmt.Sprintf("%s	%s", addr, lat))
+						break
+					}
+				}
+			case <-ticker.C:
+			case <-st.closing:
+				return
+			}
+		}
+	}()
 }
 
 func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *systray.MenuItem) {
-	proxyMenue := systray.AddMenuItem("代理规则", "请选择")
+	proxyMenu := systray.AddMenuItem("代理规则", "请选择")
 
-	auto := proxyMenue.AddSubMenuItemCheckbox("自动(自定义规则+绕过大陆IP域名)", "自动判断请求是否走代理", false)
+	auto := proxyMenu.AddSubMenuItemCheckbox("自动(自定义规则+绕过大陆IP域名)", "自动判断请求是否走代理", false)
 	if st.SS().ProxyRule() == easyss.ProxyRuleAuto {
 		auto.Check()
 	}
 
-	autoBlock := proxyMenue.AddSubMenuItemCheckbox("自动+屏蔽广告跟踪", "自动判断请求是否走代理或者屏蔽", false)
+	autoBlock := proxyMenu.AddSubMenuItemCheckbox("自动+屏蔽广告跟踪", "自动判断请求是否走代理或者屏蔽", false)
 	if st.SS().ProxyRule() == easyss.ProxyRuleAutoBlock {
 		autoBlock.Check()
 	}
 
-	reverseAuto := proxyMenue.AddSubMenuItemCheckbox("反向自动(国外访问国内)", "适用国外访问国内IP域名", false)
-	proxy := proxyMenue.AddSubMenuItemCheckbox("代理全部(绕过局域网地址)", "代理除局域网地址的所有请求", false)
+	reverseAuto := proxyMenu.AddSubMenuItemCheckbox("反向自动(国外访问国内)", "适用国外访问国内IP域名", false)
+	proxy := proxyMenu.AddSubMenuItemCheckbox("代理全部(绕过局域网地址)", "代理除局域网地址的所有请求", false)
 	if st.SS().ProxyRule() == easyss.ProxyRuleProxy {
 		proxy.Check()
 	}
 
-	direct := proxyMenue.AddSubMenuItemCheckbox("直接连接", "所有请求直接连接，不走代理", false)
+	direct := proxyMenu.AddSubMenuItemCheckbox("直接连接", "所有请求直接连接，不走代理", false)
 	if st.SS().ProxyRule() == easyss.ProxyRuleDirect {
 		direct.Check()
 	}

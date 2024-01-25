@@ -201,6 +201,9 @@ type Easyss struct {
 	// only used for http outbound proto
 	httpOutboundClient *req.Client
 
+	// used for system tray display
+	pingLatCh chan string
+
 	// the mu Mutex to protect below fields
 	mu               *sync.RWMutex
 	tcpPool          easypool.Pool
@@ -218,6 +221,7 @@ func New(config *Config) (*Easyss, error) {
 		stat:           &Statistics{},
 		dnsCache:       freecache.NewCache(DefaultDNSCacheSize),
 		directDNSCache: freecache.NewCache(DefaultDNSCacheSize),
+		pingLatCh:      make(chan string, 1),
 		closing:        make(chan struct{}, 1),
 		mu:             &sync.RWMutex{},
 	}
@@ -588,6 +592,8 @@ func (ss *Easyss) DirectDNSServer() string {
 func (ss *Easyss) ServerList() []ServerConfig {
 	return ss.config.ServerList
 }
+
+func (ss *Easyss) PingLatencyCh() chan string { return ss.pingLatCh }
 
 func (ss *Easyss) ServerListAddrs() []string {
 	var list []string

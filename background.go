@@ -30,6 +30,9 @@ func (ss *Easyss) background() {
 	}
 	ticker2 := time.NewTicker(time.Duration(n) * time.Second)
 	defer ticker2.Stop()
+
+	go ss.pingOnce()
+
 	for {
 		select {
 		case <-ticker.C:
@@ -37,11 +40,7 @@ func (ss *Easyss) background() {
 			receiveSize := ss.stat.BytesReceive.Load() / (1024 * 1024)
 			log.Info("[EASYSS_BACKGROUND]", "send_size(MB)", sendSize, "receive_size(MB)", receiveSize)
 		case <-ticker2.C:
-			since, err := ss.pingTest()
-			if err != nil {
-				continue
-			}
-			log.Info("[EASYSS_BACKGROUND] ping easyss-server", "latency", since.String())
+			go ss.pingOnce()
 		case <-tickerExec.C:
 			go ss.cmdInterval(ss.config.CMDInterval)
 		case <-closing:
@@ -50,7 +49,35 @@ func (ss *Easyss) background() {
 	}
 }
 
-func (ss *Easyss) pingTest() (time.Duration, error) {
+func (ss *Easyss) pingOnce() {
+	var since time.Duration
+	var err error
+	for i := 1; i <= 3; i++ {
+		since, err = ss.pingLatency()
+		if err != nil {
+			time.Sleep(time.Duration(i) * time.Second)
+			continue
+		}
+		break
+	}
+	if err != nil {
+		log.Error("[EASYSS_BACKGROUND] ping", "err", err)
+		select {
+		case ss.pingLatCh <- "error":
+		default:
+		}
+		return
+	}
+
+	since = (since / time.Millisecond) * time.Millisecond
+	select {
+	case ss.pingLatCh <- since.String():
+	default:
+	}
+	log.Info("[EASYSS_BACKGROUND] ping", "latency", since.String())
+}
+
+func (ss *Easyss) pingLatency() (time.Duration, error) {
 	conn, err := ss.AvailableConn(true)
 	if err != nil {
 		log.Error("[EASYSS_BACKGROUND] got available conn for ping test", "err", err)

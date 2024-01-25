@@ -12,7 +12,7 @@ require (
 	github.com/imroc/req/v3 v3.42.3
 	github.com/klauspost/compress v1.17.4
 	github.com/libp2p/go-netroute v0.2.1
-	github.com/miekg/dns v1.1.57
+	github.com/miekg/dns v1.1.58
 	github.com/nange/easypool v1.3.1
 	github.com/oschwald/geoip2-golang v1.9.0
 	github.com/refraction-networking/utls v1.6.1
@@ -76,7 +76,7 @@ require (
 	golang.org/x/sys v0.16.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
-	golang.org/x/tools v0.16.1 // indirect
+	golang.org/x/tools v0.17.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20231022001213-2e0774f246fb // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
