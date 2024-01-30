@@ -10,12 +10,12 @@ require (
 	github.com/go-faker/faker/v4 v4.2.0
 	github.com/gofrs/uuid/v5 v5.0.0
 	github.com/imroc/req/v3 v3.42.3
-	github.com/klauspost/compress v1.17.4
+	github.com/klauspost/compress v1.17.5
 	github.com/libp2p/go-netroute v0.2.1
 	github.com/miekg/dns v1.1.58
 	github.com/nange/easypool v1.3.1
 	github.com/oschwald/geoip2-golang v1.9.0
-	github.com/refraction-networking/utls v1.6.1
+	github.com/refraction-networking/utls v1.6.2
 	github.com/smallnest/ringbuffer v0.0.0-20230728150354-35801fa39d0e
 	github.com/stretchr/testify v1.8.4
 	github.com/txthinking/socks5 v0.0.0-20230325130024-4230056ae301
