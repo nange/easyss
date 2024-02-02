@@ -3,7 +3,7 @@ package cipherstream
 import (
 	"crypto/rand"
 	"encoding/binary"
-	"errors"
+	"fmt"
 	"io"
 	mr "math/rand"
 
@@ -342,11 +342,16 @@ func (fi *FrameIter) Next() *Frame {
 	var pad []byte
 	if fHeader.HasPad() {
 		padSize = payloadPlain[0]
-		pad = payloadPlain[len(payloadPlain)-int(padSize):]
+		padStartIdx := len(payloadPlain) - int(padSize)
+		if padStartIdx < 0 {
+			fi.err = fmt.Errorf("pad start index is negative:%v", padStartIdx)
+			return nil
+		}
+		pad = payloadPlain[padStartIdx:]
 
 		ppLen := len(payloadPlain) - int(padSize) - 1
 		if ppLen < 0 {
-			fi.err = errors.New("payload len is negative")
+			fi.err = fmt.Errorf("payload len is negative:%v", ppLen)
 			return nil
 		}
 		payloadPlain = payloadPlain[1 : ppLen+1]
