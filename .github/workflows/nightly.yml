@@ -57,11 +57,15 @@ jobs:
           zip easyss-with-notray-linux-arm64.zip ./easyss-with-notray
           zip easyss-server-linux-arm64.zip ./easyss-server
 
+      - name: Set outputs
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
       - name: Nightly Release
         uses: softprops/action-gh-release@v1
         with:
-          name: Nightly-${{ github.sha::7 }}
-          tag_name: nightly-${{ github.sha::7 }}
+          name: Nightly-${{ steps.vars.outputs.sha_short }}
+          tag_name: nightly-${{ steps.vars.outputs.sha_short }}
           prerelease: true
           body: For testing and development only
           files: bin/*.zip
@@ -102,11 +106,15 @@ jobs:
           zip easyss-with-notray-darwin-arm64.zip ./easyss-with-notray
           zip easyss-server-darwin-arm64.zip ./easyss-server
 
+      - name: Set outputs
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
       - name: Nightly Release
         uses: softprops/action-gh-release@v1
         with:
-          name: Nightly-${{ github.sha::7 }}
-          tag_name: nightly-${{ github.sha::7 }}
+          name: Nightly-${{ steps.vars.outputs.sha_short }}
+          tag_name: nightly-${{ steps.vars.outputs.sha_short }}
           prerelease: true
           body: For testing and development only
           files: bin/*.zip
