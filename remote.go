@@ -142,12 +142,12 @@ func (es *EasyServer) handleConn(conn net.Conn, tryReuse bool) {
 		switch {
 		case res.frameHeader.IsTCPProto():
 			if err := es.remoteTCPHandle(conn, addrStr, res.method, tryReuse); err != nil {
-				log.Info("[REMOTE] tcp handle", "err", err)
+				log.Warn("[REMOTE] tcp handle", "err", err)
 				return
 			}
 		case res.frameHeader.IsUDPProto():
 			if err := es.remoteUDPHandle(conn, addrStr, res.method, res.frameHeader.IsDNSProto(), tryReuse); err != nil {
-				log.Info("[REMOTE] udp handle", "err", err)
+				log.Warn("[REMOTE] udp handle", "err", err)
 				return
 			}
 		default:
