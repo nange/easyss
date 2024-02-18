@@ -5,7 +5,7 @@
         },
         "profiles": {
             "server": {
-                "expiry": "8760h",
+                "expiry": "876000h",
                 "usages": [
                     "signing",
                     "key encipherment",
@@ -13,7 +13,7 @@
                 ]
             },
             "client": {
-                "expiry": "8760h",
+                "expiry": "876000h",
                 "usages": [
                     "signing",
                     "key encipherment",
