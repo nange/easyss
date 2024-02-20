@@ -101,23 +101,15 @@ func (h *httpProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *httpProxy) doWithHijack(w http.ResponseWriter, r *http.Request) {
-	hij, ok := w.(http.Hijacker)
-	if !ok {
-		log.Error("[HTTP_PROXY] Connect: hijacking not supported")
-		if r.Body != nil {
-			defer r.Body.Close()
-		}
-		http.Error(w, "Connect: hijacking not supported", http.StatusInternalServerError)
-		return
-	}
-
-	hijConn, _, err := hij.Hijack()
+	rc := http.NewResponseController(w)
+	hijConn, _, err := rc.Hijack()
 	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		log.Error("[HTTP_PROXY] get hijack conn", "err", err)
 		return
 	}
-
 	defer hijConn.Close()
+
 	if _, err := hijConn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n")); err != nil {
 		log.Error("[HTTP_PROXY] write hijack ok", "err", err)
 		return
