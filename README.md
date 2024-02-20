@@ -26,7 +26,7 @@ Easyss是一款兼容socks5的安全代理上网工具，目标是使访问国�
 
 [去下载](https://github.com/nange/easyss/releases)
 
-### 或者 通过源码安装(go version 1.21+ is required)
+### 或者 通过源码安装(go version 1.22+ is required)
 
 ```sh
 // Ubuntu20.04 or Debian11 
