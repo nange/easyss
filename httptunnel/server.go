@@ -87,8 +87,8 @@ func (s *Server) Accept() (net.Conn, error) {
 }
 
 func (s *Server) handler() {
-	http.Handle("/pull", gzhttp.GzipHandler(http.HandlerFunc(s.pull)))
-	http.Handle("/push", gzhttp.GzipHandler(http.HandlerFunc(s.push)))
+	http.Handle("GET /pull", gzhttp.GzipHandler(http.HandlerFunc(s.pull)))
+	http.Handle("POST /push", gzhttp.GzipHandler(http.HandlerFunc(s.push)))
 }
 
 // pullWait wait push request to arrive
@@ -113,11 +113,6 @@ func (s *Server) pullWait(reqID string) error {
 }
 
 func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeNotFoundError(w)
-		return
-	}
-
 	reqID := r.Header.Get(RequestIDHeader)
 	if err := s.pullWait(reqID); err != nil {
 		log.Warn("[HTTP_TUNNEL_SERVER] pull uuid not found", "uuid", reqID)
@@ -182,11 +177,6 @@ func (s *Server) notifyPull(reqID string) {
 }
 
 func (s *Server) push(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeNotFoundError(w)
-		return
-	}
-
 	reqID := r.Header.Get(RequestIDHeader)
 	if reqID == "" {
 		log.Warn("[HTTP_TUNNEL_SERVER] push uuid is empty")
