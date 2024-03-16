@@ -75,11 +75,15 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		rewrittenDst = DefaultDNSServer
 	}
 
-	dstHost, _, _ := net.SplitHostPort(rewrittenDst)
+	dstHost, port, _ := net.SplitHostPort(rewrittenDst)
 	if ss.MatchHostRule(dstHost) == HostRuleDirect {
 		return ss.directUDPRelay(s, addr, d, isDNSReq)
 	}
 
+	if port == "443" && ss.DisableQUIC() { // disable quic proto
+		log.Debug("[UDP_PROXY] quic is disabled", "dst", rewrittenDst)
+		return errors.New("quic is disabled")
+	}
 	if !ss.disableValidateAddr {
 		if err := ss.validateAddr(rewrittenDst); err != nil {
 			log.Warn("[UDP_PROXY] validate", "dst", dst, "err", err)

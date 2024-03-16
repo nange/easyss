@@ -116,6 +116,7 @@ type Config struct {
 	DisableSysProxy   bool           `json:"disable_sys_proxy"`
 	DisableIPV6       bool           `json:"disable_ipv6"`
 	DisableTLS        bool           `json:"disable_tls"`
+	DisableQUIC       bool           `json:"disable_quic"`
 	EnableForwardDNS  bool           `json:"enable_forward_dns"`
 	EnableTun2socks   bool           `json:"enable_tun2socks"`
 	TunConfig         *TunConfig     `json:"tun_config"`

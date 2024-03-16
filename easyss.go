@@ -691,6 +691,8 @@ func (ss *Easyss) DisableIPV6() bool {
 	return ss.config.DisableIPV6
 }
 
+func (ss *Easyss) DisableQUIC() bool { return ss.config.DisableQUIC }
+
 func (ss *Easyss) EnableForwardDNS() bool {
 	return ss.config.EnableForwardDNS
 }
