@@ -81,7 +81,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	}
 
 	if port == "443" && ss.DisableQUIC() { // disable quic proto
-		log.Debug("[UDP_PROXY] quic is disabled", "dst", rewrittenDst)
+		log.Info("[UDP_PROXY] quic is disabled", "dst", rewrittenDst)
 		return errors.New("quic is disabled")
 	}
 	if !ss.disableValidateAddr {
