@@ -329,15 +329,28 @@ func (c *Config) OverrideFrom(sc *ServerConfig) {
 		c.Server = sc.Server
 		c.ServerPort = sc.ServerPort
 		c.Password = sc.Password
+
 		if sc.Timeout != 0 {
 			c.Timeout = sc.Timeout
 		}
-		c.DisableTLS = sc.DisableTLS
-		c.CAPath = sc.CAPath
-		c.OutboundProto = sc.OutboundProto
-		c.CMDInterval = sc.CMDInterval
-		c.CMDBeforeStartup = sc.CMDBeforeStartup
-		c.CMDIntervalTime = sc.CMDIntervalTime
+		if c.DisableTLS {
+			c.DisableTLS = sc.DisableTLS
+		}
+		if c.CAPath != "" {
+			c.CAPath = sc.CAPath
+		}
+		if c.OutboundProto != "" {
+			c.OutboundProto = sc.OutboundProto
+		}
+		if c.CMDInterval != "" {
+			c.CMDInterval = sc.CMDInterval
+		}
+		if c.CMDBeforeStartup != "" {
+			c.CMDBeforeStartup = sc.CMDBeforeStartup
+		}
+		if c.CMDIntervalTime != 0 {
+			c.CMDIntervalTime = sc.CMDIntervalTime
+		}
 	}
 }
 
