@@ -333,22 +333,22 @@ func (c *Config) OverrideFrom(sc *ServerConfig) {
 		if sc.Timeout != 0 {
 			c.Timeout = sc.Timeout
 		}
-		if c.DisableTLS {
+		if sc.DisableTLS {
 			c.DisableTLS = sc.DisableTLS
 		}
-		if c.CAPath != "" {
+		if sc.CAPath != "" {
 			c.CAPath = sc.CAPath
 		}
-		if c.OutboundProto != "" {
+		if sc.OutboundProto != "" {
 			c.OutboundProto = sc.OutboundProto
 		}
-		if c.CMDInterval != "" {
+		if sc.CMDInterval != "" {
 			c.CMDInterval = sc.CMDInterval
 		}
-		if c.CMDBeforeStartup != "" {
+		if sc.CMDBeforeStartup != "" {
 			c.CMDBeforeStartup = sc.CMDBeforeStartup
 		}
-		if c.CMDIntervalTime != 0 {
+		if sc.CMDIntervalTime != 0 {
 			c.CMDIntervalTime = sc.CMDIntervalTime
 		}
 	}
