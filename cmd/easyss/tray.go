@@ -309,9 +309,19 @@ func (st *SysTray) catLog() error {
 		win = fmt.Sprintf(win, st.ss.LogFilePath())
 	}
 
+	var linuxCmd []string
+	if runtime.GOOS == "linux" {
+		switch {
+		case util.SysSupportXTerminalEmulator():
+			linuxCmd = []string{"x-terminal-emulator", "-e", "tail", "-50f", st.ss.LogFilePath()}
+		case util.SysSupportGnomeTerminal():
+			linuxCmd = []string{"gnome-terminal", "--hide-menubar", "--geometry", "800*600", "--title", "View Easyss Logs", "--", "tail", "-50f", st.ss.LogFilePath()}
+		}
+	}
+
 	cmdMap := map[string][]string{
 		"windows": {"powershell", "-Command", "Start-Process", win},
-		"linux":   {"x-terminal-emulator", "-e", "tail", "-50f", st.ss.LogFilePath()},
+		"linux":   linuxCmd,
 		"darwin":  {"open", "-a", "Console", st.ss.LogFilePath()},
 	}
 	_, err := util.Command(cmdMap[runtime.GOOS][0], cmdMap[runtime.GOOS][1:]...)

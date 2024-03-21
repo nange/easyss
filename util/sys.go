@@ -9,7 +9,19 @@ import (
 )
 
 func SysSupportPowershell() bool {
-	lp, err := exec.LookPath("powershell")
+	return SysSupport("powershell")
+}
+
+func SysSupportXTerminalEmulator() bool {
+	return SysSupport("x-terminal-emulator")
+}
+
+func SysSupportGnomeTerminal() bool {
+	return SysSupport("gnome-terminal")
+}
+
+func SysSupport(bin string) bool {
+	lp, err := exec.LookPath(bin)
 	if lp != "" && err == nil {
 		return true
 	}
