@@ -485,7 +485,10 @@ func (ss *Easyss) loadCustomCertPool() (*x509.CertPool, error) {
 		return nil, err
 	}
 
-	certPool := x509.NewCertPool()
+	certPool, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, err
+	}
 	if ok := certPool.AppendCertsFromPEM([]byte(caString)); !ok {
 		return certPool, errors.New("append certs from pem failed")
 	}
