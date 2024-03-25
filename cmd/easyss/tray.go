@@ -303,24 +303,35 @@ func (st *SysTray) AddExitMenu() *systray.MenuItem {
 }
 
 func (st *SysTray) catLog() error {
-	// Ref: https://learn.microsoft.com/zh-cn/powershell/module/microsoft.powershell.management/start-process?view=powershell-7.3
-	win := `-FilePath powershell  -ArgumentList "-Command", "Get-Content", "-Wait", "-Tail 100", "%s"`
-	if runtime.GOOS == "windows" && util.SysSupportPowershell() {
-		win = fmt.Sprintf(win, st.ss.LogFilePath())
-	}
-
 	var linuxCmd []string
+	var winCmd string
+
 	if runtime.GOOS == "linux" {
+		title := "View Easyss Logs"
 		switch {
 		case util.SysSupportXTerminalEmulator():
 			linuxCmd = []string{"x-terminal-emulator", "-e", "tail", "-50f", st.ss.LogFilePath()}
 		case util.SysSupportGnomeTerminal():
-			linuxCmd = []string{"gnome-terminal", "--hide-menubar", "--geometry", "800*600", "--title", "View Easyss Logs", "--", "tail", "-50f", st.ss.LogFilePath()}
+			linuxCmd = []string{"gnome-terminal", "--hide-menubar", "--title", title, "--", "tail", "-50f", st.ss.LogFilePath()}
+		case util.SysSupportMateTerminal():
+			linuxCmd = []string{"gnome-terminal", "--hide-menubar", "--title", title, "--", "tail", "-50f", st.ss.LogFilePath()}
+		case util.SysSupportKonsole():
+			linuxCmd = []string{"konsole", "--hide-menubar", "-e", "tail", "-50f", st.ss.LogFilePath()}
+		case util.SysSupportXfce4Terminal():
+			linuxCmd = []string{"xfce4-terminal", "--hide-menubar", "--hide-toolbar", "--title", title, "--command", fmt.Sprintf("tail -50f %s", st.ss.LogFilePath())}
+		case util.SysSupportLxterminal():
+			linuxCmd = []string{"lxterminal", "--title", title, "--command", fmt.Sprintf("tail -50f %s", st.ss.LogFilePath())}
+		case util.SysSupportTerminator():
+			linuxCmd = []string{"terminator", "--title", title, "--command", fmt.Sprintf("tail -50f %s", st.ss.LogFilePath())}
 		}
+	} else if runtime.GOOS == "windows" {
+		// Ref: https://learn.microsoft.com/zh-cn/powershell/module/microsoft.powershell.management/start-process?view=powershell-7.3
+		win := `-FilePath powershell  -ArgumentList "-Command", "Get-Content", "-Wait", "-Tail 100", "%s"`
+		winCmd = fmt.Sprintf(win, st.ss.LogFilePath())
 	}
 
 	cmdMap := map[string][]string{
-		"windows": {"powershell", "-Command", "Start-Process", win},
+		"windows": {"powershell", "-Command", "Start-Process", winCmd},
 		"linux":   linuxCmd,
 		"darwin":  {"open", "-a", "Console", st.ss.LogFilePath()},
 	}
