@@ -34,7 +34,9 @@ jobs:
       - name: Build Android
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: make easyss-android
+        run: |
+          make easyss-android-arm64
+          make easyss-android-amd64
 
       - name: Pack
         run: |
@@ -44,8 +46,10 @@ jobs:
           zip easyss-with-notray-linux-amd64.zip ./easyss-with-notray
           zip easyss-server-linux-amd64.zip ./easyss-server
           zip easyss-server-windows-amd64.zip ./easyss-server.exe
-          mv easyss-android libeasyss.so
-          zip libeasyss.so.zip ./libeasyss.so
+          mv easyss-android-arm64 libeasyss-arm64.so
+          mv easyss-android-amd64 libeasyss-amd64.so
+          zip libeasyss-arm64.so.zip ./libeasyss-arm64.so
+          zip libeasyss-amd64.so.zip ./libeasyss-amd64.so
 
       - name: Build Arm64
         run: |
