@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	_ "embed"
 	"errors"
@@ -540,15 +541,16 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 		})
 
 	if ss.IsHTTPSOutboundProto() {
-		cert, err := ss.loadCustomCertString()
+		certPool, err := ss.loadCustomCertPool()
 		if err != nil {
-			log.Error("[EASYSS] load custom cert string", "err", err)
+			log.Error("[EASYSS] load custom cert pool", "err", err)
 			return err
 		}
-		if cert != "" {
-			log.Info("set root cert from string", "cert", cert)
-			client.SetRootCertFromString(cert)
-		}
+		client.SetTLSClientConfig(&tls.Config{
+			ServerName: ss.Server(),
+			RootCAs:    certPool,
+			NextProtos: []string{"h2", "http/1.1"},
+		})
 		client.SetTLSFingerprintChrome()
 	}
 
