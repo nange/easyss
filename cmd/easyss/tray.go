@@ -83,15 +83,14 @@ func (st *SysTray) AddSelectServerMenu() {
 							return
 						}
 						log.Info("[SYSTRAY] changing server to", "addr", addrs[_i])
-						for _, v := range subMenuItems {
+						servers := st.SS().ServerList()
+						for ii, v := range subMenuItems {
 							v.Uncheck()
+							servers[ii].Default = false
 						}
 
-						config := st.SS().ConfigClone()
-						sc := st.SS().ServerList()[_i]
-						config.OverrideFrom(&sc)
-						config.SetDefaultValue()
-						if err := st.RestartService(config); err != nil {
+						servers[_i].Default = true
+						if err := st.RestartService(st.SS().Config()); err != nil {
 							log.Error("[SYSTRAY] changing server to", "addr", addrs[_i], "err", err)
 						} else {
 							_item.Check()

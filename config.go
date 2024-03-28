@@ -100,35 +100,35 @@ type ServerConfig struct {
 }
 
 type Config struct {
-	ServerList        []ServerConfig `json:"server_list,omitempty"`
-	Server            string         `json:"server"`
-	ServerPort        int            `json:"server_port"`
-	LocalPort         int            `json:"local_port"`
-	HTTPPort          int            `json:"http_port"`
-	Password          string         `json:"password"`
-	Method            string         `json:"method"` // encryption method
-	LogLevel          string         `json:"log_level"`
-	LogFilePath       string         `json:"log_file_path"`
-	Timeout           int            `json:"timeout"`
-	AuthUsername      string         `json:"auth_username"`
-	AuthPassword      string         `json:"auth_password"`
-	BindALL           bool           `json:"bind_all"`
-	DisableSysProxy   bool           `json:"disable_sys_proxy"`
-	DisableIPV6       bool           `json:"disable_ipv6"`
-	DisableTLS        bool           `json:"disable_tls"`
-	DisableQUIC       bool           `json:"disable_quic"`
-	EnableForwardDNS  bool           `json:"enable_forward_dns"`
-	EnableTun2socks   bool           `json:"enable_tun2socks"`
-	TunConfig         *TunConfig     `json:"tun_config"`
-	DirectIPsFile     string         `json:"direct_ips_file"`
-	DirectDomainsFile string         `json:"direct_domains_file"`
-	ProxyRule         string         `json:"proxy_rule"`
-	CAPath            string         `json:"ca_path"`
-	OutboundProto     string         `json:"outbound_proto"`
-	CMDBeforeStartup  string         `json:"cmd_before_startup"`
-	CMDInterval       string         `json:"cmd_interval"`
-	CMDIntervalTime   int            `json:"cmd_interval_time"`
-	ConfigFile        string         `json:"-"`
+	ServerList        []*ServerConfig `json:"server_list,omitempty"`
+	Server            string          `json:"server"`
+	ServerPort        int             `json:"server_port"`
+	LocalPort         int             `json:"local_port"`
+	HTTPPort          int             `json:"http_port"`
+	Password          string          `json:"password"`
+	Method            string          `json:"method"` // encryption method
+	LogLevel          string          `json:"log_level"`
+	LogFilePath       string          `json:"log_file_path"`
+	Timeout           int             `json:"timeout"`
+	AuthUsername      string          `json:"auth_username"`
+	AuthPassword      string          `json:"auth_password"`
+	BindALL           bool            `json:"bind_all"`
+	DisableSysProxy   bool            `json:"disable_sys_proxy"`
+	DisableIPV6       bool            `json:"disable_ipv6"`
+	DisableTLS        bool            `json:"disable_tls"`
+	DisableQUIC       bool            `json:"disable_quic"`
+	EnableForwardDNS  bool            `json:"enable_forward_dns"`
+	EnableTun2socks   bool            `json:"enable_tun2socks"`
+	TunConfig         *TunConfig      `json:"tun_config"`
+	DirectIPsFile     string          `json:"direct_ips_file"`
+	DirectDomainsFile string          `json:"direct_domains_file"`
+	ProxyRule         string          `json:"proxy_rule"`
+	CAPath            string          `json:"ca_path"`
+	OutboundProto     string          `json:"outbound_proto"`
+	CMDBeforeStartup  string          `json:"cmd_before_startup"`
+	CMDInterval       string          `json:"cmd_interval"`
+	CMDIntervalTime   int             `json:"cmd_interval_time"`
+	ConfigFile        string          `json:"-"`
 }
 
 type TunConfig struct {
@@ -268,12 +268,6 @@ func OverrideConfig[T any](dst, src *T) {
 }
 
 func (c *Config) SetDefaultValue() {
-	// if server is empty, try to use the first item in server list instead
-	if c.Server == "" && len(c.ServerList) > 0 {
-		sc := c.DefaultServerConfigFrom(c.ServerList)
-		c.OverrideFrom(sc)
-	}
-
 	if c.LocalPort == 0 {
 		c.LocalPort = 2080
 	}
@@ -354,20 +348,20 @@ func (c *Config) OverrideFrom(sc *ServerConfig) {
 	}
 }
 
-func (c *Config) DefaultServerConfigFrom(list []ServerConfig) *ServerConfig {
+func (c *Config) DefaultServerConfigFrom(list []*ServerConfig) *ServerConfig {
 	if len(list) == 0 {
 		return nil
 	}
 	if len(list) == 1 {
-		return &list[0]
+		return list[0]
 	}
 	for _, v := range list {
 		if v.Default {
-			return &v
+			return v
 		}
 	}
 
-	return &list[0]
+	return list[0]
 }
 
 func (c *ServerConfig) SetDefaultValue() {

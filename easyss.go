@@ -175,6 +175,7 @@ const (
 
 type Easyss struct {
 	config          *Config
+	currConfig      *Config
 	serverIP        string
 	stat            *Statistics
 	localGw         string
@@ -217,8 +218,15 @@ type Easyss struct {
 }
 
 func New(config *Config) (*Easyss, error) {
+	currConfig := config.Clone()
+	// if server is empty, try to use the first item in server list instead
+	if currConfig.Server == "" && len(currConfig.ServerList) > 0 {
+		sc := currConfig.DefaultServerConfigFrom(currConfig.ServerList)
+		currConfig.OverrideFrom(sc)
+	}
 	ss := &Easyss{
 		config:         config,
+		currConfig:     currConfig,
 		stat:           &Statistics{},
 		dnsCache:       freecache.NewCache(DefaultDNSCacheSize),
 		directDNSCache: freecache.NewCache(DefaultDNSCacheSize),
@@ -226,9 +234,9 @@ func New(config *Config) (*Easyss, error) {
 		closing:        make(chan struct{}, 1),
 		mu:             &sync.RWMutex{},
 	}
-	proxyRule := ParseProxyRuleFromString(config.ProxyRule)
+	proxyRule := ParseProxyRuleFromString(currConfig.ProxyRule)
 	if proxyRule == ProxyRuleUnknown {
-		panic("unknown proxy rule:" + config.ProxyRule)
+		panic("unknown proxy rule:" + currConfig.ProxyRule)
 	}
 	ss.proxyRule = proxyRule
 
@@ -305,7 +313,7 @@ func (ss *Easyss) loadCustomIPDomains() error {
 		ss.customDirectIPs = directIPs
 	}
 
-	directDomains, err := util.ReadFileLinesMap(ss.config.DirectDomainsFile)
+	directDomains, err := util.ReadFileLinesMap(ss.currConfig.DirectDomainsFile)
 	if err != nil {
 		return err
 	}
@@ -558,43 +566,43 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 	return nil
 }
 
-func (ss *Easyss) ConfigClone() *Config {
-	return ss.config.Clone()
+func (ss *Easyss) Config() *Config {
+	return ss.config
 }
 
 func (ss *Easyss) LocalPort() int {
-	return ss.config.LocalPort
+	return ss.currConfig.LocalPort
 }
 
 func (ss *Easyss) LocalHTTPPort() int {
-	return ss.config.HTTPPort
+	return ss.currConfig.HTTPPort
 }
 
 func (ss *Easyss) LocalPacPort() int {
-	return ss.config.LocalPort + 1001
+	return ss.currConfig.LocalPort + 1001
 }
 
 func (ss *Easyss) ServerPort() int {
-	return ss.config.ServerPort
+	return ss.currConfig.ServerPort
 }
 
 func (ss *Easyss) Password() string {
-	return ss.config.Password
+	return ss.currConfig.Password
 }
 
 func (ss *Easyss) Method() string {
-	return ss.config.Method
+	return ss.currConfig.Method
 }
 
 func (ss *Easyss) Server() string {
-	return ss.config.Server
+	return ss.currConfig.Server
 }
 
 func (ss *Easyss) DirectDNSServer() string {
 	return ss.directDNSServer
 }
 
-func (ss *Easyss) ServerList() []ServerConfig {
+func (ss *Easyss) ServerList() []*ServerConfig {
 	return ss.config.ServerList
 }
 
@@ -633,7 +641,7 @@ func (ss *Easyss) LocalDeviceIndex() int {
 }
 
 func (ss *Easyss) Timeout() time.Duration {
-	return time.Duration(ss.config.Timeout) * time.Second
+	return time.Duration(ss.currConfig.Timeout) * time.Second
 }
 
 func (ss *Easyss) PingTimeout() time.Duration {
@@ -661,11 +669,11 @@ func (ss *Easyss) ReadDeadlineTimeout() time.Duration {
 }
 
 func (ss *Easyss) AuthUsername() string {
-	return ss.config.AuthUsername
+	return ss.currConfig.AuthUsername
 }
 
 func (ss *Easyss) AuthPassword() string {
-	return ss.config.AuthPassword
+	return ss.currConfig.AuthPassword
 }
 
 func (ss *Easyss) LocalAddr() string {
@@ -677,33 +685,33 @@ func (ss *Easyss) LocalHttpAddr() string {
 }
 
 func (ss *Easyss) BindAll() bool {
-	return ss.config.BindALL
+	return ss.currConfig.BindALL
 }
 
 func (ss *Easyss) LogFilePath() string {
-	return ss.config.GetLogFilePath()
+	return ss.currConfig.GetLogFilePath()
 }
 
 func (ss *Easyss) DisableTLS() bool {
-	return ss.config.DisableTLS
+	return ss.currConfig.DisableTLS
 }
 
 func (ss *Easyss) DisableSysProxy() bool {
-	return ss.config.DisableSysProxy
+	return ss.currConfig.DisableSysProxy
 }
 
 func (ss *Easyss) DisableIPV6() bool {
-	return ss.config.DisableIPV6
+	return ss.currConfig.DisableIPV6
 }
 
-func (ss *Easyss) DisableQUIC() bool { return ss.config.DisableQUIC }
+func (ss *Easyss) DisableQUIC() bool { return ss.currConfig.DisableQUIC }
 
 func (ss *Easyss) EnableForwardDNS() bool {
-	return ss.config.EnableForwardDNS
+	return ss.currConfig.EnableForwardDNS
 }
 
 func (ss *Easyss) CAPath() string {
-	return ss.config.CAPath
+	return ss.currConfig.CAPath
 }
 
 func (ss *Easyss) HTTPOutboundClient() *req.Client {
@@ -711,26 +719,26 @@ func (ss *Easyss) HTTPOutboundClient() *req.Client {
 }
 
 func (ss *Easyss) OutboundProto() string {
-	return ss.config.OutboundProto
+	return ss.currConfig.OutboundProto
 }
 
 func (ss *Easyss) IsNativeOutboundProto() bool {
-	return ss.config.OutboundProto == OutboundProtoNative
+	return ss.currConfig.OutboundProto == OutboundProtoNative
 }
 
 func (ss *Easyss) IsHTTPOutboundProto() bool {
-	return ss.config.OutboundProto == OutboundProtoHTTP
+	return ss.currConfig.OutboundProto == OutboundProtoHTTP
 }
 
 func (ss *Easyss) IsHTTPSOutboundProto() bool {
-	return ss.config.OutboundProto == OutboundProtoHTTPS
+	return ss.currConfig.OutboundProto == OutboundProtoHTTPS
 }
 
 func (ss *Easyss) ConfigFilename() string {
-	if ss.config.ConfigFile == "" {
+	if ss.currConfig.ConfigFile == "" {
 		return ""
 	}
-	return filepath.Base(ss.config.ConfigFile)
+	return filepath.Base(ss.currConfig.ConfigFile)
 }
 
 func (ss *Easyss) Pool() easypool.Pool {
@@ -830,11 +838,11 @@ func (ss *Easyss) SetTun2socks(enable bool) {
 }
 
 func (ss *Easyss) EnabledTun2socksFromConfig() bool {
-	return ss.config.EnableTun2socks
+	return ss.currConfig.EnableTun2socks
 }
 
 func (ss *Easyss) TunConfig() *TunConfig {
-	return ss.config.TunConfig
+	return ss.currConfig.TunConfig
 }
 
 func (ss *Easyss) ProxyRule() ProxyRule {
