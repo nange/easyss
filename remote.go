@@ -86,7 +86,7 @@ func (es *EasyServer) startTCPServer() {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			log.Error("[REMOTE] accept:", err)
+			log.Error("[REMOTE] accept:", "err", err)
 			break
 		}
 		log.Info("[REMOTE] a new connection(ip) is accepted", "addr", conn.RemoteAddr())
@@ -106,7 +106,7 @@ func (es *EasyServer) startHTTPTunnelServer() {
 	for {
 		conn, err := server.Accept()
 		if err != nil {
-			log.Error("[REMOTE] http tunnel server accept:", err)
+			log.Error("[REMOTE] http tunnel server accept:", "err", err)
 			break
 		}
 		log.Info("[REMOTE] a http tunnel connection is accepted", "remote_addr", conn.RemoteAddr().String())
