@@ -16,6 +16,7 @@ require (
 	github.com/nange/easypool v1.3.1
 	github.com/oschwald/geoip2-golang v1.9.0
 	github.com/refraction-networking/utls v1.6.3
+	github.com/samber/slog-formatter v1.0.0
 	github.com/smallnest/ringbuffer v0.0.0-20230728150354-35801fa39d0e
 	github.com/stretchr/testify v1.9.0
 	github.com/txthinking/socks5 v0.0.0-20230325130024-4230056ae301
@@ -64,6 +65,8 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/quic-go/qpack v0.4.0 // indirect
 	github.com/quic-go/quic-go v0.41.0 // indirect
+	github.com/samber/lo v1.38.1 // indirect
+	github.com/samber/slog-multi v1.0.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/txthinking/runnergroup v0.0.0-20210608031112-152c7c4432bf // indirect
 	github.com/zeebo/blake3 v0.2.3 // indirect

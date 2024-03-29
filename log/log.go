@@ -4,7 +4,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"time"
 
+	slogformatter "github.com/samber/slog-formatter"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -35,21 +37,31 @@ func Error(msg string, args ...any) {
 }
 
 func DefaultHandler() slog.Handler {
-	return slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	})
+	cn, _ := time.LoadLocation("Asia/Shanghai")
+	return slogformatter.NewFormatterHandler(slogformatter.TimeFormatter(time.DateTime, cn))(
+		slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level: slog.LevelInfo,
+		}),
+	)
 }
 
 func JSONHandler(w io.Writer, level slog.Level) slog.Handler {
-	return slog.NewJSONHandler(w, &slog.HandlerOptions{
-		Level: level,
-	})
+	cn, _ := time.LoadLocation("Asia/Shanghai")
+	return slogformatter.NewFormatterHandler(slogformatter.TimeFormatter(time.DateTime, cn))(
+		slog.NewJSONHandler(w, &slog.HandlerOptions{
+			Level: level,
+		}),
+	)
+
 }
 
 func TextHandler(w io.Writer, level slog.Level) slog.Handler {
-	return slog.NewTextHandler(w, &slog.HandlerOptions{
-		Level: level,
-	})
+	cn, _ := time.LoadLocation("Asia/Shanghai")
+	return slogformatter.NewFormatterHandler(slogformatter.TimeFormatter(time.DateTime, cn))(
+		slog.NewTextHandler(w, &slog.HandlerOptions{
+			Level: level,
+		}),
+	)
 }
 
 func FileWriter(outputFile string) io.WriteCloser {
@@ -73,12 +85,5 @@ func Init(outputFile, level string) {
 		l = slog.LevelError
 	}
 
-	var handler slog.Handler
-	if outputFile == "" {
-		handler = TextHandler(os.Stdout, l)
-	} else {
-		handler = JSONHandler(FileWriter(outputFile), l)
-	}
-
-	SetLogger(slog.New(handler))
+	SetLogger(slog.New(TextHandler(FileWriter(outputFile), l)))
 }

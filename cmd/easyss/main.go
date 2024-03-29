@@ -58,19 +58,19 @@ func main() {
 
 	exists, err := util.FileExists(cmdConfig.ConfigFile)
 	if !exists || err != nil {
-		log.Debug("[EASYSS-MAIN] config file", "err", err)
+		log.Debug("[EASYSS_MAIN] config file", "err", err)
 
 		binDir := util.CurrentDir()
 		cmdConfig.ConfigFile = path.Join(binDir, "config.json")
 
-		log.Debug("[EASYSS-MAIN] config file not found, try config file", "file", cmdConfig.ConfigFile)
+		log.Debug("[EASYSS_MAIN] config file not found, try config file", "file", cmdConfig.ConfigFile)
 	}
 
 	config, err := easyss.ParseConfig[easyss.Config](cmdConfig.ConfigFile)
 	if err != nil {
 		config = &cmdConfig
 		if !os.IsNotExist(err) {
-			log.Error("[EASYSS-MAIN] reading", "file", cmdConfig.ConfigFile, "err", err)
+			log.Error("[EASYSS_MAIN] reading", "file", cmdConfig.ConfigFile, "err", err)
 			os.Exit(1)
 		}
 	} else {
@@ -79,22 +79,22 @@ func main() {
 	config.SetDefaultValue()
 
 	if err := config.Validate(); err != nil {
-		log.Error("[EASYSS-MAIN] config is invalid", "err", err)
+		log.Error("[EASYSS_MAIN] config is invalid", "err", err)
 		os.Exit(1)
 	}
 
-	log.Info("[EASYSS-MAIN] set the log-level to", "level", config.LogLevel)
+	log.Info("[EASYSS_MAIN] set the log-level to", "level", config.LogLevel)
 	log.Init(config.GetLogFilePath(), config.LogLevel)
 
 	if enablePprof {
 		go pprof.StartPprof()
 	}
 
-	log.Info(version.String())
+	log.Info("[EASYSS_MAIN] " + version.String())
 
 	ss, err := easyss.New(config)
 	if err != nil {
-		log.Error("[EASYSS-MAIN] init easyss", "err", err)
+		log.Error("[EASYSS_MAIN] init easyss", "err", err)
 	}
 	Start(ss)
 }
