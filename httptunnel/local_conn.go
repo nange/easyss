@@ -21,6 +21,7 @@ import (
 
 const (
 	RequestIDHeader = "X-Request-UID"
+	RequestIDQuery  = "request_uid"
 )
 
 type LocalConn struct {
@@ -127,7 +128,7 @@ func (l *LocalConn) pull() error {
 		SetQueryParam("account_id", p.AccountID).
 		SetQueryParam("transaction_id", p.TransactionID).
 		SetQueryParam("access_token", p.AccessToken).
-		SetHeader(RequestIDHeader, l.uuid).
+		SetQueryParam(RequestIDQuery, l.uuid).
 		SetHeader("Accept-Encoding", "gzip").
 		Get(l.serverAddr + "/pull")
 	if err != nil {
@@ -146,9 +147,9 @@ func (l *LocalConn) push() error {
 	resp, err := l.client.R().
 		SetHeader("Content-Type", "application/json").
 		SetHeader("Transfer-Encoding", "chunked").
-		SetHeader(RequestIDHeader, l.uuid).
 		SetHeader("Accept-Encoding", "gzip").
 		SetHeader("Content-Encoding", "gzip").
+		SetQueryParam(RequestIDQuery, l.uuid).
 		SetBody(l).
 		Post(l.serverAddr + "/push")
 	if err != nil {

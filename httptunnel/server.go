@@ -113,7 +113,16 @@ func (s *Server) pullWait(reqID string) error {
 }
 
 func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
-	reqID := r.Header.Get(RequestIDHeader)
+	reqID := r.URL.Query().Get(RequestIDQuery)
+	if reqID == "" {
+		// compatible with old versions
+		reqID = r.Header.Get(RequestIDHeader)
+	}
+	if reqID == "" {
+		log.Warn("[HTTP_TUNNEL_SERVER] pull uuid is empty")
+		writeNotFoundError(w)
+		return
+	}
 	if err := s.pullWait(reqID); err != nil {
 		log.Warn("[HTTP_TUNNEL_SERVER] pull uuid not found", "uuid", reqID)
 		writeNotFoundError(w)
@@ -128,7 +137,6 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Transfer-Encoding", "chunked")
 	w.Header().Set("Content-Encoding", "gzip")
-	w.Header().Set(RequestIDHeader, reqID)
 
 	buf := bytespool.Get(RelayBufferSize)
 	defer bytespool.MustPut(buf)
@@ -177,7 +185,11 @@ func (s *Server) notifyPull(reqID string) {
 }
 
 func (s *Server) push(w http.ResponseWriter, r *http.Request) {
-	reqID := r.Header.Get(RequestIDHeader)
+	reqID := r.URL.Query().Get(RequestIDQuery)
+	if reqID == "" {
+		// compatible with old versions
+		reqID = r.Header.Get(RequestIDHeader)
+	}
 	if reqID == "" {
 		log.Warn("[HTTP_TUNNEL_SERVER] push uuid is empty")
 		writeNotFoundError(w)
