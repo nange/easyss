@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	slogformatter "github.com/samber/slog-formatter"
+	sf "github.com/samber/slog-formatter"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -38,18 +38,32 @@ func Error(msg string, args ...any) {
 
 func DefaultHandler() slog.Handler {
 	cn, _ := time.LoadLocation("Asia/Shanghai")
-	return slogformatter.NewFormatterHandler(slogformatter.TimeFormatter(time.DateTime, cn))(
+	return sf.NewFormatterHandler(sf.TimeFormatter(time.DateTime, time.UTC))(
 		slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key != "time" {
+					return a
+				}
+				newTime := a.Value.Time().In(cn)
+				return slog.Time(a.Key, newTime)
+			},
 		}),
 	)
 }
 
 func JSONHandler(w io.Writer, level slog.Level) slog.Handler {
 	cn, _ := time.LoadLocation("Asia/Shanghai")
-	return slogformatter.NewFormatterHandler(slogformatter.TimeFormatter(time.DateTime, cn))(
+	return sf.NewFormatterHandler(sf.TimeFormatter(time.DateTime, time.UTC))(
 		slog.NewJSONHandler(w, &slog.HandlerOptions{
 			Level: level,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key != "time" {
+					return a
+				}
+				newTime := a.Value.Time().In(cn)
+				return slog.Time(a.Key, newTime)
+			},
 		}),
 	)
 
@@ -57,9 +71,16 @@ func JSONHandler(w io.Writer, level slog.Level) slog.Handler {
 
 func TextHandler(w io.Writer, level slog.Level) slog.Handler {
 	cn, _ := time.LoadLocation("Asia/Shanghai")
-	return slogformatter.NewFormatterHandler(slogformatter.TimeFormatter(time.DateTime, cn))(
+	return sf.NewFormatterHandler(sf.TimeFormatter(time.DateTime, time.UTC))(
 		slog.NewTextHandler(w, &slog.HandlerOptions{
 			Level: level,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key != "time" {
+					return a
+				}
+				newTime := a.Value.Time().In(cn)
+				return slog.Time(a.Key, newTime)
+			},
 		}),
 	)
 }
