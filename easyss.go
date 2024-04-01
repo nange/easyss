@@ -621,6 +621,9 @@ func (ss *Easyss) ServerIP() string {
 }
 
 func (ss *Easyss) ServerAddr() string {
+	if util.IsIPV6(ss.Server()) {
+		return fmt.Sprintf("[%s]:%d", ss.Server(), ss.ServerPort())
+	}
 	return fmt.Sprintf("%s:%d", ss.Server(), ss.ServerPort())
 }
 
