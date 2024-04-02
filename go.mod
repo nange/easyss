@@ -64,7 +64,7 @@ require (
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/quic-go/qpack v0.4.0 // indirect
-	github.com/quic-go/quic-go v0.41.0 // indirect
+	github.com/quic-go/quic-go v0.42.0 // indirect
 	github.com/samber/lo v1.38.1 // indirect
 	github.com/samber/slog-multi v1.0.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
