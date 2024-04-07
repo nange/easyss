@@ -136,6 +136,8 @@ type TunConfig struct {
 	TunIP     string `json:"tun_ip"`
 	TunGW     string `json:"tun_gw"`
 	TunMask   string `json:"tun_mask"`
+	TunIPV6   string `json:"tun_ip_v6"`
+	TunGWV6   string `json:"tun_gw_v6"`
 }
 
 func (tc *TunConfig) IPSub() string {
@@ -157,6 +159,10 @@ func (tc *TunConfig) IPSub() string {
 	}
 
 	return ipNet.String()
+}
+
+func (tc *TunConfig) IPV6Sub() string {
+	return fmt.Sprintf("%s/%d", tc.TunIPV6, 64)
 }
 
 func (c *Config) Validate() error {
@@ -309,6 +315,8 @@ func (c *Config) SetDefaultValue() {
 		c.TunConfig.TunIP = "198.18.0.1"
 		c.TunConfig.TunGW = "198.18.0.1"
 		c.TunConfig.TunMask = "255.255.0.0"
+		c.TunConfig.TunIPV6 = "2001:0db8:0:f101::1"
+		c.TunConfig.TunGWV6 = "2001:0db8:0:f101::1"
 	}
 	if c.TunConfig.TunIP == "" && c.TunConfig.TunGW != "" {
 		c.TunConfig.TunIP = c.TunConfig.TunGW

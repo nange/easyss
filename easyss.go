@@ -177,10 +177,14 @@ type Easyss struct {
 	config          *Config
 	currConfig      *Config
 	serverIP        string
+	serverIPV6      string
 	stat            *Statistics
 	localGw         string
+	localGwV6       string
 	localDev        string
+	localDevV6      string
 	devIndex        int
+	devIndexV6      int
 	directDNSServer string
 	dnsCache        *freecache.Cache
 	directDNSCache  *freecache.Cache
@@ -368,6 +372,7 @@ func (ss *Easyss) initServerIPAndDNSCache() error {
 				time.Sleep(time.Duration(i) * time.Second)
 				continue
 			}
+			break
 		}
 		if err != nil {
 			return err
@@ -384,7 +389,13 @@ func (ss *Easyss) initServerIPAndDNSCache() error {
 						break
 					}
 				}
-				if ss.serverIP == "" {
+				for _, an := range msgAAAA.Answer {
+					if a, ok := an.(*dns.AAAA); ok {
+						ss.serverIPV6 = a.AAAA.String()
+						break
+					}
+				}
+				if ss.serverIP == "" && ss.serverIPV6 == "" {
 					return errors.New("can't query server ip from dns")
 				}
 				_ = ss.SetDNSCache(msg, true, true)
@@ -405,19 +416,34 @@ func (ss *Easyss) initServerIPAndDNSCache() error {
 func (ss *Easyss) initLocalGatewayAndDevice() error {
 	switch runtime.GOOS {
 	case "linux", "windows", "darwin":
-		gw, dev, err := util.SysGatewayAndDevice()
-		if err != nil {
-			log.Error("[EASYSS] get system gateway and device", "err", err.Error())
+		gw, dev, err1 := util.SysGatewayAndDevice()
+		if err1 == nil {
+			ss.localGw = gw
+			ss.localDev = dev
 		}
-		ss.localGw = gw
-		ss.localDev = dev
+		gwV6, devV6, err2 := util.SysGatewayAndDeviceV6()
+		if err2 == nil {
+			ss.localGwV6 = gwV6
+			ss.localDevV6 = devV6
+		}
 
-		iface, err := net.InterfaceByName(dev)
-		if err != nil {
-			log.Error("[EASYSS] interface by name", "err", err)
-			return err
+		if err1 != nil && err2 != nil {
+			log.Error("[EASYSS] get system gateway and device", "err", errors.Join(err1, err2))
+			return errors.Join(err1, err2)
 		}
-		ss.devIndex = iface.Index
+
+		iface, err1 := net.InterfaceByName(dev)
+		if err1 == nil {
+			ss.devIndex = iface.Index
+		}
+		ifaceV6, err2 := net.InterfaceByName(devV6)
+		if err2 == nil {
+			ss.devIndexV6 = ifaceV6.Index
+		}
+		if err1 != nil && err2 != nil {
+			log.Error("[EASYSS] interface by name", "err", errors.Join(err1, err2))
+			return errors.Join(err1, err2)
+		}
 	}
 
 	return nil
@@ -631,21 +657,19 @@ func (ss *Easyss) Socks5ProxyAddr() string {
 	return fmt.Sprintf("socks5://%s", ss.LocalAddr())
 }
 
-func (ss *Easyss) LocalGateway() string {
-	return ss.localGw
-}
+func (ss *Easyss) LocalGateway() string { return ss.localGw }
 
-func (ss *Easyss) LocalDevice() string {
-	return ss.localDev
-}
+func (ss *Easyss) LocalGatewayV6() string { return ss.localGwV6 }
 
-func (ss *Easyss) LocalDeviceIndex() int {
-	return ss.devIndex
-}
+func (ss *Easyss) LocalDevice() string { return ss.localDev }
 
-func (ss *Easyss) Timeout() time.Duration {
-	return time.Duration(ss.currConfig.Timeout) * time.Second
-}
+func (ss *Easyss) LocalDeviceV6() string { return ss.localDevV6 }
+
+func (ss *Easyss) LocalDeviceIndex() int { return ss.devIndex }
+
+func (ss *Easyss) LocalDeviceIndexV6() int { return ss.devIndexV6 }
+
+func (ss *Easyss) Timeout() time.Duration { return time.Duration(ss.currConfig.Timeout) * time.Second }
 
 func (ss *Easyss) PingTimeout() time.Duration {
 	timeout := ss.Timeout() / 5

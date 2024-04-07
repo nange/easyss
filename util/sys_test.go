@@ -34,3 +34,16 @@ func TestSysGatewayAndDevice(t *testing.T) {
 		t.SkipNow()
 	}
 }
+
+func TestSysGatewayAndDeviceV6(t *testing.T) {
+	gw, dev, err := SysGatewayAndDeviceV6()
+	switch runtime.GOOS {
+	case "linux", "darwin", "windows":
+		if err == nil {
+			assert.NotEmpty(t, gw)
+			assert.NotEmpty(t, dev)
+		}
+	default:
+		t.SkipNow()
+	}
+}

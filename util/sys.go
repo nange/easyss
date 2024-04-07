@@ -70,3 +70,13 @@ func SysGatewayAndDevice() (gw string, dev string, err error) {
 
 	return gateway.String(), iface.Name, nil
 }
+
+func SysGatewayAndDeviceV6() (gw string, dev string, err error) {
+	r, _ := netroute.New()
+	iface, gateway, _, err := r.Route(net.ParseIP("2400:3200::1"))
+	if err != nil {
+		return "", "", err
+	}
+
+	return gateway.String(), iface.Name, nil
+}
