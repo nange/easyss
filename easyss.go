@@ -407,7 +407,11 @@ func (ss *Easyss) initServerIPAndDNSCache() error {
 			}
 		}
 	} else {
-		ss.serverIP = ss.Server()
+		if util.IsIPV6(ss.Server()) {
+			ss.serverIPV6 = ss.Server()
+		} else {
+			ss.serverIP = ss.Server()
+		}
 	}
 
 	return nil
