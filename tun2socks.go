@@ -173,8 +173,9 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 	tc := ss.TunConfig()
 	switch runtime.GOOS {
 	case "linux":
-		cmdArgs := []string{"pkexec", "bash", namePath, tc.TunDevice, tc.IPSub(), tc.TunGW,
-			ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice(), tc.IPV6Sub(), ss.LocalGatewayV6(), ss.LocalDeviceV6()}
+		cmdArgs := []string{"pkexec", "bash", namePath, tc.TunDevice,
+			tc.IPSub(), tc.TunGW, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice(),
+			tc.IPV6Sub(), tc.TunGWV6, ss.ServerIPV6(), ss.LocalGatewayV6(), ss.LocalDeviceV6()}
 		if os.Geteuid() == 0 {
 			log.Info("[TUN2SOCKS] current user is root, use bash directly")
 			cmdArgs = cmdArgs[1:]

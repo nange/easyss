@@ -642,9 +642,9 @@ func (ss *Easyss) ServerListAddrs() []string {
 	return list
 }
 
-func (ss *Easyss) ServerIP() string {
-	return ss.serverIP
-}
+func (ss *Easyss) ServerIP() string { return ss.serverIP }
+
+func (ss *Easyss) ServerIPV6() string { return ss.serverIPV6 }
 
 func (ss *Easyss) ServerAddr() string {
 	if util.IsIPV6(ss.Server()) {
