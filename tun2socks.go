@@ -252,8 +252,9 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 	tc := ss.TunConfig()
 	switch runtime.GOOS {
 	case "linux":
-		if _, err := util.CommandContext(ctx, "pkexec", "bash",
-			namePath, tc.TunDevice, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()); err != nil {
+		if _, err := util.CommandContext(ctx, "pkexec", "bash", namePath, tc.TunDevice,
+			ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice(),
+			ss.ServerIPV6(), ss.LocalGatewayV6(), ss.LocalDeviceV6()); err != nil {
 			log.Error("[TUN2SOCKS] exec", "file", _closeTunFilename, "err", err)
 			return err
 		}

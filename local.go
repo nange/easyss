@@ -15,7 +15,7 @@ import (
 func (ss *Easyss) LocalSocks5() {
 	var addr string
 	if ss.BindAll() {
-		addr = ":" + strconv.Itoa(ss.LocalPort())
+		addr = "[::]:" + strconv.Itoa(ss.LocalPort())
 	} else {
 		addr = "127.0.0.1:" + strconv.Itoa(ss.LocalPort())
 	}
