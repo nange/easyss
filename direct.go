@@ -62,7 +62,7 @@ func (ss *Easyss) directTCPConn(addr string) (net.Conn, error) {
 	var tConn net.Conn
 	var err error
 	network := "tcp"
-	if ss.DisableIPV6() {
+	if ss.ShouldIPV6Disable() {
 		network = "tcp4"
 	}
 	if ss.EnabledTun2socks() {

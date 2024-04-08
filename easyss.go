@@ -191,6 +191,7 @@ type Easyss struct {
 	geoIPDB         *geoip2.Reader
 	geoSiteDirect   *GeoSite
 	geoSiteBlock    *GeoSite
+	ipv6Rule        IPV6Rule
 	// the user custom ip/domain list which have the highest priority
 	customDirectIPs     map[string]struct{}
 	customDirectCIDRIPs []*net.IPNet
@@ -238,11 +239,18 @@ func New(config *Config) (*Easyss, error) {
 		closing:        make(chan struct{}, 1),
 		mu:             &sync.RWMutex{},
 	}
+
 	proxyRule := ParseProxyRuleFromString(currConfig.ProxyRule)
 	if proxyRule == ProxyRuleUnknown {
 		panic("unknown proxy rule:" + currConfig.ProxyRule)
 	}
 	ss.proxyRule = proxyRule
+
+	ipv6Rule := ParseIPV6RuleFromString(currConfig.IPV6Rule)
+	if ipv6Rule == IPV6RuleUnknown {
+		panic("unknown ipv6 rule:" + currConfig.IPV6Rule)
+	}
+	ss.ipv6Rule = ipv6Rule
 
 	if err := ss.cmdBeforeStartup(); err != nil {
 		log.Error("[EASYSS] executing command before startup", "err", err)
@@ -474,7 +482,7 @@ func (ss *Easyss) InitTcpPool() error {
 	}
 
 	network := "tcp"
-	if ss.DisableIPV6() {
+	if ss.ShouldIPV6Disable() {
 		network = "tcp4"
 	}
 	factory := func() (net.Conn, error) {
@@ -731,10 +739,6 @@ func (ss *Easyss) DisableSysProxy() bool {
 	return ss.currConfig.DisableSysProxy
 }
 
-func (ss *Easyss) DisableIPV6() bool {
-	return ss.currConfig.DisableIPV6
-}
-
 func (ss *Easyss) DisableQUIC() bool { return ss.currConfig.DisableQUIC }
 
 func (ss *Easyss) EnableForwardDNS() bool {
@@ -886,6 +890,17 @@ func (ss *Easyss) SetProxyRule(rule ProxyRule) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	ss.proxyRule = rule
+}
+
+func (ss *Easyss) ShouldIPV6Disable() bool {
+	if ss.ipv6Rule == IPV6RuleEnable {
+		return false
+	}
+	if ss.ipv6Rule == IPV6RuleAuto && ss.serverIPV6 != "" {
+		return false
+	}
+
+	return true
 }
 
 func (ss *Easyss) SetHttpProxyServer(server *http.Server) {

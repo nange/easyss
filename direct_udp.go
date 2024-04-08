@@ -158,7 +158,7 @@ func (ss *Easyss) directUDPConn() (net.PacketConn, error) {
 	var pc net.PacketConn
 	var err error
 	network := "udp"
-	if ss.DisableIPV6() {
+	if ss.ShouldIPV6Disable() {
 		network = "udp4"
 	}
 	if ss.EnabledTun2socks() {
