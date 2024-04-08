@@ -14,5 +14,5 @@ if [ -n "$server_ip" ]; then
 fi
 
 if [ -n "$server_ip_v6" ]; then
-  ip route del "$server_ip_v6" via "$local_gateway_v6" dev "$local_device_v6"
+  ip -6 route del "$server_ip_v6" via "$local_gateway_v6" dev "$local_device_v6"
 fi
