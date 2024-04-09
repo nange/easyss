@@ -191,8 +191,9 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 			return err
 		}
 		namePath = newNamePath
-		if _, err := util.CommandContext(ctx, "cmd.exe", "/C",
-			namePath, tc.TunDevice, tc.TunIP, tc.TunGW, tc.TunMask, ss.ServerIP(), ss.LocalGateway()); err != nil {
+		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, tc.TunDevice,
+			tc.TunIP, tc.TunGW, tc.TunMask, ss.ServerIP(), ss.LocalGateway(),
+			tc.TunIPV6, tc.TunGWV6, ss.ServerIPV6(), ss.LocalGatewayV6()); err != nil {
 			log.Error("[TUN2SOCKS] exec", "file", _createTunFilename, "err", err)
 			return err
 		}

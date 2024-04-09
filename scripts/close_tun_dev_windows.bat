@@ -6,3 +6,5 @@ set local_gateway=%3
 
 route delete %server_ip% %local_gateway%
 route delete 0.0.0.0 %tun_gw%
+
+netsh interface ipv6 delete route ::/0 "tun-easyss"
