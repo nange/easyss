@@ -198,8 +198,9 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 		}
 	case "darwin":
 		if _, err := util.CommandContext(ctx, "osascript", "-e",
-			fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s\" with administrator privileges",
-				namePath, tc.TunDevice, tc.TunIP, tc.TunGW, ss.ServerIP(), ss.LocalGateway())); err != nil {
+			fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s %s %s %s\" with administrator privileges",
+				namePath, tc.TunDevice, tc.TunIP, tc.TunGW, ss.ServerIP(), ss.LocalGateway(),
+				tc.TunIPV6, tc.TunGWV6, ss.ServerIPV6(), ss.LocalGatewayV6())); err != nil {
 			log.Error("[TUN2SOCKS] exec", "file", _createTunFilename, "err", err)
 			return err
 		}
@@ -272,8 +273,9 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 		}
 	case "darwin":
 		if _, err := util.CommandContext(ctx, "osascript", "-e",
-			fmt.Sprintf("do shell script \"sh %s %s %s %s\" with administrator privileges",
-				namePath, tc.TunGW, ss.ServerIP(), ss.LocalGateway())); err != nil {
+			fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s %s\" with administrator privileges",
+				tc.TunDevice, namePath, tc.TunGW, ss.ServerIP(), ss.LocalGateway(),
+				tc.TunGWV6, ss.ServerIPV6(), ss.LocalGatewayV6())); err != nil {
 			log.Error("[TUN2SOCKS] exec", "file", _closeTunFilename, "err", err)
 			return err
 		}

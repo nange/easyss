@@ -11,7 +11,7 @@ server_ip_v6=$9
 local_gateway_v6=${10}
 local_device_v6=${11}
 
-ip tuntap add mode tun dev "$tun_device"  # add tun device
+ip tuntap add mode tun dev "$tun_device"  # create tun device
 
 ip addr add "$tun_ip_sub" dev "$tun_device"  # add ipv4 addr to device
 ip -6 addr add "$tun_ip_sub_v6" dev "$tun_device"  # add ipv6 addr to device
