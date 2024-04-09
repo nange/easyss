@@ -351,7 +351,7 @@ func (c *Config) SetDefaultValue() {
 		c.TunConfig.TunGW = "198.18.0.1"
 		c.TunConfig.TunMask = "255.255.0.0"
 		c.TunConfig.TunIPV6 = "2001:0db8:0:f101::1"
-		c.TunConfig.TunGWV6 = "2001:0db8:0:f101::1"
+		c.TunConfig.TunGWV6 = "fe80::30ff:1eff:feff:aaff"
 	}
 	if c.TunConfig.TunIP == "" && c.TunConfig.TunGW != "" {
 		c.TunConfig.TunIP = c.TunConfig.TunGW
