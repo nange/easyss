@@ -481,19 +481,15 @@ func (ss *Easyss) InitTcpPool() error {
 		return err
 	}
 
-	network := "tcp"
-	if ss.ShouldIPV6Disable() {
-		network = "tcp4"
-	}
 	factory := func() (net.Conn, error) {
 		if ss.DisableTLS() {
-			return net.DialTimeout(network, ss.ServerAddr(), ss.Timeout())
+			return ss.directTCPConn(ss.ServerAddr())
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
 		defer cancel()
 
-		conn, err := net.DialTimeout(network, ss.ServerAddr(), ss.Timeout())
+		conn, err := ss.directTCPConn(ss.ServerAddr())
 		if err != nil {
 			return nil, err
 		}

@@ -180,6 +180,7 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 			log.Info("[TUN2SOCKS] current user is root, use bash directly")
 			cmdArgs = cmdArgs[1:]
 		}
+
 		if _, err := util.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...); err != nil {
 			log.Error("[TUN2SOCKS] exec", "file", _createTunFilename, "err", err)
 			return err
@@ -190,10 +191,10 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 		if err := os.Rename(namePath, newNamePath); err != nil {
 			return err
 		}
+
 		namePath = newNamePath
 		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, tc.TunDevice,
-			tc.TunIP, tc.TunGW, tc.TunMask, ss.ServerIP(), ss.LocalGateway(),
-			tc.TunIPV6, tc.TunGWV6, ss.ServerIPV6(), ss.LocalGatewayV6()); err != nil {
+			tc.TunIP, tc.TunGW, tc.TunMask, tc.IPV6Sub(), tc.TunGWV6, ss.ServerIPV6()); err != nil {
 			log.Error("[TUN2SOCKS] exec", "file", _createTunFilename, "err", err)
 			return err
 		}
@@ -267,8 +268,7 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 			return err
 		}
 		namePath = newNamePath
-		if _, err := util.CommandContext(ctx, "cmd.exe", "/C",
-			namePath, tc.TunGW, ss.ServerIP(), ss.LocalGateway()); err != nil {
+		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, tc.TunDevice, tc.TunGW); err != nil {
 			log.Error("[TUN2SOCKS] exec", "file", _closeTunFilename, "err", err)
 			return err
 		}
