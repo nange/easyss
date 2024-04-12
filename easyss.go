@@ -587,7 +587,7 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 			log.Error("[EASYSS] load custom cert pool", "err", err)
 			return err
 		}
-		client.SetDialTLS(func(ctx context.Context, network, addr string) (net.Conn, error) {
+		client.SetDialTLS(func(_ context.Context, _, addr string) (net.Conn, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
 			defer cancel()
 
@@ -609,7 +609,7 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 			return uConn, nil
 		})
 	} else {
-		client.SetDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
+		client.SetDial(func(_ context.Context, _, addr string) (net.Conn, error) {
 			return ss.directTCPConn(addr)
 		})
 	}
