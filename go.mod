@@ -4,26 +4,26 @@ go 1.22
 
 require (
 	github.com/caddyserver/certmagic v0.20.0
-	github.com/cespare/xxhash/v2 v2.2.0
+	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/coocood/freecache v1.2.4
 	github.com/getlantern/systray v1.2.2
-	github.com/go-faker/faker/v4 v4.3.0
-	github.com/gofrs/uuid/v5 v5.0.0
-	github.com/imroc/req/v3 v3.43.1
-	github.com/klauspost/compress v1.17.7
+	github.com/go-faker/faker/v4 v4.4.1
+	github.com/gofrs/uuid/v5 v5.1.0
+	github.com/imroc/req/v3 v3.43.2
+	github.com/klauspost/compress v1.17.8
 	github.com/libp2p/go-netroute v0.2.1
 	github.com/miekg/dns v1.1.58
 	github.com/nange/easypool v1.3.1
 	github.com/oschwald/geoip2-golang v1.9.0
-	github.com/refraction-networking/utls v1.6.3
+	github.com/refraction-networking/utls v1.6.4
 	github.com/samber/slog-formatter v1.0.0
 	github.com/smallnest/ringbuffer v0.0.0-20230728150354-35801fa39d0e
 	github.com/stretchr/testify v1.9.0
 	github.com/txthinking/socks5 v0.0.0-20230325130024-4230056ae301
 	github.com/wzshiming/sysproxy v0.2.2
 	github.com/xjasonlyu/tun2socks/v2 v2.5.3-0.20240228022714-8c7c9085c21d
-	golang.org/x/crypto v0.21.0
-	golang.org/x/net v0.22.0
+	golang.org/x/crypto v0.22.0
+	golang.org/x/net v0.24.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
@@ -76,7 +76,7 @@ require (
 	go.uber.org/zap v1.24.0 // indirect
 	golang.org/x/exp v0.0.0-20240222234643-814bf88cf225 // indirect
 	golang.org/x/mod v0.16.0 // indirect
-	golang.org/x/sys v0.18.0 // indirect
+	golang.org/x/sys v0.19.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
 	golang.org/x/tools v0.19.0 // indirect
