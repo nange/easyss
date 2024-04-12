@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	_ "embed"
 	"errors"
@@ -588,12 +587,31 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 			log.Error("[EASYSS] load custom cert pool", "err", err)
 			return err
 		}
-		client.SetTLSClientConfig(&tls.Config{
-			ServerName: ss.Server(),
-			RootCAs:    certPool,
-			NextProtos: []string{"h2", "http/1.1"},
+		client.SetDialTLS(func(ctx context.Context, network, addr string) (net.Conn, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
+			defer cancel()
+
+			conn, err := ss.directTCPConn(ss.ServerAddr())
+			if err != nil {
+				return nil, err
+			}
+
+			uConn := utls.UClient(
+				conn,
+				&utls.Config{
+					ServerName: ss.Server(),
+					RootCAs:    certPool,
+				},
+				utls.HelloChrome_Auto)
+			if err := uConn.HandshakeContext(ctx); err != nil {
+				return nil, err
+			}
+			return uConn, nil
 		})
-		client.SetTLSFingerprintChrome()
+	} else {
+		client.SetDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return ss.directTCPConn(addr)
+		})
 	}
 
 	ss.httpOutboundClient = client
