@@ -286,7 +286,7 @@ func (ss *Easyss) SetDNSCacheIfNeeded(udpResp []byte, isDirect bool) *dns.Msg {
 	if err := msg.Unpack(udpResp); err == nil && isDNSResponse(msg) {
 		log.Info(logPrefix+" got result for",
 			"domain", msg.Question[0].Name, "answer", msg.Answer, "qtype", dns.TypeToString[msg.Question[0].Qtype])
-		if ss.DisableIPV6() && msg.Question[0].Qtype == dns.TypeAAAA {
+		if ss.ShouldIPV6Disable() && msg.Question[0].Qtype == dns.TypeAAAA {
 			log.Info(logPrefix+" ipv6 is disabled, set TypeAAAA dns answer to nil for", "domain", msg.Question[0].Name)
 			msg.Answer = nil
 		}

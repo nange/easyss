@@ -159,7 +159,7 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	if ss.ServerIP() == "" {
+	if ss.ServerIP() == "" && ss.ServerIPV6() == "" {
 		return errors.New("server ips is empty")
 	}
 
@@ -173,11 +173,13 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 	tc := ss.TunConfig()
 	switch runtime.GOOS {
 	case "linux":
-		cmdArgs := []string{"pkexec", "bash", namePath, tc.TunDevice, tc.IPSub(), tc.TunGW, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()}
+		cmdArgs := []string{"pkexec", "bash", namePath, tc.TunDevice,
+			tc.IPSub(), tc.TunGW, ss.LocalGateway(), tc.IPV6Sub(), tc.TunGWV6, ss.ServerIPV6(), ss.LocalGatewayV6()}
 		if os.Geteuid() == 0 {
 			log.Info("[TUN2SOCKS] current user is root, use bash directly")
 			cmdArgs = cmdArgs[1:]
 		}
+
 		if _, err := util.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...); err != nil {
 			log.Error("[TUN2SOCKS] exec", "file", _createTunFilename, "err", err)
 			return err
@@ -188,16 +190,18 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 		if err := os.Rename(namePath, newNamePath); err != nil {
 			return err
 		}
+
 		namePath = newNamePath
-		if _, err := util.CommandContext(ctx, "cmd.exe", "/C",
-			namePath, tc.TunDevice, tc.TunIP, tc.TunGW, tc.TunMask, ss.ServerIP(), ss.LocalGateway()); err != nil {
+		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, tc.TunDevice,
+			tc.TunIP, tc.TunGW, tc.TunMask, tc.IPV6Sub(), tc.TunGWV6, ss.ServerIPV6()); err != nil {
 			log.Error("[TUN2SOCKS] exec", "file", _createTunFilename, "err", err)
 			return err
 		}
 	case "darwin":
 		if _, err := util.CommandContext(ctx, "osascript", "-e",
-			fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s\" with administrator privileges",
-				namePath, tc.TunDevice, tc.TunIP, tc.TunGW, ss.ServerIP(), ss.LocalGateway())); err != nil {
+			fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s %s %s\" with administrator privileges",
+				namePath, tc.TunDevice, tc.TunIP, tc.TunGW, ss.LocalGateway(),
+				tc.TunIPV6, tc.TunGWV6, ss.ServerIPV6(), ss.LocalGatewayV6())); err != nil {
 			log.Error("[TUN2SOCKS] exec", "file", _createTunFilename, "err", err)
 			return err
 		}
@@ -250,8 +254,7 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 	tc := ss.TunConfig()
 	switch runtime.GOOS {
 	case "linux":
-		if _, err := util.CommandContext(ctx, "pkexec", "bash",
-			namePath, tc.TunDevice, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice()); err != nil {
+		if _, err := util.CommandContext(ctx, "pkexec", "bash", namePath, tc.TunDevice); err != nil {
 			log.Error("[TUN2SOCKS] exec", "file", _closeTunFilename, "err", err)
 			return err
 		}
@@ -262,15 +265,15 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 			return err
 		}
 		namePath = newNamePath
-		if _, err := util.CommandContext(ctx, "cmd.exe", "/C",
-			namePath, tc.TunGW, ss.ServerIP(), ss.LocalGateway()); err != nil {
+		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, tc.TunDevice, tc.TunGW); err != nil {
 			log.Error("[TUN2SOCKS] exec", "file", _closeTunFilename, "err", err)
 			return err
 		}
 	case "darwin":
 		if _, err := util.CommandContext(ctx, "osascript", "-e",
-			fmt.Sprintf("do shell script \"sh %s %s %s %s\" with administrator privileges",
-				namePath, tc.TunGW, ss.ServerIP(), ss.LocalGateway())); err != nil {
+			fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s\" with administrator privileges",
+				tc.TunDevice, namePath, tc.TunGW, ss.LocalGateway(),
+				tc.TunGWV6, ss.ServerIPV6(), ss.LocalGatewayV6())); err != nil {
 			log.Error("[TUN2SOCKS] exec", "file", _closeTunFilename, "err", err)
 			return err
 		}

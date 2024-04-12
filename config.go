@@ -48,6 +48,33 @@ func AllProxyRule() []string {
 	return util.MapKeys(proxyRules)
 }
 
+type IPV6Rule int
+
+const (
+	IPV6RuleUnknown IPV6Rule = iota
+	IPV6RuleAuto
+	IPV6RuleEnable
+	IPV6RuleDisable
+)
+
+var ipv6Rules = map[string]IPV6Rule{
+	"auto":    IPV6RuleAuto,
+	"enable":  IPV6RuleEnable,
+	"disable": IPV6RuleDisable,
+}
+
+func ParseIPV6RuleFromString(rule string) IPV6Rule {
+	if r, ok := ipv6Rules[rule]; ok {
+		return r
+	}
+
+	return IPV6RuleUnknown
+}
+
+func AllIPV6Rule() []string {
+	return util.MapKeys(ipv6Rules)
+}
+
 var methods = map[string]struct{}{
 	"aes-256-gcm":       {},
 	"chacha20-poly1305": {},
@@ -114,7 +141,6 @@ type Config struct {
 	AuthPassword      string          `json:"auth_password"`
 	BindALL           bool            `json:"bind_all"`
 	DisableSysProxy   bool            `json:"disable_sys_proxy"`
-	DisableIPV6       bool            `json:"disable_ipv6"`
 	DisableTLS        bool            `json:"disable_tls"`
 	DisableQUIC       bool            `json:"disable_quic"`
 	EnableForwardDNS  bool            `json:"enable_forward_dns"`
@@ -123,6 +149,7 @@ type Config struct {
 	DirectIPsFile     string          `json:"direct_ips_file"`
 	DirectDomainsFile string          `json:"direct_domains_file"`
 	ProxyRule         string          `json:"proxy_rule"`
+	IPV6Rule          string          `json:"ipv6_rule"`
 	CAPath            string          `json:"ca_path"`
 	OutboundProto     string          `json:"outbound_proto"`
 	CMDBeforeStartup  string          `json:"cmd_before_startup"`
@@ -136,6 +163,8 @@ type TunConfig struct {
 	TunIP     string `json:"tun_ip"`
 	TunGW     string `json:"tun_gw"`
 	TunMask   string `json:"tun_mask"`
+	TunIPV6   string `json:"tun_ip_v6"`
+	TunGWV6   string `json:"tun_gw_v6"`
 }
 
 func (tc *TunConfig) IPSub() string {
@@ -157,6 +186,10 @@ func (tc *TunConfig) IPSub() string {
 	}
 
 	return ipNet.String()
+}
+
+func (tc *TunConfig) IPV6Sub() string {
+	return fmt.Sprintf("%s/%d", tc.TunIPV6, 64)
 }
 
 func (c *Config) Validate() error {
@@ -183,6 +216,11 @@ func (c *Config) Validate() error {
 	if c.ProxyRule != "" {
 		if _, ok := proxyRules[c.ProxyRule]; !ok {
 			return fmt.Errorf("unsupported proxy rule:%s, supported rules:%v", c.ProxyRule, AllProxyRule())
+		}
+	}
+	if c.IPV6Rule != "" {
+		if _, ok := ipv6Rules[c.IPV6Rule]; !ok {
+			return fmt.Errorf("unsupported ipv6 rule:%s, supported rules:%v", c.IPV6Rule, AllIPV6Rule())
 		}
 	}
 	if _, ok := outboundProtos[c.OutboundProto]; !ok {
@@ -292,6 +330,9 @@ func (c *Config) SetDefaultValue() {
 	if c.ProxyRule == "" {
 		c.ProxyRule = "auto"
 	}
+	if c.IPV6Rule == "" {
+		c.IPV6Rule = "auto"
+	}
 	if c.OutboundProto == "" {
 		c.OutboundProto = OutboundProtoNative
 	}
@@ -309,6 +350,8 @@ func (c *Config) SetDefaultValue() {
 		c.TunConfig.TunIP = "198.18.0.1"
 		c.TunConfig.TunGW = "198.18.0.1"
 		c.TunConfig.TunMask = "255.255.0.0"
+		c.TunConfig.TunIPV6 = "2001:0db8:0:f101::1"
+		c.TunConfig.TunGWV6 = "fe80::30ff:1eff:feff:aaff"
 	}
 	if c.TunConfig.TunIP == "" && c.TunConfig.TunGW != "" {
 		c.TunConfig.TunIP = c.TunConfig.TunGW

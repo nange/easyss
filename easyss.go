@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	_ "embed"
 	"errors"
@@ -177,16 +176,21 @@ type Easyss struct {
 	config          *Config
 	currConfig      *Config
 	serverIP        string
+	serverIPV6      string
 	stat            *Statistics
 	localGw         string
+	localGwV6       string
 	localDev        string
+	localDevV6      string
 	devIndex        int
+	devIndexV6      int
 	directDNSServer string
 	dnsCache        *freecache.Cache
 	directDNSCache  *freecache.Cache
 	geoIPDB         *geoip2.Reader
 	geoSiteDirect   *GeoSite
 	geoSiteBlock    *GeoSite
+	ipv6Rule        IPV6Rule
 	// the user custom ip/domain list which have the highest priority
 	customDirectIPs     map[string]struct{}
 	customDirectCIDRIPs []*net.IPNet
@@ -234,11 +238,18 @@ func New(config *Config) (*Easyss, error) {
 		closing:        make(chan struct{}, 1),
 		mu:             &sync.RWMutex{},
 	}
+
 	proxyRule := ParseProxyRuleFromString(currConfig.ProxyRule)
 	if proxyRule == ProxyRuleUnknown {
 		panic("unknown proxy rule:" + currConfig.ProxyRule)
 	}
 	ss.proxyRule = proxyRule
+
+	ipv6Rule := ParseIPV6RuleFromString(currConfig.IPV6Rule)
+	if ipv6Rule == IPV6RuleUnknown {
+		panic("unknown ipv6 rule:" + currConfig.IPV6Rule)
+	}
+	ss.ipv6Rule = ipv6Rule
 
 	if err := ss.cmdBeforeStartup(); err != nil {
 		log.Error("[EASYSS] executing command before startup", "err", err)
@@ -368,6 +379,7 @@ func (ss *Easyss) initServerIPAndDNSCache() error {
 				time.Sleep(time.Duration(i) * time.Second)
 				continue
 			}
+			break
 		}
 		if err != nil {
 			return err
@@ -384,7 +396,13 @@ func (ss *Easyss) initServerIPAndDNSCache() error {
 						break
 					}
 				}
-				if ss.serverIP == "" {
+				for _, an := range msgAAAA.Answer {
+					if a, ok := an.(*dns.AAAA); ok {
+						ss.serverIPV6 = a.AAAA.String()
+						break
+					}
+				}
+				if ss.serverIP == "" && ss.serverIPV6 == "" {
 					return errors.New("can't query server ip from dns")
 				}
 				_ = ss.SetDNSCache(msg, true, true)
@@ -396,7 +414,11 @@ func (ss *Easyss) initServerIPAndDNSCache() error {
 			}
 		}
 	} else {
-		ss.serverIP = ss.Server()
+		if util.IsIPV6(ss.Server()) {
+			ss.serverIPV6 = ss.Server()
+		} else {
+			ss.serverIP = ss.Server()
+		}
 	}
 
 	return nil
@@ -405,19 +427,34 @@ func (ss *Easyss) initServerIPAndDNSCache() error {
 func (ss *Easyss) initLocalGatewayAndDevice() error {
 	switch runtime.GOOS {
 	case "linux", "windows", "darwin":
-		gw, dev, err := util.SysGatewayAndDevice()
-		if err != nil {
-			log.Error("[EASYSS] get system gateway and device", "err", err.Error())
+		gw, dev, err1 := util.SysGatewayAndDevice()
+		if err1 == nil {
+			ss.localGw = gw
+			ss.localDev = dev
 		}
-		ss.localGw = gw
-		ss.localDev = dev
+		gwV6, devV6, err2 := util.SysGatewayAndDeviceV6()
+		if err2 == nil {
+			ss.localGwV6 = gwV6
+			ss.localDevV6 = devV6
+		}
 
-		iface, err := net.InterfaceByName(dev)
-		if err != nil {
-			log.Error("[EASYSS] interface by name", "err", err)
-			return err
+		if err1 != nil && err2 != nil {
+			log.Error("[EASYSS] get system gateway and device", "err", errors.Join(err1, err2))
+			return errors.Join(err1, err2)
 		}
-		ss.devIndex = iface.Index
+
+		iface, err1 := net.InterfaceByName(dev)
+		if err1 == nil {
+			ss.devIndex = iface.Index
+		}
+		ifaceV6, err2 := net.InterfaceByName(devV6)
+		if err2 == nil {
+			ss.devIndexV6 = ifaceV6.Index
+		}
+		if err1 != nil && err2 != nil {
+			log.Error("[EASYSS] interface by name", "err", errors.Join(err1, err2))
+			return errors.Join(err1, err2)
+		}
 	}
 
 	return nil
@@ -443,19 +480,15 @@ func (ss *Easyss) InitTcpPool() error {
 		return err
 	}
 
-	network := "tcp"
-	if ss.DisableIPV6() {
-		network = "tcp4"
-	}
 	factory := func() (net.Conn, error) {
 		if ss.DisableTLS() {
-			return net.DialTimeout(network, ss.ServerAddr(), ss.Timeout())
+			return ss.directTCPConn(ss.ServerAddr())
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
 		defer cancel()
 
-		conn, err := net.DialTimeout(network, ss.ServerAddr(), ss.Timeout())
+		conn, err := ss.directTCPConn(ss.ServerAddr())
 		if err != nil {
 			return nil, err
 		}
@@ -554,12 +587,31 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 			log.Error("[EASYSS] load custom cert pool", "err", err)
 			return err
 		}
-		client.SetTLSClientConfig(&tls.Config{
-			ServerName: ss.Server(),
-			RootCAs:    certPool,
-			NextProtos: []string{"h2", "http/1.1"},
+		client.SetDialTLS(func(_ context.Context, _, addr string) (net.Conn, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
+			defer cancel()
+
+			conn, err := ss.directTCPConn(ss.ServerAddr())
+			if err != nil {
+				return nil, err
+			}
+
+			uConn := utls.UClient(
+				conn,
+				&utls.Config{
+					ServerName: ss.Server(),
+					RootCAs:    certPool,
+				},
+				utls.HelloChrome_Auto)
+			if err := uConn.HandshakeContext(ctx); err != nil {
+				return nil, err
+			}
+			return uConn, nil
 		})
-		client.SetTLSFingerprintChrome()
+	} else {
+		client.SetDial(func(_ context.Context, _, addr string) (net.Conn, error) {
+			return ss.directTCPConn(addr)
+		})
 	}
 
 	ss.httpOutboundClient = client
@@ -616,9 +668,9 @@ func (ss *Easyss) ServerListAddrs() []string {
 	return list
 }
 
-func (ss *Easyss) ServerIP() string {
-	return ss.serverIP
-}
+func (ss *Easyss) ServerIP() string { return ss.serverIP }
+
+func (ss *Easyss) ServerIPV6() string { return ss.serverIPV6 }
 
 func (ss *Easyss) ServerAddr() string {
 	if util.IsIPV6(ss.Server()) {
@@ -631,21 +683,19 @@ func (ss *Easyss) Socks5ProxyAddr() string {
 	return fmt.Sprintf("socks5://%s", ss.LocalAddr())
 }
 
-func (ss *Easyss) LocalGateway() string {
-	return ss.localGw
-}
+func (ss *Easyss) LocalGateway() string { return ss.localGw }
 
-func (ss *Easyss) LocalDevice() string {
-	return ss.localDev
-}
+func (ss *Easyss) LocalGatewayV6() string { return ss.localGwV6 }
 
-func (ss *Easyss) LocalDeviceIndex() int {
-	return ss.devIndex
-}
+func (ss *Easyss) LocalDevice() string { return ss.localDev }
 
-func (ss *Easyss) Timeout() time.Duration {
-	return time.Duration(ss.currConfig.Timeout) * time.Second
-}
+func (ss *Easyss) LocalDeviceV6() string { return ss.localDevV6 }
+
+func (ss *Easyss) LocalDeviceIndex() int { return ss.devIndex }
+
+func (ss *Easyss) LocalDeviceIndexV6() int { return ss.devIndexV6 }
+
+func (ss *Easyss) Timeout() time.Duration { return time.Duration(ss.currConfig.Timeout) * time.Second }
 
 func (ss *Easyss) PingTimeout() time.Duration {
 	timeout := ss.Timeout() / 5
@@ -701,10 +751,6 @@ func (ss *Easyss) DisableTLS() bool {
 
 func (ss *Easyss) DisableSysProxy() bool {
 	return ss.currConfig.DisableSysProxy
-}
-
-func (ss *Easyss) DisableIPV6() bool {
-	return ss.currConfig.DisableIPV6
 }
 
 func (ss *Easyss) DisableQUIC() bool { return ss.currConfig.DisableQUIC }
@@ -858,6 +904,17 @@ func (ss *Easyss) SetProxyRule(rule ProxyRule) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	ss.proxyRule = rule
+}
+
+func (ss *Easyss) ShouldIPV6Disable() bool {
+	if ss.ipv6Rule == IPV6RuleEnable {
+		return false
+	}
+	if ss.ipv6Rule == IPV6RuleAuto && ss.serverIPV6 != "" {
+		return false
+	}
+
+	return true
 }
 
 func (ss *Easyss) SetHttpProxyServer(server *http.Server) {

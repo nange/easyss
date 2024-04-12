@@ -15,7 +15,7 @@ import (
 func (ss *Easyss) LocalSocks5() {
 	var addr string
 	if ss.BindAll() {
-		addr = ":" + strconv.Itoa(ss.LocalPort())
+		addr = "[::]:" + strconv.Itoa(ss.LocalPort())
 	} else {
 		addr = "127.0.0.1:" + strconv.Itoa(ss.LocalPort())
 	}
@@ -145,10 +145,10 @@ func (ss *Easyss) validateAddr(addr string) error {
 	if util.IsLANIP(host) {
 		return fmt.Errorf("target host:%v is LAN ip, which is invalid", host)
 	}
-	if ss.DisableIPV6() && util.IsIPV6(host) {
+	if ss.ShouldIPV6Disable() && util.IsIPV6(host) {
 		return fmt.Errorf("target %s is ipv6, but ipv6 network is disabled", host)
 	}
-	if host == ss.ServerIP() && port == serverPort {
+	if (host == ss.ServerIP() || host == ss.ServerIPV6()) && port == serverPort {
 		return fmt.Errorf("target host:%v equals server host ip, which may caused infinite-loop", host)
 	}
 
