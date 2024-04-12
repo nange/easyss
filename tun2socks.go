@@ -174,8 +174,7 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 	switch runtime.GOOS {
 	case "linux":
 		cmdArgs := []string{"pkexec", "bash", namePath, tc.TunDevice,
-			tc.IPSub(), tc.TunGW, ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice(),
-			tc.IPV6Sub(), tc.TunGWV6, ss.ServerIPV6(), ss.LocalGatewayV6(), ss.LocalDeviceV6()}
+			tc.IPSub(), tc.TunGW, ss.LocalGateway(), tc.IPV6Sub(), tc.TunGWV6, ss.ServerIPV6(), ss.LocalGatewayV6()}
 		if os.Geteuid() == 0 {
 			log.Info("[TUN2SOCKS] current user is root, use bash directly")
 			cmdArgs = cmdArgs[1:]
@@ -200,8 +199,8 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 		}
 	case "darwin":
 		if _, err := util.CommandContext(ctx, "osascript", "-e",
-			fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s %s %s %s\" with administrator privileges",
-				namePath, tc.TunDevice, tc.TunIP, tc.TunGW, ss.ServerIP(), ss.LocalGateway(),
+			fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s %s %s\" with administrator privileges",
+				namePath, tc.TunDevice, tc.TunIP, tc.TunGW, ss.LocalGateway(),
 				tc.TunIPV6, tc.TunGWV6, ss.ServerIPV6(), ss.LocalGatewayV6())); err != nil {
 			log.Error("[TUN2SOCKS] exec", "file", _createTunFilename, "err", err)
 			return err
@@ -255,9 +254,7 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 	tc := ss.TunConfig()
 	switch runtime.GOOS {
 	case "linux":
-		if _, err := util.CommandContext(ctx, "pkexec", "bash", namePath, tc.TunDevice,
-			ss.ServerIP(), ss.LocalGateway(), ss.LocalDevice(),
-			ss.ServerIPV6(), ss.LocalGatewayV6(), ss.LocalDeviceV6()); err != nil {
+		if _, err := util.CommandContext(ctx, "pkexec", "bash", namePath, tc.TunDevice); err != nil {
 			log.Error("[TUN2SOCKS] exec", "file", _closeTunFilename, "err", err)
 			return err
 		}
@@ -274,8 +271,8 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 		}
 	case "darwin":
 		if _, err := util.CommandContext(ctx, "osascript", "-e",
-			fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s %s\" with administrator privileges",
-				tc.TunDevice, namePath, tc.TunGW, ss.ServerIP(), ss.LocalGateway(),
+			fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s\" with administrator privileges",
+				tc.TunDevice, namePath, tc.TunGW, ss.LocalGateway(),
 				tc.TunGWV6, ss.ServerIPV6(), ss.LocalGatewayV6())); err != nil {
 			log.Error("[TUN2SOCKS] exec", "file", _closeTunFilename, "err", err)
 			return err
