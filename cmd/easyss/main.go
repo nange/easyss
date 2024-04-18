@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"runtime"
+	_ "time/tzdata"
 
 	"github.com/nange/easyss/v2"
 	"github.com/nange/easyss/v2/log"
