@@ -144,27 +144,39 @@ func (l *LocalConn) pull() error {
 }
 
 func (l *LocalConn) push() error {
-	resp, err := l.client.R().
+	r := l.client.R().
 		SetHeader("Content-Type", "application/json").
 		SetHeader("Transfer-Encoding", "chunked").
 		SetHeader("Accept-Encoding", "gzip").
 		SetHeader("Content-Encoding", "gzip").
-		SetQueryParam(RequestIDQuery, l.uuid).
-		SetBody(l).
-		Post(l.serverAddr + "/push")
-	if err != nil {
-		return err
-	}
+		SetQueryParam(RequestIDQuery, l.uuid)
 
-	body, err := resp.ToBytes()
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("status code:%v, body:%v", resp.StatusCode, string(body))
-	}
+	buf := bytespool.Get(cipherstream.MaxPayloadSize)
+	defer bytespool.MustPut(buf)
 
-	return nil
+	for {
+		var resp *req.Response
+		n, err1 := l.Read(buf)
+		if n > 0 {
+			var err2 error
+			resp, err2 = r.SetBody(buf[:n]).Post(l.serverAddr + "/push")
+			if err2 != nil {
+				return errors.Join(err1, err2)
+			}
+		}
+		if resp != nil {
+			body, err3 := resp.ToBytes()
+			if err3 != nil {
+				return err3
+			}
+			if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+				return fmt.Errorf("status code:%v, body:%v", resp.StatusCode, string(body))
+			}
+		}
+		if err1 != nil {
+			return err1
+		}
+	}
 }
 
 // Read implements io.Reader

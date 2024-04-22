@@ -614,6 +614,7 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 		})
 	}
 
+	client.SetProxy(nil)
 	ss.httpOutboundClient = client
 	return nil
 }

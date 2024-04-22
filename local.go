@@ -137,7 +137,7 @@ func (ss *Easyss) validateAddr(addr string) error {
 	serverPort := strconv.FormatInt(int64(ss.ServerPort()), 10)
 	if !util.IsIP(host) {
 		if host == ss.Server() && port == serverPort {
-			return fmt.Errorf("target host,port equals to server host,port, which may caused infinite-loop")
+			return fmt.Errorf("target %s:%s equals to server host,port, which may caused infinite-loop", host, port)
 		}
 		return nil
 	}
@@ -149,7 +149,7 @@ func (ss *Easyss) validateAddr(addr string) error {
 		return fmt.Errorf("target %s is ipv6, but ipv6 network is disabled", host)
 	}
 	if (host == ss.ServerIP() || host == ss.ServerIPV6()) && port == serverPort {
-		return fmt.Errorf("target host:%v equals server host ip, which may caused infinite-loop", host)
+		return fmt.Errorf("target %s:%s equals server host,port, which may caused infinite-loop", host, port)
 	}
 
 	return nil

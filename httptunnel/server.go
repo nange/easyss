@@ -236,8 +236,9 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	if err != nil {
+	if err != nil && !errors.Is(err, io.EOF) {
 		_ = conns[0].Close()
+		return
 	}
 
 	writeSuccess(w)
