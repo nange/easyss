@@ -151,7 +151,7 @@ func (l *LocalConn) push() error {
 		SetHeader("Content-Encoding", "gzip").
 		SetQueryParam(RequestIDQuery, l.uuid)
 
-	buf := bytespool.Get(cipherstream.MaxPayloadSize)
+	buf := bytespool.Get(cipherstream.MaxCipherRelaySize)
 	defer bytespool.MustPut(buf)
 
 	for {

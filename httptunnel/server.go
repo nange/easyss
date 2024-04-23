@@ -210,34 +210,28 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	s.Unlock()
 
 	p := &pushPayload{}
-	dec := json.NewDecoder(r.Body)
-	var err error
-	for {
-		if err = dec.Decode(p); err != nil {
-			if !errors.Is(err, io.EOF) {
-				log.Warn("[HTTP_TUNNEL_SERVER] decode request body", "err", err, "uuid", reqID)
-			}
-			if p.Payload == "" {
-				break
-			}
-		}
-		var cipher []byte
-		cipher, err = base64.StdEncoding.DecodeString(p.Payload)
-		if err != nil {
-			log.Warn("[HTTP_TUNNEL_SERVER] decode cipher", "err", err)
-			writeServiceUnavailableError(w, "decode cipher:"+err.Error())
-			break
-		}
-		p.Payload = ""
-
-		if _, err = conns[0].Write(cipher); err != nil {
-			log.Warn("[HTTP_TUNNEL_SERVER] write local", "err", err)
-			writeServiceUnavailableError(w, "write local:"+err.Error())
-			break
-		}
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Warn("[HTTP_TUNNEL_SERVER] read request body", "err", err, "uuid", reqID, "body", string(b))
+		writeServiceUnavailableError(w, "read request body:"+err.Error())
+		return
 	}
-	if err != nil && !errors.Is(err, io.EOF) {
-		log.Warn("[HTTP_TUNNEL_SERVER] push", "err", err)
+	if err := json.Unmarshal(b, p); err != nil {
+		log.Warn("[HTTP_TUNNEL_SERVER] unmarshal request body", "err", err, "uuid", reqID, "body", string(b))
+		writeServiceUnavailableError(w, "unmarshal request body:"+err.Error())
+		return
+	}
+
+	cipher, err := base64.StdEncoding.DecodeString(p.Payload)
+	if err != nil {
+		log.Warn("[HTTP_TUNNEL_SERVER] decode cipher", "err", err)
+		writeServiceUnavailableError(w, "decode cipher:"+err.Error())
+		return
+	}
+
+	if _, err = conns[0].Write(cipher); err != nil {
+		log.Warn("[HTTP_TUNNEL_SERVER] write local", "err", err)
+		writeServiceUnavailableError(w, "write local:"+err.Error())
 		return
 	}
 
