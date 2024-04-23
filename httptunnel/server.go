@@ -237,7 +237,7 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err != nil && !errors.Is(err, io.EOF) {
-		_ = conns[0].Close()
+		log.Warn("[HTTP_TUNNEL_SERVER] push", "err", err)
 		return
 	}
 
