@@ -851,6 +851,11 @@ func (ss *Easyss) AvailableConn(needPingACK ...bool) (conn net.Conn, err error) 
 			log.Warn("[EASYSS] get conn failed", "err", err)
 			continue
 		}
+		if ss.IsHTTPOutboundProto() || ss.IsHTTPSOutboundProto() {
+			if len(needPingACK) == 0 || !needPingACK[0] {
+				break
+			}
+		}
 
 		err = pingTest(conn)
 		if err != nil {
