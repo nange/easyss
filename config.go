@@ -121,6 +121,7 @@ type ServerConfig struct {
 	CAPath           string `json:"ca_path,omitempty"`
 	Default          bool   `json:"default,omitempty"`
 	OutboundProto    string `json:"outbound_proto,omitempty"`
+	SN               string `json:"sn"`
 	CMDBeforeStartup string `json:"cmd_before_startup,omitempty"`
 	CMDInterval      string `json:"cmd_interval,omitempty"`
 	CMDIntervalTime  int    `json:"cmd_interval_time,omitempty"`
@@ -152,6 +153,7 @@ type Config struct {
 	IPV6Rule          string          `json:"ipv6_rule"`
 	CAPath            string          `json:"ca_path"`
 	OutboundProto     string          `json:"outbound_proto"`
+	SN                string          `json:"sn"`
 	CMDBeforeStartup  string          `json:"cmd_before_startup"`
 	CMDInterval       string          `json:"cmd_interval"`
 	CMDIntervalTime   int             `json:"cmd_interval_time"`
@@ -378,6 +380,9 @@ func (c *Config) OverrideFrom(sc *ServerConfig) {
 		}
 		if sc.OutboundProto != "" {
 			c.OutboundProto = sc.OutboundProto
+		}
+		if sc.SN != "" {
+			c.SN = sc.SN
 		}
 		if sc.CMDInterval != "" {
 			c.CMDInterval = sc.CMDInterval

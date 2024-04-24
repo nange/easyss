@@ -496,7 +496,7 @@ func (ss *Easyss) InitTcpPool() error {
 		uConn := utls.UClient(
 			conn,
 			&utls.Config{
-				ServerName: ss.Server(),
+				ServerName: ss.ServerName(),
 				RootCAs:    certPool,
 			},
 			utls.HelloChrome_Auto)
@@ -648,6 +648,13 @@ func (ss *Easyss) Method() string {
 }
 
 func (ss *Easyss) Server() string {
+	return ss.currConfig.Server
+}
+
+func (ss *Easyss) ServerName() string {
+	if ss.currConfig.SN != "" {
+		return ss.currConfig.SN
+	}
 	return ss.currConfig.Server
 }
 
@@ -841,9 +848,9 @@ func (ss *Easyss) AvailableConn(needPingACK ...bool) (conn net.Conn, err error) 
 	for i := 0; i < tryCount; i++ {
 		switch ss.OutboundProto() {
 		case OutboundProtoHTTP:
-			conn, err = httptunnel.NewLocalConn(ss.HTTPOutboundClient(), "http://"+ss.ServerAddr())
+			conn, err = httptunnel.NewLocalConn(ss.HTTPOutboundClient(), "http://"+ss.ServerAddr(), ss.ServerName())
 		case OutboundProtoHTTPS:
-			conn, err = httptunnel.NewLocalConn(ss.HTTPOutboundClient(), "https://"+ss.ServerAddr())
+			conn, err = httptunnel.NewLocalConn(ss.HTTPOutboundClient(), "https://"+ss.ServerAddr(), ss.ServerName())
 		default:
 			conn, err = pool.Get()
 		}

@@ -27,6 +27,7 @@ const (
 type LocalConn struct {
 	uuid       string
 	serverAddr string
+	serverName string
 	conn       net.Conn
 	conn2      net.Conn
 
@@ -35,7 +36,7 @@ type LocalConn struct {
 	left     []byte
 }
 
-func NewLocalConn(client *req.Client, serverAddr string) (net.Conn, error) {
+func NewLocalConn(client *req.Client, serverAddr, serverName string) (net.Conn, error) {
 	if client == nil {
 		return nil, errors.New("http outbound client is nil")
 	}
@@ -48,6 +49,7 @@ func NewLocalConn(client *req.Client, serverAddr string) (net.Conn, error) {
 	lc := &LocalConn{
 		uuid:       id.String(),
 		serverAddr: serverAddr,
+		serverName: serverName,
 		conn:       conn,
 		conn2:      conn2,
 		client:     client,
@@ -130,6 +132,7 @@ func (l *LocalConn) pull() error {
 		SetQueryParam("transaction_id", p.TransactionID).
 		SetQueryParam("access_token", p.AccessToken).
 		SetQueryParam(RequestIDQuery, l.uuid).
+		SetHeader("Host", l.serverName).
 		SetHeader("Accept-Encoding", "gzip").
 		Get(l.serverAddr + "/pull")
 	if err != nil {
@@ -146,6 +149,7 @@ func (l *LocalConn) pull() error {
 
 func (l *LocalConn) push() error {
 	r := l.client.R().
+		SetHeader("Host", l.serverName).
 		SetHeader("Content-Type", "application/json").
 		SetHeader("Transfer-Encoding", "chunked").
 		SetHeader("Accept-Encoding", "gzip").
