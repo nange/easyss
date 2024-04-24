@@ -73,7 +73,8 @@ func (l *LocalConn) Pull() {
 
 	for {
 		if err := dec.Decode(&resp); err != nil {
-			if !errors.Is(err, io.EOF) && !strings.Contains(err.Error(), "connection reset by peer") {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) &&
+				!strings.Contains(err.Error(), "connection reset by peer") {
 				log.Warn("[HTTP_TUNNEL_LOCAL] decode response", "err", err, "uuid", l.uuid)
 			}
 			if resp.Payload == "" {

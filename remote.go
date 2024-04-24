@@ -55,7 +55,9 @@ func (es *EasyServer) initTLSConfig() error {
 				return nil
 			}
 		}
-		return fmt.Errorf("unsupported ALPN:%s", cs.NegotiatedProtocol)
+		err := fmt.Errorf("unsupported ALPN:%s", cs.NegotiatedProtocol)
+		log.Warn("[REMOTE] verify connection", "err", err)
+		return err
 	}
 	es.tlsConfig = tlsConfig
 
