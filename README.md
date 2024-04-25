@@ -190,6 +190,12 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 并在Easyss-server配置文件中，指定`enable_http_inbound: true`，即可实现服务器部署在反向代理之后的场景。
 如果`outbound_proto: http`，还需要在Easyss-server配置文件中禁用tls：`disable_tls: true`
 
+### 配置Cloudflare优选IP
+可以把Cloudflare CDN作为反向代理，再将流量转发给Easyss,这样在很多时候能够改善我们的网络访问速度。
+使用Cloudflare CDN通常会配合其优选IP同时使用，这样可以大幅提高访问速度和降低网络延迟。
+
+我们只需要在配置文件中，将`server`字段配置为优选IP,再将`sn`字段配置为对应的在Cloudflare后台管理的域名即可。
+
 ### 启动前或定期执行自定义命令
 同时Easyss还支持配置`cmd_before_startup`, `cmd_interval`参数，用于配置一个自定义命令，在Easyss启动前执行或者定期的执行。
 `cmd_interval_time`可用于控制定期执行间隔，默认10分钟执行一次。
@@ -202,7 +208,6 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 
 ### 服务端链式代理
 服务端(`easyss-server`)支持将请求再次转发给下一个代理(目前只支持`socks5`)。
-如服务器IP被ChatGPT屏蔽了，可以在服务器上部署上`Warp`，然后`easyss-server`将ChatGPT相关的请求转发给`Warp`，这样可突破ChatGPT的封锁。
 
 只需要在配置文件中指定`next_proxy_url: "socks5://your-ip:your-port"`，
 然后在`easyss-server`目录下创建`next_proxy_domains.txt`, `next_proxy_ips.txt`文件，用于指定对哪些域名或IP地址走链式代理。
