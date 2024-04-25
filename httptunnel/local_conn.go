@@ -76,12 +76,13 @@ func (l *LocalConn) Pull() {
 	for {
 		if err := dec.Decode(&resp); err != nil {
 			if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) &&
-				!strings.Contains(err.Error(), "connection reset by peer") {
+				!strings.Contains(err.Error(), "connection reset by peer") &&
+				!strings.Contains(err.Error(), "use of closed network connection") {
 				log.Warn("[HTTP_TUNNEL_LOCAL] decode response", "err", err, "uuid", l.uuid)
 			}
-			if resp.Payload == "" {
-				break
-			}
+		}
+		if resp.Payload == "" {
+			break
 		}
 
 		data, err := base64.StdEncoding.DecodeString(resp.Payload)
@@ -118,6 +119,9 @@ func (l *LocalConn) PullClose() {
 }
 
 func (l *LocalConn) PushClose() {
+	if l.respBody != nil {
+		_ = l.respBody.Close()
+	}
 	_ = l.conn.Close()
 }
 
