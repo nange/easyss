@@ -247,6 +247,7 @@ func (s *Server) CloseConn(reqID string) {
 	defer s.Unlock()
 	conns := s.connMap[reqID]
 	if len(conns) > 0 {
+		_ = conns[0].Close()
 		_ = conns[1].Close()
 	}
 

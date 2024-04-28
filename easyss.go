@@ -1128,6 +1128,9 @@ func (ss *Easyss) Close() error {
 		err = ss.dnsForwardServer.Shutdown()
 		ss.dnsForwardServer = nil
 	}
+	if ss.httpOutboundClient != nil {
+		ss.httpOutboundClient.CloseIdleConnections()
+	}
 	if ss.closing != nil {
 		close(ss.closing)
 		ss.closing = nil
