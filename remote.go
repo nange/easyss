@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"time"
 
 	"github.com/caddyserver/certmagic"
 	"github.com/nange/easyss/v2/cipherstream"
@@ -198,12 +199,16 @@ func (es *EasyServer) handShakeWithClient(conn net.Conn) (hsRes, error) {
 	cs := csStream.(*cipherstream.CipherStream)
 	defer cs.Release()
 
+	_ = csStream.SetDeadline(time.Now().Add(5 * es.Timeout()))
+
 	var frame *cipherstream.Frame
 	for {
 		frame, err = cs.ReadFrame()
 		if err != nil {
 			return res, err
 		}
+
+		_ = csStream.SetDeadline(time.Now().Add(5 * es.Timeout()))
 
 		if frame.IsPingFrame() {
 			log.Debug("[REMOTE] got ping message",
