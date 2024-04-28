@@ -209,15 +209,19 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	s.notifyPull(reqID)
 	s.Unlock()
 
-	p := &pushPayload{}
-	b, err := io.ReadAll(r.Body)
+	buf := bytespool.GetBuffer()
+	defer bytespool.PutBuffer(buf)
+
+	_, err := io.Copy(buf, r.Body)
 	if err != nil {
-		log.Warn("[HTTP_TUNNEL_SERVER] read request body", "err", err, "uuid", reqID, "body", string(b))
+		log.Warn("[HTTP_TUNNEL_SERVER] read request body", "err", err, "uuid", reqID, "body", buf.String())
 		writeServiceUnavailableError(w, "read request body:"+err.Error())
 		return
 	}
-	if err := json.Unmarshal(b, p); err != nil {
-		log.Warn("[HTTP_TUNNEL_SERVER] unmarshal request body", "err", err, "uuid", reqID, "body", string(b))
+
+	p := &pushPayload{}
+	if err := json.Unmarshal(buf.Bytes(), p); err != nil {
+		log.Warn("[HTTP_TUNNEL_SERVER] unmarshal request body", "err", err, "uuid", reqID, "body", buf.String())
 		writeServiceUnavailableError(w, "unmarshal request body:"+err.Error())
 		return
 	}
