@@ -48,10 +48,8 @@ const (
 )
 
 const (
-	MaxCap      int = 40
-	MaxIdle     int = 5
-	IdleTime        = time.Minute
-	MaxLifetime     = 15 * time.Minute
+	MaxCap  int = 50
+	MaxIdle int = 5
 )
 
 const UserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
@@ -511,8 +509,8 @@ func (ss *Easyss) InitTcpPool() error {
 		InitialCap:  MaxIdle,
 		MaxCap:      MaxCap,
 		MaxIdle:     MaxIdle,
-		Idletime:    IdleTime,
-		MaxLifetime: MaxLifetime,
+		Idletime:    ss.Timeout(),
+		MaxLifetime: ss.MaxLifeTime(),
 		Factory:     factory,
 	}
 	tcpPool, err := easypool.NewHeapPool(config)
@@ -569,7 +567,7 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 		SetUserAgent(UserAgent)
 	client.
 		SetMaxIdleConns(MaxIdle).
-		SetIdleConnTimeout(MaxLifetime).
+		SetIdleConnTimeout(ss.MaxLifeTime()).
 		SetMaxConnsPerHost(512).
 		SetTLSHandshakeTimeout(ss.TLSTimeout())
 	client.
@@ -704,6 +702,10 @@ func (ss *Easyss) LocalDeviceIndex() int { return ss.devIndex }
 func (ss *Easyss) LocalDeviceIndexV6() int { return ss.devIndexV6 }
 
 func (ss *Easyss) Timeout() time.Duration { return time.Duration(ss.currConfig.Timeout) * time.Second }
+
+func (ss *Easyss) MaxLifeTime() time.Duration {
+	return 5 * ss.Timeout()
+}
 
 func (ss *Easyss) PingTimeout() time.Duration {
 	timeout := ss.Timeout() / 5

@@ -199,7 +199,7 @@ func (es *EasyServer) handShakeWithClient(conn net.Conn) (hsRes, error) {
 	cs := csStream.(*cipherstream.CipherStream)
 	defer cs.Release()
 
-	_ = csStream.SetDeadline(time.Now().Add(5 * es.Timeout()))
+	_ = csStream.SetDeadline(time.Now().Add(es.MaxConnWaitTimeout()))
 
 	var frame *cipherstream.Frame
 	for {
@@ -208,7 +208,7 @@ func (es *EasyServer) handShakeWithClient(conn net.Conn) (hsRes, error) {
 			return res, err
 		}
 
-		_ = csStream.SetDeadline(time.Now().Add(5 * es.Timeout()))
+		_ = csStream.SetDeadline(time.Now().Add(es.MaxConnWaitTimeout()))
 
 		if frame.IsPingFrame() {
 			log.Debug("[REMOTE] got ping message",
