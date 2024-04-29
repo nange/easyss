@@ -17,6 +17,7 @@ import (
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
 	"github.com/nange/easyss/v2/util/netpipe"
+	json2 "github.com/segmentio/encoding/json"
 )
 
 const (
@@ -209,7 +210,7 @@ func (l *LocalConn) Read(b []byte) (int, error) {
 		p := &pushPayload{}
 		_ = faker.FakeData(p)
 		p.Payload = base64.StdEncoding.EncodeToString(buf[:n])
-		payload, _ = json.Marshal(p)
+		payload, _ = json2.Marshal(p)
 	}
 
 	cn := copy(b, payload)

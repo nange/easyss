@@ -3,7 +3,6 @@ package httptunnel
 import (
 	"crypto/tls"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -18,6 +17,7 @@ import (
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
 	"github.com/nange/easyss/v2/util/netpipe"
+	"github.com/segmentio/encoding/json"
 )
 
 const RelayBufferSize = cipherstream.MaxCipherRelaySize
