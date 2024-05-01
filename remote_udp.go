@@ -28,6 +28,7 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, isD
 	_ = csStream.SetDeadline(time.Now().Add(es.MaxConnWaitTimeout()))
 	defer func() {
 		_ = csStream.SetDeadline(time.Time{})
+		csStream.(*cipherstream.CipherStream).Release()
 	}()
 
 	var _tryReuse bool
@@ -104,7 +105,6 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, isD
 	} else {
 		log.Debug("[REMOTE_UDP] underlying proxy connection is healthy, so reuse it")
 	}
-	csStream.(*cipherstream.CipherStream).Release()
 
 	return nil
 }
