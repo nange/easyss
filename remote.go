@@ -200,6 +200,9 @@ func (es *EasyServer) handShakeWithClient(conn net.Conn) (hsRes, error) {
 	defer cs.Release()
 
 	_ = csStream.SetDeadline(time.Now().Add(es.MaxConnWaitTimeout()))
+	defer func() {
+		_ = csStream.SetDeadline(time.Time{})
+	}()
 
 	var frame *cipherstream.Frame
 	for {
