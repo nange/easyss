@@ -1,8 +1,8 @@
 package httptunnel
 
 import (
+	"bufio"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,7 +17,7 @@ import (
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
 	"github.com/nange/easyss/v2/util/netpipe"
-	json2 "github.com/segmentio/encoding/json"
+	"github.com/segmentio/encoding/json"
 )
 
 const (
@@ -71,16 +71,23 @@ func (l *LocalConn) Pull() {
 	}
 	defer l.PullClose()
 
-	dec := json.NewDecoder(l.respBody)
+	buffer := bufio.NewReaderSize(l.respBody, cipherstream.MaxCipherRelaySize)
 	var resp pullResp
-
 	for {
-		if err := dec.Decode(&resp); err != nil {
+		buf, err := buffer.ReadBytes('\n')
+		if err != nil {
 			if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) &&
 				!strings.Contains(err.Error(), "connection reset by peer") &&
 				!strings.Contains(err.Error(), "use of closed network connection") {
 				log.Warn("[HTTP_TUNNEL_LOCAL] decode response", "err", err, "uuid", l.uuid)
 			}
+		}
+		if len(buf) == 0 {
+			break
+		}
+		if err := json.Unmarshal(buf, &resp); err != nil {
+			log.Warn("[HTTP_TUNNEL_LOCAL] unmarshal response", "err", err, "uuid", l.uuid)
+			break
 		}
 		if resp.Payload == "" {
 			break
@@ -210,7 +217,7 @@ func (l *LocalConn) Read(b []byte) (int, error) {
 		p := &pushPayload{}
 		_ = faker.FakeData(p)
 		p.Payload = base64.StdEncoding.EncodeToString(buf[:n])
-		payload, _ = json2.Marshal(p)
+		payload, _ = json.Marshal(p)
 	}
 
 	cn := copy(b, payload)

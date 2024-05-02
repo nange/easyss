@@ -155,6 +155,7 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 				log.Warn("[HTTP_TUNNEL_SERVER] response write", "err", er)
 				break
 			}
+			_, _ = w.Write([]byte("\n"))
 			p.Payload = ""
 		}
 		if flusher, ok := w.(http.Flusher); ok {
