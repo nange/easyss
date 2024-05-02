@@ -669,7 +669,11 @@ func (ss *Easyss) PingLatencyCh() chan string { return ss.pingLatCh }
 func (ss *Easyss) ServerListAddrs() []string {
 	var list []string
 	for _, s := range ss.config.ServerList {
-		list = append(list, fmt.Sprintf("%s:%d", s.Server, s.ServerPort))
+		if util.IsIPV6(s.Server) {
+			list = append(list, fmt.Sprintf("[%s]:%d", s.Server, s.ServerPort))
+		} else {
+			list = append(list, fmt.Sprintf("%s:%d", s.Server, s.ServerPort))
+		}
 	}
 	return list
 }
