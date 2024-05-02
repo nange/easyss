@@ -10,7 +10,7 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-var logger *slog.Logger
+var logger = slog.New(DefaultHandler(slog.LevelInfo))
 
 func SetLogger(l *slog.Logger) {
 	logger = l
