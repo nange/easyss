@@ -10,7 +10,7 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-var logger = slog.New(DefaultHandler())
+var logger *slog.Logger
 
 func SetLogger(l *slog.Logger) {
 	logger = l
@@ -36,11 +36,11 @@ func Error(msg string, args ...any) {
 	logger.Error(msg, args...)
 }
 
-func DefaultHandler() slog.Handler {
+func DefaultHandler(level slog.Level) slog.Handler {
 	cn, _ := time.LoadLocation("Asia/Shanghai")
 	return sf.NewFormatterHandler(sf.TimeFormatter(time.DateTime, time.UTC))(
 		slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-			Level: slog.LevelInfo,
+			Level: level,
 			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
 				if a.Key != "time" {
 					return a
@@ -106,5 +106,9 @@ func Init(outputFile, level string) {
 		l = slog.LevelError
 	}
 
-	SetLogger(slog.New(TextHandler(FileWriter(outputFile), l)))
+	if outputFile != "" {
+		SetLogger(slog.New(TextHandler(FileWriter(outputFile), l)))
+	} else {
+		SetLogger(slog.New(DefaultHandler(l)))
+	}
 }
