@@ -23,7 +23,6 @@ import (
 
 	"github.com/coocood/freecache"
 	"github.com/imroc/req/v3"
-	"github.com/klauspost/compress/gzhttp"
 	"github.com/miekg/dns"
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/v2/cipherstream"
@@ -497,7 +496,7 @@ func (ss *Easyss) InitTcpPool() error {
 				ServerName: ss.ServerName(),
 				RootCAs:    certPool,
 			},
-			utls.HelloChrome_Auto)
+			utls.Hello360_Auto)
 		if err := uConn.HandshakeContext(ctx); err != nil {
 			return nil, err
 		}
@@ -570,15 +569,16 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 		SetIdleConnTimeout(ss.MaxLifeTime()).
 		SetMaxConnsPerHost(512).
 		SetTLSHandshakeTimeout(ss.TLSTimeout())
-	client.
-		GetTransport().
-		WrapRoundTripFunc(func(rt http.RoundTripper) req.HttpRoundTripFunc {
-			return func(req *http.Request) (resp *http.Response, err error) {
-				resp, err = gzhttp.Transport(rt).RoundTrip(req)
-				return
-			}
-		})
-
+	//client.
+	//	GetTransport().
+	//	WrapRoundTripFunc(func(rt http.RoundTripper) req.HttpRoundTripFunc {
+	//		return func(req *http.Request) (resp *http.Response, err error) {
+	//			resp, err = gzhttp.Transport(rt).RoundTrip(req)
+	//			return
+	//		}
+	//	})
+	//client.SetProxyURL("http://127.0.0.1:8888")
+	client.EnableInsecureSkipVerify()
 	if ss.IsHTTPSOutboundProto() {
 		certPool, err := ss.loadCustomCertPool()
 		if err != nil {

@@ -217,6 +217,7 @@ func (l *LocalConn) Read(b []byte) (int, error) {
 		p := &pushPayload{}
 		_ = faker.FakeData(p)
 		p.Payload = base64.StdEncoding.EncodeToString(buf[:n])
+		p.RequestUID = l.uuid
 		payload, _ = json.Marshal(p)
 	}
 

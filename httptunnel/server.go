@@ -186,7 +186,24 @@ func (s *Server) notifyPull(reqID string) {
 }
 
 func (s *Server) push(w http.ResponseWriter, r *http.Request) {
-	reqID := r.URL.Query().Get(RequestIDQuery)
+	buf := bytespool.GetBuffer()
+	defer bytespool.PutBuffer(buf)
+
+	_, err := io.Copy(buf, r.Body)
+	if err != nil {
+		log.Warn("[HTTP_TUNNEL_SERVER] read request body", "err", err, "body", buf.String())
+		writeServiceUnavailableError(w, "read request body:"+err.Error())
+		return
+	}
+
+	p := &pushPayload{}
+	if err := json.Unmarshal(buf.Bytes(), p); err != nil {
+		log.Warn("[HTTP_TUNNEL_SERVER] unmarshal request body", "err", err, "body", buf.String())
+		writeServiceUnavailableError(w, "unmarshal request body:"+err.Error())
+		return
+	}
+
+	reqID := p.RequestUID
 	if reqID == "" {
 		// compatible with old versions
 		reqID = r.Header.Get(RequestIDHeader)
@@ -209,23 +226,6 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	}
 	s.notifyPull(reqID)
 	s.Unlock()
-
-	buf := bytespool.GetBuffer()
-	defer bytespool.PutBuffer(buf)
-
-	_, err := io.Copy(buf, r.Body)
-	if err != nil {
-		log.Warn("[HTTP_TUNNEL_SERVER] read request body", "err", err, "uuid", reqID, "body", buf.String())
-		writeServiceUnavailableError(w, "read request body:"+err.Error())
-		return
-	}
-
-	p := &pushPayload{}
-	if err := json.Unmarshal(buf.Bytes(), p); err != nil {
-		log.Warn("[HTTP_TUNNEL_SERVER] unmarshal request body", "err", err, "uuid", reqID, "body", buf.String())
-		writeServiceUnavailableError(w, "unmarshal request body:"+err.Error())
-		return
-	}
 
 	cipher, err := base64.StdEncoding.DecodeString(p.Payload)
 	if err != nil {

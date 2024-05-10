@@ -50,16 +50,6 @@ func (es *EasyServer) initTLSConfig() error {
 	}
 
 	tlsConfig.NextProtos = append([]string{"http/1.1", "h2", "h3"}, tlsConfig.NextProtos...)
-	tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
-		for _, v := range tlsConfig.NextProtos {
-			if cs.NegotiatedProtocol == v {
-				return nil
-			}
-		}
-		err := fmt.Errorf("unsupported ALPN:%s", cs.NegotiatedProtocol)
-		log.Warn("[REMOTE] verify connection", "err", err)
-		return err
-	}
 	es.tlsConfig = tlsConfig
 
 	return nil

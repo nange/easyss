@@ -4,6 +4,7 @@ type pushPayload struct {
 	AccountID   string `faker:"uuid_hyphenated" json:"account_id"`
 	AccessToken string `faker:"jwt" json:"access_token"`
 	Payload     string `faker:"-" json:"payload"`
+	RequestUID  string `faker:"-" json:"request_uid"`
 }
 
 type pullParam struct {
