@@ -48,6 +48,7 @@ func (es *EasyServer) initTLSConfig() error {
 			return err
 		}
 	}
+	tlsConfig.CipherSuites = TLSCipherSuites
 
 	tlsConfig.NextProtos = append([]string{"http/1.1", "h2", "h3"}, tlsConfig.NextProtos...)
 	es.tlsConfig = tlsConfig
