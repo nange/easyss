@@ -597,7 +597,7 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 			uConn := utls.UClient(
 				conn,
 				&utls.Config{
-					ServerName: ss.Server(),
+					ServerName: ss.ServerName(),
 					RootCAs:    certPool,
 				},
 				utls.Hello360_Auto)
