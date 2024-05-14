@@ -458,6 +458,18 @@ func (ss *Easyss) initLocalGatewayAndDevice() error {
 	return nil
 }
 
+func (ss *Easyss) tlsConfig() (*utls.Config, error) {
+	certPool, err := ss.loadCustomCertPool()
+	if err != nil {
+		log.Error("[EASYSS] load custom cert pool", "err", err)
+		return nil, err
+	}
+	return &utls.Config{
+		ServerName: ss.ServerName(),
+		RootCAs:    certPool,
+	}, nil
+}
+
 func (ss *Easyss) InitTcpPool() error {
 	if !ss.IsNativeOutboundProto() {
 		log.Info("[EASYSS] outbound proto don't need init tcp pool", "proto", ss.OutboundProto())
@@ -472,9 +484,8 @@ func (ss *Easyss) InitTcpPool() error {
 
 	log.Info("[EASYSS] initializing tcp pool with", "easy_server", ss.ServerAddr())
 
-	certPool, err := ss.loadCustomCertPool()
+	tlsConfig, err := ss.tlsConfig()
 	if err != nil {
-		log.Error("[EASYSS] load custom cert pool", "err", err)
 		return err
 	}
 
@@ -491,13 +502,7 @@ func (ss *Easyss) InitTcpPool() error {
 			return nil, err
 		}
 
-		uConn := utls.UClient(
-			conn,
-			&utls.Config{
-				ServerName: ss.ServerName(),
-				RootCAs:    certPool,
-			},
-			utls.Hello360_Auto)
+		uConn := utls.UClient(conn, tlsConfig, utls.Hello360_Auto)
 		if err := uConn.HandshakeContext(ctx); err != nil {
 			return nil, err
 		}
@@ -580,9 +585,8 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 		})
 
 	if ss.IsHTTPSOutboundProto() {
-		certPool, err := ss.loadCustomCertPool()
+		tlsConfig, err := ss.tlsConfig()
 		if err != nil {
-			log.Error("[EASYSS] load custom cert pool", "err", err)
 			return err
 		}
 		client.SetDialTLS(func(_ context.Context, _, addr string) (net.Conn, error) {
@@ -594,13 +598,7 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 				return nil, err
 			}
 
-			uConn := utls.UClient(
-				conn,
-				&utls.Config{
-					ServerName: ss.ServerName(),
-					RootCAs:    certPool,
-				},
-				utls.Hello360_Auto)
+			uConn := utls.UClient(conn, tlsConfig, utls.Hello360_Auto)
 			if err := uConn.HandshakeContext(ctx); err != nil {
 				return nil, err
 			}
