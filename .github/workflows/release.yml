@@ -78,8 +78,8 @@ jobs:
           check-latest: true
       - name: Build
         run: |
-          GOOS=darwin GOARCH=amd64 make easyss
-          GOOS=darwin GOARCH=amd64 make easyss-server
+          make easyss
+          make easyss-server
       - name: Pack
         run: |
           cd bin
