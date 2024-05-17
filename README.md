@@ -17,7 +17,7 @@ Easyss是一款兼容socks5的安全代理上网工具，目标是使访问国�
 * 可配置多服务器切换; 自定义直连白名单(IP/域名)
 * 基于TLS底层传输(可禁用); 上层支持AEAD类型高强度加密通信, 如aes-256-gcm, chacha20-poly1305
 * http2帧格式交互 (更灵活通用, 更易扩展)
-* 支持多种出口协议: `native`, `http`, `https`; 以适应各种复杂场景
+* 支持多种出口协议: `native(默认)`, `http`, `https`; 以适应各种复杂场景
 * 支持服务端(easyss-server)链式代理
 * 内建DNS服务器，支持DNS Forward转发，可用于透明代理部署时使用 (默认关闭，可通过命令行启用)
 
@@ -179,7 +179,7 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 示例就是使用IP而不是域名生成自定义证书，这样就可以无域名使用Easyss了。
 
 ## 高级用法
-### 服务器部署在反向代理之后
+### 服务器部署在反向代理(或CDN)之后
 默认Easyss的出口协议为`native`，是基于TCP的一种特有协议。
 但由于各种网络情况的客观复杂性，有可能我们的Easyss-server服务器只能部署于HTTP(s)反向代理之后的，
 这时候`native`协议将无法工作，因此easyss支持了三种出口协议可选：`native`, `http`, `https`。
