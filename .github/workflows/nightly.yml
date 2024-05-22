@@ -18,8 +18,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '^1.22'
-          check-latest: true
+          go-version-file: 'go.mod'
 
       - name: Set up Android NDK
         uses: nttld/setup-ndk@v1
@@ -66,7 +65,7 @@ jobs:
         run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
       - name: Nightly Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           name: Nightly-${{ steps.vars.outputs.sha_short }}
           tag_name: nightly-${{ steps.vars.outputs.sha_short }}
@@ -85,8 +84,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '^1.22'
-          check-latest: true
+          go-version-file: 'go.mod'
 
       - name: Build
         run: |
@@ -115,7 +113,7 @@ jobs:
         run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
       - name: Nightly Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           name: Nightly-${{ steps.vars.outputs.sha_short }}
           tag_name: nightly-${{ steps.vars.outputs.sha_short }}

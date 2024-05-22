@@ -22,11 +22,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '^1.22'
-          check-latest: true
+          go-version-file: 'go.mod'
 
       - name: Cache go module
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cache/go-build
@@ -36,7 +35,7 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v3
+        uses: golangci/golangci-lint-action@v6
         with:
           version: latest
           args: --timeout 10m0s --verbose
@@ -56,11 +55,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '^1.22'
-          check-latest: true
+          go-version-file: 'go.mod'
 
       - name: Cache go module
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cache/go-build
@@ -70,7 +68,7 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v3
+        uses: golangci/golangci-lint-action@v6
         with:
           version: latest
           args: --timeout 10m0s --verbose
@@ -90,11 +88,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '^1.22'
-          check-latest: true
+          go-version-file: 'go.mod'
 
       - name: Cache go module
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cache/go-build
@@ -104,7 +101,7 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v3
+        uses: golangci/golangci-lint-action@v6
         with:
           version: latest
           args: --timeout 10m0s --verbose

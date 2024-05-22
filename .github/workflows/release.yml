@@ -18,8 +18,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '^1.22'
-          check-latest: true
+          go-version-file: 'go.mod'
 
       - name: Set up Android NDK
         uses: nttld/setup-ndk@v1
@@ -61,7 +60,7 @@ jobs:
           zip easyss-server-linux-arm64.zip ./easyss-server
 
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           name: Release ${{ github.ref_name }}
           body: TODO
@@ -74,8 +73,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '^1.22'
-          check-latest: true
+          go-version-file: 'go.mod'
+
       - name: Build
         run: |
           make easyss
@@ -95,7 +94,7 @@ jobs:
           zip easyss-darwin-arm64.zip ./easyss
           zip easyss-server-darwin-arm64.zip ./easyss-server
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           name: Release ${{ github.ref_name }}
           body: TODO
