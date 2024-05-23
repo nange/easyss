@@ -619,6 +619,10 @@ func (ss *Easyss) Config() *Config {
 	return ss.config
 }
 
+func (ss *Easyss) CurrConfig() *Config {
+	return ss.currConfig
+}
+
 func (ss *Easyss) LocalPort() int {
 	return ss.currConfig.LocalPort
 }
@@ -666,13 +670,43 @@ func (ss *Easyss) PingLatencyCh() chan string { return ss.pingLatCh }
 
 func (ss *Easyss) ServerListAddrs() []string {
 	var list []string
+	builder := strings.Builder{}
 	for _, s := range ss.config.ServerList {
 		if util.IsIPV6(s.Server) {
-			list = append(list, fmt.Sprintf("[%s]:%d", s.Server, s.ServerPort))
+			builder.WriteString(fmt.Sprintf("[%s]:%d", s.Server, s.ServerPort))
 		} else {
-			list = append(list, fmt.Sprintf("%s:%d", s.Server, s.ServerPort))
+			builder.WriteString(fmt.Sprintf("%s:%d", s.Server, s.ServerPort))
 		}
+		builder.WriteString(" [proto=")
+		proto := ss.Config().OutboundProto
+		if s.OutboundProto != "" {
+			proto = s.OutboundProto
+		}
+		builder.WriteString(proto)
+		if s.SN != "" {
+			builder.WriteString(", sn=")
+			builder.WriteString(s.SN)
+		} else if ss.Config().SN != "" {
+			builder.WriteString(", sn=")
+			builder.WriteString(ss.Config().SN)
+		}
+		builder.WriteString("]")
+		list = append(list, builder.String())
+		builder.Reset()
 	}
+
+	if len(list) == 0 {
+		builder.WriteString(ss.ServerAddr())
+		builder.WriteString(" [proto=")
+		builder.WriteString(ss.OutboundProto())
+		if ss.CurrConfig().SN != "" {
+			builder.WriteString(", sn=")
+			builder.WriteString(ss.CurrConfig().SN)
+		}
+		builder.WriteString("]")
+		list = append(list, builder.String())
+	}
+
 	return list
 }
 

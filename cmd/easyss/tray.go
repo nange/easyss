@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,13 +62,10 @@ func (st *SysTray) AddSelectServerMenu() {
 
 	var subMenuItems []*systray.MenuItem
 	addrs := st.SS().ServerListAddrs()
-	if len(addrs) == 0 {
-		addrs = []string{st.SS().ServerAddr()}
-	}
 	for _, addr := range addrs {
 		item := selectServer.AddSubMenuItemCheckbox(addr, "服务器地址", false)
 		subMenuItems = append(subMenuItems, item)
-		if addr == st.SS().ServerAddr() {
+		if strings.Contains(addr, st.SS().ServerAddr()) {
 			item.Check()
 		}
 	}
