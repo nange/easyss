@@ -2,11 +2,11 @@ package netpipe
 
 import (
 	"fmt"
-	"io"
 	"net"
 	"sync"
 	"time"
 
+	"github.com/nange/easyss/v2/util/bytespool"
 	"github.com/smallnest/ringbuffer"
 )
 
@@ -16,6 +16,7 @@ var _ net.Conn = (*pipe)(nil) // ensure to implements net.Conn
 // will block until data is available.
 type pipe struct {
 	buf  *ringbuffer.RingBuffer
+	back []byte
 	cond sync.Cond
 	mu   sync.Mutex
 
@@ -40,10 +41,15 @@ func (p *pipe) Read(b []byte) (n int, err error) {
 	p.cond.L.Lock()
 	defer p.cond.L.Unlock()
 
+	if p.rLate {
+		return 0, ErrDeadline
+	}
+
 	if !p.readDeadline.IsZero() {
 		now := time.Now()
 		dur := p.readDeadline.Sub(now)
 		if dur <= 0 {
+			p.rLate = true
 			return 0, ErrDeadline
 		}
 		nextReadDone := make(chan struct{})
@@ -70,15 +76,10 @@ func (p *pipe) Read(b []byte) (n int, err error) {
 	}
 
 	if p.rLate {
-		err = ErrDeadline
-	} else {
-		n, err = p.buf.Read(b)
-		if p.buf.IsEmpty() && p.closed && n == 0 {
-			err = io.EOF
-		}
+		return 0, ErrDeadline
 	}
 
-	return
+	return p.buf.Read(b)
 }
 
 // Write copies bytes from p into the buffer and wakes a reader.
@@ -94,14 +95,12 @@ func (p *pipe) Write(b []byte) (n int, err error) {
 	if p.wLate {
 		return 0, ErrDeadline
 	}
-	if p.closed {
-		return 0, ErrPipeClosed
-	}
 
 	if !p.writeDeadline.IsZero() {
 		now := time.Now()
 		dur := p.writeDeadline.Sub(now)
 		if dur <= 0 {
+			p.wLate = true
 			return 0, ErrDeadline
 		}
 		nextWriteDone := make(chan struct{})
@@ -134,18 +133,24 @@ func (p *pipe) Write(b []byte) (n int, err error) {
 }
 
 func (p *pipe) Close() error {
-	p.SetErrorAndClose(ErrPipeClosed)
+	p.cond.L.Lock()
+	defer p.cond.L.Unlock()
+
+	p.closed = true
+	p.buf.CloseWithError(ErrPipeClosed)
+	p.cond.Broadcast()
+	bytespool.MustPut(p.back)
 	return nil
 }
 
-func (p *pipe) SetErrorAndClose(err error) {
+func (p *pipe) CloseWrite() error {
 	p.cond.L.Lock()
 	defer p.cond.L.Unlock()
-	defer p.cond.Broadcast()
-	if !p.closed {
-		p.closed = true
-		p.err = err
-	}
+
+	p.closed = true
+	p.buf.CloseWriter()
+	p.cond.Broadcast()
+	return nil
 }
 
 // Pipe technically implements the net.Conn interface
