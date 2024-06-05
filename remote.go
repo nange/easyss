@@ -14,6 +14,7 @@ import (
 	"github.com/nange/easyss/v2/httptunnel"
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util"
+	"github.com/nange/easyss/v2/util/netpipe"
 	"github.com/txthinking/socks5"
 )
 
@@ -117,7 +118,7 @@ func (es *EasyServer) handleConn(conn net.Conn, tryReuse bool) {
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				log.Debug("[REMOTE] got EOF error when handshake with client-server, maybe the connection pool closed the idle conn")
-			} else {
+			} else if !errors.Is(err, netpipe.ErrDeadline) {
 				log.Warn("[REMOTE] handshake with client", "err", err)
 			}
 			return

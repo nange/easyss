@@ -165,12 +165,11 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	if err != nil {
-		if !errors.Is(err, io.EOF) {
-			log.Warn("[HTTP_TUNNEL_SERVER] read from conn", "err", err)
-		}
-		s.CloseConn(reqID)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, netpipe.ErrPipeClosed) {
+		log.Warn("[HTTP_TUNNEL_SERVER] read from conn", "err", err)
 	}
+
+	s.CloseConn(reqID)
 	log.Info("[HTTP_TUNNEL_SERVER] Pull completed...", "uuid", reqID)
 }
 
@@ -246,11 +245,6 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 func (s *Server) CloseConn(reqID string) {
 	s.Lock()
 	defer s.Unlock()
-	conns := s.connMap[reqID]
-	if len(conns) > 0 {
-		_ = conns[0].Close()
-		_ = conns[1].Close()
-	}
 
 	s.connMap[reqID] = nil
 	delete(s.connMap, reqID)

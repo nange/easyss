@@ -24,7 +24,7 @@ func (d dupPipe) Write(b []byte) (n int, err error) {
 }
 
 func (d dupPipe) Close() error {
-	return d.Send.Close()
+	return errors.Join(d.Send.Close(), d.Recv.Close())
 }
 
 func (d dupPipe) CloseWrite() error {
