@@ -24,7 +24,6 @@ type pipe struct {
 	rLate         bool
 	wLate         bool
 	closed        bool
-	err           error
 	readDeadline  time.Time
 	writeDeadline time.Time
 	remoteAddr    net.Addr
