@@ -45,7 +45,7 @@ func TestDupPipe_Read_Write(t *testing.T) {
 	n, err = p1.Write([]byte("hello3"))
 	assert.Equal(t, 6, n)
 	assert.Nil(t, err)
-	assert.Nil(t, p1.Close())
+	assert.Nil(t, p1.(interface{ CloseWrite() error }).CloseWrite())
 
 	n, err = p2.Read(b)
 	assert.Equal(t, 6, n)
@@ -83,7 +83,7 @@ func TestDupPip_ConReadWrite(t *testing.T) {
 			assert.Nil(t, err)
 			count1 += n
 		}
-		assert.Nil(t, p1.Close())
+		assert.Nil(t, p1.(interface{ CloseWrite() error }).CloseWrite())
 	}()
 
 	b := make([]byte, 64)
