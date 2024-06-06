@@ -12,6 +12,7 @@ import (
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
+	"github.com/nange/easyss/v2/util/netpipe"
 )
 
 func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, isDNSProto, tryReuse bool) error {
@@ -47,7 +48,7 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, isD
 				if errors.Is(err, cipherstream.ErrFINRSTStream) {
 					_tryReuse = true
 					log.Debug("[REMOTE_UDP] received FIN when reading data from client, try to reuse the connection")
-				} else if !errors.Is(err, io.EOF) {
+				} else if !errors.Is(err, io.EOF) && !errors.Is(err, netpipe.ErrDeadline) {
 					log.Warn("[REMOTE_UDP] read data from client connection", "err", err)
 				}
 
