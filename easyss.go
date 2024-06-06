@@ -467,6 +467,7 @@ func (ss *Easyss) tlsConfig() (*utls.Config, error) {
 	return &utls.Config{
 		ServerName: ss.ServerName(),
 		RootCAs:    certPool,
+		NextProtos: []string{"http/1.1"},
 	}, nil
 }
 
