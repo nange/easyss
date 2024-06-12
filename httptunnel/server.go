@@ -169,7 +169,7 @@ func (s *Server) pull(w http.ResponseWriter, r *http.Request) {
 		log.Warn("[HTTP_TUNNEL_SERVER] read from conn", "err", err)
 	}
 
-	s.CloseConn(reqID)
+	s.pullClose(reqID)
 	log.Info("[HTTP_TUNNEL_SERVER] Pull completed...", "uuid", reqID)
 }
 
@@ -226,6 +226,11 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	s.notifyPull(reqID)
 	s.Unlock()
 
+	if p.Payload == "" {
+		// client end push
+		_ = conns[0].(interface{ CloseWrite() error }).CloseWrite()
+		return
+	}
 	cipher, err := base64.StdEncoding.DecodeString(p.Payload)
 	if err != nil {
 		log.Warn("[HTTP_TUNNEL_SERVER] decode cipher", "err", err)
@@ -242,9 +247,15 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	writeSuccess(w)
 }
 
-func (s *Server) CloseConn(reqID string) {
+func (s *Server) pullClose(reqID string) {
 	s.Lock()
 	defer s.Unlock()
+
+	conns, ok := s.connMap[reqID]
+	if !ok {
+		return
+	}
+	_ = conns[1].(interface{ CloseWrite() error }).CloseWrite()
 
 	s.connMap[reqID] = nil
 	delete(s.connMap, reqID)
