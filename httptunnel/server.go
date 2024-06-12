@@ -251,12 +251,6 @@ func (s *Server) pullClose(reqID string) {
 	s.Lock()
 	defer s.Unlock()
 
-	conns, ok := s.connMap[reqID]
-	if !ok {
-		return
-	}
-	_ = conns[1].(interface{ CloseWrite() error }).CloseWrite()
-
 	s.connMap[reqID] = nil
 	delete(s.connMap, reqID)
 }
