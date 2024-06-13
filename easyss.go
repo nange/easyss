@@ -503,7 +503,7 @@ func (ss *Easyss) InitTcpPool() error {
 			return nil, err
 		}
 
-		uConn := utls.UClient(conn, tlsConfig, utls.Hello360_Auto)
+		uConn := utls.UClient(conn, tlsConfig.Clone(), utls.Hello360_Auto)
 		if err := uConn.HandshakeContext(ctx); err != nil {
 			return nil, err
 		}
@@ -599,7 +599,7 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 				return nil, err
 			}
 
-			uConn := utls.UClient(conn, tlsConfig, utls.Hello360_Auto)
+			uConn := utls.UClient(conn, tlsConfig.Clone(), utls.Hello360_Auto)
 			if err := uConn.HandshakeContext(ctx); err != nil {
 				return nil, err
 			}
