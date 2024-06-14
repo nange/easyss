@@ -91,7 +91,7 @@ func (es *EasyServer) startTCPServer() {
 }
 
 func (es *EasyServer) startHTTPTunnelServer() {
-	server := httptunnel.NewServer(es.ListenHTTPTunnelAddr(), es.Timeout(), es.tlsConfig.Clone())
+	server := httptunnel.NewServer(es.ListenHTTPTunnelAddr(), es.MaxConnWaitTimeout(), es.tlsConfig.Clone())
 	es.mu.Lock()
 	es.httpTunnelServer = server
 	es.mu.Unlock()

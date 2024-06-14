@@ -138,7 +138,10 @@ func (p *pipe) Close() error {
 	p.closed = true
 	p.buf.CloseWithError(ErrPipeClosed)
 	p.cond.Broadcast()
-	bytespool.MustPut(p.back)
+	if len(p.back) > 0 {
+		bytespool.MustPut(p.back)
+		p.back = nil
+	}
 	return nil
 }
 
