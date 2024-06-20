@@ -48,7 +48,7 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, isD
 				if errors.Is(err, cipherstream.ErrFINRSTStream) {
 					_tryReuse = true
 					log.Debug("[REMOTE_UDP] received FIN when reading data from client, try to reuse the connection")
-				} else if !errors.Is(err, io.EOF) && !errors.Is(err, netpipe.ErrDeadline) {
+				} else if !errors.Is(err, io.EOF) && !errors.Is(err, netpipe.ErrReadDeadline) {
 					log.Warn("[REMOTE_UDP] read data from client connection", "err", err)
 				}
 

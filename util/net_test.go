@@ -23,7 +23,7 @@ func TestIP(t *testing.T) {
 }
 
 func TestLookupIPV4From(t *testing.T) {
-	ips, err := LookupIPV4From("8.8.8.8:53", "dnspod.cn")
+	ips, err := LookupIPV4From("119.29.29.29:53", "dnspod.cn")
 	assert.Nil(t, err)
 	assert.Greater(t, len(ips), 0)
 }

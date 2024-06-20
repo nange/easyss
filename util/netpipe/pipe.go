@@ -1,6 +1,7 @@
 package netpipe
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -15,10 +16,12 @@ var _ net.Conn = (*pipe)(nil) // ensure to implements net.Conn
 // Pipe is buffered version of net.Pipe. Reads
 // will block until data is available.
 type pipe struct {
-	buf  *ringbuffer.RingBuffer
-	back []byte
-	cond sync.Cond
-	mu   sync.Mutex
+	buf    *ringbuffer.RingBuffer
+	back   []byte
+	rdChan chan struct{}
+	wdChan chan struct{}
+	cond   sync.Cond
+	mu     sync.Mutex
 
 	maxSize       int
 	rLate         bool
@@ -30,7 +33,8 @@ type pipe struct {
 	localAddr     net.Addr
 }
 
-var ErrDeadline = fmt.Errorf("pipe deadline exceeded")
+var ErrReadDeadline = fmt.Errorf("pipe read deadline exceeded")
+var ErrWriteDeadline = fmt.Errorf("pipe write deadline exceeded")
 var ErrPipeClosed = fmt.Errorf("pipe closed")
 var ErrExceedMaxSize = fmt.Errorf("exceed max size")
 
@@ -41,30 +45,7 @@ func (p *pipe) Read(b []byte) (n int, err error) {
 	defer p.cond.L.Unlock()
 
 	if p.rLate {
-		return 0, ErrDeadline
-	}
-
-	if !p.readDeadline.IsZero() {
-		now := time.Now()
-		dur := p.readDeadline.Sub(now)
-		if dur <= 0 {
-			p.rLate = true
-			return 0, ErrDeadline
-		}
-		nextReadDone := make(chan struct{})
-		defer close(nextReadDone)
-		go func(dur time.Duration) {
-			timer := time.NewTimer(dur)
-			defer timer.Stop()
-			select {
-			case <-timer.C:
-				p.cond.L.Lock()
-				p.rLate = true
-				p.cond.L.Unlock()
-				p.cond.Broadcast()
-			case <-nextReadDone:
-			}
-		}(dur)
+		return 0, ErrReadDeadline
 	}
 
 	defer p.cond.Broadcast()
@@ -75,7 +56,7 @@ func (p *pipe) Read(b []byte) (n int, err error) {
 	}
 
 	if p.rLate {
-		return 0, ErrDeadline
+		return 0, ErrReadDeadline
 	}
 
 	return p.buf.Read(b)
@@ -92,31 +73,9 @@ func (p *pipe) Write(b []byte) (n int, err error) {
 	defer p.cond.L.Unlock()
 
 	if p.wLate {
-		return 0, ErrDeadline
+		return 0, ErrWriteDeadline
 	}
 
-	if !p.writeDeadline.IsZero() {
-		now := time.Now()
-		dur := p.writeDeadline.Sub(now)
-		if dur <= 0 {
-			p.wLate = true
-			return 0, ErrDeadline
-		}
-		nextWriteDone := make(chan struct{})
-		defer close(nextWriteDone)
-		go func(dur time.Duration) {
-			timer := time.NewTimer(dur)
-			defer timer.Stop()
-			select {
-			case <-timer.C:
-				p.cond.L.Lock()
-				p.wLate = true
-				p.cond.L.Unlock()
-				p.cond.Broadcast()
-			case <-nextWriteDone:
-			}
-		}(dur)
-	}
 	defer p.cond.Broadcast()
 
 	for p.buf.Free() < len(b) && !p.closed && !p.wLate {
@@ -125,7 +84,7 @@ func (p *pipe) Write(b []byte) (n int, err error) {
 	}
 
 	if p.wLate {
-		return 0, ErrDeadline
+		return 0, ErrWriteDeadline
 	}
 
 	return p.buf.Write(b)
@@ -179,26 +138,81 @@ func (a addr) Network() string { return "pipe" }
 func (p *pipe) SetDeadline(t time.Time) error {
 	err := p.SetReadDeadline(t)
 	err2 := p.SetWriteDeadline(t)
-	if err != nil {
-		return err
-	}
-	return err2
+	return errors.Join(err, err2)
 }
 
 // SetWriteDeadline implements the net.Conn method
 func (p *pipe) SetWriteDeadline(t time.Time) error {
+	// Let the previous goroutine exit, if it exists.
+	select {
+	case p.wdChan <- struct{}{}:
+	default:
+	}
+
 	p.cond.L.Lock()
-	p.writeDeadline = t
-	p.wLate = false
-	p.cond.L.Unlock()
+	defer p.cond.L.Unlock()
+
+	if t.IsZero() || t.After(time.Now()) {
+		p.wLate = false
+	} else {
+		p.wLate = true
+		p.cond.Broadcast()
+		return nil
+	}
+
+	if !t.IsZero() {
+		go func() {
+			timer := time.NewTimer(t.Sub(time.Now()))
+			defer timer.Stop()
+
+			select {
+			case <-timer.C:
+				p.cond.L.Lock()
+				p.wLate = true
+				p.cond.Broadcast()
+				p.cond.L.Unlock()
+			case <-p.wdChan:
+			}
+		}()
+	}
+
 	return nil
 }
 
 // SetReadDeadline implements the net.Conn method
 func (p *pipe) SetReadDeadline(t time.Time) error {
+	// Let the previous goroutine exit, if it exists.
+	select {
+	case p.rdChan <- struct{}{}:
+	default:
+	}
+
 	p.cond.L.Lock()
-	p.readDeadline = t
-	p.rLate = false
-	p.cond.L.Unlock()
+	defer p.cond.L.Unlock()
+
+	if t.IsZero() || t.After(time.Now()) {
+		p.rLate = false
+	} else {
+		p.rLate = true
+		p.cond.Broadcast()
+		return nil
+	}
+
+	if !t.IsZero() {
+		go func() {
+			timer := time.NewTimer(t.Sub(time.Now()))
+			defer timer.Stop()
+
+			select {
+			case <-timer.C:
+				p.cond.L.Lock()
+				p.rLate = true
+				p.cond.Broadcast()
+				p.cond.L.Unlock()
+			case <-p.rdChan:
+			}
+		}()
+	}
+
 	return nil
 }

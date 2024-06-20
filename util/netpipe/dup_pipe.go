@@ -70,6 +70,8 @@ func Pipe(maxSize int, addrs ...net.Addr) (net.Conn, net.Conn) {
 	sp := &pipe{
 		buf:        ringbuffer.NewBuffer(buf1),
 		back:       buf1,
+		rdChan:     make(chan struct{}),
+		wdChan:     make(chan struct{}),
 		maxSize:    maxSize,
 		remoteAddr: remoteAddr,
 		localAddr:  localAddr,
@@ -80,6 +82,8 @@ func Pipe(maxSize int, addrs ...net.Addr) (net.Conn, net.Conn) {
 	rp := &pipe{
 		buf:        ringbuffer.NewBuffer(buf2),
 		back:       buf2,
+		rdChan:     make(chan struct{}),
+		wdChan:     make(chan struct{}),
 		maxSize:    maxSize,
 		remoteAddr: remoteAddr,
 		localAddr:  localAddr,
