@@ -23,14 +23,12 @@ type pipe struct {
 	cond   sync.Cond
 	mu     sync.Mutex
 
-	maxSize       int
-	rLate         bool
-	wLate         bool
-	closed        bool
-	readDeadline  time.Time
-	writeDeadline time.Time
-	remoteAddr    net.Addr
-	localAddr     net.Addr
+	maxSize    int
+	rLate      bool
+	wLate      bool
+	closed     bool
+	remoteAddr net.Addr
+	localAddr  net.Addr
 }
 
 var ErrReadDeadline = fmt.Errorf("pipe read deadline exceeded")
@@ -162,7 +160,7 @@ func (p *pipe) SetWriteDeadline(t time.Time) error {
 
 	if !t.IsZero() {
 		go func() {
-			timer := time.NewTimer(t.Sub(time.Now()))
+			timer := time.NewTimer(time.Until(t))
 			defer timer.Stop()
 
 			select {
@@ -200,7 +198,7 @@ func (p *pipe) SetReadDeadline(t time.Time) error {
 
 	if !t.IsZero() {
 		go func() {
-			timer := time.NewTimer(t.Sub(time.Now()))
+			timer := time.NewTimer(time.Until(t))
 			defer timer.Stop()
 
 			select {
