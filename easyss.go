@@ -845,9 +845,13 @@ func (ss *Easyss) Pool() easypool.Pool {
 
 func (ss *Easyss) AvailableConn(needPingACK ...bool) (conn net.Conn, err error) {
 	var pool easypool.Pool
+	var tryCount = 1
 	if ss.IsNativeOutboundProto() {
 		if pool = ss.Pool(); pool == nil {
 			return nil, errors.New("pool is closed")
+		}
+		if pool.Len() > 3 {
+			tryCount = 3
 		}
 	}
 
@@ -880,7 +884,7 @@ func (ss *Easyss) AvailableConn(needPingACK ...bool) (conn net.Conn, err error) 
 		return
 	}
 
-	for i := 0; i < 3; i++ {
+	for i := 0; i < tryCount; i++ {
 		switch ss.OutboundProto() {
 		case OutboundProtoHTTP:
 			conn, err = httptunnel.NewLocalConn(ss.HTTPOutboundClient(), "http://"+ss.ServerAddr(), ss.ServerName())
