@@ -472,8 +472,14 @@ func (ss *Easyss) tlsConfig() (*utls.Config, error) {
 }
 
 func (ss *Easyss) InitTcpPool() error {
-	if !ss.IsNativeOutboundProto() {
-		log.Info("[EASYSS] outbound proto don't need init tcp pool", "proto", ss.OutboundProto())
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if ss.tcpPool != nil {
+		return nil
+	}
+
+	if !ss.IsNativeOutboundProto() || ss.proxyRule == ProxyRuleDirect {
+		log.Info("[EASYSS] don't need init tcp pool", "proto", ss.OutboundProto(), "proxy_rule", ss.proxyRule)
 		return nil
 	}
 
@@ -520,7 +526,7 @@ func (ss *Easyss) InitTcpPool() error {
 		Factory:     factory,
 	}
 	tcpPool, err := easypool.NewHeapPool(config)
-	ss.SetPool(tcpPool)
+	ss.tcpPool = tcpPool
 
 	return err
 }
@@ -844,13 +850,17 @@ func (ss *Easyss) Pool() easypool.Pool {
 }
 
 func (ss *Easyss) AvailableConn(needPingACK ...bool) (conn net.Conn, err error) {
-	var pool easypool.Pool
 	var tryCount = 1
 	if ss.IsNativeOutboundProto() {
-		if pool = ss.Pool(); pool == nil {
-			return nil, errors.New("pool is closed")
+		if ss.Pool() == nil {
+			if ss.Closed() {
+				return nil, errors.New("pool is closed")
+			}
+			if err := ss.InitTcpPool(); err != nil {
+				return nil, err
+			}
 		}
-		if pool.Len() > 3 {
+		if pool := ss.Pool(); pool != nil && pool.Len() > 3 {
 			tryCount = 3
 		}
 	}
@@ -891,7 +901,7 @@ func (ss *Easyss) AvailableConn(needPingACK ...bool) (conn net.Conn, err error) 
 		case OutboundProtoHTTPS:
 			conn, err = httptunnel.NewLocalConn(ss.HTTPOutboundClient(), "https://"+ss.ServerAddr(), ss.ServerName())
 		default:
-			conn, err = pool.Get()
+			conn, err = ss.PoolConn()
 		}
 		if err != nil {
 			log.Warn("[EASYSS] get conn failed", "err", err)
@@ -912,6 +922,15 @@ func (ss *Easyss) AvailableConn(needPingACK ...bool) (conn net.Conn, err error) 
 	}
 
 	return
+}
+
+func (ss *Easyss) PoolConn() (net.Conn, error) {
+	ss.mu.RLock()
+	defer ss.mu.RUnlock()
+	if ss.tcpPool == nil {
+		return nil, errors.New("pool is closed or not be initialized")
+	}
+	return ss.tcpPool.Get()
 }
 
 func (ss *Easyss) SetSocksServer(server *socks5.Server) {
@@ -973,12 +992,6 @@ func (ss *Easyss) SetHttpProxyServer(server *http.Server) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	ss.httpProxyServer = server
-}
-
-func (ss *Easyss) SetPool(pool easypool.Pool) {
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
-	ss.tcpPool = pool
 }
 
 func (ss *Easyss) DNSCache(name, qtype string, isDirect bool) *dns.Msg {
@@ -1175,4 +1188,10 @@ func (ss *Easyss) Close() error {
 		ss.closing = nil
 	}
 	return err
+}
+
+func (ss *Easyss) Closed() bool {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	return ss.closing == nil
 }

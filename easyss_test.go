@@ -150,8 +150,8 @@ func (es *EasyssSuite) BeforeTest(suiteName, testName string) {
 	ss.disableValidateAddr = true
 	es.ss = ss
 
-	es.Nilf(es.ss.InitTcpPool(), "init tcp pool failed")
 	go es.ss.LocalSocks5()
+	time.Sleep(time.Second)
 	go es.ss.LocalHttp()
 	time.Sleep(time.Second)
 }

@@ -12,10 +12,6 @@ import (
 )
 
 func Start(ss *easyss.Easyss) {
-	if err := ss.InitTcpPool(); err != nil {
-		log.Error("[EASYSS-MAIN] init tcp pool", "err", err)
-	}
-
 	go ss.LocalSocks5() // start local server
 	go ss.LocalHttp()   // start local http proxy server
 	if ss.EnableForwardDNS() {

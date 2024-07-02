@@ -45,6 +45,15 @@ func ParseProxyRuleFromString(rule string) ProxyRule {
 	return ProxyRuleUnknown
 }
 
+func (r ProxyRule) String() string {
+	for k, v := range proxyRules {
+		if v == r {
+			return k
+		}
+	}
+	return "unknown proxy rule"
+}
+
 func AllProxyRule() []string {
 	return util.MapKeys(proxyRules)
 }

@@ -50,6 +50,10 @@ func (ss *Easyss) background() {
 }
 
 func (ss *Easyss) pingOnce() {
+	if ss.ProxyRule() == ProxyRuleDirect {
+		log.Debug("[EASYSS_BACKGROUND] proxy rule is direct, don't need ping remote server")
+		return
+	}
 	var since time.Duration
 	var err error
 	for i := 1; i <= 3; i++ {
