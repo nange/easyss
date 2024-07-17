@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gofrs/uuid/v5"
 	"github.com/nange/easyss/v2/util/bytespool"
 	"github.com/smallnest/ringbuffer"
 )
@@ -26,6 +27,8 @@ type pipe struct {
 	maxSize    int
 	rLate      bool
 	wLate      bool
+	rdID       string
+	wdID       string
 	closed     bool
 	remoteAddr net.Addr
 	localAddr  net.Addr
@@ -141,14 +144,21 @@ func (p *pipe) SetDeadline(t time.Time) error {
 
 // SetWriteDeadline implements the net.Conn method
 func (p *pipe) SetWriteDeadline(t time.Time) error {
+	p.cond.L.Lock()
+	defer p.cond.L.Unlock()
+
+	uid, err := uuid.NewV7()
+	if err != nil {
+		return err
+	}
+	wdID := uid.String()
+	p.wdID = wdID
+
 	// Let the previous goroutine exit, if it exists.
 	select {
 	case p.wdChan <- struct{}{}:
 	default:
 	}
-
-	p.cond.L.Lock()
-	defer p.cond.L.Unlock()
 
 	if t.IsZero() || t.After(time.Now()) {
 		p.wLate = false
@@ -166,8 +176,10 @@ func (p *pipe) SetWriteDeadline(t time.Time) error {
 			select {
 			case <-timer.C:
 				p.cond.L.Lock()
-				p.wLate = true
-				p.cond.Broadcast()
+				if p.wdID == wdID {
+					p.wLate = true
+					p.cond.Broadcast()
+				}
 				p.cond.L.Unlock()
 			case <-p.wdChan:
 			}
@@ -179,14 +191,21 @@ func (p *pipe) SetWriteDeadline(t time.Time) error {
 
 // SetReadDeadline implements the net.Conn method
 func (p *pipe) SetReadDeadline(t time.Time) error {
+	p.cond.L.Lock()
+	defer p.cond.L.Unlock()
+
+	uid, err := uuid.NewV7()
+	if err != nil {
+		return err
+	}
+	rdID := uid.String()
+	p.rdID = rdID
+
 	// Let the previous goroutine exit, if it exists.
 	select {
 	case p.rdChan <- struct{}{}:
 	default:
 	}
-
-	p.cond.L.Lock()
-	defer p.cond.L.Unlock()
 
 	if t.IsZero() || t.After(time.Now()) {
 		p.rLate = false
@@ -204,8 +223,10 @@ func (p *pipe) SetReadDeadline(t time.Time) error {
 			select {
 			case <-timer.C:
 				p.cond.L.Lock()
-				p.rLate = true
-				p.cond.Broadcast()
+				if p.rdID == rdID {
+					p.rLate = true
+					p.cond.Broadcast()
+				}
 				p.cond.L.Unlock()
 			case <-p.rdChan:
 			}
