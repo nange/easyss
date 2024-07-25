@@ -30,6 +30,7 @@ type pipe struct {
 	rdID       string
 	wdID       string
 	closed     bool
+	closing    chan struct{}
 	remoteAddr net.Addr
 	localAddr  net.Addr
 }
@@ -102,6 +103,7 @@ func (p *pipe) Close() error {
 		bytespool.MustPut(p.back)
 		p.back = nil
 	}
+	close(p.closing)
 	return nil
 }
 
@@ -182,6 +184,7 @@ func (p *pipe) SetWriteDeadline(t time.Time) error {
 				}
 				p.cond.L.Unlock()
 			case <-p.wdChan:
+			case <-p.closing:
 			}
 		}()
 	}
@@ -229,6 +232,7 @@ func (p *pipe) SetReadDeadline(t time.Time) error {
 				}
 				p.cond.L.Unlock()
 			case <-p.rdChan:
+			case <-p.closing:
 			}
 		}()
 	}
