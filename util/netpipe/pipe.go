@@ -96,14 +96,18 @@ func (p *pipe) Close() error {
 	p.cond.L.Lock()
 	defer p.cond.L.Unlock()
 
-	p.closed = true
+	if !p.closed {
+		p.closed = true
+		close(p.closing)
+	}
+
 	p.buf.CloseWithError(ErrPipeClosed)
 	p.cond.Broadcast()
 	if len(p.back) > 0 {
 		bytespool.MustPut(p.back)
 		p.back = nil
 	}
-	close(p.closing)
+
 	return nil
 }
 
