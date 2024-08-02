@@ -153,6 +153,10 @@ func (p *pipe) SetWriteDeadline(t time.Time) error {
 	p.cond.L.Lock()
 	defer p.cond.L.Unlock()
 
+	if p.closed {
+		return ErrPipeClosed
+	}
+
 	uid, err := uuid.NewV7()
 	if err != nil {
 		return err
@@ -200,6 +204,10 @@ func (p *pipe) SetWriteDeadline(t time.Time) error {
 func (p *pipe) SetReadDeadline(t time.Time) error {
 	p.cond.L.Lock()
 	defer p.cond.L.Unlock()
+
+	if p.closed {
+		return ErrPipeClosed
+	}
 
 	uid, err := uuid.NewV7()
 	if err != nil {
