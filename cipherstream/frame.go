@@ -13,9 +13,9 @@ import (
 
 const (
 	Http2HeaderLen = 9
-	PaddingSize    = 96
-	MaxPaddingSize = 128
-	MinPaddingSize = 32
+	PaddingSize    = 64
+	MaxPaddingSize = 255
+	MinPaddingSize = 64
 )
 
 type FrameType uint8
