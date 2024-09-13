@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
+	"time"
 
 	"github.com/nange/easypool"
 	"github.com/nange/easyss/v2/log"
+	"github.com/nange/easyss/v2/util"
 	"github.com/nange/easyss/v2/util/bytespool"
 )
 
@@ -145,6 +148,15 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 				}
 			}
 			break
+		}
+		if util.RandomBetween(0, 10) > 6 {
+			// random insert a Ping frame
+			ping := []byte(strconv.FormatInt(time.Now().UnixNano(), 10))
+			if er := cs.WritePing(ping, FlagDefault); er != nil {
+				log.Error("[CIPHERSTREAM] write ping failed", "err", er)
+				err = errors.Join(err, er)
+				break
+			}
 		}
 	}
 
