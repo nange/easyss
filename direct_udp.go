@@ -12,9 +12,9 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/dialer"
 )
 
-// DefaultDirectDNSServers the servers are dns servers from tencent, aliyun and baidu
-var DefaultDirectDNSServers = [3]string{"119.29.29.29:53", "223.5.5.5:53", "180.76.76.76:53"}
-var DefaultDNSServerDomains = [3]string{"dnspod.cn", "alidns.com", "dudns.baidu.com"}
+// DefaultDirectDNSServers the servers are dns servers from aliyun, tencent, and baidu
+var DefaultDirectDNSServers = [3]string{"223.5.5.5:53", "119.29.29.29:53", "180.76.76.76:53"}
+var DefaultDNSServerDomains = [3]string{"alidns.com", "dnspod.cn", "dudns.baidu.com"}
 
 const DirectSuffix = "direct"
 
