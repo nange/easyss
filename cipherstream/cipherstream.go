@@ -106,6 +106,14 @@ func (cs *CipherStream) WritePing(b []byte, flag uint8) error {
 	return cs.WriteFrame(frame)
 }
 
+// RandomWritePing there is a 40% chance of inserting a Ping Frame.
+func (cs *CipherStream) RandomWritePing() error {
+	if util.RandomBetween(0, 10) > 5 {
+		return cs.WritePing([]byte(strconv.FormatInt(time.Now().UnixNano(), 10)), FlagDefault)
+	}
+	return nil
+}
+
 func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 	buf := bytespool.Get(MaxCipherRelaySize)
 	defer bytespool.MustPut(buf)
@@ -149,14 +157,11 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 			}
 			break
 		}
-		if util.RandomBetween(0, 10) > 6 {
-			// random insert a Ping frame
-			ping := []byte(strconv.FormatInt(time.Now().UnixNano(), 10))
-			if er := cs.WritePing(ping, FlagDefault); er != nil {
-				log.Error("[CIPHERSTREAM] write ping failed", "err", er)
-				err = errors.Join(err, er)
-				break
-			}
+
+		if er := cs.RandomWritePing(); er != nil {
+			log.Error("[CIPHERSTREAM] random write ping failed", "err", er)
+			err = errors.Join(err, er)
+			break
 		}
 	}
 
