@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/go-faker/faker/v4"
 	"github.com/nange/easyss/v2/util"
 )
 
@@ -145,6 +146,7 @@ type ServerConfig struct {
 	Timeout                int    `json:"timeout"`
 	LogLevel               string `json:"log_level"`
 	LogFilePath            string `json:"log_file_path"`
+	Email                  string `json:"email"`
 	DisableTLS             bool   `json:"disable_tls"`
 	CertPath               string `json:"cert_path"`
 	KeyPath                string `json:"key_path"`
@@ -457,6 +459,9 @@ func (c *ServerConfig) SetDefaultValue() {
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
 	}
+	if c.Email == "" {
+		c.Email = faker.Email()
+	}
 	if c.OutboundProto == "" {
 		c.OutboundProto = OutboundProtoNative
 	}
@@ -530,6 +535,7 @@ func ExampleServerJSONConfig() string {
 		ServerPort:        9999,
 		Password:          "your-pass",
 		Timeout:           30,
+		Email:             faker.Email(),
 		CertPath:          "",
 		KeyPath:           "",
 		EnableHTTPInbound: true,

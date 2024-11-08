@@ -44,6 +44,7 @@ func (es *EasyServer) initTLSConfig() error {
 		}
 		tlsConfig = &tls.Config{Certificates: []tls.Certificate{cer}}
 	} else {
+		certmagic.DefaultACME.Email = es.Email()
 		tlsConfig, err = certmagic.TLS([]string{es.Server()})
 		if err != nil {
 			return err

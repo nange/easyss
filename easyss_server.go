@@ -144,6 +144,10 @@ func (es *EasyServer) MaxConnWaitTimeout() time.Duration {
 	return 10 * es.Timeout()
 }
 
+func (es *EasyServer) Email() string {
+	return es.config.Email
+}
+
 func (es *EasyServer) CertPath() string {
 	return es.config.CertPath
 }
