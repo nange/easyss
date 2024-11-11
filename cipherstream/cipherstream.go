@@ -13,6 +13,7 @@ import (
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util"
 	"github.com/nange/easyss/v2/util/bytespool"
+	"github.com/nange/easyss/v2/util/netpipe"
 )
 
 const (
@@ -82,7 +83,9 @@ func (cs *CipherStream) WriteFrame(f *Frame) error {
 	}
 
 	if _, ew := cs.Conn.Write(frameBytes); ew != nil {
-		log.Warn("[CIPHERSTREAM] write cipher data to cipher stream failed", "err", ew)
+		if !errors.Is(ew, netpipe.ErrPipeClosed) {
+			log.Warn("[CIPHERSTREAM] write cipher data to cipher stream failed", "err", ew)
+		}
 		if timeout(ew) {
 			return ErrTimeout
 		}
@@ -135,7 +138,9 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 				}
 
 				if _, ew := cs.Conn.Write(frameBytes); ew != nil {
-					log.Warn("[CIPHERSTREAM] write cipher data to cipher stream failed", "err", ew)
+					if !errors.Is(ew, netpipe.ErrPipeClosed) {
+						log.Warn("[CIPHERSTREAM] write cipher data to cipher stream failed", "err", ew)
+					}
 					if timeout(ew) {
 						return ErrTimeout
 					}
@@ -159,7 +164,9 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 
 		if er := cs.RandomWritePing(); er != nil {
-			log.Error("[CIPHERSTREAM] random write ping failed", "err", er)
+			if !errors.Is(er, netpipe.ErrPipeClosed) {
+				log.Error("[CIPHERSTREAM] random write ping failed", "err", er)
+			}
 			err = errors.Join(err, er)
 			break
 		}

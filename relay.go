@@ -10,6 +10,7 @@ import (
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
+	"github.com/nange/easyss/v2/util/netpipe"
 )
 
 // RelayBufferSize set to MaxCipherRelaySize
@@ -107,7 +108,9 @@ func copyPlainTxtToCipher(cipher, plainTxt net.Conn, timeout time.Duration, tryR
 	if er := CloseWrite(cipher); er != nil {
 		tryReuse = false
 		err = errors.Join(err, er)
-		log.Warn("[REPAY] close write for cipher stream", "err", err)
+		if !errors.Is(er, netpipe.ErrPipeClosed) {
+			log.Warn("[REPAY] close write for cipher stream", "err", err)
+		}
 	}
 	if er := cipher.SetReadDeadline(time.Now().Add(3 * timeout)); er != nil {
 		err = errors.Join(err, er)

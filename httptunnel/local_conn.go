@@ -100,7 +100,9 @@ func (l *LocalConn) Pull() {
 		}
 		resp.Payload = ""
 		if _, err := l.conn2.Write(data); err != nil {
-			log.Error("[HTTP_TUNNEL_LOCAL] write text", "err", err, "uuid", l.uuid)
+			if !errors.Is(err, netpipe.ErrPipeClosed) {
+				log.Error("[HTTP_TUNNEL_LOCAL] write text", "err", err, "uuid", l.uuid)
+			}
 			break
 		}
 	}
@@ -109,7 +111,8 @@ func (l *LocalConn) Pull() {
 
 func (l *LocalConn) Push() {
 	if err := l.push(); err != nil {
-		if !errors.Is(err, io.EOF) && !errors.Is(err, netpipe.ErrPipeClosed) {
+		if !errors.Is(err, io.EOF) && !errors.Is(err, netpipe.ErrPipeClosed) &&
+			!strings.Contains(err.Error(), "pipe closed") {
 			log.Error("[HTTP_TUNNEL_LOCAL] push", "err", err, "uuid", l.uuid)
 		}
 	}

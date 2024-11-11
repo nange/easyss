@@ -280,7 +280,9 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err = conns.conns[0].Write(cipher); err != nil {
-		log.Warn("[HTTP_TUNNEL_SERVER] write local", "err", err)
+		if !errors.Is(err, netpipe.ErrPipeClosed) {
+			log.Warn("[HTTP_TUNNEL_SERVER] write local", "err", err)
+		}
 		writeServiceUnavailableError(w, "write local:"+err.Error())
 		return
 	}

@@ -2,6 +2,7 @@ package easyss
 
 import (
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
+	"github.com/nange/easyss/v2/util/netpipe"
 	"github.com/wzshiming/sysproxy"
 )
 
@@ -115,7 +117,7 @@ func (h *httpProxy) doWithHijack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.ss.localRelay(hijConn, r.URL.Host); err != nil {
+	if err := h.ss.localRelay(hijConn, r.URL.Host); err != nil && !errors.Is(err, netpipe.ErrPipeClosed) {
 		log.Warn("[HTTP_PROXY] local relay", "err", err)
 	}
 }
