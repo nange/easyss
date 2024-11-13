@@ -119,7 +119,7 @@ func (es *EasyServer) handleConn(conn net.Conn, tryReuse bool) {
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				log.Debug("[REMOTE] got EOF error when handshake with client-server, maybe the connection pool closed the idle conn")
-			} else if !errors.Is(err, netpipe.ErrReadDeadline) {
+			} else if !errors.Is(err, netpipe.ErrReadDeadline) && !errors.Is(err, netpipe.ErrPipeClosed) {
 				log.Warn("[REMOTE] handshake with client", "err", err)
 			}
 			return
