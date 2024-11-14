@@ -110,6 +110,9 @@ func (l *LocalConn) Pull() {
 }
 
 func (l *LocalConn) Push() {
+	defer func() {
+		_ = l.conn.(interface{ CloseWrite() error }).CloseWrite()
+	}()
 	if err := l.push(); err != nil {
 		if !errors.Is(err, io.EOF) && !errors.Is(err, netpipe.ErrPipeClosed) &&
 			!strings.Contains(err.Error(), "pipe closed") {
