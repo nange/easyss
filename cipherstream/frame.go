@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"iter"
 	mr "math/rand"
 
 	"github.com/nange/easyss/v2/util"
@@ -300,6 +301,16 @@ func NewFrameIter(r io.Reader, cipher AEADCipher) *FrameIter {
 		r:      r,
 		buf:    buf,
 		cipher: cipher,
+	}
+}
+
+func (fi *FrameIter) Iter() iter.Seq[*Frame] {
+	return func(yield func(*Frame) bool) {
+		for {
+			if !yield(fi.Next()) {
+				return
+			}
+		}
 	}
 }
 

@@ -183,8 +183,7 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 	}
 
 	var frame *Frame
-	for {
-		frame = cs.frameIter.Next()
+	for frame = range cs.frameIter.Iter() {
 		if cs.frameIter.Error() != nil {
 			if timeout(cs.frameIter.Error()) {
 				return 0, errors.Join(cs.frameIter.Error(), ErrTimeout)
@@ -208,6 +207,9 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 		break
 	}
 
+	if frame == nil {
+		panic("frame must not be nil")
+	}
 	rawData := frame.RawDataPayload()
 	cn := copy(b, rawData)
 	if cn < len(rawData) {
@@ -218,8 +220,10 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 }
 
 func (cs *CipherStream) ReadFrame() (*Frame, error) {
-	frame := cs.frameIter.Next()
-	return frame, cs.frameIter.Error()
+	for frame := range cs.frameIter.Iter() {
+		return frame, cs.frameIter.Error()
+	}
+	return nil, cs.frameIter.Error()
 }
 
 func (cs *CipherStream) Release() {
