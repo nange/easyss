@@ -110,6 +110,7 @@ make easyss-server
 ![托盘图标](assets/img/tray.png)
 ![托盘图标](assets/img/tray2.png)
 ![托盘图标](assets/img/tray3.png)
+![托盘图标](assets/img/tray4.png)
 
 右键图标可选择代理规则和代理对象。
 
