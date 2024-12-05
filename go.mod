@@ -1,6 +1,6 @@
 module github.com/nange/easyss/v2
 
-go 1.23.3
+go 1.23.4
 
 require (
 	github.com/caddyserver/certmagic v0.21.4
@@ -23,8 +23,8 @@ require (
 	github.com/txthinking/socks5 v0.0.0-20230325130024-4230056ae301
 	github.com/wzshiming/sysproxy v0.2.2
 	github.com/xjasonlyu/tun2socks/v2 v2.5.3-0.20241012195127-b65d23180cc5
-	golang.org/x/crypto v0.29.0
-	golang.org/x/net v0.31.0
+	golang.org/x/crypto v0.30.0
+	golang.org/x/net v0.32.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
@@ -78,9 +78,9 @@ require (
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
 	golang.org/x/mod v0.21.0 // indirect
-	golang.org/x/sync v0.9.0 // indirect
-	golang.org/x/sys v0.27.0 // indirect
-	golang.org/x/text v0.20.0 // indirect
+	golang.org/x/sync v0.10.0 // indirect
+	golang.org/x/sys v0.28.0 // indirect
+	golang.org/x/text v0.21.0 // indirect
 	golang.org/x/time v0.6.0 // indirect
 	golang.org/x/tools v0.25.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
