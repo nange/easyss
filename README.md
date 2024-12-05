@@ -27,7 +27,7 @@ Easyss是一款兼容socks5的安全代理上网工具，目标是使访问国�
 
 [去下载](https://github.com/nange/easyss/releases)
 
-### 或者 通过源码安装(go version 1.22+ is required)
+### 或者 通过源码安装(go version 1.23+ is required)
 
 ```sh
 // Ubuntu20.04 or Debian11 
@@ -108,8 +108,11 @@ make easyss-server
 保存好配置文件后，双击`easyss`，程序会自动启动，托盘会出现Easyss的图标，如下:
 
 ![托盘图标](assets/img/tray.png)
+
 ![托盘图标](assets/img/tray2.png)
+
 ![托盘图标](assets/img/tray3.png)
+
 ![托盘图标](assets/img/tray4.png)
 
 右键图标可选择代理规则和代理对象。
