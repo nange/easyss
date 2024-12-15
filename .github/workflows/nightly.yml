@@ -5,7 +5,7 @@ on:
 
 jobs:
   linux:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -73,7 +73,7 @@ jobs:
           body: For testing and development only
           files: bin/*.zip
 
-  macos:
+  macos-arm64:
     runs-on: macOS-latest
     steps:
       - name: Checkout
@@ -86,17 +86,6 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
-      - name: Build
-        run: |
-          GOOS=darwin GOARCH=amd64 make easyss
-          GOOS=darwin GOARCH=amd64 make easyss-server
-
-      - name: Pack
-        run: |
-          cd bin
-          zip easyss-darwin-amd64.zip ./easyss
-          zip easyss-server-darwin-amd64.zip ./easyss-server
-
       - name: Build Arm64
         run: |
           GOOS=darwin GOARCH=arm64 make easyss
@@ -107,6 +96,43 @@ jobs:
           cd bin
           zip easyss-darwin-arm64.zip ./easyss
           zip easyss-server-darwin-arm64.zip ./easyss-server
+
+      - name: Set outputs
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Nightly Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Nightly-${{ steps.vars.outputs.sha_short }}
+          tag_name: nightly-${{ steps.vars.outputs.sha_short }}
+          prerelease: true
+          body: For testing and development only
+          files: bin/*.zip
+
+  macos-amd64:
+    runs-on: macOS-13
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Build Amd64
+        run: |
+          GOOS=darwin GOARCH=amd64 make easyss
+          GOOS=darwin GOARCH=amd64 make easyss-server
+
+      - name: Pack Amd64
+        run: |
+          cd bin
+          zip easyss-darwin-amd64.zip ./easyss
+          zip easyss-server-darwin-amd64.zip ./easyss-server
 
       - name: Set outputs
         id: vars
