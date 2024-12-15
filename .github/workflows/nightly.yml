@@ -88,8 +88,8 @@ jobs:
 
       - name: Build
         run: |
-          make easyss
-          make easyss-server
+          GOOS=darwin GOARCH=amd64 make easyss
+          GOOS=darwin GOARCH=amd64 make easyss-server
 
       - name: Pack
         run: |
