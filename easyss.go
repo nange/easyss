@@ -813,20 +813,21 @@ func (ss *Easyss) EnableForwardDNS() bool {
 }
 
 func (ss *Easyss) CAPath() string {
-	if filepath.IsAbs(ss.currConfig.CAPath) {
+	if filepath.IsAbs(ss.currConfig.CAPath) || ss.currConfig.CAPath == "" {
 		return ss.currConfig.CAPath
 	}
 
-	cdir := util.CurrentDir()
-	if cdir == "" {
+	d := util.CurrentDir()
+	if d == "" {
 		log.Error("[Easyss] can't get current dir")
 	}
-	apath, err := filepath.Abs(filepath.Join(cdir, ss.currConfig.CAPath))
+
+	a, err := filepath.Abs(filepath.Join(d, ss.currConfig.CAPath))
 	if err != nil {
 		log.Error("[Easyss] can't get absolute path of CA")
 	}
 
-	return apath
+	return a
 }
 
 func (ss *Easyss) HTTPOutboundClient() *req.Client {

@@ -28,11 +28,13 @@ func CurrentDir() string {
 	if err != nil {
 		return ""
 	}
-	apath, err := filepath.EvalSymlinks(path)
+
+	a, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return ""
 	}
-	return filepath.Dir(apath)
+
+	return filepath.Dir(a)
 }
 
 func DirFileList(dir string) ([]string, error) {
