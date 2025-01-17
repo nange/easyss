@@ -59,7 +59,6 @@ require (
 	github.com/klauspost/cpuid/v2 v2.2.9 // indirect
 	github.com/kr/pretty v0.1.0 // indirect
 	github.com/libdns/libdns v0.2.2 // indirect
-	github.com/mholt/acmez/v2 v2.0.3 // indirect
 	github.com/mholt/acmez/v3 v3.0.0 // indirect
 	github.com/onsi/ginkgo/v2 v2.22.0 // indirect
 	github.com/oschwald/maxminddb-golang v1.13.0 // indirect
