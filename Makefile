@@ -47,4 +47,4 @@ test:
 	$(GO) test -v ./...
 
 lint:
-	golangci-lint run
+	go tool golangci-lint run
