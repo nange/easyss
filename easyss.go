@@ -1,14 +1,12 @@
 package easyss
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/x509"
 	_ "embed"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -80,13 +78,8 @@ func NewGeoSite(data []byte) *GeoSite {
 		fullDomain: make(map[string]struct{}),
 	}
 
-	r := bufio.NewReader(bytes.NewReader(data))
-	for {
-		line, _, err := r.ReadLine()
-		if err == io.EOF {
-			break
-		}
-
+	lines := bytes.Lines(data)
+	for line := range lines {
 		if bytes.HasPrefix(line, []byte("full:")) {
 			gs.fullDomain[string(line[5:])] = struct{}{}
 			continue
