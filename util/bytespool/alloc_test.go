@@ -42,7 +42,7 @@ func TestAllocPutThenGet(t *testing.T) {
 }
 
 func BenchmarkMSB(b *testing.B) {
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		msb(rand.Int())
 	}
 }

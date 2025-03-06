@@ -294,6 +294,7 @@ func closeWriteClient(msg string) string {
 func getEasyssForBench(config *Config) *Easyss {
 	ss := &Easyss{
 		config:         config,
+		currConfig:     config.Clone(),
 		stat:           &Statistics{},
 		dnsCache:       freecache.NewCache(DefaultDNSCacheSize),
 		directDNSCache: freecache.NewCache(DefaultDNSCacheSize),
@@ -336,7 +337,7 @@ func BenchmarkEasyss_MatchHostRule_Block(b *testing.B) {
 
 	assert.Equal(b, HostRuleBlock, ss.MatchHostRule(host))
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		ss.MatchHostRule(host)
 	}
 }
@@ -350,7 +351,7 @@ func BenchmarkEasyss_MatchHostRule_Direct(b *testing.B) {
 
 	assert.Equal(b, HostRuleDirect, ss.MatchHostRule(host))
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		ss.MatchHostRule(host)
 	}
 }
@@ -364,7 +365,7 @@ func BenchmarkEasyss_MatchHostRule_Proxy(b *testing.B) {
 
 	assert.Equal(b, HostRuleProxy, ss.MatchHostRule(host))
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		ss.MatchHostRule(host)
 	}
 }
