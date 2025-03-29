@@ -97,6 +97,7 @@ func main() {
 	ss, err := easyss.New(config)
 	if err != nil {
 		log.Error("[EASYSS_MAIN] init easyss", "err", err)
+		os.Exit(1)
 	}
 	Start(ss)
 }
