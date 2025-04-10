@@ -12,7 +12,7 @@ require (
 	github.com/imroc/req/v3 v3.50.0
 	github.com/klauspost/compress v1.18.0
 	github.com/libp2p/go-netroute v0.2.2
-	github.com/miekg/dns v1.1.64
+	github.com/miekg/dns v1.1.65
 	github.com/nange/easypool v1.3.1
 	github.com/oschwald/geoip2-golang v1.11.0
 	github.com/refraction-networking/utls v1.6.7
@@ -23,8 +23,8 @@ require (
 	github.com/txthinking/socks5 v0.0.0-20230325130024-4230056ae301
 	github.com/wzshiming/sysproxy v0.2.2
 	github.com/xjasonlyu/tun2socks/v2 v2.5.3-0.20250317205535-3599d4571414
-	golang.org/x/crypto v0.36.0
-	golang.org/x/net v0.38.0
+	golang.org/x/crypto v0.37.0
+	golang.org/x/net v0.39.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
@@ -242,9 +242,9 @@ require (
 	golang.org/x/exp v0.0.0-20241215155358-4a5509556b9e // indirect
 	golang.org/x/exp/typeparams v0.0.0-20250210185358-939b2ce775ac // indirect
 	golang.org/x/mod v0.24.0 // indirect
-	golang.org/x/sync v0.12.0 // indirect
-	golang.org/x/sys v0.31.0 // indirect
-	golang.org/x/text v0.23.0 // indirect
+	golang.org/x/sync v0.13.0 // indirect
+	golang.org/x/sys v0.32.0 // indirect
+	golang.org/x/text v0.24.0 // indirect
 	golang.org/x/time v0.11.0 // indirect
 	golang.org/x/tools v0.31.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
