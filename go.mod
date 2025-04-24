@@ -15,7 +15,7 @@ require (
 	github.com/miekg/dns v1.1.65
 	github.com/nange/easypool v1.3.1
 	github.com/oschwald/geoip2-golang v1.11.0
-	github.com/refraction-networking/utls v1.6.7
+	github.com/refraction-networking/utls v1.7.0
 	github.com/samber/slog-formatter v1.2.0
 	github.com/segmentio/encoding v0.4.1
 	github.com/smallnest/ringbuffer v0.0.0-20250317021400-0da97b586904
