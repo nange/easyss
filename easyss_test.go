@@ -322,6 +322,21 @@ func getEasyssForBench(config *Config) *Easyss {
 	return ss
 }
 
+func TestMatchHostRule(t *testing.T) {
+	config := &Config{ProxyRule: "auto_block"}
+	config.SetDefaultValue()
+	ss := getEasyssForBench(config)
+
+	assert.Equal(t, HostRuleProxy, ss.MatchHostRule("google.com"))
+	assert.Equal(t, HostRuleDirect, ss.MatchHostRule("baidu.com"))
+	assert.Equal(t, HostRuleBlock, ss.MatchHostRule("googleads.g.doubleclick.net"))
+	assert.Equal(t, HostRuleDirect, ss.MatchHostRule("map.baidu.com"))
+	assert.Equal(t, HostRuleDirect, ss.MatchHostRule("gaode.com"))
+	assert.Equal(t, HostRuleDirect, ss.MatchHostRule("maponline0.bdimg.com"))
+	assert.Equal(t, HostRuleBlock, ss.MatchHostRule("gm.mmstat.com"))
+	assert.Equal(t, HostRuleDirect, ss.MatchHostRule("webmap0.bdimg.com"))
+}
+
 func TestSubDomains(t *testing.T) {
 	domain := "as1.m.hao123.com"
 	subs := subDomains(domain)

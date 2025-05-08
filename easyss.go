@@ -81,6 +81,7 @@ func NewGeoSite(data []byte) *GeoSite {
 
 	lines := bytes.Lines(data)
 	for line := range lines {
+		line = bytes.TrimSuffix(line, []byte("\n"))
 		if bytes.HasPrefix(line, []byte("full:")) {
 			gs.fullDomain[string(line[5:])] = struct{}{}
 			continue
