@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v2/log"
-	"github.com/xjasonlyu/tun2socks/v2/dialer"
 )
 
 func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
@@ -68,10 +67,7 @@ func (ss *Easyss) directTCPConn(addr string) (net.Conn, error) {
 	if ss.EnabledTun2socks() {
 		ctx, cancel := context.WithTimeout(context.Background(), ss.Timeout())
 		defer cancel()
-		tConn, err = dialer.DialContextWithOptions(ctx, network, addr, &dialer.Options{
-			InterfaceName:  ss.LocalDevice(),
-			InterfaceIndex: ss.LocalDeviceIndex(),
-		})
+		tConn, err = ss.directDialer.DialContext(ctx, network, addr)
 	} else {
 		tConn, err = net.DialTimeout(network, addr, ss.Timeout())
 	}

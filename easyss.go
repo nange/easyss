@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/coocood/freecache"
@@ -31,6 +30,8 @@ import (
 	"github.com/oschwald/geoip2-golang"
 	utls "github.com/refraction-networking/utls"
 	"github.com/txthinking/socks5"
+	"github.com/xjasonlyu/tun2socks/v2/dialer"
+	"go.uber.org/atomic"
 )
 
 const (
@@ -201,6 +202,9 @@ type Easyss struct {
 	// used for system tray display
 	pingLatCh chan string
 
+	// used for direct tcp and udp connection
+	directDialer *dialer.Dialer
+
 	// the mu Mutex to protect below fields
 	mu               *sync.RWMutex
 	tcpPool          easypool.Pool
@@ -277,6 +281,12 @@ func New(config *Config) (*Easyss, error) {
 	if err := ss.initHTTPOutboundClient(); err != nil {
 		log.Error("[EASYSS] init http outbound client", "err", err)
 		return nil, err
+	}
+
+	ss.directDialer = &dialer.Dialer{
+		InterfaceName:  atomic.NewString(ss.LocalDevice()),
+		InterfaceIndex: atomic.NewInt32(int32(ss.LocalDeviceIndex())),
+		RoutingMark:    atomic.NewInt32(0),
 	}
 
 	// get origin dns on darwin

@@ -9,7 +9,6 @@ import (
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
 	"github.com/txthinking/socks5"
-	"github.com/xjasonlyu/tun2socks/v2/dialer"
 )
 
 // DefaultDirectDNSServers the servers are dns servers from aliyun, tencent, and baidu
@@ -162,10 +161,7 @@ func (ss *Easyss) directUDPConn() (net.PacketConn, error) {
 		network = "udp4"
 	}
 	if ss.EnabledTun2socks() {
-		pc, err = dialer.ListenPacketWithOptions(network, "", &dialer.Options{
-			InterfaceName:  ss.LocalDevice(),
-			InterfaceIndex: ss.LocalDeviceIndex(),
-		})
+		pc, err = ss.directDialer.ListenPacket(network, "")
 	} else {
 		pc, err = net.ListenPacket(network, "")
 	}
