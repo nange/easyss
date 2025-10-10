@@ -305,6 +305,7 @@ func ParseConfig[T any](path string) (config *T, err error) {
 	if err != nil {
 		return
 	}
+	// nolint:errcheck
 	defer file.Close()
 
 	data, err := io.ReadAll(file)

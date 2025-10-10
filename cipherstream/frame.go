@@ -281,9 +281,9 @@ func (f *Frame) Release() {
 		bytespool.MustPut(f.padBuf)
 		f.padBuf = nil
 	}
-	if f.Payload != nil && cap(f.Payload.padPayloadBuf) > 0 {
-		bytespool.MustPut(f.Payload.padPayloadBuf)
-		f.Payload.padPayloadBuf = nil
+	if f.Payload != nil && cap(f.padPayloadBuf) > 0 {
+		bytespool.MustPut(f.padPayloadBuf)
+		f.padPayloadBuf = nil
 	}
 }
 

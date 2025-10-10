@@ -216,12 +216,9 @@ func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 }
 
 func (st *SysTray) AddProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
-	proxyMenue := systray.AddMenuItem("代理对象", "请选择")
+    proxyMenue := systray.AddMenuItem("代理对象", "请选择")
 
-	browserChecked := true
-	if st.SS().DisableSysProxy() {
-		browserChecked = false
-	}
+	browserChecked := !st.SS().DisableSysProxy()
 	browser := proxyMenue.AddSubMenuItemCheckbox("浏览器(设置系统代理)", "设置系统代理配置", browserChecked)
 	global := proxyMenue.AddSubMenuItemCheckbox("系统全局流量(Tun2socks)", "Tun2socks代理系统全局", false)
 
@@ -303,29 +300,30 @@ func (st *SysTray) catLog() error {
 	var linuxCmd []string
 	var winCmd string
 
-	if runtime.GOOS == "linux" {
-		title := "View Easyss Logs"
-		switch {
-		case util.SysSupportXTerminalEmulator():
-			linuxCmd = []string{"x-terminal-emulator", "-e", "tail", "-50f", st.ss.LogFilePath()}
-		case util.SysSupportGnomeTerminal():
-			linuxCmd = []string{"gnome-terminal", "--hide-menubar", "--title", title, "--", "tail", "-50f", st.ss.LogFilePath()}
-		case util.SysSupportMateTerminal():
-			linuxCmd = []string{"gnome-terminal", "--hide-menubar", "--title", title, "--", "tail", "-50f", st.ss.LogFilePath()}
-		case util.SysSupportKonsole():
-			linuxCmd = []string{"konsole", "--hide-menubar", "-e", "tail", "-50f", st.ss.LogFilePath()}
-		case util.SysSupportXfce4Terminal():
-			linuxCmd = []string{"xfce4-terminal", "--hide-menubar", "--hide-toolbar", "--title", title, "--command", fmt.Sprintf("tail -50f %s", st.ss.LogFilePath())}
-		case util.SysSupportLxterminal():
-			linuxCmd = []string{"lxterminal", "--title", title, "--command", fmt.Sprintf("tail -50f %s", st.ss.LogFilePath())}
-		case util.SysSupportTerminator():
-			linuxCmd = []string{"terminator", "--title", title, "--command", fmt.Sprintf("tail -50f %s", st.ss.LogFilePath())}
-		}
-	} else if runtime.GOOS == "windows" {
-		// Ref: https://learn.microsoft.com/zh-cn/powershell/module/microsoft.powershell.management/start-process?view=powershell-7.3
-		win := `-FilePath powershell  -ArgumentList "-Command", "Get-Content", "-Wait", "-Tail 100", "%s"`
-		winCmd = fmt.Sprintf(win, st.ss.LogFilePath())
-	}
+switch runtime.GOOS {
+case "linux":
+    title := "View Easyss Logs"
+    switch {
+    case util.SysSupportXTerminalEmulator():
+        linuxCmd = []string{"x-terminal-emulator", "-e", "tail", "-50f", st.ss.LogFilePath()}
+    case util.SysSupportGnomeTerminal():
+        linuxCmd = []string{"gnome-terminal", "--hide-menubar", "--title", title, "--", "tail", "-50f", st.ss.LogFilePath()}
+    case util.SysSupportMateTerminal():
+        linuxCmd = []string{"gnome-terminal", "--hide-menubar", "--title", title, "--", "tail", "-50f", st.ss.LogFilePath()}
+    case util.SysSupportKonsole():
+        linuxCmd = []string{"konsole", "--hide-menubar", "-e", "tail", "-50f", st.ss.LogFilePath()}
+    case util.SysSupportXfce4Terminal():
+        linuxCmd = []string{"xfce4-terminal", "--hide-menubar", "--hide-toolbar", "--title", title, "--command", fmt.Sprintf("tail -50f %s", st.ss.LogFilePath())}
+    case util.SysSupportLxterminal():
+        linuxCmd = []string{"lxterminal", "--title", title, "--command", fmt.Sprintf("tail -50f %s", st.ss.LogFilePath())}
+    case util.SysSupportTerminator():
+        linuxCmd = []string{"terminator", "--title", title, "--command", fmt.Sprintf("tail -50f %s", st.ss.LogFilePath())}
+    }
+case "windows":
+    // Ref: https://learn.microsoft.com/zh-cn/powershell/module/microsoft.powershell.management/start-process?view=powershell-7.3
+    win := `-FilePath powershell  -ArgumentList "-Command", "Get-Content", "-Wait", "-Tail 100", "%s"`
+    winCmd = fmt.Sprintf(win, st.ss.LogFilePath())
+}
 
 	cmdMap := map[string][]string{
 		"windows": {"powershell", "-Command", "Start-Process", winCmd},

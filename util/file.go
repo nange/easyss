@@ -73,6 +73,7 @@ func ReadFileLines(file string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	// nolint:errcheck
 	defer f.Close()
 
 	lines := make([]string, 0, 16)

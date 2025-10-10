@@ -51,7 +51,7 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, isD
 				} else if !errors.Is(err, io.EOF) && !errors.Is(err, netpipe.ErrReadDeadline) && !errors.Is(err, netpipe.ErrPipeClosed) {
 					log.Warn("[REMOTE_UDP] read data from client connection", "err", err)
 				}
-
+				// nolint:errcheck
 				uConn.Close()
 				return
 			}

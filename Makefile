@@ -47,4 +47,4 @@ test:
 	$(GO) test -v ./...
 
 lint:
-	go tool golangci-lint run
+	go tool golangci-lint run --timeout 10m --verbose

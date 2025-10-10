@@ -112,6 +112,7 @@ func (es *EasyServer) startHTTPTunnelServer() {
 }
 
 func (es *EasyServer) handleConn(conn net.Conn, tryReuse bool) {
+	// nolint:errcheck
 	defer conn.Close()
 
 	for {
@@ -166,6 +167,7 @@ func (es *EasyServer) remoteTCPHandle(conn net.Conn, addrStr, method string, try
 	if err != nil {
 		return fmt.Errorf("net.Dial %v err:%v", addrStr, err)
 	}
+	// nolint:errcheck
 	defer tConn.Close()
 
 	csStream, err := cipherstream.New(conn, es.Password(), method, cipherstream.FrameTypeData, cipherstream.FlagTCP)
