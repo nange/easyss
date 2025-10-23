@@ -10,17 +10,17 @@ require (
 	github.com/go-faker/faker/v4 v4.7.0
 	github.com/gofrs/uuid/v5 v5.3.2
 	github.com/imroc/req/v3 v3.55.0
-	github.com/klauspost/compress v1.18.0
+	github.com/klauspost/compress v1.18.1
 	github.com/libp2p/go-netroute v0.3.0
 	github.com/miekg/dns v1.1.68
 	github.com/nange/easypool v1.3.1
 	github.com/oschwald/geoip2-golang v1.13.0
-	github.com/refraction-networking/utls v1.8.0
+	github.com/refraction-networking/utls v1.8.1
 	github.com/samber/slog-formatter v1.2.0
 	github.com/segmentio/encoding v0.5.3
 	github.com/smallnest/ringbuffer v0.0.0-20250317021400-0da97b586904
 	github.com/stretchr/testify v1.11.1
-	github.com/txthinking/socks5 v0.0.0-20250803014457-d3594b14cf12
+	github.com/txthinking/socks5 v0.0.0-20251011041537-5c31f201a10e
 	github.com/wzshiming/sysproxy v0.2.2
 	github.com/xjasonlyu/tun2socks/v2 v2.6.0
 	go.uber.org/atomic v1.11.0
