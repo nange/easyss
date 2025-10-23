@@ -108,16 +108,15 @@ func (ss *Easyss) localRelay(localConn net.Conn, addr string) (err error) {
 			if cs, ok := csStream.(*cipherstream.CipherStream); ok {
 				cs.MarkConnUnusable()
 			}
+			// nolint:errcheck
 			csStream.Close()
 		}
 		return
 	}
+	// nolint:errcheck
 	defer csStream.Close()
 
-	tryReuse := true
-	if !ss.IsNativeOutboundProto() {
-		tryReuse = false
-	}
+	tryReuse := ss.IsNativeOutboundProto()
 	n1, n2, err := relay(csStream, localConn, ss.Timeout(), tryReuse)
 
 	log.Debug("[TCP_PROXY] send bytes to, receive bytes", "send", n1, "to", addr, "receive", n2, "err", err)

@@ -35,10 +35,7 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
-          args: --timeout 10m0s --verbose
+        run: make lint
 
       - name: Test
         run: make test
@@ -68,10 +65,7 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
-          args: --timeout 10m0s --verbose
+        run: make lint
 
       - name: Test
         run: make test
@@ -99,12 +93,6 @@ jobs:
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
-          args: --timeout 10m0s --verbose
 
       - name: Test
         run: go test -v ./...

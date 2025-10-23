@@ -20,11 +20,7 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 	}
 
 	wg := sync.WaitGroup{}
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() {
 		_, err := io.Copy(tConn, localConn)
 		if err != nil && !ErrorCanIgnore(err) {
 			log.Warn("[TCP_DIRECT] copy from local to remote", "err", err)
@@ -35,11 +31,8 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 		}
 
 		_ = tConn.SetReadDeadline(time.Now().Add(ss.ReadDeadlineTimeout()))
-	}()
-
-	go func() {
-		defer wg.Done()
-
+	})
+	wg.Go(func() {
 		_, err := io.Copy(localConn, tConn)
 		if err != nil && !ErrorCanIgnore(err) {
 			log.Warn("[TCP_DIRECT] copy from remote to local", "err", err)
@@ -50,7 +43,7 @@ func (ss *Easyss) directRelay(localConn net.Conn, addr string) error {
 		}
 
 		_ = localConn.SetReadDeadline(time.Now().Add(ss.ReadDeadlineTimeout()))
-	}()
+	})
 
 	wg.Wait()
 

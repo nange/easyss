@@ -102,6 +102,7 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 			defer ss.unlockKey(exchKey)
 			bytespool.MustPut(buf)
 			s.UDPExchanges.Delete(exchKey)
+			// nolint:errcheck
 			ue.RemoteConn.Close()
 		}()
 

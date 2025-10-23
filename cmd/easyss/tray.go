@@ -1,4 +1,4 @@
-//go:build !with_notray
+//go:build !without_tray
 
 package main
 
@@ -58,12 +58,12 @@ func (st *SysTray) TrayReady() {
 }
 
 func (st *SysTray) AddSelectServerMenu() {
-	selectServer := systray.AddMenuItem("选择服务器", "请选择")
+	selectServer := systray.AddMenuItem("选择服务器", "")
 
 	var subMenuItems []*systray.MenuItem
 	addrs := st.SS().ServerListAddrs()
 	for _, addr := range addrs {
-		item := selectServer.AddSubMenuItemCheckbox(addr, "服务器地址", false)
+		item := selectServer.AddSubMenuItemCheckbox(addr, "", false)
 		subMenuItems = append(subMenuItems, item)
 		if strings.Contains(addr, st.SS().ServerAddr()) {
 			item.Check()
@@ -127,25 +127,25 @@ func (st *SysTray) AddSelectServerMenu() {
 }
 
 func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *systray.MenuItem) {
-	proxyMenu := systray.AddMenuItem("代理规则", "请选择")
+	proxyMenu := systray.AddMenuItem("代理规则", "")
 
-	auto := proxyMenu.AddSubMenuItemCheckbox("自动(自定义规则+绕过大陆IP域名)", "自动判断请求是否走代理", false)
+	auto := proxyMenu.AddSubMenuItemCheckbox("自动(自定义规则+绕过大陆IP域名)", "", false)
 	if st.SS().ProxyRule() == easyss.ProxyRuleAuto {
 		auto.Check()
 	}
 
-	autoBlock := proxyMenu.AddSubMenuItemCheckbox("自动+屏蔽广告跟踪", "自动判断请求是否走代理或者屏蔽", false)
+	autoBlock := proxyMenu.AddSubMenuItemCheckbox("自动+屏蔽广告跟踪", "", false)
 	if st.SS().ProxyRule() == easyss.ProxyRuleAutoBlock {
 		autoBlock.Check()
 	}
 
-	reverseAuto := proxyMenu.AddSubMenuItemCheckbox("反向自动(国外访问国内)", "适用国外访问国内IP域名", false)
-	proxy := proxyMenu.AddSubMenuItemCheckbox("代理全部(绕过局域网地址)", "代理除局域网地址的所有请求", false)
+	reverseAuto := proxyMenu.AddSubMenuItemCheckbox("反向自动(国外访问国内)", "", false)
+	proxy := proxyMenu.AddSubMenuItemCheckbox("代理全部(绕过局域网地址)", "", false)
 	if st.SS().ProxyRule() == easyss.ProxyRuleProxy {
 		proxy.Check()
 	}
 
-	direct := proxyMenu.AddSubMenuItemCheckbox("直接连接", "所有请求直接连接，不走代理", false)
+	direct := proxyMenu.AddSubMenuItemCheckbox("直接连接", "", false)
 	if st.SS().ProxyRule() == easyss.ProxyRuleDirect {
 		direct.Check()
 	}
@@ -216,14 +216,11 @@ func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 }
 
 func (st *SysTray) AddProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
-	proxyMenue := systray.AddMenuItem("代理对象", "请选择")
+	proxyMenue := systray.AddMenuItem("代理对象", "")
 
-	browserChecked := true
-	if st.SS().DisableSysProxy() {
-		browserChecked = false
-	}
-	browser := proxyMenue.AddSubMenuItemCheckbox("浏览器(设置系统代理)", "设置系统代理配置", browserChecked)
-	global := proxyMenue.AddSubMenuItemCheckbox("系统全局流量(Tun2socks)", "Tun2socks代理系统全局", false)
+	browserChecked := !st.SS().DisableSysProxy()
+	browser := proxyMenue.AddSubMenuItemCheckbox("浏览器(设置系统代理)", "", browserChecked)
+	global := proxyMenue.AddSubMenuItemCheckbox("系统全局流量(Tun2socks)", "", false)
 
 	go func() {
 		for {
@@ -264,7 +261,7 @@ func (st *SysTray) AddProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 }
 
 func (st *SysTray) AddCatLogsMenu() *systray.MenuItem {
-	catLog := systray.AddMenuItem("查看运行日志", "查看日志")
+	catLog := systray.AddMenuItem("查看运行日志", "")
 
 	go func() {
 		for {
@@ -283,7 +280,7 @@ func (st *SysTray) AddCatLogsMenu() *systray.MenuItem {
 }
 
 func (st *SysTray) AddExitMenu() *systray.MenuItem {
-	quit := systray.AddMenuItem("退出", "退出Easyss APP")
+	quit := systray.AddMenuItem("退出", "")
 
 	go func() {
 		for {
@@ -303,7 +300,8 @@ func (st *SysTray) catLog() error {
 	var linuxCmd []string
 	var winCmd string
 
-	if runtime.GOOS == "linux" {
+	switch runtime.GOOS {
+	case "linux":
 		title := "View Easyss Logs"
 		switch {
 		case util.SysSupportXTerminalEmulator():
@@ -321,7 +319,7 @@ func (st *SysTray) catLog() error {
 		case util.SysSupportTerminator():
 			linuxCmd = []string{"terminator", "--title", title, "--command", fmt.Sprintf("tail -50f %s", st.ss.LogFilePath())}
 		}
-	} else if runtime.GOOS == "windows" {
+	case "windows":
 		// Ref: https://learn.microsoft.com/zh-cn/powershell/module/microsoft.powershell.management/start-process?view=powershell-7.3
 		win := `-FilePath powershell  -ArgumentList "-Command", "Get-Content", "-Wait", "-Tail 100", "%s"`
 		winCmd = fmt.Sprintf(win, st.ss.LogFilePath())

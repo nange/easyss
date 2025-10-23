@@ -35,11 +35,8 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, isD
 	var _tryReuse bool
 
 	wg := sync.WaitGroup{}
-	wg.Add(2)
 	// send
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() {
 		var buf = bytespool.Get(MaxUDPDataSize)
 		defer bytespool.MustPut(buf)
 		for {
@@ -51,7 +48,7 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, isD
 				} else if !errors.Is(err, io.EOF) && !errors.Is(err, netpipe.ErrReadDeadline) && !errors.Is(err, netpipe.ErrPipeClosed) {
 					log.Warn("[REMOTE_UDP] read data from client connection", "err", err)
 				}
-
+				// nolint:errcheck
 				uConn.Close()
 				return
 			}
@@ -69,12 +66,10 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, isD
 			}
 			_ = csStream.SetDeadline(time.Now().Add(es.MaxConnWaitTimeout()))
 		}
-	}()
+	})
 
 	// receive
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() {
 		var buf = bytespool.Get(MaxUDPDataSize)
 		defer bytespool.MustPut(buf)
 		for {
@@ -90,7 +85,7 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, isD
 			}
 			_ = csStream.SetDeadline(time.Now().Add(es.MaxConnWaitTimeout()))
 		}
-	}()
+	})
 
 	wg.Wait()
 

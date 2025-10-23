@@ -168,6 +168,7 @@ func (ss *Easyss) createTunDevAndSetIpRoute() error {
 		log.Error("[TUN2SOCKS] write close_tun_dev.sh to temp file", "err", err)
 		return err
 	}
+	// nolint:errcheck
 	defer os.RemoveAll(namePath)
 
 	tc := ss.TunConfig()
@@ -249,6 +250,7 @@ func (ss *Easyss) closeTunDevAndDelIpRoute() error {
 		log.Error("[TUN2SOCKS] write close_tun_dev.sh to temp file", "err", err)
 		return err
 	}
+	// nolint:errcheck
 	defer os.RemoveAll(namePath)
 
 	tc := ss.TunConfig()

@@ -51,7 +51,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		// find from dns cache first
 		msgCache := ss.DNSCache(question.Name, dns.TypeToString[question.Qtype], isDirect)
 		if msgCache != nil {
-			msgCache.MsgHdr.Id = msg.MsgHdr.Id
+			msgCache.Id = msg.Id
 			log.Info("[DNS_CACHE] find from cache", "domain", question.Name, "qtype", dns.TypeToString[question.Qtype])
 			if err := responseDNSMsg(s.UDPConn, addr, msgCache, d.Address()); err != nil {
 				log.Error("[DNS_CACHE] write msg back", "err", err)
@@ -315,14 +315,15 @@ func responseBlockedDNSMsg(conn *net.UDPConn, localAddr *net.UDPAddr, request *d
 
 	m := new(dns.Msg)
 	m.SetReply(request)
-	if question.Qtype == dns.TypeA {
+	switch question.Qtype {
+	case dns.TypeA:
 		rr, err := dns.NewRR(fmt.Sprintf("%s A 127.0.0.1", question.Name))
 		if err != nil {
 			log.Error("[DNS_BLOCK] creating A record:", "err", err)
 			return err
 		}
 		m.Answer = append(m.Answer, rr)
-	} else if question.Qtype == dns.TypeAAAA {
+	case dns.TypeAAAA:
 		rr, err := dns.NewRR(fmt.Sprintf("%s AAAA ::1", question.Name))
 		if err != nil {
 			log.Error("[DNS_BLOCK] creating AAAA record:", "err", err)
@@ -357,7 +358,7 @@ func isDNSResponse(msg *dns.Msg) bool {
 	if msg == nil {
 		return false
 	}
-	if !msg.MsgHdr.Response || !isDNSRequest(msg) {
+	if !msg.Response || !isDNSRequest(msg) {
 		return false
 	}
 	return true
