@@ -10,7 +10,7 @@ GO_BUILD_WIN := GOOS=windows GOARCH=amd64 CGO_ENABLED=1 go build -ldflags '-H=wi
 GO_BUILD_ANDROID_ARM64 := GOOS=android GOARCH=arm64 GOARM=7 CGO_ENABLED=1 CC=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang go build -ldflags '$(LDFLAGS)'
 GO_BUILD_ANDROID_AMD64 := GOOS=android GOARCH=amd64 GOAMD64=v3 CGO_ENABLED=1 CC=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang go build -ldflags '$(LDFLAGS)'
 
-.PHONY: easyss easyss-with-notray easyss-windows easyss-server easyss-server-windows
+.PHONY: easyss easyss-without-tray easyss-windows easyss-server easyss-server-windows
 
 echo:
 	@echo "${PROJECT}"
@@ -23,9 +23,9 @@ easyss-windows:
 	cd cmd/easyss; \
 	$(GO_BUILD_WIN) -o ../../bin/easyss.exe
 
-easyss-with-notray:
+easyss-without-tray:
 	cd cmd/easyss; \
-    $(GO_BUILD) -tags "with_notray " -o ../../bin/easyss-with-notray
+    $(GO_BUILD) -tags "without_tray " -o ../../bin/easyss-without-tray
 
 easyss-server:
 	cd cmd/easyss-server; \
@@ -37,11 +37,11 @@ easyss-server-windows:
 
 easyss-android-arm64:
 	cd cmd/easyss; \
-	$(GO_BUILD_ANDROID_ARM64) -tags "with_notray " -o ../../bin/easyss-android-arm64
+	$(GO_BUILD_ANDROID_ARM64) -tags "without_tray " -o ../../bin/easyss-android-arm64
 
 easyss-android-amd64:
 	cd cmd/easyss; \
-	$(GO_BUILD_ANDROID_AMD64) -tags "with_notray " -o ../../bin/easyss-android-amd64
+	$(GO_BUILD_ANDROID_AMD64) -tags "without_tray " -o ../../bin/easyss-android-amd64
 
 test:
 	$(GO) test -v ./...
