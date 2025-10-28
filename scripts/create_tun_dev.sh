@@ -11,7 +11,9 @@ local_gateway_v6=$8
 ip tuntap add mode tun dev "$tun_device"  # create tun device
 
 ip addr add "$tun_ip_sub" dev "$tun_device"  # add ipv4 addr to device
-ip -6 addr add "$tun_ip_sub_v6" dev "$tun_device"  # add ipv6 addr to device
+if [ -n "$server_ip_v6" ]; then  # check if server_ip_v6 is not empty
+  ip -6 addr add "$tun_ip_sub_v6" dev "$tun_device"  # add ipv6 addr to device
+fi
 
 ip link set dev "$tun_device" up  # enable tun device
 

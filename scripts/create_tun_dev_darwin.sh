@@ -10,7 +10,9 @@ local_gateway_v6=$8
 
 # create tun device
 ifconfig "$tun_device" "$tun_ip" "$tun_gw" up
-ifconfig "$tun_device" inet6 "$tun_ip_v6"/64  up
+if [ -n "$server_ip_v6" ]; then  # check if server_ip_v6 is not empty
+  ifconfig "$tun_device" inet6 "$tun_ip_v6"/64  up
+fi
 
 # add ipv4 ip route
 route add -net 1.0.0.0/8 "$tun_gw"

@@ -45,6 +45,9 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		if rule == HostRuleBlock {
 			return responseBlockedDNSMsg(s.UDPConn, addr, msg, d.Address())
 		}
+		if ss.ShouldIPV6Disable() && question.Qtype == dns.TypeAAAA {
+			return responseBlockedDNSMsg(s.UDPConn, addr, msg, d.Address())
+		}
 
 		isDirect := rule == HostRuleDirect
 
@@ -311,7 +314,7 @@ func responseDNSMsg(conn *net.UDPConn, localAddr *net.UDPAddr, msg *dns.Msg, rem
 
 func responseBlockedDNSMsg(conn *net.UDPConn, localAddr *net.UDPAddr, request *dns.Msg, remoteAddr string) error {
 	question := request.Question[0]
-	log.Info("[DNS_BLOCK]", "domain", question.Name)
+	log.Info("[DNS_BLOCK]", "domain", question.Name, "qtype", dns.TypeToString[question.Qtype])
 
 	m := new(dns.Msg)
 	m.SetReply(request)

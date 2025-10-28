@@ -35,10 +35,19 @@ func (ss *Easyss) LocalSocks5() {
 
 func (ss *Easyss) TCPHandle(s *socks5.Server, conn *net.TCPConn, r *socks5.Request) error {
 	targetAddr := r.Address()
+	localAddr := conn.LocalAddr().String()
 	log.Debug("[SOCKS5]", "target", targetAddr, "is_udp", r.Cmd == socks5.CmdUDP)
 
+	if ss.ShouldIPV6Disable() {
+		if util.IsIPV6Addr(targetAddr) || util.IsIPV6Addr(localAddr) {
+			log.Info("[SOCKS5] ipv6 is disabled, blocked ipv6 connection",
+				"target", targetAddr, "local", localAddr)
+			return socks5.ErrBadRequest
+		}
+	}
+
 	if r.Cmd == socks5.CmdConnect {
-		a, addr, port, err := socks5.ParseAddress(conn.LocalAddr().String())
+		a, addr, port, err := socks5.ParseAddress(localAddr)
 		if err != nil {
 			log.Error("[SOCKS5] socks5 ParseAddress", "err", err)
 			return err
@@ -144,9 +153,7 @@ func (ss *Easyss) validateAddr(addr string) error {
 	if util.IsLANIP(host) {
 		return fmt.Errorf("target host:%v is LAN ip, which is invalid", host)
 	}
-	if ss.ShouldIPV6Disable() && util.IsIPV6(host) {
-		return fmt.Errorf("target %s is ipv6, but ipv6 network is disabled", host)
-	}
+
 	if (host == ss.ServerIP() || host == ss.ServerIPV6()) && port == serverPort {
 		return fmt.Errorf("target %s:%s equals server host,port, which may caused infinite-loop", host, port)
 	}

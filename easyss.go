@@ -733,7 +733,12 @@ func (ss *Easyss) ServerListAddrs() []string {
 
 func (ss *Easyss) ServerIP() string { return ss.serverIP }
 
-func (ss *Easyss) ServerIPV6() string { return ss.serverIPV6 }
+func (ss *Easyss) ServerIPV6() string {
+	if ss.ShouldIPV6Disable() {
+		return ""
+	}
+	return ss.serverIPV6
+}
 
 func (ss *Easyss) ServerAddr() string {
 	if util.IsIPV6(ss.Server()) {
@@ -1006,6 +1011,9 @@ func (ss *Easyss) SetProxyRule(rule ProxyRule) {
 }
 
 func (ss *Easyss) ShouldIPV6Disable() bool {
+	if ss.ipv6Rule == IPV6RuleDisable {
+		return true
+	}
 	if ss.ipv6Rule == IPV6RuleEnable {
 		return false
 	}

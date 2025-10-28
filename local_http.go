@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/nange/easyss/v2/log"
+	"github.com/nange/easyss/v2/util"
 	"github.com/nange/easyss/v2/util/bytespool"
 	"github.com/nange/easyss/v2/util/netpipe"
 	"github.com/wzshiming/sysproxy"
@@ -112,6 +113,13 @@ func (h *httpProxy) doWithHijack(w http.ResponseWriter, r *http.Request) {
 	}
 	// nolint:errcheck
 	defer hijConn.Close()
+
+	if h.ss.ShouldIPV6Disable() {
+		if util.IsIPV6Addr(r.URL.Host) {
+			http.Error(w, "ipv6 network is disabled", http.StatusForbidden)
+			return
+		}
+	}
 
 	if _, err := hijConn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n")); err != nil {
 		log.Error("[HTTP_PROXY] write hijack ok", "err", err)

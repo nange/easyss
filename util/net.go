@@ -45,6 +45,11 @@ func IsIPV6(ip string) bool {
 	return false
 }
 
+func IsIPV6Addr(addr string) bool {
+	host, _, _ := net.SplitHostPort(addr)
+	return IsIPV6(host)
+}
+
 func DNSMsgTypeA(dnsServer, domain string) (*dns.Msg, error) {
 	return dnsMsg(dns.TypeA, dnsServer, domain)
 }
