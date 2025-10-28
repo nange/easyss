@@ -3,6 +3,7 @@ package util
 import (
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/miekg/dns"
 )
@@ -59,7 +60,7 @@ func DNSMsgTypeAAAA(dnsServer, domain string) (*dns.Msg, error) {
 }
 
 func dnsMsg(dnsType uint16, dnsServer, domain string) (*dns.Msg, error) {
-	c := &dns.Client{UDPSize: 8192}
+	c := &dns.Client{UDPSize: 8192, Timeout: 5 * time.Second}
 
 	m := &dns.Msg{}
 	m.SetQuestion(dns.Fqdn(domain), dnsType)

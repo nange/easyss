@@ -194,6 +194,7 @@ type Easyss struct {
 	geoSiteDirect   *GeoSite
 	geoSiteBlock    *GeoSite
 	ipv6Rule        IPV6Rule
+	ipv6NetWorking  bool
 	// the user custom ip/domain list which have the highest priority
 	customDirectIPs     map[string]struct{}
 	customDirectCIDRIPs []*net.IPNet
@@ -292,6 +293,16 @@ func New(config *Config) (*Easyss, error) {
 	if err := ss.initHTTPOutboundClient(); err != nil {
 		log.Error("[EASYSS] init http outbound client", "err", err)
 		return nil, err
+	}
+
+	if ss.isIPv6OkInCurrentNetWork() {
+		log.Info("[EASYSS] ipv6 is working in current network")
+		ss.ipv6NetWorking = true
+	} else {
+		log.Info("[EASYSS] ipv6 is not working in current network")
+	}
+	if !ss.ShouldIPV6Disable() {
+		log.Info("[EASYSS] ipv6 is enabled")
 	}
 
 	ss.directDialer = &dialer.Dialer{
@@ -434,6 +445,24 @@ func (ss *Easyss) initServerIPAndDNSCache() error {
 	}
 
 	return nil
+}
+
+func (ss *Easyss) isIPv6OkInCurrentNetWork() bool {
+	for i, server := range DefaultDirectDNSV6Servers {
+		msg, msgAAAA, err := ss.DNSMsg(server, DefaultDNSServerDomains[i])
+		if err != nil {
+			log.Info("[EASYSS] check ipv6 network failed",
+				"server", DefaultDNSServerDomains[i], "from", server, "err", err)
+			continue
+		}
+		if msg != nil || msgAAAA != nil {
+			if len(msg.Answer) > 0 || len(msgAAAA.Answer) > 0 {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func (ss *Easyss) initLocalGatewayAndDevice() error {
@@ -1011,14 +1040,13 @@ func (ss *Easyss) SetProxyRule(rule ProxyRule) {
 }
 
 func (ss *Easyss) ShouldIPV6Disable() bool {
-	if ss.ipv6Rule == IPV6RuleDisable {
-		return true
-	}
-	if ss.ipv6Rule == IPV6RuleEnable {
+	switch ss.ipv6Rule {
+	case IPV6RuleEnable:
 		return false
-	}
-	if ss.ipv6Rule == IPV6RuleAuto && ss.serverIPV6 != "" {
-		return false
+	case IPV6RuleAuto:
+		if ss.ipv6NetWorking && ss.serverIPV6 != "" {
+			return false
+		}
 	}
 
 	return true
