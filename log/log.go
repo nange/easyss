@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
-	"sync"
 	"time"
 
 	sf "github.com/samber/slog-formatter"
@@ -17,40 +15,6 @@ import (
 )
 
 var logger = slog.New(DefaultHandler(slog.LevelInfo))
-
-var (
-	projectRootOnce sync.Once
-	projectRoot     string
-)
-
-func getProjectRoot() string {
-	projectRootOnce.Do(func() {
-		_, currentFile, _, ok := runtime.Caller(0)
-		if !ok {
-			wd, err := os.Getwd()
-			if err != nil {
-				projectRoot = ""
-				return
-			}
-			currentFile = wd
-		}
-
-		dir := filepath.Dir(currentFile)
-		for {
-			if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-				projectRoot = dir
-				return
-			}
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				projectRoot = ""
-				return
-			}
-			dir = parent
-		}
-	})
-	return projectRoot
-}
 
 func SetLogger(l *slog.Logger) {
 	logger = l
@@ -94,27 +58,16 @@ func newReplaceAttrFunc(cn *time.Location) func([]string, slog.Attr) slog.Attr {
 		case slog.SourceKey:
 			source := a.Value.Any().(*slog.Source)
 
-			root := getProjectRoot()
+			dir, file := filepath.Split(source.File)
+			parentDir := filepath.Base(filepath.Clean(dir))
+
 			var rel string
-			if root != "" {
-				var err error
-				rel, err = filepath.Rel(root, source.File)
-				if err != nil {
-					rel = source.File // fallback
-				}
+			if parentDir == "easyss" {
+				rel = file
 			} else {
-				wd, _ := os.Getwd()
-				var err error
-				rel, err = filepath.Rel(wd, source.File)
-				if err != nil {
-					rel = source.File
-				}
+				rel = filepath.Join(parentDir, file)
 			}
 
-			parts := strings.Split(rel, string(filepath.Separator))
-			if len(parts) > 2 {
-				rel = filepath.Join(parts[len(parts)-2:]...)
-			}
 			a.Value = slog.StringValue(rel + ":" + strconv.Itoa(source.Line))
 		case slog.TimeKey:
 			newTime := a.Value.Time().In(cn)
