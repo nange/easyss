@@ -77,6 +77,9 @@ func Error(msg string, args ...any) {
 }
 
 func log(level slog.Level, msg string, args ...any) {
+	if !logger.Enabled(context.Background(), level) {
+		return
+	}
 	var pcs [1]uintptr
 	// skip [runtime.Callers, log.log, log.Info] a total of 3
 	runtime.Callers(3, pcs[:])
