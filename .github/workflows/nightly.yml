@@ -62,12 +62,14 @@ jobs:
 
       - name: Set outputs
         id: vars
-        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "timestamp_minute=$(date -u +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
 
       - name: Nightly Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Nightly-${{ steps.vars.outputs.sha_short }}
+          name: Nightly-${{ steps.vars.outputs.timestamp_minute }}-${{ steps.vars.outputs.sha_short }}
           tag_name: nightly-${{ steps.vars.outputs.sha_short }}
           prerelease: true
           body: For testing and development only
@@ -99,12 +101,14 @@ jobs:
 
       - name: Set outputs
         id: vars
-        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "timestamp_minute=$(date -u +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
 
       - name: Nightly Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Nightly-${{ steps.vars.outputs.sha_short }}
+          name: Nightly-${{ steps.vars.outputs.timestamp_minute }}-${{ steps.vars.outputs.sha_short }}
           tag_name: nightly-${{ steps.vars.outputs.sha_short }}
           prerelease: true
           body: For testing and development only
@@ -136,12 +140,14 @@ jobs:
 
       - name: Set outputs
         id: vars
-        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "timestamp_minute=$(date -u +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
 
       - name: Nightly Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Nightly-${{ steps.vars.outputs.sha_short }}
+          name: Nightly-${{ steps.vars.outputs.timestamp_minute }}-${{ steps.vars.outputs.sha_short }}
           tag_name: nightly-${{ steps.vars.outputs.sha_short }}
           prerelease: true
           body: For testing and development only
