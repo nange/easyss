@@ -16,7 +16,6 @@ Easyss是一款兼容socks5的安全代理上网工具，目标是使访问国�
 * 支持系统托盘图标管理 (thanks [systray](https://github.com/getlantern/systray))
 * 可配置多服务器切换; 自定义直连白名单(IP/域名)
 * 基于TLS底层传输(可禁用); 上层支持AEAD类型高强度加密通信, 如aes-256-gcm, chacha20-poly1305
-* http2帧格式交互 (更灵活通用, 更易扩展)
 * 支持多种出口协议: `native(默认)`, `http`, `https`; 以适应各种复杂场景
 * 支持服务端(easyss-server)链式代理
 * 内建DNS服务器，支持DNS Forward转发，可用于透明代理部署时使用 (默认关闭，可通过命令行启用)
@@ -223,6 +222,22 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 
 只需要在配置文件或者命令行指定`enable_tun2socks: true` 或者 `-enable-tun2socks=true`开启全局代理，
 并同时开启DNS流量转发`enable_forward_dns: true` 或者`-enable-forward-dns=true`，即可实现透明代理。
+
+根据情况判断是否需要开启ip转发:
+
+```bash
+# 编辑配置文件
+vi /etc/sysctl.conf
+
+# 找到并取消注释（或添加）以下行：
+net.ipv4.ip_forward = 1
+
+# 如果需要IPv6转发，也取消注释：
+net.ipv6.conf.all.forwarding = 1
+
+# 重新加载配置
+sysctl -p
+```
 
 ### 服务端链式代理
 
