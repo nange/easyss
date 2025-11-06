@@ -1,6 +1,6 @@
 module github.com/nange/easyss/v2
 
-go 1.25.2
+go 1.25.4
 
 require (
 	github.com/caddyserver/certmagic v0.25.0
@@ -8,10 +8,10 @@ require (
 	github.com/coocood/freecache v1.2.4
 	github.com/getlantern/systray v1.2.2
 	github.com/go-faker/faker/v4 v4.7.0
-	github.com/gofrs/uuid/v5 v5.3.2
+	github.com/gofrs/uuid/v5 v5.4.0
 	github.com/imroc/req/v3 v3.55.0
 	github.com/klauspost/compress v1.18.1
-	github.com/libp2p/go-netroute v0.3.0
+	github.com/libp2p/go-netroute v0.4.0
 	github.com/miekg/dns v1.1.68
 	github.com/nange/easypool v1.3.1
 	github.com/oschwald/geoip2-golang v1.13.0
