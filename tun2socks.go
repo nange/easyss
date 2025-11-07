@@ -150,6 +150,7 @@ func (ss *Easyss) startTun2socksEngine() {
 		TCPSendBufferSize:    RelayBufferSizeString,
 		TCPReceiveBufferSize: RelayBufferSizeString,
 		UDPTimeout:           ss.Timeout(),
+		ICMPHandler:          &ICMPHandler{},
 	}
 	engine.Insert(key)
 	engine.Start()
