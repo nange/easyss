@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/caddyserver/certmagic"
@@ -44,7 +45,13 @@ func (es *EasyServer) initTLSConfig() error {
 		}
 		tlsConfig = &tls.Config{Certificates: []tls.Certificate{cer}}
 	} else {
+		certmagic.DefaultACME.Agreed = true
 		certmagic.DefaultACME.Email = es.Email()
+		// set certmagic storage path
+		certmagic.Default.Storage = &certmagic.FileStorage{
+			Path: filepath.Join(util.CurrentDir(), "certmagic"),
+		}
+
 		tlsConfig, err = certmagic.TLS([]string{es.Server()})
 		if err != nil {
 			return err
