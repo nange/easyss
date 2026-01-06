@@ -3,20 +3,20 @@ module github.com/nange/easyss/v2
 go 1.25.4
 
 require (
-	github.com/caddyserver/certmagic v0.25.0
+	github.com/caddyserver/certmagic v0.25.1
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/coocood/freecache v1.2.4
 	github.com/getlantern/systray v1.2.2
 	github.com/go-faker/faker/v4 v4.7.0
 	github.com/gofrs/uuid/v5 v5.4.0
-	github.com/imroc/req/v3 v3.55.0
-	github.com/klauspost/compress v1.18.1
+	github.com/imroc/req/v3 v3.57.0
+	github.com/klauspost/compress v1.18.2
 	github.com/libp2p/go-netroute v0.4.0
-	github.com/miekg/dns v1.1.68
+	github.com/miekg/dns v1.1.69
 	github.com/nange/easypool v1.3.1
 	github.com/oschwald/geoip2-golang v1.13.0
 	github.com/refraction-networking/utls v1.8.1
-	github.com/samber/slog-formatter v1.2.0
+	github.com/samber/slog-formatter v1.2.2
 	github.com/segmentio/encoding v0.5.3
 	github.com/smallnest/ringbuffer v0.0.0-20250317021400-0da97b586904
 	github.com/stretchr/testify v1.11.1
@@ -24,8 +24,8 @@ require (
 	github.com/wzshiming/sysproxy v0.2.2
 	github.com/xjasonlyu/tun2socks/v2 v2.6.0
 	go.uber.org/atomic v1.11.0
-	golang.org/x/crypto v0.45.0
-	golang.org/x/net v0.47.0
+	golang.org/x/crypto v0.46.0
+	golang.org/x/net v0.48.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
@@ -68,7 +68,7 @@ require (
 	github.com/breml/errchkjson v0.4.1 // indirect
 	github.com/butuzov/ireturn v0.4.0 // indirect
 	github.com/butuzov/mirror v1.3.0 // indirect
-	github.com/caddyserver/zerossl v0.1.3 // indirect
+	github.com/caddyserver/zerossl v0.1.4 // indirect
 	github.com/catenacyber/perfsprint v0.9.1 // indirect
 	github.com/ccojocar/zxcvbn-go v1.0.4 // indirect
 	github.com/charithe/durationcheck v0.0.10 // indirect
@@ -176,7 +176,7 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/mgechev/revive v1.12.0 // indirect
-	github.com/mholt/acmez/v3 v3.1.3 // indirect
+	github.com/mholt/acmez/v3 v3.1.4 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/moricho/tparallel v0.3.2 // indirect
@@ -201,15 +201,16 @@ require (
 	github.com/quasilyte/gogrep v0.5.0 // indirect
 	github.com/quasilyte/regex/syntax v0.0.0-20210819130434-b3f0c404a727 // indirect
 	github.com/quasilyte/stdinfo v0.0.0-20220114132959-f7386bf02567 // indirect
-	github.com/quic-go/qpack v0.5.1 // indirect
-	github.com/quic-go/quic-go v0.54.1 // indirect
+	github.com/quic-go/qpack v0.6.0 // indirect
+	github.com/quic-go/quic-go v0.57.1 // indirect
 	github.com/raeperd/recvcheck v0.2.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/ryancurrah/gomodguard v1.4.1 // indirect
 	github.com/ryanrolds/sqlclosecheck v0.5.1 // indirect
-	github.com/samber/lo v1.49.1 // indirect
-	github.com/samber/slog-multi v1.3.3 // indirect
+	github.com/samber/lo v1.52.0 // indirect
+	github.com/samber/slog-common v0.19.0 // indirect
+	github.com/samber/slog-multi v1.6.0 // indirect
 	github.com/sanposhiho/wastedassign/v2 v2.1.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/sashamelentyev/interfacebloat v1.1.0 // indirect
@@ -252,18 +253,17 @@ require (
 	go.augendre.info/arangolint v0.2.0 // indirect
 	go.augendre.info/fatcontext v0.8.1 // indirect
 	go.uber.org/automaxprocs v1.6.0 // indirect
-	go.uber.org/mock v0.5.2 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	go.uber.org/zap v1.27.0 // indirect
+	go.uber.org/zap v1.27.1 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
 	golang.org/x/exp v0.0.0-20241215155358-4a5509556b9e // indirect
 	golang.org/x/exp/typeparams v0.0.0-20250911091902-df9299821621 // indirect
-	golang.org/x/mod v0.29.0 // indirect
-	golang.org/x/sync v0.18.0 // indirect
-	golang.org/x/sys v0.38.0 // indirect
-	golang.org/x/text v0.31.0 // indirect
+	golang.org/x/mod v0.30.0 // indirect
+	golang.org/x/sync v0.19.0 // indirect
+	golang.org/x/sys v0.39.0 // indirect
+	golang.org/x/text v0.32.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
-	golang.org/x/tools v0.38.0 // indirect
+	golang.org/x/tools v0.39.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
