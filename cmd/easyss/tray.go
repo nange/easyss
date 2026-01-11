@@ -49,6 +49,8 @@ func (st *SysTray) TrayReady() {
 	st.SetBrowserMenu(browserMenu)
 	st.SetTun2socksMenu(tun2socksMenu)
 
+	st.AddUWPLoopbackMenu()
+
 	st.AddCatLogsMenu()
 	systray.AddSeparator()
 
