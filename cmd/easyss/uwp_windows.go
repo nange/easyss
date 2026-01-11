@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	"sync"
+
 	"github.com/getlantern/systray"
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util"
@@ -18,76 +20,158 @@ type UWPApp struct {
 	Exempt            bool
 }
 
-func (st *SysTray) AddUWPLoopbackMenu() {
-	uwpMenu := systray.AddMenuItem("Windows UWP应用豁免", "管理UWP应用豁免")
-	systray.AddSeparator()
-
-	// Initial loading in background
-	go st.loadUWPApps(uwpMenu)
+type UWPMenuItem struct {
+	MenuItem *systray.MenuItem
+	App      *UWPApp
+	Mu       sync.RWMutex
 }
 
-func (st *SysTray) loadUWPApps(parent *systray.MenuItem) {
-	apps, err := getInstalledUWPApps()
-	if err != nil {
-		log.Error("[UWP] Failed to get installed UWP apps", "err", err)
-		parent.AddSubMenuItem("Error loading apps", "").Disable()
-		return
-	}
+func (st *SysTray) AddUWPLoopbackMenu() {
+	uwpMenu := systray.AddMenuItem("Windows UWP应用豁免", "管理UWP应用豁免")
 
-	exemptsStr, err := getExemptUWPAppsOutput()
-	if err != nil {
-		log.Error("[UWP] Failed to get exempt UWP apps", "err", err)
-		// Continue, assuming none exempt or error
-	}
+	refreshItem := uwpMenu.AddSubMenuItem("刷新列表", "重新加载UWP应用列表")
+	systray.AddSeparator() // Separator doesn't work well inside submenu on all platforms, but let's try.
 
-	exemptsStr = strings.ToLower(exemptsStr)
+	// Maintain a pool of menu items
+	var menuItems []*UWPMenuItem
+	var mu sync.Mutex
 
-	for i := range apps {
-		if strings.Contains(exemptsStr, strings.ToLower(apps[i].PackageFamilyName)) {
-			apps[i].Exempt = true
-		}
-	}
+	refreshFunc := func() {
+		mu.Lock()
+		defer mu.Unlock()
 
-	// Sort by Name
-	sort.Slice(apps, func(i, j int) bool {
-		return strings.ToLower(apps[i].Name) < strings.ToLower(apps[j].Name)
-	})
-
-	for _, app := range apps {
-		if app.Name == "" || app.PackageFamilyName == "" {
-			continue
+		apps, err := getInstalledUWPApps()
+		if err != nil {
+			log.Error("[UWP] Failed to get installed UWP apps", "err", err)
+			return
 		}
 
-		item := parent.AddSubMenuItemCheckbox(app.Name, app.PackageFamilyName, app.Exempt)
+		exemptsStr, err := getExemptUWPAppsOutput()
+		if err != nil {
+			log.Error("[UWP] Failed to get exempt UWP apps", "err", err)
+		}
+		exemptsStr = strings.ToLower(exemptsStr)
 
-		// Handle clicks
-		go func(a UWPApp, m *systray.MenuItem) {
-			for {
-				select {
-				case <-m.ClickedCh:
-					if m.Checked() {
-						// Uncheck -> Remove
-						if err := removeLoopbackExempt(a.PackageFamilyName); err != nil {
-							log.Error("[UWP] Failed to remove exemption", "app", a.Name, "err", err)
-						} else {
-							m.Uncheck()
-							log.Info("[UWP] Removed exemption", "app", a.Name)
-						}
-					} else {
-						// Check -> Add
-						if err := addLoopbackExempt(a.PackageFamilyName); err != nil {
-							log.Error("[UWP] Failed to add exemption", "app", a.Name, "err", err)
-						} else {
-							m.Check()
-							log.Info("[UWP] Added exemption", "app", a.Name)
+		// Process apps
+		for i := range apps {
+			if strings.Contains(exemptsStr, strings.ToLower(apps[i].PackageFamilyName)) {
+				apps[i].Exempt = true
+			}
+		}
+
+		// Sort by Name
+		sort.Slice(apps, func(i, j int) bool {
+			return strings.ToLower(apps[i].Name) < strings.ToLower(apps[j].Name)
+		})
+
+		// Reuse or create items
+		appIndex := 0
+		for _, app := range apps {
+			if app.Name == "" || app.PackageFamilyName == "" {
+				continue
+			}
+
+			if appIndex >= len(menuItems) {
+				// Create new item
+				item := uwpMenu.AddSubMenuItemCheckbox(app.Name, app.PackageFamilyName, app.Exempt)
+				uwpItem := &UWPMenuItem{
+					MenuItem: item,
+					App:      &app,
+				}
+				menuItems = append(menuItems, uwpItem)
+
+				// Start loop for this new item
+				go func(u *UWPMenuItem) {
+					for {
+						select {
+						case <-u.MenuItem.ClickedCh:
+							u.Mu.RLock()
+							a := u.App
+							u.Mu.RUnlock()
+
+							if a == nil {
+								continue
+							}
+
+							if u.MenuItem.Checked() {
+								// Uncheck -> Remove
+								if err := removeLoopbackExempt(a.PackageFamilyName); err != nil {
+									log.Error("[UWP] Failed to remove exemption", "app", a.Name, "err", err)
+								} else {
+									u.MenuItem.Uncheck()
+									log.Info("[UWP] Removed exemption", "app", a.Name)
+									// Update internal state
+									u.Mu.Lock()
+									if u.App != nil {
+										u.App.Exempt = false
+									}
+									u.Mu.Unlock()
+								}
+							} else {
+								// Check -> Add
+								if err := addLoopbackExempt(a.PackageFamilyName); err != nil {
+									log.Error("[UWP] Failed to add exemption", "app", a.Name, "err", err)
+								} else {
+									u.MenuItem.Check()
+									log.Info("[UWP] Added exemption", "app", a.Name)
+									// Update internal state
+									u.Mu.Lock()
+									if u.App != nil {
+										u.App.Exempt = true
+									}
+									u.Mu.Unlock()
+								}
+							}
+						case <-st.closing:
+							return
 						}
 					}
-				case <-st.closing:
-					return
+				}(uwpItem)
+
+			} else {
+				// Update existing item
+				uwpItem := menuItems[appIndex]
+				uwpItem.Mu.Lock()
+				uwpItem.App = &app
+				uwpItem.Mu.Unlock()
+
+				uwpItem.MenuItem.SetTitle(app.Name)
+				uwpItem.MenuItem.SetTooltip(app.PackageFamilyName)
+				if app.Exempt {
+					uwpItem.MenuItem.Check()
+				} else {
+					uwpItem.MenuItem.Uncheck()
 				}
+				uwpItem.MenuItem.Show()
 			}
-		}(app, item)
+			appIndex++
+		}
+
+		// Hide unused items
+		for i := appIndex; i < len(menuItems); i++ {
+			menuItems[i].MenuItem.Hide()
+			menuItems[i].Mu.Lock()
+			menuItems[i].App = nil
+			menuItems[i].Mu.Unlock()
+		}
 	}
+
+	// Handle refresh click
+	go func() {
+		for {
+			select {
+			case <-refreshItem.ClickedCh:
+				log.Info("[UWP] Refreshing app list...")
+				refreshFunc()
+				log.Info("[UWP] Refresh complete")
+			case <-st.closing:
+				return
+			}
+		}
+	}()
+
+	// Initial loading in background
+	go refreshFunc()
 }
 
 func getInstalledUWPApps() ([]UWPApp, error) {
