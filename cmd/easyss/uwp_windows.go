@@ -4,13 +4,12 @@ package main
 
 import (
 	"encoding/json"
-	"os/exec"
 	"sort"
 	"strings"
-	"syscall"
 
 	"github.com/getlantern/systray"
 	"github.com/nange/easyss/v2/log"
+	"github.com/nange/easyss/v2/util"
 )
 
 type UWPApp struct {
@@ -97,10 +96,7 @@ func getInstalledUWPApps() ([]UWPApp, error) {
 	// then parse the AppID to get PackageFamilyName.
 	// We explicitly set OutputEncoding to UTF8 to avoid encoding issues on non-English systems.
 	psScript := `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-StartApps | Select-Object Name, AppID | ConvertTo-Json`
-	cmd := exec.Command("powershell", "-Command", psScript)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-
-	out, err := cmd.Output()
+	out, err := util.Command("powershell", "-Command", psScript)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +107,7 @@ func getInstalledUWPApps() ([]UWPApp, error) {
 	}
 
 	var rawApps []startApp
-	s := strings.TrimSpace(string(out))
+	s := strings.TrimSpace(out)
 	if len(s) == 0 {
 		return nil, nil
 	}
@@ -174,23 +170,15 @@ func getInstalledUWPApps() ([]UWPApp, error) {
 }
 
 func getExemptUWPAppsOutput() (string, error) {
-	cmd := exec.Command("CheckNetIsolation", "LoopbackExempt", "-s")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
+	return util.Command("CheckNetIsolation", "LoopbackExempt", "-s")
 }
 
 func addLoopbackExempt(family string) error {
-	cmd := exec.Command("CheckNetIsolation", "LoopbackExempt", "-a", "-n="+family)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	return cmd.Run()
+	_, err := util.Command("CheckNetIsolation", "LoopbackExempt", "-a", "-n="+family)
+	return err
 }
 
 func removeLoopbackExempt(family string) error {
-	cmd := exec.Command("CheckNetIsolation", "LoopbackExempt", "-d", "-n="+family)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	return cmd.Run()
+	_, err := util.Command("CheckNetIsolation", "LoopbackExempt", "-d", "-n="+family)
+	return err
 }
