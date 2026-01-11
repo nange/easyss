@@ -20,7 +20,7 @@ type UWPApp struct {
 }
 
 func (st *SysTray) AddUWPLoopbackMenu() {
-	uwpMenu := systray.AddMenuItem("UWP Loopback", "Manage UWP Loopback Exemptions")
+	uwpMenu := systray.AddMenuItem("Windows UWP应用豁免", "管理UWP应用豁免")
 	systray.AddSeparator()
 
 	// Initial loading in background
