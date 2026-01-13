@@ -1,11 +1,11 @@
 package easyss
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/miekg/dns"
@@ -13,6 +13,7 @@ import (
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
 	"github.com/nange/easyss/v2/util/netpipe"
+	"github.com/negrel/conc"
 )
 
 func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, isDNSProto, tryReuse bool) error {
@@ -34,60 +35,60 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, isD
 
 	var _tryReuse bool
 
-	wg := sync.WaitGroup{}
-	// send
-	wg.Go(func() {
-		var buf = bytespool.Get(MaxUDPDataSize)
-		defer bytespool.MustPut(buf)
-		for {
-			n, err := csStream.Read(buf[:])
-			if err != nil {
-				if errors.Is(err, cipherstream.ErrFINRSTStream) {
-					_tryReuse = true
-					log.Debug("[REMOTE_UDP] received FIN when reading data from client, try to reuse the connection")
-				} else if !errors.Is(err, io.EOF) && !errors.Is(err, netpipe.ErrReadDeadline) && !errors.Is(err, netpipe.ErrPipeClosed) {
-					log.Warn("[REMOTE_UDP] read data from client connection", "err", err)
+	jobs := []conc.Job[struct{}]{
+		// send
+		func(_ context.Context) (struct{}, error) {
+			var buf = bytespool.Get(MaxUDPDataSize)
+			defer bytespool.MustPut(buf)
+			for {
+				n, err := csStream.Read(buf[:])
+				if err != nil {
+					if errors.Is(err, cipherstream.ErrFINRSTStream) {
+						_tryReuse = true
+						log.Debug("[REMOTE_UDP] received FIN when reading data from client, try to reuse the connection")
+					} else if !errors.Is(err, io.EOF) && !errors.Is(err, netpipe.ErrReadDeadline) && !errors.Is(err, netpipe.ErrPipeClosed) {
+						log.Warn("[REMOTE_UDP] read data from client connection", "err", err)
+					}
+					// nolint:errcheck
+					uConn.Close()
+					return struct{}{}, nil
 				}
-				// nolint:errcheck
-				uConn.Close()
-				return
-			}
-			if isDNSProto {
-				// try to parse the dns request
-				msg := &dns.Msg{}
-				if err := msg.Unpack(buf[:n]); err == nil {
-					log.Info("[REMOTE_UDP] doing dns request for", "target", msg.Question[0].Name)
+				if isDNSProto {
+					// try to parse the dns request
+					msg := &dns.Msg{}
+					if err := msg.Unpack(buf[:n]); err == nil {
+						log.Info("[REMOTE_UDP] doing dns request for", "target", msg.Question[0].Name)
+					}
 				}
+				_, err = uConn.Write(buf[:n])
+				if err != nil {
+					log.Error("[REMOTE_UDP] write data to remote connection", "err", err)
+					return struct{}{}, nil
+				}
+				_ = csStream.SetDeadline(time.Now().Add(es.MaxConnWaitTimeout()))
 			}
-			_, err = uConn.Write(buf[:n])
-			if err != nil {
-				log.Error("[REMOTE_UDP] write data to remote connection", "err", err)
-				return
+		},
+		// receive
+		func(_ context.Context) (struct{}, error) {
+			var buf = bytespool.Get(MaxUDPDataSize)
+			defer bytespool.MustPut(buf)
+			for {
+				n, err := uConn.Read(buf[:])
+				if err != nil {
+					log.Debug("[REMOTE_UDP] read data from remote connection", "err", err)
+					return struct{}{}, nil
+				}
+				_, err = csStream.Write(buf[:n])
+				if err != nil {
+					log.Error("[REMOTE_UDP] write data to tcp connection", "err", err)
+					return struct{}{}, nil
+				}
+				_ = csStream.SetDeadline(time.Now().Add(es.MaxConnWaitTimeout()))
 			}
-			_ = csStream.SetDeadline(time.Now().Add(es.MaxConnWaitTimeout()))
-		}
-	})
+		},
+	}
 
-	// receive
-	wg.Go(func() {
-		var buf = bytespool.Get(MaxUDPDataSize)
-		defer bytespool.MustPut(buf)
-		for {
-			n, err := uConn.Read(buf[:])
-			if err != nil {
-				log.Debug("[REMOTE_UDP] read data from remote connection", "err", err)
-				return
-			}
-			_, err = csStream.Write(buf[:n])
-			if err != nil {
-				log.Error("[REMOTE_UDP] write data to tcp connection", "err", err)
-				return
-			}
-			_ = csStream.SetDeadline(time.Now().Add(es.MaxConnWaitTimeout()))
-		}
-	})
-
-	wg.Wait()
+	_, _ = conc.All(jobs)
 
 	var reuse error
 	if tryReuse && _tryReuse {

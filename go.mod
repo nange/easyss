@@ -14,6 +14,7 @@ require (
 	github.com/libp2p/go-netroute v0.4.0
 	github.com/miekg/dns v1.1.69
 	github.com/nange/easypool v1.3.1
+	github.com/negrel/conc v0.5.0
 	github.com/oschwald/geoip2-golang v1.13.0
 	github.com/refraction-networking/utls v1.8.1
 	github.com/samber/slog-formatter v1.2.2

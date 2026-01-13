@@ -367,6 +367,8 @@ github.com/nakabonne/nestif v0.3.1 h1:wm28nZjhQY5HyYPx+weN3Q65k6ilSBxDb8v5S81B81
 github.com/nakabonne/nestif v0.3.1/go.mod h1:9EtoZochLn5iUprVDmDjqGKPofoUEBL8U4Ngq6aY7OE=
 github.com/nange/easypool v1.3.1 h1:H08lgMheGnJJtHmj9DQqQJ0ALLYm9YgId88QQcP/8nI=
 github.com/nange/easypool v1.3.1/go.mod h1:thcZ8jRQmaMuhSsmUhbjUUvqQsZOZa6fZFxqnGTNEmw=
+github.com/negrel/conc v0.5.0 h1:NgyNsUunascV2YBpkw/2P3wqhnrEMal2bjfHGKX2Cv4=
+github.com/negrel/conc v0.5.0/go.mod h1:mnAA5l6rI/qMcV/JVHiGA1nqMA6s5FG86nBp0uo2JGw=
 github.com/nishanths/exhaustive v0.12.0 h1:vIY9sALmw6T/yxiASewa4TQcFsVYZQQRUQJhKRf3Swg=
 github.com/nishanths/exhaustive v0.12.0/go.mod h1:mEZ95wPIZW+x8kC4TgC+9YCUgiST7ecevsVDTgc2obs=
 github.com/nishanths/predeclared v0.2.2 h1:V2EPdZPliZymNAn79T8RkNApBjMmVKh5XRpLm/w98Vk=

@@ -1,6 +1,7 @@
 package easyss
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
 	"github.com/nange/easyss/v2/util/netpipe"
+	"github.com/negrel/conc"
 )
 
 // RelayBufferSize set to MaxCipherRelaySize
@@ -25,24 +27,20 @@ type closeWriter interface {
 // return the number of bytes copies
 // from plaintext stream to cipher stream, from cipher stream to plaintext stream, and needClose on server conn
 func relay(cipher, plainTxt net.Conn, timeout time.Duration, tryReuse bool) (int64, int64, error) {
-	ch1 := make(chan res, 1)
-	ch2 := make(chan res, 1)
-	go copyCipherToPlainTxt(plainTxt, cipher, timeout, tryReuse, ch2)
-	go copyPlainTxtToCipher(cipher, plainTxt, timeout, tryReuse, ch1)
-
-	var res1, res2 res
-	var n1, n2 int64
-	var err error
-	for i := 0; i < 2; i++ {
-		select {
-		case res1 = <-ch1:
-			n1 = res1.N
-			err = errors.Join(err, res1.err)
-		case res2 = <-ch2:
-			n2 = res2.N
-			err = errors.Join(err, res2.err)
-		}
+	jobs := []conc.Job[res]{
+		func(_ context.Context) (res, error) {
+			return copyPlainTxtToCipher(cipher, plainTxt, timeout, tryReuse), nil
+		},
+		func(_ context.Context) (res, error) {
+			return copyCipherToPlainTxt(plainTxt, cipher, timeout, tryReuse), nil
+		},
 	}
+
+	results, _ := conc.All(jobs)
+	res1, res2 := results[0], results[1]
+
+	n1, n2 := res1.N, res2.N
+	err := errors.Join(res1.err, res2.err)
 
 	if res1.TryReuse && res2.TryReuse {
 		reuse := tryReuseFn(cipher, timeout)
@@ -72,7 +70,7 @@ type res struct {
 	TryReuse bool
 }
 
-func copyCipherToPlainTxt(plainTxt, cipher net.Conn, timeout time.Duration, tryReuse bool, ch chan res) {
+func copyCipherToPlainTxt(plainTxt, cipher net.Conn, timeout time.Duration, tryReuse bool) res {
 	var err error
 	n, er := io.Copy(plainTxt, cipher)
 	if ce := CloseWrite(plainTxt); ce != nil {
@@ -95,10 +93,10 @@ func copyCipherToPlainTxt(plainTxt, cipher net.Conn, timeout time.Duration, tryR
 		}
 	}
 
-	ch <- res{N: n, err: err, TryReuse: tryReuse}
+	return res{N: n, err: err, TryReuse: tryReuse}
 }
 
-func copyPlainTxtToCipher(cipher, plainTxt net.Conn, timeout time.Duration, tryReuse bool, ch chan res) {
+func copyPlainTxtToCipher(cipher, plainTxt net.Conn, timeout time.Duration, tryReuse bool) res {
 	var err error
 	n, er := io.Copy(cipher, plainTxt)
 	if er != nil {
@@ -116,7 +114,7 @@ func copyPlainTxtToCipher(cipher, plainTxt net.Conn, timeout time.Duration, tryR
 		err = errors.Join(err, er)
 	}
 
-	ch <- res{N: n, err: err, TryReuse: tryReuse}
+	return res{N: n, err: err, TryReuse: tryReuse}
 }
 
 func tryReuseFn(cipher net.Conn, timeout time.Duration) error {
