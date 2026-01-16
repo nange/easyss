@@ -46,7 +46,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			return responseBlockedDNSMsg(s.UDPConn, addr, msg, d.Address())
 		}
 		if ss.ShouldIPV6Disable() && question.Qtype == dns.TypeAAAA {
-			return responseBlockedDNSMsg(s.UDPConn, addr, msg, d.Address())
+			return responseEmptyDNSMsg(s.UDPConn, addr, msg, d.Address())
 		}
 
 		isDirect := rule == HostRuleDirect
@@ -289,10 +289,6 @@ func (ss *Easyss) SetDNSCacheIfNeeded(udpResp []byte, isDirect bool) *dns.Msg {
 	if err := msg.Unpack(udpResp); err == nil && isDNSResponse(msg) {
 		log.Info(logPrefix+" got result for",
 			"domain", msg.Question[0].Name, "answer", msg.Answer, "qtype", dns.TypeToString[msg.Question[0].Qtype])
-		if ss.ShouldIPV6Disable() && msg.Question[0].Qtype == dns.TypeAAAA {
-			log.Info(logPrefix+" ipv6 is disabled, set TypeAAAA dns answer to nil for", "domain", msg.Question[0].Name)
-			msg.Answer = nil
-		}
 		if err := ss.SetDNSCache(msg, false, isDirect); err != nil {
 			log.Warn(logPrefix+" set dns cache", logPrefix, "err", err)
 		} else {
@@ -310,6 +306,22 @@ func responseDNSMsg(conn *net.UDPConn, localAddr *net.UDPAddr, msg *dns.Msg, rem
 
 	_, err := conn.WriteToUDP(d1.Bytes(), localAddr)
 	return err
+}
+
+func responseEmptyDNSMsg(conn *net.UDPConn, localAddr *net.UDPAddr, request *dns.Msg, remoteAddr string) error {
+	question := request.Question[0]
+	log.Info("[DNS_IPV6_DISABLED]", "domain", question.Name, "qtype", dns.TypeToString[question.Qtype])
+
+	m := new(dns.Msg)
+	m.SetReply(request)
+	// Do not add any answer, which means empty result
+
+	if err := responseDNSMsg(conn, localAddr, m, remoteAddr); err != nil {
+		log.Error("[DNS_IPV6_DISABLED] response", "err", err)
+		return err
+	}
+
+	return nil
 }
 
 func responseBlockedDNSMsg(conn *net.UDPConn, localAddr *net.UDPAddr, request *dns.Msg, remoteAddr string) error {
