@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/miekg/dns"
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
 	"github.com/txthinking/socks5"
@@ -134,7 +135,10 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 			log.Debug(logPrefix+" got data from remote", "client", ue.ClientAddr.String(), "data_len", len(buf[0:n]))
 
 			// if is dns response, set result to dns cache
-			_msg := ss.SetDNSCacheIfNeeded(buf[0:n], true)
+			var _msg *dns.Msg
+			if isDNSReq {
+				_msg = ss.SetDNSCacheIfNeeded(buf[0:n], true)
+			}
 
 			a, addr, port, err := socks5.ParseAddress(dst)
 			if err != nil {
