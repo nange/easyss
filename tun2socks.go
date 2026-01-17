@@ -152,6 +152,7 @@ func (ss *Easyss) startTun2socksEngine() {
 		UDPTimeout:           ss.Timeout(),
 	}
 	engine.Insert(key)
+	engine.SetICMPHandler(ss.handleICMP)
 	engine.Start()
 }
 
