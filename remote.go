@@ -256,6 +256,10 @@ func (es *EasyServer) targetConn(network, addr string) (net.Conn, error) {
 		if es.EnableNextProxyALLHost() {
 			return true
 		}
+
+		es.nextProxyMu.RLock()
+		defer es.nextProxyMu.RUnlock()
+
 		if util.IsIP(host) {
 			if _, ok := es.nextProxyIPs[host]; ok {
 				return true

@@ -20,6 +20,7 @@ type EasyServer struct {
 	httpTunnelServer *httptunnel.Server
 	tlsConfig        *tls.Config
 
+	nextProxyMu      sync.RWMutex
 	nextProxyIPs     map[string]struct{}
 	nextProxyCIDRIPs []*net.IPNet
 	nextProxyDomains map[string]struct{}
@@ -198,4 +199,13 @@ func (es *EasyServer) Close() (err error) {
 		err = es.httpTunnelServer.Close()
 	}
 	return
+}
+
+func (es *EasyServer) SetNextProxyIP(ip string) {
+	es.nextProxyMu.Lock()
+	defer es.nextProxyMu.Unlock()
+	if es.nextProxyIPs == nil {
+		es.nextProxyIPs = make(map[string]struct{})
+	}
+	es.nextProxyIPs[ip] = struct{}{}
 }

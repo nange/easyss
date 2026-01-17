@@ -196,6 +196,7 @@ type Easyss struct {
 	ipv6Rule        IPV6Rule
 	ipv6NetWorking  bool
 	// the user custom ip/domain list which have the highest priority
+	customDirectMu      sync.RWMutex
 	customDirectIPs     map[string]struct{}
 	customDirectCIDRIPs []*net.IPNet
 	customDirectDomains map[string]struct{}
@@ -1155,7 +1156,18 @@ func (ss *Easyss) MatchHostRule(host string) HostRule {
 	return HostRuleProxy
 }
 
+func (ss *Easyss) SetCustomDirectIP(ip string) {
+	ss.customDirectMu.Lock()
+	defer ss.customDirectMu.Unlock()
+	if ss.customDirectIPs == nil {
+		ss.customDirectIPs = make(map[string]struct{})
+	}
+	ss.customDirectIPs[ip] = struct{}{}
+}
+
 func (ss *Easyss) HostMatchCustomDirectConfig(host string) bool {
+	ss.customDirectMu.RLock()
+	defer ss.customDirectMu.RUnlock()
 	if util.IsIP(host) {
 		if _, ok := ss.customDirectIPs[host]; ok {
 			return true

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/miekg/dns"
@@ -78,6 +79,39 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, isD
 					log.Debug("[REMOTE_UDP] read data from remote connection", "err", err)
 					return struct{}{}, nil
 				}
+
+				if isDNSProto {
+					msg := &dns.Msg{}
+					if err = msg.Unpack(buf[:n]); err == nil && len(msg.Question) > 0 {
+						domain := msg.Question[0].Name
+						domain = strings.TrimSuffix(domain, ".")
+
+						isNextProxyDomain := false
+						es.nextProxyMu.RLock()
+						if _, ok := es.nextProxyDomains[domain]; ok {
+							isNextProxyDomain = true
+						} else {
+							subs := subDomains(domain)
+							for _, sub := range subs {
+								if _, ok := es.nextProxyDomains[sub]; ok {
+									isNextProxyDomain = true
+									break
+								}
+							}
+						}
+						es.nextProxyMu.RUnlock()
+
+						if isNextProxyDomain {
+							for _, ans := range msg.Answer {
+								if a, ok := ans.(*dns.A); ok {
+									es.SetNextProxyIP(a.A.String())
+									log.Info("[REMOTE_UDP] update next proxy ip", "domain", domain, "ip", a.A.String())
+								}
+							}
+						}
+					}
+				}
+
 				_, err = csStream.Write(buf[:n])
 				if err != nil {
 					log.Error("[REMOTE_UDP] write data to tcp connection", "err", err)

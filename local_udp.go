@@ -294,6 +294,36 @@ func (ss *Easyss) SetDNSCacheIfNeeded(udpResp []byte, isDirect bool) *dns.Msg {
 		} else {
 			log.Debug(logPrefix+" set cache for", "domain", msg.Question[0].Name, "qtype", dns.TypeToString[msg.Question[0].Qtype])
 		}
+
+		if isDirect && len(msg.Question) > 0 {
+			domain := msg.Question[0].Name
+			domain = strings.TrimSuffix(domain, ".")
+
+			isCustomDirect := false
+			ss.customDirectMu.RLock()
+			if _, ok := ss.customDirectDomains[domain]; ok {
+				isCustomDirect = true
+			} else {
+				subs := subDomains(domain)
+				for _, sub := range subs {
+					if _, ok := ss.customDirectDomains[sub]; ok {
+						isCustomDirect = true
+						break
+					}
+				}
+			}
+			ss.customDirectMu.RUnlock()
+
+			if isCustomDirect {
+				for _, ans := range msg.Answer {
+					if a, ok := ans.(*dns.A); ok {
+						ss.SetCustomDirectIP(a.A.String())
+						log.Info(logPrefix+" update custom direct ip", "domain", domain, "ip", a.A.String())
+					}
+				}
+			}
+		}
+
 		return msg
 	}
 	return nil
