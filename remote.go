@@ -17,6 +17,7 @@ import (
 	"github.com/nange/easyss/v2/util"
 	"github.com/nange/easyss/v2/util/netpipe"
 	"github.com/txthinking/socks5"
+	"golang.org/x/net/icmp"
 )
 
 func (es *EasyServer) Start() {
@@ -135,9 +136,16 @@ func (es *EasyServer) handleConn(conn net.Conn, tryReuse bool) {
 
 		addrStr := string(res.addr)
 		if !es.disableValidateAddr {
-			if err := validateTargetAddr(addrStr); err != nil {
-				log.Warn("[REMOTE] invalid target address, close the connection directly", "err", err)
-				return
+			if res.frameHeader.IsICMPProto() {
+				if err := validateICMPTargetAddr(addrStr); err != nil {
+					log.Warn("[REMOTE] invalid target address, close the connection directly", "err", err)
+					return
+				}
+			} else {
+				if err := validateTargetAddr(addrStr); err != nil {
+					log.Warn("[REMOTE] invalid target address, close the connection directly", "err", err)
+					return
+				}
 			}
 		}
 
@@ -155,6 +163,13 @@ func (es *EasyServer) handleConn(conn net.Conn, tryReuse bool) {
 			if err := es.remoteUDPHandle(conn, addrStr, res.method, res.frameHeader.IsDNSProto(), tryReuse); err != nil {
 				if !errors.Is(err, netpipe.ErrPipeClosed) {
 					log.Warn("[REMOTE] udp handle", "err", err)
+				}
+				return
+			}
+		case res.frameHeader.IsICMPProto():
+			if err := es.remoteICMPHandle(conn, addrStr, res.method); err != nil {
+				if !errors.Is(err, netpipe.ErrPipeClosed) {
+					log.Warn("[REMOTE] icmp handle", "err", err)
 				}
 				return
 			}
@@ -188,6 +203,55 @@ func (es *EasyServer) remoteTCPHandle(conn net.Conn, addrStr, method string, try
 	log.Debug("[REMOTE] send bytes to, and receive bytes", "send_bytes", n2, "to", addrStr, "receive", n1)
 
 	return err
+}
+
+func (es *EasyServer) remoteICMPHandle(conn net.Conn, addrStr, method string) error {
+	csStream, err := cipherstream.New(conn, es.Password(), method, cipherstream.FrameTypeData, cipherstream.FlagICMP)
+	if err != nil {
+		return fmt.Errorf("new cipherstream err:%v, method:%v", err, method)
+	}
+	cs := csStream.(*cipherstream.CipherStream)
+	defer cs.Release()
+
+	if err := csStream.SetReadDeadline(time.Now().Add(es.MaxConnWaitTimeout())); err != nil {
+		return err
+	}
+	buf := make([]byte, 2048)
+	n, err := csStream.Read(buf)
+	_ = csStream.SetReadDeadline(time.Time{})
+	if err != nil {
+		return err
+	}
+
+	ip := net.ParseIP(addrStr)
+	if ip == nil {
+		return fmt.Errorf("invalid icmp target address:%s", addrStr)
+	}
+
+	pc, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = pc.Close() }()
+
+	if err := pc.SetDeadline(time.Now().Add(es.Timeout())); err != nil {
+		return err
+	}
+	if _, err := pc.WriteTo(buf[:n], &net.IPAddr{IP: ip}); err != nil {
+		return err
+	}
+
+	replyBuf := make([]byte, 2048)
+	n, _, err = pc.ReadFrom(replyBuf)
+	if err != nil {
+		return err
+	}
+
+	if _, err := csStream.Write(replyBuf[:n]); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 type hsRes struct {
@@ -322,6 +386,19 @@ func validateTargetAddr(addr string) error {
 		return fmt.Errorf("target address should not be LAN ip:%s", addr)
 	}
 
+	return nil
+}
+
+func validateICMPTargetAddr(addr string) error {
+	if addr == "" {
+		return fmt.Errorf("target address should not be empty")
+	}
+	if !util.IsIP(addr) {
+		return fmt.Errorf("target address is not ip:%s", addr)
+	}
+	if util.IsLANIP(addr) {
+		return fmt.Errorf("target address should not be LAN ip:%s", addr)
+	}
 	return nil
 }
 

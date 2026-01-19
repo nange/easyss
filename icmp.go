@@ -1,8 +1,10 @@
 package easyss
 
 import (
+	"fmt"
 	"time"
 
+	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/log"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -40,7 +42,38 @@ func (ss *Easyss) handleICMP(s *stack.Stack) func(stack.TransportEndpointID, *st
 		}
 		defer r.Release()
 
-		// TODO: 添加代理Ping逻辑
+		dest := ipHdr.DestinationAddress().To4()
+		if dest.Len() == 4 {
+			dest4 := dest.As4()
+			addr := fmt.Sprintf("%d.%d.%d.%d", dest4[0], dest4[1], dest4[2], dest4[3])
+
+			reqData := stack.PayloadSince(pkt.TransportHeader())
+			defer reqData.Release()
+
+			csStream, err := ss.handShakeWithRemote(addr, cipherstream.FlagICMP)
+			if err == nil && csStream != nil {
+				_ = csStream.SetReadDeadline(time.Now().Add(ss.PingTimeout()))
+				_, err = csStream.Write(reqData.AsSlice())
+				if err != nil {
+					log.Warn("[ICMP] write echo request to remote", "err", err)
+					_ = csStream.Close()
+					return false
+				}
+
+				buf := make([]byte, 2048)
+				_, err = csStream.Read(buf)
+				_ = csStream.SetReadDeadline(time.Time{})
+				if err != nil {
+					log.Warn("[ICMP] read echo reply from remote", "err", err)
+					_ = csStream.Close()
+					return false
+				}
+				_ = csStream.Close()
+			} else {
+				log.Warn("[ICMP] handshake with remote failed", "err", err)
+				return false
+			}
+		}
 
 		replyData := stack.PayloadSince(pkt.TransportHeader())
 		defer replyData.Release()
