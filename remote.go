@@ -233,7 +233,7 @@ func (es *EasyServer) remoteICMPHandle(conn net.Conn, addrStr, method string) er
 		return err
 	}
 	defer func() { _ = pc.Close() }()
-
+	
 	if err := pc.SetDeadline(time.Now().Add(es.Timeout())); err != nil {
 		return err
 	}

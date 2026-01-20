@@ -799,18 +799,12 @@ func (ss *Easyss) MaxLifeTime() time.Duration {
 }
 
 func (ss *Easyss) PingTimeout() time.Duration {
-	timeout := ss.Timeout() / 5
-	if timeout < time.Second {
-		timeout = time.Second
-	}
+	timeout := max(ss.Timeout()/5, time.Second)
 	return timeout
 }
 
 func (ss *Easyss) TLSTimeout() time.Duration {
-	timeout := ss.Timeout() / 3
-	if timeout < time.Second {
-		timeout = time.Second
-	}
+	timeout := max(ss.Timeout()/3, time.Second)
 	return timeout
 }
 

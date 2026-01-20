@@ -23,7 +23,7 @@ func (ss *Easyss) handleICMP(s *stack.Stack) func(stack.TransportEndpointID, *st
 		if h := header.ICMPv4(pkt.TransportHeader().Slice()); h.Type() != header.ICMPv4Echo {
 			return false
 		}
-		time.Sleep(150 * time.Millisecond)
+
 		ipHdr := header.IPv4(pkt.NetworkHeader().Slice())
 		localAddressBroadcast := pkt.NetworkPacketInfo.LocalAddressBroadcast
 
@@ -50,28 +50,11 @@ func (ss *Easyss) handleICMP(s *stack.Stack) func(stack.TransportEndpointID, *st
 			reqData := stack.PayloadSince(pkt.TransportHeader())
 			defer reqData.Release()
 
-			csStream, err := ss.handShakeWithRemote(addr, cipherstream.FlagICMP)
-			if err == nil && csStream != nil {
-				_ = csStream.SetReadDeadline(time.Now().Add(ss.PingTimeout()))
-				_, err = csStream.Write(reqData.AsSlice())
-				if err != nil {
-					log.Warn("[ICMP] write echo request to remote", "err", err)
-					_ = csStream.Close()
-					return false
-				}
-
-				buf := make([]byte, 2048)
-				_, err = csStream.Read(buf)
-				_ = csStream.SetReadDeadline(time.Time{})
-				if err != nil {
-					log.Warn("[ICMP] read echo reply from remote", "err", err)
-					_ = csStream.Close()
-					return false
-				}
-				_ = csStream.Close()
-			} else {
-				log.Warn("[ICMP] handshake with remote failed", "err", err)
-				return false
+			// TODO: 添加直连ping功能，并且探索返回错误ping消息功能
+			icmpErr := ss.proxyICMPEcho(addr, reqData.AsSlice())
+			if icmpErr != nil {
+				log.Warn("[ICMP] proxy echo request to remote failed", "err", err)
+				return true
 			}
 		}
 
@@ -96,11 +79,41 @@ func (ss *Easyss) handleICMP(s *stack.Stack) func(stack.TransportEndpointID, *st
 			Protocol: header.ICMPv4ProtocolNumber,
 			TTL:      r.DefaultTTL(),
 		}, replyPkt); err != nil {
+			log.Warn("[ICMP] write echo reply to remote failed", "err", err)
 			sent.Dropped.Increment()
-			return false
 		}
 		sent.EchoReply.Increment()
 		return true
 	}
 
+}
+
+func (ss *Easyss) proxyICMPEcho(addr string, data []byte) error {
+	csStream, err := ss.handShakeWithRemote(addr, cipherstream.FlagICMP)
+	if err != nil {
+		log.Warn("[ICMP] handshake with remote failed", "err", err)
+		return err
+	}
+	defer func() {
+		_ = csStream.SetReadDeadline(time.Time{})
+		if err != nil {
+			csStream.(*cipherstream.CipherStream).MarkConnUnusable()
+		}
+		_ = csStream.Close()
+	}()
+
+	_ = csStream.SetReadDeadline(time.Now().Add(ss.PingTimeout()))
+	_, err = csStream.Write(data)
+	if err != nil {
+		log.Warn("[ICMP] write echo request to remote", "err", err)
+		return err
+	}
+
+	buf := make([]byte, 2048)
+	_, err = csStream.Read(buf)
+	if err != nil {
+		log.Warn("[ICMP] read echo reply from remote", "err", err)
+	}
+
+	return err
 }
