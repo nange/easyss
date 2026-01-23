@@ -17,7 +17,7 @@ import (
 )
 
 func (ss *Easyss) HandlePacket(p adapter.Packet) bool {
-	pkt := p.Data()
+	pkt := p.Buffer()
 	if pkt.NetworkProtocolNumber != ipv4.ProtocolNumber {
 		log.Info("[ICMP] not ipv4 packet", "protocol", pkt.NetworkProtocolNumber)
 		return false
@@ -29,7 +29,7 @@ func (ss *Easyss) HandlePacket(p adapter.Packet) bool {
 	ipHdr := header.IPv4(pkt.NetworkHeader().Slice())
 
 	dest := ipHdr.DestinationAddress().To4()
-	if dest.String() != "111.63.65.247" {
+	if dest.String() != "124.237.177.164" {
 		return false
 	}
 	log.Info("[ICMP] echo request", "sourceAddr", ipHdr.SourceAddress(), "dest", dest, "id", p.ID())
@@ -67,6 +67,7 @@ func (ss *Easyss) proxyICMPEcho(addr string, data []byte) (header.ICMPv4, error)
 	}
 	defer func() {
 		if ss.IsNativeOutboundProto() {
+			// TODO: 考虑是不是启用了协程造成了重用连接失败？
 			go tryReuseInICMP(csStream, ss.Timeout())
 		} else {
 			csStream.(*cipherstream.CipherStream).MarkConnUnusable()
