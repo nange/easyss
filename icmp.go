@@ -29,9 +29,7 @@ func (ss *Easyss) HandlePacket(p adapter.Packet) bool {
 	ipHdr := header.IPv4(pkt.NetworkHeader().Slice())
 
 	dest := ipHdr.DestinationAddress().To4()
-	if dest.String() != "124.237.177.164" {
-		return false
-	}
+
 	log.Info("[ICMP] echo request", "sourceAddr", ipHdr.SourceAddress(), "dest", dest, "id", p.ID())
 
 	var icmpHdr header.ICMPv4
@@ -67,7 +65,6 @@ func (ss *Easyss) proxyICMPEcho(addr string, data []byte) (header.ICMPv4, error)
 	}
 	defer func() {
 		if ss.IsNativeOutboundProto() {
-			// TODO: 考虑是不是启用了协程造成了重用连接失败？
 			go tryReuseInICMP(csStream, ss.Timeout())
 		} else {
 			csStream.(*cipherstream.CipherStream).MarkConnUnusable()
@@ -128,15 +125,12 @@ func echoReply(s *stack.Stack, pkt *stack.PacketBuffer, icmpType header.ICMPv4Ty
 	})
 	defer replyPkt.DecRef()
 
-	sent := s.Stats().ICMP.V4.PacketsSent
 	if err := r.WritePacket(stack.NetworkHeaderParams{
 		Protocol: header.ICMPv4ProtocolNumber,
 		TTL:      r.DefaultTTL(),
 	}, replyPkt); err != nil {
-		sent.Dropped.Increment()
 		return fmt.Errorf("write echo reply to remote failed, err: %s", err.String())
 	}
-	sent.EchoReply.Increment()
 
 	return nil
 }

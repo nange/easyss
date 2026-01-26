@@ -1,6 +1,7 @@
 package easyss
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -16,7 +17,7 @@ func (es *EasyServer) remoteICMPHandle(conn net.Conn, addrStr, method string, tr
 
 	csStream, err := cipherstream.New(conn, es.Password(), method, cipherstream.FrameTypeData, cipherstream.FlagICMP)
 	if err != nil {
-		return fmt.Errorf("new cipherstream err:%v, method:%v", err, method)
+		return fmt.Errorf("new cipherstream err:%w, method:%s", err, method)
 	}
 
 	cs := csStream.(*cipherstream.CipherStream)
@@ -27,19 +28,19 @@ func (es *EasyServer) remoteICMPHandle(conn net.Conn, addrStr, method string, tr
 			if err := tryReuseInServer(csStream, es.Timeout()); err != nil {
 				log.Warn("[REMOTE_ICMP] underlying proxy connection is unhealthy, need close it", "err", err)
 			} else {
-				log.Debug("[REMOTE_ICMP] underlying proxy connection is healthy, so reuse it")
+				log.Info("[REMOTE_ICMP] underlying proxy connection is healthy, so reuse it")
 			}
 		}
 		cs.Release()
 	}()
 
 	if err = csStream.SetReadDeadline(time.Now().Add(es.ICMPTimeout())); err != nil {
-		return fmt.Errorf("set read deadline err:%v", err)
+		return fmt.Errorf("set read deadline err:%w", err)
 	}
 
 	frame, err := cs.ReadFrame()
 	if err != nil {
-		return fmt.Errorf("read frame err:%v", err)
+		return fmt.Errorf("read frame err:%w", err)
 	}
 
 	ip := net.ParseIP(addrStr)
@@ -50,15 +51,15 @@ func (es *EasyServer) remoteICMPHandle(conn net.Conn, addrStr, method string, tr
 	var pc *icmp.PacketConn
 	pc, err = icmp.ListenPacket("ip4:icmp", "0.0.0.0")
 	if err != nil {
-		return fmt.Errorf("listen icmp packet err:%v", err)
+		return fmt.Errorf("listen icmp packet err:%w", err)
 	}
 	defer func() { _ = pc.Close() }()
 
 	if err = pc.SetDeadline(time.Now().Add(es.ICMPTimeout())); err != nil {
-		return fmt.Errorf("set deadline err:%v", err)
+		return fmt.Errorf("set deadline err:%w", err)
 	}
 	if _, err = pc.WriteTo(frame.RawDataPayload(), &net.IPAddr{IP: ip}); err != nil {
-		return fmt.Errorf("write icmp packet err:%v", err)
+		return fmt.Errorf("write icmp packet err:%w", err)
 	}
 
 	replyBuf := bytespool.Get(2048)
@@ -67,11 +68,21 @@ func (es *EasyServer) remoteICMPHandle(conn net.Conn, addrStr, method string, tr
 	var n int
 	n, _, err = pc.ReadFrom(replyBuf)
 	if err != nil {
-		return fmt.Errorf("read icmp packet err:%v", err)
+		return fmt.Errorf("read icmp packet err:%w", err)
 	}
 
 	if _, err = csStream.Write(replyBuf[:n]); err != nil {
-		return fmt.Errorf("write frame err:%v", err)
+		return fmt.Errorf("write frame err:%w", err)
+	}
+
+	if !tryReuse {
+		return nil
+	}
+
+	if _, err = csStream.Read(replyBuf); errors.Is(err, cipherstream.ErrFINRSTStream) {
+		err = nil
+	} else {
+		return fmt.Errorf("expect finrst stream err, but got:%w", err)
 	}
 
 	return nil
