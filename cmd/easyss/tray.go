@@ -339,6 +339,7 @@ func (st *SysTray) catLog() error {
 func (st *SysTray) CloseService() {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	log.Info("[SYSTRAY] close service starting...")
 	if st.browserMenu.Checked() {
 		if err := st.ss.SetSysProxyOffHTTP(); err != nil {
 			log.Error("[SYSTRAY] close service: set sysproxy off http", "err", err)
@@ -347,12 +348,15 @@ func (st *SysTray) CloseService() {
 	if err := st.ss.Close(); err != nil {
 		log.Error("[SYSTRAY] close service: close easyss", "err", err)
 	}
+	log.Info("[SYSTRAY] close service completed...")
 }
 
 func (st *SysTray) Exit() {
 	st.closing <- struct{}{}
+	log.Info("[SYSTRAY] systray exiting starting...")
 	st.CloseService()
 	log.Info("[SYSTRAY] systray exiting...")
+	os.Exit(0)
 }
 
 func (st *SysTray) StartLocalService() {

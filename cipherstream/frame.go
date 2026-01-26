@@ -172,6 +172,13 @@ func (h *Header) IsUDPProto() bool {
 	return h.header[4]&FlagUDP == FlagUDP
 }
 
+func (h *Header) IsICMPProto() bool {
+	if len(h.header) != Http2HeaderLen {
+		panic("header length is invalid")
+	}
+	return h.header[4]&FlagICMP == FlagICMP
+}
+
 func (h *Header) IsDNSProto() bool {
 	return h.IsUDPProto() && (h.header[4]&FlagDNS == FlagDNS)
 }
