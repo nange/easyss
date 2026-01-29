@@ -32,33 +32,38 @@ func (ss *Easyss) HandlePacket(p adapter.Packet) bool {
 
 	log.Info("[ICMP] echo request", "sourceAddr", ipHdr.SourceAddress(), "dest", dest, "id", p.ID())
 
-	var icmpHdr header.ICMPv4
-	var icmpErr error
+	v4Type := header.ICMPv4EchoReply
+	v4Code := header.ICMPv4NetUnreachable
 	if dest.Len() == 4 {
 		dest4 := dest.As4()
-		addr := fmt.Sprintf("%d.%d.%d.%d", dest4[0], dest4[1], dest4[2], dest4[3])
+		host := fmt.Sprintf("%d.%d.%d.%d", dest4[0], dest4[1], dest4[2], dest4[3])
 
 		reqData := stack.PayloadSince(pkt.TransportHeader())
 		defer reqData.Release()
 
-		// TODO: 添加直连ping功能，并且探索返回错误ping消息功能
-		icmpHdr, icmpErr = ss.proxyICMPEcho(addr, reqData.AsSlice())
-		if icmpErr != nil {
-			log.Warn("[ICMP] proxy echo request to remote failed", "err", icmpErr)
-			return false
+		rule := ss.MatchHostRule(host)
+		switch rule {
+		case HostRuleProxy:
+			icmpHdr, icmpErr := ss.proxyICMPEcho(host, reqData.AsSlice())
+			if icmpErr != nil {
+				log.Warn("[ICMP] proxy echo request to remote failed", "err", icmpErr)
+			} else {
+				v4Type = icmpHdr.Type()
+				v4Code = icmpHdr.Code()
+			}
+		case HostRuleDirect:
+			// TODO: 添加直连ping功能，并且探索返回错误ping消息功能
 		}
 	}
 
-	if icmpHdr != nil {
-		echoReply(p.Stack(), pkt, icmpHdr.Type(), icmpHdr.Code())
-	}
+	echoReply(p.Stack(), pkt, v4Type, v4Code)
 
 	return true
 
 }
 
-func (ss *Easyss) proxyICMPEcho(addr string, data []byte) (header.ICMPv4, error) {
-	csStream, err := ss.handShakeWithRemote(addr, cipherstream.FlagICMP)
+func (ss *Easyss) proxyICMPEcho(host string, data []byte) (header.ICMPv4, error) {
+	csStream, err := ss.handShakeWithRemote(host, cipherstream.FlagICMP)
 	if err != nil {
 		log.Warn("[ICMP] handshake with remote failed", "err", err)
 		return nil, err
