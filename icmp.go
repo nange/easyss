@@ -19,53 +19,111 @@ import (
 func (ss *Easyss) HandlePacket(p adapter.Packet) bool {
 	pkt := p.Buffer()
 	if pkt.NetworkProtocolNumber != ipv4.ProtocolNumber {
-		log.Info("[ICMP] not ipv4 packet", "protocol", pkt.NetworkProtocolNumber)
+		// log.Info("[ICMP] not ipv4 packet", "protocol", pkt.NetworkProtocolNumber)
+		return false
+	}
+	ipHdr := header.IPv4(pkt.NetworkHeader().Slice())
+	if tcpip.TransportProtocolNumber(ipHdr.Protocol()) != header.ICMPv4ProtocolNumber {
 		return false
 	}
 	if h := header.ICMPv4(pkt.TransportHeader().Slice()); h.Type() != header.ICMPv4Echo {
 		return false
 	}
 
-	ipHdr := header.IPv4(pkt.NetworkHeader().Slice())
+	// Extract necessary info for async processing
+	nicID := pkt.NICID
+	src := ipHdr.SourceAddress()
+	dst := ipHdr.DestinationAddress()
+	localAddressBroadcast := pkt.NetworkPacketInfo.LocalAddressBroadcast
 
-	dest := ipHdr.DestinationAddress().To4()
+	reqDataView := stack.PayloadSince(pkt.TransportHeader())
+	payload := append([]byte(nil), reqDataView.AsSlice()...)
+	reqDataView.Release()
 
-	log.Info("[ICMP] echo request", "sourceAddr", ipHdr.SourceAddress(), "dest", dest, "id", p.ID())
+	// We also need the stack to send reply
+	s := p.Stack()
 
-	v4Type := header.ICMPv4EchoReply
-	v4Code := header.ICMPv4NetUnreachable
-	if dest.Len() == 4 {
-		dest4 := dest.As4()
-		host := fmt.Sprintf("%d.%d.%d.%d", dest4[0], dest4[1], dest4[2], dest4[3])
+	go func() {
+		dest := dst.To4()
+		v4Type := header.ICMPv4EchoReply
+		v4Code := header.ICMPv4NetUnreachable
 
-		reqData := stack.PayloadSince(pkt.TransportHeader())
-		defer reqData.Release()
+		if dest.Len() == 4 {
+			dest4 := dest.As4()
+			host := fmt.Sprintf("%d.%d.%d.%d", dest4[0], dest4[1], dest4[2], dest4[3])
 
-		rule := ss.MatchHostRule(host)
-		switch rule {
-		case HostRuleProxy:
-			icmpHdr, icmpErr := ss.proxyICMPEcho(host, reqData.AsSlice())
-			if icmpErr != nil {
-				log.Warn("[ICMP] proxy echo request to remote failed", "err", icmpErr)
-			} else {
+			rule := ss.MatchHostRule(host)
+			var icmpHdr header.ICMPv4
+			var icmpErr error
+
+			switch rule {
+			case HostRuleProxy:
+				icmpHdr, icmpErr = ss.proxyICMPEcho(host, payload)
+				if icmpErr != nil {
+					log.Warn("[ICMP] proxy echo request to remote failed", "err", icmpErr)
+				}
+			case HostRuleDirect:
+				icmpHdr, icmpErr = ss.directICMPEcho(host, payload)
+				if icmpErr != nil {
+					log.Warn("[ICMP] direct echo request to host failed", "err", icmpErr)
+				}
+			}
+
+			if icmpErr == nil && icmpHdr != nil {
 				v4Type = icmpHdr.Type()
 				v4Code = icmpHdr.Code()
 			}
-		case HostRuleDirect:
-			// TODO: 添加直连ping功能，并且探索返回错误ping消息功能
 		}
-	}
 
-	echoReply(p.Stack(), pkt, v4Type, v4Code)
+		if err := sendEchoReply(s, nicID, src, dst, localAddressBroadcast, payload, v4Type, v4Code); err != nil {
+			log.Warn("[ICMP] echo reply failed", "err", err)
+		}
+	}()
 
 	return true
 
 }
 
+func (ss *Easyss) directICMPEcho(host string, data []byte) (header.ICMPv4, error) {
+	log.Info("[ICMP] direct echo request", "host", host)
+
+	pc, err := ss.directDialer.ListenPacket("ip4:icmp", "0.0.0.0")
+	if err != nil {
+		log.Error("[ICMP] listen icmp packet failed", "err", err)
+		return nil, err
+	}
+	defer func() {
+		_ = pc.Close()
+	}()
+	if err := pc.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		log.Error("[ICMP] set deadline failed", "err", err)
+		return nil, err
+	}
+
+	_, err = pc.WriteTo(data, &net.IPAddr{IP: net.ParseIP(host)})
+	if err != nil {
+		log.Error("[ICMP] write icmp packet failed", "err", err)
+		return nil, err
+	}
+	log.Info("[ICMP] write to success====")
+
+	buf := make([]byte, 1024)
+	n, _, err := pc.ReadFrom(buf)
+	if err != nil {
+		log.Error("[ICMP] read icmp packet failed", "err", err)
+		return nil, err
+	}
+	log.Info("[ICMP] read from success====")
+
+	return header.ICMPv4(buf[:n]), nil
+}
+
 func (ss *Easyss) proxyICMPEcho(host string, data []byte) (header.ICMPv4, error) {
+	log.Info("[ICMP] proxy echo request", "host", host)
+
 	csStream, err := ss.handShakeWithRemote(host, cipherstream.FlagICMP)
 	if err != nil {
-		log.Warn("[ICMP] handshake with remote failed", "err", err)
+		log.Error("[ICMP] handshake with remote failed", "err", err)
 		return nil, err
 	}
 	defer func() {
@@ -77,16 +135,16 @@ func (ss *Easyss) proxyICMPEcho(host string, data []byte) (header.ICMPv4, error)
 		}
 	}()
 
-	_ = csStream.SetReadDeadline(time.Now().Add(ss.PingTimeout()))
+	_ = csStream.SetReadDeadline(time.Now().Add(ss.ICMPTimeout()))
 	_, err = csStream.Write(data)
 	if err != nil {
-		log.Warn("[ICMP] write echo request to remote", "err", err)
+		log.Error("[ICMP] write echo request to remote", "err", err)
 		return nil, err
 	}
 
 	frame, err := csStream.(*cipherstream.CipherStream).ReadFrame()
 	if err != nil {
-		log.Warn("[ICMP] read echo reply from remote", "err", err)
+		log.Error("[ICMP] read echo reply from remote", "err", err)
 		return nil, err
 	}
 
@@ -95,35 +153,31 @@ func (ss *Easyss) proxyICMPEcho(host string, data []byte) (header.ICMPv4, error)
 	return header.ICMPv4(data), nil
 }
 
-func echoReply(s *stack.Stack, pkt *stack.PacketBuffer, icmpType header.ICMPv4Type, icmpCode header.ICMPv4Code) error {
-	ipHdr := header.IPv4(pkt.NetworkHeader().Slice())
-	localAddressBroadcast := pkt.NetworkPacketInfo.LocalAddressBroadcast
-
-	// As per RFC 1122 section 3.2.1.3, when a host sends any datagram, the IP
-	// source address MUST be one of its own IP addresses (but not a broadcast
-	// or multicast address).
-	localAddr := ipHdr.DestinationAddress()
+func sendEchoReply(s *stack.Stack, nicID tcpip.NICID, src, dst tcpip.Address, localAddressBroadcast bool, payload []byte, icmpType header.ICMPv4Type, icmpCode header.ICMPv4Code) error {
+	localAddr := dst
 	if localAddressBroadcast || header.IsV4MulticastAddress(localAddr) {
 		localAddr = tcpip.Address{}
 	}
 
-	r, err := s.FindRoute(pkt.NICID, localAddr, ipHdr.SourceAddress(), ipv4.ProtocolNumber, false /* multicastLoop */)
+	r, err := s.FindRoute(nicID, localAddr, src, ipv4.ProtocolNumber, false /* multicastLoop */)
 	if err != nil {
 		// If we cannot find a route to the destination, silently drop the packet.
-		return fmt.Errorf("find route to %s failed, err: %s", ipHdr.SourceAddress(), err.String())
+		return fmt.Errorf("find route to %s failed, err: %s", src, err.String())
 	}
 	defer r.Release()
 
-	replyData := stack.PayloadSince(pkt.TransportHeader())
-	defer replyData.Release()
+	if len(payload) < header.ICMPv4MinimumSize {
+		return fmt.Errorf("payload too short")
+	}
 
-	replyICMPHdr := header.ICMPv4(replyData.AsSlice())
+	// We can modify payload in place as we own it (it's a copy)
+	replyICMPHdr := header.ICMPv4(payload)
 	replyICMPHdr.SetType(icmpType)
 	replyICMPHdr.SetCode(icmpCode) // RFC 792: EchoReply must have Code=0.
 	replyICMPHdr.SetChecksum(0)
-	replyICMPHdr.SetChecksum(^checksum.Checksum(replyData.AsSlice(), 0))
+	replyICMPHdr.SetChecksum(^checksum.Checksum(payload, 0))
 
-	replyBuf := buffer.MakeWithView(replyData.Clone())
+	replyBuf := buffer.MakeWithData(payload)
 	replyPkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		ReserveHeaderBytes: int(r.MaxHeaderLength()),
 		Payload:            replyBuf,
@@ -141,7 +195,9 @@ func echoReply(s *stack.Stack, pkt *stack.PacketBuffer, icmpType header.ICMPv4Ty
 }
 
 func tryReuseInICMP(cipher net.Conn, timeout time.Duration) {
-	defer cipher.Close()
+	defer func() {
+		_ = cipher.Close()
+	}()
 
 	err := tryReuseInClient(cipher, timeout)
 	if err != nil {

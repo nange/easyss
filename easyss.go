@@ -803,6 +803,10 @@ func (ss *Easyss) PingTimeout() time.Duration {
 	return timeout
 }
 
+func (ss *Easyss) ICMPTimeout() time.Duration {
+	return 5 * time.Second
+}
+
 func (ss *Easyss) TLSTimeout() time.Duration {
 	timeout := max(ss.Timeout()/3, time.Second)
 	return timeout
