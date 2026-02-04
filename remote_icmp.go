@@ -12,8 +12,8 @@ import (
 	"golang.org/x/net/icmp"
 )
 
-func (es *EasyServer) remoteICMPHandle(conn net.Conn, addrStr, method string, tryReuse bool) error {
-	log.Info("[REMOTE] icmp handle", "addr", addrStr)
+func (es *EasyServer) remoteICMPHandle(conn net.Conn, host, method string, tryReuse bool) error {
+	log.Info("[REMOTE] icmp handle", "host", host)
 
 	csStream, err := cipherstream.New(conn, es.Password(), method, cipherstream.FrameTypeData, cipherstream.FlagICMP)
 	if err != nil {
@@ -34,8 +34,8 @@ func (es *EasyServer) remoteICMPHandle(conn net.Conn, addrStr, method string, tr
 		cs.Release()
 	}()
 
-	if err = csStream.SetReadDeadline(time.Now().Add(es.ICMPTimeout())); err != nil {
-		return fmt.Errorf("set read deadline err:%w", err)
+	if err = csStream.SetDeadline(time.Now().Add(es.ICMPTimeout())); err != nil {
+		return fmt.Errorf("set deadline err:%w", err)
 	}
 
 	frame, err := cs.ReadFrame()
@@ -43,9 +43,9 @@ func (es *EasyServer) remoteICMPHandle(conn net.Conn, addrStr, method string, tr
 		return fmt.Errorf("read frame err:%w", err)
 	}
 
-	ip := net.ParseIP(addrStr)
+	ip := net.ParseIP(host)
 	if ip == nil {
-		return fmt.Errorf("invalid icmp target address:%s", addrStr)
+		return fmt.Errorf("invalid icmp target address:%s", host)
 	}
 
 	var pc *icmp.PacketConn
@@ -62,7 +62,7 @@ func (es *EasyServer) remoteICMPHandle(conn net.Conn, addrStr, method string, tr
 		return fmt.Errorf("write icmp packet err:%w", err)
 	}
 
-	replyBuf := bytespool.Get(2048)
+	replyBuf := bytespool.Get(1024)
 	defer bytespool.MustPut(replyBuf)
 
 	var n int
@@ -79,6 +79,7 @@ func (es *EasyServer) remoteICMPHandle(conn net.Conn, addrStr, method string, tr
 		return nil
 	}
 
+	_ = csStream.SetDeadline(time.Now().Add(es.ICMPTimeout()))
 	if _, err = csStream.Read(replyBuf); errors.Is(err, cipherstream.ErrFINRSTStream) {
 		err = nil
 	} else {

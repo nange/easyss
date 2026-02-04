@@ -8,6 +8,7 @@ import (
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util"
+	"github.com/nange/easyss/v2/util/bytespool"
 	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -20,7 +21,6 @@ import (
 func (ss *Easyss) HandlePacket(p adapter.Packet) bool {
 	pkt := p.Buffer()
 	if pkt.NetworkProtocolNumber != ipv4.ProtocolNumber {
-		// log.Info("[ICMP] not ipv4 packet", "protocol", pkt.NetworkProtocolNumber)
 		return false
 	}
 	ipHdr := header.IPv4(pkt.NetworkHeader().Slice())
@@ -44,6 +44,7 @@ func (ss *Easyss) HandlePacket(p adapter.Packet) bool {
 	// We also need the stack to send reply
 	s := p.Stack()
 
+	// Create a goroutine to avoid blocking the tun2socks engine
 	go func() {
 		dest := dst.To4()
 		v4Type := header.ICMPv4EchoReply
@@ -91,7 +92,7 @@ func (ss *Easyss) directICMPEcho(host string, data []byte) (header.ICMPv4, error
 	localIP, err := util.GetInterfaceIP(ss.LocalDevice())
 	if err != nil {
 		log.Error("[ICMP] get interface ip failed", "err", err)
-		localIP = "0.0.0.0"
+		return nil, err
 	}
 
 	pc, err := ss.directDialer.ListenPacket("ip4:icmp", localIP)
@@ -102,7 +103,8 @@ func (ss *Easyss) directICMPEcho(host string, data []byte) (header.ICMPv4, error
 	defer func() {
 		_ = pc.Close()
 	}()
-	if err := pc.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+
+	if err := pc.SetDeadline(time.Now().Add(ss.ICMPTimeout())); err != nil {
 		log.Error("[ICMP] set deadline failed", "err", err)
 		return nil, err
 	}
@@ -112,15 +114,15 @@ func (ss *Easyss) directICMPEcho(host string, data []byte) (header.ICMPv4, error
 		log.Error("[ICMP] write icmp packet failed", "err", err)
 		return nil, err
 	}
-	log.Info("[ICMP] write to success====")
 
-	buf := make([]byte, 1024)
+	buf := bytespool.Get(1024)
+	defer bytespool.MustPut(buf)
+
 	n, _, err := pc.ReadFrom(buf)
 	if err != nil {
 		log.Error("[ICMP] read icmp packet failed", "err", err)
 		return nil, err
 	}
-	log.Info("[ICMP] read from success====")
 
 	return header.ICMPv4(buf[:n]), nil
 }
@@ -142,7 +144,7 @@ func (ss *Easyss) proxyICMPEcho(host string, data []byte) (header.ICMPv4, error)
 		}
 	}()
 
-	_ = csStream.SetReadDeadline(time.Now().Add(ss.ICMPTimeout()))
+	_ = csStream.SetDeadline(time.Now().Add(ss.ICMPTimeout()))
 	_, err = csStream.Write(data)
 	if err != nil {
 		log.Error("[ICMP] write echo request to remote", "err", err)
