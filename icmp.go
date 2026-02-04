@@ -7,6 +7,7 @@ import (
 
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/log"
+	"github.com/nange/easyss/v2/util"
 	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -87,7 +88,13 @@ func (ss *Easyss) HandlePacket(p adapter.Packet) bool {
 func (ss *Easyss) directICMPEcho(host string, data []byte) (header.ICMPv4, error) {
 	log.Info("[ICMP] direct echo request", "host", host)
 
-	pc, err := ss.directDialer.ListenPacket("ip4:icmp", "0.0.0.0")
+	localIP, err := util.GetInterfaceIP(ss.LocalDevice())
+	if err != nil {
+		log.Error("[ICMP] get interface ip failed", "err", err)
+		localIP = "0.0.0.0"
+	}
+
+	pc, err := ss.directDialer.ListenPacket("ip4:icmp", localIP)
 	if err != nil {
 		log.Error("[ICMP] listen icmp packet failed", "err", err)
 		return nil, err
