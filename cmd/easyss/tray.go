@@ -353,7 +353,7 @@ func (st *SysTray) CloseService() {
 func (st *SysTray) Exit() {
 	go func() {
 		// Ensure that the process can exit completely under any circumstances.
-		time.Sleep(3 * time.Second)
+		time.Sleep(5 * time.Second)
 		log.Info("[SYSTRAY] force exiting...")
 		os.Exit(0)
 	}()
