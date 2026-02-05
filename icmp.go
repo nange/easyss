@@ -182,7 +182,7 @@ func sendEchoReply(s *stack.Stack, nicID tcpip.NICID, src, dst tcpip.Address, lo
 	// We can modify payload in place as we own it (it's a copy)
 	replyICMPHdr := header.ICMPv4(payload)
 	replyICMPHdr.SetType(icmpType)
-	replyICMPHdr.SetCode(icmpCode) // RFC 792: EchoReply must have Code=0.
+	replyICMPHdr.SetCode(icmpCode)
 	replyICMPHdr.SetChecksum(0)
 	replyICMPHdr.SetChecksum(^checksum.Checksum(payload, 0))
 
