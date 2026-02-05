@@ -135,9 +135,16 @@ func (es *EasyServer) handleConn(conn net.Conn, tryReuse bool) {
 
 		addrStr := string(res.addr)
 		if !es.disableValidateAddr {
-			if err := validateTargetAddr(addrStr); err != nil {
-				log.Warn("[REMOTE] invalid target address, close the connection directly", "err", err)
-				return
+			if res.frameHeader.IsICMPProto() {
+				if err := validateICMPTargetAddr(addrStr); err != nil {
+					log.Warn("[REMOTE] invalid target address, close the connection directly", "err", err)
+					return
+				}
+			} else {
+				if err := validateTargetAddr(addrStr); err != nil {
+					log.Warn("[REMOTE] invalid target address, close the connection directly", "err", err)
+					return
+				}
 			}
 		}
 
@@ -155,6 +162,13 @@ func (es *EasyServer) handleConn(conn net.Conn, tryReuse bool) {
 			if err := es.remoteUDPHandle(conn, addrStr, res.method, res.frameHeader.IsDNSProto(), tryReuse); err != nil {
 				if !errors.Is(err, netpipe.ErrPipeClosed) {
 					log.Warn("[REMOTE] udp handle", "err", err)
+				}
+				return
+			}
+		case res.frameHeader.IsICMPProto():
+			if err := es.remoteICMPHandle(conn, addrStr, res.method, tryReuse); err != nil {
+				if !errors.Is(err, netpipe.ErrPipeClosed) {
+					log.Warn("[REMOTE] icmp handle", "err", err)
 				}
 				return
 			}
@@ -324,6 +338,22 @@ func validateTargetAddr(addr string) error {
 	}
 	if util.IsLANIP(host) {
 		return fmt.Errorf("target address should not be LAN ip:%s", addr)
+	}
+
+	return nil
+}
+
+func validateICMPTargetAddr(addr string) error {
+	if addr == "" {
+		return fmt.Errorf("icmp target address should not be empty")
+	}
+
+	if !util.IsIP(addr) {
+		return fmt.Errorf("icmp target address is not ip:%s", addr)
+	}
+
+	if util.IsLANIP(addr) {
+		return fmt.Errorf("icmp target address should not be LAN ip:%s", addr)
 	}
 
 	return nil

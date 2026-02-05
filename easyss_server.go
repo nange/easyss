@@ -145,6 +145,10 @@ func (es *EasyServer) MaxConnWaitTimeout() time.Duration {
 	return 10 * es.Timeout()
 }
 
+func (es *EasyServer) ICMPTimeout() time.Duration {
+	return 5 * time.Second
+}
+
 func (es *EasyServer) Email() string {
 	return es.config.Email
 }
