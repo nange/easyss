@@ -47,8 +47,8 @@ const (
 )
 
 const (
-	MaxCap  int = 50
-	MaxIdle int = 5
+	MaxCap  int = 128
+	MaxIdle int = 10
 )
 
 const UserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
