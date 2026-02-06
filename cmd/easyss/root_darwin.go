@@ -28,11 +28,9 @@ func RunMeElevated(extraArgs ...string) error {
 	}
 
 	// For macOS, we use osascript to run with admin privileges
-	// We run it in background using & to avoid blocking, but osascript itself waits for the command if we don't handle it
-	// However, do shell script usually waits.
-	// We want to detach.
+	// We run it in background using & to avoid blocking
 	cmdStr := fmt.Sprintf("'%s' %s &>/dev/null &", exe, argsBuilder.String())
-
+	
 	// Escape double quotes for AppleScript string
 	scriptCmd := strings.ReplaceAll(cmdStr, "\"", "\\\"")
 	script := fmt.Sprintf("do shell script \"%s\" with administrator privileges", scriptCmd)
