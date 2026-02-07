@@ -536,8 +536,8 @@ github.com/wzshiming/sysproxy v0.2.2 h1:OOZ7jRier8qA5U5hnzHwJCLlZleWqdqiNKEhJY+0
 github.com/wzshiming/sysproxy v0.2.2/go.mod h1:Epx6hex0nK1YhLHDnIhrhusgCtBQFR2NQPhM8WlMDTc=
 github.com/xen0n/gosmopolitan v1.3.0 h1:zAZI1zefvo7gcpbCOrPSHJZJYA9ZgLfJqtKzZ5pHqQM=
 github.com/xen0n/gosmopolitan v1.3.0/go.mod h1:rckfr5T6o4lBtM1ga7mLGKZmLxswUoH1zxHgNXOsEt4=
-github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20260123030432-68308ae9bd0f h1:FWqoMR+1oH26Q/3C7IW9QrZX9b4oiIozykNdJNSQq6w=
-github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20260123030432-68308ae9bd0f/go.mod h1:RJnGDuDtnzpjvAkBwK5fL1B0i4N1AGviH5PlIsGVE2M=
+github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20260206222219-82cca651a0dc h1:2FMohqMpY67I9Yw+4pP+ybxLLD0qdXXqqciy6WEsvFc=
+github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20260206222219-82cca651a0dc/go.mod h1:RJnGDuDtnzpjvAkBwK5fL1B0i4N1AGviH5PlIsGVE2M=
 github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e h1:JVG44RsyaB9T2KIHavMF/ppJZNG9ZpyihvCd0w101no=
 github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e/go.mod h1:RbqR21r5mrJuqunuUZ/Dhy/avygyECGrLceyNeo4LiM=
 github.com/xyproto/randomstring v1.0.5 h1:YtlWPoRdgMu3NZtP45drfy1GKoojuR7hmRcnhZqKjWU=
