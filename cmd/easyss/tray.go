@@ -249,6 +249,16 @@ func (st *SysTray) AddProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 					}
 					global.Uncheck()
 				} else {
+					if !IsRoot() {
+						if err := RunMeElevated("-enable-tun2socks"); err != nil {
+							log.Error("[SYSTRAY] run me elevated", "err", err)
+							continue
+						}
+						systray.Quit()
+						os.Exit(0)
+						return
+					}
+
 					if err := st.ss.CreateTun2socks(); err != nil {
 						log.Error("[SYSTRAY] create tun2socks", "err", err)
 						continue

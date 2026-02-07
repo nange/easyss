@@ -2,6 +2,7 @@ package easyss
 
 import (
 	"fmt"
+	"math/rand"
 	"net"
 	"time"
 
@@ -104,12 +105,25 @@ func (ss *Easyss) directICMPEcho(host string, data []byte) (header.ICMPv4, error
 		_ = pc.Close()
 	}()
 
+	// modify the ident of the icmp packet to avoid conflict with the original ping process
+	// make a copy of data to avoid modifying the original data
+	newData := make([]byte, len(data))
+	copy(newData, data)
+
+	icmpHdr := header.ICMPv4(newData)
+	// random a new ident
+	newIdent := uint16(rand.Intn(65535))
+	icmpHdr.SetIdent(newIdent)
+	icmpHdr.SetChecksum(0)
+	c := checksum.Checksum(newData, 0)
+	icmpHdr.SetChecksum(^c)
+
 	if err := pc.SetDeadline(time.Now().Add(ss.ICMPTimeout())); err != nil {
 		log.Error("[ICMP] set deadline failed", "err", err)
 		return nil, err
 	}
 
-	_, err = pc.WriteTo(data, &net.IPAddr{IP: net.ParseIP(host)})
+	_, err = pc.WriteTo(newData, &net.IPAddr{IP: net.ParseIP(host)})
 	if err != nil {
 		log.Error("[ICMP] write icmp packet failed", "err", err)
 		return nil, err
@@ -118,13 +132,20 @@ func (ss *Easyss) directICMPEcho(host string, data []byte) (header.ICMPv4, error
 	buf := bytespool.Get(1024)
 	defer bytespool.MustPut(buf)
 
-	n, _, err := pc.ReadFrom(buf)
-	if err != nil {
-		log.Error("[ICMP] read icmp packet failed", "err", err)
-		return nil, err
-	}
+	for {
+		n, _, err := pc.ReadFrom(buf)
+		if err != nil {
+			log.Error("[ICMP] read icmp packet failed", "err", err)
+			return nil, err
+		}
 
-	return header.ICMPv4(buf[:n]), nil
+		// check if the packet is the echo reply we want
+		replyHdr := header.ICMPv4(buf[:n])
+		// 0 is echo reply
+		if replyHdr.Type() == header.ICMPv4EchoReply && replyHdr.Ident() == newIdent {
+			return replyHdr, nil
+		}
+	}
 }
 
 func (ss *Easyss) proxyICMPEcho(host string, data []byte) (header.ICMPv4, error) {
