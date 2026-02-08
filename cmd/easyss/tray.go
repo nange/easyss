@@ -342,6 +342,10 @@ func (st *SysTray) catLog() error {
 				if u, err := user.LookupId(uid); err == nil {
 					linuxCmd = append([]string{"runuser", "-u", u.Username, "--"}, linuxCmd...)
 				}
+				// If DBUS_SESSION_BUS_ADDRESS is missing, try to set it for the user
+				if os.Getenv("DBUS_SESSION_BUS_ADDRESS") == "" {
+					os.Setenv("DBUS_SESSION_BUS_ADDRESS", fmt.Sprintf("unix:path=/run/user/%s/bus", uid))
+				}
 			}
 		}
 	case "windows":
