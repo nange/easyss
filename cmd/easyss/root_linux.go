@@ -31,16 +31,17 @@ func RunMeElevated(extraArgs ...string) error {
 
 	// Capture necessary environment variables for GUI
 	envMap := make(map[string]string)
-	envVars := []string{
-		"DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY", "HOME",
-		"DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR",
-		"XDG_DATA_DIRS", "XDG_CONFIG_DIRS", "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP",
-	}
-
-	for _, key := range envVars {
-		if val := os.Getenv(key); val != "" {
-			envMap[key] = val
+	// Preserve all environment variables except some specific ones
+	for _, env := range os.Environ() {
+		k, v, ok := strings.Cut(env, "=")
+		if !ok {
+			continue
 		}
+		// Filter out some variables that might cause issues or are not needed
+		if k == "_" || k == "PWD" || k == "OLDPWD" || k == "SHLVL" {
+			continue
+		}
+		envMap[k] = v
 	}
 
 	// Fallback for XAUTHORITY if missing
