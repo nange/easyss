@@ -59,30 +59,22 @@ func RunMeElevated(extraArgs ...string) error {
 	// Build the environment string for the command
 	var envBuilder strings.Builder
 	for k, v := range envMap {
-		envBuilder.WriteString(fmt.Sprintf("%s='%s' ", k, v))
+		envBuilder.WriteString(fmt.Sprintf("%s='%s' ", k, strings.ReplaceAll(v, "'", "'\\''")))
 	}
 
 	// Construct the command to be executed by pkexec
-	// We use 'env' to set the environment variables inside the elevated context
-	// Structure: pkexec env DISPLAY=... nohup exe args... >/dev/null 2>&1 &
+	// Structure: pkexec sh -c "env_vars nohup exe args... >/dev/null 2>&1 &"
 
 	// Note: We use sh -c to wrap the nohup command
 	// The command passed to sh -c needs to be:
-	// nohup /path/to/exe args... >/dev/null 2>&1 &
+	// env_vars nohup /path/to/exe args... >/dev/null 2>&1 &
 
-	innerCmd := fmt.Sprintf("nohup '%s' %s >/dev/null 2>&1 &", exe, argsBuilder.String())
+	innerCmd := fmt.Sprintf("%s nohup '%s' %s >/dev/null 2>&1 &", envBuilder.String(), exe, argsBuilder.String())
 
 	// Now we construct the full command for pkexec
-	// pkexec env VAR=val... sh -c "innerCmd"
+	// pkexec sh -c "innerCmd"
 
-	// We need to construct arguments for exec.Command
-	// pkexec [args...]
-
-	cmdArgs := []string{"env"}
-	for k, v := range envMap {
-		cmdArgs = append(cmdArgs, fmt.Sprintf("%s=%s", k, v))
-	}
-	cmdArgs = append(cmdArgs, "sh", "-c", innerCmd)
+	cmdArgs := []string{"sh", "-c", innerCmd}
 
 	cmd := exec.Command("pkexec", cmdArgs...)
 	return cmd.Run()
