@@ -346,6 +346,10 @@ func (st *SysTray) catLog() error {
 				if os.Getenv("DBUS_SESSION_BUS_ADDRESS") == "" {
 					os.Setenv("DBUS_SESSION_BUS_ADDRESS", fmt.Sprintf("unix:path=/run/user/%s/bus", uid))
 				}
+				// If XDG_RUNTIME_DIR is missing, try to set it for the user
+				if os.Getenv("XDG_RUNTIME_DIR") == "" {
+					os.Setenv("XDG_RUNTIME_DIR", fmt.Sprintf("/run/user/%s", uid))
+				}
 			}
 		}
 	case "windows":
