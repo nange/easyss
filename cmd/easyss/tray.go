@@ -359,7 +359,7 @@ func (st *SysTray) catLog() error {
 		"linux":   linuxCmd,
 		"darwin":  {"open", "-a", "Console", st.ss.LogFilePath()},
 	}
-	_, err := util.CommandWithoutProxy(cmdMap[runtime.GOOS][0], cmdMap[runtime.GOOS][1:]...)
+	_, err := util.Command(cmdMap[runtime.GOOS][0], cmdMap[runtime.GOOS][1:]...)
 	return err
 }
 
