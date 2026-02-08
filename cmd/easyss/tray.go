@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"runtime"
 	"strings"
 	"sync"
@@ -330,6 +331,18 @@ func (st *SysTray) catLog() error {
 			linuxCmd = []string{"lxterminal", "--title", title, "--command", fmt.Sprintf("tail -50f %s", st.ss.LogFilePath())}
 		case util.SysSupportTerminator():
 			linuxCmd = []string{"terminator", "--title", title, "--command", fmt.Sprintf("tail -50f %s", st.ss.LogFilePath())}
+		}
+
+		if os.Geteuid() == 0 {
+			uid := os.Getenv("PKEXEC_UID")
+			if uid == "" {
+				uid = os.Getenv("SUDO_UID")
+			}
+			if uid != "" {
+				if u, err := user.LookupId(uid); err == nil {
+					linuxCmd = append([]string{"runuser", "-u", u.Username, "--"}, linuxCmd...)
+				}
+			}
 		}
 	case "windows":
 		// Ref: https://learn.microsoft.com/zh-cn/powershell/module/microsoft.powershell.management/start-process?view=powershell-7.3
