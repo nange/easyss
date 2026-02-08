@@ -322,7 +322,7 @@ func (st *SysTray) catLog() error {
 		case util.SysSupportGnomeTerminal():
 			linuxCmd = []string{"gnome-terminal", "--hide-menubar", "--title", title, "--", "tail", "-50f", st.ss.LogFilePath()}
 		case util.SysSupportMateTerminal():
-			linuxCmd = []string{"gnome-terminal", "--hide-menubar", "--title", title, "--", "tail", "-50f", st.ss.LogFilePath()}
+			linuxCmd = []string{"mate-terminal", "--hide-menubar", "--title", title, "--", "tail", "-50f", st.ss.LogFilePath()}
 		case util.SysSupportKonsole():
 			linuxCmd = []string{"konsole", "--hide-menubar", "-e", "tail", "-50f", st.ss.LogFilePath()}
 		case util.SysSupportXfce4Terminal():
@@ -369,7 +369,7 @@ func (st *SysTray) catLog() error {
 	cmdMap := map[string][]string{
 		"windows": {"powershell", "-Command", "Start-Process", winCmd},
 		"linux":   linuxCmd,
-		"darwin":  {"open", "-a", "Console", st.ss.LogFilePath()},
+		"darwin":  {"osascript", "-e", fmt.Sprintf(`tell application "Terminal" to do script "tail -f \"%s\""`, st.ss.LogFilePath()), "-e", `tell application "Terminal" to activate`},
 	}
 	_, err := util.Command(cmdMap[runtime.GOOS][0], cmdMap[runtime.GOOS][1:]...)
 	return err
