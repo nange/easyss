@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"runtime"
 	"strings"
 	"sync"
@@ -332,14 +333,19 @@ func (st *SysTray) catLog() error {
 			linuxCmd = []string{"terminator", "--title", title, "--command", fmt.Sprintf("tail -50f %s", st.ss.LogFilePath())}
 		}
 
-		// If DBUS_SESSION_BUS_ADDRESS is missing, try to set it for the user
-		if os.Getenv("DBUS_SESSION_BUS_ADDRESS") == "" {
+		if os.Geteuid() == 0 {
 			uid := os.Getenv("PKEXEC_UID")
 			if uid == "" {
 				uid = os.Getenv("SUDO_UID")
 			}
 			if uid != "" {
-				os.Setenv("DBUS_SESSION_BUS_ADDRESS", fmt.Sprintf("unix:path=/run/user/%s/bus", uid))
+				if u, err := user.LookupId(uid); err == nil {
+					linuxCmd = append([]string{"runuser", "-u", u.Username, "--"}, linuxCmd...)
+				}
+				// If DBUS_SESSION_BUS_ADDRESS is missing, try to set it for the user
+				if os.Getenv("DBUS_SESSION_BUS_ADDRESS") == "" {
+					os.Setenv("DBUS_SESSION_BUS_ADDRESS", fmt.Sprintf("unix:path=/run/user/%s/bus", uid))
+				}
 			}
 		}
 	case "windows":
