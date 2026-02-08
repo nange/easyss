@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"runtime"
 	"strings"
 	"sync"
@@ -330,6 +331,34 @@ func (st *SysTray) catLog() error {
 			linuxCmd = []string{"lxterminal", "--title", title, "--command", fmt.Sprintf("tail -50f %s", st.ss.LogFilePath())}
 		case util.SysSupportTerminator():
 			linuxCmd = []string{"terminator", "--title", title, "--command", fmt.Sprintf("tail -50f %s", st.ss.LogFilePath())}
+		}
+
+		if len(linuxCmd) > 0 && IsRoot() {
+			username := ""
+			// PKEXEC_UID is set by pkexec
+			if uid := os.Getenv("PKEXEC_UID"); uid != "" {
+				if u, err := user.LookupId(uid); err == nil {
+					username = u.Username
+				}
+			}
+			// SUDO_USER is set by sudo
+			if username == "" {
+				if u := os.Getenv("SUDO_USER"); u != "" {
+					username = u
+				}
+			}
+
+			if username != "" {
+				// Use runuser to switch back to original user
+				newCmd := []string{"runuser", "-u", username, "--"}
+				// Pass DBUS_SESSION_BUS_ADDRESS if present, it is crucial for GUI apps
+				if dbusAddr := os.Getenv("DBUS_SESSION_BUS_ADDRESS"); dbusAddr != "" {
+					newCmd = append(newCmd, "env", fmt.Sprintf("DBUS_SESSION_BUS_ADDRESS=%s", dbusAddr))
+				}
+				newCmd = append(newCmd, linuxCmd...)
+				linuxCmd = newCmd
+				log.Info("[SYSTRAY] cat log: switching to user", "user", username, "cmd", linuxCmd)
+			}
 		}
 	case "windows":
 		// Ref: https://learn.microsoft.com/zh-cn/powershell/module/microsoft.powershell.management/start-process?view=powershell-7.3
