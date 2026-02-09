@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/log"
@@ -28,8 +29,20 @@ func (ss *Easyss) LocalSocks5() {
 	}
 	ss.SetSocksServer(server)
 
-	if err := server.ListenAndServe(ss); err != nil {
-		log.Warn("[SOCKS5] local socks5 server", "err", err)
+	for i := range 5 {
+		if err := server.ListenAndServe(ss); err != nil {
+			if ss.Closed() {
+				return
+			}
+			log.Warn("[SOCKS5] local socks5 server listen failed, retrying...", "err", err, "count", i+1)
+			if i == 4 {
+				log.Error("[SOCKS5] local socks5 server listen failed after retries", "err", err)
+				return
+			}
+			time.Sleep(time.Second)
+			continue
+		}
+		break
 	}
 }
 

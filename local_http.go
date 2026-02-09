@@ -3,11 +3,13 @@ package easyss
 import (
 	"encoding/base64"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util"
@@ -38,7 +40,22 @@ func (ss *Easyss) LocalHttp() {
 	server := &http.Server{Addr: addr, Handler: newHTTPProxy(ss)}
 	ss.SetHttpProxyServer(server)
 
-	if err := server.ListenAndServe(); err != nil {
+	var ln net.Listener
+	var err error
+	for i := range 5 {
+		ln, err = net.Listen("tcp", addr)
+		if err == nil {
+			break
+		}
+		log.Warn("[HTTP_PROXY] listen failed, retrying...", "addr", addr, "count", i+1, "err", err)
+		time.Sleep(time.Second)
+	}
+	if err != nil {
+		log.Error("[HTTP_PROXY] listen failed after retries", "addr", addr, "err", err)
+		return
+	}
+
+	if err := server.Serve(ln); err != nil {
 		log.Warn("[HTTP_PROXY] local http-proxy server", "err", err)
 	}
 }
