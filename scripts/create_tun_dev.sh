@@ -17,11 +17,13 @@ fi
 
 ip link set dev "$tun_device" up  # enable tun device
 
-ip route add default via "$tun_gw" dev "$tun_device" metric 1
+ip route add 0.0.0.0/1 via "$tun_gw" dev "$tun_device"
+ip route add 128.0.0.0/1 via "$tun_gw" dev "$tun_device"
 ip route add "$local_gateway" via "$tun_gw" dev "$tun_device"
 
 # add ipv6 ip route
 if [ -n "$server_ip_v6" ]; then  # check if server_ip_v6 is not empty
-  ip -6 route add default via "$tun_gw_v6" dev "$tun_device" metric 1
+  ip -6 route add ::/1 via "$tun_gw_v6" dev "$tun_device"
+  ip -6 route add 8000::/1 via "$tun_gw_v6" dev "$tun_device"
   ip -6 route add "$local_gateway_v6" via "$tun_gw_v6" dev "$tun_device"
 fi
