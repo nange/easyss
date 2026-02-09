@@ -306,11 +306,14 @@ func New(config *Config) (*Easyss, error) {
 		log.Info("[EASYSS] ipv6 is enabled")
 	}
 
-	ss.directDialer = &dialer.Dialer{
-		InterfaceName:  atomic.NewString(ss.LocalDevice()),
-		InterfaceIndex: atomic.NewInt32(int32(ss.LocalDeviceIndex())),
-		RoutingMark:    atomic.NewInt32(0),
+	var opts []dialer.SocketOption
+	if iface, err := net.InterfaceByName(ss.LocalDevice()); err == nil {
+		opts = append(opts, dialer.WithBindToInterface(iface))
+	} else {
+		log.Error("[EASYSS] interface by name failed", "name", ss.LocalDevice(), "err", err)
 	}
+
+	ss.directDialer = dialer.New(opts...)
 
 	// get origin dns on darwin
 	ds, err := util.SysDNS()

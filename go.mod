@@ -23,7 +23,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/txthinking/socks5 v0.0.0-20251011041537-5c31f201a10e
 	github.com/wzshiming/sysproxy v0.2.2
-	github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20260206222219-82cca651a0dc
+	github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20260208023458-9c2ce3997995
 	go.uber.org/atomic v1.11.0
 	golang.org/x/crypto v0.47.0
 	golang.org/x/net v0.49.0
