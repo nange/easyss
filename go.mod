@@ -10,23 +10,23 @@ require (
 	github.com/go-faker/faker/v4 v4.7.0
 	github.com/gofrs/uuid/v5 v5.4.0
 	github.com/imroc/req/v3 v3.57.0
-	github.com/klauspost/compress v1.18.2
+	github.com/klauspost/compress v1.18.3
 	github.com/libp2p/go-netroute v0.4.0
-	github.com/miekg/dns v1.1.69
+	github.com/miekg/dns v1.1.72
 	github.com/nange/easypool v1.3.1
 	github.com/negrel/conc v0.5.0
 	github.com/oschwald/geoip2-golang v1.13.0
-	github.com/refraction-networking/utls v1.8.1
+	github.com/refraction-networking/utls v1.8.2
 	github.com/samber/slog-formatter v1.2.2
 	github.com/segmentio/encoding v0.5.3
-	github.com/smallnest/ringbuffer v0.0.0-20250317021400-0da97b586904
+	github.com/smallnest/ringbuffer v0.1.1
 	github.com/stretchr/testify v1.11.1
 	github.com/txthinking/socks5 v0.0.0-20251011041537-5c31f201a10e
 	github.com/wzshiming/sysproxy v0.2.2
 	github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20260206222219-82cca651a0dc
 	go.uber.org/atomic v1.11.0
-	golang.org/x/crypto v0.46.0
-	golang.org/x/net v0.48.0
+	golang.org/x/crypto v0.47.0
+	golang.org/x/net v0.49.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gvisor.dev/gvisor v0.0.0-20260106215814-b2227fa9cfe0
 )
@@ -260,12 +260,12 @@ require (
 	go.uber.org/zap/exp v0.3.0 // indirect
 	golang.org/x/exp v0.0.0-20241215155358-4a5509556b9e // indirect
 	golang.org/x/exp/typeparams v0.0.0-20250911091902-df9299821621 // indirect
-	golang.org/x/mod v0.30.0 // indirect
+	golang.org/x/mod v0.31.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.39.0 // indirect
-	golang.org/x/text v0.32.0 // indirect
+	golang.org/x/sys v0.40.0 // indirect
+	golang.org/x/text v0.33.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
-	golang.org/x/tools v0.39.0 // indirect
+	golang.org/x/tools v0.40.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
