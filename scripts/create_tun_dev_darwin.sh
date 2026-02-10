@@ -29,3 +29,4 @@ route add -net 198.18.0.0/15 "$tun_gw"
 if [ -n "$server_ip_v6" ]; then  # check if server_ip_v6 is not empty
   # add ipv6 ip route
   route add -inet6 -net ::/0 -gateway "$tun_gw_v6"
+fi
