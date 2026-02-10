@@ -124,10 +124,17 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 
 	var ue *UDPExchange
 	var exchKey = addr.String() + dst
+
+	iue, ok := s.UDPExchanges.Get(exchKey)
+	if ok {
+		ue = iue.(*UDPExchange)
+		return send(ue, d.Data)
+	}
+
 	ss.lockKey(exchKey)
 	defer ss.unlockKey(exchKey)
 
-	iue, ok := s.UDPExchanges.Get(exchKey)
+	iue, ok = s.UDPExchanges.Get(exchKey)
 	if ok {
 		ue = iue.(*UDPExchange)
 		return send(ue, d.Data)

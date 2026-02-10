@@ -31,7 +31,6 @@ type CipherStream struct {
 	net.Conn
 	AEADCipher
 	leftover  []byte
-	wbuf      []byte
 	frameIter *FrameIter
 	frameType FrameType
 	flag      uint8
@@ -61,8 +60,6 @@ func New(stream net.Conn, password, method string, frameType FrameType, flags ..
 	}
 
 	cs.frameIter = NewFrameIter(stream, cs.AEADCipher)
-
-	cs.wbuf = bytespool.Get(MaxPayloadSize + cs.NonceSize() + cs.Overhead())
 
 	return cs, nil
 }
@@ -121,9 +118,12 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 	buf := bytespool.Get(MaxCipherRelaySize)
 	defer bytespool.MustPut(buf)
 
+	wbuf := bytespool.Get(MaxPayloadSize + cs.NonceSize() + cs.Overhead())
+	defer bytespool.MustPut(wbuf)
+
 	for {
 		buf = buf[:0]
-		payloadBuf := cs.wbuf[:MaxPayloadSize]
+		payloadBuf := wbuf[:MaxPayloadSize]
 
 		nr, er := r.Read(payloadBuf)
 		if nr > 0 {
@@ -223,15 +223,11 @@ func (cs *CipherStream) ReadFrame() (*Frame, error) {
 }
 
 func (cs *CipherStream) Release() {
-	if len(cs.wbuf) > 0 {
-		bytespool.MustPut(cs.wbuf)
-	}
 	if cs.frameIter != nil {
 		cs.frameIter.Release()
 	}
 
 	cs.Conn = nil
-	cs.wbuf = nil
 }
 
 func (cs *CipherStream) Close() error {
