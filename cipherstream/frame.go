@@ -262,19 +262,20 @@ func NewFrame(ft FrameType, payload []byte, flag uint8, cipher AEADCipher) *Fram
 }
 
 func (f *Frame) EncodeWithCipher(buf []byte) ([]byte, error) {
-	headerCipher, err := f.cipher.Encrypt(f.header)
-	if err != nil {
-		return nil, err
-	}
-
-	payloadCipher, err := f.cipher.Encrypt(f.FramePayload())
-	if err != nil {
-		return nil, err
-	}
-
 	buf = buf[:0]
-	buf = append(buf, headerCipher...)
-	buf = append(buf, payloadCipher...)
+	var err error
+	
+	// Encrypt header and append to buf
+	buf, err = f.cipher.EncryptTo(buf, f.header)
+	if err != nil {
+		return nil, err
+	}
+
+	// Encrypt payload and append to buf
+	buf, err = f.cipher.EncryptTo(buf, f.FramePayload())
+	if err != nil {
+		return nil, err
+	}
 
 	return buf, nil
 }

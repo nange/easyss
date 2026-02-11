@@ -73,7 +73,7 @@ func (cs *CipherStream) WriteFrame(f *Frame) error {
 	buf := bytespool.Get(MaxCipherRelaySize)
 	defer bytespool.MustPut(buf)
 
-	frameBytes, err := f.EncodeWithCipher(buf)
+	frameBytes, err := f.EncodeWithCipher(buf[:0])
 	if err != nil {
 		log.Error("[CIPHERSTREAM] encode frame with cipher", "err", err)
 		return err
@@ -118,23 +118,27 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 	buf := bytespool.Get(MaxCipherRelaySize)
 	defer bytespool.MustPut(buf)
 
-	payloadBuf := bytespool.Get(MaxPayloadSize + cs.NonceSize() + cs.Overhead())
-	defer bytespool.MustPut(payloadBuf)
+	wbuf := bytespool.Get(MaxPayloadSize + cs.NonceSize() + cs.Overhead())
+	defer bytespool.MustPut(wbuf)
 
 	for {
+		buf = buf[:0]
+		payloadBuf := wbuf[:MaxPayloadSize]
+
 		nr, er := r.Read(payloadBuf)
 		if nr > 0 {
 			err = errors.Join(func() error {
 				frame := NewFrame(cs.frameType, payloadBuf[:nr], cs.flag, cs.AEADCipher)
 				defer frame.Release()
 
-				frameBytes, er := frame.EncodeWithCipher(buf)
+				var er error
+				buf, er = frame.EncodeWithCipher(buf)
 				if er != nil {
 					log.Error("[CIPHERSTREAM] encode frame with cipher", "err", er)
 					return er
 				}
 
-				if _, ew := cs.Conn.Write(frameBytes); ew != nil {
+				if _, ew := cs.Conn.Write(buf); ew != nil {
 					if !errors.Is(ew, netpipe.ErrPipeClosed) {
 						log.Warn("[CIPHERSTREAM] write cipher data to cipher stream failed", "err", ew)
 					}
