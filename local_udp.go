@@ -21,6 +21,7 @@ import (
 const (
 	MaxUDPDataSize   = 65507
 	DefaultDNSServer = "8.8.8.8:53"
+	MaxUDPConnCount  = 20
 )
 
 const DefaultDNSTimeout = 5 * time.Second
@@ -29,7 +30,8 @@ const DefaultDNSTimeout = 5 * time.Second
 type UDPExchange struct {
 	ClientAddr *net.UDPAddr
 	Conns      []net.Conn
-	mu         sync.RWMutex
+	mu         sync.Mutex
+	cond       *sync.Cond
 	Pending    int
 }
 
@@ -141,74 +143,77 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			ue = &UDPExchange{
 				ClientAddr: addr,
 			}
+			ue.cond = sync.NewCond(&ue.mu)
 			s.UDPExchanges.Set(exchKey, ue, -1)
 		}
 		ss.unlockKey(exchKey)
 	}
 
 	ue.mu.Lock()
-	connCount := len(ue.Conns)
-	if connCount > 0 {
-		conn := ue.Conns[rand.Intn(connCount)]
-		if connCount+ue.Pending < 10 {
-			ue.Pending++
-			go func() {
-				defer func() {
-					ue.mu.Lock()
-					ue.Pending--
-					ue.mu.Unlock()
-				}()
-				flag := cipherstream.FlagUDP
-				if isDNSReq {
-					flag |= cipherstream.FlagDNS
-				}
-				csStream, err := ss.handShakeWithRemote(rewrittenDst, flag)
-				if err == nil {
+	if len(ue.Conns) == 0 {
+		for len(ue.Conns) == 0 {
+			if ue.Pending < MaxUDPConnCount {
+				ue.Pending++
+				go func() {
+					defer func() {
+						ue.mu.Lock()
+						ue.Pending--
+						ue.cond.Broadcast()
+						ue.mu.Unlock()
+					}()
+
+					flag := cipherstream.FlagUDP
+					if isDNSReq {
+						flag |= cipherstream.FlagDNS
+					}
+					csStream, err := ss.handShakeWithRemote(rewrittenDst, flag)
+					if err != nil {
+						log.Error("[UDP_PROXY] handshake with remote server", "err", err)
+						if csStream != nil {
+							if cs, ok := csStream.(*cipherstream.CipherStream); ok {
+								cs.MarkConnUnusable()
+							}
+							_ = csStream.Close()
+						}
+						return
+					}
 					ss.addRemoteConn(ue, csStream, dst, ch, hasAssoc, isDNSReq, exchKey, s)
-				}
-			}()
+				}()
+			}
+			ue.cond.Wait()
 		}
-		ue.mu.Unlock()
-		return send(conn, d.Data)
 	}
 
-	if ue.Pending < 10 {
+	connCount := len(ue.Conns)
+	conn := ue.Conns[rand.Intn(connCount)]
+	if connCount+ue.Pending < MaxUDPConnCount {
 		ue.Pending++
-		ue.mu.Unlock()
-
-		flag := cipherstream.FlagUDP
-		if isDNSReq {
-			flag |= cipherstream.FlagDNS
-		}
-		csStream, err := ss.handShakeWithRemote(rewrittenDst, flag)
-
-		ue.mu.Lock()
-		ue.Pending--
-		ue.mu.Unlock()
-
-		if err != nil {
-			log.Error("[UDP_PROXY] handshake with remote server", "err", err)
-			if csStream != nil {
-				if cs, ok := csStream.(*cipherstream.CipherStream); ok {
-					cs.MarkConnUnusable()
-				}
-				_ = csStream.Close()
+		go func() {
+			defer func() {
+				ue.mu.Lock()
+				ue.Pending--
+				ue.cond.Broadcast()
+				ue.mu.Unlock()
+			}()
+			flag := cipherstream.FlagUDP
+			if isDNSReq {
+				flag |= cipherstream.FlagDNS
 			}
-			return err
-		}
-
-		ss.addRemoteConn(ue, csStream, dst, ch, hasAssoc, isDNSReq, exchKey, s)
-		return send(csStream, d.Data)
+			csStream, err := ss.handShakeWithRemote(rewrittenDst, flag)
+			if err == nil {
+				ss.addRemoteConn(ue, csStream, dst, ch, hasAssoc, isDNSReq, exchKey, s)
+			}
+		}()
 	}
 	ue.mu.Unlock()
 
-	time.Sleep(time.Millisecond * 50)
-	return ss.UDPHandle(s, addr, d)
+	return send(conn, d.Data)
 }
 
 func (ss *Easyss) addRemoteConn(ue *UDPExchange, conn net.Conn, dst string, ch chan struct{}, hasAssoc bool, isDNSReq bool, exchKey string, s *socks5.Server) {
 	ue.mu.Lock()
 	ue.Conns = append(ue.Conns, conn)
+	ue.cond.Broadcast()
 	ue.mu.Unlock()
 
 	var monitorCh = make(chan bool)
@@ -264,6 +269,7 @@ func (ss *Easyss) addRemoteConn(ue *UDPExchange, conn net.Conn, dst string, ch c
 					break
 				}
 			}
+			ue.cond.Broadcast()
 
 			// We need to signal the monitor goroutine for THIS connection
 			monitorCh <- tryReuse
