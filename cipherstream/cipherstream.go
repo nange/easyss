@@ -118,10 +118,13 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 	buf := bytespool.Get(MaxCipherRelaySize)
 	defer bytespool.MustPut(buf)
 
-	payloadBuf := bytespool.Get(MaxPayloadSize + cs.NonceSize() + cs.Overhead())
-	defer bytespool.MustPut(payloadBuf)
+	wbuf := bytespool.Get(MaxPayloadSize + cs.NonceSize() + cs.Overhead())
+	defer bytespool.MustPut(wbuf)
 
 	for {
+		buf = buf[:0]
+		payloadBuf := wbuf[:MaxPayloadSize]
+
 		nr, er := r.Read(payloadBuf)
 		if nr > 0 {
 			err = errors.Join(func() error {
