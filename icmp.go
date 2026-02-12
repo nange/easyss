@@ -118,7 +118,7 @@ func (ss *Easyss) directICMPEcho(host string, data []byte) (header.ICMPv4, error
 	c := checksum.Checksum(newData, 0)
 	icmpHdr.SetChecksum(^c)
 
-	if err := pc.SetDeadline(time.Now().Add(ss.ICMPTimeout())); err != nil {
+	if err := pc.SetReadDeadline(time.Now().Add(ss.ICMPTimeout())); err != nil {
 		log.Error("[ICMP] set deadline failed", "err", err)
 		return nil, err
 	}
@@ -165,7 +165,7 @@ func (ss *Easyss) proxyICMPEcho(host string, data []byte) (header.ICMPv4, error)
 		}
 	}()
 
-	_ = csStream.SetDeadline(time.Now().Add(ss.ICMPTimeout()))
+	_ = csStream.SetReadDeadline(time.Now().Add(ss.ICMPTimeout()))
 	_, err = csStream.Write(data)
 	if err != nil {
 		log.Error("[ICMP] write echo request to remote", "err", err)
