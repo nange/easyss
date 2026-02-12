@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/cespare/xxhash/v2"
@@ -17,6 +16,7 @@ import (
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
 	"github.com/txthinking/socks5"
+	"go.uber.org/atomic"
 )
 
 const (
@@ -34,7 +34,7 @@ type UDPExchange struct {
 	mu         sync.Mutex
 	cond       *sync.Cond
 	Pending    int
-	ActiveReqs int32
+	ActiveReqs *atomic.Int32
 }
 
 func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) error {
@@ -67,8 +67,8 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 
 	ch, hasAssoc := ss.getAssociatedChan(s, addr, d)
 	ue, exchKey := ss.getOrCreateUDPExchange(s, addr, dst)
-	atomic.AddInt32(&ue.ActiveReqs, 1)
-	defer atomic.AddInt32(&ue.ActiveReqs, -1)
+	ue.ActiveReqs.Inc()
+	defer ue.ActiveReqs.Dec()
 
 	isQUIC := port == "443"
 	conn := ss.getConnFromPool(ue, rewrittenDst, dst, ch, hasAssoc, isDNSRequest(msg), isQUIC, exchKey, s)
@@ -76,7 +76,7 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		return errors.New("get conn from pool failed")
 	}
 	if isQUIC {
-		log.Info("[UDP_PROXY]", "exch_key", exchKey, "active_reqs", atomic.LoadInt32(&ue.ActiveReqs), "conn_count", len(ue.Conns))
+		log.Info("[UDP_PROXY]", "exch_key", exchKey, "active_reqs", ue.ActiveReqs.Load(), "conn_count", len(ue.Conns))
 	}
 
 	return ss.sendUDPData(conn, d.Data, ch, addr)
@@ -157,6 +157,7 @@ func (ss *Easyss) getOrCreateUDPExchange(s *socks5.Server, addr *net.UDPAddr, ds
 
 	ue := &UDPExchange{
 		ClientAddr: addr,
+		ActiveReqs: atomic.NewInt32(0),
 	}
 	ue.cond = sync.NewCond(&ue.mu)
 	s.UDPExchanges.Set(exchKey, ue, -1)
@@ -179,7 +180,7 @@ func (ss *Easyss) getConnFromPool(ue *UDPExchange, rewrittenDst, dst string, ch 
 
 	connCount := len(ue.Conns)
 	conn := ue.Conns[rand.Intn(connCount)]
-	if isQUIC && connCount+ue.Pending < MaxUDPConnCount && atomic.LoadInt32(&ue.ActiveReqs) >= int32(connCount) {
+	if isQUIC && connCount+ue.Pending < MaxUDPConnCount && ue.ActiveReqs.Load() >= int32(connCount) {
 		ue.Pending++
 		go ss.handshakeAndAddConn(ue, rewrittenDst, dst, ch, hasAssoc, isDNSReq, exchKey, s)
 	}
