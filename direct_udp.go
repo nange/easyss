@@ -72,10 +72,16 @@ func (ss *Easyss) directUDPRelay(s *socks5.Server, laddr *net.UDPAddr, d *socks5
 	var src = laddr.String()
 	var exchKey = src + dst + DirectSuffix
 
+	iue, ok := s.UDPExchanges.Get(exchKey)
+	if ok {
+		ue = iue.(*DirectUDPExchange)
+		return send(ue, d.Data, uAddr)
+	}
+
 	ss.lockKey(exchKey)
 	defer ss.unlockKey(exchKey)
 
-	iue, ok := s.UDPExchanges.Get(exchKey)
+	iue, ok = s.UDPExchanges.Get(exchKey)
 	if ok {
 		ue = iue.(*DirectUDPExchange)
 		return send(ue, d.Data, uAddr)

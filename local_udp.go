@@ -3,9 +3,11 @@ package easyss
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cespare/xxhash/v2"
@@ -14,11 +16,13 @@ import (
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
 	"github.com/txthinking/socks5"
+	"go.uber.org/atomic"
 )
 
 const (
 	MaxUDPDataSize   = 65507
 	DefaultDNSServer = "8.8.8.8:53"
+	MaxUDPConnCount  = 16
 )
 
 const DefaultDNSTimeout = 5 * time.Second
@@ -26,7 +30,11 @@ const DefaultDNSTimeout = 5 * time.Second
 // UDPExchange used to store client address and remote connection
 type UDPExchange struct {
 	ClientAddr *net.UDPAddr
-	RemoteConn net.Conn
+	Conns      []net.Conn
+	mu         sync.Mutex
+	cond       *sync.Cond
+	Pending    int
+	ActiveReqs *atomic.Int32
 }
 
 func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) error {
@@ -36,102 +44,156 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	rewrittenDst := dst
 
 	msg := &dns.Msg{}
-	err := msg.Unpack(d.Data)
-	isDNSReq := isDNSRequest(msg)
-	if err == nil && isDNSReq {
-		question := msg.Question[0]
-
-		rule := ss.MatchHostRule(strings.TrimSuffix(question.Name, "."))
-		if rule == HostRuleBlock {
-			return responseBlockedDNSMsg(s.UDPConn, addr, msg, d.Address())
+	if err := msg.Unpack(d.Data); err == nil && isDNSRequest(msg) {
+		handled, err := ss.handleDNS(s, addr, d, msg)
+		if err != nil {
+			return err
 		}
-		if ss.ShouldIPV6Disable() && question.Qtype == dns.TypeAAAA {
-			return responseEmptyDNSMsg(s.UDPConn, addr, msg, d.Address())
-		}
-
-		isDirect := rule == HostRuleDirect
-
-		// find from dns cache first
-		msgCache := ss.DNSCache(question.Name, dns.TypeToString[question.Qtype], isDirect)
-		if msgCache != nil {
-			msgCache.Id = msg.Id
-			log.Info("[DNS_CACHE] find from cache", "domain", question.Name, "qtype", dns.TypeToString[question.Qtype])
-			if err := responseDNSMsg(s.UDPConn, addr, msgCache, d.Address()); err != nil {
-				log.Error("[DNS_CACHE] write msg back", "err", err)
-				return err
-			}
-			if strings.TrimSuffix(question.Name, ".") != ss.Server() {
-				log.Debug("[DNS_CACHE] renew cache for", "domain", question.Name)
-				ss.RenewDNSCache(question.Name, dns.TypeToString[question.Qtype], isDirect)
-			}
+		if handled {
 			return nil
 		}
-
-		if isDirect {
-			log.Info("[DNS_DIRECT]", "domain", question.Name, "qtype", dns.TypeToString[question.Qtype])
-			return ss.directUDPRelay(s, addr, d, true)
-		}
-
-		log.Info("[DNS_PROXY]", "domain", msg.Question[0].Name, "qtype", dns.TypeToString[msg.Question[0].Qtype])
-
 		log.Debug("[DNS_PROXY] rewrite dns dst to", "server", DefaultDNSServer)
 		rewrittenDst = DefaultDNSServer
 	}
 
 	dstHost, port, _ := net.SplitHostPort(rewrittenDst)
 	if ss.MatchHostRule(dstHost) == HostRuleDirect {
-		return ss.directUDPRelay(s, addr, d, isDNSReq)
+		return ss.directUDPRelay(s, addr, d, isDNSRequest(msg))
 	}
 
-	if port == "443" && ss.DisableQUIC() { // disable quic proto
+	if err := ss.validateUDPProxyReq(dstHost, port, rewrittenDst); err != nil {
+		return err
+	}
+
+	ch, hasAssoc := ss.getAssociatedChan(s, addr, d)
+	ue, exchKey := ss.getOrCreateUDPExchange(s, addr, dst)
+	ue.ActiveReqs.Inc()
+	defer ue.ActiveReqs.Dec()
+
+	isQUIC := port == "443"
+	conn := ss.getConnFromPool(ue, rewrittenDst, dst, ch, hasAssoc, isDNSRequest(msg), isQUIC, exchKey, s)
+	if conn == nil {
+		return errors.New("get conn from pool failed")
+	}
+	if isQUIC {
+		log.Info("[UDP_PROXY]", "exch_key", exchKey, "active_reqs", ue.ActiveReqs.Load(), "conn_count", len(ue.Conns))
+	}
+
+	return ss.sendUDPData(conn, d.Data, ch, addr)
+}
+
+func (ss *Easyss) handleDNS(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg) (bool, error) {
+	question := msg.Question[0]
+	rule := ss.MatchHostRule(strings.TrimSuffix(question.Name, "."))
+
+	if rule == HostRuleBlock {
+		return true, responseBlockedDNSMsg(s.UDPConn, addr, msg, d.Address())
+	}
+	if ss.ShouldIPV6Disable() && question.Qtype == dns.TypeAAAA {
+		return true, responseEmptyDNSMsg(s.UDPConn, addr, msg, d.Address())
+	}
+
+	isDirect := rule == HostRuleDirect
+	if msgCache := ss.DNSCache(question.Name, dns.TypeToString[question.Qtype], isDirect); msgCache != nil {
+		msgCache.Id = msg.Id
+		log.Info("[DNS_CACHE] find from cache", "domain", question.Name, "qtype", dns.TypeToString[question.Qtype])
+		if err := responseDNSMsg(s.UDPConn, addr, msgCache, d.Address()); err != nil {
+			log.Error("[DNS_CACHE] write msg back", "err", err)
+			return true, err
+		}
+		if strings.TrimSuffix(question.Name, ".") != ss.Server() {
+			log.Debug("[DNS_CACHE] renew cache for", "domain", question.Name)
+			ss.RenewDNSCache(question.Name, dns.TypeToString[question.Qtype], isDirect)
+		}
+		return true, nil
+	}
+
+	if isDirect {
+		log.Info("[DNS_DIRECT]", "domain", question.Name, "qtype", dns.TypeToString[question.Qtype])
+		return true, ss.directUDPRelay(s, addr, d, true)
+	}
+
+	log.Info("[DNS_PROXY]", "domain", msg.Question[0].Name, "qtype", dns.TypeToString[msg.Question[0].Qtype])
+	return false, nil
+}
+
+func (ss *Easyss) validateUDPProxyReq(dstHost, port, rewrittenDst string) error {
+	if port == "443" && ss.DisableQUIC() {
 		log.Info("[UDP_PROXY] quic is disabled", "dst", rewrittenDst)
 		return errors.New("quic is disabled")
 	}
 	if !ss.disableValidateAddr {
 		if err := ss.validateAddr(rewrittenDst); err != nil {
-			log.Warn("[UDP_PROXY] validate", "dst", dst, "err", err)
+			log.Warn("[UDP_PROXY] validate", "dst", rewrittenDst, "err", err)
 			return errors.New("dst addr is invalid")
 		}
 	}
+	return nil
+}
 
-	var ch chan struct{}
-	var hasAssoc bool
-
+func (ss *Easyss) getAssociatedChan(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) (chan struct{}, bool) {
 	portStr := strconv.FormatInt(int64(addr.Port), 10)
 	asCh, ok := s.AssociatedUDP.Get(portStr)
 	if ok {
-		hasAssoc = true
-		ch = asCh.(chan struct{})
 		log.Debug("[UDP_PROXY] found the associate with tcp", "src", addr.String(), "dst", d.Address())
-	} else {
-		ch = make(chan struct{}, 2)
-		log.Debug("[UDP_PROXY] the addr doesn't associate with tcp", "addr", addr.String(), "dst", d.Address())
+		return asCh.(chan struct{}), true
+	}
+	log.Debug("[UDP_PROXY] the addr doesn't associate with tcp", "addr", addr.String(), "dst", d.Address())
+	return make(chan struct{}, 2), false
+}
+
+func (ss *Easyss) getOrCreateUDPExchange(s *socks5.Server, addr *net.UDPAddr, dst string) (*UDPExchange, string) {
+	exchKey := addr.String() + dst
+	if iue, ok := s.UDPExchanges.Get(exchKey); ok {
+		return iue.(*UDPExchange), exchKey
 	}
 
-	send := func(ue *UDPExchange, data []byte) error {
-		select {
-		case <-ch:
-			return fmt.Errorf("the tcp that udp address %s associated closed", ue.ClientAddr.String())
-		default:
-		}
-		_, err := ue.RemoteConn.Write(data)
-		if err != nil {
-			return err
-		}
-		log.Debug("[UDP_PROXY] sent data to remote", "from", ue.ClientAddr.String())
-		return nil
-	}
-
-	var ue *UDPExchange
-	var exchKey = addr.String() + dst
 	ss.lockKey(exchKey)
 	defer ss.unlockKey(exchKey)
 
-	iue, ok := s.UDPExchanges.Get(exchKey)
-	if ok {
-		ue = iue.(*UDPExchange)
-		return send(ue, d.Data)
+	if iue, ok := s.UDPExchanges.Get(exchKey); ok {
+		return iue.(*UDPExchange), exchKey
 	}
+
+	ue := &UDPExchange{
+		ClientAddr: addr,
+		ActiveReqs: atomic.NewInt32(0),
+	}
+	ue.cond = sync.NewCond(&ue.mu)
+	s.UDPExchanges.Set(exchKey, ue, -1)
+	return ue, exchKey
+}
+
+func (ss *Easyss) getConnFromPool(ue *UDPExchange, rewrittenDst, dst string, ch chan struct{}, hasAssoc, isDNSReq, isQUIC bool, exchKey string, s *socks5.Server) net.Conn {
+	ue.mu.Lock()
+	defer ue.mu.Unlock()
+
+	if len(ue.Conns) == 0 {
+		for len(ue.Conns) == 0 {
+			if ue.Pending < MaxUDPConnCount {
+				ue.Pending++
+				go ss.handshakeAndAddConn(ue, rewrittenDst, dst, ch, hasAssoc, isDNSReq, exchKey, s)
+			}
+			ue.cond.Wait()
+		}
+	}
+
+	connCount := len(ue.Conns)
+	conn := ue.Conns[rand.Intn(connCount)]
+	if isQUIC && connCount+ue.Pending < MaxUDPConnCount && ue.ActiveReqs.Load() >= int32(connCount) {
+		ue.Pending++
+		go ss.handshakeAndAddConn(ue, rewrittenDst, dst, ch, hasAssoc, isDNSReq, exchKey, s)
+	}
+	return conn
+}
+
+func (ss *Easyss) handshakeAndAddConn(ue *UDPExchange, rewrittenDst, dst string, ch chan struct{}, hasAssoc, isDNSReq bool, exchKey string, s *socks5.Server) {
+	defer func() {
+		ue.mu.Lock()
+		ue.Pending--
+		ue.cond.Broadcast()
+		ue.mu.Unlock()
+	}()
 
 	flag := cipherstream.FlagUDP
 	if isDNSReq {
@@ -146,126 +208,152 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 			}
 			_ = csStream.Close()
 		}
+		return
+	}
+	ss.addRemoteConn(ue, csStream, dst, ch, hasAssoc, isDNSReq, exchKey, s)
+}
+
+func (ss *Easyss) sendUDPData(conn net.Conn, data []byte, ch chan struct{}, addr *net.UDPAddr) error {
+	select {
+	case <-ch:
+		return fmt.Errorf("the tcp that udp address %s associated closed", addr.String())
+	default:
+	}
+	_, err := conn.Write(data)
+	if err != nil {
 		return err
 	}
+	log.Debug("[UDP_PROXY] sent data to remote", "from", addr.String())
+	return nil
+}
 
-	ue = &UDPExchange{
-		ClientAddr: addr,
-		RemoteConn: csStream,
+func (ss *Easyss) addRemoteConn(ue *UDPExchange, conn net.Conn, dst string, ch chan struct{}, hasAssoc bool, isDNSReq bool, exchKey string, s *socks5.Server) {
+	ue.mu.Lock()
+	ue.Conns = append(ue.Conns, conn)
+	ue.cond.Broadcast()
+	ue.mu.Unlock()
+
+	monitorCh := make(chan bool)
+	go ss.monitorConnReuse(conn, ch, monitorCh)
+	go ss.copyRemoteToLocal(ue, conn, dst, ch, hasAssoc, isDNSReq, exchKey, s, monitorCh)
+}
+
+func (ss *Easyss) monitorConnReuse(conn net.Conn, ch chan struct{}, monitorCh chan bool) {
+	var tryReuse bool
+	select {
+	case <-ch:
+		if err := expireConn(conn); err != nil {
+			log.Error("[UDP_PROXY] expire remote conn", "err", err)
+		}
+		tryReuse = <-monitorCh
+	case tryReuse = <-monitorCh:
 	}
-	if err := send(ue, d.Data); err != nil {
-		if cs, ok := ue.RemoteConn.(*cipherstream.CipherStream); ok {
-			cs.MarkConnUnusable()
-		}
-		_ = ue.RemoteConn.Close()
-		return err
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		tryReuse = false
 	}
-	s.UDPExchanges.Set(exchKey, ue, -1)
 
-	var monitorCh = make(chan bool)
-	// monitor the assoc tcp connection to be closed and try to reuse the underlying connection
-	go func() {
-		var tryReuse bool
-		select {
-		case <-ch:
-			if err := expireConn(ue.RemoteConn); err != nil {
-				log.Error("[UDP_PROXY] expire remote conn", "err", err)
-			}
-			tryReuse = <-monitorCh
-		case tryReuse = <-monitorCh:
-		}
-		if err := ue.RemoteConn.SetReadDeadline(time.Time{}); err != nil {
-			tryReuse = false
-		}
-
-		if tryReuse {
-			log.Debug("[UDP_PROXY] request is finished, try to reuse underlying tcp connection")
-			reuse := tryReuseInClient(ue.RemoteConn, ss.Timeout())
-			if reuse != nil {
-				if cs, ok := ue.RemoteConn.(*cipherstream.CipherStream); ok {
-					cs.MarkConnUnusable()
-				}
-				log.Warn("[UDP_PROXY] underlying proxy connection is unhealthy, need close it", "reuse", reuse)
-			} else {
-				log.Debug("[UDP_PROXY] underlying proxy connection is healthy, so reuse it")
-			}
-		} else {
-			if cs, ok := ue.RemoteConn.(*cipherstream.CipherStream); ok {
+	if tryReuse {
+		log.Debug("[UDP_PROXY] request is finished, try to reuse underlying tcp connection")
+		reuse := tryReuseInClient(conn, ss.Timeout())
+		if reuse != nil {
+			if cs, ok := conn.(*cipherstream.CipherStream); ok {
 				cs.MarkConnUnusable()
 			}
+			log.Warn("[UDP_PROXY] underlying proxy connection is unhealthy, need close it", "reuse", reuse)
+		} else {
+			log.Debug("[UDP_PROXY] underlying proxy connection is healthy, so reuse it")
 		}
-
-		_ = ue.RemoteConn.Close()
-	}()
-
-	go func(ue *UDPExchange, dst string) {
-		var tryReuse = true
-		if !ss.IsNativeOutboundProto() {
-			tryReuse = false
+	} else {
+		if cs, ok := conn.(*cipherstream.CipherStream); ok {
+			cs.MarkConnUnusable()
 		}
+	}
 
-		defer func() {
+	_ = conn.Close()
+}
+
+func (ss *Easyss) copyRemoteToLocal(ue *UDPExchange, conn net.Conn, dst string, ch chan struct{}, hasAssoc, isDNSReq bool, exchKey string, s *socks5.Server, monitorCh chan bool) {
+	var tryReuse = true
+	if !ss.IsNativeOutboundProto() {
+		tryReuse = false
+	}
+
+	defer func() {
+		ue.mu.Lock()
+		defer ue.mu.Unlock()
+
+		// remove the conn from the list
+		for i, c := range ue.Conns {
+			if c == conn {
+				ue.Conns = append(ue.Conns[:i], ue.Conns[i+1:]...)
+				break
+			}
+		}
+		ue.cond.Broadcast()
+
+		monitorCh <- tryReuse
+
+		if len(ue.Conns) == 0 {
 			ss.lockKey(exchKey)
-			defer ss.unlockKey(exchKey)
-
-			monitorCh <- tryReuse
-			ch <- struct{}{}
 			s.UDPExchanges.Delete(exchKey)
-		}()
+			ss.unlockKey(exchKey)
 
-		var buf = bytespool.Get(MaxUDPDataSize)
-		defer bytespool.MustPut(buf)
-		for {
 			select {
-			case <-ch:
-				log.Info("[UDP_PROXY] the tcp that udp address associated closed", "udp_addr", ue.ClientAddr.String())
-				return
+			case ch <- struct{}{}:
 			default:
 			}
+		}
+	}()
 
-			if !hasAssoc {
-				var err error
-				if isDNSReq {
-					err = ue.RemoteConn.SetReadDeadline(time.Now().Add(DefaultDNSTimeout))
-				} else {
-					err = ue.RemoteConn.SetReadDeadline(time.Now().Add(ss.Timeout()))
-				}
-				if err != nil {
-					log.Error("[UDP_PROXY] set the deadline for remote conn err", "err", err)
-					tryReuse = false
-					return
-				}
+	buf := bytespool.Get(MaxUDPDataSize)
+	defer bytespool.MustPut(buf)
+	for {
+		select {
+		case <-ch:
+			log.Info("[UDP_PROXY] the tcp that udp address associated closed", "udp_addr", ue.ClientAddr.String())
+			return
+		default:
+		}
+
+		if !hasAssoc {
+			var err error
+			if isDNSReq {
+				err = conn.SetReadDeadline(time.Now().Add(DefaultDNSTimeout))
+			} else {
+				err = conn.SetReadDeadline(time.Now().Add(ss.Timeout()))
 			}
-			n, err := ue.RemoteConn.Read(buf[:])
 			if err != nil {
-				if !errors.Is(err, cipherstream.ErrTimeout) {
-					tryReuse = false
-					log.Debug("[UDP_PROXY] remote conn read", "err", err)
-				}
-				return
-			}
-			log.Debug("[UDP_PROXY] got data from remote", "client", ue.ClientAddr.String(), "data_len", len(buf[0:n]))
-
-			// if is dns response, set result to dns cache
-			_msg := ss.SetDNSCacheIfNeeded(buf[0:n], false)
-
-			a, addr, port, err := socks5.ParseAddress(dst)
-			if err != nil {
-				log.Error("[UDP_PROXY] parse dst address", "err", err)
-				return
-			}
-			data := buf[0:n]
-			if _msg != nil {
-				data, _ = _msg.Pack()
-			}
-			d1 := socks5.NewDatagram(a, addr, port, data)
-			if _, err := s.UDPConn.WriteToUDP(d1.Bytes(), ue.ClientAddr); err != nil {
+				log.Error("[UDP_PROXY] set the deadline for remote conn err", "err", err)
+				tryReuse = false
 				return
 			}
 		}
-	}(ue, dst)
+		n, err := conn.Read(buf[:])
+		if err != nil {
+			if !errors.Is(err, cipherstream.ErrTimeout) {
+				tryReuse = false
+				log.Debug("[UDP_PROXY] remote conn read", "err", err)
+			}
+			return
+		}
+		log.Debug("[UDP_PROXY] got data from remote", "client", ue.ClientAddr.String(), "data_len", len(buf[0:n]))
 
-	return nil
+		_msg := ss.SetDNSCacheIfNeeded(buf[0:n], false)
+
+		a, addr, port, err := socks5.ParseAddress(dst)
+		if err != nil {
+			log.Error("[UDP_PROXY] parse dst address", "err", err)
+			return
+		}
+		data := buf[0:n]
+		if _msg != nil {
+			data, _ = _msg.Pack()
+		}
+		d1 := socks5.NewDatagram(a, addr, port, data)
+		if _, err := s.UDPConn.WriteToUDP(d1.Bytes(), ue.ClientAddr); err != nil {
+			return
+		}
+	}
 }
 
 func (ss *Easyss) lockKey(key string) {
