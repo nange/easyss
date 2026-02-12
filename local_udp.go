@@ -143,7 +143,7 @@ func (ss *Easyss) getAssociatedChan(s *socks5.Server, addr *net.UDPAddr, d *sock
 }
 
 func (ss *Easyss) getOrCreateUDPExchange(s *socks5.Server, addr *net.UDPAddr, dst string) (*UDPExchange, string) {
-	exchKey := addr.String() + dst
+	exchKey := addr.String() + "_" + dst
 	if iue, ok := s.UDPExchanges.Get(exchKey); ok {
 		return iue.(*UDPExchange), exchKey
 	}
