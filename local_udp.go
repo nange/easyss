@@ -70,9 +70,13 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	atomic.AddInt32(&ue.ActiveReqs, 1)
 	defer atomic.AddInt32(&ue.ActiveReqs, -1)
 
-	conn := ss.getConnFromPool(ue, rewrittenDst, dst, ch, hasAssoc, isDNSRequest(msg), exchKey, s)
+	isQUIC := port == "443"
+	conn := ss.getConnFromPool(ue, rewrittenDst, dst, ch, hasAssoc, isDNSRequest(msg), isQUIC, exchKey, s)
 	if conn == nil {
 		return errors.New("get conn from pool failed")
+	}
+	if isQUIC {
+		log.Info("[UDP_PROXY]", "exch_key", exchKey, "active_reqs", atomic.LoadInt32(&ue.ActiveReqs), "conn_count", len(ue.Conns))
 	}
 
 	return ss.sendUDPData(conn, d.Data, ch, addr)
@@ -159,7 +163,7 @@ func (ss *Easyss) getOrCreateUDPExchange(s *socks5.Server, addr *net.UDPAddr, ds
 	return ue, exchKey
 }
 
-func (ss *Easyss) getConnFromPool(ue *UDPExchange, rewrittenDst, dst string, ch chan struct{}, hasAssoc, isDNSReq bool, exchKey string, s *socks5.Server) net.Conn {
+func (ss *Easyss) getConnFromPool(ue *UDPExchange, rewrittenDst, dst string, ch chan struct{}, hasAssoc, isDNSReq, isQUIC bool, exchKey string, s *socks5.Server) net.Conn {
 	ue.mu.Lock()
 	defer ue.mu.Unlock()
 
@@ -175,7 +179,7 @@ func (ss *Easyss) getConnFromPool(ue *UDPExchange, rewrittenDst, dst string, ch 
 
 	connCount := len(ue.Conns)
 	conn := ue.Conns[rand.Intn(connCount)]
-	if connCount+ue.Pending < MaxUDPConnCount && atomic.LoadInt32(&ue.ActiveReqs) >= int32(connCount) {
+	if isQUIC && connCount+ue.Pending < MaxUDPConnCount && atomic.LoadInt32(&ue.ActiveReqs) >= int32(connCount) {
 		ue.Pending++
 		go ss.handshakeAndAddConn(ue, rewrittenDst, dst, ch, hasAssoc, isDNSReq, exchKey, s)
 	}
