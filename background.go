@@ -24,10 +24,7 @@ func (ss *Easyss) background() {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
 
-	n := rand.Int63n(30)
-	if n < 15 {
-		n = 15
-	}
+	n := max(rand.Int63n(30), 15)
 	ticker2 := time.NewTicker(time.Duration(n) * time.Second)
 	defer ticker2.Stop()
 
