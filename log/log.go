@@ -132,7 +132,7 @@ func Init(outputFile, level string) {
 	}
 
 	if outputFile != "" {
-		SetLogger(slog.New(TextHandler(FileWriter(outputFile), l)))
+		SetLogger(slog.New(slog.NewMultiHandler(TextHandler(FileWriter(outputFile), l), DefaultHandler(l))))
 	} else {
 		SetLogger(slog.New(DefaultHandler(l)))
 	}
