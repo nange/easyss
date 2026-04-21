@@ -22,7 +22,7 @@ import (
 const (
 	MaxUDPDataSize   = 65507
 	DefaultDNSServer = "8.8.8.8:53"
-	MaxUDPConnCount  = 16
+	MaxUDPConnCount  = 8
 )
 
 const DefaultDNSTimeout = 5 * time.Second
