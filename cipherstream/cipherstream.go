@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/nange/easypool"
@@ -34,6 +35,7 @@ type CipherStream struct {
 	frameIter *FrameIter
 	frameType FrameType
 	flag      uint8
+	wmu       sync.Mutex
 }
 
 func New(stream net.Conn, password, method string, frameType FrameType, flags ...uint8) (net.Conn, error) {
@@ -79,7 +81,11 @@ func (cs *CipherStream) WriteFrame(f *Frame) error {
 		return err
 	}
 
-	if _, ew := cs.Conn.Write(frameBytes); ew != nil {
+	cs.wmu.Lock()
+	_, ew := cs.Conn.Write(frameBytes)
+	cs.wmu.Unlock()
+
+	if ew != nil {
 		if !errors.Is(ew, netpipe.ErrPipeClosed) {
 			log.Warn("[CIPHERSTREAM] write cipher data to cipher stream failed", "err", ew)
 		}
@@ -137,7 +143,11 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 					return er
 				}
 
-				if _, ew := cs.Conn.Write(frameBytes); ew != nil {
+				cs.wmu.Lock()
+				_, ew := cs.Conn.Write(frameBytes)
+				cs.wmu.Unlock()
+
+				if ew != nil {
 					if !errors.Is(ew, netpipe.ErrPipeClosed) {
 						log.Warn("[CIPHERSTREAM] write cipher data to cipher stream failed", "err", ew)
 					}
