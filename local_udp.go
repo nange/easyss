@@ -3,11 +3,9 @@ package easyss
 import (
 	"errors"
 	"fmt"
-	"math/rand"
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/cespare/xxhash/v2"
@@ -16,13 +14,11 @@ import (
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
 	"github.com/txthinking/socks5"
-	"go.uber.org/atomic"
 )
 
 const (
 	MaxUDPDataSize   = 65507
 	DefaultDNSServer = "8.8.8.8:53"
-	MaxUDPConnCount  = 8
 )
 
 const DefaultDNSTimeout = 5 * time.Second
@@ -30,11 +26,8 @@ const DefaultDNSTimeout = 5 * time.Second
 // UDPExchange used to store client address and remote connection
 type UDPExchange struct {
 	ClientAddr *net.UDPAddr
-	Conns      []net.Conn
-	mu         sync.Mutex
-	cond       *sync.Cond
-	Pending    int
-	ActiveReqs *atomic.Int32
+	Conn       net.Conn
+	ready      chan struct{} // closed when Conn is initialized
 }
 
 func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) error {
@@ -61,25 +54,35 @@ func (ss *Easyss) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 		return ss.directUDPRelay(s, addr, d, isDNSRequest(msg))
 	}
 
-	if err := ss.validateUDPProxyReq(dstHost, port, rewrittenDst); err != nil {
+	if err := ss.validateUDPProxyReq(port, rewrittenDst); err != nil {
 		return err
 	}
 
 	ch, hasAssoc := ss.getAssociatedChan(s, addr, d)
-	ue, exchKey := ss.getOrCreateUDPExchange(s, addr, dst)
-	ue.ActiveReqs.Inc()
-	defer ue.ActiveReqs.Dec()
+	ue, exchKey, isNew := ss.getOrCreateUDPExchange(s, addr, dst)
 
-	isQUIC := port == "443"
-	conn := ss.getConnFromPool(ue, rewrittenDst, dst, ch, hasAssoc, isDNSRequest(msg), isQUIC, exchKey, s)
-	if conn == nil {
-		return errors.New("get conn from pool failed")
-	}
-	if isQUIC {
-		log.Info("[UDP_PROXY]", "exch_key", exchKey, "active_reqs", ue.ActiveReqs.Load(), "conn_count", len(ue.Conns))
+	if isNew {
+		conn, err := ss.handshakeUDP(rewrittenDst, isDNSRequest(msg))
+		if conn == nil {
+			close(ue.ready)
+			ss.lockKey(exchKey)
+			s.UDPExchanges.Delete(exchKey)
+			ss.unlockKey(exchKey)
+			return fmt.Errorf("handshake with remote server failed: %w", err)
+		}
+		ue.Conn = conn
+		close(ue.ready)
+		monitorCh := make(chan bool)
+		go ss.monitorConnReuse(conn, ch, monitorCh)
+		go ss.copyRemoteToLocal(ue, conn, dst, ch, hasAssoc, isDNSRequest(msg), exchKey, s, monitorCh)
+	} else {
+		<-ue.ready
+		if ue.Conn == nil {
+			return errors.New("udp connection not available")
+		}
 	}
 
-	return ss.sendUDPData(conn, d.Data, ch, addr)
+	return ss.sendUDPData(ue.Conn, d.Data, ch, addr)
 }
 
 func (ss *Easyss) handleDNS(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg) (bool, error) {
@@ -117,7 +120,7 @@ func (ss *Easyss) handleDNS(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 	return false, nil
 }
 
-func (ss *Easyss) validateUDPProxyReq(dstHost, port, rewrittenDst string) error {
+func (ss *Easyss) validateUDPProxyReq(port, rewrittenDst string) error {
 	if port == "443" && ss.DisableQUIC() {
 		log.Info("[UDP_PROXY] quic is disabled", "dst", rewrittenDst)
 		return errors.New("quic is disabled")
@@ -142,59 +145,28 @@ func (ss *Easyss) getAssociatedChan(s *socks5.Server, addr *net.UDPAddr, d *sock
 	return make(chan struct{}, 2), false
 }
 
-func (ss *Easyss) getOrCreateUDPExchange(s *socks5.Server, addr *net.UDPAddr, dst string) (*UDPExchange, string) {
+func (ss *Easyss) getOrCreateUDPExchange(s *socks5.Server, addr *net.UDPAddr, dst string) (*UDPExchange, string, bool) {
 	exchKey := addr.String() + "_" + dst
 	if iue, ok := s.UDPExchanges.Get(exchKey); ok {
-		return iue.(*UDPExchange), exchKey
+		return iue.(*UDPExchange), exchKey, false
 	}
 
 	ss.lockKey(exchKey)
 	defer ss.unlockKey(exchKey)
 
 	if iue, ok := s.UDPExchanges.Get(exchKey); ok {
-		return iue.(*UDPExchange), exchKey
+		return iue.(*UDPExchange), exchKey, false
 	}
 
 	ue := &UDPExchange{
 		ClientAddr: addr,
-		ActiveReqs: atomic.NewInt32(0),
+		ready:      make(chan struct{}),
 	}
-	ue.cond = sync.NewCond(&ue.mu)
 	s.UDPExchanges.Set(exchKey, ue, -1)
-	return ue, exchKey
+	return ue, exchKey, true
 }
 
-func (ss *Easyss) getConnFromPool(ue *UDPExchange, rewrittenDst, dst string, ch chan struct{}, hasAssoc, isDNSReq, isQUIC bool, exchKey string, s *socks5.Server) net.Conn {
-	ue.mu.Lock()
-	defer ue.mu.Unlock()
-
-	if len(ue.Conns) == 0 {
-		for len(ue.Conns) == 0 {
-			if ue.Pending < MaxUDPConnCount {
-				ue.Pending++
-				go ss.handshakeAndAddConn(ue, rewrittenDst, dst, ch, hasAssoc, isDNSReq, exchKey, s)
-			}
-			ue.cond.Wait()
-		}
-	}
-
-	connCount := len(ue.Conns)
-	conn := ue.Conns[rand.Intn(connCount)]
-	if isQUIC && connCount+ue.Pending < MaxUDPConnCount && ue.ActiveReqs.Load() >= int32(connCount) {
-		ue.Pending++
-		go ss.handshakeAndAddConn(ue, rewrittenDst, dst, ch, hasAssoc, isDNSReq, exchKey, s)
-	}
-	return conn
-}
-
-func (ss *Easyss) handshakeAndAddConn(ue *UDPExchange, rewrittenDst, dst string, ch chan struct{}, hasAssoc, isDNSReq bool, exchKey string, s *socks5.Server) {
-	defer func() {
-		ue.mu.Lock()
-		ue.Pending--
-		ue.cond.Broadcast()
-		ue.mu.Unlock()
-	}()
-
+func (ss *Easyss) handshakeUDP(rewrittenDst string, isDNSReq bool) (net.Conn, error) {
 	flag := cipherstream.FlagUDP
 	if isDNSReq {
 		flag |= cipherstream.FlagDNS
@@ -208,9 +180,9 @@ func (ss *Easyss) handshakeAndAddConn(ue *UDPExchange, rewrittenDst, dst string,
 			}
 			_ = csStream.Close()
 		}
-		return
+		return nil, err
 	}
-	ss.addRemoteConn(ue, csStream, dst, ch, hasAssoc, isDNSReq, exchKey, s)
+	return csStream, nil
 }
 
 func (ss *Easyss) sendUDPData(conn net.Conn, data []byte, ch chan struct{}, addr *net.UDPAddr) error {
@@ -225,17 +197,6 @@ func (ss *Easyss) sendUDPData(conn net.Conn, data []byte, ch chan struct{}, addr
 	}
 	log.Debug("[UDP_PROXY] sent data to remote", "from", addr.String())
 	return nil
-}
-
-func (ss *Easyss) addRemoteConn(ue *UDPExchange, conn net.Conn, dst string, ch chan struct{}, hasAssoc bool, isDNSReq bool, exchKey string, s *socks5.Server) {
-	ue.mu.Lock()
-	ue.Conns = append(ue.Conns, conn)
-	ue.cond.Broadcast()
-	ue.mu.Unlock()
-
-	monitorCh := make(chan bool)
-	go ss.monitorConnReuse(conn, ch, monitorCh)
-	go ss.copyRemoteToLocal(ue, conn, dst, ch, hasAssoc, isDNSReq, exchKey, s, monitorCh)
 }
 
 func (ss *Easyss) monitorConnReuse(conn net.Conn, ch chan struct{}, monitorCh chan bool) {
@@ -279,29 +240,15 @@ func (ss *Easyss) copyRemoteToLocal(ue *UDPExchange, conn net.Conn, dst string, 
 	}
 
 	defer func() {
-		ue.mu.Lock()
-		defer ue.mu.Unlock()
-
-		// remove the conn from the list
-		for i, c := range ue.Conns {
-			if c == conn {
-				ue.Conns = append(ue.Conns[:i], ue.Conns[i+1:]...)
-				break
-			}
-		}
-		ue.cond.Broadcast()
+		ss.lockKey(exchKey)
+		s.UDPExchanges.Delete(exchKey)
+		ss.unlockKey(exchKey)
 
 		monitorCh <- tryReuse
 
-		if len(ue.Conns) == 0 {
-			ss.lockKey(exchKey)
-			s.UDPExchanges.Delete(exchKey)
-			ss.unlockKey(exchKey)
-
-			select {
-			case ch <- struct{}{}:
-			default:
-			}
+		select {
+		case ch <- struct{}{}:
+		default:
 		}
 	}()
 
