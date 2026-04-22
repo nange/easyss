@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -16,7 +16,7 @@ jobs:
         run: sudo apt update && sudo apt install -y libgtk-3-dev libayatana-appindicator3-dev
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
 
@@ -67,7 +67,7 @@ jobs:
           echo "timestamp_minute=$(date -u +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
 
       - name: Nightly Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: Nightly-${{ steps.vars.outputs.timestamp_minute }}-${{ steps.vars.outputs.sha_short }}
           tag_name: nightly-${{ steps.vars.outputs.sha_short }}
@@ -79,12 +79,12 @@ jobs:
     runs-on: macOS-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
 
@@ -106,7 +106,7 @@ jobs:
           echo "timestamp_minute=$(date -u +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
 
       - name: Nightly Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: Nightly-${{ steps.vars.outputs.timestamp_minute }}-${{ steps.vars.outputs.sha_short }}
           tag_name: nightly-${{ steps.vars.outputs.sha_short }}
@@ -118,12 +118,12 @@ jobs:
     runs-on: macos-15-intel
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
 
@@ -145,7 +145,7 @@ jobs:
           echo "timestamp_minute=$(date -u +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
 
       - name: Nightly Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: Nightly-${{ steps.vars.outputs.timestamp_minute }}-${{ steps.vars.outputs.sha_short }}
           tag_name: nightly-${{ steps.vars.outputs.sha_short }}
