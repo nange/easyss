@@ -34,24 +34,6 @@ import (
 	"go.uber.org/atomic"
 )
 
-const (
-	// DefaultDNSCacheSize set default dns cache size to 2MB
-	DefaultDNSCacheSize = 2 * 1024 * 1024
-	// DefaultDNSCacheSec the default expire time for dns cache
-	DefaultDNSCacheSec = 2 * 60 * 60
-)
-
-const (
-	UDPLocksCount    = 512
-	UDPLocksAndOpVal = 511
-)
-
-const (
-	MaxCap  int = 128
-	MaxIdle int = 10
-)
-
-const UserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
 
 var (
 	//go:embed assets/geodata/Country-only-cn-private.mmdb

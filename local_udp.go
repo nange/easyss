@@ -16,12 +16,6 @@ import (
 	"github.com/txthinking/socks5"
 )
 
-const (
-	MaxUDPDataSize   = 65507
-	DefaultDNSServer = "8.8.8.8:53"
-)
-
-const DefaultDNSTimeout = 5 * time.Second
 
 // UDPExchange used to store client address and remote connection
 type UDPExchange struct {

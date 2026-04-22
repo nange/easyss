@@ -14,10 +14,44 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-faker/faker/v4"
 	"github.com/nange/easyss/v2/util"
 )
+
+const (
+	// DefaultDNSCacheSize set default dns cache size to 2MB
+	DefaultDNSCacheSize = 2 * 1024 * 1024
+	// DefaultDNSCacheSec the default expire time for dns cache
+	DefaultDNSCacheSec = 2 * 60 * 60
+	// DefaultDNSTimeout default dns request timeout
+	DefaultDNSTimeout = 5 * time.Second
+)
+
+const (
+	UDPLocksCount    = 512
+	UDPLocksAndOpVal = 511
+)
+
+const (
+	MaxCap  int = 128
+	MaxIdle int = 10
+)
+
+const (
+	MaxUDPDataSize   = 65507
+	DefaultDNSServer = "8.8.8.8:53"
+)
+
+// DefaultDirectDNSServers the servers are dns servers from aliyun, tencent
+var DefaultDirectDNSServers = [2]string{"223.5.5.5:53", "119.29.29.29:53"}
+var DefaultDirectDNSV6Servers = [2]string{"[2400:3200::1]:53", "[2402:4e00::]:53"}
+var DefaultDNSServerDomains = [2]string{"alidns.com", "dnspod.cn"}
+
+const DirectSuffix = "direct"
+
+const UserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
 
 type ProxyRule int
 

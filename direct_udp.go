@@ -12,13 +12,6 @@ import (
 	"github.com/txthinking/socks5"
 )
 
-// DefaultDirectDNSServers the servers are dns servers from aliyun, tencent
-var DefaultDirectDNSServers = [2]string{"223.5.5.5:53", "119.29.29.29:53"}
-var DefaultDirectDNSV6Servers = [2]string{"[2400:3200::1]:53", "[2402:4e00::]:53"}
-var DefaultDNSServerDomains = [2]string{"alidns.com", "dnspod.cn"}
-
-const DirectSuffix = "direct"
-
 // DirectUDPExchange used to store client address and remote connection
 type DirectUDPExchange struct {
 	ClientAddr *net.UDPAddr
