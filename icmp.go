@@ -1,7 +1,9 @@
 package easyss
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
 	"time"
@@ -63,7 +65,11 @@ func (ss *Easyss) HandlePacket(p adapter.Packet) bool {
 			case HostRuleProxy:
 				icmpHdr, icmpErr = ss.proxyICMPEcho(host, payload)
 				if icmpErr != nil {
-					log.Warn("[ICMP] proxy echo request to remote failed", "err", icmpErr)
+					if errors.Is(icmpErr, io.EOF) || errors.Is(icmpErr, io.ErrUnexpectedEOF) {
+						log.Debug("[ICMP] proxy echo request to remote failed", "err", icmpErr)
+					} else {
+						log.Warn("[ICMP] proxy echo request to remote failed", "err", icmpErr)
+					}
 				}
 			case HostRuleDirect:
 				icmpHdr, icmpErr = ss.directICMPEcho(host, payload)
@@ -174,7 +180,6 @@ func (ss *Easyss) proxyICMPEcho(host string, data []byte) (header.ICMPv4, error)
 
 	frame, err := csStream.(*cipherstream.CipherStream).ReadFrame()
 	if err != nil {
-		log.Error("[ICMP] read echo reply from remote", "err", err)
 		return nil, err
 	}
 
