@@ -11,8 +11,8 @@ import (
 )
 
 type AEADCipher interface {
-	Encrypt(plaintext []byte) (ciphertext []byte, err error)
-	Decrypt(ciphertext []byte) (plaintext []byte, err error)
+	Encrypt(dst, plaintext []byte) (ciphertext []byte, err error)
+	Decrypt(dst, ciphertext []byte) (plaintext []byte, err error)
 	NonceSize() int
 	Overhead() int
 }
@@ -34,26 +34,30 @@ type AEADCipherImpl struct {
 // Encrypt encrypts data using 256-bit AEAD.  This both hides the content of
 // the data and provides a check that it hasn't been altered. Output takes the
 // form nonce|ciphertext|tag where '|' indicates concatenation.
-func (aci *AEADCipherImpl) Encrypt(plaintext []byte) (ciphertext []byte, err error) {
-	nonce := make([]byte, aci.aead.NonceSize())
+func (aci *AEADCipherImpl) Encrypt(dst, plaintext []byte) (ciphertext []byte, err error) {
+	nonceSize := aci.aead.NonceSize()
+
+	var nonceBuf [32]byte
+	nonce := nonceBuf[:nonceSize]
 
 	_, err = io.ReadFull(rand.Reader, nonce)
 	if err != nil {
 		return nil, err
 	}
 
-	return aci.aead.Seal(nonce, nonce, plaintext, nil), nil
+	dst = append(dst, nonce...)
+	return aci.aead.Seal(dst, nonce, plaintext, nil), nil
 }
 
 // Decrypt decrypts data using 256-bit AEAD.  This both hides the content of
 // the data and provides a check that it hasn't been altered. Expects input
 // form nonce|ciphertext|tag where '|' indicates concatenation.
-func (aci *AEADCipherImpl) Decrypt(ciphertext []byte) (plaintext []byte, err error) {
+func (aci *AEADCipherImpl) Decrypt(dst, ciphertext []byte) (plaintext []byte, err error) {
 	if len(ciphertext) < aci.aead.NonceSize() {
 		return nil, errors.New("malformed ciphertext")
 	}
 
-	return aci.aead.Open(nil,
+	return aci.aead.Open(dst,
 		ciphertext[:aci.aead.NonceSize()],
 		ciphertext[aci.aead.NonceSize():],
 		nil,

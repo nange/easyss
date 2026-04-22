@@ -245,7 +245,7 @@ func (es *EasyServer) handShakeWithClient(conn net.Conn) (hsRes, error) {
 		}
 		break
 	}
-	res.frameHeader = frame.Header
+	res.frameHeader = &frame.Header
 
 	rawData := frame.RawDataPayload()
 	length := len(rawData)

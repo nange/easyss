@@ -66,16 +66,7 @@ const (
 	FlagDNS
 )
 
-func encodeHTTP2Header(frameType FrameType, flag uint8, rawDataLen int, dst []byte) (header []byte, padSize byte) {
-	if cap(dst) < Http2HeaderLen {
-		dst = make([]byte, Http2HeaderLen)
-	} else {
-		dst = dst[:Http2HeaderLen]
-	}
-
-	length := bytespool.Get(4)
-	defer bytespool.MustPut(length)
-
+func encodeHTTP2Header(frameType FrameType, flag uint8, rawDataLen int) (header [Http2HeaderLen]byte, padSize byte) {
 	dataLen := uint32(rawDataLen)
 	needPad := rawDataLen <= PaddingSize
 	if needPad {
@@ -84,98 +75,67 @@ func encodeHTTP2Header(frameType FrameType, flag uint8, rawDataLen int, dst []by
 		dataLen += 1 + uint32(ps)
 		padSize = byte(ps)
 	}
-	binary.BigEndian.PutUint32(length, dataLen)
 
 	// set length field
-	copy(dst[:3], length[1:])
+	header[0] = byte(dataLen >> 16)
+	header[1] = byte(dataLen >> 8)
+	header[2] = byte(dataLen)
 	// set frame type
-	dst[3] = frameType.ToUint8()
+	header[3] = frameType.ToUint8()
 	// set default flag
-	dst[4] = flag
+	header[4] = flag
 	if needPad { // data has pad field
-		dst[4] |= FlagPad
+		header[4] |= FlagPad
 	}
 
-	binary.BigEndian.PutUint32(dst[5:Http2HeaderLen], uint32(mr.Int31()))
+	binary.BigEndian.PutUint32(header[5:Http2HeaderLen], uint32(mr.Int31()))
 
-	return dst, padSize
+	return header, padSize
 }
 
 type Header struct {
-	header []byte
+	header [Http2HeaderLen]byte
 }
 
-// PayloadLen returns payload length in http2 header frame,
-// panic if header's length not equals Http2HeaderLen
+// PayloadLen returns payload length in http2 header frame
 func (h *Header) PayloadLen() int {
-	if len(h.header) != Http2HeaderLen {
-		panic("header length is invalid")
-	}
 	return int(h.header[0])<<16 | int(h.header[1])<<8 | int(h.header[2])
 }
 
-// HasPad returns true if http2 header frame has pad field,
-// panic if header's length not equals Http2HeaderLen
+// HasPad returns true if http2 header frame has pad field
 func (h *Header) HasPad() bool {
-	if len(h.header) != Http2HeaderLen {
-		panic("header length is invalid")
-	}
 	return h.header[4]&FlagPad == FlagPad
 }
 
 func (h *Header) FrameType() FrameType {
-	if len(h.header) != Http2HeaderLen {
-		panic("header length is invalid")
-	}
 	return ParseFrameTypeFrom(h.header[3])
 }
 
 func (h *Header) IsDataFrame() bool {
-	if len(h.header) != Http2HeaderLen {
-		panic("header length is invalid")
-	}
 	return h.FrameType() == FrameTypeData
 }
 
 func (h *Header) IsPingFrame() bool {
-	if len(h.header) != Http2HeaderLen {
-		panic("header length is invalid")
-	}
 	return h.FrameType() == FrameTypePing
 }
 
 func (h *Header) IsRSTFINFrame() bool {
-	if len(h.header) != Http2HeaderLen {
-		panic("header length is invalid")
-	}
 	return h.FrameType() == FrameTypeRST && h.header[4]&FlagFIN == FlagFIN
 }
 
 func (h *Header) IsRSTACKFrame() bool {
-	if len(h.header) != Http2HeaderLen {
-		panic("header length is invalid")
-	}
 	return h.FrameType() == FrameTypeRST && h.header[4]&FlagACK == FlagACK
 }
 
 func (h *Header) IsTCPProto() bool {
-	if len(h.header) != Http2HeaderLen {
-		panic("header length is invalid")
-	}
 	return h.header[4]&FlagTCP == FlagTCP
 }
 
 func (h *Header) IsUDPProto() bool {
-	if len(h.header) != Http2HeaderLen {
-		panic("header length is invalid")
-	}
 	return h.header[4]&FlagUDP == FlagUDP
 }
 
 func (h *Header) IsICMPProto() bool {
-	if len(h.header) != Http2HeaderLen {
-		panic("header length is invalid")
-	}
 	return h.header[4]&FlagICMP == FlagICMP
 }
 
@@ -184,9 +144,6 @@ func (h *Header) IsDNSProto() bool {
 }
 
 func (h *Header) IsNeedACK() bool {
-	if len(h.header) != Http2HeaderLen {
-		panic("header length is invalid")
-	}
 	return h.header[4]&FlagNeedACK == FlagNeedACK
 }
 
@@ -227,69 +184,60 @@ func (p *Payload) Pad() []byte {
 }
 
 type Frame struct {
-	*Header
-	*Payload
-	headerBuf []byte
-	padBuf    []byte
-	cipher    AEADCipher
+	Header
+	Payload
+	padBuf []byte
+	cipher AEADCipher
 }
 
 func NewFrame(ft FrameType, payload []byte, flag uint8, cipher AEADCipher) *Frame {
-	var f = &Frame{cipher: cipher}
+	header, padSize := encodeHTTP2Header(ft, flag, len(payload))
 
-	headerBuf := bytespool.Get(Http2HeaderLen)
-	f.headerBuf = headerBuf
-
-	header, padSize := encodeHTTP2Header(ft, flag, len(payload), headerBuf)
-	fHeader := &Header{header: header}
-	f.Header = fHeader
-
-	fPayload := &Payload{
-		padSize: padSize,
-		rawData: payload,
+	f := &Frame{
+		Header: Header{header: header},
+		Payload: Payload{
+			padSize: padSize,
+			rawData: payload,
+		},
+		cipher: cipher,
 	}
+
 	if padSize > 0 {
 		padBuf := bytespool.Get(MaxPaddingSize)
 		f.padBuf = padBuf
 
 		pad := padBuf[:padSize]
 		_, _ = rand.Read(pad)
-		fPayload.pad = pad
+		f.pad = pad
 	}
-	f.Payload = fPayload
 
 	return f
 }
 
 func (f *Frame) EncodeWithCipher(buf []byte) ([]byte, error) {
-	headerCipher, err := f.cipher.Encrypt(f.header)
-	if err != nil {
-		return nil, err
-	}
-
-	payloadCipher, err := f.cipher.Encrypt(f.FramePayload())
-	if err != nil {
-		return nil, err
-	}
-
 	buf = buf[:0]
-	buf = append(buf, headerCipher...)
-	buf = append(buf, payloadCipher...)
+	var err error
+
+	buf, err = f.cipher.Encrypt(buf, f.header[:])
+	if err != nil {
+		return nil, err
+	}
+
+	buf, err = f.cipher.Encrypt(buf, f.FramePayload())
+	if err != nil {
+		return nil, err
+	}
 
 	return buf, nil
 }
 
 func (f *Frame) Release() {
-	if cap(f.headerBuf) > 0 {
-		bytespool.MustPut(f.headerBuf)
-		f.headerBuf = nil
-	}
 	if cap(f.padBuf) > 0 {
-		bytespool.MustPut(f.padBuf)
+		bytespool.MustPut(f.padBuf[:cap(f.padBuf)])
 		f.padBuf = nil
 	}
-	if f.Payload != nil && cap(f.padPayloadBuf) > 0 {
-		bytespool.MustPut(f.padPayloadBuf)
+	if cap(f.padPayloadBuf) > 0 {
+		bytespool.MustPut(f.padPayloadBuf[:cap(f.padPayloadBuf)])
 		f.padPayloadBuf = nil
 	}
 }
@@ -329,12 +277,15 @@ func (fi *FrameIter) Next() *Frame {
 		return nil
 	}
 
-	header, err := fi.cipher.Decrypt(hBuf)
+	header, err := fi.cipher.Decrypt(hBuf[fi.cipher.NonceSize():][:0], hBuf)
 	fi.err = err
 	if fi.err != nil {
 		return nil
 	}
-	fHeader := &Header{header: header}
+
+	var headerArray [Http2HeaderLen]byte
+	copy(headerArray[:], header)
+	fHeader := Header{header: headerArray}
 
 	// the payload size reading from header
 	size := fHeader.PayloadLen()
@@ -350,7 +301,7 @@ func (fi *FrameIter) Next() *Frame {
 		return nil
 	}
 
-	payloadPlain, err := fi.cipher.Decrypt(fi.buf[:payloadLen])
+	payloadPlain, err := fi.cipher.Decrypt(fi.buf[fi.cipher.NonceSize():][:0], fi.buf[:payloadLen])
 	fi.err = err
 	if fi.err != nil {
 		return nil
@@ -375,7 +326,7 @@ func (fi *FrameIter) Next() *Frame {
 		payloadPlain = payloadPlain[1 : ppLen+1]
 	}
 
-	fPayload := &Payload{
+	fPayload := Payload{
 		padSize: padSize,
 		rawData: payloadPlain,
 		pad:     pad,

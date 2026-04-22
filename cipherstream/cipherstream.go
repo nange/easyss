@@ -179,6 +179,34 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
+func (cs *CipherStream) readNextDataPayload() ([]byte, error) {
+	for frame := range cs.frameIter.Iter() {
+		if err := cs.frameIter.Error(); err != nil {
+			if timeout(err) {
+				return nil, errors.Join(err, ErrTimeout)
+			}
+			return nil, err
+		}
+
+		if frame.IsRSTFINFrame() {
+			log.Debug("[CIPHERSTREAM] receive RST_FIN frame, stop reading immediately")
+			return nil, ErrFINRSTStream
+		}
+		if frame.IsRSTACKFrame() {
+			log.Debug("[CIPHERSTREAM] receive RST_ACK frame, stop reading immediately")
+			return nil, ErrACKRSTStream
+		}
+		if frame.IsPingFrame() {
+			log.Debug("[CIPHERSTREAM] receive Ping frame, continue to read next frame")
+			continue
+		}
+
+		return frame.RawDataPayload(), nil
+	}
+
+	return nil, io.ErrUnexpectedEOF
+}
+
 func (cs *CipherStream) Read(b []byte) (int, error) {
 	if len(cs.leftover) > 0 {
 		cn := copy(b, cs.leftover)
@@ -186,37 +214,51 @@ func (cs *CipherStream) Read(b []byte) (int, error) {
 		return cn, nil
 	}
 
-	for frame := range cs.frameIter.Iter() {
-		if cs.frameIter.Error() != nil {
-			if timeout(cs.frameIter.Error()) {
-				return 0, errors.Join(cs.frameIter.Error(), ErrTimeout)
-			}
-			return 0, cs.frameIter.Error()
-		}
-
-		if frame.IsRSTFINFrame() {
-			log.Debug("[CIPHERSTREAM] receive RST_FIN frame, stop reading immediately")
-			return 0, ErrFINRSTStream
-		}
-		if frame.IsRSTACKFrame() {
-			log.Debug("[CIPHERSTREAM] receive RST_ACK frame, stop reading immediately")
-			return 0, ErrACKRSTStream
-		}
-		if frame.IsPingFrame() {
-			log.Debug("[CIPHERSTREAM] receive Ping frame, continue to read next frame")
-			continue
-		}
-
-		rawData := frame.RawDataPayload()
-		cn := copy(b, rawData)
-		if cn < len(rawData) {
-			cs.leftover = rawData[cn:]
-		}
-
-		return cn, nil
+	rawData, err := cs.readNextDataPayload()
+	if err != nil {
+		return 0, err
 	}
 
-	return 0, io.ErrUnexpectedEOF
+	cn := copy(b, rawData)
+	if cn < len(rawData) {
+		leftoverBuf := make([]byte, len(rawData)-cn)
+		copy(leftoverBuf, rawData[cn:])
+		cs.leftover = leftoverBuf
+	}
+
+	return cn, nil
+}
+
+func (cs *CipherStream) WriteTo(w io.Writer) (n int64, err error) {
+	if len(cs.leftover) > 0 {
+		cn, er := w.Write(cs.leftover)
+		n += int64(cn)
+		cs.leftover = cs.leftover[cn:]
+		if er != nil {
+			return n, er
+		}
+	}
+
+	for {
+		rawData, err := cs.readNextDataPayload()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return n, nil
+			}
+			return n, err
+		}
+
+		if len(rawData) > 0 {
+			cn, er := w.Write(rawData)
+			n += int64(cn)
+			if er != nil {
+				return n, er
+			}
+			if cn < len(rawData) {
+				return n, io.ErrShortWrite
+			}
+		}
+	}
 }
 
 func (cs *CipherStream) ReadFrame() (*Frame, error) {
