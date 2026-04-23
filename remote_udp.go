@@ -28,9 +28,9 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, isD
 		return fmt.Errorf("new cipherstream err:%v, method:%v", err, method)
 	}
 
-	_ = csStream.SetDeadline(time.Now().Add(es.MaxConnWaitTimeout()))
+	_ = csStream.SetReadDeadline(time.Now().Add(es.MaxConnWaitTimeout()))
 	defer func() {
-		_ = csStream.SetDeadline(time.Time{})
+		_ = csStream.SetReadDeadline(time.Time{})
 		csStream.(*cipherstream.CipherStream).Release()
 	}()
 
@@ -66,7 +66,7 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, isD
 					log.Error("[REMOTE_UDP] write data to remote connection", "err", err)
 					return struct{}{}, nil
 				}
-				_ = csStream.SetDeadline(time.Now().Add(es.MaxConnWaitTimeout()))
+				_ = csStream.SetReadDeadline(time.Now().Add(es.MaxConnWaitTimeout()))
 			}
 		},
 		// receive
@@ -117,7 +117,7 @@ func (es *EasyServer) remoteUDPHandle(conn net.Conn, addrStr, method string, isD
 					log.Error("[REMOTE_UDP] write data to tcp connection", "err", err)
 					return struct{}{}, nil
 				}
-				_ = csStream.SetDeadline(time.Now().Add(es.MaxConnWaitTimeout()))
+				_ = csStream.SetReadDeadline(time.Now().Add(es.MaxConnWaitTimeout()))
 			}
 		},
 	}

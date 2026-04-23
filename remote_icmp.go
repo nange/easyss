@@ -34,8 +34,8 @@ func (es *EasyServer) remoteICMPHandle(conn net.Conn, host, method string, tryRe
 		cs.Release()
 	}()
 
-	if err = csStream.SetDeadline(time.Now().Add(es.ICMPTimeout())); err != nil {
-		return fmt.Errorf("set deadline err:%w", err)
+	if err = csStream.SetReadDeadline(time.Now().Add(es.ICMPTimeout())); err != nil {
+		return fmt.Errorf("set read deadline err:%w", err)
 	}
 
 	frame, err := cs.ReadFrame()
@@ -55,8 +55,8 @@ func (es *EasyServer) remoteICMPHandle(conn net.Conn, host, method string, tryRe
 	}
 	defer func() { _ = pc.Close() }()
 
-	if err = pc.SetDeadline(time.Now().Add(es.ICMPTimeout())); err != nil {
-		return fmt.Errorf("set deadline err:%w", err)
+	if err = pc.SetReadDeadline(time.Now().Add(es.ICMPTimeout())); err != nil {
+		return fmt.Errorf("set read deadline err:%w", err)
 	}
 	if _, err = pc.WriteTo(frame.RawDataPayload(), &net.IPAddr{IP: ip}); err != nil {
 		return fmt.Errorf("write icmp packet err:%w", err)
@@ -79,7 +79,7 @@ func (es *EasyServer) remoteICMPHandle(conn net.Conn, host, method string, tryRe
 		return nil
 	}
 
-	_ = csStream.SetDeadline(time.Now().Add(es.ICMPTimeout()))
+	_ = csStream.SetReadDeadline(time.Now().Add(es.ICMPTimeout()))
 	if _, err = csStream.Read(replyBuf); errors.Is(err, cipherstream.ErrFINRSTStream) {
 		err = nil
 	} else {
