@@ -50,8 +50,8 @@ func (ss *Easyss) HandlePacket(p adapter.Packet) bool {
 	// Create a goroutine to avoid blocking the tun2socks engine
 	go func() {
 		dest := dst.To4()
-		v4Type := header.ICMPv4EchoReply
-		v4Code := header.ICMPv4NetUnreachable
+		v4Type := header.ICMPv4DstUnreachable
+		v4Code := header.ICMPv4HostUnreachable
 
 		if dest.Len() == 4 {
 			dest4 := dest.As4()

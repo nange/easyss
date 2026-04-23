@@ -173,8 +173,8 @@ your-custom-domain.com
 ./easyss-server
 ```
 
-**注意：在没有使用自定义证书且没有禁用TLS情况下，服务器的443端口必须对外可访问，用于自动获取服务器域名证书的TLS校验使用。
-并且这种情况需要sudo权限运行easyss-server**
+**注意：在没有使用自定义证书且没有禁用TLS情况下，服务器的443端口必须对外可访问，用于自动获取服务器域名证书的TLS校验使用；
+同时需要sudo权限运行`easyss-server`。如果需要支持`ping`命令，也需要sudo权限运行`easyss-server`。**
 
 #### docker部署
 
