@@ -217,7 +217,7 @@ type Config struct {
 	BindALL           bool            `json:"bind_all"`
 	DisableSysProxy   bool            `json:"disable_sys_proxy"`
 	DisableTLS        bool            `json:"disable_tls"`
-	DisableQUIC       bool            `json:"disable_quic"`
+	EnableQUIC        bool            `json:"enable_quic"`
 	EnableForwardDNS  bool            `json:"enable_forward_dns"`
 	EnableTun2socks   bool            `json:"enable_tun2socks"`
 	TunConfig         *TunConfig      `json:"tun_config"`
@@ -558,6 +558,7 @@ func ExampleJSONConfig() string {
 		Method:     "aes-256-gcm",
 		Timeout:    30,
 		BindALL:    false,
+		EnableQUIC: false,
 	}
 
 	b, _ := json.MarshalIndent(example, "", "    ")

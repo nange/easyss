@@ -36,7 +36,7 @@ func main() {
 	flag.BoolVar(&cmdConfig.BindALL, "bind-all", false, "listens on all available IPs of the local system. default: false")
 	flag.BoolVar(&cmdConfig.EnableForwardDNS, "enable-forward-dns", false, "start a local dns server to forward dns request")
 	flag.BoolVar(&cmdConfig.EnableTun2socks, "enable-tun2socks", false, "enable tun2socks model. default: false")
-	flag.BoolVar(&cmdConfig.DisableQUIC, "disable-quic", false, "disable quic protocol. default: false")
+	flag.BoolVar(&cmdConfig.EnableQUIC, "enable-quic", false, "enable quic protocol. default: false")
 	flag.StringVar(&cmdConfig.CAPath, "ca-path", "", "set custom CA-Cert file path")
 	flag.StringVar(&cmdConfig.OutboundProto, "outbound-proto", "", "set the outbound proto(native, http, https), default: native")
 	flag.StringVar(&cmdConfig.SN, "sn", "", "set the server name")

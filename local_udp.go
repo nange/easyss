@@ -115,7 +115,7 @@ func (ss *Easyss) handleDNS(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datag
 }
 
 func (ss *Easyss) validateUDPProxyReq(port, rewrittenDst string) error {
-	if port == "443" && ss.DisableQUIC() {
+	if port == "443" && !ss.EnableQUIC() {
 		log.Info("[UDP_PROXY] quic is disabled", "dst", rewrittenDst)
 		return errors.New("quic is disabled")
 	}

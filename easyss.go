@@ -838,7 +838,7 @@ func (ss *Easyss) DisableSysProxy() bool {
 	return ss.currConfig.DisableSysProxy
 }
 
-func (ss *Easyss) DisableQUIC() bool { return ss.currConfig.DisableQUIC }
+func (ss *Easyss) EnableQUIC() bool { return ss.currConfig.EnableQUIC }
 
 func (ss *Easyss) EnableForwardDNS() bool {
 	return ss.currConfig.EnableForwardDNS
