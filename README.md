@@ -170,7 +170,8 @@ your-custom-domain.com
 执行:
 
 ```sh
-./easyss-server
+./easyss-server  # 前台运行
+nohup ./easyss-server > easyss-server.log 2>&1  # 后台运行
 ```
 
 **注意：在没有使用自定义证书且没有禁用TLS情况下，服务器的443端口必须对外可访问，用于自动获取服务器域名证书的TLS校验使用；
