@@ -1,10 +1,10 @@
 package easyss
 
 import (
-	"context"
 	"errors"
 	"io"
 	"net"
+	"sync"
 	"syscall"
 	"time"
 
@@ -12,7 +12,6 @@ import (
 	"github.com/nange/easyss/v2/log"
 	"github.com/nange/easyss/v2/util/bytespool"
 	"github.com/nange/easyss/v2/util/netpipe"
-	"github.com/negrel/conc"
 )
 
 // RelayBufferSize set to MaxCipherRelaySize
@@ -27,17 +26,17 @@ type closeWriter interface {
 // return the number of bytes copies
 // from plaintext stream to cipher stream, from cipher stream to plaintext stream, and needClose on server conn
 func relay(cipher, plainTxt net.Conn, timeout time.Duration, tryReuse bool) (int64, int64, error) {
-	jobs := []conc.Job[res]{
-		func(_ context.Context) (res, error) {
-			return copyPlainTxtToCipher(cipher, plainTxt, timeout, tryReuse), nil
-		},
-		func(_ context.Context) (res, error) {
-			return copyCipherToPlainTxt(plainTxt, cipher, timeout, tryReuse), nil
-		},
-	}
-
-	results, _ := conc.All(jobs)
-	res1, res2 := results[0], results[1]
+	var (
+		res1, res2 res
+		wg         sync.WaitGroup
+	)
+	wg.Go(func() {
+		res1 = copyPlainTxtToCipher(cipher, plainTxt, timeout, tryReuse)
+	})
+	wg.Go(func() {
+		res2 = copyCipherToPlainTxt(plainTxt, cipher, timeout, tryReuse)
+	})
+	wg.Wait()
 
 	n1, n2 := res1.N, res2.N
 	err := errors.Join(res1.err, res2.err)
