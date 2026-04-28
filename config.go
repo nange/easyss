@@ -35,8 +35,8 @@ const (
 )
 
 const (
-	MaxCap  int = 128
-	MaxIdle int = 10
+	MaxCap  int = 48
+	MaxIdle int = 8
 )
 
 const (
@@ -231,6 +231,8 @@ type Config struct {
 	CMDBeforeStartup  string          `json:"cmd_before_startup"`
 	CMDInterval       string          `json:"cmd_interval"`
 	CMDIntervalTime   int             `json:"cmd_interval_time"`
+	MaxCap            int             `json:"max_cap"`
+	MaxIdle           int             `json:"max_idle"`
 	ConfigFile        string          `json:"-"`
 }
 
@@ -307,6 +309,19 @@ func (c *Config) Validate() error {
 	}
 	if c.TunConfig.TunDevice == "" || c.TunConfig.TunIP == "" || c.TunConfig.TunGW == "" || c.TunConfig.TunMask == "" {
 		return fmt.Errorf("any of tun config field should not be empty")
+	}
+	if c.MaxCap > 0 || c.MaxIdle > 0 {
+		maxCap := MaxCap
+		maxIdle := MaxIdle
+		if c.MaxCap > 0 {
+			maxCap = c.MaxCap
+		}
+		if c.MaxIdle > 0 {
+			maxIdle = c.MaxIdle
+		}
+		if maxCap < maxIdle {
+			return fmt.Errorf("max_cap(%d) should not be less than max_idle(%d)", maxCap, maxIdle)
+		}
 	}
 
 	return nil

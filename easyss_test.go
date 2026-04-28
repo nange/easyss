@@ -384,3 +384,34 @@ func BenchmarkEasyss_MatchHostRule_Proxy(b *testing.B) {
 		ss.MatchHostRule(host)
 	}
 }
+
+func TestEasyss_MaxCapMaxIdle(t *testing.T) {
+	config := &Config{
+		Server:     "your-domain.com",
+		ServerPort: 9999,
+		Password:   "test-pass",
+	}
+	config.SetDefaultValue()
+	ss := getEasyssForBench(config)
+
+	assert.Equal(t, MaxCap, ss.MaxCap())
+	assert.Equal(t, MaxIdle, ss.MaxIdle())
+
+	config.MaxCap = 24
+	config.MaxIdle = 16
+	ss.currConfig = config.Clone()
+	assert.Equal(t, 24, ss.MaxCap())
+	assert.Equal(t, 16, ss.MaxIdle())
+
+	config.MaxCap = 0
+	config.MaxIdle = 16
+	ss.currConfig = config.Clone()
+	assert.Equal(t, MaxCap, ss.MaxCap())
+	assert.Equal(t, 16, ss.MaxIdle())
+
+	config.MaxCap = 32
+	config.MaxIdle = 0
+	ss.currConfig = config.Clone()
+	assert.Equal(t, 32, ss.MaxCap())
+	assert.Equal(t, MaxIdle, ss.MaxIdle())
+}

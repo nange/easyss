@@ -547,9 +547,9 @@ func (ss *Easyss) InitTcpPool() error {
 	}
 
 	config := &easypool.PoolConfig{
-		InitialCap:  MaxIdle,
-		MaxCap:      MaxCap,
-		MaxIdle:     MaxIdle,
+		InitialCap:  ss.MaxIdle(),
+		MaxCap:      ss.MaxCap(),
+		MaxIdle:     ss.MaxIdle(),
 		Idletime:    ss.Timeout(),
 		MaxLifetime: ss.MaxLifeTime(),
 		Factory:     factory,
@@ -607,7 +607,7 @@ func (ss *Easyss) initHTTPOutboundClient() error {
 		DisableAutoReadResponse().
 		SetUserAgent(UserAgent)
 	client.
-		SetMaxIdleConns(MaxIdle).
+		SetMaxIdleConns(ss.MaxIdle()).
 		SetIdleConnTimeout(ss.MaxLifeTime()).
 		SetMaxConnsPerHost(512).
 		SetTLSHandshakeTimeout(ss.TLSTimeout())
@@ -779,6 +779,20 @@ func (ss *Easyss) LocalDeviceIndex() int { return ss.devIndex }
 func (ss *Easyss) LocalDeviceIndexV6() int { return ss.devIndexV6 }
 
 func (ss *Easyss) Timeout() time.Duration { return time.Duration(ss.currConfig.Timeout) * time.Second }
+
+func (ss *Easyss) MaxCap() int {
+	if ss.currConfig.MaxCap > 0 {
+		return ss.currConfig.MaxCap
+	}
+	return MaxCap
+}
+
+func (ss *Easyss) MaxIdle() int {
+	if ss.currConfig.MaxIdle > 0 {
+		return ss.currConfig.MaxIdle
+	}
+	return MaxIdle
+}
 
 func (ss *Easyss) MaxLifeTime() time.Duration {
 	return 5 * ss.Timeout()

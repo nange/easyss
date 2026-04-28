@@ -79,6 +79,46 @@ func TestConfig_Clone(t *testing.T) {
 	assert.Equal(t, "your-domain.com", cloned.Server)
 }
 
+func TestConfig_MaxCapMaxIdleValidate(t *testing.T) {
+	c := &Config{
+		Server:     "your-domain.com",
+		ServerPort: 9999,
+		LocalPort:  2080,
+		Password:   "test-pass",
+		Method:     "aes-256-gcm",
+	}
+	c.SetDefaultValue()
+	assert.Nil(t, c.Validate())
+
+	c.MaxCap = 0
+	c.MaxIdle = 0
+	assert.Nil(t, c.Validate())
+
+	c.MaxCap = 48
+	c.MaxIdle = 8
+	assert.Nil(t, c.Validate())
+
+	c.MaxCap = 8
+	c.MaxIdle = 8
+	assert.Nil(t, c.Validate())
+
+	c.MaxCap = 48
+	c.MaxIdle = 0
+	assert.Nil(t, c.Validate())
+
+	c.MaxCap = 0
+	c.MaxIdle = 8
+	assert.Nil(t, c.Validate())
+
+	c.MaxCap = 4
+	c.MaxIdle = 8
+	assert.NotNil(t, c.Validate())
+
+	c.MaxCap = 0
+	c.MaxIdle = 50
+	assert.NotNil(t, c.Validate())
+}
+
 func TestOverrideConfig(t *testing.T) {
 	dst := &Config{
 		Server:     "your-domain.com",
