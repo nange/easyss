@@ -81,7 +81,7 @@ func copyCipherToPlainTxt(plainTxt, cipher net.Conn, timeout time.Duration, tryR
 	}
 
 	if er != nil && !errors.Is(er, cipherstream.ErrFINRSTStream) {
-		log.Debug("[REPAY] copy from cipher to plaintxt", "err", err)
+		log.Debug("[REPAY] copy from cipher to plaintxt", "err", er)
 		if tryReuse {
 			if er = readAllIgnore(cipher, timeout); er != nil && !errors.Is(er, cipherstream.ErrFINRSTStream) {
 				if !errors.Is(er, cipherstream.ErrTimeout) {
@@ -99,14 +99,15 @@ func copyPlainTxtToCipher(cipher, plainTxt net.Conn, timeout time.Duration, tryR
 	var err error
 	n, er := io.Copy(cipher, plainTxt)
 	if er != nil {
-		log.Debug("[REPAY] copy from plaintxt to cipher", "err", err)
+		err = errors.Join(err, er)
+		log.Debug("[REPAY] copy from plaintxt to cipher", "err", er)
 	}
 
 	if er := CloseWrite(cipher); er != nil {
 		tryReuse = false
 		err = errors.Join(err, er)
 		if !errors.Is(er, netpipe.ErrPipeClosed) {
-			log.Warn("[REPAY] close write for cipher stream", "err", err)
+			log.Warn("[REPAY] close write for cipher stream", "err", er)
 		}
 	}
 	if er := cipher.SetReadDeadline(time.Now().Add(3 * timeout)); er != nil {

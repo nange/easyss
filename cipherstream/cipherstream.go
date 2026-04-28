@@ -157,7 +157,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		if er != nil {
 			if !errors.Is(er, io.EOF) {
-				log.Debug("[CIPHERSTREAM] read plaintext from reader failed", "err", err)
+				log.Debug("[CIPHERSTREAM] read plaintext from reader failed", "err", er)
 				if timeout(er) {
 					err = errors.Join(err, ErrTimeout)
 				} else {
@@ -169,7 +169,7 @@ func (cs *CipherStream) ReadFrom(r io.Reader) (n int64, err error) {
 
 		if er := cs.RandomWritePing(); er != nil {
 			if !errors.Is(er, netpipe.ErrPipeClosed) {
-				log.Error("[CIPHERSTREAM] random write ping failed", "err", er)
+				log.Warn("[CIPHERSTREAM] random write ping failed", "err", er)
 			}
 			err = errors.Join(err, er)
 			break
