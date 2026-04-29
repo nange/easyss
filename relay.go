@@ -80,7 +80,7 @@ func copyCipherToPlainTxt(plainTxt, cipher net.Conn, timeout time.Duration, tryR
 		err = errors.Join(err, se)
 	}
 
-	if er != nil && !errors.Is(er, cipherstream.ErrFINRSTStream) {
+	if er != nil && !errors.Is(er, cipherstream.ErrFINRSTStream) && !errors.Is(er, io.EOF) {
 		log.Debug("[REPAY] copy from cipher to plaintxt", "err", er)
 		if tryReuse {
 			if er = readAllIgnore(cipher, timeout); er != nil && !errors.Is(er, cipherstream.ErrFINRSTStream) {
@@ -90,6 +90,8 @@ func copyCipherToPlainTxt(plainTxt, cipher net.Conn, timeout time.Duration, tryR
 				tryReuse = false
 			}
 		}
+	} else if errors.Is(er, io.EOF) {
+		tryReuse = false
 	}
 
 	return res{N: n, err: err, TryReuse: tryReuse}

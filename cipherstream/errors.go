@@ -7,6 +7,14 @@ import (
 var (
 	ErrFINRSTStream = errors.New("receive FIN_RST_STREAM frame")
 	ErrACKRSTStream = errors.New("receive ACK_RST_STREAM frame")
-	ErrTimeout      = errors.New("net: io timeout error")
+	ErrTimeout      = newTimeoutError()
 	ErrPayloadSize  = errors.New("payload size is invalid")
 )
+
+type timeoutError struct{}
+
+func (e *timeoutError) Error() string   { return "net: io timeout error" }
+func (e *timeoutError) Timeout() bool   { return true }
+func (e *timeoutError) Temporary() bool { return true }
+
+func newTimeoutError() error { return &timeoutError{} }
