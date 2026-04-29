@@ -34,7 +34,6 @@ import (
 	"go.uber.org/atomic"
 )
 
-
 var (
 	//go:embed assets/geodata/Country-only-cn-private.mmdb
 	geoIPCNPrivate []byte
@@ -795,7 +794,7 @@ func (ss *Easyss) MaxIdle() int {
 }
 
 func (ss *Easyss) MaxLifeTime() time.Duration {
-	return 5 * ss.Timeout()
+	return 4 * ss.Timeout()
 }
 
 func (ss *Easyss) PingTimeout() time.Duration {
