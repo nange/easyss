@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/caddyserver/certmagic"
+	"github.com/go-faker/faker/v4"
 	"github.com/nange/easyss/v2/cipherstream"
 	"github.com/nange/easyss/v2/httptunnel"
 	"github.com/nange/easyss/v2/log"
@@ -46,11 +47,21 @@ func (es *EasyServer) initTLSConfig() error {
 		tlsConfig = &tls.Config{Certificates: []tls.Certificate{cer}}
 	} else {
 		certmagic.DefaultACME.Agreed = true
-		certmagic.DefaultACME.Email = es.Email()
+
 		// set certmagic storage path
-		certmagic.Default.Storage = &certmagic.FileStorage{
-			Path: filepath.Join(util.CurrentDir(), "certmagic"),
+		storagePath := filepath.Join(util.CurrentDir(), "certmagic")
+		certmagic.Default.Storage = &certmagic.FileStorage{Path: storagePath}
+
+		email := es.Email()
+		if email == "" {
+			if existing := findExistingACMEEmail(storagePath); existing != "" {
+				email = existing
+			} else {
+				email = faker.Email()
+			}
 		}
+		log.Info("[REMOTE] ACME email", "email", email)
+		certmagic.DefaultACME.Email = email
 
 		tlsConfig, err = certmagic.TLS([]string{es.Server()})
 		if err != nil {
@@ -63,6 +74,43 @@ func (es *EasyServer) initTLSConfig() error {
 	es.tlsConfig = tlsConfig
 
 	return nil
+}
+
+func findExistingACMEEmail(storagePath string) string {
+	acmePath := filepath.Join(storagePath, "acme")
+	caDirs, err := os.ReadDir(acmePath)
+	if err != nil {
+		return ""
+	}
+
+	var earliestEmail string
+	var earliestTime time.Time
+	var found bool
+	for _, caDir := range caDirs {
+		if !caDir.IsDir() {
+			continue
+		}
+		usersPath := filepath.Join(acmePath, caDir.Name(), "users")
+		emailDirs, err := os.ReadDir(usersPath)
+		if err != nil {
+			continue
+		}
+		for _, emailDir := range emailDirs {
+			if !emailDir.IsDir() {
+				continue
+			}
+			info, err := emailDir.Info()
+			if err != nil {
+				continue
+			}
+			if !found || info.ModTime().Before(earliestTime) {
+				earliestTime = info.ModTime()
+				earliestEmail = emailDir.Name()
+				found = true
+			}
+		}
+	}
+	return earliestEmail
 }
 
 func (es *EasyServer) startTCPServer() {

@@ -509,9 +509,6 @@ func (c *ServerConfig) SetDefaultValue() {
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
 	}
-	if c.Email == "" {
-		c.Email = faker.Email()
-	}
 	if c.OutboundProto == "" {
 		c.OutboundProto = OutboundProtoNative
 	}
