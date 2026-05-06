@@ -158,14 +158,22 @@ your-custom-domain.com
     "server": "your-domain.com",
     "server_port": 9999,
     "password": "your-pass",
-    "timeout": 60,
+    "timeout": 30,
     "cert_path": "",
-    "key_path": ""
+    "key_path": "",
+    "email": "your-email"
 }
 ```
 
-保存config.json文件, 其中`server`(在没有使用自定义证书情况下必填且为服务器域名地址)、`server_port`和`password`必填,
-`cert_path`, `key_path`只有在使用自定义证书时配置，这两参数不为空则表示使用自定义tls证书，而非自动获取。
+**参数说明：**
+
+* server: 服务器地址(在没有使用自定义证书情况下必填且为服务器域名地址)
+* server_port: 服务器监听端口(必填)
+* password: 通信加密密钥(必填)
+* timeout: 超时时间,单位秒(默认30)
+* cert_path: 自定义证书文件路径(仅在使用自定义tls证书时配置，不为空则表示使用自定义tls证书，而非自动获取)
+* key_path: 自定义证书密钥文件路径(仅在使用自定义tls证书时配置，不为空则表示使用自定义tls证书，而非自动获取)
+* email: 用于服务端自动获取证书时使用的邮箱地址，也可以不填，会随机生成一个email地址
 
 执行:
 
