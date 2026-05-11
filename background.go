@@ -3,6 +3,7 @@ package easyss
 import (
 	"context"
 	"errors"
+	"io"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -103,7 +104,11 @@ func (ss *Easyss) pingLatency() (time.Duration, error) {
 	var frame *cipherstream.Frame
 	frame, err = csStream.ReadFrame()
 	if err != nil {
-		log.Error("[EASYSS_BACKGROUND] read frame from cipher stream", "err", err)
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			log.Debug("[EASYSS_BACKGROUND] read frame from cipher stream", "err", err)
+		} else {
+			log.Error("[EASYSS_BACKGROUND] read frame from cipher stream", "err", err)
+		}
 		return 0, err
 	}
 	if !frame.IsPingFrame() {
