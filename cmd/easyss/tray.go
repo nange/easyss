@@ -7,149 +7,139 @@ import (
 	"os"
 	"os/user"
 	"runtime"
-	"strings"
 	"sync"
-	"time"
 
 	"github.com/getlantern/systray"
-	"github.com/nange/easyss/v2"
-	"github.com/nange/easyss/v2/icon"
-	"github.com/nange/easyss/v2/log"
-	"github.com/nange/easyss/v2/util"
+	"github.com/nange/easyss/v3/client/config"
+	"github.com/nange/easyss/v3/client/tun"
+	"github.com/nange/easyss/v3/icon"
+	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/util"
 )
 
-type SysTray struct {
-	ss      *easyss.Easyss
-	closing chan struct{}
-	mu      *sync.RWMutex
-
-	browserMenu   *systray.MenuItem
-	tun2socksMenu *systray.MenuItem
+type TrayApp struct {
+	*App
+	closing     chan struct{}
+	mu          sync.RWMutex
+	browserMenu *systray.MenuItem
+	tunMenu     *systray.MenuItem
 }
 
-func NewSysTray(ss *easyss.Easyss) *SysTray {
-	return &SysTray{
-		ss:      ss,
-		closing: make(chan struct{}, 1),
-		mu:      &sync.RWMutex{},
+func (a *TrayApp) trayReady() {
+	if err := a.Start(); err != nil {
+		log.Error("[EASYSS-V3] tray start", "err", err)
+		os.Exit(1)
 	}
-}
 
-func (st *SysTray) TrayReady() {
 	systray.SetTemplateIcon(icon.Data, icon.Data)
 	systray.SetTooltip("Easyss")
 
-	st.AddSelectServerMenu()
+	a.addSelectServerMenu()
 	systray.AddSeparator()
 
-	st.AddProxyRuleMenu()
+	a.addProxyRuleMenu()
 	systray.AddSeparator()
 
-	browserMenu, tun2socksMenu := st.AddProxyObjectMenu()
+	browserMenu, tunMenu := a.addProxyObjectMenu()
 	systray.AddSeparator()
-	st.SetBrowserMenu(browserMenu)
-	st.SetTun2socksMenu(tun2socksMenu)
+	a.SetBrowserMenu(browserMenu)
+	a.SetTunMenu(tunMenu)
 
-	st.AddUWPLoopbackMenu()
-
-	st.AddCatLogsMenu()
+	a.addCatLogsMenu()
 	systray.AddSeparator()
 
-	st.AddExitMenu()
+	a.addExitMenu()
 
-	st.StartLocalService()
+	a.startLocalService()
 }
 
-func (st *SysTray) AddSelectServerMenu() {
-	selectServer := systray.AddMenuItem("选择服务器", "")
+func (a *TrayApp) trayExit() {
+	select {
+	case a.closing <- struct{}{}:
+	default:
+	}
+	a.Stop()
+	os.Exit(0)
+}
 
+func (a *TrayApp) addSelectServerMenu() {
+	selectServer := systray.AddMenuItem("选择服务器", "请选择")
+
+	addrs := a.cfg.ServerListAddrs()
 	var subMenuItems []*systray.MenuItem
-	addrs := st.SS().ServerListAddrs()
-	for _, addr := range addrs {
-		item := selectServer.AddSubMenuItemCheckbox(addr, "", false)
-		subMenuItems = append(subMenuItems, item)
-		if strings.Contains(addr, st.SS().ServerAddr()) {
-			item.Check()
+
+	if len(addrs) > 0 {
+		for _, addr := range addrs {
+			item := selectServer.AddSubMenuItemCheckbox(addr, "服务器地址", false)
+			subMenuItems = append(subMenuItems, item)
+			if addr == a.cfg.DefaultServerAddr() {
+				item.Check()
+			}
 		}
+	} else {
+		item := selectServer.AddSubMenuItemCheckbox(a.cfg.DefaultServerAddr(), "服务器地址", false)
+		subMenuItems = append(subMenuItems, item)
+		item.Check()
 	}
 
 	for i, item := range subMenuItems {
-		go func(_i int, _item *systray.MenuItem) {
+		go func(idx int, mi *systray.MenuItem) {
 			for {
 				select {
-				case <-_item.ClickedCh:
+				case <-mi.ClickedCh:
 					func() {
-						if _item.Checked() {
-							_item.Check()
+						if mi.Checked() {
+							mi.Check()
 							return
 						}
-						log.Info("[SYSTRAY] changing server to", "addr", addrs[_i])
-						servers := st.SS().ServerList()
-						for ii, v := range subMenuItems {
+						addr := addrs[idx]
+						log.Info("[SYSTRAY] changing server to", "addr", addr)
+						for _, v := range subMenuItems {
 							v.Uncheck()
-							servers[ii].Default = false
 						}
-
-						servers[_i].Default = true
-						if err := st.RestartService(st.SS().Config()); err != nil {
-							log.Error("[SYSTRAY] changing server to", "addr", addrs[_i], "err", err)
+						clone := a.cfg.Clone()
+						clone.SetDefaultServerIndex(idx)
+						if err := a.restartService(clone); err != nil {
+							log.Error("[SYSTRAY] changing server to", "addr", addr, "err", err)
 						} else {
-							_item.Check()
-							log.Info("[SYSTRAY] changes server success to", "addr", addrs[_i])
+							mi.Check()
+							log.Info("[SYSTRAY] changes server success to", "addr", addr)
 						}
 					}()
-				case <-st.closing:
+				case <-a.closing:
 					return
 				}
 			}
-
 		}(i, item)
 	}
-
-	// display server ping latency on menu item
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			ch := st.SS().PingLatencyCh()
-			select {
-			case lat := <-ch:
-				for i, subItem := range subMenuItems {
-					if subItem.Checked() {
-						addr := addrs[i]
-						subItem.SetTitle(fmt.Sprintf("%s	%s", addr, lat))
-						break
-					}
-				}
-			case <-ticker.C:
-			case <-st.closing:
-				return
-			}
-		}
-	}()
 }
 
-func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *systray.MenuItem) {
-	proxyMenu := systray.AddMenuItem("代理规则", "")
+func (a *TrayApp) addProxyRuleMenu() {
+	proxyMenu := systray.AddMenuItem("代理规则", "请选择")
 
-	auto := proxyMenu.AddSubMenuItemCheckbox("自动(自定义规则+绕过大陆IP域名)", "", false)
-	if st.SS().ProxyRule() == easyss.ProxyRuleAuto {
+	auto := proxyMenu.AddSubMenuItemCheckbox("自动(自定义规则+绕过大陆IP域名)", "自动判断请求是否走代理", false)
+	if a.cfg.Routing.ProxyRule == "auto" {
 		auto.Check()
 	}
 
-	autoBlock := proxyMenu.AddSubMenuItemCheckbox("自动+屏蔽广告跟踪", "", false)
-	if st.SS().ProxyRule() == easyss.ProxyRuleAutoBlock {
+	autoBlock := proxyMenu.AddSubMenuItemCheckbox("自动+屏蔽广告跟踪", "自动判断请求是否走代理或者屏蔽", false)
+	if a.cfg.Routing.ProxyRule == "auto_block" {
 		autoBlock.Check()
 	}
 
-	reverseAuto := proxyMenu.AddSubMenuItemCheckbox("反向自动(国外访问国内)", "", false)
-	proxy := proxyMenu.AddSubMenuItemCheckbox("代理全部(绕过局域网地址)", "", false)
-	if st.SS().ProxyRule() == easyss.ProxyRuleProxy {
+	reverseAuto := proxyMenu.AddSubMenuItemCheckbox("反向自动(国外访问国内)", "适用国外访问国内IP域名", false)
+	if a.cfg.Routing.ProxyRule == "reverse_auto" {
+		reverseAuto.Check()
+	}
+
+	proxy := proxyMenu.AddSubMenuItemCheckbox("代理全部(绕过局域网地址)", "代理除局域网地址的所有请求", false)
+	if a.cfg.Routing.ProxyRule == "proxy" {
 		proxy.Check()
 	}
 
-	direct := proxyMenu.AddSubMenuItemCheckbox("直接连接", "", false)
-	if st.SS().ProxyRule() == easyss.ProxyRuleDirect {
+	direct := proxyMenu.AddSubMenuItemCheckbox("直接连接", "所有请求直接连接，不走代理", false)
+	if a.cfg.Routing.ProxyRule == "direct" {
 		direct.Check()
 	}
 
@@ -161,7 +151,7 @@ func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 					auto.Check()
 					continue
 				}
-				st.SS().SetProxyRule(easyss.ProxyRuleAuto)
+				a.setProxyRule("auto")
 				auto.Check()
 				autoBlock.Uncheck()
 				reverseAuto.Uncheck()
@@ -172,7 +162,7 @@ func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 					autoBlock.Check()
 					continue
 				}
-				st.SS().SetProxyRule(easyss.ProxyRuleAutoBlock)
+				a.setProxyRule("auto_block")
 				autoBlock.Check()
 				auto.Uncheck()
 				reverseAuto.Uncheck()
@@ -183,7 +173,7 @@ func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 					reverseAuto.Check()
 					continue
 				}
-				st.SS().SetProxyRule(easyss.ProxyRuleReverseAuto)
+				a.setProxyRule("reverse_auto")
 				reverseAuto.Check()
 				auto.Uncheck()
 				autoBlock.Uncheck()
@@ -194,7 +184,7 @@ func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 					proxy.Check()
 					continue
 				}
-				st.SS().SetProxyRule(easyss.ProxyRuleProxy)
+				a.setProxyRule("proxy")
 				proxy.Check()
 				auto.Uncheck()
 				autoBlock.Uncheck()
@@ -205,46 +195,54 @@ func (st *SysTray) AddProxyRuleMenu() (*systray.MenuItem, *systray.MenuItem, *sy
 					direct.Check()
 					continue
 				}
-				st.SS().SetProxyRule(easyss.ProxyRuleDirect)
+				a.setProxyRule("direct")
 				direct.Check()
 				auto.Uncheck()
 				autoBlock.Uncheck()
 				reverseAuto.Uncheck()
 				proxy.Uncheck()
+			case <-a.closing:
+				return
 			}
 		}
 	}()
-
-	return auto, proxy, direct
 }
 
-func (st *SysTray) AddProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
-	proxyMenue := systray.AddMenuItem("代理对象", "")
+func (a *TrayApp) setProxyRule(rule string) {
+	if a.cli != nil {
+		a.cli.SetProxyRule(rule)
+	}
+	a.cfg.Routing.ProxyRule = rule
+	log.Info("[SYSTRAY] proxy rule changed", "rule", rule)
+}
 
-	browserChecked := !st.SS().DisableSysProxy()
-	browser := proxyMenue.AddSubMenuItemCheckbox("浏览器(设置系统代理)", "", browserChecked)
-	global := proxyMenue.AddSubMenuItemCheckbox("系统全局流量(Tun2socks)", "", false)
+func (a *TrayApp) addProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
+	proxyMenu := systray.AddMenuItem("代理对象", "请选择")
+
+	browserChecked := !a.cfg.Local.DisableSysProxy
+	browser := proxyMenu.AddSubMenuItemCheckbox("浏览器(设置系统代理)", "设置系统代理配置", browserChecked)
+	global := proxyMenu.AddSubMenuItemCheckbox("系统全局流量(Tun2socks)", "Tun2socks代理系统全局", a.cfg.Local.EnableTun2socks)
 
 	go func() {
 		for {
 			select {
 			case <-browser.ClickedCh:
 				if browser.Checked() {
-					if err := st.SS().SetSysProxyOffHTTP(); err != nil {
-						log.Error("[SYSTRAY] set sys-proxy off http", "err", err)
+					if err := a.setSysProxyOff(); err != nil {
+						log.Error("[SYSTRAY] set sys-proxy off", "err", err)
 						continue
 					}
 					browser.Uncheck()
 				} else {
-					if err := st.SS().SetSysProxyOnHTTP(); err != nil {
-						log.Error("[SYSTRAY] set sys-proxy on http", "err", err)
+					if err := a.setSysProxyOn(); err != nil {
+						log.Error("[SYSTRAY] set sys-proxy on", "err", err)
 						continue
 					}
 					browser.Check()
 				}
 			case <-global.ClickedCh:
 				if global.Checked() {
-					if err := st.SS().CloseTun2socks(); err != nil {
+					if err := a.closeTun2socks(); err != nil {
 						log.Error("[SYSTRAY] close tun2socks", "err", err)
 						continue
 					}
@@ -256,16 +254,16 @@ func (st *SysTray) AddProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 							continue
 						}
 						systray.Quit()
-						os.Exit(0)
 						return
 					}
-
-					if err := st.ss.CreateTun2socks(); err != nil {
+					if err := a.createTun2socks(); err != nil {
 						log.Error("[SYSTRAY] create tun2socks", "err", err)
 						continue
 					}
 					global.Check()
 				}
+			case <-a.closing:
+				return
 			}
 		}
 	}()
@@ -273,223 +271,192 @@ func (st *SysTray) AddProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 	return browser, global
 }
 
-func (st *SysTray) AddCatLogsMenu() *systray.MenuItem {
-	catLog := systray.AddMenuItem("查看运行日志", "")
+func (a *TrayApp) addCatLogsMenu() {
+	catLog := systray.AddMenuItem("查看运行日志", "查看日志")
 
 	go func() {
 		for {
 			select {
 			case <-catLog.ClickedCh:
-				if err := st.catLog(); err != nil {
+				if err := catLogFile(a.cfg.Log.FilePath); err != nil {
 					log.Error("[SYSTRAY] cat log", "err", err)
 				}
-			case <-st.closing:
+			case <-a.closing:
 				return
 			}
 		}
 	}()
-
-	return catLog
 }
 
-func (st *SysTray) AddExitMenu() *systray.MenuItem {
-	quit := systray.AddMenuItem("退出", "")
+func (a *TrayApp) addExitMenu() {
+	quit := systray.AddMenuItem("退出", "退出Easyss APP")
 
 	go func() {
 		for {
 			select {
 			case <-quit.ClickedCh:
 				systray.Quit()
-			case <-st.closing:
+			case <-a.closing:
 				return
 			}
 		}
 	}()
-
-	return quit
 }
 
-func (st *SysTray) catLog() error {
-	var linuxCmd []string
-	var winCmd string
+func (a *TrayApp) setSysProxyOn() error {
+	return setSysProxy(a.cfg.Local.HTTPPort)
+}
 
-	switch runtime.GOOS {
-	case "linux":
-		title := "View Easyss Logs"
-		switch {
-		case util.SysSupportXTerminalEmulator():
-			linuxCmd = []string{"x-terminal-emulator", "-e", "tail", "-50f", st.ss.LogFilePath()}
-		case util.SysSupportGnomeTerminal():
-			linuxCmd = []string{"gnome-terminal", "--hide-menubar", "--title", title, "--", "tail", "-50f", st.ss.LogFilePath()}
-		case util.SysSupportMateTerminal():
-			linuxCmd = []string{"mate-terminal", "--hide-menubar", "--title", title, "--", "tail", "-50f", st.ss.LogFilePath()}
-		case util.SysSupportKonsole():
-			linuxCmd = []string{"konsole", "--hide-menubar", "-e", "tail", "-50f", st.ss.LogFilePath()}
-		case util.SysSupportXfce4Terminal():
-			linuxCmd = []string{"xfce4-terminal", "--hide-menubar", "--hide-toolbar", "--title", title, "--command", fmt.Sprintf("tail -50f %s", st.ss.LogFilePath())}
-		case util.SysSupportLxterminal():
-			linuxCmd = []string{"lxterminal", "--title", title, "--command", fmt.Sprintf("tail -50f %s", st.ss.LogFilePath())}
-		case util.SysSupportTerminator():
-			linuxCmd = []string{"terminator", "--title", title, "--command", fmt.Sprintf("tail -50f %s", st.ss.LogFilePath())}
+func (a *TrayApp) setSysProxyOff() error {
+	return unsetSysProxy()
+}
+
+func (a *TrayApp) createTun2socks() error {
+	if a.tunMgr != nil {
+		return nil
+	}
+
+	a.cfg.Local.EnableTun2socks = true
+	a.tunMgr = tun.New(tun.Config{
+		Socks5Addr: fmt.Sprintf("socks5://127.0.0.1:%d", a.cfg.Local.SocksPort),
+		LogLevel:   a.cfg.Log.Level,
+	})
+
+	if a.cli == nil {
+		return fmt.Errorf("client not initialized")
+	}
+	icmpHandler := tun.NewICMPHandler(a.cli.Router())
+	icmpHandler.SetProxy(a.streamHandler, methodFromString(a.cfg.DefaultServer().Method))
+
+	go func() {
+		if err := a.tunMgr.Start(icmpHandler); err != nil {
+			log.Error("[SYSTRAY] tun2socks start", "err", err)
 		}
+	}()
 
-		if len(linuxCmd) > 0 && IsRoot() {
+	return nil
+}
+
+func (a *TrayApp) closeTun2socks() error {
+	if a.tunMgr != nil {
+		a.tunMgr.Stop()
+		a.tunMgr = nil
+	}
+	a.cfg.Local.EnableTun2socks = false
+	return nil
+}
+
+func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
+	a.closeService()
+
+	*a.App = App{
+		cfg: newCfg,
+	}
+	return a.Start()
+}
+
+func (a *TrayApp) closeService() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.browserMenu != nil && a.browserMenu.Checked() {
+		if err := a.setSysProxyOff(); err != nil {
+			log.Error("[SYSTRAY] close service: set sysproxy off", "err", err)
+		}
+	}
+	a.Stop()
+}
+
+func (a *TrayApp) startLocalService() {
+	if a.cfg.Local.SocksPort > 0 && a.cfg.Local.HTTPPort > 0 {
+		pacPort := a.cfg.Local.HTTPPort
+		_ = pacPort
+	}
+
+	if a.browserMenu != nil && a.browserMenu.Checked() {
+		if err := a.setSysProxyOn(); err != nil {
+			log.Error("[SYSTRAY] start local: set sysproxy on", "err", err)
+		}
+	} else {
+		if err := a.setSysProxyOff(); err != nil {
+			log.Error("[SYSTRAY] start local: set sysproxy off", "err", err)
+		}
+	}
+
+	if a.cfg.Local.EnableTun2socks {
+		if a.tunMenu != nil {
+			a.tunMenu.Check()
+		}
+	}
+}
+
+func catLogFile(filePath string) error {
+	switch runtime.GOOS {
+	case "windows":
+		if !util.SysSupportPowershell() {
+			return fmt.Errorf("powershell is required on windows")
+		}
+		winArg := fmt.Sprintf(`-FilePath powershell -ArgumentList "-Command", "Get-Content", "-Wait", "-Tail 100", "%s"`, filePath)
+		_, err := util.Command("powershell", "-Command", "Start-Process", winArg)
+		return err
+	case "linux":
+		cmd := []string{"x-terminal-emulator", "-e", "tail", "-50f", filePath}
+		if IsRoot() {
 			username := ""
-			// PKEXEC_UID is set by pkexec
 			if uid := os.Getenv("PKEXEC_UID"); uid != "" {
 				if u, err := user.LookupId(uid); err == nil {
 					username = u.Username
 				}
 			}
-			// SUDO_USER is set by sudo
 			if username == "" {
 				if u := os.Getenv("SUDO_USER"); u != "" {
 					username = u
 				}
 			}
-
 			if username != "" {
-				// Use runuser to switch back to original user
 				newCmd := []string{"runuser", "-u", username, "--"}
-				// Pass DBUS_SESSION_BUS_ADDRESS if present, it is crucial for GUI apps
 				if dbusAddr := os.Getenv("DBUS_SESSION_BUS_ADDRESS"); dbusAddr != "" {
 					newCmd = append(newCmd, "env", fmt.Sprintf("DBUS_SESSION_BUS_ADDRESS=%s", dbusAddr))
 				}
-				newCmd = append(newCmd, linuxCmd...)
-				linuxCmd = newCmd
-				log.Info("[SYSTRAY] cat log: switching to user", "user", username, "cmd", linuxCmd)
+				newCmd = append(newCmd, cmd...)
+				cmd = newCmd
+				log.Info("[SYSTRAY] cat log: switching to user", "user", username, "cmd", cmd)
 			}
 		}
-	case "windows":
-		// Ref: https://learn.microsoft.com/zh-cn/powershell/module/microsoft.powershell.management/start-process?view=powershell-7.3
-		win := `-FilePath powershell  -ArgumentList "-Command", "Get-Content", "-Wait", "-Tail 100", "%s"`
-		winCmd = fmt.Sprintf(win, st.ss.LogFilePath())
-	}
-
-	cmdMap := map[string][]string{
-		"windows": {"powershell", "-Command", "Start-Process", winCmd},
-		"linux":   linuxCmd,
-		"darwin":  {"osascript", "-e", fmt.Sprintf(`tell application "Terminal" to do script "tail -f \"%s\""`, st.ss.LogFilePath()), "-e", `tell application "Terminal" to activate`},
-	}
-	_, err := util.Command(cmdMap[runtime.GOOS][0], cmdMap[runtime.GOOS][1:]...)
-	return err
-}
-
-func (st *SysTray) CloseService() {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-
-	if st.browserMenu.Checked() {
-		if err := st.ss.SetSysProxyOffHTTP(); err != nil {
-			log.Error("[SYSTRAY] close service: set sysproxy off http", "err", err)
-		}
-	}
-	if err := st.ss.Close(); err != nil {
-		log.Error("[SYSTRAY] close service: close easyss", "err", err)
-	}
-}
-
-func (st *SysTray) Exit() {
-	go func() {
-		// Ensure that the process can exit completely under any circumstances.
-		time.Sleep(3 * time.Second)
-		log.Info("[SYSTRAY] force exiting...")
-		os.Exit(0)
-	}()
-
-	select {
-	case st.closing <- struct{}{}:
-	default:
-	}
-	log.Info("[SYSTRAY] systray exiting starting...")
-	st.CloseService()
-	log.Info("[SYSTRAY] systray exiting ending...")
-	os.Exit(0)
-}
-
-func (st *SysTray) StartLocalService() {
-	st.mu.RLock()
-	defer st.mu.RUnlock()
-	ss := st.ss
-
-	go ss.LocalSocks5() // start local server
-	go ss.LocalHttp()   // start local http proxy server
-	if ss.EnableForwardDNS() {
-		go ss.LocalDNSForward() // start local dns forward server
-	}
-
-	if st.SysProxyIsOn() {
-		if err := ss.SetSysProxyOnHTTP(); err != nil {
-			log.Error("[SYSTRAY] set sys proxy on http", "err", err)
-		}
-	} else {
-		if err := ss.SetSysProxyOffHTTP(); err != nil {
-			log.Error("[SYSTRAY] set sys proxy off http", "err", err)
-		}
-	}
-
-	if ss.EnabledTun2socksFromConfig() {
-		if err := st.ss.CreateTun2socks(); err != nil {
-			log.Error("[SYSTRAY] create tun2socks", "err", err)
-			os.Exit(1)
-		} else {
-			st.tun2socksMenu.Check()
-		}
-	}
-}
-
-func (st *SysTray) RestartService(config *easyss.Config) error {
-	st.CloseService()
-	st.Tun2socksMenu().Uncheck()
-
-	ss, err := easyss.New(config)
-	if err != nil {
+		_, err := util.Command(cmd[0], cmd[1:]...)
 		return err
+	case "darwin":
+		_, err := util.Command("open", "-a", "Console", filePath)
+		return err
+	default:
+		return fmt.Errorf("unsupported os: %s", runtime.GOOS)
 	}
-
-	st.SetSS(ss)
-
-	st.StartLocalService()
-
-	return nil
 }
 
-func (st *SysTray) SysProxyIsOn() bool {
-	return st.BrowserMenu().Checked()
+func (a *TrayApp) SetBrowserMenu(m *systray.MenuItem) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.browserMenu = m
 }
 
-func (st *SysTray) SetSS(ss *easyss.Easyss) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.ss = ss
+func (a *TrayApp) BrowserMenu() *systray.MenuItem {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.browserMenu
 }
 
-func (st *SysTray) SS() *easyss.Easyss {
-	st.mu.RLock()
-	defer st.mu.RUnlock()
-	return st.ss
+func (a *TrayApp) SetTunMenu(m *systray.MenuItem) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.tunMenu = m
 }
 
-func (st *SysTray) SetTun2socksMenu(t *systray.MenuItem) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.tun2socksMenu = t
+func (a *TrayApp) TunMenu() *systray.MenuItem {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.tunMenu
 }
 
-func (st *SysTray) Tun2socksMenu() *systray.MenuItem {
-	st.mu.RLock()
-	defer st.mu.RUnlock()
-	return st.tun2socksMenu
-}
-
-func (st *SysTray) SetBrowserMenu(b *systray.MenuItem) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.browserMenu = b
-}
-
-func (st *SysTray) BrowserMenu() *systray.MenuItem {
-	st.mu.RLock()
-	defer st.mu.RUnlock()
-	return st.browserMenu
+func methodFromString(s string) protocol.Method {
+	return protocol.MethodFromString(s)
 }

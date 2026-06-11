@@ -4,100 +4,210 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path"
+	"os/signal"
 	"runtime"
+	"strconv"
+	"syscall"
 	_ "time/tzdata"
 
-	"github.com/nange/easyss/v2"
-	"github.com/nange/easyss/v2/log"
-	"github.com/nange/easyss/v2/pprof"
-	"github.com/nange/easyss/v2/util"
-	"github.com/nange/easyss/v2/version"
+	"github.com/nange/easyss/v3/client"
+	"github.com/nange/easyss/v3/client/config"
+	"github.com/nange/easyss/v3/client/dns"
+	"github.com/nange/easyss/v3/client/proxy"
+	"github.com/nange/easyss/v3/client/tun"
+	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/shaper"
+	"github.com/nange/easyss/v3/version"
 )
 
 func main() {
-	var printVer, daemon, showConfigExample, enablePprof bool
-	var cmdConfig easyss.Config
+	var printVer, showConfigExample, daemon, disableTray, enableTun2socks bool
+	var configFile string
 
 	flag.BoolVar(&printVer, "version", false, "print version")
 	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file")
-	flag.StringVar(&cmdConfig.ConfigFile, "c", "config.json", "specify config file")
-	flag.StringVar(&cmdConfig.Server, "s", "", "server address")
-	flag.StringVar(&cmdConfig.Password, "k", "", "password")
-	flag.IntVar(&cmdConfig.ServerPort, "p", 0, "server port")
-	flag.IntVar(&cmdConfig.Timeout, "t", 0, "timeout in seconds")
-	flag.IntVar(&cmdConfig.LocalPort, "l", 0, "local socks5 proxy port")
-	flag.StringVar(&cmdConfig.Method, "m", "", "encryption method, default: aes-256-gcm")
-	flag.StringVar(&cmdConfig.LogLevel, "log-level", "", "set the log-level(debug, info, warn, error), default: info")
-	flag.StringVar(&cmdConfig.LogFilePath, "log-file-path", "", "set the log output location, default: Stdout")
-	flag.StringVar(&cmdConfig.ProxyRule, "proxy-rule", "", "set the proxy rule(auto, auto_block, reverse_auto, proxy, direct), default: auto")
-	flag.StringVar(&cmdConfig.IPV6Rule, "ipv6-rule", "", "set the ipv6 rule(auto, enable, disable), default: auto")
-	flag.BoolVar(&daemon, "daemon", true, "run app as a non-daemon with -daemon=false")
-	flag.BoolVar(&cmdConfig.BindALL, "bind-all", false, "listens on all available IPs of the local system. default: false")
-	flag.BoolVar(&cmdConfig.EnableForwardDNS, "enable-forward-dns", false, "start a local dns server to forward dns request")
-	flag.BoolVar(&cmdConfig.EnableTun2socks, "enable-tun2socks", false, "enable tun2socks model. default: false")
-	flag.BoolVar(&cmdConfig.EnableQUIC, "enable-quic", false, "enable quic protocol. default: false")
-	flag.StringVar(&cmdConfig.CAPath, "ca-path", "", "set custom CA-Cert file path")
-	flag.StringVar(&cmdConfig.OutboundProto, "outbound-proto", "", "set the outbound proto(native, http, https), default: native")
-	flag.StringVar(&cmdConfig.SN, "sn", "", "set the server name")
-	flag.BoolVar(&enablePprof, "enable-pprof", false, "enable pprof server. default bind to :6060")
+	flag.StringVar(&configFile, "c", "config.json", "specify config file")
+	flag.BoolVar(&daemon, "daemon", runtime.GOOS != "windows", "run app as daemon")
+	flag.BoolVar(&disableTray, "disable-tray", false, "disable system tray (windows/mac only)")
+	flag.BoolVar(&enableTun2socks, "enable-tun2socks", false, "enable tun2socks model")
 
 	flag.Parse()
 
-	if printVer || (len(os.Args) > 1 && os.Args[1] == "version") {
+	if printVer {
 		version.Print()
 		os.Exit(0)
 	}
 	if showConfigExample {
-		fmt.Printf("%s\n", easyss.ExampleJSONConfig())
+		fmt.Println(exampleV3Config())
 		os.Exit(0)
 	}
 
-	if runtime.GOOS != "windows" {
-		// starting easyss as daemon only in client model,` and save logs to file`
-		easyss.Daemon(daemon)
-	}
-
-	exists, err := util.FileExists(cmdConfig.ConfigFile)
-	if !exists || err != nil {
-		log.Debug("[EASYSS_MAIN] config file", "err", err)
-
-		binDir := util.CurrentDir()
-		cmdConfig.ConfigFile = path.Join(binDir, "config.json")
-
-		log.Debug("[EASYSS_MAIN] config file not found, try config file", "file", cmdConfig.ConfigFile)
-	}
-
-	config, err := easyss.ParseConfig[easyss.Config](cmdConfig.ConfigFile)
+	cfg, err := config.LoadConfig(configFile)
 	if err != nil {
-		config = &cmdConfig
-		if !os.IsNotExist(err) {
-			log.Error("[EASYSS_MAIN] reading", "file", cmdConfig.ConfigFile, "err", err)
-			os.Exit(1)
+		log.Error("[EASYSS-V3] load config", "err", err)
+		os.Exit(1)
+	}
+
+	log.Info("[EASYSS-V3] set log-level", "level", cfg.Log.Level)
+	log.Init(cfg.Log.FilePath, cfg.Log.Level)
+	log.Info("[EASYSS-V3] " + version.String())
+
+	if enableTun2socks {
+		cfg.Local.EnableTun2socks = true
+	}
+
+	app := &App{cfg: cfg}
+	runApp(disableTray, daemon, app)
+}
+
+func runDaemon() {
+	exe, _ := os.Executable()
+	attrs := &os.ProcAttr{}
+	proc, err := os.StartProcess(exe, os.Args[1:], attrs)
+	if err != nil {
+		log.Error("[EASYSS-V3] daemon start", "err", err)
+		os.Exit(1)
+	}
+	log.Info("[EASYSS-V3] daemon started", "pid", proc.Pid)
+	os.Exit(0)
+}
+
+func sigWait() {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+	log.Info("[EASYSS-V3] got signal to exit", "signal", <-c)
+}
+
+type App struct {
+	cfg           *config.ClientConfig
+	cli           *client.Client
+	tunMgr        *tun.Manager
+	socksServer   *proxy.Socks5Server
+	httpServer    *proxy.HTTPProxyServer
+	streamHandler *proxy.StreamHandler
+}
+
+func (a *App) Start() error {
+	cli, err := client.New(a.cfg)
+	if err != nil {
+		return err
+	}
+	a.cli = cli
+
+	method := protocol.MethodFromString(a.cfg.DefaultServer().Method)
+	if method == 0 {
+		method = protocol.MethodAES256GCM
+	}
+
+	shaperCfg := shaper.Config{
+		Mode:          a.cfg.Shaper.Mode,
+		BatchWindowMS: a.cfg.Shaper.BatchWindowMS,
+	}
+
+	timeout := a.cfg.TimeoutDuration()
+	a.streamHandler = proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, timeout/2)
+
+	if a.cfg.Local.SocksPort > 0 {
+		socksAddr := "127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
+		if a.cfg.Local.BindAll {
+			socksAddr = "0.0.0.0:" + strconv.Itoa(a.cfg.Local.SocksPort)
 		}
-	} else {
-		easyss.OverrideConfig(config, &cmdConfig)
-	}
-	config.SetDefaultValue()
-
-	if err := config.Validate(); err != nil {
-		log.Error("[EASYSS_MAIN] config is invalid", "err", err)
-		os.Exit(1)
+		a.socksServer = proxy.NewSocks5Server(socksAddr, a.cfg.AuthUsername, a.cfg.AuthPassword, a.streamHandler, cli.Router(), method, !a.cfg.Local.EnableQUIC, timeout)
+		go func() {
+			if err := a.socksServer.Start(); err != nil {
+				log.Error("[EASYSS-V3] socks5 server", "err", err)
+			}
+		}()
 	}
 
-	log.Info("[EASYSS_MAIN] set the log-level to", "level", config.LogLevel)
-	log.Init(config.GetLogFilePath(), config.LogLevel)
-
-	if enablePprof {
-		go pprof.StartPprof()
+	if a.cfg.Local.HTTPPort > 0 {
+		httpAddr := "127.0.0.1:" + strconv.Itoa(a.cfg.Local.HTTPPort)
+		if a.cfg.Local.BindAll {
+			httpAddr = "0.0.0.0:" + strconv.Itoa(a.cfg.Local.HTTPPort)
+		}
+		a.httpServer = proxy.NewHTTPProxyServer(httpAddr, a.streamHandler, cli.Router(), method)
+		go func() {
+			if err := a.httpServer.Start(); err != nil {
+				log.Error("[EASYSS-V3] http proxy server", "err", err)
+			}
+		}()
 	}
 
-	log.Info("[EASYSS_MAIN] " + version.String())
-
-	ss, err := easyss.New(config)
-	if err != nil {
-		log.Error("[EASYSS_MAIN] init easyss", "err", err)
-		os.Exit(1)
+	if a.cfg.Local.EnableForwardDNS {
+		dnsAddr := "127.0.0.1:53"
+		forwardServer := dns.NewForwardServer(dnsAddr)
+		go func() {
+			if err := forwardServer.Start(); err != nil {
+				log.Error("[EASYSS-V3] dns forward server", "err", err)
+			}
+		}()
 	}
-	Start(ss)
+
+	if a.cfg.Local.EnableTun2socks {
+		socksProxyAddr := "socks5://127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
+		a.tunMgr = tun.New(tun.Config{
+			Socks5Addr: socksProxyAddr,
+			LogLevel:   a.cfg.Log.Level,
+		})
+
+		icmpHandler := tun.NewICMPHandler(cli.Router())
+		icmpHandler.SetProxy(a.streamHandler, method)
+
+		go func() {
+			if err := a.tunMgr.Start(icmpHandler); err != nil {
+				log.Error("[EASYSS-V3] tun2socks", "err", err)
+			}
+		}()
+	}
+
+	return nil
+}
+
+func (a *App) Stop() {
+	if a.tunMgr != nil {
+		a.tunMgr.Stop()
+	}
+	if a.socksServer != nil {
+		_ = a.socksServer.Close()
+	}
+	if a.httpServer != nil {
+		_ = a.httpServer.Close()
+	}
+	if a.cli != nil {
+		_ = a.cli.Close()
+	}
+}
+
+func exampleV3Config() string {
+	return `{
+  "config_version": 3,
+  "servers": [{
+    "name": "default",
+    "address": "your-domain.com",
+    "port": 443,
+    "password": "your-password",
+    "method": "aes-256-gcm",
+    "default": true
+  }],
+  "local": {
+    "socks_port": 2080,
+    "http_port": 3080
+  },
+  "routing": {
+    "proxy_rule": "auto"
+  },
+  "transport": {
+    "conn_count_min": 8,
+    "conn_count_max": 16
+  },
+  "shaper": {
+    "mode": "light",
+    "batch_window_ms": 5
+  },
+  "log": {
+    "level": "info"
+  },
+  "timeout": 30
+}`
 }
