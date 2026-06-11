@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/client/router"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/txthinking/socks5"
 )
@@ -73,12 +74,15 @@ func (s *Socks5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 	if r.Cmd == socks5.CmdUDP {
 		caddr, err := r.UDP(c, srv.ServerAddr)
 		if err != nil {
+			log.Error("[SOCKS5] udp associate failed", "client", c.RemoteAddr().String(), "err", err)
 			return err
 		}
+		log.Debug("[SOCKS5] udp associate", "client", c.RemoteAddr().String(), "udp", caddr.String())
 		ch := make(chan byte)
 		srv.AssociatedUDP.Set(caddr.String(), ch, -1)
 		defer srv.AssociatedUDP.Delete(caddr.String())
 		io.Copy(io.Discard, c)
+		log.Debug("[SOCKS5] udp associate tcp closed", "udp", caddr.String())
 		return nil
 	}
 
@@ -89,24 +93,32 @@ func (s *Socks5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 	target := r.Address()
 	host, _, err := net.SplitHostPort(target)
 	if err != nil {
+		log.Error("[SOCKS5] parse target", "target", target, "err", err)
 		return s.replyError(c, r, socks5.RepServerFailure)
 	}
 
+	local := c.RemoteAddr().String()
 	rule := s.router.MatchHostRule(host)
 	switch rule {
 	case router.HostRuleBlock:
+		log.Info("[TCP_BLOCK] blocked", "host", host, "target", target, "local", local)
 		return s.replyError(c, r, socks5.RepNotAllowed)
 	case router.HostRuleDirect:
+		log.Info("[TCP_DIRECT]", "target", target, "local", local)
 		rc, err := r.Connect(c)
 		if err != nil {
+			log.Error("[TCP_DIRECT] connect", "target", target, "err", err)
 			return err
 		}
 		defer rc.Close()
 		relayTCP(rc, c)
+		log.Debug("[TCP_DIRECT] relay finished", "target", target)
 		return nil
 	case router.HostRuleProxy:
+		log.Info("[TCP_PROXY]", "target", target, "local", local)
 		a, bindAddr, bindPort, err := socks5.ParseAddress(c.LocalAddr().String())
 		if err != nil {
+			log.Error("[TCP_PROXY] parse local addr", "err", err)
 			return s.replyError(c, r, socks5.RepServerFailure)
 		}
 		if a == socks5.ATYPDomain {
@@ -114,9 +126,16 @@ func (s *Socks5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 		}
 		p := socks5.NewReply(socks5.RepSuccess, a, bindAddr, bindPort)
 		if _, err := p.WriteTo(c); err != nil {
+			log.Error("[TCP_PROXY] reply", "err", err)
 			return err
 		}
-		return s.handler.OpenTCPStream(context.Background(), target, s.method, c)
+		err = s.handler.OpenTCPStream(context.Background(), target, s.method, c)
+		if err != nil {
+			log.Error("[TCP_PROXY] stream", "target", target, "err", err)
+		} else {
+			log.Debug("[TCP_PROXY] stream finished", "target", target)
+		}
+		return err
 	}
 
 	return nil
@@ -163,6 +182,7 @@ func (s *Socks5Server) cleanupLoop() {
 			s.udpMu.Lock()
 			for key, ue := range s.udpExch {
 				if time.Since(ue.LastSeen()) > s.udpIdleTimeout {
+					log.Debug("[UDP_PROXY] idle cleanup", "key", key)
 					ue.Close()
 					delete(s.udpExch, key)
 				}

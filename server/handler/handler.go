@@ -2,12 +2,12 @@ package handler
 
 import (
 	"encoding/base64"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/nange/easyss/v3/crypto"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/server/nextproxy"
 	"github.com/nange/easyss/v3/shaper"
@@ -83,22 +83,24 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	first, err := sk.ReadFirstRecordWithTimeout(r.Context(), r.Body, h.handshakeTimeout)
 	if err != nil {
-		log.Printf("[SERVER] read first record failed: %v", err)
+		log.Error("[SERVER] read first record", "remote", r.RemoteAddr, "endpoint", endpoint, "err", err)
 		ServeFallback(w, r)
 		return
 	}
 
 	if !first.Handshake.MatchesEndpoint(endpoint) {
-		log.Printf("[SERVER] handshake endpoint mismatch: %s vs %s", first.Handshake.Proto, endpoint)
+		log.Error("[SERVER] endpoint mismatch", "remote", r.RemoteAddr, "proto", first.Handshake.Proto.String(), "endpoint", endpoint)
 		ServeFallback(w, r)
 		return
 	}
 
 	if !h.allowedMethods[first.Handshake.Method] {
-		log.Printf("[SERVER] method not allowed: %s", first.Handshake.Method)
+		log.Error("[SERVER] method not allowed", "remote", r.RemoteAddr, "method", first.Handshake.Method.String())
 		ServeFallback(w, r)
 		return
 	}
+
+	log.Info("[SERVER] proxy", "target", first.Handshake.Target, "remote", r.RemoteAddr)
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Cache-Control", "no-store")
@@ -128,12 +130,18 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s2cShaper := shaper.NewLight(s2cWriter, shaper.Config{Mode: "light", BatchWindowMS: 5})
 	defer s2cShaper.Close()
 
+	var handleErr error
 	switch {
 	case strings.HasSuffix(endpoint, "/tcp"):
-		_ = h.tcpHandler.Handle(c2sReader, s2cShaper, target)
+		handleErr = h.tcpHandler.Handle(c2sReader, s2cShaper, target)
 	case strings.HasSuffix(endpoint, "/udp"):
-		_ = h.udpHandler.Handle(c2sReader, s2cShaper, target)
+		handleErr = h.udpHandler.Handle(c2sReader, s2cShaper, target)
 	case strings.HasSuffix(endpoint, "/icmp"):
-		_ = h.icmpHandler.Handle(c2sReader, s2cShaper, target)
+		handleErr = h.icmpHandler.Handle(c2sReader, s2cShaper, target)
+	}
+	if handleErr != nil {
+		log.Debug("[SERVER] handler finished with error", "target", target, "endpoint", endpoint, "err", handleErr)
+	} else {
+		log.Debug("[SERVER] handler finished", "target", target, "endpoint", endpoint)
 	}
 }
