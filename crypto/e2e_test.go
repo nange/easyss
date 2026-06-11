@@ -39,6 +39,32 @@ func TestRecordRoundTrip(t *testing.T) {
 	require.Equal(t, plaintext, decrypted)
 }
 
+func TestRecordWriterFlushesAfterCompleteRecord(t *testing.T) {
+	masterKey, _ := DeriveMasterKey("flush-test-key")
+	salt, _ := GenerateSalt()
+	endpoint := "/v3/tcp"
+
+	sk, err := NewStreamKeys(masterKey, salt, endpoint)
+	require.NoError(t, err)
+	enc, counter, err := sk.Encryptor("s2c", "session", protocol.MethodAES256GCM)
+	require.NoError(t, err)
+	aad := BuildAAD(endpoint, salt, "s2c", "session", protocol.MethodAES256GCM)
+
+	w := &flushBuffer{}
+	require.NoError(t, NewRecordWriter(w, enc, counter, aad).WriteRecord([]byte("hello")))
+	require.Equal(t, 1, w.flushes)
+	require.Greater(t, w.Len(), 3)
+}
+
+type flushBuffer struct {
+	bytes.Buffer
+	flushes int
+}
+
+func (fb *flushBuffer) Flush() {
+	fb.flushes++
+}
+
 func TestHandshakeRecordRoundTrip(t *testing.T) {
 	masterKey, _ := DeriveMasterKey("handshake-test-key")
 	salt, _ := GenerateSalt()

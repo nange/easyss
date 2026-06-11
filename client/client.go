@@ -8,6 +8,7 @@ import (
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/router"
 	"github.com/nange/easyss/v3/crypto"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/transport"
 	"github.com/nange/easyss/v3/transport/http2"
@@ -43,6 +44,8 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	log.Info("[CLIENT] transport initialized", "server_url", cfg.ServerURL(), "slots", slotCount, "server_addr", cfg.DefaultServerAddr())
 
 	rt, err := router.New(router.Config{
 		ProxyRule:         router.ParseProxyRule(cfg.Routing.ProxyRule),

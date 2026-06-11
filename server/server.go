@@ -183,7 +183,7 @@ func (s *Server) Start() error {
 		MasterKey:         masterKey,
 		AllowedMethods:    s.cfg.GetAllowedMethods(),
 		HandshakeTimeout:  timeout / 2,
-		StreamIdleTimeout: timeout / 2,
+		StreamIdleTimeout: 4 * timeout,
 		UDPIdleTimeout:    timeout,
 		NextProxy:         np,
 	})

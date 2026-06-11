@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -28,7 +29,7 @@ type Socks5Server struct {
 	udpIdleTimeout time.Duration
 }
 
-func NewSocks5Server(listenAddr, username, password string, handler *StreamHandler, rt *router.Router, method protocol.Method, disableQUIC bool, udpIdleTimeout time.Duration) *Socks5Server {
+func NewSocks5Server(listenAddr, username, password string, handler *StreamHandler, rt *router.Router, method protocol.Method, disableQUIC bool, udpIdleTimeout time.Duration) (*Socks5Server, error) {
 	if udpIdleTimeout <= 0 {
 		udpIdleTimeout = 30 * time.Second
 	}
@@ -42,9 +43,12 @@ func NewSocks5Server(listenAddr, username, password string, handler *StreamHandl
 		quit:           make(chan struct{}),
 		udpIdleTimeout: udpIdleTimeout,
 	}
-	srv, _ := socks5.NewClassicServer(listenAddr, "127.0.0.1", username, password, 0, 0)
+	srv, err := socks5.NewClassicServer(listenAddr, "127.0.0.1", username, password, 0, 0)
+	if err != nil {
+		return nil, err
+	}
 	s.srv = srv
-	return s
+	return s, nil
 }
 
 func (s *Socks5Server) Start() error {
@@ -131,6 +135,10 @@ func (s *Socks5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 		}
 		err = s.handler.OpenTCPStream(context.Background(), target, s.method, c)
 		if err != nil {
+			if errors.Is(err, ErrStreamIdleTimeout) {
+				log.Debug("[TCP_PROXY] idle closed", "target", target, "err", err)
+				return nil
+			}
 			log.Error("[TCP_PROXY] stream", "target", target, "err", err)
 		} else {
 			log.Debug("[TCP_PROXY] stream finished", "target", target)

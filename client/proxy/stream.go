@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -15,6 +16,8 @@ import (
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/transport"
 )
+
+var ErrStreamIdleTimeout = errors.New("stream idle timeout")
 
 type StreamHandler struct {
 	transport         transport.Transport
@@ -169,9 +172,9 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 		buf := make([]byte, 16*1024)
 		n, rErr := localConn.Read(buf)
 		_ = localConn.SetReadDeadline(time.Time{})
-		if n > 0 && (rErr == nil || rErr == io.EOF) {
+		if n > 0 {
 			frames = append(frames, protocol.NewFrameDATA(buf[:n]))
-			log.Debug("[STREAM] merged first DATA into bootstrap record", "bytes", n)
+			log.Debug("[STREAM] merged first DATA into bootstrap record", "bytes", n, "read_err", rErr)
 		}
 	}
 
@@ -261,7 +264,7 @@ func (h *StreamHandler) relay(localConn net.Conn, tx shaper.Shaper, rx *crypto.D
 			log.Debug("[STREAM] idle timeout", "timeout", h.streamIdleTimeout)
 			_ = stream.Close()
 			_ = localConn.Close()
-			return fmt.Errorf("stream idle timeout after %v", h.streamIdleTimeout)
+			return fmt.Errorf("%w after %v", ErrStreamIdleTimeout, h.streamIdleTimeout)
 		}
 	}
 
@@ -412,7 +415,10 @@ func (ue *UDPExchange) Send(data []byte) error {
 	defer ue.mu.Unlock()
 	ue.lastSeen = time.Now()
 	frame := protocol.NewFrameDATAGRAM(data)
-	return ue.tx.PushFrame(frame)
+	if err := ue.tx.PushFrame(frame); err != nil {
+		return err
+	}
+	return ue.tx.Flush()
 }
 
 func (ue *UDPExchange) Receive() ([]byte, error) {

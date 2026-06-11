@@ -17,16 +17,22 @@ type TCPHandler struct {
 	dialer      *net.Dialer
 	nextProxy   *nextproxy.NextProxy
 	idleTimeout time.Duration
+	dialTimeout time.Duration
 }
 
 func NewTCPHandler(idleTimeout time.Duration, np *nextproxy.NextProxy) *TCPHandler {
 	if idleTimeout <= 0 {
 		idleTimeout = 15 * time.Second
 	}
+	dialTimeout := idleTimeout * 2
+	if dialTimeout < 30*time.Second {
+		dialTimeout = 30 * time.Second
+	}
 	return &TCPHandler{
-		dialer:      &net.Dialer{},
+		dialer:      &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second},
 		nextProxy:   np,
 		idleTimeout: idleTimeout,
+		dialTimeout: dialTimeout,
 	}
 }
 
@@ -34,11 +40,23 @@ func (h *TCPHandler) dialTarget(network, addr string) (net.Conn, error) {
 	if h.nextProxy != nil && h.nextProxy.ShouldProxy(addr) {
 		return h.nextProxy.Dial(network, addr)
 	}
-	return h.dialer.Dial(network, addr)
+	return h.dialer.Dial(outboundTCPNetwork(addr), addr)
+}
+
+func outboundTCPNetwork(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "tcp4"
+	}
+	ip := net.ParseIP(host)
+	if ip != nil && ip.To4() == nil {
+		return "tcp6"
+	}
+	return "tcp4"
 }
 
 func (h *TCPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, target string) error {
-	log.Info("[TCP_HANDLE] dialing target", "target", target)
+	log.Info("[TCP_HANDLE] dialing target", "target", target, "timeout", h.dialTimeout)
 	targetConn, err := h.dialTarget("tcp", target)
 	if err != nil {
 		log.Error("[TCP_HANDLE] dial failed", "target", target, "err", err)
@@ -47,7 +65,7 @@ func (h *TCPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, targe
 		return err
 	}
 	defer targetConn.Close()
-	log.Debug("[TCP_HANDLE] target connected", "target", target)
+	log.Info("[TCP_HANDLE] target connected", "target", target, "remote", targetConn.RemoteAddr().String())
 
 	errCh := make(chan error, 2)
 	activity := make(chan struct{}, 1)
@@ -143,6 +161,9 @@ func (h *TCPHandler) copyFromTarget(src net.Conn, s2c shaper.Shaper, signalActiv
 			frame := protocol.NewFrameDATA(buf[:n])
 			if wErr := s2c.PushFrame(frame); wErr != nil {
 				return wErr
+			}
+			if fErr := s2c.Flush(); fErr != nil {
+				return fErr
 			}
 		}
 		if err != nil {
