@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/crypto"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/server/nextproxy"
 	"github.com/nange/easyss/v3/shaper"
@@ -37,13 +38,16 @@ func (h *TCPHandler) dialTarget(network, addr string) (net.Conn, error) {
 }
 
 func (h *TCPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, target string) error {
+	log.Info("[TCP_HANDLE] dialing target", "target", target)
 	targetConn, err := h.dialTarget("tcp", target)
 	if err != nil {
+		log.Error("[TCP_HANDLE] dial failed", "target", target, "err", err)
 		_ = s2c.PushFrame(protocol.NewFrameRST())
 		_ = s2c.Flush()
 		return err
 	}
 	defer targetConn.Close()
+	log.Debug("[TCP_HANDLE] target connected", "target", target)
 
 	errCh := make(chan error, 2)
 	activity := make(chan struct{}, 1)
@@ -94,6 +98,7 @@ func (h *TCPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, targe
 			timer.Reset(h.idleTimeout)
 		case <-timer.C:
 			_ = targetConn.Close()
+			log.Debug("[TCP_HANDLE] idle timeout", "target", target, "timeout", h.idleTimeout)
 			return fmt.Errorf("tcp stream idle timeout after %v", h.idleTimeout)
 		}
 	}

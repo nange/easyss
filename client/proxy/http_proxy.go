@@ -71,9 +71,11 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 	rule := s.router.MatchHostRule(host)
 	switch rule {
 	case router.HostRuleBlock:
+		log.Info("[HTTP-PROXY] blocked CONNECT", "host", host)
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	case router.HostRuleDirect:
+		log.Info("[HTTP-PROXY] direct CONNECT", "target", target)
 		hj, ok := w.(http.Hijacker)
 		if !ok {
 			http.Error(w, "hijacking not supported", http.StatusInternalServerError)
@@ -112,6 +114,7 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 		remote.Close()
 		return
 	case router.HostRuleProxy:
+		log.Info("[HTTP-PROXY] proxy CONNECT", "target", target)
 		hj, ok := w.(http.Hijacker)
 		if !ok {
 			http.Error(w, "hijacking not supported", http.StatusInternalServerError)
@@ -143,9 +146,11 @@ func (s *HTTPProxyServer) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	rule := s.router.MatchHostRule(host)
 	switch rule {
 	case router.HostRuleBlock:
+		log.Info("[HTTP-PROXY] blocked HTTP", "host", host)
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	case router.HostRuleDirect:
+		log.Info("[HTTP-PROXY] direct HTTP", "host", host)
 		outReq := cloneForRoundTrip(r)
 		resp, err := http.DefaultTransport.RoundTrip(outReq)
 		if err != nil {
@@ -162,6 +167,7 @@ func (s *HTTPProxyServer) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(resp.StatusCode)
 		_, _ = io.Copy(w, resp.Body)
 	case router.HostRuleProxy:
+		log.Info("[HTTP-PROXY] proxy HTTP", "host", host)
 		target := host
 		if _, _, err := net.SplitHostPort(host); err != nil {
 			if r.URL.Scheme == "https" {

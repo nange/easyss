@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/crypto"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/transport"
@@ -47,6 +48,8 @@ func (h *StreamHandler) OpenICMPStream(ctx context.Context, target string, echoP
 }
 
 func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto protocol.Proto, target string, echoPayload []byte, method protocol.Method) ([]byte, error) {
+	log.Debug("[STREAM] icmp open", "endpoint", endpoint, "target", target)
+
 	salt, err := crypto.GenerateSalt()
 	if err != nil {
 		return nil, fmt.Errorf("generate salt: %w", err)
@@ -60,6 +63,7 @@ func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto p
 	}
 	stream, err := h.transport.Open(ctx, req)
 	if err != nil {
+		log.Error("[STREAM] icmp transport open", "target", target, "err", err)
 		return nil, fmt.Errorf("transport open: %w", err)
 	}
 	defer stream.Close()
@@ -87,6 +91,7 @@ func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto p
 
 	plaintext := protocol.EncodeFrames([]protocol.Frame{hsFrame, dataFrame})
 	if err := rw.WriteRecord(plaintext); err != nil {
+		log.Error("[STREAM] icmp handshake write", "target", target, "err", err)
 		return nil, fmt.Errorf("write handshake+data: %w", err)
 	}
 
@@ -99,10 +104,12 @@ func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto p
 
 	frame, err := dr.ReadFrame()
 	if err != nil {
+		log.Error("[STREAM] icmp read reply", "target", target, "err", err)
 		return nil, fmt.Errorf("read first reply frame: %w", err)
 	}
 
 	if frame.Type == protocol.FrameRST {
+		log.Error("[STREAM] icmp rejected", "target", target)
 		return nil, fmt.Errorf("icmp rejected by server")
 	}
 
@@ -114,6 +121,8 @@ func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto p
 }
 
 func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto protocol.Proto, target string, method protocol.Method, localConn net.Conn) error {
+	log.Debug("[STREAM] opening", "endpoint", endpoint, "target", target)
+
 	salt, err := crypto.GenerateSalt()
 	if err != nil {
 		return fmt.Errorf("generate salt: %w", err)
@@ -127,8 +136,10 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 	}
 	stream, err := h.transport.Open(ctx, req)
 	if err != nil {
+		log.Error("[STREAM] transport open", "endpoint", endpoint, "target", target, "err", err)
 		return fmt.Errorf("transport open: %w", err)
 	}
+	log.Debug("[STREAM] transport opened", "endpoint", endpoint, "target", target)
 
 	sk, err := crypto.NewStreamKeys(h.masterKey, salt, endpoint)
 	if err != nil {
@@ -160,14 +171,17 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 		_ = localConn.SetReadDeadline(time.Time{})
 		if n > 0 && (rErr == nil || rErr == io.EOF) {
 			frames = append(frames, protocol.NewFrameDATA(buf[:n]))
+			log.Debug("[STREAM] merged first DATA into bootstrap record", "bytes", n)
 		}
 	}
 
 	plaintext := protocol.EncodeFrames(frames)
 	if err := rw.WriteRecord(plaintext); err != nil {
 		stream.Close()
+		log.Error("[STREAM] handshake write", "endpoint", endpoint, "target", target, "err", err)
 		return fmt.Errorf("write handshake: %w", err)
 	}
+	log.Debug("[STREAM] handshake sent", "target", target)
 
 	aadSession := crypto.BuildAAD(endpoint, salt, "c2s", "session", method)
 	sessionEnc, sessionCounter, err := sk.Encryptor("c2s", "session", method)
@@ -187,7 +201,9 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 	}
 	dr := crypto.NewDecryptedReader(stream, aadS2C, s2cEnc, s2cCounter)
 
-	return h.relay(localConn, txShaper, dr, stream)
+	err = h.relay(localConn, txShaper, dr, stream)
+	log.Debug("[STREAM] relay finished", "endpoint", endpoint, "target", target, "err", err)
+	return err
 }
 
 func (h *StreamHandler) relay(localConn net.Conn, tx shaper.Shaper, rx *crypto.DecryptedReader, stream transport.Stream) error {
@@ -219,6 +235,7 @@ func (h *StreamHandler) relay(localConn net.Conn, tx shaper.Shaper, rx *crypto.D
 			done++
 			if err != nil && err != io.EOF && firstErr == nil {
 				firstErr = err
+				log.Debug("[STREAM] relay copy error", "err", err)
 			}
 			if firstErr != nil || done == 2 {
 				_ = stream.Close()
@@ -241,6 +258,7 @@ func (h *StreamHandler) relay(localConn net.Conn, tx shaper.Shaper, rx *crypto.D
 			}
 			timer.Reset(h.streamIdleTimeout)
 		case <-timer.C:
+			log.Debug("[STREAM] idle timeout", "timeout", h.streamIdleTimeout)
 			_ = stream.Close()
 			_ = localConn.Close()
 			return fmt.Errorf("stream idle timeout after %v", h.streamIdleTimeout)
@@ -269,6 +287,7 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 			if err == io.EOF {
 				return nil
 			}
+			log.Debug("[STREAM] local read error", "err", err)
 			return err
 		}
 	}
@@ -281,6 +300,7 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 			if err == io.EOF {
 				return nil
 			}
+			log.Debug("[STREAM] remote read error", "err", err)
 			return err
 		}
 
@@ -296,6 +316,7 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 			signalActivity()
 			return nil
 		case protocol.FrameRST:
+			log.Debug("[STREAM] reset by peer")
 			return fmt.Errorf("stream reset by peer")
 		case protocol.FramePADDING, protocol.FrameCOVER:
 			continue
@@ -313,6 +334,8 @@ type UDPExchange struct {
 }
 
 func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, method protocol.Method) (*UDPExchange, error) {
+	log.Debug("[UDP_EXCHANGE] opening", "target", target)
+
 	salt, err := crypto.GenerateSalt()
 	if err != nil {
 		return nil, fmt.Errorf("generate salt: %w", err)
@@ -326,6 +349,7 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 	}
 	stream, err := h.transport.Open(ctx, req)
 	if err != nil {
+		log.Error("[UDP_EXCHANGE] transport open", "target", target, "err", err)
 		return nil, fmt.Errorf("transport open: %w", err)
 	}
 
@@ -352,6 +376,7 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 	hsFrame := protocol.NewFrameHANDSHAKE(handshake)
 	if err := rw.WriteRecord(protocol.EncodeFrames([]protocol.Frame{hsFrame})); err != nil {
 		stream.Close()
+		log.Error("[UDP_EXCHANGE] handshake write", "target", target, "err", err)
 		return nil, fmt.Errorf("write handshake: %w", err)
 	}
 
@@ -372,6 +397,7 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 
 	dr := crypto.NewDecryptedReader(stream, aadS2C, s2cEnc, s2cCounter)
 
+	log.Debug("[UDP_EXCHANGE] opened", "target", target)
 	return &UDPExchange{
 		stream:   stream,
 		tx:       shaper.NewLight(c2sWriter, h.shaperCfg),
