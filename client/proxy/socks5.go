@@ -1,0 +1,175 @@
+package proxy
+
+import (
+	"context"
+	"io"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/nange/easyss/v3/client/router"
+	"github.com/nange/easyss/v3/protocol"
+	"github.com/txthinking/socks5"
+)
+
+type Socks5Server struct {
+	srv *socks5.Server
+
+	handler     *StreamHandler
+	router      *router.Router
+	method      protocol.Method
+	disableQUIC bool
+
+	udpMu          sync.RWMutex
+	udpExch        map[string]*UDPExchange
+	directUDP      map[string]net.Conn
+	quit           chan struct{}
+	udpIdleTimeout time.Duration
+}
+
+func NewSocks5Server(listenAddr, username, password string, handler *StreamHandler, rt *router.Router, method protocol.Method, disableQUIC bool, udpIdleTimeout time.Duration) *Socks5Server {
+	if udpIdleTimeout <= 0 {
+		udpIdleTimeout = 30 * time.Second
+	}
+	s := &Socks5Server{
+		handler:        handler,
+		router:         rt,
+		method:         method,
+		disableQUIC:    disableQUIC,
+		udpExch:        make(map[string]*UDPExchange),
+		directUDP:      make(map[string]net.Conn),
+		quit:           make(chan struct{}),
+		udpIdleTimeout: udpIdleTimeout,
+	}
+	srv, _ := socks5.NewClassicServer(listenAddr, "127.0.0.1", username, password, 0, 0)
+	s.srv = srv
+	return s
+}
+
+func (s *Socks5Server) Start() error {
+	go s.cleanupLoop()
+	return s.srv.ListenAndServe(s)
+}
+
+func (s *Socks5Server) Close() error {
+	close(s.quit)
+	s.udpMu.Lock()
+	defer s.udpMu.Unlock()
+	for key, ue := range s.udpExch {
+		ue.Close()
+		delete(s.udpExch, key)
+	}
+	for key, conn := range s.directUDP {
+		conn.Close()
+		delete(s.directUDP, key)
+	}
+	if s.srv != nil {
+		return s.srv.Shutdown()
+	}
+	return nil
+}
+
+func (s *Socks5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.Request) error {
+	if r.Cmd == socks5.CmdUDP {
+		caddr, err := r.UDP(c, srv.ServerAddr)
+		if err != nil {
+			return err
+		}
+		ch := make(chan byte)
+		srv.AssociatedUDP.Set(caddr.String(), ch, -1)
+		defer srv.AssociatedUDP.Delete(caddr.String())
+		io.Copy(io.Discard, c)
+		return nil
+	}
+
+	if r.Cmd != socks5.CmdConnect {
+		return s.replyError(c, r, socks5.RepCommandNotSupported)
+	}
+
+	target := r.Address()
+	host, _, err := net.SplitHostPort(target)
+	if err != nil {
+		return s.replyError(c, r, socks5.RepServerFailure)
+	}
+
+	rule := s.router.MatchHostRule(host)
+	switch rule {
+	case router.HostRuleBlock:
+		return s.replyError(c, r, socks5.RepNotAllowed)
+	case router.HostRuleDirect:
+		rc, err := r.Connect(c)
+		if err != nil {
+			return err
+		}
+		defer rc.Close()
+		relayTCP(rc, c)
+		return nil
+	case router.HostRuleProxy:
+		a, bindAddr, bindPort, err := socks5.ParseAddress(c.LocalAddr().String())
+		if err != nil {
+			return s.replyError(c, r, socks5.RepServerFailure)
+		}
+		if a == socks5.ATYPDomain {
+			bindAddr = bindAddr[1:]
+		}
+		p := socks5.NewReply(socks5.RepSuccess, a, bindAddr, bindPort)
+		if _, err := p.WriteTo(c); err != nil {
+			return err
+		}
+		return s.handler.OpenTCPStream(context.Background(), target, s.method, c)
+	}
+
+	return nil
+}
+
+func (s *Socks5Server) UDPHandle(srv *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) error {
+	return s.handleUDP(srv, addr, d)
+}
+
+func (s *Socks5Server) replyError(c net.Conn, r *socks5.Request, rep byte) error {
+	var p *socks5.Reply
+	if r.Atyp == socks5.ATYPIPv4 || r.Atyp == socks5.ATYPDomain {
+		p = socks5.NewReply(rep, socks5.ATYPIPv4, []byte{0, 0, 0, 0}, []byte{0, 0})
+	} else {
+		p = socks5.NewReply(rep, socks5.ATYPIPv6, []byte(net.IPv6zero), []byte{0, 0})
+	}
+	_, err := p.WriteTo(c)
+	return err
+}
+
+func relayTCP(dst, src net.Conn) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(dst, src)
+		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(src, dst)
+	}()
+	wg.Wait()
+}
+
+func (s *Socks5Server) cleanupLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			s.udpMu.Lock()
+			for key, ue := range s.udpExch {
+				if time.Since(ue.LastSeen()) > s.udpIdleTimeout {
+					ue.Close()
+					delete(s.udpExch, key)
+				}
+			}
+			s.udpMu.Unlock()
+		case <-s.quit:
+			return
+		}
+	}
+}

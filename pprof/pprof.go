@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 
-	"github.com/nange/easyss/v2/log"
+	"github.com/nange/easyss/v3/log"
 )
 
 func StartPprof() {
