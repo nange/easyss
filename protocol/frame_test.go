@@ -110,3 +110,18 @@ func TestDATAGRAMFrame(t *testing.T) {
 		t.Errorf("Length: got %d, want 1500", f.Length)
 	}
 }
+
+func TestFramePayloadConstructorsCopyInput(t *testing.T) {
+	data := []byte("hello")
+	dataFrame := NewFrameDATA(data)
+	dgramFrame := NewFrameDATAGRAM(data)
+
+	data[0] = 'x'
+
+	if string(dataFrame.Payload) != "hello" {
+		t.Fatalf("DATA payload was mutated: %q", dataFrame.Payload)
+	}
+	if string(dgramFrame.Payload) != "hello" {
+		t.Fatalf("DATAGRAM payload was mutated: %q", dgramFrame.Payload)
+	}
+}

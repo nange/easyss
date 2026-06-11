@@ -57,6 +57,14 @@ func main() {
 		cfg.Local.EnableTun2socks = true
 	}
 
+	log.Info("[EASYSS-V3] config loaded",
+		"server", cfg.DefaultServerAddr(),
+		"socks_port", cfg.Local.SocksPort,
+		"http_port", cfg.Local.HTTPPort,
+		"proxy_rule", cfg.Routing.ProxyRule,
+		"timeout", cfg.Timeout,
+	)
+
 	app := &App{cfg: cfg}
 	runApp(disableTray, daemon, app)
 }
@@ -106,14 +114,20 @@ func (a *App) Start() error {
 	}
 
 	timeout := a.cfg.TimeoutDuration()
-	a.streamHandler = proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, timeout/2)
+	a.streamHandler = proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, 4*timeout)
 
 	if a.cfg.Local.SocksPort > 0 {
 		socksAddr := "127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
 		if a.cfg.Local.BindAll {
 			socksAddr = "0.0.0.0:" + strconv.Itoa(a.cfg.Local.SocksPort)
 		}
-		a.socksServer = proxy.NewSocks5Server(socksAddr, a.cfg.AuthUsername, a.cfg.AuthPassword, a.streamHandler, cli.Router(), method, !a.cfg.Local.EnableQUIC, timeout)
+		socksServer, err := proxy.NewSocks5Server(socksAddr, a.cfg.AuthUsername, a.cfg.AuthPassword, a.streamHandler, cli.Router(), method, !a.cfg.Local.EnableQUIC, timeout)
+		if err != nil {
+			log.Error("[EASYSS-V3] create socks5 server", "err", err)
+			return err
+		}
+		a.socksServer = socksServer
+		log.Info("[EASYSS-V3] starting socks5 server", "addr", socksAddr)
 		go func() {
 			if err := a.socksServer.Start(); err != nil {
 				log.Error("[EASYSS-V3] socks5 server", "err", err)
@@ -122,11 +136,19 @@ func (a *App) Start() error {
 	}
 
 	if a.cfg.Local.HTTPPort > 0 {
+		if a.cfg.Local.SocksPort <= 0 {
+			return fmt.Errorf("http proxy requires local.socks_port to be enabled")
+		}
 		httpAddr := "127.0.0.1:" + strconv.Itoa(a.cfg.Local.HTTPPort)
 		if a.cfg.Local.BindAll {
 			httpAddr = "0.0.0.0:" + strconv.Itoa(a.cfg.Local.HTTPPort)
 		}
-		a.httpServer = proxy.NewHTTPProxyServer(httpAddr, a.streamHandler, cli.Router(), method)
+		socksAddr := "127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
+		a.httpServer, err = proxy.NewHTTPProxyServer(httpAddr, socksAddr, a.cfg.AuthUsername, a.cfg.AuthPassword, timeout)
+		if err != nil {
+			return err
+		}
+		log.Info("[EASYSS-V3] starting http proxy server", "addr", httpAddr)
 		go func() {
 			if err := a.httpServer.Start(); err != nil {
 				log.Error("[EASYSS-V3] http proxy server", "err", err)
@@ -161,6 +183,7 @@ func (a *App) Start() error {
 		}()
 	}
 
+	log.Info("[EASYSS-V3] started successfully")
 	return nil
 }
 

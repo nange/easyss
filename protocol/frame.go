@@ -51,7 +51,7 @@ func (p Proto) String() string {
 type Method uint8
 
 const (
-	MethodAES256GCM       Method = 1
+	MethodAES256GCM        Method = 1
 	MethodChaCha20Poly1305 Method = 2
 )
 
@@ -78,9 +78,9 @@ func (m Method) String() string {
 }
 
 const (
-	MaxUDPDataSize      = 65507
-	MaxPlainRecordSize  = 64 * 1024
-	MaxCipherLenSize    = 3
+	MaxUDPDataSize     = 65507
+	MaxPlainRecordSize = 64 * 1024
+	MaxCipherLenSize   = 3
 )
 
 type Handshake struct {
@@ -177,18 +177,20 @@ func WriteFrame(w io.Writer, f Frame) error {
 }
 
 func NewFrameDATA(data []byte) Frame {
+	payload := append([]byte(nil), data...)
 	return Frame{
 		Type:    FrameDATA,
-		Length:  uint16(len(data)),
-		Payload: data,
+		Length:  uint16(len(payload)),
+		Payload: payload,
 	}
 }
 
 func NewFrameDATAGRAM(data []byte) Frame {
+	payload := append([]byte(nil), data...)
 	return Frame{
 		Type:    FrameDATAGRAM,
-		Length:  uint16(len(data)),
-		Payload: data,
+		Length:  uint16(len(payload)),
+		Payload: payload,
 	}
 }
 

@@ -20,6 +20,10 @@ type RecordWriter struct {
 	maxPlain int
 }
 
+type recordFlusher interface {
+	Flush()
+}
+
 func NewRecordWriter(w io.Writer, enc Encryptor, counter *CounterNonce, aad []byte) *RecordWriter {
 	return &RecordWriter{
 		w:        w,
@@ -53,6 +57,9 @@ func (rw *RecordWriter) WriteRecord(plaintext []byte) error {
 	}
 	if _, err := rw.w.Write(ciphertext); err != nil {
 		return fmt.Errorf("crypto: write ciphertext: %w", err)
+	}
+	if flusher, ok := rw.w.(recordFlusher); ok {
+		flusher.Flush()
 	}
 
 	return nil

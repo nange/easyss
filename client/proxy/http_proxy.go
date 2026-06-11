@@ -1,35 +1,96 @@
 package proxy
 
 import (
-	"bufio"
 	"context"
+	"encoding/base64"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/nange/easyss/v3/client/router"
 	"github.com/nange/easyss/v3/log"
-	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/util/bytespool"
+	"github.com/txthinking/socks5"
 )
+
+const httpProxyBufferSize = 32 * 1024
+
+type reverseProxyBufferPool struct{}
+
+func (reverseProxyBufferPool) Get() []byte {
+	return bytespool.Get(httpProxyBufferSize)
+}
+
+func (reverseProxyBufferPool) Put(buf []byte) {
+	bytespool.MustPut(buf)
+}
 
 type HTTPProxyServer struct {
 	listenAddr string
-	handler    *StreamHandler
-	router     *router.Router
-	method     protocol.Method
+	socksAddr  string
+	socksURL   *url.URL
+	username   string
+	password   string
+	timeout    time.Duration
+	rp         *httputil.ReverseProxy
 	server     *http.Server
 	mu         sync.Mutex
 }
 
-func NewHTTPProxyServer(listenAddr string, handler *StreamHandler, rt *router.Router, method protocol.Method) *HTTPProxyServer {
-	return &HTTPProxyServer{
+func NewHTTPProxyServer(listenAddr, socksAddr, username, password string, timeout time.Duration) (*HTTPProxyServer, error) {
+	if socksAddr == "" {
+		return nil, fmt.Errorf("http proxy requires a local socks5 address")
+	}
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+
+	socksURL := &url.URL{Scheme: "socks5", Host: socksAddr}
+	if username != "" || password != "" {
+		socksURL.User = url.UserPassword(username, password)
+	}
+
+	s := &HTTPProxyServer{
 		listenAddr: listenAddr,
-		handler:    handler,
-		router:     rt,
-		method:     method,
+		socksAddr:  socksAddr,
+		socksURL:   socksURL,
+		username:   username,
+		password:   password,
+		timeout:    timeout,
+	}
+	s.rp = s.newReverseProxy()
+	return s, nil
+}
+
+func (s *HTTPProxyServer) newReverseProxy() *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			if pr.Out.URL.Scheme == "" {
+				pr.Out.URL.Scheme = "http"
+			}
+			if pr.Out.URL.Host == "" {
+				pr.Out.URL.Host = pr.In.Host
+			}
+			pr.Out.Host = pr.Out.URL.Host
+			pr.Out.RequestURI = ""
+			pr.Out.Header.Del("Proxy-Authorization")
+			pr.Out.Header.Del("Proxy-Connection")
+		},
+		Transport: &http.Transport{
+			Proxy: func(*http.Request) (*url.URL, error) {
+				return s.socksURL, nil
+			},
+			TLSHandshakeTimeout: s.timeout / 3,
+		},
+		BufferPool: reverseProxyBufferPool{},
+		ErrorHandler: func(rw http.ResponseWriter, r *http.Request, err error) {
+			log.Warn("[HTTP-PROXY] reverse proxy request", "err", err)
+			http.Error(rw, "Service unavailable", http.StatusServiceUnavailable)
+		},
 	}
 }
 
@@ -39,218 +100,107 @@ func (s *HTTPProxyServer) Start() error {
 		return fmt.Errorf("http proxy listen: %w", err)
 	}
 
-	log.Info("[HTTP-PROXY] listening", "addr", s.listenAddr)
+	log.Info("[HTTP-PROXY] listening", "addr", s.listenAddr, "socks5", s.socksURL.Redacted())
 
-	httpServer := &http.Server{Handler: http.HandlerFunc(s.serveHTTP)}
+	httpServer := &http.Server{Handler: s}
 	s.mu.Lock()
 	s.server = httpServer
 	s.mu.Unlock()
 	return httpServer.Serve(listener)
 }
 
-func (s *HTTPProxyServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !s.authOK(r) {
+		w.Header().Set("Proxy-Authenticate", `Basic realm="Easyss"`)
+		http.Error(w, "Proxy auth required", http.StatusProxyAuthRequired)
+		return
+	}
+
 	if r.Method == http.MethodConnect {
 		s.handleConnect(w, r)
 		return
 	}
 
-	s.handleHTTP(w, r)
+	s.rp.ServeHTTP(w, r)
+}
+
+func (s *HTTPProxyServer) authOK(r *http.Request) bool {
+	if s.username == "" && s.password == "" {
+		return true
+	}
+	username, password, ok := basicAuth(r)
+	return ok && username == s.username && password == s.password
 }
 
 func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
-	target := r.Host
+	target := connectTarget(r)
+
+	rc := http.NewResponseController(w)
+	hijConn, _, err := rc.Hijack()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Error("[HTTP-PROXY] hijack CONNECT", "target", target, "err", err)
+		return
+	}
+	defer hijConn.Close()
+
+	remote, err := s.dialSOCKS5(target)
+	if err != nil {
+		log.Warn("[HTTP-PROXY] socks5 CONNECT", "target", target, "err", err)
+		return
+	}
+	defer remote.Close()
+
+	if _, err := hijConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+		log.Warn("[HTTP-PROXY] write CONNECT response", "target", target, "err", err)
+		return
+	}
+
+	relayTCP(remote, hijConn)
+}
+
+func (s *HTTPProxyServer) dialSOCKS5(target string) (net.Conn, error) {
+	client, err := socks5.NewClient(s.socksAddr, s.username, s.password, int(s.timeout.Seconds()), int(s.timeout.Seconds()))
+	if err != nil {
+		return nil, err
+	}
+	return client.Dial("tcp", target)
+}
+
+func connectTarget(r *http.Request) string {
+	target := r.URL.Host
+	if target == "" {
+		target = r.Host
+	}
 	if _, _, err := net.SplitHostPort(target); err != nil {
 		target = net.JoinHostPort(target, "443")
 	}
-
-	host := target
-	if h, _, err := net.SplitHostPort(target); err == nil {
-		host = h
-	}
-
-	rule := s.router.MatchHostRule(host)
-	switch rule {
-	case router.HostRuleBlock:
-		log.Info("[HTTP-PROXY] blocked CONNECT", "host", host)
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	case router.HostRuleDirect:
-		log.Info("[HTTP-PROXY] direct CONNECT", "target", target)
-		hj, ok := w.(http.Hijacker)
-		if !ok {
-			http.Error(w, "hijacking not supported", http.StatusInternalServerError)
-			return
-		}
-
-		conn, _, err := hj.Hijack()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		remote, err := net.Dial("tcp", target)
-		if err != nil {
-			conn.Close()
-			return
-		}
-
-		_, _ = conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			_, _ = io.Copy(remote, conn)
-			if cw, ok := remote.(interface{ CloseWrite() error }); ok {
-				_ = cw.CloseWrite()
-			}
-		}()
-		go func() {
-			defer wg.Done()
-			_, _ = io.Copy(conn, remote)
-		}()
-		wg.Wait()
-		conn.Close()
-		remote.Close()
-		return
-	case router.HostRuleProxy:
-		log.Info("[HTTP-PROXY] proxy CONNECT", "target", target)
-		hj, ok := w.(http.Hijacker)
-		if !ok {
-			http.Error(w, "hijacking not supported", http.StatusInternalServerError)
-			return
-		}
-
-		conn, _, err := hj.Hijack()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		_, _ = conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-
-		ctx := context.Background()
-		if err := s.handler.OpenTCPStream(ctx, target, s.method, conn); err != nil {
-			log.Debug("[HTTP-PROXY] proxy stream", "target", target, "err", err)
-			conn.Close()
-		}
-	}
+	return target
 }
 
-func (s *HTTPProxyServer) handleHTTP(w http.ResponseWriter, r *http.Request) {
-	host := r.Host
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
+func basicAuth(r *http.Request) (username, password string, ok bool) {
+	username, password, ok = r.BasicAuth()
+	if ok {
+		return username, password, true
 	}
-
-	rule := s.router.MatchHostRule(host)
-	switch rule {
-	case router.HostRuleBlock:
-		log.Info("[HTTP-PROXY] blocked HTTP", "host", host)
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	case router.HostRuleDirect:
-		log.Info("[HTTP-PROXY] direct HTTP", "host", host)
-		outReq := cloneForRoundTrip(r)
-		resp, err := http.DefaultTransport.RoundTrip(outReq)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		defer resp.Body.Close()
-
-		for k, vs := range resp.Header {
-			for _, v := range vs {
-				w.Header().Add(k, v)
-			}
-		}
-		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
-	case router.HostRuleProxy:
-		log.Info("[HTTP-PROXY] proxy HTTP", "host", host)
-		target := host
-		if _, _, err := net.SplitHostPort(host); err != nil {
-			if r.URL.Scheme == "https" {
-				target = net.JoinHostPort(host, "443")
-			} else {
-				target = net.JoinHostPort(host, "80")
-			}
-		}
-
-		s.proxyHTTPRequest(w, r, target)
+	auth := r.Header.Get("Proxy-Authorization")
+	if auth == "" {
+		return "", "", false
 	}
+	return parseBasicAuth(auth)
 }
 
-func (s *HTTPProxyServer) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, target string) {
-	clientConn, handlerConn := net.Pipe()
-	defer clientConn.Close()
-
-	streamErr := make(chan error, 1)
-	go func() {
-		streamErr <- s.handler.OpenTCPStream(context.Background(), target, s.method, handlerConn)
-	}()
-
-	writeErr := make(chan error, 1)
-	go func() {
-		writeErr <- cloneForOrigin(r).Write(clientConn)
-	}()
-
-	resp, err := http.ReadResponse(bufio.NewReader(clientConn), r)
+func parseBasicAuth(auth string) (username, password string, ok bool) {
+	const prefix = "Basic "
+	if len(auth) < len(prefix) || !strings.EqualFold(auth[:len(prefix)], prefix) {
+		return "", "", false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(auth[len(prefix):])
 	if err != nil {
-		clientConn.Close()
-		select {
-		case err := <-streamErr:
-			if err != nil {
-				log.Debug("[HTTP-PROXY] proxy stream", "target", target, "err", err)
-			}
-		default:
-		}
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
+		return "", "", false
 	}
-	defer resp.Body.Close()
-
-	select {
-	case err := <-writeErr:
-		if err != nil {
-			log.Debug("[HTTP-PROXY] write request", "target", target, "err", err)
-		}
-	default:
-	}
-
-	for k, vs := range resp.Header {
-		for _, v := range vs {
-			w.Header().Add(k, v)
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
-}
-
-func cloneForOrigin(r *http.Request) *http.Request {
-	out := r.Clone(r.Context())
-	u := *out.URL
-	u.Scheme = ""
-	u.Host = ""
-	out.URL = &u
-	out.RequestURI = ""
-	out.Header = r.Header.Clone()
-	out.Header.Del("Proxy-Connection")
-	return out
-}
-
-func cloneForRoundTrip(r *http.Request) *http.Request {
-	out := r.Clone(r.Context())
-	out.RequestURI = ""
-	if out.URL.Scheme == "" {
-		out.URL.Scheme = "http"
-	}
-	if out.URL.Host == "" {
-		out.URL.Host = r.Host
-	}
-	out.Header = r.Header.Clone()
-	out.Header.Del("Proxy-Connection")
-	return out
+	username, password, ok = strings.Cut(string(decoded), ":")
+	return username, password, ok
 }
 
 func (s *HTTPProxyServer) Close() error {
