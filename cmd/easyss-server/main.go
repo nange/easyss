@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -62,19 +64,29 @@ func main() {
 		os.Exit(1)
 	}
 
+	startErrCh := make(chan error, 1)
 	go func() {
-		if err := srv.Start(); err != nil {
-			log.Error("[EASYSS-SERVER-V3] start server", "err", err)
-		}
+		startErrCh <- srv.Start()
 	}()
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 
-	log.Info("[EASYSS-SERVER-V3] got signal to exit", "signal", <-c)
+	select {
+	case err := <-startErrCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("[EASYSS-SERVER-V3] start server", "err", err)
+			os.Exit(1)
+		}
+	case sig := <-c:
+		log.Info("[EASYSS-SERVER-V3] got signal to exit", "signal", sig)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = srv.Shutdown(ctx)
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Error("[EASYSS-SERVER-V3] shutdown server", "err", err)
+	}
 	os.Exit(0)
 }
 
