@@ -63,6 +63,7 @@ func (np *NextProxy) LoadIPDomainFiles(ipsFile, domainsFile string) error {
 				np.cidrIPs = append(np.cidrIPs, ipnet)
 			}
 		}
+		log.Info("[NEXTPROXY] loaded IP rules", "file", ipsFile, "ips", len(np.ips), "cidrs", len(np.cidrIPs))
 	}
 
 	if domainsFile != "" {
@@ -73,6 +74,7 @@ func (np *NextProxy) LoadIPDomainFiles(ipsFile, domainsFile string) error {
 		for domain := range domains {
 			np.domains[domain] = struct{}{}
 		}
+		log.Info("[NEXTPROXY] loaded domain rules", "file", domainsFile, "count", len(np.domains))
 	}
 
 	return nil
@@ -117,6 +119,8 @@ func (np *NextProxy) dialSOCKS5(network, addr string) (net.Conn, error) {
 		username = np.url.User.Username()
 		password, _ = np.url.User.Password()
 		log.Info("[NEXTPROXY] connecting via SOCKS5 proxy", "addr", np.url.Host, "network", network, "target", addr)
+	} else {
+		log.Debug("[NEXTPROXY] connecting via SOCKS5 proxy", "addr", np.url.Host, "network", network, "target", addr)
 	}
 
 	c, err := socks5.NewClient(np.url.Host, username, password, 10, 10)
