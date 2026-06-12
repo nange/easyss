@@ -14,6 +14,7 @@ import (
 
 	utls "github.com/refraction-networking/utls"
 
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/transport"
 )
 
@@ -74,8 +75,11 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration) *transportSlot {
 		},
 		Protocols: protos,
 		HTTP2: &http.HTTP2Config{
-			SendPingTimeout:  15 * time.Second,
-			WriteByteTimeout: timeout / 2,
+			MaxReadFrameSize:              sharedconfig.DefaultHTTP2MaxReadFrameSize,
+			MaxReceiveBufferPerConnection: sharedconfig.DefaultHTTP2ReceiveBufferPerConnection,
+			MaxReceiveBufferPerStream:     sharedconfig.DefaultHTTP2ReceiveBufferPerStream,
+			SendPingTimeout:               15 * time.Second,
+			WriteByteTimeout:              timeout / 2,
 		},
 		ForceAttemptHTTP2: true,
 		MaxConnsPerHost:   1,

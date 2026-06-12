@@ -1,11 +1,16 @@
 package config
 
 const (
-	DefaultTimeout      = 30
-	DefaultConnCountMin = 8
-	DefaultConnCountMax = 16
+	DefaultTimeout       = 30
+	DefaultConnCountMin  = 8
+	DefaultConnCountMax  = 16
 	DefaultBatchWindowMS = 5
-	EndpointTCP         = "/v3/tcp"
-	EndpointUDP         = "/v3/udp"
-	EndpointICMP        = "/v3/icmp"
+
+	DefaultHTTP2MaxReadFrameSize           = 1 * 1024 * 1024
+	DefaultHTTP2ReceiveBufferPerConnection = 3 * 1024 * 1024
+	DefaultHTTP2ReceiveBufferPerStream     = 3 * 1024 * 1024
+
+	EndpointTCP  = "/v3/tcp"
+	EndpointUDP  = "/v3/udp"
+	EndpointICMP = "/v3/icmp"
 )
