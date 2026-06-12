@@ -197,6 +197,7 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 	sessionWriter := crypto.NewRecordWriter(stream, sessionEnc, sessionCounter, aadSession)
 
 	txShaper := shaper.NewLight(sessionWriter, h.shaperCfg)
+	defer txShaper.Close()
 
 	aadS2C := crypto.BuildAAD(endpoint, salt, "s2c", "session", method)
 	s2cEnc, s2cCounter, err := sk.Encryptor("s2c", "session", method)
@@ -282,6 +283,7 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 			signalActivity()
 			frame := protocol.NewFrameDATA(buf[:n])
 			if pErr := tx.PushFrame(frame); pErr != nil {
+				_ = tx.Flush()
 				return pErr
 			}
 		}

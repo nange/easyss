@@ -21,8 +21,7 @@ type Client struct {
 	shaperCfg shaper.Config
 	masterKey []byte
 
-	mu      sync.RWMutex
-	closing chan struct{}
+	mu sync.RWMutex
 }
 
 func New(cfg *config.ClientConfig) (*Client, error) {
@@ -68,7 +67,6 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		transport: tr,
 		shaperCfg: shaperCfg,
 		masterKey: masterKey,
-		closing:   make(chan struct{}),
 	}, nil
 }
 
@@ -114,10 +112,6 @@ func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.closing != nil {
-		close(c.closing)
-		c.closing = nil
-	}
 	return c.transport.Close()
 }
 
