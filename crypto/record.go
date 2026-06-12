@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 
@@ -85,6 +86,9 @@ func NewRecordReader(r io.Reader, enc Encryptor, counter *CounterNonce, aad []by
 func (rr *RecordReader) ReadRecord() ([]byte, error) {
 	var lenBuf [protocol.MaxCipherLenSize]byte
 	if _, err := io.ReadFull(rr.r, lenBuf[:]); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, io.EOF
+		}
 		return nil, fmt.Errorf("crypto: read cipher_len: %w", err)
 	}
 

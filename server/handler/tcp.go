@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -94,7 +95,7 @@ func (h *TCPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, targe
 		select {
 		case err = <-errCh:
 			done++
-			if err != nil && err != io.EOF && firstErr == nil {
+			if err != nil && !errors.Is(err, io.EOF) && firstErr == nil {
 				firstErr = err
 			}
 			if firstErr != nil || done == 2 {
@@ -169,7 +170,7 @@ func (h *TCPHandler) copyFromTarget(src net.Conn, s2c shaper.Shaper, signalActiv
 			}
 		}
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				finFrame := protocol.NewFrameFIN()
 				_ = s2c.PushFrame(finFrame)
 				_ = s2c.Flush()

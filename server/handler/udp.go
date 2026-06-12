@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -68,7 +69,7 @@ func (h *UDPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, targe
 		select {
 		case err := <-errCh:
 			closeDone()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return nil
 			}
 			return err

@@ -239,7 +239,7 @@ func (h *StreamHandler) relay(localConn net.Conn, tx shaper.Shaper, rx *crypto.D
 		select {
 		case err := <-errCh:
 			done++
-			if err != nil && err != io.EOF && firstErr == nil {
+			if err != nil && !errors.Is(err, io.EOF) && firstErr == nil {
 				firstErr = err
 				log.Debug("[STREAM] relay copy error", "err", err)
 			}
@@ -292,7 +292,7 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 			_ = tx.PushFrame(finFrame)
 			_ = tx.Flush()
 			signalActivity()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return nil
 			}
 			log.Debug("[STREAM] local read error", "err", err)
@@ -305,7 +305,7 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 	for {
 		frame, err := rx.ReadFrame()
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return nil
 			}
 			log.Debug("[STREAM] remote read error", "err", err)
