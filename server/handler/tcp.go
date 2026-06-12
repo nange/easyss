@@ -11,6 +11,7 @@ import (
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/server/nextproxy"
 	"github.com/nange/easyss/v3/shaper"
+	"github.com/nange/easyss/v3/util/bytespool"
 )
 
 type TCPHandler struct {
@@ -153,7 +154,8 @@ func (h *TCPHandler) copyFromClient(dr *crypto.DecryptedReader, dst net.Conn, si
 }
 
 func (h *TCPHandler) copyFromTarget(src net.Conn, s2c shaper.Shaper, signalActivity func()) error {
-	buf := make([]byte, 16*1024)
+	buf := bytespool.Get(16 * 1024)
+	defer bytespool.MustPut(buf)
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {

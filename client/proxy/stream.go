@@ -15,6 +15,7 @@ import (
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/transport"
+	"github.com/nange/easyss/v3/util/bytespool"
 )
 
 var ErrStreamIdleTimeout = errors.New("stream idle timeout")
@@ -169,13 +170,14 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 	frames := []protocol.Frame{hsFrame}
 	if localConn != nil {
 		_ = localConn.SetReadDeadline(time.Now().Add(5 * time.Millisecond))
-		buf := make([]byte, 16*1024)
+		buf := bytespool.Get(16 * 1024)
 		n, rErr := localConn.Read(buf)
 		_ = localConn.SetReadDeadline(time.Time{})
 		if n > 0 {
 			frames = append(frames, protocol.NewFrameDATA(buf[:n]))
 			log.Debug("[STREAM] merged first DATA into bootstrap record", "bytes", n, "read_err", rErr)
 		}
+		bytespool.MustPut(buf)
 	}
 
 	plaintext := protocol.EncodeFrames(frames)
@@ -272,7 +274,8 @@ func (h *StreamHandler) relay(localConn net.Conn, tx shaper.Shaper, rx *crypto.D
 }
 
 func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signalActivity func()) error {
-	buf := make([]byte, 16*1024)
+	buf := bytespool.Get(16 * 1024)
+	defer bytespool.MustPut(buf)
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {

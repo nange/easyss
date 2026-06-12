@@ -19,7 +19,9 @@ func TestAllocGet(t *testing.T) {
 	assert.Equal(t, 1024, cap(alloc.Get(1023)))
 	assert.Equal(t, 1024, len(alloc.Get(1024)))
 	assert.Equal(t, 65536, len(alloc.Get(65536)))
-	assert.Nil(t, alloc.Get(65537))
+	assert.Equal(t, 131072, cap(alloc.Get(65537)))
+	assert.Equal(t, 131072, len(alloc.Get(131072)))
+	assert.Nil(t, alloc.Get(131073))
 }
 
 func TestAllocPut(t *testing.T) {
@@ -30,6 +32,8 @@ func TestAllocPut(t *testing.T) {
 	assert.Nil(t, alloc.Put(make([]byte, 1023, 1024)), "put elem:1024 []bytes misbehavior")
 	assert.Nil(t, alloc.Put(make([]byte, 65536)), "put elem:65536 []bytes misbehavior")
 	assert.NotNil(t, alloc.Put(make([]byte, 65537)), "put elem:65537 []bytes misbehavior")
+	assert.Nil(t, alloc.Put(make([]byte, 131072)), "put elem:131072 []bytes misbehavior")
+	assert.NotNil(t, alloc.Put(make([]byte, 131073)), "put elem:131073 []bytes misbehavior")
 }
 
 func TestAllocPutThenGet(t *testing.T) {

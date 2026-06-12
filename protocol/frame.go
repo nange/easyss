@@ -221,11 +221,19 @@ func NewFrameHANDSHAKE(h Handshake) Frame {
 }
 
 func EncodeFrames(frames []Frame) []byte {
+	return EncodeFramesToBuf(frames, nil)
+}
+
+func EncodeFramesToBuf(frames []Frame, buf []byte) []byte {
 	total := 0
 	for _, f := range frames {
 		total += f.EncodedLen()
 	}
-	buf := make([]byte, 0, total)
+	if cap(buf) < total {
+		buf = make([]byte, 0, total)
+	} else {
+		buf = buf[:0]
+	}
 	for _, f := range frames {
 		var header [FrameHeaderSize]byte
 		header[0] = byte(f.Type)

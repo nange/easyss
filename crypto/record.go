@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/util/bytespool"
 )
 
 const (
@@ -95,13 +96,15 @@ func (rr *RecordReader) ReadRecord() ([]byte, error) {
 		return nil, fmt.Errorf("crypto: ciphertext exceeds max %d, got %d", MaxCipherRecordSize, cipherLen)
 	}
 
-	ciphertext := make([]byte, cipherLen)
+	ciphertext := bytespool.Get(cipherLen)
 	if _, err := io.ReadFull(rr.r, ciphertext); err != nil {
+		bytespool.MustPut(ciphertext)
 		return nil, fmt.Errorf("crypto: read ciphertext: %w", err)
 	}
 
 	nonce := rr.counter.Next()
 	plaintext, err := rr.enc.Decrypt(ciphertext, rr.aad, nonce[:])
+	bytespool.MustPut(ciphertext)
 	if err != nil {
 		return nil, fmt.Errorf("crypto: decrypt record: %w", err)
 	}

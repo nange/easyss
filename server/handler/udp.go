@@ -12,6 +12,7 @@ import (
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/server/nextproxy"
 	"github.com/nange/easyss/v3/shaper"
+	"github.com/nange/easyss/v3/util/bytespool"
 )
 
 const udpBufSize = 65535
@@ -129,7 +130,8 @@ func (h *UDPHandler) dialTarget(target string) (net.Conn, error) {
 }
 
 func (h *UDPHandler) readFromTarget(conn net.Conn, s2c shaper.Shaper, done <-chan struct{}) error {
-	buf := make([]byte, udpBufSize)
+	buf := bytespool.Get(udpBufSize)
+	defer bytespool.MustPut(buf)
 	for {
 		select {
 		case <-done:
