@@ -65,10 +65,11 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 }
 
 func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg, domain string) error {
-	c := &dns.Client{Timeout: 5 * time.Second, UDPSize: 8192}
 	var lastErr error
 	for _, addr := range directDNSServers {
-		resp, _, err := c.Exchange(msg, addr)
+		ctx, cancel := context.WithTimeout(context.Background(), s.dialTimeout)
+		resp, err := s.exchangeDirectDNS(ctx, msg, addr)
+		cancel()
 		if err != nil {
 			lastErr = err
 			continue
@@ -79,6 +80,21 @@ func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAdd
 	}
 	log.Error("[DNS_DIRECT]", "domain", domain, "err", lastErr)
 	return lastErr
+}
+
+func (s *Socks5Server) exchangeDirectDNS(ctx context.Context, msg *dns.Msg, addr string) (*dns.Msg, error) {
+	conn, err := s.directDialContext(ctx, "udp", addr)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	_ = conn.SetDeadline(time.Now().Add(s.dialTimeout))
+	dnsConn := &dns.Conn{Conn: conn, UDPSize: 8192}
+	if err := dnsConn.WriteMsg(msg); err != nil {
+		return nil, err
+	}
+	return dnsConn.ReadMsg()
 }
 
 func (s *Socks5Server) proxyDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg, domain string) error {
@@ -187,7 +203,9 @@ func (s *Socks5Server) directUDPRelay(srv *socks5.Server, clientAddr *net.UDPAdd
 		return err
 	}
 
-	rc, err := net.Dial("udp", dst)
+	ctx, cancel := context.WithTimeout(context.Background(), s.dialTimeout)
+	rc, err := s.directDialContext(ctx, "udp", dst)
+	cancel()
 	if err != nil {
 		return err
 	}

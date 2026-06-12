@@ -32,10 +32,11 @@ type HTTP2Transport struct {
 }
 
 type Config struct {
-	ServerURL string
-	TLSConfig *utls.Config
-	SlotCount int
-	Timeout   time.Duration
+	ServerURL   string
+	TLSConfig   *utls.Config
+	SlotCount   int
+	Timeout     time.Duration
+	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 func New(cfg Config) (*HTTP2Transport, error) {
@@ -53,7 +54,7 @@ func New(cfg Config) (*HTTP2Transport, error) {
 
 	slots := make([]*transportSlot, slotCount)
 	for i := range slots {
-		slots[i] = newSlot(cfg.TLSConfig, timeout)
+		slots[i] = newSlot(cfg.TLSConfig, timeout, cfg.DialContext)
 	}
 
 	return &HTTP2Transport{
@@ -64,7 +65,11 @@ func New(cfg Config) (*HTTP2Transport, error) {
 	}, nil
 }
 
-func newSlot(utlsCfg *utls.Config, timeout time.Duration) *transportSlot {
+func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error)) *transportSlot {
+	if dialContext == nil {
+		dialContext = defaultDialContext
+	}
+
 	protos := &http.Protocols{}
 	protos.SetHTTP2(true)
 	protos.SetUnencryptedHTTP2(true)
@@ -85,8 +90,10 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration) *transportSlot {
 		MaxConnsPerHost:   1,
 		IdleConnTimeout:   4 * timeout,
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			dialer := &net.Dialer{Timeout: timeout}
-			tcpConn, err := dialer.DialContext(ctx, network, addr)
+			dialCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+
+			tcpConn, err := dialContext(dialCtx, network, addr)
 			if err != nil {
 				return nil, err
 			}
@@ -112,6 +119,11 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration) *transportSlot {
 		},
 	}
 	return &transportSlot{t: tr}
+}
+
+func defaultDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := &net.Dialer{}
+	return dialer.DialContext(ctx, network, addr)
 }
 
 func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (transport.Stream, error) {
