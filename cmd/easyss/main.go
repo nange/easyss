@@ -122,7 +122,7 @@ func (a *App) Start() error {
 		if a.cfg.Local.BindAll {
 			socksAddr = "0.0.0.0:" + strconv.Itoa(a.cfg.Local.SocksPort)
 		}
-		socksServer, err := proxy.NewSocks5Server(socksAddr, a.cfg.AuthUsername, a.cfg.AuthPassword, a.streamHandler, cli.Router(), method, !a.cfg.Local.EnableQUIC, timeout)
+		socksServer, err := proxy.NewSocks5Server(socksAddr, a.cfg.AuthUsername, a.cfg.AuthPassword, a.streamHandler, cli.Router(), method, !a.cfg.Local.EnableQUIC, timeout, cli.DialContext)
 		if err != nil {
 			log.Error("[EASYSS-V3] create socks5 server", "err", err)
 			return err
@@ -171,7 +171,6 @@ func (a *App) Start() error {
 		socksProxyAddr := "socks5://127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
 		a.tunMgr = tun.New(tun.Config{
 			Socks5Addr: socksProxyAddr,
-			LogLevel:   a.cfg.Log.Level,
 		})
 
 		icmpHandler := tun.NewICMPHandler(cli.Router())

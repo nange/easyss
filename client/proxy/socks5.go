@@ -17,10 +17,12 @@ import (
 type Socks5Server struct {
 	srv *socks5.Server
 
-	handler     *StreamHandler
-	router      *router.Router
-	method      protocol.Method
-	disableQUIC bool
+	handler           *StreamHandler
+	router            *router.Router
+	method            protocol.Method
+	disableQUIC       bool
+	directDialContext func(context.Context, string, string) (net.Conn, error)
+	dialTimeout       time.Duration
 
 	udpMu          sync.RWMutex
 	udpExch        map[string]*UDPExchange
@@ -29,19 +31,24 @@ type Socks5Server struct {
 	udpIdleTimeout time.Duration
 }
 
-func NewSocks5Server(listenAddr, username, password string, handler *StreamHandler, rt *router.Router, method protocol.Method, disableQUIC bool, udpIdleTimeout time.Duration) (*Socks5Server, error) {
+func NewSocks5Server(listenAddr, username, password string, handler *StreamHandler, rt *router.Router, method protocol.Method, disableQUIC bool, udpIdleTimeout time.Duration, directDialContext func(context.Context, string, string) (net.Conn, error)) (*Socks5Server, error) {
 	if udpIdleTimeout <= 0 {
 		udpIdleTimeout = 30 * time.Second
 	}
+	if directDialContext == nil {
+		directDialContext = defaultDirectDialContext
+	}
 	s := &Socks5Server{
-		handler:        handler,
-		router:         rt,
-		method:         method,
-		disableQUIC:    disableQUIC,
-		udpExch:        make(map[string]*UDPExchange),
-		directUDP:      make(map[string]net.Conn),
-		quit:           make(chan struct{}),
-		udpIdleTimeout: udpIdleTimeout,
+		handler:           handler,
+		router:            rt,
+		method:            method,
+		disableQUIC:       disableQUIC,
+		directDialContext: directDialContext,
+		dialTimeout:       udpIdleTimeout,
+		udpExch:           make(map[string]*UDPExchange),
+		directUDP:         make(map[string]net.Conn),
+		quit:              make(chan struct{}),
+		udpIdleTimeout:    udpIdleTimeout,
 	}
 	srv, err := socks5.NewClassicServer(listenAddr, "127.0.0.1", username, password, 0, 0)
 	if err != nil {
@@ -49,6 +56,11 @@ func NewSocks5Server(listenAddr, username, password string, handler *StreamHandl
 	}
 	s.srv = srv
 	return s, nil
+}
+
+func defaultDirectDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := &net.Dialer{}
+	return dialer.DialContext(ctx, network, addr)
 }
 
 func (s *Socks5Server) Start() error {
@@ -109,7 +121,7 @@ func (s *Socks5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 		return s.replyError(c, r, socks5.RepNotAllowed)
 	case router.HostRuleDirect:
 		log.Info("[TCP_DIRECT]", "target", target, "local", local)
-		rc, err := r.Connect(c)
+		rc, err := s.directTCPConnect(c, r, target)
 		if err != nil {
 			log.Error("[TCP_DIRECT] connect", "target", target, "err", err)
 			return err
@@ -147,6 +159,34 @@ func (s *Socks5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 	}
 
 	return nil
+}
+
+func (s *Socks5Server) directTCPConnect(c net.Conn, r *socks5.Request, target string) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.dialTimeout)
+	defer cancel()
+
+	rc, err := s.directDialContext(ctx, "tcp", target)
+	if err != nil {
+		_ = s.replyError(c, r, socks5.RepHostUnreachable)
+		return nil, err
+	}
+
+	a, bindAddr, bindPort, err := socks5.ParseAddress(rc.LocalAddr().String())
+	if err != nil {
+		rc.Close()
+		_ = s.replyError(c, r, socks5.RepHostUnreachable)
+		return nil, err
+	}
+	if a == socks5.ATYPDomain {
+		bindAddr = bindAddr[1:]
+	}
+	p := socks5.NewReply(socks5.RepSuccess, a, bindAddr, bindPort)
+	if _, err := p.WriteTo(c); err != nil {
+		rc.Close()
+		return nil, err
+	}
+
+	return rc, nil
 }
 
 func (s *Socks5Server) UDPHandle(srv *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) error {

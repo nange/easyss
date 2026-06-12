@@ -319,7 +319,6 @@ func (a *TrayApp) createTun2socks() error {
 	a.cfg.Local.EnableTun2socks = true
 	a.tunMgr = tun.New(tun.Config{
 		Socks5Addr: fmt.Sprintf("socks5://127.0.0.1:%d", a.cfg.Local.SocksPort),
-		LogLevel:   a.cfg.Log.Level,
 	})
 
 	if a.cli == nil {

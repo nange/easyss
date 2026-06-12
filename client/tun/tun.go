@@ -59,13 +59,29 @@ func New(cfg Config) *Manager {
 		cfg.UDPTimeout = 5 * time.Minute
 	}
 	if cfg.LogLevel == "" {
-		cfg.LogLevel = "info"
+		cfg.LogLevel = "warn"
 	}
 	if cfg.Device == "" {
 		cfg.Device = "tun2"
 	}
-	if cfg.Interface == "" {
-		cfg.Interface = defaultInterface()
+	if cfg.Interface == "" || cfg.LocalGateway == "" {
+		gw, dev, err := util.SysGatewayAndDevice()
+		if err == nil {
+			if cfg.Interface == "" {
+				cfg.Interface = dev
+			}
+			if cfg.LocalGateway == "" {
+				cfg.LocalGateway = gw
+			}
+		} else {
+			log.Warn("[TUN] detect default gateway/interface failed", "err", err)
+		}
+	}
+	if cfg.LocalGatewayV6 == "" {
+		gw, _, err := util.SysGatewayAndDeviceV6()
+		if err == nil {
+			cfg.LocalGatewayV6 = gw
+		}
 	}
 	if cfg.TunIP == "" {
 		cfg.TunIP = "10.0.0.1"
@@ -241,8 +257,4 @@ func ipSub(ip, mask string) string {
 func runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	return cmd.CombinedOutput()
-}
-
-func defaultInterface() string {
-	return ""
 }

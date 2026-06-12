@@ -1,8 +1,10 @@
 package client
 
 import (
+	"context"
 	cryptorand "crypto/rand"
 	"math/big"
+	"net"
 	"sync"
 
 	"github.com/nange/easyss/v3/client/config"
@@ -12,6 +14,8 @@ import (
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/transport"
 	"github.com/nange/easyss/v3/transport/http2"
+	"github.com/nange/easyss/v3/util"
+	"github.com/xjasonlyu/tun2socks/v2/dialer"
 )
 
 type Client struct {
@@ -20,6 +24,7 @@ type Client struct {
 	transport *http2.HTTP2Transport
 	shaperCfg shaper.Config
 	masterKey []byte
+	dialer    *dialer.Dialer
 
 	mu sync.RWMutex
 }
@@ -31,6 +36,7 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	}
 
 	tlsCfg := cfg.UTLSConfig()
+	directDialer, directIface := newDirectDialer()
 
 	slotCount := chooseSlotCount(cfg.Transport.ConnCountMin, cfg.Transport.ConnCountMax)
 
@@ -39,12 +45,15 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		TLSConfig: tlsCfg,
 		SlotCount: slotCount,
 		Timeout:   cfg.TimeoutDuration(),
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialWithConfig(ctx, cfg, directDialer, network, addr)
+		},
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	log.Info("[CLIENT] transport initialized", "server_url", cfg.ServerURL(), "slots", slotCount, "server_addr", cfg.DefaultServerAddr())
+	log.Info("[CLIENT] transport initialized", "server_url", cfg.ServerURL(), "slots", slotCount, "server_addr", cfg.DefaultServerAddr(), "direct_iface", directIface)
 
 	rt, err := router.New(router.Config{
 		ProxyRule:         router.ParseProxyRule(cfg.Routing.ProxyRule),
@@ -67,7 +76,33 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		transport: tr,
 		shaperCfg: shaperCfg,
 		masterKey: masterKey,
+		dialer:    directDialer,
 	}, nil
+}
+
+func newDirectDialer() (*dialer.Dialer, string) {
+	_, dev, err := util.SysGatewayAndDevice()
+	if err != nil || dev == "" {
+		log.Warn("[CLIENT] detect default interface failed", "err", err)
+		return dialer.New(), ""
+	}
+
+	iface, err := net.InterfaceByName(dev)
+	if err != nil {
+		log.Warn("[CLIENT] load default interface failed", "name", dev, "err", err)
+		return dialer.New(), ""
+	}
+
+	return dialer.New(dialer.WithBindToInterface(iface)), dev
+}
+
+func dialWithConfig(ctx context.Context, cfg *config.ClientConfig, d *dialer.Dialer, network, addr string) (net.Conn, error) {
+	if cfg.Local.EnableTun2socks && d != nil {
+		return d.DialContext(ctx, network, addr)
+	}
+
+	nd := &net.Dialer{}
+	return nd.DialContext(ctx, network, addr)
 }
 
 func chooseSlotCount(minCount, maxCount int) int {
@@ -94,6 +129,10 @@ func (c *Client) Router() *router.Router {
 
 func (c *Client) Transport() transport.Transport {
 	return c.transport
+}
+
+func (c *Client) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	return dialWithConfig(ctx, c.cfg, c.dialer, network, addr)
 }
 
 func (c *Client) MasterKey() []byte {

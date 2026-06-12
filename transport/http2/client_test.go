@@ -25,7 +25,7 @@ func TestUTLSDialUsesHTTP2(t *testing.T) {
 	slot := newSlot(&utls.Config{
 		InsecureSkipVerify: true,
 		NextProtos:         []string{"h2"},
-	}, time.Second)
+	}, time.Second, nil)
 	t.Cleanup(slot.t.CloseIdleConnections)
 
 	req, err := http.NewRequest(http.MethodPost, srv.URL, nil)
