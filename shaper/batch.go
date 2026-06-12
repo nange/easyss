@@ -17,6 +17,7 @@ type batchShaper struct {
 	batchSize    int
 	maxChunkSize int
 	window       time.Duration
+	timerStarted bool
 	closing      bool
 	err          error
 }
@@ -53,7 +54,9 @@ func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 
 	if bs.batchSize >= bs.maxChunkSize {
 		return bs.flush()
-	} else {
+	}
+	if !bs.timerStarted {
+		bs.timerStarted = true
 		bs.timer.Reset(bs.window)
 	}
 
@@ -81,6 +84,7 @@ func (bs *batchShaper) flush() error {
 		return nil
 	}
 
+	bs.timerStarted = false
 	bs.timer.Stop()
 
 	padFrames := BuildPaddingFrames(bs.batchSize)
@@ -108,5 +112,6 @@ func (bs *batchShaper) flush() error {
 func (bs *batchShaper) onTimer() {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
+	bs.timerStarted = false
 	_ = bs.flush()
 }
