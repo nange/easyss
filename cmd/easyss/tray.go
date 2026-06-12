@@ -278,7 +278,7 @@ func (a *TrayApp) addCatLogsMenu() {
 		for {
 			select {
 			case <-catLog.ClickedCh:
-				if err := catLogFile(a.cfg.Log.FilePath); err != nil {
+				if err := a.catLog(); err != nil {
 					log.Error("[SYSTRAY] cat log", "err", err)
 				}
 			case <-a.closing:
@@ -286,6 +286,14 @@ func (a *TrayApp) addCatLogsMenu() {
 			}
 		}
 	}()
+}
+
+func (a *TrayApp) catLog() error {
+	filePath := a.cfg.Log.FilePath
+	if filePath == "" {
+		return fmt.Errorf("log file path is empty, please configure log.file_path in config.json")
+	}
+	return catLogFile(filePath)
 }
 
 func (a *TrayApp) addExitMenu() {
@@ -390,17 +398,29 @@ func (a *TrayApp) startLocalService() {
 }
 
 func catLogFile(filePath string) error {
+	var linuxCmd []string
+
 	switch runtime.GOOS {
-	case "windows":
-		if !util.SysSupportPowershell() {
-			return fmt.Errorf("powershell is required on windows")
-		}
-		winArg := fmt.Sprintf(`-FilePath powershell -ArgumentList "-Command", "Get-Content", "-Wait", "-Tail 100", "%s"`, filePath)
-		_, err := util.Command("powershell", "-Command", "Start-Process", winArg)
-		return err
 	case "linux":
-		cmd := []string{"x-terminal-emulator", "-e", "tail", "-50f", filePath}
-		if IsRoot() {
+		title := "View Easyss Logs"
+		switch {
+		case util.SysSupportXTerminalEmulator():
+			linuxCmd = []string{"x-terminal-emulator", "-e", "tail", "-50f", filePath}
+		case util.SysSupportGnomeTerminal():
+			linuxCmd = []string{"gnome-terminal", "--hide-menubar", "--title", title, "--", "tail", "-50f", filePath}
+		case util.SysSupportMateTerminal():
+			linuxCmd = []string{"mate-terminal", "--hide-menubar", "--title", title, "--", "tail", "-50f", filePath}
+		case util.SysSupportKonsole():
+			linuxCmd = []string{"konsole", "--hide-menubar", "-e", "tail", "-50f", filePath}
+		case util.SysSupportXfce4Terminal():
+			linuxCmd = []string{"xfce4-terminal", "--hide-menubar", "--hide-toolbar", "--title", title, "--command", fmt.Sprintf("tail -50f %s", filePath)}
+		case util.SysSupportLxterminal():
+			linuxCmd = []string{"lxterminal", "--title", title, "--command", fmt.Sprintf("tail -50f %s", filePath)}
+		case util.SysSupportTerminator():
+			linuxCmd = []string{"terminator", "--title", title, "--command", fmt.Sprintf("tail -50f %s", filePath)}
+		}
+
+		if len(linuxCmd) > 0 && IsRoot() {
 			username := ""
 			if uid := os.Getenv("PKEXEC_UID"); uid != "" {
 				if u, err := user.LookupId(uid); err == nil {
@@ -417,15 +437,22 @@ func catLogFile(filePath string) error {
 				if dbusAddr := os.Getenv("DBUS_SESSION_BUS_ADDRESS"); dbusAddr != "" {
 					newCmd = append(newCmd, "env", fmt.Sprintf("DBUS_SESSION_BUS_ADDRESS=%s", dbusAddr))
 				}
-				newCmd = append(newCmd, cmd...)
-				cmd = newCmd
-				log.Info("[SYSTRAY] cat log: switching to user", "user", username, "cmd", cmd)
+				newCmd = append(newCmd, linuxCmd...)
+				linuxCmd = newCmd
+				log.Info("[SYSTRAY] cat log: switching to user", "user", username, "cmd", linuxCmd)
 			}
 		}
-		_, err := util.Command(cmd[0], cmd[1:]...)
+		if len(linuxCmd) == 0 {
+			return fmt.Errorf("no supported terminal emulator found")
+		}
+		_, err := util.Command(linuxCmd[0], linuxCmd[1:]...)
+		return err
+	case "windows":
+		_, err := util.Command("cmd", "/c", "start", "powershell", "-NoExit", "-Command",
+			fmt.Sprintf("Get-Content -Wait -Tail 100 '%s'", filePath))
 		return err
 	case "darwin":
-		_, err := util.Command("open", "-a", "Console", filePath)
+		_, err := util.Command("osascript", "-e", fmt.Sprintf(`tell application "Terminal" to do script "tail -f \"%s\""`, filePath), "-e", `tell application "Terminal" to activate`)
 		return err
 	default:
 		return fmt.Errorf("unsupported os: %s", runtime.GOOS)
