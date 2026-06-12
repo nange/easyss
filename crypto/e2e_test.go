@@ -52,13 +52,20 @@ func TestRecordWriterFlushesAfterCompleteRecord(t *testing.T) {
 
 	w := &flushBuffer{}
 	require.NoError(t, NewRecordWriter(w, enc, counter, aad).WriteRecord([]byte("hello")))
+	require.Equal(t, 1, w.writes)
 	require.Equal(t, 1, w.flushes)
 	require.Greater(t, w.Len(), 3)
 }
 
 type flushBuffer struct {
 	bytes.Buffer
+	writes  int
 	flushes int
+}
+
+func (fb *flushBuffer) Write(p []byte) (int, error) {
+	fb.writes++
+	return fb.Buffer.Write(p)
 }
 
 func (fb *flushBuffer) Flush() {

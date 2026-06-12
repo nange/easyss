@@ -54,11 +54,18 @@ func (rw *RecordWriter) WriteRecord(plaintext []byte) error {
 	binary.BigEndian.PutUint16(lenBuf[1:3], uint16(len(ciphertext)&0xFFFF))
 	lenBuf[0] = byte(len(ciphertext) >> 16)
 
-	if _, err := rw.w.Write(lenBuf[:]); err != nil {
-		return fmt.Errorf("crypto: write cipher_len: %w", err)
+	record := bytespool.Get(protocol.MaxCipherLenSize + len(ciphertext))
+	copy(record[:protocol.MaxCipherLenSize], lenBuf[:])
+	copy(record[protocol.MaxCipherLenSize:], ciphertext)
+
+	recordLen := len(record)
+	n, err := rw.w.Write(record)
+	bytespool.MustPut(record)
+	if err != nil {
+		return fmt.Errorf("crypto: write record: %w", err)
 	}
-	if _, err := rw.w.Write(ciphertext); err != nil {
-		return fmt.Errorf("crypto: write ciphertext: %w", err)
+	if n != recordLen {
+		return io.ErrShortWrite
 	}
 	if flusher, ok := rw.w.(recordFlusher); ok {
 		flusher.Flush()
