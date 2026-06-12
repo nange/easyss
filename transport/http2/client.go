@@ -3,6 +3,7 @@ package http2
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"math"
 	"net"
@@ -63,11 +64,15 @@ func New(cfg Config) (*HTTP2Transport, error) {
 }
 
 func newSlot(utlsCfg *utls.Config, timeout time.Duration) *transportSlot {
+	protos := &http.Protocols{}
+	protos.SetHTTP2(true)
+	protos.SetUnencryptedHTTP2(true)
+
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			NextProtos: []string{"h2"},
 		},
-		Protocols: &http.Protocols{},
+		Protocols: protos,
 		HTTP2: &http.HTTP2Config{
 			SendPingTimeout:  15 * time.Second,
 			WriteByteTimeout: timeout / 2,
@@ -95,10 +100,13 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration) *transportSlot {
 				_ = tcpConn.Close()
 				return nil, err
 			}
+			if proto := uconn.ConnectionState().NegotiatedProtocol; proto != "h2" {
+				_ = uconn.Close()
+				return nil, fmt.Errorf("server negotiated %q, want h2", proto)
+			}
 			return uconn, nil
 		},
 	}
-	tr.Protocols.SetHTTP2(true)
 	return &transportSlot{t: tr}
 }
 
