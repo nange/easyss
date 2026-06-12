@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/caddyserver/certmagic"
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/server/config"
@@ -215,8 +216,11 @@ func (s *Server) Start() error {
 		Handler:   s.mux,
 		Protocols: &http.Protocols{},
 		HTTP2: &http.HTTP2Config{
-			SendPingTimeout:  timeout / 2,
-			WriteByteTimeout: timeout / 2,
+			MaxReadFrameSize:              sharedconfig.DefaultHTTP2MaxReadFrameSize,
+			MaxReceiveBufferPerConnection: sharedconfig.DefaultHTTP2ReceiveBufferPerConnection,
+			MaxReceiveBufferPerStream:     sharedconfig.DefaultHTTP2ReceiveBufferPerStream,
+			SendPingTimeout:               timeout / 2,
+			WriteByteTimeout:              timeout / 2,
 		},
 		IdleTimeout:       timeout / 2,
 		ReadHeaderTimeout: min(timeout/2, 10*time.Second),
