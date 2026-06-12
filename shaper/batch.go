@@ -1,6 +1,7 @@
 package shaper
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -49,8 +50,18 @@ func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 		return bs.err
 	}
 
+	frameSize := f.EncodedLen()
+	if frameSize > bs.maxChunkSize {
+		return fmt.Errorf("shaper: frame size %d exceeds max record size %d", frameSize, bs.maxChunkSize)
+	}
+	if bs.batchSize > 0 && bs.batchSize+frameSize > bs.maxChunkSize {
+		if err := bs.flush(); err != nil {
+			return err
+		}
+	}
+
 	bs.frames = append(bs.frames, f)
-	bs.batchSize += f.EncodedLen()
+	bs.batchSize += frameSize
 
 	if bs.batchSize >= bs.maxChunkSize {
 		return bs.flush()
@@ -92,11 +103,13 @@ func (bs *batchShaper) flush() error {
 	for _, f := range padFrames {
 		padSize += f.EncodedLen()
 	}
+	plaintextSize := bs.batchSize
 	if bs.batchSize+padSize <= bs.maxChunkSize {
 		bs.frames = append(bs.frames, padFrames...)
+		plaintextSize += padSize
 	}
 
-	plaintext := bytespool.Get(bs.batchSize + padSize)
+	plaintext := bytespool.Get(plaintextSize)
 	plaintext = protocol.EncodeFramesToBuf(bs.frames, plaintext)
 	if err := bs.writer.WriteRecord(plaintext); err != nil {
 		bs.err = err
