@@ -37,3 +37,5 @@ easyss.apk
 .build_android_env
 go.work*
 bin/
+
+v3_detailed_design.md
