@@ -6,6 +6,7 @@ import (
 
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/util/bytespool"
 )
 
 type batchShaper struct {
@@ -91,11 +92,13 @@ func (bs *batchShaper) flush() error {
 		bs.frames = append(bs.frames, padFrames...)
 	}
 
-	plaintext := protocol.EncodeFrames(bs.frames)
+	plaintext := bytespool.Get(bs.batchSize + padSize)
+	plaintext = protocol.EncodeFramesToBuf(bs.frames, plaintext)
 	if err := bs.writer.WriteRecord(plaintext); err != nil {
 		bs.err = err
 		return err
 	}
+	bytespool.MustPut(plaintext)
 
 	bs.frames = bs.frames[:0]
 	bs.batchSize = 0

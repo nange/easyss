@@ -15,12 +15,12 @@ type Allocator struct {
 	buffers []sync.Pool
 }
 
-// NewAllocator initiates a []byte allocator for frames less than 65536 bytes,
+// NewAllocator initiates a []byte allocator for frames less than 131072 bytes,
 // the waste(memory fragmentation) of space allocation is guaranteed to be
 // no more than 50%.
 func NewAllocator() *Allocator {
 	alloc := new(Allocator)
-	alloc.buffers = make([]sync.Pool, 17) // 1B -> 64K
+	alloc.buffers = make([]sync.Pool, 18) // 1B -> 128K
 	for k := range alloc.buffers {
 		i := k
 		alloc.buffers[k].New = func() any {
@@ -32,7 +32,7 @@ func NewAllocator() *Allocator {
 
 // Get a []byte from pool with most appropriate cap
 func (alloc *Allocator) Get(size int) []byte {
-	if size <= 0 || size > 65536 {
+	if size <= 0 || size > 131072 {
 		return nil
 	}
 
@@ -48,7 +48,7 @@ func (alloc *Allocator) Get(size int) []byte {
 // which the cap must be exactly 2^n
 func (alloc *Allocator) Put(buf []byte) error {
 	bits := msb(cap(buf))
-	if cap(buf) == 0 || cap(buf) > 65536 || cap(buf) != 1<<bits {
+	if cap(buf) == 0 || cap(buf) > 131072 || cap(buf) != 1<<bits {
 		return errors.New("allocator Put() incorrect buffer size")
 	}
 

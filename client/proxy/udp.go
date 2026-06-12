@@ -10,6 +10,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/client/router"
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/txthinking/socks5"
 )
 
@@ -201,7 +202,8 @@ func (s *Socks5Server) directUDPRelay(srv *socks5.Server, clientAddr *net.UDPAdd
 			delete(s.directUDP, key)
 			s.udpMu.Unlock()
 		}()
-		buf := make([]byte, 65507)
+		buf := bytespool.Get(65507)
+		defer bytespool.MustPut(buf)
 		for {
 			_ = rc.SetReadDeadline(time.Now().Add(2 * time.Minute))
 			n, err := rc.Read(buf)
