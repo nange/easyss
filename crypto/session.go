@@ -259,11 +259,19 @@ func (sk *StreamKeys) ReadFirstRecordWithTimeout(ctx context.Context, src io.Rea
 
 	select {
 	case <-ctx.Done():
+		closeReader(src)
 		return FirstRecord{}, ctx.Err()
 	case <-timer.C:
+		closeReader(src)
 		return FirstRecord{}, fmt.Errorf("crypto: bootstrap handshake timeout after %v", timeout)
 	case res := <-ch:
 		return res.fr, res.err
+	}
+}
+
+func closeReader(r io.Reader) {
+	if closer, ok := r.(io.Closer); ok {
+		closer.Close()
 	}
 }
 
