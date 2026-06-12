@@ -12,6 +12,7 @@ import (
 
 	"github.com/caddyserver/certmagic"
 	"github.com/nange/easyss/v3/crypto"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/server/config"
 	"github.com/nange/easyss/v3/server/handler"
 	"github.com/nange/easyss/v3/server/nextproxy"
@@ -146,9 +147,18 @@ func cleanCertmagicDomainAssets(ctx context.Context, storage certmagic.Storage, 
 }
 
 func (s *Server) Start() error {
+	cfg := s.cfg
+	log.Info("[SERVER] starting", "listen", cfg.Listen, "domain", cfg.Domain, "timeout", cfg.Timeout)
+
 	tlsConfig, err := s.initTLS()
 	if err != nil {
+		log.Error("[SERVER] init TLS failed", "err", err)
 		return err
+	}
+	if cfg.CertPath != "" && cfg.KeyPath != "" {
+		log.Info("[SERVER] TLS mode: cert files", "cert", cfg.CertPath, "key", cfg.KeyPath)
+	} else {
+		log.Info("[SERVER] TLS mode: certmagic (Let's Encrypt)", "domain", cfg.Domain, "email", cfg.Email)
 	}
 
 	timeout := time.Duration(s.cfg.Timeout) * time.Second
@@ -171,12 +181,15 @@ func (s *Server) Start() error {
 
 	np, err := nextproxy.New(s.cfg.NextProxy.URL, s.cfg.NextProxy.EnableUDP, s.cfg.NextProxy.AllHost)
 	if err != nil {
+		log.Error("[SERVER] next proxy init failed", "err", err)
 		return fmt.Errorf("next proxy: %w", err)
 	}
 	if np != nil {
 		if err := np.LoadIPDomainFiles(s.cfg.NextProxy.IPsFile, s.cfg.NextProxy.DomainsFile); err != nil {
+			log.Error("[SERVER] next proxy load ip/domain failed", "err", err)
 			return fmt.Errorf("next proxy load ip/domain: %w", err)
 		}
+		log.Info("[SERVER] next proxy configured", "url", s.cfg.NextProxy.URL, "udp", s.cfg.NextProxy.EnableUDP, "all_host", s.cfg.NextProxy.AllHost)
 	}
 
 	proxyHandler := handler.NewProxyHandler(handler.ProxyHandlerConfig{
@@ -211,10 +224,13 @@ func (s *Server) Start() error {
 	s.httpServer.Protocols.SetHTTP1(true)
 	s.httpServer.Protocols.SetHTTP2(true)
 
+	log.Info("[SERVER] listening", "addr", s.cfg.Listen, "routes", []string{"/", "/v3/tcp", "/v3/udp", "/v3/icmp"})
 	return s.httpServer.ListenAndServeTLS("", "")
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	log.Info("[SERVER] shutting down")
+
 	if s.certCache != nil {
 		s.certCache.Stop()
 		s.certCache = nil

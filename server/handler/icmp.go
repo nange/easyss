@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/crypto"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
 	"golang.org/x/net/icmp"
@@ -52,11 +53,14 @@ func (h *ICMPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, targ
 }
 
 func (h *ICMPHandler) icmpExchange(target string, payload []byte) ([]byte, error) {
+	log.Debug("[ICMP] exchange", "target", target)
+
 	if len(payload) < 4 {
 		return nil, io.ErrUnexpectedEOF
 	}
 	conn, err := net.DialTimeout("ip4:icmp", target, 5*time.Second)
 	if err != nil {
+		log.Error("[ICMP] dial target failed", "target", target, "err", err)
 		return nil, err
 	}
 	defer conn.Close()
@@ -80,12 +84,14 @@ func (h *ICMPHandler) icmpExchange(target string, payload []byte) ([]byte, error
 	}
 
 	if _, err := conn.Write(wb); err != nil {
+		log.Error("[ICMP] write failed", "target", target, "err", err)
 		return nil, err
 	}
 
 	rb := make([]byte, 1500)
 	n, err := conn.Read(rb)
 	if err != nil {
+		log.Error("[ICMP] read failed", "target", target, "err", err)
 		return nil, err
 	}
 
