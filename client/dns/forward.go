@@ -1,8 +1,10 @@
 package dns
 
 import (
+	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/coocood/freecache"
 	"github.com/miekg/dns"
@@ -20,6 +22,7 @@ type ForwardServer struct {
 	listenAddr string
 	cache      *freecache.Cache
 	client     *dns.Client
+	dnsServer  *dns.Server
 	mu         sync.Mutex
 	running    bool
 }
@@ -33,16 +36,32 @@ func NewForwardServer(listenAddr string) *ForwardServer {
 }
 
 func (s *ForwardServer) Start() error {
-	server := &dns.Server{
+	s.mu.Lock()
+	s.dnsServer = &dns.Server{
 		Addr:    s.listenAddr,
 		Net:     "udp",
 		Handler: dns.HandlerFunc(s.handleDNS),
 	}
-
 	s.running = true
+	s.mu.Unlock()
+
 	log.Info("[DNS-FORWARD] starting forward dns server", "addr", s.listenAddr)
 
-	return server.ListenAndServe()
+	return s.dnsServer.ListenAndServe()
+}
+
+func (s *ForwardServer) Shutdown() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.dnsServer == nil {
+		return nil
+	}
+
+	log.Info("[DNS-FORWARD] shutting down dns server")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return s.dnsServer.ShutdownContext(ctx)
 }
 
 func (s *ForwardServer) handleDNS(w dns.ResponseWriter, r *dns.Msg) {

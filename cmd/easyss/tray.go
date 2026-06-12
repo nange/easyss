@@ -59,7 +59,7 @@ func (a *TrayApp) trayExit() {
 	case a.closing <- struct{}{}:
 	default:
 	}
-	a.Stop()
+	a.closeService()
 	os.Exit(0)
 }
 

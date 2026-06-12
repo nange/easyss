@@ -94,6 +94,7 @@ type App struct {
 	socksServer   *proxy.Socks5Server
 	httpServer    *proxy.HTTPProxyServer
 	streamHandler *proxy.StreamHandler
+	dnsServer     *dns.ForwardServer
 }
 
 func (a *App) Start() error {
@@ -158,9 +159,9 @@ func (a *App) Start() error {
 
 	if a.cfg.Local.EnableForwardDNS {
 		dnsAddr := "127.0.0.1:53"
-		forwardServer := dns.NewForwardServer(dnsAddr)
+		a.dnsServer = dns.NewForwardServer(dnsAddr)
 		go func() {
-			if err := forwardServer.Start(); err != nil {
+			if err := a.dnsServer.Start(); err != nil {
 				log.Error("[EASYSS-V3] dns forward server", "err", err)
 			}
 		}()
@@ -192,13 +193,24 @@ func (a *App) Stop() {
 		a.tunMgr.Stop()
 	}
 	if a.socksServer != nil {
-		_ = a.socksServer.Close()
+		if err := a.socksServer.Close(); err != nil {
+			log.Debug("[EASYSS-V3] socks server close", "err", err)
+		}
 	}
 	if a.httpServer != nil {
-		_ = a.httpServer.Close()
+		if err := a.httpServer.Close(); err != nil {
+			log.Debug("[EASYSS-V3] http server close", "err", err)
+		}
+	}
+	if a.dnsServer != nil {
+		if err := a.dnsServer.Shutdown(); err != nil {
+			log.Debug("[EASYSS-V3] dns server shutdown", "err", err)
+		}
 	}
 	if a.cli != nil {
-		_ = a.cli.Close()
+		if err := a.cli.Close(); err != nil {
+			log.Debug("[EASYSS-V3] client close", "err", err)
+		}
 	}
 }
 
