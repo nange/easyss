@@ -2,6 +2,7 @@ package http2
 
 import (
 	"context"
+	"crypto/tls"
 	"io"
 	"math"
 	"net"
@@ -63,6 +64,9 @@ func New(cfg Config) (*HTTP2Transport, error) {
 
 func newSlot(utlsCfg *utls.Config, timeout time.Duration) *transportSlot {
 	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			NextProtos: []string{"h2"},
+		},
 		Protocols: &http.Protocols{},
 		HTTP2: &http.HTTP2Config{
 			SendPingTimeout:  15 * time.Second,
