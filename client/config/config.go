@@ -8,6 +8,8 @@ import (
 	"os"
 	"time"
 
+	utls "github.com/refraction-networking/utls"
+
 	"github.com/nange/easyss/v3/config"
 )
 
@@ -133,6 +135,36 @@ func (c *ClientConfig) TLSConfig() *tls.Config {
 	}
 
 	return tlsCfg
+}
+
+func (c *ClientConfig) UTLSConfig() *utls.Config {
+	srv := c.DefaultServer()
+	if srv == nil {
+		return nil
+	}
+
+	sni := srv.SNI
+	if sni == "" {
+		sni = srv.Address
+	}
+
+	utlsCfg := &utls.Config{
+		ServerName: sni,
+		NextProtos: []string{"h2"},
+	}
+
+	if srv.CAPath != "" {
+		pool, err := x509.SystemCertPool()
+		if err != nil || pool == nil {
+			pool = x509.NewCertPool()
+		}
+		pem, err := os.ReadFile(srv.CAPath)
+		if err == nil && pool.AppendCertsFromPEM(pem) {
+			utlsCfg.RootCAs = pool
+		}
+	}
+
+	return utlsCfg
 }
 
 func LoadConfig(path string) (*ClientConfig, error) {

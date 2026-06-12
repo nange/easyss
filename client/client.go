@@ -30,7 +30,7 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		return nil, err
 	}
 
-	tlsCfg := cfg.TLSConfig()
+	tlsCfg := cfg.UTLSConfig()
 
 	slotCount := chooseSlotCount(cfg.Transport.ConnCountMin, cfg.Transport.ConnCountMax)
 

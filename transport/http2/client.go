@@ -2,13 +2,15 @@ package http2
 
 import (
 	"context"
-	"crypto/tls"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	utls "github.com/refraction-networking/utls"
 
 	"github.com/nange/easyss/v3/transport"
 )
@@ -28,7 +30,7 @@ type HTTP2Transport struct {
 
 type Config struct {
 	ServerURL string
-	TLSConfig *tls.Config
+	TLSConfig *utls.Config
 	SlotCount int
 	Timeout   time.Duration
 }
@@ -59,10 +61,9 @@ func New(cfg Config) (*HTTP2Transport, error) {
 	}, nil
 }
 
-func newSlot(cfg *tls.Config, timeout time.Duration) *transportSlot {
+func newSlot(utlsCfg *utls.Config, timeout time.Duration) *transportSlot {
 	tr := &http.Transport{
-		TLSClientConfig: cfg,
-		Protocols:       &http.Protocols{},
+		Protocols: &http.Protocols{},
 		HTTP2: &http.HTTP2Config{
 			SendPingTimeout:  15 * time.Second,
 			WriteByteTimeout: timeout / 2,
@@ -70,6 +71,28 @@ func newSlot(cfg *tls.Config, timeout time.Duration) *transportSlot {
 		ForceAttemptHTTP2: true,
 		MaxConnsPerHost:   1,
 		IdleConnTimeout:   4 * timeout,
+		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialer := &net.Dialer{Timeout: timeout}
+			tcpConn, err := dialer.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+
+			ucfg := utlsCfg.Clone()
+			if ucfg.ServerName == "" {
+				host, _, err := net.SplitHostPort(addr)
+				if err == nil {
+					ucfg.ServerName = host
+				}
+			}
+
+			uconn := utls.UClient(tcpConn, ucfg, utls.HelloChrome_Auto)
+			if err := uconn.HandshakeContext(ctx); err != nil {
+				_ = tcpConn.Close()
+				return nil, err
+			}
+			return uconn, nil
+		},
 	}
 	tr.Protocols.SetHTTP2(true)
 	return &transportSlot{t: tr}
