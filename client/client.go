@@ -68,6 +68,9 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	shaperCfg := shaper.Config{
 		Mode:          cfg.Shaper.Mode,
 		BatchWindowMS: cfg.Shaper.BatchWindowMS,
+		Cover: shaper.CoverConfig{
+			BudgetRatio: cfg.Shaper.Cover.BudgetRatio,
+		},
 	}
 
 	return &Client{

@@ -211,6 +211,15 @@ func NewFramePADDING(length uint16) Frame {
 	}
 }
 
+func NewFrameCOVER(length uint16) Frame {
+	payload := make([]byte, length)
+	return Frame{
+		Type:    FrameCOVER,
+		Length:  length,
+		Payload: payload,
+	}
+}
+
 func NewFrameHANDSHAKE(h Handshake) Frame {
 	payload := h.Encode()
 	return Frame{
