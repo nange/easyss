@@ -48,10 +48,13 @@ func (h *TCPHandler) dialTarget(network, addr string) (net.Conn, error) {
 func outboundTCPNetwork(addr string) string {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		return "tcp4"
+		return "tcp"
 	}
 	ip := net.ParseIP(host)
-	if ip != nil && ip.To4() == nil {
+	if ip == nil {
+		return "tcp"
+	}
+	if ip.To4() == nil {
 		return "tcp6"
 	}
 	return "tcp4"
