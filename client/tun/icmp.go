@@ -47,11 +47,13 @@ func (h *ICMPHandler) HandlePacket(pkt adapter.Packet) bool {
 
 	switch rule {
 	case router.HostRuleDirect:
+		log.Info("[ICMP_DIRECT]", "dst", dstAddr)
 		return false
 	case router.HostRuleBlock:
-		log.Debug("[TUN-ICMP] blocked", "dst", dstAddr)
+		log.Info("[ICMP_BLOCK] blocked", "dst", dstAddr)
 		return true
 	case router.HostRuleProxy:
+		log.Info("[ICMP_PROXY]", "dst", dstAddr)
 		return h.handleProxyICMP(pkt)
 	default:
 		return false

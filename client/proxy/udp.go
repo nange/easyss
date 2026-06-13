@@ -46,6 +46,7 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 
 	rule := s.router.MatchHostRule(domain)
 	if rule == router.HostRuleBlock {
+		log.Info("[DNS_BLOCK] blocked", "domain", domain, "qtype", qtype)
 		return responseBlockedDNSMsg(srv.UDPConn, clientAddr, msg, d.Address())
 	}
 
@@ -57,6 +58,7 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 	}
 
 	if isDirect {
+		log.Info("[DNS_DIRECT]", "domain", domain, "qtype", qtype)
 		return s.directDNSQuery(srv, clientAddr, d, msg, domain)
 	}
 
@@ -182,10 +184,13 @@ func (s *Socks5Server) handleRegularUDP(srv *socks5.Server, clientAddr *net.UDPA
 	rule := s.router.MatchHostRule(host)
 	switch rule {
 	case router.HostRuleBlock:
+		log.Info("[UDP_BLOCK] blocked", "host", host, "target", dst)
 		return nil
 	case router.HostRuleDirect:
+		log.Info("[UDP_DIRECT]", "target", dst)
 		return s.directUDPRelay(srv, clientAddr, d, dst)
 	case router.HostRuleProxy:
+		log.Info("[UDP_PROXY]", "target", dst)
 		return s.proxyUDPRelay(srv, clientAddr, d, dst)
 	}
 	return nil
