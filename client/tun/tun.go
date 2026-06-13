@@ -62,7 +62,11 @@ func New(cfg Config) *Manager {
 		cfg.LogLevel = "warn"
 	}
 	if cfg.Device == "" {
-		cfg.Device = "tun2"
+		if runtime.GOOS == "darwin" {
+			cfg.Device = "utun9"
+		} else {
+			cfg.Device = "tun-easyss"
+		}
 	}
 	if cfg.Interface == "" || cfg.LocalGateway == "" {
 		gw, dev, err := util.SysGatewayAndDevice()
@@ -84,13 +88,19 @@ func New(cfg Config) *Manager {
 		}
 	}
 	if cfg.TunIP == "" {
-		cfg.TunIP = "10.0.0.1"
+		cfg.TunIP = "198.18.0.1"
 	}
 	if cfg.TunGW == "" {
-		cfg.TunGW = "10.0.0.1"
+		cfg.TunGW = "198.18.0.1"
 	}
 	if cfg.TunMask == "" {
-		cfg.TunMask = "255.255.255.0"
+		cfg.TunMask = "255.255.0.0"
+	}
+	if cfg.TunIPV6Sub == "" {
+		cfg.TunIPV6Sub = "2001:0db8:0:f101::1"
+	}
+	if cfg.TunGWV6 == "" {
+		cfg.TunGWV6 = "fe80::30ff:1eff:feff:aaff"
 	}
 
 	return &Manager{
@@ -121,7 +131,6 @@ func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
 	key := &engine.Key{
 		MTU:        m.cfg.MTU,
 		Device:     m.cfg.Device,
-		Interface:  m.cfg.Interface,
 		LogLevel:   m.cfg.LogLevel,
 		UDPTimeout: m.cfg.UDPTimeout,
 		Proxy:      m.cfg.Socks5Addr,
