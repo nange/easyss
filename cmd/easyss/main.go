@@ -112,6 +112,9 @@ func (a *App) Start() error {
 	shaperCfg := shaper.Config{
 		Mode:          a.cfg.Shaper.Mode,
 		BatchWindowMS: a.cfg.Shaper.BatchWindowMS,
+		Cover: shaper.CoverConfig{
+			BudgetRatio: a.cfg.Shaper.Cover.BudgetRatio,
+		},
 	}
 
 	timeout := a.cfg.TimeoutDuration()

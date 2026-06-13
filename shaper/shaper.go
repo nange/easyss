@@ -13,9 +13,17 @@ type Shaper interface {
 	Close() error
 }
 
+type CoverConfig struct {
+	BudgetRatio float64 // cover traffic budget ratio to real traffic, 0.0-1.0 (default 0.10)
+	IdleTimeout int     // idle timeout in ms before sending cover frames (default 100)
+	MinSize     int     // min cover frame payload size in bytes (default 64)
+	MaxSize     int     // max cover frame payload size in bytes (default 1500)
+}
+
 type Config struct {
 	Mode          string
 	BatchWindowMS int
+	Cover         CoverConfig
 }
 
 type ShaperFunc func(frames []protocol.Frame) []protocol.Frame

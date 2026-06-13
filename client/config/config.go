@@ -50,8 +50,13 @@ type TransportConfig struct {
 }
 
 type ShaperConfig struct {
-	Mode          string `json:"mode"`
-	BatchWindowMS int    `json:"batch_window_ms"`
+	Mode          string             `json:"mode"`
+	BatchWindowMS int                `json:"batch_window_ms"`
+	Cover         ShaperCoverConfig  `json:"cover"`
+}
+
+type ShaperCoverConfig struct {
+	BudgetRatio float64 `json:"budget_ratio"`
 }
 
 type LogConfig struct {

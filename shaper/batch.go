@@ -3,6 +3,7 @@ package shaper
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nange/easyss/v3/crypto"
@@ -19,8 +20,9 @@ type batchShaper struct {
 	maxChunkSize int
 	window       time.Duration
 	timerStarted bool
-	closing      bool
+	closing      atomic.Bool
 	err          error
+	cover        *coverInjector
 }
 
 func NewLight(writer *crypto.RecordWriter, cfg Config) Shaper {
@@ -36,6 +38,8 @@ func NewLight(writer *crypto.RecordWriter, cfg Config) Shaper {
 	}
 	bs.timer = time.AfterFunc(window, bs.onTimer)
 	bs.timer.Stop()
+
+	bs.cover = newCoverInjector(cfg.Cover, bs.injectCoverFrame, bs.isClosing)
 	return bs
 }
 
@@ -43,11 +47,15 @@ func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 
-	if bs.closing {
+	if bs.closing.Load() {
 		return nil
 	}
 	if bs.err != nil {
 		return bs.err
+	}
+
+	if bs.cover != nil && f.Type != protocol.FrameCOVER && f.Type != protocol.FramePADDING {
+		bs.cover.addBudget(f.EncodedLen())
 	}
 
 	frameSize := f.EncodedLen()
@@ -82,11 +90,15 @@ func (bs *batchShaper) Flush() error {
 
 func (bs *batchShaper) Close() error {
 	bs.mu.Lock()
-	defer bs.mu.Unlock()
-	if err := bs.flush(); err != nil {
+	if bs.cover != nil {
+		bs.cover.stop()
+	}
+	err := bs.flush()
+	bs.mu.Unlock()
+	if err != nil {
 		return err
 	}
-	bs.closing = true
+	bs.closing.Store(true)
 	return nil
 }
 
@@ -127,4 +139,37 @@ func (bs *batchShaper) onTimer() {
 	defer bs.mu.Unlock()
 	bs.timerStarted = false
 	_ = bs.flush()
+}
+
+func (bs *batchShaper) injectCoverFrame(f protocol.Frame) error {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+
+	if bs.closing.Load() || bs.err != nil {
+		return nil
+	}
+
+	frameSize := f.EncodedLen()
+	if bs.batchSize > 0 && bs.batchSize+frameSize > bs.maxChunkSize {
+		if err := bs.flush(); err != nil {
+			return err
+		}
+	}
+
+	bs.frames = append(bs.frames, f)
+	bs.batchSize += frameSize
+
+	if bs.batchSize >= bs.maxChunkSize {
+		return bs.flush()
+	}
+	if !bs.timerStarted {
+		bs.timerStarted = true
+		bs.timer.Reset(bs.window)
+	}
+
+	return nil
+}
+
+func (bs *batchShaper) isClosing() bool {
+	return bs.closing.Load()
 }
