@@ -29,7 +29,7 @@ type StreamHandler struct {
 
 func NewStreamHandler(tr transport.Transport, masterKey []byte, shaperCfg shaper.Config, streamIdleTimeout time.Duration) *StreamHandler {
 	if streamIdleTimeout <= 0 {
-		streamIdleTimeout = 15 * time.Second
+		streamIdleTimeout = 120 * time.Second
 	}
 	return &StreamHandler{
 		transport:         tr,
@@ -302,34 +302,76 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 }
 
 func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Conn, signalActivity func()) error {
-	for {
-		frame, err := rx.ReadFrame()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return nil
-			}
-			log.Debug("[STREAM] remote read error", "err", err)
-			return err
-		}
+	type frameItem struct {
+		data []byte
+		fin  bool
+		rst  bool
+	}
 
-		switch frame.Type {
-		case protocol.FrameDATA:
-			signalActivity()
-			if len(frame.Payload) > 0 {
-				if _, wErr := dst.Write(frame.Payload); wErr != nil {
-					return wErr
+	ch := make(chan frameItem, 256)
+	readDone := make(chan error, 1)
+	done := make(chan struct{})
+	defer close(done)
+
+	go func() {
+		defer close(ch)
+		for {
+			frame, err := rx.ReadFrame()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					readDone <- nil
+				} else {
+					log.Debug("[STREAM] remote read error", "err", err)
+					readDone <- err
 				}
+				return
 			}
-		case protocol.FrameFIN:
-			signalActivity()
-			return nil
-		case protocol.FrameRST:
-			log.Debug("[STREAM] reset by peer")
+
+			switch frame.Type {
+			case protocol.FrameDATA:
+				signalActivity()
+				if len(frame.Payload) > 0 {
+					select {
+					case ch <- frameItem{data: frame.Payload}:
+					case <-done:
+						readDone <- nil
+						return
+					}
+				}
+			case protocol.FrameFIN:
+				signalActivity()
+				select {
+				case ch <- frameItem{fin: true}:
+				case <-done:
+				}
+				readDone <- nil
+				return
+			case protocol.FrameRST:
+				select {
+				case ch <- frameItem{rst: true}:
+				case <-done:
+				}
+				readDone <- nil
+				return
+			case protocol.FramePADDING, protocol.FrameCOVER:
+				continue
+			}
+		}
+	}()
+
+	for item := range ch {
+		if item.rst {
 			return fmt.Errorf("stream reset by peer")
-		case protocol.FramePADDING, protocol.FrameCOVER:
-			continue
+		}
+		if item.fin {
+			return nil
+		}
+		if _, wErr := dst.Write(item.data); wErr != nil {
+			return wErr
 		}
 	}
+
+	return <-readDone
 }
 
 type UDPExchange struct {

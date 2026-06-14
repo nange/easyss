@@ -24,7 +24,7 @@ type TCPHandler struct {
 
 func NewTCPHandler(idleTimeout time.Duration, np *nextproxy.NextProxy) *TCPHandler {
 	if idleTimeout <= 0 {
-		idleTimeout = 15 * time.Second
+		idleTimeout = 120 * time.Second
 	}
 	dialTimeout := idleTimeout * 2
 	if dialTimeout < 30*time.Second {
