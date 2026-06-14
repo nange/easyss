@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"syscall"
+	"time"
 	_ "time/tzdata"
 
 	"github.com/nange/easyss/v3/client"
@@ -15,6 +16,7 @@ import (
 	"github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/tun"
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
@@ -118,7 +120,11 @@ func (a *App) Start() error {
 	}
 
 	timeout := a.cfg.TimeoutDuration()
-	a.streamHandler = proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, 4*timeout)
+	streamIdleTimeout := time.Duration(sharedconfig.DefaultTCPStreamIdleTimeout) * time.Second
+	if 4*timeout > streamIdleTimeout {
+		streamIdleTimeout = 4 * timeout
+	}
+	a.streamHandler = proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, streamIdleTimeout)
 
 	if a.cfg.Local.SocksPort > 0 {
 		socksAddr := "127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)

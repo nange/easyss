@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +20,8 @@ import (
 )
 
 var ErrStreamIdleTimeout = errors.New("stream idle timeout")
+
+var errLocalConnClosed = errors.New("local connection closed")
 
 type StreamHandler struct {
 	transport         transport.Transport
@@ -239,6 +242,11 @@ func (h *StreamHandler) relay(localConn net.Conn, tx shaper.Shaper, rx *crypto.D
 		select {
 		case err := <-errCh:
 			done++
+			if errors.Is(err, errLocalConnClosed) {
+				_ = stream.Close()
+				_ = localConn.Close()
+				return nil
+			}
 			if err != nil && !errors.Is(err, io.EOF) && firstErr == nil {
 				firstErr = err
 				log.Debug("[STREAM] relay copy error", "err", err)
@@ -294,6 +302,10 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 			signalActivity()
 			if errors.Is(err, io.EOF) {
 				return nil
+			}
+			if isLocalConnClosedError(err) {
+				log.Debug("[STREAM] local connection closed", "err", err)
+				return errLocalConnClosed
 			}
 			log.Debug("[STREAM] local read error", "err", err)
 			return err
@@ -367,11 +379,31 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 			return nil
 		}
 		if _, wErr := dst.Write(item.data); wErr != nil {
+			if isLocalConnClosedError(wErr) {
+				log.Debug("[STREAM] local connection closed", "err", wErr)
+				return errLocalConnClosed
+			}
 			return wErr
 		}
 	}
 
 	return <-readDone
+}
+
+func isLocalConnClosedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "use of closed network connection") ||
+		strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "forcibly closed by the remote host") ||
+		strings.Contains(msg, "software caused connection abort") ||
+		strings.Contains(msg, "connection aborted") ||
+		strings.Contains(msg, "broken pipe")
 }
 
 type UDPExchange struct {
