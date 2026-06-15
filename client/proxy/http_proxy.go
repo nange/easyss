@@ -135,6 +135,7 @@ func (s *HTTPProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Info("[HTTP-PROXY] forwarding via SOCKS5", "host", r.Host, "method", r.Method)
 	s.rp.ServeHTTP(w, r)
 }
 
@@ -191,6 +192,7 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if s.handler == nil {
+		log.Info("[HTTP-PROXY] CONNECT via SOCKS5 (no handler)", "target", target)
 		remote, err := s.dialSOCKS5(target)
 		if err != nil {
 			log.Warn("[HTTP-PROXY] socks5 CONNECT", "target", target, "err", err)
