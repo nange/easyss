@@ -462,7 +462,7 @@ func isLocalConnClosedError(err error) bool {
 		strings.Contains(msg, "connection reset by peer") ||
 		strings.Contains(msg, "forcibly closed by the remote host") ||
 		strings.Contains(msg, "software caused connection abort") ||
-		strings.Contains(msg, "connection aborted") ||
+		strings.Contains(msg, "connection was aborted") ||
 		strings.Contains(msg, "broken pipe")
 }
 
