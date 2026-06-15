@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nange/easyss/v3/crypto"
@@ -22,6 +23,60 @@ import (
 var ErrStreamIdleTimeout = errors.New("stream idle timeout")
 
 var errLocalConnClosed = errors.New("local connection closed")
+
+type streamMeter struct {
+	component string
+	target    string
+	total     atomic.Int64
+	last      atomic.Int64
+	state     atomic.Value
+	done      chan struct{}
+}
+
+func newStreamMeter(component, target string) *streamMeter {
+	m := &streamMeter{
+		component: component,
+		target:    target,
+		done:      make(chan struct{}),
+	}
+	m.state.Store("open")
+	go m.loop()
+	return m
+}
+
+func (m *streamMeter) add(n int, state string) {
+	if n > 0 {
+		m.total.Add(int64(n))
+	}
+	m.setState(state)
+}
+
+func (m *streamMeter) setState(state string) {
+	if state != "" {
+		m.state.Store(state)
+	}
+}
+
+func (m *streamMeter) close() {
+	close(m.done)
+}
+
+func (m *streamMeter) loop() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			total := m.total.Load()
+			last := m.last.Swap(total)
+			if total >= 1<<20 && total == last {
+				log.Warn("[STREAM] downstream stalled", "component", m.component, "target", m.target, "bytes", total, "state", m.state.Load())
+			}
+		case <-m.done:
+			return
+		}
+	}
+}
 
 type StreamHandler struct {
 	transport         transport.Transport
@@ -210,12 +265,15 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 	}
 	dr := crypto.NewDecryptedReader(stream, aadS2C, s2cEnc, s2cCounter)
 
-	err = h.relay(localConn, txShaper, dr, stream)
+	err = h.relay(target, localConn, txShaper, dr, stream)
 	log.Debug("[STREAM] relay finished", "endpoint", endpoint, "target", target, "err", err)
 	return err
 }
 
-func (h *StreamHandler) relay(localConn net.Conn, tx shaper.Shaper, rx *crypto.DecryptedReader, stream transport.Stream) error {
+func (h *StreamHandler) relay(target string, localConn net.Conn, tx shaper.Shaper, rx *crypto.DecryptedReader, stream transport.Stream) error {
+	meter := newStreamMeter("client", target)
+	defer meter.close()
+
 	activity := make(chan struct{}, 1)
 	signalActivity := func() {
 		select {
@@ -230,7 +288,7 @@ func (h *StreamHandler) relay(localConn net.Conn, tx shaper.Shaper, rx *crypto.D
 	}()
 
 	go func() {
-		errCh <- h.copyRemoteToLocal(rx, localConn, signalActivity)
+		errCh <- h.copyRemoteToLocal(rx, localConn, signalActivity, meter)
 	}()
 
 	timer := time.NewTimer(h.streamIdleTimeout)
@@ -313,81 +371,42 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 	}
 }
 
-func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Conn, signalActivity func()) error {
-	type frameItem struct {
-		data []byte
-		fin  bool
-		rst  bool
-	}
-
-	ch := make(chan frameItem, 1024)
-	readDone := make(chan error, 1)
-	done := make(chan struct{})
-	defer close(done)
-
-	go func() {
-		defer close(ch)
-		for {
-			frame, err := rx.ReadFrame()
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					readDone <- nil
-				} else {
-					log.Debug("[STREAM] remote read error", "err", err)
-					readDone <- err
-				}
-				return
+func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Conn, signalActivity func(), meter *streamMeter) error {
+	for {
+		meter.setState("read_remote")
+		frame, err := rx.ReadFrame()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
 			}
+			log.Debug("[STREAM] remote read error", "err", err)
+			return err
+		}
 
-			switch frame.Type {
-			case protocol.FrameDATA:
-				signalActivity()
-				if len(frame.Payload) > 0 {
-					select {
-					case ch <- frameItem{data: frame.Payload}:
-					case <-done:
-						readDone <- nil
-						return
-					}
-				}
-			case protocol.FrameFIN:
-				signalActivity()
-				select {
-				case ch <- frameItem{fin: true}:
-				case <-done:
-				}
-				readDone <- nil
-				return
-			case protocol.FrameRST:
-				select {
-				case ch <- frameItem{rst: true}:
-				case <-done:
-				}
-				readDone <- nil
-				return
-			case protocol.FramePADDING, protocol.FrameCOVER:
+		switch frame.Type {
+		case protocol.FrameDATA:
+			signalActivity()
+			if len(frame.Payload) == 0 {
 				continue
 			}
-		}
-	}()
-
-	for item := range ch {
-		if item.rst {
-			return fmt.Errorf("stream reset by peer")
-		}
-		if item.fin {
-			return nil
-		}
-		if _, wErr := dst.Write(item.data); wErr != nil {
-			if isLocalConnClosedError(wErr) {
-				log.Debug("[STREAM] local connection closed", "err", wErr)
-				return errLocalConnClosed
+			meter.setState("write_local")
+			if _, wErr := dst.Write(frame.Payload); wErr != nil {
+				if isLocalConnClosedError(wErr) {
+					log.Debug("[STREAM] local connection closed", "err", wErr)
+					return errLocalConnClosed
+				}
+				return wErr
 			}
-			return wErr
+			meter.add(len(frame.Payload), "read_remote")
+		case protocol.FrameFIN:
+			signalActivity()
+			return nil
+		case protocol.FrameRST:
+			return fmt.Errorf("stream reset by peer")
+		case protocol.FramePADDING, protocol.FrameCOVER:
+			continue
 		}
 	}
-
-	return <-readDone
 }
 
 func isLocalConnClosedError(err error) bool {

@@ -84,7 +84,6 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 			MaxReceiveBufferPerConnection: sharedconfig.DefaultHTTP2ReceiveBufferPerConnection,
 			MaxReceiveBufferPerStream:     sharedconfig.DefaultHTTP2ReceiveBufferPerStream,
 			SendPingTimeout:               15 * time.Second,
-			WriteByteTimeout:              timeout / 2,
 		},
 		ForceAttemptHTTP2: true,
 		MaxConnsPerHost:   1,

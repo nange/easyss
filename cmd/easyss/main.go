@@ -154,7 +154,7 @@ func (a *App) Start() error {
 			httpAddr = "0.0.0.0:" + strconv.Itoa(a.cfg.Local.HTTPPort)
 		}
 		socksAddr := "127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
-		a.httpServer, err = proxy.NewHTTPProxyServer(httpAddr, socksAddr, a.cfg.AuthUsername, a.cfg.AuthPassword, timeout)
+		a.httpServer, err = proxy.NewHTTPProxyServer(httpAddr, socksAddr, a.cfg.AuthUsername, a.cfg.AuthPassword, timeout, a.streamHandler, cli.Router(), method, cli.DialContext)
 		if err != nil {
 			return err
 		}
