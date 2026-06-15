@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -12,7 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nange/easyss/v3/client/router"
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/txthinking/socks5"
 )
@@ -36,17 +39,24 @@ type HTTPProxyServer struct {
 	username   string
 	password   string
 	timeout    time.Duration
+	handler    *StreamHandler
+	router     *router.Router
+	method     protocol.Method
+	dial       func(context.Context, string, string) (net.Conn, error)
 	rp         *httputil.ReverseProxy
 	server     *http.Server
 	mu         sync.Mutex
 }
 
-func NewHTTPProxyServer(listenAddr, socksAddr, username, password string, timeout time.Duration) (*HTTPProxyServer, error) {
+func NewHTTPProxyServer(listenAddr, socksAddr, username, password string, timeout time.Duration, handler *StreamHandler, rt *router.Router, method protocol.Method, dial func(context.Context, string, string) (net.Conn, error)) (*HTTPProxyServer, error) {
 	if socksAddr == "" {
 		return nil, fmt.Errorf("http proxy requires a local socks5 address")
 	}
 	if timeout <= 0 {
 		timeout = 30 * time.Second
+	}
+	if dial == nil {
+		dial = defaultDirectDialContext
 	}
 
 	socksURL := &url.URL{Scheme: "socks5", Host: socksAddr}
@@ -61,6 +71,10 @@ func NewHTTPProxyServer(listenAddr, socksAddr, username, password string, timeou
 		username:   username,
 		password:   password,
 		timeout:    timeout,
+		handler:    handler,
+		router:     rt,
+		method:     method,
+		dial:       dial,
 	}
 	s.rp = s.newReverseProxy()
 	return s, nil
@@ -134,6 +148,21 @@ func (s *HTTPProxyServer) authOK(r *http.Request) bool {
 
 func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	target := connectTarget(r)
+	host, _, err := net.SplitHostPort(target)
+	if err != nil {
+		http.Error(w, "Bad CONNECT target", http.StatusBadRequest)
+		return
+	}
+
+	rule := router.HostRuleProxy
+	if s.router != nil {
+		rule = s.router.MatchHostRule(host)
+	}
+	if rule == router.HostRuleBlock {
+		log.Info("[HTTP-PROXY] CONNECT blocked", "target", target)
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
 
 	rc := http.NewResponseController(w)
 	hijConn, _, err := rc.Hijack()
@@ -144,19 +173,48 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 	}
 	defer hijConn.Close()
 
-	remote, err := s.dialSOCKS5(target)
-	if err != nil {
-		log.Warn("[HTTP-PROXY] socks5 CONNECT", "target", target, "err", err)
-		return
-	}
-	defer remote.Close()
-
 	if _, err := hijConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		log.Warn("[HTTP-PROXY] write CONNECT response", "target", target, "err", err)
 		return
 	}
 
-	relayTCP(remote, hijConn)
+	if rule == router.HostRuleDirect {
+		log.Info("[HTTP-PROXY] CONNECT direct", "target", target)
+		remote, err := s.directConnect(target)
+		if err != nil {
+			log.Warn("[HTTP-PROXY] direct CONNECT", "target", target, "err", err)
+			return
+		}
+		defer remote.Close()
+		relayTCP(remote, hijConn)
+		return
+	}
+
+	if s.handler == nil {
+		remote, err := s.dialSOCKS5(target)
+		if err != nil {
+			log.Warn("[HTTP-PROXY] socks5 CONNECT", "target", target, "err", err)
+			return
+		}
+		defer remote.Close()
+		relayTCP(remote, hijConn)
+		return
+	}
+
+	log.Info("[HTTP-PROXY] CONNECT proxy", "target", target)
+	if err := s.handler.OpenTCPStream(context.Background(), target, s.method, hijConn); err != nil {
+		if errors.Is(err, ErrStreamIdleTimeout) {
+			log.Debug("[HTTP-PROXY] CONNECT idle closed", "target", target, "err", err)
+			return
+		}
+		log.Warn("[HTTP-PROXY] CONNECT stream", "target", target, "err", err)
+	}
+}
+
+func (s *HTTPProxyServer) directConnect(target string) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	defer cancel()
+	return s.dial(ctx, "tcp", target)
 }
 
 func (s *HTTPProxyServer) dialSOCKS5(target string) (net.Conn, error) {

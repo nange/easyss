@@ -102,12 +102,13 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	log.Info("[SERVER] proxy", "target", first.Handshake.Target, "remote", r.RemoteAddr)
 
+	rc := http.NewResponseController(w)
+	_ = rc.EnableFullDuplex()
+
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 
-	rc := http.NewResponseController(w)
-	_ = rc.EnableFullDuplex()
 	_ = rc.Flush()
 
 	target := first.Handshake.Target

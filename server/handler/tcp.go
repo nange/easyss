@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/nange/easyss/v3/crypto"
@@ -20,6 +21,58 @@ type TCPHandler struct {
 	nextProxy   *nextproxy.NextProxy
 	idleTimeout time.Duration
 	dialTimeout time.Duration
+}
+
+type tcpStreamMeter struct {
+	target string
+	total  atomic.Int64
+	last   atomic.Int64
+	state  atomic.Value
+	done   chan struct{}
+}
+
+func newTCPStreamMeter(target string) *tcpStreamMeter {
+	m := &tcpStreamMeter{
+		target: target,
+		done:   make(chan struct{}),
+	}
+	m.state.Store("open")
+	go m.loop()
+	return m
+}
+
+func (m *tcpStreamMeter) add(n int, state string) {
+	if n > 0 {
+		m.total.Add(int64(n))
+	}
+	m.setState(state)
+}
+
+func (m *tcpStreamMeter) setState(state string) {
+	if state != "" {
+		m.state.Store(state)
+	}
+}
+
+func (m *tcpStreamMeter) close() {
+	close(m.done)
+}
+
+func (m *tcpStreamMeter) loop() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			total := m.total.Load()
+			last := m.last.Swap(total)
+			if total >= 1<<20 && total == last {
+				log.Warn("[TCP_HANDLE] downstream stalled", "target", m.target, "bytes", total, "state", m.state.Load())
+			}
+		case <-m.done:
+			return
+		}
+	}
 }
 
 func NewTCPHandler(idleTimeout time.Duration, np *nextproxy.NextProxy) *TCPHandler {
@@ -71,6 +124,8 @@ func (h *TCPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, targe
 	}
 	defer targetConn.Close()
 	log.Info("[TCP_HANDLE] target connected", "target", target, "remote", targetConn.RemoteAddr().String())
+	meter := newTCPStreamMeter(target)
+	defer meter.close()
 
 	errCh := make(chan error, 2)
 	activity := make(chan struct{}, 1)
@@ -86,7 +141,7 @@ func (h *TCPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, targe
 	}()
 
 	go func() {
-		errCh <- h.copyFromTarget(targetConn, s2c, signalActivity)
+		errCh <- h.copyFromTarget(targetConn, s2c, signalActivity, meter)
 	}()
 
 	timer := time.NewTimer(h.idleTimeout)
@@ -157,17 +212,20 @@ func (h *TCPHandler) copyFromClient(dr *crypto.DecryptedReader, dst net.Conn, si
 	}
 }
 
-func (h *TCPHandler) copyFromTarget(src net.Conn, s2c shaper.Shaper, signalActivity func()) error {
+func (h *TCPHandler) copyFromTarget(src net.Conn, s2c shaper.Shaper, signalActivity func(), meter *tcpStreamMeter) error {
 	buf := bytespool.Get(16 * 1024)
 	defer bytespool.MustPut(buf)
 	for {
+		meter.setState("read_target")
 		n, err := src.Read(buf)
 		if n > 0 {
 			signalActivity()
 			frame := protocol.NewFrameDATA(buf[:n])
+			meter.setState("write_http2")
 			if wErr := s2c.PushFrame(frame); wErr != nil {
 				return wErr
 			}
+			meter.add(n, "read_target")
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
