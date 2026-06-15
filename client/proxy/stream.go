@@ -372,41 +372,82 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 }
 
 func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Conn, signalActivity func(), meter *streamMeter) error {
-	for {
-		meter.setState("read_remote")
-		frame, err := rx.ReadFrame()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return nil
-			}
-			log.Debug("[STREAM] remote read error", "err", err)
-			return err
-		}
+	type frameItem struct {
+		data []byte
+		fin  bool
+		rst  bool
+	}
 
-		switch frame.Type {
-		case protocol.FrameDATA:
-			signalActivity()
-			if len(frame.Payload) == 0 {
+	ch := make(chan frameItem, 16)
+	readDone := make(chan error, 1)
+	done := make(chan struct{})
+	defer close(done)
+
+	go func() {
+		defer close(ch)
+		for {
+			frame, err := rx.ReadFrame()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					readDone <- nil
+				} else {
+					log.Debug("[STREAM] remote read error", "err", err)
+					readDone <- err
+				}
+				return
+			}
+
+			switch frame.Type {
+			case protocol.FrameDATA:
+				signalActivity()
+				if len(frame.Payload) > 0 {
+					select {
+					case ch <- frameItem{data: frame.Payload}:
+					case <-done:
+						readDone <- nil
+						return
+					}
+				}
+			case protocol.FrameFIN:
+				signalActivity()
+				select {
+				case ch <- frameItem{fin: true}:
+				case <-done:
+				}
+				readDone <- nil
+				return
+			case protocol.FrameRST:
+				select {
+				case ch <- frameItem{rst: true}:
+				case <-done:
+				}
+				readDone <- nil
+				return
+			case protocol.FramePADDING, protocol.FrameCOVER:
 				continue
 			}
-			meter.setState("write_local")
-			if _, wErr := dst.Write(frame.Payload); wErr != nil {
-				if isLocalConnClosedError(wErr) {
-					log.Debug("[STREAM] local connection closed", "err", wErr)
-					return errLocalConnClosed
-				}
-				return wErr
-			}
-			meter.add(len(frame.Payload), "read_remote")
-		case protocol.FrameFIN:
-			signalActivity()
-			return nil
-		case protocol.FrameRST:
-			return fmt.Errorf("stream reset by peer")
-		case protocol.FramePADDING, protocol.FrameCOVER:
-			continue
 		}
+	}()
+
+	for item := range ch {
+		if item.rst {
+			return fmt.Errorf("stream reset by peer")
+		}
+		if item.fin {
+			return nil
+		}
+		meter.setState("write_local")
+		if _, wErr := dst.Write(item.data); wErr != nil {
+			if isLocalConnClosedError(wErr) {
+				log.Debug("[STREAM] local connection closed", "err", wErr)
+				return errLocalConnClosed
+			}
+			return wErr
+		}
+		meter.add(len(item.data), "read_remote")
 	}
+
+	return <-readDone
 }
 
 func isLocalConnClosedError(err error) bool {
