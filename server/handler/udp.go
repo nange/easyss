@@ -44,7 +44,7 @@ func (h *UDPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, targe
 		_ = s2c.Flush()
 		return err
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	done := make(chan struct{})
 	closeDone := sync.OnceFunc(func() { close(done) })

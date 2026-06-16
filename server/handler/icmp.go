@@ -63,7 +63,7 @@ func (h *ICMPHandler) icmpExchange(target string, payload []byte) ([]byte, error
 		log.Error("[ICMP] dial target failed", "target", target, "err", err)
 		return nil, err
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	msg := icmp.Message{
 		Type: ipv4.ICMPTypeEcho,

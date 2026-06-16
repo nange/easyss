@@ -82,7 +82,7 @@ func generateDefaultFallbackHTML() {
 
 	var buf bytesWriter
 	buf.buf = make([]byte, 0, 4096)
-	fallbackTemplate.Execute(&buf, defaultFallbackData)
+	fallbackTemplate.Execute(&buf, defaultFallbackData) //nolint:errcheck
 	defaultFallbackHTML = buf.buf
 }
 
@@ -101,5 +101,5 @@ func ServeFallback(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Server", "nginx")
 	w.WriteHeader(http.StatusOK)
-	w.Write(defaultFallbackHTML)
+	w.Write(defaultFallbackHTML) //nolint:errcheck
 }

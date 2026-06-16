@@ -73,11 +73,11 @@ func (s *Socks5Server) Close() error {
 	s.udpMu.Lock()
 	defer s.udpMu.Unlock()
 	for key, ue := range s.udpExch {
-		ue.Close()
+		ue.Close() //nolint:errcheck
 		delete(s.udpExch, key)
 	}
 	for key, conn := range s.directUDP {
-		conn.Close()
+		conn.Close() //nolint:errcheck
 		delete(s.directUDP, key)
 	}
 	if s.srv != nil {
@@ -97,7 +97,7 @@ func (s *Socks5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 		ch := make(chan byte)
 		srv.AssociatedUDP.Set(caddr.String(), ch, -1)
 		defer srv.AssociatedUDP.Delete(caddr.String())
-		io.Copy(io.Discard, c)
+		io.Copy(io.Discard, c) //nolint:errcheck
 		log.Debug("[SOCKS5] udp associate tcp closed", "udp", caddr.String())
 		return nil
 	}
@@ -126,7 +126,7 @@ func (s *Socks5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 			log.Error("[TCP_DIRECT] connect", "target", target, "err", err)
 			return err
 		}
-		defer rc.Close()
+		defer rc.Close() //nolint:errcheck
 		relayTCP(rc, c)
 		log.Debug("[TCP_DIRECT] relay finished", "target", target)
 		return nil
@@ -173,7 +173,7 @@ func (s *Socks5Server) directTCPConnect(c net.Conn, r *socks5.Request, target st
 
 	a, bindAddr, bindPort, err := socks5.ParseAddress(rc.LocalAddr().String())
 	if err != nil {
-		rc.Close()
+		rc.Close() //nolint:errcheck
 		_ = s.replyError(c, r, socks5.RepHostUnreachable)
 		return nil, err
 	}
@@ -182,7 +182,7 @@ func (s *Socks5Server) directTCPConnect(c net.Conn, r *socks5.Request, target st
 	}
 	p := socks5.NewReply(socks5.RepSuccess, a, bindAddr, bindPort)
 	if _, err := p.WriteTo(c); err != nil {
-		rc.Close()
+		rc.Close() //nolint:errcheck
 		return nil, err
 	}
 
@@ -231,7 +231,7 @@ func (s *Socks5Server) cleanupLoop() {
 			for key, ue := range s.udpExch {
 				if time.Since(ue.LastSeen()) > s.udpIdleTimeout {
 					log.Debug("[UDP_PROXY] idle cleanup", "key", key)
-					ue.Close()
+					ue.Close() //nolint:errcheck
 					delete(s.udpExch, key)
 				}
 			}

@@ -53,7 +53,7 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 	isDirect := rule == router.HostRuleDirect
 
 	if cached := s.router.DNSCacheGet(question.Name, qtype, isDirect); cached != nil {
-		cached.MsgHdr.Id = msg.MsgHdr.Id
+		cached.Id = msg.Id
 		return responseDNSMsg(srv.UDPConn, clientAddr, cached, d.Address())
 	}
 
@@ -77,7 +77,7 @@ func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAdd
 			continue
 		}
 		_ = s.router.DNSCacheSet(resp, true)
-		resp.MsgHdr.Id = msg.MsgHdr.Id
+		resp.Id = msg.Id
 		return responseDNSMsg(srv.UDPConn, clientAddr, resp, d.Address())
 	}
 	log.Error("[DNS_DIRECT]", "domain", domain, "err", lastErr)
@@ -89,7 +89,7 @@ func (s *Socks5Server) exchangeDirectDNS(ctx context.Context, msg *dns.Msg, addr
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	_ = conn.SetDeadline(time.Now().Add(s.dialTimeout))
 	dnsConn := &dns.Conn{Conn: conn, UDPSize: 8192}
@@ -126,7 +126,7 @@ func (s *Socks5Server) proxyDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr
 		log.Error("[UDP_PROXY] send", "err", err)
 		s.udpMu.Lock()
 		delete(s.udpExch, key)
-		ue.Close()
+		ue.Close() //nolint:errcheck
 		s.udpMu.Unlock()
 		return err
 	}
@@ -138,7 +138,7 @@ func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAd
 		s.udpMu.Lock()
 		delete(s.udpExch, key)
 		s.udpMu.Unlock()
-		ue.Close()
+		ue.Close() //nolint:errcheck
 	}()
 
 	for {
@@ -221,7 +221,7 @@ func (s *Socks5Server) directUDPRelay(srv *socks5.Server, clientAddr *net.UDPAdd
 
 	go func() {
 		defer func() {
-			rc.Close()
+			rc.Close() //nolint:errcheck
 			s.udpMu.Lock()
 			delete(s.directUDP, key)
 			s.udpMu.Unlock()
@@ -268,7 +268,7 @@ func (s *Socks5Server) proxyUDPRelay(srv *socks5.Server, clientAddr *net.UDPAddr
 		log.Error("[UDP_PROXY] send", "err", err)
 		s.udpMu.Lock()
 		delete(s.udpExch, key)
-		ue.Close()
+		ue.Close() //nolint:errcheck
 		s.udpMu.Unlock()
 		return err
 	}
@@ -280,14 +280,14 @@ func isDNSRequest(msg *dns.Msg) bool {
 		return false
 	}
 	q := msg.Question[0]
-	return (q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA) && msg.Response == false
+	return (q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA) && !msg.Response
 }
 
 func isDNSResponse(msg *dns.Msg) bool {
 	if len(msg.Question) == 0 {
 		return false
 	}
-	return msg.Response == true
+	return msg.Response
 }
 
 func responseDNSMsg(conn *net.UDPConn, addr *net.UDPAddr, msg *dns.Msg, dst string) error {

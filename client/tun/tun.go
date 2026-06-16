@@ -180,7 +180,7 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 	if err != nil {
 		return fmt.Errorf("tun: write create script: %w", err)
 	}
-	defer os.RemoveAll(namePath)
+	defer os.RemoveAll(namePath) //nolint:errcheck
 
 	d := m.dev
 
@@ -229,7 +229,7 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 	if err != nil {
 		return fmt.Errorf("tun: write close script: %w", err)
 	}
-	defer os.RemoveAll(namePath)
+	defer os.RemoveAll(namePath) //nolint:errcheck
 
 	d := m.dev
 
