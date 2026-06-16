@@ -300,7 +300,7 @@ func (h *StreamHandler) relay(target string, localConn net.Conn, tx shaper.Shape
 		select {
 		case err := <-errCh:
 			done++
-			if errors.Is(err, errLocalConnClosed) {
+			if errors.Is(err, errLocalConnClosed) || errors.Is(err, io.ErrClosedPipe) {
 				_ = stream.Close()
 				_ = localConn.Close()
 				return nil
@@ -350,6 +350,9 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 			frame := protocol.NewFrameDATA(buf[:n])
 			if pErr := tx.PushFrame(frame); pErr != nil {
 				_ = tx.Flush()
+				if errors.Is(pErr, io.ErrClosedPipe) {
+					return nil
+				}
 				return pErr
 			}
 		}
