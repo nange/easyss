@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
+	cryptorand "crypto/rand"
 	"flag"
 	"fmt"
+	"math/big"
 	"os"
 	"os/signal"
 	"runtime"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 	_ "time/tzdata"
@@ -97,6 +101,10 @@ type App struct {
 	httpServer    *proxy.HTTPProxyServer
 	streamHandler *proxy.StreamHandler
 	dnsServer     *dns.ForwardServer
+
+	pingLatCh  chan time.Duration
+	pingCloser chan struct{}
+	pingOnce   sync.Once
 }
 
 func (a *App) Start() error {
@@ -192,11 +200,19 @@ func (a *App) Start() error {
 		}()
 	}
 
+	a.pingLatCh = make(chan time.Duration, 1)
+	a.pingCloser = make(chan struct{})
+	go a.pingBackground()
+
 	log.Info("[EASYSS-V3] started successfully")
 	return nil
 }
 
 func (a *App) Stop() {
+	a.pingOnce.Do(func() {
+		close(a.pingCloser)
+	})
+
 	if a.tunMgr != nil {
 		a.tunMgr.Stop()
 	}
@@ -220,6 +236,60 @@ func (a *App) Stop() {
 			log.Debug("[EASYSS-V3] client close", "err", err)
 		}
 	}
+}
+
+func (a *App) PingLatencyCh() <-chan time.Duration {
+	return a.pingLatCh
+}
+
+func (a *App) pingBackground() {
+	pingOnce := func() {
+		if a.cli == nil {
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		lat, err := a.cli.Ping(ctx)
+		if err != nil {
+			log.Debug("[EASYSS-V3] ping failed", "err", err)
+			select {
+			case a.pingLatCh <- -1:
+			default:
+			}
+			return
+		}
+
+		log.Info("[EASYSS-V3] ping latency", "latency", lat)
+
+		select {
+		case a.pingLatCh <- lat:
+		default:
+		}
+	}
+
+	pingOnce()
+
+	for {
+		sleepSec := randomPingInterval()
+		timer := time.NewTimer(sleepSec)
+		select {
+		case <-timer.C:
+			pingOnce()
+		case <-a.pingCloser:
+			timer.Stop()
+			return
+		}
+	}
+}
+
+func randomPingInterval() time.Duration {
+	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(21))
+	if err != nil {
+		return 15 * time.Second
+	}
+	return time.Duration(10+int(n.Int64())) * time.Second
 }
 
 func exampleV3Config() string {
