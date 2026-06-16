@@ -272,8 +272,8 @@ func (a *App) pingBackground() {
 	pingOnce()
 
 	for {
-		sleepSec := randomPingInterval()
-		timer := time.NewTimer(sleepSec)
+		sleepDuration := randomPingInterval()
+		timer := time.NewTimer(sleepDuration)
 		select {
 		case <-timer.C:
 			pingOnce()
