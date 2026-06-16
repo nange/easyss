@@ -46,6 +46,8 @@ func (a *TrayApp) trayReady() {
 	a.SetBrowserMenu(browserMenu)
 	a.SetTunMenu(tunMenu)
 
+	a.addUWPLoopbackMenu()
+
 	a.addCatLogsMenu()
 	systray.AddSeparator()
 
