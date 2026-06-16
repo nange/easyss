@@ -128,7 +128,7 @@ func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto p
 		log.Error("[STREAM] icmp transport open", "target", target, "err", err)
 		return nil, fmt.Errorf("transport open: %w", err)
 	}
-	defer stream.Close()
+	defer stream.Close() //nolint:errcheck
 
 	sk, err := crypto.NewStreamKeys(h.masterKey, salt, endpoint)
 	if err != nil {
@@ -205,13 +205,13 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 
 	sk, err := crypto.NewStreamKeys(h.masterKey, salt, endpoint)
 	if err != nil {
-		stream.Close()
+		stream.Close() //nolint:errcheck
 		return fmt.Errorf("stream keys: %w", err)
 	}
 
 	bootstrapEnc, bootstrapCounter, err := sk.Encryptor("c2s", "bootstrap", protocol.MethodAES256GCM)
 	if err != nil {
-		stream.Close()
+		stream.Close() //nolint:errcheck
 		return fmt.Errorf("bootstrap encryptor: %w", err)
 	}
 	aad := crypto.BuildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
@@ -240,7 +240,7 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 
 	plaintext := protocol.EncodeFrames(frames)
 	if err := rw.WriteRecord(plaintext); err != nil {
-		stream.Close()
+		stream.Close() //nolint:errcheck
 		log.Error("[STREAM] handshake write", "endpoint", endpoint, "target", target, "err", err)
 		return fmt.Errorf("write handshake: %w", err)
 	}
@@ -249,18 +249,18 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 	aadSession := crypto.BuildAAD(endpoint, salt, "c2s", "session", method)
 	sessionEnc, sessionCounter, err := sk.Encryptor("c2s", "session", method)
 	if err != nil {
-		stream.Close()
+		stream.Close() //nolint:errcheck
 		return fmt.Errorf("session encryptor: %w", err)
 	}
 	sessionWriter := crypto.NewRecordWriter(stream, sessionEnc, sessionCounter, aadSession)
 
 	txShaper := shaper.NewLight(sessionWriter, h.shaperCfg)
-	defer txShaper.Close()
+	defer txShaper.Close() //nolint:errcheck
 
 	aadS2C := crypto.BuildAAD(endpoint, salt, "s2c", "session", method)
 	s2cEnc, s2cCounter, err := sk.Encryptor("s2c", "session", method)
 	if err != nil {
-		stream.Close()
+		stream.Close() //nolint:errcheck
 		return fmt.Errorf("s2c encryptor: %w", err)
 	}
 	dr := crypto.NewDecryptedReader(stream, aadS2C, s2cEnc, s2cCounter)
@@ -500,13 +500,13 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 
 	sk, err := crypto.NewStreamKeys(h.masterKey, salt, "/v3/udp")
 	if err != nil {
-		stream.Close()
+		stream.Close() //nolint:errcheck
 		return nil, fmt.Errorf("stream keys: %w", err)
 	}
 
 	bootstrapEnc, bootstrapCounter, err := sk.Encryptor("c2s", "bootstrap", protocol.MethodAES256GCM)
 	if err != nil {
-		stream.Close()
+		stream.Close() //nolint:errcheck
 		return nil, fmt.Errorf("bootstrap encryptor: %w", err)
 	}
 	aadBootstrap := crypto.BuildAAD("/v3/udp", salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
@@ -520,7 +520,7 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 	}
 	hsFrame := protocol.NewFrameHANDSHAKE(handshake)
 	if err := rw.WriteRecord(protocol.EncodeFrames([]protocol.Frame{hsFrame})); err != nil {
-		stream.Close()
+		stream.Close() //nolint:errcheck
 		log.Error("[UDP_EXCHANGE] handshake write", "target", target, "err", err)
 		return nil, fmt.Errorf("write handshake: %w", err)
 	}
@@ -528,7 +528,7 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 	aadC2S := crypto.BuildAAD("/v3/udp", salt, "c2s", "session", method)
 	c2sEnc, c2sCounter, err := sk.Encryptor("c2s", "session", method)
 	if err != nil {
-		stream.Close()
+		stream.Close() //nolint:errcheck
 		return nil, fmt.Errorf("c2s session encryptor: %w", err)
 	}
 	c2sWriter := crypto.NewRecordWriter(stream, c2sEnc, c2sCounter, aadC2S)
@@ -536,7 +536,7 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 	aadS2C := crypto.BuildAAD("/v3/udp", salt, "s2c", "session", method)
 	s2cEnc, s2cCounter, err := sk.Encryptor("s2c", "session", method)
 	if err != nil {
-		stream.Close()
+		stream.Close() //nolint:errcheck
 		return nil, fmt.Errorf("s2c session encryptor: %w", err)
 	}
 

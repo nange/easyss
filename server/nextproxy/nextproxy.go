@@ -16,7 +16,7 @@ type NextProxy struct {
 	enableUDP bool
 	allHost   bool
 
-	mu      sync.RWMutex
+	mu      sync.RWMutex //nolint:unused
 	ips     map[string]struct{}
 	cidrIPs []*net.IPNet
 	domains map[string]struct{}

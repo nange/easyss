@@ -122,7 +122,7 @@ func (h *TCPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, targe
 		_ = s2c.Flush()
 		return err
 	}
-	defer targetConn.Close()
+	defer targetConn.Close() //nolint:errcheck
 	log.Info("[TCP_HANDLE] target connected", "target", target, "remote", targetConn.RemoteAddr().String())
 	meter := newTCPStreamMeter(target)
 	defer meter.close()

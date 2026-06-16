@@ -172,7 +172,7 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 		log.Error("[HTTP-PROXY] hijack CONNECT", "target", target, "err", err)
 		return
 	}
-	defer hijConn.Close()
+	defer hijConn.Close() //nolint:errcheck
 
 	if _, err := hijConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		log.Warn("[HTTP-PROXY] write CONNECT response", "target", target, "err", err)
@@ -186,7 +186,7 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 			log.Warn("[HTTP-PROXY] direct CONNECT", "target", target, "err", err)
 			return
 		}
-		defer remote.Close()
+		defer remote.Close() //nolint:errcheck
 		relayTCP(remote, hijConn)
 		return
 	}
@@ -198,7 +198,7 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 			log.Warn("[HTTP-PROXY] socks5 CONNECT", "target", target, "err", err)
 			return
 		}
-		defer remote.Close()
+		defer remote.Close() //nolint:errcheck
 		relayTCP(remote, hijConn)
 		return
 	}

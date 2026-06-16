@@ -271,7 +271,7 @@ func (sk *StreamKeys) ReadFirstRecordWithTimeout(ctx context.Context, src io.Rea
 
 func closeReader(r io.Reader) {
 	if closer, ok := r.(io.Closer); ok {
-		closer.Close()
+		closer.Close() //nolint:errcheck
 	}
 }
 

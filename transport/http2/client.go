@@ -28,7 +28,7 @@ type HTTP2Transport struct {
 	serverURL string
 	ctx       context.Context
 	cancel    context.CancelFunc
-	mu        sync.RWMutex
+	mu        sync.RWMutex //nolint:unused
 }
 
 type Config struct {
@@ -150,7 +150,7 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	url := t.serverURL + req.Endpoint
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, pr)
 	if err != nil {
-		pw.Close()
+		pw.Close() //nolint:errcheck
 		cancel()
 		slot.active.Add(-1)
 		return nil, err
