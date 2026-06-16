@@ -5,9 +5,9 @@ name: Dev
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "master", "v2", "v3" ]
   pull_request:
-    branches: [ "master" ]
+    branches: [ "master", "v2", "v3" ]
 
 jobs:
   lint-test-build-linux:
