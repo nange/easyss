@@ -382,12 +382,23 @@ func (a *TrayApp) closeTun2socks() error {
 }
 
 func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
+	sysProxyEnabled := a.browserMenu != nil && a.browserMenu.Checked()
+
 	a.closeService()
 
 	*a.App = App{
 		cfg: newCfg,
 	}
-	return a.Start()
+	if err := a.Start(); err != nil {
+		return err
+	}
+
+	if sysProxyEnabled {
+		if err := a.setSysProxyOn(); err != nil {
+			log.Error("[SYSTRAY] restart service: restore sysproxy on", "err", err)
+		}
+	}
+	return nil
 }
 
 func (a *TrayApp) closeService() {
