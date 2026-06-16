@@ -119,7 +119,7 @@ func DecodeHandshake(data []byte) (Handshake, error) {
 func (h Handshake) MatchesEndpoint(endpoint string) bool {
 	switch h.Proto {
 	case ProtoTCP:
-		return endpoint == "/v3/tcp"
+		return endpoint == "/v3/tcp" || endpoint == "/v3/ping"
 	case ProtoUDP:
 		return endpoint == "/v3/udp"
 	case ProtoICMP:

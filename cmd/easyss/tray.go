@@ -8,6 +8,7 @@ import (
 	"os/user"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/getlantern/systray"
 	"github.com/nange/easyss/v3/client/config"
@@ -114,6 +115,31 @@ func (a *TrayApp) addSelectServerMenu() {
 				}
 			}
 		}(i, item)
+	}
+
+	go a.latencyUpdater(subMenuItems, addrs)
+}
+
+func (a *TrayApp) latencyUpdater(subMenuItems []*systray.MenuItem, addrs []string) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case lat := <-a.PingLatencyCh():
+			for i, mi := range subMenuItems {
+				if mi.Checked() {
+					if lat < 0 {
+						mi.SetTitle(fmt.Sprintf("%s\ttimeout", addrs[i]))
+					} else {
+						mi.SetTitle(fmt.Sprintf("%s\t%dms", addrs[i], lat.Round(time.Millisecond).Milliseconds()))
+					}
+					break
+				}
+			}
+		case <-ticker.C:
+		case <-a.closing:
+			return
+		}
 	}
 }
 

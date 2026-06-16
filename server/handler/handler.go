@@ -21,6 +21,7 @@ type ProxyHandler struct {
 	tcpHandler       *TCPHandler
 	udpHandler       *UDPHandler
 	icmpHandler      *ICMPHandler
+	pingHandler      *PingHandler
 }
 
 type ProxyHandlerConfig struct {
@@ -53,6 +54,7 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 		tcpHandler:       NewTCPHandler(cfg.StreamIdleTimeout, cfg.NextProxy),
 		udpHandler:       NewUDPHandler(cfg.UDPIdleTimeout, cfg.NextProxy),
 		icmpHandler:      NewICMPHandler(),
+		pingHandler:      NewPingHandler(),
 	}
 }
 
@@ -139,6 +141,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		handleErr = h.udpHandler.Handle(c2sReader, s2cShaper, target)
 	case strings.HasSuffix(endpoint, "/icmp"):
 		handleErr = h.icmpHandler.Handle(c2sReader, s2cShaper, target)
+	case strings.HasSuffix(endpoint, "/ping"):
+		handleErr = h.pingHandler.Handle(c2sReader, s2cShaper, target)
 	}
 	if handleErr != nil {
 		log.Debug("[SERVER] handler finished with error", "target", target, "endpoint", endpoint, "err", handleErr)
