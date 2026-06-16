@@ -381,7 +381,7 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 		rst  bool
 	}
 
-	ch := make(chan frameItem, 24)
+	ch := make(chan frameItem, 16)
 	readDone := make(chan error, 1)
 	done := make(chan struct{})
 	defer close(done)
