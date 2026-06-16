@@ -272,8 +272,6 @@ func (cs *CipherStream) Release() {
 	if cs.frameIter != nil {
 		cs.frameIter.Release()
 	}
-
-	cs.Conn = nil
 }
 
 func (cs *CipherStream) Close() error {
