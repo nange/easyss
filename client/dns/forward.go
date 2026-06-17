@@ -3,6 +3,7 @@ package dns
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,17 +18,31 @@ var DirectDNSServers = []string{"223.5.5.53:53", "119.29.29.29:53", "[2400:3200:
 const ProxyDNSServer = "8.8.8.8:53"
 
 type ForwardServer struct {
-	listenAddr string
-	client     *dns.Client
-	dnsServer  *dns.Server
-	mu         sync.Mutex
-	running    bool
+	listenAddr  string
+	client      *dns.Client
+	dnsServers  []string
+	dnsServer   *dns.Server
+	mu          sync.Mutex
+	running     bool
 }
 
-func NewForwardServer(listenAddr string) *ForwardServer {
+func NewForwardServer(listenAddr string, disableIPV6 bool) *ForwardServer {
+	servers := DirectDNSServers
+	if disableIPV6 {
+		var filtered []string
+		for _, s := range servers {
+			if !strings.Contains(s, "]:") {
+				filtered = append(filtered, s)
+			}
+		}
+		if len(filtered) > 0 {
+			servers = filtered
+		}
+	}
 	return &ForwardServer{
 		listenAddr: listenAddr,
 		client:     &dns.Client{},
+		dnsServers: servers,
 	}
 }
 
@@ -83,7 +98,7 @@ func (s *ForwardServer) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 func (s *ForwardServer) forwardQuery(msg *dns.Msg) (*dns.Msg, error) {
 	var lastErr error
 
-	for _, server := range DirectDNSServers {
+	for _, server := range s.dnsServers {
 		reply, _, err := s.client.Exchange(msg, server)
 		if err != nil {
 			lastErr = err
