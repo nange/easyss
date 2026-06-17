@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -86,7 +87,7 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 			SendPingTimeout:               15 * time.Second,
 		},
 		ForceAttemptHTTP2: true,
-		MaxConnsPerHost:   1,
+		MaxConnsPerHost:   2,
 		IdleConnTimeout:   4 * timeout,
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			dialCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -155,6 +156,7 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 		slot.active.Add(-1)
 		return nil, err
 	}
+	httpReq.Header.Set("User-Agent", chromeUserAgent())
 	httpReq.Header.Set("Content-Type", "application/octet-stream")
 	httpReq.Header.Set("Cache-Control", "no-store")
 	if req.Salt != "" {
@@ -213,6 +215,20 @@ func (t *HTTP2Transport) Close() error {
 		s.t.CloseIdleConnections()
 	}
 	return nil
+}
+
+func chromeUserAgent() string {
+	ver := utls.HelloChrome_Auto.Version
+	switch runtime.GOOS {
+	case "windows":
+		return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + ver + ".0.0.0 Safari/537.36"
+	case "darwin":
+		return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + ver + ".0.0.0 Safari/537.36"
+	case "android":
+		return "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + ver + ".0.0.0 Mobile Safari/537.36"
+	default:
+		return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + ver + ".0.0.0 Safari/537.36"
+	}
 }
 
 var _ transport.Transport = (*HTTP2Transport)(nil)
