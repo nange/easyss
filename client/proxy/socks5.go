@@ -12,6 +12,8 @@ import (
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/txthinking/socks5"
+
+	easydns "github.com/nange/easyss/v3/client/dns"
 )
 
 type Socks5Server struct {
@@ -19,6 +21,7 @@ type Socks5Server struct {
 
 	handler           *StreamHandler
 	router            *router.Router
+	dnsCache          *easydns.Cache
 	method            protocol.Method
 	disableQUIC       bool
 	directDialContext func(context.Context, string, string) (net.Conn, error)
@@ -39,9 +42,10 @@ func NewSocks5Server(listenAddr, username, password string, handler *StreamHandl
 		directDialContext = defaultDirectDialContext
 	}
 	s := &Socks5Server{
-		handler:           handler,
-		router:            rt,
-		method:            method,
+			handler:           handler,
+			router:            rt,
+			dnsCache:          easydns.NewCache(),
+			method:            method,
 		disableQUIC:       disableQUIC,
 		directDialContext: directDialContext,
 		dialTimeout:       udpIdleTimeout,

@@ -8,8 +8,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/coocood/freecache"
-	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/assets"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util"
@@ -177,9 +175,6 @@ type Router struct {
 	customDirectIPs     map[string]struct{}
 	customDirectCIDRIPs []*net.IPNet
 	customDirectDomains map[string]struct{}
-
-	dnsCache       *freecache.Cache
-	directDNSCache *freecache.Cache
 }
 
 func New(cfg Config) (*Router, error) {
@@ -189,12 +184,10 @@ func New(cfg Config) (*Router, error) {
 	}
 
 	r := &Router{
-		cfg:            cfg,
-		geoIPDB:        db,
-		geoSiteDirect:  NewGeoSite(assets.GeoSiteDirect),
-		geoSiteBlock:   NewGeoSite(assets.GeoSiteBlock),
-		dnsCache:       freecache.NewCache(2 * 1024 * 1024),
-		directDNSCache: freecache.NewCache(2 * 1024 * 1024),
+		cfg:           cfg,
+		geoIPDB:       db,
+		geoSiteDirect: NewGeoSite(assets.GeoSiteDirect),
+		geoSiteBlock:  NewGeoSite(assets.GeoSiteBlock),
 	}
 	r.proxyRule.Store(int32(cfg.ProxyRule))
 	r.ipv6Rule.Store(int32(cfg.IPV6Rule))
@@ -356,53 +349,3 @@ func (r *Router) ServerIPV6() string {
 	return r.cfg.ServerIPV6
 }
 
-func (r *Router) DNSCacheGet(name, qtype string, isDirect bool) *dns.Msg {
-	cache := r.dnsCache
-	if isDirect {
-		cache = r.directDNSCache
-	}
-	v, err := cache.Get([]byte(name + qtype))
-	if err != nil || len(v) == 0 {
-		return nil
-	}
-	msg := &dns.Msg{}
-	if err := msg.Unpack(v); err != nil {
-		return nil
-	}
-	return msg
-}
-
-func (r *Router) DNSCacheSet(msg *dns.Msg, isDirect bool) error {
-	if msg == nil || len(msg.Question) == 0 {
-		return nil
-	}
-	q := msg.Question[0]
-	if q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA {
-		v, err := msg.Pack()
-		if err != nil {
-			return err
-		}
-		key := []byte(q.Name + dns.TypeToString[q.Qtype])
-		if isDirect {
-			return r.directDNSCache.Set(key, v, 2*60*60)
-		}
-		return r.dnsCache.Set(key, v, 2*60*60)
-	}
-	return nil
-}
-
-func (r *Router) DNSMsg(server, domain string) ([]*dns.Msg, error) {
-	var results []*dns.Msg
-	a, err1 := util.DNSMsgTypeA(server, domain)
-	if a != nil {
-		results = append(results, a)
-	}
-	aaaa, _ := util.DNSMsgTypeAAAA(server, domain)
-	if aaaa != nil {
-		results = append(results, aaaa)
-	}
-	if len(results) == 0 {
-		return nil, err1
-	}
-	return results, nil
-}
