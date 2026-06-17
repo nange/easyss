@@ -17,6 +17,7 @@ import (
 	"github.com/nange/easyss/v3/server/config"
 	"github.com/nange/easyss/v3/server/handler"
 	"github.com/nange/easyss/v3/server/nextproxy"
+	"github.com/nange/easyss/v3/stats"
 )
 
 type Server struct {
@@ -103,6 +104,27 @@ func (s *Server) manageCert(storage certmagic.Storage, disableARI bool) (*tls.Co
 		return nil, cache, err
 	}
 	return tlsConfig, cache, nil
+}
+
+func (s *Server) statsLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		snap := stats.Collect()
+		log.Info("[SERVER_STATS]",
+			"uptime", snap.Uptime().Round(time.Second),
+			"tx", stats.HumanBytes(snap.BytesSent),
+			"rx", stats.HumanBytes(snap.BytesRecv),
+			"tcp", snap.ServerTCPStreams,
+			"udp", snap.ServerUDPStreams,
+			"icmp", snap.ServerICMPStreams,
+			"ping", snap.ServerPingStreams,
+			"hserr", snap.ServerHandshakeErrors,
+			"fallback", snap.ServerFallbackPages,
+			"padding", stats.HumanBytes(snap.PaddingBytes),
+			"records", snap.RecordsWritten,
+		)
+	}
 }
 
 func certmagicStoragePath() (string, error) {
@@ -234,6 +256,7 @@ func (s *Server) Start() error {
 	s.httpServer.Protocols.SetHTTP2(true)
 
 	log.Info("[SERVER] listening", "addr", s.cfg.Listen, "routes", []string{"/", "/v3/tcp", "/v3/udp", "/v3/icmp", "/v3/ping"})
+	go s.statsLoop()
 	return s.httpServer.ListenAndServeTLS("", "")
 }
 

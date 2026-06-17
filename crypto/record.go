@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/util/bytespool"
 )
 
@@ -67,6 +68,10 @@ func (rw *RecordWriter) WriteRecord(plaintext []byte) error {
 	if n != recordLen {
 		return io.ErrShortWrite
 	}
+
+	stats.RecordBytesSent(recordLen)
+	stats.RecordRecordWritten()
+
 	if flusher, ok := rw.w.(recordFlusher); ok {
 		flusher.Flush()
 	}
@@ -119,6 +124,8 @@ func (rr *RecordReader) ReadRecord() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("crypto: decrypt record: %w", err)
 	}
+
+	stats.RecordBytesRecv(protocol.MaxCipherLenSize + cipherLen)
 
 	return plaintext, nil
 }

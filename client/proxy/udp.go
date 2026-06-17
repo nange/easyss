@@ -11,6 +11,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/client/router"
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/txthinking/socks5"
@@ -67,10 +68,12 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 
 	if isDirect {
 		log.Info("[DNS_DIRECT]", "domain", domain, "qtype", qtype)
+		stats.RecordDNSDirectQuery()
 		return s.directDNSQuery(srv, clientAddr, d, msg, domain)
 	}
 
 	log.Info("[DNS_PROXY]", "domain", domain, "qtype", qtype)
+	stats.RecordDNSProxyQuery()
 	return s.proxyDNSQuery(srv, clientAddr, d, msg, domain)
 }
 

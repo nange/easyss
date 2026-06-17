@@ -16,6 +16,7 @@ import (
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
+	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
 	"github.com/nange/easyss/v3/util/bytespool"
 )
@@ -98,6 +99,7 @@ func NewStreamHandler(tr transport.Transport, masterKey []byte, shaperCfg shaper
 }
 
 func (h *StreamHandler) OpenTCPStream(ctx context.Context, target string, method protocol.Method, localConn net.Conn) error {
+	stats.RecordTCPConnection()
 	return h.openStream(ctx, "/v3/tcp", protocol.ProtoTCP, target, method, localConn)
 }
 
@@ -345,9 +347,10 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 	defer bytespool.MustPut(buf)
 	for {
 		n, err := src.Read(buf)
-		if n > 0 {
-			signalActivity()
-			frame := protocol.NewFrameDATA(buf[:n])
+			if n > 0 {
+		signalActivity()
+				stats.RecordProxyBytesSent(n)
+				frame := protocol.NewFrameDATA(buf[:n])
 			if pErr := tx.PushFrame(frame); pErr != nil {
 				_ = tx.Flush()
 				if errors.Is(pErr, io.ErrClosedPipe) {
@@ -440,14 +443,15 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 			return nil
 		}
 		meter.setState("write_local")
-		if _, wErr := dst.Write(item.data); wErr != nil {
-			if isLocalConnClosedError(wErr) {
-				log.Debug("[STREAM] local connection closed", "err", wErr)
-				return errLocalConnClosed
+			if _, wErr := dst.Write(item.data); wErr != nil {
+				if isLocalConnClosedError(wErr) {
+					log.Debug("[STREAM] local connection closed", "err", wErr)
+					return errLocalConnClosed
+				}
+				return wErr
 			}
-			return wErr
-		}
-		meter.add(len(item.data), "read_remote")
+		stats.RecordProxyBytesRecv(len(item.data))
+			meter.add(len(item.data), "read_remote")
 	}
 
 	return <-readDone
@@ -479,6 +483,7 @@ type UDPExchange struct {
 }
 
 func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, method protocol.Method) (*UDPExchange, error) {
+	stats.RecordUDPAssociation()
 	log.Debug("[UDP_EXCHANGE] opening", "target", target)
 
 	salt, err := crypto.GenerateSalt()

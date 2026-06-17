@@ -11,6 +11,7 @@ import (
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/server/nextproxy"
 	"github.com/nange/easyss/v3/shaper"
+	"github.com/nange/easyss/v3/stats"
 )
 
 type ProxyHandler struct {
@@ -86,18 +87,21 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	first, err := sk.ReadFirstRecordWithTimeout(r.Context(), r.Body, h.handshakeTimeout)
 	if err != nil {
 		log.Error("[SERVER] read first record", "remote", r.RemoteAddr, "endpoint", endpoint, "err", err)
+		stats.RecordServerHandshakeError()
 		ServeFallback(w, r)
 		return
 	}
 
 	if !first.Handshake.MatchesEndpoint(endpoint) {
 		log.Error("[SERVER] endpoint mismatch", "remote", r.RemoteAddr, "proto", first.Handshake.Proto.String(), "endpoint", endpoint)
+		stats.RecordServerHandshakeError()
 		ServeFallback(w, r)
 		return
 	}
 
 	if !h.allowedMethods[first.Handshake.Method] {
 		log.Error("[SERVER] method not allowed", "remote", r.RemoteAddr, "method", first.Handshake.Method.String())
+		stats.RecordServerHandshakeError()
 		ServeFallback(w, r)
 		return
 	}
@@ -136,12 +140,16 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var handleErr error
 	switch {
 	case strings.HasSuffix(endpoint, "/tcp"):
+		stats.RecordServerTCPStream()
 		handleErr = h.tcpHandler.Handle(c2sReader, s2cShaper, target)
 	case strings.HasSuffix(endpoint, "/udp"):
+		stats.RecordServerUDPStream()
 		handleErr = h.udpHandler.Handle(c2sReader, s2cShaper, target)
 	case strings.HasSuffix(endpoint, "/icmp"):
+		stats.RecordServerICMPStream()
 		handleErr = h.icmpHandler.Handle(c2sReader, s2cShaper, target)
 	case strings.HasSuffix(endpoint, "/ping"):
+		stats.RecordServerPingStream()
 		handleErr = h.pingHandler.Handle(c2sReader, s2cShaper, target)
 	}
 	if handleErr != nil {

@@ -24,6 +24,7 @@ import (
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
+	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/version"
 )
 
@@ -110,6 +111,9 @@ type App struct {
 	pingLatCh  chan time.Duration
 	pingCloser chan struct{}
 	pingOnce   sync.Once
+
+	statsCloser chan struct{}
+	statsOnce   sync.Once
 }
 
 func (a *App) Start() error {
@@ -211,7 +215,9 @@ func (a *App) Start() error {
 
 	a.pingLatCh = make(chan time.Duration, 1)
 	a.pingCloser = make(chan struct{})
+	a.statsCloser = make(chan struct{})
 	go a.pingBackground()
+	go a.statsLoop()
 
 	log.Info("[EASYSS-V3] started successfully")
 	return nil
@@ -220,6 +226,9 @@ func (a *App) Start() error {
 func (a *App) Stop() {
 	a.pingOnce.Do(func() {
 		close(a.pingCloser)
+	})
+	a.statsOnce.Do(func() {
+		close(a.statsCloser)
 	})
 
 	if a.tunMgr != nil {
@@ -299,6 +308,42 @@ func randomPingInterval() time.Duration {
 		return 15 * time.Second
 	}
 	return time.Duration(10+int(n.Int64())) * time.Second
+}
+
+func (a *App) statsLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if a.cli == nil {
+				continue
+			}
+			snap := stats.Collect()
+			trStats := a.cli.Transport().Stats()
+			log.Info("[STATS]",
+				"uptime", snap.Uptime().Round(time.Second),
+				"conns", trStats.ConnCount,
+				"active_streams", trStats.ActiveStream,
+				"streams(opened)", snap.TotalStreamsOpened,
+				"streams(closed)", snap.TotalStreamsClosed,
+				"tx", stats.HumanBytes(snap.BytesSent),
+				"rx", stats.HumanBytes(snap.BytesRecv),
+				"proxy_tx", stats.HumanBytes(snap.ProxyBytesSent),
+				"proxy_rx", stats.HumanBytes(snap.ProxyBytesRecv),
+				"tcp_conns", snap.TCPConnections,
+				"udp_assoc", snap.UDPAssociations,
+				"dns(hit)", snap.DNSCacheHits,
+				"dns(miss)", snap.DNSCacheMisses,
+				"dns(proxy)", snap.DNSProxyQueries,
+				"dns(direct)", snap.DNSDirectQueries,
+				"padding", stats.HumanBytes(snap.PaddingBytes),
+				"records", snap.RecordsWritten,
+			)
+		case <-a.statsCloser:
+			return
+		}
+	}
 }
 
 func exampleV3Config() string {

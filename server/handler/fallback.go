@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/nange/easyss/v3/stats"
 )
 
 var fallbackTmpl = template.Must(template.New("fallback").Parse(`<!DOCTYPE html>
@@ -426,6 +428,7 @@ func SetFallbackHTML(html []byte) {
 // If custom HTML was set via SetFallbackHTML, it is used for all paths.
 // Otherwise a themed, path-aware page is rendered.
 func ServeFallback(w http.ResponseWriter, r *http.Request) {
+	stats.RecordServerFallbackPage()
 	initOnce.Do(func() {
 		selectedTheme = themes[rand.IntN(len(themes))]
 	})
