@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/nange/easyss/v3/client/config"
+	"github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/router"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
@@ -158,8 +159,8 @@ func resolveServerIPV6(cfg *config.ClientConfig) string {
 		return ""
 	}
 
-	for _, dnsServer := range directDNSServers {
-		ips, err := util.LookupIPV6From(dnsServer, svr.Address)
+	for _, dnsServer := range dns.DirectDNSServers {
+		ips, err := dns.LookupIPV6From(dnsServer, svr.Address)
 		if err != nil || len(ips) == 0 {
 			continue
 		}
@@ -173,8 +174,6 @@ func detectIPV6Networking() bool {
 	_, _, err := util.SysGatewayAndDeviceV6()
 	return err == nil
 }
-
-var directDNSServers = []string{"223.5.5.53:53", "119.29.29.29:53", "[2400:3200::1]:53", "[2400:3200:baba::1]:53"}
 
 func (c *Client) Router() *router.Router {
 	return c.router

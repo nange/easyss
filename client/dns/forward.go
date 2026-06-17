@@ -6,21 +6,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coocood/freecache"
 	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/log"
 )
 
-const (
-	defaultDNSCacheSize = 2 * 1024 * 1024
-	defaultDNSCacheTTL  = 2 * 60 * 60
-)
+// DirectDNSServers are the public DNS servers used for direct (non-proxied) DNS lookups.
+var DirectDNSServers = []string{"223.5.5.53:53", "119.29.29.29:53", "[2400:3200::1]:53", "[2400:3200:baba::1]:53"}
 
-var directDNSServers = []string{"223.5.5.53:53", "119.29.29.29:53", "[2400:3200::1]:53", "[2400:3200:baba::1]:53"}
+// ProxyDNSServer is the upstream DNS server used when proxying DNS queries through the tunnel.
+const ProxyDNSServer = "8.8.8.8:53"
 
 type ForwardServer struct {
 	listenAddr string
-	cache      *freecache.Cache
 	client     *dns.Client
 	dnsServer  *dns.Server
 	mu         sync.Mutex
@@ -30,7 +27,6 @@ type ForwardServer struct {
 func NewForwardServer(listenAddr string) *ForwardServer {
 	return &ForwardServer{
 		listenAddr: listenAddr,
-		cache:      freecache.NewCache(defaultDNSCacheSize),
 		client:     &dns.Client{},
 	}
 }
@@ -70,13 +66,6 @@ func (s *ForwardServer) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	q := r.Question[0]
-	key := q.Name + dns.TypeToString[q.Qtype]
-
-	if cached := s.getFromCache(key); cached != nil {
-		cached.SetReply(r)
-		_ = w.WriteMsg(cached)
-		return
-	}
 
 	reply, err := s.forwardQuery(r)
 	if err != nil {
@@ -87,7 +76,6 @@ func (s *ForwardServer) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
-	s.setCache(key, reply)
 	reply.SetReply(r)
 	_ = w.WriteMsg(reply)
 }
@@ -95,7 +83,7 @@ func (s *ForwardServer) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 func (s *ForwardServer) forwardQuery(msg *dns.Msg) (*dns.Msg, error) {
 	var lastErr error
 
-	for _, server := range directDNSServers {
+	for _, server := range DirectDNSServers {
 		reply, _, err := s.client.Exchange(msg, server)
 		if err != nil {
 			lastErr = err
@@ -108,29 +96,6 @@ func (s *ForwardServer) forwardQuery(msg *dns.Msg) (*dns.Msg, error) {
 	}
 
 	return nil, lastErr
-}
-
-func (s *ForwardServer) getFromCache(key string) *dns.Msg {
-	v, err := s.cache.Get([]byte(key))
-	if err != nil || len(v) == 0 {
-		return nil
-	}
-	msg := &dns.Msg{}
-	if err := msg.Unpack(v); err != nil {
-		return nil
-	}
-	return msg
-}
-
-func (s *ForwardServer) setCache(key string, msg *dns.Msg) {
-	if msg == nil {
-		return
-	}
-	v, err := msg.Pack()
-	if err != nil {
-		return
-	}
-	_ = s.cache.Set([]byte(key), v, defaultDNSCacheTTL)
 }
 
 func (s *ForwardServer) IsRunning() bool {

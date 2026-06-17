@@ -13,11 +13,9 @@ import (
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/txthinking/socks5"
+
+	easydns "github.com/nange/easyss/v3/client/dns"
 )
-
-const DefaultDNSServer = "8.8.8.8:53"
-
-var directDNSServers = []string{"223.5.5.53:53", "119.29.29.29:53", "[2400:3200::1]:53", "[2400:3200:baba::1]:53"}
 
 func (s *Socks5Server) handleUDP(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram) error {
 	src := clientAddr.String()
@@ -52,10 +50,11 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 
 	isDirect := rule == router.HostRuleDirect
 
-	if cached := s.router.DNSCacheGet(question.Name, qtype, isDirect); cached != nil {
-		cached.Id = msg.Id
-		return responseDNSMsg(srv.UDPConn, clientAddr, cached, d.Address())
-	}
+	if cached := s.dnsCache.Get(question.Name, qtype, isDirect); cached != nil {
+			log.Info("[DNS_CACHE] hit", "domain", domain, "qtype", qtype, "direct", isDirect)
+			cached.Id = msg.Id
+			return responseDNSMsg(srv.UDPConn, clientAddr, cached, d.Address())
+		}
 
 	if isDirect {
 		log.Info("[DNS_DIRECT]", "domain", domain, "qtype", qtype)
@@ -68,7 +67,7 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 
 func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg, domain string) error {
 	var lastErr error
-	for _, addr := range directDNSServers {
+		for _, addr := range easydns.DirectDNSServers {
 		ctx, cancel := context.WithTimeout(context.Background(), s.dialTimeout)
 		resp, err := s.exchangeDirectDNS(ctx, msg, addr)
 		cancel()
@@ -76,7 +75,7 @@ func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAdd
 			lastErr = err
 			continue
 		}
-		_ = s.router.DNSCacheSet(resp, true)
+		_ = s.dnsCache.Set(resp, true)
 		resp.Id = msg.Id
 		return responseDNSMsg(srv.UDPConn, clientAddr, resp, d.Address())
 	}
@@ -100,7 +99,7 @@ func (s *Socks5Server) exchangeDirectDNS(ctx context.Context, msg *dns.Msg, addr
 }
 
 func (s *Socks5Server) proxyDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg, domain string) error {
-	dst := DefaultDNSServer
+	dst := easydns.ProxyDNSServer
 	key := clientAddr.String() + "_" + dst
 
 	s.udpMu.RLock()
@@ -153,7 +152,7 @@ func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAd
 		msg := &dns.Msg{}
 		if err := msg.Unpack(data); err == nil && isDNSResponse(msg) {
 			if !s.router.ShouldIPV6Disable() || msg.Question[0].Qtype != dns.TypeAAAA {
-				_ = s.router.DNSCacheSet(msg, false)
+				_ = s.dnsCache.Set(msg, false)
 			}
 		}
 
