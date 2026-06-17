@@ -35,6 +35,27 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		return nil, err
 	}
 
+	rt, err := router.New(router.Config{
+		ProxyRule:         router.ParseProxyRule(cfg.Routing.ProxyRule),
+		IPV6Rule:          router.ParseIPV6Rule(cfg.Routing.IPV6Rule),
+		DirectIPsFile:     cfg.Routing.DirectIPsFile,
+		DirectDomainsFile: cfg.Routing.DirectDomainsFile,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	serverIPV6 := resolveServerIPV6(cfg)
+	ipv6Networking := detectIPV6Networking()
+	rt.SetIPV6Info(ipv6Networking, serverIPV6)
+
+	log.Info("[CLIENT] router initialized",
+		"proxy_rule", cfg.Routing.ProxyRule,
+		"ipv6_rule", cfg.Routing.IPV6Rule,
+		"ipv6_networking", ipv6Networking,
+		"server_ipv6", serverIPV6,
+	)
+
 	tlsCfg := cfg.UTLSConfig()
 	directDialer, directIface := newDirectDialer()
 
@@ -46,7 +67,7 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		SlotCount: slotCount,
 		Timeout:   cfg.TimeoutDuration(),
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return dialWithConfig(ctx, cfg, directDialer, network, addr)
+			return dialWithConfig(ctx, cfg, directDialer, rt, network, addr)
 		},
 	})
 	if err != nil {
@@ -54,16 +75,6 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	}
 
 	log.Info("[CLIENT] transport initialized", "server_url", cfg.ServerURL(), "slots", slotCount, "server_addr", cfg.DefaultServerAddr(), "direct_iface", directIface)
-
-	rt, err := router.New(router.Config{
-		ProxyRule:         router.ParseProxyRule(cfg.Routing.ProxyRule),
-		IPV6Rule:          router.ParseIPV6Rule(cfg.Routing.IPV6Rule),
-		DirectIPsFile:     cfg.Routing.DirectIPsFile,
-		DirectDomainsFile: cfg.Routing.DirectDomainsFile,
-	})
-	if err != nil {
-		return nil, err
-	}
 
 	shaperCfg := shaper.Config{
 		Mode:          cfg.Shaper.Mode,
@@ -99,7 +110,16 @@ func newDirectDialer() (*dialer.Dialer, string) {
 	return dialer.New(dialer.WithBindToInterface(iface)), dev
 }
 
-func dialWithConfig(ctx context.Context, cfg *config.ClientConfig, d *dialer.Dialer, network, addr string) (net.Conn, error) {
+func dialWithConfig(ctx context.Context, cfg *config.ClientConfig, d *dialer.Dialer, rt *router.Router, network, addr string) (net.Conn, error) {
+	if rt.ShouldIPV6Disable() {
+		switch network {
+		case "tcp":
+			network = "tcp4"
+		case "udp":
+			network = "udp4"
+		}
+	}
+
 	if cfg.Local.EnableTun2socks && d != nil {
 		return d.DialContext(ctx, network, addr)
 	}
@@ -126,6 +146,36 @@ func chooseSlotCount(minCount, maxCount int) int {
 	return minCount + int(n.Int64())
 }
 
+func resolveServerIPV6(cfg *config.ClientConfig) string {
+	svr := cfg.DefaultServer()
+	if svr == nil {
+		return ""
+	}
+	if ip := net.ParseIP(svr.Address); ip != nil {
+		if ip.To4() == nil {
+			return svr.Address
+		}
+		return ""
+	}
+
+	for _, dnsServer := range directDNSServers {
+		ips, err := util.LookupIPV6From(dnsServer, svr.Address)
+		if err != nil || len(ips) == 0 {
+			continue
+		}
+		return ips[0].String()
+	}
+	log.Warn("[CLIENT] failed to resolve server ipv6 via all direct dns servers", "server", svr.Address)
+	return ""
+}
+
+func detectIPV6Networking() bool {
+	_, _, err := util.SysGatewayAndDeviceV6()
+	return err == nil
+}
+
+var directDNSServers = []string{"223.5.5.53:53", "119.29.29.29:53", "[2400:3200::1]:53", "[2400:3200:baba::1]:53"}
+
 func (c *Client) Router() *router.Router {
 	return c.router
 }
@@ -135,7 +185,7 @@ func (c *Client) Transport() transport.Transport {
 }
 
 func (c *Client) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	return dialWithConfig(ctx, c.cfg, c.dialer, network, addr)
+	return dialWithConfig(ctx, c.cfg, c.dialer, c.router, network, addr)
 }
 
 func (c *Client) MasterKey() []byte {

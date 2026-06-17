@@ -12,6 +12,7 @@ import (
 	"github.com/nange/easyss/v3/shaper"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 )
 
 type ICMPHandler struct {
@@ -58,15 +59,31 @@ func (h *ICMPHandler) icmpExchange(target string, payload []byte) ([]byte, error
 	if len(payload) < 4 {
 		return nil, io.ErrUnexpectedEOF
 	}
-	conn, err := net.DialTimeout("ip4:icmp", target, 5*time.Second)
+
+	isIPv6 := isIPv6Target(target)
+	dialNet := "ip4:icmp"
+	parseProto := 1
+	if isIPv6 {
+		dialNet = "ip6:ipv6-icmp"
+		parseProto = 58
+	}
+
+	conn, err := net.DialTimeout(dialNet, target, 5*time.Second)
 	if err != nil {
 		log.Error("[ICMP] dial target failed", "target", target, "err", err)
 		return nil, err
 	}
 	defer conn.Close() //nolint:errcheck
 
+	var echoType icmp.Type
+	if isIPv6 {
+		echoType = ipv6.ICMPTypeEchoRequest
+	} else {
+		echoType = ipv4.ICMPTypeEcho
+	}
+
 	msg := icmp.Message{
-		Type: ipv4.ICMPTypeEcho,
+		Type: echoType,
 		Code: 0,
 		Body: &icmp.Echo{
 			ID:   int(binary.BigEndian.Uint16(payload[:2])),
@@ -95,11 +112,18 @@ func (h *ICMPHandler) icmpExchange(target string, payload []byte) ([]byte, error
 		return nil, err
 	}
 
-	rm, err := icmp.ParseMessage(1, rb[:n])
+	rm, err := icmp.ParseMessage(parseProto, rb[:n])
 	if err != nil {
 		return nil, err
 	}
-	if rm.Type != ipv4.ICMPTypeEchoReply {
+
+	var replyType icmp.Type
+	if isIPv6 {
+		replyType = ipv6.ICMPTypeEchoReply
+	} else {
+		replyType = ipv4.ICMPTypeEchoReply
+	}
+	if rm.Type != replyType {
 		return payload, nil
 	}
 
@@ -113,4 +137,16 @@ func (h *ICMPHandler) icmpExchange(target string, payload []byte) ([]byte, error
 	default:
 		return payload, nil
 	}
+}
+
+func isIPv6Target(target string) bool {
+	host, _, err := net.SplitHostPort(target)
+	if err != nil {
+		host = target
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.To4() == nil
 }

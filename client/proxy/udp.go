@@ -17,7 +17,7 @@ import (
 
 const DefaultDNSServer = "8.8.8.8:53"
 
-var directDNSServers = []string{"223.5.5.53:53", "119.29.29.29:53"}
+var directDNSServers = []string{"223.5.5.53:53", "119.29.29.29:53", "[2400:3200::1]:53", "[2400:3200:baba::1]:53"}
 
 func (s *Socks5Server) handleUDP(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram) error {
 	src := clientAddr.String()
