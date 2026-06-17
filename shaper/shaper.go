@@ -5,6 +5,7 @@ import (
 	"math/big"
 
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/stats"
 )
 
 type Shaper interface {
@@ -47,6 +48,7 @@ func BuildPaddingFrames(totalSize int) []protocol.Frame {
 	}
 
 	padSize := target - totalSize
+	stats.RecordPaddingBytes(padSize)
 	frame := protocol.NewFramePADDING(uint16(padSize))
 	_, _ = cryptorand.Read(frame.Payload)
 	return []protocol.Frame{frame}

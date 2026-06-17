@@ -16,6 +16,7 @@ import (
 	utls "github.com/refraction-networking/utls"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
 )
 
@@ -131,6 +132,8 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 		return nil, t.ctx.Err()
 	}
 
+	stats.RecordStreamOpened()
+
 	slot := t.leastActiveSlot()
 	slot.active.Add(1)
 
@@ -172,7 +175,10 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 		respCh <- roundTripResult{resp: resp, err: err}
 	}()
 
-	doneOnce := sync.OnceFunc(func() { slot.active.Add(-1) })
+	doneOnce := sync.OnceFunc(func() {
+		slot.active.Add(-1)
+		stats.RecordStreamClosed()
+	})
 
 	return &HTTP2Stream{
 		w:      pw,

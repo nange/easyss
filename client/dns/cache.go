@@ -3,6 +3,7 @@ package dns
 import (
 	"github.com/coocood/freecache"
 	"github.com/miekg/dns"
+	"github.com/nange/easyss/v3/stats"
 )
 
 const (
@@ -34,12 +35,15 @@ func (c *Cache) Get(name, qtype string, isDirect bool) *dns.Msg {
 	}
 	v, err := cache.Get([]byte(name + qtype))
 	if err != nil || len(v) == 0 {
+		stats.RecordDNSCacheMiss()
 		return nil
 	}
 	msg := &dns.Msg{}
 	if err := msg.Unpack(v); err != nil {
+		stats.RecordDNSCacheMiss()
 		return nil
 	}
+	stats.RecordDNSCacheHit()
 	return msg
 }
 
