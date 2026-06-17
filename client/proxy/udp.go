@@ -53,6 +53,9 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 
 	if cached := s.dnsCache.Get(question.Name, qtype, isDirect); cached != nil {
 			log.Info("[DNS_CACHE] hit", "domain", domain, "qtype", qtype, "direct", isDirect)
+			if s.router.ShouldIPV6Disable() && cached.Question[0].Qtype == dns.TypeAAAA {
+				cached.Answer = nil
+			}
 			cached.Id = msg.Id
 			return responseDNSMsg(srv.UDPConn, clientAddr, cached, d.Address())
 		}
@@ -78,6 +81,9 @@ func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAdd
 		if err != nil {
 			lastErr = err
 			continue
+		}
+		if s.router.ShouldIPV6Disable() && msg.Question[0].Qtype == dns.TypeAAAA {
+			resp.Answer = nil
 		}
 		_ = s.dnsCache.Set(resp, true)
 		resp.Id = msg.Id
@@ -155,11 +161,14 @@ func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAd
 
 		msg := &dns.Msg{}
 		if err := msg.Unpack(data); err == nil && isDNSResponse(msg) {
-			if !s.router.ShouldIPV6Disable() || msg.Question[0].Qtype != dns.TypeAAAA {
-				_ = s.dnsCache.Set(msg, false)
+			if s.router.ShouldIPV6Disable() && msg.Question[0].Qtype == dns.TypeAAAA {
+				msg.Answer = nil
+				if packed, packErr := msg.Pack(); packErr == nil {
+					data = packed
+				}
 			}
+			_ = s.dnsCache.Set(msg, false)
 		}
-
 		s.sendToClient(srv, clientAddr, data, target)
 	}
 }
