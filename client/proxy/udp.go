@@ -11,6 +11,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/client/router"
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/txthinking/socks5"
 
@@ -67,7 +68,10 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 
 func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg, domain string) error {
 	var lastErr error
-		for _, addr := range easydns.DirectDNSServers {
+	for _, addr := range easydns.DirectDNSServers {
+		if s.router.ShouldIPV6Disable() && util.IsIPV6Addr(addr) {
+			continue
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), s.dialTimeout)
 		resp, err := s.exchangeDirectDNS(ctx, msg, addr)
 		cancel()

@@ -11,6 +11,7 @@ import (
 	"github.com/nange/easyss/v3/client/router"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/util"
 	"github.com/txthinking/socks5"
 
 	easydns "github.com/nange/easyss/v3/client/dns"
@@ -115,6 +116,11 @@ func (s *Socks5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 	if err != nil {
 		log.Error("[SOCKS5] parse target", "target", target, "err", err)
 		return s.replyError(c, r, socks5.RepServerFailure)
+	}
+
+	if s.router.ShouldIPV6Disable() && util.IsIPV6(host) {
+		log.Warn("[SOCKS5] ipv6 target rejected, ipv6 disabled", "target", target)
+		return s.replyError(c, r, socks5.RepNotAllowed)
 	}
 
 	local := c.RemoteAddr().String()

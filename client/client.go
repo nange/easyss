@@ -46,8 +46,12 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		return nil, err
 	}
 
-	serverIPV6 := resolveServerIPV6(cfg)
-	ipv6Networking := detectIPV6Networking()
+	serverIPV6 := ""
+	ipv6Networking := false
+	if router.ParseIPV6Rule(cfg.Routing.IPV6Rule) != router.IPV6RuleDisable {
+		serverIPV6 = resolveServerIPV6(cfg)
+		ipv6Networking = detectIPV6Networking()
+	}
 	rt.SetIPV6Info(ipv6Networking, serverIPV6)
 
 	log.Info("[CLIENT] router initialized",

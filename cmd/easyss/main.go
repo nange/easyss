@@ -181,7 +181,7 @@ func (a *App) Start() error {
 
 	if a.cfg.Local.EnableForwardDNS {
 		dnsAddr := "127.0.0.1:53"
-		a.dnsServer = dns.NewForwardServer(dnsAddr)
+		a.dnsServer = dns.NewForwardServer(dnsAddr, cli.Router().ShouldIPV6Disable())
 		go func() {
 			if err := a.dnsServer.Start(); err != nil {
 				log.Error("[EASYSS-V3] dns forward server", "err", err)
