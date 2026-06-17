@@ -29,7 +29,7 @@ import (
 
 func main() {
 	var printVer, showConfigExample, daemon, disableTray, enableTun2socks bool
-	var configFile string
+	var configFile, cmdIPV6Rule string
 
 	flag.BoolVar(&printVer, "version", false, "print version")
 	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file")
@@ -37,6 +37,7 @@ func main() {
 	flag.BoolVar(&daemon, "daemon", runtime.GOOS != "windows", "run app as daemon")
 	flag.BoolVar(&disableTray, "disable-tray", false, "disable system tray (windows/mac only)")
 	flag.BoolVar(&enableTun2socks, "enable-tun2socks", false, "enable tun2socks model")
+	flag.StringVar(&cmdIPV6Rule, "ipv6-rule", "", "set the ipv6 rule(auto, enable, disable), default: auto")
 
 	flag.Parse()
 
@@ -62,12 +63,16 @@ func main() {
 	if enableTun2socks {
 		cfg.Local.EnableTun2socks = true
 	}
+	if cmdIPV6Rule != "" {
+		cfg.Routing.IPV6Rule = cmdIPV6Rule
+	}
 
 	log.Info("[EASYSS-V3] config loaded",
 		"server", cfg.DefaultServerAddr(),
 		"socks_port", cfg.Local.SocksPort,
 		"http_port", cfg.Local.HTTPPort,
 		"proxy_rule", cfg.Routing.ProxyRule,
+		"ipv6_rule", cfg.Routing.IPV6Rule,
 		"timeout", cfg.Timeout,
 	)
 
@@ -137,7 +142,7 @@ func (a *App) Start() error {
 	if a.cfg.Local.SocksPort > 0 {
 		socksAddr := "127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
 		if a.cfg.Local.BindAll {
-			socksAddr = "0.0.0.0:" + strconv.Itoa(a.cfg.Local.SocksPort)
+			socksAddr = "[::]:" + strconv.Itoa(a.cfg.Local.SocksPort)
 		}
 		socksServer, err := proxy.NewSocks5Server(socksAddr, a.cfg.AuthUsername, a.cfg.AuthPassword, a.streamHandler, cli.Router(), method, !a.cfg.Local.EnableQUIC, timeout, cli.DialContext)
 		if err != nil {
@@ -159,7 +164,7 @@ func (a *App) Start() error {
 		}
 		httpAddr := "127.0.0.1:" + strconv.Itoa(a.cfg.Local.HTTPPort)
 		if a.cfg.Local.BindAll {
-			httpAddr = "0.0.0.0:" + strconv.Itoa(a.cfg.Local.HTTPPort)
+			httpAddr = "[::]:" + strconv.Itoa(a.cfg.Local.HTTPPort)
 		}
 		socksAddr := "127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
 		a.httpServer, err = proxy.NewHTTPProxyServer(httpAddr, socksAddr, a.cfg.AuthUsername, a.cfg.AuthPassword, timeout, a.streamHandler, cli.Router(), method, cli.DialContext)
@@ -186,9 +191,13 @@ func (a *App) Start() error {
 
 	if a.cfg.Local.EnableTun2socks {
 		socksProxyAddr := "socks5://127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
-		a.tunMgr = tun.New(tun.Config{
+		tunCfg := tun.Config{
 			Socks5Addr: socksProxyAddr,
-		})
+		}
+		if ipv6 := cli.Router().ServerIPV6(); ipv6 != "" {
+			tunCfg.ServerIPV6 = ipv6
+		}
+		a.tunMgr = tun.New(tunCfg)
 
 		icmpHandler := tun.NewICMPHandler(cli.Router())
 		icmpHandler.SetProxy(a.streamHandler, method)
@@ -308,7 +317,8 @@ func exampleV3Config() string {
     "http_port": 3080
   },
   "routing": {
-    "proxy_rule": "auto"
+    "proxy_rule": "auto",
+    "ipv6_rule": "auto"
   },
   "transport": {
     "conn_count_min": 8,

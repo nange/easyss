@@ -13,6 +13,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/checksum"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
 
@@ -184,8 +185,48 @@ func (h *ICMPHandler) sendICMPv4Reply(s *stack.Stack, id stack.TransportEndpoint
 }
 
 func (h *ICMPHandler) sendICMPv6Reply(s *stack.Stack, id stack.TransportEndpointID, pkt *stack.PacketBuffer, payload []byte) {
-	_ = s
-	_ = id
-	_ = pkt
-	_ = payload
+	ipv6Hdr := header.IPv6(pkt.NetworkHeader().Slice())
+
+	localAddr := ipv6Hdr.DestinationAddress()
+	remoteAddr := ipv6Hdr.SourceAddress()
+
+	if header.IsV6MulticastAddress(localAddr) {
+		return
+	}
+
+	r, err := s.FindRoute(pkt.NICID, localAddr, remoteAddr, ipv6.ProtocolNumber, false)
+	if err != nil {
+		log.Debug("[TUN-ICMP] find ipv6 route failed", "err", err)
+		return
+	}
+	defer r.Release()
+
+	transportData := stack.PayloadSince(pkt.TransportHeader())
+	defer transportData.Release()
+
+	icmpHdr := header.ICMPv6(transportData.AsSlice()[:header.ICMPv6HeaderSize])
+	icmpHdr.SetType(header.ICMPv6EchoReply)
+
+	payloadSlice := transportData.AsSlice()[header.ICMPv6HeaderSize:]
+	payloadCsum := checksum.Checksum(payloadSlice, 0)
+
+	icmpHdr.SetChecksum(header.ICMPv6Checksum(header.ICMPv6ChecksumParams{
+		Header:      icmpHdr,
+		Src:         localAddr,
+		Dst:         remoteAddr,
+		PayloadCsum: payloadCsum,
+		PayloadLen:  len(payloadSlice),
+	}))
+
+	replyBuf := buffer.MakeWithView(transportData.Clone())
+	replyPkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
+		ReserveHeaderBytes: int(r.MaxHeaderLength()),
+		Payload:            replyBuf,
+	})
+	defer replyPkt.DecRef()
+
+	r.WritePacket(stack.NetworkHeaderParams{
+		Protocol: header.ICMPv6ProtocolNumber,
+		TTL:      r.DefaultTTL(),
+	}, replyPkt)
 }

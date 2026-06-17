@@ -16,7 +16,7 @@ const (
 	defaultDNSCacheTTL  = 2 * 60 * 60
 )
 
-var directDNSServers = []string{"223.5.5.53:53", "119.29.29.29:53"}
+var directDNSServers = []string{"223.5.5.53:53", "119.29.29.29:53", "[2400:3200::1]:53", "[2400:3200:baba::1]:53"}
 
 type ForwardServer struct {
 	listenAddr string

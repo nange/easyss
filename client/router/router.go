@@ -347,6 +347,15 @@ func (r *Router) SetProxyRule(rule ProxyRule) {
 	r.proxyRule.Store(int32(rule))
 }
 
+func (r *Router) SetIPV6Info(networking bool, serverIPV6 string) {
+	r.cfg.IPV6NetWorking = networking
+	r.cfg.ServerIPV6 = serverIPV6
+}
+
+func (r *Router) ServerIPV6() string {
+	return r.cfg.ServerIPV6
+}
+
 func (r *Router) DNSCacheGet(name, qtype string, isDirect bool) *dns.Msg {
 	cache := r.dnsCache
 	if isDirect {
