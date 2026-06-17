@@ -25,8 +25,13 @@ func (s *Socks5Server) handleUDP(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 	_, hasAssoc := srv.AssociatedUDP.Get(src)
 	_ = hasAssoc
 
-	_, port, _ := net.SplitHostPort(dst)
+	host, port, _ := net.SplitHostPort(dst)
 	if s.disableQUIC && port == "443" {
+		return nil
+	}
+
+	if s.router.ShouldIPV6Disable() && util.IsIPV6(host) {
+		log.Warn("[UDP] ipv6 target rejected, ipv6 disabled", "target", dst)
 		return nil
 	}
 
