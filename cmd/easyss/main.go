@@ -41,7 +41,7 @@ func main() {
 	flag.IntVar(&cmdServerPort, "p", 0, "server port")
 	flag.StringVar(&cmdPassword, "k", "", "password")
 	flag.StringVar(&cmdMethod, "m", "", "encryption method (aes-256-gcm, chacha20-poly1305)")
-	flag.StringVar(&cmdProxyRule, "proxy-rule", "", "proxy rule (auto, proxy_all, direct_all)")
+	flag.StringVar(&cmdProxyRule, "proxy-rule", "", "proxy rule (auto, reverse_auto, proxy, direct, auto_block)")
 	flag.StringVar(&cmdOutboundProto, "outbound-proto", "", "outbound protocol (native, h2)")
 	flag.IntVar(&cmdLocalPort, "l", 0, "local socks5 port")
 	flag.IntVar(&cmdTimeout, "t", 0, "timeout in seconds")

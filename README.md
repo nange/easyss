@@ -83,7 +83,7 @@ Easyss v3 支持两种配置模式，自动识别：
 | `password` | 是 | - | 通信加密密钥 |
 | `local_port` | 否 | 2080 | 本地 SOCKS5 监听端口。`http_port` 自动设为 `local_port + 1000` |
 | `method` | 否 | aes-256-gcm | 加密方式，可选: `aes-256-gcm`, `chacha20-poly1305` |
-| `proxy_rule` | 否 | auto | 代理规则，可选: `auto`, `proxy_all`, `direct_all` |
+| `proxy_rule` | 否 | auto | 代理规则，可选: `auto`, `reverse_auto`, `proxy`, `direct`, `auto_block` |
 | `timeout` | 否 | 30 | 超时时间，单位秒 |
 | `bind_all` | 否 | false | 是否将监听端口绑定到所有本地 IP |
 | `outbound_proto` | 否 | native | 出口协议，可选: `native`, `h2`（效果相同，均为 HTTP/2） |
