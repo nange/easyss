@@ -255,7 +255,7 @@ func (r *Router) MatchHostRule(host string) HostRule {
 	if rule == ProxyRuleReverseAuto && !r.hostAtCN(host) {
 		return HostRuleDirect
 	}
-	if r.hostAtCN(host) {
+	if rule != ProxyRuleReverseAuto && r.hostAtCN(host) {
 		return HostRuleDirect
 	}
 	return HostRuleProxy
