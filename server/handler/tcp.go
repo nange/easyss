@@ -227,7 +227,7 @@ func (h *TCPHandler) copyFromClient(dr *crypto.DecryptedReader, dst net.Conn, si
 }
 
 func (h *TCPHandler) copyFromTarget(src net.Conn, s2c shaper.Shaper, signalActivity func(), meter *tcpStreamMeter) error {
-	buf := bytespool.Get(sharedconfig.DefaultStreamReadBufSize)
+	buf := bytespool.Get(16 * 1024)
 	defer bytespool.MustPut(buf)
 	for {
 		meter.setState("read_target")
