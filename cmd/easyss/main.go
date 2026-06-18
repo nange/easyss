@@ -129,7 +129,6 @@ func (a *App) Start() error {
 	}
 
 	shaperCfg := shaper.Config{
-		Mode:          a.cfg.Shaper.Mode,
 		BatchWindowMS: a.cfg.Shaper.BatchWindowMS,
 		Cover: shaper.CoverConfig{
 			BudgetRatio: a.cfg.Shaper.Cover.BudgetRatio,
@@ -381,7 +380,6 @@ func exampleV3Config() string {
     "conn_count_max": 16
   },
   "shaper": {
-    "mode": "light",
     "batch_window_ms": 5,
     "cover": {
       "budget_ratio": 0

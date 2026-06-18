@@ -82,7 +82,6 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	log.Info("[CLIENT] transport initialized", "server_url", cfg.ServerURL(), "slots", slotCount, "server_addr", cfg.DefaultServerAddr(), "direct_iface", directIface)
 
 	shaperCfg := shaper.Config{
-		Mode:          cfg.Shaper.Mode,
 		BatchWindowMS: cfg.Shaper.BatchWindowMS,
 		Cover: shaper.CoverConfig{
 			BudgetRatio: cfg.Shaper.Cover.BudgetRatio,
