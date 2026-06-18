@@ -65,6 +65,7 @@ Easyss v3 支持两种配置模式，自动识别：
   "password": "your-password",
   "local_port": 2080,
   "method": "aes-256-gcm",
+  "proxy_rule": "auto",
   "timeout": 30,
   "bind_all": false,
   "outbound_proto": "native",
@@ -82,18 +83,43 @@ Easyss v3 支持两种配置模式，自动识别：
 | `password` | 是 | - | 通信加密密钥 |
 | `local_port` | 否 | 2080 | 本地 SOCKS5 监听端口。`http_port` 自动设为 `local_port + 1000` |
 | `method` | 否 | aes-256-gcm | 加密方式，可选: `aes-256-gcm`, `chacha20-poly1305` |
+| `proxy_rule` | 否 | auto | 代理规则，可选: `auto`, `proxy_all`, `direct_all` |
 | `timeout` | 否 | 30 | 超时时间，单位秒 |
 | `bind_all` | 否 | false | 是否将监听端口绑定到所有本地 IP |
 | `outbound_proto` | 否 | native | 出口协议，可选: `native`, `h2`（效果相同，均为 HTTP/2） |
 | `log_level` | 否 | info | 日志级别，可选: `debug`, `info`, `warn`, `error` |
 | `log_file_path` | 否 | 空 | 日志文件路径，为空则输出到标准输出 |
 
-除 3 个必填参数外，其他均为可选。以上未列出的字段（如 `sn`, `ca_path`, `http_port`, `proxy_rule` 等）也可在简化模式中使用，会自动迁移到 v3 完整格式。
+除 3 个必填参数外，其他均为可选。以上未列出的字段（如 `sn`, `ca_path`, `http_port`, `ipv6_rule`, `enable_quic` 等）也可在简化模式中使用，会自动迁移到 v3 完整格式。
 
 执行以下命令可查看简化模式示例：
 
 ```bash
 ./easyss -show-config-example-simple
+```
+
+**简化模式命令行参数：**
+
+简化模式的配置项也可通过命令行参数指定，优先级高于配置文件：
+
+| 参数 | 说明 |
+|---|---|
+| `-s` | 服务器地址 |
+| `-p` | 服务器端口 |
+| `-k` | 通信加密密钥 |
+| `-l` | 本地 SOCKS5 端口 |
+| `-m` | 加密方式 |
+| `-proxy-rule` | 代理规则 |
+| `-t` | 超时时间（秒） |
+| `-outbound-proto` | 出口协议 |
+| `-log-level` | 日志级别 |
+| `-sn` | TLS SNI 覆盖 |
+| `-enable-quic` | 启用 QUIC 协议 |
+| `-ipv6-rule` | IPv6 规则 |
+
+示例：
+```bash
+./easyss -c config.json -s my-server.com -p 443 -k mypass -l 1080
 ```
 
 ---

@@ -29,12 +29,25 @@ import (
 )
 
 func main() {
-	var printVer, showConfigExample, showConfigExampleSimple, daemon, disableTray, enableTun2socks bool
+	var printVer, showConfigExample, showConfigExampleSimple, daemon, disableTray, enableTun2socks, enableQUIC bool
 	var configFile, cmdIPV6Rule string
+	var cmdServer, cmdPassword, cmdMethod, cmdProxyRule, cmdOutboundProto, cmdLogLevel, cmdSN string
+	var cmdServerPort, cmdLocalPort, cmdTimeout int
 
 	flag.BoolVar(&printVer, "version", false, "print version")
 	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file (full mode)")
 	flag.BoolVar(&showConfigExampleSimple, "show-config-example-simple", false, "show a example of config file (simple mode)")
+	flag.StringVar(&cmdServer, "s", "", "server address")
+	flag.IntVar(&cmdServerPort, "p", 0, "server port")
+	flag.StringVar(&cmdPassword, "k", "", "password")
+	flag.StringVar(&cmdMethod, "m", "", "encryption method (aes-256-gcm, chacha20-poly1305)")
+	flag.StringVar(&cmdProxyRule, "proxy-rule", "", "proxy rule (auto, proxy_all, direct_all)")
+	flag.StringVar(&cmdOutboundProto, "outbound-proto", "", "outbound protocol (native, h2)")
+	flag.IntVar(&cmdLocalPort, "l", 0, "local socks5 port")
+	flag.IntVar(&cmdTimeout, "t", 0, "timeout in seconds")
+	flag.StringVar(&cmdLogLevel, "log-level", "", "log level (debug, info, warn, error)")
+	flag.BoolVar(&enableQUIC, "enable-quic", false, "enable QUIC protocol")
+	flag.StringVar(&cmdSN, "sn", "", "TLS SNI override")
 	flag.StringVar(&configFile, "c", "config.json", "specify config file")
 	flag.BoolVar(&daemon, "daemon", runtime.GOOS != "windows", "run app as daemon")
 	flag.BoolVar(&disableTray, "disable-tray", false, "disable system tray (windows/mac only)")
@@ -71,6 +84,53 @@ func main() {
 	}
 	if cmdIPV6Rule != "" {
 		cfg.Routing.IPV6Rule = cmdIPV6Rule
+	}
+
+	// CLI overrides for simplified mode fields
+	srv := cfg.DefaultServer()
+	if srv != nil {
+		if cmdServer != "" {
+			srv.Address = cmdServer
+		}
+		if cmdServerPort > 0 {
+			srv.Port = cmdServerPort
+		}
+		if cmdPassword != "" {
+			srv.Password = cmdPassword
+		}
+		if cmdMethod != "" {
+			srv.Method = cmdMethod
+		}
+		if cmdSN != "" {
+			srv.SNI = cmdSN
+		}
+	}
+	if cmdProxyRule != "" {
+		cfg.Routing.ProxyRule = cmdProxyRule
+	}
+	if cmdOutboundProto != "" {
+		switch cmdOutboundProto {
+		case "native", "h2":
+			cfg.Transport.Protocol = "h2"
+		default:
+			log.Error("[EASYSS-V3] invalid outbound-proto", "value", cmdOutboundProto)
+			os.Exit(1)
+		}
+	}
+	if cmdLocalPort > 0 {
+		cfg.Local.SocksPort = cmdLocalPort
+		if cfg.Local.HTTPPort == 0 {
+			cfg.Local.HTTPPort = cmdLocalPort + 1000
+		}
+	}
+	if cmdTimeout > 0 {
+		cfg.Timeout = cmdTimeout
+	}
+	if cmdLogLevel != "" {
+		cfg.Log.Level = cmdLogLevel
+	}
+	if enableQUIC {
+		cfg.Local.EnableQUIC = true
 	}
 
 	log.Info("[EASYSS-V3] config loaded",
@@ -407,6 +467,7 @@ func exampleSimpleConfig() string {
   "password": "your-password",
   "local_port": 2080,
   "method": "aes-256-gcm",
+  "proxy_rule": "auto",
   "timeout": 30,
   "bind_all": false,
   "outbound_proto": "native",
