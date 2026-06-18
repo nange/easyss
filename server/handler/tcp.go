@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
@@ -101,15 +100,7 @@ func (h *TCPHandler) dialTarget(network, addr string) (net.Conn, error) {
 	if h.nextProxy != nil && h.nextProxy.ShouldProxy(addr) {
 		return h.nextProxy.Dial(network, addr)
 	}
-	conn, err := h.dialer.Dial(outboundTCPNetwork(addr), addr)
-	if err != nil {
-		return nil, err
-	}
-	if tc, ok := conn.(*net.TCPConn); ok {
-		_ = tc.SetReadBuffer(sharedconfig.DefaultTCPReadBufSize)
-		_ = tc.SetWriteBuffer(sharedconfig.DefaultTCPWriteBufSize)
-	}
-	return conn, nil
+	return h.dialer.Dial(outboundTCPNetwork(addr), addr)
 }
 
 func outboundTCPNetwork(addr string) string {
