@@ -5,9 +5,7 @@ const (
 	DefaultTCPStreamIdleTimeout = 10 * 60 // seconds
 	DefaultConnCountMin         = 8
 	DefaultConnCountMax         = 16
-	DefaultBatchWindowMS        = 2
-
-	DefaultStreamReadBufSize = 24 * 1024
+	DefaultBatchWindowMS        = 5
 
 	DefaultTCPReadBufSize  = 256 * 1024
 	DefaultTCPWriteBufSize = 256 * 1024
