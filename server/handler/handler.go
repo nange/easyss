@@ -143,7 +143,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s2cWriter := crypto.NewRecordWriter(w, s2cEnc, s2cCounter, aadS2C)
-	s2cShaper := shaper.NewLight(s2cWriter, shaper.Config{Mode: "light", BatchWindowMS: h.batchWindowMS, Cover: shaper.CoverConfig{}})
+		s2cShaper := shaper.NewLight(s2cWriter, shaper.Config{BatchWindowMS: h.batchWindowMS, Cover: shaper.CoverConfig{}})
 	defer s2cShaper.Close() //nolint:errcheck
 
 	var handleErr error

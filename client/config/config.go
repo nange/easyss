@@ -49,7 +49,6 @@ type TransportConfig struct {
 }
 
 type ShaperConfig struct {
-	Mode          string             `json:"mode"`
 	BatchWindowMS int                `json:"batch_window_ms"`
 	Cover         ShaperCoverConfig  `json:"cover"`
 }
@@ -210,9 +209,6 @@ func applyDefaults(c *ClientConfig) {
 	}
 	if c.Transport.ConnCountMax <= 0 {
 		c.Transport.ConnCountMax = config.DefaultConnCountMax
-	}
-	if c.Shaper.Mode == "" {
-		c.Shaper.Mode = "light"
 	}
 	if c.Shaper.BatchWindowMS <= 0 {
 		c.Shaper.BatchWindowMS = config.DefaultBatchWindowMS

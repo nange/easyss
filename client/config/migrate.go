@@ -67,7 +67,6 @@ func MigrateV2Config(v2 V2Config) *ClientConfig {
 			ConnCountMax:   16,
 		},
 		Shaper: ShaperConfig{
-			Mode:          "light",
 			BatchWindowMS: 5,
 		},
 		Log: LogConfig{

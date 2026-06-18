@@ -22,7 +22,6 @@ type CoverConfig struct {
 }
 
 type Config struct {
-	Mode          string
 	BatchWindowMS int
 	Cover         CoverConfig
 }
