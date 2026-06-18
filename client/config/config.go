@@ -277,3 +277,15 @@ func (c *ClientConfig) DefaultServerIndex() int {
 	}
 	return 0
 }
+
+func DefaultConfig() *ClientConfig {
+	cfg := &ClientConfig{
+		ConfigVersion: 3,
+		Local: LocalConfig{
+			SocksPort: 2080,
+			HTTPPort:  3080,
+		},
+	}
+	applyDefaults(cfg)
+	return cfg
+}

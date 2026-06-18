@@ -73,8 +73,33 @@ func main() {
 
 	cfg, err := config.LoadConfig(configFile)
 	if err != nil {
-		log.Error("[EASYSS-V3] load config", "err", err)
-		os.Exit(1)
+		if cmdServer != "" && cmdPassword != "" {
+			cfg = config.DefaultConfig()
+			srv := &config.ServerProfile{
+				Address:  cmdServer,
+				Password: cmdPassword,
+				Default:  true,
+			}
+			if cmdServerPort > 0 {
+				srv.Port = cmdServerPort
+			}
+			if cmdMethod != "" {
+				srv.Method = cmdMethod
+			}
+			if cmdSN != "" {
+				srv.SNI = cmdSN
+			}
+			cfg.Servers = []*config.ServerProfile{srv}
+			if srv.Port == 0 {
+				srv.Port = 443
+			}
+			if srv.Method == "" {
+				srv.Method = "aes-256-gcm"
+			}
+		} else {
+			log.Error("[EASYSS-V3] load config", "err", err)
+			os.Exit(1)
+		}
 	}
 
 	log.Info("[EASYSS-V3] set log-level", "level", cfg.Log.Level)
