@@ -9,7 +9,7 @@ import (
 
 func TestFileConfigEffectiveServerConfig(t *testing.T) {
 	data := []byte(`{
-		"config_version": 3,
+			"version": 3,
 		"server": {
 			"listen": ":443",
 			"domain": "example.com",
