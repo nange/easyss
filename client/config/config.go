@@ -14,7 +14,6 @@ import (
 )
 
 type ServerProfile struct {
-	Name     string `json:"name"`
 	Address  string `json:"address"`
 	Port     int    `json:"port"`
 	Password string `json:"password"`
@@ -64,12 +63,6 @@ type LogConfig struct {
 	FilePath string `json:"file_path"`
 }
 
-type CommandsConfig struct {
-	BeforeStartup string `json:"before_startup"`
-	Interval      string `json:"interval"`
-	IntervalTime  int    `json:"interval_time"`
-}
-
 type ClientConfig struct {
 	ConfigVersion int              `json:"config_version"`
 	Servers       []*ServerProfile `json:"servers"`
@@ -78,7 +71,6 @@ type ClientConfig struct {
 	Transport     TransportConfig  `json:"transport"`
 	Shaper        ShaperConfig     `json:"shaper"`
 	Log           LogConfig        `json:"log"`
-	Commands      CommandsConfig   `json:"commands"`
 	Timeout       int              `json:"timeout"`
 	AuthUsername  string           `json:"auth_username"`
 	AuthPassword  string           `json:"auth_password"`

@@ -28,18 +28,14 @@ type V2Config struct {
 	LogLevel          string          `json:"log_level"`
 	LogFilePath       string          `json:"log_file_path"`
 	TunConfig         json.RawMessage `json:"tun_config"`
-	CmdBeforeStartup  string          `json:"cmd_before_startup"`
-	CmdInterval       string          `json:"cmd_interval"`
-	CmdIntervalTime   int             `json:"cmd_interval_time"`
 }
 
 func MigrateV2Config(v2 V2Config) *ClientConfig {
 	v3 := ClientConfig{
 		ConfigVersion: 3,
-		Servers: []*ServerProfile{
-			{
-				Name:     "default",
-				Address:  v2.Server,
+			Servers: []*ServerProfile{
+				{
+					Address:  v2.Server,
 				Port:     v2.ServerPort,
 				Password: v2.Password,
 				Method:   v2.Method,
@@ -78,11 +74,6 @@ func MigrateV2Config(v2 V2Config) *ClientConfig {
 			Level:    v2.LogLevel,
 			FilePath: v2.LogFilePath,
 		},
-		Commands: CommandsConfig{
-			BeforeStartup: v2.CmdBeforeStartup,
-			Interval:      v2.CmdInterval,
-			IntervalTime:  v2.CmdIntervalTime,
-		},
 		Timeout: v2.Timeout,
 	}
 
@@ -103,9 +94,6 @@ func MigrateV2Config(v2 V2Config) *ClientConfig {
 	}
 	if v3.Routing.IPV6Rule == "" {
 		v3.Routing.IPV6Rule = "auto"
-	}
-	if v3.Commands.IntervalTime <= 0 {
-		v3.Commands.IntervalTime = 600
 	}
 
 	return &v3
