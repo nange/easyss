@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 )
 
@@ -28,9 +29,15 @@ type V2Config struct {
 	LogLevel          string          `json:"log_level"`
 	LogFilePath       string          `json:"log_file_path"`
 	TunConfig         json.RawMessage `json:"tun_config"`
+	OutboundProto     string          `json:"outbound_proto"`
 }
 
-func MigrateV2Config(v2 V2Config) *ClientConfig {
+func MigrateV2Config(v2 V2Config) (*ClientConfig, error) {
+	proto, err := outboundProtoToProtocol(v2.OutboundProto)
+	if err != nil {
+		return nil, err
+	}
+
 	v3 := ClientConfig{
 		ConfigVersion: 3,
 			Servers: []*ServerProfile{
@@ -61,7 +68,7 @@ func MigrateV2Config(v2 V2Config) *ClientConfig {
 			DirectDomainsFile: v2.DirectDomainsFile,
 		},
 		Transport: TransportConfig{
-			Protocol:       "h2",
+			Protocol:       proto,
 			EndpointPrefix: "/v3",
 			ConnCountMin:   8,
 			ConnCountMax:   16,
@@ -94,8 +101,11 @@ func MigrateV2Config(v2 V2Config) *ClientConfig {
 	if v3.Routing.IPV6Rule == "" {
 		v3.Routing.IPV6Rule = "auto"
 	}
+	if v3.Local.HTTPPort == 0 && v3.Local.SocksPort > 0 {
+		v3.Local.HTTPPort = v3.Local.SocksPort + 1000
+	}
 
-	return &v3
+	return &v3, nil
 }
 
 func MigrateV2ToV3(v2Path, v3Path string) error {
@@ -109,7 +119,10 @@ func MigrateV2ToV3(v2Path, v3Path string) error {
 		return err
 	}
 
-	v3 := MigrateV2Config(v2)
+	v3, err := MigrateV2Config(v2)
+	if err != nil {
+		return err
+	}
 
 	v3JSON, err := json.MarshalIndent(v3, "", "  ")
 	if err != nil {
@@ -117,4 +130,15 @@ func MigrateV2ToV3(v2Path, v3Path string) error {
 	}
 
 	return os.WriteFile(v3Path, v3JSON, 0644)
+}
+
+func outboundProtoToProtocol(proto string) (string, error) {
+	switch proto {
+	case "", "native":
+		return "", nil
+	case "h2":
+		return "h2", nil
+	default:
+		return "", fmt.Errorf("invalid outbound_proto %q: valid values are empty, native, h2", proto)
+	}
 }

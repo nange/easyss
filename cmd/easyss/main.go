@@ -29,11 +29,12 @@ import (
 )
 
 func main() {
-	var printVer, showConfigExample, daemon, disableTray, enableTun2socks bool
+	var printVer, showConfigExample, showConfigExampleSimple, daemon, disableTray, enableTun2socks bool
 	var configFile, cmdIPV6Rule string
 
 	flag.BoolVar(&printVer, "version", false, "print version")
-	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file")
+	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file (full mode)")
+	flag.BoolVar(&showConfigExampleSimple, "show-config-example-simple", false, "show a example of config file (simple mode)")
 	flag.StringVar(&configFile, "c", "config.json", "specify config file")
 	flag.BoolVar(&daemon, "daemon", runtime.GOOS != "windows", "run app as daemon")
 	flag.BoolVar(&disableTray, "disable-tray", false, "disable system tray (windows/mac only)")
@@ -48,6 +49,10 @@ func main() {
 	}
 	if showConfigExample {
 		fmt.Println(exampleV3Config())
+		os.Exit(0)
+	}
+	if showConfigExampleSimple {
+		fmt.Println(exampleSimpleConfig())
 		os.Exit(0)
 	}
 
@@ -390,7 +395,22 @@ func exampleV3Config() string {
     "file_path": ""
   },
   "timeout": 30,
-  "auth_username": "",
-  "auth_password": ""
+	  "auth_username": "",
+	  "auth_password": ""
+}`
+}
+
+func exampleSimpleConfig() string {
+	return `{
+  "server": "your-domain.com",
+  "server_port": 443,
+  "password": "your-password",
+  "local_port": 2080,
+  "method": "aes-256-gcm",
+  "timeout": 30,
+  "bind_all": false,
+  "outbound_proto": "native",
+  "log_level": "info",
+  "log_file_path": ""
 }`
 }

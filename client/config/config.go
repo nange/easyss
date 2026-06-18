@@ -182,7 +182,7 @@ func LoadConfig(path string) (*ClientConfig, error) {
 		if err := json.Unmarshal(data, &v2); err != nil {
 			return nil, err
 		}
-		return MigrateV2Config(v2), nil
+		return MigrateV2Config(v2)
 	}
 
 	var cfg ClientConfig
