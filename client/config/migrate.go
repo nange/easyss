@@ -72,7 +72,7 @@ func MigrateV2Config(v2 V2Config) *ClientConfig {
 		},
 		Shaper: ShaperConfig{
 			Mode:          "light",
-			BatchWindowMS: 5,
+			BatchWindowMS: 2,
 		},
 		Log: LogConfig{
 			Level:    v2.LogLevel,

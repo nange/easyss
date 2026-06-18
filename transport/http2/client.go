@@ -99,6 +99,11 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 				return nil, err
 			}
 
+			if tc, ok := tcpConn.(*net.TCPConn); ok {
+				_ = tc.SetReadBuffer(sharedconfig.DefaultTCPReadBufSize)
+				_ = tc.SetWriteBuffer(sharedconfig.DefaultTCPWriteBufSize)
+			}
+
 			ucfg := utlsCfg.Clone()
 			if ucfg.ServerName == "" {
 				host, _, err := net.SplitHostPort(addr)

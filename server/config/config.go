@@ -34,6 +34,7 @@ type ServerConfig struct {
 	Email            string          `json:"email"`
 	FallbackHTMLPath string          `json:"fallback_html_path"`
 	Timeout          int             `json:"timeout"`
+	BatchWindowMS    int             `json:"batch_window_ms"`
 	NextProxy        NextProxyConfig `json:"next_proxy"`
 }
 

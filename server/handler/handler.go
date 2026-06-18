@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
@@ -18,6 +19,7 @@ type ProxyHandler struct {
 	masterKey        []byte
 	allowedMethods   map[protocol.Method]bool
 	handshakeTimeout time.Duration
+	batchWindowMS    int
 	nextProxy        *nextproxy.NextProxy
 	tcpHandler       *TCPHandler
 	udpHandler       *UDPHandler
@@ -31,6 +33,7 @@ type ProxyHandlerConfig struct {
 	HandshakeTimeout  time.Duration
 	StreamIdleTimeout time.Duration
 	UDPIdleTimeout    time.Duration
+	BatchWindowMS     int
 	NextProxy         *nextproxy.NextProxy
 }
 
@@ -47,10 +50,16 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 		allowed[protocol.MethodChaCha20Poly1305] = true
 	}
 
+	batchWindowMS := cfg.BatchWindowMS
+	if batchWindowMS <= 0 {
+		batchWindowMS = sharedconfig.DefaultBatchWindowMS
+	}
+
 	return &ProxyHandler{
 		masterKey:        cfg.MasterKey,
 		allowedMethods:   allowed,
 		handshakeTimeout: cfg.HandshakeTimeout,
+		batchWindowMS:    batchWindowMS,
 		nextProxy:        cfg.NextProxy,
 		tcpHandler:       NewTCPHandler(cfg.StreamIdleTimeout, cfg.NextProxy),
 		udpHandler:       NewUDPHandler(cfg.UDPIdleTimeout, cfg.NextProxy),
@@ -134,7 +143,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s2cWriter := crypto.NewRecordWriter(w, s2cEnc, s2cCounter, aadS2C)
-	s2cShaper := shaper.NewLight(s2cWriter, shaper.Config{Mode: "light", BatchWindowMS: 5, Cover: shaper.CoverConfig{}})
+	s2cShaper := shaper.NewLight(s2cWriter, shaper.Config{Mode: "light", BatchWindowMS: h.batchWindowMS, Cover: shaper.CoverConfig{}})
 	defer s2cShaper.Close() //nolint:errcheck
 
 	var handleErr error

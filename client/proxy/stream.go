@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
@@ -235,7 +236,7 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 	frames := []protocol.Frame{hsFrame}
 	if localConn != nil {
 		_ = localConn.SetReadDeadline(time.Now().Add(5 * time.Millisecond))
-		buf := bytespool.Get(16 * 1024)
+		buf := bytespool.Get(sharedconfig.DefaultStreamReadBufSize)
 		n, rErr := localConn.Read(buf)
 		_ = localConn.SetReadDeadline(time.Time{})
 		if n > 0 {
@@ -348,7 +349,7 @@ func (h *StreamHandler) relay(target string, localConn net.Conn, tx shaper.Shape
 }
 
 func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signalActivity func()) error {
-	buf := bytespool.Get(16 * 1024)
+	buf := bytespool.Get(sharedconfig.DefaultStreamReadBufSize)
 	defer bytespool.MustPut(buf)
 	for {
 		n, err := src.Read(buf)
