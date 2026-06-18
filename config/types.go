@@ -7,9 +7,6 @@ const (
 	DefaultConnCountMax         = 16
 	DefaultBatchWindowMS        = 5
 
-	DefaultTCPReadBufSize  = 256 * 1024
-	DefaultTCPWriteBufSize = 256 * 1024
-
 	DefaultHTTP2MaxReadFrameSize           = 1 * 1024 * 1024
 	DefaultHTTP2ReceiveBufferPerConnection = 64 * 1024 * 1024
 	DefaultHTTP2ReceiveBufferPerStream     = 32 * 1024 * 1024
