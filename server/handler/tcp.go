@@ -24,11 +24,12 @@ type TCPHandler struct {
 }
 
 type tcpStreamMeter struct {
-	target string
-	total  atomic.Int64
-	last   atomic.Int64
-	state  atomic.Value
-	done   chan struct{}
+	target       string
+	total        atomic.Int64
+	last         atomic.Int64
+	state        atomic.Value
+	lastLoggedAt atomic.Int64
+	done         chan struct{}
 }
 
 func newTCPStreamMeter(target string) *tcpStreamMeter {
@@ -67,7 +68,11 @@ func (m *tcpStreamMeter) loop() {
 			total := m.total.Load()
 			last := m.last.Swap(total)
 			if total >= 1<<20 && total == last {
-				log.Warn("[TCP_HANDLE] downstream stalled", "target", m.target, "bytes", total, "state", m.state.Load())
+				now := time.Now().Unix()
+				if prev := m.lastLoggedAt.Load(); now-prev >= 60 {
+					m.lastLoggedAt.Store(now)
+					log.Info("[TCP_HANDLE] downstream stalled", "target", m.target, "bytes", total, "state", m.state.Load())
+				}
 			}
 		case <-m.done:
 			return

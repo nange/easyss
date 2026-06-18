@@ -26,12 +26,13 @@ var ErrStreamIdleTimeout = errors.New("stream idle timeout")
 var errLocalConnClosed = errors.New("local connection closed")
 
 type streamMeter struct {
-	component string
-	target    string
-	total     atomic.Int64
-	last      atomic.Int64
-	state     atomic.Value
-	done      chan struct{}
+	component    string
+	target       string
+	total        atomic.Int64
+	last         atomic.Int64
+	state        atomic.Value
+	lastLoggedAt atomic.Int64
+	done         chan struct{}
 }
 
 func newStreamMeter(component, target string) *streamMeter {
@@ -71,7 +72,11 @@ func (m *streamMeter) loop() {
 			total := m.total.Load()
 			last := m.last.Swap(total)
 			if total >= 1<<20 && total == last {
-				log.Warn("[STREAM] downstream stalled", "component", m.component, "target", m.target, "bytes", total, "state", m.state.Load())
+				now := time.Now().Unix()
+				if prev := m.lastLoggedAt.Load(); now-prev >= 60 {
+					m.lastLoggedAt.Store(now)
+					log.Info("[STREAM] downstream stalled", "component", m.component, "target", m.target, "bytes", total, "state", m.state.Load())
+				}
 			}
 		case <-m.done:
 			return
