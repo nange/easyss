@@ -385,7 +385,7 @@ func exampleV3Config() string {
     "conn_count_max": 16
   },
   "shaper": {
-    "batch_window_ms": 5,
+    "batch_window_ms": 3,
     "cover": {
       "budget_ratio": 0
     }

@@ -213,6 +213,9 @@ func applyDefaults(c *ClientConfig) {
 	if c.Shaper.BatchWindowMS <= 0 {
 		c.Shaper.BatchWindowMS = config.DefaultBatchWindowMS
 	}
+	if c.Shaper.BatchWindowMS > 10 {
+		c.Shaper.BatchWindowMS = 10
+	}
 	if c.Routing.ProxyRule == "" {
 		c.Routing.ProxyRule = "auto"
 	}
