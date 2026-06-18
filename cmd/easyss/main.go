@@ -352,13 +352,13 @@ func (a *App) statsLoop() {
 
 func exampleV3Config() string {
 	return `{
-  "config_version": 3,
+  "version": 3,
   "servers": [{
     "address": "your-domain.com",
     "port": 443,
     "password": "your-password",
     "method": "aes-256-gcm",
-    "sni": "",
+    "sn": "",
     "ca_path": "",
     "default": true
   }],

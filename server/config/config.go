@@ -33,7 +33,7 @@ type ServerConfig struct {
 }
 
 type FileConfig struct {
-	ConfigVersion int             `json:"config_version"`
+	ConfigVersion int             `json:"version"`
 	Server        ServerConfig    `json:"server"`
 	Log           LogConfig       `json:"log"`
 	Transport     TransportConfig `json:"transport"`

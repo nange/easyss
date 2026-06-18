@@ -92,7 +92,7 @@ func main() {
 
 func exampleV3ServerConfig() string {
 	return `{
-  "config_version": 3,
+  "version": 3,
   "server": {
     "listen": ":443",
     "domain": "your-domain.com",

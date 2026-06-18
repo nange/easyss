@@ -18,7 +18,7 @@ type ServerProfile struct {
 	Port     int    `json:"port"`
 	Password string `json:"password"`
 	Method   string `json:"method"`
-	SNI      string `json:"sni"`
+	SNI      string `json:"sn"`
 	CAPath   string `json:"ca_path"`
 	Default  bool   `json:"default"`
 }
@@ -63,7 +63,7 @@ type LogConfig struct {
 }
 
 type ClientConfig struct {
-	ConfigVersion int              `json:"config_version"`
+	ConfigVersion int              `json:"version"`
 	Servers       []*ServerProfile `json:"servers"`
 	Local         LocalConfig      `json:"local"`
 	Routing       RoutingConfig    `json:"routing"`
@@ -170,7 +170,7 @@ func LoadConfig(path string) (*ClientConfig, error) {
 	}
 
 	var probe struct {
-		ConfigVersion int              `json:"config_version"`
+		ConfigVersion int              `json:"version"`
 		Servers       []*ServerProfile `json:"servers"`
 		Server        string           `json:"server"`
 	}
