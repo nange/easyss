@@ -226,6 +226,7 @@ func (s *Server) Start() error {
 		HandshakeTimeout:  timeout / 2,
 		StreamIdleTimeout: streamIdleTimeout,
 		UDPIdleTimeout:    timeout,
+		BatchWindowMS:     s.cfg.BatchWindowMS,
 		NextProxy:         np,
 	})
 

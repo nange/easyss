@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
@@ -100,7 +101,15 @@ func (h *TCPHandler) dialTarget(network, addr string) (net.Conn, error) {
 	if h.nextProxy != nil && h.nextProxy.ShouldProxy(addr) {
 		return h.nextProxy.Dial(network, addr)
 	}
-	return h.dialer.Dial(outboundTCPNetwork(addr), addr)
+	conn, err := h.dialer.Dial(outboundTCPNetwork(addr), addr)
+	if err != nil {
+		return nil, err
+	}
+	if tc, ok := conn.(*net.TCPConn); ok {
+		_ = tc.SetReadBuffer(sharedconfig.DefaultTCPReadBufSize)
+		_ = tc.SetWriteBuffer(sharedconfig.DefaultTCPWriteBufSize)
+	}
+	return conn, nil
 }
 
 func outboundTCPNetwork(addr string) string {
@@ -218,7 +227,7 @@ func (h *TCPHandler) copyFromClient(dr *crypto.DecryptedReader, dst net.Conn, si
 }
 
 func (h *TCPHandler) copyFromTarget(src net.Conn, s2c shaper.Shaper, signalActivity func(), meter *tcpStreamMeter) error {
-	buf := bytespool.Get(16 * 1024)
+	buf := bytespool.Get(sharedconfig.DefaultStreamReadBufSize)
 	defer bytespool.MustPut(buf)
 	for {
 		meter.setState("read_target")
