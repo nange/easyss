@@ -137,7 +137,7 @@ Easyss v3 支持两种配置模式，自动识别：
     "conn_count_max": 16
   },
   "shaper": {
-    "batch_window_ms": 5,
+    "batch_window_ms": 3,
     "cover": {
       "budget_ratio": 0
     }

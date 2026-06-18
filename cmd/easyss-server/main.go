@@ -102,7 +102,7 @@ func exampleV3ServerConfig() string {
     "key_path": "",
     "email": "",
     "fallback_html_path": "",
-    "batch_window_ms": 5
+    "batch_window_ms": 3
   },
   "transport": {
     "protocol": "h2",

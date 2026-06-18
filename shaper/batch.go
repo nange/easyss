@@ -28,7 +28,10 @@ type batchShaper struct {
 func NewLight(writer *crypto.RecordWriter, cfg Config) Shaper {
 	window := time.Duration(cfg.BatchWindowMS) * time.Millisecond
 	if window <= 0 {
-		window = 5 * time.Millisecond
+		window = 3 * time.Millisecond
+	}
+	if window > 10*time.Millisecond {
+		window = 10 * time.Millisecond
 	}
 
 	bs := &batchShaper{

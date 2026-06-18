@@ -54,6 +54,9 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 	if batchWindowMS <= 0 {
 		batchWindowMS = sharedconfig.DefaultBatchWindowMS
 	}
+	if batchWindowMS > 10 {
+		batchWindowMS = 10
+	}
 
 	return &ProxyHandler{
 		masterKey:        cfg.MasterKey,
