@@ -35,10 +35,10 @@ type LocalConfig struct {
 }
 
 type RoutingConfig struct {
-	ProxyRule         string `json:"proxy_rule"`
-	IPV6Rule          string `json:"ipv6_rule"`
-	DirectIPsFile     string `json:"direct_ips_file"`
-	DirectDomainsFile string `json:"direct_domains_file"`
+	ProxyRule  string `json:"proxy_rule"`
+	IPV6Rule   string `json:"ipv6_rule"`
+	DirectFile string `json:"direct_file"`
+	ProxyFile  string `json:"proxy_file"`
 }
 
 type TransportConfig struct {

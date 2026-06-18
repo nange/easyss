@@ -37,10 +37,10 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	}
 
 	rt, err := router.New(router.Config{
-		ProxyRule:         router.ParseProxyRule(cfg.Routing.ProxyRule),
-		IPV6Rule:          router.ParseIPV6Rule(cfg.Routing.IPV6Rule),
-		DirectIPsFile:     cfg.Routing.DirectIPsFile,
-		DirectDomainsFile: cfg.Routing.DirectDomainsFile,
+		ProxyRule:  router.ParseProxyRule(cfg.Routing.ProxyRule),
+		IPV6Rule:   router.ParseIPV6Rule(cfg.Routing.IPV6Rule),
+		DirectFile: cfg.Routing.DirectFile,
+		ProxyFile:  cfg.Routing.ProxyFile,
 	})
 	if err != nil {
 		return nil, err

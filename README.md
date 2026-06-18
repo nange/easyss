@@ -69,6 +69,8 @@ Easyss v3 支持两种配置模式，自动识别：
   "timeout": 30,
   "bind_all": false,
   "outbound_proto": "native",
+  "direct_file": "",
+  "proxy_file": "",
   "log_level": "info",
   "log_file_path": ""
 }
@@ -89,6 +91,8 @@ Easyss v3 支持两种配置模式，自动识别：
 | `outbound_proto` | 否 | native | 出口协议，可选: `native`, `h2`（效果相同，均为 HTTP/2） |
 | `log_level` | 否 | info | 日志级别，可选: `debug`, `info`, `warn`, `error` |
 | `log_file_path` | 否 | 空 | 日志文件路径，为空则输出到标准输出 |
+| `direct_file` | 否 | 空 | 自定义直连文件路径（IP/CIDR/域名混写，每行一条） |
+| `proxy_file` | 否 | 空 | 自定义代理文件路径（IP/CIDR/域名混写，每行一条） |
 
 除 3 个必填参数外，其他均为可选。以上未列出的字段（如 `sn`, `ca_path`, `http_port`, `ipv6_rule`, `enable_quic` 等）也可在简化模式中使用，会自动迁移到 v3 完整格式。
 
@@ -116,6 +120,8 @@ Easyss v3 支持两种配置模式，自动识别：
 | `-sn` | TLS SNI 覆盖 |
 | `-enable-quic` | 启用 QUIC 协议 |
 | `-ipv6-rule` | IPv6 规则 |
+| `-direct-file` | 自定义直连文件路径 |
+| `-proxy-file` | 自定义代理文件路径 |
 
 示例：
 ```bash
@@ -153,8 +159,8 @@ Easyss v3 支持两种配置模式，自动识别：
   "routing": {
     "proxy_rule": "auto",
     "ipv6_rule": "auto",
-    "direct_ips_file": "",
-    "direct_domains_file": ""
+    "direct_file": "",
+    "proxy_file": ""
   },
   "transport": {
     "protocol": "h2",
@@ -209,27 +215,58 @@ Easyss 通过检测配置文件自动区分模式：
 
 **注意：代理对象，选择系统全局流量时，需要管理员权限。**
 
-**自定义直连白名单：**
+**自定义直连/代理白名单：**
 
-对于少部分国内的IP/域名，或者部分特殊的IP/域名，可能`Easyss`没有正确识别，造成本该直连的IP/域名走了代理，
-这时可在`easyss`所在目录下， 新建`direct_ips.txt`, `direct_domains.txt`， 分别用于存储直连IP列表和直连域名列表，每行一条记录。
+对于部分国内/国外的 IP 或域名，可能 `Easyss` 没有正确识别路由规则。可通过 `direct_file` 和 `proxy_file` 自定义。
 
-`direct_ips.txt`文件示例：
+在 `easyss` 所在目录下新建文本文件（如 `direct.txt`、`proxy.txt`），IP/CIDR/域名可混写，每行一条记录。然后在配置中指定路径：
+
+**简化模式：**
+```json
+{
+  "direct_file": "direct.txt",
+  "proxy_file": "proxy.txt"
+}
+```
+
+**完整模式：**
+```json
+"routing": {
+  "direct_file": "direct.txt",
+  "proxy_file": "proxy.txt"
+}
+```
+
+也可通过命令行指定：
+```bash
+./easyss -direct-file direct.txt -proxy-file proxy.txt
+```
+
+`direct.txt` 示例（直连白名单，匹配到则不走代理）：
 
 ```text
 39.156.66.10
 110.242.68.66
 106.11.84.3
 206.0.68.0/23
-```
-
-`direct_domains.txt`文件示例：
-
-```text
 baidu.com
 taobao.com
 your-custom-domain.com
 ```
+
+`proxy.txt` 示例（代理白名单，匹配到则强制走代理）：
+
+```text
+1.2.3.4
+10.0.0.0/8
+google.com
+twitter.com
+```
+
+**匹配规则：**
+- 每行自动识别类型：IP → 精确匹配，CIDR → 网段匹配，其他 → 域名匹配
+- 域名支持子域名匹配（如配置 `google.com`，则 `www.google.com`、`mail.google.com` 也会匹配）
+- 路由优先级：自定义直连 > 自定义代理 > auto/geo 规则
 
 ### 手机客户端
 

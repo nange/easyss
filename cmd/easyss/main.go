@@ -31,7 +31,7 @@ import (
 func main() {
 	var printVer, showConfigExample, showConfigExampleSimple, daemon, disableTray, enableTun2socks, enableQUIC bool
 	var configFile, cmdIPV6Rule string
-	var cmdServer, cmdPassword, cmdMethod, cmdProxyRule, cmdOutboundProto, cmdLogLevel, cmdSN string
+	var cmdServer, cmdPassword, cmdMethod, cmdProxyRule, cmdOutboundProto, cmdLogLevel, cmdSN, cmdDirectFile, cmdProxyFile string
 	var cmdServerPort, cmdLocalPort, cmdTimeout int
 
 	flag.BoolVar(&printVer, "version", false, "print version")
@@ -53,6 +53,8 @@ func main() {
 	flag.BoolVar(&disableTray, "disable-tray", false, "disable system tray (windows/mac only)")
 	flag.BoolVar(&enableTun2socks, "enable-tun2socks", false, "enable tun2socks model")
 	flag.StringVar(&cmdIPV6Rule, "ipv6-rule", "", "set the ipv6 rule(auto, enable, disable), default: auto")
+	flag.StringVar(&cmdDirectFile, "direct-file", "", "custom direct file (IPs/CIDRs/domains mixed, one per line)")
+	flag.StringVar(&cmdProxyFile, "proxy-file", "", "custom proxy file (IPs/CIDRs/domains mixed, one per line)")
 
 	flag.Parse()
 
@@ -131,6 +133,12 @@ func main() {
 	}
 	if enableQUIC {
 		cfg.Local.EnableQUIC = true
+	}
+	if cmdDirectFile != "" {
+		cfg.Routing.DirectFile = cmdDirectFile
+	}
+	if cmdProxyFile != "" {
+		cfg.Routing.ProxyFile = cmdProxyFile
 	}
 
 	log.Info("[EASYSS-V3] config loaded",
@@ -435,8 +443,8 @@ func exampleV3Config() string {
   "routing": {
     "proxy_rule": "auto",
     "ipv6_rule": "auto",
-    "direct_ips_file": "",
-    "direct_domains_file": ""
+    "direct_file": "",
+    "proxy_file": ""
   },
   "transport": {
     "protocol": "h2",
@@ -471,6 +479,8 @@ func exampleSimpleConfig() string {
   "timeout": 30,
   "bind_all": false,
   "outbound_proto": "native",
+  "direct_file": "",
+  "proxy_file": "",
   "log_level": "info",
   "log_file_path": ""
 }`

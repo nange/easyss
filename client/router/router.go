@@ -152,13 +152,13 @@ func subDomains(domain string) []string {
 }
 
 type Config struct {
-	ProxyRule         ProxyRule
-	IPV6Rule          IPV6Rule
-	DirectIPsFile     string
-	DirectDomainsFile string
-	DirectDNSServer   string
-	IPV6NetWorking    bool
-	ServerIPV6        string
+	ProxyRule       ProxyRule
+	IPV6Rule        IPV6Rule
+	DirectFile      string
+	ProxyFile       string
+	DirectDNSServer string
+	IPV6NetWorking  bool
+	ServerIPV6      string
 }
 
 type Router struct {
@@ -175,6 +175,9 @@ type Router struct {
 	customDirectIPs     map[string]struct{}
 	customDirectCIDRIPs []*net.IPNet
 	customDirectDomains map[string]struct{}
+	customProxyIPs      map[string]struct{}
+	customProxyCIDRIPs  []*net.IPNet
+	customProxyDomains  map[string]struct{}
 }
 
 func New(cfg Config) (*Router, error) {
@@ -202,31 +205,44 @@ func New(cfg Config) (*Router, error) {
 func (r *Router) loadCustomIPDomains() error {
 	r.customDirectIPs = make(map[string]struct{})
 	r.customDirectDomains = make(map[string]struct{})
+	r.customProxyIPs = make(map[string]struct{})
+	r.customProxyDomains = make(map[string]struct{})
 
-	if r.cfg.DirectIPsFile != "" {
-		directIPs, err := util.ReadFileLinesMap(r.cfg.DirectIPsFile)
+	if r.cfg.DirectFile != "" {
+		entries, err := util.ReadFileLinesMap(r.cfg.DirectFile)
 		if err != nil {
 			return err
 		}
-		for k := range directIPs {
+		for k := range entries {
 			_, ipnet, err := net.ParseCIDR(k)
-			if err != nil {
+			if err == nil && ipnet != nil {
+				r.customDirectCIDRIPs = append(r.customDirectCIDRIPs, ipnet)
+				continue
+			}
+			if util.IsIP(k) {
 				r.customDirectIPs[k] = struct{}{}
 				continue
 			}
-			if ipnet != nil {
-				r.customDirectCIDRIPs = append(r.customDirectCIDRIPs, ipnet)
-			}
+			r.customDirectDomains[k] = struct{}{}
 		}
 	}
 
-	if r.cfg.DirectDomainsFile != "" {
-		directDomains, err := util.ReadFileLinesMap(r.cfg.DirectDomainsFile)
+	if r.cfg.ProxyFile != "" {
+		entries, err := util.ReadFileLinesMap(r.cfg.ProxyFile)
 		if err != nil {
 			return err
 		}
-		for domain := range directDomains {
-			r.customDirectDomains[domain] = struct{}{}
+		for k := range entries {
+			_, ipnet, err := net.ParseCIDR(k)
+			if err == nil && ipnet != nil {
+				r.customProxyCIDRIPs = append(r.customProxyCIDRIPs, ipnet)
+				continue
+			}
+			if util.IsIP(k) {
+				r.customProxyIPs[k] = struct{}{}
+				continue
+			}
+			r.customProxyDomains[k] = struct{}{}
 		}
 	}
 
@@ -243,6 +259,9 @@ func (r *Router) MatchHostRule(host string) HostRule {
 	}
 	if r.hostMatchCustomDirect(host) {
 		return HostRuleDirect
+	}
+	if r.hostMatchCustomProxy(host) {
+		return HostRuleProxy
 	}
 	if rule == ProxyRuleAutoBlock && !util.IsIP(host) {
 		if r.geoSiteDirect.SimpleMatch(host, false) {
@@ -281,6 +300,33 @@ func (r *Router) hostMatchCustomDirect(host string) bool {
 		subs := subDomains(host)
 		for _, sub := range subs {
 			if _, ok := r.customDirectDomains[sub]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (r *Router) hostMatchCustomProxy(host string) bool {
+	r.customMu.RLock()
+	defer r.customMu.RUnlock()
+
+	if util.IsIP(host) {
+		if _, ok := r.customProxyIPs[host]; ok {
+			return true
+		}
+		for _, cidr := range r.customProxyCIDRIPs {
+			if cidr.Contains(net.ParseIP(host)) {
+				return true
+			}
+		}
+	} else {
+		if _, ok := r.customProxyDomains[host]; ok {
+			return true
+		}
+		subs := subDomains(host)
+		for _, sub := range subs {
+			if _, ok := r.customProxyDomains[sub]; ok {
 				return true
 			}
 		}

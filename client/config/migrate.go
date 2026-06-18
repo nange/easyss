@@ -23,8 +23,8 @@ type V2Config struct {
 	EnableQUIC        bool            `json:"enable_quic"`
 	ProxyRule         string          `json:"proxy_rule"`
 	IPV6Rule          string          `json:"ipv6_rule"`
-	DirectIPsFile     string          `json:"direct_ips_file"`
-	DirectDomainsFile string          `json:"direct_domains_file"`
+	DirectFile string `json:"direct_file"`
+	ProxyFile  string `json:"proxy_file"`
 	Timeout           int             `json:"timeout"`
 	LogLevel          string          `json:"log_level"`
 	LogFilePath       string          `json:"log_file_path"`
@@ -62,10 +62,10 @@ func MigrateV2Config(v2 V2Config) (*ClientConfig, error) {
 			TunConfig:        v2.TunConfig,
 		},
 		Routing: RoutingConfig{
-			ProxyRule:         v2.ProxyRule,
-			IPV6Rule:          v2.IPV6Rule,
-			DirectIPsFile:     v2.DirectIPsFile,
-			DirectDomainsFile: v2.DirectDomainsFile,
+			ProxyRule:  v2.ProxyRule,
+			IPV6Rule:   v2.IPV6Rule,
+			DirectFile: v2.DirectFile,
+			ProxyFile:  v2.ProxyFile,
 		},
 		Transport: TransportConfig{
 			Protocol:       proto,
