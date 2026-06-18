@@ -335,7 +335,7 @@ func (a *App) statsLoop() {
 				"rx", stats.HumanBytes(snap.BytesRecv),
 				"proxy_tx", stats.HumanBytes(snap.ProxyBytesSent),
 				"proxy_rx", stats.HumanBytes(snap.ProxyBytesRecv),
-				"tcp_conns", snap.TCPConnections,
+				"proxy_tcp_streams", snap.TCPConnections,
 				"udp_assoc", snap.UDPAssociations,
 				"dns(hit)", snap.DNSCacheHits,
 				"dns(miss)", snap.DNSCacheMisses,
