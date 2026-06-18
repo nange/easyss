@@ -98,10 +98,26 @@ func exampleV3ServerConfig() string {
     "domain": "your-domain.com",
     "password": "your-password",
     "allowed_methods": ["aes-256-gcm", "chacha20-poly1305"],
-    "email": ""
+    "cert_path": "",
+    "key_path": "",
+    "email": "",
+    "fallback_html_path": "",
+    "batch_window_ms": 5
+  },
+  "transport": {
+    "protocol": "h2",
+    "endpoint_prefix": "/v3"
+  },
+  "next_proxy": {
+    "url": "",
+    "domains_file": "",
+    "ips_file": "",
+    "enable_udp": false,
+    "all_host": false
   },
   "log": {
-    "level": "info"
+    "level": "info",
+    "file_path": ""
   },
   "timeout": 30
 }`

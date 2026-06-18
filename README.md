@@ -220,11 +220,6 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 
 我们只需要在配置文件中，将`server`字段配置为优选IP,再将`sn`字段配置为对应的在Cloudflare后台管理的域名即可。
 
-### 启动前或定期执行自定义命令
-
-同时Easyss还支持配置`cmd_before_startup`, `cmd_interval`参数，用于配置一个自定义命令，在Easyss启动前执行或者定期的执行。
-`cmd_interval_time`可用于控制定期执行间隔，默认10分钟执行一次。
-
 ### 作为透明代理将Easyss部署在路由器或者软路由上
 
 直接将Easyss部署在路由器或这软路由上，可实现家里或公司网络自动透明代理，无需在终端设备上安装Easyss客户端。

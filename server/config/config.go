@@ -10,12 +10,6 @@ type TransportConfig struct {
 	EndpointPrefix string `json:"endpoint_prefix"`
 }
 
-type CommandsConfig struct {
-	BeforeStartup string `json:"before_startup"`
-	Interval      string `json:"interval"`
-	IntervalTime  int    `json:"interval_time"`
-}
-
 type NextProxyConfig struct {
 	URL         string `json:"url"`
 	DomainsFile string `json:"domains_file"`
@@ -44,7 +38,6 @@ type FileConfig struct {
 	Log           LogConfig       `json:"log"`
 	Transport     TransportConfig `json:"transport"`
 	NextProxy     NextProxyConfig `json:"next_proxy"`
-	Commands      CommandsConfig  `json:"commands"`
 	Timeout       int             `json:"timeout"`
 }
 

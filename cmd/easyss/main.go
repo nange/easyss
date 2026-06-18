@@ -350,32 +350,49 @@ func exampleV3Config() string {
 	return `{
   "config_version": 3,
   "servers": [{
-    "name": "default",
     "address": "your-domain.com",
     "port": 443,
     "password": "your-password",
     "method": "aes-256-gcm",
+    "sni": "",
+    "ca_path": "",
     "default": true
   }],
   "local": {
     "socks_port": 2080,
-    "http_port": 3080
+    "http_port": 3080,
+    "bind_all": false,
+    "disable_sys_proxy": false,
+    "enable_forward_dns": false,
+    "enable_tun2socks": false,
+    "enable_quic": false,
+    "tun_config": {}
   },
   "routing": {
     "proxy_rule": "auto",
-    "ipv6_rule": "auto"
+    "ipv6_rule": "auto",
+    "direct_ips_file": "",
+    "direct_domains_file": ""
   },
   "transport": {
+    "protocol": "h2",
+    "endpoint_prefix": "/v3",
     "conn_count_min": 8,
     "conn_count_max": 16
   },
   "shaper": {
     "mode": "light",
-    "batch_window_ms": 5
+    "batch_window_ms": 5,
+    "cover": {
+      "budget_ratio": 0
+    }
   },
   "log": {
-    "level": "info"
+    "level": "info",
+    "file_path": ""
   },
-  "timeout": 30
+  "timeout": 30,
+  "auth_username": "",
+  "auth_password": ""
 }`
 }
