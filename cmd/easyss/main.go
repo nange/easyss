@@ -504,9 +504,9 @@ func exampleV3Config() string {
     "file_path": ""
   },
   "timeout": 30,
-	  "auth_username": "",
-	  "auth_password": "",
-	  "pprof_enabled": false
+  "auth_username": "",
+  "auth_password": "",
+  "pprof_enabled": false
 }`
 }
 
@@ -523,8 +523,8 @@ func exampleSimpleConfig() string {
   "outbound_proto": "native",
   "direct_file": "",
   "proxy_file": "",
-	  "log_level": "info",
-	  "log_file_path": "",
-	  "pprof_enabled": false
+  "log_level": "info",
+  "log_file_path": "",
+  "pprof_enabled": false
 }`
 }
