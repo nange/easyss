@@ -29,6 +29,7 @@ cmd/easyss/*.txt
 cmd/easyss/wintun.dll
 cmd/easyss/easyss*
 !cmd/easyss/easyss*.syso
+!cmd/easyss/easyss*_test.go
 cmd/easyss-server/easyss-server*
 
 .idea*
