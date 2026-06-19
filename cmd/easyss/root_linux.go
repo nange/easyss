@@ -5,9 +5,10 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/nange/easyss/v3/util"
 )
 
 func IsRoot() bool {
@@ -79,6 +80,6 @@ func RunMeElevated(extraArgs ...string) error {
 	}
 	cmdArgs = append(cmdArgs, "sh", "-c", innerCmd)
 
-	cmd := exec.Command("pkexec", cmdArgs...)
-	return cmd.Run()
+	_, err = util.Command("pkexec", cmdArgs...)
+	return err
 }

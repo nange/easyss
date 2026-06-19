@@ -5,8 +5,9 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
+
+	"github.com/nange/easyss/v3/util"
 )
 
 func IsRoot() bool {
@@ -35,6 +36,6 @@ func RunMeElevated(extraArgs ...string) error {
 	scriptCmd := strings.ReplaceAll(cmdStr, "\"", "\\\"")
 	script := fmt.Sprintf("do shell script \"%s\" with administrator privileges", scriptCmd)
 
-	cmd := exec.Command("osascript", "-e", script)
-	return cmd.Run()
+	_, err = util.Command("osascript", "-e", script)
+	return err
 }

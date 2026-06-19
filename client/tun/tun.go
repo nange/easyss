@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"time"
@@ -192,7 +191,7 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 		if os.Geteuid() == 0 {
 			cmdArgs = cmdArgs[1:]
 		}
-		if _, err := runCommand(ctx, cmdArgs[0], cmdArgs[1:]...); err != nil {
+		if _, err := util.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...); err != nil {
 			return fmt.Errorf("tun: exec create script: %w", err)
 		}
 	case "windows":
@@ -202,7 +201,7 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 			return fmt.Errorf("tun: rename script: %w", err)
 		}
 		namePath = newNamePath
-		if _, err := runCommand(ctx, "cmd.exe", "/C", namePath, d.Device,
+		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device,
 			d.TunIP, d.TunGW, d.TunMask, d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6); err != nil {
 			return fmt.Errorf("tun: exec create script: %w", err)
 		}
@@ -210,7 +209,7 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 		cmd := fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s %s %s\" with administrator privileges",
 			namePath, d.Device, d.TunIP, d.TunGW, d.LocalGateway,
 			d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6)
-		if _, err := runCommand(ctx, "osascript", "-e", cmd); err != nil {
+		if _, err := util.CommandContext(ctx, "osascript", "-e", cmd); err != nil {
 			return fmt.Errorf("tun: exec create script: %w", err)
 		}
 	}
@@ -239,7 +238,7 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 		if os.Geteuid() == 0 {
 			cmdArgs = cmdArgs[1:]
 		}
-		_, _ = runCommand(ctx, cmdArgs[0], cmdArgs[1:]...)
+		_, _ = util.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...)
 	case "windows":
 		dir := filepath.Dir(namePath)
 		newNamePath := filepath.Join(dir, scripts.CloseTunFilename)
@@ -247,11 +246,11 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 			return fmt.Errorf("tun: rename close script: %w", err)
 		}
 		namePath = newNamePath
-		_, _ = runCommand(ctx, "cmd.exe", "/C", namePath, d.Device, d.TunGW)
+		_, _ = util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device, d.TunGW)
 	case "darwin":
 		cmd := fmt.Sprintf("do shell script \"sh %s %s\" with administrator privileges",
 			namePath, d.Device)
-		_, _ = runCommand(ctx, "osascript", "-e", cmd)
+		_, _ = util.CommandContext(ctx, "osascript", "-e", cmd)
 	}
 	return nil
 }
@@ -261,9 +260,4 @@ func ipSub(ip, mask string) string {
 		return ""
 	}
 	return ip + "/" + mask
-}
-
-func runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	return cmd.CombinedOutput()
 }
