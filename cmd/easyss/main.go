@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"math/big"
+	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
@@ -22,6 +23,7 @@ import (
 	"github.com/nange/easyss/v3/client/tun"
 	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/pprof"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/stats"
@@ -33,6 +35,7 @@ func main() {
 	var configFile, cmdIPV6Rule string
 	var cmdServer, cmdPassword, cmdMethod, cmdProxyRule, cmdOutboundProto, cmdLogLevel, cmdSN, cmdDirectFile, cmdProxyFile string
 	var cmdServerPort, cmdLocalPort, cmdTimeout int
+	var pprofEnabled bool
 
 	flag.BoolVar(&printVer, "version", false, "print version")
 	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file (full mode)")
@@ -55,6 +58,7 @@ func main() {
 	flag.StringVar(&cmdIPV6Rule, "ipv6-rule", "", "set the ipv6 rule(auto, enable, disable), default: auto")
 	flag.StringVar(&cmdDirectFile, "direct-file", "", "custom direct file (IPs/CIDRs/domains mixed, one per line)")
 	flag.StringVar(&cmdProxyFile, "proxy-file", "", "custom proxy file (IPs/CIDRs/domains mixed, one per line)")
+	flag.BoolVar(&pprofEnabled, "pprof", false, "enable pprof debug server on :6060")
 
 	flag.Parse()
 
@@ -165,6 +169,9 @@ func main() {
 	if cmdProxyFile != "" {
 		cfg.Routing.ProxyFile = cmdProxyFile
 	}
+	if pprofEnabled {
+		cfg.PprofEnabled = true
+	}
 
 	log.Info("[EASYSS-V3] config loaded",
 		"server", cfg.DefaultServerAddr(),
@@ -212,6 +219,8 @@ type App struct {
 
 	statsCloser chan struct{}
 	statsOnce   sync.Once
+
+	pprofSrv *http.Server
 }
 
 func (a *App) Start() error {
@@ -316,6 +325,10 @@ func (a *App) Start() error {
 	go a.pingBackground()
 	go a.statsLoop()
 
+	if a.cfg.PprofEnabled {
+		a.pprofSrv = pprof.StartPprof()
+	}
+
 	log.Info("[EASYSS-V3] started successfully")
 	return nil
 }
@@ -350,6 +363,9 @@ func (a *App) Stop() {
 		if err := a.cli.Close(); err != nil {
 			log.Debug("[EASYSS-V3] client close", "err", err)
 		}
+	}
+	if a.pprofSrv != nil {
+		pprof.StopPprof(a.pprofSrv)
 	}
 }
 
@@ -489,7 +505,8 @@ func exampleV3Config() string {
   },
   "timeout": 30,
 	  "auth_username": "",
-	  "auth_password": ""
+	  "auth_password": "",
+	  "pprof_enabled": false
 }`
 }
 
@@ -506,7 +523,8 @@ func exampleSimpleConfig() string {
   "outbound_proto": "native",
   "direct_file": "",
   "proxy_file": "",
-  "log_level": "info",
-  "log_file_path": ""
+	  "log_level": "info",
+	  "log_file_path": "",
+	  "pprof_enabled": false
 }`
 }

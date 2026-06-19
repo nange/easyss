@@ -14,6 +14,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/pprof"
 	"github.com/nange/easyss/v3/server"
 	"github.com/nange/easyss/v3/server/config"
 	"github.com/nange/easyss/v3/version"
@@ -22,10 +23,12 @@ import (
 func main() {
 	var printVer, showConfigExample bool
 	var configFile string
+	var pprofEnabled bool
 
 	flag.BoolVar(&printVer, "version", false, "print version")
 	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file")
 	flag.StringVar(&configFile, "c", "config.json", "specify config file")
+	flag.BoolVar(&pprofEnabled, "pprof", false, "enable pprof debug server on :6060")
 
 	flag.Parse()
 
@@ -51,12 +54,20 @@ func main() {
 		os.Exit(1)
 	}
 	cfg = fileCfg.EffectiveServerConfig()
+	if pprofEnabled {
+		cfg.PprofEnabled = true
+	}
 	if fileCfg.Log.Level == "" {
 		fileCfg.Log.Level = "info"
 	}
 	log.Init(fileCfg.Log.FilePath, fileCfg.Log.Level)
 
 	log.Info("[EASYSS-SERVER-V3] " + version.String())
+
+	var pprofSrv *http.Server
+	if cfg.PprofEnabled {
+		pprofSrv = pprof.StartPprof()
+	}
 
 	srv, err := server.New(&cfg)
 	if err != nil {
@@ -87,6 +98,9 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Error("[EASYSS-SERVER-V3] shutdown server", "err", err)
 	}
+	if pprofSrv != nil {
+		pprof.StopPprof(pprofSrv)
+	}
 	os.Exit(0)
 }
 
@@ -100,9 +114,10 @@ func exampleV3ServerConfig() string {
     "allowed_methods": ["aes-256-gcm", "chacha20-poly1305"],
     "cert_path": "",
     "key_path": "",
-    "email": "",
-    "fallback_html_path": "",
-    "batch_window_ms": 3
+	    "email": "",
+	    "fallback_html_path": "",
+	    "batch_window_ms": 3,
+	    "pprof_enabled": false
   },
   "transport": {
     "protocol": "h2",

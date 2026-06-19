@@ -30,6 +30,7 @@ type ServerConfig struct {
 	Timeout          int             `json:"timeout"`
 	BatchWindowMS    int             `json:"batch_window_ms"`
 	NextProxy        NextProxyConfig `json:"next_proxy"`
+	PprofEnabled     bool            `json:"pprof_enabled"`
 }
 
 type FileConfig struct {
