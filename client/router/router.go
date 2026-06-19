@@ -367,17 +367,33 @@ func (r *Router) isLANHost(host string) bool {
 }
 
 // AddDirectIP adds an IP to the custom direct IP set (thread-safe).
+// If the IP already exists, it returns immediately without acquiring the write lock.
 func (r *Router) AddDirectIP(ip string) {
+	r.customMu.RLock()
+	_, exists := r.customDirectIPs[ip]
+	r.customMu.RUnlock()
+	if exists {
+		return
+	}
+
 	r.customMu.Lock()
-	defer r.customMu.Unlock()
 	r.customDirectIPs[ip] = struct{}{}
+	r.customMu.Unlock()
 }
 
 // AddProxyIP adds an IP to the custom proxy IP set (thread-safe).
+// If the IP already exists, it returns immediately without acquiring the write lock.
 func (r *Router) AddProxyIP(ip string) {
+	r.customMu.RLock()
+	_, exists := r.customProxyIPs[ip]
+	r.customMu.RUnlock()
+	if exists {
+		return
+	}
+
 	r.customMu.Lock()
-	defer r.customMu.Unlock()
 	r.customProxyIPs[ip] = struct{}{}
+	r.customMu.Unlock()
 }
 
 // IsCustomDirectDomain checks whether a domain is in the custom direct domain list
