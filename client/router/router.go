@@ -366,6 +366,52 @@ func (r *Router) isLANHost(host string) bool {
 	return util.IsLANIP(host)
 }
 
+// AddDirectIP adds an IP to the custom direct IP set (thread-safe).
+func (r *Router) AddDirectIP(ip string) {
+	r.customMu.Lock()
+	defer r.customMu.Unlock()
+	r.customDirectIPs[ip] = struct{}{}
+}
+
+// AddProxyIP adds an IP to the custom proxy IP set (thread-safe).
+func (r *Router) AddProxyIP(ip string) {
+	r.customMu.Lock()
+	defer r.customMu.Unlock()
+	r.customProxyIPs[ip] = struct{}{}
+}
+
+// IsCustomDirectDomain checks whether a domain is in the custom direct domain list
+// (including subdomain matching).
+func (r *Router) IsCustomDirectDomain(domain string) bool {
+	r.customMu.RLock()
+	defer r.customMu.RUnlock()
+	if _, ok := r.customDirectDomains[domain]; ok {
+		return true
+	}
+	for _, sub := range subDomains(domain) {
+		if _, ok := r.customDirectDomains[sub]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// IsCustomProxyDomain checks whether a domain is in the custom proxy domain list
+// (including subdomain matching).
+func (r *Router) IsCustomProxyDomain(domain string) bool {
+	r.customMu.RLock()
+	defer r.customMu.RUnlock()
+	if _, ok := r.customProxyDomains[domain]; ok {
+		return true
+	}
+	for _, sub := range subDomains(domain) {
+		if _, ok := r.customProxyDomains[sub]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Router) ShouldIPV6Disable() bool {
 	switch IPV6Rule(r.ipv6Rule.Load()) {
 	case IPV6RuleEnable:

@@ -291,6 +291,144 @@ func TestRouter_isLANHost(t *testing.T) {
 	}
 }
 
+func TestRouter_AddDirectIP(t *testing.T) {
+	r := &Router{
+		customDirectIPs: make(map[string]struct{}),
+	}
+
+	r.AddDirectIP("1.2.3.4")
+	r.AddDirectIP("::1")
+
+	r.customMu.RLock()
+	defer r.customMu.RUnlock()
+	if _, ok := r.customDirectIPs["1.2.3.4"]; !ok {
+		t.Error("expected 1.2.3.4 in customDirectIPs")
+	}
+	if _, ok := r.customDirectIPs["::1"]; !ok {
+		t.Error("expected ::1 in customDirectIPs")
+	}
+	if len(r.customDirectIPs) != 2 {
+		t.Errorf("expected 2 entries, got %d", len(r.customDirectIPs))
+	}
+}
+
+func TestRouter_AddProxyIP(t *testing.T) {
+	r := &Router{
+		customProxyIPs: make(map[string]struct{}),
+	}
+
+	r.AddProxyIP("10.0.0.1")
+	r.AddProxyIP("fd00::1")
+
+	r.customMu.RLock()
+	defer r.customMu.RUnlock()
+	if _, ok := r.customProxyIPs["10.0.0.1"]; !ok {
+		t.Error("expected 10.0.0.1 in customProxyIPs")
+	}
+	if _, ok := r.customProxyIPs["fd00::1"]; !ok {
+		t.Error("expected fd00::1 in customProxyIPs")
+	}
+	if len(r.customProxyIPs) != 2 {
+		t.Errorf("expected 2 entries, got %d", len(r.customProxyIPs))
+	}
+}
+
+func TestRouter_IsCustomDirectDomain(t *testing.T) {
+	r := &Router{
+		customDirectDomains: map[string]struct{}{
+			"example.com": {},
+			"test.cn":     {},
+		},
+	}
+
+	tests := []struct {
+		name   string
+		domain string
+		want   bool
+	}{
+		{"精确匹配", "example.com", true},
+		{"精确匹配 .cn", "test.cn", true},
+		{"子域名匹配", "sub.example.com", true},
+		{"多层子域名匹配", "a.b.example.com", true},
+		{"不匹配的域名", "other.com", false},
+		{"部分匹配不算", "xample.com", false},
+		{"空域名", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := r.IsCustomDirectDomain(tt.domain)
+			if got != tt.want {
+				t.Errorf("IsCustomDirectDomain(%q) = %v, want %v", tt.domain, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRouter_IsCustomProxyDomain(t *testing.T) {
+	r := &Router{
+		customProxyDomains: map[string]struct{}{
+			"google.com":    {},
+			"youtube.com":   {},
+		},
+	}
+
+	tests := []struct {
+		name   string
+		domain string
+		want   bool
+	}{
+		{"精确匹配 google.com", "google.com", true},
+		{"精确匹配 youtube.com", "youtube.com", true},
+		{"子域名匹配", "mail.google.com", true},
+		{"多层子域名匹配", "a.b.c.youtube.com", true},
+		{"不匹配的域名", "facebook.com", false},
+		{"空域名", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := r.IsCustomProxyDomain(tt.domain)
+			if got != tt.want {
+				t.Errorf("IsCustomProxyDomain(%q) = %v, want %v", tt.domain, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRouter_AddIPAfterMatch(t *testing.T) {
+	// 验证动态添加 IP 后，后续 MatchHostRule 可以基于 IP 匹配
+	r := &Router{
+		customDirectIPs:     make(map[string]struct{}),
+		customDirectCIDRIPs: nil,
+		customDirectDomains: nil,
+		customProxyIPs:      make(map[string]struct{}),
+		customProxyCIDRIPs:  nil,
+		customProxyDomains:  nil,
+	}
+	r.proxyRule.Store(int32(ProxyRuleAuto))
+
+	// 初始状态：IP 不在列表中
+	if r.hostMatchCustomDirect("1.2.3.4") {
+		t.Error("1.2.3.4 should not match before AddDirectIP")
+	}
+	if r.hostMatchCustomProxy("5.6.7.8") {
+		t.Error("5.6.7.8 should not match before AddProxyIP")
+	}
+
+	// 动态添加
+	r.AddDirectIP("1.2.3.4")
+	r.AddProxyIP("5.6.7.8")
+
+	// 添加后应匹配
+	if !r.hostMatchCustomDirect("1.2.3.4") {
+		t.Error("1.2.3.4 should match after AddDirectIP")
+	}
+	if !r.hostMatchCustomProxy("5.6.7.8") {
+		t.Error("5.6.7.8 should match after AddProxyIP")
+	}
+}
+
 func TestRouter_hostAtCN(t *testing.T) {
 	// 构造带有内部 GeoIP 数据库的 Router（域名和 IP 判断）
 	r, err := New(Config{})
