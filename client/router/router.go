@@ -112,7 +112,7 @@ func (gs *GeoSite) SimpleMatch(domain string, matchSub bool) bool {
 		return true
 	}
 	if matchSub {
-		subs := subDomains(domain)
+		subs := util.SubDomains(domain)
 		for _, sub := range subs {
 			if _, ok := gs.domain[sub]; ok {
 				return true
@@ -132,23 +132,6 @@ func (gs *GeoSite) FullMatch(domain string) bool {
 		}
 	}
 	return false
-}
-
-func subDomains(domain string) []string {
-	if domain == "" {
-		return nil
-	}
-	subs := make([]string, 0, 8)
-	i := strings.Index(domain, ".")
-	for i > 0 {
-		domain = domain[i+1:]
-		subs = append(subs, domain)
-		i = strings.Index(domain, ".")
-	}
-	if len(subs) > 1 {
-		return subs[:len(subs)-1]
-	}
-	return nil
 }
 
 type Config struct {
@@ -297,7 +280,7 @@ func (r *Router) hostMatchCustomDirect(host string) bool {
 		if _, ok := r.customDirectDomains[host]; ok {
 			return true
 		}
-		subs := subDomains(host)
+		subs := util.SubDomains(host)
 		for _, sub := range subs {
 			if _, ok := r.customDirectDomains[sub]; ok {
 				return true
@@ -324,7 +307,7 @@ func (r *Router) hostMatchCustomProxy(host string) bool {
 		if _, ok := r.customProxyDomains[host]; ok {
 			return true
 		}
-		subs := subDomains(host)
+		subs := util.SubDomains(host)
 		for _, sub := range subs {
 			if _, ok := r.customProxyDomains[sub]; ok {
 				return true
@@ -404,7 +387,7 @@ func (r *Router) IsCustomDirectDomain(domain string) bool {
 	if _, ok := r.customDirectDomains[domain]; ok {
 		return true
 	}
-	for _, sub := range subDomains(domain) {
+	for _, sub := range util.SubDomains(domain) {
 		if _, ok := r.customDirectDomains[sub]; ok {
 			return true
 		}
@@ -420,7 +403,7 @@ func (r *Router) IsCustomProxyDomain(domain string) bool {
 	if _, ok := r.customProxyDomains[domain]; ok {
 		return true
 	}
-	for _, sub := range subDomains(domain) {
+	for _, sub := range util.SubDomains(domain) {
 		if _, ok := r.customProxyDomains[sub]; ok {
 			return true
 		}

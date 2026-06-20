@@ -6,8 +6,10 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
@@ -46,11 +48,14 @@ func (h *UDPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, targe
 	}
 	defer conn.Close() //nolint:errcheck
 
+	var dnsDetected atomic.Bool
+	var dnsChecked  atomic.Bool
+
 	done := make(chan struct{})
 	closeDone := sync.OnceFunc(func() { close(done) })
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- h.readFromTarget(conn, s2c, done)
+		errCh <- h.readFromTarget(conn, s2c, done, &dnsDetected)
 	}()
 	frameCh := make(chan udpFrameResult, 1)
 	go func() {
@@ -85,6 +90,19 @@ func (h *UDPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, targe
 				}
 			}
 			timer.Reset(h.idleTimeout)
+
+			// DNS query detection (only on first DATAGRAM frame)
+			if !dnsChecked.Load() && h.nextProxy != nil &&
+				res.frame.Type == protocol.FrameDATAGRAM && len(res.frame.Payload) > 0 {
+				msg := &dns.Msg{}
+				if err := msg.Unpack(res.frame.Payload); err == nil && isDNSRequest(msg) {
+					dnsDetected.Store(true)
+					domain := strings.TrimSuffix(msg.Question[0].Name, ".")
+					log.Info("[UDP_DNS]", "domain", domain, "target", target)
+				}
+				dnsChecked.Store(true)
+			}
+
 			if err := h.handleClientFrame(conn, res.frame); err != nil {
 				closeDone()
 				return err
@@ -130,7 +148,7 @@ func (h *UDPHandler) dialTarget(target string) (net.Conn, error) {
 	return net.DialTimeout("udp", target, h.idleTimeout)
 }
 
-func (h *UDPHandler) readFromTarget(conn net.Conn, s2c shaper.Shaper, done <-chan struct{}) error {
+func (h *UDPHandler) readFromTarget(conn net.Conn, s2c shaper.Shaper, done <-chan struct{}, dnsDetected *atomic.Bool) error {
 	buf := bytespool.Get(udpBufSize)
 	defer bytespool.MustPut(buf)
 	for {
@@ -153,6 +171,24 @@ func (h *UDPHandler) readFromTarget(conn net.Conn, s2c shaper.Shaper, done <-cha
 			return err
 		}
 		if n > 0 {
+			// DNS response interception for dynamic IP learning
+			if dnsDetected.Load() && h.nextProxy != nil {
+				msg := &dns.Msg{}
+				if err := msg.Unpack(buf[:n]); err == nil && msg.Response {
+					domain := strings.TrimSuffix(msg.Question[0].Name, ".")
+					if h.nextProxy.IsCustomDomain(domain) {
+						for _, ans := range msg.Answer {
+							switch a := ans.(type) {
+							case *dns.A:
+								h.nextProxy.AddIP(a.A.String())
+							case *dns.AAAA:
+								h.nextProxy.AddIP(a.AAAA.String())
+							}
+						}
+					}
+				}
+			}
+
 			frame := protocol.NewFrameDATAGRAM(buf[:n])
 			if wErr := s2c.PushFrame(frame); wErr != nil {
 				return wErr
@@ -162,4 +198,12 @@ func (h *UDPHandler) readFromTarget(conn net.Conn, s2c shaper.Shaper, done <-cha
 			}
 		}
 	}
+}
+
+func isDNSRequest(msg *dns.Msg) bool {
+	if len(msg.Question) == 0 {
+		return false
+	}
+	q := msg.Question[0]
+	return (q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA) && !msg.Response
 }

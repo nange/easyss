@@ -3,6 +3,8 @@ package nextproxy
 import (
 	"net"
 	"testing"
+
+	"github.com/nange/easyss/v3/util"
 )
 
 func TestNew(t *testing.T) {
@@ -83,9 +85,8 @@ func TestShouldProxy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// 手动填充 CIDR 列表
 		np.ips = map[string]struct{}{}
-		_ = np.LoadProxyFile("") // 空文件初始化 maps
+		_ = np.LoadProxyFile("")
 		np.cidrIPs = append(np.cidrIPs, mustParseCIDR(t, "192.168.0.0/16"))
 
 		if !np.ShouldProxy("192.168.1.1") {
@@ -103,6 +104,19 @@ func TestShouldProxy(t *testing.T) {
 		}
 		if np.ShouldProxy("other.com") {
 			t.Error("should not proxy non-matching domain")
+		}
+	})
+
+	t.Run("子域名匹配", func(t *testing.T) {
+		np := &NextProxy{domains: map[string]struct{}{"example.com": {}}}
+		if !np.ShouldProxy("www.example.com") {
+			t.Error("should proxy subdomain")
+		}
+		if !np.ShouldProxy("api.example.com") {
+			t.Error("should proxy subdomain")
+		}
+		if np.ShouldProxy("not-example.com") {
+			t.Error("should not proxy unrelated domain")
 		}
 	})
 
@@ -166,4 +180,122 @@ func mustParseCIDR(t *testing.T, s string) *net.IPNet {
 		t.Fatalf("ParseCIDR(%q): %v", s, err)
 	}
 	return ipnet
+}
+
+func TestIsCustomDomain(t *testing.T) {
+	t.Run("nil receiver", func(t *testing.T) {
+		var np *NextProxy
+		if np.IsCustomDomain("example.com") {
+			t.Error("nil receiver should return false")
+		}
+	})
+
+	t.Run("精确匹配", func(t *testing.T) {
+		np := &NextProxy{domains: map[string]struct{}{"example.com": {}}}
+		if !np.IsCustomDomain("example.com") {
+			t.Error("should match exact domain")
+		}
+	})
+
+	t.Run("子域名匹配", func(t *testing.T) {
+		np := &NextProxy{domains: map[string]struct{}{"example.com": {}}}
+		if !np.IsCustomDomain("www.example.com") {
+			t.Error("should match subdomain")
+		}
+		if !np.IsCustomDomain("api.example.com") {
+			t.Error("should match subdomain")
+		}
+	})
+
+	t.Run("不匹配", func(t *testing.T) {
+		np := &NextProxy{domains: map[string]struct{}{"example.com": {}}}
+		if np.IsCustomDomain("other.com") {
+			t.Error("should not match unrelated domain")
+		}
+		if np.IsCustomDomain("not-example.com") {
+			t.Error("should not match domain with different suffix")
+		}
+	})
+}
+
+func TestAddIP(t *testing.T) {
+	t.Run("nil receiver", func(t *testing.T) {
+		var np *NextProxy
+		np.AddIP("1.2.3.4") // should not panic
+	})
+
+	t.Run("添加 IP", func(t *testing.T) {
+		np := &NextProxy{ips: make(map[string]struct{})}
+		np.AddIP("1.2.3.4")
+		if !np.ShouldProxy("1.2.3.4") {
+			t.Error("should proxy after AddIP")
+		}
+	})
+
+	t.Run("去重", func(t *testing.T) {
+		np := &NextProxy{ips: make(map[string]struct{})}
+		np.AddIP("1.2.3.4")
+		np.AddIP("1.2.3.4")
+		count := 0
+		np.mu.RLock()
+		count = len(np.ips)
+		np.mu.RUnlock()
+		if count != 1 {
+			t.Errorf("expected 1 IP, got %d", count)
+		}
+	})
+
+	t.Run("IPv6", func(t *testing.T) {
+		np := &NextProxy{ips: make(map[string]struct{})}
+		np.AddIP("::1")
+		if !np.ShouldProxy("::1") {
+			t.Error("should proxy IPv6 after AddIP")
+		}
+	})
+}
+
+func TestSubDomains(t *testing.T) {
+	tests := []struct {
+		input  string
+		expect []string
+	}{
+		{"", nil},
+		{"example.com", nil},
+		{"www.example.com", []string{"example.com"}},
+		{"a.b.example.com", []string{"b.example.com", "example.com"}},
+		{"com", nil},
+	}
+	for _, tt := range tests {
+		got := util.SubDomains(tt.input)
+		if len(got) != len(tt.expect) {
+			t.Errorf("subDomains(%q) = %v, want %v", tt.input, got, tt.expect)
+			continue
+		}
+		for i := range got {
+			if got[i] != tt.expect[i] {
+				t.Errorf("subDomains(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.expect[i])
+			}
+		}
+	}
+}
+
+func TestConcurrentAddIP(t *testing.T) {
+	np := &NextProxy{ips: make(map[string]struct{})}
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 100; i++ {
+			np.AddIP("10.0.0.1")
+			np.ShouldProxy("10.0.0.1")
+		}
+		done <- struct{}{}
+	}()
+	go func() {
+		for i := 0; i < 100; i++ {
+			np.AddIP("10.0.0.2")
+			np.ShouldProxy("10.0.0.2")
+		}
+		done <- struct{}{}
+	}()
+	<-done
+	<-done
 }

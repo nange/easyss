@@ -15,7 +15,7 @@ type NextProxy struct {
 	enableUDP bool
 	allHost   bool
 
-	mu      sync.RWMutex //nolint:unused
+	mu      sync.RWMutex
 	ips     map[string]struct{}
 	cidrIPs []*net.IPNet
 	domains map[string]struct{}
@@ -55,6 +55,10 @@ func (np *NextProxy) LoadProxyFile(proxyFile string) error {
 	if err != nil {
 		return err
 	}
+
+	np.mu.Lock()
+	defer np.mu.Unlock()
+
 	for k := range entries {
 		_, ipnet, err2 := net.ParseCIDR(k)
 		if err2 == nil && ipnet != nil {
@@ -83,18 +87,69 @@ func (np *NextProxy) ShouldProxy(host string) bool {
 		return true
 	}
 
-	if _, ok := np.ips[host]; ok {
+	np.mu.RLock()
+	defer np.mu.RUnlock()
+
+	if util.IsIP(host) {
+		if _, ok := np.ips[host]; ok {
+			return true
+		}
+		for _, cidr := range np.cidrIPs {
+			if cidr.Contains(net.ParseIP(host)) {
+				return true
+			}
+		}
+	} else {
+		if _, ok := np.domains[host]; ok {
+			return true
+		}
+		for _, sub := range util.SubDomains(host) {
+			if _, ok := np.domains[sub]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// IsCustomDomain checks whether a domain is in the custom domain list,
+// including subdomain matching.
+func (np *NextProxy) IsCustomDomain(domain string) bool {
+	if np == nil {
+		return false
+	}
+
+	np.mu.RLock()
+	defer np.mu.RUnlock()
+
+	if _, ok := np.domains[domain]; ok {
 		return true
 	}
-	for _, cidr := range np.cidrIPs {
-		if cidr.Contains(net.ParseIP(host)) {
+	for _, sub := range util.SubDomains(domain) {
+		if _, ok := np.domains[sub]; ok {
 			return true
 		}
 	}
-	if _, ok := np.domains[host]; ok {
-		return true
-	}
 	return false
+}
+
+// AddIP adds an IP to the routing list (thread-safe).
+// If the IP is already present, it returns immediately without acquiring the write lock.
+func (np *NextProxy) AddIP(ip string) {
+	if np == nil {
+		return
+	}
+
+	np.mu.RLock()
+	_, exists := np.ips[ip]
+	np.mu.RUnlock()
+	if exists {
+		return
+	}
+
+	np.mu.Lock()
+	np.ips[ip] = struct{}{}
+	np.mu.Unlock()
 }
 
 func (np *NextProxy) Dial(network, addr string) (net.Conn, error) {

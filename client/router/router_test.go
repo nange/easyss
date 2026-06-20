@@ -2,6 +2,8 @@ package router
 
 import (
 	"testing"
+
+	"github.com/nange/easyss/v3/util"
 )
 
 func TestParseProxyRule(t *testing.T) {
@@ -68,7 +70,7 @@ func TestSubDomains(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.domain, func(t *testing.T) {
-			got := subDomains(tt.domain)
+			got := util.SubDomains(tt.domain)
 			if len(got) != len(tt.want) {
 				t.Errorf("subDomains(%q) = %v, want %v", tt.domain, got, tt.want)
 				return
