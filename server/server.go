@@ -208,10 +208,10 @@ func (s *Server) Start() error {
 		return fmt.Errorf("next proxy: %w", err)
 	}
 	if np != nil {
-		if err := np.LoadIPDomainFiles(s.cfg.NextProxy.IPsFile, s.cfg.NextProxy.DomainsFile); err != nil {
-			log.Error("[SERVER] next proxy load ip/domain failed", "err", err)
-			return fmt.Errorf("next proxy load ip/domain: %w", err)
-		}
+			if err := np.LoadProxyFile(s.cfg.NextProxy.NextProxyFile); err != nil {
+				log.Error("[SERVER] next proxy load file failed", "err", err)
+				return fmt.Errorf("next proxy load file: %w", err)
+			}
 		log.Info("[SERVER] next proxy configured", "url", s.cfg.NextProxy.URL, "udp", s.cfg.NextProxy.EnableUDP, "all_host", s.cfg.NextProxy.AllHost)
 	}
 

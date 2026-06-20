@@ -125,8 +125,7 @@ func exampleV3ServerConfig() string {
   },
   "next_proxy": {
     "url": "",
-    "domains_file": "",
-    "ips_file": "",
+    "next_proxy_file": "",
     "enable_udp": false,
     "all_host": false
   },

@@ -85,7 +85,7 @@ func TestShouldProxy(t *testing.T) {
 		}
 		// 手动填充 CIDR 列表
 		np.ips = map[string]struct{}{}
-		_ = np.LoadIPDomainFiles("", "") // 空文件初始化 maps
+		_ = np.LoadProxyFile("") // 空文件初始化 maps
 		np.cidrIPs = append(np.cidrIPs, mustParseCIDR(t, "192.168.0.0/16"))
 
 		if !np.ShouldProxy("192.168.1.1") {

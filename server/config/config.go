@@ -11,11 +11,10 @@ type TransportConfig struct {
 }
 
 type NextProxyConfig struct {
-	URL         string `json:"url"`
-	DomainsFile string `json:"domains_file"`
-	IPsFile     string `json:"ips_file"`
-	EnableUDP   bool   `json:"enable_udp"`
-	AllHost     bool   `json:"all_host"`
+	URL           string `json:"url"`
+	NextProxyFile string `json:"next_proxy_file"`
+	EnableUDP     bool   `json:"enable_udp"`
+	AllHost       bool   `json:"all_host"`
 }
 
 type ServerConfig struct {

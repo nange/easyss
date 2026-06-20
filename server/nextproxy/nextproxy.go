@@ -3,11 +3,10 @@ package nextproxy
 import (
 	"net"
 	"net/url"
-	"os"
-	"strings"
 	"sync"
 
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/util"
 	"github.com/txthinking/socks5"
 )
 
@@ -43,39 +42,32 @@ func New(proxyURL string, enableUDP, allHost bool) (*NextProxy, error) {
 	return np, nil
 }
 
-func (np *NextProxy) LoadIPDomainFiles(ipsFile, domainsFile string) error {
+func (np *NextProxy) LoadProxyFile(proxyFile string) error {
 	if np == nil {
 		return nil
 	}
 
-	if ipsFile != "" {
-		ips, err := readFileLinesMap(ipsFile)
-		if err != nil {
-			return err
-		}
-		for k := range ips {
-			_, ipnet, err2 := net.ParseCIDR(k)
-			if err2 != nil {
-				np.ips[k] = struct{}{}
-				continue
-			}
-			if ipnet != nil {
-				np.cidrIPs = append(np.cidrIPs, ipnet)
-			}
-		}
-		log.Info("[NEXTPROXY] loaded IP rules", "file", ipsFile, "ips", len(np.ips), "cidrs", len(np.cidrIPs))
+	if proxyFile == "" {
+		return nil
 	}
 
-	if domainsFile != "" {
-		domains, err := readFileLinesMap(domainsFile)
-		if err != nil {
-			return err
-		}
-		for domain := range domains {
-			np.domains[domain] = struct{}{}
-		}
-		log.Info("[NEXTPROXY] loaded domain rules", "file", domainsFile, "count", len(np.domains))
+	entries, err := util.ReadFileLinesMap(proxyFile)
+	if err != nil {
+		return err
 	}
+	for k := range entries {
+		_, ipnet, err2 := net.ParseCIDR(k)
+		if err2 == nil && ipnet != nil {
+			np.cidrIPs = append(np.cidrIPs, ipnet)
+			continue
+		}
+		if util.IsIP(k) {
+			np.ips[k] = struct{}{}
+			continue
+		}
+		np.domains[k] = struct{}{}
+	}
+	log.Info("[NEXTPROXY] loaded proxy file", "file", proxyFile, "ips", len(np.ips), "cidrs", len(np.cidrIPs), "domains", len(np.domains))
 
 	return nil
 }
@@ -147,21 +139,4 @@ func (np *NextProxy) EnableUDP() bool {
 		return false
 	}
 	return np.enableUDP
-}
-
-func readFileLinesMap(filePath string) (map[string]struct{}, error) {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, err
-	}
-	result := make(map[string]struct{})
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		result[line] = struct{}{}
-	}
-	return result, nil
 }

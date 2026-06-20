@@ -390,8 +390,7 @@ sysctl -p
 {
     "next_proxy": {
         "url": "socks5://your-ip:your-port",
-        "domains_file": "next_proxy_domains.txt",
-        "ips_file": "next_proxy_ips.txt",
+        "next_proxy_file": "next_proxy.txt",
         "enable_udp": false,
         "all_host": false
     }
@@ -399,12 +398,11 @@ sysctl -p
 ```
 
 * `next_proxy.url`: 下一级代理地址，格式 `socks5://ip:port`
-* `next_proxy.domains_file`: 指定走链式代理的域名列表文件，每行一条记录
-* `next_proxy.ips_file`: 指定走链式代理的IP列表文件，每行一条记录
+* `next_proxy.next_proxy_file`: 指定走链式代理的 IP/CIDR/域名列表文件，每行一条记录，可混放
 * `next_proxy.enable_udp`: 是否转发UDP请求（需要下一级代理支持）
 * `next_proxy.all_host`: 是否对所有请求走链式代理
 
-如果未指定 `domains_file` 和 `ips_file`，默认使用 `easyss-server` 目录下的 `next_proxy_domains.txt` 和 `next_proxy_ips.txt`。
+如果未指定 `next_proxy_file`，则仅按 `all_host` 规则决定是否走链式代理。
 
 ## LICENSE
 
