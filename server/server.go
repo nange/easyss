@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
@@ -57,6 +59,9 @@ func (s *Server) initTLS() (*tls.Config, error) {
 	if err := os.MkdirAll(storagePath, 0700); err != nil {
 		return nil, fmt.Errorf("create certmagic storage: %w", err)
 	}
+
+	s.resolveEmail(storagePath)
+
 	storage := &certmagic.FileStorage{Path: storagePath}
 
 	tlsConfig, cache, err := s.manageCert(storage, false)
@@ -106,6 +111,19 @@ func (s *Server) manageCert(storage certmagic.Storage, disableARI bool) (*tls.Co
 	return tlsConfig, cache, nil
 }
 
+func (s *Server) resolveEmail(storagePath string) {
+	if s.cfg.Email != "" {
+		return
+	}
+	if existing := findExistingACMEEmail(storagePath); existing != "" {
+		s.cfg.Email = existing
+		log.Info("[SERVER] reused existing ACME email", "email", existing)
+		return
+	}
+	s.cfg.Email = randomEmail()
+	log.Info("[SERVER] generated random ACME email", "email", s.cfg.Email)
+}
+
 func (s *Server) statsLoop() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -140,6 +158,47 @@ func certmagicStoragePath() (string, error) {
 
 func certmagicStoragePathForExecutable(exe string) string {
 	return filepath.Join(filepath.Dir(exe), "certmagic")
+}
+
+func findExistingACMEEmail(storagePath string) string {
+	acmePath := filepath.Join(storagePath, "acme")
+	caDirs, err := os.ReadDir(acmePath)
+	if err != nil {
+		return ""
+	}
+
+	var earliestEmail string
+	var earliestTime time.Time
+	for _, caDir := range caDirs {
+		if !caDir.IsDir() {
+			continue
+		}
+		usersPath := filepath.Join(acmePath, caDir.Name(), "users")
+		emailDirs, err := os.ReadDir(usersPath)
+		if err != nil {
+			continue
+		}
+		for _, emailDir := range emailDirs {
+			if !emailDir.IsDir() {
+				continue
+			}
+			info, err := emailDir.Info()
+			if err != nil {
+				continue
+			}
+			if earliestEmail == "" || info.ModTime().Before(earliestTime) {
+				earliestTime = info.ModTime()
+				earliestEmail = emailDir.Name()
+			}
+		}
+	}
+	return earliestEmail
+}
+
+func randomEmail() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return "admin-" + hex.EncodeToString(b) + "@example.com"
 }
 
 func shouldRetryFreshCertificate(err error) bool {
