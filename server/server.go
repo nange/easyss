@@ -249,11 +249,22 @@ func (s *Server) Start() error {
 	}
 
 	if s.cfg.FallbackHTMLPath != "" {
-		fallbackHTML, err := os.ReadFile(s.cfg.FallbackHTMLPath)
+		info, err := os.Stat(s.cfg.FallbackHTMLPath)
 		if err != nil {
-			return fmt.Errorf("load fallback html: %w", err)
+			return fmt.Errorf("stat fallback path: %w", err)
 		}
-		handler.SetFallbackHTML(fallbackHTML)
+		if info.IsDir() {
+			if err := handler.SetFallbackDir(s.cfg.FallbackHTMLPath); err != nil {
+				return fmt.Errorf("load fallback dir: %w", err)
+			}
+			log.Info("[SERVER] fallback HTML dir loaded", "dir", s.cfg.FallbackHTMLPath)
+		} else {
+			fallbackHTML, err := os.ReadFile(s.cfg.FallbackHTMLPath)
+			if err != nil {
+				return fmt.Errorf("load fallback html: %w", err)
+			}
+			handler.SetFallbackHTML(fallbackHTML)
+		}
 	}
 
 	masterKey, err := crypto.DeriveMasterKey(s.cfg.Password)

@@ -314,8 +314,20 @@ twitter.com
 | `server.cert_path` | 否 | - | 自定义证书文件路径（不为空则使用自定义证书） |
 | `server.key_path` | 否 | - | 自定义证书密钥文件路径 |
 | `server.email` | 否 | 随机生成 | 用于自动获取证书的邮箱地址 |
-| `server.fallback_html_path` | 否 | - | 自定义回落 HTML 页面路径 |
+| `server.fallback_html_path` | 否 | - | 自定义回落 HTML 页面路径。可为单文件或目录：<br>**单文件**: 所有路径返回同一页面<br>**目录**: 根据 URL path 匹配对应 HTML 文件（如 `/about` → `about.html`，未匹配→`404.html`，无404→`index.html`） |
 | `timeout` | 否 | 30 | 超时时间，单位秒 |
+
+> **fallback 目录模式示例**：`fallback_html_path` 指向目录时，目录结构如下：
+> ```
+> /var/www/fallback/
+> ├── index.html          → /
+> ├── about.html          → /about
+> ├── contact.html        → /contact
+> ├── 404.html            → 未匹配路径
+> └── blog/
+>     ├── index.html      → /blog
+>     └── post1.html      → /blog/post1
+> ```
 
 执行:
 

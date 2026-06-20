@@ -2,10 +2,13 @@ package handler
 
 import (
 	"bytes"
+	"fmt"
 	"hash/fnv"
 	"html/template"
 	"math/rand/v2"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -412,6 +415,10 @@ var (
 	selectedTheme  themeDef
 	customFallback []byte
 	htmlCache      sync.Map // path string → []byte
+
+	// Directory-based multi-file fallback.
+	fallbackPages map[string][]byte // path → HTML bytes (e.g. "/about" → <html>...)
+	fallback404   []byte            // optional 404 page
 )
 
 // SetFallbackHTML overrides the built-in fallback system with custom HTML.
@@ -424,9 +431,78 @@ func SetFallbackHTML(html []byte) {
 	copy(customFallback, html)
 }
 
+// SetFallbackDir loads all .html files from a directory as multi-route fallback
+// pages. File-to-path mapping:
+//   - index.html         → "/"
+//   - 404.html           → unmatched paths
+//   - <name>.html        → "/<name>"
+//   - <sub>/<name>.html  → "/<sub>/<name>"
+//   - <sub>/index.html   → "/<sub>"
+//
+// Non-.html files are ignored. Must be called before the server starts
+// accepting requests.
+func SetFallbackDir(dir string) error {
+	pages := make(map[string][]byte)
+	var page404 []byte
+
+	err := filepath.WalkDir(dir, func(fpath string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(strings.ToLower(d.Name()), ".html") {
+			return nil
+		}
+
+		content, err := os.ReadFile(fpath)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", fpath, err)
+		}
+
+		rel, err := filepath.Rel(dir, fpath)
+		if err != nil {
+			return fmt.Errorf("rel path %s: %w", fpath, err)
+		}
+
+		nameWithoutExt := strings.TrimSuffix(d.Name(), ".html")
+
+		// 404.html is special: stored for unmatched paths, not as a regular page.
+		if strings.EqualFold(nameWithoutExt, "404") {
+			page404 = content
+			return nil
+		}
+
+		// Build URL path from relative file path.
+		urlPath := "/" + filepath.ToSlash(strings.TrimSuffix(rel, ".html"))
+
+		// index.html maps to parent directory (or "/" for root).
+		if strings.EqualFold(nameWithoutExt, "index") {
+			if dir := filepath.Dir(rel); dir == "." {
+				urlPath = "/"
+			} else {
+				urlPath = "/" + filepath.ToSlash(dir)
+			}
+		}
+
+		pages[urlPath] = content
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	fallbackPages = pages
+	fallback404 = page404
+	return nil
+}
+
 // ServeFallback writes a fallback HTML page to the response.
-// If custom HTML was set via SetFallbackHTML, it is used for all paths.
-// Otherwise a themed, path-aware page is rendered.
+// Priority (highest first):
+//  1. Directory-based multi-file fallback (SetFallbackDir)
+//  2. Single-file custom fallback (SetFallbackHTML)
+//  3. Auto-generated themed pages
 func ServeFallback(w http.ResponseWriter, r *http.Request) {
 	stats.RecordServerFallbackPage()
 	initOnce.Do(func() {
@@ -437,12 +513,39 @@ func ServeFallback(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Server", "nginx")
 	w.WriteHeader(http.StatusOK)
 
+	// Priority 1: directory-based multi-file fallback.
+	if len(fallbackPages) > 0 {
+		content, ok := fallbackPages[cleanPath(r.URL.Path)]
+		if !ok {
+			content = fallback404
+		}
+		if !ok && len(content) == 0 {
+			// No matching page and no 404.html — fall back to index.
+			content = fallbackPages["/"]
+		}
+		if len(content) > 0 {
+			w.Write(content) //nolint:errcheck
+			return
+		}
+	}
+
+	// Priority 2: single-file custom fallback.
 	if len(customFallback) > 0 {
 		w.Write(customFallback) //nolint:errcheck
 		return
 	}
 
+	// Priority 3: auto-generated themed pages.
 	w.Write(getOrRenderHTML(r.URL.Path)) //nolint:errcheck
+}
+
+// cleanPath normalizes a URL path for lookup: "/" stays "/", everything else
+// gets its trailing slash removed.
+func cleanPath(p string) string {
+	if p == "" || p == "/" {
+		return "/"
+	}
+	return strings.TrimRight(p, "/")
 }
 
 // ---------------------------------------------------------------------------
