@@ -14,5 +14,4 @@ const (
 	EndpointTCP  = "/v3/tcp"
 	EndpointUDP  = "/v3/udp"
 	EndpointICMP = "/v3/icmp"
-	EndpointPing = "/v3/ping"
 )

@@ -551,18 +551,4 @@ func TestV3Integration_ConfigDefaults(t *testing.T) {
 	// DefaultServer returns nil when no servers configured
 	assert.Nil(t, cfg.DefaultServer())
 	assert.Equal(t, "", cfg.ServerURL())
-}
-
-// TestV3Integration_Ping tests that ping works through the client
-func TestV3Integration_Ping(t *testing.T) {
-	h := newTestHarness(t)
-	defer h.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	lat, err := h.cli.Ping(ctx)
-	require.NoError(t, err)
-	assert.Greater(t, lat, time.Duration(0))
-	t.Logf("ping latency: %v", lat)
-}
+	}

@@ -31,7 +31,6 @@ type stats struct {
 	serverTCPStreams      atomic.Int64
 	serverUDPStreams      atomic.Int64
 	serverICMPStreams     atomic.Int64
-	serverPingStreams     atomic.Int64
 	serverHandshakeErrors atomic.Int64
 	serverFallbackPages   atomic.Int64
 
@@ -61,7 +60,6 @@ func RecordRecordWritten()     { g.recordsWritten.Add(1) }
 func RecordServerTCPStream()      { g.serverTCPStreams.Add(1) }
 func RecordServerUDPStream()      { g.serverUDPStreams.Add(1) }
 func RecordServerICMPStream()     { g.serverICMPStreams.Add(1) }
-func RecordServerPingStream()     { g.serverPingStreams.Add(1) }
 func RecordServerHandshakeError() { g.serverHandshakeErrors.Add(1) }
 func RecordServerFallbackPage()   { g.serverFallbackPages.Add(1) }
 
@@ -86,7 +84,6 @@ type Snapshot struct {
 	ServerTCPStreams      int64
 	ServerUDPStreams      int64
 	ServerICMPStreams     int64
-	ServerPingStreams     int64
 	ServerHandshakeErrors int64
 	ServerFallbackPages   int64
 	StartTime          time.Time
@@ -122,7 +119,6 @@ func Collect() Snapshot {
 		ServerTCPStreams:      g.serverTCPStreams.Load(),
 		ServerUDPStreams:      g.serverUDPStreams.Load(),
 		ServerICMPStreams:     g.serverICMPStreams.Load(),
-		ServerPingStreams:     g.serverPingStreams.Load(),
 		ServerHandshakeErrors: g.serverHandshakeErrors.Load(),
 		ServerFallbackPages:   g.serverFallbackPages.Load(),
 		StartTime:          g.startTime,

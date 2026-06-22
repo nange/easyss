@@ -89,6 +89,7 @@ type StreamHandler struct {
 	masterKey         []byte
 	shaperCfg         shaper.Config
 	streamIdleTimeout time.Duration
+	OnRTT             func(time.Duration)
 }
 
 func NewStreamHandler(tr transport.Transport, masterKey []byte, shaperCfg shaper.Config, streamIdleTimeout time.Duration) *StreamHandler {
@@ -396,8 +397,16 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 
 	go func() {
 		defer close(ch)
+		start := time.Now()
+		first := true
 		for {
 			frame, err := rx.ReadFrame()
+			if first {
+				first = false
+				if h.OnRTT != nil {
+					h.OnRTT(time.Since(start))
+				}
+			}
 			if err != nil {
 				if errors.Is(err, io.EOF) {
 					readDone <- nil

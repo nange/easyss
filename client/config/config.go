@@ -73,7 +73,8 @@ type ClientConfig struct {
 	Timeout       int              `json:"timeout"`
 	AuthUsername  string           `json:"auth_username"`
 	AuthPassword  string           `json:"auth_password"`
-	PprofEnabled  bool             `json:"pprof_enabled"`
+	PprofEnabled     bool `json:"pprof_enabled"`
+	LatencyOffsetMS int  `json:"latency_offset_ms"`
 }
 
 func (c *ClientConfig) DefaultServer() *ServerProfile {

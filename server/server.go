@@ -136,7 +136,6 @@ func (s *Server) statsLoop() {
 			"tcp", snap.ServerTCPStreams,
 			"udp", snap.ServerUDPStreams,
 			"icmp", snap.ServerICMPStreams,
-			"ping", snap.ServerPingStreams,
 			"hserr", snap.ServerHandshakeErrors,
 			"fallback", snap.ServerFallbackPages,
 			"padding", stats.HumanBytes(snap.PaddingBytes),
@@ -307,7 +306,6 @@ func (s *Server) Start() error {
 	s.mux.Handle("/v3/tcp", proxyHandler)
 	s.mux.Handle("/v3/udp", proxyHandler)
 	s.mux.Handle("/v3/icmp", proxyHandler)
-	s.mux.Handle("/v3/ping", proxyHandler)
 
 	s.httpServer = &http.Server{
 		Addr:      s.cfg.Listen,
@@ -326,7 +324,7 @@ func (s *Server) Start() error {
 	s.httpServer.Protocols.SetHTTP1(true)
 	s.httpServer.Protocols.SetHTTP2(true)
 
-	log.Info("[SERVER] listening", "addr", s.cfg.Listen, "routes", []string{"/", "/v3/tcp", "/v3/udp", "/v3/icmp", "/v3/ping"})
+	log.Info("[SERVER] listening", "addr", s.cfg.Listen, "routes", []string{"/", "/v3/tcp", "/v3/udp", "/v3/icmp"})
 	go s.statsLoop()
 	return s.httpServer.ListenAndServeTLS("", "")
 }

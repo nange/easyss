@@ -136,12 +136,9 @@ func TestNewProxyHandler(t *testing.T) {
 			t.Error("udpHandler should not be nil")
 		}
 		if h.icmpHandler == nil {
-			t.Error("icmpHandler should not be nil")
-		}
-		if h.pingHandler == nil {
-			t.Error("pingHandler should not be nil")
-		}
-	})
+				t.Error("icmpHandler should not be nil")
+			}
+		})
 }
 
 func TestNewTCPHandler(t *testing.T) {
@@ -163,11 +160,4 @@ func TestNewICMPHandler(t *testing.T) {
 	if h == nil {
 		t.Fatal("NewICMPHandler returned nil")
 	}
-}
-
-func TestNewPingHandler(t *testing.T) {
-	h := NewPingHandler()
-	if h == nil {
-		t.Fatal("NewPingHandler returned nil")
 	}
-}

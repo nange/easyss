@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/dns"
@@ -20,12 +21,13 @@ import (
 )
 
 type Client struct {
-	cfg       *config.ClientConfig
-	router    *router.Router
-	transport *http2.HTTP2Transport
-	shaperCfg shaper.Config
-	masterKey []byte
-	dialer    *dialer.Dialer
+	cfg            *config.ClientConfig
+	router         *router.Router
+	transport      *http2.HTTP2Transport
+	shaperCfg      shaper.Config
+	masterKey      []byte
+	dialer         *dialer.Dialer
+	latencyTracker *LatencyTracker
 
 	mu sync.RWMutex
 }
@@ -92,9 +94,10 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		cfg:       cfg,
 		router:    rt,
 		transport: tr,
-		shaperCfg: shaperCfg,
-		masterKey: masterKey,
-		dialer:    directDialer,
+		shaperCfg:      shaperCfg,
+		masterKey:      masterKey,
+		dialer:         directDialer,
+		latencyTracker: NewLatencyTracker(time.Duration(cfg.LatencyOffsetMS) * time.Millisecond),
 	}, nil
 }
 
@@ -200,6 +203,10 @@ func (c *Client) ShaperConfig() shaper.Config {
 
 func (c *Client) Config() *config.ClientConfig {
 	return c.cfg
+}
+
+func (c *Client) LatencyTracker() *LatencyTracker {
+	return c.latencyTracker
 }
 
 func (c *Client) Close() error {

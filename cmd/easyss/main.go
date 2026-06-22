@@ -1,11 +1,8 @@
 package main
 
 import (
-	"context"
-	cryptorand "crypto/rand"
 	"flag"
 	"fmt"
-	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
@@ -248,6 +245,7 @@ func (a *App) Start() error {
 		streamIdleTimeout = 4 * timeout
 	}
 	a.streamHandler = proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, streamIdleTimeout)
+	a.streamHandler.OnRTT = cli.LatencyTracker().Record
 
 	if a.cfg.Local.SocksPort > 0 {
 		socksAddr := "127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
@@ -322,7 +320,7 @@ func (a *App) Start() error {
 	a.pingLatCh = make(chan time.Duration, 1)
 	a.pingCloser = make(chan struct{})
 	a.statsCloser = make(chan struct{})
-	go a.pingBackground()
+	go a.latencyPoller()
 	go a.statsLoop()
 
 	if a.cfg.PprofEnabled {
@@ -373,54 +371,33 @@ func (a *App) PingLatencyCh() <-chan time.Duration {
 	return a.pingLatCh
 }
 
-func (a *App) pingBackground() {
-	pingOnce := func() {
-		if a.cli == nil {
-			return
-		}
+func (a *App) latencyPoller() {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		lat, err := a.cli.Ping(ctx)
-		if err != nil {
-			log.Debug("[EASYSS-V3] ping failed", "err", err)
+	var lastReported time.Duration
+	for {
+		select {
+		case <-ticker.C:
+			if a.cli == nil {
+				continue
+			}
+			est, ok := a.cli.LatencyTracker().Estimate()
+			if !ok {
+				continue
+			}
+			if est == lastReported {
+				continue
+			}
+			lastReported = est
 			select {
-			case a.pingLatCh <- -1:
+			case a.pingLatCh <- est:
 			default:
 			}
-			return
-		}
-
-		log.Info("[EASYSS-V3] ping latency", "latency", lat)
-
-		select {
-		case a.pingLatCh <- lat:
-		default:
-		}
-	}
-
-	pingOnce()
-
-	for {
-		sleepDuration := randomPingInterval()
-		timer := time.NewTimer(sleepDuration)
-		select {
-		case <-timer.C:
-			pingOnce()
 		case <-a.pingCloser:
-			timer.Stop()
 			return
 		}
 	}
-}
-
-func randomPingInterval() time.Duration {
-	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(21))
-	if err != nil {
-		return 15 * time.Second
-	}
-	return time.Duration(10+int(n.Int64())) * time.Second
 }
 
 func (a *App) statsLoop() {
