@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
@@ -218,7 +219,7 @@ func (h *TCPHandler) copyFromClient(dr *crypto.DecryptedReader, dst net.Conn, si
 }
 
 func (h *TCPHandler) copyFromTarget(src net.Conn, s2c shaper.Shaper, signalActivity func(), meter *tcpStreamMeter) error {
-	buf := bytespool.Get(16 * 1024)
+	buf := bytespool.Get(config.TCPStreamBufferSize)
 	defer bytespool.MustPut(buf)
 	for {
 		meter.setState("read_target")

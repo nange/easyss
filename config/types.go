@@ -11,6 +11,8 @@ const (
 	DefaultHTTP2ReceiveBufferPerConnection = 64 * 1024 * 1024
 	DefaultHTTP2ReceiveBufferPerStream     = 32 * 1024 * 1024
 
+	TCPStreamBufferSize = 16 * 1024
+
 	EndpointTCP  = "/v3/tcp"
 	EndpointUDP  = "/v3/udp"
 	EndpointICMP = "/v3/icmp"

@@ -14,18 +14,17 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/client/router"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/txthinking/socks5"
 )
 
-const httpProxyBufferSize = 32 * 1024
-
 type reverseProxyBufferPool struct{}
 
 func (reverseProxyBufferPool) Get() []byte {
-	return bytespool.Get(httpProxyBufferSize)
+	return bytespool.Get(config.TCPStreamBufferSize)
 }
 
 func (reverseProxyBufferPool) Put(buf []byte) {
