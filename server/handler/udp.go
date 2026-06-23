@@ -16,10 +16,11 @@ import (
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/server/nextproxy"
 	"github.com/nange/easyss/v3/shaper"
+	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/util/bytespool"
 )
 
-const udpBufSize = 65535
+const udpBufSize = protocol.MaxPlainRecordSize - protocol.FrameHeaderSize
 
 type UDPHandler struct {
 	idleTimeout time.Duration
@@ -103,7 +104,7 @@ func (h *UDPHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 			if !dnsChecked.Load() && h.nextProxy != nil &&
 				res.frame.Type == protocol.FrameDATAGRAM && len(res.frame.Payload) > 0 {
 				msg := &dns.Msg{}
-				if err := msg.Unpack(res.frame.Payload); err == nil && isDNSRequest(msg) {
+				if err := msg.Unpack(res.frame.Payload); err == nil && util.IsDNSRequest(msg) {
 					dnsDetected.Store(true)
 					domain := strings.TrimSuffix(msg.Question[0].Name, ".")
 					viaProxy := h.nextProxy.IsCustomDomain(domain)
@@ -185,7 +186,7 @@ func (h *UDPHandler) readFromTarget(conn net.Conn, s2c shaper.Shaper, done <-cha
 			// DNS response interception for dynamic IP learning
 			if dnsDetected.Load() && h.nextProxy != nil {
 				msg := &dns.Msg{}
-				if err := msg.Unpack(buf[:n]); err == nil && msg.Response {
+				if err := msg.Unpack(buf[:n]); err == nil && msg.Response && len(msg.Question) > 0 {
 					domain := strings.TrimSuffix(msg.Question[0].Name, ".")
 					if h.nextProxy.IsCustomDomain(domain) {
 						for _, ans := range msg.Answer {
@@ -209,12 +210,4 @@ func (h *UDPHandler) readFromTarget(conn net.Conn, s2c shaper.Shaper, done <-cha
 			}
 		}
 	}
-}
-
-func isDNSRequest(msg *dns.Msg) bool {
-	if len(msg.Question) == 0 {
-		return false
-	}
-	q := msg.Question[0]
-	return (q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA) && !msg.Response
 }

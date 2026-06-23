@@ -1,7 +1,6 @@
 package crypto
 
 import (
-	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
@@ -73,22 +72,6 @@ func DeriveSessionKeys(masterKey, salt []byte) (SessionKeys, error) {
 		return sk, err
 	}
 	return sk, nil
-}
-
-func SystemEntropy(extra ...[]byte) ([]byte, error) {
-	var b [32]byte
-	if _, err := hmac.New(sha256.New, nil).Write([]byte("easyss-v3-entropy")); err != nil {
-		return nil, err
-	}
-	for _, e := range extra {
-		if _, err := hmac.New(sha256.New, nil).Write(e); err != nil {
-			return nil, err
-		}
-	}
-	if _, err := io.ReadFull(rand.Reader, b[:]); err != nil {
-		return nil, err
-	}
-	return b[:], nil
 }
 
 func GenerateSalt() ([]byte, error) {

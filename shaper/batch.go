@@ -93,6 +93,7 @@ func (bs *batchShaper) Flush() error {
 
 func (bs *batchShaper) Close() error {
 	bs.mu.Lock()
+	bs.closing.Store(true)
 	if bs.cover != nil {
 		bs.cover.stop()
 	}
@@ -101,7 +102,6 @@ func (bs *batchShaper) Close() error {
 	if err != nil {
 		return err
 	}
-	bs.closing.Store(true)
 	return nil
 }
 

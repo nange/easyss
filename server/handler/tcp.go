@@ -6,15 +6,16 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync/atomic"
 	"time"
 
 	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/relay"
 	"github.com/nange/easyss/v3/server/nextproxy"
 	"github.com/nange/easyss/v3/shaper"
+	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/util/bytespool"
 )
 
@@ -23,63 +24,6 @@ type TCPHandler struct {
 	nextProxy   *nextproxy.NextProxy
 	idleTimeout time.Duration
 	dialTimeout time.Duration
-}
-
-type tcpStreamMeter struct {
-	target       string
-	total        atomic.Int64
-	last         atomic.Int64
-	state        atomic.Value
-	lastLoggedAt atomic.Int64
-	done         chan struct{}
-}
-
-func newTCPStreamMeter(target string) *tcpStreamMeter {
-	m := &tcpStreamMeter{
-		target: target,
-		done:   make(chan struct{}),
-	}
-	m.state.Store("open")
-	go m.loop()
-	return m
-}
-
-func (m *tcpStreamMeter) add(n int, state string) {
-	if n > 0 {
-		m.total.Add(int64(n))
-	}
-	m.setState(state)
-}
-
-func (m *tcpStreamMeter) setState(state string) {
-	if state != "" {
-		m.state.Store(state)
-	}
-}
-
-func (m *tcpStreamMeter) close() {
-	close(m.done)
-}
-
-func (m *tcpStreamMeter) loop() {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			total := m.total.Load()
-			last := m.last.Swap(total)
-			if total >= 1<<20 && total == last {
-				now := time.Now().Unix()
-				if prev := m.lastLoggedAt.Load(); now-prev >= 60 {
-					m.lastLoggedAt.Store(now)
-					log.Info("[TCP_HANDLE] downstream stalled", "target", m.target, "bytes", total, "state", m.state.Load())
-				}
-			}
-		case <-m.done:
-			return
-		}
-	}
 }
 
 func NewTCPHandler(idleTimeout time.Duration, np *nextproxy.NextProxy) *TCPHandler {
@@ -137,71 +81,29 @@ func (h *TCPHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 		remote = ra.String()
 	}
 	log.Info("[TCP_HANDLE] target connected", "target", target, "remote", remote)
-	meter := newTCPStreamMeter(target)
-	defer meter.close()
+	m := stats.NewStreamMeter("tcp_handle", target)
+	defer m.Close()
 
-	errCh := make(chan error, 2)
-	activity := make(chan struct{}, 1)
-	signalActivity := func() {
-		select {
-		case activity <- struct{}{}:
-		default:
-		}
-	}
-
-	go func() {
-		errCh <- h.copyFromClient(dr, targetConn, signalActivity)
-	}()
-
-	go func() {
-		errCh <- h.copyFromTarget(targetConn, s2c, signalActivity, meter)
-	}()
-
-	timer := time.NewTimer(h.idleTimeout)
-	defer timer.Stop()
-
-	done := 0
-	var firstErr error
 	sendRST := func() {
 		_ = s2c.PushFrame(protocol.NewFrameRST())
 		_ = s2c.Flush()
 	}
-	for done < 2 {
-		select {
-		case err = <-errCh:
-			done++
-			if err != nil && !errors.Is(err, io.EOF) && firstErr == nil {
-				firstErr = err
-			}
-			if firstErr != nil || done == 2 {
-				if firstErr != nil {
-					sendRST()
-				}
-				return firstErr
-			}
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			timer.Reset(h.idleTimeout)
-		case <-activity:
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			timer.Reset(h.idleTimeout)
-		case <-timer.C:
-			_ = targetConn.Close()
-			log.Debug("[TCP_HANDLE] idle timeout", "target", target, "timeout", h.idleTimeout)
-			sendRST()
-			return fmt.Errorf("tcp stream idle timeout after %v", h.idleTimeout)
-		}
+
+	result := relay.Bidirectional(h.idleTimeout, func() {
+		_ = targetConn.Close()
+	},
+		func(signal func()) error { return h.copyFromClient(dr, targetConn, signal) },
+		func(signal func()) error { return h.copyFromTarget(targetConn, s2c, signal, m) },
+	)
+	if result.TimedOut {
+		log.Debug("[TCP_HANDLE] idle timeout", "target", target, "timeout", h.idleTimeout)
+		sendRST()
+		return fmt.Errorf("tcp stream %s", result.IdleMsg)
 	}
-	return firstErr
+	if result.Err != nil {
+		sendRST()
+	}
+	return result.Err
 }
 
 func (h *TCPHandler) copyFromClient(dr *crypto.DecryptedReader, dst net.Conn, signalActivity func()) error {
@@ -233,20 +135,20 @@ func (h *TCPHandler) copyFromClient(dr *crypto.DecryptedReader, dst net.Conn, si
 	}
 }
 
-func (h *TCPHandler) copyFromTarget(src net.Conn, s2c shaper.Shaper, signalActivity func(), meter *tcpStreamMeter) error {
+func (h *TCPHandler) copyFromTarget(src net.Conn, s2c shaper.Shaper, signalActivity func(), m *stats.StreamMeter) error {
 	buf := bytespool.Get(config.TCPStreamBufferSize)
 	defer bytespool.MustPut(buf)
 	for {
-		meter.setState("read_target")
+		m.SetState("read_target")
 		n, err := src.Read(buf)
 		if n > 0 {
 			signalActivity()
 			frame := protocol.NewFrameDATA(buf[:n])
-			meter.setState("write_http2")
+			m.SetState("write_http2")
 			if wErr := s2c.PushFrame(frame); wErr != nil {
 				return wErr
 			}
-			meter.add(n, "read_target")
+			m.Add(n, "read_target")
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {

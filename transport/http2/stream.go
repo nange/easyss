@@ -17,36 +17,56 @@ type roundTripResult struct {
 type HTTP2Stream struct {
 	w      *io.PipeWriter
 	respCh <-chan roundTripResult
-	r      io.ReadCloser
 	cancel context.CancelFunc
 	done   func()
-	mu     sync.Mutex
-	respOk bool
+
+	mu       sync.Mutex
+	r        io.ReadCloser
+	respErr  error
+	respOnce sync.Once
+	closed   bool
 }
 
 func (s *HTTP2Stream) Read(p []byte) (int, error) {
 	s.mu.Lock()
-	if s.r == nil && !s.respOk {
+	if s.closed {
 		s.mu.Unlock()
-		res := <-s.respCh
-		if res.err != nil {
-			s.done()
-			return 0, res.err
-		}
-		s.mu.Lock()
-		s.r = res.resp.Body
-		s.respOk = true
-		s.mu.Unlock()
-	} else {
-		s.mu.Unlock()
+		return 0, io.ErrClosedPipe
+	}
+	needResp := s.r == nil && s.respErr == nil
+	s.mu.Unlock()
+
+	if needResp {
+		s.respOnce.Do(func() {
+			res := <-s.respCh
+			s.mu.Lock()
+			if res.err != nil {
+				s.respErr = res.err
+			} else {
+				s.r = res.resp.Body
+			}
+			s.mu.Unlock()
+		})
 	}
 
-	if s.r == nil {
+	s.mu.Lock()
+	r := s.r
+	respErr := s.respErr
+	closed := s.closed
+	s.mu.Unlock()
+
+	if closed {
+		return 0, io.ErrClosedPipe
+	}
+	if r == nil {
 		s.done()
+		if respErr != nil {
+			return 0, respErr
+		}
 		return 0, io.EOF
 	}
 
-	n, err := s.r.Read(p)
+	n, err := r.Read(p)
 	if err != nil {
 		s.done()
 	}
@@ -69,8 +89,14 @@ func (s *HTTP2Stream) Close() error {
 	defer s.done()
 	s.cancel()
 	_ = s.w.Close()
-	if s.r != nil {
-		return s.r.Close()
+
+	s.mu.Lock()
+	r := s.r
+	s.closed = true
+	s.mu.Unlock()
+
+	if r != nil {
+		return r.Close()
 	}
 	return nil
 }

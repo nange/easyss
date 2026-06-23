@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/miekg/dns"
+	"github.com/nange/easyss/v3/util"
 )
 
 func TestIsLocalConnClosedError(t *testing.T) {
@@ -128,9 +129,9 @@ func TestIsDNSRequest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isDNSRequest(tt.msg)
+			got := util.IsDNSRequest(tt.msg)
 			if got != tt.want {
-				t.Errorf("isDNSRequest() = %v, want %v", got, tt.want)
+				t.Errorf("IsDNSRequest() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -156,9 +157,9 @@ func TestIsDNSResponse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isDNSResponse(tt.msg)
+			got := util.IsDNSResponse(tt.msg)
 			if got != tt.want {
-				t.Errorf("isDNSResponse() = %v, want %v", got, tt.want)
+				t.Errorf("IsDNSResponse() = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -9,13 +9,13 @@ import (
 	"net"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/relay"
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
@@ -25,65 +25,6 @@ import (
 var ErrStreamIdleTimeout = errors.New("stream idle timeout")
 
 var errLocalConnClosed = errors.New("local connection closed")
-
-type streamMeter struct {
-	component    string
-	target       string
-	total        atomic.Int64
-	last         atomic.Int64
-	state        atomic.Value
-	lastLoggedAt atomic.Int64
-	done         chan struct{}
-}
-
-func newStreamMeter(component, target string) *streamMeter {
-	m := &streamMeter{
-		component: component,
-		target:    target,
-		done:      make(chan struct{}),
-	}
-	m.state.Store("open")
-	go m.loop()
-	return m
-}
-
-func (m *streamMeter) add(n int, state string) {
-	if n > 0 {
-		m.total.Add(int64(n))
-	}
-	m.setState(state)
-}
-
-func (m *streamMeter) setState(state string) {
-	if state != "" {
-		m.state.Store(state)
-	}
-}
-
-func (m *streamMeter) close() {
-	close(m.done)
-}
-
-func (m *streamMeter) loop() {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			total := m.total.Load()
-			last := m.last.Swap(total)
-			if total >= 1<<20 && total == last {
-				now := time.Now().Unix()
-				if prev := m.lastLoggedAt.Load(); now-prev >= 60 {
-					m.lastLoggedAt.Store(now)
-					log.Info("[STREAM] downstream stalled", "component", m.component, "target", m.target, "bytes", total, "state", m.state.Load())
-				}
-			}
-		case <-m.done:
-			return
-		}
-	}
-}
 
 type StreamHandler struct {
 	transport         transport.Transport
@@ -118,9 +59,13 @@ func (h *StreamHandler) OpenICMPStream(ctx context.Context, target string, echoP
 	return h.icmpStream(ctx, "/v3/icmp", protocol.ProtoICMP, target, echoPayload, method)
 }
 
-func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto protocol.Proto, target string, echoPayload []byte, method protocol.Method) ([]byte, error) {
-	log.Debug("[STREAM] icmp open", "endpoint", endpoint, "target", target)
+type bootstrapSession struct {
+	stream transport.Stream
+	sk     *crypto.StreamKeys
+	salt   []byte
+}
 
+func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, proto protocol.Proto, target string, method protocol.Method, extraFrames []protocol.Frame) (*bootstrapSession, error) {
 	salt, err := crypto.GenerateSalt()
 	if err != nil {
 		return nil, fmt.Errorf("generate salt: %w", err)
@@ -128,50 +73,63 @@ func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto p
 
 	saltB64 := base64.RawURLEncoding.EncodeToString(salt)
 
-	req := transport.OpenRequest{
+	stream, err := h.transport.Open(ctx, transport.OpenRequest{
 		Endpoint: endpoint,
 		Salt:     saltB64,
-	}
-	stream, err := h.transport.Open(ctx, req)
+	})
 	if err != nil {
-		log.Error("[STREAM] icmp transport open", "target", target, "err", err)
 		return nil, fmt.Errorf("transport open: %w", err)
 	}
-	defer stream.Close() //nolint:errcheck
 
 	sk, err := crypto.NewStreamKeys(h.masterKey, salt, endpoint)
 	if err != nil {
+		stream.Close() //nolint:errcheck
 		return nil, fmt.Errorf("stream keys: %w", err)
 	}
 
 	bootstrapEnc, bootstrapCounter, err := sk.Encryptor("c2s", "bootstrap", protocol.MethodAES256GCM)
 	if err != nil {
+		stream.Close() //nolint:errcheck
 		return nil, fmt.Errorf("bootstrap encryptor: %w", err)
 	}
 	aad := crypto.BuildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
 	rw := crypto.NewRecordWriter(stream, bootstrapEnc, bootstrapCounter, aad)
 
-	handshake := protocol.Handshake{
+	hsFrame := protocol.NewFrameHANDSHAKE(protocol.Handshake{
 		Version: protocol.Version3,
 		Proto:   proto,
 		Method:  method,
 		Target:  target,
-	}
-	hsFrame := protocol.NewFrameHANDSHAKE(handshake)
-	dataFrame := protocol.NewFrameDATA(echoPayload)
+	})
+	frames := append([]protocol.Frame{hsFrame}, extraFrames...)
 
-	plaintext := protocol.EncodeFrames([]protocol.Frame{hsFrame, dataFrame})
+	plaintext := protocol.EncodeFrames(frames)
 	if err := rw.WriteRecord(plaintext); err != nil {
-		log.Error("[STREAM] icmp handshake write", "target", target, "err", err)
-		return nil, fmt.Errorf("write handshake+data: %w", err)
+		stream.Close() //nolint:errcheck
+		return nil, fmt.Errorf("write handshake: %w", err)
 	}
 
-	aadS2C := crypto.BuildAAD(endpoint, salt, "s2c", "session", method)
-	s2cEnc, s2cCounter, err := sk.Encryptor("s2c", "session", method)
+	return &bootstrapSession{stream: stream, sk: sk, salt: salt}, nil
+}
+
+func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto protocol.Proto, target string, echoPayload []byte, method protocol.Method) ([]byte, error) {
+	log.Debug("[STREAM] icmp open", "endpoint", endpoint, "target", target)
+
+	bs, err := h.openAndBootstrap(ctx, endpoint, proto, target, method, []protocol.Frame{
+		protocol.NewFrameDATA(echoPayload),
+	})
+	if err != nil {
+		log.Error("[STREAM] icmp bootstrap", "target", target, "err", err)
+		return nil, err
+	}
+	defer bs.stream.Close() //nolint:errcheck
+
+	aadS2C := crypto.BuildAAD(endpoint, bs.salt, "s2c", "session", method)
+	s2cEnc, s2cCounter, err := bs.sk.Encryptor("s2c", "session", method)
 	if err != nil {
 		return nil, fmt.Errorf("s2c encryptor: %w", err)
 	}
-	dr := crypto.NewDecryptedReader(stream, aadS2C, s2cEnc, s2cCounter)
+	dr := crypto.NewDecryptedReader(bs.stream, aadS2C, s2cEnc, s2cCounter)
 
 	frame, err := dr.ReadFrame()
 	if err != nil {
@@ -194,69 +152,29 @@ func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto p
 func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto protocol.Proto, target string, method protocol.Method, localConn net.Conn) error {
 	log.Debug("[STREAM] opening", "endpoint", endpoint, "target", target)
 
-	salt, err := crypto.GenerateSalt()
-	if err != nil {
-		return fmt.Errorf("generate salt: %w", err)
-	}
-
-	saltB64 := base64.RawURLEncoding.EncodeToString(salt)
-
-	req := transport.OpenRequest{
-		Endpoint: endpoint,
-		Salt:     saltB64,
-	}
-	stream, err := h.transport.Open(ctx, req)
-	if err != nil {
-		log.Error("[STREAM] transport open", "endpoint", endpoint, "target", target, "err", err)
-		return fmt.Errorf("transport open: %w", err)
-	}
-	log.Debug("[STREAM] transport opened", "endpoint", endpoint, "target", target)
-
-	sk, err := crypto.NewStreamKeys(h.masterKey, salt, endpoint)
-	if err != nil {
-		stream.Close() //nolint:errcheck
-		return fmt.Errorf("stream keys: %w", err)
-	}
-
-	bootstrapEnc, bootstrapCounter, err := sk.Encryptor("c2s", "bootstrap", protocol.MethodAES256GCM)
-	if err != nil {
-		stream.Close() //nolint:errcheck
-		return fmt.Errorf("bootstrap encryptor: %w", err)
-	}
-	aad := crypto.BuildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
-	rw := crypto.NewRecordWriter(stream, bootstrapEnc, bootstrapCounter, aad)
-
-	handshake := protocol.Handshake{
-		Version: protocol.Version3,
-		Proto:   proto,
-		Method:  method,
-		Target:  target,
-	}
-	hsFrame := protocol.NewFrameHANDSHAKE(handshake)
-
-	frames := []protocol.Frame{hsFrame}
+	var extraFrames []protocol.Frame
 	if localConn != nil {
 		_ = localConn.SetReadDeadline(time.Now().Add(5 * time.Millisecond))
-			buf := bytespool.Get(config.TCPStreamBufferSize)
-			n, rErr := localConn.Read(buf)
+		buf := bytespool.Get(config.TCPStreamBufferSize)
+		n, rErr := localConn.Read(buf)
 		_ = localConn.SetReadDeadline(time.Time{})
 		if n > 0 {
-			frames = append(frames, protocol.NewFrameDATA(buf[:n]))
+			extraFrames = []protocol.Frame{protocol.NewFrameDATA(buf[:n])}
 			log.Debug("[STREAM] merged first DATA into bootstrap record", "bytes", n, "read_err", rErr)
 		}
 		bytespool.MustPut(buf)
 	}
 
-	plaintext := protocol.EncodeFrames(frames)
-	if err := rw.WriteRecord(plaintext); err != nil {
-		stream.Close() //nolint:errcheck
-		log.Error("[STREAM] handshake write", "endpoint", endpoint, "target", target, "err", err)
-		return fmt.Errorf("write handshake: %w", err)
+	bs, err := h.openAndBootstrap(ctx, endpoint, proto, target, method, extraFrames)
+	if err != nil {
+		log.Error("[STREAM] bootstrap", "endpoint", endpoint, "target", target, "err", err)
+		return err
 	}
+	stream := bs.stream
 	log.Debug("[STREAM] handshake sent", "target", target)
 
-	aadSession := crypto.BuildAAD(endpoint, salt, "c2s", "session", method)
-	sessionEnc, sessionCounter, err := sk.Encryptor("c2s", "session", method)
+	aadSession := crypto.BuildAAD(endpoint, bs.salt, "c2s", "session", method)
+	sessionEnc, sessionCounter, err := bs.sk.Encryptor("c2s", "session", method)
 	if err != nil {
 		stream.Close() //nolint:errcheck
 		return fmt.Errorf("session encryptor: %w", err)
@@ -266,8 +184,8 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 	txShaper := shaper.NewLight(sessionWriter, h.shaperCfg)
 	defer txShaper.Close() //nolint:errcheck
 
-	aadS2C := crypto.BuildAAD(endpoint, salt, "s2c", "session", method)
-	s2cEnc, s2cCounter, err := sk.Encryptor("s2c", "session", method)
+	aadS2C := crypto.BuildAAD(endpoint, bs.salt, "s2c", "session", method)
+	s2cEnc, s2cCounter, err := bs.sk.Encryptor("s2c", "session", method)
 	if err != nil {
 		stream.Close() //nolint:errcheck
 		return fmt.Errorf("s2c encryptor: %w", err)
@@ -280,73 +198,29 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 }
 
 func (h *StreamHandler) relay(target string, localConn net.Conn, tx shaper.Shaper, rx *crypto.DecryptedReader, stream transport.Stream) error {
-	meter := newStreamMeter("client", target)
-	defer meter.close()
+	m := stats.NewStreamMeter("client", target)
+	defer m.Close()
 
-	activity := make(chan struct{}, 1)
-	signalActivity := func() {
-		select {
-		case activity <- struct{}{}:
-		default:
-		}
-	}
-	errCh := make(chan error, 2)
-
-	go func() {
-		errCh <- h.copyLocalToRemote(localConn, tx, signalActivity)
-	}()
-
-	go func() {
-		errCh <- h.copyRemoteToLocal(rx, localConn, signalActivity, meter)
-	}()
-
-	timer := time.NewTimer(h.streamIdleTimeout)
-	defer timer.Stop()
-
-	done := 0
-	var firstErr error
-	for done < 2 {
-		select {
-		case err := <-errCh:
-			done++
-			if errors.Is(err, errLocalConnClosed) || errors.Is(err, io.ErrClosedPipe) {
-				_ = stream.Close()
-				_ = localConn.Close()
-				return nil
-			}
-			if err != nil && !errors.Is(err, io.EOF) && firstErr == nil {
-				firstErr = err
-				log.Debug("[STREAM] relay copy error", "err", err)
-			}
-			if firstErr != nil || done == 2 {
-				_ = stream.Close()
-				_ = localConn.Close()
-				return firstErr
-			}
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			timer.Reset(h.streamIdleTimeout)
-		case <-activity:
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			timer.Reset(h.streamIdleTimeout)
-		case <-timer.C:
-			log.Debug("[STREAM] idle timeout", "timeout", h.streamIdleTimeout)
-			_ = stream.Close()
-			_ = localConn.Close()
-			return fmt.Errorf("%w after %v", ErrStreamIdleTimeout, h.streamIdleTimeout)
-		}
+	closeAll := func() {
+		_ = stream.Close()
+		_ = localConn.Close()
 	}
 
-	return firstErr
+	result := relay.Bidirectional(h.streamIdleTimeout, closeAll,
+		func(signal func()) error { return h.copyLocalToRemote(localConn, tx, signal) },
+		func(signal func()) error { return h.copyRemoteToLocal(rx, localConn, signal, m) },
+	)
+
+	if result.TimedOut {
+		log.Debug("[STREAM] idle timeout", "timeout", h.streamIdleTimeout)
+		return fmt.Errorf("%w after %v", ErrStreamIdleTimeout, h.streamIdleTimeout)
+	}
+
+	if result.Err != nil && !errors.Is(result.Err, errLocalConnClosed) && !errors.Is(result.Err, io.ErrClosedPipe) {
+		log.Debug("[STREAM] relay copy error", "err", result.Err)
+		return result.Err
+	}
+	return nil
 }
 
 func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signalActivity func()) error {
@@ -384,7 +258,7 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 	}
 }
 
-func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Conn, signalActivity func(), meter *streamMeter) error {
+func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Conn, signalActivity func(), m *stats.StreamMeter) error {
 	type frameItem struct {
 		data []byte
 		fin  bool
@@ -457,7 +331,7 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 		if item.fin {
 			return nil
 		}
-		meter.setState("write_local")
+		m.SetState("write_local")
 			if _, wErr := dst.Write(item.data); wErr != nil {
 				if isLocalConnClosedError(wErr) {
 					log.Debug("[STREAM] local connection closed", "err", wErr)
@@ -466,7 +340,7 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 				return wErr
 			}
 		stats.RecordProxyBytesRecv(len(item.data))
-			meter.add(len(item.data), "read_remote")
+			m.Add(len(item.data), "read_remote")
 	}
 
 	return <-readDone
@@ -501,60 +375,23 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 	stats.RecordUDPAssociation()
 	log.Debug("[UDP_EXCHANGE] opening", "target", target)
 
-	salt, err := crypto.GenerateSalt()
+	bs, err := h.openAndBootstrap(ctx, "/v3/udp", protocol.ProtoUDP, target, method, nil)
 	if err != nil {
-		return nil, fmt.Errorf("generate salt: %w", err)
+		log.Error("[UDP_EXCHANGE] bootstrap", "target", target, "err", err)
+		return nil, err
 	}
+	stream := bs.stream
 
-	saltB64 := base64.RawURLEncoding.EncodeToString(salt)
-
-	req := transport.OpenRequest{
-		Endpoint: "/v3/udp",
-		Salt:     saltB64,
-	}
-	stream, err := h.transport.Open(ctx, req)
-	if err != nil {
-		log.Error("[UDP_EXCHANGE] transport open", "target", target, "err", err)
-		return nil, fmt.Errorf("transport open: %w", err)
-	}
-
-	sk, err := crypto.NewStreamKeys(h.masterKey, salt, "/v3/udp")
-	if err != nil {
-		stream.Close() //nolint:errcheck
-		return nil, fmt.Errorf("stream keys: %w", err)
-	}
-
-	bootstrapEnc, bootstrapCounter, err := sk.Encryptor("c2s", "bootstrap", protocol.MethodAES256GCM)
-	if err != nil {
-		stream.Close() //nolint:errcheck
-		return nil, fmt.Errorf("bootstrap encryptor: %w", err)
-	}
-	aadBootstrap := crypto.BuildAAD("/v3/udp", salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
-	rw := crypto.NewRecordWriter(stream, bootstrapEnc, bootstrapCounter, aadBootstrap)
-
-	handshake := protocol.Handshake{
-		Version: protocol.Version3,
-		Proto:   protocol.ProtoUDP,
-		Method:  method,
-		Target:  target,
-	}
-	hsFrame := protocol.NewFrameHANDSHAKE(handshake)
-	if err := rw.WriteRecord(protocol.EncodeFrames([]protocol.Frame{hsFrame})); err != nil {
-		stream.Close() //nolint:errcheck
-		log.Error("[UDP_EXCHANGE] handshake write", "target", target, "err", err)
-		return nil, fmt.Errorf("write handshake: %w", err)
-	}
-
-	aadC2S := crypto.BuildAAD("/v3/udp", salt, "c2s", "session", method)
-	c2sEnc, c2sCounter, err := sk.Encryptor("c2s", "session", method)
+	aadC2S := crypto.BuildAAD("/v3/udp", bs.salt, "c2s", "session", method)
+	c2sEnc, c2sCounter, err := bs.sk.Encryptor("c2s", "session", method)
 	if err != nil {
 		stream.Close() //nolint:errcheck
 		return nil, fmt.Errorf("c2s session encryptor: %w", err)
 	}
 	c2sWriter := crypto.NewRecordWriter(stream, c2sEnc, c2sCounter, aadC2S)
 
-	aadS2C := crypto.BuildAAD("/v3/udp", salt, "s2c", "session", method)
-	s2cEnc, s2cCounter, err := sk.Encryptor("s2c", "session", method)
+	aadS2C := crypto.BuildAAD("/v3/udp", bs.salt, "s2c", "session", method)
+	s2cEnc, s2cCounter, err := bs.sk.Encryptor("s2c", "session", method)
 	if err != nil {
 		stream.Close() //nolint:errcheck
 		return nil, fmt.Errorf("s2c session encryptor: %w", err)

@@ -105,7 +105,7 @@ func (h *ICMPHandler) icmpExchange(target string, payload []byte) ([]byte, error
 		return nil, err
 	}
 
-	rb := make([]byte, 1500)
+	rb := make([]byte, 65535)
 	n, err := conn.Read(rb)
 	if err != nil {
 		log.Error("[ICMP] read failed", "target", target, "err", err)

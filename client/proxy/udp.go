@@ -38,7 +38,7 @@ func (s *Socks5Server) handleUDP(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 	}
 
 	msg := &dns.Msg{}
-	if err := msg.Unpack(d.Data); err == nil && isDNSRequest(msg) {
+	if err := msg.Unpack(d.Data); err == nil && util.IsDNSRequest(msg) {
 		return s.handleDNS(srv, clientAddr, d, msg)
 	}
 
@@ -181,7 +181,7 @@ func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAd
 		}
 
 		msg := &dns.Msg{}
-		if err := msg.Unpack(data); err == nil && isDNSResponse(msg) {
+		if err := msg.Unpack(data); err == nil && util.IsDNSResponse(msg) {
 			if s.router.ShouldIPV6Disable() && msg.Question[0].Qtype == dns.TypeAAAA {
 				msg.Answer = nil
 				if packed, packErr := msg.Pack(); packErr == nil {
@@ -318,21 +318,6 @@ func (s *Socks5Server) proxyUDPRelay(srv *socks5.Server, clientAddr *net.UDPAddr
 		return err
 	}
 	return nil
-}
-
-func isDNSRequest(msg *dns.Msg) bool {
-	if len(msg.Question) == 0 {
-		return false
-	}
-	q := msg.Question[0]
-	return (q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA) && !msg.Response
-}
-
-func isDNSResponse(msg *dns.Msg) bool {
-	if len(msg.Question) == 0 {
-		return false
-	}
-	return msg.Response
 }
 
 func responseDNSMsg(conn *net.UDPConn, addr *net.UDPAddr, msg *dns.Msg, dst string) error {

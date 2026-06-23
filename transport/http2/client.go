@@ -30,7 +30,6 @@ type HTTP2Transport struct {
 	serverURL string
 	ctx       context.Context
 	cancel    context.CancelFunc
-	mu        sync.RWMutex //nolint:unused
 }
 
 type Config struct {
@@ -178,6 +177,7 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	doneOnce := sync.OnceFunc(func() {
 		slot.active.Add(-1)
 		stats.RecordStreamClosed()
+		cancel()
 	})
 
 	return &HTTP2Stream{

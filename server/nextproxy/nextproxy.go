@@ -216,10 +216,6 @@ func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string
 	}
 }
 
-func (np *NextProxy) DialUDP(addr string) (*net.UDPConn, error) {
-	return net.DialUDP("udp", nil, &net.UDPAddr{IP: net.ParseIP(addr), Port: 0})
-}
-
 func (np *NextProxy) URL() *url.URL {
 	if np == nil {
 		return nil
