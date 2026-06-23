@@ -99,7 +99,7 @@ Makefile 通过 `-ldflags` 向 `version/` 包注入以下变量：
 ## 其他注意事项
 
 - 始终使用简体中文回复我
-- git commit信息的生成尽量简洁，格式参考git log历史记录
+- git commit 信息使用英文，尽量简洁，格式参考 git log 历史记录
 
 ## 待清理（v3 重构进行中）
 
