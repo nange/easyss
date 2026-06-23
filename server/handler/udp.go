@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -36,10 +37,10 @@ func NewUDPHandler(idleTimeout time.Duration, np *nextproxy.NextProxy) *UDPHandl
 	return h
 }
 
-func (h *UDPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, target string) error {
+func (h *UDPHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c shaper.Shaper, target string) error {
 	log.Debug("[UDP] handler starting", "target", target)
 
-	conn, err := h.dialTarget(target)
+	conn, err := h.dialTarget(ctx, target)
 	if err != nil {
 		log.Error("[UDP] dial target failed", "target", target, "err", err)
 		_ = s2c.PushFrame(protocol.NewFrameRST())
@@ -70,6 +71,11 @@ func (h *UDPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, targe
 	timer := time.NewTimer(h.idleTimeout)
 	defer timer.Stop()
 
+	sendRST := func() {
+		_ = s2c.PushFrame(protocol.NewFrameRST())
+		_ = s2c.Flush()
+	}
+
 	for {
 		select {
 		case err := <-errCh:
@@ -77,10 +83,12 @@ func (h *UDPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, targe
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
+			sendRST()
 			return err
 		case res := <-frameCh:
 			if res.err != nil {
 				closeDone()
+				sendRST()
 				return res.err
 			}
 			if !timer.Stop() {
@@ -98,13 +106,15 @@ func (h *UDPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, targe
 				if err := msg.Unpack(res.frame.Payload); err == nil && isDNSRequest(msg) {
 					dnsDetected.Store(true)
 					domain := strings.TrimSuffix(msg.Question[0].Name, ".")
-					log.Info("[UDP_DNS]", "domain", domain, "target", target)
+					viaProxy := h.nextProxy.IsCustomDomain(domain)
+					log.Info("[UDP_DNS]", "domain", domain, "target", target, "via_proxy", viaProxy)
 				}
 				dnsChecked.Store(true)
 			}
 
 			if err := h.handleClientFrame(conn, res.frame); err != nil {
 				closeDone()
+				sendRST()
 				return err
 			}
 			if res.frame.Type == protocol.FrameFIN || res.frame.Type == protocol.FrameRST {
@@ -137,13 +147,14 @@ func (h *UDPHandler) handleClientFrame(conn net.Conn, frame protocol.Frame) erro
 	return nil
 }
 
-func (h *UDPHandler) dialTarget(target string) (net.Conn, error) {
+func (h *UDPHandler) dialTarget(ctx context.Context, target string) (net.Conn, error) {
 	host := target
 	if h, _, err := net.SplitHostPort(target); err == nil {
 		host = h
 	}
 	if h.nextProxy != nil && h.nextProxy.EnableUDP() && h.nextProxy.ShouldProxy(host) {
-		return h.nextProxy.Dial("udp", target)
+		log.Info("[UDP] dialing via next proxy", "target", target, "proxy", h.nextProxy.URL().String())
+		return h.nextProxy.DialContext(ctx, "udp", target)
 	}
 	return net.DialTimeout("udp", target, h.idleTimeout)
 }

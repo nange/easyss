@@ -2,7 +2,9 @@ package handler
 
 import (
 	"encoding/base64"
+	"fmt"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -70,6 +72,13 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 }
 
 func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if e := recover(); e != nil {
+			log.Error("[SERVER] handler panic", "remote", r.RemoteAddr, "target", r.URL.Path, "panic", fmt.Sprint(e), "stack", string(debug.Stack()))
+			_ = http.NewResponseController(w).Flush()
+		}
+	}()
+
 	if !r.ProtoAtLeast(2, 0) {
 		ServeFallback(w, r)
 		return
@@ -144,17 +153,17 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s2cWriter := crypto.NewRecordWriter(w, s2cEnc, s2cCounter, aadS2C)
-		s2cShaper := shaper.NewLight(s2cWriter, shaper.Config{BatchWindowMS: h.batchWindowMS, Cover: shaper.CoverConfig{}})
+	s2cShaper := shaper.NewLight(s2cWriter, shaper.Config{BatchWindowMS: h.batchWindowMS, Cover: shaper.CoverConfig{}})
 	defer s2cShaper.Close() //nolint:errcheck
 
 	var handleErr error
 	switch {
 	case strings.HasSuffix(endpoint, "/tcp"):
 		stats.RecordServerTCPStream()
-		handleErr = h.tcpHandler.Handle(c2sReader, s2cShaper, target)
+		handleErr = h.tcpHandler.Handle(r.Context(), c2sReader, s2cShaper, target)
 	case strings.HasSuffix(endpoint, "/udp"):
 		stats.RecordServerUDPStream()
-		handleErr = h.udpHandler.Handle(c2sReader, s2cShaper, target)
+		handleErr = h.udpHandler.Handle(r.Context(), c2sReader, s2cShaper, target)
 	case strings.HasSuffix(endpoint, "/icmp"):
 		stats.RecordServerICMPStream()
 		handleErr = h.icmpHandler.Handle(c2sReader, s2cShaper, target)

@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
+	stdlog "log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -311,6 +312,7 @@ func (s *Server) Start() error {
 		Addr:      s.cfg.Listen,
 		TLSConfig: tlsConfig,
 		Handler:   s.mux,
+		ErrorLog:  stdErrorLog(),
 		Protocols: &http.Protocols{},
 		HTTP2: &http.HTTP2Config{
 			MaxReadFrameSize:              sharedconfig.DefaultHTTP2MaxReadFrameSize,
@@ -340,4 +342,22 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return s.httpServer.Shutdown(ctx)
 	}
 	return nil
+}
+
+// stdErrorLog routes Go's internal http.Server/HTTP2 logs (connection-level
+// errors, PING timeouts, protocol errors, TLS handshake errors, etc.) through
+// easyss's slog logger. Handler panics are handled separately by the recover
+// in ProxyHandler.ServeHTTP.
+func stdErrorLog() *stdlog.Logger {
+	return stdlog.New(slogErrorWriter{}, "", 0)
+}
+
+type slogErrorWriter struct{}
+
+func (slogErrorWriter) Write(p []byte) (int, error) {
+	msg := strings.TrimSpace(string(p))
+	if msg != "" {
+		log.Error("[HTTP2]", "detail", msg)
+	}
+	return len(p), nil
 }

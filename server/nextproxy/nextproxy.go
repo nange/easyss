@@ -1,9 +1,12 @@
 package nextproxy
 
 import (
+	"context"
+	"fmt"
 	"net"
 	"net/url"
 	"sync"
+	"time"
 
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util"
@@ -153,13 +156,18 @@ func (np *NextProxy) AddIP(ip string) {
 }
 
 func (np *NextProxy) Dial(network, addr string) (net.Conn, error) {
-	if np.url.Scheme == "socks5" {
-		return np.dialSOCKS5(network, addr)
-	}
-	return net.Dial(network, addr)
+	return np.DialContext(context.Background(), network, addr)
 }
 
-func (np *NextProxy) dialSOCKS5(network, addr string) (net.Conn, error) {
+func (np *NextProxy) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	if np.url.Scheme == "socks5" {
+		return np.dialSOCKS5Context(ctx, network, addr)
+	}
+	var d net.Dialer
+	return d.DialContext(ctx, network, addr)
+}
+
+func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string) (net.Conn, error) {
 	username := ""
 	password := ""
 	if np.url.User != nil {
@@ -170,12 +178,42 @@ func (np *NextProxy) dialSOCKS5(network, addr string) (net.Conn, error) {
 		log.Debug("[NEXTPROXY] connecting via SOCKS5 proxy", "addr", np.url.Host, "network", network, "target", addr)
 	}
 
-	c, err := socks5.NewClient(np.url.Host, username, password, 10, 10)
-	if err != nil {
-		return nil, err
+	type result struct {
+		conn net.Conn
+		err  error
 	}
+	ch := make(chan result, 1)
 
-	return c.Dial(network, addr)
+	go func() {
+		c, err := socks5.NewClient(np.url.Host, username, password, 10, 10)
+		if err != nil {
+			ch <- result{nil, err}
+			return
+		}
+
+		conn, err := c.Dial(network, addr)
+		if err != nil {
+			ch <- result{nil, err}
+			return
+		}
+
+		// Clear the deadline set during SOCKS5 negotiation. The socks5 library
+		// sets SetDeadline(now + TCPTimeout) in Negotiate() for the handshake
+		// but never clears it, which would cause the connection to time out
+		// after 10 seconds during data transfer.
+		_ = conn.SetDeadline(time.Time{})
+
+		ch <- result{conn, nil}
+	}()
+
+	select {
+	case <-ctx.Done():
+		// The dial goroutine is still running and will complete eventually.
+		// We can't cancel the underlying TCP dial, but we abandon it.
+		return nil, fmt.Errorf("socks5 dial cancelled: %w", ctx.Err())
+	case res := <-ch:
+		return res.conn, res.err
+	}
 }
 
 func (np *NextProxy) DialUDP(addr string) (*net.UDPConn, error) {
