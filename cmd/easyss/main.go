@@ -483,7 +483,8 @@ func exampleV3Config() string {
   "timeout": 30,
   "auth_username": "",
   "auth_password": "",
-  "pprof_enabled": false
+  "pprof_enabled": false,
+  "latency_offset_ms": 50
 }`
 }
 
@@ -502,6 +503,7 @@ func exampleSimpleConfig() string {
   "proxy_file": "",
   "log_level": "info",
   "log_file_path": "",
-  "pprof_enabled": false
+  "pprof_enabled": false,
+  "latency_offset_ms": 50
 }`
 }
