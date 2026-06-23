@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 )
 
 type FrameType uint8
@@ -177,6 +178,7 @@ func WriteFrame(w io.Writer, f Frame) error {
 }
 
 func NewFrameDATA(data []byte) Frame {
+	checkPayloadLen(data)
 	payload := append([]byte(nil), data...)
 	return Frame{
 		Type:    FrameDATA,
@@ -186,6 +188,7 @@ func NewFrameDATA(data []byte) Frame {
 }
 
 func NewFrameDATAGRAM(data []byte) Frame {
+	checkPayloadLen(data)
 	payload := append([]byte(nil), data...)
 	return Frame{
 		Type:    FrameDATAGRAM,
@@ -222,10 +225,17 @@ func NewFrameCOVER(length uint16) Frame {
 
 func NewFrameHANDSHAKE(h Handshake) Frame {
 	payload := h.Encode()
+	checkPayloadLen(payload)
 	return Frame{
 		Type:    FrameHANDSHAKE,
 		Length:  uint16(len(payload)),
 		Payload: payload,
+	}
+}
+
+func checkPayloadLen(payload []byte) {
+	if len(payload) > math.MaxUint16 {
+		panic(fmt.Sprintf("protocol: frame payload too large: %d", len(payload)))
 	}
 }
 

@@ -33,6 +33,9 @@ func New(proxyURL string, enableUDP, allHost bool) (*NextProxy, error) {
 	if err != nil {
 		return nil, err
 	}
+	if u.Scheme != "socks5" {
+		return nil, fmt.Errorf("unsupported next proxy scheme %q", u.Scheme)
+	}
 
 	np := &NextProxy{
 		url:       u,
@@ -160,11 +163,7 @@ func (np *NextProxy) Dial(network, addr string) (net.Conn, error) {
 }
 
 func (np *NextProxy) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	if np.url.Scheme == "socks5" {
-		return np.dialSOCKS5Context(ctx, network, addr)
-	}
-	var d net.Dialer
-	return d.DialContext(ctx, network, addr)
+	return np.dialSOCKS5Context(ctx, network, addr)
 }
 
 func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string) (net.Conn, error) {

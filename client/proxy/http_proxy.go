@@ -173,11 +173,6 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 	}
 	defer hijConn.Close() //nolint:errcheck
 
-	if _, err := hijConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
-		log.Warn("[HTTP-PROXY] write CONNECT response", "target", target, "err", err)
-		return
-	}
-
 	if rule == router.HostRuleDirect {
 		log.Info("[HTTP-PROXY] CONNECT direct", "target", target)
 		remote, err := s.directConnect(target)
@@ -186,6 +181,9 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		defer remote.Close() //nolint:errcheck
+		if err := writeConnectEstablished(hijConn, target); err != nil {
+			return
+		}
 		relayTCP(remote, hijConn)
 		return
 	}
@@ -198,10 +196,16 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		defer remote.Close() //nolint:errcheck
+		if err := writeConnectEstablished(hijConn, target); err != nil {
+			return
+		}
 		relayTCP(remote, hijConn)
 		return
 	}
 
+	if err := writeConnectEstablished(hijConn, target); err != nil {
+		return
+	}
 	log.Info("[HTTP-PROXY] CONNECT proxy", "target", target)
 	if err := s.handler.OpenTCPStream(context.Background(), target, s.method, hijConn); err != nil {
 		if errors.Is(err, ErrStreamIdleTimeout) {
@@ -210,6 +214,14 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 		}
 		log.Warn("[HTTP-PROXY] CONNECT stream", "target", target, "err", err)
 	}
+}
+
+func writeConnectEstablished(conn net.Conn, target string) error {
+	if _, err := conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+		log.Warn("[HTTP-PROXY] write CONNECT response", "target", target, "err", err)
+		return err
+	}
+	return nil
 }
 
 func (s *HTTPProxyServer) directConnect(target string) (net.Conn, error) {

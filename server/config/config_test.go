@@ -15,7 +15,9 @@ func TestFileConfigEffectiveServerConfig(t *testing.T) {
 			"domain": "example.com",
 			"password": "secret",
 			"allowed_methods": ["aes-256-gcm"],
-			"fallback_html_path": "fallback.html"
+			"fallback_html_path": "fallback.html",
+			"timeout": 99,
+			"next_proxy": {"url": "socks5://127.0.0.1:9999", "enable_udp": false}
 		},
 		"next_proxy": {"url": "socks5://127.0.0.1:1080", "enable_udp": true},
 		"timeout": 30

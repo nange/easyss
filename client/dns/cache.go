@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	cacheSize = 2 * 1024 * 1024
-	cacheTTL  = 2 * 60 * 60
+	cacheSize   = 2 * 1024 * 1024
+	maxCacheTTL = 2 * 60 * 60
+	minCacheTTL = 60
 )
 
 // Cache stores DNS query results in two separate caches: one for proxied
@@ -47,7 +48,7 @@ func (c *Cache) Get(name, qtype string, isDirect bool) *dns.Msg {
 	return msg
 }
 
-// Set stores a DNS message in the appropriate cache with a fixed TTL.
+// Set stores a DNS message in the appropriate cache using DNS TTL.
 // Only A and AAAA records are cached. If isDirect is true, the direct cache is used.
 func (c *Cache) Set(msg *dns.Msg, isDirect bool) error {
 	if msg == nil || len(msg.Question) == 0 {
@@ -60,10 +61,30 @@ func (c *Cache) Set(msg *dns.Msg, isDirect bool) error {
 			return err
 		}
 		key := []byte(q.Name + dns.TypeToString[q.Qtype])
+		ttl := dnsCacheTTL(msg)
 		if isDirect {
-			return c.direct.Set(key, v, cacheTTL)
+			return c.direct.Set(key, v, ttl)
 		}
-		return c.proxied.Set(key, v, cacheTTL)
+		return c.proxied.Set(key, v, ttl)
 	}
 	return nil
+}
+
+func dnsCacheTTL(msg *dns.Msg) int {
+	ttl := uint32(maxCacheTTL)
+	for _, rr := range msg.Answer {
+		if rr == nil || rr.Header() == nil {
+			continue
+		}
+		if rr.Header().Ttl < ttl {
+			ttl = rr.Header().Ttl
+		}
+	}
+	if ttl == 0 || ttl > maxCacheTTL {
+		ttl = maxCacheTTL
+	}
+	if ttl < minCacheTTL {
+		ttl = minCacheTTL
+	}
+	return int(ttl)
 }

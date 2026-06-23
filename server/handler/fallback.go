@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/nange/easyss/v3/stats"
 )
@@ -415,11 +416,14 @@ var (
 	selectedTheme  themeDef
 	customFallback []byte
 	htmlCache      sync.Map // path string → []byte
+	htmlCacheCount atomic.Int32
 
 	// Directory-based multi-file fallback.
 	fallbackPages map[string][]byte // path → HTML bytes (e.g. "/about" → <html>...)
 	fallback404   []byte            // optional 404 page
 )
+
+const maxCachedFallbackPages = 64
 
 // SetFallbackHTML overrides the built-in fallback system with custom HTML.
 // Must be called before the server starts accepting requests.
@@ -553,13 +557,27 @@ func cleanPath(p string) string {
 // ---------------------------------------------------------------------------
 
 func getOrRenderHTML(path string) []byte {
+	path = cleanPath(path)
 	if cached, ok := htmlCache.Load(path); ok {
 		return cached.([]byte)
 	}
 
 	html := renderHTML(path)
-	htmlCache.Store(path, html)
+	if shouldCacheGeneratedPath(path) && htmlCacheCount.Load() < maxCachedFallbackPages {
+		if _, loaded := htmlCache.LoadOrStore(path, html); !loaded {
+			htmlCacheCount.Add(1)
+		}
+	}
 	return html
+}
+
+func shouldCacheGeneratedPath(path string) bool {
+	switch path {
+	case "/", "/about", "/contact", "/support", "/help", "/services", "/products", "/solutions", "/pricing":
+		return true
+	default:
+		return false
+	}
 }
 
 func renderHTML(path string) []byte {

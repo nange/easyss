@@ -125,12 +125,12 @@ func (bs *batchShaper) flush() error {
 	}
 
 	plaintext := bytespool.Get(plaintextSize)
+	defer bytespool.MustPut(plaintext)
 	plaintext = protocol.EncodeFramesToBuf(bs.frames, plaintext)
 	if err := bs.writer.WriteRecord(plaintext); err != nil {
 		bs.err = err
 		return err
 	}
-	bytespool.MustPut(plaintext)
 
 	bs.frames = bs.frames[:0]
 	bs.batchSize = 0

@@ -87,7 +87,7 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 			SendPingTimeout:               15 * time.Second,
 		},
 		ForceAttemptHTTP2: true,
-		MaxConnsPerHost:   2,
+		MaxConnsPerHost:   1,
 		IdleConnTimeout:   4 * timeout,
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			dialCtx, cancel := context.WithTimeout(ctx, timeout)

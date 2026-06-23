@@ -2,6 +2,7 @@ package nextproxy
 
 import (
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/nange/easyss/v3/util"
@@ -9,14 +10,14 @@ import (
 
 func TestNew(t *testing.T) {
 	t.Run("正常 URL", func(t *testing.T) {
-		np, err := New("http://proxy.example.com:8080", true, true)
+		np, err := New("socks5://proxy.example.com:1080", true, true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if np == nil {
 			t.Fatal("expected non-nil NextProxy")
 		}
-		if u := np.URL(); u == nil || u.Host != "proxy.example.com:8080" {
+		if u := np.URL(); u == nil || u.Host != "proxy.example.com:1080" {
 			t.Errorf("URL host = %v", u)
 		}
 		if !np.EnableUDP() {
@@ -38,6 +39,13 @@ func TestNew(t *testing.T) {
 		_, err := New("://invalid", false, false)
 		if err == nil {
 			t.Error("expected error for invalid URL")
+		}
+	})
+
+	t.Run("不支持的 scheme 返回错误", func(t *testing.T) {
+		_, err := New("http://proxy.example.com:8080", false, false)
+		if err == nil || !strings.Contains(err.Error(), "unsupported next proxy scheme") {
+			t.Fatalf("expected unsupported scheme error, got %v", err)
 		}
 	})
 
@@ -81,7 +89,7 @@ func TestShouldProxy(t *testing.T) {
 	})
 
 	t.Run("CIDR 匹配", func(t *testing.T) {
-		np, err := New("http://proxy:8080", false, false)
+		np, err := New("socks5://proxy:1080", false, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -143,12 +151,12 @@ func TestURL(t *testing.T) {
 	})
 
 	t.Run("正常返回", func(t *testing.T) {
-		np, err := New("http://proxy.example.com:8080", false, false)
+		np, err := New("socks5://proxy.example.com:1080", false, false)
 		if err != nil {
 			t.Fatal(err)
 		}
 		u := np.URL()
-		if u == nil || u.Host != "proxy.example.com:8080" {
+		if u == nil || u.Host != "proxy.example.com:1080" {
 			t.Errorf("URL = %v", u)
 		}
 	})
@@ -163,7 +171,7 @@ func TestEnableUDP(t *testing.T) {
 	})
 
 	t.Run("正常返回", func(t *testing.T) {
-		np, err := New("http://proxy:8080", true, false)
+		np, err := New("socks5://proxy:1080", true, false)
 		if err != nil {
 			t.Fatal(err)
 		}

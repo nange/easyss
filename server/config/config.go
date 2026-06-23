@@ -26,9 +26,9 @@ type ServerConfig struct {
 	KeyPath          string          `json:"key_path"`
 	Email            string          `json:"email"`
 	FallbackHTMLPath string          `json:"fallback_html_path"`
-	Timeout          int             `json:"timeout"`
+	Timeout          int             `json:"-"`
 	BatchWindowMS    int             `json:"batch_window_ms"`
-	NextProxy        NextProxyConfig `json:"next_proxy"`
+	NextProxy        NextProxyConfig `json:"-"`
 	PprofEnabled     bool            `json:"pprof_enabled"`
 }
 

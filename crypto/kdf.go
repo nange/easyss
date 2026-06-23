@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	saltSize = 16
-	keySize  = 32
+	saltSize            = 16
+	keySize             = 32
+	masterKDFIterations = 100_000
 
 	masterKDFInfo    = "easyss-v3-master"
 	bootstrapKDFInfo = "easyss-v3-bootstrap"
@@ -23,7 +24,7 @@ func DeriveMasterKey(password string) ([]byte, error) {
 	if password == "" {
 		return nil, errors.New("crypto: password is empty")
 	}
-	key := pbkdf2.Key([]byte(password), []byte(masterKDFInfo), 4096, keySize, sha256.New)
+	key := pbkdf2.Key([]byte(password), []byte(masterKDFInfo), masterKDFIterations, keySize, sha256.New)
 	if len(key) != keySize {
 		return nil, errors.New("crypto: failed to derive master key")
 	}

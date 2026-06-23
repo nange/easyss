@@ -48,13 +48,13 @@ func (h *UDPHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 		_ = s2c.Flush()
 		return err
 	}
-	defer conn.Close() //nolint:errcheck
-
 	var dnsDetected atomic.Bool
-	var dnsChecked  atomic.Bool
+	var dnsChecked atomic.Bool
 
 	done := make(chan struct{})
 	closeDone := sync.OnceFunc(func() { close(done) })
+	defer closeDone()
+	defer conn.Close() //nolint:errcheck
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- h.readFromTarget(conn, s2c, done, &dnsDetected)
@@ -63,7 +63,11 @@ func (h *UDPHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 	go func() {
 		for {
 			frame, err := dr.ReadFrame()
-			frameCh <- udpFrameResult{frame: frame, err: err}
+			select {
+			case frameCh <- udpFrameResult{frame: frame, err: err}:
+			case <-done:
+				return
+			}
 			if err != nil {
 				return
 			}

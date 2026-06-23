@@ -9,6 +9,8 @@ import (
 	"github.com/nange/easyss/v3/log"
 )
 
+const defaultAddr = "127.0.0.1:6060"
+
 func StartPprof() *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
@@ -17,9 +19,9 @@ func StartPprof() *http.Server {
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
-	srv := &http.Server{Addr: ":6060", Handler: mux}
+	srv := &http.Server{Addr: defaultAddr, Handler: mux}
 
-	log.Info("starting pprof server", "addr", ":6060")
+	log.Info("starting pprof server", "addr", defaultAddr)
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("[PPROF] start pprof server", "err", err)
