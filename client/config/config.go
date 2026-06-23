@@ -215,6 +215,9 @@ func applyDefaults(c *ClientConfig) {
 	if c.Shaper.BatchWindowMS <= 0 {
 		c.Shaper.BatchWindowMS = config.DefaultBatchWindowMS
 	}
+	if c.LatencyOffsetMS <= 0 {
+		c.LatencyOffsetMS = 50
+	}
 	if c.Shaper.BatchWindowMS > 10 {
 		c.Shaper.BatchWindowMS = 10
 	}
