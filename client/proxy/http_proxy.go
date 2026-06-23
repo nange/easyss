@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/txthinking/socks5"
 )
@@ -122,10 +124,30 @@ func (s *HTTPProxyServer) Start() error {
 	return httpServer.Serve(listener)
 }
 
+// statsResponse wraps Snapshot with derived fields for JSON output.
+type statsResponse struct {
+	stats.Snapshot
+	UptimeSeconds float64 `json:"uptime_seconds"`
+	ActiveStreams int64   `json:"active_streams"`
+}
+
 func (s *HTTPProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !s.authOK(r) {
 		w.Header().Set("Proxy-Authenticate", `Basic realm="Easyss"`)
 		http.Error(w, "Proxy auth required", http.StatusProxyAuthRequired)
+		return
+	}
+
+	// Serve /stats for direct requests to the proxy.
+	if r.URL.Host == "" && r.URL.Path == "/stats" {
+		s.serveStats(w)
+		return
+	}
+
+	// Prevent forwarding loops: reject requests that would be forwarded
+	// back to the proxy itself (both relative and absolute URLs).
+	if s.isSelfTarget(r) {
+		http.NotFound(w, r)
 		return
 	}
 
@@ -136,6 +158,45 @@ func (s *HTTPProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	log.Info("[HTTP-PROXY] forwarding via SOCKS5", "host", r.Host, "method", r.Method)
 	s.rp.ServeHTTP(w, r)
+}
+
+func (s *HTTPProxyServer) serveStats(w http.ResponseWriter) {
+	snap := stats.Collect()
+	resp := statsResponse{
+		Snapshot:      snap,
+		UptimeSeconds: snap.Uptime().Seconds(),
+		ActiveStreams: snap.ActiveStreams(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Warn("[HTTP-PROXY] encode stats", "err", err)
+	}
+}
+
+// isSelfTarget reports whether r would be forwarded back to the proxy itself,
+// which would cause an infinite forwarding loop.
+func (s *HTTPProxyServer) isSelfTarget(r *http.Request) bool {
+	target := r.URL.Host
+	if target == "" {
+		target = r.Host
+	}
+	if target == s.listenAddr {
+		return true
+	}
+	// Handle localhost aliases (e.g. 127.0.0.1 vs localhost vs ::1).
+	th, tp, err := net.SplitHostPort(target)
+	if err != nil {
+		return false
+	}
+	_, lp, err := net.SplitHostPort(s.listenAddr)
+	if err != nil {
+		return false
+	}
+	if tp != lp {
+		return false
+	}
+	return th == "127.0.0.1" || th == "localhost" || th == "::1"
 }
 
 func (s *HTTPProxyServer) authOK(r *http.Request) bool {

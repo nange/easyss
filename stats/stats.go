@@ -67,26 +67,26 @@ func RecordServerFallbackPage()   { g.serverFallbackPages.Add(1) }
 
 // Snapshot is a point-in-time copy of all counters.
 type Snapshot struct {
-	TotalStreamsOpened int64
-	TotalStreamsClosed int64
-	BytesSent          int64
-	BytesRecv          int64
-	ProxyBytesSent     int64
-	ProxyBytesRecv     int64
-	TCPConnections     int64
-	UDPAssociations    int64
-	DNSCacheHits       int64
-	DNSCacheMisses     int64
-	DNSProxyQueries    int64
-	DNSDirectQueries   int64
-	PaddingBytes       int64
-	RecordsWritten     int64
-	ServerTCPStreams      int64
-	ServerUDPStreams      int64
-	ServerICMPStreams     int64
-	ServerHandshakeErrors int64
-	ServerFallbackPages   int64
-	StartTime          time.Time
+	TotalStreamsOpened int64     `json:"total_streams_opened"`
+	TotalStreamsClosed int64     `json:"total_streams_closed"`
+	BytesSent          int64     `json:"bytes_sent"`
+	BytesRecv          int64     `json:"bytes_recv"`
+	ProxyBytesSent     int64     `json:"proxy_bytes_sent"`
+	ProxyBytesRecv     int64     `json:"proxy_bytes_recv"`
+	TCPConnections     int64     `json:"tcp_connections"`
+	UDPAssociations    int64     `json:"udp_associations"`
+	DNSCacheHits       int64     `json:"dns_cache_hits"`
+	DNSCacheMisses     int64     `json:"dns_cache_misses"`
+	DNSProxyQueries    int64     `json:"dns_proxy_queries"`
+	DNSDirectQueries   int64     `json:"dns_direct_queries"`
+	PaddingBytes       int64     `json:"padding_bytes"`
+	RecordsWritten     int64     `json:"records_written"`
+	ServerTCPStreams      int64     `json:"server_tcp_streams"`
+	ServerUDPStreams      int64     `json:"server_udp_streams"`
+	ServerICMPStreams     int64     `json:"server_icmp_streams"`
+	ServerHandshakeErrors int64     `json:"server_handshake_errors"`
+	ServerFallbackPages   int64     `json:"server_fallback_pages"`
+	StartTime          time.Time `json:"start_time"`
 }
 
 // ActiveStreams returns the current count of streams opened but not yet closed.
