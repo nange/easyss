@@ -282,9 +282,11 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 			frame, err := rx.ReadFrame()
 			if first {
 				first = false
+				rtt := time.Since(start)
 				if h.OnRTT != nil {
-					h.OnRTT(time.Since(start))
+					h.OnRTT(rtt)
 				}
+				stats.RecordRTT(rtt)
 			}
 			if err != nil {
 				if errors.Is(err, io.EOF) {

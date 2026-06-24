@@ -130,6 +130,7 @@ type statsResponse struct {
 	UptimeSeconds float64 `json:"uptime_seconds"`
 	Conns         int     `json:"conns"`
 	ActiveStreams int     `json:"active_streams"`
+	AvgRTTMs      float64 `json:"avg_rtt_ms"`
 }
 
 func (s *HTTPProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -169,6 +170,7 @@ func (s *HTTPProxyServer) serveStats(w http.ResponseWriter) {
 		UptimeSeconds: snap.Uptime().Seconds(),
 		Conns:         trStats.ConnCount,
 		ActiveStreams: trStats.ActiveStream,
+		AvgRTTMs:      float64(snap.AvgRTT().Microseconds()) / 1000.0,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

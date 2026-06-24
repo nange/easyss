@@ -27,6 +27,9 @@ type stats struct {
 	paddingBytes   atomic.Int64
 	recordsWritten atomic.Int64
 
+	rttSum   atomic.Int64 // nanoseconds
+	rttCount atomic.Int64
+
 	// Server-side proxy
 	serverTCPStreams      atomic.Int64
 	serverUDPStreams      atomic.Int64
@@ -56,6 +59,10 @@ func RecordDNSDirectQuery() { g.dnsDirectQueries.Add(1) }
 
 func RecordPaddingBytes(n int) { g.paddingBytes.Add(int64(n)) }
 func RecordRecordWritten()     { g.recordsWritten.Add(1) }
+func RecordRTT(d time.Duration) {
+	g.rttSum.Add(int64(d))
+	g.rttCount.Add(1)
+}
 
 func RecordServerTCPStream()      { g.serverTCPStreams.Add(1) }
 func RecordServerUDPStream()      { g.serverUDPStreams.Add(1) }
@@ -81,6 +88,8 @@ type Snapshot struct {
 	DNSDirectQueries   int64     `json:"dns_direct_queries"`
 	PaddingBytes       int64     `json:"padding_bytes"`
 	RecordsWritten     int64     `json:"records_written"`
+	RTTCount           int64     `json:"rtt_count"`
+	RTTSum             int64     `json:"rtt_sum_ns"`
 	ServerTCPStreams      int64     `json:"server_tcp_streams"`
 	ServerUDPStreams      int64     `json:"server_udp_streams"`
 	ServerICMPStreams     int64     `json:"server_icmp_streams"`
@@ -92,6 +101,13 @@ type Snapshot struct {
 // ActiveStreams returns the current count of streams opened but not yet closed.
 func (s Snapshot) ActiveStreams() int64 {
 	return s.TotalStreamsOpened - s.TotalStreamsClosed
+}
+
+func (s Snapshot) AvgRTT() time.Duration {
+	if s.RTTCount == 0 {
+		return 0
+	}
+	return time.Duration(s.RTTSum / s.RTTCount)
 }
 
 // Uptime returns the duration since StartTime.
@@ -116,6 +132,8 @@ func Collect() Snapshot {
 		DNSDirectQueries:   g.dnsDirectQueries.Load(),
 		PaddingBytes:       g.paddingBytes.Load(),
 		RecordsWritten:     g.recordsWritten.Load(),
+		RTTSum:             g.rttSum.Load(),
+		RTTCount:           g.rttCount.Load(),
 		ServerTCPStreams:      g.serverTCPStreams.Load(),
 		ServerUDPStreams:      g.serverUDPStreams.Load(),
 		ServerICMPStreams:     g.serverICMPStreams.Load(),

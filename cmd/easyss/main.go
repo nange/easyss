@@ -429,6 +429,7 @@ func (a *App) statsLoop() {
 				"dns(direct)", snap.DNSDirectQueries,
 				"padding", stats.HumanBytes(snap.PaddingBytes),
 				"records", snap.RecordsWritten,
+				"avg_rtt", snap.AvgRTT().Round(time.Millisecond),
 			)
 		case <-a.statsCloser:
 			return
