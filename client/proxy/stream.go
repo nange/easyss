@@ -46,6 +46,10 @@ func NewStreamHandler(tr transport.Transport, masterKey []byte, shaperCfg shaper
 	}
 }
 
+func (h *StreamHandler) Transport() transport.Transport {
+	return h.transport
+}
+
 func (h *StreamHandler) OpenTCPStream(ctx context.Context, target string, method protocol.Method, localConn net.Conn) error {
 	stats.RecordTCPConnection()
 	return h.openStream(ctx, "/v3/tcp", protocol.ProtoTCP, target, method, localConn)

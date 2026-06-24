@@ -128,7 +128,8 @@ func (s *HTTPProxyServer) Start() error {
 type statsResponse struct {
 	stats.Snapshot
 	UptimeSeconds float64 `json:"uptime_seconds"`
-	ActiveStreams int64   `json:"active_streams"`
+	Conns         int     `json:"conns"`
+	ActiveStreams int     `json:"active_streams"`
 }
 
 func (s *HTTPProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -162,10 +163,12 @@ func (s *HTTPProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPProxyServer) serveStats(w http.ResponseWriter) {
 	snap := stats.Collect()
+	trStats := s.handler.Transport().Stats()
 	resp := statsResponse{
 		Snapshot:      snap,
 		UptimeSeconds: snap.Uptime().Seconds(),
-		ActiveStreams: snap.ActiveStreams(),
+		Conns:         trStats.ConnCount,
+		ActiveStreams: trStats.ActiveStream,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
