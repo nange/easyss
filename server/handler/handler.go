@@ -12,6 +12,7 @@ import (
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/server/nextproxy"
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/stats"
@@ -138,6 +139,14 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	target := first.Handshake.Target
 	method := first.Handshake.Method
+
+	// Reject LAN/private targets to prevent SSRF attacks
+	if util.IsLANHost(target) {
+		log.Error("[SERVER] rejected LAN target", "target", target, "remote", r.RemoteAddr)
+		stats.RecordServerHandshakeError()
+		ServeFallback(w, r)
+		return
+	}
 
 	aadC2S := crypto.BuildAAD(endpoint, salt, "c2s", "session", method)
 	c2sEnc, c2sCounter, err := sk.Encryptor("c2s", "session", method)

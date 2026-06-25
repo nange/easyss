@@ -177,6 +177,53 @@ func TestIsIPV6Addr(t *testing.T) {
 	}
 }
 
+func TestIsLANHost(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		// IPv4 私有地址 + 端口
+		{"10.0.0.1:8080", true},
+		{"172.16.0.1:443", true},
+		{"192.168.1.1:80", true},
+		// IPv4 回环 + 端口
+		{"127.0.0.1:6379", true},
+		{"127.0.0.1:0", true},
+		// IPv6 私有地址 + 端口
+		{"[fd00::1]:8080", true},
+		// IPv6 回环 + 端口
+		{"[::1]:8080", true},
+		// 链路本地 + 端口
+		{"169.254.0.1:80", true},
+		{"[fe80::1]:443", true},
+		// 公网 IP + 端口
+		{"8.8.8.8:53", false},
+		{"1.1.1.1:443", false},
+		{"[2001:db8::1]:8080", false},
+		// 纯 IP 不带端口（如 ICMP target）
+		{"127.0.0.1", true},
+		{"192.168.1.1", true},
+		{"10.0.0.1", true},
+		{"8.8.8.8", false},
+		// 域名（非 IP）
+		{"example.com:443", false},
+		{"api.example.com:8080", false},
+		// 无效输入
+		{"", false},
+		{":8080", false},
+		{"invalid", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := IsLANHost(tt.input)
+			if got != tt.want {
+				t.Errorf("IsLANHost(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMapKeys(t *testing.T) {
 	t.Run("string keys", func(t *testing.T) {
 		m := map[string]int{"a": 1, "b": 2, "c": 3}

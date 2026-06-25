@@ -28,6 +28,16 @@ func IsLoopbackIP(ip string) bool {
 	return _ip.IsLoopback()
 }
 
+// IsLANHost checks whether a host address (with or without port) is a LAN/private address.
+// It is used to prevent SSRF attacks by rejecting targets that point to internal networks.
+func IsLANHost(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	return IsLANIP(host)
+}
+
 func IsIPV6(ip string) bool {
 	_ip := net.ParseIP(ip)
 	if _ip == nil {
