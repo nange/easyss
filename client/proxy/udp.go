@@ -96,16 +96,18 @@ func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAdd
 		}
 		_ = s.dnsCache.Set(resp, true)
 
-		if s.router.IsCustomDirectDomain(domain) {
-			for _, ans := range resp.Answer {
-				switch a := ans.(type) {
-				case *dns.A:
-					s.router.AddDirectIP(a.A.String())
-				case *dns.AAAA:
-					s.router.AddDirectIP(a.AAAA.String())
+			if s.router.IsCustomDirectDomain(domain) {
+				for _, ans := range resp.Answer {
+					switch a := ans.(type) {
+					case *dns.A:
+						s.router.AddDirectIP(a.A.String())
+					case *dns.AAAA:
+						s.router.AddDirectIP(a.AAAA.String())
+					case *dns.CNAME:
+						s.router.AddDirectDomain(strings.TrimSuffix(a.Target, "."))
+					}
 				}
 			}
-		}
 
 		resp.Id = msg.Id
 		return responseDNSMsg(srv.UDPConn, clientAddr, resp, d.Address())
@@ -191,16 +193,18 @@ func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAd
 			_ = s.dnsCache.Set(msg, false)
 
 			domain := strings.TrimSuffix(msg.Question[0].Name, ".")
-			if s.router.IsCustomProxyDomain(domain) {
-				for _, ans := range msg.Answer {
-					switch a := ans.(type) {
-					case *dns.A:
-						s.router.AddProxyIP(a.A.String())
-					case *dns.AAAA:
-						s.router.AddProxyIP(a.AAAA.String())
+				if s.router.IsCustomProxyDomain(domain) {
+					for _, ans := range msg.Answer {
+						switch a := ans.(type) {
+						case *dns.A:
+							s.router.AddProxyIP(a.A.String())
+						case *dns.AAAA:
+							s.router.AddProxyIP(a.AAAA.String())
+						case *dns.CNAME:
+							s.router.AddProxyDomain(strings.TrimSuffix(a.Target, "."))
+						}
 					}
 				}
-			}
 		}
 		s.sendToClient(srv, clientAddr, data, target)
 	}

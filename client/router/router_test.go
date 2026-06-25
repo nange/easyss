@@ -335,6 +335,48 @@ func TestRouter_AddProxyIP(t *testing.T) {
 	}
 }
 
+func TestRouter_AddDirectDomain(t *testing.T) {
+	r := &Router{
+		customDirectDomains: make(map[string]struct{}),
+	}
+
+	r.AddDirectDomain("cdn.example.com")
+	r.AddDirectDomain("cdn2.example.com")
+
+	r.customMu.RLock()
+	defer r.customMu.RUnlock()
+	if _, ok := r.customDirectDomains["cdn.example.com"]; !ok {
+		t.Error("expected cdn.example.com in customDirectDomains")
+	}
+	if _, ok := r.customDirectDomains["cdn2.example.com"]; !ok {
+		t.Error("expected cdn2.example.com in customDirectDomains")
+	}
+	if len(r.customDirectDomains) != 2 {
+		t.Errorf("expected 2 entries, got %d", len(r.customDirectDomains))
+	}
+}
+
+func TestRouter_AddProxyDomain(t *testing.T) {
+	r := &Router{
+		customProxyDomains: make(map[string]struct{}),
+	}
+
+	r.AddProxyDomain("google.com")
+	r.AddProxyDomain("youtube.com")
+
+	r.customMu.RLock()
+	defer r.customMu.RUnlock()
+	if _, ok := r.customProxyDomains["google.com"]; !ok {
+		t.Error("expected google.com in customProxyDomains")
+	}
+	if _, ok := r.customProxyDomains["youtube.com"]; !ok {
+		t.Error("expected youtube.com in customProxyDomains")
+	}
+	if len(r.customProxyDomains) != 2 {
+		t.Errorf("expected 2 entries, got %d", len(r.customProxyDomains))
+	}
+}
+
 func TestRouter_IsCustomDirectDomain(t *testing.T) {
 	r := &Router{
 		customDirectDomains: map[string]struct{}{

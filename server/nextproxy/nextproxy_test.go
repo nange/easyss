@@ -262,6 +262,38 @@ func TestAddIP(t *testing.T) {
 	})
 }
 
+func TestAddDomain(t *testing.T) {
+	t.Run("nil receiver", func(t *testing.T) {
+		var np *NextProxy
+		np.AddDomain("example.com") // should not panic
+	})
+
+	t.Run("添加域名", func(t *testing.T) {
+		np := &NextProxy{domains: make(map[string]struct{})}
+		np.AddDomain("cdn.example.com")
+		if !np.ShouldProxy("cdn.example.com") {
+			t.Error("should proxy after AddDomain")
+		}
+		// subdomain match should also work
+		if !np.ShouldProxy("www.cdn.example.com") {
+			t.Error("subdomain should also proxy after AddDomain")
+		}
+	})
+
+	t.Run("去重", func(t *testing.T) {
+		np := &NextProxy{domains: make(map[string]struct{})}
+		np.AddDomain("cdn.example.com")
+		np.AddDomain("cdn.example.com")
+		count := 0
+		np.mu.RLock()
+		count = len(np.domains)
+		np.mu.RUnlock()
+		if count != 1 {
+			t.Errorf("expected 1 domain, got %d", count)
+		}
+	})
+}
+
 func TestSubDomains(t *testing.T) {
 	tests := []struct {
 		input  string

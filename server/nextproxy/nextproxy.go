@@ -158,6 +158,25 @@ func (np *NextProxy) AddIP(ip string) {
 	np.mu.Unlock()
 }
 
+// AddDomain adds a domain to the routing list (thread-safe).
+// If the domain is already present, it returns immediately without acquiring the write lock.
+func (np *NextProxy) AddDomain(domain string) {
+	if np == nil {
+		return
+	}
+
+	np.mu.RLock()
+	_, exists := np.domains[domain]
+	np.mu.RUnlock()
+	if exists {
+		return
+	}
+
+	np.mu.Lock()
+	np.domains[domain] = struct{}{}
+	np.mu.Unlock()
+}
+
 func (np *NextProxy) Dial(network, addr string) (net.Conn, error) {
 	return np.DialContext(context.Background(), network, addr)
 }

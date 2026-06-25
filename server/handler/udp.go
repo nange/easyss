@@ -199,6 +199,8 @@ func (h *UDPHandler) readFromTarget(conn net.Conn, s2c shaper.Shaper, done <-cha
 								h.nextProxy.AddIP(a.A.String())
 							case *dns.AAAA:
 								h.nextProxy.AddIP(a.AAAA.String())
+							case *dns.CNAME:
+								h.nextProxy.AddDomain(strings.TrimSuffix(a.Target, "."))
 							}
 						}
 					}

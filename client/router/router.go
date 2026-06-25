@@ -379,6 +379,38 @@ func (r *Router) AddProxyIP(ip string) {
 	r.customMu.Unlock()
 }
 
+// AddDirectDomain adds a domain to the custom direct domain set (thread-safe).
+// If the domain already exists (exact match or already covered by subdomain matching),
+// it returns immediately without acquiring the write lock.
+func (r *Router) AddDirectDomain(domain string) {
+	r.customMu.RLock()
+	_, exists := r.customDirectDomains[domain]
+	r.customMu.RUnlock()
+	if exists {
+		return
+	}
+
+	r.customMu.Lock()
+	r.customDirectDomains[domain] = struct{}{}
+	r.customMu.Unlock()
+}
+
+// AddProxyDomain adds a domain to the custom proxy domain set (thread-safe).
+// If the domain already exists (exact match or already covered by subdomain matching),
+// it returns immediately without acquiring the write lock.
+func (r *Router) AddProxyDomain(domain string) {
+	r.customMu.RLock()
+	_, exists := r.customProxyDomains[domain]
+	r.customMu.RUnlock()
+	if exists {
+		return
+	}
+
+	r.customMu.Lock()
+	r.customProxyDomains[domain] = struct{}{}
+	r.customMu.Unlock()
+}
+
 // IsCustomDirectDomain checks whether a domain is in the custom direct domain list
 // (including subdomain matching).
 func (r *Router) IsCustomDirectDomain(domain string) bool {
