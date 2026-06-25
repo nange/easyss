@@ -7,6 +7,8 @@ import (
 	"html/template"
 	"math/rand/v2"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -421,6 +423,9 @@ var (
 	// Directory-based multi-file fallback.
 	fallbackPages map[string][]byte // path → HTML bytes (e.g. "/about" → <html>...)
 	fallback404   []byte            // optional 404 page
+
+	// Reverse proxy to upstream HTTP service (e.g. local nginx).
+	fallbackProxy *httputil.ReverseProxy
 )
 
 const maxCachedFallbackPages = 64
@@ -502,8 +507,64 @@ func SetFallbackDir(dir string) error {
 	return nil
 }
 
+// SetFallbackProxy configures a reverse proxy to forward non-proxy requests to
+// an upstream HTTP service (e.g. a local nginx). When set, this takes the
+// highest priority over all other fallback modes.
+// Pass an empty string to disable.
+func SetFallbackProxy(targetURL string) error {
+	if targetURL == "" {
+		fallbackProxy = nil
+		return nil
+	}
+	u, err := url.Parse(targetURL)
+	if err != nil {
+		return fmt.Errorf("parse fallback proxy url: %w", err)
+	}
+	fallbackProxy = httputil.NewSingleHostReverseProxy(u)
+	return nil
+}
+
+// SetFallbackTarget resolves a single fallback target string and configures the
+// appropriate fallback mode. The target is interpreted as:
+//   - ""                        → built-in themed auto-generated pages
+//   - "http://..." / "https://..." → reverse proxy to an upstream HTTP service
+//   - a directory path             → multi-file HTML fallback (SetFallbackDir)
+//   - a regular file path          → single-file custom HTML (SetFallbackHTML)
+func SetFallbackTarget(target string) error {
+	// Reset all fallback state.
+	fallbackProxy = nil
+	fallbackPages = nil
+	fallback404 = nil
+	customFallback = nil
+
+	if target == "" {
+		return nil
+	}
+
+	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
+		return SetFallbackProxy(target)
+	}
+
+	info, err := os.Stat(target)
+	if err != nil {
+		return fmt.Errorf("stat fallback target: %w", err)
+	}
+
+	if info.IsDir() {
+		return SetFallbackDir(target)
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		return fmt.Errorf("read fallback target: %w", err)
+	}
+	SetFallbackHTML(data)
+	return nil
+}
+
 // ServeFallback writes a fallback HTML page to the response.
 // Priority (highest first):
+//  0. Reverse proxy to upstream HTTP service (SetFallbackProxy)
 //  1. Directory-based multi-file fallback (SetFallbackDir)
 //  2. Single-file custom fallback (SetFallbackHTML)
 //  3. Auto-generated themed pages
@@ -512,6 +573,12 @@ func ServeFallback(w http.ResponseWriter, r *http.Request) {
 	initOnce.Do(func() {
 		selectedTheme = themes[rand.IntN(len(themes))]
 	})
+
+	// Priority 0 (highest): reverse proxy to upstream HTTP service.
+	if fallbackProxy != nil {
+		fallbackProxy.ServeHTTP(w, r)
+		return
+	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Server", "nginx")

@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -308,5 +309,192 @@ func TestServeFallback_DirPriorityOverCustomHTML(t *testing.T) {
 	ServeFallback(rec, req)
 	if rec.Body.String() != "<h1>Dir Home</h1>" {
 		t.Errorf("got %q, want dir mode %q", rec.Body.String(), "<h1>Dir Home</h1>")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Reverse proxy fallback tests
+// ---------------------------------------------------------------------------
+
+func TestSetFallbackProxy_EmptyURL(t *testing.T) {
+	// Setting empty URL should disable the proxy (no error).
+	if err := SetFallbackProxy(""); err != nil {
+		t.Fatalf("unexpected error for empty URL: %v", err)
+	}
+	if fallbackProxy != nil {
+		t.Error("expected fallbackProxy to be nil after empty URL")
+	}
+}
+
+func TestSetFallbackProxy_InvalidURL(t *testing.T) {
+	if err := SetFallbackProxy("://invalid"); err == nil {
+		t.Error("expected error for invalid URL")
+	}
+}
+
+func TestServeFallback_ProxyForwardsRequest(t *testing.T) {
+	// Start a test upstream server that returns a known response.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Upstream", "true")
+		w.Write([]byte("from-upstream:" + r.URL.Path))
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/some/path", nil)
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	if rec.Body.String() != "from-upstream:/some/path" {
+		t.Errorf("got %q, want %q", rec.Body.String(), "from-upstream:/some/path")
+	}
+	if rec.Header().Get("X-Upstream") != "true" {
+		t.Error("expected X-Upstream header from upstream server")
+	}
+}
+
+func TestServeFallback_ProxyHighestPriority(t *testing.T) {
+	// Start a test upstream server.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("proxy-response"))
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	// Also set directory and custom HTML fallback to verify proxy wins.
+	dir := makeFallbackDir(t, map[string]string{
+		"index.html": "<h1>Dir Home</h1>",
+	})
+	if err := SetFallbackDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	SetFallbackHTML([]byte("<h1>Custom</h1>"))
+	t.Cleanup(func() {
+		fallbackPages = nil
+		fallback404 = nil
+		customFallback = nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	// Proxy should win over both directory and custom HTML.
+	if rec.Body.String() != "proxy-response" {
+		t.Errorf("got %q, want %q", rec.Body.String(), "proxy-response")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SetFallbackTarget auto-detection tests
+// ---------------------------------------------------------------------------
+
+func TestSetFallbackTarget_Empty(t *testing.T) {
+	// Set some state first, then reset with empty.
+	customFallback = []byte("test")
+	fallbackPages = map[string][]byte{"/": []byte("test")}
+	fallbackProxy = &httputil.ReverseProxy{}
+
+	if err := SetFallbackTarget(""); err != nil {
+		t.Fatal(err)
+	}
+
+	if customFallback != nil {
+		t.Error("customFallback should be nil after reset")
+	}
+	if fallbackPages != nil {
+		t.Error("fallbackPages should be nil after reset")
+	}
+	if fallbackProxy != nil {
+		t.Error("fallbackProxy should be nil after reset")
+	}
+	if fallback404 != nil {
+		t.Error("fallback404 should be nil after reset")
+	}
+}
+
+func TestSetFallbackTarget_HTTPURL(t *testing.T) {
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	if err := SetFallbackTarget("http://127.0.0.1:8080"); err != nil {
+		t.Fatal(err)
+	}
+	if fallbackProxy == nil {
+		t.Error("expected fallbackProxy to be set for HTTP URL")
+	}
+}
+
+func TestSetFallbackTarget_HTTPSURL(t *testing.T) {
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	if err := SetFallbackTarget("https://example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if fallbackProxy == nil {
+		t.Error("expected fallbackProxy to be set for HTTPS URL")
+	}
+}
+
+func TestSetFallbackTarget_Directory(t *testing.T) {
+	dir := makeFallbackDir(t, map[string]string{
+		"index.html": "<h1>Home</h1>",
+	})
+	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
+
+	if err := SetFallbackTarget(dir); err != nil {
+		t.Fatal(err)
+	}
+	if len(fallbackPages) == 0 {
+		t.Error("expected fallbackPages to be populated for directory")
+	}
+}
+
+func TestSetFallbackTarget_File(t *testing.T) {
+	dir := makeFallbackDir(t, map[string]string{
+		"custom.html": "<h1>Custom</h1>",
+	})
+	filePath := filepath.Join(dir, "custom.html")
+	t.Cleanup(func() { customFallback = nil })
+
+	if err := SetFallbackTarget(filePath); err != nil {
+		t.Fatal(err)
+	}
+	if string(customFallback) != "<h1>Custom</h1>" {
+		t.Errorf("got %q, want %q", string(customFallback), "<h1>Custom</h1>")
+	}
+}
+
+func TestSetFallbackTarget_InvalidPath(t *testing.T) {
+	if err := SetFallbackTarget("/nonexistent/path"); err == nil {
+		t.Error("expected error for nonexistent path")
+	}
+}
+
+func TestSetFallbackTarget_ProxyEndToEnd(t *testing.T) {
+	// Full integration: SetFallbackTarget with HTTP URL then serve a request.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("upstream:" + r.URL.Path))
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackTarget(upstream.URL); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/hello", nil)
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	if rec.Body.String() != "upstream:/hello" {
+		t.Errorf("got %q, want %q", rec.Body.String(), "upstream:/hello")
 	}
 }

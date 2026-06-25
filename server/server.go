@@ -248,23 +248,11 @@ func (s *Server) Start() error {
 		timeout = 30 * time.Second
 	}
 
-	if s.cfg.FallbackHTMLPath != "" {
-		info, err := os.Stat(s.cfg.FallbackHTMLPath)
-		if err != nil {
-			return fmt.Errorf("stat fallback path: %w", err)
+	if s.cfg.FallbackTarget != "" {
+		if err := handler.SetFallbackTarget(s.cfg.FallbackTarget); err != nil {
+			return fmt.Errorf("fallback target: %w", err)
 		}
-		if info.IsDir() {
-			if err := handler.SetFallbackDir(s.cfg.FallbackHTMLPath); err != nil {
-				return fmt.Errorf("load fallback dir: %w", err)
-			}
-			log.Info("[SERVER] fallback HTML dir loaded", "dir", s.cfg.FallbackHTMLPath)
-		} else {
-			fallbackHTML, err := os.ReadFile(s.cfg.FallbackHTMLPath)
-			if err != nil {
-				return fmt.Errorf("load fallback html: %w", err)
-			}
-			handler.SetFallbackHTML(fallbackHTML)
-		}
+		log.Info("[SERVER] fallback target configured", "target", s.cfg.FallbackTarget)
 	}
 
 	masterKey, err := crypto.DeriveMasterKey(s.cfg.Password)
@@ -278,10 +266,10 @@ func (s *Server) Start() error {
 		return fmt.Errorf("next proxy: %w", err)
 	}
 	if np != nil {
-			if err := np.LoadProxyFile(s.cfg.NextProxy.NextProxyFile); err != nil {
-				log.Error("[SERVER] next proxy load file failed", "err", err)
-				return fmt.Errorf("next proxy load file: %w", err)
-			}
+		if err := np.LoadProxyFile(s.cfg.NextProxy.NextProxyFile); err != nil {
+			log.Error("[SERVER] next proxy load file failed", "err", err)
+			return fmt.Errorf("next proxy load file: %w", err)
+		}
 		log.Info("[SERVER] next proxy configured", "url", s.cfg.NextProxy.URL, "udp", s.cfg.NextProxy.EnableUDP, "all_host", s.cfg.NextProxy.AllHost)
 	}
 

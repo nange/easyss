@@ -115,7 +115,7 @@ func exampleV3ServerConfig() string {
     "cert_path": "",
     "key_path": "",
     "email": "",
-    "fallback_html_path": "",
+	"fallback_target": "",
     "batch_window_ms": 3,
     "pprof_enabled": false
   },
