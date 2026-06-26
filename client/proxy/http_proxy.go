@@ -274,8 +274,8 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 	}
 	log.Info("[HTTP-PROXY] CONNECT proxy", "target", target)
 	if err := s.handler.OpenTCPStream(context.Background(), target, s.method, hijConn); err != nil {
-		if errors.Is(err, ErrStreamIdleTimeout) {
-			log.Debug("[HTTP-PROXY] CONNECT idle closed", "target", target, "err", err)
+		if errors.Is(err, ErrStreamIdleTimeout) || errors.Is(err, ErrStreamReset) {
+			log.Debug("[HTTP-PROXY] CONNECT closed", "target", target, "err", err)
 			return
 		}
 		log.Warn("[HTTP-PROXY] CONNECT stream", "target", target, "err", err)

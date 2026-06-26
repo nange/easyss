@@ -24,6 +24,8 @@ import (
 
 var ErrStreamIdleTimeout = errors.New("stream idle timeout")
 
+var ErrStreamReset = errors.New("stream reset by peer")
+
 var errLocalConnClosed = errors.New("local connection closed")
 
 type StreamHandler struct {
@@ -332,7 +334,7 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 
 	for item := range ch {
 		if item.rst {
-			return fmt.Errorf("stream reset by peer")
+			return fmt.Errorf("%w", ErrStreamReset)
 		}
 		if item.fin {
 			return nil

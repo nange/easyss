@@ -160,8 +160,8 @@ func (s *Socks5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 		}
 		err = s.handler.OpenTCPStream(context.Background(), target, s.method, c)
 		if err != nil {
-			if errors.Is(err, ErrStreamIdleTimeout) {
-				log.Debug("[TCP_PROXY] idle closed", "target", target, "err", err)
+			if errors.Is(err, ErrStreamIdleTimeout) || errors.Is(err, ErrStreamReset) {
+				log.Debug("[TCP_PROXY] closed", "target", target, "err", err)
 				return nil
 			}
 			log.Error("[TCP_PROXY] stream", "target", target, "err", err)
