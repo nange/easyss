@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/caddyserver/certmagic"
@@ -28,6 +29,8 @@ type Server struct {
 	httpServer *http.Server
 	mux        *http.ServeMux
 	certCache  *certmagic.Cache
+	statsDone  chan struct{}
+	statsOnce  sync.Once
 }
 
 func New(cfg *config.ServerConfig) (*Server, error) {
@@ -128,20 +131,25 @@ func (s *Server) resolveEmail(storagePath string) {
 func (s *Server) statsLoop() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
-		snap := stats.Collect()
-		log.Info("[SERVER_STATS]",
-			"uptime", snap.Uptime().Round(time.Second),
-			"tx", stats.HumanBytes(snap.BytesSent),
-			"rx", stats.HumanBytes(snap.BytesRecv),
-			"tcp", snap.ServerTCPStreams,
-			"udp", snap.ServerUDPStreams,
-			"icmp", snap.ServerICMPStreams,
-			"hserr", snap.ServerHandshakeErrors,
-			"fallback", snap.ServerFallbackPages,
-			"padding", stats.HumanBytes(snap.PaddingBytes),
-			"records", snap.RecordsWritten,
-		)
+	for {
+		select {
+		case <-ticker.C:
+			snap := stats.Collect()
+			log.Info("[SERVER_STATS]",
+				"uptime", snap.Uptime().Round(time.Second),
+				"tx", stats.HumanBytes(snap.BytesSent),
+				"rx", stats.HumanBytes(snap.BytesRecv),
+				"tcp", snap.ServerTCPStreams,
+				"udp", snap.ServerUDPStreams,
+				"icmp", snap.ServerICMPStreams,
+				"hserr", snap.ServerHandshakeErrors,
+				"fallback", snap.ServerFallbackPages,
+				"padding", stats.HumanBytes(snap.PaddingBytes),
+				"records", snap.RecordsWritten,
+			)
+		case <-s.statsDone:
+			return
+		}
 	}
 }
 
@@ -315,12 +323,20 @@ func (s *Server) Start() error {
 	s.httpServer.Protocols.SetHTTP2(true)
 
 	log.Info("[SERVER] listening", "addr", s.cfg.Listen, "routes", []string{"/", "/v3/tcp", "/v3/udp", "/v3/icmp"})
+	s.statsDone = make(chan struct{})
 	go s.statsLoop()
 	return s.httpServer.ListenAndServeTLS("", "")
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	log.Info("[SERVER] shutting down")
+
+	// Stop the stats loop goroutine so it doesn't leak past shutdown.
+	s.statsOnce.Do(func() {
+		if s.statsDone != nil {
+			close(s.statsDone)
+		}
+	})
 
 	if s.certCache != nil {
 		s.certCache.Stop()

@@ -79,9 +79,8 @@ func Bidirectional(idleTimeout time.Duration, onClose func(), srcToDst, dstToSrc
 			}
 		}
 	}
-
-	if onClose != nil {
-		onClose()
-	}
+	// Unreachable in practice: the loop only exits when done == 2, and every
+	// path that increments done to 2 returns from inside the select. This
+	// return exists solely to satisfy the compiler's control-flow analysis.
 	return Result{Err: firstErr}
 }

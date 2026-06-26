@@ -30,8 +30,10 @@ type Socks5Server struct {
 
 	udpMu          sync.RWMutex
 	udpExch        map[string]*UDPExchange
+	udpInflight    map[string]*udpExchangeFactory
 	directUDP      map[string]net.Conn
 	quit           chan struct{}
+	closeOnce      sync.Once
 	udpIdleTimeout time.Duration
 }
 
@@ -51,6 +53,7 @@ func NewSocks5Server(listenAddr, username, password string, handler *StreamHandl
 		directDialContext: directDialContext,
 		dialTimeout:       udpIdleTimeout,
 		udpExch:           make(map[string]*UDPExchange),
+		udpInflight:       make(map[string]*udpExchangeFactory),
 		directUDP:         make(map[string]net.Conn),
 		quit:              make(chan struct{}),
 		udpIdleTimeout:    udpIdleTimeout,
@@ -74,7 +77,7 @@ func (s *Socks5Server) Start() error {
 }
 
 func (s *Socks5Server) Close() error {
-	close(s.quit)
+	s.closeOnce.Do(func() { close(s.quit) })
 	s.udpMu.Lock()
 	defer s.udpMu.Unlock()
 	for key, ue := range s.udpExch {
@@ -227,6 +230,12 @@ func relayTCP(dst, src net.Conn) {
 	go func() {
 		defer wg.Done()
 		_, _ = io.Copy(src, dst)
+		// Half-close src symmetrically so the peer learns that no more data
+		// will be written on this direction. Without this, a client waiting
+		// for the remote half-close to signal end-of-response would hang.
+		if cw, ok := src.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		}
 	}()
 	wg.Wait()
 }

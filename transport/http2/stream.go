@@ -45,6 +45,17 @@ func (s *HTTP2Stream) Read(p []byte) (int, error) {
 			} else {
 				s.r = res.resp.Body
 			}
+			// If Close() ran while we were blocked waiting for the response, the
+			// response body just arrived but nobody will ever read or close it.
+			// Close it now to release the HTTP/2 stream and its buffers, and
+			// surface a closed error to the caller.
+			if s.closed && s.r != nil {
+				_ = s.r.Close()
+				s.r = nil
+				if s.respErr == nil {
+					s.respErr = io.ErrClosedPipe
+				}
+			}
 			s.mu.Unlock()
 		})
 	}

@@ -1,6 +1,7 @@
 package util
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -222,6 +223,28 @@ func TestIsLANHost(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIsLANHostResolved(t *testing.T) {
+	ctx := context.Background()
+
+	// Literal LAN IPs are caught by the fast path (no DNS).
+	assert.True(t, IsLANHostResolved(ctx, "127.0.0.1:8080"))
+	assert.True(t, IsLANHostResolved(ctx, "10.0.0.1"))
+	assert.True(t, IsLANHostResolved(ctx, "[::1]:80"))
+
+	// Literal public IPs are rejected by the fast path.
+	assert.False(t, IsLANHostResolved(ctx, "8.8.8.8:53"))
+	assert.False(t, IsLANHostResolved(ctx, "1.1.1.1"))
+
+	// "localhost" resolves (via the hosts file, no external network) to a
+	// loopback address, so a domain that points at the LAN is now rejected.
+	assert.True(t, IsLANHostResolved(ctx, "localhost:80"))
+	assert.True(t, IsLANHostResolved(ctx, "localhost"))
+
+	// Empty / invalid input never resolves to LAN.
+	assert.False(t, IsLANHostResolved(ctx, ""))
+	assert.False(t, IsLANHostResolved(ctx, "invalid:0"))
 }
 
 func TestMapKeys(t *testing.T) {

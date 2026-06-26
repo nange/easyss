@@ -350,62 +350,28 @@ func (r *Router) isLANHost(host string) bool {
 }
 
 // AddDirectIP adds an IP to the custom direct IP set (thread-safe).
-// If the IP already exists, it returns immediately without acquiring the write lock.
 func (r *Router) AddDirectIP(ip string) {
-	r.customMu.RLock()
-	_, exists := r.customDirectIPs[ip]
-	r.customMu.RUnlock()
-	if exists {
-		return
-	}
-
 	r.customMu.Lock()
 	r.customDirectIPs[ip] = struct{}{}
 	r.customMu.Unlock()
 }
 
 // AddProxyIP adds an IP to the custom proxy IP set (thread-safe).
-// If the IP already exists, it returns immediately without acquiring the write lock.
 func (r *Router) AddProxyIP(ip string) {
-	r.customMu.RLock()
-	_, exists := r.customProxyIPs[ip]
-	r.customMu.RUnlock()
-	if exists {
-		return
-	}
-
 	r.customMu.Lock()
 	r.customProxyIPs[ip] = struct{}{}
 	r.customMu.Unlock()
 }
 
 // AddDirectDomain adds a domain to the custom direct domain set (thread-safe).
-// If the domain already exists (exact match or already covered by subdomain matching),
-// it returns immediately without acquiring the write lock.
 func (r *Router) AddDirectDomain(domain string) {
-	r.customMu.RLock()
-	_, exists := r.customDirectDomains[domain]
-	r.customMu.RUnlock()
-	if exists {
-		return
-	}
-
 	r.customMu.Lock()
 	r.customDirectDomains[domain] = struct{}{}
 	r.customMu.Unlock()
 }
 
 // AddProxyDomain adds a domain to the custom proxy domain set (thread-safe).
-// If the domain already exists (exact match or already covered by subdomain matching),
-// it returns immediately without acquiring the write lock.
 func (r *Router) AddProxyDomain(domain string) {
-	r.customMu.RLock()
-	_, exists := r.customProxyDomains[domain]
-	r.customMu.RUnlock()
-	if exists {
-		return
-	}
-
 	r.customMu.Lock()
 	r.customProxyDomains[domain] = struct{}{}
 	r.customMu.Unlock()

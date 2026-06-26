@@ -112,7 +112,21 @@ func (h *ICMPHandler) icmpExchange(target string, payload []byte) ([]byte, error
 		return nil, err
 	}
 
-	rm, err := icmp.ParseMessage(parseProto, rb[:n])
+	data := rb[:n]
+	// On Linux (and Windows) raw "ip4:icmp" sockets return the IPv4 header
+	// prepended to the ICMP payload, while macOS/BSD raw sockets already strip
+	// it. If the first nibble looks like an IPv4 header (version 4), peel it off
+	// before handing the payload to icmp.ParseMessage, otherwise the IP header
+	// is misparsed as the ICMP type (e.g. 0x45 -> type 69) and echo replies are
+	// never recognised, silently breaking ICMP on the primary server platform.
+	if !isIPv6 && len(data) > 0 && data[0]>>4 == 4 {
+		ihl := int(data[0]&0x0F) * 4
+		if ihl >= 20 && ihl < len(data) {
+			data = data[ihl:]
+		}
+	}
+
+	rm, err := icmp.ParseMessage(parseProto, data)
 	if err != nil {
 		return nil, err
 	}

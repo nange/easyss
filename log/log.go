@@ -79,7 +79,10 @@ func newReplaceAttrFunc(cn *time.Location) func([]string, slog.Attr) slog.Attr {
 
 func DefaultHandler(level slog.Level) slog.Handler {
 	cn, _ := time.LoadLocation("Asia/Shanghai")
-	return sf.NewFormatterHandler(sf.TimeFormatter(time.DateTime, time.UTC))(
+	if cn == nil {
+		cn = time.UTC
+	}
+	return sf.NewFormatterHandler(sf.TimeFormatter(time.DateTime, cn))(
 		slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 			AddSource:   true,
 			Level:       level,
@@ -90,7 +93,10 @@ func DefaultHandler(level slog.Level) slog.Handler {
 
 func JSONHandler(w io.Writer, level slog.Level) slog.Handler {
 	cn, _ := time.LoadLocation("Asia/Shanghai")
-	return sf.NewFormatterHandler(sf.TimeFormatter(time.DateTime, time.UTC))(
+	if cn == nil {
+		cn = time.UTC
+	}
+	return sf.NewFormatterHandler(sf.TimeFormatter(time.DateTime, cn))(
 		slog.NewJSONHandler(w, &slog.HandlerOptions{
 			AddSource:   true,
 			Level:       level,
@@ -101,7 +107,10 @@ func JSONHandler(w io.Writer, level slog.Level) slog.Handler {
 
 func TextHandler(w io.Writer, level slog.Level) slog.Handler {
 	cn, _ := time.LoadLocation("Asia/Shanghai")
-	return sf.NewFormatterHandler(sf.TimeFormatter(time.DateTime, time.UTC))(
+	if cn == nil {
+		cn = time.UTC
+	}
+	return sf.NewFormatterHandler(sf.TimeFormatter(time.DateTime, cn))(
 		slog.NewTextHandler(w, &slog.HandlerOptions{
 			AddSource:   true,
 			Level:       level,

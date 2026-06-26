@@ -140,38 +140,20 @@ func (np *NextProxy) IsCustomDomain(domain string) bool {
 }
 
 // AddIP adds an IP to the routing list (thread-safe).
-// If the IP is already present, it returns immediately without acquiring the write lock.
 func (np *NextProxy) AddIP(ip string) {
 	if np == nil {
 		return
 	}
-
-	np.mu.RLock()
-	_, exists := np.ips[ip]
-	np.mu.RUnlock()
-	if exists {
-		return
-	}
-
 	np.mu.Lock()
 	np.ips[ip] = struct{}{}
 	np.mu.Unlock()
 }
 
 // AddDomain adds a domain to the routing list (thread-safe).
-// If the domain is already present, it returns immediately without acquiring the write lock.
 func (np *NextProxy) AddDomain(domain string) {
 	if np == nil {
 		return
 	}
-
-	np.mu.RLock()
-	_, exists := np.domains[domain]
-	np.mu.RUnlock()
-	if exists {
-		return
-	}
-
 	np.mu.Lock()
 	np.domains[domain] = struct{}{}
 	np.mu.Unlock()

@@ -135,22 +135,12 @@ func (s *Socks5Server) proxyDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr
 	dst := easydns.ProxyDNSServer
 	key := clientAddr.String() + "_" + dst
 
-	s.udpMu.RLock()
-	ue, ok := s.udpExch[key]
-	s.udpMu.RUnlock()
-
-	if !ok {
-		var err error
-		ue, err = s.handler.OpenUDPExchange(context.Background(), dst, s.method)
-		if err != nil {
-			log.Error("[UDP_PROXY] open exchange", "dst", dst, "err", err)
-			return err
-		}
-
-		s.udpMu.Lock()
-		s.udpExch[key] = ue
-		s.udpMu.Unlock()
-
+	ue, created, err := s.getOrCreateUDPExchange(key, dst)
+	if err != nil {
+		log.Error("[UDP_PROXY] open exchange", "dst", dst, "err", err)
+		return err
+	}
+	if created {
 		go s.receiveLoop(ue, srv, clientAddr, dst, key)
 	}
 
@@ -158,11 +148,59 @@ func (s *Socks5Server) proxyDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr
 		log.Error("[UDP_PROXY] send", "err", err)
 		s.udpMu.Lock()
 		delete(s.udpExch, key)
-		ue.Close() //nolint:errcheck
 		s.udpMu.Unlock()
+		ue.Close() //nolint:errcheck
 		return err
 	}
 	return nil
+}
+
+// udpExchangeFactory deduplicates concurrent attempts to create a UDPExchange
+// for the same key. The first goroutine to need a key performs the (slow)
+// OpenUDPExchange call; concurrent waiters block on done and reuse the result.
+type udpExchangeFactory struct {
+	done chan struct{}
+	ue   *UDPExchange
+	err  error
+}
+
+// getOrCreateUDPExchange returns the existing UDPExchange for key, or creates
+// one via OpenUDPExchange(dst). If this call created the exchange, created is
+// true and the caller is responsible for starting receiveLoop. If another
+// goroutine is already creating the exchange, this call blocks until that
+// completes and returns the shared exchange (created == false). This eliminates
+// the previous TOCTOU race where two concurrent packets could each create an
+// exchange, with the second overwriting (and leaking) the first.
+func (s *Socks5Server) getOrCreateUDPExchange(key, dst string) (ue *UDPExchange, created bool, err error) {
+	s.udpMu.Lock()
+	if existing, ok := s.udpExch[key]; ok {
+		s.udpMu.Unlock()
+		return existing, false, nil
+	}
+	if f, ok := s.udpInflight[key]; ok {
+		s.udpMu.Unlock()
+		<-f.done
+		return f.ue, false, f.err
+	}
+	f := &udpExchangeFactory{done: make(chan struct{})}
+	s.udpInflight[key] = f
+	s.udpMu.Unlock()
+
+	ue, err = s.handler.OpenUDPExchange(context.Background(), dst, s.method)
+	f.ue, f.err = ue, err
+	close(f.done)
+
+	if err != nil {
+		s.udpMu.Lock()
+		delete(s.udpInflight, key)
+		s.udpMu.Unlock()
+		return nil, false, err
+	}
+	s.udpMu.Lock()
+	s.udpExch[key] = ue
+	delete(s.udpInflight, key)
+	s.udpMu.Unlock()
+	return ue, true, nil
 }
 
 func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAddr *net.UDPAddr, target, key string) {
@@ -294,22 +332,12 @@ func (s *Socks5Server) directUDPRelay(srv *socks5.Server, clientAddr *net.UDPAdd
 func (s *Socks5Server) proxyUDPRelay(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, dst string) error {
 	key := clientAddr.String() + "_" + dst
 
-	s.udpMu.RLock()
-	ue, ok := s.udpExch[key]
-	s.udpMu.RUnlock()
-
-	if !ok {
-		var err error
-		ue, err = s.handler.OpenUDPExchange(context.Background(), dst, s.method)
-		if err != nil {
-			log.Error("[UDP_PROXY] open exchange", "dst", dst, "err", err)
-			return err
-		}
-
-		s.udpMu.Lock()
-		s.udpExch[key] = ue
-		s.udpMu.Unlock()
-
+	ue, created, err := s.getOrCreateUDPExchange(key, dst)
+	if err != nil {
+		log.Error("[UDP_PROXY] open exchange", "dst", dst, "err", err)
+		return err
+	}
+	if created {
 		go s.receiveLoop(ue, srv, clientAddr, dst, key)
 	}
 
@@ -317,8 +345,8 @@ func (s *Socks5Server) proxyUDPRelay(srv *socks5.Server, clientAddr *net.UDPAddr
 		log.Error("[UDP_PROXY] send", "err", err)
 		s.udpMu.Lock()
 		delete(s.udpExch, key)
-		ue.Close() //nolint:errcheck
 		s.udpMu.Unlock()
+		ue.Close() //nolint:errcheck
 		return err
 	}
 	return nil

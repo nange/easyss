@@ -128,6 +128,23 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	log.Info("[SERVER] proxy", "target", first.Handshake.Target, "remote", r.RemoteAddr)
 
+	target := first.Handshake.Target
+	method := first.Handshake.Method
+
+	// Reject LAN/private targets to prevent SSRF attacks. This MUST happen
+	// before the response is committed (WriteHeader + Flush): once the
+	// octet-stream headers are flushed the response can no longer be turned
+	// into a fallback HTML page, and the client would receive a 200
+	// application/octet-stream instead of a clean rejection. IsLANHostResolved
+	// also resolves domain names so a target like evil.com (which resolves to
+	// 127.0.0.1) cannot bypass the literal-IP check.
+	if util.IsLANHostResolved(r.Context(), target) {
+		log.Error("[SERVER] rejected LAN target", "target", target, "remote", r.RemoteAddr)
+		stats.RecordServerHandshakeError()
+		ServeFallback(w, r)
+		return
+	}
+
 	rc := http.NewResponseController(w)
 	_ = rc.EnableFullDuplex()
 
@@ -136,17 +153,6 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	_ = rc.Flush()
-
-	target := first.Handshake.Target
-	method := first.Handshake.Method
-
-	// Reject LAN/private targets to prevent SSRF attacks
-	if util.IsLANHost(target) {
-		log.Error("[SERVER] rejected LAN target", "target", target, "remote", r.RemoteAddr)
-		stats.RecordServerHandshakeError()
-		ServeFallback(w, r)
-		return
-	}
 
 	aadC2S := crypto.BuildAAD(endpoint, salt, "c2s", "session", method)
 	c2sEnc, c2sCounter, err := sk.Encryptor("c2s", "session", method)
