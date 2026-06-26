@@ -316,7 +316,7 @@ func (s *Server) Start() error {
 			MaxReceiveBufferPerStream:     sharedconfig.DefaultHTTP2ReceiveBufferPerStream,
 			SendPingTimeout:               timeout / 2,
 		},
-		IdleTimeout:       timeout / 2,
+		IdleTimeout:       4 * timeout,
 		ReadHeaderTimeout: min(timeout/2, 10*time.Second),
 	}
 	s.httpServer.Protocols.SetHTTP1(true)
