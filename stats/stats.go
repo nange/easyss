@@ -14,8 +14,8 @@ type stats struct {
 	bytesSent          atomic.Int64
 	bytesRecv          atomic.Int64
 
-	proxyBytesSent  atomic.Int64
-	proxyBytesRecv  atomic.Int64
+	rawBytesSent  atomic.Int64
+	rawBytesRecv  atomic.Int64
 	tcpConnections  atomic.Int64
 	udpAssociations atomic.Int64
 
@@ -47,8 +47,8 @@ func RecordStreamClosed()    { g.totalStreamsClosed.Add(1) }
 func RecordBytesSent(n int)  { g.bytesSent.Add(int64(n)) }
 func RecordBytesRecv(n int)  { g.bytesRecv.Add(int64(n)) }
 
-func RecordProxyBytesSent(n int)  { g.proxyBytesSent.Add(int64(n)) }
-func RecordProxyBytesRecv(n int)  { g.proxyBytesRecv.Add(int64(n)) }
+func RecordRawBytesSent(n int)  { g.rawBytesSent.Add(int64(n)) }
+func RecordRawBytesRecv(n int)  { g.rawBytesRecv.Add(int64(n)) }
 func RecordTCPConnection()        { g.tcpConnections.Add(1) }
 func RecordUDPAssociation()       { g.udpAssociations.Add(1) }
 
@@ -78,8 +78,8 @@ type Snapshot struct {
 	TotalStreamsClosed int64     `json:"total_streams_closed"`
 	BytesSent          int64     `json:"bytes_sent"`
 	BytesRecv          int64     `json:"bytes_recv"`
-	ProxyBytesSent     int64     `json:"proxy_bytes_sent"`
-	ProxyBytesRecv     int64     `json:"proxy_bytes_recv"`
+	RawBytesSent     int64     `json:"raw_bytes_sent"`
+	RawBytesRecv     int64     `json:"raw_bytes_recv"`
 	TCPConnections     int64     `json:"tcp_connections"`
 	UDPAssociations    int64     `json:"udp_associations"`
 	DNSCacheHits       int64     `json:"dns_cache_hits"`
@@ -122,8 +122,8 @@ func Collect() Snapshot {
 		TotalStreamsClosed: g.totalStreamsClosed.Load(),
 		BytesSent:          g.bytesSent.Load(),
 		BytesRecv:          g.bytesRecv.Load(),
-		ProxyBytesSent:     g.proxyBytesSent.Load(),
-		ProxyBytesRecv:     g.proxyBytesRecv.Load(),
+		RawBytesSent:     g.rawBytesSent.Load(),
+		RawBytesRecv:     g.rawBytesRecv.Load(),
 		TCPConnections:     g.tcpConnections.Load(),
 		UDPAssociations:    g.udpAssociations.Load(),
 		DNSCacheHits:       g.dnsCacheHits.Load(),

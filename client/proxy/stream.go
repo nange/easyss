@@ -234,7 +234,7 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 		n, err := src.Read(buf)
 			if n > 0 {
 		signalActivity()
-				stats.RecordProxyBytesSent(n)
+				stats.RecordRawBytesSent(n)
 				frame := protocol.NewFrameDATA(buf[:n])
 			if pErr := tx.PushFrame(frame); pErr != nil {
 				_ = tx.Flush()
@@ -345,7 +345,7 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 				}
 				return wErr
 			}
-		stats.RecordProxyBytesRecv(len(item.data))
+		stats.RecordRawBytesRecv(len(item.data))
 			m.Add(len(item.data), "read_remote")
 	}
 
