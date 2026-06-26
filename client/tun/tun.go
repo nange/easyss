@@ -15,6 +15,11 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/engine"
 )
 
+const (
+	tunTCPSendBufferSize    = "1MB"
+	tunTCPReceiveBufferSize = "256KB"
+)
+
 type Config struct {
 	Socks5Addr     string
 	Device         string
@@ -128,11 +133,14 @@ func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
 	}
 
 	key := &engine.Key{
-		MTU:        m.cfg.MTU,
-		Device:     m.cfg.Device,
-		LogLevel:   m.cfg.LogLevel,
-		UDPTimeout: m.cfg.UDPTimeout,
-		Proxy:      m.cfg.Socks5Addr,
+		MTU:                      m.cfg.MTU,
+		Device:                   m.cfg.Device,
+		LogLevel:                 m.cfg.LogLevel,
+		UDPTimeout:               m.cfg.UDPTimeout,
+		Proxy:                    m.cfg.Socks5Addr,
+		TCPModerateReceiveBuffer: true,
+		TCPSendBufferSize:        tunTCPSendBufferSize,
+		TCPReceiveBufferSize:     tunTCPReceiveBufferSize,
 	}
 
 	engine.Insert(key)
