@@ -5,11 +5,11 @@ import (
 )
 
 func TestChooseSlotCount(t *testing.T) {
-	t.Run("min<=0 使用默认值8", func(t *testing.T) {
+	t.Run("min<=0 使用默认值4", func(t *testing.T) {
 		for i := 0; i < 50; i++ {
-			n := chooseSlotCount(0, 16)
-			if n < 8 || n > 16 {
-				t.Errorf("chooseSlotCount(0, 16) = %d, want [8, 16]", n)
+			n := chooseSlotCount(0, 8)
+			if n < 4 || n > 8 {
+				t.Errorf("chooseSlotCount(0, 8) = %d, want [4, 8]", n)
 			}
 		}
 	})
@@ -57,9 +57,9 @@ func TestChooseSlotCount(t *testing.T) {
 
 	t.Run("负 min 值", func(t *testing.T) {
 		for i := 0; i < 50; i++ {
-			n := chooseSlotCount(-5, 16)
-			if n < 8 || n > 16 {
-				t.Errorf("chooseSlotCount(-5, 16) = %d, want [8, 16]", n)
+			n := chooseSlotCount(-5, 8)
+			if n < 4 || n > 8 {
+				t.Errorf("chooseSlotCount(-5, 8) = %d, want [4, 8]", n)
 			}
 		}
 	})
