@@ -281,17 +281,14 @@ func (s *Server) Start() error {
 		log.Info("[SERVER] next proxy configured", "url", s.cfg.NextProxy.URL, "udp", s.cfg.NextProxy.EnableUDP, "all_host", s.cfg.NextProxy.AllHost)
 	}
 
-	streamIdleTimeout := time.Duration(sharedconfig.DefaultTCPStreamIdleTimeout) * time.Second
-	if 4*timeout > streamIdleTimeout {
-		streamIdleTimeout = 4 * timeout
-	}
+	streamIdleTimeout := 4 * timeout
 
 	proxyHandler := handler.NewProxyHandler(handler.ProxyHandlerConfig{
 		MasterKey:         masterKey,
 		AllowedMethods:    s.cfg.GetAllowedMethods(),
 		HandshakeTimeout:  timeout / 2,
 		StreamIdleTimeout: streamIdleTimeout,
-		UDPIdleTimeout:    timeout,
+		UDPIdleTimeout:    2 * timeout,
 		BatchWindowMS:     s.cfg.BatchWindowMS,
 		NextProxy:         np,
 	})
@@ -314,9 +311,8 @@ func (s *Server) Start() error {
 			MaxReadFrameSize:              sharedconfig.DefaultHTTP2MaxReadFrameSize,
 			MaxReceiveBufferPerConnection: sharedconfig.DefaultHTTP2ReceiveBufferPerConnection,
 			MaxReceiveBufferPerStream:     sharedconfig.DefaultHTTP2ReceiveBufferPerStream,
-			SendPingTimeout:               timeout / 2,
 		},
-		IdleTimeout:       4 * timeout,
+		IdleTimeout:       8 * timeout,
 		ReadHeaderTimeout: min(timeout/2, 10*time.Second),
 	}
 	s.httpServer.Protocols.SetHTTP1(true)

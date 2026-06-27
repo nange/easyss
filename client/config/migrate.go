@@ -4,32 +4,34 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+
+	sharedconfig "github.com/nange/easyss/v3/config"
 )
 
 type V2Config struct {
-	ConfigFile        string          `json:"-"`
-	Server            string          `json:"server"`
-	ServerPort        int             `json:"server_port"`
-	Password          string          `json:"password"`
-	Method            string          `json:"method"`
-	SN                string          `json:"sn"`
-	CAPath            string          `json:"ca_path"`
-	LocalPort         int             `json:"local_port"`
-	HTTPPort          int             `json:"http_port"`
-	BindALL           bool            `json:"bind_all"`
-	DisableSysProxy   bool            `json:"disable_sys_proxy"`
-	EnableForwardDNS  bool            `json:"enable_forward_dns"`
-	EnableTun2socks   bool            `json:"enable_tun2socks"`
-	EnableQUIC        bool            `json:"enable_quic"`
-	ProxyRule         string          `json:"proxy_rule"`
-	IPV6Rule          string          `json:"ipv6_rule"`
-	DirectFile string `json:"direct_file"`
-	ProxyFile  string `json:"proxy_file"`
-	Timeout           int             `json:"timeout"`
-	LogLevel          string          `json:"log_level"`
-	LogFilePath       string          `json:"log_file_path"`
-	TunConfig         json.RawMessage `json:"tun_config"`
-	OutboundProto     string          `json:"outbound_proto"`
+	ConfigFile       string          `json:"-"`
+	Server           string          `json:"server"`
+	ServerPort       int             `json:"server_port"`
+	Password         string          `json:"password"`
+	Method           string          `json:"method"`
+	SN               string          `json:"sn"`
+	CAPath           string          `json:"ca_path"`
+	LocalPort        int             `json:"local_port"`
+	HTTPPort         int             `json:"http_port"`
+	BindALL          bool            `json:"bind_all"`
+	DisableSysProxy  bool            `json:"disable_sys_proxy"`
+	EnableForwardDNS bool            `json:"enable_forward_dns"`
+	EnableTun2socks  bool            `json:"enable_tun2socks"`
+	EnableQUIC       bool            `json:"enable_quic"`
+	ProxyRule        string          `json:"proxy_rule"`
+	IPV6Rule         string          `json:"ipv6_rule"`
+	DirectFile       string          `json:"direct_file"`
+	ProxyFile        string          `json:"proxy_file"`
+	Timeout          int             `json:"timeout"`
+	LogLevel         string          `json:"log_level"`
+	LogFilePath      string          `json:"log_file_path"`
+	TunConfig        json.RawMessage `json:"tun_config"`
+	OutboundProto    string          `json:"outbound_proto"`
 }
 
 func MigrateV2Config(v2 V2Config) (*ClientConfig, error) {
@@ -40,9 +42,9 @@ func MigrateV2Config(v2 V2Config) (*ClientConfig, error) {
 
 	v3 := ClientConfig{
 		ConfigVersion: 3,
-			Servers: []*ServerProfile{
-				{
-					Address:  v2.Server,
+		Servers: []*ServerProfile{
+			{
+				Address:  v2.Server,
 				Port:     v2.ServerPort,
 				Password: v2.Password,
 				Method:   v2.Method,
@@ -70,8 +72,8 @@ func MigrateV2Config(v2 V2Config) (*ClientConfig, error) {
 		Transport: TransportConfig{
 			Protocol:       proto,
 			EndpointPrefix: "/v3",
-			ConnCountMin:   8,
-			ConnCountMax:   16,
+			ConnCountMin:   sharedconfig.DefaultConnCountMin,
+			ConnCountMax:   sharedconfig.DefaultConnCountMax,
 		},
 		Shaper: ShaperConfig{
 			BatchWindowMS: 3,

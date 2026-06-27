@@ -22,7 +22,6 @@ import (
 	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/router"
-	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/protocol"
 	server "github.com/nange/easyss/v3/server"
 	serverconfig "github.com/nange/easyss/v3/server/config"
@@ -144,7 +143,7 @@ func waitForListener(t *testing.T, addr string) {
 }
 
 // startLocalTargetServer starts a basic HTTP server for testing direct/local connections
-func startLocalTargetServer(t *testing.T) (func()) {
+func startLocalTargetServer(t *testing.T) func() {
 	t.Helper()
 	addr := testServerAddr + ":" + strconv.Itoa(testTargetPort)
 
@@ -170,7 +169,7 @@ func startLocalTargetServer(t *testing.T) (func()) {
 }
 
 // startTCPEchoServer starts a TCP echo server for CloseWrite testing
-func startTCPEchoServer(t *testing.T) (func()) {
+func startTCPEchoServer(t *testing.T) func() {
 	t.Helper()
 	addr := testServerAddr + ":" + strconv.Itoa(testCloseWritePort)
 
@@ -309,10 +308,8 @@ func newTestHarness(t *testing.T) *testHarness {
 
 	// Create stream handler
 	timeout := clientCfg.TimeoutDuration()
-	streamIdleTimeout := time.Duration(sharedconfig.DefaultTCPStreamIdleTimeout) * time.Second
-	if 4*timeout > streamIdleTimeout {
-		streamIdleTimeout = 4 * timeout
-	}
+	streamIdleTimeout := 4 * timeout
+	udpIdleTimeout := 2 * timeout
 	shaperCfg := shaper.Config{
 		BatchWindowMS: clientCfg.Shaper.BatchWindowMS,
 		Cover: shaper.CoverConfig{
@@ -323,7 +320,7 @@ func newTestHarness(t *testing.T) *testHarness {
 
 	// Start SOCKS5 proxy
 	socksAddr := testServerAddr + ":" + strconv.Itoa(testSocks5Port)
-	socksServer, err := proxy.NewSocks5Server(socksAddr, "", "", handler, cli.Router(), method, true, timeout, cli.DialContext)
+	socksServer, err := proxy.NewSocks5Server(socksAddr, "", "", handler, cli.Router(), method, true, udpIdleTimeout, cli.DialContext)
 	require.NoError(t, err)
 	h.socksServer = socksServer
 
@@ -551,4 +548,4 @@ func TestV3Integration_ConfigDefaults(t *testing.T) {
 	// DefaultServer returns nil when no servers configured
 	assert.Nil(t, cfg.DefaultServer())
 	assert.Equal(t, "", cfg.ServerURL())
-	}
+}

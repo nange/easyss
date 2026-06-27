@@ -84,11 +84,10 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 			MaxReadFrameSize:              sharedconfig.DefaultHTTP2MaxReadFrameSize,
 			MaxReceiveBufferPerConnection: sharedconfig.DefaultHTTP2ReceiveBufferPerConnection,
 			MaxReceiveBufferPerStream:     sharedconfig.DefaultHTTP2ReceiveBufferPerStream,
-			SendPingTimeout:               15 * time.Second,
 		},
 		ForceAttemptHTTP2: true,
 		MaxConnsPerHost:   1,
-		IdleConnTimeout:   4 * timeout,
+		IdleConnTimeout:   6 * timeout,
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			dialCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()

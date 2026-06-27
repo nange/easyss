@@ -18,7 +18,6 @@ import (
 	"github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/tun"
-	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/pprof"
 	"github.com/nange/easyss/v3/protocol"
@@ -240,10 +239,8 @@ func (a *App) Start() error {
 	}
 
 	timeout := a.cfg.TimeoutDuration()
-	streamIdleTimeout := time.Duration(sharedconfig.DefaultTCPStreamIdleTimeout) * time.Second
-	if 4*timeout > streamIdleTimeout {
-		streamIdleTimeout = 4 * timeout
-	}
+	streamIdleTimeout := 4 * timeout
+	udpIdleTimeout := 2 * timeout
 	a.streamHandler = proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, streamIdleTimeout)
 	a.streamHandler.OnRTT = cli.LatencyTracker().Record
 
@@ -252,7 +249,7 @@ func (a *App) Start() error {
 		if a.cfg.Local.BindAll {
 			socksAddr = "[::]:" + strconv.Itoa(a.cfg.Local.SocksPort)
 		}
-		socksServer, err := proxy.NewSocks5Server(socksAddr, a.cfg.AuthUsername, a.cfg.AuthPassword, a.streamHandler, cli.Router(), method, !a.cfg.Local.EnableQUIC, timeout, cli.DialContext)
+		socksServer, err := proxy.NewSocks5Server(socksAddr, a.cfg.AuthUsername, a.cfg.AuthPassword, a.streamHandler, cli.Router(), method, !a.cfg.Local.EnableQUIC, udpIdleTimeout, cli.DialContext)
 		if err != nil {
 			log.Error("[EASYSS-V3] create socks5 server", "err", err)
 			return err
