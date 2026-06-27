@@ -91,9 +91,9 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	}
 
 	return &Client{
-		cfg:       cfg,
-		router:    rt,
-		transport: tr,
+		cfg:            cfg,
+		router:         rt,
+		transport:      tr,
 		shaperCfg:      shaperCfg,
 		masterKey:      masterKey,
 		dialer:         directDialer,
@@ -137,7 +137,7 @@ func dialWithConfig(ctx context.Context, cfg *config.ClientConfig, d *dialer.Dia
 
 func chooseSlotCount(minCount, maxCount int) int {
 	if minCount <= 0 {
-		minCount = 8
+		minCount = 4
 	}
 	if maxCount < minCount {
 		maxCount = minCount

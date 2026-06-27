@@ -465,8 +465,8 @@ func exampleV3Config() string {
   "transport": {
     "protocol": "h2",
     "endpoint_prefix": "/v3",
-    "conn_count_min": 8,
-    "conn_count_max": 16
+    "conn_count_min": 4,
+    "conn_count_max": 8
   },
   "shaper": {
     "batch_window_ms": 3,
