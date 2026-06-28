@@ -137,7 +137,7 @@ func dialWithConfig(ctx context.Context, cfg *config.ClientConfig, d *dialer.Dia
 
 func chooseSlotCount(minCount, maxCount int) int {
 	if minCount <= 0 {
-		minCount = 4
+		minCount = 3
 	}
 	if maxCount < minCount {
 		maxCount = minCount

@@ -308,9 +308,9 @@ func (s *Server) Start() error {
 		ErrorLog:  stdErrorLog(),
 		Protocols: &http.Protocols{},
 		HTTP2: &http.HTTP2Config{
-			MaxReadFrameSize:              sharedconfig.DefaultHTTP2MaxReadFrameSize,
-			MaxReceiveBufferPerConnection: sharedconfig.DefaultHTTP2ReceiveBufferPerConnection,
-			MaxReceiveBufferPerStream:     sharedconfig.DefaultHTTP2ReceiveBufferPerStream,
+			MaxReadFrameSize:              sharedconfig.HTTP2ServerMaxReadFrameSize,
+			MaxReceiveBufferPerConnection: sharedconfig.HTTP2ServerReceiveBufferPerConnection,
+			MaxReceiveBufferPerStream:     sharedconfig.HTTP2ServerReceiveBufferPerStream,
 		},
 		IdleTimeout:       8 * timeout,
 		ReadHeaderTimeout: min(timeout/2, 10*time.Second),

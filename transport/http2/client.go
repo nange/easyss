@@ -81,13 +81,15 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 		},
 		Protocols: protos,
 		HTTP2: &http.HTTP2Config{
-			MaxReadFrameSize:              sharedconfig.DefaultHTTP2MaxReadFrameSize,
-			MaxReceiveBufferPerConnection: sharedconfig.DefaultHTTP2ReceiveBufferPerConnection,
-			MaxReceiveBufferPerStream:     sharedconfig.DefaultHTTP2ReceiveBufferPerStream,
+			MaxReadFrameSize:              sharedconfig.HTTP2ClientMaxReadFrameSize,
+			MaxReceiveBufferPerConnection: sharedconfig.HTTP2ClientReceiveBufferPerConnection,
+			MaxReceiveBufferPerStream:     sharedconfig.HTTP2ClientReceiveBufferPerStream,
+			MaxDecoderHeaderTableSize:     sharedconfig.HTTP2ClientMaxDecoderHeaderTableSize,
 		},
-		ForceAttemptHTTP2: true,
-		MaxConnsPerHost:   1,
-		IdleConnTimeout:   6 * timeout,
+		ForceAttemptHTTP2:      true,
+		MaxConnsPerHost:        1,
+		IdleConnTimeout:        6 * timeout,
+		MaxResponseHeaderBytes: sharedconfig.HTTP2ClientMaxResponseHeaderBytes,
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			dialCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
