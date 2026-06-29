@@ -157,31 +157,32 @@ func (h *ICMPHandler) sendICMPv4Reply(s *stack.Stack, id stack.TransportEndpoint
 	}
 	defer r.Release()
 
-	replyData := stack.PayloadSince(pkt.TransportHeader())
-	defer replyData.Release()
+	const icmpV4HdrSize = 4
+	replyLen := icmpV4HdrSize + len(payload)
+	replyData := buffer.NewViewWithData(make([]byte, replyLen))
+	replySlice := replyData.AsSlice()
 
-	replyICMP := header.ICMPv4(replyData.AsSlice())
+	copy(replySlice[icmpV4HdrSize:], payload)
+
+	replyICMP := header.ICMPv4(replySlice)
 	replyICMP.SetType(header.ICMPv4EchoReply)
 	replyICMP.SetCode(0)
 	replyICMP.SetChecksum(0)
-	replyICMP.SetChecksum(^checksum.Checksum(replyData.AsSlice(), 0))
+	replyICMP.SetChecksum(^checksum.Checksum(replySlice, 0))
 
-	replyBuf := buffer.MakeWithView(replyData.Clone())
+	replyBuf := buffer.MakeWithView(replyData)
 	replyPkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		ReserveHeaderBytes: int(r.MaxHeaderLength()),
 		Payload:            replyBuf,
 	})
 	defer replyPkt.DecRef()
 
-	sent := s.Stats().ICMP.V4.PacketsSent
 	if err := r.WritePacket(stack.NetworkHeaderParams{
 		Protocol: header.ICMPv4ProtocolNumber,
 		TTL:      r.DefaultTTL(),
 	}, replyPkt); err != nil {
-		sent.Dropped.Increment()
-		return
+		log.Debug("[TUN-ICMP] write ipv4 reply failed", "err", err)
 	}
-	sent.EchoReply.Increment()
 }
 
 func (h *ICMPHandler) sendICMPv6Reply(s *stack.Stack, id stack.TransportEndpointID, pkt *stack.PacketBuffer, payload []byte) {
@@ -201,32 +202,35 @@ func (h *ICMPHandler) sendICMPv6Reply(s *stack.Stack, id stack.TransportEndpoint
 	}
 	defer r.Release()
 
-	transportData := stack.PayloadSince(pkt.TransportHeader())
-	defer transportData.Release()
+	replyLen := header.ICMPv6HeaderSize + len(payload)
+	replyData := buffer.NewViewWithData(make([]byte, replyLen))
 
-	icmpHdr := header.ICMPv6(transportData.AsSlice()[:header.ICMPv6HeaderSize])
+	icmpHdr := header.ICMPv6(replyData.AsSlice()[:header.ICMPv6HeaderSize])
 	icmpHdr.SetType(header.ICMPv6EchoReply)
+	icmpHdr.SetCode(0)
 
-	payloadSlice := transportData.AsSlice()[header.ICMPv6HeaderSize:]
-	payloadCsum := checksum.Checksum(payloadSlice, 0)
+	copy(replyData.AsSlice()[header.ICMPv6HeaderSize:], payload)
 
+	payloadCsum := checksum.Checksum(payload, 0)
 	icmpHdr.SetChecksum(header.ICMPv6Checksum(header.ICMPv6ChecksumParams{
 		Header:      icmpHdr,
 		Src:         localAddr,
 		Dst:         remoteAddr,
 		PayloadCsum: payloadCsum,
-		PayloadLen:  len(payloadSlice),
+		PayloadLen:  len(payload),
 	}))
 
-	replyBuf := buffer.MakeWithView(transportData.Clone())
+	replyBuf := buffer.MakeWithView(replyData)
 	replyPkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		ReserveHeaderBytes: int(r.MaxHeaderLength()),
 		Payload:            replyBuf,
 	})
 	defer replyPkt.DecRef()
 
-	r.WritePacket(stack.NetworkHeaderParams{
+	if err := r.WritePacket(stack.NetworkHeaderParams{
 		Protocol: header.ICMPv6ProtocolNumber,
 		TTL:      r.DefaultTTL(),
-	}, replyPkt)
+	}, replyPkt); err != nil {
+		log.Debug("[TUN-ICMP] write ipv6 reply failed", "err", err)
+	}
 }
