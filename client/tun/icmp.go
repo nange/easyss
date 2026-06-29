@@ -109,8 +109,26 @@ func (h *ICMPHandler) processProxyICMP(s *stack.Stack, id stack.TransportEndpoin
 
 	netProto := pkt.NetworkProtocolNumber
 
+	// PayloadSince returns the full ICMP message including the header
+	// (type+code+checksum+id+seq+data). The server expects just the echo body
+	// (id+seq+data), so strip the leading 4 bytes (type+code+checksum).
 	payloadView := stack.PayloadSince(pkt.TransportHeader())
-	payload := payloadView.AsSlice()
+	fullICMP := payloadView.AsSlice()
+
+	var minSize int
+	if netProto == ipv4.ProtocolNumber {
+		minSize = header.ICMPv4MinimumSize
+	} else {
+		minSize = header.ICMPv6EchoMinimumSize
+	}
+	if len(fullICMP) < minSize {
+		payloadView.Release()
+		return
+	}
+
+	echoBody := make([]byte, len(fullICMP)-4)
+	copy(echoBody, fullICMP[4:])
+	payloadView.Release()
 
 	var dstAddr tcpip.Address
 	if netProto == ipv4.ProtocolNumber {
@@ -124,7 +142,7 @@ func (h *ICMPHandler) processProxyICMP(s *stack.Stack, id stack.TransportEndpoin
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	replyPayload, err := h.proxy.OpenICMPStream(ctx, dstAddr.String(), payload, h.method)
+	replyPayload, err := h.proxy.OpenICMPStream(ctx, dstAddr.String(), echoBody, h.method)
 	if err != nil {
 		log.Debug("[TUN-ICMP] proxy icmp failed", "dst", dstAddr.String(), "err", err)
 		return
