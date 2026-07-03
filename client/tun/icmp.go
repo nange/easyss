@@ -7,6 +7,7 @@ import (
 	"github.com/nange/easyss/v3/client/router"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -126,9 +127,10 @@ func (h *ICMPHandler) processProxyICMP(s *stack.Stack, id stack.TransportEndpoin
 		return
 	}
 
-	echoBody := make([]byte, len(fullICMP)-4)
+	echoBody := bytespool.Get(len(fullICMP) - 4)
 	copy(echoBody, fullICMP[4:])
 	payloadView.Release()
+	defer bytespool.MustPut(echoBody)
 
 	var dstAddr tcpip.Address
 	if netProto == ipv4.ProtocolNumber {

@@ -10,6 +10,7 @@ import (
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
+	"github.com/nange/easyss/v3/util/bytespool"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -105,7 +106,8 @@ func (h *ICMPHandler) icmpExchange(target string, payload []byte) ([]byte, error
 		return nil, err
 	}
 
-	rb := make([]byte, 65535)
+	rb := bytespool.Get(65535)
+	defer bytespool.MustPut(rb)
 	n, err := conn.Read(rb)
 	if err != nil {
 		log.Error("[ICMP] read failed", "target", target, "err", err)
