@@ -96,6 +96,9 @@ func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAdd
 		}
 		_ = s.dnsCache.Set(resp, true)
 
+			qtype := dns.TypeToString[msg.Question[0].Qtype]
+			log.Info("[DNS_DIRECT] result", "domain", domain, "qtype", qtype, "answers", util.DNSAnswerStrings(resp))
+
 			if s.router.IsCustomDirectDomain(domain) {
 				for _, ans := range resp.Answer {
 					switch a := ans.(type) {
@@ -231,6 +234,9 @@ func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAd
 			_ = s.dnsCache.Set(msg, false)
 
 			domain := strings.TrimSuffix(msg.Question[0].Name, ".")
+			qtype := dns.TypeToString[msg.Question[0].Qtype]
+			log.Info("[DNS_PROXY] result", "domain", domain, "qtype", qtype, "answers", util.DNSAnswerStrings(msg))
+
 				if s.router.IsCustomProxyDomain(domain) {
 					for _, ans := range msg.Answer {
 						switch a := ans.(type) {
