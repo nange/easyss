@@ -14,6 +14,12 @@ import (
 
 func runApp(disableTray, daemon bool, app *App) {
 	if !disableTray && (runtime.GOOS == "windows" || runtime.GOOS == "darwin") {
+		// On macOS, daemonize before starting the tray app so that
+		// closing the terminal does not terminate the process.
+		if daemon && runtime.GOOS == "darwin" {
+			runDaemon()
+		}
+
 		ta := &TrayApp{
 			App:     app,
 			closing: make(chan struct{}),
