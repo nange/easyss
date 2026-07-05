@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/stats"
+	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/version"
 )
 
@@ -71,6 +73,19 @@ func main() {
 	if showConfigExampleSimple {
 		fmt.Println(exampleSimpleConfig())
 		os.Exit(0)
+	}
+
+	// If config file path is relative and not found in CWD,
+	// try the executable's directory (e.g. double-click on macOS).
+	if !filepath.IsAbs(configFile) {
+		if _, err := os.Stat(configFile); os.IsNotExist(err) {
+			if dir := util.CurrentDir(); dir != "" {
+				altPath := filepath.Join(dir, configFile)
+				if _, err := os.Stat(altPath); err == nil {
+					configFile = altPath
+				}
+			}
+		}
 	}
 
 	cfg, err := config.LoadConfig(configFile)
