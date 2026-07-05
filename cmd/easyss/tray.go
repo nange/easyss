@@ -34,7 +34,6 @@ func (a *TrayApp) trayReady() {
 	}
 
 	systray.SetTemplateIcon(icon.Data, icon.Data)
-	systray.SetTooltip("Easyss")
 
 	a.addSelectServerMenu()
 	systray.AddSeparator()
@@ -67,21 +66,21 @@ func (a *TrayApp) trayExit() {
 }
 
 func (a *TrayApp) addSelectServerMenu() {
-	selectServer := systray.AddMenuItem("选择服务器", "请选择")
+	selectServer := systray.AddMenuItem("选择服务器", "")
 
 	addrs := a.cfg.ServerListAddrs()
 	var subMenuItems []*systray.MenuItem
 
 	if len(addrs) > 0 {
 		for _, addr := range addrs {
-			item := selectServer.AddSubMenuItemCheckbox(addr, "服务器地址", false)
-			subMenuItems = append(subMenuItems, item)
-			if addr == a.cfg.DefaultServerAddr() {
-				item.Check()
+			item := selectServer.AddSubMenuItemCheckbox(addr, "", false)
+				subMenuItems = append(subMenuItems, item)
+				if addr == a.cfg.DefaultServerAddr() {
+					item.Check()
+				}
 			}
-		}
-	} else {
-		item := selectServer.AddSubMenuItemCheckbox(a.cfg.DefaultServerAddr(), "服务器地址", false)
+		} else {
+			item := selectServer.AddSubMenuItemCheckbox(a.cfg.DefaultServerAddr(), "", false)
 		subMenuItems = append(subMenuItems, item)
 		item.Check()
 	}
@@ -144,29 +143,29 @@ func (a *TrayApp) latencyUpdater(subMenuItems []*systray.MenuItem, addrs []strin
 }
 
 func (a *TrayApp) addProxyRuleMenu() {
-	proxyMenu := systray.AddMenuItem("代理规则", "请选择")
+	proxyMenu := systray.AddMenuItem("代理规则", "")
 
-	auto := proxyMenu.AddSubMenuItemCheckbox("自动(自定义规则+绕过大陆IP域名)", "自动判断请求是否走代理", false)
+	auto := proxyMenu.AddSubMenuItemCheckbox("自动(自定义规则+绕过大陆IP域名)", "", false)
 	if a.cfg.Routing.ProxyRule == "auto" {
 		auto.Check()
 	}
 
-	autoBlock := proxyMenu.AddSubMenuItemCheckbox("自动+屏蔽广告跟踪", "自动判断请求是否走代理或者屏蔽", false)
+	autoBlock := proxyMenu.AddSubMenuItemCheckbox("自动+屏蔽广告跟踪", "", false)
 	if a.cfg.Routing.ProxyRule == "auto_block" {
 		autoBlock.Check()
 	}
 
-	reverseAuto := proxyMenu.AddSubMenuItemCheckbox("反向自动(国外访问国内)", "适用国外访问国内IP域名", false)
+	reverseAuto := proxyMenu.AddSubMenuItemCheckbox("反向自动(国外访问国内)", "", false)
 	if a.cfg.Routing.ProxyRule == "reverse_auto" {
 		reverseAuto.Check()
 	}
 
-	proxy := proxyMenu.AddSubMenuItemCheckbox("代理全部(绕过局域网地址)", "代理除局域网地址的所有请求", false)
+	proxy := proxyMenu.AddSubMenuItemCheckbox("代理全部(绕过局域网地址)", "", false)
 	if a.cfg.Routing.ProxyRule == "proxy" {
 		proxy.Check()
 	}
 
-	direct := proxyMenu.AddSubMenuItemCheckbox("直接连接", "所有请求直接连接，不走代理", false)
+	direct := proxyMenu.AddSubMenuItemCheckbox("直接连接", "", false)
 	if a.cfg.Routing.ProxyRule == "direct" {
 		direct.Check()
 	}
@@ -245,11 +244,11 @@ func (a *TrayApp) setProxyRule(rule string) {
 }
 
 func (a *TrayApp) addProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
-	proxyMenu := systray.AddMenuItem("代理对象", "请选择")
+	proxyMenu := systray.AddMenuItem("代理对象", "")
 
 	browserChecked := !a.cfg.Local.DisableSysProxy
-	browser := proxyMenu.AddSubMenuItemCheckbox("浏览器(设置系统代理)", "设置系统代理配置", browserChecked)
-	global := proxyMenu.AddSubMenuItemCheckbox("系统全局流量(Tun2socks)", "Tun2socks代理系统全局", a.cfg.Local.EnableTun2socks)
+	browser := proxyMenu.AddSubMenuItemCheckbox("浏览器(设置系统代理)", "", browserChecked)
+	global := proxyMenu.AddSubMenuItemCheckbox("系统全局流量(Tun2socks)", "", a.cfg.Local.EnableTun2socks)
 
 	go func() {
 		for {
@@ -300,7 +299,7 @@ func (a *TrayApp) addProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 }
 
 func (a *TrayApp) addCatLogsMenu() {
-	catLog := systray.AddMenuItem("查看运行日志", "查看日志")
+	catLog := systray.AddMenuItem("查看运行日志", "")
 
 	go func() {
 		for {
@@ -325,7 +324,7 @@ func (a *TrayApp) catLog() error {
 }
 
 func (a *TrayApp) addExitMenu() {
-	quit := systray.AddMenuItem("退出", "退出Easyss APP")
+	quit := systray.AddMenuItem("退出", "")
 
 	go func() {
 		for {

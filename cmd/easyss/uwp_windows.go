@@ -26,9 +26,9 @@ type UWPMenuItem struct {
 }
 
 func (a *TrayApp) addUWPLoopbackMenu() {
-	uwpMenu := systray.AddMenuItem("Windows UWP应用豁免", "管理UWP应用豁免")
+	uwpMenu := systray.AddMenuItem("Windows UWP应用豁免", "")
 
-	refreshItem := uwpMenu.AddSubMenuItem("刷新列表", "重新加载UWP应用列表")
+	refreshItem := uwpMenu.AddSubMenuItem("刷新列表", "")
 	systray.AddSeparator()
 
 	var menuItems []*UWPMenuItem
@@ -67,7 +67,7 @@ func (a *TrayApp) addUWPLoopbackMenu() {
 			}
 
 			if appIndex >= len(menuItems) {
-				item := uwpMenu.AddSubMenuItemCheckbox(app.Name, app.PackageFamilyName, app.Exempt)
+				item := uwpMenu.AddSubMenuItemCheckbox(app.Name, "", app.Exempt)
 				uwpItem := &UWPMenuItem{
 					MenuItem: item,
 					App:      &app,
@@ -124,7 +124,6 @@ func (a *TrayApp) addUWPLoopbackMenu() {
 				uwpItem.Mu.Unlock()
 
 				uwpItem.MenuItem.SetTitle(app.Name)
-				uwpItem.MenuItem.SetTooltip(app.PackageFamilyName)
 				if app.Exempt {
 					uwpItem.MenuItem.Check()
 				} else {
