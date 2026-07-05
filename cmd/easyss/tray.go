@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"os/user"
 	"runtime"
@@ -47,6 +48,9 @@ func (a *TrayApp) trayReady() {
 	a.SetTunMenu(tunMenu)
 
 	a.addUWPLoopbackMenu()
+
+	a.addLogLevelMenu()
+	systray.AddSeparator()
 
 	a.addCatLogsMenu()
 	systray.AddSeparator()
@@ -321,6 +325,83 @@ func (a *TrayApp) catLog() error {
 		return fmt.Errorf("log file path is empty, please configure log.file_path in config.json")
 	}
 	return catLogFile(filePath)
+}
+
+func (a *TrayApp) addLogLevelMenu() {
+	logLevelMenu := systray.AddMenuItem("日志级别", "")
+
+	debug := logLevelMenu.AddSubMenuItemCheckbox("Debug", "", false)
+	info := logLevelMenu.AddSubMenuItemCheckbox("Info", "", false)
+	warn := logLevelMenu.AddSubMenuItemCheckbox("Warn", "", false)
+	errLevel := logLevelMenu.AddSubMenuItemCheckbox("Error", "", false)
+
+	switch a.cfg.Log.Level {
+	case "debug":
+		debug.Check()
+	case "warn":
+		warn.Check()
+	case "error":
+		errLevel.Check()
+	default:
+		info.Check()
+	}
+
+		go func() {
+		for {
+			select {
+			case <-debug.ClickedCh:
+				if debug.Checked() {
+					debug.Check()
+					continue
+				}
+				debug.Check()
+				info.Uncheck()
+				warn.Uncheck()
+				errLevel.Uncheck()
+				a.cfg.Log.Level = "debug"
+				log.Info("[SYSTRAY] log level changed", "level", "debug")
+				log.SetLevel(slog.LevelDebug)
+			case <-info.ClickedCh:
+				if info.Checked() {
+					info.Check()
+					continue
+				}
+				info.Check()
+				debug.Uncheck()
+				warn.Uncheck()
+				errLevel.Uncheck()
+				a.cfg.Log.Level = "info"
+				log.Info("[SYSTRAY] log level changed", "level", "info")
+				log.SetLevel(slog.LevelInfo)
+			case <-warn.ClickedCh:
+				if warn.Checked() {
+					warn.Check()
+					continue
+				}
+				warn.Check()
+				debug.Uncheck()
+				info.Uncheck()
+				errLevel.Uncheck()
+				a.cfg.Log.Level = "warn"
+				log.Info("[SYSTRAY] log level changed", "level", "warn")
+				log.SetLevel(slog.LevelWarn)
+			case <-errLevel.ClickedCh:
+				if errLevel.Checked() {
+					errLevel.Check()
+					continue
+				}
+				errLevel.Check()
+				debug.Uncheck()
+				info.Uncheck()
+				warn.Uncheck()
+				a.cfg.Log.Level = "error"
+				log.Warn("[SYSTRAY] log level changed", "level", "error")
+				log.SetLevel(slog.LevelError)
+			case <-a.closing:
+				return
+			}
+		}
+	}()
 }
 
 func (a *TrayApp) addExitMenu() {

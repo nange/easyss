@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	sf "github.com/samber/slog-formatter"
@@ -15,6 +16,28 @@ import (
 )
 
 var logger = slog.New(DefaultHandler(slog.LevelInfo))
+
+// AtomicLevel is a thread-safe slog.Level that can be changed at runtime.
+type AtomicLevel struct {
+	level atomic.Int32
+}
+
+// Level returns the current log level.
+func (al *AtomicLevel) Level() slog.Level {
+	return slog.Level(al.level.Load())
+}
+
+// SetLevel sets the log level.
+func (al *AtomicLevel) SetLevel(level slog.Level) {
+	al.level.Store(int32(level))
+}
+
+var atomicLevel AtomicLevel
+
+// SetLevel dynamically changes the log level at runtime.
+func SetLevel(level slog.Level) {
+	atomicLevel.SetLevel(level)
+}
 
 func SetLogger(l *slog.Logger) {
 	logger = l
@@ -77,7 +100,7 @@ func newReplaceAttrFunc(cn *time.Location) func([]string, slog.Attr) slog.Attr {
 	}
 }
 
-func DefaultHandler(level slog.Level) slog.Handler {
+func DefaultHandler(level slog.Leveler) slog.Handler {
 	cn, _ := time.LoadLocation("Asia/Shanghai")
 	if cn == nil {
 		cn = time.UTC
@@ -91,7 +114,7 @@ func DefaultHandler(level slog.Level) slog.Handler {
 	)
 }
 
-func JSONHandler(w io.Writer, level slog.Level) slog.Handler {
+func JSONHandler(w io.Writer, level slog.Leveler) slog.Handler {
 	cn, _ := time.LoadLocation("Asia/Shanghai")
 	if cn == nil {
 		cn = time.UTC
@@ -105,7 +128,7 @@ func JSONHandler(w io.Writer, level slog.Level) slog.Handler {
 	)
 }
 
-func TextHandler(w io.Writer, level slog.Level) slog.Handler {
+func TextHandler(w io.Writer, level slog.Leveler) slog.Handler {
 	cn, _ := time.LoadLocation("Asia/Shanghai")
 	if cn == nil {
 		cn = time.UTC
@@ -139,10 +162,11 @@ func Init(outputFile, level string) {
 	case "error":
 		l = slog.LevelError
 	}
+	atomicLevel.SetLevel(l)
 
 	if outputFile != "" {
-		SetLogger(slog.New(slog.NewMultiHandler(TextHandler(FileWriter(outputFile), l), DefaultHandler(l))))
+		SetLogger(slog.New(slog.NewMultiHandler(TextHandler(FileWriter(outputFile), &atomicLevel), DefaultHandler(&atomicLevel))))
 	} else {
-		SetLogger(slog.New(DefaultHandler(l)))
+		SetLogger(slog.New(DefaultHandler(&atomicLevel)))
 	}
 }
