@@ -8,14 +8,9 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/log"
 )
-
-// DirectDNSServers are the public DNS servers used for direct (non-proxied) DNS lookups.
-var DirectDNSServers = []string{"223.5.5.53:53", "119.29.29.29:53", "[2400:3200::1]:53", "[2400:3200:baba::1]:53"}
-
-// ProxyDNSServer is the upstream DNS server used when proxying DNS queries through the tunnel.
-const ProxyDNSServer = "8.8.8.8:53"
 
 type ForwardServer struct {
 	listenAddr  string
@@ -27,7 +22,7 @@ type ForwardServer struct {
 }
 
 func NewForwardServer(listenAddr string, disableIPV6 bool) *ForwardServer {
-	servers := DirectDNSServers
+	servers := config.DirectDNSServers
 	if disableIPV6 {
 		var filtered []string
 		for _, s := range servers {

@@ -301,6 +301,7 @@ func (a *App) Start() error {
 		socksProxyAddr := "socks5://127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
 		tunCfg := tun.Config{
 			Socks5Addr: socksProxyAddr,
+			DNSServer:  config.DefaultSystemDNS,
 		}
 		if ipv6 := cli.Router().ServerIPV6(); ipv6 != "" {
 			tunCfg.ServerIPV6 = ipv6

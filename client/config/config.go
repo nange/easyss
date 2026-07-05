@@ -13,6 +13,16 @@ import (
 	"github.com/nange/easyss/v3/config"
 )
 
+// DirectDNSServers are the public DNS servers used for direct (non-proxied) DNS lookups.
+var DirectDNSServers = []string{"223.5.5.53:53", "119.29.29.29:53", "[2400:3200::1]:53", "[2400:3200:baba::1]:53"}
+
+// ProxyDNSServer is the upstream DNS server used when proxying DNS queries through the tunnel.
+const ProxyDNSServer = "8.8.8.8:53"
+
+// DefaultSystemDNS is the DNS server set on the system when TUN mode starts on Darwin.
+// It corresponds to the first entry of DirectDNSServers without the port.
+const DefaultSystemDNS = "223.5.5.5"
+
 type ServerProfile struct {
 	Address  string `json:"address"`
 	Port     int    `json:"port"`

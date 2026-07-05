@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/router"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
@@ -16,8 +17,6 @@ import (
 	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/txthinking/socks5"
-
-	easydns "github.com/nange/easyss/v3/client/dns"
 )
 
 func (s *Socks5Server) handleUDP(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram) error {
@@ -80,7 +79,7 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 
 func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg, domain string) error {
 	var lastErr error
-	for _, addr := range easydns.DirectDNSServers {
+	for _, addr := range config.DirectDNSServers {
 		if s.router.ShouldIPV6Disable() && util.IsIPV6Addr(addr) {
 			continue
 		}
@@ -135,7 +134,7 @@ func (s *Socks5Server) exchangeDirectDNS(ctx context.Context, msg *dns.Msg, addr
 }
 
 func (s *Socks5Server) proxyDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg, domain string) error {
-	dst := easydns.ProxyDNSServer
+	dst := config.ProxyDNSServer
 	key := clientAddr.String() + "_" + dst
 
 	ue, created, err := s.getOrCreateUDPExchange(key, dst)

@@ -35,6 +35,7 @@ type Config struct {
 	ServerIPV6     string
 	LocalGateway   string
 	LocalGatewayV6 string
+	DNSServer      string // DNS server to set during TUN mode (darwin only)
 }
 
 type DeviceConfig struct {
@@ -50,9 +51,10 @@ type DeviceConfig struct {
 }
 
 type Manager struct {
-	cfg     Config
-	dev     DeviceConfig
-	running bool
+	cfg       Config
+	dev       DeviceConfig
+	running   bool
+	originDNS []string // original system DNS before TUN starts (darwin only)
 }
 
 func New(cfg Config) *Manager {
@@ -148,6 +150,13 @@ func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
 
 	time.Sleep(500 * time.Millisecond)
 
+	// Save original DNS and set TUN DNS on darwin.
+	if runtime.GOOS == "darwin" {
+		if err := m.saveAndSetDNS(); err != nil {
+			log.Warn("[TUN] set system dns", "err", err)
+		}
+	}
+
 	if err := m.createTunDevAndSetIPRoute(); err != nil {
 		engine.Stop()
 		return fmt.Errorf("tun: create device: %w", err)
@@ -166,6 +175,13 @@ func (m *Manager) Stop() {
 	engine.Stop()
 
 	_ = m.closeTunDevAndDelIPRoute()
+
+	// Restore original DNS on darwin.
+	if runtime.GOOS == "darwin" {
+		if err := m.restoreDNS(); err != nil {
+			log.Warn("[TUN] restore system dns", "err", err)
+		}
+	}
 
 	m.running = false
 	log.Info("[TUN] tun2socks stopped")
@@ -261,6 +277,49 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 		_, _ = util.CommandContext(ctx, "osascript", "-e", cmd)
 	}
 	return nil
+}
+
+func (m *Manager) saveAndSetDNS() error {
+	origin, err := util.SysDNS()
+	if err != nil {
+		return err
+	}
+	m.originDNS = origin
+
+	// Only override DNS when the system has no custom DNS configured
+	// (i.e. using DHCP-provided DNS). If the user has manually set DNS,
+	// we preserve their choice.
+	if len(origin) == 0 && m.cfg.DNSServer != "" {
+		return util.SetSysDNS([]string{m.cfg.DNSServer})
+	}
+	return nil
+}
+
+func (m *Manager) restoreDNS() error {
+	if len(m.originDNS) == 0 {
+		return util.SetSysDNS([]string{"empty"})
+	}
+
+	curr, err := util.SysDNS()
+	if err != nil {
+		return err
+	}
+	if !stringSliceEqual(m.originDNS, curr) {
+		return util.SetSysDNS(m.originDNS)
+	}
+	return nil
+}
+
+func stringSliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, v := range a {
+		if v != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func ipSub(ip, mask string) string {

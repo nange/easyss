@@ -165,7 +165,7 @@ func resolveServerIPV6(cfg *config.ClientConfig) string {
 		return ""
 	}
 
-	for _, dnsServer := range dns.DirectDNSServers {
+	for _, dnsServer := range config.DirectDNSServers {
 		ips, err := dns.LookupIPV6From(dnsServer, svr.Address)
 		if err != nil || len(ips) == 0 {
 			continue
