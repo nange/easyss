@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 	_ "time/tzdata"
@@ -17,6 +18,7 @@ import (
 	"github.com/nange/easyss/v3/pprof"
 	"github.com/nange/easyss/v3/server"
 	"github.com/nange/easyss/v3/server/config"
+	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/version"
 )
 
@@ -60,6 +62,14 @@ func main() {
 	if fileCfg.Log.Level == "" {
 		fileCfg.Log.Level = "info"
 	}
+
+	// Resolve relative log file path to absolute based on executable directory.
+	if fileCfg.Log.FilePath != "" && !filepath.IsAbs(fileCfg.Log.FilePath) {
+		if dir := util.CurrentDir(); dir != "" {
+			fileCfg.Log.FilePath = filepath.Join(dir, fileCfg.Log.FilePath)
+		}
+	}
+
 	log.Init(fileCfg.Log.FilePath, fileCfg.Log.Level)
 
 	log.Info("[EASYSS-SERVER-V3] " + version.String())

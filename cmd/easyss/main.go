@@ -117,6 +117,15 @@ func main() {
 		}
 	}
 
+	// Resolve relative log file path to absolute based on executable directory,
+	// so both log writing and "View Log" from systray point to the same file
+	// regardless of the process's current working directory.
+	if cfg.Log.FilePath != "" && !filepath.IsAbs(cfg.Log.FilePath) {
+		if dir := util.CurrentDir(); dir != "" {
+			cfg.Log.FilePath = filepath.Join(dir, cfg.Log.FilePath)
+		}
+	}
+
 	log.Info("[EASYSS-V3] set log-level", "level", cfg.Log.Level)
 	log.Init(cfg.Log.FilePath, cfg.Log.Level)
 	log.Info("[EASYSS-V3] " + version.String())
