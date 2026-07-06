@@ -51,9 +51,9 @@ Easyss v3 支持两种配置模式，自动识别：
 
 ---
 
-#### 简化模式（推荐）
+#### 简化模式（推荐, 兼容v2）
 
-只包含最常用的配置项，适合大多数场景：
+只包含最常用的配置项，适合大多数场景，仅支持配置单一服务器：
 
 ```json
 {
@@ -69,7 +69,7 @@ Easyss v3 支持两种配置模式，自动识别：
   "direct_file": "",
   "proxy_file": "",
   "log_level": "info",
-  "log_file_path": ""
+  "log_file_path": "easyss.log",
 }
 ```
 
@@ -163,22 +163,22 @@ Easyss v3 支持两种配置模式，自动识别：
   "transport": {
     "protocol": "h2",
     "endpoint_prefix": "/v3",
-    "conn_count_min": 8,
-    "conn_count_max": 16
+    "conn_count_min": 3,
+    "conn_count_max": 6
   },
   "shaper": {
     "batch_window_ms": 3,
-    "cover": {
-      "budget_ratio": 0
-    }
+    "cover_budget_ratio": 0.1
   },
   "log": {
     "level": "info",
-    "file_path": ""
+    "file_path": "easyss.log"
   },
   "timeout": 30,
   "auth_username": "",
-  "auth_password": ""
+  "auth_password": "",
+  "pprof_enabled": false,
+  "latency_offset_ms": 50
 }
 ```
 
@@ -297,7 +297,7 @@ twitter.com
   },
   "log": {
       "level": "info",
-      "file_path": ""
+      "file_path": "easyss.log"
   },
   "timeout": 30
 }

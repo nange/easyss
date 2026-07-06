@@ -141,7 +141,7 @@ func exampleV3ServerConfig() string {
   },
   "log": {
     "level": "info",
-    "file_path": ""
+    "file_path": "easyss.log"
   },
   "timeout": 30
 }`

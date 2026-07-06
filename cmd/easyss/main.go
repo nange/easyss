@@ -244,11 +244,11 @@ func (a *App) Start() error {
 	}
 
 	shaperCfg := shaper.Config{
-		BatchWindowMS: a.cfg.Shaper.BatchWindowMS,
-		Cover: shaper.CoverConfig{
-			BudgetRatio: a.cfg.Shaper.Cover.BudgetRatio,
-		},
-	}
+			BatchWindowMS: a.cfg.Shaper.BatchWindowMS,
+			Cover: shaper.CoverConfig{
+				BudgetRatio: a.cfg.Shaper.CoverBudgetRatio,
+			},
+		}
 
 	timeout := a.cfg.TimeoutDuration()
 	streamIdleTimeout := 4 * timeout
@@ -483,13 +483,11 @@ func exampleV3Config() string {
   },
   "shaper": {
     "batch_window_ms": 3,
-    "cover": {
-      "budget_ratio": 0
-    }
+    "cover_budget_ratio": 0.1
   },
   "log": {
     "level": "info",
-    "file_path": ""
+    "file_path": "easyss.log"
   },
   "timeout": 30,
   "auth_username": "",
@@ -513,7 +511,7 @@ func exampleSimpleConfig() string {
   "direct_file": "",
   "proxy_file": "",
   "log_level": "info",
-  "log_file_path": "",
+  "log_file_path": "easyss.log",
   "pprof_enabled": false,
   "latency_offset_ms": 50
 }`
