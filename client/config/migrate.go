@@ -30,7 +30,7 @@ type V2Config struct {
 	Timeout          int             `json:"timeout"`
 	LogLevel         string          `json:"log_level"`
 	LogFilePath      string          `json:"log_file_path"`
-	TunConfig        json.RawMessage `json:"tun_config"`
+	TunConfig        json.RawMessage `json:"tun_config,omitempty"`
 	OutboundProto    string          `json:"outbound_proto"`
 }
 

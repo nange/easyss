@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -448,71 +449,72 @@ func (a *App) statsLoop() {
 }
 
 func exampleV3Config() string {
-	return `{
-  "version": 3,
-  "servers": [{
-    "address": "your-domain.com",
-    "port": 443,
-    "password": "your-password",
-    "method": "aes-256-gcm",
-    "sn": "",
-    "ca_path": "",
-    "default": true
-  }],
-  "local": {
-    "socks_port": 2080,
-    "http_port": 3080,
-    "bind_all": false,
-    "disable_sys_proxy": false,
-    "enable_forward_dns": false,
-    "enable_tun2socks": false,
-    "enable_quic": false,
-    "tun_config": {}
-  },
-  "routing": {
-    "proxy_rule": "auto",
-    "ipv6_rule": "auto",
-    "direct_file": "",
-    "proxy_file": ""
-  },
-  "transport": {
-    "protocol": "h2",
-    "endpoint_prefix": "/v3",
-    "conn_count_min": 3,
-    "conn_count_max": 6
-  },
-  "shaper": {
-    "batch_window_ms": 3,
-    "cover_budget_ratio": 0.1
-  },
-  "log": {
-    "level": "info",
-    "file_path": "easyss.log"
-  },
-  "timeout": 30,
-  "auth_username": "",
-  "auth_password": "",
-  "pprof_enabled": false,
-  "latency_offset_ms": 50
-}`
+	cfg := config.ClientConfig{
+		ConfigVersion: 3,
+		Servers: []*config.ServerProfile{{
+			Address:  "your-domain.com",
+			Port:     443,
+			Password: "your-password",
+			Method:   "aes-256-gcm",
+			SNI:      "",
+			CAPath:   "",
+			Default:  true,
+		}},
+		Local: config.LocalConfig{
+			SocksPort:        2080,
+			HTTPPort:         3080,
+			BindAll:          false,
+			DisableSysProxy:  false,
+			EnableForwardDNS: false,
+			EnableTun2socks:  false,
+			EnableQUIC:       false,
+		},
+		Routing: config.RoutingConfig{
+			ProxyRule:  "auto",
+			IPV6Rule:   "auto",
+			DirectFile: "",
+			ProxyFile:  "",
+		},
+		Transport: config.TransportConfig{
+			Protocol:       "h2",
+			EndpointPrefix: "/v3",
+			ConnCountMin:   3,
+			ConnCountMax:   6,
+		},
+		Shaper: config.ShaperConfig{
+			BatchWindowMS:    3,
+			CoverBudgetRatio: 0.1,
+		},
+		Log: config.LogConfig{
+			Level:    "info",
+			FilePath: "easyss.log",
+		},
+		Timeout:         30,
+		AuthUsername:    "",
+		AuthPassword:    "",
+		PprofEnabled:    false,
+		LatencyOffsetMS: 50,
+	}
+	b, _ := json.MarshalIndent(cfg, "", "  ")
+	return string(b)
 }
 
 func exampleSimpleConfig() string {
-	return `{
-  "server": "your-domain.com",
-  "server_port": 443,
-  "password": "your-password",
-  "local_port": 2080,
-  "method": "aes-256-gcm",
-  "proxy_rule": "auto",
-  "timeout": 30,
-  "bind_all": false,
-  "outbound_proto": "native",
-  "direct_file": "",
-  "proxy_file": "",
-  "log_level": "info",
-  "log_file_path": "easyss.log",
-  "pprof_enabled": false,
-  "latency_offset_ms": 50
-}`
+	cfg := config.V2Config{
+		Server:        "your-domain.com",
+		ServerPort:    443,
+		Password:      "your-password",
+		Method:        "aes-256-gcm",
+		LocalPort:     2080,
+		ProxyRule:     "auto",
+		Timeout:       30,
+		BindALL:       false,
+		OutboundProto: "native",
+		DirectFile:    "",
+		ProxyFile:     "",
+		LogLevel:      "info",
+		LogFilePath:   "easyss.log",
+	}
+	b, _ := json.MarshalIndent(cfg, "", "  ")
+	return string(b)
 }

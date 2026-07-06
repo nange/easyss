@@ -115,34 +115,36 @@ func main() {
 }
 
 func exampleV3ServerConfig() string {
-	return `{
-  "version": 3,
-  "server": {
-    "listen": ":443",
-    "domain": "your-domain.com",
-    "password": "your-password",
-    "allowed_methods": ["aes-256-gcm", "chacha20-poly1305"],
-    "cert_path": "",
-    "key_path": "",
-    "email": "",
-	"fallback_target": "",
-    "batch_window_ms": 3,
-    "pprof_enabled": false
-  },
-  "transport": {
-    "protocol": "h2",
-    "endpoint_prefix": "/v3"
-  },
-  "next_proxy": {
-    "url": "",
-    "next_proxy_file": "",
-    "enable_udp": false,
-    "all_host": false
-  },
-  "log": {
-    "level": "info",
-    "file_path": "easyss.log"
-  },
-  "timeout": 30
-}`
+	cfg := config.FileConfig{
+		ConfigVersion: 3,
+		Server: config.ServerConfig{
+			Listen:         ":443",
+			Domain:         "your-domain.com",
+			Password:       "your-password",
+			AllowedMethods: []string{"aes-256-gcm", "chacha20-poly1305"},
+			CertPath:       "",
+			KeyPath:        "",
+			Email:          "your-email@example.com",
+			FallbackTarget: "",
+			BatchWindowMS:  3,
+			PprofEnabled:   false,
+		},
+		Transport: config.TransportConfig{
+			Protocol:       "h2",
+			EndpointPrefix: "/v3",
+		},
+		NextProxy: config.NextProxyConfig{
+			URL:           "",
+			NextProxyFile: "",
+			EnableUDP:     false,
+			AllHost:       false,
+		},
+		Log: config.LogConfig{
+			Level:    "info",
+			FilePath: "easyss.log",
+		},
+		Timeout: 30,
+	}
+	b, _ := json.MarshalIndent(cfg, "", "  ")
+	return string(b)
 }
