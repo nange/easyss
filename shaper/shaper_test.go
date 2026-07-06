@@ -57,7 +57,7 @@ func TestBatchShaperFlushesBeforePlainRecordLimit(t *testing.T) {
 	aad := easycrypto.BuildAAD(endpoint, salt, "c2s", "session", protocol.MethodAES256GCM)
 
 	var out bytes.Buffer
-	bs := NewLight(easycrypto.NewRecordWriter(&out, enc, ctr, aad), Config{BatchWindowMS: 1000})
+	bs := New(easycrypto.NewRecordWriter(&out, enc, ctr, aad), Config{BatchWindowMS: 1000})
 	payload := make([]byte, 16*1024)
 	for range 4 {
 		if err := bs.PushFrame(protocol.NewFrameDATA(payload)); err != nil {

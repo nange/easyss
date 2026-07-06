@@ -187,7 +187,7 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 	}
 	sessionWriter := crypto.NewRecordWriter(stream, sessionEnc, sessionCounter, aadSession)
 
-	txShaper := shaper.NewLight(sessionWriter, h.shaperCfg)
+		txShaper := shaper.New(sessionWriter, h.shaperCfg)
 	defer txShaper.Close() //nolint:errcheck
 
 	aadS2C := crypto.BuildAAD(endpoint, bs.salt, "s2c", "session", method)
@@ -410,7 +410,7 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 	log.Debug("[UDP_EXCHANGE] opened", "target", target)
 	return &UDPExchange{
 		stream:   stream,
-		tx:       shaper.NewLight(c2sWriter, h.shaperCfg),
+		tx:       shaper.New(c2sWriter, h.shaperCfg),
 		reader:   dr,
 		target:   target,
 		lastSeen: time.Now(),

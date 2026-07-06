@@ -25,7 +25,7 @@ type batchShaper struct {
 	cover        *coverInjector
 }
 
-func NewLight(writer *crypto.RecordWriter, cfg Config) Shaper {
+func New(writer *crypto.RecordWriter, cfg Config) Shaper {
 	window := time.Duration(cfg.BatchWindowMS) * time.Millisecond
 	if window <= 0 {
 		window = 3 * time.Millisecond
