@@ -39,11 +39,11 @@ func TestIsIPv6Target(t *testing.T) {
 func TestNewProxyHandler(t *testing.T) {
 	t.Run("空 allowedMethods 使用默认", func(t *testing.T) {
 		cfg := ProxyHandlerConfig{
-			MasterKey:        []byte("test-key-32-bytes-long!!!!!!!"),
-			AllowedMethods:   nil,
-			HandshakeTimeout: 5 * time.Second,
+			MasterKey:         []byte("test-key-32-bytes-long!!!!!!!"),
+			AllowedMethods:    nil,
+			HandshakeTimeout:  5 * time.Second,
 			StreamIdleTimeout: 300 * time.Second,
-			UDPIdleTimeout:   30 * time.Second,
+			UDPIdleTimeout:    30 * time.Second,
 		}
 		h := NewProxyHandler(cfg)
 		if h == nil {
@@ -62,11 +62,11 @@ func TestNewProxyHandler(t *testing.T) {
 
 	t.Run("指定 allowedMethods", func(t *testing.T) {
 		cfg := ProxyHandlerConfig{
-			MasterKey:        []byte("test-key-32-bytes-long!!!!!!!"),
-			AllowedMethods:   []string{"aes-256-gcm"},
-			HandshakeTimeout: 5 * time.Second,
+			MasterKey:         []byte("test-key-32-bytes-long!!!!!!!"),
+			AllowedMethods:    []string{"aes-256-gcm"},
+			HandshakeTimeout:  5 * time.Second,
 			StreamIdleTimeout: 300 * time.Second,
-			UDPIdleTimeout:   30 * time.Second,
+			UDPIdleTimeout:    30 * time.Second,
 		}
 		h := NewProxyHandler(cfg)
 		if len(h.allowedMethods) != 1 {
@@ -82,11 +82,11 @@ func TestNewProxyHandler(t *testing.T) {
 
 	t.Run("无效 method 名称被忽略", func(t *testing.T) {
 		cfg := ProxyHandlerConfig{
-			MasterKey:        []byte("test-key-32-bytes-long!!!!!!!"),
-			AllowedMethods:   []string{"invalid-method", "aes-256-gcm"},
-			HandshakeTimeout: 5 * time.Second,
+			MasterKey:         []byte("test-key-32-bytes-long!!!!!!!"),
+			AllowedMethods:    []string{"invalid-method", "aes-256-gcm"},
+			HandshakeTimeout:  5 * time.Second,
 			StreamIdleTimeout: 300 * time.Second,
-			UDPIdleTimeout:   30 * time.Second,
+			UDPIdleTimeout:    30 * time.Second,
 		}
 		h := NewProxyHandler(cfg)
 		if len(h.allowedMethods) != 1 {
@@ -96,10 +96,10 @@ func TestNewProxyHandler(t *testing.T) {
 
 	t.Run("BatchWindowMS 默认值", func(t *testing.T) {
 		cfg := ProxyHandlerConfig{
-			MasterKey:        []byte("test-key-32-bytes-long!!!!!!!"),
-			HandshakeTimeout: 5 * time.Second,
+			MasterKey:         []byte("test-key-32-bytes-long!!!!!!!"),
+			HandshakeTimeout:  5 * time.Second,
 			StreamIdleTimeout: 300 * time.Second,
-			UDPIdleTimeout:   30 * time.Second,
+			UDPIdleTimeout:    30 * time.Second,
 		}
 		h := NewProxyHandler(cfg)
 		if h.batchWindowMS != sharedconfig.DefaultBatchWindowMS {
@@ -109,11 +109,11 @@ func TestNewProxyHandler(t *testing.T) {
 
 	t.Run("BatchWindowMS 上限 10", func(t *testing.T) {
 		cfg := ProxyHandlerConfig{
-			MasterKey:        []byte("test-key-32-bytes-long!!!!!!!"),
-			BatchWindowMS:    100,
-			HandshakeTimeout: 5 * time.Second,
+			MasterKey:         []byte("test-key-32-bytes-long!!!!!!!"),
+			BatchWindowMS:     100,
+			HandshakeTimeout:  5 * time.Second,
 			StreamIdleTimeout: 300 * time.Second,
-			UDPIdleTimeout:   30 * time.Second,
+			UDPIdleTimeout:    30 * time.Second,
 		}
 		h := NewProxyHandler(cfg)
 		if h.batchWindowMS != 10 {
@@ -123,10 +123,10 @@ func TestNewProxyHandler(t *testing.T) {
 
 	t.Run("子 handler 非 nil", func(t *testing.T) {
 		cfg := ProxyHandlerConfig{
-			MasterKey:        []byte("test-key-32-bytes-long!!!!!!!"),
-			HandshakeTimeout: 5 * time.Second,
+			MasterKey:         []byte("test-key-32-bytes-long!!!!!!!"),
+			HandshakeTimeout:  5 * time.Second,
 			StreamIdleTimeout: 300 * time.Second,
-			UDPIdleTimeout:   30 * time.Second,
+			UDPIdleTimeout:    30 * time.Second,
 		}
 		h := NewProxyHandler(cfg)
 		if h.tcpHandler == nil {
@@ -136,9 +136,9 @@ func TestNewProxyHandler(t *testing.T) {
 			t.Error("udpHandler should not be nil")
 		}
 		if h.icmpHandler == nil {
-				t.Error("icmpHandler should not be nil")
-			}
-		})
+			t.Error("icmpHandler should not be nil")
+		}
+	})
 }
 
 func TestNewTCPHandler(t *testing.T) {
@@ -160,4 +160,4 @@ func TestNewICMPHandler(t *testing.T) {
 	if h == nil {
 		t.Fatal("NewICMPHandler returned nil")
 	}
-	}
+}

@@ -69,18 +69,18 @@ type LogConfig struct {
 }
 
 type ClientConfig struct {
-	ConfigVersion int              `json:"version"`
-	Servers       []*ServerProfile `json:"servers"`
-	Local         LocalConfig      `json:"local"`
-	Routing       RoutingConfig    `json:"routing"`
-	Transport     TransportConfig  `json:"transport"`
-	Shaper        ShaperConfig     `json:"shaper"`
-	Log           LogConfig        `json:"log"`
-	Timeout       int              `json:"timeout"`
-	AuthUsername  string           `json:"auth_username"`
-	AuthPassword  string           `json:"auth_password"`
-	PprofEnabled     bool `json:"pprof_enabled"`
-	LatencyOffsetMS int  `json:"latency_offset_ms"`
+	ConfigVersion   int              `json:"version"`
+	Servers         []*ServerProfile `json:"servers"`
+	Local           LocalConfig      `json:"local"`
+	Routing         RoutingConfig    `json:"routing"`
+	Transport       TransportConfig  `json:"transport"`
+	Shaper          ShaperConfig     `json:"shaper"`
+	Log             LogConfig        `json:"log"`
+	Timeout         int              `json:"timeout"`
+	AuthUsername    string           `json:"auth_username"`
+	AuthPassword    string           `json:"auth_password"`
+	PprofEnabled    bool             `json:"pprof_enabled"`
+	LatencyOffsetMS int              `json:"latency_offset_ms"`
 }
 
 func (c *ClientConfig) DefaultServer() *ServerProfile {

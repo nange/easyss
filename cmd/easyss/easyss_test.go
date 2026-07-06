@@ -311,11 +311,11 @@ func newTestHarness(t *testing.T) *testHarness {
 	streamIdleTimeout := 10 * timeout
 	udpIdleTimeout := 2 * timeout
 	shaperCfg := shaper.Config{
-			BatchWindowMS: clientCfg.Shaper.BatchWindowMS,
-			Cover: shaper.CoverConfig{
-				BudgetRatio: clientCfg.Shaper.CoverBudgetRatio,
-			},
-		}
+		BatchWindowMS: clientCfg.Shaper.BatchWindowMS,
+		Cover: shaper.CoverConfig{
+			BudgetRatio: clientCfg.Shaper.CoverBudgetRatio,
+		},
+	}
 	handler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, streamIdleTimeout)
 
 	// Start SOCKS5 proxy

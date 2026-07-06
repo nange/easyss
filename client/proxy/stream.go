@@ -187,7 +187,7 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 	}
 	sessionWriter := crypto.NewRecordWriter(stream, sessionEnc, sessionCounter, aadSession)
 
-		txShaper := shaper.New(sessionWriter, h.shaperCfg)
+	txShaper := shaper.New(sessionWriter, h.shaperCfg)
 	defer txShaper.Close() //nolint:errcheck
 
 	aadS2C := crypto.BuildAAD(endpoint, bs.salt, "s2c", "session", method)
@@ -234,10 +234,10 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 	defer bytespool.MustPut(buf)
 	for {
 		n, err := src.Read(buf)
-			if n > 0 {
-		signalActivity()
-				stats.RecordRawBytesSent(n)
-				frame := protocol.NewFrameDATA(buf[:n])
+		if n > 0 {
+			signalActivity()
+			stats.RecordRawBytesSent(n)
+			frame := protocol.NewFrameDATA(buf[:n])
 			if pErr := tx.PushFrame(frame); pErr != nil {
 				_ = tx.Flush()
 				if errors.Is(pErr, io.ErrClosedPipe) {
@@ -340,15 +340,15 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 			return nil
 		}
 		m.SetState("write_local")
-			if _, wErr := dst.Write(item.data); wErr != nil {
-				if isLocalConnClosedError(wErr) {
-					log.Debug("[STREAM] local connection closed", "err", wErr)
-					return errLocalConnClosed
-				}
-				return wErr
+		if _, wErr := dst.Write(item.data); wErr != nil {
+			if isLocalConnClosedError(wErr) {
+				log.Debug("[STREAM] local connection closed", "err", wErr)
+				return errLocalConnClosed
 			}
+			return wErr
+		}
 		stats.RecordRawBytesRecv(len(item.data))
-			m.Add(len(item.data), "read_remote")
+		m.Add(len(item.data), "read_remote")
 	}
 
 	return <-readDone

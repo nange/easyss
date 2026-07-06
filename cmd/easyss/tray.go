@@ -78,13 +78,13 @@ func (a *TrayApp) addSelectServerMenu() {
 	if len(addrs) > 0 {
 		for _, addr := range addrs {
 			item := selectServer.AddSubMenuItemCheckbox(addr, "", false)
-				subMenuItems = append(subMenuItems, item)
-				if addr == a.cfg.DefaultServerAddr() {
-					item.Check()
-				}
+			subMenuItems = append(subMenuItems, item)
+			if addr == a.cfg.DefaultServerAddr() {
+				item.Check()
 			}
-		} else {
-			item := selectServer.AddSubMenuItemCheckbox(a.cfg.DefaultServerAddr(), "", false)
+		}
+	} else {
+		item := selectServer.AddSubMenuItemCheckbox(a.cfg.DefaultServerAddr(), "", false)
 		subMenuItems = append(subMenuItems, item)
 		item.Check()
 	}
@@ -346,7 +346,7 @@ func (a *TrayApp) addLogLevelMenu() {
 		info.Check()
 	}
 
-		go func() {
+	go func() {
 		for {
 			select {
 			case <-debug.ClickedCh:

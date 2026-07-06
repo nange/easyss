@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	stallThreshold  int64 = 1 << 20
-	stallLogMinGap        = 60
+	stallThreshold int64 = 1 << 20
+	stallLogMinGap       = 60
 )
 
 type StreamMeter struct {

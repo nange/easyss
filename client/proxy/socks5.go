@@ -45,10 +45,10 @@ func NewSocks5Server(listenAddr, username, password string, handler *StreamHandl
 		directDialContext = defaultDirectDialContext
 	}
 	s := &Socks5Server{
-			handler:           handler,
-			router:            rt,
-			dnsCache:          easydns.NewCache(),
-			method:            method,
+		handler:           handler,
+		router:            rt,
+		dnsCache:          easydns.NewCache(),
+		method:            method,
 		disableQUIC:       disableQUIC,
 		directDialContext: directDialContext,
 		dialTimeout:       udpIdleTimeout,

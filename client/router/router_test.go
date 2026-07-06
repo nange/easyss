@@ -16,10 +16,10 @@ func TestParseProxyRule(t *testing.T) {
 		{"proxy", ProxyRuleProxy},
 		{"direct", ProxyRuleDirect},
 		{"auto_block", ProxyRuleAutoBlock},
-		{"", ProxyRuleAuto},           // 空字符串默认 auto
-		{"unknown", ProxyRuleAuto},    // 未知规则默认 auto
-		{"Auto", ProxyRuleAuto},       // 大小写敏感 → 默认 auto
-		{"PROXY", ProxyRuleAuto},      // 大小写敏感 → 默认 auto
+		{"", ProxyRuleAuto},        // 空字符串默认 auto
+		{"unknown", ProxyRuleAuto}, // 未知规则默认 auto
+		{"Auto", ProxyRuleAuto},    // 大小写敏感 → 默认 auto
+		{"PROXY", ProxyRuleAuto},   // 大小写敏感 → 默认 auto
 	}
 
 	for _, tt := range tests {
@@ -39,10 +39,10 @@ func TestParseIPV6Rule(t *testing.T) {
 	}{
 		{"enable", IPV6RuleEnable},
 		{"auto", IPV6RuleAuto},
-		{"disable", IPV6RuleDisable},  // 显式 disable
-		{"", IPV6RuleDisable},         // 空字符串默认 disable
-		{"unknown", IPV6RuleDisable},  // 未知规则默认 disable
-		{"Disable", IPV6RuleDisable},  // 大小写敏感 → 默认 disable
+		{"disable", IPV6RuleDisable}, // 显式 disable
+		{"", IPV6RuleDisable},        // 空字符串默认 disable
+		{"unknown", IPV6RuleDisable}, // 未知规则默认 disable
+		{"Disable", IPV6RuleDisable}, // 大小写敏感 → 默认 disable
 	}
 
 	for _, tt := range tests {
@@ -62,8 +62,8 @@ func TestSubDomains(t *testing.T) {
 	}{
 		{"", nil},
 		{"com", nil},
-		{"example.com", nil},                                      // 只有一层子域名，排除顶级
-		{"a.example.com", []string{"example.com"}},                // subs=[example.com, com] → len>1 → 去掉最后一个com
+		{"example.com", nil}, // 只有一层子域名，排除顶级
+		{"a.example.com", []string{"example.com"}}, // subs=[example.com, com] → len>1 → 去掉最后一个com
 		{"b.a.example.com", []string{"a.example.com", "example.com"}},
 		{"c.b.a.example.com", []string{"b.a.example.com", "a.example.com", "example.com"}},
 	}
@@ -209,11 +209,11 @@ func TestNewRouter(t *testing.T) {
 
 func TestRouter_ShouldIPV6Disable(t *testing.T) {
 	tests := []struct {
-		name          string
-		ipv6Rule      IPV6Rule
+		name           string
+		ipv6Rule       IPV6Rule
 		ipv6Networking bool
-		serverIPV6    string
-		want          bool
+		serverIPV6     string
+		want           bool
 	}{
 		{"Enable 规则 → 不禁用", IPV6RuleEnable, false, "", false},
 		{"Auto + 网络支持 + 服务端支持 → 不禁用", IPV6RuleAuto, true, "::1", false},
@@ -412,8 +412,8 @@ func TestRouter_IsCustomDirectDomain(t *testing.T) {
 func TestRouter_IsCustomProxyDomain(t *testing.T) {
 	r := &Router{
 		customProxyDomains: map[string]struct{}{
-			"google.com":    {},
-			"youtube.com":   {},
+			"google.com":  {},
+			"youtube.com": {},
 		},
 	}
 
@@ -484,9 +484,9 @@ func TestRouter_hostAtCN(t *testing.T) {
 		host string
 		want bool
 	}{
-		{"www.baidu.cn", true},   // .cn 后缀
-		{"example.cn", true},     // .cn 后缀
-		{"www.baidu.com", true},  // geosite direct 列表匹配（如存在）
+		{"www.baidu.cn", true},    // .cn 后缀
+		{"example.cn", true},      // .cn 后缀
+		{"www.baidu.com", true},   // geosite direct 列表匹配（如存在）
 		{"www.google.com", false}, // 国外域名
 		{"", false},
 	}

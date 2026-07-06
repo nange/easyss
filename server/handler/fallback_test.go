@@ -205,9 +205,9 @@ func TestSetFallbackDir_No404FallbackToIndex(t *testing.T) {
 
 func TestSetFallbackDir_NestedSubdirs(t *testing.T) {
 	dir := makeFallbackDir(t, map[string]string{
-		"index.html":       "<h1>Home</h1>",
-		"blog/post1.html":  "<h1>Post 1</h1>",
-		"blog/post2.html":  "<h1>Post 2</h1>",
+		"index.html":      "<h1>Home</h1>",
+		"blog/post1.html": "<h1>Post 1</h1>",
+		"blog/post2.html": "<h1>Post 2</h1>",
 	})
 	if err := SetFallbackDir(dir); err != nil {
 		t.Fatal(err)
@@ -230,9 +230,9 @@ func TestSetFallbackDir_NestedSubdirs(t *testing.T) {
 
 func TestSetFallbackDir_ImplicitIndex(t *testing.T) {
 	dir := makeFallbackDir(t, map[string]string{
-		"index.html":       "<h1>Home</h1>",
-		"blog/index.html":  "<h1>Blog Home</h1>",
-		"blog/post1.html":  "<h1>Post 1</h1>",
+		"index.html":      "<h1>Home</h1>",
+		"blog/index.html": "<h1>Blog Home</h1>",
+		"blog/post1.html": "<h1>Post 1</h1>",
 	})
 	if err := SetFallbackDir(dir); err != nil {
 		t.Fatal(err)

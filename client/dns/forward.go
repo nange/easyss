@@ -13,12 +13,12 @@ import (
 )
 
 type ForwardServer struct {
-	listenAddr  string
-	client      *dns.Client
-	dnsServers  []string
-	dnsServer   *dns.Server
-	mu          sync.Mutex
-	running     bool
+	listenAddr string
+	client     *dns.Client
+	dnsServers []string
+	dnsServer  *dns.Server
+	mu         sync.Mutex
+	running    bool
 }
 
 func NewForwardServer(listenAddr string, disableIPV6 bool) *ForwardServer {

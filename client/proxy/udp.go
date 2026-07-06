@@ -58,13 +58,13 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 	isDirect := rule == router.HostRuleDirect
 
 	if cached := s.dnsCache.Get(question.Name, qtype, isDirect); cached != nil {
-			log.Info("[DNS_CACHE] hit", "domain", domain, "qtype", qtype, "direct", isDirect)
-			if s.router.ShouldIPV6Disable() && cached.Question[0].Qtype == dns.TypeAAAA {
-				cached.Answer = nil
-			}
-			cached.Id = msg.Id
-			return responseDNSMsg(srv.UDPConn, clientAddr, cached, d.Address())
+		log.Info("[DNS_CACHE] hit", "domain", domain, "qtype", qtype, "direct", isDirect)
+		if s.router.ShouldIPV6Disable() && cached.Question[0].Qtype == dns.TypeAAAA {
+			cached.Answer = nil
 		}
+		cached.Id = msg.Id
+		return responseDNSMsg(srv.UDPConn, clientAddr, cached, d.Address())
+	}
 
 	if isDirect {
 		log.Info("[DNS_DIRECT]", "domain", domain, "qtype", qtype)
@@ -95,21 +95,21 @@ func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAdd
 		}
 		_ = s.dnsCache.Set(resp, true)
 
-			qtype := dns.TypeToString[msg.Question[0].Qtype]
-			log.Info("[DNS_DIRECT] result", "domain", domain, "qtype", qtype, "answers", util.DNSAnswerStrings(resp))
+		qtype := dns.TypeToString[msg.Question[0].Qtype]
+		log.Info("[DNS_DIRECT] result", "domain", domain, "qtype", qtype, "answers", util.DNSAnswerStrings(resp))
 
-			if s.router.IsCustomDirectDomain(domain) {
-				for _, ans := range resp.Answer {
-					switch a := ans.(type) {
-					case *dns.A:
-						s.router.AddDirectIP(a.A.String())
-					case *dns.AAAA:
-						s.router.AddDirectIP(a.AAAA.String())
-					case *dns.CNAME:
-						s.router.AddDirectDomain(strings.TrimSuffix(a.Target, "."))
-					}
+		if s.router.IsCustomDirectDomain(domain) {
+			for _, ans := range resp.Answer {
+				switch a := ans.(type) {
+				case *dns.A:
+					s.router.AddDirectIP(a.A.String())
+				case *dns.AAAA:
+					s.router.AddDirectIP(a.AAAA.String())
+				case *dns.CNAME:
+					s.router.AddDirectDomain(strings.TrimSuffix(a.Target, "."))
 				}
 			}
+		}
 
 		resp.Id = msg.Id
 		return responseDNSMsg(srv.UDPConn, clientAddr, resp, d.Address())
@@ -236,18 +236,18 @@ func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAd
 			qtype := dns.TypeToString[msg.Question[0].Qtype]
 			log.Info("[DNS_PROXY] result", "domain", domain, "qtype", qtype, "answers", util.DNSAnswerStrings(msg))
 
-				if s.router.IsCustomProxyDomain(domain) {
-					for _, ans := range msg.Answer {
-						switch a := ans.(type) {
-						case *dns.A:
-							s.router.AddProxyIP(a.A.String())
-						case *dns.AAAA:
-							s.router.AddProxyIP(a.AAAA.String())
-						case *dns.CNAME:
-							s.router.AddProxyDomain(strings.TrimSuffix(a.Target, "."))
-						}
+			if s.router.IsCustomProxyDomain(domain) {
+				for _, ans := range msg.Answer {
+					switch a := ans.(type) {
+					case *dns.A:
+						s.router.AddProxyIP(a.A.String())
+					case *dns.AAAA:
+						s.router.AddProxyIP(a.AAAA.String())
+					case *dns.CNAME:
+						s.router.AddProxyDomain(strings.TrimSuffix(a.Target, "."))
 					}
 				}
+			}
 		}
 		s.sendToClient(srv, clientAddr, data, target)
 	}

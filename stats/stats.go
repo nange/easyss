@@ -14,8 +14,8 @@ type stats struct {
 	bytesSent          atomic.Int64
 	bytesRecv          atomic.Int64
 
-	rawBytesSent  atomic.Int64
-	rawBytesRecv  atomic.Int64
+	rawBytesSent    atomic.Int64
+	rawBytesRecv    atomic.Int64
 	tcpConnections  atomic.Int64
 	udpAssociations atomic.Int64
 
@@ -42,15 +42,15 @@ type stats struct {
 
 // --- recorder methods ---
 
-func RecordStreamOpened()    { g.totalStreamsOpened.Add(1) }
-func RecordStreamClosed()    { g.totalStreamsClosed.Add(1) }
-func RecordBytesSent(n int)  { g.bytesSent.Add(int64(n)) }
-func RecordBytesRecv(n int)  { g.bytesRecv.Add(int64(n)) }
+func RecordStreamOpened()   { g.totalStreamsOpened.Add(1) }
+func RecordStreamClosed()   { g.totalStreamsClosed.Add(1) }
+func RecordBytesSent(n int) { g.bytesSent.Add(int64(n)) }
+func RecordBytesRecv(n int) { g.bytesRecv.Add(int64(n)) }
 
-func RecordRawBytesSent(n int)  { g.rawBytesSent.Add(int64(n)) }
-func RecordRawBytesRecv(n int)  { g.rawBytesRecv.Add(int64(n)) }
-func RecordTCPConnection()        { g.tcpConnections.Add(1) }
-func RecordUDPAssociation()       { g.udpAssociations.Add(1) }
+func RecordRawBytesSent(n int) { g.rawBytesSent.Add(int64(n)) }
+func RecordRawBytesRecv(n int) { g.rawBytesRecv.Add(int64(n)) }
+func RecordTCPConnection()     { g.tcpConnections.Add(1) }
+func RecordUDPAssociation()    { g.udpAssociations.Add(1) }
 
 func RecordDNSCacheHit()    { g.dnsCacheHits.Add(1) }
 func RecordDNSCacheMiss()   { g.dnsCacheMisses.Add(1) }
@@ -74,28 +74,28 @@ func RecordServerFallbackPage()   { g.serverFallbackPages.Add(1) }
 
 // Snapshot is a point-in-time copy of all counters.
 type Snapshot struct {
-	TotalStreamsOpened int64     `json:"total_streams_opened"`
-	TotalStreamsClosed int64     `json:"total_streams_closed"`
-	BytesSent          int64     `json:"bytes_sent"`
-	BytesRecv          int64     `json:"bytes_recv"`
-	RawBytesSent     int64     `json:"raw_bytes_sent"`
-	RawBytesRecv     int64     `json:"raw_bytes_recv"`
-	TCPConnections     int64     `json:"tcp_connections"`
-	UDPAssociations    int64     `json:"udp_associations"`
-	DNSCacheHits       int64     `json:"dns_cache_hits"`
-	DNSCacheMisses     int64     `json:"dns_cache_misses"`
-	DNSProxyQueries    int64     `json:"dns_proxy_queries"`
-	DNSDirectQueries   int64     `json:"dns_direct_queries"`
-	PaddingBytes       int64     `json:"padding_bytes"`
-	RecordsWritten     int64     `json:"records_written"`
-	RTTCount           int64     `json:"rtt_count"`
-	RTTSum             int64     `json:"rtt_sum_ns"`
+	TotalStreamsOpened    int64     `json:"total_streams_opened"`
+	TotalStreamsClosed    int64     `json:"total_streams_closed"`
+	BytesSent             int64     `json:"bytes_sent"`
+	BytesRecv             int64     `json:"bytes_recv"`
+	RawBytesSent          int64     `json:"raw_bytes_sent"`
+	RawBytesRecv          int64     `json:"raw_bytes_recv"`
+	TCPConnections        int64     `json:"tcp_connections"`
+	UDPAssociations       int64     `json:"udp_associations"`
+	DNSCacheHits          int64     `json:"dns_cache_hits"`
+	DNSCacheMisses        int64     `json:"dns_cache_misses"`
+	DNSProxyQueries       int64     `json:"dns_proxy_queries"`
+	DNSDirectQueries      int64     `json:"dns_direct_queries"`
+	PaddingBytes          int64     `json:"padding_bytes"`
+	RecordsWritten        int64     `json:"records_written"`
+	RTTCount              int64     `json:"rtt_count"`
+	RTTSum                int64     `json:"rtt_sum_ns"`
 	ServerTCPStreams      int64     `json:"server_tcp_streams"`
 	ServerUDPStreams      int64     `json:"server_udp_streams"`
 	ServerICMPStreams     int64     `json:"server_icmp_streams"`
 	ServerHandshakeErrors int64     `json:"server_handshake_errors"`
 	ServerFallbackPages   int64     `json:"server_fallback_pages"`
-	StartTime          time.Time `json:"start_time"`
+	StartTime             time.Time `json:"start_time"`
 }
 
 // ActiveStreams returns the current count of streams opened but not yet closed.
@@ -118,28 +118,28 @@ func (s Snapshot) Uptime() time.Duration {
 // Collect returns a point-in-time copy of all counters.
 func Collect() Snapshot {
 	return Snapshot{
-		TotalStreamsOpened: g.totalStreamsOpened.Load(),
-		TotalStreamsClosed: g.totalStreamsClosed.Load(),
-		BytesSent:          g.bytesSent.Load(),
-		BytesRecv:          g.bytesRecv.Load(),
-		RawBytesSent:     g.rawBytesSent.Load(),
-		RawBytesRecv:     g.rawBytesRecv.Load(),
-		TCPConnections:     g.tcpConnections.Load(),
-		UDPAssociations:    g.udpAssociations.Load(),
-		DNSCacheHits:       g.dnsCacheHits.Load(),
-		DNSCacheMisses:     g.dnsCacheMisses.Load(),
-		DNSProxyQueries:    g.dnsProxyQueries.Load(),
-		DNSDirectQueries:   g.dnsDirectQueries.Load(),
-		PaddingBytes:       g.paddingBytes.Load(),
-		RecordsWritten:     g.recordsWritten.Load(),
-		RTTSum:             g.rttSum.Load(),
-		RTTCount:           g.rttCount.Load(),
+		TotalStreamsOpened:    g.totalStreamsOpened.Load(),
+		TotalStreamsClosed:    g.totalStreamsClosed.Load(),
+		BytesSent:             g.bytesSent.Load(),
+		BytesRecv:             g.bytesRecv.Load(),
+		RawBytesSent:          g.rawBytesSent.Load(),
+		RawBytesRecv:          g.rawBytesRecv.Load(),
+		TCPConnections:        g.tcpConnections.Load(),
+		UDPAssociations:       g.udpAssociations.Load(),
+		DNSCacheHits:          g.dnsCacheHits.Load(),
+		DNSCacheMisses:        g.dnsCacheMisses.Load(),
+		DNSProxyQueries:       g.dnsProxyQueries.Load(),
+		DNSDirectQueries:      g.dnsDirectQueries.Load(),
+		PaddingBytes:          g.paddingBytes.Load(),
+		RecordsWritten:        g.recordsWritten.Load(),
+		RTTSum:                g.rttSum.Load(),
+		RTTCount:              g.rttCount.Load(),
 		ServerTCPStreams:      g.serverTCPStreams.Load(),
 		ServerUDPStreams:      g.serverUDPStreams.Load(),
 		ServerICMPStreams:     g.serverICMPStreams.Load(),
 		ServerHandshakeErrors: g.serverHandshakeErrors.Load(),
 		ServerFallbackPages:   g.serverFallbackPages.Load(),
-		StartTime:          g.startTime,
+		StartTime:             g.startTime,
 	}
 }
 

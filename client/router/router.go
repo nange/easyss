@@ -437,4 +437,3 @@ func (r *Router) SetIPV6Info(networking bool, serverIPV6 string) {
 func (r *Router) ServerIPV6() string {
 	return r.cfg.ServerIPV6
 }
-
