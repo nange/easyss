@@ -42,7 +42,7 @@ func TestNewProxyHandler(t *testing.T) {
 			MasterKey:        []byte("test-key-32-bytes-long!!!!!!!"),
 			AllowedMethods:   nil,
 			HandshakeTimeout: 5 * time.Second,
-			StreamIdleTimeout: 120 * time.Second,
+			StreamIdleTimeout: 300 * time.Second,
 			UDPIdleTimeout:   30 * time.Second,
 		}
 		h := NewProxyHandler(cfg)
@@ -65,7 +65,7 @@ func TestNewProxyHandler(t *testing.T) {
 			MasterKey:        []byte("test-key-32-bytes-long!!!!!!!"),
 			AllowedMethods:   []string{"aes-256-gcm"},
 			HandshakeTimeout: 5 * time.Second,
-			StreamIdleTimeout: 120 * time.Second,
+			StreamIdleTimeout: 300 * time.Second,
 			UDPIdleTimeout:   30 * time.Second,
 		}
 		h := NewProxyHandler(cfg)
@@ -85,7 +85,7 @@ func TestNewProxyHandler(t *testing.T) {
 			MasterKey:        []byte("test-key-32-bytes-long!!!!!!!"),
 			AllowedMethods:   []string{"invalid-method", "aes-256-gcm"},
 			HandshakeTimeout: 5 * time.Second,
-			StreamIdleTimeout: 120 * time.Second,
+			StreamIdleTimeout: 300 * time.Second,
 			UDPIdleTimeout:   30 * time.Second,
 		}
 		h := NewProxyHandler(cfg)
@@ -98,7 +98,7 @@ func TestNewProxyHandler(t *testing.T) {
 		cfg := ProxyHandlerConfig{
 			MasterKey:        []byte("test-key-32-bytes-long!!!!!!!"),
 			HandshakeTimeout: 5 * time.Second,
-			StreamIdleTimeout: 120 * time.Second,
+			StreamIdleTimeout: 300 * time.Second,
 			UDPIdleTimeout:   30 * time.Second,
 		}
 		h := NewProxyHandler(cfg)
@@ -112,7 +112,7 @@ func TestNewProxyHandler(t *testing.T) {
 			MasterKey:        []byte("test-key-32-bytes-long!!!!!!!"),
 			BatchWindowMS:    100,
 			HandshakeTimeout: 5 * time.Second,
-			StreamIdleTimeout: 120 * time.Second,
+			StreamIdleTimeout: 300 * time.Second,
 			UDPIdleTimeout:   30 * time.Second,
 		}
 		h := NewProxyHandler(cfg)
@@ -125,7 +125,7 @@ func TestNewProxyHandler(t *testing.T) {
 		cfg := ProxyHandlerConfig{
 			MasterKey:        []byte("test-key-32-bytes-long!!!!!!!"),
 			HandshakeTimeout: 5 * time.Second,
-			StreamIdleTimeout: 120 * time.Second,
+			StreamIdleTimeout: 300 * time.Second,
 			UDPIdleTimeout:   30 * time.Second,
 		}
 		h := NewProxyHandler(cfg)

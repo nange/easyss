@@ -308,7 +308,7 @@ func newTestHarness(t *testing.T) *testHarness {
 
 	// Create stream handler
 	timeout := clientCfg.TimeoutDuration()
-	streamIdleTimeout := 4 * timeout
+	streamIdleTimeout := 10 * timeout
 	udpIdleTimeout := 2 * timeout
 	shaperCfg := shaper.Config{
 			BatchWindowMS: clientCfg.Shaper.BatchWindowMS,

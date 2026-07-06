@@ -244,14 +244,14 @@ func (a *App) Start() error {
 	}
 
 	shaperCfg := shaper.Config{
-			BatchWindowMS: a.cfg.Shaper.BatchWindowMS,
-			Cover: shaper.CoverConfig{
-				BudgetRatio: a.cfg.Shaper.CoverBudgetRatio,
-			},
-		}
+		BatchWindowMS: a.cfg.Shaper.BatchWindowMS,
+		Cover: shaper.CoverConfig{
+			BudgetRatio: a.cfg.Shaper.CoverBudgetRatio,
+		},
+	}
 
 	timeout := a.cfg.TimeoutDuration()
-	streamIdleTimeout := 4 * timeout
+	streamIdleTimeout := 10 * timeout
 	udpIdleTimeout := 2 * timeout
 	a.streamHandler = proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, streamIdleTimeout)
 	a.streamHandler.OnRTT = cli.LatencyTracker().Record

@@ -281,7 +281,7 @@ func (s *Server) Start() error {
 		log.Info("[SERVER] next proxy configured", "url", s.cfg.NextProxy.URL, "udp", s.cfg.NextProxy.EnableUDP, "all_host", s.cfg.NextProxy.AllHost)
 	}
 
-	streamIdleTimeout := 4 * timeout
+	streamIdleTimeout := 10 * timeout
 
 	proxyHandler := handler.NewProxyHandler(handler.ProxyHandlerConfig{
 		MasterKey:         masterKey,
