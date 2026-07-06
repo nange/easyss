@@ -55,6 +55,10 @@ type Manager struct {
 	dev       DeviceConfig
 	running   bool
 	originDNS []string // original system DNS before TUN starts (darwin only)
+
+	ctx    context.Context    // cancels an in-progress Start()
+	cancel context.CancelFunc // stored so Stop() can cancel the Start() goroutine
+	done   chan struct{}      // closed when Start() finishes (success or failure)
 }
 
 func New(cfg Config) *Manager {
@@ -130,6 +134,17 @@ func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
 		return fmt.Errorf("tun: unsupported os %s", runtime.GOOS)
 	}
 
+	m.ctx, m.cancel = context.WithCancel(context.Background())
+	m.done = make(chan struct{})
+	defer close(m.done)
+
+	// Fast-path: already cancelled before we begin.
+	select {
+	case <-m.ctx.Done():
+		return m.ctx.Err()
+	default:
+	}
+
 	if icmpH != nil {
 		engine.SetICMPHandler(icmpH)
 	}
@@ -148,6 +163,14 @@ func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
 	engine.Insert(key)
 	engine.Start()
 
+	// Allow Stop() to cancel us before we touch routes / DNS.
+	select {
+	case <-m.ctx.Done():
+		engine.Stop()
+		return m.ctx.Err()
+	default:
+	}
+
 	time.Sleep(500 * time.Millisecond)
 
 	// Save original DNS and set TUN DNS on darwin.
@@ -162,12 +185,32 @@ func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
 		return fmt.Errorf("tun: create device: %w", err)
 	}
 
+	// Final check: if Stop() cancelled us while the platform script was
+	// running, undo everything we just set up.
+	select {
+	case <-m.ctx.Done():
+		engine.Stop()
+		_ = m.closeTunDevAndDelIPRoute()
+		if runtime.GOOS == "darwin" {
+			_ = m.restoreDNS()
+		}
+		return m.ctx.Err()
+	default:
+	}
+
 	m.running = true
 	log.Info("[TUN] tun2socks started", "device", m.cfg.Device, "proxy", m.cfg.Socks5Addr)
 	return nil
 }
 
 func (m *Manager) Stop() {
+	// If Start() is still in progress, cancel it and wait for it to
+	// finish cleaning up before we proceed.
+	if m.cancel != nil {
+		m.cancel()
+		<-m.done
+	}
+
 	if !m.running {
 		return
 	}
@@ -196,7 +239,7 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 		return fmt.Errorf("tun: no create script for %s", runtime.GOOS)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(m.ctx, 60*time.Second)
 	defer cancel()
 
 	namePath, err := util.WriteToTemp(scripts.CreateTunFilename, scripts.CreateTunBytes)
