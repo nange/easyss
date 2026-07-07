@@ -28,6 +28,7 @@ type Client struct {
 	masterKey      []byte
 	dialer         *dialer.Dialer
 	latencyTracker *LatencyTracker
+	closeIdleDone  chan struct{}
 
 	mu sync.RWMutex
 }
@@ -90,7 +91,7 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		},
 	}
 
-	return &Client{
+	client := &Client{
 		cfg:            cfg,
 		router:         rt,
 		transport:      tr,
@@ -98,7 +99,12 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		masterKey:      masterKey,
 		dialer:         directDialer,
 		latencyTracker: NewLatencyTracker(time.Duration(cfg.LatencyOffsetMS) * time.Millisecond),
-	}, nil
+		closeIdleDone:  make(chan struct{}),
+	}
+
+	go client.closeIdleLoop()
+
+	return client, nil
 }
 
 func newDirectDialer() (*dialer.Dialer, string) {
@@ -213,7 +219,21 @@ func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	close(c.closeIdleDone)
 	return c.transport.Close()
+}
+
+func (c *Client) closeIdleLoop() {
+	ticker := time.NewTicker(2 * c.cfg.TimeoutDuration())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			c.transport.CloseIdle()
+		case <-c.closeIdleDone:
+			return
+		}
+	}
 }
 
 func (c *Client) SetProxyRule(rule string) {

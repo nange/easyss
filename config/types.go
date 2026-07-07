@@ -6,9 +6,9 @@ const (
 	DefaultConnCountMax  = 6
 	DefaultBatchWindowMS = 3
 
-	HTTP2ServerMaxReadFrameSize           = 1<<24 - 1 // 16MB-1，nginx/Cloudflare 主流值
-	HTTP2ServerReceiveBufferPerConnection = 65535     // 不发送连接级 WINDOW_UPDATE（nginx 行为）
-	HTTP2ServerReceiveBufferPerStream     = 65535     // SETTINGS_INITIAL_WINDOW_SIZE=64KB（spec 默认）
+	HTTP2ServerMaxReadFrameSize           = 1<<24 - 1  // 16MB-1，nginx/Cloudflare 主流值
+	HTTP2ServerReceiveBufferPerConnection = 1 << 20    // 1MB，避免 64KB 瓶颈导致长期运行吞吐量下降
+	HTTP2ServerReceiveBufferPerStream     = 256 * 1024 // 256KB，流级别接收窗口
 
 	HTTP2ClientMaxReadFrameSize           = 1 * 1024 * 1024  // 1MB，Chrome MAX_FRAME_SIZE
 	HTTP2ClientReceiveBufferPerConnection = 15 * 1024 * 1024 // ~15MB，Chrome 连接级窗口

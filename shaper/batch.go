@@ -132,6 +132,13 @@ func (bs *batchShaper) flush() error {
 		return err
 	}
 
+	// Return cover frame payloads to the pool after encoding.
+	for _, f := range bs.frames {
+		if f.Type == protocol.FrameCOVER && len(f.Payload) > 0 {
+			bytespool.MustPut(f.Payload)
+		}
+	}
+
 	bs.frames = bs.frames[:0]
 	bs.batchSize = 0
 	return nil

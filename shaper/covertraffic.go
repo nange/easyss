@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/util/bytespool"
 )
 
 type coverInjector struct {
@@ -95,7 +96,7 @@ func (ci *coverInjector) randomSize(maxFrameSize int) int {
 }
 
 func (ci *coverInjector) generateFrame(size int) protocol.Frame {
-	payload := make([]byte, size)
+	payload := bytespool.Get(size)[:size]
 	_, _ = cryptorand.Read(payload)
 	return protocol.Frame{
 		Type:    protocol.FrameCOVER,
