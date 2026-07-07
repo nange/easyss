@@ -19,7 +19,10 @@ type coverInjector struct {
 }
 
 func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClosing func() bool) *coverInjector {
-	if cfg.BudgetRatio <= 0 || cfg.BudgetRatio > 1 {
+	if cfg.BudgetRatio == 0 {
+		return nil
+	}
+	if cfg.BudgetRatio < 0 || cfg.BudgetRatio > 1 {
 		cfg.BudgetRatio = 0.10
 	}
 	if cfg.IdleTimeout <= 0 {

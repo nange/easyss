@@ -72,6 +72,13 @@ func Bidirectional(idleTimeout time.Duration, onClose func(), srcToDst, dstToSrc
 			if onClose != nil {
 				onClose()
 			}
+			// Drain both goroutine results so they can exit cleanly.
+			for i := 0; i < 2; i++ {
+				select {
+				case <-errCh:
+				default:
+				}
+			}
 			return Result{
 				Err:      fmt.Errorf("relay idle timeout after %v", idleTimeout),
 				IdleMsg:  fmt.Sprintf("idle timeout after %v", idleTimeout),
