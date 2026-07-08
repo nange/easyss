@@ -55,8 +55,8 @@ func main() {
 	flag.BoolVar(&disableTray, "disable-tray", false, "disable system tray (windows/mac only)")
 	flag.BoolVar(&enableTun2socks, "enable-tun2socks", false, "enable tun2socks model")
 	flag.StringVar(&cmdIPV6Rule, "ipv6-rule", "", "set the ipv6 rule(auto, enable, disable), default: auto")
-	flag.StringVar(&cmdDirectFile, "direct-file", "", "custom direct file (IPs/CIDRs/domains mixed, one per line)")
-	flag.StringVar(&cmdProxyFile, "proxy-file", "", "custom proxy file (IPs/CIDRs/domains mixed, one per line)")
+	flag.StringVar(&cmdDirectFile, "direct-file", "", "custom direct file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
+	flag.StringVar(&cmdProxyFile, "proxy-file", "", "custom proxy file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
 	flag.BoolVar(&pprofEnabled, "pprof", false, "enable pprof debug server on :6060")
 
 	flag.Parse()

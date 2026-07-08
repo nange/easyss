@@ -134,6 +134,15 @@ func (gs *GeoSite) FullMatch(domain string) bool {
 	return false
 }
 
+// globToRegexp converts a glob-like pattern (using * as wildcard) to a compiled
+// regular expression. The * matches any sequence of characters. Anchors ^ and $
+// are added so the pattern must match the entire input string.
+func globToRegexp(pattern string) (*regexp.Regexp, error) {
+	escaped := regexp.QuoteMeta(pattern)
+	reStr := strings.ReplaceAll(escaped, `\*`, `.*`)
+	return regexp.Compile(`^` + reStr + `$`)
+}
+
 type Config struct {
 	ProxyRule       ProxyRule
 	IPV6Rule        IPV6Rule
@@ -158,9 +167,11 @@ type Router struct {
 	customDirectIPs     map[string]struct{}
 	customDirectCIDRIPs []*net.IPNet
 	customDirectDomains map[string]struct{}
+	customDirectRegexps []*regexp.Regexp
 	customProxyIPs      map[string]struct{}
 	customProxyCIDRIPs  []*net.IPNet
 	customProxyDomains  map[string]struct{}
+	customProxyRegexps  []*regexp.Regexp
 }
 
 func New(cfg Config) (*Router, error) {
@@ -197,6 +208,20 @@ func (r *Router) loadCustomIPDomains() error {
 			return err
 		}
 		for k := range entries {
+			if strings.HasPrefix(k, "regexp:") {
+				re, err := regexp.Compile(k[7:])
+				if err == nil {
+					r.customDirectRegexps = append(r.customDirectRegexps, re)
+				}
+				continue
+			}
+			if strings.Contains(k, "*") {
+				re, err := globToRegexp(k)
+				if err == nil {
+					r.customDirectRegexps = append(r.customDirectRegexps, re)
+				}
+				continue
+			}
 			_, ipnet, err := net.ParseCIDR(k)
 			if err == nil && ipnet != nil {
 				r.customDirectCIDRIPs = append(r.customDirectCIDRIPs, ipnet)
@@ -216,6 +241,20 @@ func (r *Router) loadCustomIPDomains() error {
 			return err
 		}
 		for k := range entries {
+			if strings.HasPrefix(k, "regexp:") {
+				re, err := regexp.Compile(k[7:])
+				if err == nil {
+					r.customProxyRegexps = append(r.customProxyRegexps, re)
+				}
+				continue
+			}
+			if strings.Contains(k, "*") {
+				re, err := globToRegexp(k)
+				if err == nil {
+					r.customProxyRegexps = append(r.customProxyRegexps, re)
+				}
+				continue
+			}
 			_, ipnet, err := net.ParseCIDR(k)
 			if err == nil && ipnet != nil {
 				r.customProxyCIDRIPs = append(r.customProxyCIDRIPs, ipnet)
@@ -286,6 +325,11 @@ func (r *Router) hostMatchCustomDirect(host string) bool {
 				return true
 			}
 		}
+		for _, re := range r.customDirectRegexps {
+			if re.MatchString(host) {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -310,6 +354,11 @@ func (r *Router) hostMatchCustomProxy(host string) bool {
 		subs := util.SubDomains(host)
 		for _, sub := range subs {
 			if _, ok := r.customProxyDomains[sub]; ok {
+				return true
+			}
+		}
+		for _, re := range r.customProxyRegexps {
+			if re.MatchString(host) {
 				return true
 			}
 		}
@@ -378,7 +427,7 @@ func (r *Router) AddProxyDomain(domain string) {
 }
 
 // IsCustomDirectDomain checks whether a domain is in the custom direct domain list
-// (including subdomain matching).
+// (including subdomain matching and regexp/glob rules).
 func (r *Router) IsCustomDirectDomain(domain string) bool {
 	r.customMu.RLock()
 	defer r.customMu.RUnlock()
@@ -390,11 +439,16 @@ func (r *Router) IsCustomDirectDomain(domain string) bool {
 			return true
 		}
 	}
+	for _, re := range r.customDirectRegexps {
+		if re.MatchString(domain) {
+			return true
+		}
+	}
 	return false
 }
 
 // IsCustomProxyDomain checks whether a domain is in the custom proxy domain list
-// (including subdomain matching).
+// (including subdomain matching and regexp/glob rules).
 func (r *Router) IsCustomProxyDomain(domain string) bool {
 	r.customMu.RLock()
 	defer r.customMu.RUnlock()
@@ -403,6 +457,11 @@ func (r *Router) IsCustomProxyDomain(domain string) bool {
 	}
 	for _, sub := range util.SubDomains(domain) {
 		if _, ok := r.customProxyDomains[sub]; ok {
+			return true
+		}
+	}
+	for _, re := range r.customProxyRegexps {
+		if re.MatchString(domain) {
 			return true
 		}
 	}

@@ -1,6 +1,7 @@
 package router
 
 import (
+	"regexp"
 	"testing"
 
 	"github.com/nange/easyss/v3/util"
@@ -498,5 +499,196 @@ func TestRouter_hostAtCN(t *testing.T) {
 				t.Errorf("hostAtCN(%q) = %v, want %v", tt.host, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestGlobToRegexp(t *testing.T) {
+	tests := []struct {
+		pattern string
+		domain  string
+		want    bool
+	}{
+		// *google* — 包含 google 的域名
+		{"*google*", "google.com", true},
+		{"*google*", "www.google.com", true},
+		{"*google*", "mail.googleapis.com", true},
+		{"*google*", "mygoogleapp.com", true},
+		{"*google*", "facebook.com", false},
+		// *.example.com — 子域名匹配
+		{"*.example.com", "www.example.com", true},
+		{"*.example.com", "mail.example.com", true},
+		{"*.example.com", "a.b.example.com", true},
+		{"*.example.com", "example.com", false},
+		{"*.example.com", "notexample.com", false},
+		// google* — 以 google 开头
+		{"google*", "google.com", true},
+		{"google*", "googleapis.com", true},
+		{"google*", "mygoogle.com", false},
+		// *.google.* — 包含 google 且两边有点
+		{"*.google.*", "www.google.com", true},
+		{"*.google.*", "api.google.hk", true},
+		{"*.google.*", "google.com", false},
+		{"*.google.*", "mygoogle.com", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.pattern+"/"+tt.domain, func(t *testing.T) {
+			re, err := globToRegexp(tt.pattern)
+			if err != nil {
+				t.Fatalf("globToRegexp(%q) error: %v", tt.pattern, err)
+			}
+			got := re.MatchString(tt.domain)
+			if got != tt.want {
+				t.Errorf("globToRegexp(%q).MatchString(%q) = %v, want %v", tt.pattern, tt.domain, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRouter_RegexpAndGlobCustomDomain(t *testing.T) {
+	// 构造 Router，仅测试自定义正则/通配符规则（不依赖文件读取）
+	r := &Router{
+		customDirectIPs:     make(map[string]struct{}),
+		customDirectCIDRIPs: nil,
+		customDirectDomains: make(map[string]struct{}),
+		customDirectRegexps: nil,
+		customProxyIPs:      make(map[string]struct{}),
+		customProxyCIDRIPs:  nil,
+		customProxyDomains:  make(map[string]struct{}),
+		customProxyRegexps:  nil,
+	}
+	r.proxyRule.Store(int32(ProxyRuleAuto))
+
+	// 手动添加 regexp 和 glob 规则（模拟 loadCustomIPDomains 的行为）
+	directRe1, _ := regexp.Compile(`^.*\.baidu\.com$`) // regexp: 前缀
+	directRe2, _ := globToRegexp("*taobao*")           // glob 通配符
+	r.customDirectRegexps = append(r.customDirectRegexps, directRe1, directRe2)
+
+	proxyRe1, _ := globToRegexp("*google*")            // glob 通配符
+	proxyRe2, _ := regexp.Compile(`^.*\.youtube\..*$`) // regexp: 前缀
+	r.customProxyRegexps = append(r.customProxyRegexps, proxyRe1, proxyRe2)
+
+	// === 测试 hostMatchCustomDirect ===
+	directTests := []struct {
+		host string
+		want bool
+	}{
+		{"www.baidu.com", true},
+		{"tieba.baidu.com", true},
+		{"api.taobao.com", true},
+		{"www.taobao.com", true},
+		{"mytaobaoapp.com", true},
+		{"www.google.com", false},
+		{"example.com", false},
+	}
+	for _, tt := range directTests {
+		t.Run("direct/"+tt.host, func(t *testing.T) {
+			got := r.hostMatchCustomDirect(tt.host)
+			if got != tt.want {
+				t.Errorf("hostMatchCustomDirect(%q) = %v, want %v", tt.host, got, tt.want)
+			}
+		})
+	}
+
+	// === 测试 hostMatchCustomProxy ===
+	proxyTests := []struct {
+		host string
+		want bool
+	}{
+		{"www.google.com", true},
+		{"mail.googleapis.com", true},
+		{"mygoogleapp.com", true},
+		{"www.youtube.com", true},
+		{"music.youtube.com", true},
+		{"www.baidu.com", false},
+		{"example.com", false},
+	}
+	for _, tt := range proxyTests {
+		t.Run("proxy/"+tt.host, func(t *testing.T) {
+			got := r.hostMatchCustomProxy(tt.host)
+			if got != tt.want {
+				t.Errorf("hostMatchCustomProxy(%q) = %v, want %v", tt.host, got, tt.want)
+			}
+		})
+	}
+
+	// === 测试 IsCustomDirectDomain ===
+	isDirectTests := []struct {
+		domain string
+		want   bool
+	}{
+		{"www.baidu.com", true},
+		{"api.taobao.com", true},
+		{"www.google.com", false},
+		{"", false},
+	}
+	for _, tt := range isDirectTests {
+		t.Run("IsDirect/"+tt.domain, func(t *testing.T) {
+			got := r.IsCustomDirectDomain(tt.domain)
+			if got != tt.want {
+				t.Errorf("IsCustomDirectDomain(%q) = %v, want %v", tt.domain, got, tt.want)
+			}
+		})
+	}
+
+	// === 测试 IsCustomProxyDomain ===
+	isProxyTests := []struct {
+		domain string
+		want   bool
+	}{
+		{"www.google.com", true},
+		{"www.youtube.com", true},
+		{"www.baidu.com", false},
+		{"", false},
+	}
+	for _, tt := range isProxyTests {
+		t.Run("IsProxy/"+tt.domain, func(t *testing.T) {
+			got := r.IsCustomProxyDomain(tt.domain)
+			if got != tt.want {
+				t.Errorf("IsCustomProxyDomain(%q) = %v, want %v", tt.domain, got, tt.want)
+			}
+		})
+	}
+
+	// === 测试 MatchHostRule 正确集成 ===
+	matchTests := []struct {
+		host string
+		want HostRule
+	}{
+		{"www.baidu.com", HostRuleDirect}, // 匹配 direct regexp
+		{"www.google.com", HostRuleProxy}, // 匹配 proxy glob
+	}
+	for _, tt := range matchTests {
+		t.Run("Match/"+tt.host, func(t *testing.T) {
+			got := r.MatchHostRule(tt.host)
+			if got != tt.want {
+				t.Errorf("MatchHostRule(%q) = %d, want %d", tt.host, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRouter_RegexpInvalidSkips(t *testing.T) {
+	// 验证无效的正则表达式被静默跳过（与 NewGeoSite 行为一致）
+	invalidRe, _ := regexp.Compile(`^valid$`) // 末尾加一个无效的不会被添加
+	r := &Router{
+		customDirectRegexps: []*regexp.Regexp{invalidRe},
+		customDirectIPs:     make(map[string]struct{}),
+		customDirectCIDRIPs: nil,
+		customDirectDomains: make(map[string]struct{}),
+		customProxyIPs:      make(map[string]struct{}),
+		customProxyCIDRIPs:  nil,
+		customProxyDomains:  make(map[string]struct{}),
+		customProxyRegexps:  nil,
+	}
+	r.proxyRule.Store(int32(ProxyRuleAuto))
+
+	// valid 正则应匹配
+	if !r.hostMatchCustomDirect("valid") {
+		t.Error("expected 'valid' to match")
+	}
+	// 无效的正则应不匹配
+	if r.hostMatchCustomDirect("invalid") {
+		t.Error("expected 'invalid' not to match")
 	}
 }

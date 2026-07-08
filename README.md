@@ -88,8 +88,8 @@ Easyss v3 支持两种配置模式，自动识别：
 | `outbound_proto` | 否 | native | 出口协议，可选: `native`, `h2`（效果相同，均为 HTTP/2） |
 | `log_level` | 否 | info | 日志级别，可选: `debug`, `info`, `warn`, `error` |
 | `log_file_path` | 否 | 空 | 日志文件路径，为空则输出到标准输出 |
-| `direct_file` | 否 | 空 | 自定义直连文件路径（IP/CIDR/域名混写，每行一条） |
-| `proxy_file` | 否 | 空 | 自定义代理文件路径（IP/CIDR/域名混写，每行一条） |
+| `direct_file` | 否 | 空 | 自定义直连文件路径（IP/CIDR/域名/正则混写，每行一条，支持 `regexp:` 和 `*` 通配符） |
+| `proxy_file` | 否 | 空 | 自定义代理文件路径（IP/CIDR/域名/正则混写，每行一条，支持 `regexp:` 和 `*` 通配符） |
 
 除 3 个必填参数外，其他均为可选。以上未列出的字段（如 `sn`, `ca_path`, `http_port`, `ipv6_rule`, `enable_quic` 等）也可在简化模式中使用，会自动迁移到 v3 完整格式。
 
@@ -253,6 +253,8 @@ Easyss 通过检测配置文件自动区分模式：
 baidu.com
 taobao.com
 your-custom-domain.com
+*cn-*                    # glob 通配符：匹配所有包含 "cn-" 的域名
+regexp:^.*\.mycdn\.com$  # 正则表达式：匹配 mycdn.com 及其子域名
 ```
 
 `proxy.txt` 示例（代理白名单，匹配到则强制走代理）：
@@ -262,11 +264,18 @@ your-custom-domain.com
 10.0.0.0/8
 google.com
 twitter.com
+*google*                 # glob 通配符：匹配所有包含 "google" 的域名
+regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 ```
 
 **匹配规则：**
 
-* 每行自动识别类型：IP → 精确匹配，CIDR → 网段匹配，其他 → 域名匹配
+* 每行自动识别类型（按优先级）：
+    1. `regexp:` 前缀 → Go 正则表达式匹配
+    2. 包含 `*` → glob 通配符匹配（`*` 匹配任意字符序列）
+    3. IP → 精确匹配
+    4. CIDR → 网段匹配
+    5. 其他 → 域名匹配（支持子域名）
 * 域名支持子域名匹配（如配置 `google.com`，则 `www.google.com`、`mail.google.com` 也会匹配）
 * 路由优先级：自定义直连 > 自定义代理 > auto/geo 规则
 
