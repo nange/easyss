@@ -224,7 +224,7 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) closeIdleLoop() {
-	ticker := time.NewTicker(2 * c.cfg.TimeoutDuration())
+	ticker := time.NewTicker(8 * c.cfg.TimeoutDuration())
 	defer ticker.Stop()
 	for {
 		select {
