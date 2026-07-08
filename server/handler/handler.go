@@ -33,6 +33,7 @@ type ProxyHandlerConfig struct {
 	MasterKey         []byte
 	AllowedMethods    []string
 	HandshakeTimeout  time.Duration
+	Timeout           time.Duration
 	StreamIdleTimeout time.Duration
 	UDPIdleTimeout    time.Duration
 	BatchWindowMS     int
@@ -66,7 +67,7 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 		handshakeTimeout: cfg.HandshakeTimeout,
 		batchWindowMS:    batchWindowMS,
 		nextProxy:        cfg.NextProxy,
-		tcpHandler:       NewTCPHandler(cfg.StreamIdleTimeout, cfg.NextProxy),
+		tcpHandler:       NewTCPHandler(cfg.StreamIdleTimeout, cfg.Timeout, cfg.NextProxy),
 		udpHandler:       NewUDPHandler(cfg.UDPIdleTimeout, cfg.NextProxy),
 		icmpHandler:      NewICMPHandler(),
 	}

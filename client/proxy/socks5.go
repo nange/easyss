@@ -67,7 +67,9 @@ func NewSocks5Server(listenAddr, username, password string, handler *StreamHandl
 }
 
 func defaultDirectDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	dialer := &net.Dialer{}
+	dialer := &net.Dialer{
+		KeepAlive: 30 * time.Second,
+	}
 	return dialer.DialContext(ctx, network, addr)
 }
 

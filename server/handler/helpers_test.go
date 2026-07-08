@@ -142,7 +142,7 @@ func TestNewProxyHandler(t *testing.T) {
 }
 
 func TestNewTCPHandler(t *testing.T) {
-	h := NewTCPHandler(120*time.Second, nil)
+	h := NewTCPHandler(120*time.Second, 30*time.Second, nil)
 	if h == nil {
 		t.Fatal("NewTCPHandler returned nil")
 	}

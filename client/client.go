@@ -134,7 +134,9 @@ func dialWithConfig(ctx context.Context, cfg *config.ClientConfig, d *dialer.Dia
 		return d.DialContext(ctx, network, addr)
 	}
 
-	nd := &net.Dialer{}
+	nd := &net.Dialer{
+		KeepAlive: cfg.TimeoutDuration(),
+	}
 	return nd.DialContext(ctx, network, addr)
 }
 

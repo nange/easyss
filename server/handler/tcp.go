@@ -26,16 +26,19 @@ type TCPHandler struct {
 	dialTimeout time.Duration
 }
 
-func NewTCPHandler(idleTimeout time.Duration, np *nextproxy.NextProxy) *TCPHandler {
+func NewTCPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) *TCPHandler {
 	if idleTimeout <= 0 {
 		idleTimeout = 300 * time.Second
+	}
+	if timeout <= 0 {
+		timeout = 30 * time.Second
 	}
 	dialTimeout := idleTimeout * 2
 	if dialTimeout < 30*time.Second {
 		dialTimeout = 30 * time.Second
 	}
 	return &TCPHandler{
-		dialer:      &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second},
+		dialer:      &net.Dialer{Timeout: dialTimeout, KeepAlive: timeout},
 		nextProxy:   np,
 		idleTimeout: idleTimeout,
 		dialTimeout: dialTimeout,

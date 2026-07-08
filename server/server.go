@@ -287,6 +287,7 @@ func (s *Server) Start() error {
 		MasterKey:         masterKey,
 		AllowedMethods:    s.cfg.GetAllowedMethods(),
 		HandshakeTimeout:  timeout / 2,
+		Timeout:           timeout,
 		StreamIdleTimeout: streamIdleTimeout,
 		UDPIdleTimeout:    2 * timeout,
 		BatchWindowMS:     s.cfg.BatchWindowMS,

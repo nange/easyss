@@ -145,7 +145,9 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 }
 
 func defaultDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	dialer := &net.Dialer{}
+	dialer := &net.Dialer{
+		KeepAlive: 30 * time.Second,
+	}
 	return dialer.DialContext(ctx, network, addr)
 }
 
