@@ -476,10 +476,10 @@ func exampleV3Config() string {
 			ProxyFile:  "",
 		},
 		Transport: config.TransportConfig{
-			Protocol:       "h2",
-			EndpointPrefix: "/v3",
-			ConnCountMin:   3,
-			ConnCountMax:   6,
+			Protocol:        "h2",
+			EndpointPrefix:  "/v3",
+			ConnCountMax:    6,
+			StreamThreshold: 8,
 		},
 		Shaper: config.ShaperConfig{
 			BatchWindowMS:    3,

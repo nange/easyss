@@ -2,8 +2,6 @@ package client
 
 import (
 	"context"
-	cryptorand "crypto/rand"
-	"math/big"
 	"net"
 	"sync"
 	"time"
@@ -67,13 +65,12 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	tlsCfg := cfg.UTLSConfig()
 	directDialer, directIface := newDirectDialer()
 
-	slotCount := chooseSlotCount(cfg.Transport.ConnCountMin, cfg.Transport.ConnCountMax)
-
 	tr, err := http2.New(http2.Config{
-		ServerURL: cfg.ServerURL(),
-		TLSConfig: tlsCfg,
-		SlotCount: slotCount,
-		Timeout:   cfg.TimeoutDuration(),
+		ServerURL:       cfg.ServerURL(),
+		TLSConfig:       tlsCfg,
+		MaxSlotCount:    cfg.Transport.ConnCountMax,
+		StreamThreshold: cfg.Transport.StreamThreshold,
+		Timeout:         cfg.TimeoutDuration(),
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return dialWithConfig(ctx, cfg, directDialer, rt, network, addr)
 		},
@@ -82,7 +79,7 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		return nil, err
 	}
 
-	log.Info("[CLIENT] transport initialized", "server_url", cfg.ServerURL(), "slots", slotCount, "server_addr", cfg.DefaultServerAddr(), "direct_iface", directIface)
+	log.Info("[CLIENT] transport initialized", "server_url", cfg.ServerURL(), "max_slots", cfg.Transport.ConnCountMax, "stream_threshold", cfg.Transport.StreamThreshold, "server_addr", cfg.DefaultServerAddr(), "direct_iface", directIface)
 
 	shaperCfg := shaper.Config{
 		BatchWindowMS: cfg.Shaper.BatchWindowMS,
@@ -139,24 +136,6 @@ func dialWithConfig(ctx context.Context, cfg *config.ClientConfig, d *dialer.Dia
 
 	nd := &net.Dialer{}
 	return nd.DialContext(ctx, network, addr)
-}
-
-func chooseSlotCount(minCount, maxCount int) int {
-	if minCount <= 0 {
-		minCount = 3
-	}
-	if maxCount < minCount {
-		maxCount = minCount
-	}
-	span := maxCount - minCount + 1
-	if span <= 1 {
-		return minCount
-	}
-	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(span)))
-	if err != nil {
-		return minCount
-	}
-	return minCount + int(n.Int64())
 }
 
 func resolveServerIPV6(cfg *config.ClientConfig) string {

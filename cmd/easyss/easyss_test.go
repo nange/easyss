@@ -287,7 +287,6 @@ func newTestHarness(t *testing.T) *testHarness {
 		Transport: clientconfig.TransportConfig{
 			Protocol:       "h2",
 			EndpointPrefix: "/v3",
-			ConnCountMin:   2,
 			ConnCountMax:   4,
 		},
 		Shaper: clientconfig.ShaperConfig{

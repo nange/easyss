@@ -72,7 +72,6 @@ func MigrateV2Config(v2 V2Config) (*ClientConfig, error) {
 		Transport: TransportConfig{
 			Protocol:       proto,
 			EndpointPrefix: "/v3",
-			ConnCountMin:   sharedconfig.DefaultConnCountMin,
 			ConnCountMax:   sharedconfig.DefaultConnCountMax,
 		},
 		Shaper: ShaperConfig{

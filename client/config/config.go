@@ -52,10 +52,10 @@ type RoutingConfig struct {
 }
 
 type TransportConfig struct {
-	Protocol       string `json:"protocol"`
-	EndpointPrefix string `json:"endpoint_prefix"`
-	ConnCountMin   int    `json:"conn_count_min"`
-	ConnCountMax   int    `json:"conn_count_max"`
+	Protocol        string `json:"protocol"`
+	EndpointPrefix  string `json:"endpoint_prefix"`
+	ConnCountMax    int    `json:"conn_count_max"`
+	StreamThreshold int    `json:"stream_threshold"`
 }
 
 type ShaperConfig struct {
@@ -212,11 +212,11 @@ func applyDefaults(c *ClientConfig) {
 	if c.Transport.EndpointPrefix == "" {
 		c.Transport.EndpointPrefix = "/v3"
 	}
-	if c.Transport.ConnCountMin <= 0 {
-		c.Transport.ConnCountMin = config.DefaultConnCountMin
-	}
 	if c.Transport.ConnCountMax <= 0 {
 		c.Transport.ConnCountMax = config.DefaultConnCountMax
+	}
+	if c.Transport.StreamThreshold <= 0 {
+		c.Transport.StreamThreshold = config.DefaultStreamThreshold
 	}
 	if c.Shaper.BatchWindowMS <= 0 {
 		c.Shaper.BatchWindowMS = config.DefaultBatchWindowMS

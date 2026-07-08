@@ -570,11 +570,11 @@ func TestApplyDefaults(t *testing.T) {
 		if cfg.Transport.EndpointPrefix != "/v3" {
 			t.Errorf("EndpointPrefix = %q", cfg.Transport.EndpointPrefix)
 		}
-		if cfg.Transport.ConnCountMin != config.DefaultConnCountMin {
-			t.Errorf("ConnCountMin = %d", cfg.Transport.ConnCountMin)
-		}
 		if cfg.Transport.ConnCountMax != config.DefaultConnCountMax {
 			t.Errorf("ConnCountMax = %d", cfg.Transport.ConnCountMax)
+		}
+		if cfg.Transport.StreamThreshold != config.DefaultStreamThreshold {
+			t.Errorf("StreamThreshold = %d", cfg.Transport.StreamThreshold)
 		}
 		if cfg.Shaper.BatchWindowMS != config.DefaultBatchWindowMS {
 			t.Errorf("BatchWindowMS = %d", cfg.Shaper.BatchWindowMS)

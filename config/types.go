@@ -1,10 +1,10 @@
 package config
 
 const (
-	DefaultTimeout       = 30
-	DefaultConnCountMin  = 3
-	DefaultConnCountMax  = 6
-	DefaultBatchWindowMS = 3
+	DefaultTimeout         = 30
+	DefaultConnCountMax    = 6
+	DefaultStreamThreshold = 8
+	DefaultBatchWindowMS   = 3
 
 	HTTP2ServerMaxReadFrameSize           = 1<<24 - 1  // 16MB-1，nginx/Cloudflare 主流值
 	HTTP2ServerReceiveBufferPerConnection = 1 << 20    // 1MB，避免 64KB 瓶颈导致长期运行吞吐量下降
