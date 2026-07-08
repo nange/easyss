@@ -34,6 +34,8 @@ cmd/easyss-server/easyss-server*
 
 .idea*
 .vscode*
+.zcode/
+.DS_Store
 easyss.apk
 .build_android_env
 go.work*
