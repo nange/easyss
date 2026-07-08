@@ -26,16 +26,13 @@ type transportSlot struct {
 }
 
 type HTTP2Transport struct {
-	slots     []*transportSlot // pre-allocated to maxSlots, lazily filled
-	liveCount atomic.Int32     // number of currently active slots (1..maxSlots)
+	slots     []*transportSlot // pre-allocated and initialized to maxSlots
+	liveCount atomic.Int32     // number of currently active slots (0..maxSlots)
 	maxSlots  int
 	threshold int32
-	mu        sync.Mutex // protects slot initialization during grow
+	mu        sync.RWMutex // protects slot retire (shrink) and grow; RLock protects stream assignment
 
-	serverURL   string
-	tlsCfg      *utls.Config
-	timeout     time.Duration
-	dialContext func(context.Context, string, string) (net.Conn, error)
+	serverURL string
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -72,24 +69,21 @@ func New(cfg Config) (*HTTP2Transport, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Pre-allocate to max capacity, initialize only the first slot.
+	// Pre-allocate and initialize all slots. Transports are cheap structs;
+	// actual TCP connections are established lazily by Go's http.Transport.
 	slots := make([]*transportSlot, maxSlots)
-	slots[0] = newSlot(cfg.TLSConfig, timeout, dialCtx)
-
-	t := &HTTP2Transport{
-		slots:       slots,
-		maxSlots:    maxSlots,
-		threshold:   threshold,
-		serverURL:   cfg.ServerURL,
-		tlsCfg:      cfg.TLSConfig,
-		timeout:     timeout,
-		dialContext: dialCtx,
-		ctx:         ctx,
-		cancel:      cancel,
+	for i := range slots {
+		slots[i] = newSlot(cfg.TLSConfig, timeout, dialCtx)
 	}
-	t.liveCount.Store(1)
 
-	return t, nil
+	return &HTTP2Transport{
+		slots:     slots,
+		maxSlots:  maxSlots,
+		threshold: threshold,
+		serverURL: cfg.ServerURL,
+		ctx:       ctx,
+		cancel:    cancel,
+	}, nil
 }
 
 func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error)) *transportSlot {
@@ -165,8 +159,10 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	// Try to grow slots if all existing ones are above threshold.
 	t.maybeGrowSlots()
 
+	t.mu.RLock()
 	slot := t.leastActiveSlot()
 	slot.active.Add(1)
+	t.mu.RUnlock()
 
 	parentCtx := ctx
 	ctx, cancel := context.WithCancel(parentCtx)
@@ -221,9 +217,12 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 }
 
 func (t *HTTP2Transport) leastActiveSlot() *transportSlot {
+	live := t.liveCount.Load()
+	if live == 0 {
+		return t.slots[0]
+	}
 	var best *transportSlot
 	var min int32 = math.MaxInt32
-	live := t.liveCount.Load()
 	for _, s := range t.slots[:live] {
 		if a := s.active.Load(); a < min {
 			best, min = s, a
@@ -233,21 +232,23 @@ func (t *HTTP2Transport) leastActiveSlot() *transportSlot {
 }
 
 // maybeGrowSlots checks whether all live slots are at or above the threshold,
-// and if so, creates a new slot (up to maxSlots). Uses double-checked locking.
+// and if so, activates one more slot (up to maxSlots). Uses double-checked locking.
 func (t *HTTP2Transport) maybeGrowSlots() {
 	live := t.liveCount.Load()
 	if int(live) >= t.maxSlots {
 		return // already at max
 	}
 
-	// Fast path: check if any slot is below threshold (no lock needed).
-	for i := int32(0); i < live; i++ {
-		if t.slots[i].active.Load() < t.threshold {
-			return // at least one slot still has room
+	// Fast path: check if any live slot is below threshold (no lock needed).
+	if live > 0 {
+		for i := int32(0); i < live; i++ {
+			if t.slots[i].active.Load() < t.threshold {
+				return // at least one slot still has room
+			}
 		}
 	}
 
-	// All slots are above threshold — try to grow under lock.
+	// All live slots are above threshold (or liveCount==0) — try to grow under lock.
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -256,21 +257,48 @@ func (t *HTTP2Transport) maybeGrowSlots() {
 	if int(live) >= t.maxSlots {
 		return
 	}
-	for i := int32(0); i < live; i++ {
-		if t.slots[i].active.Load() < t.threshold {
-			return
+	if live > 0 {
+		for i := int32(0); i < live; i++ {
+			if t.slots[i].active.Load() < t.threshold {
+				return
+			}
 		}
 	}
 
-	// Initialize the next slot.
-	t.slots[live] = newSlot(t.tlsCfg, t.timeout, t.dialContext)
 	t.liveCount.Add(1)
 }
 
 func (t *HTTP2Transport) CloseIdle() {
-	live := t.liveCount.Load()
-	for _, s := range t.slots[:live] {
+	// Close idle TCP connections on all slots (no lock needed).
+	for _, s := range t.slots {
 		s.t.CloseIdleConnections()
+	}
+
+	// Shrink liveCount by retiring idle slots (any position, swap-remove).
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for {
+		live := int(t.liveCount.Load())
+		if live == 0 {
+			break
+		}
+		// Find first idle slot.
+		retired := -1
+		for i := 0; i < live; i++ {
+			if t.slots[i].active.Load() == 0 {
+				retired = i
+				break
+			}
+		}
+		if retired < 0 {
+			break // no idle slots left
+		}
+		// Swap-remove: move idle slot to the end, then shrink.
+		last := live - 1
+		if retired != last {
+			t.slots[retired], t.slots[last] = t.slots[last], t.slots[retired]
+		}
+		t.liveCount.Add(-1)
 	}
 }
 
