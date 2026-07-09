@@ -308,20 +308,24 @@ func (r *Router) hostMatchCustomDirect(host string) bool {
 
 	if util.IsIP(host) {
 		if _, ok := r.customDirectIPs[host]; ok {
+			log.Info("[ROUTER] custom direct ip matched", "host", host)
 			return true
 		}
 		for _, cidr := range r.customDirectCIDRIPs {
 			if cidr.Contains(net.ParseIP(host)) {
+				log.Info("[ROUTER] custom direct cidr matched", "host", host, "cidr", cidr.String())
 				return true
 			}
 		}
 	} else {
 		if _, ok := r.customDirectDomains[host]; ok {
+			log.Info("[ROUTER] custom direct domain matched", "host", host)
 			return true
 		}
 		subs := util.SubDomains(host)
 		for _, sub := range subs {
 			if _, ok := r.customDirectDomains[sub]; ok {
+				log.Info("[ROUTER] custom direct subdomain matched", "host", host, "subdomain", sub)
 				return true
 			}
 		}
@@ -341,20 +345,24 @@ func (r *Router) hostMatchCustomProxy(host string) bool {
 
 	if util.IsIP(host) {
 		if _, ok := r.customProxyIPs[host]; ok {
+			log.Info("[ROUTER] custom proxy ip matched", "host", host)
 			return true
 		}
 		for _, cidr := range r.customProxyCIDRIPs {
 			if cidr.Contains(net.ParseIP(host)) {
+				log.Info("[ROUTER] custom proxy cidr matched", "host", host, "cidr", cidr.String())
 				return true
 			}
 		}
 	} else {
 		if _, ok := r.customProxyDomains[host]; ok {
+			log.Info("[ROUTER] custom proxy domain matched", "host", host)
 			return true
 		}
 		subs := util.SubDomains(host)
 		for _, sub := range subs {
 			if _, ok := r.customProxyDomains[sub]; ok {
+				log.Info("[ROUTER] custom proxy subdomain matched", "host", host, "subdomain", sub)
 				return true
 			}
 		}
