@@ -291,6 +291,7 @@ func (s *Server) Start() error {
 		StreamIdleTimeout: streamIdleTimeout,
 		UDPIdleTimeout:    2 * timeout,
 		BatchWindowMS:     s.cfg.BatchWindowMS,
+		CoverBudgetRatio:  s.cfg.CoverBudgetRatio,
 		NextProxy:         np,
 	})
 

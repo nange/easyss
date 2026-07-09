@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	easycrypto "github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/util/bytespool"
 )
 
 func TestBuildPaddingFrames(t *testing.T) {
@@ -90,4 +94,140 @@ func TestBatchShaperFlushesBeforePlainRecordLimit(t *testing.T) {
 	if records != 2 {
 		t.Fatalf("records = %d, want 2", records)
 	}
+}
+
+func TestCoverInjectorSkipsDuringActiveStreaming(t *testing.T) {
+	var injected []protocol.Frame
+	var mu sync.Mutex
+	closed := atomic.Bool{}
+
+	ci := newCoverInjector(CoverConfig{
+		BudgetRatio: 0.10,
+		IdleTimeout: 50,
+		MinSize:     64,
+		MaxSize:     512,
+		BudgetCap:   64 * 1024,
+	}, func(f protocol.Frame) error {
+		mu.Lock()
+		injected = append(injected, f)
+		mu.Unlock()
+		return nil
+	}, func() bool { return closed.Load() })
+	if ci == nil {
+		t.Fatal("expected non-nil coverInjector")
+	}
+	defer ci.stop()
+
+	for range 100 {
+		ci.addBudget(1024)
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	mu.Lock()
+	count := len(injected)
+	mu.Unlock()
+	if count > 0 {
+		t.Fatalf("expected 0 cover frames during active streaming, got %d", count)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+
+	mu.Lock()
+	count = len(injected)
+	mu.Unlock()
+	if count == 0 {
+		t.Fatal("expected cover frames after idle period, got 0")
+	}
+
+	for _, f := range injected {
+		if f.Type != protocol.FrameCOVER {
+			t.Fatalf("expected COVER frame, got %v", f.Type)
+		}
+		bytespool.MustPut(f.Payload)
+	}
+}
+
+func TestCoverInjectorFrameSizeRange(t *testing.T) {
+	ci := &coverInjector{
+		cfg: CoverConfig{MinSize: 64, MaxSize: 1500},
+	}
+
+	minSize, maxSize := ci.coverFrameSizeRange()
+	if minSize != 64 || maxSize != 512 {
+		t.Fatalf("initial range = [%d, %d], want [64, 512]", minSize, maxSize)
+	}
+
+	ci.totalSent.Store(1 << 20)
+	minSize, maxSize = ci.coverFrameSizeRange()
+	if minSize != 256 || maxSize != 1500 {
+		t.Fatalf("at 1MB range = [%d, %d], want [256, 1500]", minSize, maxSize)
+	}
+
+	ci.totalSent.Store(10 << 20)
+	minSize, maxSize = ci.coverFrameSizeRange()
+	if minSize != 256 || maxSize != 1500 {
+		t.Fatalf("at 10MB range = [%d, %d], want [256, 1500] (capped)", minSize, maxSize)
+	}
+}
+
+func TestCoverInjectorStopsAfterThreshold(t *testing.T) {
+	var injected []protocol.Frame
+	var mu sync.Mutex
+	closed := atomic.Bool{}
+
+	ci := newCoverInjector(CoverConfig{
+		BudgetRatio: 0.10,
+		IdleTimeout: 50,
+		MinSize:     64,
+		MaxSize:     512,
+		BudgetCap:   1 << 20,
+	}, func(f protocol.Frame) error {
+		mu.Lock()
+		injected = append(injected, f)
+		mu.Unlock()
+		return nil
+	}, func() bool { return closed.Load() })
+	if ci == nil {
+		t.Fatal("expected non-nil coverInjector")
+	}
+	defer ci.stop()
+
+	for i := range 3000 {
+		ci.addBudget(1024)
+		_ = i
+	}
+	ci.mu.Lock()
+	budgetBefore := ci.budget
+	threshold := ci.coverThreshold
+	ci.mu.Unlock()
+	if threshold < int64(1024*1024) || threshold > int64(2*1024*1024) {
+		t.Fatalf("coverThreshold = %d, want in [1MB, 2MB]", threshold)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	mu.Lock()
+	countDuringActive := len(injected)
+	mu.Unlock()
+
+	for i := range 3000 {
+		ci.addBudget(1024)
+		_ = i
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	mu.Lock()
+	countAfter := len(injected)
+	mu.Unlock()
+
+	_ = budgetBefore
+	_ = countDuringActive
+	if countAfter != countDuringActive {
+		t.Fatalf("cover frames leaked after threshold: before=%d, after=%d", countDuringActive, countAfter)
+	}
+
+	mu.Lock()
+	for _, f := range injected {
+		bytespool.MustPut(f.Payload)
+	}
+	mu.Unlock()
 }
