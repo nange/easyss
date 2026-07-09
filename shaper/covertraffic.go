@@ -10,12 +10,14 @@ import (
 )
 
 type coverInjector struct {
-	cfg       CoverConfig
-	mu        sync.Mutex
-	budget    float64
-	timer     *time.Timer
-	inject    func(f protocol.Frame) error
-	isClosing func() bool
+	cfg              CoverConfig
+	mu               sync.Mutex
+	budget           float64
+	timer            *time.Timer
+	inject           func(f protocol.Frame) error
+	isClosing        func() bool
+	lastReset        time.Time
+	minResetInterval time.Duration
 }
 
 func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClosing func() bool) *coverInjector {
@@ -39,9 +41,10 @@ func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClos
 	}
 
 	ci := &coverInjector{
-		cfg:       cfg,
-		inject:    inject,
-		isClosing: isClosing,
+		cfg:              cfg,
+		inject:           inject,
+		isClosing:        isClosing,
+		minResetInterval: time.Duration(cfg.IdleTimeout) * time.Millisecond / 2,
 	}
 	ci.timer = time.AfterFunc(time.Duration(cfg.IdleTimeout)*time.Millisecond, ci.onIdle)
 	ci.timer.Stop()
@@ -50,9 +53,16 @@ func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClos
 
 func (ci *coverInjector) addBudget(realBytes int) {
 	ci.mu.Lock()
-	defer ci.mu.Unlock()
 	ci.budget += float64(realBytes) * ci.cfg.BudgetRatio
-	ci.timer.Reset(ci.jitterTimeout())
+	// Debounce timer resets to avoid excessive operations on the hot path.
+	// The timer only needs to be reset often enough that onIdle fires within
+	// ~IdleTimeout after the last frame, not after every single frame.
+	now := time.Now()
+	if now.Sub(ci.lastReset) >= ci.minResetInterval {
+		ci.timer.Reset(ci.jitterTimeout())
+		ci.lastReset = now
+	}
+	ci.mu.Unlock()
 }
 
 func (ci *coverInjector) stop() {

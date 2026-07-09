@@ -2,7 +2,7 @@ package shaper
 
 import (
 	cryptorand "crypto/rand"
-	"math/big"
+	"math/rand"
 
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/stats"
@@ -57,9 +57,5 @@ func randomInt(n int) int {
 	if n <= 0 {
 		return 0
 	}
-	v, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(n)))
-	if err != nil {
-		return 0
-	}
-	return int(v.Int64())
+	return rand.Intn(n)
 }
