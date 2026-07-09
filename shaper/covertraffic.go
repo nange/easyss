@@ -53,7 +53,7 @@ func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClos
 		cfg.MaxSize = cfg.MinSize
 	}
 	if cfg.BudgetCap <= 0 {
-		cfg.BudgetCap = 256 * 1024
+		cfg.BudgetCap = 128 * 1024
 	}
 
 	ci := &coverInjector{
