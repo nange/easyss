@@ -18,6 +18,7 @@ type coverInjector struct {
 	isClosing        func() bool
 	lastReset        time.Time
 	minResetInterval time.Duration
+	totalSent        int64
 }
 
 func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClosing func() bool) *coverInjector {
@@ -39,6 +40,9 @@ func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClos
 	if cfg.MaxSize < cfg.MinSize {
 		cfg.MaxSize = cfg.MinSize
 	}
+	if cfg.BudgetCap <= 0 {
+		cfg.BudgetCap = 512 * 1024
+	}
 
 	ci := &coverInjector{
 		cfg:              cfg,
@@ -53,7 +57,11 @@ func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClos
 
 func (ci *coverInjector) addBudget(realBytes int) {
 	ci.mu.Lock()
+	ci.totalSent += int64(realBytes)
 	ci.budget += float64(realBytes) * ci.cfg.BudgetRatio
+	if ci.budget > float64(ci.cfg.BudgetCap) {
+		ci.budget = float64(ci.cfg.BudgetCap)
+	}
 	// Debounce timer resets to avoid excessive operations on the hot path.
 	// The timer only needs to be reset often enough that onIdle fires within
 	// ~IdleTimeout after the last frame, not after every single frame.
@@ -81,16 +89,21 @@ func (ci *coverInjector) onIdle() {
 	}
 
 	budget := ci.budget
-	if budget < float64(ci.cfg.MinSize) {
+	// Use smooth dynamic frame size: linearly scales with totalSent from
+	// [64, 1500] at 0 bytes to [4096, 8192] at 1MB and beyond.
+	// This avoids a detectable step at any threshold.
+	minSize, maxSize := ci.coverFrameSizeRange()
+
+	if budget < float64(minSize) {
 		ci.mu.Unlock()
 		return
 	}
 
-	maxFrameSize := min(ci.cfg.MaxSize, int(budget))
-	frameSize := ci.randomSize(maxFrameSize)
+	maxFrameSize := min(maxSize, int(budget))
+	frameSize := minSize + randomInt(maxFrameSize-minSize+1)
 	ci.budget -= float64(frameSize)
 
-	if ci.budget >= float64(ci.cfg.MinSize) {
+	if ci.budget >= float64(minSize) {
 		ci.timer.Reset(ci.jitterTimeout())
 	}
 
@@ -100,12 +113,12 @@ func (ci *coverInjector) onIdle() {
 	_ = ci.inject(frame)
 }
 
-func (ci *coverInjector) randomSize(maxFrameSize int) int {
-	minSize := ci.cfg.MinSize
-	if minSize >= maxFrameSize {
-		return maxFrameSize
-	}
-	return minSize + randomInt(maxFrameSize-minSize)
+func (ci *coverInjector) coverFrameSizeRange() (minSize, maxSize int) {
+	const smoothSpan = 1 << 20 // 1MB
+	ratio := float64(min(ci.totalSent, smoothSpan)) / float64(smoothSpan)
+	minSize = 64 + int(ratio*(4096-64))
+	maxSize = 1500 + int(ratio*(8192-1500))
+	return
 }
 
 func (ci *coverInjector) generateFrame(size int) protocol.Frame {
