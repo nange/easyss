@@ -30,6 +30,7 @@ type coverInjector struct {
 	activeCooldown   time.Duration
 	totalSent        atomic.Int64
 	coverThreshold   int64
+	stopped          atomic.Bool
 }
 
 func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClosing func() bool) *coverInjector {
@@ -52,7 +53,7 @@ func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClos
 		cfg.MaxSize = cfg.MinSize
 	}
 	if cfg.BudgetCap <= 0 {
-		cfg.BudgetCap = 512 * 1024
+		cfg.BudgetCap = 256 * 1024
 	}
 
 	ci := &coverInjector{
@@ -69,12 +70,17 @@ func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClos
 }
 
 func (ci *coverInjector) addBudget(realBytes int) {
-	ci.totalSent.Add(int64(realBytes))
-	ci.lastRealData.Store(time.Now().UnixNano())
-
-	if ci.totalSent.Load() >= ci.coverThreshold {
+	if ci.stopped.Load() {
 		return
 	}
+
+	total := ci.totalSent.Add(int64(realBytes))
+	if total >= ci.coverThreshold {
+		ci.stopped.Store(true)
+		return
+	}
+
+	ci.lastRealData.Store(time.Now().UnixNano())
 
 	ci.mu.Lock()
 	ci.budget += float64(realBytes) * ci.cfg.BudgetRatio
@@ -97,6 +103,10 @@ func (ci *coverInjector) stop() {
 }
 
 func (ci *coverInjector) onIdle() {
+	if ci.stopped.Load() {
+		return
+	}
+
 	ci.mu.Lock()
 
 	if ci.isClosing() {
@@ -106,6 +116,7 @@ func (ci *coverInjector) onIdle() {
 
 	if ci.totalSent.Load() >= ci.coverThreshold {
 		ci.budget = 0
+		ci.stopped.Store(true)
 		ci.mu.Unlock()
 		return
 	}

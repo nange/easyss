@@ -204,11 +204,17 @@ func TestCoverInjectorStopsAfterThreshold(t *testing.T) {
 		t.Fatalf("coverThreshold = %d, want in [1MB, 2MB]", threshold)
 	}
 
+	// Verify stopped flag is set after exceeding threshold.
+	if !ci.stopped.Load() {
+		t.Fatal("expected stopped to be true after exceeding coverThreshold")
+	}
+
 	time.Sleep(300 * time.Millisecond)
 	mu.Lock()
 	countDuringActive := len(injected)
 	mu.Unlock()
 
+	// addBudget after stopped should be a no-op.
 	for i := range 3000 {
 		ci.addBudget(1024)
 		_ = i

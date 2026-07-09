@@ -148,6 +148,18 @@ func ReadFrame(r io.Reader) (Frame, error) {
 	ftype := FrameType(header[0])
 	length := binary.BigEndian.Uint16(header[1:3])
 
+	if ftype == FramePADDING || ftype == FrameCOVER {
+		if length > 0 {
+			if _, err := io.CopyN(io.Discard, r, int64(length)); err != nil {
+				return Frame{}, err
+			}
+		}
+		return Frame{
+			Type:   ftype,
+			Length: length,
+		}, nil
+	}
+
 	payload := make([]byte, length)
 	if length > 0 {
 		if _, err := io.ReadFull(r, payload); err != nil {
