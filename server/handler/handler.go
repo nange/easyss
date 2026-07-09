@@ -64,7 +64,7 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 	}
 
 	coverBudgetRatio := cfg.CoverBudgetRatio
-	if coverBudgetRatio <= 0 || coverBudgetRatio > 1 {
+	if coverBudgetRatio < 0 || coverBudgetRatio > 1 {
 		coverBudgetRatio = 0.02
 	}
 
