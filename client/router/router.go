@@ -327,6 +327,7 @@ func (r *Router) hostMatchCustomDirect(host string) bool {
 		}
 		for _, re := range r.customDirectRegexps {
 			if re.MatchString(host) {
+				log.Info("[ROUTER] custom direct regexp matched", "host", host, "pattern", re.String())
 				return true
 			}
 		}
@@ -359,6 +360,7 @@ func (r *Router) hostMatchCustomProxy(host string) bool {
 		}
 		for _, re := range r.customProxyRegexps {
 			if re.MatchString(host) {
+				log.Info("[ROUTER] custom proxy regexp matched", "host", host, "pattern", re.String())
 				return true
 			}
 		}
