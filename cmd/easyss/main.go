@@ -483,7 +483,7 @@ func exampleV3Config() string {
 		},
 		Shaper: config.ShaperConfig{
 			BatchWindowMS:    3,
-			CoverBudgetRatio: 0.1,
+			CoverBudgetRatio: 0.05,
 		},
 		Log: config.LogConfig{
 			Level:    "info",

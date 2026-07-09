@@ -227,6 +227,9 @@ func applyDefaults(c *ClientConfig) {
 	if c.Shaper.BatchWindowMS > 10 {
 		c.Shaper.BatchWindowMS = 10
 	}
+	if c.Shaper.CoverBudgetRatio <= 0 || c.Shaper.CoverBudgetRatio > 1 {
+		c.Shaper.CoverBudgetRatio = 0.05
+	}
 	if c.Routing.ProxyRule == "" {
 		c.Routing.ProxyRule = "auto"
 	}

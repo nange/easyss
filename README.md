@@ -156,7 +156,7 @@ Easyss v3 支持两种配置模式，自动识别：
   },
   "shaper": {
     "batch_window_ms": 3,
-    "cover_budget_ratio": 0.1
+    "cover_budget_ratio": 0.05
   },
   "log": {
     "level": "info",
