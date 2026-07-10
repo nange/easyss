@@ -51,19 +51,23 @@ func New(writer *crypto.RecordWriter, cfg Config) Shaper {
 	return bs
 }
 
+// PushData adds raw data as a DATA frame. Returns without holding the lock.
 func (bs *batchShaper) PushData(data []byte) error {
 	bs.mu.Lock()
-	defer bs.mu.Unlock()
 
 	if bs.closing.Load() {
+		bs.mu.Unlock()
 		return nil
 	}
 	if bs.err != nil {
-		return bs.err
+		err := bs.err
+		bs.mu.Unlock()
+		return err
 	}
 
 	frameSize := protocol.FrameHeaderSize + len(data)
 	if frameSize > bs.maxChunkSize {
+		bs.mu.Unlock()
 		return fmt.Errorf("shaper: data size %d exceeds max record size %d", frameSize, bs.maxChunkSize)
 	}
 
@@ -71,35 +75,44 @@ func (bs *batchShaper) PushData(data []byte) error {
 		bs.cover.addBudget(frameSize)
 	}
 
+	// Pre-flush if appending would overflow the record.
 	if len(bs.plaintext) > 0 && len(bs.plaintext)+frameSize > bs.maxChunkSize {
+		bs.mu.Unlock()
 		if err := bs.flush(); err != nil {
 			return err
 		}
+		bs.mu.Lock()
 	}
 
 	bs.plaintext = appendFrameHeader(bs.plaintext, protocol.FrameDATA, data)
 	bs.plaintext = append(bs.plaintext, data...)
 
+	// Post-flush if threshold reached.
 	if len(bs.plaintext) >= bs.flushThreshold {
+		bs.mu.Unlock()
 		return bs.flush()
 	}
+
 	if !bs.timerStarted {
 		bs.timerStarted = true
 		bs.timer.Reset(bs.window)
 	}
-
+	bs.mu.Unlock()
 	return nil
 }
 
+// PushFrame adds a pre-built frame (FIN, RST, COVER, etc.). Returns without holding the lock.
 func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 	bs.mu.Lock()
-	defer bs.mu.Unlock()
 
 	if bs.closing.Load() {
+		bs.mu.Unlock()
 		return nil
 	}
 	if bs.err != nil {
-		return bs.err
+		err := bs.err
+		bs.mu.Unlock()
+		return err
 	}
 
 	if bs.cover != nil && f.Type != protocol.FrameCOVER && f.Type != protocol.FramePADDING {
@@ -108,12 +121,17 @@ func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 
 	frameSize := f.EncodedLen()
 	if frameSize > bs.maxChunkSize {
+		bs.mu.Unlock()
 		return fmt.Errorf("shaper: frame size %d exceeds max record size %d", frameSize, bs.maxChunkSize)
 	}
+
+	// Pre-flush if appending would overflow the record.
 	if len(bs.plaintext) > 0 && len(bs.plaintext)+frameSize > bs.maxChunkSize {
+		bs.mu.Unlock()
 		if err := bs.flush(); err != nil {
 			return err
 		}
+		bs.mu.Lock()
 	}
 
 	bs.plaintext = appendFrameHeader(bs.plaintext, f.Type, f.Payload)
@@ -123,30 +141,37 @@ func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 		bytespool.MustPut(f.Payload)
 	}
 
+	// Post-flush if threshold reached.
 	if len(bs.plaintext) >= bs.flushThreshold {
+		bs.mu.Unlock()
 		return bs.flush()
 	}
+
 	if !bs.timerStarted {
 		bs.timerStarted = true
 		bs.timer.Reset(bs.window)
 	}
-
+	bs.mu.Unlock()
 	return nil
 }
 
+// Flush triggers an immediate flush. Does not require the caller to hold the lock.
 func (bs *batchShaper) Flush() error {
-	bs.mu.Lock()
-	defer bs.mu.Unlock()
 	return bs.flush()
 }
 
+// Close stops cover traffic, flushes remaining data, and returns the buffer to the pool.
 func (bs *batchShaper) Close() error {
 	bs.mu.Lock()
 	bs.closing.Store(true)
 	if bs.cover != nil {
 		bs.cover.stop()
 	}
+	bs.mu.Unlock()
+
 	err := bs.flush()
+
+	bs.mu.Lock()
 	plaintextBacking := bs.plaintext[:cap(bs.plaintext)]
 	bs.plaintext = nil
 	bs.mu.Unlock()
@@ -154,14 +179,15 @@ func (bs *batchShaper) Close() error {
 	if plaintextBacking != nil {
 		bytespool.MustPut(plaintextBacking)
 	}
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
+// flush acquires the lock, swaps the buffer, releases the lock before I/O,
+// then writes the encrypted record. Caller must NOT hold bs.mu.
 func (bs *batchShaper) flush() error {
+	bs.mu.Lock()
 	if len(bs.plaintext) == 0 {
+		bs.mu.Unlock()
 		return nil
 	}
 
@@ -180,35 +206,48 @@ func (bs *batchShaper) flush() error {
 		stats.RecordPaddingBytes(padSize)
 	}
 
-	if err := bs.writer.WriteRecord(bs.plaintext); err != nil {
-		bs.err = err
-		return err
-	}
+	// Swap buffer: hand off data for I/O, allocate a fresh buffer so
+	// concurrent PushData / PushFrame can keep accepting data.
+	data := bs.plaintext
+	bs.plaintext = bytespool.Get(protocol.MaxPlainRecordSize)[:0]
 
-	bs.plaintext = bs.plaintext[:0]
-	return nil
+	bs.mu.Unlock()
+
+	err := bs.writer.WriteRecord(data)
+	bytespool.MustPut(data[:cap(data)])
+
+	if err != nil {
+		bs.mu.Lock()
+		bs.err = err
+		bs.mu.Unlock()
+	}
+	return err
 }
 
 func (bs *batchShaper) onTimer() {
 	bs.mu.Lock()
-	defer bs.mu.Unlock()
 	bs.timerStarted = false
+	bs.mu.Unlock()
 	_ = bs.flush()
 }
 
 func (bs *batchShaper) injectCoverFrame(f protocol.Frame) error {
 	bs.mu.Lock()
-	defer bs.mu.Unlock()
 
 	if bs.closing.Load() || bs.err != nil {
+		bs.mu.Unlock()
 		return nil
 	}
 
 	frameSize := f.EncodedLen()
+
+	// Pre-flush if appending would overflow the record.
 	if len(bs.plaintext) > 0 && len(bs.plaintext)+frameSize > bs.maxChunkSize {
+		bs.mu.Unlock()
 		if err := bs.flush(); err != nil {
 			return err
 		}
+		bs.mu.Lock()
 	}
 
 	bs.plaintext = appendFrameHeader(bs.plaintext, f.Type, f.Payload)
@@ -218,14 +257,17 @@ func (bs *batchShaper) injectCoverFrame(f protocol.Frame) error {
 		bytespool.MustPut(f.Payload)
 	}
 
+	// Post-flush if threshold reached.
 	if len(bs.plaintext) >= bs.flushThreshold {
+		bs.mu.Unlock()
 		return bs.flush()
 	}
+
 	if !bs.timerStarted {
 		bs.timerStarted = true
 		bs.timer.Reset(bs.window)
 	}
-
+	bs.mu.Unlock()
 	return nil
 }
 
