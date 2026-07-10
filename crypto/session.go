@@ -121,14 +121,16 @@ func BuildAAD(endpoint string, salt []byte, direction, phase string, method prot
 }
 
 type DecryptedReader struct {
-	reader *RecordReader
-	frames []protocol.Frame // leftover frames from previous records
+	reader   *RecordReader
+	frames   []protocol.Frame // leftover frames from previous records
+	frameBuf []protocol.Frame // reusable backing array for decodeFramesIntoBuf
 }
 
 func NewDecryptedReader(r io.Reader, aad []byte, encryptor Encryptor, counter *CounterNonce) *DecryptedReader {
 	rr := NewRecordReader(r, encryptor, counter, aad)
 	return &DecryptedReader{
-		reader: rr,
+		reader:   rr,
+		frameBuf: make([]protocol.Frame, 0, 8),
 	}
 }
 
@@ -148,7 +150,7 @@ func (dr *DecryptedReader) ReadFrame() (protocol.Frame, error) {
 		return protocol.Frame{}, err
 	}
 
-	frames, err := decodeFramesFromPlaintext(plaintext)
+	frames, err := decodeFramesIntoBuf(plaintext, dr.frameBuf[:0])
 	if err != nil {
 		return protocol.Frame{}, err
 	}
@@ -160,11 +162,15 @@ func (dr *DecryptedReader) ReadFrame() (protocol.Frame, error) {
 }
 
 func decodeFramesFromPlaintext(plaintext []byte) ([]protocol.Frame, error) {
+	return decodeFramesIntoBuf(plaintext, nil)
+}
+
+func decodeFramesIntoBuf(plaintext []byte, buf []protocol.Frame) ([]protocol.Frame, error) {
 	if len(plaintext) < protocol.FrameHeaderSize {
 		return nil, io.ErrUnexpectedEOF
 	}
 
-	frames := make([]protocol.Frame, 0, 4)
+	frames := buf[:0]
 	for len(plaintext) > 0 {
 		f, err := decodeFrame(plaintext)
 		if err != nil {

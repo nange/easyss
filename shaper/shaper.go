@@ -10,6 +10,7 @@ import (
 
 type Shaper interface {
 	PushFrame(f protocol.Frame) error
+	PushData(data []byte) error
 	Flush() error
 	Close() error
 }
@@ -30,6 +31,18 @@ type Config struct {
 type ShaperFunc func(frames []protocol.Frame) []protocol.Frame
 
 func BuildPaddingFrames(totalSize int) []protocol.Frame {
+	padSize := computePadPayloadSize(totalSize)
+	if padSize <= 0 {
+		return nil
+	}
+
+	stats.RecordPaddingBytes(padSize)
+	frame := protocol.NewFramePADDING(uint16(padSize))
+	_, _ = cryptorand.Read(frame.Payload)
+	return []protocol.Frame{frame}
+}
+
+func computePadPayloadSize(totalSize int) int {
 	var target int
 	switch {
 	case totalSize <= 128:
@@ -44,14 +57,9 @@ func BuildPaddingFrames(totalSize int) []protocol.Frame {
 	}
 
 	if target <= totalSize {
-		return nil
+		return 0
 	}
-
-	padSize := target - totalSize
-	stats.RecordPaddingBytes(padSize)
-	frame := protocol.NewFramePADDING(uint16(padSize))
-	_, _ = cryptorand.Read(frame.Payload)
-	return []protocol.Frame{frame}
+	return target - totalSize
 }
 
 func randomInt(n int) int {

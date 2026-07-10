@@ -112,6 +112,33 @@ func TestAEADEncryptDecrypt(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestEncryptInto(t *testing.T) {
+	key := make([]byte, 32)
+	_, _ = rand.Read(key)
+
+	enc, err := NewAES256GCM(key)
+	require.NoError(t, err)
+
+	nonce := make([]byte, enc.NonceSize())
+	_, _ = rand.Read(nonce)
+
+	plaintext := []byte("hello world from EncryptInto")
+	aad := []byte("test-aad")
+
+	ciphertextStandard, err := enc.Encrypt(plaintext, aad, nonce)
+	require.NoError(t, err)
+
+	dst := make([]byte, 0, len(plaintext)+enc.Overhead())
+	ciphertextInto, err := enc.EncryptInto(dst, plaintext, aad, nonce)
+	require.NoError(t, err)
+	require.Equal(t, ciphertextStandard, ciphertextInto)
+	require.Equal(t, cap(ciphertextInto), len(plaintext)+enc.Overhead(), "EncryptInto should reuse dst backing array")
+
+	decrypted, err := enc.Decrypt(ciphertextInto, aad, nonce)
+	require.NoError(t, err)
+	require.Equal(t, plaintext, decrypted)
+}
+
 func TestChaCha20Poly1305(t *testing.T) {
 	key := make([]byte, 32)
 	_, _ = rand.Read(key)

@@ -1,7 +1,6 @@
 package crypto
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -43,24 +42,25 @@ func (rw *RecordWriter) WriteRecord(plaintext []byte) error {
 	}
 
 	nonce := rw.counter.Next()
-	ciphertext, err := rw.enc.Encrypt(plaintext, rw.aad, nonce[:])
+
+	cipherLen := len(plaintext) + rw.enc.Overhead()
+	if cipherLen > 0xFFFFFF {
+		return fmt.Errorf("crypto: ciphertext too large: %d bytes", cipherLen)
+	}
+
+	record := bytespool.Get(protocol.MaxCipherLenSize + cipherLen)
+	record[0] = byte(cipherLen >> 16)
+	record[1] = byte(cipherLen >> 8)
+	record[2] = byte(cipherLen)
+
+	ciphertext, err := rw.enc.EncryptInto(record[protocol.MaxCipherLenSize:], plaintext, rw.aad, nonce[:])
 	if err != nil {
+		bytespool.MustPut(record)
 		return fmt.Errorf("crypto: encrypt record: %w", err)
 	}
 
-	var lenBuf [protocol.MaxCipherLenSize]byte
-	if len(ciphertext) > 0xFFFFFF {
-		return fmt.Errorf("crypto: ciphertext too large: %d bytes", len(ciphertext))
-	}
-	binary.BigEndian.PutUint16(lenBuf[1:3], uint16(len(ciphertext)&0xFFFF))
-	lenBuf[0] = byte(len(ciphertext) >> 16)
-
-	record := bytespool.Get(protocol.MaxCipherLenSize + len(ciphertext))
-	copy(record[:protocol.MaxCipherLenSize], lenBuf[:])
-	copy(record[protocol.MaxCipherLenSize:], ciphertext)
-
-	recordLen := len(record)
-	n, err := rw.w.Write(record)
+	recordLen := protocol.MaxCipherLenSize + len(ciphertext)
+	n, err := rw.w.Write(record[:recordLen])
 	bytespool.MustPut(record)
 	if err != nil {
 		return fmt.Errorf("crypto: write record: %w", err)

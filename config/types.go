@@ -16,7 +16,8 @@ const (
 	HTTP2ClientMaxDecoderHeaderTableSize  = 65536            // Chrome HEADER_TABLE_SIZE
 	HTTP2ClientMaxResponseHeaderBytes     = 262144           // 256KB，Chrome MAX_HEADER_LIST_SIZE
 
-	TCPStreamBufferSize = 16 * 1024
+	TCPStreamBufferSize       = 15 * 1024 // 客户端，4帧/record (4*(15360+3)=61452 < 64KB)
+	ServerTCPStreamBufferSize = 31 * 1024 // 服务端，2帧/record (2*(31744+3)=63494 < 64KB)
 
 	EndpointTCP  = "/v3/tcp"
 	EndpointUDP  = "/v3/udp"

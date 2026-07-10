@@ -237,8 +237,7 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 		if n > 0 {
 			signalActivity()
 			stats.RecordRawBytesSent(n)
-			frame := protocol.NewFrameDATA(buf[:n])
-			if pErr := tx.PushFrame(frame); pErr != nil {
+			if pErr := tx.PushData(buf[:n]); pErr != nil {
 				_ = tx.Flush()
 				if errors.Is(pErr, io.ErrClosedPipe) {
 					return nil

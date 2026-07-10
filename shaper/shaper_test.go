@@ -64,7 +64,7 @@ func TestBatchShaperFlushesBeforePlainRecordLimit(t *testing.T) {
 	bs := New(easycrypto.NewRecordWriter(&out, enc, ctr, aad), Config{BatchWindowMS: 1000})
 	payload := make([]byte, 16*1024)
 	for range 4 {
-		if err := bs.PushFrame(protocol.NewFrameDATA(payload)); err != nil {
+		if err := bs.PushData(payload); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -11,6 +11,7 @@ import (
 
 type Encryptor interface {
 	Encrypt(plaintext, aad []byte, nonce []byte) ([]byte, error)
+	EncryptInto(dst, plaintext, aad, nonce []byte) ([]byte, error)
 	Decrypt(ciphertext, aad []byte, nonce []byte) ([]byte, error)
 	NonceSize() int
 	Overhead() int
@@ -26,6 +27,13 @@ func (a *aeadEncryptor) Encrypt(plaintext, aad []byte, nonce []byte) ([]byte, er
 	}
 	dst := a.aead.Seal(nil, nonce, plaintext, aad)
 	return dst, nil
+}
+
+func (a *aeadEncryptor) EncryptInto(dst, plaintext, aad, nonce []byte) ([]byte, error) {
+	if len(nonce) != a.aead.NonceSize() {
+		return nil, fmt.Errorf("crypto: invalid nonce size %d, want %d", len(nonce), a.aead.NonceSize())
+	}
+	return a.aead.Seal(dst[:0], nonce, plaintext, aad), nil
 }
 
 func (a *aeadEncryptor) Decrypt(ciphertext, aad []byte, nonce []byte) ([]byte, error) {

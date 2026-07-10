@@ -139,16 +139,15 @@ func (h *TCPHandler) copyFromClient(dr *crypto.DecryptedReader, dst net.Conn, si
 }
 
 func (h *TCPHandler) copyFromTarget(src net.Conn, s2c shaper.Shaper, signalActivity func(), m *stats.StreamMeter) error {
-	buf := bytespool.Get(config.TCPStreamBufferSize)
+	buf := bytespool.Get(config.ServerTCPStreamBufferSize)
 	defer bytespool.MustPut(buf)
 	for {
 		m.SetState("read_target")
 		n, err := src.Read(buf)
 		if n > 0 {
 			signalActivity()
-			frame := protocol.NewFrameDATA(buf[:n])
 			m.SetState("write_http2")
-			if wErr := s2c.PushFrame(frame); wErr != nil {
+			if wErr := s2c.PushData(buf[:n]); wErr != nil {
 				return wErr
 			}
 			m.Add(n, "read_target")
