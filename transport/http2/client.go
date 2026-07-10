@@ -267,7 +267,14 @@ func (t *HTTP2Transport) maybeGrowSlots() {
 		}
 	}
 
-	t.liveCount.Add(1)
+	// On first activation, start with 2 connections for better initial throughput,
+	// since typical web browsing generates >8 concurrent streams.
+	// Falls back to 1 when maxSlots is 1.
+	if live == 0 && t.maxSlots >= 2 {
+		t.liveCount.Add(2)
+	} else {
+		t.liveCount.Add(1)
+	}
 }
 
 func (t *HTTP2Transport) CloseIdle() {
