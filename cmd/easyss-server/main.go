@@ -127,7 +127,7 @@ func exampleV3ServerConfig() string {
 			Email:            "your-email@example.com",
 			FallbackTarget:   "",
 			BatchWindowMS:    3,
-			CoverBudgetRatio: 0.02,
+			CoverBudgetRatio: 0.03,
 			CoverBudgetCap:   128 * 1024,
 			PprofEnabled:     false,
 		},
