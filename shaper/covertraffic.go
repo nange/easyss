@@ -96,6 +96,7 @@ func (ci *coverInjector) addBudget(realBytes int) {
 }
 
 func (ci *coverInjector) stop() {
+	ci.stopped.Store(true)
 	ci.mu.Lock()
 	defer ci.mu.Unlock()
 	ci.timer.Stop()

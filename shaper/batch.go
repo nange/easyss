@@ -25,6 +25,7 @@ type batchShaper struct {
 	window         time.Duration
 	timerStarted   bool
 	closing        atomic.Bool
+	writeClosed    atomic.Bool // set after Close's flush; prevents writes after handler returns
 	err            error
 	cover          *coverInjector
 }
@@ -154,9 +155,19 @@ func (bs *batchShaper) Close() error {
 	if bs.cover != nil {
 		bs.cover.stop()
 	}
+	bs.timerStarted = false
+	bs.timer.Stop()
 	bs.mu.Unlock()
 
 	err := bs.flush()
+
+	// Serialize with writeMu: any flushAndWrite that acquires writeMu after
+	// this point will see writeClosed and discard its data, preventing writes
+	// to an already-finished HTTP handler. Flushes that acquired writeMu before
+	// this point will complete normally; we block here until they finish.
+	bs.writeMu.Lock()
+	bs.writeClosed.Store(true)
+	bs.writeMu.Unlock()
 
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
@@ -208,6 +219,12 @@ func (bs *batchShaper) flushAndWrite() error {
 	bs.mu.Unlock()
 
 	bs.writeMu.Lock()
+	if bs.writeClosed.Load() {
+		bs.writeMu.Unlock()
+		bytespool.MustPut(data[:cap(data)])
+		bs.mu.Lock()
+		return nil
+	}
 	err := bs.writer.WriteRecord(data)
 	bs.writeMu.Unlock()
 
@@ -229,6 +246,9 @@ func (bs *batchShaper) flush() error {
 }
 
 func (bs *batchShaper) onTimer() {
+	if bs.closing.Load() {
+		return
+	}
 	bs.mu.Lock()
 	bs.timerStarted = false
 	bs.mu.Unlock()
