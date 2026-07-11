@@ -72,35 +72,6 @@ type bootstrapSession struct {
 }
 
 func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, proto protocol.Proto, target string, method protocol.Method, extraFrames []protocol.Frame) (*bootstrapSession, error) {
-	salt, err := crypto.GenerateSalt()
-	if err != nil {
-		return nil, fmt.Errorf("generate salt: %w", err)
-	}
-
-	saltB64 := base64.RawURLEncoding.EncodeToString(salt)
-
-	stream, err := h.transport.Open(ctx, transport.OpenRequest{
-		Endpoint: endpoint,
-		Salt:     saltB64,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("transport open: %w", err)
-	}
-
-	sk, err := crypto.NewStreamKeys(h.masterKey, salt, endpoint)
-	if err != nil {
-		stream.Close() //nolint:errcheck
-		return nil, fmt.Errorf("stream keys: %w", err)
-	}
-
-	bootstrapEnc, bootstrapCounter, err := sk.Encryptor("c2s", "bootstrap", protocol.MethodAES256GCM)
-	if err != nil {
-		stream.Close() //nolint:errcheck
-		return nil, fmt.Errorf("bootstrap encryptor: %w", err)
-	}
-	aad := crypto.BuildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
-	rw := crypto.NewRecordWriter(stream, bootstrapEnc, bootstrapCounter, aad)
-
 	hsFrame := protocol.NewFrameHANDSHAKE(protocol.Handshake{
 		Version: protocol.Version3,
 		Proto:   proto,
@@ -108,14 +79,52 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 		Target:  target,
 	})
 	frames := append([]protocol.Frame{hsFrame}, extraFrames...)
-
 	plaintext := protocol.EncodeFrames(frames)
-	if err := rw.WriteRecord(plaintext); err != nil {
-		stream.Close() //nolint:errcheck
-		return nil, fmt.Errorf("write handshake: %w", err)
+
+	const maxRetries = 2
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		salt, err := crypto.GenerateSalt()
+		if err != nil {
+			return nil, fmt.Errorf("generate salt: %w", err)
+		}
+		saltB64 := base64.RawURLEncoding.EncodeToString(salt)
+
+		stream, err := h.transport.Open(ctx, transport.OpenRequest{
+			Endpoint: endpoint,
+			Salt:     saltB64,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("transport open: %w", err)
+		}
+
+		sk, err := crypto.NewStreamKeys(h.masterKey, salt, endpoint)
+		if err != nil {
+			stream.Close() //nolint:errcheck
+			return nil, fmt.Errorf("stream keys: %w", err)
+		}
+
+		bootstrapEnc, bootstrapCounter, err := sk.Encryptor("c2s", "bootstrap", protocol.MethodAES256GCM)
+		if err != nil {
+			stream.Close() //nolint:errcheck
+			return nil, fmt.Errorf("bootstrap encryptor: %w", err)
+		}
+		aad := crypto.BuildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
+		rw := crypto.NewRecordWriter(stream, bootstrapEnc, bootstrapCounter, aad)
+
+		if err := rw.WriteRecord(plaintext); err != nil {
+			stream.Close() //nolint:errcheck
+			if attempt < maxRetries-1 && errors.Is(err, io.ErrClosedPipe) {
+				log.Debug("[STREAM] handshake retry", "attempt", attempt+1, "target", target, "err", err)
+				continue
+			}
+			return nil, fmt.Errorf("write handshake: %w", err)
+		}
+
+		return &bootstrapSession{stream: stream, sk: sk, salt: salt}, nil
 	}
 
-	return &bootstrapSession{stream: stream, sk: sk, salt: salt}, nil
+	// Unreachable: the loop always returns inside the body.
+	return nil, fmt.Errorf("write handshake: max retries exceeded")
 }
 
 func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto protocol.Proto, target string, echoPayload []byte, method protocol.Method) ([]byte, error) {

@@ -2,6 +2,8 @@ package http2
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -25,6 +27,17 @@ type HTTP2Stream struct {
 	respErr  error
 	respOnce sync.Once
 	closed   bool
+
+	rtErrMu sync.Mutex
+	rtErr   error // RoundTrip error, captured for better diagnostics in Write()
+}
+
+// setRoundTripErr stores the RoundTrip error for use by Write() when the pipe
+// write fails with io.ErrClosedPipe.
+func (s *HTTP2Stream) setRoundTripErr(err error) {
+	s.rtErrMu.Lock()
+	s.rtErr = err
+	s.rtErrMu.Unlock()
 }
 
 func (s *HTTP2Stream) Read(p []byte) (int, error) {
@@ -88,6 +101,16 @@ func (s *HTTP2Stream) Write(p []byte) (int, error) {
 	n, err := s.w.Write(p)
 	if err != nil {
 		s.done()
+		if errors.Is(err, io.ErrClosedPipe) {
+			s.rtErrMu.Lock()
+			rtErr := s.rtErr
+			s.rtErrMu.Unlock()
+			if rtErr != nil {
+				// Wrap BOTH errors so callers can still match io.ErrClosedPipe
+				// for retry decisions, while also seeing the root cause.
+				return n, fmt.Errorf("%w: %w", io.ErrClosedPipe, rtErr)
+			}
+		}
 	}
 	return n, err
 }

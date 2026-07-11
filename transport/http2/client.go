@@ -196,13 +196,6 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	}
 
 	respCh := make(chan roundTripResult, 1)
-	go func() {
-		resp, err := slot.t.RoundTrip(httpReq)
-		if err != nil {
-			_ = pw.CloseWithError(err)
-		}
-		respCh <- roundTripResult{resp: resp, err: err}
-	}()
 
 	doneOnce := sync.OnceFunc(func() {
 		slot.active.Add(-1)
@@ -210,12 +203,25 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 		cancel()
 	})
 
-	return &HTTP2Stream{
+	stream := &HTTP2Stream{
 		w:      pw,
 		respCh: respCh,
 		cancel: cancel,
 		done:   doneOnce,
-	}, nil
+	}
+
+	go func() {
+		resp, err := slot.t.RoundTrip(httpReq)
+		if err != nil {
+			_ = pw.CloseWithError(err)
+		}
+		// Store the RoundTrip error on the stream so Write() can surface it
+		// when the pipe write fails with io.ErrClosedPipe.
+		stream.setRoundTripErr(err)
+		respCh <- roundTripResult{resp: resp, err: err}
+	}()
+
+	return stream, nil
 }
 
 func (t *HTTP2Transport) leastActiveSlot() *transportSlot {
