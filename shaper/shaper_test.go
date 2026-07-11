@@ -375,3 +375,245 @@ func TestBatchShaperConcurrentFlushNoNonceDesync(t *testing.T) {
 		})
 	}
 }
+
+type blockingWriter struct {
+	inner      *lockedBuffer
+	blocked    chan struct{}
+	release    chan struct{}
+	writeCount atomic.Int64
+	blockOnce  sync.Once
+}
+
+func newBlockingWriter() *blockingWriter {
+	return &blockingWriter{
+		inner:   &lockedBuffer{},
+		blocked: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (bw *blockingWriter) Write(p []byte) (int, error) {
+	bw.writeCount.Add(1)
+	bw.blockOnce.Do(func() { close(bw.blocked) })
+	<-bw.release
+	return bw.inner.Write(p)
+}
+
+func (bw *blockingWriter) Flush() {}
+
+type countingWriter struct {
+	inner  *lockedBuffer
+	writes atomic.Int64
+}
+
+func (cw *countingWriter) Write(p []byte) (int, error) {
+	cw.writes.Add(1)
+	return cw.inner.Write(p)
+}
+
+func (cw *countingWriter) Flush() {}
+
+func TestBatchShaperOnTimerInFlightDuringClose(t *testing.T) {
+	masterKey, err := easycrypto.DeriveMasterKey("close-race-on-timer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	salt := []byte("1234567890123456")
+	endpoint := "/v3/tcp"
+	sk, err := easycrypto.NewStreamKeys(masterKey, salt, endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, ctr, err := sk.Encryptor("c2s", "session", protocol.MethodAES256GCM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aad := easycrypto.BuildAAD(endpoint, salt, "c2s", "session", protocol.MethodAES256GCM)
+
+	bw := newBlockingWriter()
+	rw := easycrypto.NewRecordWriter(bw, enc, ctr, aad)
+	bs := New(rw, Config{BatchWindowMS: 2})
+
+	payload := make([]byte, 256)
+	if err := bs.PushData(payload); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-bw.blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for onTimer to fire")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- bs.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before onTimer was released: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(bw.release)
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for Close to complete")
+	}
+
+	writesBefore := bw.writeCount.Load()
+	time.Sleep(100 * time.Millisecond)
+	if got := bw.writeCount.Load(); got != writesBefore {
+		t.Fatalf("write after Close(): before=%d, after=%d", writesBefore, got)
+	}
+
+	if bw.writeCount.Load() == 0 {
+		t.Fatal("expected at least one WriteRecord call")
+	}
+	decEnc, decCtr, err := sk.Encryptor("c2s", "session", protocol.MethodAES256GCM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := easycrypto.NewRecordReader(bytes.NewReader(bw.inner.Snapshot()), decEnc, decCtr, aad)
+	plaintext, err := rr.ReadRecord()
+	if err != nil {
+		t.Fatalf("failed to decrypt record: %v", err)
+	}
+	if len(plaintext) == 0 {
+		t.Fatal("expected non-empty plaintext")
+	}
+	r := bytes.NewReader(plaintext)
+	frame, err := protocol.ReadFrame(r)
+	if err != nil {
+		t.Fatalf("failed to read frame: %v", err)
+	}
+	if frame.Type != protocol.FrameDATA {
+		t.Fatalf("expected DATA frame, got %v", frame.Type)
+	}
+	if len(frame.Payload) != len(payload) {
+		t.Fatalf("payload size mismatch: got %d, want %d", len(frame.Payload), len(payload))
+	}
+}
+
+func TestBatchShaperCoverInjectInFlightDuringClose(t *testing.T) {
+	masterKey, err := easycrypto.DeriveMasterKey("close-race-cover")
+	if err != nil {
+		t.Fatal(err)
+	}
+	salt := []byte("1234567890123456")
+	endpoint := "/v3/tcp"
+	sk, err := easycrypto.NewStreamKeys(masterKey, salt, endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, ctr, err := sk.Encryptor("c2s", "session", protocol.MethodAES256GCM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aad := easycrypto.BuildAAD(endpoint, salt, "c2s", "session", protocol.MethodAES256GCM)
+
+	bw := newBlockingWriter()
+	rw := easycrypto.NewRecordWriter(bw, enc, ctr, aad)
+	bs := New(rw, Config{BatchWindowMS: 10000})
+
+	bigPayload := make([]byte, 58720)
+	if err := bs.PushData(bigPayload); err != nil {
+		t.Fatal(err)
+	}
+
+	coverPayload := bytespool.Get(256)[:256]
+	coverFrame := protocol.Frame{
+		Type:    protocol.FrameCOVER,
+		Length:  256,
+		Payload: coverPayload,
+	}
+
+	bsImpl := bs.(*batchShaper)
+	go func() {
+		_ = bsImpl.injectCoverFrame(coverFrame)
+	}()
+
+	select {
+	case <-bw.blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for cover inject to trigger WriteRecord")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- bs.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before cover inject was released: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(bw.release)
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for Close to complete")
+	}
+
+	writesBefore := bw.writeCount.Load()
+	time.Sleep(100 * time.Millisecond)
+	if got := bw.writeCount.Load(); got != writesBefore {
+		t.Fatalf("write after Close(): before=%d, after=%d", writesBefore, got)
+	}
+
+	if bw.writeCount.Load() == 0 {
+		t.Fatal("expected at least one WriteRecord call")
+	}
+}
+
+func TestBatchShaperNoWriteAfterClose(t *testing.T) {
+	masterKey, err := easycrypto.DeriveMasterKey("no-write-after-close")
+	if err != nil {
+		t.Fatal(err)
+	}
+	salt := []byte("1234567890123456")
+	endpoint := "/v3/tcp"
+	sk, err := easycrypto.NewStreamKeys(masterKey, salt, endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := make([]byte, 256)
+
+	for i := range 100 {
+		enc, ctr, err := sk.Encryptor("c2s", "session", protocol.MethodAES256GCM)
+		if err != nil {
+			t.Fatal(err)
+		}
+		aad := easycrypto.BuildAAD(endpoint, salt, "c2s", "session", protocol.MethodAES256GCM)
+
+		cw := &countingWriter{inner: &lockedBuffer{}}
+		rw := easycrypto.NewRecordWriter(cw, enc, ctr, aad)
+		bs := New(rw, Config{BatchWindowMS: 1})
+
+		if err := bs.PushData(payload); err != nil {
+			t.Fatalf("PushData failed at iteration %d: %v", i, err)
+		}
+		if err := bs.Close(); err != nil {
+			t.Fatalf("Close failed at iteration %d: %v", i, err)
+		}
+
+		writesAfter := cw.writes.Load()
+		time.Sleep(10 * time.Millisecond)
+		if got := cw.writes.Load(); got != writesAfter {
+			t.Fatalf("write after close at iteration %d: before=%d, after=%d", i, writesAfter, got)
+		}
+	}
+}
