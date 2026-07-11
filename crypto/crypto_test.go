@@ -3,6 +3,8 @@ package crypto
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/binary"
+	"sync"
 	"testing"
 
 	"github.com/nange/easyss/v3/protocol"
@@ -199,4 +201,45 @@ func TestNewStreamKeysInvalidInput(t *testing.T) {
 	masterKey, _ := DeriveMasterKey("password")
 	_, err = NewStreamKeys(masterKey, []byte("short"), "/v3/tcp")
 	require.Error(t, err)
+}
+
+func TestCounterNonceConcurrentNext(t *testing.T) {
+	var prefix [4]byte
+	prefix[0] = 0xBB
+
+	cn := NewCounterNonce(prefix)
+
+	const goroutines = 8
+	const callsPerGoroutine = 10000
+	const total = goroutines * callsPerGoroutine
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	counters := make([]uint64, total)
+	for g := range goroutines {
+		go func(gid int) {
+			defer wg.Done()
+			for i := range callsPerGoroutine {
+				nonce := cn.Next()
+				idx := gid*callsPerGoroutine + i
+				counters[idx] = binary.BigEndian.Uint64(nonce[4:])
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	seen := make(map[uint64]bool, total)
+	for _, c := range counters {
+		if seen[c] {
+			t.Fatalf("duplicate nonce counter: %d", c)
+		}
+		seen[c] = true
+	}
+
+	require.Len(t, seen, total)
+
+	for i := range total {
+		require.True(t, seen[uint64(i)], "missing counter value %d", i)
+	}
 }

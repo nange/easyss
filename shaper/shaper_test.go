@@ -2,7 +2,9 @@ package shaper
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -236,4 +238,140 @@ func TestCoverInjectorStopsAfterThreshold(t *testing.T) {
 		bytespool.MustPut(f.Payload)
 	}
 	mu.Unlock()
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (lb *lockedBuffer) Write(p []byte) (int, error) {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	return lb.buf.Write(p)
+}
+
+func (lb *lockedBuffer) Flush() {}
+
+func (lb *lockedBuffer) Snapshot() []byte {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	out := make([]byte, lb.buf.Len())
+	copy(out, lb.buf.Bytes())
+	return out
+}
+
+func TestBatchShaperConcurrentFlushNoNonceDesync(t *testing.T) {
+	const rounds = 20
+	const goroutines = 4
+	const pushesPerGoroutine = 50
+	const payloadSize = 64
+
+	masterKey, err := easycrypto.DeriveMasterKey("concurrent-flush-test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	salt := []byte("1234567890123456")
+	endpoint := "/v3/tcp"
+	sk, err := easycrypto.NewStreamKeys(masterKey, salt, endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	totalPushes := goroutines * pushesPerGoroutine
+
+	for round := range rounds {
+		t.Run(fmt.Sprintf("round_%d", round), func(t *testing.T) {
+			enc, ctr, err := sk.Encryptor("c2s", "session", protocol.MethodAES256GCM)
+			if err != nil {
+				t.Fatal(err)
+			}
+			aad := easycrypto.BuildAAD(endpoint, salt, "c2s", "session", protocol.MethodAES256GCM)
+
+			out := &lockedBuffer{}
+			bs := New(easycrypto.NewRecordWriter(out, enc, ctr, aad), Config{
+				BatchWindowMS: 1,
+				Cover: CoverConfig{
+					BudgetRatio: 0.5,
+					IdleTimeout: 5,
+					MinSize:     64,
+					MaxSize:     512,
+					BudgetCap:   1 << 20,
+				},
+			})
+
+			var wg sync.WaitGroup
+			for g := range goroutines {
+				wg.Add(1)
+				go func(gid int) {
+					defer wg.Done()
+					for i := range pushesPerGoroutine {
+						seq := uint32(gid*pushesPerGoroutine + i)
+						payload := make([]byte, payloadSize)
+						binary.BigEndian.PutUint32(payload[:4], seq)
+						if err := bs.PushData(payload); err != nil {
+							t.Errorf("PushData failed (goroutine %d, push %d): %v", gid, i, err)
+							return
+						}
+					}
+				}(g)
+			}
+			wg.Wait()
+
+			if err := bs.Flush(); err != nil {
+				t.Fatalf("Flush failed: %v", err)
+			}
+			if err := bs.Close(); err != nil {
+				t.Fatalf("Close failed: %v", err)
+			}
+
+			decEnc, decCtr, err := sk.Encryptor("c2s", "session", protocol.MethodAES256GCM)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rr := easycrypto.NewRecordReader(bytes.NewReader(out.Snapshot()), decEnc, decCtr, aad)
+
+			seenSeqs := make(map[uint32]bool, totalPushes)
+			recordCount := 0
+			for {
+				plaintext, err := rr.ReadRecord()
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					t.Fatalf("record %d decrypt failed: %v", recordCount, err)
+				}
+				recordCount++
+
+				r := bytes.NewReader(plaintext)
+				for {
+					frame, err := protocol.ReadFrame(r)
+					if err != nil {
+						if errors.Is(err, io.EOF) {
+							break
+						}
+						t.Fatalf("decode frame failed in record %d: %v", recordCount-1, err)
+					}
+					if frame.Type == protocol.FrameDATA && len(frame.Payload) >= 4 {
+						seq := binary.BigEndian.Uint32(frame.Payload[:4])
+						if seenSeqs[seq] {
+							t.Fatalf("duplicate sequence number %d in round %d", seq, round)
+						}
+						seenSeqs[seq] = true
+					}
+				}
+			}
+
+			if recordCount == 0 {
+				t.Fatalf("no records decrypted in round %d", round)
+			}
+
+			for i := range totalPushes {
+				if !seenSeqs[uint32(i)] {
+					t.Fatalf("missing sequence number %d in round %d (got %d/%d)",
+						i, round, len(seenSeqs), totalPushes)
+				}
+			}
+		})
+	}
 }
