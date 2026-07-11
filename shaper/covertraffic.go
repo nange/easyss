@@ -27,7 +27,6 @@ type coverInjector struct {
 	lastReset        time.Time
 	lastRealData     atomic.Int64
 	minResetInterval time.Duration
-	activeCooldown   time.Duration
 	totalSent        atomic.Int64
 	coverThreshold   int64
 	stopped          atomic.Bool
@@ -41,7 +40,7 @@ func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClos
 		cfg.BudgetRatio = 0.10
 	}
 	if cfg.IdleTimeout <= 0 {
-		cfg.IdleTimeout = 200
+		cfg.IdleTimeout = 300
 	}
 	if cfg.MinSize <= 0 {
 		cfg.MinSize = 64
@@ -61,8 +60,7 @@ func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClos
 		inject:           inject,
 		isClosing:        isClosing,
 		minResetInterval: time.Duration(cfg.IdleTimeout) * time.Millisecond / 2,
-		activeCooldown:   time.Duration(cfg.IdleTimeout) * 3 * time.Millisecond,
-		coverThreshold:   int64(1024*1024) + int64(randomInt(1<<20)),
+			coverThreshold:   int64(1024*1024) + int64(randomInt(1<<20)),
 	}
 	ci.timer = time.AfterFunc(time.Duration(cfg.IdleTimeout)*time.Millisecond, ci.onIdle)
 	ci.timer.Stop()
@@ -125,7 +123,7 @@ func (ci *coverInjector) onIdle() {
 	lastRealNs := ci.lastRealData.Load()
 	if lastRealNs > 0 {
 		lastReal := time.Unix(0, lastRealNs)
-		if time.Since(lastReal) < ci.activeCooldown {
+		if time.Since(lastReal) < time.Duration(ci.cfg.IdleTimeout)*time.Millisecond {
 			ci.budget *= 0.5
 			ci.timer.Reset(ci.jitterTimeout())
 			ci.mu.Unlock()
