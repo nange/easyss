@@ -29,11 +29,11 @@ easyss-without-tray:
 
 easyss-server:
 	cd cmd/easyss-server; \
-	$(GO_BUILD) -o ../../bin/easyss-server
+	CGO_ENABLED=0 $(GO_BUILD) -o ../../bin/easyss-server
 
 easyss-server-windows:
 	cd cmd/easyss-server; \
-	$(GO_BUILD_WIN) -o ../../bin/easyss-server.exe
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags '$(LDFLAGS)' -o ../../bin/easyss-server.exe
 
 easyss-android-arm64:
 	cd cmd/easyss; \
