@@ -29,11 +29,6 @@ type TrayApp struct {
 }
 
 func (a *TrayApp) trayReady() {
-	if err := a.Start(); err != nil {
-		log.Error("[EASYSS-V3] tray start", "err", err)
-		os.Exit(1)
-	}
-
 	systray.SetTemplateIcon(icon.Data, icon.Data)
 
 	a.addSelectServerMenu()
@@ -56,6 +51,13 @@ func (a *TrayApp) trayReady() {
 	systray.AddSeparator()
 
 	a.addExitMenu()
+
+	// Start service after menu is populated so that desktop environments
+	// (especially GNOME with AppIndicator) see a non-empty menu on first query.
+	if err := a.Start(); err != nil {
+		log.Error("[EASYSS-V3] tray start", "err", err)
+		os.Exit(1)
+	}
 
 	a.startLocalService()
 }
