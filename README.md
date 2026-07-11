@@ -156,7 +156,8 @@ Easyss v3 支持两种配置模式，自动识别：
   },
   "shaper": {
     "batch_window_ms": 3,
-    "cover_budget_ratio": 0.05
+    "cover_budget_ratio": 0.05,
+    "cover_budget_cap": 131072
   },
   "log": {
     "level": "info",
@@ -292,7 +293,8 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
     "email": "your-email",
     "fallback_target": "",
     "batch_window_ms": 3,
-    "cover_budget_ratio": 0.02
+    "cover_budget_ratio": 0.02,
+    "cover_budget_cap": 131072
   },
   "log": {
       "level": "info",
@@ -316,6 +318,7 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 | `server.fallback_target` | 否 | - | 回落目标，自动识别类型：<br>**空**: 使用内置主题页面<br>**URL** (`http://`或`https://`开头): 反向代理到上游 HTTP 服务<br>**目录**: 根据 URL path 匹配 HTML 文件（如 `/about` → `about.html`）<br>**文件**: 所有路径返回同一 HTML 页面 |
 | `server.batch_window_ms` | 否 | 3 | 流量整形批处理窗口，单位毫秒，范围 1-10 |
 | `server.cover_budget_ratio` | 否 | 0.02 | cover traffic 占真实流量的预算比例，设为 0 或负数使用默认值，范围 (0, 1] |
+| `server.cover_budget_cap` | 否 | 131072 | cover traffic 最大累积预算，单位字节，默认 128KB |
 | `timeout` | 否 | 30 | 超时时间，单位秒 |
 
 > **fallback_target 使用示例**：

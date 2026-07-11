@@ -85,6 +85,7 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		BatchWindowMS: cfg.Shaper.BatchWindowMS,
 		Cover: shaper.CoverConfig{
 			BudgetRatio: cfg.Shaper.CoverBudgetRatio,
+			BudgetCap:   cfg.Shaper.CoverBudgetCap,
 		},
 	}
 

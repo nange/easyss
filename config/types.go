@@ -5,6 +5,7 @@ const (
 	DefaultConnCountMax    = 6
 	DefaultStreamThreshold = 8
 	DefaultBatchWindowMS   = 3
+	DefaultCoverBudgetCap  = 128 * 1024 // 128KB
 
 	HTTP2ServerMaxReadFrameSize           = 1<<24 - 1  // 16MB-1，nginx/Cloudflare 主流值
 	HTTP2ServerReceiveBufferPerConnection = 1 << 20    // 1MB，避免 64KB 瓶颈导致长期运行吞吐量下降

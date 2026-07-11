@@ -61,6 +61,7 @@ type TransportConfig struct {
 type ShaperConfig struct {
 	BatchWindowMS    int     `json:"batch_window_ms"`
 	CoverBudgetRatio float64 `json:"cover_budget_ratio"`
+	CoverBudgetCap   int     `json:"cover_budget_cap"`
 }
 
 type LogConfig struct {
@@ -229,6 +230,9 @@ func applyDefaults(c *ClientConfig) {
 	}
 	if c.Shaper.CoverBudgetRatio <= 0 || c.Shaper.CoverBudgetRatio > 1 {
 		c.Shaper.CoverBudgetRatio = 0.05
+	}
+	if c.Shaper.CoverBudgetCap <= 0 {
+		c.Shaper.CoverBudgetCap = config.DefaultCoverBudgetCap
 	}
 	if c.Routing.ProxyRule == "" {
 		c.Routing.ProxyRule = "auto"

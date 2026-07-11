@@ -128,6 +128,7 @@ func exampleV3ServerConfig() string {
 			FallbackTarget:   "",
 			BatchWindowMS:    3,
 			CoverBudgetRatio: 0.02,
+			CoverBudgetCap:   128 * 1024,
 			PprofEnabled:     false,
 		},
 		Transport: config.TransportConfig{

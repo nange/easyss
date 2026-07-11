@@ -248,6 +248,7 @@ func (a *App) Start() error {
 		BatchWindowMS: a.cfg.Shaper.BatchWindowMS,
 		Cover: shaper.CoverConfig{
 			BudgetRatio: a.cfg.Shaper.CoverBudgetRatio,
+			BudgetCap:   a.cfg.Shaper.CoverBudgetCap,
 		},
 	}
 
@@ -484,6 +485,7 @@ func exampleV3Config() string {
 		Shaper: config.ShaperConfig{
 			BatchWindowMS:    3,
 			CoverBudgetRatio: 0.05,
+			CoverBudgetCap:   128 * 1024,
 		},
 		Log: config.LogConfig{
 			Level:    "info",

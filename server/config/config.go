@@ -29,6 +29,7 @@ type ServerConfig struct {
 	Timeout          int             `json:"-"`
 	BatchWindowMS    int             `json:"batch_window_ms"`
 	CoverBudgetRatio float64         `json:"cover_budget_ratio"`
+	CoverBudgetCap   int             `json:"cover_budget_cap"`
 	NextProxy        NextProxyConfig `json:"-"`
 	PprofEnabled     bool            `json:"pprof_enabled"`
 }

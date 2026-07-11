@@ -292,6 +292,7 @@ func (s *Server) Start() error {
 		UDPIdleTimeout:    2 * timeout,
 		BatchWindowMS:     s.cfg.BatchWindowMS,
 		CoverBudgetRatio:  s.cfg.CoverBudgetRatio,
+		CoverBudgetCap:    s.cfg.CoverBudgetCap,
 		NextProxy:         np,
 	})
 

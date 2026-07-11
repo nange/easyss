@@ -24,6 +24,7 @@ type ProxyHandler struct {
 	handshakeTimeout time.Duration
 	batchWindowMS    int
 	coverBudgetRatio float64
+	coverBudgetCap   int
 	nextProxy        *nextproxy.NextProxy
 	tcpHandler       *TCPHandler
 	udpHandler       *UDPHandler
@@ -39,6 +40,7 @@ type ProxyHandlerConfig struct {
 	UDPIdleTimeout    time.Duration
 	BatchWindowMS     int
 	CoverBudgetRatio  float64
+	CoverBudgetCap    int
 	NextProxy         *nextproxy.NextProxy
 }
 
@@ -68,12 +70,18 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 		coverBudgetRatio = 0.02
 	}
 
+	coverBudgetCap := cfg.CoverBudgetCap
+	if coverBudgetCap <= 0 {
+		coverBudgetCap = sharedconfig.DefaultCoverBudgetCap
+	}
+
 	return &ProxyHandler{
 		masterKey:        cfg.MasterKey,
 		allowedMethods:   allowed,
 		handshakeTimeout: cfg.HandshakeTimeout,
 		batchWindowMS:    batchWindowMS,
 		coverBudgetRatio: coverBudgetRatio,
+		coverBudgetCap:   coverBudgetCap,
 		nextProxy:        cfg.NextProxy,
 		tcpHandler:       NewTCPHandler(cfg.StreamIdleTimeout, cfg.Timeout, cfg.NextProxy),
 		udpHandler:       NewUDPHandler(cfg.UDPIdleTimeout, cfg.NextProxy),
@@ -177,7 +185,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s2cWriter := crypto.NewRecordWriter(w, s2cEnc, s2cCounter, aadS2C)
-	s2cShaper := shaper.New(s2cWriter, shaper.Config{BatchWindowMS: h.batchWindowMS, Cover: shaper.CoverConfig{BudgetRatio: h.coverBudgetRatio}})
+	s2cShaper := shaper.New(s2cWriter, shaper.Config{BatchWindowMS: h.batchWindowMS, Cover: shaper.CoverConfig{BudgetRatio: h.coverBudgetRatio, BudgetCap: h.coverBudgetCap}})
 	defer s2cShaper.Close() //nolint:errcheck
 
 	var handleErr error
