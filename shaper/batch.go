@@ -19,6 +19,7 @@ type batchShaper struct {
 	plaintext      []byte
 	timer          *time.Timer
 	mu             sync.Mutex
+	writeMu        sync.Mutex // serializes WriteRecord calls across goroutines
 	maxChunkSize   int
 	flushThreshold int
 	window         time.Duration
@@ -213,7 +214,10 @@ func (bs *batchShaper) flush() error {
 
 	bs.mu.Unlock()
 
+	bs.writeMu.Lock()
 	err := bs.writer.WriteRecord(data)
+	bs.writeMu.Unlock()
+
 	bytespool.MustPut(data[:cap(data)])
 
 	if err != nil {
