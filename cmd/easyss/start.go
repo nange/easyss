@@ -13,10 +13,10 @@ import (
 )
 
 func runApp(disableTray, daemon bool, app *App) {
-	if !disableTray && (runtime.GOOS == "windows" || runtime.GOOS == "darwin") {
-		// On macOS, daemonize before starting the tray app so that
+	if !disableTray && (runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux") {
+		// On macOS and Linux, daemonize before starting the tray app so that
 		// closing the terminal does not terminate the process.
-		if daemon && runtime.GOOS == "darwin" {
+		if daemon && runtime.GOOS != "windows" {
 			runDaemon()
 		}
 
@@ -42,11 +42,27 @@ func runApp(disableTray, daemon bool, app *App) {
 	} else if daemon && runtime.GOOS != "windows" {
 		runDaemon()
 	} else {
+		proxyWasSet := false
+		if !app.cfg.Local.DisableSysProxy && app.cfg.Local.HTTPPort > 0 {
+			if err := setSysProxy(app.cfg.Local.HTTPPort); err != nil {
+				log.Warn("[EASYSS-V3] set system proxy failed, you may need to configure it manually", "err", err)
+			} else {
+				proxyWasSet = true
+			}
+		}
+
 		if err := app.Start(); err != nil {
 			log.Error("[EASYSS-V3] start", "err", err)
+			if proxyWasSet {
+				_ = unsetSysProxy()
+			}
 			os.Exit(1)
 		}
 		sigWait()
+
+		if proxyWasSet {
+			_ = unsetSysProxy()
+		}
 		app.Stop()
 		os.Exit(0)
 	}
