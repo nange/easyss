@@ -18,7 +18,7 @@ type Shaper interface {
 type CoverConfig struct {
 	BudgetRatio float64 // cover traffic budget ratio to real traffic, 0.0-1.0 (default 0.10)
 	IdleTimeout int     // idle timeout in ms before sending cover frames (default 300)
-	MinSize     int     // min cover frame payload size in bytes (default 64)
+	MinSize     int     // min cover frame payload size in bytes (default 128)
 	MaxSize     int     // max cover frame payload size in bytes (default 1500)
 	BudgetCap   int     // max accumulated cover budget in bytes, 0 means unlimited (default 128KB)
 }

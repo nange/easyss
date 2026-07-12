@@ -151,24 +151,56 @@ func TestCoverInjectorSkipsDuringActiveStreaming(t *testing.T) {
 
 func TestCoverInjectorFrameSizeRange(t *testing.T) {
 	ci := &coverInjector{
-		cfg: CoverConfig{MinSize: 64, MaxSize: 1500},
+		cfg: CoverConfig{MinSize: 128, MaxSize: 1500},
 	}
 
 	minSize, maxSize := ci.coverFrameSizeRange()
-	if minSize != 64 || maxSize != 512 {
-		t.Fatalf("initial range = [%d, %d], want [64, 512]", minSize, maxSize)
+	if minSize != 128 {
+		t.Fatalf("initial minSize = %d, want 128 (= cfg.MinSize)", minSize)
+	}
+	if maxSize != 509 {
+		t.Fatalf("initial maxSize = %d, want 509", maxSize)
 	}
 
 	ci.totalSent.Store(1 << 20)
 	minSize, maxSize = ci.coverFrameSizeRange()
-	if minSize != 256 || maxSize != 1500 {
-		t.Fatalf("at 1MB range = [%d, %d], want [256, 1500]", minSize, maxSize)
+	if minSize != 512 {
+		t.Fatalf("at 1MB minSize = %d, want 512", minSize)
+	}
+	if maxSize != 1500 {
+		t.Fatalf("at 1MB maxSize = %d, want cfg.MaxSize 1500", maxSize)
 	}
 
 	ci.totalSent.Store(10 << 20)
 	minSize, maxSize = ci.coverFrameSizeRange()
-	if minSize != 256 || maxSize != 1500 {
-		t.Fatalf("at 10MB range = [%d, %d], want [256, 1500] (capped)", minSize, maxSize)
+	if minSize != 512 {
+		t.Fatalf("at 10MB minSize = %d, want 512 (capped)", minSize)
+	}
+	if maxSize != 1500 {
+		t.Fatalf("at 10MB maxSize = %d, want cfg.MaxSize 1500 (capped)", maxSize)
+	}
+}
+
+func TestCoverInjectorFrameSizeRangeRespectsConfig(t *testing.T) {
+	ci := &coverInjector{
+		cfg: CoverConfig{MinSize: 256, MaxSize: 8192},
+	}
+
+	minSize, maxSize := ci.coverFrameSizeRange()
+	if minSize != 256 {
+		t.Fatalf("initial minSize = %d, want cfg.MinSize 256", minSize)
+	}
+	if maxSize != 2462 {
+		t.Fatalf("initial maxSize = %d, want 2462", maxSize)
+	}
+
+	ci.totalSent.Store(1 << 20)
+	minSize, maxSize = ci.coverFrameSizeRange()
+	if minSize != 2478 {
+		t.Fatalf("at 1MB minSize = %d, want 2478", minSize)
+	}
+	if maxSize != 8192 {
+		t.Fatalf("at 1MB maxSize = %d, want cfg.MaxSize 8192", maxSize)
 	}
 }
 

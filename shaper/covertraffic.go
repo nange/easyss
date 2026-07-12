@@ -43,7 +43,7 @@ func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClos
 		cfg.IdleTimeout = 300
 	}
 	if cfg.MinSize <= 0 {
-		cfg.MinSize = 64
+		cfg.MinSize = 128
 	}
 	if cfg.MaxSize <= 0 {
 		cfg.MaxSize = 1500
@@ -163,8 +163,23 @@ func (ci *coverInjector) coverFrameSizeRange() (minSize, maxSize int) {
 	const smoothSpan = 1 << 20
 	sent := ci.totalSent.Load()
 	ratio := float64(min(sent, smoothSpan)) / float64(smoothSpan)
-	minSize = 64 + int(ratio*(256-64))
-	maxSize = 512 + int(ratio*(1500-512))
+
+	cfgMin, cfgMax := ci.cfg.MinSize, ci.cfg.MaxSize
+	span := float64(cfgMax - cfgMin)
+
+	// 初始阶段以接近 cfgMin 的小尺寸为主,模拟空闲连接的小数据包特征;
+	// 随累计真实流量平滑过渡到接近真实 DATA 帧的尺寸分布。
+	// 默认配置(MinSize=128, MaxSize=1500)下:
+	//   ratio=0 -> [128, 509],  ratio=1 -> [512, 1500]
+	const (
+		minSteadyRatio = 0.28
+		maxStartRatio  = 0.278
+	)
+	minSteady := cfgMin + int(span*minSteadyRatio)
+	maxStart := cfgMin + int(span*maxStartRatio)
+
+	minSize = cfgMin + int(ratio*float64(minSteady-cfgMin))
+	maxSize = maxStart + int(ratio*float64(cfgMax-maxStart))
 	return
 }
 
