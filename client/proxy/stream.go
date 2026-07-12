@@ -119,6 +119,7 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 			}
 			return nil, fmt.Errorf("write handshake: %w", err)
 		}
+		rw.Flush()
 
 		return &bootstrapSession{stream: stream, sk: sk, salt: salt}, nil
 	}

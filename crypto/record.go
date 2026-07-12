@@ -72,11 +72,19 @@ func (rw *RecordWriter) WriteRecord(plaintext []byte) error {
 	stats.RecordBytesSent(recordLen)
 	stats.RecordRecordWritten()
 
+	return nil
+}
+
+// Flush triggers an immediate flush of the underlying writer if it supports
+// flushing (e.g. HTTP/2 ResponseWriter with a 4KB bufio buffer). WriteRecord
+// does not auto-flush; callers (typically the shaper) are responsible for
+// calling Flush after small records. For records larger than the HTTP/2
+// bufio buffer (4KB), the Go HTTP/2 server already sends data directly via
+// chunkWriter, making Flush a no-op.
+func (rw *RecordWriter) Flush() {
 	if flusher, ok := rw.w.(recordFlusher); ok {
 		flusher.Flush()
 	}
-
-	return nil
 }
 
 type RecordReader struct {

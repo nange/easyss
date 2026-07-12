@@ -50,11 +50,30 @@ func TestRecordWriterFlushesAfterCompleteRecord(t *testing.T) {
 	require.NoError(t, err)
 	aad := BuildAAD(endpoint, salt, "s2c", "session", protocol.MethodAES256GCM)
 
+	// WriteRecord should NOT auto-flush regardless of record size.
+	// The caller (shaper) is responsible for calling Flush().
 	w := &flushBuffer{}
-	require.NoError(t, NewRecordWriter(w, enc, counter, aad).WriteRecord([]byte("hello")))
+	rw := NewRecordWriter(w, enc, counter, aad)
+	require.NoError(t, rw.WriteRecord([]byte("hello")))
 	require.Equal(t, 1, w.writes)
-	require.Equal(t, 1, w.flushes)
+	require.Equal(t, 0, w.flushes, "WriteRecord should not auto-flush")
 	require.Greater(t, w.Len(), 3)
+
+	// Explicit Flush() should always flush.
+	rw.Flush()
+	require.Equal(t, 1, w.flushes, "explicit Flush() should flush")
+
+	// Large record should also not auto-flush.
+	large := make([]byte, 32*1024)
+	w2 := &flushBuffer{}
+	enc2, counter2, err := sk.Encryptor("s2c", "session", protocol.MethodAES256GCM)
+	require.NoError(t, err)
+	rw2 := NewRecordWriter(w2, enc2, counter2, aad)
+	require.NoError(t, rw2.WriteRecord(large))
+	require.Equal(t, 1, w2.writes)
+	require.Equal(t, 0, w2.flushes, "large record should not auto-flush")
+	rw2.Flush()
+	require.Equal(t, 1, w2.flushes, "explicit Flush() should flush after large record")
 }
 
 type flushBuffer struct {

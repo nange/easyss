@@ -76,7 +76,7 @@ func (bs *batchShaper) PushData(data []byte) error {
 
 	// Pre-flush if appending would overflow the record.
 	if len(bs.plaintext) > 0 && len(bs.plaintext)+frameSize > bs.maxChunkSize {
-		if err := bs.flushAndWrite(); err != nil {
+		if err := bs.flushAndWrite(false); err != nil {
 			return err
 		}
 	}
@@ -86,13 +86,11 @@ func (bs *batchShaper) PushData(data []byte) error {
 
 	// Post-flush if threshold reached.
 	if len(bs.plaintext) >= bs.flushThreshold {
-		return bs.flushAndWrite()
+		return bs.flushAndWrite(false)
 	}
 
-	if !bs.timerStarted {
-		bs.timerStarted = true
-		bs.timer.Reset(bs.window)
-	}
+	bs.timerStarted = true
+	bs.timer.Reset(bs.window)
 	return nil
 }
 
@@ -119,7 +117,7 @@ func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 
 	// Pre-flush if appending would overflow the record.
 	if len(bs.plaintext) > 0 && len(bs.plaintext)+frameSize > bs.maxChunkSize {
-		if err := bs.flushAndWrite(); err != nil {
+		if err := bs.flushAndWrite(false); err != nil {
 			return err
 		}
 	}
@@ -133,19 +131,17 @@ func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 
 	// Post-flush if threshold reached.
 	if len(bs.plaintext) >= bs.flushThreshold {
-		return bs.flushAndWrite()
+		return bs.flushAndWrite(false)
 	}
 
-	if !bs.timerStarted {
-		bs.timerStarted = true
-		bs.timer.Reset(bs.window)
-	}
+	bs.timerStarted = true
+	bs.timer.Reset(bs.window)
 	return nil
 }
 
 // Flush triggers an immediate flush. Does not require the caller to hold the lock.
 func (bs *batchShaper) Flush() error {
-	return bs.flush()
+	return bs.flush(true)
 }
 
 // Close stops cover traffic, flushes remaining data, and returns the buffer to the pool.
@@ -159,7 +155,7 @@ func (bs *batchShaper) Close() error {
 	bs.timer.Stop()
 	bs.mu.Unlock()
 
-	err := bs.flush()
+	err := bs.flush(true)
 
 	// Serialize with writeMu: any flushAndWrite that acquires writeMu after
 	// this point will see writeClosed and discard its data, preventing writes
@@ -209,8 +205,9 @@ func (bs *batchShaper) flushLocked() []byte {
 
 // flushAndWrite flushes the current buffer and writes the encrypted record.
 // Must be called with mu held. Temporarily releases mu during I/O and
-// re-acquires it before returning.
-func (bs *batchShaper) flushAndWrite() error {
+// re-acquires it before returning. When forceFlush is true, an explicit
+// HTTP/2 flush is triggered after the write to ensure immediate delivery.
+func (bs *batchShaper) flushAndWrite(forceFlush bool) error {
 	data := bs.flushLocked()
 	if data == nil {
 		return nil
@@ -226,6 +223,9 @@ func (bs *batchShaper) flushAndWrite() error {
 		return nil
 	}
 	err := bs.writer.WriteRecord(data)
+	if err == nil && forceFlush {
+		bs.writer.Flush()
+	}
 	bs.writeMu.Unlock()
 
 	bytespool.MustPut(data[:cap(data)])
@@ -239,10 +239,10 @@ func (bs *batchShaper) flushAndWrite() error {
 
 // flush acquires the lock, flushes the buffer, and releases the lock.
 // Caller must NOT hold bs.mu.
-func (bs *batchShaper) flush() error {
+func (bs *batchShaper) flush(forceFlush bool) error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
-	return bs.flushAndWrite()
+	return bs.flushAndWrite(forceFlush)
 }
 
 func (bs *batchShaper) onTimer() {
@@ -252,7 +252,7 @@ func (bs *batchShaper) onTimer() {
 	bs.mu.Lock()
 	bs.timerStarted = false
 	bs.mu.Unlock()
-	_ = bs.flush()
+	_ = bs.flush(true)
 }
 
 func (bs *batchShaper) injectCoverFrame(f protocol.Frame) error {
@@ -267,7 +267,7 @@ func (bs *batchShaper) injectCoverFrame(f protocol.Frame) error {
 
 	// Pre-flush if appending would overflow the record.
 	if len(bs.plaintext) > 0 && len(bs.plaintext)+frameSize > bs.maxChunkSize {
-		if err := bs.flushAndWrite(); err != nil {
+		if err := bs.flushAndWrite(false); err != nil {
 			return err
 		}
 	}
@@ -281,13 +281,11 @@ func (bs *batchShaper) injectCoverFrame(f protocol.Frame) error {
 
 	// Post-flush if threshold reached.
 	if len(bs.plaintext) >= bs.flushThreshold {
-		return bs.flushAndWrite()
+		return bs.flushAndWrite(false)
 	}
 
-	if !bs.timerStarted {
-		bs.timerStarted = true
-		bs.timer.Reset(bs.window)
-	}
+	bs.timerStarted = true
+	bs.timer.Reset(bs.window)
 	return nil
 }
 
