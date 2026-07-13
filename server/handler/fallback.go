@@ -749,6 +749,37 @@ func rewriteSetCookieHeaders(resp *http.Response, targetHost string) {
 	resp.Header["Set-Cookie"] = rewritten
 }
 
+// rewriteCSP rewrites a Content-Security-Policy header value so that source
+// expressions referencing the upstream host are replaced with the
+// client-facing origin. It handles three forms:
+//  1. Scheme-prefixed: "https://github.com/path" → "https://my-site.com/path"
+//  2. Scheme-prefixed http: "http://github.com/path" → "https://my-site.com/path"
+//  3. Bare host: "github.com/assets-cdn/worker/" → "my-site.com/assets-cdn/worker/"
+//
+// Bare-host replacement is done token-by-token (CSP source lists are
+// space-separated) to avoid accidentally replacing substrings of other hosts
+// (e.g. "api.github.com" or "github.githubassets.com").
+func rewriteCSP(csp, targetHost, origOrigin string) string {
+	// Replace scheme-prefixed forms first.
+	csp = strings.ReplaceAll(csp, "https://"+targetHost, origOrigin)
+	csp = strings.ReplaceAll(csp, "http://"+targetHost, origOrigin)
+
+	// Replace bare-host forms (no scheme prefix). CSP source lists are
+	// space-separated, so split on space and replace tokens that start
+	// with the target host followed by "/" or end exactly at the target
+	// host. This avoids matching substrings of other hosts like
+	// "api.github.com" or "github.githubassets.com".
+	origHost := strings.TrimPrefix(origOrigin, "http://")
+	origHost = strings.TrimPrefix(origHost, "https://")
+	parts := strings.Split(csp, " ")
+	for i, part := range parts {
+		if part == targetHost || strings.HasPrefix(part, targetHost+"/") {
+			parts[i] = strings.Replace(part, targetHost, origHost, 1)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 // rewriteResponseBody reads an HTML response body and replaces absolute URLs
 // pointing at the upstream host (both http and https variants) with the
 // client-facing origin, so that browser-initiated requests (e.g. Turbo frame
@@ -815,12 +846,13 @@ func rewriteResponseBody(resp *http.Response, targetHost string) error {
 	replaced = bytes.ReplaceAll(replaced, []byte("http://"+targetHost), []byte(origOrigin))
 	replaced = bytes.ReplaceAll(replaced, []byte("https://"+targetHost), []byte(origOrigin))
 
-	// Rewrite the Content-Security-Policy header similarly so that
-	// connect-src / form-action / etc. entries referencing the upstream
-	// origin allow the client-facing origin instead.
+	// Rewrite the Content-Security-Policy header so that source-list
+	// entries referencing the upstream origin allow the client-facing
+	// origin instead. This covers both scheme-prefixed forms (e.g.
+	// "https://github.com") and bare-host forms (e.g.
+	// "github.com/assets-cdn/worker/") which appear in GitHub's CSP.
 	if csp := resp.Header.Get("Content-Security-Policy"); csp != "" {
-		csp = strings.ReplaceAll(csp, "http://"+targetHost, origOrigin)
-		csp = strings.ReplaceAll(csp, "https://"+targetHost, origOrigin)
+		csp = rewriteCSP(csp, targetHost, origOrigin)
 		resp.Header.Set("Content-Security-Policy", csp)
 	}
 

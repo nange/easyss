@@ -899,6 +899,98 @@ func TestSetFallbackProxy_RewriteContentCSP(t *testing.T) {
 	}
 }
 
+// TestSetFallbackProxy_RewriteCSPBareHost verifies that bare-host source
+// expressions in CSP (without a scheme prefix, e.g.
+// "github.com/assets-cdn/worker/") are rewritten to the client-facing host.
+// This is needed for GitHub's worker-src directive which uses scheme-less
+// paths.
+func TestSetFallbackProxy_RewriteCSPBareHost(t *testing.T) {
+	var upstreamHost string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		// Simulate GitHub-style CSP with bare-host paths in worker-src.
+		w.Header().Set("Content-Security-Policy",
+			"worker-src "+upstreamHost+"/assets-cdn/worker/ "+upstreamHost+"/assets/ gist."+upstreamHost+"/assets-cdn/worker/")
+		w.Write([]byte("<html></html>"))
+	}))
+	defer upstream.Close()
+	upstreamHost = upstream.Listener.Addr().String()
+
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	csp := rec.Header().Get("Content-Security-Policy")
+	// Bare upstream host should be replaced with client-facing host.
+	// Check that no space-prefixed upstream host path remains (the space
+	// ensures we match a standalone token, not a substring of "gist.").
+	if strings.Contains(csp, " "+upstreamHost+"/assets-cdn/worker/") {
+		t.Errorf("CSP should not contain bare %q/assets-cdn/worker/\ncsp: %s", upstreamHost, csp)
+	}
+	if !strings.Contains(csp, "my-site.com/assets-cdn/worker/") {
+		t.Errorf("CSP should contain my-site.com/assets-cdn/worker/\ncsp: %s", csp)
+	}
+	if !strings.Contains(csp, "my-site.com/assets/") {
+		t.Errorf("CSP should contain my-site.com/assets/\ncsp: %s", csp)
+	}
+	// Subdomain references should be preserved (not replaced).
+	if !strings.Contains(csp, "gist."+upstreamHost) {
+		t.Errorf("CSP should still contain gist.%s\ncsp: %s", upstreamHost, csp)
+	}
+}
+
+// TestSetFallbackProxy_RewriteCSPMixed verifies that a CSP with both
+// scheme-prefixed and bare-host forms of the upstream host are all rewritten
+// correctly, while other hosts and subdomains are preserved.
+func TestSetFallbackProxy_RewriteCSPMixed(t *testing.T) {
+	var upstreamHost string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set("Content-Security-Policy",
+			"connect-src 'self' https://"+upstreamHost+" "+upstreamHost+"/api "+
+				"api."+upstreamHost+" https://other.example.com")
+		w.Write([]byte("<html></html>"))
+	}))
+	defer upstream.Close()
+	upstreamHost = upstream.Listener.Addr().String()
+
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	csp := rec.Header().Get("Content-Security-Policy")
+	// No upstream host should remain (except subdomain api.).
+	if bytes.Contains([]byte(csp), []byte("https://"+upstreamHost)) {
+		t.Errorf("CSP should not contain https://%s\ncsp: %s", upstreamHost, csp)
+	}
+	if bytes.Contains([]byte(csp), []byte(" "+upstreamHost+"/")) {
+		t.Errorf("CSP should not contain bare %q/\ncsp: %s", upstreamHost, csp)
+	}
+	// Client-facing host should be present.
+	if !bytes.Contains([]byte(csp), []byte("my-site.com")) {
+		t.Errorf("CSP should contain my-site.com\ncsp: %s", csp)
+	}
+	// Subdomain and other host should be preserved.
+	if !bytes.Contains([]byte(csp), []byte("api."+upstreamHost)) {
+		t.Errorf("CSP should still contain api.%s\ncsp: %s", upstreamHost, csp)
+	}
+	if !bytes.Contains([]byte(csp), []byte("other.example.com")) {
+		t.Errorf("CSP should still contain other.example.com\ncsp: %s", csp)
+	}
+}
+
 // TestSetFallbackProxy_RewriteContentGzip verifies that gzipped HTML
 // responses are decompressed and rewritten correctly.
 func TestSetFallbackProxy_RewriteContentGzip(t *testing.T) {
