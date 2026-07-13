@@ -1128,3 +1128,118 @@ func TestClientAcceptsGzip(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Origin / Referer request header rewriting tests
+// ---------------------------------------------------------------------------
+
+// TestSetFallbackProxy_RewriteOrigin verifies that the Origin header on POST
+// requests is rewritten from the client-facing host to the upstream host so
+// that Rails CSRF protection accepts the request.
+func TestSetFallbackProxy_RewriteOrigin(t *testing.T) {
+	var gotOrigin string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotOrigin = r.Header.Get("Origin")
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("<html></html>"))
+	}))
+	defer upstream.Close()
+	upstreamHost := upstream.Listener.Addr().String()
+
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodPost, "/session", nil)
+	req.Host = "my-site.com"
+	req.Header.Set("Origin", "http://my-site.com")
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	want := "http://" + upstreamHost
+	if gotOrigin != want {
+		t.Errorf("upstream received Origin %q, want %q", gotOrigin, want)
+	}
+}
+
+// TestSetFallbackProxy_RewriteReferer verifies that the Referer header is
+// rewritten from the client-facing host to the upstream host, preserving the
+// path.
+func TestSetFallbackProxy_RewriteReferer(t *testing.T) {
+	var gotReferer string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotReferer = r.Header.Get("Referer")
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("<html></html>"))
+	}))
+	defer upstream.Close()
+	upstreamHost := upstream.Listener.Addr().String()
+
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodPost, "/session", nil)
+	req.Host = "my-site.com"
+	req.Header.Set("Referer", "http://my-site.com/login")
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	want := "http://" + upstreamHost + "/login"
+	if gotReferer != want {
+		t.Errorf("upstream received Referer %q, want %q", gotReferer, want)
+	}
+}
+
+// TestSetFallbackProxy_OtherHostOriginUnchanged verifies that Origin headers
+// pointing at a host other than the client-facing host are left untouched.
+func TestSetFallbackProxy_OtherHostOriginUnchanged(t *testing.T) {
+	var gotOrigin string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotOrigin = r.Header.Get("Origin")
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("<html></html>"))
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodPost, "/session", nil)
+	req.Host = "my-site.com"
+	req.Header.Set("Origin", "http://other.example.com")
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	if gotOrigin != "http://other.example.com" {
+		t.Errorf("upstream received Origin %q, want %q (unchanged)", gotOrigin, "http://other.example.com")
+	}
+}
+
+// TestSetFallbackProxy_NoOriginNoError verifies that requests without an
+// Origin or Referer header are handled without error.
+func TestSetFallbackProxy_NoOriginNoError(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("<html></html>"))
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodPost, "/session", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}

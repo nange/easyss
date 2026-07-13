@@ -593,6 +593,12 @@ func SetFallbackProxy(targetURL string, preserveHost bool) error {
 			} else {
 				pr.Out.Header.Set("Accept-Encoding", "identity")
 			}
+			// Rewrite Origin and Referer request headers so the upstream
+			// sees its own origin. Without this, Rails CSRF protection
+			// (e.g. GitHub) rejects POST requests because the Origin header
+			// is "https://my-site.com" instead of "https://github.com",
+			// resulting in HTTP 422.
+			rewriteRequestOriginReferrer(pr.Out, pr.In.Host, u)
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			if err := rewriteLocationHeader(resp, targetHost); err != nil {
@@ -636,6 +642,32 @@ func clientAcceptsGzip(acceptEncoding string) bool {
 		}
 	}
 	return false
+}
+
+// rewriteRequestOriginReferrer rewrites the Origin and Referer headers on the
+// outbound request so the upstream sees its own origin instead of the
+// proxy's client-facing host. This is required for upstreams that validate
+// the Origin header as part of CSRF protection (e.g. Rails/GitHub return HTTP
+// 422 when the Origin doesn't match). Only headers whose host equals the
+// client-facing host are rewritten; headers pointing at other hosts are left
+// untouched.
+func rewriteRequestOriginReferrer(out *http.Request, clientHost string, upstream *url.URL) {
+	for _, hdr := range []string{"Origin", "Referer"} {
+		val := out.Header.Get(hdr)
+		if val == "" {
+			continue
+		}
+		parsed, err := url.Parse(val)
+		if err != nil {
+			continue
+		}
+		if parsed.Host != clientHost {
+			continue
+		}
+		parsed.Scheme = upstream.Scheme
+		parsed.Host = upstream.Host
+		out.Header.Set(hdr, parsed.String())
+	}
 }
 
 // rewriteLocationHeader rewrites a 3xx Location header that points at the
