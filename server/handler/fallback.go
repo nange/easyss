@@ -427,6 +427,7 @@ type ctxKey int
 const (
 	ctxOrigHost ctxKey = iota
 	ctxOrigScheme
+	ctxOrigAcceptEncoding
 )
 
 var (
@@ -548,9 +549,15 @@ func SetFallbackDir(dir string) error {
 // https://my-site.com/...). This is needed for upstreams like GitHub that
 // embed absolute URLs in turbo-frame src attributes or CSP directives, which
 // otherwise cause CSP violations and direct browser connections to the
-// upstream. Accept-Encoding is set to "identity, gzip" on the upstream
-// request so the body can be manipulated; gzip-compressed responses are
-// transparently decompressed.
+// upstream.
+//
+// Accept-Encoding negotiation: the proxy intersects the client's
+// Accept-Encoding with the encodings it can handle (gzip and identity). If
+// the client accepts gzip, the upstream request advertises "identity, gzip"
+// so the upstream may compress large responses; gzip HTML is decompressed for
+// rewriting and re-compressed before returning to the client. If the client
+// does not accept gzip, the upstream request advertises "identity" only, so
+// no decompression/recompression is needed.
 func SetFallbackProxy(targetURL string, preserveHost bool) error {
 	if targetURL == "" {
 		fallbackProxy = nil
@@ -573,11 +580,19 @@ func SetFallbackProxy(targetURL string, preserveHost bool) error {
 				// public Host.
 				pr.Out.Host = pr.In.Host
 			}
-			// Restrict Accept-Encoding to formats we can decompress so the
-			// HTML body can be rewritten. The upstream may still choose gzip
-			// to save bandwidth; we transparently decompress before
-			// rewriting.
-			pr.Out.Header.Set("Accept-Encoding", "identity, gzip")
+			// Advertise only encodings we can handle, intersected with
+			// what the client accepts. If the client accepts gzip, allow
+			// the upstream to gzip (saves bandwidth on the proxy<->upstream
+			// leg); we decompress before rewriting HTML and re-compress
+			// before returning to the client. If the client does not accept
+			// gzip, request identity only so we never need to decompress
+			// non-HTML responses for a client that can't handle gzip.
+			clientAE := pr.In.Header.Get("Accept-Encoding")
+			if clientAcceptsGzip(clientAE) {
+				pr.Out.Header.Set("Accept-Encoding", "identity, gzip")
+			} else {
+				pr.Out.Header.Set("Accept-Encoding", "identity")
+			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			if err := rewriteLocationHeader(resp, targetHost); err != nil {
@@ -587,6 +602,39 @@ func SetFallbackProxy(targetURL string, preserveHost bool) error {
 		},
 	}
 	return nil
+}
+
+// clientAcceptsGzip reports whether the given Accept-Encoding header value
+// indicates that gzip is acceptable to the client (q-value > 0). The wildcard
+// "*" is treated as accepting gzip.
+func clientAcceptsGzip(acceptEncoding string) bool {
+	if acceptEncoding == "" {
+		return false
+	}
+	for _, part := range strings.Split(acceptEncoding, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		coding := part
+		q := 1.0
+		for i, p := range strings.Split(part, ";") {
+			p = strings.TrimSpace(p)
+			if i == 0 {
+				coding = p
+				continue
+			}
+			if strings.HasPrefix(p, "q=") {
+				if v, err := strconv.ParseFloat(p[2:], 64); err == nil {
+					q = v
+				}
+			}
+		}
+		if (coding == "gzip" || coding == "*") && q > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // rewriteLocationHeader rewrites a 3xx Location header that points at the
@@ -629,10 +677,12 @@ func rewriteLocationHeader(resp *http.Response, targetHost string) error {
 // directly to the upstream. The Content-Security-Policy response header is
 // similarly rewritten. Non-HTML responses are passed through unchanged.
 //
-// The upstream request carries Accept-Encoding: "identity, gzip", so the
-// upstream may return either plain text or gzip-compressed content; the latter
-// is transparently decompressed before rewriting and sent uncompressed to the
-// client.
+// The upstream request's Accept-Encoding is set to "identity, gzip" (when the
+// client accepts gzip) or "identity" (otherwise), so the upstream may return
+// either plain text or gzip-compressed content; gzip is transparently
+// decompressed before rewriting. After rewriting, if the client accepts gzip,
+// the response is re-compressed with gzip before being returned; otherwise it
+// is sent uncompressed.
 func rewriteResponseBody(resp *http.Response, targetHost string) error {
 	// Only rewrite HTML responses.
 	ct := resp.Header.Get("Content-Type")
@@ -695,14 +745,33 @@ func rewriteResponseBody(resp *http.Response, targetHost string) error {
 		resp.Header.Set("Content-Security-Policy", csp)
 	}
 
-	// After rewriting, content is uncompressed — remove Content-Encoding.
-	if enc != "" && enc != "identity" {
-		resp.Header.Del("Content-Encoding")
+	// Re-compress with gzip if the client accepts it, so we don't waste
+	// bandwidth on the client<->proxy leg. Otherwise send uncompressed.
+	origAE, _ := ctx.Value(ctxOrigAcceptEncoding).(string)
+	if clientAcceptsGzip(origAE) {
+		var buf bytes.Buffer
+		gw := gzip.NewWriter(&buf)
+		if _, werr := gw.Write(replaced); werr != nil {
+			gw.Close() //nolint:errcheck
+			// Fall back to uncompressed on error.
+			resp.Body = io.NopCloser(bytes.NewReader(replaced))
+			resp.ContentLength = int64(len(replaced))
+			resp.Header.Set("Content-Length", strconv.Itoa(len(replaced)))
+			resp.Header.Del("Content-Encoding")
+			return nil
+		}
+		gw.Close() //nolint:errcheck
+		resp.Body = io.NopCloser(bytes.NewReader(buf.Bytes()))
+		resp.ContentLength = int64(buf.Len())
+		resp.Header.Set("Content-Length", strconv.Itoa(buf.Len()))
+		resp.Header.Set("Content-Encoding", "gzip")
+		return nil
 	}
 
 	resp.Body = io.NopCloser(bytes.NewReader(replaced))
 	resp.ContentLength = int64(len(replaced))
 	resp.Header.Set("Content-Length", strconv.Itoa(len(replaced)))
+	resp.Header.Del("Content-Encoding")
 	return nil
 }
 
@@ -767,6 +836,7 @@ func ServeFallback(w http.ResponseWriter, r *http.Request) {
 		}
 		ctx := context.WithValue(r.Context(), ctxOrigHost, r.Host)
 		ctx = context.WithValue(ctx, ctxOrigScheme, scheme)
+		ctx = context.WithValue(ctx, ctxOrigAcceptEncoding, r.Header.Get("Accept-Encoding"))
 		fallbackProxy.ServeHTTP(w, r.WithContext(ctx))
 		return
 	}

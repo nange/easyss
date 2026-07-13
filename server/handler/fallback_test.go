@@ -1,8 +1,9 @@
 package handler
 
 import (
-	"compress/gzip"
 	"bytes"
+	"compress/gzip"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -815,9 +816,9 @@ func TestSetFallbackProxy_RewriteContentNonHTML(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_RewriteContentAcceptEncoding verifies that the upstream
-// receives Accept-Encoding: "identity, gzip" so the upstream may compress.
-func TestSetFallbackProxy_RewriteContentAcceptEncoding(t *testing.T) {
+// TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientGzip verifies that
+// when the client accepts gzip, the upstream receives "identity, gzip".
+func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientGzip(t *testing.T) {
 	var gotAE string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAE = r.Header.Get("Accept-Encoding")
@@ -833,10 +834,144 @@ func TestSetFallbackProxy_RewriteContentAcceptEncoding(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
 	rec := httptest.NewRecorder()
 	ServeFallback(rec, req)
 
 	if gotAE != "identity, gzip" {
 		t.Errorf("upstream received Accept-Encoding %q, want %q", gotAE, "identity, gzip")
+	}
+}
+
+// TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientNoGzip verifies that
+// when the client does not accept gzip, the upstream receives "identity" only.
+func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientNoGzip(t *testing.T) {
+	var gotAE string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAE = r.Header.Get("Accept-Encoding")
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("<html></html>"))
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	// No Accept-Encoding header → client does not accept gzip.
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	if gotAE != "identity" {
+		t.Errorf("upstream received Accept-Encoding %q, want %q", gotAE, "identity")
+	}
+}
+
+// TestSetFallbackProxy_RewriteContent_RecompressGzip verifies that when the
+// client accepts gzip, the rewritten HTML response is re-compressed with gzip
+// and the Content-Encoding header is set to "gzip".
+func TestSetFallbackProxy_RewriteContent_RecompressGzip(t *testing.T) {
+	var upstreamHost string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(`<html><a href="https://` + upstreamHost + `/test">link</a></html>`))
+	}))
+	defer upstream.Close()
+	upstreamHost = upstream.Listener.Addr().String()
+
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	if ce := rec.Header().Get("Content-Encoding"); ce != "gzip" {
+		t.Errorf("Content-Encoding = %q, want %q", ce, "gzip")
+	}
+
+	// Decompress the response body and verify the rewritten URL.
+	gr, err := gzip.NewReader(rec.Body)
+	if err != nil {
+		t.Fatalf("gzip reader: %v", err)
+	}
+	body, _ := io.ReadAll(gr)
+	gr.Close()
+	if !bytes.Contains(body, []byte("http://my-site.com/test")) {
+		t.Errorf("decompressed body should contain rewritten URL\nbody: %s", body)
+	}
+	if bytes.Contains(body, []byte(upstreamHost)) {
+		t.Errorf("body should not contain upstream host %q\nbody: %s", upstreamHost, body)
+	}
+}
+
+// TestSetFallbackProxy_RewriteContent_NoRecompressWhenClientNoGzip verifies
+// that when the client does not accept gzip, the rewritten HTML is sent
+// uncompressed even if the upstream returned gzip.
+func TestSetFallbackProxy_RewriteContent_NoRecompressWhenClientNoGzip(t *testing.T) {
+	var upstreamHost string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set("Content-Encoding", "gzip")
+		gw := gzip.NewWriter(w)
+		gw.Write([]byte(`<html><a href="https://` + upstreamHost + `/test">link</a></html>`))
+		gw.Close()
+	}))
+	defer upstream.Close()
+	upstreamHost = upstream.Listener.Addr().String()
+
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	// No Accept-Encoding → client does not accept gzip.
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	if ce := rec.Header().Get("Content-Encoding"); ce != "" {
+		t.Errorf("Content-Encoding = %q, want empty (client does not accept gzip)", ce)
+	}
+	body := rec.Body.String()
+	if !bytes.Contains([]byte(body), []byte("http://my-site.com/test")) {
+		t.Errorf("body should contain rewritten URL\nbody: %s", body)
+	}
+}
+
+// TestClientAcceptsGzip verifies the clientAcceptsGzip helper function.
+func TestClientAcceptsGzip(t *testing.T) {
+	tests := []struct {
+		ae   string
+		want bool
+	}{
+		{"", false},
+		{"identity", false},
+		{"gzip", true},
+		{"gzip, deflate", true},
+		{"deflate, gzip", true},
+		{"gzip;q=0", false},
+		{"gzip;q=0.0", false},
+		{"gzip;q=0.1", true},
+		{"gzip;q=1", true},
+		{"gzip;q=1.0", true},
+		{"*", true},
+		{"*;q=0", false},
+		{"br", false},
+		{"deflate", false},
+		{"  gzip  ", true},
+	}
+	for _, tt := range tests {
+		if got := clientAcceptsGzip(tt.ae); got != tt.want {
+			t.Errorf("clientAcceptsGzip(%q) = %v, want %v", tt.ae, got, tt.want)
+		}
 	}
 }
