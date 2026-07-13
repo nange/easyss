@@ -2,16 +2,19 @@ package handler
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"hash/fnv"
 	"html/template"
+	"io"
 	"math/rand/v2"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -538,7 +541,17 @@ func SetFallbackDir(dir string) error {
 // Out.Host is restored to the original request Host). This is useful when
 // proxying to a local nginx that uses server_name-based virtual host routing
 // and expects to see the public-facing Host.
-func SetFallbackProxy(targetURL string, preserveHost bool) error {
+//
+// If rewriteContent is true, HTML response bodies and the Content-Security-Policy
+// header are rewritten so that absolute URLs pointing at the upstream host
+// (e.g. https://github.com/...) are replaced with the client-facing origin
+// (e.g. https://my-site.com/...). This is needed for upstreams like GitHub
+// that embed absolute URLs in turbo-frame src attributes or CSP directives,
+// which otherwise cause CSP violations and direct browser connections to the
+// upstream. When enabled, Accept-Encoding is set to "identity" on the upstream
+// request so the body can be manipulated as plain text; gzip-compressed
+// responses are transparently decompressed.
+func SetFallbackProxy(targetURL string, preserveHost, rewriteContent bool) error {
 	if targetURL == "" {
 		fallbackProxy = nil
 		return nil
@@ -560,9 +573,20 @@ func SetFallbackProxy(targetURL string, preserveHost bool) error {
 				// public Host.
 				pr.Out.Host = pr.In.Host
 			}
+			if rewriteContent {
+				// Request uncompressed content so the HTML body can be
+				// rewritten as plain text.
+				pr.Out.Header.Set("Accept-Encoding", "identity")
+			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
-			return rewriteLocationHeader(resp, targetHost)
+			if err := rewriteLocationHeader(resp, targetHost); err != nil {
+				return err
+			}
+			if rewriteContent {
+				return rewriteResponseBody(resp, targetHost)
+			}
+			return nil
 		},
 	}
 	return nil
@@ -601,6 +625,89 @@ func rewriteLocationHeader(resp *http.Response, targetHost string) error {
 	return nil
 }
 
+// rewriteResponseBody reads an HTML response body and replaces absolute URLs
+// pointing at the upstream host (both http and https variants) with the
+// client-facing origin, so that browser-initiated requests (e.g. Turbo frame
+// fetches, <a> links, <form> actions) stay on the proxy instead of going
+// directly to the upstream. The Content-Security-Policy response header is
+// similarly rewritten. Non-HTML responses are passed through unchanged.
+//
+// If the upstream ignored the Accept-Encoding: identity request header and
+// sent gzip-compressed content, it is transparently decompressed and sent
+// uncompressed to the client.
+func rewriteResponseBody(resp *http.Response, targetHost string) error {
+	// Only rewrite HTML responses.
+	ct := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/html") {
+		return nil
+	}
+
+	// Read the body, decompressing gzip if necessary.
+	enc := resp.Header.Get("Content-Encoding")
+	var body []byte
+	var err error
+
+	switch enc {
+	case "", "identity":
+		body, err = io.ReadAll(resp.Body)
+		resp.Body.Close() //nolint:errcheck
+	case "gzip":
+		gr, gerr := gzip.NewReader(resp.Body)
+		if gerr != nil {
+			resp.Body.Close() //nolint:errcheck
+			return nil        // skip rewriting on decompress error
+		}
+		body, err = io.ReadAll(gr)
+		gr.Close()        //nolint:errcheck
+		resp.Body.Close() //nolint:errcheck
+	default:
+		// Unsupported encoding (br, deflate, etc.) — skip rewriting.
+		return nil
+	}
+	if err != nil {
+		return nil
+	}
+
+	// Get the client-facing host/scheme from the request context.
+	ctx := resp.Request.Context()
+	origHost, _ := ctx.Value(ctxOrigHost).(string)
+	if origHost == "" {
+		// No client-facing host available — return body as-is.
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		return nil
+	}
+	origScheme, _ := ctx.Value(ctxOrigScheme).(string)
+	if origScheme == "" {
+		origScheme = "https"
+	}
+
+	// Replace absolute URLs: both http and https variants of the upstream
+	// host are replaced with the client-facing origin.
+	origOrigin := origScheme + "://" + origHost
+	replaced := body
+	replaced = bytes.ReplaceAll(replaced, []byte("http://"+targetHost), []byte(origOrigin))
+	replaced = bytes.ReplaceAll(replaced, []byte("https://"+targetHost), []byte(origOrigin))
+
+	// Rewrite the Content-Security-Policy header similarly so that
+	// connect-src / form-action / etc. entries referencing the upstream
+	// origin allow the client-facing origin instead.
+	if csp := resp.Header.Get("Content-Security-Policy"); csp != "" {
+		csp = strings.ReplaceAll(csp, "http://"+targetHost, origOrigin)
+		csp = strings.ReplaceAll(csp, "https://"+targetHost, origOrigin)
+		resp.Header.Set("Content-Security-Policy", csp)
+	}
+
+	// After rewriting, content is uncompressed — remove Content-Encoding.
+	if enc != "" && enc != "identity" {
+		resp.Header.Del("Content-Encoding")
+	}
+
+	resp.Body = io.NopCloser(bytes.NewReader(replaced))
+	resp.ContentLength = int64(len(replaced))
+	resp.Header.Set("Content-Length", strconv.Itoa(len(replaced)))
+	return nil
+}
+
 // SetFallbackTarget resolves a single fallback target string and configures the
 // appropriate fallback mode. The target is interpreted as:
 //   - ""                        → built-in themed auto-generated pages
@@ -608,9 +715,9 @@ func rewriteLocationHeader(resp *http.Response, targetHost string) error {
 //   - a directory path             → multi-file HTML fallback (SetFallbackDir)
 //   - a regular file path          → single-file custom HTML (SetFallbackHTML)
 //
-// preserveHost only affects the reverse-proxy mode (see SetFallbackProxy);
-// it is ignored for the directory/file/built-in modes.
-func SetFallbackTarget(target string, preserveHost bool) error {
+// preserveHost and rewriteContent only affect the reverse-proxy mode (see
+// SetFallbackProxy); they are ignored for the directory/file/built-in modes.
+func SetFallbackTarget(target string, preserveHost, rewriteContent bool) error {
 	// Reset all fallback state.
 	fallbackProxy = nil
 	fallbackPages = nil
@@ -622,7 +729,7 @@ func SetFallbackTarget(target string, preserveHost bool) error {
 	}
 
 	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
-		return SetFallbackProxy(target, preserveHost)
+		return SetFallbackProxy(target, preserveHost, rewriteContent)
 	}
 
 	info, err := os.Stat(target)
