@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"hash/fnv"
 	"html/template"
@@ -413,6 +414,18 @@ type renderData struct {
 // Global state
 // ---------------------------------------------------------------------------
 
+// ctxKey is an unexported context key type used to pass the original client-
+// facing Host and scheme from ServeFallback into the reverse proxy's
+// ModifyResponse hook, so that Location headers pointing at the upstream host
+// can be rewritten back to the client-facing host without leaking the upstream
+// via X-Forwarded-Host.
+type ctxKey int
+
+const (
+	ctxOrigHost ctxKey = iota
+	ctxOrigScheme
+)
+
 var (
 	initOnce       sync.Once
 	selectedTheme  themeDef
@@ -511,6 +524,14 @@ func SetFallbackDir(dir string) error {
 // an upstream HTTP service (e.g. a local nginx). When set, this takes the
 // highest priority over all other fallback modes.
 // Pass an empty string to disable.
+//
+// Unlike httputil.NewSingleHostReverseProxy, this uses Rewrite + SetURL so
+// that req.Host is set to the upstream host (some upstreams — e.g. GitHub —
+// return a 301 redirect to their canonical host when the Host header does not
+// match). A ModifyResponse hook rewrites Location headers that point at the
+// upstream host back to the client-facing host (read from the request
+// context, injected by ServeFallback), so that 3xx redirects issued by the
+// upstream do not cause the browser's address bar to jump to the upstream.
 func SetFallbackProxy(targetURL string) error {
 	if targetURL == "" {
 		fallbackProxy = nil
@@ -520,7 +541,51 @@ func SetFallbackProxy(targetURL string) error {
 	if err != nil {
 		return fmt.Errorf("parse fallback proxy url: %w", err)
 	}
-	fallbackProxy = httputil.NewSingleHostReverseProxy(u)
+	targetHost := u.Host
+	fallbackProxy = &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			// SetURL rewrites Scheme/Host/Path and, importantly, sets
+			// pr.Out.Host = u.Host so the upstream receives the correct
+			// Host header.
+			pr.SetURL(u)
+		},
+		ModifyResponse: func(resp *http.Response) error {
+			return rewriteLocationHeader(resp, targetHost)
+		},
+	}
+	return nil
+}
+
+// rewriteLocationHeader rewrites a 3xx Location header that points at the
+// upstream target host back to the client-facing host, so that browser
+// redirects stay on the proxy's address. Relative-path Locations (e.g.
+// "/login") and Locations pointing at other hosts are left untouched.
+func rewriteLocationHeader(resp *http.Response, targetHost string) error {
+	loc := resp.Header.Get("Location")
+	if loc == "" {
+		return nil
+	}
+	locURL, err := url.Parse(loc)
+	if err != nil {
+		// Malformed Location — leave it untouched and let the client decide.
+		return nil
+	}
+	// Only rewrite absolute redirects that point at the upstream host.
+	if locURL.Host == "" || locURL.Host != targetHost {
+		return nil
+	}
+	ctx := resp.Request.Context()
+	origHost, _ := ctx.Value(ctxOrigHost).(string)
+	if origHost == "" {
+		return nil
+	}
+	origScheme, _ := ctx.Value(ctxOrigScheme).(string)
+	if origScheme == "" {
+		origScheme = "https"
+	}
+	locURL.Scheme = origScheme
+	locURL.Host = origHost
+	resp.Header.Set("Location", locURL.String())
 	return nil
 }
 
@@ -576,7 +641,13 @@ func ServeFallback(w http.ResponseWriter, r *http.Request) {
 
 	// Priority 0 (highest): reverse proxy to upstream HTTP service.
 	if fallbackProxy != nil {
-		fallbackProxy.ServeHTTP(w, r)
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+		ctx := context.WithValue(r.Context(), ctxOrigHost, r.Host)
+		ctx = context.WithValue(ctx, ctxOrigScheme, scheme)
+		fallbackProxy.ServeHTTP(w, r.WithContext(ctx))
 		return
 	}
 

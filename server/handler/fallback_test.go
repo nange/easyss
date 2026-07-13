@@ -498,3 +498,112 @@ func TestSetFallbackTarget_ProxyEndToEnd(t *testing.T) {
 		t.Errorf("got %q, want %q", rec.Body.String(), "upstream:/hello")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// SetFallbackProxy Host header & Location rewrite tests
+// ---------------------------------------------------------------------------
+
+// TestSetFallbackProxy_HostHeader verifies that the request forwarded to the
+// upstream carries the upstream's Host (not the client-facing host). This is
+// the core fix: without it, upstreams like GitHub return a 301 redirect to
+// their canonical host, causing the browser address bar to jump.
+func TestSetFallbackProxy_HostHeader(t *testing.T) {
+	var gotHost string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHost = r.Host
+		w.Write([]byte("ok"))
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	// Client-facing request uses a different host.
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	want := upstream.Listener.Addr().String()
+	if gotHost != want {
+		t.Errorf("upstream received Host %q, want %q", gotHost, want)
+	}
+}
+
+// TestSetFallbackProxy_RewriteLocation verifies that a 3xx Location header
+// pointing at the upstream host is rewritten back to the client-facing host.
+func TestSetFallbackProxy_RewriteLocation(t *testing.T) {
+	var upstreamHost string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate an upstream that redirects to its own canonical URL.
+		w.Header().Set("Location", "http://"+upstreamHost+"/some/path")
+		w.WriteHeader(http.StatusMovedPermanently)
+	}))
+	defer upstream.Close()
+	upstreamHost = upstream.Listener.Addr().String()
+
+	if err := SetFallbackProxy(upstream.URL); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	// httptest.NewRequest has TLS == nil, so the client-facing scheme is "http".
+	if got := rec.Header().Get("Location"); got != "http://my-site.com/some/path" {
+		t.Errorf("Location = %q, want %q", got, "http://my-site.com/some/path")
+	}
+}
+
+// TestSetFallbackProxy_RelativeLocationUnchanged verifies that relative-path
+// Location headers (e.g. "/login") are passed through unchanged.
+func TestSetFallbackProxy_RelativeLocationUnchanged(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/login")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	if got := rec.Header().Get("Location"); got != "/login" {
+		t.Errorf("Location = %q, want %q", got, "/login")
+	}
+}
+
+// TestSetFallbackProxy_OtherHostLocationUnchanged verifies that Location
+// headers pointing at a host other than the upstream are passed through.
+func TestSetFallbackProxy_OtherHostLocationUnchanged(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "https://other.example.com/x")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	if got := rec.Header().Get("Location"); got != "https://other.example.com/x" {
+		t.Errorf("Location = %q, want %q", got, "https://other.example.com/x")
+	}
+}
