@@ -532,7 +532,13 @@ func SetFallbackDir(dir string) error {
 // upstream host back to the client-facing host (read from the request
 // context, injected by ServeFallback), so that 3xx redirects issued by the
 // upstream do not cause the browser's address bar to jump to the upstream.
-func SetFallbackProxy(targetURL string) error {
+//
+// If preserveHost is true, the client-facing Host header is forwarded to the
+// upstream unchanged (i.e. SetURL is still called for scheme/host/path but
+// Out.Host is restored to the original request Host). This is useful when
+// proxying to a local nginx that uses server_name-based virtual host routing
+// and expects to see the public-facing Host.
+func SetFallbackProxy(targetURL string, preserveHost bool) error {
 	if targetURL == "" {
 		fallbackProxy = nil
 		return nil
@@ -548,6 +554,12 @@ func SetFallbackProxy(targetURL string) error {
 			// pr.Out.Host = u.Host so the upstream receives the correct
 			// Host header.
 			pr.SetURL(u)
+			if preserveHost {
+				// Restore the client-facing Host so upstreams that rely on
+				// server_name routing (e.g. a local nginx) still see the
+				// public Host.
+				pr.Out.Host = pr.In.Host
+			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			return rewriteLocationHeader(resp, targetHost)
@@ -595,7 +607,10 @@ func rewriteLocationHeader(resp *http.Response, targetHost string) error {
 //   - "http://..." / "https://..." → reverse proxy to an upstream HTTP service
 //   - a directory path             → multi-file HTML fallback (SetFallbackDir)
 //   - a regular file path          → single-file custom HTML (SetFallbackHTML)
-func SetFallbackTarget(target string) error {
+//
+// preserveHost only affects the reverse-proxy mode (see SetFallbackProxy);
+// it is ignored for the directory/file/built-in modes.
+func SetFallbackTarget(target string, preserveHost bool) error {
 	// Reset all fallback state.
 	fallbackProxy = nil
 	fallbackPages = nil
@@ -607,7 +622,7 @@ func SetFallbackTarget(target string) error {
 	}
 
 	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
-		return SetFallbackProxy(target)
+		return SetFallbackProxy(target, preserveHost)
 	}
 
 	info, err := os.Stat(target)

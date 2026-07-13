@@ -257,10 +257,10 @@ func (s *Server) Start() error {
 	}
 
 	if s.cfg.FallbackTarget != "" {
-		if err := handler.SetFallbackTarget(s.cfg.FallbackTarget); err != nil {
+		if err := handler.SetFallbackTarget(s.cfg.FallbackTarget, s.cfg.FallbackPreserveHost); err != nil {
 			return fmt.Errorf("fallback target: %w", err)
 		}
-		log.Info("[SERVER] fallback target configured", "target", s.cfg.FallbackTarget)
+		log.Info("[SERVER] fallback target configured", "target", s.cfg.FallbackTarget, "preserve_host", s.cfg.FallbackPreserveHost)
 	}
 
 	masterKey, err := crypto.DeriveMasterKey(s.cfg.Password)

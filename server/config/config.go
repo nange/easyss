@@ -18,20 +18,21 @@ type NextProxyConfig struct {
 }
 
 type ServerConfig struct {
-	Listen           string          `json:"listen"`
-	Domain           string          `json:"domain"`
-	Password         string          `json:"password"`
-	AllowedMethods   []string        `json:"allowed_methods"`
-	CertPath         string          `json:"cert_path"`
-	KeyPath          string          `json:"key_path"`
-	Email            string          `json:"email"`
-	FallbackTarget   string          `json:"fallback_target"`
-	Timeout          int             `json:"-"`
-	BatchWindowMS    int             `json:"batch_window_ms"`
-	CoverBudgetRatio float64         `json:"cover_budget_ratio"`
-	CoverBudgetCap   int             `json:"cover_budget_cap"`
-	NextProxy        NextProxyConfig `json:"-"`
-	PprofEnabled     bool            `json:"pprof_enabled"`
+	Listen               string          `json:"listen"`
+	Domain               string          `json:"domain"`
+	Password             string          `json:"password"`
+	AllowedMethods       []string        `json:"allowed_methods"`
+	CertPath             string          `json:"cert_path"`
+	KeyPath              string          `json:"key_path"`
+	Email                string          `json:"email"`
+	FallbackTarget       string          `json:"fallback_target"`
+	FallbackPreserveHost bool            `json:"fallback_preserve_host"`
+	Timeout              int             `json:"-"`
+	BatchWindowMS        int             `json:"batch_window_ms"`
+	CoverBudgetRatio     float64         `json:"cover_budget_ratio"`
+	CoverBudgetCap       int             `json:"cover_budget_cap"`
+	NextProxy            NextProxyConfig `json:"-"`
+	PprofEnabled         bool            `json:"pprof_enabled"`
 }
 
 type FileConfig struct {

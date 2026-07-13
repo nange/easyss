@@ -292,6 +292,7 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
     "key_path": "",
     "email": "your-email",
     "fallback_target": "",
+    "fallback_preserve_host": false,
     "batch_window_ms": 3,
     "cover_budget_ratio": 0.03,
     "cover_budget_cap": 131072
@@ -316,6 +317,7 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 | `server.key_path` | 否 | - | 自定义证书密钥文件路径 |
 | `server.email` | 否 | 随机生成 | 用于自动获取证书的邮箱地址 |
 | `server.fallback_target` | 否 | - | 回落目标，自动识别类型：<br>**空**: 使用内置主题页面<br>**URL** (`http://`或`https://`开头): 反向代理到上游 HTTP 服务<br>**目录**: 根据 URL path 匹配 HTML 文件（如 `/about` → `about.html`）<br>**文件**: 所有路径返回同一 HTML 页面 |
+| `server.fallback_preserve_host` | 否 | false | 仅对 `fallback_target` 为 URL 生效。<br>**false**: 转发给上游的 Host 头设为上游主机（默认，适合 GitHub 等会校验 Host 的公网站点）<br>**true**: 透传客户端原始 Host 给上游（适合本地 nginx 依赖 `server_name` 做虚拟主机路由的场景） |
 | `server.batch_window_ms` | 否 | 3 | 流量整形批处理窗口，单位毫秒，范围 1-10 |
 | `server.cover_budget_ratio` | 否 | 0.03 | cover traffic 占真实流量的预算比例，设为 0 或负数使用默认值，范围 (0, 1] |
 | `server.cover_budget_cap` | 否 | 131072 | cover traffic 最大累积预算，单位字节，默认 128KB |
@@ -327,13 +329,18 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 > // 1. 空值 → 内置主题页面（默认）
 > "fallback_target": ""
 >
-> // 2. 反向代理到本地 nginx
-> "fallback_target": "http://127.0.0.1:8080"
+> // 2. 反向代理到本地 nginx（透传原始 Host，匹配 server_name 路由）
+> "fallback_target": "http://127.0.0.1:8080",
+> "fallback_preserve_host": true
 >
-> // 3. 单文件 → 所有路径返回同一页面
+> // 3. 反向代理到公网站点（如 GitHub，使用上游 Host 避免重定向）
+> "fallback_target": "https://github.com"
+> // fallback_preserve_host 默认 false 即可
+>
+> // 4. 单文件 → 所有路径返回同一页面
 > "fallback_target": "/var/www/fallback.html"
 >
-> // 4. 目录 → 按 URL path 匹配 HTML 文件
+> // 5. 目录 → 按 URL path 匹配 HTML 文件
 > "fallback_target": "/var/www/fallback/"
 > ```
 >

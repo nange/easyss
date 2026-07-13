@@ -318,7 +318,7 @@ func TestServeFallback_DirPriorityOverCustomHTML(t *testing.T) {
 
 func TestSetFallbackProxy_EmptyURL(t *testing.T) {
 	// Setting empty URL should disable the proxy (no error).
-	if err := SetFallbackProxy(""); err != nil {
+	if err := SetFallbackProxy("", false); err != nil {
 		t.Fatalf("unexpected error for empty URL: %v", err)
 	}
 	if fallbackProxy != nil {
@@ -327,7 +327,7 @@ func TestSetFallbackProxy_EmptyURL(t *testing.T) {
 }
 
 func TestSetFallbackProxy_InvalidURL(t *testing.T) {
-	if err := SetFallbackProxy("://invalid"); err == nil {
+	if err := SetFallbackProxy("://invalid", false); err == nil {
 		t.Error("expected error for invalid URL")
 	}
 }
@@ -340,7 +340,7 @@ func TestServeFallback_ProxyForwardsRequest(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -364,7 +364,7 @@ func TestServeFallback_ProxyHighestPriority(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -403,7 +403,7 @@ func TestSetFallbackTarget_Empty(t *testing.T) {
 	fallbackPages = map[string][]byte{"/": []byte("test")}
 	fallbackProxy = &httputil.ReverseProxy{}
 
-	if err := SetFallbackTarget(""); err != nil {
+	if err := SetFallbackTarget("", false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -424,7 +424,7 @@ func TestSetFallbackTarget_Empty(t *testing.T) {
 func TestSetFallbackTarget_HTTPURL(t *testing.T) {
 	t.Cleanup(func() { fallbackProxy = nil })
 
-	if err := SetFallbackTarget("http://127.0.0.1:8080"); err != nil {
+	if err := SetFallbackTarget("http://127.0.0.1:8080", false); err != nil {
 		t.Fatal(err)
 	}
 	if fallbackProxy == nil {
@@ -435,7 +435,7 @@ func TestSetFallbackTarget_HTTPURL(t *testing.T) {
 func TestSetFallbackTarget_HTTPSURL(t *testing.T) {
 	t.Cleanup(func() { fallbackProxy = nil })
 
-	if err := SetFallbackTarget("https://example.com"); err != nil {
+	if err := SetFallbackTarget("https://example.com", false); err != nil {
 		t.Fatal(err)
 	}
 	if fallbackProxy == nil {
@@ -449,7 +449,7 @@ func TestSetFallbackTarget_Directory(t *testing.T) {
 	})
 	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
 
-	if err := SetFallbackTarget(dir); err != nil {
+	if err := SetFallbackTarget(dir, false); err != nil {
 		t.Fatal(err)
 	}
 	if len(fallbackPages) == 0 {
@@ -464,7 +464,7 @@ func TestSetFallbackTarget_File(t *testing.T) {
 	filePath := filepath.Join(dir, "custom.html")
 	t.Cleanup(func() { customFallback = nil })
 
-	if err := SetFallbackTarget(filePath); err != nil {
+	if err := SetFallbackTarget(filePath, false); err != nil {
 		t.Fatal(err)
 	}
 	if string(customFallback) != "<h1>Custom</h1>" {
@@ -473,7 +473,7 @@ func TestSetFallbackTarget_File(t *testing.T) {
 }
 
 func TestSetFallbackTarget_InvalidPath(t *testing.T) {
-	if err := SetFallbackTarget("/nonexistent/path"); err == nil {
+	if err := SetFallbackTarget("/nonexistent/path", false); err == nil {
 		t.Error("expected error for nonexistent path")
 	}
 }
@@ -485,7 +485,7 @@ func TestSetFallbackTarget_ProxyEndToEnd(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackTarget(upstream.URL); err != nil {
+	if err := SetFallbackTarget(upstream.URL, false); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -515,7 +515,7 @@ func TestSetFallbackProxy_HostHeader(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -544,7 +544,7 @@ func TestSetFallbackProxy_RewriteLocation(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -569,7 +569,7 @@ func TestSetFallbackProxy_RelativeLocationUnchanged(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -593,7 +593,7 @@ func TestSetFallbackProxy_OtherHostLocationUnchanged(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -605,5 +605,63 @@ func TestSetFallbackProxy_OtherHostLocationUnchanged(t *testing.T) {
 
 	if got := rec.Header().Get("Location"); got != "https://other.example.com/x" {
 		t.Errorf("Location = %q, want %q", got, "https://other.example.com/x")
+	}
+}
+
+// TestSetFallbackProxy_PreserveHost verifies that when preserveHost is true,
+// the client-facing Host header is forwarded to the upstream unchanged. This
+// is needed for local nginx setups that use server_name-based virtual host
+// routing.
+func TestSetFallbackProxy_PreserveHost(t *testing.T) {
+	var gotHost string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHost = r.Host
+		w.Write([]byte("ok"))
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL, true); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	if gotHost != "my-site.com" {
+		t.Errorf("upstream received Host %q, want %q (preserveHost=true)", gotHost, "my-site.com")
+	}
+}
+
+// TestSetFallbackProxy_PreserveHostLocationRewrite verifies that Location
+// rewriting still works when preserveHost is true: if the upstream (which
+// received the client-facing Host) redirects to the upstream's own address
+// (e.g. via $host in nginx config), the Location is rewritten back to the
+// client-facing host.
+func TestSetFallbackProxy_PreserveHostLocationRewrite(t *testing.T) {
+	var upstreamHost string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Upstream redirects to its own listen address (e.g. an nginx
+		// config using $host without a proper server_name match).
+		w.Header().Set("Location", "http://"+upstreamHost+"/login")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer upstream.Close()
+	upstreamHost = upstream.Listener.Addr().String()
+
+	if err := SetFallbackProxy(upstream.URL, true); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	if got := rec.Header().Get("Location"); got != "http://my-site.com/login" {
+		t.Errorf("Location = %q, want %q", got, "http://my-site.com/login")
 	}
 }
