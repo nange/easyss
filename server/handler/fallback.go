@@ -598,6 +598,7 @@ func SetFallbackProxy(targetURL string, preserveHost bool) error {
 			if err := rewriteLocationHeader(resp, targetHost); err != nil {
 				return err
 			}
+			rewriteSetCookieHeaders(resp, targetHost)
 			return rewriteResponseBody(resp, targetHost)
 		},
 	}
@@ -668,6 +669,52 @@ func rewriteLocationHeader(resp *http.Response, targetHost string) error {
 	locURL.Host = origHost
 	resp.Header.Set("Location", locURL.String())
 	return nil
+}
+
+// rewriteSetCookieHeaders rewrites Set-Cookie response headers so that cookies
+// set by the upstream for its own domain are accepted by the browser visiting
+// the proxy's host. Without this, an upstream like GitHub that sets
+// "Domain=github.com" on its session cookies would be rejected by the browser
+// (the page origin is my-site.com, not a subdomain of github.com), causing
+// features that depend on session cookies — such as CSRF tokens in the login
+// form — to fail with HTTP 422.
+//
+// For each Set-Cookie header whose Domain attribute equals the upstream host
+// (case-insensitive, leading dot ignored), the Domain attribute is removed
+// entirely so the cookie becomes a host-only cookie bound to the proxy's host.
+// Cookies with a Domain pointing at a different host are left untouched.
+func rewriteSetCookieHeaders(resp *http.Response, targetHost string) {
+	cookies := resp.Header["Set-Cookie"]
+	if len(cookies) == 0 {
+		return
+	}
+
+	targetHostLower := strings.ToLower(strings.TrimPrefix(targetHost, "."))
+
+	rewritten := make([]string, 0, len(cookies))
+	for _, raw := range cookies {
+		parts := strings.Split(raw, ";")
+		for i, part := range parts {
+			p := strings.TrimSpace(part)
+			if len(p) <= 7 { // len("Domain=") == 7
+				continue
+			}
+			if !strings.EqualFold(p[:7], "Domain=") {
+				continue
+			}
+			domain := strings.TrimSpace(p[7:])
+			domain = strings.TrimPrefix(domain, ".")
+			if strings.EqualFold(domain, targetHostLower) {
+				// Remove the Domain attribute so the cookie becomes a
+				// host-only cookie for the proxy's host.
+				rewrittenParts := append(append([]string{}, parts[:i]...), parts[i+1:]...)
+				raw = strings.Join(rewrittenParts, ";")
+				break
+			}
+		}
+		rewritten = append(rewritten, raw)
+	}
+	resp.Header["Set-Cookie"] = rewritten
 }
 
 // rewriteResponseBody reads an HTML response body and replaces absolute URLs

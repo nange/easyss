@@ -9,6 +9,7 @@ import (
 	"net/http/httputil"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -666,6 +667,158 @@ func TestSetFallbackProxy_PreserveHostLocationRewrite(t *testing.T) {
 
 	if got := rec.Header().Get("Location"); got != "http://my-site.com/login" {
 		t.Errorf("Location = %q, want %q", got, "http://my-site.com/login")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Set-Cookie header rewriting tests
+// ---------------------------------------------------------------------------
+
+// TestSetFallbackProxy_RewriteSetCookieDomain verifies that the Domain
+// attribute in Set-Cookie headers pointing at the upstream host is removed so
+// the browser accepts the cookie for the proxy's host.
+func TestSetFallbackProxy_RewriteSetCookieDomain(t *testing.T) {
+	var upstreamHost string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		// Use a raw Set-Cookie header (not http.SetCookie) to avoid the
+		// standard library dropping the Domain attribute when it contains
+		// a port number.
+		w.Header().Add("Set-Cookie",
+			"_gh_sess=abc123; Domain="+upstreamHost+"; Path=/; HttpOnly; Secure")
+		w.Write([]byte("<html></html>"))
+	}))
+	defer upstream.Close()
+	upstreamHost = upstream.Listener.Addr().String()
+
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	// Parse the raw Set-Cookie header to verify Domain was removed.
+	rawCookies := rec.Result().Header["Set-Cookie"]
+	if len(rawCookies) != 1 {
+		t.Fatalf("expected 1 Set-Cookie header, got %d", len(rawCookies))
+	}
+	if strings.Contains(rawCookies[0], "Domain=") {
+		t.Errorf("Set-Cookie should not contain Domain attribute\nraw: %s", rawCookies[0])
+	}
+	// Verify the cookie name/value and other attributes are preserved.
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("expected 1 parsed cookie, got %d", len(cookies))
+	}
+	if cookies[0].Name != "_gh_sess" || cookies[0].Value != "abc123" {
+		t.Errorf("cookie = %q=%q, want %q=%q", cookies[0].Name, cookies[0].Value, "_gh_sess", "abc123")
+	}
+	if !cookies[0].HttpOnly {
+		t.Error("cookie HttpOnly should be preserved")
+	}
+	if !cookies[0].Secure {
+		t.Error("cookie Secure should be preserved")
+	}
+}
+
+// TestSetFallbackProxy_RewriteSetCookieDomainWithDot verifies that a Domain
+// attribute with a leading dot (e.g. ".github.com") is also removed.
+func TestSetFallbackProxy_RewriteSetCookieDomainWithDot(t *testing.T) {
+	var upstreamHost string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		// Manually set a raw Set-Cookie with leading-dot domain.
+		w.Header().Add("Set-Cookie", "test=val; Domain=."+upstreamHost+"; Path=/; Secure")
+		w.Write([]byte("<html></html>"))
+	}))
+	defer upstream.Close()
+	upstreamHost = upstream.Listener.Addr().String()
+
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("expected 1 cookie, got %d", len(cookies))
+	}
+	if cookies[0].Domain != "" {
+		t.Errorf("cookie Domain = %q, want empty (removed)", cookies[0].Domain)
+	}
+}
+
+// TestSetFallbackProxy_SetCookieOtherDomainUnchanged verifies that cookies
+// with a Domain pointing at a host other than the upstream are left untouched.
+func TestSetFallbackProxy_SetCookieOtherDomainUnchanged(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Header().Add("Set-Cookie", "test=val; Domain=other.example.com; Path=/")
+		w.Write([]byte("<html></html>"))
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("expected 1 cookie, got %d", len(cookies))
+	}
+	if cookies[0].Domain != "other.example.com" {
+		t.Errorf("cookie Domain = %q, want %q (unchanged)", cookies[0].Domain, "other.example.com")
+	}
+}
+
+// TestSetFallbackProxy_SetCookieNoDomainUnchanged verifies that cookies
+// without a Domain attribute are left untouched.
+func TestSetFallbackProxy_SetCookieNoDomainUnchanged(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		http.SetCookie(w, &http.Cookie{
+			Name:  "test",
+			Value: "val",
+			Path:  "/",
+		})
+		w.Write([]byte("<html></html>"))
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("expected 1 cookie, got %d", len(cookies))
+	}
+	if cookies[0].Domain != "" {
+		t.Errorf("cookie Domain = %q, want empty (already empty)", cookies[0].Domain)
+	}
+	if cookies[0].Value != "val" {
+		t.Errorf("cookie Value = %q, want %q", cookies[0].Value, "val")
 	}
 }
 
