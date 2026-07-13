@@ -293,6 +293,7 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
     "email": "your-email",
     "fallback_target": "",
     "fallback_preserve_host": false,
+    "fallback_cdn_domains": [],
     "batch_window_ms": 3,
     "cover_budget_ratio": 0.03,
     "cover_budget_cap": 131072
@@ -318,6 +319,7 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 | `server.email` | 否 | 随机生成 | 用于自动获取证书的邮箱地址 |
 | `server.fallback_target` | 否 | - | 回落目标，自动识别类型：<br>**空**: 使用内置主题页面<br>**URL** (`http://`或`https://`开头): 反向代理到上游 HTTP 服务<br>**目录**: 根据 URL path 匹配 HTML 文件（如 `/about` → `about.html`）<br>**文件**: 所有路径返回同一 HTML 页面 |
 | `server.fallback_preserve_host` | 否 | false | 仅对 `fallback_target` 为 URL 生效。<br>**false**: 转发给上游的 Host 头设为上游主机（默认，适合 GitHub 等会校验 Host 的公网站点）<br>**true**: 透传客户端原始 Host 给上游（适合本地 nginx 依赖 `server_name` 做虚拟主机路由的场景） |
+| `server.fallback_cdn_domains` | 否 | [] | 仅对 `fallback_target` 为 URL 生效。<br>配置需要通过代理中转的 CDN 域名列表（如 `["github.githubassets.com"]`）。HTML 和 CSP 中引用这些域名的绝对 URL 会被重写为 `/__cdn__/<host>/...` 路径前缀形式，浏览器请求时走代理转发到对应 CDN，避免直连 CDN 暴露真实 IP 或被 CSP 拦截 |
 | `server.batch_window_ms` | 否 | 3 | 流量整形批处理窗口，单位毫秒，范围 1-10 |
 | `server.cover_budget_ratio` | 否 | 0.03 | cover traffic 占真实流量的预算比例，设为 0 或负数使用默认值，范围 (0, 1] |
 | `server.cover_budget_cap` | 否 | 131072 | cover traffic 最大累积预算，单位字节，默认 128KB |
@@ -336,7 +338,9 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 > // 3. 反向代理到公网站点（如 GitHub）
 > //    自动重写 Host 头避免 301，并重写 HTML 中的绝对 URL，
 > //    修复 release assets 等动态加载的 CSP 问题
-> "fallback_target": "https://github.com"
+> //    配置 CDN 域名让静态资源也走代理
+> "fallback_target": "https://github.com",
+> "fallback_cdn_domains": ["github.githubassets.com"]
 > // fallback_preserve_host 默认 false 即可
 >
 > // 4. 单文件 → 所有路径返回同一页面
@@ -350,7 +354,10 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 > - 设置上游 Host 头（避免 GitHub 等站点返回 301 到规范主机）
 > - 重写 3xx `Location` 响应头中指向上游的绝对 URL 为客户端面向地址
 > - 重写 HTML 响应体和 `Content-Security-Policy` 头中指向上游的绝对 URL（如 turbo-frame 的 `src`），使页面内动态请求留在代理上，避免 CSP 拦截
-> - 对上游请求 `Accept-Encoding: identity, gzip`，gzip 响应自动解压后重写
+> - 重写 `Set-Cookie` 的 `Domain` 属性，使浏览器接受 cookie（修复 CSRF 422）
+> - 重写请求 `Origin`/`Referer` 头为上游地址（修复 CSRF 422）
+> - 对上游请求 `Accept-Encoding` 与客户端取交集，gzip 响应自动解压后重写、再按客户端能力重新压缩
+> - 配置了 `fallback_cdn_domains` 时，HTML/CSP 中引用这些 CDN 域名的 URL 被重写为 `/__cdn__/<host>/...`，浏览器请求经代理转发到对应 CDN
 >
 > **目录模式**：目录结构如下（优先级: 反向代理 > 目录 > 单文件 > 内置主题）：
 >

@@ -27,6 +27,7 @@ type ServerConfig struct {
 	Email                string          `json:"email"`
 	FallbackTarget       string          `json:"fallback_target"`
 	FallbackPreserveHost bool            `json:"fallback_preserve_host"`
+	FallbackCDNDomains   []string        `json:"fallback_cdn_domains"`
 	Timeout              int             `json:"-"`
 	BatchWindowMS        int             `json:"batch_window_ms"`
 	CoverBudgetRatio     float64         `json:"cover_budget_ratio"`

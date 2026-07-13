@@ -443,9 +443,24 @@ var (
 
 	// Reverse proxy to upstream HTTP service (e.g. local nginx).
 	fallbackProxy *httputil.ReverseProxy
+
+	// Allowed CDN hosts for /__cdn__/<host>/... path-prefix routing.
+	// Populated by SetFallbackProxy from the cdnDomains config. Keys are
+	// lowercased hostnames; a request to /__cdn__/github.githubassets.com/x
+	// is only proxied if "github.githubassets.com" is in this set.
+	fallbackCDNHosts map[string]bool
 )
 
-const maxCachedFallbackPages = 64
+const (
+	maxCachedFallbackPages = 64
+
+	// cdnPathPrefix is the URL path prefix under which requests for
+	// configured CDN domains are routed. A request to
+	//   /__cdn__/github.githubassets.com/assets/foo.css
+	// is proxied to
+	//   https://github.githubassets.com/assets/foo.css
+	cdnPathPrefix = "/__cdn__/"
+)
 
 // SetFallbackHTML overrides the built-in fallback system with custom HTML.
 // Must be called before the server starts accepting requests.
@@ -551,6 +566,12 @@ func SetFallbackDir(dir string) error {
 // otherwise cause CSP violations and direct browser connections to the
 // upstream.
 //
+// cdnDomains is a list of additional hosts (e.g. "github.githubassets.com")
+// whose resources should also be proxied through the client-facing origin.
+// Requests to /__cdn__/<host>/<path> are routed to https://<host>/<path>, and
+// HTML/CSP content referencing these hosts is rewritten to the /__cdn__/
+// prefix form. Pass nil/empty to disable CDN proxying.
+//
 // Accept-Encoding negotiation: the proxy intersects the client's
 // Accept-Encoding with the encodings it can handle (gzip and identity). If
 // the client accepts gzip, the upstream request advertises "identity, gzip"
@@ -558,9 +579,10 @@ func SetFallbackDir(dir string) error {
 // rewriting and re-compressed before returning to the client. If the client
 // does not accept gzip, the upstream request advertises "identity" only, so
 // no decompression/recompression is needed.
-func SetFallbackProxy(targetURL string, preserveHost bool) error {
+func SetFallbackProxy(targetURL string, preserveHost bool, cdnDomains []string) error {
 	if targetURL == "" {
 		fallbackProxy = nil
+		fallbackCDNHosts = nil
 		return nil
 	}
 	u, err := url.Parse(targetURL)
@@ -568,31 +590,35 @@ func SetFallbackProxy(targetURL string, preserveHost bool) error {
 		return fmt.Errorf("parse fallback proxy url: %w", err)
 	}
 	targetHost := u.Host
+
+	// Build the allowed CDN host set (lowercased for case-insensitive match).
+	cdnSet := make(map[string]bool, len(cdnDomains))
+	for _, d := range cdnDomains {
+		cdnSet[strings.ToLower(strings.TrimSpace(d))] = true
+	}
+	fallbackCDNHosts = cdnSet
+
 	fallbackProxy = &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			// SetURL rewrites Scheme/Host/Path and, importantly, sets
-			// pr.Out.Host = u.Host so the upstream receives the correct
-			// Host header.
+			// Check if this is a CDN-routed request (/__cdn__/<host>/...).
+			if cdnTarget, ok := routeCDN(pr, cdnSet); ok {
+				// CDN request: route to the extracted CDN host. Set
+				// URL fields directly (not SetURL) to avoid path joining.
+				pr.Out.URL.Scheme = cdnTarget.Scheme
+				pr.Out.URL.Host = cdnTarget.Host
+				pr.Out.URL.Path = cdnTarget.Path
+				pr.Out.URL.RawQuery = cdnTarget.RawQuery
+				pr.Out.Host = cdnTarget.Host
+				setAcceptEncoding(pr)
+				return
+			}
+
+			// Normal request: route to the main upstream.
 			pr.SetURL(u)
 			if preserveHost {
-				// Restore the client-facing Host so upstreams that rely on
-				// server_name routing (e.g. a local nginx) still see the
-				// public Host.
 				pr.Out.Host = pr.In.Host
 			}
-			// Advertise only encodings we can handle, intersected with
-			// what the client accepts. If the client accepts gzip, allow
-			// the upstream to gzip (saves bandwidth on the proxy<->upstream
-			// leg); we decompress before rewriting HTML and re-compress
-			// before returning to the client. If the client does not accept
-			// gzip, request identity only so we never need to decompress
-			// non-HTML responses for a client that can't handle gzip.
-			clientAE := pr.In.Header.Get("Accept-Encoding")
-			if clientAcceptsGzip(clientAE) {
-				pr.Out.Header.Set("Accept-Encoding", "identity, gzip")
-			} else {
-				pr.Out.Header.Set("Accept-Encoding", "identity")
-			}
+			setAcceptEncoding(pr)
 			// Rewrite Origin and Referer request headers so the upstream
 			// sees its own origin. Without this, Rails CSRF protection
 			// (e.g. GitHub) rejects POST requests because the Origin header
@@ -601,14 +627,94 @@ func SetFallbackProxy(targetURL string, preserveHost bool) error {
 			rewriteRequestOriginReferrer(pr.Out, pr.In.Host, u)
 		},
 		ModifyResponse: func(resp *http.Response) error {
-			if err := rewriteLocationHeader(resp, targetHost); err != nil {
+			// Determine the effective target host for this response: if it
+			// was a CDN request, use the CDN host; otherwise use the main
+			// upstream host.
+			effectiveHost := targetHost
+			if cdnHost, ok := cdnHostFromRequest(resp.Request, cdnSet); ok {
+				effectiveHost = cdnHost
+			}
+			if err := rewriteLocationHeader(resp, effectiveHost); err != nil {
 				return err
 			}
-			rewriteSetCookieHeaders(resp, targetHost)
-			return rewriteResponseBody(resp, targetHost)
+			rewriteSetCookieHeaders(resp, effectiveHost)
+			return rewriteResponseBody(resp, effectiveHost)
 		},
 	}
 	return nil
+}
+
+// setAcceptEncoding sets the outbound Accept-Encoding header based on what
+// the client accepts, intersected with what the proxy can handle (gzip and
+// identity).
+func setAcceptEncoding(pr *httputil.ProxyRequest) {
+	clientAE := pr.In.Header.Get("Accept-Encoding")
+	if clientAcceptsGzip(clientAE) {
+		pr.Out.Header.Set("Accept-Encoding", "identity, gzip")
+	} else {
+		pr.Out.Header.Set("Accept-Encoding", "identity")
+	}
+}
+
+// routeCDN checks if the outbound request path starts with the CDN path
+// prefix (/__cdn__/<host>/...) and, if the extracted host is in the allowed
+// set, returns the upstream URL to proxy to. Returns ok=false if the request
+// is not a CDN-routed request or the host is not allowed.
+func routeCDN(pr *httputil.ProxyRequest, cdnSet map[string]bool) (*url.URL, bool) {
+	path := pr.Out.URL.Path
+	if !strings.HasPrefix(path, cdnPathPrefix) {
+		return nil, false
+	}
+	rest := path[len(cdnPathPrefix):]
+	// Extract the host: everything up to the next "/".
+	slashIdx := strings.Index(rest, "/")
+	var host, restPath string
+	if slashIdx < 0 {
+		host = rest
+		restPath = ""
+	} else {
+		host = rest[:slashIdx]
+		restPath = rest[slashIdx:]
+	}
+	if host == "" {
+		return nil, false
+	}
+	if !cdnSet[strings.ToLower(host)] {
+		return nil, false
+	}
+	target := &url.URL{
+		Scheme: "https",
+		Host:   host,
+		Path:   restPath,
+	}
+	if pr.Out.URL.RawQuery != "" {
+		target.RawQuery = pr.Out.URL.RawQuery
+	}
+	return target, true
+}
+
+// cdnHostFromRequest extracts the CDN host from a request's URL path if it
+// is a /__cdn__/ request with an allowed host. Returns ok=false otherwise.
+func cdnHostFromRequest(req *http.Request, cdnSet map[string]bool) (string, bool) {
+	if req == nil {
+		return "", false
+	}
+	path := req.URL.Path
+	if !strings.HasPrefix(path, cdnPathPrefix) {
+		return "", false
+	}
+	rest := path[len(cdnPathPrefix):]
+	slashIdx := strings.Index(rest, "/")
+	var host string
+	if slashIdx < 0 {
+		host = rest
+	} else {
+		host = rest[:slashIdx]
+	}
+	if host == "" || !cdnSet[strings.ToLower(host)] {
+		return "", false
+	}
+	return host, true
 }
 
 // clientAcceptsGzip reports whether the given Accept-Encoding header value
@@ -846,13 +952,28 @@ func rewriteResponseBody(resp *http.Response, targetHost string) error {
 	replaced = bytes.ReplaceAll(replaced, []byte("http://"+targetHost), []byte(origOrigin))
 	replaced = bytes.ReplaceAll(replaced, []byte("https://"+targetHost), []byte(origOrigin))
 
+	// Replace CDN domain URLs with /__cdn__/<host> prefix form so that
+	// browser requests for static assets (CSS, JS, images) hosted on CDN
+	// domains are routed through the proxy instead of going directly to
+	// the CDN host.
+	for cdnHost := range fallbackCDNHosts {
+		cdnPrefix := origOrigin + cdnPathPrefix + cdnHost
+		replaced = bytes.ReplaceAll(replaced, []byte("https://"+cdnHost), []byte(cdnPrefix))
+		replaced = bytes.ReplaceAll(replaced, []byte("http://"+cdnHost), []byte(cdnPrefix))
+	}
+
 	// Rewrite the Content-Security-Policy header so that source-list
 	// entries referencing the upstream origin allow the client-facing
 	// origin instead. This covers both scheme-prefixed forms (e.g.
 	// "https://github.com") and bare-host forms (e.g.
 	// "github.com/assets-cdn/worker/") which appear in GitHub's CSP.
+	// CDN domain references in CSP are also rewritten.
 	if csp := resp.Header.Get("Content-Security-Policy"); csp != "" {
 		csp = rewriteCSP(csp, targetHost, origOrigin)
+		for cdnHost := range fallbackCDNHosts {
+			cdnCSPHost := origHost + cdnPathPrefix + cdnHost
+			csp = rewriteCSP(csp, cdnHost, origScheme+"://"+cdnCSPHost)
+		}
 		resp.Header.Set("Content-Security-Policy", csp)
 	}
 
@@ -893,11 +1014,12 @@ func rewriteResponseBody(resp *http.Response, targetHost string) error {
 //   - a directory path             → multi-file HTML fallback (SetFallbackDir)
 //   - a regular file path          → single-file custom HTML (SetFallbackHTML)
 //
-// preserveHost only affects the reverse-proxy mode (see SetFallbackProxy);
-// it is ignored for the directory/file/built-in modes.
-func SetFallbackTarget(target string, preserveHost bool) error {
+// preserveHost and cdnDomains only affect the reverse-proxy mode (see
+// SetFallbackProxy); they are ignored for the directory/file/built-in modes.
+func SetFallbackTarget(target string, preserveHost bool, cdnDomains []string) error {
 	// Reset all fallback state.
 	fallbackProxy = nil
+	fallbackCDNHosts = nil
 	fallbackPages = nil
 	fallback404 = nil
 	customFallback = nil
@@ -907,7 +1029,7 @@ func SetFallbackTarget(target string, preserveHost bool) error {
 	}
 
 	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
-		return SetFallbackProxy(target, preserveHost)
+		return SetFallbackProxy(target, preserveHost, cdnDomains)
 	}
 
 	info, err := os.Stat(target)

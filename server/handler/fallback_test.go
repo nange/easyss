@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/tls"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -322,7 +323,7 @@ func TestServeFallback_DirPriorityOverCustomHTML(t *testing.T) {
 
 func TestSetFallbackProxy_EmptyURL(t *testing.T) {
 	// Setting empty URL should disable the proxy (no error).
-	if err := SetFallbackProxy("", false); err != nil {
+	if err := SetFallbackProxy("", false, nil); err != nil {
 		t.Fatalf("unexpected error for empty URL: %v", err)
 	}
 	if fallbackProxy != nil {
@@ -331,7 +332,7 @@ func TestSetFallbackProxy_EmptyURL(t *testing.T) {
 }
 
 func TestSetFallbackProxy_InvalidURL(t *testing.T) {
-	if err := SetFallbackProxy("://invalid", false); err == nil {
+	if err := SetFallbackProxy("://invalid", false, nil); err == nil {
 		t.Error("expected error for invalid URL")
 	}
 }
@@ -344,7 +345,7 @@ func TestServeFallback_ProxyForwardsRequest(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -368,7 +369,7 @@ func TestServeFallback_ProxyHighestPriority(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -407,7 +408,7 @@ func TestSetFallbackTarget_Empty(t *testing.T) {
 	fallbackPages = map[string][]byte{"/": []byte("test")}
 	fallbackProxy = &httputil.ReverseProxy{}
 
-	if err := SetFallbackTarget("", false); err != nil {
+	if err := SetFallbackTarget("", false, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -428,7 +429,7 @@ func TestSetFallbackTarget_Empty(t *testing.T) {
 func TestSetFallbackTarget_HTTPURL(t *testing.T) {
 	t.Cleanup(func() { fallbackProxy = nil })
 
-	if err := SetFallbackTarget("http://127.0.0.1:8080", false); err != nil {
+	if err := SetFallbackTarget("http://127.0.0.1:8080", false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if fallbackProxy == nil {
@@ -439,7 +440,7 @@ func TestSetFallbackTarget_HTTPURL(t *testing.T) {
 func TestSetFallbackTarget_HTTPSURL(t *testing.T) {
 	t.Cleanup(func() { fallbackProxy = nil })
 
-	if err := SetFallbackTarget("https://example.com", false); err != nil {
+	if err := SetFallbackTarget("https://example.com", false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if fallbackProxy == nil {
@@ -453,7 +454,7 @@ func TestSetFallbackTarget_Directory(t *testing.T) {
 	})
 	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
 
-	if err := SetFallbackTarget(dir, false); err != nil {
+	if err := SetFallbackTarget(dir, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(fallbackPages) == 0 {
@@ -468,7 +469,7 @@ func TestSetFallbackTarget_File(t *testing.T) {
 	filePath := filepath.Join(dir, "custom.html")
 	t.Cleanup(func() { customFallback = nil })
 
-	if err := SetFallbackTarget(filePath, false); err != nil {
+	if err := SetFallbackTarget(filePath, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if string(customFallback) != "<h1>Custom</h1>" {
@@ -477,7 +478,7 @@ func TestSetFallbackTarget_File(t *testing.T) {
 }
 
 func TestSetFallbackTarget_InvalidPath(t *testing.T) {
-	if err := SetFallbackTarget("/nonexistent/path", false); err == nil {
+	if err := SetFallbackTarget("/nonexistent/path", false, nil); err == nil {
 		t.Error("expected error for nonexistent path")
 	}
 }
@@ -489,7 +490,7 @@ func TestSetFallbackTarget_ProxyEndToEnd(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackTarget(upstream.URL, false); err != nil {
+	if err := SetFallbackTarget(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -519,7 +520,7 @@ func TestSetFallbackProxy_HostHeader(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -548,7 +549,7 @@ func TestSetFallbackProxy_RewriteLocation(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -573,7 +574,7 @@ func TestSetFallbackProxy_RelativeLocationUnchanged(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -597,7 +598,7 @@ func TestSetFallbackProxy_OtherHostLocationUnchanged(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -624,7 +625,7 @@ func TestSetFallbackProxy_PreserveHost(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, true); err != nil {
+	if err := SetFallbackProxy(upstream.URL, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -655,7 +656,7 @@ func TestSetFallbackProxy_PreserveHostLocationRewrite(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, true); err != nil {
+	if err := SetFallbackProxy(upstream.URL, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -691,7 +692,7 @@ func TestSetFallbackProxy_RewriteSetCookieDomain(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -738,7 +739,7 @@ func TestSetFallbackProxy_RewriteSetCookieDomainWithDot(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -767,7 +768,7 @@ func TestSetFallbackProxy_SetCookieOtherDomainUnchanged(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -800,7 +801,7 @@ func TestSetFallbackProxy_SetCookieNoDomainUnchanged(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -840,7 +841,7 @@ func TestSetFallbackProxy_RewriteContent(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -875,7 +876,7 @@ func TestSetFallbackProxy_RewriteContentCSP(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -916,7 +917,7 @@ func TestSetFallbackProxy_RewriteCSPBareHost(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -960,7 +961,7 @@ func TestSetFallbackProxy_RewriteCSPMixed(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1007,7 +1008,7 @@ func TestSetFallbackProxy_RewriteContentGzip(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1042,7 +1043,7 @@ func TestSetFallbackProxy_RewriteContentNonHTML(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1072,7 +1073,7 @@ func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientGzip(t *testing.T) 
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1099,7 +1100,7 @@ func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientNoGzip(t *testing.T
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1127,7 +1128,7 @@ func TestSetFallbackProxy_RewriteContent_RecompressGzip(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1172,7 +1173,7 @@ func TestSetFallbackProxy_RewriteContent_NoRecompressWhenClientNoGzip(t *testing
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1238,7 +1239,7 @@ func TestSetFallbackProxy_RewriteOrigin(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost := upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1268,7 +1269,7 @@ func TestSetFallbackProxy_RewriteReferer(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost := upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1296,7 +1297,7 @@ func TestSetFallbackProxy_OtherHostOriginUnchanged(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1321,7 +1322,7 @@ func TestSetFallbackProxy_NoOriginNoError(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false); err != nil {
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1333,5 +1334,190 @@ func TestSetFallbackProxy_NoOriginNoError(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CDN domain proxying tests
+// ---------------------------------------------------------------------------
+
+// TestSetFallbackProxy_CDNRoute verifies that a request to
+// /__cdn__/<host>/<path> is proxied to https://<host>/<path> with the correct
+// Host header.
+func TestSetFallbackProxy_CDNRoute(t *testing.T) {
+	var gotHost, gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("upstream"))
+	}))
+	defer upstream.Close()
+
+	cdnServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHost = r.Host
+		gotPath = r.URL.Path
+		w.Write([]byte("cdn-content"))
+	}))
+	defer cdnServer.Close()
+	cdnHost := cdnServer.Listener.Addr().String()
+
+	if err := SetFallbackProxy(upstream.URL, false, []string{cdnHost}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
+
+	// Override the proxy's Transport to skip TLS verification for the test
+	// self-signed certificate.
+	originalTransport := fallbackProxy.Transport
+	fallbackProxy.Transport = &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	t.Cleanup(func() { fallbackProxy.Transport = originalTransport })
+
+	// Request via /__cdn__/ prefix path.
+	req := httptest.NewRequest(http.MethodGet, cdnPathPrefix+cdnHost+"/assets/foo.css", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	if gotHost != cdnHost {
+		t.Errorf("CDN received Host %q, want %q", gotHost, cdnHost)
+	}
+	if gotPath != "/assets/foo.css" {
+		t.Errorf("CDN received Path %q, want %q", gotPath, "/assets/foo.css")
+	}
+}
+
+// TestSetFallbackProxy_CDNRouteDisallowedHost verifies that a /__cdn__/
+// request to a host NOT in the allowed list is not proxied as a CDN request
+// (it falls through to the main upstream).
+func TestSetFallbackProxy_CDNRouteDisallowedHost(t *testing.T) {
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Write([]byte("upstream"))
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL, false, []string{"allowed.cdn.com"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
+
+	// Request to a disallowed CDN host.
+	req := httptest.NewRequest(http.MethodGet, cdnPathPrefix+"evil.cdn.com/assets/foo.css", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	// Should have been routed to the main upstream with the /__cdn__/ path
+	// (since the host was not in the allowed set, routeCDN returns false and
+	// the normal upstream routing applies).
+	if gotPath != cdnPathPrefix+"evil.cdn.com/assets/foo.css" {
+		t.Errorf("upstream received Path %q, want %q (passed through)", gotPath, cdnPathPrefix+"evil.cdn.com/assets/foo.css")
+	}
+}
+
+// TestSetFallbackProxy_CDNHTMLRewrite verifies that absolute URLs pointing at
+// a configured CDN domain in an HTML body are rewritten to the
+// /__cdn__/<host> prefix form.
+func TestSetFallbackProxy_CDNHTMLRewrite(t *testing.T) {
+	var upstreamHost string
+	cdnHost := "cdn.example.com"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(`<html><link rel="stylesheet" href="https://` + cdnHost + `/assets/foo.css">` +
+			`<script src="https://` + cdnHost + `/assets/bar.js"></script></html>`))
+	}))
+	defer upstream.Close()
+	upstreamHost = upstream.Listener.Addr().String()
+	_ = upstreamHost
+
+	if err := SetFallbackProxy(upstream.URL, false, []string{cdnHost}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	body := rec.Body.String()
+	wantPrefix := "http://my-site.com" + cdnPathPrefix + cdnHost
+	if !strings.Contains(body, wantPrefix+"/assets/foo.css") {
+		t.Errorf("body should contain %q/assets/foo.css\nbody: %s", wantPrefix, body)
+	}
+	if !strings.Contains(body, wantPrefix+"/assets/bar.js") {
+		t.Errorf("body should contain %q/assets/bar.js\nbody: %s", wantPrefix, body)
+	}
+	// Original CDN URL should not appear.
+	if strings.Contains(body, "https://"+cdnHost) {
+		t.Errorf("body should not contain https://%s\nbody: %s", cdnHost, body)
+	}
+}
+
+// TestSetFallbackProxy_CDNCSPRewrite verifies that CSP source expressions
+// referencing a configured CDN domain are rewritten to the /__cdn__/ prefix
+// form.
+func TestSetFallbackProxy_CDNCSPRewrite(t *testing.T) {
+	cdnHost := "cdn.example.com"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; style-src 'self' https://"+cdnHost+" "+cdnHost+"/assets/; script-src "+cdnHost)
+		w.Write([]byte("<html></html>"))
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL, false, []string{cdnHost}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	csp := rec.Header().Get("Content-Security-Policy")
+	// CDN host should be replaced with my-site.com/__cdn__/<cdnHost>.
+	wantCSPHost := "my-site.com" + cdnPathPrefix + cdnHost
+	if strings.Contains(csp, "https://"+cdnHost) {
+		t.Errorf("CSP should not contain https://%s\ncsp: %s", cdnHost, csp)
+	}
+	if !strings.Contains(csp, "http://"+wantCSPHost) {
+		t.Errorf("CSP should contain http://%s\ncsp: %s", wantCSPHost, csp)
+	}
+	// Bare-host form should also be replaced.
+	if strings.Contains(csp, " "+cdnHost+"/") {
+		t.Errorf("CSP should not contain bare %q/\ncsp: %s", cdnHost, csp)
+	}
+}
+
+// TestSetFallbackProxy_CDNNotConfigured verifies that when no CDN domains are
+// configured, HTML URLs pointing at external hosts are NOT rewritten (left
+// as-is).
+func TestSetFallbackProxy_CDNNotConfigured(t *testing.T) {
+	cdnHost := "cdn.example.com"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(`<html><link href="https://` + cdnHost + `/foo.css"></html>`))
+	}))
+	defer upstream.Close()
+
+	// No CDN domains configured.
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	body := rec.Body.String()
+	// CDN URL should remain unchanged.
+	if !strings.Contains(body, "https://"+cdnHost+"/foo.css") {
+		t.Errorf("body should contain unchanged CDN URL\nbody: %s", body)
 	}
 }
