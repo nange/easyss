@@ -1649,3 +1649,62 @@ func TestSetFallbackProxy_CDNNonMatchingSubdomain(t *testing.T) {
 		t.Errorf("body should not contain /__cdn__/%s\nbody: %s", fakeHost, body)
 	}
 }
+
+// TestSetFallbackProxy_CDNCSPSubdomainRewrite verifies that CSP source
+// expressions referencing a SUBDOMAIN of a configured CDN domain are
+// rewritten to the /__cdn__/ prefix form. This is the key fix for the
+// "blocked:csp" issue where GitHub's CSP references "github.githubassets.com"
+// but only "githubassets.com" is configured.
+func TestSetFallbackProxy_CDNCSPSubdomainRewrite(t *testing.T) {
+	cdnParent := "githubassets.com"
+	cdnSub := "github.githubassets.com"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		// Simulate GitHub-style CSP with subdomain references.
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; style-src 'self' https://"+cdnSub+" "+cdnSub+"/assets/ "+
+				cdnSub+" https://"+cdnParent+" "+cdnParent+"/assets/")
+		w.Write([]byte("<html></html>"))
+	}))
+	defer upstream.Close()
+
+	// Configure only the parent domain.
+	if err := SetFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	csp := rec.Header().Get("Content-Security-Policy")
+	// Subdomain references should be rewritten.
+	wantSubScheme := "http://my-site.com" + cdnPathPrefix + cdnSub
+	if strings.Contains(csp, "https://"+cdnSub) {
+		t.Errorf("CSP should not contain https://%s\ncsp: %s", cdnSub, csp)
+	}
+	if !strings.Contains(csp, wantSubScheme) {
+		t.Errorf("CSP should contain %q\ncsp: %s", wantSubScheme, csp)
+	}
+	// Bare subdomain should also be rewritten.
+	wantSubBare := "my-site.com" + cdnPathPrefix + cdnSub
+	if strings.Contains(csp, " "+cdnSub+"/") {
+		t.Errorf("CSP should not contain bare %q/\ncsp: %s", cdnSub, csp)
+	}
+	if !strings.Contains(csp, wantSubBare+"/assets/") {
+		t.Errorf("CSP should contain %q/assets/\ncsp: %s", wantSubBare, csp)
+	}
+	// Parent domain references should also be rewritten.
+	if strings.Contains(csp, "https://"+cdnParent) {
+		t.Errorf("CSP should not contain https://%s\ncsp: %s", cdnParent, csp)
+	}
+	// No original CDN host should remain (except in the rewritten /__cdn__/ path).
+	// Check that "github.githubassets.com" only appears within "__cdn__/" context.
+	for _, token := range strings.Fields(csp) {
+		if strings.Contains(token, cdnSub) && !strings.Contains(token, cdnPathPrefix) {
+			t.Errorf("CSP token %q contains %q without /__cdn__/ prefix\ncsp: %s", token, cdnSub, csp)
+		}
+	}
+}

@@ -970,6 +970,56 @@ func getCdnURLRegexp(cdnHost string) *regexp.Regexp {
 	return re
 }
 
+// rewriteCDNInCSP rewrites a Content-Security-Policy header value so that
+// source expressions referencing any configured CDN domain (or its
+// subdomains) are replaced with the /__cdn__/<host> prefix form. This
+// handles both scheme-prefixed forms (e.g. "https://github.githubassets.com")
+// and bare-host forms (e.g. "github.githubassets.com/assets/").
+//
+// For example, if "githubassets.com" is configured:
+//
+//	https://github.githubassets.com → https://my-site.com/__cdn__/github.githubassets.com
+//	github.githubassets.com/assets/ → my-site.com/__cdn__/github.githubassets.com/assets/
+//
+// The full host (including subdomain) is preserved in the /__cdn__/ path.
+func rewriteCDNInCSP(csp, origScheme, origHost string, cdnHosts map[string]bool) string {
+	origOrigin := origScheme + "://" + origHost
+	parts := strings.Split(csp, " ")
+	for i, part := range parts {
+		// Check if this is a scheme-prefixed URL.
+		if strings.HasPrefix(part, "https://") || strings.HasPrefix(part, "http://") {
+			u, err := url.Parse(part)
+			if err != nil || u.Host == "" {
+				continue
+			}
+			if !cdnHostMatches(u.Host, cdnHosts) {
+				continue
+			}
+			// Reconstruct: origOrigin + /__cdn__/<full-host> + path + query.
+			pathQuery := u.Path
+			if u.RawQuery != "" {
+				pathQuery += "?" + u.RawQuery
+			}
+			parts[i] = origOrigin + cdnPathPrefix + u.Host + pathQuery
+			continue
+		}
+		// Bare-host form: check if the token starts with a CDN host.
+		host := part
+		if slashIdx := strings.Index(part, "/"); slashIdx >= 0 {
+			host = part[:slashIdx]
+		}
+		if host == "" {
+			continue
+		}
+		if !cdnHostMatches(host, cdnHosts) {
+			continue
+		}
+		// Replace the host portion with my-site.com/__cdn__/<full-token>.
+		parts[i] = origHost + cdnPathPrefix + part
+	}
+	return strings.Join(parts, " ")
+}
+
 // rewriteResponseBody reads an HTML response body and replaces absolute URLs
 // pointing at the upstream host (both http and https variants) with the
 // client-facing origin, so that browser-initiated requests (e.g. Turbo frame
@@ -1049,13 +1099,11 @@ func rewriteResponseBody(resp *http.Response, targetHost string) error {
 	// origin instead. This covers both scheme-prefixed forms (e.g.
 	// "https://github.com") and bare-host forms (e.g.
 	// "github.com/assets-cdn/worker/") which appear in GitHub's CSP.
-	// CDN domain references in CSP are also rewritten.
+	// CDN domain references in CSP (including subdomains) are also
+	// rewritten to the /__cdn__/ prefix form.
 	if csp := resp.Header.Get("Content-Security-Policy"); csp != "" {
 		csp = rewriteCSP(csp, targetHost, origOrigin)
-		for cdnHost := range fallbackCDNHosts {
-			cdnCSPHost := origHost + cdnPathPrefix + cdnHost
-			csp = rewriteCSP(csp, cdnHost, origScheme+"://"+cdnCSPHost)
-		}
+		csp = rewriteCDNInCSP(csp, origScheme, origHost, fallbackCDNHosts)
 		resp.Header.Set("Content-Security-Policy", csp)
 	}
 
