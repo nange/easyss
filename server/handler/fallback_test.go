@@ -1521,3 +1521,131 @@ func TestSetFallbackProxy_CDNNotConfigured(t *testing.T) {
 		t.Errorf("body should contain unchanged CDN URL\nbody: %s", body)
 	}
 }
+
+// TestSetFallbackProxy_CDNSubdomainRoute verifies that a /__cdn__/ request to
+// a subdomain of a configured CDN domain is routed correctly (the subdomain
+// host is extracted and used as the upstream host).
+func TestSetFallbackProxy_CDNSubdomainRoute(t *testing.T) {
+	cdnParent := "githubassets.com"
+	cdnSub := "github.githubassets.com"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("upstream"))
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
+
+	// Use a custom Transport that captures the target host without actually
+	// connecting (the subdomain is not DNS-resolvable in test env).
+	var capturedHost string
+	fallbackProxy.Transport = &roundTripFunc{
+		fn: func(req *http.Request) (*http.Response, error) {
+			capturedHost = req.URL.Host
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/html"}},
+				Body:       io.NopCloser(bytes.NewReader([]byte("<html></html>"))),
+				Request:    req,
+			}, nil
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, cdnPathPrefix+cdnSub+"/assets/foo.css", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	if capturedHost != cdnSub {
+		t.Errorf("upstream host = %q, want %q (subdomain)", capturedHost, cdnSub)
+	}
+}
+
+// roundTripFunc is a helper Transport for testing that captures the request
+// without making a real network connection.
+type roundTripFunc struct {
+	fn func(*http.Request) (*http.Response, error)
+}
+
+func (rt *roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return rt.fn(req)
+}
+
+// TestSetFallbackProxy_CDNSubdomainHTMLRewrite verifies that absolute URLs
+// pointing at a subdomain of a configured CDN domain are rewritten to
+// /__cdn__/<subdomain-host> form.
+func TestSetFallbackProxy_CDNSubdomainHTMLRewrite(t *testing.T) {
+	cdnParent := "githubassets.com"
+	cdnSub := "github.githubassets.com"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(`<html><link rel="stylesheet" href="https://` + cdnSub + `/assets/foo.css">` +
+			`<link rel="stylesheet" href="https://` + cdnParent + `/assets/bar.css"></html>`))
+	}))
+	defer upstream.Close()
+
+	// Configure only the parent domain.
+	if err := SetFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	body := rec.Body.String()
+	// Subdomain URL should be rewritten with the full subdomain host.
+	wantSub := "http://my-site.com" + cdnPathPrefix + cdnSub + "/assets/foo.css"
+	if !strings.Contains(body, wantSub) {
+		t.Errorf("body should contain %q\nbody: %s", wantSub, body)
+	}
+	// Parent domain URL should also be rewritten.
+	wantParent := "http://my-site.com" + cdnPathPrefix + cdnParent + "/assets/bar.css"
+	if !strings.Contains(body, wantParent) {
+		t.Errorf("body should contain %q\nbody: %s", wantParent, body)
+	}
+	// Original URLs should not appear.
+	if strings.Contains(body, "https://"+cdnSub) {
+		t.Errorf("body should not contain https://%s\nbody: %s", cdnSub, body)
+	}
+	if strings.Contains(body, "https://"+cdnParent) {
+		t.Errorf("body should not contain https://%s\nbody: %s", cdnParent, body)
+	}
+}
+
+// TestSetFallbackProxy_CDNNonMatchingSubdomain verifies that a host that
+// merely ends with the configured CDN domain string (but is not a true
+// subdomain) is NOT matched. For example, "notgithubassets.com" should not
+// match "githubassets.com".
+func TestSetFallbackProxy_CDNNonMatchingSubdomain(t *testing.T) {
+	cdnParent := "githubassets.com"
+	fakeHost := "notgithubassets.com"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(`<html><link href="https://` + fakeHost + `/foo.css"></html>`))
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	body := rec.Body.String()
+	// The fake host URL should NOT be rewritten.
+	if !strings.Contains(body, "https://"+fakeHost+"/foo.css") {
+		t.Errorf("body should contain unchanged %q URL\nbody: %s", fakeHost, body)
+	}
+	if strings.Contains(body, cdnPathPrefix+fakeHost) {
+		t.Errorf("body should not contain /__cdn__/%s\nbody: %s", fakeHost, body)
+	}
+}

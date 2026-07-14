@@ -14,12 +14,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/nange/easyss/v3/stats"
+	"github.com/nange/easyss/v3/util"
 )
 
 var fallbackTmpl = template.Must(template.New("fallback").Parse(`<!DOCTYPE html>
@@ -656,10 +658,28 @@ func setAcceptEncoding(pr *httputil.ProxyRequest) {
 	}
 }
 
+// cdnHostMatches reports whether host matches any configured CDN domain.
+// It matches exactly (host == domain) or as a subdomain (host's parent
+// domain is in the set), using util.SubDomains for parent-domain extraction.
+// For example, if "githubassets.com" is configured, both "githubassets.com"
+// and "github.githubassets.com" match, but "notgithubassets.com" does not.
+func cdnHostMatches(host string, cdnSet map[string]bool) bool {
+	if cdnSet[strings.ToLower(host)] {
+		return true
+	}
+	for _, sub := range util.SubDomains(host) {
+		if cdnSet[strings.ToLower(sub)] {
+			return true
+		}
+	}
+	return false
+}
+
 // routeCDN checks if the outbound request path starts with the CDN path
 // prefix (/__cdn__/<host>/...) and, if the extracted host is in the allowed
-// set, returns the upstream URL to proxy to. Returns ok=false if the request
-// is not a CDN-routed request or the host is not allowed.
+// set (exact or subdomain match), returns the upstream URL to proxy to.
+// Returns ok=false if the request is not a CDN-routed request or the host
+// is not allowed.
 func routeCDN(pr *httputil.ProxyRequest, cdnSet map[string]bool) (*url.URL, bool) {
 	path := pr.Out.URL.Path
 	if !strings.HasPrefix(path, cdnPathPrefix) {
@@ -679,7 +699,7 @@ func routeCDN(pr *httputil.ProxyRequest, cdnSet map[string]bool) (*url.URL, bool
 	if host == "" {
 		return nil, false
 	}
-	if !cdnSet[strings.ToLower(host)] {
+	if !cdnHostMatches(host, cdnSet) {
 		return nil, false
 	}
 	target := &url.URL{
@@ -694,7 +714,8 @@ func routeCDN(pr *httputil.ProxyRequest, cdnSet map[string]bool) (*url.URL, bool
 }
 
 // cdnHostFromRequest extracts the CDN host from a request's URL path if it
-// is a /__cdn__/ request with an allowed host. Returns ok=false otherwise.
+// is a /__cdn__/ request with an allowed host (exact or subdomain match).
+// Returns ok=false otherwise.
 func cdnHostFromRequest(req *http.Request, cdnSet map[string]bool) (string, bool) {
 	if req == nil {
 		return "", false
@@ -711,7 +732,7 @@ func cdnHostFromRequest(req *http.Request, cdnSet map[string]bool) (string, bool
 	} else {
 		host = rest[:slashIdx]
 	}
-	if host == "" || !cdnSet[strings.ToLower(host)] {
+	if host == "" || !cdnHostMatches(host, cdnSet) {
 		return "", false
 	}
 	return host, true
@@ -886,6 +907,69 @@ func rewriteCSP(csp, targetHost, origOrigin string) string {
 	return strings.Join(parts, " ")
 }
 
+// cdnURLRegexpCache caches compiled regexps for CDN domain patterns so we
+// don't recompile on every response.
+var cdnURLRegexpCache sync.Map // cdnHost string → *regexp.Regexp
+
+// rewriteCDNURLs replaces absolute URLs (http and https) pointing at any
+// configured CDN domain or its subdomains with the /__cdn__/<host> prefix
+// form. For example, if "githubassets.com" is configured:
+//
+//	https://github.githubassets.com/assets/foo.css
+//	→ https://my-site.com/__cdn__/github.githubassets.com/assets/foo.css
+//
+//	https://githubassets.com/assets/bar.css
+//	→ https://my-site.com/__cdn__/githubassets.com/assets/bar.css
+//
+// The original host (including subdomain) is preserved in the /__cdn__/ path
+// so that the proxy can route to the correct upstream.
+func rewriteCDNURLs(body []byte, origOrigin string, cdnHosts map[string]bool) []byte {
+	for cdnHost := range cdnHosts {
+		re := getCdnURLRegexp(cdnHost)
+		replaced := re.ReplaceAllFunc(body, func(match []byte) []byte {
+			// The match is "https://<full-host>/" or "https://<full-host>:".
+			// Extract the full host (everything between "://" and the
+			// trailing "/" or ":").
+			s := string(match)
+			idx := strings.Index(s, "://")
+			rest := s[idx+3:]
+			// Trim trailing "/" or ":" to get the host.
+			fullHost := rest
+			if last := fullHost[len(fullHost)-1]; last == '/' || last == ':' {
+				fullHost = fullHost[:len(fullHost)-1]
+			}
+			// Reconstruct: origOrigin + /__cdn__/<full-host> + trailing char.
+			trailing := string(rest[len(fullHost):])
+			return []byte(origOrigin + cdnPathPrefix + fullHost + trailing)
+		})
+		body = replaced
+	}
+	return body
+}
+
+// getCdnURLRegexp returns a compiled regexp that matches "https://<host>" or
+// "http://<host>" where <host> is the configured CDN domain or any of its
+// subdomains. The regexp is cached for reuse.
+//
+// The pattern matches the scheme and host only (not the path), and requires
+// the host to be followed by "/" or ":" (port) or to be at a word boundary
+// to avoid matching "notgithubassets.com" when the configured host is
+// "githubassets.com".
+func getCdnURLRegexp(cdnHost string) *regexp.Regexp {
+	if cached, ok := cdnURLRegexpCache.Load(cdnHost); ok {
+		return cached.(*regexp.Regexp)
+	}
+	escaped := regexp.QuoteMeta(cdnHost)
+	// Match "https://" or "http://" followed by an optional subdomain
+	// prefix (one or more labels ending with ".") then the CDN host.
+	// The host must be followed by "/" or ":" (port) — captured as a
+	// trailing group so it is not consumed by the match.
+	pattern := `https?://(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)?` + escaped + `(?:/|:)`
+	re := regexp.MustCompile(pattern)
+	cdnURLRegexpCache.Store(cdnHost, re)
+	return re
+}
+
 // rewriteResponseBody reads an HTML response body and replaces absolute URLs
 // pointing at the upstream host (both http and https variants) with the
 // client-facing origin, so that browser-initiated requests (e.g. Turbo frame
@@ -955,12 +1039,10 @@ func rewriteResponseBody(resp *http.Response, targetHost string) error {
 	// Replace CDN domain URLs with /__cdn__/<host> prefix form so that
 	// browser requests for static assets (CSS, JS, images) hosted on CDN
 	// domains are routed through the proxy instead of going directly to
-	// the CDN host.
-	for cdnHost := range fallbackCDNHosts {
-		cdnPrefix := origOrigin + cdnPathPrefix + cdnHost
-		replaced = bytes.ReplaceAll(replaced, []byte("https://"+cdnHost), []byte(cdnPrefix))
-		replaced = bytes.ReplaceAll(replaced, []byte("http://"+cdnHost), []byte(cdnPrefix))
-	}
+	// the CDN host. This matches both the configured domain exactly and
+	// any subdomain (e.g. "githubassets.com" matches both
+	// "githubassets.com" and "github.githubassets.com").
+	replaced = rewriteCDNURLs(replaced, origOrigin, fallbackCDNHosts)
 
 	// Rewrite the Content-Security-Policy header so that source-list
 	// entries referencing the upstream origin allow the client-facing
