@@ -983,14 +983,20 @@ func getCdnURLRegexp(cdnHost string) *regexp.Regexp {
 
 // rewriteCDNInCSP rewrites a Content-Security-Policy header value so that
 // source expressions referencing any configured CDN domain (or its
-// subdomains) are replaced with the /__cdn__/<host> prefix form. This
+// subdomains) are replaced with the /__cdn__/<host>/ prefix form. This
 // handles both scheme-prefixed forms (e.g. "https://github.githubassets.com")
 // and bare-host forms (e.g. "github.githubassets.com/assets/").
 //
 // For example, if "githubassets.com" is configured:
 //
-//	https://github.githubassets.com → https://my-site.com/__cdn__/github.githubassets.com
+//	https://github.githubassets.com → https://my-site.com/__cdn__/github.githubassets.com/
 //	github.githubassets.com/assets/ → my-site.com/__cdn__/github.githubassets.com/assets/
+//
+// A trailing "/" is added when the original token had no path (bare host),
+// because CSP path matching requires a trailing "/" to match sub-paths:
+// "my-site.com/__cdn__/github.githubassets.com" matches ONLY that exact
+// path, while "my-site.com/__cdn__/github.githubassets.com/" matches any
+// sub-path under it.
 //
 // The full host (including subdomain) is preserved in the /__cdn__/ path.
 func rewriteCDNInCSP(csp, origScheme, origHost string, cdnHosts map[string]bool) string {
@@ -1017,7 +1023,11 @@ func rewriteCDNInCSP(csp, origScheme, origHost string, cdnHosts map[string]bool)
 				continue
 			}
 			// Reconstruct: origOrigin + /__cdn__/<full-host> + path + query.
+			// If the original had no path, add "/" so CSP matches sub-paths.
 			pathQuery := u.Path
+			if pathQuery == "" {
+				pathQuery = "/"
+			}
 			if u.RawQuery != "" {
 				pathQuery += "?" + u.RawQuery
 			}
@@ -1026,8 +1036,10 @@ func rewriteCDNInCSP(csp, origScheme, origHost string, cdnHosts map[string]bool)
 		}
 		// Bare-host form: check if the token starts with a CDN host.
 		host := part
+		hasPath := false
 		if slashIdx := strings.Index(part, "/"); slashIdx >= 0 {
 			host = part[:slashIdx]
+			hasPath = true
 		}
 		if host == "" {
 			continue
@@ -1036,7 +1048,12 @@ func rewriteCDNInCSP(csp, origScheme, origHost string, cdnHosts map[string]bool)
 			continue
 		}
 		// Replace the host portion with my-site.com/__cdn__/<full-token>.
-		parts[i] = origHost + cdnPathPrefix + part + suffix
+		// If the original had no path, add "/" for CSP sub-path matching.
+		if !hasPath {
+			parts[i] = origHost + cdnPathPrefix + part + "/" + suffix
+		} else {
+			parts[i] = origHost + cdnPathPrefix + part + suffix
+		}
 	}
 	return strings.Join(parts, " ")
 }

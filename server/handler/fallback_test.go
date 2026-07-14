@@ -1749,3 +1749,43 @@ func TestSetFallbackProxy_CSPRewrittenEvenWhenBodyUnreadable(t *testing.T) {
 		t.Errorf("CSP should contain my-site.com%s%s\ncsp: %s", cdnPathPrefix, cdnSub, csp)
 	}
 }
+
+// TestSetFallbackProxy_CDNCSPTrailingSlash verifies that bare CDN host
+// references in CSP (without a path) are rewritten with a trailing "/" so
+// that CSP path matching allows sub-paths under /__cdn__/<host>/.
+// Without the trailing "/", CSP only matches the exact path, blocking
+// sub-resource loading (e.g. CSS at /__cdn__/<host>/assets/foo.css).
+func TestSetFallbackProxy_CDNCSPTrailingSlash(t *testing.T) {
+	cdnParent := "githubassets.com"
+	cdnSub := "github.githubassets.com"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		// CSP with bare host (no path) — should get trailing "/" after rewrite.
+		w.Header().Set("Content-Security-Policy",
+			"style-src 'unsafe-inline' "+cdnSub+"; script-src https://"+cdnSub)
+		w.Write([]byte("<html></html>"))
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	csp := rec.Header().Get("Content-Security-Policy")
+	// Bare host should be rewritten WITH trailing "/" so sub-paths match.
+	wantBare := "my-site.com" + cdnPathPrefix + cdnSub + "/"
+	if !strings.Contains(csp, wantBare) {
+		t.Errorf("CSP should contain %q (with trailing /)\ncsp: %s", wantBare, csp)
+	}
+	// Scheme-prefixed form should also have trailing "/".
+	wantScheme := "http://my-site.com" + cdnPathPrefix + cdnSub + "/"
+	if !strings.Contains(csp, wantScheme) {
+		t.Errorf("CSP should contain %q (with trailing /)\ncsp: %s", wantScheme, csp)
+	}
+}
