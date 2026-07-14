@@ -1097,38 +1097,26 @@ func rewriteCSPHeader(resp *http.Response, targetHost string) {
 }
 
 // isRewritableContentType reports whether a response with the given
-// Content-Type should have its body rewritten for URL substitution. HTML and
-// JavaScript content types are rewritable because they may contain absolute
-// URLs that need to be redirected through the proxy.
+// Content-Type should have its body rewritten for URL substitution. Only
+// HTML is rewritable; JavaScript is not because JS often constructs URLs
+// dynamically (string concatenation) which cannot be caught by body
+// rewriting, and scanning large JS files wastes CPU.
 func isRewritableContentType(ct string) bool {
 	ct = strings.ToLower(strings.TrimSpace(ct))
 	// Strip any parameters (e.g. "; charset=utf-8").
 	if idx := strings.Index(ct, ";"); idx >= 0 {
 		ct = strings.TrimSpace(ct[:idx])
 	}
-	switch ct {
-	case "text/html",
-		"application/javascript",
-		"text/javascript",
-		"application/x-javascript",
-		"module": // JS module responses (some servers use this)
-		return true
-	default:
-		return false
-	}
+	return ct == "text/html"
 }
 
-// rewriteResponseBody reads an HTML or JavaScript response body and replaces
-// absolute URLs pointing at the upstream host (both http and https variants)
-// with the client-facing origin, so that browser-initiated requests (e.g.
-// Turbo frame fetches, <a> links, <form> actions, JS fetch/XHR calls) stay on
-// the proxy instead of going directly to the upstream. The Content-Security-
-// Policy response header is similarly rewritten (see rewriteCSPHeader).
-// Non-HTML/JS responses are passed through unchanged.
-//
-// JavaScript rewriting is needed because JS files loaded via /__cdn__/ paths
-// may contain hardcoded absolute URLs (e.g. fetch("https://github.githubassets.com/..."))
-// that would bypass the proxy and get blocked by CSP.
+// rewriteResponseBody reads an HTML response body and replaces absolute URLs
+// pointing at the upstream host (both http and https variants) with the
+// client-facing origin, so that browser-initiated requests (e.g. Turbo frame
+// fetches, <a> links, <form> actions) stay on the proxy instead of going
+// directly to the upstream. The Content-Security-Policy response header is
+// similarly rewritten (see rewriteCSPHeader). Non-HTML responses are passed
+// through unchanged.
 //
 // The upstream request's Accept-Encoding is set to "identity, gzip" (when the
 // client accepts gzip) or "identity" (otherwise), so the upstream may return

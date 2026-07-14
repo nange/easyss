@@ -1775,94 +1775,15 @@ func TestSetFallbackProxy_CDNCSPTrailingSlash(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_RewriteJavaScript verifies that absolute URLs in
-// JavaScript response bodies are rewritten to the client-facing origin and
-// /__cdn__/ prefix form, so that JS-initiated requests (fetch, XHR, dynamic
-// imports) stay on the proxy and don't get blocked by CSP.
-func TestSetFallbackProxy_RewriteJavaScript(t *testing.T) {
-	var upstreamHost string
-	cdnHost := "github.githubassets.com"
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-		w.Write([]byte(`fetch("https://` + upstreamHost + `/api/data");` +
-			`import("https://` + cdnHost + `/assets/chunk.js");` +
-			`var url="https://` + cdnHost + `/assets/config.json";`))
-	}))
-	defer upstream.Close()
-	upstreamHost = upstream.Listener.Addr().String()
-
-	if err := SetFallbackProxy(upstream.URL, false, []string{"githubassets.com"}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
-
-	req := httptest.NewRequest(http.MethodGet, "/assets/app.js", nil)
-	req.Host = "my-site.com"
-	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
-
-	body := rec.Body.String()
-	// Upstream host URL should be rewritten to client-facing origin.
-	if strings.Contains(body, "https://"+upstreamHost) {
-		t.Errorf("JS body should not contain https://%s\nbody: %s", upstreamHost, body)
-	}
-	// CDN host URL should be rewritten to /__cdn__/ prefix.
-	wantCDN := "http://my-site.com" + cdnPathPrefix + cdnHost
-	if !strings.Contains(body, wantCDN+"/assets/chunk.js") {
-		t.Errorf("JS body should contain %q/assets/chunk.js\nbody: %s", wantCDN, body)
-	}
-	if !strings.Contains(body, wantCDN+"/assets/config.json") {
-		t.Errorf("JS body should contain %q/assets/config.json\nbody: %s", wantCDN, body)
-	}
-	// Original CDN URL should not appear.
-	if strings.Contains(body, "https://"+cdnHost) {
-		t.Errorf("JS body should not contain https://%s\nbody: %s", cdnHost, body)
-	}
-}
-
-// TestSetFallbackProxy_RewriteJavaScriptGzip verifies that gzipped JavaScript
-// responses are decompressed and rewritten correctly.
-func TestSetFallbackProxy_RewriteJavaScriptGzip(t *testing.T) {
-	cdnHost := "github.githubassets.com"
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/javascript")
-		w.Header().Set("Content-Encoding", "gzip")
-		gw := gzip.NewWriter(w)
-		gw.Write([]byte(`fetch("https://` + cdnHost + `/api/data");`))
-		gw.Close()
-	}))
-	defer upstream.Close()
-
-	if err := SetFallbackProxy(upstream.URL, false, []string{"githubassets.com"}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
-
-	req := httptest.NewRequest(http.MethodGet, "/assets/app.js", nil)
-	req.Host = "my-site.com"
-	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
-
-	if ce := rec.Header().Get("Content-Encoding"); ce != "" {
-		t.Errorf("Content-Encoding = %q, want empty", ce)
-	}
-	body := rec.Body.String()
-	wantCDN := "http://my-site.com" + cdnPathPrefix + cdnHost
-	if !strings.Contains(body, wantCDN+"/api/data") {
-		t.Errorf("JS body should contain rewritten CDN URL\nbody: %s", body)
-	}
-	if strings.Contains(body, "https://"+cdnHost) {
-		t.Errorf("JS body should not contain original CDN URL\nbody: %s", body)
-	}
-}
-
 // TestSetFallbackProxy_NonRewritableContentType verifies that content types
-// other than HTML and JS (e.g. JSON, images) are NOT rewritten.
+// other than HTML (e.g. JavaScript, JSON) are NOT rewritten, to avoid
+// wasting CPU on body scanning that is unreliable for JS (dynamic URL
+// construction) and unnecessary for JSON/images.
 func TestSetFallbackProxy_NonRewritableContentType(t *testing.T) {
 	cdnHost := "github.githubassets.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"url":"https://` + cdnHost + `/data.json"}`))
+		w.Header().Set("Content-Type", "application/javascript")
+		w.Write([]byte(`fetch("https://` + cdnHost + `/data.js");`))
 	}))
 	defer upstream.Close()
 
@@ -1871,13 +1792,14 @@ func TestSetFallbackProxy_NonRewritableContentType(t *testing.T) {
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
-	req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
+	req := httptest.NewRequest(http.MethodGet, "/assets/app.js", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
 	ServeFallback(rec, req)
 
 	body := rec.Body.String()
+	// JavaScript should NOT be rewritten — original URL preserved.
 	if !strings.Contains(body, "https://"+cdnHost) {
-		t.Errorf("non-rewritable content type should preserve original URL\nbody: %s", body)
+		t.Errorf("JS body should preserve original URL (not rewritten)\nbody: %s", body)
 	}
 }
