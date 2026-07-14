@@ -14,9 +14,10 @@ import (
 )
 
 type NextProxy struct {
-	url       *url.URL
-	enableUDP bool
-	allHost   bool
+	url         *url.URL
+	enableUDP   bool
+	allHost     bool
+	dialTimeout time.Duration
 
 	mu      sync.RWMutex
 	ips     map[string]struct{}
@@ -159,6 +160,14 @@ func (np *NextProxy) AddDomain(domain string) {
 	np.mu.Unlock()
 }
 
+// SetDialTimeout sets the timeout for dialing the SOCKS5 proxy.
+func (np *NextProxy) SetDialTimeout(d time.Duration) {
+	if np == nil {
+		return
+	}
+	np.dialTimeout = d
+}
+
 func (np *NextProxy) Dial(network, addr string) (net.Conn, error) {
 	return np.DialContext(context.Background(), network, addr)
 }
@@ -178,6 +187,16 @@ func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string
 		log.Debug("[NEXTPROXY] connecting via SOCKS5 proxy", "addr", np.url.Host, "network", network, "target", addr)
 	}
 
+	dialTimeout := np.dialTimeout
+	if dialTimeout <= 0 {
+		dialTimeout = 10 * time.Second
+	}
+	dialer := &net.Dialer{Timeout: dialTimeout}
+	socksTimeout := int(dialTimeout.Seconds())
+	if socksTimeout < 1 {
+		socksTimeout = 1
+	}
+
 	type result struct {
 		conn net.Conn
 		err  error
@@ -185,10 +204,13 @@ func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string
 	ch := make(chan result, 1)
 
 	go func() {
-		c, err := socks5.NewClient(np.url.Host, username, password, 10, 10)
+		c, err := socks5.NewClient(np.url.Host, username, password, socksTimeout, socksTimeout)
 		if err != nil {
 			ch <- result{nil, err}
 			return
+		}
+		c.DialTCP = func(network string, laddr, raddr string) (net.Conn, error) {
+			return dialer.Dial(network, raddr)
 		}
 
 		conn, err := c.Dial(network, addr)
@@ -200,7 +222,7 @@ func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string
 		// Clear the deadline set during SOCKS5 negotiation. The socks5 library
 		// sets SetDeadline(now + TCPTimeout) in Negotiate() for the handshake
 		// but never clears it, which would cause the connection to time out
-		// after 10 seconds during data transfer.
+		// after the timeout duration during data transfer.
 		_ = conn.SetDeadline(time.Time{})
 
 		ch <- result{conn, nil}

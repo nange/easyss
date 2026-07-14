@@ -26,6 +26,19 @@ type TCPHandler struct {
 	dialTimeout time.Duration
 }
 
+// DialTimeout computes the dial timeout for outbound connections.
+// It is derived from the base timeout: timeout/3, clamped to [3s, 15s].
+func DialTimeout(timeout time.Duration) time.Duration {
+	d := timeout / 3
+	if d < 3*time.Second {
+		d = 3 * time.Second
+	}
+	if d > 15*time.Second {
+		d = 15 * time.Second
+	}
+	return d
+}
+
 func NewTCPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) *TCPHandler {
 	if idleTimeout <= 0 {
 		idleTimeout = 300 * time.Second
@@ -33,10 +46,7 @@ func NewTCPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) 
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	dialTimeout := idleTimeout * 2
-	if dialTimeout < 30*time.Second {
-		dialTimeout = 30 * time.Second
-	}
+	dialTimeout := DialTimeout(timeout)
 	return &TCPHandler{
 		dialer:      &net.Dialer{Timeout: dialTimeout, KeepAlive: timeout},
 		nextProxy:   np,

@@ -278,6 +278,7 @@ func (s *Server) Start() error {
 			log.Error("[SERVER] next proxy load file failed", "err", err)
 			return fmt.Errorf("next proxy load file: %w", err)
 		}
+		np.SetDialTimeout(handler.DialTimeout(timeout))
 		log.Info("[SERVER] next proxy configured", "url", s.cfg.NextProxy.URL, "udp", s.cfg.NextProxy.EnableUDP, "all_host", s.cfg.NextProxy.AllHost)
 	}
 
