@@ -1708,3 +1708,44 @@ func TestSetFallbackProxy_CDNCSPSubdomainRewrite(t *testing.T) {
 		}
 	}
 }
+
+// TestSetFallbackProxy_CSPRewrittenEvenWhenBodyUnreadable verifies that the
+// Content-Security-Policy header is rewritten even when the response body
+// cannot be read (e.g. unsupported Content-Encoding like br). This is the key
+// fix for the "blocked:csp" issue where CSP was skipped because body reading
+// failed before the CSP rewriting code was reached.
+func TestSetFallbackProxy_CSPRewrittenEvenWhenBodyUnreadable(t *testing.T) {
+	cdnParent := "githubassets.com"
+	cdnSub := "github.githubassets.com"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		// Return br encoding which the proxy cannot decompress, causing
+		// rewriteResponseBody to skip body processing.
+		w.Header().Set("Content-Encoding", "br")
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'none'; style-src 'unsafe-inline' "+cdnSub+" https://"+cdnSub+
+			"; script-src "+cdnSub)
+		w.Write([]byte("some brotli content that cannot be decompressed"))
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	csp := rec.Header().Get("Content-Security-Policy")
+	// Even though body couldn't be read (br encoding), CSP should be
+	// rewritten so that /__cdn__/ paths are allowed.
+	if strings.Contains(csp, "https://"+cdnSub) {
+		t.Errorf("CSP should not contain https://%s\ncsp: %s", cdnSub, csp)
+	}
+	if !strings.Contains(csp, "my-site.com"+cdnPathPrefix+cdnSub) {
+		t.Errorf("CSP should contain my-site.com%s%s\ncsp: %s", cdnPathPrefix, cdnSub, csp)
+	}
+}

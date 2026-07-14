@@ -640,6 +640,10 @@ func SetFallbackProxy(targetURL string, preserveHost bool, cdnDomains []string) 
 				return err
 			}
 			rewriteSetCookieHeaders(resp, effectiveHost)
+			// Rewrite CSP header independently of body rewriting, so that
+			// CSP is always processed even if the body cannot be read
+			// (e.g. unsupported Content-Encoding like br).
+			rewriteCSPHeader(resp, effectiveHost)
 			return rewriteResponseBody(resp, effectiveHost)
 		},
 	}
@@ -900,8 +904,15 @@ func rewriteCSP(csp, targetHost, origOrigin string) string {
 	origHost = strings.TrimPrefix(origHost, "https://")
 	parts := strings.Split(csp, " ")
 	for i, part := range parts {
+		// Strip trailing ";" (CSP directive separator) so it doesn't
+		// interfere with host matching, then reattach it after.
+		suffix := ""
+		if strings.HasSuffix(part, ";") {
+			suffix = ";"
+			part = strings.TrimRight(part, ";")
+		}
 		if part == targetHost || strings.HasPrefix(part, targetHost+"/") {
-			parts[i] = strings.Replace(part, targetHost, origHost, 1)
+			parts[i] = strings.Replace(part, targetHost, origHost, 1) + suffix
 		}
 	}
 	return strings.Join(parts, " ")
@@ -986,6 +997,16 @@ func rewriteCDNInCSP(csp, origScheme, origHost string, cdnHosts map[string]bool)
 	origOrigin := origScheme + "://" + origHost
 	parts := strings.Split(csp, " ")
 	for i, part := range parts {
+		// CSP directives are separated by ";", which may stick to the
+		// end of a token after space-splitting (e.g.
+		// "https://github.githubassets.com;"). Strip and preserve the
+		// trailing ";" so it doesn't break URL parsing or host matching.
+		suffix := ""
+		if strings.HasSuffix(part, ";") {
+			suffix = ";"
+			part = strings.TrimRight(part, ";")
+		}
+
 		// Check if this is a scheme-prefixed URL.
 		if strings.HasPrefix(part, "https://") || strings.HasPrefix(part, "http://") {
 			u, err := url.Parse(part)
@@ -1000,7 +1021,7 @@ func rewriteCDNInCSP(csp, origScheme, origHost string, cdnHosts map[string]bool)
 			if u.RawQuery != "" {
 				pathQuery += "?" + u.RawQuery
 			}
-			parts[i] = origOrigin + cdnPathPrefix + u.Host + pathQuery
+			parts[i] = origOrigin + cdnPathPrefix + u.Host + pathQuery + suffix
 			continue
 		}
 		// Bare-host form: check if the token starts with a CDN host.
@@ -1015,9 +1036,35 @@ func rewriteCDNInCSP(csp, origScheme, origHost string, cdnHosts map[string]bool)
 			continue
 		}
 		// Replace the host portion with my-site.com/__cdn__/<full-token>.
-		parts[i] = origHost + cdnPathPrefix + part
+		parts[i] = origHost + cdnPathPrefix + part + suffix
 	}
 	return strings.Join(parts, " ")
+}
+
+// rewriteCSPHeader rewrites the Content-Security-Policy response header
+// independently of body rewriting. This ensures CSP is always processed even
+// when the response body cannot be read (e.g. unsupported Content-Encoding
+// like br) or is not HTML. Without this, browsers may block sub-resources
+// (CSS, JS, workers) loaded via /__cdn__/ paths because the CSP still
+// references the original upstream/CDN hosts.
+func rewriteCSPHeader(resp *http.Response, targetHost string) {
+	csp := resp.Header.Get("Content-Security-Policy")
+	if csp == "" {
+		return
+	}
+	ctx := resp.Request.Context()
+	origHost, _ := ctx.Value(ctxOrigHost).(string)
+	if origHost == "" {
+		return
+	}
+	origScheme, _ := ctx.Value(ctxOrigScheme).(string)
+	if origScheme == "" {
+		origScheme = "https"
+	}
+	origOrigin := origScheme + "://" + origHost
+	csp = rewriteCSP(csp, targetHost, origOrigin)
+	csp = rewriteCDNInCSP(csp, origScheme, origHost, fallbackCDNHosts)
+	resp.Header.Set("Content-Security-Policy", csp)
 }
 
 // rewriteResponseBody reads an HTML response body and replaces absolute URLs
@@ -1094,18 +1141,9 @@ func rewriteResponseBody(resp *http.Response, targetHost string) error {
 	// "githubassets.com" and "github.githubassets.com").
 	replaced = rewriteCDNURLs(replaced, origOrigin, fallbackCDNHosts)
 
-	// Rewrite the Content-Security-Policy header so that source-list
-	// entries referencing the upstream origin allow the client-facing
-	// origin instead. This covers both scheme-prefixed forms (e.g.
-	// "https://github.com") and bare-host forms (e.g.
-	// "github.com/assets-cdn/worker/") which appear in GitHub's CSP.
-	// CDN domain references in CSP (including subdomains) are also
-	// rewritten to the /__cdn__/ prefix form.
-	if csp := resp.Header.Get("Content-Security-Policy"); csp != "" {
-		csp = rewriteCSP(csp, targetHost, origOrigin)
-		csp = rewriteCDNInCSP(csp, origScheme, origHost, fallbackCDNHosts)
-		resp.Header.Set("Content-Security-Policy", csp)
-	}
+	// Note: Content-Security-Policy header rewriting is handled
+	// independently by rewriteCSPHeader in ModifyResponse, not here,
+	// so that CSP is always processed even when the body cannot be read.
 
 	// Re-compress with gzip if the client accepts it, so we don't waste
 	// bandwidth on the client<->proxy leg. Otherwise send uncompressed.
