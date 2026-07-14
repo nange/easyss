@@ -196,10 +196,6 @@ Easyss 通过检测配置文件自动区分模式：
 
 ![托盘图标](assets/img/tray3.png)
 
-![托盘图标](assets/img/tray4.png)
-
-右键图标可选择代理规则和代理对象。
-
 **注意：代理对象，选择系统全局流量时，需要管理员权限。**
 
 **自定义直连/代理白名单：**
@@ -351,13 +347,14 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 > ```
 >
 > **URL 模式行为说明**：当 `fallback_target` 为 URL 时，反向代理会自动执行以下处理，无需额外配置：
-> - 设置上游 Host 头（避免 GitHub 等站点返回 301 到规范主机）
-> - 重写 3xx `Location` 响应头中指向上游的绝对 URL 为客户端面向地址
-> - 重写 HTML 响应体和 `Content-Security-Policy` 头中指向上游的绝对 URL（如 turbo-frame 的 `src`），使页面内动态请求留在代理上，避免 CSP 拦截
-> - 重写 `Set-Cookie` 的 `Domain` 属性，使浏览器接受 cookie（修复 CSRF 422）
-> - 重写请求 `Origin`/`Referer` 头为上游地址（修复 CSRF 422）
-> - 对上游请求 `Accept-Encoding` 与客户端取交集，gzip 响应自动解压后重写、再按客户端能力重新压缩
-> - 配置了 `fallback_cdn_domains` 时，HTML/CSP 中引用这些 CDN 域名的 URL 被重写为 `/__cdn__/<host>/...`，浏览器请求经代理转发到对应 CDN
+>
+> * 设置上游 Host 头（避免 GitHub 等站点返回 301 到规范主机）
+> * 重写 3xx `Location` 响应头中指向上游的绝对 URL 为客户端面向地址
+> * 重写 HTML 响应体和 `Content-Security-Policy` 头中指向上游的绝对 URL（如 turbo-frame 的 `src`），使页面内动态请求留在代理上，避免 CSP 拦截
+> * 重写 `Set-Cookie` 的 `Domain` 属性，使浏览器接受 cookie（修复 CSRF 422）
+> * 重写请求 `Origin`/`Referer` 头为上游地址（修复 CSRF 422）
+> * 对上游请求 `Accept-Encoding` 与客户端取交集，gzip 响应自动解压后重写、再按客户端能力重新压缩
+> * 配置了 `fallback_cdn_domains` 时，HTML/CSP 中引用这些 CDN 域名的 URL 被重写为 `/__cdn__/<host>/...`，浏览器请求经代理转发到对应 CDN
 >
 > **目录模式**：目录结构如下（优先级: 反向代理 > 目录 > 单文件 > 内置主题）：
 >
