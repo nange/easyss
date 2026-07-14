@@ -1479,18 +1479,15 @@ func TestSetFallbackProxy_CDNCSPRewrite(t *testing.T) {
 	ServeFallback(rec, req)
 
 	csp := rec.Header().Get("Content-Security-Policy")
-	// CDN host should be replaced with my-site.com/__cdn__/<cdnHost>.
+	// CDN host should be rewritten to /__cdn__/ prefix form.
 	wantCSPHost := "my-site.com" + cdnPathPrefix + cdnHost
-	if strings.Contains(csp, "https://"+cdnHost) {
-		t.Errorf("CSP should not contain https://%s\ncsp: %s", cdnHost, csp)
-	}
 	if !strings.Contains(csp, "http://"+wantCSPHost) {
 		t.Errorf("CSP should contain http://%s\ncsp: %s", wantCSPHost, csp)
 	}
-	// Bare-host form should also be replaced.
-	if strings.Contains(csp, " "+cdnHost+"/") {
-		t.Errorf("CSP should not contain bare %q/\ncsp: %s", cdnHost, csp)
-	}
+	// The original CDN host is intentionally preserved alongside the
+	// rewritten form so that JS-constructed URLs to the CDN are not blocked.
+	// Just verify the rewritten form is present; we don't assert the
+	// original is absent.
 }
 
 // TestSetFallbackProxy_CDNNotConfigured verifies that when no CDN domains are
@@ -1680,33 +1677,24 @@ func TestSetFallbackProxy_CDNCSPSubdomainRewrite(t *testing.T) {
 	ServeFallback(rec, req)
 
 	csp := rec.Header().Get("Content-Security-Policy")
-	// Subdomain references should be rewritten.
+	// Subdomain references should be rewritten to /__cdn__/ prefix form.
 	wantSubScheme := "http://my-site.com" + cdnPathPrefix + cdnSub
-	if strings.Contains(csp, "https://"+cdnSub) {
-		t.Errorf("CSP should not contain https://%s\ncsp: %s", cdnSub, csp)
-	}
 	if !strings.Contains(csp, wantSubScheme) {
 		t.Errorf("CSP should contain %q\ncsp: %s", wantSubScheme, csp)
 	}
 	// Bare subdomain should also be rewritten.
 	wantSubBare := "my-site.com" + cdnPathPrefix + cdnSub
-	if strings.Contains(csp, " "+cdnSub+"/") {
-		t.Errorf("CSP should not contain bare %q/\ncsp: %s", cdnSub, csp)
-	}
 	if !strings.Contains(csp, wantSubBare+"/assets/") {
 		t.Errorf("CSP should contain %q/assets/\ncsp: %s", wantSubBare, csp)
 	}
 	// Parent domain references should also be rewritten.
-	if strings.Contains(csp, "https://"+cdnParent) {
-		t.Errorf("CSP should not contain https://%s\ncsp: %s", cdnParent, csp)
+	wantParentScheme := "http://my-site.com" + cdnPathPrefix + cdnParent
+	if !strings.Contains(csp, wantParentScheme) {
+		t.Errorf("CSP should contain %q\ncsp: %s", wantParentScheme, csp)
 	}
-	// No original CDN host should remain (except in the rewritten /__cdn__/ path).
-	// Check that "github.githubassets.com" only appears within "__cdn__/" context.
-	for _, token := range strings.Fields(csp) {
-		if strings.Contains(token, cdnSub) && !strings.Contains(token, cdnPathPrefix) {
-			t.Errorf("CSP token %q contains %q without /__cdn__/ prefix\ncsp: %s", token, cdnSub, csp)
-		}
-	}
+	// The original CDN hosts are intentionally preserved alongside the
+	// rewritten form so JS-constructed URLs are not blocked by CSP.
+	// We just verify the rewritten forms are present.
 }
 
 // TestSetFallbackProxy_CSPRewrittenEvenWhenBodyUnreadable verifies that the
@@ -1742,9 +1730,6 @@ func TestSetFallbackProxy_CSPRewrittenEvenWhenBodyUnreadable(t *testing.T) {
 	csp := rec.Header().Get("Content-Security-Policy")
 	// Even though body couldn't be read (br encoding), CSP should be
 	// rewritten so that /__cdn__/ paths are allowed.
-	if strings.Contains(csp, "https://"+cdnSub) {
-		t.Errorf("CSP should not contain https://%s\ncsp: %s", cdnSub, csp)
-	}
 	if !strings.Contains(csp, "my-site.com"+cdnPathPrefix+cdnSub) {
 		t.Errorf("CSP should contain my-site.com%s%s\ncsp: %s", cdnPathPrefix, cdnSub, csp)
 	}
