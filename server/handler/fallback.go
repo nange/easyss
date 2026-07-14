@@ -801,10 +801,13 @@ func rewriteRequestOriginReferrer(out *http.Request, clientHost string, upstream
 	}
 }
 
-// rewriteLocationHeader rewrites a 3xx Location header that points at the
-// upstream target host back to the client-facing host, so that browser
-// redirects stay on the proxy's address. Relative-path Locations (e.g.
-// "/login") and Locations pointing at other hosts are left untouched.
+// rewriteLocationHeader rewrites a 3xx Location header so that browser
+// redirects stay on the proxy's address. It handles two cases:
+//  1. Location pointing at the main upstream host → rewrite to client-facing host
+//  2. Location pointing at a configured CDN domain → rewrite to /__cdn__/<host>/<path>
+//
+// Relative-path Locations (e.g. "/login") and Locations pointing at other
+// hosts are left untouched.
 func rewriteLocationHeader(resp *http.Response, targetHost string) error {
 	loc := resp.Header.Get("Location")
 	if loc == "" {
@@ -815,10 +818,10 @@ func rewriteLocationHeader(resp *http.Response, targetHost string) error {
 		// Malformed Location — leave it untouched and let the client decide.
 		return nil
 	}
-	// Only rewrite absolute redirects that point at the upstream host.
-	if locURL.Host == "" || locURL.Host != targetHost {
+	if locURL.Host == "" {
 		return nil
 	}
+
 	ctx := resp.Request.Context()
 	origHost, _ := ctx.Value(ctxOrigHost).(string)
 	if origHost == "" {
@@ -828,9 +831,29 @@ func rewriteLocationHeader(resp *http.Response, targetHost string) error {
 	if origScheme == "" {
 		origScheme = "https"
 	}
-	locURL.Scheme = origScheme
-	locURL.Host = origHost
-	resp.Header.Set("Location", locURL.String())
+
+	// Case 1: Location points at the main upstream host.
+	if locURL.Host == targetHost {
+		locURL.Scheme = origScheme
+		locURL.Host = origHost
+		resp.Header.Set("Location", locURL.String())
+		return nil
+	}
+
+	// Case 2: Location points at a configured CDN domain (or subdomain).
+	// Rewrite to /__cdn__/<host>/<path> so the browser follows the
+	// redirect through the proxy instead of going directly to the CDN.
+	// This handles cases like GitHub's /raw/ URLs redirecting to
+	// raw.githubusercontent.com.
+	if cdnHostMatches(locURL.Host, fallbackCDNHosts) {
+		cdnHost := locURL.Host
+		locURL.Scheme = origScheme
+		locURL.Host = origHost
+		locURL.Path = cdnPathPrefix + cdnHost + locURL.Path
+		resp.Header.Set("Location", locURL.String())
+		return nil
+	}
+
 	return nil
 }
 

@@ -340,7 +340,7 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 > //    修复 release assets 等动态加载的 CSP 问题
 > //    配置 CDN 域名让静态资源也走代理
 > "fallback_target": "https://github.com",
-> "fallback_cdn_domains": ["github.githubassets.com"]
+> "fallback_cdn_domains": ["githubassets.com", "githubusercontent.com"]
 > // fallback_preserve_host 默认 false 即可
 >
 > // 4. 单文件 → 所有路径返回同一页面

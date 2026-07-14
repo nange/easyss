@@ -1803,3 +1803,61 @@ func TestSetFallbackProxy_NonRewritableContentType(t *testing.T) {
 		t.Errorf("JS body should preserve original URL (not rewritten)\nbody: %s", body)
 	}
 }
+
+// TestSetFallbackProxy_CDNLocationRewrite verifies that a 3xx redirect from
+// the main upstream to a CDN domain (e.g. GitHub's /raw/ → raw.githubusercontent.com)
+// is rewritten to /__cdn__/<host>/<path> so the browser follows the redirect
+// through the proxy.
+func TestSetFallbackProxy_CDNLocationRewrite(t *testing.T) {
+	cdnHost := "raw.githubusercontent.com"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate GitHub redirecting /raw/ to raw.githubusercontent.com
+		w.Header().Set("Location", "https://"+cdnHost+"/nange/easyss/master/assets/img/tray2.png")
+		w.WriteHeader(http.StatusMovedPermanently)
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL, false, []string{"githubusercontent.com"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/nange/easyss/raw/master/assets/img/tray2.png", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	want := "http://my-site.com" + cdnPathPrefix + cdnHost + "/nange/easyss/master/assets/img/tray2.png"
+	if got := rec.Header().Get("Location"); got != want {
+		t.Errorf("Location = %q, want %q", got, want)
+	}
+}
+
+// TestSetFallbackProxy_CDNLocationNotRewrittenWhenNotConfigured verifies that
+// redirects to CDN-like hosts are NOT rewritten when the host is not in the
+// configured CDN domains.
+func TestSetFallbackProxy_CDNLocationNotRewrittenWhenNotConfigured(t *testing.T) {
+	cdnHost := "raw.githubusercontent.com"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "https://"+cdnHost+"/some/path")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer upstream.Close()
+
+	// Only githubassets.com configured, NOT githubusercontent.com.
+	if err := SetFallbackProxy(upstream.URL, false, []string{"githubassets.com"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "my-site.com"
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	// Location should be passed through unchanged.
+	want := "https://" + cdnHost + "/some/path"
+	if got := rec.Header().Get("Location"); got != want {
+		t.Errorf("Location = %q, want %q (unchanged)", got, want)
+	}
+}
