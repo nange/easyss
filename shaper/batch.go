@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/crypto"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/util/bytespool"
 )
@@ -242,7 +243,9 @@ func (bs *batchShaper) onTimer() {
 	bs.mu.Lock()
 	bs.timerStarted = false
 	bs.mu.Unlock()
-	_ = bs.flush(true)
+	if err := bs.flush(true); err != nil {
+		log.Debug("[SHAPER] timer flush error", "err", err)
+	}
 }
 
 func (bs *batchShaper) injectCoverFrame(f protocol.Frame) error {

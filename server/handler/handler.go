@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"runtime/debug"
-	"strings"
 	"time"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
@@ -200,14 +199,14 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer s2cShaper.Close() //nolint:errcheck
 
 	var handleErr error
-	switch {
-	case strings.HasSuffix(endpoint, "/tcp"):
+	switch endpoint {
+	case sharedconfig.EndpointTCP:
 		stats.RecordServerTCPStream()
 		handleErr = h.tcpHandler.Handle(r.Context(), c2sReader, s2cShaper, target)
-	case strings.HasSuffix(endpoint, "/udp"):
+	case sharedconfig.EndpointUDP:
 		stats.RecordServerUDPStream()
 		handleErr = h.udpHandler.Handle(r.Context(), c2sReader, s2cShaper, target)
-	case strings.HasSuffix(endpoint, "/icmp"):
+	case sharedconfig.EndpointICMP:
 		stats.RecordServerICMPStream()
 		handleErr = h.icmpHandler.Handle(c2sReader, s2cShaper, target)
 	}
