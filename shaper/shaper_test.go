@@ -16,7 +16,7 @@ import (
 	"github.com/nange/easyss/v3/util/bytespool"
 )
 
-func TestBuildPaddingFrames(t *testing.T) {
+func TestBuildPaddingFrame(t *testing.T) {
 	tests := []struct {
 		name      string
 		totalSize int
@@ -29,17 +29,15 @@ func TestBuildPaddingFrames(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			frames := BuildPaddingFrames(tt.totalSize)
-			if len(frames) > 1 {
-				t.Fatalf("expected at most 1 padding frame, got %d", len(frames))
+			frame, ok := BuildPaddingFrame(tt.totalSize)
+			if !ok {
+				t.Fatal("expected padding frame to be produced")
 			}
-			if len(frames) == 1 {
-				if frames[0].Type != protocol.FramePADDING {
-					t.Fatalf("expected PADDING frame, got %d", frames[0].Type)
-				}
-				if int(frames[0].Length) == 0 {
-					t.Fatal("padding frame length is 0")
-				}
+			if frame.Type != protocol.FramePADDING {
+				t.Fatalf("expected PADDING frame, got %d", frame.Type)
+			}
+			if frame.Length == 0 {
+				t.Fatal("padding frame length is 0")
 			}
 		})
 	}

@@ -79,6 +79,14 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 		Target:  target,
 	})
 	frames := append([]protocol.Frame{hsFrame}, extraFrames...)
+
+	// Add random padding to obscure the target hostname length in the
+	// bootstrap record. Without this, the first record ciphertext length
+	// directly correlates with len(target).
+	if padFrame, ok := shaper.BuildPaddingFrame(encodedLen(frames)); ok {
+		frames = append(frames, padFrame)
+	}
+
 	plaintext := protocol.EncodeFrames(frames)
 
 	const maxRetries = 2
@@ -138,6 +146,7 @@ func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto p
 		log.Error("[STREAM] icmp bootstrap", "target", target, "err", err)
 		return nil, err
 	}
+	log.Debug("[STREAM] merged ICMP echo payload into bootstrap record", "bytes", len(echoPayload))
 	defer bs.stream.Close() //nolint:errcheck
 
 	aadS2C := crypto.BuildAAD(endpoint, bs.salt, "s2c", "session", method)
@@ -170,7 +179,7 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 
 	var extraFrames []protocol.Frame
 	if localConn != nil {
-		_ = localConn.SetReadDeadline(time.Now().Add(5 * time.Millisecond))
+		_ = localConn.SetReadDeadline(time.Now().Add(8 * time.Millisecond))
 		buf := bytespool.Get(config.TCPStreamBufferSize)
 		n, rErr := localConn.Read(buf)
 		_ = localConn.SetReadDeadline(time.Time{})
@@ -379,6 +388,15 @@ func isLocalConnClosedError(err error) bool {
 		strings.Contains(msg, "broken pipe")
 }
 
+// encodedLen returns the total wire size of a list of frames (headers + payloads).
+func encodedLen(frames []protocol.Frame) int {
+	total := 0
+	for _, f := range frames {
+		total += f.EncodedLen()
+	}
+	return total
+}
+
 type UDPExchange struct {
 	stream   transport.Stream
 	tx       shaper.Shaper
@@ -388,11 +406,17 @@ type UDPExchange struct {
 	mu       sync.Mutex
 }
 
-func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, method protocol.Method) (*UDPExchange, error) {
+func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, method protocol.Method, firstPayload []byte) (*UDPExchange, error) {
 	stats.RecordUDPAssociation()
 	log.Debug("[UDP_EXCHANGE] opening", "target", target)
 
-	bs, err := h.openAndBootstrap(ctx, "/v3/udp", protocol.ProtoUDP, target, method, nil)
+	var extraFrames []protocol.Frame
+	if len(firstPayload) > 0 {
+		extraFrames = []protocol.Frame{protocol.NewFrameDATAGRAM(firstPayload)}
+		log.Debug("[UDP_EXCHANGE] merged first DATAGRAM into bootstrap record", "bytes", len(firstPayload))
+	}
+
+	bs, err := h.openAndBootstrap(ctx, "/v3/udp", protocol.ProtoUDP, target, method, extraFrames)
 	if err != nil {
 		log.Error("[UDP_EXCHANGE] bootstrap", "target", target, "err", err)
 		return nil, err
@@ -450,6 +474,8 @@ func (ue *UDPExchange) Receive() ([]byte, error) {
 		return nil, io.EOF
 	case protocol.FrameRST:
 		return nil, fmt.Errorf("udp stream reset")
+	case protocol.FramePADDING, protocol.FrameCOVER:
+		return ue.Receive()
 	default:
 		return nil, fmt.Errorf("unexpected frame type: %d", frame.Type)
 	}

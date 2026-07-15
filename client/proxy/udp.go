@@ -137,13 +137,14 @@ func (s *Socks5Server) proxyDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr
 	dst := config.ProxyDNSServer
 	key := clientAddr.String() + "_" + dst
 
-	ue, created, err := s.getOrCreateUDPExchange(key, dst)
+	ue, created, err := s.getOrCreateUDPExchange(key, dst, d.Data)
 	if err != nil {
 		log.Error("[UDP_PROXY] open exchange", "dst", dst, "err", err)
 		return err
 	}
 	if created {
 		go s.receiveLoop(ue, srv, clientAddr, dst, key)
+		return nil // first payload already sent in handshake
 	}
 
 	if err := ue.Send(d.Data); err != nil {
@@ -167,13 +168,12 @@ type udpExchangeFactory struct {
 }
 
 // getOrCreateUDPExchange returns the existing UDPExchange for key, or creates
-// one via OpenUDPExchange(dst). If this call created the exchange, created is
-// true and the caller is responsible for starting receiveLoop. If another
-// goroutine is already creating the exchange, this call blocks until that
-// completes and returns the shared exchange (created == false). This eliminates
-// the previous TOCTOU race where two concurrent packets could each create an
-// exchange, with the second overwriting (and leaking) the first.
-func (s *Socks5Server) getOrCreateUDPExchange(key, dst string) (ue *UDPExchange, created bool, err error) {
+// one via OpenUDPExchange. firstPayload, if non-empty, is merged into the
+// bootstrap record when the exchange is newly created (saving one RTT). If
+// the exchange already existed, firstPayload is ignored. If this call created
+// the exchange, created is true and the caller MUST NOT call ue.Send for the
+// first payload (it was already sent in the handshake).
+func (s *Socks5Server) getOrCreateUDPExchange(key, dst string, firstPayload []byte) (ue *UDPExchange, created bool, err error) {
 	s.udpMu.Lock()
 	if existing, ok := s.udpExch[key]; ok {
 		s.udpMu.Unlock()
@@ -188,7 +188,7 @@ func (s *Socks5Server) getOrCreateUDPExchange(key, dst string) (ue *UDPExchange,
 	s.udpInflight[key] = f
 	s.udpMu.Unlock()
 
-	ue, err = s.handler.OpenUDPExchange(context.Background(), dst, s.method)
+	ue, err = s.handler.OpenUDPExchange(context.Background(), dst, s.method, firstPayload)
 	f.ue, f.err = ue, err
 	close(f.done)
 
@@ -337,13 +337,14 @@ func (s *Socks5Server) directUDPRelay(srv *socks5.Server, clientAddr *net.UDPAdd
 func (s *Socks5Server) proxyUDPRelay(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, dst string) error {
 	key := clientAddr.String() + "_" + dst
 
-	ue, created, err := s.getOrCreateUDPExchange(key, dst)
+	ue, created, err := s.getOrCreateUDPExchange(key, dst, d.Data)
 	if err != nil {
 		log.Error("[UDP_PROXY] open exchange", "dst", dst, "err", err)
 		return err
 	}
 	if created {
 		go s.receiveLoop(ue, srv, clientAddr, dst, key)
+		return nil // first payload already sent in handshake
 	}
 
 	if err := ue.Send(d.Data); err != nil {

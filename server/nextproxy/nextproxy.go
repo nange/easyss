@@ -230,8 +230,16 @@ func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string
 
 	select {
 	case <-ctx.Done():
-		// The dial goroutine is still running and will complete eventually.
-		// We can't cancel the underlying TCP dial, but we abandon it.
+		// Drain the dial goroutine to prevent connection leak. The dial
+		// goroutine is still running and will eventually send a result to ch
+		// (buffer=1, so it won't block). If the dial succeeds, we close the
+		// connection immediately since the caller already gave up.
+		go func() {
+			res := <-ch
+			if res.conn != nil {
+				res.conn.Close() //nolint:errcheck
+			}
+		}()
 		return nil, fmt.Errorf("socks5 dial cancelled: %w", ctx.Err())
 	case res := <-ch:
 		return res.conn, res.err

@@ -1,7 +1,6 @@
 package shaper
 
 import (
-	cryptorand "crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"sync"
@@ -10,7 +9,6 @@ import (
 
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/protocol"
-	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/util/bytespool"
 )
 
@@ -184,16 +182,8 @@ func (bs *batchShaper) flushLocked() []byte {
 	bs.timerStarted = false
 	bs.timer.Stop()
 
-	padSize := computePadPayloadSize(len(bs.plaintext))
-	if padSize > 0 && len(bs.plaintext)+protocol.FrameHeaderSize+padSize <= bs.maxChunkSize {
-		var header [protocol.FrameHeaderSize]byte
-		header[0] = byte(protocol.FramePADDING)
-		binary.BigEndian.PutUint16(header[1:3], uint16(padSize))
-		bs.plaintext = append(bs.plaintext, header[:]...)
-		off := len(bs.plaintext)
-		bs.plaintext = append(bs.plaintext, make([]byte, padSize)...)
-		_, _ = cryptorand.Read(bs.plaintext[off:])
-		stats.RecordPaddingBytes(padSize)
+	if padFrame, ok := BuildPaddingFrame(len(bs.plaintext)); ok {
+		bs.plaintext = protocol.AppendFrame(bs.plaintext, padFrame)
 	}
 
 	// Swap buffer: hand off data for I/O, allocate a fresh buffer so

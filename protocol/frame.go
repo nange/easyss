@@ -251,6 +251,17 @@ func checkPayloadLen(payload []byte) {
 	}
 }
 
+// AppendFrame appends a single frame (header + payload) to buf without
+// resetting existing content. This is the append-only variant of EncodeFrames
+// suitable for incrementally building a record buffer.
+func AppendFrame(buf []byte, f Frame) []byte {
+	var header [FrameHeaderSize]byte
+	header[0] = byte(f.Type)
+	binary.BigEndian.PutUint16(header[1:3], f.Length)
+	buf = append(buf, header[:]...)
+	return append(buf, f.Payload...)
+}
+
 func EncodeFrames(frames []Frame) []byte {
 	return EncodeFramesToBuf(frames, nil)
 }

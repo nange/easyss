@@ -162,6 +162,27 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Pre-validate session encryptors before committing the response.
+	// Once WriteHeader + Flush is called the response can no longer be
+	// turned into a fallback HTML page. Encryptor creation checks that the
+	// method is supported (already validated above), but we guard against
+	// unexpected internal errors.
+	aadC2S := crypto.BuildAAD(endpoint, salt, "c2s", "session", method)
+	c2sEnc, c2sCounter, err := sk.Encryptor("c2s", "session", method)
+	if err != nil {
+		log.Error("[SERVER] c2s encryptor", "err", err)
+		ServeFallback(w, r)
+		return
+	}
+
+	aadS2C := crypto.BuildAAD(endpoint, salt, "s2c", "session", method)
+	s2cEnc, s2cCounter, err := sk.Encryptor("s2c", "session", method)
+	if err != nil {
+		log.Error("[SERVER] s2c encryptor", "err", err)
+		ServeFallback(w, r)
+		return
+	}
+
 	rc := http.NewResponseController(w)
 	_ = rc.EnableFullDuplex()
 
@@ -171,19 +192,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	_ = rc.Flush()
 
-	aadC2S := crypto.BuildAAD(endpoint, salt, "c2s", "session", method)
-	c2sEnc, c2sCounter, err := sk.Encryptor("c2s", "session", method)
-	if err != nil {
-		return
-	}
 	c2sReader := crypto.NewDecryptedReader(r.Body, aadC2S, c2sEnc, c2sCounter)
 	c2sReader.SetLeftoverFrames(first.Leftover)
 
-	aadS2C := crypto.BuildAAD(endpoint, salt, "s2c", "session", method)
-	s2cEnc, s2cCounter, err := sk.Encryptor("s2c", "session", method)
-	if err != nil {
-		return
-	}
 	s2cWriter := crypto.NewRecordWriter(w, s2cEnc, s2cCounter, aadS2C)
 	s2cShaper := shaper.New(s2cWriter, shaper.Config{BatchWindowMS: h.batchWindowMS, Cover: shaper.CoverConfig{BudgetRatio: h.coverBudgetRatio, BudgetCap: h.coverBudgetCap}})
 	defer s2cShaper.Close() //nolint:errcheck

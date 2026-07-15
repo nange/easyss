@@ -30,23 +30,34 @@ type Config struct {
 
 type ShaperFunc func(frames []protocol.Frame) []protocol.Frame
 
-func BuildPaddingFrames(totalSize int) []protocol.Frame {
+// BuildPaddingFrame returns a single PADDING frame suitable for appending to
+// the current plaintext buffer. The padding size is derived from totalSize
+// using a tiered algorithm that targets common record-size ranges to mask
+// the true payload length.
+//
+// The returned bool indicates whether padding was produced. It is false when
+// the algorithm decides padding is unnecessary or when the frame would exceed
+// MaxPlainRecordSize.
+func BuildPaddingFrame(totalSize int) (protocol.Frame, bool) {
 	padSize := computePadPayloadSize(totalSize)
 	if padSize <= 0 {
-		return nil
+		return protocol.Frame{}, false
+	}
+	if totalSize+protocol.FrameHeaderSize+padSize > protocol.MaxPlainRecordSize {
+		return protocol.Frame{}, false
 	}
 
 	stats.RecordPaddingBytes(padSize)
 	frame := protocol.NewFramePADDING(uint16(padSize))
 	_, _ = cryptorand.Read(frame.Payload)
-	return []protocol.Frame{frame}
+	return frame, true
 }
 
 func computePadPayloadSize(totalSize int) int {
 	var target int
 	switch {
 	case totalSize <= 128:
-		target = 128 + randomInt(128)
+		target = 128 + randomInt(256)
 	case totalSize <= 512:
 		target = 512 + randomInt(512)
 	case totalSize <= 1500:
