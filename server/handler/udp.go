@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -161,7 +162,18 @@ func (h *UDPHandler) dialTarget(ctx context.Context, target string) (net.Conn, e
 		log.Info("[UDP] dialing via next proxy", "target", target, "proxy", h.nextProxy.URL().String())
 		return h.nextProxy.DialContext(ctx, "udp", target)
 	}
-	return net.DialTimeout("udp", target, h.idleTimeout)
+	conn, err := net.DialTimeout("udp", target, h.idleTimeout)
+	if err != nil {
+		return nil, err
+	}
+	// Post-dial SSRF guard: verify the actual remote IP is not a LAN address.
+	if ra := conn.RemoteAddr(); ra != nil {
+		if host, _, e := net.SplitHostPort(ra.String()); e == nil && util.IsLANIP(host) {
+			_ = conn.Close()
+			return nil, fmt.Errorf("ssrf: rejected lan destination %s", host)
+		}
+	}
+	return conn, nil
 }
 
 func (h *UDPHandler) readFromTarget(conn net.Conn, s2c shaper.Shaper, done <-chan struct{}, dnsDetected *atomic.Bool) error {

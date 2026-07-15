@@ -16,6 +16,7 @@ import (
 	"github.com/nange/easyss/v3/server/nextproxy"
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/stats"
+	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/util/bytespool"
 )
 
@@ -61,7 +62,20 @@ func (h *TCPHandler) dialTarget(ctx context.Context, network, addr string) (net.
 		return h.nextProxy.DialContext(ctx, network, addr)
 	}
 	d := h.dialer
-	return d.DialContext(ctx, outboundTCPNetwork(addr), addr)
+	conn, err := d.DialContext(ctx, outboundTCPNetwork(addr), addr)
+	if err != nil {
+		return nil, err
+	}
+	// Post-dial SSRF guard: verify the actual remote IP is not a LAN address.
+	// This defends against DNS rebinding attacks where a domain resolves to a
+	// safe public IP during the handshake validation but to a LAN IP on dial.
+	if ra := conn.RemoteAddr(); ra != nil {
+		if host, _, e := net.SplitHostPort(ra.String()); e == nil && util.IsLANIP(host) {
+			_ = conn.Close()
+			return nil, fmt.Errorf("ssrf: rejected lan destination %s", host)
+		}
+	}
+	return conn, nil
 }
 
 func outboundTCPNetwork(addr string) string {
