@@ -567,9 +567,6 @@ func TestApplyDefaults(t *testing.T) {
 		if cfg.Transport.Protocol != "h2" {
 			t.Errorf("Protocol = %q", cfg.Transport.Protocol)
 		}
-		if cfg.Transport.EndpointPrefix != "/v3" {
-			t.Errorf("EndpointPrefix = %q", cfg.Transport.EndpointPrefix)
-		}
 		if cfg.Transport.ConnCountMax != config.DefaultConnCountMax {
 			t.Errorf("ConnCountMax = %d", cfg.Transport.ConnCountMax)
 		}
@@ -610,8 +607,7 @@ func TestApplyDefaults(t *testing.T) {
 		cfg := &ClientConfig{
 			Timeout: 120,
 			Transport: TransportConfig{
-				Protocol:       "h3",
-				EndpointPrefix: "/custom",
+				Protocol: "h3",
 			},
 			Routing: RoutingConfig{
 				ProxyRule: "direct",

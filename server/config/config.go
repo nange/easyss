@@ -6,8 +6,7 @@ type LogConfig struct {
 }
 
 type TransportConfig struct {
-	Protocol       string `json:"protocol"`
-	EndpointPrefix string `json:"endpoint_prefix"`
+	Protocol string `json:"protocol"`
 }
 
 type NextProxyConfig struct {

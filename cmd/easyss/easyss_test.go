@@ -285,9 +285,8 @@ func newTestHarness(t *testing.T) *testHarness {
 			IPV6Rule:  "disable",
 		},
 		Transport: clientconfig.TransportConfig{
-			Protocol:       "h2",
-			EndpointPrefix: "/v3",
-			ConnCountMax:   4,
+			Protocol:     "h2",
+			ConnCountMax: 4,
 		},
 		Shaper: clientconfig.ShaperConfig{
 			BatchWindowMS: 3,

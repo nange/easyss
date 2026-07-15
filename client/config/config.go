@@ -53,7 +53,6 @@ type RoutingConfig struct {
 
 type TransportConfig struct {
 	Protocol        string `json:"protocol"`
-	EndpointPrefix  string `json:"endpoint_prefix"`
 	ConnCountMax    int    `json:"conn_count_max"`
 	StreamThreshold int    `json:"stream_threshold"`
 }
@@ -209,9 +208,6 @@ func applyDefaults(c *ClientConfig) {
 	}
 	if c.Transport.Protocol == "" {
 		c.Transport.Protocol = "h2"
-	}
-	if c.Transport.EndpointPrefix == "" {
-		c.Transport.EndpointPrefix = "/v3"
 	}
 	if c.Transport.ConnCountMax <= 0 {
 		c.Transport.ConnCountMax = config.DefaultConnCountMax

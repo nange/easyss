@@ -134,8 +134,7 @@ func exampleV3ServerConfig() string {
 			PprofEnabled:         false,
 		},
 		Transport: config.TransportConfig{
-			Protocol:       "h2",
-			EndpointPrefix: "/v3",
+			Protocol: "h2",
 		},
 		NextProxy: config.NextProxyConfig{
 			URL:           "",

@@ -478,7 +478,6 @@ func exampleV3Config() string {
 		},
 		Transport: config.TransportConfig{
 			Protocol:        "h2",
-			EndpointPrefix:  "/v3",
 			ConnCountMax:    6,
 			StreamThreshold: 8,
 		},

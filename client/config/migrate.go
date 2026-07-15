@@ -70,9 +70,8 @@ func MigrateV2Config(v2 V2Config) (*ClientConfig, error) {
 			ProxyFile:  v2.ProxyFile,
 		},
 		Transport: TransportConfig{
-			Protocol:       proto,
-			EndpointPrefix: "/v3",
-			ConnCountMax:   sharedconfig.DefaultConnCountMax,
+			Protocol:     proto,
+			ConnCountMax: sharedconfig.DefaultConnCountMax,
 		},
 		Shaper: ShaperConfig{
 			BatchWindowMS: 3,

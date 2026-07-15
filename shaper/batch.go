@@ -244,7 +244,7 @@ func (bs *batchShaper) onTimer() {
 	bs.timerStarted = false
 	bs.mu.Unlock()
 	if err := bs.flush(true); err != nil {
-		log.Debug("[SHAPER] timer flush error", "err", err)
+		log.Info("[SHAPER] timer flush error", "err", err)
 	}
 }
 
