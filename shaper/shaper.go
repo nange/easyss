@@ -8,6 +8,14 @@ import (
 	"github.com/nange/easyss/v3/stats"
 )
 
+func newSeededChaCha8() *rand.ChaCha8 {
+	var seed [32]byte
+	_, _ = cryptorand.Read(seed[:])
+	return rand.NewChaCha8(seed)
+}
+
+var paddingRNG = newSeededChaCha8()
+
 type Shaper interface {
 	PushFrame(f protocol.Frame) error
 	PushData(data []byte) error
@@ -49,7 +57,7 @@ func BuildPaddingFrame(totalSize int) (protocol.Frame, bool) {
 
 	stats.RecordPaddingBytes(padSize)
 	frame := protocol.NewFramePADDING(uint16(padSize))
-	_, _ = cryptorand.Read(frame.Payload)
+	_, _ = paddingRNG.Read(frame.Payload)
 	return frame, true
 }
 
@@ -59,7 +67,7 @@ func computePadPayloadSize(totalSize int) int {
 	case totalSize <= 128:
 		target = 128 + randomInt(256)
 	case totalSize <= 512:
-		target = 512 + randomInt(512)
+		target = 512 + randomInt(256)
 	case totalSize <= 1500:
 		target = 1500 + randomInt(500)
 	default:

@@ -1,8 +1,6 @@
 package shaper
 
 import (
-	cryptorand "crypto/rand"
-	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -11,11 +9,7 @@ import (
 	"github.com/nange/easyss/v3/util/bytespool"
 )
 
-var coverRNG = func() *rand.ChaCha8 {
-	var seed [32]byte
-	_, _ = cryptorand.Read(seed[:])
-	return rand.NewChaCha8(seed)
-}()
+var coverRNG = newSeededChaCha8()
 
 type coverInjector struct {
 	cfg              CoverConfig

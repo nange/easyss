@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"math"
+
+	"github.com/nange/easyss/v3/config"
 )
 
 type FrameType uint8
@@ -120,11 +122,11 @@ func DecodeHandshake(data []byte) (Handshake, error) {
 func (h Handshake) MatchesEndpoint(endpoint string) bool {
 	switch h.Proto {
 	case ProtoTCP:
-		return endpoint == "/v3/tcp"
+		return endpoint == config.EndpointTCP
 	case ProtoUDP:
-		return endpoint == "/v3/udp"
+		return endpoint == config.EndpointUDP
 	case ProtoICMP:
-		return endpoint == "/v3/icmp"
+		return endpoint == config.EndpointICMP
 	default:
 		return false
 	}

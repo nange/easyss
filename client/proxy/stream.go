@@ -54,15 +54,15 @@ func (h *StreamHandler) Transport() transport.Transport {
 
 func (h *StreamHandler) OpenTCPStream(ctx context.Context, target string, method protocol.Method, localConn net.Conn) error {
 	stats.RecordTCPConnection()
-	return h.openStream(ctx, "/v3/tcp", protocol.ProtoTCP, target, method, localConn)
+	return h.openStream(ctx, config.EndpointTCP, protocol.ProtoTCP, target, method, localConn)
 }
 
 func (h *StreamHandler) OpenUDPStream(ctx context.Context, target string, method protocol.Method, localConn net.Conn) error {
-	return h.openStream(ctx, "/v3/udp", protocol.ProtoUDP, target, method, localConn)
+	return h.openStream(ctx, config.EndpointUDP, protocol.ProtoUDP, target, method, localConn)
 }
 
 func (h *StreamHandler) OpenICMPStream(ctx context.Context, target string, echoPayload []byte, method protocol.Method) ([]byte, error) {
-	return h.icmpStream(ctx, "/v3/icmp", protocol.ProtoICMP, target, echoPayload, method)
+	return h.icmpStream(ctx, config.EndpointICMP, protocol.ProtoICMP, target, echoPayload, method)
 }
 
 type bootstrapSession struct {
@@ -416,14 +416,14 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 		log.Debug("[UDP_EXCHANGE] merged first DATAGRAM into bootstrap record", "bytes", len(firstPayload))
 	}
 
-	bs, err := h.openAndBootstrap(ctx, "/v3/udp", protocol.ProtoUDP, target, method, extraFrames)
+	bs, err := h.openAndBootstrap(ctx, config.EndpointUDP, protocol.ProtoUDP, target, method, extraFrames)
 	if err != nil {
 		log.Error("[UDP_EXCHANGE] bootstrap", "target", target, "err", err)
 		return nil, err
 	}
 	stream := bs.stream
 
-	aadC2S := crypto.BuildAAD("/v3/udp", bs.salt, "c2s", "session", method)
+	aadC2S := crypto.BuildAAD(config.EndpointUDP, bs.salt, "c2s", "session", method)
 	c2sEnc, c2sCounter, err := bs.sk.Encryptor("c2s", "session", method)
 	if err != nil {
 		stream.Close() //nolint:errcheck
@@ -431,7 +431,7 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 	}
 	c2sWriter := crypto.NewRecordWriter(stream, c2sEnc, c2sCounter, aadC2S)
 
-	aadS2C := crypto.BuildAAD("/v3/udp", bs.salt, "s2c", "session", method)
+	aadS2C := crypto.BuildAAD(config.EndpointUDP, bs.salt, "s2c", "session", method)
 	s2cEnc, s2cCounter, err := bs.sk.Encryptor("s2c", "session", method)
 	if err != nil {
 		stream.Close() //nolint:errcheck

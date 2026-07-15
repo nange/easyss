@@ -301,9 +301,9 @@ func (s *Server) Start() error {
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		handler.ServeFallback(w, r)
 	})
-	s.mux.Handle("/v3/tcp", proxyHandler)
-	s.mux.Handle("/v3/udp", proxyHandler)
-	s.mux.Handle("/v3/icmp", proxyHandler)
+	s.mux.Handle(sharedconfig.EndpointTCP, proxyHandler)
+	s.mux.Handle(sharedconfig.EndpointUDP, proxyHandler)
+	s.mux.Handle(sharedconfig.EndpointICMP, proxyHandler)
 
 	s.httpServer = &http.Server{
 		Addr:      s.cfg.Listen,
@@ -322,7 +322,7 @@ func (s *Server) Start() error {
 	s.httpServer.Protocols.SetHTTP1(true)
 	s.httpServer.Protocols.SetHTTP2(true)
 
-	log.Info("[SERVER] listening", "addr", s.cfg.Listen, "routes", []string{"/", "/v3/tcp", "/v3/udp", "/v3/icmp"})
+	log.Info("[SERVER] listening", "addr", s.cfg.Listen, "routes", []string{"/", sharedconfig.EndpointTCP, sharedconfig.EndpointUDP, sharedconfig.EndpointICMP})
 	s.statsDone = make(chan struct{})
 	go s.statsLoop()
 	return s.httpServer.ListenAndServeTLS("", "")
