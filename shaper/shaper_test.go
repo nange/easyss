@@ -224,7 +224,7 @@ func TestCoverInjectorStopsAfterThreshold(t *testing.T) {
 	}
 	defer ci.stop()
 
-	for i := range 3000 {
+	for i := range 3200 {
 		ci.addBudget(1024)
 		_ = i
 	}
@@ -232,8 +232,8 @@ func TestCoverInjectorStopsAfterThreshold(t *testing.T) {
 	budgetBefore := ci.budget
 	threshold := ci.coverThreshold
 	ci.mu.Unlock()
-	if threshold < int64(1024*1024) || threshold > int64(2*1024*1024) {
-		t.Fatalf("coverThreshold = %d, want in [1MB, 2MB]", threshold)
+	if threshold < int64(2*1024*1024) || threshold > int64(3*1024*1024) {
+		t.Fatalf("coverThreshold = %d, want in [2MB, 3MB]", threshold)
 	}
 
 	// Verify stopped flag is set after exceeding threshold.
