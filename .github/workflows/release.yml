@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
@@ -18,7 +18,7 @@ jobs:
         run: sudo apt update && sudo apt install -y libgtk-3-dev libayatana-appindicator3-dev
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
 
@@ -65,18 +65,18 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           name: Release ${{ github.ref_name }}
-          body: TODO
+          generate_release_notes: true
           files: bin/*.zip
   macos-arm64:
     runs-on: macOS-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
 
@@ -93,19 +93,19 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           name: Release ${{ github.ref_name }}
-          body: TODO
+          generate_release_notes: true
           files: bin/*.zip
 
   macos-amd64:
     runs-on: macos-15-intel
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
       - name: Build Amd64
@@ -121,5 +121,5 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           name: Release ${{ github.ref_name }}
-          body: TODO
+          generate_release_notes: true
           files: bin/*.zip
