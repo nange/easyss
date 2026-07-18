@@ -54,7 +54,7 @@ func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClos
 		inject:           inject,
 		isClosing:        isClosing,
 		minResetInterval: time.Duration(cfg.IdleTimeout) * time.Millisecond / 2,
-		coverThreshold:   int64(1024*1024) + int64(randomInt(1<<20)),
+coverThreshold: int64(2*1024*1024) + int64(randomInt(1<<20)),
 	}
 	ci.timer = time.AfterFunc(time.Duration(cfg.IdleTimeout)*time.Millisecond, ci.onIdle)
 	ci.timer.Stop()
@@ -118,7 +118,6 @@ func (ci *coverInjector) onIdle() {
 	if lastRealNs > 0 {
 		lastReal := time.Unix(0, lastRealNs)
 		if time.Since(lastReal) < time.Duration(ci.cfg.IdleTimeout)*time.Millisecond {
-			ci.budget *= 0.5
 			ci.timer.Reset(ci.jitterTimeout())
 			ci.mu.Unlock()
 			return
