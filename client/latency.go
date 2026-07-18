@@ -26,7 +26,7 @@ func (t *LatencyTracker) Record(rtt time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	const alpha = 0.3
+	const alpha = 0.35
 	if t.count == 0 {
 		t.estimate = rtt
 	} else {

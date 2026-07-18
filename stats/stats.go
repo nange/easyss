@@ -2,6 +2,7 @@ package stats
 
 import (
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -27,7 +28,8 @@ type stats struct {
 	paddingBytes   atomic.Int64
 	recordsWritten atomic.Int64
 
-	rttSum   atomic.Int64 // nanoseconds
+	rttMu    sync.Mutex
+	rttEWMA  int64 // nanoseconds, EWMA-smoothed RTT
 	rttCount atomic.Int64
 
 	// Server-side proxy
@@ -59,8 +61,17 @@ func RecordDNSDirectQuery() { g.dnsDirectQueries.Add(1) }
 
 func RecordPaddingBytes(n int) { g.paddingBytes.Add(int64(n)) }
 func RecordRecordWritten()     { g.recordsWritten.Add(1) }
+
+const rttAlpha = 0.35
+
 func RecordRTT(d time.Duration) {
-	g.rttSum.Add(int64(d))
+	g.rttMu.Lock()
+	if g.rttCount.Load() == 0 {
+		g.rttEWMA = int64(d)
+	} else {
+		g.rttEWMA = int64(float64(d)*rttAlpha + float64(g.rttEWMA)*(1-rttAlpha))
+	}
+	g.rttMu.Unlock()
 	g.rttCount.Add(1)
 }
 
@@ -107,7 +118,7 @@ func (s Snapshot) AvgRTT() time.Duration {
 	if s.RTTCount == 0 {
 		return 0
 	}
-	return time.Duration(s.RTTSum / s.RTTCount)
+	return time.Duration(s.RTTSum)
 }
 
 // Uptime returns the duration since StartTime.
@@ -117,6 +128,9 @@ func (s Snapshot) Uptime() time.Duration {
 
 // Collect returns a point-in-time copy of all counters.
 func Collect() Snapshot {
+	g.rttMu.Lock()
+	ewma := g.rttEWMA
+	g.rttMu.Unlock()
 	return Snapshot{
 		TotalStreamsOpened:    g.totalStreamsOpened.Load(),
 		TotalStreamsClosed:    g.totalStreamsClosed.Load(),
@@ -132,7 +146,7 @@ func Collect() Snapshot {
 		DNSDirectQueries:      g.dnsDirectQueries.Load(),
 		PaddingBytes:          g.paddingBytes.Load(),
 		RecordsWritten:        g.recordsWritten.Load(),
-		RTTSum:                g.rttSum.Load(),
+		RTTSum:                ewma,
 		RTTCount:              g.rttCount.Load(),
 		ServerTCPStreams:      g.serverTCPStreams.Load(),
 		ServerUDPStreams:      g.serverUDPStreams.Load(),
