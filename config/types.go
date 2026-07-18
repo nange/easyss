@@ -2,7 +2,7 @@ package config
 
 const (
 	DefaultTimeout         = 30
-	DefaultConnCountMax    = 6
+	DefaultConnCountMax    = 12
 	DefaultStreamThreshold = 8
 	DefaultBatchWindowMS   = 3
 	DefaultCoverBudgetCap  = 128 * 1024 // 128KB

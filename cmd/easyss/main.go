@@ -478,12 +478,12 @@ func exampleV3Config() string {
 		},
 		Transport: config.TransportConfig{
 			Protocol:        "h2",
-			ConnCountMax:    6,
+			ConnCountMax:    12,
 			StreamThreshold: 8,
 		},
 		Shaper: config.ShaperConfig{
 			BatchWindowMS:    3,
-			CoverBudgetRatio: 0.05,
+			CoverBudgetRatio: 0.03,
 			CoverBudgetCap:   128 * 1024,
 		},
 		Log: config.LogConfig{

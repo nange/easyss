@@ -225,7 +225,7 @@ func applyDefaults(c *ClientConfig) {
 		c.Shaper.BatchWindowMS = 10
 	}
 	if c.Shaper.CoverBudgetRatio <= 0 || c.Shaper.CoverBudgetRatio > 1 {
-		c.Shaper.CoverBudgetRatio = 0.05
+		c.Shaper.CoverBudgetRatio = 0.03
 	}
 	if c.Shaper.CoverBudgetCap <= 0 {
 		c.Shaper.CoverBudgetCap = config.DefaultCoverBudgetCap
