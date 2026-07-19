@@ -13,8 +13,9 @@ type Stream interface {
 }
 
 type OpenRequest struct {
-	Endpoint string
-	Salt     string
+	Endpoint     string
+	Salt         string
+	HighPriority bool
 }
 
 type TransportStats struct {

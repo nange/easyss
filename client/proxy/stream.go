@@ -98,8 +98,9 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 		saltB64 := base64.RawURLEncoding.EncodeToString(salt)
 
 		stream, err := h.transport.Open(ctx, transport.OpenRequest{
-			Endpoint: endpoint,
-			Salt:     saltB64,
+			Endpoint:     endpoint,
+			Salt:         saltB64,
+			HighPriority: isInteractivePort(target),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("transport open: %w", err)
@@ -492,4 +493,16 @@ func (ue *UDPExchange) LastSeen() time.Time {
 	ue.mu.Lock()
 	defer ue.mu.Unlock()
 	return ue.lastSeen
+}
+
+func isInteractivePort(target string) bool {
+	_, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return false
+	}
+	switch port {
+	case "80", "443", "8080", "8443":
+		return true
+	}
+	return false
 }

@@ -66,11 +66,12 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	directDialer, directIface := newDirectDialer()
 
 	tr, err := http2.New(http2.Config{
-		ServerURL:       cfg.ServerURL(),
-		TLSConfig:       tlsCfg,
-		MaxSlotCount:    cfg.Transport.ConnCountMax,
-		StreamThreshold: cfg.Transport.StreamThreshold,
-		Timeout:         cfg.TimeoutDuration(),
+		ServerURL:         cfg.ServerURL(),
+		TLSConfig:         tlsCfg,
+		MaxSlotCount:      cfg.Transport.ConnCountMax,
+		StreamThreshold:   cfg.Transport.StreamThreshold,
+		PrioritySlotRatio: cfg.Transport.PrioritySlotRatio,
+		Timeout:           cfg.TimeoutDuration(),
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return dialWithConfig(ctx, cfg, directDialer, rt, network, addr)
 		},

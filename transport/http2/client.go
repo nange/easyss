@@ -26,11 +26,13 @@ type transportSlot struct {
 }
 
 type HTTP2Transport struct {
-	slots     []*transportSlot // pre-allocated and initialized to maxSlots
-	liveCount atomic.Int32     // number of currently active slots (0..maxSlots)
-	maxSlots  int
-	threshold int32
-	mu        sync.RWMutex // protects slot retire (shrink) and grow; RLock protects stream assignment
+	slots         []*transportSlot // pre-allocated and initialized to maxSlots
+	liveCount     atomic.Int32     // number of currently active slots (0..maxSlots)
+	maxSlots      int
+	threshold     int32
+	prioritySlots int // number of priority slots (0..prioritySlots-1)
+	bulkThreshold int32
+	mu            sync.RWMutex // protects slot retire (shrink) and grow; RLock protects stream assignment
 
 	serverURL string
 
@@ -39,12 +41,13 @@ type HTTP2Transport struct {
 }
 
 type Config struct {
-	ServerURL       string
-	TLSConfig       *utls.Config
-	MaxSlotCount    int
-	StreamThreshold int
-	Timeout         time.Duration
-	DialContext     func(ctx context.Context, network, addr string) (net.Conn, error)
+	ServerURL         string
+	TLSConfig         *utls.Config
+	MaxSlotCount      int
+	StreamThreshold   int
+	PrioritySlotRatio float64
+	Timeout           time.Duration
+	DialContext       func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 func New(cfg Config) (*HTTP2Transport, error) {
@@ -56,6 +59,20 @@ func New(cfg Config) (*HTTP2Transport, error) {
 	if threshold < 1 {
 		threshold = 8
 	}
+
+	ratio := cfg.PrioritySlotRatio
+	if ratio <= 0 || ratio > 1 {
+		ratio = 0.5
+	}
+	prioritySlots := int(float64(maxSlots) * ratio)
+	if prioritySlots < 1 {
+		prioritySlots = 1
+	}
+	if prioritySlots > maxSlots {
+		prioritySlots = maxSlots
+	}
+
+	bulkThreshold := threshold * 3 / 2
 
 	timeout := cfg.Timeout
 	if timeout <= 0 {
@@ -77,12 +94,14 @@ func New(cfg Config) (*HTTP2Transport, error) {
 	}
 
 	return &HTTP2Transport{
-		slots:     slots,
-		maxSlots:  maxSlots,
-		threshold: threshold,
-		serverURL: cfg.ServerURL,
-		ctx:       ctx,
-		cancel:    cancel,
+		slots:         slots,
+		maxSlots:      maxSlots,
+		threshold:     threshold,
+		prioritySlots: prioritySlots,
+		bulkThreshold: bulkThreshold,
+		serverURL:     cfg.ServerURL,
+		ctx:           ctx,
+		cancel:        cancel,
 	}, nil
 }
 
@@ -158,11 +177,10 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 
 	stats.RecordStreamOpened()
 
-	// Try to grow slots if all existing ones are above threshold.
-	t.maybeGrowSlots()
+	t.maybeGrowSlots(req.HighPriority)
 
 	t.mu.RLock()
-	slot := t.leastActiveSlot()
+	slot := t.selectSlot(req.HighPriority)
 	slot.active.Add(1)
 	t.mu.RUnlock()
 
@@ -224,39 +242,77 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	return stream, nil
 }
 
-func (t *HTTP2Transport) leastActiveSlot() *transportSlot {
-	live := t.liveCount.Load()
+func (t *HTTP2Transport) selectSlot(highPriority bool) *transportSlot {
+	if highPriority && t.prioritySlots > 0 {
+		slot := t.leastActiveSlotRange(0, t.prioritySlots)
+		if slot == nil || slot.active.Load() >= t.threshold {
+			slot = t.leastActiveSlotRange(t.prioritySlots, int(t.liveCount.Load()))
+		}
+		return slot
+	}
+
+	slot := t.leastActiveSlotRange(t.prioritySlots, int(t.liveCount.Load()))
+	if slot == nil || slot.active.Load() >= t.bulkThreshold {
+		slot = t.leastActiveSlotRange(0, t.prioritySlots)
+	}
+	return slot
+}
+
+func (t *HTTP2Transport) leastActiveSlotRange(start, end int) *transportSlot {
+	live := int(t.liveCount.Load())
 	if live == 0 {
 		return t.slots[0]
 	}
+	if end > live {
+		end = live
+	}
+	if start >= end {
+		start = 0
+		end = live
+	}
 	var best *transportSlot
 	var min int32 = math.MaxInt32
-	for _, s := range t.slots[:live] {
-		if a := s.active.Load(); a < min {
-			best, min = s, a
+	for i := start; i < end; i++ {
+		if a := t.slots[i].active.Load(); a < min {
+			best, min = t.slots[i], a
 		}
+	}
+	if best == nil {
+		return t.slots[0]
 	}
 	return best
 }
 
 // maybeGrowSlots checks whether all live slots are at or above the threshold,
 // and if so, activates one more slot (up to maxSlots). Uses double-checked locking.
-func (t *HTTP2Transport) maybeGrowSlots() {
+func (t *HTTP2Transport) maybeGrowSlots(highPriority bool) {
 	live := t.liveCount.Load()
 	if int(live) >= t.maxSlots {
-		return // already at max
+		return
 	}
 
-	// Fast path: check if any live slot is below threshold (no lock needed).
-	if live > 0 {
-		for i := int32(0); i < live; i++ {
-			if t.slots[i].active.Load() < t.threshold {
-				return // at least one slot still has room
-			}
+	thresh := t.threshold
+	start, end := int32(0), live
+	if highPriority && t.prioritySlots > 0 {
+		end = int32(t.prioritySlots)
+		if end > live {
+			end = live
+		}
+	} else if t.prioritySlots > 0 {
+		start = int32(t.prioritySlots)
+		thresh = t.bulkThreshold
+	}
+
+	if start >= end {
+		return
+	}
+	for i := start; i < end; i++ {
+		if t.slots[i].active.Load() < thresh {
+			return
 		}
 	}
 
-	// All live slots are above threshold (or liveCount==0) — try to grow under lock.
+	// All slots in range are at or above threshold — try to grow under lock.
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -265,11 +321,21 @@ func (t *HTTP2Transport) maybeGrowSlots() {
 	if int(live) >= t.maxSlots {
 		return
 	}
-	if live > 0 {
-		for i := int32(0); i < live; i++ {
-			if t.slots[i].active.Load() < t.threshold {
-				return
-			}
+	start2, end2 := int32(0), live
+	if highPriority && t.prioritySlots > 0 {
+		end2 = int32(t.prioritySlots)
+		if end2 > live {
+			end2 = live
+		}
+	} else if t.prioritySlots > 0 {
+		start2 = int32(t.prioritySlots)
+	}
+	if start2 >= end2 {
+		return
+	}
+	for i := start2; i < end2; i++ {
+		if t.slots[i].active.Load() < thresh {
+			return
 		}
 	}
 

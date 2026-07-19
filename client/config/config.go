@@ -52,9 +52,10 @@ type RoutingConfig struct {
 }
 
 type TransportConfig struct {
-	Protocol        string `json:"protocol"`
-	ConnCountMax    int    `json:"conn_count_max"`
-	StreamThreshold int    `json:"stream_threshold"`
+	Protocol          string  `json:"protocol"`
+	ConnCountMax      int     `json:"conn_count_max"`
+	StreamThreshold   int     `json:"stream_threshold"`
+	PrioritySlotRatio float64 `json:"priority_slot_ratio"`
 }
 
 type ShaperConfig struct {
