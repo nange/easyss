@@ -127,10 +127,14 @@ func (s *HTTPProxyServer) Start() error {
 // statsResponse wraps Snapshot with derived fields for JSON output.
 type statsResponse struct {
 	stats.Snapshot
-	UptimeSeconds float64 `json:"uptime_seconds"`
-	Conns         int     `json:"conns"`
-	ActiveStreams int     `json:"active_streams"`
-	AvgRTTMs      float64 `json:"avg_rtt_ms"`
+	UptimeSeconds         float64 `json:"uptime_seconds"`
+	Conns                 int     `json:"conns"`
+	ActiveStreams         int     `json:"active_streams"`
+	PriorityActiveStreams int     `json:"priority_active_streams"`
+	BulkActiveStreams     int     `json:"bulk_active_streams"`
+	PriorityConns         int     `json:"priority_conns"`
+	BulkConns             int     `json:"bulk_conns"`
+	AvgRTTMs              float64 `json:"avg_rtt_ms"`
 }
 
 func (s *HTTPProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -166,11 +170,15 @@ func (s *HTTPProxyServer) serveStats(w http.ResponseWriter) {
 	snap := stats.Collect()
 	trStats := s.handler.Transport().Stats()
 	resp := statsResponse{
-		Snapshot:      snap,
-		UptimeSeconds: snap.Uptime().Seconds(),
-		Conns:         trStats.ConnCount,
-		ActiveStreams: trStats.ActiveStream,
-		AvgRTTMs:      float64(snap.AvgRTT().Microseconds()) / 1000.0,
+		Snapshot:              snap,
+		UptimeSeconds:         snap.Uptime().Seconds(),
+		Conns:                 trStats.ConnCount,
+		ActiveStreams:         trStats.ActiveStream,
+		PriorityActiveStreams: trStats.PriorityActiveStream,
+		BulkActiveStreams:     trStats.BulkActiveStream,
+		PriorityConns:         trStats.PriorityConnCount,
+		BulkConns:             trStats.BulkConnCount,
+		AvgRTTMs:              float64(snap.AvgRTT().Microseconds()) / 1000.0,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -182,6 +182,11 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	t.mu.RLock()
 	slot := t.selectSlot(req.HighPriority)
 	slot.active.Add(1)
+	if req.HighPriority {
+		stats.RecordStreamOpenedPriority()
+	} else {
+		stats.RecordStreamOpenedBulk()
+	}
 	t.mu.RUnlock()
 
 	parentCtx := ctx
@@ -246,6 +251,7 @@ func (t *HTTP2Transport) selectSlot(highPriority bool) *transportSlot {
 	if highPriority && t.prioritySlots > 0 {
 		slot := t.leastActiveSlotRange(0, t.prioritySlots)
 		if slot == nil || slot.active.Load() >= t.threshold {
+			stats.RecordPriorityFallback()
 			slot = t.leastActiveSlotRange(t.prioritySlots, int(t.liveCount.Load()))
 		}
 		return slot
@@ -253,6 +259,7 @@ func (t *HTTP2Transport) selectSlot(highPriority bool) *transportSlot {
 
 	slot := t.leastActiveSlotRange(t.prioritySlots, int(t.liveCount.Load()))
 	if slot == nil || slot.active.Load() >= t.bulkThreshold {
+		stats.RecordBulkFallback()
 		slot = t.leastActiveSlotRange(0, t.prioritySlots)
 	}
 	return slot
@@ -384,14 +391,27 @@ func (t *HTTP2Transport) CloseIdle() {
 }
 
 func (t *HTTP2Transport) Stats() transport.TransportStats {
-	stats := transport.TransportStats{
-		ConnCount: int(t.liveCount.Load()),
+	live := int(t.liveCount.Load())
+	ts := transport.TransportStats{
+		ConnCount: live,
 	}
-	live := t.liveCount.Load()
-	for _, s := range t.slots[:live] {
-		stats.ActiveStream += int(s.active.Load())
+	pConns := t.prioritySlots
+	if live < pConns {
+		pConns = live
 	}
-	return stats
+	ts.PriorityConnCount = pConns
+	ts.BulkConnCount = live - pConns
+
+	for i := int32(0); i < int32(live); i++ {
+		a := int(t.slots[i].active.Load())
+		ts.ActiveStream += a
+		if i < int32(t.prioritySlots) {
+			ts.PriorityActiveStream += a
+		} else {
+			ts.BulkActiveStream += a
+		}
+	}
+	return ts
 }
 
 func (t *HTTP2Transport) Close() error {

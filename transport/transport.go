@@ -19,8 +19,12 @@ type OpenRequest struct {
 }
 
 type TransportStats struct {
-	ConnCount    int
-	ActiveStream int
+	ConnCount            int
+	ActiveStream         int
+	PriorityActiveStream int
+	BulkActiveStream     int
+	PriorityConnCount    int
+	BulkConnCount        int
 }
 
 type Transport interface {

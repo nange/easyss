@@ -28,6 +28,11 @@ type stats struct {
 	paddingBytes   atomic.Int64
 	recordsWritten atomic.Int64
 
+	priorityStreamsOpened atomic.Int64
+	bulkStreamsOpened     atomic.Int64
+	priorityFallback      atomic.Int64
+	bulkFallback          atomic.Int64
+
 	rttMu    sync.Mutex
 	rttEWMA  int64 // nanoseconds, EWMA-smoothed RTT
 	rttCount atomic.Int64
@@ -61,6 +66,11 @@ func RecordDNSDirectQuery() { g.dnsDirectQueries.Add(1) }
 
 func RecordPaddingBytes(n int) { g.paddingBytes.Add(int64(n)) }
 func RecordRecordWritten()     { g.recordsWritten.Add(1) }
+
+func RecordStreamOpenedPriority() { g.priorityStreamsOpened.Add(1) }
+func RecordStreamOpenedBulk()     { g.bulkStreamsOpened.Add(1) }
+func RecordPriorityFallback()     { g.priorityFallback.Add(1) }
+func RecordBulkFallback()         { g.bulkFallback.Add(1) }
 
 const rttAlpha = 0.35
 
@@ -106,6 +116,10 @@ type Snapshot struct {
 	ServerICMPStreams     int64     `json:"server_icmp_streams"`
 	ServerHandshakeErrors int64     `json:"server_handshake_errors"`
 	ServerFallbackPages   int64     `json:"server_fallback_pages"`
+	PriorityStreamsOpened int64     `json:"priority_streams_opened"`
+	BulkStreamsOpened     int64     `json:"bulk_streams_opened"`
+	PriorityFallback      int64     `json:"priority_fallback"`
+	BulkFallback          int64     `json:"bulk_fallback"`
 	StartTime             time.Time `json:"start_time"`
 }
 
@@ -153,6 +167,10 @@ func Collect() Snapshot {
 		ServerICMPStreams:     g.serverICMPStreams.Load(),
 		ServerHandshakeErrors: g.serverHandshakeErrors.Load(),
 		ServerFallbackPages:   g.serverFallbackPages.Load(),
+		PriorityStreamsOpened: g.priorityStreamsOpened.Load(),
+		BulkStreamsOpened:     g.bulkStreamsOpened.Load(),
+		PriorityFallback:      g.priorityFallback.Load(),
+		BulkFallback:          g.bulkFallback.Load(),
 		StartTime:             g.startTime,
 	}
 }
