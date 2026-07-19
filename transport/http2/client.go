@@ -72,7 +72,7 @@ func New(cfg Config) (*HTTP2Transport, error) {
 		prioritySlots = maxSlots
 	}
 
-	bulkThreshold := threshold * 3 / 2
+	bulkThreshold := threshold * 2
 
 	timeout := cfg.Timeout
 	if timeout <= 0 {
