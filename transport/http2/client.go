@@ -310,12 +310,14 @@ func (t *HTTP2Transport) maybeGrowSlots(highPriority bool) {
 		thresh = t.bulkThreshold
 	}
 
-	if start >= end {
-		return
-	}
-	for i := start; i < end; i++ {
-		if t.slots[i].active.Load() < thresh {
+	if live > 0 {
+		if start >= end {
 			return
+		}
+		for i := start; i < end; i++ {
+			if t.slots[i].active.Load() < thresh {
+				return
+			}
 		}
 	}
 
@@ -337,12 +339,14 @@ func (t *HTTP2Transport) maybeGrowSlots(highPriority bool) {
 	} else if t.prioritySlots > 0 {
 		start2 = int32(t.prioritySlots)
 	}
-	if start2 >= end2 {
-		return
-	}
-	for i := start2; i < end2; i++ {
-		if t.slots[i].active.Load() < thresh {
+	if live > 0 {
+		if start2 >= end2 {
 			return
+		}
+		for i := start2; i < end2; i++ {
+			if t.slots[i].active.Load() < thresh {
+				return
+			}
 		}
 	}
 
