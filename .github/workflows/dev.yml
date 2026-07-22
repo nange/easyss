@@ -81,6 +81,17 @@ jobs:
       - name: Test
         run: make test
 
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          gomobile init
+
       - name: Build
         run: make .PHONY
 
