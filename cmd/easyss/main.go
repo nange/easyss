@@ -17,11 +17,11 @@ import (
 
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/tun"
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/pprof"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/runner"
-	"github.com/nange/easyss/v3/simple"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/version"
@@ -32,7 +32,7 @@ func main() {
 	var configFile, cmdOutboundProto string
 	var pprofEnabled bool
 
-	sc := &simple.SimpleConfig{}
+	sc := &sharedconfig.SimpleConfig{}
 
 	flag.BoolVar(&printVer, "version", false, "print version")
 	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file (full mode)")
@@ -47,7 +47,7 @@ func main() {
 	flag.IntVar(&sc.Timeout, "t", 0, "timeout in seconds")
 	flag.StringVar(&sc.LogLevel, "log-level", "", "log level (debug, info, warn, error)")
 	flag.BoolVar(&sc.EnableQUIC, "enable-quic", false, "enable QUIC protocol")
-	flag.StringVar(&sc.SNI, "sn", "", "TLS SNI override")
+	flag.StringVar(&sc.SN, "sn", "", "TLS SNI override")
 	flag.StringVar(&configFile, "c", "config.json", "specify config file")
 	flag.BoolVar(&daemon, "daemon", runtime.GOOS != "windows", "run app as daemon")
 	flag.BoolVar(&disableTray, "disable-tray", false, "disable system tray (windows/mac only)")
@@ -86,7 +86,7 @@ func main() {
 	cfg, err := config.LoadConfig(configFile)
 	if err != nil {
 		if sc.Server != "" && sc.Password != "" {
-			cfg, err = sc.Build()
+			cfg, err = config.BuildSimpleConfig(sc)
 			if err != nil {
 				log.Error("[EASYSS-V3] build config from args", "err", err)
 				os.Exit(1)
@@ -96,7 +96,7 @@ func main() {
 			os.Exit(1)
 		}
 	} else {
-		sc.ApplyTo(cfg)
+		config.ApplySimpleOverrides(cfg, sc)
 	}
 
 	if cfg.Log.FilePath != "" && !filepath.IsAbs(cfg.Log.FilePath) {
@@ -353,7 +353,7 @@ func exampleV3Config() string {
 }
 
 func exampleSimpleConfig() string {
-	cfg := config.V2Config{
+	cfg := sharedconfig.SimpleConfig{
 		Server:        "your-domain.com",
 		ServerPort:    443,
 		Password:      "your-password",
@@ -361,7 +361,7 @@ func exampleSimpleConfig() string {
 		LocalPort:     2080,
 		ProxyRule:     "auto",
 		Timeout:       30,
-		BindALL:       false,
+		BindAll:       false,
 		OutboundProto: "native",
 		DirectFile:    "",
 		ProxyFile:     "",

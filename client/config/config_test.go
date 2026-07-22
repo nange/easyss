@@ -276,7 +276,7 @@ func TestDefaultServerIndex(t *testing.T) {
 
 func TestMigrateV2Config(t *testing.T) {
 	t.Run("完整 v2 配置迁移", func(t *testing.T) {
-		v2 := V2Config{
+		v2 := config.SimpleConfig{
 			Server:           "example.com",
 			ServerPort:       443,
 			Password:         "secret",
@@ -284,7 +284,7 @@ func TestMigrateV2Config(t *testing.T) {
 			SN:               "sni.example.com",
 			LocalPort:        1080,
 			HTTPPort:         2080,
-			BindALL:          true,
+			BindAll:          true,
 			DisableSysProxy:  true,
 			EnableForwardDNS: true,
 			ProxyRule:        "proxy",
@@ -338,7 +338,7 @@ func TestMigrateV2Config(t *testing.T) {
 	})
 
 	t.Run("v2 配置默认值填充", func(t *testing.T) {
-		v2 := V2Config{
+		v2 := config.SimpleConfig{
 			Server:   "example.com",
 			Password: "secret",
 		}
@@ -366,7 +366,7 @@ func TestMigrateV2Config(t *testing.T) {
 	})
 
 	t.Run("v2 HTTPPort 自动计算", func(t *testing.T) {
-		v2 := V2Config{
+		v2 := config.SimpleConfig{
 			Server:    "example.com",
 			Password:  "secret",
 			LocalPort: 1080,
@@ -384,7 +384,7 @@ func TestMigrateV2Config(t *testing.T) {
 	})
 
 	t.Run("v2 OutboundProto 校验", func(t *testing.T) {
-		v2 := V2Config{
+		v2 := config.SimpleConfig{
 			Server:        "example.com",
 			Password:      "secret",
 			OutboundProto: "invalid",
