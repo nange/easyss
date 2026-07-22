@@ -57,11 +57,8 @@ make easyss-server
 # 服务端 (Windows)
 make easyss-server-windows
 
-# Android (arm64) — 需要设置 ANDROID_NDK_HOME 且使用 without_tray tag
-make easyss-android-arm64
-
-# Android (amd64) — x86_64 模拟器/设备
-make easyss-android-amd64
+# Android AAR — 需要 gomobile 和 Android SDK
+make easyss-android-aar
 
 # 无系统托盘版本 (headless/Android)
 make easyss-without-tray

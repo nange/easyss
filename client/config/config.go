@@ -187,11 +187,11 @@ func LoadConfig(path string) (*ClientConfig, error) {
 		return nil, err
 	}
 	if probe.ConfigVersion != 3 || len(probe.Servers) == 0 {
-		var v2 V2Config
-		if err := json.Unmarshal(data, &v2); err != nil {
+		var s config.SimpleConfig
+		if err := json.Unmarshal(data, &s); err != nil {
 			return nil, err
 		}
-		return MigrateV2Config(v2)
+		return BuildSimpleConfig(&s)
 	}
 
 	var cfg ClientConfig
@@ -291,6 +291,15 @@ func (c *ClientConfig) DefaultServerIndex() int {
 		}
 	}
 	return 0
+}
+
+func ParseConfigJSON(jsonStr string) (*ClientConfig, error) {
+	var cfg ClientConfig
+	if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {
+		return nil, err
+	}
+	applyDefaults(&cfg)
+	return &cfg, nil
 }
 
 func DefaultConfig() *ClientConfig {
