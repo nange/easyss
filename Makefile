@@ -7,8 +7,6 @@ LDFLAGS += -X "github.com/nange/easyss/v3/version.GitTag=$(shell git describe --
 GO := go
 GO_BUILD := go build -ldflags '$(LDFLAGS)'
 GO_BUILD_WIN := GOOS=windows GOARCH=amd64 CGO_ENABLED=1 go build -ldflags '-H windowsgui $(LDFLAGS)'
-GO_BUILD_ANDROID_ARM64 := GOOS=android GOARCH=arm64 GOARM=7 CGO_ENABLED=1 CC=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang go build -ldflags '$(LDFLAGS)'
-GO_BUILD_ANDROID_AMD64 := GOOS=android GOARCH=amd64 GOAMD64=v3 CGO_ENABLED=1 CC=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang go build -ldflags '$(LDFLAGS)'
 GOMOBILE := gomobile
 GOMOBILE_BIND_BASE := $(GOMOBILE) bind -target=android/arm64,android/amd64 -androidapi 29 -ldflags '$(LDFLAGS)'
 
@@ -43,14 +41,6 @@ easyss-server:
 easyss-server-windows:
 	cd cmd/easyss-server; \
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags '$(LDFLAGS)' -o ../../bin/easyss-server.exe
-
-easyss-android-arm64:
-	cd cmd/easyss; \
-	$(GO_BUILD_ANDROID_ARM64) -tags "without_tray " -o ../../bin/easyss-android-arm64
-
-easyss-android-amd64:
-	cd cmd/easyss; \
-	$(GO_BUILD_ANDROID_AMD64) -tags "without_tray " -o ../../bin/easyss-android-amd64
 
 easyss-android-aar:
 	$(GOMOBILE_BIND) -javapkg io.github.nange.easyss -o bin/libeasyss.aar ./mobile/ ./config/

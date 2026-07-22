@@ -22,21 +22,19 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
-      - name: Set up Android NDK
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
+      - name: Set up Java
+        uses: actions/setup-java@v5
         with:
-          ndk-version: r29
-          add-to-path: false
+          distribution: 'temurin'
+          java-version: '17'
 
       - name: Build
         run: make .PHONY
-      - name: Build Android
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+      - name: Build Android AAR
         run: |
-          make easyss-android-arm64
-          make easyss-android-amd64
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          gomobile init
+          make easyss-android-aar
 
       - name: Pack
         run: |
@@ -46,10 +44,6 @@ jobs:
           zip easyss-without-tray-linux-amd64.zip ./easyss-without-tray
           zip easyss-server-linux-amd64.zip ./easyss-server
           zip easyss-server-windows-amd64.zip ./easyss-server.exe
-          mv easyss-android-arm64 libeasyss-arm64.so
-          mv easyss-android-amd64 libeasyss-amd64.so
-          zip libeasyss-arm64.so.zip ./libeasyss-arm64.so
-          zip libeasyss-amd64.so.zip ./libeasyss-amd64.so
 
       - name: Build Arm64
         run: |
@@ -65,7 +59,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts
-          path: bin/*.zip
+          path: |
+            bin/*.zip
+            bin/*.aar
 
   macos-arm64:
     runs-on: macOS-latest
@@ -140,4 +136,6 @@ jobs:
         with:
           name: Release ${{ github.ref_name }}
           generate_release_notes: true
-          files: artifacts/*.zip
+          files: |
+            artifacts/*.zip
+            artifacts/*.aar
