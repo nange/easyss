@@ -8,14 +8,7 @@ GO := go
 GO_BUILD := go build -ldflags '$(LDFLAGS)'
 GO_BUILD_WIN := GOOS=windows GOARCH=amd64 CGO_ENABLED=1 go build -ldflags '-H windowsgui $(LDFLAGS)'
 GOMOBILE := gomobile
-GOMOBILE_BIND_BASE := $(GOMOBILE) bind -target=android/arm64,android/amd64 -androidapi 29 -ldflags '$(LDFLAGS)'
-
-GOMOBILE_JBR_PATH := $(shell cygpath -d "C:/Program Files/Android/Android Studio/jbr/bin" 2>/dev/null)
-ifneq ($(GOMOBILE_JBR_PATH),)
-  GOMOBILE_BIND := PATH="$(GOMOBILE_JBR_PATH):$$PATH" $(GOMOBILE_BIND_BASE)
-else
-  GOMOBILE_BIND := $(GOMOBILE_BIND_BASE)
-endif
+GOMOBILE_BIND := $(GOMOBILE) bind -target=android/arm64,android/amd64 -androidapi 29 -ldflags '$(LDFLAGS)'
 
 .PHONY: easyss easyss-without-tray easyss-windows easyss-server easyss-server-windows easyss-android-aar format test lint
 
@@ -43,6 +36,10 @@ easyss-server-windows:
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags '$(LDFLAGS)' -o ../../bin/easyss-server.exe
 
 easyss-android-aar:
+	@if ! command -v javac >/dev/null 2>&1; then \
+		echo "Error: javac not found in PATH, please add JDK bin directory to PATH"; \
+		exit 1; \
+	fi
 	$(GOMOBILE_BIND) -javapkg io.github.nange.easyss -o bin/libeasyss.aar ./mobile/ ./config/
 
 format:
