@@ -7,7 +7,7 @@ LDFLAGS += -X "github.com/nange/easyss/v3/version.GitTag=$(shell git describe --
 GO := go
 GO_BUILD := go build -ldflags '$(LDFLAGS)'
 GO_BUILD_WIN := GOOS=windows GOARCH=amd64 CGO_ENABLED=1 go build -ldflags '-H windowsgui $(LDFLAGS)'
-GOMOBILE := gomobile
+GOMOBILE := $(shell go env GOPATH)/bin/gomobile
 GOMOBILE_BIND := $(GOMOBILE) bind -target=android/arm64,android/amd64 -androidapi 29 -ldflags '$(LDFLAGS)'
 
 .PHONY: easyss easyss-without-tray easyss-windows easyss-server easyss-server-windows easyss-android-aar format test lint
