@@ -10,7 +10,7 @@ GO_BUILD_WIN := GOOS=windows GOARCH=amd64 CGO_ENABLED=1 go build -ldflags '-H wi
 GO_BUILD_ANDROID_ARM64 := GOOS=android GOARCH=arm64 GOARM=7 CGO_ENABLED=1 CC=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang go build -ldflags '$(LDFLAGS)'
 GO_BUILD_ANDROID_AMD64 := GOOS=android GOARCH=amd64 GOAMD64=v3 CGO_ENABLED=1 CC=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang go build -ldflags '$(LDFLAGS)'
 GOMOBILE := gomobile
-GOMOBILE_BIND_BASE := $(GOMOBILE) bind -target=android/arm64 -androidapi 29
+GOMOBILE_BIND_BASE := $(GOMOBILE) bind -target=android/arm64 -androidapi 29 -ldflags '$(LDFLAGS)'
 
 GOMOBILE_JBR_PATH := $(shell cygpath -d "C:/Program Files/Android/Android Studio/jbr/bin" 2>/dev/null)
 ifneq ($(GOMOBILE_JBR_PATH),)

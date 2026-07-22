@@ -69,6 +69,13 @@ func Print() {
 	fmt.Print(String())
 }
 
+func Tag() string {
+	if GitTag != unknownProperty {
+		return GitTag
+	}
+	return ""
+}
+
 func String() string {
 	builder := strings.Builder{}
 	xprintf := func(k string, v string) {

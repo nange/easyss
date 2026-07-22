@@ -49,5 +49,5 @@ func Stop() {
 }
 
 func Version() string {
-	return version.String()
+	return version.Tag()
 }
