@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"errors"
 	"strconv"
 
 	"github.com/nange/easyss/v3/client"
@@ -11,6 +12,8 @@ import (
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
 )
+
+var errSocksRequired = errors.New("http proxy requires socks_port to be enabled")
 
 type Core struct {
 	Cfg           *config.ClientConfig

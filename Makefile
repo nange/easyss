@@ -53,7 +53,7 @@ easyss-android-amd64:
 	$(GO_BUILD_ANDROID_AMD64) -tags "without_tray " -o ../../bin/easyss-android-amd64
 
 easyss-android-aar:
-	$(GOMOBILE_BIND) -javapkg io.github.nange.easyss -o bin/libeasyss.aar ./mobile/
+	$(GOMOBILE_BIND) -javapkg io.github.nange.easyss -o bin/libeasyss.aar ./mobile/ ./simple/
 
 format:
 	$(GO) fmt ./...

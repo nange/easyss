@@ -1,13 +1,10 @@
-package runner
+package simple
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/nange/easyss/v3/client/config"
 )
-
-var errSocksRequired = errors.New("http proxy requires socks_port to be enabled")
 
 type SimpleConfig struct {
 	Server     string
@@ -26,7 +23,7 @@ type SimpleConfig struct {
 	EnableQUIC bool
 }
 
-func NewSimpleConfig() *SimpleConfig {
+func New() *SimpleConfig {
 	return &SimpleConfig{
 		ServerPort: 443,
 		LocalPort:  2080,
@@ -38,7 +35,7 @@ func NewSimpleConfig() *SimpleConfig {
 	}
 }
 
-func BuildConfig(s *SimpleConfig) (*config.ClientConfig, error) {
+func (s *SimpleConfig) Build() (*config.ClientConfig, error) {
 	if s.Server == "" {
 		return nil, fmt.Errorf("server is required")
 	}
@@ -99,7 +96,7 @@ func BuildConfig(s *SimpleConfig) (*config.ClientConfig, error) {
 	return cfg, nil
 }
 
-func ApplyOverrides(cfg *config.ClientConfig, s *SimpleConfig) {
+func (s *SimpleConfig) ApplyTo(cfg *config.ClientConfig) {
 	srv := cfg.DefaultServer()
 	if srv != nil {
 		if s.Server != "" {

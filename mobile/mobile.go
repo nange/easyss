@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/nange/easyss/v3/runner"
+	"github.com/nange/easyss/v3/simple"
 	"github.com/nange/easyss/v3/version"
 )
 
@@ -13,7 +14,7 @@ var (
 	mMu   sync.Mutex
 )
 
-func Start(config *runner.SimpleConfig) error {
+func Start(config *simple.SimpleConfig) error {
 	mMu.Lock()
 	defer mMu.Unlock()
 
@@ -21,7 +22,7 @@ func Start(config *runner.SimpleConfig) error {
 		return fmt.Errorf("already started, call Stop first")
 	}
 
-	cfg, err := runner.BuildConfig(config)
+	cfg, err := config.Build()
 	if err != nil {
 		return err
 	}

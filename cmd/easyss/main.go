@@ -21,6 +21,7 @@ import (
 	"github.com/nange/easyss/v3/pprof"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/runner"
+	"github.com/nange/easyss/v3/simple"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/version"
@@ -31,7 +32,7 @@ func main() {
 	var configFile, cmdOutboundProto string
 	var pprofEnabled bool
 
-	sc := &runner.SimpleConfig{}
+	sc := &simple.SimpleConfig{}
 
 	flag.BoolVar(&printVer, "version", false, "print version")
 	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file (full mode)")
@@ -85,7 +86,7 @@ func main() {
 	cfg, err := config.LoadConfig(configFile)
 	if err != nil {
 		if sc.Server != "" && sc.Password != "" {
-			cfg, err = runner.BuildConfig(sc)
+			cfg, err = sc.Build()
 			if err != nil {
 				log.Error("[EASYSS-V3] build config from args", "err", err)
 				os.Exit(1)
@@ -95,7 +96,7 @@ func main() {
 			os.Exit(1)
 		}
 	} else {
-		runner.ApplyOverrides(cfg, sc)
+		sc.ApplyTo(cfg)
 	}
 
 	if cfg.Log.FilePath != "" && !filepath.IsAbs(cfg.Log.FilePath) {
