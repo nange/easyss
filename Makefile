@@ -17,7 +17,7 @@ else
   GOMOBILE_BIND := $(GOMOBILE_BIND_BASE)
 endif
 
-.PHONY: easyss easyss-without-tray easyss-windows easyss-server easyss-server-windows format test lint
+.PHONY: easyss easyss-without-tray easyss-windows easyss-server easyss-server-windows easyss-android-aar format test lint
 
 echo:
 	@echo "${PROJECT}"
