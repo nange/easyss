@@ -293,6 +293,15 @@ func (c *ClientConfig) DefaultServerIndex() int {
 	return 0
 }
 
+func ParseConfigJSON(jsonStr string) (*ClientConfig, error) {
+	var cfg ClientConfig
+	if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {
+		return nil, err
+	}
+	applyDefaults(&cfg)
+	return &cfg, nil
+}
+
 func DefaultConfig() *ClientConfig {
 	cfg := &ClientConfig{
 		ConfigVersion: 3,

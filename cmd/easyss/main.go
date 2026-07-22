@@ -15,48 +15,45 @@ import (
 	"time"
 	_ "time/tzdata"
 
-	"github.com/nange/easyss/v3/client"
 	"github.com/nange/easyss/v3/client/config"
-	"github.com/nange/easyss/v3/client/dns"
-	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/pprof"
 	"github.com/nange/easyss/v3/protocol"
-	"github.com/nange/easyss/v3/shaper"
+	"github.com/nange/easyss/v3/runner"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/version"
 )
 
 func main() {
-	var printVer, showConfigExample, showConfigExampleSimple, daemon, disableTray, enableTun2socks, enableQUIC bool
-	var configFile, cmdIPV6Rule string
-	var cmdServer, cmdPassword, cmdMethod, cmdProxyRule, cmdOutboundProto, cmdLogLevel, cmdSN, cmdDirectFile, cmdProxyFile string
-	var cmdServerPort, cmdLocalPort, cmdTimeout int
+	var printVer, showConfigExample, showConfigExampleSimple, daemon, disableTray, enableTun2socks bool
+	var configFile, cmdOutboundProto string
 	var pprofEnabled bool
+
+	sc := &runner.SimpleConfig{}
 
 	flag.BoolVar(&printVer, "version", false, "print version")
 	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file (full mode)")
 	flag.BoolVar(&showConfigExampleSimple, "show-config-example-simple", false, "show a example of config file (simple mode)")
-	flag.StringVar(&cmdServer, "s", "", "server address")
-	flag.IntVar(&cmdServerPort, "p", 0, "server port")
-	flag.StringVar(&cmdPassword, "k", "", "password")
-	flag.StringVar(&cmdMethod, "m", "", "encryption method (aes-256-gcm, chacha20-poly1305)")
-	flag.StringVar(&cmdProxyRule, "proxy-rule", "", "proxy rule (auto, reverse_auto, proxy, direct, auto_block)")
+	flag.StringVar(&sc.Server, "s", "", "server address")
+	flag.IntVar(&sc.ServerPort, "p", 0, "server port")
+	flag.StringVar(&sc.Password, "k", "", "password")
+	flag.StringVar(&sc.Method, "m", "", "encryption method (aes-256-gcm, chacha20-poly1305)")
+	flag.StringVar(&sc.ProxyRule, "proxy-rule", "", "proxy rule (auto, reverse_auto, proxy, direct, auto_block)")
 	flag.StringVar(&cmdOutboundProto, "outbound-proto", "", "outbound protocol (native, h2)")
-	flag.IntVar(&cmdLocalPort, "l", 0, "local socks5 port")
-	flag.IntVar(&cmdTimeout, "t", 0, "timeout in seconds")
-	flag.StringVar(&cmdLogLevel, "log-level", "", "log level (debug, info, warn, error)")
-	flag.BoolVar(&enableQUIC, "enable-quic", false, "enable QUIC protocol")
-	flag.StringVar(&cmdSN, "sn", "", "TLS SNI override")
+	flag.IntVar(&sc.LocalPort, "l", 0, "local socks5 port")
+	flag.IntVar(&sc.Timeout, "t", 0, "timeout in seconds")
+	flag.StringVar(&sc.LogLevel, "log-level", "", "log level (debug, info, warn, error)")
+	flag.BoolVar(&sc.EnableQUIC, "enable-quic", false, "enable QUIC protocol")
+	flag.StringVar(&sc.SNI, "sn", "", "TLS SNI override")
 	flag.StringVar(&configFile, "c", "config.json", "specify config file")
 	flag.BoolVar(&daemon, "daemon", runtime.GOOS != "windows", "run app as daemon")
 	flag.BoolVar(&disableTray, "disable-tray", false, "disable system tray (windows/mac only)")
 	flag.BoolVar(&enableTun2socks, "enable-tun2socks", false, "enable tun2socks model")
-	flag.StringVar(&cmdIPV6Rule, "ipv6-rule", "", "set the ipv6 rule(auto, enable, disable), default: auto")
-	flag.StringVar(&cmdDirectFile, "direct-file", "", "custom direct file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
-	flag.StringVar(&cmdProxyFile, "proxy-file", "", "custom proxy file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
+	flag.StringVar(&sc.IPV6Rule, "ipv6-rule", "", "set the ipv6 rule(auto, enable, disable), default: auto")
+	flag.StringVar(&sc.DirectFile, "direct-file", "", "custom direct file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
+	flag.StringVar(&sc.ProxyFile, "proxy-file", "", "custom proxy file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
 	flag.BoolVar(&pprofEnabled, "pprof", false, "enable pprof debug server on :6060")
 
 	flag.Parse()
@@ -74,8 +71,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	// If config file path is relative and not found in CWD,
-	// try the executable's directory (e.g. double-click on macOS).
 	if !filepath.IsAbs(configFile) {
 		if _, err := os.Stat(configFile); os.IsNotExist(err) {
 			if dir := util.CurrentDir(); dir != "" {
@@ -89,38 +84,20 @@ func main() {
 
 	cfg, err := config.LoadConfig(configFile)
 	if err != nil {
-		if cmdServer != "" && cmdPassword != "" {
-			cfg = config.DefaultConfig()
-			srv := &config.ServerProfile{
-				Address:  cmdServer,
-				Password: cmdPassword,
-				Default:  true,
-			}
-			if cmdServerPort > 0 {
-				srv.Port = cmdServerPort
-			}
-			if cmdMethod != "" {
-				srv.Method = cmdMethod
-			}
-			if cmdSN != "" {
-				srv.SNI = cmdSN
-			}
-			cfg.Servers = []*config.ServerProfile{srv}
-			if srv.Port == 0 {
-				srv.Port = 443
-			}
-			if srv.Method == "" {
-				srv.Method = "aes-256-gcm"
+		if sc.Server != "" && sc.Password != "" {
+			cfg, err = runner.BuildConfig(sc)
+			if err != nil {
+				log.Error("[EASYSS-V3] build config from args", "err", err)
+				os.Exit(1)
 			}
 		} else {
 			log.Error("[EASYSS-V3] load config", "err", err)
 			os.Exit(1)
 		}
+	} else {
+		runner.ApplyOverrides(cfg, sc)
 	}
 
-	// Resolve relative log file path to absolute based on executable directory,
-	// so both log writing and "View Log" from systray point to the same file
-	// regardless of the process's current working directory.
 	if cfg.Log.FilePath != "" && !filepath.IsAbs(cfg.Log.FilePath) {
 		if dir := util.CurrentDir(); dir != "" {
 			cfg.Log.FilePath = filepath.Join(dir, cfg.Log.FilePath)
@@ -134,32 +111,6 @@ func main() {
 	if enableTun2socks {
 		cfg.Local.EnableTun2socks = true
 	}
-	if cmdIPV6Rule != "" {
-		cfg.Routing.IPV6Rule = cmdIPV6Rule
-	}
-
-	// CLI overrides for simplified mode fields
-	srv := cfg.DefaultServer()
-	if srv != nil {
-		if cmdServer != "" {
-			srv.Address = cmdServer
-		}
-		if cmdServerPort > 0 {
-			srv.Port = cmdServerPort
-		}
-		if cmdPassword != "" {
-			srv.Password = cmdPassword
-		}
-		if cmdMethod != "" {
-			srv.Method = cmdMethod
-		}
-		if cmdSN != "" {
-			srv.SNI = cmdSN
-		}
-	}
-	if cmdProxyRule != "" {
-		cfg.Routing.ProxyRule = cmdProxyRule
-	}
 	if cmdOutboundProto != "" {
 		switch cmdOutboundProto {
 		case "native", "h2":
@@ -168,27 +119,6 @@ func main() {
 			log.Error("[EASYSS-V3] invalid outbound-proto", "value", cmdOutboundProto)
 			os.Exit(1)
 		}
-	}
-	if cmdLocalPort > 0 {
-		cfg.Local.SocksPort = cmdLocalPort
-		if cfg.Local.HTTPPort == 0 {
-			cfg.Local.HTTPPort = cmdLocalPort + 1000
-		}
-	}
-	if cmdTimeout > 0 {
-		cfg.Timeout = cmdTimeout
-	}
-	if cmdLogLevel != "" {
-		cfg.Log.Level = cmdLogLevel
-	}
-	if enableQUIC {
-		cfg.Local.EnableQUIC = true
-	}
-	if cmdDirectFile != "" {
-		cfg.Routing.DirectFile = cmdDirectFile
-	}
-	if cmdProxyFile != "" {
-		cfg.Routing.ProxyFile = cmdProxyFile
 	}
 	if pprofEnabled {
 		cfg.PprofEnabled = true
@@ -214,13 +144,10 @@ func sigWait() {
 }
 
 type App struct {
-	cfg           *config.ClientConfig
-	cli           *client.Client
-	tunMgr        *tun.Manager
-	socksServer   *proxy.Socks5Server
-	httpServer    *proxy.HTTPProxyServer
-	streamHandler *proxy.StreamHandler
-	dnsServer     *dns.ForwardServer
+	cfg      *config.ClientConfig
+	core     *runner.Core
+	tunMgr   *tun.Manager
+	pprofSrv *http.Server
 
 	pingLatCh  chan time.Duration
 	pingCloser chan struct{}
@@ -228,85 +155,14 @@ type App struct {
 
 	statsCloser chan struct{}
 	statsOnce   sync.Once
-
-	pprofSrv *http.Server
 }
 
 func (a *App) Start() error {
-	cli, err := client.New(a.cfg)
+	core, err := runner.New(a.cfg)
 	if err != nil {
 		return err
 	}
-	a.cli = cli
-
-	method := protocol.MethodFromString(a.cfg.DefaultServer().Method)
-	if method == 0 {
-		method = protocol.MethodAES256GCM
-	}
-
-	shaperCfg := shaper.Config{
-		BatchWindowMS: a.cfg.Shaper.BatchWindowMS,
-		Cover: shaper.CoverConfig{
-			BudgetRatio: a.cfg.Shaper.CoverBudgetRatio,
-			BudgetCap:   a.cfg.Shaper.CoverBudgetCap,
-		},
-	}
-
-	timeout := a.cfg.TimeoutDuration()
-	streamIdleTimeout := 10 * timeout
-	udpIdleTimeout := 2 * timeout
-	a.streamHandler = proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, streamIdleTimeout)
-	a.streamHandler.OnRTT = cli.LatencyTracker().Record
-
-	if a.cfg.Local.SocksPort > 0 {
-		socksAddr := "127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
-		if a.cfg.Local.BindAll {
-			socksAddr = "[::]:" + strconv.Itoa(a.cfg.Local.SocksPort)
-		}
-		socksServer, err := proxy.NewSocks5Server(socksAddr, a.cfg.AuthUsername, a.cfg.AuthPassword, a.streamHandler, cli.Router(), method, !a.cfg.Local.EnableQUIC, udpIdleTimeout, cli.DialContext)
-		if err != nil {
-			log.Error("[EASYSS-V3] create socks5 server", "err", err)
-			return err
-		}
-		a.socksServer = socksServer
-		log.Info("[EASYSS-V3] starting socks5 server", "addr", socksAddr)
-		go func() {
-			if err := a.socksServer.Start(); err != nil {
-				log.Error("[EASYSS-V3] socks5 server", "err", err)
-			}
-		}()
-	}
-
-	if a.cfg.Local.HTTPPort > 0 {
-		if a.cfg.Local.SocksPort <= 0 {
-			return fmt.Errorf("http proxy requires local.socks_port to be enabled")
-		}
-		httpAddr := "127.0.0.1:" + strconv.Itoa(a.cfg.Local.HTTPPort)
-		if a.cfg.Local.BindAll {
-			httpAddr = "[::]:" + strconv.Itoa(a.cfg.Local.HTTPPort)
-		}
-		socksAddr := "127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
-		a.httpServer, err = proxy.NewHTTPProxyServer(httpAddr, socksAddr, a.cfg.AuthUsername, a.cfg.AuthPassword, timeout, a.streamHandler, cli.Router(), method, cli.DialContext)
-		if err != nil {
-			return err
-		}
-		log.Info("[EASYSS-V3] starting http proxy server", "addr", httpAddr)
-		go func() {
-			if err := a.httpServer.Start(); err != nil {
-				log.Error("[EASYSS-V3] http proxy server", "err", err)
-			}
-		}()
-	}
-
-	if a.cfg.Local.EnableForwardDNS {
-		dnsAddr := "127.0.0.1:53"
-		a.dnsServer = dns.NewForwardServer(dnsAddr, cli.Router().ShouldIPV6Disable())
-		go func() {
-			if err := a.dnsServer.Start(); err != nil {
-				log.Error("[EASYSS-V3] dns forward server", "err", err)
-			}
-		}()
-	}
+	a.core = core
 
 	if a.cfg.Local.EnableTun2socks {
 		socksProxyAddr := "socks5://127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
@@ -314,13 +170,17 @@ func (a *App) Start() error {
 			Socks5Addr: socksProxyAddr,
 			DNSServer:  config.DefaultSystemDNS,
 		}
-		if ipv6 := cli.Router().ServerIPV6(); ipv6 != "" {
+		if ipv6 := a.core.Client.Router().ServerIPV6(); ipv6 != "" {
 			tunCfg.ServerIPV6 = ipv6
 		}
 		a.tunMgr = tun.New(tunCfg)
 
-		icmpHandler := tun.NewICMPHandler(cli.Router())
-		icmpHandler.SetProxy(a.streamHandler, method)
+		method := protocol.MethodFromString(a.cfg.DefaultServer().Method)
+		if method == 0 {
+			method = protocol.MethodAES256GCM
+		}
+		icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
+		icmpHandler.SetProxy(a.core.StreamHandler, method)
 
 		go func() {
 			if err := a.tunMgr.Start(icmpHandler); err != nil {
@@ -339,7 +199,6 @@ func (a *App) Start() error {
 		a.pprofSrv = pprof.StartPprof()
 	}
 
-	log.Info("[EASYSS-V3] started successfully")
 	return nil
 }
 
@@ -354,25 +213,8 @@ func (a *App) Stop() {
 	if a.tunMgr != nil {
 		a.tunMgr.Stop()
 	}
-	if a.socksServer != nil {
-		if err := a.socksServer.Close(); err != nil {
-			log.Debug("[EASYSS-V3] socks server close", "err", err)
-		}
-	}
-	if a.httpServer != nil {
-		if err := a.httpServer.Close(); err != nil {
-			log.Debug("[EASYSS-V3] http server close", "err", err)
-		}
-	}
-	if a.dnsServer != nil {
-		if err := a.dnsServer.Shutdown(); err != nil {
-			log.Debug("[EASYSS-V3] dns server shutdown", "err", err)
-		}
-	}
-	if a.cli != nil {
-		if err := a.cli.Close(); err != nil {
-			log.Debug("[EASYSS-V3] client close", "err", err)
-		}
+	if a.core != nil {
+		a.core.Stop()
 	}
 	if a.pprofSrv != nil {
 		pprof.StopPprof(a.pprofSrv)
@@ -391,10 +233,10 @@ func (a *App) latencyPoller() {
 	for {
 		select {
 		case <-ticker.C:
-			if a.cli == nil {
+			if a.core == nil || a.core.Client == nil {
 				continue
 			}
-			est, ok := a.cli.LatencyTracker().Estimate()
+			est, ok := a.core.Client.LatencyTracker().Estimate()
 			if !ok {
 				continue
 			}
@@ -418,11 +260,11 @@ func (a *App) statsLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			if a.cli == nil {
+			if a.core == nil || a.core.Client == nil {
 				continue
 			}
 			snap := stats.Collect()
-			trStats := a.cli.Transport().Stats()
+			trStats := a.core.Client.Transport().Stats()
 			log.Info("[STATS]",
 				"uptime", snap.Uptime().Round(time.Second),
 				"conns", trStats.ConnCount,

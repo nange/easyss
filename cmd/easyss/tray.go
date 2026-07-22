@@ -242,8 +242,8 @@ func (a *TrayApp) addProxyRuleMenu() {
 }
 
 func (a *TrayApp) setProxyRule(rule string) {
-	if a.cli != nil {
-		a.cli.SetProxyRule(rule)
+	if a.core != nil && a.core.Client != nil {
+		a.core.Client.SetProxyRule(rule)
 	}
 	a.cfg.Routing.ProxyRule = rule
 	log.Info("[SYSTRAY] proxy rule changed", "rule", rule)
@@ -440,11 +440,11 @@ func (a *TrayApp) createTun2socks() error {
 		DNSServer:  config.DefaultSystemDNS,
 	})
 
-	if a.cli == nil {
+	if a.core == nil || a.core.Client == nil {
 		return fmt.Errorf("client not initialized")
 	}
-	icmpHandler := tun.NewICMPHandler(a.cli.Router())
-	icmpHandler.SetProxy(a.streamHandler, methodFromString(a.cfg.DefaultServer().Method))
+	icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
+	icmpHandler.SetProxy(a.core.StreamHandler, methodFromString(a.cfg.DefaultServer().Method))
 
 	go func() {
 		if err := a.tunMgr.Start(icmpHandler); err != nil {
