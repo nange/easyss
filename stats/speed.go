@@ -61,6 +61,26 @@ func (s *stats) speedLoop() {
 			newDown := int64(float64(deltaRecv)*alpha + float64(oldDown)*(1-alpha))
 			s.uploadSpeed.Store(newUp)
 			s.downloadSpeed.Store(newDown)
+
+			// Track peak speeds.
+			for {
+				peak := s.peakUploadSpeed.Load()
+				if newUp <= peak {
+					break
+				}
+				if s.peakUploadSpeed.CompareAndSwap(peak, newUp) {
+					break
+				}
+			}
+			for {
+				peak := s.peakDownloadSpeed.Load()
+				if newDown <= peak {
+					break
+				}
+				if s.peakDownloadSpeed.CompareAndSwap(peak, newDown) {
+					break
+				}
+			}
 		case <-speedDone:
 			return
 		}

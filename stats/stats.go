@@ -40,8 +40,10 @@ type stats struct {
 	rttCount atomic.Int64
 
 	// Speed tracking (bytes/sec, EWMA-smoothed)
-	uploadSpeed   atomic.Int64
-	downloadSpeed atomic.Int64
+	uploadSpeed       atomic.Int64
+	downloadSpeed     atomic.Int64
+	peakUploadSpeed   atomic.Int64
+	peakDownloadSpeed atomic.Int64
 
 	// Server-side proxy
 	serverTCPStreams      atomic.Int64
@@ -129,10 +131,12 @@ type Snapshot struct {
 	BulkFallback          int64 `json:"bulk_fallback"`
 
 	// Speed
-	UploadSpeed        int64  `json:"upload_speed"`
-	DownloadSpeed      int64  `json:"download_speed"`
-	UploadSpeedHuman   string `json:"upload_speed_human"`
-	DownloadSpeedHuman string `json:"download_speed_human"`
+	UploadSpeed            int64  `json:"upload_speed"`
+	DownloadSpeed          int64  `json:"download_speed"`
+	UploadSpeedHuman       string `json:"upload_speed_human"`
+	DownloadSpeedHuman     string `json:"download_speed_human"`
+	PeakUploadSpeedHuman   string `json:"peak_upload_speed_human"`
+	PeakDownloadSpeedHuman string `json:"peak_download_speed_human"`
 
 	// Transport stats (embedded, client-side only; zero on server)
 	transport.TransportStats
@@ -171,38 +175,40 @@ func Collect() Snapshot {
 	downSpeed := g.downloadSpeed.Load()
 
 	return Snapshot{
-		TotalStreamsOpened:    g.totalStreamsOpened.Load(),
-		TotalStreamsClosed:    g.totalStreamsClosed.Load(),
-		BytesSent:             g.bytesSent.Load(),
-		BytesRecv:             g.bytesRecv.Load(),
-		RawBytesSent:          g.rawBytesSent.Load(),
-		RawBytesRecv:          g.rawBytesRecv.Load(),
-		TCPConnections:        g.tcpConnections.Load(),
-		UDPAssociations:       g.udpAssociations.Load(),
-		DNSCacheHits:          g.dnsCacheHits.Load(),
-		DNSCacheMisses:        g.dnsCacheMisses.Load(),
-		DNSProxyQueries:       g.dnsProxyQueries.Load(),
-		DNSDirectQueries:      g.dnsDirectQueries.Load(),
-		PaddingBytes:          g.paddingBytes.Load(),
-		RecordsWritten:        g.recordsWritten.Load(),
-		RTTEWMA:               ewma,
-		RTTCount:              g.rttCount.Load(),
-		ServerTCPStreams:      g.serverTCPStreams.Load(),
-		ServerUDPStreams:      g.serverUDPStreams.Load(),
-		ServerICMPStreams:     g.serverICMPStreams.Load(),
-		ServerHandshakeErrors: g.serverHandshakeErrors.Load(),
-		ServerFallbackPages:   g.serverFallbackPages.Load(),
-		PriorityStreamsOpened: g.priorityStreamsOpened.Load(),
-		BulkStreamsOpened:     g.bulkStreamsOpened.Load(),
-		PriorityFallback:      g.priorityFallback.Load(),
-		BulkFallback:          g.bulkFallback.Load(),
-		UploadSpeed:           upSpeed,
-		DownloadSpeed:         downSpeed,
-		UploadSpeedHuman:      HumanBytes(upSpeed) + "/s",
-		DownloadSpeedHuman:    HumanBytes(downSpeed) + "/s",
-		UptimeSeconds:         time.Since(g.startTime).Seconds(),
-		AvgRTTMs:              float64(time.Duration(ewma).Microseconds()) / 1000.0,
-		StartTime:             g.startTime,
+		TotalStreamsOpened:     g.totalStreamsOpened.Load(),
+		TotalStreamsClosed:     g.totalStreamsClosed.Load(),
+		BytesSent:              g.bytesSent.Load(),
+		BytesRecv:              g.bytesRecv.Load(),
+		RawBytesSent:           g.rawBytesSent.Load(),
+		RawBytesRecv:           g.rawBytesRecv.Load(),
+		TCPConnections:         g.tcpConnections.Load(),
+		UDPAssociations:        g.udpAssociations.Load(),
+		DNSCacheHits:           g.dnsCacheHits.Load(),
+		DNSCacheMisses:         g.dnsCacheMisses.Load(),
+		DNSProxyQueries:        g.dnsProxyQueries.Load(),
+		DNSDirectQueries:       g.dnsDirectQueries.Load(),
+		PaddingBytes:           g.paddingBytes.Load(),
+		RecordsWritten:         g.recordsWritten.Load(),
+		RTTEWMA:                ewma,
+		RTTCount:               g.rttCount.Load(),
+		ServerTCPStreams:       g.serverTCPStreams.Load(),
+		ServerUDPStreams:       g.serverUDPStreams.Load(),
+		ServerICMPStreams:      g.serverICMPStreams.Load(),
+		ServerHandshakeErrors:  g.serverHandshakeErrors.Load(),
+		ServerFallbackPages:    g.serverFallbackPages.Load(),
+		PriorityStreamsOpened:  g.priorityStreamsOpened.Load(),
+		BulkStreamsOpened:      g.bulkStreamsOpened.Load(),
+		PriorityFallback:       g.priorityFallback.Load(),
+		BulkFallback:           g.bulkFallback.Load(),
+		UploadSpeed:            upSpeed,
+		DownloadSpeed:          downSpeed,
+		UploadSpeedHuman:       HumanBytes(upSpeed) + "/s",
+		DownloadSpeedHuman:     HumanBytes(downSpeed) + "/s",
+		PeakUploadSpeedHuman:   HumanBytes(g.peakUploadSpeed.Load()) + "/s",
+		PeakDownloadSpeedHuman: HumanBytes(g.peakDownloadSpeed.Load()) + "/s",
+		UptimeSeconds:          time.Since(g.startTime).Seconds(),
+		AvgRTTMs:               float64(time.Duration(ewma).Microseconds()) / 1000.0,
+		StartTime:              g.startTime,
 	}
 }
 
