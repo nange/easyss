@@ -166,8 +166,7 @@ Easyss v3 支持两种配置模式，自动识别：
   "timeout": 30,
   "auth_username": "",
   "auth_password": "",
-  "pprof_enabled": false,
-  "latency_offset_ms": 50
+  "pprof_enabled": false
 }
 ```
 

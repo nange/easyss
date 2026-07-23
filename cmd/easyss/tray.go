@@ -3,8 +3,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/user"
 	"runtime"
@@ -122,30 +124,46 @@ func (a *TrayApp) addSelectServerMenu() {
 		}(i, item)
 	}
 
-	go a.latencyUpdater(subMenuItems, addrs)
+	go a.latencyRefresher(subMenuItems, addrs)
 }
 
-func (a *TrayApp) latencyUpdater(subMenuItems []*systray.MenuItem, addrs []string) {
+func (a *TrayApp) latencyRefresher(subMenuItems []*systray.MenuItem, addrs []string) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/stats", a.cfg.Local.HTTPPort)
+	httpClient := &http.Client{Timeout: 2 * time.Second}
+
 	for {
 		select {
-		case lat := <-a.PingLatencyCh():
+		case <-ticker.C:
+			rttMs := fetchAvgRTT(httpClient, url)
 			for i, mi := range subMenuItems {
-				if mi.Checked() {
-					if lat < 0 {
-						mi.SetTitle(fmt.Sprintf("%s\ttimeout", addrs[i]))
-					} else {
-						mi.SetTitle(fmt.Sprintf("%s\t%dms", addrs[i], lat.Round(time.Millisecond).Milliseconds()))
-					}
+				if mi.Checked() && rttMs > 0 {
+					mi.SetTitle(fmt.Sprintf("%s\t%dms", addrs[i], int64(rttMs)))
 					break
 				}
 			}
-		case <-ticker.C:
 		case <-a.closing:
 			return
 		}
 	}
+}
+
+func fetchAvgRTT(client *http.Client, url string) float64 {
+	resp, err := client.Get(url)
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var snap struct {
+		AvgRTTMs float64 `json:"avg_rtt_ms"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		return 0
+	}
+	return snap.AvgRTTMs
 }
 
 func (a *TrayApp) addProxyRuleMenu() {

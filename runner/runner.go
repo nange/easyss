@@ -48,7 +48,6 @@ func New(cfg *config.ClientConfig) (*Core, error) {
 	udpIdleTimeout := 2 * timeout
 
 	streamHandler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, streamIdleTimeout)
-	streamHandler.OnRTT = cli.LatencyTracker().Record
 
 	c := &Core{
 		Cfg:           cfg,

@@ -19,14 +19,13 @@ import (
 )
 
 type Client struct {
-	cfg            *config.ClientConfig
-	router         *router.Router
-	transport      *http2.HTTP2Transport
-	shaperCfg      shaper.Config
-	masterKey      []byte
-	dialer         *dialer.Dialer
-	latencyTracker *LatencyTracker
-	closeIdleDone  chan struct{}
+	cfg           *config.ClientConfig
+	router        *router.Router
+	transport     *http2.HTTP2Transport
+	shaperCfg     shaper.Config
+	masterKey     []byte
+	dialer        *dialer.Dialer
+	closeIdleDone chan struct{}
 
 	mu sync.RWMutex
 }
@@ -91,14 +90,13 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	}
 
 	client := &Client{
-		cfg:            cfg,
-		router:         rt,
-		transport:      tr,
-		shaperCfg:      shaperCfg,
-		masterKey:      masterKey,
-		dialer:         directDialer,
-		latencyTracker: NewLatencyTracker(time.Duration(cfg.LatencyOffsetMS) * time.Millisecond),
-		closeIdleDone:  make(chan struct{}),
+		cfg:           cfg,
+		router:        rt,
+		transport:     tr,
+		shaperCfg:     shaperCfg,
+		masterKey:     masterKey,
+		dialer:        directDialer,
+		closeIdleDone: make(chan struct{}),
 	}
 
 	go client.closeIdleLoop()
@@ -192,10 +190,6 @@ func (c *Client) ShaperConfig() shaper.Config {
 
 func (c *Client) Config() *config.ClientConfig {
 	return c.cfg
-}
-
-func (c *Client) LatencyTracker() *LatencyTracker {
-	return c.latencyTracker
 }
 
 func (c *Client) Close() error {

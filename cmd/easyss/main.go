@@ -150,10 +150,6 @@ type App struct {
 	tunMgr   *tun.Manager
 	pprofSrv *http.Server
 
-	pingLatCh  chan time.Duration
-	pingCloser chan struct{}
-	pingOnce   sync.Once
-
 	statsCloser chan struct{}
 	statsOnce   sync.Once
 }
@@ -190,10 +186,7 @@ func (a *App) Start() error {
 		}()
 	}
 
-	a.pingLatCh = make(chan time.Duration, 1)
-	a.pingCloser = make(chan struct{})
 	a.statsCloser = make(chan struct{})
-	go a.latencyPoller()
 	go a.statsLoop()
 	stats.StartSpeedMonitor()
 
@@ -205,9 +198,6 @@ func (a *App) Start() error {
 }
 
 func (a *App) Stop() {
-	a.pingOnce.Do(func() {
-		close(a.pingCloser)
-	})
 	a.statsOnce.Do(func() {
 		close(a.statsCloser)
 	})
@@ -221,39 +211,6 @@ func (a *App) Stop() {
 	}
 	if a.pprofSrv != nil {
 		pprof.StopPprof(a.pprofSrv)
-	}
-}
-
-func (a *App) PingLatencyCh() <-chan time.Duration {
-	return a.pingLatCh
-}
-
-func (a *App) latencyPoller() {
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
-	var lastReported time.Duration
-	for {
-		select {
-		case <-ticker.C:
-			if a.core == nil || a.core.Client == nil {
-				continue
-			}
-			est, ok := a.core.Client.LatencyTracker().Estimate()
-			if !ok {
-				continue
-			}
-			if est == lastReported {
-				continue
-			}
-			lastReported = est
-			select {
-			case a.pingLatCh <- est:
-			default:
-			}
-		case <-a.pingCloser:
-			return
-		}
 	}
 }
 
@@ -346,11 +303,10 @@ func exampleV3Config() string {
 			Level:    "info",
 			FilePath: "easyss.log",
 		},
-		Timeout:         30,
-		AuthUsername:    "",
-		AuthPassword:    "",
-		PprofEnabled:    false,
-		LatencyOffsetMS: 50,
+		Timeout:      30,
+		AuthUsername: "",
+		AuthPassword: "",
+		PprofEnabled: false,
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
 	return string(b)
