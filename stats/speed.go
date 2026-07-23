@@ -39,10 +39,10 @@ func (s *stats) speedLoop() {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-		var lastSent, lastRecv int64
-		lastSent = s.rawBytesSent.Load()
-		lastRecv = s.rawBytesRecv.Load()
-		const alpha = 0.5
+	var lastSent, lastRecv int64
+	lastSent = s.rawBytesSent.Load()
+	lastRecv = s.rawBytesRecv.Load()
+	const alpha = 0.5
 
 	for {
 		select {
