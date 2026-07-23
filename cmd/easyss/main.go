@@ -195,6 +195,7 @@ func (a *App) Start() error {
 	a.statsCloser = make(chan struct{})
 	go a.latencyPoller()
 	go a.statsLoop()
+	stats.StartSpeedMonitor()
 
 	if a.cfg.PprofEnabled {
 		a.pprofSrv = pprof.StartPprof()
@@ -210,6 +211,7 @@ func (a *App) Stop() {
 	a.statsOnce.Do(func() {
 		close(a.statsCloser)
 	})
+	stats.StopSpeedMonitor()
 
 	if a.tunMgr != nil {
 		a.tunMgr.Stop()
@@ -265,15 +267,15 @@ func (a *App) statsLoop() {
 				continue
 			}
 			snap := stats.Collect()
-			trStats := a.core.Client.Transport().Stats()
+			snap.ApplyTransport(a.core.Client.Transport().Stats())
 			log.Info("[STATS]",
 				"uptime", snap.Uptime().Round(time.Second),
-				"conns", trStats.ConnCount,
-				"priority_conns", trStats.PriorityConnCount,
-				"bulk_conns", trStats.BulkConnCount,
-				"active_streams", trStats.ActiveStream,
-				"priority_active", trStats.PriorityActiveStream,
-				"bulk_active", trStats.BulkActiveStream,
+				"conns", snap.Conns,
+				"priority_conns", snap.PriorityConns,
+				"bulk_conns", snap.BulkConns,
+				"active_streams", snap.ActiveStreams,
+				"priority_active", snap.PriorityActiveStreams,
+				"bulk_active", snap.BulkActiveStreams,
 				"streams(opened)", snap.TotalStreamsOpened,
 				"streams(closed)", snap.TotalStreamsClosed,
 				"priority_opened", snap.PriorityStreamsOpened,
@@ -284,6 +286,8 @@ func (a *App) statsLoop() {
 				"rx", stats.HumanBytes(snap.BytesRecv),
 				"raw_tx", stats.HumanBytes(snap.RawBytesSent),
 				"raw_rx", stats.HumanBytes(snap.RawBytesRecv),
+				"upload_speed", snap.UploadSpeedHuman,
+				"download_speed", snap.DownloadSpeedHuman,
 				"proxy_tcp_streams", snap.TCPConnections,
 				"udp_assoc", snap.UDPAssociations,
 				"dns(hit)", snap.DNSCacheHits,

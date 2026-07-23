@@ -5,6 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/nange/easyss/v3/transport"
 )
 
 var g = &stats{startTime: time.Now()}
@@ -36,6 +38,10 @@ type stats struct {
 	rttMu    sync.Mutex
 	rttEWMA  int64 // nanoseconds, EWMA-smoothed RTT
 	rttCount atomic.Int64
+
+	// Speed tracking (bytes/sec, EWMA-smoothed)
+	uploadSpeed   atomic.Int64
+	downloadSpeed atomic.Int64
 
 	// Server-side proxy
 	serverTCPStreams      atomic.Int64
@@ -93,38 +99,58 @@ func RecordServerFallbackPage()   { g.serverFallbackPages.Add(1) }
 
 // --- snapshot ---
 
-// Snapshot is a point-in-time copy of all counters.
+// Snapshot is a point-in-time copy of all counters and derived metrics.
 type Snapshot struct {
-	TotalStreamsOpened    int64     `json:"total_streams_opened"`
-	TotalStreamsClosed    int64     `json:"total_streams_closed"`
-	BytesSent             int64     `json:"bytes_sent"`
-	BytesRecv             int64     `json:"bytes_recv"`
-	RawBytesSent          int64     `json:"raw_bytes_sent"`
-	RawBytesRecv          int64     `json:"raw_bytes_recv"`
-	TCPConnections        int64     `json:"tcp_connections"`
-	UDPAssociations       int64     `json:"udp_associations"`
-	DNSCacheHits          int64     `json:"dns_cache_hits"`
-	DNSCacheMisses        int64     `json:"dns_cache_misses"`
-	DNSProxyQueries       int64     `json:"dns_proxy_queries"`
-	DNSDirectQueries      int64     `json:"dns_direct_queries"`
-	PaddingBytes          int64     `json:"padding_bytes"`
-	RecordsWritten        int64     `json:"records_written"`
-	RTTCount              int64     `json:"rtt_count"`
-	RTTSum                int64     `json:"rtt_sum_ns"`
-	ServerTCPStreams      int64     `json:"server_tcp_streams"`
-	ServerUDPStreams      int64     `json:"server_udp_streams"`
-	ServerICMPStreams     int64     `json:"server_icmp_streams"`
-	ServerHandshakeErrors int64     `json:"server_handshake_errors"`
-	ServerFallbackPages   int64     `json:"server_fallback_pages"`
-	PriorityStreamsOpened int64     `json:"priority_streams_opened"`
-	BulkStreamsOpened     int64     `json:"bulk_streams_opened"`
-	PriorityFallback      int64     `json:"priority_fallback"`
-	BulkFallback          int64     `json:"bulk_fallback"`
-	StartTime             time.Time `json:"start_time"`
+	// Counters
+	TotalStreamsOpened    int64 `json:"total_streams_opened"`
+	TotalStreamsClosed    int64 `json:"total_streams_closed"`
+	BytesSent             int64 `json:"bytes_sent"`
+	BytesRecv             int64 `json:"bytes_recv"`
+	RawBytesSent          int64 `json:"raw_bytes_sent"`
+	RawBytesRecv          int64 `json:"raw_bytes_recv"`
+	TCPConnections        int64 `json:"tcp_connections"`
+	UDPAssociations       int64 `json:"udp_associations"`
+	DNSCacheHits          int64 `json:"dns_cache_hits"`
+	DNSCacheMisses        int64 `json:"dns_cache_misses"`
+	DNSProxyQueries       int64 `json:"dns_proxy_queries"`
+	DNSDirectQueries      int64 `json:"dns_direct_queries"`
+	PaddingBytes          int64 `json:"padding_bytes"`
+	RecordsWritten        int64 `json:"records_written"`
+	RTTCount              int64 `json:"rtt_count"`
+	RTTSum                int64 `json:"rtt_sum_ns"`
+	ServerTCPStreams      int64 `json:"server_tcp_streams"`
+	ServerUDPStreams      int64 `json:"server_udp_streams"`
+	ServerICMPStreams     int64 `json:"server_icmp_streams"`
+	ServerHandshakeErrors int64 `json:"server_handshake_errors"`
+	ServerFallbackPages   int64 `json:"server_fallback_pages"`
+	PriorityStreamsOpened int64 `json:"priority_streams_opened"`
+	BulkStreamsOpened     int64 `json:"bulk_streams_opened"`
+	PriorityFallback      int64 `json:"priority_fallback"`
+	BulkFallback          int64 `json:"bulk_fallback"`
+
+	// Speed
+	UploadSpeed        int64  `json:"upload_speed"`
+	DownloadSpeed      int64  `json:"download_speed"`
+	UploadSpeedHuman   string `json:"upload_speed_human"`
+	DownloadSpeedHuman string `json:"download_speed_human"`
+
+	// Transport stats (client-side only; zero on server)
+	Conns                 int `json:"conns"`
+	ActiveStreams         int `json:"active_streams"`
+	PriorityActiveStreams int `json:"priority_active_streams"`
+	BulkActiveStreams     int `json:"bulk_active_streams"`
+	PriorityConns         int `json:"priority_conns"`
+	BulkConns             int `json:"bulk_conns"`
+
+	// Derived
+	UptimeSeconds float64 `json:"uptime_seconds"`
+	AvgRTTMs      float64 `json:"avg_rtt_ms"`
+
+	StartTime time.Time `json:"start_time"`
 }
 
-// ActiveStreams returns the current count of streams opened but not yet closed.
-func (s Snapshot) ActiveStreams() int64 {
+// ActiveStreamsCount returns the current count of streams opened but not yet closed.
+func (s Snapshot) ActiveStreamsCount() int64 {
 	return s.TotalStreamsOpened - s.TotalStreamsClosed
 }
 
@@ -140,11 +166,25 @@ func (s Snapshot) Uptime() time.Duration {
 	return time.Since(s.StartTime)
 }
 
+// ApplyTransport populates transport-level stats into the snapshot.
+func (s *Snapshot) ApplyTransport(ts transport.TransportStats) {
+	s.Conns = ts.ConnCount
+	s.ActiveStreams = ts.ActiveStream
+	s.PriorityActiveStreams = ts.PriorityActiveStream
+	s.BulkActiveStreams = ts.BulkActiveStream
+	s.PriorityConns = ts.PriorityConnCount
+	s.BulkConns = ts.BulkConnCount
+}
+
 // Collect returns a point-in-time copy of all counters.
 func Collect() Snapshot {
 	g.rttMu.Lock()
 	ewma := g.rttEWMA
 	g.rttMu.Unlock()
+
+	upSpeed := g.uploadSpeed.Load()
+	downSpeed := g.downloadSpeed.Load()
+
 	return Snapshot{
 		TotalStreamsOpened:    g.totalStreamsOpened.Load(),
 		TotalStreamsClosed:    g.totalStreamsClosed.Load(),
@@ -171,6 +211,12 @@ func Collect() Snapshot {
 		BulkStreamsOpened:     g.bulkStreamsOpened.Load(),
 		PriorityFallback:      g.priorityFallback.Load(),
 		BulkFallback:          g.bulkFallback.Load(),
+		UploadSpeed:           upSpeed,
+		DownloadSpeed:         downSpeed,
+		UploadSpeedHuman:      HumanBytes(upSpeed) + "/s",
+		DownloadSpeedHuman:    HumanBytes(downSpeed) + "/s",
+		UptimeSeconds:         time.Since(g.startTime).Seconds(),
+		AvgRTTMs:              float64(time.Duration(ewma).Microseconds()) / 1000.0,
 		StartTime:             g.startTime,
 	}
 }
