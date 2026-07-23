@@ -117,7 +117,7 @@ type Snapshot struct {
 	PaddingBytes          int64 `json:"padding_bytes"`
 	RecordsWritten        int64 `json:"records_written"`
 	RTTCount              int64 `json:"rtt_count"`
-	RTTSum                int64 `json:"rtt_sum_ns"`
+	RTTEWMA               int64 `json:"rtt_ewma_ns"`
 	ServerTCPStreams      int64 `json:"server_tcp_streams,omitempty"`
 	ServerUDPStreams      int64 `json:"server_udp_streams,omitempty"`
 	ServerICMPStreams     int64 `json:"server_icmp_streams,omitempty"`
@@ -153,7 +153,7 @@ func (s Snapshot) AvgRTT() time.Duration {
 	if s.RTTCount == 0 {
 		return 0
 	}
-	return time.Duration(s.RTTSum)
+	return time.Duration(s.RTTEWMA)
 }
 
 // Uptime returns the duration since StartTime.
@@ -185,7 +185,7 @@ func Collect() Snapshot {
 		DNSDirectQueries:      g.dnsDirectQueries.Load(),
 		PaddingBytes:          g.paddingBytes.Load(),
 		RecordsWritten:        g.recordsWritten.Load(),
-		RTTSum:                ewma,
+		RTTEWMA:               ewma,
 		RTTCount:              g.rttCount.Load(),
 		ServerTCPStreams:      g.serverTCPStreams.Load(),
 		ServerUDPStreams:      g.serverUDPStreams.Load(),
