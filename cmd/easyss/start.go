@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"syscall"
 
-	"github.com/getlantern/systray"
+	"fyne.io/systray"
 	"github.com/nange/easyss/v3/log"
 )
 

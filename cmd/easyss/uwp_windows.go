@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/getlantern/systray"
+	"fyne.io/systray"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util"
 )
