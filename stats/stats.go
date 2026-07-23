@@ -118,11 +118,11 @@ type Snapshot struct {
 	RecordsWritten        int64 `json:"records_written"`
 	RTTCount              int64 `json:"rtt_count"`
 	RTTSum                int64 `json:"rtt_sum_ns"`
-	ServerTCPStreams      int64 `json:"server_tcp_streams"`
-	ServerUDPStreams      int64 `json:"server_udp_streams"`
-	ServerICMPStreams     int64 `json:"server_icmp_streams"`
-	ServerHandshakeErrors int64 `json:"server_handshake_errors"`
-	ServerFallbackPages   int64 `json:"server_fallback_pages"`
+	ServerTCPStreams      int64 `json:"server_tcp_streams,omitempty"`
+	ServerUDPStreams      int64 `json:"server_udp_streams,omitempty"`
+	ServerICMPStreams     int64 `json:"server_icmp_streams,omitempty"`
+	ServerHandshakeErrors int64 `json:"server_handshake_errors,omitempty"`
+	ServerFallbackPages   int64 `json:"server_fallback_pages,omitempty"`
 	PriorityStreamsOpened int64 `json:"priority_streams_opened"`
 	BulkStreamsOpened     int64 `json:"bulk_streams_opened"`
 	PriorityFallback      int64 `json:"priority_fallback"`
