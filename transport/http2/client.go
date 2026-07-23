@@ -397,22 +397,22 @@ func (t *HTTP2Transport) CloseIdle() {
 func (t *HTTP2Transport) Stats() transport.TransportStats {
 	live := int(t.liveCount.Load())
 	ts := transport.TransportStats{
-		ConnCount: live,
+		Conns: live,
 	}
 	pConns := t.prioritySlots
 	if live < pConns {
 		pConns = live
 	}
-	ts.PriorityConnCount = pConns
-	ts.BulkConnCount = live - pConns
+	ts.PriorityConns = pConns
+	ts.BulkConns = live - pConns
 
 	for i := int32(0); i < int32(live); i++ {
 		a := int(t.slots[i].active.Load())
-		ts.ActiveStream += a
+		ts.ActiveStreams += a
 		if i < int32(t.prioritySlots) {
-			ts.PriorityActiveStream += a
+			ts.PriorityActiveStreams += a
 		} else {
-			ts.BulkActiveStream += a
+			ts.BulkActiveStreams += a
 		}
 	}
 	return ts

@@ -19,12 +19,12 @@ type OpenRequest struct {
 }
 
 type TransportStats struct {
-	ConnCount            int
-	ActiveStream         int
-	PriorityActiveStream int
-	BulkActiveStream     int
-	PriorityConnCount    int
-	BulkConnCount        int
+	Conns                 int `json:"conns"`
+	ActiveStreams         int `json:"active_streams"`
+	PriorityActiveStreams int `json:"priority_active_streams"`
+	BulkActiveStreams     int `json:"bulk_active_streams"`
+	PriorityConns         int `json:"priority_conns"`
+	BulkConns             int `json:"bulk_conns"`
 }
 
 type Transport interface {

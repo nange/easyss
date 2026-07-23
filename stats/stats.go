@@ -134,13 +134,8 @@ type Snapshot struct {
 	UploadSpeedHuman   string `json:"upload_speed_human"`
 	DownloadSpeedHuman string `json:"download_speed_human"`
 
-	// Transport stats (client-side only; zero on server)
-	Conns                 int `json:"conns"`
-	ActiveStreams         int `json:"active_streams"`
-	PriorityActiveStreams int `json:"priority_active_streams"`
-	BulkActiveStreams     int `json:"bulk_active_streams"`
-	PriorityConns         int `json:"priority_conns"`
-	BulkConns             int `json:"bulk_conns"`
+	// Transport stats (embedded, client-side only; zero on server)
+	transport.TransportStats
 
 	// Derived
 	UptimeSeconds float64 `json:"uptime_seconds"`
@@ -164,16 +159,6 @@ func (s Snapshot) AvgRTT() time.Duration {
 // Uptime returns the duration since StartTime.
 func (s Snapshot) Uptime() time.Duration {
 	return time.Since(s.StartTime)
-}
-
-// ApplyTransport populates transport-level stats into the snapshot.
-func (s *Snapshot) ApplyTransport(ts transport.TransportStats) {
-	s.Conns = ts.ConnCount
-	s.ActiveStreams = ts.ActiveStream
-	s.PriorityActiveStreams = ts.PriorityActiveStream
-	s.BulkActiveStreams = ts.BulkActiveStream
-	s.PriorityConns = ts.PriorityConnCount
-	s.BulkConns = ts.BulkConnCount
 }
 
 // Collect returns a point-in-time copy of all counters.

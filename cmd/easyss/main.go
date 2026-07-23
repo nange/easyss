@@ -267,7 +267,7 @@ func (a *App) statsLoop() {
 				continue
 			}
 			snap := stats.Collect()
-			snap.ApplyTransport(a.core.Client.Transport().Stats())
+			snap.TransportStats = a.core.Client.Transport().Stats()
 			log.Info("[STATS]",
 				"uptime", snap.Uptime().Round(time.Second),
 				"conns", snap.Conns,

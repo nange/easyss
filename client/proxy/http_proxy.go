@@ -155,7 +155,7 @@ func (s *HTTPProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPProxyServer) serveStats(w http.ResponseWriter) {
 	snap := stats.Collect()
-	snap.ApplyTransport(s.handler.Transport().Stats())
+	snap.TransportStats = s.handler.Transport().Stats()
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(snap); err != nil {
