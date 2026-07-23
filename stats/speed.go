@@ -6,35 +6,43 @@ import (
 )
 
 var (
-	speedOnce sync.Once
-	speedDone chan struct{}
+	speedMu      sync.Mutex
+	speedRunning bool
+	speedDone    chan struct{}
 )
 
 // StartSpeedMonitor starts a background goroutine that periodically samples
 // raw byte counters and computes upload/download speed via EWMA.
 func StartSpeedMonitor() {
-	speedOnce.Do(func() {
-		speedDone = make(chan struct{})
-		go g.speedLoop()
-	})
+	speedMu.Lock()
+	defer speedMu.Unlock()
+	if speedRunning {
+		return
+	}
+	speedRunning = true
+	speedDone = make(chan struct{})
+	go g.speedLoop()
 }
 
 // StopSpeedMonitor stops the background speed monitoring goroutine.
 func StopSpeedMonitor() {
-	select {
-	case <-speedDone:
-		// Already stopped.
-	default:
-		close(speedDone)
+	speedMu.Lock()
+	defer speedMu.Unlock()
+	if !speedRunning {
+		return
 	}
+	speedRunning = false
+	close(speedDone)
 }
 
 func (s *stats) speedLoop() {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	var lastSent, lastRecv int64
-	const alpha = 0.5
+		var lastSent, lastRecv int64
+		lastSent = s.rawBytesSent.Load()
+		lastRecv = s.rawBytesRecv.Load()
+		const alpha = 0.5
 
 	for {
 		select {

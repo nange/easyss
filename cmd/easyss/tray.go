@@ -124,11 +124,11 @@ func (a *TrayApp) addSelectServerMenu() {
 		}(i, item)
 	}
 
-	go a.latencyRefresher(subMenuItems, addrs)
+	go a.statsRefresher(subMenuItems, addrs)
 }
 
-func (a *TrayApp) latencyRefresher(subMenuItems []*systray.MenuItem, addrs []string) {
-	ticker := time.NewTicker(5 * time.Second)
+func (a *TrayApp) statsRefresher(subMenuItems []*systray.MenuItem, addrs []string) {
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
 	url := fmt.Sprintf("http://127.0.0.1:%d/stats", a.cfg.Local.HTTPPort)
@@ -137,10 +137,10 @@ func (a *TrayApp) latencyRefresher(subMenuItems []*systray.MenuItem, addrs []str
 	for {
 		select {
 		case <-ticker.C:
-			rttMs := fetchAvgRTT(httpClient, url)
+			rttMs, downSpeed := fetchStats(httpClient, url)
 			for i, mi := range subMenuItems {
-				if mi.Checked() && rttMs > 0 {
-					mi.SetTitle(fmt.Sprintf("%s\t%dms", addrs[i], int64(rttMs)))
+				if mi.Checked() {
+					mi.SetTitle(formatTitle(addrs[i], rttMs, downSpeed))
 					break
 				}
 			}
@@ -150,20 +150,38 @@ func (a *TrayApp) latencyRefresher(subMenuItems []*systray.MenuItem, addrs []str
 	}
 }
 
-func fetchAvgRTT(client *http.Client, url string) float64 {
+func fetchStats(client *http.Client, url string) (rttMs float64, downSpeed string) {
 	resp, err := client.Get(url)
 	if err != nil {
-		return 0
+		return 0, ""
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	var snap struct {
-		AvgRTTMs float64 `json:"avg_rtt_ms"`
+		AvgRTTMs           float64 `json:"avg_rtt_ms"`
+		DownloadSpeedHuman string  `json:"download_speed_human"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
-		return 0
+		return 0, ""
 	}
-	return snap.AvgRTTMs
+	return snap.AvgRTTMs, snap.DownloadSpeedHuman
+}
+
+func formatTitle(addr string, rttMs float64, downSpeed string) string {
+	var extra string
+	if rttMs > 0 {
+		extra = fmt.Sprintf("%dms", int64(rttMs))
+	}
+	if downSpeed != "" {
+		if extra != "" {
+			extra += "  "
+		}
+		extra += "↓" + downSpeed
+	}
+	if extra != "" {
+		return addr + "\t" + extra
+	}
+	return addr
 }
 
 func (a *TrayApp) addProxyRuleMenu() {
