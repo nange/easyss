@@ -24,7 +24,7 @@ type Core struct {
 	DNSServer     *dns.ForwardServer
 }
 
-func New(cfg *config.ClientConfig) (*Core, error) {
+func Run(cfg *config.ClientConfig) (*Core, error) {
 	cli, err := client.New(cfg)
 	if err != nil {
 		return nil, err

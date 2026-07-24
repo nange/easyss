@@ -155,7 +155,7 @@ type App struct {
 }
 
 func (a *App) Start() error {
-	core, err := runner.New(a.cfg)
+	core, err := runner.Run(a.cfg)
 	if err != nil {
 		return err
 	}

@@ -29,7 +29,7 @@ func Start(cfg *sharedconfig.SimpleConfig) error {
 		return err
 	}
 
-	core, err := runner.New(clientCfg)
+	core, err := runner.Run(clientCfg)
 	if err != nil {
 		return err
 	}
