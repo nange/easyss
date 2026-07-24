@@ -45,6 +45,9 @@ func (a *TrayApp) trayReady() {
 	a.SetTunMenu(tunMenu)
 
 	a.addUWPLoopbackMenu()
+	systray.AddSeparator()
+
+	a.addAutoStartMenu()
 
 	a.addLogLevelMenu()
 	systray.AddSeparator()
@@ -435,6 +438,35 @@ func (a *TrayApp) addLogLevelMenu() {
 				a.cfg.Log.Level = "error"
 				log.Warn("[SYSTRAY] log level changed", "level", "error")
 				log.SetLevel(slog.LevelError)
+			case <-a.closing:
+				return
+			}
+		}
+	}()
+}
+
+func (a *TrayApp) addAutoStartMenu() {
+	autoStart := systray.AddMenuItemCheckbox("开机启动", "", IsAutoStartEnabled())
+
+	go func() {
+		for {
+			select {
+			case <-autoStart.ClickedCh:
+				if autoStart.Checked() {
+					if err := DisableAutoStart(); err != nil {
+						log.Error("[SYSTRAY] disable auto-start", "err", err)
+						continue
+					}
+					autoStart.Uncheck()
+					log.Info("[SYSTRAY] auto-start disabled")
+				} else {
+					if err := EnableAutoStart(); err != nil {
+						log.Error("[SYSTRAY] enable auto-start", "err", err)
+						continue
+					}
+					autoStart.Check()
+					log.Info("[SYSTRAY] auto-start enabled")
+				}
 			case <-a.closing:
 				return
 			}

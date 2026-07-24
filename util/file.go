@@ -34,7 +34,29 @@ func CurrentDir() string {
 		return ""
 	}
 
-	return filepath.Dir(a)
+	dir := filepath.Dir(a)
+
+	// If running from inside a macOS .app bundle, return the directory
+	// containing the .app so that config files live alongside the bundle.
+	if isAppBundleDir(dir) {
+		// dir is .../Easyss.app/Contents/MacOS → go up 3 → parent of .app
+		return filepath.Dir(filepath.Dir(filepath.Dir(dir)))
+	}
+
+	return dir
+}
+
+// isAppBundleDir reports whether dir is the MacOS directory inside a .app bundle.
+func isAppBundleDir(dir string) bool {
+	if !strings.HasSuffix(dir, "/Contents/MacOS") {
+		return false
+	}
+	contentsDir := filepath.Dir(dir) // .../Contents
+	if !strings.HasSuffix(contentsDir, "/Contents") {
+		return false
+	}
+	appDir := filepath.Dir(contentsDir) // .../Easyss.app
+	return strings.HasSuffix(appDir, ".app")
 }
 
 func DirFileList(dir string) ([]string, error) {

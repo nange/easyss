@@ -86,13 +86,13 @@ jobs:
 
       - name: Build Arm64
         run: |
-          GOOS=darwin GOARCH=arm64 make easyss
+          GOOS=darwin GOARCH=arm64 make easyss-mac-app
           GOOS=darwin GOARCH=arm64 make easyss-server
 
       - name: Pack Arm64
         run: |
           cd bin
-          zip easyss-darwin-arm64.zip ./easyss
+          zip -r easyss-darwin-arm64.zip ./Easyss.app
           zip easyss-server-darwin-arm64.zip ./easyss-server
 
       - name: Set outputs
@@ -125,13 +125,13 @@ jobs:
 
       - name: Build Amd64
         run: |
-          GOOS=darwin GOARCH=amd64 make easyss
+          GOOS=darwin GOARCH=amd64 make easyss-mac-app
           GOOS=darwin GOARCH=amd64 make easyss-server
 
       - name: Pack Amd64
         run: |
           cd bin
-          zip easyss-darwin-amd64.zip ./easyss
+          zip -r easyss-darwin-amd64.zip ./Easyss.app
           zip easyss-server-darwin-amd64.zip ./easyss-server
 
       - name: Set outputs

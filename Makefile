@@ -23,9 +23,14 @@ easyss-windows:
 	cd cmd/easyss; \
 	$(GO_BUILD_WIN) -o ../../bin/easyss.exe
 
+easyss-mac-app:
+		cd cmd/easyss; \
+		$(GO_BUILD) -o ../../bin/easyss
+		bash scripts/app-bundle.sh bin/easyss icon/icon_1024_1024.png cmd/easyss/Info.plist
+
 easyss-without-tray:
-	cd cmd/easyss; \
-    $(GO_BUILD) -tags "without_tray " -o ../../bin/easyss-without-tray
+		cd cmd/easyss; \
+	    $(GO_BUILD) -tags "without_tray " -o ../../bin/easyss-without-tray
 
 easyss-server:
 	cd cmd/easyss-server; \
