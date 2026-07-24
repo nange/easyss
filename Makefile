@@ -10,7 +10,7 @@ GO_BUILD_WIN := GOOS=windows GOARCH=amd64 CGO_ENABLED=1 go build -ldflags '-H wi
 GOMOBILE := $(shell go env GOPATH)/bin/gomobile
 GOMOBILE_BIND := $(GOMOBILE) bind -target=android/arm64,android/amd64 -androidapi 29 -ldflags '$(LDFLAGS)'
 
-.PHONY: easyss easyss-without-tray easyss-windows easyss-server easyss-server-windows easyss-android-aar format test lint
+.PHONY: easyss easyss-without-tray easyss-windows easyss-mac-app easyss-server easyss-server-windows easyss-android-aar format test lint
 
 echo:
 	@echo "${PROJECT}"
@@ -23,9 +23,14 @@ easyss-windows:
 	cd cmd/easyss; \
 	$(GO_BUILD_WIN) -o ../../bin/easyss.exe
 
+easyss-mac-app:
+		cd cmd/easyss; \
+		$(GO_BUILD) -o ../../bin/easyss
+		bash scripts/app-bundle.sh bin/easyss icon/icon_1024_1024.png cmd/easyss/Info.plist
+
 easyss-without-tray:
-	cd cmd/easyss; \
-    $(GO_BUILD) -tags "without_tray " -o ../../bin/easyss-without-tray
+		cd cmd/easyss; \
+	    $(GO_BUILD) -tags "without_tray " -o ../../bin/easyss-without-tray
 
 easyss-server:
 	cd cmd/easyss-server; \
