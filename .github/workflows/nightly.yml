@@ -82,6 +82,8 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: Build Arm64
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "14.0"
         run: |
           GOOS=darwin GOARCH=arm64 make easyss-mac-app
           GOOS=darwin GOARCH=arm64 make easyss-server
@@ -121,6 +123,8 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: Build Amd64
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "14.0"
         run: |
           GOOS=darwin GOARCH=amd64 make easyss-mac-app
           GOOS=darwin GOARCH=amd64 make easyss-server
