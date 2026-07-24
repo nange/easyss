@@ -86,13 +86,18 @@ func enableAutoStart() error {
 		return fmt.Errorf("write plist: %w", err)
 	}
 
-	// Bootstrap so the job is active for the current session immediately.
-	uid := os.Getuid()
-	bootstrapCmd := exec.Command("launchctl", "bootstrap", fmt.Sprintf("gui/%d", uid), plistPath)
-	if out, err := bootstrapCmd.CombinedOutput(); err != nil {
-		// launchctl may fail if the binary has not been cleared by Gatekeeper yet,
-		// but the plist is written and will be picked up on next login.
-		return fmt.Errorf("launchctl bootstrap: %w (output: %s)", err, string(out))
+	// Load the service for the current GUI session immediately.
+	// Using launchctl load (legacy) instead of bootstrap because
+	// "launchctl bootstrap gui/<uid>" returns "Domain does not
+	// support specified action" on macOS 15+: the gui domain is
+	// internally bootstrapped by WindowServer and rejects external
+	// bootstrap calls.
+	loadCmd := exec.Command("launchctl", "load", plistPath)
+	if out, err := loadCmd.CombinedOutput(); err != nil {
+		// launchctl load may fail if the binary has not been cleared
+		// by Gatekeeper yet, but the plist is written and will be
+		// picked up on next login.
+		return fmt.Errorf("launchctl load: %w (output: %s)", err, string(out))
 	}
 
 	return nil
