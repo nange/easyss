@@ -8,6 +8,8 @@
 	<string>Easyss</string>
 	<key>CFBundleExecutable</key>
 	<string>easyss</string>
+	<key>CFBundleIconFile</key>
+	<string>Easyss</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.github.nange.easyss</string>
 	<key>CFBundleInfoDictionaryVersion</key>
