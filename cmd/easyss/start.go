@@ -13,6 +13,9 @@ import (
 )
 
 func runApp(disableTray, daemon bool, app *App) {
+	acquireSingletonLock()
+	defer releaseSingletonLock()
+
 	if !disableTray && (runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux") {
 		// On macOS and Linux, daemonize before starting the tray app so that
 		// closing the terminal does not terminate the process.
