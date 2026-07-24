@@ -344,7 +344,7 @@ func (a *TrayApp) addProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 }
 
 func (a *TrayApp) addCatLogsMenu() {
-	catLog := systray.AddMenuItem("查看运行日志", "")
+	catLog := systray.AddMenuItem("查看日志", "")
 
 	go func() {
 		for {
