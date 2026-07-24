@@ -86,17 +86,10 @@ func enableAutoStart() error {
 		return fmt.Errorf("write plist: %w", err)
 	}
 
-	// Bootstrap the service into the user domain for the current session.
-	// Using "user/<uid>" domain instead of "gui/<uid>" because the gui
-	// domain rejects external bootstrap calls on macOS 15+.
-	uid := os.Getuid()
-	bootstrapCmd := exec.Command("launchctl", "bootstrap", fmt.Sprintf("user/%d", uid), plistPath)
-	if out, err := bootstrapCmd.CombinedOutput(); err != nil {
-		// Bootstrap may fail if the binary has not been cleared by Gatekeeper
-		// yet, but the plist is written and will be picked up on next login.
-		return fmt.Errorf("launchctl bootstrap: %w (output: %s)", err, string(out))
-	}
-
+	// Only write the plist — do NOT load it with launchctl.
+	// launchctl load would start a second instance immediately, causing
+	// duplicate tray icons. The plist has RunAtLoad=true, so macOS will
+	// auto-start the app on next login.
 	return nil
 }
 
@@ -106,10 +99,9 @@ func disableAutoStart() error {
 		return fmt.Errorf("resolve plist path: %w", err)
 	}
 
-	// Bootout the job from the user domain.
-	uid := os.Getuid()
-	bootoutCmd := exec.Command("launchctl", "bootout", fmt.Sprintf("user/%d/com.github.nange.easyss", uid))
-	if out, err := bootoutCmd.CombinedOutput(); err != nil {
+	// Unload the job from the current session.
+	unloadCmd := exec.Command("launchctl", "unload", plistPath)
+	if out, err := unloadCmd.CombinedOutput(); err != nil {
 		// It's OK if the job isn't currently loaded.
 		_ = string(out)
 	}
