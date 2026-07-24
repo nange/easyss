@@ -86,18 +86,15 @@ func enableAutoStart() error {
 		return fmt.Errorf("write plist: %w", err)
 	}
 
-	// Load the service for the current GUI session immediately.
-	// Using launchctl load (legacy) instead of bootstrap because
-	// "launchctl bootstrap gui/<uid>" returns "Domain does not
-	// support specified action" on macOS 15+: the gui domain is
-	// internally bootstrapped by WindowServer and rejects external
-	// bootstrap calls.
-	loadCmd := exec.Command("launchctl", "load", plistPath)
-	if out, err := loadCmd.CombinedOutput(); err != nil {
-		// launchctl load may fail if the binary has not been cleared
-		// by Gatekeeper yet, but the plist is written and will be
-		// picked up on next login.
-		return fmt.Errorf("launchctl load: %w (output: %s)", err, string(out))
+	// Bootstrap the service into the user domain for the current session.
+	// Using "user/<uid>" domain instead of "gui/<uid>" because the gui
+	// domain rejects external bootstrap calls on macOS 15+.
+	uid := os.Getuid()
+	bootstrapCmd := exec.Command("launchctl", "bootstrap", fmt.Sprintf("user/%d", uid), plistPath)
+	if out, err := bootstrapCmd.CombinedOutput(); err != nil {
+		// Bootstrap may fail if the binary has not been cleared by Gatekeeper
+		// yet, but the plist is written and will be picked up on next login.
+		return fmt.Errorf("launchctl bootstrap: %w (output: %s)", err, string(out))
 	}
 
 	return nil
@@ -109,9 +106,9 @@ func disableAutoStart() error {
 		return fmt.Errorf("resolve plist path: %w", err)
 	}
 
-	// Bootout the job from the current session.
+	// Bootout the job from the user domain.
 	uid := os.Getuid()
-	bootoutCmd := exec.Command("launchctl", "bootout", fmt.Sprintf("gui/%d/com.github.nange.easyss", uid))
+	bootoutCmd := exec.Command("launchctl", "bootout", fmt.Sprintf("user/%d/com.github.nange.easyss", uid))
 	if out, err := bootoutCmd.CombinedOutput(); err != nil {
 		// It's OK if the job isn't currently loaded.
 		_ = string(out)
