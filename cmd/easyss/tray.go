@@ -49,10 +49,10 @@ func (a *TrayApp) trayReady() {
 	a.addLogLevelMenu()
 	systray.AddSeparator()
 
-	a.addAutoStartMenu()
+	a.addCatLogsMenu()
 	systray.AddSeparator()
 
-	a.addCatLogsMenu()
+	a.addAutoStartMenu()
 	systray.AddSeparator()
 
 	a.addExitMenu()
