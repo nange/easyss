@@ -45,11 +45,11 @@ func (a *TrayApp) trayReady() {
 	a.SetTunMenu(tunMenu)
 
 	a.addUWPLoopbackMenu()
+
+	a.addLogLevelMenu()
 	systray.AddSeparator()
 
 	a.addAutoStartMenu()
-
-	a.addLogLevelMenu()
 	systray.AddSeparator()
 
 	a.addCatLogsMenu()
