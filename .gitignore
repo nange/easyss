@@ -41,4 +41,5 @@ easyss.apk
 go.work*
 bin/
 
-v3_detailed_design.md/easyss
+v3_detailed_design.md
+/easyss
