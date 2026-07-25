@@ -89,9 +89,11 @@ func runTunOnly(cfg *config.ClientConfig, keepaliveFile string, parentPID int) {
 	log.Info("[TUN-ONLY] tun manager started")
 
 	// Monitor the keepalive file and parent PID. If either disappears, shut down.
+	// Also periodically re-add bypass routes in case they were cleared (sleep/wake).
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
+	var routeCheck time.Time
 	for range ticker.C {
 		if parentPID > 0 && !isProcessAlive(parentPID) {
 			log.Info("[TUN-ONLY] parent process exited, shutting down")
@@ -100,6 +102,12 @@ func runTunOnly(cfg *config.ClientConfig, keepaliveFile string, parentPID int) {
 		if _, err := os.Stat(keepaliveFile); os.IsNotExist(err) {
 			log.Info("[TUN-ONLY] keepalive removed, shutting down")
 			return
+		}
+		// Re-add bypass routes every 10s in case macOS cleared them after
+		// sleep/wake or network changes.
+		if time.Since(routeCheck) > 10*time.Second {
+			routeCheck = time.Now()
+			addServerBypassRoutes(serverIPs, gw, gwV6)
 		}
 	}
 }
