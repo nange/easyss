@@ -314,23 +314,35 @@ func (a *TrayApp) addProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 				}
 			case <-global.ClickedCh:
 				if global.Checked() {
-					if err := a.closeTun2socks(); err != nil {
-						log.Error("[SYSTRAY] close tun2socks", "err", err)
-						continue
+					if !IsRoot() {
+						if err := removeTunKeepalive(); err != nil && !os.IsNotExist(err) {
+							log.Error("[SYSTRAY] remove tun keepalive", "err", err)
+						}
+						a.cfg.Local.EnableTun2socks = false
+					} else {
+						if err := a.closeTun2socks(); err != nil {
+							log.Error("[SYSTRAY] close tun2socks", "err", err)
+							continue
+						}
 					}
 					global.Uncheck()
 				} else {
 					if !IsRoot() {
-						if err := RunMeElevated("-enable-tun2socks"); err != nil {
-							log.Error("[SYSTRAY] run me elevated", "err", err)
+						if err := writeTunKeepalive(); err != nil {
+							log.Error("[SYSTRAY] write tun keepalive", "err", err)
 							continue
 						}
-						systray.Quit()
-						return
-					}
-					if err := a.createTun2socks(); err != nil {
-						log.Error("[SYSTRAY] create tun2socks", "err", err)
-						continue
+						if err := RunMeElevated("-tun-only", "-c", a.configFile); err != nil {
+							log.Error("[SYSTRAY] run me elevated for tun", "err", err)
+							_ = removeTunKeepalive()
+							continue
+						}
+						a.cfg.Local.EnableTun2socks = true
+					} else {
+						if err := a.createTun2socks(); err != nil {
+							log.Error("[SYSTRAY] create tun2socks", "err", err)
+							continue
+						}
 					}
 					global.Check()
 				}

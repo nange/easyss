@@ -273,11 +273,18 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 			return fmt.Errorf("tun: exec create script: %w", err)
 		}
 	case "darwin":
-		cmd := fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s %s %s\" with administrator privileges",
-			namePath, d.Device, d.TunIP, d.TunGW, d.LocalGateway,
-			d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6)
-		if _, err := util.CommandContext(ctx, "osascript", "-e", cmd); err != nil {
-			return fmt.Errorf("tun: exec create script: %w", err)
+		if os.Geteuid() == 0 {
+			if _, err := util.CommandContext(ctx, "sh", namePath, d.Device, d.TunIP, d.TunGW, d.LocalGateway,
+				d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6); err != nil {
+				return fmt.Errorf("tun: exec create script: %w", err)
+			}
+		} else {
+			cmd := fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s %s %s\" with administrator privileges",
+				namePath, d.Device, d.TunIP, d.TunGW, d.LocalGateway,
+				d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6)
+			if _, err := util.CommandContext(ctx, "osascript", "-e", cmd); err != nil {
+				return fmt.Errorf("tun: exec create script: %w", err)
+			}
 		}
 	}
 	return nil
@@ -315,9 +322,13 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 		namePath = newNamePath
 		_, _ = util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device, d.TunGW)
 	case "darwin":
-		cmd := fmt.Sprintf("do shell script \"sh %s %s\" with administrator privileges",
-			namePath, d.Device)
-		_, _ = util.CommandContext(ctx, "osascript", "-e", cmd)
+		if os.Geteuid() == 0 {
+			_, _ = util.CommandContext(ctx, "sh", namePath, d.Device)
+		} else {
+			cmd := fmt.Sprintf("do shell script \"sh %s %s\" with administrator privileges",
+				namePath, d.Device)
+			_, _ = util.CommandContext(ctx, "osascript", "-e", cmd)
+		}
 	}
 	return nil
 }
