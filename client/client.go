@@ -131,6 +131,29 @@ func dialWithConfig(ctx context.Context, cfg *config.ClientConfig, d *dialer.Dia
 	}
 
 	if cfg.Local.EnableTun2socks && d != nil {
+		// Force specific IP version so the direct dialer's socket-binding
+		// (IP_BOUND_IF) is applied. The dialer only handles "tcp4"/"udp4",
+		// not dual-stack "tcp"/"udp".
+		host, _, err := net.SplitHostPort(addr)
+		if err == nil {
+			if ip := net.ParseIP(host); ip != nil {
+				if ip.To4() != nil {
+					switch network {
+					case "tcp":
+						network = "tcp4"
+					case "udp":
+						network = "udp4"
+					}
+				} else {
+					switch network {
+					case "tcp":
+						network = "tcp6"
+					case "udp":
+						network = "udp6"
+					}
+				}
+			}
+		}
 		return d.DialContext(ctx, network, addr)
 	}
 
