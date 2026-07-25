@@ -10,7 +10,7 @@ import (
 )
 
 // runTunOnly is only implemented on Darwin.
-func runTunOnly(_ *config.ClientConfig, _ string) {
+func runTunOnly(_ *config.ClientConfig, _ string, _ int) {
 	fmt.Fprintln(os.Stderr, "tun-only mode is only supported on macOS")
 	os.Exit(1)
 }

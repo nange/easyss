@@ -332,7 +332,8 @@ func (a *TrayApp) addProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 							log.Error("[SYSTRAY] write tun keepalive", "err", err)
 							continue
 						}
-						if err := RunMeElevated("-tun-only", "-c", a.configFile); err != nil {
+						if err := RunMeElevated("-tun-only", "-tun-parent-pid",
+							fmt.Sprintf("%d", os.Getpid()), "-c", a.configFile); err != nil {
 							log.Error("[SYSTRAY] run me elevated for tun", "err", err)
 							_ = removeTunKeepalive()
 							continue

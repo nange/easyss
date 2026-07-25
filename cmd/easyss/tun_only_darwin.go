@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"syscall"
 	"time"
 
 	"github.com/nange/easyss/v3/client"
@@ -19,9 +20,10 @@ import (
 )
 
 // runTunOnly starts a minimal TUN manager as root (launched by the non-root tray process).
-// It monitors the keepalive file; when the file is removed, it performs a clean shutdown.
-func runTunOnly(cfg *config.ClientConfig, keepaliveFile string) {
-	log.Info("[TUN-ONLY] starting tun-only helper")
+// It monitors the keepalive file and the parent PID; if either disappears, it performs a
+// clean shutdown.
+func runTunOnly(cfg *config.ClientConfig, keepaliveFile string, parentPID int) {
+	log.Info("[TUN-ONLY] starting tun-only helper", "parent_pid", parentPID)
 
 	if err := os.WriteFile(keepaliveFile, nil, 0644); err != nil {
 		log.Error("[TUN-ONLY] write keepalive", "err", err)
@@ -86,17 +88,30 @@ func runTunOnly(cfg *config.ClientConfig, keepaliveFile string) {
 
 	log.Info("[TUN-ONLY] tun manager started")
 
-	// Monitor the keepalive file. The non-root tray process removes it
-	// to signal that TUN should be disabled.
+	// Monitor the keepalive file and parent PID. If either disappears, shut down.
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
+		if parentPID > 0 && !isProcessAlive(parentPID) {
+			log.Info("[TUN-ONLY] parent process exited, shutting down")
+			return
+		}
 		if _, err := os.Stat(keepaliveFile); os.IsNotExist(err) {
 			log.Info("[TUN-ONLY] keepalive removed, shutting down")
 			return
 		}
 	}
+}
+
+// isProcessAlive checks whether a process with the given PID exists.
+func isProcessAlive(pid int) bool {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	// Signal 0 is a null signal used for error checking.
+	return process.Signal(syscall.Signal(0)) == nil
 }
 
 // resolveServerIPs resolves all server addresses from the config to IPv4 and IPv6 IPs.

@@ -31,6 +31,7 @@ func main() {
 	var printVer, showConfigExample, showConfigExampleSimple, daemon, disableTray, enableTun2socks, tunOnly bool
 	var configFile, cmdOutboundProto string
 	var pprofEnabled bool
+	var tunParentPID int
 
 	sc := &sharedconfig.SimpleConfig{}
 
@@ -53,6 +54,7 @@ func main() {
 	flag.BoolVar(&disableTray, "disable-tray", false, "disable system tray (windows/mac only)")
 	flag.BoolVar(&enableTun2socks, "enable-tun2socks", false, "enable tun2socks model")
 	flag.BoolVar(&tunOnly, "tun-only", false, "run TUN manager only (macOS privilege separation)")
+	flag.IntVar(&tunParentPID, "tun-parent-pid", 0, "parent PID for tun-only keepalive monitoring")
 	flag.StringVar(&sc.IPV6Rule, "ipv6-rule", "", "set the ipv6 rule(auto, enable, disable), default: auto")
 	flag.StringVar(&sc.DirectFile, "direct-file", "", "custom direct file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
 	flag.StringVar(&sc.ProxyFile, "proxy-file", "", "custom proxy file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
@@ -144,7 +146,7 @@ func main() {
 
 	app := &App{cfg: cfg, configFile: configFile}
 	if tunOnly {
-		runTunOnly(cfg, tunKeepaliveFile)
+		runTunOnly(cfg, tunKeepaliveFile, tunParentPID)
 		return
 	}
 	runApp(disableTray, daemon, app)
