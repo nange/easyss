@@ -26,6 +26,10 @@ func runTunOnly(cfg *config.ClientConfig, keepaliveFile string) {
 	}
 	defer os.Remove(keepaliveFile) //nolint:errcheck
 
+	// Use the direct dialer (bind to physical interface) to prevent transport
+	// connections from being captured by the TUN device this process manages.
+	cfg.Local.EnableTun2socks = true
+
 	// Create client with transport for ICMP proxying through the Easyss server.
 	cli, err := client.New(cfg)
 	if err != nil {
