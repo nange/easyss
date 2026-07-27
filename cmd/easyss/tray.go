@@ -636,10 +636,14 @@ func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
 
 	// Re-enable TUN after restart. For the non-root case we must use the
 	// fd-based helper path; the in-process path only works as root.
+	// Run in a goroutine because the helper spawns osascript which blocks
+	// for the admin password; the menu must remain responsive.
 	if tunWasNonRoot {
-		if err := a.createTun2socksViaHelper(); err != nil {
-			log.Error("[SYSTRAY] restart service: restore tun", "err", err)
-		}
+		go func() {
+			if err := a.createTun2socksViaHelper(); err != nil {
+				log.Error("[SYSTRAY] restart service: restore tun", "err", err)
+			}
+		}()
 	}
 
 	return nil
