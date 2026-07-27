@@ -192,41 +192,48 @@ func recvFdAndDNS(conn net.Conn) (*tunHelperResult, error) {
 		result  *tunHelperResult
 		recvErr error
 	)
-	err = rawConn.Read(func(fd uintptr) bool {
+	ctrlErr := rawConn.Control(func(fd uintptr) {
+		// Switch to blocking mode so Recvmsg waits for data instead of
+		// returning EAGAIN. Restore non-blocking before returning.
+		if err := unix.SetNonblock(int(fd), false); err != nil {
+			recvErr = fmt.Errorf("set blocking: %w", err)
+			return
+		}
+		defer unix.SetNonblock(int(fd), true) //nolint:errcheck
+
 		// Read the fd via SCM_RIGHTS.
 		buf := make([]byte, 1)
 		oob := make([]byte, unix.CmsgSpace(4))
 		_, oobn, _, _, err := unix.Recvmsg(int(fd), buf, oob, 0)
 		if err != nil {
 			recvErr = fmt.Errorf("recvmsg: %w", err)
-			return false
+			return
 		}
 
 		scms, err := unix.ParseSocketControlMessage(oob[:oobn])
 		if err != nil {
 			recvErr = fmt.Errorf("parse control message: %w", err)
-			return false
+			return
 		}
 		if len(scms) == 0 {
 			recvErr = fmt.Errorf("no control message received")
-			return false
+			return
 		}
 
 		fds, err := unix.ParseUnixRights(&scms[0])
 		if err != nil {
 			recvErr = fmt.Errorf("parse unix rights: %w", err)
-			return false
+			return
 		}
 		if len(fds) == 0 {
 			recvErr = fmt.Errorf("no fd received")
-			return false
+			return
 		}
 
 		result = &tunHelperResult{FD: fds[0]}
-		return true
 	})
-	if err != nil {
-		return nil, fmt.Errorf("read control: %w", err)
+	if ctrlErr != nil {
+		return nil, fmt.Errorf("control: %w", ctrlErr)
 	}
 	if recvErr != nil {
 		return nil, recvErr
