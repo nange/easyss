@@ -625,10 +625,11 @@ func (a *TrayApp) closeService() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.browserMenu != nil && a.browserMenu.Checked() {
-		if err := a.setSysProxyOff(); err != nil {
-			log.Error("[SYSTRAY] close service: set sysproxy off", "err", err)
-		}
+	// Always try to clear the system proxy on exit, regardless of the
+	// menu checkmark state (which may be inconsistent with the actual
+	// system setting due to async toggle or startup ordering).
+	if err := a.setSysProxyOff(); err != nil {
+		log.Error("[SYSTRAY] close service: set sysproxy off", "err", err)
 	}
 	a.Stop()
 }
