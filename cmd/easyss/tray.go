@@ -616,6 +616,7 @@ func (a *TrayApp) disableTun2socks() {
 
 func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
 	sysProxyEnabled := a.browserMenu != nil && a.browserMenu.Checked()
+	tunWasEnabled := newCfg.Local.EnableTun2socks
 
 	// Stop the old core (transport, SOCKS5/HTTP servers) but leave TUN
 	// running. The TUN device, routes, and DNS are independent of which
@@ -627,13 +628,20 @@ func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
 	}
 	a.mu.Unlock()
 
-	// Update config and start a new core with the new server.
+	// Prevent a.Start() from trying to create TUN in-process — TUN is
+	// already running and does not need to change on server switch.
+	newCfg.Local.EnableTun2socks = false
+
 	*a.App = App{
 		cfg: newCfg,
 	}
 	if err := a.Start(); err != nil {
 		return err
 	}
+
+	// Restore the TUN flag so the menu and future toggles see it.
+	a.cfg.Local.EnableTun2socks = tunWasEnabled
+	newCfg.Local.EnableTun2socks = tunWasEnabled
 
 	if sysProxyEnabled {
 		if err := a.setSysProxyOn(); err != nil {
