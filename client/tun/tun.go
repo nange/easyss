@@ -261,6 +261,12 @@ func (m *Manager) IsRunning() bool {
 	return m.running
 }
 
+// UpdateICMPHandler replaces the engine's ICMP handler. Used after a
+// server switch to point to the new core's client.
+func (m *Manager) UpdateICMPHandler(h adapter.NetworkHandler) {
+	engine.SetICMPHandler(h)
+}
+
 // DeviceConfig returns the device configuration with platform defaults filled in.
 func (m *Manager) DeviceConfig() DeviceConfig {
 	return m.dev

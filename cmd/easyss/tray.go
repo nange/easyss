@@ -478,11 +478,10 @@ func (a *TrayApp) addExitMenu() {
 		for {
 			select {
 			case <-quit.ClickedCh:
-				// Run cleanup BEFORE quitting the systray. On macOS,
-				// systray.Quit() may not wait for the onExit callback,
-				// so we must clean up here to guarantee the system
-				// proxy is cleared.
-				a.closeService()
+				// Clear the system proxy synchronously — this is fast
+				// and does not require admin. Leave TUN cleanup for
+				// trayExit() to avoid blocking the menu on osascript.
+				_ = a.setSysProxyOff()
 				systray.Quit()
 			case <-a.closing:
 				return
@@ -646,6 +645,14 @@ func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
 	// Restore the old dialer which binds to the physical interface.
 	if saveDialer != nil && a.core.Client != nil {
 		saveDialer(a.core.Client)
+	}
+
+	// Update the TUN manager's ICMP handler to use the new core's client.
+	// The old handler referenced the stopped core which is now invalid.
+	if a.tunMgr != nil && a.tunMgr.IsRunning() && a.core.Client != nil {
+		icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
+		icmpHandler.SetProxy(a.core.StreamHandler, methodFromString(a.cfg.DefaultServer().Method))
+		a.tunMgr.UpdateICMPHandler(icmpHandler)
 	}
 
 	if sysProxyEnabled {
