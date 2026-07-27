@@ -616,11 +616,18 @@ func (a *TrayApp) disableTun2socks() {
 
 func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
 	sysProxyEnabled := a.browserMenu != nil && a.browserMenu.Checked()
-	tunWasEnabled := a.cfg.Local.EnableTun2socks
-	tunWasNonRoot := tunWasEnabled && !IsRoot()
 
-	a.closeService()
+	// Stop the old core (transport, SOCKS5/HTTP servers) but leave TUN
+	// running. The TUN device, routes, and DNS are independent of which
+	// server the transport connects to; tearing them down would trigger
+	// unnecessary osascript admin prompts.
+	a.mu.Lock()
+	if a.core != nil {
+		a.core.Stop()
+	}
+	a.mu.Unlock()
 
+	// Update config and start a new core with the new server.
 	*a.App = App{
 		cfg: newCfg,
 	}
@@ -633,19 +640,6 @@ func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
 			log.Error("[SYSTRAY] restart service: restore sysproxy on", "err", err)
 		}
 	}
-
-	// Re-enable TUN after restart. For the non-root case we must use the
-	// fd-based helper path; the in-process path only works as root.
-	// Run in a goroutine because the helper spawns osascript which blocks
-	// for the admin password; the menu must remain responsive.
-	if tunWasNonRoot {
-		go func() {
-			if err := a.createTun2socksViaHelper(); err != nil {
-				log.Error("[SYSTRAY] restart service: restore tun", "err", err)
-			}
-		}()
-	}
-
 	return nil
 }
 
