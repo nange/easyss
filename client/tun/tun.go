@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/nange/easyss/v3/log"
@@ -23,6 +24,7 @@ const (
 type Config struct {
 	Socks5Addr     string
 	Device         string
+	DeviceFD       int // if >= 0, use fd:// scheme instead of creating device by name
 	MTU            int
 	Interface      string
 	UDPTimeout     time.Duration
@@ -149,9 +151,15 @@ func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
 		engine.SetICMPHandler(icmpH)
 	}
 
+	fdMode := m.cfg.DeviceFD >= 0
+	device := m.cfg.Device
+	if fdMode {
+		device = "fd://" + strconv.Itoa(m.cfg.DeviceFD)
+	}
+
 	key := &engine.Key{
 		MTU:                      m.cfg.MTU,
-		Device:                   m.cfg.Device,
+		Device:                   device,
 		LogLevel:                 m.cfg.LogLevel,
 		UDPTimeout:               m.cfg.UDPTimeout,
 		Proxy:                    m.cfg.Socks5Addr,
@@ -173,16 +181,18 @@ func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
 
 	time.Sleep(500 * time.Millisecond)
 
-	// Save original DNS and set TUN DNS on darwin.
-	if runtime.GOOS == "darwin" {
-		if err := m.saveAndSetDNS(); err != nil {
-			log.Warn("[TUN] set system dns", "err", err)
+	if !fdMode {
+		// Save original DNS and set TUN DNS on darwin.
+		if runtime.GOOS == "darwin" {
+			if err := m.saveAndSetDNS(); err != nil {
+				log.Warn("[TUN] set system dns", "err", err)
+			}
 		}
-	}
 
-	if err := m.createTunDevAndSetIPRoute(); err != nil {
-		engine.Stop()
-		return fmt.Errorf("tun: create device: %w", err)
+		if err := m.createTunDevAndSetIPRoute(); err != nil {
+			engine.Stop()
+			return fmt.Errorf("tun: create device: %w", err)
+		}
 	}
 
 	// Final check: if Stop() cancelled us while the platform script was
@@ -190,7 +200,9 @@ func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
 	select {
 	case <-m.ctx.Done():
 		engine.Stop()
-		_ = m.closeTunDevAndDelIPRoute()
+		if !fdMode {
+			_ = m.closeTunDevAndDelIPRoute()
+		}
 		if runtime.GOOS == "darwin" {
 			_ = m.restoreDNS()
 		}
@@ -199,7 +211,7 @@ func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
 	}
 
 	m.running = true
-	log.Info("[TUN] tun2socks started", "device", m.cfg.Device, "proxy", m.cfg.Socks5Addr)
+	log.Info("[TUN] tun2socks started", "device", device, "proxy", m.cfg.Socks5Addr)
 	return nil
 }
 
@@ -230,8 +242,26 @@ func (m *Manager) Stop() {
 	log.Info("[TUN] tun2socks stopped")
 }
 
+// SetOriginDNS stores the original system DNS before TUN starts.
+// On darwin, this must be called before Start() when using the fd-based
+// startup path (DeviceFD >= 0) because the TUN helper sets the DNS
+// externally and the Manager needs the original values for restore.
+func (m *Manager) SetOriginDNS(dns []string) {
+	m.originDNS = dns
+}
+
+// OriginDNS returns the original system DNS before TUN started.
+func (m *Manager) OriginDNS() []string {
+	return m.originDNS
+}
+
 func (m *Manager) IsRunning() bool {
 	return m.running
+}
+
+// DeviceConfig returns the device configuration with platform defaults filled in.
+func (m *Manager) DeviceConfig() DeviceConfig {
+	return m.dev
 }
 
 func (m *Manager) createTunDevAndSetIPRoute() error {
@@ -351,17 +381,35 @@ func (m *Manager) saveAndSetDNS() error {
 
 func (m *Manager) restoreDNS() error {
 	if len(m.originDNS) == 0 {
-		return util.SetSysDNS([]string{"empty"})
+		return setSysDNSWithElevation([]string{"empty"})
 	}
 
-	curr, err := util.SysDNS()
+	curr, err := sysDNSWithElevation()
 	if err != nil {
 		return err
 	}
 	if !stringSliceEqual(m.originDNS, curr) {
-		return util.SetSysDNS(m.originDNS)
+		return setSysDNSWithElevation(m.originDNS)
 	}
 	return nil
+}
+
+// sysDNSWithElevation returns the current system DNS servers, using osascript
+// elevation on darwin when not running as root.
+func sysDNSWithElevation() ([]string, error) {
+	if runtime.GOOS == "darwin" && os.Geteuid() != 0 {
+		return util.SysDNSViaOSAScript()
+	}
+	return util.SysDNS()
+}
+
+// setSysDNSWithElevation sets the system DNS servers, using osascript
+// elevation on darwin when not running as root.
+func setSysDNSWithElevation(servers []string) error {
+	if runtime.GOOS == "darwin" && os.Geteuid() != 0 {
+		return util.SetSysDNSViaOSAScript(servers)
+	}
+	return util.SetSysDNS(servers)
 }
 
 func stringSliceEqual(a, b []string) bool {

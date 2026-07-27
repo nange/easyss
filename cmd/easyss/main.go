@@ -28,10 +28,13 @@ import (
 )
 
 func main() {
-	var printVer, showConfigExample, showConfigExampleSimple, daemon, disableTray, enableTun2socks, tunOnly bool
+	var printVer, showConfigExample, showConfigExampleSimple, daemon, disableTray, enableTun2socks, tunHelper bool
 	var configFile, cmdOutboundProto string
 	var pprofEnabled bool
-	var tunParentPID int
+
+	// TUN helper flags (used when --tun-helper is set).
+	var thSocketPath, thDevice, thTunIP, thTunGW, thLocalGateway string
+	var thTunIPV6Sub, thTunGWV6, thServerIPV6, thLocalGatewayV6, thDNSServer string
 
 	sc := &sharedconfig.SimpleConfig{}
 
@@ -53,8 +56,17 @@ func main() {
 	flag.BoolVar(&daemon, "daemon", runtime.GOOS != "windows", "run app as daemon")
 	flag.BoolVar(&disableTray, "disable-tray", false, "disable system tray (windows/mac only)")
 	flag.BoolVar(&enableTun2socks, "enable-tun2socks", false, "enable tun2socks model")
-	flag.BoolVar(&tunOnly, "tun-only", false, "run TUN manager only (macOS privilege separation)")
-	flag.IntVar(&tunParentPID, "tun-parent-pid", 0, "parent PID for tun-only keepalive monitoring")
+	flag.BoolVar(&tunHelper, "tun-helper", false, "run TUN helper (macOS privilege separation, internal)")
+	flag.StringVar(&thSocketPath, "tun-helper-socket", "", "Unix socket path for fd passing")
+	flag.StringVar(&thDevice, "tun-helper-device", "", "TUN device name")
+	flag.StringVar(&thTunIP, "tun-helper-tun-ip", "", "TUN IP address")
+	flag.StringVar(&thTunGW, "tun-helper-tun-gw", "", "TUN gateway")
+	flag.StringVar(&thLocalGateway, "tun-helper-local-gateway", "", "Local gateway")
+	flag.StringVar(&thTunIPV6Sub, "tun-helper-tun-ip-v6", "", "TUN IPv6 subnet")
+	flag.StringVar(&thTunGWV6, "tun-helper-tun-gw-v6", "", "TUN IPv6 gateway")
+	flag.StringVar(&thServerIPV6, "tun-helper-server-ip-v6", "", "Server IPv6 address")
+	flag.StringVar(&thLocalGatewayV6, "tun-helper-local-gateway-v6", "", "Local IPv6 gateway")
+	flag.StringVar(&thDNSServer, "tun-helper-dns", "", "DNS server to set during TUN mode")
 	flag.StringVar(&sc.IPV6Rule, "ipv6-rule", "", "set the ipv6 rule(auto, enable, disable), default: auto")
 	flag.StringVar(&sc.DirectFile, "direct-file", "", "custom direct file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
 	flag.StringVar(&sc.ProxyFile, "proxy-file", "", "custom proxy file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
@@ -73,6 +85,14 @@ func main() {
 	if showConfigExampleSimple {
 		fmt.Println(exampleSimpleConfig())
 		os.Exit(0)
+	}
+
+	// TUN helper is a short-lived elevated process that opens the TUN device,
+	// sets up routing/DNS, and passes the fd back to the parent. It does not
+	// need any config — exit immediately after its work is done.
+	if tunHelper {
+		os.Exit(runTunHelper(thSocketPath, thDevice, thTunIP, thTunGW, thLocalGateway,
+			thTunIPV6Sub, thTunGWV6, thServerIPV6, thLocalGatewayV6, thDNSServer))
 	}
 
 	if !filepath.IsAbs(configFile) {
@@ -112,7 +132,8 @@ func main() {
 	log.Init(cfg.Log.FilePath, cfg.Log.Level)
 	log.Info("[EASYSS-V3] " + version.String())
 
-	// Make config file path absolute for the tun-only helper
+	// Make config file path absolute so that any elevated helper
+	// process can find it regardless of working directory.
 	if !filepath.IsAbs(configFile) {
 		if abs, err := filepath.Abs(configFile); err == nil {
 			configFile = abs
@@ -145,10 +166,6 @@ func main() {
 	)
 
 	app := &App{cfg: cfg, configFile: configFile}
-	if tunOnly {
-		runTunOnly(cfg, tunKeepaliveFile, tunParentPID)
-		return
-	}
 	runApp(disableTray, daemon, app)
 }
 
@@ -180,7 +197,7 @@ func (a *App) Start() error {
 		socksProxyAddr := "socks5://127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
 		tunCfg := tun.Config{
 			Socks5Addr: socksProxyAddr,
-			DNSServer:  config.DefaultSystemDNS,
+			DNSServer:  tunDNS(a.cfg),
 		}
 		if ipv6 := a.core.Client.Router().ServerIPV6(); ipv6 != "" {
 			tunCfg.ServerIPV6 = ipv6
@@ -274,6 +291,17 @@ func (a *App) statsLoop() {
 			return
 		}
 	}
+}
+
+// tunDNS returns the DNS server to set on the system during TUN mode.
+// When the built-in DNS forward server is enabled, queries should go to
+// 127.0.0.1 so they are handled and logged by EasySS. Otherwise a public
+// DNS server is used and queries go through the TUN device as raw UDP.
+func tunDNS(cfg *config.ClientConfig) string {
+	if cfg.Local.EnableForwardDNS {
+		return "127.0.0.1"
+	}
+	return config.DefaultSystemDNS
 }
 
 func exampleV3Config() string {

@@ -315,10 +315,10 @@ func (a *TrayApp) addProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 			case <-global.ClickedCh:
 				if global.Checked() {
 					if !IsRoot() {
-						if err := removeTunKeepalive(); err != nil && !os.IsNotExist(err) {
-							log.Error("[SYSTRAY] remove tun keepalive", "err", err)
+						if err := a.closeTun2socks(); err != nil {
+							log.Error("[SYSTRAY] close tun2socks", "err", err)
+							continue
 						}
-						a.cfg.Local.EnableTun2socks = false
 					} else {
 						if err := a.closeTun2socks(); err != nil {
 							log.Error("[SYSTRAY] close tun2socks", "err", err)
@@ -328,17 +328,10 @@ func (a *TrayApp) addProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 					global.Uncheck()
 				} else {
 					if !IsRoot() {
-						if err := writeTunKeepalive(); err != nil {
-							log.Error("[SYSTRAY] write tun keepalive", "err", err)
+						if err := a.createTun2socksViaHelper(); err != nil {
+							log.Error("[SYSTRAY] create tun2socks via helper", "err", err)
 							continue
 						}
-						if err := RunMeElevated("-tun-only", "-tun-parent-pid",
-							fmt.Sprintf("%d", os.Getpid()), "-c", a.configFile); err != nil {
-							log.Error("[SYSTRAY] run me elevated for tun", "err", err)
-							_ = removeTunKeepalive()
-							continue
-						}
-						a.cfg.Local.EnableTun2socks = true
 					} else {
 						if err := a.createTun2socks(); err != nil {
 							log.Error("[SYSTRAY] create tun2socks", "err", err)
@@ -518,7 +511,7 @@ func (a *TrayApp) createTun2socks() error {
 	a.cfg.Local.EnableTun2socks = true
 	a.tunMgr = tun.New(tun.Config{
 		Socks5Addr: fmt.Sprintf("socks5://127.0.0.1:%d", a.cfg.Local.SocksPort),
-		DNSServer:  config.DefaultSystemDNS,
+		DNSServer:  tunDNS(a.cfg),
 	})
 
 	if a.core == nil || a.core.Client == nil {
@@ -530,6 +523,59 @@ func (a *TrayApp) createTun2socks() error {
 	go func() {
 		if err := a.tunMgr.Start(icmpHandler); err != nil {
 			log.Error("[SYSTRAY] tun2socks start", "err", err)
+		}
+	}()
+
+	return nil
+}
+
+// createTun2socksViaHelper spawns a short-lived elevated helper to open the
+// TUN device, set up routes/DNS, and pass the fd back. Then starts tun2socks
+// using the fd-based path.
+func (a *TrayApp) createTun2socksViaHelper() error {
+	if a.tunMgr != nil {
+		return nil
+	}
+
+	if a.core == nil || a.core.Client == nil {
+		return fmt.Errorf("client not initialized")
+	}
+
+	// Build a temporary config to compute the device defaults.
+	tmpCfg := tun.Config{
+		Socks5Addr: fmt.Sprintf("socks5://127.0.0.1:%d", a.cfg.Local.SocksPort),
+		DNSServer:  tunDNS(a.cfg),
+	}
+	if ipv6 := a.core.Client.Router().ServerIPV6(); ipv6 != "" {
+		tmpCfg.ServerIPV6 = ipv6
+	}
+	tmpMgr := tun.New(tmpCfg)
+	devCfg := tmpMgr.DeviceConfig()
+	dns := tunDNS(a.cfg)
+
+	// Spawn the elevated helper to set up the TUN device and get the fd.
+	result, err := SpawnTunHelper(devCfg, dns)
+	if err != nil {
+		return fmt.Errorf("spawn tun helper: %w", err)
+	}
+
+	// Create the real tun manager using the received fd.
+	a.cfg.Local.EnableTun2socks = true
+	a.tunMgr = tun.New(tun.Config{
+		Socks5Addr: fmt.Sprintf("socks5://127.0.0.1:%d", a.cfg.Local.SocksPort),
+		DeviceFD:   result.FD,
+		DNSServer:  dns,
+	})
+	if len(result.OriginDNS) > 0 {
+		a.tunMgr.SetOriginDNS(result.OriginDNS)
+	}
+
+	icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
+	icmpHandler.SetProxy(a.core.StreamHandler, methodFromString(a.cfg.DefaultServer().Method))
+
+	go func() {
+		if err := a.tunMgr.Start(icmpHandler); err != nil {
+			log.Error("[SYSTRAY] tun2socks start (fd)", "err", err)
 		}
 	}()
 

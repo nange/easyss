@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/util"
 )
 
@@ -82,4 +83,9 @@ func RunMeElevated(extraArgs ...string) error {
 
 	_, err = util.Command("pkexec", cmdArgs...)
 	return err
+}
+
+// SpawnTunHelper is only supported on macOS.
+func SpawnTunHelper(dev tun.DeviceConfig, dnsServer string) (*tunHelperResult, error) {
+	return nil, fmt.Errorf("SpawnTunHelper is only supported on macOS")
 }

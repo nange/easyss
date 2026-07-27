@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/textproto"
 	"regexp"
+	"strings"
 )
 
 // NetworkInterface get the active network interface of system
@@ -65,4 +66,63 @@ func SysDNS() ([]string, error) {
 	}
 
 	return ret, nil
+}
+
+// SysDNSViaOSAScript is like SysDNS but runs via osascript with administrator
+// privileges, suitable for use from a non-root process on macOS.
+func SysDNSViaOSAScript() ([]string, error) {
+	ni, err := NetworkInterface()
+	if err != nil {
+		return nil, err
+	}
+	cmd := fmt.Sprintf(`networksetup -getdnsservers "%s"`, strings.ReplaceAll(ni, `"`, `\"`))
+	out, err := runOSAScript(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	var ret []string
+	scanner := bufio.NewScanner(strings.NewReader(out))
+	for scanner.Scan() {
+		ip := strings.TrimSpace(scanner.Text())
+		if IsIP(ip) {
+			ret = append(ret, ip)
+		}
+	}
+	return ret, nil
+}
+
+// SetSysDNSViaOSAScript is like SetSysDNS but runs via osascript with
+// administrator privileges, suitable for use from a non-root process on macOS.
+func SetSysDNSViaOSAScript(servers []string) error {
+	ni, err := NetworkInterface()
+	if err != nil {
+		return err
+	}
+
+	var cmd string
+	if len(servers) == 0 || (len(servers) == 1 && servers[0] == "empty") {
+		cmd = fmt.Sprintf(`networksetup -setdnsservers "%s" Empty`, strings.ReplaceAll(ni, `"`, `\"`))
+	} else {
+		quoted := make([]string, len(servers))
+		for i, s := range servers {
+			quoted[i] = `"` + s + `"`
+		}
+		cmd = fmt.Sprintf(`networksetup -setdnsservers "%s" %s`,
+			strings.ReplaceAll(ni, `"`, `\"`),
+			strings.Join(quoted, " "))
+	}
+	_, err = runOSAScript(cmd)
+	return err
+}
+
+// runOSAScript executes a shell command with administrator privileges via osascript.
+func runOSAScript(shellCmd string) (string, error) {
+	escaped := strings.ReplaceAll(shellCmd, `"`, `\"`)
+	script := fmt.Sprintf(`do shell script "%s" with administrator privileges`, escaped)
+	out, err := Command("osascript", "-e", script)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
 }
