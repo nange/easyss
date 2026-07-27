@@ -314,31 +314,11 @@ func (a *TrayApp) addProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 				}
 			case <-global.ClickedCh:
 				if global.Checked() {
-					if !IsRoot() {
-						if err := a.closeTun2socks(); err != nil {
-							log.Error("[SYSTRAY] close tun2socks", "err", err)
-							continue
-						}
-					} else {
-						if err := a.closeTun2socks(); err != nil {
-							log.Error("[SYSTRAY] close tun2socks", "err", err)
-							continue
-						}
-					}
 					global.Uncheck()
+					go a.disableTun2socks()
 				} else {
-					if !IsRoot() {
-						if err := a.createTun2socksViaHelper(); err != nil {
-							log.Error("[SYSTRAY] create tun2socks via helper", "err", err)
-							continue
-						}
-					} else {
-						if err := a.createTun2socks(); err != nil {
-							log.Error("[SYSTRAY] create tun2socks", "err", err)
-							continue
-						}
-					}
 					global.Check()
+					go a.enableTun2socks(global)
 				}
 			case <-a.closing:
 				return
@@ -589,6 +569,32 @@ func (a *TrayApp) closeTun2socks() error {
 	}
 	a.cfg.Local.EnableTun2socks = false
 	return nil
+}
+
+// enableTun2socks runs the TUN enable flow in a background goroutine so the
+// tray menu remains responsive. On failure it reverts the menu checkmark.
+func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
+	if !IsRoot() {
+		if err := a.createTun2socksViaHelper(); err != nil {
+			log.Error("[SYSTRAY] create tun2socks via helper", "err", err)
+			menu.Uncheck()
+			return
+		}
+	} else {
+		if err := a.createTun2socks(); err != nil {
+			log.Error("[SYSTRAY] create tun2socks", "err", err)
+			menu.Uncheck()
+			return
+		}
+	}
+}
+
+// disableTun2socks runs the TUN disable flow in a background goroutine so
+// the tray menu remains responsive.
+func (a *TrayApp) disableTun2socks() {
+	if err := a.closeTun2socks(); err != nil {
+		log.Error("[SYSTRAY] close tun2socks", "err", err)
+	}
 }
 
 func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
