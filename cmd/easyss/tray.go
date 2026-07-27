@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"fyne.io/systray"
+	"github.com/nange/easyss/v3/client"
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/icon"
@@ -618,12 +619,15 @@ func (a *TrayApp) disableTun2socks() {
 func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
 	sysProxyEnabled := a.browserMenu != nil && a.browserMenu.Checked()
 
-	// Stop the old core (transport, SOCKS5/HTTP servers) but leave TUN
-	// running. The TUN device, routes, and DNS are independent of which
-	// server the transport connects to; tearing them down would trigger
-	// unnecessary osascript admin prompts.
+	// Save the old dialer before stopping the core. Once TUN is active,
+	// SysGatewayAndDevice() returns the TUN gateway, causing newDirectDialer
+	// to bind to the wrong interface. The old dialer was created before
+	// TUN was enabled and correctly binds to the physical NIC.
 	a.mu.Lock()
-	if a.core != nil {
+	var saveDialer func(*client.Client)
+	if a.core != nil && a.core.Client != nil {
+		oldDialer := a.core.Client.DirectDialer()
+		saveDialer = func(c *client.Client) { c.SetDirectDialer(oldDialer) }
 		a.core.Stop()
 	}
 	a.mu.Unlock()
@@ -637,6 +641,12 @@ func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
 	}
 	a.core = core
 	a.cfg = newCfg
+
+	// With TUN active, newDirectDialer may have picked the TUN interface.
+	// Restore the old dialer which binds to the physical interface.
+	if saveDialer != nil && a.core.Client != nil {
+		saveDialer(a.core.Client)
+	}
 
 	if sysProxyEnabled {
 		if err := a.setSysProxyOn(); err != nil {

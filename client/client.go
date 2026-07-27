@@ -241,3 +241,18 @@ func (c *Client) SetProxyRule(rule string) {
 	c.cfg.Routing.ProxyRule = rule
 	c.router.SetProxyRule(pr)
 }
+
+// DirectDialer returns the dialer that binds to the physical network
+// interface, used to bypass TUN when TUN mode is active.
+func (c *Client) DirectDialer() *dialer.Dialer {
+	return c.dialer
+}
+
+// SetDirectDialer replaces the transport's direct dialer. Used after
+// a server switch to preserve the original dialer that was created
+// before TUN routes were installed.
+func (c *Client) SetDirectDialer(d *dialer.Dialer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.dialer = d
+}
