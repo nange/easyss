@@ -14,13 +14,11 @@ import (
 	"time"
 
 	"fyne.io/systray"
-	"github.com/nange/easyss/v3/client"
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/icon"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
-	"github.com/nange/easyss/v3/runner"
 	"github.com/nange/easyss/v3/util"
 )
 
@@ -617,43 +615,24 @@ func (a *TrayApp) disableTun2socks() {
 
 func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
 	sysProxyEnabled := a.browserMenu != nil && a.browserMenu.Checked()
+	tunWasEnabled := a.cfg.Local.EnableTun2socks
 
-	// Save the old dialer before stopping the core. Once TUN is active,
-	// SysGatewayAndDevice() returns the TUN gateway, causing newDirectDialer
-	// to bind to the wrong interface. The old dialer was created before
-	// TUN was enabled and correctly binds to the physical NIC.
-	a.mu.Lock()
-	var saveDialer func(*client.Client)
-	if a.core != nil && a.core.Client != nil {
-		oldDialer := a.core.Client.DirectDialer()
-		saveDialer = func(c *client.Client) { c.SetDirectDialer(oldDialer) }
-		a.core.Stop()
+	// Stop everything including TUN. On macOS this may prompt for admin
+	// credentials to clean up routes and DNS; this matches the old behavior.
+	a.closeService()
+
+	// Prevent a.Start() from trying to recreate TUN — the user must toggle
+	// it manually after the switch. We restore the flag afterward so the
+	// menu checkmark reflects the previous state.
+	newCfg.Local.EnableTun2socks = false
+
+	*a.App = App{
+		cfg: newCfg,
 	}
-	a.mu.Unlock()
-
-	// Start a new core directly without going through a.Start(), which
-	// would try to create TUN in-process (and fail when not root, or
-	// create a duplicate when root). TUN is already running.
-	core, err := runner.Run(newCfg)
-	if err != nil {
+	if err := a.Start(); err != nil {
 		return err
 	}
-	a.core = core
-	a.cfg = newCfg
-
-	// With TUN active, newDirectDialer may have picked the TUN interface.
-	// Restore the old dialer which binds to the physical interface.
-	if saveDialer != nil && a.core.Client != nil {
-		saveDialer(a.core.Client)
-	}
-
-	// Update the TUN manager's ICMP handler to use the new core's client.
-	// The old handler referenced the stopped core which is now invalid.
-	if a.tunMgr != nil && a.tunMgr.IsRunning() && a.core.Client != nil {
-		icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
-		icmpHandler.SetProxy(a.core.StreamHandler, methodFromString(a.cfg.DefaultServer().Method))
-		a.tunMgr.UpdateICMPHandler(icmpHandler)
-	}
+	a.cfg.Local.EnableTun2socks = tunWasEnabled
 
 	if sysProxyEnabled {
 		if err := a.setSysProxyOn(); err != nil {
