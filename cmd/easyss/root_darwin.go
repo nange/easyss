@@ -117,8 +117,6 @@ func SpawnTunHelper(dev tun.DeviceConfig, dnsServer string) (*tunHelperResult, e
 	errCh := make(chan error, 1)
 
 	go func() {
-		defer close(errCh)
-
 		if err := setAcceptDeadline(listener, 30*time.Second); err != nil {
 			errCh <- fmt.Errorf("set accept deadline: %w", err)
 			return

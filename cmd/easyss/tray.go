@@ -73,6 +73,11 @@ func (a *TrayApp) trayExit() {
 	default:
 	}
 	a.closeService()
+
+	// Ensure system proxy is cleared even if closeService encountered
+	// an error (e.g. osascript timeout during DNS restore).
+	_ = a.setSysProxyOff()
+
 	os.Exit(0)
 }
 
@@ -541,6 +546,9 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	result, err := SpawnTunHelper(devCfg, dns)
 	if err != nil {
 		return fmt.Errorf("spawn tun helper: %w", err)
+	}
+	if result == nil {
+		return fmt.Errorf("spawn tun helper: nil result")
 	}
 
 	// Create the real tun manager using the received fd.
