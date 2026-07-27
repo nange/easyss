@@ -300,17 +300,21 @@ func (a *TrayApp) addProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 			select {
 			case <-browser.ClickedCh:
 				if browser.Checked() {
-					if err := a.setSysProxyOff(); err != nil {
-						log.Error("[SYSTRAY] set sys-proxy off", "err", err)
-						continue
-					}
 					browser.Uncheck()
+					go func() {
+						if err := a.setSysProxyOff(); err != nil {
+							log.Error("[SYSTRAY] set sys-proxy off", "err", err)
+							browser.Check() // revert on failure
+						}
+					}()
 				} else {
-					if err := a.setSysProxyOn(); err != nil {
-						log.Error("[SYSTRAY] set sys-proxy on", "err", err)
-						continue
-					}
 					browser.Check()
+					go func() {
+						if err := a.setSysProxyOn(); err != nil {
+							log.Error("[SYSTRAY] set sys-proxy on", "err", err)
+							browser.Uncheck() // revert on failure
+						}
+					}()
 				}
 			case <-global.ClickedCh:
 				if global.Checked() {
