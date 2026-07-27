@@ -476,6 +476,11 @@ func (a *TrayApp) addExitMenu() {
 		for {
 			select {
 			case <-quit.ClickedCh:
+				// Run cleanup BEFORE quitting the systray. On macOS,
+				// systray.Quit() may not wait for the onExit callback,
+				// so we must clean up here to guarantee the system
+				// proxy is cleared.
+				a.closeService()
 				systray.Quit()
 			case <-a.closing:
 				return
