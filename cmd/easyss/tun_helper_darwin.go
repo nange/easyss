@@ -36,17 +36,18 @@ func runTunHelper(socketPath, device, tunIP, tunGW, localGateway,
 	}
 
 	// 2. Open the TUN device.
-	tunFd, err := openTunDevice(device)
+	tunFd, actualDevice, err := openTunDevice(device)
 	if err != nil {
 		log.Error("[TUN-HELPER] open tun device", "device", device, "err", err)
 		return 1
 	}
+	log.Info("[TUN-HELPER] device created", "requested", device, "actual", actualDevice)
 
 	// Give the kernel a brief moment to initialize the interface.
 	time.Sleep(200 * time.Millisecond)
 
 	// 3. Run the create script (ifconfig + route add).
-	if err := runCreateScript(device, tunIP, tunGW, localGateway,
+	if err := runCreateScript(actualDevice, tunIP, tunGW, localGateway,
 		tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6); err != nil {
 		log.Error("[TUN-HELPER] run create script", "err", err)
 		_ = unix.Close(tunFd)
@@ -75,21 +76,22 @@ func runTunHelper(socketPath, device, tunIP, tunGW, localGateway,
 }
 
 // openTunDevice creates a TUN device on macOS using the SYSPROTO_CONTROL
-// kernel control socket mechanism. It returns the raw file descriptor.
-func openTunDevice(name string) (int, error) {
+// kernel control socket mechanism. It returns the raw file descriptor and
+// the actual interface name assigned by the kernel.
+func openTunDevice(name string) (int, string, error) {
 	// Parse the unit number from the device name (e.g. "utun9" → 9).
 	ifIndex := -1
 	if name != "utun" {
 		_, err := fmt.Sscanf(name, "utun%d", &ifIndex)
 		if err != nil || ifIndex < 0 {
-			return -1, fmt.Errorf("invalid interface name %q: must be utun[0-9]*", name)
+			return -1, "", fmt.Errorf("invalid interface name %q: must be utun[0-9]*", name)
 		}
 	}
 
 	// 1. Open a kernel control socket (AF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL=2).
 	fd, err := unix.Socket(unix.AF_SYSTEM, unix.SOCK_DGRAM, 2)
 	if err != nil {
-		return -1, fmt.Errorf("socket(AF_SYSTEM): %w", err)
+		return -1, "", fmt.Errorf("socket(AF_SYSTEM): %w", err)
 	}
 
 	// 2. Resolve the utun kernel control ID.
@@ -97,27 +99,34 @@ func openTunDevice(name string) (int, error) {
 	copy(ctlInfo.Name[:], []byte(utunControlName))
 	if err := unix.IoctlCtlInfo(fd, ctlInfo); err != nil {
 		unix.Close(fd) //nolint:errcheck
-		return -1, fmt.Errorf("ioctl CTLIOCGINFO: %w", err)
+		return -1, "", fmt.Errorf("ioctl CTLIOCGINFO: %w", err)
 	}
 
 	// 3. Connect to the utun control — this creates the utunN interface.
-	//    The Unit field uses ifIndex+1 convention (0 means auto-assign).
 	sc := &unix.SockaddrCtl{
 		ID:   ctlInfo.Id,
 		Unit: uint32(ifIndex) + 1,
 	}
 	if err := unix.Connect(fd, sc); err != nil {
 		unix.Close(fd) //nolint:errcheck
-		return -1, fmt.Errorf("connect utun control: %w", err)
+		return -1, "", fmt.Errorf("connect utun control: %w", err)
 	}
 
-	// 4. Set non-blocking mode (expected by tun2socks iobased endpoint).
+	// 4. Query the actual interface name the kernel assigned (may differ
+	//    from the requested name if the unit was already in use).
+	actualName, err := unix.GetsockoptString(fd, 2 /* SYSPROTO_CONTROL */, 2 /* UTUN_OPT_IFNAME */)
+	if err != nil {
+		unix.Close(fd) //nolint:errcheck
+		return -1, "", fmt.Errorf("getsockopt UTUN_OPT_IFNAME: %w", err)
+	}
+
+	// 5. Set non-blocking mode.
 	if err := unix.SetNonblock(fd, true); err != nil {
 		unix.Close(fd) //nolint:errcheck
-		return -1, fmt.Errorf("set nonblock: %w", err)
+		return -1, "", fmt.Errorf("set nonblock: %w", err)
 	}
 
-	return fd, nil
+	return fd, actualName, nil
 }
 
 // runCreateScript writes the embedded create_tun_dev_darwin.sh to a temp file
