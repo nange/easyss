@@ -46,7 +46,12 @@ func runTunHelper(socketPath, device, tunIP, tunGW, localGateway,
 	// Give the kernel a brief moment to initialize the interface.
 	time.Sleep(200 * time.Millisecond)
 
-	// 3. Run the create script (ifconfig + route add).
+	// 3. Clean up any stale routes from a previous TUN session before
+	//    adding new ones. This handles the case where StopEngineOnly()
+	//    was called (server switch) and left dead routes behind.
+	_ = runCloseScript(actualDevice, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6)
+
+	// 4. Run the create script (ifconfig + route add).
 	if err := runCreateScript(actualDevice, tunIP, tunGW, localGateway,
 		tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6); err != nil {
 		log.Error("[TUN-HELPER] run create script", "err", err)
@@ -148,6 +153,24 @@ func runCreateScript(device, tunIP, tunGW, localGateway,
 	if err != nil {
 		return fmt.Errorf("exec create script: %w", err)
 	}
+	return nil
+}
+
+// runCloseScript writes the embedded close_tun_dev_darwin.sh to a temp file
+// and executes it. Errors (e.g. routes that don't exist yet) are ignored
+// since this is best-effort cleanup before recreating routes.
+func runCloseScript(device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6 string) error {
+	if scripts.CloseTunBytes == nil {
+		return nil
+	}
+
+	namePath, err := util.WriteToTemp(scripts.CloseTunFilename, scripts.CloseTunBytes)
+	if err != nil {
+		return nil // best-effort
+	}
+	defer os.RemoveAll(filepath.Dir(namePath)) //nolint:errcheck
+
+	_, _ = util.Command("sh", namePath, device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6)
 	return nil
 }
 
