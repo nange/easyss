@@ -617,19 +617,10 @@ func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
 	sysProxyEnabled := a.browserMenu != nil && a.browserMenu.Checked()
 	tunWasEnabled := a.cfg.Local.EnableTun2socks
 
-	// Stop the engine and core, but skip route/DNS cleanup — they are
-	// server-independent and cleaning them up triggers osascript admin
-	// prompts which block the menu. The user can toggle TUN off/on to
-	// do a full restart later.
-	a.mu.Lock()
-	if a.tunMgr != nil {
-		a.tunMgr.StopEngineOnly()
-		a.tunMgr = nil
-	}
-	if a.core != nil {
-		a.core.Stop()
-	}
-	a.mu.Unlock()
+	// Stop everything including TUN. On macOS this prompts for admin
+	// credentials to clean up routes and DNS — acceptable during a
+	// manual server switch.
+	a.closeService()
 
 	// Prevent a.Start() from recreating TUN.
 	newCfg.Local.EnableTun2socks = false
