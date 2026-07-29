@@ -170,14 +170,12 @@ func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
 	}
 
 	engine.Insert(key)
-	if err := engine.Start(); err != nil {
-		return fmt.Errorf("tun: engine start: %w", err)
-	}
+	engine.Start()
 
 	// Allow Stop() to cancel us before we touch routes / DNS.
 	select {
 	case <-m.ctx.Done():
-		_ = engine.Stop()
+		engine.Stop()
 		return m.ctx.Err()
 	default:
 	}
@@ -193,7 +191,7 @@ func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
 		}
 
 		if err := m.createTunDevAndSetIPRoute(); err != nil {
-			_ = engine.Stop()
+			engine.Stop()
 			return fmt.Errorf("tun: create device: %w", err)
 		}
 	}
@@ -202,7 +200,7 @@ func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
 	// running, undo everything we just set up.
 	select {
 	case <-m.ctx.Done():
-		_ = engine.Stop()
+		engine.Stop()
 		if !fdMode {
 			_ = m.closeTunDevAndDelIPRoute()
 		}
@@ -234,7 +232,7 @@ func (m *Manager) Stop() {
 	}
 
 	log.Info("[TUN] Stop: calling engine.Stop")
-	_ = engine.Stop()
+	engine.Stop()
 	log.Info("[TUN] Stop: engine.Stop done")
 
 	if !m.cfg.SkipRouteCleanup {
@@ -263,7 +261,7 @@ func (m *Manager) StopEngineOnly() {
 	if !m.running {
 		return
 	}
-	_ = engine.Stop()
+	engine.Stop()
 	m.running = false
 	log.Info("[TUN] tun2socks engine stopped")
 }
