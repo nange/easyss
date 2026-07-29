@@ -158,6 +158,10 @@ func (m *Manager) Start() error {
 		device = "fd://" + strconv.Itoa(m.cfg.DeviceFD)
 	}
 
+	if err := ensureWintun(); err != nil {
+		return fmt.Errorf("tun: extract wintun.dll: %w", err)
+	}
+
 	key := &engine.Key{
 		MTU:                      m.cfg.MTU,
 		Device:                   device,
