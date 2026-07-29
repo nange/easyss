@@ -13,16 +13,17 @@ import (
 )
 
 func runApp(disableTray, daemon bool, app *App) {
+	// On macOS and Linux, daemonize before acquiring the singleton lock so that
+	// closing the terminal does not terminate the process. The lock must be
+	// acquired by the child process, not the parent.
+	if daemon && runtime.GOOS != "windows" {
+		runDaemon()
+	}
+
 	acquireSingletonLock()
 	defer releaseSingletonLock()
 
 	if !disableTray && (runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux") {
-		// On macOS and Linux, daemonize before starting the tray app so that
-		// closing the terminal does not terminate the process.
-		if daemon && runtime.GOOS != "windows" {
-			runDaemon()
-		}
-
 		ta := &TrayApp{
 			App:     app,
 			closing: make(chan struct{}),
@@ -42,8 +43,6 @@ func runApp(disableTray, daemon bool, app *App) {
 		}()
 
 		systray.Run(ta.trayReady, ta.trayExit)
-	} else if daemon && runtime.GOOS != "windows" {
-		runDaemon()
 	} else {
 		proxyWasSet := false
 		if !app.cfg.Local.DisableSysProxy && app.cfg.Local.HTTPPort > 0 {

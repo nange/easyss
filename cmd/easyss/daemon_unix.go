@@ -14,19 +14,14 @@ import (
 func runDaemon() {
 	exe, _ := os.Executable()
 
-	// Build args for child process, stripping --daemon* flags and appending --daemon=false
-	// to prevent infinite daemonization loops.
+	// Build args for child process, stripping -daemon/--daemon flags and appending
+	// --daemon=false to prevent infinite daemonization loops.
 	var args []string
-	skipNext := false
 	for _, arg := range os.Args[1:] {
-		if skipNext {
-			skipNext = false
+		if arg == "-daemon" || arg == "--daemon" {
 			continue
 		}
-		if arg == "--daemon" {
-			continue
-		}
-		if strings.HasPrefix(arg, "--daemon=") {
+		if strings.HasPrefix(arg, "-daemon=") || strings.HasPrefix(arg, "--daemon=") {
 			continue
 		}
 		args = append(args, arg)
