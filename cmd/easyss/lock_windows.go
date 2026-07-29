@@ -21,7 +21,7 @@ func acquireSingletonLock() {
 		os.Exit(1)
 	}
 	if windows.GetLastError() == windows.ERROR_ALREADY_EXISTS {
-		windows.CloseHandle(handle)
+		_ = windows.CloseHandle(handle)
 		log.Warn("[EASYSS-V3] another instance is already running, exiting")
 		os.Exit(0)
 	}
@@ -31,7 +31,7 @@ func acquireSingletonLock() {
 // releaseSingletonLock releases the named mutex.
 func releaseSingletonLock() {
 	if winLockHandle != 0 {
-		windows.CloseHandle(winLockHandle)
+		_ = windows.CloseHandle(winLockHandle)
 		winLockHandle = 0
 	}
 }
