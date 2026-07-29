@@ -3,8 +3,10 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -12,6 +14,20 @@ import (
 )
 
 func runDaemon() {
+	lockPath := filepath.Join(os.TempDir(), fmt.Sprintf("easyss-%d.lock", os.Getuid()))
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		log.Error("[EASYSS-V3] daemon lock check failed", "err", err)
+		os.Exit(1)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		log.Info("[EASYSS-V3] daemon already running, exiting")
+		_ = f.Close()
+		os.Exit(0)
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	_ = f.Close()
+
 	exe, _ := os.Executable()
 
 	// Build args for child process, stripping -daemon/--daemon flags and appending
