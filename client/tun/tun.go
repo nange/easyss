@@ -12,7 +12,6 @@ import (
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/scripts"
 	"github.com/nange/easyss/v3/util"
-	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"github.com/xjasonlyu/tun2socks/v2/engine"
 )
 
@@ -58,6 +57,7 @@ type Manager struct {
 	dev       DeviceConfig
 	running   bool
 	originDNS []string // original system DNS before TUN starts (darwin only)
+	icmpH     *ICMPHandler
 
 	ctx    context.Context    // cancels an in-progress Start()
 	cancel context.CancelFunc // stored so Stop() can cancel the Start() goroutine
@@ -132,7 +132,7 @@ func New(cfg Config) *Manager {
 	}
 }
 
-func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
+func (m *Manager) Start() error {
 	if scripts.CreateTunBytes == nil || scripts.CloseTunBytes == nil {
 		return fmt.Errorf("tun: unsupported os %s", runtime.GOOS)
 	}
@@ -148,8 +148,8 @@ func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
 	default:
 	}
 
-	if icmpH != nil {
-		engine.SetICMPHandler(icmpH)
+	if m.icmpH != nil {
+		engine.SetICMPHandler(m.icmpH)
 	}
 
 	fdMode := m.cfg.DeviceFD >= 0
@@ -283,9 +283,10 @@ func (m *Manager) IsRunning() bool {
 	return m.running
 }
 
-// UpdateICMPHandler replaces the engine's ICMP handler. Used after a
-// server switch to point to the new core's client.
-func (m *Manager) UpdateICMPHandler(h adapter.NetworkHandler) {
+// SetICMPHandler stores the ICMP handler and registers it with the engine.
+// Safe to call before or after Start(); idempotent.
+func (m *Manager) SetICMPHandler(h *ICMPHandler) {
+	m.icmpH = h
 	engine.SetICMPHandler(h)
 }
 

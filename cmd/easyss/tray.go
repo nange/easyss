@@ -520,9 +520,10 @@ func (a *TrayApp) createTun2socks() error {
 	}
 	icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
 	icmpHandler.SetProxy(a.core.StreamHandler, methodFromString(a.cfg.DefaultServer().Method))
+	a.tunMgr.SetICMPHandler(icmpHandler)
 
 	go func() {
-		if err := a.tunMgr.Start(icmpHandler); err != nil {
+		if err := a.tunMgr.Start(); err != nil {
 			log.Error("[SYSTRAY] tun2socks start", "err", err)
 		}
 	}()
@@ -620,9 +621,10 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 
 	icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
 	icmpHandler.SetProxy(a.core.StreamHandler, methodFromString(a.cfg.DefaultServer().Method))
+	a.tunMgr.SetICMPHandler(icmpHandler)
 
 	go func() {
-		if err := a.tunMgr.Start(icmpHandler); err != nil {
+		if err := a.tunMgr.Start(); err != nil {
 			log.Error("[SYSTRAY] tun2socks start (fd)", "err", err)
 		}
 	}()

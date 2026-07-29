@@ -207,9 +207,10 @@ func (a *App) Start() error {
 			}
 			icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
 			icmpHandler.SetProxy(a.core.StreamHandler, method)
+			a.tunMgr.SetICMPHandler(icmpHandler)
 
 			go func() {
-				if err := a.tunMgr.Start(icmpHandler); err != nil {
+				if err := a.tunMgr.Start(); err != nil {
 					log.Error("[EASYSS-V3] tun2socks", "err", err)
 				}
 			}()
