@@ -23,7 +23,7 @@ const (
 type Config struct {
 	Socks5Addr       string
 	Device           string
-	DeviceFD         int  // if >= 0, use fd:// scheme instead of creating device by name
+	DeviceFD         int  // if > 0, use fd:// scheme instead of creating device by name; 0 means create by name
 	SkipRouteCleanup bool // darwin: helper handles route/DNS cleanup, main process skips it in Stop()
 	MTU              int
 	Interface        string
@@ -152,7 +152,7 @@ func (m *Manager) Start() error {
 		engine.SetICMPHandler(m.icmpH)
 	}
 
-	fdMode := m.cfg.DeviceFD >= 0
+	fdMode := m.cfg.DeviceFD > 0
 	device := m.cfg.Device
 	if fdMode {
 		device = "fd://" + strconv.Itoa(m.cfg.DeviceFD)
