@@ -22,22 +22,23 @@ const (
 )
 
 type Config struct {
-	Socks5Addr     string
-	Device         string
-	DeviceFD       int // if >= 0, use fd:// scheme instead of creating device by name
-	MTU            int
-	Interface      string
-	UDPTimeout     time.Duration
-	LogLevel       string
-	TunIP          string
-	TunGW          string
-	TunMask        string
-	TunIPV6Sub     string
-	TunGWV6        string
-	ServerIPV6     string
-	LocalGateway   string
-	LocalGatewayV6 string
-	DNSServer      string // DNS server to set during TUN mode (darwin only)
+	Socks5Addr       string
+	Device           string
+	DeviceFD         int  // if >= 0, use fd:// scheme instead of creating device by name
+	SkipRouteCleanup bool // darwin: helper handles route/DNS cleanup, main process skips it in Stop()
+	MTU              int
+	Interface        string
+	UDPTimeout       time.Duration
+	LogLevel         string
+	TunIP            string
+	TunGW            string
+	TunMask          string
+	TunIPV6Sub       string
+	TunGWV6          string
+	ServerIPV6       string
+	LocalGateway     string
+	LocalGatewayV6   string
+	DNSServer        string // DNS server to set during TUN mode (darwin only)
 }
 
 type DeviceConfig struct {
@@ -222,21 +223,28 @@ func (m *Manager) Stop() {
 	// finish cleaning up before we proceed.
 	if m.cancel != nil {
 		m.cancel()
+		log.Info("[TUN] Stop: waiting for Start goroutine to finish")
 		<-m.done
+		log.Info("[TUN] Stop: Start goroutine done")
 	}
 
 	if !m.running {
+		log.Info("[TUN] Stop: not running, returning")
 		return
 	}
 
+	log.Info("[TUN] Stop: calling engine.Stop")
 	_ = engine.Stop()
+	log.Info("[TUN] Stop: engine.Stop done")
 
-	_ = m.closeTunDevAndDelIPRoute()
+	if !m.cfg.SkipRouteCleanup {
+		_ = m.closeTunDevAndDelIPRoute()
 
-	// Restore original DNS on darwin.
-	if runtime.GOOS == "darwin" {
-		if err := m.restoreDNS(); err != nil {
-			log.Warn("[TUN] restore system dns", "err", err)
+		// Restore original DNS on darwin.
+		if runtime.GOOS == "darwin" {
+			if err := m.restoreDNS(); err != nil {
+				log.Warn("[TUN] restore system dns", "err", err)
+			}
 		}
 	}
 

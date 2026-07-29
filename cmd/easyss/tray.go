@@ -5,9 +5,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/user"
 	"runtime"
 	"sync"
@@ -15,11 +17,13 @@ import (
 
 	"fyne.io/systray"
 	"github.com/nange/easyss/v3/client/config"
+	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/icon"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/util"
+	"golang.org/x/sys/unix"
 )
 
 type TrayApp struct {
@@ -28,6 +32,11 @@ type TrayApp struct {
 	mu          sync.RWMutex
 	browserMenu *systray.MenuItem
 	tunMenu     *systray.MenuItem
+
+	// TUN helper management (darwin non-root).
+	tunHelperCmd   *exec.Cmd
+	tunHelperStdin io.WriteCloser // FIFO writer; close to signal helper shutdown
+	tunHelperMu    sync.Mutex
 }
 
 func (a *TrayApp) trayReady() {
@@ -322,6 +331,7 @@ func (a *TrayApp) addProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 					}()
 				}
 			case <-global.ClickedCh:
+				log.Info("[SYSTRAY] tun menu clicked", "checked", global.Checked())
 				if global.Checked() {
 					global.Uncheck()
 					go a.disableTun2socks()
@@ -522,11 +532,19 @@ func (a *TrayApp) createTun2socks() error {
 	return nil
 }
 
-// createTun2socksViaHelper spawns a short-lived elevated helper to open the
-// TUN device, set up routes/DNS, and pass the fd back. Then starts tun2socks
-// using the fd-based path.
+// createTun2socksViaHelper spawns a long-running elevated helper to open the
+// TUN device, set up routes/DNS, and pass the fd back. The helper stays alive
+// monitoring its stdin (a FIFO) for the main process lifecycle signal.
 func (a *TrayApp) createTun2socksViaHelper() error {
+	a.tunHelperMu.Lock()
+	defer a.tunHelperMu.Unlock()
+
+	log.Info("[SYSTRAY] createTun2socksViaHelper called",
+		"tunMgrNil", a.tunMgr == nil,
+		"coreNil", a.core == nil)
+
 	if a.tunMgr != nil {
+		log.Warn("[SYSTRAY] tunMgr already set, skipping create")
 		return nil
 	}
 
@@ -534,7 +552,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 		return fmt.Errorf("client not initialized")
 	}
 
-	// Build a temporary config to compute the device defaults.
+	// 1. Build TunConfig from the temporary manager to get device defaults.
 	tmpCfg := tun.Config{
 		Socks5Addr: fmt.Sprintf("socks5://127.0.0.1:%d", a.cfg.Local.SocksPort),
 		DNSServer:  tunDNS(a.cfg),
@@ -544,27 +562,63 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	}
 	tmpMgr := tun.New(tmpCfg)
 	devCfg := tmpMgr.DeviceConfig()
-	dns := tunDNS(a.cfg)
 
-	// Spawn the elevated helper to set up the TUN device and get the fd.
-	result, err := SpawnTunHelper(devCfg, dns)
+	tunHTTPCfg := &proxy.TunConfig{
+		Socks5Addr:     fmt.Sprintf("socks5://127.0.0.1:%d", a.cfg.Local.SocksPort),
+		DNSAddr:        tunDNS(a.cfg),
+		Device:         devCfg.Device,
+		TunIP:          devCfg.TunIP,
+		TunGW:          devCfg.TunGW,
+		TunMask:        devCfg.TunMask,
+		TunIPV6Sub:     devCfg.TunIPV6Sub,
+		TunGWV6:        devCfg.TunGWV6,
+		ServerIPV6:     devCfg.ServerIPV6,
+		LocalGateway:   devCfg.LocalGateway,
+		LocalGatewayV6: devCfg.LocalGatewayV6,
+		MTU:            1500,
+	}
+
+	// 2. Register the config so the helper can fetch it via GET /tun.
+	if a.core.HTTPServer == nil {
+		return fmt.Errorf("http proxy server not started")
+	}
+	a.core.HTTPServer.SetTunConfig(tunHTTPCfg)
+
+	// 3. Spawn the elevated helper.
+	fdSocketPath := fmt.Sprintf("/tmp/easyss-tun-fd-%d.sock", os.Getpid())
+	cmd, fifoWriter, fdListener, err := SpawnTunHelper(a.cfg.Local.HTTPPort, fdSocketPath,
+		a.cfg.Log.FilePath, a.cfg.Log.Level)
 	if err != nil {
+		a.core.HTTPServer.ClearTunConfig()
 		return fmt.Errorf("spawn tun helper: %w", err)
 	}
-	if result == nil {
-		return fmt.Errorf("spawn tun helper: nil result")
+
+	// 4. Receive the TUN fd from the helper.
+	fd, err := ReceiveFd(fdListener)
+	fdListener.Close()      //nolint:errcheck
+	os.Remove(fdSocketPath) //nolint:errcheck
+	if err != nil {
+		fifoWriter.Close() //nolint:errcheck
+		a.core.HTTPServer.ClearTunConfig()
+		return fmt.Errorf("receive tun fd: %w", err)
 	}
 
-	// Create the real tun manager using the received fd.
+	// Ensure the fd is non-blocking so Go's netpoller (kqueue) reliably
+	// wakes up the iobased dispatchLoop when engine.Stop() closes the fd.
+	// The O_NONBLOCK flag may be lost during SCM_RIGHTS transfer on macOS.
+	if err := unix.SetNonblock(fd, true); err != nil {
+		fifoWriter.Close() //nolint:errcheck
+		a.core.HTTPServer.ClearTunConfig()
+		return fmt.Errorf("set nonblock: %w", err)
+	}
+
+	// 5. Create the tun manager using the received fd.
 	a.cfg.Local.EnableTun2socks = true
 	a.tunMgr = tun.New(tun.Config{
-		Socks5Addr: fmt.Sprintf("socks5://127.0.0.1:%d", a.cfg.Local.SocksPort),
-		DeviceFD:   result.FD,
-		DNSServer:  dns,
+		Socks5Addr:       fmt.Sprintf("socks5://127.0.0.1:%d", a.cfg.Local.SocksPort),
+		DeviceFD:         fd,
+		SkipRouteCleanup: true, // helper handles route/DNS cleanup
 	})
-	if len(result.OriginDNS) > 0 {
-		a.tunMgr.SetOriginDNS(result.OriginDNS)
-	}
 
 	icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
 	icmpHandler.SetProxy(a.core.StreamHandler, methodFromString(a.cfg.DefaultServer().Method))
@@ -575,14 +629,49 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 		}
 	}()
 
+	a.tunHelperCmd = cmd
+	a.tunHelperStdin = fifoWriter
+
 	return nil
 }
 
 func (a *TrayApp) closeTun2socks() error {
+	a.tunHelperMu.Lock()
+	defer a.tunHelperMu.Unlock()
+
+	log.Info("[SYSTRAY] closeTun2socks called",
+		"stdinNil", a.tunHelperStdin == nil,
+		"tunMgrNil", a.tunMgr == nil,
+		"cmdNil", a.tunHelperCmd == nil)
+
+	// 1. Signal the helper to shut down by closing the FIFO.
+	//    The helper detects EOF on stdin, cleans up routes/DNS, and exits.
+	if a.tunHelperStdin != nil {
+		a.tunHelperStdin.Close() //nolint:errcheck
+		a.tunHelperStdin = nil
+	}
+	log.Info("[SYSTRAY] closeTun2socks: fifo closed, stopping engine")
+
+	// 2. Stop the tun2socks engine (no route/DNS cleanup — helper handles it).
 	if a.tunMgr != nil {
+		log.Info("[SYSTRAY] closeTun2socks: calling tunMgr.Stop")
 		a.tunMgr.Stop()
+		log.Info("[SYSTRAY] closeTun2socks: tunMgr.Stop done")
 		a.tunMgr = nil
 	}
+
+	// 3. The helper coordinates with any previous instance via a file lock
+	//    (/tmp/easyss-tun.lock). No need to wait here — the next helper
+	//    will block on the lock until this one exits and releases it.
+
+	// 4. Clean up the FIFO and clear the HTTP /tun config.
+	fifoPath := fmt.Sprintf("/tmp/easyss-tun-ctrl-%d.fifo", os.Getpid())
+	os.Remove(fifoPath) //nolint:errcheck
+
+	if a.core != nil && a.core.HTTPServer != nil {
+		a.core.HTTPServer.ClearTunConfig()
+	}
+
 	a.cfg.Local.EnableTun2socks = false
 	return nil
 }
@@ -590,6 +679,7 @@ func (a *TrayApp) closeTun2socks() error {
 // enableTun2socks runs the TUN enable flow in a background goroutine so the
 // tray menu remains responsive. On failure it reverts the menu checkmark.
 func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
+	log.Info("[SYSTRAY] enableTun2socks called", "isRoot", IsRoot())
 	if !IsRoot() {
 		if err := a.createTun2socksViaHelper(); err != nil {
 			log.Error("[SYSTRAY] create tun2socks via helper", "err", err)
@@ -608,6 +698,7 @@ func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 // disableTun2socks runs the TUN disable flow in a background goroutine so
 // the tray menu remains responsive.
 func (a *TrayApp) disableTun2socks() {
+	log.Info("[SYSTRAY] disableTun2socks called")
 	if err := a.closeTun2socks(); err != nil {
 		log.Error("[SYSTRAY] close tun2socks", "err", err)
 	}
@@ -651,6 +742,14 @@ func (a *TrayApp) closeService() {
 	if err := a.setSysProxyOff(); err != nil {
 		log.Error("[SYSTRAY] close service: set sysproxy off", "err", err)
 	}
+
+	// Stop TUN helper and engine before stopping the core services.
+	// On non-darwin or root, closeTun2socks is a no-op if TUN was not
+	// started via helper.
+	if err := a.closeTun2socks(); err != nil {
+		log.Error("[SYSTRAY] close service: close tun2socks", "err", err)
+	}
+
 	a.Stop()
 }
 

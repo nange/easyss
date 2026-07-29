@@ -8,8 +8,7 @@ import (
 )
 
 // runTunHelper is a no-op on non-darwin platforms.
-func runTunHelper(socketPath, device, tunIP, tunGW, localGateway,
-	tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6, dnsServer string) int {
+func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	fmt.Fprintln(os.Stderr, "tun helper is only supported on macOS")
 	return 1
 }
