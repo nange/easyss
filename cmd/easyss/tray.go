@@ -706,15 +706,19 @@ func (a *TrayApp) disableTun2socks() {
 
 func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
 	sysProxyEnabled := a.browserMenu != nil && a.browserMenu.Checked()
-	tunWasEnabled := a.cfg.Local.EnableTun2socks
 
 	// Stop everything including TUN. On macOS this prompts for admin
 	// credentials to clean up routes and DNS — acceptable during a
 	// manual server switch.
 	a.closeService()
 
-	// Prevent a.Start() from recreating TUN.
+	// Prevent a.Start() from recreating TUN. TUN is intentionally left
+	// off after a server switch; the tray menu is kept in sync with the
+	// actual (off) state so the user can re-enable it with one click.
 	newCfg.Local.EnableTun2socks = false
+	if tunMenu := a.TunMenu(); tunMenu != nil {
+		tunMenu.Uncheck()
+	}
 
 	*a.App = App{
 		cfg: newCfg,
@@ -722,7 +726,6 @@ func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
 	if err := a.Start(); err != nil {
 		return err
 	}
-	a.cfg.Local.EnableTun2socks = tunWasEnabled
 
 	if sysProxyEnabled {
 		if err := a.setSysProxyOn(); err != nil {
