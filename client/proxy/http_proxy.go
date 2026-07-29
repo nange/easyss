@@ -47,6 +47,26 @@ type HTTPProxyServer struct {
 	rp         *httputil.ReverseProxy
 	server     *http.Server
 	mu         sync.Mutex
+
+	// TUN helper support (macOS): config served at GET /tun.
+	tunCfg *TunConfig
+	tunMu  sync.RWMutex
+}
+
+// TunConfig is the configuration served to the TUN helper via GET /tun.
+type TunConfig struct {
+	Socks5Addr     string `json:"socks5_addr"`
+	DNSAddr        string `json:"dns_addr"`
+	Device         string `json:"device"`
+	TunIP          string `json:"tun_ip"`
+	TunGW          string `json:"tun_gw"`
+	TunMask        string `json:"tun_mask"`
+	TunIPV6Sub     string `json:"tun_ipv6_sub,omitempty"`
+	TunGWV6        string `json:"tun_gwv6,omitempty"`
+	ServerIPV6     string `json:"server_ipv6,omitempty"`
+	LocalGateway   string `json:"local_gateway"`
+	LocalGatewayV6 string `json:"local_gateway_v6,omitempty"`
+	MTU            int    `json:"mtu"`
 }
 
 func NewHTTPProxyServer(listenAddr, socksAddr, username, password string, timeout time.Duration, handler *StreamHandler, rt *router.Router, method protocol.Method, dial func(context.Context, string, string) (net.Conn, error)) (*HTTPProxyServer, error) {
@@ -137,6 +157,16 @@ func (s *HTTPProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Serve /tun for TUN configuration (macOS helper).
+	if r.URL.Host == "" && r.URL.Path == "/tun" {
+		if r.Method == http.MethodGet {
+			s.handleTunGET(w)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
 	// Prevent forwarding loops: reject requests that would be forwarded
 	// back to the proxy itself (both relative and absolute URLs).
 	if s.isSelfTarget(r) {
@@ -160,6 +190,38 @@ func (s *HTTPProxyServer) serveStats(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(snap); err != nil {
 		log.Warn("[HTTP-PROXY] encode stats", "err", err)
+	}
+}
+
+// SetTunConfig stores the TUN configuration served at GET /tun.
+// Called before spawning the TUN helper on macOS.
+func (s *HTTPProxyServer) SetTunConfig(cfg *TunConfig) {
+	s.tunMu.Lock()
+	defer s.tunMu.Unlock()
+	s.tunCfg = cfg
+}
+
+// ClearTunConfig removes the TUN configuration. Called after the TUN helper exits.
+func (s *HTTPProxyServer) ClearTunConfig() {
+	s.tunMu.Lock()
+	defer s.tunMu.Unlock()
+	s.tunCfg = nil
+}
+
+// handleTunGET serves the TUN configuration as JSON.
+func (s *HTTPProxyServer) handleTunGET(w http.ResponseWriter) {
+	s.tunMu.RLock()
+	cfg := s.tunCfg
+	s.tunMu.RUnlock()
+
+	if cfg == nil {
+		http.Error(w, "TUN not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(cfg); err != nil {
+		log.Warn("[HTTP-PROXY] encode tun config", "err", err)
 	}
 }
 

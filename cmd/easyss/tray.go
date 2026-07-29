@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -28,6 +29,10 @@ type TrayApp struct {
 	mu          sync.RWMutex
 	browserMenu *systray.MenuItem
 	tunMenu     *systray.MenuItem
+
+	// TUN helper management (darwin non-root).
+	tunHelperStdin io.WriteCloser // FIFO writer; close to signal helper shutdown
+	tunHelperMu    sync.Mutex
 }
 
 func (a *TrayApp) trayReady() {
@@ -73,6 +78,11 @@ func (a *TrayApp) trayExit() {
 	default:
 	}
 	a.closeService()
+
+	// Ensure system proxy is cleared even if closeService encountered
+	// an error (e.g. osascript timeout during DNS restore).
+	_ = a.setSysProxyOff()
+
 	os.Exit(0)
 }
 
@@ -300,52 +310,30 @@ func (a *TrayApp) addProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
 			select {
 			case <-browser.ClickedCh:
 				if browser.Checked() {
-					if err := a.setSysProxyOff(); err != nil {
-						log.Error("[SYSTRAY] set sys-proxy off", "err", err)
-						continue
-					}
 					browser.Uncheck()
+					go func() {
+						if err := a.setSysProxyOff(); err != nil {
+							log.Error("[SYSTRAY] set sys-proxy off", "err", err)
+							browser.Check() // revert on failure
+						}
+					}()
 				} else {
-					if err := a.setSysProxyOn(); err != nil {
-						log.Error("[SYSTRAY] set sys-proxy on", "err", err)
-						continue
-					}
 					browser.Check()
+					go func() {
+						if err := a.setSysProxyOn(); err != nil {
+							log.Error("[SYSTRAY] set sys-proxy on", "err", err)
+							browser.Uncheck() // revert on failure
+						}
+					}()
 				}
 			case <-global.ClickedCh:
+				log.Info("[SYSTRAY] tun menu clicked", "checked", global.Checked())
 				if global.Checked() {
-					if !IsRoot() {
-						if err := removeTunKeepalive(); err != nil && !os.IsNotExist(err) {
-							log.Error("[SYSTRAY] remove tun keepalive", "err", err)
-						}
-						a.cfg.Local.EnableTun2socks = false
-					} else {
-						if err := a.closeTun2socks(); err != nil {
-							log.Error("[SYSTRAY] close tun2socks", "err", err)
-							continue
-						}
-					}
 					global.Uncheck()
+					go a.disableTun2socks()
 				} else {
-					if !IsRoot() {
-						if err := writeTunKeepalive(); err != nil {
-							log.Error("[SYSTRAY] write tun keepalive", "err", err)
-							continue
-						}
-						if err := RunMeElevated("-tun-only", "-tun-parent-pid",
-							fmt.Sprintf("%d", os.Getpid()), "-c", a.configFile); err != nil {
-							log.Error("[SYSTRAY] run me elevated for tun", "err", err)
-							_ = removeTunKeepalive()
-							continue
-						}
-						a.cfg.Local.EnableTun2socks = true
-					} else {
-						if err := a.createTun2socks(); err != nil {
-							log.Error("[SYSTRAY] create tun2socks", "err", err)
-							continue
-						}
-					}
 					global.Check()
+					go a.enableTun2socks(global)
 				}
 			case <-a.closing:
 				return
@@ -494,6 +482,10 @@ func (a *TrayApp) addExitMenu() {
 		for {
 			select {
 			case <-quit.ClickedCh:
+				// Clear the system proxy synchronously — this is fast
+				// and does not require admin. Leave TUN cleanup for
+				// trayExit() to avoid blocking the menu on osascript.
+				_ = a.setSysProxyOff()
 				systray.Quit()
 			case <-a.closing:
 				return
@@ -518,7 +510,7 @@ func (a *TrayApp) createTun2socks() error {
 	a.cfg.Local.EnableTun2socks = true
 	a.tunMgr = tun.New(tun.Config{
 		Socks5Addr: fmt.Sprintf("socks5://127.0.0.1:%d", a.cfg.Local.SocksPort),
-		DNSServer:  config.DefaultSystemDNS,
+		DNSServer:  tunDNS(a.cfg),
 	})
 
 	if a.core == nil || a.core.Client == nil {
@@ -526,9 +518,10 @@ func (a *TrayApp) createTun2socks() error {
 	}
 	icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
 	icmpHandler.SetProxy(a.core.StreamHandler, methodFromString(a.cfg.DefaultServer().Method))
+	a.tunMgr.SetICMPHandler(icmpHandler)
 
 	go func() {
-		if err := a.tunMgr.Start(icmpHandler); err != nil {
+		if err := a.tunMgr.Start(); err != nil {
 			log.Error("[SYSTRAY] tun2socks start", "err", err)
 		}
 	}()
@@ -537,18 +530,88 @@ func (a *TrayApp) createTun2socks() error {
 }
 
 func (a *TrayApp) closeTun2socks() error {
+	a.tunHelperMu.Lock()
+	defer a.tunHelperMu.Unlock()
+
+	log.Info("[SYSTRAY] closeTun2socks called",
+		"stdinNil", a.tunHelperStdin == nil,
+		"tunMgrNil", a.tunMgr == nil)
+
+	// 1. Signal the helper to shut down by closing the FIFO.
+	//    The helper detects EOF on stdin, cleans up routes/DNS, and exits.
+	if a.tunHelperStdin != nil {
+		a.tunHelperStdin.Close() //nolint:errcheck
+		a.tunHelperStdin = nil
+	}
+	log.Info("[SYSTRAY] closeTun2socks: fifo closed, stopping engine")
+
+	// 2. Stop the tun2socks engine (no route/DNS cleanup — helper handles it).
 	if a.tunMgr != nil {
+		log.Info("[SYSTRAY] closeTun2socks: calling tunMgr.Stop")
 		a.tunMgr.Stop()
+		log.Info("[SYSTRAY] closeTun2socks: tunMgr.Stop done")
 		a.tunMgr = nil
 	}
+
+	// 3. The helper coordinates with any previous instance via a file lock
+	//    (/tmp/easyss-tun.lock). No need to wait here — the next helper
+	//    will block on the lock until this one exits and releases it.
+
+	// 4. Clean up the FIFO and clear the HTTP /tun config.
+	fifoPath := fmt.Sprintf("/tmp/easyss-tun-ctrl-%d.fifo", os.Getpid())
+	os.Remove(fifoPath) //nolint:errcheck
+
+	if a.core != nil && a.core.HTTPServer != nil {
+		a.core.HTTPServer.ClearTunConfig()
+	}
+
 	a.cfg.Local.EnableTun2socks = false
 	return nil
+}
+
+// enableTun2socks runs the TUN enable flow in a background goroutine so the
+// tray menu remains responsive. On failure it reverts the menu checkmark.
+func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
+	log.Info("[SYSTRAY] enableTun2socks called", "isRoot", IsRoot())
+	if !IsRoot() {
+		if err := a.createTun2socksViaHelper(); err != nil {
+			log.Error("[SYSTRAY] create tun2socks via helper", "err", err)
+			menu.Uncheck()
+			return
+		}
+	} else {
+		if err := a.createTun2socks(); err != nil {
+			log.Error("[SYSTRAY] create tun2socks", "err", err)
+			menu.Uncheck()
+			return
+		}
+	}
+}
+
+// disableTun2socks runs the TUN disable flow in a background goroutine so
+// the tray menu remains responsive.
+func (a *TrayApp) disableTun2socks() {
+	log.Info("[SYSTRAY] disableTun2socks called")
+	if err := a.closeTun2socks(); err != nil {
+		log.Error("[SYSTRAY] close tun2socks", "err", err)
+	}
 }
 
 func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
 	sysProxyEnabled := a.browserMenu != nil && a.browserMenu.Checked()
 
+	// Stop everything including TUN. On macOS this prompts for admin
+	// credentials to clean up routes and DNS — acceptable during a
+	// manual server switch.
 	a.closeService()
+
+	// Prevent a.Start() from recreating TUN. TUN is intentionally left
+	// off after a server switch; the tray menu is kept in sync with the
+	// actual (off) state so the user can re-enable it with one click.
+	newCfg.Local.EnableTun2socks = false
+	if tunMenu := a.TunMenu(); tunMenu != nil {
+		tunMenu.Uncheck()
+	}
 
 	*a.App = App{
 		cfg: newCfg,
@@ -569,11 +632,20 @@ func (a *TrayApp) closeService() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.browserMenu != nil && a.browserMenu.Checked() {
-		if err := a.setSysProxyOff(); err != nil {
-			log.Error("[SYSTRAY] close service: set sysproxy off", "err", err)
-		}
+	// Always try to clear the system proxy on exit, regardless of the
+	// menu checkmark state (which may be inconsistent with the actual
+	// system setting due to async toggle or startup ordering).
+	if err := a.setSysProxyOff(); err != nil {
+		log.Error("[SYSTRAY] close service: set sysproxy off", "err", err)
 	}
+
+	// Stop TUN helper and engine before stopping the core services.
+	// On non-darwin or root, closeTun2socks is a no-op if TUN was not
+	// started via helper.
+	if err := a.closeTun2socks(); err != nil {
+		log.Error("[SYSTRAY] close service: close tun2socks", "err", err)
+	}
+
 	a.Stop()
 }
 

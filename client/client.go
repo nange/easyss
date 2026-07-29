@@ -64,23 +64,6 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	tlsCfg := cfg.UTLSConfig()
 	directDialer, directIface := newDirectDialer()
 
-	tr, err := http2.New(http2.Config{
-		ServerURL:         cfg.ServerURL(),
-		TLSConfig:         tlsCfg,
-		MaxSlotCount:      cfg.Transport.ConnCountMax,
-		StreamThreshold:   cfg.Transport.StreamThreshold,
-		PrioritySlotRatio: cfg.Transport.PrioritySlotRatio,
-		Timeout:           cfg.TimeoutDuration(),
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return dialWithConfig(ctx, cfg, directDialer, rt, network, addr)
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	log.Info("[CLIENT] transport initialized", "server_url", cfg.ServerURL(), "max_slots", cfg.Transport.ConnCountMax, "stream_threshold", cfg.Transport.StreamThreshold, "server_addr", cfg.DefaultServerAddr(), "direct_iface", directIface)
-
 	shaperCfg := shaper.Config{
 		BatchWindowMS: cfg.Shaper.BatchWindowMS,
 		Cover: shaper.CoverConfig{
@@ -92,12 +75,30 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	client := &Client{
 		cfg:           cfg,
 		router:        rt,
-		transport:     tr,
 		shaperCfg:     shaperCfg,
 		masterKey:     masterKey,
 		dialer:        directDialer,
 		closeIdleDone: make(chan struct{}),
 	}
+
+	tr, err := http2.New(http2.Config{
+		ServerURL:         cfg.ServerURL(),
+		TLSConfig:         tlsCfg,
+		MaxSlotCount:      cfg.Transport.ConnCountMax,
+		StreamThreshold:   cfg.Transport.StreamThreshold,
+		PrioritySlotRatio: cfg.Transport.PrioritySlotRatio,
+		Timeout:           cfg.TimeoutDuration(),
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialWithConfig(ctx, cfg, client.dialer, rt, network, addr)
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	client.transport = tr
+
+	log.Info("[CLIENT] transport initialized", "server_url", cfg.ServerURL(), "max_slots", cfg.Transport.ConnCountMax, "stream_threshold", cfg.Transport.StreamThreshold, "server_addr", cfg.DefaultServerAddr(), "direct_iface", directIface)
 
 	go client.closeIdleLoop()
 
@@ -240,4 +241,19 @@ func (c *Client) SetProxyRule(rule string) {
 	pr := router.ParseProxyRule(rule)
 	c.cfg.Routing.ProxyRule = rule
 	c.router.SetProxyRule(pr)
+}
+
+// DirectDialer returns the dialer that binds to the physical network
+// interface, used to bypass TUN when TUN mode is active.
+func (c *Client) DirectDialer() *dialer.Dialer {
+	return c.dialer
+}
+
+// SetDirectDialer replaces the transport's direct dialer. Used after
+// a server switch to preserve the original dialer that was created
+// before TUN routes were installed.
+func (c *Client) SetDirectDialer(d *dialer.Dialer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.dialer = d
 }

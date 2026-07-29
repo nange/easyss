@@ -6,12 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/scripts"
 	"github.com/nange/easyss/v3/util"
-	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"github.com/xjasonlyu/tun2socks/v2/engine"
 )
 
@@ -21,21 +21,23 @@ const (
 )
 
 type Config struct {
-	Socks5Addr     string
-	Device         string
-	MTU            int
-	Interface      string
-	UDPTimeout     time.Duration
-	LogLevel       string
-	TunIP          string
-	TunGW          string
-	TunMask        string
-	TunIPV6Sub     string
-	TunGWV6        string
-	ServerIPV6     string
-	LocalGateway   string
-	LocalGatewayV6 string
-	DNSServer      string // DNS server to set during TUN mode (darwin only)
+	Socks5Addr       string
+	Device           string
+	DeviceFD         int  // if >= 0, use fd:// scheme instead of creating device by name
+	SkipRouteCleanup bool // darwin: helper handles route/DNS cleanup, main process skips it in Stop()
+	MTU              int
+	Interface        string
+	UDPTimeout       time.Duration
+	LogLevel         string
+	TunIP            string
+	TunGW            string
+	TunMask          string
+	TunIPV6Sub       string
+	TunGWV6          string
+	ServerIPV6       string
+	LocalGateway     string
+	LocalGatewayV6   string
+	DNSServer        string // DNS server to set during TUN mode (darwin only)
 }
 
 type DeviceConfig struct {
@@ -55,6 +57,7 @@ type Manager struct {
 	dev       DeviceConfig
 	running   bool
 	originDNS []string // original system DNS before TUN starts (darwin only)
+	icmpH     *ICMPHandler
 
 	ctx    context.Context    // cancels an in-progress Start()
 	cancel context.CancelFunc // stored so Stop() can cancel the Start() goroutine
@@ -129,7 +132,7 @@ func New(cfg Config) *Manager {
 	}
 }
 
-func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
+func (m *Manager) Start() error {
 	if scripts.CreateTunBytes == nil || scripts.CloseTunBytes == nil {
 		return fmt.Errorf("tun: unsupported os %s", runtime.GOOS)
 	}
@@ -145,13 +148,19 @@ func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
 	default:
 	}
 
-	if icmpH != nil {
-		engine.SetICMPHandler(icmpH)
+	if m.icmpH != nil {
+		engine.SetICMPHandler(m.icmpH)
+	}
+
+	fdMode := m.cfg.DeviceFD >= 0
+	device := m.cfg.Device
+	if fdMode {
+		device = "fd://" + strconv.Itoa(m.cfg.DeviceFD)
 	}
 
 	key := &engine.Key{
 		MTU:                      m.cfg.MTU,
-		Device:                   m.cfg.Device,
+		Device:                   device,
 		LogLevel:                 m.cfg.LogLevel,
 		UDPTimeout:               m.cfg.UDPTimeout,
 		Proxy:                    m.cfg.Socks5Addr,
@@ -173,16 +182,18 @@ func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
 
 	time.Sleep(500 * time.Millisecond)
 
-	// Save original DNS and set TUN DNS on darwin.
-	if runtime.GOOS == "darwin" {
-		if err := m.saveAndSetDNS(); err != nil {
-			log.Warn("[TUN] set system dns", "err", err)
+	if !fdMode {
+		// Save original DNS and set TUN DNS on darwin.
+		if runtime.GOOS == "darwin" {
+			if err := m.saveAndSetDNS(); err != nil {
+				log.Warn("[TUN] set system dns", "err", err)
+			}
 		}
-	}
 
-	if err := m.createTunDevAndSetIPRoute(); err != nil {
-		engine.Stop()
-		return fmt.Errorf("tun: create device: %w", err)
+		if err := m.createTunDevAndSetIPRoute(); err != nil {
+			engine.Stop()
+			return fmt.Errorf("tun: create device: %w", err)
+		}
 	}
 
 	// Final check: if Stop() cancelled us while the platform script was
@@ -190,7 +201,9 @@ func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
 	select {
 	case <-m.ctx.Done():
 		engine.Stop()
-		_ = m.closeTunDevAndDelIPRoute()
+		if !fdMode {
+			_ = m.closeTunDevAndDelIPRoute()
+		}
 		if runtime.GOOS == "darwin" {
 			_ = m.restoreDNS()
 		}
@@ -199,7 +212,7 @@ func (m *Manager) Start(icmpH adapter.NetworkHandler) error {
 	}
 
 	m.running = true
-	log.Info("[TUN] tun2socks started", "device", m.cfg.Device, "proxy", m.cfg.Socks5Addr)
+	log.Info("[TUN] tun2socks started", "device", device, "proxy", m.cfg.Socks5Addr)
 	return nil
 }
 
@@ -208,21 +221,28 @@ func (m *Manager) Stop() {
 	// finish cleaning up before we proceed.
 	if m.cancel != nil {
 		m.cancel()
+		log.Info("[TUN] Stop: waiting for Start goroutine to finish")
 		<-m.done
+		log.Info("[TUN] Stop: Start goroutine done")
 	}
 
 	if !m.running {
+		log.Info("[TUN] Stop: not running, returning")
 		return
 	}
 
+	log.Info("[TUN] Stop: calling engine.Stop")
 	engine.Stop()
+	log.Info("[TUN] Stop: engine.Stop done")
 
-	_ = m.closeTunDevAndDelIPRoute()
+	if !m.cfg.SkipRouteCleanup {
+		_ = m.closeTunDevAndDelIPRoute()
 
-	// Restore original DNS on darwin.
-	if runtime.GOOS == "darwin" {
-		if err := m.restoreDNS(); err != nil {
-			log.Warn("[TUN] restore system dns", "err", err)
+		// Restore original DNS on darwin.
+		if runtime.GOOS == "darwin" {
+			if err := m.restoreDNS(); err != nil {
+				log.Warn("[TUN] restore system dns", "err", err)
+			}
 		}
 	}
 
@@ -230,8 +250,49 @@ func (m *Manager) Stop() {
 	log.Info("[TUN] tun2socks stopped")
 }
 
+// StopEngineOnly stops the engine and closes the TUN device without
+// cleaning up routes or DNS. Useful for server switches where the
+// routing configuration does not change.
+func (m *Manager) StopEngineOnly() {
+	if m.cancel != nil {
+		m.cancel()
+		<-m.done
+	}
+	if !m.running {
+		return
+	}
+	engine.Stop()
+	m.running = false
+	log.Info("[TUN] tun2socks engine stopped")
+}
+
+// SetOriginDNS stores the original system DNS before TUN starts.
+// On darwin, this must be called before Start() when using the fd-based
+// startup path (DeviceFD >= 0) because the TUN helper sets the DNS
+// externally and the Manager needs the original values for restore.
+func (m *Manager) SetOriginDNS(dns []string) {
+	m.originDNS = dns
+}
+
+// OriginDNS returns the original system DNS before TUN started.
+func (m *Manager) OriginDNS() []string {
+	return m.originDNS
+}
+
 func (m *Manager) IsRunning() bool {
 	return m.running
+}
+
+// SetICMPHandler stores the ICMP handler and registers it with the engine.
+// Safe to call before or after Start(); idempotent.
+func (m *Manager) SetICMPHandler(h *ICMPHandler) {
+	m.icmpH = h
+	engine.SetICMPHandler(h)
+}
+
+// DeviceConfig returns the device configuration with platform defaults filled in.
+func (m *Manager) DeviceConfig() DeviceConfig {
+	return m.dev
 }
 
 func (m *Manager) createTunDevAndSetIPRoute() error {
@@ -351,17 +412,35 @@ func (m *Manager) saveAndSetDNS() error {
 
 func (m *Manager) restoreDNS() error {
 	if len(m.originDNS) == 0 {
-		return util.SetSysDNS([]string{"empty"})
+		return setSysDNSWithElevation([]string{"empty"})
 	}
 
-	curr, err := util.SysDNS()
+	curr, err := sysDNSWithElevation()
 	if err != nil {
 		return err
 	}
 	if !stringSliceEqual(m.originDNS, curr) {
-		return util.SetSysDNS(m.originDNS)
+		return setSysDNSWithElevation(m.originDNS)
 	}
 	return nil
+}
+
+// sysDNSWithElevation returns the current system DNS servers, using osascript
+// elevation on darwin when not running as root.
+func sysDNSWithElevation() ([]string, error) {
+	if runtime.GOOS == "darwin" && os.Geteuid() != 0 {
+		return util.SysDNSViaOSAScript()
+	}
+	return util.SysDNS()
+}
+
+// setSysDNSWithElevation sets the system DNS servers, using osascript
+// elevation on darwin when not running as root.
+func setSysDNSWithElevation(servers []string) error {
+	if runtime.GOOS == "darwin" && os.Geteuid() != 0 {
+		return util.SetSysDNSViaOSAScript(servers)
+	}
+	return util.SetSysDNS(servers)
 }
 
 func stringSliceEqual(a, b []string) bool {

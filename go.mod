@@ -17,6 +17,7 @@ require (
 	github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20260702150440-dda1b1058db8
 	golang.org/x/crypto v0.54.0
 	golang.org/x/net v0.57.0
+	golang.org/x/sys v0.47.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gvisor.dev/gvisor v0.0.0-20260701204157-69c2d17aea96
 )
@@ -245,7 +246,6 @@ require (
 	golang.org/x/mobile v0.0.0-20260709172247-6129f5bee9d5 // indirect
 	golang.org/x/mod v0.38.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.48.0 // indirect
@@ -264,3 +264,5 @@ tool (
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 	golang.org/x/mobile/cmd/gobind
 )
+
+replace github.com/xjasonlyu/tun2socks/v2 => github.com/nange/tun2socks/v2 v2.0.0-20260729130352-d1698910c4f0
