@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -88,8 +87,8 @@ func RunMeElevated(extraArgs ...string) error {
 }
 
 // SpawnTunHelper is only supported on macOS.
-func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string) (*exec.Cmd, io.WriteCloser, net.Listener, error) {
-	return nil, nil, nil, fmt.Errorf("SpawnTunHelper is only supported on macOS")
+func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string) (io.WriteCloser, net.Listener, error) {
+	return nil, nil, fmt.Errorf("SpawnTunHelper is only supported on macOS")
 }
 
 // ReceiveFd is only supported on macOS.

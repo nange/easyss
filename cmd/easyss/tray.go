@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/user"
 	"runtime"
 	"sync"
@@ -34,7 +33,6 @@ type TrayApp struct {
 	tunMenu     *systray.MenuItem
 
 	// TUN helper management (darwin non-root).
-	tunHelperCmd   *exec.Cmd
 	tunHelperStdin io.WriteCloser // FIFO writer; close to signal helper shutdown
 	tunHelperMu    sync.Mutex
 }
@@ -586,7 +584,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 
 	// 3. Spawn the elevated helper.
 	fdSocketPath := fmt.Sprintf("/tmp/easyss-tun-fd-%d.sock", os.Getpid())
-	cmd, fifoWriter, fdListener, err := SpawnTunHelper(a.cfg.Local.HTTPPort, fdSocketPath,
+	fifoWriter, fdListener, err := SpawnTunHelper(a.cfg.Local.HTTPPort, fdSocketPath,
 		a.cfg.Log.FilePath, a.cfg.Log.Level)
 	if err != nil {
 		a.core.HTTPServer.ClearTunConfig()
@@ -629,7 +627,6 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 		}
 	}()
 
-	a.tunHelperCmd = cmd
 	a.tunHelperStdin = fifoWriter
 
 	return nil
@@ -641,8 +638,7 @@ func (a *TrayApp) closeTun2socks() error {
 
 	log.Info("[SYSTRAY] closeTun2socks called",
 		"stdinNil", a.tunHelperStdin == nil,
-		"tunMgrNil", a.tunMgr == nil,
-		"cmdNil", a.tunHelperCmd == nil)
+		"tunMgrNil", a.tunMgr == nil)
 
 	// 1. Signal the helper to shut down by closing the FIFO.
 	//    The helper detects EOF on stdin, cleans up routes/DNS, and exits.

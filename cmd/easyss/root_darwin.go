@@ -62,26 +62,25 @@ func resolveConfigArg(extraArgs *[]string) {
 
 // SpawnTunHelper launches a long-running elevated TUN helper process.
 // It creates a FIFO for lifecycle signalling (close the writer to trigger
-// helper shutdown) and a Unix socket for receiving the TUN file descriptor.
+// helper exit) and a Unix socket for receiving the TUN file descriptor.
 //
 // Returns:
-//   - cmd: the osascript process handle
 //   - fifoWriter: close to signal the helper to shut down
 //   - fdListener: accept a connection and call ReceiveFd to get the TUN fd
-func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string) (*exec.Cmd, io.WriteCloser, net.Listener, error) {
+func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string) (io.WriteCloser, net.Listener, error) {
 	log.Info("[SYSTRAY] SpawnTunHelper called",
 		"httpPort", httpPort, "fdSocket", fdSocketPath,
 		"logFile", logFile, "logLevel", logLevel)
 
 	exe, err := os.Executable()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("get executable: %w", err)
+		return nil, nil, fmt.Errorf("get executable: %w", err)
 	}
 
 	// Create a named FIFO for lifecycle signalling.
 	fifoPath := fmt.Sprintf("/tmp/easyss-tun-ctrl-%d.fifo", os.Getpid())
 	if err := unix.Mkfifo(fifoPath, 0600); err != nil {
-		return nil, nil, nil, fmt.Errorf("mkfifo %s: %w", fifoPath, err)
+		return nil, nil, fmt.Errorf("mkfifo %s: %w", fifoPath, err)
 	}
 
 	// Open the FIFO for writing in a goroutine (blocks until the helper opens
@@ -102,7 +101,7 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string) (*exec
 		// Clean up the FIFO on failure. The goroutine will unblock when we
 		// remove the FIFO (open returns error).
 		os.Remove(fifoPath) //nolint:errcheck
-		return nil, nil, nil, fmt.Errorf("listen on %s: %w", fdSocketPath, err)
+		return nil, nil, fmt.Errorf("listen on %s: %w", fdSocketPath, err)
 	}
 
 	// Build the helper command. The helper reads its config via GET /tun and
@@ -137,7 +136,7 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string) (*exec
 		fdListener.Close()      //nolint:errcheck
 		os.Remove(fifoPath)     //nolint:errcheck
 		os.Remove(fdSocketPath) //nolint:errcheck
-		return nil, nil, nil, fmt.Errorf("start osascript: %w", err)
+		return nil, nil, fmt.Errorf("start osascript: %w", err)
 	}
 
 	// Wait for the FIFO write end to be opened (helper opened the read end).
@@ -148,16 +147,16 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string) (*exec
 			fdListener.Close()      //nolint:errcheck
 			os.Remove(fifoPath)     //nolint:errcheck
 			os.Remove(fdSocketPath) //nolint:errcheck
-			return nil, nil, nil, fmt.Errorf("open fifo write: %w", r.err)
+			return nil, nil, fmt.Errorf("open fifo write: %w", r.err)
 		}
-		return osascriptCmd, r.f, fdListener, nil
+		return r.f, fdListener, nil
 	case <-time.After(60 * time.Second):
 		// Timeout: user probably cancelled the admin dialog or the helper
 		// failed to start. Clean up and return an error.
 		fdListener.Close()      //nolint:errcheck
 		os.Remove(fifoPath)     //nolint:errcheck
 		os.Remove(fdSocketPath) //nolint:errcheck
-		return nil, nil, nil, fmt.Errorf("timeout waiting for tun helper (user may have cancelled)")
+		return nil, nil, fmt.Errorf("timeout waiting for tun helper (user may have cancelled)")
 	}
 }
 
