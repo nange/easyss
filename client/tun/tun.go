@@ -110,7 +110,7 @@ func New(cfg Config) *Manager {
 		cfg.TunMask = "255.255.0.0"
 	}
 	if cfg.TunIPV6Sub == "" {
-		cfg.TunIPV6Sub = "2001:0db8:0:f101::1"
+		cfg.TunIPV6Sub = "2001:0db8:0:f101::1/64"
 	}
 	if cfg.TunGWV6 == "" {
 		cfg.TunGWV6 = "fe80::30ff:1eff:feff:aaff"
