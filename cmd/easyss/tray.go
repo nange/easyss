@@ -573,7 +573,7 @@ func (a *TrayApp) closeTun2socks() error {
 // tray menu remains responsive. On failure it reverts the menu checkmark.
 func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 	log.Info("[SYSTRAY] enableTun2socks called", "isRoot", IsRoot())
-	if !IsRoot() {
+	if runtime.GOOS == "darwin" && !IsRoot() {
 		if err := a.createTun2socksViaHelper(); err != nil {
 			log.Error("[SYSTRAY] create tun2socks via helper", "err", err)
 			menu.Uncheck()
