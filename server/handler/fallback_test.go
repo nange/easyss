@@ -1712,7 +1712,7 @@ func TestSetFallbackProxy_CSPRewrittenEvenWhenBodyUnreadable(t *testing.T) {
 		w.Header().Set("Content-Encoding", "br")
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'none'; style-src 'unsafe-inline' "+cdnSub+" https://"+cdnSub+
-			"; script-src "+cdnSub)
+				"; script-src "+cdnSub)
 		w.Write([]byte("some brotli content that cannot be decompressed"))
 	}))
 	defer upstream.Close()

@@ -12,8 +12,8 @@ func newTestStream() (*HTTP2Stream, *io.PipeReader) {
 	s := &HTTP2Stream{
 		w:      pw,
 		respCh: make(chan roundTripResult, 1),
-		cancel:  func() {},
-		done:    sync.OnceFunc(func() {}),
+		cancel: func() {},
+		done:   sync.OnceFunc(func() {}),
 	}
 	return s, pr
 }
