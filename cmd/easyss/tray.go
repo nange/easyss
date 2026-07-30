@@ -579,6 +579,17 @@ func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 			menu.Uncheck()
 			return
 		}
+	} else if runtime.GOOS == "linux" && !IsRoot() {
+		// Linux non-root: engine.Start() needs CAP_NET_ADMIN to open
+		// /dev/net/tun. Restart the app as root via pkexec with the
+		// --enable-tun2socks flag so the new root process auto-starts TUN.
+		if err := RunMeElevated("--enable-tun2socks"); err != nil {
+			log.Error("[SYSTRAY] elevate to root", "err", err)
+			menu.Uncheck()
+			return
+		}
+		systray.Quit()
+		return
 	} else {
 		if err := a.createTun2socks(); err != nil {
 			log.Error("[SYSTRAY] create tun2socks", "err", err)

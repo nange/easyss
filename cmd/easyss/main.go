@@ -186,10 +186,11 @@ func (a *App) Start() error {
 	a.core = core
 
 	if a.cfg.Local.EnableTun2socks {
-		// On macOS non-root, TUN is managed by the tray via the helper
-		// process (createTun2socksViaHelper). Skip direct creation here.
-		if runtime.GOOS == "darwin" && !IsRoot() {
-			log.Info("[EASYSS-V3] tun2socks will be started via helper (non-root)")
+		// On macOS and Linux non-root, TUN is started via privilege
+		// elevation (helper process or restart as root). Skip direct
+		// creation here to avoid "operation not permitted".
+		if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !IsRoot() {
+			log.Info("[EASYSS-V3] tun2socks will be started via elevation (non-root)")
 		} else {
 			socksProxyAddr := "socks5://127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
 			tunCfg := tun.Config{
