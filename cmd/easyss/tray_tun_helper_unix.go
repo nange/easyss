@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/tun"
@@ -65,7 +66,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	a.core.HTTPServer.SetTunConfig(tunHTTPCfg)
 
 	// 3. Spawn the elevated helper.
-	fdSocketPath := fmt.Sprintf("/tmp/easyss-tun-fd-%d.sock", os.Getpid())
+	fdSocketPath := tunFdSocketPath()
 	fifoWriter, fdListener, err := SpawnTunHelper(a.cfg.Local.HTTPPort, fdSocketPath,
 		a.cfg.Log.FilePath, a.cfg.Log.Level)
 	if err != nil {
@@ -75,8 +76,10 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 
 	// 4. Receive the TUN fd from the helper.
 	fd, err := ReceiveFd(fdListener)
-	fdListener.Close()      //nolint:errcheck
-	os.Remove(fdSocketPath) //nolint:errcheck
+	fdListener.Close() //nolint:errcheck
+	if runtime.GOOS != "linux" {
+		os.Remove(fdSocketPath) //nolint:errcheck
+	}
 	if err != nil {
 		fifoWriter.Close() //nolint:errcheck
 		a.core.HTTPServer.ClearTunConfig()

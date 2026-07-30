@@ -105,16 +105,14 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string) (io.Wr
 		fifoCh <- fifoResult{f, err}
 	}()
 
-	// Create the Unix socket for fd passing.
+	// Create the Unix socket for fd passing. On Linux we use an abstract
+	// socket (@-prefixed) which does not create a filesystem entry and is
+	// immune to pkexec mount namespace isolation.
 	fdListener, err := net.Listen("unix", fdSocketPath)
 	if err != nil {
-		// Clean up the FIFO on failure. The goroutine will unblock when we
-		// remove the FIFO (open returns error).
 		os.Remove(fifoPath) //nolint:errcheck
 		return nil, nil, fmt.Errorf("listen on %s: %w", fdSocketPath, err)
 	}
-	// Ensure the socket is accessible by the elevated helper (root).
-	os.Chmod(fdSocketPath, 0666) //nolint:errcheck
 
 	// Build the helper command. The helper reads its config via GET /tun and
 	// sends the fd via the Unix socket. Stdin is connected to the FIFO.
@@ -150,9 +148,8 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string) (io.Wr
 
 	pkexecCmd := exec.Command("pkexec", cmdArgs...)
 	if err := pkexecCmd.Start(); err != nil {
-		fdListener.Close()      //nolint:errcheck
-		os.Remove(fifoPath)     //nolint:errcheck
-		os.Remove(fdSocketPath) //nolint:errcheck
+		fdListener.Close()  //nolint:errcheck
+		os.Remove(fifoPath) //nolint:errcheck
 		return nil, nil, fmt.Errorf("start pkexec: %w", err)
 	}
 
@@ -161,16 +158,14 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string) (io.Wr
 	select {
 	case r := <-fifoCh:
 		if r.err != nil {
-			fdListener.Close()      //nolint:errcheck
-			os.Remove(fifoPath)     //nolint:errcheck
-			os.Remove(fdSocketPath) //nolint:errcheck
+			fdListener.Close()  //nolint:errcheck
+			os.Remove(fifoPath) //nolint:errcheck
 			return nil, nil, fmt.Errorf("open fifo write: %w", r.err)
 		}
 		return r.f, fdListener, nil
 	case <-time.After(60 * time.Second):
-		fdListener.Close()      //nolint:errcheck
-		os.Remove(fifoPath)     //nolint:errcheck
-		os.Remove(fdSocketPath) //nolint:errcheck
+		fdListener.Close()  //nolint:errcheck
+		os.Remove(fifoPath) //nolint:errcheck
 		return nil, nil, fmt.Errorf("timeout waiting for tun helper (user may have cancelled)")
 	}
 }
