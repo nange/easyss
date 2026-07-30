@@ -169,5 +169,3 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string) (io.Wr
 		return nil, nil, fmt.Errorf("timeout waiting for tun helper (user may have cancelled)")
 	}
 }
-
-
