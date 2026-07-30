@@ -103,6 +103,8 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string) (io.Wr
 		os.Remove(fifoPath) //nolint:errcheck
 		return nil, nil, fmt.Errorf("listen on %s: %w", fdSocketPath, err)
 	}
+	// Ensure the socket is accessible by the elevated helper (root).
+	os.Chmod(fdSocketPath, 0666) //nolint:errcheck
 
 	// Build the helper command. The helper reads its config via GET /tun and
 	// sends the fd via the Unix socket. Stdin is connected to the FIFO.
