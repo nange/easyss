@@ -23,5 +23,7 @@ ip route add "$local_gateway" via "$tun_gw" dev "$tun_device"
 if [ -n "$server_ip_v6" ]; then  # check if server_ip_v6 is not empty
   ip -6 route add ::/1 via "$tun_gw_v6" dev "$tun_device"
   ip -6 route add 8000::/1 via "$tun_gw_v6" dev "$tun_device"
-  ip -6 route add "$local_gateway_v6" via "$tun_gw_v6" dev "$tun_device"
+  if [ -n "$local_gateway_v6" ]; then
+    ip -6 route add "$local_gateway_v6" via "$tun_gw_v6" dev "$tun_device"
+  fi
 fi
