@@ -573,23 +573,14 @@ func (a *TrayApp) closeTun2socks() error {
 // tray menu remains responsive. On failure it reverts the menu checkmark.
 func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 	log.Info("[SYSTRAY] enableTun2socks called", "isRoot", IsRoot())
-	if runtime.GOOS == "darwin" && !IsRoot() {
+	if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !IsRoot() {
+		// Non-root on macOS/Linux: spawn an elevated helper process to
+		// open the TUN device, set up routes, and pass the fd back.
 		if err := a.createTun2socksViaHelper(); err != nil {
 			log.Error("[SYSTRAY] create tun2socks via helper", "err", err)
 			menu.Uncheck()
 			return
 		}
-	} else if runtime.GOOS == "linux" && !IsRoot() {
-		// Linux non-root: engine.Start() needs CAP_NET_ADMIN to open
-		// /dev/net/tun. Restart the app as root via pkexec with the
-		// --enable-tun2socks flag so the new root process auto-starts TUN.
-		if err := RunMeElevated("--enable-tun2socks"); err != nil {
-			log.Error("[SYSTRAY] elevate to root", "err", err)
-			menu.Uncheck()
-			return
-		}
-		systray.Quit()
-		return
 	} else {
 		if err := a.createTun2socks(); err != nil {
 			log.Error("[SYSTRAY] create tun2socks", "err", err)
