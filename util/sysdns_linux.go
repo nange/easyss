@@ -14,7 +14,7 @@ import (
 func SetSysDNS(v []string) error {
 	if iface, err := defaultInterface(); err == nil {
 		args := append([]string{"dns", iface}, v...)
-		Command("resolvectl", args...) // best-effort, ignore errors
+		_, _ = Command("resolvectl", args...) // best-effort, ignore errors
 	}
 	return setResolvConf(v)
 }
