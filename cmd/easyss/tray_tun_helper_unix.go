@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/proxy"
@@ -100,9 +101,26 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	// Pre-resolve the proxy server hostname and populate the DNS cache
 	// to avoid a circular dependency once TUN routes are active.
 	if serverAddr := a.cfg.DefaultServer().Address; net.ParseIP(serverAddr) == nil {
-		if a.core.SocksServer != nil && len(config.DirectDNSServers) > 0 {
-			a.core.SocksServer.PrePopulateDNS(serverAddr, config.DirectDNSServers[0])
-			log.Info("[SYSTRAY] pre-populated dns cache for server", "host", serverAddr)
+		var err error
+		for i := 0; i < 3; i++ {
+			if a.core.SocksServer == nil || len(config.DirectDNSServers) == 0 {
+				err = fmt.Errorf("dns cache not available")
+				break
+			}
+			err = a.core.SocksServer.PrePopulateDNS(serverAddr, config.DirectDNSServers[0],
+				a.cfg.Routing.IPV6Rule != "enable")
+			if err == nil {
+				log.Info("[SYSTRAY] pre-populated dns cache for server", "host", serverAddr)
+				break
+			}
+			if i < 2 {
+				time.Sleep(time.Second)
+			}
+		}
+		if err != nil {
+			fifoWriter.Close() //nolint:errcheck
+			a.core.HTTPServer.ClearTunConfig()
+			return fmt.Errorf("failed to pre-resolve server hostname %s: %w", serverAddr, err)
 		}
 	}
 

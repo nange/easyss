@@ -197,36 +197,56 @@ func (a *App) Start() error {
 			// DNS cache so that TUN-mode DNS queries for the server
 			// domain never require a network round-trip (avoids a
 			// circular dependency: DNS → TUN → proxy → DNS).
+			prepopulated := true
 			if serverAddr := a.cfg.DefaultServer().Address; net.ParseIP(serverAddr) == nil {
-				if a.core.SocksServer != nil && len(config.DirectDNSServers) > 0 {
-					a.core.SocksServer.PrePopulateDNS(serverAddr, config.DirectDNSServers[0])
-					log.Info("[EASYSS-V3] pre-populated dns cache for server", "host", serverAddr)
+				var err error
+				for i := 0; i < 3; i++ {
+					if a.core.SocksServer == nil || len(config.DirectDNSServers) == 0 {
+						prepopulated = false
+						break
+					}
+					err = a.core.SocksServer.PrePopulateDNS(serverAddr, config.DirectDNSServers[0],
+						a.cfg.Routing.IPV6Rule != "enable")
+					if err == nil {
+						log.Info("[EASYSS-V3] pre-populated dns cache for server", "host", serverAddr)
+						break
+					}
+					if i < 2 {
+						time.Sleep(time.Second)
+					}
+				}
+				if err != nil {
+					log.Error("[EASYSS-V3] failed to pre-resolve server hostname, skipping TUN",
+						"host", serverAddr, "err", err)
+					prepopulated = false
 				}
 			}
 
-			socksProxyAddr := "socks5://127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
-			tunCfg := tun.Config{
-				Socks5Addr: socksProxyAddr,
-				DNSServer:  tunDNS(a.cfg),
-			}
-			if ipv6 := a.core.Client.Router().ServerIPV6(); ipv6 != "" {
-				tunCfg.ServerIPV6 = ipv6
-			}
-			a.tunMgr = tun.New(tunCfg)
-
-			method := protocol.MethodFromString(a.cfg.DefaultServer().Method)
-			if method == 0 {
-				method = protocol.MethodAES256GCM
-			}
-			icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
-			icmpHandler.SetProxy(a.core.StreamHandler, method)
-			a.tunMgr.SetICMPHandler(icmpHandler)
-
-			go func() {
-				if err := a.tunMgr.Start(); err != nil {
-					log.Error("[EASYSS-V3] tun2socks", "err", err)
+			if prepopulated {
+				socksProxyAddr := "socks5://127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
+				tunCfg := tun.Config{
+					Socks5Addr: socksProxyAddr,
+					DNSServer:  tunDNS(a.cfg),
 				}
-			}()
+				if ipv6 := a.core.Client.Router().ServerIPV6(); ipv6 != "" {
+					tunCfg.ServerIPV6 = ipv6
+				}
+				a.tunMgr = tun.New(tunCfg)
+
+				method := protocol.MethodFromString(a.cfg.DefaultServer().Method)
+				if method == 0 {
+					method = protocol.MethodAES256GCM
+				}
+				icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
+				icmpHandler.SetProxy(a.core.StreamHandler, method)
+				a.tunMgr.SetICMPHandler(icmpHandler)
+
+				go func() {
+					if err := a.tunMgr.Start(); err != nil {
+						log.Error("[EASYSS-V3] tun2socks", "err", err)
+					}
+				}()
+			}
 		}
 	}
 

@@ -1,6 +1,8 @@
 package dns
 
 import (
+	"fmt"
+
 	"github.com/coocood/freecache"
 	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/log"
@@ -94,7 +96,9 @@ func dnsCacheTTL(msg *dns.Msg) int {
 // A and AAAA results in both the direct and proxied caches. This is used
 // to pre-seed the cache with the proxy server's IP before TUN routes are
 // active, avoiding a DNS deadlock.
-func (c *Cache) PrePopulate(domain, dnsServer string) {
+// When requireIPv4 is true, the A query must succeed; otherwise either
+// A or AAAA success is sufficient.
+func (c *Cache) PrePopulate(domain, dnsServer string, requireIPv4 bool) error {
 	store := func(msg *dns.Msg) {
 		if msg == nil {
 			return
@@ -107,15 +111,30 @@ func (c *Cache) PrePopulate(domain, dnsServer string) {
 		}
 	}
 
+	var ok bool
+	var aErr error
 	if msgA, err := DNSMsgTypeA(dnsServer, domain); err == nil {
 		store(msgA)
+		ok = true
 	} else {
+		aErr = err
 		log.Warn("[DNS] PrePopulate type A", "domain", domain, "err", err)
 	}
 
 	if msgAAAA, err := DNSMsgTypeAAAA(dnsServer, domain); err == nil {
 		store(msgAAAA)
+		if !requireIPv4 {
+			ok = true
+		}
 	} else {
 		log.Warn("[DNS] PrePopulate type AAAA", "domain", domain, "err", err)
 	}
+
+	if !ok {
+		if requireIPv4 && aErr != nil {
+			return fmt.Errorf("failed to resolve %s A record via %s: %w", domain, dnsServer, aErr)
+		}
+		return fmt.Errorf("failed to resolve %s via %s", domain, dnsServer)
+	}
+	return nil
 }
