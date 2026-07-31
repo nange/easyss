@@ -12,16 +12,10 @@ import (
 )
 
 func SetSysDNS(v []string) error {
-	iface, err := defaultInterface()
-	if err != nil {
-		return setResolvConf(v)
+	if iface, err := defaultInterface(); err == nil {
+		args := append([]string{"dns", iface}, v...)
+		Command("resolvectl", args...) // best-effort, ignore errors
 	}
-
-	args := append([]string{"dns", iface}, v...)
-	if _, err := Command("resolvectl", args...); err == nil {
-		return nil
-	}
-
 	return setResolvConf(v)
 }
 
