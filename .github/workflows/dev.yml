@@ -123,3 +123,20 @@ jobs:
 
       - name: Build
         run: cd cmd/easyss && go build -o easyss.exe -ldflags '-H=windowsgui'
+
+  lint-test-build-windows-arm64:
+    name: Lint-Test-Build-Windows-Arm64
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Test
+        run: go test -v ./...
+
+      - name: Build
+        run: cd cmd/easyss && go build -o easyss.exe -ldflags '-H=windowsgui'

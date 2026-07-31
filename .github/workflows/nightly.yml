@@ -45,11 +45,13 @@ jobs:
         run: |
           GOOS=linux GOARCH=arm64 make easyss-without-tray
           GOOS=linux GOARCH=arm64 make easyss-server
+          GOOS=windows GOARCH=arm64 make easyss-server
       - name: Pack Arm64
         run: |
           cd bin
           zip easyss-without-tray-linux-arm64.zip ./easyss-without-tray
           zip easyss-server-linux-arm64.zip ./easyss-server
+          zip easyss-server-windows-arm64.zip ./easyss-server.exe
 
       - name: Set outputs
         id: vars
@@ -67,6 +69,49 @@ jobs:
           files: |
             bin/*.zip
             bin/*.aar
+
+  windows-arm64:
+    runs-on: windows-11-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Build Arm64
+        shell: bash
+        run: |
+          cd cmd/easyss
+          go build -ldflags "-H=windowsgui -X 'github.com/nange/easyss/v3/version.Name=Easyss' -X 'github.com/nange/easyss/v3/version.BuildDate=$(date "+%Y-%m-%d %H:%M:%S")' -X 'github.com/nange/easyss/v3/version.GitTag=$(git describe --tags)'" -o ../../bin/easyss.exe
+          cd ../easyss-server
+          CGO_ENABLED=0 go build -ldflags "-X 'github.com/nange/easyss/v3/version.Name=Easyss' -X 'github.com/nange/easyss/v3/version.BuildDate=$(date "+%Y-%m-%d %H:%M:%S")' -X 'github.com/nange/easyss/v3/version.GitTag=$(git describe --tags)'" -o ../../bin/easyss-server.exe
+
+      - name: Pack Arm64
+        shell: pwsh
+        run: |
+          cd bin
+          Compress-Archive -Path ./easyss.exe -DestinationPath easyss-windows-arm64.zip
+          Compress-Archive -Path ./easyss-server.exe -DestinationPath easyss-server-windows-arm64.zip
+
+      - name: Set outputs
+        id: vars
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "timestamp_minute=$(date -u +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
+
+      - name: Nightly Release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: Nightly-${{ steps.vars.outputs.timestamp_minute }}-${{ steps.vars.outputs.sha_short }}
+          tag_name: nightly-${{ steps.vars.outputs.sha_short }}
+          prerelease: true
+          body: For testing and development only
+          files: bin/*.zip
 
   macos-arm64:
     runs-on: macOS-latest

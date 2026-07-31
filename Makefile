@@ -6,7 +6,8 @@ LDFLAGS += -X "github.com/nange/easyss/v3/version.GitTag=$(shell git describe --
 
 GO := go
 GO_BUILD := go build -ldflags '$(LDFLAGS)'
-GO_BUILD_WIN := GOOS=windows GOARCH=amd64 CGO_ENABLED=1 go build -ldflags '-H windowsgui $(LDFLAGS)'
+WIN_ARCH ?= amd64
+GO_BUILD_WIN := GOOS=windows GOARCH=$(WIN_ARCH) CGO_ENABLED=1 go build -ldflags '-H windowsgui $(LDFLAGS)'
 GOMOBILE := $(shell go env GOPATH)/bin/gomobile
 GOMOBILE_BIND := $(GOMOBILE) bind -target=android/arm64,android/amd64 -androidapi 29 -ldflags '$(LDFLAGS)'
 
@@ -38,7 +39,7 @@ easyss-server:
 
 easyss-server-windows:
 	cd cmd/easyss-server; \
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags '$(LDFLAGS)' -o ../../bin/easyss-server.exe
+	CGO_ENABLED=0 GOOS=windows GOARCH=$(WIN_ARCH) go build -ldflags '$(LDFLAGS)' -o ../../bin/easyss-server.exe
 
 easyss-android-aar:
 	@if ! command -v javac >/dev/null 2>&1; then \
