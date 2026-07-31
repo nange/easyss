@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -192,6 +193,17 @@ func (a *App) Start() error {
 		if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !IsRoot() {
 			log.Warn("[EASYSS-V3] tun2socks requires root; skipped (use sudo, or run with system tray for automatic elevation)")
 		} else {
+			// Pre-resolve the proxy server hostname and populate the
+			// DNS cache so that TUN-mode DNS queries for the server
+			// domain never require a network round-trip (avoids a
+			// circular dependency: DNS → TUN → proxy → DNS).
+			if serverAddr := a.cfg.DefaultServer().Address; net.ParseIP(serverAddr) == nil {
+				if a.core.SocksServer != nil && len(config.DirectDNSServers) > 0 {
+					a.core.SocksServer.PrePopulateDNS(serverAddr, config.DirectDNSServers[0])
+					log.Info("[EASYSS-V3] pre-populated dns cache for server", "host", serverAddr)
+				}
+			}
+
 			socksProxyAddr := "socks5://127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
 			tunCfg := tun.Config{
 				Socks5Addr: socksProxyAddr,

@@ -3,6 +3,7 @@ package dns
 import (
 	"github.com/coocood/freecache"
 	"github.com/miekg/dns"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/stats"
 )
 
@@ -87,4 +88,34 @@ func dnsCacheTTL(msg *dns.Msg) int {
 		ttl = minCacheTTL
 	}
 	return int(ttl)
+}
+
+// PrePopulate resolves the domain via the given DNS server and stores the
+// A and AAAA results in both the direct and proxied caches. This is used
+// to pre-seed the cache with the proxy server's IP before TUN routes are
+// active, avoiding a DNS deadlock.
+func (c *Cache) PrePopulate(domain, dnsServer string) {
+	store := func(msg *dns.Msg) {
+		if msg == nil {
+			return
+		}
+		if err := c.Set(msg, true); err != nil {
+			log.Warn("[DNS] PrePopulate set direct cache", "domain", domain, "err", err)
+		}
+		if err := c.Set(msg, false); err != nil {
+			log.Warn("[DNS] PrePopulate set proxy cache", "domain", domain, "err", err)
+		}
+	}
+
+	if msgA, err := DNSMsgTypeA(dnsServer, domain); err == nil {
+		store(msgA)
+	} else {
+		log.Warn("[DNS] PrePopulate type A", "domain", domain, "err", err)
+	}
+
+	if msgAAAA, err := DNSMsgTypeAAAA(dnsServer, domain); err == nil {
+		store(msgAAAA)
+	} else {
+		log.Warn("[DNS] PrePopulate type AAAA", "domain", domain, "err", err)
+	}
 }

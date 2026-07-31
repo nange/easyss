@@ -4,9 +4,11 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"runtime"
 
+	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/log"
@@ -93,6 +95,15 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 		fifoWriter.Close() //nolint:errcheck
 		a.core.HTTPServer.ClearTunConfig()
 		return fmt.Errorf("set nonblock: %w", err)
+	}
+
+	// Pre-resolve the proxy server hostname and populate the DNS cache
+	// to avoid a circular dependency once TUN routes are active.
+	if serverAddr := a.cfg.DefaultServer().Address; net.ParseIP(serverAddr) == nil {
+		if a.core.SocksServer != nil && len(config.DirectDNSServers) > 0 {
+			a.core.SocksServer.PrePopulateDNS(serverAddr, config.DirectDNSServers[0])
+			log.Info("[SYSTRAY] pre-populated dns cache for server", "host", serverAddr)
+		}
 	}
 
 	// 5. Create the tun manager using the received fd.
