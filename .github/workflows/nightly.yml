@@ -100,6 +100,7 @@ jobs:
 
       - name: Set outputs
         id: vars
+        shell: bash
         run: |
           echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
           echo "timestamp_minute=$(date -u +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
