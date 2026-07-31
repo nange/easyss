@@ -3,7 +3,6 @@ module github.com/nange/easyss/v3
 go 1.26.3
 
 require (
-	fyne.io/systray v1.12.2
 	github.com/caddyserver/certmagic v0.25.2
 	github.com/coocood/freecache v1.2.7
 	github.com/libp2p/go-netroute v0.4.0
@@ -21,6 +20,8 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gvisor.dev/gvisor v0.0.0-20260701204157-69c2d17aea96
 )
+
+require github.com/go-webgpu/goffi v0.6.2 // indirect
 
 require (
 	4d63.com/gocheckcompilerdirectives v1.3.0 // indirect
@@ -102,7 +103,7 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/go-xmlfmt/xmlfmt v1.1.3 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
-	github.com/godbus/dbus/v5 v5.1.0 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/godoc-lint/godoc-lint v0.10.0 // indirect
 	github.com/gofrs/flock v0.12.1 // indirect
 	github.com/golangci/asciicheck v0.5.0 // indirect
@@ -170,6 +171,7 @@ require (
 	github.com/moricho/tparallel v0.3.2 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/nakabonne/nestif v0.3.1 // indirect
+	github.com/nange/systray v0.2.1-easyss.1
 	github.com/nishanths/exhaustive v0.12.0 // indirect
 	github.com/nishanths/predeclared v0.2.2 // indirect
 	github.com/nunnatsa/ginkgolinter v0.21.0 // indirect

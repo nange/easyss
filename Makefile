@@ -7,7 +7,7 @@ LDFLAGS += -X "github.com/nange/easyss/v3/version.GitTag=$(shell git describe --
 GO := go
 GO_BUILD := go build -ldflags '$(LDFLAGS)'
 WIN_ARCH ?= amd64
-GO_BUILD_WIN := GOOS=windows GOARCH=$(WIN_ARCH) CGO_ENABLED=1 go build -ldflags '-H windowsgui $(LDFLAGS)'
+GO_BUILD_WIN := GOOS=windows GOARCH=$(WIN_ARCH) CGO_ENABLED=0 go build -ldflags '-H windowsgui $(LDFLAGS)'
 GOMOBILE := $(shell go env GOPATH)/bin/gomobile
 GOMOBILE_BIND := $(GOMOBILE) bind -target=android/arm64,android/amd64 -androidapi 29 -ldflags '$(LDFLAGS)'
 
@@ -26,7 +26,7 @@ easyss-windows:
 
 easyss-mac-app:
 	cd cmd/easyss; \
-	MACOSX_DEPLOYMENT_TARGET=14.0 CGO_LDFLAGS="-mmacosx-version-min=14.0" $(GO_BUILD) -o ../../bin/easyss
+	CGO_ENABLED=0 GOOS=darwin $(GO_BUILD) -o ../../bin/easyss
 	bash scripts/app-bundle.sh bin/easyss icon/icon_1024_1024.png cmd/easyss/Info.plist
 
 easyss-without-tray:

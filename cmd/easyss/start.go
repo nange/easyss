@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"syscall"
 
-	"fyne.io/systray"
 	"github.com/nange/easyss/v3/log"
 )
 
@@ -24,6 +23,12 @@ func runApp(disableTray, daemon bool, app *App) {
 	defer releaseSingletonLock()
 
 	if !disableTray && (runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux") {
+		// Pin this goroutine to its OS thread: the tray window is created on
+		// the current thread and the message loop must run on the same thread
+		// (Win32 message queues are per-thread). Without this, the Go runtime
+		// may migrate the goroutine after blocking syscalls in Start().
+		runtime.LockOSThread()
+
 		ta := &TrayApp{
 			App:     app,
 			closing: make(chan struct{}),
@@ -36,13 +41,17 @@ func runApp(disableTray, daemon bool, app *App) {
 			select {
 			case sig := <-c:
 				log.Info("[EASYSS-V3] got signal to exit", "signal", sig)
-				systray.Quit()
+				if ta.tray != nil {
+					ta.tray.Remove()
+				}
 			case <-ta.closing:
 				log.Info("[EASYSS-V3] easyss exiting...")
 			}
 		}()
 
-		systray.Run(ta.trayReady, ta.trayExit)
+		ta.buildTray()
+		_ = ta.tray.Run()
+		ta.trayExit()
 	} else {
 		proxyWasSet := false
 		if !app.cfg.Local.DisableSysProxy && app.cfg.Local.HTTPPort > 0 {

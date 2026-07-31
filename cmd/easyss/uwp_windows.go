@@ -6,156 +6,131 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
-	"sync"
 
-	"fyne.io/systray"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util"
+	"github.com/nange/systray"
 )
 
-type UWPApp struct {
-	Name              string `json:"Name"`
-	PackageFamilyName string `json:"PackageFamilyName"`
-	Exempt            bool
+func (a *TrayApp) addUWPLoopbackMenu(root *systray.Menu) {
+	a.uwpMenu = systray.NewMenu()
+	root.AddSubmenu("Windows UWP应用豁免", a.uwpMenu)
+	root.AddSeparator()
+
+	a.uwpMenu.Add("刷新列表", func() { go a.uwpRefresh() })
+
+	// Populate the list asynchronously; the menu already shows "刷新列表".
+	go a.uwpRefresh()
 }
 
-type UWPMenuItem struct {
-	MenuItem *systray.MenuItem
-	App      *UWPApp
-	Mu       sync.RWMutex
-}
+func (a *TrayApp) uwpRefresh() {
+	a.uwpMu.Lock()
+	defer a.uwpMu.Unlock()
 
-func (a *TrayApp) addUWPLoopbackMenu() {
-	uwpMenu := systray.AddMenuItem("Windows UWP应用豁免", "")
+	apps, err := getInstalledUWPApps()
+	if err != nil {
+		log.Error("[UWP] Failed to get installed UWP apps", "err", err)
+		return
+	}
 
-	refreshItem := uwpMenu.AddSubMenuItem("刷新列表", "")
-	systray.AddSeparator()
+	exemptsStr, err := getExemptUWPAppsOutput()
+	if err != nil {
+		log.Error("[UWP] Failed to get exempt UWP apps", "err", err)
+	}
+	exemptsStr = strings.ToLower(exemptsStr)
 
-	var menuItems []*UWPMenuItem
-	var mu sync.Mutex
-
-	refreshFunc := func() {
-		mu.Lock()
-		defer mu.Unlock()
-
-		apps, err := getInstalledUWPApps()
-		if err != nil {
-			log.Error("[UWP] Failed to get installed UWP apps", "err", err)
-			return
-		}
-
-		exemptsStr, err := getExemptUWPAppsOutput()
-		if err != nil {
-			log.Error("[UWP] Failed to get exempt UWP apps", "err", err)
-		}
-		exemptsStr = strings.ToLower(exemptsStr)
-
-		for i := range apps {
-			if strings.Contains(exemptsStr, strings.ToLower(apps[i].PackageFamilyName)) {
-				apps[i].Exempt = true
-			}
-		}
-
-		sort.Slice(apps, func(i, j int) bool {
-			return strings.ToLower(apps[i].Name) < strings.ToLower(apps[j].Name)
-		})
-
-		appIndex := 0
-		for _, app := range apps {
-			if app.Name == "" || app.PackageFamilyName == "" {
-				continue
-			}
-
-			if appIndex >= len(menuItems) {
-				item := uwpMenu.AddSubMenuItemCheckbox(app.Name, "", app.Exempt)
-				uwpItem := &UWPMenuItem{
-					MenuItem: item,
-					App:      &app,
-				}
-				menuItems = append(menuItems, uwpItem)
-
-				go func(u *UWPMenuItem) {
-					for {
-						select {
-						case <-u.MenuItem.ClickedCh:
-							u.Mu.RLock()
-							targetApp := u.App
-							u.Mu.RUnlock()
-
-							if targetApp == nil {
-								continue
-							}
-
-							if u.MenuItem.Checked() {
-								if err := removeLoopbackExempt(targetApp.PackageFamilyName); err != nil {
-									log.Error("[UWP] Failed to remove exemption", "app", targetApp.Name, "err", err)
-								} else {
-									u.MenuItem.Uncheck()
-									log.Info("[UWP] Removed exemption", "app", targetApp.Name)
-									u.Mu.Lock()
-									if u.App != nil {
-										u.App.Exempt = false
-									}
-									u.Mu.Unlock()
-								}
-							} else {
-								if err := addLoopbackExempt(targetApp.PackageFamilyName); err != nil {
-									log.Error("[UWP] Failed to add exemption", "app", targetApp.Name, "err", err)
-								} else {
-									u.MenuItem.Check()
-									log.Info("[UWP] Added exemption", "app", targetApp.Name)
-									u.Mu.Lock()
-									if u.App != nil {
-										u.App.Exempt = true
-									}
-									u.Mu.Unlock()
-								}
-							}
-						case <-a.closing:
-							return
-						}
-					}
-				}(uwpItem)
-
-			} else {
-				uwpItem := menuItems[appIndex]
-				uwpItem.Mu.Lock()
-				uwpItem.App = &app
-				uwpItem.Mu.Unlock()
-
-				uwpItem.MenuItem.SetTitle(app.Name)
-				if app.Exempt {
-					uwpItem.MenuItem.Check()
-				} else {
-					uwpItem.MenuItem.Uncheck()
-				}
-				uwpItem.MenuItem.Show()
-			}
-			appIndex++
-		}
-
-		for i := appIndex; i < len(menuItems); i++ {
-			menuItems[i].MenuItem.Hide()
-			menuItems[i].Mu.Lock()
-			menuItems[i].App = nil
-			menuItems[i].Mu.Unlock()
+	for i := range apps {
+		if strings.Contains(exemptsStr, strings.ToLower(apps[i].PackageFamilyName)) {
+			apps[i].Exempt = true
 		}
 	}
 
+	sort.Slice(apps, func(i, j int) bool {
+		return strings.ToLower(apps[i].Name) < strings.ToLower(apps[j].Name)
+	})
+
+	// gogpu/systray builds the native menu (HMENU) on SetMenu; there is no
+	// Show/Hide for menu items. Reuse existing items and append new ones,
+	// then re-SetMenu only when the menu tree shape changed. Items that no
+	// longer correspond to an installed app are disabled instead of hidden.
+	needsRebuild := false
+	appIndex := 0
+	for _, app := range apps {
+		if app.Name == "" || app.PackageFamilyName == "" {
+			continue
+		}
+
+		if appIndex >= len(a.uwpItems) {
+			uwpItem := &UWPMenuItem{App: &app}
+			item := a.uwpMenu.AddCheckbox(app.Name, app.Exempt, func(u *UWPMenuItem) func() {
+				return func() { a.onUWPItemClicked(u) }
+			}(uwpItem))
+			uwpItem.MenuItem = item
+			a.setChecked(item, app.Exempt)
+			a.uwpItems = append(a.uwpItems, uwpItem)
+			needsRebuild = true
+		} else {
+			uwpItem := a.uwpItems[appIndex]
+			uwpItem.Mu.Lock()
+			uwpItem.App = &app
+			uwpItem.Mu.Unlock()
+
+			uwpItem.MenuItem.SetLabel(app.Name)
+			uwpItem.MenuItem.SetDisabled(false)
+			a.setChecked(uwpItem.MenuItem, app.Exempt)
+		}
+		appIndex++
+	}
+
+	for i := appIndex; i < len(a.uwpItems); i++ {
+		uwpItem := a.uwpItems[i]
+		uwpItem.MenuItem.SetDisabled(true)
+		uwpItem.Mu.Lock()
+		uwpItem.App = nil
+		uwpItem.Mu.Unlock()
+	}
+
+	if needsRebuild && a.tray != nil {
+		a.tray.SetMenu(a.rootMenu)
+	}
+}
+
+func (a *TrayApp) onUWPItemClicked(u *UWPMenuItem) {
 	go func() {
-		for {
-			select {
-			case <-refreshItem.ClickedCh:
-				log.Info("[UWP] Refreshing app list...")
-				refreshFunc()
-				log.Info("[UWP] Refresh complete")
-			case <-a.closing:
-				return
+		u.Mu.RLock()
+		targetApp := u.App
+		u.Mu.RUnlock()
+
+		if targetApp == nil {
+			return
+		}
+
+		if a.isChecked(u.MenuItem) {
+			if err := removeLoopbackExempt(targetApp.PackageFamilyName); err != nil {
+				log.Error("[UWP] Failed to remove exemption", "app", targetApp.Name, "err", err)
+			} else {
+				a.setChecked(u.MenuItem, false)
+				log.Info("[UWP] Removed exemption", "app", targetApp.Name)
+				u.Mu.Lock()
+				if u.App != nil {
+					u.App.Exempt = false
+				}
+				u.Mu.Unlock()
+			}
+		} else {
+			if err := addLoopbackExempt(targetApp.PackageFamilyName); err != nil {
+				log.Error("[UWP] Failed to add exemption", "app", targetApp.Name, "err", err)
+			} else {
+				a.setChecked(u.MenuItem, true)
+				log.Info("[UWP] Added exemption", "app", targetApp.Name)
+				u.Mu.Lock()
+				if u.App != nil {
+					u.App.Exempt = true
+				}
+				u.Mu.Unlock()
 			}
 		}
 	}()
-
-	go refreshFunc()
 }
 
 func getInstalledUWPApps() ([]UWPApp, error) {
