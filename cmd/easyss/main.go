@@ -190,7 +190,7 @@ func (a *App) Start() error {
 		// elevation (helper process or restart as root). Skip direct
 		// creation here to avoid "operation not permitted".
 		if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !IsRoot() {
-			log.Info("[EASYSS-V3] tun2socks will be started via elevation (non-root)")
+			log.Warn("[EASYSS-V3] tun2socks requires root; skipped (use sudo, or run with system tray for automatic elevation)")
 		} else {
 			socksProxyAddr := "socks5://127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
 			tunCfg := tun.Config{
