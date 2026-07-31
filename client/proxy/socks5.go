@@ -73,6 +73,12 @@ func defaultDirectDialContext(ctx context.Context, network, addr string) (net.Co
 	return dialer.DialContext(ctx, network, addr)
 }
 
+// PrePopulateDNS pre-seeds the DNS cache with the resolved IPs for the
+// given domain. This avoids a DNS deadlock when TUN routes are active.
+func (s *Socks5Server) PrePopulateDNS(domain, dnsServer string, requireIPv4 bool) error {
+	return s.dnsCache.PrePopulate(domain, dnsServer, requireIPv4)
+}
+
 func (s *Socks5Server) Start() error {
 	go s.cleanupLoop()
 	return s.srv.ListenAndServe(s)

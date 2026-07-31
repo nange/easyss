@@ -14,6 +14,12 @@ import (
 
 const utunControlName = "com.apple.net.utun_control"
 
+// tunFdSocketPath returns the filesystem Unix socket path for fd passing.
+// macOS does not support abstract Unix sockets.
+func tunFdSocketPath() string {
+	return fmt.Sprintf("/tmp/easyss-tun-fd-%d.sock", os.Getpid())
+}
+
 // openTunDevice creates a TUN device on macOS using the SYSPROTO_CONTROL
 // kernel control socket mechanism. It returns the raw file descriptor and
 // the actual interface name assigned by the kernel.

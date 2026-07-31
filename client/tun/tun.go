@@ -187,8 +187,8 @@ func (m *Manager) Start() error {
 	time.Sleep(500 * time.Millisecond)
 
 	if !fdMode {
-		// Save original DNS and set TUN DNS on darwin.
-		if runtime.GOOS == "darwin" {
+		// Save original DNS and set TUN DNS on darwin and linux.
+		if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
 			if err := m.saveAndSetDNS(); err != nil {
 				log.Warn("[TUN] set system dns", "err", err)
 			}
@@ -208,7 +208,7 @@ func (m *Manager) Start() error {
 		if !fdMode {
 			_ = m.closeTunDevAndDelIPRoute()
 		}
-		if runtime.GOOS == "darwin" {
+		if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
 			_ = m.restoreDNS()
 		}
 		return m.ctx.Err()
@@ -242,8 +242,8 @@ func (m *Manager) Stop() {
 	if !m.cfg.SkipRouteCleanup {
 		_ = m.closeTunDevAndDelIPRoute()
 
-		// Restore original DNS on darwin.
-		if runtime.GOOS == "darwin" {
+		// Restore original DNS on darwin and linux.
+		if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
 			if err := m.restoreDNS(); err != nil {
 				log.Warn("[TUN] restore system dns", "err", err)
 			}
@@ -405,11 +405,16 @@ func (m *Manager) saveAndSetDNS() error {
 	}
 	m.originDNS = origin
 
-	// Only override DNS when the system has no custom DNS configured
-	// (i.e. using DHCP-provided DNS). If the user has manually set DNS,
-	// we preserve their choice.
-	if len(origin) == 0 && m.cfg.DNSServer != "" {
-		return util.SetSysDNS([]string{m.cfg.DNSServer})
+	if m.cfg.DNSServer != "" {
+		if runtime.GOOS == "linux" {
+			return util.SetSysDNS([]string{m.cfg.DNSServer})
+		}
+		// Darwin: only override DNS when the system has no custom DNS
+		// configured (i.e. using DHCP-provided DNS). If the user has
+		// manually set DNS, preserve their choice.
+		if len(origin) == 0 {
+			return util.SetSysDNS([]string{m.cfg.DNSServer})
+		}
 	}
 	return nil
 }

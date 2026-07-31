@@ -13,6 +13,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// tunFdSocketPath returns the abstract Unix socket path for fd passing.
+// Abstract sockets (@-prefixed) do not require a filesystem entry and are
+// immune to mount namespace isolation from pkexec.
+func tunFdSocketPath() string {
+	return fmt.Sprintf("@easyss-tun-fd-%d", os.Getpid())
+}
+
 // openTunDevice creates a TUN device on Linux using /dev/net/tun and the
 // TUNSETIFF ioctl. It returns the raw file descriptor and the actual
 // interface name assigned by the kernel.

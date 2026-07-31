@@ -4,8 +4,12 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
+	"runtime"
+	"time"
 
+	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/log"
@@ -64,8 +68,34 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	}
 	a.core.HTTPServer.SetTunConfig(tunHTTPCfg)
 
-	// 3. Spawn the elevated helper.
-	fdSocketPath := fmt.Sprintf("/tmp/easyss-tun-fd-%d.sock", os.Getpid())
+	// 3. Pre-resolve the proxy server hostname and populate the DNS cache
+	// before spawning the helper, to avoid a circular dependency once the
+	// helper sets the system DNS to go through TUN.
+	if serverAddr := a.cfg.DefaultServer().Address; net.ParseIP(serverAddr) == nil {
+		var err error
+		for i := 0; i < 3; i++ {
+			if a.core.SocksServer == nil || len(config.DirectDNSServers) == 0 {
+				err = fmt.Errorf("dns cache not available")
+				break
+			}
+			err = a.core.SocksServer.PrePopulateDNS(serverAddr, config.DirectDNSServers[0],
+				a.cfg.Routing.IPV6Rule != "enable")
+			if err == nil {
+				log.Info("[SYSTRAY] pre-populated dns cache for server", "host", serverAddr)
+				break
+			}
+			if i < 2 {
+				time.Sleep(time.Second)
+			}
+		}
+		if err != nil {
+			a.core.HTTPServer.ClearTunConfig()
+			return fmt.Errorf("failed to pre-resolve server hostname %s: %w", serverAddr, err)
+		}
+	}
+
+	// 4. Spawn the elevated helper.
+	fdSocketPath := tunFdSocketPath()
 	fifoWriter, fdListener, err := SpawnTunHelper(a.cfg.Local.HTTPPort, fdSocketPath,
 		a.cfg.Log.FilePath, a.cfg.Log.Level)
 	if err != nil {
@@ -73,10 +103,12 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 		return fmt.Errorf("spawn tun helper: %w", err)
 	}
 
-	// 4. Receive the TUN fd from the helper.
+	// 5. Receive the TUN fd from the helper.
 	fd, err := ReceiveFd(fdListener)
-	fdListener.Close()      //nolint:errcheck
-	os.Remove(fdSocketPath) //nolint:errcheck
+	fdListener.Close() //nolint:errcheck
+	if runtime.GOOS != "linux" {
+		os.Remove(fdSocketPath) //nolint:errcheck
+	}
 	if err != nil {
 		fifoWriter.Close() //nolint:errcheck
 		a.core.HTTPServer.ClearTunConfig()
@@ -92,7 +124,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 		return fmt.Errorf("set nonblock: %w", err)
 	}
 
-	// 5. Create the tun manager using the received fd.
+	// 6. Create the tun manager using the received fd.
 	a.cfg.Local.EnableTun2socks = true
 	a.tunMgr = tun.New(tun.Config{
 		Socks5Addr:       fmt.Sprintf("socks5://127.0.0.1:%d", a.cfg.Local.SocksPort),
