@@ -254,6 +254,20 @@ func flockWait(f *os.File, timeout time.Duration) error {
 	}
 }
 
+// fifoWriter wraps the FIFO write end and removes the FIFO file when closed,
+// so stale files never accumulate on retry or toggle-off. The FIFO is used
+// for lifecycle signalling: closing the writer (EOF) tells the helper to exit.
+type fifoWriter struct {
+	*os.File
+	path string
+}
+
+func (w *fifoWriter) Close() error {
+	err := w.File.Close()
+	os.Remove(w.path) //nolint:errcheck
+	return err
+}
+
 // ReceiveFd accepts a single connection on the Unix domain socket listener and
 // receives a file descriptor via SCM_RIGHTS. It does not read any data from
 // the connection — the fd is passed purely as ancillary data.
