@@ -556,11 +556,10 @@ func (a *TrayApp) closeTun2socks() error {
 	// 3. The helper coordinates with any previous instance via a file lock
 	//    (/tmp/easyss-tun.lock). No need to wait here — the next helper
 	//    will block on the lock until this one exits and releases it.
+	//    The FIFO file itself is removed when tunHelperStdin is closed
+	//    (see fifoWriter.Close).
 
-	// 4. Clean up the FIFO and clear the HTTP /tun config.
-	fifoPath := fmt.Sprintf("/tmp/easyss-tun-ctrl-%d.fifo", os.Getpid())
-	os.Remove(fifoPath) //nolint:errcheck
-
+	// 4. Clear the HTTP /tun config.
 	if a.core != nil && a.core.HTTPServer != nil {
 		a.core.HTTPServer.ClearTunConfig()
 	}

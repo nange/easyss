@@ -88,8 +88,9 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 		return nil, nil, fmt.Errorf("get executable: %w", err)
 	}
 
-	// Create a named FIFO for lifecycle signalling.
+	// Create a named FIFO for lifecycle signalling. Clean stale file first.
 	fifoPath := fmt.Sprintf("/tmp/easyss-tun-ctrl-%d.fifo", os.Getpid())
+	os.Remove(fifoPath) //nolint:errcheck
 	if err := unix.Mkfifo(fifoPath, 0600); err != nil {
 		return nil, nil, fmt.Errorf("mkfifo %s: %w", fifoPath, err)
 	}
@@ -180,7 +181,7 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 				os.Remove(fifoPath)      //nolint:errcheck
 				return nil, nil, fmt.Errorf("open fifo write: %w", r.err)
 			}
-			return r.f, fdListener, nil
+			return &fifoWriter{File: r.f, path: fifoPath}, fdListener, nil
 		case err := <-pkexecCh:
 			if err == nil {
 				// pkexec succeeded; the helper may spawn a moment after

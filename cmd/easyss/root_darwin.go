@@ -204,14 +204,3 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 		}
 	}
 }
-
-type fifoWriter struct {
-	*os.File
-	path string
-}
-
-func (w *fifoWriter) Close() error {
-	err := w.File.Close()
-	os.Remove(w.path) //nolint:errcheck
-	return err
-}
