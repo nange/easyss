@@ -78,8 +78,9 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 		return nil, nil, fmt.Errorf("get executable: %w", err)
 	}
 
-	// Create a named FIFO for lifecycle signalling.
+	// Create a named FIFO for lifecycle signalling. Clean stale file first.
 	fifoPath := fmt.Sprintf("/tmp/easyss-tun-ctrl-%d.fifo", os.Getpid())
+	os.Remove(fifoPath) //nolint:errcheck
 	if err := unix.Mkfifo(fifoPath, 0600); err != nil {
 		return nil, nil, fmt.Errorf("mkfifo %s: %w", fifoPath, err)
 	}
@@ -96,7 +97,8 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 		fifoCh <- fifoResult{f, err}
 	}()
 
-	// Create the Unix socket for fd passing.
+	// Create the Unix socket for fd passing. Clean stale socket first.
+	os.Remove(fdSocketPath) //nolint:errcheck
 	fdListener, err := net.Listen("unix", fdSocketPath)
 	if err != nil {
 		// Clean up the FIFO on failure. The goroutine will unblock when we
@@ -169,7 +171,7 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 				os.Remove(fdSocketPath)     //nolint:errcheck
 				return nil, nil, fmt.Errorf("open fifo write: %w", r.err)
 			}
-			return r.f, fdListener, nil
+			return &fifoWriter{File: r.f, path: fifoPath}, fdListener, nil
 		case err := <-osaCh:
 			if err == nil {
 				// osascript succeeded; the helper may spawn a moment after
@@ -201,4 +203,15 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 			return nil, nil, fmt.Errorf("timeout waiting for tun helper (user may have cancelled)")
 		}
 	}
+}
+
+type fifoWriter struct {
+	*os.File
+	path string
+}
+
+func (w *fifoWriter) Close() error {
+	err := w.File.Close()
+	os.Remove(w.path) //nolint:errcheck
+	return err
 }
