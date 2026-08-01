@@ -94,10 +94,15 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 		}
 	}
 
-	// 4. Spawn the elevated helper.
+	// 4. Spawn the elevated helper. Use the configured timeout (seconds) as
+	//    the spawn wait limit; fall back to 30s if unset or invalid.
+	spawnTimeout := 30 * time.Second
+	if a.cfg.Timeout > 0 {
+		spawnTimeout = time.Duration(a.cfg.Timeout) * time.Second
+	}
 	fdSocketPath := tunFdSocketPath()
 	fifoWriter, fdListener, err := SpawnTunHelper(a.cfg.Local.HTTPPort, fdSocketPath,
-		a.cfg.Log.FilePath, a.cfg.Log.Level)
+		a.cfg.Log.FilePath, a.cfg.Log.Level, spawnTimeout)
 	if err != nil {
 		a.core.HTTPServer.ClearTunConfig()
 		return fmt.Errorf("spawn tun helper: %w", err)

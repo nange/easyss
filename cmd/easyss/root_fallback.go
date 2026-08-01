@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"time"
 )
 
 func IsRoot() bool {
@@ -17,6 +18,6 @@ func RunMeElevated(extraArgs ...string) error {
 	return errors.New("unsupported operating system for elevation")
 }
 
-func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string) (io.WriteCloser, net.Listener, error) {
+func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeout time.Duration) (io.WriteCloser, net.Listener, error) {
 	return nil, nil, fmt.Errorf("SpawnTunHelper is not supported on this platform")
 }

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net"
@@ -67,7 +68,7 @@ func resolveConfigArg(extraArgs *[]string) {
 // Returns:
 //   - fifoWriter: close to signal the helper to shut down
 //   - fdListener: accept a connection and call ReceiveFd to get the TUN fd
-func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string) (io.WriteCloser, net.Listener, error) {
+func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeout time.Duration) (io.WriteCloser, net.Listener, error) {
 	log.Info("[SYSTRAY] SpawnTunHelper called",
 		"httpPort", httpPort, "fdSocket", fdSocketPath,
 		"logFile", logFile, "logLevel", logLevel)
@@ -134,6 +135,9 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string) (io.Wr
 	script := fmt.Sprintf("do shell script \"%s\" with administrator privileges", scriptCmd)
 
 	osascriptCmd := exec.Command("osascript", "-e", script)
+	var osaOut, osaErr bytes.Buffer
+	osascriptCmd.Stdout = &osaOut
+	osascriptCmd.Stderr = &osaErr
 	if err := osascriptCmd.Start(); err != nil {
 		fdListener.Close()      //nolint:errcheck
 		os.Remove(fifoPath)     //nolint:errcheck
@@ -141,23 +145,60 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string) (io.Wr
 		return nil, nil, fmt.Errorf("start osascript: %w", err)
 	}
 
+	// Wait for osascript in the background so an early exit (auth
+	// cancelled/denied, AppleScript error) surfaces immediately with the
+	// real reason instead of a blind 60s FIFO timeout.
+	osaCh := make(chan error, 1)
+	go func() {
+		osaCh <- osascriptCmd.Wait()
+	}()
+
 	// Wait for the FIFO write end to be opened (helper opened the read end).
-	// If the user cancels the admin auth dialog, this will time out.
-	select {
-	case r := <-fifoCh:
-		if r.err != nil {
+	// If the user cancels the admin auth dialog, or osascript itself fails,
+	// this returns early with the underlying error.
+	timeout = max(timeout, 10*time.Second)
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	for {
+		select {
+		case r := <-fifoCh:
+			if r.err != nil {
+				osascriptCmd.Process.Kill() //nolint:errcheck
+				fdListener.Close()          //nolint:errcheck
+				os.Remove(fifoPath)         //nolint:errcheck
+				os.Remove(fdSocketPath)     //nolint:errcheck
+				return nil, nil, fmt.Errorf("open fifo write: %w", r.err)
+			}
+			return r.f, fdListener, nil
+		case err := <-osaCh:
+			if err == nil {
+				// osascript succeeded; the helper may spawn a moment after
+				// osascript returns, so keep waiting for the FIFO.
+				osaCh = nil
+				continue
+			}
+			// osascript exited with an error before the helper started
+			// (e.g. user cancelled the admin dialog).
 			fdListener.Close()      //nolint:errcheck
 			os.Remove(fifoPath)     //nolint:errcheck
 			os.Remove(fdSocketPath) //nolint:errcheck
-			return nil, nil, fmt.Errorf("open fifo write: %w", r.err)
+			detail := strings.TrimSpace(osaErr.String())
+			if detail == "" {
+				detail = strings.TrimSpace(osaOut.String())
+			}
+			if detail != "" {
+				return nil, nil, fmt.Errorf("osascript exited before tun helper started: %v: %s", err, detail)
+			}
+			return nil, nil, fmt.Errorf("osascript exited before tun helper started: %w", err)
+		case <-deadline.C:
+			// Timeout: user probably cancelled the admin dialog or the helper
+			// failed to start. Kill osascript so a late authorization cannot
+			// spawn a helper against sockets that are about to be removed.
+			osascriptCmd.Process.Kill() //nolint:errcheck
+			fdListener.Close()          //nolint:errcheck
+			os.Remove(fifoPath)         //nolint:errcheck
+			os.Remove(fdSocketPath)     //nolint:errcheck
+			return nil, nil, fmt.Errorf("timeout waiting for tun helper (user may have cancelled)")
 		}
-		return r.f, fdListener, nil
-	case <-time.After(60 * time.Second):
-		// Timeout: user probably cancelled the admin dialog or the helper
-		// failed to start. Clean up and return an error.
-		fdListener.Close()      //nolint:errcheck
-		os.Remove(fifoPath)     //nolint:errcheck
-		os.Remove(fdSocketPath) //nolint:errcheck
-		return nil, nil, fmt.Errorf("timeout waiting for tun helper (user may have cancelled)")
 	}
 }
