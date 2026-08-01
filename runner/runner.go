@@ -2,6 +2,7 @@ package runner
 
 import (
 	"errors"
+	"net"
 	"strconv"
 
 	"github.com/nange/easyss/v3/client"
@@ -60,8 +61,12 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		if cfg.Local.BindAll {
 			socksAddr = "[::]:" + strconv.Itoa(cfg.Local.SocksPort)
 		}
+		serverDomain := ""
+		if svr := cfg.DefaultServer(); svr != nil && net.ParseIP(svr.Address) == nil {
+			serverDomain = svr.Address
+		}
 		socksServer, err := proxy.NewSocks5Server(socksAddr, cfg.AuthUsername, cfg.AuthPassword,
-			streamHandler, cli.Router(), method, !cfg.Local.EnableQUIC, udpIdleTimeout, cli.DialContext)
+			streamHandler, cli.Router(), serverDomain, method, !cfg.Local.EnableQUIC, udpIdleTimeout, cli.DialContext)
 		if err != nil {
 			_ = cli.Close()
 			return nil, err

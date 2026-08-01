@@ -170,3 +170,30 @@ func TestParseAddress(t *testing.T) {
 	_, _, _, _ = ParseAddress("example.com:80")
 	// 纯 delegate 调用，只验证不 panic
 }
+
+func TestIsServerDomain(t *testing.T) {
+	s := &Socks5Server{serverDomain: "mysite.net"}
+	tests := []struct {
+		name   string
+		domain string
+		want   bool
+	}{
+		{"完全匹配", "mysite.net", true},
+		{"大小写不敏感", "MySite.NET", true},
+		{"带尾点", "mysite.net.", false}, // handleDNS 已 TrimSuffix
+		{"其他域名", "example.com", false},
+		{"子域名", "sub.mysite.net", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := s.isServerDomain(tt.domain); got != tt.want {
+				t.Errorf("isServerDomain(%q) = %v, want %v", tt.domain, got, tt.want)
+			}
+		})
+	}
+
+	empty := &Socks5Server{serverDomain: ""}
+	if empty.isServerDomain("mysite.net") {
+		t.Error("isServerDomain should be false when serverDomain is empty")
+	}
+}

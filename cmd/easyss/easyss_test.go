@@ -318,7 +318,7 @@ func newTestHarness(t *testing.T) *testHarness {
 
 	// Start SOCKS5 proxy
 	socksAddr := testServerAddr + ":" + strconv.Itoa(testSocks5Port)
-	socksServer, err := proxy.NewSocks5Server(socksAddr, "", "", handler, cli.Router(), method, true, udpIdleTimeout, cli.DialContext)
+	socksServer, err := proxy.NewSocks5Server(socksAddr, "", "", handler, cli.Router(), "", method, true, udpIdleTimeout, cli.DialContext)
 	require.NoError(t, err)
 	h.socksServer = socksServer
 

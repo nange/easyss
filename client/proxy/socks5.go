@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,7 @@ type Socks5Server struct {
 	handler           *StreamHandler
 	router            *router.Router
 	dnsCache          *easydns.Cache
+	serverDomain      string
 	method            protocol.Method
 	disableQUIC       bool
 	directDialContext func(context.Context, string, string) (net.Conn, error)
@@ -37,17 +39,21 @@ type Socks5Server struct {
 	udpIdleTimeout time.Duration
 }
 
-func NewSocks5Server(listenAddr, username, password string, handler *StreamHandler, rt *router.Router, method protocol.Method, disableQUIC bool, udpIdleTimeout time.Duration, directDialContext func(context.Context, string, string) (net.Conn, error)) (*Socks5Server, error) {
+func NewSocks5Server(listenAddr, username, password string, handler *StreamHandler, rt *router.Router, serverDomain string, method protocol.Method, disableQUIC bool, udpIdleTimeout time.Duration, directDialContext func(context.Context, string, string) (net.Conn, error)) (*Socks5Server, error) {
 	if udpIdleTimeout <= 0 {
 		udpIdleTimeout = 30 * time.Second
 	}
 	if directDialContext == nil {
 		directDialContext = defaultDirectDialContext
 	}
+	if net.ParseIP(serverDomain) != nil {
+		serverDomain = ""
+	}
 	s := &Socks5Server{
 		handler:           handler,
 		router:            rt,
 		dnsCache:          easydns.NewCache(),
+		serverDomain:      serverDomain,
 		method:            method,
 		disableQUIC:       disableQUIC,
 		directDialContext: directDialContext,
@@ -77,6 +83,15 @@ func defaultDirectDialContext(ctx context.Context, network, addr string) (net.Co
 // given domain. This avoids a DNS deadlock when TUN routes are active.
 func (s *Socks5Server) PrePopulateDNS(domain, dnsServer string, requireIPv4 bool) error {
 	return s.dnsCache.PrePopulate(domain, dnsServer, requireIPv4)
+}
+
+// isServerDomain reports whether the given domain is the proxy server's own
+// hostname. DNS queries for it must never take the proxied path: resolving
+// the server domain would require opening a tunnel stream, which in turn
+// needs to dial the server domain — a circular dependency that deadlocks
+// (especially after system sleep/wake when cached entries may have expired).
+func (s *Socks5Server) isServerDomain(domain string) bool {
+	return s.serverDomain != "" && strings.EqualFold(domain, s.serverDomain)
 }
 
 func (s *Socks5Server) Start() error {

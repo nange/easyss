@@ -55,7 +55,15 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 		return responseBlockedDNSMsg(srv.UDPConn, clientAddr, msg, d.Address())
 	}
 
-	isDirect := rule == router.HostRuleDirect
+	// Never take the proxied path for the proxy server's own domain:
+	// opening the tunnel to answer the query would require resolving the
+	// server domain again, a circular dependency. Fall back to the direct
+	// path (bound to the physical interface, bypassing the TUN).
+	isServerDomain := s.isServerDomain(domain)
+	if isServerDomain {
+		log.Info("[DNS_SERVER_DOMAIN] direct", "domain", domain, "qtype", qtype)
+	}
+	isDirect := isServerDomain || rule == router.HostRuleDirect
 
 	if cached := s.dnsCache.Get(question.Name, qtype, isDirect); cached != nil {
 		log.Info("[DNS_CACHE] hit", "domain", domain, "qtype", qtype, "direct", isDirect)
