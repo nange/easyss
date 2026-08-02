@@ -75,12 +75,17 @@ func DirFileList(dir string) ([]string, error) {
 }
 
 func WriteToTemp(filename string, content []byte) (namePath string, err error) {
-	tf, err := os.CreateTemp("", filename)
+	ext := filepath.Ext(filename)
+	base := strings.TrimSuffix(filename, ext)
+	pattern := base + "_*" + ext
+	tf, err := os.CreateTemp("", pattern)
 	if err != nil {
 		return "", err
 	}
 
 	if _, err := tf.Write(content); err != nil {
+		tf.Close()           //nolint:errcheck
+		os.Remove(tf.Name()) //nolint:errcheck
 		return "", err
 	}
 
