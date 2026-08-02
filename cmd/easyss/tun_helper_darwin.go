@@ -5,7 +5,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/nange/easyss/v3/scripts"
 	"github.com/nange/easyss/v3/util"
@@ -79,7 +78,7 @@ func runCreateScript(device, tunIP, tunGW, localGateway,
 	if err != nil {
 		return fmt.Errorf("write create script: %w", err)
 	}
-	defer os.RemoveAll(filepath.Dir(namePath)) //nolint:errcheck
+	defer os.Remove(namePath) //nolint:errcheck
 
 	_, err = util.Command("sh", namePath, device, tunIP, tunGW, localGateway,
 		tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6)
@@ -100,7 +99,7 @@ func runCloseScript(device, tunGW, localGateway, tunGWV6, serverIPV6, localGatew
 	if err != nil {
 		return nil
 	}
-	defer os.RemoveAll(filepath.Dir(namePath)) //nolint:errcheck
+	defer os.Remove(namePath) //nolint:errcheck
 
 	_, _ = util.Command("sh", namePath, device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6)
 	return nil
