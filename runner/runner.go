@@ -107,6 +107,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		}
 		c.SocksServer = socksServer
 		log.Info("[EASYSS] starting socks5 server", "addr", socksAddr)
+		c.SocksServer.MarkStarted()
 		go func() {
 			if err := c.SocksServer.Start(); err != nil && !errors.Is(err, net.ErrClosed) {
 				log.Error("[EASYSS] socks5 server", "err", err)

@@ -2,10 +2,9 @@ package runner
 
 import (
 	"net"
-	"strconv"
+	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/nange/easyss/v3/client/config"
 )
@@ -25,21 +24,26 @@ func testConfig() *config.ClientConfig {
 	return cfg
 }
 
-// waitAccept polls addr until the server has started accepting connections.
-// Stopping a socks5 server before its accept loop is up deadlocks inside the
-// txthinking/socks5 runnergroup library, so tests must wait before Stop.
-func waitAccept(t *testing.T, addr string) {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		c, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
-		if err == nil {
-			c.Close()
-			return
+// TestStopImmediatelyAfterRun guards against the deadlock that occurs when
+// Socks5Server.Close races with the Start goroutine's accept loop setup.
+// GOMAXPROCS(1) forces the main goroutine to run to the point of Shutdown
+// before the server goroutine sets up its accept loop, deterministically
+// exposing the race. Run must remain safe to stop right after startup.
+func TestStopImmediatelyAfterRun(t *testing.T) {
+	old := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(old)
+
+	for i := 0; i < 5; i++ {
+		cfg := testConfig()
+		cfg.Local.SocksPort = freePort(t)
+		cfg.Local.HTTPPort = 0
+
+		core, err := Run(cfg)
+		if err != nil {
+			t.Fatalf("Run #%d: %v", i, err)
 		}
-		time.Sleep(50 * time.Millisecond)
+		core.Stop()
 	}
-	t.Fatalf("server did not start listening on %s", addr)
 }
 
 // occupyTCPPort returns a listener bound to a random 127.0.0.1 port that
@@ -130,10 +134,8 @@ func TestPrebindUDP(t *testing.T) {
 
 func TestRunOKWhenPortsAreFree(t *testing.T) {
 	cfg := testConfig()
-	socksPort := freePort(t)
-	httpPort := freePort(t)
-	cfg.Local.SocksPort = socksPort
-	cfg.Local.HTTPPort = httpPort
+	cfg.Local.SocksPort = freePort(t)
+	cfg.Local.HTTPPort = freePort(t)
 
 	core, err := Run(cfg)
 	if err != nil {
@@ -142,6 +144,5 @@ func TestRunOKWhenPortsAreFree(t *testing.T) {
 	if core == nil {
 		t.Fatal("core is nil")
 	}
-	waitAccept(t, "127.0.0.1:"+strconv.Itoa(socksPort))
 	core.Stop()
 }

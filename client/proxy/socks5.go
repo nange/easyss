@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nange/easyss/v3/client/router"
@@ -37,6 +38,7 @@ type Socks5Server struct {
 	quit           chan struct{}
 	closeOnce      sync.Once
 	udpIdleTimeout time.Duration
+	started        atomic.Bool
 }
 
 func NewSocks5Server(listenAddr, username, password string, handler *StreamHandler, rt *router.Router, serverDomain string, method protocol.Method, disableQUIC bool, udpIdleTimeout time.Duration, directDialContext func(context.Context, string, string) (net.Conn, error)) (*Socks5Server, error) {
@@ -94,13 +96,48 @@ func (s *Socks5Server) isServerDomain(domain string) bool {
 	return s.serverDomain != "" && strings.EqualFold(domain, s.serverDomain)
 }
 
+// MarkStarted records that Start is about to be called. It must be called
+// synchronously before launching Start in a goroutine: the flag set inside
+// Start itself would race with a Close on a single-core scheduler, letting
+// the server goroutine leak its listener.
+func (s *Socks5Server) MarkStarted() {
+	s.started.Store(true)
+}
+
 func (s *Socks5Server) Start() error {
+	s.started.Store(true)
 	go s.cleanupLoop()
 	return s.srv.ListenAndServe(s)
 }
 
+// waitForAccept polls the listen address until the server has started
+// accepting connections. Shutting down before the accept loop is up
+// deadlocks inside the txthinking/socks5 runnergroup library, so Close
+// must never race with the goroutine spawned by Start.
+func (s *Socks5Server) waitForAccept() {
+	if s.srv == nil {
+		return
+	}
+	addr := s.srv.Addr
+	if addr == "" {
+		return
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		c, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if err == nil {
+			_ = c.Close()
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func (s *Socks5Server) Close() error {
 	s.closeOnce.Do(func() { close(s.quit) })
+	if s.started.Load() {
+		s.waitForAccept()
+	}
 	s.udpMu.Lock()
 	defer s.udpMu.Unlock()
 	for key, ue := range s.udpExch {
