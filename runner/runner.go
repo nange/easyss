@@ -49,6 +49,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 	timeout := cfg.TimeoutDuration()
 	streamIdleTimeout := 10 * timeout
 	udpIdleTimeout := 2 * timeout
+	dialTimeout := timeout / 2
 
 	streamHandler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, streamIdleTimeout)
 
@@ -100,7 +101,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 			serverDomain = svr.Address
 		}
 		socksServer, err := proxy.NewSocks5Server(socksAddr, cfg.AuthUsername, cfg.AuthPassword,
-			streamHandler, cli.Router(), serverDomain, method, !cfg.Local.EnableQUIC, udpIdleTimeout, cli.DialContext)
+			streamHandler, cli.Router(), serverDomain, method, !cfg.Local.EnableQUIC, dialTimeout, udpIdleTimeout, cli.DialContext)
 		if err != nil {
 			_ = cli.Close()
 			return nil, err

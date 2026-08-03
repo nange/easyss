@@ -308,6 +308,7 @@ func newTestHarness(t *testing.T) *testHarness {
 	timeout := clientCfg.TimeoutDuration()
 	streamIdleTimeout := 10 * timeout
 	udpIdleTimeout := 2 * timeout
+	dialTimeout := timeout / 2
 	shaperCfg := shaper.Config{
 		BatchWindowMS: clientCfg.Shaper.BatchWindowMS,
 		Cover: shaper.CoverConfig{
@@ -318,7 +319,7 @@ func newTestHarness(t *testing.T) *testHarness {
 
 	// Start SOCKS5 proxy
 	socksAddr := testServerAddr + ":" + strconv.Itoa(testSocks5Port)
-	socksServer, err := proxy.NewSocks5Server(socksAddr, "", "", handler, cli.Router(), "", method, true, udpIdleTimeout, cli.DialContext)
+	socksServer, err := proxy.NewSocks5Server(socksAddr, "", "", handler, cli.Router(), "", method, true, dialTimeout, udpIdleTimeout, cli.DialContext)
 	require.NoError(t, err)
 	h.socksServer = socksServer
 

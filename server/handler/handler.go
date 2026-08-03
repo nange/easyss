@@ -229,7 +229,14 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c2sReader.SetLeftoverFrames(first.Leftover)
 
 	s2cWriter := crypto.NewRecordWriter(w, s2cEnc, s2cCounter, aadS2C)
-	s2cShaper := shaper.New(s2cWriter, shaper.Config{BatchWindowMS: h.batchWindowMS, Cover: shaper.CoverConfig{BudgetRatio: h.coverBudgetRatio, BudgetCap: h.coverBudgetCap}})
+	s2cCfg := shaper.Config{BatchWindowMS: h.batchWindowMS, Cover: shaper.CoverConfig{BudgetRatio: h.coverBudgetRatio, BudgetCap: h.coverBudgetCap}}
+	if endpoint == sharedconfig.EndpointUDP {
+		// UDP uses a short 1ms batch window so datagram bursts are merged
+		// into single encrypted records instead of one record + forced
+		// HTTP/2 flush per datagram.
+		s2cCfg.BatchWindowMS = 1
+	}
+	s2cShaper := shaper.New(s2cWriter, s2cCfg)
 	defer s2cShaper.Close() //nolint:errcheck
 
 	var handleErr error
