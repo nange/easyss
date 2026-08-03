@@ -235,7 +235,6 @@ func (s *HTTPProxyServer) isSelfTarget(r *http.Request) bool {
 	if target == s.listenAddr {
 		return true
 	}
-	// Handle localhost aliases (e.g. 127.0.0.1 vs localhost vs ::1).
 	th, tp, err := net.SplitHostPort(target)
 	if err != nil {
 		return false
@@ -247,7 +246,63 @@ func (s *HTTPProxyServer) isSelfTarget(r *http.Request) bool {
 	if tp != lp {
 		return false
 	}
-	return th == "127.0.0.1" || th == "localhost" || th == "::1"
+	if th == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(th)
+	if ip == nil {
+		// Never resolve domain names here: the lookup would go through the
+		// proxied DNS path and could deadlock or recurse.
+		return false
+	}
+	_, local := localIPSet()[ip.String()]
+	return ip.IsLoopback() || local
+}
+
+const localIPsCacheTTL = 60 * time.Second
+
+var localIPsCache = struct {
+	sync.Mutex
+	updated time.Time
+	set     map[string]struct{}
+}{}
+
+// localIPSet returns the set of IP addresses currently assigned to local
+// interfaces, cached for localIPsCacheTTL. It detects requests targeting the
+// proxy host itself: when listening on [::]:port, a request to a LAN address
+// of this host (e.g. 192.168.1.5:port) would otherwise be tunneled to the
+// server and potentially loop back into this proxy, creating an infinite
+// forwarding loop.
+func localIPSet() map[string]struct{} {
+	localIPsCache.Lock()
+	defer localIPsCache.Unlock()
+	if time.Since(localIPsCache.updated) < localIPsCacheTTL && localIPsCache.set != nil {
+		return localIPsCache.set
+	}
+	set := make(map[string]struct{})
+	if ifaces, err := net.Interfaces(); err == nil {
+		for _, ifc := range ifaces {
+			addrs, err := ifc.Addrs()
+			if err != nil {
+				continue
+			}
+			for _, a := range addrs {
+				var ip net.IP
+				switch v := a.(type) {
+				case *net.IPNet:
+					ip = v.IP
+				case *net.IPAddr:
+					ip = v.IP
+				}
+				if ip != nil {
+					set[ip.String()] = struct{}{}
+				}
+			}
+		}
+	}
+	localIPsCache.set = set
+	localIPsCache.updated = time.Now()
+	return set
 }
 
 func (s *HTTPProxyServer) authOK(r *http.Request) bool {

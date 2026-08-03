@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nange/easyss/v3/config"
@@ -399,7 +400,7 @@ type UDPExchange struct {
 	tx       shaper.Shaper
 	reader   *crypto.DecryptedReader
 	target   string
-	lastSeen time.Time
+	lastSeen atomic.Int64 // UnixNano, written by Send/Receive, read by LastSeen
 	mu       sync.Mutex
 }
 
@@ -438,19 +439,20 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 	dr := crypto.NewDecryptedReader(stream, aadS2C, s2cEnc, s2cCounter)
 
 	log.Debug("[UDP_EXCHANGE] opened", "target", target)
-	return &UDPExchange{
-		stream:   stream,
-		tx:       shaper.New(c2sWriter, h.shaperCfg),
-		reader:   dr,
-		target:   target,
-		lastSeen: time.Now(),
-	}, nil
+	ue := &UDPExchange{
+		stream: stream,
+		tx:     shaper.New(c2sWriter, h.shaperCfg),
+		reader: dr,
+		target: target,
+	}
+	ue.lastSeen.Store(time.Now().UnixNano())
+	return ue, nil
 }
 
 func (ue *UDPExchange) Send(data []byte) error {
 	ue.mu.Lock()
 	defer ue.mu.Unlock()
-	ue.lastSeen = time.Now()
+	ue.lastSeen.Store(time.Now().UnixNano())
 	frame := protocol.NewFrameDATAGRAM(data)
 	if err := ue.tx.PushFrame(frame); err != nil {
 		return err
@@ -459,22 +461,24 @@ func (ue *UDPExchange) Send(data []byte) error {
 }
 
 func (ue *UDPExchange) Receive() ([]byte, error) {
-	frame, err := ue.reader.ReadFrame()
-	if err != nil {
-		return nil, err
-	}
-	ue.lastSeen = time.Now()
-	switch frame.Type {
-	case protocol.FrameDATAGRAM:
-		return frame.Payload, nil
-	case protocol.FrameFIN:
-		return nil, io.EOF
-	case protocol.FrameRST:
-		return nil, fmt.Errorf("udp stream reset")
-	case protocol.FramePADDING, protocol.FrameCOVER:
-		return ue.Receive()
-	default:
-		return nil, fmt.Errorf("unexpected frame type: %d", frame.Type)
+	for {
+		frame, err := ue.reader.ReadFrame()
+		if err != nil {
+			return nil, err
+		}
+		ue.lastSeen.Store(time.Now().UnixNano())
+		switch frame.Type {
+		case protocol.FrameDATAGRAM:
+			return frame.Payload, nil
+		case protocol.FrameFIN:
+			return nil, io.EOF
+		case protocol.FrameRST:
+			return nil, fmt.Errorf("udp stream reset")
+		case protocol.FramePADDING, protocol.FrameCOVER:
+			continue
+		default:
+			return nil, fmt.Errorf("unexpected frame type: %d", frame.Type)
+		}
 	}
 }
 
@@ -486,9 +490,7 @@ func (ue *UDPExchange) Close() error {
 }
 
 func (ue *UDPExchange) LastSeen() time.Time {
-	ue.mu.Lock()
-	defer ue.mu.Unlock()
-	return ue.lastSeen
+	return time.Unix(0, ue.lastSeen.Load())
 }
 
 func isInteractivePort(target string) bool {

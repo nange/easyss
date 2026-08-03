@@ -9,7 +9,10 @@ import (
 	"github.com/nange/easyss/v3/util/bytespool"
 )
 
-var coverRNG = newSeededChaCha8()
+var (
+	coverRNG   = newSeededChaCha8()
+	coverRNGMu sync.Mutex
+)
 
 type coverInjector struct {
 	cfg              CoverConfig
@@ -143,7 +146,11 @@ func (ci *coverInjector) onIdle() {
 	ci.mu.Unlock()
 
 	payload := bytespool.Get(frameSize)[:frameSize]
+	// The package-level RNG is shared across streams; math/rand/v2 sources
+	// are not safe for concurrent use, so guard the fill with a mutex.
+	coverRNGMu.Lock()
 	_, _ = coverRNG.Read(payload)
+	coverRNGMu.Unlock()
 	frame := protocol.Frame{
 		Type:    protocol.FrameCOVER,
 		Length:  uint16(frameSize),

@@ -3,6 +3,7 @@ package shaper
 import (
 	cryptorand "crypto/rand"
 	"math/rand/v2"
+	"sync"
 
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/stats"
@@ -14,7 +15,10 @@ func newSeededChaCha8() *rand.ChaCha8 {
 	return rand.NewChaCha8(seed)
 }
 
-var paddingRNG = newSeededChaCha8()
+var (
+	paddingRNG   = newSeededChaCha8()
+	paddingRNGMu sync.Mutex
+)
 
 type Shaper interface {
 	PushFrame(f protocol.Frame) error
@@ -57,7 +61,11 @@ func BuildPaddingFrame(totalSize int) (protocol.Frame, bool) {
 
 	stats.RecordPaddingBytes(padSize)
 	frame := protocol.NewFramePADDING(uint16(padSize))
+	// The package-level RNG is shared across streams; math/rand/v2 sources
+	// are not safe for concurrent use, so guard the fill with a mutex.
+	paddingRNGMu.Lock()
 	_, _ = paddingRNG.Read(frame.Payload)
+	paddingRNGMu.Unlock()
 	return frame, true
 }
 
