@@ -45,15 +45,15 @@ jobs:
 
       - name: Build Arm64
         run: |
+          GOOS=linux GOARCH=arm64 make easyss
           GOOS=linux GOARCH=arm64 make easyss-without-tray
           GOOS=linux GOARCH=arm64 make easyss-server
-          GOOS=windows GOARCH=arm64 make easyss-server
       - name: Pack Arm64
         run: |
           cd bin
+          zip easyss-linux-arm64.zip ./easyss
           zip easyss-without-tray-linux-arm64.zip ./easyss-without-tray
           zip easyss-server-linux-arm64.zip ./easyss-server
-          zip easyss-server-windows-arm64.zip ./easyss-server.exe
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4

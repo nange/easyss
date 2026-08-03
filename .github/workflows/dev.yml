@@ -52,6 +52,11 @@ jobs:
       - name: Build
         run: make .PHONY
 
+      - name: Build Linux Arm64
+        run: |
+          GOOS=linux GOARCH=arm64 make easyss
+          GOOS=linux GOARCH=arm64 make easyss-server
+
   lint-test-build-macos:
     name: Lint-Test-Build-MacOS
     runs-on: macOS-latest
