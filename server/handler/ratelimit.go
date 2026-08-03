@@ -3,6 +3,8 @@ package handler
 import (
 	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -16,30 +18,32 @@ const (
 	// handshakeBurst is the initial bucket capacity (allowed burst size).
 	handshakeBurst = 100
 
-	// ipCleanupThreshold triggers a sweep of idle buckets once the map grows
+	// ipCleanupThreshold triggers a sweep of idle entries once the map grows
 	// beyond this many distinct source IPs.
 	ipCleanupThreshold = 4096
 
-	// ipCleanupTTL is how long a fully-replenished bucket may stay idle
-	// before it is dropped.
+	// ipCleanupTTL is how long an idle limiter entry may stay before it is
+	// dropped. Idle for this long the bucket is necessarily full again, so
+	// dropping and recreating it loses no state.
 	ipCleanupTTL = 30 * time.Minute
 )
 
-// ipRateLimiter is a simple per-IP token bucket that bounds the rate of
-// handshake attempts, mitigating replay storms and resource abuse.
+// ipRateLimiter bounds handshake attempts per source IP using a token bucket
+// per IP (golang.org/x/time/rate), mitigating replay storms and resource
+// abuse.
 type ipRateLimiter struct {
 	mu      sync.Mutex
-	buckets map[string]*ipTokenBucket
+	entries map[string]*ipRateEntry
 	now     func() time.Time
 }
 
-type ipTokenBucket struct {
-	tokens float64
-	last   time.Time
+type ipRateEntry struct {
+	lim      *rate.Limiter
+	lastSeen time.Time
 }
 
 func newIPRateLimiter() *ipRateLimiter {
-	return &ipRateLimiter{buckets: make(map[string]*ipTokenBucket), now: time.Now}
+	return &ipRateLimiter{entries: make(map[string]*ipRateEntry), now: time.Now}
 }
 
 // Allow reports whether the given IP may perform a handshake right now.
@@ -47,35 +51,27 @@ func (l *ipRateLimiter) Allow(ip string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if len(l.buckets) >= ipCleanupThreshold {
+	if len(l.entries) >= ipCleanupThreshold {
 		l.cleanupLocked()
 	}
 
 	now := l.now()
-	b, ok := l.buckets[ip]
+	e, ok := l.entries[ip]
 	if !ok {
-		// Consume the first token on bucket creation so the total allowed
-		// burst equals handshakeBurst.
-		l.buckets[ip] = &ipTokenBucket{tokens: handshakeBurst - 1, last: now}
-		return true
+		e = &ipRateEntry{lim: rate.NewLimiter(rate.Limit(handshakeRate), handshakeBurst), lastSeen: now}
+		l.entries[ip] = e
 	}
-
-	b.tokens = min(float64(handshakeBurst), b.tokens+now.Sub(b.last).Seconds()*handshakeRate)
-	b.last = now
-	if b.tokens < 1 {
-		return false
-	}
-	b.tokens--
-	return true
+	e.lastSeen = now
+	return e.lim.AllowN(now, 1)
 }
 
-// cleanupLocked drops buckets that are fully replenished and have been idle
-// for ipCleanupTTL, preventing unbounded growth of the map.
+// cleanupLocked drops entries idle for ipCleanupTTL, preventing unbounded
+// growth of the map.
 func (l *ipRateLimiter) cleanupLocked() {
 	now := l.now()
-	for ip, b := range l.buckets {
-		if b.tokens >= float64(handshakeBurst) && now.Sub(b.last) > ipCleanupTTL {
-			delete(l.buckets, ip)
+	for ip, e := range l.entries {
+		if now.Sub(e.lastSeen) > ipCleanupTTL {
+			delete(l.entries, ip)
 		}
 	}
 }
