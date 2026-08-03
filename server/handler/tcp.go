@@ -22,6 +22,7 @@ import (
 
 type TCPHandler struct {
 	dialer      *net.Dialer
+	dialContext func(context.Context, string, string) (net.Conn, error)
 	nextProxy   *nextproxy.NextProxy
 	idleTimeout time.Duration
 	dialTimeout time.Duration
@@ -61,6 +62,10 @@ func (h *TCPHandler) dialTarget(ctx context.Context, network, addr string) (net.
 		log.Info("[TCP_HANDLE] dialing via next proxy", "target", addr, "proxy", h.nextProxy.URL().String())
 		return h.nextProxy.DialContext(ctx, network, addr)
 	}
+	// Test-only injection point; nil in production.
+	if h.dialContext != nil {
+		return h.dialContext(ctx, network, addr)
+	}
 	d := h.dialer
 	conn, err := d.DialContext(ctx, outboundTCPNetwork(addr), addr)
 	if err != nil {
@@ -93,7 +98,12 @@ func outboundTCPNetwork(addr string) string {
 	return "tcp4"
 }
 
-func (h *TCPHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c shaper.Shaper, target string) error {
+// Handle relays a TCP stream between the client and the target.
+// cancelRead is invoked when the relay terminates (timeout/error/completion);
+// it unblocks a copy goroutine that may be stuck reading from the client
+// (e.g. the HTTP/2 request body), so no goroutine lingers after the handler
+// returns.
+func (h *TCPHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c shaper.Shaper, target string, cancelRead func()) error {
 	log.Info("[TCP_HANDLE] dialing target", "target", target, "timeout", h.dialTimeout)
 	targetConn, err := h.dialTarget(ctx, "tcp", target)
 	if err != nil {
@@ -117,6 +127,9 @@ func (h *TCPHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 	}
 
 	result := relay.Bidirectional(h.idleTimeout, func() {
+		if cancelRead != nil {
+			cancelRead()
+		}
 		_ = targetConn.Close()
 	},
 		func(signal func()) error { return h.copyFromClient(dr, targetConn, signal) },

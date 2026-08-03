@@ -253,6 +253,11 @@ func (bs *batchShaper) injectCoverFrame(f protocol.Frame) error {
 	defer bs.mu.Unlock()
 
 	if bs.closing.Load() || bs.err != nil {
+		// Return the pooled payload so no buffer is leaked when the shaper
+		// is already closed or failed.
+		if f.Type == protocol.FrameCOVER && len(f.Payload) > 0 {
+			bytespool.MustPut(f.Payload)
+		}
 		return nil
 	}
 

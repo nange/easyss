@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/base64"
 	"fmt"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"time"
@@ -28,6 +29,8 @@ type ProxyHandler struct {
 	tcpHandler       *TCPHandler
 	udpHandler       *UDPHandler
 	icmpHandler      *ICMPHandler
+	saltCache        *saltCache
+	ipLimiter        *ipRateLimiter
 }
 
 type ProxyHandlerConfig struct {
@@ -85,7 +88,17 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 		tcpHandler:       NewTCPHandler(cfg.StreamIdleTimeout, cfg.Timeout, cfg.NextProxy),
 		udpHandler:       NewUDPHandler(cfg.UDPIdleTimeout, cfg.NextProxy),
 		icmpHandler:      NewICMPHandler(),
+		saltCache:        newSaltCache(),
+		ipLimiter:        newIPRateLimiter(),
 	}
+}
+
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +122,27 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	salt, err := base64.RawURLEncoding.DecodeString(saltB64)
 	if err != nil || len(salt) != 16 {
+		ServeFallback(w, r)
+		return
+	}
+
+	// Bound handshake attempts per source IP to mitigate replay storms and
+	// CPU abuse. Only counted for requests that look like a real handshake
+	// (valid x-es header), so plain fallback-page traffic is unaffected.
+	if !h.ipLimiter.Allow(clientIP(r)) {
+		log.Error("[SERVER] handshake rate limited", "remote", r.RemoteAddr)
+		stats.RecordServerHandshakeError()
+		ServeFallback(w, r)
+		return
+	}
+
+	// Reject replayed bootstrap records. Every stream uses a unique random
+	// salt; a salt already accepted by this server means the record is being
+	// re-delivered (replay), and accepting it would re-dial the target and
+	// re-deliver the first packet.
+	if h.saltCache.MarkSeen(saltB64) {
+		log.Error("[SERVER] replayed salt", "remote", r.RemoteAddr, "endpoint", r.URL.Path)
+		stats.RecordServerHandshakeError()
 		ServeFallback(w, r)
 		return
 	}
@@ -202,7 +236,10 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch endpoint {
 	case sharedconfig.EndpointTCP:
 		stats.RecordServerTCPStream()
-		handleErr = h.tcpHandler.Handle(r.Context(), c2sReader, s2cShaper, target)
+		// cancelRead unblocks the relay's client-read goroutine immediately
+		// when the relay terminates (idle timeout/error), instead of letting
+		// it linger on the request body until net/http closes it.
+		handleErr = h.tcpHandler.Handle(r.Context(), c2sReader, s2cShaper, target, func() { _ = r.Body.Close() })
 	case sharedconfig.EndpointUDP:
 		stats.RecordServerUDPStream()
 		handleErr = h.udpHandler.Handle(r.Context(), c2sReader, s2cShaper, target)
