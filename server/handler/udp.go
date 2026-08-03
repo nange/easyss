@@ -223,9 +223,6 @@ func (h *UDPHandler) readFromTarget(conn net.Conn, s2c shaper.Shaper, done <-cha
 			if wErr := s2c.PushFrame(frame); wErr != nil {
 				return wErr
 			}
-			if fErr := s2c.Flush(); fErr != nil {
-				return fErr
-			}
 		}
 	}
 }

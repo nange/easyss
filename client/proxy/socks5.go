@@ -41,7 +41,10 @@ type Socks5Server struct {
 	started        atomic.Bool
 }
 
-func NewSocks5Server(listenAddr, username, password string, handler *StreamHandler, rt *router.Router, serverDomain string, method protocol.Method, disableQUIC bool, udpIdleTimeout time.Duration, directDialContext func(context.Context, string, string) (net.Conn, error)) (*Socks5Server, error) {
+func NewSocks5Server(listenAddr, username, password string, handler *StreamHandler, rt *router.Router, serverDomain string, method protocol.Method, disableQUIC bool, dialTimeout, udpIdleTimeout time.Duration, directDialContext func(context.Context, string, string) (net.Conn, error)) (*Socks5Server, error) {
+	if dialTimeout <= 0 {
+		dialTimeout = 10 * time.Second
+	}
 	if udpIdleTimeout <= 0 {
 		udpIdleTimeout = 30 * time.Second
 	}
@@ -59,7 +62,7 @@ func NewSocks5Server(listenAddr, username, password string, handler *StreamHandl
 		method:            method,
 		disableQUIC:       disableQUIC,
 		directDialContext: directDialContext,
-		dialTimeout:       udpIdleTimeout,
+		dialTimeout:       dialTimeout,
 		udpExch:           make(map[string]*UDPExchange),
 		udpInflight:       make(map[string]*udpExchangeFactory),
 		directUDP:         make(map[string]net.Conn),
