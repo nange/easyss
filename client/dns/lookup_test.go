@@ -3,7 +3,6 @@ package dns
 import (
 	"net"
 	"testing"
-	"time"
 
 	"github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
@@ -15,9 +14,11 @@ import (
 func startLocalDNSServer(t *testing.T) (string, func()) {
 	t.Helper()
 
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0") // random available port
+	require.NoError(t, err)
+
 	server := &dns.Server{
-		Net:  "udp",
-		Addr: "127.0.0.1:0", // random available port
+		PacketConn: pc,
 		Handler: dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
 			m := new(dns.Msg)
 			m.SetReply(r)
@@ -52,13 +53,10 @@ func startLocalDNSServer(t *testing.T) (string, func()) {
 
 	// Start the server in a goroutine.
 	go func() {
-		_ = server.ListenAndServe()
+		_ = server.ActivateAndServe()
 	}()
 
-	// Wait for the server to be ready.
-	time.Sleep(50 * time.Millisecond)
-
-	addr := server.PacketConn.LocalAddr().String()
+	addr := pc.LocalAddr().String()
 	return addr, func() {
 		_ = server.Shutdown()
 	}
