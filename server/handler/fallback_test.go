@@ -1560,6 +1560,51 @@ func TestSetFallbackProxy_CDNSubdomainRoute(t *testing.T) {
 	}
 }
 
+// TestServeFallbackProxyStripsXESHeader verifies that easyss-specific headers
+// (x-es) are removed before the request is forwarded to the upstream service,
+// so proxy protocol traces never leak to the fallback site.
+func TestServeFallbackProxyStripsXESHeader(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
+
+	var captured *http.Request
+	fallbackProxy.Transport = &roundTripFunc{
+		fn: func(req *http.Request) (*http.Response, error) {
+			captured = req
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/html"}},
+				Body:       io.NopCloser(bytes.NewReader([]byte("<html></html>"))),
+				Request:    req,
+			}, nil
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v3/tcp", nil)
+	req.Host = "my-site.com"
+	req.Header.Set("x-es", "UQ8k8i0v8JX5m6pQ2lC1AQ") // 22-char base64url salt
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0) Chrome/131.0.0.0")
+	rec := httptest.NewRecorder()
+	ServeFallback(rec, req)
+
+	if captured == nil {
+		t.Fatal("expected upstream request to be captured")
+	}
+	if got := captured.Header.Get("x-es"); got != "" {
+		t.Errorf("x-es header leaked to upstream: %q", got)
+	}
+	if got := captured.Header.Get("User-Agent"); got == "" {
+		t.Error("non-proxy headers should be preserved")
+	}
+}
+
 // roundTripFunc is a helper Transport for testing that captures the request
 // without making a real network connection.
 type roundTripFunc struct {

@@ -124,7 +124,7 @@ func (c *ClientConfig) TLSConfig() *tls.Config {
 	tlsCfg := &tls.Config{
 		ServerName: sni,
 		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{"h2"},
+		NextProtos: []string{"h2", "http/1.1"},
 	}
 
 	if srv.CAPath != "" {
@@ -154,7 +154,7 @@ func (c *ClientConfig) UTLSConfig() *utls.Config {
 
 	utlsCfg := &utls.Config{
 		ServerName: sni,
-		NextProtos: []string{"h2"},
+		NextProtos: []string{"h2", "http/1.1"},
 	}
 
 	if srv.CAPath != "" {

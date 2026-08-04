@@ -116,7 +116,7 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
-			NextProtos: []string{"h2"},
+			NextProtos: []string{"h2", "http/1.1"},
 		},
 		Protocols: protos,
 		HTTP2: &http.HTTP2Config{
