@@ -11,7 +11,7 @@ GO_BUILD_WIN := GOOS=windows GOARCH=$(WIN_ARCH) CGO_ENABLED=1 go build -ldflags 
 GOMOBILE := $(shell go env GOPATH)/bin/gomobile
 GOMOBILE_BIND := $(GOMOBILE) bind -target=android/arm64,android/amd64 -androidapi 29 -ldflags '$(LDFLAGS)'
 
-.PHONY: easyss easyss-without-tray easyss-windows easyss-server easyss-server-windows easyss-android-aar format test lint
+.PHONY: easyss easyss-without-tray easyss-windows easyss-server easyss-server-windows easyss-android-aar format test test-race lint
 
 echo:
 	@echo "${PROJECT}"
@@ -53,6 +53,9 @@ format:
 
 test:
 	$(GO) test -v ./...
+
+test-race:
+	$(GO) test -race -v ./...
 
 lint:
 	go tool golangci-lint run --timeout 10m --verbose

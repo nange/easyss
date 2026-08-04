@@ -35,7 +35,7 @@ jobs:
         run: make lint
 
       - name: Test
-        run: make test
+        run: make test-race
 
       - name: Set up Java
         uses: actions/setup-java@v5
@@ -82,7 +82,7 @@ jobs:
         run: make lint
 
       - name: Test
-        run: make test
+        run: make test-race
 
       - name: Set up Java
         uses: actions/setup-java@v5
@@ -124,7 +124,7 @@ jobs:
         run: make lint
 
       - name: Test
-        run: go test -v ./...
+        run: go test -race -v ./...
 
       - name: Build
         run: cd cmd/easyss && go build -o easyss.exe -ldflags '-H=windowsgui'
