@@ -1302,10 +1302,14 @@ func ServeFallback(w http.ResponseWriter, r *http.Request) {
 		if r.TLS != nil {
 			scheme = "https"
 		}
-		ctx := context.WithValue(r.Context(), ctxOrigHost, r.Host)
+		// Strip easyss-specific headers (e.g. x-es) before forwarding so the
+		// upstream service never sees proxy protocol traces.
+		r2 := r.Clone(r.Context())
+		r2.Header.Del("x-es")
+		ctx := context.WithValue(r2.Context(), ctxOrigHost, r2.Host)
 		ctx = context.WithValue(ctx, ctxOrigScheme, scheme)
-		ctx = context.WithValue(ctx, ctxOrigAcceptEncoding, r.Header.Get("Accept-Encoding"))
-		fallbackProxy.ServeHTTP(w, r.WithContext(ctx))
+		ctx = context.WithValue(ctx, ctxOrigAcceptEncoding, r2.Header.Get("Accept-Encoding"))
+		fallbackProxy.ServeHTTP(w, r2.WithContext(ctx))
 		return
 	}
 

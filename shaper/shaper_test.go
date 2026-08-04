@@ -202,7 +202,7 @@ func TestCoverInjectorFrameSizeRangeRespectsConfig(t *testing.T) {
 	}
 }
 
-func TestCoverInjectorStopsAfterThreshold(t *testing.T) {
+func TestCoverInjectorKeepsInjectingAfterLargeTraffic(t *testing.T) {
 	var injected []protocol.Frame
 	var mu sync.Mutex
 	closed := atomic.Bool{}
@@ -224,43 +224,35 @@ func TestCoverInjectorStopsAfterThreshold(t *testing.T) {
 	}
 	defer ci.stop()
 
+	// Feed well beyond the old cumulative stop threshold (2-3MB); cover must
+	// keep flowing, bounded by the budget, instead of stopping abruptly.
 	for i := range 3200 {
 		ci.addBudget(1024)
 		_ = i
 	}
-	ci.mu.Lock()
-	budgetBefore := ci.budget
-	threshold := ci.coverThreshold
-	ci.mu.Unlock()
-	if threshold < int64(2*1024*1024) || threshold > int64(3*1024*1024) {
-		t.Fatalf("coverThreshold = %d, want in [2MB, 3MB]", threshold)
-	}
-
-	// Verify stopped flag is set after exceeding threshold.
-	if !ci.stopped.Load() {
-		t.Fatal("expected stopped to be true after exceeding coverThreshold")
+	if ci.stopped.Load() {
+		t.Fatal("cover injector unexpectedly stopped")
 	}
 
 	time.Sleep(300 * time.Millisecond)
 	mu.Lock()
-	countDuringActive := len(injected)
+	countFirst := len(injected)
 	mu.Unlock()
+	if countFirst == 0 {
+		t.Fatal("expected cover frames after idle period, got 0")
+	}
 
-	// addBudget after stopped should be a no-op.
+	// More real traffic: cover should continue, not fade out.
 	for i := range 3000 {
 		ci.addBudget(1024)
 		_ = i
 	}
-
 	time.Sleep(300 * time.Millisecond)
 	mu.Lock()
 	countAfter := len(injected)
 	mu.Unlock()
-
-	_ = budgetBefore
-	_ = countDuringActive
-	if countAfter != countDuringActive {
-		t.Fatalf("cover frames leaked after threshold: before=%d, after=%d", countDuringActive, countAfter)
+	if countAfter <= countFirst {
+		t.Fatalf("cover frames stopped after large traffic: before=%d, after=%d", countFirst, countAfter)
 	}
 
 	mu.Lock()

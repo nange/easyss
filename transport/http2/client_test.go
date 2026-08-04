@@ -8,6 +8,8 @@ import (
 	"time"
 
 	utls "github.com/refraction-networking/utls"
+
+	sharedconfig "github.com/nange/easyss/v3/config"
 )
 
 func TestUTLSDialUsesHTTP2(t *testing.T) {
@@ -24,7 +26,7 @@ func TestUTLSDialUsesHTTP2(t *testing.T) {
 
 	slot := newSlot(&utls.Config{
 		InsecureSkipVerify: true,
-		NextProtos:         []string{"h2"},
+		NextProtos:         sharedconfig.NextProtos,
 	}, time.Second, nil)
 	t.Cleanup(slot.t.CloseIdleConnections)
 
