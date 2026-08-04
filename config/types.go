@@ -1,5 +1,9 @@
 package config
 
+// NextProtos is the ALPN protocol list advertised in TLS handshakes,
+// matching what a real Chrome browser offers (h2 preferred, http/1.1 fallback).
+var NextProtos = []string{"h2", "http/1.1"}
+
 const (
 	DefaultTimeout         = 30
 	DefaultConnCountMax    = 12

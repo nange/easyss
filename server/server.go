@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -51,7 +52,7 @@ func (s *Server) initTLS() (*tls.Config, error) {
 		}
 		return &tls.Config{
 			Certificates: []tls.Certificate{cert},
-			NextProtos:   []string{"h2", "http/1.1"},
+			NextProtos:   sharedconfig.NextProtos,
 			MinVersion:   tls.VersionTLS12,
 		}, nil
 	}
@@ -84,7 +85,7 @@ func (s *Server) initTLS() (*tls.Config, error) {
 	}
 
 	s.certCache = cache
-	tlsConfig.NextProtos = append([]string{"h2", "http/1.1"}, tlsConfig.NextProtos...)
+	tlsConfig.NextProtos = append(slices.Clone(sharedconfig.NextProtos), tlsConfig.NextProtos...)
 	return tlsConfig, nil
 }
 
