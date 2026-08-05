@@ -49,14 +49,6 @@ Easyss v3 支持两种配置模式，自动识别：
   "server_port": 443,
   "password": "your-password",
   "local_port": 2080,
-  "method": "aes-256-gcm",
-  "proxy_rule": "auto",
-  "timeout": 30,
-  "bind_all": false,
-  "outbound_proto": "native",
-  "direct_file": "",
-  "proxy_file": "",
-  "log_level": "info",
   "log_file_path": "easyss.log",
 }
 ```
