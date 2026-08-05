@@ -150,6 +150,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 	// start time and all counters.
 	stats.ResetStartTime()
 	stats.ResetCounters()
+	stats.StartSpeedMonitor()
 	return c, nil
 }
 
@@ -194,4 +195,5 @@ func (c *Core) cleanup() {
 	}
 	// No active session anymore, so no session start time either.
 	stats.ClearStartTime()
+	stats.StopSpeedMonitor()
 }
