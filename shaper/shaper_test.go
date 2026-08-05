@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -637,5 +638,47 @@ func TestBatchShaperNoWriteAfterClose(t *testing.T) {
 		if got := cw.writes.Load(); got != writesAfter {
 			t.Fatalf("write after close at iteration %d: before=%d, after=%d", i, writesAfter, got)
 		}
+	}
+}
+
+func TestIsClosedStreamError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "wrapped http2 stream closed",
+			err:  fmt.Errorf("crypto: write record: %w", errors.New("http2: stream closed")),
+			want: true,
+		},
+		{
+			name: "wrapped io.ErrClosedPipe",
+			err:  fmt.Errorf("wrapped: %w", io.ErrClosedPipe),
+			want: true,
+		},
+		{
+			name: "net.ErrClosed",
+			err:  net.ErrClosed,
+			want: true,
+		},
+		{
+			name: "plain error",
+			err:  errors.New("boom"),
+			want: false,
+		},
+		{
+			name: "nil",
+			err:  nil,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isClosedStreamError(tt.err); got != tt.want {
+				t.Fatalf("isClosedStreamError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }

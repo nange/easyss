@@ -2,7 +2,11 @@ package shaper
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
+	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -244,8 +248,32 @@ func (bs *batchShaper) onTimer() {
 	bs.timerStarted = false
 	bs.mu.Unlock()
 	if err := bs.flush(true); err != nil {
+		if isClosedStreamError(err) {
+			// The peer already closed the stream (e.g. RST_STREAM/FIN while
+			// the handler is still winding down the relay). The failed flush
+			// is just the teardown path finishing, not a real error.
+			log.Debug("[SHAPER] timer flush aborted, stream closed", "err", err)
+			return
+		}
 		log.Info("[SHAPER] timer flush error", "err", err)
 	}
+}
+
+// isClosedStreamError reports whether err indicates the underlying stream was
+// already closed by the peer (HTTP/2 stream reset, closed pipe, closed
+// connection). Such errors are benign during teardown: the peer has abandoned
+// the stream and the failed flush is just the relay finishing.
+func isClosedStreamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+		return true
+	}
+	// "http2: stream closed" is an unexported sentinel in the stdlib, so it
+	// can only be matched by string. The error chain is preserved by crypto
+	// ("crypto: write record: ..."), so a substring match is sufficient.
+	return strings.Contains(strings.ToLower(err.Error()), "stream closed")
 }
 
 func (bs *batchShaper) injectCoverFrame(f protocol.Frame) error {
