@@ -61,14 +61,14 @@ make easyss-server-windows
 make easyss-android-aar
 
 # 无系统托盘版本 (headless/Android)
-make easyss-without-tray
+make easyss-headless
 ```
 
 ### 交叉编译示例
 
 ```bash
 # Linux ARM64 headless 客户端
-GOOS=linux GOARCH=arm64 make easyss-without-tray
+GOOS=linux GOARCH=arm64 make easyss-headless
 
 # Linux ARM64 服务端
 GOOS=linux GOARCH=arm64 make easyss-server
@@ -104,8 +104,8 @@ make lint   # 等价: go tool golangci-lint run --timeout 10m --verbose
 
 ## 构建标签 (Build Tags)
 
-- `without_tray`：用于 headless/Android 构建，编译 `cmd/easyss/start_without_tray.go` 而非 `start.go`+`tray.go`
-- 注意 `cmd/easyss/start.go` 和 `tray.go` 头部有 `//go:build !without_tray`
+- `headless`：用于 headless/Android 构建，编译 `cmd/easyss/start_headless.go` 而非 `start.go`+`tray.go`
+- 注意 `cmd/easyss/start.go` 和 `tray.go` 头部有 `//go:build !headless`
 
 ## 配置相关
 

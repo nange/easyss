@@ -1,4 +1,4 @@
-//go:build without_tray
+//go:build headless
 
 package main
 

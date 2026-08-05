@@ -1,4 +1,4 @@
-//go:build linux && !without_tray
+//go:build linux && !headless
 
 package main
 

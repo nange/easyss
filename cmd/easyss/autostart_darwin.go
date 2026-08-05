@@ -1,4 +1,4 @@
-//go:build darwin && !without_tray
+//go:build darwin && !headless
 
 package main
 

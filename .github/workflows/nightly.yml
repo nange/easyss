@@ -37,20 +37,20 @@ jobs:
           cd bin
           zip easyss-linux-amd64.zip ./easyss
           zip easyss-windows-amd64.zip ./easyss.exe
-          zip easyss-without-tray-linux-amd64.zip ./easyss-without-tray
+          zip easyss-headless-linux-amd64.zip ./easyss-headless
           zip easyss-server-linux-amd64.zip ./easyss-server
           zip easyss-server-windows-amd64.zip ./easyss-server.exe
 
       - name: Build Arm64
         run: |
           GOOS=linux GOARCH=arm64 make easyss
-          GOOS=linux GOARCH=arm64 make easyss-without-tray
+          GOOS=linux GOARCH=arm64 make easyss-headless
           GOOS=linux GOARCH=arm64 make easyss-server
       - name: Pack Arm64
         run: |
           cd bin
           zip easyss-linux-arm64.zip ./easyss
-          zip easyss-without-tray-linux-arm64.zip ./easyss-without-tray
+          zip easyss-headless-linux-arm64.zip ./easyss-headless
           zip easyss-server-linux-arm64.zip ./easyss-server
 
       - name: Set outputs

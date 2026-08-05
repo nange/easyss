@@ -1,4 +1,4 @@
-//go:build !windows && !darwin && !linux && !without_tray
+//go:build !windows && !darwin && !linux && !headless
 
 package main
 

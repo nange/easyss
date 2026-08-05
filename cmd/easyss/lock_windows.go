@@ -1,4 +1,4 @@
-//go:build !without_tray && windows
+//go:build !headless && windows
 
 package main
 

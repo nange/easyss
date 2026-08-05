@@ -11,7 +11,7 @@ GO_BUILD_WIN := GOOS=windows GOARCH=$(WIN_ARCH) CGO_ENABLED=1 go build -ldflags 
 GOMOBILE := $(shell go env GOPATH)/bin/gomobile
 GOMOBILE_BIND := $(GOMOBILE) bind -target=android/arm64,android/amd64 -androidapi 29 -ldflags '$(LDFLAGS)'
 
-.PHONY: easyss easyss-without-tray easyss-windows easyss-server easyss-server-windows easyss-android-aar format test lint
+.PHONY: easyss easyss-headless easyss-windows easyss-server easyss-server-windows easyss-android-aar format test lint
 
 echo:
 	@echo "${PROJECT}"
@@ -29,9 +29,9 @@ easyss-mac-app:
 	MACOSX_DEPLOYMENT_TARGET=14.0 CGO_LDFLAGS="-mmacosx-version-min=14.0" $(GO_BUILD) -o ../../bin/easyss
 	bash scripts/app-bundle.sh bin/easyss icon/icon_1024_1024.png cmd/easyss/Info.plist
 
-easyss-without-tray:
+easyss-headless:
 		cd cmd/easyss; \
-	    $(GO_BUILD) -tags "without_tray " -o ../../bin/easyss-without-tray
+    $(GO_BUILD) -tags "headless" -o ../../bin/easyss-headless
 
 easyss-server:
 	cd cmd/easyss-server; \
