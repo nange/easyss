@@ -9,7 +9,15 @@ import (
 	"github.com/nange/easyss/v3/transport"
 )
 
-var g = &stats{startTime: time.Now()}
+var g = &stats{}
+
+func init() {
+	// Default to process start time; client sessions override this via
+	// ResetStartTime/ClearStartTime, so a server (which never resets)
+	// keeps "uptime = process uptime".
+	now := time.Now()
+	g.startTime.Store(&now)
+}
 
 type stats struct {
 	totalStreamsOpened atomic.Int64
@@ -52,7 +60,9 @@ type stats struct {
 	serverHandshakeErrors atomic.Int64
 	serverFallbackPages   atomic.Int64
 
-	startTime time.Time
+	// startTime keeps the monotonic clock reading so time.Since stays
+	// immune to wall-clock adjustments; nil means no active session.
+	startTime atomic.Pointer[time.Time]
 }
 
 // --- recorder methods ---
@@ -98,6 +108,57 @@ func RecordServerUDPStream()      { g.serverUDPStreams.Add(1) }
 func RecordServerICMPStream()     { g.serverICMPStreams.Add(1) }
 func RecordServerHandshakeError() { g.serverHandshakeErrors.Add(1) }
 func RecordServerFallbackPage()   { g.serverFallbackPages.Add(1) }
+
+// --- session lifecycle ---
+
+// ResetStartTime marks the start of a new session, e.g. on client start.
+func ResetStartTime() {
+	now := time.Now()
+	g.startTime.Store(&now)
+}
+
+// ClearStartTime clears the session start time, e.g. on client stop.
+func ClearStartTime() {
+	g.startTime.Store(nil)
+}
+
+// ResetCounters zeroes all counters so each session starts from scratch.
+func ResetCounters() {
+	g.totalStreamsOpened.Store(0)
+	g.totalStreamsClosed.Store(0)
+	g.bytesSent.Store(0)
+	g.bytesRecv.Store(0)
+	g.rawBytesSent.Store(0)
+	g.rawBytesRecv.Store(0)
+	g.tcpConnections.Store(0)
+	g.udpAssociations.Store(0)
+	g.dnsCacheHits.Store(0)
+	g.dnsCacheMisses.Store(0)
+	g.dnsProxyQueries.Store(0)
+	g.dnsDirectQueries.Store(0)
+	g.paddingBytes.Store(0)
+	g.recordsWritten.Store(0)
+	g.priorityStreamsOpened.Store(0)
+	g.bulkStreamsOpened.Store(0)
+	g.priorityFallback.Store(0)
+	g.bulkFallback.Store(0)
+
+	g.rttMu.Lock()
+	g.rttEWMA = 0
+	g.rttMu.Unlock()
+	g.rttCount.Store(0)
+
+	g.uploadSpeed.Store(0)
+	g.downloadSpeed.Store(0)
+	g.peakUploadSpeed.Store(0)
+	g.peakDownloadSpeed.Store(0)
+
+	g.serverTCPStreams.Store(0)
+	g.serverUDPStreams.Store(0)
+	g.serverICMPStreams.Store(0)
+	g.serverHandshakeErrors.Store(0)
+	g.serverFallbackPages.Store(0)
+}
 
 // --- snapshot ---
 
@@ -160,8 +221,11 @@ func (s Snapshot) AvgRTT() time.Duration {
 	return time.Duration(s.RTTEWMA)
 }
 
-// Uptime returns the duration since StartTime.
+// Uptime returns the duration since StartTime, or 0 when no session is active.
 func (s Snapshot) Uptime() time.Duration {
+	if s.StartTime.IsZero() {
+		return 0
+	}
 	return time.Since(s.StartTime)
 }
 
@@ -173,6 +237,14 @@ func Collect() Snapshot {
 
 	upSpeed := g.uploadSpeed.Load()
 	downSpeed := g.downloadSpeed.Load()
+
+	start := g.startTime.Load()
+	var startTime time.Time
+	var uptimeSeconds float64
+	if start != nil {
+		startTime = *start
+		uptimeSeconds = time.Since(startTime).Seconds()
+	}
 
 	return Snapshot{
 		TotalStreamsOpened:     g.totalStreamsOpened.Load(),
@@ -206,9 +278,9 @@ func Collect() Snapshot {
 		DownloadSpeedHuman:     HumanBytes(downSpeed) + "/s",
 		PeakUploadSpeedHuman:   HumanBytes(g.peakUploadSpeed.Load()) + "/s",
 		PeakDownloadSpeedHuman: HumanBytes(g.peakDownloadSpeed.Load()) + "/s",
-		UptimeSeconds:          time.Since(g.startTime).Seconds(),
+		UptimeSeconds:          uptimeSeconds,
 		AvgRTTMs:               float64(time.Duration(ewma).Microseconds()) / 1000.0,
-		StartTime:              g.startTime,
+		StartTime:              startTime,
 	}
 }
 
