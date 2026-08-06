@@ -5,9 +5,9 @@ LDFLAGS += -X "github.com/nange/easyss/v3/version.BuildDate=$(shell date '+%Y-%m
 LDFLAGS += -X "github.com/nange/easyss/v3/version.GitTag=$(shell git describe --tags)"
 
 GO := go
-GO_BUILD := go build -ldflags '$(LDFLAGS)'
+GO_BUILD := CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)'
 WIN_ARCH ?= amd64
-GO_BUILD_WIN := GOOS=windows GOARCH=$(WIN_ARCH) CGO_ENABLED=0 go build -ldflags '-H windowsgui $(LDFLAGS)'
+GO_BUILD_WIN := GOOS=windows GOARCH=$(WIN_ARCH) go build -ldflags '-H windowsgui $(LDFLAGS)'
 GOMOBILE := $(shell go env GOPATH)/bin/gomobile
 GOMOBILE_BIND := $(GOMOBILE) bind -target=android/arm64,android/amd64 -androidapi 29 -ldflags '$(LDFLAGS)'
 
@@ -26,7 +26,7 @@ easyss-windows:
 
 easyss-mac-app:
 	cd cmd/easyss; \
-	CGO_ENABLED=0 GOOS=darwin $(GO_BUILD) -o ../../bin/easyss
+	GOOS=darwin $(GO_BUILD) -o ../../bin/easyss
 	bash scripts/app-bundle.sh bin/easyss icon/icon_1024_1024.png cmd/easyss/Info.plist
 
 easyss-without-tray:
@@ -35,11 +35,11 @@ easyss-without-tray:
 
 easyss-server:
 	cd cmd/easyss-server; \
-	CGO_ENABLED=0 $(GO_BUILD) -o ../../bin/easyss-server
+	$(GO_BUILD) -o ../../bin/easyss-server
 
 easyss-server-windows:
 	cd cmd/easyss-server; \
-	CGO_ENABLED=0 GOOS=windows GOARCH=$(WIN_ARCH) go build -ldflags '$(LDFLAGS)' -o ../../bin/easyss-server.exe
+	GOOS=windows GOARCH=$(WIN_ARCH) $(GO_BUILD) -o ../../bin/easyss-server.exe
 
 easyss-android-aar:
 	@if ! command -v javac >/dev/null 2>&1; then \

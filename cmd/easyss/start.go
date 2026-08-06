@@ -23,12 +23,6 @@ func runApp(disableTray, daemon bool, app *App) {
 	defer releaseSingletonLock()
 
 	if !disableTray && (runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux") {
-		// Pin this goroutine to its OS thread: the tray window is created on
-		// the current thread and the message loop must run on the same thread
-		// (Win32 message queues are per-thread). Without this, the Go runtime
-		// may migrate the goroutine after blocking syscalls in Start().
-		runtime.LockOSThread()
-
 		ta := &TrayApp{
 			App:       app,
 			closing:   make(chan struct{}),
