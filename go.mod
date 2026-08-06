@@ -5,7 +5,7 @@ go 1.26.3
 require (
 	github.com/caddyserver/certmagic v0.25.2
 	github.com/coocood/freecache v1.2.7
-	github.com/gogpu/systray v0.2.6
+	github.com/gogpu/systray v0.2.8
 	github.com/libp2p/go-netroute v0.4.0
 	github.com/miekg/dns v1.1.72
 	github.com/oschwald/geoip2-golang v1.13.0
@@ -268,8 +268,3 @@ tool (
 )
 
 replace github.com/xjasonlyu/tun2socks/v2 => github.com/nange/tun2socks/v2 v2.0.0-20260729130352-d1698910c4f0
-
-// Temporary local patch: upstream gogpu/systray v0.2.6 cannot update menu items
-// inside submenus on macOS (itemWithTag: doesn't search submenus). Fix is on
-// branch fix/darwin-submenu-update of the local fork; remove once released.
-replace github.com/gogpu/systray => /Users/nange/go/src/github.com/nange/systray
