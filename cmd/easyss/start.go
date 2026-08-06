@@ -30,8 +30,9 @@ func runApp(disableTray, daemon bool, app *App) {
 		runtime.LockOSThread()
 
 		ta := &TrayApp{
-			App:     app,
-			closing: make(chan struct{}),
+			App:       app,
+			closing:   make(chan struct{}),
+			trayBuilt: make(chan struct{}),
 		}
 
 		go func() {
@@ -41,15 +42,17 @@ func runApp(disableTray, daemon bool, app *App) {
 			select {
 			case sig := <-c:
 				log.Info("[EASYSS-V3] got signal to exit", "signal", sig)
-				if ta.tray != nil {
-					ta.tray.Remove()
-				}
+				// Wait for buildTray() to finish so the tray is non-nil and
+				// Remove() can terminate the message loop.
+				<-ta.trayBuilt
+				ta.tray.Remove()
 			case <-ta.closing:
 				log.Info("[EASYSS-V3] easyss exiting...")
 			}
 		}()
 
 		ta.buildTray()
+		close(ta.trayBuilt)
 		_ = ta.tray.Run()
 		ta.trayExit()
 	} else {

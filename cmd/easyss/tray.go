@@ -30,8 +30,9 @@ type TrayApp struct {
 	browserMenu *systray.MenuItem
 	tunMenu     *systray.MenuItem
 
-	tray     *systray.SystemTray
-	rootMenu *systray.Menu
+	tray      *systray.SystemTray
+	rootMenu  *systray.Menu
+	trayBuilt chan struct{} // closed after buildTray() completes
 
 	serverMenuItems []*systray.MenuItem
 	serverAddrs     []string
