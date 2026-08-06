@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"fyne.io/systray"
+	"github.com/gogpu/systray"
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/icon"
@@ -30,37 +30,77 @@ type TrayApp struct {
 	browserMenu *systray.MenuItem
 	tunMenu     *systray.MenuItem
 
+	tray      *systray.SystemTray
+	rootMenu  *systray.Menu
+	trayBuilt chan struct{} // closed after buildTray() completes
+
+	serverMenuItems []*systray.MenuItem
+	serverAddrs     []string
+	proxyRuleItems  map[string]*systray.MenuItem
+	logLevelItems   map[string]*systray.MenuItem
+	autoStartItem   *systray.MenuItem
+
+	// UWP loopback exemption menu (Windows only).
+	uwpMu    sync.Mutex     //nolint:unused // used in uwp_windows.go
+	uwpMenu  *systray.Menu  //nolint:unused // used in uwp_windows.go
+	uwpItems []*UWPMenuItem //nolint:unused // used in uwp_windows.go
+
 	// TUN helper management (darwin non-root).
 	tunHelperStdin io.WriteCloser // FIFO writer; close to signal helper shutdown
 	tunHelperMu    sync.Mutex
 }
 
-func (a *TrayApp) trayReady() {
-	systray.SetTemplateIcon(icon.Data, icon.Data)
+// UWPApp represents an installed Windows UWP application.
+type UWPApp struct {
+	Name              string `json:"Name"`
+	PackageFamilyName string `json:"PackageFamilyName"`
+	Exempt            bool
+}
 
-	a.addSelectServerMenu()
-	systray.AddSeparator()
+// UWPMenuItem pairs a UWP app with its tray menu item.
+type UWPMenuItem struct {
+	MenuItem *systray.MenuItem
+	App      *UWPApp
+	Mu       sync.RWMutex
+}
 
-	a.addProxyRuleMenu()
-	systray.AddSeparator()
+func (a *TrayApp) buildTray() {
+	root := systray.NewMenu()
+	a.rootMenu = root
 
-	browserMenu, tunMenu := a.addProxyObjectMenu()
-	systray.AddSeparator()
-	a.SetBrowserMenu(browserMenu)
-	a.SetTunMenu(tunMenu)
+	root.AddSubmenu("选择服务器", a.buildSelectServerMenu())
+	root.AddSeparator()
 
-	a.addUWPLoopbackMenu()
+	root.AddSubmenu("代理规则", a.buildProxyRuleMenu())
+	root.AddSeparator()
 
-	a.addLogLevelMenu()
-	systray.AddSeparator()
+	root.AddSubmenu("代理对象", a.buildProxyObjectMenu())
+	root.AddSeparator()
 
-	a.addCatLogsMenu()
-	systray.AddSeparator()
+	a.addUWPLoopbackMenu(root)
 
-	a.addAutoStartMenu()
-	systray.AddSeparator()
+	root.AddSubmenu("日志级别", a.buildLogLevelMenu())
+	root.AddSeparator()
 
-	a.addExitMenu()
+	root.Add("查看日志", func() { go a.catLogs() })
+	root.AddSeparator()
+
+	a.autoStartItem = root.AddCheckbox("开机启动", IsAutoStartEnabled(), a.toggleAutoStart)
+	root.AddSeparator()
+
+	root.Add("退出", a.exitApp)
+
+	a.tray = systray.New()
+	if runtime.GOOS == "darwin" {
+		// macOS template image (monochrome, adapts to menu bar theme).
+		a.tray.SetTemplateIcon(icon.TrayData)
+	} else {
+		// Windows/Linux: SetTemplateIcon is a no-op, use SetIcon.
+		a.tray.SetIcon(icon.TrayData)
+	}
+	a.tray.SetTooltip("Easyss")
+	a.tray.SetMenu(root)
+	a.tray.Show()
 
 	// Start service after menu is populated so that desktop environments
 	// (especially GNOME with AppIndicator) see a non-empty menu on first query.
@@ -70,6 +110,7 @@ func (a *TrayApp) trayReady() {
 	}
 
 	a.startLocalService()
+	go a.statsRefresher()
 }
 
 func (a *TrayApp) trayExit() {
@@ -86,61 +127,49 @@ func (a *TrayApp) trayExit() {
 	os.Exit(0)
 }
 
-func (a *TrayApp) addSelectServerMenu() {
-	selectServer := systray.AddMenuItem("选择服务器", "")
+func (a *TrayApp) buildSelectServerMenu() *systray.Menu {
+	m := systray.NewMenu()
 
 	addrs := a.cfg.ServerListAddrs()
-	var subMenuItems []*systray.MenuItem
+	if len(addrs) == 0 {
+		addrs = []string{a.cfg.DefaultServerAddr()}
+	}
+	a.serverAddrs = addrs
+	a.serverMenuItems = make([]*systray.MenuItem, 0, len(addrs))
 
-	if len(addrs) > 0 {
-		for _, addr := range addrs {
-			item := selectServer.AddSubMenuItemCheckbox(addr, "", false)
-			subMenuItems = append(subMenuItems, item)
-			if addr == a.cfg.DefaultServerAddr() {
-				item.Check()
-			}
-		}
-	} else {
-		item := selectServer.AddSubMenuItemCheckbox(a.cfg.DefaultServerAddr(), "", false)
-		subMenuItems = append(subMenuItems, item)
-		item.Check()
+	for idx, addr := range addrs {
+		checked := addr == a.cfg.DefaultServerAddr()
+		item := m.AddCheckbox(addr, checked, func(idx int) func() {
+			return func() { a.selectServer(idx) }
+		}(idx))
+		a.serverMenuItems = append(a.serverMenuItems, item)
 	}
 
-	for i, item := range subMenuItems {
-		go func(idx int, mi *systray.MenuItem) {
-			for {
-				select {
-				case <-mi.ClickedCh:
-					func() {
-						if mi.Checked() {
-							mi.Check()
-							return
-						}
-						addr := addrs[idx]
-						log.Info("[SYSTRAY] changing server to", "addr", addr)
-						for _, v := range subMenuItems {
-							v.Uncheck()
-						}
-						clone := a.cfg.Clone()
-						clone.SetDefaultServerIndex(idx)
-						if err := a.restartService(clone); err != nil {
-							log.Error("[SYSTRAY] changing server to", "addr", addr, "err", err)
-						} else {
-							mi.Check()
-							log.Info("[SYSTRAY] changes server success to", "addr", addr)
-						}
-					}()
-				case <-a.closing:
-					return
-				}
-			}
-		}(i, item)
-	}
-
-	go a.statsRefresher(subMenuItems, addrs)
+	return m
 }
 
-func (a *TrayApp) statsRefresher(subMenuItems []*systray.MenuItem, addrs []string) {
+func (a *TrayApp) selectServer(idx int) {
+	go func() {
+		if a.serverMenuItems[idx].IsChecked() {
+			return
+		}
+		addr := a.serverAddrs[idx]
+		log.Info("[SYSTRAY] changing server to", "addr", addr)
+		for _, v := range a.serverMenuItems {
+			v.SetChecked(false)
+		}
+		clone := a.cfg.Clone()
+		clone.SetDefaultServerIndex(idx)
+		if err := a.restartService(clone); err != nil {
+			log.Error("[SYSTRAY] changing server to", "addr", addr, "err", err)
+			return
+		}
+		a.serverMenuItems[idx].SetChecked(true)
+		log.Info("[SYSTRAY] changes server success to", "addr", addr)
+	}()
+}
+
+func (a *TrayApp) statsRefresher() {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
@@ -151,9 +180,9 @@ func (a *TrayApp) statsRefresher(subMenuItems []*systray.MenuItem, addrs []strin
 		select {
 		case <-ticker.C:
 			rttMs, downSpeed := fetchStats(httpClient, url)
-			for i, mi := range subMenuItems {
-				if mi.Checked() {
-					mi.SetTitle(formatTitle(addrs[i], rttMs, downSpeed))
+			for i, mi := range a.serverMenuItems {
+				if mi.IsChecked() {
+					mi.SetLabel(formatTitle(a.serverAddrs[i], rttMs, downSpeed))
 					break
 				}
 			}
@@ -197,97 +226,40 @@ func formatTitle(addr string, rttMs float64, downSpeed string) string {
 	return addr
 }
 
-func (a *TrayApp) addProxyRuleMenu() {
-	proxyMenu := systray.AddMenuItem("代理规则", "")
+func (a *TrayApp) buildProxyRuleMenu() *systray.Menu {
+	m := systray.NewMenu()
+	a.proxyRuleItems = make(map[string]*systray.MenuItem)
 
-	auto := proxyMenu.AddSubMenuItemCheckbox("自动(自定义规则+绕过大陆IP域名)", "", false)
-	if a.cfg.Routing.ProxyRule == "auto" {
-		auto.Check()
+	rules := []struct {
+		rule    string
+		label   string
+		checked bool
+	}{
+		{"auto", "自动(自定义规则+绕过大陆IP域名)", a.cfg.Routing.ProxyRule == "auto"},
+		{"auto_block", "自动+屏蔽广告跟踪", a.cfg.Routing.ProxyRule == "auto_block"},
+		{"reverse_auto", "反向自动(国外访问国内)", a.cfg.Routing.ProxyRule == "reverse_auto"},
+		{"proxy", "代理全部(绕过局域网地址)", a.cfg.Routing.ProxyRule == "proxy"},
+		{"direct", "直接连接", a.cfg.Routing.ProxyRule == "direct"},
 	}
 
-	autoBlock := proxyMenu.AddSubMenuItemCheckbox("自动+屏蔽广告跟踪", "", false)
-	if a.cfg.Routing.ProxyRule == "auto_block" {
-		autoBlock.Check()
+	for _, r := range rules {
+		item := m.AddCheckbox(r.label, r.checked, func(rule string) func() {
+			return func() { go a.changeProxyRule(rule) }
+		}(r.rule))
+		a.proxyRuleItems[r.rule] = item
 	}
 
-	reverseAuto := proxyMenu.AddSubMenuItemCheckbox("反向自动(国外访问国内)", "", false)
-	if a.cfg.Routing.ProxyRule == "reverse_auto" {
-		reverseAuto.Check()
-	}
+	return m
+}
 
-	proxy := proxyMenu.AddSubMenuItemCheckbox("代理全部(绕过局域网地址)", "", false)
-	if a.cfg.Routing.ProxyRule == "proxy" {
-		proxy.Check()
+func (a *TrayApp) changeProxyRule(rule string) {
+	if a.proxyRuleItems[rule].IsChecked() {
+		return
 	}
-
-	direct := proxyMenu.AddSubMenuItemCheckbox("直接连接", "", false)
-	if a.cfg.Routing.ProxyRule == "direct" {
-		direct.Check()
+	a.setProxyRule(rule)
+	for r, item := range a.proxyRuleItems {
+		item.SetChecked(r == rule)
 	}
-
-	go func() {
-		for {
-			select {
-			case <-auto.ClickedCh:
-				if auto.Checked() {
-					auto.Check()
-					continue
-				}
-				a.setProxyRule("auto")
-				auto.Check()
-				autoBlock.Uncheck()
-				reverseAuto.Uncheck()
-				proxy.Uncheck()
-				direct.Uncheck()
-			case <-autoBlock.ClickedCh:
-				if autoBlock.Checked() {
-					autoBlock.Check()
-					continue
-				}
-				a.setProxyRule("auto_block")
-				autoBlock.Check()
-				auto.Uncheck()
-				reverseAuto.Uncheck()
-				proxy.Uncheck()
-				direct.Uncheck()
-			case <-reverseAuto.ClickedCh:
-				if reverseAuto.Checked() {
-					reverseAuto.Check()
-					continue
-				}
-				a.setProxyRule("reverse_auto")
-				reverseAuto.Check()
-				auto.Uncheck()
-				autoBlock.Uncheck()
-				proxy.Uncheck()
-				direct.Uncheck()
-			case <-proxy.ClickedCh:
-				if proxy.Checked() {
-					proxy.Check()
-					continue
-				}
-				a.setProxyRule("proxy")
-				proxy.Check()
-				auto.Uncheck()
-				autoBlock.Uncheck()
-				reverseAuto.Uncheck()
-				direct.Uncheck()
-			case <-direct.ClickedCh:
-				if direct.Checked() {
-					direct.Check()
-					continue
-				}
-				a.setProxyRule("direct")
-				direct.Check()
-				auto.Uncheck()
-				autoBlock.Uncheck()
-				reverseAuto.Uncheck()
-				proxy.Uncheck()
-			case <-a.closing:
-				return
-			}
-		}
-	}()
 }
 
 func (a *TrayApp) setProxyRule(rule string) {
@@ -298,67 +270,105 @@ func (a *TrayApp) setProxyRule(rule string) {
 	log.Info("[SYSTRAY] proxy rule changed", "rule", rule)
 }
 
-func (a *TrayApp) addProxyObjectMenu() (*systray.MenuItem, *systray.MenuItem) {
-	proxyMenu := systray.AddMenuItem("代理对象", "")
+func (a *TrayApp) buildProxyObjectMenu() *systray.Menu {
+	m := systray.NewMenu()
 
 	browserChecked := !a.cfg.Local.DisableSysProxy
-	browser := proxyMenu.AddSubMenuItemCheckbox("浏览器(设置系统代理)", "", browserChecked)
-	global := proxyMenu.AddSubMenuItemCheckbox("系统全局流量(Tun2socks)", "", a.cfg.Local.EnableTun2socks)
+	browser := m.AddCheckbox("浏览器(设置系统代理)", browserChecked, a.toggleSysProxy)
+	a.SetBrowserMenu(browser)
 
-	go func() {
-		for {
-			select {
-			case <-browser.ClickedCh:
-				if browser.Checked() {
-					browser.Uncheck()
-					go func() {
-						if err := a.setSysProxyOff(); err != nil {
-							log.Error("[SYSTRAY] set sys-proxy off", "err", err)
-							browser.Check() // revert on failure
-						}
-					}()
-				} else {
-					browser.Check()
-					go func() {
-						if err := a.setSysProxyOn(); err != nil {
-							log.Error("[SYSTRAY] set sys-proxy on", "err", err)
-							browser.Uncheck() // revert on failure
-						}
-					}()
-				}
-			case <-global.ClickedCh:
-				log.Info("[SYSTRAY] tun menu clicked", "checked", global.Checked())
-				if global.Checked() {
-					global.Uncheck()
-					go a.disableTun2socks()
-				} else {
-					global.Check()
-					go a.enableTun2socks(global)
-				}
-			case <-a.closing:
-				return
-			}
-		}
-	}()
+	global := m.AddCheckbox("系统全局流量(Tun2socks)", a.cfg.Local.EnableTun2socks, a.toggleTun2socks)
+	a.SetTunMenu(global)
 
-	return browser, global
+	return m
 }
 
-func (a *TrayApp) addCatLogsMenu() {
-	catLog := systray.AddMenuItem("查看日志", "")
-
+func (a *TrayApp) toggleSysProxy() {
 	go func() {
-		for {
-			select {
-			case <-catLog.ClickedCh:
-				if err := a.catLog(); err != nil {
-					log.Error("[SYSTRAY] cat log", "err", err)
-				}
-			case <-a.closing:
-				return
+		mi := a.BrowserMenu()
+		if mi.IsChecked() {
+			mi.SetChecked(false)
+			if err := a.setSysProxyOff(); err != nil {
+				log.Error("[SYSTRAY] set sys-proxy off", "err", err)
+				mi.SetChecked(true) // revert on failure
+			}
+		} else {
+			mi.SetChecked(true)
+			if err := a.setSysProxyOn(); err != nil {
+				log.Error("[SYSTRAY] set sys-proxy on", "err", err)
+				mi.SetChecked(false) // revert on failure
 			}
 		}
 	}()
+}
+
+func (a *TrayApp) toggleTun2socks() {
+	go func() {
+		mi := a.TunMenu()
+		log.Info("[SYSTRAY] tun menu clicked", "checked", mi.IsChecked())
+		if mi.IsChecked() {
+			mi.SetChecked(false)
+			a.disableTun2socks()
+		} else {
+			mi.SetChecked(true)
+			a.enableTun2socks(mi)
+		}
+	}()
+}
+
+func (a *TrayApp) buildLogLevelMenu() *systray.Menu {
+	m := systray.NewMenu()
+	a.logLevelItems = make(map[string]*systray.MenuItem)
+
+	levels := []struct {
+		level   string
+		checked bool
+	}{
+		{"debug", a.cfg.Log.Level == "debug"},
+		{"info", a.cfg.Log.Level == "info" || a.cfg.Log.Level == ""},
+		{"warn", a.cfg.Log.Level == "warn"},
+		{"error", a.cfg.Log.Level == "error"},
+	}
+
+	for _, l := range levels {
+		item := m.AddCheckbox(l.level, l.checked, func(level string) func() {
+			return func() { go a.changeLogLevel(level) }
+		}(l.level))
+		a.logLevelItems[l.level] = item
+	}
+
+	return m
+}
+
+func (a *TrayApp) changeLogLevel(level string) {
+	if a.logLevelItems[level].IsChecked() {
+		return
+	}
+	a.cfg.Log.Level = level
+	log.Info("[SYSTRAY] log level changed", "level", level)
+
+	var slogLevel slog.Level
+	switch level {
+	case "debug":
+		slogLevel = slog.LevelDebug
+	case "warn":
+		slogLevel = slog.LevelWarn
+	case "error":
+		slogLevel = slog.LevelError
+	default:
+		slogLevel = slog.LevelInfo
+	}
+	log.SetLevel(slogLevel)
+
+	for l, item := range a.logLevelItems {
+		item.SetChecked(l == level)
+	}
+}
+
+func (a *TrayApp) catLogs() {
+	if err := a.catLog(); err != nil {
+		log.Error("[SYSTRAY] cat log", "err", err)
+	}
 }
 
 func (a *TrayApp) catLog() error {
@@ -369,128 +379,33 @@ func (a *TrayApp) catLog() error {
 	return catLogFile(filePath)
 }
 
-func (a *TrayApp) addLogLevelMenu() {
-	logLevelMenu := systray.AddMenuItem("日志级别", "")
-
-	debug := logLevelMenu.AddSubMenuItemCheckbox("Debug", "", false)
-	info := logLevelMenu.AddSubMenuItemCheckbox("Info", "", false)
-	warn := logLevelMenu.AddSubMenuItemCheckbox("Warn", "", false)
-	errLevel := logLevelMenu.AddSubMenuItemCheckbox("Error", "", false)
-
-	switch a.cfg.Log.Level {
-	case "debug":
-		debug.Check()
-	case "warn":
-		warn.Check()
-	case "error":
-		errLevel.Check()
-	default:
-		info.Check()
-	}
-
+func (a *TrayApp) toggleAutoStart() {
 	go func() {
-		for {
-			select {
-			case <-debug.ClickedCh:
-				if debug.Checked() {
-					debug.Check()
-					continue
-				}
-				debug.Check()
-				info.Uncheck()
-				warn.Uncheck()
-				errLevel.Uncheck()
-				a.cfg.Log.Level = "debug"
-				log.Info("[SYSTRAY] log level changed", "level", "debug")
-				log.SetLevel(slog.LevelDebug)
-			case <-info.ClickedCh:
-				if info.Checked() {
-					info.Check()
-					continue
-				}
-				info.Check()
-				debug.Uncheck()
-				warn.Uncheck()
-				errLevel.Uncheck()
-				a.cfg.Log.Level = "info"
-				log.Info("[SYSTRAY] log level changed", "level", "info")
-				log.SetLevel(slog.LevelInfo)
-			case <-warn.ClickedCh:
-				if warn.Checked() {
-					warn.Check()
-					continue
-				}
-				warn.Check()
-				debug.Uncheck()
-				info.Uncheck()
-				errLevel.Uncheck()
-				a.cfg.Log.Level = "warn"
-				log.Info("[SYSTRAY] log level changed", "level", "warn")
-				log.SetLevel(slog.LevelWarn)
-			case <-errLevel.ClickedCh:
-				if errLevel.Checked() {
-					errLevel.Check()
-					continue
-				}
-				errLevel.Check()
-				debug.Uncheck()
-				info.Uncheck()
-				warn.Uncheck()
-				a.cfg.Log.Level = "error"
-				log.Warn("[SYSTRAY] log level changed", "level", "error")
-				log.SetLevel(slog.LevelError)
-			case <-a.closing:
+		if a.autoStartItem.IsChecked() {
+			if err := DisableAutoStart(); err != nil {
+				log.Error("[SYSTRAY] disable auto-start", "err", err)
 				return
 			}
+			a.autoStartItem.SetChecked(false)
+			log.Info("[SYSTRAY] auto-start disabled")
+		} else {
+			if err := EnableAutoStart(); err != nil {
+				log.Error("[SYSTRAY] enable auto-start", "err", err)
+				return
+			}
+			a.autoStartItem.SetChecked(true)
+			log.Info("[SYSTRAY] auto-start enabled")
 		}
 	}()
 }
 
-func (a *TrayApp) addAutoStartMenu() {
-	autoStart := systray.AddMenuItemCheckbox("开机启动", "", IsAutoStartEnabled())
-
+func (a *TrayApp) exitApp() {
 	go func() {
-		for {
-			select {
-			case <-autoStart.ClickedCh:
-				if autoStart.Checked() {
-					if err := DisableAutoStart(); err != nil {
-						log.Error("[SYSTRAY] disable auto-start", "err", err)
-						continue
-					}
-					autoStart.Uncheck()
-					log.Info("[SYSTRAY] auto-start disabled")
-				} else {
-					if err := EnableAutoStart(); err != nil {
-						log.Error("[SYSTRAY] enable auto-start", "err", err)
-						continue
-					}
-					autoStart.Check()
-					log.Info("[SYSTRAY] auto-start enabled")
-				}
-			case <-a.closing:
-				return
-			}
-		}
-	}()
-}
-
-func (a *TrayApp) addExitMenu() {
-	quit := systray.AddMenuItem("退出", "")
-
-	go func() {
-		for {
-			select {
-			case <-quit.ClickedCh:
-				// Clear the system proxy synchronously — this is fast
-				// and does not require admin. Leave TUN cleanup for
-				// trayExit() to avoid blocking the menu on osascript.
-				_ = a.setSysProxyOff()
-				systray.Quit()
-			case <-a.closing:
-				return
-			}
-		}
+		// Clear the system proxy synchronously — this is fast
+		// and does not require admin. Leave TUN cleanup for
+		// trayExit() to avoid blocking the menu on osascript.
+		_ = a.setSysProxyOff()
+		a.tray.Remove()
 	}()
 }
 
@@ -533,23 +448,18 @@ func (a *TrayApp) closeTun2socks() error {
 	a.tunHelperMu.Lock()
 	defer a.tunHelperMu.Unlock()
 
-	log.Info("[SYSTRAY] closeTun2socks called",
-		"stdinNil", a.tunHelperStdin == nil,
-		"tunMgrNil", a.tunMgr == nil)
-
 	// 1. Signal the helper to shut down by closing the FIFO.
 	//    The helper detects EOF on stdin, cleans up routes/DNS, and exits.
 	if a.tunHelperStdin != nil {
+		log.Info("[SYSTRAY] closeTun2socks: closing helper FIFO")
 		a.tunHelperStdin.Close() //nolint:errcheck
 		a.tunHelperStdin = nil
 	}
-	log.Info("[SYSTRAY] closeTun2socks: fifo closed, stopping engine")
 
 	// 2. Stop the tun2socks engine (no route/DNS cleanup — helper handles it).
 	if a.tunMgr != nil {
-		log.Info("[SYSTRAY] closeTun2socks: calling tunMgr.Stop")
+		log.Info("[SYSTRAY] closeTun2socks: stopping tun2socks engine")
 		a.tunMgr.Stop()
-		log.Info("[SYSTRAY] closeTun2socks: tunMgr.Stop done")
 		a.tunMgr = nil
 	}
 
@@ -577,13 +487,13 @@ func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 		// open the TUN device, set up routes, and pass the fd back.
 		if err := a.createTun2socksViaHelper(); err != nil {
 			log.Error("[SYSTRAY] create tun2socks via helper", "err", err)
-			menu.Uncheck()
+			menu.SetChecked(false)
 			return
 		}
 	} else {
 		if err := a.createTun2socks(); err != nil {
 			log.Error("[SYSTRAY] create tun2socks", "err", err)
-			menu.Uncheck()
+			menu.SetChecked(false)
 			return
 		}
 	}
@@ -599,7 +509,7 @@ func (a *TrayApp) disableTun2socks() {
 }
 
 func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
-	sysProxyEnabled := a.browserMenu != nil && a.browserMenu.Checked()
+	sysProxyEnabled := a.BrowserMenu() != nil && a.BrowserMenu().IsChecked()
 
 	// Stop everything including TUN. On macOS this prompts for admin
 	// credentials to clean up routes and DNS — acceptable during a
@@ -611,7 +521,7 @@ func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
 	// actual (off) state so the user can re-enable it with one click.
 	newCfg.Local.EnableTun2socks = false
 	if tunMenu := a.TunMenu(); tunMenu != nil {
-		tunMenu.Uncheck()
+		tunMenu.SetChecked(false)
 	}
 
 	*a.App = App{
@@ -656,7 +566,7 @@ func (a *TrayApp) startLocalService() {
 		_ = pacPort
 	}
 
-	if a.browserMenu != nil && a.browserMenu.Checked() {
+	if a.BrowserMenu() != nil && a.BrowserMenu().IsChecked() {
 		if err := a.setSysProxyOn(); err != nil {
 			log.Error("[SYSTRAY] start local: set sysproxy on", "err", err)
 		}
@@ -667,8 +577,8 @@ func (a *TrayApp) startLocalService() {
 	}
 
 	if a.cfg.Local.EnableTun2socks {
-		if a.tunMenu != nil {
-			a.tunMenu.Check()
+		if a.TunMenu() != nil {
+			a.TunMenu().SetChecked(true)
 		}
 	}
 }

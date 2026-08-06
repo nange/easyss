@@ -12,7 +12,7 @@ Easyss 是一款兼容 SOCKS5/HTTP 代理的安全上网工具，客户端+服�
 ## 核心目录结构
 
 ```
-cmd/easyss/         客户端入口，含系统托盘(systray) UI，Windows/Mac 需要 CGO
+cmd/easyss/         客户端入口，含系统托盘(systray) UI（gogpu/systray，纯 Go 零 CGO）
 cmd/easyss-server/  服务端入口，单文件 main.go
 client/             客户端核心：Client 结构体
 client/config/      客户端配置（JSON 解析、v2→v3 迁移）
@@ -48,7 +48,7 @@ version/            构建版本信息（GitTag、BuildDate 等）
 # 客户端 (Linux/Mac)
 make easyss
 
-# 客户端 (Windows) — 需要 CGO_ENABLED=1，systray 依赖 CGO
+# 客户端 (Windows)
 make easyss-windows
 
 # 服务端
@@ -144,7 +144,7 @@ Makefile 通过 `-ldflags` 向 `version/` 包注入以下变量，其余变量�
 
 ## Windows 构建注意事项
 
-- 客户端需要 CGO（`CGO_ENABLED=1`），依赖系统托盘库 `getlantern/systray`；服务端禁用 CGO
+- 客户端使用纯 Go 系统托盘库 `github.com/gogpu/systray`（零 CGO，Windows 走 Win32、Linux 走 D-Bus SNI、macOS 走 goffi FFI）；服务端禁用 CGO
 - 客户端产物连 `-H windowsgui` 标志以隐藏控制台窗口
 - `.gitignore` 规则 `cmd/easyss/easyss*` 排除二进制但保留 `easyss_windows.syso`
 

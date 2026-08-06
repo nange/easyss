@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"syscall"
 
-	"fyne.io/systray"
 	"github.com/nange/easyss/v3/log"
 )
 
@@ -25,8 +24,9 @@ func runApp(disableTray, daemon bool, app *App) {
 
 	if !disableTray && (runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux") {
 		ta := &TrayApp{
-			App:     app,
-			closing: make(chan struct{}),
+			App:       app,
+			closing:   make(chan struct{}),
+			trayBuilt: make(chan struct{}),
 		}
 
 		go func() {
@@ -36,13 +36,19 @@ func runApp(disableTray, daemon bool, app *App) {
 			select {
 			case sig := <-c:
 				log.Info("[EASYSS-V3] got signal to exit", "signal", sig)
-				systray.Quit()
+				// Wait for buildTray() to finish so the tray is non-nil and
+				// Remove() can terminate the message loop.
+				<-ta.trayBuilt
+				ta.tray.Remove()
 			case <-ta.closing:
 				log.Info("[EASYSS-V3] easyss exiting...")
 			}
 		}()
 
-		systray.Run(ta.trayReady, ta.trayExit)
+		ta.buildTray()
+		close(ta.trayBuilt)
+		_ = ta.tray.Run()
+		ta.trayExit()
 	} else {
 		proxyWasSet := false
 		if !app.cfg.Local.DisableSysProxy && app.cfg.Local.HTTPPort > 0 {

@@ -16,12 +16,14 @@ var winLockHandle windows.Handle
 func acquireSingletonLock() {
 	name, _ := windows.UTF16PtrFromString("Global\\Easyss_Singleton")
 	handle, err := windows.CreateMutex(nil, false, name)
-	if err != nil {
+	if err != nil && err != windows.ERROR_ALREADY_EXISTS {
 		log.Error("[EASYSS-V3] failed to create mutex", "err", err)
 		os.Exit(1)
 	}
-	if windows.GetLastError() == windows.ERROR_ALREADY_EXISTS {
-		_ = windows.CloseHandle(handle)
+	if err == windows.ERROR_ALREADY_EXISTS {
+		if handle != 0 {
+			_ = windows.CloseHandle(handle)
+		}
 		log.Warn("[EASYSS-V3] another instance is already running, exiting")
 		os.Exit(0)
 	}

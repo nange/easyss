@@ -3,9 +3,9 @@ module github.com/nange/easyss/v3
 go 1.26.3
 
 require (
-	fyne.io/systray v1.12.2
 	github.com/caddyserver/certmagic v0.25.2
 	github.com/coocood/freecache v1.2.7
+	github.com/gogpu/systray v0.2.8
 	github.com/libp2p/go-netroute v0.4.0
 	github.com/miekg/dns v1.1.72
 	github.com/oschwald/geoip2-golang v1.13.0
@@ -101,9 +101,10 @@ require (
 	github.com/go-toolsmith/strparse v1.1.0 // indirect
 	github.com/go-toolsmith/typep v1.1.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
+	github.com/go-webgpu/goffi v0.6.3 // indirect
 	github.com/go-xmlfmt/xmlfmt v1.1.3 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
-	github.com/godbus/dbus/v5 v5.1.0 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/godoc-lint/godoc-lint v0.10.0 // indirect
 	github.com/gofrs/flock v0.12.1 // indirect
 	github.com/golangci/asciicheck v0.5.0 // indirect
