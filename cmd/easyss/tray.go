@@ -447,23 +447,18 @@ func (a *TrayApp) closeTun2socks() error {
 	a.tunHelperMu.Lock()
 	defer a.tunHelperMu.Unlock()
 
-	log.Info("[SYSTRAY] closeTun2socks called",
-		"stdinNil", a.tunHelperStdin == nil,
-		"tunMgrNil", a.tunMgr == nil)
-
 	// 1. Signal the helper to shut down by closing the FIFO.
 	//    The helper detects EOF on stdin, cleans up routes/DNS, and exits.
 	if a.tunHelperStdin != nil {
+		log.Info("[SYSTRAY] closeTun2socks: closing helper FIFO")
 		a.tunHelperStdin.Close() //nolint:errcheck
 		a.tunHelperStdin = nil
 	}
-	log.Info("[SYSTRAY] closeTun2socks: fifo closed, stopping engine")
 
 	// 2. Stop the tun2socks engine (no route/DNS cleanup — helper handles it).
 	if a.tunMgr != nil {
-		log.Info("[SYSTRAY] closeTun2socks: calling tunMgr.Stop")
+		log.Info("[SYSTRAY] closeTun2socks: stopping tun2socks engine")
 		a.tunMgr.Stop()
-		log.Info("[SYSTRAY] closeTun2socks: tunMgr.Stop done")
 		a.tunMgr = nil
 	}
 
