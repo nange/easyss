@@ -5,6 +5,7 @@ go 1.26.3
 require (
 	github.com/caddyserver/certmagic v0.25.2
 	github.com/coocood/freecache v1.2.7
+	github.com/gogpu/systray v0.2.6
 	github.com/libp2p/go-netroute v0.4.0
 	github.com/miekg/dns v1.1.72
 	github.com/oschwald/geoip2-golang v1.13.0
@@ -21,7 +22,7 @@ require (
 	gvisor.dev/gvisor v0.0.0-20260701204157-69c2d17aea96
 )
 
-require github.com/go-webgpu/goffi v0.6.2 // indirect
+require github.com/go-webgpu/goffi v0.6.3 // indirect
 
 require (
 	4d63.com/gocheckcompilerdirectives v1.3.0 // indirect
@@ -171,7 +172,6 @@ require (
 	github.com/moricho/tparallel v0.3.2 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/nakabonne/nestif v0.3.1 // indirect
-	github.com/nange/systray v0.2.1-easyss.1
 	github.com/nishanths/exhaustive v0.12.0 // indirect
 	github.com/nishanths/predeclared v0.2.2 // indirect
 	github.com/nunnatsa/ginkgolinter v0.21.0 // indirect
@@ -268,3 +268,8 @@ tool (
 )
 
 replace github.com/xjasonlyu/tun2socks/v2 => github.com/nange/tun2socks/v2 v2.0.0-20260729130352-d1698910c4f0
+
+// Temporary local patch: upstream gogpu/systray v0.2.6 cannot update menu items
+// inside submenus on macOS (itemWithTag: doesn't search submenus). Fix is on
+// branch fix/darwin-submenu-update of the local fork; remove once released.
+replace github.com/gogpu/systray => /Users/nange/go/src/github.com/nange/systray

@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/gogpu/systray"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util"
-	"github.com/nange/systray"
 )
 
 func (a *TrayApp) addUWPLoopbackMenu(root *systray.Menu) {
@@ -66,7 +66,7 @@ func (a *TrayApp) uwpRefresh() {
 				return func() { a.onUWPItemClicked(u) }
 			}(uwpItem))
 			uwpItem.MenuItem = item
-			a.setChecked(item, app.Exempt)
+			item.SetChecked(app.Exempt)
 			a.uwpItems = append(a.uwpItems, uwpItem)
 			needsRebuild = true
 		} else {
@@ -77,7 +77,7 @@ func (a *TrayApp) uwpRefresh() {
 
 			uwpItem.MenuItem.SetLabel(app.Name)
 			uwpItem.MenuItem.SetDisabled(false)
-			a.setChecked(uwpItem.MenuItem, app.Exempt)
+			uwpItem.MenuItem.SetChecked(app.Exempt)
 		}
 		appIndex++
 	}
@@ -105,11 +105,11 @@ func (a *TrayApp) onUWPItemClicked(u *UWPMenuItem) {
 			return
 		}
 
-		if a.isChecked(u.MenuItem) {
+		if u.MenuItem.IsChecked() {
 			if err := removeLoopbackExempt(targetApp.PackageFamilyName); err != nil {
 				log.Error("[UWP] Failed to remove exemption", "app", targetApp.Name, "err", err)
 			} else {
-				a.setChecked(u.MenuItem, false)
+				u.MenuItem.SetChecked(false)
 				log.Info("[UWP] Removed exemption", "app", targetApp.Name)
 				u.Mu.Lock()
 				if u.App != nil {
@@ -121,7 +121,7 @@ func (a *TrayApp) onUWPItemClicked(u *UWPMenuItem) {
 			if err := addLoopbackExempt(targetApp.PackageFamilyName); err != nil {
 				log.Error("[UWP] Failed to add exemption", "app", targetApp.Name, "err", err)
 			} else {
-				a.setChecked(u.MenuItem, true)
+				u.MenuItem.SetChecked(true)
 				log.Info("[UWP] Added exemption", "app", targetApp.Name)
 				u.Mu.Lock()
 				if u.App != nil {

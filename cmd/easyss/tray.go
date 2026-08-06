@@ -14,13 +14,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gogpu/systray"
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/icon"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/util"
-	"github.com/nange/systray"
 )
 
 type TrayApp struct {
@@ -32,7 +32,6 @@ type TrayApp struct {
 
 	tray     *systray.SystemTray
 	rootMenu *systray.Menu
-	checked  map[*systray.MenuItem]bool
 
 	serverMenuItems []*systray.MenuItem
 	serverAddrs     []string
@@ -41,9 +40,9 @@ type TrayApp struct {
 	autoStartItem   *systray.MenuItem
 
 	// UWP loopback exemption menu (Windows only).
-	uwpMu    sync.Mutex
-	uwpMenu  *systray.Menu
-	uwpItems []*UWPMenuItem
+	uwpMu    sync.Mutex     //nolint:unused // used in uwp_windows.go
+	uwpMenu  *systray.Menu  //nolint:unused // used in uwp_windows.go
+	uwpItems []*UWPMenuItem //nolint:unused // used in uwp_windows.go
 
 	// TUN helper management (darwin non-root).
 	tunHelperStdin io.WriteCloser // FIFO writer; close to signal helper shutdown
@@ -62,30 +61,6 @@ type UWPMenuItem struct {
 	MenuItem *systray.MenuItem
 	App      *UWPApp
 	Mu       sync.RWMutex
-}
-
-// setChecked updates both the native checkbox state and the local state map.
-// gogpu/systray has no Checked() query, so the map is the source of truth.
-func (a *TrayApp) setChecked(mi *systray.MenuItem, v bool) {
-	if mi == nil {
-		return
-	}
-	a.mu.Lock()
-	if a.checked == nil {
-		a.checked = make(map[*systray.MenuItem]bool)
-	}
-	a.checked[mi] = v
-	a.mu.Unlock()
-	mi.SetChecked(v)
-}
-
-func (a *TrayApp) isChecked(mi *systray.MenuItem) bool {
-	if mi == nil {
-		return false
-	}
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.checked[mi]
 }
 
 func (a *TrayApp) buildTray() {
@@ -166,7 +141,6 @@ func (a *TrayApp) buildSelectServerMenu() *systray.Menu {
 		item := m.AddCheckbox(addr, checked, func(idx int) func() {
 			return func() { a.selectServer(idx) }
 		}(idx))
-		a.setChecked(item, checked)
 		a.serverMenuItems = append(a.serverMenuItems, item)
 	}
 
@@ -175,13 +149,13 @@ func (a *TrayApp) buildSelectServerMenu() *systray.Menu {
 
 func (a *TrayApp) selectServer(idx int) {
 	go func() {
-		if a.isChecked(a.serverMenuItems[idx]) {
+		if a.serverMenuItems[idx].IsChecked() {
 			return
 		}
 		addr := a.serverAddrs[idx]
 		log.Info("[SYSTRAY] changing server to", "addr", addr)
 		for _, v := range a.serverMenuItems {
-			a.setChecked(v, false)
+			v.SetChecked(false)
 		}
 		clone := a.cfg.Clone()
 		clone.SetDefaultServerIndex(idx)
@@ -189,7 +163,7 @@ func (a *TrayApp) selectServer(idx int) {
 			log.Error("[SYSTRAY] changing server to", "addr", addr, "err", err)
 			return
 		}
-		a.setChecked(a.serverMenuItems[idx], true)
+		a.serverMenuItems[idx].SetChecked(true)
 		log.Info("[SYSTRAY] changes server success to", "addr", addr)
 	}()
 }
@@ -206,7 +180,7 @@ func (a *TrayApp) statsRefresher() {
 		case <-ticker.C:
 			rttMs, downSpeed := fetchStats(httpClient, url)
 			for i, mi := range a.serverMenuItems {
-				if a.isChecked(mi) {
+				if mi.IsChecked() {
 					mi.SetLabel(formatTitle(a.serverAddrs[i], rttMs, downSpeed))
 					break
 				}
@@ -271,7 +245,6 @@ func (a *TrayApp) buildProxyRuleMenu() *systray.Menu {
 		item := m.AddCheckbox(r.label, r.checked, func(rule string) func() {
 			return func() { go a.changeProxyRule(rule) }
 		}(r.rule))
-		a.setChecked(item, r.checked)
 		a.proxyRuleItems[r.rule] = item
 	}
 
@@ -279,12 +252,12 @@ func (a *TrayApp) buildProxyRuleMenu() *systray.Menu {
 }
 
 func (a *TrayApp) changeProxyRule(rule string) {
-	if a.isChecked(a.proxyRuleItems[rule]) {
+	if a.proxyRuleItems[rule].IsChecked() {
 		return
 	}
 	a.setProxyRule(rule)
 	for r, item := range a.proxyRuleItems {
-		a.setChecked(item, r == rule)
+		item.SetChecked(r == rule)
 	}
 }
 
@@ -301,11 +274,9 @@ func (a *TrayApp) buildProxyObjectMenu() *systray.Menu {
 
 	browserChecked := !a.cfg.Local.DisableSysProxy
 	browser := m.AddCheckbox("浏览器(设置系统代理)", browserChecked, a.toggleSysProxy)
-	a.setChecked(browser, browserChecked)
 	a.SetBrowserMenu(browser)
 
 	global := m.AddCheckbox("系统全局流量(Tun2socks)", a.cfg.Local.EnableTun2socks, a.toggleTun2socks)
-	a.setChecked(global, a.cfg.Local.EnableTun2socks)
 	a.SetTunMenu(global)
 
 	return m
@@ -314,17 +285,17 @@ func (a *TrayApp) buildProxyObjectMenu() *systray.Menu {
 func (a *TrayApp) toggleSysProxy() {
 	go func() {
 		mi := a.BrowserMenu()
-		if a.isChecked(mi) {
-			a.setChecked(mi, false)
+		if mi.IsChecked() {
+			mi.SetChecked(false)
 			if err := a.setSysProxyOff(); err != nil {
 				log.Error("[SYSTRAY] set sys-proxy off", "err", err)
-				a.setChecked(mi, true) // revert on failure
+				mi.SetChecked(true) // revert on failure
 			}
 		} else {
-			a.setChecked(mi, true)
+			mi.SetChecked(true)
 			if err := a.setSysProxyOn(); err != nil {
 				log.Error("[SYSTRAY] set sys-proxy on", "err", err)
-				a.setChecked(mi, false) // revert on failure
+				mi.SetChecked(false) // revert on failure
 			}
 		}
 	}()
@@ -333,12 +304,12 @@ func (a *TrayApp) toggleSysProxy() {
 func (a *TrayApp) toggleTun2socks() {
 	go func() {
 		mi := a.TunMenu()
-		log.Info("[SYSTRAY] tun menu clicked", "checked", a.isChecked(mi))
-		if a.isChecked(mi) {
-			a.setChecked(mi, false)
+		log.Info("[SYSTRAY] tun menu clicked", "checked", mi.IsChecked())
+		if mi.IsChecked() {
+			mi.SetChecked(false)
 			a.disableTun2socks()
 		} else {
-			a.setChecked(mi, true)
+			mi.SetChecked(true)
 			a.enableTun2socks(mi)
 		}
 	}()
@@ -362,7 +333,6 @@ func (a *TrayApp) buildLogLevelMenu() *systray.Menu {
 		item := m.AddCheckbox(l.level, l.checked, func(level string) func() {
 			return func() { go a.changeLogLevel(level) }
 		}(l.level))
-		a.setChecked(item, l.checked)
 		a.logLevelItems[l.level] = item
 	}
 
@@ -370,7 +340,7 @@ func (a *TrayApp) buildLogLevelMenu() *systray.Menu {
 }
 
 func (a *TrayApp) changeLogLevel(level string) {
-	if a.isChecked(a.logLevelItems[level]) {
+	if a.logLevelItems[level].IsChecked() {
 		return
 	}
 	a.cfg.Log.Level = level
@@ -390,7 +360,7 @@ func (a *TrayApp) changeLogLevel(level string) {
 	log.SetLevel(slogLevel)
 
 	for l, item := range a.logLevelItems {
-		a.setChecked(item, l == level)
+		item.SetChecked(l == level)
 	}
 }
 
@@ -410,19 +380,19 @@ func (a *TrayApp) catLog() error {
 
 func (a *TrayApp) toggleAutoStart() {
 	go func() {
-		if a.isChecked(a.autoStartItem) {
+		if a.autoStartItem.IsChecked() {
 			if err := DisableAutoStart(); err != nil {
 				log.Error("[SYSTRAY] disable auto-start", "err", err)
 				return
 			}
-			a.setChecked(a.autoStartItem, false)
+			a.autoStartItem.SetChecked(false)
 			log.Info("[SYSTRAY] auto-start disabled")
 		} else {
 			if err := EnableAutoStart(); err != nil {
 				log.Error("[SYSTRAY] enable auto-start", "err", err)
 				return
 			}
-			a.setChecked(a.autoStartItem, true)
+			a.autoStartItem.SetChecked(true)
 			log.Info("[SYSTRAY] auto-start enabled")
 		}
 	}()
@@ -522,13 +492,13 @@ func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 		// open the TUN device, set up routes, and pass the fd back.
 		if err := a.createTun2socksViaHelper(); err != nil {
 			log.Error("[SYSTRAY] create tun2socks via helper", "err", err)
-			a.setChecked(menu, false)
+			menu.SetChecked(false)
 			return
 		}
 	} else {
 		if err := a.createTun2socks(); err != nil {
 			log.Error("[SYSTRAY] create tun2socks", "err", err)
-			a.setChecked(menu, false)
+			menu.SetChecked(false)
 			return
 		}
 	}
@@ -544,7 +514,7 @@ func (a *TrayApp) disableTun2socks() {
 }
 
 func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
-	sysProxyEnabled := a.BrowserMenu() != nil && a.isChecked(a.BrowserMenu())
+	sysProxyEnabled := a.BrowserMenu() != nil && a.BrowserMenu().IsChecked()
 
 	// Stop everything including TUN. On macOS this prompts for admin
 	// credentials to clean up routes and DNS — acceptable during a
@@ -556,7 +526,7 @@ func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
 	// actual (off) state so the user can re-enable it with one click.
 	newCfg.Local.EnableTun2socks = false
 	if tunMenu := a.TunMenu(); tunMenu != nil {
-		a.setChecked(tunMenu, false)
+		tunMenu.SetChecked(false)
 	}
 
 	*a.App = App{
@@ -601,7 +571,7 @@ func (a *TrayApp) startLocalService() {
 		_ = pacPort
 	}
 
-	if a.BrowserMenu() != nil && a.isChecked(a.BrowserMenu()) {
+	if a.BrowserMenu() != nil && a.BrowserMenu().IsChecked() {
 		if err := a.setSysProxyOn(); err != nil {
 			log.Error("[SYSTRAY] start local: set sysproxy on", "err", err)
 		}
@@ -613,7 +583,7 @@ func (a *TrayApp) startLocalService() {
 
 	if a.cfg.Local.EnableTun2socks {
 		if a.TunMenu() != nil {
-			a.setChecked(a.TunMenu(), true)
+			a.TunMenu().SetChecked(true)
 		}
 	}
 }
