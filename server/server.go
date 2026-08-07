@@ -288,7 +288,7 @@ func (s *Server) Start() error {
 	proxyHandler := handler.NewProxyHandler(handler.ProxyHandlerConfig{
 		MasterKey:         masterKey,
 		AllowedMethods:    s.cfg.GetAllowedMethods(),
-		HandshakeTimeout:  timeout / 2,
+		HandshakeTimeout:  timeout,
 		Timeout:           timeout,
 		StreamIdleTimeout: streamIdleTimeout,
 		UDPIdleTimeout:    2 * timeout,

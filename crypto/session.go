@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -13,6 +14,13 @@ const (
 	bootstrapPhase = "bootstrap"
 	sessionPhase   = "session"
 )
+
+// ErrHandshakeTimeout reports that a complete bootstrap record was not
+// received within the handshake timeout. The server responds with 408
+// Request Timeout (mirroring nginx client_body_timeout behavior) instead of a
+// camouflaged fallback page, so a legit client with a merely-delayed record
+// gets a clean rejection instead of misparsing HTML as session records.
+var ErrHandshakeTimeout = errors.New("crypto: bootstrap handshake timeout")
 
 type FirstRecord struct {
 	Handshake protocol.Handshake
@@ -269,7 +277,7 @@ func (sk *StreamKeys) ReadFirstRecordWithTimeout(ctx context.Context, src io.Rea
 		return FirstRecord{}, ctx.Err()
 	case <-timer.C:
 		closeReader(src)
-		return FirstRecord{}, fmt.Errorf("crypto: bootstrap handshake timeout after %v", timeout)
+		return FirstRecord{}, fmt.Errorf("%w after %v", ErrHandshakeTimeout, timeout)
 	case res := <-ch:
 		return res.fr, res.err
 	}

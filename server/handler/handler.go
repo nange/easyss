@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -101,6 +102,16 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
+// serveReject writes a bare HTTP error response for handshake rejections.
+// Unlike ServeFallback it sends no camouflaged HTML body: it is only used for
+// requests that either timed out waiting for the handshake record, or already
+// proved master-key possession by sending a valid encrypted handshake — for
+// those, 4xx/5xx statuses are both realistic and distinguishable for the
+// easyss client, which checks the status code before reading the body.
+func serveReject(w http.ResponseWriter, code int) {
+	w.WriteHeader(code)
+}
+
 func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if e := recover(); e != nil {
@@ -132,18 +143,19 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !h.ipLimiter.Allow(clientIP(r)) {
 		log.Error("[SERVER] handshake rate limited", "remote", r.RemoteAddr)
 		stats.RecordServerHandshakeError()
-		ServeFallback(w, r)
+		serveReject(w, http.StatusTooManyRequests)
 		return
 	}
 
 	// Reject replayed bootstrap records. Every stream uses a unique random
 	// salt; a salt already accepted by this server means the record is being
 	// re-delivered (replay), and accepting it would re-dial the target and
-	// re-deliver the first packet.
+	// re-deliver the first packet. Replays carry a valid encrypted handshake,
+	// so the responder has proven key possession and 400 is appropriate.
 	if h.saltCache.MarkSeen(saltB64) {
 		log.Error("[SERVER] replayed salt", "remote", r.RemoteAddr, "endpoint", r.URL.Path)
 		stats.RecordServerHandshakeError()
-		ServeFallback(w, r)
+		serveReject(w, http.StatusBadRequest)
 		return
 	}
 
@@ -158,6 +170,21 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Error("[SERVER] read first record", "remote", r.RemoteAddr, "endpoint", endpoint, "err", err)
 		stats.RecordServerHandshakeError()
+		if errors.Is(err, crypto.ErrHandshakeTimeout) {
+			// The client connected but its bootstrap record did not arrive in
+			// time (congested link, connection dying). A real HTTP/2 site
+			// (nginx) answers a late/absent request body with 408 Request
+			// Timeout; serving the camouflaged homepage here would poison the
+			// legit client's record stream with HTML. 408 lets the client fail
+			// fast and cleanly instead of misparsing the page as records.
+			serveReject(w, http.StatusRequestTimeout)
+			return
+		}
+		// Decrypt failure: the request did not prove master-key possession
+		// (attacker probing, wrong key). Keep the camouflaged homepage so the
+		// server stays indistinguishable from a real site for keyless
+		// requests; the easyss client detects the non-encrypted payload on
+		// its first session read and reports a clear handshake-rejected error.
 		ServeFallback(w, r)
 		return
 	}
@@ -165,14 +192,14 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !first.Handshake.MatchesEndpoint(endpoint) {
 		log.Error("[SERVER] endpoint mismatch", "remote", r.RemoteAddr, "proto", first.Handshake.Proto.String(), "endpoint", endpoint)
 		stats.RecordServerHandshakeError()
-		ServeFallback(w, r)
+		serveReject(w, http.StatusNotFound)
 		return
 	}
 
 	if !h.allowedMethods[first.Handshake.Method] {
 		log.Error("[SERVER] method not allowed", "remote", r.RemoteAddr, "method", first.Handshake.Method.String())
 		stats.RecordServerHandshakeError()
-		ServeFallback(w, r)
+		serveReject(w, http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -191,7 +218,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if util.IsLANHostResolved(r.Context(), target) {
 		log.Error("[SERVER] rejected LAN target", "target", target, "remote", r.RemoteAddr)
 		stats.RecordServerHandshakeError()
-		ServeFallback(w, r)
+		serveReject(w, http.StatusBadRequest)
 		return
 	}
 
@@ -199,12 +226,13 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Once WriteHeader + Flush is called the response can no longer be
 	// turned into a fallback HTML page. Encryptor creation checks that the
 	// method is supported (already validated above), but we guard against
-	// unexpected internal errors.
+	// unexpected internal errors. The request proved key possession, so a
+	// plain 500 (real-site behavior for internal failures) is appropriate.
 	aadC2S := crypto.BuildAAD(endpoint, salt, "c2s", "session", method)
 	c2sEnc, c2sCounter, err := sk.Encryptor("c2s", "session", method)
 	if err != nil {
 		log.Error("[SERVER] c2s encryptor", "err", err)
-		ServeFallback(w, r)
+		serveReject(w, http.StatusInternalServerError)
 		return
 	}
 
@@ -212,7 +240,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s2cEnc, s2cCounter, err := sk.Encryptor("s2c", "session", method)
 	if err != nil {
 		log.Error("[SERVER] s2c encryptor", "err", err)
-		ServeFallback(w, r)
+		serveReject(w, http.StatusInternalServerError)
 		return
 	}
 

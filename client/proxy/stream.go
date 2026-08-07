@@ -27,6 +27,12 @@ var ErrStreamIdleTimeout = errors.New("stream idle timeout")
 
 var ErrStreamReset = errors.New("stream reset by peer")
 
+// ErrServerRejectedHandshake reports that the server answered the bootstrap
+// with a non-encrypted payload (typically a camouflaged fallback page after a
+// handshake decrypt failure), i.e. the handshake was rejected before any
+// session records were exchanged. Common cause: master key mismatch.
+var ErrServerRejectedHandshake = errors.New("handshake rejected by server")
+
 var errLocalConnClosed = errors.New("local connection closed")
 
 type StreamHandler struct {
@@ -137,6 +143,27 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 	return nil, fmt.Errorf("write handshake: max retries exceeded")
 }
 
+// classifyFirstReadError maps first-record read failures caused by a
+// non-encrypted server response (e.g. a fallback page after the handshake was
+// rejected) to ErrServerRejectedHandshake with a diagnostic hint. Only the
+// very first read is classified: a failure mid-stream means real stream
+// corruption, not a handshake rejection.
+func classifyFirstReadError(err error) error {
+	if err == nil || errors.Is(err, ErrServerRejectedHandshake) {
+		return err
+	}
+	if transport.IsHandshakeRejected(err) {
+		return err
+	}
+	msg := err.Error()
+	for _, pat := range []string{"crypto: ciphertext exceeds max", "crypto: zero-length ciphertext", "crypto: decrypt record"} {
+		if strings.Contains(msg, pat) {
+			return fmt.Errorf("%w: server returned a non-encrypted payload (check master_key or server config)", ErrServerRejectedHandshake)
+		}
+	}
+	return err
+}
+
 func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto protocol.Proto, target string, echoPayload []byte, method protocol.Method) ([]byte, error) {
 	log.Debug("[STREAM] icmp open", "endpoint", endpoint, "target", target)
 
@@ -158,6 +185,7 @@ func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto p
 	dr := crypto.NewDecryptedReader(bs.stream, aadS2C, s2cEnc, s2cCounter)
 
 	frame, err := dr.ReadFrame()
+	err = classifyFirstReadError(err)
 	if err != nil {
 		log.Error("[STREAM] icmp read reply", "target", target, "err", err)
 		return nil, fmt.Errorf("read first reply frame: %w", err)
@@ -305,6 +333,7 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 				first = false
 				rtt := time.Since(start)
 				stats.RecordRTT(rtt)
+				err = classifyFirstReadError(err)
 			}
 			if err != nil {
 				if errors.Is(err, io.EOF) {
@@ -370,6 +399,29 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 	return <-readDone
 }
 
+// isTransientStreamError reports whether a stream failure is transient or
+// expected (idle timeout, peer reset, handshake rejection, HTTP/2 connection
+// loss, closed stream). Such failures often hit many streams at once when a
+// connection dies or the server rejects, and should be logged at Debug level
+// instead of flooding the Error log per stream.
+func isTransientStreamError(err error) bool {
+	if errors.Is(err, ErrStreamIdleTimeout) || errors.Is(err, ErrStreamReset) {
+		return true
+	}
+	if errors.Is(err, ErrServerRejectedHandshake) || transport.IsHandshakeRejected(err) {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "client connection lost") ||
+		strings.Contains(msg, "http2: stream closed") ||
+		strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection was aborted")
+}
+
 func isLocalConnClosedError(err error) bool {
 	if err == nil {
 		return false
@@ -401,6 +453,7 @@ type UDPExchange struct {
 	reader    *crypto.DecryptedReader
 	target    string
 	lastSeen  atomic.Int64 // UnixNano, written by Send/Receive, read by LastSeen
+	firstRead atomic.Bool  // set on the first ReadFrame, enables rejection classification
 	mu        sync.Mutex
 	closeOnce sync.Once
 }
@@ -467,6 +520,9 @@ func (ue *UDPExchange) Send(data []byte) error {
 func (ue *UDPExchange) Receive() ([]byte, error) {
 	for {
 		frame, err := ue.reader.ReadFrame()
+		if ue.firstRead.CompareAndSwap(false, true) {
+			err = classifyFirstReadError(err)
+		}
 		if err != nil {
 			return nil, err
 		}

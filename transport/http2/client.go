@@ -238,6 +238,17 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 		if err != nil {
 			_ = pw.CloseWithError(err)
 		}
+		// Rejections are answered with plain HTTP error statuses (408/400/
+		// 404/405/429...): the body would be a fallback/error page, not
+		// encrypted records. Fail the stream immediately with a clear error
+		// so the record reader never misparses the rejection body.
+		if err == nil && resp.StatusCode != http.StatusOK {
+			rejectErr := &transport.HandshakeRejectedError{StatusCode: resp.StatusCode, Status: resp.Status}
+			_ = resp.Body.Close()
+			resp = nil
+			err = rejectErr
+			_ = pw.CloseWithError(err)
+		}
 		// Store the RoundTrip error on the stream so Write() can surface it
 		// when the pipe write fails with io.ErrClosedPipe.
 		stream.setRoundTripErr(err)

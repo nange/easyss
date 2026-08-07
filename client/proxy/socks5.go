@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net"
 	"strings"
@@ -223,7 +222,7 @@ func (s *Socks5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 		}
 		err = s.handler.OpenTCPStream(context.Background(), target, s.method, c)
 		if err != nil {
-			if errors.Is(err, ErrStreamIdleTimeout) || errors.Is(err, ErrStreamReset) {
+			if isTransientStreamError(err) {
 				log.Debug("[TCP_PROXY] closed", "target", target, "err", err)
 				return nil
 			}
