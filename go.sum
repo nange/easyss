@@ -354,8 +354,6 @@ github.com/muesli/termenv v0.16.0 h1:S5AlUN9dENB57rsbnkPyfdGuWIlkmzJjbFf0Tf5FWUc
 github.com/muesli/termenv v0.16.0/go.mod h1:ZRfOIKPFDYQoDFF4Olj7/QJbW60Ol/kL1pU3VfY/Cnk=
 github.com/nakabonne/nestif v0.3.1 h1:wm28nZjhQY5HyYPx+weN3Q65k6ilSBxDb8v5S81B81U=
 github.com/nakabonne/nestif v0.3.1/go.mod h1:9EtoZochLn5iUprVDmDjqGKPofoUEBL8U4Ngq6aY7OE=
-github.com/nange/tun2socks/v2 v2.0.0-20260729130352-d1698910c4f0 h1:aw2JV6rr4pU88A8CnPPjmJGwI+Q2nqaxOdaBlUfCnPI=
-github.com/nange/tun2socks/v2 v2.0.0-20260729130352-d1698910c4f0/go.mod h1:XHgJ3wbs63mZxGbJawt6jjNX65aPDl+Qhn2ePPEE4KI=
 github.com/nishanths/exhaustive v0.12.0 h1:vIY9sALmw6T/yxiASewa4TQcFsVYZQQRUQJhKRf3Swg=
 github.com/nishanths/exhaustive v0.12.0/go.mod h1:mEZ95wPIZW+x8kC4TgC+9YCUgiST7ecevsVDTgc2obs=
 github.com/nishanths/predeclared v0.2.2 h1:V2EPdZPliZymNAn79T8RkNApBjMmVKh5XRpLm/w98Vk=
@@ -512,6 +510,8 @@ github.com/wzshiming/sysproxy v0.2.2 h1:OOZ7jRier8qA5U5hnzHwJCLlZleWqdqiNKEhJY+0
 github.com/wzshiming/sysproxy v0.2.2/go.mod h1:Epx6hex0nK1YhLHDnIhrhusgCtBQFR2NQPhM8WlMDTc=
 github.com/xen0n/gosmopolitan v1.3.0 h1:zAZI1zefvo7gcpbCOrPSHJZJYA9ZgLfJqtKzZ5pHqQM=
 github.com/xen0n/gosmopolitan v1.3.0/go.mod h1:rckfr5T6o4lBtM1ga7mLGKZmLxswUoH1zxHgNXOsEt4=
+github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20260808015004-d24a73449e3a h1:cp6IAijc0iIDR6PT5Ta7zBC+ofAo5gMpN0TntxZyvdQ=
+github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20260808015004-d24a73449e3a/go.mod h1:XHgJ3wbs63mZxGbJawt6jjNX65aPDl+Qhn2ePPEE4KI=
 github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e h1:JVG44RsyaB9T2KIHavMF/ppJZNG9ZpyihvCd0w101no=
 github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e/go.mod h1:RbqR21r5mrJuqunuUZ/Dhy/avygyECGrLceyNeo4LiM=
 github.com/yagipy/maintidx v1.0.0 h1:h5NvIsCz+nRDapQ0exNv4aJ0yXSI0420omVANTv3GJM=

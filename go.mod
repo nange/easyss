@@ -14,7 +14,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/txthinking/socks5 v0.0.0-20260601051520-339b044ab0eb
 	github.com/wzshiming/sysproxy v0.2.2
-	github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20260702150440-dda1b1058db8
+	github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20260808015004-d24a73449e3a
 	golang.org/x/crypto v0.54.0
 	golang.org/x/net v0.57.0
 	golang.org/x/sys v0.47.0
@@ -265,5 +265,3 @@ tool (
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 	golang.org/x/mobile/cmd/gobind
 )
-
-replace github.com/xjasonlyu/tun2socks/v2 => github.com/nange/tun2socks/v2 v2.0.0-20260729130352-d1698910c4f0
