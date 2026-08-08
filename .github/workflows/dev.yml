@@ -57,8 +57,8 @@ jobs:
           GOOS=linux GOARCH=arm64 make easyss
           GOOS=linux GOARCH=arm64 make easyss-server
 
-  lint-test-build-macos:
-    name: Lint-Test-Build-MacOS
+  test-macos:
+    name: Test-MacOS
     runs-on: macOS-latest
     steps:
       - uses: actions/checkout@v7
@@ -84,23 +84,8 @@ jobs:
       - name: Test
         run: make test
 
-      - name: Set up Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Install gomobile
-        run: |
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          export PATH="$(go env GOPATH)/bin:$PATH"
-          gomobile init
-
-      - name: Build
-        run: make .PHONY
-
-  lint-test-build-windows:
-    name: Lint-Test-Build-Windows
+  test-windows:
+    name: Test-Windows
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -126,11 +111,8 @@ jobs:
       - name: Test
         run: go test -v ./...
 
-      - name: Build
-        run: cd cmd/easyss && go build -o easyss.exe -ldflags '-H=windowsgui'
-
-  lint-test-build-windows-arm64:
-    name: Lint-Test-Build-Windows-Arm64
+  test-windows-arm64:
+    name: Test-Windows-Arm64
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@v7
@@ -142,6 +124,3 @@ jobs:
 
       - name: Test
         run: go test -v ./...
-
-      - name: Build
-        run: cd cmd/easyss && go build -o easyss.exe -ldflags '-H=windowsgui'

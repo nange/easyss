@@ -6,8 +6,8 @@ on:
       - "v*.*.*"
 
 jobs:
-  linux:
-    runs-on: ubuntu-22.04
+  build:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -43,130 +43,45 @@ jobs:
           zip easyss-server-linux-amd64.zip ./easyss-server
           zip easyss-server-windows-amd64.zip ./easyss-server.exe
 
-      - name: Build Arm64
+      - name: Build Linux Arm64
         run: |
           GOOS=linux GOARCH=arm64 make easyss
           GOOS=linux GOARCH=arm64 make easyss-headless
           GOOS=linux GOARCH=arm64 make easyss-server
-      - name: Pack Arm64
+      - name: Pack Linux Arm64
         run: |
           cd bin
           zip easyss-linux-arm64.zip ./easyss
           zip easyss-headless-linux-arm64.zip ./easyss-headless
           zip easyss-server-linux-arm64.zip ./easyss-server
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-artifacts
-          path: |
-            bin/*.zip
-            bin/*.aar
+      - name: Build Windows Arm64
+        run: make easyss-windows easyss-server-windows WIN_ARCH=arm64
+      - name: Pack Windows Arm64
+        run: |
+          cd bin
+          zip easyss-windows-arm64.zip ./easyss.exe
+          zip easyss-server-windows-arm64.zip ./easyss-server.exe
 
-  macos-arm64:
-    runs-on: macOS-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: 'go.mod'
-
-      - name: Build Arm64
-        env:
-          MACOSX_DEPLOYMENT_TARGET: "14.0"
+      - name: Build MacOS Arm64
         run: |
           GOOS=darwin GOARCH=arm64 make easyss-mac-app
           GOOS=darwin GOARCH=arm64 make easyss-server
-      - name: Pack Arm64
+      - name: Pack MacOS Arm64
         run: |
           cd bin
           zip -r easyss-darwin-arm64.zip ./Easyss.app
           zip easyss-server-darwin-arm64.zip ./easyss-server
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-arm64-artifacts
-          path: bin/*.zip
 
-  macos-amd64:
-    runs-on: macos-15-intel
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: 'go.mod'
-      - name: Build Amd64
-        env:
-          MACOSX_DEPLOYMENT_TARGET: "14.0"
+      - name: Build MacOS Amd64
         run: |
           GOOS=darwin GOARCH=amd64 make easyss-mac-app
           GOOS=darwin GOARCH=amd64 make easyss-server
-      - name: Pack Amd64
+      - name: Pack MacOS Amd64
         run: |
           cd bin
           zip -r easyss-darwin-amd64.zip ./Easyss.app
           zip easyss-server-darwin-amd64.zip ./easyss-server
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-amd64-artifacts
-          path: bin/*.zip
-
-  windows-arm64:
-    runs-on: windows-11-arm
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: 'go.mod'
-
-      - name: Build Arm64
-        shell: bash
-        run: |
-          cd cmd/easyss
-          go build -ldflags "-H=windowsgui -X 'github.com/nange/easyss/v3/version.Name=Easyss' -X 'github.com/nange/easyss/v3/version.BuildDate=$(date "+%Y-%m-%d %H:%M:%S")' -X 'github.com/nange/easyss/v3/version.GitTag=$(git describe --tags)'" -o ../../bin/easyss.exe
-          cd ../easyss-server
-          CGO_ENABLED=0 go build -ldflags "-X 'github.com/nange/easyss/v3/version.Name=Easyss' -X 'github.com/nange/easyss/v3/version.BuildDate=$(date "+%Y-%m-%d %H:%M:%S")' -X 'github.com/nange/easyss/v3/version.GitTag=$(git describe --tags)'" -o ../../bin/easyss-server.exe
-      - name: Pack Arm64
-        shell: pwsh
-        run: |
-          cd bin
-          Compress-Archive -Path ./easyss.exe -DestinationPath easyss-windows-arm64.zip
-          Compress-Archive -Path ./easyss-server.exe -DestinationPath easyss-server-windows-arm64.zip
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-arm64-artifacts
-          path: bin/*.zip
-
-  release:
-    runs-on: ubuntu-22.04
-    needs:
-      - linux
-      - macos-arm64
-      - macos-amd64
-      - windows-arm64
-    steps:
-      - name: Download Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
 
       - name: Release
         uses: softprops/action-gh-release@v3
@@ -174,5 +89,5 @@ jobs:
           name: Release ${{ github.ref_name }}
           generate_release_notes: true
           files: |
-            artifacts/*.zip
-            artifacts/*.aar
+            bin/*.zip
+            bin/*.aar

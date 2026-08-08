@@ -17,6 +17,7 @@ Makefile text eol=lf
 *.mmdb binary
 *.png binary
 *.ico binary
+*.icns binary
 *.dll binary
 *.syso binary
 *.zip binary

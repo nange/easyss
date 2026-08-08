@@ -27,7 +27,7 @@ easyss-windows:
 easyss-mac-app:
 	cd cmd/easyss; \
 	GOOS=darwin $(GO_BUILD) -o ../../bin/easyss
-	bash scripts/app-bundle.sh bin/easyss icon/icon_1024_1024.png cmd/easyss/Info.plist
+	bash scripts/app-bundle.sh bin/easyss icon/Easyss.icns cmd/easyss/Info.plist
 
 easyss-headless:
 		cd cmd/easyss; \
