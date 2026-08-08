@@ -2,12 +2,13 @@ package dns
 
 import (
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
 )
 
 func TestNewCache(t *testing.T) {
-	c := NewCache()
+	c := NewCache("")
 	if c == nil {
 		t.Fatal("NewCache returned nil")
 	}
@@ -17,7 +18,7 @@ func TestNewCache(t *testing.T) {
 }
 
 func TestCache_SetAndGet(t *testing.T) {
-	c := NewCache()
+	c := NewCache("")
 
 	// 构造 A 记录查询响应
 	msg := &dns.Msg{}
@@ -52,7 +53,7 @@ func TestCache_SetAndGet(t *testing.T) {
 }
 
 func TestCache_SetAndGet_AAAA(t *testing.T) {
-	c := NewCache()
+	c := NewCache("")
 
 	msg := &dns.Msg{}
 	msg.SetQuestion("example.com.", dns.TypeAAAA)
@@ -76,7 +77,7 @@ func TestCache_SetAndGet_AAAA(t *testing.T) {
 }
 
 func TestCache_Get_Miss(t *testing.T) {
-	c := NewCache()
+	c := NewCache("")
 
 	// 未存储的 key 返回 nil
 	if got := c.Get("nonexistent.com.", "A", false); got != nil {
@@ -85,7 +86,7 @@ func TestCache_Get_Miss(t *testing.T) {
 }
 
 func TestCache_Set_NilMsg(t *testing.T) {
-	c := NewCache()
+	c := NewCache("")
 
 	// nil msg 应不报错
 	if err := c.Set(nil, false); err != nil {
@@ -94,7 +95,7 @@ func TestCache_Set_NilMsg(t *testing.T) {
 }
 
 func TestCache_Set_EmptyQuestion(t *testing.T) {
-	c := NewCache()
+	c := NewCache("")
 
 	msg := &dns.Msg{} // 无 Question
 	if err := c.Set(msg, false); err != nil {
@@ -103,7 +104,7 @@ func TestCache_Set_EmptyQuestion(t *testing.T) {
 }
 
 func TestCache_Set_NonARecord(t *testing.T) {
-	c := NewCache()
+	c := NewCache("")
 
 	// MX 记录不应被缓存
 	msg := &dns.Msg{}
@@ -125,7 +126,7 @@ func TestCache_Set_NonARecord(t *testing.T) {
 }
 
 func TestCache_Get_UnpackError(t *testing.T) {
-	c := NewCache()
+	c := NewCache("")
 
 	// 直接写入损坏的数据到内部缓存
 	key := []byte("test.com.A")
@@ -140,7 +141,7 @@ func TestCache_Get_UnpackError(t *testing.T) {
 }
 
 func TestCache_DirectVsProxied(t *testing.T) {
-	c := NewCache()
+	c := NewCache("")
 
 	// 存储到 proxied
 	msgProxied := &dns.Msg{}
@@ -166,5 +167,88 @@ func TestCache_DirectVsProxied(t *testing.T) {
 	gotD := c.Get("example.com.", "A", true)
 	if gotD == nil || gotD.Answer[0].(*dns.A).A.String() != "2.2.2.2" {
 		t.Error("direct cache returned wrong IP")
+	}
+}
+
+func TestDNSCacheTTL_Clamp(t *testing.T) {
+	// TTL 低于下限 → clamp 到 30 分钟
+	msgLow := &dns.Msg{}
+	msgLow.SetQuestion("example.com.", dns.TypeA)
+	rrLow, _ := dns.NewRR("example.com. 5 IN A 1.2.3.4")
+	msgLow.Answer = append(msgLow.Answer, rrLow)
+	if ttl := dnsCacheTTL(msgLow, ""); ttl != 30*60 {
+		t.Errorf("low TTL expected %d, got %d", 30*60, ttl)
+	}
+
+	// TTL 高于上限 → clamp 到 2 小时
+	msgHigh := &dns.Msg{}
+	msgHigh.SetQuestion("example.com.", dns.TypeA)
+	rrHigh, _ := dns.NewRR("example.com. 86400 IN A 1.2.3.4")
+	msgHigh.Answer = append(msgHigh.Answer, rrHigh)
+	if ttl := dnsCacheTTL(msgHigh, ""); ttl != 2*60*60 {
+		t.Errorf("high TTL expected %d, got %d", 2*60*60, ttl)
+	}
+
+	// TTL 在区间内 → 取应答最小 TTL
+	msgMid := &dns.Msg{}
+	msgMid.SetQuestion("example.com.", dns.TypeA)
+	rrMid, _ := dns.NewRR("example.com. 3600 IN A 1.2.3.4")
+	msgMid.Answer = append(msgMid.Answer, rrMid)
+	if ttl := dnsCacheTTL(msgMid, ""); ttl != 3600 {
+		t.Errorf("mid TTL expected 3600, got %d", ttl)
+	}
+}
+
+func TestDNSCacheTTL_ServerDomain(t *testing.T) {
+	msg := &dns.Msg{}
+	msg.SetQuestion("mysite.net.", dns.TypeA)
+	rr, _ := dns.NewRR("mysite.net. 5 IN A 1.2.3.4")
+	msg.Answer = append(msg.Answer, rr)
+
+	// 服务器域名（大小写不敏感匹配）→ 永不过期
+	if ttl := dnsCacheTTL(msg, "MySite.Net"); ttl != 0 {
+		t.Errorf("server domain expected ttl 0, got %d", ttl)
+	}
+
+	// 非服务器域名 → 正常 clamp
+	if ttl := dnsCacheTTL(msg, "other.net"); ttl != 30*60 {
+		t.Errorf("non-server domain expected %d, got %d", 30*60, ttl)
+	}
+
+	// serverDomain 为空时不受影响
+	if ttl := dnsCacheTTL(msg, ""); ttl != 30*60 {
+		t.Errorf("empty serverDomain expected %d, got %d", 30*60, ttl)
+	}
+}
+
+func TestCache_ServerDomain_NeverExpires(t *testing.T) {
+	c := NewCache("mysite.net")
+
+	msg := &dns.Msg{}
+	msg.SetQuestion("mysite.net.", dns.TypeA)
+	rr, _ := dns.NewRR("mysite.net. 1 IN A 1.2.3.4")
+	msg.Answer = append(msg.Answer, rr)
+	if err := c.Set(msg, false); err != nil {
+		t.Fatalf("Set error: %v", err)
+	}
+
+	// 应答 TTL=1s，普通域名 1s 后即过期；服务器域名需保持命中
+	time.Sleep(1500 * time.Millisecond)
+	if got := c.Get("mysite.net.", "A", false); got == nil {
+		t.Fatal("server domain entry expired, expected never-expiring cache")
+	}
+
+	// 普通域名仍按 clamp 下限缓存（1s 后仍命中，验证 minCacheTTL）
+	c2 := NewCache("")
+	msg2 := &dns.Msg{}
+	msg2.SetQuestion("example.com.", dns.TypeA)
+	rr2, _ := dns.NewRR("example.com. 1 IN A 1.2.3.4")
+	msg2.Answer = append(msg2.Answer, rr2)
+	if err := c2.Set(msg2, false); err != nil {
+		t.Fatalf("Set error: %v", err)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if got := c2.Get("example.com.", "A", false); got == nil {
+		t.Fatal("regular domain entry expired before minCacheTTL")
 	}
 }

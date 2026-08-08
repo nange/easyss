@@ -2,6 +2,7 @@ package dns
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/coocood/freecache"
 	"github.com/miekg/dns"
@@ -12,21 +13,26 @@ import (
 const (
 	cacheSize   = 2 * 1024 * 1024
 	maxCacheTTL = 2 * 60 * 60
-	minCacheTTL = 60
+	minCacheTTL = 30 * 60
 )
 
 // Cache stores DNS query results in two separate caches: one for proxied
 // results and one for direct (non-proxied) results.
 type Cache struct {
-	proxied *freecache.Cache
-	direct  *freecache.Cache
+	proxied      *freecache.Cache
+	direct       *freecache.Cache
+	serverDomain string
 }
 
-// NewCache creates a new DNS cache with separate storage for proxied and direct results.
-func NewCache() *Cache {
+// NewCache creates a new DNS cache with separate storage for proxied and
+// direct results. Entries for serverDomain (usually the proxy server's own
+// hostname) are cached without expiration so that a TTL expiry can never
+// trigger a burst of concurrent direct queries for it.
+func NewCache(serverDomain string) *Cache {
 	return &Cache{
-		proxied: freecache.NewCache(cacheSize),
-		direct:  freecache.NewCache(cacheSize),
+		proxied:      freecache.NewCache(cacheSize),
+		direct:       freecache.NewCache(cacheSize),
+		serverDomain: serverDomain,
 	}
 }
 
@@ -64,7 +70,7 @@ func (c *Cache) Set(msg *dns.Msg, isDirect bool) error {
 			return err
 		}
 		key := []byte(q.Name + dns.TypeToString[q.Qtype])
-		ttl := dnsCacheTTL(msg)
+		ttl := dnsCacheTTL(msg, c.serverDomain)
 		if isDirect {
 			return c.direct.Set(key, v, ttl)
 		}
@@ -73,7 +79,18 @@ func (c *Cache) Set(msg *dns.Msg, isDirect bool) error {
 	return nil
 }
 
-func dnsCacheTTL(msg *dns.Msg) int {
+// dnsCacheTTL returns the cache lifetime in seconds for the given DNS
+// message. Entries for the proxy server's own domain never expire (0 means
+// forever in freecache); other domains are cached for the minimal answer TTL
+// clamped to [minCacheTTL, maxCacheTTL].
+func dnsCacheTTL(msg *dns.Msg, serverDomain string) int {
+	if serverDomain != "" {
+		q := msg.Question[0]
+		domain := strings.TrimSuffix(q.Name, ".")
+		if strings.EqualFold(domain, serverDomain) {
+			return 0
+		}
+	}
 	ttl := uint32(maxCacheTTL)
 	for _, rr := range msg.Answer {
 		if rr == nil || rr.Header() == nil {

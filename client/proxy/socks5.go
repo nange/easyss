@@ -56,7 +56,7 @@ func NewSocks5Server(listenAddr, username, password string, handler *StreamHandl
 	s := &Socks5Server{
 		handler:           handler,
 		router:            rt,
-		dnsCache:          easydns.NewCache(),
+		dnsCache:          easydns.NewCache(serverDomain),
 		serverDomain:      serverDomain,
 		method:            method,
 		disableQUIC:       disableQUIC,
