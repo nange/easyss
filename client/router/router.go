@@ -134,15 +134,6 @@ func (gs *GeoSite) FullMatch(domain string) bool {
 	return false
 }
 
-// globToRegexp converts a glob-like pattern (using * as wildcard) to a compiled
-// regular expression. The * matches any sequence of characters. Anchors ^ and $
-// are added so the pattern must match the entire input string.
-func globToRegexp(pattern string) (*regexp.Regexp, error) {
-	escaped := regexp.QuoteMeta(pattern)
-	reStr := strings.ReplaceAll(escaped, `\*`, `.*`)
-	return regexp.Compile(`^` + reStr + `$`)
-}
-
 type Config struct {
 	ProxyRule       ProxyRule
 	IPV6Rule        IPV6Rule
@@ -216,7 +207,7 @@ func (r *Router) loadCustomIPDomains() error {
 				continue
 			}
 			if strings.Contains(k, "*") {
-				re, err := globToRegexp(k)
+				re, err := util.GlobToRegexp(k)
 				if err == nil {
 					r.customDirectRegexps = append(r.customDirectRegexps, re)
 				}
@@ -249,7 +240,7 @@ func (r *Router) loadCustomIPDomains() error {
 				continue
 			}
 			if strings.Contains(k, "*") {
-				re, err := globToRegexp(k)
+				re, err := util.GlobToRegexp(k)
 				if err == nil {
 					r.customProxyRegexps = append(r.customProxyRegexps, re)
 				}

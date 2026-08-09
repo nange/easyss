@@ -1,6 +1,18 @@
 package util
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
+
+// GlobToRegexp converts a glob-like pattern (using * as wildcard) to a compiled
+// regular expression. The * matches any sequence of characters. Anchors ^ and $
+// are added so the pattern must match the entire input string.
+func GlobToRegexp(pattern string) (*regexp.Regexp, error) {
+	escaped := regexp.QuoteMeta(pattern)
+	reStr := strings.ReplaceAll(escaped, `\*`, `.*`)
+	return regexp.Compile(`^` + reStr + `$`)
+}
 
 // SubDomains returns all parent domains for subdomain matching.
 // For "www.example.com", returns ["example.com"].

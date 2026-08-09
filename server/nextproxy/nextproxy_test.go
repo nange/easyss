@@ -2,6 +2,9 @@ package nextproxy
 
 import (
 	"net"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -140,6 +143,33 @@ func TestShouldProxy(t *testing.T) {
 			t.Error("should proxy domain:port")
 		}
 	})
+
+	t.Run("glob 模式匹配", func(t *testing.T) {
+		np := &NextProxy{}
+		re, _ := util.GlobToRegexp("*google*")
+		np.domainPatterns = append(np.domainPatterns, re)
+		if !np.ShouldProxy("www.google.com") {
+			t.Error("should proxy glob-matching domain")
+		}
+		if !np.ShouldProxy("googleapis.com") {
+			t.Error("should proxy glob-matching domain")
+		}
+		if np.ShouldProxy("facebook.com") {
+			t.Error("should not proxy non-matching domain")
+		}
+	})
+
+	t.Run("regexp 模式匹配", func(t *testing.T) {
+		np := &NextProxy{}
+		re, _ := regexp.Compile(`^.*\.youtube\..*$`)
+		np.domainPatterns = append(np.domainPatterns, re)
+		if !np.ShouldProxy("www.youtube.com") {
+			t.Error("should proxy regexp-matching domain")
+		}
+		if np.ShouldProxy("youtube-not.com") {
+			t.Error("should not proxy non-matching domain")
+		}
+	})
 }
 
 func TestURL(t *testing.T) {
@@ -179,6 +209,49 @@ func TestEnableUDP(t *testing.T) {
 			t.Error("EnableUDP should be true")
 		}
 	})
+}
+
+func TestLoadProxyFile(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "proxy.txt")
+	content := `# comment
+10.0.0.1
+192.168.0.0/16
+example.com
+*google*
+regexp:^.*\.youtube\..*$
+`
+	if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	np, err := New("socks5://proxy:1080", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	np.ips = map[string]struct{}{}
+	if err := np.LoadProxyFile(file); err != nil {
+		t.Fatal(err)
+	}
+
+	if !np.ShouldProxy("10.0.0.1") {
+		t.Error("should proxy exact IP")
+	}
+	if !np.ShouldProxy("192.168.1.1") {
+		t.Error("should proxy CIDR")
+	}
+	if !np.ShouldProxy("example.com") {
+		t.Error("should proxy exact domain")
+	}
+	if !np.ShouldProxy("www.google.com") {
+		t.Error("should proxy glob-matching domain")
+	}
+	if !np.ShouldProxy("www.youtube.com") {
+		t.Error("should proxy regexp-matching domain")
+	}
+	if np.ShouldProxy("facebook.com") {
+		t.Error("should not proxy unrelated domain")
+	}
 }
 
 func mustParseCIDR(t *testing.T, s string) *net.IPNet {
@@ -222,6 +295,30 @@ func TestIsCustomDomain(t *testing.T) {
 		}
 		if np.IsCustomDomain("not-example.com") {
 			t.Error("should not match domain with different suffix")
+		}
+	})
+
+	t.Run("glob 模式匹配", func(t *testing.T) {
+		np := &NextProxy{}
+		re, _ := util.GlobToRegexp("*google*")
+		np.domainPatterns = append(np.domainPatterns, re)
+		if !np.IsCustomDomain("www.google.com") {
+			t.Error("should match glob pattern")
+		}
+		if np.IsCustomDomain("facebook.com") {
+			t.Error("should not match unrelated domain")
+		}
+	})
+
+	t.Run("regexp 模式匹配", func(t *testing.T) {
+		np := &NextProxy{}
+		re, _ := regexp.Compile(`^.*\.baidu\.com$`)
+		np.domainPatterns = append(np.domainPatterns, re)
+		if !np.IsCustomDomain("www.baidu.com") {
+			t.Error("should match regexp pattern")
+		}
+		if np.IsCustomDomain("baidu.org") {
+			t.Error("should not match unrelated domain")
 		}
 	})
 }
