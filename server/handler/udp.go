@@ -112,8 +112,8 @@ func (h *UDPHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 				if err := msg.Unpack(res.frame.Payload); err == nil && util.IsDNSRequest(msg) {
 					dnsDetected.Store(true)
 					domain := strings.TrimSuffix(msg.Question[0].Name, ".")
-					viaProxy := h.nextProxy.IsCustomDomain(domain)
-					log.Info("[UDP_DNS]", "domain", domain, "target", target, "via_proxy", viaProxy)
+					viaNextProxy := h.nextProxy.IsCustomDomain(domain)
+					log.Info("[UDP_DNS]", "domain", domain, "target", target, "via_next_proxy", viaNextProxy)
 				}
 				dnsChecked.Store(true)
 			}
