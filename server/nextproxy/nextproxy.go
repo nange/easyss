@@ -194,6 +194,20 @@ func (np *NextProxy) SetDialTimeout(d time.Duration) {
 	np.dialTimeout = d
 }
 
+// nextProxyConn wraps the SOCKS5 client connection so that RemoteAddr()
+// reports the actual proxy server address instead of nil.
+type nextProxyConn struct {
+	net.Conn
+	proxyAddr net.Addr
+}
+
+func (c *nextProxyConn) RemoteAddr() net.Addr {
+	if c.proxyAddr != nil {
+		return c.proxyAddr
+	}
+	return c.Conn.RemoteAddr()
+}
+
 func (np *NextProxy) Dial(network, addr string) (net.Conn, error) {
 	return np.DialContext(context.Background(), network, addr)
 }
@@ -235,8 +249,13 @@ func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string
 			ch <- result{nil, err}
 			return
 		}
+		var proxyAddr net.Addr
 		c.DialTCP = func(network string, laddr, raddr string) (net.Conn, error) {
-			return dialer.Dial(network, raddr)
+			conn, err := dialer.Dial(network, raddr)
+			if err == nil {
+				proxyAddr = conn.RemoteAddr()
+			}
+			return conn, err
 		}
 
 		conn, err := c.Dial(network, addr)
@@ -250,6 +269,14 @@ func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string
 		// but never clears it, which would cause the connection to time out
 		// after the timeout duration during data transfer.
 		_ = conn.SetDeadline(time.Time{})
+
+		// The socks5 library's RemoteAddr() returns the RemoteAddress field,
+		// which is nil here (DialWithLocalAddr is called with a nil remote
+		// address). Wrap the connection so RemoteAddr() reports the actual
+		// proxy server address instead.
+		if proxyAddr != nil {
+			conn = &nextProxyConn{Conn: conn, proxyAddr: proxyAddr}
+		}
 
 		ch <- result{conn, nil}
 	}()

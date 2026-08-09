@@ -1,6 +1,7 @@
 package nextproxy
 
 import (
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/nange/easyss/v3/util"
+	"github.com/txthinking/socks5"
 )
 
 func TestNew(t *testing.T) {
@@ -251,6 +253,60 @@ regexp:^.*\.youtube\..*$
 	}
 	if np.ShouldProxy("facebook.com") {
 		t.Error("should not proxy unrelated domain")
+	}
+}
+
+func TestDialReportsProxyRemoteAddr(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				_, _ = io.Copy(c, c)
+			}(c)
+		}
+	}()
+
+	pl, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyAddr := pl.Addr().String()
+	pl.Close()
+
+	s, err := socks5.NewClassicServer(proxyAddr, "127.0.0.1", "", "", 10, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		_ = s.ListenAndServe(nil)
+	}()
+	defer func() { _ = s.RunnerGroup.Done() }()
+
+	np, err := New("socks5://"+proxyAddr, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := np.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	ra := conn.RemoteAddr()
+	if ra == nil {
+		t.Fatal("RemoteAddr should not be nil when dialing via next proxy")
+	}
+	if ra.String() != proxyAddr {
+		t.Errorf("RemoteAddr = %q, want proxy %q", ra.String(), proxyAddr)
 	}
 }
 
