@@ -113,8 +113,13 @@ func (h *TCPHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 		return err
 	}
 	defer targetConn.Close() //nolint:errcheck
+	// When dialing via the next proxy, the socks5 client connection reports a
+	// nil RemoteAddr (the library's RemoteAddr() returns an unset field), so
+	// fall back to the configured proxy address for observability.
 	remote := ""
-	if ra := targetConn.RemoteAddr(); ra != nil {
+	if h.nextProxy != nil && h.nextProxy.ShouldProxy(target) {
+		remote = h.nextProxy.URL().Host
+	} else if ra := targetConn.RemoteAddr(); ra != nil {
 		remote = ra.String()
 	}
 	log.Info("[TCP_HANDLE] target connected", "target", target, "remote", remote)
