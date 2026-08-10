@@ -24,6 +24,14 @@ Easyss是一款兼容socks5的安全代理上网工具，目标是使访问国�
 
 [去下载](https://github.com/nange/easyss/releases)
 
+**MacOS 用户注意：** `Easyss.app` 未经 Apple 公证，从网上下载解压后首次双击会被 Gatekeeper 拦截（提示无法验证开发者/应用已损坏）。请先在终端执行以下命令解除隔离属性，然后即可正常双击运行：
+
+```bash
+xattr -cr ./Easyss.app
+```
+
+进入 `Easyss.app` 所在目录执行，将 `./Easyss.app` 替换为实际路径即可（配置文件需与程序同目录，建议将 app 保留在自选目录而非 `/Applications`）。
+
 如果想通过源码编译，可查看`Makefile`中的内容。
 
 ## 用法
