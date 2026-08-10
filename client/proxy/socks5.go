@@ -112,10 +112,17 @@ func (s *Socks5Server) Start() error {
 	return s.srv.ListenAndServe(s)
 }
 
-// waitForAccept polls the listen address until the server has started
-// accepting connections. Shutting down before the accept loop is up
-// deadlocks inside the txthinking/socks5 runnergroup library, so Close
-// must never race with the goroutine spawned by Start.
+// waitForAccept polls the listen address until the server has really
+// started accepting connections. A plain TCP dial is not enough: it
+// succeeds as soon as the listener is bound at the kernel level, before
+// the accept loop inside the txthinking/socks5 runnergroup library has
+// registered its runners. Calling Shutdown in that window either leaks
+// the listener (runnergroup.Done returns early when no runner has been
+// added yet) or deadlocks (Done skips runners whose start goroutine has
+// not run yet, then blocks forever waiting for a done signal that never
+// comes). Probing with a real SOCKS5 greeting and requiring a reply
+// only succeeds once the accept loop is up, so Close can never race
+// with the goroutine spawned by Start.
 func (s *Socks5Server) waitForAccept() {
 	if s.srv == nil {
 		return
@@ -124,15 +131,39 @@ func (s *Socks5Server) waitForAccept() {
 	if addr == "" {
 		return
 	}
+	// SOCKS5 greeting: version 5, one offered method, no auth. The
+	// server only answers after the accept loop accepted our connection
+	// and parsed the greeting.
+	greeting := []byte{0x05, 0x01, 0x00}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		c, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
-		if err == nil {
-			_ = c.Close()
+		if probeSocks5Accept(addr, greeting) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// probeSocks5Accept dials addr and performs a SOCKS5 negotiation. It
+// reports whether the server accepted the connection and replied to the
+// greeting, which proves the accept loop is up and registered.
+func probeSocks5Accept(addr string, greeting []byte) bool {
+	c, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	defer c.Close() //nolint:errcheck
+	if err := c.SetDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+		return false
+	}
+	if _, err := c.Write(greeting); err != nil {
+		return false
+	}
+	reply := make([]byte, 2)
+	if _, err := io.ReadFull(c, reply); err != nil {
+		return false
+	}
+	return reply[0] == 0x05
 }
 
 func (s *Socks5Server) Close() error {
