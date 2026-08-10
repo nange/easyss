@@ -283,7 +283,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		handleErr = h.icmpHandler.Handle(c2sReader, s2cShaper, target)
 	}
 	if handleErr != nil {
-		log.Debug("[SERVER] handler finished with error", "target", target, "endpoint", endpoint, "err", handleErr)
+		log.Info("[SERVER] handler finished with error", "target", target, "endpoint", endpoint, "err", handleErr)
 	} else {
 		log.Debug("[SERVER] handler finished", "target", target, "endpoint", endpoint)
 	}

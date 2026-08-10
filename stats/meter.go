@@ -46,6 +46,11 @@ func (m *StreamMeter) SetState(state string) {
 	}
 }
 
+// Bytes returns the total number of bytes relayed for this stream.
+func (m *StreamMeter) Bytes() int64 {
+	return m.total.Load()
+}
+
 func (m *StreamMeter) Close() {
 	close(m.done)
 }

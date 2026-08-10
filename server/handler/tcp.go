@@ -140,6 +140,14 @@ func (h *TCPHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 		func(signal func()) error { return h.copyFromClient(dr, targetConn, signal) },
 		func(signal func()) error { return h.copyFromTarget(targetConn, s2c, signal, m) },
 	)
+	// Log the stream outcome (bytes relayed and exit reason) at INFO level so
+	// targets whose connection was established but later stalled, reset or
+	// carried no data are directly visible when diagnosing blocked hosts.
+	attrs := []any{"target", target, "remote", remote, "bytes", m.Bytes(), "timed_out", result.TimedOut}
+	if result.Err != nil {
+		attrs = append(attrs, "err", result.Err.Error())
+	}
+	log.Info("[TCP_HANDLE] stream closed", attrs...)
 	if result.TimedOut {
 		log.Debug("[TCP_HANDLE] idle timeout", "target", target, "timeout", h.idleTimeout)
 		sendRST()
