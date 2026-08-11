@@ -5,7 +5,7 @@ go 1.26.3
 require (
 	github.com/caddyserver/certmagic v0.25.2
 	github.com/coocood/freecache v1.2.7
-	github.com/gogpu/systray v0.2.8
+	github.com/gogpu/systray v0.2.9-0.20260811123705-f7b37e2d956c
 	github.com/libp2p/go-netroute v0.4.0
 	github.com/miekg/dns v1.1.72
 	github.com/oschwald/geoip2-golang v1.13.0
