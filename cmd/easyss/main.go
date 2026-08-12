@@ -364,13 +364,13 @@ func exampleV3Config() string {
 		Transport: config.TransportConfig{
 			Protocol:          "h2",
 			ConnCountMax:      12,
-			StreamThreshold:   8,
+			StreamThreshold:   4,
 			PrioritySlotRatio: 0.5,
 		},
 		Shaper: config.ShaperConfig{
 			BatchWindowMS:    3,
 			CoverBudgetRatio: 0.03,
-			CoverBudgetCap:   128 * 1024,
+			CoverBudgetCap:   16 * 1024,
 		},
 		Log: config.LogConfig{
 			Level:    "info",

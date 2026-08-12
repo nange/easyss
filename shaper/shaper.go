@@ -32,7 +32,7 @@ type CoverConfig struct {
 	IdleTimeout int     // idle timeout in ms before sending cover frames (default 300)
 	MinSize     int     // min cover frame payload size in bytes (default 128)
 	MaxSize     int     // max cover frame payload size in bytes (default 1500)
-	BudgetCap   int     // max accumulated cover budget in bytes, 0 means unlimited (default 128KB)
+	BudgetCap   int     // max accumulated cover budget in bytes, 0 means unlimited (default 16KB)
 }
 
 type Config struct {

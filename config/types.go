@@ -11,7 +11,7 @@ const (
 	DefaultConnCountMax    = 12
 	DefaultStreamThreshold = 4
 	DefaultBatchWindowMS   = 3
-	DefaultCoverBudgetCap  = 128 * 1024 // 128KB
+	DefaultCoverBudgetCap  = 16 * 1024 // 16KB
 
 	// Heavy-stream detection: a stream is considered "heavy" (monopolizing
 	// its shared TCP connection under packet loss) when either condition
