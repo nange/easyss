@@ -7,7 +7,10 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
+	"time"
 
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/transport"
 )
 
@@ -21,6 +24,7 @@ type HTTP2Stream struct {
 	respCh <-chan roundTripResult
 	cancel context.CancelFunc
 	done   func()
+	slot   *transportSlot
 
 	mu       sync.Mutex
 	r        io.ReadCloser
@@ -30,6 +34,35 @@ type HTTP2Stream struct {
 
 	rtErrMu sync.Mutex
 	rtErr   error // RoundTrip error, captured for better diagnostics in Write()
+
+	// Heavy-stream tracking: once the stream qualifies as heavy (fast large
+	// transfer, or slow transfer on a poor link), it marks its slot so that
+	// new streams avoid sharing that connection.
+	startTime   time.Time
+	transferred atomic.Int64
+	heavyOnce   sync.Once
+	heavyFlag   atomic.Bool
+}
+
+// trackBytes accumulates transferred bytes and marks the owning slot as
+// heavy the first time the stream qualifies: either it crossed the fast
+// size threshold, or it has been alive long enough carrying at least the
+// slow threshold (slow links make even small transfers long-lived).
+func (s *HTTP2Stream) trackBytes(n int) {
+	if s.slot == nil || n <= 0 {
+		return
+	}
+	total := s.transferred.Add(int64(n))
+	fast := total >= sharedconfig.HeavyStreamThresholdBytes
+	slow := total >= sharedconfig.HeavyStreamSlowThresholdBytes &&
+		time.Since(s.startTime) >= sharedconfig.HeavyStreamMinAge
+	if !fast && !slow {
+		return
+	}
+	s.heavyOnce.Do(func() {
+		s.heavyFlag.Store(true)
+		s.slot.heavy.Add(1)
+	})
 }
 
 // setRoundTripErr stores the RoundTrip error for use by Write() when the pipe
@@ -91,6 +124,9 @@ func (s *HTTP2Stream) Read(p []byte) (int, error) {
 	}
 
 	n, err := r.Read(p)
+	if n > 0 {
+		s.trackBytes(n)
+	}
 	if err != nil {
 		s.done()
 	}
@@ -99,6 +135,9 @@ func (s *HTTP2Stream) Read(p []byte) (int, error) {
 
 func (s *HTTP2Stream) Write(p []byte) (int, error) {
 	n, err := s.w.Write(p)
+	if n > 0 {
+		s.trackBytes(n)
+	}
 	if err != nil {
 		s.done()
 		if errors.Is(err, io.ErrClosedPipe) {

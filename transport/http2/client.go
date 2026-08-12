@@ -23,6 +23,7 @@ import (
 type transportSlot struct {
 	t      *http.Transport
 	active atomic.Int32
+	heavy  atomic.Int32 // number of active heavy streams (>= HeavyStreamThreshold bytes)
 }
 
 type HTTP2Transport struct {
@@ -220,17 +221,25 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 
 	respCh := make(chan roundTripResult, 1)
 
+	var stream *HTTP2Stream
 	doneOnce := sync.OnceFunc(func() {
+		// Release the slot's heavy mark exactly once (doneOnce runs at most
+		// a single time), so the slot becomes eligible for new streams again.
+		if stream.heavyFlag.Swap(false) {
+			slot.heavy.Add(-1)
+		}
 		slot.active.Add(-1)
 		stats.RecordStreamClosed()
 		cancel()
 	})
 
-	stream := &HTTP2Stream{
-		w:      pw,
-		respCh: respCh,
-		cancel: cancel,
-		done:   doneOnce,
+	stream = &HTTP2Stream{
+		w:         pw,
+		respCh:    respCh,
+		cancel:    cancel,
+		done:      doneOnce,
+		slot:      slot,
+		startTime: time.Now(),
 	}
 
 	go func() {
@@ -288,8 +297,23 @@ func (t *HTTP2Transport) leastActiveSlotRange(start, end int) *transportSlot {
 		start = 0
 		end = live
 	}
+	// Prefer slots without heavy streams: a heavy stream monopolizes the
+	// connection's TCP window, so a new stream sharing that slot would be
+	// dragged down together with it (TCP head-of-line blocking under packet
+	// loss). Only fall back to heavy slots when none are available.
 	var best *transportSlot
 	var min int32 = math.MaxInt32
+	for i := start; i < end; i++ {
+		if t.slots[i].heavy.Load() > 0 {
+			continue
+		}
+		if a := t.slots[i].active.Load(); a < min {
+			best, min = t.slots[i], a
+		}
+	}
+	if best != nil {
+		return best
+	}
 	for i := start; i < end; i++ {
 		if a := t.slots[i].active.Load(); a < min {
 			best, min = t.slots[i], a
