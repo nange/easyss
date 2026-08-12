@@ -9,7 +9,10 @@ GO_BUILD := CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)'
 WIN_ARCH ?= amd64
 GO_BUILD_WIN := GOOS=windows GOARCH=$(WIN_ARCH) CGO_ENABLED=0 go build -ldflags '-H windowsgui $(LDFLAGS)'
 GOMOBILE := $(shell go env GOPATH)/bin/gomobile
-GOMOBILE_BIND := $(GOMOBILE) bind -target=android/arm64,android/amd64 -androidapi 29 -ldflags '$(LDFLAGS)'
+# Android 15+ / Google Play 要求原生库 16KB 对齐（16KB page size 支持），
+# 通过外部链接器将 ELF LOAD 段对齐到 16384 字节，消除 AGP 的 Aligned16KB 警告
+ANDROID_ALIGN_LDFLAGS := -extldflags=-Wl,-z,max-page-size=16384
+GOMOBILE_BIND := $(GOMOBILE) bind -target=android/arm64,android/amd64 -androidapi 29 -ldflags '$(LDFLAGS) $(ANDROID_ALIGN_LDFLAGS)'
 
 .PHONY: easyss easyss-headless easyss-windows easyss-server easyss-server-windows easyss-android-aar format test lint
 
