@@ -29,6 +29,17 @@ const (
 	HeavyStreamSlowThresholdBytes = 256 * 1024      // 256KB
 	HeavyStreamMinAge             = 3 * time.Second
 
+	// Degraded-slot detection: a slot hosting heavy streams whose download
+	// throughput stays below DegradedThroughputThreshold for
+	// DegradedPersistCycles consecutive health-check intervals is marked
+	// degraded — new streams avoid it and its idle connection is retired
+	// early instead of lingering. The mark clears after
+	// DegradedRecoverCycles healthy intervals.
+	HealthCheckInterval         = 5 * time.Second
+	DegradedThroughputThreshold = 64 * 1024 // 64KB/s
+	DegradedPersistCycles       = 3
+	DegradedRecoverCycles       = 2
+
 	HTTP2ServerMaxReadFrameSize           = 1<<24 - 1  // 16MB-1，nginx/Cloudflare 主流值
 	HTTP2ServerReceiveBufferPerConnection = 1 << 20    // 1MB，避免 64KB 瓶颈导致长期运行吞吐量下降
 	HTTP2ServerReceiveBufferPerStream     = 256 * 1024 // 256KB，流级别接收窗口

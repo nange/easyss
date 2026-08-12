@@ -44,11 +44,26 @@ type HTTP2Stream struct {
 	heavyFlag   atomic.Bool
 }
 
-// trackBytes accumulates transferred bytes and marks the owning slot as
+// trackRead accumulates downloaded bytes: on the slot (transport health
+// signal) and in the heavy-stream detector.
+func (s *HTTP2Stream) trackRead(n int) {
+	if s.slot == nil || n <= 0 {
+		return
+	}
+	s.slot.bytesRecv.Add(int64(n))
+	s.accumulate(n)
+}
+
+// trackWrite accumulates uploaded bytes into the heavy-stream detector.
+func (s *HTTP2Stream) trackWrite(n int) {
+	s.accumulate(n)
+}
+
+// accumulate feeds the heavy-stream detector and marks the owning slot as
 // heavy the first time the stream qualifies: either it crossed the fast
 // size threshold, or it has been alive long enough carrying at least the
 // slow threshold (slow links make even small transfers long-lived).
-func (s *HTTP2Stream) trackBytes(n int) {
+func (s *HTTP2Stream) accumulate(n int) {
 	if s.slot == nil || n <= 0 {
 		return
 	}
@@ -125,7 +140,7 @@ func (s *HTTP2Stream) Read(p []byte) (int, error) {
 
 	n, err := r.Read(p)
 	if n > 0 {
-		s.trackBytes(n)
+		s.trackRead(n)
 	}
 	if err != nil {
 		s.done()
@@ -136,7 +151,7 @@ func (s *HTTP2Stream) Read(p []byte) (int, error) {
 func (s *HTTP2Stream) Write(p []byte) (int, error) {
 	n, err := s.w.Write(p)
 	if n > 0 {
-		s.trackBytes(n)
+		s.trackWrite(n)
 	}
 	if err != nil {
 		s.done()

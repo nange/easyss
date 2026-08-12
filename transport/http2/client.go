@@ -16,6 +16,7 @@ import (
 	utls "github.com/refraction-networking/utls"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
 )
@@ -24,6 +25,18 @@ type transportSlot struct {
 	t      *http.Transport
 	active atomic.Int32
 	heavy  atomic.Int32 // number of active heavy streams (>= HeavyStreamThreshold bytes)
+	// bytesRecv is the cumulative downloaded bytes across streams on this
+	// slot; sampled by the health loop to estimate recent throughput.
+	bytesRecv atomic.Int64
+	// degraded marks a slot whose download throughput stays below the
+	// degraded threshold while hosting heavy streams; new streams avoid it
+	// and its idle connection is retired early.
+	degraded atomic.Bool
+
+	// Health-loop state, touched only from the health loop goroutine.
+	lastBytes     int64
+	lowCycles     int
+	recoverCycles int
 }
 
 type HTTP2Transport struct {
@@ -94,7 +107,7 @@ func New(cfg Config) (*HTTP2Transport, error) {
 		slots[i] = newSlot(cfg.TLSConfig, timeout, dialCtx)
 	}
 
-	return &HTTP2Transport{
+	tr := &HTTP2Transport{
 		slots:         slots,
 		maxSlots:      maxSlots,
 		threshold:     threshold,
@@ -103,7 +116,9 @@ func New(cfg Config) (*HTTP2Transport, error) {
 		serverURL:     cfg.ServerURL,
 		ctx:           ctx,
 		cancel:        cancel,
-	}, nil
+	}
+	go tr.healthLoop()
+	return tr, nil
 }
 
 func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error)) *transportSlot {
@@ -297,32 +312,41 @@ func (t *HTTP2Transport) leastActiveSlotRange(start, end int) *transportSlot {
 		start = 0
 		end = live
 	}
-	// Prefer slots without heavy streams: a heavy stream monopolizes the
-	// connection's TCP window, so a new stream sharing that slot would be
-	// dragged down together with it (TCP head-of-line blocking under packet
-	// loss). Only fall back to heavy slots when none are available.
+	// Prefer healthy slots, then slots without heavy streams, and only fall
+	// back to degraded ones when nothing else is available:
+	//   - a heavy stream monopolizes the connection's TCP window, so a new
+	//     stream sharing that slot is dragged down together with it (TCP
+	//     head-of-line blocking under packet loss);
+	//   - a degraded slot already proved persistently low throughput, so it
+	//     is avoided unless it is the only option left.
+	passes := []struct {
+		skipHeavy    bool
+		skipDegraded bool
+	}{
+		{true, true},  // healthy slots
+		{false, true}, // heavy but not degraded
+		{false, false},
+	}
 	var best *transportSlot
-	var min int32 = math.MaxInt32
-	for i := start; i < end; i++ {
-		if t.slots[i].heavy.Load() > 0 {
-			continue
+	for _, p := range passes {
+		var min int32 = math.MaxInt32
+		for i := start; i < end; i++ {
+			s := t.slots[i]
+			if p.skipHeavy && s.heavy.Load() > 0 {
+				continue
+			}
+			if p.skipDegraded && s.degraded.Load() {
+				continue
+			}
+			if a := s.active.Load(); a < min {
+				best, min = s, a
+			}
 		}
-		if a := t.slots[i].active.Load(); a < min {
-			best, min = t.slots[i], a
+		if best != nil {
+			return best
 		}
 	}
-	if best != nil {
-		return best
-	}
-	for i := start; i < end; i++ {
-		if a := t.slots[i].active.Load(); a < min {
-			best, min = t.slots[i], a
-		}
-	}
-	if best == nil {
-		return t.slots[0]
-	}
-	return best
+	return t.slots[0]
 }
 
 // maybeGrowSlots checks whether all live slots are at or above the threshold,
@@ -404,28 +428,121 @@ func (t *HTTP2Transport) CloseIdle() {
 	// Shrink liveCount by retiring idle slots (any position, swap-remove).
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for {
-		live := int(t.liveCount.Load())
-		if live == 0 {
-			break
+	for t.shrinkIdleLocked() {
+	}
+}
+
+// shrinkIdleLocked retires one idle slot (active==0) from liveCount,
+// swap-removing it to the end. Caller must hold t.mu. Returns false when
+// no idle slot remains.
+func (t *HTTP2Transport) shrinkIdleLocked() bool {
+	live := int(t.liveCount.Load())
+	for i := 0; i < live; i++ {
+		if t.slots[i].active.Load() != 0 {
+			continue
 		}
-		// Find first idle slot.
-		retired := -1
-		for i := 0; i < live; i++ {
-			if t.slots[i].active.Load() == 0 {
-				retired = i
-				break
-			}
-		}
-		if retired < 0 {
-			break // no idle slots left
-		}
-		// Swap-remove: move idle slot to the end, then shrink.
 		last := live - 1
-		if retired != last {
-			t.slots[retired], t.slots[last] = t.slots[last], t.slots[retired]
+		if i != last {
+			t.slots[i], t.slots[last] = t.slots[last], t.slots[i]
 		}
 		t.liveCount.Add(-1)
+		return true
+	}
+	return false
+}
+
+// healthLoop periodically samples slot download throughput and marks
+// persistently slow slots as degraded, retiring them once they go idle.
+// It runs until the transport is closed (t.ctx cancelled).
+func (t *HTTP2Transport) healthLoop() {
+	interval := sharedconfig.HealthCheckInterval
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			t.evaluateHealth(interval)
+		case <-t.ctx.Done():
+			return
+		}
+	}
+}
+
+func (t *HTTP2Transport) evaluateHealth(interval time.Duration) {
+	live := int(t.liveCount.Load())
+	for i := 0; i < live; i++ {
+		s := t.slots[i]
+		t.evaluateSlotHealth(i, s, interval)
+		if s.degraded.Load() && s.active.Load() == 0 {
+			t.retireSlot(s)
+			// retireSlot swap-removes the slot to the end and shrinks
+			// liveCount; re-evaluate the slot swapped into position i.
+			live--
+			i--
+		}
+	}
+}
+
+// evaluateSlotHealth updates one slot's degraded state from its recent
+// download throughput. Only slots hosting heavy streams are considered —
+// idle or short-lived slots naturally carry zero throughput. The mark is
+// set after DegradedPersistCycles consecutive slow intervals and cleared
+// after DegradedRecoverCycles healthy ones.
+func (t *HTTP2Transport) evaluateSlotHealth(idx int, s *transportSlot, interval time.Duration) {
+	if s.heavy.Load() == 0 {
+		return
+	}
+	now := s.bytesRecv.Load()
+	perSec := int64(interval / time.Second)
+	throughput := (now - s.lastBytes) / perSec
+	s.lastBytes = now
+
+	if throughput >= int64(sharedconfig.DegradedThroughputThreshold) {
+		s.lowCycles = 0
+		if s.degraded.Load() {
+			s.recoverCycles++
+			if s.recoverCycles >= sharedconfig.DegradedRecoverCycles {
+				s.degraded.Store(false)
+				s.recoverCycles = 0
+				log.Info("[TRANSPORT] slot recovered", "slot", idx, "throughput_kb_s", throughput/1024)
+			}
+		}
+		return
+	}
+
+	s.recoverCycles = 0
+	s.lowCycles++
+	if s.lowCycles >= sharedconfig.DegradedPersistCycles && !s.degraded.Load() {
+		s.degraded.Store(true)
+		s.lowCycles = 0
+		stats.RecordSlotDegraded()
+		log.Info("[TRANSPORT] slot degraded", "slot", idx, "throughput_kb_s", throughput/1024)
+	}
+}
+
+// retireSlot closes a degraded slot's idle connection and shrinks liveCount
+// once the slot no longer hosts any stream. Streams are re-checked under
+// the lock so a concurrent Open cannot be stranded.
+func (t *HTTP2Transport) retireSlot(s *transportSlot) {
+	s.t.CloseIdleConnections()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if s.active.Load() != 0 {
+		return
+	}
+	live := int(t.liveCount.Load())
+	for i := 0; i < live; i++ {
+		if t.slots[i] != s {
+			continue
+		}
+		last := live - 1
+		if i != last {
+			t.slots[i], t.slots[last] = t.slots[last], t.slots[i]
+		}
+		t.liveCount.Add(-1)
+		stats.RecordSlotRetiredDegraded()
+		log.Info("[TRANSPORT] slot retired (degraded)", "slot", i)
+		return
 	}
 }
 

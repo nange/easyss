@@ -189,7 +189,7 @@ func TestLeastActiveSlotRangeSkipsHeavy(t *testing.T) {
 	})
 }
 
-func TestTrackBytesMarksSlotHeavy(t *testing.T) {
+func TestTrackReadMarksSlotHeavy(t *testing.T) {
 	// Fast path: a large transfer is marked as soon as it crosses the
 	// cumulative size threshold.
 	t.Run("fast large transfer marks at size threshold", func(t *testing.T) {
@@ -197,19 +197,22 @@ func TestTrackBytesMarksSlotHeavy(t *testing.T) {
 		stream := &HTTP2Stream{slot: slot, startTime: time.Now()}
 
 		// Below the fast threshold and too young for the slow path: no mark.
-		stream.trackBytes(sharedconfig.HeavyStreamThresholdBytes - 1)
+		stream.trackRead(sharedconfig.HeavyStreamThresholdBytes - 1)
 		if slot.heavy.Load() != 0 || stream.heavyFlag.Load() {
 			t.Fatalf("marked heavy before threshold: slot.heavy=%d flag=%v", slot.heavy.Load(), stream.heavyFlag.Load())
 		}
 
 		// Crossing the fast threshold: mark exactly once.
-		stream.trackBytes(2)
+		stream.trackRead(2)
 		if slot.heavy.Load() != 1 || !stream.heavyFlag.Load() {
 			t.Fatalf("expected heavy mark after threshold: slot.heavy=%d flag=%v", slot.heavy.Load(), stream.heavyFlag.Load())
 		}
+		if slot.bytesRecv.Load() != int64(sharedconfig.HeavyStreamThresholdBytes+1) {
+			t.Fatalf("bytesRecv not accumulated: %d", slot.bytesRecv.Load())
+		}
 
 		// Further transfers must not double-mark.
-		stream.trackBytes(64 * 1024)
+		stream.trackRead(64 * 1024)
 		if slot.heavy.Load() != 1 {
 			t.Fatalf("heavy marked more than once: %d", slot.heavy.Load())
 		}
@@ -233,13 +236,13 @@ func TestTrackBytesMarksSlotHeavy(t *testing.T) {
 		}
 
 		// Below the slow threshold: no mark regardless of age.
-		stream.trackBytes(sharedconfig.HeavyStreamSlowThresholdBytes - 1)
+		stream.trackRead(sharedconfig.HeavyStreamSlowThresholdBytes - 1)
 		if slot.heavy.Load() != 0 {
 			t.Fatalf("marked heavy below slow threshold: %d", slot.heavy.Load())
 		}
 
 		// At or above the slow threshold with sufficient age: mark once.
-		stream.trackBytes(1024)
+		stream.trackRead(1024)
 		if slot.heavy.Load() != 1 || !stream.heavyFlag.Load() {
 			t.Fatalf("expected heavy mark on slow path: slot.heavy=%d flag=%v", slot.heavy.Load(), stream.heavyFlag.Load())
 		}
@@ -250,7 +253,7 @@ func TestTrackBytesMarksSlotHeavy(t *testing.T) {
 		slot := &transportSlot{}
 		stream := &HTTP2Stream{slot: slot, startTime: time.Now()}
 
-		stream.trackBytes(sharedconfig.HeavyStreamSlowThresholdBytes)
+		stream.trackRead(sharedconfig.HeavyStreamSlowThresholdBytes)
 		if slot.heavy.Load() != 0 {
 			t.Fatalf("young stream marked heavy: %d", slot.heavy.Load())
 		}
@@ -259,9 +262,139 @@ func TestTrackBytesMarksSlotHeavy(t *testing.T) {
 	// Nil slot is a no-op (e.g. test-constructed streams).
 	t.Run("nil slot no-op", func(t *testing.T) {
 		noSlot := &HTTP2Stream{}
-		noSlot.trackBytes(sharedconfig.HeavyStreamThresholdBytes)
+		noSlot.trackRead(sharedconfig.HeavyStreamThresholdBytes)
 		if noSlot.heavyFlag.Load() {
 			t.Fatal("nil slot must not be marked heavy")
+		}
+	})
+}
+
+func TestEvaluateSlotHealth(t *testing.T) {
+	interval := sharedconfig.HealthCheckInterval
+	tr := &HTTP2Transport{}
+
+	newHeavySlot := func() *transportSlot {
+		s := &transportSlot{t: &http.Transport{}}
+		s.heavy.Store(1)
+		return s
+	}
+	// lowThroughput simulates one health interval carrying 10KB
+	// (2KB/s, well below the 64KB/s degraded threshold).
+	lowThroughput := func(s *transportSlot) {
+		s.bytesRecv.Add(10 * 1024)
+		tr.evaluateSlotHealth(0, s, interval)
+	}
+	highThroughput := func(s *transportSlot) {
+		s.bytesRecv.Add(2 * 1024 * 1024) // 2MB over 5s = 400KB/s
+		tr.evaluateSlotHealth(0, s, interval)
+	}
+
+	t.Run("marks degraded after consecutive slow intervals", func(t *testing.T) {
+		s := newHeavySlot()
+		for i := 0; i < sharedconfig.DegradedPersistCycles-1; i++ {
+			lowThroughput(s)
+			if s.degraded.Load() {
+				t.Fatalf("degraded too early at cycle %d", i+1)
+			}
+		}
+		lowThroughput(s)
+		if !s.degraded.Load() {
+			t.Fatal("expected degraded after persist cycles")
+		}
+	})
+
+	t.Run("healthy interval resets the slow counter", func(t *testing.T) {
+		s := newHeavySlot()
+		lowThroughput(s)
+		lowThroughput(s)
+		highThroughput(s)
+		lowThroughput(s)
+		lowThroughput(s)
+		if s.degraded.Load() {
+			t.Fatal("expected not degraded after a healthy interval")
+		}
+	})
+
+	t.Run("clears degraded after consecutive healthy intervals", func(t *testing.T) {
+		s := newHeavySlot()
+		for i := 0; i < sharedconfig.DegradedPersistCycles; i++ {
+			lowThroughput(s)
+		}
+		if !s.degraded.Load() {
+			t.Fatal("expected degraded")
+		}
+		highThroughput(s)
+		if !s.degraded.Load() {
+			t.Fatal("cleared too early after a single healthy interval")
+		}
+		highThroughput(s)
+		if s.degraded.Load() {
+			t.Fatal("expected cleared after recover cycles")
+		}
+	})
+
+	t.Run("slots without heavy streams never degrade", func(t *testing.T) {
+		s := &transportSlot{t: &http.Transport{}}
+		for i := 0; i < sharedconfig.DegradedPersistCycles+2; i++ {
+			lowThroughput(s)
+		}
+		if s.degraded.Load() {
+			t.Fatal("non-heavy slot must not degrade")
+		}
+	})
+}
+
+func TestRetireSlotShrinksLiveCount(t *testing.T) {
+	s0 := &transportSlot{t: &http.Transport{}}
+	s0.active.Store(1)
+	s1 := &transportSlot{t: &http.Transport{}}
+	s1.degraded.Store(true)
+	tr := &HTTP2Transport{slots: []*transportSlot{s0, s1}}
+	tr.liveCount.Store(2)
+
+	tr.retireSlot(s1)
+	if got := tr.liveCount.Load(); got != 1 {
+		t.Fatalf("liveCount = %d, want 1", got)
+	}
+	if tr.slots[0] != s0 {
+		t.Fatal("live slot must stay at the front")
+	}
+
+	// Busy slots are never retired.
+	s2 := &transportSlot{t: &http.Transport{}}
+	s2.active.Store(1)
+	s2.degraded.Store(true)
+	tr2 := &HTTP2Transport{slots: []*transportSlot{s2}}
+	tr2.liveCount.Store(1)
+	tr2.retireSlot(s2)
+	if got := tr2.liveCount.Load(); got != 1 {
+		t.Fatalf("busy slot retired: liveCount = %d", got)
+	}
+}
+
+func TestLeastActiveSlotRangePrefersHealthyOverDegraded(t *testing.T) {
+	t.Run("skips degraded slot when healthy exists", func(t *testing.T) {
+		tr := newTestSlots([2]int32{2, 0}, [2]int32{1, 0})
+		tr.slots[1].degraded.Store(true)
+		if got := tr.leastActiveSlotRange(0, 2); got != tr.slots[0] {
+			t.Fatalf("expected healthy slot 0, got active=%d heavy=%d degraded=%v", got.active.Load(), got.heavy.Load(), got.degraded.Load())
+		}
+	})
+
+	t.Run("prefers heavy-but-not-degraded over degraded", func(t *testing.T) {
+		tr := newTestSlots([2]int32{1, 1}, [2]int32{3, 1})
+		tr.slots[1].degraded.Store(true)
+		if got := tr.leastActiveSlotRange(0, 2); got != tr.slots[0] {
+			t.Fatalf("expected non-degraded slot 0, got active=%d degraded=%v", got.active.Load(), got.degraded.Load())
+		}
+	})
+
+	t.Run("falls back to degraded when nothing else", func(t *testing.T) {
+		tr := newTestSlots([2]int32{5, 1}, [2]int32{3, 1})
+		tr.slots[0].degraded.Store(true)
+		tr.slots[1].degraded.Store(true)
+		if got := tr.leastActiveSlotRange(0, 2); got != tr.slots[1] {
+			t.Fatalf("expected least-active degraded slot 1, got active=%d", got.active.Load())
 		}
 	})
 }
