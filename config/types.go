@@ -34,11 +34,23 @@ const (
 	// DegradedPersistCycles consecutive health-check intervals is marked
 	// degraded — new streams avoid it and its idle connection is retired
 	// early instead of lingering. The mark clears after
-	// DegradedRecoverCycles healthy intervals.
+	// DegradedRecoverCycles healthy intervals. Detection only runs while
+	// the link RTT is at most DegradedMaxRTT: a congested link makes every
+	// connection slow, so retiring connections then only adds handshake
+	// churn without recovering anything.
 	HealthCheckInterval         = 5 * time.Second
 	DegradedThroughputThreshold = 64 * 1024 // 64KB/s
 	DegradedPersistCycles       = 3
 	DegradedRecoverCycles       = 2
+	DegradedMaxRTT              = 500 * time.Millisecond
+
+	// Connection rotation: long-lived TCP+TLS connections are frequently
+	// throttled by middleboxes — especially during peak hours — which is
+	// why a reconnect feels fast again. A slot whose connection exceeded
+	// either limit stops accepting new streams and its idle connection is
+	// closed, so the next stream dials a fresh one (invisible to users).
+	DefaultConnLifetimeSec = 900               // 15min
+	DefaultConnMaxBytes    = 150 * 1024 * 1024 // 150MB
 
 	HTTP2ServerMaxReadFrameSize           = 1<<24 - 1  // 16MB-1，nginx/Cloudflare 主流值
 	HTTP2ServerReceiveBufferPerConnection = 1 << 20    // 1MB，避免 64KB 瓶颈导致长期运行吞吐量下降

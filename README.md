@@ -152,7 +152,9 @@ Easyss v3 支持两种配置模式，自动识别：
     "protocol": "h2",
     "conn_count_max": 12,
     "stream_threshold": 4,
-    "priority_slot_ratio": 0.5
+    "priority_slot_ratio": 0.5,
+    "conn_lifetime_sec": 900,
+    "conn_max_bytes": 157286400
   },
   "shaper": {
     "batch_window_ms": 3,

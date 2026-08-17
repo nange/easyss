@@ -46,6 +46,7 @@ type stats struct {
 	// Transport health (client-side)
 	slotDegraded        atomic.Int64
 	slotRetiredDegraded atomic.Int64
+	connRotated         atomic.Int64
 
 	rttMu    sync.Mutex
 	rttEWMA  int64 // nanoseconds, EWMA-smoothed RTT
@@ -96,6 +97,7 @@ func RecordBulkFallback()         { g.bulkFallback.Add(1) }
 
 func RecordSlotDegraded()        { g.slotDegraded.Add(1) }
 func RecordSlotRetiredDegraded() { g.slotRetiredDegraded.Add(1) }
+func RecordConnRotated()         { g.connRotated.Add(1) }
 
 const rttAlpha = 0.35
 
@@ -151,6 +153,7 @@ func ResetCounters() {
 	g.bulkFallback.Store(0)
 	g.slotDegraded.Store(0)
 	g.slotRetiredDegraded.Store(0)
+	g.connRotated.Store(0)
 
 	g.rttMu.Lock()
 	g.rttEWMA = 0
@@ -203,6 +206,7 @@ type Snapshot struct {
 	// Transport health (client-side only; zero on server)
 	SlotDegraded        int64 `json:"slot_degraded,omitempty"`
 	SlotRetiredDegraded int64 `json:"slot_retired_degraded,omitempty"`
+	ConnRotated         int64 `json:"conn_rotated,omitempty"`
 
 	// Speed
 	UploadSpeed            int64  `json:"upload_speed"`
@@ -287,6 +291,7 @@ func Collect() Snapshot {
 		BulkFallback:           g.bulkFallback.Load(),
 		SlotDegraded:           g.slotDegraded.Load(),
 		SlotRetiredDegraded:    g.slotRetiredDegraded.Load(),
+		ConnRotated:            g.connRotated.Load(),
 		UploadSpeed:            upSpeed,
 		DownloadSpeed:          downSpeed,
 		UploadSpeedHuman:       HumanBytes(upSpeed) + "/s",

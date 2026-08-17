@@ -366,6 +366,8 @@ func exampleV3Config() string {
 			ConnCountMax:      12,
 			StreamThreshold:   4,
 			PrioritySlotRatio: 0.5,
+			ConnLifetimeSec:   900,
+			ConnMaxBytes:      150 * 1024 * 1024,
 		},
 		Shaper: config.ShaperConfig{
 			BatchWindowMS:    3,

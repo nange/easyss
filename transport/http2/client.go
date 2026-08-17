@@ -33,8 +33,18 @@ type transportSlot struct {
 	// and its idle connection is retired early.
 	degraded atomic.Bool
 
+	// Connection rotation state.
+	connStart     atomic.Int64 // unix nano of the last successful dial on this slot
+	connBytesRecv atomic.Int64 // bytes downloaded over the current connection
+	// expiring marks a slot whose connection exceeded the lifetime or bytes
+	// limit; new streams avoid it and its idle connection is closed so the
+	// next stream dials a fresh one. Cleared when a new connection is
+	// established or the rotation completes.
+	expiring atomic.Bool
+
 	// Health-loop state, touched only from the health loop goroutine.
 	lastBytes     int64
+	lastHeavy     int // last observed heavy count, tracks heavy 0->1 transitions
 	lowCycles     int
 	recoverCycles int
 }
@@ -48,6 +58,10 @@ type HTTP2Transport struct {
 	bulkThreshold int32
 	mu            sync.RWMutex // protects slot retire (shrink) and grow; RLock protects stream assignment
 
+	// Connection rotation limits.
+	connLifetime time.Duration // max age of a connection before rotation
+	connMaxBytes int64         // max bytes per connection before rotation
+
 	serverURL string
 
 	ctx    context.Context
@@ -60,6 +74,8 @@ type Config struct {
 	MaxSlotCount      int
 	StreamThreshold   int
 	PrioritySlotRatio float64
+	ConnLifetime      time.Duration // max age of a connection before rotation (0: default)
+	ConnMaxBytes      int64         // max bytes per connection before rotation (0: default)
 	Timeout           time.Duration
 	DialContext       func(ctx context.Context, network, addr string) (net.Conn, error)
 }
@@ -98,6 +114,15 @@ func New(cfg Config) (*HTTP2Transport, error) {
 		dialCtx = defaultDialContext
 	}
 
+	connLifetime := cfg.ConnLifetime
+	if connLifetime <= 0 {
+		connLifetime = time.Duration(sharedconfig.DefaultConnLifetimeSec) * time.Second
+	}
+	connMaxBytes := cfg.ConnMaxBytes
+	if connMaxBytes <= 0 {
+		connMaxBytes = sharedconfig.DefaultConnMaxBytes
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Pre-allocate and initialize all slots. Transports are cheap structs;
@@ -113,6 +138,8 @@ func New(cfg Config) (*HTTP2Transport, error) {
 		threshold:     threshold,
 		prioritySlots: prioritySlots,
 		bulkThreshold: bulkThreshold,
+		connLifetime:  connLifetime,
+		connMaxBytes:  connMaxBytes,
 		serverURL:     cfg.ServerURL,
 		ctx:           ctx,
 		cancel:        cancel,
@@ -125,6 +152,8 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 	if dialContext == nil {
 		dialContext = defaultDialContext
 	}
+
+	slot := &transportSlot{}
 
 	protos := &http.Protocols{}
 	protos.SetHTTP2(true)
@@ -173,10 +202,16 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 				_ = uconn.Close()
 				return nil, fmt.Errorf("server negotiated %q, want h2", proto)
 			}
+			// A new connection resets the rotation state: lifetime, bytes
+			// carried and the expiring mark all start fresh.
+			slot.connStart.Store(time.Now().UnixNano())
+			slot.connBytesRecv.Store(0)
+			slot.expiring.Store(false)
 			return uconn, nil
 		},
 	}
-	return &transportSlot{t: tr}
+	slot.t = tr
+	return slot
 }
 
 func defaultDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -240,9 +275,7 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	doneOnce := sync.OnceFunc(func() {
 		// Release the slot's heavy mark exactly once (doneOnce runs at most
 		// a single time), so the slot becomes eligible for new streams again.
-		if stream.heavyFlag.Swap(false) {
-			slot.heavy.Add(-1)
-		}
+		stream.releaseHeavy()
 		slot.active.Add(-1)
 		stats.RecordStreamClosed()
 		cancel()
@@ -313,19 +346,23 @@ func (t *HTTP2Transport) leastActiveSlotRange(start, end int) *transportSlot {
 		end = live
 	}
 	// Prefer healthy slots, then slots without heavy streams, and only fall
-	// back to degraded ones when nothing else is available:
+	// back to degraded or expiring ones when nothing else is available:
 	//   - a heavy stream monopolizes the connection's TCP window, so a new
 	//     stream sharing that slot is dragged down together with it (TCP
 	//     head-of-line blocking under packet loss);
 	//   - a degraded slot already proved persistently low throughput, so it
-	//     is avoided unless it is the only option left.
+	//     is avoided unless it is the only option left;
+	//   - an expiring slot is due for connection rotation, so new streams
+	//     avoid it unless nothing else is available.
 	passes := []struct {
 		skipHeavy    bool
 		skipDegraded bool
+		skipExpiring bool
 	}{
-		{true, true},  // healthy slots
-		{false, true}, // heavy but not degraded
-		{false, false},
+		{true, true, true},   // healthy slots
+		{false, true, true},  // heavy but not degraded/expiring
+		{false, false, true}, // degraded but not expiring
+		{false, false, false},
 	}
 	var best *transportSlot
 	for _, p := range passes {
@@ -336,6 +373,9 @@ func (t *HTTP2Transport) leastActiveSlotRange(start, end int) *transportSlot {
 				continue
 			}
 			if p.skipDegraded && s.degraded.Load() {
+				continue
+			}
+			if p.skipExpiring && s.expiring.Load() {
 				continue
 			}
 			if a := s.active.Load(); a < min {
@@ -349,8 +389,9 @@ func (t *HTTP2Transport) leastActiveSlotRange(start, end int) *transportSlot {
 	return t.slots[0]
 }
 
-// maybeGrowSlots checks whether all live slots are at or above the threshold,
-// and if so, activates one more slot (up to maxSlots). Uses double-checked locking.
+// maybeGrowSlots checks whether the live slots that a new stream would
+// actually use are all at or above the threshold, and if so, activates one
+// more slot (up to maxSlots). Uses double-checked locking.
 func (t *HTTP2Transport) maybeGrowSlots(highPriority bool) {
 	live := t.liveCount.Load()
 	if int(live) >= t.maxSlots {
@@ -373,14 +414,13 @@ func (t *HTTP2Transport) maybeGrowSlots(highPriority bool) {
 		if start >= end {
 			return
 		}
-		for i := start; i < end; i++ {
-			if t.slots[i].active.Load() < thresh {
-				return
-			}
+		if !t.shouldGrow(start, end, thresh) {
+			return
 		}
 	}
 
-	// All slots in range are at or above threshold — try to grow under lock.
+	// All eligible slots in range are at or above threshold — try to grow
+	// under lock.
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -402,10 +442,8 @@ func (t *HTTP2Transport) maybeGrowSlots(highPriority bool) {
 		if start2 >= end2 {
 			return
 		}
-		for i := start2; i < end2; i++ {
-			if t.slots[i].active.Load() < thresh {
-				return
-			}
+		if !t.shouldGrow(start2, end2, thresh) {
+			return
 		}
 	}
 
@@ -417,6 +455,26 @@ func (t *HTTP2Transport) maybeGrowSlots(highPriority bool) {
 	} else {
 		t.liveCount.Add(1)
 	}
+}
+
+// shouldGrow reports whether the range [start,end) needs one more live
+// slot: every slot a new stream would actually use is at or above the
+// threshold. Heavy, degraded and expiring slots are skipped — a new stream
+// avoids them, so a heavy slot hosting a single download must not block
+// growing more connections. A range with no eligible slot at all also
+// grows, since new streams then fall back onto heavy/degraded slots and
+// deserve a fresh connection.
+func (t *HTTP2Transport) shouldGrow(start, end, thresh int32) bool {
+	for i := start; i < end; i++ {
+		s := t.slots[i]
+		if s.heavy.Load() > 0 || s.degraded.Load() || s.expiring.Load() {
+			continue
+		}
+		if s.active.Load() < thresh {
+			return false
+		}
+	}
+	return true
 }
 
 func (t *HTTP2Transport) CloseIdle() {
@@ -451,9 +509,10 @@ func (t *HTTP2Transport) shrinkIdleLocked() bool {
 	return false
 }
 
-// healthLoop periodically samples slot download throughput and marks
-// persistently slow slots as degraded, retiring them once they go idle.
-// It runs until the transport is closed (t.ctx cancelled).
+// healthLoop periodically samples slot health: download throughput feeds
+// the degraded detector, connection age/bytes feed rotation, and idle
+// degraded slots are retired. It runs until the transport is closed
+// (t.ctx cancelled).
 func (t *HTTP2Transport) healthLoop() {
 	interval := sharedconfig.HealthCheckInterval
 	ticker := time.NewTicker(interval)
@@ -469,11 +528,19 @@ func (t *HTTP2Transport) healthLoop() {
 }
 
 func (t *HTTP2Transport) evaluateHealth(interval time.Duration) {
+	// A congested link (high RTT) makes every connection slow: marking or
+	// retiring slots then only adds handshake churn without recovering
+	// anything, so degraded detection is gated on a healthy RTT. Rotation,
+	// on the other hand, is exactly what a throttled connection needs and
+	// runs regardless of RTT.
+	linkOK := stats.Collect().AvgRTT() <= sharedconfig.DegradedMaxRTT
+
 	live := int(t.liveCount.Load())
 	for i := 0; i < live; i++ {
 		s := t.slots[i]
-		t.evaluateSlotHealth(i, s, interval)
-		if s.degraded.Load() && s.active.Load() == 0 {
+		t.evaluateSlotHealth(i, s, interval, linkOK)
+		t.evaluateRotation(i, s)
+		if linkOK && s.degraded.Load() && s.active.Load() == 0 {
 			t.retireSlot(s)
 			// retireSlot swap-removes the slot to the end and shrinks
 			// liveCount; re-evaluate the slot swapped into position i.
@@ -488,12 +555,35 @@ func (t *HTTP2Transport) evaluateHealth(interval time.Duration) {
 // idle or short-lived slots naturally carry zero throughput. The mark is
 // set after DegradedPersistCycles consecutive slow intervals and cleared
 // after DegradedRecoverCycles healthy ones.
-func (t *HTTP2Transport) evaluateSlotHealth(idx int, s *transportSlot, interval time.Duration) {
+func (t *HTTP2Transport) evaluateSlotHealth(idx int, s *transportSlot, interval time.Duration, linkOK bool) {
 	if s.heavy.Load() == 0 {
+		s.lastHeavy = 0
 		return
 	}
+	if s.lastHeavy == 0 {
+		// First heavy stream on this slot since it went idle: bytes
+		// transferred by earlier small streams must not skew the first
+		// sample, so reset the baseline and skip this interval.
+		s.lastHeavy = 1
+		s.lastBytes = s.bytesRecv.Load()
+		s.lowCycles = 0
+		s.recoverCycles = 0
+		return
+	}
+	if !linkOK {
+		// Congested link: low throughput is a link property, not evidence
+		// that this particular connection is broken. Advance the baseline
+		// so the first healthy interval starts from a clean sample, and
+		// freeze the counters.
+		s.lastBytes = s.bytesRecv.Load()
+		return
+	}
+
 	now := s.bytesRecv.Load()
 	perSec := int64(interval / time.Second)
+	if perSec <= 0 {
+		perSec = 1
+	}
 	throughput := (now - s.lastBytes) / perSec
 	s.lastBytes = now
 
@@ -518,6 +608,40 @@ func (t *HTTP2Transport) evaluateSlotHealth(idx int, s *transportSlot, interval 
 		stats.RecordSlotDegraded()
 		log.Info("[TRANSPORT] slot degraded", "slot", idx, "throughput_kb_s", throughput/1024)
 	}
+}
+
+// evaluateRotation marks a slot expiring once its connection exceeded the
+// lifetime or bytes limit, and completes the rotation once the slot goes
+// idle: the tired connection is closed so the next stream dials a fresh
+// one. In-flight streams are never interrupted.
+func (t *HTTP2Transport) evaluateRotation(idx int, s *transportSlot) {
+	if s.expiring.Load() {
+		if s.active.Load() == 0 {
+			s.t.CloseIdleConnections()
+			s.expiring.Store(false)
+			stats.RecordConnRotated()
+			log.Info("[TRANSPORT] connection rotated", "slot", idx)
+		}
+		return
+	}
+	if t.rotationDue(s, time.Now()) {
+		s.expiring.Store(true)
+		log.Info("[TRANSPORT] slot connection expiring", "slot", idx)
+	}
+}
+
+// rotationDue reports whether the slot's connection exceeded the lifetime
+// or bytes limit and should stop accepting new streams.
+func (t *HTTP2Transport) rotationDue(s *transportSlot, now time.Time) bool {
+	if t.connLifetime > 0 {
+		if start := s.connStart.Load(); start > 0 && now.Sub(time.Unix(0, start)) >= t.connLifetime {
+			return true
+		}
+	}
+	if t.connMaxBytes > 0 && s.connBytesRecv.Load() >= t.connMaxBytes {
+		return true
+	}
+	return false
 }
 
 // retireSlot closes a degraded slot's idle connection and shrinks liveCount

@@ -55,6 +55,8 @@ type TransportConfig struct {
 	ConnCountMax      int     `json:"conn_count_max"`
 	StreamThreshold   int     `json:"stream_threshold"`
 	PrioritySlotRatio float64 `json:"priority_slot_ratio"`
+	ConnLifetimeSec   int     `json:"conn_lifetime_sec"` // max connection lifetime in seconds, 0 uses default
+	ConnMaxBytes      int64   `json:"conn_max_bytes"`    // max bytes per connection, 0 uses default
 }
 
 type ShaperConfig struct {
@@ -182,6 +184,12 @@ func applyDefaults(c *ClientConfig) {
 	}
 	if c.Transport.StreamThreshold <= 0 {
 		c.Transport.StreamThreshold = config.DefaultStreamThreshold
+	}
+	if c.Transport.ConnLifetimeSec <= 0 {
+		c.Transport.ConnLifetimeSec = config.DefaultConnLifetimeSec
+	}
+	if c.Transport.ConnMaxBytes <= 0 {
+		c.Transport.ConnMaxBytes = config.DefaultConnMaxBytes
 	}
 	if c.Shaper.BatchWindowMS <= 0 {
 		c.Shaper.BatchWindowMS = config.DefaultBatchWindowMS

@@ -573,6 +573,12 @@ func TestApplyDefaults(t *testing.T) {
 		if cfg.Transport.StreamThreshold != config.DefaultStreamThreshold {
 			t.Errorf("StreamThreshold = %d", cfg.Transport.StreamThreshold)
 		}
+		if cfg.Transport.ConnLifetimeSec != config.DefaultConnLifetimeSec {
+			t.Errorf("ConnLifetimeSec = %d", cfg.Transport.ConnLifetimeSec)
+		}
+		if cfg.Transport.ConnMaxBytes != config.DefaultConnMaxBytes {
+			t.Errorf("ConnMaxBytes = %d", cfg.Transport.ConnMaxBytes)
+		}
 		if cfg.Shaper.BatchWindowMS != config.DefaultBatchWindowMS {
 			t.Errorf("BatchWindowMS = %d", cfg.Shaper.BatchWindowMS)
 		}

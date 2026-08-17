@@ -37,20 +37,33 @@ type HTTP2Stream struct {
 
 	// Heavy-stream tracking: once the stream qualifies as heavy (fast large
 	// transfer, or slow transfer on a poor link), it marks its slot so that
-	// new streams avoid sharing that connection.
+	// new streams avoid sharing that connection. See heavyIdle/heavyMarked/
+	// heavyReleased below.
 	startTime   time.Time
 	transferred atomic.Int64
-	heavyOnce   sync.Once
-	heavyFlag   atomic.Bool
+	heavyMu     sync.Mutex
+	heavyState  atomic.Int32
 }
 
-// trackRead accumulates downloaded bytes: on the slot (transport health
-// signal) and in the heavy-stream detector.
+// Heavy-stream state machine: a stream transitions heavyIdle -> heavyMarked
+// the first time it qualifies as heavy, and heavyMarked -> heavyReleased
+// when it closes. The mutex pairs each transition with its slot counter
+// update, so slot.heavy can never leak regardless of how Read/Write/Close
+// interleave.
+const (
+	heavyIdle     int32 = iota // stream never qualified as heavy
+	heavyMarked                // qualified: slot.heavy incremented
+	heavyReleased              // closed: slot.heavy decremented if marked
+)
+
+// trackRead accumulates downloaded bytes: on the slot (transport health and
+// connection rotation signals) and in the heavy-stream detector.
 func (s *HTTP2Stream) trackRead(n int) {
 	if s.slot == nil || n <= 0 {
 		return
 	}
 	s.slot.bytesRecv.Add(int64(n))
+	s.slot.connBytesRecv.Add(int64(n))
 	s.accumulate(n)
 }
 
@@ -68,16 +81,41 @@ func (s *HTTP2Stream) accumulate(n int) {
 		return
 	}
 	total := s.transferred.Add(int64(n))
+	// Fast path: marking happens at most once per stream; once the state
+	// left heavyIdle (marked or released) there is nothing left to do.
+	if s.heavyState.Load() != heavyIdle {
+		return
+	}
 	fast := total >= sharedconfig.HeavyStreamThresholdBytes
 	slow := total >= sharedconfig.HeavyStreamSlowThresholdBytes &&
 		time.Since(s.startTime) >= sharedconfig.HeavyStreamMinAge
 	if !fast && !slow {
 		return
 	}
-	s.heavyOnce.Do(func() {
-		s.heavyFlag.Store(true)
+	s.heavyMu.Lock()
+	defer s.heavyMu.Unlock()
+	if s.heavyState.CompareAndSwap(heavyIdle, heavyMarked) {
 		s.slot.heavy.Add(1)
-	})
+	}
+}
+
+// releaseHeavy releases the slot's heavy mark exactly once per stream. It
+// is called from the stream's done callback (guarded by sync.OnceFunc),
+// while accumulate may run concurrently from Read/Write. The mutex pairs
+// each state transition with its counter update so slot.heavy cannot leak.
+func (s *HTTP2Stream) releaseHeavy() {
+	if s.slot == nil {
+		return
+	}
+	s.heavyMu.Lock()
+	defer s.heavyMu.Unlock()
+	switch s.heavyState.Load() {
+	case heavyMarked:
+		s.heavyState.Store(heavyReleased)
+		s.slot.heavy.Add(-1)
+	case heavyIdle:
+		s.heavyState.Store(heavyReleased)
+	}
 }
 
 // setRoundTripErr stores the RoundTrip error for use by Write() when the pipe
