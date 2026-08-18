@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"runtime"
@@ -34,7 +35,7 @@ type transportSlot struct {
 	degraded atomic.Bool
 
 	// Connection rotation state.
-	connStart     atomic.Int64 // unix nano of the last successful dial on this slot
+	expireAt      atomic.Int64 // unix nano deadline of the current connection (dial time + lifetime + jitter)
 	connBytesRecv atomic.Int64 // bytes downloaded over the current connection
 	// expiring marks a slot whose connection exceeded the lifetime or bytes
 	// limit; new streams avoid it and its idle connection is closed so the
@@ -129,7 +130,7 @@ func New(cfg Config) (*HTTP2Transport, error) {
 	// actual TCP connections are established lazily by Go's http.Transport.
 	slots := make([]*transportSlot, maxSlots)
 	for i := range slots {
-		slots[i] = newSlot(cfg.TLSConfig, timeout, dialCtx)
+		slots[i] = newSlot(cfg.TLSConfig, timeout, dialCtx, connLifetime)
 	}
 
 	tr := &HTTP2Transport{
@@ -148,7 +149,7 @@ func New(cfg Config) (*HTTP2Transport, error) {
 	return tr, nil
 }
 
-func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error)) *transportSlot {
+func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error), connLifetime time.Duration) *transportSlot {
 	if dialContext == nil {
 		dialContext = defaultDialContext
 	}
@@ -202,9 +203,10 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 				_ = uconn.Close()
 				return nil, fmt.Errorf("server negotiated %q, want h2", proto)
 			}
-			// A new connection resets the rotation state: lifetime, bytes
-			// carried and the expiring mark all start fresh.
-			slot.connStart.Store(time.Now().UnixNano())
+			// A new connection resets the rotation state: the lifetime
+			// deadline (with per-connection jitter), bytes carried and the
+			// expiring mark all start fresh.
+			slot.expireAt.Store(time.Now().Add(rotationLifetime(connLifetime)).UnixNano())
 			slot.connBytesRecv.Store(0)
 			slot.expiring.Store(false)
 			return uconn, nil
@@ -634,7 +636,7 @@ func (t *HTTP2Transport) evaluateRotation(idx int, s *transportSlot) {
 // or bytes limit and should stop accepting new streams.
 func (t *HTTP2Transport) rotationDue(s *transportSlot, now time.Time) bool {
 	if t.connLifetime > 0 {
-		if start := s.connStart.Load(); start > 0 && now.Sub(time.Unix(0, start)) >= t.connLifetime {
+		if expireAt := s.expireAt.Load(); expireAt > 0 && now.UnixNano() >= expireAt {
 			return true
 		}
 	}
@@ -642,6 +644,19 @@ func (t *HTTP2Transport) rotationDue(s *transportSlot, now time.Time) bool {
 		return true
 	}
 	return false
+}
+
+// rotationLifetime returns the connection lifetime with a per-connection
+// random jitter of up to 20%. Connections created in the same burst (e.g.
+// several slots dialing together) then expire in different health ticks,
+// so rotations and the subsequent TLS handshakes do not cluster into a
+// single fingerprintable burst.
+func rotationLifetime(base time.Duration) time.Duration {
+	span := int64(base) / 5
+	if span <= 0 {
+		return base
+	}
+	return base + time.Duration(rand.Int64N(span+1))
 }
 
 // retireSlot closes a degraded slot's idle connection and shrinks liveCount

@@ -29,7 +29,7 @@ func TestUTLSDialUsesHTTP2(t *testing.T) {
 	slot := newSlot(&utls.Config{
 		InsecureSkipVerify: true,
 		NextProtos:         sharedconfig.NextProtos,
-	}, time.Second, nil)
+	}, time.Second, nil, time.Minute)
 	t.Cleanup(slot.t.CloseIdleConnections)
 
 	req, err := http.NewRequest(http.MethodPost, srv.URL, nil)
@@ -528,7 +528,7 @@ func TestRotationDue(t *testing.T) {
 	t.Run("lifetime exceeded", func(t *testing.T) {
 		tr := &HTTP2Transport{connLifetime: time.Minute}
 		s := &transportSlot{}
-		s.connStart.Store(now.Add(-2 * time.Minute).UnixNano())
+		s.expireAt.Store(now.Add(-2 * time.Minute).UnixNano())
 		if !tr.rotationDue(s, now) {
 			t.Fatal("expected rotation due by age")
 		}
@@ -537,7 +537,7 @@ func TestRotationDue(t *testing.T) {
 	t.Run("bytes exceeded", func(t *testing.T) {
 		tr := &HTTP2Transport{connLifetime: time.Hour, connMaxBytes: 1024}
 		s := &transportSlot{}
-		s.connStart.Store(now.Add(-time.Second).UnixNano())
+		s.expireAt.Store(now.Add(time.Hour).UnixNano())
 		s.connBytesRecv.Store(2048)
 		if !tr.rotationDue(s, now) {
 			t.Fatal("expected rotation due by bytes")
@@ -547,7 +547,7 @@ func TestRotationDue(t *testing.T) {
 	t.Run("fresh connection not due", func(t *testing.T) {
 		tr := &HTTP2Transport{connLifetime: time.Minute, connMaxBytes: 1024}
 		s := &transportSlot{}
-		s.connStart.Store(now.Add(-time.Second).UnixNano())
+		s.expireAt.Store(now.Add(time.Minute).UnixNano())
 		s.connBytesRecv.Store(512)
 		if tr.rotationDue(s, now) {
 			t.Fatal("fresh connection must not rotate")
@@ -563,11 +563,22 @@ func TestRotationDue(t *testing.T) {
 	})
 }
 
+func TestRotationLifetimeJitter(t *testing.T) {
+	const base = 15 * time.Minute
+	max := base + base/5
+	for i := 0; i < 1000; i++ {
+		got := rotationLifetime(base)
+		if got < base || got > max {
+			t.Fatalf("rotationLifetime(%v) = %v, want within [%v, %v]", base, got, base, max)
+		}
+	}
+}
+
 func TestEvaluateRotation(t *testing.T) {
 	t.Run("marks expiring and completes rotation when idle", func(t *testing.T) {
 		tr := &HTTP2Transport{connLifetime: time.Minute}
 		s := &transportSlot{t: &http.Transport{}}
-		s.connStart.Store(time.Now().Add(-2 * time.Minute).UnixNano())
+		s.expireAt.Store(time.Now().Add(-2 * time.Minute).UnixNano())
 		s.active.Store(1)
 		// First pass: still busy, only mark expiring.
 		tr.evaluateRotation(0, s)
@@ -585,7 +596,7 @@ func TestEvaluateRotation(t *testing.T) {
 	t.Run("fresh connection not expiring", func(t *testing.T) {
 		tr := &HTTP2Transport{connLifetime: time.Hour}
 		s := &transportSlot{t: &http.Transport{}}
-		s.connStart.Store(time.Now().UnixNano())
+		s.expireAt.Store(time.Now().Add(time.Hour).UnixNano())
 		tr.evaluateRotation(0, s)
 		if s.expiring.Load() {
 			t.Fatal("fresh connection must not expire")
