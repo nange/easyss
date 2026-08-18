@@ -79,7 +79,9 @@ func computePadPayloadSize(totalSize int) int {
 	case totalSize <= 1500:
 		target = 1500 + randomInt(500)
 	default:
-		add := randomInt(64)
+		// Ensure at least 1 byte of padding: a zero-length pad masks nothing
+		// and would make the caller's ok=false result nondeterministic.
+		add := 1 + randomInt(63)
 		target = totalSize + add
 	}
 
