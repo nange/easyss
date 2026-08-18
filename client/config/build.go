@@ -52,7 +52,7 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 			ConnCountMax: sharedconfig.DefaultConnCountMax,
 		},
 		Shaper: ShaperConfig{
-			BatchWindowMS: 3,
+			BatchWindowMS: sharedconfig.DefaultBatchWindowMS,
 		},
 		Log: LogConfig{
 			Level:    s.LogLevel,
@@ -62,22 +62,22 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 	}
 
 	if cfg.Servers[0].Port == 0 {
-		cfg.Servers[0].Port = 443
+		cfg.Servers[0].Port = sharedconfig.DefaultServerPort
 	}
 	if cfg.Servers[0].Method == "" {
-		cfg.Servers[0].Method = "aes-256-gcm"
+		cfg.Servers[0].Method = sharedconfig.DefaultMethod
 	}
 	if cfg.Timeout <= 0 {
-		cfg.Timeout = 30
+		cfg.Timeout = sharedconfig.DefaultTimeout
 	}
 	if cfg.Log.Level == "" {
-		cfg.Log.Level = "info"
+		cfg.Log.Level = sharedconfig.DefaultLogLevel
 	}
 	if cfg.Routing.ProxyRule == "" {
-		cfg.Routing.ProxyRule = "auto"
+		cfg.Routing.ProxyRule = sharedconfig.DefaultProxyRule
 	}
 	if cfg.Routing.IPV6Rule == "" {
-		cfg.Routing.IPV6Rule = "auto"
+		cfg.Routing.IPV6Rule = sharedconfig.DefaultIPV6Rule
 	}
 	if cfg.Local.HTTPPort == 0 && cfg.Local.SocksPort > 0 {
 		cfg.Local.HTTPPort = cfg.Local.SocksPort + 1000
@@ -155,7 +155,7 @@ func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) {
 		cfg.Local.BindAll = true
 	}
 	if s.OutboundProto != "" {
-		cfg.Transport.Protocol = "h2"
+		cfg.Transport.Protocol = sharedconfig.DefaultProtocol
 	}
 	if s.TunConfig != "" {
 		cfg.Local.TunConfig = jsonTunConfig(s.TunConfig)
@@ -173,8 +173,8 @@ func outboundProtoToProtocol(proto string) (string, error) {
 	switch proto {
 	case "", "native":
 		return "", nil
-	case "h2":
-		return "h2", nil
+	case sharedconfig.DefaultProtocol:
+		return sharedconfig.DefaultProtocol, nil
 	default:
 		return "", fmt.Errorf("invalid outbound_proto %q: valid values are empty, native, h2", proto)
 	}

@@ -8,10 +8,24 @@ var NextProtos = []string{"h2", "http/1.1"}
 
 const (
 	DefaultTimeout         = 30
-	DefaultConnCountMax    = 12
+	DefaultConnCountMax    = 18
 	DefaultStreamThreshold = 4
 	DefaultBatchWindowMS   = 3
 	DefaultCoverBudgetCap  = 16 * 1024 // 16KB
+
+	// Defaults shared by config builders, the example config and runtime
+	// fallbacks. Keep these as the single source of truth: any code that
+	// applies a default must reference the constant, not a literal.
+	DefaultServerPort        = 443
+	DefaultSocksPort         = 2080
+	DefaultHTTPPort          = 3080
+	DefaultProtocol          = "h2"
+	DefaultMethod            = "aes-256-gcm"
+	DefaultPrioritySlotRatio = 0.5
+	DefaultCoverBudgetRatio  = 0.03
+	DefaultProxyRule         = "auto"
+	DefaultIPV6Rule          = "auto"
+	DefaultLogLevel          = "info"
 
 	// Heavy-stream detection: a stream is considered "heavy" (monopolizing
 	// its shared TCP connection under packet loss) when either condition

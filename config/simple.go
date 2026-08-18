@@ -31,12 +31,12 @@ type SimpleConfig struct {
 
 func NewSimpleConfig() *SimpleConfig {
 	return &SimpleConfig{
-		ServerPort: 443,
-		LocalPort:  2080,
-		Method:     "aes-256-gcm",
-		ProxyRule:  "auto",
-		IPV6Rule:   "auto",
-		Timeout:    30,
-		LogLevel:   "info",
+		ServerPort: DefaultServerPort,
+		LocalPort:  DefaultSocksPort,
+		Method:     DefaultMethod,
+		ProxyRule:  DefaultProxyRule,
+		IPV6Rule:   DefaultIPV6Rule,
+		Timeout:    DefaultTimeout,
+		LogLevel:   DefaultLogLevel,
 	}
 }

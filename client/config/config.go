@@ -177,7 +177,7 @@ func applyDefaults(c *ClientConfig) {
 		c.Timeout = config.DefaultTimeout
 	}
 	if c.Transport.Protocol == "" {
-		c.Transport.Protocol = "h2"
+		c.Transport.Protocol = config.DefaultProtocol
 	}
 	if c.Transport.ConnCountMax <= 0 {
 		c.Transport.ConnCountMax = config.DefaultConnCountMax
@@ -198,26 +198,26 @@ func applyDefaults(c *ClientConfig) {
 		c.Shaper.BatchWindowMS = 10
 	}
 	if c.Shaper.CoverBudgetRatio <= 0 || c.Shaper.CoverBudgetRatio > 1 {
-		c.Shaper.CoverBudgetRatio = 0.03
+		c.Shaper.CoverBudgetRatio = config.DefaultCoverBudgetRatio
 	}
 	if c.Shaper.CoverBudgetCap <= 0 {
 		c.Shaper.CoverBudgetCap = config.DefaultCoverBudgetCap
 	}
 	if c.Routing.ProxyRule == "" {
-		c.Routing.ProxyRule = "auto"
+		c.Routing.ProxyRule = config.DefaultProxyRule
 	}
 	if c.Routing.IPV6Rule == "" {
-		c.Routing.IPV6Rule = "auto"
+		c.Routing.IPV6Rule = config.DefaultIPV6Rule
 	}
 	if c.Log.Level == "" {
-		c.Log.Level = "info"
+		c.Log.Level = config.DefaultLogLevel
 	}
 	for _, srv := range c.Servers {
 		if srv.Port == 0 {
-			srv.Port = 443
+			srv.Port = config.DefaultServerPort
 		}
 		if srv.Method == "" {
-			srv.Method = "aes-256-gcm"
+			srv.Method = config.DefaultMethod
 		}
 	}
 }
@@ -278,8 +278,8 @@ func DefaultConfig() *ClientConfig {
 	cfg := &ClientConfig{
 		ConfigVersion: 3,
 		Local: LocalConfig{
-			SocksPort: 2080,
-			HTTPPort:  3080,
+			SocksPort: config.DefaultSocksPort,
+			HTTPPort:  config.DefaultHTTPPort,
 		},
 	}
 	applyDefaults(cfg)
