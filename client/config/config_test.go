@@ -17,11 +17,11 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.ConfigVersion != 3 {
 		t.Errorf("ConfigVersion = %d, want 3", cfg.ConfigVersion)
 	}
-	if cfg.Local.SocksPort != 2080 {
-		t.Errorf("SocksPort = %d, want 2080", cfg.Local.SocksPort)
+	if cfg.Local.SocksPort != 4080 {
+		t.Errorf("SocksPort = %d, want 4080", cfg.Local.SocksPort)
 	}
-	if cfg.Local.HTTPPort != 3080 {
-		t.Errorf("HTTPPort = %d, want 3080", cfg.Local.HTTPPort)
+	if cfg.Local.HTTPPort != 5080 {
+		t.Errorf("HTTPPort = %d, want 5080", cfg.Local.HTTPPort)
 	}
 	if cfg.Timeout != config.DefaultTimeout {
 		t.Errorf("Timeout = %d, want %d", cfg.Timeout, config.DefaultTimeout)

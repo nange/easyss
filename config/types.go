@@ -17,8 +17,8 @@ const (
 	// fallbacks. Keep these as the single source of truth: any code that
 	// applies a default must reference the constant, not a literal.
 	DefaultServerPort        = 443
-	DefaultSocksPort         = 2080
-	DefaultHTTPPort          = 3080
+	DefaultSocksPort         = 4080
+	DefaultHTTPPort          = 5080
 	DefaultProtocol          = "h2"
 	DefaultMethod            = "aes-256-gcm"
 	DefaultPrioritySlotRatio = 0.5

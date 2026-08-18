@@ -396,7 +396,7 @@ func exampleSimpleConfig() string {
 		ServerPort:    443,
 		Password:      "your-password",
 		Method:        "aes-256-gcm",
-		LocalPort:     2080,
+		LocalPort:     sharedconfig.DefaultSocksPort,
 		ProxyRule:     "auto",
 		Timeout:       30,
 		BindAll:       false,

@@ -56,7 +56,7 @@ Easyss v3 支持两种配置模式，自动识别：
   "server": "your-domain.com",
   "server_port": 443,
   "password": "your-password",
-  "local_port": 2080,
+  "local_port": 4080,
   "log_file_path": "easyss.log",
 }
 ```
@@ -68,7 +68,7 @@ Easyss v3 支持两种配置模式，自动识别：
 | `server` | 是 | - | 服务器地址（域名或IP） |
 | `server_port` | 是 | - | 服务器端口 |
 | `password` | 是 | - | 通信加密密钥 |
-| `local_port` | 否 | 2080 | 本地 SOCKS5 监听端口。`http_port` 自动设为 `local_port + 1000` |
+| `local_port` | 否 | 4080 | 本地 SOCKS5 监听端口。`http_port` 自动设为 `local_port + 1000` |
 | `method` | 否 | aes-256-gcm | 加密方式，可选: `aes-256-gcm`, `chacha20-poly1305` |
 | `proxy_rule` | 否 | auto | 代理规则，可选: `auto`, `reverse_auto`, `proxy`, `direct`, `auto_block` |
 | `timeout` | 否 | 30 | 超时时间，单位秒 |
@@ -133,8 +133,8 @@ Easyss v3 支持两种配置模式，自动识别：
     "default": true
   }],
   "local": {
-    "socks_port": 2080,
-    "http_port": 3080,
+    "socks_port": 4080,
+    "http_port": 5080,
     "bind_all": false,
     "disable_sys_proxy": false,
     "enable_forward_dns": false,
