@@ -1,6 +1,7 @@
 package util
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -41,4 +42,27 @@ func TestReadFileLinesMap(t *testing.T) {
 	assert.Len(t, m, 2)
 	_, ok := m["Ni hao!"]
 	assert.True(t, ok)
+}
+
+func TestResolvePath(t *testing.T) {
+	// Empty string is returned unchanged.
+	assert.Equal(t, "", ResolvePath(""))
+
+	// Absolute paths are returned unchanged.
+	abs, err := filepath.Abs("direct.txt")
+	assert.Nil(t, err)
+	assert.True(t, filepath.IsAbs(abs))
+	assert.Equal(t, abs, ResolvePath(abs))
+
+	// Relative paths that exist in the cwd are kept as-is.
+	relExisting := "file.go"
+	e, err := FileExists(relExisting)
+	assert.Nil(t, err)
+	assert.True(t, e)
+	assert.Equal(t, relExisting, ResolvePath(relExisting))
+
+	// Relative paths missing from the cwd fall back to the executable dir.
+	relMissing := "direct.txt"
+	want := filepath.Join(CurrentDir(), relMissing)
+	assert.Equal(t, want, ResolvePath(relMissing))
 }

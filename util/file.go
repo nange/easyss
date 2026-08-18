@@ -23,6 +23,29 @@ func FileExists(path string) (bool, error) {
 	return false, err
 }
 
+// ResolvePath resolves a possibly-relative file path to an absolute one when
+// it cannot be found in the current working directory. On macOS the app is
+// often launched by Finder or launchd with cwd=/ (LaunchAgent plists have no
+// WorkingDirectory), so relative paths in config files (direct.txt, proxy.txt,
+// ca_path, cert files, ...) would otherwise never be found even though they
+// sit next to the binary/.app bundle.
+//
+// Empty strings and absolute paths are returned unchanged; relative paths that
+// exist in the cwd are kept as-is for backward compatibility; anything else is
+// joined with the executable directory (see CurrentDir).
+func ResolvePath(p string) string {
+	if p == "" || filepath.IsAbs(p) {
+		return p
+	}
+	if _, err := os.Stat(p); err == nil {
+		return p
+	}
+	if dir := CurrentDir(); dir != "" {
+		return filepath.Join(dir, p)
+	}
+	return p
+}
+
 func CurrentDir() string {
 	path, err := os.Executable()
 	if err != nil {

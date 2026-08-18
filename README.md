@@ -205,6 +205,8 @@ Easyss 通过检测配置文件自动区分模式：
 
 在 `easyss` 所在目录下新建文本文件（如 `direct.txt`、`proxy.txt`），IP/CIDR/域名可混写，每行一条记录。然后在配置中指定路径：
 
+> 配置中的相对路径（`direct_file`、`proxy_file`、`ca_path` 等）会先按当前工作目录查找，找不到时自动回退到 `easyss` 可执行文件所在目录（macOS 下为 `.app` 旁）。这样从 Finder 双击、开机自启（launchd）等方式启动时也能正常读取，不受启动目录影响。
+
 **简化模式：**
 
 ```json

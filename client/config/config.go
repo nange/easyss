@@ -10,6 +10,7 @@ import (
 	utls "github.com/refraction-networking/utls"
 
 	"github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/util"
 )
 
 // DirectDNSServers are the public DNS servers used for direct (non-proxied) DNS lookups.
@@ -56,7 +57,7 @@ type TransportConfig struct {
 	StreamThreshold   int     `json:"stream_threshold"`
 	PrioritySlotRatio float64 `json:"priority_slot_ratio"`
 	ConnLifetimeSec   int     `json:"conn_lifetime_sec"` // max connection lifetime in seconds, 0 uses default
-	ConnMaxBytes      int64   `json:"conn_max_bytes"`    // max bytes per connection, 0 uses default
+	ConnMaxBytes      int64   `json:"conn_max_bytes"`    // max bytes carried by a connection in either direction, 0 uses default
 }
 
 type ShaperConfig struct {
@@ -219,6 +220,19 @@ func applyDefaults(c *ClientConfig) {
 		if srv.Method == "" {
 			srv.Method = config.DefaultMethod
 		}
+	}
+}
+
+// ResolveFilePaths resolves relative file paths in the config against the
+// executable directory when they cannot be found in the current working
+// directory. On macOS the app is often launched by Finder/launchd with cwd=/,
+// so relative paths like direct.txt, proxy.txt or ca_path would otherwise not
+// be found even though the files sit next to the binary/.app bundle.
+func (c *ClientConfig) ResolveFilePaths() {
+	c.Routing.DirectFile = util.ResolvePath(c.Routing.DirectFile)
+	c.Routing.ProxyFile = util.ResolvePath(c.Routing.ProxyFile)
+	for _, srv := range c.Servers {
+		srv.CAPath = util.ResolvePath(srv.CAPath)
 	}
 }
 
