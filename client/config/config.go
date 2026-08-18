@@ -10,6 +10,7 @@ import (
 	utls "github.com/refraction-networking/utls"
 
 	"github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util"
 )
 
@@ -134,8 +135,13 @@ func (c *ClientConfig) UTLSConfig() *utls.Config {
 			pool = x509.NewCertPool()
 		}
 		pem, err := os.ReadFile(srv.CAPath)
-		if err == nil && pool.AppendCertsFromPEM(pem) {
+		if err != nil {
+			log.Warn("[CONFIG] load custom CA", "file", srv.CAPath, "err", err)
+		} else if !pool.AppendCertsFromPEM(pem) {
+			log.Warn("[CONFIG] load custom CA: no valid PEM certs", "file", srv.CAPath)
+		} else {
 			utlsCfg.RootCAs = pool
+			log.Info("[CONFIG] loaded custom CA", "file", srv.CAPath)
 		}
 	}
 

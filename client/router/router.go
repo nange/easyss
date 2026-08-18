@@ -224,6 +224,14 @@ func (r *Router) loadCustomIPDomains() error {
 			}
 			r.customDirectDomains[k] = struct{}{}
 		}
+		log.Info("[ROUTER] loaded direct file",
+			"file", r.cfg.DirectFile,
+			"total", len(entries),
+			"ips", len(r.customDirectIPs),
+			"cidrs", len(r.customDirectCIDRIPs),
+			"domains", len(r.customDirectDomains),
+			"patterns", len(r.customDirectRegexps),
+		)
 	}
 
 	if r.cfg.ProxyFile != "" {
@@ -257,6 +265,14 @@ func (r *Router) loadCustomIPDomains() error {
 			}
 			r.customProxyDomains[k] = struct{}{}
 		}
+		log.Info("[ROUTER] loaded proxy file",
+			"file", r.cfg.ProxyFile,
+			"total", len(entries),
+			"ips", len(r.customProxyIPs),
+			"cidrs", len(r.customProxyCIDRIPs),
+			"domains", len(r.customProxyDomains),
+			"patterns", len(r.customProxyRegexps),
+		)
 	}
 
 	return nil

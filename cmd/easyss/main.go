@@ -149,12 +149,15 @@ func main() {
 	}
 
 	log.Info("[EASYSS-V3] config loaded",
+		"config_file", configFile,
 		"server", cfg.DefaultServerAddr(),
 		"socks_port", cfg.Local.SocksPort,
 		"http_port", cfg.Local.HTTPPort,
 		"proxy_rule", cfg.Routing.ProxyRule,
 		"ipv6_rule", cfg.Routing.IPV6Rule,
 		"timeout", cfg.Timeout,
+		"direct_file", cfg.Routing.DirectFile,
+		"proxy_file", cfg.Routing.ProxyFile,
 	)
 
 	app := &App{cfg: cfg, configFile: configFile}

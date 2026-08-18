@@ -94,7 +94,7 @@ func (np *NextProxy) LoadProxyFile(proxyFile string) error {
 		}
 		np.domains[k] = struct{}{}
 	}
-	log.Info("[NEXTPROXY] loaded proxy file", "file", proxyFile, "ips", len(np.ips), "cidrs", len(np.cidrIPs), "domains", len(np.domains), "patterns", len(np.domainPatterns))
+	log.Info("[NEXTPROXY] loaded proxy file", "file", proxyFile, "total", len(entries), "ips", len(np.ips), "cidrs", len(np.cidrIPs), "domains", len(np.domains), "patterns", len(np.domainPatterns))
 
 	return nil
 }

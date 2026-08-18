@@ -83,6 +83,14 @@ func main() {
 	log.Init(fileCfg.Log.FilePath, fileCfg.Log.Level)
 
 	log.Info("[EASYSS-SERVER-V3] " + version.String())
+	log.Info("[EASYSS-SERVER-V3] config loaded",
+		"config_file", configFile,
+		"listen", cfg.Listen,
+		"domain", cfg.Domain,
+		"next_proxy_file", cfg.NextProxy.NextProxyFile,
+		"cert", cfg.CertPath,
+		"key", cfg.KeyPath,
+	)
 
 	var pprofSrv *http.Server
 	if cfg.PprofEnabled {
