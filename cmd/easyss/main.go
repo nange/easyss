@@ -316,6 +316,9 @@ func (a *App) statsLoop() {
 				"padding", stats.HumanBytes(snap.PaddingBytes),
 				"records", snap.RecordsWritten,
 				"avg_rtt", snap.AvgRTT().Round(time.Millisecond),
+				"slot_degraded", snap.SlotDegraded,
+				"slot_retired_degraded", snap.SlotRetiredDegraded,
+				"conn_rotated", snap.ConnRotated,
 			)
 		case <-a.statsCloser:
 			return
