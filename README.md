@@ -151,13 +151,15 @@ Easyss v3 支持两种配置模式，自动识别：
   "transport": {
     "protocol": "h2",
     "conn_count_max": 12,
-    "stream_threshold": 8,
-    "priority_slot_ratio": 0.5
+    "stream_threshold": 4,
+    "priority_slot_ratio": 0.5,
+    "conn_lifetime_sec": 900,
+    "conn_max_bytes": 157286400
   },
   "shaper": {
     "batch_window_ms": 3,
     "cover_budget_ratio": 0.03,
-    "cover_budget_cap": 131072
+    "cover_budget_cap": 16384
   },
   "log": {
     "level": "info",
@@ -293,7 +295,7 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
     "fallback_cdn_domains": [],
     "batch_window_ms": 3,
     "cover_budget_ratio": 0.03,
-    "cover_budget_cap": 131072
+    "cover_budget_cap": 16384
   },
   "log": {
       "level": "info",
@@ -319,7 +321,7 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 | `server.fallback_cdn_domains` | 否 | [] | 仅对 `fallback_target` 为 URL 生效。<br>配置需要通过代理中转的 CDN 域名列表（如 `["github.githubassets.com"]`）。HTML 和 CSP 中引用这些域名的绝对 URL 会被重写为 `/__cdn__/<host>/...` 路径前缀形式，浏览器请求时走代理转发到对应 CDN，避免直连 CDN 暴露真实 IP 或被 CSP 拦截 |
 | `server.batch_window_ms` | 否 | 3 | 流量整形批处理窗口，单位毫秒，范围 1-10 |
 | `server.cover_budget_ratio` | 否 | 0.03 | cover traffic 占真实流量的预算比例，设为 0 或负数使用默认值，范围 (0, 1] |
-| `server.cover_budget_cap` | 否 | 131072 | cover traffic 最大累积预算，单位字节，默认 128KB |
+| `server.cover_budget_cap` | 否 | 16384 | cover traffic 最大累积预算，单位字节，默认 16KB |
 | `timeout` | 否 | 30 | 超时时间，单位秒 |
 
 > **fallback_target 使用示例**：

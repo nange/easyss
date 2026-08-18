@@ -87,6 +87,8 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		MaxSlotCount:      cfg.Transport.ConnCountMax,
 		StreamThreshold:   cfg.Transport.StreamThreshold,
 		PrioritySlotRatio: cfg.Transport.PrioritySlotRatio,
+		ConnLifetime:      time.Duration(cfg.Transport.ConnLifetimeSec) * time.Second,
+		ConnMaxBytes:      cfg.Transport.ConnMaxBytes,
 		Timeout:           cfg.TimeoutDuration(),
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return dialWithConfig(ctx, cfg, client.dialer, rt, network, addr)

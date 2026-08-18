@@ -43,6 +43,11 @@ type stats struct {
 	priorityFallback      atomic.Int64
 	bulkFallback          atomic.Int64
 
+	// Transport health (client-side)
+	slotDegraded        atomic.Int64
+	slotRetiredDegraded atomic.Int64
+	connRotated         atomic.Int64
+
 	rttMu    sync.Mutex
 	rttEWMA  int64 // nanoseconds, EWMA-smoothed RTT
 	rttCount atomic.Int64
@@ -89,6 +94,10 @@ func RecordStreamOpenedPriority() { g.priorityStreamsOpened.Add(1) }
 func RecordStreamOpenedBulk()     { g.bulkStreamsOpened.Add(1) }
 func RecordPriorityFallback()     { g.priorityFallback.Add(1) }
 func RecordBulkFallback()         { g.bulkFallback.Add(1) }
+
+func RecordSlotDegraded()        { g.slotDegraded.Add(1) }
+func RecordSlotRetiredDegraded() { g.slotRetiredDegraded.Add(1) }
+func RecordConnRotated()         { g.connRotated.Add(1) }
 
 const rttAlpha = 0.35
 
@@ -142,6 +151,9 @@ func ResetCounters() {
 	g.bulkStreamsOpened.Store(0)
 	g.priorityFallback.Store(0)
 	g.bulkFallback.Store(0)
+	g.slotDegraded.Store(0)
+	g.slotRetiredDegraded.Store(0)
+	g.connRotated.Store(0)
 
 	g.rttMu.Lock()
 	g.rttEWMA = 0
@@ -190,6 +202,11 @@ type Snapshot struct {
 	BulkStreamsOpened     int64 `json:"bulk_streams_opened"`
 	PriorityFallback      int64 `json:"priority_fallback"`
 	BulkFallback          int64 `json:"bulk_fallback"`
+
+	// Transport health (client-side only; zero on server)
+	SlotDegraded        int64 `json:"slot_degraded"`
+	SlotRetiredDegraded int64 `json:"slot_retired_degraded"`
+	ConnRotated         int64 `json:"conn_rotated"`
 
 	// Speed
 	UploadSpeed            int64  `json:"upload_speed"`
@@ -272,6 +289,9 @@ func Collect() Snapshot {
 		BulkStreamsOpened:      g.bulkStreamsOpened.Load(),
 		PriorityFallback:       g.priorityFallback.Load(),
 		BulkFallback:           g.bulkFallback.Load(),
+		SlotDegraded:           g.slotDegraded.Load(),
+		SlotRetiredDegraded:    g.slotRetiredDegraded.Load(),
+		ConnRotated:            g.connRotated.Load(),
 		UploadSpeed:            upSpeed,
 		DownloadSpeed:          downSpeed,
 		UploadSpeedHuman:       HumanBytes(upSpeed) + "/s",
