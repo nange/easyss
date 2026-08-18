@@ -204,9 +204,9 @@ type Snapshot struct {
 	BulkFallback          int64 `json:"bulk_fallback"`
 
 	// Transport health (client-side only; zero on server)
-	SlotDegraded        int64 `json:"slot_degraded,omitempty"`
-	SlotRetiredDegraded int64 `json:"slot_retired_degraded,omitempty"`
-	ConnRotated         int64 `json:"conn_rotated,omitempty"`
+	SlotDegraded        int64 `json:"slot_degraded"`
+	SlotRetiredDegraded int64 `json:"slot_retired_degraded"`
+	ConnRotated         int64 `json:"conn_rotated"`
 
 	// Speed
 	UploadSpeed            int64  `json:"upload_speed"`
