@@ -142,14 +142,15 @@ func (lc *slotLifecycle) evaluateRotation(idx int, s *transportSlot) {
 }
 
 // rotationDue reports whether the slot's connection exceeded the lifetime
-// or bytes limit and should stop accepting new streams.
+// or bytes limit and should stop accepting new streams. The byte limit
+// counts traffic in both directions.
 func (lc *slotLifecycle) rotationDue(s *transportSlot, now time.Time) bool {
 	if lc.connLifetime > 0 {
 		if expireAt := s.expireAt.Load(); expireAt > 0 && now.UnixNano() >= expireAt {
 			return true
 		}
 	}
-	if lc.connMaxBytes > 0 && s.connBytesRecv.Load() >= lc.connMaxBytes {
+	if lc.connMaxBytes > 0 && s.connBytes.Load() >= lc.connMaxBytes {
 		return true
 	}
 	return false

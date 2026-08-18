@@ -64,11 +64,17 @@ const (
 	// either limit stops accepting new streams and its idle connection is
 	// closed, so the next stream dials a fresh one (invisible to users).
 	DefaultConnLifetimeSec = 900               // 15min
-	DefaultConnMaxBytes    = 150 * 1024 * 1024 // 150MB
+	DefaultConnMaxBytes    = 150 * 1024 * 1024 // 150MB，双向（上下行）累计
 
-	HTTP2ServerMaxReadFrameSize           = 1<<24 - 1  // 16MB-1，nginx/Cloudflare 主流值
-	HTTP2ServerReceiveBufferPerConnection = 1 << 20    // 1MB，避免 64KB 瓶颈导致长期运行吞吐量下降
-	HTTP2ServerReceiveBufferPerStream     = 256 * 1024 // 256KB，流级别接收窗口
+	// Upload flow control on the server side: the per-stream window bounds
+	// a single upload stream's in-flight data, capping its throughput at
+	// roughly window/RTT. 256KB would pin a single-stream upload to
+	// ~6.8Mbps on a 300ms link; 1MB (the stdlib server default) raises that
+	// to ~26Mbps, and the 4MB connection window keeps aggregate uploads
+	// from being constrained to ~1MB in flight per connection.
+	HTTP2ServerMaxReadFrameSize           = 1<<24 - 1 // 16MB-1，nginx/Cloudflare 主流值
+	HTTP2ServerReceiveBufferPerConnection = 4 << 20   // 4MB，连接级上行窗口
+	HTTP2ServerReceiveBufferPerStream     = 1 << 20   // 1MB，流级上行窗口（stdlib 服务端默认）
 
 	HTTP2ClientMaxReadFrameSize           = 1 * 1024 * 1024  // 1MB，Chrome MAX_FRAME_SIZE
 	HTTP2ClientReceiveBufferPerConnection = 15 * 1024 * 1024 // ~15MB，Chrome 连接级窗口

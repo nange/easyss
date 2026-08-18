@@ -306,10 +306,23 @@ func (s *Server) Start() error {
 	s.mux.Handle(sharedconfig.EndpointUDP, proxyHandler)
 	s.mux.Handle(sharedconfig.EndpointICMP, proxyHandler)
 
-	s.httpServer = &http.Server{
-		Addr:      s.cfg.Listen,
+	s.httpServer = buildHTTPServer(cfg, tlsConfig, s.mux, timeout)
+
+	log.Info("[SERVER] listening", "addr", s.cfg.Listen, "routes", []string{"/", sharedconfig.EndpointTCP, sharedconfig.EndpointUDP, sharedconfig.EndpointICMP})
+	s.statsDone = make(chan struct{})
+	go s.statsLoop()
+	return s.httpServer.ListenAndServeTLS("", "")
+}
+
+// buildHTTPServer assembles the HTTP server with HTTP/2 flow-control windows
+// sized for upload throughput: the per-stream receive window bounds a single
+// upload stream's in-flight data (throughput ≈ window/RTT), so both windows
+// must be generous enough for high-RTT links.
+func buildHTTPServer(cfg *config.ServerConfig, tlsConfig *tls.Config, mux *http.ServeMux, timeout time.Duration) *http.Server {
+	srv := &http.Server{
+		Addr:      cfg.Listen,
 		TLSConfig: tlsConfig,
-		Handler:   s.mux,
+		Handler:   mux,
 		ErrorLog:  stdErrorLog(),
 		Protocols: &http.Protocols{},
 		HTTP2: &http.HTTP2Config{
@@ -320,13 +333,9 @@ func (s *Server) Start() error {
 		IdleTimeout:       8 * timeout,
 		ReadHeaderTimeout: min(timeout/2, 10*time.Second),
 	}
-	s.httpServer.Protocols.SetHTTP1(true)
-	s.httpServer.Protocols.SetHTTP2(true)
-
-	log.Info("[SERVER] listening", "addr", s.cfg.Listen, "routes", []string{"/", sharedconfig.EndpointTCP, sharedconfig.EndpointUDP, sharedconfig.EndpointICMP})
-	s.statsDone = make(chan struct{})
-	go s.statsLoop()
-	return s.httpServer.ListenAndServeTLS("", "")
+	srv.Protocols.SetHTTP1(true)
+	srv.Protocols.SetHTTP2(true)
+	return srv
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {

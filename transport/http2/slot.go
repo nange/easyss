@@ -22,8 +22,8 @@ type transportSlot struct {
 	degraded atomic.Bool
 
 	// Connection rotation state.
-	expireAt      atomic.Int64 // unix nano deadline of the current connection (dial time + lifetime + jitter)
-	connBytesRecv atomic.Int64 // bytes downloaded over the current connection
+	expireAt  atomic.Int64 // unix nano deadline of the current connection (dial time + lifetime + jitter)
+	connBytes atomic.Int64 // bytes carried over the current connection in either direction
 	// expiring marks a slot whose connection exceeded the lifetime or bytes
 	// limit; new streams avoid it and its idle connection is closed so the
 	// next stream dials a fresh one. Cleared when a new connection is
@@ -58,6 +58,6 @@ func (s *transportSlot) eligible(skipHeavy, skipDegraded, skipExpiring bool) boo
 // carried and the expiring mark all start fresh.
 func (s *transportSlot) resetConn(connLifetime time.Duration) {
 	s.expireAt.Store(time.Now().Add(rotationLifetime(connLifetime)).UnixNano())
-	s.connBytesRecv.Store(0)
+	s.connBytes.Store(0)
 	s.expiring.Store(false)
 }

@@ -63,12 +63,19 @@ func (s *HTTP2Stream) trackRead(n int) {
 		return
 	}
 	s.slot.bytesRecv.Add(int64(n))
-	s.slot.connBytesRecv.Add(int64(n))
+	s.slot.connBytes.Add(int64(n))
 	s.accumulate(n)
 }
 
-// trackWrite accumulates uploaded bytes into the heavy-stream detector.
+// trackWrite accumulates uploaded bytes: into the connection rotation
+// counter (rotation must trigger for upload-heavy connections too, since
+// middleboxes throttle by total bytes in either direction) and the
+// heavy-stream detector.
 func (s *HTTP2Stream) trackWrite(n int) {
+	if s.slot == nil || n <= 0 {
+		return
+	}
+	s.slot.connBytes.Add(int64(n))
 	s.accumulate(n)
 }
 

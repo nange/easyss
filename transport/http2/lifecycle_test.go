@@ -132,7 +132,7 @@ func TestRotationDue(t *testing.T) {
 		lc := &slotLifecycle{connLifetime: time.Hour, connMaxBytes: 1024}
 		s := &transportSlot{}
 		s.expireAt.Store(now.Add(time.Hour).UnixNano())
-		s.connBytesRecv.Store(2048)
+		s.connBytes.Store(2048)
 		if !lc.rotationDue(s, now) {
 			t.Fatal("expected rotation due by bytes")
 		}
@@ -142,7 +142,7 @@ func TestRotationDue(t *testing.T) {
 		lc := &slotLifecycle{connLifetime: time.Minute, connMaxBytes: 1024}
 		s := &transportSlot{}
 		s.expireAt.Store(now.Add(time.Minute).UnixNano())
-		s.connBytesRecv.Store(512)
+		s.connBytes.Store(512)
 		if lc.rotationDue(s, now) {
 			t.Fatal("fresh connection must not rotate")
 		}
