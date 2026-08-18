@@ -88,16 +88,10 @@ func main() {
 		os.Exit(runTunHelper(tunHTTPAddr, tunFDSocket, logFile, sc.LogLevel))
 	}
 
-	if !filepath.IsAbs(configFile) {
-		if _, err := os.Stat(configFile); os.IsNotExist(err) {
-			if dir := util.CurrentDir(); dir != "" {
-				altPath := filepath.Join(dir, configFile)
-				if _, err := os.Stat(altPath); err == nil {
-					configFile = altPath
-				}
-			}
-		}
-	}
+	// On macOS the app is often launched by Finder/launchd with cwd=/,
+	// so a relative config path is first looked up in the cwd and then
+	// falls back to the executable directory.
+	configFile = util.ResolvePath(configFile)
 
 	cfg, err := config.LoadConfig(configFile)
 	if err != nil {
@@ -114,6 +108,11 @@ func main() {
 	} else {
 		config.ApplySimpleOverrides(cfg, sc)
 	}
+
+	// Resolve relative file paths (direct_file/proxy_file/ca_path) against
+	// the executable directory so that macOS Finder/launchd launches (cwd=/)
+	// can still find the files placed next to the binary/.app bundle.
+	cfg.ResolveFilePaths()
 
 	if cfg.Log.FilePath != "" && !filepath.IsAbs(cfg.Log.FilePath) {
 		if dir := util.CurrentDir(); dir != "" {

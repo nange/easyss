@@ -5,6 +5,7 @@ import (
 	"io"
 	"sync"
 	"testing"
+	"time"
 )
 
 func newTestStream() (*HTTP2Stream, *io.PipeReader) {
@@ -110,4 +111,43 @@ func TestSetRoundTripErr_Concurrent(t *testing.T) {
 		t.Error("expected rtErr to be set after concurrent calls")
 	}
 	s.rtErrMu.Unlock()
+}
+
+// TestHTTP2Stream_ConnBytesCountsBothDirections verifies the connection
+// rotation byte counter accumulates uploaded and downloaded bytes alike:
+// rotation against conn_max_bytes must trigger for upload-only traffic too,
+// since middleboxes throttle by total bytes in either direction.
+func TestHTTP2Stream_ConnBytesCountsBothDirections(t *testing.T) {
+	slot := &transportSlot{}
+	s, pr := newTestStream()
+	defer pr.Close()
+	defer s.Close()
+	s.slot = slot
+	s.startTime = time.Now()
+
+	s.trackRead(1000)
+	s.trackWrite(2000)
+
+	if got := slot.connBytes.Load(); got != 3000 {
+		t.Fatalf("connBytes = %d, want 3000 (both directions)", got)
+	}
+	// The throughput health sample stays download-only: bytesRecv must not
+	// include uploaded bytes.
+	if got := slot.bytesRecv.Load(); got != 1000 {
+		t.Fatalf("bytesRecv = %d, want 1000 (download only)", got)
+	}
+}
+
+// TestHTTP2Stream_TrackWriteNilSlotNoOp guards the nil-slot fast path in
+// trackWrite after it started counting connection bytes.
+func TestHTTP2Stream_TrackWriteNilSlotNoOp(t *testing.T) {
+	s, pr := newTestStream()
+	defer pr.Close()
+	defer s.Close()
+
+	s.trackWrite(1 << 20) // must not panic
+
+	if s.heavyState.Load() != heavyIdle {
+		t.Fatal("nil slot must not mark heavy")
+	}
 }

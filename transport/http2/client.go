@@ -39,7 +39,7 @@ type Config struct {
 	StreamThreshold   int
 	PrioritySlotRatio float64
 	ConnLifetime      time.Duration // max age of a connection before rotation (0: default)
-	ConnMaxBytes      int64         // max bytes per connection before rotation (0: default)
+	ConnMaxBytes      int64         // max bytes carried by a connection in either direction before rotation (0: default)
 	Timeout           time.Duration
 	DialContext       func(ctx context.Context, network, addr string) (net.Conn, error)
 }

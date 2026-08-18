@@ -1,5 +1,7 @@
 package config
 
+import "github.com/nange/easyss/v3/util"
+
 type LogConfig struct {
 	Level    string `json:"level"`
 	FilePath string `json:"file_path"`
@@ -49,6 +51,19 @@ func (fc *FileConfig) EffectiveServerConfig() ServerConfig {
 	cfg.Timeout = fc.Timeout
 	cfg.NextProxy = fc.NextProxy
 	return cfg
+}
+
+// ResolveFilePaths resolves relative file paths in the config against the
+// executable directory when they cannot be found in the current working
+// directory. Must be called before EffectiveServerConfig since the latter
+// copies the Server/NextProxy structs by value. On macOS the server is often
+// launched by launchd with cwd=/, so relative paths like cert_path/key_path
+// or next_proxy_file would otherwise not be found even though the files sit
+// next to the binary.
+func (fc *FileConfig) ResolveFilePaths() {
+	fc.Server.CertPath = util.ResolvePath(fc.Server.CertPath)
+	fc.Server.KeyPath = util.ResolvePath(fc.Server.KeyPath)
+	fc.NextProxy.NextProxyFile = util.ResolvePath(fc.NextProxy.NextProxyFile)
 }
 
 func (c *ServerConfig) GetAllowedMethods() []string {

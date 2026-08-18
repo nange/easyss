@@ -162,8 +162,8 @@ func TestTrackReadMarksSlotHeavy(t *testing.T) {
 		if slot.bytesRecv.Load() != int64(sharedconfig.HeavyStreamThresholdBytes+1) {
 			t.Fatalf("bytesRecv not accumulated: %d", slot.bytesRecv.Load())
 		}
-		if slot.connBytesRecv.Load() != slot.bytesRecv.Load() {
-			t.Fatalf("connBytesRecv = %d, want %d", slot.connBytesRecv.Load(), slot.bytesRecv.Load())
+		if slot.connBytes.Load() != slot.bytesRecv.Load() {
+			t.Fatalf("connBytes = %d, want %d", slot.connBytes.Load(), slot.bytesRecv.Load())
 		}
 
 		// Further transfers must not double-mark.

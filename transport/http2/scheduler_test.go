@@ -175,3 +175,88 @@ func TestRemoveShrinksLiveCount(t *testing.T) {
 		t.Fatalf("busy slot removed: liveCount = %d", got)
 	}
 }
+
+// newGrowTestScheduler builds a scheduler with maxSlots live slots where
+// only `live` are active, threshold 4 and prioritySlots priority-class slots
+// (bulk threshold 8).
+func newGrowTestScheduler(maxSlots, prioritySlots, live int) *slotScheduler {
+	slots := make([]*transportSlot, maxSlots)
+	for i := range slots {
+		slots[i] = &transportSlot{}
+	}
+	sch := newScheduler(maxSlots, slots, 4, prioritySlots)
+	sch.liveCount.Store(int32(live))
+	return sch
+}
+
+// TestGrowBulkOnlyWorkloadGrowsPool guards the bulk-range fallback in grow:
+// while live < prioritySlots the bulk range is empty, and a pure bulk
+// workload (no priority streams to drive growth) must still grow the pool
+// past the initial connections instead of piling onto them forever.
+func TestGrowBulkOnlyWorkloadGrowsPool(t *testing.T) {
+	sch := newGrowTestScheduler(10, 5, 2)
+
+	// Slots below the bulk threshold (8): no growth yet.
+	sch.slots[0].active.Store(4)
+	sch.slots[1].active.Store(7)
+	sch.grow(false)
+	if got := sch.liveCount.Load(); got != 2 {
+		t.Fatalf("liveCount = %d, want 2 while slots still have capacity", got)
+	}
+
+	// Every live slot at or above the bulk threshold: growth must fire even
+	// though the bulk range [prioritySlots, live) is empty.
+	sch.slots[0].active.Store(8)
+	sch.slots[1].active.Store(9)
+	sch.grow(false)
+	if got := sch.liveCount.Load(); got != 3 {
+		t.Fatalf("liveCount = %d, want 3 (bulk workload must grow the pool)", got)
+	}
+
+	// The fallback keeps working until the bulk range becomes non-empty:
+	// the newly activated slot starts idle, so saturation of all live slots
+	// keeps growing the pool.
+	sch.slots[2].active.Store(8)
+	sch.grow(false)
+	if got := sch.liveCount.Load(); got != 4 {
+		t.Fatalf("liveCount = %d, want 4", got)
+	}
+}
+
+func TestGrowBulkUsesBulkRangeOnceLive(t *testing.T) {
+	sch := newGrowTestScheduler(10, 5, 6) // slots 0-4 priority, slot 5 bulk
+
+	// Bulk slot below threshold: no growth.
+	sch.slots[5].active.Store(7)
+	sch.grow(false)
+	if got := sch.liveCount.Load(); got != 6 {
+		t.Fatalf("liveCount = %d, want 6 while bulk slot has capacity", got)
+	}
+
+	// Bulk slot saturated: grow.
+	sch.slots[5].active.Store(8)
+	sch.grow(false)
+	if got := sch.liveCount.Load(); got != 7 {
+		t.Fatalf("liveCount = %d, want 7", got)
+	}
+}
+
+func TestGrowPriorityUsesPriorityRange(t *testing.T) {
+	sch := newGrowTestScheduler(10, 5, 3)
+
+	// Priority slot below threshold (4): no growth.
+	sch.slots[0].active.Store(4)
+	sch.slots[1].active.Store(4)
+	sch.slots[2].active.Store(3)
+	sch.grow(true)
+	if got := sch.liveCount.Load(); got != 3 {
+		t.Fatalf("liveCount = %d, want 3 while priority slot has capacity", got)
+	}
+
+	// All live priority slots at threshold: grow.
+	sch.slots[2].active.Store(4)
+	sch.grow(true)
+	if got := sch.liveCount.Load(); got != 4 {
+		t.Fatalf("liveCount = %d, want 4", got)
+	}
+}

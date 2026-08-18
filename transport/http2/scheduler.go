@@ -105,6 +105,35 @@ func (s *slotScheduler) leastActiveInRange(start, end int) *transportSlot {
 	return s.slots[0]
 }
 
+// growRange returns the slot range a new stream of the given class would be
+// scheduled onto, plus the saturation threshold used to decide whether one
+// more slot is needed: priority streams prefer [0, prioritySlots), bulk
+// streams prefer [prioritySlots, live). Like pick, both fall back to the
+// whole live range when their own range is empty — in particular, bulk
+// streams schedule over the entire pool while live < prioritySlots, so a
+// pure bulk workload must be able to grow the pool instead of piling onto
+// the initial connections forever.
+func (s *slotScheduler) growRange(highPriority bool, live int32) (start, end, thresh int32) {
+	thresh = s.threshold
+	start, end = 0, live
+	if highPriority && s.prioritySlots > 0 {
+		end = int32(s.prioritySlots)
+		if end > live {
+			end = live
+		}
+	} else if s.prioritySlots > 0 {
+		start = int32(s.prioritySlots)
+		thresh = s.bulkThreshold
+		if start >= end {
+			// The bulk range is still empty (live <= prioritySlots): bulk
+			// streams fall back onto the whole live range, so growth must
+			// use that same range.
+			start = 0
+		}
+	}
+	return start, end, thresh
+}
+
 // grow activates one more live slot (up to maxSlots) when every eligible
 // slot that a new stream of this class would use is at or above the
 // threshold. Uses double-checked locking.
@@ -114,18 +143,7 @@ func (s *slotScheduler) grow(highPriority bool) {
 		return
 	}
 
-	thresh := s.threshold
-	start, end := int32(0), live
-	if highPriority && s.prioritySlots > 0 {
-		end = int32(s.prioritySlots)
-		if end > live {
-			end = live
-		}
-	} else if s.prioritySlots > 0 {
-		start = int32(s.prioritySlots)
-		thresh = s.bulkThreshold
-	}
-
+	start, end, thresh := s.growRange(highPriority, live)
 	if live > 0 {
 		if start >= end {
 			return
@@ -145,20 +163,12 @@ func (s *slotScheduler) grow(highPriority bool) {
 	if int(live) >= s.maxSlots {
 		return
 	}
-	start2, end2 := int32(0), live
-	if highPriority && s.prioritySlots > 0 {
-		end2 = int32(s.prioritySlots)
-		if end2 > live {
-			end2 = live
-		}
-	} else if s.prioritySlots > 0 {
-		start2 = int32(s.prioritySlots)
-	}
+	start, end, thresh = s.growRange(highPriority, live)
 	if live > 0 {
-		if start2 >= end2 {
+		if start >= end {
 			return
 		}
-		if !s.needsMore(start2, end2, thresh) {
+		if !s.needsMore(start, end, thresh) {
 			return
 		}
 	}

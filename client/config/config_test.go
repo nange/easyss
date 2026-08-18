@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/util"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -639,4 +640,39 @@ func TestApplyDefaults(t *testing.T) {
 			t.Errorf("LogLevel = %q, want error (not overwritten)", cfg.Log.Level)
 		}
 	})
+}
+
+func TestResolveFilePaths(t *testing.T) {
+	relDirect := "direct.txt"
+	relCA := "ca.pem"
+	abs, err := filepath.Abs("proxy.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &ClientConfig{
+		Routing: RoutingConfig{
+			DirectFile: relDirect,
+			ProxyFile:  abs,
+		},
+		Servers: []*ServerProfile{
+			{CAPath: relCA},
+			{CAPath: ""},
+		},
+	}
+
+	cfg.ResolveFilePaths()
+
+	if want := filepath.Join(util.CurrentDir(), relDirect); cfg.Routing.DirectFile != want {
+		t.Errorf("DirectFile = %q, want %q", cfg.Routing.DirectFile, want)
+	}
+	if cfg.Routing.ProxyFile != abs {
+		t.Errorf("ProxyFile = %q, want %q (absolute unchanged)", cfg.Routing.ProxyFile, abs)
+	}
+	if want := filepath.Join(util.CurrentDir(), relCA); cfg.Servers[0].CAPath != want {
+		t.Errorf("Servers[0].CAPath = %q, want %q", cfg.Servers[0].CAPath, want)
+	}
+	if cfg.Servers[1].CAPath != "" {
+		t.Errorf("Servers[1].CAPath = %q, want empty (unchanged)", cfg.Servers[1].CAPath)
+	}
 }
