@@ -308,6 +308,13 @@ func (t *HTTP2Transport) CloseIdle() {
 }
 
 func (t *HTTP2Transport) Stats() transport.TransportStats {
+	// Hold the scheduler read lock so the snapshot is consistent: shrink
+	// (swap-remove) and grow mutate liveCount and the live slot range under
+	// the write lock, so an unlocked render could read a stale liveCount
+	// and report more conns_status entries than Conns.
+	t.sched.mu.RLock()
+	defer t.sched.mu.RUnlock()
+
 	live := int(t.sched.liveCount.Load())
 	ts := transport.TransportStats{
 		Conns: live,
@@ -328,7 +335,7 @@ func (t *HTTP2Transport) Stats() transport.TransportStats {
 			ts.BulkActiveStreams += a
 		}
 	}
-	ts.ConnsStatus = slotStatusString(t.sched)
+	ts.ConnsStatus = slotStatusString(t.sched, live)
 	return ts
 }
 
@@ -356,9 +363,10 @@ func slotStatus(s *transportSlot) string {
 // slotStatusString renders every live slot as "<index>:<active streams>:
 // <status>", sorted by slot index (retire swap-removes scramble the live
 // order) and wrapped in brackets, e.g. "[0:3:degraded, 1:2:expiring,
-// 2:1:active, 3:1:heavy]". An empty live set renders as "[]".
-func slotStatusString(sched *slotScheduler) string {
-	live := int(sched.liveCount.Load())
+// 2:1:active, 3:1:heavy]". An empty live set renders as "[]". live must be
+// the liveCount value the caller snapshot under the scheduler lock, so the
+// rendered entry count always matches Conns.
+func slotStatusString(sched *slotScheduler, live int) string {
 	if live == 0 {
 		return "[]"
 	}

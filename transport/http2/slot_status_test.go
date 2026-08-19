@@ -36,14 +36,14 @@ func TestSlotStatus(t *testing.T) {
 func TestSlotStatusString(t *testing.T) {
 	t.Run("empty live set", func(t *testing.T) {
 		sch := newTestScheduler()
-		if got := slotStatusString(sch); got != "[]" {
+		if got := slotStatusString(sch, int(sch.liveCount.Load())); got != "[]" {
 			t.Fatalf("slotStatusString() = %q, want %q", got, "[]")
 		}
 	})
 
 	t.Run("all active with stream counts", func(t *testing.T) {
 		sch := newTestScheduler([2]int32{1, 0}, [2]int32{2, 0})
-		if got, want := slotStatusString(sch), "[0:1:active, 1:2:active]"; got != want {
+		if got, want := slotStatusString(sch, int(sch.liveCount.Load())), "[0:1:active, 1:2:active]"; got != want {
 			t.Fatalf("slotStatusString() = %q, want %q", got, want)
 		}
 	})
@@ -53,7 +53,7 @@ func TestSlotStatusString(t *testing.T) {
 		sch.slots[0].degraded.Store(true)
 		sch.slots[1].expiring.Store(true)
 		want := "[0:3:degraded, 1:2:expiring, 2:1:active, 3:1:heavy]"
-		if got := slotStatusString(sch); got != want {
+		if got := slotStatusString(sch, int(sch.liveCount.Load())); got != want {
 			t.Fatalf("slotStatusString() = %q, want %q", got, want)
 		}
 	})
@@ -63,7 +63,7 @@ func TestSlotStatusString(t *testing.T) {
 		sch.slots[0].expiring.Store(true)
 		sch.slots[1].degraded.Store(true)
 		want := "[0:1:heavy+expiring, 1:0:degraded]"
-		if got := slotStatusString(sch); got != want {
+		if got := slotStatusString(sch, int(sch.liveCount.Load())); got != want {
 			t.Fatalf("slotStatusString() = %q, want %q", got, want)
 		}
 	})
@@ -73,7 +73,7 @@ func TestSlotStatusString(t *testing.T) {
 		sch.slots[2].degraded.Store(true)
 		sch.liveCount.Store(2)
 		want := "[0:1:active, 1:2:active]"
-		if got := slotStatusString(sch); got != want {
+		if got := slotStatusString(sch, int(sch.liveCount.Load())); got != want {
 			t.Fatalf("slotStatusString() = %q, want %q", got, want)
 		}
 	})
@@ -85,7 +85,7 @@ func TestSlotStatusString(t *testing.T) {
 		sch.slots[1], sch.slots[3] = sch.slots[3], sch.slots[1]
 		sch.liveCount.Store(3)
 		want := "[0:1:active, 2:3:active, 3:4:active]"
-		if got := slotStatusString(sch); got != want {
+		if got := slotStatusString(sch, int(sch.liveCount.Load())); got != want {
 			t.Fatalf("slotStatusString() = %q, want %q", got, want)
 		}
 	})
