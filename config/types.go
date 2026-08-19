@@ -100,7 +100,7 @@ const (
 	ProbePayloadSize    = 128 * 1024       // 128KB，服务端启动时预生成
 	ProbeTimeout        = 3 * time.Second  // 单次探测超时（含透明重拨）
 	ProbeConfirmCycles  = 2                // 连续慢探测次数 → 标记 degraded
-	ProbeCooldown       = 30 * time.Second // 同一 slot 两次探测最小间隔
+	ProbeCooldown       = 15 * time.Second // 同一 slot 两次探测最小间隔
 	ProbeMaxPerInterval = 2                // 每个健康周期最多探测数
 	ProbeLinkRefWindow  = 60 * time.Second // 链路参考速度有效窗口
 )
