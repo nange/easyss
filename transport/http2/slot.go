@@ -10,6 +10,11 @@ import (
 // to a single connection via MaxConnsPerHost=1) plus the state that the
 // scheduler and the connection lifecycle act on.
 type transportSlot struct {
+	// idx is the slot's stable index in the scheduler's pre-allocated
+	// array, set once at construction. Retire swap-removes slots, so the
+	// live position and idx diverge; idx is used for stats reporting.
+	idx int
+
 	t      *http.Transport
 	active atomic.Int32
 	heavy  atomic.Int32 // number of active heavy streams (>= HeavyStreamThreshold bytes)

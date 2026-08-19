@@ -51,6 +51,11 @@ type TransportStats struct {
 	BulkActiveStreams     int `json:"bulk_active_streams"`
 	PriorityConns         int `json:"priority_conns"`
 	BulkConns             int `json:"bulk_conns"`
+	// ConnsStatus is a compact per-connection status summary, e.g.
+	// "[0:3:degraded, 1:2:expiring, 2:1:active, 3:1:heavy]". Each element is
+	// "<connection index>:<active streams>:<status>" where status is one of
+	// active/heavy/degraded/expiring, with multiple flags joined by "+".
+	ConnsStatus string `json:"conns_status,omitempty"`
 }
 
 type Transport interface {
