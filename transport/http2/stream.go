@@ -11,6 +11,7 @@ import (
 	"time"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
 )
 
@@ -25,6 +26,13 @@ type HTTP2Stream struct {
 	cancel context.CancelFunc
 	done   func()
 	slot   *transportSlot
+
+	// bootstrapSentAt is the moment the client finished flushing the
+	// encrypted bootstrap record (the request body). The server answers
+	// with the response headers before dialing the origin, so the time
+	// between this stamp and the response arrival is the pure client<->server
+	// path RTT (no origin time). Stored as UnixNano; 0 means never stamped.
+	bootstrapSentAt atomic.Int64
 
 	mu       sync.Mutex
 	r        io.ReadCloser
@@ -133,6 +141,14 @@ func (s *HTTP2Stream) setRoundTripErr(err error) {
 	s.rtErrMu.Unlock()
 }
 
+// MarkBootstrapSent stamps the moment the bootstrap record was flushed to
+// the transport. The response headers arrive roughly one path RTT later (the
+// server answers before dialing the origin), which Read() records as the
+// pure client<->server RTT sample.
+func (s *HTTP2Stream) MarkBootstrapSent() {
+	s.bootstrapSentAt.Store(time.Now().UnixNano())
+}
+
 func (s *HTTP2Stream) Read(p []byte) (int, error) {
 	s.mu.Lock()
 	if s.closed {
@@ -150,6 +166,12 @@ func (s *HTTP2Stream) Read(p []byte) (int, error) {
 				s.respErr = res.err
 			} else {
 				s.r = res.resp.Body
+				// Response headers arrived: with MarkBootstrapSent stamped
+				// (bootstrap record flushed) this is the pure path RTT —
+				// the server commits the response before dialing the origin.
+				if t0 := s.bootstrapSentAt.Load(); t0 > 0 {
+					stats.RecordRTT(time.Since(time.Unix(0, t0)))
+				}
 			}
 			// If Close() ran while we were blocked waiting for the response, the
 			// response body just arrived but nobody will ever read or close it.

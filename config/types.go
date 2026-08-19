@@ -51,8 +51,11 @@ const (
 	// DegradedRecoverCycles healthy intervals. Detection only runs while
 	// the link RTT is at most DegradedMaxRTT: a congested link makes every
 	// connection slow, so retiring connections then only adds handshake
-	// churn without recovering anything. When the server does not support
-	// probing, the suspicion directly marks the slot (legacy behavior).
+	// churn without recovering anything. The RTT is the pure client<->server
+	// path RTT (bootstrap round trip, origin latency excluded); a slow
+	// origin no longer suppresses detection. When the server does not
+	// support probing, the suspicion directly marks the slot (legacy
+	// behavior).
 	HealthCheckInterval         = 5 * time.Second
 	DegradedThroughputThreshold = 64 * 1024 // 64KB/s
 	DegradedPersistCycles       = 3

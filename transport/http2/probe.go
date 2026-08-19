@@ -6,6 +6,7 @@ import (
 	"time"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/stats"
 )
 
 // probeVerdict classifies a single probe result.
@@ -88,6 +89,7 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 	var total int64
 	var start time.Time
 	timed := false
+	ttfbStart := time.Now()
 	for {
 		n, rErr := resp.Body.Read(buf)
 		if n > 0 {
@@ -95,6 +97,11 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 			if !timed {
 				timed = true
 				start = time.Now()
+				// The response headers have arrived and the server writes the
+				// payload immediately (no origin involved), so the time to the
+				// first body chunk is the pure path RTT — same measurement
+				// basis as the per-request bootstrap round trip.
+				stats.RecordRTT(time.Since(ttfbStart))
 			}
 		}
 		if rErr != nil {

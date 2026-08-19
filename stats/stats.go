@@ -52,7 +52,7 @@ type stats struct {
 	slotProbeUnsupported atomic.Int64
 
 	rttMu    sync.Mutex
-	rttEWMA  int64 // nanoseconds, EWMA-smoothed RTT
+	rttEWMA  int64 // nanoseconds, EWMA-smoothed pure path RTT
 	rttCount atomic.Int64
 
 	// Speed tracking (bytes/sec, EWMA-smoothed)
@@ -110,6 +110,10 @@ func RecordSlotProbeUnsupported() {
 
 const rttAlpha = 0.35
 
+// RecordRTT feeds a pure client<->server path RTT sample: the time between
+// the client flushing its bootstrap record (or the probe request reaching
+// the server) and the response arriving. The server commits its response
+// before dialing the origin, so origin latency never enters the sample.
 func RecordRTT(d time.Duration) {
 	g.rttMu.Lock()
 	if g.rttCount.Load() == 0 {

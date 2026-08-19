@@ -10,6 +10,7 @@ import (
 	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/server/handler"
+	"github.com/nange/easyss/v3/stats"
 )
 
 const testProbePayloadSize = 4096
@@ -55,6 +56,7 @@ func TestSlotProberFast(t *testing.T) {
 	ts, token := newProbeServer(t)
 	prober := &slotProber{serverURL: ts.URL, token: token, payloadSize: testProbePayloadSize}
 
+	stats.ResetCounters()
 	speed, verdict := prober.probe(context.Background(), newProbeSlot())
 
 	if verdict != probeFast {
@@ -62,6 +64,11 @@ func TestSlotProberFast(t *testing.T) {
 	}
 	if speed < float64(sharedconfig.DegradedThroughputThreshold) {
 		t.Fatalf("speed %v below the degraded threshold", speed)
+	}
+	// A successful probe must feed a pure path RTT sample (response headers
+	// arrived -> first body chunk), same basis as the per-request sampling.
+	if got := stats.Collect().RTTCount; got != 1 {
+		t.Fatalf("RTTCount = %d, want 1 after a fast probe", got)
 	}
 }
 
