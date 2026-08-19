@@ -2,6 +2,7 @@ package dns
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"strings"
 
 	"github.com/coocood/freecache"
@@ -59,6 +60,9 @@ func (c *Cache) Get(name, qtype string, isDirect bool) *dns.Msg {
 
 // Set stores a DNS message in the appropriate cache using DNS TTL.
 // Only A and AAAA records are cached. If isDirect is true, the direct cache is used.
+// The effective cache lifetime is the base TTL plus a random jitter in
+// [0, baseTTL) so that entries with the same base TTL do not expire at the
+// same moment, avoiding bursts of concurrent DNS queries.
 func (c *Cache) Set(msg *dns.Msg, isDirect bool) error {
 	if msg == nil || len(msg.Question) == 0 {
 		return nil
@@ -70,7 +74,7 @@ func (c *Cache) Set(msg *dns.Msg, isDirect bool) error {
 			return err
 		}
 		key := []byte(q.Name + dns.TypeToString[q.Qtype])
-		ttl := dnsCacheTTL(msg, c.serverDomain)
+		ttl := jitterTTL(dnsCacheTTL(msg, c.serverDomain))
 		if isDirect {
 			return c.direct.Set(key, v, ttl)
 		}
@@ -107,6 +111,18 @@ func dnsCacheTTL(msg *dns.Msg, serverDomain string) int {
 		ttl = minCacheTTL
 	}
 	return int(ttl)
+}
+
+// jitterTTL returns the effective cache lifetime in seconds for a base TTL:
+// the base TTL plus a random jitter in [0, ttl). Entries sharing the same
+// base TTL therefore expire at scattered moments instead of all at once,
+// avoiding a burst of concurrent DNS queries. A TTL of 0 (never expire,
+// e.g. the proxy server's own domain) is returned unchanged.
+func jitterTTL(ttl int) int {
+	if ttl <= 0 {
+		return ttl
+	}
+	return ttl + rand.IntN(ttl)
 }
 
 // PrePopulate resolves the domain via the given DNS server and stores the

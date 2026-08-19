@@ -252,3 +252,31 @@ func TestCache_ServerDomain_NeverExpires(t *testing.T) {
 		t.Fatal("regular domain entry expired before minCacheTTL")
 	}
 }
+
+func TestJitterTTL_NeverExpire(t *testing.T) {
+	// TTL 0（服务器域名永不过期）必须原样返回，不受抖动影响
+	if ttl := jitterTTL(0); ttl != 0 {
+		t.Errorf("jitterTTL(0) expected 0, got %d", ttl)
+	}
+	// 负数属于防御性边界，不应 panic 也不应被改动
+	if ttl := jitterTTL(-1); ttl != -1 {
+		t.Errorf("jitterTTL(-1) expected -1, got %d", ttl)
+	}
+}
+
+func TestJitterTTL_Range(t *testing.T) {
+	const base = 1800
+	seen := make(map[int]bool)
+	for i := 0; i < 1000; i++ {
+		ttl := jitterTTL(base)
+		// 结果必须在 [base, 2*base) 区间内
+		if ttl < base || ttl >= 2*base {
+			t.Fatalf("jitterTTL(%d) = %d, want in [%d, %d)", base, ttl, base, 2*base)
+		}
+		seen[ttl] = true
+	}
+	// 1000 次采样下结果应分散，而非固定同一个值
+	if len(seen) < 2 {
+		t.Errorf("jitterTTL(%d) always returned %d, expected random jitter", base, base)
+	}
+}
