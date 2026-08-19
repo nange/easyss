@@ -578,7 +578,7 @@ func isInteractivePort(target string) bool {
 		return false
 	}
 	switch port {
-	case "80", "443", "8080", "8443":
+	case "22", "80", "443", "8080", "8443":
 		return true
 	}
 	return false
