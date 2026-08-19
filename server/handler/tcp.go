@@ -179,7 +179,13 @@ func (h *TCPHandler) copyFromClient(dr *crypto.DecryptedReader, dst net.Conn, si
 			if cw, ok := dst.(interface{ CloseWrite() error }); ok {
 				_ = cw.CloseWrite()
 			}
-			continue
+			// FIN is a terminal frame: the client sends no further frames
+			// after it (its copyLocalToRemote returns right after flushing
+			// FIN), so stop reading instead of blocking on ReadFrame until
+			// the relay idle timeout. The relay keeps waiting for the
+			// target->client direction and its idle timer still bounds the
+			// stream's lifetime.
+			return nil
 		case protocol.FrameRST:
 			return io.EOF
 		case protocol.FramePADDING, protocol.FrameCOVER:
