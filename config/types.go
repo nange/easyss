@@ -57,7 +57,7 @@ const (
 	// support probing, the suspicion directly marks the slot (legacy
 	// behavior).
 	HealthCheckInterval         = 5 * time.Second
-	DegradedThroughputThreshold = 64 * 1024 // 64KB/s
+	DegradedThroughputThreshold = 128 * 1024 // 128KB/s
 	DegradedPersistCycles       = 3
 	DegradedRecoverCycles       = 2
 	DegradedMaxRTT              = 900 * time.Millisecond
