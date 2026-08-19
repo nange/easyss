@@ -1,6 +1,7 @@
 package http2
 
 import (
+	"context"
 	"net/http"
 	"testing"
 	"time"
@@ -10,7 +11,9 @@ import (
 
 func TestEvaluateSlotHealth(t *testing.T) {
 	interval := sharedconfig.HealthCheckInterval
-	lc := &slotLifecycle{}
+	// Legacy mode (probeUnsupported): the passive sampler marks slots
+	// degraded directly, as before probing existed.
+	lc := &slotLifecycle{probeUnsupported: true}
 
 	newHeavySlot := func() *transportSlot {
 		s := &transportSlot{t: &http.Transport{}}
@@ -115,6 +118,273 @@ func TestEvaluateSlotHealth(t *testing.T) {
 			t.Fatalf("lowCycles = %d, want 1", s.lowCycles)
 		}
 	})
+}
+
+// newTestLifecycle builds a lifecycle over n live slots with the given
+// probe function (nil disables probing).
+func newTestLifecycle(n int, probe func(context.Context, *transportSlot) (float64, probeVerdict)) (*slotLifecycle, *slotScheduler) {
+	slots := make([]*transportSlot, n)
+	for i := range slots {
+		slots[i] = &transportSlot{t: &http.Transport{}}
+	}
+	sch := newScheduler(n, slots, 8, 1)
+	sch.liveCount.Store(int32(n))
+	lc := &slotLifecycle{sched: sch, probeFunc: probe}
+	return lc, sch
+}
+
+func TestSuspicionInsteadOfDirectMark(t *testing.T) {
+	interval := sharedconfig.HealthCheckInterval
+	// Probe mode: a probe function is configured, so low passive
+	// throughput only raises suspicion; the degraded mark is confirmed by
+	// probes. (The fake is never called here — only the passive sampler
+	// runs.)
+	lc := &slotLifecycle{probeFunc: func(context.Context, *transportSlot) (float64, probeVerdict) {
+		return 0, probeInconclusive
+	}}
+	s := &transportSlot{t: &http.Transport{}}
+	s.heavy.Store(1)
+
+	low := func() {
+		s.bytesRecv.Add(10 * 1024)
+		lc.evaluateSlotHealth(0, s, interval, true)
+	}
+	high := func() {
+		s.bytesRecv.Add(2 * 1024 * 1024)
+		lc.evaluateSlotHealth(0, s, interval, true)
+	}
+
+	low() // baseline reset
+	for i := 0; i < sharedconfig.DegradedPersistCycles; i++ {
+		low()
+	}
+	if s.degraded.Load() {
+		t.Fatal("probe mode must not mark degraded directly")
+	}
+	if !s.suspected {
+		t.Fatal("expected suspicion after persistent low throughput")
+	}
+
+	// A healthy interval clears the suspicion without any probe.
+	high()
+	if s.suspected {
+		t.Fatal("expected suspicion cleared by healthy throughput")
+	}
+}
+
+func TestNoProbeFuncFallsBackToPassive(t *testing.T) {
+	interval := sharedconfig.HealthCheckInterval
+	// No probe function configured (e.g. no probe token): the passive
+	// sampler keeps its legacy direct marking.
+	lc := &slotLifecycle{}
+	s := &transportSlot{t: &http.Transport{}}
+	s.heavy.Store(1)
+
+	lc.evaluateSlotHealth(0, s, interval, true) // baseline reset
+	for i := 0; i < sharedconfig.DegradedPersistCycles; i++ {
+		s.bytesRecv.Add(10 * 1024)
+		lc.evaluateSlotHealth(0, s, interval, true)
+	}
+	if !s.degraded.Load() {
+		t.Fatal("expected legacy degraded marking without a probe function")
+	}
+	if s.suspected {
+		t.Fatal("legacy mode must not set suspicion")
+	}
+}
+
+func TestProbeConfirmDegraded(t *testing.T) {
+	lc, sch := newTestLifecycle(2, func(context.Context, *transportSlot) (float64, probeVerdict) {
+		return 10 * 1024, probeSlow // 10KB/s, well below 64KB/s
+	})
+	s := sch.slots[0]
+	s.suspected = true
+
+	lc.evaluateProbes(true)
+	if s.degraded.Load() {
+		t.Fatal("degraded after a single slow probe")
+	}
+	if s.probeLowCycles != 1 {
+		t.Fatalf("probeLowCycles = %d, want 1", s.probeLowCycles)
+	}
+
+	s.lastProbeAt = time.Time{} // bypass cooldown
+	lc.evaluateProbes(true)
+	if !s.degraded.Load() {
+		t.Fatal("expected degraded after ProbeConfirmCycles slow probes")
+	}
+	if s.suspected {
+		t.Fatal("expected suspicion cleared once degraded")
+	}
+}
+
+func TestProbeFastClearsSuspicion(t *testing.T) {
+	const fastSpeed = 10 * 1024 * 1024 // 10MB/s
+	calls := 0
+	lc, sch := newTestLifecycle(1, func(context.Context, *transportSlot) (float64, probeVerdict) {
+		calls++
+		return fastSpeed, probeFast
+	})
+	s := sch.slots[0]
+	s.suspected = true
+
+	lc.evaluateProbes(true)
+
+	if calls != 1 {
+		t.Fatalf("probe calls = %d, want 1", calls)
+	}
+	if s.suspected {
+		t.Fatal("fast probe must clear suspicion")
+	}
+	if s.degraded.Load() {
+		t.Fatal("fast probe must not mark degraded")
+	}
+	if lc.linkRefSpeed != fastSpeed {
+		t.Fatalf("linkRefSpeed = %v, want %v", lc.linkRefSpeed, fastSpeed)
+	}
+}
+
+func TestProbeSlowRespectsLinkReference(t *testing.T) {
+	lc, sch := newTestLifecycle(1, func(context.Context, *transportSlot) (float64, probeVerdict) {
+		return 30 * 1024, probeSlow
+	})
+	s := sch.slots[0]
+
+	// A fresh link reference below the degraded threshold means the whole
+	// link is the bottleneck: the slow probe must not blame the slot.
+	lc.linkRefSpeed = 32 * 1024
+	lc.linkRefAt = time.Now()
+	s.suspected = true
+	lc.evaluateProbes(true)
+	if s.degraded.Load() || s.probeLowCycles != 0 || s.suspected {
+		t.Fatal("must not mark or keep suspicion while the link itself is slow")
+	}
+
+	// A healthy link reference: the slot's connection is to blame.
+	lc.linkRefSpeed = 1024 * 1024
+	lc.linkRefAt = time.Now()
+	s.suspected = true
+	s.lastProbeAt = time.Time{}
+	lc.evaluateProbes(true)
+	s.lastProbeAt = time.Time{}
+	lc.evaluateProbes(true)
+	if !s.degraded.Load() {
+		t.Fatal("expected degraded with a healthy link reference")
+	}
+}
+
+func TestProbeUnsupportedFallsBackToPassive(t *testing.T) {
+	lc, sch := newTestLifecycle(1, func(context.Context, *transportSlot) (float64, probeVerdict) {
+		return 0, probeUnsupported
+	})
+	s := sch.slots[0]
+	s.suspected = true
+
+	lc.evaluateProbes(true)
+	if lc.probeUnsupported {
+		t.Fatal("unsupported too early after a single verdict")
+	}
+	s.lastProbeAt = time.Time{}
+	lc.evaluateProbes(true)
+	if !lc.probeUnsupported {
+		t.Fatal("expected probeUnsupported after two verdicts")
+	}
+
+	// The passive sampler now marks degraded directly (legacy behavior).
+	interval := sharedconfig.HealthCheckInterval
+	s.suspected = false
+	s.heavy.Store(1)
+	lc.evaluateSlotHealth(0, s, interval, true) // baseline reset
+	for i := 0; i < sharedconfig.DegradedPersistCycles; i++ {
+		s.bytesRecv.Add(10 * 1024)
+		lc.evaluateSlotHealth(0, s, interval, true)
+	}
+	if !s.degraded.Load() {
+		t.Fatal("expected legacy degraded marking after fallback")
+	}
+}
+
+func TestProbeInconclusiveKeepsState(t *testing.T) {
+	lc, sch := newTestLifecycle(1, func(context.Context, *transportSlot) (float64, probeVerdict) {
+		return 0, probeInconclusive
+	})
+	s := sch.slots[0]
+	s.suspected = true
+
+	lc.evaluateProbes(true)
+
+	if !s.suspected {
+		t.Fatal("inconclusive probe must keep suspicion")
+	}
+	if s.probeLowCycles != 0 {
+		t.Fatalf("probeLowCycles = %d, want 0", s.probeLowCycles)
+	}
+	if lc.probeUnsupported {
+		t.Fatal("inconclusive must not count as unsupported")
+	}
+}
+
+func TestProbeCooldown(t *testing.T) {
+	calls := 0
+	lc, sch := newTestLifecycle(1, func(context.Context, *transportSlot) (float64, probeVerdict) {
+		calls++
+		return 10 * 1024, probeSlow
+	})
+	s := sch.slots[0]
+	s.suspected = true
+	s.lastProbeAt = time.Now() // probed moments ago
+
+	lc.evaluateProbes(true)
+
+	if calls != 0 {
+		t.Fatal("probe must be skipped within the cooldown")
+	}
+}
+
+func TestProbeMaxPerInterval(t *testing.T) {
+	calls := 0
+	lc, sch := newTestLifecycle(3, func(context.Context, *transportSlot) (float64, probeVerdict) {
+		calls++
+		return 10 * 1024, probeSlow
+	})
+	for i := 0; i < 3; i++ {
+		sch.slots[i].suspected = true
+	}
+
+	lc.evaluateProbes(true)
+
+	if calls != sharedconfig.ProbeMaxPerInterval {
+		t.Fatalf("probe calls = %d, want %d", calls, sharedconfig.ProbeMaxPerInterval)
+	}
+	if sch.slots[2].probeLowCycles != 0 {
+		t.Fatal("the third suspect must wait for the next tick")
+	}
+}
+
+func TestProbesPausedOnCongestedLink(t *testing.T) {
+	calls := 0
+	lc, sch := newTestLifecycle(1, func(context.Context, *transportSlot) (float64, probeVerdict) {
+		calls++
+		return 10 * 1024, probeSlow
+	})
+	sch.slots[0].suspected = true
+
+	lc.evaluateProbes(false)
+
+	if calls != 0 {
+		t.Fatal("no probes while the link is congested")
+	}
+}
+
+func TestProbesDisabledWithoutProbeFunc(t *testing.T) {
+	lc, sch := newTestLifecycle(1, nil)
+	sch.slots[0].suspected = true
+
+	lc.evaluateProbes(true)
+
+	if sch.slots[0].probeLowCycles != 0 {
+		t.Fatal("no probing without a probe function")
+	}
 }
 
 func TestRotationDue(t *testing.T) {

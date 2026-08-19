@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -81,6 +82,11 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		closeIdleDone: make(chan struct{}),
 	}
 
+	probeToken, err := crypto.ProbeToken(masterKey)
+	if err != nil {
+		return nil, fmt.Errorf("probe token: %w", err)
+	}
+
 	tr, err := http2.New(http2.Config{
 		ServerURL:         cfg.ServerURL(),
 		TLSConfig:         tlsCfg,
@@ -90,6 +96,7 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		ConnLifetime:      time.Duration(cfg.Transport.ConnLifetimeSec) * time.Second,
 		ConnMaxBytes:      cfg.Transport.ConnMaxBytes,
 		Timeout:           cfg.TimeoutDuration(),
+		ProbeToken:        probeToken,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return dialWithConfig(ctx, cfg, client.dialer, rt, network, addr)
 		},

@@ -11,13 +11,24 @@ import (
 )
 
 // slotLifecycle owns the per-slot connection lifecycle: a health loop that
-// samples download throughput for degraded detection, and connection
-// rotation once the lifetime or bytes limit is exceeded. It reuses the
-// scheduler's pool management to retire idle degraded slots.
+// samples download throughput for degradation suspicion and confirms it with
+// an active probe over the slot's own connection, plus connection rotation
+// once the lifetime or bytes limit is exceeded. It reuses the scheduler's
+// pool management to retire idle degraded slots.
 type slotLifecycle struct {
 	sched        *slotScheduler
 	connLifetime time.Duration // max age of a connection before rotation
 	connMaxBytes int64         // max bytes per connection before rotation
+
+	// probeFunc actively measures one slot's connection throughput; nil
+	// disables probing (no probe token configured).
+	probeFunc func(ctx context.Context, slot *transportSlot) (speedBps float64, verdict probeVerdict)
+
+	// Probe state, touched only from the health loop goroutine.
+	probeUnsupported bool    // server does not serve /v3/probe: fall back to passive-only detection
+	unsupportedCount int     // unsupported probe verdicts seen
+	linkRefSpeed     float64 // best probe speed observed on this link recently (bytes/s)
+	linkRefAt        time.Time
 }
 
 // run drives the periodic health evaluation until ctx is cancelled.
@@ -35,9 +46,9 @@ func (lc *slotLifecycle) run(ctx context.Context) {
 	}
 }
 
-// evaluate walks the live slots: download throughput feeds the degraded
-// detector, connection age/bytes feed rotation, and idle degraded slots are
-// retired.
+// evaluate walks the live slots: download throughput feeds the degradation
+// suspicion detector, active probes confirm suspicions, connection age/bytes
+// feed rotation, and idle degraded slots are retired.
 func (lc *slotLifecycle) evaluate(interval time.Duration) {
 	// A congested link (high RTT) makes every connection slow: marking or
 	// retiring slots then only adds handshake churn without recovering
@@ -59,16 +70,22 @@ func (lc *slotLifecycle) evaluate(interval time.Duration) {
 			i--
 		}
 	}
+
+	lc.evaluateProbes(linkOK)
 }
 
-// evaluateSlotHealth updates one slot's degraded state from its recent
-// download throughput. Only slots hosting heavy streams are considered —
-// idle or short-lived slots naturally carry zero throughput. The mark is
-// set after DegradedPersistCycles consecutive slow intervals and cleared
-// after DegradedRecoverCycles healthy ones.
+// evaluateSlotHealth updates one slot's suspicion from its recent download
+// throughput. Only slots hosting heavy streams are considered — idle or
+// short-lived slots naturally carry zero throughput. When probing is active
+// (server serves /v3/probe), persistent low throughput only marks the slot
+// as suspected and an active probe confirms or refutes it; without probing
+// (server does not support it, or no probe token configured), the suspicion
+// directly marks the slot degraded (legacy behavior). The mark is cleared
+// after DegradedRecoverCycles healthy intervals in both modes.
 func (lc *slotLifecycle) evaluateSlotHealth(idx int, s *transportSlot, interval time.Duration, linkOK bool) {
 	if s.heavy.Load() == 0 {
 		s.lastHeavy = 0
+		s.suspected = false
 		return
 	}
 	if s.lastHeavy == 0 {
@@ -100,6 +117,7 @@ func (lc *slotLifecycle) evaluateSlotHealth(idx int, s *transportSlot, interval 
 
 	if throughput >= int64(sharedconfig.DegradedThroughputThreshold) {
 		s.lowCycles = 0
+		s.suspected = false
 		if s.degraded.Load() {
 			s.recoverCycles++
 			if s.recoverCycles >= sharedconfig.DegradedRecoverCycles {
@@ -114,10 +132,104 @@ func (lc *slotLifecycle) evaluateSlotHealth(idx int, s *transportSlot, interval 
 	s.recoverCycles = 0
 	s.lowCycles++
 	if s.lowCycles >= sharedconfig.DegradedPersistCycles && !s.degraded.Load() {
-		s.degraded.Store(true)
 		s.lowCycles = 0
-		stats.RecordSlotDegraded()
-		log.Info("[TRANSPORT] slot degraded", "slot", idx, "throughput_kb_s", throughput/1024)
+		if lc.probeUnsupported || lc.probeFunc == nil {
+			// No active probing (server does not serve /v3/probe, or no
+			// probe token configured): the passive sampler marks the slot
+			// degraded directly, as before probing existed.
+			s.degraded.Store(true)
+			stats.RecordSlotDegraded()
+			log.Info("[TRANSPORT] slot degraded", "slot", idx, "throughput_kb_s", throughput/1024)
+		} else {
+			s.suspected = true
+		}
+	}
+}
+
+// evaluateProbes confirms degradation suspicions with active probes. Only
+// slots suspected by the passive sampler are probed, and only while the link
+// RTT is healthy (a congested link makes every probe slow). Each tick probes
+// at most ProbeMaxPerInterval slots; a slot is re-probed at most once per
+// ProbeCooldown.
+func (lc *slotLifecycle) evaluateProbes(linkOK bool) {
+	if !linkOK || lc.probeUnsupported || lc.probeFunc == nil {
+		return
+	}
+
+	now := time.Now()
+	live := int(lc.sched.liveCount.Load())
+	probed := 0
+	for i := 0; i < live && probed < sharedconfig.ProbeMaxPerInterval; i++ {
+		s := lc.sched.slots[i]
+		if !s.suspected || s.degraded.Load() {
+			continue
+		}
+		if now.Sub(s.lastProbeAt) < sharedconfig.ProbeCooldown {
+			continue
+		}
+		lc.probeSlot(i, s, now)
+		probed++
+	}
+}
+
+// probeSlot runs one probe and folds its verdict into the slot's degraded
+// state:
+//   - slow: confirmed after ProbeConfirmCycles consecutive slow probes —
+//     unless the link reference speed shows the whole link is the
+//     bottleneck, in which case the slot is not to blame;
+//   - fast: the connection is healthy (slow traffic is an origin or stream
+//     property, not a connection property); clears suspicion;
+//   - inconclusive: no state change;
+//   - unsupported: after two such verdicts the server is treated as not
+//     serving the probe endpoint and detection falls back to passive-only.
+func (lc *slotLifecycle) probeSlot(idx int, s *transportSlot, now time.Time) {
+	ctx, cancel := context.WithTimeout(context.Background(), sharedconfig.ProbeTimeout)
+	defer cancel()
+
+	speed, verdict := lc.probeFunc(ctx, s)
+	s.lastProbeAt = now
+	stats.RecordSlotProbe()
+
+	switch verdict {
+	case probeFast:
+		s.probeLowCycles = 0
+		s.suspected = false
+		// The link reference is the best throughput this link achieved
+		// recently; it only refreshes from fast probes.
+		if speed > lc.linkRefSpeed || now.Sub(lc.linkRefAt) > sharedconfig.ProbeLinkRefWindow {
+			lc.linkRefSpeed = speed
+			lc.linkRefAt = now
+		}
+	case probeSlow:
+		// A fresh link reference below the degraded threshold means the
+		// whole link is the bottleneck right now: every connection is
+		// slow, so blaming this slot would only add handshake churn.
+		if now.Sub(lc.linkRefAt) <= sharedconfig.ProbeLinkRefWindow &&
+			lc.linkRefSpeed < float64(sharedconfig.DegradedThroughputThreshold) {
+			s.probeLowCycles = 0
+			s.suspected = false
+			return
+		}
+		stats.RecordSlotProbeSlow()
+		s.probeLowCycles++
+		if s.probeLowCycles >= sharedconfig.ProbeConfirmCycles {
+			s.probeLowCycles = 0
+			s.suspected = false
+			s.degraded.Store(true)
+			stats.RecordSlotDegraded()
+			log.Info("[TRANSPORT] slot degraded", "slot", idx, "probe_kb_s", int64(speed)/1024)
+		}
+	case probeUnsupported:
+		lc.unsupportedCount++
+		if lc.unsupportedCount >= 2 {
+			lc.probeUnsupported = true
+			stats.RecordSlotProbeUnsupported()
+			log.Info("[TRANSPORT] server does not serve /v3/probe, falling back to passive detection")
+		}
+	case probeInconclusive:
+		// Dead connection (stream errors and rotation handle it) or
+		// transient rejection (429): keep the current state, re-probe
+		// once the cooldown elapses.
 	}
 }
 

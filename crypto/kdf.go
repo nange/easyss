@@ -3,6 +3,7 @@ package crypto
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"io"
 
@@ -18,6 +19,7 @@ const (
 	masterKDFInfo    = "easyss-v3-master"
 	bootstrapKDFInfo = "easyss-v3-bootstrap"
 	sessionKDFInfo   = "easyss-v3-session"
+	probeKDFInfo     = "easyss-v3-probe"
 )
 
 func DeriveMasterKey(password string) ([]byte, error) {
@@ -81,4 +83,17 @@ func GenerateSalt() ([]byte, error) {
 		return nil, err
 	}
 	return salt, nil
+}
+
+// ProbeToken derives the capability token for the /v3/probe endpoint.
+// Client and server derive the same 16-byte value from the master key;
+// base64url-encoded it is wire-identical to the x-es salt shape used by
+// proxy handshakes.
+func ProbeToken(masterKey []byte) (string, error) {
+	reader := hkdf.New(sha256.New, masterKey, nil, []byte(probeKDFInfo))
+	b := make([]byte, saltSize)
+	if _, err := io.ReadFull(reader, b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }

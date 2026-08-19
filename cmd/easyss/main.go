@@ -320,6 +320,8 @@ func (a *App) statsLoop() {
 				"avg_rtt", snap.AvgRTT().Round(time.Millisecond),
 				"slot_degraded", snap.SlotDegraded,
 				"slot_retired_degraded", snap.SlotRetiredDegraded,
+				"slot_probes", snap.SlotProbes,
+				"slot_probe_slow", snap.SlotProbeSlow,
 				"conn_rotated", snap.ConnRotated,
 			)
 		case <-a.statsCloser:
