@@ -1,6 +1,8 @@
 package http2
 
 import (
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,7 +12,8 @@ import (
 // TestStatsConnsStatusConsistencyUnderShrink stresses the scheduler with a
 // shrinker goroutine (simulating closeIdleLoop) while a stats reader
 // goroutine (simulating /stats polling) renders conns_status. It fails if the
-// rendered entry count ever exceeds the concurrently reported Conns value.
+// rendered entry count ever exceeds the concurrently reported Conns value,
+// or if the rendered indices are not consecutive from 0.
 func TestStatsConnsStatusConsistencyUnderShrink(t *testing.T) {
 	slots := make([]*transportSlot, 6)
 	for i := range slots {
@@ -20,6 +23,7 @@ func TestStatsConnsStatusConsistencyUnderShrink(t *testing.T) {
 	sch.liveCount.Store(6)
 
 	var over atomic.Int64
+	var badIdx atomic.Int64
 	var reads atomic.Int64
 	done := make(chan struct{})
 	var wg sync.WaitGroup
@@ -51,9 +55,15 @@ func TestStatsConnsStatusConsistencyUnderShrink(t *testing.T) {
 			}
 			live := int(sch.liveCount.Load())
 			s := slotStatusString(sch, live)
-			n := countEntries(s)
-			if n > live {
-				over.Add(int64(n - live))
+			idxs := parseIndices(s)
+			if len(idxs) > live {
+				over.Add(int64(len(idxs) - live))
+			}
+			for k, id := range idxs {
+				if id != k {
+					badIdx.Add(1)
+					break
+				}
 			}
 			reads.Add(1)
 		}
@@ -62,21 +72,31 @@ func TestStatsConnsStatusConsistencyUnderShrink(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	close(done)
 	wg.Wait()
-	t.Logf("reads=%d over_by_total=%d", reads.Load(), over.Load())
+	t.Logf("reads=%d over_by_total=%d bad_idx_total=%d", reads.Load(), over.Load(), badIdx.Load())
 	if over.Load() > 0 {
 		t.Fatalf("conns_status rendered more entries than Conns: over=%d", over.Load())
 	}
+	if badIdx.Load() > 0 {
+		t.Fatalf("conns_status indices are not consecutive from 0: bad=%d", badIdx.Load())
+	}
 }
 
-func countEntries(s string) int {
+// parseIndices extracts the leading "<index>:" of each entry, verifying the
+// array-like shape at the same time.
+func parseIndices(s string) []int {
 	if s == "[]" {
-		return 0
+		return nil
 	}
-	n := 1
-	for i := 0; i < len(s); i++ {
-		if s[i] == ',' {
-			n++
+	body := strings.TrimSuffix(strings.TrimPrefix(s, "["), "]")
+	parts := strings.Split(body, ", ")
+	idxs := make([]int, 0, len(parts))
+	for _, p := range parts {
+		colon := strings.IndexByte(p, ':')
+		n, err := strconv.Atoi(p[:colon])
+		if err != nil {
+			panic("malformed entry: " + p)
 		}
+		idxs = append(idxs, n)
 	}
-	return n
+	return idxs
 }

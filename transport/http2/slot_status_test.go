@@ -78,13 +78,15 @@ func TestSlotStatusString(t *testing.T) {
 		}
 	})
 
-	t.Run("scrambled live order is sorted by index", func(t *testing.T) {
+	t.Run("scrambled live order is renumbered consecutively", func(t *testing.T) {
 		// Simulate a swap-remove of slot 1: positions [0,1,2] now hold
-		// slots with real indices 0,3,2 and liveCount dropped to 3.
+		// slots with real indices 0,3,2 and liveCount dropped to 3. Entries
+		// stay ordered by real index but are renumbered 0..n-1, so the
+		// output indices never jump.
 		sch := newTestScheduler([2]int32{1, 0}, [2]int32{2, 0}, [2]int32{3, 0}, [2]int32{4, 0})
 		sch.slots[1], sch.slots[3] = sch.slots[3], sch.slots[1]
 		sch.liveCount.Store(3)
-		want := "[0:1:active, 2:3:active, 3:4:active]"
+		want := "[0:1:active, 1:3:active, 2:4:active]"
 		if got := slotStatusString(sch, int(sch.liveCount.Load())); got != want {
 			t.Fatalf("slotStatusString() = %q, want %q", got, want)
 		}

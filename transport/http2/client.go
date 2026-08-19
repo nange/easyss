@@ -361,11 +361,13 @@ func slotStatus(s *transportSlot) string {
 }
 
 // slotStatusString renders every live slot as "<index>:<active streams>:
-// <status>", sorted by slot index (retire swap-removes scramble the live
-// order) and wrapped in brackets, e.g. "[0:3:degraded, 1:2:expiring,
-// 2:1:active, 3:1:heavy]". An empty live set renders as "[]". live must be
-// the liveCount value the caller snapshot under the scheduler lock, so the
-// rendered entry count always matches Conns.
+// <status>", wrapped in brackets, e.g. "[0:3:degraded, 1:2:expiring,
+// 2:1:active, 3:1:heavy]". Entries are ordered by the stable slot identity
+// (retire swap-removes scramble the live order) and then renumbered from 0,
+// so the rendered indices are always consecutive with no jumps. An empty
+// live set renders as "[]". live must be the liveCount value the caller
+// snapshot under the scheduler lock, so the rendered entry count always
+// matches Conns.
 func slotStatusString(sched *slotScheduler, live int) string {
 	if live == 0 {
 		return "[]"
@@ -384,7 +386,8 @@ func slotStatusString(sched *slotScheduler, live int) string {
 			status: slotStatus(s),
 		})
 	}
-	// Present slots in index order regardless of the scrambled live order.
+	// Order by stable slot index regardless of the scrambled live order,
+	// then number entries 0..n-1 so the output indices never jump.
 	slices.SortFunc(entries, func(a, b entry) int { return a.idx - b.idx })
 
 	var b strings.Builder
@@ -393,7 +396,7 @@ func slotStatusString(sched *slotScheduler, live int) string {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		b.WriteString(strconv.Itoa(e.idx))
+		b.WriteString(strconv.Itoa(i))
 		b.WriteByte(':')
 		b.WriteString(strconv.Itoa(e.active))
 		b.WriteByte(':')
