@@ -40,8 +40,8 @@ const (
 	//    are marked once the stream has been alive long enough, so the
 	//    isolation kicks in promptly exactly when the link is congested.
 	HeavyStreamThresholdBytes     = 1 * 1024 * 1024 // 1MB
-	HeavyStreamSlowThresholdBytes = 256 * 1024      // 256KB
-	HeavyStreamMinAge             = 3 * time.Second
+	HeavyStreamSlowThresholdBytes = 300 * 1024      // 300KB
+	HeavyStreamMinAge             = 5 * time.Second
 
 	// Degraded-slot detection: a slot hosting heavy streams whose download
 	// throughput stays below DegradedThroughputThreshold for
