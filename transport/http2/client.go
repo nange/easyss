@@ -8,6 +8,9 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -96,6 +99,7 @@ func New(cfg Config) (*HTTP2Transport, error) {
 	slots := make([]*transportSlot, maxSlots)
 	for i := range slots {
 		slots[i] = newSlot(cfg.TLSConfig, timeout, dialCtx, connLifetime)
+		slots[i].idx = i
 	}
 
 	sched := newScheduler(maxSlots, slots, threshold, prioritySlots)
@@ -304,6 +308,13 @@ func (t *HTTP2Transport) CloseIdle() {
 }
 
 func (t *HTTP2Transport) Stats() transport.TransportStats {
+	// Hold the scheduler read lock so the snapshot is consistent: shrink
+	// (swap-remove) and grow mutate liveCount and the live slot range under
+	// the write lock, so an unlocked render could read a stale liveCount
+	// and report more conns_status entries than Conns.
+	t.sched.mu.RLock()
+	defer t.sched.mu.RUnlock()
+
 	live := int(t.sched.liveCount.Load())
 	ts := transport.TransportStats{
 		Conns: live,
@@ -324,7 +335,75 @@ func (t *HTTP2Transport) Stats() transport.TransportStats {
 			ts.BulkActiveStreams += a
 		}
 	}
+	ts.ConnsStatus = slotStatusString(t.sched, live)
 	return ts
+}
+
+// slotStatus derives a live slot's connection status from its health flags.
+// Multiple flags are joined with "+" so no state is hidden (a heavy download
+// crossing the connection lifetime is both heavy and expiring); a slot with
+// no flags is "active".
+func slotStatus(s *transportSlot) string {
+	var parts []string
+	if s.heavy.Load() > 0 {
+		parts = append(parts, "heavy")
+	}
+	if s.degraded.Load() {
+		parts = append(parts, "degraded")
+	}
+	if s.expiring.Load() {
+		parts = append(parts, "expiring")
+	}
+	if len(parts) == 0 {
+		return "active"
+	}
+	return strings.Join(parts, "+")
+}
+
+// slotStatusString renders every live slot as "<index>:<active streams>:
+// <status>", wrapped in brackets, e.g. "[0:3:degraded, 1:2:expiring,
+// 2:1:active, 3:1:heavy]". Entries are ordered by the stable slot identity
+// (retire swap-removes scramble the live order) and then renumbered from 0,
+// so the rendered indices are always consecutive with no jumps. An empty
+// live set renders as "[]". live must be the liveCount value the caller
+// snapshot under the scheduler lock, so the rendered entry count always
+// matches Conns.
+func slotStatusString(sched *slotScheduler, live int) string {
+	if live == 0 {
+		return "[]"
+	}
+	type entry struct {
+		idx    int
+		active int
+		status string
+	}
+	entries := make([]entry, 0, live)
+	for i := 0; i < live; i++ {
+		s := sched.slots[i]
+		entries = append(entries, entry{
+			idx:    s.idx,
+			active: int(s.active.Load()),
+			status: slotStatus(s),
+		})
+	}
+	// Order by stable slot index regardless of the scrambled live order,
+	// then number entries 0..n-1 so the output indices never jump.
+	slices.SortFunc(entries, func(a, b entry) int { return a.idx - b.idx })
+
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, e := range entries {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(strconv.Itoa(i))
+		b.WriteByte(':')
+		b.WriteString(strconv.Itoa(e.active))
+		b.WriteByte(':')
+		b.WriteString(e.status)
+	}
+	b.WriteByte(']')
+	return b.String()
 }
 
 func (t *HTTP2Transport) Close() error {

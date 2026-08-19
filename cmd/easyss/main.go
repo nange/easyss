@@ -294,6 +294,7 @@ func (a *App) statsLoop() {
 				"conns", snap.Conns,
 				"priority_conns", snap.PriorityConns,
 				"bulk_conns", snap.BulkConns,
+				"conns_status", snap.ConnsStatus,
 				"active_streams", snap.ActiveStreams,
 				"priority_active", snap.PriorityActiveStreams,
 				"bulk_active", snap.BulkActiveStreams,

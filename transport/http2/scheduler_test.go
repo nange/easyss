@@ -11,7 +11,7 @@ import (
 func newTestScheduler(specs ...[2]int32) *slotScheduler {
 	slots := make([]*transportSlot, len(specs))
 	for i, s := range specs {
-		slots[i] = &transportSlot{}
+		slots[i] = &transportSlot{idx: i}
 		slots[i].active.Store(s[0])
 		slots[i].heavy.Store(s[1])
 	}
