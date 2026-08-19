@@ -35,6 +35,14 @@ type transportSlot struct {
 	lastHeavy     int // last observed heavy count, tracks heavy 0->1 transitions
 	lowCycles     int
 	recoverCycles int
+
+	// Probe state, touched only from the health loop goroutine. suspected
+	// marks a slot whose passive throughput stayed low long enough to
+	// deserve an active probe confirmation; probeLowCycles counts
+	// consecutive slow probes; lastProbeAt enforces the probe cooldown.
+	suspected      bool
+	probeLowCycles int
+	lastProbeAt    time.Time
 }
 
 // eligible reports whether the slot may host a new stream under the given

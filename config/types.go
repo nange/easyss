@@ -45,18 +45,22 @@ const (
 
 	// Degraded-slot detection: a slot hosting heavy streams whose download
 	// throughput stays below DegradedThroughputThreshold for
-	// DegradedPersistCycles consecutive health-check intervals is marked
-	// degraded — new streams avoid it and its idle connection is retired
-	// early instead of lingering. The mark clears after
+	// DegradedPersistCycles consecutive health-check intervals is *suspected*
+	// of degradation and gets confirmed by an active probe over the slot's
+	// own connection (see EndpointProbe). The mark clears after
 	// DegradedRecoverCycles healthy intervals. Detection only runs while
 	// the link RTT is at most DegradedMaxRTT: a congested link makes every
 	// connection slow, so retiring connections then only adds handshake
-	// churn without recovering anything.
+	// churn without recovering anything. The RTT is the pure client<->server
+	// path RTT (bootstrap round trip, origin latency excluded); a slow
+	// origin no longer suppresses detection. When the server does not
+	// support probing, the suspicion directly marks the slot (legacy
+	// behavior).
 	HealthCheckInterval         = 5 * time.Second
-	DegradedThroughputThreshold = 64 * 1024 // 64KB/s
+	DegradedThroughputThreshold = 128 * 1024 // 128KB/s
 	DegradedPersistCycles       = 3
 	DegradedRecoverCycles       = 2
-	DegradedMaxRTT              = 700 * time.Millisecond
+	DegradedMaxRTT              = 900 * time.Millisecond
 
 	// Connection rotation: long-lived TCP+TLS connections are frequently
 	// throttled by middleboxes — especially during peak hours — which is
@@ -85,7 +89,21 @@ const (
 	TCPStreamBufferSize       = 15 * 1024 // 客户端，4帧/record (4*(15360+3)=61452 < 64KB)
 	ServerTCPStreamBufferSize = 31 * 1024 // 服务端，2帧/record (2*(31744+3)=63494 < 64KB)
 
-	EndpointTCP  = "/v3/tcp"
-	EndpointUDP  = "/v3/udp"
-	EndpointICMP = "/v3/icmp"
+	EndpointTCP   = "/v3/tcp"
+	EndpointUDP   = "/v3/udp"
+	EndpointICMP  = "/v3/icmp"
+	EndpointProbe = "/v3/probe"
+
+	// Active slot probing: a slot suspected of degradation (passive
+	// throughput below DegradedThroughputThreshold) is confirmed by
+	// downloading a pre-generated random payload over the slot's own
+	// connection; only a slow probe verdict marks the slot degraded. The
+	// probe measures the client<->server path only, so a slow origin or a
+	// stalled-but-open stream no longer causes misjudgment.
+	ProbePayloadSize    = 128 * 1024       // 128KB，服务端启动时预生成
+	ProbeTimeout        = 3 * time.Second  // 单次探测超时（含透明重拨）
+	ProbeConfirmCycles  = 2                // 连续慢探测次数 → 标记 degraded
+	ProbeCooldown       = 15 * time.Second // 同一 slot 两次探测最小间隔
+	ProbeMaxPerInterval = 2                // 每个健康周期最多探测数
+	ProbeLinkRefWindow  = 60 * time.Second // 链路参考速度有效窗口
 )

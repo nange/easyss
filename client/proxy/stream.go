@@ -136,6 +136,14 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 		}
 		rw.Flush()
 
+		// Stamp the moment the bootstrap record left the client: the server
+		// answers with the response headers before dialing the origin, so the
+		// transport records the pure client<->server path RTT when they
+		// arrive (see HTTP2Stream.MarkBootstrapSent).
+		if m, ok := stream.(interface{ MarkBootstrapSent() }); ok {
+			m.MarkBootstrapSent()
+		}
+
 		return &bootstrapSession{stream: stream, sk: sk, salt: salt}, nil
 	}
 
@@ -325,14 +333,11 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 
 	go func() {
 		defer close(ch)
-		start := time.Now()
 		first := true
 		for {
 			frame, err := rx.ReadFrame()
 			if first {
 				first = false
-				rtt := time.Since(start)
-				stats.RecordRTT(rtt)
 				err = classifyFirstReadError(err)
 			}
 			if err != nil {

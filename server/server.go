@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
+	"io"
 	stdlog "log"
 	"net/http"
 	"os"
@@ -145,6 +146,7 @@ func (s *Server) statsLoop() {
 				"icmp", snap.ServerICMPStreams,
 				"hserr", snap.ServerHandshakeErrors,
 				"fallback", snap.ServerFallbackPages,
+				"probe", snap.ServerProbes,
 				"padding", stats.HumanBytes(snap.PaddingBytes),
 				"records", snap.RecordsWritten,
 			)
@@ -298,6 +300,15 @@ func (s *Server) Start() error {
 		NextProxy:         np,
 	})
 
+	probePayload := make([]byte, sharedconfig.ProbePayloadSize)
+	if _, err := io.ReadFull(rand.Reader, probePayload); err != nil {
+		return fmt.Errorf("generate probe payload: %w", err)
+	}
+	probeHandler, err := handler.NewProbeHandler(masterKey, probePayload)
+	if err != nil {
+		return fmt.Errorf("probe handler: %w", err)
+	}
+
 	s.mux = http.NewServeMux()
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		handler.ServeFallback(w, r)
@@ -305,10 +316,11 @@ func (s *Server) Start() error {
 	s.mux.Handle(sharedconfig.EndpointTCP, proxyHandler)
 	s.mux.Handle(sharedconfig.EndpointUDP, proxyHandler)
 	s.mux.Handle(sharedconfig.EndpointICMP, proxyHandler)
+	s.mux.Handle(sharedconfig.EndpointProbe, probeHandler)
 
 	s.httpServer = buildHTTPServer(cfg, tlsConfig, s.mux, timeout)
 
-	log.Info("[SERVER] listening", "addr", s.cfg.Listen, "routes", []string{"/", sharedconfig.EndpointTCP, sharedconfig.EndpointUDP, sharedconfig.EndpointICMP})
+	log.Info("[SERVER] listening", "addr", s.cfg.Listen, "routes", []string{"/", sharedconfig.EndpointTCP, sharedconfig.EndpointUDP, sharedconfig.EndpointICMP, sharedconfig.EndpointProbe})
 	s.statsDone = make(chan struct{})
 	go s.statsLoop()
 	return s.httpServer.ListenAndServeTLS("", "")

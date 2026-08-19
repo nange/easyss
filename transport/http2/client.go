@@ -42,6 +42,10 @@ type Config struct {
 	ConnMaxBytes      int64         // max bytes carried by a connection in either direction before rotation (0: default)
 	Timeout           time.Duration
 	DialContext       func(ctx context.Context, network, addr string) (net.Conn, error)
+	// ProbeToken is the capability token for the server's /v3/probe
+	// endpoint (derived from the master key). Empty disables active
+	// probing, leaving passive-only degraded detection.
+	ProbeToken string
 }
 
 func New(cfg Config) (*HTTP2Transport, error) {
@@ -96,13 +100,23 @@ func New(cfg Config) (*HTTP2Transport, error) {
 
 	sched := newScheduler(maxSlots, slots, threshold, prioritySlots)
 
+	lc := &slotLifecycle{
+		sched:        sched,
+		connLifetime: connLifetime,
+		connMaxBytes: connMaxBytes,
+	}
+	if cfg.ProbeToken != "" {
+		prober := &slotProber{
+			serverURL:   cfg.ServerURL,
+			token:       cfg.ProbeToken,
+			payloadSize: int64(sharedconfig.ProbePayloadSize),
+		}
+		lc.probeFunc = prober.probe
+	}
+
 	tr := &HTTP2Transport{
-		sched: sched,
-		lifecycle: &slotLifecycle{
-			sched:        sched,
-			connLifetime: connLifetime,
-			connMaxBytes: connMaxBytes,
-		},
+		sched:     sched,
+		lifecycle: lc,
 		serverURL: cfg.ServerURL,
 		ctx:       ctx,
 		cancel:    cancel,

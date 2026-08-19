@@ -44,12 +44,15 @@ type stats struct {
 	bulkFallback          atomic.Int64
 
 	// Transport health (client-side)
-	slotDegraded        atomic.Int64
-	slotRetiredDegraded atomic.Int64
-	connRotated         atomic.Int64
+	slotDegraded         atomic.Int64
+	slotRetiredDegraded  atomic.Int64
+	connRotated          atomic.Int64
+	slotProbes           atomic.Int64
+	slotProbeSlow        atomic.Int64
+	slotProbeUnsupported atomic.Int64
 
 	rttMu    sync.Mutex
-	rttEWMA  int64 // nanoseconds, EWMA-smoothed RTT
+	rttEWMA  int64 // nanoseconds, EWMA-smoothed pure path RTT
 	rttCount atomic.Int64
 
 	// Speed tracking (bytes/sec, EWMA-smoothed)
@@ -64,6 +67,7 @@ type stats struct {
 	serverICMPStreams     atomic.Int64
 	serverHandshakeErrors atomic.Int64
 	serverFallbackPages   atomic.Int64
+	serverProbes          atomic.Int64
 
 	// startTime keeps the monotonic clock reading so time.Since stays
 	// immune to wall-clock adjustments; nil means no active session.
@@ -98,9 +102,18 @@ func RecordBulkFallback()         { g.bulkFallback.Add(1) }
 func RecordSlotDegraded()        { g.slotDegraded.Add(1) }
 func RecordSlotRetiredDegraded() { g.slotRetiredDegraded.Add(1) }
 func RecordConnRotated()         { g.connRotated.Add(1) }
+func RecordSlotProbe()           { g.slotProbes.Add(1) }
+func RecordSlotProbeSlow()       { g.slotProbeSlow.Add(1) }
+func RecordSlotProbeUnsupported() {
+	g.slotProbeUnsupported.Add(1)
+}
 
 const rttAlpha = 0.35
 
+// RecordRTT feeds a pure client<->server path RTT sample: the time between
+// the client flushing its bootstrap record (or the probe request reaching
+// the server) and the response arriving. The server commits its response
+// before dialing the origin, so origin latency never enters the sample.
 func RecordRTT(d time.Duration) {
 	g.rttMu.Lock()
 	if g.rttCount.Load() == 0 {
@@ -117,6 +130,7 @@ func RecordServerUDPStream()      { g.serverUDPStreams.Add(1) }
 func RecordServerICMPStream()     { g.serverICMPStreams.Add(1) }
 func RecordServerHandshakeError() { g.serverHandshakeErrors.Add(1) }
 func RecordServerFallbackPage()   { g.serverFallbackPages.Add(1) }
+func RecordServerProbe()          { g.serverProbes.Add(1) }
 
 // --- session lifecycle ---
 
@@ -154,6 +168,9 @@ func ResetCounters() {
 	g.slotDegraded.Store(0)
 	g.slotRetiredDegraded.Store(0)
 	g.connRotated.Store(0)
+	g.slotProbes.Store(0)
+	g.slotProbeSlow.Store(0)
+	g.slotProbeUnsupported.Store(0)
 
 	g.rttMu.Lock()
 	g.rttEWMA = 0
@@ -170,6 +187,7 @@ func ResetCounters() {
 	g.serverICMPStreams.Store(0)
 	g.serverHandshakeErrors.Store(0)
 	g.serverFallbackPages.Store(0)
+	g.serverProbes.Store(0)
 }
 
 // --- snapshot ---
@@ -198,15 +216,19 @@ type Snapshot struct {
 	ServerICMPStreams     int64 `json:"server_icmp_streams,omitempty"`
 	ServerHandshakeErrors int64 `json:"server_handshake_errors,omitempty"`
 	ServerFallbackPages   int64 `json:"server_fallback_pages,omitempty"`
+	ServerProbes          int64 `json:"server_probes,omitempty"`
 	PriorityStreamsOpened int64 `json:"priority_streams_opened"`
 	BulkStreamsOpened     int64 `json:"bulk_streams_opened"`
 	PriorityFallback      int64 `json:"priority_fallback"`
 	BulkFallback          int64 `json:"bulk_fallback"`
 
 	// Transport health (client-side only; zero on server)
-	SlotDegraded        int64 `json:"slot_degraded"`
-	SlotRetiredDegraded int64 `json:"slot_retired_degraded"`
-	ConnRotated         int64 `json:"conn_rotated"`
+	SlotDegraded         int64 `json:"slot_degraded"`
+	SlotRetiredDegraded  int64 `json:"slot_retired_degraded"`
+	ConnRotated          int64 `json:"conn_rotated"`
+	SlotProbes           int64 `json:"slot_probes"`
+	SlotProbeSlow        int64 `json:"slot_probe_slow"`
+	SlotProbeUnsupported int64 `json:"slot_probe_unsupported"`
 
 	// Speed
 	UploadSpeed            int64  `json:"upload_speed"`
@@ -285,6 +307,7 @@ func Collect() Snapshot {
 		ServerICMPStreams:      g.serverICMPStreams.Load(),
 		ServerHandshakeErrors:  g.serverHandshakeErrors.Load(),
 		ServerFallbackPages:    g.serverFallbackPages.Load(),
+		ServerProbes:           g.serverProbes.Load(),
 		PriorityStreamsOpened:  g.priorityStreamsOpened.Load(),
 		BulkStreamsOpened:      g.bulkStreamsOpened.Load(),
 		PriorityFallback:       g.priorityFallback.Load(),
@@ -292,6 +315,9 @@ func Collect() Snapshot {
 		SlotDegraded:           g.slotDegraded.Load(),
 		SlotRetiredDegraded:    g.slotRetiredDegraded.Load(),
 		ConnRotated:            g.connRotated.Load(),
+		SlotProbes:             g.slotProbes.Load(),
+		SlotProbeSlow:          g.slotProbeSlow.Load(),
+		SlotProbeUnsupported:   g.slotProbeUnsupported.Load(),
 		UploadSpeed:            upSpeed,
 		DownloadSpeed:          downSpeed,
 		UploadSpeedHuman:       HumanBytes(upSpeed) + "/s",

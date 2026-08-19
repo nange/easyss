@@ -3,9 +3,13 @@ package http2
 import (
 	"errors"
 	"io"
+	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nange/easyss/v3/stats"
 )
 
 func newTestStream() (*HTTP2Stream, *io.PipeReader) {
@@ -150,4 +154,66 @@ func TestHTTP2Stream_TrackWriteNilSlotNoOp(t *testing.T) {
 	if s.heavyState.Load() != heavyIdle {
 		t.Fatal("nil slot must not mark heavy")
 	}
+}
+
+// TestHTTP2Stream_RecordsPathRTTOnResponse verifies that a successful
+// response arriving after MarkBootstrapSent feeds one pure path RTT sample
+// (bootstrap record flushed -> response headers arrived), and that a stream
+// never stamped stays silent.
+func TestHTTP2Stream_RecordsPathRTTOnResponse(t *testing.T) {
+	// newTestStream exposes respCh as read-only, so keep a writable handle
+	// to inject the response.
+	newStream := func() (*HTTP2Stream, chan roundTripResult) {
+		s, pr := newTestStream()
+		_ = pr
+		respCh := make(chan roundTripResult, 1)
+		s.respCh = respCh
+		return s, respCh
+	}
+
+	t.Run("stamped stream records the sample", func(t *testing.T) {
+		stats.ResetCounters()
+		s, respCh := newStream()
+		defer s.Close()
+
+		s.MarkBootstrapSent()
+		time.Sleep(2 * time.Millisecond)
+		respCh <- roundTripResult{
+			resp: &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))},
+			err:  nil,
+		}
+
+		buf := make([]byte, 16)
+		if _, err := s.Read(buf); err != io.EOF {
+			t.Fatalf("Read = %v, want io.EOF", err)
+		}
+
+		snap := stats.Collect()
+		if snap.RTTCount != 1 {
+			t.Fatalf("RTTCount = %d, want 1", snap.RTTCount)
+		}
+		if snap.AvgRTT() < time.Millisecond {
+			t.Fatalf("AvgRTT = %v, want >= 1ms", snap.AvgRTT())
+		}
+	})
+
+	t.Run("unstamped stream records nothing", func(t *testing.T) {
+		stats.ResetCounters()
+		s, respCh := newStream()
+		defer s.Close()
+
+		respCh <- roundTripResult{
+			resp: &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))},
+			err:  nil,
+		}
+
+		buf := make([]byte, 16)
+		if _, err := s.Read(buf); err != io.EOF {
+			t.Fatalf("Read = %v, want io.EOF", err)
+		}
+
+		if got := stats.Collect().RTTCount; got != 0 {
+			t.Fatalf("RTTCount = %d, want 0 without MarkBootstrapSent", got)
+		}
+	})
 }
