@@ -56,7 +56,7 @@ const (
 	DegradedThroughputThreshold = 64 * 1024 // 64KB/s
 	DegradedPersistCycles       = 3
 	DegradedRecoverCycles       = 2
-	DegradedMaxRTT              = 500 * time.Millisecond
+	DegradedMaxRTT              = 700 * time.Millisecond
 
 	// Connection rotation: long-lived TCP+TLS connections are frequently
 	// throttled by middleboxes — especially during peak hours — which is
@@ -64,7 +64,7 @@ const (
 	// either limit stops accepting new streams and its idle connection is
 	// closed, so the next stream dials a fresh one (invisible to users).
 	DefaultConnLifetimeSec = 900               // 15min
-	DefaultConnMaxBytes    = 150 * 1024 * 1024 // 150MB，双向（上下行）累计
+	DefaultConnMaxBytes    = 256 * 1024 * 1024 // 256MB，双向（上下行）累计
 
 	// Upload flow control on the server side: the per-stream window bounds
 	// a single upload stream's in-flight data, capping its throughput at
