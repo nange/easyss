@@ -57,7 +57,7 @@ const (
 	DegradedThroughputThreshold = 64 * 1024 // 64KB/s
 	DegradedPersistCycles       = 3
 	DegradedRecoverCycles       = 2
-	DegradedMaxRTT              = 700 * time.Millisecond
+	DegradedMaxRTT              = 900 * time.Millisecond
 
 	// Connection rotation: long-lived TCP+TLS connections are frequently
 	// throttled by middleboxes — especially during peak hours — which is
