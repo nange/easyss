@@ -192,7 +192,17 @@ func resolveServerIPV6(cfg *config.ClientConfig) string {
 		}
 		return ips[0].String()
 	}
-	log.Warn("[CLIENT] failed to resolve server ipv6 via all direct dns servers", "server", svr.Address)
+
+	// fallback to the system dns servers when all builtin direct dns servers
+	// are unavailable
+	for _, dnsServer := range dns.SystemDNSServers() {
+		ips, err := dns.LookupIPV6From(dnsServer, svr.Address)
+		if err != nil || len(ips) == 0 {
+			continue
+		}
+		return ips[0].String()
+	}
+	log.Warn("[CLIENT] failed to resolve server ipv6 via all direct and system dns servers", "server", svr.Address)
 	return ""
 }
 

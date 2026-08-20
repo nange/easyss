@@ -10,6 +10,7 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/client/config"
+	easydns "github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/router"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
@@ -86,8 +87,51 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 }
 
 func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg, domain string) error {
+	resp, err := s.exchangeDirectDNSWithFallback(msg, domain, config.DirectDNSServers)
+	if err != nil {
+		log.Error("[DNS_DIRECT]", "domain", domain, "err", err)
+		return err
+	}
+	if s.router.ShouldIPV6Disable() && msg.Question[0].Qtype == dns.TypeAAAA {
+		resp.Answer = nil
+	}
+	_ = s.dnsCache.Set(resp, true)
+
+	qtype := dns.TypeToString[msg.Question[0].Qtype]
+	log.Info("[DNS_DIRECT] result", "domain", domain, "qtype", qtype, "answers", util.DNSAnswerStrings(resp))
+
+	if s.router.IsCustomDirectDomain(domain) {
+		for _, ans := range resp.Answer {
+			switch a := ans.(type) {
+			case *dns.A:
+				s.router.AddDirectIP(a.A.String())
+			case *dns.AAAA:
+				s.router.AddDirectIP(a.AAAA.String())
+			case *dns.CNAME:
+				s.router.AddDirectDomain(strings.TrimSuffix(a.Target, "."))
+			}
+		}
+	}
+
+	resp.Id = msg.Id
+	return responseDNSMsg(srv.UDPConn, clientAddr, resp, d.Address())
+}
+
+// exchangeDirectDNSWithFallback exchanges msg with each of the given dns
+// servers in order, falling back to the system dns servers when all of them
+// fail.
+func (s *Socks5Server) exchangeDirectDNSWithFallback(msg *dns.Msg, domain string, servers []string) (*dns.Msg, error) {
+	resp, err := s.exchangeDirectDNSFromList(msg, servers)
+	if err != nil {
+		log.Warn("[DNS_DIRECT] all builtin dns servers failed, fallback to system dns", "domain", domain, "err", err)
+		resp, err = s.exchangeDirectDNSFromList(msg, easydns.SystemDNSServers())
+	}
+	return resp, err
+}
+
+func (s *Socks5Server) exchangeDirectDNSFromList(msg *dns.Msg, servers []string) (*dns.Msg, error) {
 	var lastErr error
-	for _, addr := range config.DirectDNSServers {
+	for _, addr := range servers {
 		if s.router.ShouldIPV6Disable() && util.IsIPV6Addr(addr) {
 			continue
 		}
@@ -98,32 +142,12 @@ func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAdd
 			lastErr = err
 			continue
 		}
-		if s.router.ShouldIPV6Disable() && msg.Question[0].Qtype == dns.TypeAAAA {
-			resp.Answer = nil
-		}
-		_ = s.dnsCache.Set(resp, true)
-
-		qtype := dns.TypeToString[msg.Question[0].Qtype]
-		log.Info("[DNS_DIRECT] result", "domain", domain, "qtype", qtype, "answers", util.DNSAnswerStrings(resp))
-
-		if s.router.IsCustomDirectDomain(domain) {
-			for _, ans := range resp.Answer {
-				switch a := ans.(type) {
-				case *dns.A:
-					s.router.AddDirectIP(a.A.String())
-				case *dns.AAAA:
-					s.router.AddDirectIP(a.AAAA.String())
-				case *dns.CNAME:
-					s.router.AddDirectDomain(strings.TrimSuffix(a.Target, "."))
-				}
-			}
-		}
-
-		resp.Id = msg.Id
-		return responseDNSMsg(srv.UDPConn, clientAddr, resp, d.Address())
+		return resp, nil
 	}
-	log.Error("[DNS_DIRECT]", "domain", domain, "err", lastErr)
-	return lastErr
+	if lastErr == nil {
+		lastErr = errors.New("no dns server available")
+	}
+	return nil, lastErr
 }
 
 func (s *Socks5Server) exchangeDirectDNS(ctx context.Context, msg *dns.Msg, addr string) (*dns.Msg, error) {

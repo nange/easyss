@@ -207,7 +207,7 @@ func (a *App) Start() error {
 						prepopulated = false
 						break
 					}
-					err = a.core.SocksServer.PrePopulateDNS(serverAddr, config.DirectDNSServers[0],
+					err = a.core.SocksServer.PrePopulateDNS(serverAddr, config.DirectDNSServers,
 						a.cfg.Routing.IPV6Rule != "enable")
 					if err == nil {
 						log.Info("[EASYSS-V3] pre-populated dns cache for server", "host", serverAddr)

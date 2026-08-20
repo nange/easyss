@@ -89,21 +89,7 @@ func setResolvConf(servers []string) error {
 }
 
 func resolvConfServers() ([]string, error) {
-	data, err := os.ReadFile("/etc/resolv.conf")
-	if err != nil {
-		return nil, err
-	}
-
-	var servers []string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "nameserver") {
-			if s := strings.TrimSpace(strings.TrimPrefix(line, "nameserver")); s != "" {
-				servers = append(servers, s)
-			}
-		}
-	}
-	return servers, nil
+	return sysDNSServersFromResolvConf("/etc/resolv.conf")
 }
 
 func SysDNSViaOSAScript() ([]string, error) {
