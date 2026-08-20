@@ -54,16 +54,19 @@ func (s *slotScheduler) pick(highPriority bool) *transportSlot {
 }
 
 // leastActiveInRange returns the slot in [start,end) with the fewest active
-// streams, preferring healthy slots, then slots without heavy streams, and
-// only falling back to degraded or expiring ones when nothing else is
+// streams, preferring healthy slots, then slots without heavy streams, then
+// expiring ones, and only falling back to degraded ones when nothing else is
 // available:
 //   - a heavy stream monopolizes the connection's TCP window, so a new
 //     stream sharing that slot is dragged down together with it (TCP
 //     head-of-line blocking under packet loss);
-//   - a degraded slot already proved persistently low throughput, so it
-//     is avoided unless it is the only option left;
-//   - an expiring slot is due for connection rotation, so new streams
-//     avoid it unless nothing else is available.
+//   - an expiring slot is due for connection rotation, but rotation overdue
+//     says nothing about the connection's health: routing new streams onto
+//     it keeps the connection alive until its stream gap, which spreads the
+//     re-dials of a same-batch expiry instead of clustering them, so it is
+//     preferred over a degraded slot;
+//   - a degraded slot already proved persistently low throughput, so it is
+//     avoided unless it is the only option left.
 func (s *slotScheduler) leastActiveInRange(start, end int) *transportSlot {
 	live := int(s.liveCount.Load())
 	if live == 0 {
@@ -83,7 +86,7 @@ func (s *slotScheduler) leastActiveInRange(start, end int) *transportSlot {
 	}{
 		{true, true, true},   // healthy slots
 		{false, true, true},  // heavy but not degraded/expiring
-		{false, false, true}, // degraded but not expiring
+		{false, true, false}, // expiring but not degraded: rotation overdue, connection likely still fine
 		{false, false, false},
 	}
 	var best *transportSlot

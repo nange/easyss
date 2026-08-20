@@ -87,12 +87,22 @@ func TestLeastActiveInRangePrefersNonExpiring(t *testing.T) {
 		}
 	})
 
-	t.Run("prefers degraded-but-fresh over expiring", func(t *testing.T) {
+	t.Run("prefers expiring-but-fresh over degraded", func(t *testing.T) {
 		sch := newTestScheduler([2]int32{3, 1}, [2]int32{1, 1})
 		sch.slots[0].degraded.Store(true)
 		sch.slots[1].expiring.Store(true)
-		if got := sch.leastActiveInRange(0, 2); got != sch.slots[0] {
-			t.Fatalf("expected degraded slot 0 over expiring, got active=%d", got.active.Load())
+		if got := sch.leastActiveInRange(0, 2); got != sch.slots[1] {
+			t.Fatalf("expected expiring slot 1 over degraded, got active=%d", got.active.Load())
+		}
+	})
+
+	t.Run("prefers expiring-only over degraded-and-expiring", func(t *testing.T) {
+		sch := newTestScheduler([2]int32{3, 1}, [2]int32{1, 1})
+		sch.slots[0].degraded.Store(true)
+		sch.slots[0].expiring.Store(true)
+		sch.slots[1].expiring.Store(true)
+		if got := sch.leastActiveInRange(0, 2); got != sch.slots[1] {
+			t.Fatalf("expected expiring-only slot 1, got active=%d", got.active.Load())
 		}
 	})
 
