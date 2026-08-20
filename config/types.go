@@ -57,17 +57,17 @@ const (
 	// support probing, the suspicion directly marks the slot (legacy
 	// behavior).
 	HealthCheckInterval         = 5 * time.Second
-	DegradedThroughputThreshold = 128 * 1024 // 128KB/s
+	DegradedThroughputThreshold = 80 * 1024 // 80KB/s
 	DegradedPersistCycles       = 3
 	DegradedRecoverCycles       = 2
-	DegradedMaxRTT              = 900 * time.Millisecond
+	DegradedMaxRTT              = 700 * time.Millisecond
 
 	// Connection rotation: long-lived TCP+TLS connections are frequently
 	// throttled by middleboxes — especially during peak hours — which is
 	// why a reconnect feels fast again. A slot whose connection exceeded
 	// either limit stops accepting new streams and its idle connection is
 	// closed, so the next stream dials a fresh one (invisible to users).
-	DefaultConnLifetimeSec = 900               // 15min
+	DefaultConnLifetimeSec = 600               // 10min
 	DefaultConnMaxBytes    = 256 * 1024 * 1024 // 256MB，双向（上下行）累计
 
 	// Upload flow control on the server side: the per-stream window bounds

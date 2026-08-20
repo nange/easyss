@@ -21,7 +21,7 @@ func TestEvaluateSlotHealth(t *testing.T) {
 		return s
 	}
 	// lowThroughput simulates one health interval carrying 10KB
-	// (2KB/s, well below the 64KB/s degraded threshold).
+	// (2KB/s, well below the degraded throughput threshold).
 	lowThroughput := func(s *transportSlot) {
 		s.bytesRecv.Add(10 * 1024)
 		lc.evaluateSlotHealth(0, s, interval, true)
