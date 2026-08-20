@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coocood/freecache"
+	"github.com/miekg/dns"
 	"github.com/oschwald/geoip2-golang"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
@@ -414,4 +415,79 @@ func TestEasyss_MaxCapMaxIdle(t *testing.T) {
 	ss.currConfig = config.Clone()
 	assert.Equal(t, 32, ss.MaxCap())
 	assert.Equal(t, MaxIdle, ss.MaxIdle())
+}
+
+func TestApplyServerIPAndDNSCache(t *testing.T) {
+	config := &Config{
+		Server:     "your-domain.com",
+		ServerPort: 9999,
+		Password:   "test-pass",
+	}
+	config.SetDefaultValue()
+	ss := getEasyssForBench(config)
+
+	domain := "your-domain.com"
+	msg := &dns.Msg{}
+	msg.SetQuestion(dns.Fqdn(domain), dns.TypeA)
+	msg.Answer = append(msg.Answer, &dns.A{
+		Hdr: dns.RR_Header{Name: dns.Fqdn(domain), Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 600},
+		A:   net.ParseIP("1.2.3.4"),
+	})
+	msgAAAA := &dns.Msg{}
+	msgAAAA.SetQuestion(dns.Fqdn(domain), dns.TypeAAAA)
+	msgAAAA.Answer = append(msgAAAA.Answer, &dns.AAAA{
+		Hdr:  dns.RR_Header{Name: dns.Fqdn(domain), Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 600},
+		AAAA: net.ParseIP("2001:db8::1"),
+	})
+
+	assert.NoError(t, ss.applyServerIPAndDNSCache(domain, msg, msgAAAA))
+	assert.Equal(t, "1.2.3.4", ss.serverIP)
+	assert.Equal(t, "2001:db8::1", ss.serverIPV6)
+
+	cached := ss.DNSCache(dns.Fqdn(domain), "A", true)
+	if assert.NotNil(t, cached) {
+		assert.Len(t, cached.Answer, 1)
+		a, ok := cached.Answer[0].(*dns.A)
+		assert.True(t, ok)
+		assert.Equal(t, "1.2.3.4", a.A.String())
+	}
+	cachedAAAA := ss.DNSCache(dns.Fqdn(domain), "AAAA", false)
+	if assert.NotNil(t, cachedAAAA) {
+		assert.Len(t, cachedAAAA.Answer, 1)
+		aaaa, ok := cachedAAAA.Answer[0].(*dns.AAAA)
+		assert.True(t, ok)
+		assert.Equal(t, "2001:db8::1", aaaa.AAAA.String())
+	}
+}
+
+func TestApplyServerIPAndDNSCacheEmptyAnswers(t *testing.T) {
+	config := &Config{
+		Server:     "your-domain.com",
+		ServerPort: 9999,
+		Password:   "test-pass",
+	}
+	config.SetDefaultValue()
+	ss := getEasyssForBench(config)
+
+	domain := "your-domain.com"
+	msg := &dns.Msg{}
+	msg.SetQuestion(dns.Fqdn(domain), dns.TypeA)
+	msgAAAA := &dns.Msg{}
+	msgAAAA.SetQuestion(dns.Fqdn(domain), dns.TypeAAAA)
+
+	assert.Error(t, ss.applyServerIPAndDNSCache(domain, msg, msgAAAA))
+}
+
+func TestApplyServerIPAndDNSCacheNilMsgs(t *testing.T) {
+	config := &Config{
+		Server:     "your-domain.com",
+		ServerPort: 9999,
+		Password:   "test-pass",
+	}
+	config.SetDefaultValue()
+	ss := getEasyssForBench(config)
+
+	assert.NoError(t, ss.applyServerIPAndDNSCache("your-domain.com", nil, nil))
+	assert.Empty(t, ss.serverIP)
+	assert.Empty(t, ss.serverIPV6)
 }

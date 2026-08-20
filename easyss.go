@@ -372,7 +372,27 @@ func (ss *Easyss) initDirectDNSServer() error {
 		}
 	}
 
-	return errors.New("all direct dns server is unavailable, or the network is unavailable on this server")
+	// fallback to the system dns servers
+	log.Warn("[EASYSS] all builtin direct dns servers are unavailable, try system dns servers")
+	sysServers, err := util.SysDNS()
+	if err != nil {
+		log.Warn("[EASYSS] get system dns servers", "err", err)
+	}
+	for _, s := range sysServers {
+		addr := net.JoinHostPort(s, "53")
+		msg, err := util.DNSMsgTypeA(addr, DefaultDNSServerDomains[0])
+		if err != nil {
+			log.Warn("[EASYSS] system dns server is unavailable", "server", addr, "err", err)
+			continue
+		}
+		if msg != nil {
+			ss.directDNSServer = addr
+			log.Info("[EASYSS] set direct dns server to system dns server", "server", addr)
+			return nil
+		}
+	}
+
+	return errors.New("all direct dns server (builtin and system) is unavailable, or the network is unavailable on this server")
 }
 
 func (ss *Easyss) initServerIPAndDNSCache() error {
@@ -390,46 +410,86 @@ func (ss *Easyss) initServerIPAndDNSCache() error {
 			break
 		}
 		if err != nil {
-			return err
+			directErr := err
+			log.Warn("[EASYSS] query dns failed via direct dns server, fallback to system dns",
+				"server", ss.Server(), "from", ss.directDNSServer, "err", err)
+			msg, msgAAAA, err = ss.dnsMsgFromSystem(ss.Server())
+			if err != nil {
+				return errors.Join(directErr, err)
+			}
 		}
 		if msg != nil {
 			log.Info("[EASYSS] query dns success for", "server", ss.Server(), "from", ss.directDNSServer)
 		}
 
-		if msg != nil && msgAAAA != nil {
-			if len(msg.Answer) > 0 {
-				for _, an := range msg.Answer {
-					if a, ok := an.(*dns.A); ok {
-						ss.serverIP = a.A.String()
-						break
-					}
-				}
-				for _, an := range msgAAAA.Answer {
-					if a, ok := an.(*dns.AAAA); ok {
-						ss.serverIPV6 = a.AAAA.String()
-						break
-					}
-				}
-				if ss.serverIP == "" && ss.serverIPV6 == "" {
-					return errors.New("can't query server ip from dns")
-				}
-				_ = ss.SetDNSCache(msg, true, true)
-				_ = ss.SetDNSCache(msg, true, false)
-				_ = ss.SetDNSCache(msgAAAA, true, true)
-				_ = ss.SetDNSCache(msgAAAA, true, false)
-			} else {
-				return errors.New("dns result is empty for " + ss.Server())
-			}
-		}
+		return ss.applyServerIPAndDNSCache(ss.Server(), msg, msgAAAA)
+	}
+
+	if util.IsIPV6(ss.Server()) {
+		ss.serverIPV6 = ss.Server()
 	} else {
-		if util.IsIPV6(ss.Server()) {
-			ss.serverIPV6 = ss.Server()
+		ss.serverIP = ss.Server()
+	}
+
+	return nil
+}
+
+func (ss *Easyss) applyServerIPAndDNSCache(domain string, msg, msgAAAA *dns.Msg) error {
+	if msg != nil && msgAAAA != nil {
+		if len(msg.Answer) > 0 {
+			for _, an := range msg.Answer {
+				if a, ok := an.(*dns.A); ok {
+					ss.serverIP = a.A.String()
+					break
+				}
+			}
+			for _, an := range msgAAAA.Answer {
+				if a, ok := an.(*dns.AAAA); ok {
+					ss.serverIPV6 = a.AAAA.String()
+					break
+				}
+			}
+			if ss.serverIP == "" && ss.serverIPV6 == "" {
+				return errors.New("can't query server ip from dns")
+			}
+			_ = ss.SetDNSCache(msg, true, true)
+			_ = ss.SetDNSCache(msg, true, false)
+			_ = ss.SetDNSCache(msgAAAA, true, true)
+			_ = ss.SetDNSCache(msgAAAA, true, false)
 		} else {
-			ss.serverIP = ss.Server()
+			return errors.New("dns result is empty for " + domain)
 		}
 	}
 
 	return nil
+}
+
+// dnsMsgFromSystem queries the dns records of domain from the system dns servers
+func (ss *Easyss) dnsMsgFromSystem(domain string) (*dns.Msg, *dns.Msg, error) {
+	servers, err := util.SysDNS()
+	if err != nil {
+		log.Warn("[EASYSS] get system dns servers", "err", err)
+	}
+	for _, s := range servers {
+		addr := net.JoinHostPort(s, "53")
+		if addr == ss.directDNSServer {
+			// has been retried already, skip it to avoid waiting for the timeout again
+			continue
+		}
+		msg, msgAAAA, e := ss.DNSMsg(addr, domain)
+		if e != nil {
+			log.Warn("[EASYSS] query dns via system dns server failed", "server", addr, "err", e)
+			err = errors.Join(err, e)
+			continue
+		}
+		log.Info("[EASYSS] query dns success via system dns server", "server", addr, "domain", domain)
+		return msg, msgAAAA, nil
+	}
+
+	if err == nil {
+		err = errors.New("no system dns server available")
+	}
+	return nil, nil, err
 }
 
 func (ss *Easyss) isIPv6OkInCurrentNetWork() bool {
