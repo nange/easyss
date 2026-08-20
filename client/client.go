@@ -185,12 +185,26 @@ func resolveServerIPV6(cfg *config.ClientConfig) string {
 		return ""
 	}
 
-	for _, dnsServer := range config.DirectDNSServers {
-		ips, err := dns.LookupIPV6From(dnsServer, svr.Address)
-		if err != nil || len(ips) == 0 {
-			continue
+	if dns.BuiltinDNSAvailable() {
+		reachable := false
+		for _, dnsServer := range config.DirectDNSServers {
+			ips, err := dns.LookupIPV6From(dnsServer, svr.Address)
+			if err != nil {
+				continue
+			}
+			// the server answered (possibly NODATA), so the builtin dns
+			// servers are reachable
+			reachable = true
+			if len(ips) == 0 {
+				continue
+			}
+			dns.MarkBuiltinDNSAvailable()
+			return ips[0].String()
 		}
-		return ips[0].String()
+		if !reachable {
+			dns.MarkBuiltinDNSUnavailable()
+			log.Warn("[CLIENT] all builtin direct dns servers failed to resolve server ipv6, fallback to system dns", "server", svr.Address)
+		}
 	}
 
 	// fallback to the system dns servers when all builtin direct dns servers

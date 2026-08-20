@@ -94,12 +94,10 @@ func (s *ForwardServer) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 }
 
 func (s *ForwardServer) forwardQuery(msg *dns.Msg) (*dns.Msg, error) {
-	reply, err := s.exchangeWithServers(s.dnsServers, msg)
-	if err != nil {
-		log.Warn("[DNS-FORWARD] all builtin dns servers failed, fallback to system dns", "err", err)
-		reply, err = s.exchangeWithServers(s.systemDNSServers(), msg)
+	try := func(servers []string) (*dns.Msg, error) {
+		return s.exchangeWithServers(servers, msg)
 	}
-	return reply, err
+	return QueryWithBuiltinFirst(s.dnsServers, s.systemDNSServers(), try)
 }
 
 func (s *ForwardServer) exchangeWithServers(servers []string, msg *dns.Msg) (*dns.Msg, error) {

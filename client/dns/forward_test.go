@@ -58,6 +58,7 @@ func TestForwardQueryFallsBackToSystemDNS(t *testing.T) {
 	t.Cleanup(func() {
 		systemDNSServersFunc = old
 		resetSystemDNSCache()
+		resetBuiltinDNSCircuit()
 	})
 
 	fs := NewForwardServer("127.0.0.1:0", false)
@@ -91,6 +92,7 @@ func TestForwardQueryAllServersUnavailable(t *testing.T) {
 	t.Cleanup(func() {
 		systemDNSServersFunc = old
 		resetSystemDNSCache()
+		resetBuiltinDNSCircuit()
 	})
 
 	fs := NewForwardServer("127.0.0.1:0", false)

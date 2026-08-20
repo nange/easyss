@@ -291,6 +291,7 @@ func TestCachePrePopulateWithFallback(t *testing.T) {
 	t.Cleanup(func() {
 		systemDNSServersFunc = old
 		resetSystemDNSCache()
+		resetBuiltinDNSCircuit()
 	})
 
 	c := NewCache("example.com")
@@ -311,6 +312,7 @@ func TestCachePrePopulateWithFallbackAllFail(t *testing.T) {
 	t.Cleanup(func() {
 		systemDNSServersFunc = old
 		resetSystemDNSCache()
+		resetBuiltinDNSCircuit()
 	})
 
 	c := NewCache("example.com")

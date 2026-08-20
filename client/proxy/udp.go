@@ -87,7 +87,7 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 }
 
 func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg, domain string) error {
-	resp, err := s.exchangeDirectDNSWithFallback(msg, domain, config.DirectDNSServers)
+	resp, err := s.exchangeDirectDNSWithFallback(msg, config.DirectDNSServers)
 	if err != nil {
 		log.Error("[DNS_DIRECT]", "domain", domain, "err", err)
 		return err
@@ -119,14 +119,13 @@ func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAdd
 
 // exchangeDirectDNSWithFallback exchanges msg with each of the given dns
 // servers in order, falling back to the system dns servers when all of them
-// fail.
-func (s *Socks5Server) exchangeDirectDNSWithFallback(msg *dns.Msg, domain string, servers []string) (*dns.Msg, error) {
-	resp, err := s.exchangeDirectDNSFromList(msg, servers)
-	if err != nil {
-		log.Warn("[DNS_DIRECT] all builtin dns servers failed, fallback to system dns", "domain", domain, "err", err)
-		resp, err = s.exchangeDirectDNSFromList(msg, easydns.SystemDNSServers())
+// fail. The builtin servers are skipped entirely during the circuit breaker
+// cool-down after a failure.
+func (s *Socks5Server) exchangeDirectDNSWithFallback(msg *dns.Msg, servers []string) (*dns.Msg, error) {
+	try := func(servers []string) (*dns.Msg, error) {
+		return s.exchangeDirectDNSFromList(msg, servers)
 	}
-	return resp, err
+	return easydns.QueryWithBuiltinFirst(servers, easydns.SystemDNSServers(), try)
 }
 
 func (s *Socks5Server) exchangeDirectDNSFromList(msg *dns.Msg, servers []string) (*dns.Msg, error) {
