@@ -13,7 +13,7 @@ import (
 // dns (e.g. blocked by the network) does not slow down every query with its
 // timeouts. Once the cool-down expires a single retry is allowed so that a
 // recovered network is picked up again.
-const builtinDNSCoolDown = 1 * time.Minute
+const builtinDNSCoolDown = 3 * time.Minute
 
 var (
 	builtinDNSMu     sync.Mutex
