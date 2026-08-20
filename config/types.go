@@ -8,7 +8,7 @@ var NextProtos = []string{"h2", "http/1.1"}
 
 const (
 	DefaultTimeout         = 30
-	DefaultConnCountMax    = 18
+	DefaultConnCountMax    = 16
 	DefaultStreamThreshold = 4
 	DefaultBatchWindowMS   = 3
 	DefaultCoverBudgetCap  = 16 * 1024 // 16KB
@@ -67,7 +67,7 @@ const (
 	// why a reconnect feels fast again. A slot whose connection exceeded
 	// either limit stops accepting new streams and its idle connection is
 	// closed, so the next stream dials a fresh one (invisible to users).
-	DefaultConnLifetimeSec = 480               // 8min
+	DefaultConnLifetimeSec = 420               // 7min
 	DefaultConnMaxBytes    = 256 * 1024 * 1024 // 256MB，双向（上下行）累计
 
 	// Upload flow control on the server side: the per-stream window bounds
