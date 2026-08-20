@@ -280,3 +280,43 @@ func TestJitterTTL_Range(t *testing.T) {
 		t.Errorf("jitterTTL(%d) always returned %d, expected random jitter", base, base)
 	}
 }
+
+func TestCachePrePopulateWithFallback(t *testing.T) {
+	failAddr := startTestDNSServer(t, true) // replies SERVFAIL, fails fast
+	okAddr := startTestDNSServer(t, false)  // answers A/AAAA records
+	old := systemDNSServersFunc
+	systemDNSServersFunc = func() []string {
+		return []string{okAddr}
+	}
+	t.Cleanup(func() {
+		systemDNSServersFunc = old
+		resetSystemDNSCache()
+		resetBuiltinDNSCircuit()
+	})
+
+	c := NewCache("example.com")
+	if err := c.PrePopulateWithFallback("example.com", []string{failAddr}, true); err != nil {
+		t.Fatalf("PrePopulateWithFallback error: %v", err)
+	}
+	if got := c.Get("example.com.", "A", true); got == nil {
+		t.Fatal("direct cache should have the A record after fallback")
+	}
+}
+
+func TestCachePrePopulateWithFallbackAllFail(t *testing.T) {
+	failAddr := startTestDNSServer(t, true)
+	old := systemDNSServersFunc
+	systemDNSServersFunc = func() []string {
+		return nil
+	}
+	t.Cleanup(func() {
+		systemDNSServersFunc = old
+		resetSystemDNSCache()
+		resetBuiltinDNSCircuit()
+	})
+
+	c := NewCache("example.com")
+	if err := c.PrePopulateWithFallback("example.com", []string{failAddr}, true); err == nil {
+		t.Fatal("expected error")
+	}
+}

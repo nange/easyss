@@ -41,6 +41,16 @@ func SetSysDNS(v []string) error {
 }
 
 func SysDNS() ([]string, error) {
+	ret, err := sysDNSFromNetworkSetup()
+	if err == nil && len(ret) > 0 {
+		return ret, nil
+	}
+
+	// fallback to /etc/resolv.conf when networksetup failed or returned empty
+	return sysDNSServersFromResolvConf("/etc/resolv.conf")
+}
+
+func sysDNSFromNetworkSetup() ([]string, error) {
 	ni, err := NetworkInterface()
 	if err != nil {
 		return nil, err

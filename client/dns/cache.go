@@ -1,6 +1,7 @@
 package dns
 
 import (
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"strings"
@@ -170,4 +171,43 @@ func (c *Cache) PrePopulate(domain, dnsServer string, requireIPv4 bool) error {
 		return fmt.Errorf("failed to resolve %s via %s", domain, dnsServer)
 	}
 	return nil
+}
+
+// PrePopulateWithFallback resolves the domain via each of the given dns
+// servers in order, then falls back to the system dns servers when all of
+// them are unavailable, storing the results in both the direct and proxied
+// caches. See PrePopulate for the requireIPv4 semantics.
+func (c *Cache) PrePopulateWithFallback(domain string, dnsServers []string, requireIPv4 bool) error {
+	var lastErr error
+	try := func(server string) bool {
+		err := c.PrePopulate(domain, server, requireIPv4)
+		if err == nil {
+			return true
+		}
+		lastErr = errors.Join(lastErr, err)
+		log.Warn("[DNS] PrePopulate via dns server failed", "domain", domain, "server", server, "err", err)
+		return false
+	}
+
+	if BuiltinDNSAvailable() {
+		for _, s := range dnsServers {
+			if try(s) {
+				MarkBuiltinDNSAvailable()
+				return nil
+			}
+		}
+		MarkBuiltinDNSUnavailable()
+		log.Warn("[DNS] all builtin dns servers failed, fallback to system dns", "domain", domain, "err", lastErr)
+	}
+
+	for _, s := range systemDNSServersFunc() {
+		if try(s) {
+			return nil
+		}
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no dns server available for %s", domain)
+	}
+	return lastErr
 }
