@@ -32,10 +32,10 @@ import (
 //     heavy slots and finally degraded slots (worst candidate, last
 //     resort). Negative tiers are compared by weighted load — the active
 //     stream count times the compounded weight of the slot's negative
-//     marks (heavy ×2, expiring ×3, degraded ×6, see slotWeight), so 2
+//     marks (heavy ×2, expiring ×4, degraded ×6, see slotWeight), so 2
 //     streams on a heavy slot weigh like 4 healthy ones and 1 on a
 //     degraded slot like 6, while a heavy+expiring+degraded slot compounds
-//     to ×36. A slot only counts as full once its weighted load reaches
+//     to ×48. A slot only counts as full once its weighted load reaches
 //     the tier capacity, which doubles whenever the active layer is pushed
 //     to the next power-of-two multiple of the base — so a fully saturated
 //     pool keeps spreading load instead of piling onto one connection.
@@ -163,9 +163,9 @@ func slotTierOf(s *transportSlot) slotTier {
 // negativeScore quantifies how many negative marks a slot carries, used as
 // the secondary ordering key within a tier and in the uncapped fallback:
 // among equally loaded slots the one with fewer negative states wins.
-// Weights match slotWeight's severity order: degraded 6 > expiring 3 >
+// Weights match slotWeight's severity order: degraded 6 > expiring 4 >
 // heavy 2 (an expiring connection is worse than a merely heavy one, since
-// it is due for rotation).
+// it is due for rotation and should be recycled quickly).
 func negativeScore(s *transportSlot) int32 {
 	var score int32
 	if s.degraded.Load() {
@@ -175,24 +175,27 @@ func negativeScore(s *transportSlot) int32 {
 		score += 2
 	}
 	if s.expiring.Load() {
-		score += 3
+		score += 4
 	}
 	return score
 }
 
 // slotWeight returns the load weight of a slot's negative marks, the
 // product of every mark it carries: heavy multiplies the load by 2,
-// expiring by 3, degraded by 6 (no mark: 1). A stream on a heavy+expiring
-// slot weighs 2×3 = 6× a healthy stream, one on a heavy+expiring+degraded
-// slot 2×3×6 = 36× — multiple negative states compound, so a slot is only
+// expiring by 4, degraded by 6 (no mark: 1). A stream on a heavy+expiring
+// slot weighs 2×4 = 8× a healthy stream, one on a heavy+expiring+degraded
+// slot 2×4×6 = 48× — multiple negative states compound, so a slot is only
 // considered full once its weighted load reaches the pool's threshold.
+// Expiring is weighted deliberately high (4, above heavy's 2): the slot is
+// due for rotation, so streams should avoid it and let it go idle and be
+// recycled quickly.
 func slotWeight(s *transportSlot) int32 {
 	w := int32(1)
 	if s.heavy.Load() > 0 {
 		w *= 2
 	}
 	if s.expiring.Load() {
-		w *= 3
+		w *= 4
 	}
 	if s.degraded.Load() {
 		w *= 6
@@ -397,8 +400,8 @@ func floorLog2(v int32) int32 {
 //	level k>=1: every negative tier has cap = 2^(k-1)*base.
 //
 // At level 1 that means a heavy slot holds at most base/2 streams, an
-// expiring one base/3, a degraded one base/6 — 2 heavy streams count like
-// 4 healthy ones, 1 degraded like 6, 1 expiring like 3. Every level-up
+// expiring one base/4, a degraded one base/6 — 2 heavy streams count like
+// 4 healthy ones, 1 degraded like 6, 1 expiring like 4. Every level-up
 // doubles the negative-tier
 // capacities: the model first spills onto the negative tiers, then piles
 // back onto the active layer until it doubles, then the negative-tier
