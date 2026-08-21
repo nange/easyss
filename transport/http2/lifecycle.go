@@ -273,12 +273,15 @@ func (lc *slotLifecycle) rotationDue(s *transportSlot, now time.Time) bool {
 }
 
 // rotationLifetime returns the connection lifetime with a per-connection
-// random jitter of up to 20%. Connections created in the same burst (e.g.
+// random jitter of up to 50%. Connections created in the same burst (e.g.
 // several slots dialing together) then expire in different health ticks,
 // so rotations and the subsequent TLS handshakes do not cluster into a
-// single fingerprintable burst.
+// single fingerprintable burst. With the default 7-minute lifetime the
+// jitter spreads a same-batch expiry over a 3.5-minute window (roughly 42
+// health ticks), so a batch never tips into expiring at once and the
+// scheduler keeps healthy slots to spread new streams onto.
 func rotationLifetime(base time.Duration) time.Duration {
-	span := int64(base) / 5
+	span := int64(base) / 2
 	if span <= 0 {
 		return base
 	}

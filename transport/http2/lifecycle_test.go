@@ -443,7 +443,7 @@ func TestRotationDue(t *testing.T) {
 
 func TestRotationLifetimeJitter(t *testing.T) {
 	const base = 15 * time.Minute
-	max := base + base/5
+	max := base + base/2
 	for i := 0; i < 1000; i++ {
 		got := rotationLifetime(base)
 		if got < base || got > max {
