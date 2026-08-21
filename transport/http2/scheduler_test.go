@@ -238,14 +238,17 @@ func TestTieredSelectLevel1(t *testing.T) {
 		}
 	})
 
-	t.Run("all tiers full falls back to healthy least-active", func(t *testing.T) {
+	t.Run("all tiers full falls back to the least-loaded slot", func(t *testing.T) {
 		p := newTestPool(8, [2]int32{8, 0}, [2]int32{4, 0}, [2]int32{2, 0}, [2]int32{2, 0})
 		p.slots[1].expiring.Store(true)
 		p.slots[2].heavy.Store(1)
 		p.slots[3].degraded.Store(true)
+		// Every tier is at capacity; the fallback is the globally
+		// least-loaded slot — the heavy/degraded ones (active=2), not the
+		// piled-up healthy slot (active=8).
 		slot, saturated := p.tieredSelect()
-		if !saturated || slot != p.slots[0] {
-			t.Fatalf("got slot %d saturated=%v, want fallback to healthy slot 0 with saturated=true", slot.idx, saturated)
+		if !saturated || slot != p.slots[2] {
+			t.Fatalf("got slot %d saturated=%v, want least-loaded heavy slot 2 (active=2)", slot.idx, saturated)
 		}
 	})
 }
@@ -368,6 +371,34 @@ func TestPickBorrowsOtherPoolWhenSaturated(t *testing.T) {
 			[][2]int32{{4, 0}},
 			[][2]int32{{8, 0}, {8, 0}},
 		)
+		if got := sch.pick(true); got != sch.priority.slots[0] {
+			t.Fatalf("pick(true) = slot %d, want own pool fallback slot 0", got.idx)
+		}
+	})
+
+	t.Run("borrows other pool fallback when it is less loaded", func(t *testing.T) {
+		// Priority pool saturated (healthy slot at 4, no lower tiers); bulk
+		// pool saturated too (both slots heavy at their cap of 2), but its
+		// fallback slot hosts 2 streams vs our 4 — the new stream must go
+		// there instead of piling onto the 4-stream slot.
+		sch := newTwoPoolScheduler(
+			[][2]int32{{4, 0}},
+			[][2]int32{{2, 1}, {8, 1}},
+		)
+		sch.bulk.slots[1].expiring.Store(true)
+		if got := sch.pick(true); got != sch.bulk.slots[0] {
+			t.Fatalf("pick(true) = slot %d, want less-loaded bulk slot 0 (active=2)", got.idx)
+		}
+	})
+
+	t.Run("keeps own fallback when the other pool is not less loaded", func(t *testing.T) {
+		sch := newTwoPoolScheduler(
+			[][2]int32{{2, 0}},
+			[][2]int32{{2, 1}, {8, 1}},
+		)
+		sch.priority.slots[0].heavy.Store(1)
+		// Both fallbacks sit at 2 streams; equal load keeps the stream in
+		// its own pool.
 		if got := sch.pick(true); got != sch.priority.slots[0] {
 			t.Fatalf("pick(true) = slot %d, want own pool fallback slot 0", got.idx)
 		}

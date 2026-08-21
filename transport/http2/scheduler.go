@@ -177,8 +177,11 @@ func negativeScore(s *transportSlot) int32 {
 // its own pool, searched with the tiered pressure scheduler. When every
 // tier of the pool is saturated (and the pool is at its connection cap),
 // the other pool is searched once more — its healthy slots are borrowed
-// before piling onto a saturated connection. The result is never nil: with
-// no live slots the first pre-allocated slot is returned.
+// before piling onto a saturated connection. Even when the other pool is
+// saturated too, its fallback slot may be far less loaded than ours (e.g.
+// a heavy slot with 2 streams vs our piled-up healthy slot with 10), so it
+// is borrowed whenever it is strictly less loaded. The result is never
+// nil: with no live slots the first pre-allocated slot is returned.
 func (s *slotScheduler) pick(highPriority bool) *transportSlot {
 	pool := s.poolOf(highPriority)
 	slot, saturated := pool.tieredSelect()
@@ -190,7 +193,8 @@ func (s *slotScheduler) pick(highPriority bool) *transportSlot {
 		} else {
 			stats.RecordBulkFallback()
 		}
-		if other, otherSat := s.otherPool(pool).tieredSelect(); !otherSat {
+		other, otherSat := s.otherPool(pool).tieredSelect()
+		if !otherSat || other.active.Load() < slot.active.Load() {
 			return other
 		}
 	}
@@ -298,12 +302,13 @@ func (p *slotPool) tieredSelectAt(live int, recordStats bool) (*transportSlot, b
 		return best, false
 	}
 
-	// Every tier is at capacity: fall back to piling onto the least-loaded
-	// healthy slot (the "back to active" step of the model), or onto the
-	// least-loaded slot overall when no healthy slot exists.
-	if sl := p.leastActiveHealthy(live); sl != nil {
-		return sl, true
-	}
+	// Every tier is at capacity: fall back to the least-loaded slot
+	// overall, regardless of tier. Once the negative tiers' caps are
+	// exhausted, the least-loaded slot may well be a heavy or degraded one
+	// hosting far fewer streams than the piled-up healthy slots — piling
+	// there keeps load balanced instead of stacking every stream onto one
+	// crowded healthy connection (which is also what keeps the pressure
+	// level honest).
 	return p.leastActive(live), true
 }
 
@@ -424,23 +429,6 @@ func (p *slotPool) minActiveInRange(live int) int32 {
 		return 0
 	}
 	return min
-}
-
-// leastActiveHealthy returns the healthy (no marks) slot with the fewest
-// active streams among the first `live` slots, or nil when none exists.
-func (p *slotPool) leastActiveHealthy(live int) *transportSlot {
-	var best *transportSlot
-	var min int32 = math.MaxInt32
-	for i := 0; i < live; i++ {
-		sl := p.slots[i]
-		if slotTierOf(sl) != tierActive {
-			continue
-		}
-		if a := sl.active.Load(); a < min {
-			best, min = sl, a
-		}
-	}
-	return best
 }
 
 // leastActive returns the slot with the fewest active streams among the
