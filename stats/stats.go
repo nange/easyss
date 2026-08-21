@@ -43,6 +43,12 @@ type stats struct {
 	priorityFallback      atomic.Int64
 	bulkFallback          atomic.Int64
 
+	// Tier scheduling (client-side): streams scheduled onto a non-active
+	// health tier by the pressure scheduler.
+	tierExpiringScheduled atomic.Int64
+	tierHeavyScheduled    atomic.Int64
+	tierDegradedScheduled atomic.Int64
+
 	// Transport health (client-side)
 	slotDegraded         atomic.Int64
 	slotRetiredDegraded  atomic.Int64
@@ -98,6 +104,9 @@ func RecordStreamOpenedPriority() { g.priorityStreamsOpened.Add(1) }
 func RecordStreamOpenedBulk()     { g.bulkStreamsOpened.Add(1) }
 func RecordPriorityFallback()     { g.priorityFallback.Add(1) }
 func RecordBulkFallback()         { g.bulkFallback.Add(1) }
+func RecordTierExpiring()         { g.tierExpiringScheduled.Add(1) }
+func RecordTierHeavy()            { g.tierHeavyScheduled.Add(1) }
+func RecordTierDegraded()         { g.tierDegradedScheduled.Add(1) }
 
 func RecordSlotDegraded()        { g.slotDegraded.Add(1) }
 func RecordSlotRetiredDegraded() { g.slotRetiredDegraded.Add(1) }
@@ -165,6 +174,9 @@ func ResetCounters() {
 	g.bulkStreamsOpened.Store(0)
 	g.priorityFallback.Store(0)
 	g.bulkFallback.Store(0)
+	g.tierExpiringScheduled.Store(0)
+	g.tierHeavyScheduled.Store(0)
+	g.tierDegradedScheduled.Store(0)
 	g.slotDegraded.Store(0)
 	g.slotRetiredDegraded.Store(0)
 	g.connRotated.Store(0)
@@ -221,6 +233,11 @@ type Snapshot struct {
 	BulkStreamsOpened     int64 `json:"bulk_streams_opened"`
 	PriorityFallback      int64 `json:"priority_fallback"`
 	BulkFallback          int64 `json:"bulk_fallback"`
+
+	// Tier scheduling (client-side only; zero on server)
+	TierExpiringScheduled int64 `json:"tier_expiring_scheduled"`
+	TierHeavyScheduled    int64 `json:"tier_heavy_scheduled"`
+	TierDegradedScheduled int64 `json:"tier_degraded_scheduled"`
 
 	// Transport health (client-side only; zero on server)
 	SlotDegraded         int64 `json:"slot_degraded"`
@@ -312,6 +329,9 @@ func Collect() Snapshot {
 		BulkStreamsOpened:      g.bulkStreamsOpened.Load(),
 		PriorityFallback:       g.priorityFallback.Load(),
 		BulkFallback:           g.bulkFallback.Load(),
+		TierExpiringScheduled:  g.tierExpiringScheduled.Load(),
+		TierHeavyScheduled:     g.tierHeavyScheduled.Load(),
+		TierDegradedScheduled:  g.tierDegradedScheduled.Load(),
 		SlotDegraded:           g.slotDegraded.Load(),
 		SlotRetiredDegraded:    g.slotRetiredDegraded.Load(),
 		ConnRotated:            g.connRotated.Load(),

@@ -66,6 +66,9 @@ func TestResetCounters(t *testing.T) {
 	RecordStreamOpenedBulk()
 	RecordPriorityFallback()
 	RecordBulkFallback()
+	RecordTierExpiring()
+	RecordTierHeavy()
+	RecordTierDegraded()
 	RecordRTT(100 * time.Millisecond)
 	RecordServerTCPStream()
 	RecordServerUDPStream()
@@ -89,6 +92,8 @@ func TestResetCounters(t *testing.T) {
 		snap.PaddingBytes != 0 || snap.RecordsWritten != 0 ||
 		snap.PriorityStreamsOpened != 0 || snap.BulkStreamsOpened != 0 ||
 		snap.PriorityFallback != 0 || snap.BulkFallback != 0 ||
+		snap.TierExpiringScheduled != 0 || snap.TierHeavyScheduled != 0 ||
+		snap.TierDegradedScheduled != 0 ||
 		snap.RTTCount != 0 || snap.RTTEWMA != 0 ||
 		snap.UploadSpeed != 0 || snap.DownloadSpeed != 0 ||
 		snap.PeakUploadSpeedHuman != "0 B/s" || snap.PeakDownloadSpeedHuman != "0 B/s" ||

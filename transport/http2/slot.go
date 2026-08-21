@@ -50,22 +50,6 @@ type transportSlot struct {
 	lastProbeAt    time.Time
 }
 
-// eligible reports whether the slot may host a new stream under the given
-// skip filters. The scheduler queries it instead of reading the flags
-// directly, so the meaning of "healthy" lives with the slot.
-func (s *transportSlot) eligible(skipHeavy, skipDegraded, skipExpiring bool) bool {
-	if skipHeavy && s.heavy.Load() > 0 {
-		return false
-	}
-	if skipDegraded && s.degraded.Load() {
-		return false
-	}
-	if skipExpiring && s.expiring.Load() {
-		return false
-	}
-	return true
-}
-
 // resetConn (re)initializes the rotation state for a freshly established
 // connection: the lifetime deadline (with per-connection jitter), the bytes
 // carried and the expiring mark all start fresh.
