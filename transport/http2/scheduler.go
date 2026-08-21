@@ -480,14 +480,23 @@ func (p *slotPool) leastActive(live int) *transportSlot {
 // connection over squeezing negative ones: when the stream's own pool's
 // slots reached their thresholds (tiers saturated), the pool grows itself;
 // once the pool is at its connection cap, the sibling pool is grown
-// instead — but only while the own pool's slots are saturated, so the
-// sibling is never inflated by streams the own pool could still serve.
-// Only when both pools are at their caps does pick fall back to the tiered
-// selection and finally the least-loaded slot. Uses double-checked
-// locking. On first activation (live == 0) two connections are activated
-// at once for better initial throughput, since typical web browsing
-// generates more than 8 concurrent streams; falls back to 1 when maxSlots
-// is 1.
+// instead — but only while the sibling's slots are saturated too, so one
+// pool is never inflated stream by stream by the other pool's continuous
+// saturation. Only when both pools are at their caps does pick fall back
+// to the tiered selection and finally the least-loaded slot.
+//
+// Concurrency: the growth decision and the liveCount update happen inside
+// one critical section (s.mu write lock) — the unlocked fast path only
+// filters out the common no-growth case, and growTarget is re-evaluated
+// under the lock before any slot is activated. Concurrent growers
+// therefore serialize: the first one activates a slot (which drops the
+// target pool below saturation), and the next one re-checks and backs off,
+// so concurrent streams can never over-grow the pool. The write lock also
+// excludes concurrent pick (read lock) and shrink, keeping the live slot
+// range consistent. On first activation (live == 0) two connections are
+// activated at once for better initial throughput, since typical web
+// browsing generates more than 8 concurrent streams; falls back to 1 when
+// maxSlots is 1.
 func (s *slotScheduler) grow(highPriority bool) {
 	pool := s.poolOf(highPriority)
 	target, _ := s.growTarget(pool)
@@ -499,7 +508,8 @@ func (s *slotScheduler) grow(highPriority bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Double-check after acquiring the lock.
+	// Double-check after acquiring the lock: another grower may have
+	// activated the slot (or changed the tiers) while we waited.
 	target, live := s.growTarget(pool)
 	if target == nil {
 		return
@@ -513,22 +523,25 @@ func (s *slotScheduler) grow(highPriority bool) {
 
 // growTarget decides whether a new connection is needed and which pool it
 // belongs to; it returns nil when no pool should grow. Growth is judged by
-// the slots of the stream's own pool only: a pool grows (itself, or — once
-// at its connection cap — the sibling pool) only when every one of its
-// slots reached the threshold, i.e. its tiers are saturated. A pool whose
-// slots still have capacity never grows, no matter how full the other pool
-// is; streams are served by the tiered selection instead.
+// pool-internal slot thresholds only — a pool grows only when its own
+// slots reached their thresholds (tiers saturated), and a pool is never
+// inflated by the other pool's streams while its own slots still have
+// capacity:
 //
 //   - the stream's own pool is below its cap and its tiers still have
 //     capacity → no growth (pick serves the stream normally);
 //   - the own pool is below its cap but tier-saturated → grow the own
-//     pool;
+//     pool (the fresh idle slot drops the pool back below saturation, so
+//     growth self-throttles);
 //   - the own pool is at its cap and tier-saturated → grow the sibling
-//     pool, provided it has room; the fresh healthy connection then hosts
-//     the borrowed streams;
+//     pool, but only when the sibling is also tier-saturated (or not yet
+//     activated): the sibling's fresh slot then hosts the borrowed
+//     streams. While the sibling still has tier capacity, streams borrow
+//     its healthy slots instead and no growth happens — this throttles
+//     cross-pool growth, so one pool's continuous saturation cannot inflate
+//     the other pool stream by stream;
 //   - the own pool is at its cap but its tiers still have capacity → no
-//     growth: the sibling pool must not be inflated while the own pool's
-//     slots are below their thresholds;
+//     growth;
 //   - both pools at their caps → no growth (pick falls back to the tiered
 //     selection and finally the uncapped fallback).
 func (s *slotScheduler) growTarget(pool *slotPool) (*slotPool, int32) {
@@ -547,7 +560,7 @@ func (s *slotScheduler) growTarget(pool *slotPool) (*slotPool, int32) {
 	}
 	other := s.otherPool(pool)
 	live = other.liveCount.Load()
-	if int(live) < other.maxSlots {
+	if int(live) < other.maxSlots && (live == 0 || other.saturatedIn(int(live))) {
 		return other, live
 	}
 	return nil, 0

@@ -2,6 +2,7 @@ package http2
 
 import (
 	"net/http"
+	"sync"
 	"testing"
 )
 
@@ -553,17 +554,19 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 		}
 	})
 
-	t.Run("grows sibling when own pool is saturated and full", func(t *testing.T) {
-		// Own pool at its cap with every slot at the threshold (4): a new
-		// connection is genuinely needed, so the sibling pool grows even
-		// though it still has capacity.
+	t.Run("grows sibling when both pools are saturated", func(t *testing.T) {
+		// Own pool at its cap with every slot at the threshold (4), and
+		// the sibling pool's slots saturated too (8 each): a new
+		// connection is genuinely needed, so the sibling grows.
 		sch := newGrowTestScheduler(10, 5, 5, 2)
 		for i := 0; i < 5; i++ {
 			sch.priority.slots[i].active.Store(4)
 		}
+		sch.bulk.slots[0].active.Store(8)
+		sch.bulk.slots[1].active.Store(8)
 		sch.grow(true)
 		if got := sch.bulk.liveCount.Load(); got != 3 {
-			t.Fatalf("bulk liveCount = %d, want 3 (sibling grown while own pool saturated)", got)
+			t.Fatalf("bulk liveCount = %d, want 3 (sibling grown while both pools saturated)", got)
 		}
 	})
 
@@ -585,11 +588,12 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 		}
 	})
 
-	t.Run("priority pool full grows tier-saturated bulk pool", func(t *testing.T) {
-		// The reported snapshot: priority pool saturated, bulk pool holds
-		// two heavy slots at their weighted capacity (2 and 8 streams,
-		// both weighted >= 8) — new HTTPS streams must grow the bulk pool
-		// instead of piling onto the saturated priority connections.
+	t.Run("does not grow sibling while sibling has tier capacity", func(t *testing.T) {
+		// Priority pool saturated, bulk pool holds two heavy slots at 2
+		// and 8 streams: the 2-stream slot weighs 4 < base 8, so the bulk
+		// pool still has tier capacity — streams borrow it instead of
+		// growing it. Cross-pool growth is throttled by the sibling's own
+		// slot thresholds.
 		sch := newGrowTestScheduler(10, 5, 5, 2)
 		for i := 0; i < 5; i++ {
 			sch.priority.slots[i].active.Store(4)
@@ -599,8 +603,31 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 		sch.bulk.slots[1].active.Store(8)
 		sch.bulk.slots[1].heavy.Store(1)
 		sch.grow(true)
-		if got := sch.bulk.liveCount.Load(); got != 3 {
-			t.Fatalf("bulk liveCount = %d, want 3 (grown while its tiers are saturated)", got)
+		if got := sch.bulk.liveCount.Load(); got != 2 {
+			t.Fatalf("bulk liveCount = %d, want 2 (sibling still has tier capacity)", got)
+		}
+	})
+
+	t.Run("does not inflate a healthy sibling stream by stream", func(t *testing.T) {
+		// The reported snapshot: priority pool saturated (healthy slots at
+		// 4, heavy slots at 4/4/3 — 3 heavy streams weigh 6 >= base 4),
+		// bulk pool holds seven 1-stream healthy slots: far from its
+		// threshold 8, so growth must not happen.
+		sch := newGrowTestScheduler(14, 5, 5, 9)
+		sch.priority.slots[0].active.Store(4)
+		sch.priority.slots[1].active.Store(4)
+		sch.priority.slots[2].active.Store(4)
+		sch.priority.slots[2].heavy.Store(1)
+		sch.priority.slots[3].active.Store(4)
+		sch.priority.slots[3].heavy.Store(1)
+		sch.priority.slots[4].active.Store(3)
+		sch.priority.slots[4].heavy.Store(1)
+		for i := 0; i < 7; i++ {
+			sch.bulk.slots[i].active.Store(1)
+		}
+		sch.grow(true)
+		if got := sch.bulk.liveCount.Load(); got != 9 {
+			t.Fatalf("bulk liveCount = %d, want 9 (sibling must not be inflated)", got)
 		}
 	})
 
@@ -627,6 +654,53 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 		sch.grow(true)
 		if got := sch.priority.liveCount.Load() + sch.bulk.liveCount.Load(); got != 10 {
 			t.Fatalf("total liveCount = %d, want 10 (both pools at their caps)", got)
+		}
+	})
+}
+
+// TestGrowConcurrent stresses grow's double-checked locking: concurrent
+// growers must serialize on the write lock and re-evaluate under it, so a
+// burst of streams can never over-grow a pool.
+func TestGrowConcurrent(t *testing.T) {
+	t.Run("concurrent growers activate the sibling once", func(t *testing.T) {
+		sch := newGrowTestScheduler(10, 5, 5, 0)
+		for i := 0; i < 5; i++ {
+			sch.priority.slots[i].active.Store(4)
+		}
+		const n = 64
+		var wg sync.WaitGroup
+		wg.Add(n)
+		for i := 0; i < n; i++ {
+			go func() {
+				defer wg.Done()
+				sch.grow(true)
+			}()
+		}
+		wg.Wait()
+		if got := sch.bulk.liveCount.Load(); got != 2 {
+			t.Fatalf("bulk liveCount = %d, want 2 (single first activation under concurrency)", got)
+		}
+	})
+
+	t.Run("concurrent growers add at most one slot", func(t *testing.T) {
+		sch := newGrowTestScheduler(10, 5, 5, 2)
+		for i := 0; i < 5; i++ {
+			sch.priority.slots[i].active.Store(4)
+		}
+		sch.bulk.slots[0].active.Store(8)
+		sch.bulk.slots[1].active.Store(8)
+		const n = 64
+		var wg sync.WaitGroup
+		wg.Add(n)
+		for i := 0; i < n; i++ {
+			go func() {
+				defer wg.Done()
+				sch.grow(true)
+			}()
+		}
+		wg.Wait()
+		if got := sch.bulk.liveCount.Load(); got != 3 {
+			t.Fatalf("bulk liveCount = %d, want 3 (at most one slot added under concurrency)", got)
 		}
 	})
 }
