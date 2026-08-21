@@ -32,10 +32,10 @@ import (
 //     heavy slots and finally degraded slots (worst candidate, last
 //     resort). Negative tiers are compared by weighted load — the active
 //     stream count times the compounded weight of the slot's negative
-//     marks (heavy ×2, expiring ×2, degraded ×4, see slotWeight), so 2
+//     marks (heavy ×2, expiring ×3, degraded ×6, see slotWeight), so 2
 //     streams on a heavy slot weigh like 4 healthy ones and 1 on a
-//     degraded slot like 4, while a heavy+expiring+degraded slot compounds
-//     to ×16. A slot only counts as full once its weighted load reaches
+//     degraded slot like 6, while a heavy+expiring+degraded slot compounds
+//     to ×36. A slot only counts as full once its weighted load reaches
 //     the tier capacity, which doubles whenever the active layer is pushed
 //     to the next power-of-two multiple of the base — so a fully saturated
 //     pool keeps spreading load instead of piling onto one connection.
@@ -179,10 +179,10 @@ func negativeScore(s *transportSlot) int32 {
 }
 
 // slotWeight returns the load weight of a slot's negative marks, the
-// product of every mark it carries: expiring and heavy each multiply the
-// load by 2, degraded by 4 (no mark: 1). A stream on a heavy+expiring
-// slot weighs 2×2 = 4× a healthy stream, one on a heavy+expiring+degraded
-// slot 2×2×4 = 16× — multiple negative states compound, so a slot is only
+// product of every mark it carries: heavy multiplies the load by 2,
+// expiring by 3, degraded by 6 (no mark: 1). A stream on a heavy+expiring
+// slot weighs 2×3 = 6× a healthy stream, one on a heavy+expiring+degraded
+// slot 2×3×6 = 36× — multiple negative states compound, so a slot is only
 // considered full once its weighted load reaches the pool's threshold.
 func slotWeight(s *transportSlot) int32 {
 	w := int32(1)
@@ -190,10 +190,10 @@ func slotWeight(s *transportSlot) int32 {
 		w *= 2
 	}
 	if s.expiring.Load() {
-		w *= 2
+		w *= 3
 	}
 	if s.degraded.Load() {
-		w *= 4
+		w *= 6
 	}
 	return w
 }
@@ -394,9 +394,10 @@ func floorLog2(v int32) int32 {
 //	level 0: only the active tier has capacity, cap = base;
 //	level k>=1: every negative tier has cap = 2^(k-1)*base.
 //
-// At level 1 that means a heavy or expiring slot holds at most base/2
-// streams and a degraded one base/4 — 2 heavy streams count like 4 healthy
-// ones, 1 degraded like 4. Every level-up doubles the negative-tier
+// At level 1 that means a heavy slot holds at most base/2 streams, an
+// expiring one base/3, a degraded one base/6 — 2 heavy streams count like
+// 4 healthy ones, 1 degraded like 6, 1 expiring like 3. Every level-up
+// doubles the negative-tier
 // capacities: the model first spills onto the negative tiers, then piles
 // back onto the active layer until it doubles, then the negative-tier
 // capacities double and the spill resumes — cycling until streams end and

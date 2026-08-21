@@ -193,22 +193,22 @@ func TestWeightedActive(t *testing.T) {
 		want   int32
 	}{
 		{"healthy weighs 1", func(s *transportSlot) {}, 4, 4},
-		{"expiring weighs 2", func(s *transportSlot) { s.expiring.Store(true) }, 2, 4},
+		{"expiring weighs 3", func(s *transportSlot) { s.expiring.Store(true) }, 2, 6},
 		{"heavy weighs 2", func(s *transportSlot) { s.heavy.Store(1) }, 2, 4},
-		{"degraded weighs 4", func(s *transportSlot) { s.degraded.Store(true) }, 1, 4},
-		{"heavy and expiring compound to 4", func(s *transportSlot) {
+		{"degraded weighs 6", func(s *transportSlot) { s.degraded.Store(true) }, 1, 6},
+		{"heavy and expiring compound to 6", func(s *transportSlot) {
 			s.heavy.Store(1)
 			s.expiring.Store(true)
-		}, 2, 8},
-		{"heavy and degraded compound to 8", func(s *transportSlot) {
+		}, 2, 12},
+		{"heavy and degraded compound to 12", func(s *transportSlot) {
 			s.heavy.Store(1)
 			s.degraded.Store(true)
-		}, 1, 8},
-		{"all marks compound to 16", func(s *transportSlot) {
+		}, 1, 12},
+		{"all marks compound to 36", func(s *transportSlot) {
 			s.heavy.Store(1)
 			s.expiring.Store(true)
 			s.degraded.Store(true)
-		}, 2, 32}, // 2 streams × 2(heavy) × 2(expiring) × 4(degraded)
+		}, 2, 72}, // 2 streams × 2(heavy) × 3(expiring) × 6(degraded)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -303,11 +303,12 @@ func TestTieredSelectLevel1(t *testing.T) {
 
 func TestTieredSelectLevel2CapsDouble(t *testing.T) {
 	t.Run("expiring capacity doubles to base", func(t *testing.T) {
-		p := newTestPool(8, [2]int32{16, 0}, [2]int32{7, 0})
+		p := newTestPool(8, [2]int32{16, 0}, [2]int32{5, 0})
 		p.slots[1].expiring.Store(true)
+		// 5 expiring streams weigh 15 < doubled capacity 16.
 		slot, saturated := p.tieredSelect()
 		if saturated || slot != p.slots[1] {
-			t.Fatalf("got slot %d saturated=%v, want expiring slot 1 (active=7 < 8)", slot.idx, saturated)
+			t.Fatalf("got slot %d saturated=%v, want expiring slot 1 (active=5, weighted 15 < 16)", slot.idx, saturated)
 		}
 	})
 
@@ -518,17 +519,17 @@ func TestNoGrowthWhileNegativeTiersHaveCapacity(t *testing.T) {
 	sch := newGrowTestScheduler(10, 5, 5, 2)
 
 	// Healthy slot saturated at 8, but an expiring slot still has capacity
-	// (2 streams weigh 4 < base 8): the stream is served there, no growth.
+	// (2 streams weigh 6 < base 8): the stream is served there, no growth.
 	sch.bulk.slots[0].active.Store(8)
 	sch.bulk.slots[1].expiring.Store(true)
-	sch.bulk.slots[1].active.Store(3)
+	sch.bulk.slots[1].active.Store(2)
 	sch.grow(false)
 	if got := sch.bulk.liveCount.Load(); got != 2 {
 		t.Fatalf("bulk liveCount = %d, want 2 while expiring slot has capacity", got)
 	}
 
-	// Negative tiers saturated too: grow.
-	sch.bulk.slots[1].active.Store(4)
+	// Negative tiers saturated too (3 expiring streams weigh 9 >= 8): grow.
+	sch.bulk.slots[1].active.Store(3)
 	sch.grow(false)
 	if got := sch.bulk.liveCount.Load(); got != 3 {
 		t.Fatalf("bulk liveCount = %d, want 3 when every tier is saturated", got)
