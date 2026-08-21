@@ -161,19 +161,21 @@ func slotTierOf(s *transportSlot) slotTier {
 }
 
 // negativeScore quantifies how many negative marks a slot carries, used as
-// the secondary ordering key within a tier: among equally loaded slots the
-// one with fewer negative states wins. Weights follow the tier order:
-// degraded 4 > heavy 2 > expiring 1.
+// the secondary ordering key within a tier and in the uncapped fallback:
+// among equally loaded slots the one with fewer negative states wins.
+// Weights match slotWeight's severity order: degraded 6 > expiring 3 >
+// heavy 2 (an expiring connection is worse than a merely heavy one, since
+// it is due for rotation).
 func negativeScore(s *transportSlot) int32 {
 	var score int32
 	if s.degraded.Load() {
-		score += 4
+		score += 6
 	}
 	if s.heavy.Load() > 0 {
 		score += 2
 	}
 	if s.expiring.Load() {
-		score += 1
+		score += 3
 	}
 	return score
 }
