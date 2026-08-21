@@ -453,6 +453,42 @@ func TestGrowSqueezesNegativeTiersBeforeGrowing(t *testing.T) {
 	}
 }
 
+func TestGrowActivatesOtherPoolWhenSaturated(t *testing.T) {
+	t.Run("priority pool full activates unactivated bulk pool", func(t *testing.T) {
+		// priority pool (5 slots) at its cap, bulk pool never used: new
+		// priority streams will cross-borrow, so the bulk pool must be
+		// activated (with first-activation +2 semantics) to give borrowed
+		// streams managed, spread-out slots.
+		sch := newGrowTestScheduler(10, 5, 5, 0)
+		sch.grow(true)
+		if got := sch.bulk.liveCount.Load(); got != 2 {
+			t.Fatalf("bulk liveCount = %d, want 2 (activated for borrowing)", got)
+		}
+		if got := sch.priority.liveCount.Load(); got != 5 {
+			t.Fatalf("priority liveCount = %d, want 5 (unchanged)", got)
+		}
+	})
+
+	t.Run("does not re-activate an already live pool", func(t *testing.T) {
+		sch := newGrowTestScheduler(10, 5, 5, 2)
+		sch.grow(true)
+		if got := sch.bulk.liveCount.Load(); got != 2 {
+			t.Fatalf("bulk liveCount = %d, want 2 (no double activation)", got)
+		}
+	})
+
+	t.Run("bulk pool full activates unactivated priority pool", func(t *testing.T) {
+		sch := newGrowTestScheduler(10, 5, 0, 5)
+		sch.grow(false)
+		if got := sch.priority.liveCount.Load(); got != 2 {
+			t.Fatalf("priority liveCount = %d, want 2 (activated for borrowing)", got)
+		}
+		if got := sch.bulk.liveCount.Load(); got != 5 {
+			t.Fatalf("bulk liveCount = %d, want 5 (unchanged)", got)
+		}
+	})
+}
+
 func TestGrowFirstActivationPerPool(t *testing.T) {
 	sch := newGrowTestScheduler(10, 5, 0, 0)
 

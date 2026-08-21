@@ -479,6 +479,11 @@ func (s *slotScheduler) grow(highPriority bool) {
 	pool := s.poolOf(highPriority)
 	live := pool.liveCount.Load()
 	if int(live) >= pool.maxSlots {
+		// This pool is at its connection cap: new streams will cross-borrow
+		// from the other pool (see pick). Make sure that pool is activated,
+		// so borrowed streams land on managed slots — spread by the normal
+		// tiered scheduler instead of piling onto one unmanaged slot.
+		s.activateOther(pool)
 		return
 	}
 	if live > 0 && !pool.saturatedIn(int(live)) {
@@ -503,6 +508,27 @@ func (s *slotScheduler) grow(highPriority bool) {
 	} else {
 		pool.liveCount.Add(1)
 	}
+}
+
+// activateOther activates the sibling pool when it is still unactivated
+// (live == 0), doubling the first-activation semantics (+2): once a pool is
+// saturated to the point of cross-borrowing, the borrowed streams deserve
+// managed slots. Activation is lazy and harmless — an activated pool with
+// no streams is shrunk back by the next idle sweep.
+func (s *slotScheduler) activateOther(pool *slotPool) {
+	other := s.otherPool(pool)
+	if other.liveCount.Load() > 0 {
+		return
+	}
+	s.mu.Lock()
+	if other.liveCount.Load() == 0 {
+		if other.maxSlots >= 2 {
+			other.liveCount.Add(2)
+		} else {
+			other.liveCount.Add(1)
+		}
+	}
+	s.mu.Unlock()
 }
 
 // shrinkIdleLocked retires every idle slot (active==0) from both pools,
