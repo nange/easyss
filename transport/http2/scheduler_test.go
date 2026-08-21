@@ -536,10 +536,14 @@ func TestNoGrowthWhileNegativeTiersHaveCapacity(t *testing.T) {
 
 func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 	t.Run("priority pool full grows unactivated bulk pool", func(t *testing.T) {
-		// priority pool (5 slots) at its cap, bulk pool never used: new
-		// priority streams need fresh connections, so the sibling pool is
-		// grown (with first-activation +2 semantics).
+		// priority pool (5 slots) at its cap with every slot at the
+		// threshold, bulk pool never used: new priority streams need fresh
+		// connections, so the sibling pool is grown (with first-activation
+		// +2 semantics).
 		sch := newGrowTestScheduler(10, 5, 5, 0)
+		for i := 0; i < 5; i++ {
+			sch.priority.slots[i].active.Store(4)
+		}
 		sch.grow(true)
 		if got := sch.bulk.liveCount.Load(); got != 2 {
 			t.Fatalf("bulk liveCount = %d, want 2 (sibling grown for borrowing)", got)
@@ -549,14 +553,35 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 		}
 	})
 
-	t.Run("grows sibling even when it still has capacity", func(t *testing.T) {
-		// The own pool is at its cap: a fresh connection in the sibling
-		// pool is preferred over borrowing/piling — growth does not wait
-		// for the sibling's tiers to saturate.
+	t.Run("grows sibling when own pool is saturated and full", func(t *testing.T) {
+		// Own pool at its cap with every slot at the threshold (4): a new
+		// connection is genuinely needed, so the sibling pool grows even
+		// though it still has capacity.
 		sch := newGrowTestScheduler(10, 5, 5, 2)
+		for i := 0; i < 5; i++ {
+			sch.priority.slots[i].active.Store(4)
+		}
 		sch.grow(true)
 		if got := sch.bulk.liveCount.Load(); got != 3 {
-			t.Fatalf("bulk liveCount = %d, want 3 (fresh sibling connection preferred)", got)
+			t.Fatalf("bulk liveCount = %d, want 3 (sibling grown while own pool saturated)", got)
+		}
+	})
+
+	t.Run("does not grow sibling while own pool still has tier capacity", func(t *testing.T) {
+		// The reported snapshot: the priority pool is at its connection
+		// cap but its slots hold 3-4 streams (healthy min below the
+		// threshold 4) — the bulk pool must NOT be inflated while the
+		// priority slots can still serve streams.
+		sch := newGrowTestScheduler(10, 5, 5, 2)
+		sch.priority.slots[0].active.Store(3)
+		sch.priority.slots[1].active.Store(3)
+		sch.priority.slots[2].active.Store(3)
+		sch.priority.slots[3].active.Store(4)
+		sch.priority.slots[3].heavy.Store(1)
+		sch.priority.slots[4].active.Store(4)
+		sch.grow(true)
+		if got := sch.bulk.liveCount.Load(); got != 2 {
+			t.Fatalf("bulk liveCount = %d, want 2 (own pool still has tier capacity)", got)
 		}
 	})
 
@@ -581,6 +606,9 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 
 	t.Run("bulk pool full grows unactivated priority pool", func(t *testing.T) {
 		sch := newGrowTestScheduler(10, 5, 0, 5)
+		for i := 0; i < 5; i++ {
+			sch.bulk.slots[i].active.Store(8)
+		}
 		sch.grow(false)
 		if got := sch.priority.liveCount.Load(); got != 2 {
 			t.Fatalf("priority liveCount = %d, want 2 (sibling grown for borrowing)", got)
