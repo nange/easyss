@@ -121,14 +121,28 @@ func TestEvaluateSlotHealth(t *testing.T) {
 }
 
 // newTestLifecycle builds a lifecycle over n live slots with the given
-// probe function (nil disables probing).
+// probe function (nil disables probing). All n slots live in the priority
+// pool (bulk pool stays empty), so tests address them as priority.slots[i].
 func newTestLifecycle(n int, probe func(context.Context, *transportSlot) (float64, probeVerdict)) (*slotLifecycle, *slotScheduler) {
 	slots := make([]*transportSlot, n)
 	for i := range slots {
 		slots[i] = &transportSlot{t: &http.Transport{}}
 	}
-	sch := newScheduler(n, slots, 8, 1)
-	sch.liveCount.Store(int32(n))
+	sch := &slotScheduler{
+		priority: &slotPool{
+			slots:    slots,
+			maxSlots: n,
+			base:     8,
+		},
+		bulk: &slotPool{
+			slots:    []*transportSlot{{t: &http.Transport{}}},
+			maxSlots: 1,
+			base:     16,
+		},
+		threshold:     8,
+		bulkThreshold: 16,
+	}
+	sch.priority.liveCount.Store(int32(n))
 	lc := &slotLifecycle{sched: sch, probeFunc: probe}
 	return lc, sch
 }
@@ -197,7 +211,7 @@ func TestProbeConfirmDegraded(t *testing.T) {
 	lc, sch := newTestLifecycle(2, func(context.Context, *transportSlot) (float64, probeVerdict) {
 		return 10 * 1024, probeSlow // 10KB/s, well below 64KB/s
 	})
-	s := sch.slots[0]
+	s := sch.priority.slots[0]
 	s.suspected = true
 
 	lc.evaluateProbes(true)
@@ -225,7 +239,7 @@ func TestProbeFastClearsSuspicion(t *testing.T) {
 		calls++
 		return fastSpeed, probeFast
 	})
-	s := sch.slots[0]
+	s := sch.priority.slots[0]
 	s.suspected = true
 
 	lc.evaluateProbes(true)
@@ -248,7 +262,7 @@ func TestProbeSlowRespectsLinkReference(t *testing.T) {
 	lc, sch := newTestLifecycle(1, func(context.Context, *transportSlot) (float64, probeVerdict) {
 		return 30 * 1024, probeSlow
 	})
-	s := sch.slots[0]
+	s := sch.priority.slots[0]
 
 	// A fresh link reference below the degraded threshold means the whole
 	// link is the bottleneck: the slow probe must not blame the slot.
@@ -277,7 +291,7 @@ func TestProbeUnsupportedFallsBackToPassive(t *testing.T) {
 	lc, sch := newTestLifecycle(1, func(context.Context, *transportSlot) (float64, probeVerdict) {
 		return 0, probeUnsupported
 	})
-	s := sch.slots[0]
+	s := sch.priority.slots[0]
 	s.suspected = true
 
 	lc.evaluateProbes(true)
@@ -308,7 +322,7 @@ func TestProbeInconclusiveKeepsState(t *testing.T) {
 	lc, sch := newTestLifecycle(1, func(context.Context, *transportSlot) (float64, probeVerdict) {
 		return 0, probeInconclusive
 	})
-	s := sch.slots[0]
+	s := sch.priority.slots[0]
 	s.suspected = true
 
 	lc.evaluateProbes(true)
@@ -330,7 +344,7 @@ func TestProbeCooldown(t *testing.T) {
 		calls++
 		return 10 * 1024, probeSlow
 	})
-	s := sch.slots[0]
+	s := sch.priority.slots[0]
 	s.suspected = true
 	s.lastProbeAt = time.Now() // probed moments ago
 
@@ -348,7 +362,7 @@ func TestProbeMaxPerInterval(t *testing.T) {
 		return 10 * 1024, probeSlow
 	})
 	for i := 0; i < 3; i++ {
-		sch.slots[i].suspected = true
+		sch.priority.slots[i].suspected = true
 	}
 
 	lc.evaluateProbes(true)
@@ -356,7 +370,7 @@ func TestProbeMaxPerInterval(t *testing.T) {
 	if calls != sharedconfig.ProbeMaxPerInterval {
 		t.Fatalf("probe calls = %d, want %d", calls, sharedconfig.ProbeMaxPerInterval)
 	}
-	if sch.slots[2].probeLowCycles != 0 {
+	if sch.priority.slots[2].probeLowCycles != 0 {
 		t.Fatal("the third suspect must wait for the next tick")
 	}
 }
@@ -367,7 +381,7 @@ func TestProbesPausedOnCongestedLink(t *testing.T) {
 		calls++
 		return 10 * 1024, probeSlow
 	})
-	sch.slots[0].suspected = true
+	sch.priority.slots[0].suspected = true
 
 	lc.evaluateProbes(false)
 
@@ -378,11 +392,11 @@ func TestProbesPausedOnCongestedLink(t *testing.T) {
 
 func TestProbesDisabledWithoutProbeFunc(t *testing.T) {
 	lc, sch := newTestLifecycle(1, nil)
-	sch.slots[0].suspected = true
+	sch.priority.slots[0].suspected = true
 
 	lc.evaluateProbes(true)
 
-	if sch.slots[0].probeLowCycles != 0 {
+	if sch.priority.slots[0].probeLowCycles != 0 {
 		t.Fatal("no probing without a probe function")
 	}
 }

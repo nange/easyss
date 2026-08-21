@@ -9,23 +9,26 @@ import (
 )
 
 // slotScheduler maps new streams onto slots with a priority-aware, tiered
-// pressure scheduler and manages the live slot set: growth under load,
+// pressure scheduler and manages the live slot sets: growth under load,
 // shrink on idle, and swap-remove of retired slots. Slot health state
 // itself is owned by slotLifecycle; the scheduler only consumes the
 // eligibility signals (heavy/degraded/expiring marks).
 //
-// Scheduling model — priority × tier:
+// Scheduling model — two isolated pools × health tiers:
 //
-//   - Streams are classed by priority. Priority streams (interactive
-//     destinations, see stream.go) prefer the priority range
-//     [0, prioritySlots) and measure saturation against threshold; bulk
-//     streams prefer the bulk range [prioritySlots, live) and measure
-//     saturation against bulkThreshold = 2×threshold. Each class falls back
-//     to the whole pool when its own range is saturated.
+//   - Streams are classed by priority and each class owns a dedicated slot
+//     pool, so a DNS query or download (bulk) activates its own connections
+//     instead of sharing the interactive ones, and a burst of one class can
+//     never starve the other:
 //
-//   - Within a range, slots are ordered by health tiers (see slotTierOf):
+//     priority pool: interactive destinations (see stream.go), pressure
+//     base = threshold, at most PrioritySlotRatio×maxSlots connections;
+//     bulk pool:     everything else, pressure base = bulkThreshold
+//     (2×threshold), at most (1-ratio)×maxSlots connections.
+//
+//   - Within a pool, slots are ordered by health tiers (see slotTierOf):
 //     active (healthy) slots host new streams first. Once every active slot
-//     reached the class's pressure base, expiring slots take over (rotation
+//     reached the pool's pressure base, expiring slots take over (rotation
 //     overdue but the connection is still healthy) up to base/2 streams
 //     each; heavy slots (healthy connection monopolized by heavy streams)
 //     and degraded slots (confirmed slow) follow, up to base/4 each. Tier
@@ -33,28 +36,76 @@ import (
 //     power-of-two multiple of the base, so a fully saturated pool keeps
 //     spreading load instead of piling onto one connection.
 //
-//   - Growth fires only when every tier of the class's ranges is saturated:
-//     existing connections — including negative ones — are squeezed first,
-//     and only then is a new connection dialed, avoiding needless TLS
-//     re-dials under light overload.
+//   - Growth is per pool and fires only when every tier of that pool is
+//     saturated: existing connections — including negative ones — are
+//     squeezed first, and only then is a new connection dialed. When a pool
+//     is at its connection cap and still saturated, pick borrows a healthy
+//     slot from the other pool before settling for the uncapped fallback.
 type slotScheduler struct {
-	slots         []*transportSlot // pre-allocated and initialized to maxSlots
-	liveCount     atomic.Int32     // number of currently live slots (0..maxSlots)
-	maxSlots      int
-	threshold     int32 // pressure base for priority streams
-	prioritySlots int   // number of priority slots (0..prioritySlots-1)
-	bulkThreshold int32 // pressure base for bulk streams (2×threshold)
-	mu            sync.RWMutex
+	priority *slotPool // interactive streams, base = threshold
+	bulk     *slotPool // everything else, base = bulkThreshold
+
+	threshold     int32
+	bulkThreshold int32
+	mu            sync.RWMutex // protects pool growth/shrink; RLock protects stream assignment
 }
 
+// slotPool is one class's dedicated slot set. Slots are pre-allocated and
+// initialized to maxSlots; liveCount grows lazily on first use (+2) and
+// under load, and shrinks when slots go idle.
+type slotPool struct {
+	slots     []*transportSlot
+	liveCount atomic.Int32 // number of currently live slots (0..maxSlots)
+	maxSlots  int
+	base      int32 // pressure base of this pool (threshold or bulkThreshold)
+}
+
+// newScheduler splits the pre-allocated slot array into the priority pool
+// (first prioritySlots entries) and the bulk pool (the rest), keeping the
+// total connection cap unchanged. The split honors PrioritySlotRatio via
+// prioritySlots; both pools get at least one slot whenever maxSlots >= 2.
 func newScheduler(maxSlots int, slots []*transportSlot, threshold int32, prioritySlots int) *slotScheduler {
+	pMax := prioritySlots
+	if pMax > maxSlots {
+		pMax = maxSlots
+	}
+	if pMax < 1 {
+		pMax = 1
+	}
+	bMax := maxSlots - pMax
+	if bMax < 1 {
+		// Degenerate split (maxSlots == 1 or ratio 1): give the bulk pool
+		// the tail slot anyway; poolOf falls back to the priority pool when
+		// the bulk pool is empty.
+		bMax = 1
+		if pMax > 1 {
+			pMax = maxSlots - 1
+		}
+	}
 	return &slotScheduler{
-		slots:         slots,
-		maxSlots:      maxSlots,
+		priority: &slotPool{
+			slots:    slots[:pMax],
+			maxSlots: pMax,
+			base:     threshold,
+		},
+		bulk: &slotPool{
+			slots:    slots[pMax:],
+			maxSlots: bMax,
+			base:     threshold * 2,
+		},
 		threshold:     threshold,
-		prioritySlots: prioritySlots,
 		bulkThreshold: threshold * 2,
 	}
+}
+
+// poolOf returns the pool a stream of the given class belongs to. When the
+// bulk pool is empty (degenerate split) bulk streams share the priority
+// pool, which then behaves like the single-pool model.
+func (s *slotScheduler) poolOf(highPriority bool) *slotPool {
+	if highPriority || s.bulk.maxSlots == 0 {
+		return s.priority
+	}
+	return s.bulk
 }
 
 // slotTier classifies a slot by its most negative health signal. The tiers
@@ -114,61 +165,56 @@ func negativeScore(s *transportSlot) int32 {
 	return score
 }
 
-// preferredRange returns the slot range a new stream of the given class
-// prefers, plus the class's pressure base: priority streams prefer
-// [0, prioritySlots) and saturate at threshold, bulk streams prefer
-// [prioritySlots, live) and saturate at bulkThreshold. Like pick, both
-// classes fall back to the whole live range when their own range is
-// empty — in particular, bulk streams schedule over the entire pool while
-// live < prioritySlots, so a pure bulk workload must be able to grow the
-// pool instead of piling onto the initial connections forever.
-func (s *slotScheduler) preferredRange(highPriority bool) (start, end int, base int32) {
-	live := int(s.liveCount.Load())
-	start, end = 0, live
-	base = s.bulkThreshold
-	if highPriority && s.prioritySlots > 0 {
-		end = s.prioritySlots
-		if end > live {
-			end = live
-		}
-		base = s.threshold
-	} else if s.prioritySlots > 0 {
-		start = s.prioritySlots
-		if start >= end {
-			// The bulk range is still empty (live <= prioritySlots): bulk
-			// streams fall back onto the whole live range.
-			start = 0
-		}
-	}
-	return start, end, base
-}
-
-// pick returns the slot a new stream should use. The stream's class
-// (priority/bulk) picks its preferred range and pressure base; the range is
-// searched with the tiered pressure scheduler. When every tier of the
-// preferred range is saturated, the whole pool is searched once more (the
-// other range may still host healthy slots). The result is never nil: with
+// pick returns the slot a new stream should use: the stream's class selects
+// its own pool, searched with the tiered pressure scheduler. When every
+// tier of the pool is saturated (and the pool is at its connection cap),
+// the other pool is searched once more — its healthy slots are borrowed
+// before piling onto a saturated connection. The result is never nil: with
 // no live slots the first pre-allocated slot is returned.
 func (s *slotScheduler) pick(highPriority bool) *transportSlot {
-	start, end, base := s.preferredRange(highPriority)
-	slot, saturated := s.tieredSelect(start, end, base)
+	pool := s.poolOf(highPriority)
+	slot, saturated := pool.tieredSelect()
 	if saturated {
-		// The preferred range is fully saturated: give the other range a
-		// chance before settling for the fallback slot.
+		// The pool is fully saturated: give the other pool a chance before
+		// settling for the uncapped fallback.
 		if highPriority {
 			stats.RecordPriorityFallback()
 		} else {
 			stats.RecordBulkFallback()
 		}
-		slot, _ = s.tieredSelect(0, int(s.liveCount.Load()), base)
+		if other, otherSat := s.otherPool(pool).tieredSelect(); !otherSat {
+			return other
+		}
 	}
 	return slot
 }
 
-// tieredSelect picks the best slot in [start,end) for a new stream under
-// the pressure scheduler, returning (slot, saturated). saturated is true
-// when no tier has capacity left, in which case slot is the fallback result
-// (see below).
+// otherPool returns the sibling of the given pool.
+func (s *slotScheduler) otherPool(pool *slotPool) *slotPool {
+	if pool == s.priority {
+		return s.bulk
+	}
+	return s.priority
+}
+
+// tieredSelect picks the best slot of the pool for a new stream under the
+// pressure scheduler, returning (slot, saturated). saturated is true when
+// no tier has capacity left, in which case slot is the fallback result (see
+// below). See tieredSelectAt for the search itself.
+func (p *slotPool) tieredSelect() (*transportSlot, bool) {
+	return p.tieredSelectAt(int(p.liveCount.Load()), true)
+}
+
+// saturatedIn reports whether the tiered scheduler has no capacity left in
+// the pool — i.e. tieredSelect would take its uncapped fallback path. Used
+// by grow to decide when a new connection is truly needed; unlike
+// tieredSelect it does not record tier scheduling stats.
+func (p *slotPool) saturatedIn(live int) bool {
+	_, saturated := p.tieredSelectAt(live, false)
+	return saturated
+}
+
+// tieredSelectAt is the tiered search over the first `live` slots:
 //
 // The search walks the tiers in order of desirability — active first, then
 // expiring, heavy and degraded — and within a tier prefers the slot with
@@ -179,33 +225,26 @@ func (s *slotScheduler) pick(highPriority bool) *transportSlot {
 // healthy slot (or the least-loaded slot overall when none is healthy) with
 // no cap: that pushes the active layer toward the next pressure level,
 // where tier capacities double and the spill-over resumes.
-func (s *slotScheduler) tieredSelect(start, end int, base int32) (*transportSlot, bool) {
-	live := int(s.liveCount.Load())
+func (p *slotPool) tieredSelectAt(live int, recordStats bool) (*transportSlot, bool) {
 	if live == 0 {
-		return s.slots[0], false
-	}
-	if end > live {
-		end = live
-	}
-	if start >= end {
-		start, end = 0, live
+		return p.slots[0], false
 	}
 
-	level := s.pressureLevel(start, end, base)
+	level := p.pressureLevel(live)
 
 	// consider picks the least-active, least-negative slot of one tier
 	// within the current capacity; it reports whether such a slot exists.
 	var best *transportSlot
 	consider := func(tier slotTier) bool {
-		cap := s.tierCap(tier, level, base)
+		cap := tierCap(tier, level, p.base)
 		if cap <= 0 {
 			return false
 		}
 		best = nil
 		var bestActive int32 = math.MaxInt32
 		var bestNeg int32 = math.MaxInt32
-		for i := start; i < end; i++ {
-			sl := s.slots[i]
+		for i := 0; i < live; i++ {
+			sl := p.slots[i]
 			if slotTierOf(sl) != tier {
 				continue
 			}
@@ -233,29 +272,35 @@ func (s *slotScheduler) tieredSelect(start, end int, base int32) (*transportSlot
 		level = 1
 	}
 	if consider(tierExpiring) {
-		stats.RecordTierExpiring()
+		if recordStats {
+			stats.RecordTierExpiring()
+		}
 		return best, false
 	}
 	if consider(tierHeavy) {
-		stats.RecordTierHeavy()
+		if recordStats {
+			stats.RecordTierHeavy()
+		}
 		return best, false
 	}
 	if consider(tierDegraded) {
-		stats.RecordTierDegraded()
+		if recordStats {
+			stats.RecordTierDegraded()
+		}
 		return best, false
 	}
 
 	// Every tier is at capacity: fall back to piling onto the least-loaded
 	// healthy slot (the "back to active" step of the model), or onto the
 	// least-loaded slot overall when no healthy slot exists.
-	if sl := s.leastActiveHealthy(start, end); sl != nil {
+	if sl := p.leastActiveHealthy(live); sl != nil {
 		return sl, true
 	}
-	return s.leastActiveInRange(start, end), true
+	return p.leastActive(live), true
 }
 
 // pressureLevel derives the current pressure level from the least-loaded
-// active (healthy) slot in [start,end) against the class's pressure base:
+// active (healthy) slot of the pool against the pool's pressure base:
 //
 //	level 0: minActive < base — the active layer still has capacity, no
 //	         lower tier is enabled;
@@ -264,21 +309,21 @@ func (s *slotScheduler) tieredSelect(start, end int, base int32) (*transportSlot
 //	         expiring/heavy/degraded scale with k (see tierCap).
 //
 // With no healthy slot at all (the active layer is "full" by definition),
-// the level degrades to the whole-range minimum so the lower tiers engage
+// the level degrades to the pool-wide minimum so the lower tiers engage
 // immediately, and it is clamped to at least level 1.
-func (s *slotScheduler) pressureLevel(start, end int, base int32) int32 {
-	activeMin, hasActive := s.minActiveInTier(start, end, tierActive)
+func (p *slotPool) pressureLevel(live int) int32 {
+	activeMin, hasActive := p.minActiveInTier(live, tierActive)
 	if hasActive {
-		if activeMin < base {
+		if activeMin < p.base {
 			return 0
 		}
-		return 1 + floorLog2(activeMin/base)
+		return 1 + floorLog2(activeMin/p.base)
 	}
-	poolMin := s.minActiveInRange(start, end)
-	if poolMin < base {
-		poolMin = base
+	poolMin := p.minActiveInRange(live)
+	if poolMin < p.base {
+		poolMin = p.base
 	}
-	return 1 + floorLog2(poolMin/base)
+	return 1 + floorLog2(poolMin/p.base)
 }
 
 // floorLog2 returns floor(log2(v)) for v > 0.
@@ -309,7 +354,7 @@ func floorLog2(v int32) int32 {
 // stream), which is intended: priority streams only spill onto negative
 // slots under real pressure. Extreme levels shift beyond int32 range; the
 // resulting negative capacity is treated as "no capacity" by callers.
-func (s *slotScheduler) tierCap(tier slotTier, level, base int32) int32 {
+func tierCap(tier slotTier, level, base int32) int32 {
 	if level == 0 {
 		if tier == tierActive {
 			return base
@@ -340,12 +385,13 @@ func (s *slotScheduler) tierCap(tier slotTier, level, base int32) int32 {
 }
 
 // minActiveInTier returns the smallest active-stream count among slots of
-// the given tier in [start,end), and whether such a slot exists.
-func (s *slotScheduler) minActiveInTier(start, end int, tier slotTier) (int32, bool) {
+// the given tier, and whether such a slot exists. Only the first `live`
+// slots are considered.
+func (p *slotPool) minActiveInTier(live int, tier slotTier) (int32, bool) {
 	var min int32 = math.MaxInt32
 	found := false
-	for i := start; i < end; i++ {
-		sl := s.slots[i]
+	for i := 0; i < live; i++ {
+		sl := p.slots[i]
 		if slotTierOf(sl) != tier {
 			continue
 		}
@@ -357,12 +403,12 @@ func (s *slotScheduler) minActiveInTier(start, end int, tier slotTier) (int32, b
 	return min, found
 }
 
-// minActiveInRange returns the smallest active-stream count over all slots
-// in [start,end); 0 when the range holds no slot.
-func (s *slotScheduler) minActiveInRange(start, end int) int32 {
+// minActiveInRange returns the smallest active-stream count over the first
+// `live` slots; 0 when the range holds no slot.
+func (p *slotPool) minActiveInRange(live int) int32 {
 	var min int32 = math.MaxInt32
-	for i := start; i < end; i++ {
-		if a := s.slots[i].active.Load(); a < min {
+	for i := 0; i < live; i++ {
+		if a := p.slots[i].active.Load(); a < min {
 			min = a
 		}
 	}
@@ -372,13 +418,13 @@ func (s *slotScheduler) minActiveInRange(start, end int) int32 {
 	return min
 }
 
-// leastActiveHealthy returns the healthy (no marks) slot in [start,end)
-// with the fewest active streams, or nil when none exists.
-func (s *slotScheduler) leastActiveHealthy(start, end int) *transportSlot {
+// leastActiveHealthy returns the healthy (no marks) slot with the fewest
+// active streams among the first `live` slots, or nil when none exists.
+func (p *slotPool) leastActiveHealthy(live int) *transportSlot {
 	var best *transportSlot
 	var min int32 = math.MaxInt32
-	for i := start; i < end; i++ {
-		sl := s.slots[i]
+	for i := 0; i < live; i++ {
+		sl := p.slots[i]
 		if slotTierOf(sl) != tierActive {
 			continue
 		}
@@ -389,26 +435,19 @@ func (s *slotScheduler) leastActiveHealthy(start, end int) *transportSlot {
 	return best
 }
 
-// leastActiveInRange returns the slot in [start,end) with the fewest active
-// streams — the final uncapped fallback of the pressure scheduler; among
-// equally loaded slots the one with fewer negative marks wins. With no live
-// slots the first pre-allocated slot is returned.
-func (s *slotScheduler) leastActiveInRange(start, end int) *transportSlot {
-	live := int(s.liveCount.Load())
+// leastActive returns the slot with the fewest active streams among the
+// first `live` slots — the final uncapped fallback of the pressure
+// scheduler; among equally loaded slots the one with fewer negative marks
+// wins. With no live slots the first pre-allocated slot is returned.
+func (p *slotPool) leastActive(live int) *transportSlot {
 	if live == 0 {
-		return s.slots[0]
-	}
-	if end > live {
-		end = live
-	}
-	if start >= end {
-		start, end = 0, live
+		return p.slots[0]
 	}
 	var best *transportSlot
 	var min int32 = math.MaxInt32
 	var minNeg int32 = math.MaxInt32
-	for i := start; i < end; i++ {
-		sl := s.slots[i]
+	for i := 0; i < live; i++ {
+		sl := p.slots[i]
 		a := sl.active.Load()
 		neg := negativeScore(sl)
 		if a > min || (a == min && neg >= minNeg) {
@@ -419,111 +458,99 @@ func (s *slotScheduler) leastActiveInRange(start, end int) *transportSlot {
 	return best
 }
 
-// saturatedIn reports whether the tiered scheduler has no capacity left in
-// [start,end) for a stream of the given base — i.e. tieredSelect would take
-// its uncapped fallback path. Used by grow to decide when a new connection
-// is truly needed.
-func (s *slotScheduler) saturatedIn(start, end int, base int32) bool {
-	_, saturated := s.tieredSelect(start, end, base)
-	return saturated
-}
-
-// grow activates one more live slot (up to maxSlots), but only when every
-// tier of the stream class's ranges is saturated: the pool first squeezes
-// the remaining capacity of existing connections — including expiring,
-// heavy and degraded ones — and only dials a fresh connection once nothing
-// is left, so transient overload does not trigger needless TLS re-dials.
-// Uses double-checked locking. On first activation (live == 0) two
-// connections are activated at once for better initial throughput, since
-// typical web browsing generates more than 8 concurrent streams; falls back
-// to 1 when maxSlots is 1.
+// grow activates one more live slot of the pool (up to maxSlots), but only
+// when every tier of the pool is saturated: the pool first squeezes the
+// remaining capacity of existing connections — including expiring, heavy
+// and degraded ones — and only dials a fresh connection once nothing is
+// left, so transient overload does not trigger needless TLS re-dials. Uses
+// double-checked locking under the scheduler lock. On first activation
+// (live == 0) two connections are activated at once for better initial
+// throughput, since typical web browsing generates more than 8 concurrent
+// streams; falls back to 1 when maxSlots is 1.
 func (s *slotScheduler) grow(highPriority bool) {
-	live := s.liveCount.Load()
-	if int(live) >= s.maxSlots {
+	pool := s.poolOf(highPriority)
+	live := pool.liveCount.Load()
+	if int(live) >= pool.maxSlots {
+		return
+	}
+	if live > 0 && !pool.saturatedIn(int(live)) {
 		return
 	}
 
-	start, end, base := s.preferredRange(highPriority)
-	if live > 0 && !s.saturatedIn(start, end, base) {
-		return
-	}
-	// The preferred range is saturated: before growing, check the whole
-	// pool — the other range may still host capacity.
-	if live > 0 && !s.saturatedIn(0, int(live), base) {
-		return
-	}
-
-	// Every tier of every range is saturated — try to grow under lock.
+	// Every tier of the pool is saturated — try to grow under lock.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// Double-check after acquiring the lock.
-	live = s.liveCount.Load()
-	if int(live) >= s.maxSlots {
+	live = pool.liveCount.Load()
+	if int(live) >= pool.maxSlots {
 		return
 	}
-	start, end, base = s.preferredRange(highPriority)
-	if live > 0 && !s.saturatedIn(start, end, base) {
-		return
-	}
-	if live > 0 && !s.saturatedIn(0, int(live), base) {
+	if live > 0 && !pool.saturatedIn(int(live)) {
 		return
 	}
 
-	if live == 0 && s.maxSlots >= 2 {
-		s.liveCount.Add(2)
+	if live == 0 && pool.maxSlots >= 2 {
+		pool.liveCount.Add(2)
 	} else {
-		s.liveCount.Add(1)
+		pool.liveCount.Add(1)
 	}
 }
 
-// shrinkIdleLocked retires every idle slot (active==0) from liveCount,
-// swap-removing each to the end. Caller must hold s.mu.
+// shrinkIdleLocked retires every idle slot (active==0) from both pools,
+// swap-removing each to the end of its pool. Caller must hold s.mu.
 func (s *slotScheduler) shrinkIdleLocked() {
-	for s.removeIdleLocked() {
+	for _, pool := range []*slotPool{s.priority, s.bulk} {
+		for pool.removeIdleLocked() {
+		}
 	}
 }
 
-// removeIdleLocked swap-removes the first idle slot from liveCount.
-// Returns false when no idle slot remains. Caller must hold s.mu.
-func (s *slotScheduler) removeIdleLocked() bool {
-	live := int(s.liveCount.Load())
+// removeIdleLocked swap-removes the first idle slot from the pool's live
+// count. Returns false when no idle slot remains. Caller must hold s.mu.
+func (p *slotPool) removeIdleLocked() bool {
+	live := int(p.liveCount.Load())
 	for i := 0; i < live; i++ {
-		if s.slots[i].active.Load() != 0 {
+		if p.slots[i].active.Load() != 0 {
 			continue
 		}
-		s.removeAtLocked(i, live)
+		p.removeAtLocked(i, live)
 		return true
 	}
 	return false
 }
 
-// removeAtLocked swap-removes the slot at position i from liveCount.
-// Caller must hold s.mu.
-func (s *slotScheduler) removeAtLocked(i, live int) {
+// removeAtLocked swap-removes the slot at position i from the pool's live
+// count. Caller must hold s.mu.
+func (p *slotPool) removeAtLocked(i, live int) {
 	last := live - 1
 	if i != last {
-		s.slots[i], s.slots[last] = s.slots[last], s.slots[i]
+		p.slots[i], p.slots[last] = p.slots[last], p.slots[i]
 	}
-	s.liveCount.Add(-1)
+	p.liveCount.Add(-1)
 }
 
-// remove swaps the slot out of liveCount (swap-remove) if it is still live
-// and not hosting streams, and reports whether the removal happened.
-// Streams are re-checked under the lock so a concurrent Open cannot be
-// stranded.
+// remove swaps the slot out of its pool's live count (swap-remove) if it is
+// still live and not hosting streams, and reports whether the removal
+// happened. Streams are re-checked under the lock so a concurrent Open
+// cannot be stranded. The slot's pool is located via its stable index,
+// which the constructor assigns contiguously (priority pool first).
 func (s *slotScheduler) remove(sl *transportSlot) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if sl.active.Load() != 0 {
 		return false
 	}
-	live := int(s.liveCount.Load())
+	pool := s.priority
+	if sl.idx >= s.priority.maxSlots {
+		pool = s.bulk
+	}
+	live := int(pool.liveCount.Load())
 	for i := 0; i < live; i++ {
-		if s.slots[i] != sl {
+		if pool.slots[i] != sl {
 			continue
 		}
-		s.removeAtLocked(i, live)
+		pool.removeAtLocked(i, live)
 		return true
 	}
 	return false

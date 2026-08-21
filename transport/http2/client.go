@@ -296,9 +296,12 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 }
 
 func (t *HTTP2Transport) CloseIdle() {
-	// Close idle TCP connections on all slots (no lock needed).
-	for _, s := range t.sched.slots {
-		s.t.CloseIdleConnections()
+	// Close idle TCP connections on all slots of both pools (no lock
+	// needed).
+	for _, pool := range []*slotPool{t.sched.priority, t.sched.bulk} {
+		for _, s := range pool.slots {
+			s.t.CloseIdleConnections()
+		}
 	}
 
 	// Shrink liveCount by retiring idle slots (any position, swap-remove).
@@ -309,33 +312,33 @@ func (t *HTTP2Transport) CloseIdle() {
 
 func (t *HTTP2Transport) Stats() transport.TransportStats {
 	// Hold the scheduler read lock so the snapshot is consistent: shrink
-	// (swap-remove) and grow mutate liveCount and the live slot range under
-	// the write lock, so an unlocked render could read a stale liveCount
-	// and report more conns_status entries than Conns.
+	// (swap-remove) and grow mutate pool liveCounts and the live slot
+	// ranges under the write lock, so an unlocked render could read a
+	// stale liveCount and report more conns_status entries than Conns.
 	t.sched.mu.RLock()
 	defer t.sched.mu.RUnlock()
 
-	live := int(t.sched.liveCount.Load())
+	pLive := int(t.sched.priority.liveCount.Load())
+	bLive := int(t.sched.bulk.liveCount.Load())
 	ts := transport.TransportStats{
-		Conns: live,
+		Conns:         pLive + bLive,
+		PriorityConns: pLive,
+		BulkConns:     bLive,
 	}
-	pConns := t.sched.prioritySlots
-	if live < pConns {
-		pConns = live
-	}
-	ts.PriorityConns = pConns
-	ts.BulkConns = live - pConns
 
-	for i := int32(0); i < int32(live); i++ {
-		a := int(t.sched.slots[i].active.Load())
-		ts.ActiveStreams += a
-		if i < int32(t.sched.prioritySlots) {
-			ts.PriorityActiveStreams += a
-		} else {
-			ts.BulkActiveStreams += a
+	for _, pool := range []*slotPool{t.sched.priority, t.sched.bulk} {
+		live := int(pool.liveCount.Load())
+		for i := 0; i < live; i++ {
+			a := int(pool.slots[i].active.Load())
+			ts.ActiveStreams += a
+			if pool == t.sched.priority {
+				ts.PriorityActiveStreams += a
+			} else {
+				ts.BulkActiveStreams += a
+			}
 		}
 	}
-	ts.ConnsStatus = slotStatusString(t.sched, live)
+	ts.ConnsStatus = slotStatusString(t.sched, pLive, bLive)
 	return ts
 }
 
@@ -360,31 +363,45 @@ func slotStatus(s *transportSlot) string {
 	return strings.Join(parts, "+")
 }
 
-// slotStatusString renders every live slot as "<index>:<active streams>:
-// <status>", wrapped in brackets, e.g. "[0:3:degraded, 1:2:expiring,
-// 2:1:active, 3:1:heavy]". Entries are ordered by the stable slot identity
-// (retire swap-removes scramble the live order) and then renumbered from 0,
-// so the rendered indices are always consecutive with no jumps. An empty
-// live set renders as "[]". live must be the liveCount value the caller
-// snapshot under the scheduler lock, so the rendered entry count always
-// matches Conns.
-func slotStatusString(sched *slotScheduler, live int) string {
-	if live == 0 {
-		return "[]"
+// slotStatusString renders every live slot of both pools as
+// "<index>:<active streams>:<status>", wrapped in brackets, e.g.
+// "[0:3:degraded, 1:2:expiring, 2:1:active, 3:1:heavy]". Entries are
+// ordered by the stable slot identity (retire swap-removes scramble the
+// live order) and then renumbered from 0, so the rendered indices are
+// always consecutive with no jumps. An empty live set renders as "[]".
+// pLive/bLive must be the pool liveCount values the caller snapshot under
+// the scheduler lock, so the rendered entry count always matches Conns.
+func slotStatusString(sched *slotScheduler, pLive, bLive int) string {
+	if pLive > sched.priority.maxSlots {
+		pLive = sched.priority.maxSlots
+	}
+	if bLive > sched.bulk.maxSlots {
+		bLive = sched.bulk.maxSlots
 	}
 	type entry struct {
 		idx    int
 		active int
 		status string
 	}
-	entries := make([]entry, 0, live)
-	for i := 0; i < live; i++ {
-		s := sched.slots[i]
+	entries := make([]entry, 0, pLive+bLive)
+	for i := 0; i < pLive; i++ {
+		s := sched.priority.slots[i]
 		entries = append(entries, entry{
 			idx:    s.idx,
 			active: int(s.active.Load()),
 			status: slotStatus(s),
 		})
+	}
+	for i := 0; i < bLive; i++ {
+		s := sched.bulk.slots[i]
+		entries = append(entries, entry{
+			idx:    s.idx,
+			active: int(s.active.Load()),
+			status: slotStatus(s),
+		})
+	}
+	if len(entries) == 0 {
+		return "[]"
 	}
 	// Order by stable slot index regardless of the scrambled live order,
 	// then number entries 0..n-1 so the output indices never jump.
@@ -408,9 +425,11 @@ func slotStatusString(sched *slotScheduler, live int) string {
 
 func (t *HTTP2Transport) Close() error {
 	t.cancel()
-	live := t.sched.liveCount.Load()
-	for _, s := range t.sched.slots[:live] {
-		s.t.CloseIdleConnections()
+	for _, pool := range []*slotPool{t.sched.priority, t.sched.bulk} {
+		live := int(pool.liveCount.Load())
+		for _, s := range pool.slots[:live] {
+			s.t.CloseIdleConnections()
+		}
 	}
 	return nil
 }

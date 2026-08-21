@@ -5,18 +5,69 @@ import (
 	"testing"
 )
 
-// newTestScheduler builds a live scheduler with explicit active/heavy
+// newTestPool builds a single live pool with explicit active/heavy
 // counters. Transport structs inside slots are left nil — scheduling tests
-// never dial. threshold is 4, prioritySlots is 1, bulkThreshold 8.
-func newTestScheduler(specs ...[2]int32) *slotScheduler {
+// never dial. liveCount is set to the number of specs.
+func newTestPool(base int32, specs ...[2]int32) *slotPool {
 	slots := make([]*transportSlot, len(specs))
 	for i, s := range specs {
 		slots[i] = &transportSlot{idx: i}
 		slots[i].active.Store(s[0])
 		slots[i].heavy.Store(s[1])
 	}
-	sch := newScheduler(len(slots), slots, 4, 1)
-	sch.liveCount.Store(int32(len(slots)))
+	p := &slotPool{slots: slots, maxSlots: len(slots), base: base}
+	p.liveCount.Store(int32(len(slots)))
+	return p
+}
+
+// newTestScheduler builds a scheduler whose priority pool holds all given
+// specs (live) and whose bulk pool is empty. threshold is 4, so the
+// priority pool's base is 4 and the bulk pool's base is 8.
+func newTestScheduler(specs ...[2]int32) *slotScheduler {
+	pSlots := make([]*transportSlot, len(specs))
+	for i, s := range specs {
+		pSlots[i] = &transportSlot{idx: i}
+		pSlots[i].active.Store(s[0])
+		pSlots[i].heavy.Store(s[1])
+	}
+	sch := &slotScheduler{
+		priority: &slotPool{
+			slots:    pSlots,
+			maxSlots: len(pSlots),
+			base:     4,
+		},
+		bulk: &slotPool{
+			slots:    []*transportSlot{{idx: len(pSlots)}},
+			maxSlots: 1,
+			base:     8,
+		},
+		threshold:     4,
+		bulkThreshold: 8,
+	}
+	sch.priority.liveCount.Store(int32(len(pSlots)))
+	return sch
+}
+
+// newTwoPoolScheduler builds a scheduler via the production constructor
+// with the given per-pool specs: the first len(pSpecs) entries form the
+// priority pool (base 4), the rest the bulk pool (base 8).
+func newTwoPoolScheduler(pSpecs, bSpecs [][2]int32) *slotScheduler {
+	all := make([]*transportSlot, 0, len(pSpecs)+len(bSpecs))
+	for i, s := range pSpecs {
+		sl := &transportSlot{idx: i}
+		sl.active.Store(s[0])
+		sl.heavy.Store(s[1])
+		all = append(all, sl)
+	}
+	for i, s := range bSpecs {
+		sl := &transportSlot{idx: len(pSpecs) + i}
+		sl.active.Store(s[0])
+		sl.heavy.Store(s[1])
+		all = append(all, sl)
+	}
+	sch := newScheduler(len(all), all, 4, len(pSpecs))
+	sch.priority.liveCount.Store(int32(len(pSpecs)))
+	sch.bulk.liveCount.Store(int32(len(bSpecs)))
 	return sch
 }
 
@@ -69,38 +120,38 @@ func TestPressureLevel(t *testing.T) {
 			{[]int32{32, 32}, 3}, // 4x base
 		}
 		for _, c := range cases {
-			sch := newTestScheduler([2]int32{c.actives[0], 0}, [2]int32{c.actives[1], 0})
-			if got := sch.pressureLevel(0, 2, 8); got != c.want {
+			p := newTestPool(8, [2]int32{c.actives[0], 0}, [2]int32{c.actives[1], 0})
+			if got := p.pressureLevel(int(p.liveCount.Load())); got != c.want {
 				t.Fatalf("pressureLevel(%v, base 8) = %d, want %d", c.actives, got, c.want)
 			}
 		}
 	})
 
 	t.Run("no healthy slot degrades to pool minimum", func(t *testing.T) {
-		sch := newTestScheduler([2]int32{0, 0}, [2]int32{1, 0})
-		sch.slots[0].expiring.Store(true)
-		sch.slots[1].expiring.Store(true)
+		p := newTestPool(8, [2]int32{0, 0}, [2]int32{1, 0})
+		p.slots[0].expiring.Store(true)
+		p.slots[1].expiring.Store(true)
 		// The active layer is empty: the pool minimum (0) is clamped to the
 		// base, so the level engages at 1 instead of 0.
-		if got := sch.pressureLevel(0, 2, 8); got != 1 {
+		if got := p.pressureLevel(int(p.liveCount.Load())); got != 1 {
 			t.Fatalf("pressureLevel = %d, want 1", got)
 		}
 
-		sch2 := newTestScheduler([2]int32{16, 0}, [2]int32{16, 0})
-		sch2.slots[0].degraded.Store(true)
-		sch2.slots[1].degraded.Store(true)
-		if got := sch2.pressureLevel(0, 2, 8); got != 2 {
+		p2 := newTestPool(8, [2]int32{16, 0}, [2]int32{16, 0})
+		p2.slots[0].degraded.Store(true)
+		p2.slots[1].degraded.Store(true)
+		if got := p2.pressureLevel(int(p2.liveCount.Load())); got != 2 {
 			t.Fatalf("pressureLevel = %d, want 2", got)
 		}
 	})
 
 	t.Run("priority base 4", func(t *testing.T) {
-		sch := newTestScheduler([2]int32{4, 0}, [2]int32{4, 0})
-		if got := sch.pressureLevel(0, 2, 4); got != 1 {
+		p := newTestPool(4, [2]int32{4, 0}, [2]int32{4, 0})
+		if got := p.pressureLevel(int(p.liveCount.Load())); got != 1 {
 			t.Fatalf("pressureLevel(4, base 4) = %d, want 1", got)
 		}
-		sch2 := newTestScheduler([2]int32{8, 0}, [2]int32{8, 0})
-		if got := sch2.pressureLevel(0, 2, 4); got != 2 {
+		p2 := newTestPool(4, [2]int32{8, 0}, [2]int32{8, 0})
+		if got := p2.pressureLevel(int(p2.liveCount.Load())); got != 2 {
 			t.Fatalf("pressureLevel(8, base 4) = %d, want 2", got)
 		}
 	})
@@ -113,22 +164,22 @@ func TestTierCap(t *testing.T) {
 		base  int32
 		want  int32
 	}{
-		{tierActive, 0, 8, 8},     // level 0: active holds up to the base
-		{tierActive, 1, 8, 0},     // level>=1: active is served by fallback only
-		{tierExpiring, 0, 8, 0},   // lower tiers disabled at level 0
-		{tierExpiring, 1, 8, 4},   // base/2
-		{tierExpiring, 2, 8, 8},   // doubled
-		{tierExpiring, 3, 8, 16},  // doubled again
-		{tierHeavy, 1, 8, 2},      // base/4
-		{tierHeavy, 2, 8, 4},      // base/2
-		{tierHeavy, 3, 8, 8},      // base
-		{tierDegraded, 1, 8, 2},   // same as heavy
-		{tierDegraded, 2, 8, 4},   // same as heavy
-		{tierExpiring, 1, 4, 2},   // priority base
-		{tierHeavy, 1, 4, 1},      // priority base: effectively unusable
+		{tierActive, 0, 8, 8},    // level 0: active holds up to the base
+		{tierActive, 1, 8, 0},    // level>=1: active is served by fallback only
+		{tierExpiring, 0, 8, 0},  // lower tiers disabled at level 0
+		{tierExpiring, 1, 8, 4},  // base/2
+		{tierExpiring, 2, 8, 8},  // doubled
+		{tierExpiring, 3, 8, 16}, // doubled again
+		{tierHeavy, 1, 8, 2},     // base/4
+		{tierHeavy, 2, 8, 4},     // base/2
+		{tierHeavy, 3, 8, 8},     // base
+		{tierDegraded, 1, 8, 2},  // same as heavy
+		{tierDegraded, 2, 8, 4},  // same as heavy
+		{tierExpiring, 1, 4, 2},  // priority base
+		{tierHeavy, 1, 4, 1},     // priority base: effectively unusable
 	}
 	for _, tt := range tests {
-		if got := (&slotScheduler{}).tierCap(tt.tier, tt.level, tt.base); got != tt.want {
+		if got := tierCap(tt.tier, tt.level, tt.base); got != tt.want {
 			t.Fatalf("tierCap(tier=%v level=%d base=%d) = %d, want %d", tt.tier, tt.level, tt.base, got, tt.want)
 		}
 	}
@@ -136,9 +187,9 @@ func TestTierCap(t *testing.T) {
 
 func TestTieredSelectLevel0(t *testing.T) {
 	t.Run("prefers least-active healthy slot", func(t *testing.T) {
-		sch := newTestScheduler([2]int32{3, 0}, [2]int32{8, 0})
-		slot, saturated := sch.tieredSelect(0, 2, 8)
-		if saturated || slot != sch.slots[0] {
+		p := newTestPool(8, [2]int32{3, 0}, [2]int32{8, 0})
+		slot, saturated := p.tieredSelect()
+		if saturated || slot != p.slots[0] {
 			t.Fatalf("got slot active=%d saturated=%v, want slot 0 (active=3)", slot.active.Load(), saturated)
 		}
 	})
@@ -146,10 +197,10 @@ func TestTieredSelectLevel0(t *testing.T) {
 	t.Run("does not engage lower tiers while active has capacity", func(t *testing.T) {
 		// An idle expiring slot must NOT be chosen while a healthy slot is
 		// below the base: healthy connections are preferred.
-		sch := newTestScheduler([2]int32{0, 0}, [2]int32{3, 0})
-		sch.slots[0].expiring.Store(true)
-		slot, saturated := sch.tieredSelect(0, 2, 8)
-		if saturated || slot != sch.slots[1] {
+		p := newTestPool(8, [2]int32{0, 0}, [2]int32{3, 0})
+		p.slots[0].expiring.Store(true)
+		slot, saturated := p.tieredSelect()
+		if saturated || slot != p.slots[1] {
 			t.Fatalf("got slot %d saturated=%v, want healthy slot 1", slot.idx, saturated)
 		}
 	})
@@ -157,43 +208,43 @@ func TestTieredSelectLevel0(t *testing.T) {
 
 func TestTieredSelectLevel1(t *testing.T) {
 	t.Run("spills onto expiring below base/2", func(t *testing.T) {
-		sch := newTestScheduler([2]int32{8, 0}, [2]int32{2, 0}, [2]int32{1, 0})
-		sch.slots[1].expiring.Store(true)
-		sch.slots[2].heavy.Store(1)
-		slot, saturated := sch.tieredSelect(0, 3, 8)
-		if saturated || slot != sch.slots[1] {
+		p := newTestPool(8, [2]int32{8, 0}, [2]int32{2, 0}, [2]int32{1, 0})
+		p.slots[1].expiring.Store(true)
+		p.slots[2].heavy.Store(1)
+		slot, saturated := p.tieredSelect()
+		if saturated || slot != p.slots[1] {
 			t.Fatalf("got slot %d saturated=%v, want expiring slot 1 (active=2 < 4)", slot.idx, saturated)
 		}
 	})
 
 	t.Run("expiring full spills onto heavy below base/4", func(t *testing.T) {
-		sch := newTestScheduler([2]int32{8, 0}, [2]int32{4, 0}, [2]int32{1, 0})
-		sch.slots[1].expiring.Store(true)
-		sch.slots[2].heavy.Store(1)
-		slot, saturated := sch.tieredSelect(0, 3, 8)
-		if saturated || slot != sch.slots[2] {
+		p := newTestPool(8, [2]int32{8, 0}, [2]int32{4, 0}, [2]int32{1, 0})
+		p.slots[1].expiring.Store(true)
+		p.slots[2].heavy.Store(1)
+		slot, saturated := p.tieredSelect()
+		if saturated || slot != p.slots[2] {
 			t.Fatalf("got slot %d saturated=%v, want heavy slot 2 (active=1 < 2)", slot.idx, saturated)
 		}
 	})
 
 	t.Run("heavy full spills onto degraded below base/4", func(t *testing.T) {
-		sch := newTestScheduler([2]int32{8, 0}, [2]int32{4, 0}, [2]int32{2, 0}, [2]int32{1, 0})
-		sch.slots[1].expiring.Store(true)
-		sch.slots[2].heavy.Store(1)
-		sch.slots[3].degraded.Store(true)
-		slot, saturated := sch.tieredSelect(0, 4, 8)
-		if saturated || slot != sch.slots[3] {
+		p := newTestPool(8, [2]int32{8, 0}, [2]int32{4, 0}, [2]int32{2, 0}, [2]int32{1, 0})
+		p.slots[1].expiring.Store(true)
+		p.slots[2].heavy.Store(1)
+		p.slots[3].degraded.Store(true)
+		slot, saturated := p.tieredSelect()
+		if saturated || slot != p.slots[3] {
 			t.Fatalf("got slot %d saturated=%v, want degraded slot 3 (active=1 < 2)", slot.idx, saturated)
 		}
 	})
 
 	t.Run("all tiers full falls back to healthy least-active", func(t *testing.T) {
-		sch := newTestScheduler([2]int32{8, 0}, [2]int32{4, 0}, [2]int32{2, 0}, [2]int32{2, 0})
-		sch.slots[1].expiring.Store(true)
-		sch.slots[2].heavy.Store(1)
-		sch.slots[3].degraded.Store(true)
-		slot, saturated := sch.tieredSelect(0, 4, 8)
-		if !saturated || slot != sch.slots[0] {
+		p := newTestPool(8, [2]int32{8, 0}, [2]int32{4, 0}, [2]int32{2, 0}, [2]int32{2, 0})
+		p.slots[1].expiring.Store(true)
+		p.slots[2].heavy.Store(1)
+		p.slots[3].degraded.Store(true)
+		slot, saturated := p.tieredSelect()
+		if !saturated || slot != p.slots[0] {
 			t.Fatalf("got slot %d saturated=%v, want fallback to healthy slot 0 with saturated=true", slot.idx, saturated)
 		}
 	})
@@ -201,20 +252,20 @@ func TestTieredSelectLevel1(t *testing.T) {
 
 func TestTieredSelectLevel2CapsDouble(t *testing.T) {
 	t.Run("expiring capacity doubles to base", func(t *testing.T) {
-		sch := newTestScheduler([2]int32{16, 0}, [2]int32{7, 0})
-		sch.slots[1].expiring.Store(true)
-		slot, saturated := sch.tieredSelect(0, 2, 8)
-		if saturated || slot != sch.slots[1] {
+		p := newTestPool(8, [2]int32{16, 0}, [2]int32{7, 0})
+		p.slots[1].expiring.Store(true)
+		slot, saturated := p.tieredSelect()
+		if saturated || slot != p.slots[1] {
 			t.Fatalf("got slot %d saturated=%v, want expiring slot 1 (active=7 < 8)", slot.idx, saturated)
 		}
 	})
 
 	t.Run("heavy capacity doubles to base/2", func(t *testing.T) {
-		sch := newTestScheduler([2]int32{16, 0}, [2]int32{8, 0}, [2]int32{3, 0})
-		sch.slots[1].expiring.Store(true)
-		sch.slots[2].heavy.Store(1)
-		slot, saturated := sch.tieredSelect(0, 3, 8)
-		if saturated || slot != sch.slots[2] {
+		p := newTestPool(8, [2]int32{16, 0}, [2]int32{8, 0}, [2]int32{3, 0})
+		p.slots[1].expiring.Store(true)
+		p.slots[2].heavy.Store(1)
+		slot, saturated := p.tieredSelect()
+		if saturated || slot != p.slots[2] {
 			t.Fatalf("got slot %d saturated=%v, want heavy slot 2 (active=3 < 4)", slot.idx, saturated)
 		}
 	})
@@ -222,20 +273,20 @@ func TestTieredSelectLevel2CapsDouble(t *testing.T) {
 
 func TestTieredSelectPrefersLessNegative(t *testing.T) {
 	t.Run("among heavy slots prefers heavy-only over heavy+expiring", func(t *testing.T) {
-		sch := newTestScheduler([2]int32{8, 0}, [2]int32{1, 1}, [2]int32{1, 1})
-		sch.slots[2].expiring.Store(true)
-		slot, saturated := sch.tieredSelect(0, 3, 8)
-		if saturated || slot != sch.slots[1] {
+		p := newTestPool(8, [2]int32{8, 0}, [2]int32{1, 1}, [2]int32{1, 1})
+		p.slots[2].expiring.Store(true)
+		slot, saturated := p.tieredSelect()
+		if saturated || slot != p.slots[1] {
 			t.Fatalf("got slot %d saturated=%v, want heavy-only slot 1", slot.idx, saturated)
 		}
 	})
 
 	t.Run("among degraded slots prefers degraded-only over degraded+heavy", func(t *testing.T) {
-		sch := newTestScheduler([2]int32{8, 0}, [2]int32{1, 0}, [2]int32{1, 1})
-		sch.slots[1].degraded.Store(true)
-		sch.slots[2].degraded.Store(true)
-		slot, saturated := sch.tieredSelect(0, 3, 8)
-		if saturated || slot != sch.slots[1] {
+		p := newTestPool(8, [2]int32{8, 0}, [2]int32{1, 0}, [2]int32{1, 1})
+		p.slots[1].degraded.Store(true)
+		p.slots[2].degraded.Store(true)
+		slot, saturated := p.tieredSelect()
+		if saturated || slot != p.slots[1] {
 			t.Fatalf("got slot %d saturated=%v, want degraded-only slot 1", slot.idx, saturated)
 		}
 	})
@@ -243,21 +294,21 @@ func TestTieredSelectPrefersLessNegative(t *testing.T) {
 
 func TestTieredSelectNoHealthyEngagesLowerTiers(t *testing.T) {
 	t.Run("all expiring picks least-active below base/2", func(t *testing.T) {
-		sch := newTestScheduler([2]int32{0, 0}, [2]int32{1, 0})
-		sch.slots[0].expiring.Store(true)
-		sch.slots[1].expiring.Store(true)
-		slot, saturated := sch.tieredSelect(0, 2, 8)
-		if saturated || slot != sch.slots[0] {
+		p := newTestPool(8, [2]int32{0, 0}, [2]int32{1, 0})
+		p.slots[0].expiring.Store(true)
+		p.slots[1].expiring.Store(true)
+		slot, saturated := p.tieredSelect()
+		if saturated || slot != p.slots[0] {
 			t.Fatalf("got slot %d saturated=%v, want expiring slot 0", slot.idx, saturated)
 		}
 	})
 
 	t.Run("all negative tiers full falls back uncapped", func(t *testing.T) {
-		sch := newTestScheduler([2]int32{4, 0}, [2]int32{5, 0})
-		sch.slots[0].expiring.Store(true)
-		sch.slots[1].expiring.Store(true)
-		slot, saturated := sch.tieredSelect(0, 2, 8)
-		if !saturated || slot != sch.slots[0] {
+		p := newTestPool(8, [2]int32{4, 0}, [2]int32{5, 0})
+		p.slots[0].expiring.Store(true)
+		p.slots[1].expiring.Store(true)
+		slot, saturated := p.tieredSelect()
+		if !saturated || slot != p.slots[0] {
 			t.Fatalf("got slot %d saturated=%v, want least-active slot 0 with saturated=true", slot.idx, saturated)
 		}
 	})
@@ -266,228 +317,187 @@ func TestTieredSelectNoHealthyEngagesLowerTiers(t *testing.T) {
 func TestPriorityVsBulkBase(t *testing.T) {
 	// Two healthy slots at 5 streams each: saturated for priority streams
 	// (base 4), still open for bulk streams (base 8).
-	sch := newTestScheduler([2]int32{5, 0}, [2]int32{5, 0})
-
-	slot, saturated := sch.tieredSelect(0, 2, 4)
-	if !saturated || slot == nil {
+	p4 := newTestPool(4, [2]int32{5, 0}, [2]int32{5, 0})
+	if slot, saturated := p4.tieredSelect(); !saturated || slot == nil {
 		t.Fatalf("priority base: expected saturated fallback, got slot=%v saturated=%v", slot, saturated)
 	}
-
-	slot, saturated = sch.tieredSelect(0, 2, 8)
-	if saturated || slot != sch.slots[0] {
+	p8 := newTestPool(8, [2]int32{5, 0}, [2]int32{5, 0})
+	if slot, saturated := p8.tieredSelect(); saturated || slot != p8.slots[0] {
 		t.Fatalf("bulk base: expected healthy slot 0, got slot %d saturated=%v", slot.idx, saturated)
 	}
 }
 
-func TestPickPrefersOwnRangeThenWholePool(t *testing.T) {
-	// prioritySlots=1: slot 0 is the priority range, slots 1-2 the bulk range.
-	newPickScheduler := func() *slotScheduler {
-		sch := newTestScheduler([2]int32{0, 0}, [2]int32{0, 0}, [2]int32{0, 0})
-		sch.prioritySlots = 1
-		return sch
-	}
-
-	t.Run("priority falls back to healthy bulk slot", func(t *testing.T) {
-		sch := newPickScheduler()
-		sch.slots[0].active.Store(4) // priority range saturated at base 4
-		sch.slots[1].expiring.Store(true)
-		sch.slots[1].active.Store(1)
-		sch.slots[2].active.Store(2) // healthy bulk slot with capacity
-		if got := sch.pick(true); got != sch.slots[2] {
-			t.Fatalf("pick(true) = slot %d, want healthy bulk slot 2", got.idx)
+func TestPickBorrowsOtherPoolWhenSaturated(t *testing.T) {
+	t.Run("priority borrows healthy bulk slot", func(t *testing.T) {
+		sch := newTwoPoolScheduler(
+			[][2]int32{{4, 0}}, // priority pool saturated at base 4
+			[][2]int32{{1, 0}, {2, 0}},
+		)
+		sch.bulk.slots[0].expiring.Store(true)
+		// Bulk pool healthy least-active is slot with active=2.
+		if got := sch.pick(true); got != sch.bulk.slots[1] {
+			t.Fatalf("pick(true) = slot %d, want borrowed bulk slot (active=2)", got.idx)
 		}
 	})
 
-	t.Run("priority falls back to expiring when no healthy bulk slot", func(t *testing.T) {
-		sch := newPickScheduler()
-		sch.slots[0].active.Store(4)
-		sch.slots[1].expiring.Store(true)
-		sch.slots[1].active.Store(1)
-		sch.slots[2].active.Store(8)
-		// Whole pool at base 4: active layer at threshold -> expiring tier.
-		if got := sch.pick(true); got != sch.slots[1] {
-			t.Fatalf("pick(true) = slot %d, want expiring slot 1", got.idx)
+	t.Run("priority borrows expiring bulk slot when bulk has no healthy capacity", func(t *testing.T) {
+		sch := newTwoPoolScheduler(
+			[][2]int32{{4, 0}},
+			[][2]int32{{8, 0}, {1, 0}},
+		)
+		sch.bulk.slots[1].expiring.Store(true)
+		// Bulk pool: healthy layer at base 8 -> expiring tier (active=1 < 4).
+		if got := sch.pick(true); got != sch.bulk.slots[1] {
+			t.Fatalf("pick(true) = slot %d, want borrowed expiring bulk slot 1", got.idx)
 		}
 	})
 
-	t.Run("bulk stays in bulk range while it has capacity", func(t *testing.T) {
-		sch := newPickScheduler()
-		sch.slots[0].active.Store(4)
-		sch.slots[1].expiring.Store(true)
-		sch.slots[1].active.Store(2)
-		sch.slots[2].active.Store(3)
-		// Bulk range healthy least-active is slot 2 (active=3 < base 8).
-		if got := sch.pick(false); got != sch.slots[2] {
-			t.Fatalf("pick(false) = slot %d, want bulk slot 2", got.idx)
+	t.Run("bulk borrows healthy priority slot", func(t *testing.T) {
+		sch := newTwoPoolScheduler(
+			[][2]int32{{1, 0}},
+			[][2]int32{{8, 0}}, // bulk pool saturated at base 8
+		)
+		// Priority pool has healthy capacity (active=1 < 4).
+		if got := sch.pick(false); got != sch.priority.slots[0] {
+			t.Fatalf("pick(false) = slot %d, want borrowed priority slot 0", got.idx)
+		}
+	})
+
+	t.Run("both pools saturated returns own pool fallback", func(t *testing.T) {
+		sch := newTwoPoolScheduler(
+			[][2]int32{{4, 0}},
+			[][2]int32{{8, 0}, {8, 0}},
+		)
+		if got := sch.pick(true); got != sch.priority.slots[0] {
+			t.Fatalf("pick(true) = slot %d, want own pool fallback slot 0", got.idx)
 		}
 	})
 }
 
-// newGrowTestScheduler builds a scheduler with maxSlots slots where only
-// `live` are live, threshold 4 and prioritySlots priority-class slots
-// (bulk threshold 8).
-func newGrowTestScheduler(maxSlots, prioritySlots, live int) *slotScheduler {
+// newGrowTestScheduler builds a scheduler via the production constructor
+// with maxSlots total slots, prioritySlots priority-class slots, threshold 4
+// and the given live counts per pool (all remaining slots live as bulk).
+func newGrowTestScheduler(maxSlots, prioritySlots, pLive, bLive int) *slotScheduler {
 	slots := make([]*transportSlot, maxSlots)
 	for i := range slots {
-		slots[i] = &transportSlot{}
+		slots[i] = &transportSlot{idx: i}
 	}
 	sch := newScheduler(maxSlots, slots, 4, prioritySlots)
-	sch.liveCount.Store(int32(live))
+	sch.priority.liveCount.Store(int32(pLive))
+	sch.bulk.liveCount.Store(int32(bLive))
 	return sch
 }
 
-// TestGrowBulkOnlyWorkloadGrowsPool guards the bulk-range fallback in grow:
-// while live < prioritySlots the bulk range is empty, and a pure bulk
-// workload (no priority streams to drive growth) must still grow the pool
-// past the initial connections instead of piling onto them forever. Growth
-// fires once every tier is saturated — with no lower tiers present that
-// means every healthy slot at or beyond the bulk threshold.
-func TestGrowBulkOnlyWorkloadGrowsPool(t *testing.T) {
-	sch := newGrowTestScheduler(10, 5, 2)
+func TestGrowBulkPoolIndependentOfPriority(t *testing.T) {
+	// priority pool has 5 slots (0-4), bulk pool 5 (5-9). Only one bulk
+	// slot is live.
+	sch := newGrowTestScheduler(10, 5, 0, 1)
 
-	// Slots below the bulk threshold (8): no growth yet.
-	sch.slots[0].active.Store(4)
-	sch.slots[1].active.Store(7)
+	// Bulk slot below the bulk threshold (8): no growth.
+	sch.bulk.slots[0].active.Store(7)
 	sch.grow(false)
-	if got := sch.liveCount.Load(); got != 2 {
-		t.Fatalf("liveCount = %d, want 2 while slots still have capacity", got)
+	if got := sch.bulk.liveCount.Load(); got != 1 {
+		t.Fatalf("bulk liveCount = %d, want 1 while bulk slot has capacity", got)
 	}
 
-	// Every live slot at or above the bulk threshold: growth must fire even
-	// though the bulk range [prioritySlots, live) is empty.
-	sch.slots[0].active.Store(8)
-	sch.slots[1].active.Store(9)
+	// Bulk slot saturated: grow — regardless of the (empty) priority pool,
+	// each pool grows on its own demand.
+	sch.bulk.slots[0].active.Store(8)
 	sch.grow(false)
-	if got := sch.liveCount.Load(); got != 3 {
-		t.Fatalf("liveCount = %d, want 3 (bulk workload must grow the pool)", got)
+	if got := sch.bulk.liveCount.Load(); got != 2 {
+		t.Fatalf("bulk liveCount = %d, want 2", got)
 	}
-
-	// The fallback keeps working until the bulk range becomes non-empty:
-	// the newly activated slot starts idle, so saturation of all live slots
-	// keeps growing the pool.
-	sch.slots[2].active.Store(8)
-	sch.grow(false)
-	if got := sch.liveCount.Load(); got != 4 {
-		t.Fatalf("liveCount = %d, want 4", got)
+	if got := sch.priority.liveCount.Load(); got != 0 {
+		t.Fatalf("priority liveCount = %d, want 0 (pools grow independently)", got)
 	}
 }
 
-func TestGrowBulkUsesBulkRangeOnceLive(t *testing.T) {
-	sch := newGrowTestScheduler(10, 5, 6) // slots 0-4 priority, slot 5 bulk
-
-	// Bulk slot below threshold: no growth.
-	sch.slots[5].active.Store(7)
-	sch.grow(false)
-	if got := sch.liveCount.Load(); got != 6 {
-		t.Fatalf("liveCount = %d, want 6 while bulk slot has capacity", got)
-	}
-
-	// Bulk slot saturated, but the priority range still hosts healthy
-	// capacity: bulk streams fall back onto it instead of dialing a new
-	// connection — the pool squeezes existing connections first.
-	sch.slots[5].active.Store(8)
-	sch.grow(false)
-	if got := sch.liveCount.Load(); got != 6 {
-		t.Fatalf("liveCount = %d, want 6 while the priority range has capacity", got)
-	}
-
-	// Every range saturated: grow.
-	sch.slots[5].active.Store(8)
-	for i := 0; i < 5; i++ {
-		sch.slots[i].active.Store(8)
-	}
-	sch.grow(false)
-	if got := sch.liveCount.Load(); got != 7 {
-		t.Fatalf("liveCount = %d, want 7", got)
-	}
-}
-
-func TestGrowPriorityUsesPriorityRange(t *testing.T) {
-	sch := newGrowTestScheduler(10, 5, 3)
+func TestGrowPriorityPool(t *testing.T) {
+	sch := newGrowTestScheduler(10, 5, 3, 0)
 
 	// Priority slot below threshold (4): no growth.
-	sch.slots[0].active.Store(4)
-	sch.slots[1].active.Store(4)
-	sch.slots[2].active.Store(3)
+	sch.priority.slots[0].active.Store(4)
+	sch.priority.slots[1].active.Store(4)
+	sch.priority.slots[2].active.Store(3)
 	sch.grow(true)
-	if got := sch.liveCount.Load(); got != 3 {
-		t.Fatalf("liveCount = %d, want 3 while priority slot has capacity", got)
+	if got := sch.priority.liveCount.Load(); got != 3 {
+		t.Fatalf("priority liveCount = %d, want 3 while priority slot has capacity", got)
 	}
 
 	// All live priority slots at threshold: grow.
-	sch.slots[2].active.Store(4)
+	sch.priority.slots[2].active.Store(4)
 	sch.grow(true)
-	if got := sch.liveCount.Load(); got != 4 {
-		t.Fatalf("liveCount = %d, want 4", got)
+	if got := sch.priority.liveCount.Load(); got != 4 {
+		t.Fatalf("priority liveCount = %d, want 4", got)
 	}
 }
 
 func TestGrowSqueezesNegativeTiersBeforeGrowing(t *testing.T) {
-	sch := newGrowTestScheduler(10, 5, 6)
+	sch := newGrowTestScheduler(10, 5, 5, 2)
 
 	// Healthy slot saturated at 8, but an expiring slot still has capacity
 	// (base/2 = 4): new streams spill there, no growth.
-	sch.slots[5].active.Store(8)
-	sch.slots[0].expiring.Store(true)
-	sch.slots[0].active.Store(3)
+	sch.bulk.slots[0].active.Store(8)
+	sch.bulk.slots[1].expiring.Store(true)
+	sch.bulk.slots[1].active.Store(3)
 	sch.grow(false)
-	if got := sch.liveCount.Load(); got != 6 {
-		t.Fatalf("liveCount = %d, want 6 while expiring slot has capacity", got)
+	if got := sch.bulk.liveCount.Load(); got != 2 {
+		t.Fatalf("bulk liveCount = %d, want 2 while expiring slot has capacity", got)
 	}
 
 	// Negative tiers saturated too: grow.
-	sch.slots[0].active.Store(4)
-	for i := 1; i < 5; i++ {
-		sch.slots[i].active.Store(8)
-	}
+	sch.bulk.slots[1].active.Store(4)
 	sch.grow(false)
-	if got := sch.liveCount.Load(); got != 7 {
-		t.Fatalf("liveCount = %d, want 7 when every tier is saturated", got)
+	if got := sch.bulk.liveCount.Load(); got != 3 {
+		t.Fatalf("bulk liveCount = %d, want 3 when every tier is saturated", got)
 	}
 }
 
-func TestGrowFirstActivation(t *testing.T) {
-	sch := newGrowTestScheduler(10, 5, 0)
-	sch.grow(false)
-	if got := sch.liveCount.Load(); got != 2 {
-		t.Fatalf("liveCount = %d, want 2 on first activation", got)
+func TestGrowFirstActivationPerPool(t *testing.T) {
+	sch := newGrowTestScheduler(10, 5, 0, 0)
+
+	// The first priority stream activates 2 priority connections...
+	sch.grow(true)
+	if got := sch.priority.liveCount.Load(); got != 2 {
+		t.Fatalf("priority liveCount = %d, want 2 on first activation", got)
+	}
+	if got := sch.bulk.liveCount.Load(); got != 0 {
+		t.Fatalf("bulk liveCount = %d, want 0 (lazy, not yet used)", got)
 	}
 
-	sch1 := newGrowTestScheduler(1, 1, 0)
-	sch1.grow(false)
-	if got := sch1.liveCount.Load(); got != 1 {
-		t.Fatalf("liveCount = %d, want 1 when maxSlots == 1", got)
+	// ...and the first bulk stream (e.g. a DNS query) activates 2 bulk
+	// connections of its own.
+	sch.grow(false)
+	if got := sch.bulk.liveCount.Load(); got != 2 {
+		t.Fatalf("bulk liveCount = %d, want 2 on first activation", got)
 	}
 }
 
-func TestRemoveShrinksLiveCount(t *testing.T) {
-	s0 := &transportSlot{t: &http.Transport{}}
+func TestRemoveShrinksLiveCountAndLocatesPool(t *testing.T) {
+	s0 := &transportSlot{idx: 0, t: &http.Transport{}}
 	s0.active.Store(1)
-	s1 := &transportSlot{t: &http.Transport{}}
+	s1 := &transportSlot{idx: 1, t: &http.Transport{}}
 	s1.degraded.Store(true)
-	sch := newScheduler(2, []*transportSlot{s0, s1}, 4, 1)
-	sch.liveCount.Store(2)
+	sch := newScheduler(2, []*transportSlot{s0, s1}, 4, 1) // priority 1, bulk 1
+	sch.priority.liveCount.Store(1)
+	sch.bulk.liveCount.Store(1)
 
+	// s1 has idx 1 >= priority.maxSlots (1): it lives in the bulk pool.
 	if !sch.remove(s1) {
-		t.Fatal("idle slot must be removable")
+		t.Fatal("idle bulk slot must be removable")
 	}
-	if got := sch.liveCount.Load(); got != 1 {
-		t.Fatalf("liveCount = %d, want 1", got)
+	if got := sch.bulk.liveCount.Load(); got != 0 {
+		t.Fatalf("bulk liveCount = %d, want 0", got)
 	}
-	if sch.slots[0] != s0 {
-		t.Fatal("live slot must stay at the front")
+	if got := sch.priority.liveCount.Load(); got != 1 {
+		t.Fatalf("priority liveCount = %d, want 1 (untouched)", got)
 	}
 
 	// Busy slots are never removed.
-	s2 := &transportSlot{t: &http.Transport{}}
-	s2.active.Store(1)
-	s2.degraded.Store(true)
-	sch2 := newScheduler(1, []*transportSlot{s2}, 4, 1)
-	sch2.liveCount.Store(1)
-	if sch2.remove(s2) {
+	if sch.remove(s0) {
 		t.Fatal("busy slot must not be removable")
 	}
-	if got := sch2.liveCount.Load(); got != 1 {
-		t.Fatalf("busy slot removed: liveCount = %d", got)
+	if got := sch.priority.liveCount.Load(); got != 1 {
+		t.Fatalf("priority liveCount = %d, want 1", got)
 	}
 }

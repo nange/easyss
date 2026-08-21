@@ -46,9 +46,9 @@ func (lc *slotLifecycle) run(ctx context.Context) {
 	}
 }
 
-// evaluate walks the live slots: download throughput feeds the degradation
-// suspicion detector, active probes confirm suspicions, connection age/bytes
-// feed rotation, and idle degraded slots are retired.
+// evaluate walks the live slots of both pools: download throughput feeds
+// the degradation suspicion detector, active probes confirm suspicions,
+// connection age/bytes feed rotation, and idle degraded slots are retired.
 func (lc *slotLifecycle) evaluate(interval time.Duration) {
 	// A congested link (high RTT) makes every connection slow: marking or
 	// retiring slots then only adds handshake churn without recovering
@@ -57,17 +57,19 @@ func (lc *slotLifecycle) evaluate(interval time.Duration) {
 	// runs regardless of RTT.
 	linkOK := stats.Collect().AvgRTT() <= sharedconfig.DegradedMaxRTT
 
-	live := int(lc.sched.liveCount.Load())
-	for i := 0; i < live; i++ {
-		s := lc.sched.slots[i]
-		lc.evaluateSlotHealth(i, s, interval, linkOK)
-		lc.evaluateRotation(i, s)
-		if linkOK && s.degraded.Load() && s.active.Load() == 0 {
-			lc.retire(i, s)
-			// retire swap-removes the slot to the end and shrinks
-			// liveCount; re-evaluate the slot swapped into position i.
-			live--
-			i--
+	for _, pool := range []*slotPool{lc.sched.priority, lc.sched.bulk} {
+		live := int(pool.liveCount.Load())
+		for i := 0; i < live; i++ {
+			s := pool.slots[i]
+			lc.evaluateSlotHealth(i, s, interval, linkOK)
+			lc.evaluateRotation(i, s)
+			if linkOK && s.degraded.Load() && s.active.Load() == 0 {
+				lc.retire(i, s)
+				// retire swap-removes the slot to the end and shrinks
+				// liveCount; re-evaluate the slot swapped into position i.
+				live--
+				i--
+			}
 		}
 	}
 
@@ -157,18 +159,20 @@ func (lc *slotLifecycle) evaluateProbes(linkOK bool) {
 	}
 
 	now := time.Now()
-	live := int(lc.sched.liveCount.Load())
 	probed := 0
-	for i := 0; i < live && probed < sharedconfig.ProbeMaxPerInterval; i++ {
-		s := lc.sched.slots[i]
-		if !s.suspected || s.degraded.Load() {
-			continue
+	for _, pool := range []*slotPool{lc.sched.priority, lc.sched.bulk} {
+		live := int(pool.liveCount.Load())
+		for i := 0; i < live && probed < sharedconfig.ProbeMaxPerInterval; i++ {
+			s := pool.slots[i]
+			if !s.suspected || s.degraded.Load() {
+				continue
+			}
+			if now.Sub(s.lastProbeAt) < sharedconfig.ProbeCooldown {
+				continue
+			}
+			lc.probeSlot(i, s, now)
+			probed++
 		}
-		if now.Sub(s.lastProbeAt) < sharedconfig.ProbeCooldown {
-			continue
-		}
-		lc.probeSlot(i, s, now)
-		probed++
 	}
 }
 

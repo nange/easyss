@@ -20,7 +20,8 @@ func TestStatsConnsStatusConsistencyUnderShrink(t *testing.T) {
 		slots[i] = &transportSlot{idx: i}
 	}
 	sch := newScheduler(6, slots, 2, 1)
-	sch.liveCount.Store(6)
+	sch.priority.liveCount.Store(1)
+	sch.bulk.liveCount.Store(5)
 
 	var over atomic.Int64
 	var badIdx atomic.Int64
@@ -53,11 +54,12 @@ func TestStatsConnsStatusConsistencyUnderShrink(t *testing.T) {
 				return
 			default:
 			}
-			live := int(sch.liveCount.Load())
-			s := slotStatusString(sch, live)
+			pLive := int(sch.priority.liveCount.Load())
+			bLive := int(sch.bulk.liveCount.Load())
+			s := slotStatusString(sch, pLive, bLive)
 			idxs := parseIndices(s)
-			if len(idxs) > live {
-				over.Add(int64(len(idxs) - live))
+			if len(idxs) > pLive+bLive {
+				over.Add(int64(len(idxs) - pLive - bLive))
 			}
 			for k, id := range idxs {
 				if id != k {
