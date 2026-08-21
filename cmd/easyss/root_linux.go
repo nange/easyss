@@ -31,10 +31,10 @@ func RunMeElevated(extraArgs ...string) error {
 	// Prepare arguments
 	var argsBuilder strings.Builder
 	for _, arg := range os.Args[1:] {
-		argsBuilder.WriteString(fmt.Sprintf("'%s' ", strings.ReplaceAll(arg, "'", "'\\''")))
+		fmt.Fprintf(&argsBuilder, "'%s' ", strings.ReplaceAll(arg, "'", "'\\''"))
 	}
 	for _, arg := range extraArgs {
-		argsBuilder.WriteString(fmt.Sprintf("'%s' ", strings.ReplaceAll(arg, "'", "'\\''")))
+		fmt.Fprintf(&argsBuilder, "'%s' ", strings.ReplaceAll(arg, "'", "'\\''"))
 	}
 
 	// Capture necessary environment variables for GUI
@@ -133,7 +133,7 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 
 	var argsBuilder strings.Builder
 	for _, arg := range helperArgs {
-		argsBuilder.WriteString(fmt.Sprintf("'%s' ", strings.ReplaceAll(arg, "'", "'\\''")))
+		fmt.Fprintf(&argsBuilder, "'%s' ", strings.ReplaceAll(arg, "'", "'\\''"))
 	}
 
 	// Launch via pkexec. The helper is backgrounded (&) so pkexec returns

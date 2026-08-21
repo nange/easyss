@@ -79,7 +79,7 @@ func Tag() string {
 func String() string {
 	builder := strings.Builder{}
 	xprintf := func(k string, v string) {
-		builder.WriteString(fmt.Sprintf("%s:\t%s\n", k, v))
+		fmt.Fprintf(&builder, "%s:\t%s\n", k, v)
 	}
 
 	if Name != unknownProperty {

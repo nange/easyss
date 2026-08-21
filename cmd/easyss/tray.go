@@ -485,7 +485,9 @@ func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 	if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !IsRoot() {
 		// Non-root on macOS/Linux: spawn an elevated helper process to
 		// open the TUN device, set up routes, and pass the fd back.
-		if err := a.createTun2socksViaHelper(); err != nil {
+		// The helper always fails on non-unix builds, but this branch is
+		// unreachable there (guarded by runtime.GOOS).
+		if err := a.createTun2socksViaHelper(); err != nil { //nolint:staticcheck // always fails on non-unix builds; branch unreachable
 			log.Error("[SYSTRAY] create tun2socks via helper", "err", err)
 			menu.SetChecked(false)
 			return
