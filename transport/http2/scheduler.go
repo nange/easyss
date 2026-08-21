@@ -144,6 +144,17 @@ const (
 	tierDegraded
 )
 
+// Negative-mark load weights, shared by slotWeight (multiplicative) and
+// negativeScore (additive), so the severity order always stays aligned:
+// degraded 6 > expiring 4 > heavy 2. An expiring connection is worse than
+// a merely heavy one — it is due for rotation and should be recycled
+// quickly — hence its weight sits above heavy's.
+const (
+	weightHeavy    = 2
+	weightExpiring = 4
+	weightDegraded = 6
+)
+
 // slotTierOf returns the tier a slot currently belongs to. Heavy+expiring
 // slots classify as heavy (the heavier mark wins), any degraded combination
 // classifies as degraded.
@@ -163,42 +174,42 @@ func slotTierOf(s *transportSlot) slotTier {
 // negativeScore quantifies how many negative marks a slot carries, used as
 // the secondary ordering key within a tier and in the uncapped fallback:
 // among equally loaded slots the one with fewer negative states wins.
-// Weights match slotWeight's severity order: degraded 6 > expiring 4 >
-// heavy 2 (an expiring connection is worse than a merely heavy one, since
-// it is due for rotation and should be recycled quickly).
+// Scores use the shared negative-mark weights (weightDegraded >
+// weightExpiring > weightHeavy), so the severity order always matches
+// slotWeight's.
 func negativeScore(s *transportSlot) int32 {
 	var score int32
 	if s.degraded.Load() {
-		score += 6
+		score += weightDegraded
 	}
 	if s.heavy.Load() > 0 {
-		score += 2
+		score += weightHeavy
 	}
 	if s.expiring.Load() {
-		score += 4
+		score += weightExpiring
 	}
 	return score
 }
 
 // slotWeight returns the load weight of a slot's negative marks, the
-// product of every mark it carries: heavy multiplies the load by 2,
-// expiring by 4, degraded by 6 (no mark: 1). A stream on a heavy+expiring
-// slot weighs 2×4 = 8× a healthy stream, one on a heavy+expiring+degraded
-// slot 2×4×6 = 48× — multiple negative states compound, so a slot is only
-// considered full once its weighted load reaches the pool's threshold.
-// Expiring is weighted deliberately high (4, above heavy's 2): the slot is
-// due for rotation, so streams should avoid it and let it go idle and be
-// recycled quickly.
+// product of the shared negative-mark weights (weightHeavy, weightExpiring,
+// weightDegraded; no mark: 1). A stream on a heavy+expiring slot weighs
+// weightHeavy×weightExpiring = 8× a healthy stream, one on a
+// heavy+expiring+degraded slot 2×4×6 = 48× — multiple negative states
+// compound, so a slot is only considered full once its weighted load
+// reaches the pool's threshold. Expiring is weighted deliberately high
+// (4, above heavy's 2): the slot is due for rotation, so streams should
+// avoid it and let it go idle and be recycled quickly.
 func slotWeight(s *transportSlot) int32 {
 	w := int32(1)
 	if s.heavy.Load() > 0 {
-		w *= 2
+		w *= weightHeavy
 	}
 	if s.expiring.Load() {
-		w *= 4
+		w *= weightExpiring
 	}
 	if s.degraded.Load() {
-		w *= 6
+		w *= weightDegraded
 	}
 	return w
 }
