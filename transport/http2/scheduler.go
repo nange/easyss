@@ -64,6 +64,8 @@ type slotPool struct {
 // (first prioritySlots entries) and the bulk pool (the rest), keeping the
 // total connection cap unchanged. The split honors PrioritySlotRatio via
 // prioritySlots; both pools get at least one slot whenever maxSlots >= 2.
+// Each pool renumbers its slots from 0, so a slot's stable idx is only
+// meaningful within its own pool.
 func newScheduler(maxSlots int, slots []*transportSlot, threshold int32, prioritySlots int) *slotScheduler {
 	pMax := prioritySlots
 	if pMax > maxSlots {
@@ -81,6 +83,12 @@ func newScheduler(maxSlots int, slots []*transportSlot, threshold int32, priorit
 		if pMax > 1 {
 			pMax = maxSlots - 1
 		}
+	}
+	for i := 0; i < pMax; i++ {
+		slots[i].idx = i
+	}
+	for i := 0; i < bMax; i++ {
+		slots[pMax+i].idx = i
 	}
 	return &slotScheduler{
 		priority: &slotPool{
@@ -533,25 +541,26 @@ func (p *slotPool) removeAtLocked(i, live int) {
 // remove swaps the slot out of its pool's live count (swap-remove) if it is
 // still live and not hosting streams, and reports whether the removal
 // happened. Streams are re-checked under the lock so a concurrent Open
-// cannot be stranded. The slot's pool is located via its stable index,
-// which the constructor assigns contiguously (priority pool first).
+// cannot be stranded. The slot's pool is found by scanning both pools for
+// the pointer: each pool numbers its slots from 0 independently, so the
+// stable idx alone cannot locate the pool. Called rarely (idle degraded
+// slots being retired), so the linear scan over the pre-allocated arrays is
+// fine.
 func (s *slotScheduler) remove(sl *transportSlot) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if sl.active.Load() != 0 {
 		return false
 	}
-	pool := s.priority
-	if sl.idx >= s.priority.maxSlots {
-		pool = s.bulk
-	}
-	live := int(pool.liveCount.Load())
-	for i := 0; i < live; i++ {
-		if pool.slots[i] != sl {
-			continue
+	for _, pool := range []*slotPool{s.priority, s.bulk} {
+		live := int(pool.liveCount.Load())
+		for i := 0; i < live; i++ {
+			if pool.slots[i] != sl {
+				continue
+			}
+			pool.removeAtLocked(i, live)
+			return true
 		}
-		pool.removeAtLocked(i, live)
-		return true
 	}
 	return false
 }

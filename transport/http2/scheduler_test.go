@@ -37,7 +37,7 @@ func newTestScheduler(specs ...[2]int32) *slotScheduler {
 			base:     4,
 		},
 		bulk: &slotPool{
-			slots:    []*transportSlot{{idx: len(pSlots)}},
+			slots:    []*transportSlot{{}},
 			maxSlots: 1,
 			base:     8,
 		},
@@ -474,15 +474,16 @@ func TestGrowFirstActivationPerPool(t *testing.T) {
 }
 
 func TestRemoveShrinksLiveCountAndLocatesPool(t *testing.T) {
-	s0 := &transportSlot{idx: 0, t: &http.Transport{}}
+	s0 := &transportSlot{t: &http.Transport{}}
 	s0.active.Store(1)
-	s1 := &transportSlot{idx: 1, t: &http.Transport{}}
+	s1 := &transportSlot{t: &http.Transport{}}
 	s1.degraded.Store(true)
 	sch := newScheduler(2, []*transportSlot{s0, s1}, 4, 1) // priority 1, bulk 1
 	sch.priority.liveCount.Store(1)
 	sch.bulk.liveCount.Store(1)
 
-	// s1 has idx 1 >= priority.maxSlots (1): it lives in the bulk pool.
+	// s1 lives in the bulk pool (the constructor assigns per-pool indices
+	// and remove locates the pool by scanning both pools).
 	if !sch.remove(s1) {
 		t.Fatal("idle bulk slot must be removable")
 	}

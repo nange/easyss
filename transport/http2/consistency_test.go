@@ -11,9 +11,10 @@ import (
 
 // TestStatsConnsStatusConsistencyUnderShrink stresses the scheduler with a
 // shrinker goroutine (simulating closeIdleLoop) while a stats reader
-// goroutine (simulating /stats polling) renders conns_status. It fails if the
-// rendered entry count ever exceeds the concurrently reported Conns value,
-// or if the rendered indices are not consecutive from 0.
+// goroutine (simulating /stats polling) renders each pool's conns_status.
+// It fails if a rendered entry count ever exceeds the concurrently reported
+// per-pool Conns value, or if the rendered indices are not consecutive from
+// 0 in either pool.
 func TestStatsConnsStatusConsistencyUnderShrink(t *testing.T) {
 	slots := make([]*transportSlot, 6)
 	for i := range slots {
@@ -56,12 +57,23 @@ func TestStatsConnsStatusConsistencyUnderShrink(t *testing.T) {
 			}
 			pLive := int(sch.priority.liveCount.Load())
 			bLive := int(sch.bulk.liveCount.Load())
-			s := slotStatusString(sch, pLive, bLive)
-			idxs := parseIndices(s)
-			if len(idxs) > pLive+bLive {
-				over.Add(int64(len(idxs) - pLive - bLive))
+			pStr := slotStatusString(sch.priority, pLive)
+			bStr := slotStatusString(sch.bulk, bLive)
+			pIdxs := parseIndices(pStr)
+			bIdxs := parseIndices(bStr)
+			if len(pIdxs) > pLive {
+				over.Add(int64(len(pIdxs) - pLive))
 			}
-			for k, id := range idxs {
+			if len(bIdxs) > bLive {
+				over.Add(int64(len(bIdxs) - bLive))
+			}
+			for k, id := range pIdxs {
+				if id != k {
+					badIdx.Add(1)
+					break
+				}
+			}
+			for k, id := range bIdxs {
 				if id != k {
 					badIdx.Add(1)
 					break

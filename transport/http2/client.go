@@ -96,10 +96,10 @@ func New(cfg Config) (*HTTP2Transport, error) {
 
 	// Pre-allocate and initialize all slots. Transports are cheap structs;
 	// actual TCP connections are established lazily by Go's http.Transport.
+	// Per-pool stable indices are assigned by newScheduler.
 	slots := make([]*transportSlot, maxSlots)
 	for i := range slots {
 		slots[i] = newSlot(cfg.TLSConfig, timeout, dialCtx, connLifetime)
-		slots[i].idx = i
 	}
 
 	sched := newScheduler(maxSlots, slots, threshold, prioritySlots)
@@ -338,7 +338,8 @@ func (t *HTTP2Transport) Stats() transport.TransportStats {
 			}
 		}
 	}
-	ts.ConnsStatus = slotStatusString(t.sched, pLive, bLive)
+	ts.PriorityConnsStatus = slotStatusString(t.sched.priority, pLive)
+	ts.BulkConnsStatus = slotStatusString(t.sched.bulk, bLive)
 	return ts
 }
 
@@ -363,37 +364,26 @@ func slotStatus(s *transportSlot) string {
 	return strings.Join(parts, "+")
 }
 
-// slotStatusString renders every live slot of both pools as
+// slotStatusString renders the live slots of one pool as
 // "<index>:<active streams>:<status>", wrapped in brackets, e.g.
 // "[0:3:degraded, 1:2:expiring, 2:1:active, 3:1:heavy]". Entries are
 // ordered by the stable slot identity (retire swap-removes scramble the
 // live order) and then renumbered from 0, so the rendered indices are
 // always consecutive with no jumps. An empty live set renders as "[]".
-// pLive/bLive must be the pool liveCount values the caller snapshot under
-// the scheduler lock, so the rendered entry count always matches Conns.
-func slotStatusString(sched *slotScheduler, pLive, bLive int) string {
-	if pLive > sched.priority.maxSlots {
-		pLive = sched.priority.maxSlots
-	}
-	if bLive > sched.bulk.maxSlots {
-		bLive = sched.bulk.maxSlots
+// live must be the pool's liveCount value the caller snapshot under the
+// scheduler lock, so the rendered entry count always matches Conns.
+func slotStatusString(pool *slotPool, live int) string {
+	if live > pool.maxSlots {
+		live = pool.maxSlots
 	}
 	type entry struct {
 		idx    int
 		active int
 		status string
 	}
-	entries := make([]entry, 0, pLive+bLive)
-	for i := 0; i < pLive; i++ {
-		s := sched.priority.slots[i]
-		entries = append(entries, entry{
-			idx:    s.idx,
-			active: int(s.active.Load()),
-			status: slotStatus(s),
-		})
-	}
-	for i := 0; i < bLive; i++ {
-		s := sched.bulk.slots[i]
+	entries := make([]entry, 0, live)
+	for i := 0; i < live; i++ {
+		s := pool.slots[i]
 		entries = append(entries, entry{
 			idx:    s.idx,
 			active: int(s.active.Load()),
