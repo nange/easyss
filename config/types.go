@@ -8,7 +8,7 @@ var NextProtos = []string{"h2", "http/1.1"}
 
 const (
 	DefaultTimeout         = 30
-	DefaultConnCountMax    = 16
+	DefaultConnCountMax    = 15
 	DefaultStreamThreshold = 4
 	DefaultBatchWindowMS   = 3
 	DefaultCoverBudgetCap  = 16 * 1024 // 16KB
@@ -21,7 +21,7 @@ const (
 	DefaultHTTPPort          = 5080
 	DefaultProtocol          = "h2"
 	DefaultMethod            = "aes-256-gcm"
-	DefaultPrioritySlotRatio = 0.5
+	DefaultPrioritySlotRatio = 0.4
 	DefaultCoverBudgetRatio  = 0.03
 	DefaultProxyRule         = "auto"
 	DefaultIPV6Rule          = "auto"
