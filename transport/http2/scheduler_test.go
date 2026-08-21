@@ -186,19 +186,28 @@ func TestTierCap(t *testing.T) {
 
 func TestWeightedActive(t *testing.T) {
 	tests := []struct {
-		name  string
-		setup func(*transportSlot)
+		name   string
+		setup  func(*transportSlot)
 		active int32
-		want  int32
+		want   int32
 	}{
 		{"healthy weighs 1", func(s *transportSlot) {}, 4, 4},
 		{"expiring weighs 2", func(s *transportSlot) { s.expiring.Store(true) }, 2, 4},
 		{"heavy weighs 2", func(s *transportSlot) { s.heavy.Store(1) }, 2, 4},
 		{"degraded weighs 4", func(s *transportSlot) { s.degraded.Store(true) }, 1, 4},
-		{"degraded and heavy weighs 4", func(s *transportSlot) {
-			s.degraded.Store(true)
+		{"heavy and expiring compound to 4", func(s *transportSlot) {
 			s.heavy.Store(1)
-		}, 1, 4},
+			s.expiring.Store(true)
+		}, 2, 8},
+		{"heavy and degraded compound to 8", func(s *transportSlot) {
+			s.heavy.Store(1)
+			s.degraded.Store(true)
+		}, 1, 8},
+		{"all marks compound to 16", func(s *transportSlot) {
+			s.heavy.Store(1)
+			s.expiring.Store(true)
+			s.degraded.Store(true)
+		}, 2, 32}, // 2 streams × 2(heavy) × 2(expiring) × 4(degraded)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
