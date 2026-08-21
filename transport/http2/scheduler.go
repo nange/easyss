@@ -28,19 +28,24 @@ import (
 //
 //   - Within a pool, slots are ordered by health tiers (see slotTierOf):
 //     active (healthy) slots host new streams first. Once every active slot
-//     reached the pool's pressure base, expiring slots take over (rotation
-//     overdue but the connection is still healthy) up to base/2 streams
-//     each; heavy slots (healthy connection monopolized by heavy streams)
-//     and degraded slots (confirmed slow) follow, up to base/4 each. Tier
-//     caps double whenever the active layer is pushed to the next
-//     power-of-two multiple of the base, so a fully saturated pool keeps
-//     spreading load instead of piling onto one connection.
+//     reached the pool's pressure base, expiring slots take over, then
+//     heavy slots and finally degraded slots (worst candidate, last
+//     resort). Negative tiers are compared by weighted load — a stream on
+//     an expiring or heavy slot weighs 2× a healthy stream, one on a
+//     degraded slot 4× (see tierWeight) — so an expiring/heavy slot is
+//     full once it hosts base/2 streams and a degraded one once it hosts
+//     base/4, i.e. 2 heavy streams count like 4 healthy ones and 1
+//     degraded like 4. Tier capacity doubles whenever the active layer is
+//     pushed to the next power-of-two multiple of the base, so a fully
+//     saturated pool keeps spreading load instead of piling onto one
+//     connection.
 //
-//   - Growth is per pool and fires only when every tier of that pool is
-//     saturated: existing connections — including negative ones — are
-//     squeezed first, and only then is a new connection dialed. When a pool
-//     is at its connection cap and still saturated, pick borrows a healthy
-//     slot from the other pool before settling for the uncapped fallback.
+//   - Growth prefers fresh connections over squeezing negative ones: when a
+//     pool's tiers are saturated it grows its own pool, and once a pool is
+//     at its connection cap it grows the sibling pool instead (the sibling
+//     must also be tier-saturated; otherwise pick simply borrows its
+//     healthy slots). Only when both pools are at their caps and every
+//     tier is saturated do streams pile onto the least-loaded slot.
 type slotScheduler struct {
 	priority *slotPool // interactive streams, base = threshold
 	bulk     *slotPool // everything else, base = bulkThreshold
@@ -173,6 +178,30 @@ func negativeScore(s *transportSlot) int32 {
 	return score
 }
 
+// tierWeight returns how much a stream on the given tier weighs compared
+// with a stream on a healthy slot: a stream sharing an expiring or heavy
+// connection (rotation overdue, or a heavy stream monopolizing the TCP
+// window) is penalized 2×, one on a degraded connection (confirmed slow)
+// 4×. Comparisons of load and capacity across tiers use the weighted value
+// (see weightedActive), so 2 streams on an expiring/heavy slot count like
+// 4 on a healthy one, and 1 on a degraded slot like 4.
+func tierWeight(tier slotTier) int32 {
+	switch tier {
+	case tierExpiring, tierHeavy:
+		return 2
+	case tierDegraded:
+		return 4
+	default:
+		return 1
+	}
+}
+
+// weightedActive returns the slot's weighted load: its active stream count
+// scaled by the weight of its current tier.
+func weightedActive(s *transportSlot) int32 {
+	return s.active.Load() * tierWeight(slotTierOf(s))
+}
+
 // pick returns the slot a new stream should use: the stream's class selects
 // its own pool, searched with the tiered pressure scheduler. When every
 // tier of the pool is saturated (and the pool is at its connection cap),
@@ -231,12 +260,12 @@ func (p *slotPool) saturatedIn(live int) bool {
 // The search walks the tiers in order of desirability — active first, then
 // expiring, heavy and degraded — and within a tier prefers the slot with
 // the fewest active streams, breaking ties by negativeScore. A tier only
-// accepts a slot whose active count is below the tier's capacity, which
-// scales with the pressure level (see pressureLevel and tierCap). Once
-// every tier is full, the fallback "keeps piling" onto the least-loaded
-// healthy slot (or the least-loaded slot overall when none is healthy) with
-// no cap: that pushes the active layer toward the next pressure level,
-// where tier capacities double and the spill-over resumes.
+// accepts a slot whose weighted load (active × tierWeight) stays below the
+// tier's capacity, which scales with the pressure level (see pressureLevel
+// and tierCap). Once every tier is full, the fallback piles onto the
+// least-loaded slot overall (by weighted load, uncapped): piling there
+// keeps load balanced instead of stacking every stream onto one crowded
+// healthy connection.
 func (p *slotPool) tieredSelectAt(live int, recordStats bool) (*transportSlot, bool) {
 	if live == 0 {
 		return p.slots[0], false
@@ -252,6 +281,7 @@ func (p *slotPool) tieredSelectAt(live int, recordStats bool) (*transportSlot, b
 		if cap <= 0 {
 			return false
 		}
+		weight := tierWeight(tier)
 		best = nil
 		var bestActive int32 = math.MaxInt32
 		var bestNeg int32 = math.MaxInt32
@@ -261,7 +291,7 @@ func (p *slotPool) tieredSelectAt(live int, recordStats bool) (*transportSlot, b
 				continue
 			}
 			a := sl.active.Load()
-			if a >= cap {
+			if a*weight >= cap {
 				continue
 			}
 			neg := negativeScore(sl)
@@ -349,24 +379,23 @@ func floorLog2(v int32) int32 {
 	return n
 }
 
-// tierCap returns the stream capacity of one tier at the given pressure
-// level: a slot of that tier accepts a new stream only while its active
-// count stays below the capacity.
+// tierCap returns the weighted-load capacity of one tier at the given
+// pressure level: a slot of that tier accepts a new stream only while its
+// weighted load (active × tierWeight) stays below the capacity. The actual
+// stream cap follows by dividing through the tier weight.
 //
 //	level 0: only the active tier has capacity, cap = base;
-//	level k>=1: expiring    = 2^(k-2)*base  (k=1 → base/2)
-//	            heavy       = 2^(k-3)*base  (k=1 → base/4, k=2 → base/2)
-//	            degraded    = same as heavy
+//	level k>=1: every negative tier has cap = 2^(k-1)*base.
 //
-// Every level-up doubles all lower-tier capacities: the model first spills
-// onto the negative tiers, then piles back onto the active layer until it
-// doubles, then the lower-tier capacities double and the spill resumes —
-// cycling until streams end and the load naturally falls back. Note that
-// for a priority stream (base=threshold) a level-1 heavy/degraded capacity
-// of base/4 = 1 is effectively unusable (such slots always host >= 1 active
-// stream), which is intended: priority streams only spill onto negative
-// slots under real pressure. Extreme levels shift beyond int32 range; the
-// resulting negative capacity is treated as "no capacity" by callers.
+// At level 1 that means an expiring/heavy slot holds at most base/2
+// streams (weight 2) and a degraded one base/4 (weight 4) — 2 heavy
+// streams count like 4 healthy ones, 1 degraded like 4. Every level-up
+// doubles the negative-tier capacities: the model first spills onto the
+// negative tiers, then piles back onto the active layer until it doubles,
+// then the negative-tier capacities double and the spill resumes — cycling
+// until streams end and the load naturally falls back. Extreme levels
+// shift beyond int32 range; the resulting negative capacity is treated as
+// "no capacity" by callers.
 func tierCap(tier slotTier, level, base int32) int32 {
 	if level == 0 {
 		if tier == tierActive {
@@ -374,27 +403,14 @@ func tierCap(tier slotTier, level, base int32) int32 {
 		}
 		return 0
 	}
-	switch tier {
-	case tierExpiring:
-		if level == 1 {
-			return base / 2
-		}
-		return base << (level - 2)
-	case tierHeavy, tierDegraded:
-		if level == 1 {
-			return base / 4
-		}
-		if level == 2 {
-			return base / 2
-		}
-		return base << (level - 3)
-	default:
+	if tier == tierActive {
 		// tierActive is never actively searched at level >= 1: every
 		// active slot is at or beyond the current threshold by definition,
 		// so none would pass the capacity check. "Piling back onto the
 		// active layer" is the fallback path in tieredSelect.
 		return 0
 	}
+	return base << (level - 1)
 }
 
 // minActiveInTier returns the smallest active-stream count among slots of
@@ -431,7 +447,7 @@ func (p *slotPool) minActiveInRange(live int) int32 {
 	return min
 }
 
-// leastActive returns the slot with the fewest active streams among the
+// leastActive returns the slot with the fewest weighted streams among the
 // first `live` slots — the final uncapped fallback of the pressure
 // scheduler; among equally loaded slots the one with fewer negative marks
 // wins. With no live slots the first pre-allocated slot is returned.
@@ -440,83 +456,80 @@ func (p *slotPool) leastActive(live int) *transportSlot {
 		return p.slots[0]
 	}
 	var best *transportSlot
-	var min int32 = math.MaxInt32
+	var minWeighted int32 = math.MaxInt32
 	var minNeg int32 = math.MaxInt32
 	for i := 0; i < live; i++ {
 		sl := p.slots[i]
-		a := sl.active.Load()
+		w := weightedActive(sl)
 		neg := negativeScore(sl)
-		if a > min || (a == min && neg >= minNeg) {
+		if w > minWeighted || (w == minWeighted && neg >= minNeg) {
 			continue
 		}
-		best, min, minNeg = sl, a, neg
+		best, minWeighted, minNeg = sl, w, neg
 	}
 	return best
 }
 
-// grow activates one more live slot of the pool (up to maxSlots), but only
-// when every tier of the pool is saturated: the pool first squeezes the
-// remaining capacity of existing connections — including expiring, heavy
-// and degraded ones — and only dials a fresh connection once nothing is
-// left, so transient overload does not trigger needless TLS re-dials. Uses
-// double-checked locking under the scheduler lock. On first activation
-// (live == 0) two connections are activated at once for better initial
-// throughput, since typical web browsing generates more than 8 concurrent
-// streams; falls back to 1 when maxSlots is 1.
+// grow activates one more live slot (up to maxSlots), preferring a fresh
+// connection over squeezing negative ones: when the stream's own pool is
+// not yet at its cap and its tiers are saturated, the pool grows itself;
+// once the pool is at its cap, the sibling pool is grown whenever it has
+// room — a fresh healthy connection always beats piling onto negative
+// slots. Only when both pools are at their caps does pick fall back to the
+// tiered selection and finally the least-loaded slot. Uses double-checked
+// locking. On first activation (live == 0) two connections are activated
+// at once for better initial throughput, since typical web browsing
+// generates more than 8 concurrent streams; falls back to 1 when maxSlots
+// is 1.
 func (s *slotScheduler) grow(highPriority bool) {
 	pool := s.poolOf(highPriority)
-	live := pool.liveCount.Load()
-	if int(live) >= pool.maxSlots {
-		// This pool is at its connection cap: new streams will cross-borrow
-		// from the other pool (see pick). Make sure that pool is activated,
-		// so borrowed streams land on managed slots — spread by the normal
-		// tiered scheduler instead of piling onto one unmanaged slot.
-		s.activateOther(pool)
-		return
-	}
-	if live > 0 && !pool.saturatedIn(int(live)) {
+	target, _ := s.growTarget(pool)
+	if target == nil {
 		return
 	}
 
-	// Every tier of the pool is saturated — try to grow under lock.
+	// A new connection is needed — grow under lock.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// Double-check after acquiring the lock.
-	live = pool.liveCount.Load()
-	if int(live) >= pool.maxSlots {
+	target, live := s.growTarget(pool)
+	if target == nil {
 		return
 	}
-	if live > 0 && !pool.saturatedIn(int(live)) {
-		return
-	}
-
-	if live == 0 && pool.maxSlots >= 2 {
-		pool.liveCount.Add(2)
+	if live == 0 && target.maxSlots >= 2 {
+		target.liveCount.Add(2)
 	} else {
-		pool.liveCount.Add(1)
+		target.liveCount.Add(1)
 	}
 }
 
-// activateOther activates the sibling pool when it is still unactivated
-// (live == 0), doubling the first-activation semantics (+2): once a pool is
-// saturated to the point of cross-borrowing, the borrowed streams deserve
-// managed slots. Activation is lazy and harmless — an activated pool with
-// no streams is shrunk back by the next idle sweep.
-func (s *slotScheduler) activateOther(pool *slotPool) {
-	other := s.otherPool(pool)
-	if other.liveCount.Load() > 0 {
-		return
-	}
-	s.mu.Lock()
-	if other.liveCount.Load() == 0 {
-		if other.maxSlots >= 2 {
-			other.liveCount.Add(2)
-		} else {
-			other.liveCount.Add(1)
+// growTarget decides whether a new connection is needed and which pool it
+// belongs to; it returns nil when no pool should grow:
+//
+//   - the stream's own pool is below its cap and its tiers still have
+//     capacity → no growth (pick serves the stream normally);
+//   - the own pool is below its cap but tier-saturated → grow the own
+//     pool;
+//   - the own pool is at its cap → grow the sibling pool whenever it has
+//     room: a fresh healthy connection beats piling onto negative slots,
+//     and pick then borrows the fresh healthy slot; only when both pools
+//     are at their caps do streams fall back to the tiered selection
+//     (expiring → heavy → degraded) and finally the uncapped fallback.
+func (s *slotScheduler) growTarget(pool *slotPool) (*slotPool, int32) {
+	live := pool.liveCount.Load()
+	if int(live) < pool.maxSlots {
+		if live == 0 || pool.saturatedIn(int(live)) {
+			return pool, live
 		}
+		return nil, 0
 	}
-	s.mu.Unlock()
+	other := s.otherPool(pool)
+	live = other.liveCount.Load()
+	if int(live) < other.maxSlots {
+		return other, live
+	}
+	return nil, 0
 }
 
 // shrinkIdleLocked retires every idle slot (active==0) from both pools,

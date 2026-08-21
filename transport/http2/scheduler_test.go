@@ -164,24 +164,51 @@ func TestTierCap(t *testing.T) {
 		base  int32
 		want  int32
 	}{
-		{tierActive, 0, 8, 8},    // level 0: active holds up to the base
-		{tierActive, 1, 8, 0},    // level>=1: active is served by fallback only
-		{tierExpiring, 0, 8, 0},  // lower tiers disabled at level 0
-		{tierExpiring, 1, 8, 4},  // base/2
-		{tierExpiring, 2, 8, 8},  // doubled
-		{tierExpiring, 3, 8, 16}, // doubled again
-		{tierHeavy, 1, 8, 2},     // base/4
-		{tierHeavy, 2, 8, 4},     // base/2
-		{tierHeavy, 3, 8, 8},     // base
-		{tierDegraded, 1, 8, 2},  // same as heavy
-		{tierDegraded, 2, 8, 4},  // same as heavy
-		{tierExpiring, 1, 4, 2},  // priority base
-		{tierHeavy, 1, 4, 1},     // priority base: effectively unusable
+		{tierActive, 0, 8, 8},   // level 0: active holds up to the base
+		{tierActive, 1, 8, 0},   // level>=1: active is served by fallback only
+		{tierExpiring, 0, 8, 0}, // negative tiers disabled at level 0
+		// Weighted-load capacities at level 1: expiring/heavy slots hold
+		// base/2 streams (weight 2), degraded base/4 (weight 4) — 2 heavy
+		// streams count like 4 healthy ones, 1 degraded like 4.
+		{tierExpiring, 1, 8, 8},
+		{tierHeavy, 1, 8, 8},
+		{tierDegraded, 1, 8, 8},
+		{tierExpiring, 2, 8, 16}, // doubled
+		{tierExpiring, 3, 8, 32}, // doubled again
+		{tierExpiring, 1, 4, 4},  // priority base
 	}
 	for _, tt := range tests {
 		if got := tierCap(tt.tier, tt.level, tt.base); got != tt.want {
 			t.Fatalf("tierCap(tier=%v level=%d base=%d) = %d, want %d", tt.tier, tt.level, tt.base, got, tt.want)
 		}
+	}
+}
+
+func TestWeightedActive(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*transportSlot)
+		active int32
+		want  int32
+	}{
+		{"healthy weighs 1", func(s *transportSlot) {}, 4, 4},
+		{"expiring weighs 2", func(s *transportSlot) { s.expiring.Store(true) }, 2, 4},
+		{"heavy weighs 2", func(s *transportSlot) { s.heavy.Store(1) }, 2, 4},
+		{"degraded weighs 4", func(s *transportSlot) { s.degraded.Store(true) }, 1, 4},
+		{"degraded and heavy weighs 4", func(s *transportSlot) {
+			s.degraded.Store(true)
+			s.heavy.Store(1)
+		}, 1, 4},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sl := &transportSlot{}
+			tt.setup(sl)
+			sl.active.Store(tt.active)
+			if got := weightedActive(sl); got != tt.want {
+				t.Fatalf("weightedActive = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -217,38 +244,49 @@ func TestTieredSelectLevel1(t *testing.T) {
 		}
 	})
 
-	t.Run("expiring full spills onto heavy below base/4", func(t *testing.T) {
+	t.Run("expiring full spills onto heavy below base/2", func(t *testing.T) {
 		p := newTestPool(8, [2]int32{8, 0}, [2]int32{4, 0}, [2]int32{1, 0})
 		p.slots[1].expiring.Store(true)
 		p.slots[2].heavy.Store(1)
 		slot, saturated := p.tieredSelect()
 		if saturated || slot != p.slots[2] {
-			t.Fatalf("got slot %d saturated=%v, want heavy slot 2 (active=1 < 2)", slot.idx, saturated)
+			t.Fatalf("got slot %d saturated=%v, want heavy slot 2 (active=1 < 4)", slot.idx, saturated)
 		}
 	})
 
-	t.Run("heavy full spills onto degraded below base/4", func(t *testing.T) {
-		p := newTestPool(8, [2]int32{8, 0}, [2]int32{4, 0}, [2]int32{2, 0}, [2]int32{1, 0})
+	t.Run("heavy slots accept up to base/2 streams", func(t *testing.T) {
+		// A heavy slot with 2 streams weighs 4 < base 8: it still has
+		// capacity and is picked over the (full) expiring tier.
+		p := newTestPool(8, [2]int32{8, 0}, [2]int32{4, 0}, [2]int32{2, 0})
+		p.slots[1].expiring.Store(true)
+		p.slots[2].heavy.Store(1)
+		slot, saturated := p.tieredSelect()
+		if saturated || slot != p.slots[2] {
+			t.Fatalf("got slot %d saturated=%v, want heavy slot 2 (active=2, weighted 4 < 8)", slot.idx, saturated)
+		}
+	})
+
+	t.Run("heavy full (base/2) spills onto degraded below base/4", func(t *testing.T) {
+		p := newTestPool(8, [2]int32{8, 0}, [2]int32{4, 0}, [2]int32{4, 0}, [2]int32{1, 0})
 		p.slots[1].expiring.Store(true)
 		p.slots[2].heavy.Store(1)
 		p.slots[3].degraded.Store(true)
 		slot, saturated := p.tieredSelect()
 		if saturated || slot != p.slots[3] {
-			t.Fatalf("got slot %d saturated=%v, want degraded slot 3 (active=1 < 2)", slot.idx, saturated)
+			t.Fatalf("got slot %d saturated=%v, want degraded slot 3 (active=1, weighted 4 < 8)", slot.idx, saturated)
 		}
 	})
 
 	t.Run("all tiers full falls back to the least-loaded slot", func(t *testing.T) {
-		p := newTestPool(8, [2]int32{8, 0}, [2]int32{4, 0}, [2]int32{2, 0}, [2]int32{2, 0})
+		p := newTestPool(8, [2]int32{8, 0}, [2]int32{4, 0}, [2]int32{4, 0}, [2]int32{2, 0})
 		p.slots[1].expiring.Store(true)
 		p.slots[2].heavy.Store(1)
 		p.slots[3].degraded.Store(true)
-		// Every tier is at capacity; the fallback is the globally
-		// least-loaded slot — the heavy/degraded ones (active=2), not the
-		// piled-up healthy slot (active=8).
+		// Every tier is at capacity (weighted load 8); the fallback is the
+		// least-loaded slot by weighted load, ties broken by negativeScore.
 		slot, saturated := p.tieredSelect()
-		if !saturated || slot != p.slots[2] {
-			t.Fatalf("got slot %d saturated=%v, want least-loaded heavy slot 2 (active=2)", slot.idx, saturated)
+		if !saturated || slot != p.slots[0] {
+			t.Fatalf("got slot %d saturated=%v, want fallback slot 0 with saturated=true", slot.idx, saturated)
 		}
 	})
 }
@@ -394,11 +432,14 @@ func TestPickBorrowsOtherPoolWhenSaturated(t *testing.T) {
 	t.Run("keeps own fallback when the other pool is not less loaded", func(t *testing.T) {
 		sch := newTwoPoolScheduler(
 			[][2]int32{{2, 0}},
-			[][2]int32{{2, 1}, {8, 1}},
+			[][2]int32{{4, 1}, {8, 1}},
 		)
 		sch.priority.slots[0].heavy.Store(1)
-		// Both fallbacks sit at 2 streams; equal load keeps the stream in
-		// its own pool.
+		// Priority pool: heavy slot at 2 streams weighs 4 = its base 4, so
+		// it is saturated and falls back to slot 0 (weighted 4). Bulk pool:
+		// heavy slots at 4/8 streams (weighted 8/16) are saturated too, its
+		// fallback sits at 4 streams — not less loaded, so the stream stays
+		// in its own pool.
 		if got := sch.pick(true); got != sch.priority.slots[0] {
 			t.Fatalf("pick(true) = slot %d, want own pool fallback slot 0", got.idx)
 		}
@@ -463,11 +504,11 @@ func TestGrowPriorityPool(t *testing.T) {
 	}
 }
 
-func TestGrowSqueezesNegativeTiersBeforeGrowing(t *testing.T) {
+func TestNoGrowthWhileNegativeTiersHaveCapacity(t *testing.T) {
 	sch := newGrowTestScheduler(10, 5, 5, 2)
 
 	// Healthy slot saturated at 8, but an expiring slot still has capacity
-	// (base/2 = 4): new streams spill there, no growth.
+	// (2 streams weigh 4 < base 8): the stream is served there, no growth.
 	sch.bulk.slots[0].active.Store(8)
 	sch.bulk.slots[1].expiring.Store(true)
 	sch.bulk.slots[1].active.Store(3)
@@ -484,38 +525,71 @@ func TestGrowSqueezesNegativeTiersBeforeGrowing(t *testing.T) {
 	}
 }
 
-func TestGrowActivatesOtherPoolWhenSaturated(t *testing.T) {
-	t.Run("priority pool full activates unactivated bulk pool", func(t *testing.T) {
+func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
+	t.Run("priority pool full grows unactivated bulk pool", func(t *testing.T) {
 		// priority pool (5 slots) at its cap, bulk pool never used: new
-		// priority streams will cross-borrow, so the bulk pool must be
-		// activated (with first-activation +2 semantics) to give borrowed
-		// streams managed, spread-out slots.
+		// priority streams need fresh connections, so the sibling pool is
+		// grown (with first-activation +2 semantics).
 		sch := newGrowTestScheduler(10, 5, 5, 0)
 		sch.grow(true)
 		if got := sch.bulk.liveCount.Load(); got != 2 {
-			t.Fatalf("bulk liveCount = %d, want 2 (activated for borrowing)", got)
+			t.Fatalf("bulk liveCount = %d, want 2 (sibling grown for borrowing)", got)
 		}
 		if got := sch.priority.liveCount.Load(); got != 5 {
 			t.Fatalf("priority liveCount = %d, want 5 (unchanged)", got)
 		}
 	})
 
-	t.Run("does not re-activate an already live pool", func(t *testing.T) {
+	t.Run("grows sibling even when it still has capacity", func(t *testing.T) {
+		// The own pool is at its cap: a fresh connection in the sibling
+		// pool is preferred over borrowing/piling — growth does not wait
+		// for the sibling's tiers to saturate.
 		sch := newGrowTestScheduler(10, 5, 5, 2)
 		sch.grow(true)
-		if got := sch.bulk.liveCount.Load(); got != 2 {
-			t.Fatalf("bulk liveCount = %d, want 2 (no double activation)", got)
+		if got := sch.bulk.liveCount.Load(); got != 3 {
+			t.Fatalf("bulk liveCount = %d, want 3 (fresh sibling connection preferred)", got)
 		}
 	})
 
-	t.Run("bulk pool full activates unactivated priority pool", func(t *testing.T) {
+	t.Run("priority pool full grows tier-saturated bulk pool", func(t *testing.T) {
+		// The reported snapshot: priority pool saturated, bulk pool holds
+		// two heavy slots at their weighted capacity (2 and 8 streams,
+		// both weighted >= 8) — new HTTPS streams must grow the bulk pool
+		// instead of piling onto the saturated priority connections.
+		sch := newGrowTestScheduler(10, 5, 5, 2)
+		for i := 0; i < 5; i++ {
+			sch.priority.slots[i].active.Store(4)
+		}
+		sch.bulk.slots[0].active.Store(2)
+		sch.bulk.slots[0].heavy.Store(1)
+		sch.bulk.slots[1].active.Store(8)
+		sch.bulk.slots[1].heavy.Store(1)
+		sch.grow(true)
+		if got := sch.bulk.liveCount.Load(); got != 3 {
+			t.Fatalf("bulk liveCount = %d, want 3 (grown while its tiers are saturated)", got)
+		}
+	})
+
+	t.Run("bulk pool full grows unactivated priority pool", func(t *testing.T) {
 		sch := newGrowTestScheduler(10, 5, 0, 5)
 		sch.grow(false)
 		if got := sch.priority.liveCount.Load(); got != 2 {
-			t.Fatalf("priority liveCount = %d, want 2 (activated for borrowing)", got)
+			t.Fatalf("priority liveCount = %d, want 2 (sibling grown for borrowing)", got)
 		}
 		if got := sch.bulk.liveCount.Load(); got != 5 {
 			t.Fatalf("bulk liveCount = %d, want 5 (unchanged)", got)
+		}
+	})
+
+	t.Run("both pools full never grows", func(t *testing.T) {
+		sch := newGrowTestScheduler(10, 5, 5, 5)
+		for i := 0; i < 5; i++ {
+			sch.priority.slots[i].active.Store(4)
+			sch.bulk.slots[i].active.Store(8)
+		}
+		sch.grow(true)
+		if got := sch.priority.liveCount.Load() + sch.bulk.liveCount.Load(); got != 10 {
+			t.Fatalf("total liveCount = %d, want 10 (both pools at their caps)", got)
 		}
 	})
 }
