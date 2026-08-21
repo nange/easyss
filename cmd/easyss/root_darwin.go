@@ -33,10 +33,10 @@ func RunMeElevated(extraArgs ...string) error {
 
 	var argsBuilder strings.Builder
 	for _, arg := range os.Args[1:] {
-		argsBuilder.WriteString(fmt.Sprintf("'%s' ", strings.ReplaceAll(arg, "'", "'\\''")))
+		fmt.Fprintf(&argsBuilder, "'%s' ", strings.ReplaceAll(arg, "'", "'\\''"))
 	}
 	for _, arg := range extraArgs {
-		argsBuilder.WriteString(fmt.Sprintf("'%s' ", strings.ReplaceAll(arg, "'", "'\\''")))
+		fmt.Fprintf(&argsBuilder, "'%s' ", strings.ReplaceAll(arg, "'", "'\\''"))
 	}
 
 	cmdStr := fmt.Sprintf("'%s' %s &>/dev/null &", exe, argsBuilder.String())
@@ -126,7 +126,7 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 
 	var argsBuilder strings.Builder
 	for _, arg := range helperArgs {
-		argsBuilder.WriteString(fmt.Sprintf("'%s' ", strings.ReplaceAll(arg, "'", "'\\''")))
+		fmt.Fprintf(&argsBuilder, "'%s' ", strings.ReplaceAll(arg, "'", "'\\''"))
 	}
 
 	// Launch via osascript with admin privileges. The helper is backgrounded
