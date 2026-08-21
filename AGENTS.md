@@ -25,7 +25,7 @@ server/config/      服务端配置类型
 server/handler/     TCP/UDP/ICMP 请求处理 + fallback 伪装页面
 server/nextproxy/   上游 SOCKS5 代理（动态 IP/域名学习）
 transport/          传输层抽象：Transport/Stream 接口
-	transport/http2/    HTTP/2 传输实现（uTLS Chrome 指纹，least-active 槽位调度，懒加载扩容）
+ transport/http2/    HTTP/2 传输实现（uTLS Chrome 指纹，least-active 槽位调度，懒加载扩容）
 protocol/           应用帧协议：HANDSHAKE/DATA/DATAGRAM/FIN/RST/PADDING/COVER 编解码
 crypto/             加密层：PBKDF2 KDF + HKDF key 派生 + 计数器 nonce AEAD（两阶段）
 shaper/             流量整形：分桶 padding + cover traffic 注入 + 批处理
@@ -152,4 +152,6 @@ Makefile 通过 `-ldflags` 向 `version/` 包注入以下变量，其余变量�
 
 - 始终使用简体中文回复我
 - git commit 信息使用英文，尽量简洁，格式参考 git log 历史记录
+- 在用户没有明确要求提交代码前，都不提交代码
 - 提交代码前，先执行`make lint`，检查代码风格，存在问题则需要先修复再提交代码
+- 当用户要求提交PR时，PR标题采用英文，PR描述使用中文
