@@ -81,12 +81,17 @@ func newScheduler(maxSlots int, slots []*transportSlot, threshold int32, priorit
 	}
 	bMax := maxSlots - pMax
 	if bMax < 1 {
-		// Degenerate split (maxSlots == 1 or ratio 1): give the bulk pool
-		// the tail slot anyway; poolOf falls back to the priority pool when
-		// the bulk pool is empty.
-		bMax = 1
 		if pMax > 1 {
+			// Degenerate split (ratio 1 or prioritySlots >= maxSlots): give
+			// the bulk pool the tail slot.
 			pMax = maxSlots - 1
+			bMax = 1
+		} else {
+			// maxSlots == 1: the bulk pool stays empty (maxSlots 0) and
+			// poolOf falls back to the priority pool. Forcing bMax to 1 here
+			// would make bulk.slots an empty slice with maxSlots 1, and any
+			// bulk stream would index slots[0] out of range.
+			bMax = 0
 		}
 	}
 	for i := 0; i < pMax; i++ {
@@ -240,9 +245,14 @@ func (s *slotScheduler) pick(highPriority bool) *transportSlot {
 		} else {
 			stats.RecordBulkFallback()
 		}
-		other, otherSat := s.otherPool(pool).tieredSelect()
-		if !otherSat || other.active.Load() < slot.active.Load() {
-			return other
+		// The sibling pool may be empty (degenerate maxSlots == 1 split):
+		// it owns no slots, so there is nothing to borrow and tieredSelect
+		// would index its empty slot array.
+		if other := s.otherPool(pool); other.maxSlots > 0 {
+			otherSlot, otherSat := other.tieredSelect()
+			if !otherSat || otherSlot.active.Load() < slot.active.Load() {
+				return otherSlot
+			}
 		}
 	}
 	return slot

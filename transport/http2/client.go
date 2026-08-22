@@ -35,6 +35,15 @@ type HTTP2Transport struct {
 	cancel context.CancelFunc
 }
 
+// maxSlotCount bounds the number of pre-allocated transport slots so a
+// misconfigured (or maliciously large) MaxSlotCount cannot trigger a huge
+// upfront allocation. maxStreamThreshold keeps StreamThreshold's int32
+// arithmetic (threshold*2, tier capacity shifts) far from overflow.
+const (
+	maxSlotCount       = 64
+	maxStreamThreshold = 1 << 20
+)
+
 type Config struct {
 	ServerURL         string
 	TLSConfig         *utls.Config
@@ -56,9 +65,15 @@ func New(cfg Config) (*HTTP2Transport, error) {
 	if maxSlots < 1 {
 		maxSlots = 6
 	}
+	if maxSlots > maxSlotCount {
+		maxSlots = maxSlotCount
+	}
 	threshold := int32(cfg.StreamThreshold)
 	if threshold < 1 {
 		threshold = 8
+	}
+	if threshold > maxStreamThreshold {
+		threshold = maxStreamThreshold
 	}
 
 	ratio := cfg.PrioritySlotRatio
@@ -240,6 +255,7 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 		pw.Close() //nolint:errcheck
 		cancel()
 		slot.active.Add(-1)
+		stats.RecordStreamClosed()
 		return nil, err
 	}
 	httpReq.Header.Set("User-Agent", chromeUserAgent())
@@ -296,13 +312,16 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 }
 
 func (t *HTTP2Transport) CloseIdle() {
-	// Close idle TCP connections on all slots of both pools (no lock
-	// needed).
+	// Close idle TCP connections on all slots of both pools. The slot array
+	// elements are swap-mutated by shrink/retire under the scheduler write
+	// lock, so read the arrays under the read lock.
+	t.sched.mu.RLock()
 	for _, pool := range []*slotPool{t.sched.priority, t.sched.bulk} {
 		for _, s := range pool.slots {
 			s.t.CloseIdleConnections()
 		}
 	}
+	t.sched.mu.RUnlock()
 
 	// Shrink liveCount by retiring idle slots (any position, swap-remove).
 	t.sched.mu.Lock()
@@ -415,12 +434,17 @@ func slotStatusString(pool *slotPool, live int) string {
 
 func (t *HTTP2Transport) Close() error {
 	t.cancel()
+	// Read the live slot ranges under the scheduler read lock: shrink/retire
+	// swap-remove slots under the write lock, so an unlocked iteration over
+	// the live range would race with those swaps.
+	t.sched.mu.RLock()
 	for _, pool := range []*slotPool{t.sched.priority, t.sched.bulk} {
 		live := int(pool.liveCount.Load())
 		for _, s := range pool.slots[:live] {
 			s.t.CloseIdleConnections()
 		}
 	}
+	t.sched.mu.RUnlock()
 	return nil
 }
 
