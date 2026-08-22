@@ -454,7 +454,13 @@ var (
 )
 
 const (
-	maxCachedFallbackPages = 64
+	// maxCachedFallbackPages bounds the generated-page cache. The curated
+	// paths (/, /about, ...) would use 9 entries; the rest of the budget
+	// serves arbitrary (generic) paths so a scanner hitting random URLs
+	// cannot force a template render on every single request. Once the cap
+	// is reached, further distinct paths render without caching (a render is
+	// a small template execution), so the cache can never grow unbounded.
+	maxCachedFallbackPages = 320
 
 	// cdnPathPrefix is the URL path prefix under which requests for
 	// configured CDN domains are routed. A request to
@@ -1363,21 +1369,12 @@ func getOrRenderHTML(path string) []byte {
 	}
 
 	html := renderHTML(path)
-	if shouldCacheGeneratedPath(path) && htmlCacheCount.Load() < maxCachedFallbackPages {
+	if htmlCacheCount.Load() < maxCachedFallbackPages {
 		if _, loaded := htmlCache.LoadOrStore(path, html); !loaded {
 			htmlCacheCount.Add(1)
 		}
 	}
 	return html
-}
-
-func shouldCacheGeneratedPath(path string) bool {
-	switch path {
-	case "/", "/about", "/contact", "/support", "/help", "/services", "/products", "/solutions", "/pricing":
-		return true
-	default:
-		return false
-	}
 }
 
 func renderHTML(path string) []byte {
