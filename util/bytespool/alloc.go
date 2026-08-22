@@ -10,6 +10,10 @@ import (
 
 var defaultAllocator = NewAllocator()
 
+// MaxSize is the largest buffer size the pool can serve: Get returns nil for
+// larger requests and Put rejects buffers with a larger cap.
+const MaxSize = 131072
+
 // Allocator for incoming frames, optimized to prevent overwriting after zeroing
 type Allocator struct {
 	buffers []sync.Pool
@@ -32,7 +36,7 @@ func NewAllocator() *Allocator {
 
 // Get a []byte from pool with most appropriate cap
 func (alloc *Allocator) Get(size int) []byte {
-	if size <= 0 || size > 131072 {
+	if size <= 0 || size > MaxSize {
 		return nil
 	}
 
@@ -48,7 +52,7 @@ func (alloc *Allocator) Get(size int) []byte {
 // which the cap must be exactly 2^n
 func (alloc *Allocator) Put(buf []byte) error {
 	bits := msb(cap(buf))
-	if cap(buf) == 0 || cap(buf) > 131072 || cap(buf) != 1<<bits {
+	if cap(buf) == 0 || cap(buf) > MaxSize || cap(buf) != 1<<bits {
 		return errors.New("allocator Put() incorrect buffer size")
 	}
 

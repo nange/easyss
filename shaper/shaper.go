@@ -11,7 +11,12 @@ import (
 
 func newSeededChaCha8() *rand.ChaCha8 {
 	var seed [32]byte
-	_, _ = cryptorand.Read(seed[:])
+	if _, err := cryptorand.Read(seed[:]); err != nil {
+		// A CSPRNG failure would degenerate cover/padding content into a
+		// deterministic stream — fatal for a traffic-camouflage layer. Fail
+		// fast instead of silently running with a zero seed.
+		panic("shaper: crypto/rand unavailable: " + err.Error())
+	}
 	return rand.NewChaCha8(seed)
 }
 
@@ -28,11 +33,11 @@ type Shaper interface {
 }
 
 type CoverConfig struct {
-	BudgetRatio float64 // cover traffic budget ratio to real traffic, 0.0-1.0 (default 0.10)
+	BudgetRatio float64 // cover traffic budget ratio to real traffic, 0.0-1.0 (default 0.03)
 	IdleTimeout int     // idle timeout in ms before sending cover frames (default 300)
 	MinSize     int     // min cover frame payload size in bytes (default 128)
 	MaxSize     int     // max cover frame payload size in bytes (default 1500)
-	BudgetCap   int     // max accumulated cover budget in bytes, 0 means unlimited (default 16KB)
+	BudgetCap   int     // max accumulated cover budget in bytes, <=0 uses the default (16KB)
 }
 
 type Config struct {
