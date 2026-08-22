@@ -24,10 +24,13 @@ func (s *Socks5Server) handleUDP(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 	src := clientAddr.String()
 	dst := d.Address()
 
-	_, hasAssoc := srv.AssociatedUDP.Get(src)
-	_ = hasAssoc
-
-	host, port, _ := net.SplitHostPort(dst)
+	host, port, err := net.SplitHostPort(dst)
+	if err != nil {
+		// Malformed datagram target: drop it instead of opening an exchange
+		// with an empty target that the server would reject anyway.
+		log.Debug("[UDP] malformed datagram target", "src", src, "target", dst, "err", err)
+		return nil
+	}
 	if s.disableQUIC && port == "443" {
 		return nil
 	}
@@ -129,19 +132,48 @@ func (s *Socks5Server) exchangeDirectDNSWithFallback(msg *dns.Msg, servers []str
 }
 
 func (s *Socks5Server) exchangeDirectDNSFromList(msg *dns.Msg, servers []string) (*dns.Msg, error) {
-	var lastErr error
+	var candidates []string
 	for _, addr := range servers {
 		if s.router.ShouldIPV6Disable() && util.IsIPV6Addr(addr) {
 			continue
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), s.dialTimeout)
-		resp, err := s.exchangeDirectDNS(ctx, msg, addr)
-		cancel()
-		if err != nil {
-			lastErr = err
-			continue
+		candidates = append(candidates, addr)
+	}
+	if len(candidates) == 0 {
+		return nil, errors.New("no dns server available")
+	}
+
+	// Query every upstream concurrently and take the first success. A
+	// serial scan lets one hung upstream stall the query for the full
+	// per-server timeout — and every datagram's handler goroutine blocks for
+	// the whole wait — so a DNS outage would otherwise pile up goroutines.
+	// The whole query shares a single timeout budget.
+	ctx, cancel := context.WithTimeout(context.Background(), s.dialTimeout)
+	defer cancel()
+
+	type result struct {
+		resp *dns.Msg
+		err  error
+	}
+	ch := make(chan result, len(candidates))
+	for _, addr := range candidates {
+		go func(addr string) {
+			resp, err := s.exchangeDirectDNS(ctx, msg, addr)
+			ch <- result{resp: resp, err: err}
+		}(addr)
+	}
+
+	var lastErr error
+	for range candidates {
+		select {
+		case r := <-ch:
+			if r.err == nil {
+				return r.resp, nil
+			}
+			lastErr = r.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
-		return resp, nil
 	}
 	if lastErr == nil {
 		lastErr = errors.New("no dns server available")
@@ -198,6 +230,14 @@ type udpExchangeFactory struct {
 	err  error
 }
 
+// maxUDPExchanges bounds the number of concurrent proxied UDP exchanges.
+// Each exchange owns one HTTP/2 stream, one receiveLoop goroutine and one
+// shaper; keying by (client address, target) means a client that uses a
+// fresh ephemeral UDP source port per datagram (Go's net.Resolver, some
+// curl builds) would otherwise accumulate hundreds of them within the idle
+// window. When the cap is reached, the exchange idle the longest is evicted.
+const maxUDPExchanges = 128
+
 // getOrCreateUDPExchange returns the existing UDPExchange for key, or creates
 // one via OpenUDPExchange. firstPayload, if non-empty, is merged into the
 // bootstrap record when the exchange is newly created (saving one RTT). If
@@ -213,7 +253,13 @@ func (s *Socks5Server) getOrCreateUDPExchange(key, dst string, firstPayload []by
 	if f, ok := s.udpInflight[key]; ok {
 		s.udpMu.Unlock()
 		<-f.done
+		if s.closing.Load() {
+			return nil, false, errSocksServerClosed
+		}
 		return f.ue, false, f.err
+	}
+	if len(s.udpExch)+len(s.udpInflight) >= maxUDPExchanges {
+		s.evictOldestExchangeLocked()
 	}
 	f := &udpExchangeFactory{done: make(chan struct{})}
 	s.udpInflight[key] = f
@@ -229,11 +275,43 @@ func (s *Socks5Server) getOrCreateUDPExchange(key, dst string, firstPayload []by
 		s.udpMu.Unlock()
 		return nil, false, err
 	}
+	// The server was closed while the exchange was being created: close it
+	// immediately so the stream and its receiveLoop cannot leak past
+	// shutdown (the cleanup loop has already exited).
+	if s.closing.Load() {
+		ue.Close() //nolint:errcheck
+		s.udpMu.Lock()
+		delete(s.udpInflight, key)
+		s.udpMu.Unlock()
+		return nil, false, errSocksServerClosed
+	}
 	s.udpMu.Lock()
 	s.udpExch[key] = ue
 	delete(s.udpInflight, key)
 	s.udpMu.Unlock()
 	return ue, true, nil
+}
+
+var errSocksServerClosed = errors.New("socks5 udp server closed")
+
+// evictOldestExchangeLocked closes and removes the exchange that has been
+// idle the longest, bounding the live exchange count at maxUDPExchanges.
+// Caller must hold s.udpMu.
+func (s *Socks5Server) evictOldestExchangeLocked() {
+	var oldestKey string
+	var oldestTime time.Time
+	for k, ue := range s.udpExch {
+		last := ue.LastSeen()
+		if oldestKey == "" || last.Before(oldestTime) {
+			oldestKey, oldestTime = k, last
+		}
+	}
+	if oldestKey == "" {
+		return
+	}
+	log.Debug("[UDP_PROXY] exchange cap reached, evicting oldest idle", "key", oldestKey)
+	s.udpExch[oldestKey].Close() //nolint:errcheck
+	delete(s.udpExch, oldestKey)
 }
 
 func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAddr *net.UDPAddr, target, key string) {
@@ -323,11 +401,12 @@ func (s *Socks5Server) directUDPRelay(srv *socks5.Server, clientAddr *net.UDPAdd
 	key := "direct_" + clientAddr.String() + "_" + dst
 
 	s.udpMu.RLock()
-	conn, ok := s.directUDP[key]
+	dc, ok := s.directUDP[key]
 	s.udpMu.RUnlock()
 
 	if ok {
-		_, err := conn.Write(d.Data)
+		dc.lastSeen.Store(time.Now().UnixNano())
+		_, err := dc.conn.Write(d.Data)
 		return err
 	}
 
@@ -337,9 +416,11 @@ func (s *Socks5Server) directUDPRelay(srv *socks5.Server, clientAddr *net.UDPAdd
 	if err != nil {
 		return err
 	}
+	dc = &directUDPConn{conn: rc}
+	dc.lastSeen.Store(time.Now().UnixNano())
 
 	s.udpMu.Lock()
-	s.directUDP[key] = rc
+	s.directUDP[key] = dc
 	s.udpMu.Unlock()
 
 	go func() {

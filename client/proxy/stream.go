@@ -467,10 +467,23 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 	stats.RecordUDPAssociation()
 	log.Debug("[UDP_EXCHANGE] opening", "target", target)
 
+	// Merge the first datagram into the bootstrap record only when the
+	// combined plaintext is guaranteed to fit MaxPlainRecordSize: the
+	// HANDSHAKE frame (3 + 3 + len(target)) plus the DATAGRAM frame header
+	// (3) plus the payload, with padding adapting itself (BuildPaddingFrame
+	// backs off when the record would overflow). Oversized first datagrams
+	// (e.g. jumbo packets combined with a long target name) are sent right
+	// after the handshake instead of failing the whole exchange.
 	var extraFrames []protocol.Frame
+	mergeFirst := false
 	if len(firstPayload) > 0 {
-		extraFrames = []protocol.Frame{protocol.NewFrameDATAGRAM(firstPayload)}
-		log.Debug("[UDP_EXCHANGE] merged first DATAGRAM into bootstrap record", "bytes", len(firstPayload))
+		if len(firstPayload)+len(target)+9 <= protocol.MaxPlainRecordSize {
+			mergeFirst = true
+			extraFrames = []protocol.Frame{protocol.NewFrameDATAGRAM(firstPayload)}
+			log.Debug("[UDP_EXCHANGE] merged first DATAGRAM into bootstrap record", "bytes", len(firstPayload))
+		} else {
+			log.Debug("[UDP_EXCHANGE] first DATAGRAM too large for bootstrap, sending after handshake", "bytes", len(firstPayload))
+		}
 	}
 
 	bs, err := h.openAndBootstrap(ctx, config.EndpointUDP, protocol.ProtoUDP, target, method, extraFrames)
@@ -511,6 +524,13 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 		target: target,
 	}
 	ue.lastSeen.Store(time.Now().UnixNano())
+
+	if len(firstPayload) > 0 && !mergeFirst {
+		if err := ue.Send(firstPayload); err != nil {
+			ue.Close() //nolint:errcheck
+			return nil, fmt.Errorf("send first datagram: %w", err)
+		}
+	}
 	return ue, nil
 }
 
