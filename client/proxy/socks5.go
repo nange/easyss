@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -10,9 +11,12 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/client/router"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/relay"
 	"github.com/nange/easyss/v3/util"
+	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/txthinking/socks5"
 
 	easydns "github.com/nange/easyss/v3/client/dns"
@@ -33,11 +37,19 @@ type Socks5Server struct {
 	udpMu          sync.RWMutex
 	udpExch        map[string]*UDPExchange
 	udpInflight    map[string]*udpExchangeFactory
-	directUDP      map[string]net.Conn
+	directUDP      map[string]*directUDPConn
 	quit           chan struct{}
 	closeOnce      sync.Once
 	udpIdleTimeout time.Duration
 	started        atomic.Bool
+	closing        atomic.Bool
+}
+
+// directUDPConn pairs a direct-UDP socket with its last-write timestamp so
+// the cleanup loop can recycle sessions whose remote peer went silent.
+type directUDPConn struct {
+	conn     net.Conn
+	lastSeen atomic.Int64 // UnixNano, refreshed on every datagram written
 }
 
 func NewSocks5Server(listenAddr, username, password string, handler *StreamHandler, rt *router.Router, serverDomain string, method protocol.Method, disableQUIC bool, dialTimeout, udpIdleTimeout time.Duration, directDialContext func(context.Context, string, string) (net.Conn, error)) (*Socks5Server, error) {
@@ -64,7 +76,7 @@ func NewSocks5Server(listenAddr, username, password string, handler *StreamHandl
 		dialTimeout:       dialTimeout,
 		udpExch:           make(map[string]*UDPExchange),
 		udpInflight:       make(map[string]*udpExchangeFactory),
-		directUDP:         make(map[string]net.Conn),
+		directUDP:         make(map[string]*directUDPConn),
 		quit:              make(chan struct{}),
 		udpIdleTimeout:    udpIdleTimeout,
 	}
@@ -169,6 +181,7 @@ func probeSocks5Accept(addr string, greeting []byte) bool {
 }
 
 func (s *Socks5Server) Close() error {
+	s.closing.Store(true)
 	s.closeOnce.Do(func() { close(s.quit) })
 	if s.started.Load() {
 		s.waitForAccept()
@@ -179,10 +192,13 @@ func (s *Socks5Server) Close() error {
 		ue.Close() //nolint:errcheck
 		delete(s.udpExch, key)
 	}
-	for key, conn := range s.directUDP {
-		conn.Close() //nolint:errcheck
+	for key, dc := range s.directUDP {
+		dc.conn.Close() //nolint:errcheck
 		delete(s.directUDP, key)
 	}
+	// In-flight exchange creations are reaped by the creator itself: after
+	// OpenUDPExchange returns it observes the closing flag, closes the
+	// exchange and removes the factory entry (see getOrCreateUDPExchange).
 	if s.srv != nil {
 		return s.srv.Shutdown()
 	}
@@ -312,27 +328,57 @@ func (s *Socks5Server) replyError(c net.Conn, r *socks5.Request, rep byte) error
 	return err
 }
 
+// directRelayIdleTimeout bounds how long a direct TCP relay may sit idle
+// before both connections are torn down. The proxied path enforces its own
+// idle timeout via relay.Bidirectional (StreamHandler.streamIdleTimeout);
+// the direct path previously had no deadline at all, so a silent or
+// half-open peer left the two copy goroutines and their sockets leaked
+// forever.
+const directRelayIdleTimeout = 300 * time.Second
+
+// relayTCP copies bytes in both directions between dst and src with a shared
+// idle timeout, mirroring the proxied path's relay semantics: on clean EOF a
+// half-close is propagated, and on idle timeout or error both connections
+// are closed exactly once.
 func relayTCP(dst, src net.Conn) {
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		_, _ = io.Copy(dst, src)
-		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
-			_ = cw.CloseWrite()
+	result := relay.Bidirectional(directRelayIdleTimeout, func() {
+		_ = dst.Close()
+		_ = src.Close()
+	},
+		func(signalActivity func()) error { return copyHalfClose(dst, src, signalActivity) },
+		func(signalActivity func()) error { return copyHalfClose(src, dst, signalActivity) },
+	)
+	if result.Err != nil && !result.TimedOut &&
+		!errors.Is(result.Err, io.EOF) &&
+		!errors.Is(result.Err, io.ErrClosedPipe) &&
+		!isLocalConnClosedError(result.Err) {
+		log.Debug("[TCP_DIRECT] relay copy error", "err", result.Err)
+	}
+}
+
+// copyHalfClose streams src to dst, signalling activity on every read and
+// half-closing dst on clean EOF.
+func copyHalfClose(dst, src net.Conn, signalActivity func()) error {
+	buf := bytespool.Get(config.TCPStreamBufferSize)
+	defer bytespool.MustPut(buf)
+	for {
+		n, rErr := src.Read(buf)
+		if n > 0 {
+			signalActivity()
+			if _, wErr := dst.Write(buf[:n]); wErr != nil {
+				return wErr
+			}
 		}
-	}()
-	go func() {
-		defer wg.Done()
-		_, _ = io.Copy(src, dst)
-		// Half-close src symmetrically so the peer learns that no more data
-		// will be written on this direction. Without this, a client waiting
-		// for the remote half-close to signal end-of-response would hang.
-		if cw, ok := src.(interface{ CloseWrite() error }); ok {
-			_ = cw.CloseWrite()
+		if rErr != nil {
+			if errors.Is(rErr, io.EOF) {
+				if cw, ok := dst.(interface{ CloseWrite() error }); ok {
+					_ = cw.CloseWrite()
+				}
+				return nil
+			}
+			return rErr
 		}
-	}()
-	wg.Wait()
+	}
 }
 
 func (s *Socks5Server) cleanupLoop() {
@@ -347,6 +393,17 @@ func (s *Socks5Server) cleanupLoop() {
 					log.Debug("[UDP_PROXY] idle cleanup", "key", key)
 					ue.Close() //nolint:errcheck
 					delete(s.udpExch, key)
+				}
+			}
+			// Direct UDP sessions get the same idle recycling: a remote peer
+			// that stops responding (or a datagram flow that simply ended)
+			// must not pin the socket and its reader goroutine until the
+			// 2-minute read deadline fires.
+			for key, dc := range s.directUDP {
+				if time.Since(time.Unix(0, dc.lastSeen.Load())) > s.udpIdleTimeout {
+					log.Debug("[UDP_DIRECT] idle cleanup", "key", key)
+					dc.conn.Close() //nolint:errcheck
+					delete(s.directUDP, key)
 				}
 			}
 			s.udpMu.Unlock()

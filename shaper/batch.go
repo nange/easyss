@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"strings"
 	"sync"
@@ -68,33 +69,10 @@ func (bs *batchShaper) PushData(data []byte) error {
 		return bs.err
 	}
 
-	frameSize := protocol.FrameHeaderSize + len(data)
-	if frameSize > bs.maxChunkSize {
-		return fmt.Errorf("shaper: data size %d exceeds max record size %d", frameSize, bs.maxChunkSize)
-	}
-
 	if bs.cover != nil {
-		bs.cover.addBudget(frameSize)
+		bs.cover.addBudget(protocol.FrameHeaderSize + len(data))
 	}
-
-	// Pre-flush if appending would overflow the record.
-	if len(bs.plaintext) > 0 && len(bs.plaintext)+frameSize > bs.maxChunkSize {
-		if err := bs.flushAndWrite(false); err != nil {
-			return err
-		}
-	}
-
-	bs.plaintext = appendFrameHeader(bs.plaintext, protocol.FrameDATA, data)
-	bs.plaintext = append(bs.plaintext, data...)
-
-	// Post-flush if threshold reached.
-	if len(bs.plaintext) >= bs.flushThreshold {
-		return bs.flushAndWrite(false)
-	}
-
-	bs.timerStarted = true
-	bs.timer.Reset(bs.window)
-	return nil
+	return bs.appendFrameLocked(protocol.FrameDATA, data, false)
 }
 
 // PushFrame adds a pre-built frame (FIN, RST, COVER, etc.). Returns without holding the lock.
@@ -109,27 +87,52 @@ func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 		return bs.err
 	}
 
+	// Normalize the frame so the capacity check and the wire header always
+	// agree: the header is written from len(Payload), while the pre-flush
+	// check uses EncodedLen — a mismatched Frame could otherwise bypass the
+	// record-size guard and corrupt the stream.
+	if len(f.Payload) > math.MaxUint16 {
+		return fmt.Errorf("shaper: frame payload too large: %d", len(f.Payload))
+	}
+	f.Length = uint16(len(f.Payload))
+
 	if bs.cover != nil && f.Type != protocol.FrameCOVER && f.Type != protocol.FramePADDING {
 		bs.cover.addBudget(f.EncodedLen())
 	}
+	return bs.appendFrameLocked(f.Type, f.Payload, f.Type == protocol.FrameCOVER)
+}
 
-	frameSize := f.EncodedLen()
+// appendFrameLocked appends a frame of the given type to the plaintext
+// buffer: it pre-flushes when the record would overflow, post-flushes when
+// the threshold is reached, and re-arms the batch timer otherwise.
+// putPayload marks payloads that came from bytespool and must be returned
+// once appended. Caller must hold bs.mu.
+func (bs *batchShaper) appendFrameLocked(ftype protocol.FrameType, payload []byte, putPayload bool) error {
+	frameSize := protocol.FrameHeaderSize + len(payload)
 	if frameSize > bs.maxChunkSize {
+		if putPayload {
+			bs.putPooledPayload(payload)
+		}
 		return fmt.Errorf("shaper: frame size %d exceeds max record size %d", frameSize, bs.maxChunkSize)
 	}
 
 	// Pre-flush if appending would overflow the record.
 	if len(bs.plaintext) > 0 && len(bs.plaintext)+frameSize > bs.maxChunkSize {
 		if err := bs.flushAndWrite(false); err != nil {
+			// The frame was never appended, so return the pooled payload
+			// here: nobody else will.
+			if putPayload {
+				bs.putPooledPayload(payload)
+			}
 			return err
 		}
 	}
 
-	bs.plaintext = appendFrameHeader(bs.plaintext, f.Type, f.Payload)
-	bs.plaintext = append(bs.plaintext, f.Payload...)
+	bs.plaintext = appendFrameHeader(bs.plaintext, ftype, payload)
+	bs.plaintext = append(bs.plaintext, payload...)
 
-	if f.Type == protocol.FrameCOVER && len(f.Payload) > 0 {
-		bytespool.MustPut(f.Payload)
+	if putPayload {
+		bs.putPooledPayload(payload)
 	}
 
 	// Post-flush if threshold reached.
@@ -140,6 +143,16 @@ func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 	bs.timerStarted = true
 	bs.timer.Reset(bs.window)
 	return nil
+}
+
+// putPooledPayload returns a cover payload to bytespool when it actually is
+// a pool buffer (cap a power of two within the pool ceiling). A
+// caller-provided heap slice would make MustPut panic on the power-of-two
+// invariant, so such payloads are left to the GC.
+func (bs *batchShaper) putPooledPayload(payload []byte) {
+	if len(payload) > 0 && cap(payload) <= bytespool.MaxSize && cap(payload)&(cap(payload)-1) == 0 {
+		bytespool.MustPut(payload)
+	}
 }
 
 // Flush triggers an immediate flush. Does not require the caller to hold the lock.
@@ -283,36 +296,13 @@ func (bs *batchShaper) injectCoverFrame(f protocol.Frame) error {
 	if bs.closing.Load() || bs.err != nil {
 		// Return the pooled payload so no buffer is leaked when the shaper
 		// is already closed or failed.
-		if f.Type == protocol.FrameCOVER && len(f.Payload) > 0 {
-			bytespool.MustPut(f.Payload)
+		if f.Type == protocol.FrameCOVER {
+			bs.putPooledPayload(f.Payload)
 		}
 		return nil
 	}
 
-	frameSize := f.EncodedLen()
-
-	// Pre-flush if appending would overflow the record.
-	if len(bs.plaintext) > 0 && len(bs.plaintext)+frameSize > bs.maxChunkSize {
-		if err := bs.flushAndWrite(false); err != nil {
-			return err
-		}
-	}
-
-	bs.plaintext = appendFrameHeader(bs.plaintext, f.Type, f.Payload)
-	bs.plaintext = append(bs.plaintext, f.Payload...)
-
-	if f.Type == protocol.FrameCOVER && len(f.Payload) > 0 {
-		bytespool.MustPut(f.Payload)
-	}
-
-	// Post-flush if threshold reached.
-	if len(bs.plaintext) >= bs.flushThreshold {
-		return bs.flushAndWrite(false)
-	}
-
-	bs.timerStarted = true
-	bs.timer.Reset(bs.window)
-	return nil
+	return bs.appendFrameLocked(f.Type, f.Payload, f.Type == protocol.FrameCOVER)
 }
 
 func (bs *batchShaper) isClosing() bool {

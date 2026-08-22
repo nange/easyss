@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -18,6 +19,7 @@ import (
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/stats"
+	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/txthinking/socks5"
 )
@@ -320,6 +322,15 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Mirror the SOCKS5 path's IPv6 policy: with ipv6_rule disabled the
+	// SOCKS5 handler rejects IPv6 targets before forwarding, so the CONNECT
+	// path must too, or the two entry points would behave inconsistently.
+	if s.router != nil && s.router.ShouldIPV6Disable() && util.IsIPV6(host) {
+		log.Warn("[HTTP-PROXY] CONNECT ipv6 target rejected, ipv6 disabled", "target", target)
+		http.Error(w, "IPv6 disabled", http.StatusForbidden)
+		return
+	}
+
 	rule := router.HostRuleProxy
 	if s.router != nil {
 		rule = s.router.MatchHostRule(host)
@@ -333,7 +344,9 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 	rc := http.NewResponseController(w)
 	hijConn, _, err := rc.Hijack()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		// Never echo the internal error to the client: it may leak local
+		// details (interface names, file descriptors) to a remote caller.
+		http.Error(w, "CONNECT failed", http.StatusInternalServerError)
 		log.Error("[HTTP-PROXY] hijack CONNECT", "target", target, "err", err)
 		return
 	}
@@ -397,7 +410,13 @@ func (s *HTTPProxyServer) directConnect(target string) (net.Conn, error) {
 }
 
 func (s *HTTPProxyServer) dialSOCKS5(target string) (net.Conn, error) {
-	client, err := socks5.NewClient(s.socksAddr, s.username, s.password, int(s.timeout.Seconds()), int(s.timeout.Seconds()))
+	// Round the timeout up so sub-second timeouts never truncate to 0 (the
+	// socks5 library treats 0 as "no timeout").
+	socksTimeout := int(math.Ceil(s.timeout.Seconds()))
+	if socksTimeout < 1 {
+		socksTimeout = 1
+	}
+	client, err := socks5.NewClient(s.socksAddr, s.username, s.password, socksTimeout, socksTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -416,15 +435,16 @@ func connectTarget(r *http.Request) string {
 }
 
 func basicAuth(r *http.Request) (username, password string, ok bool) {
-	username, password, ok = r.BasicAuth()
-	if ok {
-		return username, password, true
-	}
+	// Proxy credentials live in Proxy-Authorization; only fall back to the
+	// Authorization header when it is absent, so a client carrying both (an
+	// Authorization header destined for the origin alongside the proxy's own
+	// credentials) is not misrejected.
 	auth := r.Header.Get("Proxy-Authorization")
-	if auth == "" {
-		return "", "", false
+	if auth != "" {
+		return parseBasicAuth(auth)
 	}
-	return parseBasicAuth(auth)
+	username, password, ok = r.BasicAuth()
+	return username, password, ok
 }
 
 func parseBasicAuth(auth string) (username, password string, ok bool) {

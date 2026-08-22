@@ -190,11 +190,21 @@ func TestServeHTTP_LANTarget400(t *testing.T) {
 	tr := newRejectTestClient(t)
 
 	masterKey := bytes.Repeat([]byte{0x42}, 32)
-	saltB64, body := buildBootstrapRecord(t, masterKey, sharedconfig.EndpointTCP,
-		protocol.ProtoTCP, protocol.MethodAES256GCM, "127.0.0.1:80")
-	resp, respBody := postBootstrap(t, tr, srv.URL+sharedconfig.EndpointTCP, saltB64, bytes.NewReader(body))
-	require.Equal(t, http.StatusBadRequest, resp.StatusCode,
-		"LAN target should be rejected with 400, body: %s", respBody)
+	for _, target := range []string{
+		"127.0.0.1:80",
+		"10.0.0.1:80",
+		"100.64.0.1:80",    // CGNAT
+		"192.0.2.1:80",     // TEST-NET-1
+		"198.18.0.1:80",    // benchmarking
+		"203.0.113.1:80",   // TEST-NET-3
+		"255.255.255.255:9", // broadcast
+	} {
+		saltB64, body := buildBootstrapRecord(t, masterKey, sharedconfig.EndpointTCP,
+			protocol.ProtoTCP, protocol.MethodAES256GCM, target)
+		resp, respBody := postBootstrap(t, tr, srv.URL+sharedconfig.EndpointTCP, saltB64, bytes.NewReader(body))
+		require.Equal(t, http.StatusBadRequest, resp.StatusCode,
+			"non-public target %s should be rejected with 400, body: %s", target, respBody)
+	}
 }
 
 // TestServeHTTP_ValidHandshakeOctetStream verifies that a valid TCP handshake
@@ -207,7 +217,7 @@ func TestServeHTTP_ValidHandshakeOctetStream(t *testing.T) {
 
 	masterKey := bytes.Repeat([]byte{0x42}, 32)
 	saltB64, body := buildBootstrapRecord(t, masterKey, sharedconfig.EndpointTCP,
-		protocol.ProtoTCP, protocol.MethodAES256GCM, "203.0.113.1:9")
+		protocol.ProtoTCP, protocol.MethodAES256GCM, "8.8.8.8:9")
 	resp, _ := postBootstrap(t, tr, srv.URL+sharedconfig.EndpointTCP, saltB64, bytes.NewReader(body))
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	ct := resp.Header.Get("Content-Type")

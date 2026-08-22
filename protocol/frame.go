@@ -184,8 +184,12 @@ func WriteFrame(w io.Writer, f Frame) error {
 		return err
 	}
 	if f.Length > 0 {
-		if _, err := w.Write(f.Payload); err != nil {
+		n, err := w.Write(f.Payload)
+		if err != nil {
 			return err
+		}
+		if n != len(f.Payload) {
+			return io.ErrShortWrite
 		}
 	}
 	return nil

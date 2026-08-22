@@ -166,23 +166,46 @@ func (np *NextProxy) IsCustomDomain(domain string) bool {
 	return false
 }
 
-// AddIP adds an IP to the routing list (thread-safe).
+// maxLearnedEntries bounds the dynamically learned IP/domain sets: DNS
+// responses from custom domains feed AddIP/AddDomain on every query, and a
+// long-running server behind a large CDN pool (or a domain with rotating
+// records) would otherwise grow these maps without limit. Learning stops
+// once a set reaches its cap; configured (file-loaded) entries are
+// unaffected.
+const maxLearnedEntries = 4096
+
+// AddIP adds an IP to the routing list (thread-safe). Learned IPs are
+// normalized (IPv4-mapped IPv6 collapses to IPv4) so they match the literal
+// IPs observed in dial targets. Beyond maxLearnedEntries the entry is
+// dropped to keep the set bounded.
 func (np *NextProxy) AddIP(ip string) {
 	if np == nil {
 		return
 	}
+	if parsed := net.ParseIP(ip); parsed != nil {
+		if ip4 := parsed.To4(); ip4 != nil {
+			ip = ip4.String()
+		} else {
+			ip = parsed.String()
+		}
+	}
 	np.mu.Lock()
-	np.ips[ip] = struct{}{}
+	if len(np.ips) < maxLearnedEntries {
+		np.ips[ip] = struct{}{}
+	}
 	np.mu.Unlock()
 }
 
-// AddDomain adds a domain to the routing list (thread-safe).
+// AddDomain adds a domain to the routing list (thread-safe). Beyond
+// maxLearnedEntries the entry is dropped to keep the set bounded.
 func (np *NextProxy) AddDomain(domain string) {
 	if np == nil {
 		return
 	}
 	np.mu.Lock()
-	np.domains[domain] = struct{}{}
+	if len(np.domains) < maxLearnedEntries {
+		np.domains[domain] = struct{}{}
+	}
 	np.mu.Unlock()
 }
 

@@ -11,14 +11,38 @@ func IsIP(ip string) bool {
 	return net.ParseIP(ip) != nil
 }
 
+// IsLANIP reports whether ip is a LAN/private/loopback/link-local/multicast/
+// unspecified address, or falls inside any other non-public range that a
+// proxy server must never dial: carrier-grade NAT (100.64.0.0/10), the
+// "this network" range (0.0.0.0/8), IETF protocol assignments (192.0.0.0/24),
+// benchmarking and documentation ranges (198.18.0.0/15, 192.0.2.0/24,
+// 198.51.100.0/24, 203.0.113.0/24), reserved 240.0.0.0/4 and broadcast.
+// The IPv4 checks are inlined so IPv4-mapped IPv6 forms (::ffff:a.b.c.d) are
+// covered via To4.
 func IsLANIP(ip string) bool {
 	_ip := net.ParseIP(ip)
 	if _ip == nil {
 		return false
 	}
 
-	return _ip.IsPrivate() || _ip.IsLoopback() || _ip.IsLinkLocalMulticast() || _ip.IsLinkLocalUnicast() ||
-		_ip.IsUnspecified() || _ip.IsMulticast() || _ip.IsInterfaceLocalMulticast()
+	if ip4 := _ip.To4(); ip4 != nil {
+		return ip4[0] == 0 || // 0.0.0.0/8
+			ip4[0] == 10 || // 10.0.0.0/8
+			(ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127) || // 100.64.0.0/10 CGNAT
+			ip4[0] == 127 || // 127.0.0.0/8
+			(ip4[0] == 169 && ip4[1] == 254) || // 169.254.0.0/16 link-local
+			(ip4[0] == 172 && ip4[1]&0xf0 == 16) || // 172.16.0.0/12
+			(ip4[0] == 192 && ip4[1] == 168) || // 192.168.0.0/16
+			(ip4[0] == 192 && ip4[1] == 0) || // 192.0.0.0/24 incl. TEST-NET-1 192.0.2.0/24
+			(ip4[0] == 198 && (ip4[1] == 18 || ip4[1] == 19)) || // 198.18.0.0/15 benchmarking
+			(ip4[0] == 198 && ip4[1] == 51 && ip4[2] == 100) || // 198.51.100.0/24 TEST-NET-2
+			(ip4[0] == 203 && ip4[1] == 0 && ip4[2] == 113) || // 203.0.113.0/24 TEST-NET-3
+			ip4[0] >= 224 // 224.0.0.0/4 multicast, 240.0.0.0/4 reserved, 255.255.255.255 broadcast
+	}
+
+	return _ip.IsPrivate() || _ip.IsLoopback() || _ip.IsLinkLocalMulticast() ||
+		_ip.IsLinkLocalUnicast() || _ip.IsUnspecified() || _ip.IsMulticast() ||
+		_ip.IsInterfaceLocalMulticast()
 }
 
 func IsLoopbackIP(ip string) bool {

@@ -58,17 +58,20 @@ func (lc *slotLifecycle) evaluate(interval time.Duration) {
 	linkOK := stats.Collect().AvgRTT() <= sharedconfig.DegradedMaxRTT
 
 	for _, pool := range []*slotPool{lc.sched.priority, lc.sched.bulk} {
+		// Snapshot the live slots under the scheduler read lock: shrink and
+		// retire swap-remove slots under the write lock, so iterating the
+		// live range unlocked would race with those swaps.
+		lc.sched.mu.RLock()
 		live := int(pool.liveCount.Load())
-		for i := 0; i < live; i++ {
-			s := pool.slots[i]
+		slots := make([]*transportSlot, live)
+		copy(slots, pool.slots[:live])
+		lc.sched.mu.RUnlock()
+
+		for i, s := range slots {
 			lc.evaluateSlotHealth(i, s, interval, linkOK)
 			lc.evaluateRotation(i, s)
 			if linkOK && s.degraded.Load() && s.active.Load() == 0 {
 				lc.retire(i, s)
-				// retire swap-removes the slot to the end and shrinks
-				// liveCount; re-evaluate the slot swapped into position i.
-				live--
-				i--
 			}
 		}
 	}
@@ -161,9 +164,16 @@ func (lc *slotLifecycle) evaluateProbes(linkOK bool) {
 	now := time.Now()
 	probed := 0
 	for _, pool := range []*slotPool{lc.sched.priority, lc.sched.bulk} {
+		// Same snapshot discipline as evaluate: the live range may be
+		// swap-mutated by shrink/retire under the write lock.
+		lc.sched.mu.RLock()
 		live := int(pool.liveCount.Load())
-		for i := 0; i < live && probed < sharedconfig.ProbeMaxPerInterval; i++ {
-			s := pool.slots[i]
+		slots := make([]*transportSlot, live)
+		copy(slots, pool.slots[:live])
+		lc.sched.mu.RUnlock()
+
+		for i := 0; i < len(slots) && probed < sharedconfig.ProbeMaxPerInterval; i++ {
+			s := slots[i]
 			if !s.suspected || s.degraded.Load() {
 				continue
 			}

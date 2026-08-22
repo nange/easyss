@@ -11,16 +11,24 @@ func TestSaltCache_MarkSeen(t *testing.T) {
 	c := newSaltCache()
 
 	salt := base64.RawURLEncoding.EncodeToString(make([]byte, 16))
+	const endpoint = "/v3/tcp"
 
-	if c.MarkSeen(salt) {
+	if c.MarkSeen(endpoint, salt) {
 		t.Fatal("first MarkSeen should report not-seen")
 	}
-	if !c.MarkSeen(salt) {
+	if !c.MarkSeen(endpoint, salt) {
 		t.Fatal("second MarkSeen of the same salt should report seen (replay)")
 	}
 
+	// The same salt on a different endpoint must not be treated as a replay:
+	// the per-endpoint AAD makes that record undecryptable, and burning the
+	// entry would let an attacker evict another endpoint's protection.
+	if c.MarkSeen("/v3/udp", salt) {
+		t.Fatal("the same salt on a different endpoint should report not-seen")
+	}
+
 	other := base64.RawURLEncoding.EncodeToString(append([]byte(nil), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16))
-	if c.MarkSeen(other) {
+	if c.MarkSeen(endpoint, other) {
 		t.Fatal("a different salt should report not-seen")
 	}
 }
@@ -32,9 +40,38 @@ func TestSaltCache_DistinctSalts(t *testing.T) {
 		buf := make([]byte, 16)
 		_, _ = rng.Read(buf)
 		salt := base64.RawURLEncoding.EncodeToString(buf)
-		if c.MarkSeen(salt) {
+		if c.MarkSeen("/v3/tcp", salt) {
 			t.Fatalf("salt %q reported as seen on first use", salt)
 		}
+	}
+}
+
+// TestSaltCache_ConcurrentMarkSeen verifies the check-and-set is atomic:
+// concurrent requests carrying the same salt must observe exactly one
+// not-seen result (regression test for the Get/Set TOCTOU).
+func TestSaltCache_ConcurrentMarkSeen(t *testing.T) {
+	c := newSaltCache()
+	salt := base64.RawURLEncoding.EncodeToString(make([]byte, 16))
+	const goroutines = 32
+
+	start := make(chan struct{})
+	results := make(chan bool, goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			<-start
+			results <- c.MarkSeen("/v3/tcp", salt)
+		}()
+	}
+	close(start)
+
+	seen := 0
+	for i := 0; i < goroutines; i++ {
+		if <-results {
+			seen++
+		}
+	}
+	if seen != goroutines-1 {
+		t.Fatalf("seen = %d, want %d (exactly one not-seen result)", seen, goroutines-1)
 	}
 }
 

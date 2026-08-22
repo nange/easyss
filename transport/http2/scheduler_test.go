@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 )
 
 // newTestPool builds a single live pool with explicit active/heavy
@@ -70,6 +71,51 @@ func newTwoPoolScheduler(pSpecs, bSpecs [][2]int32) *slotScheduler {
 	sch.priority.liveCount.Store(int32(len(pSpecs)))
 	sch.bulk.liveCount.Store(int32(len(bSpecs)))
 	return sch
+}
+
+// TestSchedulerSingleSlot exercises the degenerate maxSlots == 1 split: the
+// bulk pool must stay empty (maxSlots 0) so poolOf falls back to the priority
+// pool instead of indexing an empty slot array (regression test: a bulk
+// stream used to panic with index out of range).
+func TestSchedulerSingleSlot(t *testing.T) {
+	slots := make([]*transportSlot, 1)
+	slots[0] = newSlot(nil, time.Second, nil, time.Minute)
+	sch := newScheduler(1, slots, 4, 1)
+
+	if sch.bulk.maxSlots != 0 || len(sch.bulk.slots) != 0 {
+		t.Fatalf("bulk pool must be empty for maxSlots=1, got maxSlots=%d slots=%d",
+			sch.bulk.maxSlots, len(sch.bulk.slots))
+	}
+
+	for _, highPriority := range []bool{true, false} {
+		sch.grow(highPriority)
+		slot := sch.pick(highPriority)
+		if slot == nil {
+			t.Fatalf("pick(highPriority=%v) returned nil", highPriority)
+		}
+		slot.active.Add(1)
+		slot.active.Add(-1)
+	}
+
+	// A bulk grow must never activate more slots than the priority pool owns.
+	sch.grow(false)
+	if got := int(sch.priority.liveCount.Load()); got != 1 {
+		t.Fatalf("priority liveCount = %d, want 1", got)
+	}
+	if got := int(sch.bulk.liveCount.Load()); got != 0 {
+		t.Fatalf("bulk liveCount = %d, want 0", got)
+	}
+
+	// Saturate the single priority slot: pick must not try to borrow from
+	// the empty bulk pool (regression test: tieredSelect on an empty pool
+	// panics with index out of range).
+	slots[0].active.Store(4)
+	for _, highPriority := range []bool{true, false} {
+		slot := sch.pick(highPriority)
+		if slot == nil || slot != slots[0] {
+			t.Fatalf("pick(highPriority=%v) = %v, want the single priority slot", highPriority, slot)
+		}
+	}
 }
 
 func TestSlotTierOf(t *testing.T) {
