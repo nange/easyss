@@ -186,15 +186,23 @@ func (s *Socks5Server) Close() error {
 	if s.started.Load() {
 		s.waitForAccept()
 	}
+	var exchanges []*UDPExchange
 	s.udpMu.Lock()
-	defer s.udpMu.Unlock()
 	for key, ue := range s.udpExch {
-		ue.Close() //nolint:errcheck
 		delete(s.udpExch, key)
+		exchanges = append(exchanges, ue)
 	}
 	for key, dc := range s.directUDP {
 		dc.conn.Close() //nolint:errcheck
 		delete(s.directUDP, key)
+	}
+	s.udpMu.Unlock()
+	// Close the exchanges outside the lock: Close flushes a FIN through the
+	// HTTP/2 stream (an io.Pipe write), which can block on transport
+	// backpressure — holding s.udpMu there would freeze all UDP handling.
+	// closeOnce makes this safe against the receiveLoop's own Close.
+	for _, ue := range exchanges {
+		ue.Close() //nolint:errcheck
 	}
 	// In-flight exchange creations are reaped by the creator itself: after
 	// OpenUDPExchange returns it observes the closing flag, closes the
@@ -387,12 +395,13 @@ func (s *Socks5Server) cleanupLoop() {
 	for {
 		select {
 		case <-ticker.C:
+			var stale []*UDPExchange
 			s.udpMu.Lock()
 			for key, ue := range s.udpExch {
 				if time.Since(ue.LastSeen()) > s.udpIdleTimeout {
 					log.Debug("[UDP_PROXY] idle cleanup", "key", key)
-					ue.Close() //nolint:errcheck
 					delete(s.udpExch, key)
+					stale = append(stale, ue)
 				}
 			}
 			// Direct UDP sessions get the same idle recycling: a remote peer
@@ -407,6 +416,14 @@ func (s *Socks5Server) cleanupLoop() {
 				}
 			}
 			s.udpMu.Unlock()
+			// Close evicted exchanges outside the lock: Close flushes a FIN
+			// through the HTTP/2 stream (an io.Pipe write), which can block
+			// on transport backpressure — holding s.udpMu there would freeze
+			// all UDP handling. closeOnce makes this safe against the
+			// receiveLoop's own Close.
+			for _, ue := range stale {
+				ue.Close() //nolint:errcheck
+			}
 		case <-s.quit:
 			return
 		}

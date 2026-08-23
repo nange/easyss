@@ -258,12 +258,22 @@ func (s *Socks5Server) getOrCreateUDPExchange(key, dst string, firstPayload []by
 		}
 		return f.ue, false, f.err
 	}
+	var evicted *UDPExchange
 	if len(s.udpExch)+len(s.udpInflight) >= maxUDPExchanges {
-		s.evictOldestExchangeLocked()
+		evicted = s.evictOldestExchangeLocked()
 	}
 	f := &udpExchangeFactory{done: make(chan struct{})}
 	s.udpInflight[key] = f
 	s.udpMu.Unlock()
+
+	// Close the evicted exchange outside the lock: Close flushes a FIN
+	// through the HTTP/2 stream (an io.Pipe write), which can block on
+	// transport backpressure — holding s.udpMu there would freeze all UDP
+	// handling. closeOnce makes this safe against the receiveLoop's own
+	// deferred Close.
+	if evicted != nil {
+		evicted.Close() //nolint:errcheck
+	}
 
 	ue, err = s.handler.OpenUDPExchange(context.Background(), dst, s.method, firstPayload)
 	f.ue, f.err = ue, err
@@ -294,10 +304,15 @@ func (s *Socks5Server) getOrCreateUDPExchange(key, dst string, firstPayload []by
 
 var errSocksServerClosed = errors.New("socks5 udp server closed")
 
-// evictOldestExchangeLocked closes and removes the exchange that has been
-// idle the longest, bounding the live exchange count at maxUDPExchanges.
-// Caller must hold s.udpMu.
-func (s *Socks5Server) evictOldestExchangeLocked() {
+// evictOldestExchangeLocked selects the exchange that has been idle the
+// longest and removes it from the map, bounding the live exchange count at
+// maxUDPExchanges. The evicted exchange is returned without being closed:
+// the caller must close it after releasing s.udpMu, since UDPExchange.Close
+// flushes a FIN through the HTTP/2 stream (an io.Pipe write) and can block
+// on transport backpressure — holding s.udpMu there would freeze all UDP
+// handling. closeOnce makes the deferred close safe against the
+// receiveLoop's own Close.
+func (s *Socks5Server) evictOldestExchangeLocked() *UDPExchange {
 	var oldestKey string
 	var oldestTime time.Time
 	for k, ue := range s.udpExch {
@@ -307,11 +322,12 @@ func (s *Socks5Server) evictOldestExchangeLocked() {
 		}
 	}
 	if oldestKey == "" {
-		return
+		return nil
 	}
 	log.Debug("[UDP_PROXY] exchange cap reached, evicting oldest idle", "key", oldestKey)
-	s.udpExch[oldestKey].Close() //nolint:errcheck
+	evicted := s.udpExch[oldestKey]
 	delete(s.udpExch, oldestKey)
+	return evicted
 }
 
 func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAddr *net.UDPAddr, target, key string) {
