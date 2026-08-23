@@ -640,6 +640,43 @@ func TestApplyDefaults(t *testing.T) {
 			t.Errorf("LogLevel = %q, want error (not overwritten)", cfg.Log.Level)
 		}
 	})
+
+	t.Run("钳制退化配置到合法范围", func(t *testing.T) {
+		cfg := &ClientConfig{
+			Servers: []*ServerProfile{
+				{Address: "example.com"},
+			},
+			Transport: TransportConfig{
+				// conn_count_max=1 would panic the scheduler (empty bulk pool);
+				// oversized values must not trigger huge upfront allocations.
+				ConnCountMax:    1,
+				StreamThreshold: 1 << 30,
+			},
+		}
+		applyDefaults(cfg)
+
+		if cfg.Transport.ConnCountMax != config.MinConnCountMax {
+			t.Errorf("ConnCountMax = %d, want clamped to %d", cfg.Transport.ConnCountMax, config.MinConnCountMax)
+		}
+
+		cfg2 := &ClientConfig{
+			Servers: []*ServerProfile{
+				{Address: "example.com"},
+			},
+			Transport: TransportConfig{
+				ConnCountMax:    1 << 20,
+				StreamThreshold: 1 << 20,
+			},
+		}
+		applyDefaults(cfg2)
+
+		if cfg2.Transport.ConnCountMax != config.MaxConnCountMax {
+			t.Errorf("ConnCountMax = %d, want clamped to %d", cfg2.Transport.ConnCountMax, config.MaxConnCountMax)
+		}
+		if cfg2.Transport.StreamThreshold != config.MaxStreamThreshold {
+			t.Errorf("StreamThreshold = %d, want clamped to %d", cfg2.Transport.StreamThreshold, config.MaxStreamThreshold)
+		}
+	})
 }
 
 func TestResolveFilePaths(t *testing.T) {

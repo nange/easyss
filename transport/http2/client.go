@@ -35,14 +35,10 @@ type HTTP2Transport struct {
 	cancel context.CancelFunc
 }
 
-// maxSlotCount bounds the number of pre-allocated transport slots so a
-// misconfigured (or maliciously large) MaxSlotCount cannot trigger a huge
-// upfront allocation. maxStreamThreshold keeps StreamThreshold's int32
-// arithmetic (threshold*2, tier capacity shifts) far from overflow.
-const (
-	maxSlotCount       = 64
-	maxStreamThreshold = 1 << 20
-)
+// The slot-count and stream-threshold bounds live in the shared config
+// package (MaxConnCountMax, MaxStreamThreshold) so the client config
+// clamping and the transport guard always agree; see config/types.go for
+// the rationale.
 
 type Config struct {
 	ServerURL         string
@@ -65,15 +61,15 @@ func New(cfg Config) (*HTTP2Transport, error) {
 	if maxSlots < 1 {
 		maxSlots = 6
 	}
-	if maxSlots > maxSlotCount {
-		maxSlots = maxSlotCount
+	if maxSlots > sharedconfig.MaxConnCountMax {
+		maxSlots = sharedconfig.MaxConnCountMax
 	}
 	threshold := int32(cfg.StreamThreshold)
 	if threshold < 1 {
 		threshold = 8
 	}
-	if threshold > maxStreamThreshold {
-		threshold = maxStreamThreshold
+	if threshold > sharedconfig.MaxStreamThreshold {
+		threshold = sharedconfig.MaxStreamThreshold
 	}
 
 	ratio := cfg.PrioritySlotRatio

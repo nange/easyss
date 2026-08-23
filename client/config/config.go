@@ -189,17 +189,17 @@ func applyDefaults(c *ClientConfig) {
 	if c.Transport.ConnCountMax <= 0 {
 		c.Transport.ConnCountMax = config.DefaultConnCountMax
 	}
-	if c.Transport.ConnCountMax < 2 {
-		c.Transport.ConnCountMax = 2
+	if c.Transport.ConnCountMax < config.MinConnCountMax {
+		c.Transport.ConnCountMax = config.MinConnCountMax
 	}
-	if c.Transport.ConnCountMax > 64 {
-		c.Transport.ConnCountMax = 64
+	if c.Transport.ConnCountMax > config.MaxConnCountMax {
+		c.Transport.ConnCountMax = config.MaxConnCountMax
 	}
 	if c.Transport.StreamThreshold <= 0 {
 		c.Transport.StreamThreshold = config.DefaultStreamThreshold
 	}
-	if c.Transport.StreamThreshold > 1<<20 {
-		c.Transport.StreamThreshold = 1 << 20
+	if c.Transport.StreamThreshold > config.MaxStreamThreshold {
+		c.Transport.StreamThreshold = config.MaxStreamThreshold
 	}
 	if c.Transport.ConnLifetimeSec <= 0 {
 		c.Transport.ConnLifetimeSec = config.DefaultConnLifetimeSec
