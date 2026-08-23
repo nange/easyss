@@ -57,7 +57,7 @@ Easyss v3 支持两种配置模式，自动识别：
   "server_port": 443,
   "password": "your-password",
   "local_port": 4080,
-  "log_file_path": "easyss.log",
+  "log_file_path": "easyss.log"
 }
 ```
 
@@ -139,8 +139,7 @@ Easyss v3 支持两种配置模式，自动识别：
     "disable_sys_proxy": false,
     "enable_forward_dns": false,
     "enable_tun2socks": false,
-    "enable_quic": false,
-    "tun_config": {}
+    "enable_quic": false
   },
   "routing": {
     "proxy_rule": "auto",
@@ -150,11 +149,11 @@ Easyss v3 支持两种配置模式，自动识别：
   },
   "transport": {
     "protocol": "h2",
-    "conn_count_max": 18,
+    "conn_count_max": 15,
     "stream_threshold": 4,
-    "priority_slot_ratio": 0.5,
-    "conn_lifetime_sec": 900,
-    "conn_max_bytes": 157286400
+    "priority_slot_ratio": 0.4,
+    "conn_lifetime_sec": 420,
+    "conn_max_bytes": 268435456
   },
   "shaper": {
     "batch_window_ms": 3,
@@ -177,6 +176,25 @@ Easyss v3 支持两种配置模式，自动识别：
 ```bash
 ./easyss -show-config-example
 ```
+
+**transport 参数说明（默认值以代码为准，0 表示使用默认值）：**
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `transport.protocol` | h2 | 传输协议（目前仅支持 h2） |
+| `transport.conn_count_max` | 15 | 最大连接数，懒加载扩容的上限 |
+| `transport.stream_threshold` | 4 | 活跃流达到该阈值且连接数未达上限时，新建连接 |
+| `transport.priority_slot_ratio` | 0.4 | 优先（交互式）槽位占连接数的比例，其余为批量槽位 |
+| `transport.conn_lifetime_sec` | 420 | 单连接最大存活时间（秒），0 使用默认值；到期后停止接收新流并轮换连接 |
+| `transport.conn_max_bytes` | 268435456 | 单连接双向累计最大字节数（256MB），0 使用默认值；超限后轮换连接 |
+
+**shaper 参数说明：**
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `shaper.batch_window_ms` | 3 | 流量整形批处理窗口，单位毫秒，范围 1-10 |
+| `shaper.cover_budget_ratio` | 0.03 | cover traffic 占真实流量的预算比例，范围 (0, 1] |
+| `shaper.cover_budget_cap` | 16384 | cover traffic 最大累积预算，单位字节，默认 16KB |
 
 #### 配置模式自动识别
 
@@ -287,21 +305,31 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
   "server": {
     "listen": ":443",
     "domain": "your-domain.com",
-    "password": "your-pass",
+    "password": "your-password",
     "allowed_methods": ["aes-256-gcm", "chacha20-poly1305"],
     "cert_path": "",
     "key_path": "",
-    "email": "your-email",
+    "email": "your-email@example.com",
     "fallback_target": "",
     "fallback_preserve_host": false,
     "fallback_cdn_domains": [],
     "batch_window_ms": 3,
     "cover_budget_ratio": 0.03,
-    "cover_budget_cap": 16384
+    "cover_budget_cap": 16384,
+    "pprof_enabled": false
   },
   "log": {
       "level": "info",
       "file_path": "easyss.log"
+  },
+  "transport": {
+      "protocol": "h2"
+  },
+  "next_proxy": {
+      "url": "",
+      "next_proxy_file": "",
+      "enable_udp": false,
+      "all_host": false
   },
   "timeout": 30
 }
@@ -324,6 +352,8 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 | `server.batch_window_ms` | 否 | 3 | 流量整形批处理窗口，单位毫秒，范围 1-10 |
 | `server.cover_budget_ratio` | 否 | 0.03 | cover traffic 占真实流量的预算比例，设为 0 或负数使用默认值，范围 (0, 1] |
 | `server.cover_budget_cap` | 否 | 16384 | cover traffic 最大累积预算，单位字节，默认 16KB |
+| `server.pprof_enabled` | 否 | false | 是否启用 pprof 调试服务（127.0.0.1:6060） |
+| `transport.protocol` | 否 | h2 | 传输协议（目前仅支持 h2） |
 | `timeout` | 否 | 30 | 超时时间，单位秒 |
 
 > **fallback_target 使用示例**：
