@@ -13,6 +13,20 @@ const (
 	DefaultBatchWindowMS   = 3
 	DefaultCoverBudgetCap  = 16 * 1024 // 16KB
 
+	// MinConnCountMax/MaxConnCountMax bound conn_count_max: at least 2
+	// connections (the scheduler's two-pool split needs a tail slot for the
+	// bulk pool), at most 64 so a misconfigured (or maliciously large) value
+	// cannot trigger a huge upfront allocation of transport slots.
+	MinConnCountMax = 2
+	MaxConnCountMax = 64
+
+	// MaxStreamThreshold bounds stream_threshold. The scheduler derives
+	// bulkThreshold (2x) and tier-capacity shifts (base << (level-1)) from
+	// it in int32, so the cap keeps that arithmetic far from overflow — and
+	// aligned with MaxConnCountMax, a threshold beyond the connection cap
+	// would never trigger growth anyway.
+	MaxStreamThreshold = 64
+
 	// Defaults shared by config builders, the example config and runtime
 	// fallbacks. Keep these as the single source of truth: any code that
 	// applies a default must reference the constant, not a literal.

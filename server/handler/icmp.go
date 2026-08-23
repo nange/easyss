@@ -2,14 +2,17 @@ package handler
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
+	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/util/bytespool"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
@@ -76,6 +79,17 @@ func (h *ICMPHandler) icmpExchange(target string, payload []byte) ([]byte, error
 	}
 	defer conn.Close() //nolint:errcheck
 
+	// Post-dial SSRF guard, matching the TCP/UDP handlers: the handshake
+	// validated the target, but the dial re-resolves domain targets, so a
+	// DNS-rebinding name could resolve to a LAN host here. Reject the
+	// connection before anything is sent.
+	if ra := conn.RemoteAddr(); ra != nil {
+		if host := lanHostOf(ra.String()); util.IsLANIP(host) {
+			_ = conn.Close()
+			return nil, fmt.Errorf("ssrf: rejected lan destination %s", host)
+		}
+	}
+
 	var echoType icmp.Type
 	if isIPv6 {
 		echoType = ipv6.ICMPTypeEchoRequest
@@ -83,12 +97,14 @@ func (h *ICMPHandler) icmpExchange(target string, payload []byte) ([]byte, error
 		echoType = ipv4.ICMPTypeEcho
 	}
 
+	sentID := int(binary.BigEndian.Uint16(payload[:2]))
+	sentSeq := int(binary.BigEndian.Uint16(payload[2:4]))
 	msg := icmp.Message{
 		Type: echoType,
 		Code: 0,
 		Body: &icmp.Echo{
-			ID:   int(binary.BigEndian.Uint16(payload[:2])),
-			Seq:  int(binary.BigEndian.Uint16(payload[2:4])),
+			ID:   sentID,
+			Seq:  sentSeq,
 			Data: payload[4:],
 		},
 	}
@@ -108,50 +124,63 @@ func (h *ICMPHandler) icmpExchange(target string, payload []byte) ([]byte, error
 
 	rb := bytespool.Get(65535)
 	defer bytespool.MustPut(rb)
-	n, err := conn.Read(rb)
-	if err != nil {
-		log.Error("[ICMP] read failed", "target", target, "err", err)
-		return nil, err
-	}
 
-	data := rb[:n]
-	// On Linux (and Windows) raw "ip4:icmp" sockets return the IPv4 header
-	// prepended to the ICMP payload, while macOS/BSD raw sockets already strip
-	// it. If the first nibble looks like an IPv4 header (version 4), peel it off
-	// before handing the payload to icmp.ParseMessage, otherwise the IP header
-	// is misparsed as the ICMP type (e.g. 0x45 -> type 69) and echo replies are
-	// never recognised, silently breaking ICMP on the primary server platform.
-	if !isIPv6 && len(data) > 0 && data[0]>>4 == 4 {
-		ihl := int(data[0]&0x0F) * 4
-		if ihl >= 20 && ihl < len(data) {
-			data = data[ihl:]
+	// Raw ICMP sockets receive every matching ICMP packet delivered to the
+	// host, not just replies to this socket's own request: a concurrent
+	// stream to the same target can produce replies whose ID/Seq belong to
+	// the other stream. Keep reading until the deadline, ignoring packets
+	// whose ID/Seq do not match what we sent. ICMP error packets (destination
+	// unreachable, time exceeded) never match, so they surface as a timeout
+	// error instead of being misreported as a successful reply.
+	for {
+		n, err := conn.Read(rb)
+		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				log.Debug("[ICMP] read timed out", "target", target)
+			} else {
+				log.Error("[ICMP] read failed", "target", target, "err", err)
+			}
+			return nil, err
 		}
-	}
 
-	rm, err := icmp.ParseMessage(parseProto, data)
-	if err != nil {
-		return nil, err
-	}
+		data := rb[:n]
+		// On Linux (and Windows) raw "ip4:icmp" sockets return the IPv4 header
+		// prepended to the ICMP payload, while macOS/BSD raw sockets already strip
+		// it. If the first nibble looks like an IPv4 header (version 4), peel it off
+		// before handing the payload to icmp.ParseMessage, otherwise the IP header
+		// is misparsed as the ICMP type (e.g. 0x45 -> type 69) and echo replies are
+		// never recognised, silently breaking ICMP on the primary server platform.
+		if !isIPv6 && len(data) > 0 && data[0]>>4 == 4 {
+			ihl := int(data[0]&0x0F) * 4
+			if ihl >= 20 && ihl < len(data) {
+				data = data[ihl:]
+			}
+		}
 
-	var replyType icmp.Type
-	if isIPv6 {
-		replyType = ipv6.ICMPTypeEchoReply
-	} else {
-		replyType = ipv4.ICMPTypeEchoReply
-	}
-	if rm.Type != replyType {
-		return payload, nil
-	}
+		rm, err := icmp.ParseMessage(parseProto, data)
+		if err != nil {
+			continue
+		}
 
-	switch body := rm.Body.(type) {
-	case *icmp.Echo:
+		var replyType icmp.Type
+		if isIPv6 {
+			replyType = ipv6.ICMPTypeEchoReply
+		} else {
+			replyType = ipv4.ICMPTypeEchoReply
+		}
+		if rm.Type != replyType {
+			continue
+		}
+
+		body, ok := rm.Body.(*icmp.Echo)
+		if !ok || body.ID != sentID || body.Seq != sentSeq {
+			continue
+		}
 		result := make([]byte, 4+len(body.Data))
 		binary.BigEndian.PutUint16(result[:2], uint16(body.ID))
 		binary.BigEndian.PutUint16(result[2:4], uint16(body.Seq))
 		copy(result[4:], body.Data)
 		return result, nil
-	default:
-		return payload, nil
 	}
 }
 
@@ -165,4 +194,19 @@ func isIPv6Target(target string) bool {
 		return false
 	}
 	return ip.To4() == nil
+}
+
+// lanHostOf extracts the host part of a remote address in either
+// "host:port" (TCPAddr/UDPAddr) or bare-IP form (IPConn). An IPConn's
+// RemoteAddr is a *net.IPAddr whose String() carries no port — with or
+// without a %zone suffix for link-local IPv6 — so net.SplitHostPort
+// alone would always fail for it and the SSRF check would never fire.
+func lanHostOf(addr string) string {
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	if i := strings.LastIndexByte(addr, '%'); i >= 0 {
+		return addr[:i]
+	}
+	return addr
 }

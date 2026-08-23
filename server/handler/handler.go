@@ -68,6 +68,21 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 		batchWindowMS = 10
 	}
 
+	// Bound the bootstrap-record wait. A handshake request occupies two
+	// goroutines (the handler plus the first-record reader) for the whole
+	// wait, and any request with a well-formed x-es header — no password
+	// required — can hold them, so an over-generous timeout is a cheap DoS
+	// amplification channel. Legit clients write their bootstrap record
+	// immediately after opening the stream, so even high-RTT links finish
+	// far below this cap.
+	handshakeTimeout := cfg.HandshakeTimeout
+	if handshakeTimeout <= 0 {
+		handshakeTimeout = maxHandshakeTimeout
+	}
+	if handshakeTimeout > maxHandshakeTimeout {
+		handshakeTimeout = maxHandshakeTimeout
+	}
+
 	coverBudgetRatio := cfg.CoverBudgetRatio
 	if coverBudgetRatio <= 0 || coverBudgetRatio > 1 {
 		coverBudgetRatio = 0.03
@@ -81,7 +96,7 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 	return &ProxyHandler{
 		masterKey:        cfg.MasterKey,
 		allowedMethods:   allowed,
-		handshakeTimeout: cfg.HandshakeTimeout,
+		handshakeTimeout: handshakeTimeout,
 		batchWindowMS:    batchWindowMS,
 		coverBudgetRatio: coverBudgetRatio,
 		coverBudgetCap:   coverBudgetCap,
@@ -93,6 +108,10 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 		ipLimiter:        newIPRateLimiter(),
 	}
 }
+
+// maxHandshakeTimeout caps how long the server waits for a stream's first
+// encrypted record before answering 408 (see NewProxyHandler).
+const maxHandshakeTimeout = 8 * time.Second
 
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -125,6 +144,15 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The proxy endpoints only ever carry a POST body (the bootstrap
+	// record). Non-POST requests (GET/HEAD/OPTIONS probes) must not enter
+	// the handshake path: they would burn salt-cache entries and rate-limit
+	// budget while producing nothing.
+	if r.Method != http.MethodPost {
+		ServeFallback(w, r)
+		return
+	}
+
 	saltB64 := r.Header.Get("x-es")
 	if saltB64 == "" {
 		ServeFallback(w, r)
@@ -152,7 +180,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// re-delivered (replay), and accepting it would re-dial the target and
 	// re-deliver the first packet. Replays carry a valid encrypted handshake,
 	// so the responder has proven key possession and 400 is appropriate.
-	if h.saltCache.MarkSeen(saltB64) {
+	if h.saltCache.MarkSeen(r.URL.Path, saltB64) {
 		log.Error("[SERVER] replayed salt", "remote", r.RemoteAddr, "endpoint", r.URL.Path)
 		stats.RecordServerHandshakeError()
 		serveReject(w, http.StatusBadRequest)
@@ -277,7 +305,11 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		handleErr = h.tcpHandler.Handle(r.Context(), c2sReader, s2cShaper, target, func() { _ = r.Body.Close() })
 	case sharedconfig.EndpointUDP:
 		stats.RecordServerUDPStream()
-		handleErr = h.udpHandler.Handle(r.Context(), c2sReader, s2cShaper, target)
+		// cancelRead unblocks the client-read goroutine immediately when the
+		// UDP handler terminates, mirroring the TCP path: without it the
+		// frame reader lingers on the request body until net/http closes it
+		// after ServeHTTP returns.
+		handleErr = h.udpHandler.Handle(r.Context(), c2sReader, s2cShaper, target, func() { _ = r.Body.Close() })
 	case sharedconfig.EndpointICMP:
 		stats.RecordServerICMPStream()
 		handleErr = h.icmpHandler.Handle(c2sReader, s2cShaper, target)

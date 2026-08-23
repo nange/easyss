@@ -33,7 +33,7 @@ func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClos
 		return nil
 	}
 	if cfg.BudgetRatio < 0 || cfg.BudgetRatio > 1 {
-		cfg.BudgetRatio = 0.10
+		cfg.BudgetRatio = 0.03
 	}
 	if cfg.IdleTimeout <= 0 {
 		cfg.IdleTimeout = 300
@@ -43,6 +43,21 @@ func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClos
 	}
 	if cfg.MaxSize <= 0 {
 		cfg.MaxSize = 1500
+	}
+	if cfg.MaxSize < cfg.MinSize {
+		cfg.MaxSize = cfg.MinSize
+	}
+	// Clamp to the wire format: Frame.Length is uint16, so a payload larger
+	// than 65535 would be truncated in the frame header and corrupt the
+	// record stream, and sizes beyond the bytes-pool ceiling (128KB) would
+	// make bytespool.Get return nil and panic on slicing. The budget cap
+	// bounds cover frames in the default configuration, but a misconfigured
+	// budget_cap must not be able to break the stream.
+	if cfg.MinSize > protocol.MaxUDPDataSize {
+		cfg.MinSize = protocol.MaxUDPDataSize
+	}
+	if cfg.MaxSize > protocol.MaxUDPDataSize {
+		cfg.MaxSize = protocol.MaxUDPDataSize
 	}
 	if cfg.MaxSize < cfg.MinSize {
 		cfg.MaxSize = cfg.MinSize

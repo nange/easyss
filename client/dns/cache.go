@@ -45,7 +45,9 @@ func (c *Cache) Get(name, qtype string, isDirect bool) *dns.Msg {
 	if isDirect {
 		cache = c.direct
 	}
-	v, err := cache.Get([]byte(name + qtype))
+	// DNS names are case-insensitive; normalize so differently-cased
+	// queries hit the same entry.
+	v, err := cache.Get([]byte(strings.ToLower(name) + qtype))
 	if err != nil || len(v) == 0 {
 		stats.RecordDNSCacheMiss()
 		return nil
@@ -74,7 +76,7 @@ func (c *Cache) Set(msg *dns.Msg, isDirect bool) error {
 		if err != nil {
 			return err
 		}
-		key := []byte(q.Name + dns.TypeToString[q.Qtype])
+		key := []byte(strings.ToLower(q.Name) + dns.TypeToString[q.Qtype])
 		ttl := jitterTTL(dnsCacheTTL(msg, c.serverDomain))
 		if isDirect {
 			return c.direct.Set(key, v, ttl)
@@ -105,7 +107,14 @@ func dnsCacheTTL(msg *dns.Msg, serverDomain string) int {
 			ttl = rr.Header().Ttl
 		}
 	}
-	if ttl == 0 || ttl > maxCacheTTL {
+	if ttl == 0 {
+		// A TTL of 0 conventionally means "re-resolve immediately" (CDN
+		// failover, dynamic DNS). Clamp it to the *minimum* cache lifetime
+		// rather than the maximum so freshness-demanding records do not
+		// stick around for 2 hours.
+		ttl = minCacheTTL
+	}
+	if ttl > maxCacheTTL {
 		ttl = maxCacheTTL
 	}
 	if ttl < minCacheTTL {

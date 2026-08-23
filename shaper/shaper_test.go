@@ -97,6 +97,30 @@ func TestBatchShaperFlushesBeforePlainRecordLimit(t *testing.T) {
 	}
 }
 
+// TestCoverInjectorClampsFrameSize verifies the injector clamps misconfigured
+// cover sizes to the wire-format ceiling, so a huge MaxSize cannot produce
+// truncated uint16 lengths or bytespool.Get nil-panic payloads.
+func TestCoverInjectorClampsFrameSize(t *testing.T) {
+	ci := newCoverInjector(CoverConfig{
+		BudgetRatio: 0.10,
+		MinSize:     200_000, // > 65535 and > bytespool ceiling
+		MaxSize:     1_000_000,
+		BudgetCap:   2_000_000,
+	}, func(f protocol.Frame) error { return nil }, func() bool { return false })
+	if ci == nil {
+		t.Fatal("expected non-nil coverInjector")
+	}
+	defer ci.stop()
+
+	minSize, maxSize := ci.coverFrameSizeRange()
+	if minSize > protocol.MaxUDPDataSize || maxSize > protocol.MaxUDPDataSize {
+		t.Fatalf("cover size range not clamped: min=%d max=%d", minSize, maxSize)
+	}
+	if ci.cfg.MaxSize < ci.cfg.MinSize {
+		t.Fatalf("MaxSize %d < MinSize %d after clamping", ci.cfg.MaxSize, ci.cfg.MinSize)
+	}
+}
+
 func TestCoverInjectorSkipsDuringActiveStreaming(t *testing.T) {
 	var injected []protocol.Frame
 	var mu sync.Mutex

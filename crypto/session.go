@@ -276,6 +276,14 @@ func (sk *StreamKeys) ReadFirstRecordWithTimeout(ctx context.Context, src io.Rea
 		closeReader(src)
 		return FirstRecord{}, ctx.Err()
 	case <-timer.C:
+		// The read goroutine may have finished in the same instant the timer
+		// fired: draining the buffered result first avoids misjudging a
+		// perfectly valid (but slow) handshake as a timeout.
+		select {
+		case res := <-ch:
+			return res.fr, res.err
+		default:
+		}
 		closeReader(src)
 		return FirstRecord{}, fmt.Errorf("%w after %v", ErrHandshakeTimeout, timeout)
 	case res := <-ch:

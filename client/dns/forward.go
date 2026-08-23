@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/miekg/dns"
@@ -20,7 +21,7 @@ type ForwardServer struct {
 	dnsServer   *dns.Server
 	disableIPV6 bool
 	mu          sync.Mutex
-	running     bool
+	running     atomic.Bool
 }
 
 func NewForwardServer(listenAddr string, disableIPV6 bool) *ForwardServer {
@@ -51,7 +52,7 @@ func (s *ForwardServer) Start() error {
 		Net:     "udp",
 		Handler: dns.HandlerFunc(s.handleDNS),
 	}
-	s.running = true
+	s.running.Store(true)
 	s.mu.Unlock()
 
 	log.Info("[DNS-FORWARD] starting forward dns server", "addr", s.listenAddr)
@@ -70,7 +71,9 @@ func (s *ForwardServer) Shutdown() error {
 	log.Info("[DNS-FORWARD] shutting down dns server")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return s.dnsServer.ShutdownContext(ctx)
+	err := s.dnsServer.ShutdownContext(ctx)
+	s.running.Store(false)
+	return err
 }
 
 func (s *ForwardServer) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
@@ -101,21 +104,44 @@ func (s *ForwardServer) forwardQuery(msg *dns.Msg) (*dns.Msg, error) {
 }
 
 func (s *ForwardServer) exchangeWithServers(servers []string, msg *dns.Msg) (*dns.Msg, error) {
-	var lastErr error
+	if len(servers) == 0 {
+		return nil, errors.New("no dns server available")
+	}
 
+	// Query every upstream concurrently and take the first success. A
+	// serial scan lets one hung upstream stall the query for the full
+	// client timeout; the whole query shares a single timeout budget.
+	ctx, cancel := context.WithTimeout(context.Background(), s.client.Timeout)
+	defer cancel()
+
+	type result struct {
+		reply *dns.Msg
+		err   error
+	}
+	ch := make(chan result, len(servers))
 	for _, server := range servers {
-		reply, _, err := s.client.Exchange(msg, server)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if reply != nil && reply.Rcode == dns.RcodeSuccess {
-			return reply, nil
-		}
-		if reply == nil {
-			lastErr = fmt.Errorf("dns: empty reply from %s", server)
-		} else {
-			lastErr = fmt.Errorf("dns: server returned %s", dns.RcodeToString[reply.Rcode])
+		go func(server string) {
+			reply, _, err := s.client.Exchange(msg, server)
+			ch <- result{reply: reply, err: err}
+		}(server)
+	}
+
+	var lastErr error
+	for range servers {
+		select {
+		case r := <-ch:
+			if r.err == nil && r.reply != nil && r.reply.Rcode == dns.RcodeSuccess {
+				return r.reply, nil
+			}
+			if r.err != nil {
+				lastErr = r.err
+			} else if r.reply == nil {
+				lastErr = errors.New("dns: empty reply")
+			} else {
+				lastErr = fmt.Errorf("dns: server returned %s", dns.RcodeToString[r.reply.Rcode])
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
 	}
 
@@ -142,5 +168,5 @@ func (s *ForwardServer) systemDNSServers() []string {
 }
 
 func (s *ForwardServer) IsRunning() bool {
-	return s.running
+	return s.running.Load()
 }
