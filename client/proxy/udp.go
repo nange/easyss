@@ -454,6 +454,12 @@ func (s *Socks5Server) directUDPRelay(srv *socks5.Server, clientAddr *net.UDPAdd
 			if err != nil {
 				return
 			}
+			// Refresh the idle timestamp on receive as well as send, mirroring
+			// the proxied path (UDPExchange.Receive): a flow that keeps
+			// receiving but never writes again (a one-shot query with a long
+			// stream of responses) must not be reaped while it is still
+			// active.
+			dc.lastSeen.Store(time.Now().UnixNano())
 			s.sendToClient(srv, clientAddr, buf[:n], dst)
 		}
 	}()
