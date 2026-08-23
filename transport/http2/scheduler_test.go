@@ -86,15 +86,15 @@ func TestSlotTierOf(t *testing.T) {
 			s.expiring.Store(true)
 		}, tierHeavy},
 		{"degraded", func(s *transportSlot) { s.degraded.Store(true) }, tierDegraded},
-		{"degraded and expiring classifies as degraded", func(s *transportSlot) {
+		{"degraded and expiring is retiring", func(s *transportSlot) {
 			s.degraded.Store(true)
 			s.expiring.Store(true)
-		}, tierDegraded},
-		{"all marks classifies as degraded", func(s *transportSlot) {
+		}, tierRetiring},
+		{"all marks is retiring", func(s *transportSlot) {
 			s.degraded.Store(true)
 			s.heavy.Store(1)
 			s.expiring.Store(true)
-		}, tierDegraded},
+		}, tierRetiring},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -345,6 +345,54 @@ func TestTieredSelectPrefersLessNegative(t *testing.T) {
 	})
 }
 
+func TestTieredSelectExcludesRetiring(t *testing.T) {
+	t.Run("degraded tier prefers degraded-only over idle retiring", func(t *testing.T) {
+		p := newTestPool(8, [2]int32{8, 0}, [2]int32{4, 0}, [2]int32{4, 0}, [2]int32{0, 0}, [2]int32{1, 0})
+		p.slots[1].expiring.Store(true)
+		p.slots[2].heavy.Store(1)
+		p.slots[3].degraded.Store(true)
+		p.slots[3].expiring.Store(true) // idle retiring slot: weighted load 0
+		p.slots[4].degraded.Store(true)
+		// The idle retiring slot must NOT win the degraded tier: even
+		// though its weighted load is 0, retiring slots are excluded, so
+		// the degraded-only slot hosting one stream is picked.
+		slot, saturated := p.tieredSelect()
+		if saturated || slot != p.slots[4] {
+			t.Fatalf("got slot %d saturated=%v, want degraded-only slot 4 (active=1, weighted 6 < 8)", slot.idx, saturated)
+		}
+	})
+
+	t.Run("uncapped fallback excludes idle retiring", func(t *testing.T) {
+		p := newTestPool(8, [2]int32{8, 0}, [2]int32{4, 0}, [2]int32{4, 0}, [2]int32{2, 0}, [2]int32{0, 0})
+		p.slots[1].expiring.Store(true)
+		p.slots[2].heavy.Store(1)
+		p.slots[3].degraded.Store(true)
+		p.slots[4].degraded.Store(true)
+		p.slots[4].expiring.Store(true)
+		// Every tier is at capacity; the idle retiring slot (weighted 0)
+		// would be the globally least-loaded slot, but it must be passed
+		// over in favor of the least-loaded healthy slot.
+		slot, saturated := p.tieredSelect()
+		if !saturated || slot != p.slots[0] {
+			t.Fatalf("got slot %d saturated=%v, want fallback slot 0 with saturated=true", slot.idx, saturated)
+		}
+	})
+
+	t.Run("all live slots retiring returns the least-loaded retiring slot", func(t *testing.T) {
+		p := newTestPool(8, [2]int32{2, 0}, [2]int32{0, 0})
+		p.slots[0].degraded.Store(true)
+		p.slots[0].expiring.Store(true)
+		p.slots[1].degraded.Store(true)
+		p.slots[1].expiring.Store(true)
+		// No alternative exists: pick must never fail, so the least-loaded
+		// retiring slot is returned (the health loop retires both shortly).
+		slot, saturated := p.tieredSelect()
+		if !saturated || slot != p.slots[1] {
+			t.Fatalf("got slot %d saturated=%v, want least-loaded retiring slot 1", slot.idx, saturated)
+		}
+	})
+}
+
 func TestTieredSelectNoHealthyEngagesLowerTiers(t *testing.T) {
 	t.Run("all expiring picks least-active below base/2", func(t *testing.T) {
 		p := newTestPool(8, [2]int32{0, 0}, [2]int32{1, 0})
@@ -458,6 +506,38 @@ func TestPickBorrowsOtherPoolWhenSaturated(t *testing.T) {
 	})
 }
 
+func TestPickExcludesRetiringInBorrow(t *testing.T) {
+	t.Run("borrows healthy bulk slot over idle retiring bulk slot", func(t *testing.T) {
+		sch := newTwoPoolScheduler(
+			[][2]int32{{4, 0}}, // priority pool saturated at base 4
+			[][2]int32{{0, 0}, {1, 0}},
+		)
+		sch.bulk.slots[0].degraded.Store(true)
+		sch.bulk.slots[0].expiring.Store(true)
+		// The idle retiring bulk slot must not win the borrow: the healthy
+		// bulk slot (active=1) is borrowed instead.
+		if got := sch.pick(true); got != sch.bulk.slots[1] {
+			t.Fatalf("pick(true) = slot %d, want borrowed healthy bulk slot 1", got.idx)
+		}
+	})
+
+	t.Run("all bulk slots retiring still borrows the least-loaded one", func(t *testing.T) {
+		sch := newTwoPoolScheduler(
+			[][2]int32{{4, 0}},
+			[][2]int32{{1, 0}, {0, 0}},
+		)
+		sch.bulk.slots[0].degraded.Store(true)
+		sch.bulk.slots[0].expiring.Store(true)
+		sch.bulk.slots[1].degraded.Store(true)
+		sch.bulk.slots[1].expiring.Store(true)
+		// No non-retiring slot exists anywhere: the least-loaded retiring
+		// bulk slot is the absolute last resort (pick never fails).
+		if got := sch.pick(true); got != sch.bulk.slots[1] {
+			t.Fatalf("pick(true) = slot %d, want least-loaded retiring bulk slot 1", got.idx)
+		}
+	})
+}
+
 // newGrowTestScheduler builds a scheduler via the production constructor
 // with maxSlots total slots, prioritySlots priority-class slots, threshold 4
 // and the given live counts per pool (all remaining slots live as bulk).
@@ -534,6 +614,22 @@ func TestNoGrowthWhileNegativeTiersHaveCapacity(t *testing.T) {
 	sch.grow(false)
 	if got := sch.bulk.liveCount.Load(); got != 3 {
 		t.Fatalf("bulk liveCount = %d, want 3 when every tier is saturated", got)
+	}
+}
+
+func TestGrowWhenOnlyRetiringCapacityRemains(t *testing.T) {
+	sch := newGrowTestScheduler(10, 5, 0, 2)
+
+	// One healthy slot saturated at 8; the other slot is retiring
+	// (degraded+expiring) and idle. Its weighted load is 0, but retiring
+	// slots are excluded from selection, so the pool counts as saturated
+	// and a fresh connection is grown to replace the doomed slot.
+	sch.bulk.slots[0].active.Store(8)
+	sch.bulk.slots[1].degraded.Store(true)
+	sch.bulk.slots[1].expiring.Store(true)
+	sch.grow(false)
+	if got := sch.bulk.liveCount.Load(); got != 3 {
+		t.Fatalf("bulk liveCount = %d, want 3 when the only remaining capacity is a retiring slot", got)
 	}
 }
 
