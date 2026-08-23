@@ -48,6 +48,9 @@ type stats struct {
 	tierExpiringScheduled atomic.Int64
 	tierHeavyScheduled    atomic.Int64
 	tierDegradedScheduled atomic.Int64
+	// tierRetiringSkipped counts the times the scheduler passed over a
+	// retiring slot (degraded+expiring) when picking a slot for a stream.
+	tierRetiringSkipped atomic.Int64
 
 	// Transport health (client-side)
 	slotDegraded         atomic.Int64
@@ -107,6 +110,7 @@ func RecordBulkFallback()         { g.bulkFallback.Add(1) }
 func RecordTierExpiring()         { g.tierExpiringScheduled.Add(1) }
 func RecordTierHeavy()            { g.tierHeavyScheduled.Add(1) }
 func RecordTierDegraded()         { g.tierDegradedScheduled.Add(1) }
+func RecordTierRetiringSkipped()  { g.tierRetiringSkipped.Add(1) }
 
 func RecordSlotDegraded()        { g.slotDegraded.Add(1) }
 func RecordSlotRetiredDegraded() { g.slotRetiredDegraded.Add(1) }
@@ -177,6 +181,7 @@ func ResetCounters() {
 	g.tierExpiringScheduled.Store(0)
 	g.tierHeavyScheduled.Store(0)
 	g.tierDegradedScheduled.Store(0)
+	g.tierRetiringSkipped.Store(0)
 	g.slotDegraded.Store(0)
 	g.slotRetiredDegraded.Store(0)
 	g.connRotated.Store(0)
@@ -238,6 +243,7 @@ type Snapshot struct {
 	TierExpiringScheduled int64 `json:"tier_expiring_scheduled"`
 	TierHeavyScheduled    int64 `json:"tier_heavy_scheduled"`
 	TierDegradedScheduled int64 `json:"tier_degraded_scheduled"`
+	TierRetiringSkipped   int64 `json:"tier_retiring_skipped"`
 
 	// Transport health (client-side only; zero on server)
 	SlotDegraded         int64 `json:"slot_degraded"`
@@ -332,6 +338,7 @@ func Collect() Snapshot {
 		TierExpiringScheduled:  g.tierExpiringScheduled.Load(),
 		TierHeavyScheduled:     g.tierHeavyScheduled.Load(),
 		TierDegradedScheduled:  g.tierDegradedScheduled.Load(),
+		TierRetiringSkipped:    g.tierRetiringSkipped.Load(),
 		SlotDegraded:           g.slotDegraded.Load(),
 		SlotRetiredDegraded:    g.slotRetiredDegraded.Load(),
 		ConnRotated:            g.connRotated.Load(),

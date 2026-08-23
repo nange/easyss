@@ -52,9 +52,16 @@ type transportSlot struct {
 
 // resetConn (re)initializes the rotation state for a freshly established
 // connection: the lifetime deadline (with per-connection jitter), the bytes
-// carried and the expiring mark all start fresh.
+// carried and the expiring mark all start fresh. The degraded mark is
+// cleared too: degradation is a verdict about the previous connection's
+// throughput, and a freshly dialed connection deserves a clean slate until
+// the sampler or a probe re-evaluates it — in particular a slot retired
+// while degraded and later re-activated by grow reuses this same
+// transportSlot object, and its new connection must not inherit the old
+// verdict.
 func (s *transportSlot) resetConn(connLifetime time.Duration) {
 	s.expireAt.Store(time.Now().Add(rotationLifetime(connLifetime)).UnixNano())
 	s.connBytes.Store(0)
 	s.expiring.Store(false)
+	s.degraded.Store(false)
 }

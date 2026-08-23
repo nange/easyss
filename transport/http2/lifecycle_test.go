@@ -481,3 +481,29 @@ func TestEvaluateRotation(t *testing.T) {
 		}
 	})
 }
+
+func TestResetConnClearsMarks(t *testing.T) {
+	s := &transportSlot{}
+	// A retiring slot (degraded+expiring) past its lifetime with bytes
+	// carried: after a fresh connection is established, the rotation state
+	// starts over and the degraded verdict of the old connection is void.
+	s.degraded.Store(true)
+	s.expiring.Store(true)
+	s.expireAt.Store(time.Now().Add(-time.Minute).UnixNano())
+	s.connBytes.Store(1024)
+
+	s.resetConn(time.Hour)
+
+	if s.degraded.Load() {
+		t.Fatal("expected degraded cleared on a fresh connection")
+	}
+	if s.expiring.Load() {
+		t.Fatal("expected expiring cleared on a fresh connection")
+	}
+	if s.connBytes.Load() != 0 {
+		t.Fatalf("connBytes = %d, want 0", s.connBytes.Load())
+	}
+	if expireAt := s.expireAt.Load(); expireAt <= time.Now().UnixNano() {
+		t.Fatalf("expireAt = %d, want a future deadline", expireAt)
+	}
+}

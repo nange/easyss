@@ -39,6 +39,10 @@ import (
 //     the tier capacity, which doubles whenever the active layer is pushed
 //     to the next power-of-two multiple of the base — so a fully saturated
 //     pool keeps spreading load instead of piling onto one connection.
+//     A slot that is both degraded and expiring is classified as
+//     tierRetiring and never selected at all: it is due for rotation and
+//     confirmed slow, so new streams must not keep it alive — it drains to
+//     idle and the health loop retires it, replaced by a fresh connection.
 //
 //   - Growth prefers fresh connections over squeezing negative ones: when a
 //     pool's tiers are saturated it grows its own pool, and once a pool is
@@ -134,7 +138,12 @@ func (s *slotScheduler) poolOf(highPriority bool) *slotPool {
 //	                sharing stream down with them (head-of-line blocking
 //	                under loss), yet the connection itself is healthy;
 //	tierDegraded  — the connection proved persistently low throughput, the
-//	                worst candidate, used only as a last resort.
+//	                worst candidate, used only as a last resort;
+//	tierRetiring  — degraded AND expiring: due for rotation and confirmed
+//	                slow, with no recovery value (even a fast stream cannot
+//	                undo the overdue rotation). Never selected: the slot
+//	                drains to idle and the health loop retires it, replaced
+//	                by a fresh connection.
 type slotTier int
 
 const (
@@ -142,6 +151,7 @@ const (
 	tierExpiring
 	tierHeavy
 	tierDegraded
+	tierRetiring
 )
 
 // Negative-mark load weights, shared by slotWeight (multiplicative) and
@@ -157,8 +167,14 @@ const (
 
 // slotTierOf returns the tier a slot currently belongs to. Heavy+expiring
 // slots classify as heavy (the heavier mark wins), any degraded combination
-// classifies as degraded.
+// classifies as degraded — except that a slot both degraded and expiring
+// classifies as tierRetiring: it is due for rotation and confirmed slow, so
+// the scheduler never selects it (see leastActive) and the health loop
+// retires it once idle.
 func slotTierOf(s *transportSlot) slotTier {
+	if s.degraded.Load() && s.expiring.Load() {
+		return tierRetiring
+	}
 	if s.degraded.Load() {
 		return tierDegraded
 	}
@@ -284,7 +300,10 @@ func (p *slotPool) saturatedIn(live int) bool {
 // and tierCap). Once every tier is full, the fallback piles onto the
 // least-loaded slot overall (by weighted load, uncapped): piling there
 // keeps load balanced instead of stacking every stream onto one crowded
-// healthy connection.
+// healthy connection. Slots that are both degraded and expiring
+// (tierRetiring) are excluded from every search and from the fallback:
+// they are due for rotation and confirmed slow, so new streams must never
+// keep them alive — they drain to idle and are retired by the health loop.
 func (p *slotPool) tieredSelectAt(live int, recordStats bool) (*transportSlot, bool) {
 	if live == 0 {
 		return p.slots[0], false
@@ -361,8 +380,9 @@ func (p *slotPool) tieredSelectAt(live int, recordStats bool) (*transportSlot, b
 	// hosting far fewer streams than the piled-up healthy slots — piling
 	// there keeps load balanced instead of stacking every stream onto one
 	// crowded healthy connection (which is also what keeps the pressure
-	// level honest).
-	return p.leastActive(live), true
+	// level honest). Retiring slots (degraded+expiring) are excluded from
+	// the fallback too, so they drain to idle and are retired.
+	return p.leastActive(live, recordStats), true
 }
 
 // pressureLevel derives the current pressure level from the least-loaded
@@ -433,6 +453,11 @@ func tierCap(tier slotTier, level, base int32) int32 {
 		// active layer" is the fallback path in tieredSelect.
 		return 0
 	}
+	if tier == tierRetiring {
+		// tierRetiring is never searched: slots that are both degraded and
+		// expiring are excluded from selection entirely (see leastActive).
+		return 0
+	}
 	return base << (level - 1)
 }
 
@@ -473,22 +498,45 @@ func (p *slotPool) minActiveInRange(live int) int32 {
 // leastActive returns the slot with the fewest weighted streams among the
 // first `live` slots — the final uncapped fallback of the pressure
 // scheduler; among equally loaded slots the one with fewer negative marks
-// wins. With no live slots the first pre-allocated slot is returned.
-func (p *slotPool) leastActive(live int) *transportSlot {
+// wins. Retiring slots (degraded+expiring) are excluded: they are due for
+// rotation and confirmed slow, so new streams must never keep them alive —
+// they drain to idle and the health loop retires them, replaced by fresh
+// connections via grow. When every live slot is retiring, the least-loaded
+// retiring slot is returned so pick never fails (the health loop retires
+// them within a tick or two, closing the window). With no live slots the
+// first pre-allocated slot is returned. recordStats gates the
+// tier_retiring_skipped counter (the grow path's saturation check must not
+// record scheduling stats).
+func (p *slotPool) leastActive(live int, recordStats bool) *transportSlot {
 	if live == 0 {
 		return p.slots[0]
 	}
 	var best *transportSlot
 	var minWeighted int32 = math.MaxInt32
 	var minNeg int32 = math.MaxInt32
+	var retiring *transportSlot // least-loaded retiring slot, absolute last resort
+	var retWeighted int32 = math.MaxInt32
+	var retNeg int32 = math.MaxInt32
 	for i := 0; i < live; i++ {
 		sl := p.slots[i]
 		w := weightedActive(sl)
 		neg := negativeScore(sl)
+		if slotTierOf(sl) == tierRetiring {
+			if recordStats {
+				stats.RecordTierRetiringSkipped()
+			}
+			if w < retWeighted || (w == retWeighted && neg < retNeg) {
+				retiring, retWeighted, retNeg = sl, w, neg
+			}
+			continue
+		}
 		if w > minWeighted || (w == minWeighted && neg >= minNeg) {
 			continue
 		}
 		best, minWeighted, minNeg = sl, w, neg
+	}
+	if best == nil {
+		return retiring
 	}
 	return best
 }
