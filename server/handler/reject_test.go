@@ -193,10 +193,10 @@ func TestServeHTTP_LANTarget400(t *testing.T) {
 	for _, target := range []string{
 		"127.0.0.1:80",
 		"10.0.0.1:80",
-		"100.64.0.1:80",    // CGNAT
-		"192.0.2.1:80",     // TEST-NET-1
-		"198.18.0.1:80",    // benchmarking
-		"203.0.113.1:80",   // TEST-NET-3
+		"100.64.0.1:80",     // CGNAT
+		"192.0.2.1:80",      // TEST-NET-1
+		"198.18.0.1:80",     // benchmarking
+		"203.0.113.1:80",    // TEST-NET-3
 		"255.255.255.255:9", // broadcast
 	} {
 		saltB64, body := buildBootstrapRecord(t, masterKey, sharedconfig.EndpointTCP,

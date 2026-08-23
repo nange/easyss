@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/nange/easyss/v3/crypto"
@@ -83,7 +84,7 @@ func (h *ICMPHandler) icmpExchange(target string, payload []byte) ([]byte, error
 	// DNS-rebinding name could resolve to a LAN host here. Reject the
 	// connection before anything is sent.
 	if ra := conn.RemoteAddr(); ra != nil {
-		if host, _, e := net.SplitHostPort(ra.String()); e == nil && util.IsLANIP(host) {
+		if host := lanHostOf(ra.String()); util.IsLANIP(host) {
 			_ = conn.Close()
 			return nil, fmt.Errorf("ssrf: rejected lan destination %s", host)
 		}
@@ -193,4 +194,19 @@ func isIPv6Target(target string) bool {
 		return false
 	}
 	return ip.To4() == nil
+}
+
+// lanHostOf extracts the host part of a remote address in either
+// "host:port" (TCPAddr/UDPAddr) or bare-IP form (IPConn). An IPConn's
+// RemoteAddr is a *net.IPAddr whose String() carries no port — with or
+// without a %zone suffix for link-local IPv6 — so net.SplitHostPort
+// alone would always fail for it and the SSRF check would never fire.
+func lanHostOf(addr string) string {
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	if i := strings.LastIndexByte(addr, '%'); i >= 0 {
+		return addr[:i]
+	}
+	return addr
 }
