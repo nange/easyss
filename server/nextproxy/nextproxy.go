@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util"
 	"github.com/txthinking/socks5"
@@ -238,7 +239,7 @@ func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string
 
 	dialTimeout := np.dialTimeout
 	if dialTimeout <= 0 {
-		dialTimeout = 10 * time.Second
+		dialTimeout = config.DefaultDialTimeout
 	}
 	dialer := &net.Dialer{Timeout: dialTimeout}
 	socksTimeout := int(dialTimeout.Seconds())

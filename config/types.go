@@ -38,6 +38,14 @@ const (
 	DefaultConnLifetimeSec = 420               // 7min
 	DefaultConnMaxBytes    = 256 * 1024 * 1024 // 256MB，双向（上下行）累计
 
+	// Fallback timeouts used by the server-side constructors when no
+	// explicit value is provided. DefaultStreamIdleTimeout mirrors the
+	// server's derivation (10 x DefaultTimeout = 300s); the others are
+	// defensive defaults for the handler/nextproxy entry points.
+	DefaultStreamIdleTimeout = 300 * time.Second // TCP 流空闲超时兜底（= 10 × DefaultTimeout）
+	DefaultUDPIdleTimeout    = 30 * time.Second  // UDP 关联空闲超时兜底
+	DefaultDialTimeout       = 10 * time.Second  // 出口拨号超时兜底（= DefaultTimeout/3）
+
 	// Defaults shared by config builders, the example config and runtime
 	// fallbacks. Keep these as the single source of truth: any code that
 	// applies a default must reference the constant, not a literal.

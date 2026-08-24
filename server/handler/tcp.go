@@ -43,10 +43,10 @@ func DialTimeout(timeout time.Duration) time.Duration {
 
 func NewTCPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) *TCPHandler {
 	if idleTimeout <= 0 {
-		idleTimeout = 300 * time.Second
+		idleTimeout = config.DefaultStreamIdleTimeout
 	}
 	if timeout <= 0 {
-		timeout = 30 * time.Second
+		timeout = time.Duration(config.DefaultTimeout) * time.Second
 	}
 	dialTimeout := DialTimeout(timeout)
 	return &TCPHandler{

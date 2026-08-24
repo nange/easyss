@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
@@ -30,7 +31,7 @@ type UDPHandler struct {
 
 func NewUDPHandler(idleTimeout time.Duration, np *nextproxy.NextProxy) *UDPHandler {
 	if idleTimeout <= 0 {
-		idleTimeout = 30 * time.Second
+		idleTimeout = config.DefaultUDPIdleTimeout
 	}
 	h := &UDPHandler{
 		idleTimeout: idleTimeout,

@@ -256,7 +256,7 @@ func (s *Server) Start() error {
 
 	timeout := time.Duration(s.cfg.Timeout) * time.Second
 	if timeout <= 0 {
-		timeout = 30 * time.Second
+		timeout = time.Duration(sharedconfig.DefaultTimeout) * time.Second
 	}
 
 	if s.cfg.FallbackTarget != "" {
