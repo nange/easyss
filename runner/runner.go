@@ -102,7 +102,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 			serverDomain = svr.Address
 		}
 		socksServer, err := proxy.NewSocks5Server(socksAddr, cfg.AuthUsername, cfg.AuthPassword,
-			streamHandler, cli.Router(), serverDomain, method, !cfg.Local.EnableQUIC, dialTimeout, udpIdleTimeout, cli.DialContext)
+			streamHandler, cli.Router(), serverDomain, method, !cfg.Local.EnableQUIC, dialTimeout, udpIdleTimeout, timeout/3, cli.DialContext)
 		if err != nil {
 			_ = cli.Close()
 			return nil, err

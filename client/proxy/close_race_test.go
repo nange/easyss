@@ -28,7 +28,7 @@ func TestSocks5CloseRacingStart(t *testing.T) {
 		l.Close()
 
 		h := newTestStreamHandler(&mockTransport{})
-		srv, err := NewSocks5Server(addr, "", "", h, nil, "", protocol.MethodAES256GCM, true, 10*time.Second, 30*time.Second, nil)
+		srv, err := NewSocks5Server(addr, "", "", h, nil, "", protocol.MethodAES256GCM, true, 10*time.Second, 30*time.Second, 0, nil)
 		if err != nil {
 			t.Fatalf("NewSocks5Server #%d: %v", i, err)
 		}
