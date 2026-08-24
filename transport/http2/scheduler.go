@@ -32,17 +32,22 @@ import (
 //     heavy slots and finally degraded slots (worst candidate, last
 //     resort). Negative tiers are compared by weighted load — the active
 //     stream count times the compounded weight of the slot's negative
-//     marks (heavy ×2, expiring ×4, degraded ×6, see slotWeight), so 2
+//     marks (heavy ×2, expiring ×4, degraded ×8, see slotWeight), so 2
 //     streams on a heavy slot weigh like 4 healthy ones and 1 on a
-//     degraded slot like 6, while a heavy+expiring+degraded slot compounds
-//     to ×48. A slot only counts as full once its weighted load reaches
-//     the tier capacity, which doubles whenever the active layer is pushed
-//     to the next power-of-two multiple of the base — so a fully saturated
-//     pool keeps spreading load instead of piling onto one connection.
-//     A slot that is both degraded and expiring is classified as
-//     tierRetiring and never selected at all: it is due for rotation and
-//     confirmed slow, so new streams must not keep it alive — it drains to
-//     idle and the health loop retires it, replaced by a fresh connection.
+//     degraded slot like 8, while a heavy+expiring+degraded slot compounds
+//     to ×64. An idle slot (active == 0) carrying expiring or degraded
+//     marks still weighs its mark weight — never 0, see weightedActive:
+//     it must not look free, or new streams would keep the tired
+//     connection alive and postpone its eviction. A slot only counts as
+//     full once its weighted load reaches the tier capacity, which
+//     doubles whenever the active layer is pushed to the next power-of-two
+//     multiple of the base — so a fully saturated pool keeps spreading
+//     load instead of piling onto one connection. Slots due for eviction
+//     are never selected at all: a slot both degraded and expiring is
+//     classified as tierRetiring, and an idle slot carrying expiring or
+//     degraded marks is draining (see draining) — new streams must not
+//     keep either alive, they drain to idle and the health loop
+//     rotates/retires them, replaced by fresh connections.
 //
 //   - Growth prefers fresh connections over squeezing negative ones: when a
 //     pool's tiers are saturated it grows its own pool, and once a pool is
@@ -138,7 +143,8 @@ func (s *slotScheduler) poolOf(highPriority bool) *slotPool {
 //	tierExpiring  — rotation overdue, but the connection is likely still
 //	                fine: routing new streams onto it keeps it alive until
 //	                its stream gap, spreading same-batch re-dials instead of
-//	                clustering them;
+//	                clustering them; once idle the slot is draining and
+//	                excluded from selection so the rotation completes;
 //	tierHeavy     — heavy streams monopolize the TCP window, dragging any
 //	                sharing stream down with them (head-of-line blocking
 //	                under loss), yet the connection itself is healthy;
@@ -161,13 +167,14 @@ const (
 
 // Negative-mark load weights, shared by slotWeight (multiplicative) and
 // negativeScore (additive), so the severity order always stays aligned:
-// degraded 6 > expiring 4 > heavy 2. An expiring connection is worse than
+// degraded 8 > expiring 4 > heavy 2. An expiring connection is worse than
 // a merely heavy one — it is due for rotation and should be recycled
-// quickly — hence its weight sits above heavy's.
+// quickly — hence its weight sits above heavy's; degraded sits above both
+// so persistently slow connections are drained and retired first.
 const (
 	weightHeavy    = 2
 	weightExpiring = 4
-	weightDegraded = 6
+	weightDegraded = 8
 )
 
 // slotTierOf returns the tier a slot currently belongs to. Heavy+expiring
@@ -216,11 +223,14 @@ func negativeScore(s *transportSlot) int32 {
 // product of the shared negative-mark weights (weightHeavy, weightExpiring,
 // weightDegraded; no mark: 1). A stream on a heavy+expiring slot weighs
 // weightHeavy×weightExpiring = 8× a healthy stream, one on a
-// heavy+expiring+degraded slot 2×4×6 = 48× — multiple negative states
+// heavy+expiring+degraded slot 2×4×8 = 64× — multiple negative states
 // compound, so a slot is only considered full once its weighted load
 // reaches the pool's threshold. Expiring is weighted deliberately high
 // (4, above heavy's 2): the slot is due for rotation, so streams should
-// avoid it and let it go idle and be recycled quickly.
+// avoid it and let it go idle and be recycled quickly; degraded sits even
+// higher (8) so a slow connection reaches capacity with a single stream
+// and drains to retirement fast. The idle floor for expiring/degraded
+// marks is applied by weightedActive.
 func slotWeight(s *transportSlot) int32 {
 	w := int32(1)
 	if s.heavy.Load() > 0 {
@@ -236,9 +246,30 @@ func slotWeight(s *transportSlot) int32 {
 }
 
 // weightedActive returns the slot's weighted load: its active stream count
-// scaled by the compounded weight of all its negative marks.
+// scaled by the compounded weight of all its negative marks. An idle slot
+// (active == 0) carrying expiring or degraded marks counts as one stream,
+// so it weighs its mark weight (expiring 4, degraded 8, both 32) instead
+// of 0: without the floor it would look free and new streams would pile
+// onto it, keeping the tired connection alive and starving the health
+// loop's rotation/retirement. Heavy needs no floor: heavy > 0 implies at
+// least one active heavy stream (the mark is released exactly once per
+// stream on close), so a heavy-marked slot is never idle.
 func weightedActive(s *transportSlot) int32 {
-	return s.active.Load() * slotWeight(s)
+	n := s.active.Load()
+	if n == 0 && (s.expiring.Load() || s.degraded.Load()) {
+		n = 1
+	}
+	return n * slotWeight(s)
+}
+
+// draining reports whether the slot is idle (active == 0) while carrying
+// an expiring or degraded mark. Such a slot is due for eviction — rotation
+// or retirement — and must not be revived by new streams: the scheduler
+// excludes it from selection exactly like retiring slots, so it stays idle
+// until the health loop closes the connection. A draining slot is still
+// used as the absolute last resort when every live slot is negative.
+func draining(s *transportSlot) bool {
+	return s.active.Load() == 0 && (s.expiring.Load() || s.degraded.Load())
 }
 
 // pick returns the slot a new stream should use: the stream's class selects
@@ -266,7 +297,11 @@ func (s *slotScheduler) pick(highPriority bool) *transportSlot {
 		// would index its empty slot array.
 		if other := s.otherPool(pool); other.maxSlots > 0 {
 			otherSlot, otherSat := other.tieredSelect()
-			if !otherSat || otherSlot.active.Load() < slot.active.Load() {
+			// Borrow only when the sibling's fallback is strictly less
+			// loaded, compared in weighted load so negative marks are
+			// priced consistently (an idle draining slot must not look
+			// free to the borrow path either).
+			if !otherSat || weightedActive(otherSlot) < weightedActive(slot) {
 				return otherSlot
 			}
 		}
@@ -305,15 +340,16 @@ func (p *slotPool) saturatedIn(live int) bool {
 // expiring, heavy and degraded — and within a tier prefers the slot with
 // the fewest active streams, breaking ties by negativeScore. A tier only
 // accepts a slot whose weighted load (active × compounded negative-mark
-// weight, see slotWeight) stays below the
-// tier's capacity, which scales with the pressure level (see pressureLevel
-// and tierCap). Once every tier is full, the fallback piles onto the
-// least-loaded slot overall (by weighted load, uncapped): piling there
-// keeps load balanced instead of stacking every stream onto one crowded
-// healthy connection. Slots that are both degraded and expiring
-// (tierRetiring) are excluded from every search and from the fallback:
-// they are due for rotation and confirmed slow, so new streams must never
-// keep them alive — they drain to idle and are retired by the health loop.
+// weight, floored at the mark weight for idle negative slots, see
+// weightedActive) stays below the tier's capacity, which scales with the
+// pressure level (see pressureLevel and tierCap). Once every tier is full,
+// the fallback piles onto the least-loaded slot overall (by weighted load,
+// uncapped): piling there keeps load balanced instead of stacking every
+// stream onto one crowded healthy connection. Slots due for eviction are
+// excluded from every search and from the fallback: slots that are both
+// degraded and expiring (tierRetiring) and idle slots carrying expiring or
+// degraded marks (draining, see draining) — new streams must never keep
+// them alive, they drain to idle and the health loop rotates/retires them.
 func (p *slotPool) tieredSelectAt(live int, recordStats bool) (*transportSlot, bool) {
 	if live == 0 {
 		return p.slots[0], false
@@ -323,11 +359,13 @@ func (p *slotPool) tieredSelectAt(live int, recordStats bool) (*transportSlot, b
 
 	// consider picks the least-active, least-negative slot of one tier
 	// within the current capacity; it reports whether such a slot exists.
-	// Capacity is compared in weighted load: active × the compounded weight
-	// of the slot's negative marks, so a slot with 2 streams and one heavy
-	// mark (weight 4) is still open while the pool's threshold is 8 — only
-	// once every candidate slot's weighted load reaches the threshold does
-	// the pool grow.
+	// Capacity is compared in weighted load (active × the compounded weight
+	// of the slot's negative marks, floored at the mark weight for idle
+	// negative slots), so a slot with 2 streams and one heavy mark (weight
+	// 4) is still open while the pool's threshold is 8 — only once every
+	// candidate slot's weighted load reaches the threshold does the pool
+	// grow. Draining slots (idle with expiring/degraded marks) are skipped
+	// entirely: reviving them would postpone their rotation/retirement.
 	var best *transportSlot
 	consider := func(tier slotTier) bool {
 		cap := tierCap(tier, level, p.base)
@@ -339,13 +377,13 @@ func (p *slotPool) tieredSelectAt(live int, recordStats bool) (*transportSlot, b
 		var bestNeg int32 = math.MaxInt32
 		for i := 0; i < live; i++ {
 			sl := p.slots[i]
-			if slotTierOf(sl) != tier {
+			if slotTierOf(sl) != tier || draining(sl) {
+				continue
+			}
+			if weightedActive(sl) >= cap {
 				continue
 			}
 			a := sl.active.Load()
-			if a*slotWeight(sl) >= cap {
-				continue
-			}
 			neg := negativeScore(sl)
 			if a < bestActive || (a == bestActive && neg < bestNeg) {
 				best, bestActive, bestNeg = sl, a, neg
@@ -441,8 +479,8 @@ func floorLog2(v int32) int32 {
 //	level k>=1: every negative tier has cap = 2^(k-1)*base.
 //
 // At level 1 that means a heavy slot holds at most base/2 streams, an
-// expiring one base/4, a degraded one base/6 — 2 heavy streams count like
-// 4 healthy ones, 1 degraded like 6, 1 expiring like 4. Every level-up
+// expiring one base/4, a degraded one base/8 — 2 heavy streams count like
+// 4 healthy ones, 1 degraded like 8, 1 expiring like 4. Every level-up
 // doubles the negative-tier
 // capacities: the model first spills onto the negative tiers, then piles
 // back onto the active layer until it doubles, then the negative-tier
@@ -508,15 +546,15 @@ func (p *slotPool) minActiveInRange(live int) int32 {
 // leastActive returns the slot with the fewest weighted streams among the
 // first `live` slots — the final uncapped fallback of the pressure
 // scheduler; among equally loaded slots the one with fewer negative marks
-// wins. Retiring slots (degraded+expiring) are excluded: they are due for
-// rotation and confirmed slow, so new streams must never keep them alive —
-// they drain to idle and the health loop retires them, replaced by fresh
-// connections via grow. When every live slot is retiring, the least-loaded
-// retiring slot is returned so pick never fails (the health loop retires
-// them within a tick or two, closing the window). With no live slots the
-// first pre-allocated slot is returned. recordStats gates the
-// tier_retiring_skipped counter (the grow path's saturation check must not
-// record scheduling stats).
+// wins. Slots due for eviction are excluded: retiring slots (degraded and
+// expiring) and draining slots (idle with expiring or degraded marks) must
+// never be kept alive by new streams — they drain to idle and the health
+// loop rotates/retires them, replaced by fresh connections via grow. When
+// every live slot is due for eviction, the least-loaded such slot is
+// returned so pick never fails (the health loop retires them within a tick
+// or two, closing the window). With no live slots the first pre-allocated
+// slot is returned. recordStats gates the tier_retiring_skipped counter
+// (the grow path's saturation check must not record scheduling stats).
 func (p *slotPool) leastActive(live int, recordStats bool) *transportSlot {
 	if live == 0 {
 		return p.slots[0]
@@ -524,19 +562,25 @@ func (p *slotPool) leastActive(live int, recordStats bool) *transportSlot {
 	var best *transportSlot
 	var minWeighted int32 = math.MaxInt32
 	var minNeg int32 = math.MaxInt32
-	var retiring *transportSlot // least-loaded retiring slot, absolute last resort
-	var retWeighted int32 = math.MaxInt32
-	var retNeg int32 = math.MaxInt32
+	var lastResort *transportSlot // least-loaded retiring/draining slot, absolute last resort
+	var resWeighted int32 = math.MaxInt32
+	var resNeg int32 = math.MaxInt32
 	for i := 0; i < live; i++ {
 		sl := p.slots[i]
 		w := weightedActive(sl)
 		neg := negativeScore(sl)
-		if slotTierOf(sl) == tierRetiring {
-			if recordStats {
+		tier := slotTierOf(sl)
+		if tier == tierRetiring || draining(sl) {
+			if recordStats && tier == tierRetiring {
 				stats.RecordTierRetiringSkipped()
 			}
-			if w < retWeighted || (w == retWeighted && neg < retNeg) {
-				retiring, retWeighted, retNeg = sl, w, neg
+			// Among equally loaded last-resort candidates a busy slot wins
+			// over a draining one: the draining slot stays idle and is
+			// evicted by the health loop instead of being revived.
+			better := w < resWeighted ||
+				(w == resWeighted && (neg < resNeg || (neg == resNeg && !draining(sl) && draining(lastResort))))
+			if better {
+				lastResort, resWeighted, resNeg = sl, w, neg
 			}
 			continue
 		}
@@ -546,7 +590,7 @@ func (p *slotPool) leastActive(live int, recordStats bool) *transportSlot {
 		best, minWeighted, minNeg = sl, w, neg
 	}
 	if best == nil {
-		return retiring
+		return lastResort
 	}
 	return best
 }

@@ -78,13 +78,13 @@ func pickSaturation(sch *slotScheduler, mode string) {
 		sch.priority.slots[1].active.Store(4)
 		sch.priority.slots[2].active.Store(2) // heavy: 2×2 = 4 ≥ base 4
 		sch.priority.slots[3].active.Store(1) // expiring: 1×4 = 4 ≥ base 4
-		sch.priority.slots[4].active.Store(1) // degraded: 1×6 = 6 ≥ base 4
+		sch.priority.slots[4].active.Store(1) // degraded: 1×8 = 8 ≥ base 4
 		for i := 0; i < 3; i++ {
 			sch.bulk.slots[i].active.Store(8)
 		}
 		sch.bulk.slots[3].active.Store(4) // heavy: 4×2 = 8 ≥ base 8
 		sch.bulk.slots[4].active.Store(2) // expiring: 2×4 = 8 ≥ base 8
-		sch.bulk.slots[5].active.Store(2) // degraded: 2×6 = 12 ≥ base 8
+		sch.bulk.slots[5].active.Store(2) // degraded: 2×8 = 16 ≥ base 8
 	}
 }
 
