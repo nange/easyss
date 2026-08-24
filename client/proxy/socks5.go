@@ -41,6 +41,13 @@ type Socks5Server struct {
 	quit           chan struct{}
 	closeOnce      sync.Once
 	udpIdleTimeout time.Duration
+	// dnsRespTimeout bounds how long a proxied-DNS exchange may go without
+	// any server response before it is closed (read-idle timeout). Only DNS
+	// exchanges enable it; 0 disables the mechanism. It exists because the
+	// 60s udpIdleTimeout never fires for exchanges whose client keeps
+	// retrying queries (each Send refreshes lastSeen) while the upstream DNS
+	// server stays silent.
+	dnsRespTimeout time.Duration
 	started        atomic.Bool
 	closing        atomic.Bool
 }
@@ -52,7 +59,7 @@ type directUDPConn struct {
 	lastSeen atomic.Int64 // UnixNano, refreshed on every datagram written
 }
 
-func NewSocks5Server(listenAddr, username, password string, handler *StreamHandler, rt *router.Router, serverDomain string, method protocol.Method, disableQUIC bool, dialTimeout, udpIdleTimeout time.Duration, directDialContext func(context.Context, string, string) (net.Conn, error)) (*Socks5Server, error) {
+func NewSocks5Server(listenAddr, username, password string, handler *StreamHandler, rt *router.Router, serverDomain string, method protocol.Method, disableQUIC bool, dialTimeout, udpIdleTimeout, dnsRespTimeout time.Duration, directDialContext func(context.Context, string, string) (net.Conn, error)) (*Socks5Server, error) {
 	if dialTimeout <= 0 {
 		dialTimeout = 10 * time.Second
 	}
@@ -79,6 +86,7 @@ func NewSocks5Server(listenAddr, username, password string, handler *StreamHandl
 		directUDP:         make(map[string]*directUDPConn),
 		quit:              make(chan struct{}),
 		udpIdleTimeout:    udpIdleTimeout,
+		dnsRespTimeout:    dnsRespTimeout,
 	}
 	srv, err := socks5.NewClassicServer(listenAddr, "127.0.0.1", username, password, 0, 0)
 	if err != nil {

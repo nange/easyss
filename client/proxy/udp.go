@@ -206,7 +206,7 @@ func (s *Socks5Server) proxyDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr
 		return err
 	}
 	if created {
-		go s.receiveLoop(ue, srv, clientAddr, dst, key)
+		go s.receiveLoop(ue, srv, clientAddr, dst, key, s.dnsRespTimeout)
 		return nil // first payload already sent in handshake
 	}
 
@@ -330,7 +330,22 @@ func (s *Socks5Server) evictOldestExchangeLocked() *UDPExchange {
 	return evicted
 }
 
-func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAddr *net.UDPAddr, target, key string) {
+func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAddr *net.UDPAddr, target, key string, respTimeout time.Duration) {
+	// Read-idle timeout for proxied-DNS exchanges: the query was already
+	// sent (Send refreshes lastSeen, so the 60s idle reaper never fires for
+	// a client that keeps retrying while the upstream stays silent), so a
+	// long silence from the server means the upstream DNS is not answering.
+	// Close the exchange so the stream and goroutine cannot pile up; the
+	// next query transparently rebuilds it. Any received datagram resets
+	// the timer. respTimeout <= 0 disables the mechanism (non-DNS UDP).
+	var timer *time.Timer
+	if respTimeout > 0 {
+		timer = time.AfterFunc(respTimeout, func() {
+			log.Debug("[UDP_PROXY] dns response timeout, closing exchange", "key", key, "target", target)
+			ue.Close() //nolint:errcheck // closeOnce makes this safe against concurrent Close
+		})
+		defer timer.Stop()
+	}
 	defer func() {
 		s.udpMu.Lock()
 		delete(s.udpExch, key)
@@ -345,6 +360,9 @@ func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAd
 				log.Debug("[UDP_PROXY] receive", "err", err)
 			}
 			return
+		}
+		if timer != nil {
+			timer.Reset(respTimeout)
 		}
 
 		msg := &dns.Msg{}
@@ -477,7 +495,10 @@ func (s *Socks5Server) proxyUDPRelay(srv *socks5.Server, clientAddr *net.UDPAddr
 		return err
 	}
 	if created {
-		go s.receiveLoop(ue, srv, clientAddr, dst, key)
+		// Non-DNS UDP must not use the short read-idle timeout: a session
+		// may legitimately stay silent for a long time (e.g. an upload-only
+		// flow), so it keeps the 60s bidirectional idle reaper only.
+		go s.receiveLoop(ue, srv, clientAddr, dst, key, 0)
 		return nil // first payload already sent in handshake
 	}
 
