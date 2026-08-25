@@ -93,7 +93,7 @@ jobs:
           name: Nightly-${{ steps.vars.outputs.timestamp_minute }}-${{ steps.vars.outputs.sha_short }}
           tag_name: nightly-${{ steps.vars.outputs.sha_short }}
           prerelease: true
-          body: For testing and development only
+          generate_release_notes: true
           files: |
             bin/*.zip
             bin/*.aar
