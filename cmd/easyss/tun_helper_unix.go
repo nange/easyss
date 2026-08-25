@@ -124,11 +124,38 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	// 11. Block reading stdin until EOF. The main process closes the FIFO
 	//     write end to signal shutdown, or the kernel closes it if the main
 	//     process crashes (even on kill -9).
-	_, _ = io.ReadAll(os.Stdin)
+	//
+	//     While waiting, periodically verify the TUN routes are still in
+	//     place: macOS may clear non-persistent routes after sleep/wake or
+	//     network changes, which silently disables TUN mode (traffic stops
+	//     entering the device). The old tun-only daemon re-added routes
+	//     every 10s to survive sleep/wake (ba6c894); the ephemeral helper
+	//     keeps that behavior for the TUN routes themselves.
+	stdinDone := make(chan struct{})
+	go func() {
+		_, _ = io.ReadAll(os.Stdin)
+		close(stdinDone)
+	}()
 
-	log.Info("[TUN-HELPER] received shutdown signal")
-	return 0
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stdinDone:
+			log.Info("[TUN-HELPER] received shutdown signal")
+			return 0
+		case <-ticker.C:
+			if err := ensureTunRoutes(actualDevice, cfg); err != nil {
+				log.Warn("[TUN-HELPER] route keep-alive check failed", "device", actualDevice, "err", err)
+			}
+		}
+	}
 }
+
+// tunRouteProbe is a destination covered by the TUN routes (the darwin/linux
+// create scripts start at 1.0.0.0/8), used to verify the routes are still
+// present after sleep/wake or network changes.
+const tunRouteProbe = "1.1.1.1"
 
 // fetchTunConfig retrieves the TUN configuration from the main process via
 // GET /tun. It retries with backoff for up to 10 seconds in case the HTTP

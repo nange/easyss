@@ -5,8 +5,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"unsafe"
 
+	"github.com/nange/easyss/v3/client/proxy"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/scripts"
 	"github.com/nange/easyss/v3/util"
 	"golang.org/x/sys/unix"
@@ -99,4 +102,35 @@ func runCloseScript(device, tunGW, localGateway, tunGWV6, serverIPV6, localGatew
 
 	_, _ = util.Command("bash", namePath, device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6)
 	return nil
+}
+
+// ensureTunRoutes verifies the TUN interface is still up and the TUN routes
+// are still present, re-running the create script when they were cleared
+// (e.g. by NetworkManager after a connection change or sleep/wake). Errors
+// from re-applying existing configuration are tolerated: ip only reports
+// "File exists".
+func ensureTunRoutes(device string, cfg *proxy.TunConfig) error {
+	needCreate := false
+
+	out, err := util.Command("ip", "link", "show", device)
+	if err != nil || !strings.Contains(out, "UP") {
+		log.Warn("[TUN-HELPER] interface check failed", "device", device, "err", err)
+		needCreate = true
+	}
+
+	if !needCreate {
+		routeOut, err := util.Command("ip", "route", "get", tunRouteProbe)
+		if err != nil || !strings.Contains(routeOut, "dev "+device) {
+			log.Warn("[TUN-HELPER] route check failed", "device", device, "probe", tunRouteProbe, "err", err, "output", routeOut)
+			needCreate = true
+		}
+	}
+
+	if !needCreate {
+		return nil
+	}
+
+	log.Info("[TUN-HELPER] recreating TUN routes", "device", device)
+	return runCreateScript(device, cfg.TunIP, cfg.TunGW, cfg.LocalGateway,
+		cfg.TunIPV6Sub, cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6)
 }
