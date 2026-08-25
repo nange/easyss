@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/scripts"
 	"github.com/nange/easyss/v3/util"
@@ -77,9 +78,9 @@ func New(cfg Config) *Manager {
 	}
 	if cfg.Device == "" {
 		if runtime.GOOS == "darwin" {
-			cfg.Device = "utun9"
+			cfg.Device = sharedconfig.DefaultTunDeviceNameDarwin
 		} else {
-			cfg.Device = "tun-easyss"
+			cfg.Device = sharedconfig.DefaultTunDeviceName
 		}
 	}
 	if cfg.Interface == "" || cfg.LocalGateway == "" {

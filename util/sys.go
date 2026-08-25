@@ -8,6 +8,8 @@ import (
 	"strconv"
 
 	netroute "github.com/libp2p/go-netroute"
+
+	sharedconfig "github.com/nange/easyss/v3/config"
 )
 
 // easyssTunSubnet is the subnet that the easyss TUN device owns by default
@@ -21,9 +23,9 @@ var easyssTunSubnet = net.IPNet{
 // current platform, mirroring the defaults in client/tun.New.
 func defaultTunDeviceName() string {
 	if runtime.GOOS == "darwin" {
-		return "utun9"
+		return sharedconfig.DefaultTunDeviceNameDarwin
 	}
-	return "tun-easyss"
+	return sharedconfig.DefaultTunDeviceName
 }
 
 // IsTunSubnetAddr reports whether ip lies in the easyss TUN subnet

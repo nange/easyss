@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"testing"
 
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/router"
 	"github.com/xjasonlyu/tun2socks/v2/dialer"
@@ -243,7 +244,7 @@ func TestRefreshDirectDialerIgnoresTunDevice(t *testing.T) {
 		// While TUN is active the Windows/Linux route probe resolves to the
 		// TUN device itself. Binding to it would loop every dial back into
 		// the TUN device.
-		return &net.Interface{Index: 10, Name: "tun-easyss", Flags: net.FlagUp}, nil
+		return &net.Interface{Index: 10, Name: sharedconfig.DefaultTunDeviceName, Flags: net.FlagUp}, nil
 	}
 
 	if c.refreshDirectDialer() {
@@ -303,7 +304,7 @@ func TestDialWithConfigNoRetryWhenRefreshDetectsTun(t *testing.T) {
 	// the TUN device (TUN active): the refresh must keep the old binding and
 	// not retry, since retrying through the TUN device would loop.
 	detectDialIface = func() (*net.Interface, error) {
-		return &net.Interface{Index: 10, Name: "tun-easyss", Flags: net.FlagUp}, nil
+		return &net.Interface{Index: 10, Name: sharedconfig.DefaultTunDeviceName, Flags: net.FlagUp}, nil
 	}
 
 	calls := 0
@@ -329,7 +330,7 @@ func TestDialWithConfigNoRetryWhenRefreshDetectsTun(t *testing.T) {
 }
 
 func TestStartupDialIface(t *testing.T) {
-	tunIface := &net.Interface{Index: 10, Name: "tun-easyss", Flags: net.FlagUp}
+	tunIface := &net.Interface{Index: 10, Name: sharedconfig.DefaultTunDeviceName, Flags: net.FlagUp}
 
 	t.Run("probe returns physical interface", func(t *testing.T) {
 		orig := detectDialIface
@@ -357,7 +358,7 @@ func TestStartupDialIface(t *testing.T) {
 		detectDialIface = func() (*net.Interface, error) { return tunIface, nil }
 		listInterfaces = func() ([]net.Interface, error) {
 			return []net.Interface{
-				{Index: 10, Name: "tun-easyss", Flags: net.FlagUp},
+				{Index: 10, Name: sharedconfig.DefaultTunDeviceName, Flags: net.FlagUp},
 				{Index: 7, Name: "en0", Flags: net.FlagUp},
 			}, nil
 		}
@@ -384,7 +385,7 @@ func TestStartupDialIface(t *testing.T) {
 		})
 		detectDialIface = func() (*net.Interface, error) { return nil, errors.New("no route") }
 		listInterfaces = func() ([]net.Interface, error) {
-			return []net.Interface{{Index: 10, Name: "tun-easyss", Flags: net.FlagUp}}, nil
+			return []net.Interface{{Index: 10, Name: sharedconfig.DefaultTunDeviceName, Flags: net.FlagUp}}, nil
 		}
 
 		c := newTestClient(t, true)
