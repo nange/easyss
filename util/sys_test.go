@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"testing"
 
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -88,9 +89,15 @@ func TestIsTunSubnetAddr(t *testing.T) {
 
 func TestIsTunIface(t *testing.T) {
 	// Name-based match is deterministic and short-circuits before any
-	// OS address lookup.
-	if !IsTunIface(&net.Interface{Name: defaultTunDeviceName()}) {
-		t.Fatalf("expected %s to be recognized as the TUN device", defaultTunDeviceName())
+	// OS address lookup. Both platform default names must be recognized
+	// regardless of the platform the test runs on.
+	for _, name := range []string{
+		sharedconfig.DefaultTunDeviceName,
+		sharedconfig.DefaultTunDeviceNameDarwin,
+	} {
+		if !IsTunIface(&net.Interface{Name: name}) {
+			t.Fatalf("expected %s to be recognized as the TUN device", name)
+		}
 	}
 	if IsTunIface(&net.Interface{Name: "Ethernet"}) {
 		t.Fatal("expected a plain interface name to not be recognized")

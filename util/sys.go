@@ -19,15 +19,6 @@ var easyssTunSubnet = net.IPNet{
 	Mask: net.CIDRMask(15, 32),
 }
 
-// defaultTunDeviceName returns the default easyss TUN device name for the
-// current platform, mirroring the defaults in client/tun.New.
-func defaultTunDeviceName() string {
-	if runtime.GOOS == "darwin" {
-		return sharedconfig.DefaultTunDeviceNameDarwin
-	}
-	return sharedconfig.DefaultTunDeviceName
-}
-
 // IsTunSubnetAddr reports whether ip lies in the easyss TUN subnet
 // (198.18.0.0/15 by default, where the TUN device's own address lives).
 func IsTunSubnetAddr(ip net.IP) bool {
@@ -35,15 +26,18 @@ func IsTunSubnetAddr(ip net.IP) bool {
 }
 
 // IsTunIface reports whether iface is the easyss TUN device: its name matches
-// the easyss TUN device name, or it owns an address in the easyss TUN subnet.
-// The direct dialer must never bind to this interface — binding to it would
-// send every outbound packet back into the TUN device, creating a routing
-// loop through tun2socks.
+// the easyss TUN device name (tun-easyss on windows/linux, utun9 on darwin —
+// both are matched so recognition does not depend on the current platform),
+// or it owns an address in the easyss TUN subnet. The direct dialer must
+// never bind to this interface — binding to it would send every outbound
+// packet back into the TUN device, creating a routing loop through
+// tun2socks.
 func IsTunIface(iface *net.Interface) bool {
 	if iface == nil {
 		return false
 	}
-	if iface.Name == defaultTunDeviceName() {
+	if iface.Name == sharedconfig.DefaultTunDeviceName ||
+		iface.Name == sharedconfig.DefaultTunDeviceNameDarwin {
 		return true
 	}
 	addrs, err := iface.Addrs()
