@@ -32,11 +32,12 @@ import (
 //     heavy slots and finally degraded slots (worst candidate, last
 //     resort). Negative tiers are compared by weighted load — the active
 //     stream count times the compounded weight of the slot's negative
-//     marks (heavy ×2, expiring ×4, degraded ×8, see slotWeight), so 2
-//     streams on a heavy slot weigh like 4 healthy ones and 1 on a
-//     degraded slot like 8, while a heavy+expiring+degraded slot compounds
-//     to ×64. An idle slot (active == 0) carrying expiring or degraded
-//     marks still weighs its mark weight — never 0, see weightedActive:
+//     marks (heavy ×4, expiring ×8, degraded ×16, see slotWeight), so 1
+//     stream on a heavy slot weighs like 4 healthy ones, 1 on an expiring
+//     slot like 8 and 1 on a degraded slot like 16, while a
+//     heavy+expiring+degraded slot compounds to ×512. An idle slot
+//     (active == 0) carrying expiring or degraded marks still weighs its
+//     mark weight — never 0, see weightedActive:
 //     it must not look free, or new streams would keep the tired
 //     connection alive and postpone its eviction. A slot only counts as
 //     full once its weighted load reaches the tier capacity, which
@@ -167,14 +168,17 @@ const (
 
 // Negative-mark load weights, shared by slotWeight (multiplicative) and
 // negativeScore (additive), so the severity order always stays aligned:
-// degraded 8 > expiring 4 > heavy 2. An expiring connection is worse than
+// degraded 16 > expiring 8 > heavy 4. An expiring connection is worse than
 // a merely heavy one — it is due for rotation and should be recycled
 // quickly — hence its weight sits above heavy's; degraded sits above both
-// so persistently slow connections are drained and retired first.
+// so persistently slow connections are drained and retired first. The
+// weights are deliberately high: each negative mark halves the stream
+// capacity of its tier (tierCap / weight), so expiring and degraded slots
+// fill with a single stream and drain to rotation/retirement quickly.
 const (
-	weightHeavy    = 2
-	weightExpiring = 4
-	weightDegraded = 8
+	weightHeavy    = 4
+	weightExpiring = 8
+	weightDegraded = 16
 )
 
 // slotTierOf returns the tier a slot currently belongs to. Heavy+expiring
@@ -222,13 +226,13 @@ func negativeScore(s *transportSlot) int32 {
 // slotWeight returns the load weight of a slot's negative marks, the
 // product of the shared negative-mark weights (weightHeavy, weightExpiring,
 // weightDegraded; no mark: 1). A stream on a heavy+expiring slot weighs
-// weightHeavy×weightExpiring = 8× a healthy stream, one on a
-// heavy+expiring+degraded slot 2×4×8 = 64× — multiple negative states
+// weightHeavy×weightExpiring = 32× a healthy stream, one on a
+// heavy+expiring+degraded slot 4×8×16 = 512× — multiple negative states
 // compound, so a slot is only considered full once its weighted load
 // reaches the pool's threshold. Expiring is weighted deliberately high
-// (4, above heavy's 2): the slot is due for rotation, so streams should
+// (8, above heavy's 4): the slot is due for rotation, so streams should
 // avoid it and let it go idle and be recycled quickly; degraded sits even
-// higher (8) so a slow connection reaches capacity with a single stream
+// higher (16) so a slow connection reaches capacity with a single stream
 // and drains to retirement fast. The idle floor for expiring/degraded
 // marks is applied by weightedActive.
 func slotWeight(s *transportSlot) int32 {
@@ -248,7 +252,7 @@ func slotWeight(s *transportSlot) int32 {
 // weightedActive returns the slot's weighted load: its active stream count
 // scaled by the compounded weight of all its negative marks. An idle slot
 // (active == 0) carrying expiring or degraded marks counts as one stream,
-// so it weighs its mark weight (expiring 4, degraded 8, both 32) instead
+// so it weighs its mark weight (expiring 8, degraded 16, both 128) instead
 // of 0: without the floor it would look free and new streams would pile
 // onto it, keeping the tired connection alive and starving the health
 // loop's rotation/retirement. Heavy needs no floor: heavy > 0 implies at
@@ -361,7 +365,7 @@ func (p *slotPool) tieredSelectAt(live int, recordStats bool) (*transportSlot, b
 	// within the current capacity; it reports whether such a slot exists.
 	// Capacity is compared in weighted load (active × the compounded weight
 	// of the slot's negative marks, floored at the mark weight for idle
-	// negative slots), so a slot with 2 streams and one heavy mark (weight
+	// negative slots), so a slot with 1 stream and one heavy mark (weight
 	// 4) is still open while the pool's threshold is 8 — only once every
 	// candidate slot's weighted load reaches the threshold does the pool
 	// grow. Draining slots (idle with expiring/degraded marks) are skipped
@@ -478,9 +482,9 @@ func floorLog2(v int32) int32 {
 //	level 0: only the active tier has capacity, cap = base;
 //	level k>=1: every negative tier has cap = 2^(k-1)*base.
 //
-// At level 1 that means a heavy slot holds at most base/2 streams, an
-// expiring one base/4, a degraded one base/8 — 2 heavy streams count like
-// 4 healthy ones, 1 degraded like 8, 1 expiring like 4. Every level-up
+// At level 1 that means a heavy slot holds at most base/4 streams, an
+// expiring one base/8, a degraded one base/16 — 1 heavy stream counts like
+// 4 healthy ones, 1 expiring like 8, 1 degraded like 16. Every level-up
 // doubles the negative-tier
 // capacities: the model first spills onto the negative tiers, then piles
 // back onto the active layer until it doubles, then the negative-tier
