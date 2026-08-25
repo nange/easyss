@@ -109,10 +109,7 @@ func SysPowershellMajorVersion() int {
 	return int(v)
 }
 
-var (
-	errUnsupportedPlatform = errors.New("unsupported platform")
-	errNoDefaultRoute      = errors.New("no default route found")
-)
+var errUnsupportedPlatform = errors.New("unsupported platform")
 
 // SysDefaultRoute returns the physical interface and gateway of the IPv4
 // default route (0.0.0.0/0), read from the Windows routing table. Windows may

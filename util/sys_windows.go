@@ -3,12 +3,15 @@
 package util
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+var errNoDefaultRoute = errors.New("no default route found")
 
 // mibIpforwardrow mirrors MIB_IPFORWARDROW (iphlpapi.h). The layout is fixed
 // and documented (14 DWORDs = 56 bytes); only the fields needed for the
