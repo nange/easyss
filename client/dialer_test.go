@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -231,4 +232,164 @@ func TestDialWithConfigPlainPathWhenTunDisabled(t *testing.T) {
 	if called {
 		t.Fatal("bound dial must not be used when TUN is disabled")
 	}
+}
+
+func TestRefreshDirectDialerIgnoresTunDevice(t *testing.T) {
+	orig := detectDialIface
+	t.Cleanup(func() { detectDialIface = orig })
+
+	c := newTestClient(t, true)
+	detectDialIface = func() (*net.Interface, error) {
+		// While TUN is active the Windows/Linux route probe resolves to the
+		// TUN device itself. Binding to it would loop every dial back into
+		// the TUN device.
+		return &net.Interface{Index: 10, Name: "tun-easyss", Flags: net.FlagUp}, nil
+	}
+
+	if c.refreshDirectDialer() {
+		t.Fatal("expected no refresh when the probe resolves to the TUN device")
+	}
+	got, _ := c.bound.Load().(boundIface)
+	if got.name != "en0" || got.index != 4 {
+		t.Fatalf("bound = %+v, want previous en0/index 4 kept", got)
+	}
+}
+
+func TestRefreshDirectDialerIgnoresCustomTunDeviceName(t *testing.T) {
+	orig := detectDialIface
+	t.Cleanup(func() { detectDialIface = orig })
+
+	c := newTestClient(t, true)
+	c.cfg.Local.TunConfig = json.RawMessage(`{"device":"my-tun9"}`)
+
+	t.Run("custom tun device name is rejected", func(t *testing.T) {
+		detectDialIface = func() (*net.Interface, error) {
+			return &net.Interface{Index: 21, Name: "my-tun9", Flags: net.FlagUp}, nil
+		}
+		if c.refreshDirectDialer() {
+			t.Fatal("expected no refresh for the custom-named TUN device")
+		}
+		got, _ := c.bound.Load().(boundIface)
+		if got.name != "en0" {
+			t.Fatalf("bound = %+v, want previous en0 kept", got)
+		}
+	})
+
+	t.Run("unrelated interface still refreshes", func(t *testing.T) {
+		detectDialIface = func() (*net.Interface, error) {
+			return &net.Interface{Index: 22, Name: "en7", Flags: net.FlagUp}, nil
+		}
+		if !c.refreshDirectDialer() {
+			t.Fatal("expected refresh for a physical interface change")
+		}
+		got, _ := c.bound.Load().(boundIface)
+		if got.name != "en7" || got.index != 22 {
+			t.Fatalf("bound = %+v, want en7/index 22", got)
+		}
+	})
+}
+
+func TestDialWithConfigNoRetryWhenRefreshDetectsTun(t *testing.T) {
+	origDetect := detectDialIface
+	origBound := boundDialContext
+	t.Cleanup(func() {
+		detectDialIface = origDetect
+		boundDialContext = origBound
+	})
+
+	c := newTestClient(t, true)
+
+	// The dial fails with a stale-interface error, but the probe resolves to
+	// the TUN device (TUN active): the refresh must keep the old binding and
+	// not retry, since retrying through the TUN device would loop.
+	detectDialIface = func() (*net.Interface, error) {
+		return &net.Interface{Index: 10, Name: "tun-easyss", Flags: net.FlagUp}, nil
+	}
+
+	calls := 0
+	boundDialContext = func(_ *Client, ctx context.Context, network, addr string) (net.Conn, error) {
+		calls++
+		return nil, syscall.ENETDOWN
+	}
+
+	conn, err := c.dialWithConfig(context.Background(), "tcp", "1.2.3.4:80")
+	if !errors.Is(err, syscall.ENETDOWN) {
+		t.Fatalf("err = %v, want ENETDOWN from the first dial", err)
+	}
+	if conn != nil {
+		t.Fatal("expected nil connection")
+	}
+	if calls != 1 {
+		t.Fatalf("bound dial calls = %d, want 1 (no retry through the TUN device)", calls)
+	}
+	got, _ := c.bound.Load().(boundIface)
+	if got.name != "en0" {
+		t.Fatalf("bound = %+v, want previous en0 kept", got)
+	}
+}
+
+func TestStartupDialIface(t *testing.T) {
+	tunIface := &net.Interface{Index: 10, Name: "tun-easyss", Flags: net.FlagUp}
+
+	t.Run("probe returns physical interface", func(t *testing.T) {
+		orig := detectDialIface
+		t.Cleanup(func() { detectDialIface = orig })
+		detectDialIface = func() (*net.Interface, error) {
+			return &net.Interface{Index: 4, Name: "en0", Flags: net.FlagUp}, nil
+		}
+
+		c := newTestClient(t, true)
+		iface := c.startupDialIface()
+		if iface == nil || iface.Name != "en0" {
+			t.Fatalf("startupDialIface = %v, want en0", iface)
+		}
+	})
+
+	t.Run("probe returns TUN device, falls back to physical interface", func(t *testing.T) {
+		origDetect := detectDialIface
+		origList := listInterfaces
+		origAddrs := ifaceAddrs
+		t.Cleanup(func() {
+			detectDialIface = origDetect
+			listInterfaces = origList
+			ifaceAddrs = origAddrs
+		})
+		detectDialIface = func() (*net.Interface, error) { return tunIface, nil }
+		listInterfaces = func() ([]net.Interface, error) {
+			return []net.Interface{
+				{Index: 10, Name: "tun-easyss", Flags: net.FlagUp},
+				{Index: 7, Name: "en0", Flags: net.FlagUp},
+			}, nil
+		}
+		ifaceAddrs = func(iface *net.Interface) ([]net.Addr, error) {
+			if iface.Name != "en0" {
+				return nil, errors.New("no addrs")
+			}
+			return []net.Addr{&net.IPNet{IP: net.IPv4(192, 168, 1, 5), Mask: net.CIDRMask(24, 32)}}, nil
+		}
+
+		c := newTestClient(t, true)
+		iface := c.startupDialIface()
+		if iface == nil || iface.Name != "en0" || iface.Index != 7 {
+			t.Fatalf("startupDialIface = %v, want fallback en0/index 7", iface)
+		}
+	})
+
+	t.Run("probe fails and no usable interface, returns nil", func(t *testing.T) {
+		origDetect := detectDialIface
+		origList := listInterfaces
+		t.Cleanup(func() {
+			detectDialIface = origDetect
+			listInterfaces = origList
+		})
+		detectDialIface = func() (*net.Interface, error) { return nil, errors.New("no route") }
+		listInterfaces = func() ([]net.Interface, error) {
+			return []net.Interface{{Index: 10, Name: "tun-easyss", Flags: net.FlagUp}}, nil
+		}
+
+		c := newTestClient(t, true)
+		if iface := c.startupDialIface(); iface != nil {
+			t.Fatalf("startupDialIface = %v, want nil (unbound fallback)", iface)
+		}
+	})
 }

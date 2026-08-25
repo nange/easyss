@@ -15,7 +15,15 @@ fi
 
 ip link set dev "$tun_device" up  # enable tun device
 
-ip route add 0.0.0.0/1 via "$tun_gw" dev "$tun_device"
+# Route everything except 0.0.0.0/8 through the TUN device, mirroring the
+# darwin script. 0.0.0.1 (used to probe the physical default interface)
+# must stay outside the TUN routes.
+ip route add 1.0.0.0/7 via "$tun_gw" dev "$tun_device"
+ip route add 4.0.0.0/6 via "$tun_gw" dev "$tun_device"
+ip route add 8.0.0.0/5 via "$tun_gw" dev "$tun_device"
+ip route add 16.0.0.0/4 via "$tun_gw" dev "$tun_device"
+ip route add 32.0.0.0/3 via "$tun_gw" dev "$tun_device"
+ip route add 64.0.0.0/2 via "$tun_gw" dev "$tun_device"
 ip route add 128.0.0.0/1 via "$tun_gw" dev "$tun_device"
 ip route add "$local_gateway" via "$tun_gw" dev "$tun_device"
 
