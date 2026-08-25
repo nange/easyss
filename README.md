@@ -335,12 +335,14 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 }
 ```
 
+> **注意**：`server.domain` 需要填**你自己的真实域名**（如 `example.com`），且该域名已解析到本服务器 IP。除非你配置了自定义证书（`cert_path` + `key_path` 都填写），否则此项**必填**——留空会导致启动时自动获取 Let's Encrypt 证书失败。
+
 **参数说明：**
 
 | 参数 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `server.listen` | 是 | - | 服务器监听地址，如 `:443` |
-| `server.domain` | 否 | - | 服务器域名（未使用自定义证书时必填，用于自动获取 Let's Encrypt 证书） |
+| `server.domain` | 条件必填 | - | 服务器域名。**默认必填**：需填写已解析到本服务器 IP 的真实域名，用于自动获取 Let's Encrypt 证书；仅当同时配置了 `cert_path` 和 `key_path`（自定义证书）时才可留空 |
 | `server.password` | 是 | - | 通信加密密钥 |
 | `server.allowed_methods` | 否 | aes-256-gcm, chacha20-poly1305 | 允许的加密方式列表 |
 | `server.cert_path` | 否 | - | 自定义证书文件路径（不为空则使用自定义证书） |
