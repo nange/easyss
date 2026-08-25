@@ -138,4 +138,11 @@ const (
 	EndpointUDP   = "/v3/udp"
 	EndpointICMP  = "/v3/icmp"
 	EndpointProbe = "/v3/probe"
+
+	// TUN device name defaults. Single source of truth shared by
+	// client/tun.New (device creation) and util.IsTunIface (recognizing the
+	// easyss TUN device so the direct dialer never binds to it): both must
+	// reference these constants, never literals.
+	DefaultTunDeviceName       = "tun-easyss"
+	DefaultTunDeviceNameDarwin = "utun9"
 )

@@ -3,12 +3,14 @@ package tun
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"time"
 
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/scripts"
 	"github.com/nange/easyss/v3/util"
@@ -76,19 +78,30 @@ func New(cfg Config) *Manager {
 	}
 	if cfg.Device == "" {
 		if runtime.GOOS == "darwin" {
-			cfg.Device = "utun9"
+			cfg.Device = sharedconfig.DefaultTunDeviceNameDarwin
 		} else {
-			cfg.Device = "tun-easyss"
+			cfg.Device = sharedconfig.DefaultTunDeviceName
 		}
 	}
 	if cfg.Interface == "" || cfg.LocalGateway == "" {
 		gw, dev, err := util.SysGatewayAndDevice()
 		if err == nil {
-			if cfg.Interface == "" {
-				cfg.Interface = dev
+			// Skip the easyss TUN device: when TUN routes are left over from
+			// a previous session the route probe can resolve to it, and the
+			// create script would then route the local gateway through the
+			// TUN device itself.
+			if iface, ierr := net.InterfaceByName(dev); ierr == nil && util.IsTunIface(iface) {
+				log.Warn("[TUN] route probe resolved to easyss TUN device, skipping", "iface", dev)
+				dev = ""
+				gw = ""
 			}
-			if cfg.LocalGateway == "" {
-				cfg.LocalGateway = gw
+			if dev != "" {
+				if cfg.Interface == "" {
+					cfg.Interface = dev
+				}
+				if cfg.LocalGateway == "" {
+					cfg.LocalGateway = gw
+				}
 			}
 		} else {
 			log.Warn("[TUN] detect default gateway/interface failed", "err", err)

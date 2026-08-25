@@ -12,7 +12,15 @@ set server_ip_v6=%7
 netsh interface ip set address %tun_device% static address=%tun_ip% mask=%tun_mask% gateway=%tun_gw%
 netsh interface ip set dns name=%tun_device% static 8.8.8.8
 
-route add 0.0.0.0 mask 128.0.0.0 %tun_gw% metric 5
+rem Route everything except 0.0.0.0/8 through the TUN device, mirroring the
+rem darwin script. 0.0.0.1 (used to probe the physical default interface)
+rem must stay outside the TUN routes.
+route add 1.0.0.0 mask 254.0.0.0 %tun_gw% metric 5
+route add 4.0.0.0 mask 252.0.0.0 %tun_gw% metric 5
+route add 8.0.0.0 mask 248.0.0.0 %tun_gw% metric 5
+route add 16.0.0.0 mask 240.0.0.0 %tun_gw% metric 5
+route add 32.0.0.0 mask 224.0.0.0 %tun_gw% metric 5
+route add 64.0.0.0 mask 192.0.0.0 %tun_gw% metric 5
 route add 128.0.0.0 mask 128.0.0.0 %tun_gw% metric 5
 
 if not "%server_ip_v6%"=="" (

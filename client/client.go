@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -45,17 +46,20 @@ type boundIface struct {
 }
 
 // detectDialIface returns the interface that TUN-mode direct dials should be
-// bound to: the system's default-route interface. It probes a destination in
-// 0.0.0.0/8, which the easyss TUN routes never cover (the darwin create
-// script starts at 1.0.0.0/8), so the lookup yields the physical default
-// interface even while TUN routes are active — binding to the easyss TUN
-// device itself would create a routing loop. Overridable in tests.
+// bound to: the physical default-route interface. On Windows it reads the
+// 0.0.0.0/0 default route from the routing table (skipping the easyss TUN
+// device, which owns its own default route there while TUN is active). On
+// darwin and linux it probes 0.0.0.1, which the easyss TUN routes (starting
+// at 1.0.0.0/7 on every platform) never cover, so the lookup yields the
+// physical default interface even while TUN routes are active — binding to
+// the easyss TUN device itself would create a routing loop. Windows cannot
+// use the probe: its route lookup rejects 0.0.0.0/8 destinations outright.
+// Overridable in tests.
 var detectDialIface = func() (*net.Interface, error) {
-	r, err := netroute.New()
+	iface, _, err := util.SysDefaultRoute()
 	if err != nil {
-		return nil, err
+		iface, err = probeDialIface()
 	}
-	iface, _, _, err := r.Route(net.IPv4(0, 0, 0, 1))
 	if err != nil {
 		return nil, err
 	}
@@ -75,6 +79,103 @@ var detectDialIface = func() (*net.Interface, error) {
 		}
 	}
 	return nil, fmt.Errorf("default interface %s has no global unicast address", iface.Name)
+}
+
+// probeDialIface finds the default-route interface by probing a destination
+// in 0.0.0.0/8, which the easyss TUN routes (starting at 1.0.0.0/7 on every
+// platform) never cover.
+func probeDialIface() (*net.Interface, error) {
+	r, err := netroute.New()
+	if err != nil {
+		return nil, err
+	}
+	iface, _, _, err := r.Route(net.IPv4(0, 0, 0, 1))
+	if err != nil {
+		return nil, err
+	}
+	if iface == nil {
+		return nil, errors.New("no interface for default route")
+	}
+	return iface, nil
+}
+
+// tunDeviceNameFromConfig returns the TUN device name from the raw
+// tun_config JSON, if present. The device name is used to recognize the
+// easyss TUN interface so the direct dialer never binds to it.
+func tunDeviceNameFromConfig(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var cfg struct {
+		Device string `json:"device"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return ""
+	}
+	return cfg.Device
+}
+
+// isTunIface reports whether iface is the easyss TUN device. The direct
+// dialer must never bind to it: packets emitted on the TUN device are
+// captured by tun2socks and forwarded back to the local proxy, whose dials
+// would re-enter the TUN device — an infinite request loop.
+func (c *Client) isTunIface(iface *net.Interface) bool {
+	if util.IsTunIface(iface) {
+		return true
+	}
+	if iface == nil || c.cfg == nil {
+		return false
+	}
+	name := tunDeviceNameFromConfig(c.cfg.Local.TunConfig)
+	return name != "" && iface.Name == name
+}
+
+// listInterfaces enumerates the system interfaces. It is a package-level var
+// so tests can inject a deterministic set.
+var listInterfaces = net.Interfaces
+
+// ifaceAddrs returns the addresses of iface. It is a package-level var so
+// tests can inject deterministic addresses for synthetic interfaces.
+var ifaceAddrs = func(iface *net.Interface) ([]net.Addr, error) { return iface.Addrs() }
+
+// startupDialIface determines the interface the direct dialer is bound to at
+// startup. It prefers the route probe, but rejects the easyss TUN device
+// (e.g. when routes left over from a crashed TUN session redirect the probe
+// to it) and falls back to enumerating physical interfaces. Returns nil when
+// no suitable interface exists, in which case an unbound dialer is used.
+func (c *Client) startupDialIface() *net.Interface {
+	iface, err := detectDialIface()
+	if err == nil && iface != nil && !c.isTunIface(iface) {
+		return iface
+	}
+	if err != nil {
+		log.Warn("[CLIENT] detect default interface failed", "err", err)
+	} else if iface != nil {
+		log.Warn("[CLIENT] detected easyss TUN device as default interface, falling back to interface enumeration", "iface", iface.Name)
+	}
+
+	ifaces, err := listInterfaces()
+	if err != nil {
+		log.Warn("[CLIENT] list interfaces failed", "err", err)
+		return nil
+	}
+	for i := range ifaces {
+		iface := &ifaces[i]
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 || c.isTunIface(iface) {
+			continue
+		}
+		addrs, err := ifaceAddrs(iface)
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			if ipnet, ok := a.(*net.IPNet); ok && ipnet.IP.IsGlobalUnicast() {
+				log.Warn("[CLIENT] using fallback interface for direct dialer", "iface", iface.Name, "index", iface.Index)
+				return iface
+			}
+		}
+	}
+	return nil
 }
 
 // boundDialContext dials through the interface-bound direct dialer. It is a
@@ -134,9 +235,9 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	client.bound.Store(boundIface{})
 
 	directIface := ""
-	iface, err := detectDialIface()
-	if err != nil {
-		log.Warn("[CLIENT] detect default interface failed", "err", err)
+	iface := client.startupDialIface()
+	if iface == nil {
+		log.Warn("[CLIENT] no physical interface found for direct dialer, using unbound dialer")
 		client.dialer.Store(dialer.New())
 	} else {
 		client.dialer.Store(dialer.New(dialer.WithBindToInterface(iface)))
@@ -248,6 +349,16 @@ func (c *Client) refreshDirectDialer() bool {
 		log.Warn("[CLIENT] refresh direct dialer: detect interface failed", "err", err)
 		return false
 	}
+	if c.isTunIface(iface) {
+		// Defense in depth: the probe should never resolve to the easyss TUN
+		// device (0.0.0.1 is outside the TUN routes), but stale routes from
+		// older scripts or custom TUN configurations could redirect it there.
+		// Binding to it would loop every dial back into the TUN device, so
+		// keep the previously-bound physical interface.
+		log.Warn("[CLIENT] refresh direct dialer: detected easyss TUN device, keeping previous binding",
+			"iface", iface.Name, "index", iface.Index)
+		return false
+	}
 
 	prev, _ := c.bound.Load().(boundIface)
 	if prev.name == iface.Name && prev.index == iface.Index {
@@ -264,8 +375,13 @@ func (c *Client) refreshDirectDialer() bool {
 
 // dialerRefreshLoop periodically re-detects the default interface so the
 // direct dialer's interface binding survives sleep/wake and network changes:
-// on macOS the interface captured at startup can go stale after the machine
-// wakes on a different network, breaking every direct dial until restart.
+// the interface captured at startup can go stale after the machine wakes on
+// a different network, breaking every direct dial until restart. On darwin
+// and linux the probe (0.0.0.1) is outside the TUN routes, and on Windows the
+// routing table lookup skips the TUN device, so detection always resolves to
+// the physical interface; refreshDirectDialer additionally rejects the
+// easyss TUN device as a defense against stale routes from older scripts
+// (which covered 0.0.0.0/1) or custom TUN configurations.
 // Only runs while TUN mode is active (the bound dialer is unused otherwise).
 func (c *Client) dialerRefreshLoop() {
 	ticker := time.NewTicker(30 * time.Second)
