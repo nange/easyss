@@ -387,11 +387,14 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 		namePath = newNamePath
 		_, _ = util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device, d.TunGW)
 	case "darwin":
+		// Mirror the helper's runCloseScript argument order:
+		// device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6.
 		if os.Geteuid() == 0 {
-			_, _ = util.CommandContext(ctx, "sh", namePath, d.Device)
+			_, _ = util.CommandContext(ctx, "sh", namePath, d.Device, d.TunGW, d.LocalGateway,
+				d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6)
 		} else {
-			cmd := fmt.Sprintf("do shell script \"sh %s %s\" with administrator privileges",
-				namePath, d.Device)
+			cmd := fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s\" with administrator privileges",
+				namePath, d.Device, d.TunGW, d.LocalGateway, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6)
 			_, _ = util.CommandContext(ctx, "osascript", "-e", cmd)
 		}
 	}
