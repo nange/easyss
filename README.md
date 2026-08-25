@@ -309,7 +309,7 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
     "allowed_methods": ["aes-256-gcm", "chacha20-poly1305"],
     "cert_path": "",
     "key_path": "",
-    "email": "your-email@example.com",
+    "email": "",
     "fallback_target": "",
     "fallback_preserve_host": false,
     "fallback_cdn_domains": [],
