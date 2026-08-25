@@ -1,10 +1,10 @@
 #!/bin/sh
 tun_device=$1
 tun_gw=$2
-local_gateway=$4
-tun_gw_v6=$5
-server_ip_v6=$6
-local_gateway_v6=$7
+local_gateway=$3
+tun_gw_v6=$4
+server_ip_v6=$5
+local_gateway_v6=$6
 
 route delete -net 1.0.0.0/8 "$tun_gw"
 route delete -net 2.0.0.0/7 "$tun_gw"
