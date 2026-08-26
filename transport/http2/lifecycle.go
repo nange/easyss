@@ -256,6 +256,15 @@ func (lc *slotLifecycle) evaluateRotation(idx int, s *transportSlot) {
 		if s.active.Load() == 0 {
 			s.t.CloseIdleConnections()
 			s.expiring.Store(false)
+			// The tired connection has been recycled: zero the deadline
+			// and bytes so rotationDue cannot re-trigger on the old
+			// connection's state — otherwise a slot whose connection was
+			// already closed (idle timeout, server close) would be marked
+			// expiring again on every health tick until the next dial
+			// resets the state via resetConn. The next stream dials a
+			// fresh connection and starts a new lifetime.
+			s.expireAt.Store(0)
+			s.connBytes.Store(0)
 			stats.RecordConnRotated()
 			log.Info("[TRANSPORT] connection rotated", "slot", idx)
 		}

@@ -55,10 +55,16 @@ func TestStatsConnsStatusConsistencyUnderShrink(t *testing.T) {
 				return
 			default:
 			}
+			// Render under the scheduler read lock, exactly like the
+			// production Stats() snapshot: shrink/grow swap-remove slots
+			// under the write lock, so an unlocked render would race with
+			// the array swaps.
+			sch.mu.RLock()
 			pLive := int(sch.priority.liveCount.Load())
 			bLive := int(sch.bulk.liveCount.Load())
 			pStr := slotStatusString(sch.priority, pLive)
 			bStr := slotStatusString(sch.bulk, bLive)
+			sch.mu.RUnlock()
 			pIdxs := parseIndices(pStr)
 			bIdxs := parseIndices(bStr)
 			if len(pIdxs) > pLive {

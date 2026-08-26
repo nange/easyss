@@ -637,9 +637,18 @@ func (s *slotScheduler) grow(highPriority bool) {
 	if target == nil {
 		return
 	}
+	// A revived slot must not inherit the previous connection's rotation
+	// state: shrink/retire swap-remove slots out of the live set without
+	// clearing their marks, so a re-activated slot would otherwise show
+	// stale expiring/degraded verdicts and an overdue deadline until its
+	// first dial completes. Zero the connection-scoped state before the
+	// slot becomes live; the actual dial resets the deadline via resetConn.
 	if live == 0 && target.maxSlots >= 2 {
+		target.slots[live].resetRotation()
+		target.slots[live+1].resetRotation()
 		target.liveCount.Add(2)
 	} else {
+		target.slots[live].resetRotation()
 		target.liveCount.Add(1)
 	}
 }

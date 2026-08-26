@@ -50,6 +50,22 @@ type transportSlot struct {
 	lastProbeAt    time.Time
 }
 
+// resetRotation clears the connection-scoped state of a slot whose
+// connection no longer exists (closed by shrink/retire/rotation, or never
+// established): the deadline, bytes carried and the expiring/degraded marks
+// all go back to the "no connection" baseline. expireAt is zeroed rather
+// than set to a fresh deadline — rotationDue only triggers on expireAt > 0,
+// so a slot without a connection is never judged overdue. The next dial
+// calls resetConn, which sets the real deadline. grow calls this when it
+// re-activates a pre-allocated slot, so a revived slot cannot inherit the
+// previous connection's expired deadline or verdicts.
+func (s *transportSlot) resetRotation() {
+	s.expireAt.Store(0)
+	s.connBytes.Store(0)
+	s.expiring.Store(false)
+	s.degraded.Store(false)
+}
+
 // resetConn (re)initializes the rotation state for a freshly established
 // connection: the lifetime deadline (with per-connection jitter), the bytes
 // carried and the expiring mark all start fresh. The degraded mark is
@@ -60,8 +76,6 @@ type transportSlot struct {
 // transportSlot object, and its new connection must not inherit the old
 // verdict.
 func (s *transportSlot) resetConn(connLifetime time.Duration) {
+	s.resetRotation()
 	s.expireAt.Store(time.Now().Add(rotationLifetime(connLifetime)).UnixNano())
-	s.connBytes.Store(0)
-	s.expiring.Store(false)
-	s.degraded.Store(false)
 }
