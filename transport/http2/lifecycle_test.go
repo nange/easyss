@@ -457,6 +457,7 @@ func TestEvaluateRotation(t *testing.T) {
 		lc := &slotLifecycle{connLifetime: time.Minute}
 		s := &transportSlot{t: &http.Transport{}}
 		s.expireAt.Store(time.Now().Add(-2 * time.Minute).UnixNano())
+		s.connBytes.Store(1024)
 		s.active.Store(1)
 		// First pass: still busy, only mark expiring.
 		lc.evaluateRotation(0, s)
@@ -464,10 +465,24 @@ func TestEvaluateRotation(t *testing.T) {
 			t.Fatal("expected expiring mark")
 		}
 		// Second pass: idle now, rotation completes and clears the mark.
+		// The deadline and bytes are zeroed too, so the completed rotation
+		// cannot re-trigger on the recycled connection's state.
 		s.active.Store(0)
 		lc.evaluateRotation(0, s)
 		if s.expiring.Load() {
 			t.Fatal("expected expiring cleared after rotation")
+		}
+		if s.expireAt.Load() != 0 {
+			t.Fatalf("expireAt = %d, want 0 after rotation completed", s.expireAt.Load())
+		}
+		if s.connBytes.Load() != 0 {
+			t.Fatalf("connBytes = %d, want 0 after rotation completed", s.connBytes.Load())
+		}
+		// Third pass: the slot has no connection anymore, so it must not
+		// be marked expiring again on every tick.
+		lc.evaluateRotation(0, s)
+		if s.expiring.Load() {
+			t.Fatal("expected no expiring mark after rotation completed")
 		}
 	})
 
@@ -480,6 +495,39 @@ func TestEvaluateRotation(t *testing.T) {
 			t.Fatal("fresh connection must not expire")
 		}
 	})
+}
+
+func TestResetRotationClearsMarks(t *testing.T) {
+	s := &transportSlot{}
+	// A slot revived by grow (or after a completed rotation) carries the
+	// previous connection's state: an overdue deadline, bytes carried and
+	// expiring/degraded verdicts. resetRotation must return it to the "no
+	// connection" baseline: no marks, zero deadline, zero bytes — so
+	// rotationDue never triggers on the recycled connection's state.
+	s.degraded.Store(true)
+	s.expiring.Store(true)
+	s.expireAt.Store(time.Now().Add(-time.Minute).UnixNano())
+	s.connBytes.Store(1024)
+
+	s.resetRotation()
+
+	if s.degraded.Load() {
+		t.Fatal("expected degraded cleared")
+	}
+	if s.expiring.Load() {
+		t.Fatal("expected expiring cleared")
+	}
+	if s.connBytes.Load() != 0 {
+		t.Fatalf("connBytes = %d, want 0", s.connBytes.Load())
+	}
+	if s.expireAt.Load() != 0 {
+		t.Fatalf("expireAt = %d, want 0 (no connection yet)", s.expireAt.Load())
+	}
+	// A slot without a connection must never be judged overdue.
+	lc := &slotLifecycle{connLifetime: time.Minute}
+	if lc.rotationDue(s, time.Now()) {
+		t.Fatal("slot without a connection must not be due for rotation")
+	}
 }
 
 func TestResetConnClearsMarks(t *testing.T) {

@@ -1008,6 +1008,54 @@ func TestGrowFirstActivationPerPool(t *testing.T) {
 	}
 }
 
+func TestGrowResetsRevivedSlotState(t *testing.T) {
+	// A slot revived by grow must not inherit the previous connection's
+	// rotation state: shrink/retire swap-remove slots out of the live set
+	// without clearing their marks, so a re-activated slot would otherwise
+	// be judged overdue (expiring) and stay degraded until its first dial
+	// completes — the "fresh slot immediately expiring" symptom.
+	sch := newGrowTestScheduler(6, 3, 0, 0)
+	// Bulk slots 0/1 were shrunk while carrying the old connection's
+	// state: expired deadline, bytes carried, degraded/expiring verdicts.
+	sch.bulk.slots[0].degraded.Store(true)
+	sch.bulk.slots[0].expiring.Store(true)
+	sch.bulk.slots[0].expireAt.Store(time.Now().Add(-time.Minute).UnixNano())
+	sch.bulk.slots[0].connBytes.Store(1024)
+	sch.bulk.slots[1].degraded.Store(true)
+	sch.bulk.slots[1].expireAt.Store(time.Now().Add(-time.Minute).UnixNano())
+
+	// First activation revives two slots at once and must reset both.
+	sch.grow(false)
+	if got := sch.bulk.liveCount.Load(); got != 2 {
+		t.Fatalf("bulk liveCount = %d, want 2 on first activation", got)
+	}
+	lc := &slotLifecycle{connLifetime: time.Minute}
+	for i, s := range []*transportSlot{sch.bulk.slots[0], sch.bulk.slots[1]} {
+		if s.degraded.Load() {
+			t.Fatalf("slot %d: degraded must be cleared on revival", i)
+		}
+		if s.expiring.Load() {
+			t.Fatalf("slot %d: expiring must be cleared on revival", i)
+		}
+		if s.expireAt.Load() != 0 {
+			t.Fatalf("slot %d: expireAt = %d, want 0 until dialed", i, s.expireAt.Load())
+		}
+		if s.connBytes.Load() != 0 {
+			t.Fatalf("slot %d: connBytes = %d, want 0", i, s.connBytes.Load())
+		}
+		if lc.rotationDue(s, time.Now()) {
+			t.Fatalf("slot %d: revived slot without a connection must not be due for rotation", i)
+		}
+		if slotTierOf(s) != tierActive {
+			t.Fatalf("slot %d: tier = %v, want tierActive", i, slotTierOf(s))
+		}
+	}
+	// The revived slots are immediately selectable (not draining/retiring).
+	if got := sch.pick(false); got != sch.bulk.slots[0] {
+		t.Fatalf("pick(false) = slot %d, want revived bulk slot 0", got.idx)
+	}
+}
+
 func TestRemoveShrinksLiveCountAndLocatesPool(t *testing.T) {
 	s0 := &transportSlot{t: &http.Transport{}}
 	s0.active.Store(1)
