@@ -38,6 +38,17 @@ type Stream interface {
 	Close() error
 }
 
+// SlotDrainingStream is implemented by streams whose underlying connection
+// slot is due for eviction: expiring (the connection exceeded its lifetime or
+// bytes limit) or degraded (confirmed persistently low throughput). The proxy
+// layer asserts this optional interface to drain idle streams early (see
+// relay.BidirectionalWithDrain), so lingering keep-alive and half-closed
+// connections cannot postpone the slot's rotation/retirement until the full
+// relay idle timeout. Streams that do not implement it simply never drain.
+type SlotDrainingStream interface {
+	SlotDraining() bool
+}
+
 type OpenRequest struct {
 	Endpoint     string
 	Salt         string

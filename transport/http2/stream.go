@@ -257,3 +257,15 @@ func (s *HTTP2Stream) Close() error {
 }
 
 var _ transport.Stream = (*HTTP2Stream)(nil)
+
+// SlotDraining reports whether the stream's slot is due for eviction: the
+// connection exceeded its lifetime or bytes limit (expiring) or was confirmed
+// persistently slow (degraded), so it should be recycled. The proxy layer
+// asserts transport.SlotDrainingStream on the stream and closes idle streams
+// early via relay.BidirectionalWithDrain, so lingering keep-alive and
+// half-closed connections cannot postpone the slot's rotation/retirement
+// until the full relay idle timeout. Active streams are never drained: the
+// relay only closes them once they have been idle for ExpiringStreamDrainIdle.
+func (s *HTTP2Stream) SlotDraining() bool {
+	return s.slot != nil && (s.slot.expiring.Load() || s.slot.degraded.Load())
+}

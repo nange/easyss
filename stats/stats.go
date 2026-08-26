@@ -59,6 +59,11 @@ type stats struct {
 	slotProbes           atomic.Int64
 	slotProbeSlow        atomic.Int64
 	slotProbeUnsupported atomic.Int64
+	// streamsDrained counts streams closed early by the relay drain
+	// mechanism: idle streams on slots due for eviction (expiring/degraded)
+	// closed before the full idle timeout so rotation/retirement completes
+	// promptly (see relay.BidirectionalWithDrain).
+	streamsDrained atomic.Int64
 
 	rttMu    sync.Mutex
 	rttEWMA  int64 // nanoseconds, EWMA-smoothed pure path RTT
@@ -120,6 +125,7 @@ func RecordSlotProbeSlow()       { g.slotProbeSlow.Add(1) }
 func RecordSlotProbeUnsupported() {
 	g.slotProbeUnsupported.Add(1)
 }
+func RecordStreamDrained() { g.streamsDrained.Add(1) }
 
 const rttAlpha = 0.35
 
@@ -188,6 +194,7 @@ func ResetCounters() {
 	g.slotProbes.Store(0)
 	g.slotProbeSlow.Store(0)
 	g.slotProbeUnsupported.Store(0)
+	g.streamsDrained.Store(0)
 
 	g.rttMu.Lock()
 	g.rttEWMA = 0
@@ -252,6 +259,7 @@ type Snapshot struct {
 	SlotProbes           int64 `json:"slot_probes"`
 	SlotProbeSlow        int64 `json:"slot_probe_slow"`
 	SlotProbeUnsupported int64 `json:"slot_probe_unsupported"`
+	StreamsDrained       int64 `json:"streams_drained"`
 
 	// Speed
 	UploadSpeed            int64  `json:"upload_speed"`
@@ -345,6 +353,7 @@ func Collect() Snapshot {
 		SlotProbes:             g.slotProbes.Load(),
 		SlotProbeSlow:          g.slotProbeSlow.Load(),
 		SlotProbeUnsupported:   g.slotProbeUnsupported.Load(),
+		StreamsDrained:         g.streamsDrained.Load(),
 		UploadSpeed:            upSpeed,
 		DownloadSpeed:          downSpeed,
 		UploadSpeedHuman:       HumanBytes(upSpeed) + "/s",
