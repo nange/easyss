@@ -35,7 +35,7 @@ const (
 	// why a reconnect feels fast again. A slot whose connection exceeded
 	// either limit stops accepting new streams and its idle connection is
 	// closed, so the next stream dials a fresh one (invisible to users).
-	DefaultConnLifetimeSec = 420               // 7min
+	DefaultConnLifetimeSec = 360               // 6min
 	DefaultConnMaxBytes    = 256 * 1024 * 1024 // 256MB，双向（上下行）累计
 
 	// ExpiringStreamDrainIdle bounds how long a stream may stay idle on a

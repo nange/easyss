@@ -152,7 +152,7 @@ Easyss v3 支持两种配置模式，自动识别：
     "conn_count_max": 15,
     "stream_threshold": 4,
     "priority_slot_ratio": 0.4,
-    "conn_lifetime_sec": 420,
+    "conn_lifetime_sec": 360,
     "conn_max_bytes": 268435456
   },
   "shaper": {
@@ -185,7 +185,7 @@ Easyss v3 支持两种配置模式，自动识别：
 | `transport.conn_count_max` | 15 | 最大连接数，懒加载扩容的上限 |
 | `transport.stream_threshold` | 4 | 活跃流达到该阈值且连接数未达上限时，新建连接 |
 | `transport.priority_slot_ratio` | 0.4 | 优先（交互式）槽位占连接数的比例，其余为批量槽位 |
-| `transport.conn_lifetime_sec` | 420 | 单连接最大存活时间（秒），0 使用默认值；到期后停止接收新流并轮换连接 |
+| `transport.conn_lifetime_sec` | 360 | 单连接最大存活时间（秒），0 使用默认值；到期后停止接收新流并轮换连接 |
 | `transport.conn_max_bytes` | 268435456 | 单连接双向累计最大字节数（256MB），0 使用默认值；超限后轮换连接 |
 
 **shaper 参数说明：**
