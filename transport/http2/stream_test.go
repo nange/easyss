@@ -217,3 +217,38 @@ func TestHTTP2Stream_RecordsPathRTTOnResponse(t *testing.T) {
 		}
 	})
 }
+
+// TestHTTP2Stream_SlotDraining verifies the drain signal reflects the slot's
+// eviction marks (expiring/degraded), which drives the proxy's early close of
+// idle streams (relay.BidirectionalWithDrain).
+func TestHTTP2Stream_SlotDraining(t *testing.T) {
+	s, pr := newTestStream()
+	defer pr.Close()
+	defer s.Close()
+
+	slot := &transportSlot{}
+	s.slot = slot
+
+	if s.SlotDraining() {
+		t.Fatal("fresh slot must not report draining")
+	}
+	slot.expiring.Store(true)
+	if !s.SlotDraining() {
+		t.Fatal("expected draining when the slot is expiring")
+	}
+	slot.expiring.Store(false)
+	slot.degraded.Store(true)
+	if !s.SlotDraining() {
+		t.Fatal("expected draining when the slot is degraded")
+	}
+	slot.expiring.Store(true)
+	if !s.SlotDraining() {
+		t.Fatal("expected draining when the slot is expiring+degraded")
+	}
+
+	// A stream without a slot must not panic and never drains.
+	ns := &HTTP2Stream{}
+	if ns.SlotDraining() {
+		t.Fatal("nil slot must not report draining")
+	}
+}

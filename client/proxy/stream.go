@@ -40,6 +40,12 @@ type StreamHandler struct {
 	masterKey         []byte
 	shaperCfg         shaper.Config
 	streamIdleTimeout time.Duration
+	// drainIdle bounds how long a stream may stay idle on a slot due for
+	// eviction (expiring/degraded) before the relay closes it early; 0 uses
+	// the default config.ExpiringStreamDrainIdle. Not exposed as a user
+	// config option — kept as a field so tests can exercise the drain with
+	// short durations.
+	drainIdle time.Duration
 }
 
 func NewStreamHandler(tr transport.Transport, masterKey []byte, shaperCfg shaper.Config, streamIdleTimeout time.Duration) *StreamHandler {
@@ -268,10 +274,33 @@ func (h *StreamHandler) relay(target string, localConn net.Conn, tx shaper.Shape
 		_ = localConn.Close()
 	}
 
-	result := relay.Bidirectional(h.streamIdleTimeout, closeAll,
+	// Drain idle streams on slots due for eviction: once the slot is
+	// expiring (connection over age/bytes) or degraded (confirmed slow),
+	// a stream that has been idle for ExpiringStreamDrainIdle is a lingering
+	// keep-alive or half-closed connection — close it early so the slot's
+	// rotation/retirement is not postponed until the full idle timeout.
+	// Active streams (data flowing) restart the relay's idle clock and are
+	// never drained. Streams whose transport does not implement
+	// SlotDrainingStream simply keep the previous behavior.
+	var drainWhen func() bool
+	if ds, ok := stream.(transport.SlotDrainingStream); ok {
+		drainWhen = ds.SlotDraining
+	}
+	drainIdle := h.drainIdle
+	if drainIdle <= 0 {
+		drainIdle = config.ExpiringStreamDrainIdle
+	}
+
+	result := relay.BidirectionalWithDrain(h.streamIdleTimeout, drainWhen, drainIdle, closeAll,
 		func(signal func()) error { return h.copyLocalToRemote(localConn, tx, signal) },
 		func(signal func()) error { return h.copyRemoteToLocal(rx, localConn, signal, m) },
 	)
+
+	if result.Drained {
+		stats.RecordStreamDrained()
+		log.Debug("[STREAM] drained idle stream on slot due for eviction", "target", target)
+		return fmt.Errorf("%w: drained (slot due for eviction)", ErrStreamIdleTimeout)
+	}
 
 	if result.TimedOut {
 		log.Debug("[STREAM] idle timeout", "timeout", h.streamIdleTimeout)

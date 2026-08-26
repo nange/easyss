@@ -38,6 +38,18 @@ const (
 	DefaultConnLifetimeSec = 420               // 7min
 	DefaultConnMaxBytes    = 256 * 1024 * 1024 // 256MB，双向（上下行）累计
 
+	// ExpiringStreamDrainIdle bounds how long a stream may stay idle on a
+	// slot that is due for eviction (expiring or degraded) before the
+	// client closes it early (see relay.BidirectionalWithDrain). Lingering
+	// keep-alive and half-closed streams otherwise pin the slot's active
+	// count and postpone rotation/retirement until the full relay idle
+	// timeout (10 x DefaultTimeout = 300s). 30s of total silence means the
+	// stream is effectively dead — normal transfers cannot pause that long,
+	// and cover/padding traffic is not counted as activity by the relay —
+	// so closing it interrupts nothing. Active streams (data flowing) are
+	// never drained.
+	ExpiringStreamDrainIdle = 30 * time.Second
+
 	// Fallback timeouts used by the server-side constructors when no
 	// explicit value is provided. DefaultStreamIdleTimeout mirrors the
 	// server's derivation (10 x DefaultTimeout = 300s); the others are
