@@ -14,7 +14,7 @@ GOMOBILE := $(shell go env GOPATH)/bin/gomobile
 ANDROID_ALIGN_LDFLAGS := -extldflags=-Wl,-z,max-page-size=16384
 GOMOBILE_BIND := $(GOMOBILE) bind -target=android/arm64,android/amd64 -androidapi 29 -ldflags '$(LDFLAGS) $(ANDROID_ALIGN_LDFLAGS)'
 
-.PHONY: easyss easyss-headless easyss-windows easyss-server easyss-server-windows easyss-android-aar format test lint
+.PHONY: format lint test easyss easyss-headless easyss-windows easyss-server easyss-server-windows easyss-android-aar
 
 echo:
 	@echo "${PROJECT}"
