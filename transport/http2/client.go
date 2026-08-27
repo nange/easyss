@@ -432,11 +432,14 @@ func (t *HTTP2Transport) Stats() transport.TransportStats {
 	return ts
 }
 
-// slotStatus derives a live slot's connection status from its health flags.
-// Multiple flags are joined with "+" so no state is hidden (a heavy download
-// crossing the connection lifetime is both heavy and expiring); a slot with
-// no flags is "active".
-func slotStatus(s *transportSlot) string {
+// slotStatus derives a live slot's connection status from its health flags
+// and the number of streams currently hosted on it. Multiple flags are
+// joined with "+" so no state is hidden (a heavy download crossing the
+// connection lifetime is both heavy and expiring). A slot with no flags
+// hosting at least one stream is "active"; one with no flags and no streams
+// is an idle warm connection and renders as "idle", so a pool full of
+// connection slots but few streams is not mistaken for active traffic.
+func slotStatus(s *transportSlot, active int) string {
 	var parts []string
 	if s.heavy.Load() > 0 {
 		parts = append(parts, "heavy")
@@ -448,6 +451,9 @@ func slotStatus(s *transportSlot) string {
 		parts = append(parts, "expiring")
 	}
 	if len(parts) == 0 {
+		if active == 0 {
+			return "idle"
+		}
 		return "active"
 	}
 	return strings.Join(parts, "+")
@@ -455,8 +461,10 @@ func slotStatus(s *transportSlot) string {
 
 // slotStatusString renders the live slots of one pool as
 // "<index>:<active streams>:<status>", wrapped in brackets, e.g.
-// "[0:3:degraded, 1:2:expiring, 2:1:active, 3:1:heavy]". Entries are
-// ordered by the stable slot identity (retire swap-removes scramble the
+// "[0:3:degraded, 1:2:expiring, 2:1:active, 3:1:heavy]". A healthy slot
+// hosting no streams renders as "0:idle" (a warm connection), so a burst
+// that grew the pool is distinguishable from real active traffic. Entries
+// are ordered by the stable slot identity (retire swap-removes scramble the
 // live order) and then renumbered from 0, so the rendered indices are
 // always consecutive with no jumps. An empty live set renders as "[]".
 // live must be the pool's liveCount value the caller snapshot under the
@@ -473,10 +481,11 @@ func slotStatusString(pool *slotPool, live int) string {
 	entries := make([]entry, 0, live)
 	for i := 0; i < live; i++ {
 		s := pool.slots[i]
+		a := int(s.active.Load())
 		entries = append(entries, entry{
 			idx:    s.idx,
-			active: int(s.active.Load()),
-			status: slotStatus(s),
+			active: a,
+			status: slotStatus(s, a),
 		})
 	}
 	if len(entries) == 0 {
