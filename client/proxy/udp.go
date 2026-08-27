@@ -86,7 +86,7 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 
 	log.Info("[DNS_PROXY]", "domain", domain, "qtype", qtype)
 	stats.RecordDNSProxyQuery()
-	return s.proxyDNSQuery(srv, clientAddr, d, msg, domain)
+	return s.proxyDNSQuery(srv, clientAddr, msg, domain)
 }
 
 func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg, domain string) error {
@@ -196,21 +196,91 @@ func (s *Socks5Server) exchangeDirectDNS(ctx context.Context, msg *dns.Msg, addr
 	return dnsConn.ReadMsg()
 }
 
-func (s *Socks5Server) proxyDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg, domain string) error {
-	dst := config.ProxyDNSServer
-	key := clientAddr.String() + "_" + dst
+// dnsPendingEntry records one in-flight DNS query forwarded over the shared
+// proxied-DNS stream: the original transaction ID and client to restore and
+// route the response back to, the dedup group hash it belongs to, and the
+// deadline after which an unanswered query is dropped (see sweepDNS).
+type dnsPendingEntry struct {
+	origID   uint16
+	client   *net.UDPAddr
+	hash     uint64
+	deadline time.Time
+}
 
-	ue, created, err := s.getOrCreateUDPExchange(key, dst, d.Data)
+// defaultDNSRespTimeout bounds how long an unanswered proxied-DNS query may
+// stay pending before it is dropped, applied when dnsRespTimeout is not
+// configured (<= 0).
+const defaultDNSRespTimeout = 10 * time.Second
+
+// proxyDNSQuery forwards one DNS query to the upstream proxy DNS server over
+// a single shared HTTP/2 stream. Every proxied DNS query — from any client
+// and any source port — shares the one stream keyed by the upstream address,
+// so a burst of concurrent queries (which previously opened one stream per
+// (client address, target)) can no longer inflate the transport's bulk
+// connection pool. Because the stream is shared, each query's transaction ID
+// is rewritten to a globally unique ID (allocDNSID) and the response is
+// routed back by the shared receive loop (receiveLoopSharedDNS). Concurrent
+// byte-identical queries (differing only in the transaction ID) are merged
+// into a single upstream round trip via dnsDedup.
+func (s *Socks5Server) proxyDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr, msg *dns.Msg, domain string) error {
+	dst := config.ProxyDNSServer
+	key := "dns_" + dst
+
+	// Rewrite the transaction ID before forwarding: the shared stream
+	// carries queries from every client, so the original per-client IDs may
+	// collide. The rewritten ID is what the shared receive loop uses to
+	// route the response back.
+	origID := msg.Id
+	rid := s.allocDNSID()
+	msg.Id = rid
+	packed, err := msg.Pack()
 	if err != nil {
+		log.Error("[UDP_PROXY] pack dns query", "domain", domain, "err", err)
+		return err
+	}
+
+	// Register the pending response before any receive loop can process it
+	// (on a fresh stream the query rides inside the bootstrap record).
+	respTimeout := s.dnsRespTimeout
+	if respTimeout <= 0 {
+		respTimeout = defaultDNSRespTimeout
+	}
+	hash := dnsQueryHash(packed)
+	s.dnsPendingMu.Lock()
+	s.dnsPending[rid] = dnsPendingEntry{
+		origID:   origID,
+		client:   clientAddr,
+		hash:     hash,
+		deadline: time.Now().Add(respTimeout),
+	}
+	s.dnsPendingMu.Unlock()
+
+	// Merge concurrent identical queries (same bytes except the ID) into
+	// one upstream round trip: receiveLoopSharedDNS clones the primary
+	// response to the waiters.
+	s.dnsDedupMu.Lock()
+	if group, ok := s.dnsDedup[hash]; ok {
+		s.dnsDedup[hash] = append(group, rid)
+		s.dnsDedupMu.Unlock()
+		log.Debug("[DNS_PROXY] deduplicated concurrent query", "domain", domain, "qtype", dns.TypeToString[msg.Question[0].Qtype])
+		return nil
+	}
+	s.dnsDedup[hash] = []uint16{rid}
+	s.dnsDedupMu.Unlock()
+
+	ue, created, err := s.getOrCreateUDPExchange(key, dst, packed)
+	if err != nil {
+		s.dropDNSPending(rid, hash)
 		log.Error("[UDP_PROXY] open exchange", "dst", dst, "err", err)
 		return err
 	}
 	if created {
-		go s.receiveLoop(ue, srv, clientAddr, dst, key, s.dnsRespTimeout)
+		go s.receiveLoopSharedDNS(ue, srv, dst, key)
 		return nil // first payload already sent in handshake
 	}
 
-	if err := ue.Send(d.Data); err != nil {
+	if err := ue.Send(packed); err != nil {
+		s.dropDNSPending(rid, hash)
 		log.Error("[UDP_PROXY] send", "err", err)
 		s.udpMu.Lock()
 		delete(s.udpExch, key)
@@ -219,6 +289,129 @@ func (s *Socks5Server) proxyDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr
 		return err
 	}
 	return nil
+}
+
+// allocDNSID returns a globally unique 16-bit DNS transaction ID for a query
+// on the shared proxied-DNS stream. Pending entries live at most
+// dnsRespTimeout, so the counter effectively never wraps into a live ID; on
+// the theoretical collision the counter is bumped until a free ID is found.
+func (s *Socks5Server) allocDNSID() uint16 {
+	for {
+		rid := uint16(s.dnsNextID.Add(1))
+		if rid == 0 {
+			continue
+		}
+		s.dnsPendingMu.Lock()
+		_, busy := s.dnsPending[rid]
+		s.dnsPendingMu.Unlock()
+		if !busy {
+			return rid
+		}
+	}
+}
+
+// dnsQueryHash hashes a packed DNS query with the transaction ID bytes
+// skipped, so byte-identical queries that differ only in their ID hash alike
+// and can share one upstream round trip. The rest of the packet — flags,
+// question, EDNS options — participates, so queries with different attributes
+// are never merged.
+func dnsQueryHash(packed []byte) uint64 {
+	const (
+		offset64 = 14695981039346656037 // FNV-1a 64-bit offset basis
+		prime64  = 1099511628211
+	)
+	var h uint64 = offset64
+	for i, c := range packed {
+		if i < 2 { // DNS transaction ID
+			continue
+		}
+		h ^= uint64(c)
+		h *= prime64
+	}
+	return h
+}
+
+// dropDNSPending removes a pending query whose upstream round trip failed
+// before any response could arrive, and updates its dedup group: when the
+// primary failed the whole group is dead (no upstream query exists to answer
+// the waiters), otherwise the waiter is just unregistered.
+func (s *Socks5Server) dropDNSPending(rid uint16, hash uint64) {
+	s.dnsPendingMu.Lock()
+	delete(s.dnsPending, rid)
+	s.dnsPendingMu.Unlock()
+
+	s.dnsDedupMu.Lock()
+	defer s.dnsDedupMu.Unlock()
+	group, ok := s.dnsDedup[hash]
+	if !ok {
+		return
+	}
+	if len(group) > 0 && group[0] == rid {
+		delete(s.dnsDedup, hash)
+		return
+	}
+	for i, w := range group {
+		if w == rid {
+			group = append(group[:i], group[i+1:]...)
+			break
+		}
+	}
+	if len(group) == 0 {
+		delete(s.dnsDedup, hash)
+	} else {
+		s.dnsDedup[hash] = group
+	}
+}
+
+// sweepDNS drops pending proxied-DNS responses whose deadline elapsed (the
+// upstream DNS server stayed silent) and cleans up their dedup groups. Unlike
+// the old per-client exchange close, this never tears down the shared stream:
+// only stale pending entries are discarded, so one stuck query cannot affect
+// the other clients' in-flight queries. Run from the cleanup loop.
+func (s *Socks5Server) sweepDNS() {
+	now := time.Now()
+	var expired []uint16
+	s.dnsPendingMu.Lock()
+	for rid, e := range s.dnsPending {
+		if now.After(e.deadline) {
+			expired = append(expired, rid)
+			delete(s.dnsPending, rid)
+		}
+	}
+	s.dnsPendingMu.Unlock()
+	if len(expired) == 0 {
+		return
+	}
+
+	s.dnsDedupMu.Lock()
+	defer s.dnsDedupMu.Unlock()
+	for hash, group := range s.dnsDedup {
+		if containsRID(expired, group[0]) {
+			// The primary expired: no upstream query is in flight for the
+			// group, so the waiters could never be answered — drop the
+			// whole group (their pending entries expire on their own).
+			delete(s.dnsDedup, hash)
+			continue
+		}
+		kept := group[:0]
+		for _, rid := range group {
+			if !containsRID(expired, rid) {
+				kept = append(kept, rid)
+			}
+		}
+		if len(kept) != len(group) {
+			s.dnsDedup[hash] = kept
+		}
+	}
+}
+
+func containsRID(list []uint16, rid uint16) bool {
+	for _, r := range list {
+		if r == rid {
+			return true
+		}
+	}
+	return false
 }
 
 // udpExchangeFactory deduplicates concurrent attempts to create a UDPExchange
@@ -330,22 +523,7 @@ func (s *Socks5Server) evictOldestExchangeLocked() *UDPExchange {
 	return evicted
 }
 
-func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAddr *net.UDPAddr, target, key string, respTimeout time.Duration) {
-	// Read-idle timeout for proxied-DNS exchanges: the query was already
-	// sent (Send refreshes lastSeen, so the 60s idle reaper never fires for
-	// a client that keeps retrying while the upstream stays silent), so a
-	// long silence from the server means the upstream DNS is not answering.
-	// Close the exchange so the stream and goroutine cannot pile up; the
-	// next query transparently rebuilds it. Any received datagram resets
-	// the timer. respTimeout <= 0 disables the mechanism (non-DNS UDP).
-	var timer *time.Timer
-	if respTimeout > 0 {
-		timer = time.AfterFunc(respTimeout, func() {
-			log.Debug("[UDP_PROXY] dns response timeout, closing exchange", "key", key, "target", target)
-			ue.Close() //nolint:errcheck // closeOnce makes this safe against concurrent Close
-		})
-		defer timer.Stop()
-	}
+func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAddr *net.UDPAddr, target, key string) {
 	defer func() {
 		s.udpMu.Lock()
 		delete(s.udpExch, key)
@@ -361,38 +539,118 @@ func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAd
 			}
 			return
 		}
-		if timer != nil {
-			timer.Reset(respTimeout)
+
+		msg := &dns.Msg{}
+		if err := msg.Unpack(data); err == nil && util.IsDNSResponse(msg) && len(msg.Question) > 0 {
+			s.handleDNSResponse(srv, msg, clientAddr, target)
+			continue
+		}
+		s.sendToClient(srv, clientAddr, data, target)
+	}
+}
+
+// handleDNSResponse applies the client-side DNS response handling (AAAA
+// stripping when IPv6 is disabled, cache population, custom-proxy-domain IP
+// learning, logging) and delivers the response to the given client. The
+// message ID must already be restored to the originating client's ID.
+func (s *Socks5Server) handleDNSResponse(srv *socks5.Server, msg *dns.Msg, clientAddr *net.UDPAddr, dst string) {
+	if len(msg.Question) > 0 && s.router.ShouldIPV6Disable() && msg.Question[0].Qtype == dns.TypeAAAA {
+		msg.Answer = nil
+	}
+	packed, err := msg.Pack()
+	if err != nil {
+		log.Debug("[UDP_PROXY] pack dns response", "err", err)
+		return
+	}
+	_ = s.dnsCache.Set(msg, false)
+
+	domain := strings.TrimSuffix(msg.Question[0].Name, ".")
+	qtype := dns.TypeToString[msg.Question[0].Qtype]
+	log.Info("[DNS_PROXY] result", "domain", domain, "qtype", qtype, "answers", util.DNSAnswerStrings(msg))
+
+	if s.router.IsCustomProxyDomain(domain) {
+		for _, ans := range msg.Answer {
+			switch a := ans.(type) {
+			case *dns.A:
+				s.router.AddProxyIP(a.A.String())
+			case *dns.AAAA:
+				s.router.AddProxyIP(a.AAAA.String())
+			case *dns.CNAME:
+				s.router.AddProxyDomain(strings.TrimSuffix(a.Target, "."))
+			}
+		}
+	}
+	s.sendToClient(srv, clientAddr, packed, dst)
+}
+
+// receiveLoopSharedDNS reads responses on the shared proxied-DNS stream and
+// routes each back to the originating client via the rewritten transaction ID
+// (see proxyDNSQuery). Concurrent identical queries (dnsDedup) are answered
+// by cloning the primary response. Unlike the per-client receiveLoop, an
+// unanswered query never closes the shared stream — its pending entry simply
+// expires and is swept (see sweepDNS), so one stuck query cannot kill the
+// other clients' in-flight queries.
+func (s *Socks5Server) receiveLoopSharedDNS(ue *UDPExchange, srv *socks5.Server, dst, key string) {
+	defer func() {
+		s.udpMu.Lock()
+		delete(s.udpExch, key)
+		s.udpMu.Unlock()
+		ue.Close() //nolint:errcheck
+	}()
+
+	for {
+		data, err := ue.Receive()
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				log.Debug("[UDP_PROXY] receive", "err", err)
+			}
+			return
 		}
 
 		msg := &dns.Msg{}
-		if err := msg.Unpack(data); err == nil && util.IsDNSResponse(msg) {
-			if s.router.ShouldIPV6Disable() && msg.Question[0].Qtype == dns.TypeAAAA {
-				msg.Answer = nil
-				if packed, packErr := msg.Pack(); packErr == nil {
-					data = packed
-				}
-			}
-			_ = s.dnsCache.Set(msg, false)
-
-			domain := strings.TrimSuffix(msg.Question[0].Name, ".")
-			qtype := dns.TypeToString[msg.Question[0].Qtype]
-			log.Info("[DNS_PROXY] result", "domain", domain, "qtype", qtype, "answers", util.DNSAnswerStrings(msg))
-
-			if s.router.IsCustomProxyDomain(domain) {
-				for _, ans := range msg.Answer {
-					switch a := ans.(type) {
-					case *dns.A:
-						s.router.AddProxyIP(a.A.String())
-					case *dns.AAAA:
-						s.router.AddProxyIP(a.AAAA.String())
-					case *dns.CNAME:
-						s.router.AddProxyDomain(strings.TrimSuffix(a.Target, "."))
-					}
-				}
-			}
+		if err := msg.Unpack(data); err != nil || !util.IsDNSResponse(msg) || len(msg.Question) == 0 {
+			continue
 		}
-		s.sendToClient(srv, clientAddr, data, target)
+
+		rid := msg.Id
+		s.dnsPendingMu.Lock()
+		entry, ok := s.dnsPending[rid]
+		if ok {
+			delete(s.dnsPending, rid)
+		}
+		s.dnsPendingMu.Unlock()
+		if !ok {
+			// Stale or unknown ID (late response, or the query was swept):
+			// drop it rather than misrouting to a client.
+			continue
+		}
+
+		// Restore the primary client's ID and deliver.
+		msg.Id = entry.origID
+		s.handleDNSResponse(srv, msg, entry.client, dst)
+
+		// Fan out to byte-identical waiters from the dedup group.
+		s.dnsDedupMu.Lock()
+		group := s.dnsDedup[entry.hash]
+		delete(s.dnsDedup, entry.hash)
+		s.dnsDedupMu.Unlock()
+		for _, w := range group {
+			if w == rid {
+				continue // the primary itself
+			}
+			s.dnsPendingMu.Lock()
+			wEntry, ok := s.dnsPending[w]
+			if ok {
+				delete(s.dnsPending, w)
+			}
+			s.dnsPendingMu.Unlock()
+			if !ok {
+				continue
+			}
+			clone := *msg
+			clone.Id = wEntry.origID
+			s.handleDNSResponse(srv, &clone, wEntry.client, dst)
+		}
 	}
 }
 
@@ -498,7 +756,7 @@ func (s *Socks5Server) proxyUDPRelay(srv *socks5.Server, clientAddr *net.UDPAddr
 		// Non-DNS UDP must not use the short read-idle timeout: a session
 		// may legitimately stay silent for a long time (e.g. an upload-only
 		// flow), so it keeps the 60s bidirectional idle reaper only.
-		go s.receiveLoop(ue, srv, clientAddr, dst, key, 0)
+		go s.receiveLoop(ue, srv, clientAddr, dst, key)
 		return nil // first payload already sent in handshake
 	}
 

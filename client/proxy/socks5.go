@@ -41,15 +41,28 @@ type Socks5Server struct {
 	quit           chan struct{}
 	closeOnce      sync.Once
 	udpIdleTimeout time.Duration
-	// dnsRespTimeout bounds how long a proxied-DNS exchange may go without
-	// any server response before it is closed (read-idle timeout). Only DNS
-	// exchanges enable it; 0 disables the mechanism. It exists because the
-	// 60s udpIdleTimeout never fires for exchanges whose client keeps
-	// retrying queries (each Send refreshes lastSeen) while the upstream DNS
-	// server stays silent.
+	// dnsRespTimeout bounds how long an unanswered proxied-DNS query may stay
+	// pending on the shared DNS stream before it is dropped (see
+	// proxyDNSQuery and sweepDNS). It exists because the 60s udpIdleTimeout
+	// never fires for a stream whose client keeps retrying queries while the
+	// upstream DNS server stays silent.
 	dnsRespTimeout time.Duration
-	started        atomic.Bool
-	closing        atomic.Bool
+	// Shared proxied-DNS state: every client's DNS queries to the upstream
+	// proxy DNS server share a single HTTP/2 stream (see proxyDNSQuery), so a
+	// burst of concurrent queries cannot inflate the transport's bulk
+	// connection pool. Each forwarded query gets a globally unique rewritten
+	// transaction ID; dnsPending maps that ID back to the originating client
+	// and its original ID so the shared receive loop routes responses
+	// correctly. dnsDedup groups concurrent byte-identical queries
+	// (differing only in the transaction ID) so a burst of duplicate lookups
+	// costs a single upstream round trip.
+	dnsNextID    atomic.Uint32
+	dnsPendingMu sync.Mutex
+	dnsPending   map[uint16]dnsPendingEntry // rewritten ID → pending query
+	dnsDedupMu   sync.Mutex
+	dnsDedup     map[uint64][]uint16 // query hash → rewritten IDs (first = primary)
+	started      atomic.Bool
+	closing      atomic.Bool
 }
 
 // directUDPConn pairs a direct-UDP socket with its last-write timestamp so
@@ -87,6 +100,8 @@ func NewSocks5Server(listenAddr, username, password string, handler *StreamHandl
 		quit:              make(chan struct{}),
 		udpIdleTimeout:    udpIdleTimeout,
 		dnsRespTimeout:    dnsRespTimeout,
+		dnsPending:        make(map[uint16]dnsPendingEntry),
+		dnsDedup:          make(map[uint64][]uint16),
 	}
 	srv, err := socks5.NewClassicServer(listenAddr, "127.0.0.1", username, password, 0, 0)
 	if err != nil {
@@ -403,6 +418,10 @@ func (s *Socks5Server) cleanupLoop() {
 	for {
 		select {
 		case <-ticker.C:
+			// Drop proxied-DNS queries the upstream never answered (see
+			// sweepDNS); the shared DNS stream itself is left alone.
+			s.sweepDNS()
+
 			var stale []*UDPExchange
 			s.udpMu.Lock()
 			for key, ue := range s.udpExch {
