@@ -113,6 +113,7 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 			Endpoint:     endpoint,
 			Salt:         saltB64,
 			HighPriority: isInteractivePort(target),
+			Target:       target,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("transport open: %w", err)

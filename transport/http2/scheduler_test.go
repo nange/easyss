@@ -3,6 +3,7 @@ package http2
 import (
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -943,7 +944,8 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 
 // TestGrowConcurrent stresses grow's double-checked locking: concurrent
 // growers must serialize on the write lock and re-evaluate under it, so a
-// burst of streams can never over-grow a pool.
+// burst of streams can never over-grow a pool — and exactly one grower
+// reports the growth (the request that actually activated the slot).
 func TestGrowConcurrent(t *testing.T) {
 	t.Run("concurrent growers activate the sibling once", func(t *testing.T) {
 		sch := newGrowTestScheduler(10, 5, 5, 0)
@@ -952,16 +954,22 @@ func TestGrowConcurrent(t *testing.T) {
 		}
 		const n = 64
 		var wg sync.WaitGroup
+		var grown atomic.Int64
 		wg.Add(n)
 		for i := 0; i < n; i++ {
 			go func() {
 				defer wg.Done()
-				sch.grow(true)
+				if pool, _ := sch.grow(true); pool != nil {
+					grown.Add(1)
+				}
 			}()
 		}
 		wg.Wait()
 		if got := sch.bulk.liveCount.Load(); got != 2 {
 			t.Fatalf("bulk liveCount = %d, want 2 (single first activation under concurrency)", got)
+		}
+		if got := grown.Load(); got != 1 {
+			t.Fatalf("grow reported growth %d times, want 1 (only the activating request)", got)
 		}
 	})
 
@@ -974,16 +982,87 @@ func TestGrowConcurrent(t *testing.T) {
 		sch.bulk.slots[1].active.Store(8)
 		const n = 64
 		var wg sync.WaitGroup
+		var grown atomic.Int64
 		wg.Add(n)
 		for i := 0; i < n; i++ {
 			go func() {
 				defer wg.Done()
-				sch.grow(true)
+				if pool, _ := sch.grow(true); pool != nil {
+					grown.Add(1)
+				}
 			}()
 		}
 		wg.Wait()
 		if got := sch.bulk.liveCount.Load(); got != 3 {
 			t.Fatalf("bulk liveCount = %d, want 3 (at most one slot added under concurrency)", got)
+		}
+		if got := grown.Load(); got != 1 {
+			t.Fatalf("grow reported growth %d times, want 1 (only the activating request)", got)
+		}
+	})
+}
+
+// TestGrowReturnValue verifies grow's reporting contract: nil when no
+// growth happened, otherwise the grown pool with its post-growth live
+// count — Open uses this to attribute a slot expansion to the request
+// that triggered it.
+func TestGrowReturnValue(t *testing.T) {
+	t.Run("nil while the pool has tier capacity", func(t *testing.T) {
+		sch := newGrowTestScheduler(10, 5, 1, 1)
+		sch.priority.slots[0].active.Store(3) // below threshold 4
+		if pool, live := sch.grow(true); pool != nil {
+			t.Fatalf("grow returned pool=%p live=%d with capacity left", pool, live)
+		}
+	})
+
+	t.Run("grows own pool once saturated", func(t *testing.T) {
+		sch := newGrowTestScheduler(10, 5, 1, 1)
+		sch.priority.slots[0].active.Store(4) // at threshold
+		pool, live := sch.grow(true)
+		if pool != sch.priority {
+			t.Fatalf("grow returned %v, want the priority pool", pool)
+		}
+		if live != 2 {
+			t.Fatalf("live = %d, want 2", live)
+		}
+		if got := sch.priority.liveCount.Load(); got != 2 {
+			t.Fatalf("priority liveCount = %d, want 2", got)
+		}
+	})
+
+	t.Run("first activation reports 2 slots", func(t *testing.T) {
+		sch := newGrowTestScheduler(10, 5, 0, 0)
+		pool, live := sch.grow(false)
+		if pool != sch.bulk {
+			t.Fatalf("grow returned %v, want the bulk pool", pool)
+		}
+		if live != 2 {
+			t.Fatalf("live = %d, want 2 on first activation", live)
+		}
+	})
+
+	t.Run("cross-pool growth reports the sibling pool", func(t *testing.T) {
+		sch := newGrowTestScheduler(10, 5, 5, 0)
+		for i := 0; i < 5; i++ {
+			sch.priority.slots[i].active.Store(4)
+		}
+		pool, live := sch.grow(true)
+		if pool != sch.bulk {
+			t.Fatalf("grow returned %v, want the bulk (sibling) pool", pool)
+		}
+		if live != 2 {
+			t.Fatalf("live = %d, want 2 (first bulk activation)", live)
+		}
+	})
+
+	t.Run("nil when both pools are at their caps", func(t *testing.T) {
+		sch := newGrowTestScheduler(10, 5, 5, 5)
+		for i := 0; i < 5; i++ {
+			sch.priority.slots[i].active.Store(4)
+			sch.bulk.slots[i].active.Store(8)
+		}
+		if pool, live := sch.grow(true); pool != nil {
+			t.Fatalf("grow returned pool=%p live=%d with both pools at their caps", pool, live)
 		}
 	})
 }

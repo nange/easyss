@@ -7,6 +7,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/transport"
 )
 
 // TestStatsConnsStatusConsistencyUnderShrink stresses the scheduler with a
@@ -119,4 +122,86 @@ func parseIndices(s string) []int {
 		idxs = append(idxs, n)
 	}
 	return idxs
+}
+
+// TestGrowEventRingOrderAndCap verifies the growth-event ring: newest
+// first, bounded at maxGrowEvents, carrying the triggering request's
+// endpoint and target.
+func TestGrowEventRingOrderAndCap(t *testing.T) {
+	slots := make([]*transportSlot, 4)
+	for i := range slots {
+		slots[i] = &transportSlot{idx: i}
+	}
+	tr := &HTTP2Transport{sched: newScheduler(4, slots, 4, 2)}
+
+	for i := 0; i < maxGrowEvents+4; i++ {
+		tr.recordGrowEvent("bulk", int32(i), transport.OpenRequest{
+			Endpoint: sharedconfig.EndpointUDP,
+			Target:   "8.8.8.8:53",
+		})
+	}
+
+	evs := tr.Stats().GrowEvents
+	if len(evs) != maxGrowEvents {
+		t.Fatalf("GrowEvents = %d, want %d (ring bound)", len(evs), maxGrowEvents)
+	}
+	// Newest first: the last recorded event (live = maxGrowEvents+3) heads
+	// the snapshot, the oldest surviving (live = 4) tails it.
+	if evs[0].Live != maxGrowEvents+3 {
+		t.Fatalf("head event live = %d, want %d (newest first)", evs[0].Live, maxGrowEvents+3)
+	}
+	if evs[0].Pool != "bulk" || evs[0].Endpoint != sharedconfig.EndpointUDP || evs[0].Target != "8.8.8.8:53" {
+		t.Fatalf("head event fields wrong: %+v", evs[0])
+	}
+	if evs[len(evs)-1].Live != 4 {
+		t.Fatalf("tail event live = %d, want 4 (oldest surviving)", evs[len(evs)-1].Live)
+	}
+}
+
+// TestGrowEventRingConcurrent stresses the growth-event ring: a producer
+// goroutine recording events while a reader goroutine snapshots Stats() —
+// must stay race-free and never exceed the ring bound.
+func TestGrowEventRingConcurrent(t *testing.T) {
+	slots := make([]*transportSlot, 4)
+	for i := range slots {
+		slots[i] = &transportSlot{idx: i}
+	}
+	tr := &HTTP2Transport{sched: newScheduler(4, slots, 4, 2)}
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			tr.recordGrowEvent("bulk", 3, transport.OpenRequest{
+				Endpoint: sharedconfig.EndpointTCP,
+				Target:   "1.2.3.4:53",
+			})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			_ = tr.Stats()
+		}
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	close(done)
+	wg.Wait()
+
+	if got := len(tr.Stats().GrowEvents); got > maxGrowEvents {
+		t.Fatalf("GrowEvents = %d, want <= %d", got, maxGrowEvents)
+	}
 }

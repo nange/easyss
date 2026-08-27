@@ -608,6 +608,10 @@ func (p *slotPool) leastActive(live int, recordStats bool) *transportSlot {
 // saturation. Only when both pools are at their caps does pick fall back
 // to the tiered selection and finally the least-loaded slot.
 //
+// grow reports the pool that actually grew and its live slot count after
+// the activation; a nil pool means no growth happened (the caller then
+// knows this request did not trigger an expansion).
+//
 // Concurrency: the growth decision and the liveCount update happen inside
 // one critical section (s.mu write lock) — the unlocked fast path only
 // filters out the common no-growth case, and growTarget is re-evaluated
@@ -620,11 +624,11 @@ func (p *slotPool) leastActive(live int, recordStats bool) *transportSlot {
 // activated at once for better initial throughput, since typical web
 // browsing generates more than 8 concurrent streams; falls back to 1 when
 // maxSlots is 1.
-func (s *slotScheduler) grow(highPriority bool) {
+func (s *slotScheduler) grow(highPriority bool) (*slotPool, int32) {
 	pool := s.poolOf(highPriority)
 	target, _ := s.growTarget(pool)
 	if target == nil {
-		return
+		return nil, 0
 	}
 
 	// A new connection is needed — grow under lock.
@@ -635,7 +639,7 @@ func (s *slotScheduler) grow(highPriority bool) {
 	// activated the slot (or changed the tiers) while we waited.
 	target, live := s.growTarget(pool)
 	if target == nil {
-		return
+		return nil, 0
 	}
 	// A revived slot must not inherit the previous connection's rotation
 	// state: shrink/retire swap-remove slots out of the live set without
@@ -647,10 +651,11 @@ func (s *slotScheduler) grow(highPriority bool) {
 		target.slots[live].resetRotation()
 		target.slots[live+1].resetRotation()
 		target.liveCount.Add(2)
-	} else {
-		target.slots[live].resetRotation()
-		target.liveCount.Add(1)
+		return target, 2
 	}
+	target.slots[live].resetRotation()
+	target.liveCount.Add(1)
+	return target, live + 1
 }
 
 // growTarget decides whether a new connection is needed and which pool it

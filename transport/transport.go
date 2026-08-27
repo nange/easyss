@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 )
 
 // HandshakeRejectedError reports that the server answered the bootstrap
@@ -53,6 +54,11 @@ type OpenRequest struct {
 	Endpoint     string
 	Salt         string
 	HighPriority bool
+	// Target is the stream's original destination as "host:port" (domain
+	// or IP). It never participates in scheduling — it is carried so the
+	// transport can attribute a slot-growth event to the request that
+	// triggered it (see TransportStats.GrowEvents).
+	Target string
 }
 
 type TransportStats struct {
@@ -70,6 +76,25 @@ type TransportStats struct {
 	// by "+". The bulk pool renders the same way into BulkConnsStatus.
 	PriorityConnsStatus string `json:"priority_conns_status,omitempty"`
 	BulkConnsStatus     string `json:"bulk_conns_status,omitempty"`
+	// GrowEvents lists the most recent slot-growth events (new connections
+	// activated by the lazy-expansion scheduler), newest first, bounded to
+	// a small ring (see HTTP2Transport.recordGrowEvent). Each event records
+	// the pool that grew, the live slot count after growth, and the
+	// endpoint/target of the request that triggered the growth, so a
+	// sudden connection-count jump can be attributed to the traffic that
+	// caused it.
+	GrowEvents []GrowEvent `json:"recent_grow_events,omitempty"`
+}
+
+// GrowEvent is one slot-growth (new live connection) occurrence: which
+// pool grew, the live slot count after growth, and the request that
+// triggered it (its protocol endpoint and target host:port).
+type GrowEvent struct {
+	Time     time.Time `json:"time"`
+	Pool     string    `json:"pool"` // "priority" or "bulk"
+	Live     int       `json:"live"` // live slot count after growth
+	Endpoint string    `json:"endpoint"`
+	Target   string    `json:"target"`
 }
 
 type Transport interface {
