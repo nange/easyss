@@ -58,7 +58,7 @@ const testDNSRespTimeout = 200 * time.Millisecond
 func newTimeoutTestServer(t *testing.T, streams []transport.Stream) *Socks5Server {
 	t.Helper()
 	h := newTestStreamHandler(&mockTransport{streams: streams})
-	srv, err := NewSocks5Server("127.0.0.1:0", "", "", h, nil, "", protocol.MethodAES256GCM, true, 10*time.Second, 30*time.Second, testDNSRespTimeout, nil)
+	srv, err := NewSocks5Server("127.0.0.1:0", "", "", h, nil, "", protocol.MethodAES256GCM, true, 10*time.Second, 30*time.Second, testDNSRespTimeout, 0, nil)
 	if err != nil {
 		t.Fatalf("NewSocks5Server: %v", err)
 	}

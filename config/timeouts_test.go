@@ -5,16 +5,29 @@ import (
 	"time"
 )
 
+// TestDefaultStreamIdleTimeoutDerived guards the single-source-of-truth
+// constraint: the fallback default must always equal the formula evaluated
+// at the default base timeout, never a second magic number.
+func TestDefaultStreamIdleTimeoutDerived(t *testing.T) {
+	want := StreamIdleTimeout(time.Duration(DefaultTimeout) * time.Second)
+	if DefaultStreamIdleTimeout != want {
+		t.Errorf("DefaultStreamIdleTimeout = %v, want StreamIdleTimeout(DefaultTimeout) = %v", DefaultStreamIdleTimeout, want)
+	}
+	if DefaultStreamIdleTimeout <= 0 {
+		t.Fatalf("DefaultStreamIdleTimeout must be positive, got %v", DefaultStreamIdleTimeout)
+	}
+}
+
 func TestStreamIdleTimeout(t *testing.T) {
 	tests := []struct {
 		name    string
 		timeout time.Duration
 		want    time.Duration
 	}{
-		{"默认值 30s", 30 * time.Second, 300 * time.Second},
+		{"默认值 30s", 30 * time.Second, 120 * time.Second},
 		{"0s", 0, 0},
-		{"小值 5s", 5 * time.Second, 50 * time.Second},
-		{"大值 120s", 120 * time.Second, 20 * time.Minute},
+		{"小值 5s", 5 * time.Second, 20 * time.Second},
+		{"大值 120s", 120 * time.Second, 8 * time.Minute},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

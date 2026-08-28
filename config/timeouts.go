@@ -13,9 +13,12 @@ import "time"
 // value (default 30s, see DefaultTimeout).
 
 // StreamIdleTimeout returns the TCP stream idle timeout derived from the
-// user-configured base timeout (10 x base; default 30s -> 300s).
+// user-configured base timeout (4 x base; default 30s -> 120s). The
+// multiplier bounds how long a stream may sit completely silent before the
+// relay tears it down: generous enough to survive slow, idle connections
+// (SSH, long-polling) while still reaping half-open or dead peers.
 func StreamIdleTimeout(base time.Duration) time.Duration {
-	return 10 * base
+	return 4 * base
 }
 
 // UDPIdleTimeout returns the UDP session idle/read timeout (2 x base;

@@ -41,7 +41,7 @@ func (d *recordingDialer) dialed() []net.Conn {
 func newDirectUDPTestServer(t *testing.T, dial func(context.Context, string, string) (net.Conn, error)) *Socks5Server {
 	t.Helper()
 	h := newTestStreamHandler(&mockTransport{})
-	srv, err := NewSocks5Server("127.0.0.1:0", "", "", h, nil, "", protocol.MethodAES256GCM, true, 10*time.Second, 30*time.Second, 0, dial)
+	srv, err := NewSocks5Server("127.0.0.1:0", "", "", h, nil, "", protocol.MethodAES256GCM, true, 10*time.Second, 30*time.Second, 0, 0, dial)
 	if err != nil {
 		t.Fatalf("NewSocks5Server: %v", err)
 	}
