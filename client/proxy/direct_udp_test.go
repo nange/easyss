@@ -79,7 +79,7 @@ func directTestDatagram(dst string, data byte) *socks5.Datagram {
 // (client, target) key handled concurrently create exactly one direct UDP
 // session. The pre-fix code raced between the map check and the insert, so
 // both handlers dialed: one socket was orphaned (leaking it plus its read
-// goroutine for up to the 2-minute read deadline) and the orphan's cleanup
+// goroutine for up to the read-idle deadline) and the orphan's cleanup
 // then deleted the LIVE map entry, churning a fresh socket every ~2 minutes
 // for long-lived flows (QUIC, games, VoIP).
 func TestDirectUDPRelayConcurrentDial(t *testing.T) {

@@ -422,7 +422,7 @@ func (s *Socks5Server) cleanupLoop() {
 			// Direct UDP sessions get the same idle recycling: a remote peer
 			// that stops responding (or a datagram flow that simply ended)
 			// must not pin the socket and its reader goroutine until the
-			// 2-minute read deadline fires.
+			// read loop's own read-idle deadline fires.
 			for key, dc := range s.directUDP {
 				if time.Since(time.Unix(0, dc.lastSeen.Load())) > s.udpIdleTimeout {
 					log.Debug("[UDP_DIRECT] idle cleanup", "key", key)

@@ -466,9 +466,9 @@ func (s *Socks5Server) directUDPRelay(srv *socks5.Server, clientAddr *net.UDPAdd
 // result, so exactly one socket and one read loop exist per (client, target)
 // flow. Without the dedup, two datagrams of the same flow handled
 // concurrently both missed the map lookup and both dialed: one socket was
-// orphaned (leaking it plus its read goroutine until the 2-minute read
+// orphaned (leaking it plus its read goroutine until the read-idle
 // deadline), and the orphan's cleanup then deleted the LIVE map entry,
-// churning a fresh socket for the flow every ~2 minutes.
+// churning a fresh socket for the flow every ~udpIdleTimeout.
 func (s *Socks5Server) getOrCreateDirectUDPSession(srv *socks5.Server, clientAddr *net.UDPAddr, dst, key string) (*directUDPConn, error) {
 	s.udpMu.RLock()
 	dc, ok := s.directUDP[key]
@@ -518,10 +518,13 @@ func (s *Socks5Server) getOrCreateDirectUDPSession(srv *socks5.Server, clientAdd
 }
 
 // directUDPReadLoop relays datagrams from the direct remote back to the
-// client until the socket fails or the 2-minute read deadline fires with no
-// data. On exit it closes the socket and removes the session from the map,
-// but only while the entry still points at this session - never at a newer
-// one that replaced it.
+// client until the socket fails or the read-idle deadline fires with no
+// data. The deadline is the same udpIdleTimeout the cleanup loop uses to
+// reap idle sessions (2 x the user-configured timeout), mirroring the
+// server-side UDP handler which also reads with its 2 x timeout idle
+// deadline. On exit it closes the socket and removes the session from the
+// map, but only while the entry still points at this session - never at a
+// newer one that replaced it.
 func (s *Socks5Server) directUDPReadLoop(srv *socks5.Server, clientAddr *net.UDPAddr, dst, key string, dc *directUDPConn) {
 	rc := dc.conn
 	defer func() {
@@ -535,7 +538,7 @@ func (s *Socks5Server) directUDPReadLoop(srv *socks5.Server, clientAddr *net.UDP
 	buf := bytespool.Get(protocol.MaxUDPDataSize)
 	defer bytespool.MustPut(buf)
 	for {
-		_ = rc.SetReadDeadline(time.Now().Add(2 * time.Minute))
+		_ = rc.SetReadDeadline(time.Now().Add(s.udpIdleTimeout))
 		n, err := rc.Read(buf)
 		if err != nil {
 			return
