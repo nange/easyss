@@ -72,8 +72,11 @@ type TransportStats struct {
 	// priority pool, e.g. "[0:3:degraded, 1:2:expiring, 2:1:active]". Each
 	// element is "<index>:<active streams>:<status>" where indices are
 	// consecutive from 0 (ordered by stable connection identity) and status
-	// is one of active/heavy/degraded/expiring, with multiple flags joined
-	// by "+". The bulk pool renders the same way into BulkConnsStatus.
+	// is one of idle/active/heavy/degraded/expiring, with multiple flags
+	// joined by "+". "idle" marks a healthy connection hosting no streams
+	// (a warm connection), so a pool grown by a past burst is
+	// distinguishable from active traffic. The bulk pool renders the same
+	// way into BulkConnsStatus.
 	PriorityConnsStatus string `json:"priority_conns_status,omitempty"`
 	BulkConnsStatus     string `json:"bulk_conns_status,omitempty"`
 	// GrowEvents lists the most recent slot-growth events (new connections
