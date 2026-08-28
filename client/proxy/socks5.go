@@ -34,6 +34,10 @@ type Socks5Server struct {
 	disableQUIC       bool
 	directDialContext func(context.Context, string, string) (net.Conn, error)
 	dialTimeout       time.Duration
+	// streamIdleTimeout bounds idle direct-TCP relays; derived from the
+	// user-configured base timeout via config.StreamIdleTimeout so the
+	// direct path matches the proxied path's stream idle timeout.
+	streamIdleTimeout time.Duration
 
 	udpMu   sync.RWMutex
 	udpExch map[string]*UDPExchange
@@ -67,12 +71,15 @@ type directUDPConn struct {
 	lastSeen atomic.Int64 // UnixNano, refreshed on every datagram written
 }
 
-func NewSocks5Server(listenAddr, username, password string, handler *StreamHandler, rt *router.Router, serverDomain string, method protocol.Method, disableQUIC bool, dialTimeout, udpIdleTimeout, dnsRespTimeout time.Duration, directDialContext func(context.Context, string, string) (net.Conn, error)) (*Socks5Server, error) {
+func NewSocks5Server(listenAddr, username, password string, handler *StreamHandler, rt *router.Router, serverDomain string, method protocol.Method, disableQUIC bool, dialTimeout, udpIdleTimeout, dnsRespTimeout, streamIdleTimeout time.Duration, directDialContext func(context.Context, string, string) (net.Conn, error)) (*Socks5Server, error) {
 	if dialTimeout <= 0 {
 		dialTimeout = config.DefaultDialTimeout
 	}
 	if udpIdleTimeout <= 0 {
 		udpIdleTimeout = config.DefaultUDPIdleTimeout
+	}
+	if streamIdleTimeout <= 0 {
+		streamIdleTimeout = config.DefaultStreamIdleTimeout
 	}
 	if directDialContext == nil {
 		directDialContext = defaultDirectDialContext
@@ -89,6 +96,7 @@ func NewSocks5Server(listenAddr, username, password string, handler *StreamHandl
 		disableQUIC:       disableQUIC,
 		directDialContext: directDialContext,
 		dialTimeout:       dialTimeout,
+		streamIdleTimeout: streamIdleTimeout,
 		udpExch:           make(map[string]*UDPExchange),
 		directUDP:         make(map[string]*directUDPConn),
 		quit:              make(chan struct{}),
@@ -274,7 +282,7 @@ func (s *Socks5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 			return err
 		}
 		defer rc.Close() //nolint:errcheck
-		relayTCP(rc, c)
+		relayTCP(rc, c, s.streamIdleTimeout)
 		log.Debug("[TCP_DIRECT] relay finished", "target", target)
 		return nil
 	case router.HostRuleProxy:
@@ -351,20 +359,18 @@ func (s *Socks5Server) replyError(c net.Conn, r *socks5.Request, rep byte) error
 	return err
 }
 
-// directRelayIdleTimeout bounds how long a direct TCP relay may sit idle
-// before both connections are torn down. The proxied path enforces its own
-// idle timeout via relay.Bidirectional (StreamHandler.streamIdleTimeout);
-// the direct path previously had no deadline at all, so a silent or
-// half-open peer left the two copy goroutines and their sockets leaked
-// forever. It mirrors the stream idle timeout (10 x the user timeout).
-const directRelayIdleTimeout = config.DefaultStreamIdleTimeout
-
 // relayTCP copies bytes in both directions between dst and src with a shared
 // idle timeout, mirroring the proxied path's relay semantics: on clean EOF a
 // half-close is propagated, and on idle timeout or error both connections
 // are closed exactly once.
-func relayTCP(dst, src net.Conn) {
-	result := relay.Bidirectional(directRelayIdleTimeout, func() {
+//
+// idleTimeout bounds how long the relay may sit idle before both connections
+// are torn down, so a silent or half-open peer cannot leave the two copy
+// goroutines and their sockets alive forever. The caller derives it from the
+// user-configured base timeout (config.StreamIdleTimeout), keeping the direct
+// path consistent with the proxied path's stream idle timeout.
+func relayTCP(dst, src net.Conn, idleTimeout time.Duration) {
+	result := relay.Bidirectional(idleTimeout, func() {
 		_ = dst.Close()
 		_ = src.Close()
 	},

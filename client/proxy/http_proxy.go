@@ -75,7 +75,7 @@ func NewHTTPProxyServer(listenAddr, socksAddr, username, password string, timeou
 		return nil, fmt.Errorf("http proxy requires a local socks5 address")
 	}
 	if timeout <= 0 {
-		timeout = 30 * time.Second
+		timeout = time.Duration(config.DefaultTimeout) * time.Second
 	}
 	if dial == nil {
 		dial = defaultDirectDialContext
@@ -363,7 +363,7 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 		if err := writeConnectEstablished(hijConn, target); err != nil {
 			return
 		}
-		relayTCP(remote, hijConn)
+		relayTCP(remote, hijConn, config.StreamIdleTimeout(s.timeout))
 		return
 	}
 
@@ -378,7 +378,7 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 		if err := writeConnectEstablished(hijConn, target); err != nil {
 			return
 		}
-		relayTCP(remote, hijConn)
+		relayTCP(remote, hijConn, config.StreamIdleTimeout(s.timeout))
 		return
 	}
 
