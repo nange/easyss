@@ -281,11 +281,11 @@ func (s *Server) Start() error {
 			log.Error("[SERVER] next proxy load file failed", "err", err)
 			return fmt.Errorf("next proxy load file: %w", err)
 		}
-		np.SetDialTimeout(handler.DialTimeout(timeout))
+		np.SetDialTimeout(sharedconfig.DialTimeout(timeout))
 		log.Info("[SERVER] next proxy configured", "url", s.cfg.NextProxy.URL, "udp", s.cfg.NextProxy.EnableUDP, "all_host", s.cfg.NextProxy.AllHost)
 	}
 
-	streamIdleTimeout := 10 * timeout
+	streamIdleTimeout := sharedconfig.StreamIdleTimeout(timeout)
 
 	proxyHandler := handler.NewProxyHandler(handler.ProxyHandlerConfig{
 		MasterKey:         masterKey,
@@ -293,7 +293,7 @@ func (s *Server) Start() error {
 		HandshakeTimeout:  timeout,
 		Timeout:           timeout,
 		StreamIdleTimeout: streamIdleTimeout,
-		UDPIdleTimeout:    2 * timeout,
+		UDPIdleTimeout:    sharedconfig.UDPIdleTimeout(timeout),
 		BatchWindowMS:     s.cfg.BatchWindowMS,
 		CoverBudgetRatio:  s.cfg.CoverBudgetRatio,
 		CoverBudgetCap:    s.cfg.CoverBudgetCap,

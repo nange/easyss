@@ -69,10 +69,10 @@ type directUDPConn struct {
 
 func NewSocks5Server(listenAddr, username, password string, handler *StreamHandler, rt *router.Router, serverDomain string, method protocol.Method, disableQUIC bool, dialTimeout, udpIdleTimeout, dnsRespTimeout time.Duration, directDialContext func(context.Context, string, string) (net.Conn, error)) (*Socks5Server, error) {
 	if dialTimeout <= 0 {
-		dialTimeout = 10 * time.Second
+		dialTimeout = config.DefaultDialTimeout
 	}
 	if udpIdleTimeout <= 0 {
-		udpIdleTimeout = 30 * time.Second
+		udpIdleTimeout = config.DefaultUDPIdleTimeout
 	}
 	if directDialContext == nil {
 		directDialContext = defaultDirectDialContext
@@ -356,8 +356,8 @@ func (s *Socks5Server) replyError(c net.Conn, r *socks5.Request, rep byte) error
 // idle timeout via relay.Bidirectional (StreamHandler.streamIdleTimeout);
 // the direct path previously had no deadline at all, so a silent or
 // half-open peer left the two copy goroutines and their sockets leaked
-// forever.
-const directRelayIdleTimeout = 300 * time.Second
+// forever. It mirrors the stream idle timeout (10 x the user timeout).
+const directRelayIdleTimeout = config.DefaultStreamIdleTimeout
 
 // relayTCP copies bytes in both directions between dst and src with a shared
 // idle timeout, mirroring the proxied path's relay semantics: on clean EOF a

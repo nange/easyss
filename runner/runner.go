@@ -11,6 +11,7 @@ import (
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/proxy"
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
@@ -48,9 +49,9 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 	}
 
 	timeout := cfg.TimeoutDuration()
-	streamIdleTimeout := 10 * timeout
-	udpIdleTimeout := 2 * timeout
-	dialTimeout := timeout / 2
+	streamIdleTimeout := sharedconfig.StreamIdleTimeout(timeout)
+	udpIdleTimeout := sharedconfig.UDPIdleTimeout(timeout)
+	dialTimeout := sharedconfig.DialTimeout(timeout)
 
 	streamHandler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, streamIdleTimeout)
 

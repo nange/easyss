@@ -22,6 +22,7 @@ import (
 	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/router"
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/protocol"
 	server "github.com/nange/easyss/v3/server"
 	serverconfig "github.com/nange/easyss/v3/server/config"
@@ -306,9 +307,9 @@ func newTestHarness(t *testing.T) *testHarness {
 
 	// Create stream handler
 	timeout := clientCfg.TimeoutDuration()
-	streamIdleTimeout := 10 * timeout
-	udpIdleTimeout := 2 * timeout
-	dialTimeout := timeout / 2
+	streamIdleTimeout := sharedconfig.StreamIdleTimeout(timeout)
+	udpIdleTimeout := sharedconfig.UDPIdleTimeout(timeout)
+	dialTimeout := sharedconfig.DialTimeout(timeout)
 	shaperCfg := shaper.Config{
 		BatchWindowMS: clientCfg.Shaper.BatchWindowMS,
 		Cover: shaper.CoverConfig{
