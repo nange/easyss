@@ -17,6 +17,7 @@ require (
 	github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20260808015004-d24a73449e3a
 	golang.org/x/crypto v0.55.0
 	golang.org/x/net v0.58.0
+	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/time v0.15.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
@@ -248,7 +249,6 @@ require (
 	golang.org/x/exp/typeparams v0.0.0-20260820142414-ca536658362e // indirect
 	golang.org/x/mobile v0.0.0-20260820023541-8e8303b9da6c // indirect
 	golang.org/x/mod v0.40.0 // indirect
-	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/tools v0.49.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect

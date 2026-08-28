@@ -18,6 +18,7 @@ import (
 	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/txthinking/socks5"
+	"golang.org/x/sync/singleflight"
 
 	easydns "github.com/nange/easyss/v3/client/dns"
 )
@@ -34,11 +35,17 @@ type Socks5Server struct {
 	directDialContext func(context.Context, string, string) (net.Conn, error)
 	dialTimeout       time.Duration
 
-	udpMu          sync.RWMutex
-	udpExch        map[string]*UDPExchange
-	udpInflight    map[string]*udpExchangeFactory
-	directUDP      map[string]*directUDPConn
-	directInflight map[string]*directUDPFactory
+	udpMu   sync.RWMutex
+	udpExch map[string]*UDPExchange
+	// udpExchangeSF deduplicates concurrent OpenUDPExchange calls for the
+	// same (client, target) key; udpInflightCount tracks how many creations
+	// are in flight so the exchange cap can account for them.
+	udpExchangeSF    singleflight.Group
+	udpInflightCount atomic.Int64
+	directUDP        map[string]*directUDPConn
+	// directUDPSF deduplicates concurrent direct-UDP dials for the same
+	// (client, target) key.
+	directUDPSF    singleflight.Group
 	quit           chan struct{}
 	closeOnce      sync.Once
 	udpIdleTimeout time.Duration
@@ -83,9 +90,7 @@ func NewSocks5Server(listenAddr, username, password string, handler *StreamHandl
 		directDialContext: directDialContext,
 		dialTimeout:       dialTimeout,
 		udpExch:           make(map[string]*UDPExchange),
-		udpInflight:       make(map[string]*udpExchangeFactory),
 		directUDP:         make(map[string]*directUDPConn),
-		directInflight:    make(map[string]*directUDPFactory),
 		quit:              make(chan struct{}),
 		udpIdleTimeout:    udpIdleTimeout,
 		dnsRespTimeout:    dnsRespTimeout,
