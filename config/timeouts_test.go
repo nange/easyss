@@ -24,10 +24,10 @@ func TestStreamIdleTimeout(t *testing.T) {
 		timeout time.Duration
 		want    time.Duration
 	}{
-		{"默认值 30s", 30 * time.Second, 300 * time.Second},
+		{"默认值 30s", 30 * time.Second, 120 * time.Second},
 		{"0s", 0, 0},
-		{"小值 5s", 5 * time.Second, 50 * time.Second},
-		{"大值 120s", 120 * time.Second, 20 * time.Minute},
+		{"小值 5s", 5 * time.Second, 20 * time.Second},
+		{"大值 120s", 120 * time.Second, 8 * time.Minute},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
