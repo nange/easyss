@@ -18,6 +18,7 @@ import (
 	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/txthinking/socks5"
+	"golang.org/x/sync/singleflight"
 
 	easydns "github.com/nange/easyss/v3/client/dns"
 )
@@ -34,10 +35,17 @@ type Socks5Server struct {
 	directDialContext func(context.Context, string, string) (net.Conn, error)
 	dialTimeout       time.Duration
 
-	udpMu          sync.RWMutex
-	udpExch        map[string]*UDPExchange
-	udpInflight    map[string]*udpExchangeFactory
-	directUDP      map[string]*directUDPConn
+	udpMu   sync.RWMutex
+	udpExch map[string]*UDPExchange
+	// udpExchangeSF deduplicates concurrent OpenUDPExchange calls for the
+	// same (client, target) key; udpInflightCount tracks how many creations
+	// are in flight so the exchange cap can account for them.
+	udpExchangeSF    singleflight.Group
+	udpInflightCount atomic.Int64
+	directUDP        map[string]*directUDPConn
+	// directUDPSF deduplicates concurrent direct-UDP dials for the same
+	// (client, target) key.
+	directUDPSF    singleflight.Group
 	quit           chan struct{}
 	closeOnce      sync.Once
 	udpIdleTimeout time.Duration
@@ -61,10 +69,10 @@ type directUDPConn struct {
 
 func NewSocks5Server(listenAddr, username, password string, handler *StreamHandler, rt *router.Router, serverDomain string, method protocol.Method, disableQUIC bool, dialTimeout, udpIdleTimeout, dnsRespTimeout time.Duration, directDialContext func(context.Context, string, string) (net.Conn, error)) (*Socks5Server, error) {
 	if dialTimeout <= 0 {
-		dialTimeout = 10 * time.Second
+		dialTimeout = config.DefaultDialTimeout
 	}
 	if udpIdleTimeout <= 0 {
-		udpIdleTimeout = 30 * time.Second
+		udpIdleTimeout = config.DefaultUDPIdleTimeout
 	}
 	if directDialContext == nil {
 		directDialContext = defaultDirectDialContext
@@ -82,7 +90,6 @@ func NewSocks5Server(listenAddr, username, password string, handler *StreamHandl
 		directDialContext: directDialContext,
 		dialTimeout:       dialTimeout,
 		udpExch:           make(map[string]*UDPExchange),
-		udpInflight:       make(map[string]*udpExchangeFactory),
 		directUDP:         make(map[string]*directUDPConn),
 		quit:              make(chan struct{}),
 		udpIdleTimeout:    udpIdleTimeout,
@@ -349,8 +356,8 @@ func (s *Socks5Server) replyError(c net.Conn, r *socks5.Request, rep byte) error
 // idle timeout via relay.Bidirectional (StreamHandler.streamIdleTimeout);
 // the direct path previously had no deadline at all, so a silent or
 // half-open peer left the two copy goroutines and their sockets leaked
-// forever.
-const directRelayIdleTimeout = 300 * time.Second
+// forever. It mirrors the stream idle timeout (10 x the user timeout).
+const directRelayIdleTimeout = config.DefaultStreamIdleTimeout
 
 // relayTCP copies bytes in both directions between dst and src with a shared
 // idle timeout, mirroring the proxied path's relay semantics: on clean EOF a
@@ -415,7 +422,7 @@ func (s *Socks5Server) cleanupLoop() {
 			// Direct UDP sessions get the same idle recycling: a remote peer
 			// that stops responding (or a datagram flow that simply ended)
 			// must not pin the socket and its reader goroutine until the
-			// 2-minute read deadline fires.
+			// read loop's own read-idle deadline fires.
 			for key, dc := range s.directUDP {
 				if time.Since(time.Unix(0, dc.lastSeen.Load())) > s.udpIdleTimeout {
 					log.Debug("[UDP_DIRECT] idle cleanup", "key", key)

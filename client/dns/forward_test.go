@@ -109,3 +109,38 @@ func TestForwardQueryAllServersUnavailable(t *testing.T) {
 		t.Fatalf("expected nil reply, got %v", reply)
 	}
 }
+
+// TestForwardQuerySkipsSelfAsUpstream verifies the forward server never uses
+// itself as a fallback upstream. During TUN mode the system DNS points at
+// 127.0.0.1 (this very server); without the filter the fallback would
+// recurse into itself, piling up goroutines and UDP sockets until the
+// per-query timeout unwound the chain.
+func TestForwardQuerySkipsSelfAsUpstream(t *testing.T) {
+	old := systemDNSServersFunc
+	systemDNSServersFunc = func() []string {
+		// The system DNS in TUN mode: this forward server itself (the
+		// real discovery formats it as host:port), plus an unreachable
+		// extra.
+		return []string{"127.0.0.1:53", "127.0.0.1:1"}
+	}
+	t.Cleanup(func() {
+		systemDNSServersFunc = old
+		resetSystemDNSCache()
+		resetBuiltinDNSCircuit()
+	})
+
+	fs := NewForwardServer("127.0.0.1:53", false)
+	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
+	fs.dnsServers = []string{"127.0.0.1:1"} // builtin servers all unreachable
+
+	got := fs.systemDNSServers()
+	if len(got) != 1 || got[0] != "127.0.0.1:1" {
+		t.Fatalf("systemDNSServers = %v, want only the non-self server [127.0.0.1:1]", got)
+	}
+
+	msg := new(dns.Msg)
+	msg.SetQuestion("example.com.", dns.TypeA)
+	if _, err := fs.forwardQuery(msg); err == nil {
+		t.Fatal("expected error: both the builtin and the non-self fallback server are unreachable")
+	}
+}

@@ -221,15 +221,6 @@ func (s *Socks5Server) proxyDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr
 	return nil
 }
 
-// udpExchangeFactory deduplicates concurrent attempts to create a UDPExchange
-// for the same key. The first goroutine to need a key performs the (slow)
-// OpenUDPExchange call; concurrent waiters block on done and reuse the result.
-type udpExchangeFactory struct {
-	done chan struct{}
-	ue   *UDPExchange
-	err  error
-}
-
 // maxUDPExchanges bounds the number of concurrent proxied UDP exchanges.
 // Each exchange owns one HTTP/2 stream, one receiveLoop goroutine and one
 // shaper; keying by (client address, target) means a client that uses a
@@ -244,28 +235,30 @@ const maxUDPExchanges = 128
 // the exchange already existed, firstPayload is ignored. If this call created
 // the exchange, created is true and the caller MUST NOT call ue.Send for the
 // first payload (it was already sent in the handshake).
+//
+// Concurrent creations for the same key are deduplicated through a
+// singleflight group: the first caller performs the (slow) OpenUDPExchange
+// call, concurrent waiters block and reuse the result, so exactly one
+// HTTP/2 stream and one receiveLoop exist per (client, target) flow.
 func (s *Socks5Server) getOrCreateUDPExchange(key, dst string, firstPayload []byte) (ue *UDPExchange, created bool, err error) {
-	s.udpMu.Lock()
-	if existing, ok := s.udpExch[key]; ok {
-		s.udpMu.Unlock()
+	s.udpMu.RLock()
+	existing, ok := s.udpExch[key]
+	s.udpMu.RUnlock()
+	if ok {
 		return existing, false, nil
 	}
-	if f, ok := s.udpInflight[key]; ok {
-		s.udpMu.Unlock()
-		<-f.done
-		if s.closing.Load() {
-			return nil, false, errSocksServerClosed
-		}
-		return f.ue, false, f.err
-	}
+
+	// Enforce the exchange cap before creating. In-flight creations for
+	// other keys count towards the limit; this call's own creation is not
+	// registered yet (the flight fn bumps udpInflightCount after the
+	// check), mirroring the pre-singleflight semantics where the factory
+	// entry was inserted after the check.
 	var evicted *UDPExchange
-	if len(s.udpExch)+len(s.udpInflight) >= maxUDPExchanges {
+	s.udpMu.Lock()
+	if len(s.udpExch)+int(s.udpInflightCount.Load()) >= maxUDPExchanges {
 		evicted = s.evictOldestExchangeLocked()
 	}
-	f := &udpExchangeFactory{done: make(chan struct{})}
-	s.udpInflight[key] = f
 	s.udpMu.Unlock()
-
 	// Close the evicted exchange outside the lock: Close flushes a FIN
 	// through the HTTP/2 stream (an io.Pipe write), which can block on
 	// transport backpressure — holding s.udpMu there would freeze all UDP
@@ -275,31 +268,46 @@ func (s *Socks5Server) getOrCreateUDPExchange(key, dst string, firstPayload []by
 		evicted.Close() //nolint:errcheck
 	}
 
-	ue, err = s.handler.OpenUDPExchange(context.Background(), dst, s.method, firstPayload)
-	f.ue, f.err = ue, err
-	close(f.done)
+	v, err, shared := s.udpExchangeSF.Do(key, func() (any, error) {
+		s.udpInflightCount.Add(1)
+		defer s.udpInflightCount.Add(-1)
 
+		ue, err := s.handler.OpenUDPExchange(context.Background(), dst, s.method, firstPayload)
+		if err != nil {
+			return nil, err
+		}
+		// The server was closed while the exchange was being created: close
+		// it immediately so the stream and its receiveLoop cannot leak past
+		// shutdown (the cleanup loop has already exited).
+		if s.closing.Load() {
+			ue.Close() //nolint:errcheck
+			return nil, errSocksServerClosed
+		}
+		return ue, nil
+	})
 	if err != nil {
-		s.udpMu.Lock()
-		delete(s.udpInflight, key)
-		s.udpMu.Unlock()
 		return nil, false, err
 	}
-	// The server was closed while the exchange was being created: close it
-	// immediately so the stream and its receiveLoop cannot leak past
-	// shutdown (the cleanup loop has already exited).
+	ue = v.(*UDPExchange)
 	if s.closing.Load() {
-		ue.Close() //nolint:errcheck
-		s.udpMu.Lock()
-		delete(s.udpInflight, key)
-		s.udpMu.Unlock()
+		// The server was closed after the flight finished but before the
+		// exchange was registered. The creator (shared == false) owns the
+		// exchange and must close it (it is not in the map yet, so Close's
+		// map sweep cannot reclaim it); waiters just report the error.
+		if !shared {
+			ue.Close() //nolint:errcheck
+		}
 		return nil, false, errSocksServerClosed
 	}
+	// Registering the same pointer from every caller (creator and waiters)
+	// is idempotent, and lets the waiters' first payload be sent by their
+	// own ue.Send below instead of being lost.
 	s.udpMu.Lock()
 	s.udpExch[key] = ue
-	delete(s.udpInflight, key)
 	s.udpMu.Unlock()
-	return ue, true, nil
+	// created reports whether this call's firstPayload was merged into the
+	// bootstrap record: only the creator's payload was (shared == false).
+	return ue, !shared, nil
 }
 
 var errSocksServerClosed = errors.New("socks5 udp server closed")
@@ -438,52 +446,111 @@ func (s *Socks5Server) directUDPRelay(srv *socks5.Server, clientAddr *net.UDPAdd
 	dc, ok := s.directUDP[key]
 	s.udpMu.RUnlock()
 
-	if ok {
-		dc.lastSeen.Store(time.Now().UnixNano())
-		_, err := dc.conn.Write(d.Data)
-		return err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), s.dialTimeout)
-	rc, err := s.directDialContext(ctx, "udp", dst)
-	cancel()
-	if err != nil {
-		return err
-	}
-	dc = &directUDPConn{conn: rc}
-	dc.lastSeen.Store(time.Now().UnixNano())
-
-	s.udpMu.Lock()
-	s.directUDP[key] = dc
-	s.udpMu.Unlock()
-
-	go func() {
-		defer func() {
-			rc.Close() //nolint:errcheck
-			s.udpMu.Lock()
-			delete(s.directUDP, key)
-			s.udpMu.Unlock()
-		}()
-		buf := bytespool.Get(protocol.MaxUDPDataSize)
-		defer bytespool.MustPut(buf)
-		for {
-			_ = rc.SetReadDeadline(time.Now().Add(2 * time.Minute))
-			n, err := rc.Read(buf)
-			if err != nil {
-				return
-			}
-			// Refresh the idle timestamp on receive as well as send, mirroring
-			// the proxied path (UDPExchange.Receive): a flow that keeps
-			// receiving but never writes again (a one-shot query with a long
-			// stream of responses) must not be reaped while it is still
-			// active.
-			dc.lastSeen.Store(time.Now().UnixNano())
-			s.sendToClient(srv, clientAddr, buf[:n], dst)
+	if !ok {
+		var err error
+		dc, err = s.getOrCreateDirectUDPSession(srv, clientAddr, dst, key)
+		if err != nil {
+			return err
 		}
-	}()
+	}
 
-	_, err = rc.Write(d.Data)
+	dc.lastSeen.Store(time.Now().UnixNano())
+	_, err := dc.conn.Write(d.Data)
 	return err
+}
+
+// getOrCreateDirectUDPSession returns the direct UDP session for key,
+// creating its socket and read loop when absent. Concurrent creators for the
+// same key are deduplicated through a singleflight group (mirroring the
+// proxied path): the first caller dials, the others wait for and reuse the
+// result, so exactly one socket and one read loop exist per (client, target)
+// flow. Without the dedup, two datagrams of the same flow handled
+// concurrently both missed the map lookup and both dialed: one socket was
+// orphaned (leaking it plus its read goroutine until the read-idle
+// deadline), and the orphan's cleanup then deleted the LIVE map entry,
+// churning a fresh socket for the flow every ~udpIdleTimeout.
+func (s *Socks5Server) getOrCreateDirectUDPSession(srv *socks5.Server, clientAddr *net.UDPAddr, dst, key string) (*directUDPConn, error) {
+	s.udpMu.RLock()
+	dc, ok := s.directUDP[key]
+	s.udpMu.RUnlock()
+	if ok {
+		return dc, nil
+	}
+
+	v, err, _ := s.directUDPSF.Do(key, func() (any, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), s.dialTimeout)
+		rc, err := s.directDialContext(ctx, "udp", dst)
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+
+		// The server was closed while we were dialing: close the socket so
+		// the session and its read loop cannot leak past shutdown (the
+		// cleanup loop has already exited).
+		if s.closing.Load() {
+			rc.Close() //nolint:errcheck
+			return nil, errSocksServerClosed
+		}
+
+		dc := &directUDPConn{conn: rc}
+		dc.lastSeen.Store(time.Now().UnixNano())
+
+		s.udpMu.Lock()
+		s.directUDP[key] = dc
+		s.udpMu.Unlock()
+
+		go s.directUDPReadLoop(srv, clientAddr, dst, key, dc)
+
+		return dc, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	dc = v.(*directUDPConn)
+	// The server was closed after the flight finished: the creator has
+	// already registered the session, so Close's map sweep or the read
+	// loop's own exit reclaims it; waiters just report the error.
+	if s.closing.Load() {
+		return nil, errSocksServerClosed
+	}
+	return dc, nil
+}
+
+// directUDPReadLoop relays datagrams from the direct remote back to the
+// client until the socket fails or the read-idle deadline fires with no
+// data. The deadline is the same udpIdleTimeout the cleanup loop uses to
+// reap idle sessions (2 x the user-configured timeout), mirroring the
+// server-side UDP handler which also reads with its 2 x timeout idle
+// deadline. On exit it closes the socket and removes the session from the
+// map, but only while the entry still points at this session - never at a
+// newer one that replaced it.
+func (s *Socks5Server) directUDPReadLoop(srv *socks5.Server, clientAddr *net.UDPAddr, dst, key string, dc *directUDPConn) {
+	rc := dc.conn
+	defer func() {
+		rc.Close() //nolint:errcheck
+		s.udpMu.Lock()
+		if cur, ok := s.directUDP[key]; ok && cur == dc {
+			delete(s.directUDP, key)
+		}
+		s.udpMu.Unlock()
+	}()
+	buf := bytespool.Get(protocol.MaxUDPDataSize)
+	defer bytespool.MustPut(buf)
+	for {
+		_ = rc.SetReadDeadline(time.Now().Add(s.udpIdleTimeout))
+		n, err := rc.Read(buf)
+		if err != nil {
+			return
+		}
+		// Refresh the idle timestamp on receive as well as send, mirroring
+		// the proxied path (UDPExchange.Receive): a flow that keeps
+		// receiving but never writes again (a one-shot query with a long
+		// stream of responses) must not be reaped while it is still
+		// active.
+		dc.lastSeen.Store(time.Now().UnixNano())
+		s.sendToClient(srv, clientAddr, buf[:n], dst)
+	}
 }
 
 func (s *Socks5Server) proxyUDPRelay(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, dst string) error {

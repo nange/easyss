@@ -50,7 +50,7 @@ type StreamHandler struct {
 
 func NewStreamHandler(tr transport.Transport, masterKey []byte, shaperCfg shaper.Config, streamIdleTimeout time.Duration) *StreamHandler {
 	if streamIdleTimeout <= 0 {
-		streamIdleTimeout = 300 * time.Second
+		streamIdleTimeout = config.DefaultStreamIdleTimeout
 	}
 	return &StreamHandler{
 		transport:         tr,
