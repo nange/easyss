@@ -431,6 +431,19 @@ func (s *Socks5Server) handleRegularUDP(srv *socks5.Server, clientAddr *net.UDPA
 	return nil
 }
 
+// directUDPFactory deduplicates concurrent attempts to create a direct UDP
+// session for the same key, mirroring udpExchangeFactory on the proxied path.
+// Without it, two datagrams of the same (client, target) flow handled
+// concurrently both missed the map lookup and both dialed: one socket was
+// orphaned (leaking it plus its read goroutine until the 2-minute read
+// deadline), and the orphan's cleanup then deleted the LIVE map entry,
+// churning a fresh socket for the flow every ~2 minutes.
+type directUDPFactory struct {
+	done chan struct{}
+	dc   *directUDPConn
+	err  error
+}
+
 func (s *Socks5Server) directUDPRelay(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, dst string) error {
 	key := "direct_" + clientAddr.String() + "_" + dst
 
@@ -438,52 +451,110 @@ func (s *Socks5Server) directUDPRelay(srv *socks5.Server, clientAddr *net.UDPAdd
 	dc, ok := s.directUDP[key]
 	s.udpMu.RUnlock()
 
-	if ok {
-		dc.lastSeen.Store(time.Now().UnixNano())
-		_, err := dc.conn.Write(d.Data)
-		return err
+	if !ok {
+		var err error
+		dc, err = s.getOrCreateDirectUDPSession(srv, clientAddr, dst, key)
+		if err != nil {
+			return err
+		}
 	}
+
+	dc.lastSeen.Store(time.Now().UnixNano())
+	_, err := dc.conn.Write(d.Data)
+	return err
+}
+
+// getOrCreateDirectUDPSession returns the direct UDP session for key,
+// creating its socket and read loop when absent. Concurrent creators for the
+// same key are deduplicated through an in-flight factory: the first caller
+// dials, the others block on the factory and reuse the result, so exactly
+// one socket and one read loop exist per (client, target) flow.
+func (s *Socks5Server) getOrCreateDirectUDPSession(srv *socks5.Server, clientAddr *net.UDPAddr, dst, key string) (*directUDPConn, error) {
+	s.udpMu.Lock()
+	if existing, ok := s.directUDP[key]; ok {
+		s.udpMu.Unlock()
+		return existing, nil
+	}
+	if f, ok := s.directInflight[key]; ok {
+		s.udpMu.Unlock()
+		<-f.done
+		return f.dc, f.err
+	}
+	f := &directUDPFactory{done: make(chan struct{})}
+	s.directInflight[key] = f
+	s.udpMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.dialTimeout)
 	rc, err := s.directDialContext(ctx, "udp", dst)
 	cancel()
 	if err != nil {
-		return err
+		f.dc, f.err = nil, err
+		close(f.done)
+		s.udpMu.Lock()
+		delete(s.directInflight, key)
+		s.udpMu.Unlock()
+		return nil, err
 	}
-	dc = &directUDPConn{conn: rc}
+
+	// The server was closed while we were dialing: close the socket so the
+	// session and its read loop cannot leak past shutdown (the cleanup
+	// loop has already exited).
+	if s.closing.Load() {
+		rc.Close() //nolint:errcheck
+		f.dc, f.err = nil, errSocksServerClosed
+		close(f.done)
+		s.udpMu.Lock()
+		delete(s.directInflight, key)
+		s.udpMu.Unlock()
+		return nil, errSocksServerClosed
+	}
+
+	dc := &directUDPConn{conn: rc}
 	dc.lastSeen.Store(time.Now().UnixNano())
+	f.dc, f.err = dc, nil
+	close(f.done)
 
 	s.udpMu.Lock()
 	s.directUDP[key] = dc
+	delete(s.directInflight, key)
 	s.udpMu.Unlock()
 
-	go func() {
-		defer func() {
-			rc.Close() //nolint:errcheck
-			s.udpMu.Lock()
-			delete(s.directUDP, key)
-			s.udpMu.Unlock()
-		}()
-		buf := bytespool.Get(protocol.MaxUDPDataSize)
-		defer bytespool.MustPut(buf)
-		for {
-			_ = rc.SetReadDeadline(time.Now().Add(2 * time.Minute))
-			n, err := rc.Read(buf)
-			if err != nil {
-				return
-			}
-			// Refresh the idle timestamp on receive as well as send, mirroring
-			// the proxied path (UDPExchange.Receive): a flow that keeps
-			// receiving but never writes again (a one-shot query with a long
-			// stream of responses) must not be reaped while it is still
-			// active.
-			dc.lastSeen.Store(time.Now().UnixNano())
-			s.sendToClient(srv, clientAddr, buf[:n], dst)
-		}
-	}()
+	go s.directUDPReadLoop(srv, clientAddr, dst, key, dc)
 
-	_, err = rc.Write(d.Data)
-	return err
+	return dc, nil
+}
+
+// directUDPReadLoop relays datagrams from the direct remote back to the
+// client until the socket fails or the 2-minute read deadline fires with no
+// data. On exit it closes the socket and removes the session from the map,
+// but only while the entry still points at this session - never at a newer
+// one that replaced it.
+func (s *Socks5Server) directUDPReadLoop(srv *socks5.Server, clientAddr *net.UDPAddr, dst, key string, dc *directUDPConn) {
+	rc := dc.conn
+	defer func() {
+		rc.Close() //nolint:errcheck
+		s.udpMu.Lock()
+		if cur, ok := s.directUDP[key]; ok && cur == dc {
+			delete(s.directUDP, key)
+		}
+		s.udpMu.Unlock()
+	}()
+	buf := bytespool.Get(protocol.MaxUDPDataSize)
+	defer bytespool.MustPut(buf)
+	for {
+		_ = rc.SetReadDeadline(time.Now().Add(2 * time.Minute))
+		n, err := rc.Read(buf)
+		if err != nil {
+			return
+		}
+		// Refresh the idle timestamp on receive as well as send, mirroring
+		// the proxied path (UDPExchange.Receive): a flow that keeps
+		// receiving but never writes again (a one-shot query with a long
+		// stream of responses) must not be reaped while it is still
+		// active.
+		dc.lastSeen.Store(time.Now().UnixNano())
+		s.sendToClient(srv, clientAddr, buf[:n], dst)
+	}
 }
 
 func (s *Socks5Server) proxyUDPRelay(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, dst string) error {

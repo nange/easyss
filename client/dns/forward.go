@@ -152,17 +152,23 @@ func (s *ForwardServer) exchangeWithServers(servers []string, msg *dns.Msg) (*dn
 }
 
 // systemDNSServers returns the system dns servers as fallback upstreams,
-// filtering out ipv6 ones when ipv6 is disabled.
+// filtering out ipv6 ones when ipv6 is disabled. Servers pointing at this
+// forward server itself are always dropped: during TUN mode the system DNS
+// is set to 127.0.0.1, and using it as a fallback upstream would recurse
+// into ourselves (query -> fallback -> 127.0.0.1:53 -> same query), piling
+// up goroutines and UDP sockets until the per-query timeout unwinds the
+// chain.
 func (s *ForwardServer) systemDNSServers() []string {
 	servers := systemDNSServersFunc()
-	if !s.disableIPV6 {
-		return servers
-	}
 	var filtered []string
 	for _, srv := range servers {
-		if !strings.Contains(srv, "]:") {
-			filtered = append(filtered, srv)
+		if s.disableIPV6 && strings.Contains(srv, "]:") {
+			continue
 		}
+		if srv == s.listenAddr {
+			continue
+		}
+		filtered = append(filtered, srv)
 	}
 	return filtered
 }

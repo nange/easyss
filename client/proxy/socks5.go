@@ -38,6 +38,7 @@ type Socks5Server struct {
 	udpExch        map[string]*UDPExchange
 	udpInflight    map[string]*udpExchangeFactory
 	directUDP      map[string]*directUDPConn
+	directInflight map[string]*directUDPFactory
 	quit           chan struct{}
 	closeOnce      sync.Once
 	udpIdleTimeout time.Duration
@@ -84,6 +85,7 @@ func NewSocks5Server(listenAddr, username, password string, handler *StreamHandl
 		udpExch:           make(map[string]*UDPExchange),
 		udpInflight:       make(map[string]*udpExchangeFactory),
 		directUDP:         make(map[string]*directUDPConn),
+		directInflight:    make(map[string]*directUDPFactory),
 		quit:              make(chan struct{}),
 		udpIdleTimeout:    udpIdleTimeout,
 		dnsRespTimeout:    dnsRespTimeout,
