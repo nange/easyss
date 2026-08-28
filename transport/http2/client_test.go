@@ -141,6 +141,78 @@ func TestHTTP2Transport_200StatusReadsBody(t *testing.T) {
 	}
 }
 
+// TestHTTP2Transport_GrowEventAttribution verifies that a slot expansion is
+// attributed to the request that triggered it: the first Open on a fresh
+// transport activates the priority pool (2 slots on first activation) and
+// records exactly one GrowEvent carrying the request's endpoint and target;
+// a later Open with tier capacity left records nothing.
+func TestHTTP2Transport_GrowEventAttribution(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	srv.EnableHTTP2 = true
+	srv.Config.Protocols = &http.Protocols{}
+	srv.Config.Protocols.SetHTTP2(true)
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	tr, err := New(Config{
+		ServerURL: srv.URL,
+		TLSConfig: &utls.Config{
+			InsecureSkipVerify: true,
+			NextProtos:         sharedconfig.NextProtos,
+		},
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tr.Close() })
+
+	open := func(target string) {
+		t.Helper()
+		stream, err := tr.Open(context.Background(), transport.OpenRequest{
+			Endpoint:     sharedconfig.EndpointTCP,
+			Salt:         "dGVzdHNhbHR0ZXN0c2FsdA",
+			HighPriority: true,
+			Target:       target,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, stream)
+		stream.Close() //nolint:errcheck
+	}
+
+	// First stream: triggers the priority pool's first activation (+2).
+	open("example.com:443")
+	evs := tr.Stats().GrowEvents
+	if len(evs) != 1 {
+		t.Fatalf("GrowEvents = %d, want 1 after the triggering Open", len(evs))
+	}
+	ev := evs[0]
+	if ev.Pool != "priority" {
+		t.Fatalf("event pool = %q, want priority", ev.Pool)
+	}
+	if ev.Live != 2 {
+		t.Fatalf("event live = %d, want 2 (first activation)", ev.Live)
+	}
+	if ev.Endpoint != sharedconfig.EndpointTCP {
+		t.Fatalf("event endpoint = %q, want %q", ev.Endpoint, sharedconfig.EndpointTCP)
+	}
+	if ev.Target != "example.com:443" {
+		t.Fatalf("event target = %q, want example.com:443", ev.Target)
+	}
+
+	// Second stream: the pool has idle capacity, no growth, no new event.
+	open("example.org:443")
+	if got := len(tr.Stats().GrowEvents); got != 1 {
+		t.Fatalf("GrowEvents = %d, want 1 (no growth for the second Open)", got)
+	}
+}
+
 func TestTrackReadMarksSlotHeavy(t *testing.T) {
 	// Fast path: a large transfer is marked as soon as it crosses the
 	// cumulative size threshold.

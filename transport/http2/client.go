@@ -17,9 +17,15 @@ import (
 	utls "github.com/refraction-networking/utls"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
 )
+
+// maxGrowEvents bounds the ring of recent slot-growth events exposed via
+// TransportStats.GrowEvents — enough to attribute a connection-count jump
+// to its triggering requests without unbounded memory growth.
+const maxGrowEvents = 16
 
 // HTTP2Transport is a facade over the HTTP/2 client machinery: streams are
 // mapped onto connections by slotScheduler, and the per-connection state
@@ -30,6 +36,12 @@ type HTTP2Transport struct {
 	lifecycle *slotLifecycle
 
 	serverURL string
+
+	// growEvents is a bounded ring of recent slot-growth events, oldest
+	// first; snapshotted (newest first) into TransportStats.GrowEvents.
+	// Guarded by growMu.
+	growEvents []transport.GrowEvent
+	growMu     sync.Mutex
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -219,7 +231,27 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 
 	stats.RecordStreamOpened()
 
-	t.sched.grow(req.HighPriority)
+	if pool, live := t.sched.grow(req.HighPriority); pool != nil {
+		// This request actually triggered a slot expansion: attribute the
+		// growth to it. Concurrent growers serialize on the scheduler write
+		// lock and re-evaluate under it, so only the request that performed
+		// the activation reaches this branch.
+		poolName := "bulk"
+		if pool == t.sched.priority {
+			poolName = "priority"
+			stats.RecordSlotGrownPriority()
+		} else {
+			stats.RecordSlotGrownBulk()
+		}
+		log.Info("[TRANSPORT] slot grown",
+			"pool", poolName,
+			"live", live,
+			"endpoint", req.Endpoint,
+			"proto", protoOfEndpoint(req.Endpoint),
+			"target", req.Target,
+			"priority", req.HighPriority)
+		t.recordGrowEvent(poolName, live, req)
+	}
 
 	t.sched.mu.RLock()
 	slot := t.sched.pick(req.HighPriority)
@@ -307,6 +339,39 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	return stream, nil
 }
 
+// protoOfEndpoint maps a proxy endpoint path to its short protocol name
+// for growth-event logging; unknown paths are echoed as-is.
+func protoOfEndpoint(endpoint string) string {
+	switch endpoint {
+	case sharedconfig.EndpointTCP:
+		return "tcp"
+	case sharedconfig.EndpointUDP:
+		return "udp"
+	case sharedconfig.EndpointICMP:
+		return "icmp"
+	}
+	return endpoint
+}
+
+// recordGrowEvent appends one slot-growth event to the bounded ring,
+// dropping the oldest beyond maxGrowEvents. The ring is snapshotted
+// newest-first into TransportStats.GrowEvents by Stats.
+func (t *HTTP2Transport) recordGrowEvent(pool string, live int32, req transport.OpenRequest) {
+	ev := transport.GrowEvent{
+		Time:     time.Now(),
+		Pool:     pool,
+		Live:     int(live),
+		Endpoint: req.Endpoint,
+		Target:   req.Target,
+	}
+	t.growMu.Lock()
+	defer t.growMu.Unlock()
+	t.growEvents = append(t.growEvents, ev)
+	if len(t.growEvents) > maxGrowEvents {
+		t.growEvents = append([]transport.GrowEvent(nil), t.growEvents[len(t.growEvents)-maxGrowEvents:]...)
+	}
+}
+
 func (t *HTTP2Transport) CloseIdle() {
 	// Close idle TCP connections on all slots of both pools. The slot array
 	// elements are swap-mutated by shrink/retire under the scheduler write
@@ -355,6 +420,15 @@ func (t *HTTP2Transport) Stats() transport.TransportStats {
 	}
 	ts.PriorityConnsStatus = slotStatusString(t.sched.priority, pLive)
 	ts.BulkConnsStatus = slotStatusString(t.sched.bulk, bLive)
+
+	// Snapshot the recent growth events newest-first. The ring has its own
+	// mutex (recordGrowEvent holds no scheduler lock), so no lock ordering
+	// issue with the read lock held above.
+	t.growMu.Lock()
+	for i := len(t.growEvents) - 1; i >= 0; i-- {
+		ts.GrowEvents = append(ts.GrowEvents, t.growEvents[i])
+	}
+	t.growMu.Unlock()
 	return ts
 }
 

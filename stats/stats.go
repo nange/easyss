@@ -59,6 +59,10 @@ type stats struct {
 	slotProbes           atomic.Int64
 	slotProbeSlow        atomic.Int64
 	slotProbeUnsupported atomic.Int64
+	// slotGrownPriority/slotGrownBulk count slot expansions (new live
+	// connections activated by the lazy-expansion scheduler) per pool.
+	slotGrownPriority atomic.Int64
+	slotGrownBulk     atomic.Int64
 	// streamsDrained counts streams closed early by the relay drain
 	// mechanism: idle streams on slots due for eviction (expiring/degraded)
 	// closed before the full idle timeout so rotation/retirement completes
@@ -125,7 +129,9 @@ func RecordSlotProbeSlow()       { g.slotProbeSlow.Add(1) }
 func RecordSlotProbeUnsupported() {
 	g.slotProbeUnsupported.Add(1)
 }
-func RecordStreamDrained() { g.streamsDrained.Add(1) }
+func RecordSlotGrownPriority() { g.slotGrownPriority.Add(1) }
+func RecordSlotGrownBulk()     { g.slotGrownBulk.Add(1) }
+func RecordStreamDrained()     { g.streamsDrained.Add(1) }
 
 const rttAlpha = 0.35
 
@@ -194,6 +200,8 @@ func ResetCounters() {
 	g.slotProbes.Store(0)
 	g.slotProbeSlow.Store(0)
 	g.slotProbeUnsupported.Store(0)
+	g.slotGrownPriority.Store(0)
+	g.slotGrownBulk.Store(0)
 	g.streamsDrained.Store(0)
 
 	g.rttMu.Lock()
@@ -259,6 +267,8 @@ type Snapshot struct {
 	SlotProbes           int64 `json:"slot_probes"`
 	SlotProbeSlow        int64 `json:"slot_probe_slow"`
 	SlotProbeUnsupported int64 `json:"slot_probe_unsupported"`
+	SlotGrownPriority    int64 `json:"slot_grown_priority"`
+	SlotGrownBulk        int64 `json:"slot_grown_bulk"`
 	StreamsDrained       int64 `json:"streams_drained"`
 
 	// Speed
@@ -353,6 +363,8 @@ func Collect() Snapshot {
 		SlotProbes:             g.slotProbes.Load(),
 		SlotProbeSlow:          g.slotProbeSlow.Load(),
 		SlotProbeUnsupported:   g.slotProbeUnsupported.Load(),
+		SlotGrownPriority:      g.slotGrownPriority.Load(),
+		SlotGrownBulk:          g.slotGrownBulk.Load(),
 		StreamsDrained:         g.streamsDrained.Load(),
 		UploadSpeed:            upSpeed,
 		DownloadSpeed:          downSpeed,

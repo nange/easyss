@@ -324,6 +324,8 @@ func (a *App) statsLoop() {
 				"slot_retired_degraded", snap.SlotRetiredDegraded,
 				"slot_probes", snap.SlotProbes,
 				"slot_probe_slow", snap.SlotProbeSlow,
+				"slot_grown_priority", snap.SlotGrownPriority,
+				"slot_grown_bulk", snap.SlotGrownBulk,
 				"conn_rotated", snap.ConnRotated,
 			)
 		case <-a.statsCloser:
