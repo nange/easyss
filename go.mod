@@ -3,11 +3,11 @@ module github.com/nange/easyss/v3
 go 1.27
 
 require (
-	github.com/caddyserver/certmagic v0.25.2
+	github.com/caddyserver/certmagic v0.25.4
 	github.com/coocood/freecache v1.2.7
-	github.com/gogpu/systray v0.2.9-0.20260811123705-f7b37e2d956c
+	github.com/gogpu/systray v0.3.0
 	github.com/libp2p/go-netroute v0.4.0
-	github.com/miekg/dns v1.1.72
+	github.com/miekg/dns v1.1.73
 	github.com/oschwald/geoip2-golang v1.13.0
 	github.com/refraction-networking/utls v1.8.2
 	github.com/samber/slog-formatter v1.3.0
