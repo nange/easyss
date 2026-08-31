@@ -18,11 +18,12 @@ func TestFileConfigEffectiveServerConfig(t *testing.T) {
 			"domain": "example.com",
 			"password": "secret",
 			"allowed_methods": ["aes-256-gcm"],
-				"fallback_target": "fallback.html",
 			"timeout": 99,
 			"next_proxy": {"url": "socks5://127.0.0.1:9999", "enable_udp": false}
 		},
+		"fallback": {"target": "fallback.html"},
 		"next_proxy": {"url": "socks5://127.0.0.1:1080", "enable_udp": true},
+		"pprof_enabled": true,
 		"timeout": 30
 	}`)
 
@@ -31,10 +32,11 @@ func TestFileConfigEffectiveServerConfig(t *testing.T) {
 	cfg := fc.EffectiveServerConfig()
 	require.Equal(t, ":443", cfg.Listen)
 	require.Equal(t, "secret", cfg.Password)
-	require.Equal(t, "fallback.html", cfg.FallbackTarget)
+	require.Equal(t, "fallback.html", cfg.Fallback.Target)
 	require.Equal(t, 30, cfg.Timeout)
 	require.Equal(t, "socks5://127.0.0.1:1080", cfg.NextProxy.URL)
 	require.True(t, cfg.NextProxy.EnableUDP)
+	require.True(t, fc.PprofEnabled)
 }
 
 func TestResolveFilePaths(t *testing.T) {
