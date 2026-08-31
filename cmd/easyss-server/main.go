@@ -14,6 +14,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/pprof"
 	"github.com/nange/easyss/v3/protocol"
@@ -156,7 +157,11 @@ func exampleV3ServerConfig() string {
 			CoverBudgetCap:   16 * 1024,
 		},
 		Transport: config.TransportConfig{
-			Protocols: []string{"h2"},
+			Protocols:           []string{"h2"},
+			HTTP2MaxFrameSize:   sharedconfig.HTTP2ServerMaxReadFrameSize,
+			HTTP2RecvBufConn:    sharedconfig.HTTP2ServerReceiveBufferPerConnection,
+			HTTP2RecvBufStream:  sharedconfig.HTTP2ServerReceiveBufferPerStream,
+			MaxConcurrentStream: 0,
 		},
 		NextProxy: config.NextProxyConfig{
 			URL:           "",
