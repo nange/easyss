@@ -98,7 +98,7 @@ func New(cfg Config) (*HTTP2Transport, error) {
 
 	timeout := cfg.Timeout
 	if timeout <= 0 {
-		timeout = 30 * time.Second
+		timeout = time.Duration(sharedconfig.DefaultTimeout) * time.Second
 	}
 
 	dialCtx := cfg.DialContext

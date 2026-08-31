@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
@@ -20,10 +21,18 @@ import (
 )
 
 type ICMPHandler struct {
+	dialTimeout time.Duration
 }
 
-func NewICMPHandler() *ICMPHandler {
-	return &ICMPHandler{}
+// NewICMPHandler creates an ICMPHandler. The outbound ICMP dial timeout is
+// derived through config.DialTimeout (base/3 clamped to [3s, 15s]), shared
+// with the TCP/UDP handlers' dials.
+func NewICMPHandler(timeout time.Duration) *ICMPHandler {
+	dialTimeout := config.DialTimeout(timeout)
+	if timeout <= 0 {
+		dialTimeout = config.DefaultDialTimeout
+	}
+	return &ICMPHandler{dialTimeout: dialTimeout}
 }
 
 func (h *ICMPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, target string) error {
@@ -72,7 +81,7 @@ func (h *ICMPHandler) icmpExchange(target string, payload []byte) ([]byte, error
 		parseProto = 58
 	}
 
-	conn, err := net.DialTimeout(dialNet, target, 5*time.Second)
+	conn, err := net.DialTimeout(dialNet, target, h.dialTimeout)
 	if err != nil {
 		log.Error("[ICMP] dial target failed", "target", target, "err", err)
 		return nil, err

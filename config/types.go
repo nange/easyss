@@ -50,12 +50,6 @@ const (
 	// never drained.
 	ExpiringStreamDrainIdle = 30 * time.Second
 
-	// Fallback timeouts used by the server-side constructors when no
-	// explicit value is provided. The others are defensive defaults for
-	// the handler/nextproxy entry points.
-	DefaultUDPIdleTimeout = 30 * time.Second // UDP 关联空闲超时兜底
-	DefaultDialTimeout    = 10 * time.Second // 出口拨号超时兜底（= DefaultTimeout/3）
-
 	// Defaults shared by config builders, the example config and runtime
 	// fallbacks. Keep these as the single source of truth: any code that
 	// applies a default must reference the constant, not a literal.
@@ -164,3 +158,16 @@ const (
 // source of truth: normal paths derive their timeout from the user-configured
 // base and never read this variable.
 var DefaultStreamIdleTimeout = StreamIdleTimeout(time.Duration(DefaultTimeout) * time.Second)
+
+// DefaultUDPIdleTimeout is the fallback UDP session idle/read timeout used by
+// constructors when no explicit value is provided (<= 0). Derived through
+// config.UDPIdleTimeout (2 x DefaultTimeout = 60s) so it always matches the
+// value normal paths derive from the user-configured base timeout.
+var DefaultUDPIdleTimeout = UDPIdleTimeout(time.Duration(DefaultTimeout) * time.Second)
+
+// DefaultDialTimeout is the fallback outbound dial timeout used by
+// constructors when no explicit value is provided (<= 0). Derived through
+// config.DialTimeout (DefaultTimeout/3 = 10s, clamped to [3s, 15s]) so it
+// always matches the value normal paths derive from the user-configured base
+// timeout.
+var DefaultDialTimeout = DialTimeout(time.Duration(DefaultTimeout) * time.Second)
