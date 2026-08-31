@@ -103,7 +103,7 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 		nextProxy:        cfg.NextProxy,
 		tcpHandler:       NewTCPHandler(cfg.StreamIdleTimeout, cfg.Timeout, cfg.NextProxy),
 		udpHandler:       NewUDPHandler(cfg.UDPIdleTimeout, cfg.NextProxy),
-		icmpHandler:      NewICMPHandler(),
+		icmpHandler:      NewICMPHandler(cfg.Timeout),
 		saltCache:        newSaltCache(),
 		ipLimiter:        newIPRateLimiter(),
 	}

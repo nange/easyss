@@ -16,6 +16,7 @@ import (
 
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/pprof"
+	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/server"
 	"github.com/nange/easyss/v3/server/config"
 	"github.com/nange/easyss/v3/util"
@@ -139,7 +140,7 @@ func exampleV3ServerConfig() string {
 			Listen:               ":443",
 			Domain:               "your-domain.com",
 			Password:             "your-password",
-			AllowedMethods:       []string{"aes-256-gcm", "chacha20-poly1305"},
+			AllowedMethods:       []string{protocol.MethodAES256GCM.String(), protocol.MethodChaCha20Poly1305.String()},
 			CertPath:             "",
 			KeyPath:              "",
 			Email:                "your-email@example.com",

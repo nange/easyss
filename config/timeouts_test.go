@@ -18,6 +18,31 @@ func TestDefaultStreamIdleTimeoutDerived(t *testing.T) {
 	}
 }
 
+// TestDefaultUDPIdleTimeoutDerived guards the same constraint for the UDP
+// fallback: it must equal UDPIdleTimeout(DefaultTimeout), so the fallback
+// never diverges from the derived value used on normal paths.
+func TestDefaultUDPIdleTimeoutDerived(t *testing.T) {
+	want := UDPIdleTimeout(time.Duration(DefaultTimeout) * time.Second)
+	if DefaultUDPIdleTimeout != want {
+		t.Errorf("DefaultUDPIdleTimeout = %v, want UDPIdleTimeout(DefaultTimeout) = %v", DefaultUDPIdleTimeout, want)
+	}
+	if DefaultUDPIdleTimeout <= 0 {
+		t.Fatalf("DefaultUDPIdleTimeout must be positive, got %v", DefaultUDPIdleTimeout)
+	}
+}
+
+// TestDefaultDialTimeoutDerived guards the same constraint for the dial
+// fallback: it must equal DialTimeout(DefaultTimeout).
+func TestDefaultDialTimeoutDerived(t *testing.T) {
+	want := DialTimeout(time.Duration(DefaultTimeout) * time.Second)
+	if DefaultDialTimeout != want {
+		t.Errorf("DefaultDialTimeout = %v, want DialTimeout(DefaultTimeout) = %v", DefaultDialTimeout, want)
+	}
+	if DefaultDialTimeout <= 0 {
+		t.Fatalf("DefaultDialTimeout must be positive, got %v", DefaultDialTimeout)
+	}
+}
+
 func TestStreamIdleTimeout(t *testing.T) {
 	tests := []struct {
 		name    string

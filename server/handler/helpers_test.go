@@ -172,8 +172,11 @@ func TestNewUDPHandler(t *testing.T) {
 }
 
 func TestNewICMPHandler(t *testing.T) {
-	h := NewICMPHandler()
+	h := NewICMPHandler(30 * time.Second)
 	if h == nil {
 		t.Fatal("NewICMPHandler returned nil")
+	}
+	if h.dialTimeout != 10*time.Second {
+		t.Errorf("dialTimeout = %v, want 10s (DialTimeout(30s))", h.dialTimeout)
 	}
 }

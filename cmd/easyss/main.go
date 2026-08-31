@@ -401,17 +401,17 @@ func exampleV3Config() string {
 func exampleSimpleConfig() string {
 	cfg := sharedconfig.SimpleConfig{
 		Server:        "your-domain.com",
-		ServerPort:    443,
+		ServerPort:    sharedconfig.DefaultServerPort,
 		Password:      "your-password",
-		Method:        "aes-256-gcm",
+		Method:        sharedconfig.DefaultMethod,
 		LocalPort:     sharedconfig.DefaultSocksPort,
-		ProxyRule:     "auto",
-		Timeout:       30,
+		ProxyRule:     sharedconfig.DefaultProxyRule,
+		Timeout:       sharedconfig.DefaultTimeout,
 		BindAll:       false,
 		OutboundProto: "native",
 		DirectFile:    "",
 		ProxyFile:     "",
-		LogLevel:      "info",
+		LogLevel:      sharedconfig.DefaultLogLevel,
 		LogFilePath:   "easyss.log",
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")

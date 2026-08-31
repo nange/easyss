@@ -1,6 +1,9 @@
 package config
 
-import "github.com/nange/easyss/v3/util"
+import (
+	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/util"
+)
 
 type LogConfig struct {
 	Level    string `json:"level"`
@@ -68,7 +71,7 @@ func (fc *FileConfig) ResolveFilePaths() {
 
 func (c *ServerConfig) GetAllowedMethods() []string {
 	if len(c.AllowedMethods) == 0 {
-		return []string{"aes-256-gcm", "chacha20-poly1305"}
+		return []string{protocol.MethodAES256GCM.String(), protocol.MethodChaCha20Poly1305.String()}
 	}
 	return c.AllowedMethods
 }
