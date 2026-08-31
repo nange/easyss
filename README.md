@@ -305,44 +305,23 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
   "server": {
     "listen": ":443",
     "domain": "your-domain.com",
-    "password": "your-password",
-    "allowed_methods": ["aes-256-gcm", "chacha20-poly1305"],
-    "cert_path": "",
-    "key_path": "",
-    "email": ""
-  },
-  "fallback": {
-    "target": "",
-    "preserve_host": false,
-    "cdn_domains": []
-  },
-  "shaper": {
-    "batch_window_ms": 3,
-    "cover_budget_ratio": 0.03,
-    "cover_budget_cap": 16384
-  },
-  "transport": {
-    "protocols": ["h2"],
-    "http2_max_frame_size": 16777215,
-    "http2_recv_buf_conn": 4194304,
-    "http2_recv_buf_stream": 1048576
-  },
-  "next_proxy": {
-      "url": "",
-      "next_proxy_file": "",
-      "enable_udp": false,
-      "all_host": false
+    "password": "your-password"
   },
   "log": {
-      "level": "info",
-      "file_path": "easyss.log"
+    "level": "info",
+    "file_path": "easyss.log"
   },
-  "pprof_enabled": false,
   "timeout": 30
 }
 ```
 
 > **注意**：`server.domain` 需要填**你自己的真实域名**（如 `example.com`），且该域名已解析到本服务器 IP。除非你配置了自定义证书（`cert_path` + `key_path` 都填写），否则此项**必填**——留空会导致启动时自动获取 Let's Encrypt 证书失败。
+
+以上为最简配置，其他所有可配置字段（fallback、shaper、transport、next_proxy、pprof 等）均有默认值，按需配置即可。执行以下命令可查看完整配置示例：
+
+```bash
+./easyss-server -show-config-example
+```
 
 **参数说明：**
 
