@@ -36,10 +36,10 @@ type Server struct {
 }
 
 func New(cfg *config.ServerConfig) (*Server, error) {
-	switch cfg.Transport.Protocol {
-	case "", "h2":
-	default:
-		return nil, fmt.Errorf("unsupported transport protocol %q (only h2 is supported)", cfg.Transport.Protocol)
+	for _, p := range cfg.Transport.Protocols {
+		if p != "h2" {
+			return nil, fmt.Errorf("unsupported transport protocol %q (only h2 is supported)", p)
+		}
 	}
 
 	s := &Server{

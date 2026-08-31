@@ -322,7 +322,7 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
     "cover_budget_cap": 16384
   },
   "transport": {
-    "protocol": "h2",
+    "protocols": ["h2"],
     "http2_max_frame_size": 0,
     "http2_recv_buf_conn": 0,
     "http2_recv_buf_stream": 0,
@@ -362,7 +362,7 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 | `shaper.batch_window_ms` | 否 | 3 | 流量整形批处理窗口，单位毫秒，范围 1-10 |
 | `shaper.cover_budget_ratio` | 否 | 0.03 | cover traffic 占真实流量的预算比例，设为 0 或负数使用默认值，范围 (0, 1] |
 | `shaper.cover_budget_cap` | 否 | 16384 | cover traffic 最大累积预算，单位字节，默认 16KB |
-| `transport.protocol` | 否 | h2 | 传输协议（目前仅支持 h2，配置其他值启动时报错） |
+| `transport.protocols` | 否 | h2 | 支持的传输协议列表，目前仅支持 `h2`，配置其他值启动时报错；未来可同时启用多个（如 h2 + h3） |
 | `transport.http2_max_frame_size` | 否 | 16MB-1 | 服务端 HTTP/2 最大帧大小，0 使用默认值 |
 | `transport.http2_recv_buf_conn` | 否 | 4MB | 服务端连接级上行窗口，0 使用默认值 |
 | `transport.http2_recv_buf_stream` | 否 | 1MB | 服务端流级上行窗口，0 使用默认值 |

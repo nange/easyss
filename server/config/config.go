@@ -11,11 +11,11 @@ type LogConfig struct {
 }
 
 type TransportConfig struct {
-	Protocol            string `json:"protocol"`
-	HTTP2MaxFrameSize   int    `json:"http2_max_frame_size"`
-	HTTP2RecvBufConn    int    `json:"http2_recv_buf_conn"`
-	HTTP2RecvBufStream  int    `json:"http2_recv_buf_stream"`
-	MaxConcurrentStream int    `json:"max_concurrent_streams"`
+	Protocols           []string `json:"protocols"`
+	HTTP2MaxFrameSize   int      `json:"http2_max_frame_size"`
+	HTTP2RecvBufConn    int      `json:"http2_recv_buf_conn"`
+	HTTP2RecvBufStream  int      `json:"http2_recv_buf_stream"`
+	MaxConcurrentStream int      `json:"max_concurrent_streams"`
 }
 
 type FallbackConfig struct {

@@ -156,7 +156,7 @@ func exampleV3ServerConfig() string {
 			CoverBudgetCap:   16 * 1024,
 		},
 		Transport: config.TransportConfig{
-			Protocol: "h2",
+			Protocols: []string{"h2"},
 		},
 		NextProxy: config.NextProxyConfig{
 			URL:           "",

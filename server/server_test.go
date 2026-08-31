@@ -24,6 +24,21 @@ func TestCertmagicStoragePathForExecutable(t *testing.T) {
 	require.Equal(t, filepath.Join("tmp", "easyss", "certmagic"), certmagicStoragePathForExecutable(exe))
 }
 
+func TestNewTransportProtocolsValidation(t *testing.T) {
+	require.NoError(t, mustNewServer(t, nil))
+	require.NoError(t, mustNewServer(t, []string{"h2"}))
+	require.Error(t, mustNewServer(t, []string{"h3"}))
+	require.Error(t, mustNewServer(t, []string{"h2", "h3"}))
+}
+
+func mustNewServer(t *testing.T, protocols []string) error {
+	t.Helper()
+	_, err := New(&config.ServerConfig{
+		Transport: config.TransportConfig{Protocols: protocols},
+	})
+	return err
+}
+
 func TestShouldRetryFreshCertificate(t *testing.T) {
 	require.True(t, shouldRetryFreshCertificate(errString("Could not validate ARI 'replaces' field")))
 	require.True(t, shouldRetryFreshCertificate(errString("Requested certificate was not found")))
