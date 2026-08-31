@@ -351,9 +351,6 @@ func buildHTTPServer(cfg *config.ServerConfig, tlsConfig *tls.Config, mux *http.
 	if cfg.Transport.HTTP2RecvBufStream > 0 {
 		http2Cfg.MaxReceiveBufferPerStream = cfg.Transport.HTTP2RecvBufStream
 	}
-	if cfg.Transport.MaxConcurrentStream > 0 {
-		http2Cfg.MaxConcurrentStreams = cfg.Transport.MaxConcurrentStream
-	}
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,

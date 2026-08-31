@@ -157,11 +157,10 @@ func exampleV3ServerConfig() string {
 			CoverBudgetCap:   16 * 1024,
 		},
 		Transport: config.TransportConfig{
-			Protocols:           []string{"h2"},
-			HTTP2MaxFrameSize:   sharedconfig.HTTP2ServerMaxReadFrameSize,
-			HTTP2RecvBufConn:    sharedconfig.HTTP2ServerReceiveBufferPerConnection,
-			HTTP2RecvBufStream:  sharedconfig.HTTP2ServerReceiveBufferPerStream,
-			MaxConcurrentStream: 0,
+			Protocols:          []string{"h2"},
+			HTTP2MaxFrameSize:  sharedconfig.HTTP2ServerMaxReadFrameSize,
+			HTTP2RecvBufConn:   sharedconfig.HTTP2ServerReceiveBufferPerConnection,
+			HTTP2RecvBufStream: sharedconfig.HTTP2ServerReceiveBufferPerStream,
 		},
 		NextProxy: config.NextProxyConfig{
 			URL:           "",

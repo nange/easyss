@@ -325,8 +325,7 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
     "protocols": ["h2"],
     "http2_max_frame_size": 16777215,
     "http2_recv_buf_conn": 4194304,
-    "http2_recv_buf_stream": 1048576,
-    "max_concurrent_streams": 0
+    "http2_recv_buf_stream": 1048576
   },
   "next_proxy": {
       "url": "",
@@ -366,7 +365,6 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 | `transport.http2_max_frame_size` | 否 | 16777215 | 服务端 HTTP/2 最大帧大小（16MB-1），0 使用默认值 |
 | `transport.http2_recv_buf_conn` | 否 | 4194304 | 服务端连接级上行窗口（4MB），0 使用默认值 |
 | `transport.http2_recv_buf_stream` | 否 | 1048576 | 服务端流级上行窗口（1MB），0 使用默认值 |
-| `transport.max_concurrent_streams` | 否 | 无限制 | 服务端单连接最大并发流数，0 使用 Go 默认（无限制） |
 | `pprof_enabled` | 否 | false | 是否启用 pprof 调试服务（127.0.0.1:6060） |
 | `timeout` | 否 | 30 | 超时时间，单位秒 |
 
