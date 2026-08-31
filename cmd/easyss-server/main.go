@@ -141,9 +141,9 @@ func exampleV3ServerConfig() string {
 			Domain:         "your-domain.com",
 			Password:       "your-password",
 			AllowedMethods: []string{protocol.MethodAES256GCM.String(), protocol.MethodChaCha20Poly1305.String()},
-			CertPath:             "",
-			KeyPath:              "",
-			Email:                "",
+			CertPath:       "",
+			KeyPath:        "",
+			Email:          "",
 		},
 		Fallback: config.FallbackConfig{
 			Target:       "",
