@@ -309,21 +309,23 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
     "allowed_methods": ["aes-256-gcm", "chacha20-poly1305"],
     "cert_path": "",
     "key_path": "",
-    "email": "",
-    "fallback_target": "",
-    "fallback_preserve_host": false,
-    "fallback_cdn_domains": [],
+    "email": ""
+  },
+  "fallback": {
+    "target": "",
+    "preserve_host": false,
+    "cdn_domains": []
+  },
+  "shaper": {
     "batch_window_ms": 3,
     "cover_budget_ratio": 0.03,
-    "cover_budget_cap": 16384,
-    "pprof_enabled": false
-  },
-  "log": {
-      "level": "info",
-      "file_path": "easyss.log"
+    "cover_budget_cap": 16384
   },
   "transport": {
-      "protocol": "h2"
+    "protocols": ["h2"],
+    "http2_max_frame_size": 16777215,
+    "http2_recv_buf_conn": 4194304,
+    "http2_recv_buf_stream": 1048576
   },
   "next_proxy": {
       "url": "",
@@ -331,6 +333,11 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
       "enable_udp": false,
       "all_host": false
   },
+  "log": {
+      "level": "info",
+      "file_path": "easyss.log"
+  },
+  "pprof_enabled": false,
   "timeout": 30
 }
 ```
@@ -348,42 +355,49 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 | `server.cert_path` | 否 | - | 自定义证书文件路径（不为空则使用自定义证书） |
 | `server.key_path` | 否 | - | 自定义证书密钥文件路径 |
 | `server.email` | 否 | 随机生成 | 用于自动获取证书的邮箱地址 |
-| `server.fallback_target` | 否 | - | 回落目标，自动识别类型：<br>**空**: 使用内置主题页面<br>**URL** (`http://`或`https://`开头): 反向代理到上游 HTTP 服务<br>**目录**: 根据 URL path 匹配 HTML 文件（如 `/about` → `about.html`）<br>**文件**: 所有路径返回同一 HTML 页面 |
-| `server.fallback_preserve_host` | 否 | false | 仅对 `fallback_target` 为 URL 生效。<br>**false**: 转发给上游的 Host 头设为上游主机（默认，适合 GitHub 等会校验 Host 的公网站点）<br>**true**: 透传客户端原始 Host 给上游（适合本地 nginx 依赖 `server_name` 做虚拟主机路由的场景） |
-| `server.fallback_cdn_domains` | 否 | [] | 仅对 `fallback_target` 为 URL 生效。<br>配置需要通过代理中转的 CDN 域名列表（如 `["github.githubassets.com"]`）。HTML 和 CSP 中引用这些域名的绝对 URL 会被重写为 `/__cdn__/<host>/...` 路径前缀形式，浏览器请求时走代理转发到对应 CDN，避免直连 CDN 暴露真实 IP 或被 CSP 拦截 |
-| `server.batch_window_ms` | 否 | 3 | 流量整形批处理窗口，单位毫秒，范围 1-10 |
-| `server.cover_budget_ratio` | 否 | 0.03 | cover traffic 占真实流量的预算比例，设为 0 或负数使用默认值，范围 (0, 1] |
-| `server.cover_budget_cap` | 否 | 16384 | cover traffic 最大累积预算，单位字节，默认 16KB |
-| `server.pprof_enabled` | 否 | false | 是否启用 pprof 调试服务（127.0.0.1:6060） |
-| `transport.protocol` | 否 | h2 | 传输协议（目前仅支持 h2） |
+| `fallback.target` | 否 | - | 回落目标，自动识别类型：<br>**空**: 使用内置主题页面<br>**URL** (`http://`或`https://`开头): 反向代理到上游 HTTP 服务<br>**目录**: 根据 URL path 匹配 HTML 文件（如 `/about` → `about.html`）<br>**文件**: 所有路径返回同一 HTML 页面 |
+| `fallback.preserve_host` | 否 | false | 仅对 `fallback.target` 为 URL 生效。<br>**false**: 转发给上游的 Host 头设为上游主机（默认，适合 GitHub 等会校验 Host 的公网站点）<br>**true**: 透传客户端原始 Host 给上游（适合本地 nginx 依赖 `server_name` 做虚拟主机路由的场景） |
+| `fallback.cdn_domains` | 否 | [] | 仅对 `fallback.target` 为 URL 生效。<br>配置需要通过代理中转的 CDN 域名列表（如 `["github.githubassets.com"]`）。HTML 和 CSP 中引用这些域名的绝对 URL 会被重写为 `/__cdn__/<host>/...` 路径前缀形式，浏览器请求时走代理转发到对应 CDN，避免直连 CDN 暴露真实 IP 或被 CSP 拦截 |
+| `shaper.batch_window_ms` | 否 | 3 | 流量整形批处理窗口，单位毫秒，范围 1-10 |
+| `shaper.cover_budget_ratio` | 否 | 0.03 | cover traffic 占真实流量的预算比例，设为 0 或负数使用默认值，范围 (0, 1] |
+| `shaper.cover_budget_cap` | 否 | 16384 | cover traffic 最大累积预算，单位字节，默认 16KB |
+| `transport.protocols` | 否 | h2 | 支持的传输协议列表，目前仅支持 `h2`，配置其他值启动时报错；未来可同时启用多个（如 h2 + h3） |
+| `transport.http2_max_frame_size` | 否 | 16777215 | 服务端 HTTP/2 最大帧大小（16MB-1），0 使用默认值 |
+| `transport.http2_recv_buf_conn` | 否 | 4194304 | 服务端连接级上行窗口（4MB），0 使用默认值 |
+| `transport.http2_recv_buf_stream` | 否 | 1048576 | 服务端流级上行窗口（1MB），0 使用默认值 |
+| `pprof_enabled` | 否 | false | 是否启用 pprof 调试服务（127.0.0.1:6060） |
 | `timeout` | 否 | 30 | 超时时间，单位秒 |
 
-> **fallback_target 使用示例**：
+> **fallback 使用示例**：
 >
 > ```json
 > // 1. 空值 → 内置主题页面（默认）
-> "fallback_target": ""
+> "fallback": { "target": "" }
 >
 > // 2. 反向代理到本地 nginx（透传原始 Host，匹配 server_name 路由）
-> "fallback_target": "http://127.0.0.1:8080",
-> "fallback_preserve_host": true
+> "fallback": {
+>   "target": "http://127.0.0.1:8080",
+>   "preserve_host": true
+> }
 >
 > // 3. 反向代理到公网站点（如 GitHub）
 > //    自动重写 Host 头避免 301，并重写 HTML 中的绝对 URL，
 > //    修复 release assets 等动态加载的 CSP 问题
 > //    配置 CDN 域名让静态资源也走代理
-> "fallback_target": "https://github.com",
-> "fallback_cdn_domains": ["githubassets.com", "githubusercontent.com"]
-> // fallback_preserve_host 默认 false 即可
+> "fallback": {
+>   "target": "https://github.com",
+>   "cdn_domains": ["githubassets.com", "githubusercontent.com"]
+> }
+> // preserve_host 默认 false 即可
 >
 > // 4. 单文件 → 所有路径返回同一页面
-> "fallback_target": "/var/www/fallback.html"
+> "fallback": { "target": "/var/www/fallback.html" }
 >
 > // 5. 目录 → 按 URL path 匹配 HTML 文件
-> "fallback_target": "/var/www/fallback/"
+> "fallback": { "target": "/var/www/fallback/" }
 > ```
 >
-> **URL 模式行为说明**：当 `fallback_target` 为 URL 时，反向代理会自动执行以下处理，无需额外配置：
+> **URL 模式行为说明**：当 `fallback.target` 为 URL 时，反向代理会自动执行以下处理，无需额外配置：
 >
 > * 设置上游 Host 头（避免 GitHub 等站点返回 301 到规范主机）
 > * 重写 3xx `Location` 响应头中指向上游的绝对 URL 为客户端面向地址
@@ -391,7 +405,7 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 > * 重写 `Set-Cookie` 的 `Domain` 属性，使浏览器接受 cookie（修复 CSRF 422）
 > * 重写请求 `Origin`/`Referer` 头为上游地址（修复 CSRF 422）
 > * 对上游请求 `Accept-Encoding` 与客户端取交集，gzip 响应自动解压后重写、再按客户端能力重新压缩
-> * 配置了 `fallback_cdn_domains` 时，HTML/CSP 中引用这些 CDN 域名的 URL 被重写为 `/__cdn__/<host>/...`，浏览器请求经代理转发到对应 CDN
+> * 配置了 `fallback.cdn_domains` 时，HTML/CSP 中引用这些 CDN 域名的 URL 被重写为 `/__cdn__/<host>/...`，浏览器请求经代理转发到对应 CDN
 >
 > **目录模式**：目录结构如下（优先级: 反向代理 > 目录 > 单文件 > 内置主题）：
 >

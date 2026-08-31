@@ -11,7 +11,22 @@ type LogConfig struct {
 }
 
 type TransportConfig struct {
-	Protocol string `json:"protocol"`
+	Protocols          []string `json:"protocols"`
+	HTTP2MaxFrameSize  int      `json:"http2_max_frame_size"`
+	HTTP2RecvBufConn   int      `json:"http2_recv_buf_conn"`
+	HTTP2RecvBufStream int      `json:"http2_recv_buf_stream"`
+}
+
+type FallbackConfig struct {
+	Target       string   `json:"target"`
+	PreserveHost bool     `json:"preserve_host"`
+	CDNDomains   []string `json:"cdn_domains"`
+}
+
+type ShaperConfig struct {
+	BatchWindowMS    int     `json:"batch_window_ms"`
+	CoverBudgetRatio float64 `json:"cover_budget_ratio"`
+	CoverBudgetCap   int     `json:"cover_budget_cap"`
 }
 
 type NextProxyConfig struct {
@@ -22,36 +37,38 @@ type NextProxyConfig struct {
 }
 
 type ServerConfig struct {
-	Listen               string          `json:"listen"`
-	Domain               string          `json:"domain"`
-	Password             string          `json:"password"`
-	AllowedMethods       []string        `json:"allowed_methods"`
-	CertPath             string          `json:"cert_path"`
-	KeyPath              string          `json:"key_path"`
-	Email                string          `json:"email"`
-	FallbackTarget       string          `json:"fallback_target"`
-	FallbackPreserveHost bool            `json:"fallback_preserve_host"`
-	FallbackCDNDomains   []string        `json:"fallback_cdn_domains"`
-	Timeout              int             `json:"-"`
-	BatchWindowMS        int             `json:"batch_window_ms"`
-	CoverBudgetRatio     float64         `json:"cover_budget_ratio"`
-	CoverBudgetCap       int             `json:"cover_budget_cap"`
-	NextProxy            NextProxyConfig `json:"-"`
-	PprofEnabled         bool            `json:"pprof_enabled"`
+	Listen         string          `json:"listen"`
+	Domain         string          `json:"domain"`
+	Password       string          `json:"password"`
+	AllowedMethods []string        `json:"allowed_methods"`
+	CertPath       string          `json:"cert_path"`
+	KeyPath        string          `json:"key_path"`
+	Email          string          `json:"email"`
+	Timeout        int             `json:"-"`
+	Fallback       FallbackConfig  `json:"-"`
+	Shaper         ShaperConfig    `json:"-"`
+	Transport      TransportConfig `json:"-"`
+	NextProxy      NextProxyConfig `json:"-"`
 }
 
 type FileConfig struct {
 	ConfigVersion int             `json:"version"`
 	Server        ServerConfig    `json:"server"`
-	Log           LogConfig       `json:"log"`
+	Fallback      FallbackConfig  `json:"fallback"`
+	Shaper        ShaperConfig    `json:"shaper"`
 	Transport     TransportConfig `json:"transport"`
 	NextProxy     NextProxyConfig `json:"next_proxy"`
+	Log           LogConfig       `json:"log"`
+	PprofEnabled  bool            `json:"pprof_enabled"`
 	Timeout       int             `json:"timeout"`
 }
 
 func (fc *FileConfig) EffectiveServerConfig() ServerConfig {
 	cfg := fc.Server
 	cfg.Timeout = fc.Timeout
+	cfg.Fallback = fc.Fallback
+	cfg.Shaper = fc.Shaper
+	cfg.Transport = fc.Transport
 	cfg.NextProxy = fc.NextProxy
 	return cfg
 }

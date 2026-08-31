@@ -14,6 +14,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/pprof"
 	"github.com/nange/easyss/v3/protocol"
@@ -68,7 +69,7 @@ func main() {
 	fileCfg.ResolveFilePaths()
 	cfg = fileCfg.EffectiveServerConfig()
 	if pprofEnabled {
-		cfg.PprofEnabled = true
+		fileCfg.PprofEnabled = true
 	}
 	if fileCfg.Log.Level == "" {
 		fileCfg.Log.Level = "info"
@@ -94,7 +95,7 @@ func main() {
 	)
 
 	var pprofSrv *http.Server
-	if cfg.PprofEnabled {
+	if fileCfg.PprofEnabled {
 		pprofSrv = pprof.StartPprof()
 	}
 
@@ -137,23 +138,29 @@ func exampleV3ServerConfig() string {
 	cfg := config.FileConfig{
 		ConfigVersion: 3,
 		Server: config.ServerConfig{
-			Listen:               ":443",
-			Domain:               "your-domain.com",
-			Password:             "your-password",
-			AllowedMethods:       []string{protocol.MethodAES256GCM.String(), protocol.MethodChaCha20Poly1305.String()},
-			CertPath:             "",
-			KeyPath:              "",
-			Email:                "your-email@example.com",
-			FallbackTarget:       "",
-			FallbackPreserveHost: false,
-			FallbackCDNDomains:   []string{},
-			BatchWindowMS:        3,
-			CoverBudgetRatio:     0.03,
-			CoverBudgetCap:       16 * 1024,
-			PprofEnabled:         false,
+			Listen:         ":443",
+			Domain:         "your-domain.com",
+			Password:       "your-password",
+			AllowedMethods: []string{protocol.MethodAES256GCM.String(), protocol.MethodChaCha20Poly1305.String()},
+			CertPath:       "",
+			KeyPath:        "",
+			Email:          "",
+		},
+		Fallback: config.FallbackConfig{
+			Target:       "",
+			PreserveHost: false,
+			CDNDomains:   []string{},
+		},
+		Shaper: config.ShaperConfig{
+			BatchWindowMS:    3,
+			CoverBudgetRatio: 0.03,
+			CoverBudgetCap:   16 * 1024,
 		},
 		Transport: config.TransportConfig{
-			Protocol: "h2",
+			Protocols:          []string{"h2"},
+			HTTP2MaxFrameSize:  sharedconfig.HTTP2ServerMaxReadFrameSize,
+			HTTP2RecvBufConn:   sharedconfig.HTTP2ServerReceiveBufferPerConnection,
+			HTTP2RecvBufStream: sharedconfig.HTTP2ServerReceiveBufferPerStream,
 		},
 		NextProxy: config.NextProxyConfig{
 			URL:           "",
@@ -165,7 +172,8 @@ func exampleV3ServerConfig() string {
 			Level:    "info",
 			FilePath: "easyss.log",
 		},
-		Timeout: 30,
+		PprofEnabled: false,
+		Timeout:      30,
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
 	return string(b)

@@ -36,6 +36,12 @@ type Server struct {
 }
 
 func New(cfg *config.ServerConfig) (*Server, error) {
+	for _, p := range cfg.Transport.Protocols {
+		if p != "h2" {
+			return nil, fmt.Errorf("unsupported transport protocol %q (only h2 is supported)", p)
+		}
+	}
+
 	s := &Server{
 		cfg: cfg,
 	}
@@ -259,11 +265,11 @@ func (s *Server) Start() error {
 		timeout = time.Duration(sharedconfig.DefaultTimeout) * time.Second
 	}
 
-	if s.cfg.FallbackTarget != "" {
-		if err := handler.SetFallbackTarget(s.cfg.FallbackTarget, s.cfg.FallbackPreserveHost, s.cfg.FallbackCDNDomains); err != nil {
+	if s.cfg.Fallback.Target != "" {
+		if err := handler.SetFallbackTarget(s.cfg.Fallback.Target, s.cfg.Fallback.PreserveHost, s.cfg.Fallback.CDNDomains); err != nil {
 			return fmt.Errorf("fallback target: %w", err)
 		}
-		log.Info("[SERVER] fallback target configured", "target", s.cfg.FallbackTarget, "preserve_host", s.cfg.FallbackPreserveHost, "cdn_domains", s.cfg.FallbackCDNDomains)
+		log.Info("[SERVER] fallback target configured", "target", s.cfg.Fallback.Target, "preserve_host", s.cfg.Fallback.PreserveHost, "cdn_domains", s.cfg.Fallback.CDNDomains)
 	}
 
 	masterKey, err := crypto.DeriveMasterKey(s.cfg.Password)
@@ -294,9 +300,9 @@ func (s *Server) Start() error {
 		Timeout:           timeout,
 		StreamIdleTimeout: streamIdleTimeout,
 		UDPIdleTimeout:    sharedconfig.UDPIdleTimeout(timeout),
-		BatchWindowMS:     s.cfg.BatchWindowMS,
-		CoverBudgetRatio:  s.cfg.CoverBudgetRatio,
-		CoverBudgetCap:    s.cfg.CoverBudgetCap,
+		BatchWindowMS:     s.cfg.Shaper.BatchWindowMS,
+		CoverBudgetRatio:  s.cfg.Shaper.CoverBudgetRatio,
+		CoverBudgetCap:    s.cfg.Shaper.CoverBudgetCap,
 		NextProxy:         np,
 	})
 
@@ -331,17 +337,28 @@ func (s *Server) Start() error {
 // upload stream's in-flight data (throughput ≈ window/RTT), so both windows
 // must be generous enough for high-RTT links.
 func buildHTTPServer(cfg *config.ServerConfig, tlsConfig *tls.Config, mux *http.ServeMux, timeout time.Duration) *http.Server {
+	http2Cfg := &http.HTTP2Config{
+		MaxReadFrameSize:              sharedconfig.HTTP2ServerMaxReadFrameSize,
+		MaxReceiveBufferPerConnection: sharedconfig.HTTP2ServerReceiveBufferPerConnection,
+		MaxReceiveBufferPerStream:     sharedconfig.HTTP2ServerReceiveBufferPerStream,
+	}
+	if cfg.Transport.HTTP2MaxFrameSize > 0 {
+		http2Cfg.MaxReadFrameSize = cfg.Transport.HTTP2MaxFrameSize
+	}
+	if cfg.Transport.HTTP2RecvBufConn > 0 {
+		http2Cfg.MaxReceiveBufferPerConnection = cfg.Transport.HTTP2RecvBufConn
+	}
+	if cfg.Transport.HTTP2RecvBufStream > 0 {
+		http2Cfg.MaxReceiveBufferPerStream = cfg.Transport.HTTP2RecvBufStream
+	}
+
 	srv := &http.Server{
-		Addr:      cfg.Listen,
-		TLSConfig: tlsConfig,
-		Handler:   mux,
-		ErrorLog:  stdErrorLog(),
-		Protocols: &http.Protocols{},
-		HTTP2: &http.HTTP2Config{
-			MaxReadFrameSize:              sharedconfig.HTTP2ServerMaxReadFrameSize,
-			MaxReceiveBufferPerConnection: sharedconfig.HTTP2ServerReceiveBufferPerConnection,
-			MaxReceiveBufferPerStream:     sharedconfig.HTTP2ServerReceiveBufferPerStream,
-		},
+		Addr:              cfg.Listen,
+		TLSConfig:         tlsConfig,
+		Handler:           mux,
+		ErrorLog:          stdErrorLog(),
+		Protocols:         &http.Protocols{},
+		HTTP2:             http2Cfg,
 		IdleTimeout:       8 * timeout,
 		ReadHeaderTimeout: min(timeout/2, 10*time.Second),
 	}
