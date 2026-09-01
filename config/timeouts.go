@@ -31,10 +31,7 @@ func UDPIdleTimeout(base time.Duration) time.Duration {
 // [3s, 15s]. Shared by the client (direct dials) and the server (TCP
 // handler dials) so both sides always derive the same value.
 func DialTimeout(base time.Duration) time.Duration {
-	d := base / 3
-	if d < 3*time.Second {
-		d = 3 * time.Second
-	}
+	d := max(base/3, 3*time.Second)
 	if d > 15*time.Second {
 		d = 15 * time.Second
 	}

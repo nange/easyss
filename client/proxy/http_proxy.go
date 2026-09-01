@@ -412,10 +412,7 @@ func (s *HTTPProxyServer) directConnect(target string) (net.Conn, error) {
 func (s *HTTPProxyServer) dialSOCKS5(target string) (net.Conn, error) {
 	// Round the timeout up so sub-second timeouts never truncate to 0 (the
 	// socks5 library treats 0 as "no timeout").
-	socksTimeout := int(math.Ceil(s.timeout.Seconds()))
-	if socksTimeout < 1 {
-		socksTimeout = 1
-	}
+	socksTimeout := max(int(math.Ceil(s.timeout.Seconds())), 1)
 	client, err := socks5.NewClient(s.socksAddr, s.username, s.password, socksTimeout, socksTimeout)
 	if err != nil {
 		return nil, err

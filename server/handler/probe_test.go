@@ -131,7 +131,7 @@ func TestProbeHandlerRateLimit(t *testing.T) {
 	// Drain the per-IP bucket (capacity 100), then the next request is
 	// rejected with 429.
 	ip := "203.0.113.7"
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		if !h.limiter.Allow(ip) {
 			t.Fatalf("bucket drained earlier than expected at request %d", i+1)
 		}

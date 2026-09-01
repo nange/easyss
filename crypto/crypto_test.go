@@ -73,14 +73,14 @@ func TestCounterNonce(t *testing.T) {
 	require.Equal(t, prefix[1], n1[1])
 
 	var val1 uint64
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		val1 = (val1 << 8) | uint64(n1[4+i])
 	}
 	require.Equal(t, uint64(0), val1)
 
 	n2 := cn.Next()
 	var val2 uint64
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		val2 = (val2 << 8) | uint64(n2[4+i])
 	}
 	require.Equal(t, uint64(1), val2)

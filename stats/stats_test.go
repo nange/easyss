@@ -111,13 +111,13 @@ func TestCollectConcurrentWithReset(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for i := 0; i < 1000; i++ {
+		for range 1000 {
 			ResetStartTime()
 			ResetCounters()
 			ClearStartTime()
 		}
 	}()
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		Collect()
 	}
 	<-done

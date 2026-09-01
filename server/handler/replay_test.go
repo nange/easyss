@@ -36,7 +36,7 @@ func TestSaltCache_MarkSeen(t *testing.T) {
 func TestSaltCache_DistinctSalts(t *testing.T) {
 	c := newSaltCache()
 	rng := rand.New(rand.NewSource(42))
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		buf := make([]byte, 16)
 		_, _ = rng.Read(buf)
 		salt := base64.RawURLEncoding.EncodeToString(buf)
@@ -56,7 +56,7 @@ func TestSaltCache_ConcurrentMarkSeen(t *testing.T) {
 
 	start := make(chan struct{})
 	results := make(chan bool, goroutines)
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			<-start
 			results <- c.MarkSeen("/v3/tcp", salt)
@@ -65,7 +65,7 @@ func TestSaltCache_ConcurrentMarkSeen(t *testing.T) {
 	close(start)
 
 	seen := 0
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		if <-results {
 			seen++
 		}
@@ -80,7 +80,7 @@ func TestIPRateLimiter_BurstThenReject(t *testing.T) {
 	l := newIPRateLimiter()
 	l.now = func() time.Time { return now }
 
-	for i := 0; i < handshakeBurst; i++ {
+	for i := range handshakeBurst {
 		if !l.Allow("1.2.3.4") {
 			t.Fatalf("request %d within burst should be allowed", i)
 		}
@@ -95,14 +95,14 @@ func TestIPRateLimiter_Refill(t *testing.T) {
 	l := newIPRateLimiter()
 	l.now = func() time.Time { return now }
 
-	for i := 0; i < handshakeBurst; i++ {
+	for range handshakeBurst {
 		l.Allow("1.2.3.4")
 	}
 
 	// Advance 1s: exactly handshakeRate tokens are replenished.
 	now = now.Add(time.Second)
 	allowed := 0
-	for i := 0; i < int(handshakeRate); i++ {
+	for range int(handshakeRate) {
 		if l.Allow("1.2.3.4") {
 			allowed++
 		}
@@ -120,7 +120,7 @@ func TestIPRateLimiter_PerIPIsolation(t *testing.T) {
 	l := newIPRateLimiter()
 	l.now = func() time.Time { return now }
 
-	for i := 0; i < handshakeBurst; i++ {
+	for range handshakeBurst {
 		l.Allow("1.2.3.4")
 	}
 	if l.Allow("1.2.3.4") {

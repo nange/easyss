@@ -88,10 +88,7 @@ func New(cfg Config) (*HTTP2Transport, error) {
 	if ratio <= 0 || ratio > 1 {
 		ratio = sharedconfig.DefaultPrioritySlotRatio
 	}
-	prioritySlots := int(float64(maxSlots) * ratio)
-	if prioritySlots < 1 {
-		prioritySlots = 1
-	}
+	prioritySlots := max(int(float64(maxSlots)*ratio), 1)
 	if prioritySlots > maxSlots {
 		prioritySlots = maxSlots
 	}
@@ -408,7 +405,7 @@ func (t *HTTP2Transport) Stats() transport.TransportStats {
 
 	for _, pool := range []*slotPool{t.sched.priority, t.sched.bulk} {
 		live := int(pool.liveCount.Load())
-		for i := 0; i < live; i++ {
+		for i := range live {
 			a := int(pool.slots[i].active.Load())
 			ts.ActiveStreams += a
 			if pool == t.sched.priority {
@@ -425,8 +422,8 @@ func (t *HTTP2Transport) Stats() transport.TransportStats {
 	// mutex (recordGrowEvent holds no scheduler lock), so no lock ordering
 	// issue with the read lock held above.
 	t.growMu.Lock()
-	for i := len(t.growEvents) - 1; i >= 0; i-- {
-		ts.GrowEvents = append(ts.GrowEvents, t.growEvents[i])
+	for _, v := range slices.Backward(t.growEvents) {
+		ts.GrowEvents = append(ts.GrowEvents, v)
 	}
 	t.growMu.Unlock()
 	return ts

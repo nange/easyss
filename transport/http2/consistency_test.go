@@ -134,7 +134,7 @@ func TestGrowEventRingOrderAndCap(t *testing.T) {
 	}
 	tr := &HTTP2Transport{sched: newScheduler(4, slots, 4, 2)}
 
-	for i := 0; i < maxGrowEvents+4; i++ {
+	for i := range maxGrowEvents + 4 {
 		tr.recordGrowEvent("bulk", int32(i), transport.OpenRequest{
 			Endpoint: sharedconfig.EndpointUDP,
 			Target:   "8.8.8.8:53",

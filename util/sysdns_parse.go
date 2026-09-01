@@ -15,7 +15,7 @@ func parseDNSServersFromIPConfig(output string) []string {
 	seen := make(map[string]struct{})
 	inDNSSection := false
 
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if isIPConfigDNSLabel(trimmed) {
 			inDNSSection = true

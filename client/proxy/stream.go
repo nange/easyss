@@ -102,7 +102,7 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 	plaintext := protocol.EncodeFrames(frames)
 
 	const maxRetries = 2
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := range maxRetries {
 		salt, err := crypto.GenerateSalt()
 		if err != nil {
 			return nil, fmt.Errorf("generate salt: %w", err)

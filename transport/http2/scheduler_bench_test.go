@@ -40,7 +40,7 @@ func benchScheduler() *slotScheduler {
 
 	// Bulk pool (base 8): three healthy, one heavy, one expiring, one
 	// degraded, three retiring.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		sch.bulk.slots[i].active.Store(7)
 	}
 	sch.bulk.slots[3].active.Store(1)
@@ -70,7 +70,7 @@ func pickSaturation(sch *slotScheduler, mode string) {
 	case "level1":
 		sch.priority.slots[0].active.Store(4)
 		sch.priority.slots[1].active.Store(4)
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			sch.bulk.slots[i].active.Store(8)
 		}
 	case "saturated":
@@ -79,7 +79,7 @@ func pickSaturation(sch *slotScheduler, mode string) {
 		sch.priority.slots[2].active.Store(2) // heavy: 2×4 = 8 ≥ base 4
 		sch.priority.slots[3].active.Store(1) // expiring: 1×8 = 8 ≥ base 4
 		sch.priority.slots[4].active.Store(1) // degraded: 1×16 = 16 ≥ base 4
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			sch.bulk.slots[i].active.Store(8)
 		}
 		sch.bulk.slots[3].active.Store(4) // heavy: 4×4 = 16 ≥ base 8

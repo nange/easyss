@@ -152,7 +152,7 @@ func TestIsDNSResponse(t *testing.T) {
 	}{
 		{"Response=true", makeMsg(true), true},
 		{"Response=false", makeMsg(false), false},
-		{"无 Question", &dns.Msg{MsgHdr: dns.MsgHdr{Response: true}}, false},
+		{"无 Question", &dns.Msg{Response: true}, false},
 	}
 
 	for _, tt := range tests {

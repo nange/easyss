@@ -214,7 +214,7 @@ func TestServerUploadFlowControlWindowsOnWire(t *testing.T) {
 		maxFramesToRead = 16
 	)
 	var streamWindow, connWindow = 0, initialConnWin
-	for i := 0; i < maxFramesToRead; i++ {
+	for range maxFramesToRead {
 		var hdr [9]byte
 		_, err := io.ReadFull(conn, hdr[:])
 		require.NoError(t, err)
