@@ -73,7 +73,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	// helper sets the system DNS to go through TUN.
 	if serverAddr := a.cfg.DefaultServer().Address; net.ParseIP(serverAddr) == nil {
 		var err error
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			if a.core.SocksServer == nil || len(config.DirectDNSServers) == 0 {
 				err = fmt.Errorf("dns cache not available")
 				break

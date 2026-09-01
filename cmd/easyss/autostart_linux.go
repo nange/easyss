@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 const (
@@ -81,13 +82,7 @@ func isAutoStartEnabled() bool {
 	}
 
 	expectedLine := fmt.Sprintf("Exec=%s\n", exe)
-	for _, line := range splitLines(string(data)) {
-		if line == expectedLine {
-			return true
-		}
-	}
-
-	return false
+	return slices.Contains(splitLines(string(data)), expectedLine)
 }
 
 func splitLines(s string) []string {

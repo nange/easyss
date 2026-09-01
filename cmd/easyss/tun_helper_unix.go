@@ -164,7 +164,7 @@ func fetchTunConfig(httpAddr string) (*proxy.TunConfig, error) {
 	url := fmt.Sprintf("http://%s/tun", httpAddr)
 
 	var lastErr error
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if i > 0 {
 			time.Sleep(time.Duration(i) * 200 * time.Millisecond)
 		}
