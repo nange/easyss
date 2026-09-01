@@ -76,7 +76,7 @@ func postBootstrap(t *testing.T, tr *http.Transport, url, saltB64 string, body i
 	require.NoError(t, err)
 	b, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	resp.Body.Close()
+	resp.Body.Close() //nolint:errcheck
 	return resp, b
 }
 
@@ -106,7 +106,7 @@ func TestServeHTTP_HandshakeTimeout408(t *testing.T) {
 	salt, err := crypto.GenerateSalt()
 	require.NoError(t, err)
 	pr, pw := io.Pipe()
-	defer pr.Close()
+	defer pr.Close() //nolint:errcheck
 
 	resp, body := postBootstrap(t, tr, srv.URL+sharedconfig.EndpointTCP, saltToB64(salt), pr)
 	_ = pw.Close()

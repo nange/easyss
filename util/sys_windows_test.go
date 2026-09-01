@@ -11,8 +11,8 @@ func TestDefaultRouteCandidates(t *testing.T) {
 	// easyss TUN routes (1.0.0.0/7 … and the netsh-added 0.0.0.0/0 on the
 	// TUN device) plus two physical default routes with different metrics.
 	rows := []mibIpforwardrow{
-		{dest: 0x01000000, mask: 0xFE000000, ifIndex: 10, metric1: 5},  // TUN 1.0.0.0/7
-		{dest: 0x80000000, mask: 0x80000000, ifIndex: 10, metric1: 5},  // TUN 128.0.0.0/1
+		{dest: 0x01000000, mask: 0xFE000000, ifIndex: 10, metric1: 5},                      // TUN 1.0.0.0/7
+		{dest: 0x80000000, mask: 0x80000000, ifIndex: 10, metric1: 5},                      // TUN 128.0.0.0/1
 		{dest: 0x00000000, mask: 0x00000000, ifIndex: 10, metric1: 6, nextHop: 0x010214AC}, // TUN default (netsh)
 		{dest: 0x00000000, mask: 0x00000000, ifIndex: 5, metric1: 35, nextHop: 0xC0A80101}, // physical default
 		{dest: 0x00000000, mask: 0x00000000, ifIndex: 9, metric1: 25, nextHop: 0xC0A80101}, // physical default, lower metric

@@ -148,14 +148,14 @@ func TestCache_DirectVsProxied(t *testing.T) {
 	msgProxied.SetQuestion("example.com.", dns.TypeA)
 	rrP, _ := dns.NewRR("example.com. 3600 IN A 1.1.1.1")
 	msgProxied.Answer = append(msgProxied.Answer, rrP)
-	c.Set(msgProxied, false)
+	c.Set(msgProxied, false) //nolint:errcheck
 
 	// 存储到 direct
 	msgDirect := &dns.Msg{}
 	msgDirect.SetQuestion("example.com.", dns.TypeA)
 	rrD, _ := dns.NewRR("example.com. 3600 IN A 2.2.2.2")
 	msgDirect.Answer = append(msgDirect.Answer, rrD)
-	c.Set(msgDirect, true)
+	c.Set(msgDirect, true) //nolint:errcheck
 
 	// proxied → 1.1.1.1
 	gotP := c.Get("example.com.", "A", false)

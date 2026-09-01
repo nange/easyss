@@ -72,7 +72,7 @@ func TestIsTunSubnetAddr(t *testing.T) {
 		ip   string
 		want bool
 	}{
-		{"198.18.0.1", true},   // default TunIP
+		{"198.18.0.1", true}, // default TunIP
 		{"198.18.255.255", true},
 		{"198.19.255.255", true}, // /15 upper bound
 		{"198.17.255.255", false},

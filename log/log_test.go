@@ -196,7 +196,7 @@ func TestFileWriter(t *testing.T) {
 	if w == nil {
 		t.Fatal("FileWriter returned nil")
 	}
-	defer w.Close()
+	defer w.Close() //nolint:errcheck
 
 	n, err := io.WriteString(w, "test log message\n")
 	if err != nil {
@@ -207,7 +207,7 @@ func TestFileWriter(t *testing.T) {
 	}
 
 	// 关闭后验证文件内容
-	w.Close()
+	w.Close() //nolint:errcheck
 
 	data, err := os.ReadFile(logPath)
 	if err != nil {

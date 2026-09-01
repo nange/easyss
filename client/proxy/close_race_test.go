@@ -25,7 +25,7 @@ func TestSocks5CloseRacingStart(t *testing.T) {
 			t.Fatalf("listen: %v", err)
 		}
 		addr := l.Addr().String()
-		l.Close()
+		l.Close() //nolint:errcheck
 
 		h := newTestStreamHandler(&mockTransport{})
 		srv, err := NewSocks5Server(addr, "", "", h, nil, "", protocol.MethodAES256GCM, true, 10*time.Second, 30*time.Second, 0, 0, nil)
@@ -42,7 +42,7 @@ func TestSocks5CloseRacingStart(t *testing.T) {
 		for time.Now().Before(deadline) {
 			c, err := net.DialTimeout("tcp", addr, 50*time.Millisecond)
 			if err == nil {
-				c.Close()
+				c.Close() //nolint:errcheck
 				t.Fatalf("iteration #%d: server still listening on %s after Close", i, addr)
 			}
 			time.Sleep(10 * time.Millisecond)

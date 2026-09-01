@@ -561,10 +561,10 @@ func TestRouter_RegexpAndGlobCustomDomain(t *testing.T) {
 
 	// 手动添加 regexp 和 glob 规则（模拟 loadCustomIPDomains 的行为）
 	directRe1, _ := regexp.Compile(`^.*\.baidu\.com$`) // regexp: 前缀
-	directRe2, _ := util.GlobToRegexp("*taobao*")           // glob 通配符
+	directRe2, _ := util.GlobToRegexp("*taobao*")      // glob 通配符
 	r.customDirectRegexps = append(r.customDirectRegexps, directRe1, directRe2)
 
-	proxyRe1, _ := util.GlobToRegexp("*google*")            // glob 通配符
+	proxyRe1, _ := util.GlobToRegexp("*google*")       // glob 通配符
 	proxyRe2, _ := regexp.Compile(`^.*\.youtube\..*$`) // regexp: 前缀
 	r.customProxyRegexps = append(r.customProxyRegexps, proxyRe1, proxyRe2)
 

@@ -57,7 +57,7 @@ func startSilentRemoteUDP(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("listen remote udp: %v", err)
 	}
-	t.Cleanup(func() { pc.Close() })
+	t.Cleanup(func() { pc.Close() }) //nolint:errcheck
 	go func() {
 		buf := make([]byte, 2048)
 		for {

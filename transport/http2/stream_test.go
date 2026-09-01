@@ -25,14 +25,14 @@ func newTestStream() (*HTTP2Stream, *io.PipeReader) {
 
 func TestHTTP2Stream_WriteSurfacesRoundTripErr(t *testing.T) {
 	s, pr := newTestStream()
-	defer pr.Close()
-	defer s.Close()
+	defer pr.Close() //nolint:errcheck
+	defer s.Close()  //nolint:errcheck
 
 	sentinel := errors.New("tls: handshake failure")
 	s.setRoundTripErr(sentinel)
 
 	// Close the reader so the next Write fails with io.ErrClosedPipe.
-	pr.Close()
+	pr.Close() //nolint:errcheck
 
 	_, err := s.Write([]byte("payload"))
 	if err == nil {
@@ -48,11 +48,11 @@ func TestHTTP2Stream_WriteSurfacesRoundTripErr(t *testing.T) {
 
 func TestHTTP2Stream_WriteNoRoundTripErr(t *testing.T) {
 	s, pr := newTestStream()
-	defer pr.Close()
-	defer s.Close()
+	defer pr.Close() //nolint:errcheck
+	defer s.Close()  //nolint:errcheck
 
 	// rtErr remains nil — Write should return the bare io.ErrClosedPipe.
-	pr.Close()
+	pr.Close() //nolint:errcheck
 
 	_, err := s.Write([]byte("payload"))
 	if err == nil {
@@ -68,8 +68,8 @@ func TestHTTP2Stream_WriteNoRoundTripErr(t *testing.T) {
 
 func TestHTTP2Stream_WriteSuccess(t *testing.T) {
 	s, pr := newTestStream()
-	defer pr.Close()
-	defer s.Close()
+	defer pr.Close() //nolint:errcheck
+	defer s.Close()  //nolint:errcheck
 
 	done := make(chan struct{})
 	go func() {
@@ -97,8 +97,8 @@ func TestHTTP2Stream_WriteSuccess(t *testing.T) {
 
 func TestSetRoundTripErr_Concurrent(t *testing.T) {
 	s, pr := newTestStream()
-	defer pr.Close()
-	defer s.Close()
+	defer pr.Close() //nolint:errcheck
+	defer s.Close()  //nolint:errcheck
 
 	var wg sync.WaitGroup
 	for range 100 {
@@ -122,8 +122,8 @@ func TestSetRoundTripErr_Concurrent(t *testing.T) {
 func TestHTTP2Stream_ConnBytesCountsBothDirections(t *testing.T) {
 	slot := &transportSlot{}
 	s, pr := newTestStream()
-	defer pr.Close()
-	defer s.Close()
+	defer pr.Close() //nolint:errcheck
+	defer s.Close()  //nolint:errcheck
 	s.slot = slot
 	s.startTime = time.Now()
 
@@ -144,8 +144,8 @@ func TestHTTP2Stream_ConnBytesCountsBothDirections(t *testing.T) {
 // trackWrite after it started counting connection bytes.
 func TestHTTP2Stream_TrackWriteNilSlotNoOp(t *testing.T) {
 	s, pr := newTestStream()
-	defer pr.Close()
-	defer s.Close()
+	defer pr.Close() //nolint:errcheck
+	defer s.Close()  //nolint:errcheck
 
 	s.trackWrite(1 << 20) // must not panic
 
@@ -172,7 +172,7 @@ func TestHTTP2Stream_RecordsPathRTTOnResponse(t *testing.T) {
 	t.Run("stamped stream records the sample", func(t *testing.T) {
 		stats.ResetCounters()
 		s, respCh := newStream()
-		defer s.Close()
+		defer s.Close() //nolint:errcheck
 
 		s.MarkBootstrapSent()
 		time.Sleep(2 * time.Millisecond)
@@ -198,7 +198,7 @@ func TestHTTP2Stream_RecordsPathRTTOnResponse(t *testing.T) {
 	t.Run("unstamped stream records nothing", func(t *testing.T) {
 		stats.ResetCounters()
 		s, respCh := newStream()
-		defer s.Close()
+		defer s.Close() //nolint:errcheck
 
 		respCh <- roundTripResult{
 			resp: &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))},
@@ -221,8 +221,8 @@ func TestHTTP2Stream_RecordsPathRTTOnResponse(t *testing.T) {
 // idle streams (relay.BidirectionalWithDrain).
 func TestHTTP2Stream_SlotDraining(t *testing.T) {
 	s, pr := newTestStream()
-	defer pr.Close()
-	defer s.Close()
+	defer pr.Close() //nolint:errcheck
+	defer s.Close()  //nolint:errcheck
 
 	slot := &transportSlot{}
 	s.slot = slot

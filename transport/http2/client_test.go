@@ -40,7 +40,7 @@ func TestUTLSDialUsesHTTP2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if got := <-protoCh; got != "HTTP/2.0" {

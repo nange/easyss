@@ -85,7 +85,7 @@ func TestRelayTCPIdleTimeoutClosesBoth(t *testing.T) {
 // relay returns only after both directions completed (both proxy-side
 // sockets closed).
 func TestRelayTCPHalfCloseAndCompletion(t *testing.T) {
-	app, proxyC := tcpPair(t)   // local application <-> proxy
+	app, proxyC := tcpPair(t)     // local application <-> proxy
 	proxyRC, remote := tcpPair(t) // proxy <-> remote server
 
 	done := make(chan struct{})
