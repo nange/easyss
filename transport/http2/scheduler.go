@@ -82,10 +82,7 @@ type slotPool struct {
 // Each pool renumbers its slots from 0, so a slot's stable idx is only
 // meaningful within its own pool.
 func newScheduler(maxSlots int, slots []*transportSlot, threshold int32, prioritySlots int) *slotScheduler {
-	pMax := min(prioritySlots, maxSlots)
-	if pMax < 1 {
-		pMax = 1
-	}
+	pMax := max(min(prioritySlots, maxSlots), 1)
 	bMax := maxSlots - pMax
 	if bMax < 1 {
 		if pMax > 1 {

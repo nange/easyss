@@ -62,3 +62,9 @@ test-race:
 
 lint:
 	go tool golangci-lint run --timeout 10m --verbose
+	@diff="$$(go fix -diff ./...)"; \
+	if [ -n "$$diff" ]; then \
+		echo "Error: 'go fix ./...' has pending changes, run 'go fix ./...' until the diff is empty:"; \
+		echo "$$diff"; \
+		exit 1; \
+	fi
