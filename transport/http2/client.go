@@ -88,10 +88,7 @@ func New(cfg Config) (*HTTP2Transport, error) {
 	if ratio <= 0 || ratio > 1 {
 		ratio = sharedconfig.DefaultPrioritySlotRatio
 	}
-	prioritySlots := max(int(float64(maxSlots)*ratio), 1)
-	if prioritySlots > maxSlots {
-		prioritySlots = maxSlots
-	}
+	prioritySlots := min(max(int(float64(maxSlots)*ratio), 1), maxSlots)
 
 	timeout := cfg.Timeout
 	if timeout <= 0 {

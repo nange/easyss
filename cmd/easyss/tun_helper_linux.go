@@ -50,10 +50,7 @@ func openTunDevice(name string) (int, string, error) {
 		return -1, "", fmt.Errorf("set nonblock: %w", err)
 	}
 
-	namelen := len(name)
-	if namelen > len(ifr.name) {
-		namelen = len(ifr.name)
-	}
+	namelen := min(len(name), len(ifr.name))
 	for i, b := range ifr.name[:namelen] {
 		if b == 0 {
 			namelen = i

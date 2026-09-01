@@ -71,7 +71,7 @@ func setResolvConf(servers []string) error {
 	}
 
 	var lines []string
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "nameserver") {
 			continue
 		}
