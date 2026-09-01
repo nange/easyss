@@ -98,7 +98,7 @@ func fetchExternalURL(t *testing.T, client *http.Client) (body []byte, status in
 				continue
 			}
 			body, err := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			resp.Body.Close() //nolint:errcheck
 			if err != nil {
 				t.Logf("read body %s attempt %d: %v", url, attempt+1, err)
 				continue
@@ -120,7 +120,7 @@ func waitForServer(t *testing.T, addr string) {
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
 		if err == nil {
-			conn.Close()
+			conn.Close() //nolint:errcheck
 			return
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -135,7 +135,7 @@ func waitForListener(t *testing.T, addr string) {
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
 		if err == nil {
-			conn.Close()
+			conn.Close() //nolint:errcheck
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -152,7 +152,7 @@ func startLocalTargetServer(t *testing.T) func() {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "hello-from-target: %s", r.URL.Path)
+		fmt.Fprintf(w, "hello-from-target: %s", r.URL.Path) //nolint:errcheck
 	})
 
 	srv := &http.Server{Addr: addr, Handler: mux}
@@ -184,7 +184,7 @@ func startTCPEchoServer(t *testing.T) func() {
 				return
 			}
 			go func(c net.Conn) {
-				defer c.Close()
+				defer c.Close() //nolint:errcheck
 				buf := make([]byte, 1024)
 				for {
 					nr, err := c.Read(buf)
@@ -202,7 +202,7 @@ func startTCPEchoServer(t *testing.T) func() {
 
 	waitForListener(t, addr)
 
-	return func() { lis.Close() }
+	return func() { lis.Close() } //nolint:errcheck
 }
 
 type testHarness struct {
@@ -454,7 +454,7 @@ func TestV3Integration_LocalDirect(t *testing.T) {
 	targetURL := fmt.Sprintf("http://%s:%d/direct-test", testServerAddr, testTargetPort)
 	resp, err := client.Get(targetURL)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
@@ -475,7 +475,7 @@ func TestV3Integration_CloseWrite(t *testing.T) {
 
 	conn, err := sc.Dial("tcp", testServerAddr+":"+strconv.Itoa(testCloseWritePort))
 	require.NoError(t, err)
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	// Clear any deadline set by SOCKS5 negotiation
 	_ = conn.SetDeadline(time.Time{})

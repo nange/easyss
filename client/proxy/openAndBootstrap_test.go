@@ -86,7 +86,7 @@ func TestOpenAndBootstrap_SuccessFirstTry(t *testing.T) {
 	if tr.openCalls() != 1 {
 		t.Errorf("expected 1 Open call, got %d", tr.openCalls())
 	}
-	defer bs.stream.Close()
+	defer bs.stream.Close() //nolint:errcheck
 }
 
 func TestOpenAndBootstrap_RetryOnErrClosedPipe(t *testing.T) {
@@ -108,7 +108,7 @@ func TestOpenAndBootstrap_RetryOnErrClosedPipe(t *testing.T) {
 	if tr.openCalls() != 2 {
 		t.Errorf("expected 2 Open calls, got %d", tr.openCalls())
 	}
-	defer bs.stream.Close()
+	defer bs.stream.Close() //nolint:errcheck
 }
 
 func TestOpenAndBootstrap_NoRetryOnNonClosedPipeErr(t *testing.T) {
@@ -204,7 +204,7 @@ func TestOpenAndBootstrap_FreshSaltPerAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer bs.stream.Close()
+	defer bs.stream.Close() //nolint:errcheck
 
 	wrapped.mu.Lock()
 	defer wrapped.mu.Unlock()

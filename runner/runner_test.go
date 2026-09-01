@@ -54,7 +54,7 @@ func occupyTCPPort(t *testing.T) (net.Listener, int) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	t.Cleanup(func() { l.Close() })
+	t.Cleanup(func() { l.Close() }) //nolint:errcheck
 	return l, l.Addr().(*net.TCPAddr).Port
 }
 
@@ -66,7 +66,7 @@ func freePort(t *testing.T) int {
 		t.Fatalf("listen: %v", err)
 	}
 	port := l.Addr().(*net.TCPAddr).Port
-	l.Close()
+	l.Close() //nolint:errcheck
 	return port
 }
 
@@ -78,7 +78,7 @@ func occupyUDPPort(t *testing.T) net.PacketConn {
 	if err != nil {
 		t.Fatalf("listen packet: %v", err)
 	}
-	t.Cleanup(func() { pc.Close() })
+	t.Cleanup(func() { pc.Close() }) //nolint:errcheck
 	return pc
 }
 
@@ -125,7 +125,7 @@ func TestPrebindUDP(t *testing.T) {
 		t.Fatalf("listen packet: %v", err)
 	}
 	freeAddr := freePc.LocalAddr().String()
-	freePc.Close()
+	freePc.Close() //nolint:errcheck
 
 	if err := prebindUDP(freeAddr); err != nil {
 		t.Fatalf("unexpected error: %v", err)

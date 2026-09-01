@@ -9,9 +9,9 @@ import (
 	"syscall"
 	"testing"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/router"
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/xjasonlyu/tun2socks/v2/dialer"
 )
 

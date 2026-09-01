@@ -34,7 +34,7 @@ func (s *drainMockStream) Read(p []byte) (int, error) {
 }
 
 func (s *drainMockStream) Write(p []byte) (int, error) { return len(p), nil }
-func (s *drainMockStream) CloseWrite() error            { return nil }
+func (s *drainMockStream) CloseWrite() error           { return nil }
 func (s *drainMockStream) Close() error {
 	s.closeOnce.Do(func() { close(s.closedCh) })
 	return nil
@@ -103,7 +103,7 @@ func TestStreamRelayDrainsIdleStreamOnDrainingSlot(t *testing.T) {
 	stats.ResetCounters()
 	stream := newDrainMockStream(true)
 	h, tx, rx, lc, lcPeer := newDrainHandler(stream, 100*time.Millisecond)
-	defer lcPeer.Close()
+	defer lcPeer.Close() //nolint:errcheck
 
 	done := make(chan error, 1)
 	go func() { done <- h.relay("example.com:443", lc, tx, rx, stream) }()
@@ -130,7 +130,7 @@ func TestStreamRelayDrainsIdleStreamOnDrainingSlot(t *testing.T) {
 func TestStreamRelayKeepsIdleStreamOnHealthySlot(t *testing.T) {
 	stream := newDrainMockStream(false)
 	h, tx, rx, lc, lcPeer := newDrainHandler(stream, 100*time.Millisecond)
-	defer lcPeer.Close()
+	defer lcPeer.Close() //nolint:errcheck
 
 	done := make(chan error, 1)
 	go func() { done <- h.relay("example.com:443", lc, tx, rx, stream) }()

@@ -341,7 +341,7 @@ func TestServeFallback_ProxyForwardsRequest(t *testing.T) {
 	// Start a test upstream server that returns a known response.
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Upstream", "true")
-		w.Write([]byte("from-upstream:" + r.URL.Path))
+		w.Write([]byte("from-upstream:" + r.URL.Path)) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -365,7 +365,7 @@ func TestServeFallback_ProxyForwardsRequest(t *testing.T) {
 func TestServeFallback_ProxyHighestPriority(t *testing.T) {
 	// Start a test upstream server.
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("proxy-response"))
+		w.Write([]byte("proxy-response")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -486,7 +486,7 @@ func TestSetFallbackTarget_InvalidPath(t *testing.T) {
 func TestSetFallbackTarget_ProxyEndToEnd(t *testing.T) {
 	// Full integration: SetFallbackTarget with HTTP URL then serve a request.
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("upstream:" + r.URL.Path))
+		w.Write([]byte("upstream:" + r.URL.Path)) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -516,7 +516,7 @@ func TestSetFallbackProxy_HostHeader(t *testing.T) {
 	var gotHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHost = r.Host
-		w.Write([]byte("ok"))
+		w.Write([]byte("ok")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -621,7 +621,7 @@ func TestSetFallbackProxy_PreserveHost(t *testing.T) {
 	var gotHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHost = r.Host
-		w.Write([]byte("ok"))
+		w.Write([]byte("ok")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -687,7 +687,7 @@ func TestSetFallbackProxy_RewriteSetCookieDomain(t *testing.T) {
 		// a port number.
 		w.Header().Add("Set-Cookie",
 			"_gh_sess=abc123; Domain="+upstreamHost+"; Path=/; HttpOnly; Secure")
-		w.Write([]byte("<html></html>"))
+		w.Write([]byte("<html></html>")) //nolint:errcheck //nolint:errcheck
 	}))
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
@@ -734,7 +734,7 @@ func TestSetFallbackProxy_RewriteSetCookieDomainWithDot(t *testing.T) {
 		w.Header().Set("Content-Type", "text/html")
 		// Manually set a raw Set-Cookie with leading-dot domain.
 		w.Header().Add("Set-Cookie", "test=val; Domain=."+upstreamHost+"; Path=/; Secure")
-		w.Write([]byte("<html></html>"))
+		w.Write([]byte("<html></html>")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
@@ -764,7 +764,7 @@ func TestSetFallbackProxy_SetCookieOtherDomainUnchanged(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.Header().Add("Set-Cookie", "test=val; Domain=other.example.com; Path=/")
-		w.Write([]byte("<html></html>"))
+		w.Write([]byte("<html></html>")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -797,7 +797,7 @@ func TestSetFallbackProxy_SetCookieNoDomainUnchanged(t *testing.T) {
 			Value: "val",
 			Path:  "/",
 		})
-		w.Write([]byte("<html></html>"))
+		w.Write([]byte("<html></html>")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -834,7 +834,7 @@ func TestSetFallbackProxy_RewriteContent(t *testing.T) {
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte(`<html><a href="https://` + upstreamHost + `/repo">link</a>` +
+		w.Write([]byte(`<html><a href="https://` + upstreamHost + `/repo">link</a>` + //nolint:errcheck
 			`<turbo-frame src="https://` + upstreamHost + `/repo/releases/expanded_assets/v1">` +
 			`</turbo-frame></html>`))
 	}))
@@ -871,7 +871,7 @@ func TestSetFallbackProxy_RewriteContentCSP(t *testing.T) {
 		w.Header().Set("Content-Type", "text/html")
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'self'; connect-src 'self' https://"+upstreamHost+" api."+upstreamHost)
-		w.Write([]byte("<html></html>"))
+		w.Write([]byte("<html></html>")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
@@ -912,7 +912,7 @@ func TestSetFallbackProxy_RewriteCSPBareHost(t *testing.T) {
 		// Simulate GitHub-style CSP with bare-host paths in worker-src.
 		w.Header().Set("Content-Security-Policy",
 			"worker-src "+upstreamHost+"/assets-cdn/worker/ "+upstreamHost+"/assets/ gist."+upstreamHost+"/assets-cdn/worker/")
-		w.Write([]byte("<html></html>"))
+		w.Write([]byte("<html></html>")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
@@ -956,7 +956,7 @@ func TestSetFallbackProxy_RewriteCSPMixed(t *testing.T) {
 		w.Header().Set("Content-Security-Policy",
 			"connect-src 'self' https://"+upstreamHost+" "+upstreamHost+"/api "+
 				"api."+upstreamHost+" https://other.example.com")
-		w.Write([]byte("<html></html>"))
+		w.Write([]byte("<html></html>")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
@@ -1002,8 +1002,8 @@ func TestSetFallbackProxy_RewriteContentGzip(t *testing.T) {
 		w.Header().Set("Content-Type", "text/html")
 		w.Header().Set("Content-Encoding", "gzip")
 		gw := gzip.NewWriter(w)
-		gw.Write([]byte(`<html><a href="https://` + upstreamHost + `/test">link</a></html>`))
-		gw.Close()
+		gw.Write([]byte(`<html><a href="https://` + upstreamHost + `/test">link</a></html>`)) //nolint:errcheck
+		gw.Close()                                                                            //nolint:errcheck
 	}))
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
@@ -1038,7 +1038,7 @@ func TestSetFallbackProxy_RewriteContentNonHTML(t *testing.T) {
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"url":"https://` + upstreamHost + `/api"}`))
+		w.Write([]byte(`{"url":"https://` + upstreamHost + `/api"}`)) //nolint:errcheck
 	}))
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
@@ -1054,10 +1054,10 @@ func TestSetFallbackProxy_RewriteContentNonHTML(t *testing.T) {
 	ServeFallback(rec, req)
 
 	// JSON should not be rewritten.
-	if bytes.Contains([]byte(rec.Body.String()), []byte("my-site.com")) {
+	if bytes.Contains(rec.Body.Bytes(), []byte("my-site.com")) {
 		t.Errorf("non-HTML body should not be rewritten\nbody: %s", rec.Body.String())
 	}
-	if !bytes.Contains([]byte(rec.Body.String()), []byte(upstreamHost)) {
+	if !bytes.Contains(rec.Body.Bytes(), []byte(upstreamHost)) {
 		t.Errorf("non-HTML body should contain upstream host\nbody: %s", rec.Body.String())
 	}
 }
@@ -1069,7 +1069,7 @@ func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientGzip(t *testing.T) 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAE = r.Header.Get("Accept-Encoding")
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte("<html></html>"))
+		w.Write([]byte("<html></html>")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -1096,7 +1096,7 @@ func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientNoGzip(t *testing.T
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAE = r.Header.Get("Accept-Encoding")
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte("<html></html>"))
+		w.Write([]byte("<html></html>")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -1123,7 +1123,7 @@ func TestSetFallbackProxy_RewriteContent_RecompressGzip(t *testing.T) {
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(`<html><a href="https://` + upstreamHost + `/test">link</a></html>`))
+		w.Write([]byte(`<html><a href="https://` + upstreamHost + `/test">link</a></html>`)) //nolint:errcheck
 	}))
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
@@ -1149,7 +1149,7 @@ func TestSetFallbackProxy_RewriteContent_RecompressGzip(t *testing.T) {
 		t.Fatalf("gzip reader: %v", err)
 	}
 	body, _ := io.ReadAll(gr)
-	gr.Close()
+	gr.Close() //nolint:errcheck
 	if !bytes.Contains(body, []byte("http://my-site.com/test")) {
 		t.Errorf("decompressed body should contain rewritten URL\nbody: %s", body)
 	}
@@ -1167,8 +1167,8 @@ func TestSetFallbackProxy_RewriteContent_NoRecompressWhenClientNoGzip(t *testing
 		w.Header().Set("Content-Type", "text/html")
 		w.Header().Set("Content-Encoding", "gzip")
 		gw := gzip.NewWriter(w)
-		gw.Write([]byte(`<html><a href="https://` + upstreamHost + `/test">link</a></html>`))
-		gw.Close()
+		gw.Write([]byte(`<html><a href="https://` + upstreamHost + `/test">link</a></html>`)) //nolint:errcheck
+		gw.Close()                                                                            //nolint:errcheck
 	}))
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
@@ -1234,7 +1234,7 @@ func TestSetFallbackProxy_RewriteOrigin(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotOrigin = r.Header.Get("Origin")
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte("<html></html>"))
+		w.Write([]byte("<html></html>")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 	upstreamHost := upstream.Listener.Addr().String()
@@ -1264,7 +1264,7 @@ func TestSetFallbackProxy_RewriteReferer(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotReferer = r.Header.Get("Referer")
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte("<html></html>"))
+		w.Write([]byte("<html></html>")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 	upstreamHost := upstream.Listener.Addr().String()
@@ -1293,7 +1293,7 @@ func TestSetFallbackProxy_OtherHostOriginUnchanged(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotOrigin = r.Header.Get("Origin")
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte("<html></html>"))
+		w.Write([]byte("<html></html>")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -1318,7 +1318,7 @@ func TestSetFallbackProxy_OtherHostOriginUnchanged(t *testing.T) {
 func TestSetFallbackProxy_NoOriginNoError(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte("<html></html>"))
+		w.Write([]byte("<html></html>")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -1347,14 +1347,14 @@ func TestSetFallbackProxy_NoOriginNoError(t *testing.T) {
 func TestSetFallbackProxy_CDNRoute(t *testing.T) {
 	var gotHost, gotPath string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("upstream"))
+		w.Write([]byte("upstream")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
 	cdnServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHost = r.Host
 		gotPath = r.URL.Path
-		w.Write([]byte("cdn-content"))
+		w.Write([]byte("cdn-content")) //nolint:errcheck
 	}))
 	defer cdnServer.Close()
 	cdnHost := cdnServer.Listener.Addr().String()
@@ -1393,7 +1393,7 @@ func TestSetFallbackProxy_CDNRouteDisallowedHost(t *testing.T) {
 	var gotPath string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		w.Write([]byte("upstream"))
+		w.Write([]byte("upstream")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -1424,7 +1424,7 @@ func TestSetFallbackProxy_CDNHTMLRewrite(t *testing.T) {
 	cdnHost := "cdn.example.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(`<html><link rel="stylesheet" href="https://` + cdnHost + `/assets/foo.css">` +
+		w.Write([]byte(`<html><link rel="stylesheet" href="https://` + cdnHost + `/assets/foo.css">` + //nolint:errcheck
 			`<script src="https://` + cdnHost + `/assets/bar.js"></script></html>`))
 	}))
 	defer upstream.Close()
@@ -1464,7 +1464,7 @@ func TestSetFallbackProxy_CDNCSPRewrite(t *testing.T) {
 		w.Header().Set("Content-Type", "text/html")
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'self'; style-src 'self' https://"+cdnHost+" "+cdnHost+"/assets/; script-src "+cdnHost)
-		w.Write([]byte("<html></html>"))
+		w.Write([]byte("<html></html>")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -1497,7 +1497,7 @@ func TestSetFallbackProxy_CDNNotConfigured(t *testing.T) {
 	cdnHost := "cdn.example.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(`<html><link href="https://` + cdnHost + `/foo.css"></html>`))
+		w.Write([]byte(`<html><link href="https://` + cdnHost + `/foo.css"></html>`)) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -1526,7 +1526,7 @@ func TestSetFallbackProxy_CDNSubdomainRoute(t *testing.T) {
 	cdnParent := "githubassets.com"
 	cdnSub := "github.githubassets.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("upstream"))
+		w.Write([]byte("upstream")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -1623,7 +1623,7 @@ func TestSetFallbackProxy_CDNSubdomainHTMLRewrite(t *testing.T) {
 	cdnSub := "github.githubassets.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(`<html><link rel="stylesheet" href="https://` + cdnSub + `/assets/foo.css">` +
+		w.Write([]byte(`<html><link rel="stylesheet" href="https://` + cdnSub + `/assets/foo.css">` + //nolint:errcheck
 			`<link rel="stylesheet" href="https://` + cdnParent + `/assets/bar.css"></html>`))
 	}))
 	defer upstream.Close()
@@ -1668,7 +1668,7 @@ func TestSetFallbackProxy_CDNNonMatchingSubdomain(t *testing.T) {
 	fakeHost := "notgithubassets.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(`<html><link href="https://` + fakeHost + `/foo.css"></html>`))
+		w.Write([]byte(`<html><link href="https://` + fakeHost + `/foo.css"></html>`)) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -1706,7 +1706,7 @@ func TestSetFallbackProxy_CDNCSPSubdomainRewrite(t *testing.T) {
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'self'; style-src 'self' https://"+cdnSub+" "+cdnSub+"/assets/ "+
 				cdnSub+" https://"+cdnParent+" "+cdnParent+"/assets/")
-		w.Write([]byte("<html></html>"))
+		w.Write([]byte("<html></html>")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -1758,7 +1758,7 @@ func TestSetFallbackProxy_CSPRewrittenEvenWhenBodyUnreadable(t *testing.T) {
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'none'; style-src 'unsafe-inline' "+cdnSub+" https://"+cdnSub+
 				"; script-src "+cdnSub)
-		w.Write([]byte("some brotli content that cannot be decompressed"))
+		w.Write([]byte("some brotli content that cannot be decompressed")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -1793,7 +1793,7 @@ func TestSetFallbackProxy_CDNCSPTrailingSlash(t *testing.T) {
 		// CSP with bare host (no path) — should get trailing "/" after rewrite.
 		w.Header().Set("Content-Security-Policy",
 			"style-src 'unsafe-inline' "+cdnSub+"; script-src https://"+cdnSub)
-		w.Write([]byte("<html></html>"))
+		w.Write([]byte("<html></html>")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
@@ -1828,7 +1828,7 @@ func TestSetFallbackProxy_NonRewritableContentType(t *testing.T) {
 	cdnHost := "github.githubassets.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript")
-		w.Write([]byte(`fetch("https://` + cdnHost + `/data.js");`))
+		w.Write([]byte(`fetch("https://` + cdnHost + `/data.js");`)) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
