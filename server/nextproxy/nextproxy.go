@@ -242,10 +242,7 @@ func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string
 		dialTimeout = config.DefaultDialTimeout
 	}
 	dialer := &net.Dialer{Timeout: dialTimeout}
-	socksTimeout := int(dialTimeout.Seconds())
-	if socksTimeout < 1 {
-		socksTimeout = 1
-	}
+	socksTimeout := max(int(dialTimeout.Seconds()), 1)
 
 	type result struct {
 		conn net.Conn

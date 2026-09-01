@@ -267,7 +267,7 @@ func TestJitterTTL_NeverExpire(t *testing.T) {
 func TestJitterTTL_Range(t *testing.T) {
 	const base = 1800
 	seen := make(map[int]bool)
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		ttl := jitterTTL(base)
 		// 结果必须在 [base, 2*base) 区间内
 		if ttl < base || ttl >= 2*base {

@@ -92,14 +92,12 @@ func TestDirectUDPRelayConcurrentDial(t *testing.T) {
 	key := "direct_" + clientAddr.String() + "_" + dst
 
 	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 2 {
+		wg.Go(func() {
 			if err := srv.directUDPRelay(&socks5.Server{}, clientAddr, directTestDatagram(dst, 1), dst); err != nil {
 				t.Errorf("directUDPRelay: %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

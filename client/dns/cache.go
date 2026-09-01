@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"strings"
 
 	"github.com/coocood/freecache"
@@ -199,20 +200,16 @@ func (c *Cache) PrePopulateWithFallback(domain string, dnsServers []string, requ
 	}
 
 	if BuiltinDNSAvailable() {
-		for _, s := range dnsServers {
-			if try(s) {
-				MarkBuiltinDNSAvailable()
-				return nil
-			}
+		if slices.ContainsFunc(dnsServers, try) {
+			MarkBuiltinDNSAvailable()
+			return nil
 		}
 		MarkBuiltinDNSUnavailable()
 		log.Warn("[DNS] all builtin dns servers failed, fallback to system dns", "domain", domain, "err", lastErr)
 	}
 
-	for _, s := range systemDNSServersFunc() {
-		if try(s) {
-			return nil
-		}
+	if slices.ContainsFunc(systemDNSServersFunc(), try) {
+		return nil
 	}
 
 	if lastErr == nil {

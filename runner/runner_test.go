@@ -33,7 +33,7 @@ func TestStopImmediatelyAfterRun(t *testing.T) {
 	old := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(old)
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		cfg := testConfig()
 		cfg.Local.SocksPort = freePort(t)
 		cfg.Local.HTTPPort = 0

@@ -89,10 +89,7 @@ func bidirectional(idleTimeout time.Duration, drainWhen func() bool, drainIdle t
 	// drain fires within ~drainIdle..drainIdle+tick of going idle.
 	var drainC <-chan time.Time
 	if drainWhen != nil && drainIdle > 0 {
-		tick := drainIdle / 6
-		if tick < 10*time.Millisecond {
-			tick = 10 * time.Millisecond
-		}
+		tick := max(drainIdle/6, 10*time.Millisecond)
 		drainTicker := time.NewTicker(tick)
 		defer drainTicker.Stop()
 		drainC = drainTicker.C
@@ -122,7 +119,7 @@ func bidirectional(idleTimeout time.Duration, drainWhen func() bool, drainIdle t
 					onClose()
 				}
 				// Drain both goroutine results so they can exit cleanly.
-				for i := 0; i < 2; i++ {
+				for range 2 {
 					select {
 					case <-errCh:
 					default:
@@ -140,7 +137,7 @@ func bidirectional(idleTimeout time.Duration, drainWhen func() bool, drainIdle t
 				onClose()
 			}
 			// Drain both goroutine results so they can exit cleanly.
-			for i := 0; i < 2; i++ {
+			for range 2 {
 				select {
 				case <-errCh:
 				default:

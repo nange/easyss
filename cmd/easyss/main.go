@@ -202,7 +202,7 @@ func (a *App) Start() error {
 			prepopulated := true
 			if serverAddr := a.cfg.DefaultServer().Address; net.ParseIP(serverAddr) == nil {
 				var err error
-				for i := 0; i < 3; i++ {
+				for i := range 3 {
 					if a.core.SocksServer == nil || len(config.DirectDNSServers) == 0 {
 						prepopulated = false
 						break

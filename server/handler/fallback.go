@@ -735,12 +735,12 @@ func cdnHostFromRequest(req *http.Request, cdnSet map[string]bool) (string, bool
 		return "", false
 	}
 	rest := path[len(cdnPathPrefix):]
-	slashIdx := strings.Index(rest, "/")
+	before, _, ok := strings.Cut(rest, "/")
 	var host string
-	if slashIdx < 0 {
+	if !ok {
 		host = rest
 	} else {
-		host = rest[:slashIdx]
+		host = before
 	}
 	if host == "" || !cdnHostMatches(host, cdnSet) {
 		return "", false
@@ -755,7 +755,7 @@ func clientAcceptsGzip(acceptEncoding string) bool {
 	if acceptEncoding == "" {
 		return false
 	}
-	for _, part := range strings.Split(acceptEncoding, ",") {
+	for part := range strings.SplitSeq(acceptEncoding, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
@@ -971,8 +971,8 @@ func rewriteCDNURLs(body []byte, origOrigin string, cdnHosts map[string]bool) []
 			// Extract the full host (everything between "://" and the
 			// trailing "/" or ":").
 			s := string(match)
-			idx := strings.Index(s, "://")
-			rest := s[idx+3:]
+			_, after, _ := strings.Cut(s, "://")
+			rest := after
 			// Trim trailing "/" or ":" to get the host.
 			fullHost := rest
 			if last := fullHost[len(fullHost)-1]; last == '/' || last == ':' {

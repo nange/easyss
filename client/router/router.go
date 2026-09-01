@@ -80,8 +80,8 @@ func NewGeoSite(data []byte) *GeoSite {
 		fullDomain: make(map[string]struct{}),
 	}
 
-	lines := bytes.Split(data, []byte("\n"))
-	for _, line := range lines {
+	lines := bytes.SplitSeq(data, []byte("\n"))
+	for line := range lines {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue

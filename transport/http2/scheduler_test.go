@@ -826,7 +826,7 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 		// connections, so the sibling pool is grown (with first-activation
 		// +2 semantics).
 		sch := newGrowTestScheduler(10, 5, 5, 0)
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			sch.priority.slots[i].active.Store(4)
 		}
 		sch.grow(true)
@@ -843,7 +843,7 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 		// the sibling pool's slots saturated too (8 each): a new
 		// connection is genuinely needed, so the sibling grows.
 		sch := newGrowTestScheduler(10, 5, 5, 2)
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			sch.priority.slots[i].active.Store(4)
 		}
 		sch.bulk.slots[0].active.Store(8)
@@ -879,7 +879,7 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 		// growing it. Cross-pool growth is throttled by the sibling's own
 		// slot thresholds.
 		sch := newGrowTestScheduler(10, 5, 5, 2)
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			sch.priority.slots[i].active.Store(4)
 		}
 		sch.bulk.slots[0].active.Store(1)
@@ -906,7 +906,7 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 		sch.priority.slots[3].heavy.Store(1)
 		sch.priority.slots[4].active.Store(3)
 		sch.priority.slots[4].heavy.Store(1)
-		for i := 0; i < 7; i++ {
+		for i := range 7 {
 			sch.bulk.slots[i].active.Store(1)
 		}
 		sch.grow(true)
@@ -917,7 +917,7 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 
 	t.Run("bulk pool full grows unactivated priority pool", func(t *testing.T) {
 		sch := newGrowTestScheduler(10, 5, 0, 5)
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			sch.bulk.slots[i].active.Store(8)
 		}
 		sch.grow(false)
@@ -931,7 +931,7 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 
 	t.Run("both pools full never grows", func(t *testing.T) {
 		sch := newGrowTestScheduler(10, 5, 5, 5)
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			sch.priority.slots[i].active.Store(4)
 			sch.bulk.slots[i].active.Store(8)
 		}
@@ -949,14 +949,14 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 func TestGrowConcurrent(t *testing.T) {
 	t.Run("concurrent growers activate the sibling once", func(t *testing.T) {
 		sch := newGrowTestScheduler(10, 5, 5, 0)
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			sch.priority.slots[i].active.Store(4)
 		}
 		const n = 64
 		var wg sync.WaitGroup
 		var grown atomic.Int64
 		wg.Add(n)
-		for i := 0; i < n; i++ {
+		for range n {
 			go func() {
 				defer wg.Done()
 				if pool, _ := sch.grow(true); pool != nil {
@@ -975,7 +975,7 @@ func TestGrowConcurrent(t *testing.T) {
 
 	t.Run("concurrent growers add at most one slot", func(t *testing.T) {
 		sch := newGrowTestScheduler(10, 5, 5, 2)
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			sch.priority.slots[i].active.Store(4)
 		}
 		sch.bulk.slots[0].active.Store(8)
@@ -984,7 +984,7 @@ func TestGrowConcurrent(t *testing.T) {
 		var wg sync.WaitGroup
 		var grown atomic.Int64
 		wg.Add(n)
-		for i := 0; i < n; i++ {
+		for range n {
 			go func() {
 				defer wg.Done()
 				if pool, _ := sch.grow(true); pool != nil {
@@ -1043,7 +1043,7 @@ func TestGrowReturnValue(t *testing.T) {
 
 	t.Run("cross-pool growth reports the sibling pool", func(t *testing.T) {
 		sch := newGrowTestScheduler(10, 5, 5, 0)
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			sch.priority.slots[i].active.Store(4)
 		}
 		pool, live := sch.grow(true)
@@ -1057,7 +1057,7 @@ func TestGrowReturnValue(t *testing.T) {
 
 	t.Run("nil when both pools are at their caps", func(t *testing.T) {
 		sch := newGrowTestScheduler(10, 5, 5, 5)
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			sch.priority.slots[i].active.Store(4)
 			sch.bulk.slots[i].active.Store(8)
 		}

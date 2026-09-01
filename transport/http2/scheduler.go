@@ -82,10 +82,7 @@ type slotPool struct {
 // Each pool renumbers its slots from 0, so a slot's stable idx is only
 // meaningful within its own pool.
 func newScheduler(maxSlots int, slots []*transportSlot, threshold int32, prioritySlots int) *slotScheduler {
-	pMax := prioritySlots
-	if pMax > maxSlots {
-		pMax = maxSlots
-	}
+	pMax := min(prioritySlots, maxSlots)
 	if pMax < 1 {
 		pMax = 1
 	}
@@ -379,7 +376,7 @@ func (p *slotPool) tieredSelectAt(live int, recordStats bool) (*transportSlot, b
 		best = nil
 		var bestActive int32 = math.MaxInt32
 		var bestNeg int32 = math.MaxInt32
-		for i := 0; i < live; i++ {
+		for i := range live {
 			sl := p.slots[i]
 			if slotTierOf(sl) != tier || draining(sl) {
 				continue
@@ -457,10 +454,7 @@ func (p *slotPool) pressureLevel(live int) int32 {
 		}
 		return 1 + floorLog2(activeMin/p.base)
 	}
-	poolMin := p.minActiveInRange(live)
-	if poolMin < p.base {
-		poolMin = p.base
-	}
+	poolMin := max(p.minActiveInRange(live), p.base)
 	return 1 + floorLog2(poolMin/p.base)
 }
 
@@ -519,7 +513,7 @@ func tierCap(tier slotTier, level, base int32) int32 {
 func (p *slotPool) minActiveInTier(live int, tier slotTier) (int32, bool) {
 	var min int32 = math.MaxInt32
 	found := false
-	for i := 0; i < live; i++ {
+	for i := range live {
 		sl := p.slots[i]
 		if slotTierOf(sl) != tier {
 			continue
@@ -536,7 +530,7 @@ func (p *slotPool) minActiveInTier(live int, tier slotTier) (int32, bool) {
 // `live` slots; 0 when the range holds no slot.
 func (p *slotPool) minActiveInRange(live int) int32 {
 	var min int32 = math.MaxInt32
-	for i := 0; i < live; i++ {
+	for i := range live {
 		if a := p.slots[i].active.Load(); a < min {
 			min = a
 		}
@@ -569,7 +563,7 @@ func (p *slotPool) leastActive(live int, recordStats bool) *transportSlot {
 	var lastResort *transportSlot // least-loaded retiring/draining slot, absolute last resort
 	var resWeighted int32 = math.MaxInt32
 	var resNeg int32 = math.MaxInt32
-	for i := 0; i < live; i++ {
+	for i := range live {
 		sl := p.slots[i]
 		w := weightedActive(sl)
 		neg := negativeScore(sl)
@@ -716,7 +710,7 @@ func (s *slotScheduler) shrinkIdleLocked() {
 // count. Returns false when no idle slot remains. Caller must hold s.mu.
 func (p *slotPool) removeIdleLocked() bool {
 	live := int(p.liveCount.Load())
-	for i := 0; i < live; i++ {
+	for i := range live {
 		if p.slots[i].active.Load() != 0 {
 			continue
 		}
@@ -752,7 +746,7 @@ func (s *slotScheduler) remove(sl *transportSlot) bool {
 	}
 	for _, pool := range []*slotPool{s.priority, s.bulk} {
 		live := int(pool.liveCount.Load())
-		for i := 0; i < live; i++ {
+		for i := range live {
 			if pool.slots[i] != sl {
 				continue
 			}

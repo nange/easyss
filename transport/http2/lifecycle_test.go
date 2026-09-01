@@ -36,7 +36,7 @@ func TestEvaluateSlotHealth(t *testing.T) {
 		// The first interval after heavy 0->1 only resets the throughput
 		// baseline and is skipped.
 		lowThroughput(s)
-		for i := 0; i < sharedconfig.DegradedPersistCycles-1; i++ {
+		for i := range sharedconfig.DegradedPersistCycles - 1 {
 			lowThroughput(s)
 			if s.degraded.Load() {
 				t.Fatalf("degraded too early at cycle %d", i+1)
@@ -64,7 +64,7 @@ func TestEvaluateSlotHealth(t *testing.T) {
 	t.Run("clears degraded after consecutive healthy intervals", func(t *testing.T) {
 		s := newHeavySlot()
 		lowThroughput(s) // baseline reset
-		for i := 0; i < sharedconfig.DegradedPersistCycles; i++ {
+		for range sharedconfig.DegradedPersistCycles {
 			lowThroughput(s)
 		}
 		if !s.degraded.Load() {
@@ -82,7 +82,7 @@ func TestEvaluateSlotHealth(t *testing.T) {
 
 	t.Run("slots without heavy streams never degrade", func(t *testing.T) {
 		s := &transportSlot{t: &http.Transport{}}
-		for i := 0; i < sharedconfig.DegradedPersistCycles+2; i++ {
+		for range sharedconfig.DegradedPersistCycles + 2 {
 			lowThroughput(s)
 		}
 		if s.degraded.Load() {
@@ -94,7 +94,7 @@ func TestEvaluateSlotHealth(t *testing.T) {
 		s := newHeavySlot()
 		// Baseline reset happens before the congestion gate.
 		lc.evaluateSlotHealth(0, s, interval, false)
-		for i := 0; i < sharedconfig.DegradedPersistCycles+2; i++ {
+		for range sharedconfig.DegradedPersistCycles + 2 {
 			s.bytesRecv.Add(10 * 1024)
 			lc.evaluateSlotHealth(0, s, interval, false)
 		}
@@ -169,7 +169,7 @@ func TestSuspicionInsteadOfDirectMark(t *testing.T) {
 	}
 
 	low() // baseline reset
-	for i := 0; i < sharedconfig.DegradedPersistCycles; i++ {
+	for range sharedconfig.DegradedPersistCycles {
 		low()
 	}
 	if s.degraded.Load() {
@@ -195,7 +195,7 @@ func TestNoProbeFuncFallsBackToPassive(t *testing.T) {
 	s.heavy.Store(1)
 
 	lc.evaluateSlotHealth(0, s, interval, true) // baseline reset
-	for i := 0; i < sharedconfig.DegradedPersistCycles; i++ {
+	for range sharedconfig.DegradedPersistCycles {
 		s.bytesRecv.Add(10 * 1024)
 		lc.evaluateSlotHealth(0, s, interval, true)
 	}
@@ -309,7 +309,7 @@ func TestProbeUnsupportedFallsBackToPassive(t *testing.T) {
 	s.suspected = false
 	s.heavy.Store(1)
 	lc.evaluateSlotHealth(0, s, interval, true) // baseline reset
-	for i := 0; i < sharedconfig.DegradedPersistCycles; i++ {
+	for range sharedconfig.DegradedPersistCycles {
 		s.bytesRecv.Add(10 * 1024)
 		lc.evaluateSlotHealth(0, s, interval, true)
 	}
@@ -361,7 +361,7 @@ func TestProbeMaxPerInterval(t *testing.T) {
 		calls++
 		return 10 * 1024, probeSlow
 	})
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		sch.priority.slots[i].suspected = true
 	}
 
@@ -445,7 +445,7 @@ func TestRotationLifetimeJitter(t *testing.T) {
 	const base = 15 * time.Minute
 	span := base * 3 / 10
 	min, max := base-span, base+span
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		got := rotationLifetime(base)
 		if got < min || got > max {
 			t.Fatalf("rotationLifetime(%v) = %v, want within [%v, %v]", base, got, min, max)

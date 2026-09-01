@@ -88,7 +88,7 @@ var testExternalURLs = []string{
 func fetchExternalURL(t *testing.T, client *http.Client) (body []byte, status int) {
 	t.Helper()
 	for _, url := range testExternalURLs {
-		for attempt := 0; attempt < 2; attempt++ {
+		for attempt := range 2 {
 			if attempt > 0 {
 				time.Sleep(2 * time.Second)
 			}

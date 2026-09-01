@@ -101,12 +101,10 @@ func TestSetRoundTripErr_Concurrent(t *testing.T) {
 	defer s.Close()
 
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 100 {
+		wg.Go(func() {
 			s.setRoundTripErr(errors.New("concurrent error"))
-		}()
+		})
 	}
 	wg.Wait()
 

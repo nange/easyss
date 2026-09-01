@@ -420,14 +420,14 @@ func TestConcurrentAddIP(t *testing.T) {
 	np := &NextProxy{ips: make(map[string]struct{})}
 	done := make(chan struct{})
 	go func() {
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			np.AddIP("10.0.0.1")
 			np.ShouldProxy("10.0.0.1")
 		}
 		done <- struct{}{}
 	}()
 	go func() {
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			np.AddIP("10.0.0.2")
 			np.ShouldProxy("10.0.0.2")
 		}
