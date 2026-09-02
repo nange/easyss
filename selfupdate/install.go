@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -68,6 +69,29 @@ func Install(stagingDir string) error {
 	return installAt(exe, stagingDir)
 }
 
+// permissionHint rewrites a permission failure into a user-friendly message,
+// since the reason is otherwise opaque (e.g. Program Files on Windows or
+// /Applications on macOS).
+func permissionHint(action string, err error) error {
+	if os.IsPermission(err) {
+		return fmt.Errorf("%s: 安装目录无写权限，请以管理员身份运行后重试", action)
+	}
+	return fmt.Errorf("%s: %w", action, err)
+}
+
+// clearQuarantine removes the macOS quarantine attribute from a freshly
+// installed app bundle so Gatekeeper does not block it on first launch. It
+// matches the README's manual `xattr -cr` step. Best-effort: a failure is
+// logged and does not fail the install.
+func clearQuarantine(path string) {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	if err := exec.Command("xattr", "-cr", path).Run(); err != nil {
+		log.Warn("[UPDATE] clear quarantine attribute", "path", path, "err", err)
+	}
+}
+
 func installAt(exe, stagingDir string) error {
 	if bundle := appBundleRoot(exe); bundle != "" {
 		return installBundle(stagingDir, bundle)
@@ -82,11 +106,11 @@ func installAt(exe, stagingDir string) error {
 		old := exe + ".old"
 		_ = os.Remove(old)
 		if err := os.Rename(exe, old); err != nil {
-			return fmt.Errorf("rename running executable aside: %w", err)
+			return permissionHint("rename running executable aside", err)
 		}
 		if err := os.Rename(staged, exe); err != nil {
 			_ = os.Rename(old, exe) // rollback
-			return fmt.Errorf("move new executable into place: %w", err)
+			return permissionHint("move new executable into place", err)
 		}
 		return nil
 	}
@@ -96,7 +120,7 @@ func installAt(exe, stagingDir string) error {
 		return fmt.Errorf("chmod new executable: %w", err)
 	}
 	if err := os.Rename(staged, exe); err != nil {
-		return fmt.Errorf("replace executable: %w", err)
+		return permissionHint("replace executable", err)
 	}
 	return nil
 }
@@ -126,12 +150,13 @@ func installBundle(stagingDir, bundle string) error {
 	old := bundle + ".old"
 	_ = os.RemoveAll(old)
 	if err := os.Rename(bundle, old); err != nil {
-		return fmt.Errorf("move running bundle aside: %w", err)
+		return permissionHint("move running bundle aside", err)
 	}
 	if err := os.Rename(staged, bundle); err != nil {
 		_ = os.Rename(old, bundle) // rollback
-		return fmt.Errorf("move new bundle into place: %w", err)
+		return permissionHint("move new bundle into place", err)
 	}
+	clearQuarantine(bundle)
 	return nil
 }
 

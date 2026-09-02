@@ -3,6 +3,8 @@ package selfupdate
 import (
 	"archive/zip"
 	"context"
+	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -210,8 +212,38 @@ func TestRestartArgs(t *testing.T) {
 	os.Args = []string{"easyss", "-daemon=true", "-log-file", "a.log"}
 	assert.Equal(t, []string{"-log-file", "a.log", "--daemon=false"}, restartArgs())
 
+	os.Args = []string{"easyss", "-daemon", "false", "-c", "config.json"}
+	assert.Equal(t, []string{"-c", "config.json", "--daemon=false"}, restartArgs())
+
 	os.Args = []string{"easyss"}
 	assert.Equal(t, []string{"--daemon=false"}, restartArgs())
+}
+
+func TestUnzipFileSizeLimit(t *testing.T) {
+	dir := t.TempDir()
+	zipPath := filepath.Join(dir, "big.zip")
+	makeTestZip(t, zipPath, map[string]string{"big.bin": "xx"}) // 2 bytes
+
+	r, err := zip.OpenReader(zipPath)
+	require.NoError(t, err)
+	defer func() { _ = r.Close() }()
+	require.Len(t, r.File, 1)
+
+	target := filepath.Join(dir, "out", "big.bin")
+	err = unzipFile(r.File[0], target, 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds decompressed size limit")
+
+	_, statErr := os.Stat(target)
+	assert.True(t, os.IsNotExist(statErr), "oversized file must be cleaned up")
+}
+
+func TestPermissionHint(t *testing.T) {
+	err := permissionHint("install", &fs.PathError{Op: "open", Path: "/x", Err: fs.ErrPermission})
+	assert.Contains(t, err.Error(), "无写权限")
+
+	err = permissionHint("install", errors.New("boom"))
+	assert.Equal(t, "install: boom", err.Error())
 }
 
 func TestClientProxyFallback(t *testing.T) {

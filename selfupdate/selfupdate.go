@@ -48,7 +48,7 @@ func Update(ctx context.Context, localHTTPPort int, rel *Release) error {
 	// same volume (atomic).
 	staging, err := os.MkdirTemp(targetDir, stagingPrefix)
 	if err != nil {
-		return fmt.Errorf("create staging dir in %s: %w", targetDir, err)
+		return permissionHint("create staging dir in "+targetDir, err)
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
 

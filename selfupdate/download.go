@@ -80,19 +80,22 @@ func Unzip(zipPath, destDir string) error {
 				return fmt.Errorf("create dir %s: %w", target, err)
 			}
 		case info.Mode().IsRegular():
-			if err := unzipFile(f, target); err != nil {
+			if total+f.UncompressedSize64 > maxUncompressedSize {
+				return errors.New("release zip exceeds decompressed size limit")
+			}
+			if err := unzipFile(f, target, maxUncompressedSize-total); err != nil {
 				return err
 			}
 			total += f.UncompressedSize64
-			if total > maxUncompressedSize {
-				return errors.New("release zip exceeds decompressed size limit")
-			}
 		}
 	}
 	return nil
 }
 
-func unzipFile(f *zip.File, target string) error {
+// unzipFile extracts a single regular file, bounding the bytes actually
+// written to disk with maxSize so a lying zip header cannot exceed the
+// decompression budget.
+func unzipFile(f *zip.File, target string, maxSize uint64) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil { //nolint:gosec // directory, not secret
 		return fmt.Errorf("create dir %s: %w", filepath.Dir(target), err)
 	}
@@ -106,10 +109,16 @@ func unzipFile(f *zip.File, target string) error {
 	if err != nil { //nolint:gosec // zip entry path is validated against destDir by the caller
 		return fmt.Errorf("create %s: %w", target, err)
 	}
-	if _, err := io.Copy(dst, src); err != nil {
+	n, err := io.Copy(dst, io.LimitReader(src, int64(maxSize)))
+	if err != nil {
 		_ = dst.Close()
 		_ = os.Remove(target)
 		return fmt.Errorf("extract %s: %w", f.Name, err)
+	}
+	if uint64(n) >= maxSize {
+		_ = dst.Close()
+		_ = os.Remove(target)
+		return fmt.Errorf("extract %s: entry exceeds decompressed size limit", f.Name)
 	}
 	if err := dst.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", target, err)
