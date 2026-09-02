@@ -12,6 +12,7 @@ import (
 	"os/user"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gogpu/systray"
@@ -20,6 +21,7 @@ import (
 	"github.com/nange/easyss/v3/icon"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/selfupdate"
 	"github.com/nange/easyss/v3/util"
 )
 
@@ -39,6 +41,12 @@ type TrayApp struct {
 	proxyRuleItems  map[string]*systray.MenuItem
 	logLevelItems   map[string]*systray.MenuItem
 	autoStartItem   *systray.MenuItem
+
+	// Self-update state (see tray_update.go).
+	updateItem    *systray.MenuItem
+	updateState   atomic.Int32
+	pendingUpdate *selfupdate.Release
+	updateMu      sync.Mutex
 
 	// UWP loopback exemption menu (Windows only).
 	uwpMu    sync.Mutex     //nolint:unused // used in uwp_windows.go
@@ -88,6 +96,7 @@ func (a *TrayApp) buildTray() {
 	a.autoStartItem = root.AddCheckbox("开机启动", IsAutoStartEnabled(), a.toggleAutoStart)
 	root.AddSeparator()
 
+	a.updateItem = root.Add("检查更新", a.onUpdateClicked)
 	root.Add("退出", a.exitApp)
 
 	a.tray = systray.New()
@@ -111,6 +120,7 @@ func (a *TrayApp) buildTray() {
 
 	a.startLocalService()
 	go a.statsRefresher()
+	go a.autoCheckUpdate()
 }
 
 func (a *TrayApp) trayExit() {
