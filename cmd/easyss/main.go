@@ -23,6 +23,7 @@ import (
 	"github.com/nange/easyss/v3/pprof"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/runner"
+	"github.com/nange/easyss/v3/selfupdate"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/version"
@@ -87,6 +88,10 @@ func main() {
 	if tunHelper {
 		os.Exit(runTunHelper(tunHTTPAddr, tunFDSocket, logFile, sc.LogLevel))
 	}
+
+	// Remove leftovers from a previous self-update (the renamed old binary
+	// kept for Windows/macOS, stale staging directories).
+	selfupdate.CleanupOld()
 
 	// On macOS the app is often launched by Finder/launchd with cwd=/,
 	// so a relative config path is first looked up in the cwd and then
