@@ -62,21 +62,34 @@ func TestPickAsset(t *testing.T) {
 	assert.Nil(t, PickAsset(rel, "freebsd", "amd64"))
 }
 
-func TestZipTarget(t *testing.T) {
-	dest := filepath.Join("base", "dest")
-	destClean := filepath.Clean(dest) + string(os.PathSeparator)
+func TestUnzipRejectsTraversal(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "dest")
+	require.NoError(t, os.MkdirAll(dest, 0o755))
 
-	entries := map[string]bool{
-		"easyss":           true,
-		"Easyss.app/a/b":   true,
-		"/abs/evil.txt":    true, // leading slash is dropped by filepath.Join, stays inside
-		"../evil.txt":      false,
-		"a/../../evil.txt": false,
+	zipPath := filepath.Join(dir, "rel-slip.zip")
+	makeTestZip(t, zipPath, map[string]string{
+		"easyss":           "binary",
+		"Easyss.app/a/b":   "nested",
+		"/abs/evil.txt":    "leading-slash", // leading slash is dropped by filepath.Join, stays inside
+		"../evil.txt":      "evil",
+		"a/../../evil.txt": "evil",
+	})
+	require.NoError(t, Unzip(zipPath, dest))
+
+	// Legitimate entries are extracted inside dest.
+	for _, rel := range []string{
+		"easyss",
+		filepath.Join("Easyss.app", "a", "b"),
+		filepath.Join("abs", "evil.txt"),
+	} {
+		_, err := os.Stat(filepath.Join(dest, rel))
+		require.NoError(t, err, "expected %s to exist", rel)
 	}
-	for name, want := range entries {
-		_, got := zipTarget(dest, destClean, name)
-		assert.Equal(t, want, got, "entry=%q", name)
-	}
+
+	// Nothing may be written outside dest even with a zip-slip entry.
+	_, err := os.Stat(filepath.Join(dir, "evil.txt"))
+	assert.True(t, os.IsNotExist(err), "zip-slip entry must be rejected")
 }
 
 // makeTestZip builds a zip at zipPath with the given name/content pairs.

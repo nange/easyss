@@ -69,8 +69,8 @@ func Unzip(zipPath, destDir string) error {
 	destClean := filepath.Clean(destDir) + string(os.PathSeparator)
 	var total uint64
 	for _, f := range r.File {
-		target, ok := zipTarget(destDir, destClean, f.Name)
-		if !ok {
+		target := filepath.Join(destDir, f.Name)
+		if !strings.HasPrefix(target, destClean) {
 			continue
 		}
 		info := f.FileInfo()
@@ -92,16 +92,6 @@ func Unzip(zipPath, destDir string) error {
 	return nil
 }
 
-// zipTarget maps a zip entry name onto a path inside destDir, rejecting
-// entries that escape it.
-func zipTarget(destDir, destClean, name string) (string, bool) {
-	target := filepath.Clean(filepath.Join(destDir, name))
-	if target != filepath.Clean(destDir) && !strings.HasPrefix(target, destClean) {
-		return "", false
-	}
-	return target, true
-}
-
 func unzipFile(f *zip.File, target string) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil { //nolint:gosec // directory, not secret
 		return fmt.Errorf("create dir %s: %w", filepath.Dir(target), err)
@@ -113,7 +103,7 @@ func unzipFile(f *zip.File, target string) error {
 	defer func() { _ = src.Close() }()
 
 	dst, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode().Perm())
-	if err != nil { //nolint:gosec // zip entry path is sanitized by zipTarget
+	if err != nil { //nolint:gosec // zip entry path is validated against destDir by the caller
 		return fmt.Errorf("create %s: %w", target, err)
 	}
 	if _, err := io.Copy(dst, src); err != nil {
