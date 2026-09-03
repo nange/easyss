@@ -36,6 +36,9 @@ func TestHasNewVersion(t *testing.T) {
 		{"v3.0.0-rc10", "v3.0.0-rc9", false},
 		{"v3.0.0-rc9", "v3.0.0", true},
 		{"v3.0.0", "v3.0.0-rc9", false},
+		{"v3.0.0-rc9", "v3.0.0-rc9.1", true},
+		{"v3.0.0-rc9.1", "v3.0.0-rc9", false},
+		{"v3.0.0-rc9.1", "v3.0.0-rc10", true},
 		{"3.0.1", "v3.0.2", true},      // missing "v" prefix tolerated
 		{"v3.0.1", "notasemver", true}, // unparsable falls back to inequality
 	}

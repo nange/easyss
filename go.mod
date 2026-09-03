@@ -5,6 +5,7 @@ go 1.27
 require (
 	github.com/caddyserver/certmagic v0.25.4
 	github.com/coocood/freecache v1.2.7
+	github.com/coreos/go-semver v0.3.1
 	github.com/gogpu/systray v0.3.0
 	github.com/libp2p/go-netroute v0.4.0
 	github.com/miekg/dns v1.1.73
