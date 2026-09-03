@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/coreos/go-semver/semver"
+	"github.com/Masterminds/semver/v3"
 )
 
 // Asset is a downloadable file attached to a release.
@@ -52,32 +52,43 @@ func CheckLatest(ctx context.Context, c *Client) (*Release, error) {
 	return &rel, nil
 }
 
-// rcNum is the numeric decomposition of an "rcN" (or "rcN.M") prerelease.
-type rcNum struct {
+// num is the numeric decomposition of a "prefixN" (or "prefixN.M") prerelease
+// such as "rc9" or "beta9.1".
+type num struct {
 	major, minor int
 }
 
-// parseRC extracts the numeric parts of an "rcN"/"rcN.M" prerelease. It
-// returns false for any other prerelease shape.
-func parseRC(pre semver.PreRelease) (rcNum, bool) {
-	rest := strings.TrimPrefix(string(pre), "rc")
-	parts := strings.SplitN(rest, ".", 2)
+// parseNumericPre splits a prerelease into its leading identifier (letters
+// and dashes) and trailing numeric parts: "rc9" -> ("rc", {9,0}),
+// "rc9.1" -> ("rc", {9,1}), "beta12" -> ("beta", {12,0}). It returns false
+// for shapes without a numeric tail (e.g. "alpha" or a purely numeric
+// prerelease), letting the caller fall back to the library's ordering.
+func parseNumericPre(pre string) (string, num, bool) {
+	i := 0
+	for i < len(pre) && (pre[i] < '0' || pre[i] > '9') {
+		i++
+	}
+	if i == 0 || i == len(pre) {
+		return "", num{}, false
+	}
+	prefix := pre[:i]
+	parts := strings.SplitN(pre[i:], ".", 2)
 	major, err := strconv.Atoi(parts[0])
 	if err != nil {
-		return rcNum{}, false
+		return "", num{}, false
 	}
-	rc := rcNum{major: major}
+	n := num{major: major}
 	if len(parts) == 2 {
-		rc.minor, err = strconv.Atoi(parts[1])
+		n.minor, err = strconv.Atoi(parts[1])
 		if err != nil {
-			return rcNum{}, false
+			return "", num{}, false
 		}
 	}
-	return rc, true
+	return prefix, n, true
 }
 
 // compare returns -1, 0 or 1.
-func (a rcNum) compare(b rcNum) int {
+func (a num) compare(b num) int {
 	switch {
 	case a.major != b.major:
 		return cmpInt(a.major, b.major)
@@ -99,7 +110,7 @@ func cmpInt(a, b int) int {
 	}
 }
 
-func cmpInt64(a, b int64) int {
+func cmpUint64(a, b uint64) int {
 	switch {
 	case a < b:
 		return -1
@@ -121,9 +132,8 @@ func HasNewVersion(currentTag, latestTag string) bool {
 	}
 	currentTag = gitDescribeSuffix.ReplaceAllString(currentTag, "")
 
-	// coreos/go-semver does not accept a leading "v".
-	cur, curErr := semver.NewVersion(strings.TrimPrefix(currentTag, "v"))
-	lat, latErr := semver.NewVersion(strings.TrimPrefix(latestTag, "v"))
+	cur, curErr := semver.NewVersion(currentTag)
+	lat, latErr := semver.NewVersion(latestTag)
 	if curErr != nil || latErr != nil {
 		return currentTag != latestTag
 	}
@@ -131,37 +141,40 @@ func HasNewVersion(currentTag, latestTag string) bool {
 }
 
 // newerThan reports whether a is a newer release than b. Core version parts
-// are compared like the library; the only divergence is that rc prereleases
-// are compared numerically (rc9 < rc11), because the semver spec compares
-// prerelease identifiers lexically, which would rank rc9 above rc11.
+// are compared like the library; the only divergence is that prereleases
+// with a matching leading identifier and a numeric tail ("rc9", "beta12")
+// are compared numerically (rc9 < rc11, beta9 < beta11), because the semver
+// spec compares prerelease identifiers lexically, which would rank rc9 above
+// rc11.
 func newerThan(a, b *semver.Version) bool {
-	if cmp := cmpInt64(a.Major, b.Major); cmp != 0 {
+	if cmp := cmpUint64(a.Major(), b.Major()); cmp != 0 {
 		return cmp > 0
 	}
-	if cmp := cmpInt64(a.Minor, b.Minor); cmp != 0 {
+	if cmp := cmpUint64(a.Minor(), b.Minor()); cmp != 0 {
 		return cmp > 0
 	}
-	if cmp := cmpInt64(a.Patch, b.Patch); cmp != 0 {
+	if cmp := cmpUint64(a.Patch(), b.Patch()); cmp != 0 {
 		return cmp > 0
 	}
 	// Same core version: a release (no prerelease) is newer than a prerelease.
-	if a.PreRelease == "" && b.PreRelease == "" {
+	ap, bp := a.Prerelease(), b.Prerelease()
+	if ap == "" && bp == "" {
 		return false
 	}
-	if a.PreRelease == "" {
+	if ap == "" {
 		return true
 	}
-	if b.PreRelease == "" {
+	if bp == "" {
 		return false
 	}
-	// Numeric rc comparison, falling back to the library's ordering for any
-	// other prerelease shape.
-	ar, aok := parseRC(a.PreRelease)
-	br, bok := parseRC(b.PreRelease)
-	if aok && bok {
-		return ar.compare(br) > 0
+	// Numeric comparison only when both share the same leading identifier;
+	// anything else falls back to the library's ordering.
+	apre, an, aok := parseNumericPre(ap)
+	bpre, bn, bok := parseNumericPre(bp)
+	if aok && bok && apre == bpre {
+		return an.compare(bn) > 0
 	}
-	return a.Compare(*b) > 0
+	return a.Compare(b) > 0
 }
 
 // PickAsset returns the release asset for the given platform, following the
