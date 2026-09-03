@@ -207,10 +207,10 @@ func CleanupOld() {
 			}
 			path := filepath.Join(dir, name)
 			if err := os.RemoveAll(path); err != nil {
-				log.Warn("[UPDATE] cleanup old artifact", "path", name, "err", err)
+				log.Warn("[UPDATE] cleanup old artifact", "path", filepath.Base(path), "err", err)
 				retry = append(retry, path)
 			} else {
-				log.Info("[UPDATE] removed leftover from previous update", "path", name)
+				log.Info("[UPDATE] removed leftover from previous update", "path", filepath.Base(path))
 			}
 		}
 	}
