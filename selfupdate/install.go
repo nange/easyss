@@ -15,9 +15,14 @@ import (
 
 const stagingPrefix = ".easyss-update-"
 
-// cleanupRetryDelay is how long CleanupOld waits before retrying a deletion
-// that failed because the previous process still held the file (Windows).
-const cleanupRetryDelay = 3 * time.Second
+const (
+	// cleanupRetryDelay is how long CleanupOld waits before the first retry
+	// of a deletion that failed because the previous process still held the
+	// file (Windows). The delay doubles after every round.
+	cleanupRetryDelay = 3 * time.Second
+	// cleanupRetries bounds the number of retry rounds.
+	cleanupRetries = 3
+)
 
 // resolvedExe returns the real path of the running executable, symlinks resolved.
 func resolvedExe() (string, error) {
@@ -216,15 +221,23 @@ func CleanupOld() {
 	}
 	if len(retry) > 0 {
 		// The previous process may still hold a handle on the renamed
-		// binary/bundle (Windows), so retry once it has exited.
+		// binary/bundle (Windows), so retry with backoff until it has exited.
 		go func() {
-			time.Sleep(cleanupRetryDelay)
-			for _, p := range retry {
-				if err := os.RemoveAll(p); err != nil {
-					log.Warn("[UPDATE] cleanup old artifact (retry)", "path", filepath.Base(p), "err", err)
-				} else {
-					log.Info("[UPDATE] removed leftover from previous update", "path", filepath.Base(p))
+			delay := cleanupRetryDelay
+			pending := retry
+			for attempt := 0; attempt < cleanupRetries && len(pending) > 0; attempt++ {
+				time.Sleep(delay)
+				var still []string
+				for _, p := range pending {
+					if err := os.RemoveAll(p); err != nil {
+						log.Warn("[UPDATE] cleanup old artifact (retry)", "path", filepath.Base(p), "err", err)
+						still = append(still, p)
+					} else {
+						log.Info("[UPDATE] removed leftover from previous update", "path", filepath.Base(p))
+					}
 				}
+				pending = still
+				delay *= 2
 			}
 		}()
 	}
