@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-
-	"github.com/Masterminds/semver/v3"
+	"strconv"
+	"strings"
 )
 
 // Asset is a downloadable file attached to a release.
@@ -50,10 +50,78 @@ func CheckLatest(ctx context.Context, c *Client) (*Release, error) {
 	return &rel, nil
 }
 
+// parsedVersion is a numeric representation of the version tags easyss
+// publishes: [v]X.Y.Z with an optional -rcN prerelease.
+type parsedVersion struct {
+	major, minor, patch int
+	rc                  int // -1 when there is no prerelease
+}
+
+// parseVersion parses a version tag, returning false for anything outside the
+// X.Y.Z[-rcN] shape so the caller can fall back to string comparison. rc
+// numbers are compared numerically (rc9 < rc11), which semver would get wrong
+// because it compares prerelease identifiers lexically.
+func parseVersion(tag string) (parsedVersion, bool) {
+	t := strings.TrimPrefix(tag, "v")
+	rc := -1
+	if i := strings.IndexByte(t, '-'); i >= 0 {
+		pre := t[i+1:]
+		if !strings.HasPrefix(pre, "rc") {
+			return parsedVersion{}, false
+		}
+		n, err := strconv.Atoi(strings.TrimPrefix(pre, "rc"))
+		if err != nil {
+			return parsedVersion{}, false
+		}
+		rc = n
+		t = t[:i]
+	}
+	parts := strings.Split(t, ".")
+	if len(parts) != 3 {
+		return parsedVersion{}, false
+	}
+	var nums [3]int
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return parsedVersion{}, false
+		}
+		nums[i] = n
+	}
+	return parsedVersion{nums[0], nums[1], nums[2], rc}, true
+}
+
+// compare returns -1, 0 or 1. A release (no prerelease) is always newer than
+// an rc of the same core version, and rc numbers compare numerically.
+func (p parsedVersion) compare(o parsedVersion) int {
+	for _, pair := range [][2]int{{p.major, o.major}, {p.minor, o.minor}, {p.patch, o.patch}} {
+		switch {
+		case pair[0] < pair[1]:
+			return -1
+		case pair[0] > pair[1]:
+			return 1
+		}
+	}
+	switch {
+	case p.rc == -1 && o.rc == -1:
+		return 0
+	case p.rc == -1:
+		return 1
+	case o.rc == -1:
+		return -1
+	case p.rc < o.rc:
+		return -1
+	case p.rc > o.rc:
+		return 1
+	default:
+		return 0
+	}
+}
+
 // HasNewVersion reports whether latestTag is newer than currentTag. An empty
 // currentTag (development build) always updates. A git describe suffix on
 // currentTag is ignored so that a build cut slightly after a release is not
-// offered an update to that same release. Tags that are not valid semver
+// offered an update to that same release. Tags outside the X.Y.Z[-rcN] shape
 // fall back to plain inequality.
 func HasNewVersion(currentTag, latestTag string) bool {
 	if currentTag == "" {
@@ -61,12 +129,12 @@ func HasNewVersion(currentTag, latestTag string) bool {
 	}
 	currentTag = gitDescribeSuffix.ReplaceAllString(currentTag, "")
 
-	curVer, curErr := semver.NewVersion(currentTag)
-	latVer, latErr := semver.NewVersion(latestTag)
-	if curErr != nil || latErr != nil {
+	cur, curOK := parseVersion(currentTag)
+	lat, latOK := parseVersion(latestTag)
+	if !curOK || !latOK {
 		return currentTag != latestTag
 	}
-	return latVer.GreaterThan(curVer)
+	return lat.compare(cur) > 0
 }
 
 // PickAsset returns the release asset for the given platform, following the

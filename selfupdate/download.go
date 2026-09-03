@@ -43,7 +43,9 @@ func (c *Client) DownloadAsset(ctx context.Context, a *Asset) (string, error) {
 	}
 
 	if a.Size > 0 {
-		info, statErr := tmp.Stat()
+		// The file is closed above, so stat by path: tmp.Stat() would fail on
+		// Windows ("The handle is invalid") because the handle is gone.
+		info, statErr := os.Stat(tmp.Name())
 		if statErr != nil {
 			remove()
 			return "", fmt.Errorf("stat downloaded file: %w", statErr)

@@ -31,6 +31,11 @@ func TestHasNewVersion(t *testing.T) {
 		{"v3.0.1-5-gabc1234", "v3.0.1", false}, // git describe suffix ignored
 		{"v3.0.1-5-gabc1234", "v3.0.2", true},
 		{"v3.1.0-rc1", "v3.1.0", true}, // prerelease < release
+		{"v3.0.0-rc9", "v3.0.0-rc11", true},
+		{"v3.0.0-rc11", "v3.0.0-rc9", false},
+		{"v3.0.0-rc10", "v3.0.0-rc9", false},
+		{"v3.0.0-rc9", "v3.0.0", true},
+		{"v3.0.0", "v3.0.0-rc9", false},
 		{"3.0.1", "v3.0.2", true},      // missing "v" prefix tolerated
 		{"v3.0.1", "notasemver", true}, // unparsable falls back to inequality
 	}
@@ -244,6 +249,37 @@ func TestPermissionHint(t *testing.T) {
 
 	err = permissionHint("install", errors.New("boom"))
 	assert.Equal(t, "install: boom", err.Error())
+}
+
+func TestDownloadAssetSizeCheck(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("xx")) // 2 bytes
+	}))
+	defer srv.Close()
+
+	c := &Client{direct: srv.Client()}
+
+	// Size mismatch is rejected.
+	_, err := c.DownloadAsset(context.Background(), &Asset{
+		Name:               "easyss-windows-amd64.zip",
+		BrowserDownloadURL: srv.URL,
+		Size:               5,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "size")
+
+	// Size match succeeds and the temp file holds the downloaded bytes.
+	path, err := c.DownloadAsset(context.Background(), &Asset{
+		Name:               "easyss-windows-amd64.zip",
+		BrowserDownloadURL: srv.URL,
+		Size:               2,
+	})
+	require.NoError(t, err)
+	defer func() { _ = os.Remove(path) }()
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "xx", string(content))
 }
 
 func TestClientProxyFallback(t *testing.T) {
