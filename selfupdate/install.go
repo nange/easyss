@@ -8,11 +8,21 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/nange/easyss/v3/log"
 )
 
 const stagingPrefix = ".easyss-update-"
+
+const (
+	// cleanupRetryDelay is how long CleanupOld waits before the first retry
+	// of a deletion that failed because the previous process still held the
+	// file (Windows). The delay doubles after every round.
+	cleanupRetryDelay = 3 * time.Second
+	// cleanupRetries bounds the number of retry rounds.
+	cleanupRetries = 3
+)
 
 // resolvedExe returns the real path of the running executable, symlinks resolved.
 func resolvedExe() (string, error) {
@@ -187,6 +197,7 @@ func CleanupOld() {
 		dirs = append(dirs, filepath.Dir(bundle))
 	}
 
+	var retry []string
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -199,11 +210,35 @@ func CleanupOld() {
 			if !isStaging && !isOld {
 				continue
 			}
-			if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
-				log.Warn("[UPDATE] cleanup old artifact", "path", name, "err", err)
+			path := filepath.Join(dir, name)
+			if err := os.RemoveAll(path); err != nil {
+				log.Warn("[UPDATE] cleanup old artifact", "path", filepath.Base(path), "err", err)
+				retry = append(retry, path)
 			} else {
-				log.Info("[UPDATE] removed leftover from previous update", "path", name)
+				log.Info("[UPDATE] removed leftover from previous update", "path", filepath.Base(path))
 			}
 		}
+	}
+	if len(retry) > 0 {
+		// The previous process may still hold a handle on the renamed
+		// binary/bundle (Windows), so retry with backoff until it has exited.
+		go func() {
+			delay := cleanupRetryDelay
+			pending := retry
+			for attempt := 0; attempt < cleanupRetries && len(pending) > 0; attempt++ {
+				time.Sleep(delay)
+				var still []string
+				for _, p := range pending {
+					if err := os.RemoveAll(p); err != nil {
+						log.Warn("[UPDATE] cleanup old artifact (retry)", "path", filepath.Base(p), "err", err)
+						still = append(still, p)
+					} else {
+						log.Info("[UPDATE] removed leftover from previous update", "path", filepath.Base(p))
+					}
+				}
+				pending = still
+				delay *= 2
+			}
+		}()
 	}
 }

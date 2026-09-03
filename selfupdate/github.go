@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/Masterminds/semver/v3"
 )
@@ -50,23 +52,129 @@ func CheckLatest(ctx context.Context, c *Client) (*Release, error) {
 	return &rel, nil
 }
 
+// num is the numeric decomposition of a "prefixN" (or "prefixN.M") prerelease
+// such as "rc9" or "beta9.1".
+type num struct {
+	major, minor int
+}
+
+// parseNumericPre splits a prerelease into its leading identifier (letters
+// and dashes) and trailing numeric parts: "rc9" -> ("rc", {9,0}),
+// "rc9.1" -> ("rc", {9,1}), "beta12" -> ("beta", {12,0}). It returns false
+// for shapes without a numeric tail (e.g. "alpha" or a purely numeric
+// prerelease), letting the caller fall back to the library's ordering.
+func parseNumericPre(pre string) (string, num, bool) {
+	i := 0
+	for i < len(pre) && (pre[i] < '0' || pre[i] > '9') {
+		i++
+	}
+	if i == 0 || i == len(pre) {
+		return "", num{}, false
+	}
+	prefix := pre[:i]
+	parts := strings.SplitN(pre[i:], ".", 2)
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return "", num{}, false
+	}
+	n := num{major: major}
+	if len(parts) == 2 {
+		n.minor, err = strconv.Atoi(parts[1])
+		if err != nil {
+			return "", num{}, false
+		}
+	}
+	return prefix, n, true
+}
+
+// compare returns -1, 0 or 1.
+func (a num) compare(b num) int {
+	switch {
+	case a.major != b.major:
+		return cmpInt(a.major, b.major)
+	case a.minor != b.minor:
+		return cmpInt(a.minor, b.minor)
+	default:
+		return 0
+	}
+}
+
+func cmpInt(a, b int) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func cmpUint64(a, b uint64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
+}
+
 // HasNewVersion reports whether latestTag is newer than currentTag. An empty
 // currentTag (development build) always updates. A git describe suffix on
 // currentTag is ignored so that a build cut slightly after a release is not
-// offered an update to that same release. Tags that are not valid semver
-// fall back to plain inequality.
+// offered an update to that same release. Tags that fail to parse fall back
+// to plain inequality.
 func HasNewVersion(currentTag, latestTag string) bool {
 	if currentTag == "" {
 		return true
 	}
 	currentTag = gitDescribeSuffix.ReplaceAllString(currentTag, "")
 
-	curVer, curErr := semver.NewVersion(currentTag)
-	latVer, latErr := semver.NewVersion(latestTag)
+	cur, curErr := semver.NewVersion(currentTag)
+	lat, latErr := semver.NewVersion(latestTag)
 	if curErr != nil || latErr != nil {
 		return currentTag != latestTag
 	}
-	return latVer.GreaterThan(curVer)
+	return newerThan(lat, cur)
+}
+
+// newerThan reports whether a is a newer release than b. Core version parts
+// are compared like the library; the only divergence is that prereleases
+// with a matching leading identifier and a numeric tail ("rc9", "beta12")
+// are compared numerically (rc9 < rc11, beta9 < beta11), because the semver
+// spec compares prerelease identifiers lexically, which would rank rc9 above
+// rc11.
+func newerThan(a, b *semver.Version) bool {
+	if cmp := cmpUint64(a.Major(), b.Major()); cmp != 0 {
+		return cmp > 0
+	}
+	if cmp := cmpUint64(a.Minor(), b.Minor()); cmp != 0 {
+		return cmp > 0
+	}
+	if cmp := cmpUint64(a.Patch(), b.Patch()); cmp != 0 {
+		return cmp > 0
+	}
+	// Same core version: a release (no prerelease) is newer than a prerelease.
+	ap, bp := a.Prerelease(), b.Prerelease()
+	if ap == "" && bp == "" {
+		return false
+	}
+	if ap == "" {
+		return true
+	}
+	if bp == "" {
+		return false
+	}
+	// Numeric comparison only when both share the same leading identifier;
+	// anything else falls back to the library's ordering.
+	apre, an, aok := parseNumericPre(ap)
+	bpre, bn, bok := parseNumericPre(bp)
+	if aok && bok && apre == bpre {
+		return an.compare(bn) > 0
+	}
+	return a.Compare(b) > 0
 }
 
 // PickAsset returns the release asset for the given platform, following the
