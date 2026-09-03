@@ -89,10 +89,6 @@ func main() {
 		os.Exit(runTunHelper(tunHTTPAddr, tunFDSocket, logFile, sc.LogLevel))
 	}
 
-	// Remove leftovers from a previous self-update (the renamed old binary
-	// kept for Windows/macOS, stale staging directories).
-	selfupdate.CleanupOld()
-
 	// On macOS the app is often launched by Finder/launchd with cwd=/,
 	// so a relative config path is first looked up in the cwd and then
 	// falls back to the executable directory.
@@ -128,6 +124,12 @@ func main() {
 	log.Info("[EASYSS-V3] set log-level", "level", cfg.Log.Level)
 	log.Init(cfg.Log.FilePath, cfg.Log.Level)
 	log.Info("[EASYSS-V3] " + version.String())
+
+	// Remove leftovers from a previous self-update (the renamed old binary
+	// kept for Windows/macOS, stale staging directories). Runs after
+	// log.Init so its logs land in the configured output instead of the
+	// default stdout handler, which is invisible in GUI builds.
+	selfupdate.CleanupOld()
 
 	// Make config file path absolute so that any elevated helper
 	// process can find it regardless of working directory.

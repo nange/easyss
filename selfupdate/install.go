@@ -18,10 +18,12 @@ const stagingPrefix = ".easyss-update-"
 const (
 	// cleanupRetryDelay is how long CleanupOld waits before the first retry
 	// of a deletion that failed because the previous process still held the
-	// file (Windows). The delay doubles after every round.
+	// file (Windows) or antivirus was scanning the freshly renamed binary.
+	// The delay doubles after every round, covering roughly a 90-second
+	// window in total.
 	cleanupRetryDelay = 3 * time.Second
 	// cleanupRetries bounds the number of retry rounds.
-	cleanupRetries = 3
+	cleanupRetries = 5
 )
 
 // resolvedExe returns the real path of the running executable, symlinks resolved.
@@ -238,6 +240,9 @@ func CleanupOld() {
 				}
 				pending = still
 				delay *= 2
+			}
+			for _, p := range pending {
+				log.Error("[UPDATE] cleanup old artifact failed after retries", "path", filepath.Base(p))
 			}
 		}()
 	}
