@@ -70,15 +70,21 @@ func appBundleRoot(exePath string) string {
 }
 
 // Install moves the artifact staged in stagingDir over the current install
-// location. Windows cannot overwrite a running executable, so the running
-// binary is renamed aside (allowed) and removed on next start; unix replaces
-// the file atomically via rename; macOS swaps the whole .app bundle.
+// location, replacing the client binary. Windows cannot overwrite a running
+// executable, so the running binary is renamed aside (allowed) and removed on
+// next start; unix replaces the file atomically via rename; macOS swaps the
+// whole .app bundle.
 func Install(stagingDir string) error {
+	return InstallFor(stagingDir, ProductClient)
+}
+
+// InstallFor is Install for a specific product (client, headless or server).
+func InstallFor(stagingDir string, product Product) error {
 	exe, err := resolvedExe()
 	if err != nil {
 		return err
 	}
-	return installAt(exe, stagingDir)
+	return installAt(exe, stagingDir, product)
 }
 
 // permissionHint rewrites a permission failure into a user-friendly message,
@@ -104,12 +110,12 @@ func clearQuarantine(path string) {
 	}
 }
 
-func installAt(exe, stagingDir string) error {
+func installAt(exe, stagingDir string, product Product) error {
 	if bundle := appBundleRoot(exe); bundle != "" {
 		return installBundle(stagingDir, bundle)
 	}
 
-	staged, err := stagedBinary(stagingDir)
+	staged, err := stagedBinary(stagingDir, product)
 	if err != nil {
 		return err
 	}
@@ -137,13 +143,9 @@ func installAt(exe, stagingDir string) error {
 	return nil
 }
 
-// stagedBinary locates the client binary extracted into stagingDir.
-func stagedBinary(stagingDir string) (string, error) {
-	name := "easyss"
-	if runtime.GOOS == "windows" {
-		name = "easyss.exe"
-	}
-	p := filepath.Join(stagingDir, name)
+// stagedBinary locates the product binary extracted into stagingDir.
+func stagedBinary(stagingDir string, product Product) (string, error) {
+	p := filepath.Join(stagingDir, product.binaryName())
 	info, err := os.Stat(p)
 	if err != nil || info.IsDir() {
 		return "", fmt.Errorf("staged binary %s not found", p)

@@ -30,6 +30,10 @@ type Release struct {
 // the built commit is ahead of the tag, e.g. "v3.0.1-5-gabc1234".
 var gitDescribeSuffix = regexp.MustCompile(`-\d+-g[0-9a-f]+$`)
 
+// repoLatestURL is the GitHub API endpoint for the latest release. It is a
+// variable (not a constant) so tests can redirect it to a local server.
+var repoLatestURL = "https://api.github.com/repos/nange/easyss/releases/latest"
+
 // CheckLatest fetches the latest published release from GitHub. The
 // /releases/latest endpoint only returns full releases: pre-releases and
 // drafts are excluded by GitHub itself.
@@ -177,14 +181,22 @@ func newerThan(a, b *semver.Version) bool {
 	return a.Compare(b) > 0
 }
 
-// PickAsset returns the release asset for the given platform, following the
-// CI naming scheme (easyss-<goos>-<goarch>.zip), or nil when absent.
-func PickAsset(rel *Release, goos, goarch string) *Asset {
-	name := fmt.Sprintf("easyss-%s-%s.zip", goos, goarch)
+// PickAssetFor returns the release asset for the given product and platform,
+// following the CI naming scheme (<product>-<goos>-<goarch>.zip), or nil when
+// absent.
+func PickAssetFor(rel *Release, product Product, goos, goarch string) *Asset {
+	name := product.assetName(goos, goarch)
 	for i := range rel.Assets {
 		if rel.Assets[i].Name == name {
 			return &rel.Assets[i]
 		}
 	}
 	return nil
+}
+
+// PickAsset returns the client release asset for the given platform,
+// following the CI naming scheme (easyss-<goos>-<goarch>.zip), or nil when
+// absent.
+func PickAsset(rel *Release, goos, goarch string) *Asset {
+	return PickAssetFor(rel, ProductClient, goos, goarch)
 }

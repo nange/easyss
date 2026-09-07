@@ -30,6 +30,13 @@ import (
 )
 
 func main() {
+	// The "selfupdate" subcommand is handled before flag parsing so it never
+	// collides with the proxy flags. It replaces the running binary and
+	// exits without starting anything.
+	if runSelfupdateSubcommand() {
+		return
+	}
+
 	var printVer, showConfigExample, showConfigExampleSimple, daemon, disableTray, enableTun2socks, tunHelper bool
 	var configFile, cmdOutboundProto string
 	var pprofEnabled bool
