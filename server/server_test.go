@@ -72,7 +72,7 @@ func (e errString) Error() string { return string(e) }
 
 func TestRandomEmail(t *testing.T) {
 	email := randomEmail()
-	matched, err := regexp.MatchString(`^admin-[0-9a-f]{16}@example\.com$`, email)
+	matched, err := regexp.MatchString(`^admin_[0-9a-f]{16}@gmail\.com$`, email)
 	require.NoError(t, err)
 	require.True(t, matched, "unexpected email format: %s", email)
 }
@@ -154,7 +154,7 @@ func TestResolveEmail_Generated(t *testing.T) {
 	}
 	s.resolveEmail(t.TempDir())
 
-	matched, err := regexp.MatchString(`^admin-[0-9a-f]{16}@example\.com$`, s.cfg.Email)
+	matched, err := regexp.MatchString(`^admin_[0-9a-f]{16}@gmail\.com$`, s.cfg.Email)
 	require.NoError(t, err)
 	require.True(t, matched, "unexpected generated email format: %s", s.cfg.Email)
 }

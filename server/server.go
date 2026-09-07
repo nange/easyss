@@ -215,7 +215,7 @@ func findExistingACMEEmail(storagePath string) string {
 func randomEmail() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
-	return "admin-" + hex.EncodeToString(b) + "@example.com"
+	return "admin_" + hex.EncodeToString(b) + "@gmail.com"
 }
 
 func shouldRetryFreshCertificate(err error) bool {
