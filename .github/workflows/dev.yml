@@ -34,8 +34,8 @@ jobs:
       - name: golangci-lint
         run: make lint
 
-      - name: Test
-        run: make test
+      - name: Test (race)
+        run: make test-race
 
       - name: Set up Java
         uses: actions/setup-java@v5
@@ -81,8 +81,8 @@ jobs:
       - name: golangci-lint
         run: make lint
 
-      - name: Test
-        run: make test
+      - name: Test (race)
+        run: make test-race
 
   test-windows:
     name: Test-Windows
@@ -108,8 +108,8 @@ jobs:
       - name: golangci-lint
         run: make lint
 
-      - name: Test
-        run: go test -v ./...
+      - name: Test (race)
+        run: make test-race
 
   test-windows-arm64:
     name: Test-Windows-Arm64
@@ -122,5 +122,8 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
+      # The Go race detector is not supported on windows/arm64 (only
+      # windows/amd64), so this job runs the plain tests with a longer
+      # timeout suited to the ARM runner.
       - name: Test
         run: go test -v -timeout 30m ./...
