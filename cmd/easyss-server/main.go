@@ -18,6 +18,7 @@ import (
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/pprof"
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/selfupdate"
 	"github.com/nange/easyss/v3/server"
 	"github.com/nange/easyss/v3/server/config"
 	"github.com/nange/easyss/v3/util"
@@ -25,6 +26,13 @@ import (
 )
 
 func main() {
+	// The "selfupdate" subcommand is handled before flag parsing so it never
+	// collides with the server flags. It replaces the running binary and
+	// exits without starting the server.
+	if len(os.Args) > 1 && os.Args[1] == "selfupdate" {
+		os.Exit(runSelfupdate())
+	}
+
 	var printVer, showConfigExample bool
 	var configFile string
 	var pprofEnabled bool
@@ -83,6 +91,10 @@ func main() {
 	}
 
 	log.Init(fileCfg.Log.FilePath, fileCfg.Log.Level)
+
+	// Remove leftovers from a previous self-update (the renamed old binary
+	// kept for Windows and stale staging directories).
+	selfupdate.CleanupOld()
 
 	log.Info("[EASYSS-SERVER-V3] " + version.String())
 	log.Info("[EASYSS-SERVER-V3] config loaded",

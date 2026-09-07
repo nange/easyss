@@ -77,6 +77,78 @@ func TestPickAsset(t *testing.T) {
 	assert.Nil(t, PickAsset(rel, "freebsd", "amd64"))
 }
 
+func TestPickAssetFor(t *testing.T) {
+	rel := &Release{
+		TagName: "v3.1.0",
+		Assets: []Asset{
+			{Name: "easyss-windows-amd64.zip"},
+			{Name: "easyss-headless-linux-amd64.zip"},
+			{Name: "easyss-server-linux-amd64.zip"},
+			{Name: "easyss-server-windows-amd64.zip"},
+		},
+	}
+
+	cases := []struct {
+		product Product
+		goos    string
+		goarch  string
+		want    string
+	}{
+		{ProductServer, "linux", "amd64", "easyss-server-linux-amd64.zip"},
+		{ProductServer, "windows", "amd64", "easyss-server-windows-amd64.zip"},
+		{ProductHeadless, "linux", "amd64", "easyss-headless-linux-amd64.zip"},
+		{ProductClient, "windows", "amd64", "easyss-windows-amd64.zip"},
+	}
+	for _, c := range cases {
+		a := PickAssetFor(rel, c.product, c.goos, c.goarch)
+		require.NotNil(t, a, "%s/%s/%s", c.product, c.goos, c.goarch)
+		assert.Equal(t, c.want, a.Name)
+	}
+
+	// Platform without a published asset for the product.
+	assert.Nil(t, PickAssetFor(rel, ProductServer, "darwin", "arm64"))
+	assert.Nil(t, PickAssetFor(rel, ProductHeadless, "windows", "amd64"))
+}
+
+func TestRunCheck(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"v1.0.0","assets":[]}`))
+	}))
+	defer srv.Close()
+
+	orig := repoLatestURL
+	repoLatestURL = srv.URL + "/latest"
+	defer func() { repoLatestURL = orig }()
+
+	c := &Client{direct: srv.Client()}
+
+	// Already up to date.
+	_, err := runCheck(context.Background(), c, "v9.9.9")
+	assert.ErrorIs(t, err, ErrUpToDate)
+
+	// Newer version available (runCheck never downloads).
+	rel, err := runCheck(context.Background(), c, "v0.0.1")
+	require.NoError(t, err)
+	require.NotNil(t, rel)
+	assert.Equal(t, "v1.0.0", rel.TagName)
+}
+
+func TestRunCheckFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	orig := repoLatestURL
+	repoLatestURL = srv.URL + "/latest"
+	defer func() { repoLatestURL = orig }()
+
+	c := &Client{direct: srv.Client()}
+	_, err := runCheck(context.Background(), c, "v0.0.1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "check latest release")
+}
+
 func TestUnzipRejectsTraversal(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "dest")
@@ -180,7 +252,7 @@ func TestInstallAtBinary(t *testing.T) {
 	require.NoError(t, os.MkdirAll(staging, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(staging, "easyss.exe"), []byte("new"), 0o755))
 
-	require.NoError(t, installAt(exe, staging))
+	require.NoError(t, installAt(exe, staging, ProductClient))
 
 	content, err := os.ReadFile(exe)
 	require.NoError(t, err)
@@ -202,7 +274,7 @@ func TestInstallAtBundle(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(stagedExe), 0o755))
 	require.NoError(t, os.WriteFile(stagedExe, []byte("new"), 0o755))
 
-	require.NoError(t, installAt(exe, staging))
+	require.NoError(t, installAt(exe, staging, ProductClient))
 
 	content, err := os.ReadFile(exe) // same path now resolves to the new bundle
 	require.NoError(t, err)

@@ -423,6 +423,25 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 可根据自己的需求，使用`openssl`等工具生成自定义证书。也可以参考： `./scripts/self_signed_certs` 目录示例，使用`cfssl`生成自定义证书。
 示例就是使用IP而不是域名生成自定义证书，这样就可以无域名使用Easyss了。
 
+### 自更新
+
+客户端（含 headless 无托盘版）与服务端均支持 `selfupdate` 子命令：从 GitHub 检查最新 release，并**原地替换当前二进制**。替换完成后不会自动重启，需要手动（或由 systemd/supervisor 等）重启进程使新版本生效。
+
+```sh
+# 仅检查是否有新版本
+./easyss selfupdate --check
+./easyss-server selfupdate --check
+
+# 下载并替换二进制（不重启）
+./easyss selfupdate
+./easyss-headless selfupdate
+./easyss-server selfupdate
+```
+
+* `--proxy-port <port>`：若本机同时运行了 easyss 客户端，可指定其 HTTP 代理端口，更新请求优先走本地代理，失败自动回退直连（默认直连）。
+* Windows 下替换时原二进制会保留为 `.old`，下次正常启动时自动清理；Linux/macOS 直接原子替换。
+* Windows 托盘版（`easyss.exe`）因编译时隐藏控制台窗口，CLI 输出不可见，可通过重定向或退出码判断结果；服务端 Windows 版不受影响。
+
 ## 高级用法
 
 ### 服务器部署在反向代理(或CDN)之后
