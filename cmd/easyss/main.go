@@ -74,6 +74,27 @@ func main() {
 	flag.StringVar(&sc.ProxyFile, "proxy-file", "", "custom proxy file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
 	flag.BoolVar(&pprofEnabled, "pprof", false, "enable pprof debug server on :6060")
 
+	// Custom usage so --help/-h also introduces the "selfupdate" subcommand,
+	// which is handled before flag parsing and would otherwise be invisible.
+	flag.Usage = func() {
+		bin := filepath.Base(os.Args[0])
+		out := flag.CommandLine.Output()
+		_, _ = fmt.Fprintf(out, `Easyss - SOCKS5/HTTP 代理客户端
+
+用法:
+  %s [flags]              启动代理（托盘版默认带系统托盘，可用 --disable-tray 关闭）
+  %s selfupdate [flags]   检查并升级到最新 release
+
+子命令:
+  selfupdate    从 GitHub 检查最新 release，并原地替换当前二进制（不自动重启）。
+                更新完成后请手动重启进程使新版本生效。支持 --check（仅检查）、
+                --proxy-port（走本地代理下载）。
+
+Flags:
+`, bin, bin)
+		flag.PrintDefaults()
+	}
+
 	flag.Parse()
 
 	if printVer {

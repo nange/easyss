@@ -439,6 +439,7 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 ```
 
 * `--proxy-port <port>`：若本机同时运行了 easyss 客户端，可指定其 HTTP 代理端口，更新请求优先走本地代理，失败自动回退直连（默认直连）。
+* 运行 `<bin> --help`（或 `<bin> selfupdate --help`）可查看各命令的完整参数说明。
 * Windows 下替换时原二进制会保留为 `.old`，下次正常启动时自动清理；Linux/macOS 直接原子替换。
 * Windows 托盘版（`easyss.exe`）因编译时隐藏控制台窗口，CLI 输出不可见，可通过重定向或退出码判断结果；服务端 Windows 版不受影响。
 

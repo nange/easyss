@@ -149,6 +149,17 @@ func TestRunCheckFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "check latest release")
 }
 
+func TestRunCLICommandHelp(t *testing.T) {
+	// --help/-h print the subcommand usage and exit 0 without any network call.
+	assert.Equal(t, 0, RunCLICommand([]string{"--help"}, ProductHeadless))
+	assert.Equal(t, 0, RunCLICommand([]string{"-h"}, ProductHeadless))
+}
+
+func TestRunCLICommandBadFlag(t *testing.T) {
+	// Unknown flags exit 2, like the standard flag package's error convention.
+	assert.Equal(t, 2, RunCLICommand([]string{"--bogus"}, ProductHeadless))
+}
+
 func TestUnzipRejectsTraversal(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "dest")

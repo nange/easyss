@@ -30,7 +30,7 @@ func main() {
 	// collides with the server flags. It replaces the running binary and
 	// exits without starting the server.
 	if len(os.Args) > 1 && os.Args[1] == "selfupdate" {
-		os.Exit(runSelfupdate())
+		os.Exit(selfupdate.RunCLICommand(os.Args[2:], selfupdate.ProductServer))
 	}
 
 	var printVer, showConfigExample bool
@@ -41,6 +41,27 @@ func main() {
 	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file")
 	flag.StringVar(&configFile, "c", "config.json", "specify config file")
 	flag.BoolVar(&pprofEnabled, "pprof", false, "enable pprof debug server on :6060")
+
+	// Custom usage so --help/-h also introduces the "selfupdate" subcommand,
+	// which is handled before flag parsing and would otherwise be invisible.
+	flag.Usage = func() {
+		bin := filepath.Base(os.Args[0])
+		out := flag.CommandLine.Output()
+		_, _ = fmt.Fprintf(out, `Easyss Server - 代理服务端
+
+用法:
+  %s [flags]              启动服务端
+  %s selfupdate [flags]   检查并升级到最新 release
+
+子命令:
+  selfupdate    从 GitHub 检查最新 release，并原地替换当前二进制（不自动重启）。
+                更新完成后请手动重启进程使新版本生效。支持 --check（仅检查）、
+                --proxy-port（走本地代理下载）。
+
+Flags:
+`, bin, bin)
+		flag.PrintDefaults()
+	}
 
 	flag.Parse()
 
