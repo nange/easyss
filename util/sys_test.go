@@ -99,7 +99,13 @@ func TestIsTunIface(t *testing.T) {
 			t.Fatalf("expected %s to be recognized as the TUN device", name)
 		}
 	}
-	if IsTunIface(&net.Interface{Name: "Ethernet"}) {
+	// Give the synthetic interface an impossible Index: on darwin an
+	// Index of 0 makes Addrs() return every host interface's addresses
+	// (including the easyss TUN device's 198.18.0.1 when it is up),
+	// which would wrongly trip the subnet match below. A non-existent
+	// Index makes Addrs() return empty on every platform, so this
+	// negative assertion holds regardless of host interface state.
+	if IsTunIface(&net.Interface{Name: "Ethernet", Index: 1 << 24}) {
 		t.Fatal("expected a plain interface name to not be recognized")
 	}
 	if IsTunIface(nil) {
