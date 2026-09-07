@@ -132,6 +132,9 @@ Flags:
 			}
 		} else {
 			log.Error("[EASYSS-V3] load config", "err", err)
+			if !disableTray {
+				notifyStartupError(err)
+			}
 			os.Exit(1)
 		}
 	} else {

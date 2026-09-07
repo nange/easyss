@@ -58,6 +58,11 @@ type TrayApp struct {
 	tunHelperMu    sync.Mutex
 }
 
+// startupErrorNotifyDelay keeps the process alive after a startup-failure
+// notification so the OS can display it before the client exits (Windows
+// balloon tips vanish when the owning process exits).
+const startupErrorNotifyDelay = 5 * time.Second
+
 // UWPApp represents an installed Windows UWP application.
 type UWPApp struct {
 	Name              string `json:"Name"`
@@ -115,12 +120,42 @@ func (a *TrayApp) buildTray() {
 	// (especially GNOME with AppIndicator) see a non-empty menu on first query.
 	if err := a.Start(); err != nil {
 		log.Error("[EASYSS-V3] tray start", "err", err)
+		a.tray.ShowNotification("Easyss", "启动失败："+err.Error())
+		// Keep the tray (and its notification, e.g. Windows balloon tips
+		// bound to the icon) alive briefly so the user can read the reason,
+		// then exit with failure. Run() is deliberately not called here:
+		// macOS allows only one Run() per process, and the OS-level
+		// notification APIs work without the message loop.
+		time.Sleep(startupErrorNotifyDelay)
 		os.Exit(1)
 	}
 
 	a.startLocalService()
 	go a.statsRefresher()
 	go a.autoCheckUpdate()
+}
+
+// notifyStartupError surfaces a startup failure (e.g. config load error)
+// via a system notification using a minimal transient tray, because the
+// real tray has not been built yet. It is best-effort: the systray public
+// API swallows tray/notification errors, and Run() is deliberately not
+// called so the process can never hang when no GUI session is available —
+// the caller still exits with a failure code after this returns.
+func notifyStartupError(err error) {
+	tray := systray.New()
+	menu := systray.NewMenu()
+	menu.Add("退出", func() { tray.Remove() })
+	tray.SetIcon(icon.TrayData).
+		SetTooltip("Easyss").
+		SetMenu(menu)
+
+	tray.Show()
+	tray.ShowNotification("Easyss", "启动失败："+err.Error())
+
+	// Keep the process alive briefly so the notification is displayed
+	// (Windows balloon tips vanish when the owning process exits).
+	time.Sleep(startupErrorNotifyDelay)
+	tray.Remove()
 }
 
 func (a *TrayApp) trayExit() {
