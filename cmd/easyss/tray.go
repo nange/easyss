@@ -4,15 +4,19 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/user"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/gogpu/systray"
@@ -120,7 +124,7 @@ func (a *TrayApp) buildTray() {
 	// (especially GNOME with AppIndicator) see a non-empty menu on first query.
 	if err := a.Start(); err != nil {
 		log.Error("[EASYSS-V3] tray start", "err", err)
-		a.tray.ShowNotification("Easyss", "启动失败："+err.Error())
+		a.tray.ShowNotification("Easyss", friendlyStartupError(err))
 		// Keep the tray (and its notification, e.g. Windows balloon tips
 		// bound to the icon) alive briefly so the user can read the reason,
 		// then exit with failure. Run() is deliberately not called here:
@@ -135,13 +139,13 @@ func (a *TrayApp) buildTray() {
 	go a.autoCheckUpdate()
 }
 
-// notifyStartupError surfaces a startup failure (e.g. config load error)
+// notifyConfigError surfaces a config load failure (e.g. invalid JSON)
 // via a system notification using a minimal transient tray, because the
 // real tray has not been built yet. It is best-effort: the systray public
 // API swallows tray/notification errors, and Run() is deliberately not
 // called so the process can never hang when no GUI session is available —
 // the caller still exits with a failure code after this returns.
-func notifyStartupError(err error) {
+func notifyConfigError(err error) {
 	tray := systray.New()
 	menu := systray.NewMenu()
 	menu.Add("退出", func() { tray.Remove() })
@@ -150,12 +154,43 @@ func notifyStartupError(err error) {
 		SetMenu(menu)
 
 	tray.Show()
-	tray.ShowNotification("Easyss", "启动失败："+err.Error())
+	tray.ShowNotification("Easyss", friendlyConfigError(err))
 
 	// Keep the process alive briefly so the notification is displayed
 	// (Windows balloon tips vanish when the owning process exits).
 	time.Sleep(startupErrorNotifyDelay)
 	tray.Remove()
+}
+
+// friendlyConfigError 将配置文件加载错误转换为用户友好的中文提示。
+func friendlyConfigError(err error) string {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "配置文件不存在：" + err.Error()
+	default:
+		var syntaxErr *json.SyntaxError
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) {
+			return "JSON配置文件解析失败：" + err.Error()
+		}
+		return "配置文件加载失败：" + err.Error()
+	}
+}
+
+// friendlyStartupError 将服务启动错误转换为用户友好的中文提示。
+func friendlyStartupError(err error) string {
+	if isAddrInUse(err) {
+		return "服务启动失败：本地端口可能被占用，请关闭占用该端口的程序后重试。详情：" + err.Error()
+	}
+	return "服务启动失败：" + err.Error()
+}
+
+// isAddrInUse 判断错误是否为"端口已被占用"的绑定失败（Unix 走 errno，
+// Windows 走消息匹配，两者兼顾以保证跨平台）。
+func isAddrInUse(err error) bool {
+	return errors.Is(err, syscall.EADDRINUSE) ||
+		strings.Contains(err.Error(), "address already in use") ||
+		strings.Contains(err.Error(), "Only one usage of each socket address")
 }
 
 func (a *TrayApp) trayExit() {

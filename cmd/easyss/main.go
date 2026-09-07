@@ -133,7 +133,7 @@ Flags:
 		} else {
 			log.Error("[EASYSS-V3] load config", "err", err)
 			if !disableTray {
-				notifyStartupError(err)
+				notifyConfigError(err)
 			}
 			os.Exit(1)
 		}
