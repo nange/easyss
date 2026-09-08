@@ -342,14 +342,14 @@ func buildHTTPServer(cfg *config.ServerConfig, tlsConfig *tls.Config, mux *http.
 		MaxReceiveBufferPerConnection: sharedconfig.HTTP2ServerReceiveBufferPerConnection,
 		MaxReceiveBufferPerStream:     sharedconfig.HTTP2ServerReceiveBufferPerStream,
 	}
-	if cfg.Transport.HTTP2MaxFrameSize > 0 {
-		http2Cfg.MaxReadFrameSize = cfg.Transport.HTTP2MaxFrameSize
+	if cfg.Transport.H2MaxFrameSize > 0 {
+		http2Cfg.MaxReadFrameSize = cfg.Transport.H2MaxFrameSize
 	}
-	if cfg.Transport.HTTP2RecvBufConn > 0 {
-		http2Cfg.MaxReceiveBufferPerConnection = cfg.Transport.HTTP2RecvBufConn
+	if cfg.Transport.H2RecvBufConn > 0 {
+		http2Cfg.MaxReceiveBufferPerConnection = cfg.Transport.H2RecvBufConn
 	}
-	if cfg.Transport.HTTP2RecvBufStream > 0 {
-		http2Cfg.MaxReceiveBufferPerStream = cfg.Transport.HTTP2RecvBufStream
+	if cfg.Transport.H2RecvBufStream > 0 {
+		http2Cfg.MaxReceiveBufferPerStream = cfg.Transport.H2RecvBufStream
 	}
 
 	srv := &http.Server{
