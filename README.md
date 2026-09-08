@@ -30,7 +30,7 @@ Easyss是一款兼容socks5的安全代理上网工具，目标是使访问国�
 xattr -cr ./Easyss.app
 ```
 
-进入 `Easyss.app` 所在目录执行，将 `./Easyss.app` 替换为实际路径即可（配置文件需与程序同目录，建议将 app 保留在自选目录而非 `/Applications`）。
+命令行进入 `Easyss.app` 所在目录，并执行上述命令。（配置文件需与程序同目录，建议将 app 保留在自选目录而非 `/Applications`）。
 
 之后使用客户端内置的自更新功能升级时，新版本会自动清除隔离属性，无需再手动执行 `xattr` 命令。
 
