@@ -53,9 +53,10 @@ type TrayApp struct {
 	updateMu      sync.Mutex
 
 	// UWP loopback exemption menu (Windows only).
-	uwpMu    sync.Mutex     //nolint:unused // used in uwp_windows.go
-	uwpMenu  *systray.Menu  //nolint:unused // used in uwp_windows.go
-	uwpItems []*UWPMenuItem //nolint:unused // used in uwp_windows.go
+	uwpMu           sync.Mutex        //nolint:unused // used in uwp_windows.go
+	uwpMenu         *systray.Menu     //nolint:unused // used in uwp_windows.go
+	uwpItems        []*UWPMenuItem    //nolint:unused // used in uwp_windows.go
+	uwpOverflowHint *systray.MenuItem //nolint:unused // used in uwp_windows.go
 
 	// TUN helper management (darwin non-root).
 	tunHelperStdin io.WriteCloser // FIFO writer; close to signal helper shutdown
