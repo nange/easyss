@@ -49,7 +49,7 @@ type HTTPProxyServer struct {
 	server     *http.Server
 	mu         sync.Mutex
 
-	// TUN helper support (macOS): config served at GET /tun.
+	// TUN helper support (darwin/linux): config served at GET /tun.
 	tunCfg *TunConfig
 	tunMu  sync.RWMutex
 }
@@ -146,6 +146,24 @@ func (s *HTTPProxyServer) Start() error {
 }
 
 func (s *HTTPProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Serve /tun before the proxy auth check: the elevated TUN helper
+	// (darwin/linux) fetches its configuration without credentials. The
+	// endpoint is restricted to loopback sources so the config is never
+	// exposed on the network when the proxy listens on all interfaces
+	// (bind_all).
+	if r.URL.Host == "" && r.URL.Path == "/tun" {
+		if !isLoopbackRequest(r) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		if r.Method == http.MethodGet {
+			s.handleTunGET(w)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
 	if !s.authOK(r) {
 		w.Header().Set("Proxy-Authenticate", `Basic realm="Easyss"`)
 		http.Error(w, "Proxy auth required", http.StatusProxyAuthRequired)
@@ -155,16 +173,6 @@ func (s *HTTPProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Serve /stats for direct requests to the proxy.
 	if r.URL.Host == "" && r.URL.Path == "/stats" {
 		s.serveStats(w)
-		return
-	}
-
-	// Serve /tun for TUN configuration (macOS helper).
-	if r.URL.Host == "" && r.URL.Path == "/tun" {
-		if r.Method == http.MethodGet {
-			s.handleTunGET(w)
-		} else {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		}
 		return
 	}
 
@@ -195,7 +203,7 @@ func (s *HTTPProxyServer) serveStats(w http.ResponseWriter) {
 }
 
 // SetTunConfig stores the TUN configuration served at GET /tun.
-// Called before spawning the TUN helper on macOS.
+// Called before spawning the TUN helper on darwin/linux.
 func (s *HTTPProxyServer) SetTunConfig(cfg *TunConfig) {
 	s.tunMu.Lock()
 	defer s.tunMu.Unlock()
@@ -258,6 +266,19 @@ func (s *HTTPProxyServer) isSelfTarget(r *http.Request) bool {
 	}
 	_, local := localIPSet()[ip.String()]
 	return ip.IsLoopback() || local
+}
+
+// isLoopbackRequest reports whether the request originated from a loopback
+// address (the local host itself). It guards the control endpoints (e.g.
+// GET /tun) so they are only reachable from this machine even when the
+// proxy listens on all interfaces.
+func isLoopbackRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 const localIPsCacheTTL = 60 * time.Second

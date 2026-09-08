@@ -30,20 +30,21 @@ import (
 )
 
 func main() {
-	// The "selfupdate" subcommand is handled before flag parsing so it never
-	// collides with the proxy flags. It replaces the running binary and
-	// exits without starting anything.
+	// The "selfupdate" and "tun-helper" subcommands are handled before flag
+	// parsing so they never collide with the proxy flags. selfupdate replaces
+	// the running binary and exits; tun-helper runs this binary as the
+	// elevated TUN helper (spawned internally by the tray process) and exits.
 	if runSelfupdateSubcommand() {
 		return
 	}
+	if runTunHelperSubcommand() {
+		return
+	}
 
-	var printVer, showConfigExample, showConfigExampleSimple, daemon, disableTray, enableTun2socks, tunHelper bool
+	var printVer, showConfigExample, showConfigExampleSimple, daemon, disableTray, enableTun2socks bool
 	var configFile, cmdOutboundProto string
 	var pprofEnabled bool
 	var logFile string
-
-	// TUN helper flags (used when --tun-helper is set).
-	var tunHTTPAddr, tunFDSocket string
 
 	sc := &sharedconfig.SimpleConfig{}
 
@@ -66,16 +67,14 @@ func main() {
 	flag.BoolVar(&daemon, "daemon", runtime.GOOS != "windows", "run app as daemon")
 	flag.BoolVar(&disableTray, "disable-tray", false, "disable system tray (windows/mac only)")
 	flag.BoolVar(&enableTun2socks, "enable-tun2socks", false, "enable tun2socks model")
-	flag.BoolVar(&tunHelper, "tun-helper", false, "run TUN helper (macOS privilege separation, internal)")
-	flag.StringVar(&tunHTTPAddr, "tun-http-addr", "", "HTTP address for helper to fetch config")
-	flag.StringVar(&tunFDSocket, "tun-fd-socket", "", "Unix socket path for fd passing to parent")
 	flag.StringVar(&sc.IPV6Rule, "ipv6-rule", "", "set the ipv6 rule(auto, enable, disable), default: auto")
 	flag.StringVar(&sc.DirectFile, "direct-file", "", "custom direct file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
 	flag.StringVar(&sc.ProxyFile, "proxy-file", "", "custom proxy file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
 	flag.BoolVar(&pprofEnabled, "pprof", false, "enable pprof debug server on :6060")
 
-	// Custom usage so --help/-h also introduces the "selfupdate" subcommand,
-	// which is handled before flag parsing and would otherwise be invisible.
+	// Custom usage so --help/-h also introduces the "selfupdate" and
+	// "tun-helper" subcommands, which are handled before flag parsing and
+	// would otherwise be invisible.
 	flag.Usage = func() {
 		bin := filepath.Base(os.Args[0])
 		out := flag.CommandLine.Output()
@@ -84,14 +83,18 @@ func main() {
 用法:
   %s [flags]              启动代理（托盘版默认带系统托盘，可用 --disable-tray 关闭）
   %s selfupdate [flags]   检查并升级到最新 release
+  %s tun-helper [flags]   内部：以提权 TUN 助手模式运行（由主程序自动拉起）
 
 子命令:
   selfupdate    从 GitHub 检查最新 release，并原地替换当前二进制（不自动重启）。
                 更新完成后请手动重启进程使新版本生效。支持 --check（仅检查）、
                 --proxy-port（走本地代理下载）。
+  tun-helper    内部子命令：打开 TUN 设备、配置路由/DNS 并把 fd 传回主进程，
+                由主程序在提权场景下自动拉起，请勿手动使用。支持
+                --tun-http-addr/--tun-fd-socket/--log-file/--log-level。
 
 Flags:
-`, bin, bin)
+`, bin, bin, bin)
 		flag.PrintDefaults()
 	}
 
@@ -108,13 +111,6 @@ Flags:
 	if showConfigExampleSimple {
 		fmt.Println(exampleSimpleConfig())
 		os.Exit(0)
-	}
-
-	// TUN helper is a long-running elevated process that opens the TUN device,
-	// sets up routing/DNS, passes the fd back to the parent, and stays alive
-	// monitoring stdin for the parent's lifecycle signal.
-	if tunHelper {
-		os.Exit(runTunHelper(tunHTTPAddr, tunFDSocket, logFile, sc.LogLevel))
 	}
 
 	// On macOS the app is often launched by Finder/launchd with cwd=/,

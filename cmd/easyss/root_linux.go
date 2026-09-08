@@ -116,11 +116,12 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 		return nil, nil, fmt.Errorf("listen on %s: %w", fdSocketPath, err)
 	}
 
-	// Build the helper command. The helper reads its config via GET /tun and
-	// sends the fd via the Unix socket. Stdin is connected to the FIFO.
+	// Build the helper command. The helper runs as the "tun-helper" subcommand,
+	// reads its config via GET /tun, and sends the fd via the Unix socket.
+	// Stdin is connected to the FIFO.
 	tunHTTPAddr := fmt.Sprintf("127.0.0.1:%d", httpPort)
 	helperArgs := []string{
-		"--tun-helper",
+		"tun-helper",
 		"--tun-http-addr", tunHTTPAddr,
 		"--tun-fd-socket", fdSocketPath,
 	}
