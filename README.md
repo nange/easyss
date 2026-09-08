@@ -343,9 +343,9 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 | `shaper.cover_budget_ratio` | 否 | 0.03 | cover traffic 占真实流量的预算比例，设为 0 或负数使用默认值，范围 (0, 1] |
 | `shaper.cover_budget_cap` | 否 | 16384 | cover traffic 最大累积预算，单位字节，默认 16KB |
 | `transport.protocols` | 否 | h2 | 支持的传输协议列表，目前仅支持 `h2`，配置其他值启动时报错；未来可同时启用多个（如 h2 + h3） |
-| `transport.http2_max_frame_size` | 否 | 16777215 | 服务端 HTTP/2 最大帧大小（16MB-1），0 使用默认值 |
-| `transport.http2_recv_buf_conn` | 否 | 4194304 | 服务端连接级上行窗口（4MB），0 使用默认值 |
-| `transport.http2_recv_buf_stream` | 否 | 1048576 | 服务端流级上行窗口（1MB），0 使用默认值 |
+| `transport.h2_max_frame_size` | 否 | 16777215 | 服务端 HTTP/2 最大帧大小（16MB-1），0 使用默认值 |
+| `transport.h2_recv_buf_conn` | 否 | 4194304 | 服务端连接级上行窗口（4MB），0 使用默认值 |
+| `transport.h2_recv_buf_stream` | 否 | 1048576 | 服务端流级上行窗口（1MB），0 使用默认值 |
 | `pprof_enabled` | 否 | false | 是否启用 pprof 调试服务（127.0.0.1:6060） |
 | `timeout` | 否 | 30 | 超时时间，单位秒 |
 
