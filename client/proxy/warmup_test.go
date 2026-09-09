@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -24,19 +25,21 @@ func newTestSocksServer(tr transport.Transport) *Socks5Server {
 	return s
 }
 
-func TestWarmUp_OpensAndClosesExchange(t *testing.T) {
-	tr := &mockTransport{
-		streams: []transport.Stream{
-			&mockStream{},
-		},
-	}
+// TestWarmUp_WarmsTransport verifies that WarmUp hands the work to the
+// transport exactly once: the proxy layer only jitters and delegates, the
+// transport primes its own pools.
+func TestWarmUp_WarmsTransport(t *testing.T) {
+	tr := &mockTransport{}
 	s := newTestSocksServer(tr)
 
 	// jitter 0: deterministic for tests.
-	s.WarmUp("connectivitycheck.gstatic.com", 0, 0, 2*time.Second)
+	s.WarmUp(0, 0, 2*time.Second)
 
-	if got := tr.openCalls(); got != 1 {
-		t.Errorf("expected exactly 1 transport Open (connection warmed), got %d", got)
+	if got := tr.warmUpCalls(); got != 1 {
+		t.Errorf("expected exactly 1 transport WarmUp, got %d", got)
+	}
+	if got := tr.openCalls(); got != 0 {
+		t.Errorf("expected no transport Open, got %d", got)
 	}
 	if len(s.udpExch) != 0 {
 		t.Errorf("expected exchange map to be empty after warm-up, got %d entries", len(s.udpExch))
@@ -48,55 +51,38 @@ func TestWarmUp_NoopWhenClosing(t *testing.T) {
 	s := newTestSocksServer(tr)
 	s.closing.Store(true)
 
-	s.WarmUp("connectivitycheck.gstatic.com", 0, 0, 2*time.Second)
+	s.WarmUp(0, 0, 2*time.Second)
 
-	if got := tr.openCalls(); got != 0 {
-		t.Errorf("expected no transport Open when server is closing, got %d", got)
+	if got := tr.warmUpCalls(); got != 0 {
+		t.Errorf("expected no transport WarmUp when server is closing, got %d", got)
 	}
 }
 
-func TestWarmUp_NoopWhenExchangeExists(t *testing.T) {
-	tr := &mockTransport{
-		streams: []transport.Stream{
-			&mockStream{},
-			&mockStream{},
-		},
-	}
+// TestWarmUp_ErrorIsSwallowed verifies the best-effort contract: a failing
+// transport warm-up is logged and swallowed, never surfaced to the caller.
+func TestWarmUp_ErrorIsSwallowed(t *testing.T) {
+	tr := &mockTransport{warmUpErr: errors.New("probe failed")}
 	s := newTestSocksServer(tr)
 
-	// First call opens and closes the exchange; the second call must not
-	// open a new one beyond the first.
-	s.WarmUp("connectivitycheck.gstatic.com", 0, 0, 2*time.Second)
-	if got := tr.openCalls(); got != 1 {
-		t.Fatalf("expected 1 transport Open after first warm-up, got %d", got)
-	}
+	s.WarmUp(0, 0, 2*time.Second)
 
-	// Pre-register an exchange for the same key: the warm-up must skip it.
-	key := "warmup_0_connectivitycheck.gstatic.com"
-	s.udpMu.Lock()
-	s.udpExch[key] = &UDPExchange{}
-	s.udpMu.Unlock()
-
-	s.WarmUp("connectivitycheck.gstatic.com", 0, 0, 2*time.Second)
-	if got := tr.openCalls(); got != 1 {
-		t.Errorf("expected no additional transport Open when exchange exists, got %d", got)
+	if got := tr.warmUpCalls(); got != 1 {
+		t.Errorf("expected 1 transport WarmUp attempt, got %d", got)
 	}
 }
 
 func TestWarmUp_JitterBounded(t *testing.T) {
-	tr := &mockTransport{
-		streams: []transport.Stream{&mockStream{}},
-	}
+	tr := &mockTransport{}
 	s := newTestSocksServer(tr)
 
-	// jitterMax must never exceed the timeout; with a 50ms jitter window the
-	// warm-up must still complete (bounded), not hang.
+	// With a 50ms jitter window the warm-up must still complete (bounded),
+	// not hang, and reach the transport exactly once.
 	start := time.Now()
-	s.WarmUp("connectivitycheck.gstatic.com", 10*time.Millisecond, 50*time.Millisecond, 2*time.Second)
+	s.WarmUp(10*time.Millisecond, 50*time.Millisecond, 2*time.Second)
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Errorf("warm-up with jitter took too long: %v", elapsed)
 	}
-	if got := tr.openCalls(); got != 1 {
-		t.Errorf("expected 1 transport Open, got %d", got)
+	if got := tr.warmUpCalls(); got != 1 {
+		t.Errorf("expected 1 transport WarmUp, got %d", got)
 	}
 }

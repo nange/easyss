@@ -11,6 +11,7 @@ import (
 	utls "github.com/refraction-networking/utls"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
 )
 
@@ -315,4 +316,64 @@ func TestTrackReadMarksSlotHeavy(t *testing.T) {
 			t.Fatalf("double release changed counter: %d", slot.heavy.Load())
 		}
 	})
+}
+
+// TestHTTP2Transport_WarmUp verifies that both scheduling pools are activated
+// and get their first connection established with a real probe request: after
+// WarmUp each pool reports 2 live slots (first activation) and the server
+// served exactly one probe per pool, so the first real stream of either class
+// reuses an established connection.
+func TestHTTP2Transport_WarmUp(t *testing.T) {
+	ts, token := newProbeServer(t)
+
+	tr, err := New(Config{
+		ServerURL:  ts.URL,
+		TLSConfig:  &utls.Config{InsecureSkipVerify: true, NextProtos: sharedconfig.NextProtos},
+		Timeout:    time.Second,
+		ProbeToken: token,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tr.Close() })
+
+	stats.ResetCounters()
+	if err := tr.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	st := tr.Stats()
+	if st.PriorityConns != 2 {
+		t.Fatalf("PriorityConns = %d, want 2 (priority pool first activation)", st.PriorityConns)
+	}
+	if st.BulkConns != 2 {
+		t.Fatalf("BulkConns = %d, want 2 (bulk pool first activation)", st.BulkConns)
+	}
+	if got := stats.Collect().ServerProbes; got != 2 {
+		t.Fatalf("server served %d probe requests, want 2 (one per pool)", got)
+	}
+}
+
+// TestHTTP2Transport_WarmUpFailsWhenUnreachable verifies that a failed probe
+// (unreachable server) surfaces as an error so the caller can log and swallow
+// it.
+func TestHTTP2Transport_WarmUpFailsWhenUnreachable(t *testing.T) {
+	ts, token := newProbeServer(t)
+	deadURL := ts.URL
+	ts.Close() // connection refused from now on
+
+	tr, err := New(Config{
+		ServerURL:  deadURL,
+		TLSConfig:  &utls.Config{InsecureSkipVerify: true, NextProtos: sharedconfig.NextProtos},
+		Timeout:    time.Second,
+		ProbeToken: token,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tr.Close() })
+
+	if err := tr.WarmUp(context.Background()); err == nil {
+		t.Fatal("expected an error when the server is unreachable, got nil")
+	}
 }
