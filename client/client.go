@@ -184,7 +184,20 @@ var boundDialContext = func(c *Client, ctx context.Context, network, addr string
 	return c.dialer.Load().DialContext(ctx, network, addr)
 }
 
+// serverIPV6ResolveTimeout bounds the synchronous server-IPv6 resolution in
+// client.New. Resolving the server's AAAA records requires DNS round-trips
+// against the direct DNS servers; on networks where those servers are
+// unreachable, the per-query 5s timeout (times the number of servers) could
+// otherwise stall proxy startup for many seconds on every launch (most
+// noticeable on mobile, where the VPN must not go live before the proxy is
+// ready). 3s is enough for a healthy network and keeps the worst case short;
+// on timeout the router simply treats IPv6 as unavailable (the auto-mode
+// safe default). Overridable in tests.
+var serverIPV6ResolveTimeout = 3 * time.Second
+
 func New(cfg *config.ClientConfig) (*Client, error) {
+	start := time.Now()
+
 	masterKey, err := crypto.DeriveMasterKey(cfg.DefaultServer().Password)
 	if err != nil {
 		return nil, err
@@ -203,8 +216,17 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	serverIPV6 := ""
 	ipv6Networking := false
 	if router.ParseIPV6Rule(cfg.Routing.IPV6Rule) != router.IPV6RuleDisable {
-		serverIPV6 = resolveServerIPV6(cfg)
+		// Bound the whole resolution (builtin + system dns fallback) so an
+		// unreachable DNS server cannot stall startup for 5s per lookup.
+		ctx, cancel := context.WithTimeout(context.Background(), serverIPV6ResolveTimeout)
+		serverIPV6 = resolveServerIPV6(ctx, cfg)
+		cancel()
 		ipv6Networking = detectIPV6Networking()
+		log.Info("[CLIENT] server ipv6 resolved",
+			"ipv6_rule", cfg.Routing.IPV6Rule,
+			"server_ipv6", serverIPV6,
+			"elapsed_ms", time.Since(start).Milliseconds(),
+		)
 	}
 	rt.SetIPV6Info(ipv6Networking, serverIPV6)
 
@@ -213,6 +235,7 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		"ipv6_rule", cfg.Routing.IPV6Rule,
 		"ipv6_networking", ipv6Networking,
 		"server_ipv6", serverIPV6,
+		"elapsed_ms", time.Since(start).Milliseconds(),
 	)
 
 	tlsCfg := cfg.UTLSConfig()
@@ -270,7 +293,7 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 
 	client.transport = tr
 
-	log.Info("[CLIENT] transport initialized", "server_url", cfg.ServerURL(), "max_slots", cfg.Transport.ConnCountMax, "stream_threshold", cfg.Transport.StreamThreshold, "server_addr", cfg.DefaultServerAddr(), "direct_iface", directIface)
+	log.Info("[CLIENT] transport initialized", "server_url", cfg.ServerURL(), "max_slots", cfg.Transport.ConnCountMax, "stream_threshold", cfg.Transport.StreamThreshold, "server_addr", cfg.DefaultServerAddr(), "direct_iface", directIface, "elapsed_ms", time.Since(start).Milliseconds())
 
 	go client.closeIdleLoop()
 	go client.dialerRefreshLoop()
@@ -419,7 +442,7 @@ func isInterfaceStaleError(err error) bool {
 	return false
 }
 
-func resolveServerIPV6(cfg *config.ClientConfig) string {
+func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 	svr := cfg.DefaultServer()
 	if svr == nil {
 		return ""
@@ -434,8 +457,12 @@ func resolveServerIPV6(cfg *config.ClientConfig) string {
 	if dns.BuiltinDNSAvailable() {
 		reachable := false
 		for _, dnsServer := range config.DirectDNSServers {
-			ips, err := dns.LookupIPV6From(dnsServer, svr.Address)
+			ips, err := dns.LookupIPV6FromContext(ctx, dnsServer, svr.Address)
 			if err != nil {
+				if ctx.Err() != nil {
+					log.Warn("[CLIENT] server ipv6 resolution timed out", "server", svr.Address, "err", ctx.Err())
+					return ""
+				}
 				continue
 			}
 			// the server answered (possibly NODATA), so the builtin dns
@@ -456,8 +483,12 @@ func resolveServerIPV6(cfg *config.ClientConfig) string {
 	// fallback to the system dns servers when all builtin direct dns servers
 	// are unavailable
 	for _, dnsServer := range dns.SystemDNSServers() {
-		ips, err := dns.LookupIPV6From(dnsServer, svr.Address)
+		ips, err := dns.LookupIPV6FromContext(ctx, dnsServer, svr.Address)
 		if err != nil || len(ips) == 0 {
+			if ctx.Err() != nil {
+				log.Warn("[CLIENT] server ipv6 resolution timed out", "server", svr.Address, "err", ctx.Err())
+				return ""
+			}
 			continue
 		}
 		return ips[0].String()

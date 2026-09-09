@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/nange/easyss/v3/client"
 	"github.com/nange/easyss/v3/client/config"
@@ -30,10 +31,13 @@ type Core struct {
 }
 
 func Run(cfg *config.ClientConfig) (*Core, error) {
+	start := time.Now()
+
 	cli, err := client.New(cfg)
 	if err != nil {
 		return nil, err
 	}
+	log.Info("[EASYSS] client core ready", "elapsed_ms", time.Since(start).Milliseconds())
 
 	method := protocol.MethodFromString(cfg.DefaultServer().Method)
 	if method == 0 {
@@ -145,7 +149,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		}()
 	}
 
-	log.Info("[EASYSS] started successfully")
+	log.Info("[EASYSS] started successfully", "elapsed_ms", time.Since(start).Milliseconds())
 	// Start a fresh stats session: the process may host multiple
 	// start/stop cycles (e.g. Android), so reset both the session
 	// start time and all counters.
