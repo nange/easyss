@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"net"
 	"sync"
 	"testing"
@@ -94,7 +95,7 @@ func TestUDPExchangeDNSResponseTimeout(t *testing.T) {
 	srv := newTimeoutTestServer(t, []transport.Stream{bs})
 
 	key := "127.0.0.1:12345_8.8.8.8:53"
-	ue, created, err := srv.getOrCreateUDPExchange(key, "8.8.8.8:53", []byte("dns query payload"))
+	ue, created, err := srv.getOrCreateUDPExchange(context.Background(), key, "8.8.8.8:53", []byte("dns query payload"))
 	if err != nil {
 		t.Fatalf("getOrCreateUDPExchange: %v", err)
 	}
@@ -124,7 +125,7 @@ func TestUDPExchangeNoTimeoutWhenDisabled(t *testing.T) {
 	srv := newTimeoutTestServer(t, []transport.Stream{bs})
 
 	key := "127.0.0.1:12345_8.8.8.8:443"
-	ue, created, err := srv.getOrCreateUDPExchange(key, "8.8.8.8:443", []byte("udp payload"))
+	ue, created, err := srv.getOrCreateUDPExchange(context.Background(), key, "8.8.8.8:443", []byte("udp payload"))
 	if err != nil {
 		t.Fatalf("getOrCreateUDPExchange: %v", err)
 	}

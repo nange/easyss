@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math/rand/v2"
 	"net"
 	"strings"
 	"time"
@@ -46,6 +47,74 @@ func (s *Socks5Server) handleUDP(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 	}
 
 	return s.handleRegularUDP(srv, clientAddr, d, dst)
+}
+
+// WarmUp primes the proxied path right after startup without adding a
+// detectable traffic pattern: it waits a random jitter, then opens a UDP
+// exchange to the proxied DNS server carrying a benign A-record query for
+// domain and closes it immediately. The synchronous open establishes the
+// first HTTP/2 connection (dial + TLS + bootstrap handshake), so the first
+// real page load no longer pays the multi-second cold-start cost. Closing
+// right after the open keeps the stream short, and the query itself travels
+// inside the encrypted tunnel (visible only to the user's own server) and
+// mirrors the domain Android's own connectivity check queries anyway, so
+// the stream is behaviorally indistinguishable from the check's.
+//
+// jitterMin..jitterMax randomize the warm-up moment so startup traffic is
+// not a fixed, machine-timed event. Best-effort by contract: every failure
+// is logged and swallowed — startup must never depend on warm-up.
+func (s *Socks5Server) WarmUp(domain string, jitterMin, jitterMax, timeout time.Duration) {
+	if s == nil || s.closing.Load() {
+		return
+	}
+	if jitterMax > 0 {
+		d := jitterMin
+		if span := jitterMax - jitterMin; span > 0 {
+			d += time.Duration(rand.Float64() * float64(span))
+		}
+		select {
+		case <-time.After(d):
+		case <-s.quit:
+			return
+		}
+	}
+
+	msg := &dns.Msg{}
+	msg.SetQuestion(dns.Fqdn(domain), dns.TypeA)
+	msg.RecursionDesired = true
+	data, err := msg.Pack()
+	if err != nil {
+		log.Debug("[WARMUP] pack query", "domain", domain, "err", err)
+		return
+	}
+
+	dst := config.ProxyDNSServer
+	key := "warmup_0_" + strings.ToLower(domain)
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	ue, created, err := s.getOrCreateUDPExchange(ctx, key, dst, data)
+	if err != nil {
+		log.Warn("[WARMUP] open exchange failed", "domain", domain, "err", err)
+		return
+	}
+	if !created {
+		// A real flow beat us to the exchange; the connection is (being)
+		// warmed already.
+		log.Debug("[WARMUP] exchange already exists, skip", "domain", domain)
+		return
+	}
+
+	// The connection is warm once the exchange is open; close it right away
+	// and deliberately do not wait for the DNS response, keeping the stream
+	// short and the traffic pattern minimal.
+	stats.RecordDNSProxyQuery()
+	s.udpMu.Lock()
+	delete(s.udpExch, key)
+	s.udpMu.Unlock()
+	ue.Close() //nolint:errcheck
+	log.Info("[WARMUP] done", "domain", domain)
 }
 
 func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg) error {
@@ -200,7 +269,7 @@ func (s *Socks5Server) proxyDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr
 	dst := config.ProxyDNSServer
 	key := clientAddr.String() + "_" + dst
 
-	ue, created, err := s.getOrCreateUDPExchange(key, dst, d.Data)
+	ue, created, err := s.getOrCreateUDPExchange(context.Background(), key, dst, d.Data)
 	if err != nil {
 		log.Error("[UDP_PROXY] open exchange", "dst", dst, "err", err)
 		return err
@@ -234,13 +303,16 @@ const maxUDPExchanges = 128
 // bootstrap record when the exchange is newly created (saving one RTT). If
 // the exchange already existed, firstPayload is ignored. If this call created
 // the exchange, created is true and the caller MUST NOT call ue.Send for the
-// first payload (it was already sent in the handshake).
+// first payload (it was already sent in the handshake). ctx bounds the
+// exchange creation (dial + TLS + bootstrap) for callers that need a hard
+// deadline (e.g. startup warm-up); the DNS path passes context.Background()
+// and relies on its own response timeout instead.
 //
 // Concurrent creations for the same key are deduplicated through a
 // singleflight group: the first caller performs the (slow) OpenUDPExchange
 // call, concurrent waiters block and reuse the result, so exactly one
 // HTTP/2 stream and one receiveLoop exist per (client, target) flow.
-func (s *Socks5Server) getOrCreateUDPExchange(key, dst string, firstPayload []byte) (ue *UDPExchange, created bool, err error) {
+func (s *Socks5Server) getOrCreateUDPExchange(ctx context.Context, key, dst string, firstPayload []byte) (ue *UDPExchange, created bool, err error) {
 	s.udpMu.RLock()
 	existing, ok := s.udpExch[key]
 	s.udpMu.RUnlock()
@@ -272,7 +344,7 @@ func (s *Socks5Server) getOrCreateUDPExchange(key, dst string, firstPayload []by
 		s.udpInflightCount.Add(1)
 		defer s.udpInflightCount.Add(-1)
 
-		ue, err := s.handler.OpenUDPExchange(context.Background(), dst, s.method, firstPayload)
+		ue, err := s.handler.OpenUDPExchange(ctx, dst, s.method, firstPayload)
 		if err != nil {
 			return nil, err
 		}
@@ -556,7 +628,7 @@ func (s *Socks5Server) directUDPReadLoop(srv *socks5.Server, clientAddr *net.UDP
 func (s *Socks5Server) proxyUDPRelay(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, dst string) error {
 	key := clientAddr.String() + "_" + dst
 
-	ue, created, err := s.getOrCreateUDPExchange(key, dst, d.Data)
+	ue, created, err := s.getOrCreateUDPExchange(context.Background(), key, dst, d.Data)
 	if err != nil {
 		log.Error("[UDP_PROXY] open exchange", "dst", dst, "err", err)
 		return err
