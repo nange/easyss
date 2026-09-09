@@ -143,11 +143,41 @@ var listInterfaces = net.Interfaces
 // tests can inject deterministic addresses for synthetic interfaces.
 var ifaceAddrs = func(iface *net.Interface) ([]net.Addr, error) { return iface.Addrs() }
 
+// ifaceBindUnsupported reports whether the platform cannot bind the direct
+// dialer to an interface (see util.SysDirectIfaceBindUnsupported). It is a
+// package-level var so tests can exercise the platform branch
+// deterministically.
+var ifaceBindUnsupported = util.SysDirectIfaceBindUnsupported
+
+// initDirectDialer stores the direct dialer in c.dialer and returns the
+// name of the bound physical interface ("" when unbound). On platforms
+// where interface binding is unsupported (android: netlink blocked, the
+// VpnService routes only selected apps through the TUN) the dialer stays
+// unbound and no detection or warning runs.
+func (c *Client) initDirectDialer() string {
+	if ifaceBindUnsupported() {
+		c.dialer.Store(dialer.New())
+		return ""
+	}
+	iface := c.startupDialIface()
+	if iface == nil {
+		log.Warn("[CLIENT] no physical interface found for direct dialer, using unbound dialer")
+		c.dialer.Store(dialer.New())
+		return ""
+	}
+	c.dialer.Store(dialer.New(dialer.WithBindToInterface(iface)))
+	c.bound.Store(boundIface{name: iface.Name, index: iface.Index})
+	return iface.Name
+}
+
 // startupDialIface determines the interface the direct dialer is bound to at
 // startup. It prefers the route probe, but rejects the easyss TUN device
 // (e.g. when routes left over from a crashed TUN session redirect the probe
 // to it) and falls back to enumerating physical interfaces. Returns nil when
-// no suitable interface exists, in which case an unbound dialer is used.
+// no suitable interface exists, in which case an unbound dialer is used. On
+// platforms where interface binding is unsupported (android) initDirectDialer
+// never calls this — the dialer stays unbound (see
+// util.SysDirectIfaceBindUnsupported).
 func (c *Client) startupDialIface() *net.Interface {
 	iface, err := detectDialIface()
 	if err == nil && iface != nil && !c.isTunIface(iface) {
@@ -263,16 +293,7 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	}
 	client.bound.Store(boundIface{})
 
-	directIface := ""
-	iface := client.startupDialIface()
-	if iface == nil {
-		log.Warn("[CLIENT] no physical interface found for direct dialer, using unbound dialer")
-		client.dialer.Store(dialer.New())
-	} else {
-		client.dialer.Store(dialer.New(dialer.WithBindToInterface(iface)))
-		client.bound.Store(boundIface{name: iface.Name, index: iface.Index})
-		directIface = iface.Name
-	}
+	directIface := client.initDirectDialer()
 
 	probeToken, err := crypto.ProbeToken(masterKey)
 	if err != nil {
@@ -371,8 +392,14 @@ func (c *Client) dialWithConfig(ctx context.Context, network, addr string) (net.
 // interface-bound direct dialer when the binding changed (name or index). It
 // reports whether the dialer was replaced. On detection failure the existing
 // dialer is kept so a transient network state cannot degrade connectivity
-// further.
+// further. On platforms where interface binding is unsupported (android) it
+// is a no-op returning false.
 func (c *Client) refreshDirectDialer() bool {
+	if ifaceBindUnsupported() {
+		// Platforms that cannot bind the direct dialer keep the unbound
+		// dialer: there is nothing to refresh.
+		return false
+	}
 	iface, err := detectDialIface()
 	if err != nil {
 		log.Warn("[CLIENT] refresh direct dialer: detect interface failed", "err", err)

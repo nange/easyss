@@ -394,3 +394,88 @@ func TestStartupDialIface(t *testing.T) {
 		}
 	})
 }
+
+func TestInitDirectDialerUnsupportedPlatform(t *testing.T) {
+	orig := ifaceBindUnsupported
+	t.Cleanup(func() { ifaceBindUnsupported = orig })
+	ifaceBindUnsupported = func() bool { return true }
+
+	c := &Client{}
+	c.bound.Store(boundIface{name: "en0", index: 4})
+
+	if name := c.initDirectDialer(); name != "" {
+		t.Fatalf("initDirectDialer = %q, want unbound", name)
+	}
+	if c.dialer.Load() == nil {
+		t.Fatal("dialer should not be nil on the unbound path")
+	}
+	got, _ := c.bound.Load().(boundIface)
+	if got.name != "en0" || got.index != 4 {
+		t.Fatalf("bound = %+v, want previous en0/index 4 kept", got)
+	}
+}
+
+func TestInitDirectDialerBindsWhenSupported(t *testing.T) {
+	orig := ifaceBindUnsupported
+	origDetect := detectDialIface
+	t.Cleanup(func() {
+		ifaceBindUnsupported = orig
+		detectDialIface = origDetect
+	})
+	ifaceBindUnsupported = func() bool { return false }
+	detectDialIface = func() (*net.Interface, error) {
+		return &net.Interface{Index: 7, Name: "en0", Flags: net.FlagUp}, nil
+	}
+
+	c := &Client{}
+	if name := c.initDirectDialer(); name != "en0" {
+		t.Fatalf("initDirectDialer = %q, want en0", name)
+	}
+	got, _ := c.bound.Load().(boundIface)
+	if got.name != "en0" || got.index != 7 {
+		t.Fatalf("bound = %+v, want en0/index 7", got)
+	}
+}
+
+func TestInitDirectDialerUnboundOnDetectionFailure(t *testing.T) {
+	orig := ifaceBindUnsupported
+	origDetect := detectDialIface
+	origList := listInterfaces
+	t.Cleanup(func() {
+		ifaceBindUnsupported = orig
+		detectDialIface = origDetect
+		listInterfaces = origList
+	})
+	ifaceBindUnsupported = func() bool { return false }
+	detectDialIface = func() (*net.Interface, error) { return nil, errors.New("no route") }
+	listInterfaces = func() ([]net.Interface, error) { return nil, nil }
+
+	c := &Client{}
+	if name := c.initDirectDialer(); name != "" {
+		t.Fatalf("initDirectDialer = %q, want unbound", name)
+	}
+	if c.dialer.Load() == nil {
+		t.Fatal("dialer should not be nil on the unbound path")
+	}
+	if _, ok := c.bound.Load().(boundIface); ok {
+		t.Fatal("expected no binding recorded")
+	}
+}
+
+func TestRefreshDirectDialerSkipsOnUnsupportedPlatform(t *testing.T) {
+	orig := ifaceBindUnsupported
+	t.Cleanup(func() { ifaceBindUnsupported = orig })
+	ifaceBindUnsupported = func() bool { return true }
+
+	c := &Client{}
+	c.bound.Store(boundIface{name: "en0", index: 4})
+	c.dialer.Store(dialer.New())
+
+	if c.refreshDirectDialer() {
+		t.Fatal("expected no refresh on an unsupported platform")
+	}
+	got, _ := c.bound.Load().(boundIface)
+	if got.name != "en0" || got.index != 4 {
+		t.Fatalf("bound = %+v, want previous en0/index 4 kept", got)
+	}
+}
