@@ -1,8 +1,10 @@
 package dns
 
 import (
+	"context"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
@@ -80,4 +82,17 @@ func TestLookupIPV6From(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, len(ips), 0)
 	assert.Equal(t, net.ParseIP("::1").String(), ips[0].String())
+}
+
+// TestLookupIPV6FromContextBounded verifies the context-bounded variant
+// returns promptly instead of waiting out the per-query 5s timeout when the
+// context deadline expires.
+func TestLookupIPV6FromContextBounded(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := LookupIPV6FromContext(ctx, "127.0.0.1:1", "test.local")
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), 2*time.Second)
 }
