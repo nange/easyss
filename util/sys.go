@@ -125,6 +125,19 @@ func SysDefaultRoute() (iface *net.Interface, gateway net.IP, err error) {
 	}
 }
 
+// SysDirectIfaceBindUnsupported reports whether the platform cannot bind
+// the direct dialer to a physical interface. On Android netlink route
+// sockets are blocked for apps (net.Interfaces, net.Interface.Addrs and
+// go-netroute's route probes all fail with permission denied), and
+// SO_BINDTODEVICE requires CAP_NET_RAW which apps lack. The VpnService-based
+// VPN there uses per-app routing (only the selected apps enter the TUN), so
+// the app's own sockets — including the transport connections to the remote
+// server — bypass the tunnel without any binding. The direct dialer
+// therefore stays unbound on Android.
+func SysDirectIfaceBindUnsupported() bool {
+	return runtime.GOOS == "android"
+}
+
 func SysGatewayAndDevice() (gw string, dev string, err error) {
 	iface, gateway, err := SysDefaultRoute()
 	if err == nil && iface != nil && gateway != nil {
