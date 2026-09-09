@@ -135,6 +135,13 @@ func (a *TrayApp) buildTray() {
 		os.Exit(1)
 	}
 
+	// A non-fatal startup warning (e.g. the server domain failed to resolve
+	// and TUN was skipped) is surfaced as a notification without blocking
+	// or exiting: the proxy core keeps running.
+	if a.startupWarn != nil {
+		a.tray.ShowNotification("Easyss", friendlyStartupWarning(a.startupWarn))
+	}
+
 	a.startLocalService()
 	go a.statsRefresher()
 	go a.autoCheckUpdate()
@@ -183,7 +190,26 @@ func friendlyStartupError(err error) string {
 	if isAddrInUse(err) {
 		return "服务启动失败：本地端口可能被占用，请关闭占用该端口的程序后重试。详情：" + err.Error()
 	}
+	// 以下分类按稳定错误文本匹配（均为各自包内固定的字面量错误，
+	// 不随平台/环境变化）。匹配失败则落入通用提示。
+	if strings.Contains(err.Error(), "crypto: password is empty") {
+		return "配置错误：服务器密码为空，请在配置文件（或 -k 参数）中设置 password。详情：" + err.Error()
+	}
+	if strings.Contains(err.Error(), "http proxy requires socks_port to be enabled") {
+		return "配置错误：启用 HTTP 代理需要先启用 SOCKS5 代理（socks_port 需大于 0）。详情：" + err.Error()
+	}
+	// runner.resolveServerDomain: the server domain failed to resolve, so
+	// the proxy cannot reach the server and startup aborts.
+	if strings.Contains(err.Error(), "resolution failed") {
+		return "服务启动失败：服务端域名解析失败，请检查网络或域名配置。详情：" + err.Error()
+	}
 	return "服务启动失败：" + err.Error()
+}
+
+// friendlyStartupWarning 将非致命启动警告（例如自定义规则文件加载失败）
+// 转换为用户友好的中文提示。
+func friendlyStartupWarning(err error) string {
+	return "启动警告：" + err.Error()
 }
 
 // isAddrInUse 判断错误是否为"端口已被占用"的绑定失败（Unix 走 errno，
@@ -612,6 +638,9 @@ func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
 	}
 	if err := a.Start(); err != nil {
 		return err
+	}
+	if a.startupWarn != nil {
+		log.Warn("[SYSTRAY] restart service: startup warning", "err", a.startupWarn)
 	}
 
 	if sysProxyEnabled {

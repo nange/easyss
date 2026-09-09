@@ -20,6 +20,9 @@ func runApp(disableTray, daemon bool, app *App) {
 		log.Error("[EASYSS-V3] start", "err", err)
 		os.Exit(1)
 	}
+	if app.startupWarn != nil {
+		log.Warn("[EASYSS-V3] startup warning", "err", app.startupWarn)
+	}
 	sigWait()
 	app.Stop()
 	os.Exit(0)

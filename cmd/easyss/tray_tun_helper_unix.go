@@ -3,8 +3,8 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"net"
 	"os"
 	"runtime"
 	"time"
@@ -13,8 +13,15 @@ import (
 	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/util"
 	"golang.org/x/sys/unix"
 )
+
+// tunHelperResolveTimeout bounds each server-domain pre-resolution attempt
+// performed before spawning the TUN helper (a runtime toggle, unlike the
+// startup check inside runner.Run). Kept in sync with
+// runner.serverStartupResolveTimeout.
+const tunHelperResolveTimeout = 3 * time.Second
 
 // createTun2socksViaHelper spawns a long-running elevated helper to open the
 // TUN device, set up routes/DNS, and pass the fd back. The helper stays alive
@@ -71,15 +78,17 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	// 3. Pre-resolve the proxy server hostname and populate the DNS cache
 	// before spawning the helper, to avoid a circular dependency once the
 	// helper sets the system DNS to go through TUN.
-	if serverAddr := a.cfg.DefaultServer().Address; net.ParseIP(serverAddr) == nil {
+	if serverAddr := a.cfg.DefaultServer().Address; !util.IsIP(serverAddr) {
 		var err error
 		for i := range 3 {
 			if a.core.SocksServer == nil || len(config.DirectDNSServers) == 0 {
 				err = fmt.Errorf("dns cache not available")
 				break
 			}
-			err = a.core.SocksServer.PrePopulateDNS(serverAddr, config.DirectDNSServers,
+			ctx, cancel := context.WithTimeout(context.Background(), tunHelperResolveTimeout)
+			err = a.core.SocksServer.PrePopulateDNS(ctx, serverAddr, config.DirectDNSServers,
 				a.cfg.Routing.IPV6Rule != "enable")
+			cancel()
 			if err == nil {
 				log.Info("[SYSTRAY] pre-populated dns cache for server", "host", serverAddr)
 				break

@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -17,9 +18,26 @@ import (
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/stats"
+	"github.com/nange/easyss/v3/util"
 )
 
 var errSocksRequired = errors.New("http proxy requires socks_port to be enabled")
+
+// serverStartupResolveTimeout bounds each synchronous server-domain
+// resolution attempt at startup. It mirrors client.serverIPV6ResolveTimeout:
+// 3s is enough for a healthy network and keeps the worst-case startup delay
+// short. serverStartupRetryDelay is the pause between TUN-mode retries.
+// Both are vars (not consts) so tests can shorten them.
+var (
+	serverStartupResolveTimeout = 3 * time.Second
+	serverStartupRetryDelay     = time.Second
+)
+
+// prePopulateServerDomain is a package-level var so tests can inject
+// deterministic failures (same pattern as client.boundDialContext).
+var prePopulateServerDomain = func(s *proxy.Socks5Server, ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error {
+	return s.PrePopulateDNS(ctx, domain, dnsServers, requireIPv4)
+}
 
 type Core struct {
 	Cfg           *config.ClientConfig
@@ -28,6 +46,11 @@ type Core struct {
 	HTTPServer    *proxy.HTTPProxyServer
 	StreamHandler *proxy.StreamHandler
 	DNSServer     *dns.ForwardServer
+
+	// StartupWarn carries a non-fatal warning detected while initializing
+	// the core (e.g. a custom rule file that failed to load), so the caller
+	// can surface it to the user without failing startup.
+	StartupWarn error
 }
 
 func Run(cfg *config.ClientConfig) (*Core, error) {
@@ -63,6 +86,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		Cfg:           cfg,
 		Client:        cli,
 		StreamHandler: streamHandler,
+		StartupWarn:   cli.StartupWarning(),
 	}
 
 	// Pre-bind all local listen addresses before starting any server
@@ -103,7 +127,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 
 	if socksAddr != "" {
 		serverDomain := ""
-		if svr := cfg.DefaultServer(); svr != nil && net.ParseIP(svr.Address) == nil {
+		if svr := cfg.DefaultServer(); svr != nil && !util.IsIP(svr.Address) {
 			serverDomain = svr.Address
 		}
 		socksServer, err := proxy.NewSocks5Server(socksAddr, cfg.AuthUsername, cfg.AuthPassword,
@@ -149,6 +173,15 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		}()
 	}
 
+	// The server domain must resolve for the proxied path to work at all,
+	// so the resolution check belongs to core startup. A failed resolution
+	// means the server is unreachable and the proxy cannot work, so it
+	// aborts startup like any other fatal core error.
+	if err := c.resolveServerDomain(cfg); err != nil {
+		c.cleanup()
+		return nil, err
+	}
+
 	log.Info("[EASYSS] started successfully", "elapsed_ms", time.Since(start).Milliseconds())
 	// Start a fresh stats session: the process may host multiple
 	// start/stop cycles (e.g. Android), so reset both the session
@@ -162,6 +195,64 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 func (c *Core) Stop() {
 	c.cleanup()
 	log.Info("[EASYSS] stopped")
+}
+
+// resolveServerDomain pre-resolves the proxy server hostname via the direct
+// DNS servers (with system fallback) and pre-seeds the DNS cache, so the
+// proxied path never waits on a cold lookup. A failure is returned as a
+// fatal error: without the domain resolving the server is unreachable and
+// the proxy cannot work at all, so the caller aborts startup.
+//
+// TUN mode retries (3 attempts) because a failed pre-population there would
+// deadlock TUN DNS once the system DNS is switched to the forward server;
+// non-TUN mode is best-effort with a single bounded attempt. An address
+// that is a literal IP needs no resolution and returns nil.
+func (c *Core) resolveServerDomain(cfg *config.ClientConfig) error {
+	svr := cfg.DefaultServer()
+	if svr == nil || util.IsIP(svr.Address) {
+		return nil
+	}
+	if c.SocksServer == nil {
+		return nil
+	}
+
+	attempts := 1
+	if cfg.Local.EnableTun2socks {
+		attempts = 3
+	}
+
+	start := time.Now()
+	var err error
+	for i := range attempts {
+		if len(config.DirectDNSServers) == 0 {
+			err = errors.New("no direct dns servers configured")
+			break
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), serverStartupResolveTimeout)
+		err = prePopulateServerDomain(c.SocksServer, ctx, svr.Address, config.DirectDNSServers,
+			cfg.Routing.IPV6Rule != "enable")
+		cancel()
+		if err == nil {
+			break
+		}
+		if i < attempts-1 {
+			time.Sleep(serverStartupRetryDelay)
+		}
+	}
+
+	if err != nil {
+		log.Warn("[EASYSS] server domain resolution failed at startup",
+			"host", svr.Address,
+			"elapsed_ms", time.Since(start).Milliseconds(),
+			"err", err,
+		)
+		return fmt.Errorf("server domain %s resolution failed: %w", svr.Address, err)
+	}
+	log.Info("[EASYSS] server domain resolved at startup",
+		"host", svr.Address,
+		"elapsed_ms", time.Since(start).Milliseconds(),
+	)
+	return nil
 }
 
 // prebindTCP verifies the given TCP address is bindable before server

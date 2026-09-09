@@ -35,6 +35,11 @@ type Client struct {
 	closeIdleDone chan struct{}
 	closeOnce     sync.Once
 
+	// fileWarn records a non-fatal failure while loading custom
+	// direct/proxy rule files, surfaced as a startup warning (see
+	// StartupWarning). The client keeps running with built-in rules.
+	fileWarn error
+
 	mu sync.RWMutex
 }
 
@@ -253,6 +258,7 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		router:        rt,
 		shaperCfg:     shaperCfg,
 		masterKey:     masterKey,
+		fileWarn:      rt.CustomFileError(),
 		closeIdleDone: make(chan struct{}),
 	}
 	client.bound.Store(boundIface{})
@@ -504,6 +510,14 @@ func detectIPV6Networking() bool {
 
 func (c *Client) Router() *router.Router {
 	return c.router
+}
+
+// StartupWarning returns the first non-fatal warning detected during client
+// initialization (e.g. a custom direct/proxy rule file that failed to load),
+// or nil when initialization completed cleanly. The client keeps running
+// with built-in rules; callers may surface the warning to the user.
+func (c *Client) StartupWarning() error {
+	return c.fileWarn
 }
 
 func (c *Client) Transport() transport.Transport {

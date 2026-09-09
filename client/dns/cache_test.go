@@ -1,6 +1,7 @@
 package dns
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -295,7 +296,7 @@ func TestCachePrePopulateWithFallback(t *testing.T) {
 	})
 
 	c := NewCache("example.com")
-	if err := c.PrePopulateWithFallback("example.com", []string{failAddr}, true); err != nil {
+	if err := c.PrePopulateWithFallback(context.Background(), "example.com", []string{failAddr}, true); err != nil {
 		t.Fatalf("PrePopulateWithFallback error: %v", err)
 	}
 	if got := c.Get("example.com.", "A", true); got == nil {
@@ -316,7 +317,35 @@ func TestCachePrePopulateWithFallbackAllFail(t *testing.T) {
 	})
 
 	c := NewCache("example.com")
-	if err := c.PrePopulateWithFallback("example.com", []string{failAddr}, true); err == nil {
+	if err := c.PrePopulateWithFallback(context.Background(), "example.com", []string{failAddr}, true); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+// TestCachePrePopulateWithFallbackBoundedByContext verifies that a context
+// deadline bounds the whole pre-population: a blackhole DNS server would
+// otherwise hold the query for the per-query 5s timeout per record type.
+func TestCachePrePopulateWithFallbackBoundedByContext(t *testing.T) {
+	old := systemDNSServersFunc
+	systemDNSServersFunc = func() []string {
+		return nil
+	}
+	t.Cleanup(func() {
+		systemDNSServersFunc = old
+		resetSystemDNSCache()
+		resetBuiltinDNSCircuit()
+	})
+
+	c := NewCache("example.com")
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := c.PrePopulateWithFallback(ctx, "example.com", []string{"127.0.0.1:1"}, true)
+	if err == nil {
+		t.Fatal("expected error against blackhole dns server")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("pre-population took %v, want bounded by the context deadline", elapsed)
 	}
 }

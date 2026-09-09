@@ -1,6 +1,7 @@
 package dns
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -142,7 +143,9 @@ func jitterTTL(ttl int) int {
 // active, avoiding a DNS deadlock.
 // When requireIPv4 is true, the A query must succeed; otherwise either
 // A or AAAA success is sufficient.
-func (c *Cache) PrePopulate(domain, dnsServer string, requireIPv4 bool) error {
+// The ctx bounds the whole resolution so an unreachable DNS server cannot
+// stall startup for the per-query 5s timeout.
+func (c *Cache) PrePopulate(ctx context.Context, domain, dnsServer string, requireIPv4 bool) error {
 	store := func(msg *dns.Msg) {
 		if msg == nil {
 			return
@@ -157,7 +160,7 @@ func (c *Cache) PrePopulate(domain, dnsServer string, requireIPv4 bool) error {
 
 	var ok bool
 	var aErr error
-	if msgA, err := DNSMsgTypeA(dnsServer, domain); err == nil {
+	if msgA, err := DNSMsgTypeAContext(ctx, dnsServer, domain); err == nil {
 		store(msgA)
 		ok = true
 	} else {
@@ -165,7 +168,7 @@ func (c *Cache) PrePopulate(domain, dnsServer string, requireIPv4 bool) error {
 		log.Warn("[DNS] PrePopulate type A", "domain", domain, "err", err)
 	}
 
-	if msgAAAA, err := DNSMsgTypeAAAA(dnsServer, domain); err == nil {
+	if msgAAAA, err := DNSMsgTypeAAAAContext(ctx, dnsServer, domain); err == nil {
 		store(msgAAAA)
 		if !requireIPv4 {
 			ok = true
@@ -187,10 +190,11 @@ func (c *Cache) PrePopulate(domain, dnsServer string, requireIPv4 bool) error {
 // servers in order, then falls back to the system dns servers when all of
 // them are unavailable, storing the results in both the direct and proxied
 // caches. See PrePopulate for the requireIPv4 semantics.
-func (c *Cache) PrePopulateWithFallback(domain string, dnsServers []string, requireIPv4 bool) error {
+// The ctx bounds the whole resolution (see PrePopulate).
+func (c *Cache) PrePopulateWithFallback(ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error {
 	var lastErr error
 	try := func(server string) bool {
-		err := c.PrePopulate(domain, server, requireIPv4)
+		err := c.PrePopulate(ctx, domain, server, requireIPv4)
 		if err == nil {
 			return true
 		}

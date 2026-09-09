@@ -3,6 +3,7 @@ package util
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -117,7 +118,13 @@ func WriteToTemp(filename string, content []byte) (namePath string, err error) {
 
 func ReadFileLines(file string) ([]string, error) {
 	if e, err := FileExists(file); !e || err != nil {
-		return nil, err
+		if err != nil {
+			return nil, err
+		}
+		// FileExists reports (false, nil) for a missing file; surface it
+		// as a proper error instead of silently returning empty lines
+		// (which would hide a misconfigured rule file path).
+		return nil, fmt.Errorf("%s: %w", file, os.ErrNotExist)
 	}
 	f, err := os.Open(file)
 	if err != nil {

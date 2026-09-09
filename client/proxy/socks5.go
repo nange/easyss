@@ -122,8 +122,10 @@ func defaultDirectDialContext(ctx context.Context, network, addr string) (net.Co
 // given domain, trying each of the given dns servers in order and falling
 // back to the system dns servers when all of them fail. This avoids a DNS
 // deadlock when TUN routes are active.
-func (s *Socks5Server) PrePopulateDNS(domain string, dnsServers []string, requireIPv4 bool) error {
-	return s.dnsCache.PrePopulateWithFallback(domain, dnsServers, requireIPv4)
+// The ctx bounds the whole resolution so an unreachable DNS server cannot
+// stall startup (see dns.Cache.PrePopulateWithFallback).
+func (s *Socks5Server) PrePopulateDNS(ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error {
+	return s.dnsCache.PrePopulateWithFallback(ctx, domain, dnsServers, requireIPv4)
 }
 
 // isServerDomain reports whether the given domain is the proxy server's own

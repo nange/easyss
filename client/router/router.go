@@ -2,6 +2,7 @@ package router
 
 import (
 	"bytes"
+	"fmt"
 	"net"
 	"regexp"
 	"strings"
@@ -163,6 +164,12 @@ type Router struct {
 	customProxyCIDRIPs  []*net.IPNet
 	customProxyDomains  map[string]struct{}
 	customProxyRegexps  []*regexp.Regexp
+
+	// customFileErr records the first failure to load a custom direct/proxy
+	// rule file. Loading is deliberately non-fatal (the router keeps the
+	// built-in rules), but the error is surfaced as a startup warning so the
+	// user learns that their custom rules were not applied.
+	customFileErr error
 }
 
 func New(cfg Config) (*Router, error) {
@@ -181,10 +188,17 @@ func New(cfg Config) (*Router, error) {
 	r.ipv6Rule.Store(int32(cfg.IPV6Rule))
 
 	if err := r.loadCustomIPDomains(); err != nil {
+		r.customFileErr = fmt.Errorf("load custom rule file: %w", err)
 		log.Error("[ROUTER] load custom ip/domains", "err", err)
 	}
 
 	return r, nil
+}
+
+// CustomFileError returns the first failure encountered while loading the
+// custom direct/proxy rule files, or nil when both loaded successfully.
+func (r *Router) CustomFileError() error {
+	return r.customFileErr
 }
 
 func (r *Router) loadCustomIPDomains() error {
