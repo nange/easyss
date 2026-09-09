@@ -52,8 +52,35 @@ func TestFriendlyStartupError(t *testing.T) {
 		t.Fatalf("windows in-use error should get the hint: %q", msg)
 	}
 
+	// Empty password (crypto.DeriveMasterKey).
+	passwordErr := errors.New("crypto: password is empty")
+	if msg := friendlyStartupError(passwordErr); !strings.Contains(msg, "服务器密码为空") {
+		t.Fatalf("empty-password error should get the config hint: %q", msg)
+	}
+
+	// HTTP proxy without socks_port (runner.errSocksRequired).
+	socksRequiredErr := errors.New("http proxy requires socks_port to be enabled")
+	if msg := friendlyStartupError(socksRequiredErr); !strings.Contains(msg, "socks_port 需大于 0") {
+		t.Fatalf("socks-required error should get the config hint: %q", msg)
+	}
+
+	// Server domain failed to resolve (runner.resolveServerDomain): fatal.
+	dnsErr := errors.New("server domain proxy.example.com resolution failed: dns boom")
+	if msg := friendlyStartupError(dnsErr); !strings.Contains(msg, "服务端域名解析失败") {
+		t.Fatalf("resolution error should get the dns hint: %q", msg)
+	}
+
 	other := errors.New("boom")
 	if msg := friendlyStartupError(other); msg != "服务启动失败：boom" {
 		t.Fatalf("unexpected generic startup message: %q", msg)
+	}
+}
+
+func TestFriendlyStartupWarning(t *testing.T) {
+	// Non-fatal startup warnings (e.g. a custom rule file that failed to
+	// load) keep the "启动警告" prefix and the detail.
+	msg := friendlyStartupWarning(errors.New("load custom rule file: open direct.txt: no such file or directory"))
+	if msg != "启动警告：load custom rule file: open direct.txt: no such file or directory" {
+		t.Fatalf("unexpected startup warning message: %q", msg)
 	}
 }

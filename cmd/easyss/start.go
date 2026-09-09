@@ -66,6 +66,9 @@ func runApp(disableTray, daemon bool, app *App) {
 			}
 			os.Exit(1)
 		}
+		if app.startupWarn != nil {
+			log.Warn("[EASYSS-V3] startup warning (no tray to notify)", "err", app.startupWarn)
+		}
 		sigWait()
 
 		if proxyWasSet {

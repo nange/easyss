@@ -14,6 +14,14 @@ func DNSMsgTypeA(dnsServer, domain string) (*dns.Msg, error) {
 	return queryMsg(context.Background(), dns.TypeA, dnsServer, domain)
 }
 
+// DNSMsgTypeAContext is DNSMsgTypeA bounded by ctx: the query fails as
+// soon as the context is done, even if the per-query client timeout (5s) has
+// not elapsed. Used by startup paths (server domain pre-resolution) that must
+// not stall proxy initialization on unreachable DNS servers.
+func DNSMsgTypeAContext(ctx context.Context, dnsServer, domain string) (*dns.Msg, error) {
+	return queryMsg(ctx, dns.TypeA, dnsServer, domain)
+}
+
 // DNSMsgTypeAAAA sends a DNS AAAA record query for domain to the specified server.
 func DNSMsgTypeAAAA(dnsServer, domain string) (*dns.Msg, error) {
 	return queryMsg(context.Background(), dns.TypeAAAA, dnsServer, domain)

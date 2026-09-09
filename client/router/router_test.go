@@ -208,6 +208,34 @@ func TestNewRouter(t *testing.T) {
 	}
 }
 
+// TestCustomFileError verifies that a missing custom direct/proxy rule file
+// does not fail router construction (built-in rules keep working) but is
+// recorded as a startup warning via CustomFileError.
+func TestCustomFileError(t *testing.T) {
+	r, err := New(Config{
+		ProxyRule:  ProxyRuleAuto,
+		IPV6Rule:   IPV6RuleAuto,
+		DirectFile: "missing-direct.txt",
+	})
+	if err != nil {
+		t.Fatalf("New() with a missing direct file should stay non-fatal, got error: %v", err)
+	}
+	if r.CustomFileError() == nil {
+		t.Fatal("expected a custom-file warning for a missing direct file")
+	}
+
+	r2, err := New(Config{
+		ProxyRule: ProxyRuleAuto,
+		IPV6Rule:  IPV6RuleAuto,
+	})
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+	if r2.CustomFileError() != nil {
+		t.Fatalf("unexpected custom-file warning: %v", r2.CustomFileError())
+	}
+}
+
 func TestRouter_ShouldIPV6Disable(t *testing.T) {
 	tests := []struct {
 		name           string

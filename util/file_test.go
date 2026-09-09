@@ -1,6 +1,8 @@
 package util
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -42,6 +44,15 @@ func TestReadFileLinesMap(t *testing.T) {
 	assert.Len(t, m, 2)
 	_, ok := m["Ni hao!"]
 	assert.True(t, ok)
+}
+
+func TestReadFileLinesMapMissingFile(t *testing.T) {
+	// A missing file must be reported as an error rather than silently
+	// treated as empty lines (a misconfigured rule file path must not be
+	// invisible to the caller).
+	_, err := ReadFileLinesMap("definitely-not-exists.txt")
+	assert.NotNil(t, err)
+	assert.True(t, errors.Is(err, os.ErrNotExist))
 }
 
 func TestResolvePath(t *testing.T) {

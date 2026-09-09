@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -124,6 +123,9 @@ Flags:
 			cfg, err = config.BuildSimpleConfig(sc)
 			if err != nil {
 				log.Error("[EASYSS-V3] build config from args", "err", err)
+				if !disableTray {
+					notifyConfigError(err)
+				}
 				os.Exit(1)
 			}
 		} else {
@@ -211,6 +213,12 @@ type App struct {
 	tunMgr     *tun.Manager
 	pprofSrv   *http.Server
 
+	// startupWarn records the first non-fatal startup warning (e.g. the
+	// server domain failed to resolve, or a custom rule file failed to
+	// load). The client keeps running; the tray surfaces it as a system
+	// notification, headless builds log it.
+	startupWarn error
+
 	statsCloser chan struct{}
 	statsOnce   sync.Once
 }
@@ -221,6 +229,7 @@ func (a *App) Start() error {
 		return err
 	}
 	a.core = core
+	a.setStartupWarn(core.StartupWarn)
 
 	if a.cfg.Local.EnableTun2socks {
 		// On macOS and Linux non-root, TUN is started via privilege
@@ -229,60 +238,32 @@ func (a *App) Start() error {
 		if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !IsRoot() {
 			log.Warn("[EASYSS-V3] tun2socks requires root; skipped (use sudo, or run with system tray for automatic elevation)")
 		} else {
-			// Pre-resolve the proxy server hostname and populate the
-			// DNS cache so that TUN-mode DNS queries for the server
-			// domain never require a network round-trip (avoids a
-			// circular dependency: DNS → TUN → proxy → DNS).
-			prepopulated := true
-			if serverAddr := a.cfg.DefaultServer().Address; net.ParseIP(serverAddr) == nil {
-				var err error
-				for i := range 3 {
-					if a.core.SocksServer == nil || len(config.DirectDNSServers) == 0 {
-						prepopulated = false
-						break
-					}
-					err = a.core.SocksServer.PrePopulateDNS(serverAddr, config.DirectDNSServers,
-						a.cfg.Routing.IPV6Rule != "enable")
-					if err == nil {
-						log.Info("[EASYSS-V3] pre-populated dns cache for server", "host", serverAddr)
-						break
-					}
-					if i < 2 {
-						time.Sleep(time.Second)
-					}
-				}
-				if err != nil {
-					log.Error("[EASYSS-V3] failed to pre-resolve server hostname, skipping TUN",
-						"host", serverAddr, "err", err)
-					prepopulated = false
-				}
+			// runner.Run already ensured the server hostname resolves and
+			// pre-populated the DNS cache (resolveServerDomain), so TUN-mode
+			// DNS can never deadlock on the server domain.
+			socksProxyAddr := "socks5://127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
+			tunCfg := tun.Config{
+				Socks5Addr: socksProxyAddr,
+				DNSServer:  tunDNS(a.cfg),
 			}
-
-			if prepopulated {
-				socksProxyAddr := "socks5://127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
-				tunCfg := tun.Config{
-					Socks5Addr: socksProxyAddr,
-					DNSServer:  tunDNS(a.cfg),
-				}
-				if ipv6 := a.core.Client.Router().ServerIPV6(); ipv6 != "" {
-					tunCfg.ServerIPV6 = ipv6
-				}
-				a.tunMgr = tun.New(tunCfg)
-
-				method := protocol.MethodFromString(a.cfg.DefaultServer().Method)
-				if method == 0 {
-					method = protocol.MethodAES256GCM
-				}
-				icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
-				icmpHandler.SetProxy(a.core.StreamHandler, method)
-				a.tunMgr.SetICMPHandler(icmpHandler)
-
-				go func() {
-					if err := a.tunMgr.Start(); err != nil {
-						log.Error("[EASYSS-V3] tun2socks", "err", err)
-					}
-				}()
+			if ipv6 := a.core.Client.Router().ServerIPV6(); ipv6 != "" {
+				tunCfg.ServerIPV6 = ipv6
 			}
+			a.tunMgr = tun.New(tunCfg)
+
+			method := protocol.MethodFromString(a.cfg.DefaultServer().Method)
+			if method == 0 {
+				method = protocol.MethodAES256GCM
+			}
+			icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
+			icmpHandler.SetProxy(a.core.StreamHandler, method)
+			a.tunMgr.SetICMPHandler(icmpHandler)
+
+			go func() {
+				if err := a.tunMgr.Start(); err != nil {
+					log.Error("[EASYSS-V3] tun2socks", "err", err)
+				}
+			}()
 		}
 	}
 
@@ -294,6 +275,17 @@ func (a *App) Start() error {
 	}
 
 	return nil
+}
+
+// setStartupWarn records the first non-fatal startup warning. The client
+// keeps running; the tray surfaces it as a system notification, headless
+// builds log it.
+func (a *App) setStartupWarn(err error) {
+	if err == nil || a.startupWarn != nil {
+		return
+	}
+	a.startupWarn = err
+	log.Warn("[EASYSS-V3] startup warning", "err", err)
 }
 
 func (a *App) Stop() {
