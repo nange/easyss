@@ -361,19 +361,27 @@ func (t *HTTP2Transport) WarmUp(ctx context.Context) error {
 
 // warmPool activates one scheduling pool (first activation adds 2 slots) and
 // establishes its first connection with a probe request over a slot of that
-// pool. The pick must run under the scheduler read lock, mirroring Open.
+// pool. The pick must run under the scheduler read lock, mirroring Open. A
+// probe that does not confirm the connection is reported as
+// errProbeNotConfirmed wrapped with the pool name, so the caller can tell
+// which traffic class stayed cold.
 func (t *HTTP2Transport) warmPool(ctx context.Context, highPriority bool) error {
 	t.sched.grow(highPriority)
 	t.sched.mu.RLock()
 	slot := t.sched.pick(highPriority)
 	t.sched.mu.RUnlock()
 
+	poolName := "bulk"
+	if highPriority {
+		poolName = "priority"
+	}
+
 	if _, verdict := t.lifecycle.probeFunc(ctx, slot); verdict == probeInconclusive {
 		// The probe did not confirm the connection: the dial/TLS failed
 		// (the pool stays cold) or the server answered a transient
 		// rejection. Either way, best-effort: report and let the caller
 		// decide.
-		return errors.New("probe did not confirm the connection")
+		return fmt.Errorf("warm up %s pool: %w", poolName, errProbeNotConfirmed)
 	}
 	return nil
 }

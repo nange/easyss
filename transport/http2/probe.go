@@ -2,12 +2,20 @@ package http2
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/stats"
 )
+
+// errProbeNotConfirmed classifies a probe that did not confirm the slot
+// connection: a RoundTrip failure (dial/TLS/stream error, or the probe
+// timeout elapsing before the response headers) or a non-200 rejection (e.g.
+// 429 rate limit). Warm-up wraps it with the pool it failed to warm; the
+// lifecycle treats the same verdict as "no state change" instead.
+var errProbeNotConfirmed = errors.New("probe did not confirm the connection")
 
 // probeVerdict classifies a single probe result.
 type probeVerdict int

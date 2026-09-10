@@ -2,9 +2,11 @@ package http2
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -355,8 +357,9 @@ func TestHTTP2Transport_WarmUp(t *testing.T) {
 }
 
 // TestHTTP2Transport_WarmUpFailsWhenUnreachable verifies that a failed probe
-// (unreachable server) surfaces as an error so the caller can log and swallow
-// it.
+// (unreachable server) surfaces as an error so the caller can decide whether to
+// swallow it. The error names the pool that stayed cold and wraps the sentinel
+// verdict, so callers can classify the failure instead of matching text.
 func TestHTTP2Transport_WarmUpFailsWhenUnreachable(t *testing.T) {
 	ts, token := newProbeServer(t)
 	deadURL := ts.URL
@@ -373,7 +376,14 @@ func TestHTTP2Transport_WarmUpFailsWhenUnreachable(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = tr.Close() })
 
-	if err := tr.WarmUp(context.Background()); err == nil {
+	err = tr.WarmUp(context.Background())
+	if err == nil {
 		t.Fatal("expected an error when the server is unreachable, got nil")
+	}
+	if !errors.Is(err, errProbeNotConfirmed) {
+		t.Errorf("error = %v, want it to wrap errProbeNotConfirmed", err)
+	}
+	if !strings.Contains(err.Error(), "priority") {
+		t.Errorf("error = %v, want it to name the pool that failed", err)
 	}
 }

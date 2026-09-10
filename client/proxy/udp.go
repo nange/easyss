@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"math/rand/v2"
 	"net"
 	"strings"
 	"time"
@@ -47,42 +46,6 @@ func (s *Socks5Server) handleUDP(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 	}
 
 	return s.handleRegularUDP(srv, clientAddr, d, dst)
-}
-
-// WarmUp primes the transport's connection pools right after startup, so the
-// first real request of each traffic class does not pay the cold-start cost
-// (dial + TLS + HTTP/2). It waits a random jitter first, so startup traffic is
-// not a fixed, machine-timed event, then primes the pools with real probe
-// requests to the server's /v3/probe endpoint — the same request the
-// degradation detector issues, visible only to the user's own server.
-//
-// jitterMin..jitterMax randomize the warm-up moment; timeout bounds the whole
-// warm-up (jitter + connection establishment). Best-effort by contract: every
-// failure is logged and swallowed — startup must never depend on warm-up.
-func (s *Socks5Server) WarmUp(jitterMin, jitterMax, timeout time.Duration) {
-	if s == nil || s.closing.Load() {
-		return
-	}
-	if jitterMax > 0 {
-		d := jitterMin
-		if span := jitterMax - jitterMin; span > 0 {
-			d += time.Duration(rand.Float64() * float64(span))
-		}
-		select {
-		case <-time.After(d):
-		case <-s.quit:
-			return
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	if err := s.handler.Transport().WarmUp(ctx); err != nil {
-		log.Warn("[WARMUP] failed", "err", err)
-		return
-	}
-	log.Info("[WARMUP] done")
 }
 
 func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg) error {

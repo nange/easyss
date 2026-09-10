@@ -51,8 +51,13 @@ func Start(cfg *sharedconfig.SimpleConfig) error {
 // warmed with real probe requests to the server. It blocks (bounded by jitter
 // + connection establishment) and should be called between the SOCKS5 server
 // being ready and the VPN going live: the "connecting" state stays visible
-// while it runs, and the VPN comes up with warm connections. Best-effort:
-// failures are logged inside and never fail startup.
+// while it runs, and the VPN comes up with warm connections.
+//
+// Best-effort by contract: a warm-up that could not be confirmed is returned
+// (and logged by the proxy layer) so the caller can record it, but the caller
+// must not fail startup because of it — a nil error can equally mean the
+// warm-up was skipped (no SOCKS5 server, or shutting down). gomobile surfaces
+// a non-nil error as a Java exception, so callers must handle it.
 func WarmUp() error {
 	mMu.Lock()
 	defer mMu.Unlock()
@@ -61,10 +66,11 @@ func WarmUp() error {
 		return fmt.Errorf("not started, call Start first")
 	}
 	if mCore.SocksServer == nil {
+		// No local SOCKS5 proxy in this configuration: there is nothing to
+		// warm, which is not a failure.
 		return nil
 	}
-	mCore.SocksServer.WarmUp(mobileWarmUpJitterMin, mobileWarmUpJitterMax, mobileWarmUpTimeout)
-	return nil
+	return mCore.SocksServer.WarmUp(mobileWarmUpJitterMin, mobileWarmUpJitterMax, mobileWarmUpTimeout)
 }
 
 func Stop() {

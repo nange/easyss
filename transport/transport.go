@@ -108,8 +108,10 @@ type Transport interface {
 	// HTTP/2). Implementations activate the pool and issue one request over
 	// a connection of that pool; any answer proves the path works, so only
 	// a request that cannot confirm the connection is reported as an error.
-	// Best-effort by contract: callers log and swallow the error, startup
-	// must never depend on warm-up.
+	// Best-effort by contract: implementations must not silently drop a
+	// failure they already determined, but callers decide what to do with
+	// it — startup must never depend on warm-up, so the usual handling is
+	// to log it and continue.
 	WarmUp(ctx context.Context) error
 	CloseIdle()
 	Stats() TransportStats
