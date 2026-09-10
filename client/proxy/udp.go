@@ -49,21 +49,17 @@ func (s *Socks5Server) handleUDP(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 	return s.handleRegularUDP(srv, clientAddr, d, dst)
 }
 
-// WarmUp primes the proxied path right after startup without adding a
-// detectable traffic pattern: it waits a random jitter, then opens a UDP
-// exchange to the proxied DNS server carrying a benign A-record query for
-// domain and closes it immediately. The synchronous open establishes the
-// first HTTP/2 connection (dial + TLS + bootstrap handshake), so the first
-// real page load no longer pays the multi-second cold-start cost. Closing
-// right after the open keeps the stream short, and the query itself travels
-// inside the encrypted tunnel (visible only to the user's own server) and
-// mirrors the domain Android's own connectivity check queries anyway, so
-// the stream is behaviorally indistinguishable from the check's.
+// WarmUp primes the transport's connection pools right after startup, so the
+// first real request of each traffic class does not pay the cold-start cost
+// (dial + TLS + HTTP/2). It waits a random jitter first, so startup traffic is
+// not a fixed, machine-timed event, then primes the pools with real probe
+// requests to the server's /v3/probe endpoint — the same request the
+// degradation detector issues, visible only to the user's own server.
 //
-// jitterMin..jitterMax randomize the warm-up moment so startup traffic is
-// not a fixed, machine-timed event. Best-effort by contract: every failure
-// is logged and swallowed — startup must never depend on warm-up.
-func (s *Socks5Server) WarmUp(domain string, jitterMin, jitterMax, timeout time.Duration) {
+// jitterMin..jitterMax randomize the warm-up moment; timeout bounds the whole
+// warm-up (jitter + connection establishment). Best-effort by contract: every
+// failure is logged and swallowed — startup must never depend on warm-up.
+func (s *Socks5Server) WarmUp(jitterMin, jitterMax, timeout time.Duration) {
 	if s == nil || s.closing.Load() {
 		return
 	}
@@ -79,42 +75,14 @@ func (s *Socks5Server) WarmUp(domain string, jitterMin, jitterMax, timeout time.
 		}
 	}
 
-	msg := &dns.Msg{}
-	msg.SetQuestion(dns.Fqdn(domain), dns.TypeA)
-	msg.RecursionDesired = true
-	data, err := msg.Pack()
-	if err != nil {
-		log.Debug("[WARMUP] pack query", "domain", domain, "err", err)
-		return
-	}
-
-	dst := config.ProxyDNSServer
-	key := "warmup_0_" + strings.ToLower(domain)
-
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	ue, created, err := s.getOrCreateUDPExchange(ctx, key, dst, data)
-	if err != nil {
-		log.Warn("[WARMUP] open exchange failed", "domain", domain, "err", err)
+	if err := s.handler.Transport().WarmUp(ctx); err != nil {
+		log.Warn("[WARMUP] failed", "err", err)
 		return
 	}
-	if !created {
-		// A real flow beat us to the exchange; the connection is (being)
-		// warmed already.
-		log.Debug("[WARMUP] exchange already exists, skip", "domain", domain)
-		return
-	}
-
-	// The connection is warm once the exchange is open; close it right away
-	// and deliberately do not wait for the DNS response, keeping the stream
-	// short and the traffic pattern minimal.
-	stats.RecordDNSProxyQuery()
-	s.udpMu.Lock()
-	delete(s.udpExch, key)
-	s.udpMu.Unlock()
-	ue.Close() //nolint:errcheck
-	log.Info("[WARMUP] done", "domain", domain)
+	log.Info("[WARMUP] done")
 }
 
 func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg) error {

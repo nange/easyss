@@ -16,15 +16,12 @@ var (
 	mMu   sync.Mutex
 )
 
-// Warm-up tuning: the domain mirrors what Android's own connectivity check
-// queries the moment a VPN goes live, so the warm-up stream is behaviorally
-// indistinguishable from the check's. The jitter randomizes the warm-up
-// moment so startup traffic is not a fixed, machine-timed event; the timeout
-// bounds the whole warm-up (jitter + connection establishment).
+// Warm-up tuning: the jitter randomizes the warm-up moment so startup traffic
+// is not a fixed, machine-timed event; the timeout bounds the whole warm-up
+// (jitter + connection establishment).
 const (
-	mobileWarmUpDomain    = "connectivitycheck.gstatic.com"
-	mobileWarmUpJitterMin = 500 * time.Millisecond
-	mobileWarmUpJitterMax = 1500 * time.Millisecond
+	mobileWarmUpJitterMin = 300 * time.Millisecond
+	mobileWarmUpJitterMax = 1000 * time.Millisecond
 	mobileWarmUpTimeout   = 8 * time.Second
 )
 
@@ -49,13 +46,13 @@ func Start(cfg *sharedconfig.SimpleConfig) error {
 	return nil
 }
 
-// WarmUp primes the first proxied connection so the first real request does
-// not pay the cold-start cost (dial + TLS + bootstrap handshake). It blocks
-// (bounded by jitter + connection establishment) and should be called
-// between the SOCKS5 server being ready and the VPN going live: the
-// "connecting" state stays visible while it runs, and the VPN comes up with
-// a warm connection. Best-effort: failures are logged inside and never fail
-// startup.
+// WarmUp primes the first proxied connections so the first real requests do
+// not pay the cold-start cost (dial + TLS + HTTP/2). Both scheduling pools are
+// warmed with real probe requests to the server. It blocks (bounded by jitter
+// + connection establishment) and should be called between the SOCKS5 server
+// being ready and the VPN going live: the "connecting" state stays visible
+// while it runs, and the VPN comes up with warm connections. Best-effort:
+// failures are logged inside and never fail startup.
 func WarmUp() error {
 	mMu.Lock()
 	defer mMu.Unlock()
@@ -66,7 +63,7 @@ func WarmUp() error {
 	if mCore.SocksServer == nil {
 		return nil
 	}
-	mCore.SocksServer.WarmUp(mobileWarmUpDomain, mobileWarmUpJitterMin, mobileWarmUpJitterMax, mobileWarmUpTimeout)
+	mCore.SocksServer.WarmUp(mobileWarmUpJitterMin, mobileWarmUpJitterMax, mobileWarmUpTimeout)
 	return nil
 }
 

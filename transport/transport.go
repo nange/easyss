@@ -102,6 +102,15 @@ type GrowEvent struct {
 
 type Transport interface {
 	Open(ctx context.Context, req OpenRequest) (Stream, error)
+	// WarmUp primes the first connection of every scheduling pool so the
+	// first real stream of each traffic class reuses an established
+	// connection instead of paying the cold-start cost (dial + TLS +
+	// HTTP/2). Implementations activate the pool and issue one request over
+	// a connection of that pool; any answer proves the path works, so only
+	// a request that cannot confirm the connection is reported as an error.
+	// Best-effort by contract: callers log and swallow the error, startup
+	// must never depend on warm-up.
+	WarmUp(ctx context.Context) error
 	CloseIdle()
 	Stats() TransportStats
 	Close() error

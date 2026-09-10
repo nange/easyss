@@ -29,10 +29,12 @@ func (s *mockStream) CloseWrite() error { return nil }
 func (s *mockStream) Close() error      { return nil }
 
 type mockTransport struct {
-	mu        sync.Mutex
-	openCount int
-	streams   []transport.Stream
-	openErrs  []error
+	mu          sync.Mutex
+	openCount   int
+	warmUpCount int
+	warmUpErr   error
+	streams     []transport.Stream
+	openErrs    []error
 }
 
 func (m *mockTransport) Open(ctx context.Context, req transport.OpenRequest) (transport.Stream, error) {
@@ -50,6 +52,15 @@ func (m *mockTransport) Open(ctx context.Context, req transport.OpenRequest) (tr
 	return &mockStream{}, nil
 }
 
+// WarmUp records the call so the proxy layer's warm-up plumbing can be
+// asserted without any real network.
+func (m *mockTransport) WarmUp(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.warmUpCount++
+	return m.warmUpErr
+}
+
 func (m *mockTransport) CloseIdle()                      {}
 func (m *mockTransport) Stats() transport.TransportStats { return transport.TransportStats{} }
 func (m *mockTransport) Close() error                    { return nil }
@@ -58,6 +69,12 @@ func (m *mockTransport) openCalls() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.openCount
+}
+
+func (m *mockTransport) warmUpCalls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.warmUpCount
 }
 
 func newTestStreamHandler(tr transport.Transport) *StreamHandler {
@@ -186,9 +203,10 @@ func (t *saltCapturingTransport) Open(ctx context.Context, req transport.OpenReq
 	return t.inner.Open(ctx, req)
 }
 
-func (t *saltCapturingTransport) CloseIdle()                      {}
-func (t *saltCapturingTransport) Stats() transport.TransportStats { return transport.TransportStats{} }
-func (t *saltCapturingTransport) Close() error                    { return t.inner.Close() }
+func (t *saltCapturingTransport) WarmUp(ctx context.Context) error { return t.inner.WarmUp(ctx) }
+func (t *saltCapturingTransport) CloseIdle()                       {}
+func (t *saltCapturingTransport) Stats() transport.TransportStats  { return transport.TransportStats{} }
+func (t *saltCapturingTransport) Close() error                     { return t.inner.Close() }
 
 func TestOpenAndBootstrap_FreshSaltPerAttempt(t *testing.T) {
 	tr := &mockTransport{

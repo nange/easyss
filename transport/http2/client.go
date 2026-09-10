@@ -3,6 +3,7 @@ package http2
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -331,6 +332,50 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	}()
 
 	return stream, nil
+}
+
+// WarmUp primes the first connection of both scheduling pools so the first
+// real stream of each class reuses an established connection instead of
+// paying the cold-start cost (dial + TLS + HTTP/2): interactive streams
+// (browsing on 443/80/8080/8443/22) live in the priority pool, everything
+// else (DNS on 53, arbitrary ports) in the bulk pool. Each pool is primed
+// with a real probe request over one of its slots — the slot's http.Transport
+// pins the request to that slot's own connection, so the synchronous round
+// trip establishes it. Any answer counts: the probe payload, a fallback page
+// (a server without /v3/probe) or a rejection all prove the path works; only
+// a probe that cannot confirm the connection is reported, and the caller logs
+// and swallows it: startup must never depend on warm-up.
+func (t *HTTP2Transport) WarmUp(ctx context.Context) error {
+	if t.lifecycle.probeFunc == nil {
+		return errors.New("probe not configured")
+	}
+
+	var firstErr error
+	for _, highPriority := range []bool{true, false} {
+		if err := t.warmPool(ctx, highPriority); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// warmPool activates one scheduling pool (first activation adds 2 slots) and
+// establishes its first connection with a probe request over a slot of that
+// pool. The pick must run under the scheduler read lock, mirroring Open.
+func (t *HTTP2Transport) warmPool(ctx context.Context, highPriority bool) error {
+	t.sched.grow(highPriority)
+	t.sched.mu.RLock()
+	slot := t.sched.pick(highPriority)
+	t.sched.mu.RUnlock()
+
+	if _, verdict := t.lifecycle.probeFunc(ctx, slot); verdict == probeInconclusive {
+		// The probe did not confirm the connection: the dial/TLS failed
+		// (the pool stays cold) or the server answered a transient
+		// rejection. Either way, best-effort: report and let the caller
+		// decide.
+		return errors.New("probe did not confirm the connection")
+	}
+	return nil
 }
 
 // protoOfEndpoint maps a proxy endpoint path to its short protocol name
