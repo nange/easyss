@@ -57,11 +57,15 @@ func (s *Socks5Server) handleUDP(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 // degradation detector issues, visible only to the user's own server.
 //
 // jitterMin..jitterMax randomize the warm-up moment; timeout bounds the whole
-// warm-up (jitter + connection establishment). Best-effort by contract: every
-// failure is logged and swallowed — startup must never depend on warm-up.
-func (s *Socks5Server) WarmUp(jitterMin, jitterMax, timeout time.Duration) {
+// warm-up (jitter + connection establishment). Best-effort by contract: the
+// failure is logged here and returned so the caller can decide what to do with
+// it, but startup must never depend on warm-up. A nil error can also mean the
+// warm-up was skipped (server closing or quit during the jitter), and a
+// non-nil error does not mean the warm-up was useless: the connection may be
+// established while the probe that confirms it did not answer in time.
+func (s *Socks5Server) WarmUp(jitterMin, jitterMax, timeout time.Duration) error {
 	if s == nil || s.closing.Load() {
-		return
+		return nil
 	}
 	if jitterMax > 0 {
 		d := jitterMin
@@ -71,7 +75,10 @@ func (s *Socks5Server) WarmUp(jitterMin, jitterMax, timeout time.Duration) {
 		select {
 		case <-time.After(d):
 		case <-s.quit:
-			return
+			// Shutting down during the jitter: the warm-up is skipped, not
+			// failed.
+			log.Debug("[WARMUP] skipped, server closing")
+			return nil
 		}
 	}
 
@@ -80,9 +87,10 @@ func (s *Socks5Server) WarmUp(jitterMin, jitterMax, timeout time.Duration) {
 
 	if err := s.handler.Transport().WarmUp(ctx); err != nil {
 		log.Warn("[WARMUP] failed", "err", err)
-		return
+		return err
 	}
 	log.Info("[WARMUP] done")
+	return nil
 }
 
 func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg) error {

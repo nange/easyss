@@ -53,7 +53,8 @@ func (m *mockTransport) Open(ctx context.Context, req transport.OpenRequest) (tr
 }
 
 // WarmUp records the call so the proxy layer's warm-up plumbing can be
-// asserted without any real network.
+// asserted without any real network; warmUpErr is returned to the proxy layer,
+// which logs it and hands it back to its own caller.
 func (m *mockTransport) WarmUp(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
