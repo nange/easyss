@@ -679,6 +679,90 @@ func TestApplyDefaults(t *testing.T) {
 	})
 }
 
+// TestDisableWarmUpConfig pins the backward-compatibility contract of
+// transport.disable_warm_up: the key is absent from every config file written
+// before the option existed, and its false zero value keeps the startup
+// warm-up enabled there. Only an explicit true turns it off.
+func TestDisableWarmUpConfig(t *testing.T) {
+	write := func(t *testing.T, transportJSON string) *ClientConfig {
+		t.Helper()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+
+		doc := `{
+			"version": 3,
+			"servers": [{"address": "example.com", "port": 443, "password": "secret", "default": true}],
+			"local": {"socks_port": 1080},
+			"transport": ` + transportJSON + `
+		}`
+		if err := os.WriteFile(path, []byte(doc), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := LoadConfig(path)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		return cfg
+	}
+
+	t.Run("缺省键开启预热", func(t *testing.T) {
+		// An empty transport object stands for a pre-option config file; the
+		// unknown keys stand for fields a newer build may add.
+		cfg := write(t, `{"conn_count_max": 15, "future_option": true}`)
+		if cfg.Transport.DisableWarmUp {
+			t.Error("DisableWarmUp = true, want false when the key is absent")
+		}
+	})
+
+	t.Run("显式 false 开启预热", func(t *testing.T) {
+		cfg := write(t, `{"disable_warm_up": false}`)
+		if cfg.Transport.DisableWarmUp {
+			t.Error("DisableWarmUp = true, want false")
+		}
+	})
+
+	t.Run("显式 true 关闭预热", func(t *testing.T) {
+		cfg := write(t, `{"disable_warm_up": true}`)
+		if !cfg.Transport.DisableWarmUp {
+			t.Error("DisableWarmUp = false, want true")
+		}
+	})
+
+	t.Run("简化模式传递关闭", func(t *testing.T) {
+		cfg, err := BuildSimpleConfig(&config.SimpleConfig{
+			Server:        "example.com",
+			Password:      "secret",
+			DisableWarmUp: true,
+		})
+		if err != nil {
+			t.Fatalf("BuildSimpleConfig: %v", err)
+		}
+		if !cfg.Transport.DisableWarmUp {
+			t.Error("DisableWarmUp = false, want true from the simple config")
+		}
+
+		ApplySimpleOverrides(cfg, &config.SimpleConfig{})
+		if !cfg.Transport.DisableWarmUp {
+			t.Error("DisableWarmUp = false, want it preserved when the override is unset")
+		}
+	})
+
+	t.Run("简化模式默认开启", func(t *testing.T) {
+		cfg, err := BuildSimpleConfig(&config.SimpleConfig{
+			Server:   "example.com",
+			Password: "secret",
+		})
+		if err != nil {
+			t.Fatalf("BuildSimpleConfig: %v", err)
+		}
+		if cfg.Transport.DisableWarmUp {
+			t.Error("DisableWarmUp = true, want false by default")
+		}
+	})
+}
+
 func TestResolveFilePaths(t *testing.T) {
 	relDirect := "direct.txt"
 	relCA := "ca.pem"

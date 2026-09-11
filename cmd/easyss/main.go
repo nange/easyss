@@ -61,6 +61,7 @@ func main() {
 	flag.StringVar(&sc.LogLevel, "log-level", "", "log level (debug, info, warn, error)")
 	flag.StringVar(&logFile, "log-file", "", "log file path")
 	flag.BoolVar(&sc.EnableQUIC, "enable-quic", false, "enable QUIC protocol")
+	flag.BoolVar(&sc.DisableWarmUp, "disable-warmup", false, "disable the background warm-up of the transport connection pools")
 	flag.StringVar(&sc.SN, "sn", "", "TLS SNI override")
 	flag.StringVar(&configFile, "c", "config.json", "specify config file")
 	flag.BoolVar(&daemon, "daemon", runtime.GOOS != "windows", "run app as daemon")
@@ -405,6 +406,7 @@ func exampleV3Config() string {
 			PrioritySlotRatio: sharedconfig.DefaultPrioritySlotRatio,
 			ConnLifetimeSec:   sharedconfig.DefaultConnLifetimeSec,
 			ConnMaxBytes:      sharedconfig.DefaultConnMaxBytes,
+			DisableWarmUp:     false,
 		},
 		Shaper: config.ShaperConfig{
 			BatchWindowMS:    sharedconfig.DefaultBatchWindowMS,
@@ -434,6 +436,7 @@ func exampleSimpleConfig() string {
 		ProxyRule:     sharedconfig.DefaultProxyRule,
 		Timeout:       sharedconfig.DefaultTimeout,
 		BindAll:       false,
+		DisableWarmUp: false,
 		OutboundProto: "native",
 		DirectFile:    "",
 		ProxyFile:     "",

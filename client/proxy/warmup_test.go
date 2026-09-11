@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/transport"
 	"golang.org/x/sync/singleflight"
@@ -27,14 +28,13 @@ func newTestSocksServer(tr transport.Transport) *Socks5Server {
 }
 
 // TestWarmUp_WarmsTransport verifies that WarmUp hands the work to the
-// transport exactly once: the proxy layer only jitters and delegates, the
-// transport primes its own pools.
+// transport exactly once: the proxy layer only bounds the probe with a
+// deadline and delegates, the transport primes its own pools.
 func TestWarmUp_WarmsTransport(t *testing.T) {
 	tr := &mockTransport{}
 	s := newTestSocksServer(tr)
 
-	// jitter 0: deterministic for tests.
-	if err := s.WarmUp(0, 0, 2*time.Second); err != nil {
+	if err := s.WarmUp(2 * time.Second); err != nil {
 		t.Fatalf("unexpected error from a confirmed warm-up: %v", err)
 	}
 
@@ -55,12 +55,22 @@ func TestWarmUp_NoopWhenClosing(t *testing.T) {
 	s.closing.Store(true)
 
 	// A skipped warm-up is not a failure: closing returns nil, never an error.
-	if err := s.WarmUp(0, 0, 2*time.Second); err != nil {
+	if err := s.WarmUp(2 * time.Second); err != nil {
 		t.Errorf("expected nil when server is closing, got %v", err)
 	}
 
 	if got := tr.warmUpCalls(); got != 0 {
 		t.Errorf("expected no transport WarmUp when server is closing, got %d", got)
+	}
+}
+
+// TestWarmUp_NilServerIsNotAFailure covers the socks_port = 0 shape: there is
+// no proxy server to warm, which must never surface as an error.
+func TestWarmUp_NilServerIsNotAFailure(t *testing.T) {
+	var s *Socks5Server
+
+	if err := s.WarmUp(2 * time.Second); err != nil {
+		t.Errorf("expected nil for a nil server, got %v", err)
 	}
 }
 
@@ -71,7 +81,7 @@ func TestWarmUp_ErrorIsReturned(t *testing.T) {
 	tr := &mockTransport{warmUpErr: errors.New("probe failed")}
 	s := newTestSocksServer(tr)
 
-	err := s.WarmUp(0, 0, 2*time.Second)
+	err := s.WarmUp(2 * time.Second)
 
 	if err == nil {
 		t.Fatal("expected the transport warm-up error to be returned, got nil")
@@ -84,37 +94,41 @@ func TestWarmUp_ErrorIsReturned(t *testing.T) {
 	}
 }
 
-func TestWarmUp_JitterBounded(t *testing.T) {
-	tr := &mockTransport{}
-	s := newTestSocksServer(tr)
+// TestWarmUp_DefaultTimeoutWhenZero verifies the fallback: a zero (or
+// negative) timeout must not turn into an already-expired context, so the
+// probe is bounded by config.WarmUpTimeout instead.
+func TestWarmUp_DefaultTimeoutWhenZero(t *testing.T) {
+	for _, timeout := range []time.Duration{0, -time.Second} {
+		tr := &mockTransport{}
+		s := newTestSocksServer(tr)
 
-	// With a 50ms jitter window the warm-up must still complete (bounded),
-	// not hang, and reach the transport exactly once.
-	start := time.Now()
-	if err := s.WarmUp(10*time.Millisecond, 50*time.Millisecond, 2*time.Second); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Errorf("warm-up with jitter took too long: %v", elapsed)
-	}
-	if got := tr.warmUpCalls(); got != 1 {
-		t.Errorf("expected 1 transport WarmUp, got %d", got)
-	}
-}
+		start := time.Now()
+		err := s.WarmUp(timeout)
+		if err != nil {
+			t.Fatalf("timeout=%v: unexpected error from a confirmed warm-up: %v", timeout, err)
+		}
+		if got := tr.warmUpCalls(); got != 1 {
+			t.Errorf("timeout=%v: expected 1 transport WarmUp, got %d", timeout, got)
+			continue
+		}
 
-// TestWarmUp_QuitDuringJitterIsNotAnError verifies the shutdown path: when the
-// server quits while the warm-up is waiting for its jitter, the warm-up is
-// reported as skipped (nil), so a deliberate Stop never surfaces as a failure.
-func TestWarmUp_QuitDuringJitterIsNotAnError(t *testing.T) {
-	tr := &mockTransport{}
-	s := newTestSocksServer(tr)
-
-	close(s.quit)
-
-	if err := s.WarmUp(time.Second, 2*time.Second, 2*time.Second); err != nil {
-		t.Errorf("expected nil when quit during jitter, got %v", err)
-	}
-	if got := tr.warmUpCalls(); got != 0 {
-		t.Errorf("expected no transport WarmUp after quit, got %d", got)
+		deadline := tr.warmUpDeadlineOf()
+		if deadline.IsZero() {
+			t.Errorf("timeout=%v: probe context carried no deadline", timeout)
+			continue
+		}
+		remaining := deadline.Sub(start)
+		if remaining <= 0 {
+			t.Errorf("timeout=%v: probe deadline already expired", timeout)
+			continue
+		}
+		// The fallback deadline is set inside WarmUp, a little after start,
+		// so it may sit slightly above the default by the time the probe
+		// observes it. Tolerate that scheduling overhead, but nothing more:
+		// the point of the assertion is that a zero timeout does not fall
+		// back to something unbounded.
+		if limit := config.WarmUpTimeout + 100*time.Millisecond; remaining > limit {
+			t.Errorf("timeout=%v: probe deadline %v exceeds the default %v", timeout, remaining, config.WarmUpTimeout)
+		}
 	}
 }

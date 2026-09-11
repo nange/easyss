@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/nange/easyss/v3/client"
@@ -39,6 +40,18 @@ var prePopulateServerDomain = func(s *proxy.Socks5Server, ctx context.Context, d
 	return s.PrePopulateDNS(ctx, domain, dnsServers, requireIPv4)
 }
 
+// warmUpCore primes the transport pools behind the local SOCKS5 server. It is
+// a package-level var so tests can assert the dispatch without any network.
+var warmUpCore = func(s *proxy.Socks5Server, timeout time.Duration) error {
+	return s.WarmUp(timeout)
+}
+
+// warmUpStartDelay mirrors config.WarmUpStartDelay: the warm-up is dispatched
+// in a goroutine that waits this long before probing, so the host has time to
+// finish bringing its network path up. A var (not a const) so tests can
+// shorten it, same pattern as serverStartupResolveTimeout.
+var warmUpStartDelay = sharedconfig.WarmUpStartDelay
+
 type Core struct {
 	Cfg           *config.ClientConfig
 	Client        *client.Client
@@ -51,6 +64,12 @@ type Core struct {
 	// the core (e.g. a custom rule file that failed to load), so the caller
 	// can surface it to the user without failing startup.
 	StartupWarn error
+
+	// warmUpCancel cancels the in-flight (or still delayed) background
+	// warm-up started by StartWarmUp; set once, called by Stop. Guarded by
+	// warmUpMu because Stop may run while Run is still dispatching.
+	warmUpMu     sync.Mutex
+	warmUpCancel context.CancelFunc
 }
 
 func Run(cfg *config.ClientConfig) (*Core, error) {
@@ -189,10 +208,86 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 	stats.ResetStartTime()
 	stats.ResetCounters()
 	stats.StartSpeedMonitor()
+	// Dispatch the background warm-up last: it only primes the connection
+	// pools, so it must never delay or fail startup.
+	c.StartWarmUp()
 	return c, nil
 }
 
+// StartWarmUp dispatches the warm-up of the transport's connection pools in
+// the background, so the first real stream of each traffic class reuses an
+// established connection. It returns immediately: callers (desktop start,
+// gomobile Start) are never blocked by it and must not depend on it — the
+// probe runs after config.WarmUpStartDelay and its failures are only logged.
+// A disabled warm-up (transport.disable_warm_up) or a core without a local
+// SOCKS5 proxy (socks_port = 0) is skipped, not failed.
+//
+// The warm-up goroutine is cancelled by Stop, so a short-lived core (start
+// then immediately stop, as tests and a quick server switch do) never leaves
+// a probe running against a closed transport.
+func (c *Core) StartWarmUp() {
+	if c == nil || c.Cfg == nil || c.SocksServer == nil {
+		return
+	}
+	if c.Cfg.Transport.DisableWarmUp {
+		log.Info("[EASYSS] warm-up disabled by config")
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Everything the goroutine needs is captured here, before it starts.
+	// Stop tears the core down concurrently, the probe must target the
+	// server this call was dispatched for (warming a server whose Close
+	// already ran is deliberately harmless: it returns early on the closing
+	// flag), and warmUpCore/warmUpStartDelay are package vars tests swap
+	// between dispatches — reading them from the goroutine would race with
+	// the next test.
+	socksServer := c.SocksServer
+	probe := warmUpCore
+	delay := warmUpStartDelay
+
+	c.warmUpMu.Lock()
+	c.warmUpCancel = cancel
+	c.warmUpMu.Unlock()
+
+	go func() {
+		defer cancel()
+
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			// Stopped before the probe went out: a skipped warm-up is not a
+			// failure.
+			log.Debug("[EASYSS] warm-up skipped, core stopping")
+			return
+		}
+
+		if err := probe(socksServer, sharedconfig.WarmUpTimeout); err != nil {
+			log.Warn("[EASYSS] warm-up failed (non-fatal)", "err", err)
+		}
+	}()
+}
+
+// cancelWarmUp cancels the background warm-up, if one was dispatched. It is
+// safe to call on a core that never started one and to call more than once
+// (context.CancelFunc is idempotent).
+func (c *Core) cancelWarmUp() {
+	c.warmUpMu.Lock()
+	cancel := c.warmUpCancel
+	c.warmUpCancel = nil
+	c.warmUpMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+}
+
 func (c *Core) Stop() {
+	// Cancel the warm-up before anything is torn down, so a probe that is
+	// still delayed or in flight stops instead of racing the closing
+	// transport.
+	c.cancelWarmUp()
 	c.cleanup()
 	log.Info("[EASYSS] stopped")
 }
