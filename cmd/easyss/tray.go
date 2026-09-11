@@ -51,6 +51,11 @@ type TrayApp struct {
 	updateState   atomic.Int32
 	pendingUpdate *selfupdate.Release
 	updateMu      sync.Mutex
+	// updateUIMu serializes the tray UI mutations of the update flow (menu
+	// item label, icon badge, tooltip). The systray package protects menu
+	// items internally but not the icon/tooltip fields, so all update-driven
+	// tray writes go through this mutex.
+	updateUIMu sync.Mutex
 
 	// UWP loopback exemption menu (Windows only).
 	uwpMu           sync.Mutex        //nolint:unused // used in uwp_windows.go
