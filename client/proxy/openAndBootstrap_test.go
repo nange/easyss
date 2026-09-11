@@ -6,6 +6,7 @@ import (
 	"io"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
@@ -29,12 +30,13 @@ func (s *mockStream) CloseWrite() error { return nil }
 func (s *mockStream) Close() error      { return nil }
 
 type mockTransport struct {
-	mu          sync.Mutex
-	openCount   int
-	warmUpCount int
-	warmUpErr   error
-	streams     []transport.Stream
-	openErrs    []error
+	mu             sync.Mutex
+	openCount      int
+	warmUpCount    int
+	warmUpErr      error
+	warmUpDeadline time.Time
+	streams        []transport.Stream
+	openErrs       []error
 }
 
 func (m *mockTransport) Open(ctx context.Context, req transport.OpenRequest) (transport.Stream, error) {
@@ -54,11 +56,14 @@ func (m *mockTransport) Open(ctx context.Context, req transport.OpenRequest) (tr
 
 // WarmUp records the call so the proxy layer's warm-up plumbing can be
 // asserted without any real network; warmUpErr is returned to the proxy layer,
-// which logs it and hands it back to its own caller.
+// which logs it and hands it back to its own caller. warmUpDeadline records
+// the probe deadline the proxy layer derived from its timeout argument (zero
+// when the context carried no deadline).
 func (m *mockTransport) WarmUp(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.warmUpCount++
+	m.warmUpDeadline, _ = ctx.Deadline()
 	return m.warmUpErr
 }
 
@@ -76,6 +81,13 @@ func (m *mockTransport) warmUpCalls() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.warmUpCount
+}
+
+// warmUpDeadlineOf returns the deadline of the context the last warm-up saw.
+func (m *mockTransport) warmUpDeadlineOf() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.warmUpDeadline
 }
 
 func newTestStreamHandler(tr transport.Transport) *StreamHandler {

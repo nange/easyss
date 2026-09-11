@@ -50,6 +50,21 @@ const (
 	// never drained.
 	ExpiringStreamDrainIdle = 30 * time.Second
 
+	// Startup warm-up: the transport's scheduling pools are primed right
+	// after a successful core start so the first real stream of each
+	// traffic class reuses an established connection instead of paying the
+	// cold-start cost (dial + TLS + HTTP/2). The warm-up runs in the
+	// background (see runner.Core.StartWarmUp), so neither value delays
+	// startup. WarmUpStartDelay postpones the probe so the host has time to
+	// finish bringing its network path up (e.g. the Android VpnService
+	// configuring routes) before a probe can fail for that reason alone;
+	// it is a deterministic delay, cancellable by Stop, not a random
+	// jitter. WarmUpTimeout bounds the probe phase itself. Both are
+	// intentionally not user-configurable: the only knob is
+	// transport.disable_warm_up.
+	WarmUpTimeout    = 5 * time.Second
+	WarmUpStartDelay = 500 * time.Millisecond
+
 	// Defaults shared by config builders, the example config and runtime
 	// fallbacks. Keep these as the single source of truth: any code that
 	// applies a default must reference the constant, not a literal.

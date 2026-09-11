@@ -59,6 +59,12 @@ type TransportConfig struct {
 	PrioritySlotRatio float64 `json:"priority_slot_ratio"`
 	ConnLifetimeSec   int     `json:"conn_lifetime_sec"` // max connection lifetime in seconds, 0 uses default
 	ConnMaxBytes      int64   `json:"conn_max_bytes"`    // max bytes carried by a connection in either direction, 0 uses default
+	// DisableWarmUp disables the background warm-up of the transport's
+	// connection pools that runner.Core.StartWarmUp performs once the core
+	// is up (see config.WarmUpTimeout / config.WarmUpStartDelay for the
+	// values it uses). false is the zero value, so a config file written
+	// before this option existed keeps the warm-up enabled.
+	DisableWarmUp bool `json:"disable_warm_up"`
 }
 
 type ShaperConfig struct {

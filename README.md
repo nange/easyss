@@ -106,6 +106,7 @@ Easyss v3 支持两种配置模式，自动识别：
 | `-log-level` | 日志级别 |
 | `-sn` | TLS SNI 覆盖 |
 | `-enable-quic` | 启用 QUIC 协议 |
+| `-disable-warmup` | 禁用启动预热（默认开启，见 `transport.disable_warm_up`） |
 | `-ipv6-rule` | IPv6 规则 |
 | `-direct-file` | 自定义直连文件路径 |
 | `-proxy-file` | 自定义代理文件路径 |
@@ -155,7 +156,8 @@ Easyss v3 支持两种配置模式，自动识别：
     "stream_threshold": 4,
     "priority_slot_ratio": 0.4,
     "conn_lifetime_sec": 360,
-    "conn_max_bytes": 268435456
+    "conn_max_bytes": 268435456,
+    "disable_warm_up": false
   },
   "shaper": {
     "batch_window_ms": 3,
@@ -189,6 +191,7 @@ Easyss v3 支持两种配置模式，自动识别：
 | `transport.priority_slot_ratio` | 0.4 | 优先（交互式）槽位占连接数的比例，其余为批量槽位 |
 | `transport.conn_lifetime_sec` | 360 | 单连接最大存活时间（秒），0 使用默认值；到期后停止接收新流并轮换连接 |
 | `transport.conn_max_bytes` | 268435456 | 单连接双向累计最大字节数（256MB），0 使用默认值；超限后轮换连接 |
+| `transport.disable_warm_up` | false | 是否禁用启动预热。默认开启：核心启动后在后台预热优先级/批量两个连接池（各发一次 `/v3/probe` 探测），使首次请求直接复用已建立的连接，避免冷启动（dial + TLS + HTTP/2）开销。预热完全异步，不增加启动耗时；约在启动 500ms 后发出探测，探测阶段最长 5s，失败只记日志（`[WARMUP] failed`）不影响服务 |
 
 **shaper 参数说明：**
 

@@ -48,8 +48,9 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 			ProxyFile:  s.ProxyFile,
 		},
 		Transport: TransportConfig{
-			Protocol:     proto,
-			ConnCountMax: sharedconfig.DefaultConnCountMax,
+			Protocol:      proto,
+			ConnCountMax:  sharedconfig.DefaultConnCountMax,
+			DisableWarmUp: s.DisableWarmUp,
 		},
 		Shaper: ShaperConfig{
 			BatchWindowMS: sharedconfig.DefaultBatchWindowMS,
@@ -141,6 +142,9 @@ func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) {
 	}
 	if s.DisableSysProxy {
 		cfg.Local.DisableSysProxy = true
+	}
+	if s.DisableWarmUp {
+		cfg.Transport.DisableWarmUp = true
 	}
 	if s.EnableForwardDNS {
 		cfg.Local.EnableForwardDNS = true

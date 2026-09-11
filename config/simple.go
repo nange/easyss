@@ -12,6 +12,7 @@ type SimpleConfig struct {
 	HTTPPort         int  `json:"http_port"`
 	BindAll          bool `json:"bind_all"`
 	DisableSysProxy  bool `json:"disable_sys_proxy"`
+	DisableWarmUp    bool `json:"disable_warm_up"`
 	EnableForwardDNS bool `json:"enable_forward_dns"`
 	EnableTun2socks  bool `json:"enable_tun2socks"`
 	EnableQUIC       bool `json:"enable_quic"`
