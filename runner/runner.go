@@ -42,8 +42,8 @@ var prePopulateServerDomain = func(s *proxy.Socks5Server, ctx context.Context, d
 
 // warmUpCore primes the transport pools behind the local SOCKS5 server. It is
 // a package-level var so tests can assert the dispatch without any network.
-var warmUpCore = func(s *proxy.Socks5Server) error {
-	return s.WarmUp(sharedconfig.WarmUpTimeout)
+var warmUpCore = func(s *proxy.Socks5Server, timeout time.Duration) error {
+	return s.WarmUp(timeout)
 }
 
 // warmUpStartDelay mirrors config.WarmUpStartDelay: the warm-up is dispatched
@@ -236,11 +236,16 @@ func (c *Core) StartWarmUp() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Captured before the goroutine starts: Stop tears the core down
-	// concurrently, and the probe must target the server this call was
-	// dispatched for. Warming a server whose Close already ran is
-	// deliberately harmless — it returns early on the closing flag.
+	// Everything the goroutine needs is captured here, before it starts.
+	// Stop tears the core down concurrently, the probe must target the
+	// server this call was dispatched for (warming a server whose Close
+	// already ran is deliberately harmless: it returns early on the closing
+	// flag), and warmUpCore/warmUpStartDelay are package vars tests swap
+	// between dispatches — reading them from the goroutine would race with
+	// the next test.
 	socksServer := c.SocksServer
+	probe := warmUpCore
+	delay := warmUpStartDelay
 
 	c.warmUpMu.Lock()
 	c.warmUpCancel = cancel
@@ -250,7 +255,7 @@ func (c *Core) StartWarmUp() {
 		defer cancel()
 
 		select {
-		case <-time.After(warmUpStartDelay):
+		case <-time.After(delay):
 		case <-ctx.Done():
 			// Stopped before the probe went out: a skipped warm-up is not a
 			// failure.
@@ -258,7 +263,7 @@ func (c *Core) StartWarmUp() {
 			return
 		}
 
-		if err := warmUpCore(socksServer); err != nil {
+		if err := probe(socksServer, sharedconfig.WarmUpTimeout); err != nil {
 			log.Warn("[EASYSS] warm-up failed (non-fatal)", "err", err)
 		}
 	}()

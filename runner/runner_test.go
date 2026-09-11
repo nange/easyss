@@ -6,6 +6,7 @@ import (
 	"net"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -155,21 +156,51 @@ func TestRunOKWhenPortsAreFree(t *testing.T) {
 	core.Stop()
 }
 
-// stubWarmUp replaces warmUpCore with a counter that returns err, so the
-// dispatch logic can be asserted without any network. It restores the
-// previous implementation when the test ends.
-func stubWarmUp(t *testing.T, err error) *atomic.Int64 {
+// stubWarmUp replaces warmUpCore so the dispatch logic can be asserted without
+// any network. It counts the probes, releases done when a stubbed probe
+// returns, and restores the previous implementation when the test ends.
+//
+// StartWarmUp captures warmUpCore at dispatch time, so a probe that outlives
+// its test still calls this stub even after the cleanup below restores the
+// package var.
+func stubWarmUp(t *testing.T, err error) (*atomic.Int64, *waitSignal) {
 	t.Helper()
 
 	old := warmUpCore
-	var calls atomic.Int64
-	warmUpCore = func(*proxy.Socks5Server) error {
+	calls := &atomic.Int64{}
+	done := &waitSignal{done: make(chan struct{})}
+
+	warmUpCore = func(*proxy.Socks5Server, time.Duration) error {
 		calls.Add(1)
+		done.close()
 		return err
 	}
 	t.Cleanup(func() { warmUpCore = old })
 
-	return &calls
+	return calls, done
+}
+
+// waitSignal reports that a stubbed probe returned. It is closed by the stub
+// goroutine and safe to close more than once.
+type waitSignal struct {
+	once sync.Once
+	done chan struct{}
+}
+
+func (w *waitSignal) close() {
+	w.once.Do(func() { close(w.done) })
+}
+
+// waitProbe blocks until the stubbed probe returned, failing the test if it
+// never did.
+func (w *waitSignal) waitProbe(t *testing.T, what string) {
+	t.Helper()
+
+	select {
+	case <-w.done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
 }
 
 // shortWarmUpStartDelay shortens the delay the background warm-up waits for,
@@ -182,56 +213,43 @@ func shortWarmUpStartDelay(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { warmUpStartDelay = old })
 }
 
-// waitCalls polls until the warm-up stub has been called want times (or the
-// deadline expires), so tests never sleep longer than they must.
-func waitCalls(t *testing.T, calls *atomic.Int64, want int64, timeout time.Duration) {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if calls.Load() >= want {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
 // TestStartWarmUpDispatch covers the gating of the background warm-up: it runs
 // exactly when the configuration allows it and never propagates its failure.
+// Every assertion is event-based (the stub signals completion) so the test does
+// not depend on scheduling delays, which the race detector inflates.
 func TestStartWarmUpDispatch(t *testing.T) {
 	tests := []struct {
 		name       string
 		disable    bool
 		nilServer  bool
 		err        error
-		wantCalls  int64
-		wantNoCall bool
+		wantProbes int64
 	}{
 		{
-			name:      "enabled by default",
-			wantCalls: 1,
+			name:       "enabled by default",
+			wantProbes: 1,
 		},
 		{
 			name:       "disabled by config",
 			disable:    true,
-			wantNoCall: true,
+			wantProbes: 0,
 		},
 		{
 			name:       "no socks server",
 			nilServer:  true,
-			wantNoCall: true,
+			wantProbes: 0,
 		},
 		{
-			name:      "a failed warm-up is swallowed",
-			err:       errors.New("probe failed"),
-			wantCalls: 1,
+			name:       "a failed warm-up is swallowed",
+			err:        errors.New("probe failed"),
+			wantProbes: 1,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			shortWarmUpStartDelay(t, 0)
-			calls := stubWarmUp(t, tt.err)
+			calls, done := stubWarmUp(t, tt.err)
 
 			cfg := testConfig()
 			cfg.Transport.DisableWarmUp = tt.disable
@@ -244,19 +262,11 @@ func TestStartWarmUpDispatch(t *testing.T) {
 			// Best-effort by contract: StartWarmUp never blocks or panics.
 			core.StartWarmUp()
 
-			if tt.wantNoCall {
-				// Give a wrongly dispatched goroutine a chance to show up
-				// before asserting it never runs.
-				time.Sleep(50 * time.Millisecond)
-				if got := calls.Load(); got != 0 {
-					t.Fatalf("warm-up ran %d times, want 0", got)
-				}
-				return
+			if tt.wantProbes > 0 {
+				done.waitProbe(t, "the warm-up probe")
 			}
-
-			waitCalls(t, calls, tt.wantCalls, time.Second)
-			if got := calls.Load(); got != tt.wantCalls {
-				t.Fatalf("warm-up ran %d times, want %d", got, tt.wantCalls)
+			if got := calls.Load(); got != tt.wantProbes {
+				t.Fatalf("warm-up ran %d times, want %d", got, tt.wantProbes)
 			}
 		})
 	}
@@ -266,8 +276,8 @@ func TestStartWarmUpDispatch(t *testing.T) {
 // config.WarmUpStartDelay: the host gets time to bring its network path up
 // before a probe can fail for that reason alone.
 func TestStartWarmUpWaitStartDelay(t *testing.T) {
-	shortWarmUpStartDelay(t, 150*time.Millisecond)
-	calls := stubWarmUp(t, nil)
+	shortWarmUpStartDelay(t, 100*time.Millisecond)
+	calls, done := stubWarmUp(t, nil)
 
 	core := &Core{Cfg: testConfig(), SocksServer: &proxy.Socks5Server{}}
 	core.StartWarmUp()
@@ -276,9 +286,9 @@ func TestStartWarmUpWaitStartDelay(t *testing.T) {
 		t.Fatalf("warm-up probe fired before the start delay, ran %d times", got)
 	}
 
-	waitCalls(t, calls, 1, 2*time.Second)
+	done.waitProbe(t, "the delayed warm-up probe")
 	if got := calls.Load(); got != 1 {
-		t.Fatalf("warm-up probe never fired after the start delay, ran %d times", got)
+		t.Fatalf("warm-up probe ran %d times, want 1", got)
 	}
 }
 
@@ -290,15 +300,12 @@ func TestStartWarmUpWaitStartDelay(t *testing.T) {
 // cancel is the first thing Stop does, while the rest of Stop tears down
 // live servers this bare Core does not own.
 func TestStopCancelsPendingWarmUp(t *testing.T) {
-	shortWarmUpStartDelay(t, 30*time.Millisecond)
-	calls := stubWarmUp(t, nil)
+	// Long enough that the probe can only fire if the cancel failed.
+	shortWarmUpStartDelay(t, 5*time.Second)
+	calls, _ := stubWarmUp(t, nil)
 
 	core := &Core{Cfg: testConfig(), SocksServer: &proxy.Socks5Server{}}
 	core.StartWarmUp()
-
-	// Close to the delay, so the assertions below are meaningful: a stray
-	// probe would surface within the time Stop itself takes.
-	time.Sleep(20 * time.Millisecond)
 
 	done := make(chan struct{})
 	go func() {
@@ -315,11 +322,8 @@ func TestStopCancelsPendingWarmUp(t *testing.T) {
 	if got := calls.Load(); got != 0 {
 		t.Fatalf("warm-up probe ran despite the cancel, ran %d times", got)
 	}
-
-	// And it must stay skipped.
-	time.Sleep(100 * time.Millisecond)
-	if got := calls.Load(); got != 0 {
-		t.Fatalf("warm-up probe ran after the cancel, ran %d times", got)
+	if left := warmUpCancelOf(core); left != nil {
+		t.Fatal("the cancel did not clear the recorded warm-up cancel func")
 	}
 }
 
@@ -336,7 +340,7 @@ func warmUpCancelOf(c *Core) context.CancelFunc {
 // must not block on the probe either.
 func TestStopCancelsInFlightWarmUp(t *testing.T) {
 	shortWarmUpStartDelay(t, 0)
-	calls := stubWarmUp(t, nil)
+	calls, done := stubWarmUp(t, nil)
 
 	core := &Core{Cfg: testConfig(), SocksServer: &proxy.Socks5Server{}}
 	core.StartWarmUp()
@@ -345,7 +349,10 @@ func TestStopCancelsInFlightWarmUp(t *testing.T) {
 	if cancel == nil {
 		t.Fatal("StartWarmUp did not record a cancel func")
 	}
-	waitCalls(t, calls, 1, time.Second)
+	done.waitProbe(t, "the in-flight warm-up probe")
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("warm-up probe ran %d times, want 1", got)
+	}
 
 	// Stop cancels the warm-up context and returns without waiting for the
 	// probe that may still be in flight.

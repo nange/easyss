@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/client/config"
+	"github.com/nange/easyss/v3/client/proxy"
 	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/util"
 )
@@ -88,26 +89,20 @@ func warmUpConfig(t *testing.T, srvURL, caPath string) *config.ClientConfig {
 }
 
 // TestRunWarmsUpOverRealTransport is the end-to-end check of the runner-owned
-// warm-up: with the default configuration the core must, after starting, probe
-// both scheduling pools over its real HTTP/2 transport without blocking Run.
+// warm-up: with the default configuration the core must probe both scheduling
+// pools over its real HTTP/2 transport once it is up.
 func TestRunWarmsUpOverRealTransport(t *testing.T) {
 	srvURL, caPath, probes := startProbeServer(t)
 	cfg := warmUpConfig(t, srvURL, caPath)
 
-	start := time.Now()
 	core, err := Run(cfg)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	t.Cleanup(core.Stop)
 
-	// Run dispatches the warm-up and returns: startup must not wait for it.
-	if elapsed := time.Since(start); elapsed >= sharedconfig.WarmUpStartDelay {
-		t.Fatalf("Run took %v, so it waited for the warm-up instead of dispatching it", elapsed)
-	}
-
 	// Both pools (priority + bulk) are primed, each with its own probe.
-	deadline := time.Now().Add(sharedconfig.WarmUpTimeout + time.Second)
+	deadline := time.Now().Add(sharedconfig.WarmUpStartDelay + sharedconfig.WarmUpTimeout + time.Second)
 	for time.Now().Before(deadline) && probes.Load() < 2 {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -115,6 +110,64 @@ func TestRunWarmsUpOverRealTransport(t *testing.T) {
 	if got := probes.Load(); got < 2 {
 		t.Fatalf("got %d probe requests, want 2 (one per scheduling pool)", got)
 	}
+}
+
+// TestRunDoesNotWaitForWarmUp pins the non-blocking contract of the warm-up:
+// Run returns while the warm-up probe is still blocked, so neither desktop
+// start nor the gomobile binding pays for the warm-up. The probe blocks until
+// the test releases it, so no scheduling assumption (a delay racing a
+// timeout) can make this pass or fail by accident.
+func TestRunDoesNotWaitForWarmUp(t *testing.T) {
+	shortWarmUpStartDelay(t, 0)
+
+	old := warmUpCore
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	warmUpCore = func(*proxy.Socks5Server, time.Duration) error {
+		defer close(finished)
+		<-release
+		return nil
+	}
+	// Unlike the stub tests, this stub only ever runs on the warm-up
+	// goroutine and touches no *testing.T, so releasing it from the cleanup
+	// is safe.
+	t.Cleanup(func() {
+		warmUpCore = old
+		close(release)
+	})
+
+	cfg := testConfig()
+	cfg.Local.SocksPort = freePort(t)
+	cfg.Local.HTTPPort = 0
+
+	type result struct {
+		core *Core
+		err  error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		core, err := Run(cfg)
+		resultCh <- result{core: core, err: err}
+	}()
+
+	var res result
+	select {
+	case res = <-resultCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run blocked on the warm-up instead of dispatching it in the background")
+	}
+
+	// Run returned while the probe is still parked: that is the contract.
+	select {
+	case <-finished:
+		t.Fatal("the warm-up probe finished before Run returned, so Run waited for it")
+	default:
+	}
+
+	if res.err != nil {
+		t.Fatalf("Run: %v", res.err)
+	}
+	res.core.Stop()
 }
 
 // TestRunDoesNotWarmUpWhenDisabled verifies the configuration switch: with

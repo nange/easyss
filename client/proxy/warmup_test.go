@@ -120,8 +120,14 @@ func TestWarmUp_DefaultTimeoutWhenZero(t *testing.T) {
 		remaining := deadline.Sub(start)
 		if remaining <= 0 {
 			t.Errorf("timeout=%v: probe deadline already expired", timeout)
+			continue
 		}
-		if remaining > config.WarmUpTimeout {
+		// The fallback deadline is set inside WarmUp, a little after start,
+		// so it may sit slightly above the default by the time the probe
+		// observes it. Tolerate that scheduling overhead, but nothing more:
+		// the point of the assertion is that a zero timeout does not fall
+		// back to something unbounded.
+		if limit := config.WarmUpTimeout + 100*time.Millisecond; remaining > limit {
 			t.Errorf("timeout=%v: probe deadline %v exceeds the default %v", timeout, remaining, config.WarmUpTimeout)
 		}
 	}
