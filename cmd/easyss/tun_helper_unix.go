@@ -77,6 +77,7 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 		log.Info("[TUN-HELPER] cleaning up routes and DNS")
 		_ = runCloseScript(actualDevice, cfg.TunGW, cfg.LocalGateway,
 			cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6)
+		removeLeftoverDevice(actualDevice)
 		_ = restoreDNS(originDNS)
 		log.Info("[TUN-HELPER] cleanup done")
 	}()
@@ -389,6 +390,12 @@ func ReceiveFd(listener net.Listener) (int, error) {
 			recvErr = fmt.Errorf("no fd received")
 			return
 		}
+
+		// Keep the TUN fd out of any child process: the client execs pkexec
+		// (which execs the next helper) while it may still hold this fd, and
+		// an inherited copy keeps the interface attached, so the helper's
+		// cleanup and the next start fail with "device or resource busy".
+		unix.CloseOnExec(fds[0])
 
 		result = fds[0]
 	})

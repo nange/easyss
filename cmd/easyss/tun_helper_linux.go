@@ -59,6 +59,18 @@ func openTunDevice(name string) (int, string, error) {
 	}
 	actualName := string(ifr.name[:namelen])
 
+	// The interface may already exist as a *persistent* TUN device: older
+	// easyss versions created it with "ip tuntap add mode tun" from the create
+	// script, and TUNSETIFF above happily re-attaches to such a device without
+	// touching the flag. A persistent device outlives the fds that hold it, so
+	// a failed delete at shutdown (see removeLeftoverDevice) leaves the
+	// interface and every TUN route in the routing table forever. Clearing the
+	// flag makes the device disappear with the last fd again, which is what
+	// the fd-passing helper design expects.
+	if err := unix.IoctlSetInt(fd, unix.TUNSETPERSIST, 0); err != nil {
+		log.Warn("[TUN-HELPER] clear tun persist flag", "device", actualName, "err", err)
+	}
+
 	return fd, actualName, nil
 }
 
@@ -99,6 +111,27 @@ func runCloseScript(device, tunGW, localGateway, tunGWV6, serverIPV6, localGatew
 
 	_, _ = util.Command("bash", namePath, device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6)
 	return nil
+}
+
+// removeLeftoverDevice deletes the TUN interface when it survived the close
+// script. Deleting the interface is what takes the TUN routes with it, and the
+// close script's own "ip tuntap del" cannot do that while a process still
+// holds the device open: iproute2 attaches through TUNSETIFF, and the kernel
+// refuses a second attach to a device that is already attached ("device or
+// resource busy"). The client closes its fd concurrently with the close
+// script, so that delete used to fail and leave the interface plus every split
+// route in the routing table: all traffic then entered a device nothing reads
+// from, which looks like "the network is down" after stopping TUN. "ip link
+// del" tears the interface down regardless of open fds.
+func removeLeftoverDevice(device string) {
+	if _, err := util.Command("ip", "link", "show", device); err != nil {
+		return // the close script already deleted it
+	}
+
+	log.Warn("[TUN-HELPER] tun device survived cleanup, deleting it", "device", device)
+	if _, err := util.Command("ip", "link", "del", device); err != nil {
+		log.Error("[TUN-HELPER] delete tun device failed", "device", device, "err", err)
+	}
 }
 
 // ensureTunRoutes verifies the TUN interface is still up and the TUN routes

@@ -142,24 +142,10 @@ func TestCreateScriptsKeepGatewayOutsideTun(t *testing.T) {
 // inside an unprivileged user namespace; the ip commands the script issues are
 // identical for both device types. No root privileges are needed.
 func TestCreateTunScriptRoutesThroughTun(t *testing.T) {
-	scriptPath, err := filepath.Abs(filepath.Join("..", "..", "scripts", scripts.CreateTunFilename))
-	if err != nil {
-		t.Fatalf("resolve script path: %v", err)
-	}
-
 	// The first invocation creates the device and adds the addresses, exactly
 	// like the helper right after it opened the device.
-	create := runCreateTunScript(scriptPath)
-	tunSetup := `ip link add "` + testTunDevice + `" type dummy && ip link set dev lo up`
-	// The simulated physical interface carries the LAN address as well as a
-	// subnet of its own: the LAN connected route is what a real interface has,
-	// and the extra subnet's default route keeps 0.0.0.0/8 interesting for the
-	// negative probe (0.0.0.1 must resolve, just not through the TUN device).
-	physSetup := fmt.Sprintf(`ip link add %s type dummy && ip addr add %s dev %s`+
-		` && ip addr add %s dev %s && ip link set %s up && ip route add default via %s dev %s`,
-		testPhysDevice, testPhysAddr, testPhysDevice, testPhysLANAddr, testPhysDevice,
-		testPhysDevice, testPhysGateway, testPhysDevice)
-	setup := tunSetup + "\n" + physSetup
+	create := runCreateTunScript(tunScriptPath(t, scripts.CreateTunFilename))
+	setup := tunIfaceSetup() + "\n" + physIfaceSetup()
 
 	t.Run("routes installed", func(t *testing.T) {
 		out := inNetns(t, setup+"\n"+create+"\n"+routesAndProbes())
@@ -174,6 +160,78 @@ func TestCreateTunScriptRoutesThroughTun(t *testing.T) {
 			t.Errorf("1.0.0.0/8 appears %d times after a re-run, want 1:\n%s", n, out)
 		}
 	})
+}
+
+// TestCloseTunScriptFlushesRoutes is the regression test for the TUN routes
+// that survived stopping TUN and black-holed every connection. Deleting the
+// interface is what removes its routes, but that delete fails with "device or
+// resource busy" while a process still holds the TUN device open (the client
+// closes its fd concurrently with the close script), so the close script has
+// to delete the routes itself.
+//
+// The device is a dummy interface, which "ip tuntap del" cannot delete either
+// — the very condition this test needs: the routes can only disappear through
+// the flush.
+func TestCloseTunScriptFlushesRoutes(t *testing.T) {
+	closeTun := fmt.Sprintf("bash %s %s",
+		tunScriptPath(t, scripts.CloseTunFilename), testTunDevice)
+
+	// The device surviving the close script is what makes this test
+	// meaningful: assert it stayed, otherwise the routes could just as well
+	// have gone down with it.
+	const keptMarker = "DEVICE_KEPT"
+
+	body := strings.Join([]string{
+		tunIfaceSetup(),
+		physIfaceSetup(),
+		runCreateTunScript(tunScriptPath(t, scripts.CreateTunFilename)),
+		closeTun,
+		"ip link show " + testTunDevice + " >/dev/null 2>&1 && echo " + keptMarker,
+		routesAndProbes(),
+	}, "\n")
+
+	out := inNetns(t, body)
+
+	if !strings.Contains(out, keptMarker) {
+		t.Fatalf("the simulated device is gone, the route assertions below prove nothing:\n%s", out)
+	}
+	if table := routesTable(out); strings.Contains(table, "dev "+testTunDevice) {
+		t.Errorf("the close script left TUN routes behind:\n%s", table)
+	}
+	for _, addr := range testCoveredAddrs {
+		if got := probeOutput(out, addr); strings.Contains(got, "dev "+testTunDevice) {
+			t.Errorf("ip route get %s = %q, want it to leave the TUN device", addr, got)
+		}
+	}
+}
+
+// tunScriptPath returns the absolute path of an embedded script, so a test
+// runs the same file the helper executes.
+func tunScriptPath(t *testing.T, name string) string {
+	t.Helper()
+
+	path, err := filepath.Abs(filepath.Join("..", "..", "scripts", name))
+	if err != nil {
+		t.Fatalf("resolve %s: %v", name, err)
+	}
+	return path
+}
+
+// tunIfaceSetup creates the dummy interface that stands in for the TUN device.
+func tunIfaceSetup() string {
+	return `ip link add "` + testTunDevice + `" type dummy && ip link set dev lo up`
+}
+
+// physIfaceSetup creates the simulated physical interface. It carries the LAN
+// address as well as a subnet of its own: the LAN connected route is what a
+// real interface has, and the extra subnet's default route keeps 0.0.0.0/8
+// interesting for the negative probe (0.0.0.1 must resolve, just not through
+// the TUN device).
+func physIfaceSetup() string {
+	return fmt.Sprintf(`ip link add %s type dummy && ip addr add %s dev %s`+
+		` && ip addr add %s dev %s && ip link set %s up && ip route add default via %s dev %s`,
+		testPhysDevice, testPhysAddr, testPhysDevice, testPhysLANAddr, testPhysDevice,
+		testPhysDevice, testPhysGateway, testPhysDevice)
 }
 
 // routesAndProbes dumps the resulting routing table and one marked "ip route

@@ -108,6 +108,16 @@ func runCloseScript(device, tunGW, localGateway, tunGWV6, serverIPV6, localGatew
 	return nil
 }
 
+// removeLeftoverDevice reports a TUN interface that survived the close script.
+// The routes themselves are deleted by prefix in the close script, and a utun
+// interface disappears with the last fd that holds it, so there is nothing to
+// force here: the check only makes a lingering interface visible.
+func removeLeftoverDevice(device string) {
+	if _, err := util.Command("ifconfig", device); err == nil {
+		log.Warn("[TUN-HELPER] tun device survived cleanup", "device", device)
+	}
+}
+
 // ensureTunRoutes verifies the TUN interface is still up and the TUN routes
 // are still present, re-running the create script when macOS cleared them
 // (sleep/wake or network changes). Errors from re-applying existing
