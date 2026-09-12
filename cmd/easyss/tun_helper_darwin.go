@@ -122,9 +122,11 @@ func ensureTunRoutes(device string, cfg *proxy.TunConfig) error {
 	}
 
 	if !needCreate {
-		routeOut, err := util.Command("route", "-n", "get", tunRouteProbe)
-		if err != nil || !strings.Contains(routeOut, "interface: "+device) {
-			log.Warn("[TUN-HELPER] route check failed", "device", device, "probe", tunRouteProbe, "err", err, "output", routeOut)
+		routeOut, err := probeRoutedViaDevice(tunRouteProbes, func(probe string) (string, error) {
+			return util.Command("route", "-n", "get", probe)
+		}, "interface: "+device)
+		if err != nil {
+			log.Warn("[TUN-HELPER] route check failed", "device", device, "probe", tunRouteProbes, "err", err, "output", routeOut)
 			needCreate = true
 		}
 	}

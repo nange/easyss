@@ -85,7 +85,7 @@ var errUnsupportedPlatform = errors.New("unsupported platform")
 // own default route when netsh configures the static gateway); the easyss TUN
 // interface is skipped so the physical interface is returned. On darwin and
 // linux the caller probes 0.0.0.1 instead — the easyss TUN routes start at
-// 1.0.0.0/7 on every platform, so 0.0.0.1 always resolves to the physical
+// 1.0.0.0/8 on every platform, so 0.0.0.1 always resolves to the physical
 // default interface (Windows cannot use the probe: its route lookup rejects
 // 0.0.0.0/8 destinations outright).
 func SysDefaultRoute() (iface *net.Interface, gateway net.IP, err error) {
@@ -117,7 +117,7 @@ func SysGatewayAndDevice() (gw string, dev string, err error) {
 	}
 
 	// Fallback (darwin, linux and other platforms): probe 0.0.0.1, which the
-	// easyss TUN routes (starting at 1.0.0.0/7 on every platform) never cover.
+	// easyss TUN routes (starting at 1.0.0.0/8 on every platform) never cover.
 	r, _ := netroute.New()
 	iface, gateway, _, err = r.Route(net.IPv4(0, 0, 0, 1))
 	if err != nil {

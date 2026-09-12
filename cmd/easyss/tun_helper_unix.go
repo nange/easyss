@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/nange/easyss/v3/client/proxy"
@@ -152,10 +153,40 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	}
 }
 
-// tunRouteProbe is a destination covered by the TUN routes (the darwin/linux
-// create scripts start at 1.0.0.0/8), used to verify the routes are still
-// present after sleep/wake or network changes.
-const tunRouteProbe = "1.1.1.1"
+// tunRouteProbes are destinations that must be covered by the TUN routes,
+// used to verify the routes are still present after sleep/wake or network
+// changes. The darwin/linux/Windows create scripts route 1.0.0.0/8 (and
+// everything up to 128.0.0.0/1) through the TUN device, so 1.1.1.1 — a real,
+// widely used DNS/HTTPS destination — has to resolve to it. If these probes
+// and the scripts ever drift apart, the keep-alive would report a failure
+// forever, so tun_helper_linux_test.go asserts that every probe falls inside
+// a route block defined by the create scripts.
+var tunRouteProbes = []string{"1.1.1.1"}
+
+// probeRoutedViaDevice looks every address in probe up with cmd and reports
+// whether any of them resolves through the TUN device: a covered address
+// resolves to the TUN device while TUN routes are in place, never to the
+// physical default route, so the lookup output must contain marker (the
+// device name). The last lookup's output and error are returned so the caller
+// can log why the check failed.
+func probeRoutedViaDevice(probe []string, cmd func(string) (string, error), marker string) (string, error) {
+	var (
+		out      string
+		err      error
+		lastAddr string
+	)
+	for _, addr := range probe {
+		out, err = cmd(addr)
+		if err == nil && strings.Contains(out, marker) {
+			return out, nil
+		}
+		lastAddr = addr
+	}
+	if err == nil {
+		err = fmt.Errorf("no probe resolved via %q (last %s)", marker, lastAddr)
+	}
+	return out, err
+}
 
 // fetchTunConfig retrieves the TUN configuration from the main process via
 // GET /tun. It retries with backoff for up to 10 seconds in case the HTTP

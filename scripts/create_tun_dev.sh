@@ -8,30 +8,46 @@ tun_gw_v6=$6
 server_ip_v6=$7
 local_gateway_v6=$8
 
-ip addr add "$tun_ip_sub" dev "$tun_device"  # add ipv4 addr to device
+# run_idem runs an idempotent ip command, tolerating the errors that
+# re-applying an already configured address produces (this script is re-run by
+# the TUN helper keep-alive after sleep/wake; replace/route replace are
+# no-ops that exit 0). Any other failure is echoed to stderr instead of being
+# swallowed silently: a rejected route (e.g. a non-canonical prefix) used to
+# leave the tunnel half configured with no trace at all.
+run_idem() {
+  local out
+  out="$("$@" 2>&1)" || case "$out" in
+    *"File exists"* | *"already assigned"*) ;;
+    *) echo "[create_tun_dev] $*: $out" >&2 ;;
+  esac
+}
+
+run_idem ip addr replace "$tun_ip_sub" dev "$tun_device"  # add ipv4 addr to device
 if [ -n "$server_ip_v6" ]; then  # check if server_ip_v6 is not empty
-  ip -6 addr add "$tun_ip_sub_v6" dev "$tun_device"  # add ipv6 addr to device
+  run_idem ip -6 addr replace "$tun_ip_sub_v6" dev "$tun_device"  # add ipv6 addr to device
 fi
 
-ip link set dev "$tun_device" up  # enable tun device
+run_idem ip link set dev "$tun_device" up  # enable tun device
 
 # Route everything except 0.0.0.0/8 through the TUN device, mirroring the
 # darwin script. 0.0.0.1 (used to probe the physical default interface)
-# must stay outside the TUN routes.
-ip route add 1.0.0.0/7 via "$tun_gw" dev "$tun_device"
-ip route add 4.0.0.0/6 via "$tun_gw" dev "$tun_device"
-ip route add 8.0.0.0/5 via "$tun_gw" dev "$tun_device"
-ip route add 16.0.0.0/4 via "$tun_gw" dev "$tun_device"
-ip route add 32.0.0.0/3 via "$tun_gw" dev "$tun_device"
-ip route add 64.0.0.0/2 via "$tun_gw" dev "$tun_device"
-ip route add 128.0.0.0/1 via "$tun_gw" dev "$tun_device"
-ip route add "$local_gateway" via "$tun_gw" dev "$tun_device"
+# must stay outside the TUN routes. Keep every prefix canonical (aligned with
+# its own mask): 1.0.0.0/7 normalizes to 0.0.0.0/7 and is rejected outright,
+# which used to leave 1.0.0.0/8 leaking outside the tunnel.
+run_idem ip route replace 1.0.0.0/8 via "$tun_gw" dev "$tun_device"
+run_idem ip route replace 4.0.0.0/6 via "$tun_gw" dev "$tun_device"
+run_idem ip route replace 8.0.0.0/5 via "$tun_gw" dev "$tun_device"
+run_idem ip route replace 16.0.0.0/4 via "$tun_gw" dev "$tun_device"
+run_idem ip route replace 32.0.0.0/3 via "$tun_gw" dev "$tun_device"
+run_idem ip route replace 64.0.0.0/2 via "$tun_gw" dev "$tun_device"
+run_idem ip route replace 128.0.0.0/1 via "$tun_gw" dev "$tun_device"
+run_idem ip route replace "$local_gateway" via "$tun_gw" dev "$tun_device"
 
 # add ipv6 ip route
 if [ -n "$server_ip_v6" ]; then  # check if server_ip_v6 is not empty
-  ip -6 route add ::/1 via "$tun_gw_v6" dev "$tun_device"
-  ip -6 route add 8000::/1 via "$tun_gw_v6" dev "$tun_device"
+  run_idem ip -6 route replace ::/1 via "$tun_gw_v6" dev "$tun_device"
+  run_idem ip -6 route replace 8000::/1 via "$tun_gw_v6" dev "$tun_device"
   if [ -n "$local_gateway_v6" ]; then
-    ip -6 route add "$local_gateway_v6" via "$tun_gw_v6" dev "$tun_device"
+    run_idem ip -6 route replace "$local_gateway_v6" via "$tun_gw_v6" dev "$tun_device"
   fi
 fi

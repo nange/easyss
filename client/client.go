@@ -55,7 +55,7 @@ type boundIface struct {
 // 0.0.0.0/0 default route from the routing table (skipping the easyss TUN
 // device, which owns its own default route there while TUN is active). On
 // darwin and linux it probes 0.0.0.1, which the easyss TUN routes (starting
-// at 1.0.0.0/7 on every platform) never cover, so the lookup yields the
+// at 1.0.0.0/8 on every platform) never cover, so the lookup yields the
 // physical default interface even while TUN routes are active — binding to
 // the easyss TUN device itself would create a routing loop. Windows cannot
 // use the probe: its route lookup rejects 0.0.0.0/8 destinations outright.
@@ -87,7 +87,7 @@ var detectDialIface = func() (*net.Interface, error) {
 }
 
 // probeDialIface finds the default-route interface by probing a destination
-// in 0.0.0.0/8, which the easyss TUN routes (starting at 1.0.0.0/7 on every
+// in 0.0.0.0/8, which the easyss TUN routes (starting at 1.0.0.0/8 on every
 // platform) never cover.
 func probeDialIface() (*net.Interface, error) {
 	r, err := netroute.New()
