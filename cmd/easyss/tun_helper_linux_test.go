@@ -22,14 +22,21 @@ const (
 	testTunDevice = "tun-easyss"
 	testTunIPSub  = "198.18.0.1/16"
 	testTunGW     = "198.18.0.1"
-	// testRoutedGateway is the local gateway the script routes through the TUN
-	// device: a LAN router whose own subnet is not connected in the test, so
-	// the only route that can match it is the TUN one.
+	// testRoutedGateway is the local gateway of the simulated LAN. It must stay
+	// outside the TUN routes (see testExcludedAddrs): the create script used to
+	// install it as a host route through the TUN device, which swallowed the
+	// kernel's ICMP replies to the gateway's own liveness probes.
 	testRoutedGateway = "192.168.3.1"
-	// testPhysAddr/testPhysGateway describe the simulated physical interface
-	// (its default route keeps 0.0.0.0/8 interesting for the negative probe).
+	// testPhysDevice/testPhysAddr/testPhysGateway describe the simulated
+	// physical interface: its default route keeps 0.0.0.0/8 interesting for the
+	// negative probe, and testPhysLANAddr gives it a connected route on the
+	// gateway's own subnet, exactly like a real LAN interface. That connected
+	// route is what keeps the gateway (and the kernel's ICMP replies to it) off
+	// the TUN's 128.0.0.0/1 route.
+	testPhysDevice  = "phys0"
 	testPhysAddr    = "192.168.9.93/24"
 	testPhysGateway = "192.168.9.1"
+	testPhysLANAddr = "192.168.3.93/24"
 )
 
 // testCoveredAddrs are destinations that must resolve through the TUN device
@@ -37,10 +44,16 @@ const (
 // route block family.
 var testCoveredAddrs = []string{"1.1.1.1", "8.8.8.8", "223.5.5.5", "100.64.0.1"}
 
-// testExcludedAddr must stay outside the TUN routes: 0.0.0.0/8 is deliberately
-// not routed to the TUN device, because the direct dialer probes it to find
-// the physical default interface.
-const testExcludedAddr = "0.0.0.1"
+// testExcludedAddrs must stay outside the TUN routes. 0.0.0.0/8 is deliberately
+// not routed to the TUN device, because the direct dialer probes it to find the
+// physical default interface. The local gateway belongs there too: once it is
+// routed into the TUN device every packet addressed to it enters the tunnel,
+// and tun2socks' default ICMP forwarder only answers echo requests — the
+// kernel's replies to the gateway's liveness probes would be discarded, so the
+// gateway would keep probing forever (several [ICMP_DIRECT] log lines per
+// second) and `ping <gateway>` would only ever see a synthetic reply. darwin
+// dropped that route in 91bb4c6; linux followed.
+var testExcludedAddrs = []string{"0.0.0.1", testRoutedGateway}
 
 // TestTunRouteBlocksAreCanonical is the regression test for the broken
 // "ip route add 1.0.0.0/7" line: 1.0.0.0/7 is not aligned with its own mask
@@ -91,6 +104,34 @@ func TestTunRouteProbeCoveredByScripts(t *testing.T) {
 	}
 }
 
+// TestCreateScriptsKeepGatewayOutsideTun is the regression test for routing the
+// local gateway into the TUN device. The linux script used to install it as a
+// bare "ip route replace $local_gateway" host route, which beat the physical
+// interface's connected route for the LAN: every packet addressed to the
+// gateway entered the tunnel, including the kernel's ICMP replies to the
+// gateway's liveness probes. tun2socks' default ICMP forwarder answers echo
+// requests only and drops every other type, so the gateway never saw a reply
+// and kept probing (several [ICMP_DIRECT] log lines per second), while
+// `ping <gateway>` only ever reported a synthetic sub-millisecond reply.
+// darwin dropped the same route in 91bb4c6; no create script may add it back.
+func TestCreateScriptsKeepGatewayOutsideTun(t *testing.T) {
+	for _, platform := range createScripts() {
+		t.Run(platform.name, func(t *testing.T) {
+			for line := range strings.SplitSeq(string(platform.source), "\n") {
+				line = strings.TrimSpace(strings.TrimRight(strings.TrimSpace(line), "\r"))
+				if line == "" || strings.HasPrefix(line, "#") ||
+					strings.HasPrefix(strings.ToLower(line), "rem ") {
+					continue
+				}
+				if !strings.Contains(line, "local_gateway") || !addsRoute(line) {
+					continue
+				}
+				t.Errorf("%s: %s routes the local gateway into the TUN device", platform.name, line)
+			}
+		})
+	}
+}
+
 // TestCreateTunScriptRoutesThroughTun runs the real create script in a
 // throwaway network namespace and asserts what the keep-alive needs: every
 // intended route is installed, the probes resolve through the TUN device, the
@@ -110,13 +151,14 @@ func TestCreateTunScriptRoutesThroughTun(t *testing.T) {
 	// like the helper right after it opened the device.
 	create := runCreateTunScript(scriptPath)
 	tunSetup := `ip link add "` + testTunDevice + `" type dummy && ip link set dev lo up`
-	// The simulated physical interface sits on a subnet of its own so that the
-	// local gateway the script routes has no competing connected route; its
-	// default route is what makes the negative probe meaningful (0.0.0.1 must
-	// resolve, just not through the TUN device).
-	physSetup := fmt.Sprintf(`ip link add phys0 type dummy && ip addr add %s dev phys0`+
-		` && ip link set phys0 up && ip route add default via %s dev phys0`,
-		testPhysAddr, testPhysGateway)
+	// The simulated physical interface carries the LAN address as well as a
+	// subnet of its own: the LAN connected route is what a real interface has,
+	// and the extra subnet's default route keeps 0.0.0.0/8 interesting for the
+	// negative probe (0.0.0.1 must resolve, just not through the TUN device).
+	physSetup := fmt.Sprintf(`ip link add %s type dummy && ip addr add %s dev %s`+
+		` && ip addr add %s dev %s && ip link set %s up && ip route add default via %s dev %s`,
+		testPhysDevice, testPhysAddr, testPhysDevice, testPhysLANAddr, testPhysDevice,
+		testPhysDevice, testPhysGateway, testPhysDevice)
 	setup := tunSetup + "\n" + physSetup
 
 	t.Run("routes installed", func(t *testing.T) {
@@ -142,7 +184,7 @@ func TestCreateTunScriptRoutesThroughTun(t *testing.T) {
 func routesAndProbes() string {
 	var b strings.Builder
 	b.WriteString("ip route show | grep -v '^default'\n")
-	for _, addr := range append(slices.Clone(testCoveredAddrs), testExcludedAddr) {
+	for _, addr := range append(slices.Clone(testCoveredAddrs), testExcludedAddrs...) {
 		fmt.Fprintf(&b, "echo '%s %s' \"$(ip route get %s 2>&1 | head -1)\"\n",
 			probeMarker, addr, addr)
 	}
@@ -159,7 +201,7 @@ func requireRoutesThroughTun(t *testing.T, out string) {
 	table := routesTable(out)
 	for _, cidr := range []string{
 		"1.0.0.0/8", "4.0.0.0/6", "8.0.0.0/5", "16.0.0.0/4",
-		"32.0.0.0/3", "64.0.0.0/2", "128.0.0.0/1", testRoutedGateway + "/32",
+		"32.0.0.0/3", "64.0.0.0/2", "128.0.0.0/1",
 	} {
 		// Compare masked prefixes: the kernel prints a host route as its bare
 		// address ("192.168.3.1"), which parses to 192.168.3.1/32, while the
@@ -180,8 +222,18 @@ func requireRoutesThroughTun(t *testing.T, out string) {
 		}
 	}
 
-	if got := probeOutput(out, testExcludedAddr); strings.Contains(got, "dev "+testTunDevice) {
-		t.Errorf("ip route get %s = %q, want it to stay outside the TUN routes", testExcludedAddr, got)
+	for _, addr := range testExcludedAddrs {
+		if got := probeOutput(out, addr); strings.Contains(got, "dev "+testTunDevice) {
+			t.Errorf("ip route get %s = %q, want it to stay outside the TUN routes", addr, got)
+		}
+	}
+
+	// The gateway keeps resolving (through the physical interface's default
+	// route), so its own liveness probes reach this host and its ICMP replies
+	// leave through the physical interface.
+	if got := probeOutput(out, testRoutedGateway); !strings.Contains(got, "dev "+testPhysDevice) {
+		t.Errorf("ip route get %s = %q, want it to resolve through %s",
+			testRoutedGateway, got, testPhysDevice)
 	}
 }
 
@@ -342,6 +394,20 @@ func staticRouteBlocks(t *testing.T, script []byte) []routeBlock {
 		}
 	}
 	return blocks
+}
+
+// routeArgs returns the fields following the add/replace verb of a route
+// command, reporting false for lines that neither add a route nor refer to a
+// addsRoute reports whether line is a route command that adds or replaces a
+// route, in any of the dialects the create scripts are written in
+// ("ip route add|replace ...", "route add ...").
+func addsRoute(line string) bool {
+	fields := strings.Fields(line)
+	// The linux script wraps its ip calls in the run_idem shell helper.
+	if idx := slices.IndexFunc(fields, func(f string) bool { return f == "ip" || f == "route" }); idx > 0 {
+		fields = fields[idx:]
+	}
+	return slices.ContainsFunc(fields, func(f string) bool { return f == "add" || f == "replace" })
 }
 
 // routeArgs returns the fields following the add/replace verb of a route

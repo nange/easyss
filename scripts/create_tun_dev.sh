@@ -41,13 +41,22 @@ run_idem ip route replace 16.0.0.0/4 via "$tun_gw" dev "$tun_device"
 run_idem ip route replace 32.0.0.0/3 via "$tun_gw" dev "$tun_device"
 run_idem ip route replace 64.0.0.0/2 via "$tun_gw" dev "$tun_device"
 run_idem ip route replace 128.0.0.0/1 via "$tun_gw" dev "$tun_device"
-run_idem ip route replace "$local_gateway" via "$tun_gw" dev "$tun_device"
+
+# The local gateway ($local_gateway and $local_gateway_v6) is deliberately NOT
+# routed into the TUN device. A bare address is installed as a /32 host route,
+# so it would beat the physical interface's on-link connected route (e.g.
+# 192.168.3.0/24) and pull every packet addressed to the gateway into the
+# tunnel — including the kernel's ICMP echo replies to the gateway's own
+# liveness probes. tun2socks' default ICMP forwarder only answers echo
+# requests (type 8) and drops every other type, so those replies never reach
+# the gateway: it keeps probing forever (observed as several [ICMP_DIRECT]
+# log lines per second) and `ping <gateway>` only ever reports a synthetic
+# sub-millisecond reply. The gateway must therefore stay on the physical
+# interface, exactly like the darwin script, which dropped the same route in
+# 91bb4c6 ("fix: ip route on darwin when enable tun2socks").
 
 # add ipv6 ip route
 if [ -n "$server_ip_v6" ]; then  # check if server_ip_v6 is not empty
   run_idem ip -6 route replace ::/1 via "$tun_gw_v6" dev "$tun_device"
   run_idem ip -6 route replace 8000::/1 via "$tun_gw_v6" dev "$tun_device"
-  if [ -n "$local_gateway_v6" ]; then
-    run_idem ip -6 route replace "$local_gateway_v6" via "$tun_gw_v6" dev "$tun_device"
-  fi
 fi
