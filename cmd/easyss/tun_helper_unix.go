@@ -78,7 +78,7 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 		_ = runCloseScript(actualDevice, cfg.TunGW, cfg.LocalGateway,
 			cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6)
 		removeLeftoverDevice(actualDevice)
-		_ = restoreDNS(originDNS)
+		_ = util.RestoreSysDNSForTun(actualDevice, originDNS)
 		log.Info("[TUN-HELPER] cleanup done")
 	}()
 
@@ -104,7 +104,7 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	// 8. Set system DNS.
 	if cfg.DNSAddr != "" {
 		log.Info("[TUN-HELPER] setting system dns", "dns", cfg.DNSAddr)
-		if err := util.SetSysDNS([]string{cfg.DNSAddr}); err != nil {
+		if err := util.SetSysDNSForTun(actualDevice, []string{cfg.DNSAddr}); err != nil {
 			log.Warn("[TUN-HELPER] set dns", "err", err)
 		}
 	}
@@ -149,6 +149,14 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 		case <-ticker.C:
 			if err := ensureTunRoutes(actualDevice, cfg); err != nil {
 				log.Warn("[TUN-HELPER] route keep-alive check failed", "device", actualDevice, "err", err)
+			}
+			// NetworkManager rewrites the link DNS settings when the connection
+			// changes and can hand the DNS default route back to the physical
+			// link, which lets resolution bypass the tunnel again.
+			if cfg.DNSAddr != "" {
+				if err := util.EnsureSysDNSForTun(actualDevice, []string{cfg.DNSAddr}); err != nil {
+					log.Warn("[TUN-HELPER] dns keep-alive check failed", "device", actualDevice, "err", err)
+				}
 			}
 		}
 	}
@@ -267,33 +275,6 @@ func sendFdToParent(socketPath string, tunFd int) error {
 
 	log.Info("[TUN-HELPER] fd sent via unix socket", "socket", socketPath)
 	return nil
-}
-
-// restoreDNS restores the system DNS to the original servers.
-func restoreDNS(originDNS []string) error {
-	if len(originDNS) == 0 {
-		return util.SetSysDNS([]string{"empty"})
-	}
-	curr, err := util.SysDNS()
-	if err != nil {
-		return err
-	}
-	if !stringSliceEqual(originDNS, curr) {
-		return util.SetSysDNS(originDNS)
-	}
-	return nil
-}
-
-func stringSliceEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i, v := range a {
-		if v != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // flockWait acquires an exclusive lock on f, retrying until the lock is

@@ -423,7 +423,11 @@ func (m *Manager) saveAndSetDNS() error {
 
 	if m.cfg.DNSServer != "" {
 		if runtime.GOOS == "linux" {
-			return util.SetSysDNS([]string{m.cfg.DNSServer})
+			// Linux also has to pin the resolver to the TUN device: a DNS
+			// server configured for the physical link only is queried with
+			// the socket bound to that link, so its lookups leave through the
+			// physical NIC and bypass the tunnel (see util.SetSysDNSForTun).
+			return util.SetSysDNSForTun(m.dev.Device, []string{m.cfg.DNSServer})
 		}
 		// Darwin: only override DNS when the system has no custom DNS
 		// configured (i.e. using DHCP-provided DNS). If the user has
@@ -436,6 +440,10 @@ func (m *Manager) saveAndSetDNS() error {
 }
 
 func (m *Manager) restoreDNS() error {
+	if runtime.GOOS == "linux" {
+		return util.RestoreSysDNSForTun(m.dev.Device, m.originDNS)
+	}
+
 	if len(m.originDNS) == 0 {
 		return setSysDNSWithElevation([]string{"empty"})
 	}
