@@ -197,16 +197,23 @@ func (s *Socks5Server) exchangeDirectDNS(ctx context.Context, msg *dns.Msg, addr
 }
 
 func (s *Socks5Server) proxyDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg, domain string) error {
-	dst := config.ProxyDNSServer
-	key := clientAddr.String() + "_" + dst
+	// upstream is where this proxy resolves the query; the client asked
+	// whichever server its own resolver is configured with, and that is the
+	// address the answer has to be sent from (d.Address()), like every other
+	// DNS branch does. Framing the answer with the upstream instead makes a
+	// transparent NAT (tun2socks) drop it: the flow is keyed by the client's
+	// target, so a datagram claiming to come from a different server never
+	// matches and the query looks unanswered.
+	upstream := config.ProxyDNSServer
+	key := clientAddr.String() + "_" + upstream
 
-	ue, created, err := s.getOrCreateUDPExchange(context.Background(), key, dst, d.Data)
+	ue, created, err := s.getOrCreateUDPExchange(context.Background(), key, upstream, d.Data)
 	if err != nil {
-		log.Error("[UDP_PROXY] open exchange", "dst", dst, "err", err)
+		log.Error("[UDP_PROXY] open exchange", "dst", upstream, "err", err)
 		return err
 	}
 	if created {
-		go s.receiveLoop(ue, srv, clientAddr, dst, key, s.dnsRespTimeout)
+		go s.receiveLoop(ue, srv, clientAddr, d.Address(), key, s.dnsRespTimeout)
 		return nil // first payload already sent in handshake
 	}
 
