@@ -56,34 +56,6 @@ func SysSupportPowershell() bool {
 	return SysSupport("powershell")
 }
 
-func SysSupportXTerminalEmulator() bool {
-	return SysSupport("x-terminal-emulator")
-}
-
-func SysSupportGnomeTerminal() bool {
-	return SysSupport("gnome-terminal")
-}
-
-func SysSupportKonsole() bool {
-	return SysSupport("konsole")
-}
-
-func SysSupportXfce4Terminal() bool {
-	return SysSupport("xfce4-terminal")
-}
-
-func SysSupportLxterminal() bool {
-	return SysSupport("lxterminal")
-}
-
-func SysSupportMateTerminal() bool {
-	return SysSupport("mate-terminal")
-}
-
-func SysSupportTerminator() bool {
-	return SysSupport("terminator")
-}
-
 func SysSupport(bin string) bool {
 	lp, err := exec.LookPath(bin)
 	if lp != "" && err == nil {
