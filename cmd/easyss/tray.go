@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/user"
 	"runtime"
 	"strings"
 	"sync"
@@ -26,7 +25,6 @@ import (
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/selfupdate"
-	"github.com/nange/easyss/v3/util"
 )
 
 type TrayApp struct {
@@ -215,6 +213,24 @@ func friendlyStartupError(err error) string {
 // 转换为用户友好的中文提示。
 func friendlyStartupWarning(err error) string {
 	return "启动警告：" + err.Error()
+}
+
+// friendlyCatLogError 将「查看日志」失败转换为用户友好的中文提示。
+func friendlyCatLogError(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, errLogFileNotConfigured):
+		return "日志文件未配置：请在 config.json 中设置 log.file_path，日志才会写入文件。"
+	case errors.Is(err, errNoTerminalEmulator):
+		return "未找到可用的终端模拟器：请安装 xdg-terminal-exec、alacritty、foot 等终端，或设置 $TERMINAL 环境变量。"
+	case errors.Is(err, fs.ErrNotExist):
+		return "日志文件不存在：" + err.Error()
+	case errors.Is(err, fs.ErrPermission):
+		return "没有权限读取日志文件：" + err.Error()
+	default:
+		return "打开日志失败：" + err.Error()
+	}
 }
 
 // isAddrInUse 判断错误是否为"端口已被占用"的绑定失败（Unix 走 errno，
@@ -477,18 +493,18 @@ func (a *TrayApp) changeLogLevel(level string) {
 	}
 }
 
+// catLogs opens the log file from the tray menu (see tray_log.go). Failures
+// used to be written to the log file only, which left the menu entry looking
+// dead, so every one of them is surfaced as a notification too.
 func (a *TrayApp) catLogs() {
-	if err := a.catLog(); err != nil {
+	fallback, err := openLogFile(a.cfg.Log.FilePath)
+	switch {
+	case err != nil:
 		log.Error("[SYSTRAY] cat log", "err", err)
+		a.tray.ShowNotification("Easyss", friendlyCatLogError(err))
+	case fallback:
+		a.tray.ShowNotification("Easyss", "未找到终端模拟器，已在默认程序中打开日志快照（最近 500 行）")
 	}
-}
-
-func (a *TrayApp) catLog() error {
-	filePath := a.cfg.Log.FilePath
-	if filePath == "" {
-		return fmt.Errorf("log file path is empty, please configure log.file_path in config.json")
-	}
-	return catLogFile(filePath)
 }
 
 func (a *TrayApp) toggleAutoStart() {
@@ -697,68 +713,6 @@ func (a *TrayApp) startLocalService() {
 		if a.TunMenu() != nil {
 			a.TunMenu().SetChecked(true)
 		}
-	}
-}
-
-func catLogFile(filePath string) error {
-	var linuxCmd []string
-
-	switch runtime.GOOS {
-	case "linux":
-		title := "View Easyss Logs"
-		switch {
-		case util.SysSupportXTerminalEmulator():
-			linuxCmd = []string{"x-terminal-emulator", "-e", "tail", "-50f", filePath}
-		case util.SysSupportGnomeTerminal():
-			linuxCmd = []string{"gnome-terminal", "--hide-menubar", "--title", title, "--", "tail", "-50f", filePath}
-		case util.SysSupportMateTerminal():
-			linuxCmd = []string{"mate-terminal", "--hide-menubar", "--title", title, "--", "tail", "-50f", filePath}
-		case util.SysSupportKonsole():
-			linuxCmd = []string{"konsole", "--hide-menubar", "-e", "tail", "-50f", filePath}
-		case util.SysSupportXfce4Terminal():
-			linuxCmd = []string{"xfce4-terminal", "--hide-menubar", "--hide-toolbar", "--title", title, "--command", fmt.Sprintf("tail -50f %s", filePath)}
-		case util.SysSupportLxterminal():
-			linuxCmd = []string{"lxterminal", "--title", title, "--command", fmt.Sprintf("tail -50f %s", filePath)}
-		case util.SysSupportTerminator():
-			linuxCmd = []string{"terminator", "--title", title, "--command", fmt.Sprintf("tail -50f %s", filePath)}
-		}
-
-		if len(linuxCmd) > 0 && IsRoot() {
-			username := ""
-			if uid := os.Getenv("PKEXEC_UID"); uid != "" {
-				if u, err := user.LookupId(uid); err == nil {
-					username = u.Username
-				}
-			}
-			if username == "" {
-				if u := os.Getenv("SUDO_USER"); u != "" {
-					username = u
-				}
-			}
-			if username != "" {
-				newCmd := []string{"runuser", "-u", username, "--"}
-				if dbusAddr := os.Getenv("DBUS_SESSION_BUS_ADDRESS"); dbusAddr != "" {
-					newCmd = append(newCmd, "env", fmt.Sprintf("DBUS_SESSION_BUS_ADDRESS=%s", dbusAddr))
-				}
-				newCmd = append(newCmd, linuxCmd...)
-				linuxCmd = newCmd
-				log.Info("[SYSTRAY] cat log: switching to user", "user", username, "cmd", linuxCmd)
-			}
-		}
-		if len(linuxCmd) == 0 {
-			return fmt.Errorf("no supported terminal emulator found")
-		}
-		_, err := util.Command(linuxCmd[0], linuxCmd[1:]...)
-		return err
-	case "windows":
-		_, err := util.Command("cmd", "/c", "start", "powershell", "-NoExit", "-Command",
-			fmt.Sprintf("Get-Content -Wait -Tail 100 '%s'", filePath))
-		return err
-	case "darwin":
-		_, err := util.Command("osascript", "-e", fmt.Sprintf(`tell application "Terminal" to do script "tail -f \"%s\""`, filePath), "-e", `tell application "Terminal" to activate`)
-		return err
-	default:
-		return fmt.Errorf("unsupported os: %s", runtime.GOOS)
 	}
 }
 

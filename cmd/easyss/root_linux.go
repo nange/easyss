@@ -37,9 +37,11 @@ func RunMeElevated(extraArgs ...string) error {
 		fmt.Fprintf(&argsBuilder, "'%s' ", strings.ReplaceAll(arg, "'", "'\\''"))
 	}
 
-	// Capture necessary environment variables for GUI
+	// Capture necessary environment variables for GUI. XDG_RUNTIME_DIR carries
+	// the Wayland socket path and TERMINAL the user's terminal preference —
+	// both are required by the elevated tray to open the log viewer.
 	envMap := make(map[string]string)
-	envVars := []string{"DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY", "HOME", "DBUS_SESSION_BUS_ADDRESS"}
+	envVars := []string{"DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "TERMINAL", "HOME", "DBUS_SESSION_BUS_ADDRESS"}
 
 	for _, key := range envVars {
 		if val := os.Getenv(key); val != "" {
