@@ -576,19 +576,25 @@ func (a *TrayApp) closeTun2socks() error {
 	a.tunHelperMu.Lock()
 	defer a.tunHelperMu.Unlock()
 
-	// 1. Signal the helper to shut down by closing the FIFO.
+	// 1. Stop the tun2socks engine first: it closes the TUN fd that the helper
+	//    passed to this process. The helper's close script deletes the
+	//    interface, and iproute2 cannot delete a device that is still attached
+	//    to a fd — it fails with "device or resource busy" and leaves the
+	//    interface behind, together with every TUN route (they are bound to
+	//    it). Traffic then keeps entering a device nothing reads from, which
+	//    looks like "the network is down" after TUN is stopped.
+	if a.tunMgr != nil {
+		log.Info("[SYSTRAY] closeTun2socks: stopping tun2socks engine")
+		a.tunMgr.Stop()
+		a.tunMgr = nil
+	}
+
+	// 2. Signal the helper to shut down by closing the FIFO.
 	//    The helper detects EOF on stdin, cleans up routes/DNS, and exits.
 	if a.tunHelperStdin != nil {
 		log.Info("[SYSTRAY] closeTun2socks: closing helper FIFO")
 		a.tunHelperStdin.Close() //nolint:errcheck
 		a.tunHelperStdin = nil
-	}
-
-	// 2. Stop the tun2socks engine (no route/DNS cleanup — helper handles it).
-	if a.tunMgr != nil {
-		log.Info("[SYSTRAY] closeTun2socks: stopping tun2socks engine")
-		a.tunMgr.Stop()
-		a.tunMgr = nil
 	}
 
 	// 3. The helper coordinates with any previous instance via a file lock
