@@ -45,20 +45,63 @@ func (h *ICMPHandler) HandlePacket(pkt adapter.Packet) bool {
 	id := pkt.ID()
 	dstAddr := id.LocalAddress.String()
 
+	// Only echo requests carry a routing decision worth an INFO line: the
+	// other ICMP types (echo replies, errors, neighbour discovery) are never
+	// proxied and tun2socks' default forwarder drops them anyway, so
+	// classifying them explains nothing and floods the log. A LAN gateway
+	// probing this host every second is enough to produce a handful of such
+	// lines per second, because the kernel's replies to those probes are
+	// routed into the TUN device (see the route notes in create_tun_dev.sh).
+	icmpType, echoRequest := icmpEchoRequest(pkt)
+	if !echoRequest {
+		log.Debug("[ICMP_DROP]", "dst", dstAddr, "type", icmpType, "reason", "non-echo")
+		return false
+	}
+
 	rule := h.router.MatchHostRule(dstAddr)
 
 	switch rule {
 	case router.HostRuleDirect:
-		log.Info("[ICMP_DIRECT]", "dst", dstAddr)
+		log.Info("[ICMP_DIRECT]", "dst", dstAddr, "type", icmpType)
 		return false
 	case router.HostRuleBlock:
-		log.Info("[ICMP_BLOCK] blocked", "dst", dstAddr)
+		log.Info("[ICMP_BLOCK] blocked", "dst", dstAddr, "type", icmpType)
 		return true
 	case router.HostRuleProxy:
-		log.Info("[ICMP_PROXY]", "dst", dstAddr)
+		log.Info("[ICMP_PROXY]", "dst", dstAddr, "type", icmpType)
 		return h.handleProxyICMP(pkt)
 	default:
+		log.Debug("[ICMP_DROP]", "dst", dstAddr, "type", icmpType, "reason", "no-rule")
 		return false
+	}
+}
+
+// icmpEchoRequest reports whether pkt is an ICMPv4/ICMPv6 echo request — the
+// only ICMP message this handler can route or proxy — and returns its ICMP
+// type for logging. Packets too short to carry an ICMP header count as
+// non-echo, mirroring the header checks in handleProxyICMP.
+func icmpEchoRequest(pkt adapter.Packet) (icmpType uint8, ok bool) {
+	buf := pkt.Buffer()
+	if buf == nil {
+		return 0, false
+	}
+
+	transHdr := buf.TransportHeader().Slice()
+	switch buf.NetworkProtocolNumber {
+	case ipv4.ProtocolNumber:
+		if len(transHdr) < header.ICMPv4MinimumSize {
+			return 0, false
+		}
+		t := header.ICMPv4(transHdr).Type()
+		return uint8(t), t == header.ICMPv4Echo
+	case header.IPv6ProtocolNumber:
+		if len(transHdr) < header.ICMPv6HeaderSize {
+			return 0, false
+		}
+		t := header.ICMPv6(transHdr).Type()
+		return uint8(t), t == header.ICMPv6EchoRequest
+	default:
+		return 0, false
 	}
 }
 
