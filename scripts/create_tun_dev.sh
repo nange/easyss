@@ -31,10 +31,22 @@ run_idem ip link set dev "$tun_device" up  # enable tun device
 
 # Route everything except 0.0.0.0/8 through the TUN device, mirroring the
 # darwin script. 0.0.0.1 (used to probe the physical default interface)
-# must stay outside the TUN routes. Keep every prefix canonical (aligned with
-# its own mask): 1.0.0.0/7 normalizes to 0.0.0.0/7 and is rejected outright,
-# which used to leave 1.0.0.0/8 leaking outside the tunnel.
+# must stay outside the TUN routes.
+#
+# The blocks below must form one contiguous ladder from 1.0.0.0 up to
+# 255.255.255.255 (1.0.0.0/8 + 2.0.0.0/7 + 4.0.0.0/6 + ... + 128.0.0.0/1):
+# skipping one leaks its whole range outside the tunnel. The missing
+# 2.0.0.0/7 block sent every 2.x/3.x destination out of the physical NIC —
+# the 3.x AWS addresses behind registry-1.docker.io included — so docker
+# pulls became direct connections that the network resets instead of
+# proxied ones. testCoveredAddrs and the coverage test in
+# tun_helper_linux_test.go pin this down.
+#
+# Keep every prefix canonical (aligned with its own mask): 1.0.0.0/7
+# normalizes to 0.0.0.0/7 and is rejected outright, which used to leave
+# 1.0.0.0/8 leaking outside the tunnel.
 run_idem ip route replace 1.0.0.0/8 via "$tun_gw" dev "$tun_device"
+run_idem ip route replace 2.0.0.0/7 via "$tun_gw" dev "$tun_device"
 run_idem ip route replace 4.0.0.0/6 via "$tun_gw" dev "$tun_device"
 run_idem ip route replace 8.0.0.0/5 via "$tun_gw" dev "$tun_device"
 run_idem ip route replace 16.0.0.0/4 via "$tun_gw" dev "$tun_device"
