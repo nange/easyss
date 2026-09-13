@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net"
 	"net/netip"
@@ -41,8 +42,11 @@ const (
 
 // testCoveredAddrs are destinations that must resolve through the TUN device
 // once its routes are installed: the keep-alive probes plus one address per
-// route block family.
-var testCoveredAddrs = []string{"1.1.1.1", "8.8.8.8", "223.5.5.5", "100.64.0.1"}
+// route block family. 2.2.2.2 and 3.220.72.168 cover the 2.0.0.0/7 block —
+// the latter is an AWS us-east-1 address of the kind registry-1.docker.io
+// resolves to, and it resolved through the physical NIC for as long as that
+// block was missing from the linux and Windows ladders.
+var testCoveredAddrs = []string{"1.1.1.1", "2.2.2.2", "3.220.72.168", "8.8.8.8", "223.5.5.5", "100.64.0.1"}
 
 // testExcludedAddrs must stay outside the TUN routes. 0.0.0.0/8 is deliberately
 // not routed to the TUN device, because the direct dialer probes it to find the
@@ -98,6 +102,62 @@ func TestTunRouteProbeCoveredByScripts(t *testing.T) {
 				if !routedBy(blocks, probe) {
 					t.Errorf("%s: keep-alive probe %s is outside every route block %v",
 						platform.name, probe, blocks)
+				}
+			}
+		})
+	}
+}
+
+// TestCreateScriptsCoverIPv4ExceptProbeBlock is the regression test for the
+// missing 2.0.0.0/7 block. When the non-canonical 1.0.0.0/7 was replaced with
+// 1.0.0.0/8, the linux and Windows ladders jumped straight to 4.0.0.0/6 while
+// darwin's ladder starts with both blocks: 2.0.0.0/7 — 2.x and 3.x — stayed
+// outside the tunnel, so every destination in it left through the physical
+// NIC. registry-1.docker.io resolves to 3.x AWS addresses, which turned docker
+// pulls into direct connections that the network resets instead of proxied
+// ones. The platforms are checked for coverage as a whole, because every
+// individual block can be spelled correctly and the script still leak.
+func TestCreateScriptsCoverIPv4ExceptProbeBlock(t *testing.T) {
+	for _, platform := range createScripts() {
+		t.Run(platform.name, func(t *testing.T) {
+			blocks := staticRouteBlocks(t, platform.source)
+			if len(blocks) == 0 {
+				t.Fatal("no static route block found: the parser and the script drifted apart")
+			}
+			requireContiguousIPv4Coverage(t, platform.name, blocks)
+		})
+	}
+}
+
+// TestCloseScriptsDeleteCreateRoutes asserts that every static IPv4 route a
+// create script installs is deleted again by the matching close script. A
+// route that outlives TUN points at a gateway on a device that no longer
+// exists, which black-holes every destination in its range — worse than the
+// leak it was meant to fix. The linux close script flushes the whole device
+// instead (covered by TestCloseTunScriptFlushesRoutes), so it has no
+// per-route list to compare against.
+func TestCloseScriptsDeleteCreateRoutes(t *testing.T) {
+	for _, platform := range []struct {
+		name   string
+		create []byte
+		close  []byte
+	}{
+		{"darwin", scripts.CreateTunDevDarwinSh, scripts.CloseTunDevDarwinSh},
+		{"windows", scripts.CreateTunDevBat, scripts.CloseTunDevBat},
+	} {
+		t.Run(platform.name, func(t *testing.T) {
+			deletes := staticRouteDeleteBlocks(t, platform.close)
+			for _, block := range staticRouteBlocks(t, platform.create) {
+				if !block.prefix.IsValid() {
+					continue // reported by TestTunRouteBlocksAreCanonical
+				}
+				want := block.prefix.Masked()
+				found := slices.ContainsFunc(deletes, func(deleted routeBlock) bool {
+					return deleted.prefix.IsValid() && deleted.prefix.Masked() == want
+				})
+				if !found {
+					t.Errorf("the close script does not delete %s, it deletes: %s",
+						block.raw, routeBlockRaws(deletes))
 				}
 			}
 		})
@@ -258,7 +318,7 @@ func requireRoutesThroughTun(t *testing.T, out string) {
 
 	table := routesTable(out)
 	for _, cidr := range []string{
-		"1.0.0.0/8", "4.0.0.0/6", "8.0.0.0/5", "16.0.0.0/4",
+		"1.0.0.0/8", "2.0.0.0/7", "4.0.0.0/6", "8.0.0.0/5", "16.0.0.0/4",
 		"32.0.0.0/3", "64.0.0.0/2", "128.0.0.0/1",
 	} {
 		// Compare masked prefixes: the kernel prints a host route as its bare
@@ -406,12 +466,111 @@ func routedBy(blocks []routeBlock, addr string) bool {
 	return false
 }
 
+// requireContiguousIPv4Coverage asserts the route blocks cover every address
+// above 0.0.0.0/8, i.e. one contiguous ladder from 1.0.0.0 up to
+// 255.255.255.255, and that 0.0.0.0/8 itself stays outside the tunnel.
+func requireContiguousIPv4Coverage(t *testing.T, name string, blocks []routeBlock) {
+	t.Helper()
+
+	// 0.0.0.0/8 stays outside deliberately: the direct dialer probes 0.0.0.1 to
+	// find the physical default interface, and a covered probe would resolve to
+	// the TUN device, which the dialer must never bind to (a routing loop).
+	for _, addr := range []string{"0.0.0.1", "0.255.255.255"} {
+		if routedBy(blocks, addr) {
+			t.Errorf("%s: %s is covered by a route block, want 0.0.0.0/8 to stay outside the TUN routes",
+				name, addr)
+		}
+	}
+
+	// Walk the space above 0.0.0.0/8 block by block: the first address no block
+	// covers starts a gap, and every destination inside it leaks outside the
+	// tunnel (see the 2.0.0.0/7 hole).
+	for cur := uint32(1) << 24; ; {
+		last, ok := lastCoveringBlock(blocks, cur)
+		if !ok {
+			t.Errorf("%s: no route block covers %s, the range leaks outside the TUN device",
+				name, addrFromUint32(cur))
+			return
+		}
+		if last == ^uint32(0) {
+			return
+		}
+		cur = last + 1
+	}
+}
+
+// lastCoveringBlock returns the highest end address among the blocks that
+// contain addr, and whether any block contains it at all. Blocks that are not
+// canonical prefixes are ignored: TestTunRouteBlocksAreCanonical reports them.
+func lastCoveringBlock(blocks []routeBlock, addr uint32) (uint32, bool) {
+	var (
+		last    uint32
+		covered bool
+	)
+	for _, block := range blocks {
+		if !block.prefix.IsValid() || !block.prefix.Addr().Is4() {
+			continue
+		}
+		base := addrToUint32(block.prefix.Masked().Addr())
+		end := base | (^uint32(0) >> uint(block.prefix.Bits()))
+		if base <= addr && addr <= end && (!covered || end > last) {
+			last, covered = end, true
+		}
+	}
+	return last, covered
+}
+
+// addrToUint32 converts an IPv4 address to its big-endian integer form.
+func addrToUint32(addr netip.Addr) uint32 {
+	a := addr.As4()
+	return binary.BigEndian.Uint32(a[:])
+}
+
+// addrFromUint32 is the inverse of addrToUint32.
+func addrFromUint32(v uint32) netip.Addr {
+	var a [4]byte
+	binary.BigEndian.PutUint32(a[:], v)
+	return netip.AddrFrom4(a)
+}
+
+// routeBlockRaws returns the raw spellings of blocks, the form a failure
+// message can show without netip's internals.
+func routeBlockRaws(blocks []routeBlock) string {
+	raws := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		raws = append(raws, block.raw)
+	}
+	return strings.Join(raws, ", ")
+}
+
+// createRouteVerbs are the route verbs a create script installs routes with:
+// the linux script uses "ip route replace" (idempotent re-runs after
+// sleep/wake), darwin and windows "route add".
+var createRouteVerbs = []string{"add", "replace"}
+
 // staticRouteBlocks parses the IPv4 route destinations a create script
 // installs, in every dialect the scripts are written in: "ip route
 // add|replace <prefix>" (linux), "route add -net <prefix>" (darwin) and
 // "route add <addr> mask <mask>" (windows). Routes built from shell variables
 // (the local gateway) and IPv6 lines are skipped.
 func staticRouteBlocks(t *testing.T, script []byte) []routeBlock {
+	t.Helper()
+
+	return parseRouteBlocks(t, script, createRouteVerbs)
+}
+
+// staticRouteDeleteBlocks parses the IPv4 destinations a close script removes
+// ("route delete ...", "ip route delete|del ..."). The linux close script
+// flushes every route of the TUN device instead, so it contributes no blocks.
+func staticRouteDeleteBlocks(t *testing.T, script []byte) []routeBlock {
+	t.Helper()
+
+	return parseRouteBlocks(t, script, []string{"delete", "del"})
+}
+
+// parseRouteBlocks parses the static IPv4 route destinations of a script for
+// the given route verbs.
+func parseRouteBlocks(t *testing.T, script []byte, verbs []string) []routeBlock {
 	t.Helper()
 
 	var blocks []routeBlock
@@ -429,7 +588,7 @@ func staticRouteBlocks(t *testing.T, script []byte) []routeBlock {
 		switch fields[0] {
 		case "ip":
 			// linux: ip route replace 1.0.0.0/8 via "$tun_gw" dev "$tun_device"
-			args, ok := routeArgs(fields[1:])
+			args, ok := routeArgs(fields[1:], verbs)
 			if !ok {
 				continue
 			}
@@ -437,7 +596,7 @@ func staticRouteBlocks(t *testing.T, script []byte) []routeBlock {
 		case "route":
 			// windows: route add 1.0.0.0 mask 254.0.0.0 %tun_gw% metric 5
 			// darwin:  route add -net 1.0.0.0/8 "$tun_gw"
-			args, ok := routeArgs(fields[1:])
+			args, ok := routeArgs(fields[1:], verbs)
 			if !ok {
 				continue
 			}
@@ -454,8 +613,6 @@ func staticRouteBlocks(t *testing.T, script []byte) []routeBlock {
 	return blocks
 }
 
-// routeArgs returns the fields following the add/replace verb of a route
-// command, reporting false for lines that neither add a route nor refer to a
 // addsRoute reports whether line is a route command that adds or replaces a
 // route, in any of the dialects the create scripts are written in
 // ("ip route add|replace ...", "route add ...").
@@ -465,14 +622,14 @@ func addsRoute(line string) bool {
 	if idx := slices.IndexFunc(fields, func(f string) bool { return f == "ip" || f == "route" }); idx > 0 {
 		fields = fields[idx:]
 	}
-	return slices.ContainsFunc(fields, func(f string) bool { return f == "add" || f == "replace" })
+	return slices.ContainsFunc(fields, func(f string) bool { return slices.Contains(createRouteVerbs, f) })
 }
 
-// routeArgs returns the fields following the add/replace verb of a route
-// command, reporting false for lines that neither add a route nor refer to a
+// routeArgs returns the fields following one of the given route verbs,
+// reporting false for lines that neither add/delete a route nor refer to a
 // static destination.
-func routeArgs(fields []string) ([]string, bool) {
-	idx := slices.IndexFunc(fields, func(f string) bool { return f == "add" || f == "replace" })
+func routeArgs(fields []string, verbs []string) ([]string, bool) {
+	idx := slices.IndexFunc(fields, func(f string) bool { return slices.Contains(verbs, f) })
 	if idx < 0 || idx+1 >= len(fields) {
 		return nil, false
 	}
@@ -528,11 +685,11 @@ func newRouteBlock(t *testing.T, raw string) routeBlock {
 		if bits != 32 {
 			return routeBlock{raw: raw}
 		}
-		prefix, err := addr.Prefix(ones)
-		if err != nil {
-			return routeBlock{raw: raw}
-		}
-		return routeBlock{raw: raw, prefix: prefix}
+		// PrefixFrom keeps the destination as spelled instead of masking it down
+		// (Addr.Prefix would turn "1.0.0.0 mask 254.0.0.0" into 0.0.0.0/7 and hide
+		// the mistake), so a destination that is not the network address of its
+		// own mask is reported by TestTunRouteBlocksAreCanonical.
+		return routeBlock{raw: raw, prefix: netip.PrefixFrom(addr, ones)}
 	default:
 		t.Fatalf("unrecognized route block %q", raw)
 		return routeBlock{raw: raw}
