@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,6 +50,20 @@ type TrayApp struct {
 	updateState   atomic.Int32
 	pendingUpdate *selfupdate.Release
 	updateMu      sync.Mutex
+	// lastNotifiedTag is the tag whose "new version" system notification has
+	// already been shown. The periodic check refreshes the badge/menu item for
+	// the same release but must not pop the notification again every time
+	// (see shouldNotify). Guarded by updateMu.
+	lastNotifiedTag string
+	// checkLatest queries the latest published release. It is a field so
+	// tests can exercise the periodic check loop without network access;
+	// buildTray wires it to selfupdate.CheckLatest.
+	checkLatest func(context.Context, *selfupdate.Client) (*selfupdate.Release, error)
+	// updateCheckEvery is the wait between two periodic update checks
+	// (updateCheckInterval plus jitter). Tests shorten it to keep the
+	// recurring-check behavior observable; it is only written before the
+	// check loop starts.
+	updateCheckEvery time.Duration
 	// updateUIMu serializes the tray UI mutations of the update flow (menu
 	// item label, icon badge, tooltip). The systray package protects menu
 	// items internally but not the icon/tooltip fields, so all update-driven
@@ -147,6 +162,8 @@ func (a *TrayApp) buildTray() {
 
 	a.startLocalService()
 	go a.statsRefresher()
+	a.checkLatest = selfupdate.CheckLatest
+	a.updateCheckEvery = timedUpdateCheckInterval()
 	go a.autoCheckUpdate()
 }
 

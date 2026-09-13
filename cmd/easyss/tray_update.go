@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"runtime"
 	"time"
@@ -16,9 +17,19 @@ import (
 )
 
 const (
-	// updateCheckDelay is how long after startup the automatic silent
+	// updateCheckDelay is how long after startup the first automatic silent
 	// update check runs.
 	updateCheckDelay = time.Minute
+	// updateCheckInterval is how often the automatic silent check repeats
+	// while the client keeps running. Desktop users rarely restart the app
+	// (macOS users in particular keep it alive for weeks), so a single
+	// startup check would leave new releases unnoticed indefinitely.
+	updateCheckInterval = 24 * time.Hour
+	// updateCheckJitter is the relative spread applied to every periodic
+	// interval: all running clients would otherwise hit the GitHub API at
+	// the same wall-clock time, and it keeps the cadence from looking like
+	// a fixed beacon.
+	updateCheckJitter = 0.10
 	// updateMenuReset is how long a transient result (failure or
 	// up-to-date) stays visible before the item resets.
 	updateMenuReset = 4 * time.Second
@@ -43,7 +54,9 @@ func (a *TrayApp) onUpdateClicked() {
 	go func() {
 		switch a.updateState.Load() {
 		case updateStateIdle:
-			a.checkUpdate(true)
+			ctx, cancel := context.WithTimeout(context.Background(), selfupdate.CheckTimeout)
+			defer cancel()
+			a.checkUpdate(ctx, true)
 		case updateStateAvailable:
 			a.downloadAndInstall()
 		default: // checking or downloading: extra clicks are ignored
@@ -51,8 +64,11 @@ func (a *TrayApp) onUpdateClicked() {
 	}()
 }
 
-// autoCheckUpdate performs one silent update check shortly after startup.
-// Development builds (no injected git tag) are skipped.
+// autoCheckUpdate performs silent update checks for the lifetime of the
+// process: one shortly after startup and then one every updateCheckInterval
+// (±jitter). A tray client is typically never restarted, so a startup-only
+// check would hide every later release from the user. Development builds (no
+// injected git tag) are skipped.
 func (a *TrayApp) autoCheckUpdate() {
 	if version.Tag() == "" {
 		log.Info("[SYSTRAY] auto check update skipped: build has no version tag")
@@ -60,13 +76,53 @@ func (a *TrayApp) autoCheckUpdate() {
 	}
 	select {
 	case <-time.After(updateCheckDelay):
-		log.Info("[SYSTRAY] auto check update starting", "delay", updateCheckDelay)
-		a.checkUpdate(false)
 	case <-a.closing:
+		return
+	}
+	a.runUpdateCheckLoop(func() { a.checkUpdate(context.Background(), false) })
+}
+
+// runUpdateCheckLoop runs check once, then repeats it every
+// a.updateCheckEvery until a.closing signals shutdown. check runs
+// synchronously on the loop goroutine, so two checks can never overlap and
+// the next interval starts only after the previous check returned.
+func (a *TrayApp) runUpdateCheckLoop(check func()) {
+	interval := a.updateCheckEvery
+	if interval <= 0 {
+		// TrayApp built without buildTray (tests): fall back to the real
+		// interval instead of letting NewTicker panic.
+		interval = timedUpdateCheckInterval()
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		log.Info("[SYSTRAY] auto check update starting", "interval", interval)
+		check()
+
+		select {
+		case <-ticker.C:
+		case <-a.closing:
+			return
+		}
 	}
 }
 
-func (a *TrayApp) checkUpdate(interactive bool) {
+// timedUpdateCheckInterval returns the periodic check interval with a random
+// spread of ±updateCheckJitter, so that all running clients do not query the
+// release API at the same wall-clock time.
+func timedUpdateCheckInterval() time.Duration {
+	factor := 1 + updateCheckJitter*(rand.Float64()*2-1)
+	return time.Duration(float64(updateCheckInterval) * factor)
+}
+
+// checkUpdate performs one update check. It is synchronous: callers run it on
+// their own goroutine (the tray menu handler, the periodic loop), and the
+// update state machine makes a concurrent second call a no-op. ctx bounds the
+// check. Only an interactive check (menu click) reports a failure or an
+// up-to-date result; automatic checks stay silent unless a new version shows
+// up.
+func (a *TrayApp) checkUpdate(ctx context.Context, interactive bool) {
 	if !a.updateState.CompareAndSwap(updateStateIdle, updateStateChecking) {
 		return
 	}
@@ -74,38 +130,36 @@ func (a *TrayApp) checkUpdate(interactive bool) {
 		a.setUpdateItem("检查更新中...", true)
 	}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), selfupdate.CheckTimeout)
-		defer cancel()
-
-		rel, err := selfupdate.CheckLatest(ctx, selfupdate.NewClient(a.cfg.Local.HTTPPort))
-		if err != nil {
-			log.Error("[SYSTRAY] check update", "err", err)
-			if interactive {
-				a.setUpdateItem("检查更新失败", true)
-				a.notifyOnInteractive("检查更新失败：" + err.Error())
-			}
-			a.scheduleUpdateMenuReset()
-			return
+	rel, err := a.checkLatest(ctx, selfupdate.NewClient(a.cfg.Local.HTTPPort))
+	if err != nil {
+		log.Error("[SYSTRAY] check update", "err", err)
+		if interactive {
+			a.setUpdateItem("检查更新失败", true)
+			a.notifyOnInteractive("检查更新失败：" + err.Error())
 		}
+		a.scheduleUpdateMenuReset()
+		return
+	}
 
-		if !selfupdate.HasNewVersion(version.Tag(), rel.TagName) {
-			log.Info("[SYSTRAY] check update: already up to date", "version", version.Tag())
-			if interactive {
-				a.setUpdateItem(updateUpToDateText(version.Tag()), true)
-				a.notifyOnInteractive(updateUpToDateText(version.Tag()))
-			}
-			a.scheduleUpdateMenuReset()
-			return
+	if !selfupdate.HasNewVersion(version.Tag(), rel.TagName) {
+		log.Info("[SYSTRAY] check update: already up to date", "version", version.Tag())
+		if interactive {
+			a.setUpdateItem(updateUpToDateText(version.Tag()), true)
+			a.notifyOnInteractive(updateUpToDateText(version.Tag()))
 		}
+		a.scheduleUpdateMenuReset()
+		return
+	}
 
-		a.updateMu.Lock()
-		a.pendingUpdate = rel
-		a.updateMu.Unlock()
-		a.updateState.Store(updateStateAvailable)
-		a.notifyUpdateAvailable(rel.TagName)
-		log.Info("[SYSTRAY] new version available", "current", version.Tag(), "latest", rel.TagName)
-	}()
+	a.updateMu.Lock()
+	a.pendingUpdate = rel
+	a.updateMu.Unlock()
+	a.updateState.Store(updateStateAvailable)
+	// Called for a periodic re-detection too: the reminder channels are
+	// refreshed (the menu item and tooltip carry the newest tag), while the
+	// system notification is one per tag.
+	a.notifyUpdateAvailable(rel.TagName)
+	log.Info("[SYSTRAY] new version available", "current", version.Tag(), "latest", rel.TagName)
 }
 
 // updateAvailableItemLabel is the persistent tray menu label shown while an
@@ -162,9 +216,10 @@ func (a *TrayApp) notifyUserSkipped(msg string) {
 }
 
 // notifyOnInteractive shows a notification for a result the user explicitly
-// asked for by clicking the tray menu item. It is a no-op for the automatic
-// startup check, so a silent background check never notifies twice, and it
-// stays silent when the tray is not usable yet.
+// asked for by clicking the tray menu item. checkUpdate calls it only for an
+// interactive check, so a silent background check (startup or periodic) never
+// notifies about a failure or an up-to-date result. It stays silent when the
+// tray is not usable yet.
 func (a *TrayApp) notifyOnInteractive(msg string) {
 	if !a.trayReady() {
 		a.notifyUserSkipped(msg)
@@ -184,12 +239,35 @@ func (a *TrayApp) notifyOnInteractive(msg string) {
 //  4. one system notification (best effort: gogpu/systray discards the
 //     notification error and the OS may silently drop balloon tips, so it can
 //     neither be verified nor relied upon as the only channel).
+//
+// Channels 1-3 are refreshed on every detection, so a periodic check keeps the
+// reminder pointing at the newest release. Channel 4 is shown once per tag
+// (see shouldNotify): a user who ignores the reminder must not get a popup
+// every updateCheckInterval for the very same release, while a release newer
+// than the one already announced notifies again.
 func (a *TrayApp) notifyUpdateAvailable(tag string) {
 	a.setUpdateItem(updateAvailableItemLabel(tag), false)
 	a.applyUpdateBadge(tag)
+	if !a.shouldNotify(tag) {
+		return
+	}
 	a.notifyUser(updateTooltipText(tag))
 	log.Info("[SYSTRAY] update notification sent", "latest", tag,
 		"channels", "system-notification,tray-badge,tray-tooltip,tray-menu-item")
+}
+
+// shouldNotify reports whether the "new version" system notification still has
+// to be shown for tag, and records it. The tag is remembered for the lifetime
+// of the process only: a manual check or a restart (the binary was not updated
+// yet) reminds the user again, as before.
+func (a *TrayApp) shouldNotify(tag string) bool {
+	a.updateMu.Lock()
+	defer a.updateMu.Unlock()
+	if a.lastNotifiedTag == tag {
+		return false
+	}
+	a.lastNotifiedTag = tag
+	return true
 }
 
 // applyUpdateBadge re-applies the tray icon with an update badge and updates
@@ -295,7 +373,13 @@ func (a *TrayApp) scheduleUpdateMenuReset() {
 	})
 }
 
+// setUpdateItem updates the update menu entry. The reset scheduled by
+// scheduleUpdateMenuReset runs in a timer callback, so the guard keeps a late
+// callback from panicking when no update item exists (the tray was not built).
 func (a *TrayApp) setUpdateItem(label string, disabled bool) {
+	if a.updateItem == nil {
+		return
+	}
 	a.updateItem.SetLabel(label)
 	a.updateItem.SetDisabled(disabled)
 }
