@@ -4,13 +4,20 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/icon"
+	"github.com/nange/easyss/v3/selfupdate"
 )
 
 func TestUpdateAvailableLabels(t *testing.T) {
@@ -36,6 +43,98 @@ func TestUpdateAvailableLabels(t *testing.T) {
 func TestUpdateUpToDateText(t *testing.T) {
 	if got, want := updateUpToDateText("v3.0.1"), "已是最新版本(v3.0.1)"; got != want {
 		t.Fatalf("unexpected up-to-date text: got %q, want %q", got, want)
+	}
+}
+
+func TestUpdateCheckLoopRepeats(t *testing.T) {
+	closing := make(chan struct{})
+	a := &TrayApp{closing: closing, updateCheckEvery: 10 * time.Millisecond}
+
+	// The loop only stops on shutdown, so the test runs it on its own
+	// goroutine and stops it through the closing channel. runUpdateCheckLoop
+	// is deliberately tested instead of autoCheckUpdate: the latter first
+	// waits updateCheckDelay (a minute) and skips the loop entirely for builds
+	// without an injected git tag, both of which would make this test a no-op.
+	// The check is a stub on purpose: the real checkUpdate path keeps the
+	// update state at "checking" until scheduleUpdateMenuReset fires 4s later,
+	// which would leak a timer callback into the rest of the test binary. The
+	// state machine itself is covered by TestCheckUpdateRequiresIdleState.
+	checked := make(chan struct{})
+	var once sync.Once
+	var checks atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.runUpdateCheckLoop(func() {
+			if checks.Add(1) >= 2 {
+				once.Do(func() { close(checked) })
+			}
+		})
+	}()
+
+	select {
+	case <-checked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("periodic update check did not repeat")
+	}
+
+	close(closing)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("check loop did not stop on shutdown")
+	}
+}
+
+func TestTimedUpdateCheckIntervalJitter(t *testing.T) {
+	minInterval := time.Duration(float64(updateCheckInterval) * (1 - updateCheckJitter))
+	maxInterval := time.Duration(float64(updateCheckInterval) * (1 + updateCheckJitter))
+
+	sawDifferent := false
+	for range 50 {
+		got := timedUpdateCheckInterval()
+		if got < minInterval || got > maxInterval {
+			t.Fatalf("interval %v outside [%v, %v]", got, minInterval, maxInterval)
+		}
+		if got != updateCheckInterval {
+			sawDifferent = true
+		}
+	}
+	if !sawDifferent {
+		t.Fatal("jitter never changed the interval")
+	}
+}
+
+func TestShouldNotifyOncePerTag(t *testing.T) {
+	a := &TrayApp{}
+
+	if !a.shouldNotify("v3.0.1") {
+		t.Fatal("first notification for a tag should be shown")
+	}
+	if a.shouldNotify("v3.0.1") {
+		t.Fatal("the same tag must not notify twice (e.g. on the next periodic check)")
+	}
+	if !a.shouldNotify("v3.0.2") {
+		t.Fatal("a newer tag should notify again")
+	}
+}
+
+func TestCheckUpdateRequiresIdleState(t *testing.T) {
+	// The update state machine is the only guard between the menu handler, the
+	// periodic loop and the installer: a check that is already "checking" (or
+	// "available"/"downloading") must not query the API again.
+	var calls atomic.Int64
+	a := &TrayApp{App: &App{cfg: &config.ClientConfig{}}}
+	a.checkLatest = func(context.Context, *selfupdate.Client) (*selfupdate.Release, error) {
+		calls.Add(1)
+		return nil, errors.New("offline")
+	}
+	a.updateState.Store(updateStateDownloading)
+
+	a.checkUpdate(context.Background(), false)
+
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("checkLatest calls = %d, want 0 while an update is downloading", got)
 	}
 }
 
