@@ -1,25 +1,30 @@
 #!/bin/bash
 # Assemble Easyss.app bundle for macOS.
 #
-# Usage: bash scripts/app-bundle.sh <binary> <icns> <plist>
-#   binary: path to the compiled Go binary (e.g., bin/easyss)
-#   icns:   path to the .icns icon (e.g., icon/Easyss.icns)
-#   plist:  path to Info.plist (e.g., cmd/easyss/Info.plist)
+# Usage: bash scripts/app-bundle.sh <binary> <icns> <plist> [out-dir]
+#   binary:  path to the compiled Go binary (e.g., bin/easyss)
+#   icns:    path to the .icns icon (e.g., icon/Easyss.icns)
+#   plist:   path to Info.plist (e.g., cmd/easyss/Info.plist)
+#   out-dir: directory (relative to the repo root) to place Easyss.app in,
+#            defaults to bin so `make easyss-mac-app` keeps writing bin/Easyss.app.
+#            CI passes bin/darwin-<arch> so both macOS architectures keep their
+#            own bundle instead of overwriting one another.
 #
 # The .icns icon is pre-generated (see scripts/gen_icns.sh, run on macOS)
 # and checked into the repo, so this script is platform-independent.
-# Output: bin/Easyss.app/
+# Output: <out-dir>/Easyss.app/
 
 set -euo pipefail
 
 BINARY="$1"
 ICNS="$2"
 PLIST="$3"
+OUT_DIR="${4:-bin}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-APP_DIR="${REPO_ROOT}/bin/Easyss.app"
+APP_DIR="${REPO_ROOT}/${OUT_DIR}/Easyss.app"
 
 echo "Assembling ${APP_DIR}..."
 

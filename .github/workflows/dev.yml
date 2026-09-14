@@ -49,13 +49,11 @@ jobs:
           export PATH="$(go env GOPATH)/bin:$PATH"
           gomobile init
 
-      - name: Build
-        run: make .PHONY
+      - name: Build (all platforms)
+        run: make build
 
-      - name: Build Linux Arm64
-        run: |
-          GOOS=linux GOARCH=arm64 make easyss
-          GOOS=linux GOARCH=arm64 make easyss-server
+      - name: Build Android AAR
+        run: make easyss-android-aar
 
   test-macos:
     name: Test-MacOS

@@ -44,6 +44,8 @@ version/            构建版本信息（GitTag、BuildDate 等）
 
 ## 构建命令
 
+### 本机开发（产物写在 `bin/` 根目录）
+
 ```bash
 # 客户端 (Linux/Mac)
 make easyss
@@ -64,26 +66,45 @@ make easyss-android-aar
 make easyss-headless
 ```
 
+### CI / 发布（产物写在 `bin/<os>-<arch>/` 子目录）
+
+每个平台一个目录，不同架构不会互相覆盖，因此打包与构建顺序无关：
+
+```bash
+make build            # 全部 6 个平台的二进制：linux/windows/darwin × amd64/arm64
+make pack             # build + 14 个 zip 资产（落在 bin/）
+make dist             # 发布资产：pack + Android AAR（CI 的 release/nightly 用它）
+make verify           # lint + test-race（发布前的显式校验）
+make clean            # 只清 CI 产物；bin/ 下的本机二进制、config.json、日志不动
+
+# 单平台
+make build-linux-amd64   # bin/linux-amd64/{easyss,easyss-headless,easyss-server}
+make build-linux-arm64
+make build-windows-amd64 # bin/windows-amd64/{easyss.exe,easyss-server.exe}
+make build-windows-arm64
+make build-darwin-arm64  # bin/darwin-arm64/{Easyss.app,easyss-server}
+make build-darwin-amd64
+```
+
+zip 资产名（`easyss-linux-amd64.zip` 等）与 zip 内的二进制名是客户端自更新
+（`selfupdate/product.go`）与 `docker/Dockerfile` 的对外契约，改动会导致老客户端
+无法自更新，不要重命名。
+
+> `.PHONY` 只是 Makefile 的声明行。不要用 `make .PHONY` 当目标——它会把
+> format/lint/test/全部构建当作前置目标跑一遍，这正是旧 CI 里重复构建的来源。
+
 ### 交叉编译示例
 
 ```bash
-# Linux ARM64 headless 客户端
+# Linux ARM64 headless 客户端 / 服务端
+make build-linux-arm64
+
+# macOS ARM64 / Intel 客户端与服务端（含 .app bundle）
+make build-darwin-arm64
+make build-darwin-amd64
+
+# 一次性本机交叉构建仍可用（产物落在 bin/ 根目录，会被后面的构建覆盖）
 GOOS=linux GOARCH=arm64 make easyss-headless
-
-# Linux ARM64 服务端
-GOOS=linux GOARCH=arm64 make easyss-server
-
-# macOS ARM64 客户端
-GOOS=darwin GOARCH=arm64 make easyss
-
-# macOS ARM64 服务端
-GOOS=darwin GOARCH=arm64 make easyss-server
-
-# macOS Intel 客户端
-GOOS=darwin GOARCH=amd64 make easyss
-
-# macOS Intel 服务端
-GOOS=darwin GOARCH=amd64 make easyss-server
 ```
 
 ## 运行单个测试 / lint

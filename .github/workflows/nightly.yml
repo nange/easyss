@@ -17,6 +17,16 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
+      - name: Cache go module
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
       - name: Set up Java
         uses: actions/setup-java@v5
         with:
@@ -29,57 +39,13 @@ jobs:
           export PATH="$(go env GOPATH)/bin:$PATH"
           gomobile init
 
-      - name: Build
-        run: make .PHONY
+      # 发布前显式校验（构建步骤本身不再顺带跑 lint/测试）
+      - name: Verify (lint + tests)
+        run: make verify
 
-      - name: Pack
-        run: |
-          cd bin
-          zip easyss-linux-amd64.zip ./easyss
-          zip easyss-windows-amd64.zip ./easyss.exe
-          zip easyss-headless-linux-amd64.zip ./easyss-headless
-          zip easyss-server-linux-amd64.zip ./easyss-server
-          zip easyss-server-windows-amd64.zip ./easyss-server.exe
-
-      - name: Build Linux Arm64
-        run: |
-          GOOS=linux GOARCH=arm64 make easyss
-          GOOS=linux GOARCH=arm64 make easyss-headless
-          GOOS=linux GOARCH=arm64 make easyss-server
-      - name: Pack Linux Arm64
-        run: |
-          cd bin
-          zip easyss-linux-arm64.zip ./easyss
-          zip easyss-headless-linux-arm64.zip ./easyss-headless
-          zip easyss-server-linux-arm64.zip ./easyss-server
-
-      - name: Build Windows Arm64
-        run: make easyss-windows easyss-server-windows WIN_ARCH=arm64
-      - name: Pack Windows Arm64
-        run: |
-          cd bin
-          zip easyss-windows-arm64.zip ./easyss.exe
-          zip easyss-server-windows-arm64.zip ./easyss-server.exe
-
-      - name: Build MacOS Arm64
-        run: |
-          GOOS=darwin GOARCH=arm64 make easyss-mac-app
-          GOOS=darwin GOARCH=arm64 make easyss-server
-      - name: Pack MacOS Arm64
-        run: |
-          cd bin
-          zip -r easyss-darwin-arm64.zip ./Easyss.app
-          zip easyss-server-darwin-arm64.zip ./easyss-server
-
-      - name: Build MacOS Amd64
-        run: |
-          GOOS=darwin GOARCH=amd64 make easyss-mac-app
-          GOOS=darwin GOARCH=amd64 make easyss-server
-      - name: Pack MacOS Amd64
-        run: |
-          cd bin
-          zip -r easyss-darwin-amd64.zip ./Easyss.app
-          zip easyss-server-darwin-amd64.zip ./easyss-server
+      # 一次产出全部平台二进制、14 个 zip 与 Android AAR（见 Makefile 的 build/pack/dist）
+      - name: Build release assets
+        run: make dist
 
       - name: Set outputs
         id: vars
