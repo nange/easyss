@@ -27,7 +27,7 @@ const failureMarker = "[create_tun_dev_windows] failed near:"
 // rejected still reported success: the client kept the TUN routes installed,
 // marked tun2socks as started and notified nothing, while every packet went
 // into a device that had no address and no DNS. The script now records the
-// first failing step and exits non-zero, which is what this test pins down.
+// failing step and exits non-zero, which is what this test pins down.
 //
 // The real script is run through cmd.exe exactly like client/tun/tun.go does,
 // with a directory of stub tools prepended to PATH so that the failures are
@@ -46,16 +46,14 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 
 	// stubTool writes a tool that exits with the given code, printing a marker
 	// on stderr when it fails.
-	stubTool := func(t *testing.T, dir, name string, code int) string {
+	stubTool := func(t *testing.T, dir, name string, code int) {
 		t.Helper()
 
-		path := filepath.Join(dir, name)
 		body := "@echo off\r\nexit /b " + strconv.Itoa(code) + "\r\n"
 		if code != 0 {
 			body = "@echo off\r\necho " + name + " failed 1>&2\r\nexit /b " + strconv.Itoa(code) + "\r\n"
 		}
-		require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
-		return path
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644))
 	}
 
 	// A stub directory inside a path with spaces would be passed to the
@@ -97,13 +95,6 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 		return code, string(out)
 	}
 
-	// A stub directory inside a path with spaces would be passed to the
-	// unquoted tool invocations as several arguments, turning this test into a
-	// quotation test instead of an exit code test.
-	if strings.ContainsAny(t.TempDir(), " ") {
-		t.Skipf("TEMP %q contains a space: the stub directory could not be reached unquoted", os.Getenv("TEMP"))
-	}
-
 	t.Run("every command succeeds", func(t *testing.T) {
 		code, out := runScript(t, 0, 0, "")
 		require.Equal(t, 0, code, "the create script must exit 0 when every command succeeds:\n%s", out)
@@ -135,5 +126,86 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 
 		code, out = runScript(t, 0, 0, "2001:db8::2")
 		require.Equal(t, 0, code, "the ipv6 branch must not fail when every command succeeds:\n%s", out)
+	})
+}
+
+// TestCloseTunScriptCleanup runs the real close script with recording stubs
+// and pins the commands it has to issue: the same route ladder the create
+// script installs (same destinations and masks), the two ipv6 routes, and the
+// ipv6 address - netsh add address is persistent and the create script's
+// unconditional "add address" cannot re-apply it while it is still on the
+// adapter, so the close script has to delete it (see bareV6Addr in
+// client/tun/tun.go for the /prefix handling).
+func TestCloseTunScriptCleanup(t *testing.T) {
+	script, err := filepath.Abs(filepath.Join("..", "..", "scripts", scripts.CloseTunFilename))
+	require.NoError(t, err)
+
+	comspec := os.Getenv("COMSPEC")
+	if comspec == "" {
+		comspec = "cmd.exe"
+	}
+
+	// A stub directory inside a path with spaces would be passed to the
+	// unquoted tool invocations as several arguments, turning this test into
+	// a quotation test instead of a command test.
+	stubRoot := t.TempDir()
+	if strings.Contains(stubRoot, " ") {
+		t.Skipf("temp directory %q contains a space: the stub directory could not be reached unquoted", stubRoot)
+	}
+
+	// runClose runs the close script with netsh and route replaced by stubs
+	// that append every invocation to a record file, and returns the
+	// recorded command lines.
+	runClose := func(t *testing.T, args ...string) []string {
+		t.Helper()
+
+		dir, err := os.MkdirTemp(stubRoot, "stubs")
+		require.NoError(t, err)
+		record := filepath.Join(dir, "record.txt")
+		body := "@echo off\r\necho %* >> \"" + record + "\"\r\nexit /b 0\r\n"
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "netsh.cmd"), []byte(body), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "route.cmd"), []byte(body), 0o644))
+
+		cmd := exec.Command(comspec, append([]string{"/C", script}, args...)...)
+		cmd.Env = append(os.Environ(), "PATH="+dir+";"+os.Getenv("PATH"))
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "the close script must exit 0 when every stub succeeds:\n%s", out)
+
+		content, err := os.ReadFile(record)
+		require.NoError(t, err, "the stub tools were never invoked")
+		var lines []string
+		for line := range strings.SplitSeq(string(content), "\n") {
+			if line = strings.TrimSpace(line); line != "" {
+				lines = append(lines, line)
+			}
+		}
+		return lines
+	}
+
+	t.Run("with a v6 address", func(t *testing.T) {
+		lines := runClose(t, "tun-easyss-test", "198.18.0.1", "2001:db8::1")
+
+		expected := []string{
+			"delete 1.0.0.0 mask 255.0.0.0 198.18.0.1",
+			"delete 2.0.0.0 mask 254.0.0.0 198.18.0.1",
+			"delete 4.0.0.0 mask 252.0.0.0 198.18.0.1",
+			"delete 8.0.0.0 mask 248.0.0.0 198.18.0.1",
+			"delete 16.0.0.0 mask 240.0.0.0 198.18.0.1",
+			"delete 32.0.0.0 mask 224.0.0.0 198.18.0.1",
+			"delete 64.0.0.0 mask 192.0.0.0 198.18.0.1",
+			"delete 128.0.0.0 mask 128.0.0.0 198.18.0.1",
+			"interface ipv6 delete route ::/1 tun-easyss-test",
+			"interface ipv6 delete route 8000::/1 tun-easyss-test",
+			"interface ipv6 delete address tun-easyss-test 2001:db8::1",
+		}
+		require.Equal(t, expected, lines)
+	})
+
+	t.Run("without a v6 address", func(t *testing.T) {
+		lines := runClose(t, "tun-easyss-test", "198.18.0.1")
+		require.Len(t, lines, 10, "only the routes are deleted")
+		for _, line := range lines {
+			require.NotContains(t, line, "delete address")
+		}
 	})
 }

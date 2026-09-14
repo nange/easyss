@@ -20,10 +20,12 @@ import (
 // from.
 //
 // The rollback is exercised through the same helper Start() calls, with the
-// close script replaced by one that leaves a marker file: removing the routes
-// for real needs administrator rights and would rewrite the machine's network
-// configuration, and what has to be proven here is that the cleanup runs at
-// all. The platform close scripts themselves are covered by the helper tests.
+// close script replaced by one that records its arguments into a marker file:
+// removing the routes for real needs administrator rights and would rewrite
+// the machine's network configuration, and what has to be proven here is
+// that the cleanup runs at all, and with the arguments the platform scripts
+// need. The platform close scripts themselves are covered by the helper
+// tests.
 func TestCloseTunDevRunsTheCloseScript(t *testing.T) {
 	require.NotNil(t, scripts.CloseTunBytes, "this test needs the platform close script to be embedded")
 
@@ -48,11 +50,21 @@ func TestCloseTunDevRunsTheCloseScript(t *testing.T) {
 		TunIP:      "198.18.0.1",
 		TunGW:      "198.18.0.1",
 		TunMask:    "255.255.0.0",
+		TunIPV6Sub: "2001:db8::1/64",
 	})
 
 	require.NoError(t, m.closeTunDevAndDelIPRoute())
-	require.FileExists(t, marker,
-		"the close script did not run: the routes of a failed TUN start would stay behind")
+	content, err := os.ReadFile(marker)
+	require.NoError(t, err, "the close script did not run: the routes of a failed TUN start would stay behind")
+	require.Contains(t, string(content), "tun-easyss-test")
+	if runtime.GOOS == "windows" {
+		// The third argument is the bare v6 address (no /64): netsh delete
+		// address takes the plain address, and the create script's
+		// "add address" cannot re-apply the persistent v6 address while it
+		// is still on the adapter.
+		require.Contains(t, string(content), "2001:db8::1")
+		require.NotContains(t, string(content), "/64")
+	}
 }
 
 // closeScriptName returns a close script name the platform branch of
@@ -65,10 +77,10 @@ func closeScriptName() string {
 }
 
 // markerScript returns a script in the language of the running platform that
-// creates the marker file.
+// records its arguments into the marker file.
 func markerScript(marker string) string {
 	if runtime.GOOS == "windows" {
-		return "@echo off\r\necho. > \"" + marker + "\"\r\nexit /b 0\r\n"
+		return "@echo off\r\necho %* > \"" + marker + "\"\r\nexit /b 0\r\n"
 	}
-	return "#!/bin/sh\n: > \"" + marker + "\"\n"
+	return "#!/bin/sh\necho \"$@\" > \"" + marker + "\"\n"
 }

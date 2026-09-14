@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
@@ -366,8 +367,8 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 		if os.Geteuid() == 0 {
 			cmdArgs = cmdArgs[1:]
 		}
-		if out, err := util.CommandContextCombined(ctx, cmdArgs[0], cmdArgs[1:]...); err != nil {
-			return fmt.Errorf("tun: exec create script: %w: %q", err, out)
+		if _, err := util.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...); err != nil {
+			return fmt.Errorf("tun: exec create script: %w", err)
 		}
 	case "windows":
 		dir := filepath.Dir(namePath)
@@ -376,26 +377,25 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 			return fmt.Errorf("tun: rename script: %w", err)
 		}
 		namePath = newNamePath
-		// The script reports failures with a non-zero exit code (see the exit
-		// code contract in create_tun_dev_windows.bat) and prints the failing
-		// step on stderr, which is what makes the reason visible in the tray
-		// notification instead of a bare "exit status 1".
-		if out, err := util.CommandContextCombined(ctx, "cmd.exe", "/C", namePath, d.Device,
+		// The script reports failures with a non-zero exit code (see the
+		// exit code contract in create_tun_dev_windows.bat); its output is
+		// part of the returned error.
+		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device,
 			d.TunIP, d.TunGW, d.TunMask, d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6); err != nil {
-			return fmt.Errorf("tun: exec create script: %w: %q", err, out)
+			return fmt.Errorf("tun: exec create script: %w", err)
 		}
 	case "darwin":
 		if os.Geteuid() == 0 {
-			if out, err := util.CommandContextCombined(ctx, "sh", namePath, d.Device, d.TunIP, d.TunGW, d.LocalGateway,
+			if _, err := util.CommandContext(ctx, "sh", namePath, d.Device, d.TunIP, d.TunGW, d.LocalGateway,
 				d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6); err != nil {
-				return fmt.Errorf("tun: exec create script: %w: %q", err, out)
+				return fmt.Errorf("tun: exec create script: %w", err)
 			}
 		} else {
 			cmd := fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s %s %s\" with administrator privileges",
 				namePath, d.Device, d.TunIP, d.TunGW, d.LocalGateway,
 				d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6)
-			if out, err := util.CommandContextCombined(ctx, "osascript", "-e", cmd); err != nil {
-				return fmt.Errorf("tun: exec create script: %w: %q", err, out)
+			if _, err := util.CommandContext(ctx, "osascript", "-e", cmd); err != nil {
+				return fmt.Errorf("tun: exec create script: %w", err)
 			}
 		}
 	}
@@ -424,8 +424,8 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 		if os.Geteuid() == 0 {
 			cmdArgs = cmdArgs[1:]
 		}
-		if out, err := util.CommandContextCombined(ctx, cmdArgs[0], cmdArgs[1:]...); err != nil {
-			log.Warn("[TUN] close script", "err", err, "out", out)
+		if _, err := util.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...); err != nil {
+			log.Warn("[TUN] close script", "err", err)
 		}
 	case "windows":
 		dir := filepath.Dir(namePath)
@@ -434,22 +434,25 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 			return fmt.Errorf("tun: rename close script: %w", err)
 		}
 		namePath = newNamePath
-		if out, err := util.CommandContextCombined(ctx, "cmd.exe", "/C", namePath, d.Device, d.TunGW); err != nil {
-			log.Warn("[TUN] close script", "err", err, "out", out)
+		// The third argument is the bare IPv6 address of the TUN device
+		// (no /prefix): the script deletes the persistent v6 address, which
+		// the create script's "add address" would refuse to duplicate.
+		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device, d.TunGW, bareV6Addr(d.TunIPV6Sub)); err != nil {
+			log.Warn("[TUN] close script", "err", err)
 		}
 	case "darwin":
 		// Mirror the helper's runCloseScript argument order:
 		// device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6.
 		if os.Geteuid() == 0 {
-			if out, err := util.CommandContextCombined(ctx, "sh", namePath, d.Device, d.TunGW, d.LocalGateway,
+			if _, err := util.CommandContext(ctx, "sh", namePath, d.Device, d.TunGW, d.LocalGateway,
 				d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6); err != nil {
-				log.Warn("[TUN] close script", "err", err, "out", out)
+				log.Warn("[TUN] close script", "err", err)
 			}
 		} else {
 			cmd := fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s\" with administrator privileges",
 				namePath, d.Device, d.TunGW, d.LocalGateway, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6)
-			if out, err := util.CommandContextCombined(ctx, "osascript", "-e", cmd); err != nil {
-				log.Warn("[TUN] close script", "err", err, "out", out)
+			if _, err := util.CommandContext(ctx, "osascript", "-e", cmd); err != nil {
+				log.Warn("[TUN] close script", "err", err)
 			}
 		}
 	}
@@ -535,4 +538,13 @@ func ipSub(ip, mask string) string {
 		return ""
 	}
 	return ip + "/" + mask
+}
+
+// bareV6Addr strips the prefix length from an "address/prefix" subnet string
+// ("2001:db8::1/64" -> "2001:db8::1"): netsh add address takes the /prefix
+// form, but the netsh delete address of the windows close script wants the
+// plain address.
+func bareV6Addr(sub string) string {
+	addr, _, _ := strings.Cut(sub, "/")
+	return addr
 }
