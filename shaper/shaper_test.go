@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -164,7 +165,15 @@ func TestCoverInjectorSkipsDuringActiveStreaming(t *testing.T) {
 		t.Fatal("expected cover frames after idle period, got 0")
 	}
 
-	for _, f := range injected {
+	// Snapshot under the lock. The injector keeps firing on its idle timer
+	// until ci.stop() runs, so ranging over the shared slice directly races
+	// with the append in the inject callback; holding mu across t.Fatalf
+	// instead would leave the mutex locked for good.
+	mu.Lock()
+	frames := slices.Clone(injected)
+	mu.Unlock()
+
+	for _, f := range frames {
 		if f.Type != protocol.FrameCOVER {
 			t.Fatalf("expected COVER frame, got %v", f.Type)
 		}

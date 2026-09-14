@@ -187,12 +187,20 @@ func (m *Manager) Start() error {
 	}
 
 	engine.Insert(key)
-	engine.Start()
+
+	// Upstream turned Start into an error return instead of a log.Fatalf
+	// (tun2socks #550/#552): report the failure to the caller rather than
+	// exiting the process, and release the TUN device Start may have opened
+	// before core.CreateStack failed.
+	if err := engine.Start(); err != nil {
+		stopEngine("start failed")
+		return fmt.Errorf("tun: start engine: %w", err)
+	}
 
 	// Allow Stop() to cancel us before we touch routes / DNS.
 	select {
 	case <-m.ctx.Done():
-		engine.Stop()
+		stopEngine("start cancelled")
 		return m.ctx.Err()
 	default:
 	}
@@ -208,7 +216,7 @@ func (m *Manager) Start() error {
 		}
 
 		if err := m.createTunDevAndSetIPRoute(); err != nil {
-			engine.Stop()
+			stopEngine("create device failed")
 			return fmt.Errorf("tun: create device: %w", err)
 		}
 	}
@@ -217,7 +225,7 @@ func (m *Manager) Start() error {
 	// running, undo everything we just set up.
 	select {
 	case <-m.ctx.Done():
-		engine.Stop()
+		stopEngine("start cancelled")
 		if !fdMode {
 			_ = m.closeTunDevAndDelIPRoute()
 		}
@@ -249,7 +257,7 @@ func (m *Manager) Stop() {
 	}
 
 	log.Info("[TUN] Stop: calling engine.Stop")
-	engine.Stop()
+	stopEngine("stop")
 	log.Info("[TUN] Stop: engine.Stop done")
 
 	if !m.cfg.SkipRouteCleanup {
@@ -278,9 +286,20 @@ func (m *Manager) StopEngineOnly() {
 	if !m.running {
 		return
 	}
-	engine.Stop()
+	stopEngine("stop engine only")
 	m.running = false
 	log.Info("[TUN] tun2socks engine stopped")
+}
+
+// stopEngine stops the tun2socks engine, logging the error instead of
+// propagating it: every caller sits on a cleanup path where a failed stop
+// must not mask the original error, and upstream's StopOrFatal would exit the
+// process. Stop is safe after a failed Start: it only releases the device and
+// stack that were actually created.
+func stopEngine(reason string) {
+	if err := engine.Stop(); err != nil {
+		log.Warn("[TUN] engine stop", "reason", reason, "err", err)
+	}
 }
 
 // SetOriginDNS stores the original system DNS before TUN starts.

@@ -14,7 +14,7 @@ GOMOBILE := $(shell go env GOPATH)/bin/gomobile
 ANDROID_ALIGN_LDFLAGS := -extldflags=-Wl,-z,max-page-size=16384
 GOMOBILE_BIND := $(GOMOBILE) bind -target=android/arm64,android/amd64 -androidapi 29 -ldflags '$(LDFLAGS) $(ANDROID_ALIGN_LDFLAGS)'
 
-.PHONY: format lint test easyss easyss-headless easyss-windows easyss-server easyss-server-windows easyss-android-aar
+.PHONY: format lint test test-race test-headless test-race-headless easyss easyss-headless easyss-windows easyss-server easyss-server-windows easyss-android-aar
 
 echo:
 	@echo "${PROJECT}"
@@ -59,6 +59,17 @@ test:
 
 test-race:
 	$(GO) test -race -timeout 20m -v ./...
+
+# headless (Android/无托盘) 下只有 cmd/easyss 的文件集随该标签变化，其余包
+# 完全相同，因此测试只跑 cmd/easyss；vet 用同一标签覆盖全部包的编译（含
+# _test.go），「测试文件引用了托盘专属符号」这类问题由它拦住。
+test-headless:
+	$(GO) vet -tags headless ./...
+	$(GO) test -tags headless -timeout 15m -v ./cmd/easyss/
+
+test-race-headless:
+	$(GO) vet -tags headless ./...
+	$(GO) test -tags headless -race -timeout 20m -v ./cmd/easyss/
 
 lint:
 	go tool golangci-lint run --timeout 10m --verbose

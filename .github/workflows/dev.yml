@@ -127,3 +127,31 @@ jobs:
       # timeout suited to the ARM runner.
       - name: Test
         run: go test -v -timeout 30m ./...
+
+  test-headless-linux:
+    name: Test-Headless-Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Cache go module
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      # headless (Android / no tray) only changes which files compile into
+      # cmd/easyss; every other package is identical under the tag. The target
+      # vets the whole module with it (which is what catches a test file
+      # referencing a tray-only symbol) and runs the cmd/easyss tests.
+      - name: Test (race)
+        run: make test-race-headless

@@ -150,11 +150,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	icmpHandler.SetProxy(a.core.StreamHandler, methodFromString(a.cfg.DefaultServer().Method))
 	a.tunMgr.SetICMPHandler(icmpHandler)
 
-	go func() {
-		if err := a.tunMgr.Start(); err != nil {
-			log.Error("[SYSTRAY] tun2socks start (fd)", "err", err)
-		}
-	}()
+	startTunEngine(a.tunMgr, "fd")
 
 	a.tunHelperStdin = fifoWriter
 
