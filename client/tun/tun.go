@@ -217,6 +217,17 @@ func (m *Manager) Start() error {
 
 		if err := m.createTunDevAndSetIPRoute(); err != nil {
 			stopEngine("create device failed")
+			// The platform script can fail halfway through (it installs the
+			// address first and the routes after), and the routes it already
+			// added stay in the system routing table when only the engine is
+			// stopped: Stop() below returns early because m.running is still
+			// false, so nothing else ever removes them. Left behind, they send
+			// traffic into a TUN device nothing reads from, which looks like a
+			// dead network. Deleting them is idempotent and only meaningful on
+			// the paths that just ran the create script.
+			if closeErr := m.closeTunDevAndDelIPRoute(); closeErr != nil {
+				log.Warn("[TUN] rollback routes after create failure", "err", closeErr)
+			}
 			return fmt.Errorf("tun: create device: %w", err)
 		}
 	}
@@ -355,8 +366,8 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 		if os.Geteuid() == 0 {
 			cmdArgs = cmdArgs[1:]
 		}
-		if _, err := util.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...); err != nil {
-			return fmt.Errorf("tun: exec create script: %w", err)
+		if out, err := util.CommandContextCombined(ctx, cmdArgs[0], cmdArgs[1:]...); err != nil {
+			return fmt.Errorf("tun: exec create script: %w: %q", err, out)
 		}
 	case "windows":
 		dir := filepath.Dir(namePath)
@@ -365,22 +376,26 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 			return fmt.Errorf("tun: rename script: %w", err)
 		}
 		namePath = newNamePath
-		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device,
+		// The script reports failures with a non-zero exit code (see the exit
+		// code contract in create_tun_dev_windows.bat) and prints the failing
+		// step on stderr, which is what makes the reason visible in the tray
+		// notification instead of a bare "exit status 1".
+		if out, err := util.CommandContextCombined(ctx, "cmd.exe", "/C", namePath, d.Device,
 			d.TunIP, d.TunGW, d.TunMask, d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6); err != nil {
-			return fmt.Errorf("tun: exec create script: %w", err)
+			return fmt.Errorf("tun: exec create script: %w: %q", err, out)
 		}
 	case "darwin":
 		if os.Geteuid() == 0 {
-			if _, err := util.CommandContext(ctx, "sh", namePath, d.Device, d.TunIP, d.TunGW, d.LocalGateway,
+			if out, err := util.CommandContextCombined(ctx, "sh", namePath, d.Device, d.TunIP, d.TunGW, d.LocalGateway,
 				d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6); err != nil {
-				return fmt.Errorf("tun: exec create script: %w", err)
+				return fmt.Errorf("tun: exec create script: %w: %q", err, out)
 			}
 		} else {
 			cmd := fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s %s %s\" with administrator privileges",
 				namePath, d.Device, d.TunIP, d.TunGW, d.LocalGateway,
 				d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6)
-			if _, err := util.CommandContext(ctx, "osascript", "-e", cmd); err != nil {
-				return fmt.Errorf("tun: exec create script: %w", err)
+			if out, err := util.CommandContextCombined(ctx, "osascript", "-e", cmd); err != nil {
+				return fmt.Errorf("tun: exec create script: %w: %q", err, out)
 			}
 		}
 	}
@@ -409,7 +424,9 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 		if os.Geteuid() == 0 {
 			cmdArgs = cmdArgs[1:]
 		}
-		_, _ = util.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...)
+		if out, err := util.CommandContextCombined(ctx, cmdArgs[0], cmdArgs[1:]...); err != nil {
+			log.Warn("[TUN] close script", "err", err, "out", out)
+		}
 	case "windows":
 		dir := filepath.Dir(namePath)
 		newNamePath := filepath.Join(dir, scripts.CloseTunFilename)
@@ -417,17 +434,23 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 			return fmt.Errorf("tun: rename close script: %w", err)
 		}
 		namePath = newNamePath
-		_, _ = util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device, d.TunGW)
+		if out, err := util.CommandContextCombined(ctx, "cmd.exe", "/C", namePath, d.Device, d.TunGW); err != nil {
+			log.Warn("[TUN] close script", "err", err, "out", out)
+		}
 	case "darwin":
 		// Mirror the helper's runCloseScript argument order:
 		// device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6.
 		if os.Geteuid() == 0 {
-			_, _ = util.CommandContext(ctx, "sh", namePath, d.Device, d.TunGW, d.LocalGateway,
-				d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6)
+			if out, err := util.CommandContextCombined(ctx, "sh", namePath, d.Device, d.TunGW, d.LocalGateway,
+				d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6); err != nil {
+				log.Warn("[TUN] close script", "err", err, "out", out)
+			}
 		} else {
 			cmd := fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s\" with administrator privileges",
 				namePath, d.Device, d.TunGW, d.LocalGateway, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6)
-			_, _ = util.CommandContext(ctx, "osascript", "-e", cmd)
+			if out, err := util.CommandContextCombined(ctx, "osascript", "-e", cmd); err != nil {
+				log.Warn("[TUN] close script", "err", err, "out", out)
+			}
 		}
 	}
 	return nil
