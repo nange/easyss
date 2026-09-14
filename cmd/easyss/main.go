@@ -235,9 +235,14 @@ func (a *App) Start() error {
 	if a.cfg.Local.EnableTun2socks {
 		// On macOS and Linux non-root, TUN is started via privilege
 		// elevation (helper process or restart as root). Skip direct
-		// creation here to avoid "operation not permitted".
+		// creation here to avoid "operation not permitted". Reaching this
+		// branch means the user asked for system-wide traffic but will not
+		// get it, so the tray tells them why instead of leaving them with a
+		// silently unproxied system. main.go is shared with headless builds,
+		// so this goes through tunStartNotify rather than the tray directly.
 		if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !IsRoot() {
 			log.Warn("[EASYSS-V3] tun2socks requires root; skipped (use sudo, or run with system tray for automatic elevation)")
+			notifyTunSkippedNoRoot()
 		} else {
 			// runner.Run already ensured the server hostname resolves and
 			// pre-populated the DNS cache (resolveServerDomain), so TUN-mode
@@ -278,8 +283,28 @@ func (a *App) Start() error {
 // The tray build installs it in buildTray so that a failure at startup also
 // reverts the menu item (see (*TrayApp).revertTunStart). Headless and
 // --disable-tray builds leave it nil: they have no UI state to revert, and the
-// engine is released by Stop().
+// engine is released by Stop(). It is only called by trayStartTunFailure, which
+// additionally reports the reason to the user.
 var tunStartFailureHook func()
+
+// tunStartNotify, when non-nil, reports a TUN start failure to the user through
+// the tray's system notification. The tray build installs it in buildTray (see
+// (*TrayApp).notifyTunStartFailure); headless and --disable-tray builds leave
+// it nil, so the reason reaches the log file alone. Without it the failure
+// would be invisible: the proxy core keeps running, and only the state the user
+// just turned on (system-wide traffic) is missing.
+var tunStartNotify func(msg string)
+
+// tunStartErrorText, when non-nil, turns a TUN start error into the message
+// shown to the user, and may return an empty string for a failure the user
+// caused deliberately (see friendlyTunError in tray.go, installed in
+// buildTray). It stays nil in headless and --disable-tray builds, where
+// trayStartTunFailure falls back to err.Error() — main.go is compiled into
+// every build and cannot reference tray.go.
+//
+// The current value is read on the engine goroutine, so it is written exactly
+// once, during startup, before any engine start can fail.
+var tunStartErrorText func(err error) string
 
 // startTunEngine starts the tun2socks engine in the background. Manager.Start
 // blocks through the device setup, the settle delay and the platform route
@@ -295,11 +320,43 @@ func startTunEngine(mgr *tun.Manager, mode string) {
 	go func() {
 		if err := mgr.Start(); err != nil {
 			log.Error("[EASYSS-V3] tun2socks start", "mode", mode, "err", err)
-			if tunStartFailureHook != nil {
-				tunStartFailureHook()
-			}
+			trayStartTunFailure(err)
 		}
 	}()
+}
+
+// trayStartTunFailure is the single owner of "the TUN engine failed to start":
+// it reverts the half-enabled state (hook) and tells the user why (notify).
+//
+// tunStartErrorText may return an empty message for a failure the user asked for
+// rather than suffered (see friendlyTunError): Stop() cancelling the start —
+// toggle off, server switch, app exit — is not an error worth interrupting
+// anyone over. The revert still runs in that case: the menu has to end up
+// unchecked regardless of who stopped what.
+func trayStartTunFailure(err error) {
+	if tunStartFailureHook != nil {
+		tunStartFailureHook()
+	}
+	if err == nil {
+		return
+	}
+	msg := err.Error()
+	if tunStartErrorText != nil {
+		msg = tunStartErrorText(err)
+	}
+	if msg != "" && tunStartNotify != nil {
+		tunStartNotify(msg)
+	}
+}
+
+// notifyTunSkippedNoRoot reports that TUN was configured but could not be
+// started without administrator privileges. The text is fixed: there is no
+// underlying error to append, and the actionable hint is the same on every
+// platform that reaches this path.
+func notifyTunSkippedNoRoot() {
+	if tunStartNotify != nil {
+		tunStartNotify("Tun2socks 未启用：需要管理员权限，请以 root 运行或使用系统托盘授权")
+	}
 }
 
 // setStartupWarn records the first non-fatal startup warning. The client

@@ -143,7 +143,14 @@ func (a *TrayApp) buildTray() {
 	// startup path starts the engine inside App.Start(), which has no access
 	// to the tray. Installed before that call, and the same TrayApp outlives
 	// every App.Start() (restartService only rebuilds the embedded App).
+	// The notifier is installed alongside the hook because the hook alone
+	// would revert the menu without saying why (see trayStartTunFailure).
 	tunStartFailureHook = a.revertTunStart
+	tunStartNotify = a.notifyTunStartFailure
+	// The user-facing wording of a TUN failure lives here, not in main.go,
+	// because the classification needs the tray-only friendly text. Assigning
+	// the function value directly keeps the tests able to call it by name.
+	tunStartErrorText = friendlyTunError
 
 	// Start service after menu is populated so that desktop environments
 	// (especially GNOME with AppIndicator) see a non-empty menu on first query.
@@ -236,6 +243,38 @@ func friendlyStartupError(err error) string {
 // 转换为用户友好的中文提示。
 func friendlyStartupWarning(err error) string {
 	return "启动警告：" + err.Error()
+}
+
+// notifyTunStartFailure surfaces a TUN start failure as a system notification.
+// The proxy core keeps running over SOCKS5/HTTP — only system-wide traffic is
+// affected, which is precisely the state the user just asked for — so a failure
+// that only reached the log file would look like a silent no-op.
+//
+// An empty message means there is nothing to tell the user (see
+// friendlyTunError): the start was cancelled deliberately, not failed.
+func (a *TrayApp) notifyTunStartFailure(msg string) {
+	if msg == "" {
+		return
+	}
+	a.notifyUser(msg)
+}
+
+// friendlyTunError 将 tun2socks 启动失败转换为用户友好的中文提示。
+// 返回空字符串表示无需通知（用户主动取消提权，或 TUN 被主动停止）。
+func friendlyTunError(err error) string {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return ""
+	}
+	// 用户已明确取消提权授权对话：错误文本是 root_linux.go / root_darwin.go
+	// 各自的固定字面量（"pkexec/osascript exited before tun helper started"），
+	// 属于用户意图而非故障，再弹一次通知只会变成骚扰。
+	if strings.Contains(err.Error(), "exited before tun helper started") {
+		return ""
+	}
+	if strings.Contains(err.Error(), "requires root") || errors.Is(err, fs.ErrPermission) {
+		return "Tun2socks 启动失败：需要管理员权限，请以 root/管理员身份运行或重试授权。详情：" + err.Error()
+	}
+	return "Tun2socks 启动失败：系统全局流量未生效，代理（SOCKS5/HTTP）仍可正常使用，可在托盘中重试。详情：" + err.Error()
 }
 
 // friendlyCatLogError 将「查看日志」失败转换为用户友好的中文提示。
@@ -650,7 +689,9 @@ func (a *TrayApp) closeTun2socks() error {
 }
 
 // enableTun2socks runs the TUN enable flow in a background goroutine so the
-// tray menu remains responsive. On failure it reverts the menu checkmark.
+// tray menu remains responsive. On failure it reverts the menu checkmark and
+// notifies the user: the failure is otherwise invisible, since the proxy core
+// keeps serving SOCKS5/HTTP while system-wide traffic silently stays direct.
 func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 	log.Info("[SYSTRAY] enableTun2socks called", "isRoot", IsRoot())
 	if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !IsRoot() {
@@ -661,12 +702,14 @@ func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 		if err := a.createTun2socksViaHelper(); err != nil { //nolint:staticcheck // always fails on non-unix builds; branch unreachable
 			log.Error("[SYSTRAY] create tun2socks via helper", "err", err)
 			menu.SetChecked(false)
+			a.notifyTunStartFailure(friendlyTunError(err))
 			return
 		}
 	} else {
 		if err := a.createTun2socks(); err != nil {
 			log.Error("[SYSTRAY] create tun2socks", "err", err)
 			menu.SetChecked(false)
+			a.notifyTunStartFailure(friendlyTunError(err))
 			return
 		}
 	}
