@@ -260,11 +260,7 @@ func (a *App) Start() error {
 			icmpHandler.SetProxy(a.core.StreamHandler, method)
 			a.tunMgr.SetICMPHandler(icmpHandler)
 
-			go func() {
-				if err := a.tunMgr.Start(); err != nil {
-					log.Error("[EASYSS-V3] tun2socks", "err", err)
-				}
-			}()
+			startTunEngine(a.tunMgr, "device")
 		}
 	}
 
@@ -276,6 +272,34 @@ func (a *App) Start() error {
 	}
 
 	return nil
+}
+
+// tunStartFailureHook, when non-nil, runs after the TUN engine fails to start.
+// The tray build installs it in buildTray so that a failure at startup also
+// reverts the menu item (see (*TrayApp).revertTunStart). Headless and
+// --disable-tray builds leave it nil: they have no UI state to revert, and the
+// engine is released by Stop().
+var tunStartFailureHook func()
+
+// startTunEngine starts the tun2socks engine in the background. Manager.Start
+// blocks through the device setup, the settle delay and the platform route
+// scripts (up to 60s), so it must not run on the caller's goroutine.
+//
+// mode names how the device was acquired ("device" by name, "fd" from the
+// elevated helper) so a failure is traceable to one of the two paths.
+//
+// Upstream reports a failed start as an error instead of the log.Fatalf that
+// used to kill the process (tun2socks #550/#552), so the half-enabled state
+// has to be undone by whoever owns it rather than by exiting.
+func startTunEngine(mgr *tun.Manager, mode string) {
+	go func() {
+		if err := mgr.Start(); err != nil {
+			log.Error("[EASYSS-V3] tun2socks start", "mode", mode, "err", err)
+			if tunStartFailureHook != nil {
+				tunStartFailureHook()
+			}
+		}
+	}()
 }
 
 // setStartupWarn records the first non-fatal startup warning. The client

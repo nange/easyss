@@ -139,6 +139,12 @@ func (a *TrayApp) buildTray() {
 	a.tray.SetMenu(root)
 	a.tray.Show()
 
+	// A failed engine start has to revert the tray state as well, and the
+	// startup path starts the engine inside App.Start(), which has no access
+	// to the tray. Installed before that call, and the same TrayApp outlives
+	// every App.Start() (restartService only rebuilds the embedded App).
+	tunStartFailureHook = a.revertTunStart
+
 	// Start service after menu is populated so that desktop environments
 	// (especially GNOME with AppIndicator) see a non-empty menu on first query.
 	if err := a.Start(); err != nil {
@@ -580,24 +586,27 @@ func (a *TrayApp) createTun2socks() error {
 	icmpHandler.SetProxy(a.core.StreamHandler, methodFromString(a.cfg.DefaultServer().Method))
 	a.tunMgr.SetICMPHandler(icmpHandler)
 
-	mgr := a.tunMgr
-	go func() {
-		if err := mgr.Start(); err != nil {
-			log.Error("[SYSTRAY] tun2socks start", "err", err)
-			// The engine reports failures instead of exiting the process, so
-			// revert the menu item and drop the half-enabled manager: leaving
-			// it set would make the next enable a no-op (see the a.tunMgr
-			// guard above) while the menu still claims TUN is on.
-			if mi := a.TunMenu(); mi != nil {
-				mi.SetChecked(false)
-			}
-			if err := a.closeTun2socks(); err != nil {
-				log.Error("[SYSTRAY] close tun2socks after start failure", "err", err)
-			}
-		}
-	}()
+	startTunEngine(a.tunMgr, "device")
 
 	return nil
+}
+
+// revertTunStart undoes a TUN start that failed after the manager was built.
+// It is installed as tunStartFailureHook so that both the menu toggle and the
+// startup path land here.
+//
+// Dropping the menu checkmark alone is not enough: closeTun2socks also clears
+// a.tunMgr, without which the next enable would hit the "already set" guard at
+// the top of createTun2socks and silently do nothing while the menu claims TUN
+// is on. On the fd path the helper has already installed the routes and DNS,
+// so it must be told to take them down as well.
+func (a *TrayApp) revertTunStart() {
+	if mi := a.TunMenu(); mi != nil {
+		mi.SetChecked(false)
+	}
+	if err := a.closeTun2socks(); err != nil {
+		log.Error("[SYSTRAY] close tun2socks after start failure", "err", err)
+	}
 }
 
 func (a *TrayApp) closeTun2socks() error {
