@@ -150,9 +150,19 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	icmpHandler.SetProxy(a.core.StreamHandler, methodFromString(a.cfg.DefaultServer().Method))
 	a.tunMgr.SetICMPHandler(icmpHandler)
 
+	mgr := a.tunMgr
 	go func() {
-		if err := a.tunMgr.Start(); err != nil {
+		if err := mgr.Start(); err != nil {
 			log.Error("[SYSTRAY] tun2socks start (fd)", "err", err)
+			if mi := a.TunMenu(); mi != nil {
+				mi.SetChecked(false)
+			}
+			// The helper has already installed the TUN routes and DNS. Close
+			// it so it tears both down again, instead of leaving traffic
+			// entering a device nothing reads from.
+			if err := a.closeTun2socks(); err != nil {
+				log.Error("[SYSTRAY] close tun2socks after start failure", "err", err)
+			}
 		}
 	}()
 

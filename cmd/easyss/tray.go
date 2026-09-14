@@ -580,9 +580,20 @@ func (a *TrayApp) createTun2socks() error {
 	icmpHandler.SetProxy(a.core.StreamHandler, methodFromString(a.cfg.DefaultServer().Method))
 	a.tunMgr.SetICMPHandler(icmpHandler)
 
+	mgr := a.tunMgr
 	go func() {
-		if err := a.tunMgr.Start(); err != nil {
+		if err := mgr.Start(); err != nil {
 			log.Error("[SYSTRAY] tun2socks start", "err", err)
+			// The engine reports failures instead of exiting the process, so
+			// revert the menu item and drop the half-enabled manager: leaving
+			// it set would make the next enable a no-op (see the a.tunMgr
+			// guard above) while the menu still claims TUN is on.
+			if mi := a.TunMenu(); mi != nil {
+				mi.SetChecked(false)
+			}
+			if err := a.closeTun2socks(); err != nil {
+				log.Error("[SYSTRAY] close tun2socks after start failure", "err", err)
+			}
 		}
 	}()
 
