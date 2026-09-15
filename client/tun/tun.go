@@ -331,22 +331,6 @@ func (m *Manager) Stop() {
 	log.Info("[TUN] tun2socks stopped")
 }
 
-// StopEngineOnly stops the engine and closes the TUN device without
-// cleaning up routes or DNS. Useful for server switches where the
-// routing configuration does not change.
-func (m *Manager) StopEngineOnly() {
-	if m.cancel != nil {
-		m.cancel()
-		<-m.done
-	}
-	if !m.running {
-		return
-	}
-	engineStopFn("stop engine only")
-	m.running = false
-	log.Info("[TUN] tun2socks engine stopped")
-}
-
 // stopEngine stops the tun2socks engine, logging the error instead of
 // propagating it: every caller sits on a cleanup path where a failed stop
 // must not mask the original error, and upstream's StopOrFatal would exit the
@@ -356,19 +340,6 @@ func stopEngine(reason string) {
 	if err := engine.Stop(); err != nil {
 		log.Warn("[TUN] engine stop", "reason", reason, "err", err)
 	}
-}
-
-// SetOriginDNS stores the original system DNS before TUN starts.
-// On darwin, this must be called before Start() when using the fd-based
-// startup path (DeviceFD >= 0) because the TUN helper sets the DNS
-// externally and the Manager needs the original values for restore.
-func (m *Manager) SetOriginDNS(dns []string) {
-	m.originDNS = dns
-}
-
-// OriginDNS returns the original system DNS before TUN started.
-func (m *Manager) OriginDNS() []string {
-	return m.originDNS
 }
 
 func (m *Manager) IsRunning() bool {

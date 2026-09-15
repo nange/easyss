@@ -160,7 +160,7 @@ func TestRunOKWhenPortsAreFree(t *testing.T) {
 // any network. It counts the probes, releases done when a stubbed probe
 // returns, and restores the previous implementation when the test ends.
 //
-// StartWarmUp captures warmUpCore at dispatch time, so a probe that outlives
+// startWarmUp captures warmUpCore at dispatch time, so a probe that outlives
 // its test still calls this stub even after the cleanup below restores the
 // package var.
 func stubWarmUp(t *testing.T, err error) (*atomic.Int64, *waitSignal) {
@@ -254,13 +254,13 @@ func TestStartWarmUpDispatch(t *testing.T) {
 			cfg := testConfig()
 			cfg.Transport.DisableWarmUp = tt.disable
 
-			core := &Core{Cfg: cfg}
+			core := &Core{cfg: cfg}
 			if !tt.nilServer {
 				core.SocksServer = &proxy.Socks5Server{}
 			}
 
-			// Best-effort by contract: StartWarmUp never blocks or panics.
-			core.StartWarmUp()
+			// Best-effort by contract: startWarmUp never blocks or panics.
+			core.startWarmUp()
 
 			if tt.wantProbes > 0 {
 				done.waitProbe(t, "the warm-up probe")
@@ -279,8 +279,8 @@ func TestStartWarmUpWaitStartDelay(t *testing.T) {
 	shortWarmUpStartDelay(t, 100*time.Millisecond)
 	calls, done := stubWarmUp(t, nil)
 
-	core := &Core{Cfg: testConfig(), SocksServer: &proxy.Socks5Server{}}
-	core.StartWarmUp()
+	core := &Core{cfg: testConfig(), SocksServer: &proxy.Socks5Server{}}
+	core.startWarmUp()
 
 	if got := calls.Load(); got != 0 {
 		t.Fatalf("warm-up probe fired before the start delay, ran %d times", got)
@@ -304,8 +304,8 @@ func TestStopCancelsPendingWarmUp(t *testing.T) {
 	shortWarmUpStartDelay(t, 5*time.Second)
 	calls, _ := stubWarmUp(t, nil)
 
-	core := &Core{Cfg: testConfig(), SocksServer: &proxy.Socks5Server{}}
-	core.StartWarmUp()
+	core := &Core{cfg: testConfig(), SocksServer: &proxy.Socks5Server{}}
+	core.startWarmUp()
 
 	done := make(chan struct{})
 	go func() {
@@ -342,12 +342,12 @@ func TestStopCancelsInFlightWarmUp(t *testing.T) {
 	shortWarmUpStartDelay(t, 0)
 	calls, done := stubWarmUp(t, nil)
 
-	core := &Core{Cfg: testConfig(), SocksServer: &proxy.Socks5Server{}}
-	core.StartWarmUp()
+	core := &Core{cfg: testConfig(), SocksServer: &proxy.Socks5Server{}}
+	core.startWarmUp()
 
 	cancel := warmUpCancelOf(core)
 	if cancel == nil {
-		t.Fatal("StartWarmUp did not record a cancel func")
+		t.Fatal("startWarmUp did not record a cancel func")
 	}
 	done.waitProbe(t, "the in-flight warm-up probe")
 	if got := calls.Load(); got != 1 {

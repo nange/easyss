@@ -58,11 +58,9 @@ import (
 //     tier is saturated do streams pile onto the least-loaded slot.
 type slotScheduler struct {
 	priority *slotPool // interactive streams, base = threshold
-	bulk     *slotPool // everything else, base = bulkThreshold
+	bulk     *slotPool // everything else, base = threshold*2
 
-	threshold     int32
-	bulkThreshold int32
-	mu            sync.RWMutex // protects pool growth/shrink; RLock protects stream assignment
+	mu sync.RWMutex // protects pool growth/shrink; RLock protects stream assignment
 }
 
 // slotPool is one class's dedicated slot set. Slots are pre-allocated and
@@ -72,7 +70,7 @@ type slotPool struct {
 	slots     []*transportSlot
 	liveCount atomic.Int32 // number of currently live slots (0..maxSlots)
 	maxSlots  int
-	base      int32 // pressure base of this pool (threshold or bulkThreshold)
+	base      int32 // pressure base of this pool (threshold, or 2x for bulk)
 }
 
 // newScheduler splits the pre-allocated slot array into the priority pool
@@ -115,8 +113,6 @@ func newScheduler(maxSlots int, slots []*transportSlot, threshold int32, priorit
 			maxSlots: bMax,
 			base:     threshold * 2,
 		},
-		threshold:     threshold,
-		bulkThreshold: threshold * 2,
 	}
 }
 

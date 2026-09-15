@@ -33,7 +33,7 @@ func TestNewTransportProtocolsValidation(t *testing.T) {
 
 func mustNewServer(t *testing.T, protocols []string) error {
 	t.Helper()
-	_, err := New(&config.ServerConfig{
+	_, err := New(&config.FileConfig{
 		Transport: config.TransportConfig{Protocols: protocols},
 	})
 	return err
@@ -120,12 +120,12 @@ func TestFindExistingACMEEmail_NoUsers(t *testing.T) {
 
 func TestResolveEmail_Configured(t *testing.T) {
 	s := &Server{
-		cfg: &config.ServerConfig{
-			Email: "user@example.com",
+		cfg: &config.FileConfig{
+			Server: config.ServerConfig{Email: "user@example.com"},
 		},
 	}
 	s.resolveEmail(t.TempDir())
-	require.Equal(t, "user@example.com", s.cfg.Email)
+	require.Equal(t, "user@example.com", s.cfg.Server.Email)
 }
 
 func TestResolveEmail_Reuse(t *testing.T) {
@@ -138,25 +138,25 @@ func TestResolveEmail_Reuse(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(usersPath, existingEmail), 0700))
 
 	s := &Server{
-		cfg: &config.ServerConfig{
-			Email: "", // not configured
+		cfg: &config.FileConfig{
+			Server: config.ServerConfig{Email: ""}, // not configured
 		},
 	}
 	s.resolveEmail(storagePath)
-	require.Equal(t, existingEmail, s.cfg.Email)
+	require.Equal(t, existingEmail, s.cfg.Server.Email)
 }
 
 func TestResolveEmail_Generated(t *testing.T) {
 	s := &Server{
-		cfg: &config.ServerConfig{
-			Email: "",
+		cfg: &config.FileConfig{
+			Server: config.ServerConfig{Email: ""},
 		},
 	}
 	s.resolveEmail(t.TempDir())
 
-	matched, err := regexp.MatchString(`^admin_[0-9a-f]{16}@gmail\.com$`, s.cfg.Email)
+	matched, err := regexp.MatchString(`^admin_[0-9a-f]{16}@gmail\.com$`, s.cfg.Server.Email)
 	require.NoError(t, err)
-	require.True(t, matched, "unexpected generated email format: %s", s.cfg.Email)
+	require.True(t, matched, "unexpected generated email format: %s", s.cfg.Server.Email)
 }
 
 // TestBuildHTTPServerUploadFlowControl pins the upload-side flow-control
@@ -166,7 +166,7 @@ func TestResolveEmail_Generated(t *testing.T) {
 // must be at least 1MB (~26Mbps on a 300ms link) and the connection window
 // at least 2MB.
 func TestBuildHTTPServerUploadFlowControl(t *testing.T) {
-	srv := buildHTTPServer(&config.ServerConfig{Listen: ":443"}, nil, http.NewServeMux(), 30*time.Second)
+	srv := buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Listen: ":443"}}, nil, http.NewServeMux(), 30*time.Second)
 	require.NotNil(t, srv.HTTP2)
 	require.GreaterOrEqual(t, srv.HTTP2.MaxReceiveBufferPerStream, 1<<20,
 		"per-stream upload window must be >= 1MB")

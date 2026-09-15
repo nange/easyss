@@ -13,7 +13,13 @@ import (
 // reachable by the unauthenticated TUN helper over loopback.
 func newTunTestServer(t *testing.T) *HTTPProxyServer {
 	t.Helper()
-	s, err := NewHTTPProxyServer("127.0.0.1:0", "127.0.0.1:4080", "user", "pass", 5*time.Second, nil, nil, 0, nil)
+	s, err := NewHTTPProxyServer(HTTPProxyOptions{
+		ListenAddr: "127.0.0.1:0",
+		SocksAddr:  "127.0.0.1:4080",
+		Username:   "user",
+		Password:   "pass",
+		Timeout:    5 * time.Second,
+	})
 	if err != nil {
 		t.Fatalf("NewHTTPProxyServer: %v", err)
 	}

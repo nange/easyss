@@ -5,6 +5,7 @@ import (
 	"math/rand/v2"
 	"sync"
 
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/stats"
 )
@@ -45,7 +46,57 @@ type Config struct {
 	Cover         CoverConfig
 }
 
-type ShaperFunc func(frames []protocol.Frame) []protocol.Frame
+// maxBatchWindowMS bounds the batching delay, and the cover-traffic knobs
+// below have no config field: they are fixed properties of the camouflage
+// layer, defined here as the single source of truth.
+const (
+	maxBatchWindowMS = 10
+
+	defaultCoverIdleTimeoutMS = 300
+	defaultCoverMinSize       = 128
+	defaultCoverMaxSize       = 1500
+)
+
+// Normalize applies the defaults and bounds every construction path shares, so
+// the effective shaper settings have exactly one definition instead of being
+// re-clamped by the client config layer, the server handler and New.
+func (c Config) Normalize() Config {
+	if c.BatchWindowMS <= 0 {
+		c.BatchWindowMS = sharedconfig.DefaultBatchWindowMS
+	}
+	if c.BatchWindowMS > maxBatchWindowMS {
+		c.BatchWindowMS = maxBatchWindowMS
+	}
+
+	if c.Cover.BudgetRatio <= 0 || c.Cover.BudgetRatio > 1 {
+		c.Cover.BudgetRatio = sharedconfig.DefaultCoverBudgetRatio
+	}
+	if c.Cover.BudgetCap <= 0 {
+		c.Cover.BudgetCap = sharedconfig.DefaultCoverBudgetCap
+	}
+	if c.Cover.IdleTimeout <= 0 {
+		c.Cover.IdleTimeout = defaultCoverIdleTimeoutMS
+	}
+	if c.Cover.MinSize <= 0 {
+		c.Cover.MinSize = defaultCoverMinSize
+	}
+	if c.Cover.MaxSize <= 0 {
+		c.Cover.MaxSize = defaultCoverMaxSize
+	}
+	// Clamp to the wire format: Frame.Length is uint16 and cover payloads come
+	// from the bytes pool, so an oversized value would corrupt the record
+	// stream. A misconfigured budget cap must not be able to do that.
+	if c.Cover.MinSize > protocol.MaxUDPDataSize {
+		c.Cover.MinSize = protocol.MaxUDPDataSize
+	}
+	if c.Cover.MaxSize > protocol.MaxUDPDataSize {
+		c.Cover.MaxSize = protocol.MaxUDPDataSize
+	}
+	if c.Cover.MaxSize < c.Cover.MinSize {
+		c.Cover.MaxSize = c.Cover.MinSize
+	}
+	return c
+}
 
 // BuildPaddingFrame returns a single PADDING frame suitable for appending to
 // the current plaintext buffer. The padding size is derived from totalSize

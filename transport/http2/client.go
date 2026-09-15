@@ -28,11 +28,11 @@ import (
 // to its triggering requests without unbounded memory growth.
 const maxGrowEvents = 16
 
-// HTTP2Transport is a facade over the HTTP/2 client machinery: streams are
+// http2Transport is a facade over the HTTP/2 client machinery: streams are
 // mapped onto connections by slotScheduler, and the per-connection state
 // (degradation, rotation) is driven by slotLifecycle. This type only wires
 // the two together and speaks HTTP.
-type HTTP2Transport struct {
+type http2Transport struct {
 	sched     *slotScheduler
 	lifecycle *slotLifecycle
 
@@ -69,7 +69,14 @@ type Config struct {
 	ProbeToken string
 }
 
-func New(cfg Config) (*HTTP2Transport, error) {
+// New builds the transport. The returned error is contractual: a nil TLSConfig
+// cannot be dialed (newSlot clones it), so it is rejected here instead of
+// panicking on the first Open.
+func New(cfg Config) (transport.Transport, error) {
+	if cfg.TLSConfig == nil {
+		return nil, errors.New("http2: TLSConfig is required")
+	}
+
 	maxSlots := cfg.MaxSlotCount
 	if maxSlots < 1 {
 		maxSlots = 6
@@ -136,7 +143,7 @@ func New(cfg Config) (*HTTP2Transport, error) {
 		lc.probeFunc = prober.probe
 	}
 
-	tr := &HTTP2Transport{
+	tr := &http2Transport{
 		sched:     sched,
 		lifecycle: lc,
 		serverURL: cfg.ServerURL,
@@ -219,7 +226,7 @@ func defaultDialContext(ctx context.Context, network, addr string) (net.Conn, er
 	return dialer.DialContext(ctx, network, addr)
 }
 
-func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (transport.Stream, error) {
+func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (transport.Stream, error) {
 	if t.ctx.Err() != nil {
 		return nil, t.ctx.Err()
 	}
@@ -290,7 +297,7 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 
 	respCh := make(chan roundTripResult, 1)
 
-	var stream *HTTP2Stream
+	var stream *http2Stream
 	doneOnce := sync.OnceFunc(func() {
 		// Release the slot's heavy mark exactly once (doneOnce runs at most
 		// a single time), so the slot becomes eligible for new streams again.
@@ -300,7 +307,7 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 		cancel()
 	})
 
-	stream = &HTTP2Stream{
+	stream = &http2Stream{
 		w:         pw,
 		respCh:    respCh,
 		cancel:    cancel,
@@ -345,7 +352,7 @@ func (t *HTTP2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 // (a server without /v3/probe) or a rejection all prove the path works; only
 // a probe that cannot confirm the connection is reported, and the caller logs
 // and swallows it: startup must never depend on warm-up.
-func (t *HTTP2Transport) WarmUp(ctx context.Context) error {
+func (t *http2Transport) WarmUp(ctx context.Context) error {
 	if t.lifecycle.probeFunc == nil {
 		return errors.New("probe not configured")
 	}
@@ -365,7 +372,7 @@ func (t *HTTP2Transport) WarmUp(ctx context.Context) error {
 // probe that does not confirm the connection is reported as
 // errProbeNotConfirmed wrapped with the pool name, so the caller can tell
 // which traffic class stayed cold.
-func (t *HTTP2Transport) warmPool(ctx context.Context, highPriority bool) error {
+func (t *http2Transport) warmPool(ctx context.Context, highPriority bool) error {
 	t.sched.grow(highPriority)
 	t.sched.mu.RLock()
 	slot := t.sched.pick(highPriority)
@@ -403,7 +410,7 @@ func protoOfEndpoint(endpoint string) string {
 // recordGrowEvent appends one slot-growth event to the bounded ring,
 // dropping the oldest beyond maxGrowEvents. The ring is snapshotted
 // newest-first into TransportStats.GrowEvents by Stats.
-func (t *HTTP2Transport) recordGrowEvent(pool string, live int32, req transport.OpenRequest) {
+func (t *http2Transport) recordGrowEvent(pool string, live int32, req transport.OpenRequest) {
 	ev := transport.GrowEvent{
 		Time:     time.Now(),
 		Pool:     pool,
@@ -419,7 +426,7 @@ func (t *HTTP2Transport) recordGrowEvent(pool string, live int32, req transport.
 	}
 }
 
-func (t *HTTP2Transport) CloseIdle() {
+func (t *http2Transport) CloseIdle() {
 	// Close idle TCP connections on all slots of both pools. The slot array
 	// elements are swap-mutated by shrink/retire under the scheduler write
 	// lock, so read the arrays under the read lock.
@@ -437,7 +444,7 @@ func (t *HTTP2Transport) CloseIdle() {
 	t.sched.shrinkIdleLocked()
 }
 
-func (t *HTTP2Transport) Stats() transport.TransportStats {
+func (t *http2Transport) Stats() transport.TransportStats {
 	// Hold the scheduler read lock so the snapshot is consistent: shrink
 	// (swap-remove) and grow mutate pool liveCounts and the live slot
 	// ranges under the write lock, so an unlocked render could read a
@@ -558,7 +565,7 @@ func slotStatusString(pool *slotPool, live int) string {
 	return b.String()
 }
 
-func (t *HTTP2Transport) Close() error {
+func (t *http2Transport) Close() error {
 	t.cancel()
 	// Read the live slot ranges under the scheduler read lock: shrink/retire
 	// swap-remove slots under the write lock, so an unlocked iteration over
@@ -588,4 +595,4 @@ func chromeUserAgent() string {
 	}
 }
 
-var _ transport.Transport = (*HTTP2Transport)(nil)
+var _ transport.Transport = (*http2Transport)(nil)

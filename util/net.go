@@ -2,7 +2,6 @@ package util
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"time"
 )
@@ -134,23 +133,4 @@ func IsIPV6(ip string) bool {
 func IsIPV6Addr(addr string) bool {
 	host, _, _ := net.SplitHostPort(addr)
 	return IsIPV6(host)
-}
-
-func GetInterfaceIP(name string) (string, error) {
-	iface, err := net.InterfaceByName(name)
-	if err != nil {
-		return "", err
-	}
-	addrs, err := iface.Addrs()
-	if err != nil {
-		return "", err
-	}
-	for _, addr := range addrs {
-		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ip4 := ipnet.IP.To4(); ip4 != nil {
-				return ip4.String(), nil
-			}
-		}
-	}
-	return "", fmt.Errorf("no ipv4 address found for interface %s", name)
 }

@@ -60,7 +60,7 @@ type TransportConfig struct {
 	ConnLifetimeSec   int     `json:"conn_lifetime_sec"` // max connection lifetime in seconds, 0 uses default
 	ConnMaxBytes      int64   `json:"conn_max_bytes"`    // max bytes carried by a connection in either direction, 0 uses default
 	// DisableWarmUp disables the background warm-up of the transport's
-	// connection pools that runner.Core.StartWarmUp performs once the core
+	// connection pools that runner.Run dispatches once the core
 	// is up (see config.WarmUpTimeout / config.WarmUpStartDelay for the
 	// values it uses). false is the zero value, so a config file written
 	// before this option existed keeps the warm-up enabled.
@@ -213,18 +213,9 @@ func applyDefaults(c *ClientConfig) {
 	if c.Transport.ConnMaxBytes <= 0 {
 		c.Transport.ConnMaxBytes = config.DefaultConnMaxBytes
 	}
-	if c.Shaper.BatchWindowMS <= 0 {
-		c.Shaper.BatchWindowMS = config.DefaultBatchWindowMS
-	}
-	if c.Shaper.BatchWindowMS > 10 {
-		c.Shaper.BatchWindowMS = 10
-	}
-	if c.Shaper.CoverBudgetRatio <= 0 || c.Shaper.CoverBudgetRatio > 1 {
-		c.Shaper.CoverBudgetRatio = config.DefaultCoverBudgetRatio
-	}
-	if c.Shaper.CoverBudgetCap <= 0 {
-		c.Shaper.CoverBudgetCap = config.DefaultCoverBudgetCap
-	}
+	// The shaper settings are normalized where the shaper is built
+	// (shaper.Config.Normalize), which owns those defaults and bounds; keeping
+	// a second copy of them here is what let the two drift apart.
 	if c.Routing.ProxyRule == "" {
 		c.Routing.ProxyRule = config.DefaultProxyRule
 	}

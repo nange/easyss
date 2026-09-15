@@ -14,7 +14,7 @@ import (
 // requests to the server's /v3/probe endpoint — the same request the
 // degradation detector issues, visible only to the user's own server.
 //
-// The caller runs this in the background (runner.Core.StartWarmUp), so there
+// The caller runs this in the background (dispatched by runner.Run), so there
 // is no jitter and no startup blocking here: timeout bounds the probe phase
 // and callers pass config.WarmUpTimeout. Best-effort by contract: the failure
 // is logged here and returned so the caller can decide what to do with it,

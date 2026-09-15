@@ -253,14 +253,9 @@ func TestRouter_ShouldIPV6Disable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := &Router{
-				cfg: Config{
-					IPV6Rule:       tt.ipv6Rule,
-					IPV6NetWorking: tt.ipv6Networking,
-					ServerIPV6:     tt.serverIPV6,
-				},
-			}
+			r := &Router{}
 			r.ipv6Rule.Store(int32(tt.ipv6Rule))
+			r.SetIPV6Info(tt.ipv6Networking, tt.serverIPV6)
 
 			got := r.ShouldIPV6Disable()
 			if got != tt.want {
@@ -284,14 +279,22 @@ func TestRouter_SetIPV6Info(t *testing.T) {
 	r := &Router{}
 	r.SetIPV6Info(true, "2001:db8::1")
 
-	if !r.cfg.IPV6NetWorking {
-		t.Error("IPV6NetWorking should be true")
-	}
-	if r.cfg.ServerIPV6 != "2001:db8::1" {
-		t.Errorf("ServerIPV6 = %q", r.cfg.ServerIPV6)
+	if !r.ipv6Networking.Load() {
+		t.Error("ipv6Networking should be true")
 	}
 	if r.ServerIPV6() != "2001:db8::1" {
 		t.Errorf("ServerIPV6() = %q", r.ServerIPV6())
+	}
+
+	// Auto rule: IPv6 is only enabled while both networking and the server
+	// address are available.
+	r.ipv6Rule.Store(int32(IPV6RuleAuto))
+	if r.ShouldIPV6Disable() {
+		t.Error("IPV6RuleAuto with networking and server ipv6 should not disable ipv6")
+	}
+	r.SetIPV6Info(true, "")
+	if !r.ShouldIPV6Disable() {
+		t.Error("IPV6RuleAuto without a server ipv6 should disable ipv6")
 	}
 }
 

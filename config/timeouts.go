@@ -34,3 +34,31 @@ func DialTimeout(base time.Duration) time.Duration {
 	d := min(max(base/3, 3*time.Second), 15*time.Second)
 	return d
 }
+
+// Timeouts is the complete derived timeout set a core needs. Callers build it
+// once from the configured base timeout and pass it down, instead of each
+// layer recomputing (or worse, hand-rolling) one of the values — the client
+// used to pass timeout/3 as the DNS response timeout while the server derived
+// its dial timeout through DialTimeout.
+type Timeouts struct {
+	Base       time.Duration // user-configured base timeout
+	Dial       time.Duration // outbound dial (base/3, clamped to [3s,15s])
+	StreamIdle time.Duration // TCP stream idle (4 x base)
+	UDPIdle    time.Duration // UDP session idle (2 x base)
+	DNSResp    time.Duration // DNS response read-idle (base/3, unclamped)
+}
+
+// NewTimeouts derives the whole set from the user-configured base timeout
+// (the default is applied when base <= 0).
+func NewTimeouts(base time.Duration) Timeouts {
+	if base <= 0 {
+		base = time.Duration(DefaultTimeout) * time.Second
+	}
+	return Timeouts{
+		Base:       base,
+		Dial:       DialTimeout(base),
+		StreamIdle: StreamIdleTimeout(base),
+		UDPIdle:    UDPIdleTimeout(base),
+		DNSResp:    base / 3,
+	}
+}

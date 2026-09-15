@@ -15,7 +15,6 @@ import (
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/relay"
-	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/txthinking/socks5"
 	"golang.org/x/sync/singleflight"
@@ -71,29 +70,56 @@ type directUDPConn struct {
 	lastSeen atomic.Int64 // UnixNano, refreshed on every datagram written
 }
 
-func NewSocks5Server(listenAddr, username, password string, handler *StreamHandler, rt *router.Router, serverDomain string, method protocol.Method, disableQUIC bool, dialTimeout, udpIdleTimeout, dnsRespTimeout, streamIdleTimeout time.Duration, directDialContext func(context.Context, string, string) (net.Conn, error)) (*Socks5Server, error) {
+// Socks5Options configures NewSocks5Server. It replaces a positional parameter
+// list that had grown to fourteen arguments, where four durations derived from
+// one base timeout could be transposed silently.
+type Socks5Options struct {
+	ListenAddr string
+	Username   string
+	Password   string
+	Handler    *StreamHandler
+	Router     *router.Router
+	// ServerDomain is the proxy server's own hostname ("" when it is a literal
+	// IP): DNS queries for it must never take the proxied path.
+	ServerDomain string
+	Method       protocol.Method
+	// DisableQUIC is set when QUIC (HTTP/3) must be blocked for direct hosts.
+	DisableQUIC bool
+	// Timeouts carries every derived duration (dial, TCP/UDP idle, DNS
+	// response). See config.NewTimeouts.
+	Timeouts config.Timeouts
+	// DirectDialContext opens direct connections; nil uses a plain net.Dialer.
+	DirectDialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+}
+
+func NewSocks5Server(opts Socks5Options) (*Socks5Server, error) {
+	dialTimeout := opts.Timeouts.Dial
 	if dialTimeout <= 0 {
 		dialTimeout = config.DefaultDialTimeout
 	}
+	udpIdleTimeout := opts.Timeouts.UDPIdle
 	if udpIdleTimeout <= 0 {
 		udpIdleTimeout = config.DefaultUDPIdleTimeout
 	}
+	streamIdleTimeout := opts.Timeouts.StreamIdle
 	if streamIdleTimeout <= 0 {
 		streamIdleTimeout = config.DefaultStreamIdleTimeout
 	}
+	directDialContext := opts.DirectDialContext
 	if directDialContext == nil {
 		directDialContext = defaultDirectDialContext
 	}
+	serverDomain := opts.ServerDomain
 	if net.ParseIP(serverDomain) != nil {
 		serverDomain = ""
 	}
 	s := &Socks5Server{
-		handler:           handler,
-		router:            rt,
+		handler:           opts.Handler,
+		router:            opts.Router,
 		dnsCache:          easydns.NewCache(serverDomain),
 		serverDomain:      serverDomain,
-		method:            method,
-		disableQUIC:       disableQUIC,
+		method:            opts.Method,
+		disableQUIC:       opts.DisableQUIC,
 		directDialContext: directDialContext,
 		dialTimeout:       dialTimeout,
 		streamIdleTimeout: streamIdleTimeout,
@@ -101,9 +127,9 @@ func NewSocks5Server(listenAddr, username, password string, handler *StreamHandl
 		directUDP:         make(map[string]*directUDPConn),
 		quit:              make(chan struct{}),
 		udpIdleTimeout:    udpIdleTimeout,
-		dnsRespTimeout:    dnsRespTimeout,
+		dnsRespTimeout:    opts.Timeouts.DNSResp,
 	}
-	srv, err := socks5.NewClassicServer(listenAddr, "127.0.0.1", username, password, 0, 0)
+	srv, err := socks5.NewClassicServer(opts.ListenAddr, "127.0.0.1", opts.Username, opts.Password, 0, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -265,14 +291,14 @@ func (s *Socks5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 		return s.replyError(c, r, socks5.RepServerFailure)
 	}
 
-	if s.router.ShouldIPV6Disable() && util.IsIPV6(host) {
+	cls := s.router.ClassifyHost(host)
+	if cls.IPV6Rejected {
 		log.Warn("[SOCKS5] ipv6 target rejected, ipv6 disabled", "target", target)
 		return s.replyError(c, r, socks5.RepNotAllowed)
 	}
 
 	local := c.RemoteAddr().String()
-	rule := s.router.MatchHostRule(host)
-	switch rule {
+	switch cls.Rule {
 	case router.HostRuleBlock:
 		log.Info("[TCP_BLOCK] blocked", "host", host, "target", target, "local", local)
 		return s.replyError(c, r, socks5.RepNotAllowed)
@@ -372,19 +398,26 @@ func (s *Socks5Server) replyError(c net.Conn, r *socks5.Request, rep byte) error
 // user-configured base timeout (config.StreamIdleTimeout), keeping the direct
 // path consistent with the proxied path's stream idle timeout.
 func relayTCP(dst, src net.Conn, idleTimeout time.Duration) {
-	result := relay.Bidirectional(idleTimeout, func() {
-		_ = dst.Close()
-		_ = src.Close()
-	},
+	result := relay.Bidirectional(idleTimeout, relay.CloseBoth(dst, src),
 		func(signalActivity func()) error { return copyHalfClose(dst, src, signalActivity) },
 		func(signalActivity func()) error { return copyHalfClose(src, dst, signalActivity) },
 	)
-	if result.Err != nil && !result.TimedOut &&
-		!errors.Is(result.Err, io.EOF) &&
-		!errors.Is(result.Err, io.ErrClosedPipe) &&
-		!isLocalConnClosedError(result.Err) {
-		log.Debug("[TCP_DIRECT] relay copy error", "err", result.Err)
+	logRelayResult("[TCP_DIRECT]", "", result)
+}
+
+// logRelayResult reports a finished relay at the level its outcome deserves:
+// silent for expected teardown, Debug for a timeout or a failed copy. Shared
+// by the direct and proxied TCP paths so the same condition cannot be reported
+// at different levels (the direct path used to swallow idle timeouts).
+func logRelayResult(prefix, target string, result relay.Result) {
+	if result.Err == nil || errors.Is(result.Err, io.EOF) || errors.Is(result.Err, io.ErrClosedPipe) || isLocalConnClosedError(result.Err) {
+		return
 	}
+	if result.TimedOut {
+		log.Debug(prefix+" stream idle timeout", "target", target, "err", result.Err)
+		return
+	}
+	log.Debug(prefix+" relay copy error", "target", target, "err", result.Err)
 }
 
 // copyHalfClose streams src to dst, signalling activity on every read and

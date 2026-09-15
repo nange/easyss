@@ -7,6 +7,21 @@ import (
 	"time"
 )
 
+// CloseBoth returns the onClose callback the callers of Bidirectional need: it
+// closes every non-nil closer once per invocation. The relay invokes onClose
+// exactly once per termination, and all three call sites (client proxied path,
+// client direct path, server TCP handler) close the same pair of connections,
+// so the closure is defined once here instead of being retyped.
+func CloseBoth(closers ...io.Closer) func() {
+	return func() {
+		for _, c := range closers {
+			if c != nil {
+				_ = c.Close()
+			}
+		}
+	}
+}
+
 func resetTimer(t *time.Timer, d time.Duration) {
 	if !t.Stop() {
 		select {
@@ -19,7 +34,6 @@ func resetTimer(t *time.Timer, d time.Duration) {
 
 type Result struct {
 	Err      error
-	IdleMsg  string
 	TimedOut bool
 	// Drained reports that the relay was terminated early by the drain
 	// mechanism (BidirectionalWithDrain): the stream sat idle beyond
@@ -127,7 +141,6 @@ func bidirectional(idleTimeout time.Duration, drainWhen func() bool, drainIdle t
 				}
 				return Result{
 					Err:      fmt.Errorf("stream drained: idle for %v while the slot is due for eviction", drainIdle),
-					IdleMsg:  fmt.Sprintf("drained after %v idle (slot due for eviction)", drainIdle),
 					TimedOut: true,
 					Drained:  true,
 				}
@@ -145,7 +158,6 @@ func bidirectional(idleTimeout time.Duration, drainWhen func() bool, drainIdle t
 			}
 			return Result{
 				Err:      fmt.Errorf("relay idle timeout after %v", idleTimeout),
-				IdleMsg:  fmt.Sprintf("idle timeout after %v", idleTimeout),
 				TimedOut: true,
 			}
 		}

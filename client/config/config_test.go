@@ -404,8 +404,8 @@ func TestOutboundProtoToProtocol(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{"", "", false},
-		{"native", "", false},
+		{"", "h2", false},
+		{"native", "h2", false},
 		{"h2", "h2", false},
 		{"invalid", "", true},
 		{"H2", "", true}, // 大小写敏感
@@ -413,7 +413,7 @@ func TestOutboundProtoToProtocol(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.proto, func(t *testing.T) {
-			got, err := outboundProtoToProtocol(tt.proto)
+			got, err := OutboundProtoToProtocol(tt.proto)
 			if tt.wantErr {
 				if err == nil {
 					t.Error("expected error, got nil")
@@ -580,8 +580,10 @@ func TestApplyDefaults(t *testing.T) {
 		if cfg.Transport.ConnMaxBytes != config.DefaultConnMaxBytes {
 			t.Errorf("ConnMaxBytes = %d", cfg.Transport.ConnMaxBytes)
 		}
-		if cfg.Shaper.BatchWindowMS != config.DefaultBatchWindowMS {
-			t.Errorf("BatchWindowMS = %d", cfg.Shaper.BatchWindowMS)
+		// Shaper values are left raw here: shaper.Config.Normalize owns their
+		// defaults and bounds (pinned in shaper/shaper_test.go).
+		if cfg.Shaper.BatchWindowMS != 0 {
+			t.Errorf("BatchWindowMS = %d, want 0 (normalized at the shaper)", cfg.Shaper.BatchWindowMS)
 		}
 		if cfg.Routing.ProxyRule != "auto" {
 			t.Errorf("ProxyRule = %q", cfg.Routing.ProxyRule)
@@ -602,11 +604,11 @@ func TestApplyDefaults(t *testing.T) {
 		}
 	})
 
-	t.Run("BatchWindowMS 上限", func(t *testing.T) {
+	t.Run("Shaper 取值原样保留，归一化在 shaper 层", func(t *testing.T) {
 		cfg := &ClientConfig{Shaper: ShaperConfig{BatchWindowMS: 100}}
 		applyDefaults(cfg)
-		if cfg.Shaper.BatchWindowMS != 10 {
-			t.Errorf("BatchWindowMS = %d, want 10 (capped)", cfg.Shaper.BatchWindowMS)
+		if cfg.Shaper.BatchWindowMS != 100 {
+			t.Errorf("BatchWindowMS = %d, want 100 (untouched)", cfg.Shaper.BatchWindowMS)
 		}
 	})
 

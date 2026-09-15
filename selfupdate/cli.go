@@ -12,28 +12,28 @@ import (
 	"github.com/nange/easyss/v3/version"
 )
 
-// ErrUpToDate reports that the local build already matches the latest
+// errUpToDate reports that the local build already matches the latest
 // release. runCheck returns it when no update is needed.
-var ErrUpToDate = errors.New("already up to date")
+var errUpToDate = errors.New("already up to date")
 
-// CheckCLI checks the latest published release for the given product and
-// returns it when a newer version is available, or ErrUpToDate when the
+// checkCLI checks the latest published release for the given product and
+// returns it when a newer version is available, or errUpToDate when the
 // local build is already up to date. It never downloads anything.
 // proxyPort > 0 routes the fetches through the local easyss HTTP proxy at
 // 127.0.0.1:<proxyPort>; otherwise a direct connection is used.
-func CheckCLI(ctx context.Context, proxyPort int, product Product) (*Release, error) {
+func checkCLI(ctx context.Context, proxyPort int, product Product) (*Release, error) {
 	return runCheck(ctx, NewClient(proxyPort), version.Tag())
 }
 
-// RunCLI performs a one-shot self-update for the given product from the
+// runCLI performs a one-shot self-update for the given product from the
 // command line: it checks the latest release and, when a newer one exists,
 // downloads the release asset and replaces the running binary in place. It
 // never restarts the process — the caller exits afterwards so the user or
-// service manager starts the new binary. It returns ErrUpToDate when the
+// service manager starts the new binary. It returns errUpToDate when the
 // local build is already the latest release. proxyPort > 0 routes the
 // fetches through the local easyss HTTP proxy at 127.0.0.1:<proxyPort>;
 // otherwise a direct connection is used.
-func RunCLI(ctx context.Context, proxyPort int, product Product) error {
+func runCLI(ctx context.Context, proxyPort int, product Product) error {
 	c := NewClient(proxyPort)
 	rel, err := runCheck(ctx, c, version.Tag())
 	if err != nil {
@@ -76,9 +76,9 @@ func RunCLICommand(args []string, product Product) int {
 	bin := filepath.Base(os.Args[0])
 
 	if checkOnly {
-		rel, err := CheckCLI(ctx, proxyPort, product)
+		rel, err := checkCLI(ctx, proxyPort, product)
 		if err != nil {
-			if errors.Is(err, ErrUpToDate) {
+			if errors.Is(err, errUpToDate) {
 				fmt.Println("已是最新版本:", version.Tag())
 				return 0
 			}
@@ -90,8 +90,8 @@ func RunCLICommand(args []string, product Product) int {
 		return 0
 	}
 
-	if err := RunCLI(ctx, proxyPort, product); err != nil {
-		if errors.Is(err, ErrUpToDate) {
+	if err := runCLI(ctx, proxyPort, product); err != nil {
+		if errors.Is(err, errUpToDate) {
 			fmt.Println("已是最新版本:", version.Tag())
 			return 0
 		}
@@ -113,7 +113,7 @@ func runCheck(ctx context.Context, c *Client, currentTag string) (*Release, erro
 		return nil, fmt.Errorf("check latest release: %w", err)
 	}
 	if !HasNewVersion(currentTag, rel.TagName) {
-		return nil, ErrUpToDate
+		return nil, errUpToDate
 	}
 	return rel, nil
 }

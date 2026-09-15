@@ -17,7 +17,6 @@ import (
 	"github.com/nange/easyss/v3/client/router"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
-	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/transport"
 	"github.com/nange/easyss/v3/transport/http2"
 	"github.com/nange/easyss/v3/util"
@@ -27,8 +26,7 @@ import (
 type Client struct {
 	cfg           *config.ClientConfig
 	router        *router.Router
-	transport     *http2.HTTP2Transport
-	shaperCfg     shaper.Config
+	transport     transport.Transport
 	masterKey     []byte
 	dialer        atomic.Pointer[dialer.Dialer]
 	bound         atomic.Value // boundIface: the interface the direct dialer is bound to
@@ -275,18 +273,9 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 
 	tlsCfg := cfg.UTLSConfig()
 
-	shaperCfg := shaper.Config{
-		BatchWindowMS: cfg.Shaper.BatchWindowMS,
-		Cover: shaper.CoverConfig{
-			BudgetRatio: cfg.Shaper.CoverBudgetRatio,
-			BudgetCap:   cfg.Shaper.CoverBudgetCap,
-		},
-	}
-
 	client := &Client{
 		cfg:           cfg,
 		router:        rt,
-		shaperCfg:     shaperCfg,
 		masterKey:     masterKey,
 		fileWarn:      rt.CustomFileError(),
 		closeIdleDone: make(chan struct{}),
@@ -559,10 +548,6 @@ func (c *Client) MasterKey() []byte {
 	return c.masterKey
 }
 
-func (c *Client) ShaperConfig() shaper.Config {
-	return c.shaperCfg
-}
-
 func (c *Client) Config() *config.ClientConfig {
 	return c.cfg
 }
@@ -595,19 +580,4 @@ func (c *Client) SetProxyRule(rule string) {
 	pr := router.ParseProxyRule(rule)
 	c.cfg.Routing.ProxyRule = rule
 	c.router.SetProxyRule(pr)
-}
-
-// DirectDialer returns the dialer that binds to the physical network
-// interface, used to bypass TUN when TUN mode is active.
-func (c *Client) DirectDialer() *dialer.Dialer {
-	return c.dialer.Load()
-}
-
-// SetDirectDialer replaces the transport's direct dialer. Used after
-// a server switch to preserve the original dialer that was created
-// before TUN routes were installed. The recorded binding is reset so the
-// next refresh re-detects the current default interface.
-func (c *Client) SetDirectDialer(d *dialer.Dialer) {
-	c.dialer.Store(d)
-	c.bound.Store(boundIface{})
 }

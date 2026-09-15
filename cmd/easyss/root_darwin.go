@@ -9,56 +9,15 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/nange/easyss/v3/log"
-	"github.com/nange/easyss/v3/util"
 	"golang.org/x/sys/unix"
 )
 
 func IsRoot() bool {
 	return os.Geteuid() == 0
-}
-
-func RunMeElevated(extraArgs ...string) error {
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-
-	// Resolve config file to absolute path so the elevated process can find it.
-	resolveConfigArg(&extraArgs)
-
-	var argsBuilder strings.Builder
-	for _, arg := range os.Args[1:] {
-		fmt.Fprintf(&argsBuilder, "'%s' ", strings.ReplaceAll(arg, "'", "'\\''"))
-	}
-	for _, arg := range extraArgs {
-		fmt.Fprintf(&argsBuilder, "'%s' ", strings.ReplaceAll(arg, "'", "'\\''"))
-	}
-
-	cmdStr := fmt.Sprintf("'%s' %s &>/dev/null &", exe, argsBuilder.String())
-
-	scriptCmd := strings.ReplaceAll(cmdStr, "\"", "\\\"")
-	script := fmt.Sprintf("do shell script \"%s\" with administrator privileges", scriptCmd)
-
-	_, err = util.Command("osascript", "-e", script)
-	return err
-}
-
-// resolveConfigArg converts any relative -c path in extraArgs to absolute.
-func resolveConfigArg(extraArgs *[]string) {
-	args := *extraArgs
-	for i := 0; i < len(args)-1; i++ {
-		if args[i] == "-c" && !filepath.IsAbs(args[i+1]) {
-			if abs, err := filepath.Abs(args[i+1]); err == nil {
-				args[i+1] = abs
-			}
-		}
-	}
-	*extraArgs = args
 }
 
 // SpawnTunHelper launches a long-running elevated TUN helper process.
@@ -87,22 +46,13 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 
 	// Open the FIFO for writing in a goroutine (blocks until the helper opens
 	// it for reading via stdin redirection).
-	type fifoResult struct {
-		f   *os.File
-		err error
-	}
-	fifoCh := make(chan fifoResult, 1)
-	go func() {
-		f, err := os.OpenFile(fifoPath, os.O_WRONLY, 0)
-		fifoCh <- fifoResult{f, err}
-	}()
+	fifoCh := openFifoForWriteAsync(fifoPath)
 
 	// Create the Unix socket for fd passing. Clean stale socket first.
 	os.Remove(fdSocketPath) //nolint:errcheck
 	fdListener, err := net.Listen("unix", fdSocketPath)
 	if err != nil {
-		// Clean up the FIFO on failure. The goroutine will unblock when we
-		// remove the FIFO (open returns error).
+		releaseFifoOpen(fifoPath, fifoCh)
 		os.Remove(fifoPath) //nolint:errcheck
 		return nil, nil, fmt.Errorf("listen on %s: %w", fdSocketPath, err)
 	}
@@ -142,7 +92,8 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 	osascriptCmd.Stdout = &osaOut
 	osascriptCmd.Stderr = &osaErr
 	if err := osascriptCmd.Start(); err != nil {
-		fdListener.Close()      //nolint:errcheck
+		fdListener.Close() //nolint:errcheck
+		releaseFifoOpen(fifoPath, fifoCh)
 		os.Remove(fifoPath)     //nolint:errcheck
 		os.Remove(fdSocketPath) //nolint:errcheck
 		return nil, nil, fmt.Errorf("start osascript: %w", err)
@@ -182,7 +133,8 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 			}
 			// osascript exited with an error before the helper started
 			// (e.g. user cancelled the admin dialog).
-			fdListener.Close()      //nolint:errcheck
+			fdListener.Close() //nolint:errcheck
+			releaseFifoOpen(fifoPath, fifoCh)
 			os.Remove(fifoPath)     //nolint:errcheck
 			os.Remove(fdSocketPath) //nolint:errcheck
 			detail := strings.TrimSpace(osaErr.String())
@@ -199,8 +151,9 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 			// spawn a helper against sockets that are about to be removed.
 			osascriptCmd.Process.Kill() //nolint:errcheck
 			fdListener.Close()          //nolint:errcheck
-			os.Remove(fifoPath)         //nolint:errcheck
-			os.Remove(fdSocketPath)     //nolint:errcheck
+			releaseFifoOpen(fifoPath, fifoCh)
+			os.Remove(fifoPath)     //nolint:errcheck
+			os.Remove(fdSocketPath) //nolint:errcheck
 			return nil, nil, fmt.Errorf("timeout waiting for tun helper (user may have cancelled)")
 		}
 	}

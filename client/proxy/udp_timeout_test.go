@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/transport"
 )
@@ -59,7 +60,17 @@ const testDNSRespTimeout = 200 * time.Millisecond
 func newTimeoutTestServer(t *testing.T, streams []transport.Stream) *Socks5Server {
 	t.Helper()
 	h := newTestStreamHandler(&mockTransport{streams: streams})
-	srv, err := NewSocks5Server("127.0.0.1:0", "", "", h, nil, "", protocol.MethodAES256GCM, true, 10*time.Second, 30*time.Second, testDNSRespTimeout, 0, nil)
+	srv, err := NewSocks5Server(Socks5Options{
+		ListenAddr: "127.0.0.1:0",
+		Handler:    h,
+		Method:     protocol.MethodAES256GCM,
+		Timeouts: config.Timeouts{
+			Base:       30 * time.Second,
+			Dial:       10 * time.Second,
+			StreamIdle: 30 * time.Second,
+			DNSResp:    testDNSRespTimeout,
+		},
+	})
 	if err != nil {
 		t.Fatalf("NewSocks5Server: %v", err)
 	}

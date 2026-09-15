@@ -99,15 +99,16 @@ func TestTCPHandler_CancelReadOnIdleTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	aad := crypto.BuildAAD(sharedconfig.EndpointTCP, make([]byte, 16), "s2c", "session", protocol.MethodAES256GCM)
-	enc, counter, err := sk.Encryptor("s2c", "session", protocol.MethodAES256GCM)
+	pr, pw := io.Pipe()
+	dr, err := sk.NewReader(pr, crypto.DirS2C, protocol.MethodAES256GCM)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	pr, pw := io.Pipe()
-	dr := crypto.NewDecryptedReader(pr, aad, enc, counter)
-	s2c := shaper.New(crypto.NewRecordWriter(io.Discard, enc, counter, aad), shaper.Config{})
+	s2cWriter, err := sk.NewWriter(io.Discard, crypto.DirS2C, protocol.MethodAES256GCM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2c := shaper.New(s2cWriter, shaper.Config{})
 
 	var cancelled atomic.Bool
 	start := time.Now()
