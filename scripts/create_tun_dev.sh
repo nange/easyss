@@ -8,26 +8,67 @@ tun_gw_v6=$6
 server_ip_v6=$7
 local_gateway_v6=$8
 
-# run_idem runs an idempotent ip command, tolerating the errors that
-# re-applying an already configured address produces (this script is re-run by
-# the TUN helper keep-alive after sleep/wake; replace/route replace are
-# no-ops that exit 0). Any other failure is echoed to stderr instead of being
-# swallowed silently: a rejected route (e.g. a non-canonical prefix) used to
-# leave the tunnel half configured with no trace at all.
-run_idem() {
-  local out
-  out="$("$@" 2>&1)" || case "$out" in
-    *"File exists"* | *"already assigned"*) ;;
-    *) echo "[create_tun_dev] $*: $out" >&2 ;;
+# Exit code contract: the caller (cmd/easyss/tun_helper_linux.go, and
+# client/tun/tun.go on the no-helper path) keeps the TUN routes installed only
+# when this script exits 0. Every command that is not allowed to fail records
+# its step name in FAIL below, and the script ends with an explicit exit.
+#
+# The failure steps are reported instead of swallowed because the script
+# installs the address first and the routes after: a script that reports
+# success after a rejected "ip route replace" leaves a half configured tunnel
+# (traffic enters a device that reads nothing, or leaks outside the tunnel)
+# while the tray claims system-wide traffic is on. The same contract is what
+# create_tun_dev_windows.bat implements for cmd.exe, which propagates a
+# missing "exit /b" as success.
+#
+# This script is re-run by the TUN helper keep-alive after sleep/wake and by
+# every start, so re-applying already configured state must stay silent and
+# successful: only the "already configured" errors of an idempotent command
+# are tolerated (see run_idem / is_benign), a genuine rejection is not.
+set -o pipefail
+
+FAIL=
+
+# is_benign reports whether the output of a failed command describes state
+# that is already in place, i.e. an error a re-run legitimately produces.
+# "File exists" is iproute2's "RTNETLINK answers: File exists" for an address
+# or route that is already configured, which "ip addr replace" and "ip route
+# replace" do not produce but a device that survived a crashed session can.
+is_benign() {
+  case "$1" in
+    *"File exists"* | *"already assigned"*) return 0 ;;
+    *) return 1 ;;
   esac
 }
 
-run_idem ip addr replace "$tun_ip_sub" dev "$tun_device"  # add ipv4 addr to device
+# run_idem STEP COMMAND... runs an idempotent ip command. A tolerated error
+# stays silent (the keep-alive re-runs this script and must not report the
+# same non-error every 10s); any other failure is echoed to stderr and
+# recorded in FAIL, naming the step, so the caller learns the tunnel is only
+# partly configured. FAIL belongs to the caller's shell: run_idem runs in it,
+# not in a subshell, and the function deliberately does not declare it local.
+run_idem() {
+  local step=$1 out
+  shift
+
+  if out="$("$@" 2>&1)"; then
+    return 0
+  fi
+
+  if is_benign "$out"; then
+    return 0
+  fi
+
+  echo "[create_tun_dev] $step ($*): $out" >&2
+  FAIL="${FAIL:+$FAIL,}$step"
+}
+
+run_idem addr ip addr replace "$tun_ip_sub" dev "$tun_device"  # add ipv4 addr to device
 if [ -n "$server_ip_v6" ]; then  # check if server_ip_v6 is not empty
-  run_idem ip -6 addr replace "$tun_ip_sub_v6" dev "$tun_device"  # add ipv6 addr to device
+  run_idem v6-addr ip -6 addr replace "$tun_ip_sub_v6" dev "$tun_device"  # add ipv6 addr to device
 fi
 
-run_idem ip link set dev "$tun_device" up  # enable tun device
+run_idem link ip link set dev "$tun_device" up  # enable tun device
 
 # Route everything except 0.0.0.0/8 through the TUN device, mirroring the
 # darwin script. 0.0.0.1 (used to probe the physical default interface)
@@ -45,14 +86,14 @@ run_idem ip link set dev "$tun_device" up  # enable tun device
 # Keep every prefix canonical (aligned with its own mask): 1.0.0.0/7
 # normalizes to 0.0.0.0/7 and is rejected outright, which used to leave
 # 1.0.0.0/8 leaking outside the tunnel.
-run_idem ip route replace 1.0.0.0/8 via "$tun_gw" dev "$tun_device"
-run_idem ip route replace 2.0.0.0/7 via "$tun_gw" dev "$tun_device"
-run_idem ip route replace 4.0.0.0/6 via "$tun_gw" dev "$tun_device"
-run_idem ip route replace 8.0.0.0/5 via "$tun_gw" dev "$tun_device"
-run_idem ip route replace 16.0.0.0/4 via "$tun_gw" dev "$tun_device"
-run_idem ip route replace 32.0.0.0/3 via "$tun_gw" dev "$tun_device"
-run_idem ip route replace 64.0.0.0/2 via "$tun_gw" dev "$tun_device"
-run_idem ip route replace 128.0.0.0/1 via "$tun_gw" dev "$tun_device"
+run_idem route ip route replace 1.0.0.0/8 via "$tun_gw" dev "$tun_device"
+run_idem route ip route replace 2.0.0.0/7 via "$tun_gw" dev "$tun_device"
+run_idem route ip route replace 4.0.0.0/6 via "$tun_gw" dev "$tun_device"
+run_idem route ip route replace 8.0.0.0/5 via "$tun_gw" dev "$tun_device"
+run_idem route ip route replace 16.0.0.0/4 via "$tun_gw" dev "$tun_device"
+run_idem route ip route replace 32.0.0.0/3 via "$tun_gw" dev "$tun_device"
+run_idem route ip route replace 64.0.0.0/2 via "$tun_gw" dev "$tun_device"
+run_idem route ip route replace 128.0.0.0/1 via "$tun_gw" dev "$tun_device"
 
 # The local gateway ($local_gateway and $local_gateway_v6) is deliberately NOT
 # routed into the TUN device. A bare address is installed as a /32 host route,
@@ -69,6 +110,12 @@ run_idem ip route replace 128.0.0.0/1 via "$tun_gw" dev "$tun_device"
 
 # add ipv6 ip route
 if [ -n "$server_ip_v6" ]; then  # check if server_ip_v6 is not empty
-  run_idem ip -6 route replace ::/1 via "$tun_gw_v6" dev "$tun_device"
-  run_idem ip -6 route replace 8000::/1 via "$tun_gw_v6" dev "$tun_device"
+  run_idem v6-route ip -6 route replace ::/1 via "$tun_gw_v6" dev "$tun_device"
+  run_idem v6-route ip -6 route replace 8000::/1 via "$tun_gw_v6" dev "$tun_device"
 fi
+
+if [ -n "$FAIL" ]; then
+  echo "[create_tun_dev] failed near: $FAIL" >&2
+  exit 1
+fi
+exit 0
