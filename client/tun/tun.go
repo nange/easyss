@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
@@ -217,6 +218,17 @@ func (m *Manager) Start() error {
 
 		if err := m.createTunDevAndSetIPRoute(); err != nil {
 			stopEngine("create device failed")
+			// The platform script can fail halfway through (it installs the
+			// address first and the routes after), and the routes it already
+			// added stay in the system routing table when only the engine is
+			// stopped: Stop() below returns early because m.running is still
+			// false, so nothing else ever removes them. Left behind, they send
+			// traffic into a TUN device nothing reads from, which looks like a
+			// dead network. Deleting them is idempotent and only meaningful on
+			// the paths that just ran the create script.
+			if closeErr := m.closeTunDevAndDelIPRoute(); closeErr != nil {
+				log.Warn("[TUN] rollback routes after create failure", "err", closeErr)
+			}
 			return fmt.Errorf("tun: create device: %w", err)
 		}
 	}
@@ -365,6 +377,9 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 			return fmt.Errorf("tun: rename script: %w", err)
 		}
 		namePath = newNamePath
+		// The script reports failures with a non-zero exit code (see the
+		// exit code contract in create_tun_dev_windows.bat); its output is
+		// part of the returned error.
 		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device,
 			d.TunIP, d.TunGW, d.TunMask, d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6); err != nil {
 			return fmt.Errorf("tun: exec create script: %w", err)
@@ -409,7 +424,9 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 		if os.Geteuid() == 0 {
 			cmdArgs = cmdArgs[1:]
 		}
-		_, _ = util.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...)
+		if _, err := util.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...); err != nil {
+			log.Warn("[TUN] close script", "err", err)
+		}
 	case "windows":
 		dir := filepath.Dir(namePath)
 		newNamePath := filepath.Join(dir, scripts.CloseTunFilename)
@@ -417,17 +434,26 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 			return fmt.Errorf("tun: rename close script: %w", err)
 		}
 		namePath = newNamePath
-		_, _ = util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device, d.TunGW)
+		// The third argument is the bare IPv6 address of the TUN device
+		// (no /prefix): the script deletes the persistent v6 address, which
+		// the create script's "add address" would refuse to duplicate.
+		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device, d.TunGW, bareV6Addr(d.TunIPV6Sub)); err != nil {
+			log.Warn("[TUN] close script", "err", err)
+		}
 	case "darwin":
 		// Mirror the helper's runCloseScript argument order:
 		// device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6.
 		if os.Geteuid() == 0 {
-			_, _ = util.CommandContext(ctx, "sh", namePath, d.Device, d.TunGW, d.LocalGateway,
-				d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6)
+			if _, err := util.CommandContext(ctx, "sh", namePath, d.Device, d.TunGW, d.LocalGateway,
+				d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6); err != nil {
+				log.Warn("[TUN] close script", "err", err)
+			}
 		} else {
 			cmd := fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s\" with administrator privileges",
 				namePath, d.Device, d.TunGW, d.LocalGateway, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6)
-			_, _ = util.CommandContext(ctx, "osascript", "-e", cmd)
+			if _, err := util.CommandContext(ctx, "osascript", "-e", cmd); err != nil {
+				log.Warn("[TUN] close script", "err", err)
+			}
 		}
 	}
 	return nil
@@ -512,4 +538,13 @@ func ipSub(ip, mask string) string {
 		return ""
 	}
 	return ip + "/" + mask
+}
+
+// bareV6Addr strips the prefix length from an "address/prefix" subnet string
+// ("2001:db8::1/64" -> "2001:db8::1"): netsh add address takes the /prefix
+// form, but the netsh delete address of the windows close script wants the
+// plain address.
+func bareV6Addr(sub string) string {
+	addr, _, _ := strings.Cut(sub, "/")
+	return addr
 }

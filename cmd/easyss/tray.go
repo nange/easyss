@@ -274,6 +274,12 @@ func friendlyTunError(err error) string {
 	if strings.Contains(err.Error(), "requires root") || errors.Is(err, fs.ErrPermission) {
 		return "Tun2socks 启动失败：需要管理员权限，请以 root/管理员身份运行或重试授权。详情：" + err.Error()
 	}
+	// 设备/路由配置脚本执行失败（例如 Windows 上 netsh 设置地址或 route
+	// add 阶梯路由被拒绝）：这类失败会由 Start() 先回滚已写入的路由，所以
+	// 文案要说明流量没有被接管，而不是让用户以为只是"没生效"。
+	if strings.Contains(err.Error(), "create device") {
+		return "Tun2socks 启动失败：TUN 设备/路由配置未完成，已回滚，系统全局流量未被接管；代理（SOCKS5/HTTP）仍可正常使用，可在托盘中重试。详情：" + err.Error()
+	}
 	return "Tun2socks 启动失败：系统全局流量未生效，代理（SOCKS5/HTTP）仍可正常使用，可在托盘中重试。详情：" + err.Error()
 }
 
