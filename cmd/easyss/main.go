@@ -173,13 +173,12 @@ Flags:
 		cfg.Local.EnableTun2socks = true
 	}
 	if cmdOutboundProto != "" {
-		switch cmdOutboundProto {
-		case "native", "h2":
-			cfg.Transport.Protocol = "h2"
-		default:
-			log.Error("[EASYSS-V3] invalid outbound-proto", "value", cmdOutboundProto)
+		proto, err := config.OutboundProtoToProtocol(cmdOutboundProto)
+		if err != nil {
+			log.Error("[EASYSS-V3] invalid outbound-proto", "value", cmdOutboundProto, "err", err)
 			os.Exit(1)
 		}
+		cfg.Transport.Protocol = proto
 	}
 	if pprofEnabled {
 		cfg.PprofEnabled = true
@@ -220,8 +219,12 @@ type App struct {
 	// notification, headless builds log it.
 	startupWarn error
 
+	// statsCloser stops the background stats logger. It is guarded by
+	// statsMu because Start/Stop can run concurrently (tray menu handlers)
+	// and because a failed Start leaves it unset: closing a nil channel
+	// would panic.
+	statsMu     sync.Mutex
 	statsCloser chan struct{}
-	statsOnce   sync.Once
 }
 
 func (a *App) Start() error {
@@ -247,30 +250,17 @@ func (a *App) Start() error {
 			// runner.Run already ensured the server hostname resolves and
 			// pre-populated the DNS cache (resolveServerDomain), so TUN-mode
 			// DNS can never deadlock on the server domain.
-			socksProxyAddr := "socks5://127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort)
-			tunCfg := tun.Config{
-				Socks5Addr: socksProxyAddr,
-				DNSServer:  tunDNS(a.cfg),
-			}
-			if ipv6 := a.core.Client.Router().ServerIPV6(); ipv6 != "" {
-				tunCfg.ServerIPV6 = ipv6
-			}
-			a.tunMgr = tun.New(tunCfg)
+			a.tunMgr = tun.New(a.tunConfig())
 
-			method := protocol.MethodFromString(a.cfg.DefaultServer().Method)
-			if method == 0 {
-				method = protocol.MethodAES256GCM
-			}
 			icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
-			icmpHandler.SetProxy(a.core.StreamHandler, method)
+			icmpHandler.SetProxy(a.core.StreamHandler, a.methodFromServer())
 			a.tunMgr.SetICMPHandler(icmpHandler)
 
 			startTunEngine(a.tunMgr, "device")
 		}
 	}
 
-	a.statsCloser = make(chan struct{})
-	go a.statsLoop()
+	a.startStatsLoop()
 
 	if a.cfg.PprofEnabled {
 		a.pprofSrv = pprof.StartPprof()
@@ -371,9 +361,7 @@ func (a *App) setStartupWarn(err error) {
 }
 
 func (a *App) Stop() {
-	a.statsOnce.Do(func() {
-		close(a.statsCloser)
-	})
+	a.stopStatsLoop()
 
 	if a.tunMgr != nil {
 		a.tunMgr.Stop()
@@ -386,7 +374,31 @@ func (a *App) Stop() {
 	}
 }
 
-func (a *App) statsLoop() {
+// startStatsLoop (re)starts the background stats logger, stopping a previous
+// loop if one is still running. The stop channel is captured by the goroutine
+// so a later restart cannot leave the old loop selecting on the new channel.
+func (a *App) startStatsLoop() {
+	a.statsMu.Lock()
+	defer a.statsMu.Unlock()
+	if a.statsCloser != nil {
+		close(a.statsCloser)
+	}
+	a.statsCloser = make(chan struct{})
+	go a.statsLoop(a.statsCloser)
+}
+
+// stopStatsLoop stops the background stats logger. It is safe to call on an
+// App that never started one, and safe to call repeatedly.
+func (a *App) stopStatsLoop() {
+	a.statsMu.Lock()
+	defer a.statsMu.Unlock()
+	if a.statsCloser != nil {
+		close(a.statsCloser)
+		a.statsCloser = nil
+	}
+}
+
+func (a *App) statsLoop(done <-chan struct{}) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -436,10 +448,37 @@ func (a *App) statsLoop() {
 				"slot_grown_bulk", snap.SlotGrownBulk,
 				"conn_rotated", snap.ConnRotated,
 			)
-		case <-a.statsCloser:
+		case <-done:
 			return
 		}
 	}
+}
+
+// tunConfig builds the TUN configuration for this App. It is the single
+// construction point shared by the startup path and the tray toggle, so the
+// two cannot drift apart (notably the server-IPv6 hint, which the tray path
+// used to omit).
+func (a *App) tunConfig() tun.Config {
+	cfg := tun.Config{
+		Socks5Addr: "socks5://127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort),
+		DNSServer:  tunDNS(a.cfg),
+	}
+	if a.core != nil && a.core.Client != nil {
+		if ipv6 := a.core.Client.Router().ServerIPV6(); ipv6 != "" {
+			cfg.ServerIPV6 = ipv6
+		}
+	}
+	return cfg
+}
+
+// methodFromServer returns the configured AEAD method, falling back to
+// AES-256-GCM when the config names an unknown one.
+func (a *App) methodFromServer() protocol.Method {
+	method := protocol.MethodFromString(a.cfg.DefaultServer().Method)
+	if method == 0 {
+		method = protocol.MethodAES256GCM
+	}
+	return method
 }
 
 // tunDNS returns the DNS server to set on the system during TUN mode.

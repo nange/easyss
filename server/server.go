@@ -23,11 +23,12 @@ import (
 	"github.com/nange/easyss/v3/server/config"
 	"github.com/nange/easyss/v3/server/handler"
 	"github.com/nange/easyss/v3/server/nextproxy"
+	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/stats"
 )
 
 type Server struct {
-	cfg        *config.ServerConfig
+	cfg        *config.FileConfig
 	httpServer *http.Server
 	mux        *http.ServeMux
 	certCache  *certmagic.Cache
@@ -35,7 +36,7 @@ type Server struct {
 	statsOnce  sync.Once
 }
 
-func New(cfg *config.ServerConfig) (*Server, error) {
+func New(cfg *config.FileConfig) (*Server, error) {
 	for _, p := range cfg.Transport.Protocols {
 		if p != "h2" {
 			return nil, fmt.Errorf("unsupported transport protocol %q (only h2 is supported)", p)
@@ -51,9 +52,10 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 func (s *Server) initTLS() (*tls.Config, error) {
 	cfg := s.cfg
+	srvCfg := cfg.Server
 
-	if cfg.CertPath != "" && cfg.KeyPath != "" {
-		cert, err := tls.LoadX509KeyPair(cfg.CertPath, cfg.KeyPath)
+	if srvCfg.CertPath != "" && srvCfg.KeyPath != "" {
+		cert, err := tls.LoadX509KeyPair(srvCfg.CertPath, srvCfg.KeyPath)
 		if err != nil {
 			return nil, fmt.Errorf("load cert: %w", err)
 		}
@@ -81,7 +83,7 @@ func (s *Server) initTLS() (*tls.Config, error) {
 		if cache != nil {
 			cache.Stop()
 		}
-		_ = cleanCertmagicDomainAssets(context.Background(), storage, cfg.Domain)
+		_ = cleanCertmagicDomainAssets(context.Background(), storage, srvCfg.Domain)
 		tlsConfig, cache, err = s.manageCert(storage, true)
 	}
 	if err != nil {
@@ -111,12 +113,12 @@ func (s *Server) manageCert(storage certmagic.Storage, disableARI bool) (*tls.Co
 
 	acmeCfg := certmagic.DefaultACME
 	acmeCfg.Agreed = true
-	acmeCfg.Email = s.cfg.Email
+	acmeCfg.Email = s.cfg.Server.Email
 	acmeCfg.DisableHTTPChallenge = true
 	cmCfg.Issuers = []certmagic.Issuer{certmagic.NewACMEIssuer(cmCfg, acmeCfg)}
 
 	tlsConfig := cmCfg.TLSConfig()
-	err := cmCfg.ManageSync(context.Background(), []string{s.cfg.Domain})
+	err := cmCfg.ManageSync(context.Background(), []string{s.cfg.Server.Domain})
 	if err != nil {
 		return nil, cache, err
 	}
@@ -124,16 +126,16 @@ func (s *Server) manageCert(storage certmagic.Storage, disableARI bool) (*tls.Co
 }
 
 func (s *Server) resolveEmail(storagePath string) {
-	if s.cfg.Email != "" {
+	if s.cfg.Server.Email != "" {
 		return
 	}
 	if existing := findExistingACMEEmail(storagePath); existing != "" {
-		s.cfg.Email = existing
+		s.cfg.Server.Email = existing
 		log.Info("[SERVER] reused existing ACME email", "email", existing)
 		return
 	}
-	s.cfg.Email = randomEmail()
-	log.Info("[SERVER] generated random ACME email", "email", s.cfg.Email)
+	s.cfg.Server.Email = randomEmail()
+	log.Info("[SERVER] generated random ACME email", "email", s.cfg.Server.Email)
 }
 
 func (s *Server) statsLoop() {
@@ -247,63 +249,64 @@ func cleanCertmagicDomainAssets(ctx context.Context, storage certmagic.Storage, 
 
 func (s *Server) Start() error {
 	cfg := s.cfg
-	log.Info("[SERVER] starting", "listen", cfg.Listen, "domain", cfg.Domain, "timeout", cfg.Timeout)
+	srvCfg := cfg.Server
+	log.Info("[SERVER] starting", "listen", srvCfg.Listen, "domain", srvCfg.Domain, "timeout", cfg.Timeout)
 
 	tlsConfig, err := s.initTLS()
 	if err != nil {
 		log.Error("[SERVER] init TLS failed", "err", err)
 		return err
 	}
-	if cfg.CertPath != "" && cfg.KeyPath != "" {
-		log.Info("[SERVER] TLS mode: cert files", "cert", cfg.CertPath, "key", cfg.KeyPath)
+	if srvCfg.CertPath != "" && srvCfg.KeyPath != "" {
+		log.Info("[SERVER] TLS mode: cert files", "cert", srvCfg.CertPath, "key", srvCfg.KeyPath)
 	} else {
-		log.Info("[SERVER] TLS mode: certmagic (Let's Encrypt)", "domain", cfg.Domain, "email", cfg.Email)
+		log.Info("[SERVER] TLS mode: certmagic (Let's Encrypt)", "domain", srvCfg.Domain, "email", srvCfg.Email)
 	}
 
-	timeout := time.Duration(s.cfg.Timeout) * time.Second
+	timeout := time.Duration(cfg.Timeout) * time.Second
 	if timeout <= 0 {
 		timeout = time.Duration(sharedconfig.DefaultTimeout) * time.Second
 	}
+	timeouts := sharedconfig.NewTimeouts(timeout)
 
-	if s.cfg.Fallback.Target != "" {
-		if err := handler.SetFallbackTarget(s.cfg.Fallback.Target, s.cfg.Fallback.PreserveHost, s.cfg.Fallback.CDNDomains); err != nil {
+	if cfg.Fallback.Target != "" {
+		if err := handler.SetFallbackTarget(cfg.Fallback.Target, cfg.Fallback.PreserveHost, cfg.Fallback.CDNDomains); err != nil {
 			return fmt.Errorf("fallback target: %w", err)
 		}
-		log.Info("[SERVER] fallback target configured", "target", s.cfg.Fallback.Target, "preserve_host", s.cfg.Fallback.PreserveHost, "cdn_domains", s.cfg.Fallback.CDNDomains)
+		log.Info("[SERVER] fallback target configured", "target", cfg.Fallback.Target, "preserve_host", cfg.Fallback.PreserveHost, "cdn_domains", cfg.Fallback.CDNDomains)
 	}
 
-	masterKey, err := crypto.DeriveMasterKey(s.cfg.Password)
+	masterKey, err := crypto.DeriveMasterKey(srvCfg.Password)
 	if err != nil {
 		return fmt.Errorf("derive master key: %w", err)
 	}
 
-	np, err := nextproxy.New(s.cfg.NextProxy.URL, s.cfg.NextProxy.EnableUDP, s.cfg.NextProxy.AllHost)
+	np, err := nextproxy.New(cfg.NextProxy.URL, cfg.NextProxy.EnableUDP, cfg.NextProxy.AllHost)
 	if err != nil {
 		log.Error("[SERVER] next proxy init failed", "err", err)
 		return fmt.Errorf("next proxy: %w", err)
 	}
 	if np != nil {
-		if err := np.LoadProxyFile(s.cfg.NextProxy.NextProxyFile); err != nil {
+		if err := np.LoadProxyFile(cfg.NextProxy.NextProxyFile); err != nil {
 			log.Error("[SERVER] next proxy load file failed", "err", err)
 			return fmt.Errorf("next proxy load file: %w", err)
 		}
-		np.SetDialTimeout(sharedconfig.DialTimeout(timeout))
-		log.Info("[SERVER] next proxy configured", "url", s.cfg.NextProxy.URL, "udp", s.cfg.NextProxy.EnableUDP, "all_host", s.cfg.NextProxy.AllHost)
+		np.SetDialTimeout(timeouts.Dial)
+		log.Info("[SERVER] next proxy configured", "url", cfg.NextProxy.URL, "udp", cfg.NextProxy.EnableUDP, "all_host", cfg.NextProxy.AllHost)
 	}
 
-	streamIdleTimeout := sharedconfig.StreamIdleTimeout(timeout)
-
 	proxyHandler := handler.NewProxyHandler(handler.ProxyHandlerConfig{
-		MasterKey:         masterKey,
-		AllowedMethods:    s.cfg.GetAllowedMethods(),
-		HandshakeTimeout:  timeout,
-		Timeout:           timeout,
-		StreamIdleTimeout: streamIdleTimeout,
-		UDPIdleTimeout:    sharedconfig.UDPIdleTimeout(timeout),
-		BatchWindowMS:     s.cfg.Shaper.BatchWindowMS,
-		CoverBudgetRatio:  s.cfg.Shaper.CoverBudgetRatio,
-		CoverBudgetCap:    s.cfg.Shaper.CoverBudgetCap,
-		NextProxy:         np,
+		MasterKey:      masterKey,
+		AllowedMethods: srvCfg.GetAllowedMethods(),
+		Timeouts:       timeouts,
+		Shaper: shaper.Config{
+			BatchWindowMS: cfg.Shaper.BatchWindowMS,
+			Cover: shaper.CoverConfig{
+				BudgetRatio: cfg.Shaper.CoverBudgetRatio,
+				BudgetCap:   cfg.Shaper.CoverBudgetCap,
+			},
+		},
+		NextProxy: np,
 	})
 
 	probePayload := make([]byte, sharedconfig.ProbePayloadSize)
@@ -326,7 +329,7 @@ func (s *Server) Start() error {
 
 	s.httpServer = buildHTTPServer(cfg, tlsConfig, s.mux, timeout)
 
-	log.Info("[SERVER] listening", "addr", s.cfg.Listen, "routes", []string{"/", sharedconfig.EndpointTCP, sharedconfig.EndpointUDP, sharedconfig.EndpointICMP, sharedconfig.EndpointProbe})
+	log.Info("[SERVER] listening", "addr", srvCfg.Listen, "routes", []string{"/", sharedconfig.EndpointTCP, sharedconfig.EndpointUDP, sharedconfig.EndpointICMP, sharedconfig.EndpointProbe})
 	s.statsDone = make(chan struct{})
 	go s.statsLoop()
 	return s.httpServer.ListenAndServeTLS("", "")
@@ -336,7 +339,7 @@ func (s *Server) Start() error {
 // sized for upload throughput: the per-stream receive window bounds a single
 // upload stream's in-flight data (throughput ≈ window/RTT), so both windows
 // must be generous enough for high-RTT links.
-func buildHTTPServer(cfg *config.ServerConfig, tlsConfig *tls.Config, mux *http.ServeMux, timeout time.Duration) *http.Server {
+func buildHTTPServer(cfg *config.FileConfig, tlsConfig *tls.Config, mux *http.ServeMux, timeout time.Duration) *http.Server {
 	http2Cfg := &http.HTTP2Config{
 		MaxReadFrameSize:              sharedconfig.HTTP2ServerMaxReadFrameSize,
 		MaxReceiveBufferPerConnection: sharedconfig.HTTP2ServerReceiveBufferPerConnection,
@@ -353,7 +356,7 @@ func buildHTTPServer(cfg *config.ServerConfig, tlsConfig *tls.Config, mux *http.
 	}
 
 	srv := &http.Server{
-		Addr:              cfg.Listen,
+		Addr:              cfg.Server.Listen,
 		TLSConfig:         tlsConfig,
 		Handler:           mux,
 		ErrorLog:          stdErrorLog(),

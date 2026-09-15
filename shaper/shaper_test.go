@@ -13,10 +13,56 @@ import (
 	"testing"
 	"time"
 
+	sharedconfig "github.com/nange/easyss/v3/config"
 	easycrypto "github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/util/bytespool"
 )
+
+// TestConfigNormalize pins the single source of the shaper defaults and
+// bounds, which used to be re-applied by the client config layer, the server
+// handler and New independently.
+func TestConfigNormalize(t *testing.T) {
+	got := Config{}.Normalize()
+	if got.BatchWindowMS != sharedconfig.DefaultBatchWindowMS {
+		t.Errorf("BatchWindowMS = %d, want %d", got.BatchWindowMS, sharedconfig.DefaultBatchWindowMS)
+	}
+	if got.Cover.BudgetRatio != sharedconfig.DefaultCoverBudgetRatio {
+		t.Errorf("BudgetRatio = %v, want %v", got.Cover.BudgetRatio, sharedconfig.DefaultCoverBudgetRatio)
+	}
+	if got.Cover.BudgetCap != sharedconfig.DefaultCoverBudgetCap {
+		t.Errorf("BudgetCap = %d, want %d", got.Cover.BudgetCap, sharedconfig.DefaultCoverBudgetCap)
+	}
+	if got.Cover.IdleTimeout != defaultCoverIdleTimeoutMS {
+		t.Errorf("IdleTimeout = %d, want %d", got.Cover.IdleTimeout, defaultCoverIdleTimeoutMS)
+	}
+	if got.Cover.MinSize != defaultCoverMinSize || got.Cover.MaxSize != defaultCoverMaxSize {
+		t.Errorf("size range = [%d,%d], want [%d,%d]", got.Cover.MinSize, got.Cover.MaxSize, defaultCoverMinSize, defaultCoverMaxSize)
+	}
+
+	capped := Config{
+		BatchWindowMS: 100,
+		Cover:         CoverConfig{BudgetRatio: 2, BudgetCap: -1, IdleTimeout: -5},
+	}.Normalize()
+	if capped.BatchWindowMS != maxBatchWindowMS {
+		t.Errorf("BatchWindowMS = %d, want %d", capped.BatchWindowMS, maxBatchWindowMS)
+	}
+	if capped.Cover.BudgetRatio != sharedconfig.DefaultCoverBudgetRatio {
+		t.Errorf("BudgetRatio = %v, want the default", capped.Cover.BudgetRatio)
+	}
+	if capped.Cover.BudgetCap != sharedconfig.DefaultCoverBudgetCap {
+		t.Errorf("BudgetCap = %d, want the default", capped.Cover.BudgetCap)
+	}
+	if capped.Cover.IdleTimeout != defaultCoverIdleTimeoutMS {
+		t.Errorf("IdleTimeout = %d, want the default", capped.Cover.IdleTimeout)
+	}
+
+	// An in-range value is preserved.
+	kept := Config{BatchWindowMS: 7, Cover: CoverConfig{BudgetRatio: 0.5, BudgetCap: 4096}}.Normalize()
+	if kept.BatchWindowMS != 7 || kept.Cover.BudgetRatio != 0.5 || kept.Cover.BudgetCap != 4096 {
+		t.Errorf("in-range values changed: %+v", kept)
+	}
+}
 
 func TestBuildPaddingFrame(t *testing.T) {
 	tests := []struct {
@@ -56,14 +102,9 @@ func TestBatchShaperFlushesBeforePlainRecordLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	enc, ctr, err := sk.Encryptor("c2s", "session", protocol.MethodAES256GCM)
-	if err != nil {
-		t.Fatal(err)
-	}
-	aad := easycrypto.BuildAAD(endpoint, salt, "c2s", "session", protocol.MethodAES256GCM)
 
 	var out bytes.Buffer
-	bs := New(easycrypto.NewRecordWriter(&out, enc, ctr, aad), Config{BatchWindowMS: 1000})
+	bs := New(newTestWriter(t, sk, &out), Config{BatchWindowMS: 1000})
 	payload := make([]byte, 16*1024)
 	for range 4 {
 		if err := bs.PushData(payload); err != nil {
@@ -74,11 +115,7 @@ func TestBatchShaperFlushesBeforePlainRecordLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	decEnc, decCtr, err := sk.Encryptor("c2s", "session", protocol.MethodAES256GCM)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rr := easycrypto.NewRecordReader(&out, decEnc, decCtr, aad)
+	rr := newTestReader(t, sk, &out)
 	records := 0
 	for {
 		plaintext, err := rr.ReadRecord()
@@ -98,16 +135,26 @@ func TestBatchShaperFlushesBeforePlainRecordLimit(t *testing.T) {
 	}
 }
 
-// TestCoverInjectorClampsFrameSize verifies the injector clamps misconfigured
-// cover sizes to the wire-format ceiling, so a huge MaxSize cannot produce
-// truncated uint16 lengths or bytespool.Get nil-panic payloads.
-func TestCoverInjectorClampsFrameSize(t *testing.T) {
-	ci := newCoverInjector(CoverConfig{
+// TestCoverNormalizeClampsFrameSize verifies Config.Normalize clamps
+// misconfigured cover sizes to the wire-format ceiling, so a huge MaxSize
+// cannot produce truncated uint16 lengths or bytespool.Get nil-panic payloads.
+// Normalize runs at the top of New, before the injector is built.
+func TestCoverNormalizeClampsFrameSize(t *testing.T) {
+	cfg := Config{Cover: CoverConfig{
 		BudgetRatio: 0.10,
 		MinSize:     200_000, // > 65535 and > bytespool ceiling
 		MaxSize:     1_000_000,
 		BudgetCap:   2_000_000,
-	}, func(f protocol.Frame) error { return nil }, func() bool { return false })
+	}}.Normalize()
+
+	if cfg.Cover.MinSize > protocol.MaxUDPDataSize || cfg.Cover.MaxSize > protocol.MaxUDPDataSize {
+		t.Fatalf("cover size range not clamped: min=%d max=%d", cfg.Cover.MinSize, cfg.Cover.MaxSize)
+	}
+	if cfg.Cover.MaxSize < cfg.Cover.MinSize {
+		t.Fatalf("MaxSize %d < MinSize %d after clamping", cfg.Cover.MaxSize, cfg.Cover.MinSize)
+	}
+
+	ci := newCoverInjector(cfg.Cover, func(protocol.Frame) error { return nil }, func() bool { return false })
 	if ci == nil {
 		t.Fatal("expected non-nil coverInjector")
 	}
@@ -116,9 +163,6 @@ func TestCoverInjectorClampsFrameSize(t *testing.T) {
 	minSize, maxSize := ci.coverFrameSizeRange()
 	if minSize > protocol.MaxUDPDataSize || maxSize > protocol.MaxUDPDataSize {
 		t.Fatalf("cover size range not clamped: min=%d max=%d", minSize, maxSize)
-	}
-	if ci.cfg.MaxSize < ci.cfg.MinSize {
-		t.Fatalf("MaxSize %d < MinSize %d after clamping", ci.cfg.MaxSize, ci.cfg.MinSize)
 	}
 }
 
@@ -338,14 +382,9 @@ func TestBatchShaperConcurrentFlushNoNonceDesync(t *testing.T) {
 
 	for round := range rounds {
 		t.Run(fmt.Sprintf("round_%d", round), func(t *testing.T) {
-			enc, ctr, err := sk.Encryptor("c2s", "session", protocol.MethodAES256GCM)
-			if err != nil {
-				t.Fatal(err)
-			}
-			aad := easycrypto.BuildAAD(endpoint, salt, "c2s", "session", protocol.MethodAES256GCM)
 
 			out := &lockedBuffer{}
-			bs := New(easycrypto.NewRecordWriter(out, enc, ctr, aad), Config{
+			bs := New(newTestWriter(t, sk, out), Config{
 				BatchWindowMS: 1,
 				Cover: CoverConfig{
 					BudgetRatio: 0.5,
@@ -381,11 +420,7 @@ func TestBatchShaperConcurrentFlushNoNonceDesync(t *testing.T) {
 				t.Fatalf("Close failed: %v", err)
 			}
 
-			decEnc, decCtr, err := sk.Encryptor("c2s", "session", protocol.MethodAES256GCM)
-			if err != nil {
-				t.Fatal(err)
-			}
-			rr := easycrypto.NewRecordReader(bytes.NewReader(out.Snapshot()), decEnc, decCtr, aad)
+			rr := newTestReader(t, sk, bytes.NewReader(out.Snapshot()))
 
 			seenSeqs := make(map[uint32]bool, totalPushes)
 			recordCount := 0
@@ -399,15 +434,13 @@ func TestBatchShaperConcurrentFlushNoNonceDesync(t *testing.T) {
 				}
 				recordCount++
 
-				r := bytes.NewReader(plaintext)
-				for {
-					frame, err := protocol.ReadFrame(r)
+				remaining := plaintext
+				for len(remaining) > 0 {
+					frame, n, err := protocol.DecodeFrame(remaining)
 					if err != nil {
-						if errors.Is(err, io.EOF) {
-							break
-						}
 						t.Fatalf("decode frame failed in record %d: %v", recordCount-1, err)
 					}
+					remaining = remaining[n:]
 					if frame.Type == protocol.FrameDATA && len(frame.Payload) >= 4 {
 						seq := binary.BigEndian.Uint32(frame.Payload[:4])
 						if seenSeqs[seq] {
@@ -480,14 +513,9 @@ func TestBatchShaperOnTimerInFlightDuringClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	enc, ctr, err := sk.Encryptor("c2s", "session", protocol.MethodAES256GCM)
-	if err != nil {
-		t.Fatal(err)
-	}
-	aad := easycrypto.BuildAAD(endpoint, salt, "c2s", "session", protocol.MethodAES256GCM)
 
 	bw := newBlockingWriter()
-	rw := easycrypto.NewRecordWriter(bw, enc, ctr, aad)
+	rw := newTestWriter(t, sk, bw)
 	bs := New(rw, Config{BatchWindowMS: 2})
 
 	payload := make([]byte, 256)
@@ -532,11 +560,7 @@ func TestBatchShaperOnTimerInFlightDuringClose(t *testing.T) {
 	if bw.writeCount.Load() == 0 {
 		t.Fatal("expected at least one WriteRecord call")
 	}
-	decEnc, decCtr, err := sk.Encryptor("c2s", "session", protocol.MethodAES256GCM)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rr := easycrypto.NewRecordReader(bytes.NewReader(bw.inner.Snapshot()), decEnc, decCtr, aad)
+	rr := newTestReader(t, sk, bytes.NewReader(bw.inner.Snapshot()))
 	plaintext, err := rr.ReadRecord()
 	if err != nil {
 		t.Fatalf("failed to decrypt record: %v", err)
@@ -544,8 +568,7 @@ func TestBatchShaperOnTimerInFlightDuringClose(t *testing.T) {
 	if len(plaintext) == 0 {
 		t.Fatal("expected non-empty plaintext")
 	}
-	r := bytes.NewReader(plaintext)
-	frame, err := protocol.ReadFrame(r)
+	frame, _, err := protocol.DecodeFrame(plaintext)
 	if err != nil {
 		t.Fatalf("failed to read frame: %v", err)
 	}
@@ -568,14 +591,9 @@ func TestBatchShaperCoverInjectInFlightDuringClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	enc, ctr, err := sk.Encryptor("c2s", "session", protocol.MethodAES256GCM)
-	if err != nil {
-		t.Fatal(err)
-	}
-	aad := easycrypto.BuildAAD(endpoint, salt, "c2s", "session", protocol.MethodAES256GCM)
 
 	bw := newBlockingWriter()
-	rw := easycrypto.NewRecordWriter(bw, enc, ctr, aad)
+	rw := newTestWriter(t, sk, bw)
 	bs := New(rw, Config{BatchWindowMS: 10000})
 
 	bigPayload := make([]byte, 58720)
@@ -649,14 +667,9 @@ func TestBatchShaperNoWriteAfterClose(t *testing.T) {
 	payload := make([]byte, 256)
 
 	for i := range 100 {
-		enc, ctr, err := sk.Encryptor("c2s", "session", protocol.MethodAES256GCM)
-		if err != nil {
-			t.Fatal(err)
-		}
-		aad := easycrypto.BuildAAD(endpoint, salt, "c2s", "session", protocol.MethodAES256GCM)
 
 		cw := &countingWriter{inner: &lockedBuffer{}}
-		rw := easycrypto.NewRecordWriter(cw, enc, ctr, aad)
+		rw := newTestWriter(t, sk, cw)
 		bs := New(rw, Config{BatchWindowMS: 1})
 
 		if err := bs.PushData(payload); err != nil {
@@ -714,4 +727,26 @@ func TestIsClosedStreamError(t *testing.T) {
 			}
 		})
 	}
+}
+
+// newTestWriter builds a c2s session record writer through the production
+// facade, replacing the Encryptor + BuildAAD + NewRecordWriter triple the
+// tests used to assemble by hand.
+func newTestWriter(t *testing.T, sk *easycrypto.StreamKeys, w io.Writer) *easycrypto.RecordWriter {
+	t.Helper()
+	rw, err := sk.NewWriter(w, easycrypto.DirC2S, protocol.MethodAES256GCM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rw
+}
+
+// newTestReader is the reader counterpart of newTestWriter.
+func newTestReader(t *testing.T, sk *easycrypto.StreamKeys, r io.Reader) *easycrypto.RecordReader {
+	t.Helper()
+	rr, err := sk.NewRecordReader(r, easycrypto.DirC2S, protocol.MethodAES256GCM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rr
 }

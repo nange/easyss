@@ -20,8 +20,8 @@ func TestNew(t *testing.T) {
 		if np == nil {
 			t.Fatal("expected non-nil NextProxy")
 		}
-		if u := np.URL(); u == nil || u.Host != "proxy.example.com:1080" {
-			t.Errorf("URL host = %v", u)
+		if got := np.Host(); got != "proxy.example.com:1080" {
+			t.Errorf("Host = %q", got)
 		}
 		if !np.EnableUDP() {
 			t.Error("EnableUDP should be true")
@@ -172,11 +172,11 @@ func TestShouldProxy(t *testing.T) {
 	})
 }
 
-func TestURL(t *testing.T) {
+func TestHost(t *testing.T) {
 	t.Run("nil receiver", func(t *testing.T) {
 		var np *NextProxy
-		if u := np.URL(); u != nil {
-			t.Errorf("expected nil, got %v", u)
+		if got := np.Host(); got != "" {
+			t.Errorf("expected empty, got %q", got)
 		}
 	})
 
@@ -185,9 +185,8 @@ func TestURL(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		u := np.URL()
-		if u == nil || u.Host != "proxy.example.com:1080" {
-			t.Errorf("URL = %v", u)
+		if got := np.Host(); got != "proxy.example.com:1080" {
+			t.Errorf("Host = %q", got)
 		}
 	})
 }

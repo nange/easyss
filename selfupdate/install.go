@@ -69,17 +69,11 @@ func appBundleRoot(exePath string) string {
 	return bundle
 }
 
-// Install moves the artifact staged in stagingDir over the current install
-// location, replacing the client binary. Windows cannot overwrite a running
-// executable, so the running binary is renamed aside (allowed) and removed on
-// next start; unix replaces the file atomically via rename; macOS swaps the
-// whole .app bundle.
-func Install(stagingDir string) error {
-	return InstallFor(stagingDir, ProductClient)
-}
-
-// InstallFor is Install for a specific product (client, headless or server).
-func InstallFor(stagingDir string, product Product) error {
+// installFor moves the artifact staged in stagingDir over the install location
+// of the given product. Windows cannot overwrite a running executable, so the
+// running binary is renamed aside (allowed) and removed on next start; unix
+// replaces the file atomically via rename; macOS swaps the whole .app bundle.
+func installFor(stagingDir string, product Product) error {
 	exe, err := resolvedExe()
 	if err != nil {
 		return err

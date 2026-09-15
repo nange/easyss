@@ -19,6 +19,45 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// fifoOpenResult carries the outcome of a blocking FIFO write-open.
+type fifoOpenResult struct {
+	f   *os.File
+	err error
+}
+
+// openFifoForWriteAsync opens fifoPath for writing in the background: open(2)
+// on a FIFO blocks until a reader appears, and the reader here is the elevated
+// helper started via stdin redirection.
+func openFifoForWriteAsync(fifoPath string) <-chan fifoOpenResult {
+	ch := make(chan fifoOpenResult, 1)
+	go func() {
+		f, err := os.OpenFile(fifoPath, os.O_WRONLY, 0)
+		ch <- fifoOpenResult{f: f, err: err}
+	}()
+	return ch
+}
+
+// releaseFifoOpen unblocks a write-open started by openFifoForWriteAsync and
+// closes the file it produced. Callers that abandon the wait must use it:
+// deleting the FIFO does not unblock an open(2) that is already waiting for a
+// reader, so the goroutine (and its file descriptor) would otherwise leak for
+// the lifetime of the process. Opening the read end here lets the pending open
+// complete; it is non-blocking and needs no writer.
+func releaseFifoOpen(fifoPath string, ch <-chan fifoOpenResult) {
+	rd, err := os.OpenFile(fifoPath, os.O_RDONLY|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return
+	}
+	select {
+	case r := <-ch:
+		if r.f != nil {
+			_ = r.f.Close()
+		}
+	case <-time.After(time.Second):
+	}
+	_ = rd.Close()
+}
+
 // runTunHelper is the entry point for the long-running elevated TUN helper.
 // It fetches configuration from the main process via GET /tun, opens the TUN
 // device, sets up routing and DNS, sends the file descriptor back via a Unix
@@ -236,21 +275,26 @@ func fetchTunConfig(httpAddr string) (*proxy.TunConfig, error) {
 			lastErr = err
 			continue
 		}
-		defer resp.Body.Close() //nolint:errcheck
-
+		// Close the body on every iteration: the retry loop can run up to ten
+		// times, so a deferred close would keep every earlier response open
+		// until the function returns.
 		if resp.StatusCode == http.StatusServiceUnavailable {
+			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("tun not configured yet (503)")
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("GET /tun returned %d: %s", resp.StatusCode, string(body))
 			continue
 		}
 
 		var cfg proxy.TunConfig
-		if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
-			lastErr = fmt.Errorf("decode tun config: %w", err)
+		decodeErr := json.NewDecoder(resp.Body).Decode(&cfg)
+		_ = resp.Body.Close()
+		if decodeErr != nil {
+			lastErr = fmt.Errorf("decode tun config: %w", decodeErr)
 			continue
 		}
 

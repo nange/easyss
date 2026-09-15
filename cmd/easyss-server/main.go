@@ -85,18 +85,23 @@ Flags:
 		os.Exit(1)
 	}
 
-	var cfg config.ServerConfig
 	var fileCfg config.FileConfig
 	if err := json.Unmarshal(data, &fileCfg); err != nil {
 		log.Error("[EASYSS-SERVER-V3] parse config", "err", err)
 		os.Exit(1)
 	}
+	// A config written for another major version may carry fields this binary
+	// would silently ignore (or interpret differently), so refuse to start on
+	// it. 0 means the field is absent (a config predating it) and is accepted.
+	if fileCfg.ConfigVersion != 0 && fileCfg.ConfigVersion != 3 {
+		log.Error("[EASYSS-SERVER-V3] unsupported config version",
+			"version", fileCfg.ConfigVersion, "supported", 3, "file", configFile)
+		os.Exit(1)
+	}
 	// Resolve relative file paths (cert_path/key_path/next_proxy_file)
 	// against the executable directory so that macOS launchd launches
 	// (cwd=/) can still find the files placed next to the binary.
-	// Must run before EffectiveServerConfig, which copies by value.
 	fileCfg.ResolveFilePaths()
-	cfg = fileCfg.EffectiveServerConfig()
 	if pprofEnabled {
 		fileCfg.PprofEnabled = true
 	}
@@ -120,11 +125,11 @@ Flags:
 	log.Info("[EASYSS-SERVER-V3] " + version.String())
 	log.Info("[EASYSS-SERVER-V3] config loaded",
 		"config_file", configFile,
-		"listen", cfg.Listen,
-		"domain", cfg.Domain,
-		"next_proxy_file", cfg.NextProxy.NextProxyFile,
-		"cert", cfg.CertPath,
-		"key", cfg.KeyPath,
+		"listen", fileCfg.Server.Listen,
+		"domain", fileCfg.Server.Domain,
+		"next_proxy_file", fileCfg.NextProxy.NextProxyFile,
+		"cert", fileCfg.Server.CertPath,
+		"key", fileCfg.Server.KeyPath,
 	)
 
 	var pprofSrv *http.Server
@@ -132,7 +137,7 @@ Flags:
 		pprofSrv = pprof.StartPprof()
 	}
 
-	srv, err := server.New(&cfg)
+	srv, err := server.New(&fileCfg)
 	if err != nil {
 		log.Error("[EASYSS-SERVER-V3] init server", "err", err)
 		os.Exit(1)
@@ -185,9 +190,9 @@ func exampleV3ServerConfig() string {
 			CDNDomains:   []string{},
 		},
 		Shaper: config.ShaperConfig{
-			BatchWindowMS:    3,
-			CoverBudgetRatio: 0.03,
-			CoverBudgetCap:   16 * 1024,
+			BatchWindowMS:    sharedconfig.DefaultBatchWindowMS,
+			CoverBudgetRatio: sharedconfig.DefaultCoverBudgetRatio,
+			CoverBudgetCap:   sharedconfig.DefaultCoverBudgetCap,
 		},
 		Transport: config.TransportConfig{
 			Protocols:       []string{"h2"},

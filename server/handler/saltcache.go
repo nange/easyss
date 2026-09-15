@@ -13,15 +13,20 @@ const (
 	// endpoint plus the 22-char base64url salt.
 	saltCacheSize = 8 * 1024 * 1024
 
-	// saltCacheTTL bounds how long a salt stays in the cache. A replayed
-	// bootstrap record must be rejected for as long as the record could be
-	// re-delivered, so the TTL is deliberately far longer than any stream
-	// lifetime: reusing the same salt on two streams would reuse the same
-	// session keys and nonce counter (DeriveSessionKeys does not include the
-	// endpoint, and each stream's CounterNonce starts from zero), which is a
-	// GCM keystream-reuse catastrophe. The cache is capacity-bounded by
-	// freecache's LRU, so this only bounds how long an evicted salt's replay
-	// window stays closed.
+	// saltCacheTTL is the upper bound on how long a salt stays in the cache.
+	// A replayed bootstrap record must be rejected for as long as the record
+	// could be re-delivered, so the TTL is deliberately far longer than any
+	// stream lifetime: reusing the same salt on two streams would reuse the
+	// same session keys and nonce counter (DeriveSessionKeys does not include
+	// the endpoint, and each stream's CounterNonce starts from zero), which is
+	// a GCM keystream-reuse catastrophe.
+	//
+	// The effective replay window is LRU residency, not this TTL: freecache is
+	// capacity-bounded (saltCacheSize), and at sustained high stream rates a
+	// legitimately accepted salt can be evicted long before 24h, after which
+	// its replay would be accepted again. Closing that gap requires a
+	// TTL-bounded map with an explicit sweep rather than a capacity-bounded
+	// cache.
 	saltCacheTTL = 24 * time.Hour
 )
 

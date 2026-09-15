@@ -23,9 +23,7 @@ type ProxyHandler struct {
 	masterKey        []byte
 	allowedMethods   map[protocol.Method]bool
 	handshakeTimeout time.Duration
-	batchWindowMS    int
-	coverBudgetRatio float64
-	coverBudgetCap   int
+	shaperCfg        shaper.Config
 	nextProxy        *nextproxy.NextProxy
 	tcpHandler       *TCPHandler
 	udpHandler       *UDPHandler
@@ -35,16 +33,19 @@ type ProxyHandler struct {
 }
 
 type ProxyHandlerConfig struct {
-	MasterKey         []byte
-	AllowedMethods    []string
-	HandshakeTimeout  time.Duration
-	Timeout           time.Duration
-	StreamIdleTimeout time.Duration
-	UDPIdleTimeout    time.Duration
-	BatchWindowMS     int
-	CoverBudgetRatio  float64
-	CoverBudgetCap    int
-	NextProxy         *nextproxy.NextProxy
+	MasterKey      []byte
+	AllowedMethods []string
+	// Timeouts carries every derived duration (see config.NewTimeouts), and
+	// Shaper the shaper settings (normalized here). Both are built by the
+	// caller from the server config, so this struct no longer re-derives or
+	// re-clamps anything.
+	Timeouts  sharedconfig.Timeouts
+	Shaper    shaper.Config
+	NextProxy *nextproxy.NextProxy
+	// HandshakeTimeout overrides the bootstrap-record wait. 0 uses
+	// Timeouts.Base, which is what the server passes; tests shrink it without
+	// touching the derived idle timeouts.
+	HandshakeTimeout time.Duration
 }
 
 func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
@@ -60,13 +61,7 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 		allowed[protocol.MethodChaCha20Poly1305] = true
 	}
 
-	batchWindowMS := cfg.BatchWindowMS
-	if batchWindowMS <= 0 {
-		batchWindowMS = sharedconfig.DefaultBatchWindowMS
-	}
-	if batchWindowMS > 10 {
-		batchWindowMS = 10
-	}
+	shaperCfg := cfg.Shaper.Normalize()
 
 	// Bound the bootstrap-record wait. A handshake request occupies two
 	// goroutines (the handler plus the first-record reader) for the whole
@@ -77,33 +72,24 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 	// far below this cap.
 	handshakeTimeout := cfg.HandshakeTimeout
 	if handshakeTimeout <= 0 {
+		handshakeTimeout = cfg.Timeouts.Base
+	}
+	if handshakeTimeout <= 0 {
 		handshakeTimeout = maxHandshakeTimeout
 	}
 	if handshakeTimeout > maxHandshakeTimeout {
 		handshakeTimeout = maxHandshakeTimeout
 	}
 
-	coverBudgetRatio := cfg.CoverBudgetRatio
-	if coverBudgetRatio <= 0 || coverBudgetRatio > 1 {
-		coverBudgetRatio = sharedconfig.DefaultCoverBudgetRatio
-	}
-
-	coverBudgetCap := cfg.CoverBudgetCap
-	if coverBudgetCap <= 0 {
-		coverBudgetCap = sharedconfig.DefaultCoverBudgetCap
-	}
-
 	return &ProxyHandler{
 		masterKey:        cfg.MasterKey,
 		allowedMethods:   allowed,
 		handshakeTimeout: handshakeTimeout,
-		batchWindowMS:    batchWindowMS,
-		coverBudgetRatio: coverBudgetRatio,
-		coverBudgetCap:   coverBudgetCap,
+		shaperCfg:        shaperCfg,
 		nextProxy:        cfg.NextProxy,
-		tcpHandler:       NewTCPHandler(cfg.StreamIdleTimeout, cfg.Timeout, cfg.NextProxy),
-		udpHandler:       NewUDPHandler(cfg.UDPIdleTimeout, cfg.NextProxy),
-		icmpHandler:      NewICMPHandler(cfg.Timeout),
+		tcpHandler:       NewTCPHandler(cfg.Timeouts.StreamIdle, cfg.Timeouts.Base, cfg.NextProxy),
+		udpHandler:       NewUDPHandler(cfg.Timeouts.UDPIdle, cfg.Timeouts.Base, cfg.NextProxy),
+		icmpHandler:      NewICMPHandler(cfg.Timeouts.Base),
 		saltCache:        newSaltCache(),
 		ipLimiter:        newIPRateLimiter(),
 	}
@@ -119,6 +105,20 @@ func clientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// remoteString returns a printable remote endpoint for logging. It is nil
+// safe on purpose: the SOCKS5 client connection used on the next-proxy path
+// reports an unset (nil) RemoteAddr, so a direct RemoteAddr().String() would
+// panic.
+func remoteString(conn net.Conn) string {
+	if conn == nil {
+		return ""
+	}
+	if ra := conn.RemoteAddr(); ra != nil {
+		return ra.String()
+	}
+	return ""
 }
 
 // serveReject writes a bare HTTP error response for handshake rejections.
@@ -169,7 +169,11 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// CPU abuse. Only counted for requests that look like a real handshake
 	// (valid x-es header), so plain fallback-page traffic is unaffected.
 	if !h.ipLimiter.Allow(clientIP(r)) {
-		log.Error("[SERVER] handshake rate limited", "remote", r.RemoteAddr)
+		// Debug, not Error: any peer that sends a well-formed x-es header
+		// reaches this branch, so an unauthenticated IP-churning client could
+		// otherwise flood the log. The limiter warns once per cleanup interval
+		// when its hard cap is hit.
+		log.Debug("[SERVER] handshake rate limited", "remote", r.RemoteAddr)
 		stats.RecordServerHandshakeError()
 		serveReject(w, http.StatusTooManyRequests)
 		return
@@ -181,7 +185,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// re-deliver the first packet. Replays carry a valid encrypted handshake,
 	// so the responder has proven key possession and 400 is appropriate.
 	if h.saltCache.MarkSeen(r.URL.Path, saltB64) {
-		log.Error("[SERVER] replayed salt", "remote", r.RemoteAddr, "endpoint", r.URL.Path)
+		log.Debug("[SERVER] replayed salt", "remote", r.RemoteAddr, "endpoint", r.URL.Path)
 		stats.RecordServerHandshakeError()
 		serveReject(w, http.StatusBadRequest)
 		return
@@ -196,9 +200,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	first, err := sk.ReadFirstRecordWithTimeout(r.Context(), r.Body, h.handshakeTimeout)
 	if err != nil {
-		log.Error("[SERVER] read first record", "remote", r.RemoteAddr, "endpoint", endpoint, "err", err)
 		stats.RecordServerHandshakeError()
 		if errors.Is(err, crypto.ErrHandshakeTimeout) {
+			log.Warn("[SERVER] read first record timed out", "remote", r.RemoteAddr, "endpoint", endpoint, "err", err)
 			// The client connected but its bootstrap record did not arrive in
 			// time (congested link, connection dying). A real HTTP/2 site
 			// (nginx) answers a late/absent request body with 408 Request
@@ -209,10 +213,14 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Decrypt failure: the request did not prove master-key possession
-		// (attacker probing, wrong key). Keep the camouflaged homepage so the
-		// server stays indistinguishable from a real site for keyless
-		// requests; the easyss client detects the non-encrypted payload on
-		// its first session read and reports a clear handshake-rejected error.
+		// (attacker probing, wrong key). Debug, not Error: any request with a
+		// random x-es header reaches this branch, and error-level logging here
+		// lets an unauthenticated peer flood the log. Keep the camouflaged
+		// homepage so the server stays indistinguishable from a real site for
+		// keyless requests; the easyss client detects the non-encrypted payload
+		// on its first session read and reports a clear handshake-rejected
+		// error.
+		log.Debug("[SERVER] read first record failed", "remote", r.RemoteAddr, "endpoint", endpoint, "err", err)
 		ServeFallback(w, r)
 		return
 	}
@@ -250,24 +258,21 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Pre-validate session encryptors before committing the response.
+	// Pre-validate the session reader/writer before committing the response.
 	// Once WriteHeader + Flush is called the response can no longer be
-	// turned into a fallback HTML page. Encryptor creation checks that the
-	// method is supported (already validated above), but we guard against
+	// turned into a fallback HTML page. Reader/writer creation checks that
+	// the method is supported (already validated above), but we guard against
 	// unexpected internal errors. The request proved key possession, so a
 	// plain 500 (real-site behavior for internal failures) is appropriate.
-	aadC2S := crypto.BuildAAD(endpoint, salt, "c2s", "session", method)
-	c2sEnc, c2sCounter, err := sk.Encryptor("c2s", "session", method)
+	s2cWriter, err := sk.NewWriter(w, crypto.DirS2C, method)
 	if err != nil {
-		log.Error("[SERVER] c2s encryptor", "err", err)
+		log.Error("[SERVER] s2c writer", "err", err)
 		serveReject(w, http.StatusInternalServerError)
 		return
 	}
-
-	aadS2C := crypto.BuildAAD(endpoint, salt, "s2c", "session", method)
-	s2cEnc, s2cCounter, err := sk.Encryptor("s2c", "session", method)
+	c2sReader, err := sk.NewReader(r.Body, crypto.DirC2S, method)
 	if err != nil {
-		log.Error("[SERVER] s2c encryptor", "err", err)
+		log.Error("[SERVER] c2s reader", "err", err)
 		serveReject(w, http.StatusInternalServerError)
 		return
 	}
@@ -281,11 +286,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	_ = rc.Flush()
 
-	c2sReader := crypto.NewDecryptedReader(r.Body, aadC2S, c2sEnc, c2sCounter)
 	c2sReader.SetLeftoverFrames(first.Leftover)
 
-	s2cWriter := crypto.NewRecordWriter(w, s2cEnc, s2cCounter, aadS2C)
-	s2cCfg := shaper.Config{BatchWindowMS: h.batchWindowMS, Cover: shaper.CoverConfig{BudgetRatio: h.coverBudgetRatio, BudgetCap: h.coverBudgetCap}}
+	s2cCfg := h.shaperCfg
 	if endpoint == sharedconfig.EndpointUDP {
 		// UDP uses a short 1ms batch window so datagram bursts are merged
 		// into single encrypted records instead of one record + forced

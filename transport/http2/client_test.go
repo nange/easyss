@@ -221,7 +221,7 @@ func TestTrackReadMarksSlotHeavy(t *testing.T) {
 	// cumulative size threshold.
 	t.Run("fast large transfer marks at size threshold", func(t *testing.T) {
 		slot := &transportSlot{}
-		stream := &HTTP2Stream{slot: slot, startTime: time.Now()}
+		stream := &http2Stream{slot: slot, startTime: time.Now()}
 
 		// Below the fast threshold and too young for the slow path: no mark.
 		stream.trackRead(sharedconfig.HeavyStreamThresholdBytes - 1)
@@ -261,7 +261,7 @@ func TestTrackReadMarksSlotHeavy(t *testing.T) {
 	// so it must be marked once the stream has been alive long enough.
 	t.Run("slow transfer marks after min age", func(t *testing.T) {
 		slot := &transportSlot{}
-		stream := &HTTP2Stream{
+		stream := &http2Stream{
 			slot:      slot,
 			startTime: time.Now().Add(-sharedconfig.HeavyStreamMinAge - time.Second),
 		}
@@ -282,7 +282,7 @@ func TestTrackReadMarksSlotHeavy(t *testing.T) {
 	// A young stream below the fast threshold must not be marked.
 	t.Run("young stream below fast threshold not marked", func(t *testing.T) {
 		slot := &transportSlot{}
-		stream := &HTTP2Stream{slot: slot, startTime: time.Now()}
+		stream := &http2Stream{slot: slot, startTime: time.Now()}
 
 		stream.trackRead(sharedconfig.HeavyStreamSlowThresholdBytes)
 		if slot.heavy.Load() != 0 {
@@ -292,7 +292,7 @@ func TestTrackReadMarksSlotHeavy(t *testing.T) {
 
 	// Nil slot is a no-op (e.g. test-constructed streams).
 	t.Run("nil slot no-op", func(t *testing.T) {
-		noSlot := &HTTP2Stream{}
+		noSlot := &http2Stream{}
 		noSlot.trackRead(sharedconfig.HeavyStreamThresholdBytes)
 		if noSlot.heavyState.Load() != heavyIdle {
 			t.Fatal("nil slot must not be marked heavy")
@@ -303,7 +303,7 @@ func TestTrackReadMarksSlotHeavy(t *testing.T) {
 	// increment the slot counter, and a later transfer must not leak it.
 	t.Run("release before marking never increments", func(t *testing.T) {
 		slot := &transportSlot{}
-		stream := &HTTP2Stream{slot: slot, startTime: time.Now()}
+		stream := &http2Stream{slot: slot, startTime: time.Now()}
 		stream.releaseHeavy()
 		stream.trackRead(sharedconfig.HeavyStreamThresholdBytes)
 		if slot.heavy.Load() != 0 {

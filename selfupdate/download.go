@@ -14,9 +14,9 @@ import (
 // maxUncompressedSize bounds the total decompressed size of a release zip.
 const maxUncompressedSize = 512 << 20
 
-// DownloadAsset streams the asset into a temporary zip file and returns its
+// downloadAsset streams the asset into a temporary zip file and returns its
 // path. The caller is responsible for removing the file.
-func (c *Client) DownloadAsset(ctx context.Context, a *Asset) (string, error) {
+func (c *Client) downloadAsset(ctx context.Context, a *asset) (string, error) {
 	tmp, err := os.CreateTemp("", "easyss-update-*.zip")
 	if err != nil {
 		return "", fmt.Errorf("create temp file: %w", err)
@@ -58,10 +58,10 @@ func (c *Client) DownloadAsset(ctx context.Context, a *Asset) (string, error) {
 	return tmp.Name(), nil
 }
 
-// Unzip extracts a release zip into destDir. Only regular file and directory
+// unzip extracts a release zip into destDir. Only regular file and directory
 // entries are extracted; path traversal (zip-slip) entries are rejected. The
 // zip CRC checksum is verified automatically while copying.
-func Unzip(zipPath, destDir string) error {
+func unzip(zipPath, destDir string) error {
 	r, err := zip.OpenReader(zipPath) //nolint:gosec // path comes from our own temp file
 	if err != nil {
 		return fmt.Errorf("open zip %s: %w", zipPath, err)

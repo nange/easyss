@@ -16,10 +16,10 @@ func TestRecordRoundTrip(t *testing.T) {
 	sk, err := NewStreamKeys(masterKey, salt, endpoint)
 	require.NoError(t, err)
 
-	enc, counter, err := sk.Encryptor("c2s", "bootstrap", protocol.MethodAES256GCM)
+	enc, counter, err := sk.newEncryptor(bootstrapPhase, DirC2S, protocol.MethodAES256GCM)
 	require.NoError(t, err)
 
-	aad := BuildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
+	aad := buildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
 
 	var buf bytes.Buffer
 	w := NewRecordWriter(&buf, enc, counter, aad)
@@ -29,9 +29,9 @@ func TestRecordRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, buf.Len(), 3)
 
-	decEnc, decCounter, err := sk.Encryptor("c2s", "bootstrap", protocol.MethodAES256GCM)
+	decEnc, decCounter, err := sk.newEncryptor(bootstrapPhase, DirC2S, protocol.MethodAES256GCM)
 	require.NoError(t, err)
-	decAAD := BuildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
+	decAAD := buildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
 
 	r := NewRecordReader(&buf, decEnc, decCounter, decAAD)
 	decrypted, err := r.ReadRecord()
@@ -46,9 +46,9 @@ func TestRecordWriterFlushesAfterCompleteRecord(t *testing.T) {
 
 	sk, err := NewStreamKeys(masterKey, salt, endpoint)
 	require.NoError(t, err)
-	enc, counter, err := sk.Encryptor("s2c", "session", protocol.MethodAES256GCM)
+	enc, counter, err := sk.newEncryptor(sessionPhase, DirS2C, protocol.MethodAES256GCM)
 	require.NoError(t, err)
-	aad := BuildAAD(endpoint, salt, "s2c", "session", protocol.MethodAES256GCM)
+	aad := buildAAD(endpoint, salt, "s2c", "session", protocol.MethodAES256GCM)
 
 	// WriteRecord should NOT auto-flush regardless of record size.
 	// The caller (shaper) is responsible for calling Flush().
@@ -66,7 +66,7 @@ func TestRecordWriterFlushesAfterCompleteRecord(t *testing.T) {
 	// Large record should also not auto-flush.
 	large := make([]byte, 32*1024)
 	w2 := &flushBuffer{}
-	enc2, counter2, err := sk.Encryptor("s2c", "session", protocol.MethodAES256GCM)
+	enc2, counter2, err := sk.newEncryptor(sessionPhase, DirS2C, protocol.MethodAES256GCM)
 	require.NoError(t, err)
 	rw2 := NewRecordWriter(w2, enc2, counter2, aad)
 	require.NoError(t, rw2.WriteRecord(large))
@@ -99,10 +99,10 @@ func TestHandshakeRecordRoundTrip(t *testing.T) {
 	sk, err := NewStreamKeys(masterKey, salt, endpoint)
 	require.NoError(t, err)
 
-	enc, ctr, err := sk.Encryptor("c2s", "bootstrap", protocol.MethodAES256GCM)
+	enc, ctr, err := sk.newEncryptor(bootstrapPhase, DirC2S, protocol.MethodAES256GCM)
 	require.NoError(t, err)
 
-	aad := BuildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
+	aad := buildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
 
 	hs := protocol.Handshake{
 		Version: protocol.Version3,
@@ -139,9 +139,9 @@ func TestDecryptedReaderReturnsAllFramesInRecord(t *testing.T) {
 	sk, err := NewStreamKeys(masterKey, salt, endpoint)
 	require.NoError(t, err)
 
-	enc, ctr, err := sk.Encryptor("c2s", "session", protocol.MethodAES256GCM)
+	enc, ctr, err := sk.newEncryptor(sessionPhase, DirC2S, protocol.MethodAES256GCM)
 	require.NoError(t, err)
-	aad := BuildAAD(endpoint, salt, "c2s", "session", protocol.MethodAES256GCM)
+	aad := buildAAD(endpoint, salt, "c2s", "session", protocol.MethodAES256GCM)
 
 	frames := []protocol.Frame{
 		protocol.NewFrameDATA([]byte("one")),
@@ -154,7 +154,7 @@ func TestDecryptedReaderReturnsAllFramesInRecord(t *testing.T) {
 	w := NewRecordWriter(&buf, enc, ctr, aad)
 	require.NoError(t, w.WriteRecord(protocol.EncodeFrames(frames)))
 
-	decEnc, decCtr, err := sk.Encryptor("c2s", "session", protocol.MethodAES256GCM)
+	decEnc, decCtr, err := sk.newEncryptor(sessionPhase, DirC2S, protocol.MethodAES256GCM)
 	require.NoError(t, err)
 	dr := NewDecryptedReader(&buf, aad, decEnc, decCtr)
 
@@ -177,9 +177,9 @@ func TestMultipleRecords(t *testing.T) {
 	sk, err := NewStreamKeys(masterKey, salt, endpoint)
 	require.NoError(t, err)
 
-	enc, ctr, err := sk.Encryptor("c2s", "bootstrap", protocol.MethodAES256GCM)
+	enc, ctr, err := sk.newEncryptor(bootstrapPhase, DirC2S, protocol.MethodAES256GCM)
 	require.NoError(t, err)
-	aad := BuildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
+	aad := buildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
 
 	var buf bytes.Buffer
 	w := NewRecordWriter(&buf, enc, ctr, aad)
@@ -195,9 +195,9 @@ func TestMultipleRecords(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	decEnc, decCtr, err := sk.Encryptor("c2s", "bootstrap", protocol.MethodAES256GCM)
+	decEnc, decCtr, err := sk.newEncryptor(bootstrapPhase, DirC2S, protocol.MethodAES256GCM)
 	require.NoError(t, err)
-	decAAD := BuildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
+	decAAD := buildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
 	r := NewRecordReader(&buf, decEnc, decCtr, decAAD)
 
 	for i, expected := range records {
@@ -215,9 +215,9 @@ func TestRecordTamperDetection(t *testing.T) {
 	sk, err := NewStreamKeys(masterKey, salt, endpoint)
 	require.NoError(t, err)
 
-	enc, ctr, err := sk.Encryptor("c2s", "bootstrap", protocol.MethodAES256GCM)
+	enc, ctr, err := sk.newEncryptor(bootstrapPhase, DirC2S, protocol.MethodAES256GCM)
 	require.NoError(t, err)
-	aad := BuildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
+	aad := buildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
 
 	var buf bytes.Buffer
 	w := NewRecordWriter(&buf, enc, ctr, aad)
@@ -227,9 +227,9 @@ func TestRecordTamperDetection(t *testing.T) {
 	raw := buf.Bytes()
 	raw[len(raw)-1] ^= 0xFF
 
-	decEnc, decCtr, err := sk.Encryptor("c2s", "bootstrap", protocol.MethodAES256GCM)
+	decEnc, decCtr, err := sk.newEncryptor(bootstrapPhase, DirC2S, protocol.MethodAES256GCM)
 	require.NoError(t, err)
-	decAAD := BuildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
+	decAAD := buildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
 
 	r := NewRecordReader(bytes.NewReader(raw), decEnc, decCtr, decAAD)
 	_, err = r.ReadRecord()

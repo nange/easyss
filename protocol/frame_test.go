@@ -9,14 +9,14 @@ func TestFrameEncodeDecode(t *testing.T) {
 	payload := []byte("hello world")
 	f := NewFrameDATA(payload)
 
-	var buf bytes.Buffer
-	if err := WriteFrame(&buf, f); err != nil {
-		t.Fatalf("WriteFrame: %v", err)
-	}
+	buf := AppendFrame(nil, f)
 
-	got, err := ReadFrame(&buf)
+	got, n, err := DecodeFrame(buf)
 	if err != nil {
-		t.Fatalf("ReadFrame: %v", err)
+		t.Fatalf("DecodeFrame: %v", err)
+	}
+	if n != len(buf) {
+		t.Errorf("consumed: got %d, want %d", n, len(buf))
 	}
 
 	if got.Type != FrameDATA {
@@ -27,6 +27,24 @@ func TestFrameEncodeDecode(t *testing.T) {
 	}
 	if !bytes.Equal(got.Payload, payload) {
 		t.Errorf("Payload: got %v, want %v", got.Payload, payload)
+	}
+}
+
+func TestAppendFrameDerivesLengthFromPayload(t *testing.T) {
+	// A Frame whose Length disagrees with its payload (e.g. one decoded from
+	// the wire) must still encode as a well-formed frame.
+	f := Frame{Type: FrameDATA, Length: 99, Payload: []byte("abc")}
+	buf := AppendFrame(nil, f)
+
+	got, n, err := DecodeFrame(buf)
+	if err != nil {
+		t.Fatalf("DecodeFrame: %v", err)
+	}
+	if n != FrameHeaderSize+3 {
+		t.Fatalf("consumed: got %d, want %d", n, FrameHeaderSize+3)
+	}
+	if got.Type != FrameDATA || string(got.Payload) != "abc" {
+		t.Errorf("decoded %d/%q, want %d/%q", got.Type, got.Payload, FrameDATA, "abc")
 	}
 }
 
@@ -71,15 +89,15 @@ func TestEncodeFrames(t *testing.T) {
 	}
 	plaintext := EncodeFrames(frames)
 
-	reader := bytes.NewReader(plaintext)
-
+	remaining := plaintext
 	var decoded []Frame
-	for reader.Len() > 0 {
-		f, err := ReadFrame(reader)
+	for len(remaining) > 0 {
+		f, n, err := DecodeFrame(remaining)
 		if err != nil {
-			t.Fatalf("ReadFrame: %v", err)
+			t.Fatalf("DecodeFrame: %v", err)
 		}
 		decoded = append(decoded, f)
+		remaining = remaining[n:]
 	}
 
 	if len(decoded) != 3 {

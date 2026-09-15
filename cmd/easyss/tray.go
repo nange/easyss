@@ -24,7 +24,6 @@ import (
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/icon"
 	"github.com/nange/easyss/v3/log"
-	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/selfupdate"
 )
 
@@ -619,16 +618,13 @@ func (a *TrayApp) createTun2socks() error {
 	}
 
 	a.cfg.Local.EnableTun2socks = true
-	a.tunMgr = tun.New(tun.Config{
-		Socks5Addr: fmt.Sprintf("socks5://127.0.0.1:%d", a.cfg.Local.SocksPort),
-		DNSServer:  tunDNS(a.cfg),
-	})
+	a.tunMgr = tun.New(a.tunConfig())
 
 	if a.core == nil || a.core.Client == nil {
 		return fmt.Errorf("client not initialized")
 	}
 	icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
-	icmpHandler.SetProxy(a.core.StreamHandler, methodFromString(a.cfg.DefaultServer().Method))
+	icmpHandler.SetProxy(a.core.StreamHandler, a.methodFromServer())
 	a.tunMgr.SetICMPHandler(icmpHandler)
 
 	startTunEngine(a.tunMgr, "device")
@@ -786,11 +782,6 @@ func (a *TrayApp) closeService() {
 }
 
 func (a *TrayApp) startLocalService() {
-	if a.cfg.Local.SocksPort > 0 && a.cfg.Local.HTTPPort > 0 {
-		pacPort := a.cfg.Local.HTTPPort
-		_ = pacPort
-	}
-
 	if a.BrowserMenu() != nil && a.BrowserMenu().IsChecked() {
 		if err := a.setSysProxyOn(); err != nil {
 			log.Error("[SYSTRAY] start local: set sysproxy on", "err", err)
@@ -830,8 +821,4 @@ func (a *TrayApp) TunMenu() *systray.MenuItem {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.tunMenu
-}
-
-func methodFromString(s string) protocol.Method {
-	return protocol.MethodFromString(s)
 }

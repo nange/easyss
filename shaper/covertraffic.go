@@ -28,42 +28,12 @@ type coverInjector struct {
 	stopped          atomic.Bool
 }
 
+// newCoverInjector builds the cover-traffic injector for an already normalized
+// configuration (see Config.Normalize, which is the single place the cover
+// defaults live). A zero BudgetRatio disables cover traffic.
 func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClosing func() bool) *coverInjector {
 	if cfg.BudgetRatio == 0 {
 		return nil
-	}
-	if cfg.BudgetRatio < 0 || cfg.BudgetRatio > 1 {
-		cfg.BudgetRatio = 0.03
-	}
-	if cfg.IdleTimeout <= 0 {
-		cfg.IdleTimeout = 300
-	}
-	if cfg.MinSize <= 0 {
-		cfg.MinSize = 128
-	}
-	if cfg.MaxSize <= 0 {
-		cfg.MaxSize = 1500
-	}
-	if cfg.MaxSize < cfg.MinSize {
-		cfg.MaxSize = cfg.MinSize
-	}
-	// Clamp to the wire format: Frame.Length is uint16, so a payload larger
-	// than 65535 would be truncated in the frame header and corrupt the
-	// record stream, and sizes beyond the bytes-pool ceiling (128KB) would
-	// make bytespool.Get return nil and panic on slicing. The budget cap
-	// bounds cover frames in the default configuration, but a misconfigured
-	// budget_cap must not be able to break the stream.
-	if cfg.MinSize > protocol.MaxUDPDataSize {
-		cfg.MinSize = protocol.MaxUDPDataSize
-	}
-	if cfg.MaxSize > protocol.MaxUDPDataSize {
-		cfg.MaxSize = protocol.MaxUDPDataSize
-	}
-	if cfg.MaxSize < cfg.MinSize {
-		cfg.MaxSize = cfg.MinSize
-	}
-	if cfg.BudgetCap <= 0 {
-		cfg.BudgetCap = 16 * 1024
 	}
 
 	ci := &coverInjector{
@@ -152,11 +122,9 @@ func (ci *coverInjector) onIdle() {
 	coverRNGMu.Lock()
 	_, _ = coverRNG.Read(payload)
 	coverRNGMu.Unlock()
-	frame := protocol.Frame{
-		Type:    protocol.FrameCOVER,
-		Length:  uint16(frameSize),
-		Payload: payload,
-	}
+	// NewFrameWithPayload wraps the pooled buffer without copying it: the
+	// shaper returns this exact buffer to the pool after appending it.
+	frame := protocol.NewFrameWithPayload(protocol.FrameCOVER, payload)
 	_ = ci.inject(frame)
 }
 

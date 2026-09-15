@@ -12,9 +12,9 @@ import (
 	"github.com/nange/easyss/v3/stats"
 )
 
-func newTestStream() (*HTTP2Stream, *io.PipeReader) {
+func newTestStream() (*http2Stream, *io.PipeReader) {
 	pr, pw := io.Pipe()
-	s := &HTTP2Stream{
+	s := &http2Stream{
 		w:      pw,
 		respCh: make(chan roundTripResult, 1),
 		cancel: func() {},
@@ -161,7 +161,7 @@ func TestHTTP2Stream_TrackWriteNilSlotNoOp(t *testing.T) {
 func TestHTTP2Stream_RecordsPathRTTOnResponse(t *testing.T) {
 	// newTestStream exposes respCh as read-only, so keep a writable handle
 	// to inject the response.
-	newStream := func() (*HTTP2Stream, chan roundTripResult) {
+	newStream := func() (*http2Stream, chan roundTripResult) {
 		s, pr := newTestStream()
 		_ = pr
 		respCh := make(chan roundTripResult, 1)
@@ -245,7 +245,7 @@ func TestHTTP2Stream_SlotDraining(t *testing.T) {
 	}
 
 	// A stream without a slot must not panic and never drains.
-	ns := &HTTP2Stream{}
+	ns := &http2Stream{}
 	if ns.SlotDraining() {
 		t.Fatal("nil slot must not report draining")
 	}

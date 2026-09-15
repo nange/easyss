@@ -24,7 +24,11 @@ func TestIsLocalConnClosedError(t *testing.T) {
 		{"io.ErrClosedPipe", io.ErrClosedPipe, true},
 		{"use of closed network connection", errors.New("use of closed network connection"), true},
 		{"Use Of Closed Network Connection", errors.New("Use Of Closed Network Connection"), true}, // 大小写不敏感
-		{"connection reset by peer", errors.New("connection reset by peer"), true},
+		// "connection reset by peer" belongs to isTransientStreamError: it is a
+		// stream-level failure, not a locally closed connection. Classifying it
+		// in both places was what made the same error report as two different
+		// things depending on which check ran first.
+		{"connection reset by peer", errors.New("connection reset by peer"), false},
 		{"forcibly closed by the remote host", errors.New("forcibly closed by the remote host"), true},
 		{"software caused connection abort", errors.New("software caused connection abort"), true},
 		{"connection was aborted", errors.New("connection was aborted"), true},
@@ -40,6 +44,11 @@ func TestIsLocalConnClosedError(t *testing.T) {
 				t.Errorf("isLocalConnClosedError(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+
+	// The reset case is transient, and only transient.
+	if !isTransientStreamError(errors.New("connection reset by peer")) {
+		t.Error("isTransientStreamError(connection reset by peer) = false, want true")
 	}
 }
 
@@ -163,12 +172,6 @@ func TestIsDNSResponse(t *testing.T) {
 			}
 		})
 	}
-}
-
-// ParseAddress 委托给 socks5.ParseAddress，此处仅验证代理不 panic
-func TestParseAddress(t *testing.T) {
-	_, _, _, _ = ParseAddress("example.com:80")
-	// 纯 delegate 调用，只验证不 panic
 }
 
 func TestIsServerDomain(t *testing.T) {

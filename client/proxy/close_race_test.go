@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/protocol"
 )
 
@@ -28,7 +29,16 @@ func TestSocks5CloseRacingStart(t *testing.T) {
 		l.Close() //nolint:errcheck
 
 		h := newTestStreamHandler(&mockTransport{})
-		srv, err := NewSocks5Server(addr, "", "", h, nil, "", protocol.MethodAES256GCM, true, 10*time.Second, 30*time.Second, 0, 0, nil)
+		srv, err := NewSocks5Server(Socks5Options{
+			ListenAddr: addr,
+			Handler:    h,
+			Method:     protocol.MethodAES256GCM,
+			Timeouts: config.Timeouts{
+				Base:       30 * time.Second,
+				Dial:       10 * time.Second,
+				StreamIdle: 30 * time.Second,
+			},
+		})
 		if err != nil {
 			t.Fatalf("NewSocks5Server #%d: %v", i, err)
 		}

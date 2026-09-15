@@ -14,6 +14,7 @@ import (
 	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/shaper"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,12 +26,6 @@ func buildBootstrapRecord(t *testing.T, masterKey []byte, endpoint string, proto
 	require.NoError(t, err)
 	sk, err := crypto.NewStreamKeys(masterKey, salt, endpoint)
 	require.NoError(t, err)
-	// The bootstrap record is always encrypted with AES-256-GCM regardless
-	// of the session method negotiated in the handshake frame.
-	enc, counter, err := sk.Encryptor("c2s", "bootstrap", protocol.MethodAES256GCM)
-	require.NoError(t, err)
-	aad := crypto.BuildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
-
 	hs := protocol.NewFrameHANDSHAKE(protocol.Handshake{
 		Version: protocol.Version3,
 		Proto:   proto,
@@ -39,8 +34,11 @@ func buildBootstrapRecord(t *testing.T, masterKey []byte, endpoint string, proto
 	})
 	plaintext := protocol.EncodeFrames([]protocol.Frame{hs})
 
+	// The bootstrap record is always encrypted with AES-256-GCM regardless
+	// of the session method negotiated in the handshake frame.
 	var buf bytes.Buffer
-	rw := crypto.NewRecordWriter(&buf, enc, counter, aad)
+	rw, err := sk.BootstrapWriter(&buf)
+	require.NoError(t, err)
 	require.NoError(t, rw.WriteRecord(plaintext))
 	return base64.RawURLEncoding.EncodeToString(salt), buf.Bytes()
 }
@@ -84,15 +82,13 @@ func saltToB64(salt []byte) string {
 	return base64.RawURLEncoding.EncodeToString(salt)
 }
 
-func newRejectHandler(timeout time.Duration) http.Handler {
+func newRejectHandler(handshakeTimeout time.Duration) http.Handler {
 	return NewProxyHandler(ProxyHandlerConfig{
-		MasterKey:         bytes.Repeat([]byte{0x42}, 32),
-		AllowedMethods:    []string{protocol.MethodAES256GCM.String()},
-		HandshakeTimeout:  timeout,
-		Timeout:           5 * time.Second,
-		StreamIdleTimeout: 300 * time.Second,
-		UDPIdleTimeout:    30 * time.Second,
-		BatchWindowMS:     1,
+		MasterKey:        bytes.Repeat([]byte{0x42}, 32),
+		AllowedMethods:   []string{protocol.MethodAES256GCM.String()},
+		Timeouts:         sharedconfig.NewTimeouts(5 * time.Second),
+		HandshakeTimeout: handshakeTimeout,
+		Shaper:           shaper.Config{BatchWindowMS: 1},
 	})
 }
 

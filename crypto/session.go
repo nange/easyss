@@ -15,6 +15,26 @@ const (
 	sessionPhase   = "session"
 )
 
+// Direction identifies one side of a session: client-to-server or
+// server-to-client. Each direction has its own key and nonce counter.
+type Direction uint8
+
+const (
+	DirC2S Direction = 1
+	DirS2C Direction = 2
+)
+
+func (d Direction) String() string {
+	switch d {
+	case DirC2S:
+		return "c2s"
+	case DirS2C:
+		return "s2c"
+	default:
+		return "unknown"
+	}
+}
+
 // ErrHandshakeTimeout reports that a complete bootstrap record was not
 // received within the handshake timeout. The server responds with 408
 // Request Timeout (mirroring nginx client_body_timeout behavior) instead of a
@@ -71,11 +91,56 @@ func NewStreamKeys(masterKey, salt []byte, endpoint string) (*StreamKeys, error)
 	}, nil
 }
 
-func (sk *StreamKeys) Salt() []byte {
-	return sk.salt
+// BootstrapWriter returns the record writer for a stream's first record (the
+// bootstrap record carrying the handshake). The bootstrap phase always uses
+// AES-256-GCM on the c2s key, so the caller cannot select a mismatched method.
+func (sk *StreamKeys) BootstrapWriter(w io.Writer) (*RecordWriter, error) {
+	return sk.newRecordWriter(w, bootstrapPhase, DirC2S, protocol.MethodAES256GCM)
 }
 
-func (sk *StreamKeys) Encryptor(direction, phase string, method protocol.Method) (Encryptor, *CounterNonce, error) {
+// NewWriter returns a session-phase record writer for the given direction.
+func (sk *StreamKeys) NewWriter(w io.Writer, dir Direction, method protocol.Method) (*RecordWriter, error) {
+	return sk.newRecordWriter(w, sessionPhase, dir, method)
+}
+
+// NewReader returns a session-phase record reader for the given direction.
+// Reader and writer are created together with their AAD, encryptor and nonce
+// counter, so the three can never disagree and a direction's counter is
+// instantiated exactly once (calling newEncryptor twice for one direction
+// would restart the nonce counter and reuse keystream).
+func (sk *StreamKeys) NewReader(r io.Reader, dir Direction, method protocol.Method) (*DecryptedReader, error) {
+	enc, counter, err := sk.newEncryptor(sessionPhase, dir, method)
+	if err != nil {
+		return nil, err
+	}
+	return NewDecryptedReader(r, sk.aad(dir, sessionPhase, method), enc, counter), nil
+}
+
+// NewRecordReader is NewReader without the frame layer, for callers that
+// decode records themselves (e.g. tests and the bootstrap first-record read).
+func (sk *StreamKeys) NewRecordReader(r io.Reader, dir Direction, method protocol.Method) (*RecordReader, error) {
+	enc, counter, err := sk.newEncryptor(sessionPhase, dir, method)
+	if err != nil {
+		return nil, err
+	}
+	return NewRecordReader(r, enc, counter, sk.aad(dir, sessionPhase, method)), nil
+}
+
+func (sk *StreamKeys) newRecordWriter(w io.Writer, phase string, dir Direction, method protocol.Method) (*RecordWriter, error) {
+	enc, counter, err := sk.newEncryptor(phase, dir, method)
+	if err != nil {
+		return nil, err
+	}
+	return NewRecordWriter(w, enc, counter, sk.aad(dir, phase, method)), nil
+}
+
+// aad builds the additional authenticated data binding a record to this
+// stream's endpoint, salt, direction, phase and method.
+func (sk *StreamKeys) aad(dir Direction, phase string, method protocol.Method) []byte {
+	return buildAAD(sk.Endpoint, sk.salt, dir.String(), phase, method)
+}
+
+func (sk *StreamKeys) newEncryptor(phase string, dir Direction, method protocol.Method) (Encryptor, *CounterNonce, error) {
 	var key [32]byte
 	var noncePrefix [4]byte
 
@@ -83,15 +148,15 @@ func (sk *StreamKeys) Encryptor(direction, phase string, method protocol.Method)
 	case bootstrapPhase:
 		return sk.bootstrapEncryptor, NewCounterNonce(sk.bootstrapNoncePrefix), nil
 	case sessionPhase:
-		switch direction {
-		case "c2s":
+		switch dir {
+		case DirC2S:
 			key = sk.sessionKeys.C2SKey
 			noncePrefix = sk.sessionKeys.C2SNoncePrefix
-		case "s2c":
+		case DirS2C:
 			key = sk.sessionKeys.S2CKey
 			noncePrefix = sk.sessionKeys.S2CNoncePrefix
 		default:
-			return nil, nil, fmt.Errorf("crypto: invalid direction %s", direction)
+			return nil, nil, fmt.Errorf("crypto: invalid direction %s", dir)
 		}
 	default:
 		return nil, nil, fmt.Errorf("crypto: invalid phase %s", phase)
@@ -114,7 +179,7 @@ func (sk *StreamKeys) Encryptor(direction, phase string, method protocol.Method)
 	return enc, NewCounterNonce(noncePrefix), nil
 }
 
-func BuildAAD(endpoint string, salt []byte, direction, phase string, method protocol.Method) []byte {
+func buildAAD(endpoint string, salt []byte, direction, phase string, method protocol.Method) []byte {
 	prefix := "easyss-v3" + endpoint
 	b := make([]byte, 0, len(prefix)+len(salt)+len(direction)+len(phase)+len(method.String())+4)
 	b = append(b, prefix...)
@@ -169,62 +234,35 @@ func (dr *DecryptedReader) ReadFrame() (protocol.Frame, error) {
 	return frames[0], nil
 }
 
-func decodeFramesFromPlaintext(plaintext []byte) ([]protocol.Frame, error) {
-	return decodeFramesIntoBuf(plaintext, nil)
-}
-
+// decodeFramesIntoBuf splits a decrypted record into frames, reusing buf as
+// the backing array. Frame payloads alias plaintext, whose lifetime is the
+// caller's.
 func decodeFramesIntoBuf(plaintext []byte, buf []protocol.Frame) ([]protocol.Frame, error) {
-	if len(plaintext) < protocol.FrameHeaderSize {
-		return nil, io.ErrUnexpectedEOF
-	}
-
 	frames := buf[:0]
 	for len(plaintext) > 0 {
-		f, err := decodeFrame(plaintext)
+		f, n, err := protocol.DecodeFrame(plaintext)
 		if err != nil {
 			return nil, err
 		}
 		frames = append(frames, f)
-		plaintext = plaintext[f.EncodedLen():]
+		plaintext = plaintext[n:]
 	}
-
 	return frames, nil
 }
 
-func decodeFrame(data []byte) (protocol.Frame, error) {
-	if len(data) < protocol.FrameHeaderSize {
-		return protocol.Frame{}, io.ErrUnexpectedEOF
-	}
-	ftype := protocol.FrameType(data[0])
-	length := uint16(data[1])<<8 | uint16(data[2])
-	payload := data[3:]
-
-	if int(length) > len(payload) {
-		return protocol.Frame{}, io.ErrUnexpectedEOF
-	}
-
-	return protocol.Frame{
-		Type:    ftype,
-		Length:  length,
-		Payload: payload[:length],
-	}, nil
-}
-
 func (sk *StreamKeys) ReadFirstRecord(src io.Reader) (FirstRecord, error) {
-	bootstrapEnc, bootstrapCounter, err := sk.Encryptor("c2s", bootstrapPhase, protocol.MethodAES256GCM)
+	bootstrapEnc, bootstrapCounter, err := sk.newEncryptor(bootstrapPhase, DirC2S, protocol.MethodAES256GCM)
 	if err != nil {
 		return FirstRecord{}, fmt.Errorf("crypto: read first record: %w", err)
 	}
-	aad := BuildAAD(sk.Endpoint, sk.salt, "c2s", bootstrapPhase, protocol.MethodAES256GCM)
 
-	rr := NewRecordReader(src, bootstrapEnc, bootstrapCounter, aad)
+	rr := NewRecordReader(src, bootstrapEnc, bootstrapCounter, sk.aad(DirC2S, bootstrapPhase, protocol.MethodAES256GCM))
 	plaintext, err := rr.ReadRecord()
 	if err != nil {
 		return FirstRecord{}, fmt.Errorf("crypto: read first record: %w", err)
 	}
 
-	reader := &rawFrameReader{data: plaintext}
-	frame, err := protocol.ReadFrame(reader)
+	frame, n, err := protocol.DecodeFrame(plaintext)
 	if err != nil {
 		return FirstRecord{}, fmt.Errorf("crypto: read first frame: %w", err)
 	}
@@ -238,8 +276,9 @@ func (sk *StreamKeys) ReadFirstRecord(src io.Reader) (FirstRecord, error) {
 		return FirstRecord{}, fmt.Errorf("crypto: decode handshake: %w", err)
 	}
 
-	leftoverBytes := reader.data[reader.offset:]
-	leftover, err := decodeFramesFromPlaintextAllowEmpty(leftoverBytes)
+	// The first record may carry more than the handshake (the client merges
+	// the first DATA/DATAGRAM and a padding frame into it).
+	leftover, err := decodeFramesIntoBuf(plaintext[n:], nil)
 	if err != nil {
 		return FirstRecord{}, fmt.Errorf("crypto: decode leftover frames: %w", err)
 	}
@@ -248,13 +287,6 @@ func (sk *StreamKeys) ReadFirstRecord(src io.Reader) (FirstRecord, error) {
 		Handshake: handshake,
 		Leftover:  leftover,
 	}, nil
-}
-
-func decodeFramesFromPlaintextAllowEmpty(plaintext []byte) ([]protocol.Frame, error) {
-	if len(plaintext) == 0 {
-		return nil, nil
-	}
-	return decodeFramesFromPlaintext(plaintext)
 }
 
 func (sk *StreamKeys) ReadFirstRecordWithTimeout(ctx context.Context, src io.Reader, timeout time.Duration) (FirstRecord, error) {
@@ -295,18 +327,4 @@ func closeReader(r io.Reader) {
 	if closer, ok := r.(io.Closer); ok {
 		closer.Close() //nolint:errcheck
 	}
-}
-
-type rawFrameReader struct {
-	data   []byte
-	offset int
-}
-
-func (r *rawFrameReader) Read(p []byte) (int, error) {
-	if r.offset >= len(r.data) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.data[r.offset:])
-	r.offset += n
-	return n, nil
 }

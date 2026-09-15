@@ -50,6 +50,16 @@ type SlotDrainingStream interface {
 	SlotDraining() bool
 }
 
+// BootstrapSentMarker is implemented by streams whose transport samples the
+// pure client<->server path RTT: the proxy marks the instant the bootstrap
+// record was flushed, so the transport can record the round trip when the
+// response headers arrive (the server commits its response before dialing the
+// origin, so origin latency never enters the sample). Streams that do not
+// implement it are simply not RTT-sampled.
+type BootstrapSentMarker interface {
+	MarkBootstrapSent()
+}
+
 type OpenRequest struct {
 	Endpoint     string
 	Salt         string
@@ -81,7 +91,7 @@ type TransportStats struct {
 	BulkConnsStatus     string `json:"bulk_conns_status,omitempty"`
 	// GrowEvents lists the most recent slot-growth events (new connections
 	// activated by the lazy-expansion scheduler), newest first, bounded to
-	// a small ring (see HTTP2Transport.recordGrowEvent). Each event records
+	// a small ring in the transport implementation. Each event records
 	// the pool that grew, the live slot count after growth, and the
 	// endpoint/target of the request that triggered the growth, so a
 	// sudden connection-count jump can be attributed to the traffic that

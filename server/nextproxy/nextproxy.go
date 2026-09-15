@@ -27,6 +27,13 @@ type NextProxy struct {
 	cidrIPs        []*net.IPNet
 	domains        map[string]struct{}
 	domainPatterns []*regexp.Regexp
+
+	// learnedIPs/learnedDomains count only the entries added by AddIP/
+	// AddDomain. The maps above also hold the file-configured entries, so
+	// len(ips)/len(domains) cannot be used as the learning budget: a large
+	// configured proxy file would otherwise disable dynamic learning.
+	learnedIPs     int
+	learnedDomains int
 }
 
 func New(proxyURL string, enableUDP, allHost bool) (*NextProxy, error) {
@@ -124,19 +131,7 @@ func (np *NextProxy) ShouldProxy(host string) bool {
 			}
 		}
 	} else {
-		if _, ok := np.domains[host]; ok {
-			return true
-		}
-		for _, sub := range util.SubDomains(host) {
-			if _, ok := np.domains[sub]; ok {
-				return true
-			}
-		}
-		for _, re := range np.domainPatterns {
-			if re.MatchString(host) {
-				return true
-			}
-		}
+		return np.matchesDomainLocked(host)
 	}
 	return false
 }
@@ -151,16 +146,24 @@ func (np *NextProxy) IsCustomDomain(domain string) bool {
 	np.mu.RLock()
 	defer np.mu.RUnlock()
 
-	if _, ok := np.domains[domain]; ok {
+	return np.matchesDomainLocked(domain)
+}
+
+// matchesDomainLocked reports whether host, any of its parent domains, or one
+// of the configured patterns matches the configured domain set. The caller
+// must hold np.mu: ShouldProxy and IsCustomDomain are its only callers and
+// used to carry identical copies of this walk.
+func (np *NextProxy) matchesDomainLocked(host string) bool {
+	if _, ok := np.domains[host]; ok {
 		return true
 	}
-	for _, sub := range util.SubDomains(domain) {
+	for _, sub := range util.SubDomains(host) {
 		if _, ok := np.domains[sub]; ok {
 			return true
 		}
 	}
 	for _, re := range np.domainPatterns {
-		if re.MatchString(domain) {
+		if re.MatchString(host) {
 			return true
 		}
 	}
@@ -191,8 +194,9 @@ func (np *NextProxy) AddIP(ip string) {
 		}
 	}
 	np.mu.Lock()
-	if len(np.ips) < maxLearnedEntries {
+	if _, exists := np.ips[ip]; !exists && np.learnedIPs < maxLearnedEntries {
 		np.ips[ip] = struct{}{}
+		np.learnedIPs++
 	}
 	np.mu.Unlock()
 }
@@ -204,8 +208,9 @@ func (np *NextProxy) AddDomain(domain string) {
 		return
 	}
 	np.mu.Lock()
-	if len(np.domains) < maxLearnedEntries {
+	if _, exists := np.domains[domain]; !exists && np.learnedDomains < maxLearnedEntries {
 		np.domains[domain] = struct{}{}
+		np.learnedDomains++
 	}
 	np.mu.Unlock()
 }
@@ -216,10 +221,6 @@ func (np *NextProxy) SetDialTimeout(d time.Duration) {
 		return
 	}
 	np.dialTimeout = d
-}
-
-func (np *NextProxy) Dial(network, addr string) (net.Conn, error) {
-	return np.DialContext(context.Background(), network, addr)
 }
 
 func (np *NextProxy) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -293,11 +294,14 @@ func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string
 	}
 }
 
-func (np *NextProxy) URL() *url.URL {
-	if np == nil {
-		return nil
+// Host returns the upstream proxy address as "host:port" ("" on a nil
+// receiver). Callers only ever need it for dialing and logging, so the
+// internal *url.URL is not exposed.
+func (np *NextProxy) Host() string {
+	if np == nil || np.url == nil {
+		return ""
 	}
-	return np.url
+	return np.url.Host
 }
 
 func (np *NextProxy) EnableUDP() bool {

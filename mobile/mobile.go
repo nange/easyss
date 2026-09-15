@@ -1,7 +1,7 @@
 // Package mobile is the gomobile binding for the EasySS client core.
 //
 // The transport warm-up is no longer exported here: runner.Run dispatches it
-// in the background once the core is up (runner.Core.StartWarmUp), unless the
+// in the background once the core is up (runner.Run), unless the
 // configuration disables it via transport.disable_warm_up. Host applications
 // upgrading this AAR must drop their WarmUp() call accordingly — Start()
 // returning already means the warm-up has been dispatched. The "connecting"

@@ -132,7 +132,7 @@ func TestGrowEventRingOrderAndCap(t *testing.T) {
 	for i := range slots {
 		slots[i] = &transportSlot{idx: i}
 	}
-	tr := &HTTP2Transport{sched: newScheduler(4, slots, 4, 2)}
+	tr := &http2Transport{sched: newScheduler(4, slots, 4, 2)}
 
 	for i := range maxGrowEvents + 4 {
 		tr.recordGrowEvent("bulk", int32(i), transport.OpenRequest{
@@ -166,7 +166,7 @@ func TestGrowEventRingConcurrent(t *testing.T) {
 	for i := range slots {
 		slots[i] = &transportSlot{idx: i}
 	}
-	tr := &HTTP2Transport{sched: newScheduler(4, slots, 4, 2)}
+	tr := &http2Transport{sched: newScheduler(4, slots, 4, 2)}
 
 	done := make(chan struct{})
 	var wg sync.WaitGroup

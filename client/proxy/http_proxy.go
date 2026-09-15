@@ -19,7 +19,6 @@ import (
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/stats"
-	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/txthinking/socks5"
 )
@@ -70,32 +69,54 @@ type TunConfig struct {
 	MTU            int    `json:"mtu"`
 }
 
-func NewHTTPProxyServer(listenAddr, socksAddr, username, password string, timeout time.Duration, handler *StreamHandler, rt *router.Router, method protocol.Method, dial func(context.Context, string, string) (net.Conn, error)) (*HTTPProxyServer, error) {
+// HTTPProxyOptions configures NewHTTPProxyServer. It replaces a positional
+// parameter list that had grown to nine arguments.
+type HTTPProxyOptions struct {
+	ListenAddr string
+	SocksAddr  string
+	Username   string
+	Password   string
+	// Timeout is the base timeout used for the reverse proxy's outbound
+	// requests and idle handling.
+	Timeout time.Duration
+	Handler *StreamHandler
+	Router  *router.Router
+	Method  protocol.Method
+	// Dial opens direct connections (bypassing the local SOCKS5 proxy) for the
+	// forward path when the router marks the host direct; nil uses a plain
+	// net.Dialer.
+	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
+}
+
+func NewHTTPProxyServer(opts HTTPProxyOptions) (*HTTPProxyServer, error) {
+	listenAddr, socksAddr := opts.ListenAddr, opts.SocksAddr
 	if socksAddr == "" {
 		return nil, fmt.Errorf("http proxy requires a local socks5 address")
 	}
+	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = time.Duration(config.DefaultTimeout) * time.Second
 	}
+	dial := opts.Dial
 	if dial == nil {
 		dial = defaultDirectDialContext
 	}
 
 	socksURL := &url.URL{Scheme: "socks5", Host: socksAddr}
-	if username != "" || password != "" {
-		socksURL.User = url.UserPassword(username, password)
+	if opts.Username != "" || opts.Password != "" {
+		socksURL.User = url.UserPassword(opts.Username, opts.Password)
 	}
 
 	s := &HTTPProxyServer{
 		listenAddr: listenAddr,
 		socksAddr:  socksAddr,
 		socksURL:   socksURL,
-		username:   username,
-		password:   password,
+		username:   opts.Username,
+		password:   opts.Password,
 		timeout:    timeout,
-		handler:    handler,
-		router:     rt,
-		method:     method,
+		handler:    opts.Handler,
+		router:     opts.Router,
+		method:     opts.Method,
 		dial:       dial,
 	}
 	s.rp = s.newReverseProxy()
@@ -343,20 +364,15 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Mirror the SOCKS5 path's IPv6 policy: with ipv6_rule disabled the
-	// SOCKS5 handler rejects IPv6 targets before forwarding, so the CONNECT
-	// path must too, or the two entry points would behave inconsistently.
-	if s.router != nil && s.router.ShouldIPV6Disable() && util.IsIPV6(host) {
+	// The IPv6 policy gate and the routing rule come from one classification
+	// shared with the SOCKS5 path, so the two entry points cannot drift.
+	cls := s.router.ClassifyHost(host)
+	if cls.IPV6Rejected {
 		log.Warn("[HTTP-PROXY] CONNECT ipv6 target rejected, ipv6 disabled", "target", target)
 		http.Error(w, "IPv6 disabled", http.StatusForbidden)
 		return
 	}
-
-	rule := router.HostRuleProxy
-	if s.router != nil {
-		rule = s.router.MatchHostRule(host)
-	}
-	if rule == router.HostRuleBlock {
+	if cls.Rule == router.HostRuleBlock {
 		log.Info("[HTTP-PROXY] CONNECT blocked", "target", target)
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
@@ -373,7 +389,7 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 	}
 	defer hijConn.Close() //nolint:errcheck
 
-	if rule == router.HostRuleDirect {
+	if cls.Rule == router.HostRuleDirect {
 		log.Info("[HTTP-PROXY] CONNECT direct", "target", target)
 		remote, err := s.directConnect(target)
 		if err != nil {

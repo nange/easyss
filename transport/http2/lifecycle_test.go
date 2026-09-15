@@ -139,8 +139,6 @@ func newTestLifecycle(n int, probe func(context.Context, *transportSlot) (float6
 			maxSlots: 1,
 			base:     16,
 		},
-		threshold:     8,
-		bulkThreshold: 16,
 	}
 	sch.priority.liveCount.Store(int32(n))
 	lc := &slotLifecycle{sched: sch, probeFunc: probe}

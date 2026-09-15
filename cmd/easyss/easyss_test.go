@@ -308,12 +308,14 @@ func newTestHarness(t *testing.T) *testHarness {
 	t.Cleanup(h.Close)
 
 	// Create server config
-	serverCfg := &serverconfig.ServerConfig{
-		Listen:   h.serverAddr,
-		Password: testPassword,
-		CertPath: h.certPath,
-		KeyPath:  h.keyPath,
-		Timeout:  30,
+	serverCfg := &serverconfig.FileConfig{
+		Timeout: 30,
+		Server: serverconfig.ServerConfig{
+			Listen:   h.serverAddr,
+			Password: testPassword,
+			CertPath: h.certPath,
+			KeyPath:  h.keyPath,
+		},
 	}
 
 	srv, err := server.New(serverCfg)
@@ -374,20 +376,25 @@ func newTestHarness(t *testing.T) *testHarness {
 	method := protocol.MethodFromString("aes-256-gcm")
 
 	// Create stream handler
-	timeout := clientCfg.TimeoutDuration()
-	streamIdleTimeout := sharedconfig.StreamIdleTimeout(timeout)
-	udpIdleTimeout := sharedconfig.UDPIdleTimeout(timeout)
-	dialTimeout := sharedconfig.DialTimeout(timeout)
+	timeouts := sharedconfig.NewTimeouts(clientCfg.TimeoutDuration())
 	shaperCfg := shaper.Config{
 		BatchWindowMS: clientCfg.Shaper.BatchWindowMS,
 		Cover: shaper.CoverConfig{
 			BudgetRatio: clientCfg.Shaper.CoverBudgetRatio,
 		},
 	}
-	handler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, streamIdleTimeout)
+	handler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, timeouts.StreamIdle)
 
 	// Start SOCKS5 proxy
-	socksServer, err := proxy.NewSocks5Server(h.socksAddr, "", "", handler, cli.Router(), "", method, true, dialTimeout, udpIdleTimeout, timeout/3, streamIdleTimeout, cli.DialContext)
+	socksServer, err := proxy.NewSocks5Server(proxy.Socks5Options{
+		ListenAddr:        h.socksAddr,
+		Handler:           handler,
+		Router:            cli.Router(),
+		Method:            method,
+		DisableQUIC:       true,
+		Timeouts:          timeouts,
+		DirectDialContext: cli.DialContext,
+	})
 	require.NoError(t, err)
 
 	socksErr := make(chan error, 1)
@@ -400,7 +407,15 @@ func newTestHarness(t *testing.T) *testHarness {
 	h.closers = append(h.closers, func() { _ = socksServer.Close() })
 
 	// Start HTTP proxy
-	httpProxy, err := proxy.NewHTTPProxyServer(h.httpAddr, h.socksAddr, "", "", timeout, handler, cli.Router(), method, cli.DialContext)
+	httpProxy, err := proxy.NewHTTPProxyServer(proxy.HTTPProxyOptions{
+		ListenAddr: h.httpAddr,
+		SocksAddr:  h.socksAddr,
+		Timeout:    timeouts.Base,
+		Handler:    handler,
+		Router:     cli.Router(),
+		Method:     method,
+		Dial:       cli.DialContext,
+	})
 	require.NoError(t, err)
 
 	httpErr := make(chan error, 1)

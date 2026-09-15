@@ -58,9 +58,16 @@ func (h *ICMPHandler) HandlePacket(pkt adapter.Packet) bool {
 		return false
 	}
 
-	rule := h.router.MatchHostRule(dstAddr)
+	// The IPv6 policy gate is part of the shared classification: an ICMP echo
+	// to a literal IPv6 address must be rejected on the same terms as the
+	// SOCKS5/HTTP paths when ipv6_rule disables IPv6.
+	cls := h.router.ClassifyHost(dstAddr)
+	if cls.IPV6Rejected {
+		log.Info("[ICMP_BLOCK] ipv6 target rejected, ipv6 disabled", "dst", dstAddr, "type", icmpType)
+		return true
+	}
 
-	switch rule {
+	switch cls.Rule {
 	case router.HostRuleDirect:
 		log.Info("[ICMP_DIRECT]", "dst", dstAddr, "type", icmpType)
 		return false

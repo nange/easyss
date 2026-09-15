@@ -36,19 +36,18 @@ type NextProxyConfig struct {
 	AllHost       bool   `json:"all_host"`
 }
 
+// ServerConfig holds exactly the fields that live under the "server" key of the
+// config file. The top-level settings (version, timeout, fallback, shaper,
+// transport, next_proxy, log, pprof_enabled) live on FileConfig, their only
+// home: server.Server reads that one struct instead of merging a second copy.
 type ServerConfig struct {
-	Listen         string          `json:"listen"`
-	Domain         string          `json:"domain"`
-	Password       string          `json:"password"`
-	AllowedMethods []string        `json:"allowed_methods"`
-	CertPath       string          `json:"cert_path"`
-	KeyPath        string          `json:"key_path"`
-	Email          string          `json:"email"`
-	Timeout        int             `json:"-"`
-	Fallback       FallbackConfig  `json:"-"`
-	Shaper         ShaperConfig    `json:"-"`
-	Transport      TransportConfig `json:"-"`
-	NextProxy      NextProxyConfig `json:"-"`
+	Listen         string   `json:"listen"`
+	Domain         string   `json:"domain"`
+	Password       string   `json:"password"`
+	AllowedMethods []string `json:"allowed_methods"`
+	CertPath       string   `json:"cert_path"`
+	KeyPath        string   `json:"key_path"`
+	Email          string   `json:"email"`
 }
 
 type FileConfig struct {
@@ -63,23 +62,11 @@ type FileConfig struct {
 	Timeout       int             `json:"timeout"`
 }
 
-func (fc *FileConfig) EffectiveServerConfig() ServerConfig {
-	cfg := fc.Server
-	cfg.Timeout = fc.Timeout
-	cfg.Fallback = fc.Fallback
-	cfg.Shaper = fc.Shaper
-	cfg.Transport = fc.Transport
-	cfg.NextProxy = fc.NextProxy
-	return cfg
-}
-
 // ResolveFilePaths resolves relative file paths in the config against the
 // executable directory when they cannot be found in the current working
-// directory. Must be called before EffectiveServerConfig since the latter
-// copies the Server/NextProxy structs by value. On macOS the server is often
-// launched by launchd with cwd=/, so relative paths like cert_path/key_path
-// or next_proxy_file would otherwise not be found even though the files sit
-// next to the binary.
+// directory. On macOS the server is often launched by launchd with cwd=/, so
+// relative paths like cert_path/key_path or next_proxy_file would otherwise not
+// be found even though the files sit next to the binary.
 func (fc *FileConfig) ResolveFilePaths() {
 	fc.Server.CertPath = util.ResolvePath(fc.Server.CertPath)
 	fc.Server.KeyPath = util.ResolvePath(fc.Server.KeyPath)

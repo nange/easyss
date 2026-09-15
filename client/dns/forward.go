@@ -172,7 +172,3 @@ func (s *ForwardServer) systemDNSServers() []string {
 	}
 	return filtered
 }
-
-func (s *ForwardServer) IsRunning() bool {
-	return s.running.Load()
-}

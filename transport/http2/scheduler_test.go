@@ -44,8 +44,6 @@ func newTestScheduler(specs ...[2]int32) *slotScheduler {
 			maxSlots: 1,
 			base:     8,
 		},
-		threshold:     4,
-		bulkThreshold: 8,
 	}
 	sch.priority.liveCount.Store(int32(len(pSlots)))
 	return sch
