@@ -383,8 +383,13 @@ func TestCreateScriptsGuardEveryCommand(t *testing.T) {
 			for line := range strings.SplitSeq(tc.script, "\n") {
 				line = strings.TrimSpace(line)
 				if inComment {
-					inComment = !strings.HasPrefix(line, "#")
-					continue
+					if strings.HasPrefix(line, "#") {
+						continue
+					}
+					// The comment block ends here: this line is code and has to
+					// fall through to the checks below instead of being skipped,
+					// which would leave the command right under a comment unseen.
+					inComment = false
 				}
 				switch {
 				case line == "":

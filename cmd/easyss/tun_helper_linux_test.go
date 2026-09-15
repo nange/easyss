@@ -568,6 +568,18 @@ func staticRouteDeleteBlocks(t *testing.T, script []byte) []routeBlock {
 	return parseRouteBlocks(t, script, []string{"delete", "del"})
 }
 
+// unwrapScriptHelper drops the shell helper the unix create scripts put in
+// front of every tool call: "run_idem STEP cmd ..." (linux) and "fail STEP
+// cmd ..." (darwin). The step name is an ordinary word, and the linux one used
+// for the route ladder is literally "route": left in place, the dialect
+// detection below reads the step name as the command and misparses the line.
+func unwrapScriptHelper(fields []string) []string {
+	if len(fields) >= 3 && (fields[0] == "run_idem" || fields[0] == "fail") {
+		return fields[2:]
+	}
+	return fields
+}
+
 // parseRouteBlocks parses the static IPv4 route destinations of a script for
 // the given route verbs.
 func parseRouteBlocks(t *testing.T, script []byte, verbs []string) []routeBlock {
@@ -580,8 +592,7 @@ func parseRouteBlocks(t *testing.T, script []byte, verbs []string) []routeBlock 
 			continue
 		}
 
-		fields := strings.Fields(line)
-		// The linux script wraps its ip calls in the run_idem shell helper.
+		fields := unwrapScriptHelper(strings.Fields(line))
 		if idx := slices.IndexFunc(fields, func(f string) bool { return f == "ip" || f == "route" }); idx > 0 {
 			fields = fields[idx:]
 		}
@@ -617,8 +628,7 @@ func parseRouteBlocks(t *testing.T, script []byte, verbs []string) []routeBlock 
 // route, in any of the dialects the create scripts are written in
 // ("ip route add|replace ...", "route add ...").
 func addsRoute(line string) bool {
-	fields := strings.Fields(line)
-	// The linux script wraps its ip calls in the run_idem shell helper.
+	fields := unwrapScriptHelper(strings.Fields(line))
 	if idx := slices.IndexFunc(fields, func(f string) bool { return f == "ip" || f == "route" }); idx > 0 {
 		fields = fields[idx:]
 	}

@@ -166,11 +166,23 @@ func TestStartRollbackSkipsUntouchedDNS(t *testing.T) {
 // TestStartCreateScriptFailureEndToEnd exercises the real script plumbing: the
 // embedded create script is replaced by one that fails, and the failure has to
 // come back out of Start() as an error naming the step, with the close script
-// run afterwards. The check needs a POSIX shell, so it is skipped on Windows,
-// where tun_script_windows_test.go covers the same contract for cmd.exe.
+// run afterwards.
+//
+// It needs to run the script through the interpreter the platform uses, and
+// without root that is pkexec on linux and "osascript ... with administrator
+// privileges" on darwin: a test runner has no polkit agent and no
+// authorization dialogue to answer, so the script would never run at all (and
+// the darwin run would sit out the 60s create and 30s close timeouts). The
+// exit code contract itself is covered without root by
+// cmd/easyss/tun_script_unix_test.go, and cmd.exe by
+// tun_script_windows_test.go, so this end-to-end check is left to a run that
+// already is root.
 func TestStartCreateScriptFailureEndToEnd(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the replacement scripts are POSIX shell scripts; cmd.exe is covered by tun_script_windows_test.go")
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("the create script runs through pkexec/osascript without root, which a test runner cannot authorize")
 	}
 
 	origCreateBytes, origCreateName := scripts.CreateTunBytes, scripts.CreateTunFilename
