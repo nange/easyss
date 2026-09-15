@@ -189,6 +189,12 @@ func TestStartCreateScriptFailureEndToEnd(t *testing.T) {
 	scripts.CloseTunBytes = []byte("#!/bin/sh\necho ran > \"" + closeRan + "\"\n")
 
 	stubStartHooks(t)
+	// The real implementations have to run here: this test exercises the
+	// script plumbing (writing the embedded script, running it through the
+	// platform interpreter, reading back its exit code), which is what the
+	// failing stub above replaces. Never a no-op.
+	createTunDevFn = func(m *Manager) error { return m.createTunDevAndSetIPRoute() }
+	closeTunDevFn = func(m *Manager) error { return m.closeTunDevAndDelIPRoute() }
 
 	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "tun-easyss-test"})
 	err := m.Start()

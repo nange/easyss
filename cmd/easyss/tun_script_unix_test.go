@@ -37,96 +37,94 @@ import (
 // script issued, which is what proves a failure did not skip the rest of the
 // script.
 
-// stubTool writes a tool that exits with code, appends the word ok to
-// <name>.ran on success and prints marker on stderr when it fails.
+// stubScript returns the shell body a stub tool is written with. Every
+// invocation appends its arguments to invocations.log before the tool answers,
+// so a test can tell how often the script called it and with what: the script
+// itself decides whether that call was a failure, which is exactly what the
+// assertions are about.
+func stubScript(dir, name, answer string) string {
+	return "#!/bin/sh\n" +
+		"printf '%s\\n' \"$*\" >> " + quoteForScript(filepath.Join(dir, name+".log")) + "\n" +
+		answer
+}
+
+// quoteForScript quotes a path for a POSIX shell single-quoted string, so a
+// test directory containing spaces or quotes still yields a runnable stub.
+func quoteForScript(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// stubTool writes a tool that exits with code, printing marker on stderr when
+// it fails.
 func stubTool(t *testing.T, dir, name string, code int, marker string) {
 	t.Helper()
 
-	body := "#!/bin/sh\nprintf 'ok' >> \"$(dirname \"$0\")/" + name + ".ran\"\n"
-	if code == 0 {
-		body += "exit 0\n"
-	} else {
-		body += "echo " + marker + " 1>&2\nexit " + strconv.Itoa(code) + "\n"
+	answer := "exit 0\n"
+	if code != 0 {
+		answer = "echo " + marker + " 1>&2\nexit " + strconv.Itoa(code) + "\n"
 	}
-	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(stubScript(dir, name, answer)), 0o755))
 }
 
-// failTool writes a tool that always fails with the given output and exit code.
+// failTool writes a tool that always fails with the given output (already
+// quoted for the shell) and exit code.
 func failTool(t *testing.T, dir, name, output string, code int) {
 	t.Helper()
 
-	body := "#!/bin/sh\necho " + output + " 1>&2\nexit " + strconv.Itoa(code) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755))
+	answer := "echo " + output + " 1>&2\nexit " + strconv.Itoa(code) + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(stubScript(dir, name, answer)), 0o755))
 }
 
-// stubStep is one step of a scripted sequence of tool answers: the nth
-// invocation of the tool fails when fail is true. Invocations beyond the
-// sequence succeed.
+// stubStep is one answer of a scripted sequence: the nth invocation of the
+// tool fails when fail is true. Invocations beyond the sequence succeed.
 type stubStep struct {
 	fail bool
 }
 
-// sequenceTool writes a tool that walks steps in order, so a test can make the
-// nth ip/route call fail while the others succeed. Every failure prints marker
-// on stderr, which is how the script learns there was one.
+// sequenceTool writes a tool that walks steps in order, so a test can make one
+// specific step fail while every other one succeeds. The counter lives in a
+// file because each invocation is a separate process.
 func sequenceTool(t *testing.T, dir, name, marker string, steps ...stubStep) {
 	t.Helper()
 
-	var b strings.Builder
-	b.WriteString("#!/bin/sh\n")
-	b.WriteString("n=$(cat \"$(dirname \"$0\")/" + name + ".n\" 2>/dev/null || echo 0)\n")
-	b.WriteString("n=$((n + 1))\n")
-	b.WriteString("echo $n > \"$(dirname \"$0\")/" + name + ".n\"\n")
-	b.WriteString("case $n in\n")
+	counter := quoteForScript(filepath.Join(dir, name+".n"))
+	answer := "n=$(cat " + counter + " 2>/dev/null || echo 0)\n" +
+		"n=$((n + 1))\n" +
+		"echo $n > " + counter + "\n" +
+		"case $n in\n"
 	for i, step := range steps {
 		body := ": ;;"
 		if step.fail {
 			body = "echo " + marker + " 1>&2; exit 1 ;;"
 		}
-		b.WriteString("  " + strconv.Itoa(i+1) + ") " + body + "\n")
+		answer += "  " + strconv.Itoa(i+1) + ") " + body + "\n"
 	}
-	b.WriteString("esac\nexit 0\n")
+	answer += "esac\nexit 0\n"
 
-	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(b.String()), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(stubScript(dir, name, answer)), 0o755))
 }
 
-// toolInvocations returns how many times the named stub tool was invoked.
+// toolInvocations returns how many times the named stub tool ran. It fails the
+// test when the log is missing: an empty log would otherwise read as "the
+// script never called the tool", hiding the reason a count assertion failed.
 func toolInvocations(t *testing.T, dir, name string) int {
 	t.Helper()
 
-	data, err := os.ReadFile(filepath.Join(dir, name+".ran"))
-	if os.IsNotExist(err) {
-		return 0
-	}
-	require.NoError(t, err)
-	return strings.Count(string(data), "ok")
-}
-
-// ranTool parses the shell (-x) trace of a script and reports whether the tool
-// was invoked at all. A test uses it to tell "the step failed" apart from "the
-// script stopped before the step".
-func ranTool(trace, tool string) bool {
-	for line := range strings.SplitSeq(trace, "\n") {
-		if strings.HasPrefix(strings.TrimPrefix(line, "+ "), tool+" ") {
-			return true
-		}
-	}
-	return false
+	data, err := os.ReadFile(filepath.Join(dir, name+".log"))
+	require.NoError(t, err, "the stub tool of %s never ran", name)
+	return len(strings.Split(strings.TrimSpace(string(data)), "\n"))
 }
 
 // runScriptStubbed runs the given create script through shell with the stub
 // directory first on PATH, and returns its exit code together with the
-// combined output (the trace plus the script's diagnostics).
-//
-// The script is passed to the shell as an argument, so the interpreter does not
-// have to resolve a shebang, and the "#!/bin/sh -x" line prepended here is what
-// makes the script record every command it ran.
+// combined output (the script's diagnostics). The script is passed to the shell
+// as an argument, so the interpreter does not have to resolve a shebang, and
+// the stubs it calls are the ones recording what ran.
 func runScriptStubbed(t *testing.T, shell, script, stubDir string, args ...string) (int, string) {
 	t.Helper()
 
-	traced := "#!/bin/sh -x\n" + script
-	path := filepath.Join(t.TempDir(), "create_tun_dev_traced.sh")
-	require.NoError(t, os.WriteFile(path, []byte(traced), 0o755))
+	path := filepath.Join(t.TempDir(), "create_tun_dev_test.sh")
+	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
 
 	cmd := exec.Command(shell, append([]string{path}, args...)...)
 	cmd.Env = append(os.Environ(), "PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -203,7 +201,6 @@ func TestCreateTunScriptLinuxExitCode(t *testing.T) {
 		require.NotEqualf(t, 0, code, "a rejected ip addr replace must not leave a zero exit code:\n%s", out)
 		require.Contains(t, out, "failed near: addr",
 			"the failing step must be reported on stderr so the tray notification can show it")
-		require.True(t, ranTool(out, "ip"), "the trace must show the tool was invoked")
 		require.Equal(t, stepsV4, toolInvocations(t, dir, "ip"),
 			"one rejected block must not skip the remaining steps")
 	})
@@ -216,7 +213,8 @@ func TestCreateTunScriptLinuxExitCode(t *testing.T) {
 		code, out := runScriptStubbed(t, "bash", string(scripts.CreateTunDevSh), dir, linuxScriptArgs(false)...)
 		require.NotEqualf(t, 0, code, "a rejected route must not leave a zero exit code:\n%s", out)
 		require.Contains(t, out, "failed near: route")
-		require.Equal(t, stepsV4, toolInvocations(t, dir, "ip"))
+		require.Equal(t, stepsV4, toolInvocations(t, dir, "ip"),
+			"the ladder must be attempted to the end: one rejected block must not skip the rest")
 	})
 
 	t.Run("failing ipv6 route fails the script", func(t *testing.T) {
