@@ -23,6 +23,31 @@ const (
 	tunTCPReceiveBufferSize = "256KB"
 )
 
+// hooks are the points tests replace to exercise the Start() failure path
+// without a TUN device, administrator rights or a live tun2socks engine: the
+// platform scripts and the DNS setup can only be run for real as root and
+// rewrite the network configuration of the machine running the test. Every
+// hook defaults to the production implementation, and they are only ever
+// written by tests (t.Cleanup restores them), never at runtime.
+var (
+	// createTunDevFn writes and runs the platform create script.
+	createTunDevFn = func(m *Manager) error { return m.createTunDevAndSetIPRoute() }
+	// closeTunDevFn writes and runs the platform close script. It backs both
+	// the Stop() cleanup and the Start() rollback.
+	closeTunDevFn = func(m *Manager) error { return m.closeTunDevAndDelIPRoute() }
+	// saveAndSetDNSStepFn saves the original system DNS and switches the
+	// system over to the TUN resolver (darwin/linux only).
+	saveAndSetDNSStepFn = func(m *Manager) error { return m.saveAndSetDNSStep() }
+	// restoreDNSStepFn puts the saved system DNS back.
+	restoreDNSStepFn = func(m *Manager) error { return m.restoreDNSStep() }
+	// engineStartFn starts the tun2socks engine; engineStopFn stops it.
+	engineStartFn = func() error { return engine.Start() }
+	engineStopFn  = func(reason string) { stopEngine(reason) }
+	// settleDelay is the pause after the engine start that lets the device
+	// come up before the platform script configures it.
+	settleDelay = func() { time.Sleep(500 * time.Millisecond) }
+)
+
 type Config struct {
 	Socks5Addr       string
 	Device           string
@@ -56,11 +81,12 @@ type DeviceConfig struct {
 }
 
 type Manager struct {
-	cfg       Config
-	dev       DeviceConfig
-	running   bool
-	originDNS []string // original system DNS before TUN starts (darwin only)
-	icmpH     *ICMPHandler
+	cfg        Config
+	dev        DeviceConfig
+	running    bool
+	originDNS  []string // original system DNS before TUN starts (darwin/linux only)
+	dnsChanged bool     // saveAndSetDNSStep actually reconfigured the system DNS
+	icmpH      *ICMPHandler
 
 	ctx    context.Context    // cancels an in-progress Start()
 	cancel context.CancelFunc // stored so Stop() can cancel the Start() goroutine
@@ -146,6 +172,13 @@ func New(cfg Config) *Manager {
 	}
 }
 
+// manageSystemDNS reports whether this platform switches the system DNS over to
+// the TUN resolver for the duration of a TUN session. Windows does not: its
+// create/close scripts configure the adapter DNS themselves.
+func manageSystemDNS() bool {
+	return runtime.GOOS == "darwin" || runtime.GOOS == "linux"
+}
+
 func (m *Manager) Start() error {
 	if scripts.CreateTunBytes == nil || scripts.CloseTunBytes == nil {
 		return fmt.Errorf("tun: unsupported os %s", runtime.GOOS)
@@ -193,31 +226,31 @@ func (m *Manager) Start() error {
 	// (tun2socks #550/#552): report the failure to the caller rather than
 	// exiting the process, and release the TUN device Start may have opened
 	// before core.CreateStack failed.
-	if err := engine.Start(); err != nil {
-		stopEngine("start failed")
+	if err := engineStartFn(); err != nil {
+		engineStopFn("start failed")
 		return fmt.Errorf("tun: start engine: %w", err)
 	}
 
 	// Allow Stop() to cancel us before we touch routes / DNS.
 	select {
 	case <-m.ctx.Done():
-		stopEngine("start cancelled")
+		engineStopFn("start cancelled")
 		return m.ctx.Err()
 	default:
 	}
 
-	time.Sleep(500 * time.Millisecond)
+	settleDelay()
 
 	if !fdMode {
 		// Save original DNS and set TUN DNS on darwin and linux.
-		if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
-			if err := m.saveAndSetDNS(); err != nil {
+		if manageSystemDNS() {
+			if err := saveAndSetDNSStepFn(m); err != nil {
 				log.Warn("[TUN] set system dns", "err", err)
 			}
 		}
 
-		if err := m.createTunDevAndSetIPRoute(); err != nil {
-			stopEngine("create device failed")
+		if err := createTunDevFn(m); err != nil {
+			engineStopFn("create device failed")
 			// The platform script can fail halfway through (it installs the
 			// address first and the routes after), and the routes it already
 			// added stay in the system routing table when only the engine is
@@ -226,8 +259,19 @@ func (m *Manager) Start() error {
 			// traffic into a TUN device nothing reads from, which looks like a
 			// dead network. Deleting them is idempotent and only meaningful on
 			// the paths that just ran the create script.
-			if closeErr := m.closeTunDevAndDelIPRoute(); closeErr != nil {
+			if closeErr := closeTunDevFn(m); closeErr != nil {
 				log.Warn("[TUN] rollback routes after create failure", "err", closeErr)
+			}
+			// The system DNS was switched to the TUN resolver before the
+			// device existed. Stop() returns early while m.running is false, so
+			// the failure path has to put it back itself: left pointing at a
+			// TUN device nothing answers on (or at a public resolver that is
+			// only reachable through the tunnel), resolution dies system-wide
+			// even though the proxy core keeps running.
+			if manageSystemDNS() {
+				if dnsErr := restoreDNSStepFn(m); dnsErr != nil {
+					log.Warn("[TUN] rollback system dns after create failure", "err", dnsErr)
+				}
 			}
 			return fmt.Errorf("tun: create device: %w", err)
 		}
@@ -237,12 +281,12 @@ func (m *Manager) Start() error {
 	// running, undo everything we just set up.
 	select {
 	case <-m.ctx.Done():
-		stopEngine("start cancelled")
+		engineStopFn("start cancelled")
 		if !fdMode {
-			_ = m.closeTunDevAndDelIPRoute()
+			_ = closeTunDevFn(m)
 		}
-		if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
-			_ = m.restoreDNS()
+		if manageSystemDNS() {
+			_ = restoreDNSStepFn(m)
 		}
 		return m.ctx.Err()
 	default:
@@ -269,15 +313,15 @@ func (m *Manager) Stop() {
 	}
 
 	log.Info("[TUN] Stop: calling engine.Stop")
-	stopEngine("stop")
+	engineStopFn("stop")
 	log.Info("[TUN] Stop: engine.Stop done")
 
 	if !m.cfg.SkipRouteCleanup {
-		_ = m.closeTunDevAndDelIPRoute()
+		_ = closeTunDevFn(m)
 
 		// Restore original DNS on darwin and linux.
-		if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
-			if err := m.restoreDNS(); err != nil {
+		if manageSystemDNS() {
+			if err := restoreDNSStepFn(m); err != nil {
 				log.Warn("[TUN] restore system dns", "err", err)
 			}
 		}
@@ -298,7 +342,7 @@ func (m *Manager) StopEngineOnly() {
 	if !m.running {
 		return
 	}
-	stopEngine("stop engine only")
+	engineStopFn("stop engine only")
 	m.running = false
 	log.Info("[TUN] tun2socks engine stopped")
 }
@@ -459,32 +503,55 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 	return nil
 }
 
-func (m *Manager) saveAndSetDNS() error {
+// saveAndSetDNSStep saves the original system DNS and switches the system over
+// to the TUN resolver. It records whether the system DNS was actually changed
+// (dnsChanged), which is what restoreDNSStep and the Start() failure rollback
+// act on: darwin leaves a hand-configured DNS alone, and restoring DNS that was
+// never touched would clear it (see restoreDNSStep).
+func (m *Manager) saveAndSetDNSStep() error {
 	origin, err := util.SysDNS()
 	if err != nil {
 		return err
 	}
 	m.originDNS = origin
+	m.dnsChanged = false
 
-	if m.cfg.DNSServer != "" {
-		if runtime.GOOS == "linux" {
-			// Linux also has to pin the resolver to the TUN device: a DNS
-			// server configured for the physical link only is queried with
-			// the socket bound to that link, so its lookups leave through the
-			// physical NIC and bypass the tunnel (see util.SetSysDNSForTun).
-			return util.SetSysDNSForTun(m.dev.Device, []string{m.cfg.DNSServer})
-		}
+	if m.cfg.DNSServer == "" {
+		return nil
+	}
+
+	var setErr error
+	if runtime.GOOS == "linux" {
+		// Linux also has to pin the resolver to the TUN device: a DNS
+		// server configured for the physical link only is queried with
+		// the socket bound to that link, so its lookups leave through the
+		// physical NIC and bypass the tunnel (see util.SetSysDNSForTun).
+		setErr = util.SetSysDNSForTun(m.dev.Device, []string{m.cfg.DNSServer})
+	} else if len(origin) == 0 {
 		// Darwin: only override DNS when the system has no custom DNS
 		// configured (i.e. using DHCP-provided DNS). If the user has
 		// manually set DNS, preserve their choice.
-		if len(origin) == 0 {
-			return util.SetSysDNS([]string{m.cfg.DNSServer})
-		}
+		setErr = util.SetSysDNS([]string{m.cfg.DNSServer})
+	} else {
+		// Darwin with a custom DNS: nothing was changed, so nothing has to
+		// be restored, not even after a failed start.
+		return nil
 	}
-	return nil
+
+	// The setup may have applied part of the change before reporting the
+	// error, so the rollback has to run whenever it was attempted at all.
+	m.dnsChanged = true
+	return setErr
 }
 
-func (m *Manager) restoreDNS() error {
+// restoreDNSStep undoes saveAndSetDNSStep. It is a no-op unless the system DNS
+// was actually reconfigured: on darwin an untouched system would otherwise be
+// written back as "empty", which clears the DHCP-provided servers.
+func (m *Manager) restoreDNSStep() error {
+	if !m.dnsChanged {
+		return nil
+	}
+
 	if runtime.GOOS == "linux" {
 		return util.RestoreSysDNSForTun(m.dev.Device, m.originDNS)
 	}
