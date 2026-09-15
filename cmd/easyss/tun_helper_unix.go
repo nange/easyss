@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -29,6 +30,32 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 		return 1
 	}
 
+	// The parent blocks in ReceiveFd until a helper connects to the fd socket,
+	// so a helper that gives up before it can send a fd has to knock on that
+	// socket itself: left alone, the parent would sit out its whole accept
+	// deadline and report a timeout 30s later instead of the failure that just
+	// happened. The reason travels on that same connection, so the tray can
+	// show it instead of sending the user to the log file. Deferred, so every
+	// early return below is covered, including the ones added later; a helper
+	// that sent its fd stays silent.
+	var (
+		fdSent  bool
+		failure error
+	)
+	defer func() {
+		if !fdSent {
+			notifyStartFailure(fdSocketPath, failure)
+		}
+	}()
+
+	// giveUp records why the helper is exiting, logs it and returns the exit
+	// code. The recorded reason is what notifyStartFailure hands to the parent.
+	giveUp := func(step string, err error) int {
+		failure = fmt.Errorf("%s: %w", step, err)
+		log.Error("[TUN-HELPER] "+step, "err", err)
+		return 1
+	}
+
 	// 1. Initialize logger as early as possible so all errors are visible
 	//    in the log file (not lost to /dev/null via stderr).
 	log.Init(logFilePath, logLevel)
@@ -36,8 +63,7 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	// 2. Fetch TUN configuration from the main process via HTTP.
 	cfg, err := fetchTunConfig(httpAddr)
 	if err != nil {
-		log.Error("[TUN-HELPER] fetch tun config", "err", err)
-		return 1
+		return giveUp("fetch tun config", err)
 	}
 	log.Info("[TUN-HELPER] config received", "device", cfg.Device)
 
@@ -46,13 +72,11 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	//    exits and the kernel releases the lock (works even with kill -9).
 	lockFile, err := os.OpenFile("/tmp/easyss-tun.lock", os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
-		log.Error("[TUN-HELPER] open lock file", "err", err)
-		return 1
+		return giveUp("open lock file", err)
 	}
 	if err := flockWait(lockFile, 30*time.Second); err != nil {
-		log.Error("[TUN-HELPER] acquire lock", "err", err)
 		lockFile.Close() //nolint:errcheck
-		return 1
+		return giveUp("acquire lock", err)
 	}
 	log.Info("[TUN-HELPER] lock acquired")
 	defer lockFile.Close() //nolint:errcheck
@@ -67,8 +91,7 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	// 5. Open the TUN device.
 	tunFd, actualDevice, err := openTunDevice(cfg.Device)
 	if err != nil {
-		log.Error("[TUN-HELPER] open tun device", "device", cfg.Device, "err", err)
-		return 1
+		return giveUp("open tun device", err)
 	}
 	log.Info("[TUN-HELPER] device created", "requested", cfg.Device, "actual", actualDevice)
 
@@ -95,9 +118,8 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	log.Info("[TUN-HELPER] creating routes and configuring interface")
 	if err := runCreateScript(actualDevice, cfg.TunIP, cfg.TunGW, cfg.LocalGateway,
 		cfg.TunIPV6Sub, cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6); err != nil {
-		log.Error("[TUN-HELPER] run create script", "err", err)
 		_ = unix.Close(tunFd)
-		return 1
+		return giveUp("run create script", err)
 	}
 	log.Info("[TUN-HELPER] routes and interface configured")
 
@@ -112,10 +134,10 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	// 9. Send the TUN fd to the main process via Unix domain socket.
 	log.Info("[TUN-HELPER] sending tun fd to parent", "socket", fdSocketPath)
 	if err := sendFdToParent(fdSocketPath, tunFd); err != nil {
-		log.Error("[TUN-HELPER] send fd to parent", "err", err)
 		_ = unix.Close(tunFd)
-		return 1
+		return giveUp("send fd to parent", err)
 	}
+	fdSent = true
 
 	// 10. Close the fd (it has been sent to the parent).
 	_ = unix.Close(tunFd)
@@ -235,7 +257,70 @@ func fetchTunConfig(httpAddr string) (*proxy.TunConfig, error) {
 		return &cfg, nil
 	}
 
-	return nil, fmt.Errorf("fetch tun config after retries: %w", lastErr)
+	// The retrying is what this error adds: the caller names the step.
+	return nil, fmt.Errorf("after retries: %w", lastErr)
+}
+
+// maxHelperFailureReason caps the failure text the helper hands to the parent:
+// it ends up in a desktop notification, and a platform script can fail with
+// pages of quoted command output.
+const maxHelperFailureReason = 512
+
+// notifyStartFailure tells the parent, which is waiting in ReceiveFd, that this
+// helper is giving up before it could send a fd, and why. Connecting to the
+// socket is the signal — the parent accepts the connection and finds no fd in
+// it — and the reason travels as the payload of that same connection, so the
+// tray can name the failed step instead of pointing at the log file. Best
+// effort: when the parent is gone there is nobody left to tell.
+func notifyStartFailure(socketPath string, reason error) {
+	if socketPath == "" {
+		return
+	}
+	conn, err := net.DialTimeout("unix", socketPath, time.Second)
+	if err != nil {
+		return
+	}
+	defer conn.Close() //nolint:errcheck
+
+	if payload := failurePayload(reason); len(payload) > 0 {
+		_, _ = conn.Write(payload)
+	}
+}
+
+// failurePayload renders reason as the single line the parent shows: a desktop
+// notification does not render the newlines a failed platform script produces,
+// and one message is all this socket carries. Text over the cap keeps both ends
+// — the failing step at the front, the script's "failed near:" summary at the
+// back — and drops the repeated output in the middle.
+func failurePayload(reason error) []byte {
+	if reason == nil {
+		return nil
+	}
+	msg := strings.Join(strings.Fields(reason.Error()), " ")
+	if len(msg) > maxHelperFailureReason {
+		const ellipsis = " ... "
+		keep := maxHelperFailureReason - len(ellipsis)
+		msg = msg[:keep/2] + ellipsis + msg[len(msg)-(keep-keep/2):]
+	}
+	return []byte(msg)
+}
+
+// execScriptWithOutput runs a platform script and returns the script's own
+// output with the error. util.Command packs the whole command line and a
+// Go-quoted copy of that output into its error, which is fine for a log line
+// but not for what the parent shows the user: the unix create scripts name the
+// step that failed in their output, and that text has to survive (see
+// failurePayload).
+//
+// The error carries no action of its own ("run create script", say): its caller
+// already names the step it was running through giveUp, and repeating it only
+// makes the notification longer.
+func execScriptWithOutput(shell, scriptPath string, args ...string) error {
+	out, err := exec.Command(shell, append([]string{scriptPath}, args...)...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // sendFdToParent connects to the Unix socket at socketPath and sends the TUN
@@ -309,8 +394,9 @@ func (w *fifoWriter) Close() error {
 }
 
 // ReceiveFd accepts a single connection on the Unix domain socket listener and
-// receives a file descriptor via SCM_RIGHTS. It does not read any data from
-// the connection — the fd is passed purely as ancillary data.
+// receives a file descriptor via SCM_RIGHTS. The fd is passed purely as
+// ancillary data; the only payload this socket carries is the failure reason of
+// a helper that gave up before it had one to send (see notifyStartFailure).
 func ReceiveFd(listener net.Listener) (int, error) {
 	if err := setAcceptDeadline(listener, 30*time.Second); err != nil {
 		return -1, fmt.Errorf("set accept deadline: %w", err)
@@ -344,9 +430,11 @@ func ReceiveFd(listener net.Listener) (int, error) {
 		}
 		defer unix.SetNonblock(int(fd), true) //nolint:errcheck
 
-		buf := make([]byte, 1)
+		// The buffer holds the failure reason notifyStartFailure may send
+		// instead of a fd (see maxHelperFailureReason).
+		buf := make([]byte, maxHelperFailureReason)
 		oob := make([]byte, unix.CmsgSpace(4))
-		_, oobn, _, _, err := unix.Recvmsg(int(fd), buf, oob, 0)
+		n, oobn, _, _, err := unix.Recvmsg(int(fd), buf, oob, 0)
 		if err != nil {
 			recvErr = fmt.Errorf("recvmsg: %w", err)
 			return
@@ -358,6 +446,12 @@ func ReceiveFd(listener net.Listener) (int, error) {
 			return
 		}
 		if len(scms) == 0 {
+			// A helper that gave up connects without a fd to report exactly
+			// that, and writes why: the reason is what the tray has to show.
+			if reason := strings.TrimSpace(string(buf[:n])); reason != "" {
+				recvErr = fmt.Errorf("the tun helper exited: %s", reason)
+				return
+			}
 			recvErr = fmt.Errorf("no control message received")
 			return
 		}
