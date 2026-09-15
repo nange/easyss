@@ -88,10 +88,9 @@ func runCreateScript(device, tunIP, tunGW, localGateway,
 	}
 	defer os.Remove(namePath) //nolint:errcheck
 
-	_, err = util.Command("bash", namePath, device, tunIP, tunGW, localGateway,
-		tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6)
-	if err != nil {
-		return fmt.Errorf("exec create script: %w", err)
+	if err := execScriptWithOutput("bash", namePath, device, tunIP, tunGW, localGateway,
+		tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6); err != nil {
+		return err
 	}
 	return nil
 }
