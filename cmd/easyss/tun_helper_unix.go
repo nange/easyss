@@ -29,6 +29,19 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 		return 1
 	}
 
+	// The parent blocks in ReceiveFd until a helper connects to the fd socket,
+	// so a helper that gives up before it can send a fd has to knock on that
+	// socket itself: left alone, the parent would sit out its whole accept
+	// deadline and report a timeout 30s later instead of the failure that just
+	// happened. Deferred, so every early return below is covered, including the
+	// ones added later; a helper that sent its fd stays silent.
+	fdSent := false
+	defer func() {
+		if !fdSent {
+			notifyStartFailure(fdSocketPath)
+		}
+	}()
+
 	// 1. Initialize logger as early as possible so all errors are visible
 	//    in the log file (not lost to /dev/null via stderr).
 	log.Init(logFilePath, logLevel)
@@ -116,6 +129,7 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 		_ = unix.Close(tunFd)
 		return 1
 	}
+	fdSent = true
 
 	// 10. Close the fd (it has been sent to the parent).
 	_ = unix.Close(tunFd)
@@ -236,6 +250,22 @@ func fetchTunConfig(httpAddr string) (*proxy.TunConfig, error) {
 	}
 
 	return nil, fmt.Errorf("fetch tun config after retries: %w", lastErr)
+}
+
+// notifyStartFailure tells the parent, which is waiting in ReceiveFd, that this
+// helper is giving up before it could send a fd. Connecting to the socket is
+// the whole signal: the parent accepts the connection and finds no fd in it, so
+// it reports the failure right away instead of waiting out its accept deadline.
+// Best effort — when the parent is gone there is nobody left to tell.
+func notifyStartFailure(socketPath string) {
+	if socketPath == "" {
+		return
+	}
+	conn, err := net.DialTimeout("unix", socketPath, time.Second)
+	if err != nil {
+		return
+	}
+	_ = conn.Close()
 }
 
 // sendFdToParent connects to the Unix socket at socketPath and sends the TUN
