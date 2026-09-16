@@ -81,6 +81,7 @@ type stats struct {
 	serverUDPStreams      atomic.Int64
 	serverICMPStreams     atomic.Int64
 	serverHandshakeErrors atomic.Int64
+	serverStreamCancels   atomic.Int64
 	serverFallbackPages   atomic.Int64
 	serverProbes          atomic.Int64
 
@@ -153,6 +154,11 @@ func RecordServerHandshakeError() { g.serverHandshakeErrors.Add(1) }
 func RecordServerFallbackPage()   { g.serverFallbackPages.Add(1) }
 func RecordServerProbe()          { g.serverProbes.Add(1) }
 
+// RecordServerStreamCancel 统计以"对端已离开该流"结束的服务端会话
+// （客户端正常拆除、HTTP/2 流取消、中继空闲超时）。这类结束被降到 Debug
+// 级别记录，计数器使它们仍然可见而不刷日志。
+func RecordServerStreamCancel() { g.serverStreamCancels.Add(1) }
+
 // --- 会话生命周期 ---
 
 // ResetStartTime 标记新会话的开始，例如客户端启动时。
@@ -214,6 +220,7 @@ func ResetCounters() {
 	g.serverUDPStreams.Store(0)
 	g.serverICMPStreams.Store(0)
 	g.serverHandshakeErrors.Store(0)
+	g.serverStreamCancels.Store(0)
 	g.serverFallbackPages.Store(0)
 	g.serverProbes.Store(0)
 }
@@ -243,6 +250,7 @@ type Snapshot struct {
 	ServerUDPStreams      int64 `json:"server_udp_streams,omitempty"`
 	ServerICMPStreams     int64 `json:"server_icmp_streams,omitempty"`
 	ServerHandshakeErrors int64 `json:"server_handshake_errors,omitempty"`
+	ServerStreamCancels   int64 `json:"server_stream_cancels,omitempty"`
 	ServerFallbackPages   int64 `json:"server_fallback_pages,omitempty"`
 	ServerProbes          int64 `json:"server_probes,omitempty"`
 	PriorityStreamsOpened int64 `json:"priority_streams_opened"`
@@ -338,6 +346,7 @@ func Collect() Snapshot {
 		ServerUDPStreams:       g.serverUDPStreams.Load(),
 		ServerICMPStreams:      g.serverICMPStreams.Load(),
 		ServerHandshakeErrors:  g.serverHandshakeErrors.Load(),
+		ServerStreamCancels:    g.serverStreamCancels.Load(),
 		ServerFallbackPages:    g.serverFallbackPages.Load(),
 		ServerProbes:           g.serverProbes.Load(),
 		PriorityStreamsOpened:  g.priorityStreamsOpened.Load(),

@@ -48,32 +48,18 @@ func newTCPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) 
 	dialTimeout, keepAlive := tcpDialerOptions(timeout)
 	h := &tcpHandler{idleTimeout: idleTimeout}
 	h.dial = dialer{
-		nextProxy: np,
-		useProxy:  np.ShouldProxy,
-		dial: func(ctx context.Context, _ string, target string) (net.Conn, error) {
+		nextProxy:   np,
+		shouldProxy: np.ShouldProxy,
+		direct: func(ctx context.Context, network, target string) (net.Conn, error) {
+			// 测试注入点：生产环境为 nil。
 			if h.dialContext != nil {
-				return h.dialContext(ctx, "tcp", target)
+				return h.dialContext(ctx, network, target)
 			}
-			d := &net.Dialer{Timeout: dialTimeout, KeepAlive: keepAlive}
-			return d.DialContext(ctx, outboundTCPNetwork(target), target)
+			d := &hostDialer{dialer: net.Dialer{KeepAlive: keepAlive}, timeout: dialTimeout}
+			return dialOutbound(ctx, d, network, target, preferredOrNone(ctx))
 		},
 	}
 	return h
-}
-
-func outboundTCPNetwork(addr string) string {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return "tcp"
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return "tcp"
-	}
-	if ip.To4() == nil {
-		return "tcp6"
-	}
-	return "tcp4"
 }
 
 // Handle 在客户端与目标之间中继 TCP 流。
@@ -104,14 +90,20 @@ func (h *tcpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 		func(signal func()) error { return h.copyFromClient(dr, targetConn, signal) },
 		func(signal func()) error { return h.copyFromTarget(targetConn, s2c, signal, m) },
 	)
-	// 以 INFO 级别记录流的最终结果（中继字节数和退出原因），
-	// 这样排查被屏蔽主机时，连接已建立但后来停滞、被重置或没有任何数据的
-	// 目标可以直接可见。
-	attrs := []any{"target", target, "remote", remote, "bytes", m.Bytes(), "timed_out", result.TimedOut}
+	// 记录流的最终结果（中继字节数和退出原因），这样排查被屏蔽主机时，
+	// 连接已建立但后来停滞、被重置或没有任何数据的目标可以直接可见。
+	// 客户端正常拆除（RST_STREAM/CANCEL、请求体已被关闭）会命中每个流，
+	// 因此这类结果降到 Debug；真正的故障保持 Info。
+	transient := isTransientStreamError(result.Err)
+	attrs := []any{"target", target, "remote", remote, "bytes", m.Bytes(), "timed_out", result.TimedOut, "transient", transient}
 	if result.Err != nil {
 		attrs = append(attrs, "err", result.Err.Error())
 	}
-	log.Info("[TCP_HANDLE] stream closed", attrs...)
+	if transient {
+		log.Debug("[TCP_HANDLE] stream closed", attrs...)
+	} else {
+		log.Info("[TCP_HANDLE] stream closed", attrs...)
+	}
 	if result.TimedOut {
 		log.Debug("[TCP_HANDLE] idle timeout", "target", target, "timeout", h.idleTimeout)
 		sendRST(s2c)

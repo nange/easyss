@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -36,6 +37,62 @@ func TestIsIPv6Target(t *testing.T) {
 				t.Errorf("isIPv6Target(%q) = %v, want %v", tt.target, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestClientPreferredFamily 固定"客户端到服务端的地址族"推导：只有能确定
+// 客户端用哪个族接入时才会有偏好，IPv4-mapped 形式折叠为 IPv4
+// （v4 客户端经双栈监听接入时 Go 报告的就是这种形式）。
+func TestClientPreferredFamily(t *testing.T) {
+	tests := []struct {
+		name       string
+		remoteAddr string
+		want       string
+	}{
+		{"ipv4", "1.2.3.4:5678", "1.2.3.4"},
+		{"ipv6", "[2606:50c0:8002::154]:443", "2606:50c0:8002::154"},
+		{"ipv4-mapped folds to ipv4", "[::ffff:1.2.3.4]:443", "1.2.3.4"},
+		{"loopback ipv4", "127.0.0.1:1234", "127.0.0.1"},
+		{"no port", "1.2.3.4", ""},
+		{"garbage", "not-an-address", ""},
+		{"empty", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := clientPreferredFamily(tt.remoteAddr)
+			if tt.want == "" {
+				if got.IsValid() {
+					t.Fatalf("clientPreferredFamily(%q) = %v, want the zero value", tt.remoteAddr, got)
+				}
+				return
+			}
+			if got.String() != tt.want {
+				t.Fatalf("clientPreferredFamily(%q) = %v, want %v", tt.remoteAddr, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPreferredFamilyContext 覆盖族提示在 context 中的往返：零值不写入，
+// 没有提示的 context 读出无偏好，使拨号退化为系统默认排序。
+func TestPreferredFamilyContext(t *testing.T) {
+	if _, ok := preferredFamily(t.Context()); ok {
+		t.Fatal("a bare context should report no preference")
+	}
+	if preferredOrNone(t.Context()).IsValid() {
+		t.Fatal("preferredOrNone on a bare context should be the zero value")
+	}
+
+	want := netip.MustParseAddr("93.184.216.34")
+	ctx := withPreferredFamily(t.Context(), want)
+	got, ok := preferredFamily(ctx)
+	if !ok || got != want {
+		t.Fatalf("preferredFamily = (%v, %v), want (%v, true)", got, ok, want)
+	}
+
+	if got := withPreferredFamily(t.Context(), netip.Addr{}); got.Value(ctxPreferredFamily) != nil {
+		t.Fatal("an invalid address must not be stored as a preference")
 	}
 }
 
@@ -230,7 +287,7 @@ func TestNewICMPHandler(t *testing.T) {
 	if h == nil {
 		t.Fatal("newICMPHandler returned nil")
 	}
-	if h.dial.nextProxy != nil || h.dial.useProxy != nil {
+	if h.dial.nextProxy != nil || h.dial.shouldProxy != nil {
 		t.Error("ICMP must not route through a next proxy")
 	}
 }

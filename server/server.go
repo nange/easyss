@@ -153,6 +153,7 @@ func (s *Server) statsLoop() {
 				"udp", snap.ServerUDPStreams,
 				"icmp", snap.ServerICMPStreams,
 				"hserr", snap.ServerHandshakeErrors,
+				"scancel", snap.ServerStreamCancels,
 				"fallback", snap.ServerFallbackPages,
 				"probe", snap.ServerProbes,
 				"padding", stats.HumanBytes(snap.PaddingBytes),

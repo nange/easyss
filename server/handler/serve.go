@@ -174,7 +174,7 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 // WriteHeader 开始的所有事情都发生在这里：响应已无法再变成回退 HTML 页面，
 // 因此此后出现的失败表现为流级别的 RST 而不是 HTTP 错误。
 func (h *ProxyHandler) serveSession(w http.ResponseWriter, r *http.Request, res handshakeResult) {
-	log.Info("[SERVER] proxy", "target", res.target, "remote", r.RemoteAddr)
+	log.Info("[SERVER] proxy", "target", res.target, "client", r.RemoteAddr)
 
 	// 在提交响应之前预先创建并校验会话的 reader/writer。
 	// 一旦调用 WriteHeader + Flush，响应就无法再变成回退 HTML 页面。
@@ -215,25 +215,44 @@ func (h *ProxyHandler) serveSession(w http.ResponseWriter, r *http.Request, res 
 	defer s2cShaper.Close() //nolint:errcheck
 
 	var handleErr error
+	// 客户端到服务端的地址族决定出站拨号的优先地址族：客户端用 IPv4 接入时，
+	// 服务端也优先用 IPv4 连目标，而不是依赖操作系统的双栈排序（后者在 VPS 上
+	// 往往先试 IPv6）。客户端连接的族是这里唯一能观测到的信号。
+	reqCtx := withPreferredFamily(r.Context(), clientPreferredFamily(r.RemoteAddr))
 	switch res.endpoint {
 	case sharedconfig.EndpointTCP:
 		stats.RecordServerTCPStream()
 		// cancelRead 在中继终止（空闲超时/错误）时立即解除中继客户端读取
 		// goroutine 的阻塞，而不是让它停留在请求体上直到 net/http 将其关闭。
-		handleErr = h.tcp.Handle(r.Context(), c2sReader, s2cShaper, res.target, func() { _ = r.Body.Close() })
+		handleErr = h.tcp.Handle(reqCtx, c2sReader, s2cShaper, res.target, func() { _ = r.Body.Close() })
 	case sharedconfig.EndpointUDP:
 		stats.RecordServerUDPStream()
 		// cancelRead 在 UDP handler 终止时立即解除客户端读取 goroutine 的阻塞，
 		// 与 TCP 路径保持一致：否则帧读取器会停留在请求体上，
 		// 直到 ServeHTTP 返回后 net/http 将其关闭。
-		handleErr = h.udp.Handle(r.Context(), c2sReader, s2cShaper, res.target, func() { _ = r.Body.Close() })
+		handleErr = h.udp.Handle(reqCtx, c2sReader, s2cShaper, res.target, func() { _ = r.Body.Close() })
 	case sharedconfig.EndpointICMP:
 		stats.RecordServerICMPStream()
 		handleErr = h.icmp.Handle(c2sReader, s2cShaper, res.target)
 	}
-	if handleErr != nil {
-		log.Info("[SERVER] handler finished with error", "target", res.target, "endpoint", res.endpoint, "err", handleErr)
-	} else {
-		log.Debug("[SERVER] handler finished", "target", res.target, "endpoint", res.endpoint)
+	logHandlerResult(handleErr, res.target, res.endpoint, r.RemoteAddr)
+}
+
+// logHandlerResult 记录一条流的最终结果。对端已离开该流（客户端正常拆除、
+// HTTP/2 流被取消、中继空闲超时）属于预期路径：客户端每关闭一个连接都会产生
+// 一条这样的错误，因此降到 Debug，并把它们计入 server_stream_cancels 计数器，
+// 使"被静音的拆除"仍然可观测。真正的故障（拨号失败、目标重置、解密失败）
+// 保持 Info + err=，不会被淹没。
+func logHandlerResult(handleErr error, target, endpoint, remote string) {
+	attrs := []any{"target", target, "endpoint", endpoint, "client", remote}
+	if handleErr == nil {
+		log.Debug("[SERVER] handler finished", attrs...)
+		return
 	}
+	if isTransientStreamError(handleErr) {
+		stats.RecordServerStreamCancel()
+		log.Debug("[SERVER] handler finished", append(attrs, "transient", true, "err", handleErr)...)
+		return
+	}
+	log.Info("[SERVER] handler finished with error", append(attrs, "err", handleErr)...)
 }

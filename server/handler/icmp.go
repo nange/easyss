@@ -32,8 +32,9 @@ func newICMPHandler(timeout time.Duration) *icmpHandler {
 	dialTimeout := config.DialTimeout(timeout)
 	return &icmpHandler{
 		dial: dialer{
-			dial: func(_ context.Context, network, target string) (net.Conn, error) {
-				return net.DialTimeout(network, target, dialTimeout)
+			direct: func(ctx context.Context, network, target string) (net.Conn, error) {
+				d := &hostDialer{timeout: dialTimeout}
+				return dialOutbound(ctx, d, network, target, preferredOrNone(ctx))
 			},
 		},
 	}
@@ -74,10 +75,11 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) ([]byte, error
 	}
 
 	isIPv6 := isIPv6Target(target)
-	dialNet := "ip4:icmp"
+	// 网络名只给出协议，地址族由 dialOutbound 按目标字面量（或域名解析结果）
+	// 与 ctx 中的客户端族偏好决定，因此这里不再分别写死 ip4:icmp / ip6:ipv6-icmp。
+	dialNet := "ip:icmp"
 	parseProto := 1
 	if isIPv6 {
-		dialNet = "ip6:ipv6-icmp"
 		parseProto = 58
 	}
 
