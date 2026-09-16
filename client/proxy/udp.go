@@ -90,7 +90,10 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 }
 
 func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg, domain string) error {
-	resp, err := s.exchangeDirectDNSWithFallback(msg, config.DirectDNSServers)
+	try := func(servers []string) (*dns.Msg, error) {
+		return s.exchangeDirectDNSFromList(msg, servers)
+	}
+	resp, err := easydns.QueryWithBuiltinFirst(config.DirectDNSServers, easydns.SystemDNSServers(), try)
 	if err != nil {
 		log.Error("[DNS_DIRECT]", "domain", domain, "err", err)
 		return err
@@ -120,17 +123,9 @@ func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAdd
 	return responseDNSMsg(srv.UDPConn, clientAddr, resp, d.Address())
 }
 
-// exchangeDirectDNSWithFallback exchanges msg with each of the given dns
-// servers in order, falling back to the system dns servers when all of them
-// fail. The builtin servers are skipped entirely during the circuit breaker
-// cool-down after a failure.
-func (s *Socks5Server) exchangeDirectDNSWithFallback(msg *dns.Msg, servers []string) (*dns.Msg, error) {
-	try := func(servers []string) (*dns.Msg, error) {
-		return s.exchangeDirectDNSFromList(msg, servers)
-	}
-	return easydns.QueryWithBuiltinFirst(servers, easydns.SystemDNSServers(), try)
-}
-
+// exchangeDirectDNSFromList exchanges msg against the given dns servers in
+// order. The builtin-first fallback (including the circuit-breaker cool-down)
+// is applied by the caller through easydns.QueryWithBuiltinFirst.
 func (s *Socks5Server) exchangeDirectDNSFromList(msg *dns.Msg, servers []string) (*dns.Msg, error) {
 	var candidates []string
 	for _, addr := range servers {
@@ -398,16 +393,13 @@ func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAd
 			log.Info("[DNS_PROXY] result", "domain", domain, "qtype", qtype, "answers", util.DNSAnswerStrings(msg))
 
 			if s.router.IsCustomProxyDomain(domain) {
-				for _, ans := range msg.Answer {
-					switch a := ans.(type) {
-					case *dns.A:
-						s.router.AddProxyIP(a.A.String())
-					case *dns.AAAA:
-						s.router.AddProxyIP(a.AAAA.String())
-					case *dns.CNAME:
-						s.router.AddProxyDomain(strings.TrimSuffix(a.Target, "."))
+				util.ForEachDNSAnswer(msg, func(kind, value string) {
+					if kind == "CNAME" {
+						s.router.AddProxyDomain(value)
+						return
 					}
-				}
+					s.router.AddProxyIP(value)
+				})
 			}
 		}
 		s.sendToClient(srv, clientAddr, data, target)
@@ -434,8 +426,7 @@ func (s *Socks5Server) handleRegularUDP(srv *socks5.Server, clientAddr *net.UDPA
 		return err
 	}
 
-	rule := s.router.MatchHostRule(host)
-	switch rule {
+	switch s.router.ClassifyHost(host).Rule {
 	case router.HostRuleBlock:
 		log.Info("[UDP_BLOCK] blocked", "host", host, "target", dst)
 		return nil
@@ -507,8 +498,30 @@ func (s *Socks5Server) getOrCreateDirectUDPSession(srv *socks5.Server, clientAdd
 		dc.lastSeen.Store(time.Now().UnixNano())
 
 		s.udpMu.Lock()
+		if s.closing.Load() {
+			// Re-check under the same lock as the registration: a Close that
+			// raced the dial has already run its sweep, so an entry inserted
+			// afterwards would never be reclaimed (the cleanup loop and the
+			// read loop both refuse to touch a closing server).
+			s.udpMu.Unlock()
+			rc.Close() //nolint:errcheck
+			return nil, errSocksServerClosed
+		}
+		// Enforce the same session cap as the proxied path: a client sending
+		// UDP to many distinct direct destinations would otherwise create one
+		// socket plus goroutine per flow, reaped only by the 30s cleanup tick.
+		var evicted *directUDPConn
+		if len(s.directUDP) >= maxUDPExchanges {
+			evicted = s.evictOldestDirectUDPLocked()
+		}
 		s.directUDP[key] = dc
 		s.udpMu.Unlock()
+
+		if evicted != nil {
+			// Closing the socket makes the evicted session's read loop return,
+			// which removes its own (already deleted) map entry by identity.
+			evicted.conn.Close() //nolint:errcheck
+		}
 
 		go s.directUDPReadLoop(srv, clientAddr, dst, key, dc)
 
@@ -525,6 +538,29 @@ func (s *Socks5Server) getOrCreateDirectUDPSession(srv *socks5.Server, clientAdd
 		return nil, errSocksServerClosed
 	}
 	return dc, nil
+}
+
+// evictOldestDirectUDPLocked selects the direct-UDP session that has been idle
+// the longest and removes it from the map, bounding the live session count at
+// maxUDPExchanges. The caller must close the returned socket after releasing
+// s.udpMu: closing it unblocks the session's read loop, which takes the lock
+// itself.
+func (s *Socks5Server) evictOldestDirectUDPLocked() *directUDPConn {
+	var oldestKey string
+	var oldestTime time.Time
+	for k, dc := range s.directUDP {
+		last := time.Unix(0, dc.lastSeen.Load())
+		if oldestKey == "" || last.Before(oldestTime) {
+			oldestKey, oldestTime = k, last
+		}
+	}
+	if oldestKey == "" {
+		return nil
+	}
+	log.Debug("[UDP_DIRECT] session cap reached, evicting oldest idle", "key", oldestKey)
+	evicted := s.directUDP[oldestKey]
+	delete(s.directUDP, oldestKey)
+	return evicted
 }
 
 // directUDPReadLoop relays datagrams from the direct remote back to the
@@ -595,7 +631,7 @@ func responseDNSMsg(conn *net.UDPConn, addr *net.UDPAddr, msg *dns.Msg, dst stri
 	if err != nil {
 		return err
 	}
-	a, addrBytes, port, err := ParseAddress(dst)
+	a, addrBytes, port, err := socks5.ParseAddress(dst)
 	if err != nil {
 		return err
 	}
@@ -613,8 +649,4 @@ func responseBlockedDNSMsg(conn *net.UDPConn, addr *net.UDPAddr, msg *dns.Msg, d
 	msg.Ns = nil
 	msg.Extra = nil
 	return responseDNSMsg(conn, addr, msg, dst)
-}
-
-func ParseAddress(address string) (a byte, addr []byte, port []byte, err error) {
-	return socks5.ParseAddress(address)
 }

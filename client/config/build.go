@@ -15,7 +15,7 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 		return nil, fmt.Errorf("password is required")
 	}
 
-	proto, err := outboundProtoToProtocol(s.OutboundProto)
+	proto, err := OutboundProtoToProtocol(s.OutboundProto)
 	if err != nil {
 		return nil, err
 	}
@@ -158,9 +158,6 @@ func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) {
 	if s.BindAll {
 		cfg.Local.BindAll = true
 	}
-	if s.OutboundProto != "" {
-		cfg.Transport.Protocol = sharedconfig.DefaultProtocol
-	}
 	if s.TunConfig != "" {
 		cfg.Local.TunConfig = jsonTunConfig(s.TunConfig)
 	}
@@ -173,10 +170,14 @@ func jsonTunConfig(s string) json.RawMessage {
 	return json.RawMessage(s)
 }
 
-func outboundProtoToProtocol(proto string) (string, error) {
+// OutboundProtoToProtocol maps the user-facing outbound_proto value to the
+// transport protocol. Only h2 is implemented, so "native" (the historical
+// empty value) and "h2" both select it — the mapping is shared by the config
+// file and the --outbound-proto flag so the two cannot drift.
+func OutboundProtoToProtocol(proto string) (string, error) {
 	switch proto {
 	case "", "native":
-		return "", nil
+		return sharedconfig.DefaultProtocol, nil
 	case sharedconfig.DefaultProtocol:
 		return sharedconfig.DefaultProtocol, nil
 	default:

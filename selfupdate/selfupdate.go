@@ -23,18 +23,13 @@ const (
 // restart the process (see Restart). localHTTPPort is the local HTTP proxy
 // port tried first for fetching; a direct connection is used as fallback.
 func Update(ctx context.Context, localHTTPPort int, rel *Release) error {
-	return UpdateFor(ctx, localHTTPPort, ProductClient, rel)
-}
-
-// UpdateFor is Update for a specific product (client, headless or server).
-func UpdateFor(ctx context.Context, localHTTPPort int, product Product, rel *Release) error {
-	return updateFor(ctx, NewClient(localHTTPPort), product, rel)
+	return updateFor(ctx, NewClient(localHTTPPort), ProductClient, rel)
 }
 
 // updateFor downloads, extracts and installs the release asset for product
 // using the given fetch client.
 func updateFor(ctx context.Context, c *Client, product Product, rel *Release) error {
-	asset := PickAssetFor(rel, product, runtime.GOOS, runtime.GOARCH)
+	asset := pickAssetFor(rel, product, runtime.GOOS, runtime.GOARCH)
 	if asset == nil {
 		return fmt.Errorf("no release asset for %s on %s/%s", product, runtime.GOOS, runtime.GOARCH)
 	}
@@ -42,7 +37,7 @@ func updateFor(ctx context.Context, c *Client, product Product, rel *Release) er
 	ctx, cancel := context.WithTimeout(ctx, DownloadTimeout)
 	defer cancel()
 
-	zipPath, err := c.DownloadAsset(ctx, asset)
+	zipPath, err := c.downloadAsset(ctx, asset)
 	if err != nil {
 		return fmt.Errorf("download asset %s: %w", asset.Name, err)
 	}
@@ -60,10 +55,10 @@ func updateFor(ctx context.Context, c *Client, product Product, rel *Release) er
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
 
-	if err := Unzip(zipPath, staging); err != nil {
+	if err := unzip(zipPath, staging); err != nil {
 		return fmt.Errorf("unzip asset %s: %w", asset.Name, err)
 	}
-	if err := InstallFor(staging, product); err != nil {
+	if err := installFor(staging, product); err != nil {
 		return fmt.Errorf("install: %w", err)
 	}
 	return nil

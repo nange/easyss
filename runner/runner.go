@@ -53,12 +53,12 @@ var warmUpCore = func(s *proxy.Socks5Server, timeout time.Duration) error {
 var warmUpStartDelay = sharedconfig.WarmUpStartDelay
 
 type Core struct {
-	Cfg           *config.ClientConfig
+	cfg           *config.ClientConfig
 	Client        *client.Client
 	SocksServer   *proxy.Socks5Server
 	HTTPServer    *proxy.HTTPProxyServer
 	StreamHandler *proxy.StreamHandler
-	DNSServer     *dns.ForwardServer
+	dnsServer     *dns.ForwardServer
 
 	// StartupWarn carries a non-fatal warning detected while initializing
 	// the core (e.g. a custom rule file that failed to load), so the caller
@@ -66,7 +66,7 @@ type Core struct {
 	StartupWarn error
 
 	// warmUpCancel cancels the in-flight (or still delayed) background
-	// warm-up started by StartWarmUp; set once, called by Stop. Guarded by
+	// warm-up started by startWarmUp; set once, called by Stop. Guarded by
 	// warmUpMu because Stop may run while Run is still dispatching.
 	warmUpMu     sync.Mutex
 	warmUpCancel context.CancelFunc
@@ -94,15 +94,12 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		},
 	}
 
-	timeout := cfg.TimeoutDuration()
-	streamIdleTimeout := sharedconfig.StreamIdleTimeout(timeout)
-	udpIdleTimeout := sharedconfig.UDPIdleTimeout(timeout)
-	dialTimeout := sharedconfig.DialTimeout(timeout)
+	timeouts := sharedconfig.NewTimeouts(cfg.TimeoutDuration())
 
-	streamHandler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, streamIdleTimeout)
+	streamHandler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, timeouts.StreamIdle)
 
 	c := &Core{
-		Cfg:           cfg,
+		cfg:           cfg,
 		Client:        cli,
 		StreamHandler: streamHandler,
 		StartupWarn:   cli.StartupWarning(),
@@ -149,8 +146,18 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		if svr := cfg.DefaultServer(); svr != nil && !util.IsIP(svr.Address) {
 			serverDomain = svr.Address
 		}
-		socksServer, err := proxy.NewSocks5Server(socksAddr, cfg.AuthUsername, cfg.AuthPassword,
-			streamHandler, cli.Router(), serverDomain, method, !cfg.Local.EnableQUIC, dialTimeout, udpIdleTimeout, timeout/3, streamIdleTimeout, cli.DialContext)
+		socksServer, err := proxy.NewSocks5Server(proxy.Socks5Options{
+			ListenAddr:        socksAddr,
+			Username:          cfg.AuthUsername,
+			Password:          cfg.AuthPassword,
+			Handler:           streamHandler,
+			Router:            cli.Router(),
+			ServerDomain:      serverDomain,
+			Method:            method,
+			DisableQUIC:       !cfg.Local.EnableQUIC,
+			Timeouts:          timeouts,
+			DirectDialContext: cli.DialContext,
+		})
 		if err != nil {
 			_ = cli.Close()
 			return nil, err
@@ -167,8 +174,17 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 
 	if httpAddr != "" {
 		socksAddr := "127.0.0.1:" + strconv.Itoa(cfg.Local.SocksPort)
-		httpServer, err := proxy.NewHTTPProxyServer(httpAddr, socksAddr, cfg.AuthUsername, cfg.AuthPassword,
-			timeout, streamHandler, cli.Router(), method, cli.DialContext)
+		httpServer, err := proxy.NewHTTPProxyServer(proxy.HTTPProxyOptions{
+			ListenAddr: httpAddr,
+			SocksAddr:  socksAddr,
+			Username:   cfg.AuthUsername,
+			Password:   cfg.AuthPassword,
+			Timeout:    timeouts.Base,
+			Handler:    streamHandler,
+			Router:     cli.Router(),
+			Method:     method,
+			Dial:       cli.DialContext,
+		})
 		if err != nil {
 			c.cleanup()
 			return nil, err
@@ -183,10 +199,10 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 	}
 
 	if dnsAddr != "" {
-		c.DNSServer = dns.NewForwardServer(dnsAddr, cli.Router().ShouldIPV6Disable())
+		c.dnsServer = dns.NewForwardServer(dnsAddr, cli.Router().ShouldIPV6Disable())
 		log.Info("[EASYSS] starting dns forward server", "addr", dnsAddr)
 		go func() {
-			if err := c.DNSServer.Start(); err != nil {
+			if err := c.dnsServer.Start(); err != nil {
 				log.Error("[EASYSS] dns forward server", "err", err)
 			}
 		}()
@@ -210,11 +226,11 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 	stats.StartSpeedMonitor()
 	// Dispatch the background warm-up last: it only primes the connection
 	// pools, so it must never delay or fail startup.
-	c.StartWarmUp()
+	c.startWarmUp()
 	return c, nil
 }
 
-// StartWarmUp dispatches the warm-up of the transport's connection pools in
+// startWarmUp dispatches the warm-up of the transport's connection pools in
 // the background, so the first real stream of each traffic class reuses an
 // established connection. It returns immediately: callers (desktop start,
 // gomobile Start) are never blocked by it and must not depend on it — the
@@ -225,11 +241,11 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 // The warm-up goroutine is cancelled by Stop, so a short-lived core (start
 // then immediately stop, as tests and a quick server switch do) never leaves
 // a probe running against a closed transport.
-func (c *Core) StartWarmUp() {
-	if c == nil || c.Cfg == nil || c.SocksServer == nil {
+func (c *Core) startWarmUp() {
+	if c == nil || c.cfg == nil || c.SocksServer == nil {
 		return
 	}
-	if c.Cfg.Transport.DisableWarmUp {
+	if c.cfg.Transport.DisableWarmUp {
 		log.Info("[EASYSS] warm-up disabled by config")
 		return
 	}
@@ -378,8 +394,8 @@ func (c *Core) cleanup() {
 	if c.HTTPServer != nil {
 		_ = c.HTTPServer.Close()
 	}
-	if c.DNSServer != nil {
-		_ = c.DNSServer.Shutdown()
+	if c.dnsServer != nil {
+		_ = c.dnsServer.Shutdown()
 	}
 	if c.Client != nil {
 		_ = c.Client.Close()

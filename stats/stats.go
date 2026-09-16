@@ -289,11 +289,6 @@ type Snapshot struct {
 	StartTime time.Time `json:"start_time"`
 }
 
-// ActiveStreamsCount returns the current count of streams opened but not yet closed.
-func (s Snapshot) ActiveStreamsCount() int64 {
-	return s.TotalStreamsOpened - s.TotalStreamsClosed
-}
-
 func (s Snapshot) AvgRTT() time.Duration {
 	if s.RTTCount == 0 {
 		return 0

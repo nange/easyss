@@ -142,113 +142,81 @@ func (f Frame) EncodedLen() int {
 	return FrameHeaderSize + int(f.Length)
 }
 
-func ReadFrame(r io.Reader) (Frame, error) {
-	var header [FrameHeaderSize]byte
-	if _, err := io.ReadFull(r, header[:]); err != nil {
-		return Frame{}, err
+// DecodeFrame decodes one frame from the head of data. It is the
+// non-streaming counterpart of the record layer: a decrypted CryptoRecord is
+// split in memory, so no io.Reader is involved. It returns the frame, the
+// number of bytes it occupied, and an error. Frame payloads alias data, whose
+// lifetime is the caller's.
+func DecodeFrame(data []byte) (Frame, int, error) {
+	if len(data) < FrameHeaderSize {
+		return Frame{}, 0, io.ErrUnexpectedEOF
 	}
-	ftype := FrameType(header[0])
-	length := binary.BigEndian.Uint16(header[1:3])
-
-	if ftype == FramePADDING || ftype == FrameCOVER {
-		if length > 0 {
-			if _, err := io.CopyN(io.Discard, r, int64(length)); err != nil {
-				return Frame{}, err
-			}
-		}
-		return Frame{
-			Type:   ftype,
-			Length: length,
-		}, nil
+	ftype := FrameType(data[0])
+	length := int(binary.BigEndian.Uint16(data[1:3]))
+	encoded := FrameHeaderSize + length
+	if encoded > len(data) {
+		return Frame{}, 0, io.ErrUnexpectedEOF
 	}
 
-	payload := make([]byte, length)
+	f := Frame{Type: ftype, Length: uint16(length)}
 	if length > 0 {
-		if _, err := io.ReadFull(r, payload); err != nil {
-			return Frame{}, err
-		}
+		f.Payload = data[FrameHeaderSize:encoded]
 	}
-
-	return Frame{
-		Type:    ftype,
-		Length:  length,
-		Payload: payload,
-	}, nil
+	return f, encoded, nil
 }
 
-func WriteFrame(w io.Writer, f Frame) error {
-	var header [FrameHeaderSize]byte
-	header[0] = byte(f.Type)
-	binary.BigEndian.PutUint16(header[1:3], f.Length)
-	if _, err := w.Write(header[:]); err != nil {
-		return err
+// NewFrame builds a frame of the given type, copying payload so the caller may
+// reuse its buffer (the shaper hands over bytespool buffers). Length is always
+// derived from the payload, so the wire header can never disagree with the
+// bytes written after it.
+func NewFrame(typ FrameType, payload []byte) Frame {
+	return NewFrameWithPayload(typ, append([]byte(nil), payload...))
+}
+
+// NewFrameWithPayload wraps an existing payload buffer without copying it, for
+// callers that own a pooled buffer (cover traffic) and must hand it to the
+// shaper unchanged so it is returned to the pool.
+func NewFrameWithPayload(typ FrameType, payload []byte) Frame {
+	checkPayloadLen(payload)
+	return Frame{
+		Type:    typ,
+		Length:  uint16(len(payload)),
+		Payload: payload,
 	}
-	if f.Length > 0 {
-		n, err := w.Write(f.Payload)
-		if err != nil {
-			return err
-		}
-		if n != len(f.Payload) {
-			return io.ErrShortWrite
-		}
+}
+
+// NewZeroFrame builds a frame of the given type with a zeroed payload of
+// length bytes, for callers that fill the buffer afterwards (padding).
+func NewZeroFrame(typ FrameType, length uint16) Frame {
+	return Frame{
+		Type:    typ,
+		Length:  length,
+		Payload: make([]byte, length),
 	}
-	return nil
 }
 
 func NewFrameDATA(data []byte) Frame {
-	checkPayloadLen(data)
-	payload := append([]byte(nil), data...)
-	return Frame{
-		Type:    FrameDATA,
-		Length:  uint16(len(payload)),
-		Payload: payload,
-	}
+	return NewFrame(FrameDATA, data)
 }
 
 func NewFrameDATAGRAM(data []byte) Frame {
-	checkPayloadLen(data)
-	payload := append([]byte(nil), data...)
-	return Frame{
-		Type:    FrameDATAGRAM,
-		Length:  uint16(len(payload)),
-		Payload: payload,
-	}
+	return NewFrame(FrameDATAGRAM, data)
 }
 
 func NewFrameFIN() Frame {
-	return Frame{Type: FrameFIN, Length: 0}
+	return Frame{Type: FrameFIN}
 }
 
 func NewFrameRST() Frame {
-	return Frame{Type: FrameRST, Length: 0}
+	return Frame{Type: FrameRST}
 }
 
 func NewFramePADDING(length uint16) Frame {
-	payload := make([]byte, length)
-	return Frame{
-		Type:    FramePADDING,
-		Length:  length,
-		Payload: payload,
-	}
-}
-
-func NewFrameCOVER(length uint16) Frame {
-	payload := make([]byte, length)
-	return Frame{
-		Type:    FrameCOVER,
-		Length:  length,
-		Payload: payload,
-	}
+	return NewZeroFrame(FramePADDING, length)
 }
 
 func NewFrameHANDSHAKE(h Handshake) Frame {
-	payload := h.Encode()
-	checkPayloadLen(payload)
-	return Frame{
-		Type:    FrameHANDSHAKE,
-		Length:  uint16(len(payload)),
-		Payload: payload,
-	}
+	return NewFrame(FrameHANDSHAKE, h.Encode())
 }
 
 func checkPayloadLen(payload []byte) {
@@ -258,36 +226,27 @@ func checkPayloadLen(payload []byte) {
 }
 
 // AppendFrame appends a single frame (header + payload) to buf without
-// resetting existing content. This is the append-only variant of EncodeFrames
-// suitable for incrementally building a record buffer.
+// resetting existing content. This is the only frame-encoding path: the
+// header is derived from len(f.Payload) rather than from f.Length, so a Frame
+// whose two fields disagree (e.g. one just decoded from the wire) can never
+// produce a corrupt record.
 func AppendFrame(buf []byte, f Frame) []byte {
 	var header [FrameHeaderSize]byte
 	header[0] = byte(f.Type)
-	binary.BigEndian.PutUint16(header[1:3], f.Length)
+	binary.BigEndian.PutUint16(header[1:3], uint16(len(f.Payload)))
 	buf = append(buf, header[:]...)
 	return append(buf, f.Payload...)
 }
 
+// EncodeFrames encodes a list of frames into a single new buffer.
 func EncodeFrames(frames []Frame) []byte {
-	return EncodeFramesToBuf(frames, nil)
-}
-
-func EncodeFramesToBuf(frames []Frame, buf []byte) []byte {
 	total := 0
 	for _, f := range frames {
-		total += f.EncodedLen()
+		total += FrameHeaderSize + len(f.Payload)
 	}
-	if cap(buf) < total {
-		buf = make([]byte, 0, total)
-	} else {
-		buf = buf[:0]
-	}
+	buf := make([]byte, 0, total)
 	for _, f := range frames {
-		var header [FrameHeaderSize]byte
-		header[0] = byte(f.Type)
-		binary.BigEndian.PutUint16(header[1:3], f.Length)
-		buf = append(buf, header[:]...)
-		buf = append(buf, f.Payload...)
+		buf = AppendFrame(buf, f)
 	}
 	return buf
 }

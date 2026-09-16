@@ -151,6 +151,12 @@ type Router struct {
 	proxyRule atomic.Int32
 	ipv6Rule  atomic.Int32
 
+	// IPv6 availability is resolved after construction (client.New) and read
+	// per request, so it is stored atomically like the rules above instead of
+	// in cfg, whose fields would race.
+	ipv6Networking atomic.Bool
+	serverIPV6     atomic.Pointer[string]
+
 	geoIPDB       *geoip2.Reader
 	geoSiteDirect *GeoSite
 	geoSiteBlock  *GeoSite
@@ -186,6 +192,7 @@ func New(cfg Config) (*Router, error) {
 	}
 	r.proxyRule.Store(int32(cfg.ProxyRule))
 	r.ipv6Rule.Store(int32(cfg.IPV6Rule))
+	r.SetIPV6Info(cfg.IPV6NetWorking, cfg.ServerIPV6)
 
 	if err := r.loadCustomIPDomains(); err != nil {
 		r.customFileErr = fmt.Errorf("load custom rule file: %w", err)
@@ -290,6 +297,31 @@ func (r *Router) loadCustomIPDomains() error {
 	}
 
 	return nil
+}
+
+// HostClassification is the routing decision for a target host.
+type HostClassification struct {
+	// Rule is the routing rule to apply.
+	Rule HostRule
+	// IPV6Rejected reports that Rule was forced to HostRuleBlock by the IPv6
+	// policy gate (a literal IPv6 target while IPv6 is disabled), so the
+	// caller can answer with a protocol-specific rejection.
+	IPV6Rejected bool
+}
+
+// ClassifyHost resolves the routing decision for host: the IPv6 policy gate
+// first, then the direct/proxy/block rule. Every request path (SOCKS5, HTTP
+// CONNECT, UDP, TUN ICMP) shares it, so no path can forget the gate or apply
+// the two checks in a different order. A nil router classifies everything as
+// proxied, which is what an unconfigured test server expects.
+func (r *Router) ClassifyHost(host string) HostClassification {
+	if r == nil {
+		return HostClassification{Rule: HostRuleProxy}
+	}
+	if r.ShouldIPV6Disable() && util.IsIPV6(host) {
+		return HostClassification{Rule: HostRuleBlock, IPV6Rejected: true}
+	}
+	return HostClassification{Rule: r.MatchHostRule(host)}
 }
 
 func (r *Router) MatchHostRule(host string) HostRule {
@@ -504,7 +536,7 @@ func (r *Router) ShouldIPV6Disable() bool {
 	case IPV6RuleEnable:
 		return false
 	case IPV6RuleAuto:
-		if r.cfg.IPV6NetWorking && r.cfg.ServerIPV6 != "" {
+		if r.ipv6Networking.Load() && r.ServerIPV6() != "" {
 			return false
 		}
 	}
@@ -519,11 +551,17 @@ func (r *Router) SetProxyRule(rule ProxyRule) {
 	r.proxyRule.Store(int32(rule))
 }
 
+// SetIPV6Info records whether IPv6 networking is available and the resolved
+// server IPv6 address. It is safe to call concurrently with the readers.
 func (r *Router) SetIPV6Info(networking bool, serverIPV6 string) {
-	r.cfg.IPV6NetWorking = networking
-	r.cfg.ServerIPV6 = serverIPV6
+	r.ipv6Networking.Store(networking)
+	r.serverIPV6.Store(&serverIPV6)
 }
 
+// ServerIPV6 returns the resolved server IPv6 address ("" when unavailable).
 func (r *Router) ServerIPV6() string {
-	return r.cfg.ServerIPV6
+	if p := r.serverIPV6.Load(); p != nil {
+		return *p
+	}
+	return ""
 }

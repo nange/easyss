@@ -54,7 +54,7 @@ const (
 	// after a successful core start so the first real stream of each
 	// traffic class reuses an established connection instead of paying the
 	// cold-start cost (dial + TLS + HTTP/2). The warm-up runs in the
-	// background (see runner.Core.StartWarmUp), so neither value delays
+	// background (see runner.Run), so neither value delays
 	// startup. WarmUpStartDelay postpones the probe so the host has time to
 	// finish bringing its network path up (e.g. the Android VpnService
 	// configuring routes) before a probe can fail for that reason alone;

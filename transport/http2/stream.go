@@ -20,7 +20,7 @@ type roundTripResult struct {
 	err  error
 }
 
-type HTTP2Stream struct {
+type http2Stream struct {
 	w      *io.PipeWriter
 	respCh <-chan roundTripResult
 	cancel context.CancelFunc
@@ -66,7 +66,7 @@ const (
 
 // trackRead accumulates downloaded bytes: on the slot (transport health and
 // connection rotation signals) and in the heavy-stream detector.
-func (s *HTTP2Stream) trackRead(n int) {
+func (s *http2Stream) trackRead(n int) {
 	if s.slot == nil || n <= 0 {
 		return
 	}
@@ -79,7 +79,7 @@ func (s *HTTP2Stream) trackRead(n int) {
 // counter (rotation must trigger for upload-heavy connections too, since
 // middleboxes throttle by total bytes in either direction) and the
 // heavy-stream detector.
-func (s *HTTP2Stream) trackWrite(n int) {
+func (s *http2Stream) trackWrite(n int) {
 	if s.slot == nil || n <= 0 {
 		return
 	}
@@ -91,7 +91,7 @@ func (s *HTTP2Stream) trackWrite(n int) {
 // heavy the first time the stream qualifies: either it crossed the fast
 // size threshold, or it has been alive long enough carrying at least the
 // slow threshold (slow links make even small transfers long-lived).
-func (s *HTTP2Stream) accumulate(n int) {
+func (s *http2Stream) accumulate(n int) {
 	if s.slot == nil || n <= 0 {
 		return
 	}
@@ -118,7 +118,7 @@ func (s *HTTP2Stream) accumulate(n int) {
 // is called from the stream's done callback (guarded by sync.OnceFunc),
 // while accumulate may run concurrently from Read/Write. The mutex pairs
 // each state transition with its counter update so slot.heavy cannot leak.
-func (s *HTTP2Stream) releaseHeavy() {
+func (s *http2Stream) releaseHeavy() {
 	if s.slot == nil {
 		return
 	}
@@ -135,7 +135,7 @@ func (s *HTTP2Stream) releaseHeavy() {
 
 // setRoundTripErr stores the RoundTrip error for use by Write() when the pipe
 // write fails with io.ErrClosedPipe.
-func (s *HTTP2Stream) setRoundTripErr(err error) {
+func (s *http2Stream) setRoundTripErr(err error) {
 	s.rtErrMu.Lock()
 	s.rtErr = err
 	s.rtErrMu.Unlock()
@@ -145,11 +145,11 @@ func (s *HTTP2Stream) setRoundTripErr(err error) {
 // the transport. The response headers arrive roughly one path RTT later (the
 // server answers before dialing the origin), which Read() records as the
 // pure client<->server RTT sample.
-func (s *HTTP2Stream) MarkBootstrapSent() {
+func (s *http2Stream) MarkBootstrapSent() {
 	s.bootstrapSentAt.Store(time.Now().UnixNano())
 }
 
-func (s *HTTP2Stream) Read(p []byte) (int, error) {
+func (s *http2Stream) Read(p []byte) (int, error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -215,7 +215,7 @@ func (s *HTTP2Stream) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (s *HTTP2Stream) Write(p []byte) (int, error) {
+func (s *http2Stream) Write(p []byte) (int, error) {
 	n, err := s.w.Write(p)
 	if n > 0 {
 		s.trackWrite(n)
@@ -236,11 +236,11 @@ func (s *HTTP2Stream) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func (s *HTTP2Stream) CloseWrite() error {
+func (s *http2Stream) CloseWrite() error {
 	return s.w.Close()
 }
 
-func (s *HTTP2Stream) Close() error {
+func (s *http2Stream) Close() error {
 	defer s.done()
 	s.cancel()
 	_ = s.w.Close()
@@ -256,7 +256,7 @@ func (s *HTTP2Stream) Close() error {
 	return nil
 }
 
-var _ transport.Stream = (*HTTP2Stream)(nil)
+var _ transport.Stream = (*http2Stream)(nil)
 
 // SlotDraining reports whether the stream's slot is due for eviction: the
 // connection exceeded its lifetime or bytes limit (expiring) or was confirmed
@@ -266,6 +266,6 @@ var _ transport.Stream = (*HTTP2Stream)(nil)
 // half-closed connections cannot postpone the slot's rotation/retirement
 // until the full relay idle timeout. Active streams are never drained: the
 // relay only closes them once they have been idle for ExpiringStreamDrainIdle.
-func (s *HTTP2Stream) SlotDraining() bool {
+func (s *http2Stream) SlotDraining() bool {
 	return s.slot != nil && (s.slot.expiring.Load() || s.slot.degraded.Load())
 }

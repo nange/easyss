@@ -9,68 +9,15 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/nange/easyss/v3/log"
-	"github.com/nange/easyss/v3/util"
 	"golang.org/x/sys/unix"
 )
 
 func IsRoot() bool {
 	return os.Geteuid() == 0
-}
-
-func RunMeElevated(extraArgs ...string) error {
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-
-	// Prepare arguments
-	var argsBuilder strings.Builder
-	for _, arg := range os.Args[1:] {
-		fmt.Fprintf(&argsBuilder, "'%s' ", strings.ReplaceAll(arg, "'", "'\\''"))
-	}
-	for _, arg := range extraArgs {
-		fmt.Fprintf(&argsBuilder, "'%s' ", strings.ReplaceAll(arg, "'", "'\\''"))
-	}
-
-	// Capture necessary environment variables for GUI. XDG_RUNTIME_DIR carries
-	// the Wayland socket path and TERMINAL the user's terminal preference —
-	// both are required by the elevated tray to open the log viewer.
-	envMap := make(map[string]string)
-	envVars := []string{"DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "TERMINAL", "HOME", "DBUS_SESSION_BUS_ADDRESS"}
-
-	for _, key := range envVars {
-		if val := os.Getenv(key); val != "" {
-			envMap[key] = val
-		}
-	}
-
-	// Fallback for XAUTHORITY if missing
-	if _, ok := envMap["XAUTHORITY"]; !ok {
-		if home, ok := envMap["HOME"]; ok {
-			envMap["XAUTHORITY"] = filepath.Join(home, ".Xauthority")
-		} else {
-			// Try to get current user's home dir
-			if homeDir, err := os.UserHomeDir(); err == nil {
-				envMap["XAUTHORITY"] = filepath.Join(homeDir, ".Xauthority")
-			}
-		}
-	}
-
-	innerCmd := fmt.Sprintf("nohup '%s' %s >/dev/null 2>&1 &", exe, argsBuilder.String())
-
-	cmdArgs := []string{"env"}
-	for k, v := range envMap {
-		cmdArgs = append(cmdArgs, fmt.Sprintf("%s=%s", k, v))
-	}
-	cmdArgs = append(cmdArgs, "sh", "-c", innerCmd)
-
-	_, err = util.Command("pkexec", cmdArgs...)
-	return err
 }
 
 // SpawnTunHelper launches a long-running elevated TUN helper process via pkexec.
@@ -99,21 +46,14 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 
 	// Open the FIFO for writing in a goroutine (blocks until the helper opens
 	// it for reading via stdin redirection).
-	type fifoResult struct {
-		f   *os.File
-		err error
-	}
-	fifoCh := make(chan fifoResult, 1)
-	go func() {
-		f, err := os.OpenFile(fifoPath, os.O_WRONLY, 0)
-		fifoCh <- fifoResult{f, err}
-	}()
+	fifoCh := openFifoForWriteAsync(fifoPath)
 
 	// Create the Unix socket for fd passing. On Linux we use an abstract
 	// socket (@-prefixed) which does not create a filesystem entry and is
 	// immune to pkexec mount namespace isolation.
 	fdListener, err := net.Listen("unix", fdSocketPath)
 	if err != nil {
+		releaseFifoOpen(fifoPath, fifoCh)
 		os.Remove(fifoPath) //nolint:errcheck
 		return nil, nil, fmt.Errorf("listen on %s: %w", fdSocketPath, err)
 	}
@@ -156,7 +96,8 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 	pkexecCmd.Stdout = &pkexecOut
 	pkexecCmd.Stderr = &pkexecErr
 	if err := pkexecCmd.Start(); err != nil {
-		fdListener.Close()  //nolint:errcheck
+		fdListener.Close() //nolint:errcheck
+		releaseFifoOpen(fifoPath, fifoCh)
 		os.Remove(fifoPath) //nolint:errcheck
 		return nil, nil, fmt.Errorf("start pkexec: %w", err)
 	}
@@ -194,7 +135,8 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 			}
 			// pkexec exited with an error before the helper started
 			// (e.g. user cancelled the auth dialog).
-			fdListener.Close()  //nolint:errcheck
+			fdListener.Close() //nolint:errcheck
+			releaseFifoOpen(fifoPath, fifoCh)
 			os.Remove(fifoPath) //nolint:errcheck
 			detail := strings.TrimSpace(pkexecErr.String())
 			if detail == "" {
@@ -210,7 +152,8 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 			// spawn a helper against sockets that are about to be removed.
 			pkexecCmd.Process.Kill() //nolint:errcheck
 			fdListener.Close()       //nolint:errcheck
-			os.Remove(fifoPath)      //nolint:errcheck
+			releaseFifoOpen(fifoPath, fifoCh)
+			os.Remove(fifoPath) //nolint:errcheck
 			return nil, nil, fmt.Errorf("timeout waiting for tun helper (user may have cancelled)")
 		}
 	}

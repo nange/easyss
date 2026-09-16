@@ -11,8 +11,8 @@ import (
 	"github.com/Masterminds/semver/v3"
 )
 
-// Asset is a downloadable file attached to a release.
-type Asset struct {
+// asset is a downloadable file attached to a release.
+type asset struct {
 	Name string `json:"name"`
 	// BrowserDownloadURL is the direct download URL.
 	BrowserDownloadURL string `json:"browser_download_url"`
@@ -23,7 +23,7 @@ type Asset struct {
 type Release struct {
 	TagName string  `json:"tag_name"`
 	Name    string  `json:"name"`
-	Assets  []Asset `json:"assets"`
+	Assets  []asset `json:"assets"`
 }
 
 // gitDescribeSuffix matches the "-<n>-g<sha>" tail git describe appends when
@@ -181,10 +181,10 @@ func newerThan(a, b *semver.Version) bool {
 	return a.Compare(b) > 0
 }
 
-// PickAssetFor returns the release asset for the given product and platform,
+// pickAssetFor returns the release asset for the given product and platform,
 // following the CI naming scheme (<product>-<goos>-<goarch>.zip), or nil when
 // absent.
-func PickAssetFor(rel *Release, product Product, goos, goarch string) *Asset {
+func pickAssetFor(rel *Release, product Product, goos, goarch string) *asset {
 	name := product.assetName(goos, goarch)
 	for i := range rel.Assets {
 		if rel.Assets[i].Name == name {
@@ -194,9 +194,9 @@ func PickAssetFor(rel *Release, product Product, goos, goarch string) *Asset {
 	return nil
 }
 
-// PickAsset returns the client release asset for the given platform,
+// pickAsset returns the client release asset for the given platform,
 // following the CI naming scheme (easyss-<goos>-<goarch>.zip), or nil when
 // absent.
-func PickAsset(rel *Release, goos, goarch string) *Asset {
-	return PickAssetFor(rel, ProductClient, goos, goarch)
+func pickAsset(rel *Release, goos, goarch string) *asset {
+	return pickAssetFor(rel, ProductClient, goos, goarch)
 }

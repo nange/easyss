@@ -26,15 +26,24 @@ const udpBufSize = protocol.MaxUDPDataSize
 
 type UDPHandler struct {
 	idleTimeout time.Duration
+	dialTimeout time.Duration
 	nextProxy   *nextproxy.NextProxy
 }
 
-func NewUDPHandler(idleTimeout time.Duration, np *nextproxy.NextProxy) *UDPHandler {
+// NewUDPHandler creates a UDPHandler with the given idle timeout and base
+// timeout. Like NewTCPHandler, the dial timeout is derived through
+// config.DialTimeout (base/3 clamped to [3s, 15s]) instead of reusing the
+// much longer idle timeout.
+func NewUDPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) *UDPHandler {
 	if idleTimeout <= 0 {
 		idleTimeout = config.DefaultUDPIdleTimeout
 	}
+	if timeout <= 0 {
+		timeout = time.Duration(config.DefaultTimeout) * time.Second
+	}
 	h := &UDPHandler{
 		idleTimeout: idleTimeout,
+		dialTimeout: config.DialTimeout(timeout),
 		nextProxy:   np,
 	}
 	return h
@@ -47,7 +56,7 @@ func NewUDPHandler(idleTimeout time.Duration, np *nextproxy.NextProxy) *UDPHandl
 func (h *UDPHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c shaper.Shaper, target string, cancelRead func()) error {
 	log.Debug("[UDP] handler starting", "target", target)
 
-	conn, err := h.dialTarget(ctx, target)
+	conn, remote, err := h.dialTarget(ctx, target)
 	if err != nil {
 		log.Error("[UDP] dial target failed", "target", target, "err", err)
 		_ = s2c.PushFrame(protocol.NewFrameRST())
@@ -68,7 +77,7 @@ func (h *UDPHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 	defer conn.Close() //nolint:errcheck
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- h.readFromTarget(conn, s2c, done, &dnsDetected)
+		errCh <- h.readFromTarget(conn, s2c, done, &dnsDetected, remote)
 	}()
 	frameCh := make(chan udpFrameResult, 1)
 	go func() {
@@ -163,7 +172,10 @@ func (h *UDPHandler) handleClientFrame(conn net.Conn, frame protocol.Frame) erro
 	return nil
 }
 
-func (h *UDPHandler) dialTarget(ctx context.Context, target string) (net.Conn, error) {
+// dialTarget opens the outbound UDP socket and returns it together with a
+// printable remote address for logging. The remote is resolved here because
+// the next-proxy path yields a SOCKS5 connection whose RemoteAddr() is nil.
+func (h *UDPHandler) dialTarget(ctx context.Context, target string) (net.Conn, string, error) {
 	host := target
 	if h, _, err := net.SplitHostPort(target); err == nil {
 		host = h
@@ -173,26 +185,30 @@ func (h *UDPHandler) dialTarget(ctx context.Context, target string) (net.Conn, e
 		// the residual-risk note: the SOCKS5 connection reports the proxy's
 		// address, so the post-dial guard below cannot run on this path).
 		if util.IsLANHostResolved(ctx, target) {
-			return nil, fmt.Errorf("ssrf: rejected lan destination %s", target)
+			return nil, "", fmt.Errorf("ssrf: rejected lan destination %s", target)
 		}
-		log.Info("[UDP] dialing via next proxy", "target", target, "proxy", h.nextProxy.URL().String())
-		return h.nextProxy.DialContext(ctx, "udp", target)
+		log.Info("[UDP] dialing via next proxy", "target", target, "proxy", h.nextProxy.Host())
+		conn, err := h.nextProxy.DialContext(ctx, "udp", target)
+		if err != nil {
+			return nil, "", err
+		}
+		return conn, h.nextProxy.Host(), nil
 	}
-	conn, err := net.DialTimeout("udp", target, h.idleTimeout)
+	conn, err := net.DialTimeout("udp", target, h.dialTimeout)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	// Post-dial SSRF guard: verify the actual remote IP is not a LAN address.
 	if ra := conn.RemoteAddr(); ra != nil {
 		if host, _, e := net.SplitHostPort(ra.String()); e == nil && util.IsLANIP(host) {
 			_ = conn.Close()
-			return nil, fmt.Errorf("ssrf: rejected lan destination %s", host)
+			return nil, "", fmt.Errorf("ssrf: rejected lan destination %s", host)
 		}
 	}
-	return conn, nil
+	return conn, remoteString(conn), nil
 }
 
-func (h *UDPHandler) readFromTarget(conn net.Conn, s2c shaper.Shaper, done <-chan struct{}, dnsDetected *atomic.Bool) error {
+func (h *UDPHandler) readFromTarget(conn net.Conn, s2c shaper.Shaper, done <-chan struct{}, dnsDetected *atomic.Bool, remote string) error {
 	buf := bytespool.Get(udpBufSize)
 	defer bytespool.MustPut(buf)
 	for {
@@ -205,32 +221,30 @@ func (h *UDPHandler) readFromTarget(conn net.Conn, s2c shaper.Shaper, done <-cha
 		_ = conn.SetReadDeadline(time.Now().Add(h.idleTimeout))
 		n, err := conn.Read(buf)
 		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
 				return io.EOF
 			}
-			if strings.Contains(err.Error(), "use of closed network connection") {
+			if errors.Is(err, net.ErrClosed) {
 				return io.EOF
 			}
-			log.Error("[UDP] read from target failed", "target", conn.RemoteAddr().String(), "err", err)
+			log.Error("[UDP] read from target failed", "target", remote, "err", err)
 			return err
 		}
 		if n > 0 {
 			// DNS response interception for dynamic IP learning
 			if dnsDetected.Load() && h.nextProxy != nil {
 				msg := &dns.Msg{}
-				if err := msg.Unpack(buf[:n]); err == nil && msg.Response && len(msg.Question) > 0 {
+				if err := msg.Unpack(buf[:n]); err == nil && util.IsDNSResponse(msg) {
 					domain := strings.TrimSuffix(msg.Question[0].Name, ".")
 					if h.nextProxy.IsCustomDomain(domain) {
-						for _, ans := range msg.Answer {
-							switch a := ans.(type) {
-							case *dns.A:
-								h.nextProxy.AddIP(a.A.String())
-							case *dns.AAAA:
-								h.nextProxy.AddIP(a.AAAA.String())
-							case *dns.CNAME:
-								h.nextProxy.AddDomain(strings.TrimSuffix(a.Target, "."))
+						util.ForEachDNSAnswer(msg, func(kind, value string) {
+							if kind == "CNAME" {
+								h.nextProxy.AddDomain(value)
+								return
 							}
-						}
+							h.nextProxy.AddIP(value)
+						})
 					}
 				}
 			}

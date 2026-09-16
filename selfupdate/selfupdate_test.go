@@ -57,7 +57,7 @@ func TestHasNewVersion(t *testing.T) {
 func TestPickAsset(t *testing.T) {
 	rel := &Release{
 		TagName: "v3.1.0",
-		Assets: []Asset{
+		Assets: []asset{
 			{Name: "easyss-windows-amd64.zip"},
 			{Name: "easyss-linux-arm64.zip"},
 			{Name: "easyss-darwin-arm64.zip"},
@@ -65,22 +65,22 @@ func TestPickAsset(t *testing.T) {
 		},
 	}
 
-	a := PickAsset(rel, "windows", "amd64")
+	a := pickAsset(rel, "windows", "amd64")
 	require.NotNil(t, a)
 	assert.Equal(t, "easyss-windows-amd64.zip", a.Name)
 
-	a = PickAsset(rel, "darwin", "arm64")
+	a = pickAsset(rel, "darwin", "arm64")
 	require.NotNil(t, a)
 	assert.Equal(t, "easyss-darwin-arm64.zip", a.Name)
 
-	assert.Nil(t, PickAsset(rel, "linux", "386"))
-	assert.Nil(t, PickAsset(rel, "freebsd", "amd64"))
+	assert.Nil(t, pickAsset(rel, "linux", "386"))
+	assert.Nil(t, pickAsset(rel, "freebsd", "amd64"))
 }
 
 func TestPickAssetFor(t *testing.T) {
 	rel := &Release{
 		TagName: "v3.1.0",
-		Assets: []Asset{
+		Assets: []asset{
 			{Name: "easyss-windows-amd64.zip"},
 			{Name: "easyss-headless-linux-amd64.zip"},
 			{Name: "easyss-server-linux-amd64.zip"},
@@ -100,14 +100,14 @@ func TestPickAssetFor(t *testing.T) {
 		{ProductClient, "windows", "amd64", "easyss-windows-amd64.zip"},
 	}
 	for _, c := range cases {
-		a := PickAssetFor(rel, c.product, c.goos, c.goarch)
+		a := pickAssetFor(rel, c.product, c.goos, c.goarch)
 		require.NotNil(t, a, "%s/%s/%s", c.product, c.goos, c.goarch)
 		assert.Equal(t, c.want, a.Name)
 	}
 
 	// Platform without a published asset for the product.
-	assert.Nil(t, PickAssetFor(rel, ProductServer, "darwin", "arm64"))
-	assert.Nil(t, PickAssetFor(rel, ProductHeadless, "windows", "amd64"))
+	assert.Nil(t, pickAssetFor(rel, ProductServer, "darwin", "arm64"))
+	assert.Nil(t, pickAssetFor(rel, ProductHeadless, "windows", "amd64"))
 }
 
 func TestRunCheck(t *testing.T) {
@@ -124,7 +124,7 @@ func TestRunCheck(t *testing.T) {
 
 	// Already up to date.
 	_, err := runCheck(context.Background(), c, "v9.9.9")
-	assert.ErrorIs(t, err, ErrUpToDate)
+	assert.ErrorIs(t, err, errUpToDate)
 
 	// Newer version available (runCheck never downloads).
 	rel, err := runCheck(context.Background(), c, "v0.0.1")
@@ -173,7 +173,7 @@ func TestUnzipRejectsTraversal(t *testing.T) {
 		"../evil.txt":      "evil",
 		"a/../../evil.txt": "evil",
 	})
-	require.NoError(t, Unzip(zipPath, dest))
+	require.NoError(t, unzip(zipPath, dest))
 
 	// Legitimate entries are extracted inside dest.
 	for _, rel := range []string{
@@ -225,7 +225,7 @@ func TestUnzip(t *testing.T) {
 		"Easyss.app/a.txt": "app-file",
 	})
 
-	require.NoError(t, Unzip(zipPath, dest))
+	require.NoError(t, unzip(zipPath, dest))
 
 	content, err := os.ReadFile(filepath.Join(dest, "easyss"))
 	require.NoError(t, err)
@@ -245,7 +245,7 @@ func TestUnzip(t *testing.T) {
 	// Nothing may be written outside dest even with a zip-slip entry.
 	slipPath := filepath.Join(dir, "rel-slip.zip")
 	makeTestZip(t, slipPath, map[string]string{"../evil.txt": "evil"})
-	require.NoError(t, Unzip(slipPath, dest))
+	require.NoError(t, unzip(slipPath, dest))
 	_, err = os.Stat(filepath.Join(dir, "evil.txt"))
 	assert.True(t, os.IsNotExist(err), "zip-slip entry must be rejected")
 }
@@ -351,7 +351,7 @@ func TestDownloadAssetSizeCheck(t *testing.T) {
 	c := &Client{direct: srv.Client()}
 
 	// Size mismatch is rejected.
-	_, err := c.DownloadAsset(context.Background(), &Asset{
+	_, err := c.downloadAsset(context.Background(), &asset{
 		Name:               "easyss-windows-amd64.zip",
 		BrowserDownloadURL: srv.URL,
 		Size:               5,
@@ -360,7 +360,7 @@ func TestDownloadAssetSizeCheck(t *testing.T) {
 	assert.Contains(t, err.Error(), "size")
 
 	// Size match succeeds and the temp file holds the downloaded bytes.
-	path, err := c.DownloadAsset(context.Background(), &Asset{
+	path, err := c.downloadAsset(context.Background(), &asset{
 		Name:               "easyss-windows-amd64.zip",
 		BrowserDownloadURL: srv.URL,
 		Size:               2,

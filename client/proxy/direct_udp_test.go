@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/txthinking/socks5"
 )
@@ -41,7 +42,17 @@ func (d *recordingDialer) dialed() []net.Conn {
 func newDirectUDPTestServer(t *testing.T, dial func(context.Context, string, string) (net.Conn, error)) *Socks5Server {
 	t.Helper()
 	h := newTestStreamHandler(&mockTransport{})
-	srv, err := NewSocks5Server("127.0.0.1:0", "", "", h, nil, "", protocol.MethodAES256GCM, true, 10*time.Second, 30*time.Second, 0, 0, dial)
+	srv, err := NewSocks5Server(Socks5Options{
+		ListenAddr: "127.0.0.1:0",
+		Handler:    h,
+		Method:     protocol.MethodAES256GCM,
+		Timeouts: config.Timeouts{
+			Base:       30 * time.Second,
+			Dial:       10 * time.Second,
+			StreamIdle: 30 * time.Second,
+		},
+		DirectDialContext: dial,
+	})
 	if err != nil {
 		t.Fatalf("NewSocks5Server: %v", err)
 	}

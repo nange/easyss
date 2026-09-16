@@ -44,13 +44,9 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	}
 
 	// 1. Build TunConfig from the temporary manager to get device defaults.
-	tmpCfg := tun.Config{
-		Socks5Addr: fmt.Sprintf("socks5://127.0.0.1:%d", a.cfg.Local.SocksPort),
-		DNSServer:  tunDNS(a.cfg),
-	}
-	if ipv6 := a.core.Client.Router().ServerIPV6(); ipv6 != "" {
-		tmpCfg.ServerIPV6 = ipv6
-	}
+	// The manager config comes from the shared builder, so this path uses the
+	// same socks/dns/server-ipv6 values as the direct path.
+	tmpCfg := a.tunConfig()
 	tmpMgr := tun.New(tmpCfg)
 	devCfg := tmpMgr.DeviceConfig()
 
@@ -147,7 +143,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	})
 
 	icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
-	icmpHandler.SetProxy(a.core.StreamHandler, methodFromString(a.cfg.DefaultServer().Method))
+	icmpHandler.SetProxy(a.core.StreamHandler, a.methodFromServer())
 	a.tunMgr.SetICMPHandler(icmpHandler)
 
 	startTunEngine(a.tunMgr, "fd")

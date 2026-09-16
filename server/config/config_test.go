@@ -10,7 +10,10 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-func TestFileConfigEffectiveServerConfig(t *testing.T) {
+// TestFileConfigJSON pins the documented config shape: the top-level settings
+// live on FileConfig and the "server" key maps onto ServerConfig, with no
+// duplicated fields between them.
+func TestFileConfigJSON(t *testing.T) {
 	data := []byte(`{
 			"version": 3,
 		"server": {
@@ -29,13 +32,13 @@ func TestFileConfigEffectiveServerConfig(t *testing.T) {
 
 	var fc FileConfig
 	require.NoError(t, json.Unmarshal(data, &fc))
-	cfg := fc.EffectiveServerConfig()
-	require.Equal(t, ":443", cfg.Listen)
-	require.Equal(t, "secret", cfg.Password)
-	require.Equal(t, "fallback.html", cfg.Fallback.Target)
-	require.Equal(t, 30, cfg.Timeout)
-	require.Equal(t, "socks5://127.0.0.1:1080", cfg.NextProxy.URL)
-	require.True(t, cfg.NextProxy.EnableUDP)
+	require.Equal(t, ":443", fc.Server.Listen)
+	require.Equal(t, "secret", fc.Server.Password)
+	require.Equal(t, []string{"aes-256-gcm"}, fc.Server.AllowedMethods)
+	require.Equal(t, "fallback.html", fc.Fallback.Target)
+	require.Equal(t, 30, fc.Timeout)
+	require.Equal(t, "socks5://127.0.0.1:1080", fc.NextProxy.URL)
+	require.True(t, fc.NextProxy.EnableUDP)
 	require.True(t, fc.PprofEnabled)
 }
 
@@ -79,7 +82,10 @@ func TestResolveFilePathsEmpty(t *testing.T) {
 	}
 }
 
-func TestEffectiveServerConfigCarriesResolvedPaths(t *testing.T) {
+// TestResolveFilePathsCarriesIntoResolvedPaths pins that ResolveFilePaths
+// rewrites the fields in place: there is no second copy of them to keep in
+// sync after the EffectiveServerConfig merge was removed.
+func TestResolveFilePathsResolvedInPlace(t *testing.T) {
 	fc := &FileConfig{
 		Server: ServerConfig{
 			CertPath: "server.crt",
@@ -92,15 +98,14 @@ func TestEffectiveServerConfigCarriesResolvedPaths(t *testing.T) {
 	}
 
 	fc.ResolveFilePaths()
-	cfg := fc.EffectiveServerConfig()
 
-	if cfg.CertPath != fc.Server.CertPath {
-		t.Errorf("effective CertPath = %q, want %q", cfg.CertPath, fc.Server.CertPath)
+	if want := filepath.Join(util.CurrentDir(), "server.crt"); fc.Server.CertPath != want {
+		t.Errorf("CertPath = %q, want %q", fc.Server.CertPath, want)
 	}
-	if cfg.NextProxy.NextProxyFile != fc.NextProxy.NextProxyFile {
-		t.Errorf("effective NextProxyFile = %q, want %q", cfg.NextProxy.NextProxyFile, fc.NextProxy.NextProxyFile)
+	if want := filepath.Join(util.CurrentDir(), "next_proxy.txt"); fc.NextProxy.NextProxyFile != want {
+		t.Errorf("NextProxyFile = %q, want %q", fc.NextProxy.NextProxyFile, want)
 	}
-	if cfg.Timeout != 30 {
-		t.Errorf("Timeout = %d, want 30", cfg.Timeout)
+	if fc.Timeout != 30 {
+		t.Errorf("Timeout = %d, want 30", fc.Timeout)
 	}
 }

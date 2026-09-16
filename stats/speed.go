@@ -21,7 +21,7 @@ func StartSpeedMonitor() {
 	}
 	speedRunning = true
 	speedDone = make(chan struct{})
-	go g.speedLoop()
+	go g.speedLoop(speedDone)
 }
 
 // StopSpeedMonitor stops the background speed monitoring goroutine.
@@ -35,7 +35,11 @@ func StopSpeedMonitor() {
 	close(speedDone)
 }
 
-func (s *stats) speedLoop() {
+// speedLoop samples the raw byte counters until done is closed. The stop
+// channel is passed in rather than read from the package global: after a
+// Start/Stop/Start cycle the old goroutine would otherwise observe the new
+// channel and never exit, leaving two monitors updating the same gauges.
+func (s *stats) speedLoop(done <-chan struct{}) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -89,7 +93,7 @@ func (s *stats) speedLoop() {
 					break
 				}
 			}
-		case <-speedDone:
+		case <-done:
 			return
 		}
 	}

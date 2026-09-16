@@ -50,7 +50,7 @@ func TestServeFallback_SamePathSameContent(t *testing.T) {
 
 func TestServeFallback_CustomHTML(t *testing.T) {
 	custom := []byte("<html><body>custom</body></html>")
-	SetFallbackHTML(custom)
+	setFallbackHTML(custom)
 	t.Cleanup(func() { customFallback = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -136,7 +136,7 @@ func TestSetFallbackDir_ExactPathMatch(t *testing.T) {
 		"about.html":   "<h1>About</h1>",
 		"contact.html": "<h1>Contact</h1>",
 	})
-	if err := SetFallbackDir(dir); err != nil {
+	if err := setFallbackDir(dir); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
@@ -160,7 +160,7 @@ func TestSetFallbackDir_IndexMapping(t *testing.T) {
 	dir := makeFallbackDir(t, map[string]string{
 		"index.html": "<h1>Root</h1>",
 	})
-	if err := SetFallbackDir(dir); err != nil {
+	if err := setFallbackDir(dir); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
@@ -178,7 +178,7 @@ func TestSetFallbackDir_404Fallback(t *testing.T) {
 		"index.html": "<h1>Home</h1>",
 		"404.html":   "<h1>Not Found</h1>",
 	})
-	if err := SetFallbackDir(dir); err != nil {
+	if err := setFallbackDir(dir); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
@@ -195,7 +195,7 @@ func TestSetFallbackDir_No404FallbackToIndex(t *testing.T) {
 	dir := makeFallbackDir(t, map[string]string{
 		"index.html": "<h1>Home</h1>",
 	})
-	if err := SetFallbackDir(dir); err != nil {
+	if err := setFallbackDir(dir); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
@@ -214,7 +214,7 @@ func TestSetFallbackDir_NestedSubdirs(t *testing.T) {
 		"blog/post1.html": "<h1>Post 1</h1>",
 		"blog/post2.html": "<h1>Post 2</h1>",
 	})
-	if err := SetFallbackDir(dir); err != nil {
+	if err := setFallbackDir(dir); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
@@ -239,7 +239,7 @@ func TestSetFallbackDir_ImplicitIndex(t *testing.T) {
 		"blog/index.html": "<h1>Blog Home</h1>",
 		"blog/post1.html": "<h1>Post 1</h1>",
 	})
-	if err := SetFallbackDir(dir); err != nil {
+	if err := setFallbackDir(dir); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
@@ -266,7 +266,7 @@ func TestSetFallbackDir_IgnoresNonHTML(t *testing.T) {
 		"style.css":  "body { color: red; }",
 		"readme.txt": "hello",
 	})
-	if err := SetFallbackDir(dir); err != nil {
+	if err := setFallbackDir(dir); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
@@ -283,7 +283,7 @@ func TestSetFallbackDir_IgnoresNonHTML(t *testing.T) {
 
 func TestSetFallbackDir_EmptyDir(t *testing.T) {
 	dir := makeFallbackDir(t, map[string]string{})
-	if err := SetFallbackDir(dir); err != nil {
+	if err := setFallbackDir(dir); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
@@ -302,10 +302,10 @@ func TestServeFallback_DirPriorityOverCustomHTML(t *testing.T) {
 	dir := makeFallbackDir(t, map[string]string{
 		"index.html": "<h1>Dir Home</h1>",
 	})
-	if err := SetFallbackDir(dir); err != nil {
+	if err := setFallbackDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	SetFallbackHTML([]byte("<h1>Custom</h1>"))
+	setFallbackHTML([]byte("<h1>Custom</h1>"))
 	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil; customFallback = nil })
 
 	// Directory mode takes priority over single-file custom HTML.
@@ -323,7 +323,7 @@ func TestServeFallback_DirPriorityOverCustomHTML(t *testing.T) {
 
 func TestSetFallbackProxy_EmptyURL(t *testing.T) {
 	// Setting empty URL should disable the proxy (no error).
-	if err := SetFallbackProxy("", false, nil); err != nil {
+	if err := setFallbackProxy("", false, nil); err != nil {
 		t.Fatalf("unexpected error for empty URL: %v", err)
 	}
 	if fallbackProxy != nil {
@@ -332,7 +332,7 @@ func TestSetFallbackProxy_EmptyURL(t *testing.T) {
 }
 
 func TestSetFallbackProxy_InvalidURL(t *testing.T) {
-	if err := SetFallbackProxy("://invalid", false, nil); err == nil {
+	if err := setFallbackProxy("://invalid", false, nil); err == nil {
 		t.Error("expected error for invalid URL")
 	}
 }
@@ -345,7 +345,7 @@ func TestServeFallback_ProxyForwardsRequest(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -369,7 +369,7 @@ func TestServeFallback_ProxyHighestPriority(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -378,10 +378,10 @@ func TestServeFallback_ProxyHighestPriority(t *testing.T) {
 	dir := makeFallbackDir(t, map[string]string{
 		"index.html": "<h1>Dir Home</h1>",
 	})
-	if err := SetFallbackDir(dir); err != nil {
+	if err := setFallbackDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	SetFallbackHTML([]byte("<h1>Custom</h1>"))
+	setFallbackHTML([]byte("<h1>Custom</h1>"))
 	t.Cleanup(func() {
 		fallbackPages = nil
 		fallback404 = nil
@@ -505,7 +505,7 @@ func TestSetFallbackTarget_ProxyEndToEnd(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// SetFallbackProxy Host header & Location rewrite tests
+// setFallbackProxy Host header & Location rewrite tests
 // ---------------------------------------------------------------------------
 
 // TestSetFallbackProxy_HostHeader verifies that the request forwarded to the
@@ -520,7 +520,7 @@ func TestSetFallbackProxy_HostHeader(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -549,7 +549,7 @@ func TestSetFallbackProxy_RewriteLocation(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -574,7 +574,7 @@ func TestSetFallbackProxy_RelativeLocationUnchanged(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -598,7 +598,7 @@ func TestSetFallbackProxy_OtherHostLocationUnchanged(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -625,7 +625,7 @@ func TestSetFallbackProxy_PreserveHost(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, true, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -656,7 +656,7 @@ func TestSetFallbackProxy_PreserveHostLocationRewrite(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, true, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -692,7 +692,7 @@ func TestSetFallbackProxy_RewriteSetCookieDomain(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -739,7 +739,7 @@ func TestSetFallbackProxy_RewriteSetCookieDomainWithDot(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -768,7 +768,7 @@ func TestSetFallbackProxy_SetCookieOtherDomainUnchanged(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -801,7 +801,7 @@ func TestSetFallbackProxy_SetCookieNoDomainUnchanged(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -824,7 +824,7 @@ func TestSetFallbackProxy_SetCookieNoDomainUnchanged(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// SetFallbackProxy content rewriting tests (always enabled in URL mode)
+// setFallbackProxy content rewriting tests (always enabled in URL mode)
 // ---------------------------------------------------------------------------
 
 // TestSetFallbackProxy_RewriteContent verifies that absolute URLs in an HTML
@@ -841,7 +841,7 @@ func TestSetFallbackProxy_RewriteContent(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -876,7 +876,7 @@ func TestSetFallbackProxy_RewriteContentCSP(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -917,7 +917,7 @@ func TestSetFallbackProxy_RewriteCSPBareHost(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -961,7 +961,7 @@ func TestSetFallbackProxy_RewriteCSPMixed(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1008,7 +1008,7 @@ func TestSetFallbackProxy_RewriteContentGzip(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1043,7 +1043,7 @@ func TestSetFallbackProxy_RewriteContentNonHTML(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1073,7 +1073,7 @@ func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientGzip(t *testing.T) 
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1100,7 +1100,7 @@ func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientNoGzip(t *testing.T
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1128,7 +1128,7 @@ func TestSetFallbackProxy_RewriteContent_RecompressGzip(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1173,7 +1173,7 @@ func TestSetFallbackProxy_RewriteContent_NoRecompressWhenClientNoGzip(t *testing
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1239,7 +1239,7 @@ func TestSetFallbackProxy_RewriteOrigin(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost := upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1269,7 +1269,7 @@ func TestSetFallbackProxy_RewriteReferer(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost := upstream.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1297,7 +1297,7 @@ func TestSetFallbackProxy_OtherHostOriginUnchanged(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1322,7 +1322,7 @@ func TestSetFallbackProxy_NoOriginNoError(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
@@ -1359,7 +1359,7 @@ func TestSetFallbackProxy_CDNRoute(t *testing.T) {
 	defer cdnServer.Close()
 	cdnHost := cdnServer.Listener.Addr().String()
 
-	if err := SetFallbackProxy(upstream.URL, false, []string{cdnHost}); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, []string{cdnHost}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
@@ -1397,7 +1397,7 @@ func TestSetFallbackProxy_CDNRouteDisallowedHost(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, []string{"allowed.cdn.com"}); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, []string{"allowed.cdn.com"}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
@@ -1431,7 +1431,7 @@ func TestSetFallbackProxy_CDNHTMLRewrite(t *testing.T) {
 	upstreamHost = upstream.Listener.Addr().String()
 	_ = upstreamHost
 
-	if err := SetFallbackProxy(upstream.URL, false, []string{cdnHost}); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, []string{cdnHost}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
@@ -1468,7 +1468,7 @@ func TestSetFallbackProxy_CDNCSPRewrite(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, []string{cdnHost}); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, []string{cdnHost}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
@@ -1502,7 +1502,7 @@ func TestSetFallbackProxy_CDNNotConfigured(t *testing.T) {
 	defer upstream.Close()
 
 	// No CDN domains configured.
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
@@ -1530,7 +1530,7 @@ func TestSetFallbackProxy_CDNSubdomainRoute(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
@@ -1569,7 +1569,7 @@ func TestServeFallbackProxyStripsXESHeader(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
@@ -1629,7 +1629,7 @@ func TestSetFallbackProxy_CDNSubdomainHTMLRewrite(t *testing.T) {
 	defer upstream.Close()
 
 	// Configure only the parent domain.
-	if err := SetFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
@@ -1672,7 +1672,7 @@ func TestSetFallbackProxy_CDNNonMatchingSubdomain(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
@@ -1711,7 +1711,7 @@ func TestSetFallbackProxy_CDNCSPSubdomainRewrite(t *testing.T) {
 	defer upstream.Close()
 
 	// Configure only the parent domain.
-	if err := SetFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
@@ -1762,7 +1762,7 @@ func TestSetFallbackProxy_CSPRewrittenEvenWhenBodyUnreadable(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
@@ -1797,7 +1797,7 @@ func TestSetFallbackProxy_CDNCSPTrailingSlash(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
@@ -1832,7 +1832,7 @@ func TestSetFallbackProxy_NonRewritableContentType(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, []string{"githubassets.com"}); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, []string{"githubassets.com"}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
@@ -1862,7 +1862,7 @@ func TestSetFallbackProxy_CDNLocationRewrite(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackProxy(upstream.URL, false, []string{"githubusercontent.com"}); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, []string{"githubusercontent.com"}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
@@ -1890,7 +1890,7 @@ func TestSetFallbackProxy_CDNLocationNotRewrittenWhenNotConfigured(t *testing.T)
 	defer upstream.Close()
 
 	// Only githubassets.com configured, NOT githubusercontent.com.
-	if err := SetFallbackProxy(upstream.URL, false, []string{"githubassets.com"}); err != nil {
+	if err := setFallbackProxy(upstream.URL, false, []string{"githubassets.com"}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })

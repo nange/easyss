@@ -26,18 +26,28 @@ func IsDNSResponse(msg *dns.Msg) bool {
 // 10 entries.
 func DNSAnswerStrings(msg *dns.Msg) []string {
 	var results []string
-	for _, ans := range msg.Answer {
-		if len(results) >= 10 {
-			break
+	ForEachDNSAnswer(msg, func(kind, value string) {
+		if len(results) < 10 {
+			results = append(results, kind+":"+value)
 		}
+	})
+	return results
+}
+
+// ForEachDNSAnswer calls fn for every A, AAAA and CNAME answer record, with
+// kind one of "A", "AAAA" or "CNAME" and value the address or the
+// dot-trimmed target. It is the single walker for the answer lists consumed by
+// the client's and the server's dynamic routing (both used to carry their own
+// copy of this switch).
+func ForEachDNSAnswer(msg *dns.Msg, fn func(kind, value string)) {
+	for _, ans := range msg.Answer {
 		switch a := ans.(type) {
 		case *dns.A:
-			results = append(results, "A:"+a.A.String())
+			fn("A", a.A.String())
 		case *dns.AAAA:
-			results = append(results, "AAAA:"+a.AAAA.String())
+			fn("AAAA", a.AAAA.String())
 		case *dns.CNAME:
-			results = append(results, "CNAME:"+strings.TrimSuffix(a.Target, "."))
+			fn("CNAME", strings.TrimSuffix(a.Target, "."))
 		}
 	}
-	return results
 }

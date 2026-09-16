@@ -29,15 +29,3 @@ type SimpleConfig struct {
 	TunConfig     string `json:"tun_config,omitempty"`
 	OutboundProto string `json:"outbound_proto"`
 }
-
-func NewSimpleConfig() *SimpleConfig {
-	return &SimpleConfig{
-		ServerPort: DefaultServerPort,
-		LocalPort:  DefaultSocksPort,
-		Method:     DefaultMethod,
-		ProxyRule:  DefaultProxyRule,
-		IPV6Rule:   DefaultIPV6Rule,
-		Timeout:    DefaultTimeout,
-		LogLevel:   DefaultLogLevel,
-	}
-}

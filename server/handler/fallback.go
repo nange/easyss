@@ -15,11 +15,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/util"
 )
@@ -447,7 +449,7 @@ var (
 	fallbackProxy *httputil.ReverseProxy
 
 	// Allowed CDN hosts for /__cdn__/<host>/... path-prefix routing.
-	// Populated by SetFallbackProxy from the cdnDomains config. Keys are
+	// Populated by setFallbackProxy from the cdnDomains config. Keys are
 	// lowercased hostnames; a request to /__cdn__/github.githubassets.com/x
 	// is only proxied if "github.githubassets.com" is in this set.
 	fallbackCDNHosts map[string]bool
@@ -470,9 +472,9 @@ const (
 	cdnPathPrefix = "/__cdn__/"
 )
 
-// SetFallbackHTML overrides the built-in fallback system with custom HTML.
+// setFallbackHTML overrides the built-in fallback system with custom HTML.
 // Must be called before the server starts accepting requests.
-func SetFallbackHTML(html []byte) {
+func setFallbackHTML(html []byte) {
 	if len(html) == 0 {
 		return
 	}
@@ -480,7 +482,7 @@ func SetFallbackHTML(html []byte) {
 	copy(customFallback, html)
 }
 
-// SetFallbackDir loads all .html files from a directory as multi-route fallback
+// setFallbackDir loads all .html files from a directory as multi-route fallback
 // pages. File-to-path mapping:
 //   - index.html         → "/"
 //   - 404.html           → unmatched paths
@@ -490,7 +492,7 @@ func SetFallbackHTML(html []byte) {
 //
 // Non-.html files are ignored. Must be called before the server starts
 // accepting requests.
-func SetFallbackDir(dir string) error {
+func setFallbackDir(dir string) error {
 	pages := make(map[string][]byte)
 	var page404 []byte
 
@@ -547,7 +549,7 @@ func SetFallbackDir(dir string) error {
 	return nil
 }
 
-// SetFallbackProxy configures a reverse proxy to forward non-proxy requests to
+// setFallbackProxy configures a reverse proxy to forward non-proxy requests to
 // an upstream HTTP service (e.g. a local nginx). When set, this takes the
 // highest priority over all other fallback modes.
 // Pass an empty string to disable.
@@ -587,7 +589,7 @@ func SetFallbackDir(dir string) error {
 // rewriting and re-compressed before returning to the client. If the client
 // does not accept gzip, the upstream request advertises "identity" only, so
 // no decompression/recompression is needed.
-func SetFallbackProxy(targetURL string, preserveHost bool, cdnDomains []string) error {
+func setFallbackProxy(targetURL string, preserveHost bool, cdnDomains []string) error {
 	if targetURL == "" {
 		fallbackProxy = nil
 		fallbackCDNHosts = nil
@@ -964,7 +966,15 @@ var cdnURLRegexpCache sync.Map // cdnHost string → *regexp.Regexp
 // The original host (including subdomain) is preserved in the /__cdn__/ path
 // so that the proxy can route to the correct upstream.
 func rewriteCDNURLs(body []byte, origOrigin string, cdnHosts map[string]bool) []byte {
+	// Iterate in a stable order so the result does not depend on Go's map
+	// iteration order when two configured hosts can match the same URL.
+	hosts := make([]string, 0, len(cdnHosts))
 	for cdnHost := range cdnHosts {
+		hosts = append(hosts, cdnHost)
+	}
+	slices.Sort(hosts)
+
+	for _, cdnHost := range hosts {
 		re := getCdnURLRegexp(cdnHost)
 		replaced := re.ReplaceAllFunc(body, func(match []byte) []byte {
 			// The match is "https://<full-host>/" or "https://<full-host>:".
@@ -1000,11 +1010,14 @@ func getCdnURLRegexp(cdnHost string) *regexp.Regexp {
 		return cached.(*regexp.Regexp)
 	}
 	escaped := regexp.QuoteMeta(cdnHost)
-	// Match "https://" or "http://" followed by an optional subdomain
-	// prefix (one or more labels ending with ".") then the CDN host.
-	// The host must be followed by "/" or ":" (port) — captured as a
-	// trailing group so it is not consumed by the match.
-	pattern := `https?://(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)?` + escaped + `(?:/|:)`
+	// Match "https://" or "http://" followed by zero or more subdomain labels
+	// then the CDN host. Zero or more (not "at most one") is required for the
+	// rewriting to agree with cdnHostMatches, which accepts arbitrary depth:
+	// a URL like "a.b.cdn.example.com" is routed through the proxy there, so
+	// it must also be rewritten here or the assets leak to the real CDN.
+	// The host must be followed by "/" or ":" (port) — captured as a trailing
+	// group so it is not consumed by the match.
+	pattern := `https?://(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)*` + escaped + `(?:/|:)`
 	re := regexp.MustCompile(pattern)
 	cdnURLRegexpCache.Store(cdnHost, re)
 	return re
@@ -1160,32 +1173,62 @@ func rewriteResponseBody(resp *http.Response, targetHost string) error {
 		return nil
 	}
 
-	// Read the body, decompressing gzip if necessary.
+	// Read the body, decompressing gzip if necessary. From here on the body
+	// has been consumed: every failure path must put a body back, otherwise
+	// the reverse proxy would copy from an already-closed body and truncate
+	// the response while the upstream Content-Length stayed in place.
 	enc := resp.Header.Get("Content-Encoding")
 	var body []byte
-	var err error
 
 	switch enc {
 	case "", "identity":
+		var err error
 		body, err = io.ReadAll(resp.Body)
 		resp.Body.Close() //nolint:errcheck
+		if err != nil {
+			restoreFailedBody(resp, body, err)
+			return nil
+		}
 	case "gzip":
 		gr, gerr := gzip.NewReader(resp.Body)
 		if gerr != nil {
 			resp.Body.Close() //nolint:errcheck
-			return nil        // skip rewriting on decompress error
+			restoreFailedBody(resp, nil, gerr)
+			return nil
 		}
+		var err error
 		body, err = io.ReadAll(gr)
 		gr.Close()        //nolint:errcheck
 		resp.Body.Close() //nolint:errcheck
+		if err != nil {
+			restoreFailedBody(resp, body, err)
+			return nil
+		}
 	default:
-		// Unsupported encoding (br, deflate, etc.) — skip rewriting.
-		return nil
-	}
-	if err != nil {
+		// Unsupported encoding (br, deflate, etc.) — skip rewriting and
+		// leave the untouched body in place.
 		return nil
 	}
 
+	return rewriteBodyContent(resp, targetHost, body)
+}
+
+// restoreFailedBody reinstates a body that could not be fully read or
+// decompressed, keeping the bytes that were actually obtained and dropping
+// the now-wrong Content-Encoding so the client receives a consistent (if
+// partial) response instead of a truncated one announced with a stale
+// Content-Length.
+func restoreFailedBody(resp *http.Response, body []byte, err error) {
+	log.Debug("[FALLBACK] body read failed, passing through what was read", "err", err, "bytes", len(body))
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	resp.ContentLength = int64(len(body))
+	resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	resp.Header.Del("Content-Encoding")
+}
+
+// rewriteBodyContent rewrites absolute upstream URLs and CDN host references
+// in the decoded body, then re-compresses it when the client accepts gzip.
+func rewriteBodyContent(resp *http.Response, targetHost string, body []byte) error {
 	// Get the client-facing host/scheme from the request context.
 	ctx := resp.Request.Context()
 	origHost, _ := ctx.Value(ctxOrigHost).(string)
@@ -1252,11 +1295,11 @@ func rewriteResponseBody(resp *http.Response, targetHost string) error {
 // appropriate fallback mode. The target is interpreted as:
 //   - ""                        → built-in themed auto-generated pages
 //   - "http://..." / "https://..." → reverse proxy to an upstream HTTP service
-//   - a directory path             → multi-file HTML fallback (SetFallbackDir)
-//   - a regular file path          → single-file custom HTML (SetFallbackHTML)
+//   - a directory path             → multi-file HTML fallback (setFallbackDir)
+//   - a regular file path          → single-file custom HTML (setFallbackHTML)
 //
 // preserveHost and cdnDomains only affect the reverse-proxy mode (see
-// SetFallbackProxy); they are ignored for the directory/file/built-in modes.
+// setFallbackProxy); they are ignored for the directory/file/built-in modes.
 func SetFallbackTarget(target string, preserveHost bool, cdnDomains []string) error {
 	// Reset all fallback state.
 	fallbackProxy = nil
@@ -1270,7 +1313,7 @@ func SetFallbackTarget(target string, preserveHost bool, cdnDomains []string) er
 	}
 
 	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
-		return SetFallbackProxy(target, preserveHost, cdnDomains)
+		return setFallbackProxy(target, preserveHost, cdnDomains)
 	}
 
 	info, err := os.Stat(target)
@@ -1279,22 +1322,22 @@ func SetFallbackTarget(target string, preserveHost bool, cdnDomains []string) er
 	}
 
 	if info.IsDir() {
-		return SetFallbackDir(target)
+		return setFallbackDir(target)
 	}
 
 	data, err := os.ReadFile(target)
 	if err != nil {
 		return fmt.Errorf("read fallback target: %w", err)
 	}
-	SetFallbackHTML(data)
+	setFallbackHTML(data)
 	return nil
 }
 
 // ServeFallback writes a fallback HTML page to the response.
 // Priority (highest first):
-//  0. Reverse proxy to upstream HTTP service (SetFallbackProxy)
-//  1. Directory-based multi-file fallback (SetFallbackDir)
-//  2. Single-file custom fallback (SetFallbackHTML)
+//  0. Reverse proxy to upstream HTTP service (setFallbackProxy)
+//  1. Directory-based multi-file fallback (setFallbackDir)
+//  2. Single-file custom fallback (setFallbackHTML)
 //  3. Auto-generated themed pages
 func ServeFallback(w http.ResponseWriter, r *http.Request) {
 	stats.RecordServerFallbackPage()

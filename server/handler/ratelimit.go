@@ -48,6 +48,10 @@ type ipRateLimiter struct {
 	entries     map[string]*ipRateEntry
 	now         func() time.Time
 	lastCleanup time.Time
+	// lastCapWarn rate-limits the hard-cap warning. Once the map is pinned at
+	// ipHardCap every untracked request takes that branch, so an unauthenticated
+	// IP-churning botnet could otherwise turn it into a log flood.
+	lastCapWarn time.Time
 }
 
 type ipRateEntry struct {
@@ -79,7 +83,10 @@ func (l *ipRateLimiter) Allow(ip string) bool {
 			l.cleanupLocked()
 			l.lastCleanup = now
 			if len(l.entries) >= ipHardCap {
-				log.Warn("[RATELIMIT] entry hard cap reached, admitting untracked ip", "ip", ip)
+				if now.Sub(l.lastCapWarn) >= ipCleanupInterval {
+					l.lastCapWarn = now
+					log.Warn("[RATELIMIT] entry hard cap reached, admitting untracked ip", "cap", ipHardCap)
+				}
 				return true
 			}
 		}

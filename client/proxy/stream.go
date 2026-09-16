@@ -69,10 +69,6 @@ func (h *StreamHandler) OpenTCPStream(ctx context.Context, target string, method
 	return h.openStream(ctx, config.EndpointTCP, protocol.ProtoTCP, target, method, localConn)
 }
 
-func (h *StreamHandler) OpenUDPStream(ctx context.Context, target string, method protocol.Method, localConn net.Conn) error {
-	return h.openStream(ctx, config.EndpointUDP, protocol.ProtoUDP, target, method, localConn)
-}
-
 func (h *StreamHandler) OpenICMPStream(ctx context.Context, target string, echoPayload []byte, method protocol.Method) ([]byte, error) {
 	return h.icmpStream(ctx, config.EndpointICMP, protocol.ProtoICMP, target, echoPayload, method)
 }
@@ -125,15 +121,13 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 			return nil, fmt.Errorf("stream keys: %w", err)
 		}
 
-		bootstrapEnc, bootstrapCounter, err := sk.Encryptor("c2s", "bootstrap", protocol.MethodAES256GCM)
+		bootstrapWriter, err := sk.BootstrapWriter(stream)
 		if err != nil {
 			stream.Close() //nolint:errcheck
-			return nil, fmt.Errorf("bootstrap encryptor: %w", err)
+			return nil, fmt.Errorf("bootstrap writer: %w", err)
 		}
-		aad := crypto.BuildAAD(endpoint, salt, "c2s", "bootstrap", protocol.MethodAES256GCM)
-		rw := crypto.NewRecordWriter(stream, bootstrapEnc, bootstrapCounter, aad)
 
-		if err := rw.WriteRecord(plaintext); err != nil {
+		if err := bootstrapWriter.WriteRecord(plaintext); err != nil {
 			stream.Close() //nolint:errcheck
 			if attempt < maxRetries-1 && errors.Is(err, io.ErrClosedPipe) {
 				log.Debug("[STREAM] handshake retry", "attempt", attempt+1, "target", target, "err", err)
@@ -141,13 +135,13 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 			}
 			return nil, fmt.Errorf("write handshake: %w", err)
 		}
-		rw.Flush()
+		bootstrapWriter.Flush()
 
 		// Stamp the moment the bootstrap record left the client: the server
 		// answers with the response headers before dialing the origin, so the
 		// transport records the pure client<->server path RTT when they
-		// arrive (see HTTP2Stream.MarkBootstrapSent).
-		if m, ok := stream.(interface{ MarkBootstrapSent() }); ok {
+		// arrive (see transport.BootstrapSentMarker).
+		if m, ok := stream.(transport.BootstrapSentMarker); ok {
 			m.MarkBootstrapSent()
 		}
 
@@ -182,24 +176,22 @@ func classifyFirstReadError(err error) error {
 func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto protocol.Proto, target string, echoPayload []byte, method protocol.Method) ([]byte, error) {
 	log.Debug("[STREAM] icmp open", "endpoint", endpoint, "target", target)
 
-	bs, err := h.openAndBootstrap(ctx, endpoint, proto, target, method, []protocol.Frame{
-		protocol.NewFrameDATA(echoPayload),
-	})
+	s, err := h.newSession(ctx, endpoint, proto, target, method,
+		[]protocol.Frame{protocol.NewFrameDATA(echoPayload)}, 0)
 	if err != nil {
 		log.Error("[STREAM] icmp bootstrap", "target", target, "err", err)
 		return nil, err
 	}
 	log.Debug("[STREAM] merged ICMP echo payload into bootstrap record", "bytes", len(echoPayload))
-	defer bs.stream.Close() //nolint:errcheck
+	defer s.stream.Close() //nolint:errcheck
+	// This path only receives: the echo payload rode in the bootstrap record,
+	// so tx is never pushed to. It still owns a pooled 64KB record buffer
+	// (shaper.New takes it from bytespool and only Close returns it) and a
+	// cover injector, so it must be closed. Declared after the stream defer so
+	// it runs first (LIFO), keeping a flush off a closed stream.
+	defer s.tx.Close() //nolint:errcheck
 
-	aadS2C := crypto.BuildAAD(endpoint, bs.salt, "s2c", "session", method)
-	s2cEnc, s2cCounter, err := bs.sk.Encryptor("s2c", "session", method)
-	if err != nil {
-		return nil, fmt.Errorf("s2c encryptor: %w", err)
-	}
-	dr := crypto.NewDecryptedReader(bs.stream, aadS2C, s2cEnc, s2cCounter)
-
-	frame, err := dr.ReadFrame()
+	frame, err := s.rx.ReadFrame()
 	err = classifyFirstReadError(err)
 	if err != nil {
 		log.Error("[STREAM] icmp read reply", "target", target, "err", err)
@@ -218,6 +210,49 @@ func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto p
 	return frame.Payload, nil
 }
 
+// session bundles what every protocol needs after the bootstrap handshake: the
+// transport stream, the shaping c2s writer and the s2c frame reader. Building
+// them together (see newSession) keeps the writer/reader pair in one place, so
+// TCP, UDP and ICMP cannot drift apart in how they negotiate the session.
+type session struct {
+	stream transport.Stream
+	tx     shaper.Shaper
+	rx     *crypto.DecryptedReader
+}
+
+// newSession opens the stream, sends the bootstrap record (handshake plus any
+// frames merged into it) and derives the session reader/writer pair.
+// batchWindowMS overrides the configured shaper batch window when > 0 (UDP
+// uses a short 1ms window so datagram bursts merge into single records).
+func (h *StreamHandler) newSession(ctx context.Context, endpoint string, proto protocol.Proto, target string, method protocol.Method, extraFrames []protocol.Frame, batchWindowMS int) (*session, error) {
+	bs, err := h.openAndBootstrap(ctx, endpoint, proto, target, method, extraFrames)
+	if err != nil {
+		return nil, err
+	}
+	stream := bs.stream
+
+	txWriter, err := bs.sk.NewWriter(stream, crypto.DirC2S, method)
+	if err != nil {
+		stream.Close() //nolint:errcheck
+		return nil, fmt.Errorf("c2s session writer: %w", err)
+	}
+
+	shaperCfg := h.shaperCfg
+	if batchWindowMS > 0 {
+		shaperCfg.BatchWindowMS = batchWindowMS
+	}
+	tx := shaper.New(txWriter, shaperCfg)
+
+	rx, err := bs.sk.NewReader(stream, crypto.DirS2C, method)
+	if err != nil {
+		_ = tx.Close()
+		stream.Close() //nolint:errcheck
+		return nil, fmt.Errorf("s2c session reader: %w", err)
+	}
+
+	return &session{stream: stream, tx: tx, rx: rx}, nil
+}
+
 func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto protocol.Proto, target string, method protocol.Method, localConn net.Conn) error {
 	log.Debug("[STREAM] opening", "endpoint", endpoint, "target", target)
 
@@ -234,34 +269,15 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 		bytespool.MustPut(buf)
 	}
 
-	bs, err := h.openAndBootstrap(ctx, endpoint, proto, target, method, extraFrames)
+	s, err := h.newSession(ctx, endpoint, proto, target, method, extraFrames, 0)
 	if err != nil {
 		log.Error("[STREAM] bootstrap", "endpoint", endpoint, "target", target, "err", err)
 		return err
 	}
-	stream := bs.stream
+	defer s.tx.Close() //nolint:errcheck
 	log.Debug("[STREAM] handshake sent", "target", target)
 
-	aadSession := crypto.BuildAAD(endpoint, bs.salt, "c2s", "session", method)
-	sessionEnc, sessionCounter, err := bs.sk.Encryptor("c2s", "session", method)
-	if err != nil {
-		stream.Close() //nolint:errcheck
-		return fmt.Errorf("session encryptor: %w", err)
-	}
-	sessionWriter := crypto.NewRecordWriter(stream, sessionEnc, sessionCounter, aadSession)
-
-	txShaper := shaper.New(sessionWriter, h.shaperCfg)
-	defer txShaper.Close() //nolint:errcheck
-
-	aadS2C := crypto.BuildAAD(endpoint, bs.salt, "s2c", "session", method)
-	s2cEnc, s2cCounter, err := bs.sk.Encryptor("s2c", "session", method)
-	if err != nil {
-		stream.Close() //nolint:errcheck
-		return fmt.Errorf("s2c encryptor: %w", err)
-	}
-	dr := crypto.NewDecryptedReader(stream, aadS2C, s2cEnc, s2cCounter)
-
-	err = h.relay(target, localConn, txShaper, dr, stream)
+	err = h.relay(target, localConn, s.tx, s.rx, s.stream)
 	log.Debug("[STREAM] relay finished", "endpoint", endpoint, "target", target, "err", err)
 	return err
 }
@@ -270,10 +286,7 @@ func (h *StreamHandler) relay(target string, localConn net.Conn, tx shaper.Shape
 	m := stats.NewStreamMeter("client", target)
 	defer m.Close()
 
-	closeAll := func() {
-		_ = stream.Close()
-		_ = localConn.Close()
-	}
+	closeAll := relay.CloseBoth(stream, localConn)
 
 	// Drain idle streams on slots due for eviction: once the slot is
 	// expiring (connection over age/bytes) or degraded (confirmed slow),
@@ -457,6 +470,12 @@ func isTransientStreamError(err error) bool {
 		strings.Contains(msg, "connection was aborted")
 }
 
+// isLocalConnClosedError reports whether err means the local connection is
+// gone (our own side closed it, or the peer refused/reset it) rather than a
+// stream-level failure. It deliberately does not classify "connection reset by
+// peer": isTransientStreamError owns that case, and having both classify the
+// same string meant the same failure was reported as two different things
+// depending on which check ran first.
 func isLocalConnClosedError(err error) bool {
 	if err == nil {
 		return false
@@ -466,7 +485,6 @@ func isLocalConnClosedError(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "use of closed network connection") ||
-		strings.Contains(msg, "connection reset by peer") ||
 		strings.Contains(msg, "forcibly closed by the remote host") ||
 		strings.Contains(msg, "software caused connection abort") ||
 		strings.Contains(msg, "connection was aborted") ||
@@ -516,41 +534,21 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 		}
 	}
 
-	bs, err := h.openAndBootstrap(ctx, config.EndpointUDP, protocol.ProtoUDP, target, method, extraFrames)
-	if err != nil {
-		log.Error("[UDP_EXCHANGE] bootstrap", "target", target, "err", err)
-		return nil, err
-	}
-	stream := bs.stream
-
-	aadC2S := crypto.BuildAAD(config.EndpointUDP, bs.salt, "c2s", "session", method)
-	c2sEnc, c2sCounter, err := bs.sk.Encryptor("c2s", "session", method)
-	if err != nil {
-		stream.Close() //nolint:errcheck
-		return nil, fmt.Errorf("c2s session encryptor: %w", err)
-	}
-	c2sWriter := crypto.NewRecordWriter(stream, c2sEnc, c2sCounter, aadC2S)
-
-	aadS2C := crypto.BuildAAD(config.EndpointUDP, bs.salt, "s2c", "session", method)
-	s2cEnc, s2cCounter, err := bs.sk.Encryptor("s2c", "session", method)
-	if err != nil {
-		stream.Close() //nolint:errcheck
-		return nil, fmt.Errorf("s2c session encryptor: %w", err)
-	}
-
-	dr := crypto.NewDecryptedReader(stream, aadS2C, s2cEnc, s2cCounter)
-
-	log.Debug("[UDP_EXCHANGE] opened", "target", target)
 	// UDP uses a short 1ms batch window instead of per-datagram forced
 	// flushes: bursts of datagrams are merged into a single encrypted
 	// record, while the idle-triggered timer keeps interaction latency
 	// bounded at ~1ms for sparse traffic (DNS, games).
-	udpShaperCfg := h.shaperCfg
-	udpShaperCfg.BatchWindowMS = 1
+	s, err := h.newSession(ctx, config.EndpointUDP, protocol.ProtoUDP, target, method, extraFrames, 1)
+	if err != nil {
+		log.Error("[UDP_EXCHANGE] bootstrap", "target", target, "err", err)
+		return nil, err
+	}
+
+	log.Debug("[UDP_EXCHANGE] opened", "target", target)
 	ue := &UDPExchange{
-		stream: stream,
-		tx:     shaper.New(c2sWriter, udpShaperCfg),
-		reader: dr,
+		stream: s.stream,
+		tx:     s.tx,
+		reader: s.rx,
 		target: target,
 	}
 	ue.lastSeen.Store(time.Now().UnixNano())

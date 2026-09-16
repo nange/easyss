@@ -58,7 +58,7 @@ func (h *TCPHandler) dialTarget(ctx context.Context, network, addr string) (net.
 		if util.IsLANHostResolved(ctx, addr) {
 			return nil, fmt.Errorf("ssrf: rejected lan destination %s", addr)
 		}
-		log.Info("[TCP_HANDLE] dialing via next proxy", "target", addr, "proxy", h.nextProxy.URL().String())
+		log.Info("[TCP_HANDLE] dialing via next proxy", "target", addr, "proxy", h.nextProxy.Host())
 		return h.nextProxy.DialContext(ctx, network, addr)
 	}
 	// Test-only injection point; nil in production.
@@ -117,9 +117,9 @@ func (h *TCPHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 	// fall back to the configured proxy address for observability.
 	remote := ""
 	if h.nextProxy != nil && h.nextProxy.ShouldProxy(target) {
-		remote = h.nextProxy.URL().Host
-	} else if ra := targetConn.RemoteAddr(); ra != nil {
-		remote = ra.String()
+		remote = h.nextProxy.Host()
+	} else {
+		remote = remoteString(targetConn)
 	}
 	log.Info("[TCP_HANDLE] target connected", "target", target, "remote", remote)
 	m := stats.NewStreamMeter("tcp_handle", target)
@@ -130,6 +130,9 @@ func (h *TCPHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 		_ = s2c.Flush()
 	}
 
+	// The relay's onClose must both unblock the client reader (cancelRead) and
+	// close the target connection, so the generic CloseBoth is composed with
+	// that callback here.
 	result := relay.Bidirectional(h.idleTimeout, func() {
 		if cancelRead != nil {
 			cancelRead()
@@ -150,7 +153,7 @@ func (h *TCPHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 	if result.TimedOut {
 		log.Debug("[TCP_HANDLE] idle timeout", "target", target, "timeout", h.idleTimeout)
 		sendRST()
-		return fmt.Errorf("tcp stream %s", result.IdleMsg)
+		return fmt.Errorf("tcp stream idle timeout after %v", h.idleTimeout)
 	}
 	if result.Err != nil {
 		sendRST()

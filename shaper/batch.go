@@ -1,7 +1,6 @@
 package shaper
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -34,23 +33,19 @@ type batchShaper struct {
 	cover          *coverInjector
 }
 
+// New builds a shaper over the given record writer. cfg is normalized here
+// (see Config.Normalize), so callers may pass raw config-file values.
 func New(writer *crypto.RecordWriter, cfg Config) Shaper {
-	window := time.Duration(cfg.BatchWindowMS) * time.Millisecond
-	if window <= 0 {
-		window = 3 * time.Millisecond
-	}
-	if window > 10*time.Millisecond {
-		window = 10 * time.Millisecond
-	}
+	cfg = cfg.Normalize()
 
 	bs := &batchShaper{
 		writer:         writer,
 		plaintext:      bytespool.Get(protocol.MaxPlainRecordSize)[:0],
 		maxChunkSize:   protocol.MaxPlainRecordSize,
 		flushThreshold: protocol.MaxPlainRecordSize * 9 / 10,
-		window:         window,
+		window:         time.Duration(cfg.BatchWindowMS) * time.Millisecond,
 	}
-	bs.timer = time.AfterFunc(window, bs.onTimer)
+	bs.timer = time.AfterFunc(bs.window, bs.onTimer)
 	bs.timer.Stop()
 
 	bs.cover = newCoverInjector(cfg.Cover, bs.injectCoverFrame, bs.isClosing)
@@ -87,10 +82,10 @@ func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 		return bs.err
 	}
 
-	// Normalize the frame so the capacity check and the wire header always
-	// agree: the header is written from len(Payload), while the pre-flush
-	// check uses EncodedLen — a mismatched Frame could otherwise bypass the
-	// record-size guard and corrupt the stream.
+	// Keep Length in step with the payload: the record-size guards below and
+	// the shaper's cover budget use EncodedLen (3 + Length), so a mismatched
+	// Frame would let an oversized frame bypass them. The wire header itself
+	// is derived from len(Payload) by protocol.AppendFrame.
 	if len(f.Payload) > math.MaxUint16 {
 		return fmt.Errorf("shaper: frame payload too large: %d", len(f.Payload))
 	}
@@ -128,8 +123,7 @@ func (bs *batchShaper) appendFrameLocked(ftype protocol.FrameType, payload []byt
 		}
 	}
 
-	bs.plaintext = appendFrameHeader(bs.plaintext, ftype, payload)
-	bs.plaintext = append(bs.plaintext, payload...)
+	bs.plaintext = protocol.AppendFrame(bs.plaintext, protocol.Frame{Type: ftype, Payload: payload})
 
 	if putPayload {
 		bs.putPooledPayload(payload)
@@ -307,11 +301,4 @@ func (bs *batchShaper) injectCoverFrame(f protocol.Frame) error {
 
 func (bs *batchShaper) isClosing() bool {
 	return bs.closing.Load()
-}
-
-func appendFrameHeader(buf []byte, ftype protocol.FrameType, payload []byte) []byte {
-	var header [protocol.FrameHeaderSize]byte
-	header[0] = byte(ftype)
-	binary.BigEndian.PutUint16(header[1:3], uint16(len(payload)))
-	return append(buf, header[:]...)
 }

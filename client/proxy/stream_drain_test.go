@@ -70,19 +70,16 @@ func newDrainHandler(stream *drainMockStream, drainIdle time.Duration) (*StreamH
 		panic(err)
 	}
 
-	aadC2S := crypto.BuildAAD(endpoint, salt, "c2s", "session", method)
-	c2sEnc, c2sCounter, err := sk.Encryptor("c2s", "session", method)
+	c2sWriter, err := sk.NewWriter(stream, crypto.DirC2S, method)
 	if err != nil {
 		panic(err)
 	}
-	tx := shaper.New(crypto.NewRecordWriter(stream, c2sEnc, c2sCounter, aadC2S), shaper.Config{})
+	tx := shaper.New(c2sWriter, shaper.Config{})
 
-	aadS2C := crypto.BuildAAD(endpoint, salt, "s2c", "session", method)
-	s2cEnc, s2cCounter, err := sk.Encryptor("s2c", "session", method)
+	rx, err := sk.NewReader(stream, crypto.DirS2C, method)
 	if err != nil {
 		panic(err)
 	}
-	rx := crypto.NewDecryptedReader(stream, aadS2C, s2cEnc, s2cCounter)
 
 	lc, lcPeer := net.Pipe()
 	h := &StreamHandler{

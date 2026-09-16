@@ -6,6 +6,7 @@ import (
 
 	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/shaper"
 )
 
 func TestIsIPv6Target(t *testing.T) {
@@ -39,11 +40,9 @@ func TestIsIPv6Target(t *testing.T) {
 func TestNewProxyHandler(t *testing.T) {
 	t.Run("空 allowedMethods 使用默认", func(t *testing.T) {
 		cfg := ProxyHandlerConfig{
-			MasterKey:         []byte("test-key-32-bytes-long!!!!!!!"),
-			AllowedMethods:    nil,
-			HandshakeTimeout:  5 * time.Second,
-			StreamIdleTimeout: 300 * time.Second,
-			UDPIdleTimeout:    30 * time.Second,
+			MasterKey:      []byte("test-key-32-bytes-long!!!!!!!"),
+			AllowedMethods: nil,
+			Timeouts:       sharedconfig.NewTimeouts(5 * time.Second),
 		}
 		h := NewProxyHandler(cfg)
 		if h == nil {
@@ -62,11 +61,9 @@ func TestNewProxyHandler(t *testing.T) {
 
 	t.Run("指定 allowedMethods", func(t *testing.T) {
 		cfg := ProxyHandlerConfig{
-			MasterKey:         []byte("test-key-32-bytes-long!!!!!!!"),
-			AllowedMethods:    []string{"aes-256-gcm"},
-			HandshakeTimeout:  5 * time.Second,
-			StreamIdleTimeout: 300 * time.Second,
-			UDPIdleTimeout:    30 * time.Second,
+			MasterKey:      []byte("test-key-32-bytes-long!!!!!!!"),
+			AllowedMethods: []string{"aes-256-gcm"},
+			Timeouts:       sharedconfig.NewTimeouts(5 * time.Second),
 		}
 		h := NewProxyHandler(cfg)
 		if len(h.allowedMethods) != 1 {
@@ -82,11 +79,9 @@ func TestNewProxyHandler(t *testing.T) {
 
 	t.Run("无效 method 名称被忽略", func(t *testing.T) {
 		cfg := ProxyHandlerConfig{
-			MasterKey:         []byte("test-key-32-bytes-long!!!!!!!"),
-			AllowedMethods:    []string{"invalid-method", "aes-256-gcm"},
-			HandshakeTimeout:  5 * time.Second,
-			StreamIdleTimeout: 300 * time.Second,
-			UDPIdleTimeout:    30 * time.Second,
+			MasterKey:      []byte("test-key-32-bytes-long!!!!!!!"),
+			AllowedMethods: []string{"invalid-method", "aes-256-gcm"},
+			Timeouts:       sharedconfig.NewTimeouts(5 * time.Second),
 		}
 		h := NewProxyHandler(cfg)
 		if len(h.allowedMethods) != 1 {
@@ -96,37 +91,37 @@ func TestNewProxyHandler(t *testing.T) {
 
 	t.Run("BatchWindowMS 默认值", func(t *testing.T) {
 		cfg := ProxyHandlerConfig{
-			MasterKey:         []byte("test-key-32-bytes-long!!!!!!!"),
-			HandshakeTimeout:  5 * time.Second,
-			StreamIdleTimeout: 300 * time.Second,
-			UDPIdleTimeout:    30 * time.Second,
+			MasterKey: []byte("test-key-32-bytes-long!!!!!!!"),
+			Timeouts:  sharedconfig.NewTimeouts(5 * time.Second),
 		}
 		h := NewProxyHandler(cfg)
-		if h.batchWindowMS != sharedconfig.DefaultBatchWindowMS {
-			t.Errorf("batchWindowMS = %d, want %d", h.batchWindowMS, sharedconfig.DefaultBatchWindowMS)
+		if h.shaperCfg.BatchWindowMS != sharedconfig.DefaultBatchWindowMS {
+			t.Errorf("BatchWindowMS = %d, want %d", h.shaperCfg.BatchWindowMS, sharedconfig.DefaultBatchWindowMS)
+		}
+		if h.shaperCfg.Cover.BudgetRatio != sharedconfig.DefaultCoverBudgetRatio {
+			t.Errorf("CoverBudgetRatio = %v, want %v", h.shaperCfg.Cover.BudgetRatio, sharedconfig.DefaultCoverBudgetRatio)
+		}
+		if h.shaperCfg.Cover.BudgetCap != sharedconfig.DefaultCoverBudgetCap {
+			t.Errorf("CoverBudgetCap = %d, want %d", h.shaperCfg.Cover.BudgetCap, sharedconfig.DefaultCoverBudgetCap)
 		}
 	})
 
 	t.Run("BatchWindowMS 上限 10", func(t *testing.T) {
 		cfg := ProxyHandlerConfig{
-			MasterKey:         []byte("test-key-32-bytes-long!!!!!!!"),
-			BatchWindowMS:     100,
-			HandshakeTimeout:  5 * time.Second,
-			StreamIdleTimeout: 300 * time.Second,
-			UDPIdleTimeout:    30 * time.Second,
+			MasterKey: []byte("test-key-32-bytes-long!!!!!!!"),
+			Shaper:    shaper.Config{BatchWindowMS: 100},
+			Timeouts:  sharedconfig.NewTimeouts(5 * time.Second),
 		}
 		h := NewProxyHandler(cfg)
-		if h.batchWindowMS != 10 {
-			t.Errorf("batchWindowMS = %d, want 10 (capped)", h.batchWindowMS)
+		if h.shaperCfg.BatchWindowMS != 10 {
+			t.Errorf("BatchWindowMS = %d, want 10 (capped)", h.shaperCfg.BatchWindowMS)
 		}
 	})
 
 	t.Run("子 handler 非 nil", func(t *testing.T) {
 		cfg := ProxyHandlerConfig{
-			MasterKey:         []byte("test-key-32-bytes-long!!!!!!!"),
-			HandshakeTimeout:  5 * time.Second,
-			StreamIdleTimeout: 300 * time.Second,
-			UDPIdleTimeout:    30 * time.Second,
+			MasterKey: []byte("test-key-32-bytes-long!!!!!!!"),
+			Timeouts:  sharedconfig.NewTimeouts(5 * time.Second),
 		}
 		h := NewProxyHandler(cfg)
 		if h.tcpHandler == nil {
@@ -165,9 +160,12 @@ func TestNewTCPHandler(t *testing.T) {
 }
 
 func TestNewUDPHandler(t *testing.T) {
-	h := NewUDPHandler(30*time.Second, nil)
+	h := NewUDPHandler(30*time.Second, 30*time.Second, nil)
 	if h == nil {
 		t.Fatal("NewUDPHandler returned nil")
+	}
+	if h.dialTimeout != 10*time.Second {
+		t.Errorf("dialTimeout = %v, want 10s (DialTimeout(30s))", h.dialTimeout)
 	}
 }
 

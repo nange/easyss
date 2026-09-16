@@ -351,6 +351,12 @@ func (a *TrayApp) downloadAndInstall() {
 			// running in-process and let the user restart manually.
 			log.Error("[SYSTRAY] restart after update", "err", err)
 			a.tray.ShowNotification("Easyss", "重启失败，请手动重启应用完成更新")
+			// The singleton lock was released before the relaunch attempt;
+			// re-acquire it so this process stays the only instance while it
+			// keeps serving.
+			if lerr := tryAcquireSingletonLock(); lerr != nil {
+				log.Error("[SYSTRAY] re-acquire singleton lock after failed restart", "err", lerr)
+			}
 			if err := a.restartService(a.cfg.Clone()); err != nil {
 				log.Error("[SYSTRAY] restore service after failed restart", "err", err)
 			}
