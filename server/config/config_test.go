@@ -10,9 +10,8 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-// TestFileConfigJSON pins the documented config shape: the top-level settings
-// live on FileConfig and the "server" key maps onto ServerConfig, with no
-// duplicated fields between them.
+// TestFileConfigJSON 固定文档化的配置形态：顶层设置位于 FileConfig 上，
+// "server" 键映射到 ServerConfig，两者之间没有重复字段。
 func TestFileConfigJSON(t *testing.T) {
 	data := []byte(`{
 			"version": 3,
@@ -82,9 +81,9 @@ func TestResolveFilePathsEmpty(t *testing.T) {
 	}
 }
 
-// TestResolveFilePathsCarriesIntoResolvedPaths pins that ResolveFilePaths
-// rewrites the fields in place: there is no second copy of them to keep in
-// sync after the EffectiveServerConfig merge was removed.
+// TestResolveFilePathsCarriesIntoResolvedPaths 固定 ResolveFilePaths 就地
+// 改写字段的行为：在移除 EffectiveServerConfig 合并之后，已不存在需要保持
+// 同步的第二份副本。
 func TestResolveFilePathsResolvedInPlace(t *testing.T) {
 	fc := &FileConfig{
 		Server: ServerConfig{

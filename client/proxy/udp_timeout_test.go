@@ -12,10 +12,9 @@ import (
 	"github.com/nange/easyss/v3/transport"
 )
 
-// blockingStream is a transport.Stream whose Read blocks until Close is
-// called, simulating a server that never answers (e.g. an upstream DNS
-// server that silently drops queries). Write succeeds so the bootstrap
-// handshake completes.
+// blockingStream 是一个 transport.Stream，其 Read 会阻塞直到 Close 被调用，
+// 模拟一个从不应答的服务器（例如静默丢弃查询的上游 DNS 服务器）。
+// Write 总是成功，因此 bootstrap 握手可以完成。
 type blockingStream struct {
 	mu     sync.Mutex
 	closed bool
@@ -55,8 +54,8 @@ var _ transport.Stream = (*blockingStream)(nil)
 
 const testDNSRespTimeout = 200 * time.Millisecond
 
-// newTimeoutTestServer builds a Socks5Server whose proxied-DNS exchanges run
-// with testDNSRespTimeout and whose transport serves the given streams.
+// newTimeoutTestServer 构建一个 Socks5Server：其代理 DNS 交换使用 testDNSRespTimeout
+// 超时，其传输层提供给定的流。
 func newTimeoutTestServer(t *testing.T, streams []transport.Stream) *Socks5Server {
 	t.Helper()
 	h := newTestStreamHandler(&mockTransport{streams: streams})
@@ -84,8 +83,8 @@ func (s *Socks5Server) hasExchange(key string) bool {
 	return ok
 }
 
-// waitExchangeReaped polls until the key disappears from s.udpExch (the
-// receiveLoop defer removes it) or the deadline expires.
+// waitExchangeReaped 轮询直到该键从 s.udpExch 中消失（由 receiveLoop 的 defer 移除）
+// 或截止时间到期。
 func waitExchangeReaped(t *testing.T, s *Socks5Server, key string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -97,10 +96,9 @@ func waitExchangeReaped(t *testing.T, s *Socks5Server, key string) {
 	}
 }
 
-// TestUDPExchangeDNSResponseTimeout verifies that a proxied-DNS exchange
-// with no server response is closed (stream closed, key removed) once
-// dnsRespTimeout elapses, so silent upstream DNS servers cannot pile up
-// HTTP/2 streams and receiveLoop goroutines.
+// TestUDPExchangeDNSResponseTimeout 验证当 dnsRespTimeout 到期后，没有服务器响应的
+// 代理 DNS 交换会被关闭（流被关闭、键被移除），这样静默的上游 DNS 服务器就无法堆积
+// HTTP/2 流和 receiveLoop 协程。
 func TestUDPExchangeDNSResponseTimeout(t *testing.T) {
 	bs := newBlockingStream()
 	srv := newTimeoutTestServer(t, []transport.Stream{bs})
@@ -128,9 +126,8 @@ func TestUDPExchangeDNSResponseTimeout(t *testing.T) {
 	}
 }
 
-// TestUDPExchangeNoTimeoutWhenDisabled verifies that respTimeout=0 (the
-// non-DNS UDP path) leaves the exchange untouched even past dnsRespTimeout:
-// a long downlink silence must not kill regular UDP sessions.
+// TestUDPExchangeNoTimeoutWhenDisabled 验证 respTimeout=0（非 DNS 的 UDP 路径）时，
+// 即使超过 dnsRespTimeout，交换也不会被处理：长时间的下行静默绝不能终止常规 UDP 会话。
 func TestUDPExchangeNoTimeoutWhenDisabled(t *testing.T) {
 	bs := newBlockingStream()
 	srv := newTimeoutTestServer(t, []transport.Stream{bs})
@@ -155,8 +152,7 @@ func TestUDPExchangeNoTimeoutWhenDisabled(t *testing.T) {
 		t.Error("stream must not be closed when the response timeout is disabled")
 	}
 
-	// Tear down: close the exchange so the blocked receiveLoop exits and
-	// the key is cleaned up, then wait for the goroutine to finish.
+	// 收尾：关闭交换使阻塞的 receiveLoop 退出并清理键，然后等待协程结束。
 	ue.Close() //nolint:errcheck
 	waitExchangeReaped(t, srv, key)
 }

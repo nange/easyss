@@ -8,8 +8,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-// resetBuiltinDNSCircuit clears the builtin dns circuit breaker state so
-// tests are isolated from each other.
+// resetBuiltinDNSCircuit 清除内置 DNS 熔断器状态，使各测试之间相互隔离。
 func resetBuiltinDNSCircuit() {
 	builtinDNSMu.Lock()
 	builtinDNSDown = false
@@ -31,7 +30,7 @@ func TestBuiltinDNSUnavailableCoolDown(t *testing.T) {
 		t.Fatal("builtin dns should be skipped during cool-down")
 	}
 
-	// simulate cool-down expiry, a retry is then allowed
+	// 模拟冷却期结束，此时允许一次重试
 	builtinDNSMu.Lock()
 	builtinDNSDownAt = time.Now().Add(-builtinDNSCoolDown)
 	builtinDNSMu.Unlock()
@@ -39,7 +38,7 @@ func TestBuiltinDNSUnavailableCoolDown(t *testing.T) {
 		t.Fatal("builtin dns should be retried after cool-down")
 	}
 
-	// recovery clears the unavailable state
+	// 恢复操作清除不可用状态
 	MarkBuiltinDNSAvailable()
 	if !BuiltinDNSAvailable() {
 		t.Fatal("builtin dns should be available after recovery")
@@ -59,7 +58,7 @@ func TestQueryWithBuiltinFirst(t *testing.T) {
 		return reply, nil
 	}
 
-	// the builtin servers fail, falls back to the system dns and marks the breaker
+	// 内置服务器查询失败，回退到系统 DNS 并标记熔断器
 	got, err := QueryWithBuiltinFirst([]string{"builtin"}, []string{"system"}, try)
 	if err != nil || got != reply {
 		t.Fatalf("expected system reply, got %v, %v", got, err)
@@ -68,7 +67,7 @@ func TestQueryWithBuiltinFirst(t *testing.T) {
 		t.Fatalf("unexpected call counts: builtin=%d system=%d", builtinCalls, systemCalls)
 	}
 
-	// during the cool-down the builtin servers are skipped entirely
+	// 冷却期内完全跳过内置服务器
 	got, err = QueryWithBuiltinFirst([]string{"builtin"}, []string{"system"}, try)
 	if err != nil || got != reply {
 		t.Fatalf("expected system reply, got %v, %v", got, err)

@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// resetSystemDNSCache clears the cached system dns servers so that a test
-// injected sysDNSFunc result does not leak into other tests.
+// resetSystemDNSCache 清除缓存的系统 DNS 服务器，使测试注入的 sysDNSFunc
+// 结果不会泄漏到其他测试。
 func resetSystemDNSCache() {
 	systemDNSMu.Lock()
 	systemDNSCached = nil
@@ -38,7 +38,7 @@ func TestSystemDNSServers(t *testing.T) {
 		}
 	}
 
-	// the result is cached: a second call must not re-discover
+	// 结果已缓存：第二次调用不应重新发现
 	SystemDNSServers()
 	if calls != 1 {
 		t.Fatalf("expected 1 discovery call, got %d", calls)

@@ -21,25 +21,23 @@ import (
 
 type tcpHandler struct {
 	idleTimeout time.Duration
-	// dialContext is a test-only injection point for the direct dial; nil in
-	// production.
+	// dialContext 是仅供测试的直接拨号注入点；生产环境为 nil。
 	dialContext func(context.Context, string, string) (net.Conn, error)
 	dial        dialer
 }
 
-// tcpDialerOptions returns the parameters of the direct-dial net.Dialer:
-// dialTimeout through config.DialTimeout (base/3 clamped to [3s, 15s]) and
-// keepAlive at the full base timeout, so long-lived streams are reaped by the
-// kernel instead of lingering half-open after a peer vanishes. The dialer is
-// built lazily inside the dial closure, so this extraction is the only place
-// the mapping can be asserted.
+// tcpDialerOptions 返回直接拨号 net.Dialer 的参数：
+// dialTimeout 通过 config.DialTimeout 派生（base/3，限制在 [3s, 15s]），
+// keepAlive 取完整的基础超时，这样长连接流由内核回收，
+// 而不会在对端消失后一直半开残留。拨号器在 dial 闭包内惰性构建，
+// 因此这里是唯一可以断言该映射关系的地方。
 func tcpDialerOptions(timeout time.Duration) (dialTimeout, keepAlive time.Duration) {
 	return config.DialTimeout(timeout), timeout
 }
 
-// newTCPHandler creates a tcpHandler with the given idle timeout and base
-// timeout. The dial timeout is derived through config.DialTimeout (base/3
-// clamped to [3s, 15s]), shared with the client side.
+// newTCPHandler 用给定的空闲超时和基础超时创建 tcpHandler。
+// 拨号超时通过 config.DialTimeout 派生（base/3，限制在 [3s, 15s]），
+// 与客户端共用。
 func newTCPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) *tcpHandler {
 	if idleTimeout <= 0 {
 		idleTimeout = config.DefaultStreamIdleTimeout
@@ -78,11 +76,10 @@ func outboundTCPNetwork(addr string) string {
 	return "tcp4"
 }
 
-// Handle relays a TCP stream between the client and the target.
-// cancelRead is invoked when the relay terminates (timeout/error/completion);
-// it unblocks a copy goroutine that may be stuck reading from the client
-// (e.g. the HTTP/2 request body), so no goroutine lingers after the handler
-// returns.
+// Handle 在客户端与目标之间中继 TCP 流。
+// cancelRead 在中继终止（超时/错误/完成）时被调用；
+// 它会解除可能正阻塞在读取客户端数据（如 HTTP/2 请求体）上的拷贝 goroutine，
+// 从而在 handler 返回后不会有 goroutine 残留。
 func (h *tcpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c shaper.Shaper, target string, cancelRead func()) error {
 	log.Info("[TCP_HANDLE] dialing target", "target", target)
 	targetConn, remote, err := h.dial.dialTarget(ctx, "tcp", target)
@@ -96,9 +93,8 @@ func (h *tcpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 	m := stats.NewStreamMeter("tcp_handle", target)
 	defer m.Close()
 
-	// The relay's onClose must both unblock the client reader (cancelRead) and
-	// close the target connection, so the generic CloseBoth is composed with
-	// that callback here.
+	// 中继的 onClose 既要解除客户端读取器阻塞（cancelRead），
+	// 也要关闭目标连接，因此这里把通用的 CloseBoth 与该回调组合在一起。
 	result := relay.Bidirectional(h.idleTimeout, func() {
 		if cancelRead != nil {
 			cancelRead()
@@ -108,9 +104,9 @@ func (h *tcpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 		func(signal func()) error { return h.copyFromClient(dr, targetConn, signal) },
 		func(signal func()) error { return h.copyFromTarget(targetConn, s2c, signal, m) },
 	)
-	// Log the stream outcome (bytes relayed and exit reason) at INFO level so
-	// targets whose connection was established but later stalled, reset or
-	// carried no data are directly visible when diagnosing blocked hosts.
+	// 以 INFO 级别记录流的最终结果（中继字节数和退出原因），
+	// 这样排查被屏蔽主机时，连接已建立但后来停滞、被重置或没有任何数据的
+	// 目标可以直接可见。
 	attrs := []any{"target", target, "remote", remote, "bytes", m.Bytes(), "timed_out", result.TimedOut}
 	if result.Err != nil {
 		attrs = append(attrs, "err", result.Err.Error())
@@ -141,12 +137,11 @@ func (h *tcpHandler) copyFromClient(dr *crypto.DecryptedReader, dst net.Conn, si
 			if cw, ok := dst.(interface{ CloseWrite() error }); ok {
 				_ = cw.CloseWrite()
 			}
-			// FIN is a terminal frame: the client sends no further frames
-			// after it (its copyLocalToRemote returns right after flushing
-			// FIN), so stop reading instead of blocking on ReadFrame until
-			// the relay idle timeout. The relay keeps waiting for the
-			// target->client direction and its idle timer still bounds the
-			// stream's lifetime.
+			// FIN 是终止帧：客户端在它之后不会再发送任何帧
+			// （客户端的 copyLocalToRemote 在 flush FIN 后立即返回），
+			// 因此停止读取，而不是一直阻塞在 ReadFrame 上直到中继空闲超时。
+			// 中继仍会等待 target->client 方向，其空闲计时器仍然限定
+			// 流的生命周期。
 			return nil
 		}
 		signalActivity()

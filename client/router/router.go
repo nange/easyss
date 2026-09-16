@@ -151,9 +151,9 @@ type Router struct {
 	proxyRule atomic.Int32
 	ipv6Rule  atomic.Int32
 
-	// IPv6 availability is resolved after construction (client.New) and read
-	// per request, so it is stored atomically like the rules above instead of
-	// in cfg, whose fields would race.
+	// IPv6 可用性在构造之后（client.New）才解析、并在每个请求时读取，
+	// 因此与上面的规则一样以原子方式存储，而不是放进 cfg——cfg 的字段会
+	// 产生数据竞争。
 	ipv6Networking atomic.Bool
 	serverIPV6     atomic.Pointer[string]
 
@@ -171,10 +171,9 @@ type Router struct {
 	customProxyDomains  map[string]struct{}
 	customProxyRegexps  []*regexp.Regexp
 
-	// customFileErr records the first failure to load a custom direct/proxy
-	// rule file. Loading is deliberately non-fatal (the router keeps the
-	// built-in rules), but the error is surfaced as a startup warning so the
-	// user learns that their custom rules were not applied.
+	// customFileErr 记录加载自定义直连/代理规则文件时遇到的第一个失败。
+	// 加载刻意设计为非致命（路由器仍保留内置规则），但该错误会作为启动警告
+	// 暴露出来，让用户知道自己的自定义规则没有被应用。
 	customFileErr error
 }
 
@@ -202,8 +201,8 @@ func New(cfg Config) (*Router, error) {
 	return r, nil
 }
 
-// CustomFileError returns the first failure encountered while loading the
-// custom direct/proxy rule files, or nil when both loaded successfully.
+// CustomFileError 返回加载自定义直连/代理规则文件时遇到的第一个失败，
+// 两个文件都加载成功时返回 nil。
 func (r *Router) CustomFileError() error {
 	return r.customFileErr
 }
@@ -299,21 +298,20 @@ func (r *Router) loadCustomIPDomains() error {
 	return nil
 }
 
-// HostClassification is the routing decision for a target host.
+// HostClassification 是针对目标主机的路由决策结果。
 type HostClassification struct {
-	// Rule is the routing rule to apply.
+	// Rule 是要应用的路由规则。
 	Rule HostRule
-	// IPV6Rejected reports that Rule was forced to HostRuleBlock by the IPv6
-	// policy gate (a literal IPv6 target while IPv6 is disabled), so the
-	// caller can answer with a protocol-specific rejection.
+	// IPV6Rejected 表示 Rule 被 IPv6 策略门强制为 HostRuleBlock
+	// （即 IPv6 被禁用时遇到字面 IPv6 目标），调用方可以据此返回
+	// 协议特定的拒绝响应。
 	IPV6Rejected bool
 }
 
-// ClassifyHost resolves the routing decision for host: the IPv6 policy gate
-// first, then the direct/proxy/block rule. Every request path (SOCKS5, HTTP
-// CONNECT, UDP, TUN ICMP) shares it, so no path can forget the gate or apply
-// the two checks in a different order. A nil router classifies everything as
-// proxied, which is what an unconfigured test server expects.
+// ClassifyHost 解析 host 的路由决策：先过 IPv6 策略门，再应用
+// 直连/代理/屏蔽规则。所有请求路径（SOCKS5、HTTP CONNECT、UDP、TUN ICMP）
+// 共用它，因此任何路径都不会漏掉策略门，也不会以不同顺序执行这两项检查。
+// nil 路由器把所有流量都分类为走代理，这正是未配置的测试服务器所期望的行为。
 func (r *Router) ClassifyHost(host string) HostClassification {
 	if r == nil {
 		return HostClassification{Rule: HostRuleProxy}
@@ -461,36 +459,36 @@ func (r *Router) isLANHost(host string) bool {
 	return util.IsLANIP(host)
 }
 
-// AddDirectIP adds an IP to the custom direct IP set (thread-safe).
+// AddDirectIP 向自定义直连 IP 集合中添加一个 IP（线程安全）。
 func (r *Router) AddDirectIP(ip string) {
 	r.customMu.Lock()
 	r.customDirectIPs[ip] = struct{}{}
 	r.customMu.Unlock()
 }
 
-// AddProxyIP adds an IP to the custom proxy IP set (thread-safe).
+// AddProxyIP 向自定义代理 IP 集合中添加一个 IP（线程安全）。
 func (r *Router) AddProxyIP(ip string) {
 	r.customMu.Lock()
 	r.customProxyIPs[ip] = struct{}{}
 	r.customMu.Unlock()
 }
 
-// AddDirectDomain adds a domain to the custom direct domain set (thread-safe).
+// AddDirectDomain 向自定义直连域名集合中添加一个域名（线程安全）。
 func (r *Router) AddDirectDomain(domain string) {
 	r.customMu.Lock()
 	r.customDirectDomains[domain] = struct{}{}
 	r.customMu.Unlock()
 }
 
-// AddProxyDomain adds a domain to the custom proxy domain set (thread-safe).
+// AddProxyDomain 向自定义代理域名集合中添加一个域名（线程安全）。
 func (r *Router) AddProxyDomain(domain string) {
 	r.customMu.Lock()
 	r.customProxyDomains[domain] = struct{}{}
 	r.customMu.Unlock()
 }
 
-// IsCustomDirectDomain checks whether a domain is in the custom direct domain list
-// (including subdomain matching and regexp/glob rules).
+// IsCustomDirectDomain 检查域名是否在自定义直连域名列表中
+// （包括子域名匹配以及 regexp/glob 规则）。
 func (r *Router) IsCustomDirectDomain(domain string) bool {
 	r.customMu.RLock()
 	defer r.customMu.RUnlock()
@@ -510,8 +508,8 @@ func (r *Router) IsCustomDirectDomain(domain string) bool {
 	return false
 }
 
-// IsCustomProxyDomain checks whether a domain is in the custom proxy domain list
-// (including subdomain matching and regexp/glob rules).
+// IsCustomProxyDomain 检查域名是否在自定义代理域名列表中
+// （包括子域名匹配以及 regexp/glob 规则）。
 func (r *Router) IsCustomProxyDomain(domain string) bool {
 	r.customMu.RLock()
 	defer r.customMu.RUnlock()
@@ -551,14 +549,14 @@ func (r *Router) SetProxyRule(rule ProxyRule) {
 	r.proxyRule.Store(int32(rule))
 }
 
-// SetIPV6Info records whether IPv6 networking is available and the resolved
-// server IPv6 address. It is safe to call concurrently with the readers.
+// SetIPV6Info 记录 IPv6 网络是否可用以及解析出的服务器 IPv6 地址。
+// 可以与读取方并发调用。
 func (r *Router) SetIPV6Info(networking bool, serverIPV6 string) {
 	r.ipv6Networking.Store(networking)
 	r.serverIPV6.Store(&serverIPV6)
 }
 
-// ServerIPV6 returns the resolved server IPv6 address ("" when unavailable).
+// ServerIPV6 返回解析出的服务器 IPv6 地址（不可用时返回 ""）。
 func (r *Router) ServerIPV6() string {
 	if p := r.serverIPV6.Load(); p != nil {
 		return *p

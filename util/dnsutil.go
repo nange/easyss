@@ -21,9 +21,9 @@ func IsDNSResponse(msg *dns.Msg) bool {
 	return msg.Response
 }
 
-// DNSAnswerStrings extracts answer records from a DNS response as human-readable
-// strings like "A:1.2.3.4", "AAAA:2001::1", "CNAME:example.com". Returns at most
-// 10 entries.
+// DNSAnswerStrings 从 DNS 响应中提取答案记录，格式为人类可读的
+// 字符串，如 "A:1.2.3.4"、"AAAA:2001::1"、"CNAME:example.com"。最多
+// 返回 10 条。
 func DNSAnswerStrings(msg *dns.Msg) []string {
 	var results []string
 	ForEachDNSAnswer(msg, func(kind, value string) {
@@ -34,11 +34,10 @@ func DNSAnswerStrings(msg *dns.Msg) []string {
 	return results
 }
 
-// ForEachDNSAnswer calls fn for every A, AAAA and CNAME answer record, with
-// kind one of "A", "AAAA" or "CNAME" and value the address or the
-// dot-trimmed target. It is the single walker for the answer lists consumed by
-// the client's and the server's dynamic routing (both used to carry their own
-// copy of this switch).
+// ForEachDNSAnswer 对每条 A、AAAA 和 CNAME 答案记录调用 fn，
+// kind 为 "A"、"AAAA" 或 "CNAME" 之一，value 为地址或去掉末尾点号的
+// CNAME 目标。客户端与服务端动态路由都要遍历答案列表，这里是唯一的
+// 遍历入口（两端各自维护一份该 switch 的副本）。
 func ForEachDNSAnswer(msg *dns.Msg, fn func(kind, value string)) {
 	for _, ans := range msg.Answer {
 		switch a := ans.(type) {

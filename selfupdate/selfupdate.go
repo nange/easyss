@@ -1,5 +1,5 @@
-// Package selfupdate implements checking GitHub releases, downloading and
-// installing a new client build, and restarting the application process.
+// Package selfupdate 实现检查 GitHub release、下载并安装新的客户端构建，
+// 以及重启应用程序进程。
 package selfupdate
 
 import (
@@ -11,23 +11,21 @@ import (
 )
 
 const (
-	// CheckTimeout bounds a single GitHub release check.
+	// CheckTimeout 限制单次 GitHub release 检查的超时时间。
 	CheckTimeout = 15 * time.Second
-	// DownloadTimeout bounds downloading and installing a release asset.
+	// DownloadTimeout 限制下载并安装发布资产的超时时间。
 	DownloadTimeout = 10 * time.Minute
 )
 
-// Update downloads the release asset for the current platform, extracts it
-// and installs it over the running executable (or the whole .app bundle on
-// macOS). On success the new binary is in place and the caller should
-// restart the process (see Restart). localHTTPPort is the local HTTP proxy
-// port tried first for fetching; a direct connection is used as fallback.
+// Update 下载当前平台的发布资产，解压并安装以覆盖正在运行的可执行文件
+// （macOS 上为整个 .app bundle）。成功后新二进制已就位，调用方应重启进程
+// （参见 Restart）。localHTTPPort 是获取时优先尝试的本地 HTTP 代理端口；
+// 失败时回退到直连。
 func Update(ctx context.Context, localHTTPPort int, rel *Release) error {
 	return updateFor(ctx, NewClient(localHTTPPort), ProductClient, rel)
 }
 
-// updateFor downloads, extracts and installs the release asset for product
-// using the given fetch client.
+// updateFor 使用给定的获取客户端，下载、解压并安装 product 的发布资产。
 func updateFor(ctx context.Context, c *Client, product Product, rel *Release) error {
 	asset := pickAssetFor(rel, product, runtime.GOOS, runtime.GOARCH)
 	if asset == nil {
@@ -47,8 +45,7 @@ func updateFor(ctx context.Context, c *Client, product Product, rel *Release) er
 	if err != nil {
 		return err
 	}
-	// Stage next to the install target so the final rename stays on the
-	// same volume (atomic).
+	// 在安装目标旁边创建暂存目录，使最终的 rename 保持在同一个卷内（原子操作）。
 	staging, err := os.MkdirTemp(targetDir, stagingPrefix)
 	if err != nil {
 		return permissionHint("create staging dir in "+targetDir, err)

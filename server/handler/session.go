@@ -14,17 +14,15 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-// sendRST pushes an RST frame through the s2c shaper and flushes it: the
-// uniform way every handler tells the client that its stream failed after
-// the response was committed.
+// sendRST 通过 s2c shaper 推送一个 RST 帧并 flush：这是所有 handler
+// 在响应提交后向客户端告知其流失败的统一方式。
 func sendRST(s2c shaper.Shaper) {
 	_ = s2c.PushFrame(protocol.NewFrameRST())
 	_ = s2c.Flush()
 }
 
-// nextClientFrame reads the next actionable frame from the client stream,
-// skipping PADDING/COVER. done reports that the stream ended (FIN or RST);
-// the returned frame is then the terminal one. err aborts everything.
+// nextClientFrame 从客户端流中读取下一个可处理的帧，跳过 PADDING/COVER。
+// done 表示流已结束（FIN 或 RST），此时返回的帧就是终止帧。err 会中止一切。
 func nextClientFrame(dr *crypto.DecryptedReader) (frame protocol.Frame, done bool, err error) {
 	for {
 		f, err := dr.ReadFrame()
@@ -42,11 +40,10 @@ func nextClientFrame(dr *crypto.DecryptedReader) (frame protocol.Frame, done boo
 	}
 }
 
-// lanHostOf extracts the host part of a remote address in either
-// "host:port" (TCPAddr/UDPAddr) or bare-IP form (IPConn). An IPConn's
-// RemoteAddr is a *net.IPAddr whose String() carries no port — with or
-// without a %zone suffix for link-local IPv6 — so net.SplitHostPort
-// alone would always fail for it and the SSRF check would never fire.
+// lanHostOf 提取远端地址的主机部分，支持 "host:port"（TCPAddr/UDPAddr）
+// 或裸 IP 形式（IPConn）。IPConn 的 RemoteAddr 是 *net.IPAddr，
+// 其 String() 不带端口——链路本地 IPv6 可能带也可能不带 %zone 后缀——
+// 因此仅靠 net.SplitHostPort 对它必然失败，SSRF 检查将永远不会触发。
 func lanHostOf(addr string) string {
 	if host, _, err := net.SplitHostPort(addr); err == nil {
 		return host
@@ -57,11 +54,10 @@ func lanHostOf(addr string) string {
 	return addr
 }
 
-// rejectLANConn closes conn when its remote address is a LAN/private IP and
-// returns the rejection error. It is the post-dial SSRF guard shared by the
-// TCP/UDP/ICMP handlers: the handshake validated the target, but the dial
-// re-resolves domain targets, so a DNS-rebinding name could resolve to a LAN
-// host here. Reject the connection before anything is sent.
+// rejectLANConn 当 conn 的远端地址是 LAN/私网 IP 时关闭它并返回拒绝错误。
+// 它是 TCP/UDP/ICMP handler 共享的拨号后 SSRF 防护：握手阶段已校验目标，
+// 但拨号会重新解析域名目标，因此 DNS 重绑定（DNS-rebinding）的域名在这里
+// 可能解析到 LAN 主机。在发送任何数据之前拒绝该连接。
 func rejectLANConn(conn net.Conn) error {
 	if ra := conn.RemoteAddr(); ra != nil {
 		if host := lanHostOf(ra.String()); util.IsLANIP(host) {
@@ -72,31 +68,28 @@ func rejectLANConn(conn net.Conn) error {
 	return nil
 }
 
-// dialer is the shared outbound-dial piece of the TCP/UDP/ICMP handlers:
-// next-proxy routing (with its SSRF pre-check) and the direct dial with the
-// post-dial SSRF guard.
+// dialer 是 TCP/UDP/ICMP handler 共享的出站拨号组件：
+// next-proxy 路由（带 SSRF 预检查）以及带拨号后 SSRF 防护的直接拨号。
 type dialer struct {
 	nextProxy *nextproxy.NextProxy
-	// useProxy decides whether target goes through the next proxy. It is only
-	// consulted when nextProxy is non-nil, and must be set whenever nextProxy
-	// is: the ICMP handler leaves both unset because raw sockets cannot be
-	// carried by a SOCKS5 proxy and its path carries no context.
+	// useProxy 决定 target 是否经由 next proxy 转发。只有当 nextProxy 非 nil
+	// 时才会被查询，并且只要设置了 nextProxy 就必须同时设置它：
+	// ICMP handler 两者都不设置，因为原始 socket 无法由 SOCKS5 代理承载，
+	// 而且它的路径不携带 context。
 	useProxy func(target string) bool
-	// dial opens the direct outbound connection for target.
+	// dial 为 target 打开直接出站连接。
 	dial func(ctx context.Context, network, target string) (net.Conn, error)
 }
 
-// dialTarget opens the outbound connection and returns it together with a
-// printable remote address for logging. The remote is resolved here because
-// the next-proxy path yields a SOCKS5 connection whose RemoteAddr() is nil.
+// dialTarget 打开出站连接，并连同可打印的远端地址一起返回用于日志。
+// 远端地址在这里解析，因为 next-proxy 路径得到的是 SOCKS5 连接，
+// 其 RemoteAddr() 为 nil。
 func (d *dialer) dialTarget(ctx context.Context, network, target string) (net.Conn, string, error) {
 	if d.nextProxy != nil && d.useProxy(target) {
-		// Re-run the SSRF check at dial time: the handshake-time check may
-		// be long past, and a DNS-rebinding name can resolve differently
-		// now. The post-dial check below cannot run on this path — the
-		// SOCKS5 connection reports the proxy's address, not the target's —
-		// so the proxy's own resolver remains a (trusted, admin-configured)
-		// residual risk.
+		// 在拨号时重新执行 SSRF 检查：握手时的检查可能已经过去很久，
+		// 而 DNS 重绑定域名现在可能解析出不同的结果。下面的拨号后检查
+		// 无法在此路径上执行——SOCKS5 连接报告的是代理的地址而不是目标的——
+		// 因此代理自身的解析器仍是（可信的、管理员配置的）残余风险。
 		if util.IsLANHostResolved(ctx, target) {
 			return nil, "", fmt.Errorf("ssrf: rejected lan destination %s", target)
 		}

@@ -15,47 +15,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The create scripts of linux and darwin are checked here for the same exit
-// code contract create_tun_dev_windows.bat implements and
-// tun_script_windows_test.go pins down for cmd.exe: the caller keeps the TUN
-// routes installed only when the script exits 0, and reports the failing step
-// on stderr otherwise.
+// 这里检查 linux 和 darwin 的创建脚本是否遵守与
+// create_tun_dev_windows.bat 实现的、且由 tun_script_windows_test.go 针对
+// cmd.exe 固定下来的相同的退出码契约：只有脚本以 0 退出时调用方才保留
+// TUN 路由，否则在 stderr 上报失败的步骤。
 //
-// The linux script used to exit 0 unconditionally — run_idem echoed the error
-// to stderr but its "case" always returned 0, and the last command of the
-// script was a run_idem call — so a rejected "ip addr replace" or route left a
-// half configured tunnel while the helper and the tray both believed TUN was
-// up. The darwin script had no per-command check at all: without a server IPv6
-// address it ended with "route add -net 128.0.0.0/1", so a failed ifconfig or
-// any failed earlier route was masked by the success of the last route add.
+// linux 脚本曾经无条件以 0 退出——run_idem 把错误回显到 stderr，但它的
+// "case" 总是返回 0，而且脚本的最后一条命令就是一次 run_idem 调用——所以
+// 被拒绝的 "ip addr replace" 或路由会留下一个只配置了一半的隧道，而 helper
+// 和托盘都以为 TUN 已启用。darwin 脚本则完全没有逐命令检查：没有服务器
+// IPv6 地址时它以 "route add -net 128.0.0.0/1" 结尾，因此失败的 ifconfig 或
+// 任何更早失败的路由都被最后一次成功的 route add 掩盖了。
 //
-// Both scripts are run for real, the way cmd/easyss/tun_helper_linux.go and
-// tun_helper_darwin.go do, with stub tools first on PATH: the tools would
-// otherwise reconfigure the network of the machine running the test (and need
-// root to do it). The stubs are found through the shell's own PATH lookup, and
-// the "-x" runScriptStubbed writes into the shebang records every command the
-// script issued, which is what proves a failure did not skip the rest of the
-// script.
+// 两个脚本都会像 cmd/easyss/tun_helper_linux.go 和 tun_helper_darwin.go
+// 那样被真实运行，stub 工具放在 PATH 最前面：否则这些工具会重新配置运行
+// 测试的机器的网络（而且需要 root 权限）。stub 工具通过 shell 自身的 PATH
+// 查找被找到，每次调用都会把参数追加到自己的 <工具名>.log 日志中（参见
+// stubScript 和 toolInvocations），这正是证明一次失败没有跳过脚本其余
+// 部分的依据。
 
-// stubScript returns the shell body a stub tool is written with. Every
-// invocation appends its arguments to invocations.log before the tool answers,
-// so a test can tell how often the script called it and with what: the script
-// itself decides whether that call was a failure, which is exactly what the
-// assertions are about.
+// stubScript 返回 stub 工具写入的 shell 主体。每次调用都会在工具应答前把
+// 它的参数追加到 <name>.log（name 为工具名），因此测试可以知道脚本调用
+// 了它多少次、用什么参数调用：是否把这次调用当作失败由脚本自己决定，
+// 这正是断言所要验证的。
 func stubScript(dir, name, answer string) string {
 	return "#!/bin/sh\n" +
 		"printf '%s\\n' \"$*\" >> " + quoteForScript(filepath.Join(dir, name+".log")) + "\n" +
 		answer
 }
 
-// quoteForScript quotes a path for a POSIX shell single-quoted string, so a
-// test directory containing spaces or quotes still yields a runnable stub.
+// quoteForScript 把路径转义为 POSIX shell 单引号字符串，因此包含空格或
+// 引号的测试目录仍然能生成可运行的 stub。
 func quoteForScript(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// stubTool writes a tool that exits with code, printing marker on stderr when
-// it fails.
+// stubTool 生成一个以 code 退出的工具，失败时把 marker 打印到 stderr。
 func stubTool(t *testing.T, dir, name string, code int, marker string) {
 	t.Helper()
 
@@ -66,8 +61,8 @@ func stubTool(t *testing.T, dir, name string, code int, marker string) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(stubScript(dir, name, answer)), 0o755))
 }
 
-// failTool writes a tool that always fails with the given output (already
-// quoted for the shell) and exit code.
+// failTool 生成一个总是失败的工具，输出给定的内容（已为 shell 转义）并以
+// code 退出。
 func failTool(t *testing.T, dir, name, output string, code int) {
 	t.Helper()
 
@@ -75,15 +70,15 @@ func failTool(t *testing.T, dir, name, output string, code int) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(stubScript(dir, name, answer)), 0o755))
 }
 
-// stubStep is one answer of a scripted sequence: the nth invocation of the
-// tool fails when fail is true. Invocations beyond the sequence succeed.
+// stubStep 是脚本化序列中的一个应答：当 fail 为 true 时工具的第 n 次调用
+// 失败。超出序列的调用一律成功。
 type stubStep struct {
 	fail bool
 }
 
-// sequenceTool writes a tool that walks steps in order, so a test can make one
-// specific step fail while every other one succeeds. The counter lives in a
-// file because each invocation is a separate process.
+// sequenceTool 生成一个按顺序走过各步骤的工具，因此测试可以让某一个步骤
+// 失败而其余步骤全部成功。计数器保存在文件中，因为每次调用都是独立的
+// 进程。
 func sequenceTool(t *testing.T, dir, name, marker string, steps ...stubStep) {
 	t.Helper()
 
@@ -104,9 +99,8 @@ func sequenceTool(t *testing.T, dir, name, marker string, steps ...stubStep) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(stubScript(dir, name, answer)), 0o755))
 }
 
-// toolInvocations returns how many times the named stub tool ran. It fails the
-// test when the log is missing: an empty log would otherwise read as "the
-// script never called the tool", hiding the reason a count assertion failed.
+// toolInvocations 返回指定 stub 工具运行了多少次。日志缺失时它会使测试
+// 失败：否则空日志会被读成"脚本从未调用该工具"，掩盖计数断言失败的原因。
 func toolInvocations(t *testing.T, dir, name string) int {
 	t.Helper()
 
@@ -115,11 +109,10 @@ func toolInvocations(t *testing.T, dir, name string) int {
 	return len(strings.Split(strings.TrimSpace(string(data)), "\n"))
 }
 
-// runScriptStubbed runs the given create script through shell with the stub
-// directory first on PATH, and returns its exit code together with the
-// combined output (the script's diagnostics). The script is passed to the shell
-// as an argument, so the interpreter does not have to resolve a shebang, and
-// the stubs it calls are the ones recording what ran.
+// runScriptStubbed 通过 shell 运行给定的创建脚本，stub 目录位于 PATH 最前，
+// 返回其退出码以及合并后的输出（脚本的诊断信息）。脚本作为参数传给
+// shell，因此解释器无需解析 shebang，而脚本调用的 stub 会记录实际运行的
+// 内容。
 func runScriptStubbed(t *testing.T, shell, script, stubDir string, args ...string) (int, string) {
 	t.Helper()
 
@@ -139,8 +132,8 @@ func runScriptStubbed(t *testing.T, shell, script, stubDir string, args ...strin
 	return code, string(out)
 }
 
-// requireShell skips the test when the interpreter the script is run with is
-// not installed, so a minimal environment does not fail on a missing shell.
+// requireShell 在脚本所用的解释器未安装时跳过测试，因此极简环境不会因为
+// 缺少 shell 而失败。
 func requireShell(t *testing.T, shell string) {
 	t.Helper()
 
@@ -149,9 +142,9 @@ func requireShell(t *testing.T, shell string) {
 	}
 }
 
-// linuxScriptArgs mirrors what client/tun/tun.go passes to the linux script:
-// device, tun ip/prefix, tun gw, local gw, tun ipv6, tun gw ipv6,
-// server ipv6, local gw ipv6.
+// linuxScriptArgs 与 client/tun/tun.go 传给 linux 脚本的参数保持一致：
+// device、tun ip/prefix、tun gw、local gw、tun ipv6、tun gw ipv6、
+// server ipv6、local gw ipv6。
 func linuxScriptArgs(withV6 bool) []string {
 	args := []string{"tun-easyss-test", "198.18.0.1/16", "198.18.0.1", "192.168.3.1"}
 	if !withV6 {
@@ -160,7 +153,7 @@ func linuxScriptArgs(withV6 bool) []string {
 	return append(args, "2001:db8::1/64", "fe80::1", "2001:db8::2", "fe80::2")
 }
 
-// darwinScriptArgs mirrors what client/tun/tun.go passes to the darwin script.
+// darwinScriptArgs 与 client/tun/tun.go 传给 darwin 脚本的参数保持一致。
 func darwinScriptArgs(withV6 bool) []string {
 	args := []string{"utun8", "198.18.0.1", "198.18.0.1", "192.168.3.1"}
 	if !withV6 {
@@ -169,14 +162,14 @@ func darwinScriptArgs(withV6 bool) []string {
 	return append(args, "2001:db8::1/64", "fe80::1", "2001:db8::2", "fe80::2")
 }
 
-// TestCreateTunScriptLinuxExitCode pins the exit code contract of
-// scripts/create_tun_dev.sh.
+// TestCreateTunScriptLinuxExitCode 固定 scripts/create_tun_dev.sh 的退出码
+// 契约。
 func TestCreateTunScriptLinuxExitCode(t *testing.T) {
 	requireShell(t, "bash")
 
 	const marker = "[create_tun_dev]"
-	// The script issues one "ip" per step: addr, link and the 8 route blocks,
-	// plus the ipv6 address and the 2 ipv6 routes when a server ipv6 exists.
+	// 脚本每个步骤调用一次 "ip"：addr、link 和 8 个路由块，存在服务器 ipv6
+	// 时还有 ipv6 地址和 2 条 ipv6 路由。
 	const stepsV4 = 10
 	const stepsV6 = 13
 
@@ -192,9 +185,8 @@ func TestCreateTunScriptLinuxExitCode(t *testing.T) {
 
 	t.Run("failing address fails the script", func(t *testing.T) {
 		dir := t.TempDir()
-		// Only the address step fails and the routes still succeed: this is
-		// the partly configured device the caller has to roll back, and the
-		// case that used to report success.
+		// 只有地址步骤失败而路由仍然成功：这是调用方必须回滚的部分配置
+		// 设备，也是过去会被报告为成功的情况。
 		sequenceTool(t, dir, "ip", marker, stubStep{fail: true})
 
 		code, out := runScriptStubbed(t, "bash", string(scripts.CreateTunDevSh), dir, linuxScriptArgs(false)...)
@@ -207,7 +199,7 @@ func TestCreateTunScriptLinuxExitCode(t *testing.T) {
 
 	t.Run("failing route fails the script", func(t *testing.T) {
 		dir := t.TempDir()
-		// The address and the link come up, the first route is rejected.
+		// 地址和链路都配置成功，第二条路由（2.0.0.0/7）被拒绝。
 		sequenceTool(t, dir, "ip", marker, stubStep{}, stubStep{}, stubStep{}, stubStep{fail: true})
 
 		code, out := runScriptStubbed(t, "bash", string(scripts.CreateTunDevSh), dir, linuxScriptArgs(false)...)
@@ -219,8 +211,8 @@ func TestCreateTunScriptLinuxExitCode(t *testing.T) {
 
 	t.Run("failing ipv6 route fails the script", func(t *testing.T) {
 		dir := t.TempDir()
-		// Only the last step (the second ipv6 route) fails: everything before
-		// it was installed, which is exactly the state a rollback has to undo.
+		// 只有最后一步（第二条 ipv6 路由）失败：它之前的全部内容都已安装，
+		// 这正是回滚必须撤销的状态。
 		steps := make([]stubStep, stepsV6)
 		steps[stepsV6-1] = stubStep{fail: true}
 		sequenceTool(t, dir, "ip", marker, steps...)
@@ -231,10 +223,9 @@ func TestCreateTunScriptLinuxExitCode(t *testing.T) {
 	})
 
 	t.Run("already configured state stays successful", func(t *testing.T) {
-		// The keep-alive re-runs the script after sleep/wake: iproute2 answers
-		// "File exists" for state that survived a session which was not closed
-		// cleanly. That is not a failure and must not make the helper exit or
-		// the tray complain.
+		// keep-alive 在休眠/唤醒后会重新运行脚本：对于未干净结束的会话
+		// 遗留下来的状态，iproute2 会应答 "File exists"。这不是失败，不能
+		// 让 helper 退出或让托盘报错。
 		dir := t.TempDir()
 		failTool(t, dir, "ip", "'RTNETLINK answers: File exists'", 2)
 
@@ -244,20 +235,20 @@ func TestCreateTunScriptLinuxExitCode(t *testing.T) {
 	})
 }
 
-// TestCreateTunScriptDarwinExitCode pins the exit code contract of
-// scripts/create_tun_dev_darwin.sh, including the case that used to be masked:
-// a failing ifconfig followed by successful route adds.
+// TestCreateTunScriptDarwinExitCode 固定 scripts/create_tun_dev_darwin.sh 的
+// 退出码契约，包括过去会被掩盖的情况：失败的 ifconfig 之后跟着成功的
+// route add。
 func TestCreateTunScriptDarwinExitCode(t *testing.T) {
 	requireShell(t, "sh")
 
 	const marker = "[create_tun_dev_darwin]"
-	// The script issues one route per IPv4 block (8 blocks plus 198.18.0.0/15)
-	// and one more for the IPv6 default route when a server ipv6 exists.
+	// 脚本对每个 IPv4 块（8 个块加 198.18.0.0/15）执行一次 route，存在服务器
+	// ipv6 时再为 IPv6 默认路由多执行一次。
 	const routesV4 = 9
 	const routesV6 = 10
 
-	// stubDarwin writes the ifconfig and route stubs a subtest needs, with the
-	// nth route call failing when routeFail says so.
+	// stubDarwin 生成子测试所需的 ifconfig 和 route stub，当 routeFail 返回
+	// true 时第 n 次 route 调用失败。
 	stubDarwin := func(t *testing.T, ifconfigFail bool, routeFail func(n int) bool) string {
 		t.Helper()
 
@@ -283,9 +274,9 @@ func TestCreateTunScriptDarwinExitCode(t *testing.T) {
 	})
 
 	t.Run("failing ifconfig fails the script even when the routes succeed", func(t *testing.T) {
-		// This is the regression: without a server IPv6 address the script
-		// used to end with "route add -net 128.0.0.0/1" and exit 0, so the
-		// device had no address while the caller believed TUN was up.
+		// 这就是回归所在：没有服务器 IPv6 地址时，脚本过去以
+		// "route add -net 128.0.0.0/1" 结尾并退出 0，于是设备没有地址，
+		// 而调用方却以为 TUN 已启用。
 		dir := stubDarwin(t, true, func(int) bool { return false })
 
 		code, out := runScriptStubbed(t, "sh", string(scripts.CreateTunDevDarwinSh), dir, darwinScriptArgs(false)...)
@@ -296,8 +287,7 @@ func TestCreateTunScriptDarwinExitCode(t *testing.T) {
 	})
 
 	t.Run("failing ifconfig in the ipv6 branch fails the script", func(t *testing.T) {
-		// The ipv6 branch has its own ifconfig call, which no exit code used to
-		// cover either.
+		// ipv6 分支有自己的 ifconfig 调用，过去也没有任何退出码覆盖它。
 		dir := t.TempDir()
 		sequenceTool(t, dir, "ifconfig", marker, stubStep{}, stubStep{fail: true})
 		stubTool(t, dir, "route", 0, marker)
@@ -334,10 +324,10 @@ func TestCreateTunScriptDarwinExitCode(t *testing.T) {
 	})
 
 	t.Run("already configured routes stay successful", func(t *testing.T) {
-		// macOS "route add" refuses to duplicate a route and reports
-		// "File exists": the keep-alive re-run after sleep/wake must not turn
-		// that into a failure, which would make the helper exit and the tray
-		// report a bogus "recreating TUN routes" every 10s.
+		// macOS 的 "route add" 拒绝重复添加路由并报告 "File exists"：
+		// keep-alive 在休眠/唤醒后的重跑绝不能把这种情况变成失败，否则
+		// helper 会退出，托盘每 10 秒都会报告一次虚假的 "recreating TUN
+		// routes"。
 		dir := t.TempDir()
 		stubTool(t, dir, "ifconfig", 0, marker)
 		failTool(t, dir, "route", "'route: writing to routing socket: File exists'", 1)
@@ -348,12 +338,10 @@ func TestCreateTunScriptDarwinExitCode(t *testing.T) {
 	})
 }
 
-// TestCreateScriptsGuardEveryCommand is a light structural guard behind the
-// tests above: they prove the scripts report the failures that are exercised,
-// this one catches a new "ip"/"ifconfig"/"route" command added without a guard,
-// which is the bug class this file exists for. Only the commands the scripts
-// issue with their own tools are checked; the helpers' definitions and comments
-// are skipped.
+// TestCreateScriptsGuardEveryCommand 是上述测试背后的一个轻量结构守卫：
+// 那些测试证明脚本会报告被测到的失败，而这个测试捕获新增的、没有守卫的
+// "ip"/"ifconfig"/"route" 命令——这正是本文件要防的那类 bug。只检查脚本
+// 用自身工具发出的命令；helper 的函数定义和注释会被跳过。
 func TestCreateScriptsGuardEveryCommand(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -375,10 +363,9 @@ func TestCreateScriptsGuardEveryCommand(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// Shell comments span several lines, and their continuation lines
-			// start with an ordinary word: without following the block, a line
-			// such as "allowed to fail calls fail, which records its step name"
-			// would be reported as a tool invocation.
+			// Shell 注释会跨越多行，其续行以普通单词开头：如果不跟踪注释
+			// 块，像 "allowed to fail calls fail, which records its step name"
+			// 这样的行就会被误报为工具调用。
 			inComment := false
 			for line := range strings.SplitSeq(tc.script, "\n") {
 				line = strings.TrimSpace(line)
@@ -386,9 +373,8 @@ func TestCreateScriptsGuardEveryCommand(t *testing.T) {
 					if strings.HasPrefix(line, "#") {
 						continue
 					}
-					// The comment block ends here: this line is code and has to
-					// fall through to the checks below instead of being skipped,
-					// which would leave the command right under a comment unseen.
+					// 注释块到此结束：这一行是代码，必须落入下面的检查
+					// 而不是被跳过，否则紧跟在注释下的命令会被漏看。
 					inComment = false
 				}
 				switch {
@@ -400,12 +386,12 @@ func TestCreateScriptsGuardEveryCommand(t *testing.T) {
 				}
 				if !slices.ContainsFunc(tc.tools, func(tool string) bool {
 					return strings.HasPrefix(line, tool) ||
-						strings.HasPrefix(line, tc.wrappers[0]) // the helpers' own definitions
+						strings.HasPrefix(line, tc.wrappers[0]) // helper 自身的定义
 				}) {
 					continue
 				}
 				if strings.Contains(line, "()") || strings.HasPrefix(line, "}") {
-					continue // a function definition or its closing brace
+					continue // 函数定义或其右花括号
 				}
 				if !slices.ContainsFunc(tc.wrappers, func(w string) bool {
 					return strings.HasPrefix(line, w)
@@ -418,8 +404,8 @@ func TestCreateScriptsGuardEveryCommand(t *testing.T) {
 	}
 }
 
-// boolCode maps a boolean to an exit code, so a stub table reads as "this tool
-// fails" instead of a magic number.
+// boolCode 把布尔值映射为退出码，这样 stub 表格读起来是"该工具失败"而不是
+// 一个魔法数字。
 func boolCode(fail bool) int {
 	if fail {
 		return 1

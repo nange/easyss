@@ -8,14 +8,12 @@ import (
 	"github.com/txthinking/socks5"
 )
 
-// TestSendToClientFramesReplyFromClientTarget pins the invariant every DNS
-// branch depends on: an answer is framed with the address the client sent its
-// query to, never with the upstream this proxy resolved through. A transparent
-// NAT in front (tun2socks) keys its UDP flows by that address in symmetric NAT
-// mode and drops any datagram whose source differs from it, so a reply framed
-// with the upstream made the query look unanswered — for every proxied query
-// whose upstream (config.ProxyDNSServer, 8.8.8.8:53) differed from the
-// resolver the client asked (e.g. the 223.5.5.5 configured for TUN mode).
+// TestSendToClientFramesReplyFromClientTarget 固定了每个 DNS 分支都依赖的不变式：
+// 应答使用客户端发送查询时所用的地址组帧，绝不使用本代理解析到的上游地址。
+// 前置的透明 NAT（tun2socks）在对称 NAT 模式下以该地址为 UDP 流建键，并丢弃任何
+// 源地址与之不同的数据报，因此用上游地址组帧的应答会让查询看起来无人应答——
+// 对每个上游（config.ProxyDNSServer，8.8.8.8:53）与客户端所询问的解析器
+// （如 TUN 模式配置的 223.5.5.5）不同的代理查询都是如此。
 func TestSendToClientFramesReplyFromClientTarget(t *testing.T) {
 	clientConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
@@ -29,8 +27,8 @@ func TestSendToClientFramesReplyFromClientTarget(t *testing.T) {
 	}
 	t.Cleanup(func() { serverConn.Close() }) //nolint:errcheck
 
-	// The SOCKS5 side only touches srv.UDPConn here, so a bare server is
-	// enough: no listener, handler or transport is involved.
+	// SOCKS5 侧在这里只用到 srv.UDPConn，所以一个裸服务器就够了：
+	// 不涉及监听器、处理器或传输层。
 	clientAddr := clientConn.LocalAddr().(*net.UDPAddr)
 	s := &Socks5Server{}
 	s.sendToClient(&socks5.Server{UDPConn: serverConn}, clientAddr, []byte("answer"), "223.5.5.5:53")
@@ -47,8 +45,7 @@ func TestSendToClientFramesReplyFromClientTarget(t *testing.T) {
 		t.Fatalf("reply is %d bytes, too short for a SOCKS5 UDP header", n)
 	}
 
-	// Parse with the same framing the peer (tun2socks) reads: the address in
-	// the header is the source it matches the reply against.
+	// 用对端（tun2socks）读取时相同的帧格式解析：头中的地址就是它用来匹配应答的源地址。
 	d, err := socks5.NewDatagramFromBytes(buf[:n])
 	if err != nil {
 		t.Fatalf("parse reply datagram: %v", err)

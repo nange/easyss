@@ -72,22 +72,21 @@ const (
 	testServerAddr = "127.0.0.1"
 	testPassword   = "test-pass"
 
-	// readinessTimeout bounds how long the harness waits for an
-	// asynchronously started server to accept connections. A start failure is
-	// reported through the error channel right away, so this only covers
-	// scheduling delay under load (measured: ~0.2s plain, ~0.7s with -race).
+	// readinessTimeout 限制测试框架等待异步启动的服务器接受连接的时间。
+	// 启动失败会立即通过 error channel 上报，因此该值只需覆盖高负载下的
+	// 调度延迟（实测：普通构建约 0.2s，-race 下约 0.7s）。
 	readinessTimeout = 15 * time.Second
 )
 
-// testExternalURLs are used for testing the full proxy tunnel.
-// Multiple URLs for fallback in case one is temporarily unavailable.
+// testExternalURLs 用于测试完整的代理隧道。
+// 提供多个 URL，以便在某个暂时不可用时进行回退。
 var testExternalURLs = []string{
 	"http://www.example.com",
 	"https://www.baidu.com",
 	"http://httpbin.org/get",
 }
 
-// fetchExternalURL tries to GET url via client, with retries across fallback URLs
+// fetchExternalURL 通过 client 尝试 GET 各个 URL，并在多个回退 URL 之间重试
 func fetchExternalURL(t *testing.T, client *http.Client) (body []byte, status int) {
 	t.Helper()
 	for _, url := range testExternalURLs {
@@ -116,14 +115,14 @@ func fetchExternalURL(t *testing.T, client *http.Client) (body []byte, status in
 	return nil, 0
 }
 
-// loopbackAddr formats a 127.0.0.1 address for a chosen port.
+// loopbackAddr 为指定端口格式化一个 127.0.0.1 地址。
 func loopbackAddr(port int) string {
 	return testServerAddr + ":" + strconv.Itoa(port)
 }
 
-// freeTCPPort returns a loopback TCP port that is currently free. Choosing a
-// port per test keeps concurrent runs of this package (a second terminal, an
-// IDE test run, another checkout) from stealing each other's listeners.
+// freeTCPPort 返回一个当前空闲的 loopback TCP 端口。每个测试单独选端口，
+// 可以避免本包的并发运行（另一个终端、IDE 测试运行、另一个检出目录）
+// 互相抢占对方的监听端口。
 func freeTCPPort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", testServerAddr+":0")
@@ -133,9 +132,9 @@ func freeTCPPort(t *testing.T) int {
 	return port
 }
 
-// freeSocks5Port returns a loopback port that is free on TCP and UDP both:
-// the txthinking/socks5 server binds a TCP listener and a UDP socket on the
-// same address, so a port free on TCP alone still fails to start.
+// freeSocks5Port 返回一个在 TCP 和 UDP 上都空闲的 loopback 端口：
+// txthinking/socks5 服务器会在同一地址上同时绑定 TCP 监听器和 UDP socket，
+// 因此仅 TCP 空闲的端口仍然无法启动。
 func freeSocks5Port(t *testing.T) int {
 	t.Helper()
 	for range 20 {
@@ -151,12 +150,10 @@ func freeSocks5Port(t *testing.T) int {
 	return 0
 }
 
-// waitForReady polls addr until it accepts a TCP connection, so the harness
-// only continues once an asynchronously started server really listens. A start
-// failure published on startErr aborts immediately with that error: waiting
-// out the deadline instead would disguise "address already in use" (or any
-// other start failure) as a plain readiness timeout, and a foreign process
-// holding the port would even be mistaken for the server under test.
+// waitForReady 轮询 addr 直到其接受 TCP 连接，确保测试框架只在异步启动的
+// 服务器真正开始监听后才继续。startErr 上发布的启动失败会立即以该错误中止：
+// 否则等待超时会把 "address already in use"（或任何其他启动失败）伪装成普通的
+// 就绪超时，甚至会把占用端口的其他进程误认为是被测服务器。
 func waitForReady(what, addr string, startErr <-chan error, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
@@ -179,11 +176,10 @@ func waitForReady(what, addr string, startErr <-chan error, timeout time.Duratio
 	}
 }
 
-// startLocalTargetServer starts a basic HTTP server for testing direct/local
-// connections. It returns the kernel-chosen address it listens on and a
-// cleanup that shuts it down. The listener is bound here instead of inside
-// Serve, so a busy port fails the test immediately and nothing has to be
-// polled before the address is usable.
+// startLocalTargetServer 启动一个用于测试直连/本地连接的基础 HTTP 服务器。
+// 它返回内核选择的监听地址以及用于关闭服务器的 cleanup 函数。监听器在此处
+// 绑定而不是在 Serve 内部绑定，因此端口被占用时测试会立即失败，且地址可用
+// 之前无需任何轮询。
 func startLocalTargetServer(t *testing.T) (string, func()) {
 	t.Helper()
 
@@ -209,8 +205,8 @@ func startLocalTargetServer(t *testing.T) (string, func()) {
 	}
 }
 
-// startTCPEchoServer starts a TCP echo server for CloseWrite testing. Like the
-// target server it binds its own ephemeral port and returns it.
+// startTCPEchoServer 启动一个用于 CloseWrite 测试的 TCP echo 服务器。
+// 与目标服务器一样，它绑定自己的临时端口并返回该端口。
 func startTCPEchoServer(t *testing.T) (string, func()) {
 	t.Helper()
 
@@ -257,12 +253,10 @@ type testHarness struct {
 
 	cli *client.Client
 
-	// closers holds the teardown of every component that started, in startup
-	// order; Close runs them in reverse. The socks5 proxy is only appended
-	// after its Start reported success: txthinking/socks5 registers its TCP
-	// runner before binding the UDP socket on the same address, so once Start
-	// has returned an error its Shutdown would block forever on the runner
-	// group's never-closed done channel.
+	// closers 按启动顺序保存每个已启动组件的清理函数；Close 按相反顺序执行。
+	// socks5 代理只有在 Start 报告成功之后才会被追加：txthinking/socks5
+	// 会在绑定同一地址的 UDP socket 之前注册 TCP runner，因此一旦 Start
+	// 返回错误，其 Shutdown 会因 runner 组永不关闭的 done channel 而永久阻塞。
 	closers []func()
 
 	cleanupOnce sync.Once
@@ -273,9 +267,9 @@ func newTestHarness(t *testing.T) *testHarness {
 
 	h := &testHarness{}
 
-	// Every listener gets a kernel-chosen port: two runs of this package on
-	// one machine must not fight over listeners, and a taken port has to fail
-	// loudly instead of being mistaken for a merely slow start.
+	// 每个监听器都使用内核选择的端口：同一台机器上本包的两个运行实例
+	// 不能互相争抢监听端口，且端口被占用时必须明显失败，而不是被误认为
+	// 仅仅是启动缓慢。
 	serverPort := freeTCPPort(t)
 	socksPort := freeSocks5Port(t)
 	httpPort := freeTCPPort(t)
@@ -283,7 +277,7 @@ func newTestHarness(t *testing.T) *testHarness {
 	h.socksAddr = loopbackAddr(socksPort)
 	h.httpAddr = loopbackAddr(httpPort)
 
-	// Write cert files
+	// 写入证书文件
 	h.tempDir = t.TempDir()
 	h.certPath = filepath.Join(h.tempDir, "cert.pem")
 	h.keyPath = filepath.Join(h.tempDir, "key.pem")
@@ -293,7 +287,7 @@ func newTestHarness(t *testing.T) *testHarness {
 	require.NoError(t, os.WriteFile(h.keyPath, []byte(ServerKey), 0644))
 	require.NoError(t, os.WriteFile(h.caPath, []byte(CACert), 0644))
 
-	// Start local target servers
+	// 启动本地目标服务器
 	targetAddr, targetCleanup := startLocalTargetServer(t)
 	t.Cleanup(targetCleanup)
 	h.targetAddr = targetAddr
@@ -302,12 +296,12 @@ func newTestHarness(t *testing.T) *testHarness {
 	t.Cleanup(echoCleanup)
 	h.echoAddr = echoAddr
 
-	// Registered after the local targets so it runs before their cleanups
-	// (t.Cleanup is LIFO): every component started below then tears itself
-	// down even when a t.Fatal unwinds the test without running its defers.
+	// 注册在本地目标之后，因此会先于它们的 cleanup 执行（t.Cleanup 是
+	// LIFO）：即使 t.Fatal 在未运行 defer 的情况下展开测试，下面启动的
+	// 每个组件也都会自行清理。
 	t.Cleanup(h.Close)
 
-	// Create server config
+	// 创建服务器配置
 	serverCfg := &serverconfig.FileConfig{
 		Timeout: 30,
 		Server: serverconfig.ServerConfig{
@@ -332,7 +326,7 @@ func newTestHarness(t *testing.T) *testHarness {
 	})
 	require.NoError(t, waitForReady("v3 server", h.serverAddr, serverErr, readinessTimeout))
 
-	// Create client config
+	// 创建客户端配置
 	clientCfg := &clientconfig.ClientConfig{
 		ConfigVersion: 3,
 		Servers: []*clientconfig.ServerProfile{
@@ -372,10 +366,10 @@ func newTestHarness(t *testing.T) *testHarness {
 	h.cli = cli
 	h.closers = append(h.closers, func() { _ = cli.Close() })
 
-	// Determine encryption method
+	// 确定加密方法
 	method := protocol.MethodFromString("aes-256-gcm")
 
-	// Create stream handler
+	// 创建 StreamHandler
 	timeouts := sharedconfig.NewTimeouts(clientCfg.TimeoutDuration())
 	shaperCfg := shaper.Config{
 		BatchWindowMS: clientCfg.Shaper.BatchWindowMS,
@@ -385,7 +379,7 @@ func newTestHarness(t *testing.T) *testHarness {
 	}
 	handler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, timeouts.StreamIdle)
 
-	// Start SOCKS5 proxy
+	// 启动 SOCKS5 代理
 	socksServer, err := proxy.NewSocks5Server(proxy.Socks5Options{
 		ListenAddr:        h.socksAddr,
 		Handler:           handler,
@@ -402,11 +396,11 @@ func newTestHarness(t *testing.T) *testHarness {
 		socksErr <- socksServer.Start()
 	}()
 	require.NoError(t, waitForReady("socks5 proxy", h.socksAddr, socksErr, readinessTimeout))
-	// Appended only now: a Start that failed inside socks5 leaves a runner
-	// group that Shutdown can never finish (see the closers field comment).
+	// 只有现在才追加：在 socks5 内部失败的 Start 会留下一个 Shutdown 永远
+	// 无法完成的 runner 组（参见 closers 字段的注释）。
 	h.closers = append(h.closers, func() { _ = socksServer.Close() })
 
-	// Start HTTP proxy
+	// 启动 HTTP 代理
 	httpProxy, err := proxy.NewHTTPProxyServer(proxy.HTTPProxyOptions{
 		ListenAddr: h.httpAddr,
 		SocksAddr:  h.socksAddr,
@@ -430,15 +424,14 @@ func newTestHarness(t *testing.T) *testHarness {
 
 func (h *testHarness) Close() {
 	h.cleanupOnce.Do(func() {
-		// Reverse startup order: proxies first, then the client, then the
-		// server the client was talking to.
+		// 按启动顺序的逆序执行：先代理，再客户端，最后是客户端所连接的服务器。
 		for _, closer := range slices.Backward(h.closers) {
 			closer()
 		}
 	})
 }
 
-// TestV3Integration_Socks5Proxy tests HTTP requests through the SOCKS5 proxy via the v3 tunnel
+// TestV3Integration_Socks5Proxy 测试通过 v3 隧道经 SOCKS5 代理发起 HTTP 请求
 func TestV3Integration_Socks5Proxy(t *testing.T) {
 	h := newTestHarness(t)
 
@@ -467,7 +460,7 @@ func TestV3Integration_Socks5Proxy(t *testing.T) {
 	t.Logf("SOCKS5 proxy response: %d bytes", len(body))
 }
 
-// TestV3Integration_HTTPProxy tests HTTP requests through the HTTP proxy via the v3 tunnel
+// TestV3Integration_HTTPProxy 测试通过 v3 隧道经 HTTP 代理发起 HTTP 请求
 func TestV3Integration_HTTPProxy(t *testing.T) {
 	h := newTestHarness(t)
 
@@ -489,7 +482,7 @@ func TestV3Integration_HTTPProxy(t *testing.T) {
 	t.Logf("HTTP proxy response: %d bytes", len(body))
 }
 
-// TestV3Integration_LocalDirect tests that local (LAN) connections go direct
+// TestV3Integration_LocalDirect 测试本地（LAN）连接走直连
 func TestV3Integration_LocalDirect(t *testing.T) {
 	h := newTestHarness(t)
 
@@ -522,7 +515,7 @@ func TestV3Integration_LocalDirect(t *testing.T) {
 	assert.Contains(t, string(body), "hello-from-target: /direct-test")
 }
 
-// TestV3Integration_CloseWrite tests TCP half-close through the SOCKS5 proxy
+// TestV3Integration_CloseWrite 测试通过 SOCKS5 代理进行 TCP 半关闭
 func TestV3Integration_CloseWrite(t *testing.T) {
 	h := newTestHarness(t)
 
@@ -535,58 +528,58 @@ func TestV3Integration_CloseWrite(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close() //nolint:errcheck
 
-	// Clear any deadline set by SOCKS5 negotiation
+	// 清除 SOCKS5 协商设置的任何 deadline
 	_ = conn.SetDeadline(time.Time{})
 
-	// The socks5.Client wraps the real TCP connection; extract it for CloseWrite
+	// socks5.Client 包装了真实的 TCP 连接；将其取出以执行 CloseWrite
 	socksClient, ok := conn.(*socks5.Client)
 	require.True(t, ok, "expected *socks5.Client from SOCKS5 dial")
 	tcpConn, ok := socksClient.TCPConn.(*net.TCPConn)
 	require.True(t, ok, "expected *net.TCPConn as underlying connection")
 
-	// Send message
+	// 发送消息
 	_, err = tcpConn.Write([]byte(msg))
 	require.NoError(t, err)
 
-	// Close write side (half-close)
+	// 关闭写侧（半关闭）
 	err = tcpConn.CloseWrite()
 	require.NoError(t, err)
 
-	// Read response
+	// 读取响应
 	buf := make([]byte, 1024)
 	nr, err := tcpConn.Read(buf)
 	require.NoError(t, err)
 	assert.Equal(t, msg, string(buf[:nr]))
 }
 
-// TestV3Integration_Router tests that router properly classifies hosts
+// TestV3Integration_Router 测试 router 是否正确地对主机进行分类
 func TestV3Integration_Router(t *testing.T) {
 	h := newTestHarness(t)
 
 	rt := h.cli.Router()
 
-	// With proxy_rule=proxy, all non-LAN hosts should be proxy
-	// LAN hosts always go direct regardless of rule
+	// proxy_rule=proxy 时，所有非 LAN 主机都应走代理
+	// LAN 主机无论何种规则都始终直连
 	assert.Equal(t, router.HostRuleDirect, rt.MatchHostRule("127.0.0.1"))
 	assert.Equal(t, router.HostRuleDirect, rt.MatchHostRule("localhost"))
 	assert.Equal(t, router.HostRuleProxy, rt.MatchHostRule("google.com"))
 	assert.Equal(t, router.HostRuleProxy, rt.MatchHostRule("baidu.com"))
 	assert.Equal(t, router.HostRuleProxy, rt.MatchHostRule("example.com"))
 
-	// Switch to auto rule
+	// 切换到 auto 规则
 	rt.SetProxyRule(router.ProxyRuleAuto)
 
-	// google.com should be proxied (foreign)
+	// google.com 应走代理（国外站点）
 	assert.Equal(t, router.HostRuleProxy, rt.MatchHostRule("google.com"))
 
-	// baidu.com should be direct (Chinese)
+	// baidu.com 应直连（国内站点）
 	assert.Equal(t, router.HostRuleDirect, rt.MatchHostRule("baidu.com"))
 
-	// LAN hosts still direct
+	// LAN 主机仍然直连
 	assert.Equal(t, router.HostRuleDirect, rt.MatchHostRule("127.0.0.1"))
 }
 
-// TestV3Integration_ConfigDefaults tests that config defaults are properly applied
+// TestV3Integration_ConfigDefaults 测试配置默认值是否正确生效
 func TestV3Integration_ConfigDefaults(t *testing.T) {
 	cfg := clientconfig.DefaultConfig()
 
@@ -598,18 +591,18 @@ func TestV3Integration_ConfigDefaults(t *testing.T) {
 	assert.Equal(t, 30, cfg.Timeout)
 	assert.Equal(t, "info", cfg.Log.Level)
 
-	// Clone should produce equivalent config
+	// Clone 应产生等价的配置
 	clone := cfg.Clone()
 	assert.Equal(t, cfg.Local.SocksPort, clone.Local.SocksPort)
 
-	// DefaultServer returns nil when no servers configured
+	// 未配置任何服务器时 DefaultServer 返回 nil
 	assert.Nil(t, cfg.DefaultServer())
 	assert.Equal(t, "", cfg.ServerURL())
 }
 
-// TestFreeSocks5PortIsFreeOnTCPAndUDP pins the reason the socks5 port is not
-// picked with freeTCPPort: the txthinking/socks5 server binds TCP and UDP on
-// the same address, so a port free on TCP alone still fails to start.
+// TestFreeSocks5PortIsFreeOnTCPAndUDP 固化了 socks5 端口不能用 freeTCPPort
+// 选择的原因：txthinking/socks5 服务器会在同一地址上绑定 TCP 和 UDP，
+// 因此仅 TCP 空闲的端口仍然无法启动。
 func TestFreeSocks5PortIsFreeOnTCPAndUDP(t *testing.T) {
 	port := freeSocks5Port(t)
 
@@ -622,9 +615,8 @@ func TestFreeSocks5PortIsFreeOnTCPAndUDP(t *testing.T) {
 	require.NoError(t, l.Close())
 }
 
-// TestWaitForReadyReportsStartError pins the fail-fast contract: a server that
-// failed to start must be reported with its real error, not disguised as a
-// readiness timeout.
+// TestWaitForReadyReportsStartError 固化了快速失败契约：启动失败的服务器
+// 必须以其真实错误上报，而不是伪装成就绪超时。
 func TestWaitForReadyReportsStartError(t *testing.T) {
 	addr := loopbackAddr(freeTCPPort(t))
 	startErr := make(chan error, 1)
@@ -639,8 +631,7 @@ func TestWaitForReadyReportsStartError(t *testing.T) {
 	assert.Less(t, time.Since(start), time.Second, "a start error must abort the wait immediately")
 }
 
-// TestWaitForReadyTimesOut covers the remaining case: nothing listening and no
-// start error to report.
+// TestWaitForReadyTimesOut 覆盖剩余的情况：没有任何监听且没有启动错误可上报。
 func TestWaitForReadyTimesOut(t *testing.T) {
 	addr := loopbackAddr(freeTCPPort(t))
 

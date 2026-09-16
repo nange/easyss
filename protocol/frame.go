@@ -142,11 +142,9 @@ func (f Frame) EncodedLen() int {
 	return FrameHeaderSize + int(f.Length)
 }
 
-// DecodeFrame decodes one frame from the head of data. It is the
-// non-streaming counterpart of the record layer: a decrypted CryptoRecord is
-// split in memory, so no io.Reader is involved. It returns the frame, the
-// number of bytes it occupied, and an error. Frame payloads alias data, whose
-// lifetime is the caller's.
+// DecodeFrame 从 data 头部解码一个帧。它是记录层的非流式对应物：解密的
+// CryptoRecord 在内存中切分，因此不涉及 io.Reader。返回帧、其占用的字节数
+// 以及错误。帧的 payload 别名自 data，其生命周期由调用方负责。
 func DecodeFrame(data []byte) (Frame, int, error) {
 	if len(data) < FrameHeaderSize {
 		return Frame{}, 0, io.ErrUnexpectedEOF
@@ -165,17 +163,15 @@ func DecodeFrame(data []byte) (Frame, int, error) {
 	return f, encoded, nil
 }
 
-// NewFrame builds a frame of the given type, copying payload so the caller may
-// reuse its buffer (the shaper hands over bytespool buffers). Length is always
-// derived from the payload, so the wire header can never disagree with the
-// bytes written after it.
+// NewFrame 构建给定类型的帧，并复制 payload，使调用方可以复用其缓冲区
+// （shaper 交出的是 bytespool 缓冲区）。Length 始终由 payload 推导，
+// 因此线上的头部永远不可能与随后写入的字节不一致。
 func NewFrame(typ FrameType, payload []byte) Frame {
 	return NewFrameWithPayload(typ, append([]byte(nil), payload...))
 }
 
-// NewFrameWithPayload wraps an existing payload buffer without copying it, for
-// callers that own a pooled buffer (cover traffic) and must hand it to the
-// shaper unchanged so it is returned to the pool.
+// NewFrameWithPayload 包装现有 payload 缓冲区而不复制，供持有池化缓冲区
+// （cover 流量）的调用方使用：必须原样交给 shaper，以便归还池中。
 func NewFrameWithPayload(typ FrameType, payload []byte) Frame {
 	checkPayloadLen(payload)
 	return Frame{
@@ -185,8 +181,8 @@ func NewFrameWithPayload(typ FrameType, payload []byte) Frame {
 	}
 }
 
-// NewZeroFrame builds a frame of the given type with a zeroed payload of
-// length bytes, for callers that fill the buffer afterwards (padding).
+// NewZeroFrame 构建给定类型的帧，payload 为 length 字节的零值缓冲区，
+// 供随后再填充缓冲区的调用方使用（padding）。
 func NewZeroFrame(typ FrameType, length uint16) Frame {
 	return Frame{
 		Type:    typ,
@@ -225,11 +221,10 @@ func checkPayloadLen(payload []byte) {
 	}
 }
 
-// AppendFrame appends a single frame (header + payload) to buf without
-// resetting existing content. This is the only frame-encoding path: the
-// header is derived from len(f.Payload) rather than from f.Length, so a Frame
-// whose two fields disagree (e.g. one just decoded from the wire) can never
-// produce a corrupt record.
+// AppendFrame 把单个帧（头部 + payload）追加到 buf，不重置已有内容。
+// 这是唯一的帧编码路径：头部由 len(f.Payload) 推导而非 f.Length，
+// 因此两个字段不一致的 Frame（例如刚从线上解码出来的）永远不会产生
+// 损坏的记录。
 func AppendFrame(buf []byte, f Frame) []byte {
 	var header [FrameHeaderSize]byte
 	header[0] = byte(f.Type)
@@ -238,7 +233,7 @@ func AppendFrame(buf []byte, f Frame) []byte {
 	return append(buf, f.Payload...)
 }
 
-// EncodeFrames encodes a list of frames into a single new buffer.
+// EncodeFrames 把一组帧编码进单个新缓冲区。
 func EncodeFrames(frames []Frame) []byte {
 	total := 0
 	for _, f := range frames {

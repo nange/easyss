@@ -138,12 +138,10 @@ func TestNewProxyHandler(t *testing.T) {
 	})
 }
 
-// TestTCPDialerOptions pins the mapping from the base timeout to the direct
-// dialer's parameters: Timeout goes through config.DialTimeout (base/3 clamped
-// to [3s, 15s]) while KeepAlive keeps the full base timeout, so long-lived
-// streams are reaped by the kernel instead of lingering half-open. The dialer
-// itself is now built lazily inside the dial closure, so this extraction is the
-// only place the mapping stays observable.
+// TestTCPDialerOptions 固定了基础超时到直连拨号器参数的映射：Timeout 经由
+// config.DialTimeout（base/3，限制在 [3s, 15s]）派生，而 KeepAlive 保留完整的基础超时，
+// 使长连接流由内核回收而不是半开地悬留。拨号器本身现在是在拨号闭包内惰性构建的，
+// 因此该映射只有在这里仍然可观测。
 func TestTCPDialerOptions(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -177,11 +175,9 @@ func TestNewTCPHandler(t *testing.T) {
 	}
 }
 
-// TestTCPHandlerDialTarget covers the shared dial piece of the TCP handler: the
-// direct dial resolves the network from the literal target, and the post-dial
-// SSRF guard rejects a LAN remote address. Neither the dial timeout nor the
-// keepalive is observable from a dialed connection, so the mapping from the
-// base timeout lives in TestTCPDialerOptions.
+// TestTCPHandlerDialTarget 覆盖 TCP handler 共享的拨号部分：直连拨号根据目标字面量
+// 解析网络，拨号后的 SSRF 防护会拒绝 LAN 远端地址。拨号超时和 keepalive 都无法从
+// 已建立的连接上观测到，因此基础超时的映射由 TestTCPDialerOptions 覆盖。
 func TestTCPHandlerDialTarget(t *testing.T) {
 	t.Run("按目标字面量选择网络", func(t *testing.T) {
 		h := newTCPHandler(120*time.Second, 30*time.Second, nil)
@@ -226,10 +222,9 @@ func TestNewUDPHandler(t *testing.T) {
 	}
 }
 
-// TestNewICMPHandler only checks construction: every ICMP dial failure path
-// runs through the shared dialer (covered by TestTCPHandlerDialTarget), and
-// reaching an actual ICMP exchange needs raw-socket privileges. The dial timeout
-// is derived through config.DialTimeout, which config.TestDialTimeout pins.
+// TestNewICMPHandler 只检查构造：所有 ICMP 拨号失败路径都走共享的 dialer
+// （由 TestTCPHandlerDialTarget 覆盖），而真正进行 ICMP 交换需要原始套接字权限。
+// 拨号超时通过 config.DialTimeout 派生，由 config.TestDialTimeout 固定。
 func TestNewICMPHandler(t *testing.T) {
 	h := newICMPHandler(30 * time.Second)
 	if h == nil {

@@ -14,10 +14,9 @@ import (
 
 var singletonLockFile *os.File
 
-// tryAcquireSingletonLock attempts to acquire the exclusive file lock that
-// ensures only one instance of the app runs at a time. It returns
-// errAnotherInstance when another process holds the lock, or the underlying
-// error (e.g. the lock file cannot be created) otherwise.
+// tryAcquireSingletonLock 尝试获取确保同一时刻只运行一个应用实例的
+// 排他文件锁。当另一个进程持有该锁时返回 errAnotherInstance，
+// 否则返回底层错误（例如无法创建锁文件）。
 func tryAcquireSingletonLock() error {
 	lockPath := filepath.Join(os.TempDir(), fmt.Sprintf("easyss-%d.lock", os.Getuid()))
 
@@ -31,7 +30,7 @@ func tryAcquireSingletonLock() error {
 		return errAnotherInstance
 	}
 
-	// Write PID for diagnostic purposes.
+	// 写入 PID 供诊断使用。
 	_ = f.Truncate(0)
 	_, _ = f.Seek(0, 0)
 	_, _ = fmt.Fprintf(f, "%d\n", os.Getpid())
@@ -40,8 +39,8 @@ func tryAcquireSingletonLock() error {
 	return nil
 }
 
-// acquireSingletonLock acquires the singleton lock, exiting the process when
-// the lock is unavailable. Must be called after daemonization.
+// acquireSingletonLock 获取单实例锁，锁不可用时退出进程。
+// 必须在守护化之后调用。
 func acquireSingletonLock() {
 	err := tryAcquireSingletonLock()
 	switch {
@@ -56,7 +55,7 @@ func acquireSingletonLock() {
 	}
 }
 
-// releaseSingletonLock releases the file lock and cleans up the lock file.
+// releaseSingletonLock 释放文件锁并清理锁文件。
 func releaseSingletonLock() {
 	if singletonLockFile != nil {
 		_ = util.Unflock(singletonLockFile)

@@ -7,17 +7,16 @@ import (
 	"testing"
 )
 
-// maxUnixSocketPath is the shortest sun_path budget Go's net package builds
-// against: 104 bytes on macOS/BSD (Linux allows 108). Staying under it is what
-// lets the same socket test pass on every platform.
+// maxUnixSocketPath 是 Go net 包所遵循的最短 sun_path 预算：
+// macOS/BSD 上为 104 字节（Linux 允许 108）。保持在其之下，
+// 才能让同一个 socket 测试在所有平台上通过。
 const maxUnixSocketPath = 104
 
-// waylandRuntimeDir returns a short directory to act as the session runtime
-// directory, optionally with a live wayland-0 socket in it. The sun_path of a
-// Unix socket is limited to about 104 bytes, and t.TempDir() embeds the test
-// name, which is long enough to exceed that limit on macOS and Windows — the
-// bind then fails with "invalid argument", not with anything that names the
-// real cause.
+// waylandRuntimeDir 返回一个短目录作为会话运行时目录，可选地在其内
+// 放置一个真实的 wayland-0 socket。Unix socket 的 sun_path 限制约为
+// 104 字节，而 t.TempDir() 会嵌入测试名，长度足以在 macOS 和 Windows
+// 上超过该限制——此时 bind 会以 "invalid argument" 失败，
+// 而不是任何能指出真正原因的错误。
 func waylandRuntimeDir(t *testing.T, withSocket bool) string {
 	t.Helper()
 
@@ -29,8 +28,8 @@ func waylandRuntimeDir(t *testing.T, withSocket bool) string {
 
 	socketPath := filepath.Join(dir, "wayland-0")
 	if len(socketPath) > maxUnixSocketPath {
-		// Nothing about the code under test depends on the length, so a temp
-		// root this deep is an environment limit, not a failure.
+		// 被测代码的任何部分都不依赖路径长度，因此临时根目录过深
+		// 只是环境限制，不是测试失败。
 		t.Skipf("temp root leaves no sun_path budget: %d bytes for %s", len(socketPath), socketPath)
 	}
 
@@ -41,8 +40,8 @@ func waylandRuntimeDir(t *testing.T, withSocket bool) string {
 		}
 		t.Cleanup(func() { ln.Close() }) //nolint:errcheck
 
-		// Test premise: a Unix listener really is a socket, so the ModeSocket
-		// check in firstWaylandDisplay is what accepts it (not the name).
+		// 测试前提：Unix listener 确实是 socket，因此 firstWaylandDisplay
+		// 中基于 ModeSocket 的检查（而非名称）才会接受它。
 		info, err := os.Stat(socketPath)
 		if err != nil {
 			t.Fatal(err)
@@ -64,9 +63,9 @@ func TestFirstWaylandDisplay(t *testing.T) {
 
 	t.Run("没有 wayland socket", func(t *testing.T) {
 		dir := waylandRuntimeDir(t, false)
-		// A non-matching entry and a matching name that is not a socket: only
-		// an actual socket may be reported, otherwise a stale lock file named
-		// wayland-0 would be handed to the tray as WAYLAND_DISPLAY.
+		// 不匹配的条目，以及名称匹配但不是 socket 的文件：只有真正的
+		// socket 才会被返回，否则名为 wayland-0 的过期锁文件会被当作
+		// WAYLAND_DISPLAY 传给托盘。
 		if err := os.WriteFile(filepath.Join(dir, "bus"), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -84,7 +83,7 @@ func TestFirstWaylandDisplay(t *testing.T) {
 		}
 	})
 
-	// The helper is only ever called with a GLOB pattern that cannot fail
-	// (filepath.Join of a directory and "wayland-*"), so the ErrBadPattern
-	// branch has no reachable input to test.
+	// 该辅助函数只会被传入不会失败的 GLOB 模式
+	// （目录与 "wayland-*" 的 filepath.Join），因此 ErrBadPattern
+	// 分支没有可达的输入可供测试。
 }

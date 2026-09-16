@@ -1,18 +1,18 @@
 #!/bin/bash
-# Assemble Easyss.app bundle for macOS.
+# 为 macOS 组装 Easyss.app 应用包。
 #
-# Usage: bash scripts/app-bundle.sh <binary> <icns> <plist> [out-dir]
-#   binary:  path to the compiled Go binary (e.g., bin/easyss)
-#   icns:    path to the .icns icon (e.g., icon/Easyss.icns)
-#   plist:   path to Info.plist (e.g., cmd/easyss/Info.plist)
-#   out-dir: directory (relative to the repo root) to place Easyss.app in,
-#            defaults to bin so `make easyss-mac-app` keeps writing bin/Easyss.app.
-#            CI passes bin/darwin-<arch> so both macOS architectures keep their
-#            own bundle instead of overwriting one another.
+# 用法：bash scripts/app-bundle.sh <binary> <icns> <plist> [out-dir]
+#   binary:  编译好的 Go 二进制文件路径（例如 bin/easyss）
+#   icns:    .icns 图标文件路径（例如 icon/Easyss.icns）
+#   plist:   Info.plist 文件路径（例如 cmd/easyss/Info.plist）
+#   out-dir: 放置 Easyss.app 的目录（相对于仓库根目录），
+#            默认为 bin，这样 `make easyss-mac-app` 会持续写入 bin/Easyss.app。
+#            CI 传入 bin/darwin-<arch>，使两个 macOS 架构各自保留
+#            自己的应用包，而不是互相覆盖。
 #
-# The .icns icon is pre-generated (see scripts/gen_icns.sh, run on macOS)
-# and checked into the repo, so this script is platform-independent.
-# Output: <out-dir>/Easyss.app/
+# .icns 图标是预先生成的（参见 scripts/gen_icns.sh，在 macOS 上运行）
+# 并已签入仓库，因此本脚本与平台无关。
+# 输出：<out-dir>/Easyss.app/
 
 set -euo pipefail
 

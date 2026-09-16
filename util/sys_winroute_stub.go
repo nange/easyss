@@ -4,8 +4,8 @@ package util
 
 import "net"
 
-// defaultRouteFromWinTable is implemented on windows; other platforms fall
-// back to the netroute probe in SysGatewayAndDevice.
+// defaultRouteFromWinTable 在 windows 上实现；其他平台回退到
+// SysGatewayAndDevice 中的 netroute 探测。
 func defaultRouteFromWinTable() (*net.Interface, net.IP, error) {
 	return nil, nil, errUnsupportedPlatform
 }

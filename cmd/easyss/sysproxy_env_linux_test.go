@@ -20,8 +20,7 @@ type recordedProxyEnvCmd struct {
 	args []string
 }
 
-// installProxyEnvExec replaces the command runner for the duration of the test
-// and collects every command that is issued.
+// installProxyEnvExec 在测试期间替换命令执行器，并收集发出的每一条命令。
 func installProxyEnvExec(t *testing.T, run func(name string, args []string) (string, error)) *[]recordedProxyEnvCmd {
 	t.Helper()
 
@@ -38,8 +37,8 @@ func installProxyEnvExec(t *testing.T, run func(name string, args []string) (str
 	return cmds
 }
 
-// stubProxyEnvExec succeeds for every command, serving dump for
-// `systemctl --user show-environment`; fail makes every command fail instead.
+// stubProxyEnvExec 让每条命令都成功，并为 `systemctl --user show-environment`
+// 提供 dump 内容；fail 为 true 时则让所有命令都失败。
 func stubProxyEnvExec(t *testing.T, dump string, fail bool) *[]recordedProxyEnvCmd {
 	t.Helper()
 
@@ -54,8 +53,7 @@ func stubProxyEnvExec(t *testing.T, dump string, fail bool) *[]recordedProxyEnvC
 	})
 }
 
-// stubFailingCommand lets only failName fail, so that the fallback to the other
-// environment store can be exercised.
+// stubFailingCommand 只让 failName 失败，以便测试回退到另一个环境存储的逻辑。
 func stubFailingCommand(t *testing.T, failName string) *[]recordedProxyEnvCmd {
 	t.Helper()
 
@@ -90,8 +88,7 @@ func sysProxyAssignments(port int) []string {
 	return assignments
 }
 
-// findProxyEnvCmd returns the arguments of the recorded command whose name
-// matches and whose arguments contain every wanted element.
+// findProxyEnvCmd 返回名称匹配且参数包含所有期望元素的已记录命令的参数。
 func findProxyEnvCmd(cmds []recordedProxyEnvCmd, name string, wanted ...string) []string {
 	for _, cmd := range cmds {
 		if cmd.name != name {
@@ -111,10 +108,9 @@ func findProxyEnvCmd(cmds []recordedProxyEnvCmd, name string, wanted ...string) 
 	return nil
 }
 
-// assertNoDBusSystemdFlag guards the split between the two environment stores:
-// passing --systemd to dbus-update-activation-environment makes it write to the
-// systemd user manager as well, where it would re-create the variables that
-// `systemctl unset-environment` just removed.
+// assertNoDBusSystemdFlag 守护两个环境存储之间的分工：向
+// dbus-update-activation-environment 传递 --systemd 会使其同时写入 systemd
+// 用户管理器，从而重新创建 `systemctl unset-environment` 刚刚删除的变量。
 func assertNoDBusSystemdFlag(t *testing.T, cmds []recordedProxyEnvCmd) {
 	t.Helper()
 
@@ -167,8 +163,8 @@ func TestSetSysProxyEnvPublishesToSystemdUserManager(t *testing.T) {
 		t.Fatalf("systemd user manager not updated, commands: %v", *cmds)
 	}
 
-	// One store is enough: publishing to D-Bus as well would duplicate the work
-	// and, with dbus-broker, target the very same environment.
+	// 一个存储就足够了：同时发布到 D-Bus 会重复工作，而且在 dbus-broker
+	// 下还会指向完全相同的环境。
 	if args := findProxyEnvCmd(*cmds, "dbus-update-activation-environment"); args != nil {
 		t.Fatalf("D-Bus activation environment updated although systemd worked: %v", args)
 	}
@@ -191,13 +187,13 @@ func TestUnsetSysProxyEnvRestoresPreviousValues(t *testing.T) {
 		t.Fatal("unsetSysProxyEnv reported that nothing was restored")
 	}
 
-	// The variables that existed before easyss started are put back.
+	// easyss 启动前已存在的变量会被恢复。
 	restored := []string{"http_proxy=http://old.example:1234", "NO_PROXY=example.com"}
 	if args := findProxyEnvCmd(*cmds, "systemctl", append([]string{"--user", "set-environment"}, restored...)...); args == nil {
 		t.Fatalf("previous values not restored, commands: %v", *cmds)
 	}
 
-	// The ones easyss introduced are removed again.
+	// easyss 引入的变量会被再次移除。
 	unsetArgs := findProxyEnvCmd(*cmds, "systemctl", "--user", "unset-environment")
 	if unsetArgs == nil {
 		t.Fatalf("variables not unset, commands: %v", *cmds)
@@ -242,8 +238,8 @@ func TestSetSysProxyEnvFallsBackToDBus(t *testing.T) {
 		t.Fatalf("unsetSysProxyEnv: %v", err)
 	}
 
-	// dbus-daemon cannot remove a variable, so the pre-existing value is put
-	// back and the ones easyss added are emptied instead.
+	// dbus-daemon 无法删除变量，因此预先存在的值会被放回，而 easyss 添加
+	// 的变量则被清空。
 	wanted := []string{"http_proxy=http://old.example:1234", "https_proxy=", "NO_PROXY=example.com"}
 	if args := findProxyEnvCmd(*cmds, "dbus-update-activation-environment", wanted...); args == nil {
 		t.Fatalf("D-Bus activation environment not restored, commands: %v", *cmds)
@@ -281,7 +277,7 @@ func TestSetSysProxyEnvReportsFailureWhenNoStoreIsReachable(t *testing.T) {
 		t.Fatal("expected an error when no environment store could be updated")
 	}
 
-	// A failed set must not make a later unset believe it has something to do.
+	// 失败的 set 不能让后续的 unset 误以为有工作要做。
 	unsetApplied, unsetErr := unsetSysProxyEnv()
 	if unsetApplied || unsetErr != nil {
 		t.Fatalf("unsetSysProxyEnv = (%v, %v), want (false, nil)", unsetApplied, unsetErr)
@@ -311,8 +307,8 @@ func TestUnsetSysProxyEnvKeepsStateWhenRestoreFails(t *testing.T) {
 		t.Fatalf("unsetSysProxyEnv = (%v, %v), want a failure", applied, err)
 	}
 
-	// The snapshot survives the failure, so a retry -- the tray reverts its
-	// checkmark and lets the user click again -- can still restore the values.
+	// 快照在失败后仍然保留，因此重试——托盘撤销勾选并让用户再次点击——
+	// 仍然可以恢复这些值。
 	failSystemd = false
 	applied, err := unsetSysProxyEnv()
 	if err != nil {

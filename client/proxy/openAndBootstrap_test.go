@@ -54,11 +54,9 @@ func (m *mockTransport) Open(ctx context.Context, req transport.OpenRequest) (tr
 	return &mockStream{}, nil
 }
 
-// WarmUp records the call so the proxy layer's warm-up plumbing can be
-// asserted without any real network; warmUpErr is returned to the proxy layer,
-// which logs it and hands it back to its own caller. warmUpDeadline records
-// the probe deadline the proxy layer derived from its timeout argument (zero
-// when the context carried no deadline).
+// WarmUp 记录调用，使代理层的预热管线无需任何真实网络即可被断言；warmUpErr 返回给
+// 代理层，由代理层记录日志后交还给它自己的调用方。warmUpDeadline 记录代理层根据其
+// timeout 参数推导出的探测截止时间（上下文未携带截止时间时为零值）。
 func (m *mockTransport) WarmUp(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -83,7 +81,7 @@ func (m *mockTransport) warmUpCalls() int {
 	return m.warmUpCount
 }
 
-// warmUpDeadlineOf returns the deadline of the context the last warm-up saw.
+// warmUpDeadlineOf 返回最近一次预热时上下文里的截止时间。
 func (m *mockTransport) warmUpDeadlineOf() time.Time {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -202,7 +200,7 @@ func TestOpenAndBootstrap_OpenFailureNoRetry(t *testing.T) {
 	}
 }
 
-// saltCapturingTransport wraps a Transport and records the Salt from each Open call.
+// saltCapturingTransport 包装一个 Transport，并记录每次 Open 调用中的 Salt。
 type saltCapturingTransport struct {
 	inner transport.Transport
 	mu    sync.Mutex

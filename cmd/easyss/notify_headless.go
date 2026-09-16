@@ -2,7 +2,6 @@
 
 package main
 
-// notifyConfigError is a no-op in headless builds: there is no system
-// tray to show a notification from, and the caller already logs the
-// startup error.
+// notifyConfigError 在 headless 构建中是空操作：没有系统托盘可显示
+// 通知，且调用方已经记录启动错误。
 func notifyConfigError(error) {}

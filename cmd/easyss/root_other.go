@@ -9,15 +9,13 @@ import (
 	"time"
 )
 
-// IsRoot reports whether the process runs with administrator privileges. On
-// platforms without the unix elevation flow, the check is bypassed (returns
-// true) so the direct TUN path is used.
+// IsRoot 报告进程是否以管理员权限运行。在没有 unix 提权流程的平台上，
+// 该检查被绕过（返回 true），从而使用直接的 TUN 路径。
 func IsRoot() bool {
 	return true
 }
 
-// SpawnTunHelper is not supported on this platform: the elevated-helper flow
-// exists only on darwin/linux.
+// SpawnTunHelper 在此平台不受支持：提权 helper 流程只存在于 darwin/linux。
 func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeout time.Duration) (io.WriteCloser, net.Listener, error) {
 	return nil, nil, fmt.Errorf("SpawnTunHelper is not supported on this platform")
 }

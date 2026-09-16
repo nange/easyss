@@ -31,8 +31,8 @@ func runDaemon() {
 
 	exe, _ := util.ExecutablePath()
 
-	// Build args for child process, stripping -daemon/--daemon flags and appending
-	// --daemon=false to prevent infinite daemonization loops.
+	// 构建子进程参数：剔除 -daemon/--daemon 标志并追加
+	// --daemon=false，防止无限守护化循环。
 	var args []string
 	for _, arg := range os.Args[1:] {
 		if arg == "-daemon" || arg == "--daemon" {
@@ -47,9 +47,9 @@ func runDaemon() {
 
 	cmd := exec.Command(exe, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setsid: true, // Create a new session, detach from controlling terminal
+		Setsid: true, // 创建新会话，脱离控制终端
 	}
-	// Stdin/Stdout/Stderr nil -> /dev/null, prevents binding to the terminal
+	// Stdin/Stdout/Stderr 为 nil -> /dev/null，避免绑定到终端
 
 	if err := cmd.Start(); err != nil {
 		log.Error("[EASYSS-V3] daemon start", "err", err)

@@ -38,7 +38,7 @@ func TestIsIP_EdgeCases(t *testing.T) {
 		{"2001:db8::1", true},
 		{"2001:db8:0:0:0:0:2:1", true},
 		{"2001:db8::2:1", true},
-		{"::ffff:192.0.2.1", true}, // IPv4-mapped IPv6
+		{"::ffff:192.0.2.1", true}, // IPv4 映射的 IPv6
 		// 无效输入
 		{"", false},
 		{"not-an-ip", false},
@@ -244,21 +244,21 @@ func TestIsLANHost(t *testing.T) {
 func TestIsLANHostResolved(t *testing.T) {
 	ctx := context.Background()
 
-	// Literal LAN IPs are caught by the fast path (no DNS).
+	// 字面 LAN IP 会被快速路径拦截（不发起 DNS 查询）。
 	assert.True(t, IsLANHostResolved(ctx, "127.0.0.1:8080"))
 	assert.True(t, IsLANHostResolved(ctx, "10.0.0.1"))
 	assert.True(t, IsLANHostResolved(ctx, "[::1]:80"))
 
-	// Literal public IPs are rejected by the fast path.
+	// 字面公网 IP 会被快速路径直接放行（返回 false）。
 	assert.False(t, IsLANHostResolved(ctx, "8.8.8.8:53"))
 	assert.False(t, IsLANHostResolved(ctx, "1.1.1.1"))
 
-	// "localhost" resolves (via the hosts file, no external network) to a
-	// loopback address, so a domain that points at the LAN is now rejected.
+	// "localhost"（通过 hosts 文件解析，不依赖外部网络）解析为
+	// 环回地址，因此指向 LAN 的域名现在会被拒绝（判定为 LAN）。
 	assert.True(t, IsLANHostResolved(ctx, "localhost:80"))
 	assert.True(t, IsLANHostResolved(ctx, "localhost"))
 
-	// Empty / invalid input never resolves to LAN.
+	// 空 / 无效输入永远不会被判定为 LAN。
 	assert.False(t, IsLANHostResolved(ctx, ""))
 	assert.False(t, IsLANHostResolved(ctx, "invalid:0"))
 }

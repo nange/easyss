@@ -7,11 +7,10 @@ import (
 	"time"
 )
 
-// CloseBoth returns the onClose callback the callers of Bidirectional need: it
-// closes every non-nil closer once per invocation. The relay invokes onClose
-// exactly once per termination, and all three call sites (client proxied path,
-// client direct path, server TCP handler) close the same pair of connections,
-// so the closure is defined once here instead of being retyped.
+// CloseBoth 返回 Bidirectional 的调用方所需的 onClose 回调：每次调用会关闭
+// 所有非 nil 的 closer。中继在每次终止时恰好调用一次 onClose，且三处调用点
+// （客户端代理路径、客户端直连路径、服务端 TCP handler）关闭的都是同一对连接，
+// 因此该闭包在这里只定义一次，而不是重复书写。
 func CloseBoth(closers ...io.Closer) func() {
 	return func() {
 		for _, c := range closers {
@@ -35,38 +34,31 @@ func resetTimer(t *time.Timer, d time.Duration) {
 type Result struct {
 	Err      error
 	TimedOut bool
-	// Drained reports that the relay was terminated early by the drain
-	// mechanism (BidirectionalWithDrain): the stream sat idle beyond
-	// drainIdle while drainWhen reported the owning slot is due for
-	// eviction, so the lingering connection was closed before the full idle
-	// timeout.
+	// Drained 表示中继被 drain 机制提前终止（BidirectionalWithDrain）：
+	// 当 drainWhen 报告所属 slot 该被淘汰时，流空闲超过 drainIdle 即被关闭，
+	// 而无需等待完整的空闲超时。
 	Drained bool
 }
 
-// Bidirectional runs two copy goroutines concurrently with a shared idle
-// timeout. The signalActivity callback passed to each copy function should be
-// invoked whenever data flows, to reset the idle timer. If no activity is
-// observed for idleTimeout, onClose is invoked and a timeout error is returned.
+// Bidirectional 并发运行两个拷贝 goroutine，共享同一个空闲超时。传给每个拷贝
+// 函数的 signalActivity 回调应在有数据流动时调用，以重置空闲计时器。如果
+// idleTimeout 内没有观察到任何活动，则调用 onClose 并返回超时错误。
 //
-// The onClose callback is invoked exactly once when the relay terminates
-// (whether by completion, error, or timeout).
+// 中继终止（无论是完成、出错还是超时）时，onClose 回调恰好被调用一次。
 //
-// Each copy function returns nil on clean EOF, or an error otherwise. The
-// first non-nil, non-EOF error is returned. If both copies complete without
-// error, nil is returned.
+// 每个拷贝函数在干净 EOF 时返回 nil，否则返回错误。返回第一个非 nil、
+// 非 EOF 的错误。若两个拷贝都无错误地完成，则返回 nil。
 func Bidirectional(idleTimeout time.Duration, onClose func(), srcToDst, dstToSrc func(signalActivity func()) error) Result {
 	return bidirectional(idleTimeout, nil, 0, onClose, srcToDst, dstToSrc)
 }
 
-// BidirectionalWithDrain is Bidirectional plus an early-close drain
-// mechanism: while drainWhen reports the relay should wind down (e.g. the
-// owning connection slot is due for rotation or retirement), a relay that has
-// been idle for at least drainIdle is closed instead of waiting out the full
-// idle timeout. Activity (signalActivity or a completed copy) restarts the
-// idle clock, so streams that keep flowing are never drained — only
-// lingering idle connections, which is exactly what postpones slot rotation.
-// drainWhen == nil or drainIdle <= 0 disables the mechanism and the behavior
-// is identical to Bidirectional.
+// BidirectionalWithDrain 是 Bidirectional 加上提前关闭的 drain 机制：
+// 当 drainWhen 报告中继该收尾时（例如所属连接 slot 到期需要轮换或退役），
+// 已空闲至少 drainIdle 的中继会被关闭，而不用等满整个空闲超时。活动
+// （signalActivity 或某个拷贝完成）会重新启动空闲计时，因此持续有流量的
+// 流永远不会被 drain——只有迟迟空闲的连接才会，而正是它们在推迟 slot 轮换。
+// drainWhen 为 nil 或 drainIdle <= 0 时该机制被禁用，行为与 Bidirectional
+// 完全相同。
 func BidirectionalWithDrain(idleTimeout time.Duration, drainWhen func() bool, drainIdle time.Duration, onClose func(), srcToDst, dstToSrc func(signalActivity func()) error) Result {
 	return bidirectional(idleTimeout, drainWhen, drainIdle, onClose, srcToDst, dstToSrc)
 }
@@ -87,20 +79,18 @@ func bidirectional(idleTimeout time.Duration, drainWhen func() bool, drainIdle t
 	timer := time.NewTimer(idleTimeout)
 	defer timer.Stop()
 
-	// idleSince tracks the moment the relay's idle clock started, kept in
-	// lockstep with the timer: both restart on activity and on a completed
-	// copy. The drain check compares against it so the drain grace is
-	// measured from the same reference as the idle timeout.
+	// idleSince 记录中继空闲计时器启动的时刻，与定时器保持同步：
+	// 两者都会在收到活动或某个拷贝完成时重新启动。drain 检查与它比较，
+	// 使 drain 宽限期的度量基准与空闲超时一致。
 	idleSince := time.Now()
 	resetIdle := func() {
 		idleSince = time.Now()
 		resetTimer(timer, idleTimeout)
 	}
 
-	// Drain ticker: sampled periodically rather than re-armed on every
-	// state change, because the slot marks (drainWhen) flip asynchronously
-	// from the health loop. The tick is a fraction of drainIdle so the
-	// drain fires within ~drainIdle..drainIdle+tick of going idle.
+	// drain 计时器：周期性采样而不是在每次状态变化时重新武装，因为 slot 标记
+	// （drainWhen）由健康检查循环异步翻转。tick 取 drainIdle 的一个分数，
+	// 因此进入空闲后 drain 会在约 drainIdle..drainIdle+tick 内触发。
 	var drainC <-chan time.Time
 	if drainWhen != nil && drainIdle > 0 {
 		tick := max(drainIdle/6, 10*time.Millisecond)
@@ -132,7 +122,7 @@ func bidirectional(idleTimeout time.Duration, drainWhen func() bool, drainIdle t
 				if onClose != nil {
 					onClose()
 				}
-				// Drain both goroutine results so they can exit cleanly.
+				// 排空两个 goroutine 的结果，使它们能干净地退出。
 				for range 2 {
 					select {
 					case <-errCh:
@@ -149,7 +139,7 @@ func bidirectional(idleTimeout time.Duration, drainWhen func() bool, drainIdle t
 			if onClose != nil {
 				onClose()
 			}
-			// Drain both goroutine results so they can exit cleanly.
+			// 排空两个 goroutine 的结果，使它们能干净地退出。
 			for range 2 {
 				select {
 				case <-errCh:
@@ -162,8 +152,8 @@ func bidirectional(idleTimeout time.Duration, drainWhen func() bool, drainIdle t
 			}
 		}
 	}
-	// Unreachable in practice: the loop only exits when done == 2, and every
-	// path that increments done to 2 returns from inside the select. This
-	// return exists solely to satisfy the compiler's control-flow analysis.
+	// 实际不可达：循环只在 done == 2 时退出，而所有把 done 递增到 2 的路径
+	// 都会在 select 内直接返回。此处的 return 仅仅是为了满足编译器的
+	// 控制流分析。
 	return Result{Err: firstErr}
 }

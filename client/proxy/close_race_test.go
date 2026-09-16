@@ -10,12 +10,10 @@ import (
 	"github.com/nange/easyss/v3/protocol"
 )
 
-// TestSocks5CloseRacingStart guards against closing a socks5 server right
-// after starting it, which races with the accept-loop setup inside the
-// txthinking/socks5 runnergroup library. GOMAXPROCS(1) forces the Close
-// call to run before the Start goroutine sets up its accept loop: without
-// synchronization the listener leaks (the port keeps accepting) or the
-// Shutdown deadlocks. After Close returns, the port must be closed.
+// TestSocks5CloseRacingStart 防护"刚启动 socks5 服务器就立即关闭"的场景：这会与
+// txthinking/socks5 runnergroup 库内部的 accept 循环初始化产生竞争。GOMAXPROCS(1)
+// 强制 Close 调用先于 Start 协程建立 accept 循环执行：没有同步机制的话，监听器会
+// 泄漏（端口仍在接受连接），或 Shutdown 死锁。Close 返回后，端口必须已关闭。
 func TestSocks5CloseRacingStart(t *testing.T) {
 	old := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(old)
@@ -46,8 +44,7 @@ func TestSocks5CloseRacingStart(t *testing.T) {
 		go srv.Start() //nolint:errcheck
 		_ = srv.Close()
 
-		// Give a leaked accept loop a chance to run, then verify the
-		// port is actually closed.
+		// 给泄漏的 accept 循环一个运行的机会，然后验证端口确实已关闭。
 		deadline := time.Now().Add(500 * time.Millisecond)
 		for time.Now().Before(deadline) {
 			c, err := net.DialTimeout("tcp", addr, 50*time.Millisecond)

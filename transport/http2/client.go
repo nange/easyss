@@ -23,24 +23,21 @@ import (
 	"github.com/nange/easyss/v3/transport"
 )
 
-// maxGrowEvents bounds the ring of recent slot-growth events exposed via
-// TransportStats.GrowEvents — enough to attribute a connection-count jump
-// to its triggering requests without unbounded memory growth.
+// maxGrowEvents 限制通过 TransportStats.GrowEvents 暴露的近期槽位增长事件环形
+// 缓冲大小——足以把连接数跳变归因到触发它的请求，同时避免无界的内存增长。
 const maxGrowEvents = 16
 
-// http2Transport is a facade over the HTTP/2 client machinery: streams are
-// mapped onto connections by slotScheduler, and the per-connection state
-// (degradation, rotation) is driven by slotLifecycle. This type only wires
-// the two together and speaks HTTP.
+// http2Transport 是 HTTP/2 客户端机制的门面：流由 slotScheduler 映射到连接上，
+// 每连接的状态（降级、轮换）由 slotLifecycle 驱动。该类型只负责把两者
+// 连接起来并对外提供 HTTP 能力。
 type http2Transport struct {
 	sched     *slotScheduler
 	lifecycle *slotLifecycle
 
 	serverURL string
 
-	// growEvents is a bounded ring of recent slot-growth events, oldest
-	// first; snapshotted (newest first) into TransportStats.GrowEvents.
-	// Guarded by growMu.
+	// growEvents 是近期槽位增长事件的有界环形缓冲，最旧的在最前；
+	// 以最新优先的顺序快照进 TransportStats.GrowEvents。由 growMu 保护。
 	growEvents []transport.GrowEvent
 	growMu     sync.Mutex
 
@@ -48,10 +45,9 @@ type http2Transport struct {
 	cancel context.CancelFunc
 }
 
-// The slot-count and stream-threshold bounds live in the shared config
-// package (MaxConnCountMax, MaxStreamThreshold) so the client config
-// clamping and the transport guard always agree; see config/types.go for
-// the rationale.
+// 槽位数量与流阈值上限定义在共享 config 包中（MaxConnCountMax、
+// MaxStreamThreshold），这样客户端配置的钳制与传输层的防护总是保持一致；
+// 理由详见 config/types.go。
 
 type Config struct {
 	ServerURL         string
@@ -59,19 +55,17 @@ type Config struct {
 	MaxSlotCount      int
 	StreamThreshold   int
 	PrioritySlotRatio float64
-	ConnLifetime      time.Duration // max age of a connection before rotation (0: default)
-	ConnMaxBytes      int64         // max bytes carried by a connection in either direction before rotation (0: default)
+	ConnLifetime      time.Duration // 连接轮换前的最大存活时长（0：使用默认值）
+	ConnMaxBytes      int64         // 轮换前连接在任一方向承载的最大字节数（0：使用默认值）
 	Timeout           time.Duration
 	DialContext       func(ctx context.Context, network, addr string) (net.Conn, error)
-	// ProbeToken is the capability token for the server's /v3/probe
-	// endpoint (derived from the master key). Empty disables active
-	// probing, leaving passive-only degraded detection.
+	// ProbeToken 是服务端 /v3/probe 端点的能力令牌（由主密钥派生）。
+	// 为空则禁用主动探测，只保留被动式降级检测。
 	ProbeToken string
 }
 
-// New builds the transport. The returned error is contractual: a nil TLSConfig
-// cannot be dialed (newSlot clones it), so it is rejected here instead of
-// panicking on the first Open.
+// New 构建传输层。返回的错误是契约性的：nil 的 TLSConfig 无法完成拨号
+// （newSlot 会克隆它），因此在这里直接拒绝，而不是在第一次 Open 时 panic。
 func New(cfg Config) (transport.Transport, error) {
 	if cfg.TLSConfig == nil {
 		return nil, errors.New("http2: TLSConfig is required")
@@ -119,9 +113,9 @@ func New(cfg Config) (transport.Transport, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Pre-allocate and initialize all slots. Transports are cheap structs;
-	// actual TCP connections are established lazily by Go's http.Transport.
-	// Per-pool stable indices are assigned by newScheduler.
+	// 预分配并初始化所有槽位。Transport 是廉价的 struct；
+	// 真正的 TCP 连接由 Go 的 http.Transport 惰性建立。
+	// 每个池内的稳定索引由 newScheduler 分配。
 	slots := make([]*transportSlot, maxSlots)
 	for i := range slots {
 		slots[i] = newSlot(cfg.TLSConfig, timeout, dialCtx, connLifetime)
@@ -208,9 +202,8 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 				_ = uconn.Close()
 				return nil, fmt.Errorf("server negotiated %q, want h2", proto)
 			}
-			// A new connection resets the rotation state: the lifetime
-			// deadline (with per-connection jitter), bytes carried and the
-			// expiring mark all start fresh.
+			// 新连接会重置轮换状态：生命周期截止时间（含每连接抖动）、
+			// 已承载字节数和 expiring 标记都从零开始。
 			slot.resetConn(connLifetime)
 			return uconn, nil
 		},
@@ -234,10 +227,9 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	stats.RecordStreamOpened()
 
 	if pool, live := t.sched.grow(req.HighPriority); pool != nil {
-		// This request actually triggered a slot expansion: attribute the
-		// growth to it. Concurrent growers serialize on the scheduler write
-		// lock and re-evaluate under it, so only the request that performed
-		// the activation reaches this branch.
+		// 该请求确实触发了槽位扩容：把这次增长归因于它。并发的扩容者会在
+		// 调度器的写锁上串行化并在锁内重新评估，因此只有真正执行了激活的
+		// 请求才会走到这个分支。
 		poolName := "bulk"
 		if pool == t.sched.priority {
 			poolName = "priority"
@@ -299,8 +291,8 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 
 	var stream *http2Stream
 	doneOnce := sync.OnceFunc(func() {
-		// Release the slot's heavy mark exactly once (doneOnce runs at most
-		// a single time), so the slot becomes eligible for new streams again.
+		// 恰好释放一次槽位的 heavy 标记（doneOnce 最多执行一次），
+		// 使槽位重新可以承接新的流。
 		stream.releaseHeavy()
 		slot.active.Add(-1)
 		stats.RecordStreamClosed()
@@ -321,10 +313,9 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 		if err != nil {
 			_ = pw.CloseWithError(err)
 		}
-		// Rejections are answered with plain HTTP error statuses (408/400/
-		// 404/405/429...): the body would be a fallback/error page, not
-		// encrypted records. Fail the stream immediately with a clear error
-		// so the record reader never misparses the rejection body.
+		// 拒绝会以普通 HTTP 错误状态码应答（408/400/404/405/429...）：
+		// 响应体将是 fallback/错误页面，而不是加密记录。立即以明确的错误
+		// 让流失败，这样记录读取器永远不会误解析拒绝响应体。
 		if err == nil && resp.StatusCode != http.StatusOK {
 			rejectErr := &transport.HandshakeRejectedError{StatusCode: resp.StatusCode, Status: resp.Status}
 			_ = resp.Body.Close()
@@ -332,8 +323,8 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 			err = rejectErr
 			_ = pw.CloseWithError(err)
 		}
-		// Store the RoundTrip error on the stream so Write() can surface it
-		// when the pipe write fails with io.ErrClosedPipe.
+		// 把 RoundTrip 错误存到流上，这样当管道写入以 io.ErrClosedPipe 失败时
+		// Write() 可以把它呈现出来。
 		stream.setRoundTripErr(err)
 		respCh <- roundTripResult{resp: resp, err: err}
 	}()
@@ -341,17 +332,14 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	return stream, nil
 }
 
-// WarmUp primes the first connection of both scheduling pools so the first
-// real stream of each class reuses an established connection instead of
-// paying the cold-start cost (dial + TLS + HTTP/2): interactive streams
-// (browsing on 443/80/8080/8443/22) live in the priority pool, everything
-// else (DNS on 53, arbitrary ports) in the bulk pool. Each pool is primed
-// with a real probe request over one of its slots — the slot's http.Transport
-// pins the request to that slot's own connection, so the synchronous round
-// trip establishes it. Any answer counts: the probe payload, a fallback page
-// (a server without /v3/probe) or a rejection all prove the path works; only
-// a probe that cannot confirm the connection is reported, and the caller logs
-// and swallows it: startup must never depend on warm-up.
+// WarmUp 预热两个调度池各自的第一个连接，使每一类的第一条真实流能复用已建立的
+// 连接，而不用付出冷启动代价（拨号 + TLS + HTTP/2）：交互式流（443/80/8080/
+// 8443/22 端口上的浏览）位于 priority 池，其他一切（53 端口的 DNS、任意端口）
+// 位于 bulk 池。每个池都通过其某个槽位上的一次真实探测请求来预热——槽位的
+// http.Transport 会把请求固定到该槽位自己的连接上，因此这次同步往返就能
+// 建立连接。任何应答都算数：探测载荷、fallback 页面（不支持 /v3/probe 的
+// 服务器）或拒绝都能证明路径可用；只有无法确认连接的探测才会被报告，
+// 调用方记录日志后吞掉它：启动绝不能依赖预热。
 func (t *http2Transport) WarmUp(ctx context.Context) error {
 	if t.lifecycle.probeFunc == nil {
 		return errors.New("probe not configured")
@@ -366,12 +354,10 @@ func (t *http2Transport) WarmUp(ctx context.Context) error {
 	return firstErr
 }
 
-// warmPool activates one scheduling pool (first activation adds 2 slots) and
-// establishes its first connection with a probe request over a slot of that
-// pool. The pick must run under the scheduler read lock, mirroring Open. A
-// probe that does not confirm the connection is reported as
-// errProbeNotConfirmed wrapped with the pool name, so the caller can tell
-// which traffic class stayed cold.
+// warmPool 激活一个调度池（首次激活会新增 2 个槽位），并通过该池某个槽位上的
+// 一次探测请求建立它的第一个连接。与 Open 一样，pick 必须在调度器读锁下执行。
+// 无法确认连接的探测会以 errProbeNotConfirmed 报告，并包裹池名，以便调用方
+// 知道哪个流量类别仍然处于冷状态。
 func (t *http2Transport) warmPool(ctx context.Context, highPriority bool) error {
 	t.sched.grow(highPriority)
 	t.sched.mu.RLock()
@@ -384,17 +370,15 @@ func (t *http2Transport) warmPool(ctx context.Context, highPriority bool) error 
 	}
 
 	if _, verdict := t.lifecycle.probeFunc(ctx, slot); verdict == probeInconclusive {
-		// The probe did not confirm the connection: the dial/TLS failed
-		// (the pool stays cold) or the server answered a transient
-		// rejection. Either way, best-effort: report and let the caller
-		// decide.
+		// 探测未能确认连接：拨号/TLS 失败（池保持冷状态）或服务端返回了
+		// 临时性拒绝。无论哪种情况，都是尽力而为：报告并让调用方决定。
 		return fmt.Errorf("warm up %s pool: %w", poolName, errProbeNotConfirmed)
 	}
 	return nil
 }
 
-// protoOfEndpoint maps a proxy endpoint path to its short protocol name
-// for growth-event logging; unknown paths are echoed as-is.
+// protoOfEndpoint 把代理端点路径映射为简短协议名，用于增长事件日志；
+// 未知路径原样返回。
 func protoOfEndpoint(endpoint string) string {
 	switch endpoint {
 	case sharedconfig.EndpointTCP:
@@ -407,9 +391,9 @@ func protoOfEndpoint(endpoint string) string {
 	return endpoint
 }
 
-// recordGrowEvent appends one slot-growth event to the bounded ring,
-// dropping the oldest beyond maxGrowEvents. The ring is snapshotted
-// newest-first into TransportStats.GrowEvents by Stats.
+// recordGrowEvent 把一个槽位增长事件追加到有界环形缓冲中，
+// 超出 maxGrowEvents 时丢弃最旧的。Stats 会以最新优先的顺序把
+// 该环形缓冲快照进 TransportStats.GrowEvents。
 func (t *http2Transport) recordGrowEvent(pool string, live int32, req transport.OpenRequest) {
 	ev := transport.GrowEvent{
 		Time:     time.Now(),
@@ -427,9 +411,8 @@ func (t *http2Transport) recordGrowEvent(pool string, live int32, req transport.
 }
 
 func (t *http2Transport) CloseIdle() {
-	// Close idle TCP connections on all slots of both pools. The slot array
-	// elements are swap-mutated by shrink/retire under the scheduler write
-	// lock, so read the arrays under the read lock.
+	// 关闭两个池所有槽位上的空闲 TCP 连接。槽位数组元素会被 shrink/retire
+	// 在调度器写锁下交换修改，因此要在读锁下读取数组。
 	t.sched.mu.RLock()
 	for _, pool := range []*slotPool{t.sched.priority, t.sched.bulk} {
 		for _, s := range pool.slots {
@@ -438,17 +421,16 @@ func (t *http2Transport) CloseIdle() {
 	}
 	t.sched.mu.RUnlock()
 
-	// Shrink liveCount by retiring idle slots (any position, swap-remove).
+	// 通过退役空闲槽位来缩减 liveCount（任意位置，交换删除）。
 	t.sched.mu.Lock()
 	defer t.sched.mu.Unlock()
 	t.sched.shrinkIdleLocked()
 }
 
 func (t *http2Transport) Stats() transport.TransportStats {
-	// Hold the scheduler read lock so the snapshot is consistent: shrink
-	// (swap-remove) and grow mutate pool liveCounts and the live slot
-	// ranges under the write lock, so an unlocked render could read a
-	// stale liveCount and report more conns_status entries than Conns.
+	// 持有调度器读锁以保证快照一致：shrink（交换删除）和 grow 会在写锁下
+	// 修改池的 liveCount 与活跃槽位区间，因此不加锁的渲染可能读到过期的
+	// liveCount，报告的 conns_status 条目数会多于 Conns。
 	t.sched.mu.RLock()
 	defer t.sched.mu.RUnlock()
 
@@ -475,9 +457,9 @@ func (t *http2Transport) Stats() transport.TransportStats {
 	ts.PriorityConnsStatus = slotStatusString(t.sched.priority, pLive)
 	ts.BulkConnsStatus = slotStatusString(t.sched.bulk, bLive)
 
-	// Snapshot the recent growth events newest-first. The ring has its own
-	// mutex (recordGrowEvent holds no scheduler lock), so no lock ordering
-	// issue with the read lock held above.
+	// 以最新优先的顺序快照近期的增长事件。环形缓冲有自己的互斥锁
+	// （recordGrowEvent 不持有调度器锁），因此与上面持有的读锁不存在
+	// 锁顺序问题。
 	t.growMu.Lock()
 	for _, v := range slices.Backward(t.growEvents) {
 		ts.GrowEvents = append(ts.GrowEvents, v)
@@ -486,13 +468,11 @@ func (t *http2Transport) Stats() transport.TransportStats {
 	return ts
 }
 
-// slotStatus derives a live slot's connection status from its health flags
-// and the number of streams currently hosted on it. Multiple flags are
-// joined with "+" so no state is hidden (a heavy download crossing the
-// connection lifetime is both heavy and expiring). A slot with no flags
-// hosting at least one stream is "active"; one with no flags and no streams
-// is an idle warm connection and renders as "idle", so a pool full of
-// connection slots but few streams is not mistaken for active traffic.
+// slotStatus 根据槽位的健康标记以及当前承载的流数量推导其连接状态。
+// 多个标记用 "+" 连接，以免隐藏任何状态（跨越连接生命周期的重下载既是
+// heavy 又是 expiring）。无标记且承载至少一条流的槽位是 "active"；
+// 无标记且无流的槽位是空闲的预热连接，渲染为 "idle"，这样满是连接槽位
+// 但流很少的池不会被误认为是活跃流量。
 func slotStatus(s *transportSlot, active int) string {
 	var parts []string
 	if s.heavy.Load() > 0 {
@@ -513,16 +493,13 @@ func slotStatus(s *transportSlot, active int) string {
 	return strings.Join(parts, "+")
 }
 
-// slotStatusString renders the live slots of one pool as
-// "<index>:<active streams>:<status>", wrapped in brackets, e.g.
-// "[0:3:degraded, 1:2:expiring, 2:1:active, 3:1:heavy]". A healthy slot
-// hosting no streams renders as "0:idle" (a warm connection), so a burst
-// that grew the pool is distinguishable from real active traffic. Entries
-// are ordered by the stable slot identity (retire swap-removes scramble the
-// live order) and then renumbered from 0, so the rendered indices are
-// always consecutive with no jumps. An empty live set renders as "[]".
-// live must be the pool's liveCount value the caller snapshot under the
-// scheduler lock, so the rendered entry count always matches Conns.
+// slotStatusString 把一个池的活跃槽位渲染为 "<index>:<active streams>:<status>"，
+// 外面包上括号，例如 "[0:3:degraded, 1:2:expiring, 2:1:active, 3:1:heavy]"。
+// 无流承载的健康槽位渲染为 "0:idle"（预热连接），这样因突发流量而扩大的池
+// 与真正的活跃流量可以区分。条目按稳定的槽位身份排序（retire 的交换删除会
+// 打乱活跃顺序），然后从 0 重新编号，因此渲染出的索引始终连续、无跳号。
+// 活跃集合为空时渲染为 "[]"。live 必须是调用方在调度器锁下快照的池
+// liveCount 值，这样渲染出的条目数始终与 Conns 一致。
 func slotStatusString(pool *slotPool, live int) string {
 	if live > pool.maxSlots {
 		live = pool.maxSlots
@@ -545,8 +522,8 @@ func slotStatusString(pool *slotPool, live int) string {
 	if len(entries) == 0 {
 		return "[]"
 	}
-	// Order by stable slot index regardless of the scrambled live order,
-	// then number entries 0..n-1 so the output indices never jump.
+	// 无论活跃顺序如何被打乱，都按稳定的槽位索引排序，
+	// 然后把条目编号为 0..n-1，使输出索引永不跳号。
 	slices.SortFunc(entries, func(a, b entry) int { return a.idx - b.idx })
 
 	var b strings.Builder
@@ -567,9 +544,8 @@ func slotStatusString(pool *slotPool, live int) string {
 
 func (t *http2Transport) Close() error {
 	t.cancel()
-	// Read the live slot ranges under the scheduler read lock: shrink/retire
-	// swap-remove slots under the write lock, so an unlocked iteration over
-	// the live range would race with those swaps.
+	// 在调度器读锁下读取活跃槽位区间：shrink/retire 在写锁下交换删除槽位，
+	// 因此不加锁地遍历活跃区间会与这些交换产生竞争。
 	t.sched.mu.RLock()
 	for _, pool := range []*slotPool{t.sched.priority, t.sched.bulk} {
 		live := int(pool.liveCount.Load())

@@ -16,18 +16,16 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-// serveReject writes a bare HTTP error response for handshake rejections.
-// Unlike ServeFallback it sends no camouflaged HTML body: it is only used for
-// requests that either timed out waiting for the handshake record, or already
-// proved master-key possession by sending a valid encrypted handshake — for
-// those, 4xx/5xx statuses are both realistic and distinguishable for the
-// easyss client, which checks the status code before reading the body.
+// serveReject 为握手拒绝写出一个裸的 HTTP 错误响应。
+// 与 ServeFallback 不同，它不发送伪装的 HTML 正文：它只用于被限流的请求、
+// 等待握手记录超时的请求，或已经通过发送有效加密握手证明持有主密钥的请求——
+// 对这些请求，4xx/5xx 状态码既真实可信，也能被 easyss 客户端区分，
+// 客户端会在读取正文之前检查状态码。
 func serveReject(w http.ResponseWriter, code int) {
 	w.WriteHeader(code)
 }
 
-// handshakeResult carries the state a validated handshake passes to
-// serveSession.
+// handshakeResult 保存验证通过的握手结果，供 serveSession 使用。
 type handshakeResult struct {
 	sk       *crypto.StreamKeys
 	first    crypto.FirstRecord
@@ -36,9 +34,8 @@ type handshakeResult struct {
 	method   protocol.Method
 }
 
-// ServeHTTP serves one request: everything that can reject the handshake
-// before the response is committed (preflight), then the encrypted session
-// itself (serveSession).
+// ServeHTTP 处理一个请求：先在响应提交之前完成所有可能拒绝握手的前置检查
+// （preflight），然后才是加密会话本身（serveSession）。
 func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if e := recover(); e != nil {
@@ -54,21 +51,18 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.serveSession(w, r, res)
 }
 
-// preflight runs every check that can reject the request with a fallback page
-// or a bare 4xx/5xx, all before the response is committed (once the
-// octet-stream headers are flushed the response can no longer turn into a
-// fallback HTML page). ok=false means the response has been written and
-// ServeHTTP must return.
+// preflight 在响应提交之前执行所有能用回退页面或裸 4xx/5xx 拒绝请求的检查
+// （一旦 octet-stream 头被 flush，响应就无法再变成回退 HTML 页面）。
+// ok=false 表示响应已经写出，ServeHTTP 必须返回。
 func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handshakeResult, bool) {
 	if !r.ProtoAtLeast(2, 0) {
 		ServeFallback(w, r)
 		return handshakeResult{}, false
 	}
 
-	// The proxy endpoints only ever carry a POST body (the bootstrap
-	// record). Non-POST requests (GET/HEAD/OPTIONS probes) must not enter
-	// the handshake path: they would burn salt-cache entries and rate-limit
-	// budget while producing nothing.
+	// 代理端点只承载 POST 请求体（bootstrap 记录）。非 POST 请求
+	// （GET/HEAD/OPTIONS 探测）不得进入握手路径：它们只会消耗 salt 缓存
+	// 条目和限流预算，却不会产生任何结果。
 	if r.Method != http.MethodPost {
 		ServeFallback(w, r)
 		return handshakeResult{}, false
@@ -86,25 +80,22 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 		return handshakeResult{}, false
 	}
 
-	// Bound handshake attempts per source IP to mitigate replay storms and
-	// CPU abuse. Only counted for requests that look like a real handshake
-	// (valid x-es header), so plain fallback-page traffic is unaffected.
+	// 按源 IP 限制握手尝试，以缓解重放风暴和 CPU 滥用。只对看起来像真实
+	// 握手的请求（带有有效的 x-es 头）计数，因此普通的回退页面流量不受影响。
 	if !h.ipLimiter.Allow(clientIP(r)) {
-		// Debug, not Error: any peer that sends a well-formed x-es header
-		// reaches this branch, so an unauthenticated IP-churning client could
-		// otherwise flood the log. The limiter warns once per cleanup interval
-		// when its hard cap is hit.
+		// 用 Debug 而非 Error：任何发送格式正确 x-es 头的对端都会走到这个
+		// 分支，否则未经认证的轮换 IP 客户端可能刷爆日志。限流器在硬上限
+		// 被触发时每个清理间隔只告警一次。
 		log.Debug("[SERVER] handshake rate limited", "remote", r.RemoteAddr)
 		stats.RecordServerHandshakeError()
 		serveReject(w, http.StatusTooManyRequests)
 		return handshakeResult{}, false
 	}
 
-	// Reject replayed bootstrap records. Every stream uses a unique random
-	// salt; a salt already accepted by this server means the record is being
-	// re-delivered (replay), and accepting it would re-dial the target and
-	// re-deliver the first packet. Replays carry a valid encrypted handshake,
-	// so the responder has proven key possession and 400 is appropriate.
+	// 拒绝重放的 bootstrap 记录。每个流使用唯一的随机 salt；该服务器已经
+	// 接受过的 salt 意味着记录正在被重新投递（重放），接受它会导致重新拨号
+	// 目标并重新投递第一个数据包。重放带有有效的加密握手，
+	// 因此应答方已证明持有密钥，返回 400 是合适的。
 	if h.saltCache.MarkSeen(r.URL.Path, saltB64) {
 		log.Debug("[SERVER] replayed salt", "remote", r.RemoteAddr, "endpoint", r.URL.Path)
 		stats.RecordServerHandshakeError()
@@ -124,23 +115,19 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 		stats.RecordServerHandshakeError()
 		if errors.Is(err, crypto.ErrHandshakeTimeout) {
 			log.Warn("[SERVER] read first record timed out", "remote", r.RemoteAddr, "endpoint", endpoint, "err", err)
-			// The client connected but its bootstrap record did not arrive in
-			// time (congested link, connection dying). A real HTTP/2 site
-			// (nginx) answers a late/absent request body with 408 Request
-			// Timeout; serving the camouflaged homepage here would poison the
-			// legit client's record stream with HTML. 408 lets the client fail
-			// fast and cleanly instead of misparsing the page as records.
+			// 客户端已连接，但其 bootstrap 记录没有及时到达（链路拥塞、
+			// 连接正在消亡）。真实的 HTTP/2 站点（nginx）会对迟到/缺失的
+			// 请求体应答 408 Request Timeout；这里若返回伪装首页，会把 HTML
+			// 混入合法客户端的记录流。408 让客户端快速干净地失败，
+			// 而不是把页面误解析为记录。
 			serveReject(w, http.StatusRequestTimeout)
 			return handshakeResult{}, false
 		}
-		// Decrypt failure: the request did not prove master-key possession
-		// (attacker probing, wrong key). Debug, not Error: any request with a
-		// random x-es header reaches this branch, and error-level logging here
-		// lets an unauthenticated peer flood the log. Keep the camouflaged
-		// homepage so the server stays indistinguishable from a real site for
-		// keyless requests; the easyss client detects the non-encrypted payload
-		// on its first session read and reports a clear handshake-rejected
-		// error.
+		// 解密失败：请求没有证明持有主密钥（攻击者探测、密钥错误）。
+		// 用 Debug 而非 Error：任何带有随机 x-es 头的请求都会走到这个分支，
+		// 在这里做 error 级别日志会让未认证的对端刷爆日志。保持伪装首页，
+		// 使服务器对无密钥请求与真实网站无法区分；easyss 客户端会在第一次
+		// 会话读取时发现非加密载荷，并报告清晰的握手被拒绝错误。
 		log.Debug("[SERVER] read first record failed", "remote", r.RemoteAddr, "endpoint", endpoint, "err", err)
 		ServeFallback(w, r)
 		return handshakeResult{}, false
@@ -162,13 +149,11 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 
 	target := first.Handshake.Target
 
-	// Reject LAN/private targets to prevent SSRF attacks. This MUST happen
-	// before the response is committed (WriteHeader + Flush): once the
-	// octet-stream headers are flushed the response can no longer be turned
-	// into a fallback HTML page, and the client would receive a 200
-	// application/octet-stream instead of a clean rejection. IsLANHostResolved
-	// also resolves domain names so a target like evil.com (which resolves to
-	// 127.0.0.1) cannot bypass the literal-IP check.
+	// 拒绝 LAN/私网目标以防止 SSRF 攻击。这必须在响应提交（WriteHeader +
+	// Flush）之前完成：一旦 octet-stream 头被 flush，响应就无法再变成回退
+	// HTML 页面，客户端会收到 200 application/octet-stream 而不是干净的拒绝。
+	// IsLANHostResolved 还会解析域名，因此像 evil.com（解析到 127.0.0.1）
+	// 这样的目标无法绕过字面 IP 检查。
 	if util.IsLANHostResolved(r.Context(), target) {
 		log.Error("[SERVER] rejected LAN target", "target", target, "remote", r.RemoteAddr)
 		stats.RecordServerHandshakeError()
@@ -185,21 +170,17 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 	}, true
 }
 
-// serveSession commits the encrypted session on the response and dispatches
-// to the endpoint handler. Everything from the first WriteHeader on happens
-// here: the response can no longer be turned into a fallback HTML page, so a
-// failure after this point surfaces as a stream-level RST instead of an HTTP
-// error.
+// serveSession 在响应上提交加密会话并分派给端点 handler。从第一次
+// WriteHeader 开始的所有事情都发生在这里：响应已无法再变成回退 HTML 页面，
+// 因此此后出现的失败表现为流级别的 RST 而不是 HTTP 错误。
 func (h *ProxyHandler) serveSession(w http.ResponseWriter, r *http.Request, res handshakeResult) {
 	log.Info("[SERVER] proxy", "target", res.target, "remote", r.RemoteAddr)
 
-	// Pre-validate the session reader/writer before committing the response.
-	// Once WriteHeader + Flush is called the response can no longer be
-	// turned into a fallback HTML page. Reader/writer creation checks that
-	// the method is supported (already validated in preflight), but we guard
-	// against unexpected internal errors. The request proved key possession,
-	// so a plain 500 (real-site behavior for internal failures) is
-	// appropriate.
+	// 在提交响应之前预先创建并校验会话的 reader/writer。
+	// 一旦调用 WriteHeader + Flush，响应就无法再变成回退 HTML 页面。
+	// reader/writer 的创建会检查方法是否受支持（preflight 中已校验过），
+	// 但这里还要防范意外的内部错误。请求已证明持有密钥，
+	// 因此返回一个普通的 500（真实站点对内部故障的行为）是合适的。
 	s2cWriter, err := res.sk.NewWriter(w, crypto.DirS2C, res.method)
 	if err != nil {
 		log.Error("[SERVER] s2c writer", "err", err)
@@ -226,9 +207,8 @@ func (h *ProxyHandler) serveSession(w http.ResponseWriter, r *http.Request, res 
 
 	s2cCfg := h.shaperCfg
 	if res.endpoint == sharedconfig.EndpointUDP {
-		// UDP uses a short 1ms batch window so datagram bursts are merged
-		// into single encrypted records instead of one record + forced
-		// HTTP/2 flush per datagram.
+		// UDP 使用较短的 1ms 批处理窗口，使数据报突发被合并进单个加密记录，
+		// 而不是每个数据报一个记录并强制做一次 HTTP/2 flush。
 		s2cCfg.BatchWindowMS = 1
 	}
 	s2cShaper := shaper.New(s2cWriter, s2cCfg)
@@ -238,16 +218,14 @@ func (h *ProxyHandler) serveSession(w http.ResponseWriter, r *http.Request, res 
 	switch res.endpoint {
 	case sharedconfig.EndpointTCP:
 		stats.RecordServerTCPStream()
-		// cancelRead unblocks the relay's client-read goroutine immediately
-		// when the relay terminates (idle timeout/error), instead of letting
-		// it linger on the request body until net/http closes it.
+		// cancelRead 在中继终止（空闲超时/错误）时立即解除中继客户端读取
+		// goroutine 的阻塞，而不是让它停留在请求体上直到 net/http 将其关闭。
 		handleErr = h.tcp.Handle(r.Context(), c2sReader, s2cShaper, res.target, func() { _ = r.Body.Close() })
 	case sharedconfig.EndpointUDP:
 		stats.RecordServerUDPStream()
-		// cancelRead unblocks the client-read goroutine immediately when the
-		// UDP handler terminates, mirroring the TCP path: without it the
-		// frame reader lingers on the request body until net/http closes it
-		// after ServeHTTP returns.
+		// cancelRead 在 UDP handler 终止时立即解除客户端读取 goroutine 的阻塞，
+		// 与 TCP 路径保持一致：否则帧读取器会停留在请求体上，
+		// 直到 ServeHTTP 返回后 net/http 将其关闭。
 		handleErr = h.udp.Handle(r.Context(), c2sReader, s2cShaper, res.target, func() { _ = r.Body.Close() })
 	case sharedconfig.EndpointICMP:
 		stats.RecordServerICMPStream()

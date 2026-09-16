@@ -5,17 +5,17 @@ import (
 	"strings"
 )
 
-// GlobToRegexp converts a glob-like pattern (using * as wildcard) to a compiled
-// regular expression. The * matches any sequence of characters. Anchors ^ and $
-// are added so the pattern must match the entire input string.
+// GlobToRegexp 将类似 glob 的模式（使用 * 作为通配符）转换为编译好的
+// 正则表达式。* 匹配任意字符序列。会加上 ^ 和 $ 锚点，
+// 因此模式必须匹配整个输入字符串。
 func GlobToRegexp(pattern string) (*regexp.Regexp, error) {
 	escaped := regexp.QuoteMeta(pattern)
 	reStr := strings.ReplaceAll(escaped, `\*`, `.*`)
 	return regexp.Compile(`^` + reStr + `$`)
 }
 
-// SubDomains returns all parent domains for subdomain matching.
-// For "www.example.com", returns ["example.com"].
+// SubDomains 返回用于子域名匹配的所有父级域名。
+// 例如 "www.example.com" 返回 ["example.com"]。
 func SubDomains(domain string) []string {
 	if domain == "" {
 		return nil

@@ -4,7 +4,7 @@ import (
 	_ "embed"
 )
 
-// TrayData is the PNG data used for the tray icon.
+// TrayData 是托盘图标所用的 PNG 数据。
 //
 //go:embed icon_32_32.png
 var TrayData []byte

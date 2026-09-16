@@ -10,55 +10,45 @@ import (
 	"github.com/nange/easyss/v3/stats"
 )
 
-// errProbeNotConfirmed classifies a probe that did not confirm the slot
-// connection: a RoundTrip failure (dial/TLS/stream error, or the probe
-// timeout elapsing before the response headers) or a non-200 rejection (e.g.
-// 429 rate limit). Warm-up wraps it with the pool it failed to warm; the
-// lifecycle treats the same verdict as "no state change" instead.
+// errProbeNotConfirmed 归类未能确认槽位连接的探测：RoundTrip 失败（拨号/TLS/
+// 流错误，或响应头到达前探测超时）或非 200 的拒绝（例如 429 限流）。预热会
+// 用其未能预热的池名包裹它；生命周期则把同样的结论当作"状态不变"处理。
 var errProbeNotConfirmed = errors.New("probe did not confirm the connection")
 
-// probeVerdict classifies a single probe result.
+// probeVerdict 归类单次探测的结果。
 type probeVerdict int
 
 const (
-	// probeInconclusive: the probe failed before any body bytes arrived
-	// (RoundTrip error, non-200 status): the connection is either dead
-	// (handled by stream errors/rotation) or transiently rejected (429),
-	// so no verdict is produced.
+	// probeInconclusive：探测在任一响应体字节到达前失败（RoundTrip 错误、
+	// 非 200 状态）：连接要么已死（由流错误/轮换处理），要么被临时性拒绝
+	// （429），因此不产生结论。
 	probeInconclusive probeVerdict = iota
-	// probeFast: the payload was delivered at or above the degraded
-	// throughput threshold.
+	// probeFast：载荷以不低于降级吞吐量阈值的速度送达。
 	probeFast
-	// probeSlow: no bytes arrived within the probe timeout, or the body
-	// throughput stayed below the degraded threshold.
+	// probeSlow：探测超时内没有字节到达，或响应体吞吐量低于降级阈值。
 	probeSlow
-	// probeUnsupported: the server answered 200 but not with the probe
-	// payload (wrong Content-Type/Content-Length), i.e. it does not serve
-	// the /v3/probe endpoint and the client must fall back to passive
-	// detection.
+	// probeUnsupported：服务端返回 200 但不是探测载荷（Content-Type/
+	// Content-Length 不符），即它不提供 /v3/probe 端点，客户端必须回退到
+	// 被动检测。
 	probeUnsupported
 )
 
-// maxProbeSpeed caps the measured throughput so a single instantaneous
-// (elapsed==0) probe cannot latch the link reference speed to an absurd
-// value.
+// maxProbeSpeed 对测量到的吞吐量设上限，使单次瞬时（elapsed==0）探测无法把
+// 链路参考速度锁定到一个荒谬的值。
 const maxProbeSpeed = 1 << 30 // 1GB/s
 
-// slotProber actively measures the download throughput of one slot's own
-// connection by downloading the server's pre-generated random payload
-// through the slot's http.Transport (MaxConnsPerHost=1 pins the transport
-// to that single connection, so the probe bytes traverse exactly the
-// connection under test).
+// slotProber 通过槽位的 http.Transport 下载服务端预生成的随机载荷，主动测量
+// 某个槽位自身连接的下载吞吐量（MaxConnsPerHost=1 把 transport 固定到那一条
+// 连接上，因此探测字节恰好经过被测连接）。
 type slotProber struct {
 	serverURL   string
 	token       string
 	payloadSize int64
 }
 
-// probe downloads the probe payload over the slot's connection and reports
-// the body throughput (excluding TTFB: timing starts with the first body
-// chunk). The verdict is decided against the absolute degraded threshold;
-// the lifecycle applies the link-reference refinement on top.
+// probe 通过槽位连接下载探测载荷并报告响应体吞吐量（不含 TTFB：计时从第一个
+// 响应体分块开始）。结论依据绝对的降级阈值判定；生命周期在此基础上再应用
+// 链路参考值的细化。
 func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, probeVerdict) {
 	probeCtx, cancel := context.WithTimeout(ctx, sharedconfig.ProbeTimeout)
 	defer cancel()
@@ -73,23 +63,21 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 
 	resp, err := slot.t.RoundTrip(req)
 	if err != nil {
-		// RoundTrip failed (dial/TLS/stream error, or the timeout expired
-		// before the response headers): the connection is dead or the
-		// server is unreachable — no verdict, stream errors and rotation
-		// handle those. A healthy redial inside RoundTrip completes the
-		// request, so a fresh connection is never misjudged as slow.
+		// RoundTrip 失败（拨号/TLS/流错误，或响应头到达前超时）：连接已死或
+		// 服务端不可达——不产生结论，这些情况由流错误和轮换处理。RoundTrip
+		// 内部的健康重拨能完成请求，因此新连接绝不会被误判为慢。
 		return 0, probeInconclusive
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		// Rejection (e.g. 429 rate limit): transient, re-probe later.
+		// 拒绝（例如 429 限流）：是临时性的，稍后重新探测。
 		return 0, probeInconclusive
 	}
 	if resp.ContentLength != p.payloadSize ||
 		resp.Header.Get("Content-Type") != "application/octet-stream" {
-		// The server answered 200 but not with the probe payload (e.g. a
-		// fallback HTML page from a server without /v3/probe).
+		// 服务端返回 200 但不是探测载荷（例如来自不支持 /v3/probe 的服务器的
+		// fallback HTML 页面）。
 		return 0, probeUnsupported
 	}
 
@@ -105,22 +93,20 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 			if !timed {
 				timed = true
 				start = time.Now()
-				// The response headers have arrived and the server writes the
-				// payload immediately (no origin involved), so the time to the
-				// first body chunk is the pure path RTT — same measurement
-				// basis as the per-request bootstrap round trip.
+				// 响应头已到达，且服务端会立即写入载荷（不涉及源端），因此到
+				// 第一个响应体分块的时间就是纯路径 RTT——与每次请求的 bootstrap
+				// 往返采用相同的测量基准。
 				stats.RecordRTT(time.Since(ttfbStart))
 			}
 		}
 		if rErr != nil {
-			break // EOF, timeout or connection error: measure what arrived
+			break // EOF、超时或连接错误：按已到达的字节数计量
 		}
 	}
 
 	if total == 0 {
-		// Nothing arrived within the probe timeout (or the body was cut
-		// short immediately): on any sane link the first bytes of 128KB
-		// arrive well within 3s, so treat this as slow evidence.
+		// 探测超时内没有任何字节到达（或响应体立即被截断）：在任何正常的
+		// 链路上，128KB 的首批字节都远在 3 秒内到达，因此把它当作慢的证据。
 		return 0, probeSlow
 	}
 

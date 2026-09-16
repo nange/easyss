@@ -18,9 +18,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fdTestSocketPath returns a short socket path in its own directory: the
-// sun_path of a Unix socket is limited to about 104 bytes, and t.TempDir()
-// embeds the test name, which is long enough to exceed that limit on macOS.
+// fdTestSocketPath 在独立目录中返回一个较短的 socket 路径：Unix socket 的
+// sun_path 长度限制约为 104 字节，而 t.TempDir() 会嵌入测试名，其长度在
+// macOS 上足以超出该限制。
 func fdTestSocketPath(t *testing.T) string {
 	t.Helper()
 
@@ -31,14 +31,12 @@ func fdTestSocketPath(t *testing.T) string {
 	return filepath.Join(dir, "fd.sock")
 }
 
-// TestReceiveFdReportsAFailedHelperImmediately is the regression test for the
-// blind wait on the fd socket: a helper that fails before it can send the fd
-// (the create script exits non-zero, for instance) fails long before the
-// parent's 30s accept deadline, and what the user saw was a timeout instead of
-// that failure. The helper now announces the give-up by connecting to the
-// socket without an fd (see notifyStartFailure), and the parent has to report
-// it at once, with the reason, so the tray does not have to send the user to
-// the log file.
+// TestReceiveFdReportsAFailedHelperImmediately 是针对 fd socket 上盲目等待的
+// 回归测试：helper 在能发送 fd 之前就失败（例如创建脚本以非零码退出）时，它
+// 远早于父进程 30 秒的 accept 截止时间就失败了，而用户看到的却是超时而不是
+// 该失败。现在 helper 通过连接 socket 但不携带 fd 来宣告放弃（参见
+// notifyStartFailure），父进程必须立即连同原因一起报告它，这样托盘就不必
+// 让用户去翻日志文件。
 func TestReceiveFdReportsAFailedHelperImmediately(t *testing.T) {
 	const reason = `run create script: exit status 1: "[create_tun_dev] failed near: route"`
 
@@ -65,9 +63,8 @@ func TestReceiveFdReportsAFailedHelperImmediately(t *testing.T) {
 		"the failure reason the helper sent has to reach the caller: it is what the tray notification shows")
 }
 
-// TestReceiveFdReportsAGiveUpWithoutReason covers the helper that could not name
-// a reason: the connection alone still has to fail the start instead of letting
-// the parent wait for an fd that will never come.
+// TestReceiveFdReportsAGiveUpWithoutReason 覆盖无法给出原因的 helper：仅凭
+// 这次连接本身也必须让启动失败，而不是让父进程等待一个永远不会到来的 fd。
 func TestReceiveFdReportsAGiveUpWithoutReason(t *testing.T) {
 	socketPath := fdTestSocketPath(t)
 	listener, err := net.Listen("unix", socketPath)
@@ -86,17 +83,16 @@ func TestReceiveFdReportsAGiveUpWithoutReason(t *testing.T) {
 	require.Error(t, err, "a helper that gave up without a reason still did not start")
 }
 
-// TestFailurePayload keeps the failure text usable in a desktop notification:
-// one line, even when it carries the newlines of a failed platform script, and
-// never longer than the socket message the parent reads.
+// TestFailurePayload 保证失败文本可以用于桌面通知：即使失败的平台脚本带有
+// 换行，也始终是一行，并且长度不会超过父进程读取的 socket 消息。
 func TestFailurePayload(t *testing.T) {
 	require.Nil(t, failurePayload(nil), "a helper without a reason sends nothing")
 
 	payload := string(failurePayload(errors.New("run create script: \n  \"bash /tmp/x.sh\":\texit status 1\n")))
 	require.Equal(t, `run create script: "bash /tmp/x.sh": exit status 1`, payload)
 
-	// Over the cap both ends survive: the failing step at the front and the
-	// script's own "failed near:" summary at the back.
+	// 超过上限时两端都要保留：开头是失败的步骤，结尾是脚本自己的
+	// "failed near:" 摘要。
 	long := string(failurePayload(errors.New("start of the reason " +
 		strings.Repeat("x", 4*maxHelperFailureReason) + " failed near: route")))
 	require.Len(t, long, maxHelperFailureReason, "the parent reads exactly one message of this size")
@@ -105,15 +101,13 @@ func TestFailurePayload(t *testing.T) {
 	require.Contains(t, long, " ... ")
 }
 
-// TestHelperFailureReasonCarriesTheScriptDiagnostics pins what the tray
-// notification shows: the real create script of the platform runs here with
-// stub tools that reject every call, and the reason the helper hands to the
-// parent has to carry the script's own diagnostics — what failed and its
-// "failed near:" summary — not just "exit status 1".
+// TestHelperFailureReasonCarriesTheScriptDiagnostics 固定了托盘通知所显示的
+// 内容：这里用拒绝一切调用的 stub 工具真实运行当前平台的创建脚本，helper
+// 交给父进程的原因必须携带脚本自身的诊断信息——失败的是什么以及它的
+// "failed near:" 摘要——而不只是 "exit status 1"。
 //
-// The stubs also keep the test from reconfiguring the machine it runs on: the
-// linux script only reaches for "ip", the darwin one for "ifconfig" and
-// "route".
+// stub 工具还能防止测试重新配置运行它的机器：linux 脚本只会用到 "ip"，
+// darwin 脚本只会用到 "ifconfig" 和 "route"。
 func TestHelperFailureReasonCarriesTheScriptDiagnostics(t *testing.T) {
 	shell, tools := "bash", []string{"ip"}
 	if runtime.GOOS == "darwin" {
@@ -145,8 +139,8 @@ func TestHelperFailureReasonCarriesTheScriptDiagnostics(t *testing.T) {
 	require.LessOrEqual(t, len(reason), maxHelperFailureReason)
 }
 
-// TestReceiveFdReceivesTheSentFd guards the same path from the other side: the
-// give-up signal must not make the parent reject the fd a healthy helper sends.
+// TestReceiveFdReceivesTheSentFd 从另一侧守护同一条路径：放弃信号绝不能
+// 让父进程拒绝健康 helper 发来的 fd。
 func TestReceiveFdReceivesTheSentFd(t *testing.T) {
 	socketPath := fdTestSocketPath(t)
 	listener, err := net.Listen("unix", socketPath)
@@ -167,8 +161,7 @@ func TestReceiveFdReceivesTheSentFd(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, <-sent, "the helper failed to send its fd")
 
-	// The received descriptor has to be the read end of the pipe the "helper"
-	// sent, not just some number.
+	// 收到的描述符必须是 "helper" 发送的管道读端，而不只是某个数字。
 	received := os.NewFile(uintptr(fd), "received-fd")
 	t.Cleanup(func() { received.Close() }) //nolint:errcheck
 

@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 )
 
-// ExecutablePath returns the real path of the current executable, resolving
-// symlinks so the result is stable across launches (macOS Finder/launchd
-// launch through a symlinked bundle path). Falls back to the raw
-// os.Executable result when symlinks cannot be resolved.
+// ExecutablePath 返回当前可执行文件的真实路径，会解析符号链接，
+// 以保证多次启动时结果稳定（macOS 的 Finder/launchd 通过符号链接的
+// bundle 路径启动）。当符号链接无法解析时，回退到
+// os.Executable 的原始结果。
 func ExecutablePath() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {

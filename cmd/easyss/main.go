@@ -28,10 +28,9 @@ import (
 )
 
 func main() {
-	// The "selfupdate" and "tun-helper" subcommands are handled before flag
-	// parsing so they never collide with the proxy flags. selfupdate replaces
-	// the running binary and exits; tun-helper runs this binary as the
-	// elevated TUN helper (spawned internally by the tray process) and exits.
+	// "selfupdate" 和 "tun-helper" 子命令在 flag 解析之前处理，
+	// 这样它们永远不会与代理参数冲突。selfupdate 会替换当前运行的二进制并退出；
+	// tun-helper 则以提权 TUN 助手模式运行本二进制（由托盘进程内部拉起）并退出。
 	if runSelfupdateSubcommand() {
 		return
 	}
@@ -71,9 +70,8 @@ func main() {
 	flag.StringVar(&sc.ProxyFile, "proxy-file", "", "custom proxy file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
 	flag.BoolVar(&pprofEnabled, "pprof", false, "enable pprof debug server on :6060")
 
-	// Custom usage so --help/-h also introduces the "selfupdate" and
-	// "tun-helper" subcommands, which are handled before flag parsing and
-	// would otherwise be invisible.
+	// 自定义 usage，使 --help/-h 也能介绍 "selfupdate" 和 "tun-helper"
+	// 子命令——它们在 flag 解析之前处理，否则在帮助中不可见。
 	flag.Usage = func() {
 		bin := filepath.Base(os.Args[0])
 		out := flag.CommandLine.Output()
@@ -112,9 +110,8 @@ Flags:
 		os.Exit(0)
 	}
 
-	// On macOS the app is often launched by Finder/launchd with cwd=/,
-	// so a relative config path is first looked up in the cwd and then
-	// falls back to the executable directory.
+	// 在 macOS 上应用常由 Finder/launchd 以 cwd=/ 启动，
+	// 因此相对配置文件路径会先在工作目录查找，再回退到可执行文件所在目录。
 	configFile = util.ResolvePath(configFile)
 
 	cfg, err := config.LoadConfig(configFile)
@@ -139,9 +136,8 @@ Flags:
 		config.ApplySimpleOverrides(cfg, sc)
 	}
 
-	// Resolve relative file paths (direct_file/proxy_file/ca_path) against
-	// the executable directory so that macOS Finder/launchd launches (cwd=/)
-	// can still find the files placed next to the binary/.app bundle.
+	// 将相对文件路径（direct_file/proxy_file/ca_path）相对于可执行文件目录解析，
+	// 这样 macOS Finder/launchd 启动（cwd=/）时仍能找到放在二进制/.app 包旁边的文件。
 	cfg.ResolveFilePaths()
 
 	if cfg.Log.FilePath != "" && !filepath.IsAbs(cfg.Log.FilePath) {
@@ -154,14 +150,13 @@ Flags:
 	log.Init(cfg.Log.FilePath, cfg.Log.Level)
 	log.Info("[EASYSS-V3] " + version.String())
 
-	// Remove leftovers from a previous self-update (the renamed old binary
-	// kept for Windows/macOS, stale staging directories). Runs after
-	// log.Init so its logs land in the configured output instead of the
-	// default stdout handler, which is invisible in GUI builds.
+	// 清理上次自更新遗留的文件（为 Windows/macOS 保留的重命名旧二进制、过期的暂存目录）。
+	// 在 log.Init 之后执行，这样其日志会写入配置的输出，而不是默认的 stdout 处理器
+	//（GUI 构建中 stdout 不可见）。
 	selfupdate.CleanupOld()
 
-	// Make config file path absolute so that any elevated helper
-	// process can find it regardless of working directory.
+	// 将配置文件路径改为绝对路径，这样任何提权助手进程
+	// 无论工作目录如何都能找到它。
 	if !filepath.IsAbs(configFile) {
 		if abs, err := filepath.Abs(configFile); err == nil {
 			configFile = abs
@@ -207,21 +202,19 @@ func sigWait() {
 
 type App struct {
 	cfg        *config.ClientConfig
-	configFile string // absolute path to config file
+	configFile string // 配置文件绝对路径
 	core       *runner.Core
 	tunMgr     *tun.Manager
 	pprofSrv   *http.Server
 
-	// startupWarn records the first non-fatal startup warning (e.g. the
-	// server domain failed to resolve, or a custom rule file failed to
-	// load). The client keeps running; the tray surfaces it as a system
-	// notification, headless builds log it.
+	// startupWarn 记录首个非致命启动警告（例如服务端域名解析失败，
+	// 或自定义规则文件加载失败）。客户端继续运行；托盘以系统通知形式
+	// 呈现，headless 构建则记入日志。
 	startupWarn error
 
-	// statsCloser stops the background stats logger. It is guarded by
-	// statsMu because Start/Stop can run concurrently (tray menu handlers)
-	// and because a failed Start leaves it unset: closing a nil channel
-	// would panic.
+	// statsCloser 用于停止后台统计日志器。它由 statsMu 保护，
+	// 因为 Start/Stop 可能并发执行（托盘菜单处理器），
+	// 而且 Start 失败时会保持未设置：关闭 nil channel 会 panic。
 	statsMu     sync.Mutex
 	statsCloser chan struct{}
 }
@@ -235,20 +228,17 @@ func (a *App) Start() error {
 	a.setStartupWarn(core.StartupWarn)
 
 	if a.cfg.Local.EnableTun2socks {
-		// On macOS and Linux non-root, TUN is started via privilege
-		// elevation (helper process or restart as root). Skip direct
-		// creation here to avoid "operation not permitted". Reaching this
-		// branch means the user asked for system-wide traffic but will not
-		// get it, so the tray tells them why instead of leaving them with a
-		// silently unproxied system. main.go is shared with headless builds,
-		// so this goes through tunStartNotify rather than the tray directly.
+		// 在 macOS 和 Linux 非 root 环境下，TUN 通过提权启动（助手进程或以 root 重启）。
+		// 这里跳过直接创建，以避免 "operation not permitted"。到达该分支意味着
+		// 用户请求了系统全局流量但无法获得，因此托盘会告知原因，
+		// 而不是留下一个静默未代理的系统。main.go 与 headless 构建共享，
+		// 所以这里通过 tunStartNotify 而非直接使用托盘。
 		if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !IsRoot() {
 			log.Warn("[EASYSS-V3] tun2socks requires root; skipped (use sudo, or run with system tray for automatic elevation)")
 			notifyTunSkippedNoRoot()
 		} else {
-			// runner.Run already ensured the server hostname resolves and
-			// pre-populated the DNS cache (resolveServerDomain), so TUN-mode
-			// DNS can never deadlock on the server domain.
+			// runner.Run 已确保服务端主机名可解析并预填充了 DNS 缓存
+			//（resolveServerDomain），因此 TUN 模式的 DNS 绝不会在服务端域名上死锁。
 			a.tunMgr = tun.New(a.tunConfig())
 
 			icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
@@ -268,43 +258,39 @@ func (a *App) Start() error {
 	return nil
 }
 
-// tunStartFailureHook, when non-nil, runs after the TUN engine fails to start.
-// The tray build installs it in buildTray so that a failure at startup also
-// reverts the menu item (see (*TrayApp).revertTunStart). Headless and
-// --disable-tray builds leave it nil: they have no UI state to revert, and the
-// engine is released by Stop(). It is only called by trayStartTunFailure, which
-// additionally reports the reason to the user.
+// tunStartFailureHook 非 nil 时，会在 TUN 引擎启动失败后执行。
+// 托盘构建在 buildTray 中安装它，这样启动时的失败也会回滚菜单项
+// （见 (*TrayApp).revertTunStart）。headless 和 --disable-tray 构建保持其为 nil：
+// 它们没有可回滚的 UI 状态，引擎由 Stop() 释放。它只被 trayStartTunFailure 调用，
+// 后者还会向用户报告失败原因。
 var tunStartFailureHook func()
 
-// tunStartNotify, when non-nil, reports a TUN start failure to the user through
-// the tray's system notification. The tray build installs it in buildTray (see
-// (*TrayApp).notifyTunStartFailure); headless and --disable-tray builds leave
-// it nil, so the reason reaches the log file alone. Without it the failure
-// would be invisible: the proxy core keeps running, and only the state the user
-// just turned on (system-wide traffic) is missing.
+// tunStartNotify 非 nil 时，通过托盘的系统通知向用户报告 TUN 启动失败。
+// 托盘构建在 buildTray 中安装它（见 (*TrayApp).notifyTunStartFailure）；
+// headless 和 --disable-tray 构建保持其为 nil，因此原因只会写入日志文件。
+// 没有它，失败将不可见：代理核心继续运行，只是用户刚开启的状态
+// （系统全局流量）缺失。
 var tunStartNotify func(msg string)
 
-// tunStartErrorText, when non-nil, turns a TUN start error into the message
-// shown to the user, and may return an empty string for a failure the user
-// caused deliberately (see friendlyTunError in tray.go, installed in
-// buildTray). It stays nil in headless and --disable-tray builds, where
-// trayStartTunFailure falls back to err.Error() — main.go is compiled into
-// every build and cannot reference tray.go.
+// tunStartErrorText 非 nil 时，将 TUN 启动错误转换为展示给用户的消息，
+// 对用户有意造成的失败可返回空字符串（见 tray.go 中的 friendlyTunError，
+// 在 buildTray 中安装）。在 headless 和 --disable-tray 构建中保持为 nil，
+// 此时 trayStartTunFailure 回退到 err.Error() —— main.go 被编译进每个构建，
+// 无法引用 tray.go。
 //
-// The current value is read on the engine goroutine, so it is written exactly
-// once, during startup, before any engine start can fail.
+// 当前值在引擎 goroutine 上读取，因此只在启动期间、任何引擎启动可能失败之前
+// 写入一次。
 var tunStartErrorText func(err error) string
 
-// startTunEngine starts the tun2socks engine in the background. Manager.Start
-// blocks through the device setup, the settle delay and the platform route
-// scripts (up to 60s), so it must not run on the caller's goroutine.
+// startTunEngine 在后台启动 tun2socks 引擎。Manager.Start
+// 会阻塞至设备设置、稳定等待延迟和平台路由脚本完成（最长 60 秒），
+// 因此不能放在调用方 goroutine 上运行。
 //
-// mode names how the device was acquired ("device" by name, "fd" from the
-// elevated helper) so a failure is traceable to one of the two paths.
+// mode 表示设备获取方式（"device" 表示按名称、"fd" 表示来自提权助手），
+// 以便失败可追溯到两条路径之一。
 //
-// Upstream reports a failed start as an error instead of the log.Fatalf that
-// used to kill the process (tun2socks #550/#552), so the half-enabled state
-// has to be undone by whoever owns it rather than by exiting.
+// 上游把启动失败作为错误返回，而不是像过去那样用 log.Fatalf 杀死进程
+// （tun2socks #550/#552），因此半启用状态必须由其持有者撤销，而不是靠退出进程。
 func startTunEngine(mgr *tun.Manager, mode string) {
 	go func() {
 		if err := mgr.Start(); err != nil {
@@ -314,14 +300,13 @@ func startTunEngine(mgr *tun.Manager, mode string) {
 	}()
 }
 
-// trayStartTunFailure is the single owner of "the TUN engine failed to start":
-// it reverts the half-enabled state (hook) and tells the user why (notify).
+// trayStartTunFailure 是"TUN 引擎启动失败"的唯一处理者：
+// 它回滚半启用状态（hook）并向用户说明原因（notify）。
 //
-// tunStartErrorText may return an empty message for a failure the user asked for
-// rather than suffered (see friendlyTunError): Stop() cancelling the start —
-// toggle off, server switch, app exit — is not an error worth interrupting
-// anyone over. The revert still runs in that case: the menu has to end up
-// unchecked regardless of who stopped what.
+// tunStartErrorText 对用户主动要求而非被动承受的失败可返回空消息
+// （见 friendlyTunError）：Stop() 取消启动 —— 关闭开关、切换服务器、退出应用 ——
+// 都不值得为此打扰用户。这种情况下回滚仍会执行：无论谁停止了什么，
+// 菜单最终都必须处于未勾选状态。
 func trayStartTunFailure(err error) {
 	if tunStartFailureHook != nil {
 		tunStartFailureHook()
@@ -338,19 +323,17 @@ func trayStartTunFailure(err error) {
 	}
 }
 
-// notifyTunSkippedNoRoot reports that TUN was configured but could not be
-// started without administrator privileges. The text is fixed: there is no
-// underlying error to append, and the actionable hint is the same on every
-// platform that reaches this path.
+// notifyTunSkippedNoRoot 报告 TUN 已配置但因缺少管理员权限而无法启动。
+// 提示文本是固定的：没有可附加的底层错误，而且可操作的建议在
+// 到达该路径的所有平台上都一样。
 func notifyTunSkippedNoRoot() {
 	if tunStartNotify != nil {
 		tunStartNotify("Tun2socks 未启用：需要管理员权限，请以 root 运行或使用系统托盘授权")
 	}
 }
 
-// setStartupWarn records the first non-fatal startup warning. The client
-// keeps running; the tray surfaces it as a system notification, headless
-// builds log it.
+// setStartupWarn 记录首个非致命启动警告。客户端继续运行；
+// 托盘以系统通知形式呈现，headless 构建则记入日志。
 func (a *App) setStartupWarn(err error) {
 	if err == nil || a.startupWarn != nil {
 		return
@@ -373,9 +356,8 @@ func (a *App) Stop() {
 	}
 }
 
-// startStatsLoop (re)starts the background stats logger, stopping a previous
-// loop if one is still running. The stop channel is captured by the goroutine
-// so a later restart cannot leave the old loop selecting on the new channel.
+// startStatsLoop（重新）启动后台统计日志器，若之前的循环仍在运行则将其停止。
+// 停止 channel 被 goroutine 捕获，因此后续重启不会让旧循环在新 channel 上 select。
 func (a *App) startStatsLoop() {
 	a.statsMu.Lock()
 	defer a.statsMu.Unlock()
@@ -386,8 +368,8 @@ func (a *App) startStatsLoop() {
 	go a.statsLoop(a.statsCloser)
 }
 
-// stopStatsLoop stops the background stats logger. It is safe to call on an
-// App that never started one, and safe to call repeatedly.
+// stopStatsLoop 停止后台统计日志器。对从未启动过统计日志器的 App 调用是安全的，
+// 重复调用也是安全的。
 func (a *App) stopStatsLoop() {
 	a.statsMu.Lock()
 	defer a.statsMu.Unlock()
@@ -453,10 +435,8 @@ func (a *App) statsLoop(done <-chan struct{}) {
 	}
 }
 
-// tunConfig builds the TUN configuration for this App. It is the single
-// construction point shared by the startup path and the tray toggle, so the
-// two cannot drift apart (notably the server-IPv6 hint, which the tray path
-// used to omit).
+// tunConfig 为本 App 构建 TUN 配置。它是启动路径与托盘开关共享的唯一构造点，
+// 因此两者不会出现偏差（尤其是 server-IPv6 提示，托盘路径过去常常遗漏它）。
 func (a *App) tunConfig() tun.Config {
 	cfg := tun.Config{
 		Socks5Addr: util.Socks5URI(a.cfg.Local.SocksPort),
@@ -470,8 +450,8 @@ func (a *App) tunConfig() tun.Config {
 	return cfg
 }
 
-// methodFromServer returns the configured AEAD method, falling back to
-// AES-256-GCM when the config names an unknown one.
+// methodFromServer 返回配置的 AEAD 加密方法；当配置指定了未知方法时
+// 回退到 AES-256-GCM。
 func (a *App) methodFromServer() protocol.Method {
 	method := protocol.MethodFromString(a.cfg.DefaultServer().Method)
 	if method == 0 {
@@ -480,10 +460,9 @@ func (a *App) methodFromServer() protocol.Method {
 	return method
 }
 
-// tunDNS returns the DNS server to set on the system during TUN mode.
-// When the built-in DNS forward server is enabled, queries should go to
-// 127.0.0.1 so they are handled and logged by EasySS. Otherwise a public
-// DNS server is used and queries go through the TUN device as raw UDP.
+// tunDNS 返回 TUN 模式下需要设置到系统的 DNS 服务器。
+// 当内置 DNS 转发服务器启用时，查询应发往 127.0.0.1，由 EasySS 处理和记录。
+// 否则使用公共 DNS 服务器，查询作为原始 UDP 通过 TUN 设备发出。
 func tunDNS(cfg *config.ClientConfig) string {
 	if cfg.Local.EnableForwardDNS {
 		return "127.0.0.1"

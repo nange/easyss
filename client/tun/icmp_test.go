@@ -18,16 +18,14 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
 
-// Addresses used by the handler tests: a LAN gateway and a host that the
-// auto rule set proxies.
+// handler 测试用到的地址：一个局域网网关，以及一个被 auto 规则集代理的主机。
 var (
 	lanGatewayAddr = tcpip.AddrFrom4([4]byte{192, 168, 3, 1})
 	proxiedAddr    = tcpip.AddrFrom4([4]byte{8, 8, 8, 8})
 )
 
-// testPacket is the adapter.Packet the tun2socks ICMP forwarder hands to the
-// handler: a packet buffer plus the transport endpoint ID the handler reads
-// the destination address from.
+// testPacket 是 tun2socks 的 ICMP forwarder 交给 handler 的 adapter.Packet：
+// 一个报文缓冲区，加上 handler 用来读取目的地址的传输端点 ID。
 type testPacket struct {
 	pkt *stack.PacketBuffer
 	id  stack.TransportEndpointID
@@ -39,9 +37,8 @@ func (p *testPacket) Stack() *stack.Stack { return nil }
 
 func (p *testPacket) ID() stack.TransportEndpointID { return p.id }
 
-// newPacket builds a packet whose network header is netHdrLen bytes followed
-// by icmpMsg, in the order the stack parses an inbound packet. The header
-// contents do not matter: only the ICMP type byte is read.
+// newPacket 构造一个报文：网络头为 netHdrLen 字节，其后紧跟 icmpMsg，顺序与
+// stack 解析入站报文时一致。头部内容无关紧要：只有 ICMP 类型字节会被读取。
 func newPacket(t *testing.T, netProto tcpip.NetworkProtocolNumber, netHdrLen int, icmpMsg []byte) *testPacket {
 	t.Helper()
 
@@ -61,7 +58,7 @@ func newPacket(t *testing.T, netProto tcpip.NetworkProtocolNumber, netHdrLen int
 	return &testPacket{pkt: pkt}
 }
 
-// icmpv4Msg and icmpv6Msg build a minimal ICMP message of the given type.
+// icmpv4Msg 和 icmpv6Msg 构造一个给定类型的最小 ICMP 报文。
 func icmpv4Msg(typ header.ICMPv4Type) []byte {
 	msg := make([]byte, header.ICMPv4MinimumSize)
 	header.ICMPv4(msg).SetType(typ)
@@ -111,8 +108,7 @@ func TestICMPEchoRequest(t *testing.T) {
 }
 
 func TestICMPEchoRequestMalformed(t *testing.T) {
-	// A packet too short to hold an ICMP header (a truncated capture) must be
-	// reported as non-echo instead of panicking.
+	// 短到装不下 ICMP 头的报文（截断的抓包）必须被报告为非 echo，而不是 panic。
 	t.Run("empty transport header", func(t *testing.T) {
 		pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 			Payload: buffer.MakeWithData([]byte{0x45, 0x00, 0x00, 0x00}),
@@ -132,16 +128,14 @@ func TestICMPEchoRequestMalformed(t *testing.T) {
 	})
 }
 
-// TestHandlePacketLogsOnlyEchoRequests is the regression test for the INFO
-// flood this handler used to produce: a LAN gateway probes every host on its
-// network, the kernel replies to each probe, and once the gateway address is
-// routed into the TUN device those replies (ICMP type 0) arrive here. Logging
-// them at INFO produced several lines per second forever, so only echo
-// requests — the messages that actually carry a routing decision — may reach
-// the INFO log; every other type belongs to the debug log.
+// TestHandlePacketLogsOnlyEchoRequests 是针对本 handler 曾经产生的 INFO 日志
+// 洪泛的回归测试：局域网网关会探测其网络上的每台主机，内核回复每个探测，而一旦
+// 网关地址被路由进 TUN 设备，这些回复（ICMP 类型 0）就会到达这里。把它们记成
+// INFO 日志会永久性地每秒产生数行输出，因此只有 echo 请求——真正携带路由决策
+// 的报文——才能进入 INFO 日志；其他所有类型都归调试日志。
 func TestHandlePacketLogsOnlyEchoRequests(t *testing.T) {
-	// Build the router before swapping the logger: router.New logs the rule
-	// files it loads and that output is not part of what this test asserts.
+	// 在替换 logger 之前先构建 router：router.New 会记录它加载的规则文件，
+	// 而那段输出不在本测试的断言范围内。
 	rt, err := router.New(router.Config{ProxyRule: router.ProxyRuleAuto})
 	if err != nil {
 		t.Fatalf("router.New: %v", err)
@@ -193,8 +187,8 @@ func TestHandlePacketLogsOnlyEchoRequests(t *testing.T) {
 			pkt := newPacket(t, ipv4.ProtocolNumber, header.IPv4MinimumSize, icmpv4Msg(tc.typ))
 			pkt.id = stack.TransportEndpointID{LocalAddress: tc.dst}
 
-			// No proxied exchange can complete in this test, so every case
-			// ends with the packet left to the default forwarder.
+			// 本测试中不会有任何代理交换完成，所以每个用例最终都把报文
+			// 留给默认 forwarder 处理。
 			if got := h.HandlePacket(pkt); got {
 				t.Errorf("HandlePacket() = true, want false")
 			}
@@ -225,8 +219,8 @@ func TestHandlePacketLogsOnlyEchoRequests(t *testing.T) {
 	}
 }
 
-// recordingHandler captures every record the log package emits so tests can
-// assert which levels a code path logs at.
+// recordingHandler 捕获 log 包发出的每一条记录，使测试可以断言某条代码路径
+// 在哪些级别上记录日志。
 type recordingHandler struct {
 	mu      sync.Mutex
 	records []slog.Record
@@ -251,7 +245,7 @@ func (h *recordingHandler) reset() {
 	h.records = nil
 }
 
-// infoMessages returns the messages of every record logged at INFO or above.
+// infoMessages 返回所有在 INFO 及以上级别记录的日志消息。
 func (h *recordingHandler) infoMessages() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -284,7 +278,7 @@ func (h *recordingHandler) findRecord(level slog.Level, msg string) (slog.Record
 	return slog.Record{}, false
 }
 
-// messages renders "level message" for every record, for failure output.
+// messages 将每条记录渲染为 "level message" 形式，用于失败输出。
 func (h *recordingHandler) messages() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()

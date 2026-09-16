@@ -50,15 +50,14 @@ func TestUpdateCheckLoopRepeats(t *testing.T) {
 	closing := make(chan struct{})
 	a := &TrayApp{closing: closing, updateCheckEvery: 10 * time.Millisecond}
 
-	// The loop only stops on shutdown, so the test runs it on its own
-	// goroutine and stops it through the closing channel. runUpdateCheckLoop
-	// is deliberately tested instead of autoCheckUpdate: the latter first
-	// waits updateCheckDelay (a minute) and skips the loop entirely for builds
-	// without an injected git tag, both of which would make this test a no-op.
-	// The check is a stub on purpose: the real checkUpdate path keeps the
-	// update state at "checking" until scheduleUpdateMenuReset fires 4s later,
-	// which would leak a timer callback into the rest of the test binary. The
-	// state machine itself is covered by TestCheckUpdateRequiresIdleState.
+	// 该循环只在关闭时停止，因此测试在自己的 goroutine 中运行它，并通过
+	// closing channel 停止它。这里刻意测试 runUpdateCheckLoop 而不是
+	// autoCheckUpdate：后者会先等待 updateCheckDelay（一分钟），并且对未注入
+	// git tag 的构建会完全跳过该循环，两者都会使此测试变成空操作。
+	// 这里的 check 回调故意使用桩函数：真实的 checkUpdate 路径会让更新状态
+	// 保持为 "checking"，直到 4 秒后 scheduleUpdateMenuReset 触发，这会把
+	// 一个定时器回调泄漏到测试二进制的其余部分。状态机本身由
+	// TestCheckUpdateRequiresIdleState 覆盖。
 	checked := make(chan struct{})
 	var once sync.Once
 	var checks atomic.Int64
@@ -120,9 +119,8 @@ func TestShouldNotifyOncePerTag(t *testing.T) {
 }
 
 func TestCheckUpdateRequiresIdleState(t *testing.T) {
-	// The update state machine is the only guard between the menu handler, the
-	// periodic loop and the installer: a check that is already "checking" (or
-	// "available"/"downloading") must not query the API again.
+	// 更新状态机是菜单处理器、周期循环和安装器之间的唯一守卫：当检查已经
+	// 处于 "checking"（或 "available"/"downloading"）状态时，不得再次查询 API。
 	var calls atomic.Int64
 	a := &TrayApp{App: &App{cfg: &config.ClientConfig{}}}
 	a.checkLatest = func(context.Context, *selfupdate.Client) (*selfupdate.Release, error) {
@@ -155,7 +153,7 @@ func TestUpdateBadge(t *testing.T) {
 	for y := 0; y < 16 && !changed; y++ {
 		for x := 16; x < 32; x++ {
 			r, _, _, _ := img.At(x, y).RGBA()
-			if r != 0x1212 { // 8-bit 0x12 scaled to 16 bits
+			if r != 0x1212 { // 8 位的 0x12 放大到 16 位
 				changed = true
 				break
 			}
@@ -171,8 +169,8 @@ func TestUpdateBadge(t *testing.T) {
 }
 
 func TestUpdateBadgeKeepsTransparency(t *testing.T) {
-	// A template icon (macOS) is a monochrome mask: transparency has to
-	// survive the badge overlay, otherwise the menu bar shows a black square.
+	// 模板图标（macOS）是单色蒙版：透明度必须穿过角标叠加层保留下来，
+	// 否则菜单栏会显示一个黑色方块。
 	transparent := image.NewRGBA(image.Rect(0, 0, 44, 44))
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, transparent); err != nil {
@@ -212,7 +210,7 @@ func TestUpdateBadgeDecodeError(t *testing.T) {
 	}
 }
 
-// solidImage returns an encoded PNG of the given size filled with c.
+// solidImage 返回一个用 c 填充的、指定大小的 PNG 编码图像。
 func solidImage(w, h int, c color.Color) []byte {
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
 	for y := range h {
@@ -228,7 +226,7 @@ func solidImage(w, h int, c color.Color) []byte {
 	return buf.Bytes()
 }
 
-// decodePNG decodes PNG data back into an image for pixel assertions.
+// decodePNG 将 PNG 数据解码回图像，用于像素断言。
 func decodePNG(t *testing.T, data []byte) image.Image {
 	t.Helper()
 

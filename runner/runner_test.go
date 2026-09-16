@@ -18,26 +18,25 @@ import (
 func testConfig() *config.ClientConfig {
 	cfg := config.DefaultConfig()
 	cfg.Servers = []*config.ServerProfile{{
-		// A literal IP keeps startup-side DNS work out of the tests:
-		// resolveServerDomain (and the IPv6 resolution in client.New) both
-		// skip literal IPs, so tests never issue real DNS queries.
+		// 使用字面 IP 让测试不涉及启动阶段的 DNS 工作：
+		// resolveServerDomain（以及 client.New 中的 IPv6 解析）都会跳过
+		// 字面 IP，因此测试永远不会发起真实的 DNS 查询。
 		Address:  "127.0.0.1",
 		Port:     443,
 		Password: "test-password",
 		Method:   "aes-256-gcm",
 		Default:  true,
 	}}
-	// Skip the IPv6 resolution via direct DNS servers during client init,
-	// which would otherwise block for seconds per query in tests.
+	// 跳过客户端初始化期间通过直连 DNS 服务器进行的 IPv6 解析，
+	// 否则测试中每次查询都会阻塞数秒。
 	cfg.Routing.IPV6Rule = "disable"
 	return cfg
 }
 
-// TestStopImmediatelyAfterRun guards against the deadlock that occurs when
-// Socks5Server.Close races with the Start goroutine's accept loop setup.
-// GOMAXPROCS(1) forces the main goroutine to run to the point of Shutdown
-// before the server goroutine sets up its accept loop, deterministically
-// exposing the race. Run must remain safe to stop right after startup.
+// TestStopImmediatelyAfterRun 防止 Socks5Server.Close 与 Start goroutine 的
+// accept 循环初始化竞争时发生的死锁。GOMAXPROCS(1) 强制主 goroutine 先运行到
+// Shutdown 的位置，然后服务器 goroutine 才建立 accept 循环，从而确定性地
+// 暴露该竞争。Run 之后必须能立即安全地 Stop。
 func TestStopImmediatelyAfterRun(t *testing.T) {
 	old := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(old)
@@ -55,8 +54,8 @@ func TestStopImmediatelyAfterRun(t *testing.T) {
 	}
 }
 
-// occupyTCPPort returns a listener bound to a random 127.0.0.1 port that
-// stays open for the duration of the test, so the port is unavailable.
+// occupyTCPPort 返回一个绑定到随机 127.0.0.1 端口的监听器，它在整个测试期间
+// 保持打开，因此该端口不可用。
 func occupyTCPPort(t *testing.T) (net.Listener, int) {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -67,7 +66,7 @@ func occupyTCPPort(t *testing.T) (net.Listener, int) {
 	return l, l.Addr().(*net.TCPAddr).Port
 }
 
-// freePort returns a port that is currently available for binding.
+// freePort 返回一个当前可用于绑定的端口。
 func freePort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -79,8 +78,8 @@ func freePort(t *testing.T) int {
 	return port
 }
 
-// occupyUDPPort returns a packet conn bound to a random 127.0.0.1 UDP port
-// that stays open for the duration of the test.
+// occupyUDPPort 返回一个绑定到随机 127.0.0.1 UDP 端口的包连接，
+// 它在整个测试期间保持打开。
 func occupyUDPPort(t *testing.T) net.PacketConn {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -156,13 +155,11 @@ func TestRunOKWhenPortsAreFree(t *testing.T) {
 	core.Stop()
 }
 
-// stubWarmUp replaces warmUpCore so the dispatch logic can be asserted without
-// any network. It counts the probes, releases done when a stubbed probe
-// returns, and restores the previous implementation when the test ends.
+// stubWarmUp 替换 warmUpCore，使调度逻辑可以在没有任何网络的情况下被断言。
+// 它统计探测次数，在桩探测返回时释放 done，并在测试结束时恢复之前的实现。
 //
-// startWarmUp captures warmUpCore at dispatch time, so a probe that outlives
-// its test still calls this stub even after the cleanup below restores the
-// package var.
+// startWarmUp 在派发时捕获 warmUpCore，因此比其测试存活得更久的探测即使在
+// 下面的清理恢复了包变量之后，仍会调用这个桩。
 func stubWarmUp(t *testing.T, err error) (*atomic.Int64, *waitSignal) {
 	t.Helper()
 
@@ -180,8 +177,8 @@ func stubWarmUp(t *testing.T, err error) (*atomic.Int64, *waitSignal) {
 	return calls, done
 }
 
-// waitSignal reports that a stubbed probe returned. It is closed by the stub
-// goroutine and safe to close more than once.
+// waitSignal 用于报告桩探测已返回。它由桩 goroutine 关闭，
+// 并且可以安全地关闭多次。
 type waitSignal struct {
 	once sync.Once
 	done chan struct{}
@@ -191,8 +188,7 @@ func (w *waitSignal) close() {
 	w.once.Do(func() { close(w.done) })
 }
 
-// waitProbe blocks until the stubbed probe returned, failing the test if it
-// never did.
+// waitProbe 阻塞直到桩探测返回，如果始终未返回则使测试失败。
 func (w *waitSignal) waitProbe(t *testing.T, what string) {
 	t.Helper()
 
@@ -203,8 +199,8 @@ func (w *waitSignal) waitProbe(t *testing.T, what string) {
 	}
 }
 
-// shortWarmUpStartDelay shortens the delay the background warm-up waits for,
-// so tests do not have to sleep for config.WarmUpStartDelay.
+// shortWarmUpStartDelay 缩短后台预热等待的延迟，
+// 使测试不必真的睡眠 config.WarmUpStartDelay 那么久。
 func shortWarmUpStartDelay(t *testing.T, d time.Duration) {
 	t.Helper()
 
@@ -213,10 +209,9 @@ func shortWarmUpStartDelay(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { warmUpStartDelay = old })
 }
 
-// TestStartWarmUpDispatch covers the gating of the background warm-up: it runs
-// exactly when the configuration allows it and never propagates its failure.
-// Every assertion is event-based (the stub signals completion) so the test does
-// not depend on scheduling delays, which the race detector inflates.
+// TestStartWarmUpDispatch 覆盖后台预热的门控逻辑：它只在配置允许时运行，
+// 且绝不会传播其失败。所有断言都是基于事件的（桩会发出完成信号），
+// 因此测试不依赖调度延迟——而调度延迟会被竞态检测器放大。
 func TestStartWarmUpDispatch(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -259,7 +254,7 @@ func TestStartWarmUpDispatch(t *testing.T) {
 				core.SocksServer = &proxy.Socks5Server{}
 			}
 
-			// Best-effort by contract: startWarmUp never blocks or panics.
+			// 按约定尽力而为：startWarmUp 从不阻塞也不会 panic。
 			core.startWarmUp()
 
 			if tt.wantProbes > 0 {
@@ -272,9 +267,8 @@ func TestStartWarmUpDispatch(t *testing.T) {
 	}
 }
 
-// TestStartWarmUpWaitStartDelay verifies that the probe is postponed by
-// config.WarmUpStartDelay: the host gets time to bring its network path up
-// before a probe can fail for that reason alone.
+// TestStartWarmUpWaitStartDelay 验证探测会被 config.WarmUpStartDelay 推迟：
+// 主机有时间建立网络路径，探测不会仅仅因为这个原因而失败。
 func TestStartWarmUpWaitStartDelay(t *testing.T) {
 	shortWarmUpStartDelay(t, 100*time.Millisecond)
 	calls, done := stubWarmUp(t, nil)
@@ -292,15 +286,13 @@ func TestStartWarmUpWaitStartDelay(t *testing.T) {
 	}
 }
 
-// TestStopCancelsPendingWarmUp verifies the shutdown path: a warm-up still
-// waiting for its start delay is dropped by the cancel Stop performs, so a
-// short-lived core never probes against a torn-down transport.
+// TestStopCancelsPendingWarmUp 验证关闭路径：仍在等待启动延迟的预热会被
+// Stop 执行的取消操作丢弃，因此短命的核心绝不会针对已拆除的传输层探测。
 //
-// The test calls the cancel path directly instead of Core.Stop: the warm-up
-// cancel is the first thing Stop does, while the rest of Stop tears down
-// live servers this bare Core does not own.
+// 该测试直接调用取消路径而不是 Core.Stop：取消预热是 Stop 做的第一件事，
+// 而 Stop 的其余部分会拆除这个裸 Core 并不拥有的活动服务器。
 func TestStopCancelsPendingWarmUp(t *testing.T) {
-	// Long enough that the probe can only fire if the cancel failed.
+	// 足够长，使得探测只有在取消失败时才会触发。
 	shortWarmUpStartDelay(t, 5*time.Second)
 	calls, _ := stubWarmUp(t, nil)
 
@@ -327,17 +319,16 @@ func TestStopCancelsPendingWarmUp(t *testing.T) {
 	}
 }
 
-// warmUpCancelOf snapshots the cancel func of the dispatched warm-up.
+// warmUpCancelOf 快照已派发预热的 cancel func。
 func warmUpCancelOf(c *Core) context.CancelFunc {
 	c.warmUpMu.Lock()
 	defer c.warmUpMu.Unlock()
 	return c.warmUpCancel
 }
 
-// TestStopCancelsInFlightWarmUp verifies that Stop also cancels a probe that
-// already started: the warm-up context is done by the time Stop returns, so a
-// transport that honours ctx stops instead of racing the closing core. Stop
-// must not block on the probe either.
+// TestStopCancelsInFlightWarmUp 验证 Stop 也会取消已经开始执行的探测：
+// 当 Stop 返回时预热 context 已完成，因此遵守 ctx 的传输层会停止，
+// 而不是与正在关闭的核心竞争。Stop 也绝不能阻塞在探测上。
 func TestStopCancelsInFlightWarmUp(t *testing.T) {
 	shortWarmUpStartDelay(t, 0)
 	calls, done := stubWarmUp(t, nil)
@@ -354,8 +345,7 @@ func TestStopCancelsInFlightWarmUp(t *testing.T) {
 		t.Fatalf("warm-up probe ran %d times, want 1", got)
 	}
 
-	// Stop cancels the warm-up context and returns without waiting for the
-	// probe that may still be in flight.
+	// Stop 取消预热 context 并立即返回，不等待可能仍在进行中的探测。
 	stopped := make(chan struct{})
 	go func() {
 		core.cancelWarmUp()
@@ -373,9 +363,9 @@ func TestStopCancelsInFlightWarmUp(t *testing.T) {
 	}
 }
 
-// TestResolveServerDomain covers the startup server-domain resolution with
-// an injected prePopulateServerDomain so no real DNS query ever leaves the
-// test. A failed resolution is a fatal error (the server is unreachable).
+// TestResolveServerDomain 通过注入 prePopulateServerDomain 覆盖启动时的
+// 服务器域名解析，确保测试中永远不会发出真实的 DNS 查询。
+// 解析失败是致命错误（服务器不可达）。
 func TestResolveServerDomain(t *testing.T) {
 	oldFn := prePopulateServerDomain
 	oldTimeout := serverStartupResolveTimeout
@@ -388,8 +378,8 @@ func TestResolveServerDomain(t *testing.T) {
 	serverStartupResolveTimeout = 50 * time.Millisecond
 	serverStartupRetryDelay = 0
 
-	// A literal IP needs no resolution: skipped without touching the DNS.
-	cfgIP := testConfig() // Address is 127.0.0.1
+	// 字面 IP 无需解析：不触碰 DNS 直接跳过。
+	cfgIP := testConfig() // Address 是 127.0.0.1
 	attempts := 0
 	prePopulateServerDomain = func(*proxy.Socks5Server, context.Context, string, []string, bool) error {
 		attempts++
@@ -403,7 +393,7 @@ func TestResolveServerDomain(t *testing.T) {
 		t.Fatalf("IP address should not query DNS, got %d attempts", attempts)
 	}
 
-	// No default server: skipped.
+	// 没有默认服务器：跳过。
 	cfgNone := testConfig()
 	cfgNone.Servers = nil
 	c = &Core{}
@@ -411,7 +401,7 @@ func TestResolveServerDomain(t *testing.T) {
 		t.Fatalf("no server should not resolve: %v", err)
 	}
 
-	// Non-TUN failure: a single bounded attempt, fatal error returned.
+	// 非 TUN 模式失败：仅一次有界尝试，返回致命错误。
 	cfgDomain := testConfig()
 	cfgDomain.Servers[0].Address = "proxy.example.com"
 	cfgDomain.Local.EnableTun2socks = false
@@ -432,7 +422,7 @@ func TestResolveServerDomain(t *testing.T) {
 		t.Fatalf("non-TUN should attempt once, got %d", attempts)
 	}
 
-	// TUN failure: retried 3 times (the pre-population is mandatory there).
+	// TUN 模式失败：重试 3 次（那里的预填充是必需的）。
 	cfgTun := testConfig()
 	cfgTun.Servers[0].Address = "proxy.example.com"
 	cfgTun.Local.EnableTun2socks = true
@@ -445,7 +435,7 @@ func TestResolveServerDomain(t *testing.T) {
 		t.Fatalf("TUN should attempt 3 times, got %d", attempts)
 	}
 
-	// Success: no error.
+	// 成功：无错误。
 	prePopulateServerDomain = func(*proxy.Socks5Server, context.Context, string, []string, bool) error {
 		attempts++
 		return nil
@@ -459,7 +449,7 @@ func TestResolveServerDomain(t *testing.T) {
 		t.Fatalf("expected a single successful attempt, got %d", attempts)
 	}
 
-	// No DNS servers configured: reported as a resolution failure.
+	// 未配置 DNS 服务器：按解析失败处理。
 	oldDirect := config.DirectDNSServers
 	config.DirectDNSServers = nil
 	t.Cleanup(func() { config.DirectDNSServers = oldDirect })
@@ -473,9 +463,8 @@ func TestResolveServerDomain(t *testing.T) {
 	}
 }
 
-// TestRunFailsOnServerDomainResolve verifies that a failed server-domain
-// resolution aborts startup: Run returns a fatal error instead of starting
-// the servers, because the proxy cannot work without it.
+// TestRunFailsOnServerDomainResolve 验证服务器域名解析失败会中止启动：
+// Run 返回致命错误而不是启动服务器，因为没有它代理无法工作。
 func TestRunFailsOnServerDomainResolve(t *testing.T) {
 	oldFn := prePopulateServerDomain
 	oldTimeout := serverStartupResolveTimeout

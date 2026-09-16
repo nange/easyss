@@ -24,16 +24,14 @@ func FileExists(path string) (bool, error) {
 	return false, err
 }
 
-// ResolvePath resolves a possibly-relative file path to an absolute one when
-// it cannot be found in the current working directory. On macOS the app is
-// often launched by Finder or launchd with cwd=/ (LaunchAgent plists have no
-// WorkingDirectory), so relative paths in config files (direct.txt, proxy.txt,
-// ca_path, cert files, ...) would otherwise never be found even though they
-// sit next to the binary/.app bundle.
+// ResolvePath 在相对文件路径无法于当前工作目录中找到时，将其解析为绝对路径。
+// 在 macOS 上，应用常由 Finder 或 launchd 以 cwd=/ 启动（LaunchAgent 的
+// plist 没有 WorkingDirectory），因此配置文件（direct.txt、proxy.txt、
+// ca_path、证书文件等）中的相对路径即使与二进制/.app bundle 位于同一目录，
+// 也永远无法被找到。
 //
-// Empty strings and absolute paths are returned unchanged; relative paths that
-// exist in the cwd are kept as-is for backward compatibility; anything else is
-// joined with the executable directory (see CurrentDir).
+// 空字符串和绝对路径原样返回；存在于当前工作目录中的相对路径为了向后兼容
+// 保持原样；其余情况则与可执行文件所在目录拼接（参见 CurrentDir）。
 func ResolvePath(p string) string {
 	if p == "" || filepath.IsAbs(p) {
 		return p
@@ -55,17 +53,17 @@ func CurrentDir() string {
 
 	dir := filepath.Dir(path)
 
-	// If running from inside a macOS .app bundle, return the directory
-	// containing the .app so that config files live alongside the bundle.
+	// 如果从 macOS .app bundle 内部运行，返回包含 .app 的目录，
+	// 使配置文件与 bundle 放在一起。
 	if isAppBundleDir(dir) {
-		// dir is .../Easyss.app/Contents/MacOS → go up 3 → parent of .app
+		// dir 为 .../Easyss.app/Contents/MacOS → 向上 3 级 → .app 的父目录
 		return filepath.Dir(filepath.Dir(filepath.Dir(dir)))
 	}
 
 	return dir
 }
 
-// isAppBundleDir reports whether dir is the MacOS directory inside a .app bundle.
+// isAppBundleDir 报告 dir 是否为 .app bundle 内的 MacOS 目录。
 func isAppBundleDir(dir string) bool {
 	if !strings.HasSuffix(dir, "/Contents/MacOS") {
 		return false
@@ -116,9 +114,9 @@ func ReadFileLines(file string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		// FileExists reports (false, nil) for a missing file; surface it
-		// as a proper error instead of silently returning empty lines
-		// (which would hide a misconfigured rule file path).
+		// FileExists 对不存在的文件返回 (false, nil)；这里将其转换为
+		// 真正的错误返回，而不是静默返回空行列表
+		// （否则会掩盖配置错误的规则文件路径）。
 		return nil, fmt.Errorf("%s: %w", file, os.ErrNotExist)
 	}
 	f, err := os.Open(file)

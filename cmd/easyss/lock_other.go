@@ -2,13 +2,12 @@
 
 package main
 
-// tryAcquireSingletonLock is a no-op on platforms without a lock
-// implementation: the app runs without single-instance protection, matching
-// the other platform fallback files (root_fallback.go, autostart_other.go).
+// tryAcquireSingletonLock 在没有锁实现平台的空操作：应用在无单实例保护
+// 的情况下运行，与其它平台回退文件一致（root_fallback.go、autostart_other.go）。
 func tryAcquireSingletonLock() error { return nil }
 
-// acquireSingletonLock is a no-op (see tryAcquireSingletonLock).
+// acquireSingletonLock 是空操作（见 tryAcquireSingletonLock）。
 func acquireSingletonLock() {}
 
-// releaseSingletonLock is a no-op (see tryAcquireSingletonLock).
+// releaseSingletonLock 是空操作（见 tryAcquireSingletonLock）。
 func releaseSingletonLock() {}

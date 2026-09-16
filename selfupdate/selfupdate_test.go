@@ -27,10 +27,10 @@ func TestHasNewVersion(t *testing.T) {
 		{"v3.1.0", "v3.0.1", false},
 		{"v3.1.0", "v3.1.0", false},
 		{"v3.0", "v3.0.1", true},
-		{"", "v0.0.1", true},                   // dev build always updates
-		{"v3.0.1-5-gabc1234", "v3.0.1", false}, // git describe suffix ignored
+		{"", "v0.0.1", true},                   // 开发构建总是更新
+		{"v3.0.1-5-gabc1234", "v3.0.1", false}, // git describe 后缀被忽略
 		{"v3.0.1-5-gabc1234", "v3.0.2", true},
-		{"v3.1.0-rc1", "v3.1.0", true}, // prerelease < release
+		{"v3.1.0-rc1", "v3.1.0", true}, // 预发布 < 正式版
 		{"v3.0.0-rc9", "v3.0.0-rc11", true},
 		{"v3.0.0-rc11", "v3.0.0-rc9", false},
 		{"v3.0.0-rc10", "v3.0.0-rc9", false},
@@ -41,11 +41,11 @@ func TestHasNewVersion(t *testing.T) {
 		{"v3.0.0-rc9.1", "v3.0.0-rc10", true},
 		{"v3.0.0-beta9", "v3.0.0-beta11", true},
 		{"v3.0.0-beta11", "v3.0.0-beta9", false},
-		{"v3.0.0-alpha.9", "v3.0.0-alpha.10", true}, // dot prefix + numeric tail goes numeric (lexical would say false)
+		{"v3.0.0-alpha.9", "v3.0.0-alpha.10", true}, // 点号前缀 + 数字尾部按数值比较（字典序会得到 false）
 		{"v3.0.0-alpha.10", "v3.0.0-alpha.9", false},
-		{"v3.0.0-rc9", "v3.0.0-beta9", false}, // different prefix: lexical fallback, rc9 > beta9
-		{"3.0.1", "v3.0.2", true},             // missing "v" prefix tolerated
-		{"v3.0.1", "notasemver", true},        // unparsable falls back to inequality
+		{"v3.0.0-rc9", "v3.0.0-beta9", false}, // 前缀不同：回退到字典序，rc9 > beta9
+		{"3.0.1", "v3.0.2", true},             // 缺少 "v" 前缀也能解析
+		{"v3.0.1", "notasemver", true},        // 无法解析时回退到不等比较
 	}
 
 	for _, c := range cases {
@@ -105,7 +105,7 @@ func TestPickAssetFor(t *testing.T) {
 		assert.Equal(t, c.want, a.Name)
 	}
 
-	// Platform without a published asset for the product.
+	// 该产品在该平台没有已发布的资产。
 	assert.Nil(t, pickAssetFor(rel, ProductServer, "darwin", "arm64"))
 	assert.Nil(t, pickAssetFor(rel, ProductHeadless, "windows", "amd64"))
 }
@@ -122,11 +122,11 @@ func TestRunCheck(t *testing.T) {
 
 	c := &Client{direct: srv.Client()}
 
-	// Already up to date.
+	// 已是最新版本。
 	_, err := runCheck(context.Background(), c, "v9.9.9")
 	assert.ErrorIs(t, err, errUpToDate)
 
-	// Newer version available (runCheck never downloads).
+	// 有更新版本可用（runCheck 从不下载）。
 	rel, err := runCheck(context.Background(), c, "v0.0.1")
 	require.NoError(t, err)
 	require.NotNil(t, rel)
@@ -150,13 +150,13 @@ func TestRunCheckFailure(t *testing.T) {
 }
 
 func TestRunCLICommandHelp(t *testing.T) {
-	// --help/-h print the subcommand usage and exit 0 without any network call.
+	// --help/-h 打印子命令用法并以 0 退出，不发起任何网络请求。
 	assert.Equal(t, 0, RunCLICommand([]string{"--help"}, ProductHeadless))
 	assert.Equal(t, 0, RunCLICommand([]string{"-h"}, ProductHeadless))
 }
 
 func TestRunCLICommandBadFlag(t *testing.T) {
-	// Unknown flags exit 2, like the standard flag package's error convention.
+	// 未知标志以 2 退出，与标准 flag 包的错误约定一致。
 	assert.Equal(t, 2, RunCLICommand([]string{"--bogus"}, ProductHeadless))
 }
 
@@ -169,13 +169,13 @@ func TestUnzipRejectsTraversal(t *testing.T) {
 	makeTestZip(t, zipPath, map[string]string{
 		"easyss":           "binary",
 		"Easyss.app/a/b":   "nested",
-		"/abs/evil.txt":    "leading-slash", // leading slash is dropped by filepath.Join, stays inside
+		"/abs/evil.txt":    "leading-slash", // 前导斜杠会被 filepath.Join 去掉，因此仍落在解压目录内
 		"../evil.txt":      "evil",
 		"a/../../evil.txt": "evil",
 	})
 	require.NoError(t, unzip(zipPath, dest))
 
-	// Legitimate entries are extracted inside dest.
+	// 合法条目都被解压到 dest 内。
 	for _, rel := range []string{
 		"easyss",
 		filepath.Join("Easyss.app", "a", "b"),
@@ -185,13 +185,13 @@ func TestUnzipRejectsTraversal(t *testing.T) {
 		require.NoError(t, err, "expected %s to exist", rel)
 	}
 
-	// Nothing may be written outside dest even with a zip-slip entry.
+	// 即使存在 zip-slip 条目，也不得在 dest 之外写入任何内容。
 	_, err := os.Stat(filepath.Join(dir, "evil.txt"))
 	assert.True(t, os.IsNotExist(err), "zip-slip entry must be rejected")
 }
 
-// makeTestZip builds a zip at zipPath with the given name/content pairs.
-// Entries are written with unix mode 0755 so permission handling is exercised.
+// makeTestZip 用给定的 name/content 键值对在 zipPath 处构建一个 zip。
+// 条目以 unix 模式 0755 写入，以覆盖权限处理逻辑。
 func makeTestZip(t *testing.T, zipPath string, files map[string]string) {
 	t.Helper()
 
@@ -204,7 +204,7 @@ func makeTestZip(t *testing.T, zipPath string, files map[string]string) {
 		fw, err := w.CreateHeader(&zip.FileHeader{
 			Name:           name,
 			Method:         zip.Deflate,
-			CreatorVersion: 3<<8 | 20, // creator unix, spec 2.0
+			CreatorVersion: 3<<8 | 20, // 创建者 unix，规范 2.0
 			ExternalAttrs:  0o755 << 16,
 		})
 		require.NoError(t, err)
@@ -235,14 +235,14 @@ func TestUnzip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "app-file", string(content))
 
-	// The executable bit survives extraction (unix filesystems only).
+	// 可执行位在解压后仍然保留（仅 unix 文件系统）。
 	if runtime.GOOS != "windows" {
 		info, err := os.Stat(filepath.Join(dest, "easyss"))
 		require.NoError(t, err)
 		assert.NotZero(t, info.Mode()&0o111, "binary should stay executable")
 	}
 
-	// Nothing may be written outside dest even with a zip-slip entry.
+	// 即使存在 zip-slip 条目，也不得在 dest 之外写入任何内容。
 	slipPath := filepath.Join(dir, "rel-slip.zip")
 	makeTestZip(t, slipPath, map[string]string{"../evil.txt": "evil"})
 	require.NoError(t, unzip(slipPath, dest))
@@ -287,7 +287,7 @@ func TestInstallAtBundle(t *testing.T) {
 
 	require.NoError(t, installAt(exe, staging, ProductClient))
 
-	content, err := os.ReadFile(exe) // same path now resolves to the new bundle
+	content, err := os.ReadFile(exe) // 同一路径现在指向新的 bundle
 	require.NoError(t, err)
 	assert.Equal(t, "new", string(content))
 
@@ -350,7 +350,7 @@ func TestDownloadAssetSizeCheck(t *testing.T) {
 
 	c := &Client{direct: srv.Client()}
 
-	// Size mismatch is rejected.
+	// 大小不匹配会被拒绝。
 	_, err := c.downloadAsset(context.Background(), &asset{
 		Name:               "easyss-windows-amd64.zip",
 		BrowserDownloadURL: srv.URL,
@@ -359,7 +359,7 @@ func TestDownloadAssetSizeCheck(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "size")
 
-	// Size match succeeds and the temp file holds the downloaded bytes.
+	// 大小匹配时下载成功，临时文件保存了下载的字节。
 	path, err := c.downloadAsset(context.Background(), &asset{
 		Name:               "easyss-windows-amd64.zip",
 		BrowserDownloadURL: srv.URL,
@@ -375,8 +375,8 @@ func TestDownloadAssetSizeCheck(t *testing.T) {
 
 func TestClientProxyFallback(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Acting as an HTTP proxy, Host carries the target's authority; a
-		// direct request carries the server's own host.
+		// 作为 HTTP 代理时，Host 携带目标地址的 authority；直连请求则携带
+		// 服务器自身的主机名。
 		if r.Host == "203.0.113.1:9" {
 			_, _ = w.Write([]byte("via-proxy"))
 			return
@@ -388,7 +388,7 @@ func TestClientProxyFallback(t *testing.T) {
 	proxyURL, err := url.Parse(srv.URL)
 	require.NoError(t, err)
 
-	// Proxy path: the request must be served by the local proxy.
+	// 代理路径：请求必须由本地代理服务。
 	c := &Client{
 		proxy:  &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}},
 		direct: &http.Client{},
@@ -398,7 +398,7 @@ func TestClientProxyFallback(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	_ = resp.Body.Close()
 
-	// Dead proxy: Get must fall back to the direct client.
+	// 代理不可用：Get 必须回退到直连客户端。
 	dead := &Client{
 		proxy:  &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(deadProxyURL)}},
 		direct: srv.Client(),

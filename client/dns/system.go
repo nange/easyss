@@ -9,11 +9,11 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-// sysDNSFunc discovers the system dns servers, overridable in tests.
+// sysDNSFunc 负责发现系统 DNS 服务器，可在测试中覆盖。
 var sysDNSFunc = util.SysDNS
 
-// systemDNSServersFunc returns the formatted system dns server list consumed
-// by the fallback paths, overridable in tests.
+// systemDNSServersFunc 返回格式化后的系统 DNS 服务器列表，供回退路径使用，
+// 可在测试中覆盖。
 var systemDNSServersFunc = SystemDNSServers
 
 const systemDNSCacheTTL = 5 * time.Minute
@@ -24,11 +24,10 @@ var (
 	systemDNSTime   time.Time
 )
 
-// SystemDNSServers returns the system dns servers as host:port addresses,
-// discovered lazily from the os and cached briefly. It is used as a fallback
-// when all builtin direct dns servers are unavailable. An empty result is
-// cached as well so that a failing discovery (e.g. a slow `ipconfig` call)
-// is not repeated on every dns query.
+// SystemDNSServers 以 host:port 地址的形式返回系统 DNS 服务器，从操作系统
+// 惰性发现并短暂缓存。当所有内置直连 DNS 服务器都不可用时作为回退使用。
+// 空结果也会被缓存，这样失败的发现（例如缓慢的 ipconfig 调用）不会在每次
+// DNS 查询时重复执行。
 func SystemDNSServers() []string {
 	systemDNSMu.Lock()
 	defer systemDNSMu.Unlock()

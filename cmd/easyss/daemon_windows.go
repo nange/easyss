@@ -3,6 +3,6 @@
 package main
 
 func runDaemon() {
-	// Daemon mode is not supported on Windows.
-	// The caller in start.go already guards with runtime.GOOS != "windows".
+	// Windows 不支持守护模式。
+	// start.go 中的调用方已用 runtime.GOOS != "windows" 守护。
 }

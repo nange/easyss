@@ -12,19 +12,18 @@ import (
 	"time"
 )
 
-// SpawnTunHelper launches a long-running elevated TUN helper process via
-// osascript with administrator privileges. It creates a FIFO for lifecycle
-// signalling (close the writer to trigger helper exit) and a Unix socket for
-// receiving the TUN file descriptor. See spawnTunHelper for the full
-// lifecycle.
+// SpawnTunHelper 通过带管理员权限的 osascript 启动一个常驻的提权 TUN
+// helper 进程。它创建一个 FIFO 用于生命周期信号（关闭写端触发 helper
+// 退出），以及一个用于接收 TUN 文件描述符的 Unix socket。完整生命周期
+// 见 spawnTunHelper。
 //
-// Returns:
-//   - fifoWriter: close to signal the helper to shut down
-//   - fdListener: accept a connection and call ReceiveFd to get the TUN fd
+// 返回：
+//   - fifoWriter：关闭以通知 helper 关闭
+//   - fdListener：接受连接并调用 ReceiveFd 获取 TUN fd
 func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeout time.Duration) (io.WriteCloser, net.Listener, error) {
-	// macOS has no abstract Unix sockets: the fd socket is a filesystem entry
-	// that must be cleaned of stale files before listen and made accessible
-	// to the elevated (root) helper afterwards.
+	// macOS 没有抽象 Unix socket：fd socket 是文件系统条目，
+	// 必须在 listen 前清理陈旧文件，并在之后让提权的（root）helper
+	// 可以访问。
 	return spawnTunHelper(tunHelperElevator{
 		label: "osascript",
 		command: func(innerCmd string) *exec.Cmd {
@@ -39,7 +38,7 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 			os.Remove(fdSocketPath) //nolint:errcheck
 		},
 		afterListen: func(fdSocketPath string) {
-			// Ensure the socket is accessible by the elevated helper (root).
+			// 确保提权的 helper（root）可以访问该 socket。
 			os.Chmod(fdSocketPath, 0666) //nolint:errcheck
 		},
 		cleanupSocket: func(fdSocketPath string) {

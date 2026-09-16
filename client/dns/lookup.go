@@ -9,28 +9,26 @@ import (
 	"github.com/miekg/dns"
 )
 
-// DNSMsgTypeA sends a DNS A record query for domain to the specified server.
+// DNSMsgTypeA 向指定服务器发送 domain 的 DNS A 记录查询。
 func DNSMsgTypeA(dnsServer, domain string) (*dns.Msg, error) {
 	return queryMsg(context.Background(), dns.TypeA, dnsServer, domain)
 }
 
-// DNSMsgTypeAContext is DNSMsgTypeA bounded by ctx: the query fails as
-// soon as the context is done, even if the per-query client timeout (5s) has
-// not elapsed. Used by startup paths (server domain pre-resolution) that must
-// not stall proxy initialization on unreachable DNS servers.
+// DNSMsgTypeAContext 是受 ctx 约束的 DNSMsgTypeA：只要 context 结束查询即
+// 失败，即使单次查询的客户端超时（5s）尚未到。用于启动路径（服务器域名预
+// 解析），这些路径不能在不可达的 DNS 服务器上阻塞代理初始化。
 func DNSMsgTypeAContext(ctx context.Context, dnsServer, domain string) (*dns.Msg, error) {
 	return queryMsg(ctx, dns.TypeA, dnsServer, domain)
 }
 
-// DNSMsgTypeAAAA sends a DNS AAAA record query for domain to the specified server.
+// DNSMsgTypeAAAA 向指定服务器发送 domain 的 DNS AAAA 记录查询。
 func DNSMsgTypeAAAA(dnsServer, domain string) (*dns.Msg, error) {
 	return queryMsg(context.Background(), dns.TypeAAAA, dnsServer, domain)
 }
 
-// DNSMsgTypeAAAAContext is DNSMsgTypeAAAA bounded by ctx: the query fails as
-// soon as the context is done, even if the per-query client timeout (5s) has
-// not elapsed. Used by startup paths (server IPv6 resolution) that must not
-// stall proxy initialization on unreachable DNS servers.
+// DNSMsgTypeAAAAContext 是受 ctx 约束的 DNSMsgTypeAAAA：只要 context 结束
+// 查询即失败，即使单次查询的客户端超时（5s）尚未到。用于启动路径（服务器
+// IPv6 解析），这些路径不能在不可达的 DNS 服务器上阻塞代理初始化。
 func DNSMsgTypeAAAAContext(ctx context.Context, dnsServer, domain string) (*dns.Msg, error) {
 	return queryMsg(ctx, dns.TypeAAAA, dnsServer, domain)
 }
@@ -53,7 +51,7 @@ func queryMsg(ctx context.Context, dnsType uint16, dnsServer, domain string) (*d
 	return r, nil
 }
 
-// LookupIPV4From resolves IPv4 addresses for domain from the specified DNS server.
+// LookupIPV4From 从指定的 DNS 服务器解析 domain 的 IPv4 地址。
 func LookupIPV4From(dnsServer, domain string) ([]net.IP, error) {
 	msgA, err := DNSMsgTypeA(dnsServer, domain)
 	if err != nil || msgA == nil {
@@ -70,13 +68,13 @@ func LookupIPV4From(dnsServer, domain string) ([]net.IP, error) {
 	return ips, nil
 }
 
-// LookupIPV6From resolves IPv6 addresses for domain from the specified DNS server.
+// LookupIPV6From 从指定的 DNS 服务器解析 domain 的 IPv6 地址。
 func LookupIPV6From(dnsServer, domain string) ([]net.IP, error) {
 	return lookupIPV6From(context.Background(), dnsServer, domain)
 }
 
-// LookupIPV6FromContext is LookupIPV6From bounded by ctx (see
-// DNSMsgTypeAAAAContext).
+// LookupIPV6FromContext 是受 ctx 约束的 LookupIPV6From（参见
+// DNSMsgTypeAAAAContext）。
 func LookupIPV6FromContext(ctx context.Context, dnsServer, domain string) ([]net.IP, error) {
 	return lookupIPV6From(ctx, dnsServer, domain)
 }

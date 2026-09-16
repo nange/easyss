@@ -13,9 +13,8 @@ import (
 	"github.com/txthinking/socks5"
 )
 
-// recordingDialer wraps a plain UDP dialer, recording every dialed conn and
-// delaying each dial so concurrent datagram handlers overlap inside the
-// (map check -> dial -> insert) window of the direct UDP relay path.
+// recordingDialer 包装一个普通的 UDP dialer：记录每个拨号得到的连接，并延迟每次拨号，
+// 使并发的数据报处理器在直连 UDP 中继路径的（查 map -> 拨号 -> 插入）窗口内重叠。
 type recordingDialer struct {
 	mu    sync.Mutex
 	conns []net.Conn
@@ -59,9 +58,9 @@ func newDirectUDPTestServer(t *testing.T, dial func(context.Context, string, str
 	return srv
 }
 
-// startSilentRemoteUDP starts a local UDP "remote" that silently discards
-// every datagram, so the relay's read loops never receive data and never
-// call sendToClient (which would need a real socks5.Server with a UDPConn).
+// startSilentRemoteUDP 启动一个本地 UDP"远端"，它静默丢弃所有数据报，这样中继的读循环
+// 永远不会收到数据，也永远不会调用 sendToClient（后者需要一个带 UDPConn 的真实
+// socks5.Server）。
 func startSilentRemoteUDP(t *testing.T) string {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -86,13 +85,11 @@ func directTestDatagram(dst string, data byte) *socks5.Datagram {
 	return socks5.NewDatagram(socks5.ATYPIPv4, net.ParseIP(host).To4(), []byte{byte(port >> 8), byte(port)}, []byte{data})
 }
 
-// TestDirectUDPRelayConcurrentDial verifies that two datagrams for the same
-// (client, target) key handled concurrently create exactly one direct UDP
-// session. The pre-fix code raced between the map check and the insert, so
-// both handlers dialed: one socket was orphaned (leaking it plus its read
-// goroutine for up to the read-idle deadline) and the orphan's cleanup
-// then deleted the LIVE map entry, churning a fresh socket every ~2 minutes
-// for long-lived flows (QUIC, games, VoIP).
+// TestDirectUDPRelayConcurrentDial 验证针对同一个（client, target）键并发处理的两个
+// 数据报只会创建一个直连 UDP 会话。修复前的代码在查 map 与插入之间存在竞争，导致两个
+// 处理器都拨号：一个 socket 成为孤儿（连同其读协程一起泄漏，最多持续到读空闲截止时间），
+// 而孤儿的清理随后删除了仍在使用的 map 条目，使长连接流（QUIC、游戏、VoIP）每约
+// udpIdleTimeout（默认 60s）就换一个新 socket。
 func TestDirectUDPRelayConcurrentDial(t *testing.T) {
 	dst := startSilentRemoteUDP(t)
 
@@ -124,10 +121,9 @@ func TestDirectUDPRelayConcurrentDial(t *testing.T) {
 	}
 }
 
-// TestDirectUDPRelayStaleReadLoopKeepsLiveEntry verifies that a read loop
-// exiting for a socket it no longer owns must not delete the map entry of
-// the live session. Pre-fix, the loop's defer deleted the entry blindly, so
-// the session was silently dropped while its socket kept lingering.
+// TestDirectUDPRelayStaleReadLoopKeepsLiveEntry 验证读循环为一个不再属于自己的 socket
+// 退出时，绝不能删除活跃会话的 map 条目。修复前，循环的 defer 会盲目删除条目，
+// 导致会话被静默丢弃，而其 socket 却继续残留。
 func TestDirectUDPRelayStaleReadLoopKeepsLiveEntry(t *testing.T) {
 	dst := startSilentRemoteUDP(t)
 
@@ -147,9 +143,8 @@ func TestDirectUDPRelayStaleReadLoopKeepsLiveEntry(t *testing.T) {
 		t.Fatal("live session missing before stale loop test")
 	}
 
-	// A stale socket for the same key that is NOT the map entry (this is
-	// what the duplicate-dial race produced): its read loop must exit
-	// without evicting the live session.
+	// 一个同键但不属于 map 条目的过期 socket（这正是重复拨号竞争产生的结果）：
+	// 它的读循环必须退出，且不得驱逐活跃会话。
 	staleConn, err := srv.directDialContext(context.Background(), "udp", dst)
 	if err != nil {
 		t.Fatalf("dial stale conn: %v", err)
@@ -168,7 +163,7 @@ func TestDirectUDPRelayStaleReadLoopKeepsLiveEntry(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	time.Sleep(100 * time.Millisecond) // let any late delete settle
+	time.Sleep(100 * time.Millisecond) // 等待任何迟到的删除操作落定
 	srv.udpMu.RLock()
 	_, ok = srv.directUDP[key]
 	srv.udpMu.RUnlock()
@@ -176,7 +171,7 @@ func TestDirectUDPRelayStaleReadLoopKeepsLiveEntry(t *testing.T) {
 		t.Fatal("live session's map entry disappeared after stale loop exit")
 	}
 
-	// Positive control: the OWNED loop's exit must still clean up its entry.
+	// 阳性对照：所属读循环退出时仍必须清理自己的条目。
 	_ = live.conn.Close()
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

@@ -1,12 +1,10 @@
-// Package mobile is the gomobile binding for the EasySS client core.
+// Package mobile 是 EasySS 客户端核心的 gomobile 绑定。
 //
-// The transport warm-up is no longer exported here: runner.Run dispatches it
-// in the background once the core is up (runner.Run), unless the
-// configuration disables it via transport.disable_warm_up. Host applications
-// upgrading this AAR must drop their WarmUp() call accordingly — Start()
-// returning already means the warm-up has been dispatched. The "connecting"
-// state users previously saw while the binding blocked on the warm-up is
-// therefore no longer observable from here.
+// 传输预热不再从这里导出：runner.Run 会在核心启动后于后台调度预热
+// （runner.Run），除非配置通过 transport.disable_warm_up 将其禁用。升级此
+// AAR 的主机应用必须相应移除它们的 WarmUp() 调用——Start() 返回即表示
+// 预热已被调度。此前用户在绑定阻塞于预热期间看到的"连接中"状态，
+// 因此从这里不再可观察。
 package mobile
 
 import (

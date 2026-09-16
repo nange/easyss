@@ -36,10 +36,10 @@ type NextProxyConfig struct {
 	AllHost       bool   `json:"all_host"`
 }
 
-// ServerConfig holds exactly the fields that live under the "server" key of the
-// config file. The top-level settings (version, timeout, fallback, shaper,
-// transport, next_proxy, log, pprof_enabled) live on FileConfig, their only
-// home: server.Server reads that one struct instead of merging a second copy.
+// ServerConfig 恰好持有配置文件 "server" 键下的全部字段。顶层设置
+// （version、timeout、fallback、shaper、transport、next_proxy、log、
+// pprof_enabled）只存在于 FileConfig 上：server.Server 读取这一个结构体，
+// 而不是再合并一份副本。
 type ServerConfig struct {
 	Listen         string   `json:"listen"`
 	Domain         string   `json:"domain"`
@@ -62,11 +62,10 @@ type FileConfig struct {
 	Timeout       int             `json:"timeout"`
 }
 
-// ResolveFilePaths resolves relative file paths in the config against the
-// executable directory when they cannot be found in the current working
-// directory. On macOS the server is often launched by launchd with cwd=/, so
-// relative paths like cert_path/key_path or next_proxy_file would otherwise not
-// be found even though the files sit next to the binary.
+// ResolveFilePaths 将配置中的相对文件路径解析为相对可执行文件目录的路径，
+// 前提是这些路径无法在当前工作目录中找到。在 macOS 上服务端常由 launchd
+// 以 cwd=/ 启动，因此 cert_path/key_path 或 next_proxy_file 等相对路径
+// 即使与二进制位于同一目录，也照样无法被找到。
 func (fc *FileConfig) ResolveFilePaths() {
 	fc.Server.CertPath = util.ResolvePath(fc.Server.CertPath)
 	fc.Server.KeyPath = util.ResolvePath(fc.Server.KeyPath)

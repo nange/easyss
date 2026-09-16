@@ -12,9 +12,8 @@ import (
 
 var winLockHandle windows.Handle
 
-// tryAcquireSingletonLock creates the named mutex that ensures only one
-// instance of the app runs at a time. It returns errAnotherInstance when the
-// mutex already exists, or the underlying error otherwise.
+// tryAcquireSingletonLock 创建确保同一时刻只运行一个应用实例的命名互斥量。
+// 互斥量已存在时返回 errAnotherInstance，否则返回底层错误。
 func tryAcquireSingletonLock() error {
 	name, _ := windows.UTF16PtrFromString("Global\\Easyss_Singleton")
 	handle, err := windows.CreateMutex(nil, false, name)
@@ -31,8 +30,7 @@ func tryAcquireSingletonLock() error {
 	return nil
 }
 
-// acquireSingletonLock acquires the singleton lock, exiting the process when
-// the lock is unavailable.
+// acquireSingletonLock 获取单实例锁，锁不可用时退出进程。
 func acquireSingletonLock() {
 	err := tryAcquireSingletonLock()
 	switch {
@@ -47,7 +45,7 @@ func acquireSingletonLock() {
 	}
 }
 
-// releaseSingletonLock releases the named mutex.
+// releaseSingletonLock 释放命名互斥量。
 func releaseSingletonLock() {
 	if winLockHandle != 0 {
 		_ = windows.CloseHandle(winLockHandle)

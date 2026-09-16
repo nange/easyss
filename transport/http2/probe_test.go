@@ -15,7 +15,7 @@ import (
 
 const testProbePayloadSize = 4096
 
-// newProbeServer starts a real TLS server serving the probe endpoint.
+// newProbeServer 启动一个提供探测端点的真实 TLS 服务器。
 func newProbeServer(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
 	masterKey, err := crypto.DeriveMasterKey("test-password")
@@ -41,11 +41,11 @@ func newProbeServer(t *testing.T) (*httptest.Server, string) {
 	return ts, token
 }
 
-// newProbeSlot builds a slot whose transport talks plain TLS to the test
-// server (the production transport uses uTLS, which is irrelevant here).
+// newProbeSlot 构建一个槽位，其 transport 用普通 TLS 与测试服务器通信
+// （生产 transport 使用 uTLS，此处无关紧要）。
 func newProbeSlot() *transportSlot {
 	tr := &http.Transport{
-		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // test server cert
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // 测试服务器证书
 		ForceAttemptHTTP2: true,
 		MaxConnsPerHost:   1,
 	}
@@ -65,16 +65,15 @@ func TestSlotProberFast(t *testing.T) {
 	if speed < float64(sharedconfig.DegradedThroughputThreshold) {
 		t.Fatalf("speed %v below the degraded threshold", speed)
 	}
-	// A successful probe must feed a pure path RTT sample (response headers
-	// arrived -> first body chunk), same basis as the per-request sampling.
+	// 成功的探测必须贡献一个纯路径 RTT 样本（响应头到达 ->
+	// 首个响应体块），与按请求采样的口径一致。
 	if got := stats.Collect().RTTCount; got != 1 {
 		t.Fatalf("RTTCount = %d, want 1 after a fast probe", got)
 	}
 }
 
 func TestSlotProberSlowOnEmptyBody(t *testing.T) {
-	// A 200 octet-stream response that delivers nothing within the probe
-	// timeout counts as slow evidence.
+	// 探测超时内不投递任何内容的 200 octet-stream 响应计为慢速证据。
 	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", "4096")
@@ -95,8 +94,8 @@ func TestSlotProberSlowOnEmptyBody(t *testing.T) {
 }
 
 func TestSlotProberUnsupportedOnHTML(t *testing.T) {
-	// A 200 page that is not the probe payload (e.g. an old server's
-	// fallback HTML) marks the probe unsupported.
+	// 不是探测载荷的 200 页面（例如旧服务器的 fallback HTML）
+	// 把探测标记为 unsupported。
 	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte("<html><body>fallback</body></html>"))
@@ -128,7 +127,7 @@ func TestSlotProberInconclusiveOnErrorStatus(t *testing.T) {
 func TestSlotProberInconclusiveOnDialError(t *testing.T) {
 	ts, _ := newProbeServer(t)
 	deadURL := ts.URL
-	ts.Close() // connection refused from now on
+	ts.Close() // 从此连接被拒绝
 
 	prober := &slotProber{serverURL: deadURL, token: "unused", payloadSize: testProbePayloadSize}
 

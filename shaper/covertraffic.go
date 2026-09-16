@@ -28,9 +28,9 @@ type coverInjector struct {
 	stopped          atomic.Bool
 }
 
-// newCoverInjector builds the cover-traffic injector for an already normalized
-// configuration (see Config.Normalize, which is the single place the cover
-// defaults live). A zero BudgetRatio disables cover traffic.
+// newCoverInjector 为已规范化的配置构建 cover 流量注入器
+// （参见 Config.Normalize，它是 cover 默认值的唯一出处）。
+// BudgetRatio 为零时禁用 cover 流量。
 func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClosing func() bool) *coverInjector {
 	if cfg.BudgetRatio == 0 {
 		return nil
@@ -117,13 +117,13 @@ func (ci *coverInjector) onIdle() {
 	ci.mu.Unlock()
 
 	payload := bytespool.Get(frameSize)[:frameSize]
-	// The package-level RNG is shared across streams; math/rand/v2 sources
-	// are not safe for concurrent use, so guard the fill with a mutex.
+	// 包级 RNG 在多个流之间共享；math/rand/v2 的随机源不适合并发使用，
+	// 因此用互斥锁保护填充操作。
 	coverRNGMu.Lock()
 	_, _ = coverRNG.Read(payload)
 	coverRNGMu.Unlock()
-	// NewFrameWithPayload wraps the pooled buffer without copying it: the
-	// shaper returns this exact buffer to the pool after appending it.
+	// NewFrameWithPayload 直接包装池化缓冲区而不复制：整形器在追加该帧后
+	// 会将这个缓冲区原样归还池。
 	frame := protocol.NewFrameWithPayload(protocol.FrameCOVER, payload)
 	_ = ci.inject(frame)
 }
@@ -136,9 +136,9 @@ func (ci *coverInjector) coverFrameSizeRange() (minSize, maxSize int) {
 	cfgMin, cfgMax := ci.cfg.MinSize, ci.cfg.MaxSize
 	span := float64(cfgMax - cfgMin)
 
-	// 初始阶段以接近 cfgMin 的小尺寸为主,模拟空闲连接的小数据包特征;
+	// 初始阶段以接近 cfgMin 的小尺寸为主，模拟空闲连接的小数据包特征；
 	// 随累计真实流量平滑过渡到接近真实 DATA 帧的尺寸分布。
-	// 默认配置(MinSize=128, MaxSize=1500)下:
+	// 默认配置（MinSize=128, MaxSize=1500）下：
 	//   ratio=0 -> [128, 509],  ratio=1 -> [512, 1500]
 	const (
 		minSteadyRatio = 0.28

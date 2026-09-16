@@ -19,54 +19,53 @@ import (
 )
 
 const (
-	// logTailLines is the number of trailing lines shown by the terminal.
+	// logTailLines 是终端显示的末尾行数。
 	logTailLines = 50
 
-	// logSnapshotLines bounds the snapshot written for the last-resort
-	// fallback, so that a huge log file never reaches a GUI editor whole.
+	// logSnapshotLines 限制为最后兜底回退而写入的快照大小，
+	// 这样巨大的日志文件不会整份进入 GUI 编辑器。
 	logSnapshotLines = 500
 
-	// logSnapshotTimeout bounds the tail command used for the snapshot.
+	// logSnapshotTimeout 限制用于快照的 tail 命令的执行时间。
 	logSnapshotTimeout = 5 * time.Second
 )
 
-// Sentinel errors of the "view log" flow. They let the tray turn a technical
-// failure into a user-facing Chinese message (see friendlyCatLogError).
+// "查看日志"流程的哨兵错误。它们让托盘能把技术性失败
+// 转换为面向用户的中文消息（见 friendlyCatLogError）。
 var (
 	errLogFileNotConfigured = errors.New("log file path is empty, configure log.file_path in config.json")
 	errNoTerminalEmulator   = errors.New("no supported terminal emulator found")
 )
 
-// termCmdStyle describes how a terminal emulator is told which command to run.
+// termCmdStyle 描述如何告知终端模拟器要运行的命令。
 type termCmdStyle int
 
 const (
-	// termStyleArgs appends the command as separate arguments,
-	// e.g. `alacritty -e tail -n 50 -f /path/to/easyss.log`.
+	// termStyleArgs 以独立参数形式追加命令，
+	// 例如 `alacritty -e tail -n 50 -f /path/to/easyss.log`。
 	termStyleArgs termCmdStyle = iota
-	// termStyleString appends the command as one shell string,
-	// e.g. `xfce4-terminal --command "tail -n 50 -f '/path/to/easyss.log'"`.
+	// termStyleString 以单个 shell 字符串形式追加命令，
+	// 例如 `xfce4-terminal --command "tail -n 50 -f '/path/to/easyss.log'"`。
 	termStyleString
 )
 
-// termLauncher is one entry of the terminal emulator table.
+// termLauncher 是终端模拟器表中的一个条目。
 type termLauncher struct {
 	bin   string
 	args  []string
 	style termCmdStyle
 }
 
-// termLaunchers is the ordered terminal emulator preference list, used when
-// $TERMINAL does not name a usable terminal. The order puts the XDG default
-// terminal launcher and the Wayland-native terminals first: on a modern
-// Wayland session (Hyprland, sway, ...) none of the X11 era terminals below
-// them is installed.
+// termLaunchers 是有序的终端模拟器优先列表，当 $TERMINAL 未指定可用终端时使用。
+// 顺序把 XDG 默认终端启动器和 Wayland 原生终端放在前面：
+// 在现代 Wayland 会话（Hyprland、sway 等）中，排在它们后面的 X11 时代
+// 终端通常都没有安装。
 var termLaunchers = []termLauncher{
-	// Default Terminal Execution Specification (Arch, Omarchy, ...).
+	// 默认终端执行规范（Arch、Omarchy 等）。
 	{"xdg-terminal-exec", []string{"--"}, termStyleArgs},
 	{"foot", []string{"-e"}, termStyleArgs},
 	{"alacritty", []string{"-e"}, termStyleArgs},
-	// kitty takes the program to run without a separating flag.
+	// kitty 无需分隔参数即可接收要运行的程序。
 	{"kitty", nil, termStyleArgs},
 	{"ghostty", []string{"-e"}, termStyleArgs},
 	{"wezterm", []string{"start", "--"}, termStyleArgs},
@@ -84,32 +83,29 @@ var termLaunchers = []termLauncher{
 	{"st", []string{"-e"}, termStyleArgs},
 }
 
-// lookPath is exec.LookPath, kept in a variable so that tests can resolve the
-// table against a simulated set of installed terminals.
+// lookPath 即 exec.LookPath，放在变量中以便测试能针对一组模拟的已安装终端
+// 来解析该表。
 var lookPath = exec.LookPath
 
-// openWithDefaultApp opens a file in the desktop's default application. It is
-// a variable so that tests can exercise the fallback without spawning a GUI
-// window.
+// openWithDefaultApp 用桌面的默认应用打开文件。它是变量，
+// 以便测试无需弹出 GUI 窗口即可覆盖回退逻辑。
 var openWithDefaultApp = func(path string) error {
 	argv := sessionLaunch([]string{"xdg-open", path})
 
 	return util.StartDetached(argv)
 }
 
-// openLogFile opens the log file for the user: in a terminal emulator tailing
-// it, or — when no terminal emulator is available — as a snapshot in the
-// desktop's default application.
+// openLogFile 为用户打开日志文件：在终端模拟器中实时跟踪它，
+// 或者 —— 当没有可用的终端模拟器时 —— 以快照形式在桌面的默认应用中打开。
 //
-// fallback reports that the snapshot path was taken, so the caller can tell
-// the user why the log is not live.
+// fallback 报告是否走了快照路径，这样调用方可以告知用户
+// 日志为何不是实时更新的。
 func openLogFile(filePath string) (fallback bool, err error) {
 	if strings.TrimSpace(filePath) == "" {
 		return false, errLogFileNotConfigured
 	}
 
-	// A log file that does not exist yet would only make the terminal flash
-	// and close again, so it is reported instead.
+	// 尚不存在的日志文件只会让终端闪一下又关闭，因此改为报告错误。
 	if _, statErr := os.Stat(filePath); statErr != nil {
 		return false, fmt.Errorf("log file %s: %w", filePath, statErr)
 	}
@@ -131,9 +127,8 @@ func openLogFile(filePath string) (fallback bool, err error) {
 	}
 }
 
-// openLogFileLinux tails the log in a terminal emulator. When no terminal
-// emulator can be found it falls back to the snapshot viewer, so that the
-// menu entry still shows something on a minimal desktop.
+// openLogFileLinux 在终端模拟器中实时跟踪日志。当找不到任何终端模拟器时，
+// 回退到快照查看器，这样即使在最小化的桌面上菜单项仍能展示内容。
 func openLogFileLinux(filePath string) (fallback bool, err error) {
 	argv, resolveErr := logViewerArgv(filePath)
 	if resolveErr == nil {
@@ -154,9 +149,8 @@ func openLogFileLinux(filePath string) (fallback bool, err error) {
 	return true, nil
 }
 
-// logViewerArgv returns the command that tails filePath in a terminal
-// emulator: $TERMINAL when it is usable, otherwise the first installed entry
-// of termLaunchers.
+// logViewerArgv 返回在终端模拟器中实时跟踪 filePath 的命令：
+// 优先使用可用的 $TERMINAL，否则使用 termLaunchers 中第一个已安装的条目。
 func logViewerArgv(filePath string) ([]string, error) {
 	viewer := []string{"tail", "-n", strconv.Itoa(logTailLines), "-f", filePath}
 
@@ -177,10 +171,9 @@ func logViewerArgv(filePath string) ([]string, error) {
 	return nil, fmt.Errorf("%w (tried $TERMINAL and %s)", errNoTerminalEmulator, strings.Join(checked, ", "))
 }
 
-// terminalFromEnv resolves the terminal named by $TERMINAL. A known terminal
-// keeps the argument style of its table entry (extra words after the binary
-// name are dropped, as they would land after the command separator); an
-// unknown one is passed the command with the xterm style -e convention.
+// terminalFromEnv 解析 $TERMINAL 指定的终端。已知终端保留其表条目的参数风格
+// （二进制名之后的额外单词会被丢弃，因为它们会落在命令分隔符之后）；
+// 未知终端则按 xterm 风格的 -e 约定传入命令。
 func terminalFromEnv(viewer []string) ([]string, bool) {
 	term := strings.TrimSpace(os.Getenv("TERMINAL"))
 	if term == "" {
@@ -213,7 +206,7 @@ func terminalFromEnv(viewer []string) ([]string, bool) {
 	return nil, false
 }
 
-// launcherArgv builds the full argv for one terminal emulator.
+// launcherArgv 为单个终端模拟器构建完整的 argv。
 func launcherArgv(bin string, l termLauncher, viewer []string) []string {
 	argv := make([]string, 0, 1+len(l.args)+len(viewer))
 	argv = append(argv, bin)
@@ -225,11 +218,10 @@ func launcherArgv(bin string, l termLauncher, viewer []string) []string {
 	return append(argv, viewer...)
 }
 
-// sessionLaunch hands the command to the desktop user when easyss runs as
-// root (pkexec/sudo elevation, e.g. with TUN enabled), together with the
-// session environment the elevation dropped. Without XDG_RUNTIME_DIR a
-// Wayland terminal cannot reach the compositor at all. The command is
-// returned unchanged when the user cannot be determined.
+// sessionLaunch 在 easyss 以 root 运行时（pkexec/sudo 提权，例如启用 TUN），
+// 把命令交给桌面用户执行，并带上提权时丢失的会话环境。
+// 没有 XDG_RUNTIME_DIR，Wayland 终端根本无法连接合成器。
+// 当无法确定用户时，命令原样返回。
 func sessionLaunch(argv []string) []string {
 	if runtime.GOOS != "linux" || !IsRoot() {
 		return argv
@@ -247,9 +239,8 @@ func sessionLaunch(argv []string) []string {
 	return append(launch, argv...)
 }
 
-// openLogSnapshot writes the last logSnapshotLines lines of the log to a
-// temporary file and opens it in the desktop's default application. It is the
-// last resort when no terminal emulator is available.
+// openLogSnapshot 把日志的最后 logSnapshotLines 行写入临时文件，
+// 并在桌面的默认应用中打开它。这是没有终端模拟器时的最后手段。
 func openLogSnapshot(filePath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), logSnapshotTimeout)
 	defer cancel()
@@ -268,8 +259,7 @@ func openLogSnapshot(filePath string) error {
 	if _, err := fmt.Fprintln(f, content); err != nil {
 		return fmt.Errorf("write log snapshot: %w", err)
 	}
-	// The tray may run as root, while the application opening the snapshot
-	// runs as the desktop user.
+	// 托盘可能以 root 运行，而打开快照的应用以桌面用户身份运行。
 	if err := os.Chmod(f.Name(), 0o644); err != nil {
 		return fmt.Errorf("chmod log snapshot: %w", err)
 	}

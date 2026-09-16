@@ -12,9 +12,8 @@ import (
 	"github.com/nange/easyss/v3/crypto"
 )
 
-// h2Request builds an HTTP/2 request; httptest.NewRequest defaults to
-// HTTP/1.1, which the probe handler (like the proxy handler) rejects with
-// the fallback page.
+// h2Request 构建一个 HTTP/2 请求；httptest.NewRequest 默认生成 HTTP/1.1 请求，
+// probe handler（与 proxy handler 一样）会以 fallback 页面拒绝它。
 func h2Request(method, target string) *http.Request {
 	req := httptest.NewRequest(method, target, nil)
 	req.Proto = "HTTP/2.0"
@@ -69,7 +68,7 @@ func TestProbeHandlerValidToken(t *testing.T) {
 		t.Fatal("body differs from the pre-generated payload")
 	}
 
-	// A second request must serve the same buffer.
+	// 第二个请求必须返回同一缓冲区内容。
 	req2 := h2Request(http.MethodGet, "/v3/probe")
 	req2.Header.Set("x-es", token)
 	rr2 := httptest.NewRecorder()
@@ -128,8 +127,7 @@ func TestProbeHandlerRejectsHTTP1(t *testing.T) {
 func TestProbeHandlerRateLimit(t *testing.T) {
 	h, token, _ := newTestProbeHandler(t)
 
-	// Drain the per-IP bucket (capacity 100), then the next request is
-	// rejected with 429.
+	// 耗尽按 IP 计数的令牌桶（容量 100），随后下一个请求被 429 拒绝。
 	ip := "203.0.113.7"
 	for i := range 100 {
 		if !h.limiter.Allow(ip) {

@@ -25,17 +25,15 @@ const udpBufSize = protocol.MaxUDPDataSize
 
 type udpHandler struct {
 	idleTimeout time.Duration
-	// nextProxy is kept here (not only inside dial) because UDP alone uses it
-	// for DNS-answer learning on the datagram stream, independently of
-	// whether this particular target is routed through it.
+	// nextProxy 在这里单独保存（而不仅存在于 dial 内部），因为只有 UDP
+	// 会在数据报流上用它进行 DNS 应答学习，与当前目标是否经由它路由无关。
 	nextProxy *nextproxy.NextProxy
 	dial      dialer
 }
 
-// newUDPHandler creates a udpHandler with the given idle timeout and base
-// timeout. Like newTCPHandler, the dial timeout is derived through
-// config.DialTimeout (base/3 clamped to [3s, 15s]) instead of reusing the
-// much longer idle timeout.
+// newUDPHandler 用给定的空闲超时和基础超时创建 udpHandler。
+// 与 newTCPHandler 一样，拨号超时通过 config.DialTimeout 派生
+// （base/3，限制在 [3s, 15s]），而不是复用长得多的空闲超时。
 func newUDPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) *udpHandler {
 	if idleTimeout <= 0 {
 		idleTimeout = config.DefaultUDPIdleTimeout
@@ -57,10 +55,10 @@ func newUDPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) 
 	return h
 }
 
-// Handle relays UDP datagrams between the client stream and the target.
-// cancelRead is invoked when the handler terminates (idle timeout/error/
-// FIN): it unblocks the frame-reader goroutine that may be stuck reading the
-// client's request body, so no goroutine lingers after ServeHTTP returns.
+// Handle 在客户端流与目标之间中继 UDP 数据报。
+// cancelRead 在 handler 终止（空闲超时/错误/FIN）时被调用：
+// 它会解除可能正阻塞在读取客户端请求体上的帧读取 goroutine，
+// 从而在 ServeHTTP 返回后不会有 goroutine 残留。
 func (h *udpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c shaper.Shaper, target string, cancelRead func()) error {
 	log.Debug("[UDP] handler starting", "target", target)
 
@@ -126,7 +124,7 @@ func (h *udpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 			}
 			timer.Reset(h.idleTimeout)
 
-			// DNS query detection (only on first DATAGRAM frame)
+			// DNS 查询检测（仅在第一个 DATAGRAM 帧上）
 			if !dnsChecked.Load() && h.nextProxy != nil &&
 				res.frame.Type == protocol.FrameDATAGRAM && len(res.frame.Payload) > 0 {
 				msg := &dns.Msg{}
@@ -198,7 +196,7 @@ func (h *udpHandler) readFromTarget(conn net.Conn, s2c shaper.Shaper, done <-cha
 			return err
 		}
 		if n > 0 {
-			// DNS response interception for dynamic IP learning
+			// 拦截 DNS 应答以进行动态 IP 学习
 			if dnsDetected.Load() && h.nextProxy != nil {
 				msg := &dns.Msg{}
 				if err := msg.Unpack(buf[:n]); err == nil && util.IsDNSResponse(msg) {

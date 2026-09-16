@@ -11,23 +11,22 @@ import (
 	"time"
 )
 
-// SpawnTunHelper launches a long-running elevated TUN helper process via
-// pkexec. It creates a FIFO for lifecycle signalling (close the writer to
-// trigger helper exit) and a Unix socket for receiving the TUN file
-// descriptor. See spawnTunHelper for the full lifecycle.
+// SpawnTunHelper 通过 pkexec 启动一个常驻的提权 TUN helper 进程。
+// 它创建一个 FIFO 用于生命周期信号（关闭写端触发 helper 退出），以及
+// 一个用于接收 TUN 文件描述符的 Unix socket。完整生命周期见
+// spawnTunHelper。
 //
-// Returns:
-//   - fifoWriter: close to signal the helper to shut down
-//   - fdListener: accept a connection and call ReceiveFd to get the TUN fd
+// 返回：
+//   - fifoWriter：关闭以通知 helper 关闭
+//   - fdListener：接受连接并调用 ReceiveFd 获取 TUN fd
 func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeout time.Duration) (io.WriteCloser, net.Listener, error) {
-	// Linux uses an abstract socket (@-prefixed): it has no filesystem entry
-	// (no stale-file removal, no chmod) and is immune to pkexec mount
-	// namespace isolation.
+	// Linux 使用抽象 socket（@ 前缀）：它没有文件系统条目
+	// （无需清理陈旧文件、无需 chmod），也不受 pkexec 挂载
+	// 命名空间隔离的影响。
 	return spawnTunHelper(tunHelperElevator{
 		label: "pkexec",
 		command: func(innerCmd string) *exec.Cmd {
-			// Pass HOME so the helper can find the config file; pkexec
-			// sanitizes env.
+			// 传入 HOME，使 helper 能找到配置文件；pkexec 会净化环境变量。
 			cmdArgs := []string{"env"}
 			if home := os.Getenv("HOME"); home != "" {
 				cmdArgs = append(cmdArgs, fmt.Sprintf("HOME=%s", home))

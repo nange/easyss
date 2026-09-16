@@ -11,34 +11,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// errCreateFailed is what a stubbed create script reports: the platform script
-// rejected a command and exited non-zero, which is the contract the unix and
-// Windows create scripts now implement.
+// errCreateFailed 是桩（stub）化创建脚本上报的错误：平台脚本
+// 拒绝了命令并以非零退出码结束，这是 unix 和 Windows
+// 创建脚本现在实现的约定。
 var errCreateFailed = errors.New("tun: exec create script: exit status 1")
 
-// TestCloseTunDevRunsTheCloseScript pins the rollback behind the TUN traffic
-// loop: when the create script fails, Start() has to delete the routes the
-// script may have installed before it failed.
+// TestCloseTunDevRunsTheCloseScript 将回滚行为固定下来，
+// 防止出现 TUN 流量死循环：当创建脚本失败时，Start()
+// 必须删除脚本在失败前可能已经安装的路由。
 //
-// Only stopEngine ran on that path before. The tray then called Stop(), which
-// returns early because m.running is still false, so the routes stayed in the
-// system routing table and sent every packet into a TUN device nothing reads
-// from.
+// 在此之前该路径上只会运行 stopEngine。随后托盘调用 Stop()，
+// 而 Stop() 会因 m.running 仍为 false 而提前返回，
+// 于是路由残留在系统路由表中，把每个数据包
+// 都送入一个无人读取的 TUN 设备。
 //
-// The rollback is exercised through the same helper Start() calls, with the
-// close script replaced by one that records its arguments into a marker file:
-// removing the routes for real needs administrator rights and would rewrite
-// the machine's network configuration, and what has to be proven here is
-// that the cleanup runs at all, and with the arguments the platform scripts
-// need. The platform close scripts themselves are covered by the helper
-// tests.
+// 回滚通过 Start() 调用的同一个辅助函数来触发，
+// 只是把关闭脚本替换为把参数记录到标记文件中的脚本：
+// 真正删除路由需要管理员权限，
+// 并且会改写机器的网络配置；
+// 这里要证明的是清理逻辑确实会运行，
+// 并且带着平台脚本所需的参数运行。
+// 平台关闭脚本本身由辅助测试覆盖。
 func TestCloseTunDevRunsTheCloseScript(t *testing.T) {
 	require.NotNil(t, scripts.CloseTunBytes, "this test needs the platform close script to be embedded")
 
-	// unix runs the close script through pkexec unless the test is already
-	// root, and a CI runner has no polkit agent to answer the prompt that
-	// would have to appear. Running the check there would test the elevation,
-	// not the rollback.
+	// unix 上除非测试本身已是 root，否则会通过 pkexec 运行关闭脚本，
+	// 而 CI 运行环境没有 polkit 代理来应答必然弹出的授权提示。
+	// 在那里运行本检查测试的是提权逻辑，
+	// 而不是回滚。
 	if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && os.Geteuid() != 0 {
 		t.Skip("running the close script needs root on unix")
 	}
@@ -64,35 +64,35 @@ func TestCloseTunDevRunsTheCloseScript(t *testing.T) {
 	require.NoError(t, err, "the close script did not run: the routes of a failed TUN start would stay behind")
 	require.Contains(t, string(content), "tun-easyss-test")
 	if runtime.GOOS == "windows" {
-		// The third argument is the bare v6 address (no /64): netsh delete
-		// address takes the plain address, and the create script's
-		// "add address" cannot re-apply the persistent v6 address while it
-		// is still on the adapter.
+		// 第三个参数是裸的 v6 地址（不带 /64）：
+		// netsh delete address 接受纯地址，而在持久化 v6 地址
+		// 仍位于适配器上时，创建脚本的 "add address"
+		// 无法重新应用它。
 		require.Contains(t, string(content), "2001:db8::1")
 		require.NotContains(t, string(content), "/64")
 	}
 }
 
-// TestStartRollbackAfterCreateFailure drives the whole Start() failure path
-// through the package hooks: the create script exits non-zero, which is what
-// the platform scripts now report (see the exit code contract in
-// create_tun_dev.sh, create_tun_dev_darwin.sh and create_tun_dev_windows.bat),
-// and Start() has to undo everything it already touched.
+// TestStartRollbackAfterCreateFailure 通过包级钩子驱动完整的
+// Start() 失败路径：创建脚本以非零退出码结束（这正是平台脚本
+// 现在的行为，参见 create_tun_dev.sh、create_tun_dev_darwin.sh
+// 和 create_tun_dev_windows.bat 中的退出码约定），
+// 而 Start() 必须撤销它已经做过的一切。
 //
-// This is the cross-platform counterpart of TestCloseTunDevRunsTheCloseScript:
-// that one proves the close script is invoked with the right arguments on the
-// platform it runs on, this one proves the rollback happens at all, in order,
-// and includes the system DNS that the same failure used to leave pointing at
-// the TUN resolver. It replaces the engine, the scripts and the DNS setup with
-// hooks because the real ones need a TUN device, administrator rights and a
-// live proxy — and would reconfigure the network of the machine running it.
+// 它是 TestCloseTunDevRunsTheCloseScript 的跨平台对应物：
+// 那个测试证明关闭脚本在其运行的平台上以正确的参数被调用，
+// 这个测试证明回滚确实会发生、顺序正确，
+// 并且包含系统 DNS —— 同样的失败过去会让系统 DNS
+// 一直指向 TUN 解析器。它用钩子替换了引擎、脚本和 DNS 设置，
+// 因为真实的实现需要 TUN 设备、管理员权限和活动的代理 ——
+// 而且会重配置运行测试的机器的网络。
 func TestStartRollbackAfterCreateFailure(t *testing.T) {
 	var order []string
 
 	stubStartHooks(t)
 	saveAndSetDNSStepFn = func(m *Manager) error {
 		order = append(order, "save-dns")
-		// What saveAndSetDNSStep records once it has touched the system DNS.
+		// 这是 saveAndSetDNSStep 在改动系统 DNS 后记录的内容。
 		m.originDNS = []string{"192.168.1.1"}
 		m.dnsChanged = true
 		return nil
@@ -112,8 +112,8 @@ func TestStartRollbackAfterCreateFailure(t *testing.T) {
 		return nil
 	}
 
-	// Windows configures the adapter DNS from its own scripts and never
-	// touches the system DNS, so its failure path has no DNS step to run.
+	// Windows 由自己的脚本配置适配器 DNS，从不改动系统 DNS，
+	// 因此其失败路径没有需要运行的 DNS 步骤。
 	want := []string{"create", "close"}
 	if manageSystemDNS() {
 		want = []string{"save-dns", "create", "close", "restore-dns"}
@@ -130,10 +130,10 @@ func TestStartRollbackAfterCreateFailure(t *testing.T) {
 		"the failure path has to stop the engine, delete the routes the script may have installed, and put the system DNS back")
 }
 
-// TestStartRollbackSkipsUntouchedDNS is the other half of the DNS rollback: a
-// start that never reconfigured the system DNS must not have it written back.
-// On darwin an untouched system is restored as "empty", which would clear the
-// DHCP-provided servers instead of leaving them alone.
+// TestStartRollbackSkipsUntouchedDNS 是 DNS 回滚的另一半：
+// 从未重配置过系统 DNS 的启动过程不得把它写回去。
+// 在 darwin 上，未改动过的系统会被恢复为 "empty"，
+// 这会清空 DHCP 提供的服务器，而不是让它们保持原样。
 func TestStartRollbackSkipsUntouchedDNS(t *testing.T) {
 	if !manageSystemDNS() {
 		t.Skip("this platform does not switch the system DNS for TUN")
@@ -143,8 +143,8 @@ func TestStartRollbackSkipsUntouchedDNS(t *testing.T) {
 
 	stubStartHooks(t)
 	saveAndSetDNSStepFn = func(m *Manager) error {
-		// darwin with a hand-configured DNS: nothing is changed, so nothing
-		// has to be restored.
+		// darwin 且手工配置了 DNS：没有任何改动，
+		// 因此也无需恢复。
 		m.originDNS = []string{"192.168.1.1"}
 		m.dnsChanged = false
 		return nil
@@ -163,20 +163,20 @@ func TestStartRollbackSkipsUntouchedDNS(t *testing.T) {
 	require.False(t, m.dnsChanged, "a start that did not change the system DNS must not have it restored")
 }
 
-// TestStartCreateScriptFailureEndToEnd exercises the real script plumbing: the
-// embedded create script is replaced by one that fails, and the failure has to
-// come back out of Start() as an error naming the step, with the close script
-// run afterwards.
+// TestStartCreateScriptFailureEndToEnd 端到端走一遍真实的脚本管道：
+// 把内嵌的创建脚本替换为会失败的脚本，
+// 失败必须以指明步骤的错误从 Start() 中返回，
+// 并且之后还要运行关闭脚本。
 //
-// It needs to run the script through the interpreter the platform uses, and
-// without root that is pkexec on linux and "osascript ... with administrator
-// privileges" on darwin: a test runner has no polkit agent and no
-// authorization dialogue to answer, so the script would never run at all (and
-// the darwin run would sit out the 60s create and 30s close timeouts). The
-// exit code contract itself is covered without root by
-// cmd/easyss/tun_script_unix_test.go, and cmd.exe by
-// tun_script_windows_test.go, so this end-to-end check is left to a run that
-// already is root.
+// 它需要借助平台所用的解释器运行脚本，而在非 root 情况下，
+// linux 上是通过 pkexec、darwin 上是通过
+// "osascript ... with administrator privileges"：测试运行环境
+// 既没有 polkit 代理，也没有可应答的授权对话框，
+// 因此脚本根本不会运行（darwin 上还会白白耗掉
+// 60 秒的创建超时和 30 秒的关闭超时）。退出码约定
+// 本身在非 root 情况下由 cmd/easyss/tun_script_unix_test.go
+// 覆盖，cmd.exe 由 tun_script_windows_test.go 覆盖，
+// 因此这个端到端检查留给已经以 root 运行的环境。
 func TestStartCreateScriptFailureEndToEnd(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the replacement scripts are POSIX shell scripts; cmd.exe is covered by tun_script_windows_test.go")
@@ -201,10 +201,10 @@ func TestStartCreateScriptFailureEndToEnd(t *testing.T) {
 	scripts.CloseTunBytes = []byte("#!/bin/sh\necho ran > \"" + closeRan + "\"\n")
 
 	stubStartHooks(t)
-	// The real implementations have to run here: this test exercises the
-	// script plumbing (writing the embedded script, running it through the
-	// platform interpreter, reading back its exit code), which is what the
-	// failing stub above replaces. Never a no-op.
+	// 这里必须运行真实实现：本测试要验证的是脚本管道
+	// （写出内嵌脚本、通过平台解释器运行、读回其退出码），
+	// 这正是上面那个失败的桩所替换掉的部分。
+	// 绝不能是空操作。
 	createTunDevFn = func(m *Manager) error { return m.createTunDevAndSetIPRoute() }
 	closeTunDevFn = func(m *Manager) error { return m.closeTunDevAndDelIPRoute() }
 
@@ -219,12 +219,12 @@ func TestStartCreateScriptFailureEndToEnd(t *testing.T) {
 	require.NoError(t, statErr, "the close script did not run: the routes of the failed start would stay behind")
 }
 
-// stubStartHooks replaces the engine, the settle delay, the DNS steps and the
-// platform scripts with no-op hooks, and restores every hook it touched when
-// the test ends. It keeps a test from starting tun2socks for real (which would
-// open a TUN device and need administrator rights) and from waiting out the
-// device settle pause; a test that needs a hook to do something assigns it
-// after this call.
+// stubStartHooks 用空操作钩子替换引擎、就绪停顿、DNS 步骤
+// 和平台脚本，并在测试结束时恢复它动过的每一个钩子。
+// 它让测试不会真的启动 tun2socks（那会打开 TUN 设备
+// 并需要管理员权限），也不会干等设备就绪停顿；
+// 需要钩子做事的测试
+// 在调用本函数之后再为钩子赋值。
 func stubStartHooks(t *testing.T) {
 	t.Helper()
 
@@ -249,8 +249,8 @@ func stubStartHooks(t *testing.T) {
 	})
 }
 
-// closeScriptName returns a close script name the platform branch of
-// closeTunDevAndDelIPRoute can hand to its interpreter.
+// closeScriptName 返回一个关闭脚本名，供 closeTunDevAndDelIPRoute 的平台分支
+// 交给其解释器执行。
 func closeScriptName() string {
 	if runtime.GOOS == "windows" {
 		return "close_tun_dev_rollback_test.bat"
@@ -258,8 +258,8 @@ func closeScriptName() string {
 	return "close_tun_dev_rollback_test.sh"
 }
 
-// markerScript returns a script in the language of the running platform that
-// records its arguments into the marker file.
+// markerScript 返回一个用当前运行平台的语言编写的脚本，把它的参数记录到标记
+// 文件中。
 func markerScript(marker string) string {
 	if runtime.GOOS == "windows" {
 		return "@echo off\r\necho %* > \"" + marker + "\"\r\nexit /b 0\r\n"

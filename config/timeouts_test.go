@@ -5,9 +5,8 @@ import (
 	"time"
 )
 
-// TestDefaultStreamIdleTimeoutDerived guards the single-source-of-truth
-// constraint: the fallback default must always equal the formula evaluated
-// at the default base timeout, never a second magic number.
+// TestDefaultStreamIdleTimeoutDerived 守护单一事实来源约束：回退默认值必须始终等于
+// 在默认基础超时下求得的公式结果，绝不允许出现第二个魔法数字。
 func TestDefaultStreamIdleTimeoutDerived(t *testing.T) {
 	want := StreamIdleTimeout(time.Duration(DefaultTimeout) * time.Second)
 	if DefaultStreamIdleTimeout != want {
@@ -18,9 +17,8 @@ func TestDefaultStreamIdleTimeoutDerived(t *testing.T) {
 	}
 }
 
-// TestDefaultUDPIdleTimeoutDerived guards the same constraint for the UDP
-// fallback: it must equal UDPIdleTimeout(DefaultTimeout), so the fallback
-// never diverges from the derived value used on normal paths.
+// TestDefaultUDPIdleTimeoutDerived 为 UDP 回退值守护同样的约束：它必须等于
+// UDPIdleTimeout(DefaultTimeout)，使回退值永不偏离正常路径所使用的派生值。
 func TestDefaultUDPIdleTimeoutDerived(t *testing.T) {
 	want := UDPIdleTimeout(time.Duration(DefaultTimeout) * time.Second)
 	if DefaultUDPIdleTimeout != want {
@@ -31,8 +29,8 @@ func TestDefaultUDPIdleTimeoutDerived(t *testing.T) {
 	}
 }
 
-// TestDefaultDialTimeoutDerived guards the same constraint for the dial
-// fallback: it must equal DialTimeout(DefaultTimeout).
+// TestDefaultDialTimeoutDerived 为拨号回退值守护同样的约束：它必须等于
+// DialTimeout(DefaultTimeout)。
 func TestDefaultDialTimeoutDerived(t *testing.T) {
 	want := DialTimeout(time.Duration(DefaultTimeout) * time.Second)
 	if DefaultDialTimeout != want {

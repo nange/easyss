@@ -21,10 +21,9 @@ func TestResetStartTime(t *testing.T) {
 	if snap.UptimeSeconds < 0 {
 		t.Fatalf("UptimeSeconds should be >= 0, got %v", snap.UptimeSeconds)
 	}
-	// Uptime() recomputes time.Since(StartTime) with the monotonic clock:
-	// it can never be negative, nor smaller than the snapshot's uptime
-	// (the assertion runs after Collect). Coarse clocks may yield 0, so
-	// do not require strictly positive.
+	// Uptime() 使用单调时钟重新计算 time.Since(StartTime)：它不可能为负，
+	// 也不可能小于快照中的运行时间（断言在 Collect 之后执行）。
+	// 粗粒度时钟可能得到 0，因此不要求严格为正。
 	if u := snap.Uptime(); u < 0 || u.Seconds() < snap.UptimeSeconds {
 		t.Fatalf("Uptime() %v inconsistent with UptimeSeconds %v", u, snap.UptimeSeconds)
 	}
@@ -105,8 +104,8 @@ func TestResetCounters(t *testing.T) {
 	}
 }
 
-// TestCollectConcurrentWithReset exercises Collect against concurrent
-// session resets; meaningful under -race.
+// TestCollectConcurrentWithReset 让 Collect 与并发的会话重置一起运行；
+// 在 -race 下有意义。
 func TestCollectConcurrentWithReset(t *testing.T) {
 	done := make(chan struct{})
 	go func() {

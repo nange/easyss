@@ -12,12 +12,11 @@ import (
 	"github.com/nange/easyss/v3/transport"
 )
 
-// TestStatsConnsStatusConsistencyUnderShrink stresses the scheduler with a
-// shrinker goroutine (simulating closeIdleLoop) while a stats reader
-// goroutine (simulating /stats polling) renders each pool's conns_status.
-// It fails if a rendered entry count ever exceeds the concurrently reported
-// per-pool Conns value, or if the rendered indices are not consecutive from
-// 0 in either pool.
+// TestStatsConnsStatusConsistencyUnderShrink 用 shrinker goroutine
+// （模拟 closeIdleLoop）压力测试调度器，同时让一个 stats 读取 goroutine
+// （模拟 /stats 轮询）渲染每个池的 conns_status。若渲染出的条目数超过
+// 并发报告的每池 Conns 值，或任一池渲染出的索引不是从 0 连续递增，
+// 则测试失败。
 func TestStatsConnsStatusConsistencyUnderShrink(t *testing.T) {
 	slots := make([]*transportSlot, 6)
 	for i := range slots {
@@ -45,7 +44,7 @@ func TestStatsConnsStatusConsistencyUnderShrink(t *testing.T) {
 			sch.mu.Lock()
 			sch.shrinkIdleLocked()
 			sch.mu.Unlock()
-			// Re-grow like new streams arriving.
+			// 像新流到达那样重新生长。
 			sch.grow(false)
 		}
 	}()
@@ -58,10 +57,9 @@ func TestStatsConnsStatusConsistencyUnderShrink(t *testing.T) {
 				return
 			default:
 			}
-			// Render under the scheduler read lock, exactly like the
-			// production Stats() snapshot: shrink/grow swap-remove slots
-			// under the write lock, so an unlocked render would race with
-			// the array swaps.
+			// 在调度器读锁下渲染，与生产 Stats() 快照完全一致：
+			// shrink/grow 在写锁下交换删除槽位，不加锁的渲染会与
+			// 数组交换产生竞争。
 			sch.mu.RLock()
 			pLive := int(sch.priority.liveCount.Load())
 			bLive := int(sch.bulk.liveCount.Load())
@@ -104,8 +102,7 @@ func TestStatsConnsStatusConsistencyUnderShrink(t *testing.T) {
 	}
 }
 
-// parseIndices extracts the leading "<index>:" of each entry, verifying the
-// array-like shape at the same time.
+// parseIndices 提取每条目的前导 "<index>:"，同时验证数组形状。
 func parseIndices(s string) []int {
 	if s == "[]" {
 		return nil
@@ -124,9 +121,8 @@ func parseIndices(s string) []int {
 	return idxs
 }
 
-// TestGrowEventRingOrderAndCap verifies the growth-event ring: newest
-// first, bounded at maxGrowEvents, carrying the triggering request's
-// endpoint and target.
+// TestGrowEventRingOrderAndCap 验证增长事件环形缓冲：最新在前、
+// 上限为 maxGrowEvents、携带触发请求的 endpoint 与 target。
 func TestGrowEventRingOrderAndCap(t *testing.T) {
 	slots := make([]*transportSlot, 4)
 	for i := range slots {
@@ -145,8 +141,8 @@ func TestGrowEventRingOrderAndCap(t *testing.T) {
 	if len(evs) != maxGrowEvents {
 		t.Fatalf("GrowEvents = %d, want %d (ring bound)", len(evs), maxGrowEvents)
 	}
-	// Newest first: the last recorded event (live = maxGrowEvents+3) heads
-	// the snapshot, the oldest surviving (live = 4) tails it.
+	// 最新在前：最后记录的事件（live = maxGrowEvents+3）位于快照头部，
+	// 存留最久的（live = 4）位于尾部。
 	if evs[0].Live != maxGrowEvents+3 {
 		t.Fatalf("head event live = %d, want %d (newest first)", evs[0].Live, maxGrowEvents+3)
 	}
@@ -158,9 +154,9 @@ func TestGrowEventRingOrderAndCap(t *testing.T) {
 	}
 }
 
-// TestGrowEventRingConcurrent stresses the growth-event ring: a producer
-// goroutine recording events while a reader goroutine snapshots Stats() —
-// must stay race-free and never exceed the ring bound.
+// TestGrowEventRingConcurrent 压力测试增长事件环形缓冲：一个生产者
+// goroutine 记录事件，同时一个读取 goroutine 快照 Stats()——
+// 必须无竞争，且绝不超过环形缓冲上限。
 func TestGrowEventRingConcurrent(t *testing.T) {
 	slots := make([]*transportSlot, 4)
 	for i := range slots {

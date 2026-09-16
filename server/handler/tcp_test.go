@@ -84,7 +84,7 @@ func (c *stubConn) SetReadDeadline(t time.Time) error { return nil }
 
 func (c *stubConn) SetWriteDeadline(t time.Time) error { return nil }
 
-// isClosed reports whether Close has been called on the stub.
+// isClosed 报告该 stub 是否已被调用 Close。
 func (c *stubConn) isClosed() bool {
 	select {
 	case <-c.closed:
@@ -96,8 +96,8 @@ func (c *stubConn) isClosed() bool {
 
 func TestTCPHandler_CancelReadOnIdleTimeout(t *testing.T) {
 	h := newTCPHandler(150*time.Millisecond, 5*time.Second, nil)
-	// A silent peer: the stub accepts writes and never produces data, with a
-	// public remote address so the post-dial SSRF guard passes.
+	// 一个静默对端：stub 接受写入但从不产生数据，使用公网远端地址
+	// 以便通过拨号后的 SSRF 防护。
 	stub := newStubConn(&net.TCPAddr{IP: net.ParseIP("8.8.8.8"), Port: 53})
 	h.dialContext = func(context.Context, string, string) (net.Conn, error) { return stub, nil }
 

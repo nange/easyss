@@ -8,11 +8,9 @@ import (
 	"time"
 )
 
-// HandshakeRejectedError reports that the server answered the bootstrap
-// handshake with a non-200 status (e.g. 408 Request Timeout, 400 Bad
-// Request), meaning the stream was rejected before any session records were
-// exchanged. The client fails fast on the first read instead of misparsing
-// the rejection body as encrypted records.
+// HandshakeRejectedError 报告服务器以非 200 状态（例如 408 Request Timeout、
+// 400 Bad Request）应答 bootstrap 握手，意味着流在交换任何会话记录之前
+// 就被拒绝。客户端在首次读取时快速失败，而不是把拒绝正文误解析为加密记录。
 type HandshakeRejectedError struct {
 	StatusCode int
 	Status     string
@@ -25,8 +23,7 @@ func (e *HandshakeRejectedError) Error() string {
 	return fmt.Sprintf("handshake rejected: server returned HTTP %d", e.StatusCode)
 }
 
-// IsHandshakeRejected reports whether err indicates the server rejected the
-// handshake with a non-200 status.
+// IsHandshakeRejected 报告 err 是否表示服务器以非 200 状态拒绝了握手。
 func IsHandshakeRejected(err error) bool {
 	var e *HandshakeRejectedError
 	return errors.As(err, &e)
@@ -39,23 +36,19 @@ type Stream interface {
 	Close() error
 }
 
-// SlotDrainingStream is implemented by streams whose underlying connection
-// slot is due for eviction: expiring (the connection exceeded its lifetime or
-// bytes limit) or degraded (confirmed persistently low throughput). The proxy
-// layer asserts this optional interface to drain idle streams early (see
-// relay.BidirectionalWithDrain), so lingering keep-alive and half-closed
-// connections cannot postpone the slot's rotation/retirement until the full
-// relay idle timeout. Streams that do not implement it simply never drain.
+// SlotDrainingStream 由底层连接槽位即将被驱逐的流实现：expiring
+// （连接超过其寿命或字节限制）或 degraded（确认持续低速）。代理层断言
+// 这个可选接口以提前排空空闲流（见 relay.BidirectionalWithDrain），
+// 使残留的 keep-alive 与半关闭连接无法把槽位的轮换/退役推迟到完整的中继
+// 空闲超时。未实现该接口的流永远不会排空。
 type SlotDrainingStream interface {
 	SlotDraining() bool
 }
 
-// BootstrapSentMarker is implemented by streams whose transport samples the
-// pure client<->server path RTT: the proxy marks the instant the bootstrap
-// record was flushed, so the transport can record the round trip when the
-// response headers arrive (the server commits its response before dialing the
-// origin, so origin latency never enters the sample). Streams that do not
-// implement it are simply not RTT-sampled.
+// BootstrapSentMarker 由传输层采样纯客户端<->服务器路径 RTT 的流实现：
+// 代理标记 bootstrap 记录刷出的时刻，使传输层能在响应头到达时记录往返
+// （服务器在拨号源站之前就提交响应，因此源站延迟永远不会进入样本）。
+// 未实现该接口的流不做 RTT 采样。
 type BootstrapSentMarker interface {
 	MarkBootstrapSent()
 }
@@ -64,10 +57,9 @@ type OpenRequest struct {
 	Endpoint     string
 	Salt         string
 	HighPriority bool
-	// Target is the stream's original destination as "host:port" (domain
-	// or IP). It never participates in scheduling — it is carried so the
-	// transport can attribute a slot-growth event to the request that
-	// triggered it (see TransportStats.GrowEvents).
+	// Target 是流的目标地址 "host:port"（域名或 IP）。它从不参与调度——
+	// 带上它只是为了把槽位增长事件归因于触发它的请求
+	// （见 TransportStats.GrowEvents）。
 	Target string
 }
 
@@ -78,50 +70,40 @@ type TransportStats struct {
 	BulkActiveStreams     int `json:"bulk_active_streams"`
 	PriorityConns         int `json:"priority_conns"`
 	BulkConns             int `json:"bulk_conns"`
-	// PriorityConnsStatus is a compact per-connection status summary of the
-	// priority pool, e.g. "[0:3:degraded, 1:2:expiring, 2:1:active]". Each
-	// element is "<index>:<active streams>:<status>" where indices are
-	// consecutive from 0 (ordered by stable connection identity) and status
-	// is one of idle/active/heavy/degraded/expiring, with multiple flags
-	// joined by "+". "idle" marks a healthy connection hosting no streams
-	// (a warm connection), so a pool grown by a past burst is
-	// distinguishable from active traffic. The bulk pool renders the same
-	// way into BulkConnsStatus.
+	// PriorityConnsStatus 是 priority 池的紧凑逐连接状态摘要，
+	// 例如 "[0:3:degraded, 1:2:expiring, 2:1:active]"。每个元素形如
+	// "<index>:<active streams>:<status>"：索引从 0 连续递增（按稳定的
+	// 连接身份排序），状态为 idle/active/heavy/degraded/expiring 之一，
+	// 多个标记用 "+" 连接。"idle" 表示不承载任何流的健康连接（热连接），
+	// 使过去突发增长出来的池与活跃流量可区分。bulk 池以相同方式
+	// 渲染进 BulkConnsStatus。
 	PriorityConnsStatus string `json:"priority_conns_status,omitempty"`
 	BulkConnsStatus     string `json:"bulk_conns_status,omitempty"`
-	// GrowEvents lists the most recent slot-growth events (new connections
-	// activated by the lazy-expansion scheduler), newest first, bounded to
-	// a small ring in the transport implementation. Each event records
-	// the pool that grew, the live slot count after growth, and the
-	// endpoint/target of the request that triggered the growth, so a
-	// sudden connection-count jump can be attributed to the traffic that
-	// caused it.
+	// GrowEvents 列出最近的槽位增长事件（懒加载扩容调度器激活的新连接），
+	// 最新在前，在传输实现中限制为一个小型环形缓冲。每个事件记录增长的池、
+	// 增长后的存活槽位数，以及触发增长的请求的 endpoint/target，
+	// 让连接数的突然跳升可以归因到造成它的流量。
 	GrowEvents []GrowEvent `json:"recent_grow_events,omitempty"`
 }
 
-// GrowEvent is one slot-growth (new live connection) occurrence: which
-// pool grew, the live slot count after growth, and the request that
-// triggered it (its protocol endpoint and target host:port).
+// GrowEvent 是一次槽位增长（新的存活连接）：哪个池增长、
+// 增长后的存活槽位数，以及触发它的请求（其协议端点与目标 host:port）。
 type GrowEvent struct {
 	Time     time.Time `json:"time"`
-	Pool     string    `json:"pool"` // "priority" or "bulk"
-	Live     int       `json:"live"` // live slot count after growth
+	Pool     string    `json:"pool"` // "priority" 或 "bulk"
+	Live     int       `json:"live"` // 增长后的存活槽位数
 	Endpoint string    `json:"endpoint"`
 	Target   string    `json:"target"`
 }
 
 type Transport interface {
 	Open(ctx context.Context, req OpenRequest) (Stream, error)
-	// WarmUp primes the first connection of every scheduling pool so the
-	// first real stream of each traffic class reuses an established
-	// connection instead of paying the cold-start cost (dial + TLS +
-	// HTTP/2). Implementations activate the pool and issue one request over
-	// a connection of that pool; any answer proves the path works, so only
-	// a request that cannot confirm the connection is reported as an error.
-	// Best-effort by contract: implementations must not silently drop a
-	// failure they already determined, but callers decide what to do with
-	// it — startup must never depend on warm-up, so the usual handling is
-	// to log it and continue.
+	// WarmUp 预热每个调度池的首条连接，使每个流量类的首条真实流
+	// 复用已建立的连接，而不是付出冷启动代价（拨号 + TLS + HTTP/2）。
+	// 实现激活池并在该池的一条连接上发起一次请求；任何应答都证明
+	// 路径可用，因此只有无法确认连接的请求才被报告为错误。
+	// 按契约尽力而为：实现不得静默丢弃已确定的失败，但如何处理由调用方
+	// 决定——启动绝不能依赖预热，通常的处理是记录日志后继续。
 	WarmUp(ctx context.Context) error
 	CloseIdle()
 	Stats() TransportStats

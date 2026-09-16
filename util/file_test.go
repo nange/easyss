@@ -47,32 +47,31 @@ func TestReadFileLinesMap(t *testing.T) {
 }
 
 func TestReadFileLinesMapMissingFile(t *testing.T) {
-	// A missing file must be reported as an error rather than silently
-	// treated as empty lines (a misconfigured rule file path must not be
-	// invisible to the caller).
+	// 缺失的文件必须作为错误上报，而不是被静默当作空行列表处理
+	// （配置错误的规则文件路径不能被调用方忽视）。
 	_, err := ReadFileLinesMap("definitely-not-exists.txt")
 	assert.NotNil(t, err)
 	assert.True(t, errors.Is(err, os.ErrNotExist))
 }
 
 func TestResolvePath(t *testing.T) {
-	// Empty string is returned unchanged.
+	// 空字符串原样返回。
 	assert.Equal(t, "", ResolvePath(""))
 
-	// Absolute paths are returned unchanged.
+	// 绝对路径原样返回。
 	abs, err := filepath.Abs("direct.txt")
 	assert.Nil(t, err)
 	assert.True(t, filepath.IsAbs(abs))
 	assert.Equal(t, abs, ResolvePath(abs))
 
-	// Relative paths that exist in the cwd are kept as-is.
+	// 存在于当前工作目录中的相对路径保持原样。
 	relExisting := "file.go"
 	e, err := FileExists(relExisting)
 	assert.Nil(t, err)
 	assert.True(t, e)
 	assert.Equal(t, relExisting, ResolvePath(relExisting))
 
-	// Relative paths missing from the cwd fall back to the executable dir.
+	// 当前工作目录中不存在的相对路径回退到可执行文件所在目录。
 	relMissing := "direct.txt"
 	want := filepath.Join(CurrentDir(), relMissing)
 	assert.Equal(t, want, ResolvePath(relMissing))

@@ -85,10 +85,9 @@ func GenerateSalt() ([]byte, error) {
 	return salt, nil
 }
 
-// ProbeToken derives the capability token for the /v3/probe endpoint.
-// Client and server derive the same 16-byte value from the master key;
-// base64url-encoded it is wire-identical to the x-es salt shape used by
-// proxy handshakes.
+// ProbeToken 为 /v3/probe 端点派生能力令牌。
+// 客户端和服务端从主密钥派生相同的 16 字节值；
+// 经 base64url 编码后，与代理握手所用的 x-es salt 形状在线路上完全一致。
 func ProbeToken(masterKey []byte) (string, error) {
 	reader := hkdf.New(sha256.New, masterKey, nil, []byte(probeKDFInfo))
 	b := make([]byte, saltSize)

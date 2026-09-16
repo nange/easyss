@@ -17,32 +17,27 @@ import (
 )
 
 const (
-	// updateCheckDelay is how long after startup the first automatic silent
-	// update check runs.
+	// updateCheckDelay 是启动后多久执行第一次自动静默更新检查。
 	updateCheckDelay = time.Minute
-	// updateCheckInterval is how often the automatic silent check repeats
-	// while the client keeps running. Desktop users rarely restart the app
-	// (macOS users in particular keep it alive for weeks), so a single
-	// startup check would leave new releases unnoticed indefinitely.
+	// updateCheckInterval 是客户端持续运行时自动静默检查的重复间隔。
+	// 桌面用户很少重启应用（尤其是 macOS 用户会连续运行数周），
+	// 因此只在启动时检查一次会让新版本无限期地不被发现。
 	updateCheckInterval = 24 * time.Hour
-	// updateCheckJitter is the relative spread applied to every periodic
-	// interval: all running clients would otherwise hit the GitHub API at
-	// the same wall-clock time, and it keeps the cadence from looking like
-	// a fixed beacon.
+	// updateCheckJitter 是应用到每个周期间隔的相对抖动：
+	// 否则所有运行中的客户端会在同一墙钟时间访问 GitHub API，
+	// 同时它也让检查节奏看起来不像是固定信标。
 	updateCheckJitter = 0.10
-	// updateMenuReset is how long a transient result (failure or
-	// up-to-date) stays visible before the item resets.
+	// updateMenuReset 是临时结果（失败或已是最新）在菜单项重置前保持可见的时长。
 	updateMenuReset = 4 * time.Second
-	// updateNotifyTitle is the title of every update notification, and the
-	// title kept in the tray tooltip.
+	// updateNotifyTitle 是所有更新通知的标题，也是托盘 tooltip 中保留的标题。
 	updateNotifyTitle = "Easyss"
-	// updateTooltipMax bounds the tooltip text; NOTIFYICONDATA.szTip holds
-	// 128 UTF-16 code units on Windows, so the truncation is applied here
-	// instead of letting the shell cut it.
+	// updateTooltipMax 限制 tooltip 文本长度；Windows 上 NOTIFYICONDATA.szTip
+	// 只能容纳 128 个 UTF-16 码元，因此在这里截断，
+	// 而不是让系统外壳去截断。
 	updateTooltipMax = 120
 )
 
-// Tray update state machine states.
+// 托盘更新状态机的各个状态。
 const (
 	updateStateIdle int32 = iota
 	updateStateChecking
@@ -59,16 +54,15 @@ func (a *TrayApp) onUpdateClicked() {
 			a.checkUpdate(ctx, true)
 		case updateStateAvailable:
 			a.downloadAndInstall()
-		default: // checking or downloading: extra clicks are ignored
+		default: // 检查中或下载中：额外的点击被忽略
 		}
 	}()
 }
 
-// autoCheckUpdate performs silent update checks for the lifetime of the
-// process: one shortly after startup and then one every updateCheckInterval
-// (±jitter). A tray client is typically never restarted, so a startup-only
-// check would hide every later release from the user. Development builds (no
-// injected git tag) are skipped.
+// autoCheckUpdate 在进程整个生命周期内执行静默更新检查：
+// 启动后不久一次，然后每隔 updateCheckInterval（±抖动）一次。
+// 托盘客户端通常从不重启，因此只在启动时检查会隐藏之后的所有新版本。
+// 开发构建（未注入 git tag）会跳过。
 func (a *TrayApp) autoCheckUpdate() {
 	if version.Tag() == "" {
 		log.Info("[SYSTRAY] auto check update skipped: build has no version tag")
@@ -82,15 +76,14 @@ func (a *TrayApp) autoCheckUpdate() {
 	a.runUpdateCheckLoop(func() { a.checkUpdate(context.Background(), false) })
 }
 
-// runUpdateCheckLoop runs check once, then repeats it every
-// a.updateCheckEvery until a.closing signals shutdown. check runs
-// synchronously on the loop goroutine, so two checks can never overlap and
-// the next interval starts only after the previous check returned.
+// runUpdateCheckLoop 先运行一次 check，然后每隔 a.updateCheckEvery 重复一次，
+// 直到 a.closing 发出关闭信号。check 在循环 goroutine 上同步运行，
+// 因此两次检查绝不会重叠，且下一次间隔只在上一次检查返回后开始。
 func (a *TrayApp) runUpdateCheckLoop(check func()) {
 	interval := a.updateCheckEvery
 	if interval <= 0 {
-		// TrayApp built without buildTray (tests): fall back to the real
-		// interval instead of letting NewTicker panic.
+		// 未通过 buildTray 构建的 TrayApp（测试）：回退到真实间隔，
+		// 而不是让 NewTicker panic。
 		interval = timedUpdateCheckInterval()
 	}
 	ticker := time.NewTicker(interval)
@@ -108,20 +101,17 @@ func (a *TrayApp) runUpdateCheckLoop(check func()) {
 	}
 }
 
-// timedUpdateCheckInterval returns the periodic check interval with a random
-// spread of ±updateCheckJitter, so that all running clients do not query the
-// release API at the same wall-clock time.
+// timedUpdateCheckInterval 返回带 ±updateCheckJitter 随机抖动的周期检查间隔，
+// 这样所有运行中的客户端不会在同一墙钟时间查询 release API。
 func timedUpdateCheckInterval() time.Duration {
 	factor := 1 + updateCheckJitter*(rand.Float64()*2-1)
 	return time.Duration(float64(updateCheckInterval) * factor)
 }
 
-// checkUpdate performs one update check. It is synchronous: callers run it on
-// their own goroutine (the tray menu handler, the periodic loop), and the
-// update state machine makes a concurrent second call a no-op. ctx bounds the
-// check. Only an interactive check (menu click) reports a failure or an
-// up-to-date result; automatic checks stay silent unless a new version shows
-// up.
+// checkUpdate 执行一次更新检查。它是同步的：调用方在自己的 goroutine 上运行它
+// （托盘菜单处理器、周期循环），且更新状态机会让并发第二次调用变成空操作。
+// ctx 限定检查的范围。只有交互式检查（菜单点击）会报告失败或已是最新的结果；
+// 自动检查保持静默，除非出现新版本。
 func (a *TrayApp) checkUpdate(ctx context.Context, interactive bool) {
 	if !a.updateState.CompareAndSwap(updateStateIdle, updateStateChecking) {
 		return
@@ -155,20 +145,18 @@ func (a *TrayApp) checkUpdate(ctx context.Context, interactive bool) {
 	a.pendingUpdate = rel
 	a.updateMu.Unlock()
 	a.updateState.Store(updateStateAvailable)
-	// Called for a periodic re-detection too: the reminder channels are
-	// refreshed (the menu item and tooltip carry the newest tag), while the
-	// system notification is one per tag.
+	// 周期性重新检测时也会调用：提醒渠道会被刷新（菜单项和 tooltip
+	// 携带最新 tag），而系统通知每个 tag 只发一次。
 	a.notifyUpdateAvailable(rel.TagName)
 	log.Info("[SYSTRAY] new version available", "current", version.Tag(), "latest", rel.TagName)
 }
 
-// updateAvailableItemLabel is the persistent tray menu label shown while an
-// update is pending.
+// updateAvailableItemLabel 是有更新待处理时托盘菜单上显示的常驻标签。
 func updateAvailableItemLabel(tag string) string {
 	return fmt.Sprintf("发现新版本 %s，点击更新", tag)
 }
 
-// updateTooltipText is the tooltip/hover text shown while an update is pending.
+// updateTooltipText 是有更新待处理时显示的 tooltip/悬停文本。
 func updateTooltipText(tag string) string {
 	text := fmt.Sprintf("%s: 发现新版本 %s，点击托盘菜单更新", updateNotifyTitle, tag)
 	if len([]rune(text)) > updateTooltipMax {
@@ -177,29 +165,25 @@ func updateTooltipText(tag string) string {
 	return text
 }
 
-// updateUpToDateText is the notification shown after an interactive check that
-// found no newer release. The transient menu label ("已是最新版本(...)")
-// resets after updateMenuReset, so without a notification the user would have
-// to reopen the tray menu to see the result.
+// updateUpToDateText 是交互式检查未发现新版本后显示的通知。
+// 临时菜单标签（"已是最新版本(...)"）会在 updateMenuReset 后重置，
+// 因此没有通知的话，用户必须重新打开托盘菜单才能看到结果。
 func updateUpToDateText(tag string) string {
 	return fmt.Sprintf("已是最新版本(%s)", tag)
 }
 
-// notifyUser shows a system notification and records it in the log. Best
-// effort: gogpu/systray discards the platform error, so the log entry is the
-// only trace of whether the notification was handed to the OS.
+// notifyUser 显示系统通知并记入日志。尽力而为：
+// gogpu/systray 会丢弃平台错误，因此日志条目是通知是否交给操作系统的唯一痕迹。
 func (a *TrayApp) notifyUser(msg string) {
 	log.Info("[SYSTRAY] notify", "msg", msg)
 	a.tray.ShowNotification(updateNotifyTitle, msg)
 }
 
-// trayReady reports whether buildTray() has completed. The check is a
-// deliberate over-approximation: a.tray is assigned inside buildTray() shortly
-// before the channel is closed, so a false positive (ready reported just
-// before the field write becomes visible) is theoretically possible, but a
-// manual check can only be triggered from the tray menu, which buildTray()
-// itself constructs. Everywhere else the result only gates optional
-// notifications, never control flow.
+// trayReady 报告 buildTray() 是否已完成。该检查是刻意的过度近似：
+// a.tray 在 buildTray() 内、channel 关闭前不久被赋值，
+// 因此理论上可能出现误报（在字段写入可见前就报告已就绪），
+// 但手动检查只能由托盘菜单触发，而托盘菜单正是 buildTray() 自己构建的。
+// 其他任何地方，该结果只控制可选通知，绝不控制流程。
 func (a *TrayApp) trayReady() bool {
 	select {
 	case <-a.trayBuilt:
@@ -209,17 +193,15 @@ func (a *TrayApp) trayReady() bool {
 	}
 }
 
-// notifyUserSkipped reports that a notification was skipped because the tray
-// was not ready yet; the caller's logs and menu label still carry the result.
+// notifyUserSkipped 报告通知因托盘尚未就绪而被跳过；
+// 调用方的日志和菜单标签仍会保留该结果。
 func (a *TrayApp) notifyUserSkipped(msg string) {
 	log.Warn("[SYSTRAY] notify skipped: tray not ready", "msg", msg)
 }
 
-// notifyOnInteractive shows a notification for a result the user explicitly
-// asked for by clicking the tray menu item. checkUpdate calls it only for an
-// interactive check, so a silent background check (startup or periodic) never
-// notifies about a failure or an up-to-date result. It stays silent when the
-// tray is not usable yet.
+// notifyOnInteractive 为用户点击托盘菜单项明确请求的结果显示通知。
+// checkUpdate 只在交互式检查时调用它，因此静默的后台检查（启动或周期）
+// 绝不会就失败或已是最新的结果发通知。托盘尚不可用时它保持静默。
 func (a *TrayApp) notifyOnInteractive(msg string) {
 	if !a.trayReady() {
 		a.notifyUserSkipped(msg)
@@ -228,23 +210,20 @@ func (a *TrayApp) notifyOnInteractive(msg string) {
 	a.notifyUser(msg)
 }
 
-// notifyUpdateAvailable is the single entry point of the "new version
-// available" reminder. It combines four channels, in order of reliability:
+// notifyUpdateAvailable 是"发现新版本"提醒的唯一入口。它按可靠性顺序组合了
+// 四个渠道：
 //
-//  1. the tray menu item, which persists until the update is installed (no
-//     4s reset) and is always reachable;
-//  2. a badge drawn onto the tray icon, which is visible even when system
-//     notifications are disabled or Focus Assist suppresses them;
-//  3. the tray tooltip, for users who hover the icon;
-//  4. one system notification (best effort: gogpu/systray discards the
-//     notification error and the OS may silently drop balloon tips, so it can
-//     neither be verified nor relied upon as the only channel).
+//  1. 托盘菜单项，在更新安装前一直存在（无 4 秒重置）且始终可达；
+//  2. 绘制在托盘图标上的徽标，即使系统通知被禁用或被专注助手（Focus Assist）
+//     抑制也可见；
+//  3. 托盘 tooltip，供悬停图标的用户查看；
+//  4. 一条系统通知（尽力而为：gogpu/systray 会丢弃通知错误，
+//     操作系统也可能静默丢弃气泡提示，因此它既无法验证，也不能作为唯一渠道依赖）。
 //
-// Channels 1-3 are refreshed on every detection, so a periodic check keeps the
-// reminder pointing at the newest release. Channel 4 is shown once per tag
-// (see shouldNotify): a user who ignores the reminder must not get a popup
-// every updateCheckInterval for the very same release, while a release newer
-// than the one already announced notifies again.
+// 渠道 1-3 在每次检测时刷新，因此周期检查会让提醒始终指向最新版本。
+// 渠道 4 每个 tag 只显示一次（见 shouldNotify）：忽略提醒的用户
+// 不能在每个 updateCheckInterval 都为同一个 release 收到弹窗，
+// 而比已通告版本更新的 release 会再次通知。
 func (a *TrayApp) notifyUpdateAvailable(tag string) {
 	a.setUpdateItem(updateAvailableItemLabel(tag), false)
 	a.applyUpdateBadge(tag)
@@ -256,10 +235,9 @@ func (a *TrayApp) notifyUpdateAvailable(tag string) {
 		"channels", "system-notification,tray-badge,tray-tooltip,tray-menu-item")
 }
 
-// shouldNotify reports whether the "new version" system notification still has
-// to be shown for tag, and records it. The tag is remembered for the lifetime
-// of the process only: a manual check or a restart (the binary was not updated
-// yet) reminds the user again, as before.
+// shouldNotify 报告 tag 的"新版本"系统通知是否仍需显示，并记录之。
+// tag 只在进程生命周期内被记住：手动检查或重启（二进制尚未更新）
+// 会像之前一样再次提醒用户。
 func (a *TrayApp) shouldNotify(tag string) bool {
 	a.updateMu.Lock()
 	defer a.updateMu.Unlock()
@@ -270,9 +248,8 @@ func (a *TrayApp) shouldNotify(tag string) bool {
 	return true
 }
 
-// applyUpdateBadge re-applies the tray icon with an update badge and updates
-// the tooltip. Missing icon rendering support degrades to a tooltip-only
-// reminder.
+// applyUpdateBadge 重新应用带更新徽标的托盘图标并更新 tooltip。
+// 缺少图标渲染支持时会降级为仅 tooltip 提醒。
 func (a *TrayApp) applyUpdateBadge(tag string) {
 	a.updateUIMu.Lock()
 	defer a.updateUIMu.Unlock()
@@ -288,9 +265,8 @@ func (a *TrayApp) applyUpdateBadge(tag string) {
 	a.tray.SetTooltip(updateTooltipText(tag))
 }
 
-// clearUpdateBadge restores the plain tray icon and tooltip after the client
-// has been updated. It is defensive: the process is restarted right after a
-// successful install.
+// clearUpdateBadge 在客户端更新后恢复普通托盘图标和 tooltip。
+// 它是防御性的：成功安装后进程随即重启。
 func (a *TrayApp) clearUpdateBadge() {
 	a.updateUIMu.Lock()
 	defer a.updateUIMu.Unlock()
@@ -299,10 +275,10 @@ func (a *TrayApp) clearUpdateBadge() {
 	a.tray.SetTooltip(updateNotifyTitle)
 }
 
-// applyTrayIcon applies png to the tray icon on every platform: macOS uses a
-// template (monochrome) image, Windows/Linux a plain PNG. The dark mode slot
-// is set as well so that a Windows theme switch cannot re-apply the unbadged
-// icon over the badge (the call is a no-op on the other platforms).
+// applyTrayIcon 在所有平台上把 png 应用到托盘图标：macOS 使用模板（单色）图片，
+// Windows/Linux 使用普通 PNG。同时设置暗色模式图标槽位，
+// 这样 Windows 主题切换时不会用无徽标的图标覆盖徽标
+// （该调用在其他平台上是空操作）。
 func (a *TrayApp) applyTrayIcon(png []byte) {
 	if runtime.GOOS == "darwin" {
 		a.tray.SetTemplateIcon(png)
@@ -342,18 +318,17 @@ func (a *TrayApp) downloadAndInstall() {
 
 		_ = a.setSysProxyOff()
 		a.closeService()
-		// Release before relaunch so the new process never races the old
-		// one for the singleton mutex.
+		// 在重新启动前释放单例锁，这样新进程绝不会与旧进程
+		// 竞争单例互斥锁。
 		releaseSingletonLock()
 
 		if err := selfupdate.Restart(); err != nil {
-			// The new binary is already in place; keep the old version
-			// running in-process and let the user restart manually.
+			// 新二进制已经就位；让旧版本继续在进程内运行，
+			// 由用户手动重启。
 			log.Error("[SYSTRAY] restart after update", "err", err)
 			a.tray.ShowNotification("Easyss", "重启失败，请手动重启应用完成更新")
-			// The singleton lock was released before the relaunch attempt;
-			// re-acquire it so this process stays the only instance while it
-			// keeps serving.
+			// 单例锁在重新启动尝试前已释放；重新获取它，
+			// 以便本进程在继续提供服务期间保持唯一实例。
 			if lerr := tryAcquireSingletonLock(); lerr != nil {
 				log.Error("[SYSTRAY] re-acquire singleton lock after failed restart", "err", lerr)
 			}
@@ -364,13 +339,13 @@ func (a *TrayApp) downloadAndInstall() {
 			a.updateState.Store(updateStateAvailable)
 			return
 		}
-		// The new process is running; terminate this one.
+		// 新进程已在运行；终止本进程。
 		os.Exit(0)
 	}()
 }
 
-// scheduleUpdateMenuReset returns the update item to its idle label after a
-// transient result (failure / up-to-date) has been visible for a moment.
+// scheduleUpdateMenuReset 在临时结果（失败/已是最新）显示片刻后，
+// 把更新菜单项恢复到空闲标签。
 func (a *TrayApp) scheduleUpdateMenuReset() {
 	time.AfterFunc(updateMenuReset, func() {
 		if a.updateState.CompareAndSwap(updateStateChecking, updateStateIdle) {
@@ -379,9 +354,9 @@ func (a *TrayApp) scheduleUpdateMenuReset() {
 	})
 }
 
-// setUpdateItem updates the update menu entry. The reset scheduled by
-// scheduleUpdateMenuReset runs in a timer callback, so the guard keeps a late
-// callback from panicking when no update item exists (the tray was not built).
+// setUpdateItem 更新更新菜单项。scheduleUpdateMenuReset 调度的重置
+// 在定时器回调中运行，因此该保护可防止在更新项不存在时
+// （托盘尚未构建）迟到的回调引发 panic。
 func (a *TrayApp) setUpdateItem(label string, disabled bool) {
 	if a.updateItem == nil {
 		return

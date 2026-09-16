@@ -8,9 +8,9 @@ import (
 	"github.com/miekg/dns"
 )
 
-// startTestDNSServer starts a local udp dns server on a random port. When
-// fail is true it replies SERVFAIL to every query, otherwise it answers
-// A/AAAA records. It returns the server address and registers cleanup.
+// startTestDNSServer 在随机端口上启动一个本地 UDP DNS 服务器。当 fail 为
+// true 时，它对每个查询都回复 SERVFAIL；否则正常应答 A/AAAA 记录。返回
+// 服务器地址并注册清理函数。
 func startTestDNSServer(t *testing.T, fail bool) string {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -63,7 +63,7 @@ func TestForwardQueryFallsBackToSystemDNS(t *testing.T) {
 
 	fs := NewForwardServer("127.0.0.1:0", false)
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
-	// an unreachable local address forces the fallback path
+	// 不可达的本地地址强制走回退路径
 	fs.dnsServers = []string{"127.0.0.1:1"}
 
 	msg := new(dns.Msg)
@@ -110,17 +110,15 @@ func TestForwardQueryAllServersUnavailable(t *testing.T) {
 	}
 }
 
-// TestForwardQuerySkipsSelfAsUpstream verifies the forward server never uses
-// itself as a fallback upstream. During TUN mode the system DNS points at
-// 127.0.0.1 (this very server); without the filter the fallback would
-// recurse into itself, piling up goroutines and UDP sockets until the
-// per-query timeout unwound the chain.
+// TestForwardQuerySkipsSelfAsUpstream 验证转发服务器永远不会把自身作为回退
+// 上游。TUN 模式下系统 DNS 指向 127.0.0.1（即本服务器）；若没有该过滤，
+// 回退会递归进自身，堆积 goroutine 和 UDP socket，直到单次查询超时解开
+// 这条链。
 func TestForwardQuerySkipsSelfAsUpstream(t *testing.T) {
 	old := systemDNSServersFunc
 	systemDNSServersFunc = func() []string {
-		// The system DNS in TUN mode: this forward server itself (the
-		// real discovery formats it as host:port), plus an unreachable
-		// extra.
+		// TUN 模式下的系统 DNS：本转发服务器自身（真实发现逻辑会将其格式化
+		// 为 host:port），外加一个不可达的额外服务器。
 		return []string{"127.0.0.1:53", "127.0.0.1:1"}
 	}
 	t.Cleanup(func() {
@@ -131,7 +129,7 @@ func TestForwardQuerySkipsSelfAsUpstream(t *testing.T) {
 
 	fs := NewForwardServer("127.0.0.1:53", false)
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
-	fs.dnsServers = []string{"127.0.0.1:1"} // builtin servers all unreachable
+	fs.dnsServers = []string{"127.0.0.1:1"} // 内置服务器全部不可达
 
 	got := fs.systemDNSServers()
 	if len(got) != 1 || got[0] != "127.0.0.1:1" {

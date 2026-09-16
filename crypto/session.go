@@ -15,8 +15,8 @@ const (
 	sessionPhase   = "session"
 )
 
-// Direction identifies one side of a session: client-to-server or
-// server-to-client. Each direction has its own key and nonce counter.
+// Direction 标识会话的一侧：客户端到服务端或服务端到客户端。
+// 每个方向拥有独立的密钥与 nonce 计数器。
 type Direction uint8
 
 const (
@@ -35,11 +35,10 @@ func (d Direction) String() string {
 	}
 }
 
-// ErrHandshakeTimeout reports that a complete bootstrap record was not
-// received within the handshake timeout. The server responds with 408
-// Request Timeout (mirroring nginx client_body_timeout behavior) instead of a
-// camouflaged fallback page, so a legit client with a merely-delayed record
-// gets a clean rejection instead of misparsing HTML as session records.
+// ErrHandshakeTimeout 报告在握手超时时间内未收到完整的 bootstrap 记录。
+// 此时服务端返回 408 Request Timeout（镜像 nginx client_body_timeout 的行为）
+// 而不是伪装 fallback 页面，这样记录只是延迟到达的合法客户端会收到干净的
+// 拒绝，而不是把 HTML 误解析为会话记录。
 var ErrHandshakeTimeout = errors.New("crypto: bootstrap handshake timeout")
 
 type FirstRecord struct {
@@ -91,23 +90,22 @@ func NewStreamKeys(masterKey, salt []byte, endpoint string) (*StreamKeys, error)
 	}, nil
 }
 
-// BootstrapWriter returns the record writer for a stream's first record (the
-// bootstrap record carrying the handshake). The bootstrap phase always uses
-// AES-256-GCM on the c2s key, so the caller cannot select a mismatched method.
+// BootstrapWriter 返回流的首条记录（携带握手的 bootstrap 记录）的写入器。
+// bootstrap 阶段始终在 c2s 密钥上使用 AES-256-GCM，因此调用方无法选择
+// 不匹配的方法。
 func (sk *StreamKeys) BootstrapWriter(w io.Writer) (*RecordWriter, error) {
 	return sk.newRecordWriter(w, bootstrapPhase, DirC2S, protocol.MethodAES256GCM)
 }
 
-// NewWriter returns a session-phase record writer for the given direction.
+// NewWriter 返回给定方向的会话阶段记录写入器。
 func (sk *StreamKeys) NewWriter(w io.Writer, dir Direction, method protocol.Method) (*RecordWriter, error) {
 	return sk.newRecordWriter(w, sessionPhase, dir, method)
 }
 
-// NewReader returns a session-phase record reader for the given direction.
-// Reader and writer are created together with their AAD, encryptor and nonce
-// counter, so the three can never disagree and a direction's counter is
-// instantiated exactly once (calling newEncryptor twice for one direction
-// would restart the nonce counter and reuse keystream).
+// NewReader 返回给定方向的会话阶段记录读取器。读取器与写入器连同各自的
+// AAD、加密器和 nonce 计数器一起创建，三者永远不会不一致，且一个方向的
+// 计数器只实例化一次（对同一方向调用两次 newEncryptor 会重启 nonce 计数器
+// 并复用密钥流）。
 func (sk *StreamKeys) NewReader(r io.Reader, dir Direction, method protocol.Method) (*DecryptedReader, error) {
 	enc, counter, err := sk.newEncryptor(sessionPhase, dir, method)
 	if err != nil {
@@ -116,8 +114,8 @@ func (sk *StreamKeys) NewReader(r io.Reader, dir Direction, method protocol.Meth
 	return NewDecryptedReader(r, sk.aad(dir, sessionPhase, method), enc, counter), nil
 }
 
-// NewRecordReader is NewReader without the frame layer, for callers that
-// decode records themselves (e.g. tests and the bootstrap first-record read).
+// NewRecordReader 是不带帧层的 NewReader，供自行解码记录的调用方使用
+// （例如测试和 bootstrap 首条记录读取）。
 func (sk *StreamKeys) NewRecordReader(r io.Reader, dir Direction, method protocol.Method) (*RecordReader, error) {
 	enc, counter, err := sk.newEncryptor(sessionPhase, dir, method)
 	if err != nil {
@@ -134,8 +132,7 @@ func (sk *StreamKeys) newRecordWriter(w io.Writer, phase string, dir Direction, 
 	return NewRecordWriter(w, enc, counter, sk.aad(dir, phase, method)), nil
 }
 
-// aad builds the additional authenticated data binding a record to this
-// stream's endpoint, salt, direction, phase and method.
+// aad 构建附加认证数据，把记录绑定到本流的端点、salt、方向、阶段与方法。
 func (sk *StreamKeys) aad(dir Direction, phase string, method protocol.Method) []byte {
 	return buildAAD(sk.Endpoint, sk.salt, dir.String(), phase, method)
 }
@@ -195,8 +192,8 @@ func buildAAD(endpoint string, salt []byte, direction, phase string, method prot
 
 type DecryptedReader struct {
 	reader   *RecordReader
-	frames   []protocol.Frame // leftover frames from previous records
-	frameBuf []protocol.Frame // reusable backing array for decodeFramesIntoBuf
+	frames   []protocol.Frame // 先前记录留下的残余帧
+	frameBuf []protocol.Frame // decodeFramesIntoBuf 的可复用后备数组
 }
 
 func NewDecryptedReader(r io.Reader, aad []byte, encryptor Encryptor, counter *CounterNonce) *DecryptedReader {
@@ -234,9 +231,8 @@ func (dr *DecryptedReader) ReadFrame() (protocol.Frame, error) {
 	return frames[0], nil
 }
 
-// decodeFramesIntoBuf splits a decrypted record into frames, reusing buf as
-// the backing array. Frame payloads alias plaintext, whose lifetime is the
-// caller's.
+// decodeFramesIntoBuf 把解密的记录拆分为帧，复用 buf 作为后备数组。
+// 帧的 payload 别名自 plaintext，其生命周期由调用方负责。
 func decodeFramesIntoBuf(plaintext []byte, buf []protocol.Frame) ([]protocol.Frame, error) {
 	frames := buf[:0]
 	for len(plaintext) > 0 {
@@ -276,8 +272,8 @@ func (sk *StreamKeys) ReadFirstRecord(src io.Reader) (FirstRecord, error) {
 		return FirstRecord{}, fmt.Errorf("crypto: decode handshake: %w", err)
 	}
 
-	// The first record may carry more than the handshake (the client merges
-	// the first DATA/DATAGRAM and a padding frame into it).
+	// 首条记录可能携带不止握手本身（客户端会把首条 DATA/DATAGRAM 帧
+	// 和一个 padding 帧合并进来）。
 	leftover, err := decodeFramesIntoBuf(plaintext[n:], nil)
 	if err != nil {
 		return FirstRecord{}, fmt.Errorf("crypto: decode leftover frames: %w", err)
@@ -308,9 +304,8 @@ func (sk *StreamKeys) ReadFirstRecordWithTimeout(ctx context.Context, src io.Rea
 		closeReader(src)
 		return FirstRecord{}, ctx.Err()
 	case <-timer.C:
-		// The read goroutine may have finished in the same instant the timer
-		// fired: draining the buffered result first avoids misjudging a
-		// perfectly valid (but slow) handshake as a timeout.
+		// 读 goroutine 可能恰在定时器触发的同一瞬间完成：先排空带缓冲的结果，
+		// 避免把一个完全有效（但较慢）的握手误判为超时。
 		select {
 		case res := <-ch:
 			return res.fr, res.err

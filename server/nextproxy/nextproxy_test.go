@@ -325,7 +325,7 @@ func TestIsCustomDomain(t *testing.T) {
 func TestAddIP(t *testing.T) {
 	t.Run("nil receiver", func(t *testing.T) {
 		var np *NextProxy
-		np.AddIP("1.2.3.4") // should not panic
+		np.AddIP("1.2.3.4") // 不应 panic
 	})
 
 	t.Run("添加 IP", func(t *testing.T) {
@@ -361,7 +361,7 @@ func TestAddIP(t *testing.T) {
 func TestAddDomain(t *testing.T) {
 	t.Run("nil receiver", func(t *testing.T) {
 		var np *NextProxy
-		np.AddDomain("example.com") // should not panic
+		np.AddDomain("example.com") // 不应 panic
 	})
 
 	t.Run("添加域名", func(t *testing.T) {
@@ -370,7 +370,7 @@ func TestAddDomain(t *testing.T) {
 		if !np.ShouldProxy("cdn.example.com") {
 			t.Error("should proxy after AddDomain")
 		}
-		// subdomain match should also work
+		// 子域名匹配也应生效
 		if !np.ShouldProxy("www.cdn.example.com") {
 			t.Error("subdomain should also proxy after AddDomain")
 		}

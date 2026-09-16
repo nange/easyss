@@ -8,33 +8,28 @@ tun_gw_v6=$6
 server_ip_v6=$7
 local_gateway_v6=$8
 
-# Exit code contract: the caller (cmd/easyss/tun_helper_darwin.go on the
-# fd/helper path, client/tun/tun.go on the no-helper path) keeps the TUN
-# routes installed only when this script exits 0. Every command that is not
-# allowed to fail calls fail, which records its step name in FAIL; the script
-# ends with an explicit exit.
+# 退出码契约：调用方（fd/helper 路径下的 cmd/easyss/tun_helper_darwin.go，
+# 以及无 helper 路径下的 client/tun/tun.go）仅在本脚本以 0 退出时才保留已
+# 安装的 TUN 路由。所有不允许失败的命令都会调用 fail，把各自的步骤名记录到
+# FAIL 中；脚本最后以显式 exit 结束。
 #
-# This script has no "set -e" on purpose. It is re-run by the helper keep-alive
-# after sleep/wake, and with "set -e" the first already configured route would
-# abort it before the missing ones were re-installed. The exit code has to be
-# the script's own verdict over every command it ran, not the status of
-# whichever command happened to come last: the routes are installed after the
-# device address, so a rejected ifconfig or an early rejected route add used to
-# be masked by the success of the last route add — the same silently half
-# configured tunnel create_tun_dev_windows.bat reported on Windows before its
-# "exit /b" contract. The same contract also lets ensureTunRoutes tell a
-# successful re-apply from a genuine failure instead of logging a warning every
-# 10s and making the helper exit.
+# 本脚本刻意不使用 "set -e"。它会在睡眠/唤醒后被 helper 的 keep-alive 重新
+# 执行，而一旦启用 "set -e"，第一条"已配置"的路由就会中止脚本，导致缺失的
+# 路由无法被重新安装。退出码必须是脚本对自身运行过的每条命令给出的总体判定，
+# 而不是恰好最后执行的那条命令的状态：路由是在设备地址之后安装的，因此一次被
+# 拒绝的 ifconfig 或一次早期的路由添加失败，曾会被最后一条成功的路由添加掩盖
+# ——正是 create_tun_dev_windows.bat 在 Windows 上引入 "exit /b" 契约之前
+# 所报告的那种静默的半配置隧道。同样的契约也让 ensureTunRoutes 能区分成功的
+# 重放与真正的失败，而不是每 10 秒记录一次警告并让 helper 退出。
 set -u
 
 FAIL=
 
-# is_benign reports whether the output of a failed command describes state that
-# is already in place, i.e. an error a re-run legitimately produces. macOS
-# "route add" refuses to duplicate a route ("File exists"), and ifconfig
-# reports "File exists" for an address that is already configured: the keep
-# alive re-runs this script against the state the previous run left behind, so
-# those have to stay silent and successful.
+# is_benign 用于判断一条失败命令的输出是否描述"状态已就位"的情况，
+# 即重跑时合理出现的错误。macOS 的 "route add" 会拒绝重复添加路由
+# （"File exists"），ifconfig 对已配置的地址也会报 "File exists"：
+# keep-alive 会用上一次运行遗留的状态重新执行本脚本，因此这些错误
+# 必须保持静默且视为成功。
 is_benign() {
   case "$1" in
     *"File exists"* | *"already assigned"*) return 0 ;;
@@ -42,11 +37,10 @@ is_benign() {
   esac
 }
 
-# fail STEP COMMAND... runs a command that is allowed to fail and records STEP
-# in FAIL unless the failure is the benign "already configured" case. FAIL and
-# the running command share this shell, so the recording happens in the
-# caller's scope (no subshell) and is expanded only at the end of the script,
-# where every command has run.
+# fail STEP COMMAND... 运行一条允许失败的命令，除非失败属于良性的
+# "已配置"情况，否则把 STEP 记录到 FAIL 中。FAIL 与正在运行的命令共享
+# 同一个 shell，因此记录发生在调用方的作用域内（无子 shell），并且只在
+# 脚本末尾所有命令都执行完之后才展开。
 fail() {
   step=$1
   shift
@@ -63,13 +57,13 @@ fail() {
   FAIL="${FAIL:+$FAIL,}$step"
 }
 
-# create tun device
+# 创建 tun 设备
 fail ifconfig-ipv4 ifconfig "$tun_device" "$tun_ip" "$tun_gw" up
-if [ -n "$server_ip_v6" ]; then  # check if server_ip_v6 is not empty
+if [ -n "$server_ip_v6" ]; then  # 检查 server_ip_v6 是否非空
   fail ifconfig-ipv6 ifconfig "$tun_device" inet6 "$tun_ip_v6"/64 up
 fi
 
-# add ipv4 ip route
+# 添加 IPv4 路由
 fail route-1.0.0.0/8 route add -net 1.0.0.0/8 "$tun_gw"
 fail route-2.0.0.0/7 route add -net 2.0.0.0/7 "$tun_gw"
 fail route-4.0.0.0/6 route add -net 4.0.0.0/6 "$tun_gw"
@@ -81,8 +75,8 @@ fail route-128.0.0.0/1 route add -net 128.0.0.0/1 "$tun_gw"
 fail route-198.18.0.0/15 route add -net 198.18.0.0/15 "$tun_gw"
 
 
-if [ -n "$server_ip_v6" ]; then  # check if server_ip_v6 is not empty
-  # add ipv6 ip route
+if [ -n "$server_ip_v6" ]; then  # 检查 server_ip_v6 是否非空
+  # 添加 IPv6 路由
   fail route-v6-default route add -inet6 -net ::/0 -gateway "$tun_gw_v6"
 fi
 

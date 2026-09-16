@@ -20,9 +20,8 @@ func TestSaltCache_MarkSeen(t *testing.T) {
 		t.Fatal("second MarkSeen of the same salt should report seen (replay)")
 	}
 
-	// The same salt on a different endpoint must not be treated as a replay:
-	// the per-endpoint AAD makes that record undecryptable, and burning the
-	// entry would let an attacker evict another endpoint's protection.
+	// 同一 salt 出现在不同端点上时不能视为重放：
+	// 按端点区分的 AAD 使该记录无法解密，而烧掉该条目会让攻击者逐出另一端点的防护。
 	if c.MarkSeen("/v3/udp", salt) {
 		t.Fatal("the same salt on a different endpoint should report not-seen")
 	}
@@ -46,9 +45,9 @@ func TestSaltCache_DistinctSalts(t *testing.T) {
 	}
 }
 
-// TestSaltCache_ConcurrentMarkSeen verifies the check-and-set is atomic:
-// concurrent requests carrying the same salt must observe exactly one
-// not-seen result (regression test for the Get/Set TOCTOU).
+// TestSaltCache_ConcurrentMarkSeen 验证 check-and-set 的原子性：
+// 携带同一 salt 的并发请求必须恰好观察到一次 not-seen 结果
+// （针对 Get/Set TOCTOU 的回归测试）。
 func TestSaltCache_ConcurrentMarkSeen(t *testing.T) {
 	c := newSaltCache()
 	salt := base64.RawURLEncoding.EncodeToString(make([]byte, 16))
@@ -99,7 +98,7 @@ func TestIPRateLimiter_Refill(t *testing.T) {
 		l.Allow("1.2.3.4")
 	}
 
-	// Advance 1s: exactly handshakeRate tokens are replenished.
+	// 前进 1 秒：恰好补充 handshakeRate 个令牌。
 	now = now.Add(time.Second)
 	allowed := 0
 	for range int(handshakeRate) {

@@ -17,20 +17,19 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-// fakeBin is the executable path fakeLookPath reports, and the one every
-// expectation below is written with. It stays POSIX style on every platform:
-// the terminal table it feeds is used on linux only.
+// fakeBin 是 fakeLookPath 报告的、也是下面所有预期所用的可执行文件路径。
+// 它在所有平台上都保持 POSIX 风格：它填充的终端表只在 linux 上使用。
 func fakeBin(name string) string {
 	return "/usr/bin/" + name
 }
 
-// binName strips the directory from a path, treating the POSIX and the
-// Windows separator alike so that the fake below behaves the same everywhere.
+// binName 从路径中剥离目录部分，对 POSIX 和 Windows 分隔符一视同仁，
+// 以便下面的 fake 在所有平台上行为一致。
 func binName(path string) string {
 	return path[strings.LastIndexAny(path, `/\`)+1:]
 }
 
-// fakeLookPath simulates a PATH holding exactly the given executables.
+// fakeLookPath 模拟一个只包含给定可执行文件的 PATH。
 func fakeLookPath(installed ...string) func(string) (string, error) {
 	available := make(map[string]bool, len(installed))
 	for _, bin := range installed {
@@ -46,9 +45,8 @@ func fakeLookPath(installed ...string) func(string) (string, error) {
 }
 
 func TestBinName(t *testing.T) {
-	// The fakes have to resolve the same executable on every platform, which
-	// is why the separator handling is asserted here instead of relying on
-	// filepath, whose Windows build also accepts backslashes.
+	// fake 必须在每个平台上解析出相同的可执行文件，因此这里直接断言分隔符
+	// 的处理，而不是依赖 filepath——它的 Windows 版本同样接受反斜杠。
 	cases := map[string]string{
 		"foot":                      "foot",
 		"/usr/bin/foot":             "foot",
@@ -89,8 +87,7 @@ func TestLogViewerArgv(t *testing.T) {
 			want:      append([]string{fakeBin("xdg-terminal-exec"), "--"}, tailArgv...),
 		},
 		{
-			// The XDG launcher is preferred over the Wayland terminals below
-			// it: it is what the session itself would use.
+			// XDG 启动器优先于其下方的 Wayland 终端：这正是会话本身会使用的。
 			name:      "xdg launcher wins without TERMINAL",
 			installed: []string{"xdg-terminal-exec", "alacritty", "foot"},
 			want:      append([]string{fakeBin("xdg-terminal-exec"), "--"}, tailArgv...),
@@ -146,8 +143,7 @@ func TestLogViewerArgv(t *testing.T) {
 			want:      append([]string{fakeBin("wezterm"), "start", "--"}, tailArgv...),
 		},
 		{
-			// Terminals that only take one shell string get the command
-			// joined and quoted.
+			// 只接受单个 shell 字符串的终端，其命令会被拼接并加引号。
 			name:      "xfce4-terminal takes a shell string",
 			installed: []string{"xfce4-terminal"},
 			want:      []string{fakeBin("xfce4-terminal"), "--command", "tail -n 50 -f " + logPath},
@@ -194,9 +190,9 @@ func TestLogViewerArgvWithoutTerminal(t *testing.T) {
 	if !errors.Is(err, errNoTerminalEmulator) {
 		t.Fatalf("expected errNoTerminalEmulator, got %v", err)
 	}
-	// The message has to name what was probed: the previous version only
-	// reported "no supported terminal emulator found", which gave no hint
-	// about why the log viewer refused to open.
+	// 错误消息必须说明探测了哪些程序：旧版本只报告
+	// "no supported terminal emulator found"，完全没有提示日志查看器
+	// 为什么拒绝打开。
 	for _, bin := range []string{"xdg-terminal-exec", "alacritty", "foot", "gnome-terminal"} {
 		if !strings.Contains(err.Error(), bin) {
 			t.Fatalf("error %q should list the probed terminal %q", err, bin)
@@ -217,7 +213,7 @@ func TestOpenLogFileErrors(t *testing.T) {
 	}
 }
 
-// writeTestLog writes a log file with lines "line 1" .. "line N".
+// writeTestLog 写入一个包含 "line 1" .. "line N" 各行的日志文件。
 func writeTestLog(t *testing.T, lines int) string {
 	t.Helper()
 
@@ -233,8 +229,7 @@ func writeTestLog(t *testing.T, lines int) string {
 	return filePath
 }
 
-// stubDefaultApp captures the path handed to the desktop's default
-// application instead of opening a window.
+// stubDefaultApp 捕获交给桌面默认应用程序的路径，而不真正打开窗口。
 func stubDefaultApp(t *testing.T) *string {
 	t.Helper()
 
@@ -270,8 +265,7 @@ func TestOpenLogSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("snapshot not found: %v", err)
 	}
-	// The tray may run as root, so the snapshot has to be readable by the
-	// desktop user that opens it.
+	// 托盘可能以 root 身份运行，因此快照必须对打开它的桌面用户可读。
 	if got := info.Mode().Perm(); got != 0o644 {
 		t.Fatalf("snapshot mode = %o, want 644", got)
 	}
@@ -292,9 +286,8 @@ func TestOpenLogSnapshot(t *testing.T) {
 	}
 }
 
-// TestOpenLogFileFallsBackWithoutTerminal covers the whole flow on a desktop
-// without any of the supported terminal emulators: the log is opened as a
-// snapshot instead of failing.
+// TestOpenLogFileFallsBackWithoutTerminal 覆盖在没有安装任何受支持终端模拟器
+// 的桌面上的完整流程：日志以快照方式打开，而不是直接失败。
 func TestOpenLogFileFallsBackWithoutTerminal(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the terminal table is used on linux only")
@@ -333,15 +326,14 @@ func TestStartDetached(t *testing.T) {
 	if err != nil {
 		t.Skipf("true not found: %v", err)
 	}
-	// Must return without waiting for the child.
+	// 必须在不等待子进程的情况下返回。
 	if err := util.StartDetached([]string{trueBin}); err != nil {
 		t.Fatalf("util.StartDetached failed: %v", err)
 	}
 }
 
-// TestLogViewerArgvOnHost resolves the table against the real PATH of the
-// machine running the tests, which is what the tray does at runtime. It is
-// skipped on a host without any terminal emulator.
+// TestLogViewerArgvOnHost 针对运行测试的机器的真实 PATH 解析终端表，
+// 这正是托盘在运行时的行为。在没有终端模拟器的主机上会跳过该测试。
 func TestLogViewerArgvOnHost(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the terminal table is used on linux only")

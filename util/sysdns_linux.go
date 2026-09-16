@@ -16,7 +16,7 @@ import (
 func SetSysDNS(v []string) error {
 	if iface, err := defaultInterface(); err == nil {
 		args := append([]string{"dns", iface}, v...)
-		_, _ = Command("resolvectl", args...) // best-effort, ignore errors
+		_, _ = Command("resolvectl", args...) // 尽力而为，忽略错误
 	}
 	return setResolvConf(v)
 }
@@ -44,7 +44,7 @@ func defaultInterface() (string, error) {
 	}
 
 	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Scan() // skip header
+	scanner.Scan() // 跳过表头
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
 		if len(fields) >= 8 && fields[1] == "00000000" && fields[3] == "0003" {
@@ -102,35 +102,30 @@ func SetSysDNSViaOSAScript(servers []string) error {
 	return fmt.Errorf("SetSysDNSViaOSAScript is only supported on macOS")
 }
 
-// tunDNSCommand runs the resolvectl invocations of the TUN DNS setup. It is a
-// variable so that tests can assert the issued commands without touching the
-// resolver of the machine running them.
+// tunDNSCommand 执行 TUN DNS 配置中的 resolvectl 调用。它是一个
+// 变量，这样测试就能断言发出的命令，而无需触碰运行测试的机器的解析器。
 var tunDNSCommand = func(name string, args ...string) (string, error) {
 	return Command(name, args...)
 }
 
-// SetSysDNSForTun configures DNS resolution for TUN mode: the TUN device
-// becomes the DNS default-route link with the resolver of its own, and the
-// physical link stops being one.
+// SetSysDNSForTun 为 TUN 模式配置 DNS 解析：TUN 设备成为 DNS 默认路由
+// 链路并拥有自己的解析器，物理链路则不再是默认路由。
 //
-// The per-link part is what makes resolution usable at all. systemd-resolved
-// queries the resolver of a link with the socket pinned to that link's device,
-// so the physical link's resolver sends its queries out of the physical NIC
-// and therefore past the TUN routes: a public resolver cannot answer for a
-// blocked domain, and the client then connects to whatever address the
-// polluted path returned. Pinned to the TUN device, exactly the same query
-// enters the tunnel instead, where easyss routes it by domain — direct for CN
-// names, through the server for everything else.
+// 按链路（per-link）的配置才是让解析真正可用的关键。systemd-resolved
+// 查询某条链路的解析器时，会把 socket 固定到该链路的设备上，
+// 因此物理链路的解析器会从物理网卡发出查询，从而绕过 TUN 路由：
+// 公共解析器无法回答被封锁的域名，客户端随后就会连接到被污染路径
+// 返回的任意地址。而固定在 TUN 设备上时，完全相同的查询会进入隧道，
+// 由 easyss 按域名路由 — 中国域名直连，其余域名走服务端。
 func SetSysDNSForTun(tunDevice string, v []string) error {
-	// The system DNS below is what programs that read /etc/resolv.conf or ask
-	// for the link configuration keep using; it is best-effort like before.
+	// 下面的系统 DNS 设置是那些读取 /etc/resolv.conf 或查询链路配置的
+	// 程序仍在使用的解析器；和以往一样，这是尽力而为的操作。
 	return errors.Join(setTunLinkDNS(tunDevice, v), SetSysDNS(v))
 }
 
-// EnsureSysDNSForTun re-asserts the TUN DNS state. NetworkManager rewrites a
-// link's DNS settings when the connection changes (roaming, DHCP renew), and
-// one of those rewrites makes the physical link the DNS default route again,
-// which is the state that lets resolution bypass the tunnel.
+// EnsureSysDNSForTun 重新断言 TUN DNS 状态。NetworkManager 会在连接
+// 变化（漫游、DHCP 续租）时重写链路的 DNS 设置，其中某次重写会让物理
+// 链路重新成为 DNS 默认路由，而该状态会让解析绕过隧道。
 func EnsureSysDNSForTun(tunDevice string, v []string) error {
 	iface, err := defaultInterface()
 	if err != nil {
@@ -144,14 +139,13 @@ func EnsureSysDNSForTun(tunDevice string, v []string) error {
 	return setTunLinkDNS(tunDevice, v)
 }
 
-// RestoreSysDNSForTun undoes SetSysDNSForTun. The TUN link's own settings
-// disappear with the interface, so only the physical link has to be handed
-// back to the resolver, besides restoring the servers the caller saved.
+// RestoreSysDNSForTun 撤销 SetSysDNSForTun 的效果。TUN 链路的设置会随
+// 接口一起消失，因此除了恢复调用方保存的服务器外，只需把物理链路
+// 交还给解析器。
 func RestoreSysDNSForTun(tunDevice string, origin []string) error {
 	var errs []error
 
-	// Best-effort: the interface is usually gone by now, which also drops the
-	// per-link state below.
+	// 尽力而为：接口此时通常已经消失，下面的按链路状态也随之丢弃。
 	if _, err := tunDNSCommand("resolvectl", "revert", tunDevice); err != nil {
 		errs = append(errs, fmt.Errorf("resolvectl revert %s: %w", tunDevice, err))
 	}
@@ -174,8 +168,8 @@ func RestoreSysDNSForTun(tunDevice string, origin []string) error {
 	return errors.Join(append(errs, SetSysDNS(origin))...)
 }
 
-// setTunLinkDNS pins the resolver to the TUN device and keeps the physical
-// link out of the DNS default route.
+// setTunLinkDNS 把解析器固定到 TUN 设备，并让物理链路
+// 不参与 DNS 默认路由。
 func setTunLinkDNS(tunDevice string, v []string) error {
 	iface, err := defaultInterface()
 	if err != nil {
@@ -199,8 +193,8 @@ func setTunLinkDNS(tunDevice string, v []string) error {
 	return nil
 }
 
-// resolvectlBool returns the trailing "yes"/"no" of a resolvectl setting
-// output such as "Link 2 (eno1): no", so that a link name never matches.
+// resolvectlBool 返回 resolvectl 设置输出（如 "Link 2 (eno1): no"）
+// 末尾的 "yes"/"no"，这样链路名称永远不会被误匹配。
 func resolvectlBool(out string) string {
 	idx := strings.LastIndex(out, ":")
 	if idx < 0 {

@@ -11,26 +11,22 @@ import (
 	"github.com/nange/easyss/v3/stats"
 )
 
-// probeChunkSize is the write granularity for the probe payload: each chunk
-// is flushed so the payload reaches the client at its real network pace
-// instead of being buffered server-side.
+// probeChunkSize 是 probe 载荷的写入粒度：每个块都会 flush，
+// 使载荷以真实的网络速度到达客户端，而不是在服务端被缓冲。
 const probeChunkSize = 32 * 1024
 
-// ProbeHandler serves the pre-generated random payload used by clients to
-// actively measure the download throughput of their own connection. A valid
-// request must carry the capability token derived from the master key in the
-// x-es header (same header name and wire shape as the proxy handshake salt);
-// anything else is answered with the camouflaged fallback page so the server
-// stays indistinguishable from a real site.
+// ProbeHandler 提供预先生成的随机载荷，供客户端主动测量自身连接的下载吞吐量。
+// 有效请求必须在 x-es 头中携带由主密钥派生的能力令牌（与代理握手的 salt
+// 使用相同的头名称和线上格式）；其他任何请求都会得到伪装回退页面，
+// 使服务器与真实网站无法区分。
 type ProbeHandler struct {
 	payload []byte
 	token   []byte
 	limiter *ipRateLimiter
 }
 
-// NewProbeHandler builds the /v3/probe handler. The payload must have been
-// generated at server startup; serving the same buffer keeps the endpoint
-// cheap and uncacheable (Cache-Control: no-store).
+// NewProbeHandler 构建 /v3/probe handler。载荷必须在服务器启动时生成；
+// 复用同一个缓冲区使该端点开销极低且不可缓存（Cache-Control: no-store）。
 func NewProbeHandler(masterKey, payload []byte) (*ProbeHandler, error) {
 	tokenB64, err := crypto.ProbeToken(masterKey)
 	if err != nil {
@@ -65,8 +61,8 @@ func (h *ProbeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Bound probe downloads per source IP; wrong-token requests never reach
-	// this point (they get the cheap fallback page instead).
+	// 按源 IP 限制 probe 下载；token 错误的请求永远不会到达这里
+	// （它们会得到廉价的回退页面）。
 	if !h.limiter.Allow(clientIP(r)) {
 		log.Error("[SERVER] probe rate limited", "remote", r.RemoteAddr)
 		serveReject(w, http.StatusTooManyRequests)

@@ -14,20 +14,18 @@ import (
 )
 
 const (
-	// uwpMenuSlots is the fixed number of UWP-app checkbox slots pre-built
-	// into the submenu at startup. The menu tree is never structurally
-	// rebuilt at runtime: gogpu/systray's SetMenu renumbers every item
-	// positionally and destroys the native HMENU, so a rebuild while the
-	// context menu is open can dispatch a click to another item's callback
-	// (https://github.com/gogpu/systray/issues/39). Pre-allocating a fixed
-	// number of slots and only updating label/checked/disabled state in
-	// place keeps the root menu shape constant, so no stale-ID aliasing is
-	// possible. Any future feature that changes the menu tree structure at
-	// runtime must respect the same constraint.
+	// uwpMenuSlots 是启动时预建进子菜单的 UWP 应用复选框槽位的固定数量。
+	// 菜单树在运行时绝不会被结构性重建：gogpu/systray 的 SetMenu 会按位置
+	// 重新编号每个菜单项并销毁原生 HMENU，因此在上下文菜单打开期间重建
+	// 可能把一次点击派发到另一个菜单项的回调上
+	// (https://github.com/gogpu/systray/issues/39)。预分配固定数量的槽位并
+	// 只就地更新标签/选中/禁用状态，可保持根菜单形状不变，
+	// 因此不会出现过期 ID 别名问题。任何将来要在运行时改变菜单树结构的
+	// 特性都必须遵守同样的约束。
 	uwpMenuSlots = 48
 
-	// uwpSlotLoadingLabel is the placeholder shown in unpopulated slots
-	// until the first refresh fills them in.
+	// uwpSlotLoadingLabel 是显示在未填充槽位中的占位符，
+	// 直到第一次刷新将其填满。
 	uwpSlotLoadingLabel = "…"
 )
 
@@ -40,14 +38,14 @@ func (a *TrayApp) addUWPLoopbackMenu(root *systray.Menu) {
 
 	a.buildUWPSlots()
 
-	// Populate the list asynchronously; the menu already shows "刷新列表".
+	// 异步填充列表；菜单此时已显示 "刷新列表"。
 	go a.uwpRefresh()
 }
 
-// buildUWPSlots pre-builds the fixed slot layout of the UWP submenu: one
-// overflow hint item followed by uwpMenuSlots checkbox slots, all disabled
-// with a placeholder label. Slots are filled in place by applyUWPAppsToSlots,
-// so the menu tree is never rebuilt after startup (see uwpMenuSlots).
+// buildUWPSlots 预建 UWP 子菜单的固定槽位布局：一个溢出提示项，
+// 后跟 uwpMenuSlots 个复选框槽位，全部以占位符标签禁用。
+// 槽位由 applyUWPAppsToSlots 就地填充，因此菜单树在启动后不会被重建
+// （参见 uwpMenuSlots）。
 func (a *TrayApp) buildUWPSlots() {
 	a.uwpOverflowHint = a.uwpMenu.Add(uwpSlotLoadingLabel, nil)
 	a.uwpOverflowHint.SetDisabled(true)
@@ -93,11 +91,11 @@ func (a *TrayApp) uwpRefresh() {
 	a.applyUWPAppsToSlots(apps)
 }
 
-// applyUWPAppsToSlots writes apps into the pre-built slot layout in place.
-// Apps beyond the slot count are dropped (reported by the overflow hint),
-// and slots without a matching app stay disabled with their previous label.
-// The menu tree shape is never changed here — no SetMenu, so the stale
-// command-ID aliasing of gogpu/systray issue #39 cannot be triggered.
+// applyUWPAppsToSlots 将应用就地写入预建的槽位布局。
+// 超出槽位数量的应用会被丢弃（由溢出提示项报告），
+// 没有对应应用的槽位保持禁用并保留之前的标签。
+// 此处绝不改变菜单树的形状——不调用 SetMenu，因此不会触发
+// gogpu/systray issue #39 的过期命令 ID 别名问题。
 func (a *TrayApp) applyUWPAppsToSlots(apps []UWPApp) {
 	slot := 0
 	for i := range apps {
@@ -120,8 +118,8 @@ func (a *TrayApp) applyUWPAppsToSlots(apps []UWPApp) {
 		slot++
 	}
 
-	// Slots without a corresponding app are disabled (their previous label
-	// is preserved so the user still sees which app used to sit there).
+	// 没有对应应用的槽位会被禁用（保留之前的标签，
+	// 以便用户仍能看到哪个应用曾占据该位置）。
 	for i := slot; i < len(a.uwpItems); i++ {
 		uwpItem := a.uwpItems[i]
 		uwpItem.MenuItem.SetDisabled(true)
@@ -136,8 +134,7 @@ func (a *TrayApp) applyUWPAppsToSlots(apps []UWPApp) {
 		} else {
 			a.uwpOverflowHint.SetLabel(fmt.Sprintf("共 %d 个应用", len(apps)))
 		}
-		// The hint stays disabled: it is informational only, and clicking it
-		// must never do anything.
+		// 提示项保持禁用：它仅供信息展示，点击它绝不能触发任何操作。
 	}
 }
 

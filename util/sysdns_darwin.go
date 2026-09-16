@@ -11,8 +11,8 @@ import (
 	"strings"
 )
 
-// NetworkInterface get the active network interface of system
-// Ref:https://github.com/wzshiming/sysproxy/blob/5e86de4b71cf89f78bf95976d6ca35ea2e9ba526/sysproxy_darwin.go#L208
+// NetworkInterface 获取系统的活动网络接口
+// 参考：https://github.com/wzshiming/sysproxy/blob/5e86de4b71cf89f78bf95976d6ca35ea2e9ba526/sysproxy_darwin.go#L208
 func NetworkInterface() (string, error) {
 	buf, err := Command("sh", "-c", "networksetup -listnetworkserviceorder | grep -B 1 $(route -n get default | grep interface | awk '{print $2}')")
 	if err != nil {
@@ -46,7 +46,7 @@ func SysDNS() ([]string, error) {
 		return ret, nil
 	}
 
-	// fallback to /etc/resolv.conf when networksetup failed or returned empty
+	// 当 networksetup 失败或返回空时，回退到 /etc/resolv.conf
 	return sysDNSServersFromResolvConf("/etc/resolv.conf")
 }
 
@@ -78,8 +78,8 @@ func sysDNSFromNetworkSetup() ([]string, error) {
 	return ret, nil
 }
 
-// SysDNSViaOSAScript is like SysDNS but runs via osascript with administrator
-// privileges, suitable for use from a non-root process on macOS.
+// SysDNSViaOSAScript 与 SysDNS 类似，但通过 osascript 以管理员权限运行，
+// 适用于 macOS 上的非 root 进程。
 func SysDNSViaOSAScript() ([]string, error) {
 	ni, err := NetworkInterface()
 	if err != nil {
@@ -102,8 +102,8 @@ func SysDNSViaOSAScript() ([]string, error) {
 	return ret, nil
 }
 
-// SetSysDNSViaOSAScript is like SetSysDNS but runs via osascript with
-// administrator privileges, suitable for use from a non-root process on macOS.
+// SetSysDNSViaOSAScript 与 SetSysDNS 类似，但通过 osascript 以管理员权限
+// 运行，适用于 macOS 上的非 root 进程。
 func SetSysDNSViaOSAScript(servers []string) error {
 	ni, err := NetworkInterface()
 	if err != nil {
@@ -126,7 +126,7 @@ func SetSysDNSViaOSAScript(servers []string) error {
 	return err
 }
 
-// runOSAScript executes a shell command with administrator privileges via osascript.
+// runOSAScript 通过 osascript 以管理员权限执行 shell 命令。
 func runOSAScript(shellCmd string) (string, error) {
 	escaped := strings.ReplaceAll(shellCmd, `"`, `\"`)
 	script := fmt.Sprintf(`do shell script "%s" with administrator privileges`, escaped)

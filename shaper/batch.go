@@ -22,19 +22,19 @@ type batchShaper struct {
 	plaintext      []byte
 	timer          *time.Timer
 	mu             sync.Mutex
-	writeMu        sync.Mutex // serializes WriteRecord calls across goroutines
+	writeMu        sync.Mutex // 跨 goroutine 串行化 WriteRecord 调用
 	maxChunkSize   int
 	flushThreshold int
 	window         time.Duration
 	timerStarted   bool
 	closing        atomic.Bool
-	writeClosed    atomic.Bool // set after Close's flush; prevents writes after handler returns
+	writeClosed    atomic.Bool // 在 Close 的 flush 之后置位；防止 handler 返回后继续写入
 	err            error
 	cover          *coverInjector
 }
 
-// New builds a shaper over the given record writer. cfg is normalized here
-// (see Config.Normalize), so callers may pass raw config-file values.
+// New 在给定的 record writer 之上构建一个流量整形器。cfg 在此处规范化
+// （参见 Config.Normalize），因此调用方可以直接传入原始的配置文件值。
 func New(writer *crypto.RecordWriter, cfg Config) Shaper {
 	cfg = cfg.Normalize()
 
@@ -52,7 +52,7 @@ func New(writer *crypto.RecordWriter, cfg Config) Shaper {
 	return bs
 }
 
-// PushData adds raw data as a DATA frame. Returns without holding the lock.
+// PushData 将原始数据作为 DATA 帧添加。返回时不持有锁。
 func (bs *batchShaper) PushData(data []byte) error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
@@ -70,7 +70,7 @@ func (bs *batchShaper) PushData(data []byte) error {
 	return bs.appendFrameLocked(protocol.FrameDATA, data, false)
 }
 
-// PushFrame adds a pre-built frame (FIN, RST, COVER, etc.). Returns without holding the lock.
+// PushFrame 添加一个预先构建好的帧（FIN、RST、COVER 等）。返回时不持有锁。
 func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
@@ -82,10 +82,10 @@ func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 		return bs.err
 	}
 
-	// Keep Length in step with the payload: the record-size guards below and
-	// the shaper's cover budget use EncodedLen (3 + Length), so a mismatched
-	// Frame would let an oversized frame bypass them. The wire header itself
-	// is derived from len(Payload) by protocol.AppendFrame.
+	// 让 Length 与 payload 保持一致：下面的记录大小检查和整形器的 cover 预算
+	// 都使用 EncodedLen（3 + Length），因此 Length 与 payload 不一致的帧
+	// 会让超大帧绕过这些检查。线缆上的头部由 protocol.AppendFrame 根据
+	// len(Payload) 推导。
 	if len(f.Payload) > math.MaxUint16 {
 		return fmt.Errorf("shaper: frame payload too large: %d", len(f.Payload))
 	}
@@ -97,11 +97,10 @@ func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 	return bs.appendFrameLocked(f.Type, f.Payload, f.Type == protocol.FrameCOVER)
 }
 
-// appendFrameLocked appends a frame of the given type to the plaintext
-// buffer: it pre-flushes when the record would overflow, post-flushes when
-// the threshold is reached, and re-arms the batch timer otherwise.
-// putPayload marks payloads that came from bytespool and must be returned
-// once appended. Caller must hold bs.mu.
+// appendFrameLocked 将指定类型的帧追加到明文缓冲区：当记录即将溢出时
+// 预冲刷，达到阈值时后冲刷，否则重新启动批处理定时器。
+// putPayload 标记来自 bytespool 的 payload，追加完成后必须归还。
+// 调用方必须持有 bs.mu。
 func (bs *batchShaper) appendFrameLocked(ftype protocol.FrameType, payload []byte, putPayload bool) error {
 	frameSize := protocol.FrameHeaderSize + len(payload)
 	if frameSize > bs.maxChunkSize {
@@ -111,11 +110,10 @@ func (bs *batchShaper) appendFrameLocked(ftype protocol.FrameType, payload []byt
 		return fmt.Errorf("shaper: frame size %d exceeds max record size %d", frameSize, bs.maxChunkSize)
 	}
 
-	// Pre-flush if appending would overflow the record.
+	// 若追加会导致记录溢出，则预先冲刷。
 	if len(bs.plaintext) > 0 && len(bs.plaintext)+frameSize > bs.maxChunkSize {
 		if err := bs.flushAndWrite(false); err != nil {
-			// The frame was never appended, so return the pooled payload
-			// here: nobody else will.
+			// 该帧从未被追加，因此在此归还池化 payload：没有其他人会归还它。
 			if putPayload {
 				bs.putPooledPayload(payload)
 			}
@@ -129,7 +127,7 @@ func (bs *batchShaper) appendFrameLocked(ftype protocol.FrameType, payload []byt
 		bs.putPooledPayload(payload)
 	}
 
-	// Post-flush if threshold reached.
+	// 达到阈值后冲刷。
 	if len(bs.plaintext) >= bs.flushThreshold {
 		return bs.flushAndWrite(false)
 	}
@@ -139,22 +137,21 @@ func (bs *batchShaper) appendFrameLocked(ftype protocol.FrameType, payload []byt
 	return nil
 }
 
-// putPooledPayload returns a cover payload to bytespool when it actually is
-// a pool buffer (cap a power of two within the pool ceiling). A
-// caller-provided heap slice would make MustPut panic on the power-of-two
-// invariant, so such payloads are left to the GC.
+// putPooledPayload 在 cover payload 确实是池缓冲区（容量为池上限内的
+// 2 的幂）时将其归还 bytespool。调用方提供的堆切片会使 MustPut
+// 因 2 的幂不变式而 panic，因此这类 payload 留给 GC 回收。
 func (bs *batchShaper) putPooledPayload(payload []byte) {
 	if len(payload) > 0 && cap(payload) <= bytespool.MaxSize && cap(payload)&(cap(payload)-1) == 0 {
 		bytespool.MustPut(payload)
 	}
 }
 
-// Flush triggers an immediate flush. Does not require the caller to hold the lock.
+// Flush 触发立即冲刷。不要求调用方持有锁。
 func (bs *batchShaper) Flush() error {
 	return bs.flush(true)
 }
 
-// Close stops cover traffic, flushes remaining data, and returns the buffer to the pool.
+// Close 停止 cover 流量，冲刷剩余数据，并将缓冲区归还池。
 func (bs *batchShaper) Close() error {
 	bs.mu.Lock()
 	bs.closing.Store(true)
@@ -167,10 +164,9 @@ func (bs *batchShaper) Close() error {
 
 	err := bs.flush(true)
 
-	// Serialize with writeMu: any flushAndWrite that acquires writeMu after
-	// this point will see writeClosed and discard its data, preventing writes
-	// to an already-finished HTTP handler. Flushes that acquired writeMu before
-	// this point will complete normally; we block here until they finish.
+	// 与 writeMu 串行化：此后任何获取 writeMu 的 flushAndWrite 都会看到
+	// writeClosed 并丢弃其数据，防止向已结束的 HTTP handler 写入。
+	// 此前已获取 writeMu 的冲刷会正常完成；我们在此阻塞直到它们结束。
 	bs.writeMu.Lock()
 	bs.writeClosed.Store(true)
 	bs.writeMu.Unlock()
@@ -184,8 +180,8 @@ func (bs *batchShaper) Close() error {
 	return err
 }
 
-// flushLocked stops the timer, appends padding, and swaps the plaintext buffer.
-// Must be called with mu held. Returns the data to write, or nil if the buffer is empty.
+// flushLocked 停止定时器，追加填充，并交换明文缓冲区。
+// 必须在持有 mu 时调用。返回待写入的数据，缓冲区为空时返回 nil。
 func (bs *batchShaper) flushLocked() []byte {
 	if len(bs.plaintext) == 0 {
 		return nil
@@ -198,17 +194,17 @@ func (bs *batchShaper) flushLocked() []byte {
 		bs.plaintext = protocol.AppendFrame(bs.plaintext, padFrame)
 	}
 
-	// Swap buffer: hand off data for I/O, allocate a fresh buffer so
-	// concurrent PushData / PushFrame can keep accepting data.
+	// 交换缓冲区：将数据交给 I/O，分配一个全新缓冲区，
+	// 以便并发的 PushData / PushFrame 继续接收数据。
 	data := bs.plaintext
 	bs.plaintext = bytespool.Get(protocol.MaxPlainRecordSize)[:0]
 	return data
 }
 
-// flushAndWrite flushes the current buffer and writes the encrypted record.
-// Must be called with mu held. Temporarily releases mu during I/O and
-// re-acquires it before returning. When forceFlush is true, an explicit
-// HTTP/2 flush is triggered after the write to ensure immediate delivery.
+// flushAndWrite 冲刷当前缓冲区并写出加密记录。
+// 必须在持有 mu 时调用。I/O 期间临时释放 mu，返回前重新获取。
+// 当 forceFlush 为 true 时，写入后会触发显式的 HTTP/2 flush，
+// 以确保立即投递。
 func (bs *batchShaper) flushAndWrite(forceFlush bool) error {
 	data := bs.flushLocked()
 	if data == nil {
@@ -239,8 +235,8 @@ func (bs *batchShaper) flushAndWrite(forceFlush bool) error {
 	return err
 }
 
-// flush acquires the lock, flushes the buffer, and releases the lock.
-// Caller must NOT hold bs.mu.
+// flush 获取锁，冲刷缓冲区，然后释放锁。
+// 调用方不得持有 bs.mu。
 func (bs *batchShaper) flush(forceFlush bool) error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
@@ -256,9 +252,8 @@ func (bs *batchShaper) onTimer() {
 	bs.mu.Unlock()
 	if err := bs.flush(true); err != nil {
 		if isClosedStreamError(err) {
-			// The peer already closed the stream (e.g. RST_STREAM/FIN while
-			// the handler is still winding down the relay). The failed flush
-			// is just the teardown path finishing, not a real error.
+			// 对端已关闭该流（例如 handler 仍在关闭 relay 时收到
+			// RST_STREAM/FIN）。失败的冲刷只是拆除路径收尾，并非真正的错误。
 			log.Debug("[SHAPER] timer flush aborted, stream closed", "err", err)
 			return
 		}
@@ -266,10 +261,9 @@ func (bs *batchShaper) onTimer() {
 	}
 }
 
-// isClosedStreamError reports whether err indicates the underlying stream was
-// already closed by the peer (HTTP/2 stream reset, closed pipe, closed
-// connection). Such errors are benign during teardown: the peer has abandoned
-// the stream and the failed flush is just the relay finishing.
+// isClosedStreamError 报告 err 是否表明底层流已被对端关闭
+// （HTTP/2 流重置、管道关闭、连接关闭）。这类错误在拆除阶段是无害的：
+// 对端已放弃该流，失败的冲刷只是 relay 收尾。
 func isClosedStreamError(err error) bool {
 	if err == nil {
 		return false
@@ -277,9 +271,9 @@ func isClosedStreamError(err error) bool {
 	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
 		return true
 	}
-	// "http2: stream closed" is an unexported sentinel in the stdlib, so it
-	// can only be matched by string. The error chain is preserved by crypto
-	// ("crypto: write record: ..."), so a substring match is sufficient.
+	// "http2: stream closed" 是标准库中未导出的哨兵错误，因此只能通过
+	// 字符串匹配。crypto 会保留错误链（"crypto: write record: ..."），
+	// 所以子串匹配就足够了。
 	return strings.Contains(strings.ToLower(err.Error()), "stream closed")
 }
 
@@ -288,8 +282,7 @@ func (bs *batchShaper) injectCoverFrame(f protocol.Frame) error {
 	defer bs.mu.Unlock()
 
 	if bs.closing.Load() || bs.err != nil {
-		// Return the pooled payload so no buffer is leaked when the shaper
-		// is already closed or failed.
+		// 归还池化 payload，避免整形器已关闭或已出错时泄漏缓冲区。
 		if f.Type == protocol.FrameCOVER {
 			bs.putPooledPayload(f.Payload)
 		}

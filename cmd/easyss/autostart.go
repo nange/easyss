@@ -2,17 +2,17 @@
 
 package main
 
-// EnableAutoStart registers the app to start at user login.
+// EnableAutoStart 注册应用随用户登录自动启动。
 func EnableAutoStart() error {
 	return enableAutoStart()
 }
 
-// DisableAutoStart unregisters the app from starting at user login.
+// DisableAutoStart 取消注册应用随用户登录自动启动。
 func DisableAutoStart() error {
 	return disableAutoStart()
 }
 
-// IsAutoStartEnabled checks whether the app is registered to start at login.
+// IsAutoStartEnabled 检查应用是否已注册为登录时自动启动。
 func IsAutoStartEnabled() bool {
 	return isAutoStartEnabled()
 }

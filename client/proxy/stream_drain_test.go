@@ -15,9 +15,9 @@ import (
 	"github.com/nange/easyss/v3/stats"
 )
 
-// drainMockStream is a transport.Stream whose Read blocks until Close, with
-// a configurable SlotDraining verdict, so tests can exercise the relay drain
-// without a real HTTP/2 transport.
+// drainMockStream 是一个 transport.Stream，其 Read 会阻塞直到 Close 被调用，
+// 并带有可配置的 SlotDraining 判定结果，这样测试无需真实的 HTTP/2 传输层
+// 即可覆盖中继的排空（drain）逻辑。
 type drainMockStream struct {
 	slotDraining bool
 	closedCh     chan struct{}
@@ -51,8 +51,8 @@ func (s *drainMockStream) closed() bool {
 	}
 }
 
-// newDrainHandler builds a StreamHandler with a short drain idle (so tests
-// run fast) plus the crypto plumbing a relay needs over stream.
+// newDrainHandler 构建一个使用较短 drain 空闲时间（让测试跑得快）的 StreamHandler，
+// 以及中继在 stream 上所需的加密管线。
 func newDrainHandler(stream *drainMockStream, drainIdle time.Duration) (*StreamHandler, shaper.Shaper, *crypto.DecryptedReader, net.Conn, net.Conn) {
 	key := make([]byte, 32)
 	for i := range key {
@@ -86,16 +86,15 @@ func newDrainHandler(stream *drainMockStream, drainIdle time.Duration) (*StreamH
 		transport:         &mockTransport{},
 		masterKey:         key,
 		shaperCfg:         shaper.Config{},
-		streamIdleTimeout: time.Minute, // the drain, not the idle timeout, must end the relay
+		streamIdleTimeout: time.Minute, // 结束中继的必须是 drain，而不是空闲超时
 		drainIdle:         drainIdle,
 	}
 	return h, tx, rx, lc, lcPeer
 }
 
-// TestStreamRelayDrainsIdleStreamOnDrainingSlot verifies the end-to-end drain
-// wiring: a stream on a slot due for eviction that sits idle past the drain
-// grace is closed early by the relay, reported as an idle-timeout error and
-// counted in the stats.
+// TestStreamRelayDrainsIdleStreamOnDrainingSlot 验证端到端的 drain 接线：位于即将被
+// 驱逐的 slot 上的流，在空闲超过 drain 宽限期后被中继提前关闭，报告为 idle-timeout
+// 错误，并计入统计。
 func TestStreamRelayDrainsIdleStreamOnDrainingSlot(t *testing.T) {
 	stats.ResetCounters()
 	stream := newDrainMockStream(true)
@@ -121,9 +120,8 @@ func TestStreamRelayDrainsIdleStreamOnDrainingSlot(t *testing.T) {
 	}
 }
 
-// TestStreamRelayKeepsIdleStreamOnHealthySlot verifies the drain never fires
-// while the slot is healthy: the relay survives far beyond the drain grace
-// and only ends when the stream is closed externally.
+// TestStreamRelayKeepsIdleStreamOnHealthySlot 验证 slot 健康时 drain 永不触发：
+// 中继远超 drain 宽限期仍然存活，只有流被外部关闭时才会结束。
 func TestStreamRelayKeepsIdleStreamOnHealthySlot(t *testing.T) {
 	stream := newDrainMockStream(false)
 	h, tx, rx, lc, lcPeer := newDrainHandler(stream, 100*time.Millisecond)
@@ -141,7 +139,7 @@ func TestStreamRelayKeepsIdleStreamOnHealthySlot(t *testing.T) {
 		t.Fatal("stream must not be closed while the slot is healthy")
 	}
 
-	// Close the stream to end the relay cleanly.
+	// 关闭流以干净地结束中继。
 	_ = stream.Close()
 	select {
 	case <-done:

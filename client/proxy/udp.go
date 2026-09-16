@@ -26,8 +26,8 @@ func (s *Socks5Server) handleUDP(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 
 	host, port, err := net.SplitHostPort(dst)
 	if err != nil {
-		// Malformed datagram target: drop it instead of opening an exchange
-		// with an empty target that the server would reject anyway.
+		// 畸形数据报目标：直接丢弃，而不是用一个服务器反正会拒绝的空目标
+		// 打开交换。
 		log.Debug("[UDP] malformed datagram target", "src", src, "target", dst, "err", err)
 		return nil
 	}
@@ -59,10 +59,8 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 		return responseBlockedDNSMsg(srv.UDPConn, clientAddr, msg, d.Address())
 	}
 
-	// Never take the proxied path for the proxy server's own domain:
-	// opening the tunnel to answer the query would require resolving the
-	// server domain again, a circular dependency. Fall back to the direct
-	// path (bound to the physical interface, bypassing the TUN).
+	// 对代理服务器自身的域名绝不走代理路径：打开隧道来应答查询会需要再次解析
+	// 服务器域名，形成循环依赖。回退到直连路径（绑定到物理接口，绕过 TUN）。
 	isServerDomain := s.isServerDomain(domain)
 	if isServerDomain {
 		log.Info("[DNS_SERVER_DOMAIN] direct", "domain", domain, "qtype", qtype)
@@ -123,9 +121,8 @@ func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAdd
 	return responseDNSMsg(srv.UDPConn, clientAddr, resp, d.Address())
 }
 
-// exchangeDirectDNSFromList exchanges msg against the given dns servers in
-// order. The builtin-first fallback (including the circuit-breaker cool-down)
-// is applied by the caller through easydns.QueryWithBuiltinFirst.
+// exchangeDirectDNSFromList 依次用给定的 DNS 服务器交换 msg。内置优先的回退
+// （包括熔断器冷却时间）由调用方通过 easydns.QueryWithBuiltinFirst 施加。
 func (s *Socks5Server) exchangeDirectDNSFromList(msg *dns.Msg, servers []string) (*dns.Msg, error) {
 	var candidates []string
 	for _, addr := range servers {
@@ -138,11 +135,9 @@ func (s *Socks5Server) exchangeDirectDNSFromList(msg *dns.Msg, servers []string)
 		return nil, errors.New("no dns server available")
 	}
 
-	// Query every upstream concurrently and take the first success. A
-	// serial scan lets one hung upstream stall the query for the full
-	// per-server timeout — and every datagram's handler goroutine blocks for
-	// the whole wait — so a DNS outage would otherwise pile up goroutines.
-	// The whole query shares a single timeout budget.
+	// 并发查询每个上游并取第一个成功结果。串行扫描时，一个卡住的上游会把查询
+	// 拖到单服务器超时上限，而每个数据报的处理 goroutine 都会阻塞在整个等待
+	// 期间——DNS 故障时 goroutine 就会越积越多。整个查询共享一个超时预算。
 	ctx, cancel := context.WithTimeout(context.Background(), s.dialTimeout)
 	defer cancel()
 
@@ -192,13 +187,11 @@ func (s *Socks5Server) exchangeDirectDNS(ctx context.Context, msg *dns.Msg, addr
 }
 
 func (s *Socks5Server) proxyDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg, domain string) error {
-	// upstream is where this proxy resolves the query; the client asked
-	// whichever server its own resolver is configured with, and that is the
-	// address the answer has to be sent from (d.Address()), like every other
-	// DNS branch does. Framing the answer with the upstream instead makes a
-	// transparent NAT (tun2socks) drop it: the flow is keyed by the client's
-	// target, so a datagram claiming to come from a different server never
-	// matches and the query looks unanswered.
+	// upstream 是本代理解析查询的位置；客户端请求的是其自身解析器所配置的
+	// 服务器，而应答必须伪装成来自该地址（d.Address()），与其他所有 DNS 分支
+	// 一致。如果改用 upstream 来封装应答，透明 NAT（tun2socks）会把它丢弃：
+	// 流是按客户端的目标来标识的，声称来自不同服务器的数据报永远不会匹配，
+	// 查询就会看起来没有得到应答。
 	upstream := config.ProxyDNSServer
 	key := clientAddr.String() + "_" + upstream
 
@@ -209,7 +202,7 @@ func (s *Socks5Server) proxyDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr
 	}
 	if created {
 		go s.receiveLoop(ue, srv, clientAddr, d.Address(), key, s.dnsRespTimeout)
-		return nil // first payload already sent in handshake
+		return nil // 第一个载荷已在握手中发送
 	}
 
 	if err := ue.Send(d.Data); err != nil {
@@ -223,28 +216,22 @@ func (s *Socks5Server) proxyDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr
 	return nil
 }
 
-// maxUDPExchanges bounds the number of concurrent proxied UDP exchanges.
-// Each exchange owns one HTTP/2 stream, one receiveLoop goroutine and one
-// shaper; keying by (client address, target) means a client that uses a
-// fresh ephemeral UDP source port per datagram (Go's net.Resolver, some
-// curl builds) would otherwise accumulate hundreds of them within the idle
-// window. When the cap is reached, the exchange idle the longest is evicted.
+// maxUDPExchanges 限制并发代理 UDP 交换的数量。每个交换占有一条 HTTP/2 流、
+// 一个 receiveLoop goroutine 和一个 shaper；按（客户端地址，目标）做键意味着：
+// 若客户端每个数据报都使用新的临时 UDP 源端口（Go 的 net.Resolver、某些 curl
+// 构建），就会在空闲窗口内累积数百个交换。达到上限时，空闲最久的交换被驱逐。
 const maxUDPExchanges = 128
 
-// getOrCreateUDPExchange returns the existing UDPExchange for key, or creates
-// one via OpenUDPExchange. firstPayload, if non-empty, is merged into the
-// bootstrap record when the exchange is newly created (saving one RTT). If
-// the exchange already existed, firstPayload is ignored. If this call created
-// the exchange, created is true and the caller MUST NOT call ue.Send for the
-// first payload (it was already sent in the handshake). ctx bounds the
-// exchange creation (dial + TLS + bootstrap) for callers that need a hard
-// deadline (e.g. startup warm-up); the DNS path passes context.Background()
-// and relies on its own response timeout instead.
+// getOrCreateUDPExchange 返回 key 对应的现有 UDPExchange，不存在时通过
+// OpenUDPExchange 创建。firstPayload 非空且交换为新创建时，会被合并进引导记录
+// （省去一次 RTT）。若交换已存在，则忽略 firstPayload。若本次调用创建了交换，
+// created 为 true，调用方绝不能为第一个载荷调用 ue.Send（它已在握手中发送）。
+// ctx 约束交换的创建过程（拨号 + TLS + 引导），供需要硬截止时间的调用方使用
+// （例如启动预热）；DNS 路径传入 context.Background()，改而依赖自己的响应超时。
 //
-// Concurrent creations for the same key are deduplicated through a
-// singleflight group: the first caller performs the (slow) OpenUDPExchange
-// call, concurrent waiters block and reuse the result, so exactly one
-// HTTP/2 stream and one receiveLoop exist per (client, target) flow.
+// 同一 key 的并发创建通过 singleflight 组去重：第一个调用方执行（较慢的）
+// OpenUDPExchange，并发等待者阻塞并复用其结果，因此每个 (client, target) 流
+// 恰好只有一条 HTTP/2 流和一个 receiveLoop。
 func (s *Socks5Server) getOrCreateUDPExchange(ctx context.Context, key, dst string, firstPayload []byte) (ue *UDPExchange, created bool, err error) {
 	s.udpMu.RLock()
 	existing, ok := s.udpExch[key]
@@ -253,22 +240,18 @@ func (s *Socks5Server) getOrCreateUDPExchange(ctx context.Context, key, dst stri
 		return existing, false, nil
 	}
 
-	// Enforce the exchange cap before creating. In-flight creations for
-	// other keys count towards the limit; this call's own creation is not
-	// registered yet (the flight fn bumps udpInflightCount after the
-	// check), mirroring the pre-singleflight semantics where the factory
-	// entry was inserted after the check.
+	// 在创建前强制交换数量上限。其他 key 正在创建中的数量计入上限；本次调用
+	// 自身的创建尚未登记（flight 函数在检查之后才递增 udpInflightCount），
+	// 与 singleflight 之前的语义一致——那时工厂条目也是在检查之后才插入。
 	var evicted *UDPExchange
 	s.udpMu.Lock()
 	if len(s.udpExch)+int(s.udpInflightCount.Load()) >= maxUDPExchanges {
 		evicted = s.evictOldestExchangeLocked()
 	}
 	s.udpMu.Unlock()
-	// Close the evicted exchange outside the lock: Close flushes a FIN
-	// through the HTTP/2 stream (an io.Pipe write), which can block on
-	// transport backpressure — holding s.udpMu there would freeze all UDP
-	// handling. closeOnce makes this safe against the receiveLoop's own
-	// deferred Close.
+	// 在锁外关闭被驱逐的交换：Close 会通过 HTTP/2 流冲刷一个 FIN（一次 io.Pipe
+	// 写入），可能因传输层背压而阻塞——此时持有 s.udpMu 会冻结所有 UDP 处理。
+	// closeOnce 保证它与 receiveLoop 自身的延迟 Close 并发时是安全的。
 	if evicted != nil {
 		evicted.Close() //nolint:errcheck
 	}
@@ -281,9 +264,8 @@ func (s *Socks5Server) getOrCreateUDPExchange(ctx context.Context, key, dst stri
 		if err != nil {
 			return nil, err
 		}
-		// The server was closed while the exchange was being created: close
-		// it immediately so the stream and its receiveLoop cannot leak past
-		// shutdown (the cleanup loop has already exited).
+		// 交换创建过程中服务器已关闭：立即关闭它，使流及其 receiveLoop 不会
+		// 泄漏到关闭之后（清理循环已经退出）。
 		if s.closing.Load() {
 			ue.Close() //nolint:errcheck
 			return nil, errSocksServerClosed
@@ -295,36 +277,31 @@ func (s *Socks5Server) getOrCreateUDPExchange(ctx context.Context, key, dst stri
 	}
 	ue = v.(*UDPExchange)
 	if s.closing.Load() {
-		// The server was closed after the flight finished but before the
-		// exchange was registered. The creator (shared == false) owns the
-		// exchange and must close it (it is not in the map yet, so Close's
-		// map sweep cannot reclaim it); waiters just report the error.
+		// 服务器在 flight 结束之后、交换登记之前被关闭。创建者（shared == false）
+		// 拥有该交换并必须关闭它（它尚未在 map 中，因此 Close 的 map 扫描无法
+		// 回收它）；等待者只报告错误。
 		if !shared {
 			ue.Close() //nolint:errcheck
 		}
 		return nil, false, errSocksServerClosed
 	}
-	// Registering the same pointer from every caller (creator and waiters)
-	// is idempotent, and lets the waiters' first payload be sent by their
-	// own ue.Send below instead of being lost.
+	// 每个调用方（创建者与等待者）登记同一个指针是幂等的，并让等待者
+	// 能用它自己的 ue.Send 发送首个载荷，而不会丢失。
 	s.udpMu.Lock()
 	s.udpExch[key] = ue
 	s.udpMu.Unlock()
-	// created reports whether this call's firstPayload was merged into the
-	// bootstrap record: only the creator's payload was (shared == false).
+	// created 报告本次调用的 firstPayload 是否被合并进引导记录：只有创建者的
+	// 载荷被合并了（shared == false）。
 	return ue, !shared, nil
 }
 
 var errSocksServerClosed = errors.New("socks5 udp server closed")
 
-// evictOldestExchangeLocked selects the exchange that has been idle the
-// longest and removes it from the map, bounding the live exchange count at
-// maxUDPExchanges. The evicted exchange is returned without being closed:
-// the caller must close it after releasing s.udpMu, since UDPExchange.Close
-// flushes a FIN through the HTTP/2 stream (an io.Pipe write) and can block
-// on transport backpressure — holding s.udpMu there would freeze all UDP
-// handling. closeOnce makes the deferred close safe against the
-// receiveLoop's own Close.
+// evictOldestExchangeLocked 选择空闲最久的交换并将其从 map 中移除，把存活交换
+// 数量限制在 maxUDPExchanges 以内。被驱逐的交换返回时并未关闭：调用方必须在
+// 释放 s.udpMu 后关闭它，因为 UDPExchange.Close 会通过 HTTP/2 流冲刷一个 FIN
+// （一次 io.Pipe 写入），可能因传输层背压而阻塞——此时持有 s.udpMu 会冻结所有
+// UDP 处理。closeOnce 保证延迟的关闭与 receiveLoop 自身的 Close 并发时是安全的。
 func (s *Socks5Server) evictOldestExchangeLocked() *UDPExchange {
 	var oldestKey string
 	var oldestTime time.Time
@@ -344,18 +321,16 @@ func (s *Socks5Server) evictOldestExchangeLocked() *UDPExchange {
 }
 
 func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAddr *net.UDPAddr, target, key string, respTimeout time.Duration) {
-	// Read-idle timeout for proxied-DNS exchanges: the query was already
-	// sent (Send refreshes lastSeen, so the 60s idle reaper never fires for
-	// a client that keeps retrying while the upstream stays silent), so a
-	// long silence from the server means the upstream DNS is not answering.
-	// Close the exchange so the stream and goroutine cannot pile up; the
-	// next query transparently rebuilds it. Any received datagram resets
-	// the timer. respTimeout <= 0 disables the mechanism (non-DNS UDP).
+	// 代理 DNS 交换的读空闲超时：查询已经发送（Send 会刷新 lastSeen，所以对于
+	// 不断重试而上游一直沉默的客户端，默认 60 秒的空闲回收器永远不会触发），因此
+	// 服务器长时间沉默意味着上游 DNS 没有应答。关闭交换，使流和 goroutine 不会
+	// 堆积；下一个查询会透明地重建它。任何收到的数据报都会重置该定时器。
+	// respTimeout <= 0 时禁用该机制（非 DNS 的 UDP）。
 	var timer *time.Timer
 	if respTimeout > 0 {
 		timer = time.AfterFunc(respTimeout, func() {
 			log.Debug("[UDP_PROXY] dns response timeout, closing exchange", "key", key, "target", target)
-			ue.Close() //nolint:errcheck // closeOnce makes this safe against concurrent Close
+			ue.Close() //nolint:errcheck // closeOnce 使其与并发的 Close 之间保持安全
 		})
 		defer timer.Stop()
 	}
@@ -460,16 +435,13 @@ func (s *Socks5Server) directUDPRelay(srv *socks5.Server, clientAddr *net.UDPAdd
 	return err
 }
 
-// getOrCreateDirectUDPSession returns the direct UDP session for key,
-// creating its socket and read loop when absent. Concurrent creators for the
-// same key are deduplicated through a singleflight group (mirroring the
-// proxied path): the first caller dials, the others wait for and reuse the
-// result, so exactly one socket and one read loop exist per (client, target)
-// flow. Without the dedup, two datagrams of the same flow handled
-// concurrently both missed the map lookup and both dialed: one socket was
-// orphaned (leaking it plus its read goroutine until the read-idle
-// deadline), and the orphan's cleanup then deleted the LIVE map entry,
-// churning a fresh socket for the flow every ~udpIdleTimeout.
+// getOrCreateDirectUDPSession 返回 key 对应的直连 UDP 会话，不存在时创建其
+// socket 与读取循环。同一 key 的并发创建者通过 singleflight 组去重（镜像代理
+// 路径）：第一个调用方拨号，其余调用方等待并复用其结果，因此每个 (client,
+// target) 流恰好只有一个 socket 和一个读取循环。没有去重时，同一流的两个数据报
+// 被并发处理，都会错过 map 查询并各自拨号：一个 socket 被孤立（连同其读取
+// goroutine 一起泄漏，直到读空闲截止时间），而孤立者的清理随后删除了存活的
+// map 条目，导致该流每隔约 udpIdleTimeout 就要更换一个新 socket。
 func (s *Socks5Server) getOrCreateDirectUDPSession(srv *socks5.Server, clientAddr *net.UDPAddr, dst, key string) (*directUDPConn, error) {
 	s.udpMu.RLock()
 	dc, ok := s.directUDP[key]
@@ -486,9 +458,8 @@ func (s *Socks5Server) getOrCreateDirectUDPSession(srv *socks5.Server, clientAdd
 			return nil, err
 		}
 
-		// The server was closed while we were dialing: close the socket so
-		// the session and its read loop cannot leak past shutdown (the
-		// cleanup loop has already exited).
+		// 拨号期间服务器已关闭：关闭 socket，使会话及其读取循环不会泄漏到
+		// 关闭之后（清理循环已经退出）。
 		if s.closing.Load() {
 			rc.Close() //nolint:errcheck
 			return nil, errSocksServerClosed
@@ -499,17 +470,16 @@ func (s *Socks5Server) getOrCreateDirectUDPSession(srv *socks5.Server, clientAdd
 
 		s.udpMu.Lock()
 		if s.closing.Load() {
-			// Re-check under the same lock as the registration: a Close that
-			// raced the dial has already run its sweep, so an entry inserted
-			// afterwards would never be reclaimed (the cleanup loop and the
-			// read loop both refuse to touch a closing server).
+			// 在与登记相同的锁下重新检查：与拨号竞争的 Close 已经执行过它的
+			// 扫描，因此之后再插入的条目永远不会被回收（清理循环与读取循环都
+			// 拒绝触碰正在关闭的服务器）。
 			s.udpMu.Unlock()
 			rc.Close() //nolint:errcheck
 			return nil, errSocksServerClosed
 		}
-		// Enforce the same session cap as the proxied path: a client sending
-		// UDP to many distinct direct destinations would otherwise create one
-		// socket plus goroutine per flow, reaped only by the 30s cleanup tick.
+		// 与代理路径一样强制会话数量上限：否则向许多不同直连目标发送 UDP 的
+		// 客户端会为每个流创建一个 socket 加一个 goroutine，且只能靠 30 秒的
+		// 清理定时器回收。
 		var evicted *directUDPConn
 		if len(s.directUDP) >= maxUDPExchanges {
 			evicted = s.evictOldestDirectUDPLocked()
@@ -518,8 +488,8 @@ func (s *Socks5Server) getOrCreateDirectUDPSession(srv *socks5.Server, clientAdd
 		s.udpMu.Unlock()
 
 		if evicted != nil {
-			// Closing the socket makes the evicted session's read loop return,
-			// which removes its own (already deleted) map entry by identity.
+			// 关闭 socket 会使被驱逐会话的读取循环返回，从而按身份移除它自己
+			// （已经被删除）的 map 条目。
 			evicted.conn.Close() //nolint:errcheck
 		}
 
@@ -531,20 +501,17 @@ func (s *Socks5Server) getOrCreateDirectUDPSession(srv *socks5.Server, clientAdd
 		return nil, err
 	}
 	dc = v.(*directUDPConn)
-	// The server was closed after the flight finished: the creator has
-	// already registered the session, so Close's map sweep or the read
-	// loop's own exit reclaims it; waiters just report the error.
+	// 服务器在 flight 结束后被关闭：创建者已经登记了会话，因此 Close 的 map
+	// 扫描或读取循环自身的退出会回收它；等待者只报告错误。
 	if s.closing.Load() {
 		return nil, errSocksServerClosed
 	}
 	return dc, nil
 }
 
-// evictOldestDirectUDPLocked selects the direct-UDP session that has been idle
-// the longest and removes it from the map, bounding the live session count at
-// maxUDPExchanges. The caller must close the returned socket after releasing
-// s.udpMu: closing it unblocks the session's read loop, which takes the lock
-// itself.
+// evictOldestDirectUDPLocked 选择空闲最久的直连 UDP 会话并将其从 map 中移除，
+// 把存活会话数量限制在 maxUDPExchanges 以内。调用方必须在释放 s.udpMu 后关闭
+// 返回的 socket：关闭它会解除会话读取循环的阻塞，而读取循环自己会加锁。
 func (s *Socks5Server) evictOldestDirectUDPLocked() *directUDPConn {
 	var oldestKey string
 	var oldestTime time.Time
@@ -563,14 +530,11 @@ func (s *Socks5Server) evictOldestDirectUDPLocked() *directUDPConn {
 	return evicted
 }
 
-// directUDPReadLoop relays datagrams from the direct remote back to the
-// client until the socket fails or the read-idle deadline fires with no
-// data. The deadline is the same udpIdleTimeout the cleanup loop uses to
-// reap idle sessions (2 x the user-configured timeout), mirroring the
-// server-side UDP handler which also reads with its 2 x timeout idle
-// deadline. On exit it closes the socket and removes the session from the
-// map, but only while the entry still points at this session - never at a
-// newer one that replaced it.
+// directUDPReadLoop 把来自直连远端的数据库报中继回客户端，直到 socket 失败或
+// 读空闲截止时间在无数据的情况下触发。该截止时间与清理循环用于回收空闲会话的
+// udpIdleTimeout 相同（用户配置超时的 2 倍），镜像服务端 UDP 处理器——它同样以
+// 2 倍超时的空闲截止时间读取。退出时会关闭 socket 并从 map 中移除会话，但仅在
+// 条目仍指向本会话时——绝不会移除指向替换它的新会话的条目。
 func (s *Socks5Server) directUDPReadLoop(srv *socks5.Server, clientAddr *net.UDPAddr, dst, key string, dc *directUDPConn) {
 	rc := dc.conn
 	defer func() {
@@ -589,11 +553,9 @@ func (s *Socks5Server) directUDPReadLoop(srv *socks5.Server, clientAddr *net.UDP
 		if err != nil {
 			return
 		}
-		// Refresh the idle timestamp on receive as well as send, mirroring
-		// the proxied path (UDPExchange.Receive): a flow that keeps
-		// receiving but never writes again (a one-shot query with a long
-		// stream of responses) must not be reaped while it is still
-		// active.
+		// 接收时也刷新空闲时间戳，与发送一致，镜像代理路径
+		// （UDPExchange.Receive）：一个只持续接收而不再写入的流（一次查询带来
+		// 一长串响应）在仍然活跃时不能被回收。
 		dc.lastSeen.Store(time.Now().UnixNano())
 		s.sendToClient(srv, clientAddr, buf[:n], dst)
 	}
@@ -608,11 +570,10 @@ func (s *Socks5Server) proxyUDPRelay(srv *socks5.Server, clientAddr *net.UDPAddr
 		return err
 	}
 	if created {
-		// Non-DNS UDP must not use the short read-idle timeout: a session
-		// may legitimately stay silent for a long time (e.g. an upload-only
-		// flow), so it keeps the 60s bidirectional idle reaper only.
+		// 非 DNS 的 UDP 不能使用较短的读空闲超时：会话可能合法地长时间沉默
+		// （例如纯上传流），因此它只保留默认 60 秒的双向空闲回收器。
 		go s.receiveLoop(ue, srv, clientAddr, dst, key, 0)
-		return nil // first payload already sent in handshake
+		return nil // 第一个载荷已在握手中发送
 	}
 
 	if err := ue.Send(d.Data); err != nil {

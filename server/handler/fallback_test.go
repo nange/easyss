@@ -112,7 +112,7 @@ func TestHashIndex_SameInputSameOutput(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Directory-based fallback tests
+// 基于目录的回退页面测试
 // ---------------------------------------------------------------------------
 
 func makeFallbackDir(t *testing.T, files map[string]string) string {
@@ -251,7 +251,7 @@ func TestSetFallbackDir_ImplicitIndex(t *testing.T) {
 		t.Errorf("got %q, want %q", rec.Body.String(), "<h1>Blog Home</h1>")
 	}
 
-	// /blog/ should also work
+	// /blog/ 路径也应生效
 	req2 := httptest.NewRequest(http.MethodGet, "/blog/", nil)
 	rec2 := httptest.NewRecorder()
 	ServeFallback(rec2, req2)
@@ -271,11 +271,11 @@ func TestSetFallbackDir_IgnoresNonHTML(t *testing.T) {
 	}
 	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
 
-	// /style should not match style.css (not .html)
+	// /style 不应匹配到 style.css（它不是 .html 文件）
 	req := httptest.NewRequest(http.MethodGet, "/style", nil)
 	rec := httptest.NewRecorder()
 	ServeFallback(rec, req)
-	// Should fall back to index
+	// 应回退到 index 页面
 	if rec.Body.String() != "<h1>Home</h1>" {
 		t.Errorf("got %q, want index fallback %q", rec.Body.String(), "<h1>Home</h1>")
 	}
@@ -288,8 +288,8 @@ func TestSetFallbackDir_EmptyDir(t *testing.T) {
 	}
 	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
 
-	// Empty dir falls through to auto-generated (or custom fallback if set).
-	// We just verify it doesn't panic.
+	// 空目录时回退到自动生成页面（或已设置的自定义 fallback）。
+	// 这里验证返回的 body 非空。
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
 	ServeFallback(rec, req)
@@ -308,7 +308,7 @@ func TestServeFallback_DirPriorityOverCustomHTML(t *testing.T) {
 	setFallbackHTML([]byte("<h1>Custom</h1>"))
 	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil; customFallback = nil })
 
-	// Directory mode takes priority over single-file custom HTML.
+	// 目录模式优先于单文件自定义 HTML。
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
 	ServeFallback(rec, req)
@@ -318,11 +318,11 @@ func TestServeFallback_DirPriorityOverCustomHTML(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Reverse proxy fallback tests
+// 反向代理回退测试
 // ---------------------------------------------------------------------------
 
 func TestSetFallbackProxy_EmptyURL(t *testing.T) {
-	// Setting empty URL should disable the proxy (no error).
+	// 设置空 URL 应禁用代理（不报错）。
 	if err := setFallbackProxy("", false, nil); err != nil {
 		t.Fatalf("unexpected error for empty URL: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestSetFallbackProxy_InvalidURL(t *testing.T) {
 }
 
 func TestServeFallback_ProxyForwardsRequest(t *testing.T) {
-	// Start a test upstream server that returns a known response.
+	// 启动一个返回已知响应的测试用上游服务器。
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Upstream", "true")
 		w.Write([]byte("from-upstream:" + r.URL.Path)) //nolint:errcheck
@@ -363,7 +363,7 @@ func TestServeFallback_ProxyForwardsRequest(t *testing.T) {
 }
 
 func TestServeFallback_ProxyHighestPriority(t *testing.T) {
-	// Start a test upstream server.
+	// 启动一个测试用上游服务器。
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("proxy-response")) //nolint:errcheck
 	}))
@@ -374,7 +374,7 @@ func TestServeFallback_ProxyHighestPriority(t *testing.T) {
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
 
-	// Also set directory and custom HTML fallback to verify proxy wins.
+	// 同时设置目录和自定义 HTML 回退，以验证代理的优先级更高。
 	dir := makeFallbackDir(t, map[string]string{
 		"index.html": "<h1>Dir Home</h1>",
 	})
@@ -392,18 +392,18 @@ func TestServeFallback_ProxyHighestPriority(t *testing.T) {
 	rec := httptest.NewRecorder()
 	ServeFallback(rec, req)
 
-	// Proxy should win over both directory and custom HTML.
+	// 代理应同时优先于目录和自定义 HTML。
 	if rec.Body.String() != "proxy-response" {
 		t.Errorf("got %q, want %q", rec.Body.String(), "proxy-response")
 	}
 }
 
 // ---------------------------------------------------------------------------
-// SetFallbackTarget auto-detection tests
+// SetFallbackTarget 自动识别测试
 // ---------------------------------------------------------------------------
 
 func TestSetFallbackTarget_Empty(t *testing.T) {
-	// Set some state first, then reset with empty.
+	// 先设置一些状态，再用空字符串重置。
 	customFallback = []byte("test")
 	fallbackPages = map[string][]byte{"/": []byte("test")}
 	fallbackProxy = &httputil.ReverseProxy{}
@@ -484,7 +484,7 @@ func TestSetFallbackTarget_InvalidPath(t *testing.T) {
 }
 
 func TestSetFallbackTarget_ProxyEndToEnd(t *testing.T) {
-	// Full integration: SetFallbackTarget with HTTP URL then serve a request.
+	// 完整集成：用 HTTP URL 调用 SetFallbackTarget 后再服务一个请求。
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("upstream:" + r.URL.Path)) //nolint:errcheck
 	}))
@@ -505,13 +505,13 @@ func TestSetFallbackTarget_ProxyEndToEnd(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// setFallbackProxy Host header & Location rewrite tests
+// setFallbackProxy 的 Host 头与 Location 重写测试
 // ---------------------------------------------------------------------------
 
-// TestSetFallbackProxy_HostHeader verifies that the request forwarded to the
-// upstream carries the upstream's Host (not the client-facing host). This is
-// the core fix: without it, upstreams like GitHub return a 301 redirect to
-// their canonical host, causing the browser address bar to jump.
+// TestSetFallbackProxy_HostHeader 验证转发给上游的请求带的是上游的 Host
+// （而非面向客户端的 host）。
+// 这是核心修复：没有它，像 GitHub 这样的上游会返回
+// 指向其规范域名的 301 重定向，导致浏览器地址栏跳转。
 func TestSetFallbackProxy_HostHeader(t *testing.T) {
 	var gotHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -525,7 +525,7 @@ func TestSetFallbackProxy_HostHeader(t *testing.T) {
 	}
 	t.Cleanup(func() { fallbackProxy = nil })
 
-	// Client-facing request uses a different host.
+	// 面向客户端的请求使用不同的 host。
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
@@ -537,12 +537,12 @@ func TestSetFallbackProxy_HostHeader(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_RewriteLocation verifies that a 3xx Location header
-// pointing at the upstream host is rewritten back to the client-facing host.
+// TestSetFallbackProxy_RewriteLocation 验证指向上游 host 的 3xx Location 头
+// 会被重写回面向客户端的 host。
 func TestSetFallbackProxy_RewriteLocation(t *testing.T) {
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Simulate an upstream that redirects to its own canonical URL.
+		// 模拟一个重定向到自身规范 URL 的上游。
 		w.Header().Set("Location", "http://"+upstreamHost+"/some/path")
 		w.WriteHeader(http.StatusMovedPermanently)
 	}))
@@ -559,14 +559,14 @@ func TestSetFallbackProxy_RewriteLocation(t *testing.T) {
 	rec := httptest.NewRecorder()
 	ServeFallback(rec, req)
 
-	// httptest.NewRequest has TLS == nil, so the client-facing scheme is "http".
+	// httptest.NewRequest 的 TLS 为 nil，因此面向客户端的 scheme 是 "http"。
 	if got := rec.Header().Get("Location"); got != "http://my-site.com/some/path" {
 		t.Errorf("Location = %q, want %q", got, "http://my-site.com/some/path")
 	}
 }
 
-// TestSetFallbackProxy_RelativeLocationUnchanged verifies that relative-path
-// Location headers (e.g. "/login") are passed through unchanged.
+// TestSetFallbackProxy_RelativeLocationUnchanged 验证相对路径的 Location 头
+// （例如 "/login"）会原样透传。
 func TestSetFallbackProxy_RelativeLocationUnchanged(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Location", "/login")
@@ -589,8 +589,8 @@ func TestSetFallbackProxy_RelativeLocationUnchanged(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_OtherHostLocationUnchanged verifies that Location
-// headers pointing at a host other than the upstream are passed through.
+// TestSetFallbackProxy_OtherHostLocationUnchanged 验证指向非上游 host 的
+// Location 头会原样透传。
 func TestSetFallbackProxy_OtherHostLocationUnchanged(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Location", "https://other.example.com/x")
@@ -613,10 +613,10 @@ func TestSetFallbackProxy_OtherHostLocationUnchanged(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_PreserveHost verifies that when preserveHost is true,
-// the client-facing Host header is forwarded to the upstream unchanged. This
-// is needed for local nginx setups that use server_name-based virtual host
-// routing.
+// TestSetFallbackProxy_PreserveHost 验证当 preserveHost 为 true 时，
+// 面向客户端的 Host 头会原样转发给上游。
+// 本地 nginx 基于 server_name 做虚拟主机路由的配置
+// 需要这一行为。
 func TestSetFallbackProxy_PreserveHost(t *testing.T) {
 	var gotHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -640,16 +640,16 @@ func TestSetFallbackProxy_PreserveHost(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_PreserveHostLocationRewrite verifies that Location
-// rewriting still works when preserveHost is true: if the upstream (which
-// received the client-facing Host) redirects to the upstream's own address
-// (e.g. via $host in nginx config), the Location is rewritten back to the
-// client-facing host.
+// TestSetFallbackProxy_PreserveHostLocationRewrite 验证当 preserveHost
+// 为 true 时 Location 重写仍然生效：如果上游（收到的是面向客户端的
+// Host）重定向到其自身地址（例如 nginx 配置中通过 $host 生成），
+// 则 Location 会被重写回
+// 面向客户端的 host。
 func TestSetFallbackProxy_PreserveHostLocationRewrite(t *testing.T) {
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Upstream redirects to its own listen address (e.g. an nginx
-		// config using $host without a proper server_name match).
+		// 上游重定向到自身的监听地址（例如 nginx 配置中
+		// 使用 $host 但没有匹配的 server_name）。
 		w.Header().Set("Location", "http://"+upstreamHost+"/login")
 		w.WriteHeader(http.StatusFound)
 	}))
@@ -672,19 +672,19 @@ func TestSetFallbackProxy_PreserveHostLocationRewrite(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Set-Cookie header rewriting tests
+// Set-Cookie 头重写测试
 // ---------------------------------------------------------------------------
 
-// TestSetFallbackProxy_RewriteSetCookieDomain verifies that the Domain
-// attribute in Set-Cookie headers pointing at the upstream host is removed so
-// the browser accepts the cookie for the proxy's host.
+// TestSetFallbackProxy_RewriteSetCookieDomain 验证 Set-Cookie 头中
+// 指向上游 host 的 Domain 属性会被移除，使浏览器能接受
+// 代理 host 下的 cookie。
 func TestSetFallbackProxy_RewriteSetCookieDomain(t *testing.T) {
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		// Use a raw Set-Cookie header (not http.SetCookie) to avoid the
-		// standard library dropping the Domain attribute when it contains
-		// a port number.
+		// 使用原始的 Set-Cookie 头（而非 http.SetCookie），
+		// 以避免标准库在 Domain 属性包含端口号时
+		// 将其丢弃。
 		w.Header().Add("Set-Cookie",
 			"_gh_sess=abc123; Domain="+upstreamHost+"; Path=/; HttpOnly; Secure")
 		w.Write([]byte("<html></html>")) //nolint:errcheck //nolint:errcheck
@@ -702,7 +702,7 @@ func TestSetFallbackProxy_RewriteSetCookieDomain(t *testing.T) {
 	rec := httptest.NewRecorder()
 	ServeFallback(rec, req)
 
-	// Parse the raw Set-Cookie header to verify Domain was removed.
+	// 解析原始 Set-Cookie 头以验证 Domain 已被移除。
 	rawCookies := rec.Result().Header["Set-Cookie"]
 	if len(rawCookies) != 1 {
 		t.Fatalf("expected 1 Set-Cookie header, got %d", len(rawCookies))
@@ -710,7 +710,7 @@ func TestSetFallbackProxy_RewriteSetCookieDomain(t *testing.T) {
 	if strings.Contains(rawCookies[0], "Domain=") {
 		t.Errorf("Set-Cookie should not contain Domain attribute\nraw: %s", rawCookies[0])
 	}
-	// Verify the cookie name/value and other attributes are preserved.
+	// 验证 cookie 的名称/值及其他属性都被保留。
 	cookies := rec.Result().Cookies()
 	if len(cookies) != 1 {
 		t.Fatalf("expected 1 parsed cookie, got %d", len(cookies))
@@ -726,13 +726,13 @@ func TestSetFallbackProxy_RewriteSetCookieDomain(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_RewriteSetCookieDomainWithDot verifies that a Domain
-// attribute with a leading dot (e.g. ".github.com") is also removed.
+// TestSetFallbackProxy_RewriteSetCookieDomainWithDot 验证带前导点号的 Domain
+// 属性（例如 ".github.com"）同样会被移除。
 func TestSetFallbackProxy_RewriteSetCookieDomainWithDot(t *testing.T) {
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		// Manually set a raw Set-Cookie with leading-dot domain.
+		// 手动设置一个带前导点号域名的原始 Set-Cookie。
 		w.Header().Add("Set-Cookie", "test=val; Domain=."+upstreamHost+"; Path=/; Secure")
 		w.Write([]byte("<html></html>")) //nolint:errcheck
 	}))
@@ -758,8 +758,8 @@ func TestSetFallbackProxy_RewriteSetCookieDomainWithDot(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_SetCookieOtherDomainUnchanged verifies that cookies
-// with a Domain pointing at a host other than the upstream are left untouched.
+// TestSetFallbackProxy_SetCookieOtherDomainUnchanged 验证 Domain 指向非上游
+// host 的 cookie 不会被改动。
 func TestSetFallbackProxy_SetCookieOtherDomainUnchanged(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -787,8 +787,8 @@ func TestSetFallbackProxy_SetCookieOtherDomainUnchanged(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_SetCookieNoDomainUnchanged verifies that cookies
-// without a Domain attribute are left untouched.
+// TestSetFallbackProxy_SetCookieNoDomainUnchanged 验证没有 Domain 属性的
+// cookie 不会被改动。
 func TestSetFallbackProxy_SetCookieNoDomainUnchanged(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -824,12 +824,12 @@ func TestSetFallbackProxy_SetCookieNoDomainUnchanged(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// setFallbackProxy content rewriting tests (always enabled in URL mode)
+// setFallbackProxy 内容重写测试（URL 模式下始终启用）
 // ---------------------------------------------------------------------------
 
-// TestSetFallbackProxy_RewriteContent verifies that absolute URLs in an HTML
-// response body pointing at the upstream host are rewritten to the
-// client-facing origin.
+// TestSetFallbackProxy_RewriteContent 验证 HTML 响应体中指向
+// 上游 host 的绝对 URL 会被重写为面向客户端的
+// origin。
 func TestSetFallbackProxy_RewriteContent(t *testing.T) {
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -851,7 +851,7 @@ func TestSetFallbackProxy_RewriteContent(t *testing.T) {
 	rec := httptest.NewRecorder()
 	ServeFallback(rec, req)
 
-	// httptest.NewRequest has TLS == nil, so origScheme defaults to "http".
+	// httptest.NewRequest 的 TLS 为 nil，因此 origScheme 默认为 "http"。
 	body := rec.Body.String()
 	want := "http://my-site.com/repo"
 	if !bytes.Contains([]byte(body), []byte(want)) {
@@ -862,9 +862,9 @@ func TestSetFallbackProxy_RewriteContent(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_RewriteContentCSP verifies that the
-// Content-Security-Policy header is rewritten to replace upstream URLs with
-// the client-facing origin.
+// TestSetFallbackProxy_RewriteContentCSP 验证
+// Content-Security-Policy 头会被重写，把其中的上游 URL
+// 替换为面向客户端的 origin。
 func TestSetFallbackProxy_RewriteContentCSP(t *testing.T) {
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -890,26 +890,26 @@ func TestSetFallbackProxy_RewriteContentCSP(t *testing.T) {
 	if bytes.Contains([]byte(csp), []byte("https://"+upstreamHost)) {
 		t.Errorf("CSP should not contain https://%s\ncsp: %s", upstreamHost, csp)
 	}
-	// httptest.NewRequest has TLS == nil → origScheme = "http".
+	// httptest.NewRequest 的 TLS 为 nil → origScheme = "http"。
 	if !bytes.Contains([]byte(csp), []byte("http://my-site.com")) {
 		t.Errorf("CSP should contain http://my-site.com\ncsp: %s", csp)
 	}
-	// Subdomain references should be preserved (not replaced).
+	// 子域引用应被保留（不被替换）。
 	if !bytes.Contains([]byte(csp), []byte("api."+upstreamHost)) {
 		t.Errorf("CSP should still contain api.%s\ncsp: %s", upstreamHost, csp)
 	}
 }
 
-// TestSetFallbackProxy_RewriteCSPBareHost verifies that bare-host source
-// expressions in CSP (without a scheme prefix, e.g.
-// "github.com/assets-cdn/worker/") are rewritten to the client-facing host.
-// This is needed for GitHub's worker-src directive which uses scheme-less
-// paths.
+// TestSetFallbackProxy_RewriteCSPBareHost 验证 CSP 中不带 scheme 前缀的
+// 裸主机（bare-host）源表达式（例如
+// "github.com/assets-cdn/worker/"）会被重写为面向客户端的 host。
+// GitHub 的 worker-src 指令使用无 scheme 的路径，
+// 因此需要这一处理。
 func TestSetFallbackProxy_RewriteCSPBareHost(t *testing.T) {
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		// Simulate GitHub-style CSP with bare-host paths in worker-src.
+		// 模拟 GitHub 风格的 CSP，在 worker-src 中使用裸主机路径。
 		w.Header().Set("Content-Security-Policy",
 			"worker-src "+upstreamHost+"/assets-cdn/worker/ "+upstreamHost+"/assets/ gist."+upstreamHost+"/assets-cdn/worker/")
 		w.Write([]byte("<html></html>")) //nolint:errcheck
@@ -928,9 +928,9 @@ func TestSetFallbackProxy_RewriteCSPBareHost(t *testing.T) {
 	ServeFallback(rec, req)
 
 	csp := rec.Header().Get("Content-Security-Policy")
-	// Bare upstream host should be replaced with client-facing host.
-	// Check that no space-prefixed upstream host path remains (the space
-	// ensures we match a standalone token, not a substring of "gist.").
+	// 裸上游主机应被替换为面向客户端的 host。
+	// 检查不残留带空格前缀的上游主机路径（空格确保匹配的是独立 token，
+	// 而不是 "gist." 的子串）。
 	if strings.Contains(csp, " "+upstreamHost+"/assets-cdn/worker/") {
 		t.Errorf("CSP should not contain bare %q/assets-cdn/worker/\ncsp: %s", upstreamHost, csp)
 	}
@@ -940,15 +940,15 @@ func TestSetFallbackProxy_RewriteCSPBareHost(t *testing.T) {
 	if !strings.Contains(csp, "my-site.com/assets/") {
 		t.Errorf("CSP should contain my-site.com/assets/\ncsp: %s", csp)
 	}
-	// Subdomain references should be preserved (not replaced).
+	// 子域引用应被保留（不被替换）。
 	if !strings.Contains(csp, "gist."+upstreamHost) {
 		t.Errorf("CSP should still contain gist.%s\ncsp: %s", upstreamHost, csp)
 	}
 }
 
-// TestSetFallbackProxy_RewriteCSPMixed verifies that a CSP with both
-// scheme-prefixed and bare-host forms of the upstream host are all rewritten
-// correctly, while other hosts and subdomains are preserved.
+// TestSetFallbackProxy_RewriteCSPMixed 验证同时包含带 scheme 前缀
+// 和裸主机形式上游主机的 CSP 都会被正确重写，
+// 而其他主机和子域会被保留。
 func TestSetFallbackProxy_RewriteCSPMixed(t *testing.T) {
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -972,18 +972,18 @@ func TestSetFallbackProxy_RewriteCSPMixed(t *testing.T) {
 	ServeFallback(rec, req)
 
 	csp := rec.Header().Get("Content-Security-Policy")
-	// No upstream host should remain (except subdomain api.).
+	// 不应残留任何上游主机（子域 api. 除外）。
 	if bytes.Contains([]byte(csp), []byte("https://"+upstreamHost)) {
 		t.Errorf("CSP should not contain https://%s\ncsp: %s", upstreamHost, csp)
 	}
 	if bytes.Contains([]byte(csp), []byte(" "+upstreamHost+"/")) {
 		t.Errorf("CSP should not contain bare %q/\ncsp: %s", upstreamHost, csp)
 	}
-	// Client-facing host should be present.
+	// 面向客户端的 host 应存在。
 	if !bytes.Contains([]byte(csp), []byte("my-site.com")) {
 		t.Errorf("CSP should contain my-site.com\ncsp: %s", csp)
 	}
-	// Subdomain and other host should be preserved.
+	// 子域和其他主机应被保留。
 	if !bytes.Contains([]byte(csp), []byte("api."+upstreamHost)) {
 		t.Errorf("CSP should still contain api.%s\ncsp: %s", upstreamHost, csp)
 	}
@@ -992,13 +992,13 @@ func TestSetFallbackProxy_RewriteCSPMixed(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_RewriteContentGzip verifies that gzipped HTML
-// responses are decompressed and rewritten correctly.
+// TestSetFallbackProxy_RewriteContentGzip 验证 gzip 压缩的 HTML 响应会被
+// 解压并正确重写。
 func TestSetFallbackProxy_RewriteContentGzip(t *testing.T) {
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Simulate an upstream that ignores Accept-Encoding: identity
-		// and sends gzip anyway.
+		// 模拟一个忽略 Accept-Encoding: identity、
+		// 仍然发送 gzip 的上游。
 		w.Header().Set("Content-Type", "text/html")
 		w.Header().Set("Content-Encoding", "gzip")
 		gw := gzip.NewWriter(w)
@@ -1018,12 +1018,12 @@ func TestSetFallbackProxy_RewriteContentGzip(t *testing.T) {
 	rec := httptest.NewRecorder()
 	ServeFallback(rec, req)
 
-	// Content-Encoding should be removed (we send uncompressed after rewriting).
+	// Content-Encoding 应被移除（重写后发送未压缩的内容）。
 	if ce := rec.Header().Get("Content-Encoding"); ce != "" {
 		t.Errorf("Content-Encoding = %q, want empty", ce)
 	}
 	body := rec.Body.String()
-	// httptest.NewRequest has TLS == nil → origScheme = "http".
+	// httptest.NewRequest 的 TLS 为 nil → origScheme = "http"。
 	if !bytes.Contains([]byte(body), []byte("http://my-site.com/test")) {
 		t.Errorf("body should contain rewritten URL\nbody: %s", body)
 	}
@@ -1032,8 +1032,8 @@ func TestSetFallbackProxy_RewriteContentGzip(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_RewriteContentNonHTML verifies that non-HTML responses
-// are passed through unchanged (only HTML is rewritten).
+// TestSetFallbackProxy_RewriteContentNonHTML 验证非 HTML 响应会原样透传
+// （只有 HTML 会被重写）。
 func TestSetFallbackProxy_RewriteContentNonHTML(t *testing.T) {
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1053,7 +1053,7 @@ func TestSetFallbackProxy_RewriteContentNonHTML(t *testing.T) {
 	rec := httptest.NewRecorder()
 	ServeFallback(rec, req)
 
-	// JSON should not be rewritten.
+	// JSON 不应被重写。
 	if bytes.Contains(rec.Body.Bytes(), []byte("my-site.com")) {
 		t.Errorf("non-HTML body should not be rewritten\nbody: %s", rec.Body.String())
 	}
@@ -1062,8 +1062,8 @@ func TestSetFallbackProxy_RewriteContentNonHTML(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientGzip verifies that
-// when the client accepts gzip, the upstream receives "identity, gzip".
+// TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientGzip 验证当客户端
+// 接受 gzip 时，上游收到的是 "identity, gzip"。
 func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientGzip(t *testing.T) {
 	var gotAE string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1089,8 +1089,8 @@ func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientGzip(t *testing.T) 
 	}
 }
 
-// TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientNoGzip verifies that
-// when the client does not accept gzip, the upstream receives "identity" only.
+// TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientNoGzip 验证当客户端
+// 不接受 gzip 时，上游只收到 "identity"。
 func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientNoGzip(t *testing.T) {
 	var gotAE string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1107,7 +1107,7 @@ func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientNoGzip(t *testing.T
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
-	// No Accept-Encoding header → client does not accept gzip.
+	// 没有 Accept-Encoding 头 → 客户端不接受 gzip。
 	rec := httptest.NewRecorder()
 	ServeFallback(rec, req)
 
@@ -1116,9 +1116,9 @@ func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientNoGzip(t *testing.T
 	}
 }
 
-// TestSetFallbackProxy_RewriteContent_RecompressGzip verifies that when the
-// client accepts gzip, the rewritten HTML response is re-compressed with gzip
-// and the Content-Encoding header is set to "gzip".
+// TestSetFallbackProxy_RewriteContent_RecompressGzip 验证当客户端接受 gzip 时，
+// 重写后的 HTML 响应会用 gzip 重新压缩，并把 Content-Encoding 头设置为
+// "gzip"。
 func TestSetFallbackProxy_RewriteContent_RecompressGzip(t *testing.T) {
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1143,7 +1143,7 @@ func TestSetFallbackProxy_RewriteContent_RecompressGzip(t *testing.T) {
 		t.Errorf("Content-Encoding = %q, want %q", ce, "gzip")
 	}
 
-	// Decompress the response body and verify the rewritten URL.
+	// 解压响应体并验证重写后的 URL。
 	gr, err := gzip.NewReader(rec.Body)
 	if err != nil {
 		t.Fatalf("gzip reader: %v", err)
@@ -1158,9 +1158,9 @@ func TestSetFallbackProxy_RewriteContent_RecompressGzip(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_RewriteContent_NoRecompressWhenClientNoGzip verifies
-// that when the client does not accept gzip, the rewritten HTML is sent
-// uncompressed even if the upstream returned gzip.
+// TestSetFallbackProxy_RewriteContent_NoRecompressWhenClientNoGzip
+// 验证当客户端不接受 gzip 时，即使上游返回了 gzip，
+// 重写后的 HTML 也会以未压缩形式发送。
 func TestSetFallbackProxy_RewriteContent_NoRecompressWhenClientNoGzip(t *testing.T) {
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1180,7 +1180,7 @@ func TestSetFallbackProxy_RewriteContent_NoRecompressWhenClientNoGzip(t *testing
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
-	// No Accept-Encoding → client does not accept gzip.
+	// 没有 Accept-Encoding → 客户端不接受 gzip。
 	rec := httptest.NewRecorder()
 	ServeFallback(rec, req)
 
@@ -1193,7 +1193,7 @@ func TestSetFallbackProxy_RewriteContent_NoRecompressWhenClientNoGzip(t *testing
 	}
 }
 
-// TestClientAcceptsGzip verifies the clientAcceptsGzip helper function.
+// TestClientAcceptsGzip 验证 clientAcceptsGzip 辅助函数。
 func TestClientAcceptsGzip(t *testing.T) {
 	tests := []struct {
 		ae   string
@@ -1223,12 +1223,12 @@ func TestClientAcceptsGzip(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Origin / Referer request header rewriting tests
+// Origin / Referer 请求头重写测试
 // ---------------------------------------------------------------------------
 
-// TestSetFallbackProxy_RewriteOrigin verifies that the Origin header on POST
-// requests is rewritten from the client-facing host to the upstream host so
-// that Rails CSRF protection accepts the request.
+// TestSetFallbackProxy_RewriteOrigin 验证 POST 请求的 Origin 头
+// 会从面向客户端的 host 重写为上游 host，
+// 从而使 Rails 的 CSRF 防护接受该请求。
 func TestSetFallbackProxy_RewriteOrigin(t *testing.T) {
 	var gotOrigin string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1256,9 +1256,9 @@ func TestSetFallbackProxy_RewriteOrigin(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_RewriteReferer verifies that the Referer header is
-// rewritten from the client-facing host to the upstream host, preserving the
-// path.
+// TestSetFallbackProxy_RewriteReferer 验证 Referer 头会从
+// 面向客户端的 host 重写为上游 host，
+// 并保留路径。
 func TestSetFallbackProxy_RewriteReferer(t *testing.T) {
 	var gotReferer string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1286,8 +1286,8 @@ func TestSetFallbackProxy_RewriteReferer(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_OtherHostOriginUnchanged verifies that Origin headers
-// pointing at a host other than the client-facing host are left untouched.
+// TestSetFallbackProxy_OtherHostOriginUnchanged 验证指向非面向客户端 host 的
+// Origin 头不会被改动。
 func TestSetFallbackProxy_OtherHostOriginUnchanged(t *testing.T) {
 	var gotOrigin string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1313,8 +1313,8 @@ func TestSetFallbackProxy_OtherHostOriginUnchanged(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_NoOriginNoError verifies that requests without an
-// Origin or Referer header are handled without error.
+// TestSetFallbackProxy_NoOriginNoError 验证没有 Origin 或 Referer 头的请求
+// 也能无错误地处理。
 func TestSetFallbackProxy_NoOriginNoError(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -1338,12 +1338,12 @@ func TestSetFallbackProxy_NoOriginNoError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CDN domain proxying tests
+// CDN 域名代理测试
 // ---------------------------------------------------------------------------
 
-// TestSetFallbackProxy_CDNRoute verifies that a request to
-// /__cdn__/<host>/<path> is proxied to https://<host>/<path> with the correct
-// Host header.
+// TestSetFallbackProxy_CDNRoute 验证对 /__cdn__/<host>/<path> 的请求
+// 会以正确的 Host 头代理到
+// https://<host>/<path>。
 func TestSetFallbackProxy_CDNRoute(t *testing.T) {
 	var gotHost, gotPath string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1364,15 +1364,15 @@ func TestSetFallbackProxy_CDNRoute(t *testing.T) {
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
-	// Override the proxy's Transport to skip TLS verification for the test
-	// self-signed certificate.
+	// 覆盖代理的 Transport，跳过对测试所用
+	// 自签名证书的 TLS 校验。
 	originalTransport := fallbackProxy.Transport
 	fallbackProxy.Transport = &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	t.Cleanup(func() { fallbackProxy.Transport = originalTransport })
 
-	// Request via /__cdn__/ prefix path.
+	// 通过 /__cdn__/ 前缀路径发起请求。
 	req := httptest.NewRequest(http.MethodGet, cdnPathPrefix+cdnHost+"/assets/foo.css", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
@@ -1386,9 +1386,9 @@ func TestSetFallbackProxy_CDNRoute(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_CDNRouteDisallowedHost verifies that a /__cdn__/
-// request to a host NOT in the allowed list is not proxied as a CDN request
-// (it falls through to the main upstream).
+// TestSetFallbackProxy_CDNRouteDisallowedHost 验证对不在允许列表中
+// 的主机的 /__cdn__/ 请求不会被当作 CDN 请求代理
+// （它会回落到主上游）。
 func TestSetFallbackProxy_CDNRouteDisallowedHost(t *testing.T) {
 	var gotPath string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1402,23 +1402,23 @@ func TestSetFallbackProxy_CDNRouteDisallowedHost(t *testing.T) {
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
-	// Request to a disallowed CDN host.
+	// 向不允许的 CDN 主机发起请求。
 	req := httptest.NewRequest(http.MethodGet, cdnPathPrefix+"evil.cdn.com/assets/foo.css", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
 	ServeFallback(rec, req)
 
-	// Should have been routed to the main upstream with the /__cdn__/ path
-	// (since the host was not in the allowed set, routeCDN returns false and
-	// the normal upstream routing applies).
+	// 应带着 /__cdn__/ 路径路由到主上游
+	// （主机不在允许集合中，因此 routeCDN 返回 false，走正常的
+	// 上游路由逻辑）。
 	if gotPath != cdnPathPrefix+"evil.cdn.com/assets/foo.css" {
 		t.Errorf("upstream received Path %q, want %q (passed through)", gotPath, cdnPathPrefix+"evil.cdn.com/assets/foo.css")
 	}
 }
 
-// TestSetFallbackProxy_CDNHTMLRewrite verifies that absolute URLs pointing at
-// a configured CDN domain in an HTML body are rewritten to the
-// /__cdn__/<host> prefix form.
+// TestSetFallbackProxy_CDNHTMLRewrite 验证 HTML 响应体中指向
+// 已配置 CDN 域名的绝对 URL 会被重写为
+// /__cdn__/<host> 前缀形式。
 func TestSetFallbackProxy_CDNHTMLRewrite(t *testing.T) {
 	var upstreamHost string
 	cdnHost := "cdn.example.com"
@@ -1449,15 +1449,15 @@ func TestSetFallbackProxy_CDNHTMLRewrite(t *testing.T) {
 	if !strings.Contains(body, wantPrefix+"/assets/bar.js") {
 		t.Errorf("body should contain %q/assets/bar.js\nbody: %s", wantPrefix, body)
 	}
-	// Original CDN URL should not appear.
+	// 原始 CDN URL 不应出现。
 	if strings.Contains(body, "https://"+cdnHost) {
 		t.Errorf("body should not contain https://%s\nbody: %s", cdnHost, body)
 	}
 }
 
-// TestSetFallbackProxy_CDNCSPRewrite verifies that CSP source expressions
-// referencing a configured CDN domain are rewritten to the /__cdn__/ prefix
-// form.
+// TestSetFallbackProxy_CDNCSPRewrite 验证引用已配置 CDN 域名的
+// CSP 源表达式会被重写为
+// /__cdn__/ 前缀形式。
 func TestSetFallbackProxy_CDNCSPRewrite(t *testing.T) {
 	cdnHost := "cdn.example.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1479,20 +1479,20 @@ func TestSetFallbackProxy_CDNCSPRewrite(t *testing.T) {
 	ServeFallback(rec, req)
 
 	csp := rec.Header().Get("Content-Security-Policy")
-	// CDN host should be rewritten to /__cdn__/ prefix form.
+	// CDN 主机应被重写为 /__cdn__/ 前缀形式。
 	wantCSPHost := "my-site.com" + cdnPathPrefix + cdnHost
 	if !strings.Contains(csp, "http://"+wantCSPHost) {
 		t.Errorf("CSP should contain http://%s\ncsp: %s", wantCSPHost, csp)
 	}
-	// The original CDN host is intentionally preserved alongside the
-	// rewritten form so that JS-constructed URLs to the CDN are not blocked.
-	// Just verify the rewritten form is present; we don't assert the
-	// original is absent.
+	// 原始 CDN 主机有意与重写后的形式一起保留，
+	// 这样 JS 动态构造的 CDN URL 不会被拦截。
+	// 这里只验证重写后的形式存在，
+	// 不断言原始形式不存在。
 }
 
-// TestSetFallbackProxy_CDNNotConfigured verifies that when no CDN domains are
-// configured, HTML URLs pointing at external hosts are NOT rewritten (left
-// as-is).
+// TestSetFallbackProxy_CDNNotConfigured 验证未配置任何 CDN 域名时，
+// 指向外部主机的 HTML URL 不会被重写
+// （保持原样）。
 func TestSetFallbackProxy_CDNNotConfigured(t *testing.T) {
 	cdnHost := "cdn.example.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1501,7 +1501,7 @@ func TestSetFallbackProxy_CDNNotConfigured(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	// No CDN domains configured.
+	// 未配置任何 CDN 域名。
 	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -1513,15 +1513,15 @@ func TestSetFallbackProxy_CDNNotConfigured(t *testing.T) {
 	ServeFallback(rec, req)
 
 	body := rec.Body.String()
-	// CDN URL should remain unchanged.
+	// CDN URL 应保持不变。
 	if !strings.Contains(body, "https://"+cdnHost+"/foo.css") {
 		t.Errorf("body should contain unchanged CDN URL\nbody: %s", body)
 	}
 }
 
-// TestSetFallbackProxy_CDNSubdomainRoute verifies that a /__cdn__/ request to
-// a subdomain of a configured CDN domain is routed correctly (the subdomain
-// host is extracted and used as the upstream host).
+// TestSetFallbackProxy_CDNSubdomainRoute 验证对已配置 CDN 域名的子域的
+// /__cdn__/ 请求能被正确路由（提取子域主机
+// 作为上游主机）。
 func TestSetFallbackProxy_CDNSubdomainRoute(t *testing.T) {
 	cdnParent := "githubassets.com"
 	cdnSub := "github.githubassets.com"
@@ -1535,8 +1535,8 @@ func TestSetFallbackProxy_CDNSubdomainRoute(t *testing.T) {
 	}
 	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
-	// Use a custom Transport that captures the target host without actually
-	// connecting (the subdomain is not DNS-resolvable in test env).
+	// 使用自定义 Transport 捕获目标主机而不真正建立连接
+	// （测试环境中该子域无法通过 DNS 解析）。
 	var capturedHost string
 	fallbackProxy.Transport = &roundTripFunc{
 		fn: func(req *http.Request) (*http.Response, error) {
@@ -1560,9 +1560,9 @@ func TestSetFallbackProxy_CDNSubdomainRoute(t *testing.T) {
 	}
 }
 
-// TestServeFallbackProxyStripsXESHeader verifies that easyss-specific headers
-// (x-es) are removed before the request is forwarded to the upstream service,
-// so proxy protocol traces never leak to the fallback site.
+// TestServeFallbackProxyStripsXESHeader 验证 easyss 特有的请求头（x-es）
+// 会在请求转发给上游服务前被移除，从而保证代理协议痕迹
+// 永远不会泄露给回退站点。
 func TestServeFallbackProxyStripsXESHeader(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -1589,7 +1589,7 @@ func TestServeFallbackProxyStripsXESHeader(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v3/tcp", nil)
 	req.Host = "my-site.com"
-	req.Header.Set("x-es", "UQ8k8i0v8JX5m6pQ2lC1AQ") // 22-char base64url salt
+	req.Header.Set("x-es", "UQ8k8i0v8JX5m6pQ2lC1AQ") // 22 字符的 base64url salt
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0) Chrome/131.0.0.0")
 	rec := httptest.NewRecorder()
 	ServeFallback(rec, req)
@@ -1605,8 +1605,8 @@ func TestServeFallbackProxyStripsXESHeader(t *testing.T) {
 	}
 }
 
-// roundTripFunc is a helper Transport for testing that captures the request
-// without making a real network connection.
+// roundTripFunc 是测试用的辅助 Transport，
+// 捕获请求而不建立真实网络连接。
 type roundTripFunc struct {
 	fn func(*http.Request) (*http.Response, error)
 }
@@ -1615,9 +1615,9 @@ func (rt *roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return rt.fn(req)
 }
 
-// TestSetFallbackProxy_CDNSubdomainHTMLRewrite verifies that absolute URLs
-// pointing at a subdomain of a configured CDN domain are rewritten to
-// /__cdn__/<subdomain-host> form.
+// TestSetFallbackProxy_CDNSubdomainHTMLRewrite 验证指向已配置 CDN 域名
+// 的子域的绝对 URL 会被重写为
+// /__cdn__/<subdomain-host> 形式。
 func TestSetFallbackProxy_CDNSubdomainHTMLRewrite(t *testing.T) {
 	cdnParent := "githubassets.com"
 	cdnSub := "github.githubassets.com"
@@ -1628,7 +1628,7 @@ func TestSetFallbackProxy_CDNSubdomainHTMLRewrite(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	// Configure only the parent domain.
+	// 只配置父域名。
 	if err := setFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
 		t.Fatal(err)
 	}
@@ -1640,17 +1640,17 @@ func TestSetFallbackProxy_CDNSubdomainHTMLRewrite(t *testing.T) {
 	ServeFallback(rec, req)
 
 	body := rec.Body.String()
-	// Subdomain URL should be rewritten with the full subdomain host.
+	// 子域 URL 应使用完整的子域主机名进行重写。
 	wantSub := "http://my-site.com" + cdnPathPrefix + cdnSub + "/assets/foo.css"
 	if !strings.Contains(body, wantSub) {
 		t.Errorf("body should contain %q\nbody: %s", wantSub, body)
 	}
-	// Parent domain URL should also be rewritten.
+	// 父域 URL 也应被重写。
 	wantParent := "http://my-site.com" + cdnPathPrefix + cdnParent + "/assets/bar.css"
 	if !strings.Contains(body, wantParent) {
 		t.Errorf("body should contain %q\nbody: %s", wantParent, body)
 	}
-	// Original URLs should not appear.
+	// 原始 URL 不应出现。
 	if strings.Contains(body, "https://"+cdnSub) {
 		t.Errorf("body should not contain https://%s\nbody: %s", cdnSub, body)
 	}
@@ -1659,10 +1659,10 @@ func TestSetFallbackProxy_CDNSubdomainHTMLRewrite(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_CDNNonMatchingSubdomain verifies that a host that
-// merely ends with the configured CDN domain string (but is not a true
-// subdomain) is NOT matched. For example, "notgithubassets.com" should not
-// match "githubassets.com".
+// TestSetFallbackProxy_CDNNonMatchingSubdomain 验证只是以配置的 CDN 域名
+// 字符串结尾、但并非真正子域的主机不会被匹配。
+// 例如 "notgithubassets.com" 不应匹配
+// "githubassets.com"。
 func TestSetFallbackProxy_CDNNonMatchingSubdomain(t *testing.T) {
 	cdnParent := "githubassets.com"
 	fakeHost := "notgithubassets.com"
@@ -1683,7 +1683,7 @@ func TestSetFallbackProxy_CDNNonMatchingSubdomain(t *testing.T) {
 	ServeFallback(rec, req)
 
 	body := rec.Body.String()
-	// The fake host URL should NOT be rewritten.
+	// 伪主机的 URL 不应被重写。
 	if !strings.Contains(body, "https://"+fakeHost+"/foo.css") {
 		t.Errorf("body should contain unchanged %q URL\nbody: %s", fakeHost, body)
 	}
@@ -1692,17 +1692,17 @@ func TestSetFallbackProxy_CDNNonMatchingSubdomain(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_CDNCSPSubdomainRewrite verifies that CSP source
-// expressions referencing a SUBDOMAIN of a configured CDN domain are
-// rewritten to the /__cdn__/ prefix form. This is the key fix for the
-// "blocked:csp" issue where GitHub's CSP references "github.githubassets.com"
-// but only "githubassets.com" is configured.
+// TestSetFallbackProxy_CDNCSPSubdomainRewrite 验证引用已配置 CDN 域名的
+// 子域的 CSP 源表达式会被重写为 /__cdn__/ 前缀形式。
+// 这是 "blocked:csp" 问题的关键修复：GitHub 的 CSP 引用
+// "github.githubassets.com"，而只配置了
+// "githubassets.com"。
 func TestSetFallbackProxy_CDNCSPSubdomainRewrite(t *testing.T) {
 	cdnParent := "githubassets.com"
 	cdnSub := "github.githubassets.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		// Simulate GitHub-style CSP with subdomain references.
+		// 模拟 GitHub 风格的含子域引用的 CSP。
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'self'; style-src 'self' https://"+cdnSub+" "+cdnSub+"/assets/ "+
 				cdnSub+" https://"+cdnParent+" "+cdnParent+"/assets/")
@@ -1710,7 +1710,7 @@ func TestSetFallbackProxy_CDNCSPSubdomainRewrite(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	// Configure only the parent domain.
+	// 只配置父域名。
 	if err := setFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
 		t.Fatal(err)
 	}
@@ -1722,38 +1722,38 @@ func TestSetFallbackProxy_CDNCSPSubdomainRewrite(t *testing.T) {
 	ServeFallback(rec, req)
 
 	csp := rec.Header().Get("Content-Security-Policy")
-	// Subdomain references should be rewritten to /__cdn__/ prefix form.
+	// 子域引用应被重写为 /__cdn__/ 前缀形式。
 	wantSubScheme := "http://my-site.com" + cdnPathPrefix + cdnSub
 	if !strings.Contains(csp, wantSubScheme) {
 		t.Errorf("CSP should contain %q\ncsp: %s", wantSubScheme, csp)
 	}
-	// Bare subdomain should also be rewritten.
+	// 裸子域也应被重写。
 	wantSubBare := "my-site.com" + cdnPathPrefix + cdnSub
 	if !strings.Contains(csp, wantSubBare+"/assets/") {
 		t.Errorf("CSP should contain %q/assets/\ncsp: %s", wantSubBare, csp)
 	}
-	// Parent domain references should also be rewritten.
+	// 父域引用也应被重写。
 	wantParentScheme := "http://my-site.com" + cdnPathPrefix + cdnParent
 	if !strings.Contains(csp, wantParentScheme) {
 		t.Errorf("CSP should contain %q\ncsp: %s", wantParentScheme, csp)
 	}
-	// The original CDN hosts are intentionally preserved alongside the
-	// rewritten form so JS-constructed URLs are not blocked by CSP.
-	// We just verify the rewritten forms are present.
+	// 原始 CDN 主机有意与重写后的形式一起保留，
+	// 这样 JS 动态构造的 URL 不会被 CSP 拦截。
+	// 这里只验证重写后的形式存在。
 }
 
-// TestSetFallbackProxy_CSPRewrittenEvenWhenBodyUnreadable verifies that the
-// Content-Security-Policy header is rewritten even when the response body
-// cannot be read (e.g. unsupported Content-Encoding like br). This is the key
-// fix for the "blocked:csp" issue where CSP was skipped because body reading
-// failed before the CSP rewriting code was reached.
+// TestSetFallbackProxy_CSPRewrittenEvenWhenBodyUnreadable 验证即使
+// 响应体无法读取（例如 Content-Encoding 为不支持的 br）时，
+// Content-Security-Policy 头仍会被重写。这是 "blocked:csp" 问题的
+// 关键修复：此前在到达 CSP 重写代码之前就因读取响应体失败
+// 而跳过了 CSP 重写。
 func TestSetFallbackProxy_CSPRewrittenEvenWhenBodyUnreadable(t *testing.T) {
 	cdnParent := "githubassets.com"
 	cdnSub := "github.githubassets.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		// Return br encoding which the proxy cannot decompress, causing
-		// rewriteResponseBody to skip body processing.
+		// 返回代理无法解压的 br 编码，使 rewriteResponseBody 跳过
+		// 响应体处理。
 		w.Header().Set("Content-Encoding", "br")
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'none'; style-src 'unsafe-inline' "+cdnSub+" https://"+cdnSub+
@@ -1773,24 +1773,24 @@ func TestSetFallbackProxy_CSPRewrittenEvenWhenBodyUnreadable(t *testing.T) {
 	ServeFallback(rec, req)
 
 	csp := rec.Header().Get("Content-Security-Policy")
-	// Even though body couldn't be read (br encoding), CSP should be
-	// rewritten so that /__cdn__/ paths are allowed.
+	// 即使响应体无法读取（br 编码），CSP 也应被重写，从而允许 /__cdn__/
+	// 路径。
 	if !strings.Contains(csp, "my-site.com"+cdnPathPrefix+cdnSub) {
 		t.Errorf("CSP should contain my-site.com%s%s\ncsp: %s", cdnPathPrefix, cdnSub, csp)
 	}
 }
 
-// TestSetFallbackProxy_CDNCSPTrailingSlash verifies that bare CDN host
-// references in CSP (without a path) are rewritten with a trailing "/" so
-// that CSP path matching allows sub-paths under /__cdn__/<host>/.
-// Without the trailing "/", CSP only matches the exact path, blocking
-// sub-resource loading (e.g. CSS at /__cdn__/<host>/assets/foo.css).
+// TestSetFallbackProxy_CDNCSPTrailingSlash 验证 CSP 中不带路径的裸 CDN
+// 主机引用会被重写为带末尾 "/" 的形式，使 CSP 的路径匹配允许
+// /__cdn__/<host>/ 下的子路径。如果没有末尾的 "/"，CSP 只会
+// 精确匹配该路径，从而阻止子资源的加载
+// （例如 /__cdn__/<host>/assets/foo.css 上的 CSS）。
 func TestSetFallbackProxy_CDNCSPTrailingSlash(t *testing.T) {
 	cdnParent := "githubassets.com"
 	cdnSub := "github.githubassets.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		// CSP with bare host (no path) — should get trailing "/" after rewrite.
+		// 使用裸主机（无路径）的 CSP —— 重写后应带末尾 "/"。
 		w.Header().Set("Content-Security-Policy",
 			"style-src 'unsafe-inline' "+cdnSub+"; script-src https://"+cdnSub)
 		w.Write([]byte("<html></html>")) //nolint:errcheck
@@ -1808,22 +1808,22 @@ func TestSetFallbackProxy_CDNCSPTrailingSlash(t *testing.T) {
 	ServeFallback(rec, req)
 
 	csp := rec.Header().Get("Content-Security-Policy")
-	// Bare host should be rewritten WITH trailing "/" so sub-paths match.
+	// 裸主机应被重写为带末尾 "/" 的形式，使子路径能匹配。
 	wantBare := "my-site.com" + cdnPathPrefix + cdnSub + "/"
 	if !strings.Contains(csp, wantBare) {
 		t.Errorf("CSP should contain %q (with trailing /)\ncsp: %s", wantBare, csp)
 	}
-	// Scheme-prefixed form should also have trailing "/".
+	// 带 scheme 前缀的形式也应有末尾 "/"。
 	wantScheme := "http://my-site.com" + cdnPathPrefix + cdnSub + "/"
 	if !strings.Contains(csp, wantScheme) {
 		t.Errorf("CSP should contain %q (with trailing /)\ncsp: %s", wantScheme, csp)
 	}
 }
 
-// TestSetFallbackProxy_NonRewritableContentType verifies that content types
-// other than HTML (e.g. JavaScript, JSON) are NOT rewritten, to avoid
-// wasting CPU on body scanning that is unreliable for JS (dynamic URL
-// construction) and unnecessary for JSON/images.
+// TestSetFallbackProxy_NonRewritableContentType 验证除 HTML 外的内容类型
+// （例如 JavaScript、JSON）不会被重写，以避免在响应体扫描上浪费
+// CPU：对 JS 而言该扫描不可靠（URL 是动态构造的），
+// 对 JSON/图片而言又没必要。
 func TestSetFallbackProxy_NonRewritableContentType(t *testing.T) {
 	cdnHost := "github.githubassets.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1843,20 +1843,20 @@ func TestSetFallbackProxy_NonRewritableContentType(t *testing.T) {
 	ServeFallback(rec, req)
 
 	body := rec.Body.String()
-	// JavaScript should NOT be rewritten — original URL preserved.
+	// JavaScript 不应被重写 —— 保留原始 URL。
 	if !strings.Contains(body, "https://"+cdnHost) {
 		t.Errorf("JS body should preserve original URL (not rewritten)\nbody: %s", body)
 	}
 }
 
-// TestSetFallbackProxy_CDNLocationRewrite verifies that a 3xx redirect from
-// the main upstream to a CDN domain (e.g. GitHub's /raw/ → raw.githubusercontent.com)
-// is rewritten to /__cdn__/<host>/<path> so the browser follows the redirect
-// through the proxy.
+// TestSetFallbackProxy_CDNLocationRewrite 验证从主上游到 CDN 域名的
+// 3xx 重定向（例如 GitHub 的 /raw/ → raw.githubusercontent.com）
+// 会被重写为 /__cdn__/<host>/<path>，使浏览器能通过代理
+// 跟随该重定向。
 func TestSetFallbackProxy_CDNLocationRewrite(t *testing.T) {
 	cdnHost := "raw.githubusercontent.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Simulate GitHub redirecting /raw/ to raw.githubusercontent.com
+		// 模拟 GitHub 把 /raw/ 重定向到 raw.githubusercontent.com
 		w.Header().Set("Location", "https://"+cdnHost+"/nange/easyss/master/assets/img/tray2.png")
 		w.WriteHeader(http.StatusMovedPermanently)
 	}))
@@ -1878,9 +1878,9 @@ func TestSetFallbackProxy_CDNLocationRewrite(t *testing.T) {
 	}
 }
 
-// TestSetFallbackProxy_CDNLocationNotRewrittenWhenNotConfigured verifies that
-// redirects to CDN-like hosts are NOT rewritten when the host is not in the
-// configured CDN domains.
+// TestSetFallbackProxy_CDNLocationNotRewrittenWhenNotConfigured
+// 验证当主机不在已配置的 CDN 域名中时，
+// 指向类 CDN 主机的重定向不会被重写。
 func TestSetFallbackProxy_CDNLocationNotRewrittenWhenNotConfigured(t *testing.T) {
 	cdnHost := "raw.githubusercontent.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1889,7 +1889,7 @@ func TestSetFallbackProxy_CDNLocationNotRewrittenWhenNotConfigured(t *testing.T)
 	}))
 	defer upstream.Close()
 
-	// Only githubassets.com configured, NOT githubusercontent.com.
+	// 只配置了 githubassets.com，而不是 githubusercontent.com。
 	if err := setFallbackProxy(upstream.URL, false, []string{"githubassets.com"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1900,7 +1900,7 @@ func TestSetFallbackProxy_CDNLocationNotRewrittenWhenNotConfigured(t *testing.T)
 	rec := httptest.NewRecorder()
 	ServeFallback(rec, req)
 
-	// Location should be passed through unchanged.
+	// Location 应原样透传。
 	want := "https://" + cdnHost + "/some/path"
 	if got := rec.Header().Get("Location"); got != want {
 		t.Errorf("Location = %q, want %q (unchanged)", got, want)

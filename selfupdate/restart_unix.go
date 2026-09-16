@@ -8,11 +8,9 @@ import (
 	"syscall"
 )
 
-// Restart relaunches the freshly installed binary with the original
-// arguments in a detached process. After the install step the original
-// path points at the new binary (or bundle), so re-resolving
-// os.Executable is enough. The caller must terminate the current process
-// once Restart returns nil.
+// Restart 在一个脱离（detached）的进程中，用原始参数重新启动刚安装的
+// 二进制。安装步骤完成后，原路径已指向新二进制（或 bundle），因此只需
+// 重新解析 os.Executable 即可。Restart 返回 nil 后，调用方必须终止当前进程。
 func Restart() error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -20,7 +18,7 @@ func Restart() error {
 	}
 	cmd := exec.Command(exe, restartArgs()...) //nolint:gosec // relaunching ourselves by design
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setsid: true, // detach from the controlling terminal
+		Setsid: true, // 脱离控制终端
 	}
 	return cmd.Start()
 }

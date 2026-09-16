@@ -12,8 +12,8 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// newTestSocksServer builds a Socks5Server wired to a mock transport so
-// WarmUp can be exercised without any real network.
+// newTestSocksServer 构建一个接入 mock transport 的 Socks5Server，
+// 这样无需任何真实网络即可测试 WarmUp。
 func newTestSocksServer(tr transport.Transport) *Socks5Server {
 	s := &Socks5Server{
 		handler:        newTestStreamHandler(tr),
@@ -27,9 +27,8 @@ func newTestSocksServer(tr transport.Transport) *Socks5Server {
 	return s
 }
 
-// TestWarmUp_WarmsTransport verifies that WarmUp hands the work to the
-// transport exactly once: the proxy layer only bounds the probe with a
-// deadline and delegates, the transport primes its own pools.
+// TestWarmUp_WarmsTransport 验证 WarmUp 恰好把工作交给 transport 一次：
+// 代理层只用截止时间约束探测并将其委托出去，由 transport 预热自己的连接池。
 func TestWarmUp_WarmsTransport(t *testing.T) {
 	tr := &mockTransport{}
 	s := newTestSocksServer(tr)
@@ -54,7 +53,7 @@ func TestWarmUp_NoopWhenClosing(t *testing.T) {
 	s := newTestSocksServer(tr)
 	s.closing.Store(true)
 
-	// A skipped warm-up is not a failure: closing returns nil, never an error.
+	// 跳过的预热不是失败：关闭中返回 nil，绝不返回错误。
 	if err := s.WarmUp(2 * time.Second); err != nil {
 		t.Errorf("expected nil when server is closing, got %v", err)
 	}
@@ -64,8 +63,8 @@ func TestWarmUp_NoopWhenClosing(t *testing.T) {
 	}
 }
 
-// TestWarmUp_NilServerIsNotAFailure covers the socks_port = 0 shape: there is
-// no proxy server to warm, which must never surface as an error.
+// TestWarmUp_NilServerIsNotAFailure 覆盖 socks_port = 0 的形态：没有需要预热的
+// 代理服务器，这绝不能表现为错误。
 func TestWarmUp_NilServerIsNotAFailure(t *testing.T) {
 	var s *Socks5Server
 
@@ -74,9 +73,8 @@ func TestWarmUp_NilServerIsNotAFailure(t *testing.T) {
 	}
 }
 
-// TestWarmUp_ErrorIsReturned verifies the best-effort contract: the failure is
-// logged here and handed back to the caller (which may swallow it), but the
-// error is never replaced or dropped by the proxy layer.
+// TestWarmUp_ErrorIsReturned 验证尽力而为的契约：失败在此记录日志并交还给调用方
+// （调用方可能忽略它），但代理层绝不会替换或丢弃该错误。
 func TestWarmUp_ErrorIsReturned(t *testing.T) {
 	tr := &mockTransport{warmUpErr: errors.New("probe failed")}
 	s := newTestSocksServer(tr)
@@ -94,9 +92,8 @@ func TestWarmUp_ErrorIsReturned(t *testing.T) {
 	}
 }
 
-// TestWarmUp_DefaultTimeoutWhenZero verifies the fallback: a zero (or
-// negative) timeout must not turn into an already-expired context, so the
-// probe is bounded by config.WarmUpTimeout instead.
+// TestWarmUp_DefaultTimeoutWhenZero 验证回退逻辑：零（或负）超时绝不能变成
+// 一个已过期的上下文，探测应改用 config.WarmUpTimeout 作为上限。
 func TestWarmUp_DefaultTimeoutWhenZero(t *testing.T) {
 	for _, timeout := range []time.Duration{0, -time.Second} {
 		tr := &mockTransport{}
@@ -122,11 +119,9 @@ func TestWarmUp_DefaultTimeoutWhenZero(t *testing.T) {
 			t.Errorf("timeout=%v: probe deadline already expired", timeout)
 			continue
 		}
-		// The fallback deadline is set inside WarmUp, a little after start,
-		// so it may sit slightly above the default by the time the probe
-		// observes it. Tolerate that scheduling overhead, but nothing more:
-		// the point of the assertion is that a zero timeout does not fall
-		// back to something unbounded.
+		// 回退截止时间是在 WarmUp 内部设置的，比 start 稍晚一些，因此探测观察到它时
+		// 可能略高于默认值。可以容忍这一调度开销，但仅此而已：断言的要点是零超时
+		// 不会回退成无上限的东西。
 		if limit := config.WarmUpTimeout + 100*time.Millisecond; remaining > limit {
 			t.Errorf("timeout=%v: probe deadline %v exceeds the default %v", timeout, remaining, config.WarmUpTimeout)
 		}

@@ -83,8 +83,7 @@ func TestRefreshDirectDialer(t *testing.T) {
 	})
 }
 
-// newTestClient builds a minimal Client with a router and TUN mode toggled by
-// tunEnabled.
+// newTestClient 构建一个最小化的 Client，带 router，并通过 tunEnabled 切换 TUN 模式。
 func newTestClient(t *testing.T, tunEnabled bool) *Client {
 	t.Helper()
 
@@ -112,7 +111,7 @@ func TestDialWithConfigRefreshesAndRetriesOnStaleError(t *testing.T) {
 
 	c := newTestClient(t, true)
 
-	// The interface changed while we were "asleep".
+	// 我们"休眠"期间接口发生了变化。
 	detectDialIface = func() (*net.Interface, error) {
 		return &net.Interface{Index: 9, Name: "en9", Flags: net.FlagUp}, nil
 	}
@@ -188,8 +187,7 @@ func TestDialWithConfigNoRefreshWhenBindingUnchanged(t *testing.T) {
 
 	c := newTestClient(t, true)
 
-	// Same interface as recorded at startup: refresh must not replace it,
-	// so the retry uses the same dialer.
+	// 与启动时记录的接口相同：刷新不得替换它，因此重试仍使用同一个 dialer。
 	detectDialIface = func() (*net.Interface, error) {
 		return &net.Interface{Index: 4, Name: "en0", Flags: net.FlagUp}, nil
 	}
@@ -224,8 +222,7 @@ func TestDialWithConfigPlainPathWhenTunDisabled(t *testing.T) {
 		return nil, errors.New("must not be used when TUN is disabled")
 	}
 
-	// The plain path uses a real socket: a refused loopback dial is fast
-	// and deterministic.
+	// 普通路径使用真实 socket：被拒绝的回环拨号既快又确定。
 	_, err := c.dialWithConfig(context.Background(), "tcp", "127.0.0.1:1")
 	if err == nil {
 		t.Fatal("expected connection refused")
@@ -241,9 +238,8 @@ func TestRefreshDirectDialerIgnoresTunDevice(t *testing.T) {
 
 	c := newTestClient(t, true)
 	detectDialIface = func() (*net.Interface, error) {
-		// While TUN is active the Windows/Linux route probe resolves to the
-		// TUN device itself. Binding to it would loop every dial back into
-		// the TUN device.
+		// TUN 激活期间，Windows/Linux 的路由探测会解析到 TUN 设备本身。
+		// 绑定到它会让每次拨号都回环进 TUN 设备。
 		return &net.Interface{Index: 10, Name: sharedconfig.DefaultTunDeviceName, Flags: net.FlagUp}, nil
 	}
 
@@ -300,9 +296,8 @@ func TestDialWithConfigNoRetryWhenRefreshDetectsTun(t *testing.T) {
 
 	c := newTestClient(t, true)
 
-	// The dial fails with a stale-interface error, but the probe resolves to
-	// the TUN device (TUN active): the refresh must keep the old binding and
-	// not retry, since retrying through the TUN device would loop.
+	// 拨号因接口过期错误失败，但探测解析到 TUN 设备（TUN 已激活）：刷新必须保留旧的绑定
+	// 且不重试，因为经由 TUN 设备重试会形成回环。
 	detectDialIface = func() (*net.Interface, error) {
 		return &net.Interface{Index: 10, Name: sharedconfig.DefaultTunDeviceName, Flags: net.FlagUp}, nil
 	}

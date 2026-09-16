@@ -31,7 +31,7 @@ func TestHTTP2Stream_WriteSurfacesRoundTripErr(t *testing.T) {
 	sentinel := errors.New("tls: handshake failure")
 	s.setRoundTripErr(sentinel)
 
-	// Close the reader so the next Write fails with io.ErrClosedPipe.
+	// 关闭读取端，使下一次 Write 以 io.ErrClosedPipe 失败。
 	pr.Close() //nolint:errcheck
 
 	_, err := s.Write([]byte("payload"))
@@ -51,7 +51,7 @@ func TestHTTP2Stream_WriteNoRoundTripErr(t *testing.T) {
 	defer pr.Close() //nolint:errcheck
 	defer s.Close()  //nolint:errcheck
 
-	// rtErr remains nil — Write should return the bare io.ErrClosedPipe.
+	// rtErr 保持 nil——Write 应返回裸的 io.ErrClosedPipe。
 	pr.Close() //nolint:errcheck
 
 	_, err := s.Write([]byte("payload"))
@@ -115,10 +115,9 @@ func TestSetRoundTripErr_Concurrent(t *testing.T) {
 	s.rtErrMu.Unlock()
 }
 
-// TestHTTP2Stream_ConnBytesCountsBothDirections verifies the connection
-// rotation byte counter accumulates uploaded and downloaded bytes alike:
-// rotation against conn_max_bytes must trigger for upload-only traffic too,
-// since middleboxes throttle by total bytes in either direction.
+// TestHTTP2Stream_ConnBytesCountsBothDirections 验证连接轮换字节计数器
+// 同时累计上传与下载字节：针对 conn_max_bytes 的轮换必须对纯上传流量
+// 也生效，因为中间盒按任一方向的总字节数限流。
 func TestHTTP2Stream_ConnBytesCountsBothDirections(t *testing.T) {
 	slot := &transportSlot{}
 	s, pr := newTestStream()
@@ -133,34 +132,32 @@ func TestHTTP2Stream_ConnBytesCountsBothDirections(t *testing.T) {
 	if got := slot.connBytes.Load(); got != 3000 {
 		t.Fatalf("connBytes = %d, want 3000 (both directions)", got)
 	}
-	// The throughput health sample stays download-only: bytesRecv must not
-	// include uploaded bytes.
+	// 吞吐健康样本保持仅下载口径：bytesRecv 不得包含上传字节。
 	if got := slot.bytesRecv.Load(); got != 1000 {
 		t.Fatalf("bytesRecv = %d, want 1000 (download only)", got)
 	}
 }
 
-// TestHTTP2Stream_TrackWriteNilSlotNoOp guards the nil-slot fast path in
-// trackWrite after it started counting connection bytes.
+// TestHTTP2Stream_TrackWriteNilSlotNoOp 守护 trackWrite 在开始统计连接
+// 字节之后的 nil 槽位快路径。
 func TestHTTP2Stream_TrackWriteNilSlotNoOp(t *testing.T) {
 	s, pr := newTestStream()
 	defer pr.Close() //nolint:errcheck
 	defer s.Close()  //nolint:errcheck
 
-	s.trackWrite(1 << 20) // must not panic
+	s.trackWrite(1 << 20) // 不得 panic
 
 	if s.heavyState.Load() != heavyIdle {
 		t.Fatal("nil slot must not mark heavy")
 	}
 }
 
-// TestHTTP2Stream_RecordsPathRTTOnResponse verifies that a successful
-// response arriving after MarkBootstrapSent feeds one pure path RTT sample
-// (bootstrap record flushed -> response headers arrived), and that a stream
-// never stamped stays silent.
+// TestHTTP2Stream_RecordsPathRTTOnResponse 验证 MarkBootstrapSent 之后
+// 到达的成功响应会贡献一个纯路径 RTT 样本（bootstrap 记录刷出 ->
+// 响应头到达），而从未盖章的流保持静默。
 func TestHTTP2Stream_RecordsPathRTTOnResponse(t *testing.T) {
-	// newTestStream exposes respCh as read-only, so keep a writable handle
-	// to inject the response.
+	// newTestStream 把 respCh 暴露为只读，因此保留一个可写句柄
+	// 以便注入响应。
 	newStream := func() (*http2Stream, chan roundTripResult) {
 		s, pr := newTestStream()
 		_ = pr
@@ -216,9 +213,9 @@ func TestHTTP2Stream_RecordsPathRTTOnResponse(t *testing.T) {
 	})
 }
 
-// TestHTTP2Stream_SlotDraining verifies the drain signal reflects the slot's
-// eviction marks (expiring/degraded), which drives the proxy's early close of
-// idle streams (relay.BidirectionalWithDrain).
+// TestHTTP2Stream_SlotDraining 验证排空信号反映槽位的驱逐标记
+// （expiring/degraded），它驱动代理对空闲流的提前关闭
+// （relay.BidirectionalWithDrain）。
 func TestHTTP2Stream_SlotDraining(t *testing.T) {
 	s, pr := newTestStream()
 	defer pr.Close() //nolint:errcheck
@@ -244,7 +241,7 @@ func TestHTTP2Stream_SlotDraining(t *testing.T) {
 		t.Fatal("expected draining when the slot is expiring+degraded")
 	}
 
-	// A stream without a slot must not panic and never drains.
+	// 没有槽位的流不得 panic，也永不排空。
 	ns := &http2Stream{}
 	if ns.SlotDraining() {
 		t.Fatal("nil slot must not report draining")

@@ -38,8 +38,8 @@ func TestSysGatewayAndDevice(t *testing.T) {
 }
 
 func TestSysDefaultRoute(t *testing.T) {
-	// Only Windows reads the routing table; darwin/linux use the 0.0.0.1
-	// probe (see SysGatewayAndDevice).
+	// 只有 Windows 读取路由表；darwin/linux 使用 0.0.0.1 探测
+	// （参见 SysGatewayAndDevice）。
 	if runtime.GOOS != "windows" {
 		t.SkipNow()
 	}
@@ -72,9 +72,9 @@ func TestIsTunSubnetAddr(t *testing.T) {
 		ip   string
 		want bool
 	}{
-		{"198.18.0.1", true}, // default TunIP
+		{"198.18.0.1", true}, // 默认 TunIP
 		{"198.18.255.255", true},
-		{"198.19.255.255", true}, // /15 upper bound
+		{"198.19.255.255", true}, // /15 上界
 		{"198.17.255.255", false},
 		{"198.20.0.1", false},
 		{"192.168.1.1", false},
@@ -88,9 +88,8 @@ func TestIsTunSubnetAddr(t *testing.T) {
 }
 
 func TestIsTunIface(t *testing.T) {
-	// Name-based match is deterministic and short-circuits before any
-	// OS address lookup. Both platform default names must be recognized
-	// regardless of the platform the test runs on.
+	// 基于名称的匹配是确定性的，并且会在任何 OS 地址查询之前短路。
+	// 无论测试运行在哪个平台，两个平台的默认名称都必须被识别。
 	for _, name := range []string{
 		sharedconfig.DefaultTunDeviceName,
 		sharedconfig.DefaultTunDeviceNameDarwin,
@@ -99,12 +98,11 @@ func TestIsTunIface(t *testing.T) {
 			t.Fatalf("expected %s to be recognized as the TUN device", name)
 		}
 	}
-	// Give the synthetic interface an impossible Index: on darwin an
-	// Index of 0 makes Addrs() return every host interface's addresses
-	// (including the easyss TUN device's 198.18.0.1 when it is up),
-	// which would wrongly trip the subnet match below. A non-existent
-	// Index makes Addrs() return empty on every platform, so this
-	// negative assertion holds regardless of host interface state.
+	// 给合成的接口一个不可能存在的 Index：在 darwin 上 Index 为 0
+	// 会使 Addrs() 返回所有主机接口的地址（包括 easyss TUN 设备
+	// 启动时的 198.18.0.1），这会错误地触发下面的子网匹配。
+	// 不存在的 Index 会让 Addrs() 在所有平台上返回空，
+	// 因此无论主机接口状态如何，这个反向断言都成立。
 	if IsTunIface(&net.Interface{Name: "Ethernet", Index: 1 << 24}) {
 		t.Fatal("expected a plain interface name to not be recognized")
 	}

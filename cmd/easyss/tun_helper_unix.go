@@ -19,15 +19,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// fifoOpenResult carries the outcome of a blocking FIFO write-open.
+// fifoOpenResult 保存阻塞式 FIFO 写打开的结果。
 type fifoOpenResult struct {
 	f   *os.File
 	err error
 }
 
-// openFifoForWriteAsync opens fifoPath for writing in the background: open(2)
-// on a FIFO blocks until a reader appears, and the reader here is the elevated
-// helper started via stdin redirection.
+// openFifoForWriteAsync 在后台以写模式打开 fifoPath：对 FIFO 的 open(2) 会阻塞
+// 直到出现读取方，而这里的读取方是通过 stdin 重定向启动的特权辅助进程。
 func openFifoForWriteAsync(fifoPath string) <-chan fifoOpenResult {
 	ch := make(chan fifoOpenResult, 1)
 	go func() {
@@ -37,12 +36,10 @@ func openFifoForWriteAsync(fifoPath string) <-chan fifoOpenResult {
 	return ch
 }
 
-// releaseFifoOpen unblocks a write-open started by openFifoForWriteAsync and
-// closes the file it produced. Callers that abandon the wait must use it:
-// deleting the FIFO does not unblock an open(2) that is already waiting for a
-// reader, so the goroutine (and its file descriptor) would otherwise leak for
-// the lifetime of the process. Opening the read end here lets the pending open
-// complete; it is non-blocking and needs no writer.
+// releaseFifoOpen 解除 openFifoForWriteAsync 发起的写打开阻塞，并关闭它产生的
+// 文件。放弃等待的调用方必须使用它：删除 FIFO 并不能解除一个已在等待读取方的
+// open(2)，否则该 goroutine（连同它的文件描述符）会在进程的整个生命周期内泄漏。
+// 此处打开读端可以让挂起的 open 完成；它是非阻塞的，不需要写入方。
 func releaseFifoOpen(fifoPath string, ch <-chan fifoOpenResult) {
 	rd, err := os.OpenFile(fifoPath, os.O_RDONLY|unix.O_NONBLOCK, 0)
 	if err != nil {
@@ -58,25 +55,22 @@ func releaseFifoOpen(fifoPath string, ch <-chan fifoOpenResult) {
 	_ = rd.Close()
 }
 
-// runTunHelper is the entry point for the long-running elevated TUN helper.
-// It fetches configuration from the main process via GET /tun, opens the TUN
-// device, sets up routing and DNS, sends the file descriptor back via a Unix
-// domain socket, then blocks reading stdin. When stdin returns EOF (main
-// process closed the FIFO or crashed), it cleans up and exits.
+// runTunHelper 是长期运行的特权 TUN 辅助进程的入口。它通过 GET /tun 从主进程
+// 获取配置，打开 TUN 设备，设置路由和 DNS，通过 Unix 域套接字把文件描述符传回，
+// 然后阻塞读取 stdin。当 stdin 返回 EOF（主进程关闭了 FIFO 或已崩溃）时，
+// 它执行清理并退出。
 func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	if httpAddr == "" || fdSocketPath == "" {
 		fmt.Fprintf(os.Stderr, "[TUN-HELPER] missing required flags\n")
 		return 1
 	}
 
-	// The parent blocks in ReceiveFd until a helper connects to the fd socket,
-	// so a helper that gives up before it can send a fd has to knock on that
-	// socket itself: left alone, the parent would sit out its whole accept
-	// deadline and report a timeout 30s later instead of the failure that just
-	// happened. The reason travels on that same connection, so the tray can
-	// show it instead of sending the user to the log file. Deferred, so every
-	// early return below is covered, including the ones added later; a helper
-	// that sent its fd stays silent.
+	// 父进程阻塞在 ReceiveFd 中等待辅助进程连接 fd 套接字，因此一个在能发送 fd
+	// 之前就放弃的辅助进程必须自己去敲这个套接字：放任不管的话，父进程会一直等到
+	// 整个 accept 超时，30 秒后才报告超时，而不是刚刚发生的失败。失败原因随同这条
+	// 连接一并传递，托盘可以直接展示它，而不必把用户引向日志文件。使用 defer 保证
+	// 下面的每个提前返回都被覆盖，包括以后新增的返回路径；已发送 fd 的辅助进程
+	// 则保持沉默。
 	var (
 		fdSent  bool
 		failure error
@@ -87,28 +81,27 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 		}
 	}()
 
-	// giveUp records why the helper is exiting, logs it and returns the exit
-	// code. The recorded reason is what notifyStartFailure hands to the parent.
+	// giveUp 记录辅助进程退出的原因，写入日志并返回退出码。记录的失败原因正是
+	// notifyStartFailure 交给父进程的内容。
 	giveUp := func(step string, err error) int {
 		failure = fmt.Errorf("%s: %w", step, err)
 		log.Error("[TUN-HELPER] "+step, "err", err)
 		return 1
 	}
 
-	// 1. Initialize logger as early as possible so all errors are visible
-	//    in the log file (not lost to /dev/null via stderr).
+	// 1. 尽早初始化日志器，使所有错误都出现在日志文件中（不会经由 stderr 丢失到
+	//    /dev/null）。
 	log.Init(logFilePath, logLevel)
 
-	// 2. Fetch TUN configuration from the main process via HTTP.
+	// 2. 通过 HTTP 从主进程获取 TUN 配置。
 	cfg, err := fetchTunConfig(httpAddr)
 	if err != nil {
 		return giveUp("fetch tun config", err)
 	}
 	log.Info("[TUN-HELPER] config received", "device", cfg.Device)
 
-	// 3. Acquire an exclusive file lock to ensure only one helper runs at a
-	//    time. If a previous helper is still cleaning up, we block until it
-	//    exits and the kernel releases the lock (works even with kill -9).
+	// 3. 获取独占文件锁，确保同一时刻只有一个辅助进程在运行。如果前一个辅助进程
+	//    仍在清理中，我们会阻塞等待它退出、内核释放锁（即使 kill -9 也有效）。
 	lockFile, err := os.OpenFile("/tmp/easyss-tun.lock", os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return giveUp("open lock file", err)
@@ -120,21 +113,21 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	log.Info("[TUN-HELPER] lock acquired")
 	defer lockFile.Close() //nolint:errcheck
 
-	// 4. Save the original system DNS before changing it.
+	// 4. 在修改系统 DNS 之前保存原始配置。
 	originDNS, err := util.SysDNS()
 	if err != nil {
 		log.Warn("[TUN-HELPER] read original dns", "err", err)
 	}
 	log.Info("[TUN-HELPER] original dns saved", "dns", originDNS)
 
-	// 5. Open the TUN device.
+	// 5. 打开 TUN 设备。
 	tunFd, actualDevice, err := openTunDevice(cfg.Device)
 	if err != nil {
 		return giveUp("open tun device", err)
 	}
 	log.Info("[TUN-HELPER] device created", "requested", cfg.Device, "actual", actualDevice)
 
-	// Defer cleanup: on exit, remove routes and restore DNS.
+	// 延迟清理：退出时移除路由并恢复 DNS。
 	defer func() {
 		log.Info("[TUN-HELPER] cleaning up routes and DNS")
 		_ = runCloseScript(actualDevice, cfg.TunGW, cfg.LocalGateway,
@@ -144,16 +137,16 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 		log.Info("[TUN-HELPER] cleanup done")
 	}()
 
-	// Give the kernel a brief moment to initialize the interface.
+	// 给内核一点时间初始化接口。
 	log.Info("[TUN-HELPER] waiting for kernel interface init")
 	time.Sleep(200 * time.Millisecond)
 
-	// 6. Clean up any stale routes from a previous TUN session.
+	// 6. 清理上次 TUN 会话遗留的过期路由。
 	log.Info("[TUN-HELPER] cleaning stale routes")
 	_ = runCloseScript(actualDevice, cfg.TunGW, cfg.LocalGateway,
 		cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6)
 
-	// 7. Run the create script (ifconfig/ip + route add).
+	// 7. 运行 create 脚本（ifconfig/ip + route add）。
 	log.Info("[TUN-HELPER] creating routes and configuring interface")
 	if err := runCreateScript(actualDevice, cfg.TunIP, cfg.TunGW, cfg.LocalGateway,
 		cfg.TunIPV6Sub, cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6); err != nil {
@@ -162,7 +155,7 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	}
 	log.Info("[TUN-HELPER] routes and interface configured")
 
-	// 8. Set system DNS.
+	// 8. 设置系统 DNS。
 	if cfg.DNSAddr != "" {
 		log.Info("[TUN-HELPER] setting system dns", "dns", cfg.DNSAddr)
 		if err := util.SetSysDNSForTun(actualDevice, []string{cfg.DNSAddr}); err != nil {
@@ -170,7 +163,7 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 		}
 	}
 
-	// 9. Send the TUN fd to the main process via Unix domain socket.
+	// 9. 通过 Unix 域套接字把 TUN fd 发送给主进程。
 	log.Info("[TUN-HELPER] sending tun fd to parent", "socket", fdSocketPath)
 	if err := sendFdToParent(fdSocketPath, tunFd); err != nil {
 		_ = unix.Close(tunFd)
@@ -178,22 +171,19 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	}
 	fdSent = true
 
-	// 10. Close the fd (it has been sent to the parent).
+	// 10. 关闭 fd（它已经发送给父进程）。
 	_ = unix.Close(tunFd)
 	log.Info("[TUN-HELPER] fd sent and closed")
 
 	log.Info("[TUN-HELPER] ready, waiting for shutdown signal on stdin")
 
-	// 11. Block reading stdin until EOF. The main process closes the FIFO
-	//     write end to signal shutdown, or the kernel closes it if the main
-	//     process crashes (even on kill -9).
+	// 11. 阻塞读取 stdin 直到 EOF。主进程关闭 FIFO 写端来发出关闭信号；若主进程
+	//     崩溃（即使是被 kill -9），内核也会关闭它。
 	//
-	//     While waiting, periodically verify the TUN routes are still in
-	//     place: macOS may clear non-persistent routes after sleep/wake or
-	//     network changes, which silently disables TUN mode (traffic stops
-	//     entering the device). The old tun-only daemon re-added routes
-	//     every 10s to survive sleep/wake (ba6c894); the ephemeral helper
-	//     keeps that behavior for the TUN routes themselves.
+	//     等待期间定期校验 TUN 路由是否仍然存在：macOS 在睡眠/唤醒或网络变更后
+	//     可能清除非持久路由，从而静默禁用 TUN 模式（流量不再进入设备）。旧的
+	//     纯 TUN 守护进程每 10 秒重新添加路由以应对睡眠/唤醒（ba6c894）；
+	//     这个临时辅助进程对 TUN 路由本身保持了同样的行为。
 	stdinDone := make(chan struct{})
 	go func() {
 		_, _ = io.ReadAll(os.Stdin)
@@ -211,9 +201,8 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 			if err := ensureTunRoutes(actualDevice, cfg); err != nil {
 				log.Warn("[TUN-HELPER] route keep-alive check failed", "device", actualDevice, "err", err)
 			}
-			// NetworkManager rewrites the link DNS settings when the connection
-			// changes and can hand the DNS default route back to the physical
-			// link, which lets resolution bypass the tunnel again.
+			// NetworkManager 在连接变更时会重写链路 DNS 设置，可能把 DNS 默认路由
+			// 交还给物理链路，使域名解析再次绕过隧道。
 			if cfg.DNSAddr != "" {
 				if err := util.EnsureSysDNSForTun(actualDevice, []string{cfg.DNSAddr}); err != nil {
 					log.Warn("[TUN-HELPER] dns keep-alive check failed", "device", actualDevice, "err", err)
@@ -223,22 +212,18 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	}
 }
 
-// tunRouteProbes are destinations that must be covered by the TUN routes,
-// used to verify the routes are still present after sleep/wake or network
-// changes. The darwin/linux/Windows create scripts route 1.0.0.0/8 (and
-// everything up to 128.0.0.0/1) through the TUN device, so 1.1.1.1 — a real,
-// widely used DNS/HTTPS destination — has to resolve to it. If these probes
-// and the scripts ever drift apart, the keep-alive would report a failure
-// forever, so tun_helper_linux_test.go asserts that every probe falls inside
-// a route block defined by the create scripts.
+// tunRouteProbes 是必须被 TUN 路由覆盖的目标，用于校验睡眠/唤醒或网络变更后
+// 路由是否仍然存在。darwin/linux/Windows 的 create 脚本把 1.0.0.0/8（以及直到
+// 128.0.0.0/1 的全部网段）路由进 TUN 设备，因此 1.1.1.1——一个真实且广泛使用的
+// DNS/HTTPS 目标——必须解析到它。如果这些探测地址与脚本发生漂移，keep-alive
+// 会永远报告失败，因此 tun_helper_linux_test.go 断言每个探测地址都落在 create
+// 脚本定义的路由块内。
 var tunRouteProbes = []string{"1.1.1.1"}
 
-// probeRoutedViaDevice looks every address in probe up with cmd and reports
-// whether any of them resolves through the TUN device: a covered address
-// resolves to the TUN device while TUN routes are in place, never to the
-// physical default route, so the lookup output must contain marker (the
-// device name). The last lookup's output and error are returned so the caller
-// can log why the check failed.
+// probeRoutedViaDevice 用 cmd 查询 probe 中的每个地址，并报告其中是否有任何一个
+// 经由 TUN 设备解析：TUN 路由就位时，被覆盖的地址会解析到 TUN 设备而绝不会
+// 走物理默认路由，因此查询输出必须包含 marker（设备名）。返回最后一次查询的
+// 输出和错误，调用方可以据此记录检查失败的原因。
 func probeRoutedViaDevice(probe []string, cmd func(string) (string, error), marker string) (string, error) {
 	var (
 		out      string
@@ -258,9 +243,8 @@ func probeRoutedViaDevice(probe []string, cmd func(string) (string, error), mark
 	return out, err
 }
 
-// fetchTunConfig retrieves the TUN configuration from the main process via
-// GET /tun. It retries with backoff for up to 10 seconds in case the HTTP
-// server is not ready yet.
+// fetchTunConfig 通过 GET /tun 从主进程获取 TUN 配置。它会带退避重试最长约
+// 10 秒，以防 HTTP 服务器尚未就绪。
 func fetchTunConfig(httpAddr string) (*proxy.TunConfig, error) {
 	url := fmt.Sprintf("http://%s/tun", httpAddr)
 
@@ -275,9 +259,8 @@ func fetchTunConfig(httpAddr string) (*proxy.TunConfig, error) {
 			lastErr = err
 			continue
 		}
-		// Close the body on every iteration: the retry loop can run up to ten
-		// times, so a deferred close would keep every earlier response open
-		// until the function returns.
+		// 每次迭代都关闭 body：重试循环最多运行十次，若用 defer 关闭，之前每次
+		// 响应的 body 都会一直打开到函数返回。
 		if resp.StatusCode == http.StatusServiceUnavailable {
 			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("tun not configured yet (503)")
@@ -301,21 +284,18 @@ func fetchTunConfig(httpAddr string) (*proxy.TunConfig, error) {
 		return &cfg, nil
 	}
 
-	// The retrying is what this error adds: the caller names the step.
+	// 这个错误额外说明的是重试本身：调用方负责命名失败步骤。
 	return nil, fmt.Errorf("after retries: %w", lastErr)
 }
 
-// maxHelperFailureReason caps the failure text the helper hands to the parent:
-// it ends up in a desktop notification, and a platform script can fail with
-// pages of quoted command output.
+// maxHelperFailureReason 限制辅助进程交给父进程的失败文本长度：它会出现在桌面
+// 通知中，而平台脚本失败时可能产生大段引用的命令输出。
 const maxHelperFailureReason = 512
 
-// notifyStartFailure tells the parent, which is waiting in ReceiveFd, that this
-// helper is giving up before it could send a fd, and why. Connecting to the
-// socket is the signal — the parent accepts the connection and finds no fd in
-// it — and the reason travels as the payload of that same connection, so the
-// tray can name the failed step instead of pointing at the log file. Best
-// effort: when the parent is gone there is nobody left to tell.
+// notifyStartFailure 告诉正在 ReceiveFd 中等待的父进程：本辅助进程在能发送 fd
+// 之前就放弃了，以及放弃的原因。连接套接字本身就是信号——父进程接受连接后发现
+// 其中没有 fd——原因则作为这条连接的载荷一并传递，这样托盘可以直接说出失败的
+// 步骤，而不必指向日志文件。这是尽力而为的操作：父进程已不存在时就无人可告知了。
 func notifyStartFailure(socketPath string, reason error) {
 	if socketPath == "" {
 		return
@@ -331,11 +311,9 @@ func notifyStartFailure(socketPath string, reason error) {
 	}
 }
 
-// failurePayload renders reason as the single line the parent shows: a desktop
-// notification does not render the newlines a failed platform script produces,
-// and one message is all this socket carries. Text over the cap keeps both ends
-// — the failing step at the front, the script's "failed near:" summary at the
-// back — and drops the repeated output in the middle.
+// failurePayload 把 reason 渲染成父进程展示的单行文本：桌面通知无法渲染平台脚本
+// 失败时产生的换行，而这个套接字只承载一条消息。超过上限的文本保留两端——开头是
+// 失败的步骤，结尾是脚本的 "failed near:" 摘要——并丢弃中间重复的输出。
 func failurePayload(reason error) []byte {
 	if reason == nil {
 		return nil
@@ -349,16 +327,13 @@ func failurePayload(reason error) []byte {
 	return []byte(msg)
 }
 
-// execScriptWithOutput runs a platform script and returns the script's own
-// output with the error. util.Command packs the whole command line and a
-// Go-quoted copy of that output into its error, which is fine for a log line
-// but not for what the parent shows the user: the unix create scripts name the
-// step that failed in their output, and that text has to survive (see
-// failurePayload).
+// execScriptWithOutput 运行平台脚本，并连同错误一起返回脚本自身的输出。
+// util.Command 会把整条命令行和该输出的 Go 引号转义副本打包进错误里，这对日志行
+// 没问题，但不适合父进程展示给用户的内容：unix create 脚本会在输出中指明失败的
+// 步骤，这段文本必须保留下来（参见 failurePayload）。
 //
-// The error carries no action of its own ("run create script", say): its caller
-// already names the step it was running through giveUp, and repeating it only
-// makes the notification longer.
+// 错误本身不带动作名（例如 "run create script"）：其调用方已经通过 giveUp 命名了
+// 正在运行的步骤，重复只会让通知更长。
 func execScriptWithOutput(shell, scriptPath string, args ...string) error {
 	out, err := exec.Command(shell, append([]string{scriptPath}, args...)...).CombinedOutput()
 	if err != nil {
@@ -367,8 +342,8 @@ func execScriptWithOutput(shell, scriptPath string, args ...string) error {
 	return nil
 }
 
-// sendFdToParent connects to the Unix socket at socketPath and sends the TUN
-// file descriptor via SCM_RIGHTS.
+// sendFdToParent 连接到 socketPath 处的 Unix 套接字，并通过 SCM_RIGHTS 发送
+// TUN 文件描述符。
 func sendFdToParent(socketPath string, tunFd int) error {
 	conn, err := net.DialTimeout("unix", socketPath, 10*time.Second)
 	if err != nil {
@@ -406,9 +381,8 @@ func sendFdToParent(socketPath string, tunFd int) error {
 	return nil
 }
 
-// fifoWriter wraps the FIFO write end and removes the FIFO file when closed,
-// so stale files never accumulate on retry or toggle-off. The FIFO is used
-// for lifecycle signalling: closing the writer (EOF) tells the helper to exit.
+// fifoWriter 包装 FIFO 写端，并在关闭时删除 FIFO 文件，这样重试或关闭 TUN 时
+// 不会积累残留文件。FIFO 用于生命周期信号：关闭写端（EOF）即通知辅助进程退出。
 type fifoWriter struct {
 	*os.File
 	path string
@@ -420,10 +394,9 @@ func (w *fifoWriter) Close() error {
 	return err
 }
 
-// ReceiveFd accepts a single connection on the Unix domain socket listener and
-// receives a file descriptor via SCM_RIGHTS. The fd is passed purely as
-// ancillary data; the only payload this socket carries is the failure reason of
-// a helper that gave up before it had one to send (see notifyStartFailure).
+// ReceiveFd 在 Unix 域套接字监听器上接受单个连接，并通过 SCM_RIGHTS 接收文件
+// 描述符。fd 纯粹作为辅助数据传递；这个套接字唯一承载的载荷，是一个在拥有可发送
+// fd 之前就放弃的辅助进程的失败原因（参见 notifyStartFailure）。
 func ReceiveFd(listener net.Listener) (int, error) {
 	if err := setAcceptDeadline(listener, 30*time.Second); err != nil {
 		return -1, fmt.Errorf("set accept deadline: %w", err)
@@ -450,15 +423,15 @@ func ReceiveFd(listener net.Listener) (int, error) {
 		recvErr error
 	)
 	ctrlErr := rawConn.Control(func(fd uintptr) {
-		// Switch to blocking mode so Recvmsg waits for data.
+		// 切换到阻塞模式，让 Recvmsg 等待数据。
 		if err := unix.SetNonblock(int(fd), false); err != nil {
 			recvErr = fmt.Errorf("set blocking: %w", err)
 			return
 		}
 		defer unix.SetNonblock(int(fd), true) //nolint:errcheck
 
-		// The buffer holds the failure reason notifyStartFailure may send
-		// instead of a fd (see maxHelperFailureReason).
+		// 缓冲区容纳 notifyStartFailure 可能发送的、替代 fd 的失败原因
+		// （参见 maxHelperFailureReason）。
 		buf := make([]byte, maxHelperFailureReason)
 		oob := make([]byte, unix.CmsgSpace(4))
 		n, oobn, _, _, err := unix.Recvmsg(int(fd), buf, oob, 0)
@@ -473,8 +446,8 @@ func ReceiveFd(listener net.Listener) (int, error) {
 			return
 		}
 		if len(scms) == 0 {
-			// A helper that gave up connects without a fd to report exactly
-			// that, and writes why: the reason is what the tray has to show.
+			// 放弃的辅助进程不带 fd 连接，正是为了报告这一点，并写入原因：
+			// 这个原因就是托盘必须展示的内容。
 			if reason := strings.TrimSpace(string(buf[:n])); reason != "" {
 				recvErr = fmt.Errorf("the tun helper exited: %s", reason)
 				return
@@ -493,10 +466,9 @@ func ReceiveFd(listener net.Listener) (int, error) {
 			return
 		}
 
-		// Keep the TUN fd out of any child process: the client execs pkexec
-		// (which execs the next helper) while it may still hold this fd, and
-		// an inherited copy keeps the interface attached, so the helper's
-		// cleanup and the next start fail with "device or resource busy".
+		// 让 TUN fd 不进入任何子进程：客户端在可能仍持有该 fd 时会 exec pkexec
+		// （它会再 exec 下一个辅助进程），继承的副本会让接口保持挂接状态，导致
+		// 辅助进程的清理和下一次启动以 "device or resource busy" 失败。
 		unix.CloseOnExec(fds[0])
 
 		result = fds[0]
@@ -511,7 +483,7 @@ func ReceiveFd(listener net.Listener) (int, error) {
 	return result, nil
 }
 
-// setAcceptDeadline sets the accept deadline on a Unix listener.
+// setAcceptDeadline 设置 Unix 监听器的 accept 截止时间。
 func setAcceptDeadline(listener net.Listener, d time.Duration) error {
 	unixListener, ok := listener.(*net.UnixListener)
 	if !ok {

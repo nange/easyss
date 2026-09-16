@@ -11,15 +11,14 @@ import (
 	"github.com/wzshiming/sysproxy"
 )
 
-// setSysProxy points the system at the local http proxy through both available
-// mechanisms: the desktop proxy settings (gsettings on GNOME, kioslaverc on KDE,
-// the registry on Windows, networksetup on macOS) and -- on Linux -- the session
-// environment. The latter is what programs that do not read the desktop settings
-// use; Chromium, for example, ignores gsettings on every desktop environment it
-// does not recognise, which includes Hyprland.
+// setSysProxy 通过两种可用机制把系统指向本地 HTTP 代理：
+// 桌面代理设置（GNOME 的 gsettings、KDE 的 kioslaverc、
+// Windows 的注册表、macOS 的 networksetup）以及 —— Linux 上 —— 会话环境。
+// 后者供不读取桌面设置的程序使用；例如 Chromium 会在所有它无法识别的
+// 桌面环境（包括 Hyprland）上忽略 gsettings。
 //
-// The returned error is nil as soon as one of the two mechanisms took effect,
-// so that a caller can rely on unsetSysProxy undoing it again.
+// 只要两种机制之一生效，返回的 error 即为 nil，
+// 因此调用方可以依赖 unsetSysProxy 再次撤销它。
 func setSysProxy(port int) error {
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 
@@ -64,8 +63,8 @@ func unsetSysProxy() error {
 	return nil
 }
 
-// wrapProxyErr labels an error without turning a nil error into a non-nil one,
-// so that errors.Join keeps reporting success when every step succeeded.
+// wrapProxyErr 给错误加上标签，但不会把 nil 错误变成非 nil，
+// 这样当每一步都成功时 errors.Join 仍会报告成功。
 func wrapProxyErr(msg string, err error) error {
 	if err == nil {
 		return nil

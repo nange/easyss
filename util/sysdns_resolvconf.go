@@ -4,8 +4,8 @@ package util
 
 import "github.com/miekg/dns"
 
-// sysDNSServersFromResolvConf parses the dns servers from a resolv.conf file,
-// the path is parameterized for testing.
+// sysDNSServersFromResolvConf 从 resolv.conf 文件中解析 DNS 服务器，
+// 路径参数化以便测试。
 func sysDNSServersFromResolvConf(path string) ([]string, error) {
 	cfg, err := dns.ClientConfigFromFile(path)
 	if err != nil {

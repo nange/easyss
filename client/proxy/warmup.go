@@ -8,20 +8,15 @@ import (
 	"github.com/nange/easyss/v3/log"
 )
 
-// WarmUp primes the transport's connection pools right after the core
-// started, so the first real request of each traffic class does not pay the
-// cold-start cost (dial + TLS + HTTP/2). It primes the pools with real probe
-// requests to the server's /v3/probe endpoint — the same request the
-// degradation detector issues, visible only to the user's own server.
+// WarmUp 在核心启动后立即预热传输层的连接池，使每种流量类别的第一个真实请求
+// 不必付出冷启动代价（拨号 + TLS + HTTP/2）。它用对服务器 /v3/probe 端点的真实
+// 探测请求来预热连接池——与降级检测器发出的请求相同，只对用户自己的服务器可见。
 //
-// The caller runs this in the background (dispatched by runner.Run), so there
-// is no jitter and no startup blocking here: timeout bounds the probe phase
-// and callers pass config.WarmUpTimeout. Best-effort by contract: the failure
-// is logged here and returned so the caller can decide what to do with it,
-// but startup must never depend on warm-up. A nil error can equally mean the
-// warm-up was skipped (no proxy server, or it is closing), and a non-nil
-// error does not mean the warm-up was useless: the connection may be
-// established while the probe that confirms it did not answer in time.
+// 调用方在后台运行它（由 runner.Run 派发），因此这里没有抖动、也不会阻塞启动：
+// timeout 约束探测阶段，调用方传入 config.WarmUpTimeout。按约定为尽力而为：失败
+// 会在此记录日志并返回，由调用方决定如何处理，但启动绝不能依赖预热。返回 nil
+// 同样可能意味着预热被跳过（没有代理服务器，或正在关闭）；返回非 nil 也不意味着
+// 预热毫无用处：连接可能已建立，只是用于确认它的探测没有及时应答。
 func (s *Socks5Server) WarmUp(timeout time.Duration) error {
 	if s == nil || s.closing.Load() {
 		return nil

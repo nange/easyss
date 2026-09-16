@@ -12,9 +12,8 @@ import (
 )
 
 func runApp(disableTray, daemon bool, app *App) {
-	// On macOS and Linux, daemonize before acquiring the singleton lock so that
-	// closing the terminal does not terminate the process. The lock must be
-	// acquired by the child process, not the parent.
+	// 在 macOS 和 Linux 上，先守护化（daemonize）再获取单例锁，
+	// 这样关闭终端不会终止进程。锁必须由子进程获取，而不是父进程。
 	if daemon && runtime.GOOS != "windows" {
 		runDaemon()
 	}
@@ -36,8 +35,8 @@ func runApp(disableTray, daemon bool, app *App) {
 			select {
 			case sig := <-c:
 				log.Info("[EASYSS-V3] got signal to exit", "signal", sig)
-				// Wait for buildTray() to finish so the tray is non-nil and
-				// Remove() can terminate the message loop.
+				// 等待 buildTray() 完成，这样托盘非 nil，
+				// Remove() 才能终止消息循环。
 				<-ta.trayBuilt
 				ta.tray.Remove()
 			case <-ta.closing:

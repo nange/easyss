@@ -11,9 +11,9 @@ import (
 	"github.com/nange/easyss/v3/shaper"
 )
 
-// ProxyHandler owns the three per-protocol session handlers but no next-proxy
-// state of its own: each handler holds the proxy it routes through, so routing
-// has a single owner and cannot drift between them.
+// ProxyHandler 持有三个按协议划分的会话 handler，但自身不保存任何
+// next-proxy 状态：每个 handler 各自持有其路由所用的代理，因此路由只有一个
+// 所有者，不会在它们之间漂移不一致。
 type ProxyHandler struct {
 	masterKey        []byte
 	allowedMethods   map[protocol.Method]bool
@@ -29,16 +29,15 @@ type ProxyHandler struct {
 type ProxyHandlerConfig struct {
 	MasterKey      []byte
 	AllowedMethods []string
-	// Timeouts carries every derived duration (see config.NewTimeouts), and
-	// Shaper the shaper settings (normalized here). Both are built by the
-	// caller from the server config, so this struct no longer re-derives or
-	// re-clamps anything.
+	// Timeouts 保存全部已派生的时长（见 config.NewTimeouts），
+	// Shaper 保存 shaper 设置（在此处归一化）。两者都由调用方根据服务器配置
+	// 构建，因此本结构体不再重新派生或重新钳制任何值。
 	Timeouts  sharedconfig.Timeouts
 	Shaper    shaper.Config
 	NextProxy *nextproxy.NextProxy
-	// HandshakeTimeout overrides the bootstrap-record wait. 0 uses
-	// Timeouts.Base, which is what the server passes; tests shrink it without
-	// touching the derived idle timeouts.
+	// HandshakeTimeout 覆盖等待 bootstrap 记录的超时。0 表示使用
+	// Timeouts.Base，这正是服务器传入的值；测试可以缩小它而不影响
+	// 派生的空闲超时。
 	HandshakeTimeout time.Duration
 }
 
@@ -57,13 +56,11 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 
 	shaperCfg := cfg.Shaper.Normalize()
 
-	// Bound the bootstrap-record wait. A handshake request occupies two
-	// goroutines (the handler plus the first-record reader) for the whole
-	// wait, and any request with a well-formed x-es header — no password
-	// required — can hold them, so an over-generous timeout is a cheap DoS
-	// amplification channel. Legit clients write their bootstrap record
-	// immediately after opening the stream, so even high-RTT links finish
-	// far below this cap.
+	// 限制等待 bootstrap 记录的时间。整个等待期间一个握手请求会占用两个
+	// goroutine（handler 加首记录读取器），而任何带有格式正确的 x-es 头的
+	// 请求——无需密码——都能占用它们，因此过于宽松的超时是一个廉价的 DoS
+	// 放大通道。合法客户端在打开流之后立即写入 bootstrap 记录，
+	// 所以即使是高 RTT 链路也远低于此上限完成。
 	handshakeTimeout := cfg.HandshakeTimeout
 	if handshakeTimeout <= 0 {
 		handshakeTimeout = cfg.Timeouts.Base
@@ -88,8 +85,8 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 	}
 }
 
-// maxHandshakeTimeout caps how long the server waits for a stream's first
-// encrypted record before answering 408 (see NewProxyHandler).
+// maxHandshakeTimeout 限制服务器在应答 408 之前等待流的第一个加密记录的时长
+// （见 NewProxyHandler）。
 const maxHandshakeTimeout = 8 * time.Second
 
 func clientIP(r *http.Request) string {
@@ -100,11 +97,10 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-// remoteString returns a printable remote endpoint for logging. It is nil safe
-// on purpose: a dialed connection may report an unset (nil) RemoteAddr, and a
-// bare RemoteAddr().String() would panic. The next-proxy path does not use it
-// (a SOCKS5 connection reports the proxy's address, so dialTarget logs the
-// configured proxy instead).
+// remoteString 返回用于日志的可打印远端端点。它特意对 nil 安全：拨号得到的
+// 连接可能报告未设置（nil）的 RemoteAddr，直接调用 RemoteAddr().String()
+// 会 panic。next-proxy 路径不使用它（SOCKS5 连接报告的是代理的地址，
+// 因此 dialTarget 改为记录配置的代理）。
 func remoteString(conn net.Conn) string {
 	if conn == nil {
 		return ""

@@ -335,10 +335,9 @@ func (s *Server) Start() error {
 	return s.httpServer.ListenAndServeTLS("", "")
 }
 
-// buildHTTPServer assembles the HTTP server with HTTP/2 flow-control windows
-// sized for upload throughput: the per-stream receive window bounds a single
-// upload stream's in-flight data (throughput ≈ window/RTT), so both windows
-// must be generous enough for high-RTT links.
+// buildHTTPServer 组装 HTTP 服务器，其 HTTP/2 流控窗口按上传吞吐量来定尺寸：
+// 每流接收窗口限制了单个上传流的在途数据量（吞吐 ≈ 窗口/RTT），因此两个窗口
+// 都必须足够大，以适配高 RTT 链路。
 func buildHTTPServer(cfg *config.FileConfig, tlsConfig *tls.Config, mux *http.ServeMux, timeout time.Duration) *http.Server {
 	http2Cfg := &http.HTTP2Config{
 		MaxReadFrameSize:              sharedconfig.HTTP2ServerMaxReadFrameSize,
@@ -373,7 +372,7 @@ func buildHTTPServer(cfg *config.FileConfig, tlsConfig *tls.Config, mux *http.Se
 func (s *Server) Shutdown(ctx context.Context) error {
 	log.Info("[SERVER] shutting down")
 
-	// Stop the stats loop goroutine so it doesn't leak past shutdown.
+	// 停止 stats 循环 goroutine，使其不会在关闭后泄漏。
 	s.statsOnce.Do(func() {
 		if s.statsDone != nil {
 			close(s.statsDone)
@@ -390,10 +389,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// stdErrorLog routes Go's internal http.Server/HTTP2 logs (connection-level
-// errors, PING timeouts, protocol errors, TLS handshake errors, etc.) through
-// easyss's slog logger. Handler panics are handled separately by the recover
-// in ProxyHandler.ServeHTTP.
+// stdErrorLog 将 Go 内部 http.Server/HTTP2 的日志（连接级错误、PING 超时、
+// 协议错误、TLS 握手错误等）转接到 easyss 的 slog 日志器。handler 的 panic
+// 由 ProxyHandler.ServeHTTP 中的 recover 单独处理。
 func stdErrorLog() *stdlog.Logger {
 	return stdlog.New(slogErrorWriter{}, "", 0)
 }

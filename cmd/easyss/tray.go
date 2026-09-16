@@ -36,7 +36,7 @@ type TrayApp struct {
 
 	tray      *systray.SystemTray
 	rootMenu  *systray.Menu
-	trayBuilt chan struct{} // closed after buildTray() completes
+	trayBuilt chan struct{} // buildTray() 完成后关闭
 
 	serverMenuItems []*systray.MenuItem
 	serverAddrs     []string
@@ -44,55 +44,51 @@ type TrayApp struct {
 	logLevelItems   map[string]*systray.MenuItem
 	autoStartItem   *systray.MenuItem
 
-	// Self-update state (see tray_update.go).
+	// 自更新状态（见 tray_update.go）。
 	updateItem    *systray.MenuItem
 	updateState   atomic.Int32
 	pendingUpdate *selfupdate.Release
 	updateMu      sync.Mutex
-	// lastNotifiedTag is the tag whose "new version" system notification has
-	// already been shown. The periodic check refreshes the badge/menu item for
-	// the same release but must not pop the notification again every time
-	// (see shouldNotify). Guarded by updateMu.
+	// lastNotifiedTag 是已展示过"新版本"系统通知的 tag。
+	// 周期性检查会为同一 release 刷新徽标/菜单项，但不得每次都再次弹出通知
+	//（见 shouldNotify）。由 updateMu 保护。
 	lastNotifiedTag string
-	// checkLatest queries the latest published release. It is a field so
-	// tests can exercise the periodic check loop without network access;
-	// buildTray wires it to selfupdate.CheckLatest.
+	// checkLatest 查询最新发布的 release。它作为字段是为了让测试
+	// 可以在无网络访问的情况下运行周期性检查循环；buildTray 将它接入
+	// selfupdate.CheckLatest。
 	checkLatest func(context.Context, *selfupdate.Client) (*selfupdate.Release, error)
-	// updateCheckEvery is the wait between two periodic update checks
-	// (updateCheckInterval plus jitter). Tests shorten it to keep the
-	// recurring-check behavior observable; it is only written before the
-	// check loop starts.
+	// updateCheckEvery 是两次周期性更新检查之间的等待时间
+	//（updateCheckInterval 加上抖动）。测试会缩短它以观察循环检查行为；
+	// 它只在检查循环启动前写入。
 	updateCheckEvery time.Duration
-	// updateUIMu serializes the tray UI mutations of the update flow (menu
-	// item label, icon badge, tooltip). The systray package protects menu
-	// items internally but not the icon/tooltip fields, so all update-driven
-	// tray writes go through this mutex.
+	// updateUIMu 串行化更新流程中的托盘 UI 变更（菜单项标签、图标徽标、tooltip）。
+	// systray 包在内部保护菜单项，但不保护图标/tooltip 字段，
+	// 因此所有由更新驱动的托盘写入都经过这个互斥锁。
 	updateUIMu sync.Mutex
 
-	// UWP loopback exemption menu (Windows only).
+	// UWP 回环豁免菜单（仅 Windows）。
 	uwpMu           sync.Mutex        //nolint:unused // used in uwp_windows.go
 	uwpMenu         *systray.Menu     //nolint:unused // used in uwp_windows.go
 	uwpItems        []*UWPMenuItem    //nolint:unused // used in uwp_windows.go
 	uwpOverflowHint *systray.MenuItem //nolint:unused // used in uwp_windows.go
 
-	// TUN helper management (darwin non-root).
-	tunHelperStdin io.WriteCloser // FIFO writer; close to signal helper shutdown
+	// TUN 助手进程管理（darwin 非 root）。
+	tunHelperStdin io.WriteCloser // FIFO 写入端；关闭以通知助手进程退出
 	tunHelperMu    sync.Mutex
 }
 
-// startupErrorNotifyDelay keeps the process alive after a startup-failure
-// notification so the OS can display it before the client exits (Windows
-// balloon tips vanish when the owning process exits).
+// startupErrorNotifyDelay 在启动失败通知后让进程存活一段时间，
+// 以便操作系统在客户端退出前显示通知（Windows 气球提示在所属进程退出时消失）。
 const startupErrorNotifyDelay = 5 * time.Second
 
-// UWPApp represents an installed Windows UWP application.
+// UWPApp 表示一个已安装的 Windows UWP 应用。
 type UWPApp struct {
 	Name              string `json:"Name"`
 	PackageFamilyName string `json:"PackageFamilyName"`
 	Exempt            bool
 }
 
-// UWPMenuItem pairs a UWP app with its tray menu item.
+// UWPMenuItem 将 UWP 应用与其托盘菜单项配对。
 type UWPMenuItem struct {
 	MenuItem *systray.MenuItem
 	App      *UWPApp
@@ -128,46 +124,43 @@ func (a *TrayApp) buildTray() {
 
 	a.tray = systray.New()
 	if runtime.GOOS == "darwin" {
-		// macOS template image (monochrome, adapts to menu bar theme).
+		// macOS 模板图片（单色，随菜单栏主题自适应）。
 		a.tray.SetTemplateIcon(icon.TrayData)
 	} else {
-		// Windows/Linux: SetTemplateIcon is a no-op, use SetIcon.
+		// Windows/Linux：SetTemplateIcon 是空操作，使用 SetIcon。
 		a.tray.SetIcon(icon.TrayData)
 	}
 	a.tray.SetTooltip("Easyss")
 	a.tray.SetMenu(root)
 	a.tray.Show()
 
-	// A failed engine start has to revert the tray state as well, and the
-	// startup path starts the engine inside App.Start(), which has no access
-	// to the tray. Installed before that call, and the same TrayApp outlives
-	// every App.Start() (restartService only rebuilds the embedded App).
-	// The notifier is installed alongside the hook because the hook alone
-	// would revert the menu without saying why (see trayStartTunFailure).
+	// 引擎启动失败同样需要回滚托盘状态，而启动路径在 App.Start() 内启动引擎，
+	// 那里无法访问托盘。因此在调用之前安装，且同一个 TrayApp 比每次
+	// App.Start() 更长寿（restartService 只重建内嵌的 App）。
+	// notifier 与 hook 一起安装，因为仅靠 hook 会回滚菜单却不说明原因
+	//（见 trayStartTunFailure）。
 	tunStartFailureHook = a.revertTunStart
 	tunStartNotify = a.notifyTunStartFailure
-	// The user-facing wording of a TUN failure lives here, not in main.go,
-	// because the classification needs the tray-only friendly text. Assigning
-	// the function value directly keeps the tests able to call it by name.
+	// TUN 失败的面向用户措辞在这里定义，而不是在 main.go 中，
+	// 因为分类需要只有托盘才有的友好文案。直接赋值函数值
+	// 使测试可以按名称调用它。
 	tunStartErrorText = friendlyTunError
 
-	// Start service after menu is populated so that desktop environments
-	// (especially GNOME with AppIndicator) see a non-empty menu on first query.
+	// 在菜单填充完成后再启动服务，这样桌面环境
+	//（尤其是带 AppIndicator 的 GNOME）首次查询时能看到非空菜单。
 	if err := a.Start(); err != nil {
 		log.Error("[EASYSS-V3] tray start", "err", err)
 		a.tray.ShowNotification("Easyss", friendlyStartupError(err))
-		// Keep the tray (and its notification, e.g. Windows balloon tips
-		// bound to the icon) alive briefly so the user can read the reason,
-		// then exit with failure. Run() is deliberately not called here:
-		// macOS allows only one Run() per process, and the OS-level
-		// notification APIs work without the message loop.
+		// 让托盘（及其通知，例如绑定到图标的 Windows 气球提示）短暂存活，
+		// 以便用户能读到原因，然后以失败退出。这里刻意不调用 Run()：
+		// macOS 每个进程只允许一次 Run()，而且操作系统级通知 API
+		// 无需消息循环即可工作。
 		time.Sleep(startupErrorNotifyDelay)
 		os.Exit(1)
 	}
 
-	// A non-fatal startup warning (e.g. the server domain failed to resolve
-	// and TUN was skipped) is surfaced as a notification without blocking
-	// or exiting: the proxy core keeps running.
+	// 非致命启动警告（例如服务端域名解析失败且 TUN 被跳过）以通知形式呈现，
+	// 不阻塞也不退出：代理核心继续运行。
 	if a.startupWarn != nil {
 		a.tray.ShowNotification("Easyss", friendlyStartupWarning(a.startupWarn))
 	}
@@ -179,12 +172,11 @@ func (a *TrayApp) buildTray() {
 	go a.autoCheckUpdate()
 }
 
-// notifyConfigError surfaces a config load failure (e.g. invalid JSON)
-// via a system notification using a minimal transient tray, because the
-// real tray has not been built yet. It is best-effort: the systray public
-// API swallows tray/notification errors, and Run() is deliberately not
-// called so the process can never hang when no GUI session is available —
-// the caller still exits with a failure code after this returns.
+// notifyConfigError 使用最小化的临时托盘，通过系统通知呈现配置加载失败
+// （例如无效的 JSON），因为真正的托盘尚未构建。它尽力而为：
+// systray 公开 API 会吞掉托盘/通知错误，且刻意不调用 Run()，
+// 这样在没有 GUI 会话可用时进程绝不会挂起 ——
+// 调用方在该函数返回后仍会以失败码退出。
 func notifyConfigError(err error) {
 	tray := systray.New()
 	menu := systray.NewMenu()
@@ -196,8 +188,8 @@ func notifyConfigError(err error) {
 	tray.Show()
 	tray.ShowNotification("Easyss", friendlyConfigError(err))
 
-	// Keep the process alive briefly so the notification is displayed
-	// (Windows balloon tips vanish when the owning process exits).
+	// 让进程再存活一小会儿，确保通知能显示出来
+	// （Windows 气泡提示在属主进程退出时会消失）。
 	time.Sleep(startupErrorNotifyDelay)
 	tray.Remove()
 }
@@ -223,15 +215,15 @@ func friendlyStartupError(err error) string {
 		return "服务启动失败：本地端口可能被占用，请关闭占用该端口的程序后重试。详情：" + err.Error()
 	}
 	// 以下分类按稳定错误文本匹配（均为各自包内固定的字面量错误，
-	// 不随平台/环境变化）。匹配失败则落入通用提示。
+	// 不随平台/环境变化）。匹配失败则回退到通用提示。
 	if strings.Contains(err.Error(), "crypto: password is empty") {
 		return "配置错误：服务器密码为空，请在配置文件（或 -k 参数）中设置 password。详情：" + err.Error()
 	}
 	if strings.Contains(err.Error(), "http proxy requires socks_port to be enabled") {
 		return "配置错误：启用 HTTP 代理需要先启用 SOCKS5 代理（socks_port 需大于 0）。详情：" + err.Error()
 	}
-	// runner.resolveServerDomain: the server domain failed to resolve, so
-	// the proxy cannot reach the server and startup aborts.
+	// runner.resolveServerDomain：服务端域名解析失败，
+	// 代理无法连接到服务端，启动中止。
 	if strings.Contains(err.Error(), "resolution failed") {
 		return "服务启动失败：服务端域名解析失败，请检查网络或域名配置。详情：" + err.Error()
 	}
@@ -244,13 +236,13 @@ func friendlyStartupWarning(err error) string {
 	return "启动警告：" + err.Error()
 }
 
-// notifyTunStartFailure surfaces a TUN start failure as a system notification.
-// The proxy core keeps running over SOCKS5/HTTP — only system-wide traffic is
-// affected, which is precisely the state the user just asked for — so a failure
-// that only reached the log file would look like a silent no-op.
+// notifyTunStartFailure 以系统通知形式呈现 TUN 启动失败。
+// 代理核心仍通过 SOCKS5/HTTP 运行 —— 只有系统全局流量受影响，
+// 而这正是用户刚请求的状态 —— 所以只写入日志文件的失败
+// 看起来会像一次静默的无操作。
 //
-// An empty message means there is nothing to tell the user (see
-// friendlyTunError): the start was cancelled deliberately, not failed.
+// 空消息表示没有需要告知用户的内容（见 friendlyTunError）：
+// 启动是被有意取消的，而不是失败了。
 func (a *TrayApp) notifyTunStartFailure(msg string) {
 	if msg == "" {
 		return
@@ -315,8 +307,8 @@ func (a *TrayApp) trayExit() {
 	}
 	a.closeService()
 
-	// Ensure system proxy is cleared even if closeService encountered
-	// an error (e.g. osascript timeout during DNS restore).
+	// 即使 closeService 遇到错误（例如 DNS 恢复期间 osascript 超时），
+	// 也要确保清除系统代理。
 	_ = a.setSysProxyOff()
 
 	os.Exit(0)
@@ -485,13 +477,13 @@ func (a *TrayApp) toggleSysProxy() {
 			mi.SetChecked(false)
 			if err := a.setSysProxyOff(); err != nil {
 				log.Error("[SYSTRAY] set sys-proxy off", "err", err)
-				mi.SetChecked(true) // revert on failure
+				mi.SetChecked(true) // 失败时回滚
 			}
 		} else {
 			mi.SetChecked(true)
 			if err := a.setSysProxyOn(); err != nil {
 				log.Error("[SYSTRAY] set sys-proxy on", "err", err)
-				mi.SetChecked(false) // revert on failure
+				mi.SetChecked(false) // 失败时回滚
 			}
 		}
 	}()
@@ -560,9 +552,8 @@ func (a *TrayApp) changeLogLevel(level string) {
 	}
 }
 
-// catLogs opens the log file from the tray menu (see tray_log.go). Failures
-// used to be written to the log file only, which left the menu entry looking
-// dead, so every one of them is surfaced as a notification too.
+// catLogs 从托盘菜单打开日志文件（见 tray_log.go）。失败过去只写入日志文件，
+// 这让菜单项看起来像没有反应，因此现在每个失败也会以通知形式呈现。
 func (a *TrayApp) catLogs() {
 	fallback, err := openLogFile(a.cfg.Log.FilePath)
 	switch {
@@ -596,9 +587,8 @@ func (a *TrayApp) toggleAutoStart() {
 
 func (a *TrayApp) exitApp() {
 	go func() {
-		// Clear the system proxy synchronously — this is fast
-		// and does not require admin. Leave TUN cleanup for
-		// trayExit() to avoid blocking the menu on osascript.
+		// 同步清除系统代理 —— 这很快且不需要管理员权限。
+		// TUN 清理交给 trayExit() 处理，避免在 osascript 上阻塞菜单。
 		_ = a.setSysProxyOff()
 		a.tray.Remove()
 	}()
@@ -632,15 +622,13 @@ func (a *TrayApp) createTun2socks() error {
 	return nil
 }
 
-// revertTunStart undoes a TUN start that failed after the manager was built.
-// It is installed as tunStartFailureHook so that both the menu toggle and the
-// startup path land here.
+// revertTunStart 撤销一次在 manager 构建后失败的 TUN 启动。
+// 它被安装为 tunStartFailureHook，因此菜单开关和启动路径都会走到这里。
 //
-// Dropping the menu checkmark alone is not enough: closeTun2socks also clears
-// a.tunMgr, without which the next enable would hit the "already set" guard at
-// the top of createTun2socks and silently do nothing while the menu claims TUN
-// is on. On the fd path the helper has already installed the routes and DNS,
-// so it must be told to take them down as well.
+// 仅取消菜单勾选还不够：closeTun2socks 还会清空 a.tunMgr，
+// 否则下次启用会命中 createTun2socks 顶部的"已设置"保护，
+// 在菜单声称 TUN 已开启时静默地什么都不做。在 fd 路径上，
+// 助手进程已经安装了路由和 DNS，因此也必须告诉它拆除这些。
 func (a *TrayApp) revertTunStart() {
 	if mi := a.TunMenu(); mi != nil {
 		mi.SetChecked(false)
@@ -654,34 +642,30 @@ func (a *TrayApp) closeTun2socks() error {
 	a.tunHelperMu.Lock()
 	defer a.tunHelperMu.Unlock()
 
-	// 1. Stop the tun2socks engine first: it closes the TUN fd that the helper
-	//    passed to this process. The helper's close script deletes the
-	//    interface, and iproute2 cannot delete a device that is still attached
-	//    to a fd — it fails with "device or resource busy" and leaves the
-	//    interface behind, together with every TUN route (they are bound to
-	//    it). Traffic then keeps entering a device nothing reads from, which
-	//    looks like "the network is down" after TUN is stopped.
+	// 1. 先停止 tun2socks 引擎：它会关闭助手进程传给本进程的 TUN fd。
+	//    助手进程的关闭脚本会删除该接口，而 iproute2 无法删除仍附着在
+	//    fd 上的设备 —— 会报 "device or resource busy" 并把接口留下来，
+	//    连同所有 TUN 路由（它们都绑定在该接口上）。此后流量仍会进入
+	//    一个无人读取的设备，表现为 TUN 停止后"网络不可用"。
 	if a.tunMgr != nil {
 		log.Info("[SYSTRAY] closeTun2socks: stopping tun2socks engine")
 		a.tunMgr.Stop()
 		a.tunMgr = nil
 	}
 
-	// 2. Signal the helper to shut down by closing the FIFO.
-	//    The helper detects EOF on stdin, cleans up routes/DNS, and exits.
+	// 2. 通过关闭 FIFO 通知助手进程退出。
+	//    助手进程检测到 stdin 上的 EOF 后清理路由/DNS 并退出。
 	if a.tunHelperStdin != nil {
 		log.Info("[SYSTRAY] closeTun2socks: closing helper FIFO")
 		a.tunHelperStdin.Close() //nolint:errcheck
 		a.tunHelperStdin = nil
 	}
 
-	// 3. The helper coordinates with any previous instance via a file lock
-	//    (/tmp/easyss-tun.lock). No need to wait here — the next helper
-	//    will block on the lock until this one exits and releases it.
-	//    The FIFO file itself is removed when tunHelperStdin is closed
-	//    (see fifoWriter.Close).
+	// 3. 助手进程通过文件锁（/tmp/easyss-tun.lock）与任何先前实例协调。
+	//    这里无需等待 —— 下一个助手进程会阻塞在锁上，直到本实例退出并释放。
+	//    FIFO 文件本身在 tunHelperStdin 关闭时被删除（见 fifoWriter.Close）。
 
-	// 4. Clear the HTTP /tun config.
+	// 4. 清除 HTTP /tun 配置。
 	if a.core != nil && a.core.HTTPServer != nil {
 		a.core.HTTPServer.ClearTunConfig()
 	}
@@ -690,17 +674,17 @@ func (a *TrayApp) closeTun2socks() error {
 	return nil
 }
 
-// enableTun2socks runs the TUN enable flow in a background goroutine so the
-// tray menu remains responsive. On failure it reverts the menu checkmark and
-// notifies the user: the failure is otherwise invisible, since the proxy core
-// keeps serving SOCKS5/HTTP while system-wide traffic silently stays direct.
+// enableTun2socks 在后台 goroutine 中运行 TUN 启用流程，
+// 以保持托盘菜单响应。失败时它回滚菜单勾选并通知用户：
+// 否则失败不可见，因为代理核心继续提供 SOCKS5/HTTP 服务，
+// 而系统全局流量会静默地保持直连。
 func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 	log.Info("[SYSTRAY] enableTun2socks called", "isRoot", IsRoot())
 	if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !IsRoot() {
-		// Non-root on macOS/Linux: spawn an elevated helper process to
-		// open the TUN device, set up routes, and pass the fd back.
-		// The helper always fails on non-unix builds, but this branch is
-		// unreachable there (guarded by runtime.GOOS).
+		// macOS/Linux 非 root：拉起一个提权助手进程，
+		// 打开 TUN 设备、设置路由并把 fd 传回。
+		// 助手进程在非 unix 构建上总会失败，但该分支在那里不可达
+		//（由 runtime.GOOS 保证）。
 		if err := a.createTun2socksViaHelper(); err != nil { //nolint:staticcheck // always fails on non-unix builds; branch unreachable
 			log.Error("[SYSTRAY] create tun2socks via helper", "err", err)
 			menu.SetChecked(false)
@@ -717,8 +701,8 @@ func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 	}
 }
 
-// disableTun2socks runs the TUN disable flow in a background goroutine so
-// the tray menu remains responsive.
+// disableTun2socks 在后台 goroutine 中运行 TUN 关闭流程，
+// 以保持托盘菜单响应。
 func (a *TrayApp) disableTun2socks() {
 	log.Info("[SYSTRAY] disableTun2socks called")
 	if err := a.closeTun2socks(); err != nil {
@@ -729,14 +713,12 @@ func (a *TrayApp) disableTun2socks() {
 func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
 	sysProxyEnabled := a.BrowserMenu() != nil && a.BrowserMenu().IsChecked()
 
-	// Stop everything including TUN. On macOS this prompts for admin
-	// credentials to clean up routes and DNS — acceptable during a
-	// manual server switch.
+	// 停止一切，包括 TUN。在 macOS 上这会提示输入管理员凭据
+	// 以清理路由和 DNS —— 在手动切换服务器期间可以接受。
 	a.closeService()
 
-	// Prevent a.Start() from recreating TUN. TUN is intentionally left
-	// off after a server switch; the tray menu is kept in sync with the
-	// actual (off) state so the user can re-enable it with one click.
+	// 防止 a.Start() 重新创建 TUN。切换服务器后 TUN 有意保持关闭；
+	// 托盘菜单与实际（关闭）状态保持同步，用户只需一次点击即可重新启用。
 	newCfg.Local.EnableTun2socks = false
 	if tunMenu := a.TunMenu(); tunMenu != nil {
 		tunMenu.SetChecked(false)
@@ -764,16 +746,15 @@ func (a *TrayApp) closeService() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// Always try to clear the system proxy on exit, regardless of the
-	// menu checkmark state (which may be inconsistent with the actual
-	// system setting due to async toggle or startup ordering).
+	// 退出时总是尝试清除系统代理，无论菜单勾选状态如何
+	//（由于异步开关或启动顺序，勾选状态可能与实际系统设置不一致）。
 	if err := a.setSysProxyOff(); err != nil {
 		log.Error("[SYSTRAY] close service: set sysproxy off", "err", err)
 	}
 
-	// Stop TUN helper and engine before stopping the core services.
-	// On non-darwin or root, closeTun2socks is a no-op if TUN was not
-	// started via helper.
+	// 在停止核心服务之前停止 TUN 助手进程和引擎。
+	// 在非 darwin 或 root 环境下，如果 TUN 不是通过助手进程启动的，
+	// closeTun2socks 是空操作。
 	if err := a.closeTun2socks(); err != nil {
 		log.Error("[SYSTRAY] close service: close tun2socks", "err", err)
 	}

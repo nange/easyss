@@ -1,11 +1,11 @@
 #!/bin/bash
-# Generate Easyss.icns from a 1024x1024 PNG source image.
-# Requires macOS with sips and iconutil.
+# 从 1024x1024 的 PNG 源图生成 Easyss.icns。
+# 需要装有 sips 和 iconutil 的 macOS。
 #
-# Usage: bash scripts/gen_icns.sh <source_1024x1024.png>
+# 用法：bash scripts/gen_icns.sh <source_1024x1024.png>
 #
-# The output Easyss.icns will be placed in icon/.
-# This script only needs to be run when the icon design changes.
+# 生成的 Easyss.icns 会放在 icon/ 目录下。
+# 仅当图标设计变更时才需要运行本脚本。
 
 set -euo pipefail
 

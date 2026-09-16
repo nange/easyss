@@ -8,9 +8,8 @@ import (
 	"time"
 )
 
-// newTunTestServer builds an HTTPProxyServer with proxy credentials
-// configured, mimicking a real deployment where the /tun endpoint must be
-// reachable by the unauthenticated TUN helper over loopback.
+// newTunTestServer 构建一个配置了代理凭据的 HTTPProxyServer，模拟真实部署场景：
+// 未认证的 TUN 助手必须能通过回环地址访问 /tun 端点。
 func newTunTestServer(t *testing.T) *HTTPProxyServer {
 	t.Helper()
 	s, err := NewHTTPProxyServer(HTTPProxyOptions{
@@ -39,9 +38,8 @@ func testTunConfig() *TunConfig {
 	}
 }
 
-// TestTunEndpointServedWithoutProxyAuth verifies the TUN helper can fetch
-// GET /tun without proxy credentials even when auth is configured (the
-// helper has no way to obtain them).
+// TestTunEndpointServedWithoutProxyAuth 验证即使配置了认证，TUN 助手也能不带任何
+// 代理凭据获取 GET /tun（助手没有办法获得这些凭据）。
 func TestTunEndpointServedWithoutProxyAuth(t *testing.T) {
 	s := newTunTestServer(t)
 	s.SetTunConfig(testTunConfig())
@@ -63,8 +61,8 @@ func TestTunEndpointServedWithoutProxyAuth(t *testing.T) {
 	}
 }
 
-// TestTunEndpointRejectsNonLoopbackSource verifies /tun is never served to
-// non-loopback clients (protects the config when bind_all is enabled).
+// TestTunEndpointRejectsNonLoopbackSource 验证 /tun 绝不会提供给非回环客户端
+// （在启用 bind_all 时保护配置）。
 func TestTunEndpointRejectsNonLoopbackSource(t *testing.T) {
 	s := newTunTestServer(t)
 	s.SetTunConfig(testTunConfig())
@@ -79,8 +77,8 @@ func TestTunEndpointRejectsNonLoopbackSource(t *testing.T) {
 	}
 }
 
-// TestTunEndpointNotConfiguredReturns503 verifies the helper's retry loop
-// still sees 503 when the parent has not registered a TUN config yet.
+// TestTunEndpointNotConfiguredReturns503 验证当父进程尚未注册 TUN 配置时，
+// 助手的重试循环仍然会看到 503。
 func TestTunEndpointNotConfiguredReturns503(t *testing.T) {
 	s := newTunTestServer(t)
 
@@ -94,8 +92,8 @@ func TestTunEndpointNotConfiguredReturns503(t *testing.T) {
 	}
 }
 
-// TestProxyAuthStillRequiredForProxyRequests verifies the auth exemption is
-// scoped to /tun only: ordinary proxy requests still require credentials.
+// TestProxyAuthStillRequiredForProxyRequests 验证认证豁免仅限 /tun：
+// 普通的代理请求仍然需要凭据。
 func TestProxyAuthStillRequiredForProxyRequests(t *testing.T) {
 	s := newTunTestServer(t)
 

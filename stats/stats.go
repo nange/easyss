@@ -12,9 +12,8 @@ import (
 var g = &stats{}
 
 func init() {
-	// Default to process start time; client sessions override this via
-	// ResetStartTime/ClearStartTime, so a server (which never resets)
-	// keeps "uptime = process uptime".
+	// 默认取进程启动时间；客户端会话通过 ResetStartTime/ClearStartTime
+	// 覆盖它，因此服务端（从不重置）保持“运行时间 = 进程运行时间”。
 	now := time.Now()
 	g.startTime.Store(&now)
 }
@@ -43,43 +42,41 @@ type stats struct {
 	priorityFallback      atomic.Int64
 	bulkFallback          atomic.Int64
 
-	// Tier scheduling (client-side): streams scheduled onto a non-active
-	// health tier by the pressure scheduler.
+	// 分档调度（客户端侧）：由压力调度器调度到非活跃健康档位的流。
 	tierExpiringScheduled atomic.Int64
 	tierHeavyScheduled    atomic.Int64
 	tierDegradedScheduled atomic.Int64
-	// tierRetiringSkipped counts the times the scheduler passed over a
-	// retiring slot (degraded+expiring) when picking a slot for a stream.
+	// tierRetiringSkipped 统计调度器为流选择槽位时跳过退役中槽位
+	// （degraded+expiring）的次数。
 	tierRetiringSkipped atomic.Int64
 
-	// Transport health (client-side)
+	// 传输健康度（客户端侧）
 	slotDegraded         atomic.Int64
 	slotRetiredDegraded  atomic.Int64
 	connRotated          atomic.Int64
 	slotProbes           atomic.Int64
 	slotProbeSlow        atomic.Int64
 	slotProbeUnsupported atomic.Int64
-	// slotGrownPriority/slotGrownBulk count slot expansions (new live
-	// connections activated by the lazy-expansion scheduler) per pool.
+	// slotGrownPriority/slotGrownBulk 统计每个池的槽位扩容次数
+	// （由懒加载扩容调度器激活的新存活连接）。
 	slotGrownPriority atomic.Int64
 	slotGrownBulk     atomic.Int64
-	// streamsDrained counts streams closed early by the relay drain
-	// mechanism: idle streams on slots due for eviction (expiring/degraded)
-	// closed before the full idle timeout so rotation/retirement completes
-	// promptly (see relay.BidirectionalWithDrain).
+	// streamsDrained 统计被 relay 排空机制提前关闭的流数：
+	// 位于待驱逐槽位（expiring/degraded）上的空闲流在完整空闲超时前
+	// 被关闭，以便轮换/退役及时完成（参见 relay.BidirectionalWithDrain）。
 	streamsDrained atomic.Int64
 
 	rttMu    sync.Mutex
-	rttEWMA  int64 // nanoseconds, EWMA-smoothed pure path RTT
+	rttEWMA  int64 // 纳秒，EWMA 平滑的纯路径 RTT
 	rttCount atomic.Int64
 
-	// Speed tracking (bytes/sec, EWMA-smoothed)
+	// 速度跟踪（字节/秒，EWMA 平滑）
 	uploadSpeed       atomic.Int64
 	downloadSpeed     atomic.Int64
 	peakUploadSpeed   atomic.Int64
 	peakDownloadSpeed atomic.Int64
 
-	// Server-side proxy
+	// 服务端代理
 	serverTCPStreams      atomic.Int64
 	serverUDPStreams      atomic.Int64
 	serverICMPStreams     atomic.Int64
@@ -87,12 +84,12 @@ type stats struct {
 	serverFallbackPages   atomic.Int64
 	serverProbes          atomic.Int64
 
-	// startTime keeps the monotonic clock reading so time.Since stays
-	// immune to wall-clock adjustments; nil means no active session.
+	// startTime 保存单调时钟读数，使 time.Since 不受墙上时钟调整影响；
+	// nil 表示没有活跃会话。
 	startTime atomic.Pointer[time.Time]
 }
 
-// --- recorder methods ---
+// --- 记录器方法 ---
 
 func RecordStreamOpened()   { g.totalStreamsOpened.Add(1) }
 func RecordStreamClosed()   { g.totalStreamsClosed.Add(1) }
@@ -135,10 +132,9 @@ func RecordStreamDrained()     { g.streamsDrained.Add(1) }
 
 const rttAlpha = 0.35
 
-// RecordRTT feeds a pure client<->server path RTT sample: the time between
-// the client flushing its bootstrap record (or the probe request reaching
-// the server) and the response arriving. The server commits its response
-// before dialing the origin, so origin latency never enters the sample.
+// RecordRTT 提供纯客户端<->服务器路径 RTT 样本：即客户端冲刷其引导记录
+// （或探测请求到达服务器）与响应到达之间的时间。服务器在拨号源站之前
+// 就提交响应，因此源站延迟永远不会进入样本。
 func RecordRTT(d time.Duration) {
 	g.rttMu.Lock()
 	if g.rttCount.Load() == 0 {
@@ -157,20 +153,20 @@ func RecordServerHandshakeError() { g.serverHandshakeErrors.Add(1) }
 func RecordServerFallbackPage()   { g.serverFallbackPages.Add(1) }
 func RecordServerProbe()          { g.serverProbes.Add(1) }
 
-// --- session lifecycle ---
+// --- 会话生命周期 ---
 
-// ResetStartTime marks the start of a new session, e.g. on client start.
+// ResetStartTime 标记新会话的开始，例如客户端启动时。
 func ResetStartTime() {
 	now := time.Now()
 	g.startTime.Store(&now)
 }
 
-// ClearStartTime clears the session start time, e.g. on client stop.
+// ClearStartTime 清除会话开始时间，例如客户端停止时。
 func ClearStartTime() {
 	g.startTime.Store(nil)
 }
 
-// ResetCounters zeroes all counters so each session starts from scratch.
+// ResetCounters 将所有计数器清零，使每个会话从头开始。
 func ResetCounters() {
 	g.totalStreamsOpened.Store(0)
 	g.totalStreamsClosed.Store(0)
@@ -222,11 +218,11 @@ func ResetCounters() {
 	g.serverProbes.Store(0)
 }
 
-// --- snapshot ---
+// --- 快照 ---
 
-// Snapshot is a point-in-time copy of all counters and derived metrics.
+// Snapshot 是所有计数器和派生指标的时点副本。
 type Snapshot struct {
-	// Counters
+	// 计数器
 	TotalStreamsOpened    int64 `json:"total_streams_opened"`
 	TotalStreamsClosed    int64 `json:"total_streams_closed"`
 	BytesSent             int64 `json:"bytes_sent"`
@@ -254,13 +250,13 @@ type Snapshot struct {
 	PriorityFallback      int64 `json:"priority_fallback"`
 	BulkFallback          int64 `json:"bulk_fallback"`
 
-	// Tier scheduling (client-side only; zero on server)
+	// 分档调度（仅客户端侧；服务端为零）
 	TierExpiringScheduled int64 `json:"tier_expiring_scheduled"`
 	TierHeavyScheduled    int64 `json:"tier_heavy_scheduled"`
 	TierDegradedScheduled int64 `json:"tier_degraded_scheduled"`
 	TierRetiringSkipped   int64 `json:"tier_retiring_skipped"`
 
-	// Transport health (client-side only; zero on server)
+	// 传输健康度（仅客户端侧；服务端为零）
 	SlotDegraded         int64 `json:"slot_degraded"`
 	SlotRetiredDegraded  int64 `json:"slot_retired_degraded"`
 	ConnRotated          int64 `json:"conn_rotated"`
@@ -271,7 +267,7 @@ type Snapshot struct {
 	SlotGrownBulk        int64 `json:"slot_grown_bulk"`
 	StreamsDrained       int64 `json:"streams_drained"`
 
-	// Speed
+	// 速度
 	UploadSpeed            int64  `json:"upload_speed"`
 	DownloadSpeed          int64  `json:"download_speed"`
 	UploadSpeedHuman       string `json:"upload_speed_human"`
@@ -279,10 +275,10 @@ type Snapshot struct {
 	PeakUploadSpeedHuman   string `json:"peak_upload_speed_human"`
 	PeakDownloadSpeedHuman string `json:"peak_download_speed_human"`
 
-	// Transport stats (embedded, client-side only; zero on server)
+	// 传输统计（内嵌，仅客户端侧；服务端为零）
 	transport.TransportStats
 
-	// Derived
+	// 派生指标
 	UptimeSeconds float64 `json:"uptime_seconds"`
 	AvgRTTMs      float64 `json:"avg_rtt_ms"`
 
@@ -296,7 +292,7 @@ func (s Snapshot) AvgRTT() time.Duration {
 	return time.Duration(s.RTTEWMA)
 }
 
-// Uptime returns the duration since StartTime, or 0 when no session is active.
+// Uptime 返回自 StartTime 以来的时长，无活跃会话时返回 0。
 func (s Snapshot) Uptime() time.Duration {
 	if s.StartTime.IsZero() {
 		return 0
@@ -304,7 +300,7 @@ func (s Snapshot) Uptime() time.Duration {
 	return time.Since(s.StartTime)
 }
 
-// Collect returns a point-in-time copy of all counters.
+// Collect 返回所有计数器的时点副本。
 func Collect() Snapshot {
 	g.rttMu.Lock()
 	ewma := g.rttEWMA
@@ -373,7 +369,7 @@ func Collect() Snapshot {
 	}
 }
 
-// HumanBytes converts bytes to a human-readable string.
+// HumanBytes 将字节数转换为人类可读的字符串。
 func HumanBytes(n int64) string {
 	const unit = 1024
 	if n < unit {

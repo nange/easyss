@@ -12,26 +12,25 @@ import (
 	sharedconfig "github.com/nange/easyss/v3/config"
 )
 
-// easyssTunSubnet is the subnet that the easyss TUN device owns by default
-// (TunIP/TunGW default to 198.18.0.1 with mask 255.255.0.0).
+// easyssTunSubnet 是 easyss TUN 设备默认拥有的子网
+// （TunIP/TunGW 默认为 198.18.0.1，掩码 255.255.0.0）。
 var easyssTunSubnet = net.IPNet{
 	IP:   net.IPv4(198, 18, 0, 0),
 	Mask: net.CIDRMask(15, 32),
 }
 
-// IsTunSubnetAddr reports whether ip lies in the easyss TUN subnet
-// (198.18.0.0/15 by default, where the TUN device's own address lives).
+// IsTunSubnetAddr 报告 ip 是否位于 easyss TUN 子网内
+// （默认为 198.18.0.0/15，即 TUN 设备自身地址所在的网段）。
 func IsTunSubnetAddr(ip net.IP) bool {
 	return easyssTunSubnet.Contains(ip)
 }
 
-// IsTunIface reports whether iface is the easyss TUN device: its name matches
-// the easyss TUN device name (tun-easyss on windows/linux, utun9 on darwin —
-// both are matched so recognition does not depend on the current platform),
-// or it owns an address in the easyss TUN subnet. The direct dialer must
-// never bind to this interface — binding to it would send every outbound
-// packet back into the TUN device, creating a routing loop through
-// tun2socks.
+// IsTunIface 报告 iface 是否为 easyss TUN 设备：其名称匹配
+// easyss TUN 设备名（windows/linux 上为 tun-easyss，darwin 上为 utun9 —
+// 两者都会被匹配，因此识别不依赖当前平台），
+// 或它拥有 easyss TUN 子网内的地址。直连拨号器绝不能绑定到该接口 —
+// 绑定它会把每个出站数据包送回 TUN 设备，从而通过
+// tun2socks 形成路由环路。
 func IsTunIface(iface *net.Interface) bool {
 	if iface == nil {
 		return false
@@ -79,15 +78,13 @@ func SysPowershellMajorVersion() int {
 
 var errUnsupportedPlatform = errors.New("unsupported platform")
 
-// SysDefaultRoute returns the physical interface and gateway of the IPv4
-// default route (0.0.0.0/0), read from the Windows routing table. Windows may
-// hold several 0.0.0.0/0 entries while TUN is active (the TUN device gets its
-// own default route when netsh configures the static gateway); the easyss TUN
-// interface is skipped so the physical interface is returned. On darwin and
-// linux the caller probes 0.0.0.1 instead — the easyss TUN routes start at
-// 1.0.0.0/8 on every platform, so 0.0.0.1 always resolves to the physical
-// default interface (Windows cannot use the probe: its route lookup rejects
-// 0.0.0.0/8 destinations outright).
+// SysDefaultRoute 返回 IPv4 默认路由（0.0.0.0/0）的物理接口和网关，
+// 数据来自 Windows 路由表。TUN 激活时 Windows 可能持有多个 0.0.0.0/0
+// 条目（netsh 配置静态网关时 TUN 设备会获得自己的默认路由）；
+// 会跳过 easyss TUN 接口，从而返回物理接口。在 darwin 和 linux 上，
+// 调用方改为探测 0.0.0.1 — easyss TUN 路由在所有平台上都从 1.0.0.0/8
+// 开始，因此 0.0.0.1 始终解析到物理默认接口（Windows 无法使用该探测：
+// 其路由查找会直接拒绝 0.0.0.0/8 目标）。
 func SysDefaultRoute() (iface *net.Interface, gateway net.IP, err error) {
 	switch runtime.GOOS {
 	case "windows":
@@ -97,15 +94,14 @@ func SysDefaultRoute() (iface *net.Interface, gateway net.IP, err error) {
 	}
 }
 
-// SysDirectIfaceBindUnsupported reports whether the platform cannot bind
-// the direct dialer to a physical interface. On Android netlink route
-// sockets are blocked for apps (net.Interfaces, net.Interface.Addrs and
-// go-netroute's route probes all fail with permission denied), and
-// SO_BINDTODEVICE requires CAP_NET_RAW which apps lack. The VpnService-based
-// VPN there uses per-app routing (only the selected apps enter the TUN), so
-// the app's own sockets — including the transport connections to the remote
-// server — bypass the tunnel without any binding. The direct dialer
-// therefore stays unbound on Android.
+// SysDirectIfaceBindUnsupported 报告平台是否无法将直连拨号器绑定到
+// 物理接口。在 Android 上，应用无法访问 netlink 路由 socket
+// （net.Interfaces、net.Interface.Addrs 和 go-netroute 的路由探测都会
+// 因权限被拒绝而失败），而 SO_BINDTODEVICE 需要应用不具备的
+// CAP_NET_RAW。那里的 VpnService 型 VPN 使用按应用路由
+// （只有被选中的应用进入 TUN），因此应用自身的 socket —
+// 包括到远程服务器的传输连接 — 无需任何绑定即可绕过隧道。
+// 因此在 Android 上直连拨号器保持不绑定。
 func SysDirectIfaceBindUnsupported() bool {
 	return runtime.GOOS == "android"
 }
@@ -116,8 +112,8 @@ func SysGatewayAndDevice() (gw string, dev string, err error) {
 		return gateway.String(), iface.Name, nil
 	}
 
-	// Fallback (darwin, linux and other platforms): probe 0.0.0.1, which the
-	// easyss TUN routes (starting at 1.0.0.0/8 on every platform) never cover.
+	// 兜底方案（darwin、linux 及其他平台）：探测 0.0.0.1，该地址
+	// 不会被 easyss TUN 路由（在所有平台上都从 1.0.0.0/8 开始）覆盖。
 	r, _ := netroute.New()
 	iface, gateway, _, err = r.Route(net.IPv4(0, 0, 0, 1))
 	if err != nil {

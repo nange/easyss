@@ -46,7 +46,7 @@ func (m *StreamMeter) SetState(state string) {
 	}
 }
 
-// Bytes returns the total number of bytes relayed for this stream.
+// Bytes 返回该流中继的总字节数。
 func (m *StreamMeter) Bytes() int64 {
 	return m.total.Load()
 }

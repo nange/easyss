@@ -158,13 +158,13 @@ func TestCache_DirectVsProxied(t *testing.T) {
 	msgDirect.Answer = append(msgDirect.Answer, rrD)
 	c.Set(msgDirect, true) //nolint:errcheck
 
-	// proxied → 1.1.1.1
+	// 代理 → 1.1.1.1
 	gotP := c.Get("example.com.", "A", false)
 	if gotP == nil || gotP.Answer[0].(*dns.A).A.String() != "1.1.1.1" {
 		t.Error("proxied cache returned wrong IP")
 	}
 
-	// direct → 2.2.2.2
+	// 直连 → 2.2.2.2
 	gotD := c.Get("example.com.", "A", true)
 	if gotD == nil || gotD.Answer[0].(*dns.A).A.String() != "2.2.2.2" {
 		t.Error("direct cache returned wrong IP")
@@ -233,7 +233,7 @@ func TestCache_ServerDomain_NeverExpires(t *testing.T) {
 		t.Fatalf("Set error: %v", err)
 	}
 
-	// 应答 TTL=1s，普通域名 1s 后即过期；服务器域名需保持命中
+	// 应答 TTL=1s，服务器域名不受 TTL 影响、需保持命中
 	time.Sleep(1500 * time.Millisecond)
 	if got := c.Get("mysite.net.", "A", false); got == nil {
 		t.Fatal("server domain entry expired, expected never-expiring cache")
@@ -283,8 +283,8 @@ func TestJitterTTL_Range(t *testing.T) {
 }
 
 func TestCachePrePopulateWithFallback(t *testing.T) {
-	failAddr := startTestDNSServer(t, true) // replies SERVFAIL, fails fast
-	okAddr := startTestDNSServer(t, false)  // answers A/AAAA records
+	failAddr := startTestDNSServer(t, true) // 回复 SERVFAIL，快速失败
+	okAddr := startTestDNSServer(t, false)  // 正常应答 A/AAAA 记录
 	old := systemDNSServersFunc
 	systemDNSServersFunc = func() []string {
 		return []string{okAddr}
@@ -322,9 +322,9 @@ func TestCachePrePopulateWithFallbackAllFail(t *testing.T) {
 	}
 }
 
-// TestCachePrePopulateWithFallbackBoundedByContext verifies that a context
-// deadline bounds the whole pre-population: a blackhole DNS server would
-// otherwise hold the query for the per-query 5s timeout per record type.
+// TestCachePrePopulateWithFallbackBoundedByContext 验证 context 截止时间会
+// 约束整个预填充过程：否则黑洞 DNS 服务器会使查询按每种记录类型各等待 5s
+// 超时。
 func TestCachePrePopulateWithFallbackBoundedByContext(t *testing.T) {
 	old := systemDNSServersFunc
 	systemDNSServersFunc = func() []string {

@@ -31,8 +31,8 @@ func TestFrameEncodeDecode(t *testing.T) {
 }
 
 func TestAppendFrameDerivesLengthFromPayload(t *testing.T) {
-	// A Frame whose Length disagrees with its payload (e.g. one decoded from
-	// the wire) must still encode as a well-formed frame.
+	// Length 与 payload 不一致的 Frame（例如从线上解码出来的）也必须
+	// 编码成格式正确的帧。
 	f := Frame{Type: FrameDATA, Length: 99, Payload: []byte("abc")}
 	buf := AppendFrame(nil, f)
 

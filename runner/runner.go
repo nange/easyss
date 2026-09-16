@@ -24,32 +24,31 @@ import (
 
 var errSocksRequired = errors.New("http proxy requires socks_port to be enabled")
 
-// serverStartupResolveTimeout bounds each synchronous server-domain
-// resolution attempt at startup. It mirrors client.serverIPV6ResolveTimeout:
-// 3s is enough for a healthy network and keeps the worst-case startup delay
-// short. serverStartupRetryDelay is the pause between TUN-mode retries.
-// Both are vars (not consts) so tests can shorten them.
+// serverStartupResolveTimeout 限定启动时每次同步的服务器域名解析尝试。
+// 它与 client.serverIPV6ResolveTimeout 保持一致：3s 对健康的网络足够，
+// 同时能把最坏情况下的启动延迟控制得很短。serverStartupRetryDelay 是
+// TUN 模式下重试之间的停顿时间。两者都是变量（而非常量），以便测试缩短它们。
 var (
 	serverStartupResolveTimeout = 3 * time.Second
 	serverStartupRetryDelay     = time.Second
 )
 
-// prePopulateServerDomain is a package-level var so tests can inject
-// deterministic failures (same pattern as client.boundDialContext).
+// prePopulateServerDomain 是包级变量，以便测试注入确定性的失败
+// （与 client.boundDialContext 采用相同模式）。
 var prePopulateServerDomain = func(s *proxy.Socks5Server, ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error {
 	return s.PrePopulateDNS(ctx, domain, dnsServers, requireIPv4)
 }
 
-// warmUpCore primes the transport pools behind the local SOCKS5 server. It is
-// a package-level var so tests can assert the dispatch without any network.
+// warmUpCore 预热本地 SOCKS5 服务器背后的传输连接池。它是包级变量，
+// 以便测试在没有任何网络的情况下断言调度行为。
 var warmUpCore = func(s *proxy.Socks5Server, timeout time.Duration) error {
 	return s.WarmUp(timeout)
 }
 
-// warmUpStartDelay mirrors config.WarmUpStartDelay: the warm-up is dispatched
-// in a goroutine that waits this long before probing, so the host has time to
-// finish bringing its network path up. A var (not a const) so tests can
-// shorten it, same pattern as serverStartupResolveTimeout.
+// warmUpStartDelay 与 config.WarmUpStartDelay 保持一致：预热在 goroutine
+// 中派发，先等待这段时间再发起探测，让主机有时间完成网络路径的建立。
+// 它是变量（而非常量），以便测试缩短它，与 serverStartupResolveTimeout
+// 采用相同模式。
 var warmUpStartDelay = sharedconfig.WarmUpStartDelay
 
 type Core struct {
@@ -60,14 +59,13 @@ type Core struct {
 	StreamHandler *proxy.StreamHandler
 	dnsServer     *dns.ForwardServer
 
-	// StartupWarn carries a non-fatal warning detected while initializing
-	// the core (e.g. a custom rule file that failed to load), so the caller
-	// can surface it to the user without failing startup.
+	// StartupWarn 保存初始化核心时检测到的非致命警告（例如自定义规则文件
+	// 加载失败），调用方可以在不中断启动的情况下将其展示给用户。
 	StartupWarn error
 
-	// warmUpCancel cancels the in-flight (or still delayed) background
-	// warm-up started by startWarmUp; set once, called by Stop. Guarded by
-	// warmUpMu because Stop may run while Run is still dispatching.
+	// warmUpCancel 取消由 startWarmUp 启动的进行中（或仍在延迟中的）后台
+	// 预热；只设置一次，由 Stop 调用。由 warmUpMu 保护，因为 Stop 可能在
+	// Run 仍在派发时执行。
 	warmUpMu     sync.Mutex
 	warmUpCancel context.CancelFunc
 }
@@ -105,9 +103,9 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		StartupWarn:   cli.StartupWarning(),
 	}
 
-	// Pre-bind all local listen addresses before starting any server
-	// goroutine, so a listen failure (e.g. port already in use) aborts
-	// startup with an error instead of being logged and silently ignored.
+	// 在启动任何服务器 goroutine 之前，预先绑定所有本地监听地址，
+	// 这样监听失败（例如端口已被占用）会以错误中止启动，
+	// 而不是被记录日志后静默忽略。
 	var socksAddr, httpAddr, dnsAddr string
 	if cfg.Local.SocksPort > 0 {
 		socksAddr = "127.0.0.1:" + strconv.Itoa(cfg.Local.SocksPort)
@@ -208,39 +206,33 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		}()
 	}
 
-	// The server domain must resolve for the proxied path to work at all,
-	// so the resolution check belongs to core startup. A failed resolution
-	// means the server is unreachable and the proxy cannot work, so it
-	// aborts startup like any other fatal core error.
+	// 服务器域名必须能解析，代理路径才能工作，因此解析检查属于核心启动
+	// 的一部分。解析失败意味着服务器不可达、代理无法工作，因此它和其他
+	// 致命的核心错误一样会中止启动。
 	if err := c.resolveServerDomain(cfg); err != nil {
 		c.cleanup()
 		return nil, err
 	}
 
 	log.Info("[EASYSS] started successfully", "elapsed_ms", time.Since(start).Milliseconds())
-	// Start a fresh stats session: the process may host multiple
-	// start/stop cycles (e.g. Android), so reset both the session
-	// start time and all counters.
+	// 开启一个全新的统计会话：进程可能经历多次启动/停止周期（例如
+	// Android），因此同时重置会话开始时间和所有计数器。
 	stats.ResetStartTime()
 	stats.ResetCounters()
 	stats.StartSpeedMonitor()
-	// Dispatch the background warm-up last: it only primes the connection
-	// pools, so it must never delay or fail startup.
+	// 最后再派发后台预热：它只预热连接池，绝不能延迟或导致启动失败。
 	c.startWarmUp()
 	return c, nil
 }
 
-// startWarmUp dispatches the warm-up of the transport's connection pools in
-// the background, so the first real stream of each traffic class reuses an
-// established connection. It returns immediately: callers (desktop start,
-// gomobile Start) are never blocked by it and must not depend on it — the
-// probe runs after config.WarmUpStartDelay and its failures are only logged.
-// A disabled warm-up (transport.disable_warm_up) or a core without a local
-// SOCKS5 proxy (socks_port = 0) is skipped, not failed.
+// startWarmUp 在后台派发传输层连接池的预热，使每种流量类型的第一个真实
+// 流都能复用已建立的连接。它会立即返回：调用方（桌面端启动、gomobile
+// Start）永远不会被它阻塞，也不应依赖它——探测在 config.WarmUpStartDelay
+// 之后才执行，其失败只会被记录日志。预热被禁用（transport.disable_warm_up）
+// 或核心没有本地 SOCKS5 代理（socks_port = 0）时会被跳过，而不会失败。
 //
-// The warm-up goroutine is cancelled by Stop, so a short-lived core (start
-// then immediately stop, as tests and a quick server switch do) never leaves
-// a probe running against a closed transport.
+// 预热 goroutine 由 Stop 取消，因此短命的核心（启动后立即停止，如测试和
+// 快速切换服务器时）绝不会留下一个针对已关闭传输层的探测在运行。
 func (c *Core) startWarmUp() {
 	if c == nil || c.cfg == nil || c.SocksServer == nil {
 		return
@@ -252,13 +244,11 @@ func (c *Core) startWarmUp() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Everything the goroutine needs is captured here, before it starts.
-	// Stop tears the core down concurrently, the probe must target the
-	// server this call was dispatched for (warming a server whose Close
-	// already ran is deliberately harmless: it returns early on the closing
-	// flag), and warmUpCore/warmUpStartDelay are package vars tests swap
-	// between dispatches — reading them from the goroutine would race with
-	// the next test.
+	// goroutine 需要的一切都在它启动前捕获完成。Stop 会并发地拆除核心，
+	// 探测必须针对本次调用派发时的服务器（预热一个 Close 已执行的服务器
+	// 是无害的：它会因 closing 标志提前返回），而 warmUpCore/warmUpStartDelay
+	// 是测试在两次派发之间会替换的包级变量——从 goroutine 中读取它们会与
+	// 下一个测试产生数据竞争。
 	socksServer := c.SocksServer
 	probe := warmUpCore
 	delay := warmUpStartDelay
@@ -273,8 +263,7 @@ func (c *Core) startWarmUp() {
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
-			// Stopped before the probe went out: a skipped warm-up is not a
-			// failure.
+			// 在探测发出之前就停止了：被跳过的预热不算失败。
 			log.Debug("[EASYSS] warm-up skipped, core stopping")
 			return
 		}
@@ -285,9 +274,8 @@ func (c *Core) startWarmUp() {
 	}()
 }
 
-// cancelWarmUp cancels the background warm-up, if one was dispatched. It is
-// safe to call on a core that never started one and to call more than once
-// (context.CancelFunc is idempotent).
+// cancelWarmUp 取消后台预热（如果已派发）。对从未启动过预热的核心调用
+// 它是安全的，重复调用也是安全的（context.CancelFunc 是幂等的）。
 func (c *Core) cancelWarmUp() {
 	c.warmUpMu.Lock()
 	cancel := c.warmUpCancel
@@ -300,24 +288,21 @@ func (c *Core) cancelWarmUp() {
 }
 
 func (c *Core) Stop() {
-	// Cancel the warm-up before anything is torn down, so a probe that is
-	// still delayed or in flight stops instead of racing the closing
-	// transport.
+	// 在拆除任何东西之前先取消预热，使仍在延迟中或进行中的探测停止，
+	// 而不是与正在关闭的传输层竞争。
 	c.cancelWarmUp()
 	c.cleanup()
 	log.Info("[EASYSS] stopped")
 }
 
-// resolveServerDomain pre-resolves the proxy server hostname via the direct
-// DNS servers (with system fallback) and pre-seeds the DNS cache, so the
-// proxied path never waits on a cold lookup. A failure is returned as a
-// fatal error: without the domain resolving the server is unreachable and
-// the proxy cannot work at all, so the caller aborts startup.
+// resolveServerDomain 通过直连 DNS 服务器（带系统 DNS 兜底）预先解析代理
+// 服务器主机名并预填充 DNS 缓存，使代理路径永远不会等待冷查询。失败会以
+// 致命错误返回：域名无法解析时服务器不可达、代理完全无法工作，因此调用方
+// 中止启动。
 //
-// TUN mode retries (3 attempts) because a failed pre-population there would
-// deadlock TUN DNS once the system DNS is switched to the forward server;
-// non-TUN mode is best-effort with a single bounded attempt. An address
-// that is a literal IP needs no resolution and returns nil.
+// TUN 模式会重试（3 次），因为一旦系统 DNS 切换到转发服务器，那里的预填充
+// 失败会导致 TUN DNS 死锁；非 TUN 模式则是尽力而为，只做一次有界尝试。
+// 字面 IP 地址无需解析，直接返回 nil。
 func (c *Core) resolveServerDomain(cfg *config.ClientConfig) error {
 	svr := cfg.DefaultServer()
 	if svr == nil || util.IsIP(svr.Address) {
@@ -366,9 +351,9 @@ func (c *Core) resolveServerDomain(cfg *config.ClientConfig) error {
 	return nil
 }
 
-// prebindTCP verifies the given TCP address is bindable before server
-// goroutines start, so listen failures (e.g. port already in use) fail
-// fast with an error instead of being logged and silently ignored.
+// prebindTCP 在服务器 goroutine 启动前验证给定的 TCP 地址可绑定，
+// 使监听失败（例如端口已被占用）能快速以错误失败，
+// 而不是被记录日志后静默忽略。
 func prebindTCP(addr string) error {
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -377,8 +362,8 @@ func prebindTCP(addr string) error {
 	return l.Close()
 }
 
-// prebindUDP is the UDP counterpart of prebindTCP, used by the DNS
-// forward server which listens on UDP.
+// prebindUDP 是 prebindTCP 的 UDP 对应版本，供监听 UDP 的 DNS
+// 转发服务器使用。
 func prebindUDP(addr string) error {
 	pc, err := net.ListenPacket("udp", addr)
 	if err != nil {
@@ -400,7 +385,7 @@ func (c *Core) cleanup() {
 	if c.Client != nil {
 		_ = c.Client.Close()
 	}
-	// No active session anymore, so no session start time either.
+	// 不再有活跃会话，因此也不再需要会话开始时间。
 	stats.ClearStartTime()
 	stats.StopSpeedMonitor()
 }

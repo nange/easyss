@@ -7,8 +7,7 @@ import (
 	"time"
 )
 
-// tcpPair dials a fresh local TCP pair (client side + accepted server side)
-// and returns both ends.
+// tcpPair 建立一对全新的本地 TCP 连接（客户端侧 + 被接受的服务器侧）并返回两端。
 func tcpPair(t *testing.T) (client, server net.Conn) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -42,9 +41,8 @@ func tcpPair(t *testing.T) (client, server net.Conn) {
 	return client, server
 }
 
-// connClosed reports whether the connection has been closed: a read on a
-// closed TCP connection returns an error (possibly after the FIN/EOF of a
-// half-close, which also proves no data keeps flowing).
+// connClosed 报告连接是否已关闭：对已关闭的 TCP 连接执行读操作会返回错误
+// （半关闭的 FIN/EOF 之后也是如此，这也证明不再有数据流动）。
 func connClosed(t *testing.T, conn net.Conn) bool {
 	t.Helper()
 	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
@@ -53,9 +51,8 @@ func connClosed(t *testing.T, conn net.Conn) bool {
 	return err != nil
 }
 
-// TestRelayTCPIdleTimeoutClosesBoth verifies that relayTCP honors its idle
-// timeout argument: a silent pair must be torn down (both connections closed)
-// after the given idle, so the copy goroutines cannot linger forever.
+// TestRelayTCPIdleTimeoutClosesBoth 验证 relayTCP 遵守其 idle 超时参数：一对静默的
+// 连接必须在给定的 idle 时间后被拆除（两端连接均关闭），这样拷贝协程才不会永远挂起。
 func TestRelayTCPIdleTimeoutClosesBoth(t *testing.T) {
 	client, server := tcpPair(t)
 
@@ -76,27 +73,23 @@ func TestRelayTCPIdleTimeoutClosesBoth(t *testing.T) {
 	}
 }
 
-// TestRelayTCPHalfCloseAndCompletion verifies the half-close semantics of the
-// direct relay with a faithful topology: two separate TCP pairs simulate the
-// local application <-> proxy leg and the proxy <-> remote leg, with the
-// relay bridging the proxy-side sockets. Each socket has exactly one reader
-// and one writer, like production. A FIN on one leg is propagated to the
-// other via CloseWrite while the reverse direction keeps flowing, and the
-// relay returns only after both directions completed (both proxy-side
-// sockets closed).
+// TestRelayTCPHalfCloseAndCompletion 以贴近真实的拓扑验证直连中继的半关闭语义：
+// 两对独立的 TCP 连接分别模拟"本地应用 <-> 代理"和"代理 <-> 远端服务器"两段，
+// 由中继桥接代理侧的两个 socket。每个 socket 恰好有一个读方和一个写方，与生产环境
+// 一致。一段的 FIN 通过 CloseWrite 传播到另一端，同时反向方向继续传输；只有两个
+// 方向都完成后（代理侧两个 socket 都已关闭），中继才返回。
 func TestRelayTCPHalfCloseAndCompletion(t *testing.T) {
-	app, proxyC := tcpPair(t)     // local application <-> proxy
-	proxyRC, remote := tcpPair(t) // proxy <-> remote server
+	app, proxyC := tcpPair(t)     // 本地应用 <-> 代理
+	proxyRC, remote := tcpPair(t) // 代理 <-> 远端服务器
 
 	done := make(chan struct{})
 	go func() {
-		relayTCP(proxyRC, proxyC, time.Minute) // same orientation as TCPHandle
+		relayTCP(proxyRC, proxyC, time.Minute) // 与 TCPHandle 相同的参数方向
 		close(done)
 	}()
 
-	// The application sends its payload and half-closes its write side:
-	// the relay must forward the FIN to the remote (CloseWrite) while the
-	// remote->application direction stays alive.
+	// 应用发送其负载并半关闭写侧：中继必须把 FIN 转发给远端（CloseWrite），
+	// 同时保持"远端 -> 应用"方向存活。
 	if _, err := app.Write([]byte("hello")); err != nil {
 		t.Fatalf("app write: %v", err)
 	}
@@ -111,13 +104,12 @@ func TestRelayTCPHalfCloseAndCompletion(t *testing.T) {
 	if string(buf) != "hello" {
 		t.Fatalf("remote got %q, want %q", buf, "hello")
 	}
-	// The application FIN must have reached the remote: next read is EOF.
+	// 应用的 FIN 必须已到达远端：下一次读取应为 EOF。
 	if _, err := remote.Read(buf); err != io.EOF {
 		t.Fatalf("remote read after app FIN = %v, want io.EOF", err)
 	}
 
-	// The remote answers and half-closes; the relay must deliver the
-	// payload and the FIN back to the application.
+	// 远端应答并半关闭；中继必须把负载和 FIN 送回应用。
 	if _, err := remote.Write([]byte("world")); err != nil {
 		t.Fatalf("remote write: %v", err)
 	}
@@ -130,7 +122,7 @@ func TestRelayTCPHalfCloseAndCompletion(t *testing.T) {
 	if string(buf) != "world" {
 		t.Fatalf("app got %q, want %q", buf, "world")
 	}
-	// The remote FIN must have reached the application.
+	// 远端的 FIN 必须已到达应用。
 	if _, err := app.Read(buf); err != io.EOF {
 		t.Fatalf("app read after remote FIN = %v, want io.EOF", err)
 	}
@@ -140,8 +132,8 @@ func TestRelayTCPHalfCloseAndCompletion(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("relay did not return after both directions completed")
 	}
-	// The relay closed both proxy-side sockets; the app/remote ends saw
-	// their FINs above and are now fully closed too.
+	// 中继已关闭代理侧的两个 socket；应用/远端两端在上面看到了各自的 FIN，
+	// 现在也已完全关闭。
 	if !connClosed(t, app) {
 		t.Error("app connection still open after relay completed")
 	}

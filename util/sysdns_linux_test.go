@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// recordingTunDNS replaces tunDNSCommand so the DNS setup can be asserted
-// without touching the resolver of the machine running the test.
+// recordingTunDNS 替换 tunDNSCommand，以便在不触碰运行测试的机器
+// 的解析器的情况下断言 DNS 配置。
 type recordingTunDNS struct {
 	commands [][]string
 	replies  map[string]string
@@ -61,17 +61,15 @@ func TestEnsureSysDNSForTunReassertsState(t *testing.T) {
 
 	cases := []struct {
 		name string
-		// reply is what the "resolvectl default-route <link>" lookup returns.
+		// reply 是 "resolvectl default-route <link>" 查询返回的内容。
 		reply string
-		// wantCmds counts that lookup plus whatever had to be re-applied.
+		// wantCmds 统计该查询加上所有需要重新应用的命令数。
 		wantCmds int
 	}{
-		// The physical link is still out of the DNS default route: the TUN
-		// state survived and only the lookup was issued.
+		// 物理链路仍不在 DNS 默认路由上：TUN 状态完好，只发出了查询。
 		{"state in place", "Link 2 (" + iface + "): no", 1},
-		// NetworkManager handed the DNS default route back to the physical
-		// link: resolution would bypass the tunnel again, so the state is
-		// re-applied (lookup + four commands).
+		// NetworkManager 把 DNS 默认路由交还给了物理链路：解析将再次
+		// 绕过隧道，因此需要重新应用状态（查询 + 四条命令）。
 		{"physical link took it back", "Link 2 (" + iface + "): yes", 5},
 	}
 
@@ -96,7 +94,7 @@ func TestResolvectlBool(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"Link 2 (wlp0s20f3): no", "no"},
 		{"Link 2 (wlp0s20f3): yes", "yes"},
-		// A link name must never be mistaken for the answer.
+		// 链路名称绝不能与答案混淆。
 		{"Link 2 (eno1): no", "no"},
 		{"Link 2 (eno1): yes", "yes"},
 		{"eno1", ""},

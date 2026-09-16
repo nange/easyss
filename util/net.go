@@ -10,14 +10,15 @@ func IsIP(ip string) bool {
 	return net.ParseIP(ip) != nil
 }
 
-// IsLANIP reports whether ip is a LAN/private/loopback/link-local/multicast/
-// unspecified address, or falls inside any other non-public range that a
-// proxy server must never dial: carrier-grade NAT (100.64.0.0/10), the
-// "this network" range (0.0.0.0/8), IETF protocol assignments (192.0.0.0/24),
-// benchmarking and documentation ranges (198.18.0.0/15, 192.0.2.0/24,
-// 198.51.100.0/24, 203.0.113.0/24), reserved 240.0.0.0/4 and broadcast.
-// The IPv4 checks are inlined so IPv4-mapped IPv6 forms (::ffff:a.b.c.d) are
-// covered via To4.
+// IsLANIP 报告 ip 是否为 LAN/私有/环回/链路本地/多播/未指定地址，
+// 或是否落在代理服务器绝不应拨号的任何其他非公网范围内：
+// 运营商级 NAT（100.64.0.0/10）、"本网络" 范围（0.0.0.0/8）、
+// IETF 协议分配与文档网段（192.0.0.0/16，含 192.0.0.0/24 协议分配段
+// 及 192.0.1.0/24–192.0.3.0/24 文档网段）、基准测试网段（198.18.0.0/15）、
+// 文档网段（192.0.2.0/24、198.51.100.0/24、203.0.113.0/24）、
+// 保留的 240.0.0.0/4 和广播地址。
+// IPv4 检查为内联实现，因此 IPv4 映射的 IPv6 形式（::ffff:a.b.c.d）
+// 通过 To4 一并覆盖。
 func IsLANIP(ip string) bool {
 	_ip := net.ParseIP(ip)
 	if _ip == nil {
@@ -32,7 +33,7 @@ func IsLANIP(ip string) bool {
 			(ip4[0] == 169 && ip4[1] == 254) || // 169.254.0.0/16 link-local
 			(ip4[0] == 172 && ip4[1]&0xf0 == 16) || // 172.16.0.0/12
 			(ip4[0] == 192 && ip4[1] == 168) || // 192.168.0.0/16
-			(ip4[0] == 192 && ip4[1] == 0) || // 192.0.0.0/24 incl. TEST-NET-1 192.0.2.0/24
+			(ip4[0] == 192 && ip4[1] == 0) || // 192.0.0.0/16，含协议分配段 192.0.0.0/24 与文档网段 192.0.1.0/24–192.0.3.0/24
 			(ip4[0] == 198 && (ip4[1] == 18 || ip4[1] == 19)) || // 198.18.0.0/15 benchmarking
 			(ip4[0] == 198 && ip4[1] == 51 && ip4[2] == 100) || // 198.51.100.0/24 TEST-NET-2
 			(ip4[0] == 203 && ip4[1] == 0 && ip4[2] == 113) || // 203.0.113.0/24 TEST-NET-3
@@ -53,12 +54,11 @@ func IsLoopbackIP(ip string) bool {
 	return _ip.IsLoopback()
 }
 
-// IsLANHost checks whether a host address (with or without port) is a LAN/private address.
-// It is used to prevent SSRF attacks by rejecting targets that point to internal networks.
+// IsLANHost 检查主机地址（带或不带端口）是否为 LAN/私有地址。
+// 它用于通过拒绝指向内部网络的目标来防止 SSRF 攻击。
 //
-// NOTE: This is a fast, IP-only check. Domain names are NOT resolved here, so a domain
-// that resolves to a LAN address will return false. For SSRF protection against
-// domain-based bypasses, use IsLANHostResolved instead.
+// 注意：这是一个快速的纯 IP 检查。这里不会解析域名，因此解析到 LAN 地址的
+// 域名会返回 false。如需防止基于域名的绕过，请改用 IsLANHostResolved。
 func IsLANHost(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -67,13 +67,12 @@ func IsLANHost(addr string) bool {
 	return IsLANIP(host)
 }
 
-// IsLANHostResolved is the SSRF-safe variant of IsLANHost: when the host is a domain
-// name rather than a literal IP, it resolves the name and rejects the request if any
-// resolved address is a LAN/private address. The fast IP-only path is used when the
-// host is already a literal IP, so the common case incurs no DNS lookup.
+// IsLANHostResolved 是 IsLANHost 的 SSRF 安全版本：当主机是域名
+// 而非字面 IP 时，它会解析该域名，并在任一解析结果地址为 LAN/私有地址时
+// 拒绝请求。当主机本身已是字面 IP 时走快速的纯 IP 路径，
+// 因此常见情况不会产生 DNS 查询。
 //
-// The provided ctx bounds the DNS resolution so a hung resolver cannot stall the
-// handshake.
+// 传入的 ctx 用于约束 DNS 解析，以免挂起的解析器拖住握手。
 func IsLANHostResolved(ctx context.Context, addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -82,7 +81,7 @@ func IsLANHostResolved(ctx context.Context, addr string) bool {
 	if IsLANIP(host) {
 		return true
 	}
-	// Literal IP that is not LAN: safe.
+	// 非 LAN 的字面 IP：安全。
 	if IsIP(host) {
 		return false
 	}
@@ -90,9 +89,9 @@ func IsLANHostResolved(ctx context.Context, addr string) bool {
 		return false
 	}
 
-	// Domain name: resolve and check every resulting address. A short fallback
-	// timeout is applied when the caller's ctx has no deadline, so a slow DNS
-	// server cannot hold the handshake open indefinitely.
+	// 域名：解析并检查每个结果地址。当调用方的 ctx 没有截止时间时，
+	// 会应用一个较短的兜底超时，这样缓慢的 DNS 服务器就无法无限期
+	// 拖住握手。
 	resolveCtx := ctx
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -102,9 +101,8 @@ func IsLANHostResolved(ctx context.Context, addr string) bool {
 
 	ips, err := net.DefaultResolver.LookupIPAddr(resolveCtx, host)
 	if err != nil {
-		// On resolution failure, fail open (return false) so the dial layer can
-		// produce the actual error. SSRF protection relies on the next check
-		// succeeding; an unresolvable name cannot reach a LAN host anyway.
+		// 解析失败时放行（返回 false），让拨号层产生真实的错误。
+		// SSRF 防护依赖后续检查的通过；无法解析的域名反正也到不了局域网主机。
 		return false
 	}
 	for _, ip := range ips {

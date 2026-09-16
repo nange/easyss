@@ -11,8 +11,8 @@ import (
 
 func TestEvaluateSlotHealth(t *testing.T) {
 	interval := sharedconfig.HealthCheckInterval
-	// Legacy mode (probeUnsupported): the passive sampler marks slots
-	// degraded directly, as before probing existed.
+	// 传统模式（probeUnsupported）：被动采样器直接标记 degraded，
+	// 与探测功能出现之前的行为一致。
 	lc := &slotLifecycle{probeUnsupported: true}
 
 	newHeavySlot := func() *transportSlot {
@@ -20,21 +20,20 @@ func TestEvaluateSlotHealth(t *testing.T) {
 		s.heavy.Store(1)
 		return s
 	}
-	// lowThroughput simulates one health interval carrying 10KB
-	// (2KB/s, well below the degraded throughput threshold).
+	// lowThroughput 模拟一个健康周期内只传输 10KB
+	// （2KB/s，远低于 degraded 吞吐阈值）。
 	lowThroughput := func(s *transportSlot) {
 		s.bytesRecv.Add(10 * 1024)
 		lc.evaluateSlotHealth(0, s, interval, true)
 	}
 	highThroughput := func(s *transportSlot) {
-		s.bytesRecv.Add(2 * 1024 * 1024) // 2MB over 5s = 400KB/s
+		s.bytesRecv.Add(2 * 1024 * 1024) // 5 秒内 2MB = 400KB/s
 		lc.evaluateSlotHealth(0, s, interval, true)
 	}
 
 	t.Run("marks degraded after consecutive slow intervals", func(t *testing.T) {
 		s := newHeavySlot()
-		// The first interval after heavy 0->1 only resets the throughput
-		// baseline and is skipped.
+		// heavy 0->1 后的首个周期只重置吞吐基线，被跳过。
 		lowThroughput(s)
 		for i := range sharedconfig.DegradedPersistCycles - 1 {
 			lowThroughput(s)
@@ -50,7 +49,7 @@ func TestEvaluateSlotHealth(t *testing.T) {
 
 	t.Run("healthy interval resets the slow counter", func(t *testing.T) {
 		s := newHeavySlot()
-		lowThroughput(s) // baseline reset
+		lowThroughput(s) // 基线重置
 		lowThroughput(s)
 		lowThroughput(s)
 		highThroughput(s)
@@ -63,7 +62,7 @@ func TestEvaluateSlotHealth(t *testing.T) {
 
 	t.Run("clears degraded after consecutive healthy intervals", func(t *testing.T) {
 		s := newHeavySlot()
-		lowThroughput(s) // baseline reset
+		lowThroughput(s) // 基线重置
 		for range sharedconfig.DegradedPersistCycles {
 			lowThroughput(s)
 		}
@@ -92,7 +91,7 @@ func TestEvaluateSlotHealth(t *testing.T) {
 
 	t.Run("congested link never degrades", func(t *testing.T) {
 		s := newHeavySlot()
-		// Baseline reset happens before the congestion gate.
+		// 基线重置发生在拥塞闸门之前。
 		lc.evaluateSlotHealth(0, s, interval, false)
 		for range sharedconfig.DegradedPersistCycles + 2 {
 			s.bytesRecv.Add(10 * 1024)
@@ -105,13 +104,13 @@ func TestEvaluateSlotHealth(t *testing.T) {
 
 	t.Run("heavy 0->1 transition resets throughput baseline", func(t *testing.T) {
 		s := newHeavySlot()
-		s.bytesRecv.Add(50 * 1024) // stale bytes from earlier small streams
-		// First sample only resets the baseline.
+		s.bytesRecv.Add(50 * 1024) // 更早的小流留下的陈旧字节
+		// 首个样本只重置基线。
 		lc.evaluateSlotHealth(0, s, interval, true)
 		if s.lowCycles != 0 {
 			t.Fatalf("lowCycles = %d after baseline reset, want 0", s.lowCycles)
 		}
-		// A slow interval afterwards counts from the reset point.
+		// 随后的慢周期从重置点开始计数。
 		s.bytesRecv.Add(10 * 1024)
 		lc.evaluateSlotHealth(0, s, interval, true)
 		if s.lowCycles != 1 {
@@ -120,9 +119,9 @@ func TestEvaluateSlotHealth(t *testing.T) {
 	})
 }
 
-// newTestLifecycle builds a lifecycle over n live slots with the given
-// probe function (nil disables probing). All n slots live in the priority
-// pool (bulk pool stays empty), so tests address them as priority.slots[i].
+// newTestLifecycle 在 n 个存活槽位上构建生命周期，并给定探测函数
+// （nil 表示禁用探测）。全部 n 个槽位都位于 priority 池（bulk 池保持为空），
+// 因此测试以 priority.slots[i] 访问它们。
 func newTestLifecycle(n int, probe func(context.Context, *transportSlot) (float64, probeVerdict)) (*slotLifecycle, *slotScheduler) {
 	slots := make([]*transportSlot, n)
 	for i := range slots {
@@ -147,10 +146,9 @@ func newTestLifecycle(n int, probe func(context.Context, *transportSlot) (float6
 
 func TestSuspicionInsteadOfDirectMark(t *testing.T) {
 	interval := sharedconfig.HealthCheckInterval
-	// Probe mode: a probe function is configured, so low passive
-	// throughput only raises suspicion; the degraded mark is confirmed by
-	// probes. (The fake is never called here — only the passive sampler
-	// runs.)
+	// 探测模式：配置了探测函数，因此被动低速只产生嫌疑；
+	// degraded 标记由探测确认。（这里的假探测函数不会被调用——
+	// 只有被动采样器在运行。）
 	lc := &slotLifecycle{probeFunc: func(context.Context, *transportSlot) (float64, probeVerdict) {
 		return 0, probeInconclusive
 	}}
@@ -166,7 +164,7 @@ func TestSuspicionInsteadOfDirectMark(t *testing.T) {
 		lc.evaluateSlotHealth(0, s, interval, true)
 	}
 
-	low() // baseline reset
+	low() // 基线重置
 	for range sharedconfig.DegradedPersistCycles {
 		low()
 	}
@@ -177,7 +175,7 @@ func TestSuspicionInsteadOfDirectMark(t *testing.T) {
 		t.Fatal("expected suspicion after persistent low throughput")
 	}
 
-	// A healthy interval clears the suspicion without any probe.
+	// 一个健康周期无需任何探测即可清除嫌疑。
 	high()
 	if s.suspected {
 		t.Fatal("expected suspicion cleared by healthy throughput")
@@ -186,13 +184,12 @@ func TestSuspicionInsteadOfDirectMark(t *testing.T) {
 
 func TestNoProbeFuncFallsBackToPassive(t *testing.T) {
 	interval := sharedconfig.HealthCheckInterval
-	// No probe function configured (e.g. no probe token): the passive
-	// sampler keeps its legacy direct marking.
+	// 未配置探测函数（例如没有探测令牌）：被动采样器保持传统的直接标记。
 	lc := &slotLifecycle{}
 	s := &transportSlot{t: &http.Transport{}}
 	s.heavy.Store(1)
 
-	lc.evaluateSlotHealth(0, s, interval, true) // baseline reset
+	lc.evaluateSlotHealth(0, s, interval, true) // 基线重置
 	for range sharedconfig.DegradedPersistCycles {
 		s.bytesRecv.Add(10 * 1024)
 		lc.evaluateSlotHealth(0, s, interval, true)
@@ -207,7 +204,7 @@ func TestNoProbeFuncFallsBackToPassive(t *testing.T) {
 
 func TestProbeConfirmDegraded(t *testing.T) {
 	lc, sch := newTestLifecycle(2, func(context.Context, *transportSlot) (float64, probeVerdict) {
-		return 10 * 1024, probeSlow // 10KB/s, well below 64KB/s
+		return 10 * 1024, probeSlow // 10KB/s，远低于 64KB/s
 	})
 	s := sch.priority.slots[0]
 	s.suspected = true
@@ -220,7 +217,7 @@ func TestProbeConfirmDegraded(t *testing.T) {
 		t.Fatalf("probeLowCycles = %d, want 1", s.probeLowCycles)
 	}
 
-	s.lastProbeAt = time.Time{} // bypass cooldown
+	s.lastProbeAt = time.Time{} // 绕过冷却
 	lc.evaluateProbes(true)
 	if !s.degraded.Load() {
 		t.Fatal("expected degraded after ProbeConfirmCycles slow probes")
@@ -262,8 +259,8 @@ func TestProbeSlowRespectsLinkReference(t *testing.T) {
 	})
 	s := sch.priority.slots[0]
 
-	// A fresh link reference below the degraded threshold means the whole
-	// link is the bottleneck: the slow probe must not blame the slot.
+	// 新的链路参考速度低于 degraded 阈值，说明整条链路才是瓶颈：
+	// 慢探测不得归咎于该槽位。
 	lc.linkRefSpeed = 32 * 1024
 	lc.linkRefAt = time.Now()
 	s.suspected = true
@@ -272,7 +269,7 @@ func TestProbeSlowRespectsLinkReference(t *testing.T) {
 		t.Fatal("must not mark or keep suspicion while the link itself is slow")
 	}
 
-	// A healthy link reference: the slot's connection is to blame.
+	// 链路参考健康：该槽位的连接才是问题所在。
 	lc.linkRefSpeed = 1024 * 1024
 	lc.linkRefAt = time.Now()
 	s.suspected = true
@@ -302,11 +299,11 @@ func TestProbeUnsupportedFallsBackToPassive(t *testing.T) {
 		t.Fatal("expected probeUnsupported after two verdicts")
 	}
 
-	// The passive sampler now marks degraded directly (legacy behavior).
+	// 被动采样器现在直接标记 degraded（传统行为）。
 	interval := sharedconfig.HealthCheckInterval
 	s.suspected = false
 	s.heavy.Store(1)
-	lc.evaluateSlotHealth(0, s, interval, true) // baseline reset
+	lc.evaluateSlotHealth(0, s, interval, true) // 基线重置
 	for range sharedconfig.DegradedPersistCycles {
 		s.bytesRecv.Add(10 * 1024)
 		lc.evaluateSlotHealth(0, s, interval, true)
@@ -344,7 +341,7 @@ func TestProbeCooldown(t *testing.T) {
 	})
 	s := sch.priority.slots[0]
 	s.suspected = true
-	s.lastProbeAt = time.Now() // probed moments ago
+	s.lastProbeAt = time.Now() // 刚才探测过
 
 	lc.evaluateProbes(true)
 
@@ -458,14 +455,14 @@ func TestEvaluateRotation(t *testing.T) {
 		s.expireAt.Store(time.Now().Add(-2 * time.Minute).UnixNano())
 		s.connBytes.Store(1024)
 		s.active.Store(1)
-		// First pass: still busy, only mark expiring.
+		// 第一轮：仍然忙碌，只标记 expiring。
 		lc.evaluateRotation(0, s)
 		if !s.expiring.Load() {
 			t.Fatal("expected expiring mark")
 		}
-		// Second pass: idle now, rotation completes and clears the mark.
-		// The deadline and bytes are zeroed too, so the completed rotation
-		// cannot re-trigger on the recycled connection's state.
+		// 第二轮：现在空闲，轮换完成并清除标记。
+		// 截止时间与字节数也被清零，因此已完成的轮换不会
+		// 在复用连接的状态上再次触发。
 		s.active.Store(0)
 		lc.evaluateRotation(0, s)
 		if s.expiring.Load() {
@@ -477,8 +474,7 @@ func TestEvaluateRotation(t *testing.T) {
 		if s.connBytes.Load() != 0 {
 			t.Fatalf("connBytes = %d, want 0 after rotation completed", s.connBytes.Load())
 		}
-		// Third pass: the slot has no connection anymore, so it must not
-		// be marked expiring again on every tick.
+		// 第三轮：槽位已无连接，因此每次 tick 都不得再次标记 expiring。
 		lc.evaluateRotation(0, s)
 		if s.expiring.Load() {
 			t.Fatal("expected no expiring mark after rotation completed")
@@ -498,11 +494,10 @@ func TestEvaluateRotation(t *testing.T) {
 
 func TestResetRotationClearsMarks(t *testing.T) {
 	s := &transportSlot{}
-	// A slot revived by grow (or after a completed rotation) carries the
-	// previous connection's state: an overdue deadline, bytes carried and
-	// expiring/degraded verdicts. resetRotation must return it to the "no
-	// connection" baseline: no marks, zero deadline, zero bytes — so
-	// rotationDue never triggers on the recycled connection's state.
+	// 被 grow 重新激活（或完成轮换后）的槽位带着前一条连接的状态：
+	// 过期的截止时间、承载的字节数以及 expiring/degraded 判定。
+	// resetRotation 必须把它恢复到"无连接"基线：无标记、零截止时间、
+	// 零字节——这样 rotationDue 绝不会在复用连接的状态上触发。
 	s.degraded.Store(true)
 	s.expiring.Store(true)
 	s.expireAt.Store(time.Now().Add(-time.Minute).UnixNano())
@@ -522,7 +517,7 @@ func TestResetRotationClearsMarks(t *testing.T) {
 	if s.expireAt.Load() != 0 {
 		t.Fatalf("expireAt = %d, want 0 (no connection yet)", s.expireAt.Load())
 	}
-	// A slot without a connection must never be judged overdue.
+	// 没有连接的槽位绝不能被判为过期。
 	lc := &slotLifecycle{connLifetime: time.Minute}
 	if lc.rotationDue(s, time.Now()) {
 		t.Fatal("slot without a connection must not be due for rotation")
@@ -531,9 +526,8 @@ func TestResetRotationClearsMarks(t *testing.T) {
 
 func TestResetConnClearsMarks(t *testing.T) {
 	s := &transportSlot{}
-	// A retiring slot (degraded+expiring) past its lifetime with bytes
-	// carried: after a fresh connection is established, the rotation state
-	// starts over and the degraded verdict of the old connection is void.
+	// 一个超过寿命、带字节数的 retiring 槽位（degraded+expiring）：
+	// 建立新连接后，轮换状态重新开始，旧连接的 degraded 判定失效。
 	s.degraded.Store(true)
 	s.expiring.Store(true)
 	s.expireAt.Store(time.Now().Add(-time.Minute).UnixNano())

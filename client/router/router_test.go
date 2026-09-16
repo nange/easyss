@@ -208,9 +208,8 @@ func TestNewRouter(t *testing.T) {
 	}
 }
 
-// TestCustomFileError verifies that a missing custom direct/proxy rule file
-// does not fail router construction (built-in rules keep working) but is
-// recorded as a startup warning via CustomFileError.
+// TestCustomFileError 验证自定义直连/代理规则文件缺失不会导致路由器构造失败
+// （内置规则仍可正常工作），但会通过 CustomFileError 记录为启动警告。
 func TestCustomFileError(t *testing.T) {
 	r, err := New(Config{
 		ProxyRule:  ProxyRuleAuto,
@@ -286,8 +285,7 @@ func TestRouter_SetIPV6Info(t *testing.T) {
 		t.Errorf("ServerIPV6() = %q", r.ServerIPV6())
 	}
 
-	// Auto rule: IPv6 is only enabled while both networking and the server
-	// address are available.
+	// Auto 规则：只有网络和服务器地址都可用时 IPv6 才启用。
 	r.ipv6Rule.Store(int32(IPV6RuleAuto))
 	if r.ShouldIPV6Disable() {
 		t.Error("IPV6RuleAuto with networking and server ipv6 should not disable ipv6")

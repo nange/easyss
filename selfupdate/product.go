@@ -5,28 +5,26 @@ import (
 	"runtime"
 )
 
-// Product identifies which binary variant is being updated. It drives both
-// the release asset name and the staged binary name inside the release zip,
-// following the CI naming scheme (<product>-<goos>-<goarch>.zip).
+// Product 标识正在更新的二进制变体。它同时决定 release 资产名和 release zip
+// 内部的暂存二进制名，遵循 CI 命名规范（<product>-<goos>-<goarch>.zip）。
 type Product string
 
 const (
-	// ProductClient is the tray client build (binary "easyss"/"easyss.exe").
+	// ProductClient 是带托盘客户端的构建（二进制 "easyss"/"easyss.exe"）。
 	ProductClient Product = "easyss"
-	// ProductHeadless is the headless client build (binary "easyss-headless").
+	// ProductHeadless 是无界面客户端的构建（二进制 "easyss-headless"）。
 	ProductHeadless Product = "easyss-headless"
-	// ProductServer is the server build (binary "easyss-server"/"easyss-server.exe").
+	// ProductServer 是服务端的构建（二进制 "easyss-server"/"easyss-server.exe"）。
 	ProductServer Product = "easyss-server"
 )
 
-// assetName returns the release asset name for the product on a platform,
-// e.g. ("easyss-server", "linux", "amd64") -> "easyss-server-linux-amd64.zip".
+// assetName 返回产品在某个平台上的 release 资产名，例如
+// ("easyss-server", "linux", "amd64") -> "easyss-server-linux-amd64.zip"。
 func (p Product) assetName(goos, goarch string) string {
 	return fmt.Sprintf("%s-%s-%s.zip", p, goos, goarch)
 }
 
-// binaryName returns the staged binary name inside the release zip for the
-// current platform.
+// binaryName 返回当前平台在 release zip 内部的暂存二进制名。
 func (p Product) binaryName() string {
 	name := string(p)
 	if runtime.GOOS == "windows" {

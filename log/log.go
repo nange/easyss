@@ -17,24 +17,24 @@ import (
 
 var logger = slog.New(DefaultHandler(slog.LevelInfo))
 
-// AtomicLevel is a thread-safe slog.Level that can be changed at runtime.
+// AtomicLevel 是可在运行时修改的线程安全 slog.Level。
 type AtomicLevel struct {
 	level atomic.Int32
 }
 
-// Level returns the current log level.
+// Level 返回当前日志级别。
 func (al *AtomicLevel) Level() slog.Level {
 	return slog.Level(al.level.Load())
 }
 
-// SetLevel sets the log level.
+// SetLevel 设置日志级别。
 func (al *AtomicLevel) SetLevel(level slog.Level) {
 	al.level.Store(int32(level))
 }
 
 var atomicLevel AtomicLevel
 
-// SetLevel dynamically changes the log level at runtime.
+// SetLevel 在运行时动态修改日志级别。
 func SetLevel(level slog.Level) {
 	atomicLevel.SetLevel(level)
 }
@@ -68,7 +68,7 @@ func log(level slog.Level, msg string, args ...any) {
 		return
 	}
 	var pcs [1]uintptr
-	// skip [runtime.Callers, log.log, log.Info] a total of 3
+	// 跳过 [runtime.Callers, log.log, log.Info] 共 3 层
 	runtime.Callers(3, pcs[:])
 	r := slog.NewRecord(time.Now(), level, msg, pcs[0])
 	r.Add(args...)

@@ -33,62 +33,57 @@ type Socks5Server struct {
 	disableQUIC       bool
 	directDialContext func(context.Context, string, string) (net.Conn, error)
 	dialTimeout       time.Duration
-	// streamIdleTimeout bounds idle direct-TCP relays; derived from the
-	// user-configured base timeout via config.StreamIdleTimeout so the
-	// direct path matches the proxied path's stream idle timeout.
+	// streamIdleTimeout 限制直连 TCP 中继的空闲时长；由用户配置的基础超时经
+	// config.StreamIdleTimeout 派生而来，使直连路径与代理路径的流空闲超时一致。
 	streamIdleTimeout time.Duration
 
 	udpMu   sync.RWMutex
 	udpExch map[string]*UDPExchange
-	// udpExchangeSF deduplicates concurrent OpenUDPExchange calls for the
-	// same (client, target) key; udpInflightCount tracks how many creations
-	// are in flight so the exchange cap can account for them.
+	// udpExchangeSF 对相同 (client, target) 键的并发 OpenUDPExchange 调用去重；
+	// udpInflightCount 记录正在创建中的数量，使交换数量上限能将其计入。
 	udpExchangeSF    singleflight.Group
 	udpInflightCount atomic.Int64
 	directUDP        map[string]*directUDPConn
-	// directUDPSF deduplicates concurrent direct-UDP dials for the same
-	// (client, target) key.
+	// directUDPSF 对相同 (client, target) 键的并发直连 UDP 拨号去重。
 	directUDPSF    singleflight.Group
 	quit           chan struct{}
 	closeOnce      sync.Once
 	udpIdleTimeout time.Duration
-	// dnsRespTimeout bounds how long a proxied-DNS exchange may go without
-	// any server response before it is closed (read-idle timeout). Only DNS
-	// exchanges enable it; 0 disables the mechanism. It exists because the
-	// 60s udpIdleTimeout never fires for exchanges whose client keeps
-	// retrying queries (each Send refreshes lastSeen) while the upstream DNS
-	// server stays silent.
+	// dnsRespTimeout 限制代理 DNS 交换在没有任何服务器响应的情况下可保持多久
+	// 才被关闭（读空闲超时）。只有 DNS 交换启用它；0 表示禁用该机制。它存在的
+	// 原因是：当客户端不断重试查询（每次 Send 都会刷新 lastSeen）而上游 DNS
+	// 服务器一直沉默时，默认 60 秒的 udpIdleTimeout 永远不会触发。
 	dnsRespTimeout time.Duration
 	started        atomic.Bool
 	closing        atomic.Bool
 }
 
-// directUDPConn pairs a direct-UDP socket with its last-write timestamp so
-// the cleanup loop can recycle sessions whose remote peer went silent.
+// directUDPConn 将直连 UDP socket 与其最近活动时间戳配对，使清理循环能够回收
+// 远端已沉默的会话。
 type directUDPConn struct {
 	conn     net.Conn
-	lastSeen atomic.Int64 // UnixNano, refreshed on every datagram written
+	lastSeen atomic.Int64 // UnixNano，每次收发数据报时刷新
 }
 
-// Socks5Options configures NewSocks5Server. It replaces a positional parameter
-// list that had grown to fourteen arguments, where four durations derived from
-// one base timeout could be transposed silently.
+// Socks5Options 用于配置 NewSocks5Server。它取代了一个已增长到十四个参数的
+// 位置参数列表——其中四个从同一个基础超时派生的时长可能被悄悄弄混。
 type Socks5Options struct {
 	ListenAddr string
 	Username   string
 	Password   string
 	Handler    *StreamHandler
 	Router     *router.Router
-	// ServerDomain is the proxy server's own hostname ("" when it is a literal
-	// IP): DNS queries for it must never take the proxied path.
+	// ServerDomain 是代理服务器自身的主机名（为字面 IP 时是 ""）：针对它的 DNS
+	// 查询绝不能走代理路径。
 	ServerDomain string
 	Method       protocol.Method
-	// DisableQUIC is set when QUIC (HTTP/3) must be blocked for direct hosts.
+	// DisableQUIC 置为 true 时屏蔽 QUIC（HTTP/3）：启用后所有发往 443 端口的
+	// UDP 数据报都会被丢弃（见 handleUDP），与路由规则无关。
 	DisableQUIC bool
-	// Timeouts carries every derived duration (dial, TCP/UDP idle, DNS
-	// response). See config.NewTimeouts.
+	// Timeouts 保存所有派生的时长（拨号、TCP/UDP 空闲、DNS 响应）。参见
+	// config.NewTimeouts。
 	Timeouts config.Timeouts
-	// DirectDialContext opens direct connections; nil uses a plain net.Dialer.
+	// DirectDialContext 打开直连连接；为 nil 时使用普通的 net.Dialer。
 	DirectDialContext func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
@@ -144,29 +139,26 @@ func defaultDirectDialContext(ctx context.Context, network, addr string) (net.Co
 	return dialer.DialContext(ctx, network, addr)
 }
 
-// PrePopulateDNS pre-seeds the DNS cache with the resolved IPs for the
-// given domain, trying each of the given dns servers in order and falling
-// back to the system dns servers when all of them fail. This avoids a DNS
-// deadlock when TUN routes are active.
-// The ctx bounds the whole resolution so an unreachable DNS server cannot
-// stall startup (see dns.Cache.PrePopulateWithFallback).
+// PrePopulateDNS 用给定域名的解析结果 IP 预先填充 DNS 缓存：依次尝试给定的各个
+// DNS 服务器，全部失败时回退到系统 DNS 服务器。这可以避免 TUN 路由生效时出现
+// DNS 死锁。
+// ctx 约束整个解析过程，使不可达的 DNS 服务器无法阻塞启动
+// （参见 dns.Cache.PrePopulateWithFallback）。
 func (s *Socks5Server) PrePopulateDNS(ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error {
 	return s.dnsCache.PrePopulateWithFallback(ctx, domain, dnsServers, requireIPv4)
 }
 
-// isServerDomain reports whether the given domain is the proxy server's own
-// hostname. DNS queries for it must never take the proxied path: resolving
-// the server domain would require opening a tunnel stream, which in turn
-// needs to dial the server domain — a circular dependency that deadlocks
-// (especially after system sleep/wake when cached entries may have expired).
+// isServerDomain 报告给定域名是否是代理服务器自身的主机名。针对它的 DNS 查询
+// 绝不能走代理路径：解析服务器域名需要打开隧道流，而打开隧道流又需要拨号到
+// 服务器域名——这是一个会死锁的循环依赖（尤其是在系统休眠/唤醒后缓存条目可能
+// 已过期时）。
 func (s *Socks5Server) isServerDomain(domain string) bool {
 	return s.serverDomain != "" && strings.EqualFold(domain, s.serverDomain)
 }
 
-// MarkStarted records that Start is about to be called. It must be called
-// synchronously before launching Start in a goroutine: the flag set inside
-// Start itself would race with a Close on a single-core scheduler, letting
-// the server goroutine leak its listener.
+// MarkStarted 记录 Start 即将被调用。它必须在以 goroutine 方式启动 Start 之前
+// 同步调用：若在 Start 内部设置该标志，在单核调度器上会与 Close 竞争，
+// 导致服务器 goroutine 泄漏其监听器。
 func (s *Socks5Server) MarkStarted() {
 	s.started.Store(true)
 }
@@ -177,17 +169,13 @@ func (s *Socks5Server) Start() error {
 	return s.srv.ListenAndServe(s)
 }
 
-// waitForAccept polls the listen address until the server has really
-// started accepting connections. A plain TCP dial is not enough: it
-// succeeds as soon as the listener is bound at the kernel level, before
-// the accept loop inside the txthinking/socks5 runnergroup library has
-// registered its runners. Calling Shutdown in that window either leaks
-// the listener (runnergroup.Done returns early when no runner has been
-// added yet) or deadlocks (Done skips runners whose start goroutine has
-// not run yet, then blocks forever waiting for a done signal that never
-// comes). Probing with a real SOCKS5 greeting and requiring a reply
-// only succeeds once the accept loop is up, so Close can never race
-// with the goroutine spawned by Start.
+// waitForAccept 轮询监听地址，直到服务器真正开始接受连接。单纯的 TCP 拨号
+// 不够：只要监听器在内核层面完成绑定它就会成功，而此时 txthinking/socks5
+// runnergroup 库内部的 accept 循环尚未注册其 runner。在这个窗口内调用 Shutdown
+// 要么泄漏监听器（尚未添加任何 runner 时 runnergroup.Done 会提前返回），要么
+// 死锁（Done 会跳过启动 goroutine 尚未运行的 runner，然后永远阻塞等待一个
+// 永远不会到来的完成信号）。只有用真实的 SOCKS5 问候并收到回复来探测，才能
+// 在 accept 循环就绪后成功，因此 Close 永远不会与 Start 派生的 goroutine 竞争。
 func (s *Socks5Server) waitForAccept() {
 	if s.srv == nil {
 		return
@@ -196,9 +184,8 @@ func (s *Socks5Server) waitForAccept() {
 	if addr == "" {
 		return
 	}
-	// SOCKS5 greeting: version 5, one offered method, no auth. The
-	// server only answers after the accept loop accepted our connection
-	// and parsed the greeting.
+	// SOCKS5 问候：版本 5，提供一个方法，无认证。只有 accept 循环接受了
+	// 我们的连接并解析完问候后，服务器才会应答。
 	greeting := []byte{0x05, 0x01, 0x00}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -209,9 +196,8 @@ func (s *Socks5Server) waitForAccept() {
 	}
 }
 
-// probeSocks5Accept dials addr and performs a SOCKS5 negotiation. It
-// reports whether the server accepted the connection and replied to the
-// greeting, which proves the accept loop is up and registered.
+// probeSocks5Accept 拨号 addr 并执行一次 SOCKS5 协商。它报告服务器是否接受了
+// 连接并应答了问候，以此证明 accept 循环已启动并完成注册。
 func probeSocks5Accept(addr string, greeting []byte) bool {
 	c, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
 	if err != nil {
@@ -248,16 +234,14 @@ func (s *Socks5Server) Close() error {
 		delete(s.directUDP, key)
 	}
 	s.udpMu.Unlock()
-	// Close the exchanges outside the lock: Close flushes a FIN through the
-	// HTTP/2 stream (an io.Pipe write), which can block on transport
-	// backpressure — holding s.udpMu there would freeze all UDP handling.
-	// closeOnce makes this safe against the receiveLoop's own Close.
+	// 在锁外关闭交换：Close 会通过 HTTP/2 流冲刷一个 FIN（一次 io.Pipe 写入），
+	// 可能因传输层背压而阻塞——此时持有 s.udpMu 会冻结所有 UDP 处理。
+	// closeOnce 保证它与 receiveLoop 自身的 Close 并发时是安全的。
 	for _, ue := range exchanges {
 		ue.Close() //nolint:errcheck
 	}
-	// In-flight exchange creations are reaped by the creator itself: after
-	// OpenUDPExchange returns it observes the closing flag, closes the
-	// exchange and removes the factory entry (see getOrCreateUDPExchange).
+	// 正在创建中的交换由创建者自己回收：OpenUDPExchange 返回后它会检查关闭
+	// 标志，关闭交换并移除工厂条目（参见 getOrCreateUDPExchange）。
 	if s.srv != nil {
 		return s.srv.Shutdown()
 	}
@@ -387,16 +371,12 @@ func (s *Socks5Server) replyError(c net.Conn, r *socks5.Request, rep byte) error
 	return err
 }
 
-// relayTCP copies bytes in both directions between dst and src with a shared
-// idle timeout, mirroring the proxied path's relay semantics: on clean EOF a
-// half-close is propagated, and on idle timeout or error both connections
-// are closed exactly once.
+// relayTCP 在 dst 与 src 之间双向拷贝字节，共用一个空闲超时，镜像代理路径的
+// 中继语义：干净 EOF 时传播半关闭，空闲超时或出错时两个连接恰好关闭一次。
 //
-// idleTimeout bounds how long the relay may sit idle before both connections
-// are torn down, so a silent or half-open peer cannot leave the two copy
-// goroutines and their sockets alive forever. The caller derives it from the
-// user-configured base timeout (config.StreamIdleTimeout), keeping the direct
-// path consistent with the proxied path's stream idle timeout.
+// idleTimeout 限制中继在两条连接被拆除前可保持空闲的时长，使沉默或半开的对端
+// 无法让两个拷贝 goroutine 及其 socket 永久存活。调用方由用户配置的基础超时
+// 派生它（config.StreamIdleTimeout），使直连路径与代理路径的流空闲超时一致。
 func relayTCP(dst, src net.Conn, idleTimeout time.Duration) {
 	result := relay.Bidirectional(idleTimeout, relay.CloseBoth(dst, src),
 		func(signalActivity func()) error { return copyHalfClose(dst, src, signalActivity) },
@@ -405,10 +385,9 @@ func relayTCP(dst, src net.Conn, idleTimeout time.Duration) {
 	logRelayResult("[TCP_DIRECT]", "", result)
 }
 
-// logRelayResult reports a finished relay at the level its outcome deserves:
-// silent for expected teardown, Debug for a timeout or a failed copy. Shared
-// by the direct and proxied TCP paths so the same condition cannot be reported
-// at different levels (the direct path used to swallow idle timeouts).
+// logRelayResult 以与结果相匹配的级别记录一次结束的中继：预期的拆除保持静默，
+// 超时或拷贝失败记录为 Debug。直连与代理 TCP 路径共用，使同一情况不会被记录为
+// 不同级别（直连路径过去会吞掉空闲超时）。
 func logRelayResult(prefix, target string, result relay.Result) {
 	if result.Err == nil || errors.Is(result.Err, io.EOF) || errors.Is(result.Err, io.ErrClosedPipe) || isLocalConnClosedError(result.Err) {
 		return
@@ -420,8 +399,8 @@ func logRelayResult(prefix, target string, result relay.Result) {
 	log.Debug(prefix+" relay copy error", "target", target, "err", result.Err)
 }
 
-// copyHalfClose streams src to dst, signalling activity on every read and
-// half-closing dst on clean EOF.
+// copyHalfClose 将 src 流式拷贝到 dst，每次读取时发出活动信号，并在干净 EOF
+// 时对 dst 执行半关闭。
 func copyHalfClose(dst, src net.Conn, signalActivity func()) error {
 	buf := bytespool.Get(config.TCPStreamBufferSize)
 	defer bytespool.MustPut(buf)
@@ -460,10 +439,9 @@ func (s *Socks5Server) cleanupLoop() {
 					stale = append(stale, ue)
 				}
 			}
-			// Direct UDP sessions get the same idle recycling: a remote peer
-			// that stops responding (or a datagram flow that simply ended)
-			// must not pin the socket and its reader goroutine until the
-			// read loop's own read-idle deadline fires.
+			// 直连 UDP 会话采用相同的空闲回收：停止响应的远端对端（或已经结束的
+			// 数据报流）不应把 socket 及其读取 goroutine 一直占用到读循环自身的
+			// 读空闲截止时间触发。
 			for key, dc := range s.directUDP {
 				if time.Since(time.Unix(0, dc.lastSeen.Load())) > s.udpIdleTimeout {
 					log.Debug("[UDP_DIRECT] idle cleanup", "key", key)
@@ -472,11 +450,10 @@ func (s *Socks5Server) cleanupLoop() {
 				}
 			}
 			s.udpMu.Unlock()
-			// Close evicted exchanges outside the lock: Close flushes a FIN
-			// through the HTTP/2 stream (an io.Pipe write), which can block
-			// on transport backpressure — holding s.udpMu there would freeze
-			// all UDP handling. closeOnce makes this safe against the
-			// receiveLoop's own Close.
+			// 在锁外关闭被驱逐的交换：Close 会通过 HTTP/2 流冲刷一个 FIN（一次
+			// io.Pipe 写入），可能因传输层背压而阻塞——此时持有 s.udpMu 会冻结
+			// 所有 UDP 处理。closeOnce 保证它与 receiveLoop 自身的 Close
+			// 并发时是安全的。
 			for _, ue := range stale {
 				ue.Close() //nolint:errcheck
 			}

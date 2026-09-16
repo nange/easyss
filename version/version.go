@@ -1,6 +1,6 @@
 package version
 
-// Ref: https://github.com/qiniu/version
+// 参考：https://github.com/qiniu/version
 
 import (
 	"fmt"
@@ -13,58 +13,46 @@ const (
 	unknownProperty = ""
 )
 
-// Compiler is a convenient alias for runtime.Compiler.
+// Compiler 是 runtime.Compiler 的便捷别名。
 const Compiler = runtime.Compiler
 
-// Version information
+// 版本信息
 var (
-	// GoVersion is the version of the Go toolchain used to build the binary
-	// (e.g. "go1.19.2").
-	// It defaults to value of runtime.Version() if not explicitly overridden.
+	// GoVersion 是构建该二进制所用的 Go 工具链版本（例如 "go1.19.2"）。
+	// 未显式覆盖时默认为 runtime.Version() 的值。
 	GoVersion = unknownProperty
-	// GitCommit is the commit hash of the Git repository's HEAD at
-	// build-time.
-	// It defaults to the value as collected by the runtime/debug package if
-	// not explicitly overridden.
+	// GitCommit 是构建时 Git 仓库 HEAD 的提交哈希。
+	// 未显式覆盖时默认为 runtime/debug 包收集到的值。
 	GitCommit = unknownProperty
-	// GitCommitDate is GitCommit's commit date in RFC3339 format.
-	// It defaults to the value as collected by the runtime/debug package if
-	// not explicitly overridden.
+	// GitCommitDate 是 GitCommit 的提交日期，RFC3339 格式。
+	// 未显式覆盖时默认为 runtime/debug 包收集到的值。
 	GitCommitDate = unknownProperty
-	// GitTreeState becomes "dirty" if the source tree had local modifications
-	// at build-time.
-	// It stays empty otherwise and will not be shown in Print if this is the
-	// case.
+	// GitTreeState 在构建时源码树有本地修改时为 "dirty"。
+	// 否则保持为空，这种情况下 Print 不会显示它。
 	GitTreeState = unknownProperty
-	// GitTag is meant to be injected with the tag name associated with
-	// GitCommit, by means of `go -ldflags` at build-time.
-	// It stays empty otherwise and will not be shown in Print if this is the
-	// case.
+	// GitTag 旨在通过 `go -ldflags` 在构建时注入与 GitCommit 关联的标签名。
+	// 否则保持为空，这种情况下 Print 不会显示它。
 	GitTag = unknownProperty
-	// BuildDate is meant to be injected with a string denoting the build time
-	// of the binary, by means of `go -ldflags` at build-time.
-	// It stays empty otherwise and will not be shown in Print if this is the
-	// case.
+	// BuildDate 旨在通过 `go -ldflags` 在构建时注入表示构建时间的字符串。
+	// 否则保持为空，这种情况下 Print 不会显示它。
 	BuildDate = unknownProperty
-	// Platform is a string in the form of "GOOS/GOARCH", e.g. "linux/amd64".
+	// Platform 是 "GOOS/GOARCH" 形式的字符串，例如 "linux/amd64"。
 	Platform = unknownProperty
-	// BuildComments can be used to associate arbitrary extra information with
-	// the binary, by means of injection via `go -ldflags` at build-time.
+	// BuildComments 可用于通过 `go -ldflags` 在构建时注入与二进制
+	// 关联的任意附加信息。
 	BuildComments = unknownProperty
-	// Name is meant to be injected with the binary's intended name, by means
-	// of `go -ldflags` at build-time.
-	// It stays empty otherwise and will not be shown in Print if this is the
-	// case.
+	// Name 旨在通过 `go -ldflags` 在构建时注入二进制的预期名称。
+	// 否则保持为空，这种情况下 Print 不会显示它。
 	Name = unknownProperty
 )
 
-// This is for preventing access to the unpopulated properties.
+// 用于防止访问未填充的属性。
 func init() {
 	collectFromBuildInfo()
 	collectFromRuntime()
 }
 
-// Print prints out the collected version information.
+// Print 打印收集到的版本信息。
 func Print() {
 	fmt.Print(String())
 }
@@ -112,8 +100,8 @@ func String() string {
 	return builder.String()
 }
 
-// collectFromBuildInfo tries to set the build information embedded in the running binary via Go module.
-// It doesn't override data if were already set by Go -ldflags.
+// collectFromBuildInfo 尝试设置 Go module 嵌入在运行二进制中的构建信息。
+// 如果数据已由 Go -ldflags 设置，则不覆盖。
 func collectFromBuildInfo() {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
@@ -139,8 +127,8 @@ func collectFromBuildInfo() {
 	}
 }
 
-// collectFromRuntime tries to set the build information embedded in the running binary via go runtime.
-// It doesn't override data if were already set by Go -ldflags.
+// collectFromRuntime 尝试设置 go runtime 嵌入在运行二进制中的构建信息。
+// 如果数据已由 Go -ldflags 设置，则不覆盖。
 func collectFromRuntime() {
 	if GoVersion == unknownProperty {
 		GoVersion = runtime.Version()

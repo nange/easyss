@@ -5,5 +5,5 @@ package main
 import "github.com/gogpu/systray"
 
 func (a *TrayApp) addUWPLoopbackMenu(root *systray.Menu) {
-	// No-op on non-Windows
+	// 在非 Windows 平台上为空操作
 }

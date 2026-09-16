@@ -20,18 +20,17 @@ const (
 	minCacheTTL = 30 * 60
 )
 
-// Cache stores DNS query results in two separate caches: one for proxied
-// results and one for direct (non-proxied) results.
+// Cache 将 DNS 查询结果存储在两个独立的缓存中：一个用于代理（proxied）
+// 结果，一个用于直连（direct）结果。
 type Cache struct {
 	proxied      *freecache.Cache
 	direct       *freecache.Cache
 	serverDomain string
 }
 
-// NewCache creates a new DNS cache with separate storage for proxied and
-// direct results. Entries for serverDomain (usually the proxy server's own
-// hostname) are cached without expiration so that a TTL expiry can never
-// trigger a burst of concurrent direct queries for it.
+// NewCache 创建一个 DNS 缓存，代理与直连结果分开存储。serverDomain（通常为
+// 代理服务器自身的域名）对应的条目永不过期，这样 TTL 到期永远不会触发针对
+// 它的并发直连查询突发。
 func NewCache(serverDomain string) *Cache {
 	return &Cache{
 		proxied:      freecache.NewCache(cacheSize),
@@ -40,15 +39,14 @@ func NewCache(serverDomain string) *Cache {
 	}
 }
 
-// Get retrieves a cached DNS message by name and query type.
-// If isDirect is true, the direct cache is queried; otherwise the proxied cache.
+// Get 按名称和查询类型获取缓存的 DNS 消息。
+// 若 isDirect 为 true 则查询直连缓存，否则查询代理缓存。
 func (c *Cache) Get(name, qtype string, isDirect bool) *dns.Msg {
 	cache := c.proxied
 	if isDirect {
 		cache = c.direct
 	}
-	// DNS names are case-insensitive; normalize so differently-cased
-	// queries hit the same entry.
+	// DNS 名称不区分大小写；统一归一化，使不同大小写的查询命中同一条目。
 	v, err := cache.Get([]byte(strings.ToLower(name) + qtype))
 	if err != nil || len(v) == 0 {
 		stats.RecordDNSCacheMiss()
@@ -63,11 +61,10 @@ func (c *Cache) Get(name, qtype string, isDirect bool) *dns.Msg {
 	return msg
 }
 
-// Set stores a DNS message in the appropriate cache using DNS TTL.
-// Only A and AAAA records are cached. If isDirect is true, the direct cache is used.
-// The effective cache lifetime is the base TTL plus a random jitter in
-// [0, baseTTL) so that entries with the same base TTL do not expire at the
-// same moment, avoiding bursts of concurrent DNS queries.
+// Set 使用 DNS TTL 将 DNS 消息存入对应的缓存。
+// 仅缓存 A 和 AAAA 记录。若 isDirect 为 true 则使用直连缓存。
+// 有效缓存时长为基础 TTL 加上 [0, baseTTL) 范围内的随机抖动，使具有相同
+// 基础 TTL 的条目不会在同一时刻过期，避免并发 DNS 查询的突发。
 func (c *Cache) Set(msg *dns.Msg, isDirect bool) error {
 	if msg == nil || len(msg.Question) == 0 {
 		return nil
@@ -88,10 +85,9 @@ func (c *Cache) Set(msg *dns.Msg, isDirect bool) error {
 	return nil
 }
 
-// dnsCacheTTL returns the cache lifetime in seconds for the given DNS
-// message. Entries for the proxy server's own domain never expire (0 means
-// forever in freecache); other domains are cached for the minimal answer TTL
-// clamped to [minCacheTTL, maxCacheTTL].
+// dnsCacheTTL 返回给定 DNS 消息的缓存时长（秒）。代理服务器自身域名的条目
+// 永不过期（freecache 中 0 表示永不过期）；其他域名按应答中最小 TTL 缓存，
+// 并限制在 [minCacheTTL, maxCacheTTL] 区间内。
 func dnsCacheTTL(msg *dns.Msg, serverDomain string) int {
 	if serverDomain != "" {
 		q := msg.Question[0]
@@ -110,10 +106,9 @@ func dnsCacheTTL(msg *dns.Msg, serverDomain string) int {
 		}
 	}
 	if ttl == 0 {
-		// A TTL of 0 conventionally means "re-resolve immediately" (CDN
-		// failover, dynamic DNS). Clamp it to the *minimum* cache lifetime
-		// rather than the maximum so freshness-demanding records do not
-		// stick around for 2 hours.
+		// TTL 为 0 通常表示“立即重新解析”（CDN 故障切换、动态 DNS）。将其
+		// 限制到 *最小* 缓存时长而不是最大时长，这样对新鲜度要求高的记录
+		// 不会滞留 2 小时。
 		ttl = minCacheTTL
 	}
 	if ttl > maxCacheTTL {
@@ -125,11 +120,10 @@ func dnsCacheTTL(msg *dns.Msg, serverDomain string) int {
 	return int(ttl)
 }
 
-// jitterTTL returns the effective cache lifetime in seconds for a base TTL:
-// the base TTL plus a random jitter in [0, ttl). Entries sharing the same
-// base TTL therefore expire at scattered moments instead of all at once,
-// avoiding a burst of concurrent DNS queries. A TTL of 0 (never expire,
-// e.g. the proxy server's own domain) is returned unchanged.
+// jitterTTL 返回基础 TTL 对应的有效缓存时长（秒）：基础 TTL 加上 [0, ttl)
+// 范围内的随机抖动。因此共享同一基础 TTL 的条目会在分散的时刻过期，而不是
+// 同时过期，从而避免并发 DNS 查询的突发。TTL 为 0（永不过期，例如代理服务器
+// 自身域名）时原样返回。
 func jitterTTL(ttl int) int {
 	if ttl <= 0 {
 		return ttl
@@ -137,14 +131,12 @@ func jitterTTL(ttl int) int {
 	return ttl + rand.IntN(ttl)
 }
 
-// PrePopulate resolves the domain via the given DNS server and stores the
-// A and AAAA results in both the direct and proxied caches. This is used
-// to pre-seed the cache with the proxy server's IP before TUN routes are
-// active, avoiding a DNS deadlock.
-// When requireIPv4 is true, the A query must succeed; otherwise either
-// A or AAAA success is sufficient.
-// The ctx bounds the whole resolution so an unreachable DNS server cannot
-// stall startup for the per-query 5s timeout.
+// PrePopulate 通过指定的 DNS 服务器解析域名，并将 A 和 AAAA 结果同时存入
+// 直连与代理缓存。用于在 TUN 路由生效前预置代理服务器 IP 的缓存，避免 DNS
+// 死锁。
+// 当 requireIPv4 为 true 时，A 查询必须成功；否则 A 或 AAAA 任一成功即可。
+// ctx 约束整个解析过程，这样不可达的 DNS 服务器不会因单次查询 5s 的超时
+// 而拖慢启动。
 func (c *Cache) PrePopulate(ctx context.Context, domain, dnsServer string, requireIPv4 bool) error {
 	store := func(msg *dns.Msg) {
 		if msg == nil {
@@ -186,11 +178,10 @@ func (c *Cache) PrePopulate(ctx context.Context, domain, dnsServer string, requi
 	return nil
 }
 
-// PrePopulateWithFallback resolves the domain via each of the given dns
-// servers in order, then falls back to the system dns servers when all of
-// them are unavailable, storing the results in both the direct and proxied
-// caches. See PrePopulate for the requireIPv4 semantics.
-// The ctx bounds the whole resolution (see PrePopulate).
+// PrePopulateWithFallback 依次通过给定的每个 DNS 服务器解析域名，当它们全部
+// 不可用时回退到系统 DNS 服务器，并将结果同时存入直连与代理缓存。
+// requireIPv4 的语义见 PrePopulate。
+// ctx 约束整个解析过程（见 PrePopulate）。
 func (c *Cache) PrePopulateWithFallback(ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error {
 	var lastErr error
 	try := func(server string) bool {

@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	MaxCipherRecordSize = protocol.MaxPlainRecordSize + 16 // max plaintext + AEAD tag
+	MaxCipherRecordSize = protocol.MaxPlainRecordSize + 16 // 最大明文 + AEAD 认证标签
 )
 
 type RecordWriter struct {
@@ -75,12 +75,11 @@ func (rw *RecordWriter) WriteRecord(plaintext []byte) error {
 	return nil
 }
 
-// Flush triggers an immediate flush of the underlying writer if it supports
-// flushing (e.g. HTTP/2 ResponseWriter with a 4KB bufio buffer). WriteRecord
-// does not auto-flush; callers (typically the shaper) are responsible for
-// calling Flush after small records. For records larger than the HTTP/2
-// bufio buffer (4KB), the Go HTTP/2 server already sends data directly via
-// chunkWriter, making Flush a no-op.
+// Flush 在底层写入器支持刷新时立即触发一次刷新（例如带 4KB bufio 缓冲的
+// HTTP/2 ResponseWriter）。WriteRecord 不会自动 flush；调用方（通常是
+// shaper）负责在小记录后调用 Flush。对于大于 HTTP/2 bufio 缓冲（4KB）的
+// 记录，Go HTTP/2 服务器已经通过 chunkWriter 直接发送数据，Flush 成为
+// 空操作。
 func (rw *RecordWriter) Flush() {
 	if flusher, ok := rw.w.(recordFlusher); ok {
 		flusher.Flush()

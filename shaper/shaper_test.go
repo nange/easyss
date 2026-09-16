@@ -19,9 +19,8 @@ import (
 	"github.com/nange/easyss/v3/util/bytespool"
 )
 
-// TestConfigNormalize pins the single source of the shaper defaults and
-// bounds, which used to be re-applied by the client config layer, the server
-// handler and New independently.
+// TestConfigNormalize 固定了整形器默认值和边界的唯一出处，
+// 这些值过去曾被客户端配置层、服务端 handler 和 New 各自重复应用。
 func TestConfigNormalize(t *testing.T) {
 	got := Config{}.Normalize()
 	if got.BatchWindowMS != sharedconfig.DefaultBatchWindowMS {
@@ -57,7 +56,7 @@ func TestConfigNormalize(t *testing.T) {
 		t.Errorf("IdleTimeout = %d, want the default", capped.Cover.IdleTimeout)
 	}
 
-	// An in-range value is preserved.
+	// 范围内的值保持不变。
 	kept := Config{BatchWindowMS: 7, Cover: CoverConfig{BudgetRatio: 0.5, BudgetCap: 4096}}.Normalize()
 	if kept.BatchWindowMS != 7 || kept.Cover.BudgetRatio != 0.5 || kept.Cover.BudgetCap != 4096 {
 		t.Errorf("in-range values changed: %+v", kept)
@@ -135,14 +134,14 @@ func TestBatchShaperFlushesBeforePlainRecordLimit(t *testing.T) {
 	}
 }
 
-// TestCoverNormalizeClampsFrameSize verifies Config.Normalize clamps
-// misconfigured cover sizes to the wire-format ceiling, so a huge MaxSize
-// cannot produce truncated uint16 lengths or bytespool.Get nil-panic payloads.
-// Normalize runs at the top of New, before the injector is built.
+// TestCoverNormalizeClampsFrameSize 验证 Config.Normalize 会将配置错误的
+// cover 尺寸钳制到线缆格式上限，使过大的 MaxSize 不会产生截断的 uint16
+// 长度或 bytespool.Get 的 nil panic payload。
+// Normalize 在 New 的开头运行，先于注入器的构建。
 func TestCoverNormalizeClampsFrameSize(t *testing.T) {
 	cfg := Config{Cover: CoverConfig{
 		BudgetRatio: 0.10,
-		MinSize:     200_000, // > 65535 and > bytespool ceiling
+		MinSize:     200_000, // > 65535 且 > bytespool 上限
 		MaxSize:     1_000_000,
 		BudgetCap:   2_000_000,
 	}}.Normalize()
@@ -209,10 +208,9 @@ func TestCoverInjectorSkipsDuringActiveStreaming(t *testing.T) {
 		t.Fatal("expected cover frames after idle period, got 0")
 	}
 
-	// Snapshot under the lock. The injector keeps firing on its idle timer
-	// until ci.stop() runs, so ranging over the shared slice directly races
-	// with the append in the inject callback; holding mu across t.Fatalf
-	// instead would leave the mutex locked for good.
+	// 在锁下做快照。注入器会一直按空闲定时器触发，直到 ci.stop() 执行，
+	// 因此直接遍历共享切片会与注入回调中的 append 产生竞争；
+	// 若跨 t.Fatalf 持有 mu，则会使互斥锁永远保持锁定。
 	mu.Lock()
 	frames := slices.Clone(injected)
 	mu.Unlock()
@@ -302,8 +300,8 @@ func TestCoverInjectorKeepsInjectingAfterLargeTraffic(t *testing.T) {
 	}
 	defer ci.stop()
 
-	// Feed well beyond the old cumulative stop threshold (2-3MB); cover must
-	// keep flowing, bounded by the budget, instead of stopping abruptly.
+	// 喂入远超旧的累计停止阈值（2-3MB）的数据；cover 必须持续流动，
+	// 受预算限制，而不是突然停止。
 	for i := range 3200 {
 		ci.addBudget(1024)
 		_ = i
@@ -320,7 +318,7 @@ func TestCoverInjectorKeepsInjectingAfterLargeTraffic(t *testing.T) {
 		t.Fatal("expected cover frames after idle period, got 0")
 	}
 
-	// More real traffic: cover should continue, not fade out.
+	// 更多真实流量：cover 应继续流动，而不是逐渐消失。
 	for i := range 3000 {
 		ci.addBudget(1024)
 		_ = i
@@ -729,9 +727,8 @@ func TestIsClosedStreamError(t *testing.T) {
 	}
 }
 
-// newTestWriter builds a c2s session record writer through the production
-// facade, replacing the Encryptor + BuildAAD + NewRecordWriter triple the
-// tests used to assemble by hand.
+// newTestWriter 通过生产外观构建 c2s 会话记录写入器，
+// 取代了测试过去手工拼装的 Encryptor + BuildAAD + NewRecordWriter 组合。
 func newTestWriter(t *testing.T, sk *easycrypto.StreamKeys, w io.Writer) *easycrypto.RecordWriter {
 	t.Helper()
 	rw, err := sk.NewWriter(w, easycrypto.DirC2S, protocol.MethodAES256GCM)
@@ -741,7 +738,7 @@ func newTestWriter(t *testing.T, sk *easycrypto.StreamKeys, w io.Writer) *easycr
 	return rw
 }
 
-// newTestReader is the reader counterpart of newTestWriter.
+// newTestReader 是 newTestWriter 对应的读取器版本。
 func newTestReader(t *testing.T, sk *easycrypto.StreamKeys, r io.Reader) *easycrypto.RecordReader {
 	t.Helper()
 	rr, err := sk.NewRecordReader(r, easycrypto.DirC2S, protocol.MethodAES256GCM)

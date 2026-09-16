@@ -11,12 +11,12 @@ func TestLanHostOf(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"8.8.8.8", "8.8.8.8"},              // bare IP (IPConn.RemoteAddr)
-		{"8.8.8.8:9", "8.8.8.8"},            // TCP/UDP form
-		{"2001:db8::1", "2001:db8::1"},      // bare IPv6
-		{"[2001:db8::1]:53", "2001:db8::1"}, // IPv6 with port
-		{"fe80::1%en0", "fe80::1"},          // bare IPv6 with zone
-		{"[fe80::1%en0]:0", "fe80::1%en0"},  // IPv6 with port and zone
+		{"8.8.8.8", "8.8.8.8"},              // 裸 IP（IPConn.RemoteAddr）
+		{"8.8.8.8:9", "8.8.8.8"},            // TCP/UDP 形式
+		{"2001:db8::1", "2001:db8::1"},      // 裸 IPv6
+		{"[2001:db8::1]:53", "2001:db8::1"}, // 带端口的 IPv6
+		{"fe80::1%en0", "fe80::1"},          // 带 zone 的裸 IPv6
+		{"[fe80::1%en0]:0", "fe80::1%en0"},  // 带端口和 zone 的 IPv6
 		{"", ""},
 	}
 	for _, tt := range tests {
@@ -26,9 +26,8 @@ func TestLanHostOf(t *testing.T) {
 	}
 }
 
-// TestLanHostOfSSRFGuard pins the post-dial SSRF check: the host extracted
-// from an IPConn-style bare address must feed util.IsLANIP unchanged, or a
-// DNS-rebinding name resolving to a LAN host would slip past the guard.
+// TestLanHostOfSSRFGuard 固定拨号后的 SSRF 检查：从 IPConn 风格的裸地址提取出的主机
+// 必须原样传给 util.IsLANIP，否则解析到 LAN 主机的 DNS 重绑定名称就会绕过防护。
 func TestLanHostOfSSRFGuard(t *testing.T) {
 	for _, lan := range []string{"127.0.0.1", "10.0.0.1", "100.64.0.1", "fe80::1"} {
 		if !util.IsLANIP(lanHostOf(lan)) {

@@ -1,7 +1,7 @@
-// Package bytespool provides a pool of []byte.
+// Package bytespool 提供 []byte 缓冲池。
 package bytespool
 
-// Ref: github.com/Dreamacro/clash/common/pool
+// 参考：github.com/Dreamacro/clash/common/pool
 
 func Get(size int) []byte {
 	return defaultAllocator.Get(size)

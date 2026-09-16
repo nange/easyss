@@ -29,35 +29,32 @@ type Client struct {
 	transport     transport.Transport
 	masterKey     []byte
 	dialer        atomic.Pointer[dialer.Dialer]
-	bound         atomic.Value // boundIface: the interface the direct dialer is bound to
+	bound         atomic.Value // boundIface：直连拨号器当前绑定的接口
 	closeIdleDone chan struct{}
 	closeOnce     sync.Once
 
-	// fileWarn records a non-fatal failure while loading custom
-	// direct/proxy rule files, surfaced as a startup warning (see
-	// StartupWarning). The client keeps running with built-in rules.
+	// fileWarn 记录加载自定义直连/代理规则文件时出现的非致命错误，
+	// 以启动警告的形式呈现（参见 StartupWarning）。
+	// 客户端仍会使用内置规则继续运行。
 	fileWarn error
 
 	mu sync.RWMutex
 }
 
-// boundIface records the interface the direct dialer is currently bound to,
-// so the refresh loop can detect a change (name or index) and rebuild it.
+// boundIface 记录直连拨号器当前绑定的接口，
+// 以便刷新循环检测到变更（名称或索引）时重建拨号器。
 type boundIface struct {
 	name  string
 	index int
 }
 
-// detectDialIface returns the interface that TUN-mode direct dials should be
-// bound to: the physical default-route interface. On Windows it reads the
-// 0.0.0.0/0 default route from the routing table (skipping the easyss TUN
-// device, which owns its own default route there while TUN is active). On
-// darwin and linux it probes 0.0.0.1, which the easyss TUN routes (starting
-// at 1.0.0.0/8 on every platform) never cover, so the lookup yields the
-// physical default interface even while TUN routes are active — binding to
-// the easyss TUN device itself would create a routing loop. Windows cannot
-// use the probe: its route lookup rejects 0.0.0.0/8 destinations outright.
-// Overridable in tests.
+// detectDialIface 返回 TUN 模式下直连拨号应绑定的接口：物理默认路由接口。
+// 在 Windows 上，它从路由表读取 0.0.0.0/0 默认路由（跳过 easyss TUN
+// 设备——TUN 激活时该设备拥有自己的默认路由）。在 darwin 和 linux 上，
+// 它探测 0.0.0.1，该地址不会被 easyss TUN 路由（所有平台均从 1.0.0.0/8
+// 开始）覆盖，因此即使在 TUN 路由激活时，查找结果也是物理默认接口——
+// 绑定到 easyss TUN 设备本身会造成路由环路。Windows 无法使用该探测：
+// 其路由查找会直接拒绝 0.0.0.0/8 目标。可在测试中覆盖。
 var detectDialIface = func() (*net.Interface, error) {
 	iface, _, err := util.SysDefaultRoute()
 	if err != nil {
@@ -84,9 +81,8 @@ var detectDialIface = func() (*net.Interface, error) {
 	return nil, fmt.Errorf("default interface %s has no global unicast address", iface.Name)
 }
 
-// probeDialIface finds the default-route interface by probing a destination
-// in 0.0.0.0/8, which the easyss TUN routes (starting at 1.0.0.0/8 on every
-// platform) never cover.
+// probeDialIface 通过探测 0.0.0.0/8 中的目标来查找默认路由接口，
+// 该网段不会被 easyss TUN 路由（所有平台均从 1.0.0.0/8 开始）覆盖。
 func probeDialIface() (*net.Interface, error) {
 	r, err := netroute.New()
 	if err != nil {
@@ -102,9 +98,8 @@ func probeDialIface() (*net.Interface, error) {
 	return iface, nil
 }
 
-// tunDeviceNameFromConfig returns the TUN device name from the raw
-// tun_config JSON, if present. The device name is used to recognize the
-// easyss TUN interface so the direct dialer never binds to it.
+// tunDeviceNameFromConfig 从原始 tun_config JSON 中返回 TUN 设备名
+// （如果存在）。设备名用于识别 easyss TUN 接口，使直连拨号器绝不绑定到它。
 func tunDeviceNameFromConfig(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
@@ -118,10 +113,9 @@ func tunDeviceNameFromConfig(raw json.RawMessage) string {
 	return cfg.Device
 }
 
-// isTunIface reports whether iface is the easyss TUN device. The direct
-// dialer must never bind to it: packets emitted on the TUN device are
-// captured by tun2socks and forwarded back to the local proxy, whose dials
-// would re-enter the TUN device — an infinite request loop.
+// isTunIface 报告 iface 是否为 easyss TUN 设备。直连拨号器绝不能绑定到它：
+// 发往 TUN 设备的数据包会被 tun2socks 捕获并转发回本地代理，代理的拨号
+// 又会重新进入 TUN 设备——形成无限请求循环。
 func (c *Client) isTunIface(iface *net.Interface) bool {
 	if util.IsTunIface(iface) {
 		return true
@@ -133,25 +127,23 @@ func (c *Client) isTunIface(iface *net.Interface) bool {
 	return name != "" && iface.Name == name
 }
 
-// listInterfaces enumerates the system interfaces. It is a package-level var
-// so tests can inject a deterministic set.
+// listInterfaces 枚举系统接口。它是包级变量，
+// 以便测试注入确定性的接口集合。
 var listInterfaces = net.Interfaces
 
-// ifaceAddrs returns the addresses of iface. It is a package-level var so
-// tests can inject deterministic addresses for synthetic interfaces.
+// ifaceAddrs 返回 iface 的地址。它是包级变量，
+// 以便测试为合成接口注入确定性的地址。
 var ifaceAddrs = func(iface *net.Interface) ([]net.Addr, error) { return iface.Addrs() }
 
-// ifaceBindUnsupported reports whether the platform cannot bind the direct
-// dialer to an interface (see util.SysDirectIfaceBindUnsupported). It is a
-// package-level var so tests can exercise the platform branch
-// deterministically.
+// ifaceBindUnsupported 报告平台是否无法将直连拨号器绑定到接口
+// （参见 util.SysDirectIfaceBindUnsupported）。它是包级变量，
+// 以便测试确定性地覆盖平台分支。
 var ifaceBindUnsupported = util.SysDirectIfaceBindUnsupported
 
-// initDirectDialer stores the direct dialer in c.dialer and returns the
-// name of the bound physical interface ("" when unbound). On platforms
-// where interface binding is unsupported (android: netlink blocked, the
-// VpnService routes only selected apps through the TUN) the dialer stays
-// unbound and no detection or warning runs.
+// initDirectDialer 将直连拨号器存入 c.dialer，并返回所绑定物理接口的
+// 名称（未绑定时返回 ""）。在接口绑定不受支持的平台上（android：
+// netlink 被阻止，VpnService 只将选中的应用路由进 TUN），拨号器保持
+// 未绑定状态，且不执行任何检测或告警。
 func (c *Client) initDirectDialer() string {
 	if ifaceBindUnsupported() {
 		c.dialer.Store(dialer.New())
@@ -168,14 +160,12 @@ func (c *Client) initDirectDialer() string {
 	return iface.Name
 }
 
-// startupDialIface determines the interface the direct dialer is bound to at
-// startup. It prefers the route probe, but rejects the easyss TUN device
-// (e.g. when routes left over from a crashed TUN session redirect the probe
-// to it) and falls back to enumerating physical interfaces. Returns nil when
-// no suitable interface exists, in which case an unbound dialer is used. On
-// platforms where interface binding is unsupported (android) initDirectDialer
-// never calls this — the dialer stays unbound (see
-// util.SysDirectIfaceBindUnsupported).
+// startupDialIface 确定直连拨号器在启动时绑定的接口。它优先使用路由探测，
+// 但会拒绝 easyss TUN 设备（例如崩溃的 TUN 会话遗留的路由把探测重定向到
+// 它时），并回退到枚举物理接口。没有合适的接口时返回 nil，此时使用未绑定
+// 的拨号器。在接口绑定不受支持的平台上（android），initDirectDialer
+// 不会调用本函数——拨号器保持未绑定（参见
+// util.SysDirectIfaceBindUnsupported）。
 func (c *Client) startupDialIface() *net.Interface {
 	iface, err := detectDialIface()
 	if err == nil && iface != nil && !c.isTunIface(iface) {
@@ -211,21 +201,18 @@ func (c *Client) startupDialIface() *net.Interface {
 	return nil
 }
 
-// boundDialContext dials through the interface-bound direct dialer. It is a
-// package-level var so tests can inject failures deterministically.
+// boundDialContext 通过绑定接口的直连拨号器拨号。它是包级变量，
+// 以便测试确定性地注入失败。
 var boundDialContext = func(c *Client, ctx context.Context, network, addr string) (net.Conn, error) {
 	return c.dialer.Load().DialContext(ctx, network, addr)
 }
 
-// serverIPV6ResolveTimeout bounds the synchronous server-IPv6 resolution in
-// client.New. Resolving the server's AAAA records requires DNS round-trips
-// against the direct DNS servers; on networks where those servers are
-// unreachable, the per-query 5s timeout (times the number of servers) could
-// otherwise stall proxy startup for many seconds on every launch (most
-// noticeable on mobile, where the VPN must not go live before the proxy is
-// ready). 3s is enough for a healthy network and keeps the worst case short;
-// on timeout the router simply treats IPv6 as unavailable (the auto-mode
-// safe default). Overridable in tests.
+// serverIPV6ResolveTimeout 约束 client.New 中同步的服务器 IPv6 解析。
+// 解析服务器的 AAAA 记录需要对直连 DNS 服务器做 DNS 往返；在那些服务器
+// 不可达的网络中，每个查询 5 秒的超时（乘以服务器数量）会让代理启动
+// 每次都停滞数秒（在移动端最明显——VPN 不能在代理就绪之前上线）。
+// 3s 对健康网络足够，并把最坏情况控制在很短；超时时路由引擎只是把
+// IPv6 视为不可用（自动模式的保险默认）。可在测试中覆盖。
 var serverIPV6ResolveTimeout = 3 * time.Second
 
 func New(cfg *config.ClientConfig) (*Client, error) {
@@ -249,8 +236,8 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	serverIPV6 := ""
 	ipv6Networking := false
 	if router.ParseIPV6Rule(cfg.Routing.IPV6Rule) != router.IPV6RuleDisable {
-		// Bound the whole resolution (builtin + system dns fallback) so an
-		// unreachable DNS server cannot stall startup for 5s per lookup.
+		// 约束整个解析过程（builtin + 系统 DNS 回退），使不可达的 DNS
+		// 服务器无法让每次查询都把启动拖住 5 秒。
 		ctx, cancel := context.WithTimeout(context.Background(), serverIPV6ResolveTimeout)
 		serverIPV6 = resolveServerIPV6(ctx, cfg)
 		cancel()
@@ -317,10 +304,10 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	return client, nil
 }
 
-// dialWithConfig dials with the interface-bound direct dialer when TUN mode
-// is active (so the socket bypasses the TUN device), falling back to a plain
-// net.Dialer otherwise. A failure that looks like a stale interface binding
-// (sleep/wake, network switch) triggers a one-shot dialer refresh and retry.
+// dialWithConfig 在 TUN 模式激活时使用绑定接口的直连拨号器拨号
+// （使 socket 绕过 TUN 设备），否则回退到普通的 net.Dialer。
+// 看似接口绑定过期的失败（休眠/唤醒、网络切换）会触发一次性
+// 拨号器刷新与重试。
 func (c *Client) dialWithConfig(ctx context.Context, network, addr string) (net.Conn, error) {
 	if c.router.ShouldIPV6Disable() {
 		switch network {
@@ -332,9 +319,9 @@ func (c *Client) dialWithConfig(ctx context.Context, network, addr string) (net.
 	}
 
 	if c.cfg.Local.EnableTun2socks && c.dialer.Load() != nil {
-		// Force specific IP version so the direct dialer's socket-binding
-		// (IP_BOUND_IF) is applied. The dialer only handles "tcp4"/"udp4",
-		// not dual-stack "tcp"/"udp".
+		// 强制特定 IP 版本，直连拨号器的 socket 绑定（IP_BOUND_IF）
+		// 才能生效。该拨号器只处理 "tcp4"/"udp4"，不处理双栈的
+		// "tcp"/"udp"。
 		host, _, err := net.SplitHostPort(addr)
 		if err == nil {
 			if ip := net.ParseIP(host); ip != nil {
@@ -361,9 +348,8 @@ func (c *Client) dialWithConfig(ctx context.Context, network, addr string) (net.
 			return conn, err
 		}
 
-		// The bound interface went stale (sleep/wake, network switch): the
-		// interface captured at startup no longer routes. Re-detect the
-		// default interface, rebuild the dialer and retry once.
+		// 绑定的接口过期了（休眠/唤醒、网络切换）：启动时捕获的接口
+		// 不再路由。重新检测默认接口、重建拨号器并重试一次。
 		log.Warn("[CLIENT] direct dial failed, refreshing interface binding", "addr", addr, "err", err)
 		if c.refreshDirectDialer() {
 			return boundDialContext(c, ctx, network, addr)
@@ -377,16 +363,13 @@ func (c *Client) dialWithConfig(ctx context.Context, network, addr string) (net.
 	return nd.DialContext(ctx, network, addr)
 }
 
-// refreshDirectDialer re-detects the default interface and rebuilds the
-// interface-bound direct dialer when the binding changed (name or index). It
-// reports whether the dialer was replaced. On detection failure the existing
-// dialer is kept so a transient network state cannot degrade connectivity
-// further. On platforms where interface binding is unsupported (android) it
-// is a no-op returning false.
+// refreshDirectDialer 在绑定变更（名称或索引）时重新检测默认接口并重建
+// 绑定接口的直连拨号器。报告拨号器是否被替换。检测失败时保留现有拨号器，
+// 使瞬态网络状态不会进一步降低连通性。在接口绑定不受支持的平台上
+// （android）是返回 false 的空操作。
 func (c *Client) refreshDirectDialer() bool {
 	if ifaceBindUnsupported() {
-		// Platforms that cannot bind the direct dialer keep the unbound
-		// dialer: there is nothing to refresh.
+		// 无法绑定直连拨号器的平台保持未绑定拨号器：没有可刷新的内容。
 		return false
 	}
 	iface, err := detectDialIface()
@@ -395,11 +378,10 @@ func (c *Client) refreshDirectDialer() bool {
 		return false
 	}
 	if c.isTunIface(iface) {
-		// Defense in depth: the probe should never resolve to the easyss TUN
-		// device (0.0.0.1 is outside the TUN routes), but stale routes from
-		// older scripts or custom TUN configurations could redirect it there.
-		// Binding to it would loop every dial back into the TUN device, so
-		// keep the previously-bound physical interface.
+		// 纵深防御：探测绝不应解析到 easyss TUN 设备（0.0.0.1 在 TUN
+		// 路由之外），但旧脚本或自定义 TUN 配置留下的陈旧路由可能把它
+		// 重定向到那里。绑定到它会让每次拨号都回环进 TUN 设备，
+		// 因此保留先前绑定的物理接口。
 		log.Warn("[CLIENT] refresh direct dialer: detected easyss TUN device, keeping previous binding",
 			"iface", iface.Name, "index", iface.Index)
 		return false
@@ -418,16 +400,14 @@ func (c *Client) refreshDirectDialer() bool {
 	return true
 }
 
-// dialerRefreshLoop periodically re-detects the default interface so the
-// direct dialer's interface binding survives sleep/wake and network changes:
-// the interface captured at startup can go stale after the machine wakes on
-// a different network, breaking every direct dial until restart. On darwin
-// and linux the probe (0.0.0.1) is outside the TUN routes, and on Windows the
-// routing table lookup skips the TUN device, so detection always resolves to
-// the physical interface; refreshDirectDialer additionally rejects the
-// easyss TUN device as a defense against stale routes from older scripts
-// (which covered 0.0.0.0/1) or custom TUN configurations.
-// Only runs while TUN mode is active (the bound dialer is unused otherwise).
+// dialerRefreshLoop 周期性重新检测默认接口，使直连拨号器的接口绑定在
+// 休眠/唤醒与网络切换后仍然有效：机器在不同网络上唤醒后，启动时捕获的
+// 接口可能过期，使每次直连拨号在重启前都失败。在 darwin 和 linux 上
+// 探测（0.0.0.1）位于 TUN 路由之外，在 Windows 上路由表查找会跳过
+// TUN 设备，因此检测总是解析到物理接口；refreshDirectDialer 另外拒绝
+// easyss TUN 设备，作为对旧脚本（覆盖 0.0.0.0/1）或自定义 TUN 配置
+// 留下的陈旧路由的防御。
+// 仅在 TUN 模式激活时运行（否则绑定的拨号器不被使用）。
 func (c *Client) dialerRefreshLoop() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -443,9 +423,8 @@ func (c *Client) dialerRefreshLoop() {
 	}
 }
 
-// isInterfaceStaleError reports whether err looks like the bound interface
-// went stale (interface removed, down, or unreachable), so the dialer can be
-// rebuilt and the dial retried.
+// isInterfaceStaleError 报告 err 是否像绑定的接口过期了（接口被移除、
+// 宕机或不可达），以便重建拨号器并重试拨号。
 func isInterfaceStaleError(err error) bool {
 	if err == nil {
 		return false
@@ -487,8 +466,8 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 				}
 				continue
 			}
-			// the server answered (possibly NODATA), so the builtin dns
-			// servers are reachable
+			// 服务器应答了（可能为 NODATA），因此 builtin DNS
+			// 服务器可达
 			reachable = true
 			if len(ips) == 0 {
 				continue
@@ -502,8 +481,7 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 		}
 	}
 
-	// fallback to the system dns servers when all builtin direct dns servers
-	// are unavailable
+	// 所有 builtin 直连 DNS 服务器都不可用时，回退到系统 DNS 服务器
 	for _, dnsServer := range dns.SystemDNSServers() {
 		ips, err := dns.LookupIPV6FromContext(ctx, dnsServer, svr.Address)
 		if err != nil || len(ips) == 0 {
@@ -528,10 +506,9 @@ func (c *Client) Router() *router.Router {
 	return c.router
 }
 
-// StartupWarning returns the first non-fatal warning detected during client
-// initialization (e.g. a custom direct/proxy rule file that failed to load),
-// or nil when initialization completed cleanly. The client keeps running
-// with built-in rules; callers may surface the warning to the user.
+// StartupWarning 返回客户端初始化期间检测到的首个非致命警告
+// （例如加载失败的自定义直连/代理规则文件），初始化干净完成时返回 nil。
+// 客户端继续使用内置规则运行；调用方可以把警告呈现给用户。
 func (c *Client) StartupWarning() error {
 	return c.fileWarn
 }
@@ -556,9 +533,8 @@ func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Close is not idempotent by contract (the transport cannot be
-	// reopened), but a second call must not panic by closing the channel
-	// twice.
+	// 按契约 Close 不具备幂等性（transport 无法重新打开），
+	// 但第二次调用不得因重复关闭 channel 而 panic。
 	c.closeOnce.Do(func() { close(c.closeIdleDone) })
 	return c.transport.Close()
 }

@@ -21,18 +21,15 @@ import (
 	"github.com/nange/easyss/v3/stats"
 )
 
-// fallbackFS embeds the themed-page template, the theme definitions and the
-// content pools (see assets/fallback). Keeping them out of Go source lets the
-// pages be tuned without touching code; they are compiled into the binary, so
-// a missing or malformed asset fails loudly at startup instead of at request
-// time.
+// fallbackFS 内嵌主题页面模板、主题定义和内容池（见 assets/fallback）。
+// 把它们放在 Go 源码之外，可以在不改动代码的情况下调整页面；它们会被编译进
+// 二进制，因此缺失或损坏的资源会在启动时立刻暴露，而不是等到请求时才出错。
 //
 //go:embed assets/fallback/*.html assets/fallback/*.json
 var fallbackFS embed.FS
 
-// mustReadFallback reads an embedded asset, panicking on failure: the assets
-// are compiled in, so a missing file is a build-time mistake that must
-// surface immediately.
+// mustReadFallback 读取内嵌资源，失败时直接 panic：资源已编译进二进制，
+// 文件缺失属于构建期错误，必须立即暴露出来。
 func mustReadFallback(name string) []byte {
 	b, err := fallbackFS.ReadFile(name)
 	if err != nil {
@@ -44,14 +41,13 @@ func mustReadFallback(name string) []byte {
 var fallbackTmpl = template.Must(template.New("fallback").Parse(string(mustReadFallback("assets/fallback/template.html"))))
 
 // ---------------------------------------------------------------------------
-// Theme definitions — each theme has CSS and site-level info.
-// Themes are visually distinct: different color palettes, fonts, and layout
-// parameters. One theme is randomly selected at startup per deployment.
+// 主题定义——每个主题包含 CSS 和站点级信息。
+// 各主题在视觉上彼此不同：不同的配色、字体和布局参数。
+// 每次部署在启动时随机选择一个主题。
 // ---------------------------------------------------------------------------
 
 type themeDef struct {
-	// Name identifies the theme in the asset file (see assets/fallback/
-	// themes.json); it is not rendered.
+	// Name 标识资源文件中的主题（见 assets/fallback/themes.json）；该字段不会被渲染。
 	Name        string
 	CSS         template.CSS
 	SiteName    string
@@ -73,9 +69,8 @@ func loadThemes() []themeDef {
 var themes = loadThemes()
 
 // ---------------------------------------------------------------------------
-// Content pools — realistic, varied text for each page type.
-// Content is selected via deterministic hash of the request path,
-// so the same URL always gets the same content.
+// 内容池——每种页面类型对应的真实、多样的文本。
+// 内容通过对请求路径做确定性哈希来选取，因此相同的 URL 总是得到相同的内容。
 // ---------------------------------------------------------------------------
 
 type pageContent struct {
@@ -98,7 +93,7 @@ func loadContentPools() contentPool {
 var contentPools = loadContentPools()
 
 // ---------------------------------------------------------------------------
-// Types for rendering
+// 渲染用类型
 // ---------------------------------------------------------------------------
 
 type renderData struct {
@@ -116,14 +111,12 @@ type renderData struct {
 }
 
 // ---------------------------------------------------------------------------
-// Global state
+// 全局状态
 // ---------------------------------------------------------------------------
 
-// ctxKey is an unexported context key type used to pass the original client-
-// facing Host and scheme from ServeFallback into the reverse proxy's
-// ModifyResponse hook, so that Location headers pointing at the upstream host
-// can be rewritten back to the client-facing host without leaking the upstream
-// via X-Forwarded-Host.
+// ctxKey 是一个未导出的 context 键类型，用于把客户端可见的原始 Host 和 scheme
+// 从 ServeFallback 传入反向代理的 ModifyResponse 钩子，从而可以把指向上游主机
+// 的 Location 头重写回客户端可见的主机，而无需通过 X-Forwarded-Host 暴露上游。
 type ctxKey int
 
 const (
@@ -136,42 +129,40 @@ var (
 	initOnce       sync.Once
 	selectedTheme  themeDef
 	customFallback []byte
-	htmlCache      sync.Map // path string → []byte
+	htmlCache      sync.Map // path string → []byte（路径到页面字节）
 	htmlCacheCount atomic.Int32
 
-	// Directory-based multi-file fallback.
-	fallbackPages map[string][]byte // path → HTML bytes (e.g. "/about" → <html>...)
-	fallback404   []byte            // optional 404 page
+	// 基于目录的多文件回退。
+	fallbackPages map[string][]byte // path → HTML 字节（如 "/about" → <html>...）
+	fallback404   []byte            // 可选的 404 页面
 
-	// Reverse proxy to upstream HTTP service (e.g. local nginx).
+	// 指向上游 HTTP 服务（如本地 nginx）的反向代理。
 	fallbackProxy *httputil.ReverseProxy
 
-	// Allowed CDN hosts for /__cdn__/<host>/... path-prefix routing.
-	// Populated by setFallbackProxy from the cdnDomains config. Keys are
-	// lowercased hostnames; a request to /__cdn__/github.githubassets.com/x
-	// is only proxied if "github.githubassets.com" is in this set.
+	// /__cdn__/<host>/... 路径前缀路由所允许的 CDN 主机集合。
+	// 由 setFallbackProxy 根据 cdnDomains 配置填充。键为小写主机名；
+	// 仅当 "github.githubassets.com" 在该集合中时，对
+	// /__cdn__/github.githubassets.com/x 的请求才会被代理。
 	fallbackCDNHosts map[string]bool
 )
 
 const (
-	// maxCachedFallbackPages bounds the generated-page cache. The curated
-	// paths (/, /about, ...) would use 9 entries; the rest of the budget
-	// serves arbitrary (generic) paths so a scanner hitting random URLs
-	// cannot force a template render on every single request. Once the cap
-	// is reached, further distinct paths render without caching (a render is
-	// a small template execution), so the cache can never grow unbounded.
+	// maxCachedFallbackPages 限制生成页面的缓存规模。固定的关键字路径
+	// （/、/about、/contact、/services、/blog 及其别名）只会占用 12 个条目；
+	// 其余预算用于任意（generic）路径，这样扫描器命中随机 URL 时
+	// 不会每次请求都触发模板渲染。达到上限后，新的不同路径直接渲染而不缓存
+	// （一次渲染只是一次小规模模板执行），因此缓存不会无限增长。
 	maxCachedFallbackPages = 320
 
-	// cdnPathPrefix is the URL path prefix under which requests for
-	// configured CDN domains are routed. A request to
+	// cdnPathPrefix 是配置的 CDN 域请求所路由到的 URL 路径前缀。请求
 	//   /__cdn__/github.githubassets.com/assets/foo.css
-	// is proxied to
+	// 会被代理到
 	//   https://github.githubassets.com/assets/foo.css
 	cdnPathPrefix = "/__cdn__/"
 )
 
-// setFallbackHTML overrides the built-in fallback system with custom HTML.
-// Must be called before the server starts accepting requests.
+// setFallbackHTML 用自定义 HTML 覆盖内置的回退系统。
+// 必须在服务器开始接受请求之前调用。
 func setFallbackHTML(html []byte) {
 	if len(html) == 0 {
 		return
@@ -180,16 +171,14 @@ func setFallbackHTML(html []byte) {
 	copy(customFallback, html)
 }
 
-// setFallbackDir loads all .html files from a directory as multi-route fallback
-// pages. File-to-path mapping:
+// setFallbackDir 把目录下所有 .html 文件加载为多路由回退页面。文件到路径的映射：
 //   - index.html         → "/"
-//   - 404.html           → unmatched paths
+//   - 404.html           → 未匹配的路径
 //   - <name>.html        → "/<name>"
 //   - <sub>/<name>.html  → "/<sub>/<name>"
 //   - <sub>/index.html   → "/<sub>"
 //
-// Non-.html files are ignored. Must be called before the server starts
-// accepting requests.
+// 非 .html 文件会被忽略。必须在服务器开始接受请求之前调用。
 func setFallbackDir(dir string) error {
 	pages := make(map[string][]byte)
 	var page404 []byte
@@ -217,16 +206,16 @@ func setFallbackDir(dir string) error {
 
 		nameWithoutExt := strings.TrimSuffix(d.Name(), ".html")
 
-		// 404.html is special: stored for unmatched paths, not as a regular page.
+		// 404.html 是特殊的：作为未匹配路径的页面存储，而不是普通页面。
 		if strings.EqualFold(nameWithoutExt, "404") {
 			page404 = content
 			return nil
 		}
 
-		// Build URL path from relative file path.
+		// 根据相对文件路径构建 URL 路径。
 		urlPath := "/" + filepath.ToSlash(strings.TrimSuffix(rel, ".html"))
 
-		// index.html maps to parent directory (or "/" for root).
+		// index.html 映射到父目录（根目录时为 "/"）。
 		if strings.EqualFold(nameWithoutExt, "index") {
 			if dir := filepath.Dir(rel); dir == "." {
 				urlPath = "/"
@@ -247,17 +236,16 @@ func setFallbackDir(dir string) error {
 	return nil
 }
 
-// SetFallbackTarget resolves a single fallback target string and configures the
-// appropriate fallback mode. The target is interpreted as:
-//   - ""                        → built-in themed auto-generated pages
-//   - "http://..." / "https://..." → reverse proxy to an upstream HTTP service
-//   - a directory path             → multi-file HTML fallback (setFallbackDir)
-//   - a regular file path          → single-file custom HTML (setFallbackHTML)
+// SetFallbackTarget 解析单个回退目标字符串并配置相应的回退模式。目标字符串按如下解释：
+//   - ""                           → 内置的主题化自动生成页面
+//   - "http://..." / "https://..." → 指向上游 HTTP 服务的反向代理
+//   - 目录路径                       → 多文件 HTML 回退（setFallbackDir）
+//   - 普通文件路径                    → 单文件自定义 HTML（setFallbackHTML）
 //
-// preserveHost and cdnDomains only affect the reverse-proxy mode (see
-// setFallbackProxy); they are ignored for the directory/file/built-in modes.
+// preserveHost 和 cdnDomains 只影响反向代理模式（见 setFallbackProxy）；
+// 在目录/文件/内置模式下会被忽略。
 func SetFallbackTarget(target string, preserveHost bool, cdnDomains []string) error {
-	// Reset all fallback state.
+	// 重置所有回退状态。
 	fallbackProxy = nil
 	fallbackCDNHosts = nil
 	fallbackPages = nil
@@ -289,30 +277,28 @@ func SetFallbackTarget(target string, preserveHost bool, cdnDomains []string) er
 	return nil
 }
 
-// ServeFallback writes a fallback HTML page to the response.
-// Priority (highest first):
-//  0. Reverse proxy to upstream HTTP service (setFallbackProxy)
-//  1. Directory-based multi-file fallback (setFallbackDir)
-//  2. Single-file custom fallback (setFallbackHTML)
-//  3. Auto-generated themed pages
+// ServeFallback 向响应写入一个回退 HTML 页面。
+// 优先级（从高到低）：
+//  0. 指向上游 HTTP 服务的反向代理（setFallbackProxy）
+//  1. 基于目录的多文件回退（setFallbackDir）
+//  2. 单文件自定义回退（setFallbackHTML）
+//  3. 自动生成的主题化页面
 func ServeFallback(w http.ResponseWriter, r *http.Request) {
 	stats.RecordServerFallbackPage()
 	initOnce.Do(func() {
 		selectedTheme = themes[rand.IntN(len(themes))]
-		// Logged here rather than at package init so the record lands in the
-		// configured log: which theme a deployment serves is the only way to
-		// tell two fallback pages apart when debugging camouflage.
+		// 在这里而不是包 init 时记录日志，使记录进入已配置的日志：
+		// 部署实际服务的主题，是排查伪装问题时区分两个回退页面的唯一途径。
 		log.Debug("[SERVER] fallback theme selected", "theme", selectedTheme.Name)
 	})
 
-	// Priority 0 (highest): reverse proxy to upstream HTTP service.
+	// 优先级 0（最高）：指向上游 HTTP 服务的反向代理。
 	if fallbackProxy != nil {
 		scheme := "http"
 		if r.TLS != nil {
 			scheme = "https"
 		}
-		// Strip easyss-specific headers (e.g. x-es) before forwarding so the
-		// upstream service never sees proxy protocol traces.
+		// 转发前剥离 easyss 特有的请求头（如 x-es），使上游服务永远看不到代理协议痕迹。
 		r2 := r.Clone(r.Context())
 		r2.Header.Del("x-es")
 		ctx := context.WithValue(r2.Context(), ctxOrigHost, r2.Host)
@@ -326,14 +312,14 @@ func ServeFallback(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Server", "nginx")
 	w.WriteHeader(http.StatusOK)
 
-	// Priority 1: directory-based multi-file fallback.
+	// 优先级 1：基于目录的多文件回退。
 	if len(fallbackPages) > 0 {
 		content, ok := fallbackPages[cleanPath(r.URL.Path)]
 		if !ok {
 			content = fallback404
 		}
 		if !ok && len(content) == 0 {
-			// No matching page and no 404.html — fall back to index.
+			// 没有匹配的页面也没有 404.html——回退到 index。
 			content = fallbackPages["/"]
 		}
 		if len(content) > 0 {
@@ -342,18 +328,17 @@ func ServeFallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Priority 2: single-file custom fallback.
+	// 优先级 2：单文件自定义回退。
 	if len(customFallback) > 0 {
 		w.Write(customFallback) //nolint:errcheck
 		return
 	}
 
-	// Priority 3: auto-generated themed pages.
+	// 优先级 3：自动生成的主题化页面。
 	w.Write(getOrRenderHTML(r.URL.Path)) //nolint:errcheck
 }
 
-// cleanPath normalizes a URL path for lookup: "/" stays "/", everything else
-// gets its trailing slash removed.
+// cleanPath 规范化用于查找的 URL 路径："/" 保持 "/" 不变，其余路径去除末尾的斜杠。
 func cleanPath(p string) string {
 	if p == "" || p == "/" {
 		return "/"
@@ -362,7 +347,7 @@ func cleanPath(p string) string {
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers
+// 内部辅助函数
 // ---------------------------------------------------------------------------
 
 func getOrRenderHTML(path string) []byte {
@@ -436,8 +421,7 @@ func hashIndex(input string, n int) int {
 	return int(h.Sum32()) % n
 }
 
-// resolveTitle returns the page title. If the content title is empty or just a
-// space, the site name is used as a fallback.
+// resolveTitle 返回页面标题。如果内容标题为空或只有空白字符，则回退使用站点名称。
 func resolveTitle(title, siteName string) string {
 	title = strings.TrimSpace(title)
 	if title == "" {

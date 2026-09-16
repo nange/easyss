@@ -13,14 +13,13 @@ import (
 
 const userAgent = "easyss-selfupdate"
 
-// Client fetches release data over the local easyss HTTP proxy first and
-// falls back to a direct connection when the proxy fails.
+// Client 优先通过本地 easyss HTTP 代理获取发布数据，代理失败时回退到直连。
 type Client struct {
 	proxy  *http.Client
 	direct *http.Client
 }
 
-// NewClient builds a fetch client; localHTTPPort <= 0 disables the proxy path.
+// NewClient 构建一个获取客户端；localHTTPPort <= 0 时禁用代理路径。
 func NewClient(localHTTPPort int) *Client {
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	newTransport := func(proxyFn func(*http.Request) (*url.URL, error)) *http.Transport {
@@ -45,9 +44,8 @@ func NewClient(localHTTPPort int) *Client {
 	return c
 }
 
-// Get issues a GET request, trying the local proxy first and then the
-// direct connection, and returns the first successful response. The caller
-// must close the response body. extraHeaders are applied to every attempt.
+// Get 发起 GET 请求，先尝试本地代理，再尝试直连，并返回第一个成功的响应。
+// 调用方必须关闭响应体。extraHeaders 会应用于每一次尝试。
 func (c *Client) Get(ctx context.Context, rawURL string, extraHeaders map[string]string) (*http.Response, error) {
 	clients := make([]*http.Client, 0, 2)
 	if c.proxy != nil {
@@ -77,7 +75,7 @@ func doRequest(hc *http.Client, ctx context.Context, rawURL string, extraHeaders
 		req.Header.Set(k, v)
 	}
 
-	resp, err := hc.Do(req) //nolint:gosec // request URL comes from our own release API response
+	resp, err := hc.Do(req) //nolint:gosec // 请求 URL 来自我们自己的 release API 响应
 	if err != nil {
 		return nil, err
 	}

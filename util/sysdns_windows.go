@@ -4,12 +4,12 @@ package util
 
 import "fmt"
 
-// SetSysDNS is a no-op on this platform.
+// SetSysDNS 在此平台上为空操作。
 func SetSysDNS(v []string) error {
 	return nil
 }
 
-// SysDNS returns the dns servers of the system, parsed from the output of `ipconfig /all`.
+// SysDNS 返回系统的 DNS 服务器，解析自 `ipconfig /all` 的输出。
 func SysDNS() ([]string, error) {
 	out, err := Command("ipconfig", "/all")
 	if err != nil {
@@ -18,12 +18,12 @@ func SysDNS() ([]string, error) {
 	return parseDNSServersFromIPConfig(out), nil
 }
 
-// SysDNSViaOSAScript is a no-op on non-darwin platforms.
+// SysDNSViaOSAScript 在非 darwin 平台上不受支持，调用会返回错误。
 func SysDNSViaOSAScript() ([]string, error) {
 	return nil, fmt.Errorf("SysDNSViaOSAScript is only supported on macOS")
 }
 
-// SetSysDNSViaOSAScript is a no-op on non-darwin platforms.
+// SetSysDNSViaOSAScript 在非 darwin 平台上不受支持，调用会返回错误。
 func SetSysDNSViaOSAScript(servers []string) error {
 	return fmt.Errorf("SetSysDNSViaOSAScript is only supported on macOS")
 }

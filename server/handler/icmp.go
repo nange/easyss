@@ -22,9 +22,9 @@ type icmpHandler struct {
 	dial dialer
 }
 
-// newICMPHandler creates an icmpHandler. The outbound ICMP dial timeout is
-// derived through config.DialTimeout (base/3 clamped to [3s, 15s]), shared
-// with the TCP/UDP handlers' dials.
+// newICMPHandler 创建一个 icmpHandler。出站 ICMP 拨号超时通过
+// config.DialTimeout 派生（base/3，限制在 [3s, 15s]），与 TCP/UDP handler
+// 的拨号共用同一套派生。
 func newICMPHandler(timeout time.Duration) *icmpHandler {
 	if timeout <= 0 {
 		timeout = time.Duration(config.DefaultTimeout) * time.Second
@@ -39,11 +39,10 @@ func newICMPHandler(timeout time.Duration) *icmpHandler {
 	}
 }
 
-// Handle relays one ICMP echo exchange per stream: it reads the client's
-// echo request (DATA frame, skipping PADDING/COVER), performs the exchange
-// and answers with the reply plus FIN. Unlike the TCP/UDP handlers it
-// carries no context and no cancelRead: the exchange is self-contained and
-// bounded by its own read deadline, and the stream ends after the reply.
+// Handle 在每个流上完成一次 ICMP 回显交换：读取客户端的回显请求
+// （DATA 帧，跳过 PADDING/COVER），执行交换，并以回显应答加 FIN 回复。
+// 与 TCP/UDP handler 不同，它不携带 context 也没有 cancelRead：
+// 交换是自包含的，由自身的读取截止时间限定，流在应答之后即结束。
 func (h *icmpHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, target string) error {
 	frame, done, err := nextClientFrame(dr)
 	if err != nil {
@@ -82,9 +81,9 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) ([]byte, error
 		parseProto = 58
 	}
 
-	// The shared dialer expects a context; ICMP has none (see Handle), so a
-	// background context is used. The dial timeout still bounds the dial
-	// itself, and the post-dial SSRF guard runs inside dialTarget.
+	// 共享的 dialer 需要一个 context；ICMP 没有（见 Handle），因此使用
+	// background context。拨号超时仍然限制拨号本身，
+	// 拨号后的 SSRF 防护在 dialTarget 内部执行。
 	conn, _, err := h.dial.dialTarget(context.Background(), dialNet, target)
 	if err != nil {
 		log.Error("[ICMP] dial target failed", "target", target, "err", err)
@@ -127,13 +126,11 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) ([]byte, error
 	rb := bytespool.Get(65535)
 	defer bytespool.MustPut(rb)
 
-	// Raw ICMP sockets receive every matching ICMP packet delivered to the
-	// host, not just replies to this socket's own request: a concurrent
-	// stream to the same target can produce replies whose ID/Seq belong to
-	// the other stream. Keep reading until the deadline, ignoring packets
-	// whose ID/Seq do not match what we sent. ICMP error packets (destination
-	// unreachable, time exceeded) never match, so they surface as a timeout
-	// error instead of being misreported as a successful reply.
+	// 原始 ICMP socket 会收到送达本机的所有匹配 ICMP 报文，而不只是本 socket
+	// 自己请求的应答：并发访问同一目标的流可能产生 ID/Seq 属于其他流的应答。
+	// 持续读取直到截止时间，忽略 ID/Seq 与我们所发送不匹配的报文。ICMP 错误
+	// 报文（目标不可达、超时）永远不会匹配，因此它们会表现为超时错误，
+	// 而不会被误报为成功应答。
 	for {
 		n, err := conn.Read(rb)
 		if err != nil {
@@ -146,12 +143,11 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) ([]byte, error
 		}
 
 		data := rb[:n]
-		// On Linux (and Windows) raw "ip4:icmp" sockets return the IPv4 header
-		// prepended to the ICMP payload, while macOS/BSD raw sockets already strip
-		// it. If the first nibble looks like an IPv4 header (version 4), peel it off
-		// before handing the payload to icmp.ParseMessage, otherwise the IP header
-		// is misparsed as the ICMP type (e.g. 0x45 -> type 69) and echo replies are
-		// never recognised, silently breaking ICMP on the primary server platform.
+		// 在 Linux（和 Windows）上，原始 "ip4:icmp" socket 返回的 ICMP 载荷前
+		// 会附带 IPv4 头，而 macOS/BSD 的原始 socket 已经剥掉它。如果第一个
+		// 半字节看起来像 IPv4 头（版本 4），在把载荷交给 icmp.ParseMessage 之前
+		// 先剥掉它，否则 IP 头会被误解析为 ICMP 类型（如 0x45 -> type 69），
+		// 回显应答永远无法识别，从而在主服务器平台上悄悄破坏 ICMP 功能。
 		if !isIPv6 && len(data) > 0 && data[0]>>4 == 4 {
 			ihl := int(data[0]&0x0F) * 4
 			if ihl >= 20 && ihl < len(data) {

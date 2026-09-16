@@ -13,12 +13,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// startLocalDNSServer starts a local UDP DNS server answering AAAA queries
-// for "test.local." with ::1 (mirrors client/dns/lookup_test.go).
+// startLocalDNSServer 启动一个本地 UDP DNS 服务器，对 "test.local." 的 AAAA 查询
+// 以 ::1 应答（与 client/dns/lookup_test.go 中的做法一致）。
 func startLocalDNSServer(t *testing.T) (string, func()) {
 	t.Helper()
 
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0") // random available port
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0") // 随机可用端口
 	require.NoError(t, err)
 
 	server := &dns.Server{
@@ -65,9 +65,8 @@ func TestResolveServerIPV6IPServer(t *testing.T) {
 }
 
 func TestResolveServerIPV6BoundedByContext(t *testing.T) {
-	// A blackhole direct DNS server makes every lookup fail; the context
-	// deadline must bound the whole resolution instead of the per-query 5s
-	// timeout stalling startup.
+	// 黑洞直连 DNS 服务器会让每次解析都失败；上下文截止时间必须约束整个解析过程，
+	// 而不是让每次查询 5 秒的超时拖慢启动。
 	old := config.DirectDNSServers
 	config.DirectDNSServers = []string{"127.0.0.1:1"}
 	defer func() { config.DirectDNSServers = old }()

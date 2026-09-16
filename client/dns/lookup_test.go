@@ -11,12 +11,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// startLocalDNSServer starts a local UDP DNS server that responds to A queries for "test.local."
-// with a fixed IPv4 address. Returns the server address (ip:port) and a shutdown function.
+// startLocalDNSServer 启动一个本地 UDP DNS 服务器，对 "test.local." 的 A 查询
+// 返回固定的 IPv4 地址。返回服务器地址（ip:port）和一个关闭函数。
 func startLocalDNSServer(t *testing.T) (string, func()) {
 	t.Helper()
 
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0") // random available port
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0") // 随机可用端口
 	require.NoError(t, err)
 
 	server := &dns.Server{
@@ -53,7 +53,7 @@ func startLocalDNSServer(t *testing.T) (string, func()) {
 		}),
 	}
 
-	// Start the server in a goroutine.
+	// 在 goroutine 中启动服务器。
 	go func() {
 		_ = server.ActivateAndServe()
 	}()
@@ -84,9 +84,8 @@ func TestLookupIPV6From(t *testing.T) {
 	assert.Equal(t, net.ParseIP("::1").String(), ips[0].String())
 }
 
-// TestLookupIPV6FromContextBounded verifies the context-bounded variant
-// returns promptly instead of waiting out the per-query 5s timeout when the
-// context deadline expires.
+// TestLookupIPV6FromContextBounded 验证受 context 约束的变体在 context 截止
+// 时间到期时能立即返回，而不是等待单次查询的 5s 超时。
 func TestLookupIPV6FromContextBounded(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()

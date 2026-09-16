@@ -580,8 +580,8 @@ func TestApplyDefaults(t *testing.T) {
 		if cfg.Transport.ConnMaxBytes != config.DefaultConnMaxBytes {
 			t.Errorf("ConnMaxBytes = %d", cfg.Transport.ConnMaxBytes)
 		}
-		// Shaper values are left raw here: shaper.Config.Normalize owns their
-		// defaults and bounds (pinned in shaper/shaper_test.go).
+		// 此处保持 shaper 取值原样：其默认值与边界由 shaper.Config.Normalize
+		// 负责（在 shaper/shaper_test.go 中固定）。
 		if cfg.Shaper.BatchWindowMS != 0 {
 			t.Errorf("BatchWindowMS = %d, want 0 (normalized at the shaper)", cfg.Shaper.BatchWindowMS)
 		}
@@ -649,8 +649,8 @@ func TestApplyDefaults(t *testing.T) {
 				{Address: "example.com"},
 			},
 			Transport: TransportConfig{
-				// conn_count_max=1 would panic the scheduler (empty bulk pool);
-				// oversized values must not trigger huge upfront allocations.
+				// conn_count_max=1 会让调度器 panic（空的 bulk 池）；
+				// 过大的值则绝不能触发巨大的前置分配。
 				ConnCountMax:    1,
 				StreamThreshold: 1 << 30,
 			},
@@ -681,10 +681,9 @@ func TestApplyDefaults(t *testing.T) {
 	})
 }
 
-// TestDisableWarmUpConfig pins the backward-compatibility contract of
-// transport.disable_warm_up: the key is absent from every config file written
-// before the option existed, and its false zero value keeps the startup
-// warm-up enabled there. Only an explicit true turns it off.
+// TestDisableWarmUpConfig 固定 transport.disable_warm_up 的向后兼容契约：
+// 该选项出现之前写入的所有配置文件都不含此键，其 false 零值会在这些配置中
+// 保持启动预热开启。只有显式设置为 true 才会关闭预热。
 func TestDisableWarmUpConfig(t *testing.T) {
 	write := func(t *testing.T, transportJSON string) *ClientConfig {
 		t.Helper()
@@ -710,8 +709,8 @@ func TestDisableWarmUpConfig(t *testing.T) {
 	}
 
 	t.Run("缺省键开启预热", func(t *testing.T) {
-		// An empty transport object stands for a pre-option config file; the
-		// unknown keys stand for fields a newer build may add.
+		// 空的 transport 对象代表选项出现之前的配置文件；未知键代表更新版本
+		// 可能新增的字段。
 		cfg := write(t, `{"conn_count_max": 15, "future_option": true}`)
 		if cfg.Transport.DisableWarmUp {
 			t.Error("DisableWarmUp = true, want false when the key is absent")

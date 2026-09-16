@@ -10,37 +10,33 @@ import (
 )
 
 const (
-	// badgeInset is the gap in pixels kept between the badge and the icon edge.
+	// badgeInset 是徽章与图标边缘之间保留的像素间隙。
 	badgeInset = 2
-	// badgeMinRadius/badgeMaxRadius bound the badge radius so it stays
-	// visible on very small icons and unobtrusive on very large ones.
+	// badgeMinRadius/badgeMaxRadius 约束徽章半径：在很小的图标上保持可见，
+	// 在很大的图标上又不显突兀。
 	badgeMinRadius = 3
 	badgeMaxRadius = 6
-	// badgeRadiusDivisor sizes the badge relative to the icon (roughly 1/10 of
-	// the shorter side): 32x32 -> 4px, 44x44 -> 5px.
+	// badgeRadiusDivisor 使徽章相对图标成比例（约为较短边的 1/10）：
+	// 32x32 -> 3px、44x44 -> 4px。
 	badgeRadiusDivisor = 10
 )
 
-// badgeColor is the fill color of the update badge. A saturated green keeps
-// the badge readable on both light and dark task bars.
+// badgeColor 是更新徽章的填充色。饱和的绿色在浅色和深色任务栏上都能看清。
 var badgeColor = color.RGBA{R: 0x22, G: 0xC5, B: 0x5E, A: 0xFF}
 
-// badgeOutline is drawn one pixel wider than badgeColor so the badge stays
-// visible on top of icons of any luminance.
+// badgeOutline 比 badgeColor 向外扩一个像素绘制，使徽章在任意亮度的图标上都可见。
 var badgeOutline = color.RGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}
 
-// UpdateBadge returns a copy of basePNG with a badge drawn in its top-right
-// corner, giving the tray a persistent "update available" marker that does
-// not depend on system notifications being enabled.
+// UpdateBadge 返回 basePNG 的副本，并在其右上角绘制徽章，为托盘提供一个
+// 不依赖系统通知是否开启的常驻"有更新可用"标记。
 //
-// The badge is sized proportionally to the icon (see badgeRadius), so it works
-// for both the 32x32 Windows/Linux icon and the 44x44 macOS template icon. The
-// result can be re-applied through tray.SetIcon/SetTemplateIcon; on macOS the
-// outline and the dot are both fully opaque, which is what a template image
-// needs in order to render a solid monochrome dot in the menu bar.
+// 徽章大小与图标成比例（见 badgeRadius），因此同时适用于 32x32 的
+// Windows/Linux 图标和 44x44 的 macOS 模板图标。结果可再次通过
+// tray.SetIcon/SetTemplateIcon 应用；在 macOS 上轮廓与圆点都完全不透明，
+// 这正是模板图像在菜单栏渲染出实心单色圆点所需的条件。
 //
-// An error is returned when basePNG cannot be decoded (for example a non-PNG
-// asset); callers should then fall back to a tooltip-only reminder.
+// 当 basePNG 无法解码时（例如非 PNG 资源）返回错误；调用方应退回到
+// 仅提示气泡的提醒方式。
 func UpdateBadge(basePNG []byte) ([]byte, error) {
 	base, err := png.Decode(bytes.NewReader(basePNG))
 	if err != nil {
@@ -66,12 +62,12 @@ func UpdateBadge(basePNG []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// badgeRadius returns the badge radius for the given icon side length.
+// badgeRadius 返回给定图标边长的徽章半径。
 func badgeRadius(side int) int {
 	return min(badgeMaxRadius, max(badgeMinRadius, side/badgeRadiusDivisor))
 }
 
-// fillCircle paints a filled circle with center (cx, cy) and radius r.
+// fillCircle 以圆心 (cx, cy) 和半径 r 绘制一个实心圆。
 func fillCircle(dst *image.RGBA, cx, cy, r int, c color.Color) {
 	bounds := dst.Bounds()
 	for y := cy - r; y <= cy+r; y++ {

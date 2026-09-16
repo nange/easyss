@@ -50,8 +50,8 @@ func TestRecordWriterFlushesAfterCompleteRecord(t *testing.T) {
 	require.NoError(t, err)
 	aad := buildAAD(endpoint, salt, "s2c", "session", protocol.MethodAES256GCM)
 
-	// WriteRecord should NOT auto-flush regardless of record size.
-	// The caller (shaper) is responsible for calling Flush().
+	// WriteRecord 不应自动 flush，无论记录多大。
+	// 由调用方（shaper）负责调用 Flush()。
 	w := &flushBuffer{}
 	rw := NewRecordWriter(w, enc, counter, aad)
 	require.NoError(t, rw.WriteRecord([]byte("hello")))
@@ -59,11 +59,11 @@ func TestRecordWriterFlushesAfterCompleteRecord(t *testing.T) {
 	require.Equal(t, 0, w.flushes, "WriteRecord should not auto-flush")
 	require.Greater(t, w.Len(), 3)
 
-	// Explicit Flush() should always flush.
+	// 显式调用 Flush() 应始终执行 flush。
 	rw.Flush()
 	require.Equal(t, 1, w.flushes, "explicit Flush() should flush")
 
-	// Large record should also not auto-flush.
+	// 大记录同样不应自动 flush。
 	large := make([]byte, 32*1024)
 	w2 := &flushBuffer{}
 	enc2, counter2, err := sk.newEncryptor(sessionPhase, DirS2C, protocol.MethodAES256GCM)

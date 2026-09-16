@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newTestUWPTrayApp builds a TrayApp with a fresh UWP submenu and its
-// pre-built slot layout, without touching the real system tray.
+// newTestUWPTrayApp 构建一个带有全新 UWP 子菜单及其预构建槽位布局的
+// TrayApp，不触碰真实的系统托盘。
 func newTestUWPTrayApp() *TrayApp {
 	a := &TrayApp{}
 	a.uwpMenu = systray.NewMenu()
@@ -50,15 +50,14 @@ func TestUWPApplySlots_Overflow(t *testing.T) {
 	apps := makeFakeUWPApps(uwpMenuSlots+6, 20)
 	a.applyUWPAppsToSlots(apps)
 
-	// All slots are populated (the overflow is dropped); the first 20 are
-	// checked.
+	// 所有槽位都被填充（溢出的被丢弃）；前 20 个被勾选。
 	for i := range uwpMenuSlots {
 		require.False(t, a.uwpItems[i].MenuItem.IsDisabled(), "slot %d should be enabled", i)
 		require.Equal(t, i < 20, a.uwpItems[i].MenuItem.IsChecked(), "slot %d checked", i)
 		require.NotNil(t, a.uwpItems[i].App, "slot %d app", i)
 		require.Equal(t, apps[i].PackageFamilyName, a.uwpItems[i].App.PackageFamilyName, "slot %d pfn", i)
 	}
-	// Overflow hint stays disabled: it is informational only.
+	// 溢出提示保持禁用：它只是信息性提示。
 	require.True(t, a.uwpOverflowHint.IsDisabled())
 }
 
@@ -75,7 +74,7 @@ func TestUWPApplySlots_Partial(t *testing.T) {
 		require.True(t, a.uwpItems[i].MenuItem.IsDisabled(), "slot %d should stay disabled", i)
 		require.Nil(t, a.uwpItems[i].App, "slot %d app should be nil", i)
 	}
-	// Overflow hint stays disabled: it is informational only.
+	// 溢出提示保持禁用：它只是信息性提示。
 	require.True(t, a.uwpOverflowHint.IsDisabled())
 }
 
@@ -93,9 +92,9 @@ func TestUWPApplySlots_SkipsInvalid(t *testing.T) {
 	a := newTestUWPTrayApp()
 
 	apps := []UWPApp{
-		{Name: "", PackageFamilyName: "Bad.NoName_pkg"},   // skipped: no name
-		{Name: "Good", PackageFamilyName: "Good.App_pkg"}, // fills slot 0
-		{Name: "NoPfn", PackageFamilyName: ""},            // skipped: no PFN
+		{Name: "", PackageFamilyName: "Bad.NoName_pkg"},   // 跳过：无名称
+		{Name: "Good", PackageFamilyName: "Good.App_pkg"}, // 填充槽位 0
+		{Name: "NoPfn", PackageFamilyName: ""},            // 跳过：无 PFN
 	}
 	a.applyUWPAppsToSlots(apps)
 
@@ -107,8 +106,8 @@ func TestUWPApplySlots_SkipsInvalid(t *testing.T) {
 	require.Nil(t, a.uwpItems[1].App)
 }
 
-// TestUWPApplySlots_Twice ensures repeated refreshes are idempotent: the
-// slot count never grows and disabled state converges after apps disappear.
+// TestUWPApplySlots_Twice 确保重复刷新是幂等的：槽位数量不会增长，
+// 应用消失后禁用状态会收敛。
 func TestUWPApplySlots_Twice(t *testing.T) {
 	a := newTestUWPTrayApp()
 
@@ -124,6 +123,6 @@ func TestUWPApplySlots_Twice(t *testing.T) {
 		require.True(t, a.uwpItems[i].MenuItem.IsDisabled(), "slot %d should be disabled", i)
 		require.Nil(t, a.uwpItems[i].App, "slot %d app should be nil", i)
 	}
-	// Slots beyond the previous fill are untouched.
+	// 超出上次填充范围的槽位不受影响。
 	require.True(t, a.uwpItems[10].MenuItem.IsDisabled())
 }

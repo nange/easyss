@@ -170,10 +170,9 @@ func jsonTunConfig(s string) json.RawMessage {
 	return json.RawMessage(s)
 }
 
-// OutboundProtoToProtocol maps the user-facing outbound_proto value to the
-// transport protocol. Only h2 is implemented, so "native" (the historical
-// empty value) and "h2" both select it — the mapping is shared by the config
-// file and the --outbound-proto flag so the two cannot drift.
+// OutboundProtoToProtocol 将面向用户的 outbound_proto 值映射为传输协议。
+// 目前只实现了 h2，因此 "native"（历史上的空值）和 "h2" 都选中它——该映射
+// 由配置文件与 --outbound-proto 标志共用，两者不会发生偏离。
 func OutboundProtoToProtocol(proto string) (string, error) {
 	switch proto {
 	case "", "native":

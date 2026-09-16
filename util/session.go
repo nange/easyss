@@ -8,8 +8,8 @@ import (
 	"strconv"
 )
 
-// SessionUser returns the desktop user that invoked the elevated easyss:
-// pkexec exports PKEXEC_UID, sudo exports SUDO_UID/SUDO_USER.
+// SessionUser 返回调用提权后 easyss 的桌面用户：
+// pkexec 导出 PKEXEC_UID，sudo 导出 SUDO_UID/SUDO_USER。
 func SessionUser() (username string, uid int, ok bool) {
 	candidates := []struct{ uid, name string }{
 		{os.Getenv("PKEXEC_UID"), ""},
@@ -44,9 +44,8 @@ func SessionUser() (username string, uid int, ok bool) {
 	return "", 0, false
 }
 
-// SessionEnv builds the KEY=VALUE assignments of the desktop session, using
-// the standard locations under /run/user/<uid> for anything the elevated
-// process did not inherit.
+// SessionEnv 构建桌面会话的 KEY=VALUE 环境变量列表，对于提权进程
+// 未继承的内容，使用 /run/user/<uid> 下的标准位置。
 func SessionEnv(username string, uid int) []string {
 	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
 	if runtimeDir == "" {
@@ -103,8 +102,8 @@ func SessionEnv(username string, uid int) []string {
 	return env
 }
 
-// firstWaylandDisplay returns the name of the first Wayland socket in the
-// runtime directory, i.e. the WAYLAND_DISPLAY value a session would use.
+// firstWaylandDisplay 返回运行时目录中第一个 Wayland socket 的名称，
+// 即会话会使用的 WAYLAND_DISPLAY 值。
 func firstWaylandDisplay(runtimeDir string) string {
 	matches, err := filepath.Glob(filepath.Join(runtimeDir, "wayland-*"))
 	if err != nil {

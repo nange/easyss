@@ -108,9 +108,8 @@ func (s *ForwardServer) exchangeWithServers(servers []string, msg *dns.Msg) (*dn
 		return nil, errors.New("no dns server available")
 	}
 
-	// Query every upstream concurrently and take the first success. A
-	// serial scan lets one hung upstream stall the query for the full
-	// client timeout; the whole query shares a single timeout budget.
+	// 并发查询每个上游服务器并取第一个成功结果。串行扫描会让一个挂起的
+	// 上游占用整个客户端超时时间；整个查询共享同一个超时预算。
 	ctx, cancel := context.WithTimeout(context.Background(), s.client.Timeout)
 	defer cancel()
 
@@ -151,13 +150,11 @@ func (s *ForwardServer) exchangeWithServers(servers []string, msg *dns.Msg) (*dn
 	return nil, lastErr
 }
 
-// systemDNSServers returns the system dns servers as fallback upstreams,
-// filtering out ipv6 ones when ipv6 is disabled. Servers pointing at this
-// forward server itself are always dropped: during TUN mode the system DNS
-// is set to 127.0.0.1, and using it as a fallback upstream would recurse
-// into ourselves (query -> fallback -> 127.0.0.1:53 -> same query), piling
-// up goroutines and UDP sockets until the per-query timeout unwinds the
-// chain.
+// systemDNSServers 返回系统 DNS 服务器作为回退上游，禁用 IPv6 时过滤掉
+// IPv6 服务器。指向本转发服务器自身的服务器总是被丢弃：TUN 模式下系统 DNS
+// 被设置为 127.0.0.1，若将其用作回退上游会递归回自身（查询 -> 回退 ->
+// 127.0.0.1:53 -> 同一查询），堆积 goroutine 和 UDP socket，直到单次查询的
+// 超时解开这条链。
 func (s *ForwardServer) systemDNSServers() []string {
 	servers := systemDNSServersFunc()
 	var filtered []string

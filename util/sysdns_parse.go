@@ -4,12 +4,12 @@ package util
 
 import "strings"
 
-// parseDNSServersFromIPConfig parses the dns servers from the output of `ipconfig /all`.
+// parseDNSServersFromIPConfig 从 `ipconfig /all` 的输出中解析 DNS 服务器。
 //
-// It matches the dns server section by label lines like "DNS Servers" or
-// "DNS 服务器" (utf-8 or gbk encoded), then collects the following pure-ip
-// lines as dns servers until the next non-empty non-ip line. The result is
-// deduplicated and keeps the original order.
+// 它通过形如 "DNS Servers" 或 "DNS 服务器"（utf-8 或 gbk 编码）的标签行
+// 定位 DNS 服务器段落，然后收集其后连续的纯 IP 行作为 DNS 服务器，直到
+// 遇到下一个非空且非 IP 的行。结果会去重，
+// 并保持原有顺序。
 func parseDNSServersFromIPConfig(output string) []string {
 	var ret []string
 	seen := make(map[string]struct{})
@@ -41,11 +41,11 @@ func isIPConfigDNSLabel(line string) bool {
 		return false
 	}
 
-	// "DNS Servers" for english windows, "DNS 服务器" for chinese windows,
-	// the latter may be utf-8 or gbk(cp936) encoded.
+	// "DNS Servers" 用于英文版 Windows，"DNS 服务器" 用于中文版 Windows，
+	// 后者可能是 utf-8 或 gbk(cp936) 编码。
 	return strings.Contains(line, "Servers") ||
 		strings.Contains(line, "服务器") ||
-		strings.Contains(line, "\xB7\xFE\xCE\xF1\xC6\xF7") // gbk encoding of 服务器
+		strings.Contains(line, "\xB7\xFE\xCE\xF1\xC6\xF7") // "服务器" 的 gbk 编码
 }
 
 func appendDNSIP(ret *[]string, seen map[string]struct{}, ip string) {

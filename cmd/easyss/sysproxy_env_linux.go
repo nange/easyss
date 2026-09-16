@@ -15,30 +15,29 @@ import (
 )
 
 const (
-	// sysProxyNoProxy keeps traffic to the local machine itself out of the
-	// proxy. Without it a request for http://127.0.0.1:<http_port>/stats would
-	// be sent to the proxy listening at that very address.
+	// sysProxyNoProxy 让发往本机自身的流量不经过代理。
+	// 没有它，对 http://127.0.0.1:<http_port>/stats 的请求
+	// 会被发送到监听在同一地址的代理上。
 	sysProxyNoProxy = "localhost,127.0.0.1,::1"
 
-	// proxyEnvTimeout bounds the external commands below so that an
-	// unresponsive session bus cannot block startup or the tray.
+	// proxyEnvTimeout 限制下面外部命令的执行时间，
+	// 这样无响应的会话总线不会阻塞启动或托盘。
 	proxyEnvTimeout = 5 * time.Second
 )
 
-// sysProxyEnvKeys lists every variable easyss publishes and restores.
+// sysProxyEnvKeys 列出 easyss 发布并恢复的所有变量。
 //
-// Programs pick the proxy source based on the desktop environment they detect:
-// Chromium reads gsettings on GNOME and kioslaverc on KDE, but on any other
-// desktop (Hyprland, sway, ...) it ignores the system settings entirely and
-// only looks at these environment variables. Publishing them to the session
-// environment therefore closes the gap that leaves a browser on a plain
-// Hyprland session talking directly to the internet.
+// 程序根据它们检测到的桌面环境来选择代理来源：
+// Chromium 在 GNOME 上读取 gsettings，在 KDE 上读取 kioslaverc，
+// 但在任何其他桌面（Hyprland、sway 等）上它会完全忽略系统设置，
+// 只看这些环境变量。因此把它们发布到会话环境，
+// 就填补了纯 Hyprland 会话中的浏览器直连互联网的缺口。
 var sysProxyEnvKeys = []string{
 	"http_proxy", "https_proxy", "no_proxy",
 	"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
 }
 
-// proxyEnvStore identifies where setSysProxyEnv published the proxy.
+// proxyEnvStore 标识 setSysProxyEnv 把代理发布到了哪里。
 type proxyEnvStore int
 
 const (
@@ -47,15 +46,14 @@ const (
 	proxyEnvStoreDBus
 )
 
-// proxyEnvCmd is a single external command that reads or updates the session
-// environment.
+// proxyEnvCmd 是读取或更新会话环境的单个外部命令。
 type proxyEnvCmd struct {
 	name string
 	args []string
 }
 
-// proxyEnvExec runs such a command. It is a variable so that tests can observe
-// the commands being issued without touching the real session.
+// proxyEnvExec 运行这样的命令。它是变量，以便测试可以观察
+// 发出的命令而无需触碰真实会话。
 var proxyEnvExec = func(name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), proxyEnvTimeout)
 	defer cancel()
@@ -65,19 +63,18 @@ var proxyEnvExec = func(name string, args ...string) (string, error) {
 
 var sysProxyEnv struct {
 	mu sync.Mutex
-	// previous holds the values the session environment had before easyss
-	// changed them. A key missing from the map was not set at all.
+	// previous 保存 easyss 修改会话环境之前的值。
+	// 映射中缺失的键表示原本根本没有设置。
 	previous map[string]string
 	store    proxyEnvStore
 }
 
-// setSysProxyEnv publishes the proxy for the given local http proxy port to the
-// session environment. It reports whether the environment was updated, which is
-// false on a session that offers neither a systemd user manager nor a D-Bus
-// session bus.
+// setSysProxyEnv 把给定本地 HTTP 代理端口的代理配置发布到会话环境。
+// 它报告环境是否已更新；在没有 systemd 用户管理器也没有 D-Bus
+// 会话总线的会话上返回 false。
 //
-// Only applications started after this call inherit the new variables: a
-// browser that is already running has to be restarted to pick the proxy up.
+// 只有此调用之后启动的应用才会继承新变量：
+// 已在运行的浏览器必须重启才能使用该代理。
 func setSysProxyEnv(port int) (bool, error) {
 	sysProxyEnv.mu.Lock()
 	defer sysProxyEnv.mu.Unlock()
@@ -96,9 +93,8 @@ func setSysProxyEnv(port int) (bool, error) {
 	return true, nil
 }
 
-// unsetSysProxyEnv restores the variables setSysProxyEnv overwrote. It reports
-// whether it changed anything, which is false when this process never published
-// a proxy.
+// unsetSysProxyEnv 恢复 setSysProxyEnv 覆盖的变量。它报告是否
+// 改变了什么；当本进程从未发布过代理时返回 false。
 func unsetSysProxyEnv() (bool, error) {
 	sysProxyEnv.mu.Lock()
 	defer sysProxyEnv.mu.Unlock()
@@ -107,9 +103,8 @@ func unsetSysProxyEnv() (bool, error) {
 		return false, nil
 	}
 
-	// Keep the state when the restore fails, so that a retry -- the tray
-	// reverts its checkmark and lets the user click again -- can still bring
-	// the original values back.
+	// 恢复失败时保留状态，这样重试 —— 托盘回滚勾选并允许用户再次点击 ——
+	// 仍能把原始值恢复回来。
 	if err := restoreSysProxyEnv(sysProxyEnv.store, sysProxyEnv.previous); err != nil {
 		return false, err
 	}
@@ -119,8 +114,7 @@ func unsetSysProxyEnv() (bool, error) {
 	return true, nil
 }
 
-// sysProxyEnvValues returns the session environment easyss publishes for the
-// given local http proxy port.
+// sysProxyEnvValues 返回 easyss 为给定本地 HTTP 代理端口发布的会话环境。
 func sysProxyEnvValues(port int) map[string]string {
 	addr := "http://127.0.0.1:" + strconv.Itoa(port)
 
@@ -134,16 +128,15 @@ func sysProxyEnvValues(port int) map[string]string {
 	}
 }
 
-// snapshotSysProxyEnv records the proxy related variables the session
-// environment currently holds, so that unsetSysProxyEnv can put them back. A
-// variable missing from the result was not set before.
+// snapshotSysProxyEnv 记录会话环境当前持有的代理相关变量，
+// 以便 unsetSysProxyEnv 能恢复它们。结果中缺失的变量表示之前未设置。
 func snapshotSysProxyEnv() map[string]string {
 	previous := make(map[string]string, len(sysProxyEnvKeys))
 
 	current, err := systemdUserEnv()
 	if err != nil {
-		// Restoring then degrades to clearing the variables, which still beats
-		// leaving a proxy pointing at a stopped easyss behind.
+		// 此时恢复降级为清除这些变量，这仍然好过
+		// 留下一个指向已停止 easyss 的代理配置。
 		log.Warn("[SYSPROXY] cannot read session environment, previous proxy values will not be restored", "err", err)
 		return previous
 	}
@@ -157,17 +150,14 @@ func snapshotSysProxyEnv() map[string]string {
 	return previous
 }
 
-// applySysProxyEnv publishes the given values to the session environment.
+// applySysProxyEnv 把给定值发布到会话环境。
 //
-// Exactly one store is used. The systemd user manager is preferred because it is
-// what desktop sessions that launch applications through systemd -- uwsm on
-// Hyprland, for instance -- hand down to them, and because it can remove a
-// variable again. Only when there is no usable user manager does easyss fall
-// back to the D-Bus activation environment.
+// 只使用一个存储。优先使用 systemd 用户管理器，因为通过 systemd 启动应用的
+// 桌面会话（例如 Hyprland 上的 uwsm）会把它传给应用，而且它能再次删除变量。
+// 只有在没有可用的用户管理器时，easyss 才回退到 D-Bus activation 环境。
 //
-// Writing to both would be a mistake: with dbus-broker the activation
-// environment *is* the systemd user manager environment, so the values would be
-// published twice and could no longer be removed cleanly.
+// 同时写入两者是错误的：使用 dbus-broker 时，activation 环境
+// *就是* systemd 用户管理器环境，值会被发布两次，且无法再被干净地移除。
 func applySysProxyEnv(values map[string]string) (proxyEnvStore, error) {
 	assignments := make([]string, 0, len(sysProxyEnvKeys))
 	for _, key := range sysProxyEnvKeys {
@@ -188,13 +178,12 @@ func applySysProxyEnv(values map[string]string) (proxyEnvStore, error) {
 	return proxyEnvStoreDBus, nil
 }
 
-// restoreSysProxyEnv puts the session environment back to the values
-// snapshotSysProxyEnv captured, using the store the proxy was published to.
+// restoreSysProxyEnv 使用发布代理时所用的存储，把会话环境恢复到
+// snapshotSysProxyEnv 捕获的值。
 func restoreSysProxyEnv(store proxyEnvStore, previous map[string]string) error {
 	if store == proxyEnvStoreDBus {
-		// dbus-daemon cannot remove a variable once it has been set, so the
-		// ones easyss introduced are emptied instead: Chromium, curl and
-		// friends treat an empty proxy variable the same as an unset one.
+		// dbus-daemon 一旦设置了变量就无法再删除，因此改为清空 easyss 引入的
+		// 变量：Chromium、curl 等会把空的代理变量视同未设置。
 		assignments := make([]string, 0, len(sysProxyEnvKeys))
 		for _, key := range sysProxyEnvKeys {
 			assignments = append(assignments, key+"="+previous[key])
@@ -211,8 +200,7 @@ func restoreSysProxyEnv(store proxyEnvStore, previous map[string]string) error {
 		systemdUnset = append(systemdUnset, key)
 	}
 
-	// Putting the previous values back and removing the ones easyss added are
-	// two independent commands, and both have to run.
+	// 恢复先前的值和移除 easyss 添加的值是两个独立命令，两者都必须执行。
 	var errs []error
 	if len(systemdSet) > 0 {
 		cmd := proxyEnvCmd{"systemctl", append([]string{"--user", "set-environment"}, systemdSet...)}
@@ -226,13 +214,13 @@ func restoreSysProxyEnv(store proxyEnvStore, previous map[string]string) error {
 	return errors.Join(errs...)
 }
 
-// runProxyEnvCmd runs one environment update command.
+// runProxyEnvCmd 运行一条环境更新命令。
 func runProxyEnvCmd(cmd proxyEnvCmd) error {
 	_, err := proxyEnvExec(cmd.name, cmd.args...)
 	return err
 }
 
-// systemdUserEnv reads the environment of the systemd user manager.
+// systemdUserEnv 读取 systemd 用户管理器的环境。
 func systemdUserEnv() (map[string]string, error) {
 	out, err := proxyEnvExec("systemctl", "--user", "show-environment")
 	if err != nil {

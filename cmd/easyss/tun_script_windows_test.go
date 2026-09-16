@@ -14,27 +14,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// failureMarker is what create_tun_dev_windows.bat prints on stderr (and
-// therefore what the user notification shows) when a command of the TUN
-// configuration script failed.
+// failureMarker 是 create_tun_dev_windows.bat 在 TUN 配置脚本的某个命令
+// 失败时打印到 stderr 的内容（因此也是用户通知所显示的内容）。
 const failureMarker = "[create_tun_dev_windows] failed near:"
 
-// TestCreateTunScriptExitCode is the regression test for the TUN traffic loop
-// a silently successful create script produced on Windows.
+// TestCreateTunScriptExitCode 是 Windows 上"静默成功的创建脚本造成 TUN
+// 流量回路"问题的回归测试。
 //
-// cmd.exe returns 0 for a batch file without an explicit "exit /b" even when
-// the commands inside it failed, so a script whose netsh/route commands were
-// rejected still reported success: the client kept the TUN routes installed,
-// marked tun2socks as started and notified nothing, while every packet went
-// into a device that had no address and no DNS. The script now records the
-// failing step and exits non-zero, which is what this test pins down.
+// 即使批处理内部的命令失败，cmd.exe 对没有显式 "exit /b" 的批处理文件
+// 也返回 0，因此 netsh/route 命令被拒绝的脚本仍会报告成功：客户端保留
+// 已安装的 TUN 路由、把 tun2socks 标记为已启动且不通知任何内容，而每个
+// 数据包都进入一个既无地址也无 DNS 的设备。脚本现在会记录失败的步骤并
+// 以非零码退出，这正是本测试要钉住的行为。
 //
-// The real script is run through cmd.exe exactly like client/tun/tun.go does,
-// with a directory of stub tools prepended to PATH so that the failures are
-// reproducible: netsh refuses to configure an adapter that does not exist and
-// installing routes for real would need administrator rights. The stubs are
-// ordinary batch files, which works because the script calls every tool with
-// "call" (see the comment on the exit code contract in the script).
+// 真实脚本像 client/tun/tun.go 那样通过 cmd.exe 运行，并在 PATH 前面
+// 加一个存根工具目录，使失败可复现：netsh 拒绝配置不存在的适配器，
+// 而真实安装路由需要管理员权限。存根是普通批处理文件，这可行是因为
+// 脚本用 "call" 调用每个工具（见脚本中退出码契约的注释）。
 func TestCreateTunScriptExitCode(t *testing.T) {
 	script, err := filepath.Abs(filepath.Join("..", "..", "scripts", scripts.CreateTunFilename))
 	require.NoError(t, err)
@@ -44,8 +40,7 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 		comspec = "cmd.exe"
 	}
 
-	// stubTool writes a tool that exits with the given code, printing a marker
-	// on stderr when it fails.
+	// stubTool 写入一个以给定码退出的工具，失败时在 stderr 打印标记。
 	stubTool := func(t *testing.T, dir, name string, code int) {
 		t.Helper()
 
@@ -56,17 +51,15 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644))
 	}
 
-	// A stub directory inside a path with spaces would be passed to the
-	// unquoted tool invocations as several arguments, turning this test into a
-	// quotation test instead of an exit code test.
+	// 带空格的路径中的存根目录会被未加引号的工具调用拆成多个参数，
+	// 把本测试变成引号测试而非退出码测试。
 	stubRoot := t.TempDir()
 	if strings.Contains(stubRoot, " ") {
 		t.Skipf("temp directory %q contains a space: the stub directory could not be reached unquoted", stubRoot)
 	}
 
-	// runScript runs the create script with netsh and route stubbed, and
-	// returns its exit code together with the combined output. serverIPV6
-	// switches the script into its ipv6 branch.
+	// runScript 用 netsh 和 route 的存根运行创建脚本，返回其退出码与
+	// 合并输出。serverIPV6 把脚本切到 ipv6 分支。
 	runScript := func(t *testing.T, netshCode, routeCode int, serverIPV6 string) (int, string) {
 		t.Helper()
 
@@ -101,8 +94,7 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 	})
 
 	t.Run("failing netsh fails the script", func(t *testing.T) {
-		// The address and DNS commands fail while the routes are installed:
-		// this is the case that used to look like a successful start.
+		// 地址与 DNS 命令失败而路由被安装：这正是过去看起来像成功启动的情形。
 		code, out := runScript(t, 9009, 0, "")
 		require.NotEqualf(t, 0, code, "a failing netsh must not leave the script with a zero exit code:\n%s", out)
 		require.Contains(t, out, failureMarker,
@@ -117,9 +109,8 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 	})
 
 	t.Run("failing command in the ipv6 branch fails the script", func(t *testing.T) {
-		// Only the ipv6 block can fail here, which means the ipv4 address and
-		// routes were installed first: exactly the partly configured device
-		// Manager.Start has to roll back.
+		// 这里只有 ipv6 块可能失败，意味着 ipv4 地址与路由已先安装：
+		// 正是 Manager.Start 必须回滚的部分配置设备。
 		code, out := runScript(t, 9009, 0, "2001:db8::2")
 		require.NotEqualf(t, 0, code, "an ipv6 command failure must not leave a zero exit code:\n%s", out)
 		require.Contains(t, out, failureMarker)
@@ -129,13 +120,11 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 	})
 }
 
-// TestCloseTunScriptCleanup runs the real close script with recording stubs
-// and pins the commands it has to issue: the same route ladder the create
-// script installs (same destinations and masks), the two ipv6 routes, and the
-// ipv6 address - netsh add address is persistent and the create script's
-// unconditional "add address" cannot re-apply it while it is still on the
-// adapter, so the close script has to delete it (see bareV6Addr in
-// client/tun/tun.go for the /prefix handling).
+// TestCloseTunScriptCleanup 用记录存根运行真实的关闭脚本，并钉住它必须
+// 发出的命令：创建脚本安装的同一路由阶梯（相同目的与掩码）、两条 ipv6
+// 路由，以及 ipv6 地址——netsh add address 是持久的，创建脚本的无条件
+// "add address" 无法在地址仍在适配器上时重新应用，因此关闭脚本必须删除它
+// （/prefix 处理见 client/tun/tun.go 的 bareV6Addr）。
 func TestCloseTunScriptCleanup(t *testing.T) {
 	script, err := filepath.Abs(filepath.Join("..", "..", "scripts", scripts.CloseTunFilename))
 	require.NoError(t, err)
@@ -145,17 +134,15 @@ func TestCloseTunScriptCleanup(t *testing.T) {
 		comspec = "cmd.exe"
 	}
 
-	// A stub directory inside a path with spaces would be passed to the
-	// unquoted tool invocations as several arguments, turning this test into
-	// a quotation test instead of a command test.
+	// 带空格的路径中的存根目录会被未加引号的工具调用拆成多个参数，
+	// 把本测试变成引号测试而非命令测试。
 	stubRoot := t.TempDir()
 	if strings.Contains(stubRoot, " ") {
 		t.Skipf("temp directory %q contains a space: the stub directory could not be reached unquoted", stubRoot)
 	}
 
-	// runClose runs the close script with netsh and route replaced by stubs
-	// that append every invocation to a record file, and returns the
-	// recorded command lines.
+	// runClose 用把每次调用都追加到记录文件的 netsh/route 存根运行关闭
+	// 脚本，并返回记录下来的命令行。
 	runClose := func(t *testing.T, args ...string) []string {
 		t.Helper()
 

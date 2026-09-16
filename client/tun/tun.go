@@ -23,36 +23,33 @@ const (
 	tunTCPReceiveBufferSize = "256KB"
 )
 
-// hooks are the points tests replace to exercise the Start() failure path
-// without a TUN device, administrator rights or a live tun2socks engine: the
-// platform scripts and the DNS setup can only be run for real as root and
-// rewrite the network configuration of the machine running the test. Every
-// hook defaults to the production implementation, and they are only ever
-// written by tests (t.Cleanup restores them), never at runtime.
+// hooks 是测试用来模拟 Start() 失败路径的替换点，无需 TUN 设备、管理员权限
+// 或正在运行的 tun2socks engine：平台脚本和 DNS 设置只能以 root 身份真实运行，
+// 并且会改写运行测试的机器的网络配置。每个 hook 默认指向生产实现，且只由测试
+// 赋值（t.Cleanup 负责还原），运行时绝不会被改写。
 var (
-	// createTunDevFn writes and runs the platform create script.
+	// createTunDevFn 写入并运行平台的创建脚本。
 	createTunDevFn = func(m *Manager) error { return m.createTunDevAndSetIPRoute() }
-	// closeTunDevFn writes and runs the platform close script. It backs both
-	// the Stop() cleanup and the Start() rollback.
+	// closeTunDevFn 写入并运行平台的关闭脚本。Stop() 的清理和 Start() 的回滚
+	// 都由它承担。
 	closeTunDevFn = func(m *Manager) error { return m.closeTunDevAndDelIPRoute() }
-	// saveAndSetDNSStepFn saves the original system DNS and switches the
-	// system over to the TUN resolver (darwin/linux only).
+	// saveAndSetDNSStepFn 保存原始系统 DNS，并把系统切换到 TUN resolver
+	// （仅 darwin/linux）。
 	saveAndSetDNSStepFn = func(m *Manager) error { return m.saveAndSetDNSStep() }
-	// restoreDNSStepFn puts the saved system DNS back.
+	// restoreDNSStepFn 恢复已保存的系统 DNS。
 	restoreDNSStepFn = func(m *Manager) error { return m.restoreDNSStep() }
-	// engineStartFn starts the tun2socks engine; engineStopFn stops it.
+	// engineStartFn 启动 tun2socks engine；engineStopFn 停止它。
 	engineStartFn = func() error { return engine.Start() }
 	engineStopFn  = func(reason string) { stopEngine(reason) }
-	// settleDelay is the pause after the engine start that lets the device
-	// come up before the platform script configures it.
+	// settleDelay 是引擎启动后的停顿，让设备先就绪，随后平台脚本再配置它。
 	settleDelay = func() { time.Sleep(500 * time.Millisecond) }
 )
 
 type Config struct {
 	Socks5Addr       string
 	Device           string
-	DeviceFD         int  // if > 0, use fd:// scheme instead of creating device by name; 0 means create by name
-	SkipRouteCleanup bool // darwin: helper handles route/DNS cleanup, main process skips it in Stop()
+	DeviceFD         int  // 若 > 0，使用 fd:// scheme 打开设备而非按名称创建；0 表示按名称创建
+	SkipRouteCleanup bool // darwin：helper 负责路由/DNS 清理，主进程在 Stop() 中跳过
 	MTU              int
 	Interface        string
 	UDPTimeout       time.Duration
@@ -65,7 +62,7 @@ type Config struct {
 	ServerIPV6       string
 	LocalGateway     string
 	LocalGatewayV6   string
-	DNSServer        string // DNS server to set during TUN mode (darwin only)
+	DNSServer        string // TUN 模式下要设置的 DNS 服务器（darwin/linux）
 }
 
 type DeviceConfig struct {
@@ -84,13 +81,13 @@ type Manager struct {
 	cfg        Config
 	dev        DeviceConfig
 	running    bool
-	originDNS  []string // original system DNS before TUN starts (darwin/linux only)
-	dnsChanged bool     // saveAndSetDNSStep actually reconfigured the system DNS
+	originDNS  []string // TUN 启动前的原始系统 DNS（仅 darwin/linux）
+	dnsChanged bool     // saveAndSetDNSStep 是否尝试过改动系统 DNS（即使中途失败也会置位，供回滚判断）
 	icmpH      *ICMPHandler
 
-	ctx    context.Context    // cancels an in-progress Start()
-	cancel context.CancelFunc // stored so Stop() can cancel the Start() goroutine
-	done   chan struct{}      // closed when Start() finishes (success or failure)
+	ctx    context.Context    // 用于取消进行中的 Start()
+	cancel context.CancelFunc // 保存下来，供 Stop() 取消 Start() goroutine
+	done   chan struct{}      // Start() 结束（成功或失败）时关闭
 }
 
 func New(cfg Config) *Manager {
@@ -113,10 +110,8 @@ func New(cfg Config) *Manager {
 	if cfg.Interface == "" || cfg.LocalGateway == "" {
 		gw, dev, err := util.SysGatewayAndDevice()
 		if err == nil {
-			// Skip the easyss TUN device: when TUN routes are left over from
-			// a previous session the route probe can resolve to it, and the
-			// create script would then route the local gateway through the
-			// TUN device itself.
+			// 跳过 easyss 自身的 TUN 设备：当上次会话残留 TUN 路由时，路由探测
+			// 可能解析到它，创建脚本随后就会把本地网关路由进 TUN 设备本身。
 			if iface, ierr := net.InterfaceByName(dev); ierr == nil && util.IsTunIface(iface) {
 				log.Warn("[TUN] route probe resolved to easyss TUN device, skipping", "iface", dev)
 				dev = ""
@@ -172,9 +167,8 @@ func New(cfg Config) *Manager {
 	}
 }
 
-// manageSystemDNS reports whether this platform switches the system DNS over to
-// the TUN resolver for the duration of a TUN session. Windows does not: its
-// create/close scripts configure the adapter DNS themselves.
+// manageSystemDNS 报告当前平台是否在 TUN 会话期间把系统 DNS 切换到 TUN
+// resolver。Windows 不会：它的创建/关闭脚本自己配置适配器 DNS。
 func manageSystemDNS() bool {
 	return runtime.GOOS == "darwin" || runtime.GOOS == "linux"
 }
@@ -188,7 +182,7 @@ func (m *Manager) Start() error {
 	m.done = make(chan struct{})
 	defer close(m.done)
 
-	// Fast-path: already cancelled before we begin.
+	// 快速路径：还没开始就被取消了。
 	select {
 	case <-m.ctx.Done():
 		return m.ctx.Err()
@@ -222,16 +216,16 @@ func (m *Manager) Start() error {
 
 	engine.Insert(key)
 
-	// Upstream turned Start into an error return instead of a log.Fatalf
-	// (tun2socks #550/#552): report the failure to the caller rather than
-	// exiting the process, and release the TUN device Start may have opened
-	// before core.CreateStack failed.
+	// 上游把 Start 改成了返回错误而不是 log.Fatalf
+	// （tun2socks #550/#552）：把失败报告给调用方而不是退出进程，
+	// 并释放 Start 在 core.CreateStack 失败之前可能已打开的
+	// TUN 设备。
 	if err := engineStartFn(); err != nil {
 		engineStopFn("start failed")
 		return fmt.Errorf("tun: start engine: %w", err)
 	}
 
-	// Allow Stop() to cancel us before we touch routes / DNS.
+	// 在改动路由 / DNS 之前，允许 Stop() 取消本次启动。
 	select {
 	case <-m.ctx.Done():
 		engineStopFn("start cancelled")
@@ -242,7 +236,7 @@ func (m *Manager) Start() error {
 	settleDelay()
 
 	if !fdMode {
-		// Save original DNS and set TUN DNS on darwin and linux.
+		// 在 darwin 和 linux 上保存原始 DNS 并设置 TUN DNS。
 		if manageSystemDNS() {
 			if err := saveAndSetDNSStepFn(m); err != nil {
 				log.Warn("[TUN] set system dns", "err", err)
@@ -251,23 +245,23 @@ func (m *Manager) Start() error {
 
 		if err := createTunDevFn(m); err != nil {
 			engineStopFn("create device failed")
-			// The platform script can fail halfway through (it installs the
-			// address first and the routes after), and the routes it already
-			// added stay in the system routing table when only the engine is
-			// stopped: Stop() below returns early because m.running is still
-			// false, so nothing else ever removes them. Left behind, they send
-			// traffic into a TUN device nothing reads from, which looks like a
-			// dead network. Deleting them is idempotent and only meaningful on
-			// the paths that just ran the create script.
+			// 平台脚本可能在半途失败（它先安装地址，再安装路由），
+			// 而只停止 engine 时，它已经添加的路由仍留在系统路由表里：
+			// 下面的 Stop() 因为 m.running 还是 false 而提前返回，
+			// 所以没有任何东西会再去移除它们。
+			// 残留的路由会把流量送进一个无人读取的 TUN 设备，
+			// 看起来就像网络死了。
+			// 删除这些路由是幂等的，并且只在刚运行过创建脚本的
+			// 路径上才有意义。
 			if closeErr := closeTunDevFn(m); closeErr != nil {
 				log.Warn("[TUN] rollback routes after create failure", "err", closeErr)
 			}
-			// The system DNS was switched to the TUN resolver before the
-			// device existed. Stop() returns early while m.running is false, so
-			// the failure path has to put it back itself: left pointing at a
-			// TUN device nothing answers on (or at a public resolver that is
-			// only reachable through the tunnel), resolution dies system-wide
-			// even though the proxy core keeps running.
+			// 系统 DNS 在设备存在之前就已切换到 TUN resolver。
+			// m.running 为 false 时 Stop() 会提前返回，
+			// 所以失败路径必须自己把 DNS 恢复：
+			// 若继续指向一个无人应答的 TUN 设备（或一个只能通过隧道
+			// 访问的公共解析器），即使代理核心仍在运行，
+			// 全系统的域名解析也会瘫痪。
 			if manageSystemDNS() {
 				if dnsErr := restoreDNSStepFn(m); dnsErr != nil {
 					log.Warn("[TUN] rollback system dns after create failure", "err", dnsErr)
@@ -277,8 +271,8 @@ func (m *Manager) Start() error {
 		}
 	}
 
-	// Final check: if Stop() cancelled us while the platform script was
-	// running, undo everything we just set up.
+	// 最后检查：如果平台脚本运行期间 Stop() 取消了本次启动，
+	// 撤销刚才建立的一切。
 	select {
 	case <-m.ctx.Done():
 		engineStopFn("start cancelled")
@@ -298,8 +292,8 @@ func (m *Manager) Start() error {
 }
 
 func (m *Manager) Stop() {
-	// If Start() is still in progress, cancel it and wait for it to
-	// finish cleaning up before we proceed.
+	// 如果 Start() 仍在进行中，先取消它，
+	// 等它完成清理后再继续。
 	if m.cancel != nil {
 		m.cancel()
 		log.Info("[TUN] Stop: waiting for Start goroutine to finish")
@@ -319,7 +313,7 @@ func (m *Manager) Stop() {
 	if !m.cfg.SkipRouteCleanup {
 		_ = closeTunDevFn(m)
 
-		// Restore original DNS on darwin and linux.
+		// 在 darwin 和 linux 上恢复原始 DNS。
 		if manageSystemDNS() {
 			if err := restoreDNSStepFn(m); err != nil {
 				log.Warn("[TUN] restore system dns", "err", err)
@@ -331,11 +325,11 @@ func (m *Manager) Stop() {
 	log.Info("[TUN] tun2socks stopped")
 }
 
-// stopEngine stops the tun2socks engine, logging the error instead of
-// propagating it: every caller sits on a cleanup path where a failed stop
-// must not mask the original error, and upstream's StopOrFatal would exit the
-// process. Stop is safe after a failed Start: it only releases the device and
-// stack that were actually created.
+// stopEngine 停止 tun2socks engine，把错误记入日志而不是向上传播：
+// 每个调用方都处在清理路径上，停止失败绝不能掩盖原始错误，
+// 而上游的 StopOrFatal 会直接退出进程。
+// Start 失败后再调用 Stop 是安全的：它只会释放
+// 实际创建出来的设备和协议栈。
 func stopEngine(reason string) {
 	if err := engine.Stop(); err != nil {
 		log.Warn("[TUN] engine stop", "reason", reason, "err", err)
@@ -346,14 +340,14 @@ func (m *Manager) IsRunning() bool {
 	return m.running
 }
 
-// SetICMPHandler stores the ICMP handler and registers it with the engine.
-// Safe to call before or after Start(); idempotent.
+// SetICMPHandler 保存 ICMP handler 并把它注册到 engine。
+// 在 Start() 之前或之后调用都安全；幂等。
 func (m *Manager) SetICMPHandler(h *ICMPHandler) {
 	m.icmpH = h
 	engine.SetICMPHandler(h)
 }
 
-// DeviceConfig returns the device configuration with platform defaults filled in.
+// DeviceConfig 返回填入了平台默认值的设备配置。
 func (m *Manager) DeviceConfig() DeviceConfig {
 	return m.dev
 }
@@ -392,9 +386,9 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 			return fmt.Errorf("tun: rename script: %w", err)
 		}
 		namePath = newNamePath
-		// The script reports failures with a non-zero exit code (see the
-		// exit code contract in create_tun_dev_windows.bat); its output is
-		// part of the returned error.
+		// 脚本用非零退出码报告失败（参见
+		// create_tun_dev_windows.bat 中的退出码契约）；
+		// 它的输出会包含在返回的错误里。
 		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device,
 			d.TunIP, d.TunGW, d.TunMask, d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6); err != nil {
 			return fmt.Errorf("tun: exec create script: %w", err)
@@ -449,15 +443,15 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 			return fmt.Errorf("tun: rename close script: %w", err)
 		}
 		namePath = newNamePath
-		// The third argument is the bare IPv6 address of the TUN device
-		// (no /prefix): the script deletes the persistent v6 address, which
-		// the create script's "add address" would refuse to duplicate.
+		// 第三个参数是 TUN 设备的裸 IPv6 地址（不带 /prefix）：
+		// 脚本删除持久化的 v6 地址，而创建脚本的
+		// "add address" 会拒绝重复添加它。
 		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device, d.TunGW, bareV6Addr(d.TunIPV6Sub)); err != nil {
 			log.Warn("[TUN] close script", "err", err)
 		}
 	case "darwin":
-		// Mirror the helper's runCloseScript argument order:
-		// device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6.
+		// 与 helper 的 runCloseScript 参数顺序保持一致：
+		// device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6。
 		if os.Geteuid() == 0 {
 			if _, err := util.CommandContext(ctx, "sh", namePath, d.Device, d.TunGW, d.LocalGateway,
 				d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6); err != nil {
@@ -474,11 +468,11 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 	return nil
 }
 
-// saveAndSetDNSStep saves the original system DNS and switches the system over
-// to the TUN resolver. It records whether the system DNS was actually changed
-// (dnsChanged), which is what restoreDNSStep and the Start() failure rollback
-// act on: darwin leaves a hand-configured DNS alone, and restoring DNS that was
-// never touched would clear it (see restoreDNSStep).
+// saveAndSetDNSStep 保存原始系统 DNS，并把系统切换到 TUN resolver。
+// 它记录是否尝试过改动系统 DNS（dnsChanged，即使中途失败也会置位），
+// restoreDNSStep 和 Start() 的失败回滚都以它为据：
+// darwin 上手工配置的 DNS 保持不动，而把从未动过的 DNS
+// 恢复回去会清空它（参见 restoreDNSStep）。
 func (m *Manager) saveAndSetDNSStep() error {
 	origin, err := util.SysDNS()
 	if err != nil {
@@ -493,31 +487,31 @@ func (m *Manager) saveAndSetDNSStep() error {
 
 	var setErr error
 	if runtime.GOOS == "linux" {
-		// Linux also has to pin the resolver to the TUN device: a DNS
-		// server configured for the physical link only is queried with
-		// the socket bound to that link, so its lookups leave through the
-		// physical NIC and bypass the tunnel (see util.SetSysDNSForTun).
+		// Linux 还必须把解析器固定到 TUN 设备：只给物理链路
+		// 配置的 DNS 服务器，查询时 socket 会绑定到那条链路，
+		// 于是查询从物理网卡发出而绕过隧道
+		// （参见 util.SetSysDNSForTun）。
 		setErr = util.SetSysDNSForTun(m.dev.Device, []string{m.cfg.DNSServer})
 	} else if len(origin) == 0 {
-		// Darwin: only override DNS when the system has no custom DNS
-		// configured (i.e. using DHCP-provided DNS). If the user has
-		// manually set DNS, preserve their choice.
+		// Darwin：仅在系统没有配置自定义 DNS（即使用 DHCP 提供的
+		// DNS）时才覆盖 DNS。如果用户手动设置了 DNS，
+		// 则保留用户的选择。
 		setErr = util.SetSysDNS([]string{m.cfg.DNSServer})
 	} else {
-		// Darwin with a custom DNS: nothing was changed, so nothing has to
-		// be restored, not even after a failed start.
+		// Darwin 且配置了自定义 DNS：什么都没改动，因此什么也不用恢复，
+		// 即使启动失败也是如此。
 		return nil
 	}
 
-	// The setup may have applied part of the change before reporting the
-	// error, so the rollback has to run whenever it was attempted at all.
+	// 设置过程可能在报告错误之前已应用了部分改动，因此只要尝试过
+	// 就必须执行回滚。
 	m.dnsChanged = true
 	return setErr
 }
 
-// restoreDNSStep undoes saveAndSetDNSStep. It is a no-op unless the system DNS
-// was actually reconfigured: on darwin an untouched system would otherwise be
-// written back as "empty", which clears the DHCP-provided servers.
+// restoreDNSStep 撤销 saveAndSetDNSStep 的效果。除非系统 DNS 确实被
+// 重新配置过，否则它是空操作：在 darwin 上，未改动过的系统会被写回
+// "empty"，从而清空 DHCP 提供的服务器。
 func (m *Manager) restoreDNSStep() error {
 	if !m.dnsChanged {
 		return nil
@@ -541,8 +535,8 @@ func (m *Manager) restoreDNSStep() error {
 	return nil
 }
 
-// sysDNSWithElevation returns the current system DNS servers, using osascript
-// elevation on darwin when not running as root.
+// sysDNSWithElevation 返回当前系统 DNS 服务器；在 darwin 上非 root
+// 运行时通过 osascript 提权。
 func sysDNSWithElevation() ([]string, error) {
 	if runtime.GOOS == "darwin" && os.Geteuid() != 0 {
 		return util.SysDNSViaOSAScript()
@@ -550,8 +544,8 @@ func sysDNSWithElevation() ([]string, error) {
 	return util.SysDNS()
 }
 
-// setSysDNSWithElevation sets the system DNS servers, using osascript
-// elevation on darwin when not running as root.
+// setSysDNSWithElevation 设置系统 DNS 服务器；在 darwin 上非 root
+// 运行时通过 osascript 提权。
 func setSysDNSWithElevation(servers []string) error {
 	if runtime.GOOS == "darwin" && os.Geteuid() != 0 {
 		return util.SetSysDNSViaOSAScript(servers)
@@ -578,10 +572,10 @@ func ipSub(ip, mask string) string {
 	return ip + "/" + mask
 }
 
-// bareV6Addr strips the prefix length from an "address/prefix" subnet string
-// ("2001:db8::1/64" -> "2001:db8::1"): netsh add address takes the /prefix
-// form, but the netsh delete address of the windows close script wants the
-// plain address.
+// bareV6Addr 从 "address/prefix" 形式的子网字符串中去掉前缀长度
+// （"2001:db8::1/64" -> "2001:db8::1"）：netsh add address 接受带
+// /prefix 的形式，而 windows 关闭脚本里的 netsh delete address 需要
+// 不带前缀的纯地址。
 func bareV6Addr(sub string) string {
 	addr, _, _ := strings.Cut(sub, "/")
 	return addr

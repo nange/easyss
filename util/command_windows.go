@@ -8,7 +8,7 @@ import (
 	"syscall"
 )
 
-// Command Ref: https://github.com/wzshiming/sysproxy/blob/5e86de4b71cf89f78bf95976d6ca35ea2e9ba526/command_windows.go#L10
+// Command 参考：https://github.com/wzshiming/sysproxy/blob/5e86de4b71cf89f78bf95976d6ca35ea2e9ba526/command_windows.go#L10
 func Command(name string, arg ...string) (string, error) {
 	return CommandContext(context.Background(), name, arg...)
 }

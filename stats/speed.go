@@ -11,8 +11,8 @@ var (
 	speedDone    chan struct{}
 )
 
-// StartSpeedMonitor starts a background goroutine that periodically samples
-// raw byte counters and computes upload/download speed via EWMA.
+// StartSpeedMonitor 启动一个后台 goroutine，周期性采样原始字节计数器，
+// 并通过 EWMA 计算上传/下载速度。
 func StartSpeedMonitor() {
 	speedMu.Lock()
 	defer speedMu.Unlock()
@@ -24,7 +24,7 @@ func StartSpeedMonitor() {
 	go g.speedLoop(speedDone)
 }
 
-// StopSpeedMonitor stops the background speed monitoring goroutine.
+// StopSpeedMonitor 停止后台速度监控 goroutine。
 func StopSpeedMonitor() {
 	speedMu.Lock()
 	defer speedMu.Unlock()
@@ -35,10 +35,9 @@ func StopSpeedMonitor() {
 	close(speedDone)
 }
 
-// speedLoop samples the raw byte counters until done is closed. The stop
-// channel is passed in rather than read from the package global: after a
-// Start/Stop/Start cycle the old goroutine would otherwise observe the new
-// channel and never exit, leaving two monitors updating the same gauges.
+// speedLoop 采样原始字节计数器，直到 done 关闭。停止通道通过参数传入
+// 而不是读取包级全局变量：否则经过一次 Start/Stop/Start 循环后，旧的
+// goroutine 会观察到新通道而永不退出，导致两个监控器更新同一组仪表。
 func (s *stats) speedLoop(done <-chan struct{}) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -58,7 +57,7 @@ func (s *stats) speedLoop(done <-chan struct{}) {
 			deltaRecv := curRecv - lastRecv
 			lastSent, lastRecv = curSent, curRecv
 
-			// Clamp negative deltas (counter reset, should not happen with monotonic counters).
+			// 钳制负增量（计数器重置，单调计数器下不应发生）。
 			if deltaSent < 0 {
 				deltaSent = 0
 			}
@@ -66,7 +65,7 @@ func (s *stats) speedLoop(done <-chan struct{}) {
 				deltaRecv = 0
 			}
 
-			// EWMA update.
+			// EWMA 更新。
 			oldUp := s.uploadSpeed.Load()
 			oldDown := s.downloadSpeed.Load()
 			newUp := int64(float64(deltaSent)*alpha + float64(oldUp)*(1-alpha))
@@ -74,7 +73,7 @@ func (s *stats) speedLoop(done <-chan struct{}) {
 			s.uploadSpeed.Store(newUp)
 			s.downloadSpeed.Store(newDown)
 
-			// Track peak speeds.
+			// 记录峰值速度。
 			for {
 				peak := s.peakUploadSpeed.Load()
 				if newUp <= peak {

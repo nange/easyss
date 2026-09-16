@@ -18,8 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// buildBootstrapRecord produces the encrypted bootstrap record a real easyss
-// client would send (same construction as client openAndBootstrap).
+// buildBootstrapRecord 生成真实 easyss 客户端会发送的加密 bootstrap 记录
+// （与客户端 openAndBootstrap 的构造方式相同）。
 func buildBootstrapRecord(t *testing.T, masterKey []byte, endpoint string, proto protocol.Proto, method protocol.Method, target string) (saltB64 string, body []byte) {
 	t.Helper()
 	salt, err := crypto.GenerateSalt()
@@ -34,8 +34,7 @@ func buildBootstrapRecord(t *testing.T, masterKey []byte, endpoint string, proto
 	})
 	plaintext := protocol.EncodeFrames([]protocol.Frame{hs})
 
-	// The bootstrap record is always encrypted with AES-256-GCM regardless
-	// of the session method negotiated in the handshake frame.
+	// bootstrap 记录始终使用 AES-256-GCM 加密，与握手帧中协商的会话方法无关。
 	var buf bytes.Buffer
 	rw, err := sk.BootstrapWriter(&buf)
 	require.NoError(t, err)
@@ -92,9 +91,8 @@ func newRejectHandler(handshakeTimeout time.Duration) http.Handler {
 	})
 }
 
-// TestServeHTTP_HandshakeTimeout408 verifies that a bootstrap record which
-// never completes gets 408 Request Timeout (nginx-style), NOT a camouflaged
-// 200 page that would poison the legit client's record stream.
+// TestServeHTTP_HandshakeTimeout408 验证从未完整到达的 bootstrap 记录会得到
+// 408 Request Timeout（nginx 风格），而不是会污染合法客户端记录流的伪装 200 页面。
 func TestServeHTTP_HandshakeTimeout408(t *testing.T) {
 	srv := newRejectTestServer(t, newRejectHandler(150*time.Millisecond))
 	tr := newRejectTestClient(t)
@@ -112,9 +110,8 @@ func TestServeHTTP_HandshakeTimeout408(t *testing.T) {
 	require.Empty(t, body)
 }
 
-// TestServeHTTP_DecryptFailureKeepsFallback verifies that a keyless request
-// (bootstrap decrypt failure) still gets the camouflaged 200 homepage, so
-// probing the server is indistinguishable from browsing a normal site.
+// TestServeHTTP_DecryptFailureKeepsFallback 验证无密钥请求（bootstrap 解密失败）
+// 仍会得到伪装成普通站点的 200 首页，使探测服务器与浏览普通网站无法区分。
 func TestServeHTTP_DecryptFailureKeepsFallback(t *testing.T) {
 	srv := newRejectTestServer(t, newRejectHandler(time.Second))
 	tr := newRejectTestClient(t)
@@ -130,8 +127,7 @@ func TestServeHTTP_DecryptFailureKeepsFallback(t *testing.T) {
 		"expected fallback HTML body, got: %s", body)
 }
 
-// TestServeHTTP_ReplaySalt400 verifies that a replayed salt is rejected with
-// 400 after the requester proved key possession.
+// TestServeHTTP_ReplaySalt400 验证在请求者证明持有密钥之后，重放的 salt 会被 400 拒绝。
 func TestServeHTTP_ReplaySalt400(t *testing.T) {
 	srv := newRejectTestServer(t, newRejectHandler(time.Second))
 	tr := newRejectTestClient(t)
@@ -151,8 +147,7 @@ func TestServeHTTP_ReplaySalt400(t *testing.T) {
 	require.Empty(t, body2)
 }
 
-// TestServeHTTP_EndpointMismatch404 verifies that a valid handshake whose
-// proto does not match the requested endpoint path is rejected with 404.
+// TestServeHTTP_EndpointMismatch404 验证 proto 与请求的端点路径不匹配的合法握手会被 404 拒绝。
 func TestServeHTTP_EndpointMismatch404(t *testing.T) {
 	srv := newRejectTestServer(t, newRejectHandler(time.Second))
 	tr := newRejectTestClient(t)
@@ -165,8 +160,7 @@ func TestServeHTTP_EndpointMismatch404(t *testing.T) {
 		"endpoint mismatch should be rejected with 404, body: %s", respBody)
 }
 
-// TestServeHTTP_MethodNotAllowed405 verifies that a valid handshake using a
-// method the server does not allow is rejected with 405.
+// TestServeHTTP_MethodNotAllowed405 验证使用服务器不允许的方法的合法握手会被 405 拒绝。
 func TestServeHTTP_MethodNotAllowed405(t *testing.T) {
 	srv := newRejectTestServer(t, newRejectHandler(time.Second))
 	tr := newRejectTestClient(t)
@@ -179,8 +173,7 @@ func TestServeHTTP_MethodNotAllowed405(t *testing.T) {
 		"disallowed method should be rejected with 405, body: %s", respBody)
 }
 
-// TestServeHTTP_LANTarget400 verifies that a valid handshake targeting a LAN
-// address is rejected with 400 (SSRF guard).
+// TestServeHTTP_LANTarget400 验证以 LAN 地址为目标的合法握手会被 400 拒绝（SSRF 防护）。
 func TestServeHTTP_LANTarget400(t *testing.T) {
 	srv := newRejectTestServer(t, newRejectHandler(time.Second))
 	tr := newRejectTestClient(t)
@@ -191,9 +184,9 @@ func TestServeHTTP_LANTarget400(t *testing.T) {
 		"10.0.0.1:80",
 		"100.64.0.1:80",     // CGNAT
 		"192.0.2.1:80",      // TEST-NET-1
-		"198.18.0.1:80",     // benchmarking
+		"198.18.0.1:80",     // 基准测试网段
 		"203.0.113.1:80",    // TEST-NET-3
-		"255.255.255.255:9", // broadcast
+		"255.255.255.255:9", // 广播地址
 	} {
 		saltB64, body := buildBootstrapRecord(t, masterKey, sharedconfig.EndpointTCP,
 			protocol.ProtoTCP, protocol.MethodAES256GCM, target)
@@ -203,10 +196,9 @@ func TestServeHTTP_LANTarget400(t *testing.T) {
 	}
 }
 
-// TestServeHTTP_ValidHandshakeOctetStream verifies that a valid TCP handshake
-// gets the 200 application/octet-stream response (the proxy path commits).
-// The target is unreachable, so the relay will fail after the commit — we
-// only assert the committed response.
+// TestServeHTTP_ValidHandshakeOctetStream 验证合法的 TCP 握手会得到
+// 200 application/octet-stream 响应（代理路径已提交）。
+// 目标不可达，因此中继会在提交之后失败 —— 这里只断言已提交的响应。
 func TestServeHTTP_ValidHandshakeOctetStream(t *testing.T) {
 	srv := newRejectTestServer(t, newRejectHandler(time.Second))
 	tr := newRejectTestClient(t)

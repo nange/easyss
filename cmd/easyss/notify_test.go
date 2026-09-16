@@ -45,31 +45,31 @@ func TestFriendlyConfigError(t *testing.T) {
 }
 
 func TestFriendlyStartupError(t *testing.T) {
-	// Unix: errno-based detection.
+	// Unix：基于 errno 的检测。
 	msg := friendlyStartupError(syscall.EADDRINUSE)
 	if !strings.Contains(msg, "本地端口可能被占用") {
 		t.Fatalf("EADDRINUSE should get the port-in-use hint: %q", msg)
 	}
 
-	// Windows: the canonical message text.
+	// Windows：标准的错误消息文本。
 	windowsErr := errors.New("bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.")
 	if msg := friendlyStartupError(windowsErr); !strings.Contains(msg, "本地端口可能被占用") {
 		t.Fatalf("windows in-use error should get the hint: %q", msg)
 	}
 
-	// Empty password (crypto.DeriveMasterKey).
+	// 空密码（crypto.DeriveMasterKey）。
 	passwordErr := errors.New("crypto: password is empty")
 	if msg := friendlyStartupError(passwordErr); !strings.Contains(msg, "服务器密码为空") {
 		t.Fatalf("empty-password error should get the config hint: %q", msg)
 	}
 
-	// HTTP proxy without socks_port (runner.errSocksRequired).
+	// HTTP 代理未启用 socks_port（runner.errSocksRequired）。
 	socksRequiredErr := errors.New("http proxy requires socks_port to be enabled")
 	if msg := friendlyStartupError(socksRequiredErr); !strings.Contains(msg, "socks_port 需大于 0") {
 		t.Fatalf("socks-required error should get the config hint: %q", msg)
 	}
 
-	// Server domain failed to resolve (runner.resolveServerDomain): fatal.
+	// 服务端域名解析失败（runner.resolveServerDomain）：致命错误。
 	dnsErr := errors.New("server domain proxy.example.com resolution failed: dns boom")
 	if msg := friendlyStartupError(dnsErr); !strings.Contains(msg, "服务端域名解析失败") {
 		t.Fatalf("resolution error should get the dns hint: %q", msg)
@@ -82,8 +82,7 @@ func TestFriendlyStartupError(t *testing.T) {
 }
 
 func TestFriendlyStartupWarning(t *testing.T) {
-	// Non-fatal startup warnings (e.g. a custom rule file that failed to
-	// load) keep the "启动警告" prefix and the detail.
+	// 非致命的启动警告（例如自定义规则文件加载失败）保留 "启动警告" 前缀和详情。
 	msg := friendlyStartupWarning(errors.New("load custom rule file: open direct.txt: no such file or directory"))
 	if msg != "启动警告：load custom rule file: open direct.txt: no such file or directory" {
 		t.Fatalf("unexpected startup warning message: %q", msg)
@@ -91,9 +90,8 @@ func TestFriendlyStartupWarning(t *testing.T) {
 }
 
 func TestFriendlyTunError(t *testing.T) {
-	// A start cancelled by Stop() (toggle off, server switch, app exit) is
-	// not a failure: nothing may be shown, or every TUN toggle-off would pop
-	// a notification.
+	// 由 Stop() 取消的启动（关闭开关、切换服务器、退出应用）不算失败：
+	// 不得显示任何内容，否则每次关闭 TUN 都会弹出一条通知。
 	if msg := friendlyTunError(context.Canceled); msg != "" {
 		t.Fatalf("context.Canceled must not notify, got %q", msg)
 	}
@@ -104,9 +102,8 @@ func TestFriendlyTunError(t *testing.T) {
 		t.Fatalf("nil error must not notify, got %q", msg)
 	}
 
-	// The user cancelled the pkexec/osascript auth dialog: the platform
-	// wrappers emit these fixed literals, and this is user intent, not a
-	// fault, so it stays silent too.
+	// 用户取消了 pkexec/osascript 授权对话框：平台包装层会发出这些固定
+	// 字面量，这是用户意图而非故障，因此同样保持静默。
 	cancelled := errors.New("pkexec exited before tun helper started: exit status 126: Error executing command as another user: Request dismissed")
 	if msg := friendlyTunError(cancelled); msg != "" {
 		t.Fatalf("a cancelled auth dialog must not notify, got %q", msg)
@@ -116,7 +113,7 @@ func TestFriendlyTunError(t *testing.T) {
 		t.Fatalf("a cancelled admin dialog must not notify, got %q", msg)
 	}
 
-	// Missing privileges keep the actionable hint.
+	// 缺少权限时保留可操作的建议提示。
 	denied := errors.New("tun2socks requires root on this platform")
 	if msg := friendlyTunError(denied); !strings.Contains(msg, "需要管理员权限") || !strings.Contains(msg, denied.Error()) {
 		t.Fatalf("a permission failure should get the elevation hint: %q", msg)
@@ -126,8 +123,8 @@ func TestFriendlyTunError(t *testing.T) {
 		t.Fatalf("an fs.ErrPermission failure should get the elevation hint: %q", msg)
 	}
 
-	// Anything else names both the missing feature and the fact that the
-	// proxy core still works, plus the underlying reason.
+	// 其他任何错误都会同时说明缺失的功能、代理核心仍然可用的事实，
+	// 以及底层原因。
 	engineErr := errors.New("tun: start engine: boom")
 	msg := friendlyTunError(engineErr)
 	for _, want := range []string{"Tun2socks 启动失败", "系统全局流量未生效", "代理（SOCKS5/HTTP）仍可正常使用", engineErr.Error()} {
@@ -172,8 +169,7 @@ func TestTrayStartTunFailureNotifies(t *testing.T) {
 		t.Fatalf("notification %q should carry the underlying reason", got[0])
 	}
 
-	// A deliberate stop must still revert the state (the toggle-off path
-	// relies on it) but must not notify.
+	// 主动停止仍然必须回滚状态（关闭开关的路径依赖于此），但不得通知。
 	trayStartTunFailure(fmt.Errorf("tun: start engine: %w", context.Canceled))
 
 	notifyMu.Lock()
@@ -186,9 +182,8 @@ func TestTrayStartTunFailureNotifies(t *testing.T) {
 	}
 }
 
-// TestTrayStartTunFailureHeadlessText pins the fallback main.go keeps in builds
-// without tray.go: with no tunStartErrorText installed, the raw error text is
-// what would be notified.
+// TestTrayStartTunFailureHeadlessText 固化无 tray.go 构建中 main.go 保留的
+// 回退行为：未安装 tunStartErrorText 时，通知的将是原始错误文本。
 func TestTrayStartTunFailureHeadlessText(t *testing.T) {
 	origHook, origNotify, origText := tunStartFailureHook, tunStartNotify, tunStartErrorText
 	t.Cleanup(func() {
