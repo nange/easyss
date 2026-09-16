@@ -4,25 +4,29 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{.Title}}</title>
+    <meta name="description" content="{{.Description}}">
+    {{.HeadExtras}}
     <style>{{.CSS}}</style>
 </head>
-<body>
+<body class="{{.BodyClass}}">
     <header>
         <h1>{{.SiteName}}</h1>
-        <p>{{.Tagline}}</p>
+        <p><span>{{.Tagline}}</span></p>
     </header>
     <nav>
-        <a href="/">{{.NavHome}}</a>
-        <a href="/about">{{.NavAbout}}</a>
-        <a href="/services">{{.NavServices}}</a>
-        <a href="/contact">{{.NavContact}}</a>
+        {{range .NavItems}}<a href="{{.Href}}">{{.Label}}</a>
+        {{end}}
     </nav>
     <main>
         <h2>{{.Heading}}</h2>
-        {{range .Paragraphs}}<p>{{.}}</p>{{end}}
+        {{range .Paragraphs}}<p>{{.}}</p>
+        {{end}}
     </main>
     <footer>
         <p>{{.Footer}}</p>
+        {{if .FooterNotice}}<p>{{.FooterNotice}}</p>
+        {{end}}
     </footer>
+    {{.Analytics}}
 </body>
 </html>

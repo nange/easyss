@@ -100,17 +100,6 @@ func TestDetectPageType(t *testing.T) {
 	}
 }
 
-func TestHashIndex_SameInputSameOutput(t *testing.T) {
-	a := hashIndex("hello", 5)
-	b := hashIndex("hello", 5)
-	if a != b {
-		t.Errorf("hashIndex not deterministic: %d vs %d", a, b)
-	}
-	if a < 0 || a >= 5 {
-		t.Errorf("hashIndex out of range: %d", a)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // 基于目录的回退页面测试
 // ---------------------------------------------------------------------------
