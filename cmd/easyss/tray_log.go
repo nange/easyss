@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -95,7 +94,7 @@ var lookPath = exec.LookPath
 var openWithDefaultApp = func(path string) error {
 	argv := sessionLaunch([]string{"xdg-open", path})
 
-	return startDetached(argv)
+	return util.StartDetached(argv)
 }
 
 // openLogFile opens the log file for the user: in a terminal emulator tailing
@@ -121,12 +120,12 @@ func openLogFile(filePath string) (fallback bool, err error) {
 	case "windows":
 		argv := []string{"cmd", "/c", "start", "powershell", "-NoExit", "-Command",
 			fmt.Sprintf("Get-Content -Wait -Tail 100 '%s'", filePath)}
-		return false, startDetached(argv)
+		return false, util.StartDetached(argv)
 	case "darwin":
 		argv := []string{"osascript",
 			"-e", fmt.Sprintf(`tell application "Terminal" to do script "tail -f \"%s\""`, filePath),
 			"-e", `tell application "Terminal" to activate`}
-		return false, startDetached(argv)
+		return false, util.StartDetached(argv)
 	default:
 		return false, fmt.Errorf("unsupported os: %s", runtime.GOOS)
 	}
@@ -139,7 +138,7 @@ func openLogFileLinux(filePath string) (fallback bool, err error) {
 	argv, resolveErr := logViewerArgv(filePath)
 	if resolveErr == nil {
 		argv = sessionLaunch(argv)
-		startErr := startDetached(argv)
+		startErr := util.StartDetached(argv)
 		if startErr == nil {
 			log.Info("[SYSTRAY] log opened", "cmd", argv)
 			return false, nil
@@ -220,54 +219,10 @@ func launcherArgv(bin string, l termLauncher, viewer []string) []string {
 	argv = append(argv, bin)
 	argv = append(argv, l.args...)
 	if l.style == termStyleString {
-		return append(argv, shellJoin(viewer))
+		return append(argv, util.ShellJoin(viewer))
 	}
 
 	return append(argv, viewer...)
-}
-
-// shellJoin quotes every argument so that the result can be handed to a
-// terminal emulator that expects one shell command string.
-func shellJoin(args []string) string {
-	quoted := make([]string, 0, len(args))
-	for _, arg := range args {
-		quoted = append(quoted, shellQuote(arg))
-	}
-
-	return strings.Join(quoted, " ")
-}
-
-// shellQuote quotes a single argument for the shell. Arguments without any
-// character the shell treats specially are left untouched.
-func shellQuote(s string) string {
-	const specials = " \t\n\"'\\$`&|;<>()*?[]{}~#!"
-
-	if s != "" && !strings.ContainsAny(s, specials) {
-		return s
-	}
-
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// startDetached starts a command and returns as soon as it has been spawned:
-// an interactive terminal stays in the foreground for as long as the user
-// keeps the window open, so waiting for it — as util.Command does — would
-// block the caller for the whole session. The process is reaped in the
-// background to avoid leaving a zombie behind.
-func startDetached(argv []string) error {
-	if len(argv) == 0 {
-		return errors.New("empty command")
-	}
-
-	cmd := exec.Command(argv[0], argv[1:]...)
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	go func() {
-		_ = cmd.Wait()
-	}()
-
-	return nil
 }
 
 // sessionLaunch hands the command to the desktop user when easyss runs as
@@ -280,128 +235,16 @@ func sessionLaunch(argv []string) []string {
 		return argv
 	}
 
-	username, uid, ok := sessionUser()
+	username, uid, ok := util.SessionUser()
 	if !ok {
 		log.Warn("[SYSTRAY] cannot determine the desktop user, launching as root")
 		return argv
 	}
 
 	launch := []string{"runuser", "-u", username, "--", "env"}
-	launch = append(launch, sessionEnv(username, uid)...)
+	launch = append(launch, util.SessionEnv(username, uid)...)
 
 	return append(launch, argv...)
-}
-
-// sessionUser returns the desktop user that invoked the elevated easyss:
-// pkexec exports PKEXEC_UID, sudo exports SUDO_UID/SUDO_USER.
-func sessionUser() (username string, uid int, ok bool) {
-	candidates := []struct{ uid, name string }{
-		{os.Getenv("PKEXEC_UID"), ""},
-		{os.Getenv("SUDO_UID"), os.Getenv("SUDO_USER")},
-	}
-
-	for _, candidate := range candidates {
-		if candidate.uid == "" {
-			continue
-		}
-		id, err := strconv.Atoi(candidate.uid)
-		if err != nil {
-			continue
-		}
-		name := candidate.name
-		if u, err := user.LookupId(candidate.uid); err == nil {
-			name = u.Username
-		}
-		if name != "" {
-			return name, id, true
-		}
-	}
-
-	if name := os.Getenv("SUDO_USER"); name != "" {
-		if u, err := user.Lookup(name); err == nil {
-			if id, err := strconv.Atoi(u.Uid); err == nil {
-				return u.Username, id, true
-			}
-		}
-	}
-
-	return "", 0, false
-}
-
-// sessionEnv builds the KEY=VALUE assignments of the desktop session, using
-// the standard locations under /run/user/<uid> for anything the elevated
-// process did not inherit.
-func sessionEnv(username string, uid int) []string {
-	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
-	if runtimeDir == "" {
-		runtimeDir = fmt.Sprintf("/run/user/%d", uid)
-	}
-
-	home := ""
-	if u, err := user.Lookup(username); err == nil {
-		home = u.HomeDir
-	}
-	if home == "" {
-		home = os.Getenv("HOME")
-	}
-
-	env := []string{"XDG_RUNTIME_DIR=" + runtimeDir}
-	if home != "" {
-		env = append(env, "HOME="+home)
-	}
-
-	waylandDisplay := os.Getenv("WAYLAND_DISPLAY")
-	if waylandDisplay == "" {
-		waylandDisplay = firstWaylandDisplay(runtimeDir)
-	}
-	if waylandDisplay != "" {
-		env = append(env, "WAYLAND_DISPLAY="+waylandDisplay)
-	}
-
-	dbusAddr := os.Getenv("DBUS_SESSION_BUS_ADDRESS")
-	if dbusAddr == "" {
-		busPath := filepath.Join(runtimeDir, "bus")
-		if _, err := os.Stat(busPath); err == nil {
-			dbusAddr = "unix:path=" + busPath
-		}
-	}
-	if dbusAddr != "" {
-		env = append(env, "DBUS_SESSION_BUS_ADDRESS="+dbusAddr)
-	}
-
-	if xauthority := os.Getenv("XAUTHORITY"); xauthority != "" {
-		env = append(env, "XAUTHORITY="+xauthority)
-	} else if home != "" {
-		xauthority = filepath.Join(home, ".Xauthority")
-		if _, err := os.Stat(xauthority); err == nil {
-			env = append(env, "XAUTHORITY="+xauthority)
-		}
-	}
-
-	for _, key := range []string{"DISPLAY", "TERMINAL", "XDG_CURRENT_DESKTOP", "HYPRLAND_INSTANCE_SIGNATURE"} {
-		if value := os.Getenv(key); value != "" {
-			env = append(env, key+"="+value)
-		}
-	}
-
-	return env
-}
-
-// firstWaylandDisplay returns the name of the first Wayland socket in the
-// runtime directory, i.e. the WAYLAND_DISPLAY value a session would use.
-func firstWaylandDisplay(runtimeDir string) string {
-	matches, err := filepath.Glob(filepath.Join(runtimeDir, "wayland-*"))
-	if err != nil {
-		return ""
-	}
-
-	for _, match := range matches {
-		if info, err := os.Stat(match); err == nil && info.Mode()&os.ModeSocket != 0 {
-			return filepath.Base(match)
-		}
-	}
-
-	return ""
 }
 
 // openLogSnapshot writes the last logSnapshotLines lines of the log to a

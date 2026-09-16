@@ -113,7 +113,7 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	if err != nil {
 		return giveUp("open lock file", err)
 	}
-	if err := flockWait(lockFile, 30*time.Second); err != nil {
+	if err := util.FlockWait(lockFile, 30*time.Second); err != nil {
 		lockFile.Close() //nolint:errcheck
 		return giveUp("acquire lock", err)
 	}
@@ -404,23 +404,6 @@ func sendFdToParent(socketPath string, tunFd int) error {
 
 	log.Info("[TUN-HELPER] fd sent via unix socket", "socket", socketPath)
 	return nil
-}
-
-// flockWait acquires an exclusive lock on f, retrying until the lock is
-// acquired or the timeout expires. The lock is automatically released by
-// the kernel when the process exits, including on kill -9.
-func flockWait(f *os.File, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
-		if err == nil {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("timeout waiting for lock after %v", timeout)
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
 }
 
 // fifoWriter wraps the FIFO write end and removes the FIFO file when closed,

@@ -1,11 +1,10 @@
 package handler
 
 import (
+	"context"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"net"
-	"strings"
 	"time"
 
 	"github.com/nange/easyss/v3/config"
@@ -13,60 +12,64 @@ import (
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
-	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/util/bytespool"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 )
 
-type ICMPHandler struct {
+type icmpHandler struct {
 	dialTimeout time.Duration
+	dial        dialer
 }
 
-// NewICMPHandler creates an ICMPHandler. The outbound ICMP dial timeout is
+// newICMPHandler creates an icmpHandler. The outbound ICMP dial timeout is
 // derived through config.DialTimeout (base/3 clamped to [3s, 15s]), shared
 // with the TCP/UDP handlers' dials.
-func NewICMPHandler(timeout time.Duration) *ICMPHandler {
-	dialTimeout := config.DialTimeout(timeout)
+func newICMPHandler(timeout time.Duration) *icmpHandler {
 	if timeout <= 0 {
-		dialTimeout = config.DefaultDialTimeout
+		timeout = time.Duration(config.DefaultTimeout) * time.Second
 	}
-	return &ICMPHandler{dialTimeout: dialTimeout}
-}
-
-func (h *ICMPHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, target string) error {
-	for {
-		frame, err := dr.ReadFrame()
-		if err != nil {
-			return err
-		}
-
-		switch frame.Type {
-		case protocol.FrameDATA:
-			replyPayload, err := h.icmpExchange(target, frame.Payload)
-			if err != nil {
-				_ = s2c.PushFrame(protocol.NewFrameRST())
-				_ = s2c.Flush()
-				return err
-			}
-
-			dataFrame := protocol.NewFrameDATA(replyPayload)
-			finFrame := protocol.NewFrameFIN()
-			_ = s2c.PushFrame(dataFrame)
-			_ = s2c.PushFrame(finFrame)
-			_ = s2c.Flush()
-			return nil
-
-		case protocol.FrameFIN, protocol.FrameRST:
-			return nil
-		case protocol.FramePADDING, protocol.FrameCOVER:
-			continue
-		}
+	dialTimeout := config.DialTimeout(timeout)
+	return &icmpHandler{
+		dialTimeout: dialTimeout,
+		dial: dialer{
+			dial: func(_ context.Context, network, target string) (net.Conn, error) {
+				return net.DialTimeout(network, target, dialTimeout)
+			},
+		},
 	}
 }
 
-func (h *ICMPHandler) icmpExchange(target string, payload []byte) ([]byte, error) {
+// Handle relays one ICMP echo exchange per stream: it reads the client's
+// echo request (DATA frame, skipping PADDING/COVER), performs the exchange
+// and answers with the reply plus FIN. Unlike the TCP/UDP handlers it
+// carries no context and no cancelRead: the exchange is self-contained and
+// bounded by its own read deadline, and the stream ends after the reply.
+func (h *icmpHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, target string) error {
+	frame, done, err := nextClientFrame(dr)
+	if err != nil {
+		return err
+	}
+	if done {
+		return nil
+	}
+
+	replyPayload, err := h.icmpExchange(target, frame.Payload)
+	if err != nil {
+		sendRST(s2c)
+		return err
+	}
+
+	dataFrame := protocol.NewFrameDATA(replyPayload)
+	finFrame := protocol.NewFrameFIN()
+	_ = s2c.PushFrame(dataFrame)
+	_ = s2c.PushFrame(finFrame)
+	_ = s2c.Flush()
+	return nil
+}
+
+func (h *icmpHandler) icmpExchange(target string, payload []byte) ([]byte, error) {
 	log.Debug("[ICMP] exchange", "target", target)
 
 	if len(payload) < 4 {
@@ -81,23 +84,15 @@ func (h *ICMPHandler) icmpExchange(target string, payload []byte) ([]byte, error
 		parseProto = 58
 	}
 
-	conn, err := net.DialTimeout(dialNet, target, h.dialTimeout)
+	// The shared dialer expects a context; ICMP has none (see Handle), so a
+	// background context is used. The dial timeout still bounds the dial
+	// itself, and the post-dial SSRF guard runs inside dialTarget.
+	conn, _, err := h.dial.dialTarget(context.Background(), dialNet, target)
 	if err != nil {
 		log.Error("[ICMP] dial target failed", "target", target, "err", err)
 		return nil, err
 	}
 	defer conn.Close() //nolint:errcheck
-
-	// Post-dial SSRF guard, matching the TCP/UDP handlers: the handshake
-	// validated the target, but the dial re-resolves domain targets, so a
-	// DNS-rebinding name could resolve to a LAN host here. Reject the
-	// connection before anything is sent.
-	if ra := conn.RemoteAddr(); ra != nil {
-		if host := lanHostOf(ra.String()); util.IsLANIP(host) {
-			_ = conn.Close()
-			return nil, fmt.Errorf("ssrf: rejected lan destination %s", host)
-		}
-	}
 
 	var echoType icmp.Type
 	if isIPv6 {
@@ -203,19 +198,4 @@ func isIPv6Target(target string) bool {
 		return false
 	}
 	return ip.To4() == nil
-}
-
-// lanHostOf extracts the host part of a remote address in either
-// "host:port" (TCPAddr/UDPAddr) or bare-IP form (IPConn). An IPConn's
-// RemoteAddr is a *net.IPAddr whose String() carries no port — with or
-// without a %zone suffix for link-local IPv6 — so net.SplitHostPort
-// alone would always fail for it and the SSRF check would never fire.
-func lanHostOf(addr string) string {
-	if host, _, err := net.SplitHostPort(addr); err == nil {
-		return host
-	}
-	if i := strings.LastIndexByte(addr, '%'); i >= 0 {
-		return addr[:i]
-	}
-	return addr
 }

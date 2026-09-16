@@ -48,17 +48,12 @@ func ResolvePath(p string) string {
 }
 
 func CurrentDir() string {
-	path, err := os.Executable()
+	path, err := ExecutablePath()
 	if err != nil {
 		return ""
 	}
 
-	a, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return ""
-	}
-
-	dir := filepath.Dir(a)
+	dir := filepath.Dir(path)
 
 	// If running from inside a macOS .app bundle, return the directory
 	// containing the .app so that config files live alongside the bundle.

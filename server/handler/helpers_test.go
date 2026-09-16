@@ -124,45 +124,39 @@ func TestNewProxyHandler(t *testing.T) {
 			Timeouts:  sharedconfig.NewTimeouts(5 * time.Second),
 		}
 		h := NewProxyHandler(cfg)
-		if h.tcpHandler == nil {
-			t.Error("tcpHandler should not be nil")
+		if h.tcp == nil {
+			t.Error("tcp handler should not be nil")
 		}
-		if h.udpHandler == nil {
-			t.Error("udpHandler should not be nil")
+		if h.udp == nil {
+			t.Error("udp handler should not be nil")
 		}
-		if h.icmpHandler == nil {
-			t.Error("icmpHandler should not be nil")
+		if h.icmp == nil {
+			t.Error("icmp handler should not be nil")
 		}
 	})
 }
 
 func TestNewTCPHandler_DialTimeout(t *testing.T) {
-	h := NewTCPHandler(120*time.Second, 30*time.Second, nil)
+	h := newTCPHandler(120*time.Second, 30*time.Second, nil)
 	if h == nil {
-		t.Fatal("NewTCPHandler returned nil")
+		t.Fatal("newTCPHandler returned nil")
 	}
 	if h.dialTimeout != 10*time.Second {
 		t.Errorf("dialTimeout = %v, want 10s", h.dialTimeout)
 	}
-	if h.dialer.Timeout != 10*time.Second {
-		t.Errorf("dialer.Timeout = %v, want 10s", h.dialer.Timeout)
-	}
-	if h.dialer.KeepAlive != 30*time.Second {
-		t.Errorf("dialer.KeepAlive = %v, want 30s", h.dialer.KeepAlive)
-	}
 }
 
 func TestNewTCPHandler(t *testing.T) {
-	h := NewTCPHandler(120*time.Second, 30*time.Second, nil)
+	h := newTCPHandler(120*time.Second, 30*time.Second, nil)
 	if h == nil {
-		t.Fatal("NewTCPHandler returned nil")
+		t.Fatal("newTCPHandler returned nil")
 	}
 }
 
 func TestNewUDPHandler(t *testing.T) {
-	h := NewUDPHandler(30*time.Second, 30*time.Second, nil)
+	h := newUDPHandler(30*time.Second, 30*time.Second, nil)
 	if h == nil {
-		t.Fatal("NewUDPHandler returned nil")
+		t.Fatal("newUDPHandler returned nil")
 	}
 	if h.dialTimeout != 10*time.Second {
 		t.Errorf("dialTimeout = %v, want 10s (DialTimeout(30s))", h.dialTimeout)
@@ -170,9 +164,9 @@ func TestNewUDPHandler(t *testing.T) {
 }
 
 func TestNewICMPHandler(t *testing.T) {
-	h := NewICMPHandler(30 * time.Second)
+	h := newICMPHandler(30 * time.Second)
 	if h == nil {
-		t.Fatal("NewICMPHandler returned nil")
+		t.Fatal("newICMPHandler returned nil")
 	}
 	if h.dialTimeout != 10*time.Second {
 		t.Errorf("dialTimeout = %v, want 10s (DialTimeout(30s))", h.dialTimeout)

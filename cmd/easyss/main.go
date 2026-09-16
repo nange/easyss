@@ -9,7 +9,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -460,7 +459,7 @@ func (a *App) statsLoop(done <-chan struct{}) {
 // used to omit).
 func (a *App) tunConfig() tun.Config {
 	cfg := tun.Config{
-		Socks5Addr: "socks5://127.0.0.1:" + strconv.Itoa(a.cfg.Local.SocksPort),
+		Socks5Addr: util.Socks5URI(a.cfg.Local.SocksPort),
 		DNSServer:  tunDNS(a.cfg),
 	}
 	if a.core != nil && a.core.Client != nil {

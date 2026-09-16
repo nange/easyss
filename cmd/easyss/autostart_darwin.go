@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/nange/easyss/v3/util"
 )
 
 const launchAgentPlist = `<?xml version="1.0" encoding="UTF-8"?>
@@ -36,34 +38,11 @@ func launchAgentPath() (string, error) {
 	return filepath.Join(home, "Library", "LaunchAgents", "com.github.nange.easyss.plist"), nil
 }
 
-// executablePathForAutoStart returns the path to use in the LaunchAgent plist.
-// If the current binary is inside an .app bundle (e.g., Easyss.app/Contents/MacOS/easyss),
-// it uses the bundle path so that macOS treats it as a proper application.
-// Otherwise, it falls back to the raw binary path.
+// executablePathForAutoStart returns the path to use in the LaunchAgent
+// plist. The symlink-resolved executable path keeps the plist stable across
+// launches (Finder/launchd launch through a symlinked bundle path).
 func executablePathForAutoStart() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-
-	// Resolve symlinks to get the real path.
-	realExe, err := filepath.EvalSymlinks(exe)
-	if err != nil {
-		realExe = exe
-	}
-
-	// Check if running from inside an .app bundle.
-	// The bundle structure is: Easyss.app/Contents/MacOS/easyss
-	macOSDir := filepath.Dir(realExe)      // .../Contents/MacOS
-	contentsDir := filepath.Dir(macOSDir)  // .../Contents
-	appBundle := filepath.Dir(contentsDir) // .../Easyss.app
-
-	if strings.HasSuffix(macOSDir, "/MacOS") && strings.HasSuffix(contentsDir, "/Contents") && strings.HasSuffix(appBundle, ".app") {
-		// Running from inside a proper .app bundle, use the bundle path.
-		return realExe, nil
-	}
-
-	return realExe, nil
+	return util.ExecutablePath()
 }
 
 func enableAutoStart() error {
