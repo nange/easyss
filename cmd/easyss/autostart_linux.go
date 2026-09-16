@@ -27,7 +27,7 @@ func autoStartDesktopPath() (string, error) {
 func enableAutoStart() error {
 	exe, err := util.ExecutablePath()
 	if err != nil {
-		return fmt.Errorf("os.Executable: %w", err)
+		return fmt.Errorf("resolve executable path: %w", err)
 	}
 
 	desktopPath, err := autoStartDesktopPath()

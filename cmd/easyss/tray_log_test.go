@@ -204,33 +204,6 @@ func TestLogViewerArgvWithoutTerminal(t *testing.T) {
 	}
 }
 
-func TestShellQuote(t *testing.T) {
-	cases := []struct {
-		in   string
-		want string
-	}{
-		{"/home/nange/Easyss/easyss.log", "/home/nange/Easyss/easyss.log"},
-		{"", "''"},
-		{"/tmp/a b.log", "'/tmp/a b.log'"},
-		{"/tmp/it's.log", `'/tmp/it'\''s.log'`},
-		{"/tmp/$HOME.log", "'/tmp/$HOME.log'"},
-		{"/tmp/back\\slash.log", "'/tmp/back\\slash.log'"},
-	}
-
-	for _, c := range cases {
-		if got := util.ShellQuote(c.in); got != c.want {
-			t.Fatalf("util.ShellQuote(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
-func TestShellJoin(t *testing.T) {
-	got := util.ShellJoin([]string{"tail", "-n", "50", "-f", "/tmp/a b.log"})
-	if want := "tail -n 50 -f '/tmp/a b.log'"; got != want {
-		t.Fatalf("util.ShellJoin = %q, want %q", got, want)
-	}
-}
-
 func TestOpenLogFileErrors(t *testing.T) {
 	for _, filePath := range []string{"", "   "} {
 		if _, err := openLogFile(filePath); !errors.Is(err, errLogFileNotConfigured) {

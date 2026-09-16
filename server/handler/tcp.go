@@ -21,11 +21,20 @@ import (
 
 type tcpHandler struct {
 	idleTimeout time.Duration
-	dialTimeout time.Duration
 	// dialContext is a test-only injection point for the direct dial; nil in
 	// production.
 	dialContext func(context.Context, string, string) (net.Conn, error)
 	dial        dialer
+}
+
+// tcpDialerOptions returns the parameters of the direct-dial net.Dialer:
+// dialTimeout through config.DialTimeout (base/3 clamped to [3s, 15s]) and
+// keepAlive at the full base timeout, so long-lived streams are reaped by the
+// kernel instead of lingering half-open after a peer vanishes. The dialer is
+// built lazily inside the dial closure, so this extraction is the only place
+// the mapping can be asserted.
+func tcpDialerOptions(timeout time.Duration) (dialTimeout, keepAlive time.Duration) {
+	return config.DialTimeout(timeout), timeout
 }
 
 // newTCPHandler creates a tcpHandler with the given idle timeout and base
@@ -38,8 +47,8 @@ func newTCPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) 
 	if timeout <= 0 {
 		timeout = time.Duration(config.DefaultTimeout) * time.Second
 	}
-	dialTimeout := config.DialTimeout(timeout)
-	h := &tcpHandler{idleTimeout: idleTimeout, dialTimeout: dialTimeout}
+	dialTimeout, keepAlive := tcpDialerOptions(timeout)
+	h := &tcpHandler{idleTimeout: idleTimeout}
 	h.dial = dialer{
 		nextProxy: np,
 		useProxy:  np.ShouldProxy,
@@ -47,9 +56,7 @@ func newTCPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) 
 			if h.dialContext != nil {
 				return h.dialContext(ctx, "tcp", target)
 			}
-			// KeepAlive keeps long-lived streams reaped by the kernel instead
-			// of lingering half-open after a peer vanishes.
-			d := &net.Dialer{Timeout: dialTimeout, KeepAlive: timeout}
+			d := &net.Dialer{Timeout: dialTimeout, KeepAlive: keepAlive}
 			return d.DialContext(ctx, outboundTCPNetwork(target), target)
 		},
 	}

@@ -11,12 +11,14 @@ import (
 	"github.com/nange/easyss/v3/shaper"
 )
 
+// ProxyHandler owns the three per-protocol session handlers but no next-proxy
+// state of its own: each handler holds the proxy it routes through, so routing
+// has a single owner and cannot drift between them.
 type ProxyHandler struct {
 	masterKey        []byte
 	allowedMethods   map[protocol.Method]bool
 	handshakeTimeout time.Duration
 	shaperCfg        shaper.Config
-	nextProxy        *nextproxy.NextProxy
 	tcp              *tcpHandler
 	udp              *udpHandler
 	icmp             *icmpHandler
@@ -78,7 +80,6 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 		allowedMethods:   allowed,
 		handshakeTimeout: handshakeTimeout,
 		shaperCfg:        shaperCfg,
-		nextProxy:        cfg.NextProxy,
 		tcp:              newTCPHandler(cfg.Timeouts.StreamIdle, cfg.Timeouts.Base, cfg.NextProxy),
 		udp:              newUDPHandler(cfg.Timeouts.UDPIdle, cfg.Timeouts.Base, cfg.NextProxy),
 		icmp:             newICMPHandler(cfg.Timeouts.Base),
@@ -99,10 +100,11 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-// remoteString returns a printable remote endpoint for logging. It is nil
-// safe on purpose: the SOCKS5 client connection used on the next-proxy path
-// reports an unset (nil) RemoteAddr, so a direct RemoteAddr().String() would
-// panic.
+// remoteString returns a printable remote endpoint for logging. It is nil safe
+// on purpose: a dialed connection may report an unset (nil) RemoteAddr, and a
+// bare RemoteAddr().String() would panic. The next-proxy path does not use it
+// (a SOCKS5 connection reports the proxy's address, so dialTarget logs the
+// configured proxy instead).
 func remoteString(conn net.Conn) string {
 	if conn == nil {
 		return ""

@@ -17,7 +17,7 @@ const (
 func enableAutoStart() error {
 	exe, err := util.ExecutablePath()
 	if err != nil {
-		return fmt.Errorf("os.Executable: %w", err)
+		return fmt.Errorf("resolve executable path: %w", err)
 	}
 
 	key, err := registry.OpenKey(registry.CURRENT_USER, autoStartRunKey, registry.SET_VALUE)

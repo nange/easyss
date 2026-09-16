@@ -68,7 +68,7 @@ func SessionEnv(username string, uid int) []string {
 
 	waylandDisplay := os.Getenv("WAYLAND_DISPLAY")
 	if waylandDisplay == "" {
-		waylandDisplay = FirstWaylandDisplay(runtimeDir)
+		waylandDisplay = firstWaylandDisplay(runtimeDir)
 	}
 	if waylandDisplay != "" {
 		env = append(env, "WAYLAND_DISPLAY="+waylandDisplay)
@@ -103,9 +103,9 @@ func SessionEnv(username string, uid int) []string {
 	return env
 }
 
-// FirstWaylandDisplay returns the name of the first Wayland socket in the
+// firstWaylandDisplay returns the name of the first Wayland socket in the
 // runtime directory, i.e. the WAYLAND_DISPLAY value a session would use.
-func FirstWaylandDisplay(runtimeDir string) string {
+func firstWaylandDisplay(runtimeDir string) string {
 	matches, err := filepath.Glob(filepath.Join(runtimeDir, "wayland-*"))
 	if err != nil {
 		return ""

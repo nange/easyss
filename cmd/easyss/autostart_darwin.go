@@ -38,15 +38,11 @@ func launchAgentPath() (string, error) {
 	return filepath.Join(home, "Library", "LaunchAgents", "com.github.nange.easyss.plist"), nil
 }
 
-// executablePathForAutoStart returns the path to use in the LaunchAgent
-// plist. The symlink-resolved executable path keeps the plist stable across
-// launches (Finder/launchd launch through a symlinked bundle path).
-func executablePathForAutoStart() (string, error) {
-	return util.ExecutablePath()
-}
-
 func enableAutoStart() error {
-	exePath, err := executablePathForAutoStart()
+	// The symlink-resolved path keeps the plist stable across launches
+	// (Finder/launchd start the app through a symlinked bundle path) and lets
+	// isAutoStartEnabled compare against the exact string written here.
+	exePath, err := util.ExecutablePath()
 	if err != nil {
 		return fmt.Errorf("resolve executable path: %w", err)
 	}
@@ -105,7 +101,7 @@ func isAutoStartEnabled() bool {
 	}
 
 	// Check that the plist references the current executable path.
-	exePath, err := executablePathForAutoStart()
+	exePath, err := util.ExecutablePath()
 	if err != nil {
 		return false
 	}

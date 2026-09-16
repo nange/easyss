@@ -25,8 +25,11 @@ const udpBufSize = protocol.MaxUDPDataSize
 
 type udpHandler struct {
 	idleTimeout time.Duration
-	dialTimeout time.Duration
-	dial        dialer
+	// nextProxy is kept here (not only inside dial) because UDP alone uses it
+	// for DNS-answer learning on the datagram stream, independently of
+	// whether this particular target is routed through it.
+	nextProxy *nextproxy.NextProxy
+	dial      dialer
 }
 
 // newUDPHandler creates a udpHandler with the given idle timeout and base
@@ -41,19 +44,17 @@ func newUDPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) 
 		timeout = time.Duration(config.DefaultTimeout) * time.Second
 	}
 	dialTimeout := config.DialTimeout(timeout)
-	return &udpHandler{
-		idleTimeout: idleTimeout,
-		dialTimeout: dialTimeout,
-		dial: dialer{
-			nextProxy: np,
-			useProxy: func(target string) bool {
-				return np.EnableUDP() && np.ShouldProxy(target)
-			},
-			dial: func(ctx context.Context, network, target string) (net.Conn, error) {
-				return net.DialTimeout(network, target, dialTimeout)
-			},
+	h := &udpHandler{idleTimeout: idleTimeout, nextProxy: np}
+	h.dial = dialer{
+		nextProxy: np,
+		useProxy: func(target string) bool {
+			return np.EnableUDP() && np.ShouldProxy(target)
+		},
+		dial: func(ctx context.Context, network, target string) (net.Conn, error) {
+			return net.DialTimeout(network, target, dialTimeout)
 		},
 	}
+	return h
 }
 
 // Handle relays UDP datagrams between the client stream and the target.
@@ -126,13 +127,13 @@ func (h *udpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 			timer.Reset(h.idleTimeout)
 
 			// DNS query detection (only on first DATAGRAM frame)
-			if !dnsChecked.Load() && h.dial.nextProxy != nil &&
+			if !dnsChecked.Load() && h.nextProxy != nil &&
 				res.frame.Type == protocol.FrameDATAGRAM && len(res.frame.Payload) > 0 {
 				msg := &dns.Msg{}
 				if err := msg.Unpack(res.frame.Payload); err == nil && util.IsDNSRequest(msg) {
 					dnsDetected.Store(true)
 					domain := strings.TrimSuffix(msg.Question[0].Name, ".")
-					viaNextProxy := h.dial.nextProxy.IsCustomDomain(domain)
+					viaNextProxy := h.nextProxy.IsCustomDomain(domain)
 					log.Info("[UDP_DNS]", "domain", domain, "target", target, "via_next_proxy", viaNextProxy)
 				}
 				dnsChecked.Store(true)
@@ -198,17 +199,17 @@ func (h *udpHandler) readFromTarget(conn net.Conn, s2c shaper.Shaper, done <-cha
 		}
 		if n > 0 {
 			// DNS response interception for dynamic IP learning
-			if dnsDetected.Load() && h.dial.nextProxy != nil {
+			if dnsDetected.Load() && h.nextProxy != nil {
 				msg := &dns.Msg{}
 				if err := msg.Unpack(buf[:n]); err == nil && util.IsDNSResponse(msg) {
 					domain := strings.TrimSuffix(msg.Question[0].Name, ".")
-					if h.dial.nextProxy.IsCustomDomain(domain) {
+					if h.nextProxy.IsCustomDomain(domain) {
 						util.ForEachDNSAnswer(msg, func(kind, value string) {
 							if kind == "CNAME" {
-								h.dial.nextProxy.AddDomain(value)
+								h.nextProxy.AddDomain(value)
 								return
 							}
-							h.dial.nextProxy.AddIP(value)
+							h.nextProxy.AddIP(value)
 						})
 					}
 				}

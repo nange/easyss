@@ -19,8 +19,7 @@ import (
 )
 
 type icmpHandler struct {
-	dialTimeout time.Duration
-	dial        dialer
+	dial dialer
 }
 
 // newICMPHandler creates an icmpHandler. The outbound ICMP dial timeout is
@@ -32,7 +31,6 @@ func newICMPHandler(timeout time.Duration) *icmpHandler {
 	}
 	dialTimeout := config.DialTimeout(timeout)
 	return &icmpHandler{
-		dialTimeout: dialTimeout,
 		dial: dialer{
 			dial: func(_ context.Context, network, target string) (net.Conn, error) {
 				return net.DialTimeout(network, target, dialTimeout)

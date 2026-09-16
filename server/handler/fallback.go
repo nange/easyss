@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/stats"
 )
 
@@ -26,7 +27,7 @@ import (
 // a missing or malformed asset fails loudly at startup instead of at request
 // time.
 //
-//go:embed assets/fallback/*
+//go:embed assets/fallback/*.html assets/fallback/*.json
 var fallbackFS embed.FS
 
 // mustReadFallback reads an embedded asset, panicking on failure: the assets
@@ -49,6 +50,9 @@ var fallbackTmpl = template.Must(template.New("fallback").Parse(string(mustReadF
 // ---------------------------------------------------------------------------
 
 type themeDef struct {
+	// Name identifies the theme in the asset file (see assets/fallback/
+	// themes.json); it is not rendered.
+	Name        string
 	CSS         template.CSS
 	SiteName    string
 	Tagline     string
@@ -295,6 +299,10 @@ func ServeFallback(w http.ResponseWriter, r *http.Request) {
 	stats.RecordServerFallbackPage()
 	initOnce.Do(func() {
 		selectedTheme = themes[rand.IntN(len(themes))]
+		// Logged here rather than at package init so the record lands in the
+		// configured log: which theme a deployment serves is the only way to
+		// tell two fallback pages apart when debugging camouflage.
+		log.Debug("[SERVER] fallback theme selected", "theme", selectedTheme.Name)
 	})
 
 	// Priority 0 (highest): reverse proxy to upstream HTTP service.

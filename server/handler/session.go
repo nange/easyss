@@ -77,9 +77,10 @@ func rejectLANConn(conn net.Conn) error {
 // post-dial SSRF guard.
 type dialer struct {
 	nextProxy *nextproxy.NextProxy
-	// useProxy decides whether target goes through the next proxy. nil means
-	// the next-proxy branch is unreachable (ICMP: raw sockets cannot be
-	// carried by a SOCKS5 proxy, and the handler carries no context).
+	// useProxy decides whether target goes through the next proxy. It is only
+	// consulted when nextProxy is non-nil, and must be set whenever nextProxy
+	// is: the ICMP handler leaves both unset because raw sockets cannot be
+	// carried by a SOCKS5 proxy and its path carries no context.
 	useProxy func(target string) bool
 	// dial opens the direct outbound connection for target.
 	dial func(ctx context.Context, network, target string) (net.Conn, error)
@@ -89,7 +90,7 @@ type dialer struct {
 // printable remote address for logging. The remote is resolved here because
 // the next-proxy path yields a SOCKS5 connection whose RemoteAddr() is nil.
 func (d *dialer) dialTarget(ctx context.Context, network, target string) (net.Conn, string, error) {
-	if d.nextProxy != nil && d.useProxy != nil && d.useProxy(target) {
+	if d.nextProxy != nil && d.useProxy(target) {
 		// Re-run the SSRF check at dial time: the handshake-time check may
 		// be long past, and a DNS-rebinding name can resolve differently
 		// now. The post-dial check below cannot run on this path — the

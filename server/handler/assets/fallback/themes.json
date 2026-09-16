@@ -1,5 +1,6 @@
 [
   {
+    "Name": "Ocean Blue",
     "CSS": "body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif;margin:0;padding:0;background:#edf2f7;color:#2d3748;line-height:1.6}\nheader{background:#1a365d;color:#fff;padding:32px 20px;text-align:center}\nheader h1{font-size:2rem;margin:0 0 8px 0;font-weight:700}\nheader p{font-size:1rem;margin:0;opacity:0.85}\nnav{background:#2c5282;padding:12px 20px;text-align:center}\nnav a{color:#bee3f8;text-decoration:none;margin:0 18px;font-size:.95rem;font-weight:500;transition:color .2s}\nnav a:hover{color:#fff}\nmain{max-width:780px;margin:40px auto;padding:32px;background:#fff;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.08)}\nmain h2{font-size:1.5rem;margin-top:0;color:#1a365d}\nmain p{margin:16px 0;font-size:1rem}\nfooter{text-align:center;padding:24px;color:#a0aec0;font-size:.85rem;border-top:1px solid #e2e8f0}",
     "SiteName": "Acme Solutions",
     "Tagline": "Innovation delivered with integrity",
@@ -9,6 +10,7 @@
     "NavContact": "Contact"
   },
   {
+    "Name": "Forest Green",
     "CSS": "body{font-family:Georgia,\"Times New Roman\",serif;margin:0;padding:0;background:#f0f7f4;color:#2d3a2e;line-height:1.7}\nheader{background:#22543d;color:#f0fff4;padding:36px 24px;text-align:center}\nheader h1{font-size:2.1rem;margin:0 0 6px 0;letter-spacing:-0.5px}\nheader p{font-size:1.05rem;margin:0;font-style:italic;opacity:0.8}\nnav{background:#38a169;padding:14px 20px;text-align:center;border-bottom:3px solid #22543d}\nnav a{color:#f0fff4;text-decoration:none;margin:0 20px;font-size:.95rem;text-transform:uppercase;letter-spacing:.5px}\nnav a:hover{text-decoration:underline}\nmain{max-width:760px;margin:36px auto;padding:28px 32px;background:#fff;border-radius:12px;border-left:6px solid #38a169;box-shadow:0 1px 4px rgba(0,0,0,.06)}\nmain h2{font-size:1.5rem;margin-top:0;color:#22543d}\nmain p{margin:14px 0;font-size:.98rem}\nfooter{text-align:center;padding:20px;color:#718096;font-size:.8rem;background:#e2e8e0}",
     "SiteName": "Greenfield Partners",
     "Tagline": "Rooted in values, growing together",
@@ -18,6 +20,7 @@
     "NavContact": "Get in Touch"
   },
   {
+    "Name": "Dark Modern",
     "CSS": "body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;margin:0;padding:0;background:#0d1117;color:#c9d1d9;line-height:1.65}\nheader{background:#010409;padding:28px 24px;border-bottom:1px solid #21262d;text-align:center}\nheader h1{font-size:1.8rem;margin:0;color:#58a6ff;font-weight:600}\nheader p{font-size:.9rem;margin:6px 0 0 0;color:#8b949e}\nnav{background:#161b22;padding:10px 20px;text-align:center;border-bottom:1px solid #30363d}\nnav a{color:#c9d1d9;text-decoration:none;margin:0 16px;font-size:.88rem}\nnav a:hover{color:#58a6ff}\nmain{max-width:720px;margin:36px auto;padding:28px;background:#161b22;border:1px solid #30363d;border-radius:6px}\nmain h2{font-size:1.4rem;margin-top:0;color:#f0f6fc}\nmain p{margin:14px 0;font-size:.92rem;color:#8b949e}\nfooter{text-align:center;padding:20px;color:#484f58;font-size:.78rem;border-top:1px solid #21262d}",
     "SiteName": "NexusCode",
     "Tagline": "Engineering the future, one line at a time",
@@ -27,6 +30,7 @@
     "NavContact": "Contact"
   },
   {
+    "Name": "Sunset Amber",
     "CSS": "body{font-family:Cambria,\"Hoefler Text\",Utopia,\"Liberation Serif\",\"Times New Roman\",serif;margin:0;padding:0;background:#fef9f0;color:#3e2a1e;line-height:1.7}\nheader{background:#c05621;color:#fffaf0;padding:38px 20px 28px;text-align:center;border-bottom:4px solid #9c4221}\nheader h1{font-size:2.2rem;margin:0;font-weight:400;text-shadow:1px 1px 2px rgba(0,0,0,.2)}\nheader p{font-size:1rem;margin:8px 0 0;opacity:0.9;font-style:italic}\nnav{background:#edf2f7;padding:16px 20px;text-align:center}\nnav a{color:#9c4221;text-decoration:none;margin:0 22px;font-size:.95rem;font-variant:small-caps}\nnav a:hover{color:#c05621;border-bottom:2px solid #c05621}\nmain{max-width:700px;margin:42px auto;padding:30px 36px;background:#fffaf0;border:1px solid #e2d5c0;box-shadow:0 2px 6px rgba(156,66,33,.08)}\nmain h2{font-size:1.6rem;margin-top:0;color:#9c4221;font-weight:400}\nmain p{margin:16px 0;font-size:1rem}\nfooter{text-align:center;padding:22px;color:#8b6f5e;font-size:.82rem;font-style:italic}",
     "SiteName": "Crestwood Advisory",
     "Tagline": "Wisdom, trust, and the human touch",
@@ -36,6 +40,7 @@
     "NavContact": "Contact"
   },
   {
+    "Name": "Minimal Mono",
     "CSS": "body{font-family:\"Helvetica Neue\",Helvetica,Arial,sans-serif;margin:0;padding:0;background:#fff;color:#333;line-height:1.6}\nheader{background:transparent;padding:40px 20px 20px;text-align:center;border-bottom:1px solid #eaeaea}\nheader h1{font-size:1.6rem;margin:0;font-weight:300;color:#111;text-transform:uppercase;letter-spacing:2px}\nheader p{font-size:.85rem;margin:8px 0 0;color:#999}\nnav{padding:16px 20px;text-align:center;border-bottom:1px solid #eaeaea}\nnav a{color:#555;text-decoration:none;margin:0 24px;font-size:.8rem;text-transform:uppercase;letter-spacing:1.5px;font-weight:500}\nnav a:hover{color:#111}\nmain{max-width:640px;margin:48px auto;padding:0 24px}\nmain h2{font-size:1.3rem;margin:0 0 24px;font-weight:400;color:#111}\nmain p{margin:0 0 20px;font-size:.95rem;color:#555}\nfooter{text-align:center;padding:28px 20px;color:#bbb;font-size:.75rem;border-top:1px solid #f0f0f0}",
     "SiteName": "Mode Studio",
     "Tagline": "Crafting clarity through design",

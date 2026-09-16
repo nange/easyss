@@ -23,6 +23,7 @@ client/tun/         TUN2socks 虚拟网卡 + ICMP 代理
 server/             服务端核心：Server 结构体（TLS/certmagic）
 server/config/      服务端配置类型
 server/handler/     TCP/UDP/ICMP 请求处理 + fallback 伪装页面
+server/handler/assets/fallback/  fallback 模板/CSS/内容（//go:embed：template.html + themes.json + content.json）
 server/nextproxy/   上游 SOCKS5 代理（动态 IP/域名学习）
 transport/          传输层抽象：Transport/Stream 接口
  transport/http2/    HTTP/2 传输实现（uTLS Chrome 指纹，least-active 槽位调度，懒加载扩容）
