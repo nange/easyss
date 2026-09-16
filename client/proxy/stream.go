@@ -184,6 +184,12 @@ func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto p
 	}
 	log.Debug("[STREAM] merged ICMP echo payload into bootstrap record", "bytes", len(echoPayload))
 	defer s.stream.Close() //nolint:errcheck
+	// This path only receives: the echo payload rode in the bootstrap record,
+	// so tx is never pushed to. It still owns a pooled 64KB record buffer
+	// (shaper.New takes it from bytespool and only Close returns it) and a
+	// cover injector, so it must be closed. Declared after the stream defer so
+	// it runs first (LIFO), keeping a flush off a closed stream.
+	defer s.tx.Close() //nolint:errcheck
 
 	frame, err := s.rx.ReadFrame()
 	err = classifyFirstReadError(err)
