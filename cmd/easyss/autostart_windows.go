@@ -4,8 +4,8 @@ package main
 
 import (
 	"fmt"
-	"os"
 
+	"github.com/nange/easyss/v3/util"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -15,9 +15,9 @@ const (
 )
 
 func enableAutoStart() error {
-	exe, err := os.Executable()
+	exe, err := util.ExecutablePath()
 	if err != nil {
-		return fmt.Errorf("os.Executable: %w", err)
+		return fmt.Errorf("resolve executable path: %w", err)
 	}
 
 	key, err := registry.OpenKey(registry.CURRENT_USER, autoStartRunKey, registry.SET_VALUE)
@@ -48,7 +48,7 @@ func disableAutoStart() error {
 }
 
 func isAutoStartEnabled() bool {
-	exe, err := os.Executable()
+	exe, err := util.ExecutablePath()
 	if err != nil {
 		return false
 	}

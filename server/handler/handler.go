@@ -1,33 +1,27 @@
 package handler
 
 import (
-	"encoding/base64"
-	"errors"
-	"fmt"
 	"net"
 	"net/http"
-	"runtime/debug"
 	"time"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
-	"github.com/nange/easyss/v3/crypto"
-	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/server/nextproxy"
 	"github.com/nange/easyss/v3/shaper"
-	"github.com/nange/easyss/v3/stats"
-	"github.com/nange/easyss/v3/util"
 )
 
+// ProxyHandler owns the three per-protocol session handlers but no next-proxy
+// state of its own: each handler holds the proxy it routes through, so routing
+// has a single owner and cannot drift between them.
 type ProxyHandler struct {
 	masterKey        []byte
 	allowedMethods   map[protocol.Method]bool
 	handshakeTimeout time.Duration
 	shaperCfg        shaper.Config
-	nextProxy        *nextproxy.NextProxy
-	tcpHandler       *TCPHandler
-	udpHandler       *UDPHandler
-	icmpHandler      *ICMPHandler
+	tcp              *tcpHandler
+	udp              *udpHandler
+	icmp             *icmpHandler
 	saltCache        *saltCache
 	ipLimiter        *ipRateLimiter
 }
@@ -86,10 +80,9 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 		allowedMethods:   allowed,
 		handshakeTimeout: handshakeTimeout,
 		shaperCfg:        shaperCfg,
-		nextProxy:        cfg.NextProxy,
-		tcpHandler:       NewTCPHandler(cfg.Timeouts.StreamIdle, cfg.Timeouts.Base, cfg.NextProxy),
-		udpHandler:       NewUDPHandler(cfg.Timeouts.UDPIdle, cfg.Timeouts.Base, cfg.NextProxy),
-		icmpHandler:      NewICMPHandler(cfg.Timeouts.Base),
+		tcp:              newTCPHandler(cfg.Timeouts.StreamIdle, cfg.Timeouts.Base, cfg.NextProxy),
+		udp:              newUDPHandler(cfg.Timeouts.UDPIdle, cfg.Timeouts.Base, cfg.NextProxy),
+		icmp:             newICMPHandler(cfg.Timeouts.Base),
 		saltCache:        newSaltCache(),
 		ipLimiter:        newIPRateLimiter(),
 	}
@@ -107,10 +100,11 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-// remoteString returns a printable remote endpoint for logging. It is nil
-// safe on purpose: the SOCKS5 client connection used on the next-proxy path
-// reports an unset (nil) RemoteAddr, so a direct RemoteAddr().String() would
-// panic.
+// remoteString returns a printable remote endpoint for logging. It is nil safe
+// on purpose: a dialed connection may report an unset (nil) RemoteAddr, and a
+// bare RemoteAddr().String() would panic. The next-proxy path does not use it
+// (a SOCKS5 connection reports the proxy's address, so dialTarget logs the
+// configured proxy instead).
 func remoteString(conn net.Conn) string {
 	if conn == nil {
 		return ""
@@ -119,207 +113,4 @@ func remoteString(conn net.Conn) string {
 		return ra.String()
 	}
 	return ""
-}
-
-// serveReject writes a bare HTTP error response for handshake rejections.
-// Unlike ServeFallback it sends no camouflaged HTML body: it is only used for
-// requests that either timed out waiting for the handshake record, or already
-// proved master-key possession by sending a valid encrypted handshake — for
-// those, 4xx/5xx statuses are both realistic and distinguishable for the
-// easyss client, which checks the status code before reading the body.
-func serveReject(w http.ResponseWriter, code int) {
-	w.WriteHeader(code)
-}
-
-func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer func() {
-		if e := recover(); e != nil {
-			log.Error("[SERVER] handler panic", "remote", r.RemoteAddr, "target", r.URL.Path, "panic", fmt.Sprint(e), "stack", string(debug.Stack()))
-			_ = http.NewResponseController(w).Flush()
-		}
-	}()
-
-	if !r.ProtoAtLeast(2, 0) {
-		ServeFallback(w, r)
-		return
-	}
-
-	// The proxy endpoints only ever carry a POST body (the bootstrap
-	// record). Non-POST requests (GET/HEAD/OPTIONS probes) must not enter
-	// the handshake path: they would burn salt-cache entries and rate-limit
-	// budget while producing nothing.
-	if r.Method != http.MethodPost {
-		ServeFallback(w, r)
-		return
-	}
-
-	saltB64 := r.Header.Get("x-es")
-	if saltB64 == "" {
-		ServeFallback(w, r)
-		return
-	}
-
-	salt, err := base64.RawURLEncoding.DecodeString(saltB64)
-	if err != nil || len(salt) != 16 {
-		ServeFallback(w, r)
-		return
-	}
-
-	// Bound handshake attempts per source IP to mitigate replay storms and
-	// CPU abuse. Only counted for requests that look like a real handshake
-	// (valid x-es header), so plain fallback-page traffic is unaffected.
-	if !h.ipLimiter.Allow(clientIP(r)) {
-		// Debug, not Error: any peer that sends a well-formed x-es header
-		// reaches this branch, so an unauthenticated IP-churning client could
-		// otherwise flood the log. The limiter warns once per cleanup interval
-		// when its hard cap is hit.
-		log.Debug("[SERVER] handshake rate limited", "remote", r.RemoteAddr)
-		stats.RecordServerHandshakeError()
-		serveReject(w, http.StatusTooManyRequests)
-		return
-	}
-
-	// Reject replayed bootstrap records. Every stream uses a unique random
-	// salt; a salt already accepted by this server means the record is being
-	// re-delivered (replay), and accepting it would re-dial the target and
-	// re-deliver the first packet. Replays carry a valid encrypted handshake,
-	// so the responder has proven key possession and 400 is appropriate.
-	if h.saltCache.MarkSeen(r.URL.Path, saltB64) {
-		log.Debug("[SERVER] replayed salt", "remote", r.RemoteAddr, "endpoint", r.URL.Path)
-		stats.RecordServerHandshakeError()
-		serveReject(w, http.StatusBadRequest)
-		return
-	}
-
-	endpoint := r.URL.Path
-	sk, err := crypto.NewStreamKeys(h.masterKey, salt, endpoint)
-	if err != nil {
-		ServeFallback(w, r)
-		return
-	}
-
-	first, err := sk.ReadFirstRecordWithTimeout(r.Context(), r.Body, h.handshakeTimeout)
-	if err != nil {
-		stats.RecordServerHandshakeError()
-		if errors.Is(err, crypto.ErrHandshakeTimeout) {
-			log.Warn("[SERVER] read first record timed out", "remote", r.RemoteAddr, "endpoint", endpoint, "err", err)
-			// The client connected but its bootstrap record did not arrive in
-			// time (congested link, connection dying). A real HTTP/2 site
-			// (nginx) answers a late/absent request body with 408 Request
-			// Timeout; serving the camouflaged homepage here would poison the
-			// legit client's record stream with HTML. 408 lets the client fail
-			// fast and cleanly instead of misparsing the page as records.
-			serveReject(w, http.StatusRequestTimeout)
-			return
-		}
-		// Decrypt failure: the request did not prove master-key possession
-		// (attacker probing, wrong key). Debug, not Error: any request with a
-		// random x-es header reaches this branch, and error-level logging here
-		// lets an unauthenticated peer flood the log. Keep the camouflaged
-		// homepage so the server stays indistinguishable from a real site for
-		// keyless requests; the easyss client detects the non-encrypted payload
-		// on its first session read and reports a clear handshake-rejected
-		// error.
-		log.Debug("[SERVER] read first record failed", "remote", r.RemoteAddr, "endpoint", endpoint, "err", err)
-		ServeFallback(w, r)
-		return
-	}
-
-	if !first.Handshake.MatchesEndpoint(endpoint) {
-		log.Error("[SERVER] endpoint mismatch", "remote", r.RemoteAddr, "proto", first.Handshake.Proto.String(), "endpoint", endpoint)
-		stats.RecordServerHandshakeError()
-		serveReject(w, http.StatusNotFound)
-		return
-	}
-
-	if !h.allowedMethods[first.Handshake.Method] {
-		log.Error("[SERVER] method not allowed", "remote", r.RemoteAddr, "method", first.Handshake.Method.String())
-		stats.RecordServerHandshakeError()
-		serveReject(w, http.StatusMethodNotAllowed)
-		return
-	}
-
-	log.Info("[SERVER] proxy", "target", first.Handshake.Target, "remote", r.RemoteAddr)
-
-	target := first.Handshake.Target
-	method := first.Handshake.Method
-
-	// Reject LAN/private targets to prevent SSRF attacks. This MUST happen
-	// before the response is committed (WriteHeader + Flush): once the
-	// octet-stream headers are flushed the response can no longer be turned
-	// into a fallback HTML page, and the client would receive a 200
-	// application/octet-stream instead of a clean rejection. IsLANHostResolved
-	// also resolves domain names so a target like evil.com (which resolves to
-	// 127.0.0.1) cannot bypass the literal-IP check.
-	if util.IsLANHostResolved(r.Context(), target) {
-		log.Error("[SERVER] rejected LAN target", "target", target, "remote", r.RemoteAddr)
-		stats.RecordServerHandshakeError()
-		serveReject(w, http.StatusBadRequest)
-		return
-	}
-
-	// Pre-validate the session reader/writer before committing the response.
-	// Once WriteHeader + Flush is called the response can no longer be
-	// turned into a fallback HTML page. Reader/writer creation checks that
-	// the method is supported (already validated above), but we guard against
-	// unexpected internal errors. The request proved key possession, so a
-	// plain 500 (real-site behavior for internal failures) is appropriate.
-	s2cWriter, err := sk.NewWriter(w, crypto.DirS2C, method)
-	if err != nil {
-		log.Error("[SERVER] s2c writer", "err", err)
-		serveReject(w, http.StatusInternalServerError)
-		return
-	}
-	c2sReader, err := sk.NewReader(r.Body, crypto.DirC2S, method)
-	if err != nil {
-		log.Error("[SERVER] c2s reader", "err", err)
-		serveReject(w, http.StatusInternalServerError)
-		return
-	}
-
-	rc := http.NewResponseController(w)
-	_ = rc.EnableFullDuplex()
-
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusOK)
-
-	_ = rc.Flush()
-
-	c2sReader.SetLeftoverFrames(first.Leftover)
-
-	s2cCfg := h.shaperCfg
-	if endpoint == sharedconfig.EndpointUDP {
-		// UDP uses a short 1ms batch window so datagram bursts are merged
-		// into single encrypted records instead of one record + forced
-		// HTTP/2 flush per datagram.
-		s2cCfg.BatchWindowMS = 1
-	}
-	s2cShaper := shaper.New(s2cWriter, s2cCfg)
-	defer s2cShaper.Close() //nolint:errcheck
-
-	var handleErr error
-	switch endpoint {
-	case sharedconfig.EndpointTCP:
-		stats.RecordServerTCPStream()
-		// cancelRead unblocks the relay's client-read goroutine immediately
-		// when the relay terminates (idle timeout/error), instead of letting
-		// it linger on the request body until net/http closes it.
-		handleErr = h.tcpHandler.Handle(r.Context(), c2sReader, s2cShaper, target, func() { _ = r.Body.Close() })
-	case sharedconfig.EndpointUDP:
-		stats.RecordServerUDPStream()
-		// cancelRead unblocks the client-read goroutine immediately when the
-		// UDP handler terminates, mirroring the TCP path: without it the
-		// frame reader lingers on the request body until net/http closes it
-		// after ServeHTTP returns.
-		handleErr = h.udpHandler.Handle(r.Context(), c2sReader, s2cShaper, target, func() { _ = r.Body.Close() })
-	case sharedconfig.EndpointICMP:
-		stats.RecordServerICMPStream()
-		handleErr = h.icmpHandler.Handle(c2sReader, s2cShaper, target)
-	}
-	if handleErr != nil {
-		log.Info("[SERVER] handler finished with error", "target", target, "endpoint", endpoint, "err", handleErr)
-	} else {
-		log.Debug("[SERVER] handler finished", "target", target, "endpoint", endpoint)
-	}
 }

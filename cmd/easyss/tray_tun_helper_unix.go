@@ -51,7 +51,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	devCfg := tmpMgr.DeviceConfig()
 
 	tunHTTPCfg := &proxy.TunConfig{
-		Socks5Addr:     fmt.Sprintf("socks5://127.0.0.1:%d", a.cfg.Local.SocksPort),
+		Socks5Addr:     util.Socks5URI(a.cfg.Local.SocksPort),
 		DNSAddr:        tunDNS(a.cfg),
 		Device:         devCfg.Device,
 		TunIP:          devCfg.TunIP,
@@ -137,7 +137,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	// 6. Create the tun manager using the received fd.
 	a.cfg.Local.EnableTun2socks = true
 	a.tunMgr = tun.New(tun.Config{
-		Socks5Addr:       fmt.Sprintf("socks5://127.0.0.1:%d", a.cfg.Local.SocksPort),
+		Socks5Addr:       util.Socks5URI(a.cfg.Local.SocksPort),
 		DeviceFD:         fd,
 		SkipRouteCleanup: true, // helper handles route/DNS cleanup
 	})

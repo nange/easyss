@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+
+	"github.com/nange/easyss/v3/util"
 )
 
 const (
@@ -23,9 +25,9 @@ func autoStartDesktopPath() (string, error) {
 }
 
 func enableAutoStart() error {
-	exe, err := os.Executable()
+	exe, err := util.ExecutablePath()
 	if err != nil {
-		return fmt.Errorf("os.Executable: %w", err)
+		return fmt.Errorf("resolve executable path: %w", err)
 	}
 
 	desktopPath, err := autoStartDesktopPath()
@@ -66,7 +68,7 @@ func disableAutoStart() error {
 }
 
 func isAutoStartEnabled() bool {
-	exe, err := os.Executable()
+	exe, err := util.ExecutablePath()
 	if err != nil {
 		return false
 	}

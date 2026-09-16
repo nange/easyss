@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/util"
 )
 
 func runDaemon() {
@@ -20,15 +21,15 @@ func runDaemon() {
 		log.Error("[EASYSS-V3] daemon lock check failed", "err", err)
 		os.Exit(1)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := util.FlockTry(f); err != nil {
 		log.Info("[EASYSS-V3] daemon already running, exiting")
 		_ = f.Close()
 		os.Exit(0)
 	}
-	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	_ = util.Unflock(f)
 	_ = f.Close()
 
-	exe, _ := os.Executable()
+	exe, _ := util.ExecutablePath()
 
 	// Build args for child process, stripping -daemon/--daemon flags and appending
 	// --daemon=false to prevent infinite daemonization loops.

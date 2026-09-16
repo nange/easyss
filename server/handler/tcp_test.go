@@ -84,8 +84,18 @@ func (c *stubConn) SetReadDeadline(t time.Time) error { return nil }
 
 func (c *stubConn) SetWriteDeadline(t time.Time) error { return nil }
 
+// isClosed reports whether Close has been called on the stub.
+func (c *stubConn) isClosed() bool {
+	select {
+	case <-c.closed:
+		return true
+	default:
+		return false
+	}
+}
+
 func TestTCPHandler_CancelReadOnIdleTimeout(t *testing.T) {
-	h := NewTCPHandler(150*time.Millisecond, 5*time.Second, nil)
+	h := newTCPHandler(150*time.Millisecond, 5*time.Second, nil)
 	// A silent peer: the stub accepts writes and never produces data, with a
 	// public remote address so the post-dial SSRF guard passes.
 	stub := newStubConn(&net.TCPAddr{IP: net.ParseIP("8.8.8.8"), Port: 53})

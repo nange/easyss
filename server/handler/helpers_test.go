@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"net"
 	"testing"
 	"time"
 
@@ -124,57 +126,116 @@ func TestNewProxyHandler(t *testing.T) {
 			Timeouts:  sharedconfig.NewTimeouts(5 * time.Second),
 		}
 		h := NewProxyHandler(cfg)
-		if h.tcpHandler == nil {
-			t.Error("tcpHandler should not be nil")
+		if h.tcp == nil {
+			t.Error("tcp handler should not be nil")
 		}
-		if h.udpHandler == nil {
-			t.Error("udpHandler should not be nil")
+		if h.udp == nil {
+			t.Error("udp handler should not be nil")
 		}
-		if h.icmpHandler == nil {
-			t.Error("icmpHandler should not be nil")
+		if h.icmp == nil {
+			t.Error("icmp handler should not be nil")
 		}
 	})
 }
 
-func TestNewTCPHandler_DialTimeout(t *testing.T) {
-	h := NewTCPHandler(120*time.Second, 30*time.Second, nil)
-	if h == nil {
-		t.Fatal("NewTCPHandler returned nil")
+// TestTCPDialerOptions pins the mapping from the base timeout to the direct
+// dialer's parameters: Timeout goes through config.DialTimeout (base/3 clamped
+// to [3s, 15s]) while KeepAlive keeps the full base timeout, so long-lived
+// streams are reaped by the kernel instead of lingering half-open. The dialer
+// itself is now built lazily inside the dial closure, so this extraction is the
+// only place the mapping stays observable.
+func TestTCPDialerOptions(t *testing.T) {
+	tests := []struct {
+		name            string
+		timeout         time.Duration
+		wantDialTimeout time.Duration
+	}{
+		{"默认值 30s", 30 * time.Second, 10 * time.Second},
+		{"最小值保底", 5 * time.Second, 3 * time.Second},
+		{"最大值封顶", 120 * time.Second, 15 * time.Second},
 	}
-	if h.dialTimeout != 10*time.Second {
-		t.Errorf("dialTimeout = %v, want 10s", h.dialTimeout)
-	}
-	if h.dialer.Timeout != 10*time.Second {
-		t.Errorf("dialer.Timeout = %v, want 10s", h.dialer.Timeout)
-	}
-	if h.dialer.KeepAlive != 30*time.Second {
-		t.Errorf("dialer.KeepAlive = %v, want 30s", h.dialer.KeepAlive)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dialTimeout, keepAlive := tcpDialerOptions(tt.timeout)
+			if dialTimeout != tt.wantDialTimeout {
+				t.Errorf("dialTimeout = %v, want %v", dialTimeout, tt.wantDialTimeout)
+			}
+			if keepAlive != tt.timeout {
+				t.Errorf("keepAlive = %v, want the base timeout %v", keepAlive, tt.timeout)
+			}
+		})
 	}
 }
 
 func TestNewTCPHandler(t *testing.T) {
-	h := NewTCPHandler(120*time.Second, 30*time.Second, nil)
+	h := newTCPHandler(120*time.Second, 30*time.Second, nil)
 	if h == nil {
-		t.Fatal("NewTCPHandler returned nil")
+		t.Fatal("newTCPHandler returned nil")
 	}
+	if h.idleTimeout != 120*time.Second {
+		t.Errorf("idleTimeout = %v, want 120s", h.idleTimeout)
+	}
+}
+
+// TestTCPHandlerDialTarget covers the shared dial piece of the TCP handler: the
+// direct dial resolves the network from the literal target, and the post-dial
+// SSRF guard rejects a LAN remote address. Neither the dial timeout nor the
+// keepalive is observable from a dialed connection, so the mapping from the
+// base timeout lives in TestTCPDialerOptions.
+func TestTCPHandlerDialTarget(t *testing.T) {
+	t.Run("按目标字面量选择网络", func(t *testing.T) {
+		h := newTCPHandler(120*time.Second, 30*time.Second, nil)
+		var gotNetwork, gotTarget string
+		h.dialContext = func(_ context.Context, network, target string) (net.Conn, error) {
+			gotNetwork, gotTarget = network, target
+			return newStubConn(&net.TCPAddr{IP: net.ParseIP("8.8.8.8"), Port: 53}), nil
+		}
+
+		if _, _, err := h.dial.dialTarget(t.Context(), "tcp", "8.8.8.8:53"); err != nil {
+			t.Fatalf("dialTarget: %v", err)
+		}
+		if gotNetwork != "tcp" || gotTarget != "8.8.8.8:53" {
+			t.Errorf("dialed %q %q, want \"tcp\" \"8.8.8.8:53\"", gotNetwork, gotTarget)
+		}
+	})
+
+	t.Run("拨号后拒绝 LAN 目标", func(t *testing.T) {
+		h := newTCPHandler(120*time.Second, 30*time.Second, nil)
+		stub := newStubConn(&net.TCPAddr{IP: net.ParseIP("192.168.7.7"), Port: 80})
+		h.dialContext = func(context.Context, string, string) (net.Conn, error) { return stub, nil }
+
+		if _, _, err := h.dial.dialTarget(t.Context(), "tcp", "192.168.7.7:80"); err == nil {
+			t.Fatal("dialTarget accepted a LAN remote address")
+		}
+		if !stub.isClosed() {
+			t.Error("rejected connection was not closed")
+		}
+	})
 }
 
 func TestNewUDPHandler(t *testing.T) {
-	h := NewUDPHandler(30*time.Second, 30*time.Second, nil)
+	h := newUDPHandler(30*time.Second, 30*time.Second, nil)
 	if h == nil {
-		t.Fatal("NewUDPHandler returned nil")
+		t.Fatal("newUDPHandler returned nil")
 	}
-	if h.dialTimeout != 10*time.Second {
-		t.Errorf("dialTimeout = %v, want 10s (DialTimeout(30s))", h.dialTimeout)
+	if h.idleTimeout != 30*time.Second {
+		t.Errorf("idleTimeout = %v, want 30s", h.idleTimeout)
+	}
+	if h.nextProxy != nil {
+		t.Error("nextProxy should stay nil when none is configured")
 	}
 }
 
+// TestNewICMPHandler only checks construction: every ICMP dial failure path
+// runs through the shared dialer (covered by TestTCPHandlerDialTarget), and
+// reaching an actual ICMP exchange needs raw-socket privileges. The dial timeout
+// is derived through config.DialTimeout, which config.TestDialTimeout pins.
 func TestNewICMPHandler(t *testing.T) {
-	h := NewICMPHandler(30 * time.Second)
+	h := newICMPHandler(30 * time.Second)
 	if h == nil {
-		t.Fatal("NewICMPHandler returned nil")
+		t.Fatal("newICMPHandler returned nil")
 	}
-	if h.dialTimeout != 10*time.Second {
-		t.Errorf("dialTimeout = %v, want 10s (DialTimeout(30s))", h.dialTimeout)
+	if h.dial.nextProxy != nil || h.dial.useProxy != nil {
+		t.Error("ICMP must not route through a next proxy")
 	}
 }

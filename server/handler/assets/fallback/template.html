@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <style>{{.CSS}}</style>
+</head>
+<body>
+    <header>
+        <h1>{{.SiteName}}</h1>
+        <p>{{.Tagline}}</p>
+    </header>
+    <nav>
+        <a href="/">{{.NavHome}}</a>
+        <a href="/about">{{.NavAbout}}</a>
+        <a href="/services">{{.NavServices}}</a>
+        <a href="/contact">{{.NavContact}}</a>
+    </nav>
+    <main>
+        <h2>{{.Heading}}</h2>
+        {{range .Paragraphs}}<p>{{.}}</p>{{end}}
+    </main>
+    <footer>
+        <p>{{.Footer}}</p>
+    </footer>
+</body>
+</html>

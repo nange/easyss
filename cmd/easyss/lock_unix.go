@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/util"
 )
 
 var singletonLockFile *os.File
@@ -26,7 +26,7 @@ func tryAcquireSingletonLock() error {
 		return fmt.Errorf("open lock file: %w", err)
 	}
 
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := util.FlockTry(f); err != nil {
 		_ = f.Close()
 		return errAnotherInstance
 	}
@@ -59,7 +59,7 @@ func acquireSingletonLock() {
 // releaseSingletonLock releases the file lock and cleans up the lock file.
 func releaseSingletonLock() {
 	if singletonLockFile != nil {
-		_ = syscall.Flock(int(singletonLockFile.Fd()), syscall.LOCK_UN)
+		_ = util.Unflock(singletonLockFile)
 		_ = singletonLockFile.Close()
 		_ = os.Remove(singletonLockFile.Name())
 		singletonLockFile = nil

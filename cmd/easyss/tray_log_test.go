@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/nange/easyss/v3/util"
 )
 
 // fakeBin is the executable path fakeLookPath reports, and the one every
@@ -202,33 +204,6 @@ func TestLogViewerArgvWithoutTerminal(t *testing.T) {
 	}
 }
 
-func TestShellQuote(t *testing.T) {
-	cases := []struct {
-		in   string
-		want string
-	}{
-		{"/home/nange/Easyss/easyss.log", "/home/nange/Easyss/easyss.log"},
-		{"", "''"},
-		{"/tmp/a b.log", "'/tmp/a b.log'"},
-		{"/tmp/it's.log", `'/tmp/it'\''s.log'`},
-		{"/tmp/$HOME.log", "'/tmp/$HOME.log'"},
-		{"/tmp/back\\slash.log", "'/tmp/back\\slash.log'"},
-	}
-
-	for _, c := range cases {
-		if got := shellQuote(c.in); got != c.want {
-			t.Fatalf("shellQuote(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
-func TestShellJoin(t *testing.T) {
-	got := shellJoin([]string{"tail", "-n", "50", "-f", "/tmp/a b.log"})
-	if want := "tail -n 50 -f '/tmp/a b.log'"; got != want {
-		t.Fatalf("shellJoin = %q, want %q", got, want)
-	}
-}
-
 func TestOpenLogFileErrors(t *testing.T) {
 	for _, filePath := range []string{"", "   "} {
 		if _, err := openLogFile(filePath); !errors.Is(err, errLogFileNotConfigured) {
@@ -344,10 +319,10 @@ func TestOpenLogFileFallsBackWithoutTerminal(t *testing.T) {
 }
 
 func TestStartDetached(t *testing.T) {
-	if err := startDetached(nil); err == nil {
+	if err := util.StartDetached(nil); err == nil {
 		t.Fatal("expected an error for an empty command")
 	}
-	if err := startDetached([]string{filepath.Join(t.TempDir(), "does-not-exist")}); err == nil {
+	if err := util.StartDetached([]string{filepath.Join(t.TempDir(), "does-not-exist")}); err == nil {
 		t.Fatal("expected an error for a missing executable")
 	}
 
@@ -359,8 +334,8 @@ func TestStartDetached(t *testing.T) {
 		t.Skipf("true not found: %v", err)
 	}
 	// Must return without waiting for the child.
-	if err := startDetached([]string{trueBin}); err != nil {
-		t.Fatalf("startDetached failed: %v", err)
+	if err := util.StartDetached([]string{trueBin}); err != nil {
+		t.Fatalf("util.StartDetached failed: %v", err)
 	}
 }
 
