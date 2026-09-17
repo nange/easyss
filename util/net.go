@@ -2,7 +2,10 @@ package util
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net"
+	"net/netip"
 	"time"
 )
 
@@ -67,31 +70,29 @@ func IsLANHost(addr string) bool {
 	return IsLANIP(host)
 }
 
-// IsLANHostResolved 是 IsLANHost 的 SSRF 安全版本：当主机是域名
-// 而非字面 IP 时，它会解析该域名，并在任一解析结果地址为 LAN/私有地址时
-// 拒绝请求。当主机本身已是字面 IP 时走快速的纯 IP 路径，
-// 因此常见情况不会产生 DNS 查询。
+// ResolveHostIPs 解析 addr（"host:port" 或裸 host）中的主机名，返回其全部地址，
+// IPv4-mapped 的 IPv6 形式折叠为 IPv4。字面 IP 直接返回该地址（保留 zone），
+// 不产生 DNS 查询。
 //
-// 传入的 ctx 用于约束 DNS 解析，以免挂起的解析器拖住握手。
-func IsLANHostResolved(ctx context.Context, addr string) bool {
+// 与旧的 IsLANHostResolved 不同，解析失败返回错误而不是「视为安全」：调用方
+// 需要自行决定放行还是失败。调用方应当校验返回的全部地址，并**只拨这些字面
+// 地址**，这样 SSRF 检查与实际连接用的是同一次解析的结果，DNS-rebinding
+// （检查时解析到公网、拨号时解析到内网）就没有可利用的窗口。
+//
+// ctx 用于约束解析；没有截止时间时套一个较短的兜底超时，这样缓慢的 DNS
+// 服务器无法无限期拖住握手或拨号。
+func ResolveHostIPs(ctx context.Context, addr string) ([]netip.Addr, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		host = addr
 	}
-	if IsLANIP(host) {
-		return true
-	}
-	// 非 LAN 的字面 IP：安全。
-	if IsIP(host) {
-		return false
-	}
 	if host == "" {
-		return false
+		return nil, errors.New("empty host")
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return []netip.Addr{ip.Unmap()}, nil
 	}
 
-	// 域名：解析并检查每个结果地址。当调用方的 ctx 没有截止时间时，
-	// 会应用一个较短的兜底超时，这样缓慢的 DNS 服务器就无法无限期
-	// 拖住握手。
 	resolveCtx := ctx
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -99,18 +100,30 @@ func IsLANHostResolved(ctx context.Context, addr string) bool {
 		defer cancel()
 	}
 
-	ips, err := net.DefaultResolver.LookupIPAddr(resolveCtx, host)
+	ips, err := net.DefaultResolver.LookupNetIP(resolveCtx, "ip", host)
 	if err != nil {
-		// 解析失败时放行（返回 false），让拨号层产生真实的错误。
-		// SSRF 防护依赖后续检查的通过；无法解析的域名反正也到不了局域网主机。
-		return false
+		return nil, err
 	}
+	addrs := make([]netip.Addr, 0, len(ips))
 	for _, ip := range ips {
-		if IsLANIP(ip.IP.String()) {
-			return true
+		addrs = append(addrs, ip.Unmap())
+	}
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("no addresses for %s", host)
+	}
+	return addrs, nil
+}
+
+// FirstLANAddr 返回 addrs 中第一个 LAN/私有/保留地址，全部为公网地址时返回
+// 零值。zone（如 fe80::1%eth0）在这里被剥掉再判定，否则 net.ParseIP 无法解析
+// 带 zone 的地址，链路本地目标会被漏判。
+func FirstLANAddr(addrs []netip.Addr) netip.Addr {
+	for _, addr := range addrs {
+		if IsLANIP(addr.WithZone("").String()) {
+			return addr
 		}
 	}
-	return false
+	return netip.Addr{}
 }
 
 func IsIPV6(ip string) bool {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"runtime/debug"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
@@ -32,6 +33,10 @@ type handshakeResult struct {
 	endpoint string
 	target   string
 	method   protocol.Method
+	// addrs 是握手阶段解析并校验过的目标地址（字面 IP 目标即该地址本身，
+	// 解析失败时为空）。拨号路径复用它，因此一次流只解析一次，SSRF 检查与
+	// 实际连接用的是同一批地址。
+	addrs []netip.Addr
 }
 
 // ServeHTTP 处理一个请求：先在响应提交之前完成所有可能拒绝握手的前置检查
@@ -152,13 +157,23 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 	// 拒绝 LAN/私网目标以防止 SSRF 攻击。这必须在响应提交（WriteHeader +
 	// Flush）之前完成：一旦 octet-stream 头被 flush，响应就无法再变成回退
 	// HTML 页面，客户端会收到 200 application/octet-stream 而不是干净的拒绝。
-	// IsLANHostResolved 还会解析域名，因此像 evil.com（解析到 127.0.0.1）
-	// 这样的目标无法绕过字面 IP 检查。
-	if util.IsLANHostResolved(r.Context(), target) {
-		log.Error("[SERVER] rejected LAN target", "target", target, "remote", r.RemoteAddr)
-		stats.RecordServerHandshakeError()
-		serveReject(w, http.StatusBadRequest)
-		return handshakeResult{}, false
+	//
+	// 这里解析出的地址会一路传给拨号路径（见 handshakeResult.addrs），拨号只
+	// 拨这些校验过的字面地址，因此像 evil.com（检查时解析到公网、拨号时解析到
+	// 127.0.0.1）这样的 DNS-rebinding 目标没有可翻转的第二次解析。
+	//
+	// 解析失败时不拒绝（沿用旧契约）：把 DNS 抖动变成 400 会误伤正常客户端，
+	// 而拨号层会重新解析并再次校验，届时失败会以真实的拨号错误呈现。
+	addrs, err := resolveHost(r.Context(), target)
+	if err == nil {
+		if lan := util.FirstLANAddr(addrs); lan.IsValid() {
+			log.Error("[SERVER] rejected LAN target", "target", target, "resolved", lan, "remote", r.RemoteAddr)
+			stats.RecordServerHandshakeError()
+			serveReject(w, http.StatusBadRequest)
+			return handshakeResult{}, false
+		}
+	} else {
+		log.Debug("[SERVER] target resolve failed", "target", target, "remote", r.RemoteAddr, "err", err)
 	}
 
 	return handshakeResult{
@@ -167,6 +182,7 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 		endpoint: endpoint,
 		target:   target,
 		method:   first.Handshake.Method,
+		addrs:    addrs,
 	}, true
 }
 
@@ -218,7 +234,8 @@ func (h *ProxyHandler) serveSession(w http.ResponseWriter, r *http.Request, res 
 	// 客户端到服务端的地址族决定出站拨号的优先地址族：客户端用 IPv4 接入时，
 	// 服务端也优先用 IPv4 连目标，而不是依赖操作系统的双栈排序（后者在 VPS 上
 	// 往往先试 IPv6）。客户端连接的族是这里唯一能观测到的信号。
-	reqCtx := withPreferredFamily(r.Context(), clientPreferredFamily(r.RemoteAddr))
+	// 握手阶段解析并校验过的目标地址一并传入：拨号只拨它们，不再查 DNS。
+	reqCtx := withResolvedAddrs(withPreferredFamily(r.Context(), clientPreferredFamily(r.RemoteAddr)), res.addrs)
 	switch res.endpoint {
 	case sharedconfig.EndpointTCP:
 		stats.RecordServerTCPStream()

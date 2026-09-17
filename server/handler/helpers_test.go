@@ -74,14 +74,15 @@ func TestClientPreferredFamily(t *testing.T) {
 	}
 }
 
-// TestPreferredFamilyContext 覆盖族提示在 context 中的往返：零值不写入，
-// 没有提示的 context 读出无偏好，使拨号退化为系统默认排序。
+// TestPreferredFamilyContext 覆盖两处 context 载体的往返：零值/空切片不写入，
+// 没有提示的 context 读出「无偏好 + 无已校验地址」，拨号因此退化为自行解析并按
+// 系统默认顺序拨号。
 func TestPreferredFamilyContext(t *testing.T) {
 	if _, ok := preferredFamily(t.Context()); ok {
 		t.Fatal("a bare context should report no preference")
 	}
-	if got := preferredTarget(t.Context(), "example.com:443", netip.Addr{}); got != "" {
-		t.Fatalf("preferredTarget without a preference = %q, want no rewrite", got)
+	if _, ok := resolvedAddrs(t.Context()); ok {
+		t.Fatal("a bare context should report no resolved addresses")
 	}
 
 	want := netip.MustParseAddr("93.184.216.34")
@@ -93,6 +94,15 @@ func TestPreferredFamilyContext(t *testing.T) {
 
 	if got := withPreferredFamily(t.Context(), netip.Addr{}); got.Value(ctxPreferredFamily) != nil {
 		t.Fatal("an invalid address must not be stored as a preference")
+	}
+
+	ctx = withResolvedAddrs(ctx, []netip.Addr{want})
+	addrs, ok := resolvedAddrs(ctx)
+	if !ok || len(addrs) != 1 || addrs[0] != want {
+		t.Fatalf("resolvedAddrs = (%v, %v), want ([%v], true)", addrs, ok, want)
+	}
+	if got := withResolvedAddrs(t.Context(), nil); got.Value(ctxResolvedAddrs) != nil {
+		t.Fatal("an empty address list must not be stored")
 	}
 }
 

@@ -196,6 +196,21 @@ func TestServeHTTP_LANTarget400(t *testing.T) {
 	}
 }
 
+// TestServeHTTP_DomainResolvingToLAN400 验证解析到 LAN 的域名同样在握手阶段被
+// 400 拒绝（DNS-rebinding 的检查侧）；解析入口被替换，因此不依赖真实 DNS。
+func TestServeHTTP_DomainResolvingToLAN400(t *testing.T) {
+	srv := newRejectTestServer(t, newRejectHandler(time.Second))
+	tr := newRejectTestClient(t)
+	stubResolveHost(t, []string{"127.0.0.1"}, nil)
+
+	masterKey := bytes.Repeat([]byte{0x42}, 32)
+	saltB64, body := buildBootstrapRecord(t, masterKey, sharedconfig.EndpointTCP,
+		protocol.ProtoTCP, protocol.MethodAES256GCM, "rebind.example.com:80")
+	resp, respBody := postBootstrap(t, tr, srv.URL+sharedconfig.EndpointTCP, saltB64, bytes.NewReader(body))
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode,
+		"a domain resolving to LAN should be rejected with 400, body: %s", respBody)
+}
+
 // TestServeHTTP_ValidHandshakeOctetStream 验证合法的 TCP 握手会得到
 // 200 application/octet-stream 响应（代理路径已提交）。
 // 目标不可达，因此中继会在提交之后失败 —— 这里只断言已提交的响应。
