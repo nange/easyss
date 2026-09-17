@@ -276,6 +276,11 @@ func (s *Server) Start() error {
 		log.Info("[SERVER] fallback target configured", "target", cfg.Fallback.Target, "preserve_host", cfg.Fallback.PreserveHost, "cdn_domains", cfg.Fallback.CDNDomains)
 	}
 
+	// 初始化内置回退页面的"部署级身份"（主题调色板、站点名、导航、文案、
+	// Last-Modified）。必须在开始接受请求之前完成，这样所有客户端看到的是
+	// 同一套稳定页面，而不同部署之间彼此不同。
+	handler.InitFallback()
+
 	masterKey, err := crypto.DeriveMasterKey(srvCfg.Password)
 	if err != nil {
 		return fmt.Errorf("derive master key: %w", err)
