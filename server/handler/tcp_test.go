@@ -286,9 +286,12 @@ func TestTCPHandler_CancelReadOnIdleTimeout(t *testing.T) {
 
 	var cancelled atomic.Bool
 	start := time.Now()
-	err = h.Handle(context.Background(), dr, s2c, "8.8.8.8:53", func() { cancelled.Store(true) })
-	if err == nil {
+	res := h.Handle(context.Background(), dr, s2c, "8.8.8.8:53", func() { cancelled.Store(true) })
+	if res.Err == nil {
 		t.Fatal("Handle should return an error on idle timeout")
+	}
+	if !res.TimedOut {
+		t.Fatal("Handle should flag the idle-timeout result")
 	}
 	if !cancelled.Load() {
 		t.Fatal("cancelRead should be invoked when the relay terminates")

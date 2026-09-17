@@ -55,22 +55,26 @@ func newUDPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) 
 	return h
 }
 
-// Handle 在客户端流与目标之间中继 UDP 数据报。
+// Handle 在客户端流与目标之间中继 UDP 数据报，并以结构化结果返回已推送的
+// 载荷字节数与远端地址（日志由 serveSession 的唯一出口记录）。
 // cancelRead 在 handler 终止（空闲超时/错误/FIN）时被调用：
 // 它会解除可能正阻塞在读取客户端请求体上的帧读取 goroutine，
 // 从而在 ServeHTTP 返回后不会有 goroutine 残留。
-func (h *udpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c shaper.Shaper, target string, cancelRead func()) error {
+func (h *udpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c shaper.Shaper, target string, cancelRead func()) streamResult {
 	log.Debug("[UDP] handler starting", "target", target)
 
 	conn, remote, err := h.dial.dialTarget(ctx, "udp", target)
 	if err != nil {
 		log.Error("[UDP] dial target failed", "target", target, "err", err)
 		sendRST(s2c)
-		return err
+		return streamResult{Err: err}
 	}
 	var dnsDetected atomic.Bool
 	var dnsChecked atomic.Bool
 
+	// transferred 由读取侧累加、主 goroutine 在返回前读取：它是两条 goroutine
+	// 之间唯一共享的可变计数（Phase 2 会把整个会话收进一个值对象）。
+	var transferred atomic.Int64
 	done := make(chan struct{})
 	closeDone := sync.OnceFunc(func() {
 		close(done)
@@ -82,7 +86,7 @@ func (h *udpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 	defer conn.Close() //nolint:errcheck
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- h.readFromTarget(conn, s2c, done, &dnsDetected, remote)
+		errCh <- h.readFromTarget(conn, s2c, done, &dnsDetected, &transferred, remote)
 	}()
 	frameCh := make(chan udpFrameResult, 1)
 	go func() {
@@ -106,15 +110,15 @@ func (h *udpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 		case err := <-errCh:
 			closeDone()
 			if errors.Is(err, io.EOF) {
-				return nil
+				return streamResult{Remote: remote, Bytes: transferred.Load()}
 			}
 			sendRST(s2c)
-			return err
+			return streamResult{Remote: remote, Bytes: transferred.Load(), Err: err}
 		case res := <-frameCh:
 			if res.err != nil {
 				closeDone()
 				sendRST(s2c)
-				return res.err
+				return streamResult{Remote: remote, Bytes: transferred.Load(), Err: res.err}
 			}
 			if !timer.Stop() {
 				select {
@@ -140,16 +144,16 @@ func (h *udpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 			if err := h.handleClientFrame(conn, res.frame); err != nil {
 				closeDone()
 				sendRST(s2c)
-				return err
+				return streamResult{Remote: remote, Bytes: transferred.Load(), Err: err}
 			}
 			if res.frame.Type == protocol.FrameFIN || res.frame.Type == protocol.FrameRST {
 				closeDone()
-				return nil
+				return streamResult{Remote: remote, Bytes: transferred.Load()}
 			}
 		case <-timer.C:
 			closeDone()
 			log.Debug("[UDP] idle timeout", "target", target, "timeout", h.idleTimeout)
-			return nil
+			return streamResult{Remote: remote, Bytes: transferred.Load(), TimedOut: true}
 		}
 	}
 }
@@ -172,7 +176,7 @@ func (h *udpHandler) handleClientFrame(conn net.Conn, frame protocol.Frame) erro
 	return nil
 }
 
-func (h *udpHandler) readFromTarget(conn net.Conn, s2c shaper.Shaper, done <-chan struct{}, dnsDetected *atomic.Bool, remote string) error {
+func (h *udpHandler) readFromTarget(conn net.Conn, s2c shaper.Shaper, done <-chan struct{}, dnsDetected *atomic.Bool, transferred *atomic.Int64, remote string) error {
 	buf := bytespool.Get(udpBufSize)
 	defer bytespool.MustPut(buf)
 	for {
@@ -217,6 +221,7 @@ func (h *udpHandler) readFromTarget(conn net.Conn, s2c shaper.Shaper, done <-cha
 			if wErr := s2c.PushFrame(frame); wErr != nil {
 				return wErr
 			}
+			transferred.Add(int64(n))
 		}
 	}
 }

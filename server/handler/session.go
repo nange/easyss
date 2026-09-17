@@ -21,6 +21,11 @@ import (
 
 // sendRST 通过 s2c shaper 推送一个 RST 帧并 flush：这是所有 handler
 // 在响应提交后向客户端告知其流失败的统一方式。
+//
+// 它刻意吞掉写入错误：RST 是发给一条已经死掉的流的最佳努力通知，
+// 失败（流已被客户端取消、连接已断）没有任何可执行的补救，也会在每条正常
+// 拆除的流上制造噪声。这里显式声明该契约，使"不检查返回值"与其他地方的
+// PushFrame/PushData 错误检查区分开，而不是看起来像遗漏。
 func sendRST(s2c shaper.Shaper) {
 	_ = s2c.PushFrame(protocol.NewFrameRST())
 	_ = s2c.Flush()

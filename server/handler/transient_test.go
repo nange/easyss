@@ -132,9 +132,33 @@ func TestIsTransientStreamErrorCancelledDial(t *testing.T) {
 	}
 }
 
+// resultRecords 返回"一条流的最终结果"日志。统一出口的约定是：一条流恰好产生
+// 一条这样的记录，消息以 "handler finished" 开头。
+func (h *recordingHandler) resultRecords() []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []slog.Record
+	for _, r := range h.records {
+		if strings.HasPrefix(r.Message, "[SERVER] handler finished") {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func attrsOf(r slog.Record) map[string]string {
+	attrs := map[string]string{}
+	r.Attrs(func(a slog.Attr) bool {
+		attrs[a.Key] = a.Value.String()
+		return true
+	})
+	return attrs
+}
+
 // TestLogHandlerResult 是针对"每关闭一个连接就刷一条 Info 错误"的回归测试：
 // 客户端正常拆除（stream CANCEL）必须降到 Debug 并计入 stream_cancels，
-// 而真正的目标侧故障仍然留在 Info 且带 err=。
+// 而真正的目标侧故障仍然留在 Info 且带 err=。同时固定"一条流恰好一条结果日志、
+// RecordServerStreamCancel 恰好 +1"这一验收契约。
 func TestLogHandlerResult(t *testing.T) {
 	rec := &recordingHandler{}
 	prev := log.Logger()
@@ -144,7 +168,7 @@ func TestLogHandlerResult(t *testing.T) {
 	cancelErr := errors.New("crypto: read cipher_len: stream error: stream ID 13; CANCEL")
 
 	stats.ResetCounters()
-	logHandlerResult(cancelErr, "avatars.githubusercontent.com:443", "/v3/tcp", "1.2.3.4:5678")
+	logHandlerResult(streamResult{Err: cancelErr}, "avatars.githubusercontent.com:443", "/v3/tcp", "1.2.3.4:5678")
 
 	if got := len(rec.at(slog.LevelInfo)); got != 0 {
 		t.Fatalf("a cancelled stream produced %d Info records, want 0: %v", got, rec.at(slog.LevelInfo))
@@ -156,6 +180,9 @@ func TestLogHandlerResult(t *testing.T) {
 	if !strings.Contains(debugs[0].Message, "handler finished") {
 		t.Fatalf("message = %q, want it to mention the finished handler", debugs[0].Message)
 	}
+	if results := rec.resultRecords(); len(results) != 1 {
+		t.Fatalf("a stream produced %d result records, want exactly 1: %v", len(results), results)
+	}
 	if snap := stats.Collect(); snap.ServerStreamCancels != 1 {
 		t.Fatalf("ServerStreamCancels = %d, want 1", snap.ServerStreamCancels)
 	}
@@ -163,7 +190,7 @@ func TestLogHandlerResult(t *testing.T) {
 	// 真正的故障保持 Info，并且带上可以定位目标的属性。
 	rec.records = nil
 	dialErr := errors.New(`dial tcp 93.184.216.34:443: connect: connection refused`)
-	logHandlerResult(dialErr, "example.com:443", "/v3/tcp", "1.2.3.4:5678")
+	logHandlerResult(streamResult{Remote: "93.184.216.34:443", Bytes: 4096, Err: dialErr}, "example.com:443", "/v3/tcp", "1.2.3.4:5678")
 
 	infos := rec.at(slog.LevelInfo)
 	if len(infos) != 1 {
@@ -172,17 +199,33 @@ func TestLogHandlerResult(t *testing.T) {
 	if !strings.Contains(infos[0].Message, "handler finished with error") {
 		t.Fatalf("message = %q, want the error variant", infos[0].Message)
 	}
-	attrs := map[string]string{}
-	infos[0].Attrs(func(a slog.Attr) bool {
-		attrs[a.Key] = a.Value.String()
-		return true
-	})
-	for _, key := range []string{"target", "endpoint", "client", "err"} {
+	attrs := attrsOf(infos[0])
+	for _, key := range []string{"target", "endpoint", "client", "err", "upstream", "bytes"} {
 		if attrs[key] == "" {
 			t.Errorf("Info record is missing the %q attribute: %v", key, attrs)
 		}
 	}
+	if results := rec.resultRecords(); len(results) != 1 {
+		t.Fatalf("a failing stream produced %d result records, want exactly 1: %v", len(results), results)
+	}
 	if snap := stats.Collect(); snap.ServerStreamCancels != 1 {
 		t.Fatalf("a real failure must not count as a stream cancel: %d", snap.ServerStreamCancels)
+	}
+
+	// 时间戳/正常结束的流不产生 stream_cancels，也不会出现 Info。
+	rec.records = nil
+	stats.ResetCounters()
+	logHandlerResult(streamResult{Remote: "1.1.1.1:53", Bytes: 128, TimedOut: true}, "1.1.1.1:53", "/v3/udp", "1.2.3.4:5678")
+	if got := len(rec.resultRecords()); got != 1 {
+		t.Fatalf("a timed-out stream produced %d result records, want exactly 1", got)
+	}
+	if got := len(rec.at(slog.LevelInfo)); got != 0 {
+		t.Fatalf("a timed-out stream produced %d Info records, want 0", got)
+	}
+	if snap := stats.Collect(); snap.ServerStreamCancels != 0 {
+		t.Fatalf("a timed-out stream must not count as a stream cancel: %d", snap.ServerStreamCancels)
+	}
+	if attrs := attrsOf(rec.resultRecords()[0]); attrs["timed_out"] != "true" || attrs["bytes"] != "128" {
+		t.Fatalf("the result record is missing the stream outcome: %v", attrs)
 	}
 }
