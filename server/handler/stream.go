@@ -27,8 +27,16 @@ type streamResult struct {
 }
 
 // needsRST 报告该结果是否应向客户端发送 RST：只有真实故障需要。
-// io.EOF 是读取侧对"流已正常终止"的惯用表达，不算故障——它在日志里按正常
-// 结束处理（[SERVER] handler finished，Debug），也不会触发 RST。
+//
+// RST 与 FIN 在 easyss 帧协议里是两个信号，客户端也区别对待（FIN 结束本地
+// 连接，RST 变成 ErrStreamReset 错误）：FIN 表示"这个方向不再写数据"，由
+// copyFromTarget/Handle 在正常收尾时主动推送；RST 表示"这条流失败了"。
+// 因此 io.EOF 绝不能映射成 RST：它是读取侧对"不再有数据"的惯用表达。
+//
+// 说明：当前 relay.bidirectional 会把两个拷贝方向返回的 io.EOF 全部过滤掉
+// （firstErr 只在非 EOF 时被赋值），UDP 的 io.EOF 也只来自已收尾会话，因此
+// 这个判断目前是防御性的。它保留在接口层，是为了让"某个新 handler 直接返回
+// io.EOF"时语义仍然正确，而不用依赖 relay 那条不显眼的过滤规则。
 func (r streamResult) needsRST() bool {
 	return r.Err != nil && !errors.Is(r.Err, io.EOF)
 }
