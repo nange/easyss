@@ -18,7 +18,7 @@ import (
 )
 
 // serveReject 为握手拒绝写出一个裸的 HTTP 错误响应。
-// 与 ServeFallback 不同，它不发送伪装的 HTML 正文：它只用于被限流的请求、
+// 与 (*ProxyHandler).serveFallback 不同，它不发送伪装的 HTML 正文：它只用于被限流的请求、
 // 等待握手记录超时的请求，或已经通过发送有效加密握手证明持有主密钥的请求——
 // 对这些请求，4xx/5xx 状态码既真实可信，也能被 easyss 客户端区分，
 // 客户端会在读取正文之前检查状态码。
@@ -61,7 +61,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // ok=false 表示响应已经写出，ServeHTTP 必须返回。
 func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handshakeResult, bool) {
 	if !r.ProtoAtLeast(2, 0) {
-		ServeFallback(w, r)
+		h.serveFallback(w, r)
 		return handshakeResult{}, false
 	}
 
@@ -69,19 +69,19 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 	// （GET/HEAD/OPTIONS 探测）不得进入握手路径：它们只会消耗 salt 缓存
 	// 条目和限流预算，却不会产生任何结果。
 	if r.Method != http.MethodPost {
-		ServeFallback(w, r)
+		h.serveFallback(w, r)
 		return handshakeResult{}, false
 	}
 
 	saltB64 := r.Header.Get("x-es")
 	if saltB64 == "" {
-		ServeFallback(w, r)
+		h.serveFallback(w, r)
 		return handshakeResult{}, false
 	}
 
 	salt, err := base64.RawURLEncoding.DecodeString(saltB64)
 	if err != nil || len(salt) != 16 {
-		ServeFallback(w, r)
+		h.serveFallback(w, r)
 		return handshakeResult{}, false
 	}
 
@@ -111,7 +111,7 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 	endpoint := r.URL.Path
 	sk, err := crypto.NewStreamKeys(h.masterKey, salt, endpoint)
 	if err != nil {
-		ServeFallback(w, r)
+		h.serveFallback(w, r)
 		return handshakeResult{}, false
 	}
 
@@ -134,7 +134,7 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 		// 使服务器对无密钥请求与真实网站无法区分；easyss 客户端会在第一次
 		// 会话读取时发现非加密载荷，并报告清晰的握手被拒绝错误。
 		log.Debug("[SERVER] read first record failed", "remote", r.RemoteAddr, "endpoint", endpoint, "err", err)
-		ServeFallback(w, r)
+		h.serveFallback(w, r)
 		return handshakeResult{}, false
 	}
 

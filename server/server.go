@@ -270,17 +270,20 @@ func (s *Server) Start() error {
 	}
 	timeouts := sharedconfig.NewTimeouts(timeout)
 
+	// 构造本次部署唯一的回退实例：模式配置与部署级身份都在这里一次性确定，
+	// 随后由各个 handler 共享。构造失败会直接让服务器启动失败，不会留下
+	// 部分改写的可见状态。
+	fallback, err := handler.NewFallback(handler.FallbackConfig{
+		Target:       cfg.Fallback.Target,
+		PreserveHost: cfg.Fallback.PreserveHost,
+		CDNDomains:   cfg.Fallback.CDNDomains,
+	})
+	if err != nil {
+		return fmt.Errorf("fallback target: %w", err)
+	}
 	if cfg.Fallback.Target != "" {
-		if err := handler.SetFallbackTarget(cfg.Fallback.Target, cfg.Fallback.PreserveHost, cfg.Fallback.CDNDomains); err != nil {
-			return fmt.Errorf("fallback target: %w", err)
-		}
 		log.Info("[SERVER] fallback target configured", "target", cfg.Fallback.Target, "preserve_host", cfg.Fallback.PreserveHost, "cdn_domains", cfg.Fallback.CDNDomains)
 	}
-
-	// 初始化内置回退页面的"部署级身份"（主题调色板、站点名、导航、文案、
-	// Last-Modified）。必须在开始接受请求之前完成，这样所有客户端看到的是
-	// 同一套稳定页面，而不同部署之间彼此不同。
-	handler.InitFallback()
 
 	masterKey, err := crypto.DeriveMasterKey(srvCfg.Password)
 	if err != nil {
@@ -313,20 +316,21 @@ func (s *Server) Start() error {
 			},
 		},
 		NextProxy: np,
+		Fallback:  fallback,
 	})
 
 	probePayload := make([]byte, sharedconfig.ProbePayloadSize)
 	if _, err := io.ReadFull(rand.Reader, probePayload); err != nil {
 		return fmt.Errorf("generate probe payload: %w", err)
 	}
-	probeHandler, err := handler.NewProbeHandler(masterKey, probePayload)
+	probeHandler, err := handler.NewProbeHandler(masterKey, probePayload, fallback)
 	if err != nil {
 		return fmt.Errorf("probe handler: %w", err)
 	}
 
 	s.mux = http.NewServeMux()
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		handler.ServeFallback(w, r)
+		fallback.Serve(w, r)
 	})
 	s.mux.Handle(sharedconfig.EndpointTCP, proxyHandler)
 	s.mux.Handle(sharedconfig.EndpointUDP, proxyHandler)

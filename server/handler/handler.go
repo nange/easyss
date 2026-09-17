@@ -14,6 +14,9 @@ import (
 // ProxyHandler 持有三个按协议划分的会话 handler，但自身不保存任何
 // next-proxy 状态：每个 handler 各自持有其路由所用的代理，因此路由只有一个
 // 所有者，不会在它们之间漂移不一致。
+//
+// fallback 由 server 启动路径构造并注入（见 handler.NewFallback）；为 nil 时
+// 回落到包级内置实例，使零值 ProxyHandler 也能服务回退页面。
 type ProxyHandler struct {
 	masterKey        []byte
 	allowedMethods   map[protocol.Method]bool
@@ -24,6 +27,7 @@ type ProxyHandler struct {
 	icmp             *icmpHandler
 	saltCache        *saltCache
 	ipLimiter        *ipRateLimiter
+	fallback         *Fallback
 }
 
 type ProxyHandlerConfig struct {
@@ -39,6 +43,8 @@ type ProxyHandlerConfig struct {
 	// Timeouts.Base，这正是服务器传入的值；测试可以缩小它而不影响
 	// 派生的空闲超时。
 	HandshakeTimeout time.Duration
+	// Fallback 是服务非代理请求（伪装页面）的实例。nil 表示使用包级内置实例。
+	Fallback *Fallback
 }
 
 func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
@@ -82,7 +88,21 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 		icmp:             newICMPHandler(cfg.Timeouts.Base),
 		saltCache:        newSaltCache(),
 		ipLimiter:        newIPRateLimiter(),
+		fallback:         cfg.Fallback,
 	}
+}
+
+// fallbackFor 返回本 handler 使用的回退实例，未注入时回落到包级内置实例。
+func (h *ProxyHandler) fallbackFor() *Fallback {
+	if h.fallback != nil {
+		return h.fallback
+	}
+	return builtinFallback()
+}
+
+// serveFallback 向响应写出一张伪装回退页面。
+func (h *ProxyHandler) serveFallback(w http.ResponseWriter, r *http.Request) {
+	h.fallbackFor().Serve(w, r)
 }
 
 // maxHandshakeTimeout 限制服务器在应答 408 之前等待流的第一个加密记录的时长

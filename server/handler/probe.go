@@ -20,14 +20,16 @@ const probeChunkSize = 32 * 1024
 // 使用相同的头名称和线上格式）；其他任何请求都会得到伪装回退页面，
 // 使服务器与真实网站无法区分。
 type ProbeHandler struct {
-	payload []byte
-	token   []byte
-	limiter *ipRateLimiter
+	payload  []byte
+	token    []byte
+	limiter  *ipRateLimiter
+	fallback *Fallback
 }
 
 // NewProbeHandler 构建 /v3/probe handler。载荷必须在服务器启动时生成；
 // 复用同一个缓冲区使该端点开销极低且不可缓存（Cache-Control: no-store）。
-func NewProbeHandler(masterKey, payload []byte) (*ProbeHandler, error) {
+// fallback 为 nil 时回落到包级内置回退实例。
+func NewProbeHandler(masterKey, payload []byte, fallback *Fallback) (*ProbeHandler, error) {
 	tokenB64, err := crypto.ProbeToken(masterKey)
 	if err != nil {
 		return nil, err
@@ -37,27 +39,41 @@ func NewProbeHandler(masterKey, payload []byte) (*ProbeHandler, error) {
 		return nil, err
 	}
 	return &ProbeHandler{
-		payload: payload,
-		token:   token,
-		limiter: newIPRateLimiter(),
+		payload:  payload,
+		token:    token,
+		limiter:  newIPRateLimiter(),
+		fallback: fallback,
 	}, nil
+}
+
+// fallbackFor 返回本 handler 使用的回退实例，未注入时回落到包级内置实例。
+func (h *ProbeHandler) fallbackFor() *Fallback {
+	if h.fallback != nil {
+		return h.fallback
+	}
+	return builtinFallback()
+}
+
+// serveFallback 向响应写出一张伪装回退页面。
+func (h *ProbeHandler) serveFallback(w http.ResponseWriter, r *http.Request) {
+	h.fallbackFor().Serve(w, r)
 }
 
 func (h *ProbeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !r.ProtoAtLeast(2, 0) {
-		ServeFallback(w, r)
+		h.serveFallback(w, r)
 		return
 	}
 
 	tokenB64 := r.Header.Get("x-es")
 	if tokenB64 == "" {
-		ServeFallback(w, r)
+		h.serveFallback(w, r)
 		return
 	}
 	token, err := base64.RawURLEncoding.DecodeString(tokenB64)
 	if err != nil || len(token) != len(h.token) ||
 		subtle.ConstantTimeCompare(token, h.token) != 1 {
-		ServeFallback(w, r)
+		h.serveFallback(w, r)
 		return
 	}
 

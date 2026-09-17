@@ -9,7 +9,6 @@ import (
 	mrand "math/rand/v2"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/nange/easyss/v3/log"
@@ -20,7 +19,7 @@ import (
 // 所有客户端看到完全相同的页面，不同部署之间彼此不同。
 //
 // 为什么不注入"每次请求随机"的隐藏数据：真实静态站点对同一 URL 返回逐字节
-// 相同的内容，同一路径每次都变反而是更强的自动化指纹，而且会让 htmlCache
+// 相同的内容，同一路径每次都变反而是更强的自动化指纹，而且会让生成页缓存
 // 失去意义。因此随机性只注入到"部署"这一层，路径映射仍由 hashIndex 确定性决定。
 //
 // 种子的唯一职责是可变性，不是保密：所有派生值都可能被观察者看到。
@@ -29,8 +28,7 @@ import (
 // 部署级状态
 // ---------------------------------------------------------------------------
 
-// deployment 是一次部署的完整伪装身份。字段在初始化后只读，因此并发读取安全；
-// 初始化本身由 depOnce 保护。
+// deployment 是一次部署的完整伪装身份。字段在初始化后只读，因此并发读取安全。
 type deployment struct {
 	seed         [32]byte
 	theme        themeDef
@@ -47,29 +45,6 @@ type deployment struct {
 type fallbackVariant struct {
 	Seed  []byte
 	Theme string
-}
-
-var (
-	depOnce  sync.Once
-	depState *deployment
-)
-
-// InitFallback 在服务器开始接受请求之前初始化部署级身份。
-// 它只由 server 启动路径调用；ServeFallback 内部还有一层按需初始化兜底，
-// 使直接调用它的测试也总能拿到可用状态。
-func InitFallback() {
-	initFallback(fallbackVariant{})
-}
-
-func initFallback(v fallbackVariant) {
-	depOnce.Do(func() { depState = newDeployment(v) })
-}
-
-// currentDeployment 返回本部署的身份，必要时先完成初始化。
-// 必须在任何渲染之前调用：主题与站点身份都来自它。
-func currentDeployment() *deployment {
-	initFallback(fallbackVariant{})
-	return depState
 }
 
 func newDeployment(v fallbackVariant) *deployment {
@@ -112,7 +87,7 @@ func initialSeed(injected []byte) [32]byte {
 }
 
 // gen 派生一个用途隔离的随机源：先做域分离再喂给 ChaCha8。这样新增一个随机
-// 消费点不会改变其它用途的输出——htmlCache 溢出后重算、以及测试中的复现
+// 消费点不会改变其它用途的输出——生成页缓存溢出后重算、以及测试中的复现
 // 都依赖这一点。
 func gen(seed [32]byte, purpose string) *mrand.Rand {
 	key := sha256.Sum256(append([]byte(purpose+"\x00"), seed[:]...))

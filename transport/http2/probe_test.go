@@ -30,7 +30,8 @@ func newProbeServer(t *testing.T) (*httptest.Server, string) {
 	for i := range payload {
 		payload[i] = byte(i)
 	}
-	h, err := handler.NewProbeHandler(masterKey, payload)
+	// 这里的探针测试只覆盖成功路径，回退页面由 nil（内置实例）承担。
+	h, err := handler.NewProbeHandler(masterKey, payload, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
