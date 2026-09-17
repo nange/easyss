@@ -394,15 +394,16 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 			return fmt.Errorf("tun: exec create script: %w", err)
 		}
 	case "darwin":
+		// 两个分支必须传同一组实参（提权方式不同而已），因此都从
+		// darwinScriptArgs 取值。
+		args := darwinScriptArgs(d)
 		if os.Geteuid() == 0 {
-			if _, err := util.CommandContext(ctx, "sh", namePath, d.Device, d.TunIP, d.TunGW, d.LocalGateway,
-				d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6); err != nil {
+			if _, err := util.CommandContext(ctx, "sh", append([]string{namePath}, args...)...); err != nil {
 				return fmt.Errorf("tun: exec create script: %w", err)
 			}
 		} else {
-			cmd := fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s %s %s\" with administrator privileges",
-				namePath, d.Device, d.TunIP, d.TunGW, d.LocalGateway,
-				d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6)
+			cmd := fmt.Sprintf("do shell script \"sh %s %s\" with administrator privileges",
+				namePath, strings.Join(args, " "))
 			if _, err := util.CommandContext(ctx, "osascript", "-e", cmd); err != nil {
 				return fmt.Errorf("tun: exec create script: %w", err)
 			}
@@ -572,10 +573,26 @@ func ipSub(ip, mask string) string {
 	return ip + "/" + mask
 }
 
+// darwinScriptArgs 返回 create_tun_dev_darwin.sh 的实参，顺序与脚本的位置
+// 参数一致：device、tun ip、tun gw、local gw、tun ipv6、tun gw ipv6、
+// server ipv6、local gw ipv6。
+//
+// tun ipv6 传的是裸地址：darwin 脚本自己把 "/64" 拼到 ifconfig 的 inet6
+// 参数上，而 TunIPV6Sub 是按 linux 脚本的 "ip -6 addr replace" 需要 CIDR
+// 形式携带前缀长度的（默认 "2001:0db8:0:f101::1/64"）。直接把 TunIPV6Sub
+// 交给 darwin 脚本会拼出 "2001:0db8:0:f101::1/64/64"，ifconfig 报
+// "bad value" 并以退出码 1 结束，创建脚本整体失败、TUN 起不来。
+func darwinScriptArgs(d DeviceConfig) []string {
+	return []string{
+		d.Device, d.TunIP, d.TunGW, d.LocalGateway,
+		bareV6Addr(d.TunIPV6Sub), d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6,
+	}
+}
+
 // bareV6Addr 从 "address/prefix" 形式的子网字符串中去掉前缀长度
-// （"2001:db8::1/64" -> "2001:db8::1"）：netsh add address 接受带
-// /prefix 的形式，而 windows 关闭脚本里的 netsh delete address 需要
-// 不带前缀的纯地址。
+// （"2001:db8::1/64" -> "2001:db8::1"）：windows 关闭脚本里的
+// netsh delete address 需要不带前缀的纯地址，而 darwin 创建脚本会自己
+// 补上前缀长度，两者都拒绝 TunIPV6Sub 携带的 CIDR 形式。
 func bareV6Addr(sub string) string {
 	addr, _, _ := strings.Cut(sub, "/")
 	return addr

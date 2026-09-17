@@ -82,11 +82,23 @@ func runCreateScript(device, tunIP, tunGW, localGateway,
 	}
 	defer os.Remove(namePath) //nolint:errcheck
 
+	// create_tun_dev_darwin.sh 会自己给地址拼上 "/64"（ifconfig 的 inet6
+	// 参数必须带前缀长度），而 TunIPV6Sub 是按 linux 脚本的
+	// "ip -6 addr replace" 以 CIDR 形式携带前缀的，因此先剥掉前缀再交给
+	// 脚本：否则会拼出 ".../64/64"，ifconfig 报 "bad value" 并以退出码 1
+	// 结束，整个 TUN 启动随之失败。
 	if err := execScriptWithOutput("sh", namePath, device, tunIP, tunGW, localGateway,
-		tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6); err != nil {
+		bareV6Addr(tunIPV6Sub), tunGWV6, serverIPV6, localGatewayV6); err != nil {
 		return err
 	}
 	return nil
+}
+
+// bareV6Addr 去掉 IPv6 地址上的前缀长度（"2001:db8::1/64" -> "2001:db8::1"），
+// 因为 create_tun_dev_darwin.sh 会自己补上 "/64"。
+func bareV6Addr(sub string) string {
+	addr, _, _ := strings.Cut(sub, "/")
+	return addr
 }
 
 // runCloseScript 将内嵌的 close_tun_dev_darwin.sh 写入临时文件并执行。
