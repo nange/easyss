@@ -36,7 +36,7 @@ func newTestProbeHandler(t *testing.T) (*ProbeHandler, string, []byte) {
 	if _, err := io.ReadFull(rand.Reader, payload); err != nil {
 		t.Fatal(err)
 	}
-	h, err := NewProbeHandler(masterKey, payload)
+	h, err := NewProbeHandler(masterKey, payload, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

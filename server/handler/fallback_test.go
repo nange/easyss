@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/http/httputil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,13 +14,14 @@ import (
 )
 
 func TestServeFallback_DifferentPathsDifferentContent(t *testing.T) {
+	fb := newTestFallback(t)
 	paths := []string{"/", "/about", "/contact", "/services", "/blog"}
 	seen := make(map[string]string)
 
 	for _, path := range paths {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
-		ServeFallback(rec, req)
+		fb.Serve(rec, req)
 
 		body := rec.Body.String()
 		if body == "" {
@@ -35,13 +35,14 @@ func TestServeFallback_DifferentPathsDifferentContent(t *testing.T) {
 }
 
 func TestServeFallback_SamePathSameContent(t *testing.T) {
+	fb := newTestFallback(t)
 	req1 := httptest.NewRequest(http.MethodGet, "/about", nil)
 	rec1 := httptest.NewRecorder()
-	ServeFallback(rec1, req1)
+	fb.Serve(rec1, req1)
 
 	req2 := httptest.NewRequest(http.MethodGet, "/about", nil)
 	rec2 := httptest.NewRecorder()
-	ServeFallback(rec2, req2)
+	fb.Serve(rec2, req2)
 
 	if rec1.Body.String() != rec2.Body.String() {
 		t.Error("same path returned different content")
@@ -49,13 +50,13 @@ func TestServeFallback_SamePathSameContent(t *testing.T) {
 }
 
 func TestServeFallback_CustomHTML(t *testing.T) {
+	fb := newTestFallback(t)
 	custom := []byte("<html><body>custom</body></html>")
-	setFallbackHTML(custom)
-	t.Cleanup(func() { customFallback = nil })
+	fb.setHTML(custom)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	if rec.Body.String() != string(custom) {
 		t.Errorf("expected custom HTML, got %q", rec.Body.String())
@@ -120,15 +121,15 @@ func makeFallbackDir(t *testing.T, files map[string]string) string {
 }
 
 func TestSetFallbackDir_ExactPathMatch(t *testing.T) {
+	fb := newTestFallback(t)
 	dir := makeFallbackDir(t, map[string]string{
 		"index.html":   "<h1>Home</h1>",
 		"about.html":   "<h1>About</h1>",
 		"contact.html": "<h1>Contact</h1>",
 	})
-	if err := setFallbackDir(dir); err != nil {
+	if err := fb.setDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
 
 	for _, tt := range []struct{ path, want string }{
 		{"/", "<h1>Home</h1>"},
@@ -138,7 +139,7 @@ func TestSetFallbackDir_ExactPathMatch(t *testing.T) {
 	} {
 		req := httptest.NewRequest(http.MethodGet, tt.path, nil)
 		rec := httptest.NewRecorder()
-		ServeFallback(rec, req)
+		fb.Serve(rec, req)
 		if rec.Body.String() != tt.want {
 			t.Errorf("path %q: got %q, want %q", tt.path, rec.Body.String(), tt.want)
 		}
@@ -146,67 +147,67 @@ func TestSetFallbackDir_ExactPathMatch(t *testing.T) {
 }
 
 func TestSetFallbackDir_IndexMapping(t *testing.T) {
+	fb := newTestFallback(t)
 	dir := makeFallbackDir(t, map[string]string{
 		"index.html": "<h1>Root</h1>",
 	})
-	if err := setFallbackDir(dir); err != nil {
+	if err := fb.setDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 	if rec.Body.String() != "<h1>Root</h1>" {
 		t.Errorf("got %q, want %q", rec.Body.String(), "<h1>Root</h1>")
 	}
 }
 
 func TestSetFallbackDir_404Fallback(t *testing.T) {
+	fb := newTestFallback(t)
 	dir := makeFallbackDir(t, map[string]string{
 		"index.html": "<h1>Home</h1>",
 		"404.html":   "<h1>Not Found</h1>",
 	})
-	if err := setFallbackDir(dir); err != nil {
+	if err := fb.setDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/nonexistent", nil)
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 	if rec.Body.String() != "<h1>Not Found</h1>" {
 		t.Errorf("got %q, want %q", rec.Body.String(), "<h1>Not Found</h1>")
 	}
 }
 
 func TestSetFallbackDir_No404FallbackToIndex(t *testing.T) {
+	fb := newTestFallback(t)
 	dir := makeFallbackDir(t, map[string]string{
 		"index.html": "<h1>Home</h1>",
 	})
-	if err := setFallbackDir(dir); err != nil {
+	if err := fb.setDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/nonexistent", nil)
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 	if rec.Body.String() != "<h1>Home</h1>" {
 		t.Errorf("got %q, want %q", rec.Body.String(), "<h1>Home</h1>")
 	}
 }
 
 func TestSetFallbackDir_NestedSubdirs(t *testing.T) {
+	fb := newTestFallback(t)
 	dir := makeFallbackDir(t, map[string]string{
 		"index.html":      "<h1>Home</h1>",
 		"blog/post1.html": "<h1>Post 1</h1>",
 		"blog/post2.html": "<h1>Post 2</h1>",
 	})
-	if err := setFallbackDir(dir); err != nil {
+	if err := fb.setDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
 
 	for _, tt := range []struct{ path, want string }{
 		{"/", "<h1>Home</h1>"},
@@ -215,7 +216,7 @@ func TestSetFallbackDir_NestedSubdirs(t *testing.T) {
 	} {
 		req := httptest.NewRequest(http.MethodGet, tt.path, nil)
 		rec := httptest.NewRecorder()
-		ServeFallback(rec, req)
+		fb.Serve(rec, req)
 		if rec.Body.String() != tt.want {
 			t.Errorf("path %q: got %q, want %q", tt.path, rec.Body.String(), tt.want)
 		}
@@ -223,19 +224,19 @@ func TestSetFallbackDir_NestedSubdirs(t *testing.T) {
 }
 
 func TestSetFallbackDir_ImplicitIndex(t *testing.T) {
+	fb := newTestFallback(t)
 	dir := makeFallbackDir(t, map[string]string{
 		"index.html":      "<h1>Home</h1>",
 		"blog/index.html": "<h1>Blog Home</h1>",
 		"blog/post1.html": "<h1>Post 1</h1>",
 	})
-	if err := setFallbackDir(dir); err != nil {
+	if err := fb.setDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/blog", nil)
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 	if rec.Body.String() != "<h1>Blog Home</h1>" {
 		t.Errorf("got %q, want %q", rec.Body.String(), "<h1>Blog Home</h1>")
 	}
@@ -243,27 +244,27 @@ func TestSetFallbackDir_ImplicitIndex(t *testing.T) {
 	// /blog/ 路径也应生效
 	req2 := httptest.NewRequest(http.MethodGet, "/blog/", nil)
 	rec2 := httptest.NewRecorder()
-	ServeFallback(rec2, req2)
+	fb.Serve(rec2, req2)
 	if rec2.Body.String() != "<h1>Blog Home</h1>" {
 		t.Errorf("got %q, want %q", rec2.Body.String(), "<h1>Blog Home</h1>")
 	}
 }
 
 func TestSetFallbackDir_IgnoresNonHTML(t *testing.T) {
+	fb := newTestFallback(t)
 	dir := makeFallbackDir(t, map[string]string{
 		"index.html": "<h1>Home</h1>",
 		"style.css":  "body { color: red; }",
 		"readme.txt": "hello",
 	})
-	if err := setFallbackDir(dir); err != nil {
+	if err := fb.setDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
 
 	// /style 不应匹配到 style.css（它不是 .html 文件）
 	req := httptest.NewRequest(http.MethodGet, "/style", nil)
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 	// 应回退到 index 页面
 	if rec.Body.String() != "<h1>Home</h1>" {
 		t.Errorf("got %q, want index fallback %q", rec.Body.String(), "<h1>Home</h1>")
@@ -271,36 +272,36 @@ func TestSetFallbackDir_IgnoresNonHTML(t *testing.T) {
 }
 
 func TestSetFallbackDir_EmptyDir(t *testing.T) {
+	fb := newTestFallback(t)
 	dir := makeFallbackDir(t, map[string]string{})
-	if err := setFallbackDir(dir); err != nil {
+	if err := fb.setDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
 
 	// 空目录时回退到自动生成页面（或已设置的自定义 fallback）。
 	// 这里验证返回的 body 非空。
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 	if rec.Body.Len() == 0 {
 		t.Error("expected non-empty body from auto-generated fallback")
 	}
 }
 
 func TestServeFallback_DirPriorityOverCustomHTML(t *testing.T) {
+	fb := newTestFallback(t)
 	dir := makeFallbackDir(t, map[string]string{
 		"index.html": "<h1>Dir Home</h1>",
 	})
-	if err := setFallbackDir(dir); err != nil {
+	if err := fb.setDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	setFallbackHTML([]byte("<h1>Custom</h1>"))
-	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil; customFallback = nil })
+	fb.setHTML([]byte("<h1>Custom</h1>"))
 
 	// 目录模式优先于单文件自定义 HTML。
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 	if rec.Body.String() != "<h1>Dir Home</h1>" {
 		t.Errorf("got %q, want dir mode %q", rec.Body.String(), "<h1>Dir Home</h1>")
 	}
@@ -311,22 +312,25 @@ func TestServeFallback_DirPriorityOverCustomHTML(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSetFallbackProxy_EmptyURL(t *testing.T) {
+	fb := newTestFallback(t)
 	// 设置空 URL 应禁用代理（不报错）。
-	if err := setFallbackProxy("", false, nil); err != nil {
+	if err := fb.setProxy("", false, nil); err != nil {
 		t.Fatalf("unexpected error for empty URL: %v", err)
 	}
-	if fallbackProxy != nil {
-		t.Error("expected fallbackProxy to be nil after empty URL")
+	if fb.proxy != nil {
+		t.Error("expected fb.proxy to be nil after empty URL")
 	}
 }
 
 func TestSetFallbackProxy_InvalidURL(t *testing.T) {
-	if err := setFallbackProxy("://invalid", false, nil); err == nil {
+	fb := newTestFallback(t)
+	if err := fb.setProxy("://invalid", false, nil); err == nil {
 		t.Error("expected error for invalid URL")
 	}
 }
 
 func TestServeFallback_ProxyForwardsRequest(t *testing.T) {
+	fb := newTestFallback(t)
 	// 启动一个返回已知响应的测试用上游服务器。
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Upstream", "true")
@@ -334,14 +338,13 @@ func TestServeFallback_ProxyForwardsRequest(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/some/path", nil)
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	if rec.Body.String() != "from-upstream:/some/path" {
 		t.Errorf("got %q, want %q", rec.Body.String(), "from-upstream:/some/path")
@@ -352,34 +355,29 @@ func TestServeFallback_ProxyForwardsRequest(t *testing.T) {
 }
 
 func TestServeFallback_ProxyHighestPriority(t *testing.T) {
+	fb := newTestFallback(t)
 	// 启动一个测试用上游服务器。
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("proxy-response")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	// 同时设置目录和自定义 HTML 回退，以验证代理的优先级更高。
 	dir := makeFallbackDir(t, map[string]string{
 		"index.html": "<h1>Dir Home</h1>",
 	})
-	if err := setFallbackDir(dir); err != nil {
+	if err := fb.setDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	setFallbackHTML([]byte("<h1>Custom</h1>"))
-	t.Cleanup(func() {
-		fallbackPages = nil
-		fallback404 = nil
-		customFallback = nil
-	})
+	fb.setHTML([]byte("<h1>Custom</h1>"))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	// 代理应同时优先于目录和自定义 HTML。
 	if rec.Body.String() != "proxy-response" {
@@ -392,101 +390,117 @@ func TestServeFallback_ProxyHighestPriority(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSetFallbackTarget_Empty(t *testing.T) {
-	// 先设置一些状态，再用空字符串重置。
-	customFallback = []byte("test")
-	fallbackPages = map[string][]byte{"/": []byte("test")}
-	fallbackProxy = &httputil.ReverseProxy{}
-
-	if err := SetFallbackTarget("", false, nil); err != nil {
+	fb := newTestFallback(t)
+	// 先配置一个反代目标，再用空字符串重置回内置生成页模式。
+	if err := fb.SetTarget("http://127.0.0.1:8080", true, []string{"cdn.example.com"}); err != nil {
 		t.Fatal(err)
 	}
 
-	if customFallback != nil {
-		t.Error("customFallback should be nil after reset")
+	if err := fb.SetTarget("", false, nil); err != nil {
+		t.Fatal(err)
 	}
-	if fallbackPages != nil {
-		t.Error("fallbackPages should be nil after reset")
+
+	if fb.proxy != nil {
+		t.Error("fb.proxy should be nil after reset")
 	}
-	if fallbackProxy != nil {
-		t.Error("fallbackProxy should be nil after reset")
+	if fb.cdnHosts != nil {
+		t.Error("fb.cdnHosts should be nil after reset")
 	}
-	if fallback404 != nil {
-		t.Error("fallback404 should be nil after reset")
+	if fb.pages != nil {
+		t.Error("fb.pages should be nil after reset")
+	}
+	if fb.page404 != nil {
+		t.Error("fb.page404 should be nil after reset")
+	}
+	if fb.custom != nil {
+		t.Error("fb.custom should be nil after reset")
+	}
+
+	// 重置后必须回到内置生成页：带 HTTP 真实性层的 200 + 页面正文。
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	fb.Serve(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+	if rec.Header().Get("ETag") == "" {
+		t.Error("reset target should serve the generated page with its HTTP realism headers")
 	}
 }
 
 func TestSetFallbackTarget_HTTPURL(t *testing.T) {
-	t.Cleanup(func() { fallbackProxy = nil })
+	fb := newTestFallback(t)
 
-	if err := SetFallbackTarget("http://127.0.0.1:8080", false, nil); err != nil {
+	if err := fb.SetTarget("http://127.0.0.1:8080", false, nil); err != nil {
 		t.Fatal(err)
 	}
-	if fallbackProxy == nil {
-		t.Error("expected fallbackProxy to be set for HTTP URL")
+	if fb.proxy == nil {
+		t.Error("expected fb.proxy to be set for HTTP URL")
 	}
 }
 
 func TestSetFallbackTarget_HTTPSURL(t *testing.T) {
-	t.Cleanup(func() { fallbackProxy = nil })
+	fb := newTestFallback(t)
 
-	if err := SetFallbackTarget("https://example.com", false, nil); err != nil {
+	if err := fb.SetTarget("https://example.com", false, nil); err != nil {
 		t.Fatal(err)
 	}
-	if fallbackProxy == nil {
-		t.Error("expected fallbackProxy to be set for HTTPS URL")
+	if fb.proxy == nil {
+		t.Error("expected fb.proxy to be set for HTTPS URL")
 	}
 }
 
 func TestSetFallbackTarget_Directory(t *testing.T) {
+	fb := newTestFallback(t)
 	dir := makeFallbackDir(t, map[string]string{
 		"index.html": "<h1>Home</h1>",
 	})
-	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
 
-	if err := SetFallbackTarget(dir, false, nil); err != nil {
+	if err := fb.SetTarget(dir, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(fallbackPages) == 0 {
-		t.Error("expected fallbackPages to be populated for directory")
+	if len(fb.pages) == 0 {
+		t.Error("expected fb.pages to be populated for directory")
 	}
 }
 
 func TestSetFallbackTarget_File(t *testing.T) {
+	fb := newTestFallback(t)
 	dir := makeFallbackDir(t, map[string]string{
 		"custom.html": "<h1>Custom</h1>",
 	})
 	filePath := filepath.Join(dir, "custom.html")
-	t.Cleanup(func() { customFallback = nil })
 
-	if err := SetFallbackTarget(filePath, false, nil); err != nil {
+	if err := fb.SetTarget(filePath, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	if string(customFallback) != "<h1>Custom</h1>" {
-		t.Errorf("got %q, want %q", string(customFallback), "<h1>Custom</h1>")
+	if string(fb.custom) != "<h1>Custom</h1>" {
+		t.Errorf("got %q, want %q", string(fb.custom), "<h1>Custom</h1>")
 	}
 }
 
 func TestSetFallbackTarget_InvalidPath(t *testing.T) {
-	if err := SetFallbackTarget("/nonexistent/path", false, nil); err == nil {
+	fb := newTestFallback(t)
+	if err := fb.SetTarget("/nonexistent/path", false, nil); err == nil {
 		t.Error("expected error for nonexistent path")
 	}
 }
 
 func TestSetFallbackTarget_ProxyEndToEnd(t *testing.T) {
+	fb := newTestFallback(t)
 	// 完整集成：用 HTTP URL 调用 SetFallbackTarget 后再服务一个请求。
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("upstream:" + r.URL.Path)) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
-	if err := SetFallbackTarget(upstream.URL, false, nil); err != nil {
+	if err := fb.SetTarget(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/hello", nil)
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	if rec.Body.String() != "upstream:/hello" {
 		t.Errorf("got %q, want %q", rec.Body.String(), "upstream:/hello")
@@ -502,6 +516,7 @@ func TestSetFallbackTarget_ProxyEndToEnd(t *testing.T) {
 // 这是核心修复：没有它，像 GitHub 这样的上游会返回
 // 指向其规范域名的 301 重定向，导致浏览器地址栏跳转。
 func TestSetFallbackProxy_HostHeader(t *testing.T) {
+	fb := newTestFallback(t)
 	var gotHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHost = r.Host
@@ -509,16 +524,15 @@ func TestSetFallbackProxy_HostHeader(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	// 面向客户端的请求使用不同的 host。
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	want := upstream.Listener.Addr().String()
 	if gotHost != want {
@@ -529,6 +543,7 @@ func TestSetFallbackProxy_HostHeader(t *testing.T) {
 // TestSetFallbackProxy_RewriteLocation 验证指向上游 host 的 3xx Location 头
 // 会被重写回面向客户端的 host。
 func TestSetFallbackProxy_RewriteLocation(t *testing.T) {
+	fb := newTestFallback(t)
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 模拟一个重定向到自身规范 URL 的上游。
@@ -538,15 +553,14 @@ func TestSetFallbackProxy_RewriteLocation(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	// httptest.NewRequest 的 TLS 为 nil，因此面向客户端的 scheme 是 "http"。
 	if got := rec.Header().Get("Location"); got != "http://my-site.com/some/path" {
@@ -557,21 +571,21 @@ func TestSetFallbackProxy_RewriteLocation(t *testing.T) {
 // TestSetFallbackProxy_RelativeLocationUnchanged 验证相对路径的 Location 头
 // （例如 "/login"）会原样透传。
 func TestSetFallbackProxy_RelativeLocationUnchanged(t *testing.T) {
+	fb := newTestFallback(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Location", "/login")
 		w.WriteHeader(http.StatusFound)
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	if got := rec.Header().Get("Location"); got != "/login" {
 		t.Errorf("Location = %q, want %q", got, "/login")
@@ -581,21 +595,21 @@ func TestSetFallbackProxy_RelativeLocationUnchanged(t *testing.T) {
 // TestSetFallbackProxy_OtherHostLocationUnchanged 验证指向非上游 host 的
 // Location 头会原样透传。
 func TestSetFallbackProxy_OtherHostLocationUnchanged(t *testing.T) {
+	fb := newTestFallback(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Location", "https://other.example.com/x")
 		w.WriteHeader(http.StatusFound)
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	if got := rec.Header().Get("Location"); got != "https://other.example.com/x" {
 		t.Errorf("Location = %q, want %q", got, "https://other.example.com/x")
@@ -607,6 +621,7 @@ func TestSetFallbackProxy_OtherHostLocationUnchanged(t *testing.T) {
 // 本地 nginx 基于 server_name 做虚拟主机路由的配置
 // 需要这一行为。
 func TestSetFallbackProxy_PreserveHost(t *testing.T) {
+	fb := newTestFallback(t)
 	var gotHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHost = r.Host
@@ -614,15 +629,14 @@ func TestSetFallbackProxy_PreserveHost(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, true, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, true, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	if gotHost != "my-site.com" {
 		t.Errorf("upstream received Host %q, want %q (preserveHost=true)", gotHost, "my-site.com")
@@ -635,6 +649,7 @@ func TestSetFallbackProxy_PreserveHost(t *testing.T) {
 // 则 Location 会被重写回
 // 面向客户端的 host。
 func TestSetFallbackProxy_PreserveHostLocationRewrite(t *testing.T) {
+	fb := newTestFallback(t)
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 上游重定向到自身的监听地址（例如 nginx 配置中
@@ -645,15 +660,14 @@ func TestSetFallbackProxy_PreserveHostLocationRewrite(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := setFallbackProxy(upstream.URL, true, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, true, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	if got := rec.Header().Get("Location"); got != "http://my-site.com/login" {
 		t.Errorf("Location = %q, want %q", got, "http://my-site.com/login")
@@ -668,6 +682,7 @@ func TestSetFallbackProxy_PreserveHostLocationRewrite(t *testing.T) {
 // 指向上游 host 的 Domain 属性会被移除，使浏览器能接受
 // 代理 host 下的 cookie。
 func TestSetFallbackProxy_RewriteSetCookieDomain(t *testing.T) {
+	fb := newTestFallback(t)
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -681,15 +696,14 @@ func TestSetFallbackProxy_RewriteSetCookieDomain(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	// 解析原始 Set-Cookie 头以验证 Domain 已被移除。
 	rawCookies := rec.Result().Header["Set-Cookie"]
@@ -718,6 +732,7 @@ func TestSetFallbackProxy_RewriteSetCookieDomain(t *testing.T) {
 // TestSetFallbackProxy_RewriteSetCookieDomainWithDot 验证带前导点号的 Domain
 // 属性（例如 ".github.com"）同样会被移除。
 func TestSetFallbackProxy_RewriteSetCookieDomainWithDot(t *testing.T) {
+	fb := newTestFallback(t)
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -728,15 +743,14 @@ func TestSetFallbackProxy_RewriteSetCookieDomainWithDot(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	cookies := rec.Result().Cookies()
 	if len(cookies) != 1 {
@@ -750,6 +764,7 @@ func TestSetFallbackProxy_RewriteSetCookieDomainWithDot(t *testing.T) {
 // TestSetFallbackProxy_SetCookieOtherDomainUnchanged 验证 Domain 指向非上游
 // host 的 cookie 不会被改动。
 func TestSetFallbackProxy_SetCookieOtherDomainUnchanged(t *testing.T) {
+	fb := newTestFallback(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.Header().Add("Set-Cookie", "test=val; Domain=other.example.com; Path=/")
@@ -757,15 +772,14 @@ func TestSetFallbackProxy_SetCookieOtherDomainUnchanged(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	cookies := rec.Result().Cookies()
 	if len(cookies) != 1 {
@@ -779,6 +793,7 @@ func TestSetFallbackProxy_SetCookieOtherDomainUnchanged(t *testing.T) {
 // TestSetFallbackProxy_SetCookieNoDomainUnchanged 验证没有 Domain 属性的
 // cookie 不会被改动。
 func TestSetFallbackProxy_SetCookieNoDomainUnchanged(t *testing.T) {
+	fb := newTestFallback(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		http.SetCookie(w, &http.Cookie{
@@ -790,15 +805,14 @@ func TestSetFallbackProxy_SetCookieNoDomainUnchanged(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	cookies := rec.Result().Cookies()
 	if len(cookies) != 1 {
@@ -820,6 +834,7 @@ func TestSetFallbackProxy_SetCookieNoDomainUnchanged(t *testing.T) {
 // 上游 host 的绝对 URL 会被重写为面向客户端的
 // origin。
 func TestSetFallbackProxy_RewriteContent(t *testing.T) {
+	fb := newTestFallback(t)
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -830,15 +845,14 @@ func TestSetFallbackProxy_RewriteContent(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/repo/releases", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	// httptest.NewRequest 的 TLS 为 nil，因此 origScheme 默认为 "http"。
 	body := rec.Body.String()
@@ -855,6 +869,7 @@ func TestSetFallbackProxy_RewriteContent(t *testing.T) {
 // Content-Security-Policy 头会被重写，把其中的上游 URL
 // 替换为面向客户端的 origin。
 func TestSetFallbackProxy_RewriteContentCSP(t *testing.T) {
+	fb := newTestFallback(t)
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -865,15 +880,14 @@ func TestSetFallbackProxy_RewriteContentCSP(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	csp := rec.Header().Get("Content-Security-Policy")
 	if bytes.Contains([]byte(csp), []byte("https://"+upstreamHost)) {
@@ -895,6 +909,7 @@ func TestSetFallbackProxy_RewriteContentCSP(t *testing.T) {
 // GitHub 的 worker-src 指令使用无 scheme 的路径，
 // 因此需要这一处理。
 func TestSetFallbackProxy_RewriteCSPBareHost(t *testing.T) {
+	fb := newTestFallback(t)
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -906,15 +921,14 @@ func TestSetFallbackProxy_RewriteCSPBareHost(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	csp := rec.Header().Get("Content-Security-Policy")
 	// 裸上游主机应被替换为面向客户端的 host。
@@ -939,6 +953,7 @@ func TestSetFallbackProxy_RewriteCSPBareHost(t *testing.T) {
 // 和裸主机形式上游主机的 CSP 都会被正确重写，
 // 而其他主机和子域会被保留。
 func TestSetFallbackProxy_RewriteCSPMixed(t *testing.T) {
+	fb := newTestFallback(t)
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -950,15 +965,14 @@ func TestSetFallbackProxy_RewriteCSPMixed(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	csp := rec.Header().Get("Content-Security-Policy")
 	// 不应残留任何上游主机（子域 api. 除外）。
@@ -984,6 +998,7 @@ func TestSetFallbackProxy_RewriteCSPMixed(t *testing.T) {
 // TestSetFallbackProxy_RewriteContentGzip 验证 gzip 压缩的 HTML 响应会被
 // 解压并正确重写。
 func TestSetFallbackProxy_RewriteContentGzip(t *testing.T) {
+	fb := newTestFallback(t)
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 模拟一个忽略 Accept-Encoding: identity、
@@ -997,15 +1012,14 @@ func TestSetFallbackProxy_RewriteContentGzip(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	// Content-Encoding 应被移除（重写后发送未压缩的内容）。
 	if ce := rec.Header().Get("Content-Encoding"); ce != "" {
@@ -1024,6 +1038,7 @@ func TestSetFallbackProxy_RewriteContentGzip(t *testing.T) {
 // TestSetFallbackProxy_RewriteContentNonHTML 验证非 HTML 响应会原样透传
 // （只有 HTML 会被重写）。
 func TestSetFallbackProxy_RewriteContentNonHTML(t *testing.T) {
+	fb := newTestFallback(t)
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1032,15 +1047,14 @@ func TestSetFallbackProxy_RewriteContentNonHTML(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/api", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	// JSON 不应被重写。
 	if bytes.Contains(rec.Body.Bytes(), []byte("my-site.com")) {
@@ -1054,6 +1068,7 @@ func TestSetFallbackProxy_RewriteContentNonHTML(t *testing.T) {
 // TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientGzip 验证当客户端
 // 接受 gzip 时，上游收到的是 "identity, gzip"。
 func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientGzip(t *testing.T) {
+	fb := newTestFallback(t)
 	var gotAE string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAE = r.Header.Get("Accept-Encoding")
@@ -1062,16 +1077,15 @@ func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientGzip(t *testing.T) 
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	if gotAE != "identity, gzip" {
 		t.Errorf("upstream received Accept-Encoding %q, want %q", gotAE, "identity, gzip")
@@ -1081,6 +1095,7 @@ func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientGzip(t *testing.T) 
 // TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientNoGzip 验证当客户端
 // 不接受 gzip 时，上游只收到 "identity"。
 func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientNoGzip(t *testing.T) {
+	fb := newTestFallback(t)
 	var gotAE string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAE = r.Header.Get("Accept-Encoding")
@@ -1089,16 +1104,15 @@ func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientNoGzip(t *testing.T
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	// 没有 Accept-Encoding 头 → 客户端不接受 gzip。
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	if gotAE != "identity" {
 		t.Errorf("upstream received Accept-Encoding %q, want %q", gotAE, "identity")
@@ -1109,6 +1123,7 @@ func TestSetFallbackProxy_RewriteContentAcceptEncoding_ClientNoGzip(t *testing.T
 // 重写后的 HTML 响应会用 gzip 重新压缩，并把 Content-Encoding 头设置为
 // "gzip"。
 func TestSetFallbackProxy_RewriteContent_RecompressGzip(t *testing.T) {
+	fb := newTestFallback(t)
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -1117,16 +1132,15 @@ func TestSetFallbackProxy_RewriteContent_RecompressGzip(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	req.Header.Set("Accept-Encoding", "gzip")
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	if ce := rec.Header().Get("Content-Encoding"); ce != "gzip" {
 		t.Errorf("Content-Encoding = %q, want %q", ce, "gzip")
@@ -1151,6 +1165,7 @@ func TestSetFallbackProxy_RewriteContent_RecompressGzip(t *testing.T) {
 // 验证当客户端不接受 gzip 时，即使上游返回了 gzip，
 // 重写后的 HTML 也会以未压缩形式发送。
 func TestSetFallbackProxy_RewriteContent_NoRecompressWhenClientNoGzip(t *testing.T) {
+	fb := newTestFallback(t)
 	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -1162,16 +1177,15 @@ func TestSetFallbackProxy_RewriteContent_NoRecompressWhenClientNoGzip(t *testing
 	defer upstream.Close()
 	upstreamHost = upstream.Listener.Addr().String()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	// 没有 Accept-Encoding → 客户端不接受 gzip。
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	if ce := rec.Header().Get("Content-Encoding"); ce != "" {
 		t.Errorf("Content-Encoding = %q, want empty (client does not accept gzip)", ce)
@@ -1219,6 +1233,7 @@ func TestClientAcceptsGzip(t *testing.T) {
 // 会从面向客户端的 host 重写为上游 host，
 // 从而使 Rails 的 CSRF 防护接受该请求。
 func TestSetFallbackProxy_RewriteOrigin(t *testing.T) {
+	fb := newTestFallback(t)
 	var gotOrigin string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotOrigin = r.Header.Get("Origin")
@@ -1228,16 +1243,15 @@ func TestSetFallbackProxy_RewriteOrigin(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost := upstream.Listener.Addr().String()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodPost, "/session", nil)
 	req.Host = "my-site.com"
 	req.Header.Set("Origin", "http://my-site.com")
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	want := "http://" + upstreamHost
 	if gotOrigin != want {
@@ -1249,6 +1263,7 @@ func TestSetFallbackProxy_RewriteOrigin(t *testing.T) {
 // 面向客户端的 host 重写为上游 host，
 // 并保留路径。
 func TestSetFallbackProxy_RewriteReferer(t *testing.T) {
+	fb := newTestFallback(t)
 	var gotReferer string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotReferer = r.Header.Get("Referer")
@@ -1258,16 +1273,15 @@ func TestSetFallbackProxy_RewriteReferer(t *testing.T) {
 	defer upstream.Close()
 	upstreamHost := upstream.Listener.Addr().String()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodPost, "/session", nil)
 	req.Host = "my-site.com"
 	req.Header.Set("Referer", "http://my-site.com/login")
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	want := "http://" + upstreamHost + "/login"
 	if gotReferer != want {
@@ -1278,6 +1292,7 @@ func TestSetFallbackProxy_RewriteReferer(t *testing.T) {
 // TestSetFallbackProxy_OtherHostOriginUnchanged 验证指向非面向客户端 host 的
 // Origin 头不会被改动。
 func TestSetFallbackProxy_OtherHostOriginUnchanged(t *testing.T) {
+	fb := newTestFallback(t)
 	var gotOrigin string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotOrigin = r.Header.Get("Origin")
@@ -1286,16 +1301,15 @@ func TestSetFallbackProxy_OtherHostOriginUnchanged(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodPost, "/session", nil)
 	req.Host = "my-site.com"
 	req.Header.Set("Origin", "http://other.example.com")
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	if gotOrigin != "http://other.example.com" {
 		t.Errorf("upstream received Origin %q, want %q (unchanged)", gotOrigin, "http://other.example.com")
@@ -1305,21 +1319,21 @@ func TestSetFallbackProxy_OtherHostOriginUnchanged(t *testing.T) {
 // TestSetFallbackProxy_NoOriginNoError 验证没有 Origin 或 Referer 头的请求
 // 也能无错误地处理。
 func TestSetFallbackProxy_NoOriginNoError(t *testing.T) {
+	fb := newTestFallback(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.Write([]byte("<html></html>")) //nolint:errcheck
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil })
 
 	req := httptest.NewRequest(http.MethodPost, "/session", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -1334,6 +1348,7 @@ func TestSetFallbackProxy_NoOriginNoError(t *testing.T) {
 // 会以正确的 Host 头代理到
 // https://<host>/<path>。
 func TestSetFallbackProxy_CDNRoute(t *testing.T) {
+	fb := newTestFallback(t)
 	var gotHost, gotPath string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("upstream")) //nolint:errcheck
@@ -1348,24 +1363,21 @@ func TestSetFallbackProxy_CDNRoute(t *testing.T) {
 	defer cdnServer.Close()
 	cdnHost := cdnServer.Listener.Addr().String()
 
-	if err := setFallbackProxy(upstream.URL, false, []string{cdnHost}); err != nil {
+	if err := fb.setProxy(upstream.URL, false, []string{cdnHost}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
-	// 覆盖代理的 Transport，跳过对测试所用
-	// 自签名证书的 TLS 校验。
-	originalTransport := fallbackProxy.Transport
-	fallbackProxy.Transport = &http.Transport{
+	// 覆盖代理的 Transport，跳过对测试所用自签名证书的 TLS 校验。
+	// 实例是测试私有的，因此不需要还原。
+	fb.proxy.Transport = &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
-	t.Cleanup(func() { fallbackProxy.Transport = originalTransport })
 
 	// 通过 /__cdn__/ 前缀路径发起请求。
 	req := httptest.NewRequest(http.MethodGet, cdnPathPrefix+cdnHost+"/assets/foo.css", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	if gotHost != cdnHost {
 		t.Errorf("CDN received Host %q, want %q", gotHost, cdnHost)
@@ -1379,6 +1391,7 @@ func TestSetFallbackProxy_CDNRoute(t *testing.T) {
 // 的主机的 /__cdn__/ 请求不会被当作 CDN 请求代理
 // （它会回落到主上游）。
 func TestSetFallbackProxy_CDNRouteDisallowedHost(t *testing.T) {
+	fb := newTestFallback(t)
 	var gotPath string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -1386,16 +1399,15 @@ func TestSetFallbackProxy_CDNRouteDisallowedHost(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, []string{"allowed.cdn.com"}); err != nil {
+	if err := fb.setProxy(upstream.URL, false, []string{"allowed.cdn.com"}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
 	// 向不允许的 CDN 主机发起请求。
 	req := httptest.NewRequest(http.MethodGet, cdnPathPrefix+"evil.cdn.com/assets/foo.css", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	// 应带着 /__cdn__/ 路径路由到主上游
 	// （主机不在允许集合中，因此 routeCDN 返回 false，走正常的
@@ -1409,6 +1421,7 @@ func TestSetFallbackProxy_CDNRouteDisallowedHost(t *testing.T) {
 // 已配置 CDN 域名的绝对 URL 会被重写为
 // /__cdn__/<host> 前缀形式。
 func TestSetFallbackProxy_CDNHTMLRewrite(t *testing.T) {
+	fb := newTestFallback(t)
 	var upstreamHost string
 	cdnHost := "cdn.example.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1420,15 +1433,14 @@ func TestSetFallbackProxy_CDNHTMLRewrite(t *testing.T) {
 	upstreamHost = upstream.Listener.Addr().String()
 	_ = upstreamHost
 
-	if err := setFallbackProxy(upstream.URL, false, []string{cdnHost}); err != nil {
+	if err := fb.setProxy(upstream.URL, false, []string{cdnHost}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	body := rec.Body.String()
 	wantPrefix := "http://my-site.com" + cdnPathPrefix + cdnHost
@@ -1448,6 +1460,7 @@ func TestSetFallbackProxy_CDNHTMLRewrite(t *testing.T) {
 // CSP 源表达式会被重写为
 // /__cdn__/ 前缀形式。
 func TestSetFallbackProxy_CDNCSPRewrite(t *testing.T) {
+	fb := newTestFallback(t)
 	cdnHost := "cdn.example.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -1457,15 +1470,14 @@ func TestSetFallbackProxy_CDNCSPRewrite(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, []string{cdnHost}); err != nil {
+	if err := fb.setProxy(upstream.URL, false, []string{cdnHost}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	csp := rec.Header().Get("Content-Security-Policy")
 	// CDN 主机应被重写为 /__cdn__/ 前缀形式。
@@ -1483,6 +1495,7 @@ func TestSetFallbackProxy_CDNCSPRewrite(t *testing.T) {
 // 指向外部主机的 HTML URL 不会被重写
 // （保持原样）。
 func TestSetFallbackProxy_CDNNotConfigured(t *testing.T) {
+	fb := newTestFallback(t)
 	cdnHost := "cdn.example.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -1491,15 +1504,14 @@ func TestSetFallbackProxy_CDNNotConfigured(t *testing.T) {
 	defer upstream.Close()
 
 	// 未配置任何 CDN 域名。
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	body := rec.Body.String()
 	// CDN URL 应保持不变。
@@ -1512,6 +1524,7 @@ func TestSetFallbackProxy_CDNNotConfigured(t *testing.T) {
 // /__cdn__/ 请求能被正确路由（提取子域主机
 // 作为上游主机）。
 func TestSetFallbackProxy_CDNSubdomainRoute(t *testing.T) {
+	fb := newTestFallback(t)
 	cdnParent := "githubassets.com"
 	cdnSub := "github.githubassets.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1519,15 +1532,14 @@ func TestSetFallbackProxy_CDNSubdomainRoute(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
+	if err := fb.setProxy(upstream.URL, false, []string{cdnParent}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
 	// 使用自定义 Transport 捕获目标主机而不真正建立连接
 	// （测试环境中该子域无法通过 DNS 解析）。
 	var capturedHost string
-	fallbackProxy.Transport = &roundTripFunc{
+	fb.proxy.Transport = &roundTripFunc{
 		fn: func(req *http.Request) (*http.Response, error) {
 			capturedHost = req.URL.Host
 			return &http.Response{
@@ -1542,7 +1554,7 @@ func TestSetFallbackProxy_CDNSubdomainRoute(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, cdnPathPrefix+cdnSub+"/assets/foo.css", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	if capturedHost != cdnSub {
 		t.Errorf("upstream host = %q, want %q (subdomain)", capturedHost, cdnSub)
@@ -1553,18 +1565,18 @@ func TestSetFallbackProxy_CDNSubdomainRoute(t *testing.T) {
 // 会在请求转发给上游服务前被移除，从而保证代理协议痕迹
 // 永远不会泄露给回退站点。
 func TestServeFallbackProxyStripsXESHeader(t *testing.T) {
+	fb := newTestFallback(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, nil); err != nil {
+	if err := fb.setProxy(upstream.URL, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
 	var captured *http.Request
-	fallbackProxy.Transport = &roundTripFunc{
+	fb.proxy.Transport = &roundTripFunc{
 		fn: func(req *http.Request) (*http.Response, error) {
 			captured = req
 			return &http.Response{
@@ -1581,7 +1593,7 @@ func TestServeFallbackProxyStripsXESHeader(t *testing.T) {
 	req.Header.Set("x-es", "UQ8k8i0v8JX5m6pQ2lC1AQ") // 22 字符的 base64url salt
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0) Chrome/131.0.0.0")
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	if captured == nil {
 		t.Fatal("expected upstream request to be captured")
@@ -1608,6 +1620,7 @@ func (rt *roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 // 的子域的绝对 URL 会被重写为
 // /__cdn__/<subdomain-host> 形式。
 func TestSetFallbackProxy_CDNSubdomainHTMLRewrite(t *testing.T) {
+	fb := newTestFallback(t)
 	cdnParent := "githubassets.com"
 	cdnSub := "github.githubassets.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1618,15 +1631,14 @@ func TestSetFallbackProxy_CDNSubdomainHTMLRewrite(t *testing.T) {
 	defer upstream.Close()
 
 	// 只配置父域名。
-	if err := setFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
+	if err := fb.setProxy(upstream.URL, false, []string{cdnParent}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	body := rec.Body.String()
 	// 子域 URL 应使用完整的子域主机名进行重写。
@@ -1653,6 +1665,7 @@ func TestSetFallbackProxy_CDNSubdomainHTMLRewrite(t *testing.T) {
 // 例如 "notgithubassets.com" 不应匹配
 // "githubassets.com"。
 func TestSetFallbackProxy_CDNNonMatchingSubdomain(t *testing.T) {
+	fb := newTestFallback(t)
 	cdnParent := "githubassets.com"
 	fakeHost := "notgithubassets.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1661,15 +1674,14 @@ func TestSetFallbackProxy_CDNNonMatchingSubdomain(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
+	if err := fb.setProxy(upstream.URL, false, []string{cdnParent}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	body := rec.Body.String()
 	// 伪主机的 URL 不应被重写。
@@ -1687,6 +1699,7 @@ func TestSetFallbackProxy_CDNNonMatchingSubdomain(t *testing.T) {
 // "github.githubassets.com"，而只配置了
 // "githubassets.com"。
 func TestSetFallbackProxy_CDNCSPSubdomainRewrite(t *testing.T) {
+	fb := newTestFallback(t)
 	cdnParent := "githubassets.com"
 	cdnSub := "github.githubassets.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1700,15 +1713,14 @@ func TestSetFallbackProxy_CDNCSPSubdomainRewrite(t *testing.T) {
 	defer upstream.Close()
 
 	// 只配置父域名。
-	if err := setFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
+	if err := fb.setProxy(upstream.URL, false, []string{cdnParent}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	csp := rec.Header().Get("Content-Security-Policy")
 	// 子域引用应被重写为 /__cdn__/ 前缀形式。
@@ -1737,6 +1749,7 @@ func TestSetFallbackProxy_CDNCSPSubdomainRewrite(t *testing.T) {
 // 关键修复：此前在到达 CSP 重写代码之前就因读取响应体失败
 // 而跳过了 CSP 重写。
 func TestSetFallbackProxy_CSPRewrittenEvenWhenBodyUnreadable(t *testing.T) {
+	fb := newTestFallback(t)
 	cdnParent := "githubassets.com"
 	cdnSub := "github.githubassets.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1751,15 +1764,14 @@ func TestSetFallbackProxy_CSPRewrittenEvenWhenBodyUnreadable(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
+	if err := fb.setProxy(upstream.URL, false, []string{cdnParent}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	csp := rec.Header().Get("Content-Security-Policy")
 	// 即使响应体无法读取（br 编码），CSP 也应被重写，从而允许 /__cdn__/
@@ -1775,6 +1787,7 @@ func TestSetFallbackProxy_CSPRewrittenEvenWhenBodyUnreadable(t *testing.T) {
 // 精确匹配该路径，从而阻止子资源的加载
 // （例如 /__cdn__/<host>/assets/foo.css 上的 CSS）。
 func TestSetFallbackProxy_CDNCSPTrailingSlash(t *testing.T) {
+	fb := newTestFallback(t)
 	cdnParent := "githubassets.com"
 	cdnSub := "github.githubassets.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1786,15 +1799,14 @@ func TestSetFallbackProxy_CDNCSPTrailingSlash(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, []string{cdnParent}); err != nil {
+	if err := fb.setProxy(upstream.URL, false, []string{cdnParent}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	csp := rec.Header().Get("Content-Security-Policy")
 	// 裸主机应被重写为带末尾 "/" 的形式，使子路径能匹配。
@@ -1814,6 +1826,7 @@ func TestSetFallbackProxy_CDNCSPTrailingSlash(t *testing.T) {
 // CPU：对 JS 而言该扫描不可靠（URL 是动态构造的），
 // 对 JSON/图片而言又没必要。
 func TestSetFallbackProxy_NonRewritableContentType(t *testing.T) {
+	fb := newTestFallback(t)
 	cdnHost := "github.githubassets.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript")
@@ -1821,15 +1834,14 @@ func TestSetFallbackProxy_NonRewritableContentType(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, []string{"githubassets.com"}); err != nil {
+	if err := fb.setProxy(upstream.URL, false, []string{"githubassets.com"}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/assets/app.js", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	body := rec.Body.String()
 	// JavaScript 不应被重写 —— 保留原始 URL。
@@ -1843,6 +1855,7 @@ func TestSetFallbackProxy_NonRewritableContentType(t *testing.T) {
 // 会被重写为 /__cdn__/<host>/<path>，使浏览器能通过代理
 // 跟随该重定向。
 func TestSetFallbackProxy_CDNLocationRewrite(t *testing.T) {
+	fb := newTestFallback(t)
 	cdnHost := "raw.githubusercontent.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 模拟 GitHub 把 /raw/ 重定向到 raw.githubusercontent.com
@@ -1851,15 +1864,14 @@ func TestSetFallbackProxy_CDNLocationRewrite(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	if err := setFallbackProxy(upstream.URL, false, []string{"githubusercontent.com"}); err != nil {
+	if err := fb.setProxy(upstream.URL, false, []string{"githubusercontent.com"}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/nange/easyss/raw/master/assets/img/tray2.png", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	want := "http://my-site.com" + cdnPathPrefix + cdnHost + "/nange/easyss/master/assets/img/tray2.png"
 	if got := rec.Header().Get("Location"); got != want {
@@ -1871,6 +1883,7 @@ func TestSetFallbackProxy_CDNLocationRewrite(t *testing.T) {
 // 验证当主机不在已配置的 CDN 域名中时，
 // 指向类 CDN 主机的重定向不会被重写。
 func TestSetFallbackProxy_CDNLocationNotRewrittenWhenNotConfigured(t *testing.T) {
+	fb := newTestFallback(t)
 	cdnHost := "raw.githubusercontent.com"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Location", "https://"+cdnHost+"/some/path")
@@ -1879,15 +1892,14 @@ func TestSetFallbackProxy_CDNLocationNotRewrittenWhenNotConfigured(t *testing.T)
 	defer upstream.Close()
 
 	// 只配置了 githubassets.com，而不是 githubusercontent.com。
-	if err := setFallbackProxy(upstream.URL, false, []string{"githubassets.com"}); err != nil {
+	if err := fb.setProxy(upstream.URL, false, []string{"githubassets.com"}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackProxy = nil; fallbackCDNHosts = nil })
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "my-site.com"
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 
 	// Location 应原样透传。
 	want := "https://" + cdnHost + "/some/path"

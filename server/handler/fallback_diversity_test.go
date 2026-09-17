@@ -20,22 +20,27 @@ import (
 // 部署级随机化
 // ---------------------------------------------------------------------------
 
-// withDeployment 用固定种子/主题重建部署级身份，并在测试结束后把包状态恢复到
-// 自动初始化，避免污染同一包内的其它测试。
-func withDeployment(t *testing.T, seed []byte, theme string) *deployment {
+// depState 是当前测试部署身份的只读别名，指向 withDeployment 最近构造出的
+// 实例，仅用于断言（它是测试专用变量，生产代码里不存在对应的包级状态）。
+var depState *deployment
+
+// withDeployment 用固定种子/主题构造一个独立的 fallback 实例，并把它设为
+// handler 未注入时的包级内置实例（这样 serveProbe / 零值 ProxyHandler 也拿到
+// 同一套身份），测试结束后清空该内置实例。它返回该实例，调用方通过它服务
+// 请求，因此不需要重置任何回退状态。
+func withDeployment(t *testing.T, seed []byte, theme string) *Fallback {
 	t.Helper()
-	depOnce = sync.Once{}
-	depState = nil
-	htmlCache = sync.Map{}
-	htmlCacheCount.Store(0)
-	initFallback(fallbackVariant{Seed: seed, Theme: theme})
+	fb, err := NewFallback(FallbackConfig{}, WithSeed(seed), WithTheme(theme))
+	if err != nil {
+		t.Fatalf("NewFallback: %v", err)
+	}
+	setBuiltinFallbackForTest(fb)
+	depState = fb.dep
 	t.Cleanup(func() {
-		depOnce = sync.Once{}
+		setBuiltinFallbackForTest(nil)
 		depState = nil
-		htmlCache = sync.Map{}
-		htmlCacheCount.Store(0)
 	})
-	return depState
+	return fb
 }
 
 func seedOf(n int) []byte {
@@ -60,35 +65,54 @@ func TestInitFallback_Deterministic(t *testing.T) {
 	}
 }
 
-// TestInitFallback_Idempotent 验证重复初始化只生效一次。
-func TestInitFallback_Idempotent(t *testing.T) {
-	dep := withDeployment(t, seedOf(2), "")
-	before := dep.site.Name
+// TestFallbackInstance_Isolated 验证两个实例互不影响：不同种子的身份与渲染
+// 结果都不同，且各自在同一路径上稳定（对应旧的"重复初始化只生效一次"，
+// 现在由构造语义表达）。
+func TestFallbackInstance_Isolated(t *testing.T) {
+	first := withDeployment(t, seedOf(2), "")
+	firstHome := first.renderPage("/")
 
-	// 第二次调用（同一种子）必须是无操作。
-	initFallback(fallbackVariant{Seed: seedOf(3)})
-	if got := depState.site.Name; got != before {
-		t.Errorf("second init changed deployment identity: %q -> %q", before, got)
+	second := withDeployment(t, seedOf(3), "")
+	secondHome := second.renderPage("/")
+
+	if bytes.Equal(firstHome, secondHome) {
+		t.Error("two instances produced the same home page")
+	}
+	if first.dep.site.Name == second.dep.site.Name {
+		t.Errorf("two instances produced the same site name %q", first.dep.site.Name)
+	}
+	if !bytes.Equal(firstHome, first.renderPage("/")) {
+		t.Error("an instance changed its own rendering after another instance was constructed")
 	}
 }
 
-// TestInitFallback_ConcurrentInit 验证并发初始化在 -race 下不产生数据竞争。
-func TestInitFallback_ConcurrentInit(t *testing.T) {
-	depOnce = sync.Once{}
-	depState = nil
-	t.Cleanup(func() {
-		depOnce = sync.Once{}
-		depState = nil
-	})
+// TestBuiltinFallback_ConcurrentInit 验证包级内置实例的惰性构造在并发调用下
+// 是安全的，并且所有调用者拿到同一个实例（在 -race 下同样成立）。
+func TestBuiltinFallback_ConcurrentInit(t *testing.T) {
+	fb, err := NewFallback(FallbackConfig{}, WithSeed(seedOf(4)))
+	if err != nil {
+		t.Fatalf("NewFallback: %v", err)
+	}
+	setBuiltinFallbackForTest(fb)
+	t.Cleanup(func() { setBuiltinFallbackForTest(nil) })
 
 	var wg sync.WaitGroup
-	for range 50 {
-		wg.Go(func() { initFallback(fallbackVariant{}) })
+	results := make([]*Fallback, 50)
+	for i := range 50 {
+		wg.Go(func() { results[i] = builtinFallback() })
 	}
 	wg.Wait()
 
-	if depState == nil {
+	if results[0] == nil {
 		t.Fatal("deployment not initialized")
+	}
+	for i, got := range results {
+		if got != results[0] {
+			t.Fatalf("call %d got a different builtin instance", i)
+		}
+	}
+	if results[0].dep == nil {
+		t.Fatal("builtin instance has no deployment identity")
 	}
 }
 
@@ -124,9 +148,9 @@ func TestInitFallback_DeploymentSpace(t *testing.T) {
 	palettes := make(map[string]int)
 	homes := make(map[string]int)
 	for i := range 50 {
-		withDeployment(t, seedOf(100+i), "")
-		palettes[strongETag([]byte(depState.theme.CSS))]++
-		homes[strongETag(renderPage("/"))]++
+		fb := withDeployment(t, seedOf(100+i), "")
+		palettes[strongETag([]byte(fb.dep.theme.CSS))]++
+		homes[strongETag(fb.renderPage("/"))]++
 	}
 
 	if distinct := len(palettes); distinct < 45 {
@@ -219,9 +243,9 @@ var placeholderRe = regexp.MustCompile(`\{\{\w+\}\}`)
 // TestThemeCSSTokensResolved 覆盖"任何一次派生都不把占位符发给扫描器"。
 func TestThemeCSSTokensResolved(t *testing.T) {
 	for i := range 20 {
-		withDeployment(t, seedOf(300+i), "")
+		fb := withDeployment(t, seedOf(300+i), "")
 
-		css := string(depState.theme.CSS)
+		css := string(fb.dep.theme.CSS)
 		if m := placeholderRe.FindString(css); m != "" {
 			t.Fatalf("seed %d: unreplaced token %s in theme CSS", i, m)
 		}
@@ -239,8 +263,8 @@ func TestThemeCSSTokensResolved(t *testing.T) {
 // 这里直接校验调色板本身：主题 CSS 里的 token 已被替换，无法再用于配对。
 func TestThemeCSS_Contrast(t *testing.T) {
 	for i := range 40 {
-		withDeployment(t, seedOf(400+i), "")
-		for _, check := range validatePalette(themePalette(depState.seed, depState.theme)) {
+		fb := withDeployment(t, seedOf(400+i), "")
+		for _, check := range validatePalette(themePalette(fb.dep.seed, fb.dep.theme)) {
 			if check.Got < check.Min-0.01 {
 				t.Errorf("seed %d: %s contrast = %.2f, want >= %.2f",
 					i, check.Name, check.Got, check.Min)
@@ -290,10 +314,10 @@ func TestThemesJSON_TokenWhitelist(t *testing.T) {
 // TestComposeContent_Shape 验证拼装出的页面结构合理：3-5 段、标题/一级标题
 // 非空、页脚含站点名与年份。
 func TestComposeContent_Shape(t *testing.T) {
-	withDeployment(t, seedOf(500), "")
+	fb := withDeployment(t, seedOf(500), "")
 
 	for _, path := range []string{"/", "/about", "/services", "/blog", "/contact", "/random"} {
-		content := composeContent(depState, path, detectPageType(path))
+		content := composeContent(fb.dep, path, detectPageType(path))
 		if n := len(content.Paragraphs); n < 2 || n > 6 {
 			t.Errorf("path %q: %d paragraphs, want 2-6", path, n)
 		}
@@ -318,13 +342,13 @@ func TestComposeContent_Shape(t *testing.T) {
 // TestComposeContent_EmptyPools 验证资源文件缺字段时不 panic：
 // rand.IntN(0) 会 panic，因此空池必须有守卫。
 func TestComposeContent_EmptyPools(t *testing.T) {
-	withDeployment(t, seedOf(501), "")
+	fb := withDeployment(t, seedOf(501), "")
 
 	saved := contentPools
 	contentPools = contentPool{}
 	t.Cleanup(func() { contentPools = saved })
 
-	content := composeContent(depState, "/", "home")
+	content := composeContent(fb.dep, "/", "home")
 	if len(content.Paragraphs) == 0 {
 		t.Error("empty pools should still produce a fallback paragraph")
 	}
@@ -341,7 +365,7 @@ func TestComposeContent_EmptyPools(t *testing.T) {
 // TestLegacyContentPool 验证旧式"整篇文案"格式（只有 <pageType> 数组、
 // 没有片段池）仍然可以渲染出页面。
 func TestLegacyContentPool(t *testing.T) {
-	withDeployment(t, seedOf(502), "")
+	fb := withDeployment(t, seedOf(502), "")
 
 	saved := contentPools
 	contentPools = contentPool{Pages: legacyPool{
@@ -349,7 +373,7 @@ func TestLegacyContentPool(t *testing.T) {
 	}}
 	t.Cleanup(func() { contentPools = saved })
 
-	content := composeContent(depState, "/", "home")
+	content := composeContent(fb.dep, "/", "home")
 	if content.Heading != "Legacy Heading" {
 		t.Errorf("legacy heading = %q", content.Heading)
 	}
@@ -366,8 +390,8 @@ func TestLegacyContentPool(t *testing.T) {
 // detectPageType 归入一个真实存在的页面族。
 func TestNavItems_LinksResolve(t *testing.T) {
 	for i := range 50 {
-		withDeployment(t, seedOf(600+i), "")
-		nav := depState.nav
+		fb := withDeployment(t, seedOf(600+i), "")
+		nav := fb.dep.nav
 
 		if len(nav) < 3 || len(nav) > 4 {
 			t.Fatalf("seed %d: %d nav items, want 3-4", i, len(nav))
@@ -393,9 +417,9 @@ func TestNavItems_LinksResolve(t *testing.T) {
 func TestNavItems_SpaceCoversAliases(t *testing.T) {
 	combos := make(map[string]bool)
 	for i := range 50 {
-		withDeployment(t, seedOf(700+i), "")
+		fb := withDeployment(t, seedOf(700+i), "")
 		var labels []string
-		for _, item := range depState.nav {
+		for _, item := range fb.dep.nav {
 			labels = append(labels, item.Label+"@"+item.Href)
 		}
 		combos[strings.Join(labels, "|")] = true
@@ -409,21 +433,21 @@ func TestNavItems_SpaceCoversAliases(t *testing.T) {
 // HTTP 真实性层
 // ---------------------------------------------------------------------------
 
-func doFallback(seed []byte, target string, headers map[string]string, method string) *httptest.ResponseRecorder {
+func doFallback(fb *Fallback, target string, headers map[string]string, method string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, target, nil)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
 	rec := httptest.NewRecorder()
-	ServeFallback(rec, req)
+	fb.Serve(rec, req)
 	return rec
 }
 
 // TestServeFallback_ContentHeaders 验证真实 nginx 会发而 Go 默认不发的响应头。
 func TestServeFallback_ContentHeaders(t *testing.T) {
-	withDeployment(t, seedOf(800), "")
+	fb := withDeployment(t, seedOf(800), "")
 
-	rec := doFallback(seedOf(800), "/", nil, http.MethodGet)
+	rec := doFallback(fb, "/", nil, http.MethodGet)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -447,19 +471,19 @@ func TestServeFallback_ContentHeaders(t *testing.T) {
 // TestServeFallback_UnknownPathStatus 验证浏览器式的内容请求对未知路径返回 404，
 // 而非内容请求（客户端探测）保持 200 + 页面正文。
 func TestServeFallback_UnknownPathStatus(t *testing.T) {
-	withDeployment(t, seedOf(801), "")
+	fb := withDeployment(t, seedOf(801), "")
 
 	browser := map[string]string{"Accept": "text/html,application/xhtml+xml;q=0.9"}
-	if rec := doFallback(seedOf(801), "/x9f2ab", browser, http.MethodGet); rec.Code != http.StatusNotFound {
+	if rec := doFallback(fb, "/x9f2ab", browser, http.MethodGet); rec.Code != http.StatusNotFound {
 		t.Errorf("unknown path with Accept: text/html: status = %d, want 404", rec.Code)
 	}
 	for _, path := range []string{"/", "/about", "/services", "/blog", "/contact"} {
-		if rec := doFallback(seedOf(801), path, browser, http.MethodGet); rec.Code != http.StatusOK {
+		if rec := doFallback(fb, path, browser, http.MethodGet); rec.Code != http.StatusOK {
 			t.Errorf("known path %q: status = %d, want 200", path, rec.Code)
 		}
 	}
 	// 客户端探测不带 text/html：保持 200，避免改变既有客户端看到的响应形状。
-	if rec := doFallback(seedOf(801), "/x9f2ab", nil, http.MethodGet); rec.Code != http.StatusOK {
+	if rec := doFallback(fb, "/x9f2ab", nil, http.MethodGet); rec.Code != http.StatusOK {
 		t.Errorf("unknown path without Accept: status = %d, want 200", rec.Code)
 	}
 }
@@ -490,8 +514,8 @@ func masterKeyForTest() []byte {
 
 func serveProbe(t *testing.T, seed []byte, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
-	withDeployment(t, seed, "")
-	h, err := NewProbeHandler(masterKeyForTest(), make([]byte, 64))
+	fb := withDeployment(t, seed, "")
+	h, err := NewProbeHandler(masterKeyForTest(), make([]byte, 64), fb)
 	if err != nil {
 		panic(err)
 	}
@@ -580,23 +604,23 @@ func TestClientRequestShapes_Always200(t *testing.T) {
 func TestEndpointRoutingContract(t *testing.T) {
 	const probeStub = "/v3/probe-stub"
 
+	fb := withDeployment(t, seedOf(812), "")
+
 	mux := http.NewServeMux()
-	proxy := &ProxyHandler{} // 非 HTTP/2 请求会走 fallback，不解引用任何字段
+	proxy := &ProxyHandler{} // 非 HTTP/2 请求会走内置 fallback，不解引用任何字段
 	mux.Handle("/v3/tcp", proxy)
 	mux.Handle("/v3/udp", proxy)
 	mux.Handle("/v3/icmp", proxy)
 	mux.Handle(probeStub, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !r.ProtoAtLeast(2, 0) {
-			ServeFallback(w, r)
+			fb.Serve(w, r)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		ServeFallback(w, r)
+		fb.Serve(w, r)
 	})
-
-	withDeployment(t, seedOf(812), "")
 
 	// 每个端点都必须命中自己的 handler，而不是 "/" 的 fallback。
 	for _, endpoint := range []string{"/v3/tcp", "/v3/udp", "/v3/icmp", probeStub} {
@@ -629,9 +653,9 @@ func TestEndpointRoutingContract(t *testing.T) {
 
 // TestServeFallback_NotModified 覆盖条件请求矩阵。
 func TestServeFallback_NotModified(t *testing.T) {
-	withDeployment(t, seedOf(802), "")
+	fb := withDeployment(t, seedOf(802), "")
 
-	first := doFallback(seedOf(802), "/about", nil, http.MethodGet)
+	first := doFallback(fb, "/about", nil, http.MethodGet)
 	etag := first.Header().Get("ETag")
 	lastModified := first.Header().Get("Last-Modified")
 	lm, err := http.ParseTime(lastModified)
@@ -690,7 +714,7 @@ func TestServeFallback_NotModified(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := doFallback(seedOf(802), "/about", tt.headers, http.MethodGet)
+			rec := doFallback(fb, "/about", tt.headers, http.MethodGet)
 			if rec.Code != tt.want {
 				t.Errorf("status = %d, want %d", rec.Code, tt.want)
 			}
@@ -708,10 +732,10 @@ func TestServeFallback_NotModified(t *testing.T) {
 
 // TestServeFallback_Head 验证 HEAD 与 GET 报出相同的长度但无正文。
 func TestServeFallback_Head(t *testing.T) {
-	withDeployment(t, seedOf(803), "")
+	fb := withDeployment(t, seedOf(803), "")
 
-	get := doFallback(seedOf(803), "/services", nil, http.MethodGet)
-	head := doFallback(seedOf(803), "/services", nil, http.MethodHead)
+	get := doFallback(fb, "/services", nil, http.MethodGet)
+	head := doFallback(fb, "/services", nil, http.MethodHead)
 
 	if head.Header().Get("Content-Length") != get.Header().Get("Content-Length") {
 		t.Errorf("HEAD Content-Length = %q, GET = %q",
@@ -727,16 +751,16 @@ func TestServeFallback_Head(t *testing.T) {
 // TestServeFallback_ETagStablePerDeployment 验证同一路径的 ETag 在一个部署内
 // 稳定，跨部署变化。真实静态文件的 ETag 也具备这两个性质。
 func TestServeFallback_ETagStablePerDeployment(t *testing.T) {
-	withDeployment(t, seedOf(804), "")
-	first := doFallback(seedOf(804), "/about", nil, http.MethodGet).Header().Get("ETag")
-	second := doFallback(seedOf(804), "/about", nil, http.MethodGet).Header().Get("ETag")
+	fb := withDeployment(t, seedOf(804), "")
+	first := doFallback(fb, "/about", nil, http.MethodGet).Header().Get("ETag")
+	second := doFallback(fb, "/about", nil, http.MethodGet).Header().Get("ETag")
 	if first != second {
 		t.Errorf("ETag changed within a deployment: %q -> %q", first, second)
 	}
 
-	withDeployment(t, seedOf(805), "")
-	other := doFallback(seedOf(805), "/about", nil, http.MethodGet).Header().Get("ETag")
-	if other == first {
+	other := withDeployment(t, seedOf(805), "")
+	otherETag := doFallback(other, "/about", nil, http.MethodGet).Header().Get("ETag")
+	if otherETag == first {
 		t.Error("ETag identical across deployments")
 	}
 }
@@ -744,19 +768,18 @@ func TestServeFallback_ETagStablePerDeployment(t *testing.T) {
 // TestServeFallback_CustomModesUnchanged 验证目录/自定义模式的行为与状态码
 // 不受真实性层影响。
 func TestServeFallback_CustomModesUnchanged(t *testing.T) {
-	withDeployment(t, seedOf(806), "")
+	fb := withDeployment(t, seedOf(806), "")
 
 	dir := makeFallbackDir(t, map[string]string{
 		"index.html": "<h1>Home</h1>",
 		"404.html":   "<h1>Not Found</h1>",
 	})
-	if err := setFallbackDir(dir); err != nil {
+	if err := fb.setDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { fallbackPages = nil; fallback404 = nil })
 
 	browser := map[string]string{"Accept": "text/html"}
-	rec := doFallback(seedOf(806), "/does-not-exist", browser, http.MethodGet)
+	rec := doFallback(fb, "/does-not-exist", browser, http.MethodGet)
 	if rec.Code != http.StatusOK {
 		t.Errorf("dir mode status = %d, want 200 (unchanged)", rec.Code)
 	}
@@ -803,10 +826,10 @@ func TestThemesJSON_Structure(t *testing.T) {
 // renderAll 用给定种子渲染一组路径，返回 路径→字节。
 func renderAll(t *testing.T, seed []byte) map[string][]byte {
 	t.Helper()
-	withDeployment(t, seed, "")
+	fb := withDeployment(t, seed, "")
 	out := make(map[string][]byte)
 	for _, path := range []string{"/", "/about", "/services", "/blog", "/contact", "/random"} {
-		out[path] = renderPage(path)
+		out[path] = fb.renderPage(path)
 	}
 	return out
 }

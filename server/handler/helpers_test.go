@@ -12,6 +12,19 @@ import (
 	"github.com/nange/easyss/v3/shaper"
 )
 
+// newTestFallback 返回一个隔离的 fallback 实例：每个测试用自己的实例与缓存，
+// 因此不再需要重置任何包级状态。身份用固定种子派生，使同一测试内的多次渲染
+// 可复现。
+func newTestFallback(t *testing.T) *Fallback {
+	t.Helper()
+	fb, err := NewFallback(FallbackConfig{},
+		WithSeed([]byte("handler-test-seed")), WithTheme(""))
+	if err != nil {
+		t.Fatalf("NewFallback: %v", err)
+	}
+	return fb
+}
+
 func TestIsIPv6Target(t *testing.T) {
 	tests := []struct {
 		name   string

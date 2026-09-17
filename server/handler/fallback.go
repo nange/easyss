@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/nange/easyss/v3/stats"
 )
@@ -175,10 +174,10 @@ type renderData struct {
 // ---------------------------------------------------------------------------
 
 // renderPage 为一个路径渲染完整页面。随机源按 (种子, 路径) 域分离派生，
-// 因此同一路径总是得到同一页面（真实静态站的行为），htmlCache 溢出后
+// 因此同一路径总是得到同一页面（真实静态站的行为），cache 溢出后
 // 重算也得到同样的字节。
-func renderPage(path string) []byte {
-	dep := currentDeployment()
+func (fb *Fallback) renderPage(path string) []byte {
+	dep := fb.dep
 	pageType := detectPageType(path)
 	content := composeContent(dep, path, pageType)
 
@@ -335,11 +334,11 @@ func hexToken(seed [32]byte, purpose string) string {
 }
 
 // ---------------------------------------------------------------------------
-// 全局状态
+// Fallback：回退服务实例
 // ---------------------------------------------------------------------------
 
 // ctxKey 是一个未导出的 context 键类型，用于把客户端可见的原始 Host 和 scheme
-// 从 ServeFallback 传入反向代理的 ModifyResponse 钩子，从而可以把指向上游主机
+// 从 Serve 传入反向代理的 ModifyResponse 钩子，从而可以把指向上游主机
 // 的 Location 头重写回客户端可见的主机，而无需通过 X-Forwarded-Host 暴露上游。
 type ctxKey int
 
@@ -349,24 +348,102 @@ const (
 	ctxOrigAcceptEncoding
 )
 
+// Fallback 持有一次部署的全部回退状态：模式配置与部署级身份在构造完成后只读，
+// 因此可以并发服务请求；运行期唯一的可变状态是有界的生成页缓存（cacheMu 保护）。
+//
+// 每个实例拥有独立的身份与缓存，因此不再需要"配置必须发生在服务器接受请求之前"
+// 这类只写在注释里的顺序契约：顺序由 constructor → handler 的数据流表达。
+type Fallback struct {
+	dep *deployment // 部署级身份（主题、站点名、导航、Last-Modified），构造后只读
+
+	custom  []byte            // 单文件自定义回退 HTML
+	pages   map[string][]byte // 目录模式：URL 路径 → HTML 字节
+	page404 []byte            // 目录模式的可选 404 页面
+
+	proxy    *httputil.ReverseProxy // 反代模式；nil 表示未启用
+	cdnHosts map[string]bool        // 反代模式允许的 CDN 主机集合（小写）
+
+	cacheMu    sync.Mutex
+	cache      map[string][]byte // 路径 → 生成页字节（有界，见 maxCachedFallbackPages）
+	cacheCount int
+}
+
+// FallbackConfig 是回退目标配置。Target 的解释见 (*Fallback).SetTarget；
+// PreserveHost 与 CDNDomains 只在反向代理模式下生效。
+type FallbackConfig struct {
+	Target       string
+	PreserveHost bool
+	CDNDomains   []string
+}
+
+// fallbackOptions 保存构造期的身份注入值（测试用固定种子/主题）。
+type fallbackOptions struct {
+	seed  []byte
+	theme string
+}
+
+// FallbackOption 在构造部署级身份时注入固定值，使测试得到可复现的输出。
+type FallbackOption func(*fallbackOptions)
+
+// WithSeed 用固定种子构造部署身份；nil 表示使用 crypto/rand 随机种子。
+func WithSeed(seed []byte) FallbackOption {
+	return func(o *fallbackOptions) { o.seed = seed }
+}
+
+// WithTheme 固定主题名（必须存在于内嵌 themes.json；不存在时回退为随机选择）。
+func WithTheme(name string) FallbackOption {
+	return func(o *fallbackOptions) { o.theme = name }
+}
+
+// NewFallback 构造一个回退服务实例：先生成部署级身份，再按 cfg.Target 装配模式。
+// 配置失败时返回错误，且不会产生任何可见状态（所有写入都发生在尚未返回的实例上，
+// 因此不存在旧实现那种"入口先清空全局、解析失败留下部分改写"的中间态）。
+func NewFallback(cfg FallbackConfig, opts ...FallbackOption) (*Fallback, error) {
+	var o fallbackOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	fb := &Fallback{
+		dep:   newDeployment(fallbackVariant{Seed: o.seed, Theme: o.theme}),
+		cache: make(map[string][]byte),
+	}
+	if err := fb.SetTarget(cfg.Target, cfg.PreserveHost, cfg.CDNDomains); err != nil {
+		return nil, err
+	}
+	return fb, nil
+}
+
+// builtinFallbackPtr 是包级内置实例（延迟构造）。测试通过
+// setBuiltinFallbackForTest 注入固定种子的实例；生产路径它始终只由
+// builtinFallback 在 sync.Once 内写一次。
 var (
-	customFallback []byte
-	htmlCache      sync.Map // path string → []byte（路径到页面字节）
-	htmlCacheCount atomic.Int32
-
-	// 基于目录的多文件回退。
-	fallbackPages map[string][]byte // path → HTML 字节（如 "/about" → <html>...）
-	fallback404   []byte            // 可选的 404 页面
-
-	// 指向上游 HTTP 服务（如本地 nginx）的反向代理。
-	fallbackProxy *httputil.ReverseProxy
-
-	// /__cdn__/<host>/... 路径前缀路由所允许的 CDN 主机集合。
-	// 由 setFallbackProxy 根据 cdnDomains 配置填充。键为小写主机名；
-	// 仅当 "github.githubassets.com" 在该集合中时，对
-	// /__cdn__/github.githubassets.com/x 的请求才会被代理。
-	fallbackCDNHosts map[string]bool
+	builtinFallbackOnce sync.Once
+	builtinFallbackPtr  *Fallback
 )
+
+// builtinFallback 返回进程级的内置回退实例，供未注入 Fallback 的 handler
+// （例如零值 ProxyHandler）兜底使用。它保证一个进程内只诞生一次身份，
+// 与旧 currentDeployment() 的按需初始化语义一致。
+func builtinFallback() *Fallback {
+	builtinFallbackOnce.Do(func() {
+		if builtinFallbackPtr == nil {
+			fb, err := NewFallback(FallbackConfig{})
+			if err != nil {
+				// FallbackConfig{} 不会失败，除非内嵌资源损坏；这里不能静默降级。
+				panic(fmt.Sprintf("fallback builtin init: %v", err))
+			}
+			builtinFallbackPtr = fb
+		}
+	})
+	return builtinFallbackPtr
+}
+
+// setBuiltinFallbackForTest 用给定实例（或 nil，表示恢复自动构造）替换包级内置
+// 实例。它只供测试使用，且必须在没有并发调用 builtinFallback 时调用。
+func setBuiltinFallbackForTest(fb *Fallback) {
+	builtinFallbackOnce = sync.Once{}
+	builtinFallbackPtr = fb
+}
 
 const (
 	// maxCachedFallbackPages 限制生成页面的缓存规模。固定的关键字路径
@@ -383,25 +460,24 @@ const (
 	cdnPathPrefix = "/__cdn__/"
 )
 
-// setFallbackHTML 用自定义 HTML 覆盖内置的回退系统。
-// 必须在服务器开始接受请求之前调用。
-func setFallbackHTML(html []byte) {
+// setHTML 用自定义 HTML 覆盖内置的回退系统。空内容表示未启用该模式。
+func (fb *Fallback) setHTML(html []byte) {
 	if len(html) == 0 {
 		return
 	}
-	customFallback = make([]byte, len(html))
-	copy(customFallback, html)
+	fb.custom = make([]byte, len(html))
+	copy(fb.custom, html)
 }
 
-// setFallbackDir 把目录下所有 .html 文件加载为多路由回退页面。文件到路径的映射：
+// setDir 把目录下所有 .html 文件加载为多路由回退页面。文件到路径的映射：
 //   - index.html         → "/"
 //   - 404.html           → 未匹配的路径
 //   - <name>.html        → "/<name>"
 //   - <sub>/<name>.html  → "/<sub>/<name>"
 //   - <sub>/index.html   → "/<sub>"
 //
-// 非 .html 文件会被忽略。必须在服务器开始接受请求之前调用。
-func setFallbackDir(dir string) error {
+// 非 .html 文件会被忽略。仅应由构造路径调用（配置在构造后只读）。
+func (fb *Fallback) setDir(dir string) error {
 	pages := make(map[string][]byte)
 	var page404 []byte
 
@@ -453,33 +529,35 @@ func setFallbackDir(dir string) error {
 		return err
 	}
 
-	fallbackPages = pages
-	fallback404 = page404
+	fb.pages = pages
+	fb.page404 = page404
 	return nil
 }
 
-// SetFallbackTarget 解析单个回退目标字符串并配置相应的回退模式。目标字符串按如下解释：
+// SetTarget 解析单个回退目标字符串并配置相应的回退模式。目标字符串按如下解释：
 //   - ""                           → 内置的主题化自动生成页面
 //   - "http://..." / "https://..." → 指向上游 HTTP 服务的反向代理
-//   - 目录路径                       → 多文件 HTML 回退（setFallbackDir）
-//   - 普通文件路径                    → 单文件自定义 HTML（setFallbackHTML）
+//   - 目录路径                       → 多文件 HTML 回退（setDir）
+//   - 普通文件路径                    → 单文件自定义 HTML（setHTML）
 //
-// preserveHost 和 cdnDomains 只影响反向代理模式（见 setFallbackProxy）；
+// preserveHost 和 cdnDomains 只影响反向代理模式（见 setProxy）；
 // 在目录/文件/内置模式下会被忽略。
-func SetFallbackTarget(target string, preserveHost bool, cdnDomains []string) error {
-	// 重置所有回退状态。
-	fallbackProxy = nil
-	fallbackCDNHosts = nil
-	fallbackPages = nil
-	fallback404 = nil
-	customFallback = nil
+//
+// 每次调用都会先清空全部模式，因此新配置总是替换旧配置，而不是叠加。
+func (fb *Fallback) SetTarget(target string, preserveHost bool, cdnDomains []string) error {
+	// 重置所有回退模式。
+	fb.proxy = nil
+	fb.cdnHosts = nil
+	fb.pages = nil
+	fb.page404 = nil
+	fb.custom = nil
 
 	if target == "" {
 		return nil
 	}
 
 	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
-		return setFallbackProxy(target, preserveHost, cdnDomains)
+		return fb.setProxy(target, preserveHost, cdnDomains)
 	}
 
 	info, err := os.Stat(target)
@@ -488,28 +566,28 @@ func SetFallbackTarget(target string, preserveHost bool, cdnDomains []string) er
 	}
 
 	if info.IsDir() {
-		return setFallbackDir(target)
+		return fb.setDir(target)
 	}
 
 	data, err := os.ReadFile(target)
 	if err != nil {
 		return fmt.Errorf("read fallback target: %w", err)
 	}
-	setFallbackHTML(data)
+	fb.setHTML(data)
 	return nil
 }
 
-// ServeFallback 向响应写入一个回退 HTML 页面。
+// Serve 向响应写入一个回退页面。
 // 优先级（从高到低）：
-//  0. 指向上游 HTTP 服务的反向代理（setFallbackProxy）
-//  1. 基于目录的多文件回退（setFallbackDir）
-//  2. 单文件自定义回退（setFallbackHTML）
+//  0. 指向上游 HTTP 服务的反向代理（setProxy）
+//  1. 基于目录的多文件回退（setDir）
+//  2. 单文件自定义回退（setHTML）
 //  3. 自动生成的主题化页面
-func ServeFallback(w http.ResponseWriter, r *http.Request) {
+func (fb *Fallback) Serve(w http.ResponseWriter, r *http.Request) {
 	stats.RecordServerFallbackPage()
 
 	// 优先级 0（最高）：指向上游 HTTP 服务的反向代理。
-	if fallbackProxy != nil {
+	if fb.proxy != nil {
 		scheme := "http"
 		if r.TLS != nil {
 			scheme = "https"
@@ -520,7 +598,7 @@ func ServeFallback(w http.ResponseWriter, r *http.Request) {
 		ctx := context.WithValue(r2.Context(), ctxOrigHost, r2.Host)
 		ctx = context.WithValue(ctx, ctxOrigScheme, scheme)
 		ctx = context.WithValue(ctx, ctxOrigAcceptEncoding, r2.Header.Get("Accept-Encoding"))
-		fallbackProxy.ServeHTTP(w, r2.WithContext(ctx))
+		fb.proxy.ServeHTTP(w, r2.WithContext(ctx))
 		return
 	}
 
@@ -528,14 +606,14 @@ func ServeFallback(w http.ResponseWriter, r *http.Request) {
 
 	// 优先级 1：基于目录的多文件回退。这些页面完全由运营者提供，
 	// 因此状态码与缓存头保持原样（200 + 固定的 Content-Type）。
-	if len(fallbackPages) > 0 {
-		content, ok := fallbackPages[path]
+	if len(fb.pages) > 0 {
+		content, ok := fb.pages[path]
 		if !ok {
-			content = fallback404
+			content = fb.page404
 		}
 		if !ok && len(content) == 0 {
 			// 没有匹配的页面也没有 404.html——回退到 index。
-			content = fallbackPages["/"]
+			content = fb.pages["/"]
 		}
 		if len(content) > 0 {
 			writeRawFallback(w, content)
@@ -544,14 +622,14 @@ func ServeFallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 优先级 2：单文件自定义回退。
-	if len(customFallback) > 0 {
-		writeRawFallback(w, customFallback)
+	if len(fb.custom) > 0 {
+		writeRawFallback(w, fb.custom)
 		return
 	}
 
 	// 优先级 3：自动生成的主题化页面。这里走完整的 HTTP 真实性层：
 	// 未知路径返回 404，并补齐 ETag/Last-Modified/条件请求。
-	serveGeneratedPage(w, r, path)
+	fb.serveGeneratedPage(w, r, path)
 }
 
 // writeRawFallback 写出运营者提供的回退页面。保持此前的行为：
@@ -565,9 +643,9 @@ func writeRawFallback(w http.ResponseWriter, content []byte) {
 
 // serveGeneratedPage 服务自动生成的页面，并补齐真实静态站点会有的响应头与
 // 条件请求语义。
-func serveGeneratedPage(w http.ResponseWriter, r *http.Request, path string) {
-	body := getOrRenderHTML(path)
-	lastModified := currentDeployment().lastModified
+func (fb *Fallback) serveGeneratedPage(w http.ResponseWriter, r *http.Request, path string) {
+	body := fb.getOrRenderHTML(path)
+	lastModified := fb.dep.lastModified
 
 	if prepareFallbackResponse(w, r, body, lastModified, generatedStatus(r, path)) {
 		w.Write(body) //nolint:errcheck
@@ -593,17 +671,24 @@ func generatedStatus(r *http.Request, path string) int {
 }
 
 // getOrRenderHTML 返回路径对应的页面字节，命中缓存时直接复用。
-func getOrRenderHTML(path string) []byte {
+// 缓存有界：达到 maxCachedFallbackPages 后，新路径直接渲染而不入缓存。
+func (fb *Fallback) getOrRenderHTML(path string) []byte {
 	path = cleanPath(path)
-	if cached, ok := htmlCache.Load(path); ok {
-		return cached.([]byte)
-	}
 
-	html := renderPage(path)
-	if htmlCacheCount.Load() < maxCachedFallbackPages {
-		if _, loaded := htmlCache.LoadOrStore(path, html); !loaded {
-			htmlCacheCount.Add(1)
-		}
+	fb.cacheMu.Lock()
+	if cached, ok := fb.cache[path]; ok {
+		fb.cacheMu.Unlock()
+		return cached
+	}
+	fb.cacheMu.Unlock()
+
+	html := fb.renderPage(path)
+
+	fb.cacheMu.Lock()
+	defer fb.cacheMu.Unlock()
+	if _, ok := fb.cache[path]; !ok && fb.cacheCount < maxCachedFallbackPages {
+		fb.cache[path] = html
+		fb.cacheCount++
 	}
 	return html
 }

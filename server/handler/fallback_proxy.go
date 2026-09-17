@@ -22,14 +22,14 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-// setFallbackProxy 配置一个反向代理，把非代理请求转发给上游 HTTP 服务
+// setProxy 配置一个反向代理，把非代理请求转发给上游 HTTP 服务
 // （如本地 nginx）。一旦设置，它拥有高于所有其他回退模式的最高优先级。
 // 传入空字符串可禁用。
 //
 // 与 httputil.NewSingleHostReverseProxy 不同，这里使用 Rewrite + SetURL，
 // 使 req.Host 被设置为上游主机（有些上游——如 GitHub——在 Host 头不匹配时
 // 会 301 重定向到其规范主机）。ModifyResponse 钩子会把指向上游主机的
-// Location 头重写回客户端可见的主机（从请求上下文中读取，由 ServeFallback
+// Location 头重写回客户端可见的主机（从请求上下文中读取，由 (*Fallback).Serve
 // 注入），这样上游发出的 3xx 重定向不会让浏览器地址栏跳到上游。
 //
 // 如果 preserveHost 为 true，客户端可见的 Host 头会原样转发给上游
@@ -53,10 +53,10 @@ import (
 // "identity, gzip"，使上游可以对大响应进行压缩；gzip 的 HTML 会先解压以便
 // 重写，返回给客户端前再重新压缩。如果客户端不接受 gzip，向上游的请求
 // 只通告 "identity"，从而无需解压/再压缩。
-func setFallbackProxy(targetURL string, preserveHost bool, cdnDomains []string) error {
+func (fb *Fallback) setProxy(targetURL string, preserveHost bool, cdnDomains []string) error {
 	if targetURL == "" {
-		fallbackProxy = nil
-		fallbackCDNHosts = nil
+		fb.proxy = nil
+		fb.cdnHosts = nil
 		return nil
 	}
 	u, err := url.Parse(targetURL)
@@ -70,9 +70,9 @@ func setFallbackProxy(targetURL string, preserveHost bool, cdnDomains []string) 
 	for _, d := range cdnDomains {
 		cdnSet[strings.ToLower(strings.TrimSpace(d))] = true
 	}
-	fallbackCDNHosts = cdnSet
+	fb.cdnHosts = cdnSet
 
-	fallbackProxy = &httputil.ReverseProxy{
+	fb.proxy = &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			// 检查这是否是一个 CDN 路由请求（/__cdn__/<host>/...）。
 			if cdnTarget, ok := routeCDN(pr, cdnSet); ok {
@@ -106,14 +106,14 @@ func setFallbackProxy(targetURL string, preserveHost bool, cdnDomains []string) 
 			if cdnHost, ok := cdnHostFromRequest(resp.Request, cdnSet); ok {
 				effectiveHost = cdnHost
 			}
-			if err := rewriteLocationHeader(resp, effectiveHost); err != nil {
+			if err := rewriteLocationHeader(resp, effectiveHost, fb.cdnHosts); err != nil {
 				return err
 			}
 			rewriteSetCookieHeaders(resp, effectiveHost)
 			// 独立于正文重写处理 CSP 头，这样即使正文无法读取
 			// （如遇到 br 等不支持的 Content-Encoding），CSP 也总是被处理。
-			rewriteCSPHeader(resp, effectiveHost)
-			return rewriteResponseBody(resp, effectiveHost)
+			rewriteCSPHeader(resp, effectiveHost, fb.cdnHosts)
+			return rewriteResponseBody(resp, effectiveHost, fb.cdnHosts)
 		},
 	}
 	return nil
@@ -269,7 +269,7 @@ func rewriteRequestOriginReferrer(out *http.Request, clientHost string, upstream
 //  2. Location 指向已配置的 CDN 域 → 重写为 /__cdn__/<host>/<path>
 //
 // 相对路径的 Location（如 "/login"）以及指向其他主机的 Location 保持原样。
-func rewriteLocationHeader(resp *http.Response, targetHost string) error {
+func rewriteLocationHeader(resp *http.Response, targetHost string, cdnHosts map[string]bool) error {
 	loc := resp.Header.Get("Location")
 	if loc == "" {
 		return nil
@@ -305,7 +305,7 @@ func rewriteLocationHeader(resp *http.Response, targetHost string) error {
 	// 重写为 /__cdn__/<host>/<path>，使浏览器经由代理跟随重定向，
 	// 而不是直接访问 CDN。这可以处理类似 GitHub 的 /raw/ URL
 	// 重定向到 raw.githubusercontent.com 的情况。
-	if cdnHostMatches(locURL.Host, fallbackCDNHosts) {
+	if cdnHostMatches(locURL.Host, cdnHosts) {
 		cdnHost := locURL.Host
 		locURL.Scheme = origScheme
 		locURL.Host = origHost
@@ -547,7 +547,7 @@ func rewriteCDNInCSP(csp, origScheme, origHost string, cdnHosts map[string]bool)
 // 这确保即使响应正文无法读取（如 br 等不支持的 Content-Encoding）或不是
 // HTML，CSP 也总是被处理。否则，浏览器可能会拦截通过 /__cdn__/ 路径加载的
 // 子资源（CSS、JS、worker），因为 CSP 仍然引用原始的上游/CDN 主机。
-func rewriteCSPHeader(resp *http.Response, targetHost string) {
+func rewriteCSPHeader(resp *http.Response, targetHost string, cdnHosts map[string]bool) {
 	csp := resp.Header.Get("Content-Security-Policy")
 	if csp == "" {
 		return
@@ -563,7 +563,7 @@ func rewriteCSPHeader(resp *http.Response, targetHost string) {
 	}
 	origOrigin := origScheme + "://" + origHost
 	csp = rewriteCSP(csp, targetHost, origOrigin)
-	csp = rewriteCDNInCSP(csp, origScheme, origHost, fallbackCDNHosts)
+	csp = rewriteCDNInCSP(csp, origScheme, origHost, cdnHosts)
 	resp.Header.Set("Content-Security-Policy", csp)
 }
 
@@ -589,7 +589,7 @@ func isRewritableContentType(ct string) bool {
 // gzip 时）或 "identity"（否则），因此上游可能返回纯文本或 gzip 压缩内容；
 // gzip 会在重写前被透明解压。重写后，如果客户端接受 gzip，响应在返回前会
 // 用 gzip 重新压缩；否则以未压缩形式发送。
-func rewriteResponseBody(resp *http.Response, targetHost string) error {
+func rewriteResponseBody(resp *http.Response, targetHost string, cdnHosts map[string]bool) error {
 	// 只重写 HTML 响应。
 	ct := resp.Header.Get("Content-Type")
 	if !isRewritableContentType(ct) {
@@ -631,7 +631,7 @@ func rewriteResponseBody(resp *http.Response, targetHost string) error {
 		return nil
 	}
 
-	return rewriteBodyContent(resp, targetHost, body)
+	return rewriteBodyContent(resp, targetHost, body, cdnHosts)
 }
 
 // restoreFailedBody 恢复一个未能完整读取或解压的 body：保留实际获得的字节，
@@ -647,7 +647,7 @@ func restoreFailedBody(resp *http.Response, body []byte, err error) {
 
 // rewriteBodyContent 重写解码后正文中的上游绝对 URL 和 CDN 主机引用，
 // 然后在客户端接受 gzip 时重新压缩。
-func rewriteBodyContent(resp *http.Response, targetHost string, body []byte) error {
+func rewriteBodyContent(resp *http.Response, targetHost string, body []byte, cdnHosts map[string]bool) error {
 	// 从请求上下文获取客户端可见的主机/scheme。
 	ctx := resp.Request.Context()
 	origHost, _ := ctx.Value(ctxOrigHost).(string)
@@ -671,7 +671,7 @@ func rewriteBodyContent(resp *http.Response, targetHost string, body []byte) err
 	// 静态资源（CSS、JS、图片）的请求经由代理路由，而不是直连 CDN 主机。
 	// 这同时匹配配置的域本身和任意子域（如 "githubassets.com" 同时匹配
 	// "githubassets.com" 和 "github.githubassets.com"）。
-	replaced = rewriteCDNURLs(replaced, origOrigin, fallbackCDNHosts)
+	replaced = rewriteCDNURLs(replaced, origOrigin, cdnHosts)
 
 	// 注意：Content-Security-Policy 头的重写由 ModifyResponse 中的
 	// rewriteCSPHeader 独立处理，不在这里做，这样即使正文无法读取，
