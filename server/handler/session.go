@@ -107,9 +107,9 @@ func lanHostOf(addr string) string {
 }
 
 // rejectLANConn 当 conn 的远端地址是 LAN/私网 IP 时关闭它并返回拒绝错误。
-// 它是 TCP/UDP/ICMP handler 共享的拨号后 SSRF 防护：握手阶段已校验目标，
-// 但拨号会重新解析域名目标，因此 DNS 重绑定（DNS-rebinding）的域名在这里
-// 可能解析到 LAN 主机。在发送任何数据之前拒绝该连接。
+// 它现在是纵深防御的断言：拨号前已经用同一次解析的结果校验过候选地址，
+// 所有出站连接都只拨那些字面地址，因此正常情况下不会触发。保留它是因为
+// 成本为零，且能兜住未来新增的、绕过 dialOutbound 的拨号路径。
 func rejectLANConn(conn net.Conn) error {
 	if ra := conn.RemoteAddr(); ra != nil {
 		if host := lanHostOf(ra.String()); util.IsLANIP(host) {
@@ -121,18 +121,21 @@ func rejectLANConn(conn net.Conn) error {
 }
 
 // ---------------------------------------------------------------------------
-// 出站地址族偏好
+// 出站地址校验与地址族偏好
 // ---------------------------------------------------------------------------
 
-// lookupNetIP 解析域名的指定地址族（"ip4"/"ip6"）地址；测试替换它以注入
-// 确定性的解析结果，使拨号不依赖真实 DNS。
-var lookupNetIP = net.DefaultResolver.LookupNetIP
+// resolveHost 是全包唯一的域名解析入口；测试替换它以注入确定性的解析结果，
+// 使 SSRF 校验与拨号都不依赖真实 DNS。
+var resolveHost = util.ResolveHostIPs
 
-// dialCtxKey 是未导出的 context 键类型，把"客户端接入服务端所用的地址族"
-// 从 ServeHTTP 传到各 handler 的拨号路径。
+// dialCtxKey 是未导出的 context 键类型，把「客户端接入服务端所用的地址族」与
+// 「握手阶段解析并校验过的目标地址」从 ServeHTTP 传到各 handler 的拨号路径。
 type dialCtxKey int
 
-const ctxPreferredFamily dialCtxKey = iota
+const (
+	ctxPreferredFamily dialCtxKey = iota
+	ctxResolvedAddrs
+)
 
 // withPreferredFamily 返回携带出站地址族偏好的 context；addr 为零值时原样返回
 // （无偏好 = 由系统按 RFC 6724 排序）。
@@ -149,6 +152,21 @@ func preferredFamily(ctx context.Context) (netip.Addr, bool) {
 	return addr, ok && addr.IsValid()
 }
 
+// withResolvedAddrs 返回携带「握手阶段已解析并校验过的目标地址」的 context。
+// 拨号路径优先复用它们，因此一次流只解析一次：检查与连接用的是同一批地址。
+func withResolvedAddrs(ctx context.Context, addrs []netip.Addr) context.Context {
+	if len(addrs) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxResolvedAddrs, addrs)
+}
+
+// resolvedAddrs 取出已校验的目标地址，ok 为 false 表示 ctx 中没有（需要自行解析）。
+func resolvedAddrs(ctx context.Context) ([]netip.Addr, bool) {
+	addrs, ok := ctx.Value(ctxResolvedAddrs).([]netip.Addr)
+	return addrs, ok && len(addrs) > 0
+}
+
 // clientPreferredFamily 从客户端到服务端的远端地址推导其接入地址族。
 // IPv4-mapped 形式（::ffff:a.b.c.d）折叠为 IPv4；无法解析时返回零值（无偏好）。
 func clientPreferredFamily(remoteAddr string) netip.Addr {
@@ -159,30 +177,44 @@ func clientPreferredFamily(remoteAddr string) netip.Addr {
 	return ap.Addr().Unmap()
 }
 
-// preferredTarget 把 host:port 中的域名解析为 prefer 所属族的地址，返回
-// "ip:port"。字面 IP 目标（族已由目标自身决定）、无端口、无偏好、解析失败或
-// 该族没有地址时返回空串，调用方随即退回目标原文——因此这只是偏好而非过滤，
-// 目标只有另一族时依旧可连。
-func preferredTarget(ctx context.Context, target string, prefer netip.Addr) string {
-	if !prefer.IsValid() {
-		return ""
+// preferredFirst 返回按族偏好重排后的候选：prefer 所属族的地址在前，其余保持
+// 解析器给出的原序（RFC 6724 已经做了合理的排序，这里只调整族的优先级）。
+// 它不修改入参（ctx 里的切片是共享的），且只是偏好而非过滤：目标只有另一族时
+// 依旧可连。
+func preferredFirst(addrs []netip.Addr, prefer netip.Addr) []netip.Addr {
+	if !prefer.IsValid() || len(addrs) < 2 {
+		return addrs
 	}
-	host, port, err := net.SplitHostPort(target)
-	if err != nil {
-		return ""
+	preferred := make([]netip.Addr, 0, len(addrs))
+	rest := make([]netip.Addr, 0, len(addrs))
+	for _, addr := range addrs {
+		if addr.Is4() == prefer.Is4() {
+			preferred = append(preferred, addr)
+			continue
+		}
+		rest = append(rest, addr)
 	}
-	if _, err := netip.ParseAddr(host); err == nil {
-		return ""
+	return append(preferred, rest...)
+}
+
+// dialCandidates 返回可拨号的字面地址，并按客户端地址族偏好排序。它优先复用
+// 握手阶段已解析并校验过的地址（这一次流不再查 DNS），没有时才自行解析。
+// 任一候选为 LAN/私网/保留地址时拒绝整个目标：SSRF 校验与实际连接共用同一
+// 批地址，DNS-rebinding 没有在检查与连接之间翻转答案的窗口。
+func dialCandidates(ctx context.Context, target string) ([]netip.Addr, error) {
+	addrs, ok := resolvedAddrs(ctx)
+	if !ok {
+		var err error
+		addrs, err = resolveHost(ctx, target)
+		if err != nil {
+			return nil, err
+		}
 	}
-	family := "ip6"
-	if prefer.Is4() {
-		family = "ip4"
+	if lan := util.FirstLANAddr(addrs); lan.IsValid() {
+		return nil, fmt.Errorf("ssrf: rejected lan destination %s (target %s)", lan, target)
 	}
-	ips, err := lookupNetIP(ctx, family, host)
-	if err != nil || len(ips) == 0 {
-		return ""
-	}
-	return net.JoinHostPort(ips[0].Unmap().String(), port)
+	prefer, _ := preferredFamily(ctx)
+	return preferredFirst(addrs, prefer), nil
 }
 
 // errClientGone 表示拨号期间客户端已经离开（请求 context 已失效）。它是显式
@@ -191,27 +223,41 @@ func preferredTarget(ctx context.Context, target string, prefer netip.Addr) stri
 // 拨号故障混在一起（见 isTransientStreamError）。
 var errClientGone = errors.New("client gone")
 
-// dialOutbound 打开一个出站连接。域名目标先拨客户端所属族的地址（VPS 上系统
-// 往往先试 IPv6），该族不可用时退回目标原文、由系统重新解析并做双栈回退。
-// 拨号本身由 d.Timeout 限定。
-func dialOutbound(ctx context.Context, d *net.Dialer, network, target string) (net.Conn, error) {
-	prefer, _ := preferredFamily(ctx)
+// dialAddr 把候选地址拼成拨号用的目标：端口字符串原样沿用（不做服务名重解析），
+// 无端口的目标（ICMP）拨裸 IP——给原始套接字的目标带上端口会让 net.Dial 失败。
+func dialAddr(addr netip.Addr, target string) string {
+	_, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return addr.String()
+	}
+	return net.JoinHostPort(addr.String(), port)
+}
 
-	if resolved := preferredTarget(ctx, target, prefer); resolved != "" {
-		conn, err := d.DialContext(ctx, network, resolved)
+// dialAddrs 逐个拨给定的字面地址。拨号本身由 d.Timeout 限定；全部候选失败时
+// 返回最后一个错误，客户端中途离开则返回 errClientGone。
+func dialAddrs(ctx context.Context, d *net.Dialer, network, target string, addrs []netip.Addr) (net.Conn, error) {
+	var lastErr error
+	for _, addr := range addrs {
+		conn, err := d.DialContext(ctx, network, dialAddr(addr, target))
 		if err == nil {
 			return conn, nil
 		}
+		lastErr = err
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("%w: %v", errClientGone, err)
 		}
 	}
+	return nil, lastErr
+}
 
-	conn, err := d.DialContext(ctx, network, target)
-	if err != nil && ctx.Err() != nil {
-		return nil, fmt.Errorf("%w: %v", errClientGone, err)
+// dialOutbound 解析并校验目标（域名只解析一次，优先复用握手结果），然后只拨
+// 校验过的字面地址。目标原文永远不会传给拨号器，避免产生第二次、未校验的解析。
+func dialOutbound(ctx context.Context, d *net.Dialer, network, target string) (net.Conn, error) {
+	addrs, err := dialCandidates(ctx, target)
+	if err != nil {
+		return nil, err
 	}
-	return conn, err
+	return dialAddrs(ctx, d, network, target, addrs)
 }
 
 // outboundDialer 返回直接出站拨号器；keepAlive 为 0 表示系统默认
@@ -222,7 +268,8 @@ func outboundDialer(timeout, keepAlive time.Duration) *net.Dialer {
 }
 
 // dialer 是 TCP/UDP/ICMP handler 共享的出站拨号组件：
-// next-proxy 路由（带 SSRF 预检查）以及带拨号后 SSRF 防护的直接拨号。
+// next-proxy 路由（带尽力而为的 SSRF 预检查，见 dialTarget）以及只拨校验过的
+// 字面地址的直接拨号（带拨号后的纵深防御断言）。
 type dialer struct {
 	nextProxy *nextproxy.NextProxy
 	// shouldProxy 决定 target 是否经由 next proxy 转发。只有当 nextProxy 非 nil
@@ -238,12 +285,22 @@ type dialer struct {
 // 其 RemoteAddr() 为 nil。
 func (d *dialer) dialTarget(ctx context.Context, network, target string) (net.Conn, string, error) {
 	if d.nextProxy != nil && d.shouldProxy(target) {
-		// 在拨号时重新执行 SSRF 检查：握手时的检查可能已经过去很久，
-		// 而 DNS 重绑定域名现在可能解析出不同的结果。下面的拨号后检查
-		// 无法在此路径上执行——SOCKS5 连接报告的是代理的地址而不是目标的——
-		// 因此代理自身的解析器仍是（可信的、管理员配置的）残余风险。
-		if util.IsLANHostResolved(ctx, target) {
-			return nil, "", fmt.Errorf("ssrf: rejected lan destination %s", target)
+		// 这条路径**有意**保持「把域名交给上游代理解析」的语义，因此 SSRF 检查
+		// 与实际连接是两次不同的解析：代理是管理员配置的可信组件，其自身解析器
+		// 是明确接受的残余风险（而不是遗漏）。这里的检查只是尽力而为的早退，
+		// 并复用握手阶段的解析结果；解析失败时放行（让代理去解析），因为被墙/
+		// 仅代理侧可解析的域名正是 next proxy 的用途之一。要彻底关掉这个窗口，
+		// 需要改成把服务端解析并校验过的字面 IP 交给代理——那会牺牲上述场景，
+		// 因此没有默认启用。
+		addrs, ok := resolvedAddrs(ctx)
+		if !ok {
+			var err error
+			if addrs, err = resolveHost(ctx, target); err != nil {
+				log.Debug("[HANDLE] next proxy target resolve failed, handing the name to the proxy", "target", target, "err", err)
+			}
+		}
+		if lan := util.FirstLANAddr(addrs); lan.IsValid() {
+			return nil, "", fmt.Errorf("ssrf: rejected lan destination %s (target %s)", lan, target)
 		}
 		// 地址族刻意不下推到这一层：这里连的是上游 SOCKS5 代理而不是目标，
 		// 把客户端的地址族套到代理地址上只会让上游不可达。

@@ -2,9 +2,11 @@ package util
 
 import (
 	"context"
+	"net/netip"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIP(t *testing.T) {
@@ -241,26 +243,79 @@ func TestIsLANHost(t *testing.T) {
 	}
 }
 
-func TestIsLANHostResolved(t *testing.T) {
+// TestResolveHostIPs 固定解析契约：字面 IP 不查 DNS 且保留 zone，域名返回全部
+// 地址并折叠 IPv4-mapped，解析失败返回错误（而不是旧的「失败即放行」）。
+func TestResolveHostIPs(t *testing.T) {
 	ctx := context.Background()
 
-	// 字面 LAN IP 会被快速路径拦截（不发起 DNS 查询）。
-	assert.True(t, IsLANHostResolved(ctx, "127.0.0.1:8080"))
-	assert.True(t, IsLANHostResolved(ctx, "10.0.0.1"))
-	assert.True(t, IsLANHostResolved(ctx, "[::1]:80"))
+	t.Run("字面 IP 不发起解析", func(t *testing.T) {
+		for _, tt := range []struct{ addr, want string }{
+			{"127.0.0.1:8080", "127.0.0.1"},
+			{"10.0.0.1", "10.0.0.1"},
+			{"[::1]:80", "::1"},
+			{"8.8.8.8:53", "8.8.8.8"},
+			{"[fe80::1%eth0]:443", "fe80::1%eth0"},
+		} {
+			addrs, err := ResolveHostIPs(ctx, tt.addr)
+			require.NoError(t, err)
+			require.Len(t, addrs, 1, "literal %s should yield exactly one address", tt.addr)
+			assert.Equal(t, tt.want, addrs[0].String())
+		}
+	})
 
-	// 字面公网 IP 会被快速路径直接放行（返回 false）。
-	assert.False(t, IsLANHostResolved(ctx, "8.8.8.8:53"))
-	assert.False(t, IsLANHostResolved(ctx, "1.1.1.1"))
+	t.Run("域名解析到 LAN", func(t *testing.T) {
+		// "localhost" 通过 hosts 文件解析，不依赖外部网络。
+		addrs, err := ResolveHostIPs(ctx, "localhost:80")
+		require.NoError(t, err)
+		assert.True(t, FirstLANAddr(addrs).IsValid(), "localhost should resolve to a LAN address: %v", addrs)
+	})
 
-	// "localhost"（通过 hosts 文件解析，不依赖外部网络）解析为
-	// 环回地址，因此指向 LAN 的域名现在会被拒绝（判定为 LAN）。
-	assert.True(t, IsLANHostResolved(ctx, "localhost:80"))
-	assert.True(t, IsLANHostResolved(ctx, "localhost"))
+	t.Run("解析失败返回错误", func(t *testing.T) {
+		for _, addr := range []string{"", "invalid:0", "no-such-host-for-easyss-test.invalid:80"} {
+			if _, err := ResolveHostIPs(ctx, addr); err == nil {
+				t.Errorf("ResolveHostIPs(%q) returned no error", addr)
+			}
+		}
+	})
 
-	// 空 / 无效输入永远不会被判定为 LAN。
-	assert.False(t, IsLANHostResolved(ctx, ""))
-	assert.False(t, IsLANHostResolved(ctx, "invalid:0"))
+	t.Run("ctx 已取消", func(t *testing.T) {
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		if _, err := ResolveHostIPs(canceled, "example.com:443"); err == nil {
+			t.Error("a canceled context should fail the resolution")
+		}
+	})
+}
+
+// TestFirstLANAddr 覆盖「任一路径为 LAN 即拒绝」的判定，包括带 zone 的链路本地
+// 地址（net.ParseIP 无法解析带 zone 的地址，必须先剥掉否则会漏判）。
+func TestFirstLANAddr(t *testing.T) {
+	tests := []struct {
+		name string
+		ips  []string
+		want string
+	}{
+		{name: "全部公网", ips: []string{"8.8.8.8", "2606:4700:4700::1111"}, want: ""},
+		{name: "混合时命中私网", ips: []string{"8.8.8.8", "10.0.0.1"}, want: "10.0.0.1"},
+		{name: "回环", ips: []string{"127.0.0.1"}, want: "127.0.0.1"},
+		{name: "链路本地带 zone", ips: []string{"fe80::1%eth0"}, want: "fe80::1%eth0"},
+		{name: "空列表", ips: nil, want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			addrs := make([]netip.Addr, 0, len(tt.ips))
+			for _, ip := range tt.ips {
+				addrs = append(addrs, netip.MustParseAddr(ip))
+			}
+			got := FirstLANAddr(addrs)
+			if tt.want == "" {
+				assert.False(t, got.IsValid(), "FirstLANAddr(%v) = %v, want the zero value", tt.ips, got)
+				return
+			}
+			assert.Equal(t, tt.want, got.String())
+		})
+	}
 }
 
 func TestMapKeys(t *testing.T) {
