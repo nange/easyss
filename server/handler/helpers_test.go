@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -36,6 +37,62 @@ func TestIsIPv6Target(t *testing.T) {
 				t.Errorf("isIPv6Target(%q) = %v, want %v", tt.target, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestClientPreferredFamily 固定"客户端到服务端的地址族"推导：只有能确定
+// 客户端用哪个族接入时才会有偏好，IPv4-mapped 形式折叠为 IPv4
+// （v4 客户端经双栈监听接入时 Go 报告的就是这种形式）。
+func TestClientPreferredFamily(t *testing.T) {
+	tests := []struct {
+		name       string
+		remoteAddr string
+		want       string
+	}{
+		{"ipv4", "1.2.3.4:5678", "1.2.3.4"},
+		{"ipv6", "[2606:50c0:8002::154]:443", "2606:50c0:8002::154"},
+		{"ipv4-mapped folds to ipv4", "[::ffff:1.2.3.4]:443", "1.2.3.4"},
+		{"loopback ipv4", "127.0.0.1:1234", "127.0.0.1"},
+		{"no port", "1.2.3.4", ""},
+		{"garbage", "not-an-address", ""},
+		{"empty", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := clientPreferredFamily(tt.remoteAddr)
+			if tt.want == "" {
+				if got.IsValid() {
+					t.Fatalf("clientPreferredFamily(%q) = %v, want the zero value", tt.remoteAddr, got)
+				}
+				return
+			}
+			if got.String() != tt.want {
+				t.Fatalf("clientPreferredFamily(%q) = %v, want %v", tt.remoteAddr, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPreferredFamilyContext 覆盖族提示在 context 中的往返：零值不写入，
+// 没有提示的 context 读出无偏好，使拨号退化为系统默认排序。
+func TestPreferredFamilyContext(t *testing.T) {
+	if _, ok := preferredFamily(t.Context()); ok {
+		t.Fatal("a bare context should report no preference")
+	}
+	if got := preferredTarget(t.Context(), "example.com:443", netip.Addr{}); got != "" {
+		t.Fatalf("preferredTarget without a preference = %q, want no rewrite", got)
+	}
+
+	want := netip.MustParseAddr("93.184.216.34")
+	ctx := withPreferredFamily(t.Context(), want)
+	got, ok := preferredFamily(ctx)
+	if !ok || got != want {
+		t.Fatalf("preferredFamily = (%v, %v), want (%v, true)", got, ok, want)
+	}
+
+	if got := withPreferredFamily(t.Context(), netip.Addr{}); got.Value(ctxPreferredFamily) != nil {
+		t.Fatal("an invalid address must not be stored as a preference")
 	}
 }
 
@@ -138,30 +195,16 @@ func TestNewProxyHandler(t *testing.T) {
 	})
 }
 
-// TestTCPDialerOptions 固定了基础超时到直连拨号器参数的映射：Timeout 经由
-// config.DialTimeout（base/3，限制在 [3s, 15s]）派生，而 KeepAlive 保留完整的基础超时，
-// 使长连接流由内核回收而不是半开地悬留。拨号器本身现在是在拨号闭包内惰性构建的，
-// 因此该映射只有在这里仍然可观测。
-func TestTCPDialerOptions(t *testing.T) {
-	tests := []struct {
-		name            string
-		timeout         time.Duration
-		wantDialTimeout time.Duration
-	}{
-		{"默认值 30s", 30 * time.Second, 10 * time.Second},
-		{"最小值保底", 5 * time.Second, 3 * time.Second},
-		{"最大值封顶", 120 * time.Second, 15 * time.Second},
+// TestOutboundDialer 固定直连拨号器的参数：Timeout 必须显式设置，否则
+// dialOutbound（它自己不设截止时间）会在 SYN 黑洞上一直挂着；KeepAlive 保留
+// 完整的基础超时，使长连接流由内核回收而不是半开地悬留。
+func TestOutboundDialer(t *testing.T) {
+	d := outboundDialer(10*time.Second, 30*time.Second)
+	if d.Timeout != 10*time.Second {
+		t.Errorf("Timeout = %v, want 10s", d.Timeout)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dialTimeout, keepAlive := tcpDialerOptions(tt.timeout)
-			if dialTimeout != tt.wantDialTimeout {
-				t.Errorf("dialTimeout = %v, want %v", dialTimeout, tt.wantDialTimeout)
-			}
-			if keepAlive != tt.timeout {
-				t.Errorf("keepAlive = %v, want the base timeout %v", keepAlive, tt.timeout)
-			}
-		})
+	if d.KeepAlive != 30*time.Second {
+		t.Errorf("KeepAlive = %v, want the base timeout 30s", d.KeepAlive)
 	}
 }
 
@@ -175,11 +218,12 @@ func TestNewTCPHandler(t *testing.T) {
 	}
 }
 
-// TestTCPHandlerDialTarget 覆盖 TCP handler 共享的拨号部分：直连拨号根据目标字面量
-// 解析网络，拨号后的 SSRF 防护会拒绝 LAN 远端地址。拨号超时和 keepalive 都无法从
-// 已建立的连接上观测到，因此基础超时的映射由 TestTCPDialerOptions 覆盖。
+// TestTCPHandlerDialTarget 覆盖 TCP handler 共享的拨号部分：直连拨号把网络名
+// 与目标原样下传（地址族由 dialOutbound 决定），拨号后的 SSRF 防护会拒绝 LAN
+// 远端地址。拨号超时和 keepalive 都无法从已建立的连接上观测到，因此它们由
+// TestOutboundDialer 覆盖。
 func TestTCPHandlerDialTarget(t *testing.T) {
-	t.Run("按目标字面量选择网络", func(t *testing.T) {
+	t.Run("网络名与目标原样下传", func(t *testing.T) {
 		h := newTCPHandler(120*time.Second, 30*time.Second, nil)
 		var gotNetwork, gotTarget string
 		h.dialContext = func(_ context.Context, network, target string) (net.Conn, error) {
@@ -230,7 +274,7 @@ func TestNewICMPHandler(t *testing.T) {
 	if h == nil {
 		t.Fatal("newICMPHandler returned nil")
 	}
-	if h.dial.nextProxy != nil || h.dial.useProxy != nil {
+	if h.dial.nextProxy != nil || h.dial.shouldProxy != nil {
 		t.Error("ICMP must not route through a next proxy")
 	}
 }

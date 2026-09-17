@@ -26,18 +26,10 @@ type tcpHandler struct {
 	dial        dialer
 }
 
-// tcpDialerOptions 返回直接拨号 net.Dialer 的参数：
-// dialTimeout 通过 config.DialTimeout 派生（base/3，限制在 [3s, 15s]），
-// keepAlive 取完整的基础超时，这样长连接流由内核回收，
-// 而不会在对端消失后一直半开残留。拨号器在 dial 闭包内惰性构建，
-// 因此这里是唯一可以断言该映射关系的地方。
-func tcpDialerOptions(timeout time.Duration) (dialTimeout, keepAlive time.Duration) {
-	return config.DialTimeout(timeout), timeout
-}
-
 // newTCPHandler 用给定的空闲超时和基础超时创建 tcpHandler。
-// 拨号超时通过 config.DialTimeout 派生（base/3，限制在 [3s, 15s]），
-// 与客户端共用。
+// 拨号超时通过 config.DialTimeout 派生（base/3，限制在 [3s, 15s]），与客户端
+// 共用；KeepAlive 取完整的基础超时，这样长连接流由内核回收，而不会在对端
+// 消失后一直半开残留。
 func newTCPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) *tcpHandler {
 	if idleTimeout <= 0 {
 		idleTimeout = config.DefaultStreamIdleTimeout
@@ -45,35 +37,20 @@ func newTCPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) 
 	if timeout <= 0 {
 		timeout = time.Duration(config.DefaultTimeout) * time.Second
 	}
-	dialTimeout, keepAlive := tcpDialerOptions(timeout)
+	directDialer := outboundDialer(config.DialTimeout(timeout), timeout)
 	h := &tcpHandler{idleTimeout: idleTimeout}
 	h.dial = dialer{
-		nextProxy: np,
-		useProxy:  np.ShouldProxy,
-		dial: func(ctx context.Context, _ string, target string) (net.Conn, error) {
+		nextProxy:   np,
+		shouldProxy: np.ShouldProxy,
+		direct: func(ctx context.Context, network, target string) (net.Conn, error) {
+			// 测试注入点：生产环境为 nil。
 			if h.dialContext != nil {
-				return h.dialContext(ctx, "tcp", target)
+				return h.dialContext(ctx, network, target)
 			}
-			d := &net.Dialer{Timeout: dialTimeout, KeepAlive: keepAlive}
-			return d.DialContext(ctx, outboundTCPNetwork(target), target)
+			return dialOutbound(ctx, directDialer, network, target)
 		},
 	}
 	return h
-}
-
-func outboundTCPNetwork(addr string) string {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return "tcp"
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return "tcp"
-	}
-	if ip.To4() == nil {
-		return "tcp6"
-	}
-	return "tcp4"
 }
 
 // Handle 在客户端与目标之间中继 TCP 流。
@@ -104,14 +81,20 @@ func (h *tcpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 		func(signal func()) error { return h.copyFromClient(dr, targetConn, signal) },
 		func(signal func()) error { return h.copyFromTarget(targetConn, s2c, signal, m) },
 	)
-	// 以 INFO 级别记录流的最终结果（中继字节数和退出原因），
-	// 这样排查被屏蔽主机时，连接已建立但后来停滞、被重置或没有任何数据的
-	// 目标可以直接可见。
-	attrs := []any{"target", target, "remote", remote, "bytes", m.Bytes(), "timed_out", result.TimedOut}
+	// 记录流的最终结果（中继字节数和退出原因），这样排查被屏蔽主机时，
+	// 连接已建立但后来停滞、被重置或没有任何数据的目标可以直接可见。
+	// 客户端正常拆除（RST_STREAM/CANCEL、请求体已被关闭）会命中每个流，
+	// 因此这类结果降到 Debug；真正的故障保持 Info。
+	transient := isTransientStreamError(result.Err)
+	attrs := []any{"target", target, "remote", remote, "bytes", m.Bytes(), "timed_out", result.TimedOut, "transient", transient}
 	if result.Err != nil {
 		attrs = append(attrs, "err", result.Err.Error())
 	}
-	log.Info("[TCP_HANDLE] stream closed", attrs...)
+	if transient {
+		log.Debug("[TCP_HANDLE] stream closed", attrs...)
+	} else {
+		log.Info("[TCP_HANDLE] stream closed", attrs...)
+	}
 	if result.TimedOut {
 		log.Debug("[TCP_HANDLE] idle timeout", "target", target, "timeout", h.idleTimeout)
 		sendRST(s2c)
