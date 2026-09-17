@@ -160,10 +160,10 @@ func newUDPSession(cfg udpSessionConfig) *udpSession {
 }
 
 // udpDatagram 是读取 goroutine 回传给主 goroutine 的一个目标侧数据报。
-// dnsMsg 非空表示该数据报已被识别为 DNS 应答（只解析一次）。
+// 它只携带原始载荷：DNS 解析由主 goroutine 按学习状态门控（见 maybeDNS），
+// 读取侧因此不对普通中继流量（QUIC 等）做任何解析。
 type udpDatagram struct {
 	payload []byte
-	dnsMsg  *dns.Msg
 	err     error
 }
 
@@ -211,7 +211,12 @@ func (s *udpSession) run() (out streamResult) {
 				return streamResult{Err: res.err}
 			}
 			s.transferred += int64(len(res.payload))
-			s.learnFromDNS(res)
+			// 门控解析：只有确实发出过 DNS 查询的会话才尝试 Unpack 应答。
+			// UDP 中继的主力是 QUIC 这类非 DNS 流量，对每个数据报做一次
+			// Unpack 是纯粹的浪费（约 350ns/240B/4 allocs，随总吞吐线性放大）。
+			if s.dns.intercept {
+				s.learnFromDNS(res.payload)
+			}
 			if err := s.s2c.PushFrame(protocol.NewFrameDATAGRAM(res.payload)); err != nil {
 				return streamResult{Err: err}
 			}
@@ -321,7 +326,7 @@ func (s *udpSession) readFromTarget() {
 			return
 		}
 		payload := append([]byte(nil), buf[:n]...)
-		if !s.sendResult(udpDatagram{payload: payload, dnsMsg: s.maybeDNS(payload)}) {
+		if !s.sendResult(udpDatagram{payload: payload}) {
 			return
 		}
 	}
@@ -358,10 +363,11 @@ func (s *udpSession) targetReadError(err error) error {
 	return err
 }
 
-// maybeDNS 解析一个疑似 DNS 报文；不是 DNS 应答时返回 nil。解析只在这里
-// 发生，主 goroutine 复用同一份 *dns.Msg 做学习判定。
+// maybeDNS 解析一个疑似 DNS 应答；不是 DNS 应答时返回 nil。它只由主
+// goroutine 调用，且调用点已用学习状态门控，因此普通中继流量（QUIC 等）
+// 不会被解析，`*dns.Msg` 也不会跨 goroutine 传递。
 func (s *udpSession) maybeDNS(payload []byte) *dns.Msg {
-	if s.nextProxy == nil || len(payload) == 0 {
+	if len(payload) == 0 {
 		return nil
 	}
 	msg := &dns.Msg{}
@@ -392,16 +398,25 @@ func (s *udpSession) detectDNSQuery(f protocol.Frame) {
 }
 
 // learnFromDNS 用指向自定义域名的 DNS 应答喂给 next proxy 的动态路由表
-// （CNAME 目标与解析出的 IP）。只有会话确实发出过 DNS 查询时才学习。
-func (s *udpSession) learnFromDNS(res udpDatagram) {
-	if !s.dns.intercept || s.nextProxy == nil || res.dnsMsg == nil {
+// （CNAME 目标与解析出的 IP）。
+//
+// 它自带双门控，因为调用点（主循环的目标侧分支）是每个数据报都会经过的
+// 热路径：nextProxy 未配置、或会话从未观察到 DNS 查询时直接返回，普通中继
+// 流量（QUIC 等）因此不会被解析。intercept 是主 goroutine 私有状态，读取侧
+// 不参与该判定。
+func (s *udpSession) learnFromDNS(payload []byte) {
+	if s.nextProxy == nil || !s.dns.intercept {
 		return
 	}
-	domain := strings.TrimSuffix(res.dnsMsg.Question[0].Name, ".")
+	msg := s.maybeDNS(payload)
+	if msg == nil {
+		return
+	}
+	domain := strings.TrimSuffix(msg.Question[0].Name, ".")
 	if !s.nextProxy.IsCustomDomain(domain) {
 		return
 	}
-	util.ForEachDNSAnswer(res.dnsMsg, func(kind, value string) {
+	util.ForEachDNSAnswer(msg, func(kind, value string) {
 		if kind == "CNAME" {
 			s.nextProxy.AddDomain(value)
 			return

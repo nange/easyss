@@ -282,7 +282,8 @@ func (c *errorConn) SetWriteDeadline(time.Time) error { return nil }
 // TestUDPSessionLearnsDNSAnswers 固定 UDP 上的动态路由学习：会话看到指向
 // 自定义域名的 DNS 查询后，用同一会话里返回的 DNS 应答喂养 next proxy 的
 // 路由表（CNAME 目标与解析出的 IP）。学习状态由主 goroutine 独占，这里直接
-// 驱动它的两个入口（detectDNSQuery / learnFromDNS）。
+// 驱动它的两个入口（detectDNSQuery / learnFromDNS），并模拟主循环的门控：
+// 只有 intercept 为真时才解析应答，否则普通中继流量不该被解析（见 maybeDNS）。
 func TestUDPSessionLearnsDNSAnswers(t *testing.T) {
 	np, err := nextproxy.New("socks5://proxy.example.com:1080", true, false)
 	if err != nil {
@@ -313,7 +314,8 @@ func TestUDPSessionLearnsDNSAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.learnFromDNS(udpDatagram{payload: ps, dnsMsg: resp})
+	// 主循环的热路径入口：自带 intercept 门控。
+	s.learnFromDNS(ps)
 
 	if !np.ShouldProxy("93.184.216.34") {
 		t.Fatal("the A record from the DNS answer was not learned by the next proxy")
@@ -329,9 +331,54 @@ func TestUDPSessionLearnsDNSAnswers(t *testing.T) {
 	}
 	other.AddDomain("cdn.example.com")
 	s2, _ := newUDPSessionFixture(t, newDeadlineConn(), "8.8.8.8:53", time.Second, other, newBlockingConn())
-	s2.learnFromDNS(udpDatagram{payload: ps, dnsMsg: resp})
+	s2.learnFromDNS(ps)
 	if other.ShouldProxy("93.184.216.34") {
 		t.Fatal("without an observed DNS query the session must not learn answers")
+	}
+}
+
+// TestUDPSessionLearnFromDNSGate 是非 DNS 中继流量（QUIC 等）的性能回归：
+// 主循环的热路径只有 s.dns.intercept 为真时才会走到解析，而 learnFromDNS
+// 自身也保持这道门控。这里用一个*确实能被解析成 DNS 应答*的载荷来证明
+// "没解析就不学习"——若门控被去掉，解析与学习都会发生，测试即失败。
+func TestUDPSessionLearnFromDNSGate(t *testing.T) {
+	np, err := nextproxy.New("socks5://proxy.example.com:1080", true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	np.AddDomain("cdn.example.com")
+
+	s, _ := newUDPSessionFixture(t, newDeadlineConn(), "8.8.8.8:53", time.Second, np, newBlockingConn())
+
+	query := &dns.Msg{}
+	query.SetQuestion("cdn.example.com.", dns.TypeA)
+	resp := &dns.Msg{}
+	resp.SetReply(query)
+	resp.Answer = []dns.RR{
+		&dns.A{Hdr: dns.RR_Header{Name: "cdn.example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.ParseIP("93.184.216.34")},
+	}
+	msg, err := resp.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 载荷本身是合法的 DNS 应答，唯一的差别只在门控状态。
+	if s.maybeDNS(msg) == nil {
+		t.Fatal("the fixture payload should be parseable as a DNS response")
+	}
+
+	if s.dns.intercept {
+		t.Fatal("a fresh session must not intercept DNS answers")
+	}
+	s.learnFromDNS(msg)
+	if np.ShouldProxy("93.184.216.34") {
+		t.Fatal("an un-intercepted session must not parse or learn the datagram")
+	}
+
+	// 门控打开后同一份载荷才会被解析并学习。
+	s.dns.intercept = true
+	s.learnFromDNS(msg)
+	if !np.ShouldProxy("93.184.216.34") {
+		t.Fatal("an intercepted session must learn the DNS answer")
 	}
 }
 
