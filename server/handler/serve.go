@@ -186,6 +186,11 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 	}, true
 }
 
+// udpBatchWindowMS 是 UDP 会话专用的批处理窗口（毫秒）。它比配置的默认窗口短
+// 得多：UDP 流是一串小的数据报，默认窗口会让每个数据报等待一次定时器才 flush，
+// 而 1ms 足以把同一突发里的数据报合并进单个加密记录，同时不引入可感知的延迟。
+const udpBatchWindowMS = 1
+
 // serveSession 在响应上提交加密会话并分派给端点 handler。从第一次
 // WriteHeader 开始的所有事情都发生在这里：响应已无法再变成回退 HTML 页面，
 // 因此此后出现的失败表现为流级别的 RST 而不是 HTTP 错误。
@@ -223,53 +228,43 @@ func (h *ProxyHandler) serveSession(w http.ResponseWriter, r *http.Request, res 
 
 	s2cCfg := h.shaperCfg
 	if res.endpoint == sharedconfig.EndpointUDP {
-		// UDP 使用较短的 1ms 批处理窗口，使数据报突发被合并进单个加密记录，
-		// 而不是每个数据报一个记录并强制做一次 HTTP/2 flush。
-		s2cCfg.BatchWindowMS = 1
+		// UDP 使用较短的批处理窗口（udpBatchWindowMS），使数据报突发被合并进
+		// 单个加密记录，而不是每个数据报一个记录并强制做一次 HTTP/2 flush。
+		s2cCfg.BatchWindowMS = udpBatchWindowMS
 	}
 	s2cShaper := shaper.New(s2cWriter, s2cCfg)
-	defer s2cShaper.Close() //nolint:errcheck
 
-	var handleErr error
-	// 客户端到服务端的地址族决定出站拨号的优先地址族：客户端用 IPv4 接入时，
-	// 服务端也优先用 IPv4 连目标，而不是依赖操作系统的双栈排序（后者在 VPS 上
-	// 往往先试 IPv6）。客户端连接的族是这里唯一能观测到的信号。
-	// 握手阶段解析并校验过的目标地址一并传入：拨号只拨它们，不再查 DNS。
-	reqCtx := withResolvedAddrs(withPreferredFamily(r.Context(), clientPreferredFamily(r.RemoteAddr)), res.addrs)
-	switch res.endpoint {
-	case sharedconfig.EndpointTCP:
-		stats.RecordServerTCPStream()
-		// cancelRead 在中继终止（空闲超时/错误）时立即解除中继客户端读取
-		// goroutine 的阻塞，而不是让它停留在请求体上直到 net/http 将其关闭。
-		handleErr = h.tcp.Handle(reqCtx, c2sReader, s2cShaper, res.target, func() { _ = r.Body.Close() })
-	case sharedconfig.EndpointUDP:
-		stats.RecordServerUDPStream()
-		// cancelRead 在 UDP handler 终止时立即解除客户端读取 goroutine 的阻塞，
-		// 与 TCP 路径保持一致：否则帧读取器会停留在请求体上，
-		// 直到 ServeHTTP 返回后 net/http 将其关闭。
-		handleErr = h.udp.Handle(reqCtx, c2sReader, s2cShaper, res.target, func() { _ = r.Body.Close() })
-	case sharedconfig.EndpointICMP:
-		stats.RecordServerICMPStream()
-		handleErr = h.icmp.Handle(c2sReader, s2cShaper, res.target)
-	}
-	logHandlerResult(handleErr, res.target, res.endpoint, r.RemoteAddr)
-}
+	// 把 handler 分派包成一次函数调用，使下面这个 defer 既能在正常返回时
+	// 保证"记录结果日志"是该流的最后一个动作，又能在 handler panic 时
+	// （外层 recover 之前）照常关闭 shaper。
+	func() {
+		defer s2cShaper.Close() //nolint:errcheck
 
-// logHandlerResult 记录一条流的最终结果。对端已离开该流（客户端正常拆除、
-// HTTP/2 流被取消、中继空闲超时）属于预期路径：客户端每关闭一个连接都会产生
-// 一条这样的错误，因此降到 Debug，并把它们计入 server_stream_cancels 计数器，
-// 使"被静音的拆除"仍然可观测。真正的故障（拨号失败、目标重置、解密失败）
-// 保持 Info + err=，不会被淹没。
-func logHandlerResult(handleErr error, target, endpoint, remote string) {
-	attrs := []any{"target", target, "endpoint", endpoint, "client", remote}
-	if handleErr == nil {
-		log.Debug("[SERVER] handler finished", attrs...)
-		return
-	}
-	if isTransientStreamError(handleErr) {
-		stats.RecordServerStreamCancel()
-		log.Debug("[SERVER] handler finished", append(attrs, "transient", true, "err", handleErr)...)
-		return
-	}
-	log.Info("[SERVER] handler finished with error", append(attrs, "err", handleErr)...)
+		var handleResult streamResult
+		// 客户端到服务端的地址族决定出站拨号的优先地址族：客户端用 IPv4 接入时，
+		// 服务端也优先用 IPv4 连目标，而不是依赖操作系统的双栈排序（后者在 VPS 上
+		// 往往先试 IPv6）。客户端连接的族是这里唯一能观测到的信号。
+		// 握手阶段解析并校验过的目标地址一并传入：拨号只拨它们，不再查 DNS。
+		reqCtx := withResolvedAddrs(withPreferredFamily(r.Context(), clientPreferredFamily(r.RemoteAddr)), res.addrs)
+		switch res.endpoint {
+		case sharedconfig.EndpointTCP:
+			stats.RecordServerTCPStream()
+			// cancelRead 在中继终止（空闲超时/错误）时立即解除中继客户端读取
+			// goroutine 的阻塞，而不是让它停留在请求体上直到 net/http 将其关闭。
+			handleResult = h.tcp.Handle(reqCtx, c2sReader, s2cShaper, res.target, func() { _ = r.Body.Close() })
+		case sharedconfig.EndpointUDP:
+			stats.RecordServerUDPStream()
+			// cancelRead 在 UDP handler 终止时立即解除客户端读取 goroutine 的阻塞，
+			// 与 TCP 路径保持一致：否则帧读取器会停留在请求体上，
+			// 直到 ServeHTTP 返回后 net/http 将其关闭。
+			handleResult = h.udp.Handle(reqCtx, c2sReader, s2cShaper, res.target, func() { _ = r.Body.Close() })
+		case sharedconfig.EndpointICMP:
+			stats.RecordServerICMPStream()
+			// ICMP 是"一次性回显交换"，没有 context 也没有 cancelRead，
+			// 这处签名不对称是刻意的（见 icmpHandler.Handle）。
+			handleResult = h.icmp.Handle(c2sReader, s2cShaper, res.target)
+		}
+		// 唯一的结果日志出口：一条流恰好在这里产生一条结果日志。
+		logHandlerResult(handleResult, res.target, res.endpoint, r.RemoteAddr)
+	}()
 }

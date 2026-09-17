@@ -96,17 +96,3 @@ func clientIP(r *http.Request) string {
 	}
 	return host
 }
-
-// remoteString 返回用于日志的可打印远端端点。它特意对 nil 安全：拨号得到的
-// 连接可能报告未设置（nil）的 RemoteAddr，直接调用 RemoteAddr().String()
-// 会 panic。next-proxy 路径不使用它（SOCKS5 连接报告的是代理的地址，
-// 因此 dialTarget 改为记录配置的代理）。
-func remoteString(conn net.Conn) string {
-	if conn == nil {
-		return ""
-	}
-	if ra := conn.RemoteAddr(); ra != nil {
-		return ra.String()
-	}
-	return ""
-}

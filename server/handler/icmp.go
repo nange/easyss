@@ -18,6 +18,18 @@ import (
 	"golang.org/x/net/ipv6"
 )
 
+// icmpHandler 的常量。两者都是该协议本身的属性，不是可调参数，因此集中在此
+// 并注释来源，而不是散落在交换逻辑里。
+const (
+	// icmpExchangeDeadline 限定一次回显请求的发送与应答等待。ICMP 交换是
+	// 一次性、无 context 的，这个截止时间就是它唯一的生命周期上限。
+	icmpExchangeDeadline = 5 * time.Second
+
+	// icmpReadBufSize 是回显应答的读取缓冲区：单个 IP 报文的最大长度
+	// （IPv4 总长度字段只有 16 位），因此足够容纳任何可读到的应答。
+	icmpReadBufSize = 65535
+)
+
 type icmpHandler struct {
 	dial dialer
 }
@@ -44,19 +56,24 @@ func newICMPHandler(timeout time.Duration) *icmpHandler {
 // （DATA 帧，跳过 PADDING/COVER），执行交换，并以回显应答加 FIN 回复。
 // 与 TCP/UDP handler 不同，它不携带 context 也没有 cancelRead：
 // 交换是自包含的，由自身的读取截止时间限定，流在应答之后即结束。
-func (h *icmpHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, target string) error {
+// 这处签名不对称是刻意的：把一次性回显交换硬塞进带 ctx/cancel 的流式接口
+// 只会引入永远为空的参数。返回结构化结果（字节数与远端地址）供统一日志出口使用。
+func (h *icmpHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, target string) streamResult {
 	frame, done, err := nextClientFrame(dr)
 	if err != nil {
-		return err
+		return streamResult{Err: err}
 	}
 	if done {
-		return nil
+		return streamResult{}
 	}
 
-	replyPayload, err := h.icmpExchange(target, frame.Payload)
+	replyPayload, remote, err := h.icmpExchange(target, frame.Payload)
 	if err != nil {
-		sendRST(s2c)
-		return err
+		result := streamResult{Err: err}
+		if result.needsRST() {
+			sendRST(s2c)
+		}
+		return result
 	}
 
 	dataFrame := protocol.NewFrameDATA(replyPayload)
@@ -64,14 +81,14 @@ func (h *icmpHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, targ
 	_ = s2c.PushFrame(dataFrame)
 	_ = s2c.PushFrame(finFrame)
 	_ = s2c.Flush()
-	return nil
+	return streamResult{Remote: remote, Bytes: int64(len(replyPayload))}
 }
 
-func (h *icmpHandler) icmpExchange(target string, payload []byte) ([]byte, error) {
+func (h *icmpHandler) icmpExchange(target string, payload []byte) (reply []byte, remote string, err error) {
 	log.Debug("[ICMP] exchange", "target", target)
 
 	if len(payload) < 4 {
-		return nil, io.ErrUnexpectedEOF
+		return nil, "", io.ErrUnexpectedEOF
 	}
 
 	isIPv6 := isIPv6Target(target)
@@ -89,10 +106,10 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) ([]byte, error
 	// 共享的 dialer 需要一个 context；ICMP 没有（见 Handle），因此使用
 	// background context。拨号超时仍然限制拨号本身，
 	// 拨号后的 SSRF 防护在 dialTarget 内部执行。
-	conn, _, err := h.dial.dialTarget(context.Background(), dialNet, target)
+	conn, connRemote, err := h.dial.dialTarget(context.Background(), dialNet, target)
 	if err != nil {
 		log.Error("[ICMP] dial target failed", "target", target, "err", err)
-		return nil, err
+		return nil, "", err
 	}
 	defer conn.Close() //nolint:errcheck
 
@@ -116,19 +133,19 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) ([]byte, error
 	}
 	wb, err := msg.Marshal(nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
-	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		return nil, err
+	if err := conn.SetDeadline(time.Now().Add(icmpExchangeDeadline)); err != nil {
+		return nil, "", err
 	}
 
 	if _, err := conn.Write(wb); err != nil {
 		log.Error("[ICMP] write failed", "target", target, "err", err)
-		return nil, err
+		return nil, "", err
 	}
 
-	rb := bytespool.Get(65535)
+	rb := bytespool.Get(icmpReadBufSize)
 	defer bytespool.MustPut(rb)
 
 	// 原始 ICMP socket 会收到送达本机的所有匹配 ICMP 报文，而不只是本 socket
@@ -144,7 +161,7 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) ([]byte, error
 			} else {
 				log.Error("[ICMP] read failed", "target", target, "err", err)
 			}
-			return nil, err
+			return nil, "", err
 		}
 
 		data := rb[:n]
@@ -183,7 +200,7 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) ([]byte, error
 		binary.BigEndian.PutUint16(result[:2], uint16(body.ID))
 		binary.BigEndian.PutUint16(result[2:4], uint16(body.Seq))
 		copy(result[4:], body.Data)
-		return result, nil
+		return result, connRemote, nil
 	}
 }
 
