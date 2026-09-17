@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -68,10 +67,9 @@ func TestIsTransientStreamError(t *testing.T) {
 		{"http2 stream cancel", errors.New(`crypto: read cipher_len: stream error: stream ID 13; CANCEL`)},
 		{"http2 stream reset", errors.New(`crypto: read cipher_len: stream error: stream ID 7; RST_STREAM`)},
 		{"http2 stream closed", errors.New("crypto: write record: http2: stream closed")},
+		{"http2 client disconnected", errors.New("crypto: read cipher_len: client disconnected")},
 		{"http2 connection lost", errors.New("crypto: read cipher_len: http2: client connection lost")},
 		{"poisoned request body", errors.New("crypto: read cipher_len: http: invalid Read on closed Body")},
-		{"connection reset", errors.New("read tcp 10.0.0.1:443->10.0.0.2:5512: read: connection reset by peer")},
-		{"broken pipe", errors.New("write tcp: broken pipe")},
 		{"relay idle timeout", errors.New("tcp stream idle timeout after 2m0s")},
 		{"relay drained", errors.New("stream drained: idle for 5s while the slot is due for eviction")},
 		{"client gone after cancel", errClientGone},
@@ -102,6 +100,11 @@ func TestIsTransientStreamError(t *testing.T) {
 		// 客户端拆除：它同样可能是真正的拨号故障。只有 dialOutbound 显式标记的
 		// errClientGone 才代表客户端离开。
 		{"canceled dial without the client-gone label", &net.OpError{Op: "dial", Net: "tcp4", Err: cancelledDialError{}}},
+		// 传输层文本不区分方向：目标侧被 RST/半关（排查被墙主机时最想看到的
+		// 信号）与客户端拆除共用同一句话，因此必须留在 Info。
+		{"target reset", errors.New("read tcp 10.0.0.1:443->10.0.0.2:5512: read: connection reset by peer")},
+		{"broken pipe", errors.New("write tcp: broken pipe")},
+		{"connection aborted", errors.New("read tcp: connection was aborted")},
 		{"nil", nil},
 	}
 
@@ -118,20 +121,11 @@ func TestIsTransientStreamError(t *testing.T) {
 // 的回归测试：net 把取消转成未导出的取消错误（"operation was canceled"），而
 // 它的 Is(context.Canceled) 为真。这一点会让 errors.Is(err, context.Canceled)
 // 成立，因此 client-gone 必须由 dialOutbound 用 errClientGone 显式标记，
-// 而不是依赖字符串匹配去猜。
+// 而不是依赖字符串匹配去猜（标记行为由 TestDialOutbound 覆盖）。
 func TestIsTransientStreamErrorCancelledDial(t *testing.T) {
 	dialErr := &net.OpError{Op: "dial", Net: "tcp4", Err: cancelledDialError{}}
 	if isTransientStreamError(dialErr) {
 		t.Fatalf("the raw canceled-dial error must not be classified on its own: %v", dialErr)
-	}
-
-	ctx, cancel := context.WithCancel(t.Context())
-	d := &probeNetDialer{
-		fail: func(string) bool { cancel(); return true },
-		err:  dialErr,
-	}
-	if _, err := dialOutbound(ctx, d, "tcp", testPublicV4+":443", netip.MustParseAddr(testPublicV4)); !errors.Is(err, errClientGone) {
-		t.Fatalf("dialOutbound = %v, want errClientGone once the caller's context is gone", err)
 	}
 	if !isTransientStreamError(errClientGone) {
 		t.Fatal("errClientGone must be classified as transient")

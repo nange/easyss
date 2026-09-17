@@ -26,18 +26,10 @@ type tcpHandler struct {
 	dial        dialer
 }
 
-// tcpDialerOptions 返回直接拨号 net.Dialer 的参数：
-// dialTimeout 通过 config.DialTimeout 派生（base/3，限制在 [3s, 15s]），
-// keepAlive 取完整的基础超时，这样长连接流由内核回收，
-// 而不会在对端消失后一直半开残留。拨号器在 dial 闭包内惰性构建，
-// 因此这里是唯一可以断言该映射关系的地方。
-func tcpDialerOptions(timeout time.Duration) (dialTimeout, keepAlive time.Duration) {
-	return config.DialTimeout(timeout), timeout
-}
-
 // newTCPHandler 用给定的空闲超时和基础超时创建 tcpHandler。
-// 拨号超时通过 config.DialTimeout 派生（base/3，限制在 [3s, 15s]），
-// 与客户端共用。
+// 拨号超时通过 config.DialTimeout 派生（base/3，限制在 [3s, 15s]），与客户端
+// 共用；KeepAlive 取完整的基础超时，这样长连接流由内核回收，而不会在对端
+// 消失后一直半开残留。
 func newTCPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) *tcpHandler {
 	if idleTimeout <= 0 {
 		idleTimeout = config.DefaultStreamIdleTimeout
@@ -45,7 +37,7 @@ func newTCPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) 
 	if timeout <= 0 {
 		timeout = time.Duration(config.DefaultTimeout) * time.Second
 	}
-	dialTimeout, keepAlive := tcpDialerOptions(timeout)
+	directDialer := outboundDialer(config.DialTimeout(timeout), timeout)
 	h := &tcpHandler{idleTimeout: idleTimeout}
 	h.dial = dialer{
 		nextProxy:   np,
@@ -55,8 +47,7 @@ func newTCPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) 
 			if h.dialContext != nil {
 				return h.dialContext(ctx, network, target)
 			}
-			d := &hostDialer{dialer: net.Dialer{KeepAlive: keepAlive}, timeout: dialTimeout}
-			return dialOutbound(ctx, d, network, target, preferredOrNone(ctx))
+			return dialOutbound(ctx, directDialer, network, target)
 		},
 	}
 	return h

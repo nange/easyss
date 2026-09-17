@@ -80,8 +80,8 @@ func TestPreferredFamilyContext(t *testing.T) {
 	if _, ok := preferredFamily(t.Context()); ok {
 		t.Fatal("a bare context should report no preference")
 	}
-	if preferredOrNone(t.Context()).IsValid() {
-		t.Fatal("preferredOrNone on a bare context should be the zero value")
+	if got := preferredTarget(t.Context(), "example.com:443", netip.Addr{}); got != "" {
+		t.Fatalf("preferredTarget without a preference = %q, want no rewrite", got)
 	}
 
 	want := netip.MustParseAddr("93.184.216.34")
@@ -195,30 +195,16 @@ func TestNewProxyHandler(t *testing.T) {
 	})
 }
 
-// TestTCPDialerOptions 固定了基础超时到直连拨号器参数的映射：Timeout 经由
-// config.DialTimeout（base/3，限制在 [3s, 15s]）派生，而 KeepAlive 保留完整的基础超时，
-// 使长连接流由内核回收而不是半开地悬留。拨号器本身现在是在拨号闭包内惰性构建的，
-// 因此该映射只有在这里仍然可观测。
-func TestTCPDialerOptions(t *testing.T) {
-	tests := []struct {
-		name            string
-		timeout         time.Duration
-		wantDialTimeout time.Duration
-	}{
-		{"默认值 30s", 30 * time.Second, 10 * time.Second},
-		{"最小值保底", 5 * time.Second, 3 * time.Second},
-		{"最大值封顶", 120 * time.Second, 15 * time.Second},
+// TestOutboundDialer 固定直连拨号器的参数：Timeout 必须显式设置，否则
+// dialOutbound（它自己不设截止时间）会在 SYN 黑洞上一直挂着；KeepAlive 保留
+// 完整的基础超时，使长连接流由内核回收而不是半开地悬留。
+func TestOutboundDialer(t *testing.T) {
+	d := outboundDialer(10*time.Second, 30*time.Second)
+	if d.Timeout != 10*time.Second {
+		t.Errorf("Timeout = %v, want 10s", d.Timeout)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dialTimeout, keepAlive := tcpDialerOptions(tt.timeout)
-			if dialTimeout != tt.wantDialTimeout {
-				t.Errorf("dialTimeout = %v, want %v", dialTimeout, tt.wantDialTimeout)
-			}
-			if keepAlive != tt.timeout {
-				t.Errorf("keepAlive = %v, want the base timeout %v", keepAlive, tt.timeout)
-			}
-		})
+	if d.KeepAlive != 30*time.Second {
+		t.Errorf("KeepAlive = %v, want the base timeout 30s", d.KeepAlive)
 	}
 }
 
@@ -232,11 +218,12 @@ func TestNewTCPHandler(t *testing.T) {
 	}
 }
 
-// TestTCPHandlerDialTarget 覆盖 TCP handler 共享的拨号部分：直连拨号根据目标字面量
-// 解析网络，拨号后的 SSRF 防护会拒绝 LAN 远端地址。拨号超时和 keepalive 都无法从
-// 已建立的连接上观测到，因此基础超时的映射由 TestTCPDialerOptions 覆盖。
+// TestTCPHandlerDialTarget 覆盖 TCP handler 共享的拨号部分：直连拨号把网络名
+// 与目标原样下传（地址族由 dialOutbound 决定），拨号后的 SSRF 防护会拒绝 LAN
+// 远端地址。拨号超时和 keepalive 都无法从已建立的连接上观测到，因此它们由
+// TestOutboundDialer 覆盖。
 func TestTCPHandlerDialTarget(t *testing.T) {
-	t.Run("按目标字面量选择网络", func(t *testing.T) {
+	t.Run("网络名与目标原样下传", func(t *testing.T) {
 		h := newTCPHandler(120*time.Second, 30*time.Second, nil)
 		var gotNetwork, gotTarget string
 		h.dialContext = func(_ context.Context, network, target string) (net.Conn, error) {

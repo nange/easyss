@@ -30,11 +30,11 @@ func newICMPHandler(timeout time.Duration) *icmpHandler {
 		timeout = time.Duration(config.DefaultTimeout) * time.Second
 	}
 	dialTimeout := config.DialTimeout(timeout)
+	directDialer := outboundDialer(dialTimeout, 0)
 	return &icmpHandler{
 		dial: dialer{
 			direct: func(ctx context.Context, network, target string) (net.Conn, error) {
-				d := &hostDialer{timeout: dialTimeout}
-				return dialOutbound(ctx, d, network, target, preferredOrNone(ctx))
+				return dialOutbound(ctx, directDialer, network, target)
 			},
 		},
 	}
@@ -75,11 +75,14 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) ([]byte, error
 	}
 
 	isIPv6 := isIPv6Target(target)
-	// 网络名只给出协议，地址族由 dialOutbound 按目标字面量（或域名解析结果）
-	// 与 ctx 中的客户端族偏好决定，因此这里不再分别写死 ip4:icmp / ip6:ipv6-icmp。
-	dialNet := "ip:icmp"
+	// 原始 socket 的网络名必须写死地址族 + 协议号：IPv6 的 ICMPv6 是协议号 58，
+	// 而 "ip:icmp" 会让 Go 取到 /etc/protocols 里的 ipv4 "icmp"(1)，在 AF_INET6
+	// 原始 socket 上永远收不到回显应答。ICMP 拨号也不携带 context（见 Handle），
+	// 因此它不参与出站地址族偏好。
+	dialNet := "ip4:icmp"
 	parseProto := 1
 	if isIPv6 {
+		dialNet = "ip6:ipv6-icmp"
 		parseProto = 58
 	}
 
