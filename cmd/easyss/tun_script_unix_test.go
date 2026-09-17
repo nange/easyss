@@ -99,14 +99,22 @@ func sequenceTool(t *testing.T, dir, name, marker string, steps ...stubStep) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(stubScript(dir, name, answer)), 0o755))
 }
 
+// toolLog 返回 stub 工具记录的全部调用：每行一次调用的实参，
+// 因此测试既能数调用次数，也能看到每次调用真正传了什么。
+func toolLog(t *testing.T, dir, name string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join(dir, name+".log"))
+	require.NoError(t, err, "the stub tool of %s never ran", name)
+	return string(data)
+}
+
 // toolInvocations 返回指定 stub 工具运行了多少次。日志缺失时它会使测试
 // 失败：否则空日志会被读成"脚本从未调用该工具"，掩盖计数断言失败的原因。
 func toolInvocations(t *testing.T, dir, name string) int {
 	t.Helper()
 
-	data, err := os.ReadFile(filepath.Join(dir, name+".log"))
-	require.NoError(t, err, "the stub tool of %s never ran", name)
-	return len(strings.Split(strings.TrimSpace(string(data)), "\n"))
+	return len(strings.Split(strings.TrimSpace(toolLog(t, dir, name)), "\n"))
 }
 
 // runScriptStubbed 通过 shell 运行给定的创建脚本，stub 目录位于 PATH 最前，
@@ -153,13 +161,16 @@ func linuxScriptArgs(withV6 bool) []string {
 	return append(args, "2001:db8::1/64", "fe80::1", "2001:db8::2", "fe80::2")
 }
 
-// darwinScriptArgs 与 client/tun/tun.go 传给 darwin 脚本的参数保持一致。
+// darwinScriptArgs 与 client/tun/tun.go 的 darwinScriptArgs 传给
+// create_tun_dev_darwin.sh 的参数保持一致：第五个参数是裸的 IPv6 地址，
+// 因为脚本自己把 "/64" 拼到 ifconfig 的 inet6 参数上，由调用方负责剥掉
+// TunIPV6Sub 自带的前缀长度。
 func darwinScriptArgs(withV6 bool) []string {
 	args := []string{"utun8", "198.18.0.1", "198.18.0.1", "192.168.3.1"}
 	if !withV6 {
 		return args
 	}
-	return append(args, "2001:db8::1/64", "fe80::1", "2001:db8::2", "fe80::2")
+	return append(args, "2001:db8::1", "fe80::1", "2001:db8::2", "fe80::2")
 }
 
 // TestCreateTunScriptLinuxExitCode 固定 scripts/create_tun_dev.sh 的退出码
@@ -313,6 +324,23 @@ func TestCreateTunScriptDarwinExitCode(t *testing.T) {
 		code, out := runScriptStubbed(t, "sh", string(scripts.CreateTunDevDarwinSh), dir, darwinScriptArgs(true)...)
 		require.NotEqualf(t, 0, code, "a rejected ipv6 route must not leave a zero exit code:\n%s", out)
 		require.Contains(t, out, "failed near: route-v6-default")
+	})
+
+	t.Run("the ipv6 address reaches ifconfig with a single prefix", func(t *testing.T) {
+		// 这个断言正是此前缺失的一环：stub 化的 ifconfig 从不检查实参，于是
+		// "2001:0db8:0:f101::1/64/64" 一路走到用户的 macOS 上被 ifconfig 以
+		// "bad value" 拒绝，创建脚本整体失败、TUN 起不来。脚本自己拼 "/64"，
+		// 因此调用方必须剥掉 TunIPV6Sub 自带的前缀（client/tun/tun.go 的
+		// darwinScriptArgs 与 tun_helper_darwin.go 的 runCreateScript）。
+		dir := stubDarwin(t, false, func(int) bool { return false })
+
+		code, out := runScriptStubbed(t, "sh", string(scripts.CreateTunDevDarwinSh), dir, darwinScriptArgs(true)...)
+		require.Equal(t, 0, code, "%s", out)
+
+		log := toolLog(t, dir, "ifconfig")
+		require.Contains(t, log, "utun8 inet6 2001:db8::1/64 up",
+			"the script appends the prefix length to the bare address it is given")
+		require.NotContains(t, log, "/64/64", "a doubled prefix length is what ifconfig rejects")
 	})
 
 	t.Run("the ipv6 branch stays a no-op without a server ipv6", func(t *testing.T) {

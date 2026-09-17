@@ -60,6 +60,9 @@ fail() {
 # 创建 tun 设备
 fail ifconfig-ipv4 ifconfig "$tun_device" "$tun_ip" "$tun_gw" up
 if [ -n "$server_ip_v6" ]; then  # 检查 server_ip_v6 是否非空
+  # $tun_ip_v6 必须是裸地址：前缀长度由这里拼上，调用方（cmd/easyss 的
+  # tun_helper_darwin.go 和 client/tun/tun.go）负责剥掉 TunIPV6Sub 自带的
+  # 前缀。传入 "2001:db8::1/64" 会拼成 ".../64/64"，ifconfig 报 "bad value"。
   fail ifconfig-ipv6 ifconfig "$tun_device" inet6 "$tun_ip_v6"/64 up
 fi
 
