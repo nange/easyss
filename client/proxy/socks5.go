@@ -169,30 +169,47 @@ func (s *Socks5Server) Start() error {
 	return s.srv.ListenAndServe(s)
 }
 
-// waitForAccept 轮询监听地址，直到服务器真正开始接受连接。单纯的 TCP 拨号
-// 不够：只要监听器在内核层面完成绑定它就会成功，而此时 txthinking/socks5
-// runnergroup 库内部的 accept 循环尚未注册其 runner。在这个窗口内调用 Shutdown
-// 要么泄漏监听器（尚未添加任何 runner 时 runnergroup.Done 会提前返回），要么
-// 死锁（Done 会跳过启动 goroutine 尚未运行的 runner，然后永远阻塞等待一个
-// 永远不会到来的完成信号）。只有用真实的 SOCKS5 问候并收到回复来探测，才能
-// 在 accept 循环就绪后成功，因此 Close 永远不会与 Start 派生的 goroutine 竞争。
-func (s *Socks5Server) waitForAccept() {
+// acceptProbeTimeout 限制 waitForAccept 等待 accept 循环就绪的时长。它只在
+// "启动 socks5 服务器后紧接着关闭"这一路径上被消耗：服务器已经在运行时第一次
+// 探测就会成功，等待时间约等于零。CI 上出现过 accept 循环在一台超载的
+// windows-arm64 runner 上迟迟不响应的实例，因此预算给得比一次调度延迟宽松。
+const acceptProbeTimeout = 3 * time.Second
+
+// acceptProbeInterval 是两次探测之间的间隔。
+const acceptProbeInterval = 20 * time.Millisecond
+
+// errAcceptNotReady 在 accept 循环迟迟未就绪时由 Close 返回：此时 Close 跳过了
+// 库的 Shutdown（见下），监听地址与已接受的连接可能尚未释放。
+var errAcceptNotReady = errors.New("socks5 server accept loop did not start in time; shutdown skipped")
+
+// waitForAccept 轮询监听地址，直到服务器真正开始接受连接，报告 accept 循环是否
+// 在预算内就绪。单纯的 TCP 拨号不够：只要监听器在内核层面完成绑定它就会成功，
+// 而此时 txthinking/socks5 runnergroup 库内部的 accept 循环尚未注册其 runner。
+// 在这个窗口内调用 Shutdown 要么泄漏监听器（尚未添加任何 runner 时
+// runnergroup.Done 会提前返回），要么死锁（Done 会跳过启动 goroutine 尚未运行的
+// runner，然后永远阻塞等待一个永远不会到来的完成信号）。只有用真实的 SOCKS5
+// 问候并收到回复来探测，才能证明 accept 循环已经运行：探测成功意味着 runner
+// 早已被调度过，因此 Close 永远不会与 Start 派生的 goroutine 竞争。
+func (s *Socks5Server) waitForAccept() bool {
 	if s.srv == nil {
-		return
+		return false
 	}
 	addr := s.srv.Addr
 	if addr == "" {
-		return
+		return false
 	}
 	// SOCKS5 问候：版本 5，提供一个方法，无认证。只有 accept 循环接受了
 	// 我们的连接并解析完问候后，服务器才会应答。
 	greeting := []byte{0x05, 0x01, 0x00}
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	deadline := time.Now().Add(acceptProbeTimeout)
+	for {
 		if probeSocks5Accept(addr, greeting) {
-			return
+			return true
 		}
-		time.Sleep(20 * time.Millisecond)
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(acceptProbeInterval)
 	}
 }
 
@@ -220,8 +237,19 @@ func probeSocks5Accept(addr string, greeting []byte) bool {
 func (s *Socks5Server) Close() error {
 	s.closing.Store(true)
 	s.closeOnce.Do(func() { close(s.quit) })
-	if s.started.Load() {
-		s.waitForAccept()
+	// accept 循环没能在预算内证明自己已启动时，绝不能调用库的 Shutdown：此刻
+	// runnergroup 的启动 goroutine 可能尚未运行，Done 会在 <-g.done 上永久阻塞
+	// （2026-09-17 的 windows-arm64 CI 就因此把整个 job 拖到 30 分钟超时）。
+	// 宁可跳过关闭并返回错误：调用方要么正在退出进程，要么在下一个测试用例里
+	// 用新地址重新开始，而一次卡死会冻结整个客户端。
+	if s.started.Load() && !s.waitForAccept() {
+		addr := ""
+		if s.srv != nil {
+			addr = s.srv.Addr
+		}
+		log.Error("[SOCKS5] accept loop not ready, skip shutdown",
+			"addr", addr, "timeout", acceptProbeTimeout)
+		return errAcceptNotReady
 	}
 	var exchanges []*UDPExchange
 	s.udpMu.Lock()
