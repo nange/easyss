@@ -2,6 +2,11 @@ module github.com/nange/easyss/v3
 
 go 1.27.1
 
+// nange/systray 是 gogpu/systray 的分支：修复了上游 issue #39
+//（上下文菜单打开期间 SetMenu 重建菜单会把点击派发到另一个菜单项的回调）。
+// 详见 https://github.com/gogpu/systray/issues/39。
+replace github.com/gogpu/systray => github.com/nange/systray v0.3.0-easyss.1
+
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/caddyserver/certmagic v0.25.4

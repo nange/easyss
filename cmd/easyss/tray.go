@@ -67,10 +67,9 @@ type TrayApp struct {
 	updateUIMu sync.Mutex
 
 	// UWP 回环豁免菜单（仅 Windows）。
-	uwpMu           sync.Mutex        //nolint:unused // used in uwp_windows.go
-	uwpMenu         *systray.Menu     //nolint:unused // used in uwp_windows.go
-	uwpItems        []*UWPMenuItem    //nolint:unused // used in uwp_windows.go
-	uwpOverflowHint *systray.MenuItem //nolint:unused // used in uwp_windows.go
+	uwpMu    sync.Mutex     //nolint:unused // used in uwp_windows.go
+	uwpMenu  *systray.Menu  //nolint:unused // used in uwp_windows.go
+	uwpItems []*UWPMenuItem //nolint:unused // used in uwp_windows.go
 
 	// TUN 助手进程管理（darwin 非 root）。
 	tunHelperStdin io.WriteCloser // FIFO 写入端；关闭以通知助手进程退出
