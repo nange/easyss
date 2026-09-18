@@ -45,30 +45,13 @@ func newBufferedConn(c net.Conn, br *bufio.Reader, pending []byte) net.Conn {
 	return &bufferedConn{Conn: c, r: bufio.NewReader(io.MultiReader(bytes.NewReader(pending), br))}
 }
 
-// readTCPDNSMessage 从流中读取一条 DNS over TCP 报文（2 字节长度前缀 + DNS 报文）。
-func readTCPDNSMessage(br *bufio.Reader) (*dns.Msg, error) {
-	var lenBuf [2]byte
-	if _, err := io.ReadFull(br, lenBuf[:]); err != nil {
-		return nil, err
-	}
-	length := int(lenBuf[0])<<8 | int(lenBuf[1])
-	if length == 0 || length > maxTCPDNSMessageLen {
-		return nil, fmt.Errorf("dns tcp message length %d out of range", length)
-	}
-	data := make([]byte, length)
-	if _, err := io.ReadFull(br, data); err != nil {
-		return nil, err
-	}
-	msg := &dns.Msg{}
-	if err := msg.Unpack(data); err != nil {
-		return nil, err
-	}
-	return msg, nil
-}
-
-// readFirstTCPDNS 读取首条 DNS over TCP 报文，并在失败时返回已消耗的字节
-// （供回退中继使用，保证不丢数据）。
-func readFirstTCPDNS(br *bufio.Reader) (msg *dns.Msg, consumed []byte, err error) {
+// readFirstTCPDNS 从流中读取一条 DNS over TCP 报文（2 字节长度前缀 + DNS 报文），
+// 并在失败时返回已消耗的字节：首条报文可能只是恰好落在 53 端口上的非 DNS 流量，
+// 回退中继必须把这些字节原样还给目标。
+//
+// touch 在长度前缀读完后调用一次，让调用方按读取进度续期读截止时间：否则整条
+// 报文（最长 64KB）会被塞进一个固定的首读窗口，慢速滴水即可长期占住 goroutine。
+func readFirstTCPDNS(br *bufio.Reader, touch func()) (msg *dns.Msg, consumed []byte, err error) {
 	var lenBuf [2]byte
 	if _, err := io.ReadFull(br, lenBuf[:]); err != nil {
 		return nil, nil, err
@@ -77,6 +60,10 @@ func readFirstTCPDNS(br *bufio.Reader) (msg *dns.Msg, consumed []byte, err error
 	length := int(lenBuf[0])<<8 | int(lenBuf[1])
 	if length == 0 || length > maxTCPDNSMessageLen {
 		return nil, consumed, fmt.Errorf("dns tcp message length %d out of range", length)
+	}
+
+	if touch != nil {
+		touch()
 	}
 	data := make([]byte, length)
 	n, err := io.ReadFull(br, data)
@@ -89,6 +76,13 @@ func readFirstTCPDNS(br *bufio.Reader) (msg *dns.Msg, consumed []byte, err error
 		return nil, consumed, err
 	}
 	return msg, consumed, nil
+}
+
+// readTCPDNSMessage 读取后续（可丢弃）的一条 DNS over TCP 报文，语义与
+// readFirstTCPDNS 相同但不关心已消耗字节，由后者兜住读取逻辑。
+func readTCPDNSMessage(br *bufio.Reader, touch func()) (*dns.Msg, error) {
+	msg, _, err := readFirstTCPDNS(br, touch)
+	return msg, err
 }
 
 // writeTCPDNSMessage 以 DNS over TCP 帧格式写出一条应答。
@@ -109,14 +103,15 @@ func writeTCPDNSMessage(w io.Writer, msg *dns.Msg) error {
 	return err
 }
 
-// isDNSQueryMessage 报告 msg 是否为一条 DNS 查询（任意 qtype）。
-// 与 UDP 拦截的 IsDNSRequest（仅 A/AAAA）不同：TCP 连接面向解析器，
-// 放宽到任意 qtype，避免非 A/AAAA 的查询落入回退而绕过域名分流。
-func isDNSQueryMessage(msg *dns.Msg) bool {
-	return msg != nil && len(msg.Question) > 0 && !msg.Response
+// touchReadDeadline 返回一个把连接读截止时间续期 timeout 的回调，供读帧函数
+// 在读取过程中按进度调用。续期失败无从报告（读帧函数只返回协议错误），因此
+// 忽略；真正的连接错误会在随后的 Read 上暴露。
+func touchReadDeadline(c net.Conn, timeout time.Duration) func() {
+	return func() { _ = c.SetReadDeadline(time.Now().Add(timeout)) }
 }
 
-// tcpDNSUpstream 持有 TCP DNS 连接生命周期内复用的代理上游交换（8.8.8.8:53）。
+// tcpDNSUpstream 持有 TCP DNS 连接生命周期内复用的代理上游交换。只有代理分支
+// （经隧道到 config.ProxyDNSServer）使用它；直连分支每个查询独立拨号。
 type tcpDNSUpstream struct {
 	s   *Socks5Server
 	key string
@@ -149,13 +144,16 @@ func (u *tcpDNSUpstream) close() {
 func (s *Socks5Server) handleTCPDNS(c net.Conn, r *socks5.Request, target, host string) error {
 	br := bufio.NewReader(c)
 
-	// 首个读用一个与中继空闲超时相当的宽松截止时间：连接建立后不发数据的客户端
-	// 不应挂住本 goroutine；回退路径会清除它，把生命周期交给中继自身的空闲超时。
+	// 扫雷式首读：只要首条报文没被确认为 DNS 查询，最终都会走按目标 IP 的普通
+	// 中继，因此这里只受一个宽限期约束——连接建立后完全不发数据的客户端不应挂住
+	// 本 goroutine。该窗口在读到长度前缀后按进度续期，覆盖载荷读取；一旦确认是
+	// DNS 查询，之后的空闲计时改由 tcpDNSIdleTimeout 承担。
 	if err := c.SetReadDeadline(time.Now().Add(s.streamIdleTimeout)); err != nil {
 		return err
 	}
+	touch := touchReadDeadline(c, s.streamIdleTimeout)
 
-	first, consumed, err := readFirstTCPDNS(br)
+	first, consumed, err := readFirstTCPDNS(br, touch)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			// 客户端连上后立即关闭：无事可做。
@@ -164,7 +162,7 @@ func (s *Socks5Server) handleTCPDNS(c net.Conn, r *socks5.Request, target, host 
 		log.Debug("[TCP_DNS] first message unreadable, fallback to relay", "target", target, "err", err)
 		return s.fallbackTCPDNS(c, br, consumed, r, target, host)
 	}
-	if !isDNSQueryMessage(first) {
+	if !isDNSQueryMsg(first) {
 		log.Debug("[TCP_DNS] first message is not a dns query, fallback to relay", "target", target)
 		return s.fallbackTCPDNS(c, br, consumed, r, target, host)
 	}
@@ -174,15 +172,17 @@ func (s *Socks5Server) handleTCPDNS(c net.Conn, r *socks5.Request, target, host 
 		return err
 	}
 
+	// key 只需在本进程内唯一标识这条连接的上游交换：RemoteAddr 对每条 TCP 连接
+	// 唯一，ProxyDNSServer 只是命名空间标记（同一条连接只对应一个上游）。
 	up := &tcpDNSUpstream{
 		s:   s,
-		key: "tcp_" + c.RemoteAddr().String() + "_" + config.ProxyDNSServer,
+		key: fmt.Sprintf("tcp_dns://%s->%s", c.RemoteAddr(), config.ProxyDNSServer),
 	}
 	defer up.close()
 
 	msg := first
 	for {
-		resp, err := s.resolveTCPDNSQuery(msg, up)
+		resp, err := s.resolveTCPDNSQuery(msg, up, target)
 		if err != nil {
 			// 上游解析失败：回 SERVFAIL，连接继续，让客户端自行重试。
 			log.Warn("[TCP_DNS] resolve", "target", target, "err", err)
@@ -200,12 +200,12 @@ func (s *Socks5Server) handleTCPDNS(c net.Conn, r *socks5.Request, target, host 
 		if err := c.SetReadDeadline(time.Now().Add(s.tcpDNSIdleTimeout())); err != nil {
 			return err
 		}
-		msg, err = readTCPDNSMessage(br)
+		msg, err = readTCPDNSMessage(br, touchReadDeadline(c, s.tcpDNSIdleTimeout()))
 		if err != nil {
 			// EOF/超时/对端关闭：连接结束。
 			return nil
 		}
-		if !isDNSQueryMessage(msg) {
+		if !isDNSQueryMsg(msg) {
 			return nil
 		}
 	}
@@ -228,10 +228,10 @@ func (s *Socks5Server) tcpDNSIdleTimeout() time.Duration {
 	return 30 * time.Second
 }
 
-// resolveTCPDNSQuery 按查询域名解析单条 DNS 查询：Block 本地拒绝，
-// Direct/服务器域名直连解析，其余经隧道到 config.ProxyDNSServer。
-// 结果写入 dnsCache（A/AAAA）并按自定义域名规则学习。
-func (s *Socks5Server) resolveTCPDNSQuery(msg *dns.Msg, up *tcpDNSUpstream) (*dns.Msg, error) {
+// resolveTCPDNSQuery 按查询域名解析单条 DNS 查询：Block 本地屏蔽，
+// Direct/服务器域名用 target（客户端请求的解析器）直连解析，其余经隧道到
+// config.ProxyDNSServer。结果写入 dnsCache（A/AAAA）并按自定义域名规则学习。
+func (s *Socks5Server) resolveTCPDNSQuery(msg *dns.Msg, up *tcpDNSUpstream, target string) (*dns.Msg, error) {
 	q := msg.Question[0]
 	domain := strings.TrimSuffix(q.Name, ".")
 	qtype := dns.TypeToString[q.Qtype]
@@ -255,7 +255,7 @@ func (s *Socks5Server) resolveTCPDNSQuery(msg *dns.Msg, up *tcpDNSUpstream) (*dn
 	if isDirect {
 		log.Info("[DNS_DIRECT]", "domain", domain, "qtype", qtype)
 		stats.RecordDNSDirectQuery()
-		resp, err := s.resolveDirectDNS(msg, domain)
+		resp, err := s.resolveDirectDNS(msg, domain, target)
 		if err != nil {
 			return nil, err
 		}
@@ -281,8 +281,10 @@ func (s *Socks5Server) resolveTCPDNSQuery(msg *dns.Msg, up *tcpDNSUpstream) (*dn
 }
 
 // resolveProxyDNS 把 DNS 查询经隧道发给 config.ProxyDNSServer（8.8.8.8:53），
-// 同步等待应答。up 在连接生命周期内复用同一个 UDP 交换；每次查询都必须发送，
-// 只有"创建时首载荷已合并进引导记录"的那一次免于重复发送。
+// 同步等待应答。这里刻意忽略客户端请求的解析器地址：走代理的意义就是让查询在
+// 隧道出口发出，避免解析器降级到 TCP 时把查询明文发到墙内。
+// up 在连接生命周期内复用同一个 UDP 交换；每次查询都必须发送，只有"创建时首
+// 载荷已合并进引导记录"的那一次免于重复发送。
 func (s *Socks5Server) resolveProxyDNS(msg *dns.Msg, up *tcpDNSUpstream) (*dns.Msg, error) {
 	data, err := msg.Pack()
 	if err != nil {
@@ -317,7 +319,9 @@ func (s *Socks5Server) resolveProxyDNS(msg *dns.Msg, up *tcpDNSUpstream) (*dns.M
 	return resp, err
 }
 
-// waitUDPDNSResponse 同步等待代理 DNS 交换返回一条应答，超时后关闭交换。
+// waitUDPDNSResponse 同步等待代理 DNS 交换返回一条应答，超时后关闭交换使阻塞
+// 的 Receive 退出（调用方随后会作废该交换）。交换只被本连接顺序使用，因此
+// Receive 不会并发。
 func (s *Socks5Server) waitUDPDNSResponse(ue *UDPExchange) (*dns.Msg, error) {
 	timeout := s.dnsRespTimeout
 	if timeout <= 0 {
@@ -334,6 +338,9 @@ func (s *Socks5Server) waitUDPDNSResponse(ue *UDPExchange) (*dns.Msg, error) {
 		ch <- result{data: data, err: err}
 	}()
 
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
 	select {
 	case r := <-ch:
 		if r.err != nil {
@@ -344,8 +351,7 @@ func (s *Socks5Server) waitUDPDNSResponse(ue *UDPExchange) (*dns.Msg, error) {
 			return nil, err
 		}
 		return msg, nil
-	case <-time.After(timeout):
-		// 上游沉默：关闭交换使阻塞的 Receive 退出；调用方会作废该交换。
+	case <-timer.C:
 		ue.Close() //nolint:errcheck
 		return nil, errDNSResponseTimeout
 	}
