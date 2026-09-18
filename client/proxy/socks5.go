@@ -297,12 +297,25 @@ func (s *Socks5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 	}
 
 	target := r.Address()
-	host, _, err := net.SplitHostPort(target)
+	host, port, err := net.SplitHostPort(target)
 	if err != nil {
 		log.Error("[SOCKS5] parse target", "target", target, "err", err)
 		return s.replyError(c, r, socks5.RepServerFailure)
 	}
 
+	// 拦截 DNS over TCP：发往 53 端口的连接按查询域名分流（与 UDP DNS 拦截一致）。
+	// 否则解析器走 TCP 时（如 systemd-resolved 特性集降级）DNS 查询会按目标 IP 判
+	// 直连、从物理网卡发出而绕过隧道，被 GFW 污染。
+	if port == "53" {
+		return s.handleTCPDNS(c, r, target, host)
+	}
+
+	return s.routeTCP(c, r, target, host)
+}
+
+// routeTCP 对已完成 SOCKS5 CONNECT 的 TCP 连接执行 Block/Direct/Proxy 分流。
+// 正常路径与 TCP DNS 拦截的回退路径共用。
+func (s *Socks5Server) routeTCP(c net.Conn, r *socks5.Request, target, host string) error {
 	cls := s.router.ClassifyHost(host)
 	if cls.IPV6Rejected {
 		log.Warn("[SOCKS5] ipv6 target rejected, ipv6 disabled", "target", target)
@@ -327,20 +340,11 @@ func (s *Socks5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 		return nil
 	case router.HostRuleProxy:
 		log.Info("[TCP_PROXY]", "target", target, "local", local)
-		a, bindAddr, bindPort, err := socks5.ParseAddress(c.LocalAddr().String())
-		if err != nil {
-			log.Error("[TCP_PROXY] parse local addr", "err", err)
-			return s.replyError(c, r, socks5.RepServerFailure)
-		}
-		if a == socks5.ATYPDomain {
-			bindAddr = bindAddr[1:]
-		}
-		p := socks5.NewReply(socks5.RepSuccess, a, bindAddr, bindPort)
-		if _, err := p.WriteTo(c); err != nil {
+		if err := writeSocksSuccessReply(c); err != nil {
 			log.Error("[TCP_PROXY] reply", "err", err)
 			return err
 		}
-		err = s.handler.OpenTCPStream(context.Background(), target, s.method, c)
+		err := s.handler.OpenTCPStream(context.Background(), target, s.method, c)
 		if err != nil {
 			if isTransientStreamError(err) {
 				log.Debug("[TCP_PROXY] closed", "target", target, "err", err)
@@ -354,6 +358,21 @@ func (s *Socks5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 	}
 
 	return nil
+}
+
+// writeSocksSuccessReply 向客户端写 SOCKS5 CONNECT 成功应答，地址取自本地监听
+// 地址（与代理路径一致，供 TCP DNS 拦截复用）。
+func writeSocksSuccessReply(c net.Conn) error {
+	a, bindAddr, bindPort, err := socks5.ParseAddress(c.LocalAddr().String())
+	if err != nil {
+		return err
+	}
+	if a == socks5.ATYPDomain {
+		bindAddr = bindAddr[1:]
+	}
+	p := socks5.NewReply(socks5.RepSuccess, a, bindAddr, bindPort)
+	_, err = p.WriteTo(c)
+	return err
 }
 
 func (s *Socks5Server) directTCPConnect(c net.Conn, r *socks5.Request, target string) (net.Conn, error) {

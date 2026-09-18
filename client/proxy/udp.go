@@ -20,6 +20,17 @@ import (
 	"github.com/txthinking/socks5"
 )
 
+// isDNSQueryMsg 报告 msg 是否为一次待拦截的 DNS 查询：任意 qtype、必须带
+// Question 且不是响应。UDP 与 TCP 两条 DNS 拦截路径共用同一判定，否则同一
+// 域名的 MX/TXT/HTTPS 等查询会出现"UDP 按目标 IP 直连出网、TCP 按域名走隧道"
+// 的分裂行为。
+//
+// 它刻意比 util.IsDNSRequest（仅 A/AAAA）宽松：后者还被服务端 nextproxy 的
+// 动态域名学习使用，在那里放宽会改变拦截门控（例如让 MX 应答也进入学习路径）。
+func isDNSQueryMsg(msg *dns.Msg) bool {
+	return msg != nil && len(msg.Question) > 0 && !msg.Response
+}
+
 func (s *Socks5Server) handleUDP(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram) error {
 	src := clientAddr.String()
 	dst := d.Address()
@@ -41,7 +52,7 @@ func (s *Socks5Server) handleUDP(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 	}
 
 	msg := &dns.Msg{}
-	if err := msg.Unpack(d.Data); err == nil && util.IsDNSRequest(msg) {
+	if err := msg.Unpack(d.Data); err == nil && isDNSQueryMsg(msg) {
 		return s.handleDNS(srv, clientAddr, d, msg)
 	}
 
@@ -88,24 +99,87 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 }
 
 func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg, domain string) error {
-	try := func(servers []string) (*dns.Msg, error) {
-		return s.exchangeDirectDNSFromList(msg, servers)
-	}
-	resp, err := easydns.QueryWithBuiltinFirst(config.DirectDNSServers, easydns.SystemDNSServers(), try)
+	resp, err := s.resolveDirectDNS(msg, domain, d.Address())
 	if err != nil {
 		log.Error("[DNS_DIRECT]", "domain", domain, "err", err)
 		return err
+	}
+
+	qtype := dns.TypeToString[msg.Question[0].Qtype]
+	log.Info("[DNS_DIRECT] result", "domain", domain, "qtype", qtype, "answers", util.DNSAnswerStrings(resp))
+
+	resp.Id = msg.Id
+	return responseDNSMsg(srv.UDPConn, clientAddr, resp, d.Address())
+}
+
+// resolveDirectDNS 不经隧道直接解析 msg：优先用客户端请求的 DNS 服务器
+// （reqServer，可能为空或不可用），否则用内置公共 DNS、系统 DNS 兜底；并完成
+// AAAA 剥离、缓存与自定义直连域名学习。应答 ID 由调用方改写。
+// UDP 直连 DNS 与 TCP DNS 拦截共用。
+//
+// reqServer 让"客户端显式指定了解析器"这一信息不被丢弃：否则发往内网/企业
+// 解析器的查询会被转投公共 DNS 而拿到错误答案。仅在请求的服务器是明确的单播
+// 地址时才采用（未指定/多播地址，以及 ipv6_rule=disable 下的 IPv6 地址一律
+// 忽略，这些地址永远拨不通）；reqServer 失败时仍回落到内置列表，保持既有韧性。
+// 多个候选由一个共享超时预算并发竞争（见 exchangeDirectDNSFromList），不会串行
+// 叠加延迟。
+func (s *Socks5Server) resolveDirectDNS(msg *dns.Msg, domain, reqServer string) (*dns.Msg, error) {
+	try := func(servers []string) (*dns.Msg, error) {
+		return s.exchangeDirectDNSFromList(msg, servers)
+	}
+
+	var resp *dns.Msg
+	var err error
+	if s.usableDirectDNSServer(reqServer) {
+		resp, err = s.exchangeDirectDNSFromList(msg, append([]string{reqServer}, config.DirectDNSServers...))
+	} else {
+		resp, err = easydns.QueryWithBuiltinFirst(config.DirectDNSServers, easydns.SystemDNSServers(), try)
+	}
+	if err != nil {
+		return nil, err
 	}
 	if s.router.ShouldIPV6Disable() && msg.Question[0].Qtype == dns.TypeAAAA {
 		resp.Answer = nil
 	}
 	_ = s.dnsCache.Set(resp, true)
+	s.learnDNSAnswers(resp, domain, true)
+	return resp, nil
+}
 
-	qtype := dns.TypeToString[msg.Question[0].Qtype]
-	log.Info("[DNS_DIRECT] result", "domain", domain, "qtype", qtype, "answers", util.DNSAnswerStrings(resp))
+// usableDirectDNSServer 报告 addr 是否可作为直连解析的目标：必须是可拨号的
+// 单播地址。未指定（0.0.0.0/::）与多播/广播地址永远不可用；ipv6_rule=disable
+// 时 IPv6 上游也要忽略（exchangeDirectDNSFromList 同样会过滤，这里只是提前
+// 让出内置兜底路径）。回环地址是允许的：那可能正是客户端配置的本地解析器
+// （本机 DNS 转发服务器），拨过去仍能拿到应答，只是多一跳。
+func (s *Socks5Server) usableDirectDNSServer(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	if ip.IsUnspecified() || ip.IsMulticast() {
+		return false
+	}
+	if s.router.ShouldIPV6Disable() && util.IsIPV6(host) {
+		return false
+	}
+	return true
+}
 
-	if s.router.IsCustomDirectDomain(domain) {
-		for _, ans := range resp.Answer {
+// learnDNSAnswers 依据自定义直连/代理域名规则，从应答中学习 A/AAAA/CNAME，
+// 供后续连接按 IP 或域名路由。UDP 与 TCP DNS 路径共用。
+func (s *Socks5Server) learnDNSAnswers(msg *dns.Msg, domain string, isDirect bool) {
+	if msg == nil {
+		return
+	}
+	if isDirect {
+		if !s.router.IsCustomDirectDomain(domain) {
+			return
+		}
+		for _, ans := range msg.Answer {
 			switch a := ans.(type) {
 			case *dns.A:
 				s.router.AddDirectIP(a.A.String())
@@ -115,10 +189,18 @@ func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAdd
 				s.router.AddDirectDomain(strings.TrimSuffix(a.Target, "."))
 			}
 		}
+		return
 	}
-
-	resp.Id = msg.Id
-	return responseDNSMsg(srv.UDPConn, clientAddr, resp, d.Address())
+	if !s.router.IsCustomProxyDomain(domain) {
+		return
+	}
+	util.ForEachDNSAnswer(msg, func(kind, value string) {
+		if kind == "CNAME" {
+			s.router.AddProxyDomain(value)
+			return
+		}
+		s.router.AddProxyIP(value)
+	})
 }
 
 // exchangeDirectDNSFromList 依次用给定的 DNS 服务器交换 msg。内置优先的回退
@@ -367,15 +449,7 @@ func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAd
 			qtype := dns.TypeToString[msg.Question[0].Qtype]
 			log.Info("[DNS_PROXY] result", "domain", domain, "qtype", qtype, "answers", util.DNSAnswerStrings(msg))
 
-			if s.router.IsCustomProxyDomain(domain) {
-				util.ForEachDNSAnswer(msg, func(kind, value string) {
-					if kind == "CNAME" {
-						s.router.AddProxyDomain(value)
-						return
-					}
-					s.router.AddProxyIP(value)
-				})
-			}
+			s.learnDNSAnswers(msg, domain, false)
 		}
 		s.sendToClient(srv, clientAddr, data, target)
 	}
@@ -605,9 +679,19 @@ func responseDNSMsg(conn *net.UDPConn, addr *net.UDPAddr, msg *dns.Msg, dst stri
 }
 
 func responseBlockedDNSMsg(conn *net.UDPConn, addr *net.UDPAddr, msg *dns.Msg, dst string) error {
+	blockedDNSReply(msg)
+	return responseDNSMsg(conn, addr, msg, dst)
+}
+
+// blockedDNSReply 把 msg 原地改造成一个"按策略屏蔽"的应答：响应位置位、清空
+// 答案/授权/附加区。Rcode 刻意保持请求的原值（通常为 NOERROR），与 UDP 路径
+// 的历史语义一致——NOERROR + 空答案会被解析器按 NXDOMAIN 之外的负缓存处理，
+// 换用 REFUSED 反而让部分 stub resolver 反复重试同一被屏蔽域名。
+// UDP 与 TCP DNS 路径共用。
+func blockedDNSReply(msg *dns.Msg) *dns.Msg {
 	msg.Response = true
 	msg.Answer = nil
 	msg.Ns = nil
 	msg.Extra = nil
-	return responseDNSMsg(conn, addr, msg, dst)
+	return msg
 }
