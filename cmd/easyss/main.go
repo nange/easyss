@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	_ "time/tzdata"
@@ -212,11 +213,92 @@ type App struct {
 	// 呈现，headless 构建则记入日志。
 	startupWarn error
 
+	// tunSkippedForNetwork 记录启动时因服务端域名尚未解析成功（开机网络还
+	// 没就绪）而跳过了 TUN；后台解析恢复后据此在通知里提醒用户手动开启。
+	tunSkippedForNetwork bool
+
 	// statsCloser 用于停止后台统计日志器。它由 statsMu 保护，
 	// 因为 Start/Stop 可能并发执行（托盘菜单处理器），
 	// 而且 Start 失败时会保持未设置：关闭 nil channel 会 panic。
 	statsMu     sync.Mutex
 	statsCloser chan struct{}
+}
+
+// coreGen 为每次 App.Start 启动的核心分配单调递增的序号，供后台 goroutine
+// 判断自己观察的核心是否仍是当前核心。App 会被 restartService 整体重建
+// （*a.App = App{...}），因此序号不能放在 App 上，否则会与旧实例冲突。
+var coreGen atomic.Uint64
+
+// serverDomainReadyNotify 非 nil 时，通过托盘系统通知报告"后台重试已解析出
+// 服务端域名、代理恢复可用"。托盘构建在 buildTray 中安装它；headless 与
+// --disable-tray 构建保持 nil，此时恢复过程只体现在日志里（由 runner 输出）。
+var serverDomainReadyNotify func(msg string)
+
+// serverDomainReadiness 是启动路径需要的最小核心视图：服务端域名是否已就绪，
+// 以及核心何时停止。抽成接口是为了能在测试中注入假实现
+// （*runner.Core 的字段无法从包外构造）。
+type serverDomainReadiness interface {
+	ServerDomainReady() <-chan struct{}
+	Done() <-chan struct{}
+}
+
+// canStartTunNow 报告现在是否可以启用 TUN：服务端域名必须已经解析成功
+// （或无需解析）。nil core 与未初始化的就绪通道都视为"无需等待"，保持既有行为。
+//
+// 未就绪时启用 TUN 是危险的：平台脚本会把系统 DNS 指向本机转发服务器，
+// 而解析服务端域名又需要先连上服务器（隧道），容易形成解析递归；网络根本
+// 没起来时脚本还会因缺默认网关而失败。
+func canStartTunNow(core serverDomainReadiness) bool {
+	if core == nil {
+		return true
+	}
+	ready := core.ServerDomainReady()
+	if ready == nil {
+		return true
+	}
+	select {
+	case <-ready:
+		return true
+	default:
+		return false
+	}
+}
+
+// watchServerDomainReady 在降级启动（服务端域名暂不可解析）后，等待后台重试
+// 成功并向用户报告一次。pending 为 false（启动即就绪）时不派发任何 goroutine，
+// 否则每次正常启动都会弹一条无意义通知。tunSkipped 由调用方在派发前读取，
+// 使 goroutine 不必访问会被 restartService 重建的 App 字段。
+func (a *App) watchServerDomainReady(core serverDomainReadiness, gen uint64, pending, tunSkipped bool) {
+	if !pending || core == nil || serverDomainReadyNotify == nil {
+		return
+	}
+	ready, done := core.ServerDomainReady(), core.Done()
+	if ready == nil || done == nil {
+		return
+	}
+
+	go func() {
+		select {
+		case <-ready:
+		case <-done:
+			return
+		}
+		// 就绪与"核心被停止/替换"可能并发发生：过期核心不再弹通知。
+		select {
+		case <-done:
+			return
+		default:
+		}
+		if coreGen.Load() != gen {
+			return
+		}
+
+		msg := "网络已恢复，代理服务已就绪"
+		if tunSkipped {
+			msg += "；系统全局流量(Tun2socks)启动时已跳过，可在托盘菜单中重新开启"
+		}
+		serverDomainReadyNotify(msg)
+	}()
 }
 
 func (a *App) Start() error {
@@ -226,6 +308,9 @@ func (a *App) Start() error {
 	}
 	a.core = core
 	a.setStartupWarn(core.StartupWarn)
+	gen := coreGen.Add(1)
+	// 降级启动（开机时网络未就绪、服务端域名暂不可解析）时为 true。
+	domainPending := !canStartTunNow(core)
 
 	if a.cfg.Local.EnableTun2socks {
 		// 在 macOS 和 Linux 非 root 环境下，TUN 通过提权启动（助手进程或以 root 重启）。
@@ -236,16 +321,20 @@ func (a *App) Start() error {
 		if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !IsRoot() {
 			log.Warn("[EASYSS-V3] tun2socks requires root; skipped (use sudo, or run with system tray for automatic elevation)")
 			notifyTunSkippedNoRoot()
-		} else {
+		} else if !domainPending {
 			// runner.Run 已确保服务端主机名可解析并预填充了 DNS 缓存
-			//（resolveServerDomain），因此 TUN 模式的 DNS 绝不会在服务端域名上死锁。
-			a.tunMgr = tun.New(a.tunConfig())
-
-			icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
-			icmpHandler.SetProxy(a.core.StreamHandler, a.methodFromServer())
-			a.tunMgr.SetICMPHandler(icmpHandler)
-
-			startTunEngine(a.tunMgr, "device")
+			//（resolveServerDomain），因此 TUN 模式的 DNS 永远不会在服务端域名上死锁。
+			a.startTunEngineAtStartup()
+		} else {
+			// 开机时网络常常尚未就绪，服务端域名还没解析出来。此时照常启用 TUN
+			// 会让平台脚本把系统 DNS 指向本机转发服务器，而解析服务端域名又需要
+			// 隧道本身（递归）；网络根本没起来时脚本还会因缺默认网关失败。
+			// 因此跳过 TUN，并把配置与托盘勾选同步为"未启用"，等网络恢复后由
+			// 用户手动开启（届时 canStartTunNow 放行）。
+			a.cfg.Local.EnableTun2socks = false
+			a.tunSkippedForNetwork = true
+			log.Warn("[EASYSS-V3] server domain not resolved yet; tun2socks skipped until the network is ready")
+			notifyTunSkippedNetworkUnready()
 		}
 	}
 
@@ -255,7 +344,31 @@ func (a *App) Start() error {
 		a.pprofSrv = pprof.StartPprof()
 	}
 
+	// 降级启动时，网络恢复后向用户报告一次（仅托盘构建安装了 hook）。
+	a.watchServerDomainReady(core, gen, domainPending, a.tunSkippedForNetwork)
+
 	return nil
+}
+
+// startTunEngineAtStartup 在启动路径上创建 TUN 管理器并派发引擎启动。
+// 构造顺序与托盘菜单路径（TrayApp.createTun2socks）保持一致。
+func (a *App) startTunEngineAtStartup() {
+	a.tunMgr = tun.New(a.tunConfig())
+
+	icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
+	icmpHandler.SetProxy(a.core.StreamHandler, a.methodFromServer())
+	a.tunMgr.SetICMPHandler(icmpHandler)
+
+	startTunEngine(a.tunMgr, "device")
+}
+
+// notifyTunSkippedNetworkUnready 报告 TUN 因服务端域名尚未解析成功而跳过。
+// 与 notifyTunSkippedNoRoot 一样走 tunStartNotify：headless 与 --disable-tray
+// 构建没有托盘 hook，原因只写日志。
+func notifyTunSkippedNetworkUnready() {
+	if tunStartNotify != nil {
+		tunStartNotify("网络尚未就绪：已跳过系统全局流量(Tun2socks)；网络恢复后请在托盘菜单中重新开启")
+	}
 }
 
 // tunStartFailureHook 非 nil 时，会在 TUN 引擎启动失败后执行。
@@ -443,6 +556,10 @@ func (a *App) tunConfig() tun.Config {
 		DNSServer:  tunDNS(a.cfg),
 	}
 	if a.core != nil && a.core.Client != nil {
+		// 降级启动（开机时网络未就绪）会让启动期的 IPv6 解析得到空值；这里在
+		// 读取前补一次有界解析，否则 TUN 脚本不会安装 IPv6 默认路由，
+		// IPv6 流量会绕过隧道。已有值时该方法直接返回，不做 DNS 查询。
+		a.core.Client.RefreshServerIPV6()
 		if ipv6 := a.core.Client.Router().ServerIPV6(); ipv6 != "" {
 			cfg.ServerIPV6 = ipv6
 		}

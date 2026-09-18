@@ -9,6 +9,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/client/config"
 	easydns "github.com/nange/easyss/v3/client/dns"
+	"github.com/nange/easyss/v3/client/router"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -98,4 +99,61 @@ func TestResolveServerIPV6WithLocalDNS(t *testing.T) {
 	}
 	got := resolveServerIPV6(context.Background(), cfg)
 	assert.Equal(t, net.ParseIP("::1").String(), got)
+}
+
+// TestRefreshServerIPV6 覆盖 RefreshServerIPV6 的短路路径与"降级启动后重新
+// 解析"的正向路径：只有当前值为空、服务器是域名且 IPv6 规则未禁用时才查询。
+func TestRefreshServerIPV6(t *testing.T) {
+	newClient := func(t *testing.T, cfg *config.ClientConfig) *Client {
+		t.Helper()
+		rt, err := router.New(router.Config{
+			ProxyRule: router.ParseProxyRule(cfg.Routing.ProxyRule),
+			IPV6Rule:  router.ParseIPV6Rule(cfg.Routing.IPV6Rule),
+		})
+		require.NoError(t, err)
+		return &Client{cfg: cfg, router: rt}
+	}
+	domainCfg := func(rule string) *config.ClientConfig {
+		return &config.ClientConfig{
+			Servers: []*config.ServerProfile{{Address: "proxy.example.com", Default: true}},
+			Routing: config.RoutingConfig{IPV6Rule: rule},
+		}
+	}
+
+	// nil 客户端安全返回空串。
+	var nilClient *Client
+	assert.Equal(t, "", nilClient.RefreshServerIPV6())
+
+	// 已有解析结果：直接返回，不重新查询。
+	c := newClient(t, domainCfg("auto"))
+	c.router.SetIPV6Info(false, "2001:db8::1")
+	assert.Equal(t, "2001:db8::1", c.RefreshServerIPV6())
+
+	// 服务器是字面 IPv4：无需解析。
+	c = newClient(t, &config.ClientConfig{
+		Servers: []*config.ServerProfile{{Address: "1.2.3.4", Default: true}},
+		Routing: config.RoutingConfig{IPV6Rule: "auto"},
+	})
+	assert.Equal(t, "", c.RefreshServerIPV6())
+
+	// IPv6 规则禁用：不解析。
+	c = newClient(t, domainCfg("disable"))
+	assert.Equal(t, "", c.RefreshServerIPV6())
+
+	// 正向路径：本地 DNS 应答 AAAA ::1，结果写回路由引擎。
+	addr, shutdown := startLocalDNSServer(t)
+	defer shutdown()
+
+	old := config.DirectDNSServers
+	config.DirectDNSServers = []string{addr}
+	defer func() { config.DirectDNSServers = old }()
+	easydns.MarkBuiltinDNSAvailable()
+
+	cfg := &config.ClientConfig{
+		Servers: []*config.ServerProfile{{Address: "test.local", Default: true}},
+		Routing: config.RoutingConfig{IPV6Rule: "auto"},
+	}
+	c = newClient(t, cfg)
+	assert.Equal(t, net.ParseIP("::1").String(), c.RefreshServerIPV6())
+	assert.Equal(t, net.ParseIP("::1").String(), c.router.ServerIPV6())
 }
