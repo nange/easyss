@@ -4,29 +4,12 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/gogpu/systray"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util"
-)
-
-const (
-	// uwpMenuSlots 是启动时预建进子菜单的 UWP 应用复选框槽位的固定数量。
-	// 菜单树在运行时绝不会被结构性重建：gogpu/systray 的 SetMenu 会按位置
-	// 重新编号每个菜单项并销毁原生 HMENU，因此在上下文菜单打开期间重建
-	// 可能把一次点击派发到另一个菜单项的回调上
-	// (https://github.com/gogpu/systray/issues/39)。预分配固定数量的槽位并
-	// 只就地更新标签/选中/禁用状态，可保持根菜单形状不变，
-	// 因此不会出现过期 ID 别名问题。任何将来要在运行时改变菜单树结构的
-	// 特性都必须遵守同样的约束。
-	uwpMenuSlots = 48
-
-	// uwpSlotLoadingLabel 是显示在未填充槽位中的占位符，
-	// 直到第一次刷新将其填满。
-	uwpSlotLoadingLabel = "…"
 )
 
 func (a *TrayApp) addUWPLoopbackMenu(root *systray.Menu) {
@@ -36,29 +19,66 @@ func (a *TrayApp) addUWPLoopbackMenu(root *systray.Menu) {
 
 	a.uwpMenu.Add("刷新列表", func() { go a.uwpRefresh() })
 
-	a.buildUWPSlots()
-
 	// 异步填充列表；菜单此时已显示 "刷新列表"。
 	go a.uwpRefresh()
 }
 
-// buildUWPSlots 预建 UWP 子菜单的固定槽位布局：一个溢出提示项，
-// 后跟 uwpMenuSlots 个复选框槽位，全部以占位符标签禁用。
-// 槽位由 applyUWPAppsToSlots 就地填充，因此菜单树在启动后不会被重建
-// （参见 uwpMenuSlots）。
-func (a *TrayApp) buildUWPSlots() {
-	a.uwpOverflowHint = a.uwpMenu.Add(uwpSlotLoadingLabel, nil)
-	a.uwpOverflowHint.SetDisabled(true)
+// refreshUWPAppItems 按当前已安装应用重建 UWP 子菜单的列表。
+//
+// 菜单列表是动态的：已存在的条目就地更新，新安装的应用追加到末尾，
+// 已卸载/已消失的应用对应的条目置灰（systray 没有移除菜单项的 API，
+// 列表可能随着时间增长，但只会显示当前有效的应用）。只要菜单形状
+// 发生变化就调用一次 SetMenu，让原生菜单与这份列表同步。
+//
+// 这样做的前提是 nange/systray 修复了 gogpu/systray issue #39：
+// 每个菜单项使用稳定的命令 ID，且在菜单显示期间到达的重建请求会被排队，
+// 等菜单关闭后再应用，因此重建绝不会把用户的点击派发到另一个菜单项，
+// 也不会销毁正在被 TrackPopupMenu 跟踪的 HMENU。
+func (a *TrayApp) refreshUWPAppItems(apps []UWPApp) {
+	needsRebuild := false
+	appIndex := 0
 
-	a.uwpItems = make([]*UWPMenuItem, 0, uwpMenuSlots)
-	for range uwpMenuSlots {
-		uwpItem := &UWPMenuItem{}
-		item := a.uwpMenu.AddCheckbox(uwpSlotLoadingLabel, false, func(u *UWPMenuItem) func() {
-			return func() { a.onUWPItemClicked(u) }
-		}(uwpItem))
-		item.SetDisabled(true)
-		uwpItem.MenuItem = item
-		a.uwpItems = append(a.uwpItems, uwpItem)
+	for i := range apps {
+		app := &apps[i]
+		if app.Name == "" || app.PackageFamilyName == "" {
+			continue
+		}
+
+		if appIndex >= len(a.uwpItems) {
+			uwpItem := &UWPMenuItem{App: app}
+			item := a.uwpMenu.AddCheckbox(app.Name, app.Exempt, func(u *UWPMenuItem) func() {
+				return func() { a.onUWPItemClicked(u) }
+			}(uwpItem))
+			uwpItem.MenuItem = item
+			a.uwpItems = append(a.uwpItems, uwpItem)
+			needsRebuild = true
+		} else {
+			uwpItem := a.uwpItems[appIndex]
+			uwpItem.Mu.Lock()
+			uwpItem.App = app
+			uwpItem.Mu.Unlock()
+
+			uwpItem.MenuItem.SetLabel(app.Name)
+			uwpItem.MenuItem.SetDisabled(false)
+			uwpItem.MenuItem.SetChecked(app.Exempt)
+		}
+		appIndex++
+	}
+
+	// 剩余条目对应的应用已不存在：置灰并清空目标应用，
+	// 这样点击它们不会对任何应用生效。
+	for i := appIndex; i < len(a.uwpItems); i++ {
+		uwpItem := a.uwpItems[i]
+		uwpItem.MenuItem.SetDisabled(true)
+		uwpItem.Mu.Lock()
+		uwpItem.App = nil
+		uwpItem.Mu.Unlock()
+	}
+
+	if needsRebuild && a.tray != nil {
+		// 重建发生在持有 uwpMu 期间：systray 的重建请求在菜单显示期间会被排队，
+		// 因此这里不会与正在浏览菜单的用户产生竞争（托盘未构建时为无操作）。
+		a.tray.SetMenu(a.rootMenu)
 	}
 }
 
@@ -88,54 +108,7 @@ func (a *TrayApp) uwpRefresh() {
 		return strings.ToLower(apps[i].Name) < strings.ToLower(apps[j].Name)
 	})
 
-	a.applyUWPAppsToSlots(apps)
-}
-
-// applyUWPAppsToSlots 将应用就地写入预建的槽位布局。
-// 超出槽位数量的应用会被丢弃（由溢出提示项报告），
-// 没有对应应用的槽位保持禁用并保留之前的标签。
-// 此处绝不改变菜单树的形状——不调用 SetMenu，因此不会触发
-// gogpu/systray issue #39 的过期命令 ID 别名问题。
-func (a *TrayApp) applyUWPAppsToSlots(apps []UWPApp) {
-	slot := 0
-	for i := range apps {
-		if apps[i].Name == "" || apps[i].PackageFamilyName == "" {
-			continue
-		}
-		if slot >= len(a.uwpItems) {
-			break
-		}
-		app := &apps[i]
-		uwpItem := a.uwpItems[slot]
-
-		uwpItem.Mu.Lock()
-		uwpItem.App = app
-		uwpItem.Mu.Unlock()
-
-		uwpItem.MenuItem.SetLabel(app.Name)
-		uwpItem.MenuItem.SetDisabled(false)
-		uwpItem.MenuItem.SetChecked(app.Exempt)
-		slot++
-	}
-
-	// 没有对应应用的槽位会被禁用（保留之前的标签，
-	// 以便用户仍能看到哪个应用曾占据该位置）。
-	for i := slot; i < len(a.uwpItems); i++ {
-		uwpItem := a.uwpItems[i]
-		uwpItem.MenuItem.SetDisabled(true)
-		uwpItem.Mu.Lock()
-		uwpItem.App = nil
-		uwpItem.Mu.Unlock()
-	}
-
-	if a.uwpOverflowHint != nil {
-		if len(apps) > len(a.uwpItems) {
-			a.uwpOverflowHint.SetLabel(fmt.Sprintf("共 %d 个应用，仅显示前 %d 个", len(apps), len(a.uwpItems)))
-		} else {
-			a.uwpOverflowHint.SetLabel(fmt.Sprintf("共 %d 个应用", len(apps)))
-		}
-		// 提示项保持禁用：它仅供信息展示，点击它绝不能触发任何操作。
-	}
+	a.refreshUWPAppItems(apps)
 }
 
 func (a *TrayApp) onUWPItemClicked(u *UWPMenuItem) {
