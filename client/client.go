@@ -502,6 +502,41 @@ func detectIPV6Networking() bool {
 	return err == nil
 }
 
+// RefreshServerIPV6 在服务端 IPv6 信息仍为空时重新解析一次，并更新路由引擎。
+//
+// 启动时若网络尚未就绪（开机自启动的典型情况），client.New 里的解析会得到
+// 空值；降级启动后用户手动启用 TUN 时如果仍为空，平台脚本不会安装 IPv6 默认
+// 路由，IPv6 流量就会绕过隧道（见 scripts/create_tun_dev*.sh）。已有值、服务器
+// 是字面 IP、或 IPv6 规则为 disable 时直接返回，不做 DNS 查询。
+func (c *Client) RefreshServerIPV6() string {
+	if c == nil {
+		return ""
+	}
+	if ipv6 := c.router.ServerIPV6(); ipv6 != "" {
+		return ipv6
+	}
+	if router.ParseIPV6Rule(c.cfg.Routing.IPV6Rule) == router.IPV6RuleDisable {
+		return ""
+	}
+	if svr := c.cfg.DefaultServer(); svr == nil || net.ParseIP(svr.Address) != nil {
+		return ""
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), serverIPV6ResolveTimeout)
+	defer cancel()
+
+	serverIPV6 := resolveServerIPV6(ctx, c.cfg)
+	ipv6Networking := detectIPV6Networking()
+	c.router.SetIPV6Info(ipv6Networking, serverIPV6)
+
+	log.Info("[CLIENT] server ipv6 refreshed",
+		"ipv6_rule", c.cfg.Routing.IPV6Rule,
+		"server_ipv6", serverIPV6,
+		"ipv6_networking", ipv6Networking,
+	)
+	return serverIPV6
+}
+
 func (c *Client) Router() *router.Router {
 	return c.router
 }

@@ -365,18 +365,16 @@ func TestStopCancelsInFlightWarmUp(t *testing.T) {
 
 // TestResolveServerDomain 通过注入 prePopulateServerDomain 覆盖启动时的
 // 服务器域名解析，确保测试中永远不会发出真实的 DNS 查询。
-// 解析失败是致命错误（服务器不可达）。
+// 它只做一次有界尝试，失败以错误返回（是否致命由 Run 决定，见
+// TestRunDegradesWhenServerDomainUnresolved）。
 func TestResolveServerDomain(t *testing.T) {
 	oldFn := prePopulateServerDomain
 	oldTimeout := serverStartupResolveTimeout
-	oldDelay := serverStartupRetryDelay
 	t.Cleanup(func() {
 		prePopulateServerDomain = oldFn
 		serverStartupResolveTimeout = oldTimeout
-		serverStartupRetryDelay = oldDelay
 	})
 	serverStartupResolveTimeout = 50 * time.Millisecond
-	serverStartupRetryDelay = 0
 
 	// 字面 IP 无需解析：不触碰 DNS 直接跳过。
 	cfgIP := testConfig() // Address 是 127.0.0.1
@@ -401,9 +399,15 @@ func TestResolveServerDomain(t *testing.T) {
 		t.Fatalf("no server should not resolve: %v", err)
 	}
 
-	// 非 TUN 模式失败：仅一次有界尝试，返回致命错误。
+	// 没有本地 socks5 服务：没有可预填充的 DNS 缓存，跳过。
 	cfgDomain := testConfig()
 	cfgDomain.Servers[0].Address = "proxy.example.com"
+	c = &Core{}
+	if err := c.resolveServerDomain(cfgDomain); err != nil {
+		t.Fatalf("no socks5 server should not resolve: %v", err)
+	}
+
+	// 非 TUN 模式失败：仅一次有界尝试，返回错误。
 	cfgDomain.Local.EnableTun2socks = false
 	prePopulateServerDomain = func(*proxy.Socks5Server, context.Context, string, []string, bool) error {
 		attempts++
@@ -422,7 +426,7 @@ func TestResolveServerDomain(t *testing.T) {
 		t.Fatalf("non-TUN should attempt once, got %d", attempts)
 	}
 
-	// TUN 模式失败：重试 3 次（那里的预填充是必需的）。
+	// TUN 模式失败同样只尝试一次：重试由 Run 派发到后台，不再阻塞启动。
 	cfgTun := testConfig()
 	cfgTun.Servers[0].Address = "proxy.example.com"
 	cfgTun.Local.EnableTun2socks = true
@@ -431,8 +435,8 @@ func TestResolveServerDomain(t *testing.T) {
 	if err := c.resolveServerDomain(cfgTun); err == nil {
 		t.Fatal("expected error on TUN resolution failure")
 	}
-	if attempts != 3 {
-		t.Fatalf("TUN should attempt 3 times, got %d", attempts)
+	if attempts != 1 {
+		t.Fatalf("TUN should attempt once (retries happen in the background), got %d", attempts)
 	}
 
 	// 成功：无错误。
@@ -449,7 +453,7 @@ func TestResolveServerDomain(t *testing.T) {
 		t.Fatalf("expected a single successful attempt, got %d", attempts)
 	}
 
-	// 未配置 DNS 服务器：按解析失败处理。
+	// 未配置 DNS 服务器：直接返回错误且不尝试。
 	oldDirect := config.DirectDNSServers
 	config.DirectDNSServers = nil
 	t.Cleanup(func() { config.DirectDNSServers = oldDirect })
@@ -463,35 +467,197 @@ func TestResolveServerDomain(t *testing.T) {
 	}
 }
 
-// TestRunFailsOnServerDomainResolve 验证服务器域名解析失败会中止启动：
-// Run 返回致命错误而不是启动服务器，因为没有它代理无法工作。
-func TestRunFailsOnServerDomainResolve(t *testing.T) {
-	oldFn := prePopulateServerDomain
+// setShortDomainRetry 把后台重试的时序参数与外部副作用缩到测试尺度，
+// 并在测试结束时还原。
+func setShortDomainRetry(t *testing.T) {
+	t.Helper()
+
+	oldBase, oldMax := serverDomainRetryBase, serverDomainRetryMax
 	oldTimeout := serverStartupResolveTimeout
-	oldDelay := serverStartupRetryDelay
+	oldReset := resetResolveState
+	oldWarmUp, oldDelay := warmUpCore, warmUpStartDelay
 	t.Cleanup(func() {
-		prePopulateServerDomain = oldFn
+		serverDomainRetryBase, serverDomainRetryMax = oldBase, oldMax
 		serverStartupResolveTimeout = oldTimeout
-		serverStartupRetryDelay = oldDelay
+		resetResolveState = oldReset
+		warmUpCore, warmUpStartDelay = oldWarmUp, oldDelay
 	})
+
 	serverStartupResolveTimeout = 50 * time.Millisecond
-	serverStartupRetryDelay = 0
+	serverDomainRetryBase = 10 * time.Millisecond
+	serverDomainRetryMax = 20 * time.Millisecond
+	warmUpStartDelay = time.Millisecond
+	// DNS 包的熔断/系统 DNS 缓存是进程级状态，测试里不触碰它。
+	resetResolveState = func() {}
+	// 预热的真实实现会拨号；测试里只关心它是否被再次派发。
+	warmUpCore = func(*proxy.Socks5Server, time.Duration) error { return nil }
+}
+
+// TestRunDegradesWhenServerDomainUnresolved 验证服务器域名解析失败不再中止
+// 启动：Run 正常返回核心，警告带上专用哨兵，后台重试成功后关闭就绪通道并
+// 补派一次连接池预热。
+func TestRunDegradesWhenServerDomainUnresolved(t *testing.T) {
+	oldFn := prePopulateServerDomain
+	t.Cleanup(func() { prePopulateServerDomain = oldFn })
+	setShortDomainRetry(t)
+
+	var (
+		mu       sync.Mutex
+		attempts int
+		resets   int
+		warmUps  int
+	)
+	prePopulateServerDomain = func(*proxy.Socks5Server, context.Context, string, []string, bool) error {
+		mu.Lock()
+		defer mu.Unlock()
+		attempts++
+		if attempts < 3 {
+			return errors.New("dns boom")
+		}
+		return nil
+	}
+	resetResolveState = func() {
+		mu.Lock()
+		defer mu.Unlock()
+		resets++
+	}
+	warmUpCore = func(*proxy.Socks5Server, time.Duration) error {
+		mu.Lock()
+		defer mu.Unlock()
+		warmUps++
+		return nil
+	}
 
 	cfg := testConfig()
 	cfg.Servers[0].Address = "proxy.example.com"
 	cfg.Local.SocksPort = freePort(t)
 	cfg.Local.HTTPPort = 0
 
+	core, err := Run(cfg)
+	if err != nil {
+		t.Fatalf("Run must not fail when the server domain is unresolved: %v", err)
+	}
+	defer core.Stop()
+
+	if !errors.Is(core.StartupWarn, ErrServerDomainUnresolved) {
+		t.Fatalf("StartupWarn = %v, want ErrServerDomainUnresolved", core.StartupWarn)
+	}
+	select {
+	case <-core.ServerDomainReady():
+		t.Fatal("ready channel must stay open while the domain is unresolved")
+	default:
+	}
+
+	select {
+	case <-core.ServerDomainReady():
+	case <-time.After(5 * time.Second):
+		t.Fatal("ready channel was not closed after the background retry succeeded")
+	}
+
+	mu.Lock()
+	gotAttempts, gotResets := attempts, resets
+	mu.Unlock()
+	if gotAttempts < 3 {
+		t.Fatalf("attempts = %d, want >= 3", gotAttempts)
+	}
+	// 前台那次尝试不清缓存；此后每次后台尝试都先清一次。
+	if gotResets != gotAttempts-1 {
+		t.Fatalf("resetResolveState calls = %d, want one per background attempt (%d)", gotResets, gotAttempts-1)
+	}
+
+	// 预热在就绪后才补派，且探测自身还有一个小延迟，因此轮询等待。
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		gotWarmUps := warmUps
+		mu.Unlock()
+		if gotWarmUps >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no warm-up probe was dispatched after the domain became ready")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestRunServerDomainReadyImmediately 验证无需解析（字面 IP）时启动即就绪，
+// 且不会派发任何后台解析尝试。
+func TestRunServerDomainReadyImmediately(t *testing.T) {
+	oldFn := prePopulateServerDomain
+	t.Cleanup(func() { prePopulateServerDomain = oldFn })
+	setShortDomainRetry(t)
+
+	var attempts atomic.Int64
 	prePopulateServerDomain = func(*proxy.Socks5Server, context.Context, string, []string, bool) error {
+		attempts.Add(1)
+		return nil
+	}
+
+	cfg := testConfig() // Address 是字面 IP
+	cfg.Local.SocksPort = freePort(t)
+	cfg.Local.HTTPPort = 0
+
+	core, err := Run(cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	defer core.Stop()
+
+	if core.StartupWarn != nil {
+		t.Fatalf("StartupWarn = %v, want nil", core.StartupWarn)
+	}
+	select {
+	case <-core.ServerDomainReady():
+	default:
+		t.Fatal("ready channel must be closed for a literal server IP")
+	}
+
+	time.Sleep(5 * serverDomainRetryMax)
+	if got := attempts.Load(); got != 0 {
+		t.Fatalf("literal IP must not trigger resolution attempts, got %d", got)
+	}
+}
+
+// TestServerDomainRetryStopsOnStop 验证核心停止后后台重试不再发起新的解析。
+func TestServerDomainRetryStopsOnStop(t *testing.T) {
+	oldFn := prePopulateServerDomain
+	t.Cleanup(func() { prePopulateServerDomain = oldFn })
+	setShortDomainRetry(t)
+
+	var attempts atomic.Int64
+	prePopulateServerDomain = func(*proxy.Socks5Server, context.Context, string, []string, bool) error {
+		attempts.Add(1)
 		return errors.New("dns boom")
 	}
 
+	cfg := testConfig()
+	cfg.Servers[0].Address = "proxy.example.com"
+	cfg.Local.SocksPort = freePort(t)
+	cfg.Local.HTTPPort = 0
+
 	core, err := Run(cfg)
-	if err == nil {
-		core.Stop()
-		t.Fatal("expected Run to fail when the server domain cannot resolve")
+	if err != nil {
+		t.Fatalf("Run must not fail when the server domain is unresolved: %v", err)
 	}
-	if !strings.Contains(err.Error(), "resolution failed") {
-		t.Fatalf("unexpected error: %v", err)
+
+	// 等到后台确实在重试。
+	deadline := time.Now().Add(5 * time.Second)
+	for attempts.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("background retry never started")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	core.Stop()
+
+	// 让进行中的那次尝试收尾（最坏 serverStartupResolveTimeout），随后取样两次：
+	// 停止之后不允许再出现新的尝试。
+	time.Sleep(3 * serverStartupResolveTimeout)
+	settled := attempts.Load()
+	time.Sleep(5 * serverDomainRetryMax)
+	if got := attempts.Load(); got != settled {
+		t.Fatalf("retry kept running after Stop: %d -> %d", settled, got)
 	}
 }

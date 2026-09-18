@@ -12,6 +12,9 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
+
+	"github.com/nange/easyss/v3/runner"
 )
 
 func TestFriendlyConfigError(t *testing.T) {
@@ -69,12 +72,6 @@ func TestFriendlyStartupError(t *testing.T) {
 		t.Fatalf("socks-required error should get the config hint: %q", msg)
 	}
 
-	// 服务端域名解析失败（runner.resolveServerDomain）：致命错误。
-	dnsErr := errors.New("server domain proxy.example.com resolution failed: dns boom")
-	if msg := friendlyStartupError(dnsErr); !strings.Contains(msg, "服务端域名解析失败") {
-		t.Fatalf("resolution error should get the dns hint: %q", msg)
-	}
-
 	other := errors.New("boom")
 	if msg := friendlyStartupError(other); msg != "服务启动失败：boom" {
 		t.Fatalf("unexpected generic startup message: %q", msg)
@@ -86,6 +83,112 @@ func TestFriendlyStartupWarning(t *testing.T) {
 	msg := friendlyStartupWarning(errors.New("load custom rule file: open direct.txt: no such file or directory"))
 	if msg != "启动警告：load custom rule file: open direct.txt: no such file or directory" {
 		t.Fatalf("unexpected startup warning message: %q", msg)
+	}
+
+	// 服务端域名解析失败（runner.ErrServerDomainUnresolved）单独给出
+	// "网络可能尚未就绪、已在后台重试" 的说明，且 errors.Join 包装后仍能识别。
+	resolveErr := errors.Join(
+		errors.New("load custom rule file: boom"),
+		fmt.Errorf("%w: proxy.example.com: %v", runner.ErrServerDomainUnresolved, errors.New("dns boom")),
+	)
+	msg = friendlyStartupWarning(resolveErr)
+	for _, want := range []string{"启动警告", "网络尚未就绪", "后台自动重试", resolveErr.Error()} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("server-domain warning %q is missing %q", msg, want)
+		}
+	}
+}
+
+// fakeDomainReadiness 是 serverDomainReadiness 的测试替身：cmd 包内无法构造
+// 带可用通道的 *runner.Core（字段不可导出）。
+type fakeDomainReadiness struct {
+	ready <-chan struct{}
+	done  <-chan struct{}
+}
+
+func (f fakeDomainReadiness) ServerDomainReady() <-chan struct{} { return f.ready }
+func (f fakeDomainReadiness) Done() <-chan struct{}              { return f.done }
+
+func TestCanStartTunNow(t *testing.T) {
+	if !canStartTunNow(nil) {
+		t.Fatal("nil core must be treated as ready")
+	}
+	if !canStartTunNow(fakeDomainReadiness{}) {
+		t.Fatal("an uninitialized ready channel must be treated as ready")
+	}
+
+	open := make(chan struct{})
+	if canStartTunNow(fakeDomainReadiness{ready: open}) {
+		t.Fatal("an open ready channel must defer the TUN start")
+	}
+	close(open)
+	if !canStartTunNow(fakeDomainReadiness{ready: open}) {
+		t.Fatal("a closed ready channel must allow the TUN start")
+	}
+}
+
+func TestWatchServerDomainReady(t *testing.T) {
+	orig := serverDomainReadyNotify
+	t.Cleanup(func() { serverDomainReadyNotify = orig })
+
+	notified := make(chan string, 4)
+	serverDomainReadyNotify = func(msg string) { notified <- msg }
+
+	ready, done := make(chan struct{}), make(chan struct{})
+	a := &App{}
+	gen := coreGen.Add(1)
+	a.watchServerDomainReady(fakeDomainReadiness{ready: ready, done: done}, gen, true, true)
+
+	select {
+	case msg := <-notified:
+		t.Fatalf("notified before the domain became ready: %q", msg)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(ready)
+	select {
+	case msg := <-notified:
+		// TUN 被跳过时，恢复通知要额外提醒如何重新开启全局流量。
+		for _, want := range []string{"已就绪", "重新开启"} {
+			if !strings.Contains(msg, want) {
+				t.Fatalf("unexpected recovery notification %q, missing %q", msg, want)
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no notification after the domain became ready")
+	}
+
+	// 启动即就绪（pending=false）不派发通知。
+	ready2, done2 := make(chan struct{}), make(chan struct{})
+	close(ready2)
+	a.watchServerDomainReady(fakeDomainReadiness{ready: ready2, done: done2}, coreGen.Add(1), false, false)
+	select {
+	case msg := <-notified:
+		t.Fatalf("a non-degraded start must not notify on recovery: %q", msg)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// 核心被替换（序号更新）后，过期核心不再弹通知。
+	ready3, done3 := make(chan struct{}), make(chan struct{})
+	a.watchServerDomainReady(fakeDomainReadiness{ready: ready3, done: done3}, coreGen.Add(1), true, false)
+	coreGen.Add(1) // 模拟下一次 App.Start
+	close(ready3)
+	select {
+	case msg := <-notified:
+		t.Fatalf("a stale core must not notify: %q", msg)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// 核心已停止：就绪信号到达也不通知（TUN 被跳过的提示走同一通道）。
+	ready4, done4 := make(chan struct{}), make(chan struct{})
+	a4 := &App{}
+	a4.watchServerDomainReady(fakeDomainReadiness{ready: ready4, done: done4}, coreGen.Add(1), true, true)
+	close(done4)
+	close(ready4)
+	select {
+	case msg := <-notified:
+		t.Fatalf("a stopped core must not notify: %q", msg)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

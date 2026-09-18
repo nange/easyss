@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"strconv"
@@ -24,13 +25,23 @@ import (
 
 var errSocksRequired = errors.New("http proxy requires socks_port to be enabled")
 
-// serverStartupResolveTimeout 限定启动时每次同步的服务器域名解析尝试。
+// ErrServerDomainUnresolved 标记"启动时服务端域名尚未解析成功"这一非致命启动
+// 警告：进程继续运行并在后台重试解析。调用方（托盘/headless）用 errors.Is
+// 判定它，以便给出"网络可能尚未就绪"的专用提示。
+var ErrServerDomainUnresolved = errors.New("server domain unresolved")
+
+// serverStartupResolveTimeout 限定启动时以及后台每次重试的服务器域名解析尝试。
 // 它与 client.serverIPV6ResolveTimeout 保持一致：3s 对健康的网络足够，
-// 同时能把最坏情况下的启动延迟控制得很短。serverStartupRetryDelay 是
-// TUN 模式下重试之间的停顿时间。两者都是变量（而非常量），以便测试缩短它们。
+// 同时能把最坏情况下的启动延迟控制得很短。
+//
+// serverDomainRetryBase/serverDomainRetryMax 是后台重试的指数退避区间
+// （下限、上限，带 ±20% 抖动）：开机时网络可能几十秒后才就绪，退避上限决定
+// 了恢复被发现的延迟上界，同时让长时间离线时的尝试足够廉价。三者都是变量
+// （而非常量），以便测试缩短它们。
 var (
 	serverStartupResolveTimeout = 3 * time.Second
-	serverStartupRetryDelay     = time.Second
+	serverDomainRetryBase       = time.Second
+	serverDomainRetryMax        = 15 * time.Second
 )
 
 // prePopulateServerDomain 是包级变量，以便测试注入确定性的失败
@@ -38,6 +49,11 @@ var (
 var prePopulateServerDomain = func(s *proxy.Socks5Server, ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error {
 	return s.PrePopulateDNS(ctx, domain, dnsServers, requireIPv4)
 }
+
+// resetResolveState 清除 DNS 层的内置服务器熔断状态与系统 DNS 发现缓存
+// （见 dns.ResetResolveState）。它是包级变量，以便测试注入空操作，
+// 避免测试改动 DNS 包的进程级状态。
+var resetResolveState = dns.ResetResolveState
 
 // warmUpCore 预热本地 SOCKS5 服务器背后的传输连接池。它是包级变量，
 // 以便测试在没有任何网络的情况下断言调度行为。
@@ -60,14 +76,31 @@ type Core struct {
 	dnsServer     *dns.ForwardServer
 
 	// StartupWarn 保存初始化核心时检测到的非致命警告（例如自定义规则文件
-	// 加载失败），调用方可以在不中断启动的情况下将其展示给用户。
+	// 加载失败，或服务端域名暂时无法解析），调用方可以在不中断启动的情况下
+	// 将其展示给用户。
 	StartupWarn error
 
+	// done 在 Stop（或 Run 失败的清理路径）关闭，既是"核心已停止"的信号，
+	// 也是后台任务（服务端域名重试）的停止信号。doneOnce 保证只关闭一次。
+	done     chan struct{}
+	doneOnce sync.Once
+
+	// domainReady 在服务端域名首次解析成功（或无需解析）时关闭；
+	// domainReadyOnce 保证只关闭一次。启用 TUN 前必须先就绪：系统 DNS 被
+	// 指向本机转发服务器后，解析服务端域名不能再依赖隧道本身。
+	domainReady     chan struct{}
+	domainReadyOnce sync.Once
+
 	// warmUpCancel 取消由 startWarmUp 启动的进行中（或仍在延迟中的）后台
-	// 预热；只设置一次，由 Stop 调用。由 warmUpMu 保护，因为 Stop 可能在
-	// Run 仍在派发时执行。
+	// 预热；由 Stop 调用，也会在重新派发预热时替换掉上一次的取消函数。
+	// 由 warmUpMu 保护，因为 Stop 可能在 Run 仍在派发时执行。
 	warmUpMu     sync.Mutex
 	warmUpCancel context.CancelFunc
+
+	// retryCancel 取消进行中的后台域名解析尝试，由 retryMu 保护：
+	// Stop 可能在重试 goroutine 正持有一次尝试时执行。
+	retryMu     sync.Mutex
+	retryCancel context.CancelFunc
 }
 
 func Run(cfg *config.ClientConfig) (*Core, error) {
@@ -101,6 +134,8 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		Client:        cli,
 		StreamHandler: streamHandler,
 		StartupWarn:   cli.StartupWarning(),
+		done:          make(chan struct{}),
+		domainReady:   make(chan struct{}),
 	}
 
 	// 在启动任何服务器 goroutine 之前，预先绑定所有本地监听地址，
@@ -206,12 +241,29 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		}()
 	}
 
-	// 服务器域名必须能解析，代理路径才能工作，因此解析检查属于核心启动
-	// 的一部分。解析失败意味着服务器不可达、代理无法工作，因此它和其他
-	// 致命的核心错误一样会中止启动。
+	// 服务端域名解析不再中止启动：开机自启动时网络常常尚未就绪（例如 WiFi
+	// 还没初始化完），此时解析必然失败。进程照常启动并监听本地端口，后台按
+	// 退避重试解析，网络恢复后自动补齐 DNS 缓存并使代理可用。
 	if err := c.resolveServerDomain(cfg); err != nil {
-		c.cleanup()
-		return nil, err
+		host := ""
+		if svr := cfg.DefaultServer(); svr != nil {
+			host = svr.Address
+		}
+		c.StartupWarn = errors.Join(c.StartupWarn,
+			fmt.Errorf("%w: %s: %w", ErrServerDomainUnresolved, host, err))
+		// 依赖与调参在这里（调用方 goroutine 上）捕获，见 serverDomainRetry。
+		go c.retryServerDomain(cfg, serverDomainRetry{
+			prePopulate: prePopulateServerDomain,
+			reset:       resetResolveState,
+			dnsServers:  config.DirectDNSServers,
+			requireIPv4: cfg.Routing.IPV6Rule != "enable",
+			timeout:     serverStartupResolveTimeout,
+			base:        serverDomainRetryBase,
+			max:         serverDomainRetryMax,
+			warmUp:      captureWarmUpSeams(),
+		})
+	} else {
+		c.markServerDomainReady()
 	}
 
 	log.Info("[EASYSS] started successfully", "elapsed_ms", time.Since(start).Milliseconds())
@@ -225,6 +277,21 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 	return c, nil
 }
 
+// warmUpSeams 是预热的两项可注入依赖（探测函数与派发前的延迟）。调用方在
+// 派发预热 goroutine 之前捕获它们：warmUpCore/warmUpStartDelay 是测试在两次
+// 派发之间会替换的包级变量，从 goroutine 中（或从另一个常驻 goroutine 调用
+// startWarmUp 时）读取会与下一个测试产生数据竞争。
+type warmUpSeams struct {
+	probe func(s *proxy.Socks5Server, timeout time.Duration) error
+	delay time.Duration
+}
+
+// captureWarmUpSeams 在当前 goroutine 上捕获预热依赖。任何可能从后台
+// goroutine 派发预热的调用方都必须先捕获，再调用 dispatchWarmUp。
+func captureWarmUpSeams() warmUpSeams {
+	return warmUpSeams{probe: warmUpCore, delay: warmUpStartDelay}
+}
+
 // startWarmUp 在后台派发传输层连接池的预热，使每种流量类型的第一个真实
 // 流都能复用已建立的连接。它会立即返回：调用方（桌面端启动、gomobile
 // Start）永远不会被它阻塞，也不应依赖它——探测在 config.WarmUpStartDelay
@@ -234,6 +301,11 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 // 预热 goroutine 由 Stop 取消，因此短命的核心（启动后立即停止，如测试和
 // 快速切换服务器时）绝不会留下一个针对已关闭传输层的探测在运行。
 func (c *Core) startWarmUp() {
+	c.dispatchWarmUp(captureWarmUpSeams())
+}
+
+// dispatchWarmUp 是预热的派发实现，依赖由调用方捕获后传入。
+func (c *Core) dispatchWarmUp(seams warmUpSeams) {
 	if c == nil || c.cfg == nil || c.SocksServer == nil {
 		return
 	}
@@ -241,17 +313,23 @@ func (c *Core) startWarmUp() {
 		log.Info("[EASYSS] warm-up disabled by config")
 		return
 	}
+	if c.stopped() {
+		// 核心已在停止过程中：网络恢复后的补派预热不能在该状态下派发。
+		return
+	}
+
+	// 替换（而不是叠加）仍在延迟中的上一次预热：服务端域名由后台重试解析
+	// 成功后需要重新派发一次，而首次派发的探测注定失败。
+	c.cancelWarmUp()
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// goroutine 需要的一切都在它启动前捕获完成。Stop 会并发地拆除核心，
 	// 探测必须针对本次调用派发时的服务器（预热一个 Close 已执行的服务器
-	// 是无害的：它会因 closing 标志提前返回），而 warmUpCore/warmUpStartDelay
-	// 是测试在两次派发之间会替换的包级变量——从 goroutine 中读取它们会与
-	// 下一个测试产生数据竞争。
+	// 是无害的：它会因 closing 标志提前返回）。
 	socksServer := c.SocksServer
-	probe := warmUpCore
-	delay := warmUpStartDelay
+	probe := seams.probe
+	delay := seams.delay
 
 	c.warmUpMu.Lock()
 	c.warmUpCancel = cancel
@@ -296,13 +374,13 @@ func (c *Core) Stop() {
 }
 
 // resolveServerDomain 通过直连 DNS 服务器（带系统 DNS 兜底）预先解析代理
-// 服务器主机名并预填充 DNS 缓存，使代理路径永远不会等待冷查询。失败会以
-// 致命错误返回：域名无法解析时服务器不可达、代理完全无法工作，因此调用方
-// 中止启动。
+// 服务器主机名并预填充 DNS 缓存，使代理路径永远不会等待冷查询；这次预填充
+// 同时也是 TUN 模式的安全前提（系统 DNS 指向本机转发服务器后，解析服务端
+// 域名不能再依赖隧道本身）。
 //
-// TUN 模式会重试（3 次），因为一旦系统 DNS 切换到转发服务器，那里的预填充
-// 失败会导致 TUN DNS 死锁；非 TUN 模式则是尽力而为，只做一次有界尝试。
-// 字面 IP 地址无需解析，直接返回 nil。
+// 它只做一次有界尝试：失败以错误返回，是否致命由调用方决定（见 Run：失败
+// 降级为启动警告并转入后台重试）。字面 IP 地址、没有默认服务器、或没有本地
+// socks5 服务时无需解析，直接返回 nil。
 func (c *Core) resolveServerDomain(cfg *config.ClientConfig) error {
 	svr := cfg.DefaultServer()
 	if svr == nil || util.IsIP(svr.Address) {
@@ -311,31 +389,16 @@ func (c *Core) resolveServerDomain(cfg *config.ClientConfig) error {
 	if c.SocksServer == nil {
 		return nil
 	}
-
-	attempts := 1
-	if cfg.Local.EnableTun2socks {
-		attempts = 3
+	if len(config.DirectDNSServers) == 0 {
+		return errors.New("no direct dns servers configured")
 	}
 
 	start := time.Now()
-	var err error
-	for i := range attempts {
-		if len(config.DirectDNSServers) == 0 {
-			err = errors.New("no direct dns servers configured")
-			break
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), serverStartupResolveTimeout)
-		err = prePopulateServerDomain(c.SocksServer, ctx, svr.Address, config.DirectDNSServers,
-			cfg.Routing.IPV6Rule != "enable")
-		cancel()
-		if err == nil {
-			break
-		}
-		if i < attempts-1 {
-			time.Sleep(serverStartupRetryDelay)
-		}
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), serverStartupResolveTimeout)
+	defer cancel()
 
+	err := prePopulateServerDomain(c.SocksServer, ctx, svr.Address, config.DirectDNSServers,
+		cfg.Routing.IPV6Rule != "enable")
 	if err != nil {
 		log.Warn("[EASYSS] server domain resolution failed at startup",
 			"host", svr.Address,
@@ -349,6 +412,160 @@ func (c *Core) resolveServerDomain(cfg *config.ClientConfig) error {
 		"elapsed_ms", time.Since(start).Milliseconds(),
 	)
 	return nil
+}
+
+// serverDomainRetry 把后台重试所需的可注入依赖与调参在派发 goroutine 之前
+// 捕获下来：prePopulateServerDomain/resetResolveState/serverDomainRetry*
+// 都是测试在两次派发之间会替换的包级变量，从后台 goroutine 里读取它们会与
+// 下一个测试产生数据竞争（与 warmUpSeams 采用相同做法）。
+type serverDomainRetry struct {
+	prePopulate func(s *proxy.Socks5Server, ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error
+	reset       func()
+	dnsServers  []string
+	requireIPv4 bool
+	timeout     time.Duration
+	base        time.Duration
+	max         time.Duration
+	warmUp      warmUpSeams
+}
+
+// retryServerDomain 在后台按指数退避重试服务端域名解析，直到成功或核心停止，
+// 成功后关闭就绪通道并补派一次连接池预热。
+//
+// 它存在的唯一原因是开机自启动：进程常常先于网络就绪启动，此时解析必然失败，
+// 但网络恢复后代理应当自动可用。每次尝试前调用 r.reset 清除 DNS 层的熔断状态
+// 与系统 DNS 发现缓存——开机时的失败会把内置 DNS 服务器熔断 3 分钟
+// （builtinDNSCoolDown），并把空的系统 DNS 列表缓存 5 分钟（systemDNSCacheTTL），
+// 不清理会让"网络已恢复"被拖后数分钟。
+func (c *Core) retryServerDomain(cfg *config.ClientConfig, r serverDomainRetry) {
+	svr := cfg.DefaultServer()
+	if svr == nil {
+		// 没有默认服务器时无需解析：Run 的可就绪判定与这里保持一致。
+		c.markServerDomainReady()
+		return
+	}
+
+	delay := r.base
+	for attempt := 1; ; attempt++ {
+		select {
+		case <-c.done:
+			return
+		case <-time.After(jitterDuration(delay)):
+		}
+		// 退避结束后再确认一次停止信号，避免在停止过程中新起一次解析。
+		if c.stopped() {
+			return
+		}
+
+		r.reset()
+
+		ctx, cancel := context.WithTimeout(context.Background(), r.timeout)
+		c.setRetryCancel(cancel)
+		err := r.prePopulate(c.SocksServer, ctx, svr.Address, r.dnsServers, r.requireIPv4)
+		cancel()
+		c.clearRetryCancel()
+
+		if err == nil {
+			log.Info("[EASYSS] server domain resolved by background retry",
+				"host", svr.Address,
+				"attempts", attempt,
+			)
+			c.markServerDomainReady()
+			// 网络恢复后补一次连接池预热（替换掉启动时那次注定失败的预热），
+			// 使恢复后的第一个真实请求复用已建立的连接。
+			c.dispatchWarmUp(r.warmUp)
+			return
+		}
+		// 首次失败已在 resolveServerDomain 里以 Warn 记录；后续尝试走 Debug，
+		// 使长时间离线不会刷爆日志。
+		log.Debug("[EASYSS] server domain retry failed",
+			"host", svr.Address, "attempt", attempt, "err", err)
+
+		if delay = min(delay*2, r.max); delay < r.base {
+			delay = r.base
+		}
+	}
+}
+
+// jitterDuration 在 [0.8d, 1.2d) 内抖动退避间隔，避免大量客户端在同一时刻
+// 开机时形成同步的解析请求突发。
+func jitterDuration(d time.Duration) time.Duration {
+	jittered := time.Duration(float64(d) * (0.8 + rand.Float64()*0.4))
+	if jittered <= 0 {
+		return d
+	}
+	return jittered
+}
+
+// setRetryCancel 记录进行中的后台解析尝试的取消函数。
+func (c *Core) setRetryCancel(cancel context.CancelFunc) {
+	c.retryMu.Lock()
+	defer c.retryMu.Unlock()
+	c.retryCancel = cancel
+}
+
+// clearRetryCancel 丢弃已结束的后台解析尝试的取消函数。
+func (c *Core) clearRetryCancel() {
+	c.retryMu.Lock()
+	defer c.retryMu.Unlock()
+	c.retryCancel = nil
+}
+
+// cancelRetry 取消进行中的后台解析尝试（若有）。可重复调用。
+func (c *Core) cancelRetry() {
+	c.retryMu.Lock()
+	cancel := c.retryCancel
+	c.retryCancel = nil
+	c.retryMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// stopped 报告核心是否已停止。零值核心（done 为 nil）视为未停止。
+func (c *Core) stopped() bool {
+	select {
+	case <-c.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// closeDone 关闭"核心已停止"信号，幂等。
+func (c *Core) closeDone() {
+	if c == nil || c.done == nil {
+		return
+	}
+	c.doneOnce.Do(func() { close(c.done) })
+}
+
+// markServerDomainReady 记录服务端域名已就绪（解析成功或无需解析），幂等。
+// 零值核心（domainReady 为 nil）上是空操作。
+func (c *Core) markServerDomainReady() {
+	if c == nil || c.domainReady == nil {
+		return
+	}
+	c.domainReadyOnce.Do(func() { close(c.domainReady) })
+}
+
+// ServerDomainReady 返回在服务端域名首次解析成功（或无需解析）时关闭的通道。
+// 调用方（启动路径、托盘）用它判断"现在可以安全启用 TUN"。
+// 零值核心上返回 nil；调用方应把 nil 视为"无需等待"。
+func (c *Core) ServerDomainReady() <-chan struct{} {
+	if c == nil {
+		return nil
+	}
+	return c.domainReady
+}
+
+// Done 返回核心停止时关闭的通道。零值核心上返回 nil。
+func (c *Core) Done() <-chan struct{} {
+	if c == nil {
+		return nil
+	}
+	return c.done
 }
 
 // prebindTCP 在服务器 goroutine 启动前验证给定的 TCP 地址可绑定，
@@ -372,7 +589,12 @@ func prebindUDP(addr string) error {
 	return pc.Close()
 }
 
+// cleanup 撤销核心持有的一切：先取消后台解析尝试并关闭停止信号（让后台
+// goroutine 在资源被拆除前退出），再依次关闭各服务器与客户端。
 func (c *Core) cleanup() {
+	c.cancelRetry()
+	c.closeDone()
+
 	if c.SocksServer != nil {
 		_ = c.SocksServer.Close()
 	}

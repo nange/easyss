@@ -24,6 +24,7 @@ import (
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/icon"
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/runner"
 	"github.com/nange/easyss/v3/selfupdate"
 )
 
@@ -140,6 +141,9 @@ func (a *TrayApp) buildTray() {
 	//（见 trayStartTunFailure）。
 	tunStartFailureHook = a.revertTunStart
 	tunStartNotify = a.notifyTunStartFailure
+	// 降级启动（开机网络未就绪）后，后台重试解析成功时用同一条系统通知通道
+	// 报告一次"网络已恢复、代理可用"。
+	serverDomainReadyNotify = a.notifyServerDomainReady
 	// TUN 失败的面向用户措辞在这里定义，而不是在 main.go 中，
 	// 因为分类需要只有托盘才有的友好文案。直接赋值函数值
 	// 使测试可以按名称调用它。
@@ -221,17 +225,17 @@ func friendlyStartupError(err error) string {
 	if strings.Contains(err.Error(), "http proxy requires socks_port to be enabled") {
 		return "配置错误：启用 HTTP 代理需要先启用 SOCKS5 代理（socks_port 需大于 0）。详情：" + err.Error()
 	}
-	// runner.resolveServerDomain：服务端域名解析失败，
-	// 代理无法连接到服务端，启动中止。
-	if strings.Contains(err.Error(), "resolution failed") {
-		return "服务启动失败：服务端域名解析失败，请检查网络或域名配置。详情：" + err.Error()
-	}
 	return "服务启动失败：" + err.Error()
 }
 
-// friendlyStartupWarning 将非致命启动警告（例如自定义规则文件加载失败）
-// 转换为用户友好的中文提示。
+// friendlyStartupWarning 将非致命启动警告转换为用户友好的中文提示。
+// 服务端域名解析失败是最常见的一类（开机自启动时网络往往尚未就绪），
+// 它不会中止启动：客户端在后台自动重试，网络恢复后代理即可用。
 func friendlyStartupWarning(err error) string {
+	if errors.Is(err, runner.ErrServerDomainUnresolved) {
+		return "启动警告：网络尚未就绪（服务端域名解析失败），客户端已在后台自动重试，" +
+			"网络恢复后即可正常代理。详情：" + err.Error()
+	}
 	return "启动警告：" + err.Error()
 }
 
@@ -243,6 +247,15 @@ func friendlyStartupWarning(err error) string {
 // 空消息表示没有需要告知用户的内容（见 friendlyTunError）：
 // 启动是被有意取消的，而不是失败了。
 func (a *TrayApp) notifyTunStartFailure(msg string) {
+	if msg == "" {
+		return
+	}
+	a.notifyUser(msg)
+}
+
+// notifyServerDomainReady 报告后台重试已解析出服务端域名（网络已恢复）。
+// 它安装为 serverDomainReadyNotify，只在降级启动后触发一次。
+func (a *TrayApp) notifyServerDomainReady(msg string) {
 	if msg == "" {
 		return
 	}
@@ -679,6 +692,17 @@ func (a *TrayApp) closeTun2socks() error {
 // 而系统全局流量会静默地保持直连。
 func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 	log.Info("[SYSTRAY] enableTun2socks called", "isRoot", IsRoot())
+
+	// 服务端域名还没解析成功时拒绝启用：TUN 会把系统 DNS 指向本机转发服务器，
+	// 而解析服务端域名又依赖隧道本身，容易形成解析递归；网络未就绪时平台脚本
+	// 还会因缺默认网关失败。恢复后（就绪通道关闭）再点即正常放行。
+	if !canStartTunNow(a.core) {
+		log.Warn("[SYSTRAY] tun2socks refused: server domain not resolved yet")
+		menu.SetChecked(false)
+		a.notifyTunStartFailure("服务端域名尚未解析成功，暂时无法开启系统全局流量；请等待网络恢复后重试")
+		return
+	}
+
 	if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !IsRoot() {
 		// macOS/Linux 非 root：拉起一个提权助手进程，
 		// 打开 TUN 设备、设置路由并把 fd 传回。
@@ -772,10 +796,12 @@ func (a *TrayApp) startLocalService() {
 		}
 	}
 
-	if a.cfg.Local.EnableTun2socks {
-		if a.TunMenu() != nil {
-			a.TunMenu().SetChecked(true)
-		}
+	// 菜单在 App.Start 之前构建，因此勾选状态可能在启动过程中被改写：TUN 因
+	// 服务端域名尚未解析成功而跳过时，App.Start 会把 cfg 置为未启用。这里按
+	// cfg 双向同步，菜单始终反映实际是否启用了 TUN（勾选但未运行会让用户
+	// 需要点两次才能开启）。
+	if a.TunMenu() != nil {
+		a.TunMenu().SetChecked(a.cfg.Local.EnableTun2socks)
 	}
 }
 
