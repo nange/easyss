@@ -88,24 +88,49 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 }
 
 func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg, domain string) error {
+	resp, err := s.resolveDirectDNS(msg, domain)
+	if err != nil {
+		log.Error("[DNS_DIRECT]", "domain", domain, "err", err)
+		return err
+	}
+
+	qtype := dns.TypeToString[msg.Question[0].Qtype]
+	log.Info("[DNS_DIRECT] result", "domain", domain, "qtype", qtype, "answers", util.DNSAnswerStrings(resp))
+
+	resp.Id = msg.Id
+	return responseDNSMsg(srv.UDPConn, clientAddr, resp, d.Address())
+}
+
+// resolveDirectDNS 不经隧道直接解析 msg：内置 DNS 服务器优先、系统 DNS 兜底，
+// 并完成 AAAA 剥离、缓存与自定义直连域名学习。应答 ID 由调用方改写。
+// UDP 直连 DNS 与 TCP DNS 拦截共用。
+func (s *Socks5Server) resolveDirectDNS(msg *dns.Msg, domain string) (*dns.Msg, error) {
 	try := func(servers []string) (*dns.Msg, error) {
 		return s.exchangeDirectDNSFromList(msg, servers)
 	}
 	resp, err := easydns.QueryWithBuiltinFirst(config.DirectDNSServers, easydns.SystemDNSServers(), try)
 	if err != nil {
-		log.Error("[DNS_DIRECT]", "domain", domain, "err", err)
-		return err
+		return nil, err
 	}
 	if s.router.ShouldIPV6Disable() && msg.Question[0].Qtype == dns.TypeAAAA {
 		resp.Answer = nil
 	}
 	_ = s.dnsCache.Set(resp, true)
+	s.learnDNSAnswers(resp, domain, true)
+	return resp, nil
+}
 
-	qtype := dns.TypeToString[msg.Question[0].Qtype]
-	log.Info("[DNS_DIRECT] result", "domain", domain, "qtype", qtype, "answers", util.DNSAnswerStrings(resp))
-
-	if s.router.IsCustomDirectDomain(domain) {
-		for _, ans := range resp.Answer {
+// learnDNSAnswers 依据自定义直连/代理域名规则，从应答中学习 A/AAAA/CNAME，
+// 供后续连接按 IP 或域名路由。UDP 与 TCP DNS 路径共用。
+func (s *Socks5Server) learnDNSAnswers(msg *dns.Msg, domain string, isDirect bool) {
+	if msg == nil {
+		return
+	}
+	if isDirect {
+		if !s.router.IsCustomDirectDomain(domain) {
+			return
+		}
+		for _, ans := range msg.Answer {
 			switch a := ans.(type) {
 			case *dns.A:
 				s.router.AddDirectIP(a.A.String())
@@ -115,10 +140,18 @@ func (s *Socks5Server) directDNSQuery(srv *socks5.Server, clientAddr *net.UDPAdd
 				s.router.AddDirectDomain(strings.TrimSuffix(a.Target, "."))
 			}
 		}
+		return
 	}
-
-	resp.Id = msg.Id
-	return responseDNSMsg(srv.UDPConn, clientAddr, resp, d.Address())
+	if !s.router.IsCustomProxyDomain(domain) {
+		return
+	}
+	util.ForEachDNSAnswer(msg, func(kind, value string) {
+		if kind == "CNAME" {
+			s.router.AddProxyDomain(value)
+			return
+		}
+		s.router.AddProxyIP(value)
+	})
 }
 
 // exchangeDirectDNSFromList 依次用给定的 DNS 服务器交换 msg。内置优先的回退
@@ -367,15 +400,7 @@ func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAd
 			qtype := dns.TypeToString[msg.Question[0].Qtype]
 			log.Info("[DNS_PROXY] result", "domain", domain, "qtype", qtype, "answers", util.DNSAnswerStrings(msg))
 
-			if s.router.IsCustomProxyDomain(domain) {
-				util.ForEachDNSAnswer(msg, func(kind, value string) {
-					if kind == "CNAME" {
-						s.router.AddProxyDomain(value)
-						return
-					}
-					s.router.AddProxyIP(value)
-				})
-			}
+			s.learnDNSAnswers(msg, domain, false)
 		}
 		s.sendToClient(srv, clientAddr, data, target)
 	}
@@ -605,9 +630,17 @@ func responseDNSMsg(conn *net.UDPConn, addr *net.UDPAddr, msg *dns.Msg, dst stri
 }
 
 func responseBlockedDNSMsg(conn *net.UDPConn, addr *net.UDPAddr, msg *dns.Msg, dst string) error {
+	blockedDNSReply(msg)
+	return responseDNSMsg(conn, addr, msg, dst)
+}
+
+// blockedDNSReply 把 msg 原地改造成一个拒绝应答：响应位置位、Rcode 置为 REFUSED
+// （RFC 1035：因策略原因拒绝执行操作）、清空答案区。UDP 与 TCP DNS 路径共用。
+func blockedDNSReply(msg *dns.Msg) *dns.Msg {
 	msg.Response = true
+	msg.Rcode = dns.RcodeRefused
 	msg.Answer = nil
 	msg.Ns = nil
 	msg.Extra = nil
-	return responseDNSMsg(conn, addr, msg, dst)
+	return msg
 }
