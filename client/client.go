@@ -476,7 +476,12 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 			return ips[0].String()
 		}
 		if !reachable {
-			dns.MarkBuiltinDNSUnavailable()
+			// 只有存在系统 DNS 兜底时才熔断内置服务器：无兜底时熔断会让后续
+			// 解析在冷却期内直接跳过仍可能可用的内置服务器（Android 上系统
+			// DNS 对应用不可见，正是这种情形）。
+			if len(dns.SystemDNSServers()) > 0 {
+				dns.MarkBuiltinDNSUnavailable()
+			}
 			log.Warn("[CLIENT] all builtin direct dns servers failed to resolve server ipv6, fallback to system dns", "server", svr.Address)
 		}
 	}

@@ -320,6 +320,10 @@ func TestCachePrePopulateWithFallbackAllFail(t *testing.T) {
 	if err := c.PrePopulateWithFallback(context.Background(), "example.com", []string{failAddr}, true); err == nil {
 		t.Fatal("expected error")
 	}
+	// 没有系统 DNS 兜底时不得熔断内置服务器，否则冷却期内的解析会立刻失败
+	if !BuiltinDNSAvailable() {
+		t.Fatal("builtin dns must not be tripped when there is no system dns fallback")
+	}
 }
 
 // TestCachePrePopulateWithFallbackBoundedByContext 验证 context 截止时间会

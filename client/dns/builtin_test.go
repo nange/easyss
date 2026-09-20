@@ -113,3 +113,32 @@ func TestQueryWithBuiltinFirstEmptyBuiltin(t *testing.T) {
 		t.Fatalf("expected 1 system call, got %d", systemCalls)
 	}
 }
+
+// TestQueryWithBuiltinFirstNoSystemFallback 验证没有系统 DNS 兜底时不会熔断
+// 内置服务器：Android 上系统 DNS 对应用不可见，此时熔断会把 3 分钟冷却变成
+// "每一次查询都立刻失败"的彻底解析中断。
+func TestQueryWithBuiltinFirstNoSystemFallback(t *testing.T) {
+	resetBuiltinDNSCircuit()
+	var builtinCalls int
+	try := func(servers []string) (*dns.Msg, error) {
+		if len(servers) > 0 && servers[0] == "builtin" {
+			builtinCalls++
+		}
+		return nil, errors.New("all dns servers down")
+	}
+
+	if _, err := QueryWithBuiltinFirst([]string{"builtin"}, nil, try); err == nil {
+		t.Fatal("expected error when every upstream fails")
+	}
+	if !BuiltinDNSAvailable() {
+		t.Fatal("builtin dns must not be tripped when there is no fallback")
+	}
+
+	// 内置服务器必须继续被尝试，而不是在冷却期内被跳过
+	if _, err := QueryWithBuiltinFirst([]string{"builtin"}, nil, try); err == nil {
+		t.Fatal("expected error when every upstream fails")
+	}
+	if builtinCalls != 2 {
+		t.Fatalf("builtin should be retried without a fallback: builtin=%d", builtinCalls)
+	}
+}
