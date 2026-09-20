@@ -469,6 +469,9 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 			// 服务器应答了（可能为 NODATA），因此 builtin DNS
 			// 服务器可达
 			reachable = true
+			// 记录已确认可达的内置服务器，供 TUN 启动时挑选系统 DNS
+			// （见 dns.PreferredSystemDNS）。
+			dns.MarkBuiltinServerReachable(dnsServer)
 			if len(ips) == 0 {
 				continue
 			}

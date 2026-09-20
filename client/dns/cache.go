@@ -183,6 +183,9 @@ func (c *Cache) PrePopulate(ctx context.Context, domain, dnsServer string, requi
 // requireIPv4 的语义见 PrePopulate。
 // ctx 约束整个解析过程（见 PrePopulate）。
 //
+// 它在内置分支记录成功应答过的服务器（MarkBuiltinServerReachable），因此调用
+// 方在它成功之后可以通过 PreferredSystemDNS 拿到"本会话实测可用的内置 DNS"。
+//
 // 与 QueryWithBuiltinFirst 一致：只有存在系统 DNS 兜底时才会熔断内置服务器，
 // 否则冷却期会变成"每次解析都立刻失败"的解析中断。
 func (c *Cache) PrePopulateWithFallback(ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error {
@@ -197,8 +200,18 @@ func (c *Cache) PrePopulateWithFallback(ctx context.Context, domain string, dnsS
 		return false
 	}
 
+	// 内置分支额外记录成功过的服务器，供 TUN 启动时挑选系统 DNS（见
+	// PreferredSystemDNS）；系统 DNS 兜底成功不算内置服务器可达。
+	tryBuiltin := func(server string) bool {
+		if !try(server) {
+			return false
+		}
+		MarkBuiltinServerReachable(server)
+		return true
+	}
+
 	if BuiltinDNSAvailable() {
-		if slices.ContainsFunc(dnsServers, try) {
+		if slices.ContainsFunc(dnsServers, tryBuiltin) {
 			MarkBuiltinDNSAvailable()
 			return nil
 		}

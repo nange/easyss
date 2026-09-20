@@ -8,12 +8,15 @@ import (
 	"github.com/miekg/dns"
 )
 
-// resetBuiltinDNSCircuit 清除内置 DNS 熔断器状态，使各测试之间相互隔离。
+// resetBuiltinDNSCircuit 清除内置 DNS 熔断器状态与可达记录（TUN 系统 DNS
+// 的取值来源），使各测试之间相互隔离。
 func resetBuiltinDNSCircuit() {
 	builtinDNSMu.Lock()
 	builtinDNSDown = false
 	builtinDNSDownAt = time.Time{}
 	builtinDNSMu.Unlock()
+
+	clearReachableBuiltinServers()
 }
 
 func TestBuiltinDNSAvailableInitial(t *testing.T) {

@@ -68,12 +68,12 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 		stubTool(t, dir, "netsh.cmd", netshCode)
 		stubTool(t, dir, "route.cmd", routeCode)
 
+		// 参数形状与 client/tun/tun.go 的 windows 分支一致：6 个设备/路由参数
+		// + 第 7 个服务端 IPv6（没有时为空字符串，与生产路径相同）+ 第 8 个
+		// 系统 DNS（由 cmd/easyss 的 tunDNS 计算后传入）。
 		args := append([]string{"/C", script},
 			"tun-easyss-test", "198.18.0.1", "198.18.0.1", "255.255.0.0",
-			"2001:db8::1/64", "fe80::1")
-		if serverIPV6 != "" {
-			args = append(args, serverIPV6)
-		}
+			"2001:db8::1/64", "fe80::1", serverIPV6, "223.5.5.5")
 
 		cmd := exec.Command(comspec, args...)
 		cmd.Env = append(os.Environ(), "PATH="+dir+";"+os.Getenv("PATH"))

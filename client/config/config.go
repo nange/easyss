@@ -15,14 +15,25 @@ import (
 )
 
 // DirectDNSServers 是用于直连（不走代理）DNS 查询的公共 DNS 服务器列表。
-var DirectDNSServers = []string{"223.5.5.53:53", "119.29.29.29:53", "[2400:3200::1]:53", "[2400:3200:baba::1]:53"}
+// IPv4 项在前、IPv6 项在后，顺序是唯一的优先级依据：服务端域名的预解析按顺序
+// 串行尝试（见 dns.Cache.PrePopulateWithFallback），在线查询则把整个列表并发
+// 下发、取首个成功结果（见 dns.QueryWithBuiltinFirst 与 proxy.resolveDirectDNS）。
+// 区域内可达性有差异的服务器（如北京联通 123.123.123.123）排在国家级公共 DNS 之后。
+var DirectDNSServers = []string{
+	"223.5.5.5:53",       // AliDNS
+	"119.29.29.29:53",    // DNSPod
+	"114.114.114.114:53", // 114DNS
+	"123.123.123.123:53", // 北京联通递归 DNS
+	"[2400:3200::1]:53",
+	"[2400:3200:baba::1]:53",
+}
 
 // ProxyDNSServer 是通过隧道代理 DNS 查询时使用的上游 DNS 服务器。
 const ProxyDNSServer = "8.8.8.8:53"
 
-// DefaultSystemDNS 是 TUN 模式在 Darwin 上启动时设置到系统的 DNS 服务器。
-// 它取公共 DNS 地址 223.5.5.5；注意 DirectDNSServers 第一项（223.5.5.53:53）
-// 去掉端口后是 223.5.5.53，与它并不相同。
+// DefaultSystemDNS 是写入系统解析器配置的保底裸 IPv4，等于 DirectDNSServers
+// 中第一个 IPv4 项。TUN 启动时实际取值优先用 dns.PreferredSystemDNS()——本会话
+// 已确认可达的内置服务器——只有还没有任何内置服务器应答过时才回退到这里。
 const DefaultSystemDNS = "223.5.5.5"
 
 type ServerProfile struct {

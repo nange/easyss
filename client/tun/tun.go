@@ -62,7 +62,7 @@ type Config struct {
 	ServerIPV6       string
 	LocalGateway     string
 	LocalGatewayV6   string
-	DNSServer        string // TUN 模式下要设置的 DNS 服务器（darwin/linux）
+	DNSServer        string // TUN 模式下要设置的 DNS 服务器（darwin/linux/windows）
 }
 
 type DeviceConfig struct {
@@ -389,8 +389,12 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 		// 脚本用非零退出码报告失败（参见
 		// create_tun_dev_windows.bat 中的退出码契约）；
 		// 它的输出会包含在返回的错误里。
+		// 第 8 个参数是系统 DNS（由 cmd/easyss 的 tunDNS 计算：转发 DNS 启用时
+		// 为 127.0.0.1，否则为本会话可达的内置 DNS），使 Windows 与
+		// darwin/linux 的取值一致，不再由脚本硬编码。
 		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device,
-			d.TunIP, d.TunGW, d.TunMask, d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6); err != nil {
+			d.TunIP, d.TunGW, d.TunMask, d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6,
+			m.cfg.DNSServer); err != nil {
 			return fmt.Errorf("tun: exec create script: %w", err)
 		}
 	case "darwin":
