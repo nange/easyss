@@ -182,6 +182,9 @@ func (c *Cache) PrePopulate(ctx context.Context, domain, dnsServer string, requi
 // 不可用时回退到系统 DNS 服务器，并将结果同时存入直连与代理缓存。
 // requireIPv4 的语义见 PrePopulate。
 // ctx 约束整个解析过程（见 PrePopulate）。
+//
+// 与 QueryWithBuiltinFirst 一致：只有存在系统 DNS 兜底时才会熔断内置服务器，
+// 否则冷却期会变成"每次解析都立刻失败"的解析中断。
 func (c *Cache) PrePopulateWithFallback(ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error {
 	var lastErr error
 	try := func(server string) bool {
@@ -199,11 +202,23 @@ func (c *Cache) PrePopulateWithFallback(ctx context.Context, domain string, dnsS
 			MarkBuiltinDNSAvailable()
 			return nil
 		}
-		MarkBuiltinDNSUnavailable()
-		log.Warn("[DNS] all builtin dns servers failed, fallback to system dns", "domain", domain, "err", lastErr)
-	}
 
-	if slices.ContainsFunc(systemDNSServersFunc(), try) {
+		// 惰性获取系统 DNS：内置可用时不应为此付出一次系统 DNS 发现的开销。
+		systemServers := systemDNSServersFunc()
+		// 只有确实存在系统 DNS 兜底时才熔断内置服务器。无兜底时熔断会让冷却
+		// 期内每一次解析都在这条空回退上立刻失败，而内置服务器此时仍可能可用
+		// （Android 上系统 DNS 对应用不可见，正是这种情形）。
+		if len(systemServers) > 0 {
+			MarkBuiltinDNSUnavailable()
+			log.Warn("[DNS] all builtin dns servers failed, fallback to system dns", "domain", domain, "err", lastErr)
+		} else {
+			log.Debug("[DNS] all builtin dns servers failed and no system dns is available", "domain", domain, "err", lastErr)
+		}
+
+		if slices.ContainsFunc(systemServers, try) {
+			return nil
+		}
+	} else if slices.ContainsFunc(systemDNSServersFunc(), try) {
 		return nil
 	}
 

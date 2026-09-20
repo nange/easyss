@@ -133,7 +133,10 @@ func (s *Socks5Server) resolveDirectDNS(msg *dns.Msg, domain, reqServer string) 
 	if s.usableDirectDNSServer(reqServer) {
 		resp, err = s.exchangeDirectDNSFromList(msg, append([]string{reqServer}, config.DirectDNSServers...))
 	} else {
-		resp, err = easydns.QueryWithBuiltinFirst(config.DirectDNSServers, easydns.SystemDNSServers(), try)
+		// 兜底列表必须是过滤后的可用上游：QueryWithBuiltinFirst 依据它是否为
+		// 空来决定要不要熔断内置服务器（见 easydns.QueryWithBuiltinFirst）。
+		fallback := s.filterDNSUpstreams(easydns.SystemDNSServers())
+		resp, err = easydns.QueryWithBuiltinFirst(config.DirectDNSServers, fallback, try)
 	}
 	if err != nil {
 		return nil, err
@@ -203,9 +206,11 @@ func (s *Socks5Server) learnDNSAnswers(msg *dns.Msg, domain string, isDirect boo
 	})
 }
 
-// exchangeDirectDNSFromList 依次用给定的 DNS 服务器交换 msg。内置优先的回退
-// （包括熔断器冷却时间）由调用方通过 easydns.QueryWithBuiltinFirst 施加。
-func (s *Socks5Server) exchangeDirectDNSFromList(msg *dns.Msg, servers []string) (*dns.Msg, error) {
+// filterDNSUpstreams 丢弃当前规则下无法拨通的上游：ipv6_rule=disable 时
+// IPv6 地址永远拨不通。它同时被兜底列表的构建（resolveDirectDNS）与实际交换
+// （exchangeDirectDNSFromList）使用，使"是否存在可用兜底"与"真正会被尝试的
+// 上游"是同一份列表。
+func (s *Socks5Server) filterDNSUpstreams(servers []string) []string {
 	var candidates []string
 	for _, addr := range servers {
 		if s.router.ShouldIPV6Disable() && util.IsIPV6Addr(addr) {
@@ -213,6 +218,13 @@ func (s *Socks5Server) exchangeDirectDNSFromList(msg *dns.Msg, servers []string)
 		}
 		candidates = append(candidates, addr)
 	}
+	return candidates
+}
+
+// exchangeDirectDNSFromList 依次用给定的 DNS 服务器交换 msg。内置优先的回退
+// （包括熔断器冷却时间）由调用方通过 easydns.QueryWithBuiltinFirst 施加。
+func (s *Socks5Server) exchangeDirectDNSFromList(msg *dns.Msg, servers []string) (*dns.Msg, error) {
+	candidates := s.filterDNSUpstreams(servers)
 	if len(candidates) == 0 {
 		return nil, errors.New("no dns server available")
 	}
