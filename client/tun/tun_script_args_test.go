@@ -42,3 +42,35 @@ func TestDarwinScriptArgsWithoutV6(t *testing.T) {
 	require.Len(t, args, 8)
 	require.Equal(t, "", args[6], "an empty server ipv6 keeps the script's ipv6 branch a no-op")
 }
+
+// TestOsascriptRunScriptKeepsPositionalArgs 固定 darwin 提权命令的拼装方式。
+//
+// osascript 路径是把实参拼进一条 sh 命令行的，未加引号的空实参会被 shell 的
+// 词分割丢掉，它后面的位置参数整体前移：本用例里 server_ip_v6 为空、本机有
+// IPv6，前移会让创建脚本把本地网关 v6 当成 server_ip_v6，从而在服务端没有
+// IPv6 时照样安装 ::/0 默认路由；关闭脚本则会把 local_gateway_v6 删成空串。
+func TestOsascriptRunScriptKeepsPositionalArgs(t *testing.T) {
+	args := darwinScriptArgs(DeviceConfig{
+		Device:         "utun8",
+		TunIP:          "198.18.0.1",
+		TunGW:          "198.18.0.1",
+		LocalGateway:   "192.168.3.1",
+		TunIPV6Sub:     "2001:db8::1/64",
+		TunGWV6:        "fe80::1",
+		ServerIPV6:     "",
+		LocalGatewayV6: "fe80::2",
+	})
+	require.Equal(t, "", args[6], "the fixture must exercise an empty server ipv6")
+
+	require.Equal(t,
+		`do shell script "sh '/tmp/t.sh' 'utun8' '198.18.0.1' '198.18.0.1' '192.168.3.1' '2001:db8::1' 'fe80::1' '' 'fe80::2'" with administrator privileges`,
+		osascriptRunScript("/tmp/t.sh", args))
+}
+
+// TestShellQuote 固定单个实参的引号处理：空串必须变成可保留的空位置参数，
+// 含空格的实参必须仍是一个参数，实参里的单引号按 POSIX shell 惯例转义。
+func TestShellQuote(t *testing.T) {
+	require.Equal(t, "''", shellQuote(""))
+	require.Equal(t, "'/tmp/create tun.sh'", shellQuote("/tmp/create tun.sh"))
+	require.Equal(t, `'it'\''s'`, shellQuote("it's"))
+}

@@ -406,8 +406,7 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 				return fmt.Errorf("tun: exec create script: %w", err)
 			}
 		} else {
-			cmd := fmt.Sprintf("do shell script \"sh %s %s\" with administrator privileges",
-				namePath, strings.Join(args, " "))
+			cmd := osascriptRunScript(namePath, args)
 			if _, err := util.CommandContext(ctx, "osascript", "-e", cmd); err != nil {
 				return fmt.Errorf("tun: exec create script: %w", err)
 			}
@@ -457,14 +456,14 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 	case "darwin":
 		// 与 helper 的 runCloseScript 参数顺序保持一致：
 		// device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6。
+		// 两个分支必须传同一组实参（提权方式不同而已），因此都在这里构造。
+		args := []string{d.Device, d.TunGW, d.LocalGateway, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6}
 		if os.Geteuid() == 0 {
-			if _, err := util.CommandContext(ctx, "sh", namePath, d.Device, d.TunGW, d.LocalGateway,
-				d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6); err != nil {
+			if _, err := util.CommandContext(ctx, "sh", append([]string{namePath}, args...)...); err != nil {
 				log.Warn("[TUN] close script", "err", err)
 			}
 		} else {
-			cmd := fmt.Sprintf("do shell script \"sh %s %s %s %s %s %s %s\" with administrator privileges",
-				namePath, d.Device, d.TunGW, d.LocalGateway, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6)
+			cmd := osascriptRunScript(namePath, args)
 			if _, err := util.CommandContext(ctx, "osascript", "-e", cmd); err != nil {
 				log.Warn("[TUN] close script", "err", err)
 			}
@@ -600,4 +599,28 @@ func darwinScriptArgs(d DeviceConfig) []string {
 func bareV6Addr(sub string) string {
 	addr, _, _ := strings.Cut(sub, "/")
 	return addr
+}
+
+// osascriptRunScript 返回以管理员权限执行 sh 脚本的 AppleScript 源码。
+//
+// 实参必须逐项加引号后拼接，不能直接 strings.Join 或用 "%s %s" 展开：
+// ServerIPV6（服务端只有 IPv4 时为空）与 LocalGatewayV6（本机没有 IPv6 时为
+// 空）都可能是空串，未加引号的空实参会被 shell 的词分割丢掉，它后面的位置
+// 参数整体前移——创建脚本会把本地网关 v6 当成 server_ip_v6，在服务端没有
+// IPv6 时照样安装 ::/0 默认路由；关闭脚本则会把 local_gateway_v6 当作空串删掉。
+// root 路径与 helper 走 exec 直接传参，不受影响。
+func osascriptRunScript(scriptPath string, args []string) string {
+	quoted := make([]string, 0, len(args)+1)
+	quoted = append(quoted, shellQuote(scriptPath))
+	for _, arg := range args {
+		quoted = append(quoted, shellQuote(arg))
+	}
+	return fmt.Sprintf("do shell script \"sh %s\" with administrator privileges",
+		strings.Join(quoted, " "))
+}
+
+// shellQuote 用单引号包裹一个实参，使空串与含空格的实参都作为独立的位置参数
+// 传给 sh。实参里的单引号按 POSIX shell 的惯例用 '\” 结束-转义-重开。
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
