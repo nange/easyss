@@ -552,15 +552,23 @@ func (a *App) statsLoop(done <-chan struct{}) {
 // tunConfig 为本 App 构建 TUN 配置。它是启动路径与托盘开关共享的唯一构造点，
 // 因此两者不会出现偏差（尤其是 server-IPv6 提示，托盘路径过去常常遗漏它）。
 func (a *App) tunConfig() tun.Config {
+	if a.core != nil && a.core.Client != nil {
+		// 降级启动（开机时网络未就绪）会让启动期的 IPv6 解析得到空值；这里在
+		// 读取前补一次有界解析，否则 TUN 脚本不会安装 IPv6 默认路由，
+		// IPv6 流量会绕过隧道。已有值时该方法直接返回，不做 DNS 查询。
+		//
+		// 它同时可能触发一次新的 DNS 探测（resolveServerIPV6 会记录可达的内置/
+		// 系统解析器），因此必须在 tunDNS 之前执行：在"此前所有标记尝试都失败、
+		// 恰好这次刷新才成功"的边角情形下，先取 DNS 会让 TUN 拿到默认值而不是
+		// 刚学到的可达服务器。
+		a.core.Client.RefreshServerIPV6()
+	}
+
 	cfg := tun.Config{
 		Socks5Addr: util.Socks5URI(a.cfg.Local.SocksPort),
 		DNSServer:  tunDNS(a.cfg),
 	}
 	if a.core != nil && a.core.Client != nil {
-		// 降级启动（开机时网络未就绪）会让启动期的 IPv6 解析得到空值；这里在
-		// 读取前补一次有界解析，否则 TUN 脚本不会安装 IPv6 默认路由，
-		// IPv6 流量会绕过隧道。已有值时该方法直接返回，不做 DNS 查询。
-		a.core.Client.RefreshServerIPV6()
 		if ipv6 := a.core.Client.Router().ServerIPV6(); ipv6 != "" {
 			cfg.ServerIPV6 = ipv6
 		}

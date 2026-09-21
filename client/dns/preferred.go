@@ -9,9 +9,9 @@ import (
 )
 
 var (
-	reachableDNSMu    sync.Mutex
-	reachableBuiltin  []string // host:port，内置池中成功应答过的，按首次成功顺序
-	reachableSystemDN []string // host:port，系统 DNS 中成功应答过的，按首次成功顺序
+	reachableDNSMu      sync.Mutex
+	reachableBuiltinDNS []string // host:port，内置池中成功应答过的，按首次成功顺序
+	reachableSystemDNS  []string // host:port，系统 DNS 中成功应答过的，按首次成功顺序
 )
 
 // MarkBuiltinServerReachable 记录某个内置直连 DNS 服务器在本会话成功应答过。
@@ -28,8 +28,8 @@ func MarkBuiltinServerReachable(server string) {
 
 	reachableDNSMu.Lock()
 	defer reachableDNSMu.Unlock()
-	if !slices.Contains(reachableBuiltin, server) {
-		reachableBuiltin = append(reachableBuiltin, server)
+	if !slices.Contains(reachableBuiltinDNS, server) {
+		reachableBuiltinDNS = append(reachableBuiltinDNS, server)
 	}
 }
 
@@ -42,8 +42,8 @@ func MarkBuiltinServerReachable(server string) {
 func MarkSystemServerReachable(server string) {
 	reachableDNSMu.Lock()
 	defer reachableDNSMu.Unlock()
-	if !slices.Contains(reachableSystemDN, server) {
-		reachableSystemDN = append(reachableSystemDN, server)
+	if !slices.Contains(reachableSystemDNS, server) {
+		reachableSystemDNS = append(reachableSystemDNS, server)
 	}
 }
 
@@ -51,8 +51,8 @@ func MarkSystemServerReachable(server string) {
 // 后调用它：上一次网络里可用的服务器不代表当前网络仍可用。
 func clearReachableDNSServers() {
 	reachableDNSMu.Lock()
-	reachableBuiltin = nil
-	reachableSystemDN = nil
+	reachableBuiltinDNS = nil
+	reachableSystemDNS = nil
 	reachableDNSMu.Unlock()
 }
 
@@ -73,12 +73,12 @@ func PreferredSystemDNS() string {
 	reachableDNSMu.Lock()
 	defer reachableDNSMu.Unlock()
 
-	for _, server := range reachableBuiltin {
+	for _, server := range reachableBuiltinDNS {
 		if host := ipv4Host(server); host != "" {
 			return host
 		}
 	}
-	for _, server := range reachableSystemDN {
+	for _, server := range reachableSystemDNS {
 		if host := systemDNSHost(server); host != "" {
 			return host
 		}

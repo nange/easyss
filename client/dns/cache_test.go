@@ -331,10 +331,10 @@ func TestCachePrePopulateWithFallbackRecordsSystemDNS(t *testing.T) {
 	}
 
 	reachableDNSMu.Lock()
-	got := slices.Clone(reachableSystemDN)
+	got := slices.Clone(reachableSystemDNS)
 	reachableDNSMu.Unlock()
 	if len(got) != 1 || got[0] != okAddr {
-		t.Fatalf("reachableSystemDN = %v, want [%s]", got, okAddr)
+		t.Fatalf("reachableSystemDNS = %v, want [%s]", got, okAddr)
 	}
 	if v := PreferredSystemDNS(); v != config.DefaultSystemDNS {
 		t.Fatalf("PreferredSystemDNS = %q, want %q (a loopback system dns must not be used)", v, config.DefaultSystemDNS)

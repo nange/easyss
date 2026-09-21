@@ -44,33 +44,16 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 
 	// 1. 用临时 manager 构建 TunConfig 以获取设备默认值。
 	// manager 配置来自共享 builder，因此此路径与直接路径使用相同的
-	// socks/dns/server-ipv6 值。
+	// socks/dns/server-ipv6 值（它同时会刷新服务端 IPv6）。
 	tmpCfg := a.tunConfig()
 	tmpMgr := tun.New(tmpCfg)
 	devCfg := tmpMgr.DeviceConfig()
 
-	tunHTTPCfg := &proxy.TunConfig{
-		Socks5Addr:     util.Socks5URI(a.cfg.Local.SocksPort),
-		DNSAddr:        tunDNS(a.cfg),
-		Device:         devCfg.Device,
-		TunIP:          devCfg.TunIP,
-		TunGW:          devCfg.TunGW,
-		TunMask:        devCfg.TunMask,
-		TunIPV6Sub:     devCfg.TunIPV6Sub,
-		TunGWV6:        devCfg.TunGWV6,
-		ServerIPV6:     devCfg.ServerIPV6,
-		LocalGateway:   devCfg.LocalGateway,
-		LocalGatewayV6: devCfg.LocalGatewayV6,
-		MTU:            1500,
-	}
-
-	// 2. 注册配置，让 helper 可以通过 GET /tun 获取它。
 	if a.core.HTTPServer == nil {
 		return fmt.Errorf("http proxy server not started")
 	}
-	a.core.HTTPServer.SetTunConfig(tunHTTPCfg)
 
-	// 3. 在生成 helper 之前预解析代理服务器主机名并填充 DNS 缓存，
+	// 2. 在生成 helper 之前预解析代理服务器主机名并填充 DNS 缓存，
 	// 以避免 helper 将系统 DNS 指向 TUN 后产生循环依赖。
 	if serverAddr := a.cfg.DefaultServer().Address; !util.IsIP(serverAddr) {
 		var err error
@@ -96,6 +79,28 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 			return fmt.Errorf("failed to pre-resolve server hostname %s: %w", serverAddr, err)
 		}
 	}
+
+	// 3. 预解析之后再取 tunDNS 并注册配置：预解析成功的内置/系统解析器只有在这
+	// 之后才可能被记录（见 dns.PreferredSystemDNS）。先取值会让"此前所有标记
+	// 尝试都失败、恰好这次预解析才成功"的情形把 TUN 的系统 DNS 写成已知不可达的
+	// 默认值。
+	tunHTTPCfg := &proxy.TunConfig{
+		Socks5Addr:     util.Socks5URI(a.cfg.Local.SocksPort),
+		DNSAddr:        tunDNS(a.cfg),
+		Device:         devCfg.Device,
+		TunIP:          devCfg.TunIP,
+		TunGW:          devCfg.TunGW,
+		TunMask:        devCfg.TunMask,
+		TunIPV6Sub:     devCfg.TunIPV6Sub,
+		TunGWV6:        devCfg.TunGWV6,
+		ServerIPV6:     devCfg.ServerIPV6,
+		LocalGateway:   devCfg.LocalGateway,
+		LocalGatewayV6: devCfg.LocalGatewayV6,
+		MTU:            1500,
+	}
+
+	// 让 helper 可以通过 GET /tun 获取配置。
+	a.core.HTTPServer.SetTunConfig(tunHTTPCfg)
 
 	// 4. 生成提权 helper。将配置的超时时间（秒）作为生成等待上限；
 	//    未设置或无效时回退到 30s。

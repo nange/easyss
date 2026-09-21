@@ -7,8 +7,13 @@ set tun_gw=%3
 set tun_mask=%4
 set tun_ip_sub_v6=%5
 set tun_gw_v6=%6
-set server_ip_v6=%7
-set tun_dns=%8
+rem "%~N" strips the surrounding quotes. It matters for the optional arguments:
+rem Go encodes an empty argument as a literal "" and cmd keeps those quotes in a
+rem batch parameter, so a plain "%server_ip_v6%" would look non-empty and the
+rem script would wrongly install the ipv6 routes (address, ::/1 and 8000::/1)
+rem on a tunnel whose server has no ipv6 to carry them.
+set server_ip_v6=%~7
+set tun_dns=%~8
 
 rem Exit code contract: the caller (client/tun/tun.go) keeps the TUN routes
 rem installed only when this script exits 0. cmd.exe propagates the exit
