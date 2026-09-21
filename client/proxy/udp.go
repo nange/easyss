@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"slices"
 	"strings"
 	"time"
 
@@ -229,6 +230,11 @@ func (s *Socks5Server) exchangeDirectDNSFromList(msg *dns.Msg, servers []string)
 		return nil, errors.New("no dns server available")
 	}
 
+	// 去重：TUN 的系统 DNS 现在取自内置池（见 easydns.PreferredSystemDNS），
+	// 直连分支把它作为 reqServer 前置到同一个池上，候选里会出现同一台服务器
+	// 两次。并发竞争取首个成功结果，重复候选没有任何冗余收益，只会多拨一次。
+	candidates = dedupeDNSUpstreams(candidates)
+
 	// 并发查询每个上游并取第一个成功结果。串行扫描时，一个卡住的上游会把查询
 	// 拖到单服务器超时上限，而每个数据报的处理 goroutine 都会阻塞在整个等待
 	// 期间——DNS 故障时 goroutine 就会越积越多。整个查询共享一个超时预算。
@@ -263,6 +269,20 @@ func (s *Socks5Server) exchangeDirectDNSFromList(msg *dns.Msg, servers []string)
 		lastErr = errors.New("no dns server available")
 	}
 	return nil, lastErr
+}
+
+// dedupeDNSUpstreams 原地去重上游列表，保持首次出现的顺序。TUN 的系统 DNS
+// 取自内置池，会被前置到同一个池上做并发竞争，不去重就会对同一台服务器
+// 重复拨号（重复候选在"首个成功即返回"的竞争里没有任何收益）。
+func dedupeDNSUpstreams(servers []string) []string {
+	deduped := servers[:0]
+	for _, addr := range servers {
+		if slices.Contains(deduped, addr) {
+			continue
+		}
+		deduped = append(deduped, addr)
+	}
+	return deduped
 }
 
 func (s *Socks5Server) exchangeDirectDNS(ctx context.Context, msg *dns.Msg, addr string) (*dns.Msg, error) {

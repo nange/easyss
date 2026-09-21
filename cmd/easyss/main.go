@@ -16,6 +16,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/nange/easyss/v3/client/config"
+	easydns "github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/tun"
 	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
@@ -551,15 +552,23 @@ func (a *App) statsLoop(done <-chan struct{}) {
 // tunConfig 为本 App 构建 TUN 配置。它是启动路径与托盘开关共享的唯一构造点，
 // 因此两者不会出现偏差（尤其是 server-IPv6 提示，托盘路径过去常常遗漏它）。
 func (a *App) tunConfig() tun.Config {
+	if a.core != nil && a.core.Client != nil {
+		// 降级启动（开机时网络未就绪）会让启动期的 IPv6 解析得到空值；这里在
+		// 读取前补一次有界解析，否则 TUN 脚本不会安装 IPv6 默认路由，
+		// IPv6 流量会绕过隧道。已有值时该方法直接返回，不做 DNS 查询。
+		//
+		// 它同时可能触发一次新的 DNS 探测（resolveServerIPV6 会记录可达的内置/
+		// 系统解析器），因此必须在 tunDNS 之前执行：在"此前所有标记尝试都失败、
+		// 恰好这次刷新才成功"的边角情形下，先取 DNS 会让 TUN 拿到默认值而不是
+		// 刚学到的可达服务器。
+		a.core.Client.RefreshServerIPV6()
+	}
+
 	cfg := tun.Config{
 		Socks5Addr: util.Socks5URI(a.cfg.Local.SocksPort),
 		DNSServer:  tunDNS(a.cfg),
 	}
 	if a.core != nil && a.core.Client != nil {
-		// 降级启动（开机时网络未就绪）会让启动期的 IPv6 解析得到空值；这里在
-		// 读取前补一次有界解析，否则 TUN 脚本不会安装 IPv6 默认路由，
-		// IPv6 流量会绕过隧道。已有值时该方法直接返回，不做 DNS 查询。
-		a.core.Client.RefreshServerIPV6()
 		if ipv6 := a.core.Client.Router().ServerIPV6(); ipv6 != "" {
 			cfg.ServerIPV6 = ipv6
 		}
@@ -579,12 +588,14 @@ func (a *App) methodFromServer() protocol.Method {
 
 // tunDNS 返回 TUN 模式下需要设置到系统的 DNS 服务器。
 // 当内置 DNS 转发服务器启用时，查询应发往 127.0.0.1，由 EasySS 处理和记录。
-// 否则使用公共 DNS 服务器，查询作为原始 UDP 通过 TUN 设备发出。
+// 否则使用本会话实测可达的解析器（查询作为原始 UDP 通过 TUN 设备发出，由客户端
+// 截获后按域名直连/代理拆分）：先内置直连 DNS，内置全不可用时用系统 DNS
+// （DHCP/内网解析器），两者都没有记录时回退到内置池第一个 IPv4 项。
 func tunDNS(cfg *config.ClientConfig) string {
 	if cfg.Local.EnableForwardDNS {
 		return "127.0.0.1"
 	}
-	return config.DefaultSystemDNS
+	return easydns.PreferredSystemDNS()
 }
 
 func exampleV3Config() string {

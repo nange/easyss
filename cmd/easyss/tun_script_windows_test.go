@@ -40,13 +40,20 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 		comspec = "cmd.exe"
 	}
 
-	// stubTool 写入一个以给定码退出的工具，失败时在 stderr 打印标记。
-	stubTool := func(t *testing.T, dir, name string, code int) {
+	// stubTool 写入一个以给定码退出的工具：每次调用都把收到的命令行追加到
+	// logPath，失败时另外在 stderr 打印标记。存根永远"成功"，所以仅凭退出码
+	// 区分不出脚本走了哪个分支（例如 server_ip_v6 为空时不应进入 ipv6 分支），
+	// 调用日志才是分支断言的数据来源。
+	//
+	// 记录文件路径直接写进存根脚本（与 TestCloseTunScriptCleanup 的记录存根同一
+	// 做法），不依赖环境变量：cmd.exe 子进程的环境继承在这里不可靠。
+	stubTool := func(t *testing.T, dir, name, logPath string, code int) {
 		t.Helper()
 
-		body := "@echo off\r\nexit /b " + strconv.Itoa(code) + "\r\n"
+		record := "echo %* >> \"" + logPath + "\"\r\n"
+		body := "@echo off\r\n" + record + "exit /b " + strconv.Itoa(code) + "\r\n"
 		if code != 0 {
-			body = "@echo off\r\necho " + name + " failed 1>&2\r\nexit /b " + strconv.Itoa(code) + "\r\n"
+			body = "@echo off\r\n" + record + "echo " + name + " failed 1>&2\r\nexit /b " + strconv.Itoa(code) + "\r\n"
 		}
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644))
 	}
@@ -58,22 +65,23 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 		t.Skipf("temp directory %q contains a space: the stub directory could not be reached unquoted", stubRoot)
 	}
 
-	// runScript 用 netsh 和 route 的存根运行创建脚本，返回其退出码与
-	// 合并输出。serverIPV6 把脚本切到 ipv6 分支。
-	runScript := func(t *testing.T, netshCode, routeCode int, serverIPV6 string) (int, string) {
+	// runScript 用 netsh 和 route 的存根运行创建脚本，返回其退出码、合并输出与
+	// 存根调用日志。serverIPV6 把脚本切到 ipv6 分支。
+	runScript := func(t *testing.T, netshCode, routeCode int, serverIPV6 string) (int, string, string) {
 		t.Helper()
 
 		dir, err := os.MkdirTemp(stubRoot, "stubs")
 		require.NoError(t, err)
-		stubTool(t, dir, "netsh.cmd", netshCode)
-		stubTool(t, dir, "route.cmd", routeCode)
+		logPath := filepath.Join(dir, "calls.log")
+		stubTool(t, dir, "netsh.cmd", logPath, netshCode)
+		stubTool(t, dir, "route.cmd", logPath, routeCode)
 
+		// 参数形状与 client/tun/tun.go 的 windows 分支一致：6 个设备/路由参数
+		// + 第 7 个服务端 IPv6（没有时为空字符串，与生产路径相同）+ 第 8 个
+		// 系统 DNS（由 cmd/easyss 的 tunDNS 计算后传入）。
 		args := append([]string{"/C", script},
 			"tun-easyss-test", "198.18.0.1", "198.18.0.1", "255.255.0.0",
-			"2001:db8::1/64", "fe80::1")
-		if serverIPV6 != "" {
-			args = append(args, serverIPV6)
-		}
+			"2001:db8::1/64", "fe80::1", serverIPV6, "223.5.5.5")
 
 		cmd := exec.Command(comspec, args...)
 		cmd.Env = append(os.Environ(), "PATH="+dir+";"+os.Getenv("PATH"))
@@ -85,24 +93,47 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 			require.ErrorAs(t, err, &exitErr, "running the create script with stubbed tools: %v", err)
 			code = exitErr.ExitCode()
 		}
-		return code, string(out)
+		calls, readErr := os.ReadFile(logPath)
+		require.NoError(t, readErr, "the stub tools were never invoked; script output:\n%s", out)
+		return code, string(out), string(calls)
 	}
 
 	t.Run("every command succeeds", func(t *testing.T) {
-		code, out := runScript(t, 0, 0, "")
+		code, out, _ := runScript(t, 0, 0, "")
 		require.Equal(t, 0, code, "the create script must exit 0 when every command succeeds:\n%s", out)
+	})
+
+	// TestCreateTunScriptBranchSelection 的回归目标：Go 把空参数编码为字面 ""，
+	// cmd 会把这对引号保留在 %7 里，因此脚本必须用 %~7 去引号。否则在服务端没有
+	// IPv6（或 ipv6_rule=disable）时，"%server_ip_v6%" 看起来非空，脚本会误入
+	// ipv6 分支，把 v6 地址与 ::/1、8000::/1 默认路由装进一条没有服务端 IPv6
+	// 承载它们的隧道。存根永远成功，只有调用日志能区分这两种分支。
+	t.Run("empty server ipv6 keeps the ipv6 branch off", func(t *testing.T) {
+		code, out, calls := runScript(t, 0, 0, "")
+		require.Equal(t, 0, code, "%s", out)
+		require.Contains(t, calls, "set dns name=tun-easyss-test static 223.5.5.5",
+			"the dns passed by the caller must be applied:\n%s", calls)
+		require.NotContains(t, calls, "ipv6",
+			"an empty server ipv6 (Go passes it as a literal \"\") must not install ipv6 routes:\n%s", calls)
+	})
+
+	t.Run("non-empty server ipv6 installs the ipv6 routes", func(t *testing.T) {
+		code, out, calls := runScript(t, 0, 0, "2001:db8::2")
+		require.Equal(t, 0, code, "%s", out)
+		require.Contains(t, calls, "ipv6 add route ::/1",
+			"a server ipv6 must install the ipv6 default routes:\n%s", calls)
 	})
 
 	t.Run("failing netsh fails the script", func(t *testing.T) {
 		// 地址与 DNS 命令失败而路由被安装：这正是过去看起来像成功启动的情形。
-		code, out := runScript(t, 9009, 0, "")
+		code, out, _ := runScript(t, 9009, 0, "")
 		require.NotEqualf(t, 0, code, "a failing netsh must not leave the script with a zero exit code:\n%s", out)
 		require.Contains(t, out, failureMarker,
 			"the failing step must be reported on stderr so the tray notification can show it")
 	})
 
 	t.Run("failing route fails the script", func(t *testing.T) {
-		code, out := runScript(t, 0, 1, "")
+		code, out, _ := runScript(t, 0, 1, "")
 		require.NotEqualf(t, 0, code, "a failing route add must not leave the script with a zero exit code:\n%s", out)
 		require.Contains(t, out, failureMarker,
 			"the failing step must be reported on stderr so the tray notification can show it")
@@ -111,11 +142,11 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 	t.Run("failing command in the ipv6 branch fails the script", func(t *testing.T) {
 		// 这里只有 ipv6 块可能失败，意味着 ipv4 地址与路由已先安装：
 		// 正是 Manager.Start 必须回滚的部分配置设备。
-		code, out := runScript(t, 9009, 0, "2001:db8::2")
+		code, out, _ := runScript(t, 9009, 0, "2001:db8::2")
 		require.NotEqualf(t, 0, code, "an ipv6 command failure must not leave a zero exit code:\n%s", out)
 		require.Contains(t, out, failureMarker)
 
-		code, out = runScript(t, 0, 0, "2001:db8::2")
+		code, out, _ = runScript(t, 0, 0, "2001:db8::2")
 		require.Equal(t, 0, code, "the ipv6 branch must not fail when every command succeeds:\n%s", out)
 	})
 }

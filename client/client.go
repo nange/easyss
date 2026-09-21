@@ -469,6 +469,9 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 			// 服务器应答了（可能为 NODATA），因此 builtin DNS
 			// 服务器可达
 			reachable = true
+			// 记录已确认可达的内置服务器，供 TUN 启动时挑选系统 DNS
+			// （见 dns.PreferredSystemDNS）。
+			dns.MarkBuiltinServerReachable(dnsServer)
 			if len(ips) == 0 {
 				continue
 			}
@@ -489,6 +492,11 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 	// 所有 builtin 直连 DNS 服务器都不可用时，回退到系统 DNS 服务器
 	for _, dnsServer := range dns.SystemDNSServers() {
 		ips, err := dns.LookupIPV6FromContext(ctx, dnsServer, svr.Address)
+		if err == nil {
+			// 记录已确认可达的系统 DNS，供"内置 DNS 全不可用"的网络里挑选
+			// TUN 系统解析器（见 dns.PreferredSystemDNS）。
+			dns.MarkSystemServerReachable(dnsServer)
+		}
 		if err != nil || len(ips) == 0 {
 			if ctx.Err() != nil {
 				log.Warn("[CLIENT] server ipv6 resolution timed out", "server", svr.Address, "err", ctx.Err())

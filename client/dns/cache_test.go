@@ -2,10 +2,13 @@ package dns
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/miekg/dns"
+
+	"github.com/nange/easyss/v3/client/config"
 )
 
 func TestNewCache(t *testing.T) {
@@ -301,6 +304,40 @@ func TestCachePrePopulateWithFallback(t *testing.T) {
 	}
 	if got := c.Get("example.com.", "A", true); got == nil {
 		t.Fatal("direct cache should have the A record after fallback")
+	}
+}
+
+// TestCachePrePopulateWithFallbackRecordsSystemDNS 验证内置全失败、系统 DNS 兜底
+// 成功时会记录那台系统服务器：TUN 启动据此挑选系统解析器，避免把当前网络已知
+// 不可达的内置地址写进系统（见 PreferredSystemDNS）。本地假服务器是环回地址，
+// 读取时会被过滤掉，因此记录值本身要直接断言。
+func TestCachePrePopulateWithFallbackRecordsSystemDNS(t *testing.T) {
+	resetBuiltinDNSCircuit()
+	failAddr := startTestDNSServer(t, true)
+	okAddr := startTestDNSServer(t, false)
+	old := systemDNSServersFunc
+	systemDNSServersFunc = func() []string {
+		return []string{okAddr}
+	}
+	t.Cleanup(func() {
+		systemDNSServersFunc = old
+		resetSystemDNSCache()
+		resetBuiltinDNSCircuit()
+	})
+
+	c := NewCache("example.com")
+	if err := c.PrePopulateWithFallback(context.Background(), "example.com", []string{failAddr}, true); err != nil {
+		t.Fatalf("PrePopulateWithFallback error: %v", err)
+	}
+
+	reachableDNSMu.Lock()
+	got := slices.Clone(reachableSystemDNS)
+	reachableDNSMu.Unlock()
+	if len(got) != 1 || got[0] != okAddr {
+		t.Fatalf("reachableSystemDNS = %v, want [%s]", got, okAddr)
+	}
+	if v := PreferredSystemDNS(); v != config.DefaultSystemDNS {
+		t.Fatalf("PreferredSystemDNS = %q, want %q (a loopback system dns must not be used)", v, config.DefaultSystemDNS)
 	}
 }
 

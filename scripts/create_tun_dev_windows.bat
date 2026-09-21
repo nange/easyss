@@ -7,7 +7,16 @@ set tun_gw=%3
 set tun_mask=%4
 set tun_ip_sub_v6=%5
 set tun_gw_v6=%6
-set server_ip_v6=%7
+rem The two optional arguments below strip the surrounding quotes from their
+rem parameter. It matters: Go encodes an empty argument as a literal "" and cmd
+rem keeps those quotes in a batch parameter, so a plain "%server_ip_v6%" would
+rem look non-empty and the script would wrongly install the ipv6 routes (address,
+rem ::/1 and 8000::/1) on a tunnel whose server has no ipv6 to carry them.
+rem Never spell the tilde-path modifier with a non-digit in this file, not even
+rem inside a rem: cmd rejects the whole script with "usage of the path operator
+rem in batch-parameter substitution is invalid" and nothing below it runs.
+set server_ip_v6=%~7
+set tun_dns=%~8
 
 rem Exit code contract: the caller (client/tun/tun.go) keeps the TUN routes
 rem installed only when this script exits 0. cmd.exe propagates the exit
@@ -30,7 +39,14 @@ rem a read-only "already configured" pre-check here.
 set FAIL=
 
 call netsh interface ipv4 set address %tun_device% static address=%tun_ip% mask=%tun_mask% gateway=%tun_gw% || set FAIL=address
-call netsh interface ipv4 set dns name=%tun_device% static 8.8.8.8 || set FAIL=dns
+
+rem The DNS server is computed by the caller (cmd/easyss tunDNS) and passed as
+rem the 8th argument, so Windows uses the same value as darwin/linux: 127.0.0.1
+rem (the local forward DNS server) when enable_forward_dns is set, otherwise the
+rem builtin direct DNS that answered during this session. When the argument is
+rem empty the adapter keeps its default configuration, which is not a failure.
+rem Keep this block ASCII-only: cmd.exe reads the file in the OEM code page.
+if not "%tun_dns%"=="" call netsh interface ipv4 set dns name=%tun_device% static %tun_dns% || set FAIL=dns
 
 rem Route everything except 0.0.0.0/8 through the TUN device, mirroring the
 rem darwin script. 0.0.0.1 (used to probe the physical default interface)
