@@ -41,15 +41,19 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 	}
 
 	// stubTool 写入一个以给定码退出的工具：每次调用都把收到的命令行追加到
-	// %STUB_LOG%，失败时另外在 stderr 打印标记。存根永远"成功"，所以仅凭退出码
+	// logPath，失败时另外在 stderr 打印标记。存根永远"成功"，所以仅凭退出码
 	// 区分不出脚本走了哪个分支（例如 server_ip_v6 为空时不应进入 ipv6 分支），
 	// 调用日志才是分支断言的数据来源。
-	stubTool := func(t *testing.T, dir, name string, code int) {
+	//
+	// 记录文件路径直接写进存根脚本（与 TestCloseTunScriptCleanup 的记录存根同一
+	// 做法），不依赖环境变量：cmd.exe 子进程的环境继承在这里不可靠。
+	stubTool := func(t *testing.T, dir, name, logPath string, code int) {
 		t.Helper()
 
-		body := "@echo off\r\necho %* >>\"%STUB_LOG%\"\r\nexit /b " + strconv.Itoa(code) + "\r\n"
+		record := "echo %* >> \"" + logPath + "\"\r\n"
+		body := "@echo off\r\n" + record + "exit /b " + strconv.Itoa(code) + "\r\n"
 		if code != 0 {
-			body = "@echo off\r\necho %* >>\"%STUB_LOG%\"\r\necho " + name + " failed 1>&2\r\nexit /b " + strconv.Itoa(code) + "\r\n"
+			body = "@echo off\r\n" + record + "echo " + name + " failed 1>&2\r\nexit /b " + strconv.Itoa(code) + "\r\n"
 		}
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644))
 	}
@@ -68,8 +72,9 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 
 		dir, err := os.MkdirTemp(stubRoot, "stubs")
 		require.NoError(t, err)
-		stubTool(t, dir, "netsh.cmd", netshCode)
-		stubTool(t, dir, "route.cmd", routeCode)
+		logPath := filepath.Join(dir, "calls.log")
+		stubTool(t, dir, "netsh.cmd", logPath, netshCode)
+		stubTool(t, dir, "route.cmd", logPath, routeCode)
 
 		// 参数形状与 client/tun/tun.go 的 windows 分支一致：6 个设备/路由参数
 		// + 第 7 个服务端 IPv6（没有时为空字符串，与生产路径相同）+ 第 8 个
@@ -78,9 +83,8 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 			"tun-easyss-test", "198.18.0.1", "198.18.0.1", "255.255.0.0",
 			"2001:db8::1/64", "fe80::1", serverIPV6, "223.5.5.5")
 
-		logPath := filepath.Join(dir, "calls.log")
 		cmd := exec.Command(comspec, args...)
-		cmd.Env = append(os.Environ(), "PATH="+dir+";"+os.Getenv("PATH"), "STUB_LOG="+logPath)
+		cmd.Env = append(os.Environ(), "PATH="+dir+";"+os.Getenv("PATH"))
 		out, err := cmd.CombinedOutput()
 
 		code := 0
@@ -90,7 +94,7 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 			code = exitErr.ExitCode()
 		}
 		calls, readErr := os.ReadFile(logPath)
-		require.NoError(t, readErr, "the stub call log must exist")
+		require.NoError(t, readErr, "the stub tools were never invoked; script output:\n%s", out)
 		return code, string(out), string(calls)
 	}
 
