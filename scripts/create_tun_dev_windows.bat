@@ -7,11 +7,14 @@ set tun_gw=%3
 set tun_mask=%4
 set tun_ip_sub_v6=%5
 set tun_gw_v6=%6
-rem "%~N" strips the surrounding quotes. It matters for the optional arguments:
-rem Go encodes an empty argument as a literal "" and cmd keeps those quotes in a
-rem batch parameter, so a plain "%server_ip_v6%" would look non-empty and the
-rem script would wrongly install the ipv6 routes (address, ::/1 and 8000::/1)
-rem on a tunnel whose server has no ipv6 to carry them.
+rem The two optional arguments below strip the surrounding quotes from their
+rem parameter. It matters: Go encodes an empty argument as a literal "" and cmd
+rem keeps those quotes in a batch parameter, so a plain "%server_ip_v6%" would
+rem look non-empty and the script would wrongly install the ipv6 routes (address,
+rem ::/1 and 8000::/1) on a tunnel whose server has no ipv6 to carry them.
+rem Never spell the tilde-path modifier with a non-digit in this file, not even
+rem inside a rem: cmd rejects the whole script with "usage of the path operator
+rem in batch-parameter substitution is invalid" and nothing below it runs.
 set server_ip_v6=%~7
 set tun_dns=%~8
 
