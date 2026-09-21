@@ -9,14 +9,14 @@ import (
 )
 
 // resetBuiltinDNSCircuit 清除内置 DNS 熔断器状态与可达记录（TUN 系统 DNS
-// 的取值来源），使各测试之间相互隔离。
+// 的取值来源，含内置与系统两份），使各测试之间相互隔离。
 func resetBuiltinDNSCircuit() {
 	builtinDNSMu.Lock()
 	builtinDNSDown = false
 	builtinDNSDownAt = time.Time{}
 	builtinDNSMu.Unlock()
 
-	clearReachableBuiltinServers()
+	clearReachableDNSServers()
 }
 
 func TestBuiltinDNSAvailableInitial(t *testing.T) {

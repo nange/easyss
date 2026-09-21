@@ -580,9 +580,9 @@ func (a *App) methodFromServer() protocol.Method {
 
 // tunDNS 返回 TUN 模式下需要设置到系统的 DNS 服务器。
 // 当内置 DNS 转发服务器启用时，查询应发往 127.0.0.1，由 EasySS 处理和记录。
-// 否则使用本会话已确认可达的内置直连 DNS（查询作为原始 UDP 通过 TUN 设备发出，
-// 由客户端截获后按域名直连/代理拆分）；还没有任何内置服务器应答过时，
-// PreferredSystemDNS 回退到内置池第一个 IPv4 项。
+// 否则使用本会话实测可达的解析器（查询作为原始 UDP 通过 TUN 设备发出，由客户端
+// 截获后按域名直连/代理拆分）：先内置直连 DNS，内置全不可用时用系统 DNS
+// （DHCP/内网解析器），两者都没有记录时回退到内置池第一个 IPv4 项。
 func tunDNS(cfg *config.ClientConfig) string {
 	if cfg.Local.EnableForwardDNS {
 		return "127.0.0.1"

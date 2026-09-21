@@ -33,7 +33,8 @@ const ProxyDNSServer = "8.8.8.8:53"
 
 // DefaultSystemDNS 是写入系统解析器配置的保底裸 IPv4，等于 DirectDNSServers
 // 中第一个 IPv4 项。TUN 启动时实际取值优先用 dns.PreferredSystemDNS()——本会话
-// 已确认可达的内置服务器——只有还没有任何内置服务器应答过时才回退到这里。
+// 实测可达的内置直连 DNS，其次是实测可达的系统 DNS（DHCP/内网解析器，覆盖
+// "全部内置 DNS 都不可用"的网络）——两者都没有记录时才回退到这里。
 const DefaultSystemDNS = "223.5.5.5"
 
 type ServerProfile struct {
