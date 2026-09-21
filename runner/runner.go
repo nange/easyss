@@ -30,16 +30,16 @@ var errSocksRequired = errors.New("http proxy requires socks_port to be enabled"
 // 判定它，以便给出"网络可能尚未就绪"的专用提示。
 var ErrServerDomainUnresolved = errors.New("server domain unresolved")
 
-// serverStartupResolveTimeout 限定启动时以及后台每次重试的服务器域名解析尝试。
-// 它与 client.serverIPV6ResolveTimeout 保持一致：3s 对健康的网络足够，
-// 同时能把最坏情况下的启动延迟控制得很短。
+// serverStartupResolveTimeout 限定启动时以及后台每次重试的服务器域名解析尝试，
+// 默认取 dns.PreResolveTimeout（预解析总预算的唯一事实来源，client.New 与 TUN
+// helper 也用它）。
 //
 // serverDomainRetryBase/serverDomainRetryMax 是后台重试的指数退避区间
 // （下限、上限，带 ±20% 抖动）：开机时网络可能几十秒后才就绪，退避上限决定
 // 了恢复被发现的延迟上界，同时让长时间离线时的尝试足够廉价。三者都是变量
 // （而非常量），以便测试缩短它们。
 var (
-	serverStartupResolveTimeout = 3 * time.Second
+	serverStartupResolveTimeout = dns.PreResolveTimeout
 	serverDomainRetryBase       = time.Second
 	serverDomainRetryMax        = 15 * time.Second
 )
@@ -410,8 +410,22 @@ func (c *Core) resolveServerDomain(cfg *config.ClientConfig) error {
 	log.Info("[EASYSS] server domain resolved at startup",
 		"host", svr.Address,
 		"elapsed_ms", time.Since(start).Milliseconds(),
+		"ips", c.publishServerIPs(),
 	)
 	return nil
+}
+
+// publishServerIPs 把预解析得到的服务端地址交给客户端，使传输层拨号做 DNS
+// pinning（见 client.Client.SetServerIPs）：这样即使操作系统解析器坏掉或被
+// 污染（例如家用路由器的 DNS 返回畸形应答），隧道依然能连上服务端。返回交出去
+// 的地址，便于调用方记录日志。
+func (c *Core) publishServerIPs() []string {
+	if c.Client == nil || c.SocksServer == nil {
+		return nil
+	}
+	ips := c.SocksServer.ServerIPs()
+	c.Client.SetServerIPs(ips)
+	return ips
 }
 
 // serverDomainRetry 把后台重试所需的可注入依赖与调参在派发 goroutine 之前
@@ -469,6 +483,7 @@ func (c *Core) retryServerDomain(cfg *config.ClientConfig, r serverDomainRetry) 
 			log.Info("[EASYSS] server domain resolved by background retry",
 				"host", svr.Address,
 				"attempts", attempt,
+				"ips", c.publishServerIPs(),
 			)
 			c.markServerDomainReady()
 			// 网络恢复后补一次连接池预热（替换掉启动时那次注定失败的预热），

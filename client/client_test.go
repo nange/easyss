@@ -157,3 +157,63 @@ func TestRefreshServerIPV6(t *testing.T) {
 	assert.Equal(t, net.ParseIP("::1").String(), c.RefreshServerIPV6())
 	assert.Equal(t, net.ParseIP("::1").String(), c.router.ServerIPV6())
 }
+
+// newDialTestClient 构造一个用于拨号测试的客户端：TUN 关闭（走普通 net.Dialer），
+// 服务端域名与 IPv6 规则由调用方指定。
+func newDialTestClient(t *testing.T, ipv6Rule, serverAddr string) *Client {
+	t.Helper()
+	rt, err := router.New(router.Config{IPV6Rule: router.ParseIPV6Rule(ipv6Rule)})
+	require.NoError(t, err)
+	return &Client{
+		cfg: &config.ClientConfig{
+			Servers: []*config.ServerProfile{{Address: serverAddr, Default: true}},
+			Routing: config.RoutingConfig{IPV6Rule: ipv6Rule},
+		},
+		router:       rt,
+		serverDomain: serverAddr,
+	}
+}
+
+// TestDialWithConfigUsesServerIPs 验证 DNS pinning：服务端域名无法通过系统解析器
+// 解析时，传输层仍然能连上——它拨的是预解析注入的字面 IP（而 TLS 的 SNI 仍来自
+// addr 里的域名）。
+func TestDialWithConfigUsesServerIPs(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	require.NoError(t, err)
+
+	// server.invalid 在公网 DNS 里不存在（RFC 6761 保留），系统解析器必然失败。
+	c := newDialTestClient(t, "disable", "server.invalid")
+	c.SetServerIPs([]string{"127.0.0.1"})
+
+	conn, err := c.dialWithConfig(context.Background(), "tcp", net.JoinHostPort("server.invalid", port))
+	require.NoError(t, err, "server.invalid is not resolvable; the dial must use the pre-resolved ip")
+	defer conn.Close() //nolint:errcheck
+	assert.Equal(t, ln.Addr().String(), conn.RemoteAddr().String())
+}
+
+// TestDialWithConfigFallsBackWhenServerIPsFail 验证缓存地址过期时的自愈：拨预解析
+// 地址失败后丢弃它并回退到域名拨号（系统解析器），而不是一直拨旧地址。
+func TestDialWithConfigFallsBackWhenServerIPsFail(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	require.NoError(t, err)
+
+	// localhost 可由系统解析器（/etc/hosts）解析；注入的 127.0.0.2 上没有监听者，
+	// 连接会被立即拒绝（而不是等超时），于是回退路径被触发。
+	c := newDialTestClient(t, "disable", "localhost")
+	c.SetServerIPs([]string{"127.0.0.2"})
+
+	conn, err := c.dialWithConfig(context.Background(), "tcp", net.JoinHostPort("localhost", port))
+	require.NoError(t, err, "the domain dial must take over after the stale ip fails")
+	defer conn.Close() //nolint:errcheck
+
+	// 失败后缓存地址被丢弃，后续拨号不再尝试旧地址。
+	assert.Nil(t, c.serverIPs.Load(), "stale pre-resolved ips must be dropped")
+}

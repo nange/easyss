@@ -148,6 +148,13 @@ func (s *Socks5Server) PrePopulateDNS(ctx context.Context, domain string, dnsSer
 	return s.dnsCache.PrePopulateWithFallback(ctx, domain, dnsServers, requireIPv4)
 }
 
+// ServerIPs 返回服务端域名在本会话预解析出来的地址（A 在前、AAAA 在后）。
+// runner 在预解析成功后把它们交给客户端，使传输层拨号做 DNS pinning，不再依赖
+// 可能坏掉或被污染的操作系统解析器（见 client.Client.SetServerIPs）。
+func (s *Socks5Server) ServerIPs() []string {
+	return s.dnsCache.ServerAddrs()
+}
+
 // isServerDomain 报告给定域名是否是代理服务器自身的主机名。针对它的 DNS 查询
 // 绝不能走代理路径：解析服务器域名需要打开隧道流，而打开隧道流又需要拨号到
 // 服务器域名——这是一个会死锁的循环依赖（尤其是在系统休眠/唤醒后缓存条目可能

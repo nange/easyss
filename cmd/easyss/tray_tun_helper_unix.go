@@ -10,17 +10,13 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/client/config"
+	"github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util"
 	"golang.org/x/sys/unix"
 )
-
-// tunHelperResolveTimeout 限制生成 TUN helper 之前对每个服务端域名进行
-// 预解析的耗时（这是一个运行时开关，不同于 runner.Run 内部的启动检查）。
-// 与 runner.serverStartupResolveTimeout 保持同步。
-const tunHelperResolveTimeout = 3 * time.Second
 
 // createTun2socksViaHelper 生成一个长期运行的提权 helper 来打开
 // TUN 设备、配置路由/DNS，并将 fd 传回。helper 持续存活，
@@ -55,29 +51,24 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 
 	// 2. 在生成 helper 之前预解析代理服务器主机名并填充 DNS 缓存，
 	// 以避免 helper 将系统 DNS 指向 TUN 后产生循环依赖。
+	//
+	// 只做一次有界尝试（预算为 dns.PreResolveTimeout，与启动期预解析同一个
+	// 常量）：这是用户主动触发的操作，失败就报错让用户重试，而不是在界面无
+	// 反馈的情况下把最坏等待叠成"尝试次数 × 总预算"。
 	if serverAddr := a.cfg.DefaultServer().Address; !util.IsIP(serverAddr) {
-		var err error
-		for i := range 3 {
-			if a.core.SocksServer == nil || len(config.DirectDNSServers) == 0 {
-				err = fmt.Errorf("dns cache not available")
-				break
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), tunHelperResolveTimeout)
-			err = a.core.SocksServer.PrePopulateDNS(ctx, serverAddr, config.DirectDNSServers,
-				a.cfg.Routing.IPV6Rule != "enable")
-			cancel()
-			if err == nil {
-				log.Info("[SYSTRAY] pre-populated dns cache for server", "host", serverAddr)
-				break
-			}
-			if i < 2 {
-				time.Sleep(time.Second)
-			}
+		if a.core.SocksServer == nil || len(config.DirectDNSServers) == 0 {
+			a.core.HTTPServer.ClearTunConfig()
+			return fmt.Errorf("failed to pre-resolve server hostname %s: dns cache not available", serverAddr)
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), dns.PreResolveTimeout)
+		err := a.core.SocksServer.PrePopulateDNS(ctx, serverAddr, config.DirectDNSServers,
+			a.cfg.Routing.IPV6Rule != "enable")
+		cancel()
 		if err != nil {
 			a.core.HTTPServer.ClearTunConfig()
 			return fmt.Errorf("failed to pre-resolve server hostname %s: %w", serverAddr, err)
 		}
+		log.Info("[SYSTRAY] pre-populated dns cache for server", "host", serverAddr)
 	}
 
 	// 3. 预解析之后再取 tunDNS 并注册配置：预解析成功的内置/系统解析器只有在这
