@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -32,6 +33,13 @@ type Client struct {
 	bound         atomic.Value // boundIface：直连拨号器当前绑定的接口
 	closeIdleDone chan struct{}
 	closeOnce     sync.Once
+
+	// serverDomain 是服务端域名（服务端地址是字面 IP 时为空）；serverIPs 是
+	// runner 预解析成功后注入的地址。dialWithConfig 优先拨这些字面 IP 而不是
+	// 把域名交给操作系统解析器，因此系统解析器坏掉/被污染时也能连上服务端
+	// （见 SetServerIPs）。
+	serverDomain string
+	serverIPs    atomic.Pointer[[]string]
 
 	// fileWarn 记录加载自定义直连/代理规则文件时出现的非致命错误，
 	// 以启动警告的形式呈现（参见 StartupWarning）。
@@ -207,13 +215,18 @@ var boundDialContext = func(c *Client, ctx context.Context, network, addr string
 	return c.dialer.Load().DialContext(ctx, network, addr)
 }
 
-// serverIPV6ResolveTimeout 约束 client.New 中同步的服务器 IPv6 解析。
-// 解析服务器的 AAAA 记录需要对直连 DNS 服务器做 DNS 往返；在那些服务器
-// 不可达的网络中，每个查询 5 秒的超时（乘以服务器数量）会让代理启动
-// 每次都停滞数秒（在移动端最明显——VPN 不能在代理就绪之前上线）。
-// 3s 对健康网络足够，并把最坏情况控制在很短；超时时路由引擎只是把
-// IPv6 视为不可用（自动模式的保险默认）。可在测试中覆盖。
-var serverIPV6ResolveTimeout = 3 * time.Second
+// serverIPDialTimeout 限定"拨预解析出来的某个字面地址"的单次尝试。服务端的 IP
+// 可能已经变化，某个地址也可能被黑洞：单次尝试必须有界，剩余预算留给回退到域名
+// 拨号（见 dialServerIPs）。
+const serverIPDialTimeout = 5 * time.Second
+
+// serverIPV6ResolveTimeout 约束 client.New 中同步的服务器 IPv6 解析，默认取
+// dns.PreResolveTimeout（与启动期预解析共用同一个总预算）。
+// 解析服务器的 AAAA 记录需要对直连 DNS 服务器做 DNS 往返；每个条目受
+// dns.ResolveItemTimeout 限制，因此不可达的服务器不会按"服务器数量 × 单次
+// 超时"叠加（在移动端最明显——VPN 不能在代理就绪之前上线）。
+// 超时时路由引擎只是把 IPv6 视为不可用（自动模式的保险默认）。可在测试中覆盖。
+var serverIPV6ResolveTimeout = dns.PreResolveTimeout
 
 func New(cfg *config.ClientConfig) (*Client, error) {
 	start := time.Now()
@@ -260,10 +273,17 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 
 	tlsCfg := cfg.UTLSConfig()
 
+	serverDomain := cfg.DefaultServer().Address
+	if util.IsIP(serverDomain) {
+		// 字面 IP 无需解析，也就没有 DNS pinning 可言。
+		serverDomain = ""
+	}
+
 	client := &Client{
 		cfg:           cfg,
 		router:        rt,
 		masterKey:     masterKey,
+		serverDomain:  serverDomain,
 		fileWarn:      rt.CustomFileError(),
 		closeIdleDone: make(chan struct{}),
 	}
@@ -304,10 +324,13 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	return client, nil
 }
 
-// dialWithConfig 在 TUN 模式激活时使用绑定接口的直连拨号器拨号
-// （使 socket 绕过 TUN 设备），否则回退到普通的 net.Dialer。
-// 看似接口绑定过期的失败（休眠/唤醒、网络切换）会触发一次性
-// 拨号器刷新与重试。
+// dialWithConfig 拨号传输层需要的服务端地址。当目标是服务端域名且已有预解析
+// 地址时优先拨这些字面 IP（DNS pinning，见 SetServerIPs）：服务端域名在
+// TLS/SNI 与证书校验里仍然是原域名（由传输层从 addr 派生），但解析这一步不再
+// 经过操作系统解析器，因此系统 DNS 坏掉或被污染时隧道依然可用。
+// TUN 模式激活时使用绑定接口的直连拨号器拨号（使 socket 绕过 TUN 设备），否则
+// 回退到普通的 net.Dialer。看似接口绑定过期的失败（休眠/唤醒、网络切换）会触发
+// 一次性拨号器刷新与重试。
 func (c *Client) dialWithConfig(ctx context.Context, network, addr string) (net.Conn, error) {
 	if c.router.ShouldIPV6Disable() {
 		switch network {
@@ -318,6 +341,62 @@ func (c *Client) dialWithConfig(ctx context.Context, network, addr string) (net.
 		}
 	}
 
+	if host, port, err := net.SplitHostPort(addr); err == nil {
+		if ips := c.serverDialIPs(host); len(ips) > 0 {
+			conn, err := c.dialServerIPs(ctx, network, ips, port)
+			if err == nil {
+				return conn, nil
+			}
+			// 预解析的地址可能已经过期（服务端换了 IP）：丢弃它并回退到域名
+			// 拨号（操作系统解析器），使后续拨号重新解析而不是一直拨旧地址。
+			c.SetServerIPs(nil)
+			log.Warn("[CLIENT] dial server by pre-resolved ip failed, falling back to system resolver",
+				"server", host, "ips", ips, "err", err)
+		}
+	}
+
+	return c.dialAddr(ctx, network, addr)
+}
+
+// serverDialIPs 返回可用于拨号的服务端字面 IP：仅当 host 正是服务端域名时。
+// 规则禁用 IPv6 时过滤掉 IPv6 地址（拨了也连不上）。
+func (c *Client) serverDialIPs(host string) []string {
+	if c.serverDomain == "" || !strings.EqualFold(host, c.serverDomain) {
+		return nil
+	}
+	p := c.serverIPs.Load()
+	if p == nil {
+		return nil
+	}
+	var ips []string
+	for _, ip := range *p {
+		if c.router.ShouldIPV6Disable() && util.IsIPV6(ip) {
+			continue
+		}
+		ips = append(ips, ip)
+	}
+	return ips
+}
+
+// dialServerIPs 依次尝试预解析得到的字面 IP，返回第一个成功的连接。
+// 每个地址的尝试都有界（serverIPDialTimeout）：某个地址被黑洞时不能吃掉整个
+// 拨号预算，剩余时间要留给回退到域名拨号。
+func (c *Client) dialServerIPs(ctx context.Context, network string, ips []string, port string) (net.Conn, error) {
+	var lastErr error
+	for _, ip := range ips {
+		tryCtx, cancel := context.WithTimeout(ctx, serverIPDialTimeout)
+		conn, err := c.dialAddr(tryCtx, network, net.JoinHostPort(ip, port))
+		cancel()
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+// dialAddr 拨一个具体地址（域名或字面 IP）。
+func (c *Client) dialAddr(ctx context.Context, network, addr string) (net.Conn, error) {
 	if c.cfg.Local.EnableTun2socks && c.dialer.Load() != nil {
 		// 强制特定 IP 版本，直连拨号器的 socket 绑定（IP_BOUND_IF）
 		// 才能生效。该拨号器只处理 "tcp4"/"udp4"，不处理双栈的
@@ -361,6 +440,18 @@ func (c *Client) dialWithConfig(ctx context.Context, network, addr string) (net.
 		KeepAlive: c.cfg.TimeoutDuration(),
 	}
 	return nd.DialContext(ctx, network, addr)
+}
+
+// SetServerIPs 记录服务端域名预解析得到的地址（由 runner 在预解析成功后注入，
+// 见 runner.Core.publishServerIPs）。传空列表表示丢弃：拨号随即回到由操作系统
+// 解析器解析域名的路径。
+func (c *Client) SetServerIPs(ips []string) {
+	if len(ips) == 0 {
+		c.serverIPs.Store(nil)
+		return
+	}
+	addrs := append([]string(nil), ips...)
+	c.serverIPs.Store(&addrs)
 }
 
 // refreshDirectDialer 在绑定变更（名称或索引）时重新检测默认接口并重建
@@ -456,9 +547,24 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 	}
 
 	if dns.BuiltinDNSAvailable() {
+		// 内置分支只能花掉总预算里除预留量以外的部分：黑洞内置 DNS（丢包而非
+		// 立即拒绝）会把整个预算耗在一次查询上，系统 DNS 兜底复用同一个已过期
+		// 的 ctx 就会在毫秒内全部失败（见 dns.WithSystemDNSFallbackReserve）。
+		builtinCtx, cancelBuiltin := dns.WithSystemDNSFallbackReserve(ctx)
+		defer cancelBuiltin()
+
 		reachable := false
 		for _, dnsServer := range config.DirectDNSServers {
-			ips, err := dns.LookupIPV6FromContext(ctx, dnsServer, svr.Address)
+			if builtinCtx.Err() != nil {
+				log.Warn("[CLIENT] server ipv6 resolution budget exhausted, skipping remaining builtin dns servers",
+					"server", svr.Address, "err", builtinCtx.Err())
+				break
+			}
+			// 每个条目独立预算，避免一个黑洞服务器吃掉整个内置分支
+			// （见 dns.ResolveItemTimeout）。
+			itemCtx, cancelItem := context.WithTimeout(builtinCtx, dns.ResolveItemTimeout)
+			ips, err := dns.LookupIPV6FromContext(itemCtx, dnsServer, svr.Address)
+			cancelItem()
 			if err != nil {
 				if ctx.Err() != nil {
 					log.Warn("[CLIENT] server ipv6 resolution timed out", "server", svr.Address, "err", ctx.Err())
@@ -491,7 +597,14 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 
 	// 所有 builtin 直连 DNS 服务器都不可用时，回退到系统 DNS 服务器
 	for _, dnsServer := range dns.SystemDNSServers() {
-		ips, err := dns.LookupIPV6FromContext(ctx, dnsServer, svr.Address)
+		if ctx.Err() != nil {
+			log.Warn("[CLIENT] server ipv6 resolution budget exhausted, skipping remaining system dns servers",
+				"server", svr.Address, "err", ctx.Err())
+			break
+		}
+		itemCtx, cancelItem := context.WithTimeout(ctx, dns.ResolveItemTimeout)
+		ips, err := dns.LookupIPV6FromContext(itemCtx, dnsServer, svr.Address)
+		cancelItem()
 		if err == nil {
 			// 记录已确认可达的系统 DNS，供"内置 DNS 全不可用"的网络里挑选
 			// TUN 系统解析器（见 dns.PreferredSystemDNS）。
