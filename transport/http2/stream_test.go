@@ -15,10 +15,10 @@ import (
 func newTestStream() (*http2Stream, *io.PipeReader) {
 	pr, pw := io.Pipe()
 	s := &http2Stream{
-		w:      pw,
-		respCh: make(chan roundTripResult, 1),
-		cancel: func() {},
-		done:   sync.OnceFunc(func() {}),
+		w:         pw,
+		respReady: make(chan struct{}),
+		cancel:    func() {},
+		done:      sync.OnceFunc(func() {}),
 	}
 	return s, pr
 }
@@ -156,27 +156,23 @@ func TestHTTP2Stream_TrackWriteNilSlotNoOp(t *testing.T) {
 // 到达的成功响应会贡献一个纯路径 RTT 样本（bootstrap 记录刷出 ->
 // 响应头到达），而从未盖章的流保持静默。
 func TestHTTP2Stream_RecordsPathRTTOnResponse(t *testing.T) {
-	// newTestStream 把 respCh 暴露为只读，因此保留一个可写句柄
-	// 以便注入响应。
-	newStream := func() (*http2Stream, chan roundTripResult) {
+	newStream := func() *http2Stream {
 		s, pr := newTestStream()
 		_ = pr
-		respCh := make(chan roundTripResult, 1)
-		s.respCh = respCh
-		return s, respCh
+		return s
 	}
 
 	t.Run("stamped stream records the sample", func(t *testing.T) {
 		stats.ResetCounters()
-		s, respCh := newStream()
+		s := newStream()
 		defer s.Close() //nolint:errcheck
 
 		s.MarkBootstrapSent()
 		time.Sleep(2 * time.Millisecond)
-		respCh <- roundTripResult{
+		s.deliver(roundTripResult{
 			resp: &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))},
 			err:  nil,
-		}
+		})
 
 		buf := make([]byte, 16)
 		if _, err := s.Read(buf); err != io.EOF {
@@ -194,13 +190,13 @@ func TestHTTP2Stream_RecordsPathRTTOnResponse(t *testing.T) {
 
 	t.Run("unstamped stream records nothing", func(t *testing.T) {
 		stats.ResetCounters()
-		s, respCh := newStream()
+		s := newStream()
 		defer s.Close() //nolint:errcheck
 
-		respCh <- roundTripResult{
+		s.deliver(roundTripResult{
 			resp: &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))},
 			err:  nil,
-		}
+		})
 
 		buf := make([]byte, 16)
 		if _, err := s.Read(buf); err != io.EOF {

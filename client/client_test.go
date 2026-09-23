@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -216,4 +217,115 @@ func TestDialWithConfigFallsBackWhenServerIPsFail(t *testing.T) {
 
 	// 失败后缓存地址被丢弃，后续拨号不再尝试旧地址。
 	assert.Nil(t, c.serverIPs.Load(), "stale pre-resolved ips must be dropped")
+}
+
+// TestWithDomainFallbackReserve 验证 pin 阶段总预算的切分：只有在总预算大于一次
+// 拨号预算（serverIPDialTimeout）时才提前扣掉它，保证域名回退至少有一次机会。
+func TestWithDomainFallbackReserve(t *testing.T) {
+	t.Run("no deadline is left untouched", func(t *testing.T) {
+		ctx, cancel := withDomainFallbackReserve(context.Background())
+		defer cancel()
+		if _, ok := ctx.Deadline(); ok {
+			t.Fatal("a context without a deadline must not gain one")
+		}
+	})
+
+	t.Run("reserves one dial budget", func(t *testing.T) {
+		parent, cancelParent := context.WithTimeout(context.Background(), 3*serverIPDialTimeout)
+		defer cancelParent()
+
+		ctx, cancel := withDomainFallbackReserve(parent)
+		defer cancel()
+
+		got, ok := ctx.Deadline()
+		require.True(t, ok, "expected a reserved deadline")
+		want, _ := parent.Deadline()
+		want = want.Add(-serverIPDialTimeout)
+		if diff := got.Sub(want); diff > 50*time.Millisecond || diff < -50*time.Millisecond {
+			t.Fatalf("reserved deadline = %v, want %v (±50ms)", got, want)
+		}
+	})
+
+	t.Run("budget too small is left untouched", func(t *testing.T) {
+		parent, cancelParent := context.WithTimeout(context.Background(), serverIPDialTimeout/2)
+		defer cancelParent()
+
+		ctx, cancel := withDomainFallbackReserve(parent)
+		defer cancel()
+
+		got, _ := ctx.Deadline()
+		want, _ := parent.Deadline()
+		if !got.Equal(want) {
+			t.Fatalf("deadline = %v, want the parent deadline %v untouched", got, want)
+		}
+	})
+}
+
+// TestDialWithConfigReservesBudgetForDomainFallback 覆盖 F1(b)：预解析的字面地址
+// 是黑洞（拨号一直等到预算耗尽）时，pin 阶段必须只吃掉总预算里除一次拨号预算以外
+// 的部分，域名回退才有机会成功。没有这层预留，域名回退会复用同一个已过期的
+// context 在毫秒内失败——即使操作系统解析器完全可用。
+func TestDialWithConfigReservesBudgetForDomainFallback(t *testing.T) {
+	origBound := boundDialContext
+	t.Cleanup(func() { boundDialContext = origBound })
+
+	c := newTestClient(t, true) // TUN 模式：dialAddr 走可注入的 boundDialContext
+	c.serverDomain = "server.invalid"
+	c.SetServerIPs([]string{"10.255.255.1"})
+
+	var domainDials int
+	pinnedBudget := make(chan error, 1)
+	boundDialContext = func(_ *Client, ctx context.Context, _ string, addr string) (net.Conn, error) {
+		host, _, _ := net.SplitHostPort(addr)
+		if host == "10.255.255.1" {
+			<-ctx.Done() // 黑洞：只收不回，一直等到 pin 阶段预算耗尽
+			pinnedBudget <- ctx.Err()
+			return nil, ctx.Err()
+		}
+		domainDials++
+		return &net.TCPConn{}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), serverIPDialTimeout+200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	conn, err := c.dialWithConfig(ctx, "tcp", "server.invalid:443")
+	require.NoError(t, err, "the domain fallback must still have budget after the pinned attempt")
+	require.NotNil(t, conn)
+	if domainDials != 1 {
+		t.Fatalf("domain dials = %d, want 1", domainDials)
+	}
+	if elapsed := time.Since(start); elapsed > serverIPDialTimeout/2 {
+		t.Fatalf("pinned phase took %v, want it cut short by the reserve", elapsed)
+	}
+	if err := <-pinnedBudget; err == nil {
+		t.Fatal("the pinned dial must have failed on an exhausted budget")
+	}
+	assert.Nil(t, c.serverIPs.Load(), "the failed pre-resolved address must be dropped")
+}
+
+// TestDialServerIPsStopsWhenBudgetExhausted 验证 pin 阶段预算耗尽后不再逐个尝试
+// 剩余字面地址：它们只会各记一次瞬时失败，剩余预算要留给域名回退。
+func TestDialServerIPsStopsWhenBudgetExhausted(t *testing.T) {
+	origBound := boundDialContext
+	t.Cleanup(func() { boundDialContext = origBound })
+
+	c := newTestClient(t, true)
+	var calls int
+	boundDialContext = func(_ *Client, _ context.Context, _, _ string) (net.Conn, error) {
+		calls++
+		return nil, errors.New("unreachable")
+	}
+
+	expired, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := c.dialServerIPs(expired, "tcp4", []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}, "443")
+	if err == nil {
+		t.Fatal("expected the exhausted budget to be reported")
+	}
+	if calls != 0 {
+		t.Fatalf("dial calls = %d, want 0 after the budget was exhausted", calls)
+	}
 }

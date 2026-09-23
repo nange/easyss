@@ -53,6 +53,36 @@ type BootstrapSentMarker interface {
 	MarkBootstrapSent()
 }
 
+// ResponseAwaiter 由能在不消费响应体的情况下等待"响应已就绪"的传输层流实现：
+// 代理层据此在引导阶段用一个有界窗口等待服务端响应，而不是写完引导记录就
+// 假定连接可用。契约必须精确，否则会把"服务端拒绝"误当成网络故障：
+//
+//   - 响应已就绪（含服务端以非 200 拒绝握手，传输层已把它转成
+//     HandshakeRejectedError）→ nil；
+//   - 传输层错误 → 该错误；
+//   - ctx 结束 → ctx.Err()。
+//
+// 未实现该接口的流保持原有行为：代理层不等待。
+type ResponseAwaiter interface {
+	AwaitResponse(ctx context.Context) error
+}
+
+// ConnLiveness 由能在本流所在连接上做一次轻量存活探测的传输层流实现：
+// 响应头迟到既可能是"连接已死"（网络切换/漫游），也可能是"服务端仍在解析
+// 目标域名"，判活探测用来区分二者。ok=false 表示无法判定（服务端不提供
+// /v3/probe，或客户端未配置探测令牌），此时调用方应按判死处理。
+type ConnLiveness interface {
+	ConnAlive(ctx context.Context) (alive, ok bool)
+}
+
+// ConnInvalidator 由能强制关闭本流所在底层连接的传输层流实现。
+// http.Transport 只暴露 CloseIdleConnections，它关不掉正在承载活跃流的连接，
+// 因此"判死即换连接重试"需要传输层按连接身份精确关闭。未实现该接口的流
+// 永远不会被调用。
+type ConnInvalidator interface {
+	InvalidateConn()
+}
+
 type OpenRequest struct {
 	Endpoint     string
 	Salt         string
