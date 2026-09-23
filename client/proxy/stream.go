@@ -152,8 +152,9 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 			stream.Close() //nolint:errcheck
 			lastErr = fmt.Errorf("write handshake: %w", err)
 			// 写失败说明管道已被 RoundTrip 的错误关闭，即连接在写入阶段就坏了。
-			// 只有这一种错误值得换连接重试（其它写入错误是确定性的，重试无用）。
-			if attempt < bootstrapMaxAttempts && errors.Is(err, io.ErrClosedPipe) {
+			// 只有这一种错误值得换连接重试（其它写入错误是确定性的，重试无用）；
+			// 上层已取消时同样不重试——取消不是判死，也不该顺手丢弃连接池。
+			if attempt < bootstrapMaxAttempts && errors.Is(err, io.ErrClosedPipe) && ctx.Err() == nil {
 				log.Debug("[STREAM] bootstrap write failed, retrying on a new connection",
 					"attempt", attempt, "target", target, "err", err)
 				// 等本流收敛并丢掉其余空闲连接：它们多半也绑在旧网络上，否则
@@ -180,16 +181,21 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 		}
 		lastErr = err
 
+		// 上层取消（核心停止、本地连接已断、请求被放弃）：只关闭本流，**不得**
+		// 失效连接。取消不是判死——这条连接可能完全是健康的，而且被同槽位的
+		// 其他在飞流共享，关掉它会连带中断它们。因此这个检查必须排在
+		// invalidateDeadStream 之前。
+		if ctx.Err() != nil {
+			_ = stream.Close()
+			return nil, ctx.Err()
+		}
+
 		// 判死：失效这条连接（它仍承载着本流，http.Transport 的
 		// CloseIdleConnections 关不掉它），并丢掉其余空闲连接。只作用于本次请求
 		// 自己的连接，因此不会误杀刚重试建立的新连接。
 		invalidateDeadStream(stream)
 		_ = stream.Close()
 
-		// 上层取消（核心停止、本地连接已断）：不重试，直接上报。
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
 		if attempt < bootstrapMaxAttempts {
 			log.Debug("[STREAM] bootstrap timed out, retrying on a new connection",
 				"attempt", attempt, "target", target, "err", lastErr)

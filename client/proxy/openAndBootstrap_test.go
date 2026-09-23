@@ -214,6 +214,11 @@ func TestOpenAndBootstrap_ContextCanceledNoRetry(t *testing.T) {
 	if tr.closeIdleCalls() != 0 {
 		t.Errorf("expected no CloseIdle call after cancellation, got %d", tr.closeIdleCalls())
 	}
+	// 取消不是判死：只关闭本流，绝不能失效连接——这条连接是健康的，且被同槽位
+	// 其他在飞流共享，关掉它会连带中断它们。
+	if _, _, invalidates, closes := first.counters(); invalidates != 0 || closes != 1 {
+		t.Errorf("first stream: invalidates=%d closes=%d, want 0/1", invalidates, closes)
+	}
 }
 
 // TestOpenAndBootstrap_ResponseReadyNoRetry 验证"响应已就绪"（含服务端拒绝）不
