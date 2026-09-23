@@ -85,15 +85,20 @@ type bootstrapSession struct {
 //   - bootstrapLivenessTimeout：窗口到点后，在同一条连接上做一次存活探测的预算。
 //     探测用来把"连接已死"与"服务端还在解析目标域名/链路很慢"区分开，因此窗口
 //     可以取得小而不误伤慢服务端。
+//   - bootstrapSettleTimeout：判死重试前等待本流 RoundTrip 收敛的上限，使
+//     CloseIdle() 能可靠地把这条连接从 net/http 的池里摘掉（见 settleDeadStream）。
+//     正常在微秒级返回，这个上限只是防御性的。
 //
 // bootstrapMaxAttempts 是"应用尚未收到任何数据"这一阶段允许的总尝试次数：第 1 次
-// 通常踩在死连接上、第 2 次成功，第 3 次留给"网络正在切换中"的抖动。每次尝试都
-// 重新生成 salt，服务端的重放保护不会把重试当作重放（对它就是一条新流）。
+// 通常踩在死连接上、第 2 次在判死路径（失效 + settle + 丢弃空闲连接）之后必然拿到
+// 新连接；第 3 次留给"网络正在切换中"的抖动。每次尝试都重新生成 salt，服务端的
+// 重放保护不会把重试当作重放（对它就是一条新流）。
 const bootstrapMaxAttempts = 3
 
 var (
 	bootstrapResponseTimeout = 4 * time.Second
 	bootstrapLivenessTimeout = 2 * time.Second
+	bootstrapSettleTimeout   = 100 * time.Millisecond
 )
 
 func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, proto protocol.Proto, target string, method protocol.Method, extraFrames []protocol.Frame) (*bootstrapSession, error) {
@@ -151,8 +156,10 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 			if attempt < bootstrapMaxAttempts && errors.Is(err, io.ErrClosedPipe) {
 				log.Debug("[STREAM] bootstrap write failed, retrying on a new connection",
 					"attempt", attempt, "target", target, "err", err)
-				// 丢掉其余空闲连接：它们多半也绑在旧网络上，否则后续请求会逐个
-				// 再踩一次死连接。判死瞬间做这件事，而不是等 240s 的池级回收。
+				// 等本流收敛并丢掉其余空闲连接：它们多半也绑在旧网络上，否则
+				// 后续请求会逐个再踩一次死连接。判死瞬间做这件事，而不是等
+				// 240s 的池级回收（见 settleDeadStream 对顺序的说明）。
+				settleDeadStream(stream)
 				h.transport.CloseIdle()
 				continue
 			}
@@ -186,6 +193,8 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 		if attempt < bootstrapMaxAttempts {
 			log.Debug("[STREAM] bootstrap timed out, retrying on a new connection",
 				"attempt", attempt, "target", target, "err", lastErr)
+			// 必须先等本流的 RoundTrip 收敛，再丢弃空闲连接（见 settleDeadStream）。
+			settleDeadStream(stream)
 			h.transport.CloseIdle()
 			continue
 		}
@@ -250,6 +259,27 @@ func invalidateDeadStream(stream transport.Stream) {
 	if inv, ok := stream.(transport.ConnInvalidator); ok {
 		inv.InvalidateConn()
 	}
+}
+
+// settleDeadStream 用有界窗口等待一条已关闭的流的 RoundTrip 收敛。
+//
+// 判死路径必须在 CloseIdle() 之前等这一步：InvalidateConn 关掉底层连接后，
+// net/http 的读循环是异步感知并回收它的；在那之前这条连接仍被本流"占用"，
+// 而 CloseIdleConnections 只回收空闲连接——于是下一次 Open 会把这条正在死去的
+// 连接再次交付出来，引导记录写入立即以 io.ErrClosedPipe 失败，白白消耗一次尝试
+// （判死即换连接的核心保证也就不严格成立）。等本流的 RoundTrip 返回后，连接才
+// 真正转为空闲，CloseIdle() 能可靠地把它从池里摘掉。
+//
+// 实测这一步在本地约 25µs；未实现 transport.ResponseAwaiter 的传输层没有这个
+// 问题（也不会被等待）。
+func settleDeadStream(stream transport.Stream) {
+	ra, ok := stream.(transport.ResponseAwaiter)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), bootstrapSettleTimeout)
+	defer cancel()
+	_ = ra.AwaitResponse(ctx)
 }
 
 // classifyFirstReadError 将由非加密服务器响应（例如握手被拒绝后的 fallback 页面）

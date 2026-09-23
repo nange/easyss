@@ -325,8 +325,14 @@ func newRecoveryTransport(t *testing.T, serverURL, probeToken string) transport.
 	return tr
 }
 
-// TestHTTP2Transport_InvalidateConnForcesNewConnection 验证端到端效果：判死失效后，
-// 下一次 Open 必然建立一条新的底层连接（httptest 的 ConnState 计数）。
+// TestHTTP2Transport_InvalidateConnForcesNewConnection 验证端到端效果：判死路径
+// （失效连接 → 关闭流 → 等本流 RoundTrip 收敛 → 丢弃空闲连接，见 client/proxy
+// 的 settleDeadStream）之后，下一次 Open 必然建立一条新的底层连接
+// （httptest 的 ConnState 计数）。
+//
+// 顺序是必须的：InvalidateConn 只关闭底层连接，net/http 的读循环异步感知并回收
+// 它；在那之前 CloseIdleConnections 仍把这条连接当作被活跃流占用而不回收，下一次
+// Open 就会再次拿到它（写引导记录立即失败）。
 func TestHTTP2Transport_InvalidateConnForcesNewConnection(t *testing.T) {
 	srv, conns := newH2Server(t)
 	tr := newRecoveryTransport(t, srv.URL, "")
@@ -355,6 +361,10 @@ func TestHTTP2Transport_InvalidateConnForcesNewConnection(t *testing.T) {
 	inv.InvalidateConn()
 	_ = first.Close()
 
+	// 判死路径在 CloseIdle() 之前等待本流收敛（见 client/proxy.settleDeadStream）。
+	awaitResponse(t, first, time.Second)
+	tr.CloseIdle()
+
 	second := open()
 	defer second.Close() //nolint:errcheck
 	if _, err := second.Write([]byte("abcd")); err != nil {
@@ -365,6 +375,18 @@ func TestHTTP2Transport_InvalidateConnForcesNewConnection(t *testing.T) {
 	if got := conns.Load(); got < 2 {
 		t.Fatalf("server saw %d connections, want at least 2 after invalidation", got)
 	}
+}
+
+// awaitResponse 等待流的 RoundTrip 结果落定（有界）。
+func awaitResponse(t *testing.T, stream transport.Stream, timeout time.Duration) {
+	t.Helper()
+	ra, ok := stream.(transport.ResponseAwaiter)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	_ = ra.AwaitResponse(ctx)
 }
 
 // TestHTTP2Transport_DoesNotImplementOptionalInterfacesWhenUnprobed 验证未配置探测

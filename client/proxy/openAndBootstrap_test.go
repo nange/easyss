@@ -237,6 +237,42 @@ func TestOpenAndBootstrap_ResponseReadyNoRetry(t *testing.T) {
 	}
 }
 
+// TestOpenAndBootstrap_SettlesBeforeDroppingIdleConnections 验证判死路径的动作
+// 顺序：失效连接 → 关闭流 → 等本流 RoundTrip 收敛 → CloseIdle()。顺序反了
+// （尤其是 CloseIdle 提前）会让 CloseIdleConnections 漏掉这条仍被在飞流占用的
+// 连接，重试的 Open 会再次拿到它，白费一次尝试。
+func TestOpenAndBootstrap_SettlesBeforeDroppingIdleConnections(t *testing.T) {
+	settledAfterClose := false
+	first := &awaitableStream{}
+	first.await = func(context.Context) error {
+		if _, _, _, closes := first.counters(); closes == 1 {
+			settledAfterClose = true
+		}
+		return context.DeadlineExceeded
+	}
+	second := &awaitableStream{}
+	tr := &mockTransport{streams: []transport.Stream{first, second}}
+	tr.onCloseIdle = func() {
+		if await, _, _, _ := first.counters(); await < 2 {
+			t.Error("CloseIdle must run after the dead stream settled")
+		}
+	}
+	h := newTestStreamHandler(tr)
+
+	bs, err := h.openAndBootstrap(context.Background(), "/v3/tcp", protocol.ProtoTCP, "example.com:443", protocol.MethodAES256GCM, nil)
+	if err != nil {
+		t.Fatalf("expected success after retry, got: %v", err)
+	}
+	defer bs.stream.Close() //nolint:errcheck
+
+	if !settledAfterClose {
+		t.Error("the dead stream must be closed before the settle wait")
+	}
+	if _, _, invalidates, closes := first.counters(); invalidates != 1 || closes != 1 {
+		t.Errorf("first stream: invalidates=%d closes=%d, want 1/1", invalidates, closes)
+	}
+}
+
 // TestOpenAndBootstrap_ResponseWindowIsBounded 验证等待窗口真的被应用于
 // AwaitResponse：一个在窗口到点前不会自己返回的流，最终仍由引导窗口打断。
 func TestOpenAndBootstrap_ResponseWindowIsBounded(t *testing.T) {
@@ -244,11 +280,14 @@ func TestOpenAndBootstrap_ResponseWindowIsBounded(t *testing.T) {
 	bootstrapResponseTimeout = 20 * time.Millisecond
 	t.Cleanup(func() { bootstrapResponseTimeout = old })
 
-	windowEnded := make(chan time.Duration, bootstrapMaxAttempts)
+	// 第一次 AwaitResponse 是引导等待窗口；后续调用是判死后的 settle 等待，
+	// 只记录第一次的耗时。
+	windowEnded := make(chan time.Duration, 1)
+	var recordOnce sync.Once
 	await := func(ctx context.Context) error {
 		start := time.Now()
 		<-ctx.Done()
-		windowEnded <- time.Since(start)
+		recordOnce.Do(func() { windowEnded <- time.Since(start) })
 		return ctx.Err()
 	}
 	streams := make([]transport.Stream, 0, bootstrapMaxAttempts)
@@ -281,6 +320,8 @@ type mockTransport struct {
 	warmUpDeadline time.Time
 	streams        []transport.Stream
 	openErrs       []error
+	// onCloseIdle 在 CloseIdle 递增计数后被调用，供用例断言判死路径的动作顺序。
+	onCloseIdle func()
 }
 
 func (m *mockTransport) Open(ctx context.Context, req transport.OpenRequest) (transport.Stream, error) {
@@ -312,7 +353,11 @@ func (m *mockTransport) WarmUp(ctx context.Context) error {
 func (m *mockTransport) CloseIdle() {
 	m.mu.Lock()
 	m.closeIdleCount++
+	hook := m.onCloseIdle
 	m.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 }
 
 func (m *mockTransport) Stats() transport.TransportStats { return transport.TransportStats{} }
