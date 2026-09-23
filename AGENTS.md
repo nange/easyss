@@ -60,7 +60,9 @@ make easyss-server
 # 服务端 (Windows)
 make easyss-server-windows
 
-# Android AAR — 需要 gomobile 和 Android SDK
+# Android AAR — 需要 JDK(javac)、Android SDK/NDK 和 gomobile/gobind：
+#   go install golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
+#   （gomobile 通过 PATH 查找 gobind；Makefile 依次按 PATH → GOBIN → GOPATH/bin 定位 gomobile）
 make easyss-android-aar
 
 # 无系统托盘版本 (headless/Android)

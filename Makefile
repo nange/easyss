@@ -8,7 +8,12 @@ GO := go
 GO_BUILD := CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)'
 WIN_ARCH ?= amd64
 GO_BUILD_WIN := GOOS=windows GOARCH=$(WIN_ARCH) CGO_ENABLED=0 go build -ldflags '-H windowsgui $(LDFLAGS)'
-GOMOBILE := $(shell go env GOPATH)/bin/gomobile
+# gomobile/gobind 由 `go install golang.org/x/mobile/cmd/{gomobile,gobind}` 提供。
+# 优先用 PATH 里的 gomobile（它同样从 PATH 查找 gobind），其次回退到 GOBIN ——
+# mise/asdf 这类工具链会设置 GOBIN，可执行文件不一定落在 $(GOPATH)/bin。
+GOBIN_DIR := $(shell go env GOBIN)
+GOMOBILE ?= $(or $(shell command -v gomobile 2>/dev/null),\
+              $(if $(GOBIN_DIR),$(GOBIN_DIR),$(shell go env GOPATH)/bin)/gomobile)
 # Android 15+ / Google Play 要求原生库 16KB 对齐（16KB page size 支持），
 # 通过外部链接器将 ELF LOAD 段对齐到 16384 字节，消除 AGP 的 Aligned16KB 警告
 ANDROID_ALIGN_LDFLAGS := -extldflags=-Wl,-z,max-page-size=16384
@@ -63,6 +68,11 @@ easyss-server-windows:
 easyss-android-aar:
 	@if ! command -v javac >/dev/null 2>&1; then \
 		echo "Error: javac not found in PATH, please add JDK bin directory to PATH"; \
+		exit 1; \
+	fi
+	@if [ ! -x "$(GOMOBILE)" ] || ! command -v gobind >/dev/null 2>&1; then \
+		echo "Error: gomobile/gobind not found (gomobile: $(GOMOBILE))"; \
+		echo "Install them with: go install golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind"; \
 		exit 1; \
 	fi
 	$(GOMOBILE_BIND) -javapkg io.github.nange.easyss -o bin/libeasyss.aar ./mobile/ ./config/
