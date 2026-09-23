@@ -374,8 +374,22 @@ func (c *Cache) PrePopulateWithFallback(ctx context.Context, domain string, dnsS
 		if tryAll(ctx, systemServers, trySystem) {
 			return nil
 		}
-	} else if tryAll(ctx, systemDNSServersFunc(), trySystem) {
-		return nil
+	} else {
+		// 熔断已置位：正常跳过内置服务器。但它可能是在"当时还有系统兜底"的情况下
+		// 置位的，而现在兜底已经消失（Android 上系统 DNS 对应用不可见，正是这种
+		// 情形）——此时冷却期会变成彻底的解析中断。没有兜底就无视冷却，仍然尝试
+		// 内置池。
+		systemServers := systemDNSServersFunc()
+		if len(systemServers) == 0 {
+			log.Warn("[DNS] builtin dns breaker is armed but no system dns is available, retrying builtin servers",
+				"domain", domain)
+			if tryAll(builtinCtx, dnsServers, tryBuiltin) {
+				MarkBuiltinDNSAvailable()
+				return nil
+			}
+		} else if tryAll(ctx, systemServers, trySystem) {
+			return nil
+		}
 	}
 
 	if lastErr == nil {

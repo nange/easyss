@@ -343,7 +343,12 @@ func (c *Client) dialWithConfig(ctx context.Context, network, addr string) (net.
 
 	if host, port, err := net.SplitHostPort(addr); err == nil {
 		if ips := c.serverDialIPs(host); len(ips) > 0 {
-			conn, err := c.dialServerIPs(ctx, network, ips, port)
+			// 给域名回退预留一次机会：pin 阶段（可能包含多个被黑洞的字面地址）
+			// 不得吃掉整个拨号预算，否则失败的域名回退会复用同一个已过期的
+			// context 在毫秒内全部失败——即使操作系统解析器完全可用。
+			pinnedCtx, cancelPinned := withDomainFallbackReserve(ctx)
+			conn, err := c.dialServerIPs(pinnedCtx, network, ips, port)
+			cancelPinned()
 			if err == nil {
 				return conn, nil
 			}
@@ -356,6 +361,25 @@ func (c *Client) dialWithConfig(ctx context.Context, network, addr string) (net.
 	}
 
 	return c.dialAddr(ctx, network, addr)
+}
+
+// withDomainFallbackReserve 返回"拨预解析字面地址"阶段应使用的 context：当调用方
+// 带了截止时间、且剩余预算大于一个 serverIPDialTimeout 时，把 pin 阶段的截止时间
+// 提前一个 serverIPDialTimeout（即一次完整拨号的预算），这样全部字面 IP 都失败
+// 后，域名回退至少还能拿到这段时间。与 dns.WithSystemDNSFallbackReserve 是同一种
+// 思路（那里为系统 DNS 兜底预留一个条目的预算）。
+//
+// 没有截止时间（调用方不设总预算）或剩余预算已不足预留量时原样返回，不做切分。
+func withDomainFallbackReserve(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return ctx, func() {}
+	}
+	pinnedDeadline := deadline.Add(-serverIPDialTimeout)
+	if !time.Now().Before(pinnedDeadline) {
+		return ctx, func() {}
+	}
+	return context.WithDeadline(ctx, pinnedDeadline)
 }
 
 // serverDialIPs 返回可用于拨号的服务端字面 IP：仅当 host 正是服务端域名时。
@@ -379,11 +403,19 @@ func (c *Client) serverDialIPs(host string) []string {
 }
 
 // dialServerIPs 依次尝试预解析得到的字面 IP，返回第一个成功的连接。
-// 每个地址的尝试都有界（serverIPDialTimeout）：某个地址被黑洞时不能吃掉整个
-// 拨号预算，剩余时间要留给回退到域名拨号。
+// 每个地址的尝试都有界（serverIPDialTimeout）；ctx 本身携带 pin 阶段的总预算
+// （见 withDomainFallbackReserve），预算耗尽即停止尝试，把剩余时间留给域名回退。
 func (c *Client) dialServerIPs(ctx context.Context, network string, ips []string, port string) (net.Conn, error) {
 	var lastErr error
 	for _, ip := range ips {
+		if ctx.Err() != nil {
+			// pin 阶段预算已耗尽：继续只会对剩下的地址各记一次瞬时失败
+			// （拨号根本没发生），把日志刷爆且毫无意义。
+			if lastErr == nil {
+				lastErr = ctx.Err()
+			}
+			break
+		}
 		tryCtx, cancel := context.WithTimeout(ctx, serverIPDialTimeout)
 		conn, err := c.dialAddr(tryCtx, network, net.JoinHostPort(ip, port))
 		cancel()

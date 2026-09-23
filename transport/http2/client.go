@@ -36,6 +36,10 @@ type http2Transport struct {
 
 	serverURL string
 
+	// liveness 在某个槽位的连接上做一次轻量存活探测（HEAD /v3/probe），供
+	// 代理层区分"连接已死"与"服务端还在解析目标域名"。未配置探测令牌时为 nil。
+	liveness func(ctx context.Context, slot *transportSlot) (alive, ok bool)
+
 	// growEvents 是近期槽位增长事件的有界环形缓冲，最旧的在最前；
 	// 以最新优先的顺序快照进 TransportStats.GrowEvents。由 growMu 保护。
 	growEvents []transport.GrowEvent
@@ -128,6 +132,7 @@ func New(cfg Config) (transport.Transport, error) {
 		connLifetime: connLifetime,
 		connMaxBytes: connMaxBytes,
 	}
+	var liveness func(ctx context.Context, slot *transportSlot) (alive, ok bool)
 	if cfg.ProbeToken != "" {
 		prober := &slotProber{
 			serverURL:   cfg.ServerURL,
@@ -135,12 +140,15 @@ func New(cfg Config) (transport.Transport, error) {
 			payloadSize: int64(sharedconfig.ProbePayloadSize),
 		}
 		lc.probeFunc = prober.probe
+		// 同一个探测端点也用于"判活"：HEAD 只花一个 RTT，不需下载载荷。
+		liveness = prober.alive
 	}
 
 	tr := &http2Transport{
 		sched:     sched,
 		lifecycle: lc,
 		serverURL: cfg.ServerURL,
+		liveness:  liveness,
 		ctx:       ctx,
 		cancel:    cancel,
 	}
@@ -205,11 +213,32 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 			// 新连接会重置轮换状态：生命周期截止时间（含每连接抖动）、
 			// 已承载字节数和 expiring 标记都从零开始。
 			slot.resetConn(connLifetime)
-			return uconn, nil
+
+			// 记录这条连接的身份，使判死路径能精确关闭承载活跃流的连接
+			// （http.Transport 自己关不掉它）。只有这里写入指针；清除一律走
+			// CAS（trackedConn.Close、http2Stream.InvalidateConn）。
+			sc := &slotConn{c: uconn}
+			slot.conn.Store(sc)
+			return &trackedConn{Conn: uconn, slot: slot, self: sc}, nil
 		},
 	}
 	slot.t = tr
 	return slot
+}
+
+// trackedConn 是 DialTLSContext 返回给 net/http 的连接：转发关闭是它的契约
+// （net/http 回收连接时调用），但清除槽位指针必须走 CAS——net/http 关闭的
+// 可能是一条早已被轮换掉的连接，绝不能把新连接的指针清掉。
+type trackedConn struct {
+	net.Conn
+	slot *transportSlot
+	self *slotConn
+}
+
+func (c *trackedConn) Close() error {
+	err := c.Conn.Close()
+	c.slot.conn.CompareAndSwap(c.self, nil)
+	return err
 }
 
 func defaultDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -287,8 +316,6 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 		httpReq.Header.Set("x-es", req.Salt)
 	}
 
-	respCh := make(chan roundTripResult, 1)
-
 	var stream *http2Stream
 	doneOnce := sync.OnceFunc(func() {
 		// 恰好释放一次槽位的 heavy 标记（doneOnce 最多执行一次），
@@ -301,10 +328,11 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 
 	stream = &http2Stream{
 		w:         pw,
-		respCh:    respCh,
+		respReady: make(chan struct{}),
 		cancel:    cancel,
 		done:      doneOnce,
 		slot:      slot,
+		liveness:  t.liveness,
 		startTime: time.Now(),
 	}
 
@@ -323,10 +351,9 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 			err = rejectErr
 			_ = pw.CloseWithError(err)
 		}
-		// 把 RoundTrip 错误存到流上，这样当管道写入以 io.ErrClosedPipe 失败时
-		// Write() 可以把它呈现出来。
-		stream.setRoundTripErr(err)
-		respCh <- roundTripResult{resp: resp, err: err}
+		// 落定结果：同时供 Read 消费、供 AwaitResponse 观察，以及供 Write
+		// 在管道写入失败时呈现根本原因。
+		stream.deliver(roundTripResult{resp: resp, err: err})
 	}()
 
 	return stream, nil

@@ -363,6 +363,35 @@ func TestCachePrePopulateWithFallbackAllFail(t *testing.T) {
 	}
 }
 
+// TestCachePrePopulateWithFallbackArmedBreakerWithoutSystemDNS 覆盖 F3：熔断是在
+// "当时还有系统兜底"时置位的，随后兜底消失。此时冷却期不得变成彻底的解析中断：
+// 仍然尝试内置池，成功后清掉熔断。
+func TestCachePrePopulateWithFallbackArmedBreakerWithoutSystemDNS(t *testing.T) {
+	resetBuiltinDNSCircuit()
+	okAddr := startTestDNSServer(t, false)
+	old := systemDNSServersFunc
+	systemDNSServersFunc = func() []string {
+		return nil
+	}
+	t.Cleanup(func() {
+		systemDNSServersFunc = old
+		resetSystemDNSCache()
+		resetBuiltinDNSCircuit()
+	})
+	MarkBuiltinDNSUnavailable() // 先有兜底、后兜底消失
+
+	c := NewCache("example.com")
+	if err := c.PrePopulateWithFallback(context.Background(), "example.com", []string{okAddr}, true); err != nil {
+		t.Fatalf("PrePopulateWithFallback error: %v", err)
+	}
+	if got := c.Get("example.com.", "A", true); got == nil {
+		t.Fatal("direct cache should have the A record after ignoring the armed breaker")
+	}
+	if !BuiltinDNSAvailable() {
+		t.Fatal("a successful builtin query must clear the breaker")
+	}
+}
+
 // TestCachePrePopulateWithFallbackBlackholeBuiltin 验证内置 DNS 是黑洞时系统
 // DNS 兜底仍能拿到时间预算：黑洞服务器（只收不回）会一直等到截止时间，若兜底
 // 复用同一个已过期的 ctx，它就会以 dial i/o timeout 在毫秒内全部失败——即使

@@ -46,6 +46,31 @@ type slotProber struct {
 	payloadSize int64
 }
 
+// alive 在同一槽位的连接上发起一次 HEAD /v3/probe，用一个 RTT 回答"这条连接
+// 还能不能往返"（见 transport.ConnLiveness）。它复用探测端点与能力令牌，但
+// 不下载载荷：net/http 服务端对 HEAD 会丢弃响应体，因此开销只有一个 RTT。
+// 判活标准与探测的吞吐量结论无关——拿到任何响应（200、429 限流、fallback
+// 页面）都证明连接是活的；只有 RoundTrip 报错或超时才判死。
+// 返回的 ok=false 表示"无法判定"（未配置探测令牌），调用方应按判死处理。
+func (p *slotProber) alive(ctx context.Context, slot *transportSlot) (alive, ok bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, p.serverURL+sharedconfig.EndpointProbe, nil)
+	if err != nil {
+		return false, false
+	}
+	req.Header.Set("x-es", p.token)
+	req.Header.Set("Cache-Control", "no-store")
+	req.Header.Set("User-Agent", chromeUserAgent())
+
+	resp, err := slot.t.RoundTrip(req)
+	if err != nil {
+		// 不可往返：连接已死（黑洞、接口消失、连接被关闭）。MaxConnsPerHost=1
+		// 使这次探测排在本流仍在占用的那条连接之后，而不是偷偷拨一条新连接。
+		return false, true
+	}
+	_ = resp.Body.Close()
+	return true, true
+}
+
 // probe 通过槽位连接下载探测载荷并报告响应体吞吐量（不含 TTFB：计时从第一个
 // 响应体分块开始）。结论依据绝对的降级阈值判定；生命周期在此基础上再应用
 // 链路参考值的细化。

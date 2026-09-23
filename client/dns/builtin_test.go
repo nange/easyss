@@ -145,3 +145,35 @@ func TestQueryWithBuiltinFirstNoSystemFallback(t *testing.T) {
 		t.Fatalf("builtin should be retried without a fallback: builtin=%d", builtinCalls)
 	}
 }
+
+// TestQueryWithBuiltinFirstArmedBreakerWithoutFallback 覆盖 F3：熔断可能是在
+// "当时还有系统 DNS"的情况下置位的，随后兜底消失（Android 上系统 DNS 对应用
+// 不可见）。此时必须无视冷却仍然尝试内置池，否则冷却期会变成彻底的解析中断。
+func TestQueryWithBuiltinFirstArmedBreakerWithoutFallback(t *testing.T) {
+	resetBuiltinDNSCircuit()
+	MarkBuiltinDNSUnavailable()
+	if BuiltinDNSAvailable() {
+		t.Fatal("precondition: the breaker must be armed")
+	}
+
+	reply := new(dns.Msg)
+	var builtinCalls int
+	try := func(servers []string) (*dns.Msg, error) {
+		if len(servers) > 0 && servers[0] == "builtin" {
+			builtinCalls++
+			return reply, nil
+		}
+		return nil, errors.New("system dns must not be consulted without a fallback")
+	}
+
+	got, err := QueryWithBuiltinFirst([]string{"builtin"}, nil, try)
+	if err != nil || got != reply {
+		t.Fatalf("expected the builtin reply, got %v, %v", got, err)
+	}
+	if builtinCalls != 1 {
+		t.Fatalf("builtin calls = %d, want 1 (an armed breaker must be ignored without a fallback)", builtinCalls)
+	}
+	if !BuiltinDNSAvailable() {
+		t.Fatal("a successful builtin query must clear the breaker")
+	}
+}

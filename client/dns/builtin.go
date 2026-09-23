@@ -65,7 +65,11 @@ func QueryWithBuiltinFirst(builtin, system []string, try func(servers []string) 
 	if len(builtin) == 0 {
 		return try(system)
 	}
-	if BuiltinDNSAvailable() {
+	// 没有兜底上游时无视熔断：熔断可能是在"当时还有系统 DNS"的情况下置位的，
+	// 而现在 system 已经为空，跳过内置池会让冷却期内的每一次查询都在空列表上
+	// 立刻失败（try([]) 立即返回错误，而不是超时），把 3 分钟冷却变成彻底的解析
+	// 中断——Android 上系统 DNS 对应用不可见，正是这种"只有内置 DNS 可用"的情形。
+	if BuiltinDNSAvailable() || len(system) == 0 {
 		reply, err := try(builtin)
 		if err == nil {
 			MarkBuiltinDNSAvailable()

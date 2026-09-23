@@ -76,6 +76,26 @@ type bootstrapSession struct {
 	salt   []byte
 }
 
+// 引导阶段的自愈参数。它们刻意是包级变量（而非常量），使测试可以把窗口缩短到
+// 毫秒级；生产路径只读。
+//
+//   - bootstrapResponseTimeout：写完引导记录后等待"服务端做了什么回应"的有界窗口。
+//     健康路径的响应头 ≈ 1 个路径 RTT，因此 4s 覆盖 RTT ≤ ~1s 的链路，又远小于
+//     中继空闲超时（120s）——判死不再依赖后者。
+//   - bootstrapLivenessTimeout：窗口到点后，在同一条连接上做一次存活探测的预算。
+//     探测用来把"连接已死"与"服务端还在解析目标域名/链路很慢"区分开，因此窗口
+//     可以取得小而不误伤慢服务端。
+//
+// bootstrapMaxAttempts 是"应用尚未收到任何数据"这一阶段允许的总尝试次数：第 1 次
+// 通常踩在死连接上、第 2 次成功，第 3 次留给"网络正在切换中"的抖动。每次尝试都
+// 重新生成 salt，服务端的重放保护不会把重试当作重放（对它就是一条新流）。
+const bootstrapMaxAttempts = 3
+
+var (
+	bootstrapResponseTimeout = 4 * time.Second
+	bootstrapLivenessTimeout = 2 * time.Second
+)
+
 func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, proto protocol.Proto, target string, method protocol.Method, extraFrames []protocol.Frame) (*bootstrapSession, error) {
 	hsFrame := protocol.NewFrameHANDSHAKE(protocol.Handshake{
 		Version: protocol.Version3,
@@ -93,8 +113,8 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 
 	plaintext := protocol.EncodeFrames(frames)
 
-	const maxRetries = 2
-	for attempt := range maxRetries {
+	var lastErr error
+	for attempt := 1; attempt <= bootstrapMaxAttempts; attempt++ {
 		salt, err := crypto.GenerateSalt()
 		if err != nil {
 			return nil, fmt.Errorf("generate salt: %w", err)
@@ -125,11 +145,18 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 
 		if err := bootstrapWriter.WriteRecord(plaintext); err != nil {
 			stream.Close() //nolint:errcheck
-			if attempt < maxRetries-1 && errors.Is(err, io.ErrClosedPipe) {
-				log.Debug("[STREAM] handshake retry", "attempt", attempt+1, "target", target, "err", err)
+			lastErr = fmt.Errorf("write handshake: %w", err)
+			// 写失败说明管道已被 RoundTrip 的错误关闭，即连接在写入阶段就坏了。
+			// 只有这一种错误值得换连接重试（其它写入错误是确定性的，重试无用）。
+			if attempt < bootstrapMaxAttempts && errors.Is(err, io.ErrClosedPipe) {
+				log.Debug("[STREAM] bootstrap write failed, retrying on a new connection",
+					"attempt", attempt, "target", target, "err", err)
+				// 丢掉其余空闲连接：它们多半也绑在旧网络上，否则后续请求会逐个
+				// 再踩一次死连接。判死瞬间做这件事，而不是等 240s 的池级回收。
+				h.transport.CloseIdle()
 				continue
 			}
-			return nil, fmt.Errorf("write handshake: %w", err)
+			return nil, lastErr
 		}
 		bootstrapWriter.Flush()
 
@@ -140,11 +167,89 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 			m.MarkBootstrapSent()
 		}
 
-		return &bootstrapSession{stream: stream, sk: sk, salt: salt}, nil
+		err = h.awaitBootstrapResponse(ctx, stream)
+		if err == nil {
+			return &bootstrapSession{stream: stream, sk: sk, salt: salt}, nil
+		}
+		lastErr = err
+
+		// 判死：失效这条连接（它仍承载着本流，http.Transport 的
+		// CloseIdleConnections 关不掉它），并丢掉其余空闲连接。只作用于本次请求
+		// 自己的连接，因此不会误杀刚重试建立的新连接。
+		invalidateDeadStream(stream)
+		_ = stream.Close()
+
+		// 上层取消（核心停止、本地连接已断）：不重试，直接上报。
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if attempt < bootstrapMaxAttempts {
+			log.Debug("[STREAM] bootstrap timed out, retrying on a new connection",
+				"attempt", attempt, "target", target, "err", lastErr)
+			h.transport.CloseIdle()
+			continue
+		}
+		return nil, lastErr
 	}
 
 	// 不可达：循环体内部总是会返回。
-	return nil, fmt.Errorf("write handshake: max retries exceeded")
+	return nil, lastErr
+}
+
+// awaitBootstrapResponse 在引导阶段用一个有界窗口等待服务端的回应，并在窗口
+// 到点时用一次同连接探测区分"连接已死"与"服务端只是还没答复"（例如仍在解析
+// 目标域名）。返回 nil 表示可以继续（响应已就绪，或判活确认连接仍然可往返）；
+// 返回非 nil 表示这条连接应判死。
+//
+// 传输层未实现 transport.ResponseAwaiter 时不做任何等待，行为与既有实现完全一致。
+//
+// 状态清理的边界：这里只做"判死 + 重试"这类无状态动作，不触碰任何缓存、DNS
+// 熔断、可达记录或 pin——那些只影响最优性，不出现在可用性路径上。
+func (h *StreamHandler) awaitBootstrapResponse(ctx context.Context, stream transport.Stream) error {
+	ra, ok := stream.(transport.ResponseAwaiter)
+	if !ok {
+		return nil
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, bootstrapResponseTimeout)
+	err := ra.AwaitResponse(waitCtx)
+	cancel()
+
+	if err == nil {
+		// 响应已就绪：成功或服务端拒绝（非 200 已被传输层转成
+		// HandshakeRejectedError）。拒绝的分类交给首次 Read，不应在这里重试。
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		// 传输层错误：连接在写入阶段或响应阶段就坏了，立即换连接，不必等满窗口。
+		return err
+	}
+
+	// 窗口到点：先问"这条连接还能不能往返"。服务端在解析目标域名之后才提交
+	// 响应头，因此"响应头迟到"不等于"连接已死"；判活成功就继续等（无回归）。
+	if cl, ok := stream.(transport.ConnLiveness); ok {
+		liveCtx, cancelLive := context.WithTimeout(ctx, bootstrapLivenessTimeout)
+		alive, known := cl.ConnAlive(liveCtx)
+		cancelLive()
+		if known && alive {
+			log.Debug("[STREAM] bootstrap response late but connection is alive, keep waiting",
+				"response_timeout", bootstrapResponseTimeout)
+			return nil
+		}
+	}
+	return err
+}
+
+// invalidateDeadStream 让传输层强制关闭本流所在的那条底层连接：判死重试必须
+// 换连接，而 http.Transport 的 CloseIdleConnections 不会关闭承载活跃流的连接。
+// 未实现 transport.ConnInvalidator 的传输层（测试桩、其他实现）保持现状。
+func invalidateDeadStream(stream transport.Stream) {
+	if inv, ok := stream.(transport.ConnInvalidator); ok {
+		inv.InvalidateConn()
+	}
 }
 
 // classifyFirstReadError 将由非加密服务器响应（例如握手被拒绝后的 fallback 页面）

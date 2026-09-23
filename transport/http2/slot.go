@@ -1,10 +1,20 @@
 package http2
 
 import (
+	"net"
 	"net/http"
 	"sync/atomic"
 	"time"
 )
+
+// slotConn 标识槽位当前承载的底层连接。net/http 的 http.Transport 没有关闭
+// "正在承载活跃流"的连接的 API（CloseIdleConnections 只回收空闲连接），因此
+// 传输层自己记录连接身份：DialTLSContext 写入新连接，trackedConn.Close 与
+// http2Stream.InvalidateConn 都通过 CAS 清除这个指针——"先比较身份再置空"
+// 保证同一时刻只有一个赢家，既不会重复关闭，也不会误杀后来新建的连接。
+type slotConn struct {
+	c net.Conn
+}
 
 // transportSlot 承载一条 HTTP/2 连接（一个通过 MaxConnsPerHost=1 固定到单条
 // 连接上的标准库 http.Transport），以及调度器和连接生命周期所作用的状态。
@@ -17,6 +27,11 @@ type transportSlot struct {
 	t      *http.Transport
 	active atomic.Int32
 	heavy  atomic.Int32 // 活跃 heavy 流数量（>= HeavyStreamThreshold 字节）
+
+	// conn 指向槽位当前的底层连接。只有 DialTLSContext 写入；清除一律走 CAS
+	// （trackedConn.Close、http2Stream.InvalidateConn），因此持有一条连接身份的
+	// 流可以安全地"只在它仍是当前连接时"关闭它。
+	conn atomic.Pointer[slotConn]
 	// bytesRecv 是该槽位所有流累计下载的字节数；健康循环采样它以估算近期
 	// 吞吐量。
 	bytesRecv atomic.Int64
