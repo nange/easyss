@@ -167,10 +167,10 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		}
 	}
 	if cfg.Local.EnableForwardDNS {
-		dnsAddr = "127.0.0.1:53"
+		dnsAddr = forwardDNSListenAddr()
 		if err := prebindUDP(dnsAddr); err != nil {
 			c.cleanup()
-			return nil, fmt.Errorf("dns forward server listen %s: %w", dnsAddr, err)
+			return nil, forwardDNSListenError(dnsAddr, err)
 		}
 	}
 
@@ -602,6 +602,24 @@ func prebindUDP(addr string) error {
 		return err
 	}
 	return pc.Close()
+}
+
+// forwardDNSListenAddr 返回 forward DNS 服务器的监听地址。它刻意监听所有
+// 网卡的 53 端口：该功能面向"把 easyss 部署在路由器/软路由上、LAN 设备的
+// DNS 指向这台路由器"的场景，只监听回环时 LAN 设备根本够不到（见 README
+// 的透明代理章节）。通配地址在支持双栈的平台上同时接受 IPv4 与 IPv6 查询，
+// 应答的源地址由内核按客户端所在网段选取，因此多网口路由器无需额外配置。
+func forwardDNSListenAddr() string {
+	return ":53"
+}
+
+// forwardDNSListenError 包装 forward DNS 的监听失败。53 端口被占用是这个
+// 功能最常见的启动失败原因（路由器上通常是 dnsmasq 或 systemd-resolved 先
+// 占着），裸的 bind 错误无法让用户知道下一步该做什么，因此把排查方向直接
+// 写进错误信息。
+func forwardDNSListenError(addr string, err error) error {
+	return fmt.Errorf("dns forward server listen %s: %w (端口 53 常被 dnsmasq 或 "+
+		"systemd-resolved 占用，请先停用它们的 DNS 监听再启用 enable_forward_dns)", addr, err)
 }
 
 // cleanup 撤销核心持有的一切：先取消后台解析尝试并关闭停止信号（让后台
