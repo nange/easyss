@@ -77,7 +77,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	// 默认值。
 	tunHTTPCfg := &proxy.TunConfig{
 		Socks5Addr:     util.Socks5URI(a.cfg.Local.SocksPort),
-		DNSAddr:        tunDNS(a.cfg),
+		DNSAddr:        tunDNS(),
 		Device:         devCfg.Device,
 		TunIP:          devCfg.TunIP,
 		TunGW:          devCfg.TunGW,

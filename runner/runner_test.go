@@ -140,6 +140,47 @@ func TestPrebindUDP(t *testing.T) {
 	}
 }
 
+// TestForwardDNSListenAddr 钉住 forward DNS 的监听地址：必须是所有网卡上的
+// 53 端口。只监听回环（历史上的 127.0.0.1:53）会让该功能的既定场景不可用——
+// LAN 设备的 DNS 指向路由器时根本连不上这个解析器。这里只断言地址本身，
+// 不去真的绑定 53 端口（CI 环境不一定允许，也可能被 dnsmasq/systemd-resolved
+// 占着）。
+func TestForwardDNSListenAddr(t *testing.T) {
+	addr := forwardDNSListenAddr()
+	if addr != ":53" {
+		t.Fatalf("forwardDNSListenAddr() = %q, want \":53\"", addr)
+	}
+
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("SplitHostPort(%q): %v", addr, err)
+	}
+	// 通配地址：空 host 等价于 0.0.0.0，绝不能被写成某个具体网卡地址。
+	if host != "" {
+		t.Errorf("forward dns must listen on all interfaces, got host %q", host)
+	}
+	if port != "53" {
+		t.Errorf("forward dns must listen on port 53, got %q", port)
+	}
+}
+
+// TestForwardDNSListenErrorMentionsPortConflict 验证 53 端口冲突的错误信息
+// 带上排查方向：路由器上最常见的占用者是 dnsmasq/systemd-resolved，用户只看
+// 到裸的 "address already in use" 无法知道下一步该做什么。
+func TestForwardDNSListenErrorMentionsPortConflict(t *testing.T) {
+	sentinel := errors.New("bind: address already in use")
+	err := forwardDNSListenError(":53", sentinel)
+
+	for _, want := range []string{":53", "dnsmasq", "systemd-resolved", "enable_forward_dns"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q must mention %q", err, want)
+		}
+	}
+	if !errors.Is(err, sentinel) {
+		t.Errorf("error must wrap the original bind error, got %v", err)
+	}
+}
+
 func TestRunOKWhenPortsAreFree(t *testing.T) {
 	cfg := testConfig()
 	cfg.Local.SocksPort = freePort(t)

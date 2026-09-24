@@ -155,10 +155,10 @@ func (s *ForwardServer) exchangeWithServers(servers []string, msg *dns.Msg) (*dn
 }
 
 // systemDNSServers 返回系统 DNS 服务器作为回退上游，禁用 IPv6 时过滤掉
-// IPv6 服务器。指向本转发服务器自身的服务器总是被丢弃：TUN 模式下系统 DNS
-// 被设置为 127.0.0.1，若将其用作回退上游会递归回自身（查询 -> 回退 ->
-// 127.0.0.1:53 -> 同一查询），堆积 goroutine 和 UDP socket，直到单次查询的
-// 超时解开这条链。
+// IPv6 服务器。等于本转发服务器监听地址的条目总是被丢弃：系统解析器可能
+// 被配置为本机地址（例如应用把 DNS 指向 127.0.0.1，而查询又经隧道绕回本机），
+// 把它用作回退上游会递归回自身（查询 -> 回退 -> 本机:53 -> 同一查询），堆积
+// goroutine 和 UDP socket，直到单次查询的超时解开这条链。
 func (s *ForwardServer) systemDNSServers() []string {
 	servers := systemDNSServersFunc()
 	var filtered []string

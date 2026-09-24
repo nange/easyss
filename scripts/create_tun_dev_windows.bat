@@ -41,10 +41,12 @@ set FAIL=
 call netsh interface ipv4 set address %tun_device% static address=%tun_ip% mask=%tun_mask% gateway=%tun_gw% || set FAIL=address
 
 rem The DNS server is computed by the caller (cmd/easyss tunDNS) and passed as
-rem the 8th argument, so Windows uses the same value as darwin/linux: 127.0.0.1
-rem (the local forward DNS server) when enable_forward_dns is set, otherwise the
-rem builtin direct DNS that answered during this session. When the argument is
-rem empty the adapter keeps its default configuration, which is not a failure.
+rem the 8th argument, so Windows uses the same value as darwin/linux: the
+rem resolver that actually answered during this session (builtin direct DNS,
+rem falling back to the system resolver). It is unrelated to
+rem enable_forward_dns, which only serves LAN clients on 0.0.0.0:53. When the
+rem argument is empty the adapter keeps its default configuration, which is not
+rem a failure.
 rem Keep this block ASCII-only: cmd.exe reads the file in the OEM code page.
 if not "%tun_dns%"=="" call netsh interface ipv4 set dns name=%tun_device% static %tun_dns% || set FAIL=dns
 

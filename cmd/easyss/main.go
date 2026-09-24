@@ -566,7 +566,7 @@ func (a *App) tunConfig() tun.Config {
 
 	cfg := tun.Config{
 		Socks5Addr: util.Socks5URI(a.cfg.Local.SocksPort),
-		DNSServer:  tunDNS(a.cfg),
+		DNSServer:  tunDNS(),
 	}
 	if a.core != nil && a.core.Client != nil {
 		if ipv6 := a.core.Client.Router().ServerIPV6(); ipv6 != "" {
@@ -586,15 +586,15 @@ func (a *App) methodFromServer() protocol.Method {
 	return method
 }
 
-// tunDNS 返回 TUN 模式下需要设置到系统的 DNS 服务器。
-// 当内置 DNS 转发服务器启用时，查询应发往 127.0.0.1，由 EasySS 处理和记录。
-// 否则使用本会话实测可达的解析器（查询作为原始 UDP 通过 TUN 设备发出，由客户端
-// 截获后按域名直连/代理拆分）：先内置直连 DNS，内置全不可用时用系统 DNS
-// （DHCP/内网解析器），两者都没有记录时回退到内置池第一个 IPv4 项。
-func tunDNS(cfg *config.ClientConfig) string {
-	if cfg.Local.EnableForwardDNS {
-		return "127.0.0.1"
-	}
+// tunDNS 返回 TUN 模式下需要设置到系统的 DNS 服务器：本会话实测可达的解析器
+// （查询作为原始 UDP 通过 TUN 设备发出，由客户端截获后按域名直连/代理拆分）。
+// 取值顺序为内置直连 DNS → 系统 DNS（DHCP/内网解析器）→ 内置池第一个 IPv4 项，
+// 见 dns.PreferredSystemDNS。
+//
+// 它与 enable_forward_dns 无关：转发服务器是给 LAN 设备当解析器用的（监听
+// 0.0.0.0:53，见 runner.forwardDNSListenAddr），把本机 TUN 的解析器也指向它
+// 只会让本机解析绕一圈并丢掉按域名拆分的路径。
+func tunDNS() string {
 	return easydns.PreferredSystemDNS()
 }
 
