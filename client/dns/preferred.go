@@ -14,6 +14,11 @@ var (
 	reachableSystemDNS  []string // host:port，系统 DNS 中成功应答过的，按首次成功顺序
 )
 
+// defaultDNSPort 是没有显式端口时的 DNS 端口。回退上游的条目偶尔会是裸地址
+// （"223.5.5.5"），用它补齐端口，避免把"没有端口"误判成"端口不同"从而放行
+// 一个其实会打回本机的上游。
+const defaultDNSPort = "53"
+
 // MarkBuiltinServerReachable 记录某个内置直连 DNS 服务器在本会话成功应答过。
 // 非内置池成员会被忽略，这样测试里替换 config.DirectDNSServers 后使用的本地
 // 假服务器不会污染记录。
@@ -113,4 +118,80 @@ func systemDNSHost(addr string) string {
 		return ""
 	}
 	return host
+}
+
+// localAddrSet 返回本机接口上的地址集合，键为 host:port。转发服务器用它判断
+// 某个回退上游是否会打回自己：系统解析器可能被配置为本机地址（路由器上
+// /etc/resolv.conf 指向 127.0.0.1 是 dnsmasq 的惯例），而转发服务器监听通配
+// 地址时"本机地址"包含所有网卡，不只是回环。
+//
+// 它不做缓存：一次接口枚举是微秒量级，而调用点在一次真实的 DNS 往返路径上，
+// 相对上游 RTT 可以忽略；缓存反而会引入"网络切换后判定过期"的问题。
+func localAddrSet(port string) map[string]struct{} {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+
+	addrs := make(map[string]struct{})
+	for _, iface := range ifaces {
+		ifaceAddrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range ifaceAddrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			// To4 是 nil 的 IPv4-mapped 地址（::ffff:1.2.3.4）与 IPv4 字面值
+			// 归一化成同一个键，否则两种写法会被当成不同地址。
+			ip := ipnet.IP
+			if v4 := ip.To4(); v4 != nil {
+				ip = v4
+			}
+			addrs[net.JoinHostPort(ip.String(), port)] = struct{}{}
+		}
+	}
+	return addrs
+}
+
+// isSelfUpstreamAddr 报告回退上游 addr 是否会把查询打回本机监听地址，从而
+// 形成自环（查询 -> 回退上游 -> 本机转发服务器 -> 同一查询）。前身是
+// forward.go 里的字符串相等比较，在转发服务器改为监听通配地址后失效：
+// SystemDNSServers 的条目一律是 host:port，永远不可能等于 ":53"。
+//
+// 两条规则都必须先看端口：本机另一端口上的解析器并不会打回本监听 socket
+// （例如 127.0.0.1:1 上的本地假服务器，测试里大量使用）。
+//   - 端口等于监听端口，且 host 是环回/未指定地址——它们总是指向本机，
+//     不必枚举接口即可判定（未指定地址尤其重要：转发服务器监听通配地址时
+//     0.0.0.0:53 就是它自己，放过去会立刻打回自己）；
+//   - 端口等于监听端口，且 host 落在本机接口地址集合里（通配监听时本机所有
+//     网卡地址都会到达本监听 socket，见 localAddrSet）。
+//
+// 主机名形式的上游不做判断：判它需要一次解析，不适合放在查询路径上。
+func isSelfUpstreamAddr(addr, listenAddr string) bool {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		// 无端口的裸地址：按默认 DNS 端口参与判断，否则一个被写成裸 IP 的
+		// 上游会被当成"打不到本机"而放行。
+		host, port = addr, defaultDNSPort
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+
+	_, listenPort, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		listenPort = defaultDNSPort
+	}
+	if port != listenPort {
+		return false
+	}
+	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() {
+		return true
+	}
+	_, ok := localAddrSet(port)[net.JoinHostPort(ip.String(), port)]
+	return ok
 }

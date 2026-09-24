@@ -14,7 +14,11 @@ import (
 // 它与 enable_forward_dns 无关：转发服务器监听所有网卡（见
 // runner.forwardDNSListenAddr），是给 LAN 设备当解析器用的；把本机 TUN 的
 // 解析器也指向 127.0.0.1 只会让本机解析绕一圈，并绕开按域名直连/代理拆分的
-// 那条路径。两个开关取值必须得到同一个结果。
+// 那条路径。
+//
+// 需要说明的是：`tunDNS()` 已经不接收配置，因此下面翻转 EnableForwardDNS 的
+// 两次断言走的是同一条代码路径，真正的防线是函数签名本身（编译期）。保留这两
+// 次调用只是把"两个开关互不影响"这条策略写在测试里，别指望它能拦住回归。
 func TestTunDNS(t *testing.T) {
 	// 记录与熔断状态是包级变量，测试之间必须复位。
 	easydns.ResetResolveState()
