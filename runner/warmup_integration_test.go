@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/client/config"
-	"github.com/nange/easyss/v3/client/proxy"
 	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/transport"
 	"github.com/nange/easyss/v3/util"
 )
 
@@ -118,7 +118,7 @@ func TestRunDoesNotWaitForWarmUp(t *testing.T) {
 	old := warmUpCore
 	release := make(chan struct{})
 	finished := make(chan struct{})
-	warmUpCore = func(*proxy.Socks5Server, time.Duration) error {
+	warmUpCore = func(transport.Transport, time.Duration) error {
 		defer close(finished)
 		<-release
 		return nil

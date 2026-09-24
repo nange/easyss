@@ -174,7 +174,7 @@ func TestIsDNSResponse(t *testing.T) {
 }
 
 func TestIsServerDomain(t *testing.T) {
-	s := &Socks5Server{serverDomain: "mysite.net"}
+	s := &dnsInterceptor{serverDomain: "mysite.net"}
 	tests := []struct {
 		name   string
 		domain string
@@ -194,7 +194,7 @@ func TestIsServerDomain(t *testing.T) {
 		})
 	}
 
-	empty := &Socks5Server{serverDomain: ""}
+	empty := &dnsInterceptor{serverDomain: ""}
 	if empty.isServerDomain("mysite.net") {
 		t.Error("isServerDomain should be false when serverDomain is empty")
 	}

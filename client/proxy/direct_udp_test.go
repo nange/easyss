@@ -113,9 +113,7 @@ func TestDirectUDPRelayConcurrentDial(t *testing.T) {
 		t.Fatalf("dialed %d UDP sockets for one session, want 1 (duplicate dial orphans a socket and its read goroutine)", got)
 	}
 
-	srv.udpMu.RLock()
-	dc, ok := srv.directUDP[key]
-	srv.udpMu.RUnlock()
+	dc, ok := srv.udp.directFor(key)
 	if !ok || dc == nil {
 		t.Fatal("direct UDP session not registered in the map")
 	}
@@ -136,9 +134,7 @@ func TestDirectUDPRelayStaleReadLoopKeepsLiveEntry(t *testing.T) {
 	if err := srv.directUDPRelay(&socks5.Server{}, clientAddr, directTestDatagram(dst, 1), dst); err != nil {
 		t.Fatalf("directUDPRelay: %v", err)
 	}
-	srv.udpMu.RLock()
-	live, ok := srv.directUDP[key]
-	srv.udpMu.RUnlock()
+	live, ok := srv.udp.directFor(key)
 	if !ok || live == nil {
 		t.Fatal("live session missing before stale loop test")
 	}
@@ -155,18 +151,14 @@ func TestDirectUDPRelayStaleReadLoopKeepsLiveEntry(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		srv.udpMu.RLock()
-		_, ok := srv.directUDP[key]
-		srv.udpMu.RUnlock()
+		_, ok := srv.udp.directFor(key)
 		if !ok {
 			t.Fatal("stale read loop deleted the live session's map entry")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	time.Sleep(100 * time.Millisecond) // 等待任何迟到的删除操作落定
-	srv.udpMu.RLock()
-	_, ok = srv.directUDP[key]
-	srv.udpMu.RUnlock()
+	_, ok = srv.udp.directFor(key)
 	if !ok {
 		t.Fatal("live session's map entry disappeared after stale loop exit")
 	}
@@ -175,9 +167,7 @@ func TestDirectUDPRelayStaleReadLoopKeepsLiveEntry(t *testing.T) {
 	_ = live.conn.Close()
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		srv.udpMu.RLock()
-		_, ok = srv.directUDP[key]
-		srv.udpMu.RUnlock()
+		_, ok = srv.udp.directFor(key)
 		if !ok {
 			return
 		}
