@@ -11,6 +11,7 @@ import (
 	"time"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
 )
@@ -301,6 +302,13 @@ func (s *http2Stream) InvalidateConn() {
 	if s.slot.conn.CompareAndSwap(sc, nil) {
 		s.slot.resetRotation()
 		_ = sc.c.Close()
+		// 这是连接级事件，与 slot grown/rotated/retired 同级放在 Info：身份 CAS
+		// 保证每条被丢弃的连接恰好记一条，同一连接上的多条流同时判死也不会刷屏。
+		// 默认 Info 级别下它是"判死即换连接"唯一可见的锚点（逐流的判死原因与
+		// 重试决策在代理层记 Debug，见 client/proxy/stream.go）。
+		log.Info("[TRANSPORT] connection invalidated",
+			"slot", s.slot.idx,
+			"active_streams", s.slot.active.Load())
 	}
 }
 

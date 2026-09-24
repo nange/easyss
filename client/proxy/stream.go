@@ -177,6 +177,13 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 
 		err = h.awaitBootstrapResponse(ctx, stream)
 		if err == nil {
+			if attempt > 1 {
+				// 判死重试后恢复：这是"切网后应用无感自愈"在默认 Info 级别下的
+				// 可见证据。只记成功路径，因此持续断网时不会刷屏（失败由
+				// openStream 的 Error 覆盖）；逐次的重试决策仍记 Debug。
+				log.Info("[STREAM] bootstrap recovered on a new connection",
+					"target", target, "attempts", attempt)
+			}
 			return &bootstrapSession{stream: stream, sk: sk, salt: salt}, nil
 		}
 		lastErr = err
