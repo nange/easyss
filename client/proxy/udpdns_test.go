@@ -98,7 +98,8 @@ func newUDPDNSTestServer(t *testing.T, rt *router.Router) (*Socks5Server, *net.U
 		var d net.Dialer
 		return d.Dial(network, addr)
 	})
-	srv.router = rt
+	// 拦截器在构造时持有 router 指针：测试直接注入的两个使用方必须同时更新。
+	srv.router, srv.dns.router = rt, rt
 	return srv, sock, dialed
 }
 

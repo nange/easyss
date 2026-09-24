@@ -319,10 +319,7 @@ func TestOpenAndBootstrap_ResponseWindowIsBounded(t *testing.T) {
 type mockTransport struct {
 	mu             sync.Mutex
 	openCount      int
-	warmUpCount    int
 	closeIdleCount int
-	warmUpErr      error
-	warmUpDeadline time.Time
 	streams        []transport.Stream
 	openErrs       []error
 	// onCloseIdle 在 CloseIdle 递增计数后被调用，供用例断言判死路径的动作顺序。
@@ -344,16 +341,9 @@ func (m *mockTransport) Open(ctx context.Context, req transport.OpenRequest) (tr
 	return &mockStream{}, nil
 }
 
-// WarmUp 记录调用，使代理层的预热管线无需任何真实网络即可被断言；warmUpErr 返回给
-// 代理层，由代理层记录日志后交还给它自己的调用方。warmUpDeadline 记录代理层根据其
-// timeout 参数推导出的探测截止时间（上下文未携带截止时间时为零值）。
-func (m *mockTransport) WarmUp(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.warmUpCount++
-	m.warmUpDeadline, _ = ctx.Deadline()
-	return m.warmUpErr
-}
+// WarmUp 是 transport.Transport 的接口要求：预热的实现与断言在 runner 侧
+// （见 runner/warmup_test.go），代理层不再调用它。
+func (m *mockTransport) WarmUp(context.Context) error { return nil }
 
 func (m *mockTransport) CloseIdle() {
 	m.mu.Lock()
@@ -378,19 +368,6 @@ func (m *mockTransport) closeIdleCalls() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.closeIdleCount
-}
-
-func (m *mockTransport) warmUpCalls() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.warmUpCount
-}
-
-// warmUpDeadlineOf 返回最近一次预热时上下文里的截止时间。
-func (m *mockTransport) warmUpDeadlineOf() time.Time {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.warmUpDeadline
 }
 
 func newTestStreamHandler(tr transport.Transport) *StreamHandler {

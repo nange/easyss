@@ -172,7 +172,7 @@ func (f *fakeEncryptedUpstream) Close() error {
 
 // serve 读取客户端写来的引导记录（含 DNS 查询），再用同一套密钥在 s2c 方向
 // 加密回写一条 DATAGRAM 应答。responder 返回 nil 表示故意沉默，交由调用方的
-// dnsRespTimeout 处理。
+// DNS 响应读空闲超时（dnsOptions.RespTimeout）处理。
 func (f *fakeEncryptedUpstream) serve(salt []byte, masterKey []byte, responder func(*dns.Msg) *dns.Msg) error {
 	// 客户端在引导记录写出之前不会去读应答（Receive 紧随 Open 之后），因此这里
 	// 必须等到引导记录（含 DNS 查询）真正落盘，否则应答会先于引导记录被读走。
@@ -396,7 +396,7 @@ func TestHandleTCPDNSDirect(t *testing.T) {
 	}
 
 	// 结果应写入直连缓存。
-	if cached := srv.dnsCache.Get("direct.example.com.", "A", true); cached == nil {
+	if cached := srv.dns.cache.Get("direct.example.com.", "A", true); cached == nil {
 		t.Error("direct answer not cached")
 	}
 }
@@ -583,7 +583,7 @@ func TestHandleTCPDNSProxySuccess(t *testing.T) {
 	if !ok || a.A.String() != "9.9.9.9" {
 		t.Fatalf("answer = %v, want 9.9.9.9", resp.Answer[0])
 	}
-	if cached := srv.dnsCache.Get("proxy.example.com.", "A", false); cached == nil {
+	if cached := srv.dns.cache.Get("proxy.example.com.", "A", false); cached == nil {
 		t.Error("proxied answer not cached")
 	}
 }
@@ -790,7 +790,7 @@ func TestHandleTCPDNSMultipleQueries(t *testing.T) {
 
 // TestHandleTCPDNSProxyExchangeRecreatedAfterFailure 覆盖失效交换残留的回归：
 // 第一次代理查询失败（上游静默 → SERVFAIL）后，残留的已关闭交换必须从
-// s.udpExch 移除，第二次代理查询要重建新交换（transport openCalls 增加到 2），
+// 会话池移除，第二次代理查询要重建新交换（transport openCalls 增加到 2），
 // 而不是命中残留交换导致该连接后续代理查询永久 SERVFAIL。
 func TestHandleTCPDNSProxyExchangeRecreatedAfterFailure(t *testing.T) {
 	rt, err := router.New(router.Config{ProxyRule: router.ProxyRuleAuto, IPV6Rule: router.IPV6RuleDisable})

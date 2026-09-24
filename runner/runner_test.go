@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/client/config"
+	"github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/proxy"
+	"github.com/nange/easyss/v3/transport"
 )
 
 func testConfig() *config.ClientConfig {
@@ -208,7 +210,7 @@ func stubWarmUp(t *testing.T, err error) (*atomic.Int64, *waitSignal) {
 	calls := &atomic.Int64{}
 	done := &waitSignal{done: make(chan struct{})}
 
-	warmUpCore = func(*proxy.Socks5Server, time.Duration) error {
+	warmUpCore = func(transport.Transport, time.Duration) error {
 		calls.Add(1)
 		done.close()
 		return err
@@ -293,6 +295,7 @@ func TestStartWarmUpDispatch(t *testing.T) {
 			core := &Core{cfg: cfg}
 			if !tt.nilServer {
 				core.SocksServer = &proxy.Socks5Server{}
+				core.transport = &warmUpTestTransport{}
 			}
 
 			// 按约定尽力而为：startWarmUp 从不阻塞也不会 panic。
@@ -314,7 +317,7 @@ func TestStartWarmUpWaitStartDelay(t *testing.T) {
 	shortWarmUpStartDelay(t, 100*time.Millisecond)
 	calls, done := stubWarmUp(t, nil)
 
-	core := &Core{cfg: testConfig(), SocksServer: &proxy.Socks5Server{}}
+	core := &Core{cfg: testConfig(), SocksServer: &proxy.Socks5Server{}, transport: &warmUpTestTransport{}}
 	core.startWarmUp()
 
 	if got := calls.Load(); got != 0 {
@@ -337,7 +340,7 @@ func TestStopCancelsPendingWarmUp(t *testing.T) {
 	shortWarmUpStartDelay(t, 5*time.Second)
 	calls, _ := stubWarmUp(t, nil)
 
-	core := &Core{cfg: testConfig(), SocksServer: &proxy.Socks5Server{}}
+	core := &Core{cfg: testConfig(), SocksServer: &proxy.Socks5Server{}, transport: &warmUpTestTransport{}}
 	core.startWarmUp()
 
 	done := make(chan struct{})
@@ -374,7 +377,7 @@ func TestStopCancelsInFlightWarmUp(t *testing.T) {
 	shortWarmUpStartDelay(t, 0)
 	calls, done := stubWarmUp(t, nil)
 
-	core := &Core{cfg: testConfig(), SocksServer: &proxy.Socks5Server{}}
+	core := &Core{cfg: testConfig(), SocksServer: &proxy.Socks5Server{}, transport: &warmUpTestTransport{}}
 	core.startWarmUp()
 
 	cancel := warmUpCancelOf(core)
@@ -420,7 +423,7 @@ func TestResolveServerDomain(t *testing.T) {
 	// 字面 IP 无需解析：不触碰 DNS 直接跳过。
 	cfgIP := testConfig() // Address 是 127.0.0.1
 	attempts := 0
-	prePopulateServerDomain = func(*proxy.Socks5Server, context.Context, string, []string, bool) error {
+	prePopulateServerDomain = func(*dns.Cache, context.Context, string, []string, bool) error {
 		attempts++
 		return nil
 	}
@@ -450,12 +453,12 @@ func TestResolveServerDomain(t *testing.T) {
 
 	// 非 TUN 模式失败：仅一次有界尝试，返回错误。
 	cfgDomain.Local.EnableTun2socks = false
-	prePopulateServerDomain = func(*proxy.Socks5Server, context.Context, string, []string, bool) error {
+	prePopulateServerDomain = func(*dns.Cache, context.Context, string, []string, bool) error {
 		attempts++
 		return errors.New("dns boom")
 	}
 	attempts = 0
-	c = &Core{SocksServer: &proxy.Socks5Server{}}
+	c = &Core{dnsCache: dns.NewCache("")}
 	err := c.resolveServerDomain(cfgDomain)
 	if err == nil {
 		t.Fatal("expected error on resolution failure")
@@ -472,7 +475,7 @@ func TestResolveServerDomain(t *testing.T) {
 	cfgTun.Servers[0].Address = "proxy.example.com"
 	cfgTun.Local.EnableTun2socks = true
 	attempts = 0
-	c = &Core{SocksServer: &proxy.Socks5Server{}}
+	c = &Core{dnsCache: dns.NewCache("")}
 	if err := c.resolveServerDomain(cfgTun); err == nil {
 		t.Fatal("expected error on TUN resolution failure")
 	}
@@ -481,12 +484,12 @@ func TestResolveServerDomain(t *testing.T) {
 	}
 
 	// 成功：无错误。
-	prePopulateServerDomain = func(*proxy.Socks5Server, context.Context, string, []string, bool) error {
+	prePopulateServerDomain = func(*dns.Cache, context.Context, string, []string, bool) error {
 		attempts++
 		return nil
 	}
 	attempts = 0
-	c = &Core{SocksServer: &proxy.Socks5Server{}}
+	c = &Core{dnsCache: dns.NewCache("")}
 	if err := c.resolveServerDomain(cfgDomain); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -499,7 +502,7 @@ func TestResolveServerDomain(t *testing.T) {
 	config.DirectDNSServers = nil
 	t.Cleanup(func() { config.DirectDNSServers = oldDirect })
 	attempts = 0
-	c = &Core{SocksServer: &proxy.Socks5Server{}}
+	c = &Core{dnsCache: dns.NewCache("")}
 	if err := c.resolveServerDomain(cfgDomain); err == nil {
 		t.Fatal("expected error when no dns servers configured")
 	}
@@ -531,7 +534,7 @@ func setShortDomainRetry(t *testing.T) {
 	// DNS 包的熔断/系统 DNS 缓存是进程级状态，测试里不触碰它。
 	resetResolveState = func() {}
 	// 预热的真实实现会拨号；测试里只关心它是否被再次派发。
-	warmUpCore = func(*proxy.Socks5Server, time.Duration) error { return nil }
+	warmUpCore = func(transport.Transport, time.Duration) error { return nil }
 }
 
 // TestRunDegradesWhenServerDomainUnresolved 验证服务器域名解析失败不再中止
@@ -548,7 +551,7 @@ func TestRunDegradesWhenServerDomainUnresolved(t *testing.T) {
 		resets   int
 		warmUps  int
 	)
-	prePopulateServerDomain = func(*proxy.Socks5Server, context.Context, string, []string, bool) error {
+	prePopulateServerDomain = func(*dns.Cache, context.Context, string, []string, bool) error {
 		mu.Lock()
 		defer mu.Unlock()
 		attempts++
@@ -562,7 +565,7 @@ func TestRunDegradesWhenServerDomainUnresolved(t *testing.T) {
 		defer mu.Unlock()
 		resets++
 	}
-	warmUpCore = func(*proxy.Socks5Server, time.Duration) error {
+	warmUpCore = func(transport.Transport, time.Duration) error {
 		mu.Lock()
 		defer mu.Unlock()
 		warmUps++
@@ -630,7 +633,7 @@ func TestRunServerDomainReadyImmediately(t *testing.T) {
 	setShortDomainRetry(t)
 
 	var attempts atomic.Int64
-	prePopulateServerDomain = func(*proxy.Socks5Server, context.Context, string, []string, bool) error {
+	prePopulateServerDomain = func(*dns.Cache, context.Context, string, []string, bool) error {
 		attempts.Add(1)
 		return nil
 	}
@@ -667,7 +670,7 @@ func TestServerDomainRetryStopsOnStop(t *testing.T) {
 	setShortDomainRetry(t)
 
 	var attempts atomic.Int64
-	prePopulateServerDomain = func(*proxy.Socks5Server, context.Context, string, []string, bool) error {
+	prePopulateServerDomain = func(*dns.Cache, context.Context, string, []string, bool) error {
 		attempts.Add(1)
 		return errors.New("dns boom")
 	}

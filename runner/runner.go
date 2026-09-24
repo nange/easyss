@@ -20,6 +20,7 @@ import (
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/stats"
+	"github.com/nange/easyss/v3/transport"
 	"github.com/nange/easyss/v3/util"
 )
 
@@ -45,9 +46,10 @@ var (
 )
 
 // prePopulateServerDomain 是包级变量，以便测试注入确定性的失败
-// （与 client.boundDialContext 采用相同模式）。
-var prePopulateServerDomain = func(s *proxy.Socks5Server, ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error {
-	return s.PrePopulateDNS(ctx, domain, dnsServers, requireIPv4)
+// （与 client.boundDialContext 采用相同模式）。缓存由 runner 自己持有：
+// 预解析、DNS pinning 地址发布与代理服务器共享同一份缓存实例。
+var prePopulateServerDomain = func(cache *dns.Cache, ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error {
+	return cache.PrePopulateWithFallback(ctx, domain, dnsServers, requireIPv4)
 }
 
 // resetResolveState 清除 DNS 层的内置服务器熔断状态与系统 DNS 发现缓存
@@ -55,11 +57,9 @@ var prePopulateServerDomain = func(s *proxy.Socks5Server, ctx context.Context, d
 // 避免测试改动 DNS 包的进程级状态。
 var resetResolveState = dns.ResetResolveState
 
-// warmUpCore 预热本地 SOCKS5 服务器背后的传输连接池。它是包级变量，
-// 以便测试在没有任何网络的情况下断言调度行为。
-var warmUpCore = func(s *proxy.Socks5Server, timeout time.Duration) error {
-	return s.WarmUp(timeout)
-}
+// warmUpCore 预热传输连接池。它是包级变量，以便测试在没有任何网络的情况下
+// 断言调度行为。
+var warmUpCore = warmUpTransport
 
 // warmUpStartDelay 与 config.WarmUpStartDelay 保持一致：预热在 goroutine
 // 中派发，先等待这段时间再发起探测，让主机有时间完成网络路径的建立。
@@ -74,6 +74,13 @@ type Core struct {
 	HTTPServer    *proxy.HTTPProxyServer
 	StreamHandler *proxy.StreamHandler
 	dnsServer     *dns.ForwardServer
+
+	// dnsCache 由核心持有并与代理服务器共享：服务端域名的预解析（启动期与
+	// 后台重试）与 DNS pinning 地址发布都直接作用于它，不再经过代理服务器。
+	// socks_port = 0 时没有本地代理入口，因此它是 nil。
+	dnsCache *dns.Cache
+	// transport 是隧道传输层，预热直接作用于它（预热不再经由代理服务器）。
+	transport transport.Transport
 
 	// StartupWarn 保存初始化核心时检测到的非致命警告（例如自定义规则文件
 	// 加载失败，或服务端域名暂时无法解析），调用方可以在不中断启动的情况下
@@ -133,6 +140,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		cfg:           cfg,
 		Client:        cli,
 		StreamHandler: streamHandler,
+		transport:     cli.Transport(),
 		StartupWarn:   cli.StartupWarning(),
 		done:          make(chan struct{}),
 		domainReady:   make(chan struct{}),
@@ -179,6 +187,9 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		if svr := cfg.DefaultServer(); svr != nil && !util.IsIP(svr.Address) {
 			serverDomain = svr.Address
 		}
+		// DNS 缓存由核心持有：服务端域名的预解析与 DNS pinning 地址发布是核心的
+		// 启动编排，代理服务器只是这份缓存的又一个使用者。
+		c.dnsCache = dns.NewCache(serverDomain)
 		socksServer, err := proxy.NewSocks5Server(proxy.Socks5Options{
 			ListenAddr:        socksAddr,
 			Username:          cfg.AuthUsername,
@@ -190,6 +201,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 			DisableQUIC:       !cfg.Local.EnableQUIC,
 			Timeouts:          timeouts,
 			DirectDialContext: cli.DialContext,
+			DNSCache:          c.dnsCache,
 		})
 		if err != nil {
 			_ = cli.Close()
@@ -282,7 +294,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 // 派发之间会替换的包级变量，从 goroutine 中（或从另一个常驻 goroutine 调用
 // startWarmUp 时）读取会与下一个测试产生数据竞争。
 type warmUpSeams struct {
-	probe func(s *proxy.Socks5Server, timeout time.Duration) error
+	probe func(tr transport.Transport, timeout time.Duration) error
 	delay time.Duration
 }
 
@@ -306,7 +318,9 @@ func (c *Core) startWarmUp() {
 
 // dispatchWarmUp 是预热的派发实现，依赖由调用方捕获后传入。
 func (c *Core) dispatchWarmUp(seams warmUpSeams) {
-	if c == nil || c.cfg == nil || c.SocksServer == nil {
+	// 预热只服务于本地代理入口：socks_port = 0 时核心没有入口可用，
+	// 跳过而不是失败（见 TestRunWarmUpSkippedWithoutSocksServer）。
+	if c == nil || c.cfg == nil || c.SocksServer == nil || c.transport == nil {
 		return
 	}
 	if c.cfg.Transport.DisableWarmUp {
@@ -325,9 +339,8 @@ func (c *Core) dispatchWarmUp(seams warmUpSeams) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// goroutine 需要的一切都在它启动前捕获完成。Stop 会并发地拆除核心，
-	// 探测必须针对本次调用派发时的服务器（预热一个 Close 已执行的服务器
-	// 是无害的：它会因 closing 标志提前返回）。
-	socksServer := c.SocksServer
+	// 探测必须针对本次调用派发时的传输层。
+	tr := c.transport
 	probe := seams.probe
 	delay := seams.delay
 
@@ -346,7 +359,15 @@ func (c *Core) dispatchWarmUp(seams warmUpSeams) {
 			return
 		}
 
-		if err := probe(socksServer, sharedconfig.WarmUpTimeout); err != nil {
+		// 延迟期间核心可能已经停止：cleanup 会先关闭停止信号再拆除传输层，
+		// 因此这里能挡住针对已关闭传输层的探测（等价于过去代理服务器上的
+		// closing 标志早退）。
+		if c.stopped() {
+			log.Debug("[EASYSS] warm-up skipped, core stopping")
+			return
+		}
+
+		if err := probe(tr, sharedconfig.WarmUpTimeout); err != nil {
 			log.Warn("[EASYSS] warm-up failed (non-fatal)", "err", err)
 		}
 	}()
@@ -386,7 +407,8 @@ func (c *Core) resolveServerDomain(cfg *config.ClientConfig) error {
 	if svr == nil || util.IsIP(svr.Address) {
 		return nil
 	}
-	if c.SocksServer == nil {
+	// 没有本地代理入口时没有需要预填充的 DNS 缓存。
+	if c.dnsCache == nil {
 		return nil
 	}
 	if len(config.DirectDNSServers) == 0 {
@@ -397,7 +419,7 @@ func (c *Core) resolveServerDomain(cfg *config.ClientConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), serverStartupResolveTimeout)
 	defer cancel()
 
-	err := prePopulateServerDomain(c.SocksServer, ctx, svr.Address, config.DirectDNSServers,
+	err := prePopulateServerDomain(c.dnsCache, ctx, svr.Address, config.DirectDNSServers,
 		cfg.Routing.IPV6Rule != "enable")
 	if err != nil {
 		log.Warn("[EASYSS] server domain resolution failed at startup",
@@ -420,12 +442,25 @@ func (c *Core) resolveServerDomain(cfg *config.ClientConfig) error {
 // 污染（例如家用路由器的 DNS 返回畸形应答），隧道依然能连上服务端。返回交出去
 // 的地址，便于调用方记录日志。
 func (c *Core) publishServerIPs() []string {
-	if c.Client == nil || c.SocksServer == nil {
+	if c.Client == nil || c.dnsCache == nil {
 		return nil
 	}
-	ips := c.SocksServer.ServerIPs()
+	ips := c.dnsCache.ServerAddrs()
 	c.Client.SetServerIPs(ips)
 	return ips
+}
+
+// PrePopulateServerDomain 用给定域名的解析结果 IP 预先填充 DNS 缓存：依次尝试
+// 给定的各个 DNS 服务器，全部失败时回退到系统 DNS 服务器。TUN 启用路径在把系统
+// DNS 指向本机转发服务器之前调用它，避免解析服务端域名时形成循环依赖。
+//
+// ctx 约束整个解析过程，使不可达的 DNS 服务器无法阻塞启动
+// （参见 dns.Cache.PrePopulateWithFallback）。
+func (c *Core) PrePopulateServerDomain(ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error {
+	if c.dnsCache == nil {
+		return errors.New("dns cache not available (socks_port is disabled)")
+	}
+	return c.dnsCache.PrePopulateWithFallback(ctx, domain, dnsServers, requireIPv4)
 }
 
 // serverDomainRetry 把后台重试所需的可注入依赖与调参在派发 goroutine 之前
@@ -433,7 +468,7 @@ func (c *Core) publishServerIPs() []string {
 // 都是测试在两次派发之间会替换的包级变量，从后台 goroutine 里读取它们会与
 // 下一个测试产生数据竞争（与 warmUpSeams 采用相同做法）。
 type serverDomainRetry struct {
-	prePopulate func(s *proxy.Socks5Server, ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error
+	prePopulate func(cache *dns.Cache, ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error
 	reset       func()
 	dnsServers  []string
 	requireIPv4 bool
@@ -475,7 +510,7 @@ func (c *Core) retryServerDomain(cfg *config.ClientConfig, r serverDomainRetry) 
 
 		ctx, cancel := context.WithTimeout(context.Background(), r.timeout)
 		c.setRetryCancel(cancel)
-		err := r.prePopulate(c.SocksServer, ctx, svr.Address, r.dnsServers, r.requireIPv4)
+		err := r.prePopulate(c.dnsCache, ctx, svr.Address, r.dnsServers, r.requireIPv4)
 		cancel()
 		c.clearRetryCancel()
 

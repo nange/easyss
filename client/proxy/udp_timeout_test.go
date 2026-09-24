@@ -54,8 +54,8 @@ var _ transport.Stream = (*blockingStream)(nil)
 
 const testDNSRespTimeout = 200 * time.Millisecond
 
-// newTimeoutTestServer 构建一个 Socks5Server：其代理 DNS 交换使用 testDNSRespTimeout
-// 超时，其传输层提供给定的流。
+// newTimeoutTestServer 构建一个 Socks5Server：其代理 DNS 交换使用
+// testDNSRespTimeout 作为响应读空闲超时，其传输层提供给定的流。
 func newTimeoutTestServer(t *testing.T, streams []transport.Stream) *Socks5Server {
 	t.Helper()
 	h := newTestStreamHandler(&mockTransport{streams: streams})
@@ -76,19 +76,17 @@ func newTimeoutTestServer(t *testing.T, streams []transport.Stream) *Socks5Serve
 	return srv
 }
 
-func (s *Socks5Server) hasExchange(key string) bool {
-	s.udpMu.RLock()
-	defer s.udpMu.RUnlock()
-	_, ok := s.udpExch[key]
+func hasExchange(s *Socks5Server, key string) bool {
+	_, ok := s.udp.exchangeFor(key)
 	return ok
 }
 
-// waitExchangeReaped 轮询直到该键从 s.udpExch 中消失（由 receiveLoop 的 defer 移除）
+// waitExchangeReaped 轮询直到该键从会话池中消失（由 receiveLoop 退出时移除）
 // 或截止时间到期。
 func waitExchangeReaped(t *testing.T, s *Socks5Server, key string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
-	for s.hasExchange(key) {
+	for hasExchange(s, key) {
 		if time.Now().After(deadline) {
 			t.Fatalf("exchange %q not reaped within deadline", key)
 		}
@@ -96,7 +94,8 @@ func waitExchangeReaped(t *testing.T, s *Socks5Server, key string) {
 	}
 }
 
-// TestUDPExchangeDNSResponseTimeout 验证当 dnsRespTimeout 到期后，没有服务器响应的
+// TestUDPExchangeDNSResponseTimeout 验证当 DNS 响应读空闲超时（dnsOptions.RespTimeout）
+// 到期后，没有服务器响应的
 // 代理 DNS 交换会被关闭（流被关闭、键被移除），这样静默的上游 DNS 服务器就无法堆积
 // HTTP/2 流和 receiveLoop 协程。
 func TestUDPExchangeDNSResponseTimeout(t *testing.T) {
@@ -104,18 +103,17 @@ func TestUDPExchangeDNSResponseTimeout(t *testing.T) {
 	srv := newTimeoutTestServer(t, []transport.Stream{bs})
 
 	key := "127.0.0.1:12345_8.8.8.8:53"
-	ue, created, err := srv.getOrCreateUDPExchange(context.Background(), key, "8.8.8.8:53", []byte("dns query payload"))
+	ue, created, err := srv.udp.acquireExchange(context.Background(), key, "8.8.8.8:53", []byte("dns query payload"))
 	if err != nil {
-		t.Fatalf("getOrCreateUDPExchange: %v", err)
+		t.Fatalf("acquireExchange: %v", err)
 	}
 	if !created {
 		t.Fatal("expected exchange to be created")
 	}
 
-	clientAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 12345}
-	go srv.receiveLoop(ue, nil, clientAddr, "8.8.8.8:53", key, srv.dnsRespTimeout)
+	go srv.udp.receiveLoop(ue, key, testDNSRespTimeout, nil)
 
-	if !srv.hasExchange(key) {
+	if !hasExchange(srv, key) {
 		t.Fatal("expected exchange to be registered before the timeout")
 	}
 
@@ -127,25 +125,25 @@ func TestUDPExchangeDNSResponseTimeout(t *testing.T) {
 }
 
 // TestUDPExchangeNoTimeoutWhenDisabled 验证 respTimeout=0（非 DNS 的 UDP 路径）时，
-// 即使超过 dnsRespTimeout，交换也不会被处理：长时间的下行静默绝不能终止常规 UDP 会话。
+// 即使超过 DNS 响应读空闲超时，交换也不会被处理：长时间的下行静默绝不能终止常规
+// UDP 会话。
 func TestUDPExchangeNoTimeoutWhenDisabled(t *testing.T) {
 	bs := newBlockingStream()
 	srv := newTimeoutTestServer(t, []transport.Stream{bs})
 
 	key := "127.0.0.1:12345_8.8.8.8:443"
-	ue, created, err := srv.getOrCreateUDPExchange(context.Background(), key, "8.8.8.8:443", []byte("udp payload"))
+	ue, created, err := srv.udp.acquireExchange(context.Background(), key, "8.8.8.8:443", []byte("udp payload"))
 	if err != nil {
-		t.Fatalf("getOrCreateUDPExchange: %v", err)
+		t.Fatalf("acquireExchange: %v", err)
 	}
 	if !created {
 		t.Fatal("expected exchange to be created")
 	}
 
-	clientAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 12345}
-	go srv.receiveLoop(ue, nil, clientAddr, "8.8.8.8:443", key, 0)
+	go srv.udp.receiveLoop(ue, key, 0, nil)
 
 	time.Sleep(testDNSRespTimeout * 2)
-	if !srv.hasExchange(key) {
+	if !hasExchange(srv, key) {
 		t.Fatal("exchange must not be reaped when the response timeout is disabled")
 	}
 	if bs.isClosed() {

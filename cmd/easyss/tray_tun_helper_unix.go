@@ -56,12 +56,14 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	// 常量）：这是用户主动触发的操作，失败就报错让用户重试，而不是在界面无
 	// 反馈的情况下把最坏等待叠成"尝试次数 × 总预算"。
 	if serverAddr := a.cfg.DefaultServer().Address; !util.IsIP(serverAddr) {
-		if a.core.SocksServer == nil || len(config.DirectDNSServers) == 0 {
+		if len(config.DirectDNSServers) == 0 {
 			a.core.HTTPServer.ClearTunConfig()
 			return fmt.Errorf("failed to pre-resolve server hostname %s: dns cache not available", serverAddr)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), dns.PreResolveTimeout)
-		err := a.core.SocksServer.PrePopulateDNS(ctx, serverAddr, config.DirectDNSServers,
+		// 缓存由核心持有（见 runner.Core.PrePopulateServerDomain）：它是 DNS
+		// pinning 与 TUN 系统 DNS 的同一个来源，不再经由本地 SOCKS5 服务器。
+		err := a.core.PrePopulateServerDomain(ctx, serverAddr, config.DirectDNSServers,
 			a.cfg.Routing.IPV6Rule != "enable")
 		cancel()
 		if err != nil {

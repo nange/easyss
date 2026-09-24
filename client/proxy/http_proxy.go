@@ -41,12 +41,14 @@ type HTTPProxyServer struct {
 	password   string
 	timeout    time.Duration
 	handler    *StreamHandler
-	router     *router.Router
-	method     protocol.Method
-	dial       func(context.Context, string, string) (net.Conn, error)
-	rp         *httputil.ReverseProxy
-	server     *http.Server
-	mu         sync.Mutex
+	// policy 与 SOCKS5 入口共用同一套 Block/Direct/Proxy 判定（见 route.go），
+	// 也是本入口唯一的路由规则持有者。
+	policy *routePolicy
+	method protocol.Method
+	dial   func(context.Context, string, string) (net.Conn, error)
+	rp     *httputil.ReverseProxy
+	server *http.Server
+	mu     sync.Mutex
 
 	// TUN 辅助程序支持（darwin/linux）：配置通过 GET /tun 提供。
 	tunCfg *TunConfig
@@ -113,10 +115,17 @@ func NewHTTPProxyServer(opts HTTPProxyOptions) (*HTTPProxyServer, error) {
 		password:   opts.Password,
 		timeout:    timeout,
 		handler:    opts.Handler,
-		router:     opts.Router,
 		method:     opts.Method,
 		dial:       dial,
 	}
+	// 中继空闲超时与 SOCKS5 入口同源（config.StreamIdleTimeout 是唯一事实来源），
+	// 只是本入口持有的是基础超时而非派生值。
+	s.policy = newRoutePolicy(routePolicyOptions{
+		Router:            opts.Router,
+		Dial:              dial,
+		DialTimeout:       timeout,
+		StreamIdleTimeout: config.StreamIdleTimeout(timeout),
+	})
 	s.rp = s.newReverseProxy()
 	return s, nil
 }
@@ -353,16 +362,16 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// IPv6 策略门禁与路由规则来自与 SOCKS5 路径共享的同一个分类结果，
-	// 因此两个入口不会发生偏离。
-	cls := s.router.ClassifyHost(host)
-	if cls.IPV6Rejected {
-		log.Warn("[HTTP-PROXY] CONNECT ipv6 target rejected, ipv6 disabled", "target", target)
+	// IPv6 策略门禁与路由规则来自与 SOCKS5 路径共享的同一个 routePolicy，
+	// 因此两个入口不会发生偏离（见 route.go）。
+	decision := s.policy.decide(host)
+	if decision.IPV6Rejected {
+		logRouteIPV6Rejected("[HTTP-PROXY]", target)
 		http.Error(w, "IPv6 disabled", http.StatusForbidden)
 		return
 	}
-	if cls.Rule == router.HostRuleBlock {
-		log.Info("[HTTP-PROXY] CONNECT blocked", "target", target)
+	logRouteDecision("[HTTP-PROXY]", decision, host, target, r.RemoteAddr)
+	if decision.Action == routeBlock {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
@@ -378,9 +387,8 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 	}
 	defer hijConn.Close() //nolint:errcheck
 
-	if cls.Rule == router.HostRuleDirect {
-		log.Info("[HTTP-PROXY] CONNECT direct", "target", target)
-		remote, err := s.directConnect(target)
+	if decision.Action == routeDirect {
+		remote, err := s.policy.dialDirect(target)
 		if err != nil {
 			log.Warn("[HTTP-PROXY] direct CONNECT", "target", target, "err", err)
 			return
@@ -389,7 +397,7 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 		if err := writeConnectEstablished(hijConn, target); err != nil {
 			return
 		}
-		relayTCP(remote, hijConn, config.StreamIdleTimeout(s.timeout))
+		relayTCP(remote, hijConn, s.policy.streamIdle())
 		return
 	}
 
@@ -404,14 +412,13 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 		if err := writeConnectEstablished(hijConn, target); err != nil {
 			return
 		}
-		relayTCP(remote, hijConn, config.StreamIdleTimeout(s.timeout))
+		relayTCP(remote, hijConn, s.policy.streamIdle())
 		return
 	}
 
 	if err := writeConnectEstablished(hijConn, target); err != nil {
 		return
 	}
-	log.Info("[HTTP-PROXY] CONNECT proxy", "target", target)
 	if err := s.handler.OpenTCPStream(context.Background(), target, s.method, hijConn); err != nil {
 		if isTransientStreamError(err) {
 			log.Debug("[HTTP-PROXY] CONNECT closed", "target", target, "err", err)
@@ -427,12 +434,6 @@ func writeConnectEstablished(conn net.Conn, target string) error {
 		return err
 	}
 	return nil
-}
-
-func (s *HTTPProxyServer) directConnect(target string) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
-	defer cancel()
-	return s.dial(ctx, "tcp", target)
 }
 
 func (s *HTTPProxyServer) dialSOCKS5(target string) (net.Conn, error) {
