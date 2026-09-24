@@ -120,41 +120,74 @@ func loopbackAddr(port int) string {
 	return testServerAddr + ":" + strconv.Itoa(port)
 }
 
-// freeTCPPort 返回一个当前空闲的 loopback TCP 端口。每个测试单独选端口，
-// 可以避免本包的并发运行（另一个终端、IDE 测试运行、另一个检出目录）
-// 互相抢占对方的监听端口。
-func freeTCPPort(t *testing.T) int {
+// portReservation 以保持监听的方式占住一个 loopback 端口，直到真正的服务
+// 即将绑定它。与"挑选后立即释放"的 free-port 模式相反，预留使同一 harness
+// 内的多次挑选不可能拿到同一个端口（占位监听器都开着，内核不会把一个端口
+// 分发给两个绑定者），也把"挑选与真正绑定之间被并行进程抢走"的窗口从数百
+// 毫秒压缩到 release 与 Start 之间的几行代码。CI 的 go test ./... 并行跑
+// 多个包，每个包都在做同样的端口挑选，挑完就放的模式曾让 serverPort 与
+// socksPort 撞在同一个端口上：socks5 服务器 EADDRINUSE 启动失败，而
+// waitForReady 的拨号被先一步启动的 v3 服务端应答，测试带着一个从未启动的
+// socks5 组件继续跑，最终以一次莫名其妙的 "Get ...: EOF" 收场。
+type portReservation struct {
+	listener net.Listener
+	packet   net.PacketConn // 仅 SOCKS5 预留需要：同一端口的 UDP 侧
+}
+
+// reserveTCPPort 占住一个当前空闲的 loopback TCP 端口，返回端口号与预留。
+func reserveTCPPort(t *testing.T) (int, *portReservation) {
 	t.Helper()
+
 	l, err := net.Listen("tcp", testServerAddr+":0")
 	require.NoError(t, err)
-	port := l.Addr().(*net.TCPAddr).Port
-	require.NoError(t, l.Close())
-	return port
+	r := &portReservation{listener: l}
+	// 兜底：正常路径在派发 Start 前同步 release；harness 中途失败时由
+	// Cleanup 收尾，测试进程退出前不会泄漏占位监听器。
+	t.Cleanup(func() { r.release() })
+	return l.Addr().(*net.TCPAddr).Port, r
 }
 
-// freeSocks5Port 返回一个在 TCP 和 UDP 上都空闲的 loopback 端口：
+// reserveSocks5Port 占住一个 TCP 与 UDP 两侧都空闲的 loopback 端口：
 // txthinking/socks5 服务器会在同一地址上同时绑定 TCP 监听器和 UDP socket，
-// 因此仅 TCP 空闲的端口仍然无法启动。
-func freeSocks5Port(t *testing.T) int {
+// 因此仅占住 TCP 侧的端口仍然无法保证它能启动。
+func reserveSocks5Port(t *testing.T) (int, *portReservation) {
 	t.Helper()
+
 	for range 20 {
-		port := freeTCPPort(t)
+		port, r := reserveTCPPort(t)
 		pc, err := net.ListenPacket("udp", loopbackAddr(port))
 		if err != nil {
+			r.release()
 			continue
 		}
-		require.NoError(t, pc.Close())
-		return port
+		r.packet = pc
+		return port, r
 	}
 	t.Fatal("no loopback port free on both tcp and udp")
-	return 0
+	return 0, nil
 }
 
-// waitForReady 轮询 addr 直到其接受 TCP 连接，确保测试框架只在异步启动的
-// 服务器真正开始监听后才继续。startErr 上发布的启动失败会立即以该错误中止：
-// 否则等待超时会把 "address already in use"（或任何其他启动失败）伪装成普通的
-// 就绪超时，甚至会把占用端口的其他进程误认为是被测服务器。
-func waitForReady(what, addr string, startErr <-chan error, timeout time.Duration) error {
+// release 把端口交还给即将启动的真正服务，必须在派发 Start 的前一行调用。
+// 它是幂等的，可安全地在正常路径与 Cleanup 中各调用一次。
+func (r *portReservation) release() {
+	if r.packet != nil {
+		_ = r.packet.Close()
+		r.packet = nil
+	}
+	if r.listener != nil {
+		_ = r.listener.Close()
+		r.listener = nil
+	}
+}
+
+// waitForReady 轮询 addr 直到其接受 TCP 连接且（可选的）协议探测通过，
+// 确保测试框架只在异步启动的服务器真正开始监听后才继续。startErr 上发布的
+// 启动失败会立即以该错误中止：否则等待超时会把 "address already in use"
+// （或任何其他启动失败）伪装成就绪超时。probe 为 nil 时仅要求连接被接受；
+// 非 nil 时还要求探测通过——单纯能拨通不再等价于就绪：端口撞车时拨号会被
+// 占住该端口的邻居组件（或其他进程）应答，组件自身的 EADDRINUSE 错误又
+// 迟到于探测拨号，测试就会带着一个从未启动的组件继续跑。
+func waitForReady(what, addr string, startErr <-chan error, timeout time.Duration, probe func(net.Conn) bool) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for {
@@ -165,15 +198,39 @@ func waitForReady(what, addr string, startErr <-chan error, timeout time.Duratio
 		}
 		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
 		if err == nil {
+			ready := true
+			if probe != nil && !probe(conn) {
+				ready = false
+				lastErr = fmt.Errorf("connected but %s did not answer its protocol probe (port occupied by a foreign listener?)", what)
+			}
 			conn.Close() //nolint:errcheck
-			return nil
+			if ready {
+				return nil
+			}
+		} else {
+			lastErr = err
 		}
-		lastErr = err
 		if time.Now().After(deadline) {
 			return fmt.Errorf("%s (%s) did not accept connections within %s: %w", what, addr, timeout, lastErr)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// probeSocks5Greeting 用一次真实的 SOCKS5 协商验证连接的对端确是我们的
+// SOCKS5 服务端：发送版本 5 问候并期待方法选择应答。只有 SOCKS5 服务器会
+// 以首字节 0x05 应答；端口撞车时接管的 v3 TLS 服务端只会让探测在读应答时
+// 超时，waitForReady 便会转而盯住组件自己的启动错误。
+func probeSocks5Greeting(conn net.Conn) bool {
+	_ = conn.SetDeadline(time.Now().Add(200 * time.Millisecond))
+	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
+		return false
+	}
+	reply := make([]byte, 2)
+	if _, err := io.ReadFull(conn, reply); err != nil {
+		return false
+	}
+	return reply[0] == 0x05
 }
 
 // startLocalTargetServer 启动一个用于测试直连/本地连接的基础 HTTP 服务器。
@@ -267,12 +324,17 @@ func newTestHarness(t *testing.T) *testHarness {
 
 	h := &testHarness{}
 
-	// 每个监听器都使用内核选择的端口：同一台机器上本包的两个运行实例
-	// 不能互相争抢监听端口，且端口被占用时必须明显失败，而不是被误认为
-	// 仅仅是启动缓慢。
-	serverPort := freeTCPPort(t)
-	socksPort := freeSocks5Port(t)
-	httpPort := freeTCPPort(t)
+	// 每个监听器都使用内核选择的端口，且以预留的方式占住直到对应组件
+	// 即将绑定：同一台机器上本包的两个运行实例（另一个终端、IDE 测试
+	// 运行、另一个检出目录）不会互相争抢监听端口，本 harness 内部也不会
+	// 自相撞车，端口被占用时必须明显失败，而不是被误认为仅仅是启动缓慢。
+	serverPort, serverRes := reserveTCPPort(t)
+	socksPort, socksRes := reserveSocks5Port(t)
+	httpPort, httpRes := reserveTCPPort(t)
+	// 三份预留同时保持监听，内核不可能复用同一端口；断言是廉价的防线，
+	// 万一被打破，失败信息应直指端口撞车，而不是下游测试里莫名的 EOF。
+	require.True(t, serverPort != socksPort && serverPort != httpPort && socksPort != httpPort,
+		fmt.Sprintf("harness ports collided: server=%d socks=%d http=%d", serverPort, socksPort, httpPort))
 	h.serverAddr = loopbackAddr(serverPort)
 	h.socksAddr = loopbackAddr(socksPort)
 	h.httpAddr = loopbackAddr(httpPort)
@@ -315,6 +377,8 @@ func newTestHarness(t *testing.T) *testHarness {
 	srv, err := server.New(serverCfg)
 	require.NoError(t, err)
 
+	// 端口交还与派发 Start 之间只有几行代码，窗口小到可以忽略。
+	serverRes.release()
 	serverErr := make(chan error, 1)
 	go func() {
 		serverErr <- srv.Start()
@@ -324,7 +388,7 @@ func newTestHarness(t *testing.T) *testHarness {
 		defer cancel()
 		srv.Shutdown(ctx) //nolint:errcheck
 	})
-	require.NoError(t, waitForReady("v3 server", h.serverAddr, serverErr, readinessTimeout))
+	require.NoError(t, waitForReady("v3 server", h.serverAddr, serverErr, readinessTimeout, nil))
 
 	// 创建客户端配置
 	clientCfg := &clientconfig.ClientConfig{
@@ -391,11 +455,12 @@ func newTestHarness(t *testing.T) *testHarness {
 	})
 	require.NoError(t, err)
 
+	socksRes.release()
 	socksErr := make(chan error, 1)
 	go func() {
 		socksErr <- socksServer.Start()
 	}()
-	require.NoError(t, waitForReady("socks5 proxy", h.socksAddr, socksErr, readinessTimeout))
+	require.NoError(t, waitForReady("socks5 proxy", h.socksAddr, socksErr, readinessTimeout, probeSocks5Greeting))
 	// 只有现在才追加：在 socks5 内部失败的 Start 会留下一个 Shutdown 永远
 	// 无法完成的 runner 组（参见 closers 字段的注释）。
 	h.closers = append(h.closers, func() { _ = socksServer.Close() })
@@ -412,12 +477,13 @@ func newTestHarness(t *testing.T) *testHarness {
 	})
 	require.NoError(t, err)
 
+	httpRes.release()
 	httpErr := make(chan error, 1)
 	go func() {
 		httpErr <- httpProxy.Start()
 	}()
 	h.closers = append(h.closers, func() { _ = httpProxy.Close() })
-	require.NoError(t, waitForReady("http proxy", h.httpAddr, httpErr, readinessTimeout))
+	require.NoError(t, waitForReady("http proxy", h.httpAddr, httpErr, readinessTimeout, nil))
 
 	return h
 }
@@ -600,11 +666,20 @@ func TestV3Integration_ConfigDefaults(t *testing.T) {
 	assert.Equal(t, "", cfg.ServerURL())
 }
 
-// TestFreeSocks5PortIsFreeOnTCPAndUDP 固化了 socks5 端口不能用 freeTCPPort
-// 选择的原因：txthinking/socks5 服务器会在同一地址上绑定 TCP 和 UDP，
-// 因此仅 TCP 空闲的端口仍然无法启动。
-func TestFreeSocks5PortIsFreeOnTCPAndUDP(t *testing.T) {
-	port := freeSocks5Port(t)
+// TestReserveSocks5PortHoldsTCPAndUDP 固化了端口预留的契约：预留保持 TCP
+// 占位监听器与 UDP 占位 socket 打开，因此在 release 之前两侧都无法被其他
+// socket 绑定；release 之后 txthinking/socks5 需要的 TCP+UDP 双绑定即可
+// 成功。
+func TestReserveSocks5PortHoldsTCPAndUDP(t *testing.T) {
+	port, r := reserveSocks5Port(t)
+	t.Cleanup(func() { r.release() })
+
+	_, err := net.Listen("tcp", loopbackAddr(port))
+	require.Error(t, err, "reservation must hold the TCP side")
+	_, err = net.ListenPacket("udp", loopbackAddr(port))
+	require.Error(t, err, "reservation must hold the UDP side")
+
+	r.release()
 
 	l, err := net.Listen("tcp", loopbackAddr(port))
 	require.NoError(t, err)
@@ -618,12 +693,14 @@ func TestFreeSocks5PortIsFreeOnTCPAndUDP(t *testing.T) {
 // TestWaitForReadyReportsStartError 固化了快速失败契约：启动失败的服务器
 // 必须以其真实错误上报，而不是伪装成就绪超时。
 func TestWaitForReadyReportsStartError(t *testing.T) {
-	addr := loopbackAddr(freeTCPPort(t))
+	port, r := reserveTCPPort(t)
+	t.Cleanup(func() { r.release() })
+	addr := loopbackAddr(port)
 	startErr := make(chan error, 1)
 	startErr <- errors.New("listen udp " + addr + ": bind: address already in use")
 
 	start := time.Now()
-	err := waitForReady("socks5 proxy", addr, startErr, 30*time.Second)
+	err := waitForReady("socks5 proxy", addr, startErr, 30*time.Second, nil)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "socks5 proxy")
@@ -633,11 +710,42 @@ func TestWaitForReadyReportsStartError(t *testing.T) {
 
 // TestWaitForReadyTimesOut 覆盖剩余的情况：没有任何监听且没有启动错误可上报。
 func TestWaitForReadyTimesOut(t *testing.T) {
-	addr := loopbackAddr(freeTCPPort(t))
+	// 只需要一个曾经空闲的地址：占位监听器此刻关闭，地址上没有任何监听。
+	port, r := reserveTCPPort(t)
+	r.release()
 
-	err := waitForReady("http proxy", addr, make(chan error), 300*time.Millisecond)
+	err := waitForReady("http proxy", loopbackAddr(port), make(chan error), 300*time.Millisecond, nil)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "http proxy")
 	assert.Contains(t, err.Error(), "did not accept connections")
+}
+
+// TestWaitForReadyRejectsForeignListener 固化了协议探测的契约：端口上
+// 是一个会接受连接但不应答 SOCKS5 协商的陌生监听器时，waitForReady 不得
+// 报告就绪。这正是端口撞车事故里 socks5 探测拨号被 v3 TLS 服务端应答、
+// 从而掩盖 EADDRINUSE 启动错误的失败模式。
+func TestWaitForReadyRejectsForeignListener(t *testing.T) {
+	// 用一个只接受连接的哑监听器扮演"陌生进程"。
+	l, err := net.Listen("tcp", testServerAddr+":0")
+	require.NoError(t, err)
+	defer l.Close() //nolint:errcheck
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			// 读取对端数据但不回应，模拟 TLS 服务端等待更多字节的行为。
+			buf := make([]byte, 64)
+			_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			_, _ = conn.Read(buf)
+			_ = conn.Close()
+		}
+	}()
+
+	err = waitForReady("socks5 proxy", l.Addr().String(), make(chan error), 600*time.Millisecond, probeSocks5Greeting)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "did not answer its protocol probe")
 }
