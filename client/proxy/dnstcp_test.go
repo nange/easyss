@@ -265,6 +265,25 @@ func readSocks5Reply(t *testing.T, r *bufio.Reader) {
 	}
 }
 
+// socks5ReplyTimeout 限定"等待 SOCKS5 应答"的时长。RFC 1928 要求客户端在发送
+// 任何数据之前先等到应答，因此实现必须应答先行；若把这个顺序改回去，等待会在这
+// 个窗口后失败，而不是把测试挂到 go test 的整包超时。
+const socks5ReplyTimeout = 2 * time.Second
+
+// awaitSocks5Reply 按 RFC 1928 的顺序等待 SOCKS5 CONNECT 应答：在客户端写出任何
+// 字节之前就应该到达。测试用它是为了锁住"应答先于首读"这条不变量——旧实现把应答
+// 推迟到读到首条报文之后，规范客户端与它会互等，直到 streamIdleTimeout 才降级。
+func awaitSocks5Reply(t *testing.T, client net.Conn, br *bufio.Reader) {
+	t.Helper()
+	if err := client.SetReadDeadline(time.Now().Add(socks5ReplyTimeout)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	readSocks5Reply(t, br)
+	if err := client.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear read deadline: %v", err)
+	}
+}
+
 // startUDPDNSResponder 启动一个本地 UDP DNS 应答器：任意 A 查询回 answerIP。
 func startUDPDNSResponder(t *testing.T, answerIP string) string {
 	t.Helper()
@@ -369,11 +388,11 @@ func TestHandleTCPDNSDirect(t *testing.T) {
 	q := new(dns.Msg)
 	q.SetQuestion("direct.example.com.", dns.TypeA)
 	q.Id = 0x1234
+	awaitSocks5Reply(t, client, br)
 	if err := writeTCPDNSMessage(client, q); err != nil {
 		t.Fatalf("write query: %v", err)
 	}
 
-	readSocks5Reply(t, br)
 	resp, err := readTCPDNSMessage(br, nil)
 	if err != nil {
 		t.Fatalf("read response: %v", err)
@@ -421,11 +440,11 @@ func TestHandleTCPDNSDirectFallsBackToBuiltinList(t *testing.T) {
 
 	q := new(dns.Msg)
 	q.SetQuestion("direct.example.com.", dns.TypeA)
+	awaitSocks5Reply(t, client, br)
 	if err := writeTCPDNSMessage(client, q); err != nil {
 		t.Fatalf("write query: %v", err)
 	}
 
-	readSocks5Reply(t, br)
 	resp, err := readTCPDNSMessage(br, nil)
 	if err != nil {
 		t.Fatalf("read response: %v", err)
@@ -451,11 +470,11 @@ func TestHandleTCPDNSBlock(t *testing.T) {
 	q := new(dns.Msg)
 	q.SetQuestion("adsensecamp.com.", dns.TypeA)
 	q.Id = 0x1111
+	awaitSocks5Reply(t, client, br)
 	if err := writeTCPDNSMessage(client, q); err != nil {
 		t.Fatalf("write query: %v", err)
 	}
 
-	readSocks5Reply(t, br)
 	resp, err := readTCPDNSMessage(br, nil)
 	if err != nil {
 		t.Fatalf("read response: %v", err)
@@ -556,11 +575,11 @@ func TestHandleTCPDNSProxySuccess(t *testing.T) {
 	q := new(dns.Msg)
 	q.SetQuestion("proxy.example.com.", dns.TypeA)
 	q.Id = 0x3333
+	awaitSocks5Reply(t, client, br)
 	if err := writeTCPDNSMessage(client, q); err != nil {
 		t.Fatalf("write query: %v", err)
 	}
 
-	readSocks5Reply(t, br)
 	select {
 	case err := <-serveErr:
 		if err != nil {
@@ -623,6 +642,9 @@ func TestHandleTCPDNSFallbackNonDNSDirectCrossPath(t *testing.T) {
 	}
 	client, br := serveTCPDNSHandler(t, srv, "direct.example.com:53")
 
+	// 回退路径同样必须先给应答：客户端在拿到应答之前不会发送任何字节。
+	awaitSocks5Reply(t, client, br)
+
 	// "hello" 的前两字节被当作长度字段后读不满 → 首条报文解析失败 → 回退中继。
 	if _, err := client.Write([]byte("hello")); err != nil {
 		t.Fatalf("write non-dns bytes: %v", err)
@@ -631,8 +653,6 @@ func TestHandleTCPDNSFallbackNonDNSDirectCrossPath(t *testing.T) {
 		_ = tc.CloseWrite()
 	}
 
-	// 回退必须完成正常的 SOCKS5 握手，客户端才不会挂在一个未应答的连接上。
-	readSocks5Reply(t, br)
 	select {
 	case s := <-got:
 		if s != "hello" {
@@ -657,11 +677,11 @@ func TestHandleTCPDNSProxyUpstreamFailure(t *testing.T) {
 	q := new(dns.Msg)
 	q.SetQuestion("proxy.example.com.", dns.TypeA)
 	q.Id = 0x2222
+	awaitSocks5Reply(t, client, br)
 	if err := writeTCPDNSMessage(client, q); err != nil {
 		t.Fatalf("write query: %v", err)
 	}
 
-	readSocks5Reply(t, br)
 	resp, err := readTCPDNSMessage(br, nil)
 	if err != nil {
 		t.Fatalf("read response: %v", err)
@@ -705,6 +725,9 @@ func TestHandleTCPDNSFallbackNonDNS(t *testing.T) {
 	target := targetLn.Addr().String() // 127.0.0.1:* → LAN → 直连
 	client, br := serveTCPDNSHandler(t, srv, target)
 
+	// 回退路径同样必须先给应答：客户端在拿到应答之前不会发送任何字节。
+	awaitSocks5Reply(t, client, br)
+
 	// "he" 会被当作长度字段（0x6865 = 26725），后续字节读不满 → 首条报文解析失败
 	// → 回退普通中继，且不丢已读字节。
 	if _, err := client.Write([]byte("hello")); err != nil {
@@ -714,7 +737,6 @@ func TestHandleTCPDNSFallbackNonDNS(t *testing.T) {
 		_ = tc.CloseWrite()
 	}
 
-	readSocks5Reply(t, br)
 	select {
 	case s := <-got:
 		if s != "hello" {
@@ -745,10 +767,10 @@ func TestHandleTCPDNSMultipleQueries(t *testing.T) {
 	q1 := new(dns.Msg)
 	q1.SetQuestion("direct.example.com.", dns.TypeA)
 	q1.Id = 1
+	awaitSocks5Reply(t, client, br)
 	if err := writeTCPDNSMessage(client, q1); err != nil {
 		t.Fatalf("write query 1: %v", err)
 	}
-	readSocks5Reply(t, br)
 	r1, err := readTCPDNSMessage(br, nil)
 	if err != nil {
 		t.Fatalf("read response 1: %v", err)
@@ -807,10 +829,10 @@ func TestHandleTCPDNSProxyExchangeRecreatedAfterFailure(t *testing.T) {
 	q1 := new(dns.Msg)
 	q1.SetQuestion("proxy.example.com.", dns.TypeA)
 	q1.Id = 1
+	awaitSocks5Reply(t, client, br)
 	if err := writeTCPDNSMessage(client, q1); err != nil {
 		t.Fatalf("write query 1: %v", err)
 	}
-	readSocks5Reply(t, br)
 	r1, err := readTCPDNSMessage(br, nil)
 	if err != nil {
 		t.Fatalf("read response 1: %v", err)
@@ -835,5 +857,136 @@ func TestHandleTCPDNSProxyExchangeRecreatedAfterFailure(t *testing.T) {
 	}
 	if got := tr.openCalls(); got != 2 {
 		t.Errorf("transport open calls = %d, want 2 (stale exchange must be invalidated and rebuilt)", got)
+	}
+}
+
+// TestHandleTCPDNSRepliesBeforeAnyQueryArrives 锁住 TCP DNS 拦截的应答顺序：
+// RFC 1928 的客户端（curl、浏览器，以及 TUN 模式下承载系统解析器的 tun2socks）在
+// 拿到 SOCKS5 应答之前不会发送任何字节，因此成功应答必须先于"首报文读取"写出。
+// 把应答推迟到读到首条 DNS 报文之后（#177 的实现），双方互等，连接只能挂到
+// streamIdleTimeout（默认 120s）到期降级成普通中继——DNS 查询因此长时间卡住，
+// 网页与视频加载超时，而且默认日志里没有任何线索。
+func TestHandleTCPDNSRepliesBeforeAnyQueryArrives(t *testing.T) {
+	rt, err := router.New(router.Config{ProxyRule: router.ProxyRuleAutoBlock, IPV6Rule: router.IPV6RuleDisable})
+	if err != nil {
+		t.Fatalf("router.New: %v", err)
+	}
+
+	srv := newTCPDNSTestServer(t, rt, &mockTransport{})
+	client, br := serveTCPDNSHandler(t, srv, "223.5.5.5:53")
+
+	// 关键断言：一个字节都还没发，应答就必须已经到达（超时窗口见
+	// awaitSocks5Reply；实现退回旧顺序时这里会失败，而不是把测试挂住）。
+	awaitSocks5Reply(t, client, br)
+
+	q := new(dns.Msg)
+	q.SetQuestion("adsensecamp.com.", dns.TypeA)
+	q.Id = 0x7777
+	if err := writeTCPDNSMessage(client, q); err != nil {
+		t.Fatalf("write query: %v", err)
+	}
+	resp, err := readTCPDNSMessage(br, nil)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if resp.Id != 0x7777 || !resp.Response {
+		t.Fatalf("response id = %#x response bit = %v, want the blocked answer for 0x7777", resp.Id, resp.Response)
+	}
+}
+
+// TestHandleTCPDNSFallbackRepliesExactlyOnce 覆盖应答先行带来的新不变量：回退路径
+// （首条报文不是 DNS 查询）交回 routeTCP 时已经应答过，不能再写第二个应答——多出
+// 的应答会被客户端当成中继数据，污染整条流。
+func TestHandleTCPDNSFallbackRepliesExactlyOnce(t *testing.T) {
+	rt, err := router.New(router.Config{ProxyRule: router.ProxyRuleAuto, IPV6Rule: router.IPV6RuleDisable})
+	if err != nil {
+		t.Fatalf("router.New: %v", err)
+	}
+
+	// 本地 TCP 目标（LAN → 直连）：只读取、不回写，因此应答之后客户端再收到任何
+	// 字节都只能来自多写的应答。
+	targetLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen target: %v", err)
+	}
+	t.Cleanup(func() { targetLn.Close() }) //nolint:errcheck
+	got := make(chan string, 1)
+	go func() {
+		conn, err := targetLn.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close() //nolint:errcheck
+		buf := make([]byte, 32)
+		n, _ := conn.Read(buf)
+		got <- string(buf[:n])
+	}()
+
+	srv := newTCPDNSTestServer(t, rt, &mockTransport{})
+	client, br := serveTCPDNSHandler(t, srv, targetLn.Addr().String())
+	awaitSocks5Reply(t, client, br)
+
+	// "hello" 的前两字节被当作长度字段后读不满 → 首条报文解析失败 → 回退中继。
+	if _, err := client.Write([]byte("hello")); err != nil {
+		t.Fatalf("write non-dns bytes: %v", err)
+	}
+	if tc, ok := client.(*net.TCPConn); ok {
+		_ = tc.CloseWrite()
+	}
+
+	select {
+	case s := <-got:
+		if s != "hello" {
+			t.Errorf("target received %q, want %q", s, "hello")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("target did not receive relayed bytes")
+	}
+
+	// 应答之后不该再有任何字节：目标不回写，所以这里只能读到 EOF 或超时。
+	if err := client.SetReadDeadline(time.Now().Add(300 * time.Millisecond)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	buf := make([]byte, 32)
+	n, err := br.Read(buf)
+	if n > 0 {
+		t.Fatalf("client received %d unexpected bytes after the single socks5 reply: %q", n, buf[:n])
+	}
+	if err == nil {
+		t.Fatal("expected EOF or a read timeout after the single socks5 reply")
+	}
+}
+
+// TestHandleTCPDNSRejectedAfterReplyCloses 覆盖"已应答后无法再拒绝"：回退路径遇到
+// IPv6 门禁（ipv6_rule=disable 且目标为 IPv6）时，只能直接关闭连接，而不能补写一个
+// 失败应答——那个应答同样会被客户端当成中继数据。
+func TestHandleTCPDNSRejectedAfterReplyCloses(t *testing.T) {
+	rt, err := router.New(router.Config{ProxyRule: router.ProxyRuleAuto, IPV6Rule: router.IPV6RuleDisable})
+	if err != nil {
+		t.Fatalf("router.New: %v", err)
+	}
+
+	srv := newTCPDNSTestServer(t, rt, &mockTransport{})
+	client, br := serveTCPDNSHandler(t, srv, "[::1]:53")
+	awaitSocks5Reply(t, client, br)
+
+	// 非 DNS 首报文 → 回退 routeTCP → IPv6 门禁拒绝（已应答，因此只关闭）。
+	if _, err := client.Write([]byte("hello")); err != nil {
+		t.Fatalf("write non-dns bytes: %v", err)
+	}
+	if tc, ok := client.(*net.TCPConn); ok {
+		_ = tc.CloseWrite()
+	}
+
+	if err := client.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	buf := make([]byte, 32)
+	n, err := br.Read(buf)
+	if n > 0 {
+		t.Fatalf("client received %d unexpected bytes: a second socks5 reply would be read as relayed data", n)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("read error = %v, want EOF (the connection must be closed, not left hanging)", err)
 	}
 }
