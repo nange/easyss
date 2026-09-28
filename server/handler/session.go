@@ -182,11 +182,16 @@ func clientPreferredFamily(remoteAddr string) netip.Addr {
 	return ap.Addr().Unmap()
 }
 
-// preferredFirst 返回按族偏好重排后的候选：prefer 所属族的地址在前，其余保持
-// 解析器给出的原序（RFC 6724 已经做了合理的排序，这里只调整族的优先级）。
+// orderByFamily 返回按族偏好重排后的候选：prefer 所属族的地址先出现，两族随后
+// 交错排列。族内保持解析器给出的原序（RFC 6724 已经排过，这里只调整族的优先级）。
+//
+// 交错而不是整族分组，是因为候选由 dialAddrs **串行**尝试：若把首选族整族排在
+// 前面，该族第一个地址挂起（被墙 IP 的 SYN 黑洞）时，另一个族的候选要等完整族
+// 的预算才轮到；交错后只需等一个候选的子预算（见 attemptDeadline）。
+//
 // 它不修改入参（ctx 里的切片是共享的），且只是偏好而非过滤：目标只有另一族时
 // 依旧可连。
-func preferredFirst(addrs []netip.Addr, prefer netip.Addr) []netip.Addr {
+func orderByFamily(addrs []netip.Addr, prefer netip.Addr) []netip.Addr {
 	if !prefer.IsValid() || len(addrs) < 2 {
 		return addrs
 	}
@@ -199,13 +204,23 @@ func preferredFirst(addrs []netip.Addr, prefer netip.Addr) []netip.Addr {
 		}
 		rest = append(rest, addr)
 	}
-	return append(preferred, rest...)
+	ordered := make([]netip.Addr, 0, len(addrs))
+	for i := range max(len(preferred), len(rest)) {
+		if i < len(preferred) {
+			ordered = append(ordered, preferred[i])
+		}
+		if i < len(rest) {
+			ordered = append(ordered, rest[i])
+		}
+	}
+	return ordered
 }
 
-// dialCandidates 返回可拨号的字面地址，并按客户端地址族偏好排序。它优先复用
-// 握手阶段已解析并校验过的地址（这一次流不再查 DNS），没有时才自行解析。
-// 任一候选为 LAN/私网/保留地址时拒绝整个目标：SSRF 校验与实际连接共用同一
-// 批地址，DNS-rebinding 没有在检查与连接之间翻转答案的窗口。
+// dialCandidates 返回可拨号的字面地址，并按客户端地址族偏好重排（见
+// orderByFamily）。它优先复用握手阶段已解析并校验过的地址（这一次流不再查
+// DNS），没有时才自行解析。任一候选为 LAN/私网/保留地址时拒绝整个目标：SSRF
+// 校验与实际连接共用同一批地址，DNS-rebinding 没有在检查与连接之间翻转答案的
+// 窗口。
 func dialCandidates(ctx context.Context, target string) ([]netip.Addr, error) {
 	addrs, ok := resolvedAddrs(ctx)
 	if !ok {
@@ -219,7 +234,7 @@ func dialCandidates(ctx context.Context, target string) ([]netip.Addr, error) {
 		return nil, fmt.Errorf("ssrf: rejected lan destination %s (target %s)", lan, target)
 	}
 	prefer, _ := preferredFamily(ctx)
-	return preferredFirst(addrs, prefer), nil
+	return orderByFamily(addrs, prefer), nil
 }
 
 // errClientGone 表示拨号期间客户端已经离开（请求 context 已失效）。它是显式
@@ -238,18 +253,78 @@ func dialAddr(addr netip.Addr, target string) string {
 	return net.JoinHostPort(addr.String(), port)
 }
 
-// dialAddrs 逐个拨给定的字面地址。拨号本身由 d.Timeout 限定；全部候选失败时
-// 返回最后一个错误，客户端中途离开则返回 errClientGone。
+// dialAttempt 执行对单个字面地址的一次拨号。它是包级变量，使测试可以用确定性的
+// 假拨号（记录候选顺序与各自拿到的截止时间、并按预算阻塞）验证预算切分，而不必
+// 依赖真实网络里恰好存在的黑洞地址。
+var dialAttempt = func(d *net.Dialer, ctx context.Context, network, addr string) (net.Conn, error) {
+	return d.DialContext(ctx, network, addr)
+}
+
+// dialAttemptMinBudget 是单个候选能分到的最小拨号预算，对应 net.Dialer 内部
+// partialDeadline 的 2s 下限：低于它就不值得再切分。它是变量，使测试能用更小的
+// 数值验证切分，而不必让测试真的等满 2s。
+var dialAttemptMinBudget = 2 * time.Second
+
+// attemptDeadline 返回单个候选的拨号截止时间：把整体的剩余预算按剩余候选数均分，
+// 但不低于 dialAttemptMinBudget（剩余预算本身更少时就直接用掉它）。这与
+// net.Dialer 内部 partialDeadline 的切分同构——rc13 之前域名交给 net.Dialer 时，
+// 同一个族内的候选拿到的就是这种子预算，因此"第一个候选挂起"最多只吃掉一个子
+// 预算，而不是一整个拨号超时。
+func attemptDeadline(now, deadline time.Time, candidatesLeft int) time.Time {
+	left := deadline.Sub(now)
+	if left <= 0 {
+		return now
+	}
+	share := left / time.Duration(candidatesLeft)
+	if share < dialAttemptMinBudget {
+		// 剩余预算不足最小值时只能把它全用掉，否则给足最小值。
+		share = min(left, dialAttemptMinBudget)
+	}
+	return now.Add(share)
+}
+
+// dialAddrs 逐个拨给定的字面地址，整批候选**共享一份**拨号预算：预算取
+// d.Timeout——把域名交给 net.Dialer 时，一次名字解析的所有地址尝试共享的正是
+// 这一份——并按 attemptDeadline 给每个候选切分剩余预算。
+//
+// 每个候选各吃满一份 d.Timeout 会让 N 个挂起的候选把一条流卡住 N×d.Timeout
+// （默认 10s×N）且没有任何整体上界；共享预算后总时长回到单份 d.Timeout 之内，
+// 换候选的等待也降到一个子预算。全部候选失败时返回最后一个错误，调用方（客户端
+// 流）中途离开则返回 errClientGone。
 func dialAddrs(ctx context.Context, d *net.Dialer, network, target string, addrs []netip.Addr) (net.Conn, error) {
+	if len(addrs) == 0 {
+		return nil, errors.New("no candidate addresses to dial")
+	}
+
+	caller := ctx
+	if d.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, d.Timeout)
+		defer cancel()
+	}
+
 	var lastErr error
-	for _, addr := range addrs {
-		conn, err := d.DialContext(ctx, network, dialAddr(addr, target))
+	for i, addr := range addrs {
+		attemptCtx := ctx
+		var cancel context.CancelFunc
+		if deadline, ok := ctx.Deadline(); ok {
+			attemptCtx, cancel = context.WithDeadline(ctx, attemptDeadline(time.Now(), deadline, len(addrs)-i))
+		}
+		conn, err := dialAttempt(d, attemptCtx, network, dialAddr(addr, target))
+		if cancel != nil {
+			cancel()
+		}
 		if err == nil {
 			return conn, nil
 		}
 		lastErr = err
-		if ctx.Err() != nil {
+		// 调用方离开优先于预算耗尽：前者要被标记成 errClientGone 让上层按预期的
+		// 拆除处理，后者只是一次普通的拨号失败（保留最后一个真实错误）。
+		if caller.Err() != nil {
 			return nil, fmt.Errorf("%w: %v", errClientGone, err)
+		}
+		if ctx.Err() != nil {
+			break
 		}
 	}
 	return nil, lastErr
@@ -266,8 +341,9 @@ func dialOutbound(ctx context.Context, d *net.Dialer, network, target string) (n
 }
 
 // outboundDialer 返回直接出站拨号器；keepAlive 为 0 表示系统默认
-// （UDP/ICMP 没有长连接语义）。Timeout 必须显式设置：dialOutbound 自己不设
-// 截止时间，缺少它会让拨号在 SYN 黑洞（被墙目标的常态）上一直挂到客户端放弃。
+// （UDP/ICMP 没有长连接语义）。Timeout 必须显式设置：它既是 dialAddrs 分给整批
+// 候选的总预算，也是单个候选在一次 DialContext 内的上限；缺少它会让拨号在 SYN
+// 黑洞（被墙目标的常态）上一直挂到客户端放弃。
 func outboundDialer(timeout, keepAlive time.Duration) *net.Dialer {
 	return &net.Dialer{Timeout: timeout, KeepAlive: keepAlive}
 }

@@ -190,18 +190,35 @@ func (s *Socks5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 // 正常路径与 TCP DNS 拦截的回退路径共用；判定与 HTTP 入口共用同一个
 // routePolicy（见 route.go）。
 func (s *Socks5Server) routeTCP(c net.Conn, r *socks5.Request, target, host string) error {
+	return s.routeTCPReplied(c, r, target, host, false)
+}
+
+// routeTCPReplied 是 routeTCP 的实现。replied 表示 SOCKS5 成功应答是否已经写出：
+// TCP DNS 拦截在做首读之前就先应答（见 handleTCPDNS），否则规范客户端会与我们
+// 的首读互等。已应答时任何分支都不再写应答——Block/IPv6 门禁只能直接关闭连接，
+// 直连拨号失败也只返回错误——因为第二个应答会被客户端当成上层数据，污染流。
+func (s *Socks5Server) routeTCPReplied(c net.Conn, r *socks5.Request, target, host string, replied bool) error {
+	// reject 写出 SOCKS5 拒绝应答；已经应答过就只能关闭（返回 nil 由调用方关闭）。
+	reject := func(rep byte) error {
+		if replied {
+			log.Debug("[TCP] rejected after the socks5 reply was already sent, closing", "target", target)
+			return nil
+		}
+		return s.replyError(c, r, rep)
+	}
+
 	decision := s.policy.decide(host)
 	if decision.IPV6Rejected {
 		logRouteIPV6Rejected("[TCP]", target)
-		return s.replyError(c, r, socks5.RepNotAllowed)
+		return reject(socks5.RepNotAllowed)
 	}
 	logRouteDecision("[TCP]", decision, host, target, c.RemoteAddr().String())
 
 	switch decision.Action {
 	case routeBlock:
-		return s.replyError(c, r, socks5.RepNotAllowed)
+		return reject(socks5.RepNotAllowed)
 	case routeDirect:
-		rc, err := s.directTCPConnect(c, r, target)
+		rc, err := s.directTCPConnect(c, r, target, replied)
 		if err != nil {
 			log.Error("[TCP] direct connect", "target", target, "err", err)
 			return err
@@ -211,9 +228,11 @@ func (s *Socks5Server) routeTCP(c net.Conn, r *socks5.Request, target, host stri
 		log.Debug("[TCP] direct relay finished", "target", target)
 		return nil
 	default:
-		if err := writeSocksSuccessReply(c); err != nil {
-			log.Error("[TCP] proxy reply", "err", err)
-			return err
+		if !replied {
+			if err := writeSocksSuccessReply(c); err != nil {
+				log.Error("[TCP] proxy reply", "err", err)
+				return err
+			}
 		}
 		err := s.handler.OpenTCPStream(context.Background(), target, s.method, c)
 		if err != nil {
@@ -244,11 +263,20 @@ func writeSocksSuccessReply(c net.Conn) error {
 	return err
 }
 
-func (s *Socks5Server) directTCPConnect(c net.Conn, r *socks5.Request, target string) (net.Conn, error) {
+// directTCPConnect 打开直连并把结果写回客户端。replied 为 true 表示成功应答已
+// 经写出（TCP DNS 拦截的回退路径）：此时不再补写应答，拨号失败也只能返回错误，
+// 因为客户端已经拿到成功应答，任何后写的应答都会被当成上层数据。
+func (s *Socks5Server) directTCPConnect(c net.Conn, r *socks5.Request, target string, replied bool) (net.Conn, error) {
 	rc, err := s.policy.dialDirect(target)
 	if err != nil {
-		_ = s.replyError(c, r, socks5.RepHostUnreachable)
+		if !replied {
+			_ = s.replyError(c, r, socks5.RepHostUnreachable)
+		}
 		return nil, err
+	}
+
+	if replied {
+		return rc, nil
 	}
 
 	a, bindAddr, bindPort, err := socks5.ParseAddress(rc.LocalAddr().String())

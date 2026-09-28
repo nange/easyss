@@ -108,7 +108,21 @@ func touchReadDeadline(c net.Conn, timeout time.Duration) func() {
 // handleTCPDNS 拦截发往 53 端口的 TCP 连接，按查询域名分流应答
 // （与 UDP 的 handleUDPQuery 行为一致）。首条报文无法解析为 DNS 查询时，
 // 回退到按目标 IP 的普通中继（已读字节还给流）。
+//
+// SOCKS5 成功应答在**任何读取之前**写出。RFC 1928 的客户端会等到应答才发送数据
+// （curl、浏览器，以及 TUN 模式下承载系统解析器的 tun2socks 都是如此），若把应答
+// 推迟到"确认首报文是 DNS 查询"之后，双方互等，连接只能挂到 streamIdleTimeout
+// （默认 120s）到期降级成普通中继为止——表现为 DNS 查询长时间卡住、网页与视频
+// 加载超时，而且默认日志里看不到任何线索。
+//
+// 应答先行意味着回退路径不能再写应答：已应答的连接遇到 Block/IPv6 门禁只能关闭
+// （见 routeTCPReplied）。
 func (s *Socks5Server) handleTCPDNS(c net.Conn, r *socks5.Request, target, host string) error {
+	if err := writeSocksSuccessReply(c); err != nil {
+		log.Error("[TCP_DNS] reply", "target", target, "err", err)
+		return err
+	}
+
 	br := bufio.NewReader(c)
 
 	// 扫雷式首读：只要首条报文没被确认为 DNS 查询，最终都会走按目标 IP 的普通
@@ -132,11 +146,6 @@ func (s *Socks5Server) handleTCPDNS(c net.Conn, r *socks5.Request, target, host 
 	if !isDNSQueryMsg(first) {
 		log.Debug("[TCP_DNS] first message is not a dns query, fallback to relay", "target", target)
 		return s.fallbackTCPDNS(c, br, consumed, r, target, host)
-	}
-
-	// 是 DNS 查询：先回 SOCKS5 成功应答，再逐条处理。
-	if err := writeSocksSuccessReply(c); err != nil {
-		return err
 	}
 
 	sess := s.dns.newTCPSession(c.RemoteAddr())
@@ -175,7 +184,9 @@ func (s *Socks5Server) handleTCPDNS(c net.Conn, r *socks5.Request, target, host 
 
 // fallbackTCPDNS 在首条报文无法识别为 DNS 查询时，把连接交回按目标 IP 的
 // 普通分流（已读字节通过 pending 还给流），并清除本路径设置的读截止时间。
+// 成功应答已经由 handleTCPDNS 写出，因此这里以 replied=true 交回，避免写下第二个
+// 应答把中继数据弄脏。
 func (s *Socks5Server) fallbackTCPDNS(c net.Conn, br *bufio.Reader, pending []byte, r *socks5.Request, target, host string) error {
 	_ = c.SetReadDeadline(time.Time{})
-	return s.routeTCP(newBufferedConn(c, br, pending), r, target, host)
+	return s.routeTCPReplied(newBufferedConn(c, br, pending), r, target, host, true)
 }
