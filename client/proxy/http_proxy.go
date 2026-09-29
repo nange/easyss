@@ -51,10 +51,11 @@ type HTTPProxyServer struct {
 	// 入口，池中的空闲连接会连带占住 SOCKS5 侧的 handler goroutine 与一条隧道流，
 	// 因此 Close 必须回收它，而不能只关监听器（见 Close）。
 	rpTransport *http.Transport
-	server      *http.Server
-	// listener 在 Start 中被登记，供 Close 释放；Close 早于 Start 时 server 为 nil。
-	listener net.Listener
-	// closing 由 Close 在 mu 下置位。Start 会在登记监听器之前检查它：runner 在
+	// server 在 Start 中登记，是 Close 唯一的释放入口：http.Server.Shutdown 会
+	// 关闭 Serve 注册过的监听器，而 Serve 自身也 defer 关闭它——因此不需要再
+	// 单独持有 listener。Close 早于 Start 时它为 nil。
+	server *http.Server
+	// closing 由 Close 在 mu 下置位。Start 会在登记 server 之前检查它：runner 在
 	// goroutine 中启动服务器，核心可能随即被停止，此时迟到的 Start 必须自己关掉
 	// 监听器，否则端口会被一个无人引用的服务器永久占用（重启会因端口被占而失败）。
 	closing bool
@@ -198,7 +199,6 @@ func (s *HTTPProxyServer) Start() error {
 		_ = listener.Close()
 		return http.ErrServerClosed
 	}
-	s.listener = listener
 	s.server = httpServer
 	s.mu.Unlock()
 

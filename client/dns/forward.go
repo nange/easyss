@@ -88,6 +88,9 @@ func (s *ForwardServer) Start() error {
 // 释放（dns.Server.ShutdownContext 在未启动时只返回 "server not started"，不会
 // 关闭任何东西）。
 //
+// 返回时 s.pc 已被清空：本类型"最多持有一个监听 socket，Shutdown 之后不再持有"
+// 这一状态是自明的，调用方与测试不必再去探测 socket 或尝试重新绑定端口。
+//
 // 它不关闭借用的依赖：client/dnsServers 由本类型构造期持有，无需释放。
 func (s *ForwardServer) Shutdown() error {
 	s.mu.Lock()
@@ -114,6 +117,12 @@ func (s *ForwardServer) Shutdown() error {
 	if pc != nil {
 		_ = pc.Close()
 	}
+
+	// closing 已在上面置位：此后 Start 会在登记之前拒绝，因此这里不可能把
+	// 一个刚登记的 socket 漏掉。
+	s.mu.Lock()
+	s.pc = nil
+	s.mu.Unlock()
 	return nil
 }
 
