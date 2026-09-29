@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -16,6 +17,15 @@ import (
 )
 
 var logger = slog.New(DefaultHandler(slog.LevelInfo))
+
+// fileOutput 记录当前日志器的文件输出（lumberjack 写入器），使重新初始化和显式
+// 关闭都能释放底层文件句柄。没有这条记录时，句柄只能等 GC 回收——被打开的文件
+// 在 Windows 上无法删除或重命名，而 Android 绑定会在同一个进程里反复走
+// Start/Stop，宿主删除日志文件的操作会被遗留句柄挡住（见 CloseFileOutput）。
+var (
+	fileOutputMu sync.Mutex
+	fileOutput   io.Closer
+)
 
 // AtomicLevel 是可在运行时修改的线程安全 slog.Level。
 type AtomicLevel struct {
@@ -164,9 +174,48 @@ func Init(outputFile, level string) {
 	}
 	atomicLevel.SetLevel(l)
 
+	// 先摘下旧的文件输出（安装完新日志器后再关闭它）：初始化可能被同一进程
+	// 反复调用，不接管上一个写入器就会累积已打开的文件句柄。
+	fileOutputMu.Lock()
+	prev := fileOutput
+	fileOutput = nil
+	fileOutputMu.Unlock()
+
 	if outputFile != "" {
-		SetLogger(slog.New(slog.NewMultiHandler(TextHandler(FileWriter(outputFile), &atomicLevel), DefaultHandler(&atomicLevel))))
+		w := FileWriter(outputFile)
+		fileOutputMu.Lock()
+		fileOutput = w
+		fileOutputMu.Unlock()
+		SetLogger(slog.New(slog.NewMultiHandler(TextHandler(w, &atomicLevel), DefaultHandler(&atomicLevel))))
 	} else {
 		SetLogger(slog.New(DefaultHandler(&atomicLevel)))
 	}
+
+	if prev != nil {
+		_ = prev.Close()
+	}
+}
+
+// CloseFileOutput 关闭文件输出，并把日志器切回"只写 stdout、级别不变"的状态；
+// 下一次 Init 会按传入的路径重新打开文件。没有文件输出时它是空操作，因此可以
+// 重复调用。
+//
+// 释放句柄这件事必须由初始化日志的一方在停止时显式完成：被打开的文件在
+// Windows 上无法删除/重命名，宿主（Android 绑定、托盘）在服务停止后清理或轮转
+// 日志文件时会被遗留句柄挡住。
+func CloseFileOutput() error {
+	fileOutputMu.Lock()
+	w := fileOutput
+	fileOutput = nil
+	fileOutputMu.Unlock()
+
+	if w == nil {
+		return nil
+	}
+
+	// 先摘掉文件处理器再关句柄：lumberjack 在句柄为 nil 时会于下一次写入重新
+	// 打开文件，若日志器仍挂着文件处理器，"关闭"就会被紧随其后的写入撤销，
+	// 宿主删除日志文件的操作也就白做了。
+	SetLogger(slog.New(DefaultHandler(&atomicLevel)))
+	return w.Close()
 }
