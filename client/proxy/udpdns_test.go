@@ -132,9 +132,14 @@ func TestHandleUDPInterceptsNonAddressQtype(t *testing.T) {
 		t.Fatalf("pack query: %v", err)
 	}
 	// 客户端显式请求的解析器就是本地应答器本身：它必须被真正拨到。
+	//
+	// 这里走 handleDNS 而不是 handleUDP：handleUDP 只把 53 端口的数据报交给 DNS
+	// 拦截，而本用例要验证"客户端请求的解析器被真正拨到"，需要应答器监听一个可绑定的
+	// 高位端口（CI 上无法绑定 53）。入口门控本身由
+	// TestHandleUDPDNSInterceptionRequiresPort53 与 TestHandleUDPDropsLinkLocalTargets 覆盖。
 	requested := responder
-	if err := srv.handleUDP(&socks5.Server{UDPConn: sock}, clientAddr, buildUDPDatagram(t, requested, data)); err != nil {
-		t.Fatalf("handleUDP: %v", err)
+	if err := srv.handleDNS(&socks5.Server{UDPConn: sock}, clientAddr, buildUDPDatagram(t, requested, data), query); err != nil {
+		t.Fatalf("handleDNS: %v", err)
 	}
 
 	if err := sock.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {

@@ -22,6 +22,8 @@ var errDNSResponseTimeout = errors.New("dns response timeout")
 type tcpDNSSession struct {
 	d   *dnsInterceptor
 	key string
+	// src 是客户端地址，只用于日志（与 UDP 路径的 [DNS_*] 日志字段保持一致）。
+	src string
 	ue  *UDPExchange
 }
 
@@ -33,6 +35,9 @@ func (d *dnsInterceptor) newTCPSession(remote net.Addr) *tcpDNSSession {
 	return &tcpDNSSession{
 		d:   d,
 		key: fmt.Sprintf("tcp_dns://%s->%s", remote, config.ProxyDNSServer),
+		// %v 而非 remote.String()：remote 允许为 nil（nil 接口上调用 String 会 panic），
+		// 而日志不该为平台细节承担这个风险。
+		src: fmt.Sprintf("%v", remote),
 	}
 }
 
@@ -60,28 +65,33 @@ func (s *tcpDNSSession) resolve(msg *dns.Msg, target string) (*dns.Msg, error) {
 	plan := d.plan(msg)
 	switch plan.action {
 	case dnsActionBlock:
-		log.Info("[DNS_BLOCK] blocked", "domain", plan.domain, "qtype", plan.qtype)
+		log.Info("[DNS_BLOCK] blocked", "domain", plan.domain, "qtype", plan.qtype,
+			"src", s.src, "dst", target)
 		return blockedDNSReply(msg), nil
 	case dnsActionCacheHit:
 		return plan.cached, nil
 	case dnsActionDirect:
-		log.Info("[DNS_DIRECT]", "domain", plan.domain, "qtype", plan.qtype)
+		log.Info("[DNS_DIRECT]", "domain", plan.domain, "qtype", plan.qtype,
+			"src", s.src, "dst", target)
 		stats.RecordDNSDirectQuery()
 		resp, err := d.resolveDirectDNS(msg, plan.domain, target)
 		if err != nil {
 			return nil, err
 		}
-		log.Info("[DNS_DIRECT] result", "domain", plan.domain, "qtype", plan.qtype, "answers", util.DNSAnswerStrings(resp))
+		log.Info("[DNS_DIRECT] result", "domain", plan.domain, "qtype", plan.qtype,
+			"answers", util.DNSAnswerStrings(resp), "src", s.src, "dst", target)
 		resp.Id = msg.Id
 		return resp, nil
 	default:
-		log.Info("[DNS_PROXY]", "domain", plan.domain, "qtype", plan.qtype)
+		log.Info("[DNS_PROXY]", "domain", plan.domain, "qtype", plan.qtype,
+			"src", s.src, "dst", target)
 		stats.RecordDNSProxyQuery()
 		resp, err := s.resolveProxy(msg)
 		if err != nil {
 			return nil, err
 		}
-		log.Info("[DNS_PROXY] result", "domain", plan.domain, "qtype", plan.qtype, "answers", util.DNSAnswerStrings(resp))
+		log.Info("[DNS_PROXY] result", "domain", plan.domain, "qtype", plan.qtype,
+			"answers", util.DNSAnswerStrings(resp), "src", s.src, "dst", target)
 		if d.router.ShouldIPV6Disable() && msg.Question[0].Qtype == dns.TypeAAAA {
 			resp.Answer = nil
 		}

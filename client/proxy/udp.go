@@ -34,12 +34,47 @@ func (s *Socks5Server) handleUDP(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 		return nil
 	}
 
-	msg := &dns.Msg{}
-	if err := msg.Unpack(d.Data); err == nil && isDNSQueryMsg(msg) {
-		return s.handleDNS(srv, clientAddr, d, msg)
+	// 链路本地专用的目的地不进中继路径，见 isNonRelayableUDPTarget。
+	if isNonRelayableUDPTarget(host) {
+		log.Debug("[UDP] link-local broadcast/multicast target dropped", "src", src, "target", dst)
+		return nil
+	}
+
+	// DNS 拦截只针对 53 端口，与 TCP 路径的端口门控一致（见 Socks5Server.TCPHandle）。
+	// 只按"载荷能否解包成 DNS 查询"判定会连 NBNS(137)/LLMNR(5355)/mDNS(5353) 一起吞掉：
+	// NBNS 查询在 DNS 线格式里就是 QNAME 为 NetBIOS first-level 编码的单标签、
+	// QTYPE=32（DNS 类型表里是 NIMLOC），于是被当成 DNS 查询经隧道送到
+	// config.ProxyDNSServer 解析——局域网主机名被泄漏给代理与公共 DNS，客户端还会
+	// 拿着一个假的否定应答当作 NBNS 服务器的回复。非 53 端口按普通 UDP 分流。
+	if port == "53" {
+		msg := &dns.Msg{}
+		if err := msg.Unpack(d.Data); err == nil && isDNSQueryMsg(msg) {
+			return s.handleDNS(srv, clientAddr, d, msg)
+		}
 	}
 
 	return s.handleRegularUDP(srv, clientAddr, d, dst)
+}
+
+// isNonRelayableUDPTarget 报告 host 是否为"只能由本机在物理接口上发出"的目的地：
+// 受限广播（255.255.255.255）、多播、链路本地单播。中继它们既没有意义也有害：
+//
+//   - 直连用的是 net.Dial 的已连接 socket，内核只接受来自该目标地址的数据报，而
+//     广播/多播查询的应答来自响应者的单播地址，因此应答永远收不到；
+//   - 直连拨号只对 global unicast 目标绑定物理接口（tun2socks dialer 主动跳过
+//     受限广播与多播），未绑定的 socket 会按系统路由表把报文送回 TUN——TUN 的
+//     /1../8 路由与各接口的广播路由里它的 metric 都更优——形成 代理→直连→TUN→代理
+//     的环路，正是 client.Client 直连拨号器注释里警告的那个环路。
+//
+// 子网广播（192.168.1.255、TUN 的 198.18.255.255 等）不在此列：它们是 global
+// unicast，直连拨号会绑定物理接口，历史上一直按直连中继（日志里出现的
+// [UDP_DIRECT] target=198.18.255.255:137 即是），行为保持不变。
+func isNonRelayableUDPTarget(host string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.Equal(net.IPv4bcast) || ip.IsMulticast() || ip.IsLinkLocalUnicast()
 }
 
 // handleDNS 把一条 DNS 查询交给拦截器，并为它准备两条应答通道：同步分支用
@@ -50,6 +85,7 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 	return s.dns.handleUDPQuery(clientAddr, udpDNSQuery{
 		raw: d.Data,
 		msg: msg,
+		src: clientAddr.String(),
 		dst: d.Address(),
 		reply: udpReply{
 			msg: func(m *dns.Msg) error {
