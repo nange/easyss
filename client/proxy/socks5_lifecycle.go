@@ -103,14 +103,28 @@ func probeSocks5Accept(addr string, greeting []byte) bool {
 	return reply[0] == 0x05
 }
 
+// Close 关闭本服务器持有的资源：全部 UDP 会话（代理交换与直连 socket）与库级
+// 监听器。它刻意不关闭借用的依赖：handler（StreamHandler）、router、
+// directDialContext 与 DNSCache 都由 runner 持有并与 HTTP 入口共用（见
+// Socks5Options 的字段注释）。
+//
+// 已接受的 TCP 连接不在这里终止：txthinking/socks5 的 Shutdown 是
+// runnergroup.Done（它关闭监听器与库自身的 UDP socket，但不跟踪每条连接的
+// handler goroutine），在飞中继靠最后关闭传输层（client.Client.Close）收尾。
+//
+// 幂等：第二次调用立即返回首次的结果，不会重新走 accept 探测——那会白等
+// acceptProbeTimeout 并留下一个 30 秒的后台补关闭 goroutine（见 shutdown）。
 func (s *Socks5Server) Close() error {
-	// 关闭全部 UDP 会话（代理交换与直连 socket）。正在创建中的交换由创建者
-	// 自己回收：OpenExchange 返回后它会检查关闭标志，关闭交换并移除工厂条目
-	// （参见 udpPool.acquireExchange）。
-	if s.udp != nil {
-		s.udp.close()
-	}
-	return s.shutdown()
+	s.closeOnce.Do(func() {
+		// 关闭全部 UDP 会话（代理交换与直连 socket）。正在创建中的交换由创建者
+		// 自己回收：OpenExchange 返回后它会检查关闭标志，关闭交换并移除工厂条目
+		// （参见 udpPool.acquireExchange）。
+		if s.udp != nil {
+			s.udp.close()
+		}
+		s.closeErr = s.shutdown()
+	})
+	return s.closeErr
 }
 
 // shutdown 关闭库级服务器，并且绝不为了等一个不会到来的信号而挂住调用方。

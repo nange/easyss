@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,16 +39,28 @@ type Socks5Server struct {
 	// started 记录 Start 已被派发（见 MarkStarted）：Close 依赖它区分
 	// "从未启动"与"启动后立刻关闭"两条路径（见 socks5_lifecycle.go）。
 	started atomic.Bool
+	// closeOnce/closeErr 使 Close 幂等：第二次调用不得重新触发 accept 探测与
+	// 后台补关闭（那会白等 3 秒并留下一个 30 秒的后台 goroutine）。
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // Socks5Options 用于配置 NewSocks5Server。它取代了一个已增长到十四个参数的
 // 位置参数列表——其中四个从同一个基础超时派生的时长可能被悄悄弄混。
+//
+// 字段的所有权约定（Close 只关闭本类型自己创建的东西）：
+//   - Handler/Router/DirectDialContext 一律**借用**：调用方持有它们，并与 HTTP
+//     入口共用（见 HTTPProxyOptions），Close 绝不关闭它们；
+//   - DNSCache 传入时借用、为 nil 时自建（自建物无需释放）；
+//   - 服务器自己创建并负责关闭的只有监听器与 UDP 会话（见 Socks5Server.Close）。
 type Socks5Options struct {
 	ListenAddr string
 	Username   string
 	Password   string
-	Handler    *StreamHandler
-	Router     *router.Router
+	// Handler 是借用的隧道流处理器（由 runner 创建并与 HTTP 入口共用）。
+	Handler *StreamHandler
+	// Router 是借用的路由引擎（同样与 HTTP 入口共用）。
+	Router *router.Router
 	// ServerDomain 是代理服务器自身的主机名（为字面 IP 时是 ""）：针对它的 DNS
 	// 查询绝不能走代理路径。
 	ServerDomain string

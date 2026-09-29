@@ -125,6 +125,9 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	// 关闭 fd 时可靠地唤醒 iobased dispatchLoop。
 	// O_NONBLOCK 标志可能在 macOS 的 SCM_RIGHTS 传输过程中丢失。
 	if err := unix.SetNonblock(fd, true); err != nil {
+		// 这个裸 fd 尚未交给任何持有者：不在这里关闭就会永久泄漏，并让
+		// Linux 上的 TUN 设备无法随最后一个 fd 消失。
+		_ = unix.Close(fd)
 		fifoWriter.Close() //nolint:errcheck
 		a.core.HTTPServer.ClearTunConfig()
 		return fmt.Errorf("set nonblock: %w", err)

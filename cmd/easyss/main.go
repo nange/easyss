@@ -223,6 +223,12 @@ type App struct {
 	// 而且 Start 失败时会保持未设置：关闭 nil channel 会 panic。
 	statsMu     sync.Mutex
 	statsCloser chan struct{}
+
+	// stopOnce 使 Stop 幂等。托盘的关闭流程与更新重启路径会各自调用一次
+	// （见 TrayApp.closeService / restartService），若重复执行就会把同一个
+	// 核心与 pprof 服务器关两次。App 在 restartService 中被整体重建
+	// （*a.App = App{...}），once 随之重置，正是所需语义。
+	stopOnce sync.Once
 }
 
 // coreGen 为每次 App.Start 启动的核心分配单调递增的序号，供后台 goroutine
@@ -456,18 +462,26 @@ func (a *App) setStartupWarn(err error) {
 	log.Warn("[EASYSS-V3] startup warning", "err", err)
 }
 
+// Stop 停止核心、TUN 引擎与 pprof 服务器。顺序是硬约束：TUN 依赖核心的本地
+// 代理入口，必须先停。它幂等，并且在停止后清空持有者字段——否则后续的
+// closeService/restartService 会再次 Stop 同一个已停止的对象。
 func (a *App) Stop() {
-	a.stopStatsLoop()
+	a.stopOnce.Do(func() {
+		a.stopStatsLoop()
 
-	if a.tunMgr != nil {
-		a.tunMgr.Stop()
-	}
-	if a.core != nil {
-		a.core.Stop()
-	}
-	if a.pprofSrv != nil {
-		pprof.StopPprof(a.pprofSrv)
-	}
+		if a.tunMgr != nil {
+			a.tunMgr.Stop()
+			a.tunMgr = nil
+		}
+		if a.core != nil {
+			a.core.Stop()
+			a.core = nil
+		}
+		if a.pprofSrv != nil {
+			pprof.StopPprof(a.pprofSrv)
+			a.pprofSrv = nil
+		}
+	})
 }
 
 // startStatsLoop（重新）启动后台统计日志器，若之前的循环仍在运行则将其停止。
