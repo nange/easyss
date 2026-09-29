@@ -2,6 +2,7 @@ package log
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -215,5 +216,68 @@ func TestFileWriter(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "test log message") {
 		t.Errorf("file content mismatch: %s", string(data))
+	}
+}
+
+// TestCloseFileOutput 固定"文件输出可以被显式释放"这一契约。
+//
+// 句柄必须由 Init 登记、由 CloseFileOutput 释放，而不能只等 GC 回收：被打开的
+// 文件在 Windows 上无法删除，Android 绑定在 Stop 之后清理/轮转日志文件时会被
+// 遗留句柄挡住（本用例的临时目录清理在 Windows 上就是这条断言的执行者）。
+func TestCloseFileOutput(t *testing.T) {
+	original := Logger()
+	defer SetLogger(original)
+
+	logPath := filepath.Join(t.TempDir(), "close.log")
+
+	Init(logPath, "debug")
+	t.Cleanup(func() {
+		// 兜底：断言失败提前返回时也要释放句柄，否则 Windows 上的临时目录清理
+		// 会再失败一次，把一次断言失败变成一条误导性的清理错误。
+		_ = CloseFileOutput()
+	})
+
+	// 触发写入，使文件真的被打开；未写入时 lumberjack 不创建文件，句柄也就
+	// 无从谈起。
+	Info("before close")
+
+	fileOutputMu.Lock()
+	tracked := fileOutput
+	fileOutputMu.Unlock()
+	if tracked == nil {
+		t.Fatal("Init did not register the file output")
+	}
+
+	if err := CloseFileOutput(); err != nil {
+		t.Fatalf("CloseFileOutput: %v", err)
+	}
+
+	fileOutputMu.Lock()
+	still := fileOutput
+	fileOutputMu.Unlock()
+	if still != nil {
+		t.Error("CloseFileOutput kept the file output registered")
+	}
+
+	// 幂等：已经释放之后再调一次是空操作。
+	if err := CloseFileOutput(); err != nil {
+		t.Errorf("second CloseFileOutput: %v", err)
+	}
+
+	// 释放文件输出只改变目的地，不改变级别；释放后继续写日志也不应 panic。
+	if !Logger().Enabled(context.Background(), slog.LevelDebug) {
+		t.Error("closing the file output should keep the configured level")
+	}
+	Info("after close")
+
+	// 下一次 Init 重新打开文件：释放不是永久性的。
+	Init(logPath, "info")
+	Info("reopened")
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log file after re-init: %v", err)
+	}
+	if !strings.Contains(string(data), "reopened") {
+		t.Errorf("Init after CloseFileOutput should reopen the file, content: %q", data)
 	}
 }
