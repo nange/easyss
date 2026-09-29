@@ -57,16 +57,6 @@ var prePopulateServerDomain = func(cache *dns.Cache, ctx context.Context, domain
 // 避免测试改动 DNS 包的进程级状态。
 var resetResolveState = dns.ResetResolveState
 
-// warmUpCore 预热传输连接池。它是包级变量，以便测试在没有任何网络的情况下
-// 断言调度行为。
-var warmUpCore = warmUpTransport
-
-// warmUpStartDelay 与 config.WarmUpStartDelay 保持一致：预热在 goroutine
-// 中派发，先等待这段时间再发起探测，让主机有时间完成网络路径的建立。
-// 它是变量（而非常量），以便测试缩短它，与 serverStartupResolveTimeout
-// 采用相同模式。
-var warmUpStartDelay = sharedconfig.WarmUpStartDelay
-
 // Core 持有一次客户端会话的全部组件，并**唯一**负责它们的关闭顺序
 // （见 cleanup）：本地代理入口 -> 传输层。
 //
@@ -85,9 +75,8 @@ type Core struct {
 	// 后台重试）与 DNS pinning 地址发布都直接作用于它，不再经过代理服务器。
 	// socks_port = 0 时没有本地代理入口，因此它是 nil。
 	dnsCache *dns.Cache
-	// transport 是隧道传输层，预热直接作用于它（预热不再经由代理服务器）。
-	// 它借用自 Client（与 StreamHandler 持有的是同一个实例），随 Client.Close
-	// 释放——本类型不再单独关闭它。
+	// transport 是隧道传输层，借用自 Client（与 StreamHandler 持有的是同一个
+	// 实例），随 Client.Close 释放——本类型不再单独关闭它。
 	transport transport.Transport
 
 	// StartupWarn 保存初始化核心时检测到的非致命警告（例如自定义规则文件
@@ -110,12 +99,6 @@ type Core struct {
 	// 指向本机转发服务器后，解析服务端域名不能再依赖隧道本身。
 	domainReady     chan struct{}
 	domainReadyOnce sync.Once
-
-	// warmUpCancel 取消由 startWarmUp 启动的进行中（或仍在延迟中的）后台
-	// 预热；由 Stop 调用，也会在重新派发预热时替换掉上一次的取消函数。
-	// 由 warmUpMu 保护，因为 Stop 可能在 Run 仍在派发时执行。
-	warmUpMu     sync.Mutex
-	warmUpCancel context.CancelFunc
 
 	// retryCancel 取消进行中的后台域名解析尝试，由 retryMu 保护：
 	// Stop 可能在重试 goroutine 正持有一次尝试时执行。
@@ -285,7 +268,6 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 			timeout:     serverStartupResolveTimeout,
 			base:        serverDomainRetryBase,
 			max:         serverDomainRetryMax,
-			warmUp:      captureWarmUpSeams(),
 		})
 	} else {
 		c.markServerDomainReady()
@@ -297,106 +279,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 	stats.ResetStartTime()
 	stats.ResetCounters()
 	stats.StartSpeedMonitor()
-	// 最后再派发后台预热：它只预热连接池，绝不能延迟或导致启动失败。
-	c.startWarmUp()
 	return c, nil
-}
-
-// warmUpSeams 是预热的两项可注入依赖（探测函数与派发前的延迟）。调用方在
-// 派发预热 goroutine 之前捕获它们：warmUpCore/warmUpStartDelay 是测试在两次
-// 派发之间会替换的包级变量，从 goroutine 中（或从另一个常驻 goroutine 调用
-// startWarmUp 时）读取会与下一个测试产生数据竞争。
-type warmUpSeams struct {
-	probe func(tr transport.Transport, timeout time.Duration) error
-	delay time.Duration
-}
-
-// captureWarmUpSeams 在当前 goroutine 上捕获预热依赖。任何可能从后台
-// goroutine 派发预热的调用方都必须先捕获，再调用 dispatchWarmUp。
-func captureWarmUpSeams() warmUpSeams {
-	return warmUpSeams{probe: warmUpCore, delay: warmUpStartDelay}
-}
-
-// startWarmUp 在后台派发传输层连接池的预热，使每种流量类型的第一个真实
-// 流都能复用已建立的连接。它会立即返回：调用方（桌面端启动、gomobile
-// Start）永远不会被它阻塞，也不应依赖它——探测在 config.WarmUpStartDelay
-// 之后才执行，其失败只会被记录日志。预热被禁用（transport.disable_warm_up）
-// 或核心没有本地 SOCKS5 代理（socks_port = 0）时会被跳过，而不会失败。
-//
-// 预热 goroutine 由 Stop 取消，因此短命的核心（启动后立即停止，如测试和
-// 快速切换服务器时）绝不会留下一个针对已关闭传输层的探测在运行。
-func (c *Core) startWarmUp() {
-	c.dispatchWarmUp(captureWarmUpSeams())
-}
-
-// dispatchWarmUp 是预热的派发实现，依赖由调用方捕获后传入。
-func (c *Core) dispatchWarmUp(seams warmUpSeams) {
-	// 预热只服务于本地代理入口：socks_port = 0 时核心没有入口可用，
-	// 跳过而不是失败（见 TestRunWarmUpSkippedWithoutSocksServer）。
-	if c == nil || c.cfg == nil || c.SocksServer == nil || c.transport == nil {
-		return
-	}
-	if c.cfg.Transport.DisableWarmUp {
-		log.Info("[EASYSS] warm-up disabled by config")
-		return
-	}
-	if c.stopped() {
-		// 核心已在停止过程中：网络恢复后的补派预热不能在该状态下派发。
-		return
-	}
-
-	// 替换（而不是叠加）仍在延迟中的上一次预热：服务端域名由后台重试解析
-	// 成功后需要重新派发一次，而首次派发的探测注定失败。
-	c.cancelWarmUp()
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// goroutine 需要的一切都在它启动前捕获完成。Stop 会并发地拆除核心，
-	// 探测必须针对本次调用派发时的传输层。
-	tr := c.transport
-	probe := seams.probe
-	delay := seams.delay
-
-	c.warmUpMu.Lock()
-	c.warmUpCancel = cancel
-	c.warmUpMu.Unlock()
-
-	go func() {
-		defer cancel()
-
-		select {
-		case <-time.After(delay):
-		case <-ctx.Done():
-			// 在探测发出之前就停止了：被跳过的预热不算失败。
-			log.Debug("[EASYSS] warm-up skipped, core stopping")
-			return
-		}
-
-		// 延迟期间核心可能已经停止：cleanup 会先关闭停止信号再拆除传输层，
-		// 因此这里能挡住针对已关闭传输层的探测（等价于过去代理服务器上的
-		// closing 标志早退）。
-		if c.stopped() {
-			log.Debug("[EASYSS] warm-up skipped, core stopping")
-			return
-		}
-
-		if err := probe(tr, sharedconfig.WarmUpTimeout); err != nil {
-			log.Warn("[EASYSS] warm-up failed (non-fatal)", "err", err)
-		}
-	}()
-}
-
-// cancelWarmUp 取消后台预热（如果已派发）。对从未启动过预热的核心调用
-// 它是安全的，重复调用也是安全的（context.CancelFunc 是幂等的）。
-func (c *Core) cancelWarmUp() {
-	c.warmUpMu.Lock()
-	cancel := c.warmUpCancel
-	c.warmUpCancel = nil
-	c.warmUpMu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
 }
 
 // Stop 停止核心并释放它持有的一切。它幂等：同一核心被重复停止（例如托盘的
@@ -404,9 +287,6 @@ func (c *Core) cancelWarmUp() {
 // accept 探测白等一次并留下后台补关闭 goroutine（见 stopOnce）。
 func (c *Core) Stop() {
 	c.stopOnce.Do(func() {
-		// 在拆除任何东西之前先取消预热，使仍在延迟中或进行中的探测停止，
-		// 而不是与正在关闭的传输层竞争。
-		c.cancelWarmUp()
 		c.cleanup()
 		log.Info("[EASYSS] stopped")
 	})
@@ -484,7 +364,7 @@ func (c *Core) PrePopulateServerDomain(ctx context.Context, domain string, dnsSe
 // serverDomainRetry 把后台重试所需的可注入依赖与调参在派发 goroutine 之前
 // 捕获下来：prePopulateServerDomain/resetResolveState/serverDomainRetry*
 // 都是测试在两次派发之间会替换的包级变量，从后台 goroutine 里读取它们会与
-// 下一个测试产生数据竞争（与 warmUpSeams 采用相同做法）。
+// 下一个测试产生数据竞争。
 type serverDomainRetry struct {
 	prePopulate func(cache *dns.Cache, ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error
 	reset       func()
@@ -493,11 +373,10 @@ type serverDomainRetry struct {
 	timeout     time.Duration
 	base        time.Duration
 	max         time.Duration
-	warmUp      warmUpSeams
 }
 
 // retryServerDomain 在后台按指数退避重试服务端域名解析，直到成功或核心停止，
-// 成功后关闭就绪通道并补派一次连接池预热。
+// 成功后关闭就绪通道。
 //
 // 它存在的唯一原因是开机自启动：进程常常先于网络就绪启动，此时解析必然失败，
 // 但网络恢复后代理应当自动可用。每次尝试前调用 r.reset 清除 DNS 层的熔断状态
@@ -539,9 +418,6 @@ func (c *Core) retryServerDomain(cfg *config.ClientConfig, r serverDomainRetry) 
 				"ips", c.publishServerIPs(),
 			)
 			c.markServerDomainReady()
-			// 网络恢复后补一次连接池预热（替换掉启动时那次注定失败的预热），
-			// 使恢复后的第一个真实请求复用已建立的连接。
-			c.dispatchWarmUp(r.warmUp)
 			return
 		}
 		// 首次失败已在 resolveServerDomain 里以 Warn 记录；后续尝试走 Debug，

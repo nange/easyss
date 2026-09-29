@@ -42,17 +42,6 @@ const (
 	// 活跃流（有数据流动）绝不会被 drain。
 	ExpiringStreamDrainIdle = 30 * time.Second
 
-	// 启动预热：core 成功启动后立即预热传输层的调度连接池，使每种流量类别的
-	// 第一条真实流都能复用已建立的连接，而不必付出冷启动代价（拨号 + TLS + HTTP/2）。
-	// 预热在后台运行（见 runner.Run），因此这两个值都不会拖延启动。
-	// WarmUpStartDelay 推迟探测的发出，让主机有时间完成网络路径的建立
-	// （例如 Android VpnService 配置路由），避免探测仅因此类原因而失败；
-	// 它是一个确定性的延迟，可由 Stop 取消，而非随机抖动。
-	// WarmUpTimeout 限定探测阶段本身。两者都刻意不做用户配置：
-	// 唯一可调开关是 transport.disable_warm_up。
-	WarmUpTimeout    = 5 * time.Second
-	WarmUpStartDelay = 500 * time.Millisecond
-
 	// 由配置构建器、示例配置与运行时回退值共同使用的默认值。
 	// 请把这些常量作为唯一事实来源：任何应用默认值的代码都必须引用常量，而非字面量。
 	DefaultServerPort        = 443

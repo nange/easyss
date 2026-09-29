@@ -126,7 +126,7 @@ func (p *udpPool) exchangeFor(key string) (*UDPExchange, bool) {
 // 创建。firstPayload 非空且交换为新创建时，会被合并进引导记录（省去一次 RTT）。
 // 若交换已存在，则忽略 firstPayload。若本次调用创建了交换，created 为 true，
 // 调用方绝不能为第一个载荷调用 ue.Send（它已在握手中发送）。ctx 约束交换的创建
-// 过程（拨号 + TLS + 引导），供需要硬截止时间的调用方使用（例如启动预热）；
+// 过程（拨号 + TLS + 引导），供需要硬截止时间的调用方使用；
 // DNS 路径传入 context.Background()，改而依赖自己的响应超时。
 //
 // 同一 key 的并发创建通过 singleflight 组去重：第一个调用方执行（较慢的）

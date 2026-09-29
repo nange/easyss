@@ -128,13 +128,6 @@ type GrowEvent struct {
 
 type Transport interface {
 	Open(ctx context.Context, req OpenRequest) (Stream, error)
-	// WarmUp 预热每个调度池的首条连接，使每个流量类的首条真实流
-	// 复用已建立的连接，而不是付出冷启动代价（拨号 + TLS + HTTP/2）。
-	// 实现激活池并在该池的一条连接上发起一次请求；任何应答都证明
-	// 路径可用，因此只有无法确认连接的请求才被报告为错误。
-	// 按契约尽力而为：实现不得静默丢弃已确定的失败，但如何处理由调用方
-	// 决定——启动绝不能依赖预热，通常的处理是记录日志后继续。
-	WarmUp(ctx context.Context) error
 	CloseIdle()
 	Stats() TransportStats
 	Close() error

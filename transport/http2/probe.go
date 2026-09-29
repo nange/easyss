@@ -2,18 +2,12 @@ package http2
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"time"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/stats"
 )
-
-// errProbeNotConfirmed 归类未能确认槽位连接的探测：RoundTrip 失败（拨号/TLS/
-// 流错误，或响应头到达前探测超时）或非 200 的拒绝（例如 429 限流）。预热会
-// 用其未能预热的池名包裹它；生命周期则把同样的结论当作"状态不变"处理。
-var errProbeNotConfirmed = errors.New("probe did not confirm the connection")
 
 // probeVerdict 归类单次探测的结果。
 type probeVerdict int
