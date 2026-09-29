@@ -22,9 +22,13 @@ type udpReply struct {
 
 // udpDNSQuery 是一条已完成解包的 UDP DNS 查询及其应答通道。
 // raw 是原始数据报载荷，用于经隧道发出（首载荷会合并进引导记录）。
+// src/dst 只用于日志：请求来源与客户端询问的解析器。端口门控之后的 UDP DNS
+// 拦截一律以 53 为目标，但日志里的 dst 能直接指出"这条查询被送到哪里"，
+// 排障时不必再从 QNAME 反推。
 type udpDNSQuery struct {
 	raw   []byte
 	msg   *dns.Msg
+	src   string
 	dst   string
 	reply udpReply
 }
@@ -35,7 +39,8 @@ func (d *dnsInterceptor) handleUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery
 	plan := d.plan(req.msg)
 	switch plan.action {
 	case dnsActionBlock:
-		log.Info("[DNS_BLOCK] blocked", "domain", plan.domain, "qtype", plan.qtype)
+		log.Info("[DNS_BLOCK] blocked", "domain", plan.domain, "qtype", plan.qtype,
+			"src", req.src, "dst", req.dst)
 		return req.reply.msg(blockedDNSReply(req.msg))
 	case dnsActionCacheHit:
 		return req.reply.msg(plan.cached)
@@ -49,15 +54,18 @@ func (d *dnsInterceptor) handleUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery
 // directUDPQuery 同步解析一条直连查询并立即应答：客户端显式请求的解析器
 // （req.dst）优先，失败回落到内置/系统 DNS。
 func (d *dnsInterceptor) directUDPQuery(req udpDNSQuery, plan dnsPlan) error {
-	log.Info("[DNS_DIRECT]", "domain", plan.domain, "qtype", plan.qtype)
+	log.Info("[DNS_DIRECT]", "domain", plan.domain, "qtype", plan.qtype,
+		"src", req.src, "dst", req.dst)
 	stats.RecordDNSDirectQuery()
 
 	resp, err := d.resolveDirectDNS(req.msg, plan.domain, req.dst)
 	if err != nil {
-		log.Error("[DNS_DIRECT]", "domain", plan.domain, "err", err)
+		log.Error("[DNS_DIRECT]", "domain", plan.domain, "err", err,
+			"src", req.src, "dst", req.dst)
 		return err
 	}
-	log.Info("[DNS_DIRECT] result", "domain", plan.domain, "qtype", plan.qtype, "answers", util.DNSAnswerStrings(resp))
+	log.Info("[DNS_DIRECT] result", "domain", plan.domain, "qtype", plan.qtype,
+		"answers", util.DNSAnswerStrings(resp), "src", req.src, "dst", req.dst)
 
 	resp.Id = req.msg.Id
 	return req.reply.msg(resp)
@@ -74,7 +82,8 @@ func (d *dnsInterceptor) proxyUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery,
 	upstream := config.ProxyDNSServer
 	key := clientAddr.String() + "_" + upstream
 
-	log.Info("[DNS_PROXY]", "domain", plan.domain, "qtype", plan.qtype)
+	log.Info("[DNS_PROXY]", "domain", plan.domain, "qtype", plan.qtype,
+		"src", req.src, "dst", req.dst)
 	stats.RecordDNSProxyQuery()
 
 	ue, created, err := d.pool.acquireExchange(context.Background(), key, upstream, req.raw)
@@ -84,7 +93,7 @@ func (d *dnsInterceptor) proxyUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery,
 	}
 	onData := func(data []byte) {
 		if req.reply.raw != nil {
-			req.reply.raw(d.postProcessProxied(data))
+			req.reply.raw(d.postProcessProxied(data, req.src, req.dst))
 		}
 	}
 	if created {
@@ -102,7 +111,8 @@ func (d *dnsInterceptor) proxyUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery,
 
 // postProcessProxied 处理一条经隧道返回的 DNS 应答：按 ipv6 策略剥离 AAAA、
 // 写入代理缓存、记录结果并按自定义域名规则学习。解包失败或不是响应时原样返回。
-func (d *dnsInterceptor) postProcessProxied(data []byte) []byte {
+// src/dst 只用于日志，与对应的 [DNS_PROXY] 查询行配对。
+func (d *dnsInterceptor) postProcessProxied(data []byte, src, dst string) []byte {
 	msg := &dns.Msg{}
 	if err := msg.Unpack(data); err != nil || !util.IsDNSResponse(msg) {
 		return data
@@ -117,7 +127,8 @@ func (d *dnsInterceptor) postProcessProxied(data []byte) []byte {
 
 	domain := strings.TrimSuffix(msg.Question[0].Name, ".")
 	qtype := dns.TypeToString[msg.Question[0].Qtype]
-	log.Info("[DNS_PROXY] result", "domain", domain, "qtype", qtype, "answers", util.DNSAnswerStrings(msg))
+	log.Info("[DNS_PROXY] result", "domain", domain, "qtype", qtype,
+		"answers", util.DNSAnswerStrings(msg), "src", src, "dst", dst)
 
 	d.learnDNSAnswers(msg, domain, false)
 	return data
