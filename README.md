@@ -225,6 +225,15 @@ Easyss 支持开机自启动。开机时 WiFi/网络往往还没有初始化完�
 
 如果配置了"系统全局流量(Tun2socks)"，网络未就绪时会**跳过 TUN**（此时启用会把系统 DNS 指向本机转发服务器却无法解析服务端域名）；托盘中的"系统全局流量"会保持未勾选，等网络恢复后在托盘菜单里重新开启即可。
 
+**无托盘（headless）版本的系统代理：**
+
+`easyss-headless`（以及 `easyss --disable-tray`）没有托盘菜单可以勾选"浏览器(设置系统代理)"，因此会在本地代理启动成功后**直接设置系统代理**（等价于该勾选项），并在收到退出信号时自动撤销。不需要它时，在配置里设置 `"disable_sys_proxy": true`（完整模式为 `local.disable_sys_proxy`）；通常只有改用 `enable_tun2socks` 做全局透明代理时才需要关掉。
+
+两点需要注意：
+
+* Linux 上设置 GNOME 代理走 `gsettings`，发布会话环境走 `systemctl --user` / `dbus-update-activation-environment`。以 root 或 systemd 系统服务方式运行时这些通常不可达，此时系统代理**不会**生效，日志里只留下 `[SYSPROXY]`/`[EASYSS-V3] set system proxy failed` 警告——这种部署请改用 `enable_tun2socks`（TUN）或手动配置代理。
+* 进程被 `kill -9`（SIGKILL）或崩溃时来不及撤销，系统代理会残留并指向一个已经停止的本地端口，表现为"整机断网"。手动恢复（GNOME）：`gsettings set org.gnome.system.proxy mode 'none'`，然后重新启动 Easyss 即可。
+
 **自定义直连/代理白名单：**
 
 对于部分国内/国外的 IP 或域名，可能 `Easyss` 没有正确识别路由规则。可通过 `direct_file` 和 `proxy_file` 自定义。

@@ -130,6 +130,7 @@ make lint   # 等价: go tool golangci-lint run --timeout 10m --verbose
 
 - `headless`：用于 headless/Android 构建，编译 `cmd/easyss/start_headless.go` 而非 `start.go`+`tray.go`
 - 注意 `cmd/easyss/start.go` 和 `tray.go` 头部有 `//go:build !headless`
+- 系统代理（`sysproxy*.go`）不是托盘专属：三条启动路径共用 `App.setupSysProxy`/`teardownSysProxy`（`main.go`），headless 在核心启动成功后同样设置系统代理、退出信号到达时撤销，`disable_sys_proxy` 是统一开关（设置失败只记警告，因为 root/systemd 下 gsettings 与用户会话总线常常不可达）
 
 ## 配置相关
 

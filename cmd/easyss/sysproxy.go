@@ -1,5 +1,3 @@
-//go:build !headless
-
 package main
 
 import (
@@ -9,6 +7,14 @@ import (
 
 	"github.com/nange/easyss/v3/log"
 	"github.com/wzshiming/sysproxy"
+)
+
+// sysProxyApply 与 sysProxyRevert 是变量，以便启动路径的测试能观察设置/撤销调用，
+// 而不改动运行测试的机器的真实系统代理配置（与 sysproxy_env_linux.go 中的
+// proxyEnvExec 同一手法）。
+var (
+	sysProxyApply  = setSysProxy
+	sysProxyRevert = unsetSysProxy
 )
 
 // setSysProxy 通过两种可用机制把系统指向本地 HTTP 代理：
