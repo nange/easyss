@@ -2,18 +2,15 @@ package http2
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
-	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
 )
 
@@ -314,70 +311,4 @@ func TestTrackReadMarksSlotHeavy(t *testing.T) {
 			t.Fatalf("double release changed counter: %d", slot.heavy.Load())
 		}
 	})
-}
-
-// TestHTTP2Transport_WarmUp 验证两个调度池都被激活，并通过真实的探测请求
-// 建立各自的首条连接：WarmUp 之后每个池报告 2 个存活槽位（首次激活），
-// 且服务器为每个池各服务恰好一次探测，因此任一类的首条真实流
-// 都复用已建立的连接。
-func TestHTTP2Transport_WarmUp(t *testing.T) {
-	ts, token := newProbeServer(t)
-
-	tr, err := New(Config{
-		ServerURL:  ts.URL,
-		TLSConfig:  &utls.Config{InsecureSkipVerify: true, NextProtos: sharedconfig.NextProtos},
-		Timeout:    time.Second,
-		ProbeToken: token,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = tr.Close() })
-
-	stats.ResetCounters()
-	if err := tr.WarmUp(context.Background()); err != nil {
-		t.Fatalf("WarmUp: %v", err)
-	}
-
-	st := tr.Stats()
-	if st.PriorityConns != 2 {
-		t.Fatalf("PriorityConns = %d, want 2 (priority pool first activation)", st.PriorityConns)
-	}
-	if st.BulkConns != 2 {
-		t.Fatalf("BulkConns = %d, want 2 (bulk pool first activation)", st.BulkConns)
-	}
-	if got := stats.Collect().ServerProbes; got != 2 {
-		t.Fatalf("server served %d probe requests, want 2 (one per pool)", got)
-	}
-}
-
-// TestHTTP2Transport_WarmUpFailsWhenUnreachable 验证失败的探测（服务器不可达）
-// 以错误形式呈现，由调用方决定是否吞掉。错误指明保持冷态的池，
-// 并包装哨兵判定，使调用方可以分类失败而不是匹配文本。
-func TestHTTP2Transport_WarmUpFailsWhenUnreachable(t *testing.T) {
-	ts, token := newProbeServer(t)
-	deadURL := ts.URL
-	ts.Close() // connection refused from now on
-
-	tr, err := New(Config{
-		ServerURL:  deadURL,
-		TLSConfig:  &utls.Config{InsecureSkipVerify: true, NextProtos: sharedconfig.NextProtos},
-		Timeout:    time.Second,
-		ProbeToken: token,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = tr.Close() })
-
-	err = tr.WarmUp(context.Background())
-	if err == nil {
-		t.Fatal("expected an error when the server is unreachable, got nil")
-	}
-	if !errors.Is(err, errProbeNotConfirmed) {
-		t.Errorf("error = %v, want it to wrap errProbeNotConfirmed", err)
-	}
-	if !strings.Contains(err.Error(), "priority") {
-		t.Errorf("error = %v, want it to name the pool that failed", err)
-	}
 }

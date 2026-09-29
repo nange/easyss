@@ -1,11 +1,5 @@
 // Package mobile 是 EasySS 客户端核心的 gomobile 绑定。
 //
-// 传输预热不再从这里导出：runner.Run 会在核心启动后于后台调度预热
-// （runner.Run），除非配置通过 transport.disable_warm_up 将其禁用。升级此
-// AAR 的主机应用必须相应移除它们的 WarmUp() 调用——Start() 返回即表示
-// 预热已被调度。此前用户在绑定阻塞于预热期间看到的"连接中"状态，
-// 因此从这里不再可观察。
-//
 // 日志器由 Start 按 SimpleConfig 的 log_level/log_file_path 装配，这两个字段
 // 因此对 Android 主机应用生效：log_file_path 为空时只写进程 stdout——gomobile
 // 已把它桥接到 logcat 的 GoLog 标签，app 的日志查看器正是这么收集的；传入应用

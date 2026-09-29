@@ -13,8 +13,6 @@ import (
 
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/dns"
-	"github.com/nange/easyss/v3/client/proxy"
-	"github.com/nange/easyss/v3/transport"
 )
 
 func testConfig() *config.ClientConfig {
@@ -198,215 +196,6 @@ func TestRunOKWhenPortsAreFree(t *testing.T) {
 	core.Stop()
 }
 
-// stubWarmUp 替换 warmUpCore，使调度逻辑可以在没有任何网络的情况下被断言。
-// 它统计探测次数，在桩探测返回时释放 done，并在测试结束时恢复之前的实现。
-//
-// startWarmUp 在派发时捕获 warmUpCore，因此比其测试存活得更久的探测即使在
-// 下面的清理恢复了包变量之后，仍会调用这个桩。
-func stubWarmUp(t *testing.T, err error) (*atomic.Int64, *waitSignal) {
-	t.Helper()
-
-	old := warmUpCore
-	calls := &atomic.Int64{}
-	done := &waitSignal{done: make(chan struct{})}
-
-	warmUpCore = func(transport.Transport, time.Duration) error {
-		calls.Add(1)
-		done.close()
-		return err
-	}
-	t.Cleanup(func() { warmUpCore = old })
-
-	return calls, done
-}
-
-// waitSignal 用于报告桩探测已返回。它由桩 goroutine 关闭，
-// 并且可以安全地关闭多次。
-type waitSignal struct {
-	once sync.Once
-	done chan struct{}
-}
-
-func (w *waitSignal) close() {
-	w.once.Do(func() { close(w.done) })
-}
-
-// waitProbe 阻塞直到桩探测返回，如果始终未返回则使测试失败。
-func (w *waitSignal) waitProbe(t *testing.T, what string) {
-	t.Helper()
-
-	select {
-	case <-w.done:
-	case <-time.After(5 * time.Second):
-		t.Fatalf("timed out waiting for %s", what)
-	}
-}
-
-// shortWarmUpStartDelay 缩短后台预热等待的延迟，
-// 使测试不必真的睡眠 config.WarmUpStartDelay 那么久。
-func shortWarmUpStartDelay(t *testing.T, d time.Duration) {
-	t.Helper()
-
-	old := warmUpStartDelay
-	warmUpStartDelay = d
-	t.Cleanup(func() { warmUpStartDelay = old })
-}
-
-// TestStartWarmUpDispatch 覆盖后台预热的门控逻辑：它只在配置允许时运行，
-// 且绝不会传播其失败。所有断言都是基于事件的（桩会发出完成信号），
-// 因此测试不依赖调度延迟——而调度延迟会被竞态检测器放大。
-func TestStartWarmUpDispatch(t *testing.T) {
-	tests := []struct {
-		name       string
-		disable    bool
-		nilServer  bool
-		err        error
-		wantProbes int64
-	}{
-		{
-			name:       "enabled by default",
-			wantProbes: 1,
-		},
-		{
-			name:       "disabled by config",
-			disable:    true,
-			wantProbes: 0,
-		},
-		{
-			name:       "no socks server",
-			nilServer:  true,
-			wantProbes: 0,
-		},
-		{
-			name:       "a failed warm-up is swallowed",
-			err:        errors.New("probe failed"),
-			wantProbes: 1,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			shortWarmUpStartDelay(t, 0)
-			calls, done := stubWarmUp(t, tt.err)
-
-			cfg := testConfig()
-			cfg.Transport.DisableWarmUp = tt.disable
-
-			core := &Core{cfg: cfg}
-			if !tt.nilServer {
-				core.SocksServer = &proxy.Socks5Server{}
-				core.transport = &warmUpTestTransport{}
-			}
-
-			// 按约定尽力而为：startWarmUp 从不阻塞也不会 panic。
-			core.startWarmUp()
-
-			if tt.wantProbes > 0 {
-				done.waitProbe(t, "the warm-up probe")
-			}
-			if got := calls.Load(); got != tt.wantProbes {
-				t.Fatalf("warm-up ran %d times, want %d", got, tt.wantProbes)
-			}
-		})
-	}
-}
-
-// TestStartWarmUpWaitStartDelay 验证探测会被 config.WarmUpStartDelay 推迟：
-// 主机有时间建立网络路径，探测不会仅仅因为这个原因而失败。
-func TestStartWarmUpWaitStartDelay(t *testing.T) {
-	shortWarmUpStartDelay(t, 100*time.Millisecond)
-	calls, done := stubWarmUp(t, nil)
-
-	core := &Core{cfg: testConfig(), SocksServer: &proxy.Socks5Server{}, transport: &warmUpTestTransport{}}
-	core.startWarmUp()
-
-	if got := calls.Load(); got != 0 {
-		t.Fatalf("warm-up probe fired before the start delay, ran %d times", got)
-	}
-
-	done.waitProbe(t, "the delayed warm-up probe")
-	if got := calls.Load(); got != 1 {
-		t.Fatalf("warm-up probe ran %d times, want 1", got)
-	}
-}
-
-// TestStopCancelsPendingWarmUp 验证关闭路径：仍在等待启动延迟的预热会被
-// Stop 执行的取消操作丢弃，因此短命的核心绝不会针对已拆除的传输层探测。
-//
-// 该测试直接调用取消路径而不是 Core.Stop：取消预热是 Stop 做的第一件事，
-// 而 Stop 的其余部分会拆除这个裸 Core 并不拥有的活动服务器。
-func TestStopCancelsPendingWarmUp(t *testing.T) {
-	// 足够长，使得探测只有在取消失败时才会触发。
-	shortWarmUpStartDelay(t, 5*time.Second)
-	calls, _ := stubWarmUp(t, nil)
-
-	core := &Core{cfg: testConfig(), SocksServer: &proxy.Socks5Server{}, transport: &warmUpTestTransport{}}
-	core.startWarmUp()
-
-	done := make(chan struct{})
-	go func() {
-		core.cancelWarmUp()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("Stop blocked on the warm-up")
-	}
-
-	if got := calls.Load(); got != 0 {
-		t.Fatalf("warm-up probe ran despite the cancel, ran %d times", got)
-	}
-	if left := warmUpCancelOf(core); left != nil {
-		t.Fatal("the cancel did not clear the recorded warm-up cancel func")
-	}
-}
-
-// warmUpCancelOf 快照已派发预热的 cancel func。
-func warmUpCancelOf(c *Core) context.CancelFunc {
-	c.warmUpMu.Lock()
-	defer c.warmUpMu.Unlock()
-	return c.warmUpCancel
-}
-
-// TestStopCancelsInFlightWarmUp 验证 Stop 也会取消已经开始执行的探测：
-// 当 Stop 返回时预热 context 已完成，因此遵守 ctx 的传输层会停止，
-// 而不是与正在关闭的核心竞争。Stop 也绝不能阻塞在探测上。
-func TestStopCancelsInFlightWarmUp(t *testing.T) {
-	shortWarmUpStartDelay(t, 0)
-	calls, done := stubWarmUp(t, nil)
-
-	core := &Core{cfg: testConfig(), SocksServer: &proxy.Socks5Server{}, transport: &warmUpTestTransport{}}
-	core.startWarmUp()
-
-	cancel := warmUpCancelOf(core)
-	if cancel == nil {
-		t.Fatal("startWarmUp did not record a cancel func")
-	}
-	done.waitProbe(t, "the in-flight warm-up probe")
-	if got := calls.Load(); got != 1 {
-		t.Fatalf("warm-up probe ran %d times, want 1", got)
-	}
-
-	// Stop 取消预热 context 并立即返回，不等待可能仍在进行中的探测。
-	stopped := make(chan struct{})
-	go func() {
-		core.cancelWarmUp()
-		close(stopped)
-	}()
-
-	select {
-	case <-stopped:
-	case <-time.After(time.Second):
-		t.Fatal("Stop blocked on the in-flight warm-up")
-	}
-
-	if left := warmUpCancelOf(core); left != nil {
-		t.Fatal("Stop did not clear the recorded warm-up cancel func")
-	}
-}
-
 // TestResolveServerDomain 通过注入 prePopulateServerDomain 覆盖启动时的
 // 服务器域名解析，确保测试中永远不会发出真实的 DNS 查询。
 // 它只做一次有界尝试，失败以错误返回（是否致命由 Run 决定，见
@@ -519,27 +308,21 @@ func setShortDomainRetry(t *testing.T) {
 	oldBase, oldMax := serverDomainRetryBase, serverDomainRetryMax
 	oldTimeout := serverStartupResolveTimeout
 	oldReset := resetResolveState
-	oldWarmUp, oldDelay := warmUpCore, warmUpStartDelay
 	t.Cleanup(func() {
 		serverDomainRetryBase, serverDomainRetryMax = oldBase, oldMax
 		serverStartupResolveTimeout = oldTimeout
 		resetResolveState = oldReset
-		warmUpCore, warmUpStartDelay = oldWarmUp, oldDelay
 	})
 
 	serverStartupResolveTimeout = 50 * time.Millisecond
 	serverDomainRetryBase = 10 * time.Millisecond
 	serverDomainRetryMax = 20 * time.Millisecond
-	warmUpStartDelay = time.Millisecond
 	// DNS 包的熔断/系统 DNS 缓存是进程级状态，测试里不触碰它。
 	resetResolveState = func() {}
-	// 预热的真实实现会拨号；测试里只关心它是否被再次派发。
-	warmUpCore = func(transport.Transport, time.Duration) error { return nil }
 }
 
 // TestRunDegradesWhenServerDomainUnresolved 验证服务器域名解析失败不再中止
-// 启动：Run 正常返回核心，警告带上专用哨兵，后台重试成功后关闭就绪通道并
-// 补派一次连接池预热。
+// 启动：Run 正常返回核心，警告带上专用哨兵，后台重试成功后关闭就绪通道。
 func TestRunDegradesWhenServerDomainUnresolved(t *testing.T) {
 	oldFn := prePopulateServerDomain
 	t.Cleanup(func() { prePopulateServerDomain = oldFn })
@@ -549,7 +332,6 @@ func TestRunDegradesWhenServerDomainUnresolved(t *testing.T) {
 		mu       sync.Mutex
 		attempts int
 		resets   int
-		warmUps  int
 	)
 	prePopulateServerDomain = func(*dns.Cache, context.Context, string, []string, bool) error {
 		mu.Lock()
@@ -564,12 +346,6 @@ func TestRunDegradesWhenServerDomainUnresolved(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		resets++
-	}
-	warmUpCore = func(transport.Transport, time.Duration) error {
-		mu.Lock()
-		defer mu.Unlock()
-		warmUps++
-		return nil
 	}
 
 	cfg := testConfig()
@@ -607,21 +383,6 @@ func TestRunDegradesWhenServerDomainUnresolved(t *testing.T) {
 	// 前台那次尝试不清缓存；此后每次后台尝试都先清一次。
 	if gotResets != gotAttempts-1 {
 		t.Fatalf("resetResolveState calls = %d, want one per background attempt (%d)", gotResets, gotAttempts-1)
-	}
-
-	// 预热在就绪后才补派，且探测自身还有一个小延迟，因此轮询等待。
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		mu.Lock()
-		gotWarmUps := warmUps
-		mu.Unlock()
-		if gotWarmUps >= 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("no warm-up probe was dispatched after the domain became ready")
-		}
-		time.Sleep(5 * time.Millisecond)
 	}
 }
 

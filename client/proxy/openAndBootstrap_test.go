@@ -341,10 +341,6 @@ func (m *mockTransport) Open(ctx context.Context, req transport.OpenRequest) (tr
 	return &mockStream{}, nil
 }
 
-// WarmUp 是 transport.Transport 的接口要求：预热的实现与断言在 runner 侧
-// （见 runner/warmup_test.go），代理层不再调用它。
-func (m *mockTransport) WarmUp(context.Context) error { return nil }
-
 func (m *mockTransport) CloseIdle() {
 	m.mu.Lock()
 	m.closeIdleCount++
@@ -497,10 +493,9 @@ func (t *saltCapturingTransport) Open(ctx context.Context, req transport.OpenReq
 	return t.inner.Open(ctx, req)
 }
 
-func (t *saltCapturingTransport) WarmUp(ctx context.Context) error { return t.inner.WarmUp(ctx) }
-func (t *saltCapturingTransport) CloseIdle()                       {}
-func (t *saltCapturingTransport) Stats() transport.TransportStats  { return transport.TransportStats{} }
-func (t *saltCapturingTransport) Close() error                     { return t.inner.Close() }
+func (t *saltCapturingTransport) CloseIdle()                      {}
+func (t *saltCapturingTransport) Stats() transport.TransportStats { return transport.TransportStats{} }
+func (t *saltCapturingTransport) Close() error                    { return t.inner.Close() }
 
 func TestOpenAndBootstrap_FreshSaltPerAttempt(t *testing.T) {
 	tr := &mockTransport{

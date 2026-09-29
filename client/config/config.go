@@ -72,10 +72,6 @@ type TransportConfig struct {
 	PrioritySlotRatio float64 `json:"priority_slot_ratio"`
 	ConnLifetimeSec   int     `json:"conn_lifetime_sec"` // 连接的最大生命周期（秒），0 表示使用默认值
 	ConnMaxBytes      int64   `json:"conn_max_bytes"`    // 连接在任一方向上承载的最大字节数，0 表示使用默认值
-	// DisableWarmUp 用于禁用传输层连接池的后台预热，该预热由 runner.Run 在核心
-	// 启动完成后派发（所使用的取值参见 config.WarmUpTimeout / config.WarmUpStartDelay）。
-	// false 是零值，因此在该选项出现之前写入的配置文件会保持预热开启。
-	DisableWarmUp bool `json:"disable_warm_up"`
 }
 
 type ShaperConfig struct {
