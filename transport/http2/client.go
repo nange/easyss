@@ -367,10 +367,31 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 // 建立连接。任何应答都算数：探测载荷、fallback 页面（不支持 /v3/probe 的
 // 服务器）或拒绝都能证明路径可用；只有无法确认连接的探测才会被报告，
 // 调用方记录日志后吞掉它：启动绝不能依赖预热。
+//
+// 探测被绑定到传输层自身的生命周期（t.ctx）：调用方的 ctx 只约束它自己，
+// 而预热是在后台 goroutine 里派发的（见 runner.dispatchWarmUp），核心停止时
+// 只能取消那个 goroutine 的延迟等待，取消不到已经在飞的探测。没有这条绑定，
+// Close 之后仍会 grow 槽位、重新拨号并下载探测载荷，与"Stop 后不留下针对已
+// 关闭传输层的探测"的契约相矛盾。
 func (t *http2Transport) WarmUp(ctx context.Context) error {
+	if err := t.ctx.Err(); err != nil {
+		// 已关闭：与 Open 一致，直接拒绝，不激活任何槽位。
+		return err
+	}
 	if t.lifecycle.probeFunc == nil {
 		return errors.New("probe not configured")
 	}
+
+	// 与 Open 相同的观察者模式：Close 取消 t.ctx 时同步取消本次预热。
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-t.ctx.Done():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	var firstErr error
 	for _, highPriority := range []bool{true, false} {

@@ -67,6 +67,12 @@ var warmUpCore = warmUpTransport
 // 采用相同模式。
 var warmUpStartDelay = sharedconfig.WarmUpStartDelay
 
+// Core 持有一次客户端会话的全部组件，并**唯一**负责它们的关闭顺序
+// （见 cleanup）：本地代理入口 -> 传输层。
+//
+// 字段的所有权：Client 是传输层与路由引擎的所有者；SocksServer/HTTPServer 与
+// StreamHandler 只借用它们（各自的 Close 明确不关闭借来的依赖）。因此
+// cleanup 必须按逆序关闭，调用方只需要调用 Core.Stop。
 type Core struct {
 	cfg           *config.ClientConfig
 	Client        *client.Client
@@ -80,6 +86,8 @@ type Core struct {
 	// socks_port = 0 时没有本地代理入口，因此它是 nil。
 	dnsCache *dns.Cache
 	// transport 是隧道传输层，预热直接作用于它（预热不再经由代理服务器）。
+	// 它借用自 Client（与 StreamHandler 持有的是同一个实例），随 Client.Close
+	// 释放——本类型不再单独关闭它。
 	transport transport.Transport
 
 	// StartupWarn 保存初始化核心时检测到的非致命警告（例如自定义规则文件
@@ -91,6 +99,11 @@ type Core struct {
 	// 也是后台任务（服务端域名重试）的停止信号。doneOnce 保证只关闭一次。
 	done     chan struct{}
 	doneOnce sync.Once
+
+	// stopOnce 使 Stop 幂等：调用方（托盘关闭流程、更新重启路径、headless
+	// 退出路径）可能对同一个核心调用多次。Run 的错误清理路径直接调 cleanup，
+	// 那时核心尚未外泄，因此不需要经过它。
+	stopOnce sync.Once
 
 	// domainReady 在服务端域名首次解析成功（或无需解析）时关闭；
 	// domainReadyOnce 保证只关闭一次。启用 TUN 前必须先就绪：系统 DNS 被
@@ -386,12 +399,17 @@ func (c *Core) cancelWarmUp() {
 	}
 }
 
+// Stop 停止核心并释放它持有的一切。它幂等：同一核心被重复停止（例如托盘的
+// 关闭流程与更新重启路径各调一次）不会二次拆除服务器——那会让 SOCKS5 的
+// accept 探测白等一次并留下后台补关闭 goroutine（见 stopOnce）。
 func (c *Core) Stop() {
-	// 在拆除任何东西之前先取消预热，使仍在延迟中或进行中的探测停止，
-	// 而不是与正在关闭的传输层竞争。
-	c.cancelWarmUp()
-	c.cleanup()
-	log.Info("[EASYSS] stopped")
+	c.stopOnce.Do(func() {
+		// 在拆除任何东西之前先取消预热，使仍在延迟中或进行中的探测停止，
+		// 而不是与正在关闭的传输层竞争。
+		c.cancelWarmUp()
+		c.cleanup()
+		log.Info("[EASYSS] stopped")
+	})
 }
 
 // resolveServerDomain 通过直连 DNS 服务器（带系统 DNS 兜底）预先解析代理
@@ -658,19 +676,27 @@ func forwardDNSListenError(addr string, err error) error {
 }
 
 // cleanup 撤销核心持有的一切：先取消后台解析尝试并关闭停止信号（让后台
-// goroutine 在资源被拆除前退出），再依次关闭各服务器与客户端。
+// goroutine 在资源被拆除前退出），再按"启动顺序的逆序"关闭各组件。
+//
+// 逆序是硬约束，不是风格问题：
+//   - HTTP 代理入口依赖本地 SOCKS5 入口（它的反向代理连接池与回退路径都拨
+//     SocksAddr），因此必须比 SOCKS5 先关，否则正在收尾的请求会打到一个
+//     已经关闭的入口；
+//   - 传输层（client.Client）被上面所有入口借用（StreamHandler 持有它），
+//     必须最后关：Socks5Server.Close 只关监听器与 UDP 会话，在飞中继正是靠
+//     传输层关闭才结束的（见 client/proxy.Socks5Server.Close）。
 func (c *Core) cleanup() {
 	c.cancelRetry()
 	c.closeDone()
 
-	if c.SocksServer != nil {
-		_ = c.SocksServer.Close()
+	if c.dnsServer != nil {
+		_ = c.dnsServer.Shutdown()
 	}
 	if c.HTTPServer != nil {
 		_ = c.HTTPServer.Close()
 	}
-	if c.dnsServer != nil {
-		_ = c.dnsServer.Shutdown()
+	if c.SocksServer != nil {
+		_ = c.SocksServer.Close()
 	}
 	if c.Client != nil {
 		_ = c.Client.Close()

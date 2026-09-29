@@ -619,12 +619,16 @@ func (a *TrayApp) createTun2socks() error {
 		return nil
 	}
 
-	a.cfg.Local.EnableTun2socks = true
-	a.tunMgr = tun.New(a.tunConfig())
-
+	// core 检查必须早于任何状态写入：如果这里已经留下了 tunMgr 与
+	// EnableTun2socks=true，后续每次点击都会命中顶部的"已设置"保护而静默返回
+	// nil（菜单勾选着，引擎却从未运行、也再没人能 Stop 它）。
 	if a.core == nil || a.core.Client == nil {
 		return fmt.Errorf("client not initialized")
 	}
+
+	a.cfg.Local.EnableTun2socks = true
+	a.tunMgr = tun.New(a.tunConfig())
+
 	icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
 	icmpHandler.SetProxy(a.core.StreamHandler, a.methodFromServer())
 	a.tunMgr.SetICMPHandler(icmpHandler)

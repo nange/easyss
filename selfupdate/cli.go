@@ -21,7 +21,9 @@ var errUpToDate = errors.New("already up to date")
 // proxyPort > 0 时，请求经由本地 easyss HTTP 代理（127.0.0.1:<proxyPort>）转发；
 // 否则使用直连。
 func checkCLI(ctx context.Context, proxyPort int, product Product) (*Release, error) {
-	return runCheck(ctx, NewClient(proxyPort), version.Tag())
+	c := NewClient(proxyPort)
+	defer c.Close()
+	return runCheck(ctx, c, version.Tag())
 }
 
 // runCLI 从命令行对给定产品执行一次性自更新：先检查最新 release，若存在
@@ -31,6 +33,7 @@ func checkCLI(ctx context.Context, proxyPort int, product Product) (*Release, er
 // 代理（127.0.0.1:<proxyPort>）转发；否则使用直连。
 func runCLI(ctx context.Context, proxyPort int, product Product) error {
 	c := NewClient(proxyPort)
+	defer c.Close()
 	rel, err := runCheck(ctx, c, version.Tag())
 	if err != nil {
 		return err

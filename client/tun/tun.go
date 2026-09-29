@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
@@ -80,14 +81,23 @@ type DeviceConfig struct {
 type Manager struct {
 	cfg        Config
 	dev        DeviceConfig
-	running    bool
 	originDNS  []string // TUN 启动前的原始系统 DNS（仅 darwin/linux）
 	dnsChanged bool     // saveAndSetDNSStep 是否尝试过改动系统 DNS（即使中途失败也会置位，供回滚判断）
 	icmpH      *ICMPHandler
 
-	ctx    context.Context    // 用于取消进行中的 Start()
-	cancel context.CancelFunc // 保存下来，供 Stop() 取消 Start() goroutine
-	done   chan struct{}      // Start() 结束（成功或失败）时关闭
+	// mu 保护下面的生命周期字段。Start 在后台 goroutine 上运行（见
+	// cmd/easyss.startTunEngine），而 Stop 可能来自托盘菜单或退出路径，
+	// 两者并发执行：没有这把锁时，Stop 可能读到已发布但尚未创建的 done，
+	// 从而在 nil channel 上永久阻塞（并因托盘持有 tunHelperMu 而卡住菜单）。
+	mu      sync.Mutex
+	running bool
+	ctx     context.Context    // 用于取消进行中的 Start()
+	cancel  context.CancelFunc // 保存下来，供 Stop() 取消 Start() goroutine
+	done    chan struct{}      // Start() 结束（成功或失败）时关闭
+
+	// stopMu 把整个 Stop 串行化：并发的第二个 Stop 必须等第一次拆除完成再返回，
+	// 否则调用方会以为 TUN 已经停了（App.Stop 依赖"TUN 先于核心停止"这一顺序）。
+	stopMu sync.Mutex
 }
 
 func New(cfg Config) *Manager {
@@ -178,19 +188,29 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("tun: unsupported os %s", runtime.GOOS)
 	}
 
-	m.ctx, m.cancel = context.WithCancel(context.Background())
-	m.done = make(chan struct{})
-	defer close(m.done)
+	// 先建 done 再发布 cancel：Stop 是按"有 cancel 就等 done"的顺序工作的，
+	// 反过来发布会让 Stop 在两步之间读到非 nil 的 cancel 与 nil 的 done，
+	// 从而在 nil channel 上永久阻塞（见 mu 字段的说明）。
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	m.mu.Lock()
+	m.ctx, m.cancel, m.done = ctx, cancel, done
+	m.mu.Unlock()
+	defer close(done)
 
 	// 快速路径：还没开始就被取消了。
 	select {
-	case <-m.ctx.Done():
-		return m.ctx.Err()
+	case <-ctx.Done():
+		return ctx.Err()
 	default:
 	}
 
-	if m.icmpH != nil {
-		engine.SetICMPHandler(m.icmpH)
+	m.mu.Lock()
+	icmpH := m.icmpH
+	m.mu.Unlock()
+	if icmpH != nil {
+		engine.SetICMPHandler(icmpH)
 	}
 
 	fdMode := m.cfg.DeviceFD > 0
@@ -227,9 +247,9 @@ func (m *Manager) Start() error {
 
 	// 在改动路由 / DNS 之前，允许 Stop() 取消本次启动。
 	select {
-	case <-m.ctx.Done():
+	case <-ctx.Done():
 		engineStopFn("start cancelled")
-		return m.ctx.Err()
+		return ctx.Err()
 	default:
 	}
 
@@ -274,7 +294,7 @@ func (m *Manager) Start() error {
 	// 最后检查：如果平台脚本运行期间 Stop() 取消了本次启动，
 	// 撤销刚才建立的一切。
 	select {
-	case <-m.ctx.Done():
+	case <-ctx.Done():
 		engineStopFn("start cancelled")
 		if !fdMode {
 			_ = closeTunDevFn(m)
@@ -282,29 +302,48 @@ func (m *Manager) Start() error {
 		if manageSystemDNS() {
 			_ = restoreDNSStepFn(m)
 		}
-		return m.ctx.Err()
+		return ctx.Err()
 	default:
 	}
 
+	m.mu.Lock()
 	m.running = true
+	m.mu.Unlock()
 	log.Info("[TUN] tun2socks started", "device", device, "proxy", m.cfg.Socks5Addr)
 	return nil
 }
 
+// Stop 停止 tun2socks 并撤销它对系统做的改动。它幂等：对从未 Start 过、
+// 或已经停止的实例调用都是安全的空操作；并发的 Stop 会串行执行，第二个调用者
+// 等第一次拆除完成后再返回。
 func (m *Manager) Stop() {
+	m.stopMu.Lock()
+	defer m.stopMu.Unlock()
+
 	// 如果 Start() 仍在进行中，先取消它，
-	// 等它完成清理后再继续。
-	if m.cancel != nil {
-		m.cancel()
+	// 等它完成清理后再继续。cancel/done 在同一把锁下快照：Start 先建 done
+	// 再发布 cancel，因此这里绝不会在 nil channel 上等待。
+	m.mu.Lock()
+	cancel, done := m.cancel, m.done
+	m.mu.Unlock()
+
+	if cancel != nil && done != nil {
+		cancel()
 		log.Info("[TUN] Stop: waiting for Start goroutine to finish")
-		<-m.done
+		<-done
 		log.Info("[TUN] Stop: Start goroutine done")
 	}
 
+	m.mu.Lock()
 	if !m.running {
+		m.mu.Unlock()
 		log.Info("[TUN] Stop: not running, returning")
 		return
 	}
+	// 先落 running=false 再拆除：重复 Stop 与并发 Stop 都不会二次执行清理
+	// （engine.Stop / 关脚本 / 恢复 DNS 都是"只能做一次"的动作）。
+	m.running = false
+	m.mu.Unlock()
 
 	log.Info("[TUN] Stop: calling engine.Stop")
 	engineStopFn("stop")
@@ -321,7 +360,6 @@ func (m *Manager) Stop() {
 		}
 	}
 
-	m.running = false
 	log.Info("[TUN] tun2socks stopped")
 }
 
@@ -336,14 +374,24 @@ func stopEngine(reason string) {
 	}
 }
 
+// IsRunning 报告 TUN 引擎当前是否处于运行状态。它由托盘读取以同步菜单，
+// 而 Start/Stop 在其它 goroutine 上改写该状态，因此必须加锁。
 func (m *Manager) IsRunning() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.running
 }
 
 // SetICMPHandler 保存 ICMP handler 并把它注册到 engine。
 // 在 Start() 之前或之后调用都安全；幂等。
+//
+// 注意 handler 是借用的：它内部持有 core 的 StreamHandler 与 Router
+// （见 cmd/easyss），而 engine 的注册是进程级全局，本类型既不关闭它也不注销它
+// —— 关闭 core 必须先停止 TUN（App.Stop 已保证该顺序）。
 func (m *Manager) SetICMPHandler(h *ICMPHandler) {
+	m.mu.Lock()
 	m.icmpH = h
+	m.mu.Unlock()
 	engine.SetICMPHandler(h)
 }
 

@@ -120,7 +120,12 @@ func (a *TrayApp) checkUpdate(ctx context.Context, interactive bool) {
 		a.setUpdateItem("检查更新中...", true)
 	}
 
-	rel, err := a.checkLatest(ctx, selfupdate.NewClient(a.cfg.Local.HTTPPort))
+	// 获取客户端持有自己的连接池，必须随本次检查回收：托盘是长驻进程，
+	// 检查每天一次且可被反复手动触发（见 selfupdate.Client.Close）。
+	client := selfupdate.NewClient(a.cfg.Local.HTTPPort)
+	defer client.Close()
+
+	rel, err := a.checkLatest(ctx, client)
 	if err != nil {
 		log.Error("[SYSTRAY] check update", "err", err)
 		if interactive {

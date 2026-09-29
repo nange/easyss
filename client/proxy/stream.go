@@ -34,6 +34,12 @@ var ErrServerRejectedHandshake = errors.New("handshake rejected by server")
 
 var errLocalConnClosed = errors.New("local connection closed")
 
+// StreamHandler 建立并中继经隧道的流（TCP/UDP/ICMP）。
+//
+// 它没有 Close：这里不持有任何需要释放的资源，transport 是**借用**的——由
+// client.Client 创建并持有，其寿命覆盖所有使用它的入口，最终由
+// client.Client.Close 拆除（见 runner.Core.cleanup 的逆序关闭规则）。
+// 单条流/交换的资源由各自的所有者释放（session 关闭、UDPExchange.Close）。
 type StreamHandler struct {
 	transport         transport.Transport
 	masterKey         []byte

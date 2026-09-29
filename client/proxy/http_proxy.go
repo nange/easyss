@@ -47,8 +47,19 @@ type HTTPProxyServer struct {
 	method protocol.Method
 	dial   func(context.Context, string, string) (net.Conn, error)
 	rp     *httputil.ReverseProxy
+	// rpTransport 是反向代理（普通 HTTP 转发）自己的连接池：它拨的是本地 SOCKS5
+	// 入口，池中的空闲连接会连带占住 SOCKS5 侧的 handler goroutine 与一条隧道流，
+	// 因此 Close 必须回收它，而不能只关监听器（见 Close）。
+	rpTransport *http.Transport
+	// server 在 Start 中登记，是 Close 唯一的释放入口：http.Server.Shutdown 会
+	// 关闭 Serve 注册过的监听器，而 Serve 自身也 defer 关闭它——因此不需要再
+	// 单独持有 listener。Close 早于 Start 时它为 nil。
 	server *http.Server
-	mu     sync.Mutex
+	// closing 由 Close 在 mu 下置位。Start 会在登记 server 之前检查它：runner 在
+	// goroutine 中启动服务器，核心可能随即被停止，此时迟到的 Start 必须自己关掉
+	// 监听器，否则端口会被一个无人引用的服务器永久占用（重启会因端口被占而失败）。
+	closing bool
+	mu      sync.Mutex
 
 	// TUN 辅助程序支持（darwin/linux）：配置通过 GET /tun 提供。
 	tunCfg *TunConfig
@@ -73,6 +84,13 @@ type TunConfig struct {
 
 // HTTPProxyOptions 用于配置 NewHTTPProxyServer。它取代了一个已增长到九个参数的
 // 位置参数列表。
+//
+// 字段的所有权约定（Close 只关闭本类型自己创建的东西）：
+//   - Handler/Router/Dial 一律**借用**：调用方持有它们，并与 SOCKS5 入口共用
+//     （见 Socks5Options），Close 绝不关闭它们；
+//   - SocksAddr 指向的本地 SOCKS5 入口由调用方持有，本类型只拨它，不关它
+//     ——因此关闭顺序必须是"先本入口、后 SOCKS5"（见 runner.Core.cleanup）；
+//   - 服务器自己创建并负责关闭的是监听器与反向代理的连接池（见 Close）。
 type HTTPProxyOptions struct {
 	ListenAddr string
 	SocksAddr  string
@@ -80,11 +98,13 @@ type HTTPProxyOptions struct {
 	Password   string
 	// Timeout 是反向代理出站请求与空闲处理所用的基础超时。
 	Timeout time.Duration
+	// Handler 是借用的隧道流处理器（由 runner 创建并与 SOCKS5 入口共用）。
 	Handler *StreamHandler
-	Router  *router.Router
-	Method  protocol.Method
+	// Router 是借用的路由引擎（同样与 SOCKS5 入口共用）。
+	Router *router.Router
+	Method protocol.Method
 	// Dial 在路由把主机标记为直连时为转发路径打开直连连接（绕过本地 SOCKS5 代理）；
-	// 为 nil 时使用普通的 net.Dialer。
+	// 为 nil 时使用普通的 net.Dialer。它同样是借用的函数值。
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
@@ -131,6 +151,16 @@ func NewHTTPProxyServer(opts HTTPProxyOptions) (*HTTPProxyServer, error) {
 }
 
 func (s *HTTPProxyServer) newReverseProxy() *httputil.ReverseProxy {
+	// 连接池在这里创建、由 HTTPProxyServer 持有：Close 需要回收它的空闲连接
+	// （见 HTTPProxyServer.Close）。
+	tr := &http.Transport{
+		Proxy: func(*http.Request) (*url.URL, error) {
+			return s.socksURL, nil
+		},
+		TLSHandshakeTimeout: s.timeout / 3,
+	}
+	s.rpTransport = tr
+
 	return &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			if pr.Out.URL.Scheme == "" {
@@ -144,12 +174,7 @@ func (s *HTTPProxyServer) newReverseProxy() *httputil.ReverseProxy {
 			pr.Out.Header.Del("Proxy-Authorization")
 			pr.Out.Header.Del("Proxy-Connection")
 		},
-		Transport: &http.Transport{
-			Proxy: func(*http.Request) (*url.URL, error) {
-				return s.socksURL, nil
-			},
-			TLSHandshakeTimeout: s.timeout / 3,
-		},
+		Transport:  tr,
 		BufferPool: reverseProxyBufferPool{},
 		ErrorHandler: func(rw http.ResponseWriter, r *http.Request, err error) {
 			log.Warn("[HTTP-PROXY] reverse proxy request", "err", err)
@@ -158,18 +183,27 @@ func (s *HTTPProxyServer) newReverseProxy() *httputil.ReverseProxy {
 	}
 }
 
+// Start 绑定监听地址并开始服务。Close 先于 Start 发生时，迟到的 Start 会关掉
+// 自己刚绑定的监听器并返回 http.ErrServerClosed，而不是让一个无人引用的服务器
+// 永久占用端口（调用方已把该错误视为正常停止，见 runner 的错误过滤）。
 func (s *HTTPProxyServer) Start() error {
 	listener, err := net.Listen("tcp", s.listenAddr)
 	if err != nil {
 		return fmt.Errorf("http proxy listen: %w", err)
 	}
 
-	log.Info("[HTTP-PROXY] listening", "addr", s.listenAddr, "socks5", s.socksURL.Redacted())
-
 	httpServer := &http.Server{Handler: s}
 	s.mu.Lock()
+	if s.closing {
+		s.mu.Unlock()
+		_ = listener.Close()
+		return http.ErrServerClosed
+	}
 	s.server = httpServer
 	s.mu.Unlock()
+
+	log.Info("[HTTP-PROXY] listening", "addr", s.listenAddr, "socks5", s.socksURL.Redacted())
+
 	return httpServer.Serve(listener)
 }
 
@@ -482,13 +516,31 @@ func parseBasicAuth(auth string) (username, password string, ok bool) {
 	return username, password, ok
 }
 
+// Close 关闭本服务器持有的全部资源：HTTP 监听器与在飞请求，以及反向代理自己的
+// 连接池（它拨本地 SOCKS5 入口，空闲连接会连带占住一条隧道流）。
+//
+// 它刻意不关闭借用的依赖：handler（StreamHandler）、policy/router、dial 与
+// method 都由 runner 持有并与 SOCKS5 入口共用（见 HTTPProxyOptions 的字段注释）
+// —— 关闭它们需要由持有者（runner.Core）按逆序统一编排。
+//
+// 幂等：重复调用不会再次 Shutdown，也不会让迟到的 Start 重新上线（见 Start）。
 func (s *HTTPProxyServer) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.server != nil {
+	alreadyClosed := s.closing
+	s.closing = true
+	srv := s.server
+	s.mu.Unlock()
+
+	var shutdownErr error
+	if srv != nil && !alreadyClosed {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		return s.server.Shutdown(ctx)
+		shutdownErr = srv.Shutdown(ctx)
 	}
-	return nil
+	// 连接池无条件回收：即便优雅关闭超时（在飞请求没有在预算内结束），
+	// 空闲连接也必须释放——它们各自占着一条隧道流。
+	if s.rpTransport != nil {
+		s.rpTransport.CloseIdleConnections()
+	}
+	return shutdownErr
 }

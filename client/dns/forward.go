@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/miekg/dns"
@@ -18,10 +18,18 @@ type ForwardServer struct {
 	listenAddr  string
 	client      *dns.Client
 	dnsServers  []string
-	dnsServer   *dns.Server
 	disableIPV6 bool
-	mu          sync.Mutex
-	running     atomic.Bool
+
+	mu sync.Mutex
+	// pc 是本服务器自己绑定的 UDP socket：Shutdown 直接关闭它，因此即使
+	// Shutdown 落在 dns.Server 尚未置位 started 的窗口里，端口也一定会被释放
+	// （miekg/dns 的 ShutdownContext 对未启动的服务器只返回错误，什么都不做）。
+	pc net.PacketConn
+	// dnsServer 与 pc 一同登记，供 Shutdown 优雅关闭（等待在飞查询）。
+	dnsServer *dns.Server
+	// closing 由 Shutdown 在 mu 下置位；Start 在登记 socket 之前检查它，
+	// 使"先 Shutdown 再 Start"不会把服务器重新拉起来。
+	closing bool
 }
 
 func NewForwardServer(listenAddr string, disableIPV6 bool) *ForwardServer {
@@ -45,35 +53,77 @@ func NewForwardServer(listenAddr string, disableIPV6 bool) *ForwardServer {
 	}
 }
 
+// Start 绑定监听 socket 并开始服务。socket 在向内部状态登记之前就已绑定，
+// 因此无论 Shutdown 落在哪个时刻，端口都会被释放（见 pc 字段）。
 func (s *ForwardServer) Start() error {
-	s.mu.Lock()
-	s.dnsServer = &dns.Server{
-		Addr:    s.listenAddr,
-		Net:     "udp",
-		Handler: dns.HandlerFunc(s.handleDNS),
+	pc, err := net.ListenPacket("udp", s.listenAddr)
+	if err != nil {
+		return err
 	}
-	s.running.Store(true)
+
+	srv := &dns.Server{
+		PacketConn: pc,
+		Handler:    dns.HandlerFunc(s.handleDNS),
+	}
+
+	s.mu.Lock()
+	if s.closing {
+		// Shutdown 已发生：绝不把这个迟到的 socket 留在服务状态里，
+		// 否则它就再也没人关了。
+		s.mu.Unlock()
+		_ = pc.Close()
+		return net.ErrClosed
+	}
+	s.pc = pc
+	s.dnsServer = srv
 	s.mu.Unlock()
 
 	log.Info("[DNS-FORWARD] starting forward dns server", "addr", s.listenAddr)
 
-	return s.dnsServer.ListenAndServe()
+	return srv.ActivateAndServe()
 }
 
+// Shutdown 关闭监听 socket 并等待在飞查询结束。它是幂等的，且不依赖 dns.Server
+// 是否已进入 started 状态：自己持有的 PacketConn 一定会被关闭，端口也就一定会
+// 释放（dns.Server.ShutdownContext 在未启动时只返回 "server not started"，不会
+// 关闭任何东西）。
+//
+// 返回时 s.pc 已被清空：本类型"最多持有一个监听 socket，Shutdown 之后不再持有"
+// 这一状态是自明的，调用方与测试不必再去探测 socket 或尝试重新绑定端口。
+//
+// 它不关闭借用的依赖：client/dnsServers 由本类型构造期持有，无需释放。
 func (s *ForwardServer) Shutdown() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	alreadyClosed := s.closing
+	s.closing = true
+	srv, pc := s.dnsServer, s.pc
+	s.mu.Unlock()
 
-	if s.dnsServer == nil {
+	if alreadyClosed {
 		return nil
 	}
 
 	log.Info("[DNS-FORWARD] shutting down dns server")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	err := s.dnsServer.ShutdownContext(ctx)
-	s.running.Store(false)
-	return err
+	if srv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.ShutdownContext(ctx); err != nil {
+			// "server not started"（Shutdown 早于 serve 循环）与超时都在这里：
+			// 前者的端口由下面的 pc.Close 释放，后者说明在飞查询没能在预算内
+			// 结束，socket 同样会被关掉。
+			log.Warn("[DNS-FORWARD] graceful shutdown incomplete", "err", err)
+		}
+	}
+	if pc != nil {
+		_ = pc.Close()
+	}
+
+	// closing 已在上面置位：此后 Start 会在登记之前拒绝，因此这里不可能把
+	// 一个刚登记的 socket 漏掉。
+	s.mu.Lock()
+	s.pc = nil
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *ForwardServer) handleDNS(w dns.ResponseWriter, r *dns.Msg) {

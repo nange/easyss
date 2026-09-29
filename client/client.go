@@ -33,6 +33,8 @@ type Client struct {
 	bound         atomic.Value // boundIface：直连拨号器当前绑定的接口
 	closeIdleDone chan struct{}
 	closeOnce     sync.Once
+	// closed 记录传输层已被拆除：Close 幂等，第二次调用不再重复拆一次。
+	closed atomic.Bool
 
 	// serverDomain 是服务端域名（服务端地址是字面 IP 时为空）；serverIPs 是
 	// runner 预解析成功后注入的地址。dialWithConfig 优先拨这些字面 IP 而不是
@@ -722,13 +724,21 @@ func (c *Client) Config() *config.ClientConfig {
 	return c.cfg
 }
 
+// Close 拆除客户端：停止空闲回收循环并关闭传输层。传输层无法重新打开，
+// 因此 Client 不能被重启——但 Close 本身是幂等的，重复调用返回 nil。
+//
+// 关闭顺序提醒：传输层被本地代理入口（StreamHandler）借用，调用方必须在关闭
+// 所有使用它的服务器之后再调用本方法（见 runner.Core.cleanup）。
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// 按契约 Close 不具备幂等性（transport 无法重新打开），
-	// 但第二次调用不得因重复关闭 channel 而 panic。
 	c.closeOnce.Do(func() { close(c.closeIdleDone) })
+	if c.closed.Swap(true) {
+		// 第二次调用不得再拆一次传输层（拆一次是安全的，但"重复拆除"不是
+		// 本类型对外的契约，调用方也不该依赖它）。
+		return nil
+	}
 	return c.transport.Close()
 }
 

@@ -22,7 +22,10 @@ const (
 // （参见 Restart）。localHTTPPort 是获取时优先尝试的本地 HTTP 代理端口；
 // 失败时回退到直连。
 func Update(ctx context.Context, localHTTPPort int, rel *Release) error {
-	return updateFor(ctx, NewClient(localHTTPPort), ProductClient, rel)
+	c := NewClient(localHTTPPort)
+	// 下载用的连接池随本次更新结束一起回收，不留给长驻进程（见 Client.Close）。
+	defer c.Close()
+	return updateFor(ctx, c, ProductClient, rel)
 }
 
 // updateFor 使用给定的获取客户端，下载、解压并安装 product 的发布资产。
