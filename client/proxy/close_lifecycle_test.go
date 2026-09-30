@@ -132,10 +132,14 @@ func TestSocks5CloseIsIdempotent(t *testing.T) {
 	go srv.Start() //nolint:errcheck
 
 	// 先等 accept 循环真正开始应答：这样第一次 Close 通常落在同步 Shutdown 路径上
-	// （而不是碰运气命中 3s 探测预算）；万一探测仍然没答上，也只是转走补关闭，
-	// 由下面的"返回首次结果"断言覆盖，不会变成失败。
+	// （而不是碰运气命中 3s 探测预算）。
 	if !srv.waitForAcceptWithin(closeLifecycleBudget) {
-		t.Fatal("accept loop did not become ready in time")
+		// 探测没答上不是回归，不能变成失败（2026-09-30 的 windows-11-arm job
+		// 正是在这里把一次环境抖动当成了失败）：超载 runner 上 accept 循环可能
+		// 迟迟不被调度，预算耗尽只说明这一次覆盖的是补关闭路径。幂等性断言对
+		// 两条路径同样成立——第一次 Close 此时返回 errAcceptNotReady，第二次必须
+		// 原样返回它。该路径的确定性覆盖见 TestSocks5CloseIdempotentWhenAcceptNeverReady。
+		t.Logf("accept loop not ready within %s; asserting the deferred-shutdown path", closeLifecycleBudget)
 	}
 
 	firstErr := srv.Close()
@@ -154,6 +158,56 @@ func TestSocks5CloseIsIdempotent(t *testing.T) {
 	if elapsed > closeIdempotentBudget {
 		t.Fatalf("second Close took %s, want an immediate no-op (<= %s)", elapsed, closeIdempotentBudget)
 	}
+}
+
+// TestSocks5CloseIdempotentWhenAcceptNeverReady 在 accept 循环确定不会就绪的世界里
+// 固定同一份幂等契约：第一次 Close 返回 errAcceptNotReady 并把补关闭交给后台，
+// 第二次 Close 必须立即原样返回同一个结果——既不重新探测（那要再等一次
+// acceptProbeTimeout），也不派发第二个补关闭 goroutine。
+//
+// 这个世界不是假想时序：MarkStarted 与 accept 循环上线之间存在真实窗口，超载
+// runner 上的调度饥饿可以把 TestSocks5CloseIsIdempotent 的 10s 探测预算整个耗尽
+// （2026-09-30 的 windows-11-arm job）。而任何机器上 accept 循环一旦真正上线，
+// 就再也构造不出这条路径，因此这里不派发 Start，让它确定可达。
+func TestSocks5CloseIdempotentWhenAcceptNeverReady(t *testing.T) {
+	srv, err := NewSocks5Server(Socks5Options{
+		ListenAddr: freeLoopbackAddr(t),
+		Handler:    newTestStreamHandler(&mockTransport{}),
+		Method:     protocol.MethodAES256GCM,
+		Timeouts: config.Timeouts{
+			Base:       30 * time.Second,
+			Dial:       10 * time.Second,
+			StreamIdle: 30 * time.Second,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewSocks5Server: %v", err)
+	}
+	// MarkStarted 之后 Start 迟迟未上线：同步探测必然拿不到应答（监听地址从未
+	// 绑定，拨号立即被拒绝），第一次 Close 只能走补关闭路径。
+	srv.MarkStarted()
+
+	start := time.Now()
+	firstErr := srv.Close()
+	if !errors.Is(firstErr, errAcceptNotReady) {
+		t.Fatalf("first Close: got %v, want errAcceptNotReady", firstErr)
+	}
+	// 第一次 Close 只允许消耗探测预算量级的时间（这里每次拨号都立即失败，
+	// 等待全部来自 probe 间隔本身）。
+	if elapsed := time.Since(start); elapsed > closeLifecycleBudget {
+		t.Fatalf("first Close took %s, want <= %s", elapsed, closeLifecycleBudget)
+	}
+
+	secondStart := time.Now()
+	secondErr := srv.Close()
+	if secondErr != firstErr {
+		t.Fatalf("second Close = %v, want the cached first result %v", secondErr, firstErr)
+	}
+	if elapsed := time.Since(secondStart); elapsed > closeIdempotentBudget {
+		t.Fatalf("second Close took %s, want an immediate no-op (<= %s)", elapsed, closeIdempotentBudget)
+	}
+	// 后台补关闭会继续探测这个永远无人监听的地址并在宽限期内放弃：没有监听器
+	// 需要释放，无需等待它退出。
 }
 
 // socks5Stub 是最小的 SOCKS5 服务端桩：完成无认证握手与 CONNECT 应答，回一个
