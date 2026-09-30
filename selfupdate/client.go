@@ -13,6 +13,18 @@ import (
 
 const userAgent = "easyss-selfupdate"
 
+// httpStatusError 表示获取请求返回了非 200 状态码。调用方可据此区分特定状态
+// （例如 404 表示指定 tag 的 release 不存在）。
+type httpStatusError struct {
+	StatusCode int
+	URL        string
+	Body       string
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("unexpected http status %d from %s: %s", e.StatusCode, e.URL, e.Body)
+}
+
 // Client 优先通过本地 easyss HTTP 代理获取发布数据，代理失败时回退到直连。
 type Client struct {
 	proxy  *http.Client
@@ -101,7 +113,11 @@ func doRequest(hc *http.Client, ctx context.Context, rawURL string, extraHeaders
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		_ = resp.Body.Close()
-		return nil, fmt.Errorf("unexpected http status %d from %s: %s", resp.StatusCode, rawURL, string(body))
+		return nil, &httpStatusError{
+			StatusCode: resp.StatusCode,
+			URL:        rawURL,
+			Body:       string(body),
+		}
 	}
 	return resp, nil
 }

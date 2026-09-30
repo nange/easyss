@@ -86,7 +86,8 @@ func main() {
 子命令:
   selfupdate    从 GitHub 检查最新 release，并原地替换当前二进制（不自动重启）。
                 更新完成后请手动重启进程使新版本生效。支持 --check（仅检查）、
-                --proxy-port（走本地代理下载）。
+                --version <tag>（安装指定版本，可重装当前版本或回退，tag 需与
+                release tag 完全一致）、--proxy-port（走本地代理下载）。
   tun-helper    内部子命令：打开 TUN 设备、配置路由/DNS 并把 fd 传回主进程，
                 由主程序在提权场景下自动拉起，请勿手动使用。支持
                 --tun-http-addr/--tun-fd-socket/--log-file/--log-level。

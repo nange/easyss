@@ -3,7 +3,10 @@ package selfupdate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -34,6 +37,13 @@ var gitDescribeSuffix = regexp.MustCompile(`-\d+-g[0-9a-f]+$`)
 // 以便测试将其重定向到本地服务器。
 var repoLatestURL = "https://api.github.com/repos/nange/easyss/releases/latest"
 
+// repoReleaseTagURL 是获取指定 tag 的 release 的 GitHub API 端点模板。
+// 它同样是变量以便测试重定向。
+var repoReleaseTagURL = "https://api.github.com/repos/nange/easyss/releases/tags/%s"
+
+// errReleaseNotFound 表示 GitHub 上没有与所请求 tag 匹配的 release。
+var errReleaseNotFound = errors.New("release not found")
+
 // CheckLatest 从 GitHub 获取最新已发布的 release。/releases/latest 端点
 // 只返回正式 release：预发布（pre-release）和草稿（draft）由 GitHub 自行排除。
 func CheckLatest(ctx context.Context, c *Client) (*Release, error) {
@@ -51,6 +61,34 @@ func CheckLatest(ctx context.Context, c *Client) (*Release, error) {
 	}
 	if rel.TagName == "" {
 		return nil, fmt.Errorf("latest release response has no tag")
+	}
+	return &rel, nil
+}
+
+// checkTag 获取 tag 对应的 release。与 /releases/latest 不同，该端点也会返回
+// 预发布版本（pre-release）；草稿（draft）对匿名请求不可见。tag 必须与 release
+// 的 tag 完全一致（例如 "v3.0.0"、"nightly-1a2b3c4"），不做任何前缀补全：
+// 未找到时返回包装了 errReleaseNotFound 的错误，让调用方给出明确提示。
+func checkTag(ctx context.Context, c *Client, tag string) (*Release, error) {
+	rawURL := fmt.Sprintf(repoReleaseTagURL, url.PathEscape(tag))
+	resp, err := c.Get(ctx, rawURL, map[string]string{
+		"Accept": "application/vnd.github+json",
+	})
+	if err != nil {
+		var statusErr *httpStatusError
+		if errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("%w: tag %s", errReleaseNotFound, tag)
+		}
+		return nil, fmt.Errorf("query release %s: %w", tag, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var rel Release
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return nil, fmt.Errorf("decode release %s: %w", tag, err)
+	}
+	if rel.TagName == "" {
+		return nil, fmt.Errorf("release %s response has no tag", tag)
 	}
 	return &rel, nil
 }

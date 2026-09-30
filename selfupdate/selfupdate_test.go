@@ -3,6 +3,7 @@ package selfupdate
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"net/http"
@@ -158,6 +159,178 @@ func TestRunCLICommandHelp(t *testing.T) {
 func TestRunCLICommandBadFlag(t *testing.T) {
 	// 未知标志以 2 退出，与标准 flag 包的错误约定一致。
 	assert.Equal(t, 2, RunCLICommand([]string{"--bogus"}, ProductHeadless))
+}
+
+func TestRunCLICommandRejectsPositionalArg(t *testing.T) {
+	// 位置参数不得被静默忽略：否则 "selfupdate v3.0.0" 会变成一次意料之外的
+	// 网络请求（升级到最新 release）。指定版本必须走 --version。
+	assert.Equal(t, 2, RunCLICommand([]string{"v3.0.0"}, ProductHeadless))
+	assert.Equal(t, 2, RunCLICommand([]string{"--check", "v3.0.0"}, ProductHeadless))
+}
+
+func TestCheckTag(t *testing.T) {
+	releaseBody := makeReleaseBody(t, "v1.2.3", "easyss-linux-amd64.zip")
+	preBody := makeReleaseBody(t, "v3.0.0-rc1")
+
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		switch r.URL.Path {
+		case "/releases/tags/v1.2.3":
+			_, _ = w.Write([]byte(releaseBody))
+		case "/releases/tags/v3.0.0-rc1":
+			_, _ = w.Write([]byte(preBody))
+		case "/releases/tags/boom":
+			http.Error(w, "boom", http.StatusInternalServerError)
+		default:
+			http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	orig := repoReleaseTagURL
+	repoReleaseTagURL = srv.URL + "/releases/tags/%s"
+	defer func() { repoReleaseTagURL = orig }()
+
+	c := &Client{direct: srv.Client()}
+
+	rel, err := checkTag(context.Background(), c, "v1.2.3")
+	require.NoError(t, err)
+	assert.Equal(t, "v1.2.3", rel.TagName)
+	assert.Equal(t, "/releases/tags/v1.2.3", gotPath)
+	require.Len(t, rel.Assets, 1)
+	assert.Equal(t, "easyss-linux-amd64.zip", rel.Assets[0].Name)
+
+	// 该端点也会返回预发布版本，这正是调试时需要的（/releases/latest 不会）。
+	rel, err = checkTag(context.Background(), c, "v3.0.0-rc1")
+	require.NoError(t, err)
+	assert.Equal(t, "v3.0.0-rc1", rel.TagName)
+
+	// tag 不存在：必须可被调用方识别，以便给出「tag 需完全一致」的提示。
+	_, err = checkTag(context.Background(), c, "v9.9.9")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errReleaseNotFound)
+	assert.Contains(t, err.Error(), "v9.9.9")
+
+	// 其它状态的错误不得被误判为「版本不存在」。
+	_, err = checkTag(context.Background(), c, "boom")
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, errReleaseNotFound)
+}
+
+func TestResolveReleaseExplicitVersion(t *testing.T) {
+	latestBody := makeReleaseBody(t, "v1.0.0", "easyss-linux-amd64.zip")
+	tagBody := makeReleaseBody(t, "v1.0.0", "easyss-linux-amd64.zip")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/latest" {
+			_, _ = w.Write([]byte(latestBody))
+			return
+		}
+		_, _ = w.Write([]byte(tagBody))
+	}))
+	defer srv.Close()
+
+	origLatest, origTag := repoLatestURL, repoReleaseTagURL
+	repoLatestURL = srv.URL + "/latest"
+	repoReleaseTagURL = srv.URL + "/releases/tags/%s"
+	defer func() { repoLatestURL, repoReleaseTagURL = origLatest, origTag }()
+
+	c := &Client{direct: srv.Client()}
+
+	// 显式指定的版本比本地更旧：必须照样返回它，而不是 errUpToDate，
+	// 因为重装当前版本与回退到旧版本正是该参数的用途。
+	rel, err := resolveRelease(context.Background(), c, "v9.9.9", "v1.0.0")
+	require.NoError(t, err)
+	assert.Equal(t, "v1.0.0", rel.TagName)
+
+	// 未指定版本时保持原语义：本地已不落后于最新 release 即 errUpToDate。
+	_, err = resolveRelease(context.Background(), c, "v9.9.9", "")
+	assert.ErrorIs(t, err, errUpToDate)
+}
+
+func TestRunCLICommandVersionNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	orig := repoReleaseTagURL
+	repoReleaseTagURL = srv.URL + "/releases/tags/%s"
+	defer func() { repoReleaseTagURL = orig }()
+
+	// 不存在的 tag：检查与安装路径都以 1 退出，且不会下载任何内容。
+	assert.Equal(t, 1, RunCLICommand([]string{"--check", "--version", "v9.9.9"}, ProductHeadless))
+	assert.Equal(t, 1, RunCLICommand([]string{"--version", "v9.9.9"}, ProductHeadless))
+}
+
+func TestRunCLICommandCheckVersionAssets(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{
+			name: "有当前平台的资产",
+			body: makeReleaseBody(t, "v1.0.0", ProductHeadless.assetName(runtime.GOOS, runtime.GOARCH)),
+			want: 0,
+		},
+		{
+			name: "没有当前平台的资产",
+			body: makeReleaseBody(t, "v1.0.0", "easyss-headless-plan9-mips.zip"),
+			want: 1,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			body := c.body
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+
+			orig := repoReleaseTagURL
+			repoReleaseTagURL = srv.URL + "/releases/tags/%s"
+			defer func() { repoReleaseTagURL = orig }()
+
+			// --check 只查询，不下载也不替换运行中的测试二进制。
+			assert.Equal(t, c.want, RunCLICommand([]string{"--check", "--version", "v1.0.0"}, ProductHeadless))
+		})
+	}
+}
+
+func TestRunCLICommandVersionNoAsset(t *testing.T) {
+	body := makeReleaseBody(t, "v1.0.0", "easyss-headless-plan9-mips.zip")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	orig := repoReleaseTagURL
+	repoReleaseTagURL = srv.URL + "/releases/tags/%s"
+	defer func() { repoReleaseTagURL = orig }()
+
+	// 安装路径在「挑选资产」阶段就失败，早于下载与 installFor，
+	// 因此该测试不会覆盖正在运行的测试二进制。
+	assert.Equal(t, 1, RunCLICommand([]string{"--version", "v1.0.0"}, ProductHeadless))
+}
+
+// makeReleaseBody 生成一个最小的 release API 响应体，资产只带名称与下载地址。
+func makeReleaseBody(t *testing.T, tag string, assetNames ...string) string {
+	t.Helper()
+
+	rel := Release{TagName: tag, Name: tag}
+	for _, name := range assetNames {
+		rel.Assets = append(rel.Assets, asset{
+			Name:               name,
+			BrowserDownloadURL: "http://127.0.0.1:9/" + name,
+			Size:               1,
+		})
+	}
+	b, err := json.Marshal(rel)
+	require.NoError(t, err)
+	return string(b)
 }
 
 func TestUnzipRejectsTraversal(t *testing.T) {
