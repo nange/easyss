@@ -281,8 +281,9 @@ func TestOpenAndBootstrap_SettlesBeforeDroppingIdleConnections(t *testing.T) {
 // TestOpenAndBootstrap_ResponseWindowIsBounded 验证等待窗口真的被应用于
 // AwaitResponse：一个在窗口到点前不会自己返回的流，最终仍由引导窗口打断。
 func TestOpenAndBootstrap_ResponseWindowIsBounded(t *testing.T) {
+	const window = 20 * time.Millisecond
 	old := bootstrapResponseTimeout
-	bootstrapResponseTimeout = 20 * time.Millisecond
+	bootstrapResponseTimeout = window
 	t.Cleanup(func() { bootstrapResponseTimeout = old })
 
 	// 第一次 AwaitResponse 是引导等待窗口；后续调用是判死后的 settle 等待，
@@ -290,9 +291,20 @@ func TestOpenAndBootstrap_ResponseWindowIsBounded(t *testing.T) {
 	windowEnded := make(chan time.Duration, 1)
 	var recordOnce sync.Once
 	await := func(ctx context.Context) error {
-		start := time.Now()
 		<-ctx.Done()
-		recordOnce.Do(func() { windowEnded <- time.Since(start) })
+
+		// 窗口起点必须由 deadline 反推，而不是在 AwaitResponse 内部取 now：
+		// 窗口由 awaitBootstrapResponse 里的 context.WithTimeout 创建，两者之间
+		// 还隔着一次接口调用与并发原语开销，定时器却只在 deadline 之后触发，
+		// 因此"从调用内部起算"量出的值恒小于窗口，只靠定时器过冲掩盖。Windows
+		// 上该开销会被调度放大到毫秒级（实测 18.3ms < 20ms），断言便会偶发失败。
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			// 没有 deadline 就没法衡量窗口：直接失败，而不是让 <-ctx.Done()
+			// 永远阻塞（那只会把失败变成测试超时挂起）。
+			return errors.New("AwaitResponse was called without the bootstrap window")
+		}
+		recordOnce.Do(func() { windowEnded <- time.Since(deadline.Add(-window)) })
 		return ctx.Err()
 	}
 	streams := make([]transport.Stream, 0, bootstrapMaxAttempts)
@@ -308,8 +320,8 @@ func TestOpenAndBootstrap_ResponseWindowIsBounded(t *testing.T) {
 	}
 	select {
 	case elapsed := <-windowEnded:
-		if elapsed < bootstrapResponseTimeout {
-			t.Errorf("AwaitResponse returned after %v, want >= the %v window", elapsed, bootstrapResponseTimeout)
+		if elapsed < window {
+			t.Errorf("AwaitResponse returned after %v, want >= the %v window", elapsed, window)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("AwaitResponse was never interrupted by the bootstrap window")
