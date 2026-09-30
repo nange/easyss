@@ -483,6 +483,37 @@ func (a *App) Stop() {
 	})
 }
 
+// setupSysProxy 按配置把系统代理指向本地 HTTP 代理（见 setSysProxy）。
+// 返回 true 表示系统代理已被改动，调用方在退出前必须用 teardownSysProxy 撤销它。
+//
+// 配置禁用（disable_sys_proxy）或本地 HTTP 端口无效时它什么都不做；设置失败
+// 也只记一条警告：用户仍可手动配置代理，启动不应因此失败——这条降级逻辑
+// 对 Linux 上的 root/systemd 场景尤其重要，那里 gsettings 与用户会话总线
+// 常常不可达（托盘、--disable-tray 与 headless 三条启动路径共用本函数，
+// 避免对 disable_sys_proxy 的处理分叉）。
+func (a *App) setupSysProxy() bool {
+	if a.cfg.Local.DisableSysProxy || a.cfg.Local.HTTPPort <= 0 {
+		return false
+	}
+	if err := sysProxyApply(a.cfg.Local.HTTPPort); err != nil {
+		log.Warn("[EASYSS-V3] set system proxy failed, you may need to configure it manually", "err", err)
+		return false
+	}
+	return true
+}
+
+// teardownSysProxy 撤销 setupSysProxy 的改动；applied 为 false 时是空操作。
+// 是否应用由调用方传入而不是用 defer 表达，因为无托盘的启动路径最后用
+// os.Exit 退出，defer 不会执行。
+func teardownSysProxy(applied bool) {
+	if !applied {
+		return
+	}
+	if err := sysProxyRevert(); err != nil {
+		log.Warn("[EASYSS-V3] unset system proxy failed, you may need to restore it manually", "err", err)
+	}
+}
+
 // startStatsLoop（重新）启动后台统计日志器，若之前的循环仍在运行则将其停止。
 // 停止 channel 被 goroutine 捕获，因此后续重启不会让旧循环在新 channel 上 select。
 func (a *App) startStatsLoop() {

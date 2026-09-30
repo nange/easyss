@@ -49,20 +49,11 @@ func runApp(disableTray, daemon bool, app *App) {
 		_ = ta.tray.Run()
 		ta.trayExit()
 	} else {
-		proxyWasSet := false
-		if !app.cfg.Local.DisableSysProxy && app.cfg.Local.HTTPPort > 0 {
-			if err := setSysProxy(app.cfg.Local.HTTPPort); err != nil {
-				log.Warn("[EASYSS-V3] set system proxy failed, you may need to configure it manually", "err", err)
-			} else {
-				proxyWasSet = true
-			}
-		}
+		proxyWasSet := app.setupSysProxy()
 
 		if err := app.Start(); err != nil {
 			log.Error("[EASYSS-V3] start", "err", err)
-			if proxyWasSet {
-				_ = unsetSysProxy()
-			}
+			teardownSysProxy(proxyWasSet)
 			os.Exit(1)
 		}
 		if app.startupWarn != nil {
@@ -70,9 +61,7 @@ func runApp(disableTray, daemon bool, app *App) {
 		}
 		sigWait()
 
-		if proxyWasSet {
-			_ = unsetSysProxy()
-		}
+		teardownSysProxy(proxyWasSet)
 		app.Stop()
 		os.Exit(0)
 	}
