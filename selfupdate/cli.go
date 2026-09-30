@@ -18,12 +18,13 @@ import (
 // runCheck 在无需更新时返回该错误。
 var errUpToDate = errors.New("already up to date")
 
-// checkCLI 检查给定产品的 release：wantTag 为空时是最新已发布 release，
-// 存在更新版本时返回它；wantTag 非空时返回该 tag 对应的 release（不与本地版本
-// 比较，因此可以重装当前版本或回退到旧版本）。它从不下载任何内容。
+// checkCLI 检查 release：wantTag 为空时是最新已发布 release，存在更新版本时
+// 返回它；wantTag 非空时返回该 tag 对应的 release（不与本地版本比较，因此可以
+// 重装当前版本或回退到旧版本）。它从不下载任何内容，也不关心产品：产品只决定
+// 资产名，而资产是否存在由调用方用 pickAssetFor 判断。
 // proxyPort > 0 时，请求经由本地 easyss HTTP 代理（127.0.0.1:<proxyPort>）转发；
 // 否则使用直连。
-func checkCLI(ctx context.Context, proxyPort int, product Product, wantTag string) (*Release, error) {
+func checkCLI(ctx context.Context, proxyPort int, wantTag string) (*Release, error) {
 	c := NewClient(proxyPort)
 	defer c.Close()
 	return resolveRelease(ctx, c, version.Tag(), wantTag)
@@ -91,7 +92,7 @@ func RunCLICommand(args []string, product Product) int {
 	bin := filepath.Base(os.Args[0])
 
 	if checkOnly {
-		rel, err := checkCLI(ctx, proxyPort, product, wantTag)
+		rel, err := checkCLI(ctx, proxyPort, wantTag)
 		if err != nil {
 			if errors.Is(err, errUpToDate) {
 				fmt.Println("已是最新版本:", version.Tag())
