@@ -104,6 +104,9 @@ func TestBatchShaperFlushesBeforePlainRecordLimit(t *testing.T) {
 
 	var out bytes.Buffer
 	bs := New(newTestWriter(t, sk, &out), Config{BatchWindowMS: 1000})
+	// 提前登记补偿关闭：PushData/Flush 中途失败时也不能把活着的注入器与定时器
+	// 留给后面的测试。
+	t.Cleanup(func() { _ = bs.Close() })
 	payload := make([]byte, 16*1024)
 	for range 4 {
 		if err := bs.PushData(payload); err != nil {
@@ -111,6 +114,14 @@ func TestBatchShaperFlushesBeforePlainRecordLimit(t *testing.T) {
 		}
 	}
 	if err := bs.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	// 读取 out 之前必须先冻结写入端：整形器不关闭时，cover 注入器会在空闲后注入
+	// 帧并重新武装批处理定时器，把新记录写回同一个 bytes.Buffer。写入端与读取端
+	// 共享一个无锁 buffer 且二者之间没有 happens-before，2026-09-30 macOS 的
+	// -race job 就是这样在后续测试里报出 DATA RACE 的。Close 同时冲刷尾部记录，
+	// 因此记录流与只调用 Flush 时完全一致。
+	if err := bs.Close(); err != nil {
 		t.Fatal(err)
 	}
 

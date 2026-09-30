@@ -8,8 +8,11 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
+	"github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/util"
 )
 
@@ -198,4 +201,27 @@ func TestIsServerDomain(t *testing.T) {
 	if empty.isServerDomain("mysite.net") {
 		t.Error("isServerDomain should be false when serverDomain is empty")
 	}
+}
+
+// newTestSocks5Server 构造关闭/启动生命周期测试共用的最小 SOCKS5 服务器：
+// AES-256-GCM 方法、mock 隧道流处理器与同一套派生超时。ListenAddr 由调用方
+// 给出（通常是 freeLoopbackAddr 的结果）；需要额外字段（Router、
+// DirectDialContext 等）的用例仍直接使用 NewSocks5Server。
+func newTestSocks5Server(t *testing.T, addr string) *Socks5Server {
+	t.Helper()
+
+	srv, err := NewSocks5Server(Socks5Options{
+		ListenAddr: addr,
+		Handler:    newTestStreamHandler(&mockTransport{}),
+		Method:     protocol.MethodAES256GCM,
+		Timeouts: config.Timeouts{
+			Base:       30 * time.Second,
+			Dial:       10 * time.Second,
+			StreamIdle: 30 * time.Second,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewSocks5Server: %v", err)
+	}
+	return srv
 }
