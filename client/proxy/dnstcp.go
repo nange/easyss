@@ -112,8 +112,8 @@ func touchReadDeadline(c net.Conn, timeout time.Duration) func() {
 // SOCKS5 成功应答在**任何读取之前**写出。RFC 1928 的客户端会等到应答才发送数据
 // （curl、浏览器，以及 TUN 模式下承载系统解析器的 tun2socks 都是如此），若把应答
 // 推迟到"确认首报文是 DNS 查询"之后，双方互等，连接只能挂到 streamIdleTimeout
-// （默认 120s）到期降级成普通中继为止——表现为 DNS 查询长时间卡住、网页与视频
-// 加载超时，而且默认日志里看不到任何线索。
+// （8 × timeout，默认 240s）到期降级成普通中继为止——表现为 DNS 查询长时间卡住、
+// 网页与视频加载超时，而且默认日志里看不到任何线索。
 //
 // 应答先行意味着回退路径不能再写应答：已应答的连接遇到 Block/IPv6 门禁只能关闭
 // （见 routeTCPReplied）。

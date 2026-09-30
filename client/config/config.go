@@ -70,8 +70,7 @@ type TransportConfig struct {
 	ConnCountMax      int     `json:"conn_count_max"`
 	StreamThreshold   int     `json:"stream_threshold"`
 	PrioritySlotRatio float64 `json:"priority_slot_ratio"`
-	ConnLifetimeSec   int     `json:"conn_lifetime_sec"` // 连接的最大生命周期（秒），0 表示使用默认值
-	ConnMaxBytes      int64   `json:"conn_max_bytes"`    // 连接在任一方向上承载的最大字节数，0 表示使用默认值
+	ConnMaxBytes      int64   `json:"conn_max_bytes"` // 连接在任一方向上承载的最大字节数，0 表示使用默认值
 }
 
 type ShaperConfig struct {
@@ -119,11 +118,18 @@ func (c *ClientConfig) ServerURL() string {
 	return fmt.Sprintf("https://%s:%d", srv.Address, srv.Port)
 }
 
+// TimeoutDuration 返回归一化后的基础超时：非正值取默认值，越界值钳制到
+// [config.MinTimeout, config.MaxTimeout]（见 config.NormalizeTimeout）。
 func (c *ClientConfig) TimeoutDuration() time.Duration {
-	if c.Timeout <= 0 {
-		return time.Duration(config.DefaultTimeout) * time.Second
-	}
-	return time.Duration(c.Timeout) * time.Second
+	return config.TimeoutDuration(c.Timeout)
+}
+
+// ConnLifetimeDuration 返回传输层连接轮换前的最大存活时长，由基础超时派生
+// （config.ConnLifetime = 12 倍 timeout，默认 360s）。该值刻意不可配置：
+// 单一旋钮 timeout 即同时缩放空闲、拨号与轮换节奏，慢链路把 timeout 调大时
+// 连接不会相对更频繁地被轮换。
+func (c *ClientConfig) ConnLifetimeDuration() time.Duration {
+	return config.ConnLifetime(c.TimeoutDuration())
 }
 
 func (c *ClientConfig) UTLSConfig() *utls.Config {
@@ -193,9 +199,10 @@ func LoadConfig(path string) (*ClientConfig, error) {
 }
 
 func applyDefaults(c *ClientConfig) {
-	if c.Timeout <= 0 {
-		c.Timeout = config.DefaultTimeout
-	}
+	// timeout 是全部派生超时（流空闲/UDP 空闲/拨号/DNS 响应/连接轮换）的唯一旋钮：
+	// 非正值取默认值，越界值钳制到 [MinTimeout, MaxTimeout]，使内存中的配置与
+	// 之后派生的值始终一致（见 config.NormalizeTimeout）。
+	c.Timeout = config.NormalizeTimeout(c.Timeout)
 	if c.Transport.Protocol == "" {
 		c.Transport.Protocol = config.DefaultProtocol
 	}
@@ -213,9 +220,6 @@ func applyDefaults(c *ClientConfig) {
 	}
 	if c.Transport.StreamThreshold > config.MaxStreamThreshold {
 		c.Transport.StreamThreshold = config.MaxStreamThreshold
-	}
-	if c.Transport.ConnLifetimeSec <= 0 {
-		c.Transport.ConnLifetimeSec = config.DefaultConnLifetimeSec
 	}
 	if c.Transport.ConnMaxBytes <= 0 {
 		c.Transport.ConnMaxBytes = config.DefaultConnMaxBytes

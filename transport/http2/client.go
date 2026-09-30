@@ -59,7 +59,7 @@ type Config struct {
 	MaxSlotCount      int
 	StreamThreshold   int
 	PrioritySlotRatio float64
-	ConnLifetime      time.Duration // 连接轮换前的最大存活时长（0：使用默认值）
+	ConnLifetime      time.Duration // 连接轮换前的最大存活时长（0：回退 DefaultConnLifetime）
 	ConnMaxBytes      int64         // 轮换前连接在任一方向承载的最大字节数（0：使用默认值）
 	Timeout           time.Duration
 	DialContext       func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -108,7 +108,7 @@ func New(cfg Config) (transport.Transport, error) {
 
 	connLifetime := cfg.ConnLifetime
 	if connLifetime <= 0 {
-		connLifetime = time.Duration(sharedconfig.DefaultConnLifetimeSec) * time.Second
+		connLifetime = sharedconfig.DefaultConnLifetime
 	}
 	connMaxBytes := cfg.ConnMaxBytes
 	if connMaxBytes <= 0 {

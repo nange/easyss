@@ -16,6 +16,13 @@ const (
 	DefaultBatchWindowMS   = 3
 	DefaultCoverBudgetCap  = 16 * 1024 // 16KB
 
+	// MinTimeout/MaxTimeout 界定基础超时（秒）的合法区间：timeout 派生出 TCP/UDP
+	// 空闲、拨号、DNS 响应与连接轮换（见 timeouts.go 的 NormalizeTimeout），因此
+	// 不能随意设置——过小会让空闲流被频繁误杀，过大则让半开连接长时间占用资源。
+	// 越界值取最近的边界。
+	MinTimeout = 15
+	MaxTimeout = 60
+
 	// MinConnCountMax/MaxConnCountMax 界定 conn_count_max 的上下界：至少 2 个
 	// 连接（调度器的双池划分需要为 bulk 池留出一个尾部槽位），至多 64，
 	// 以免配置错误（或恶意超大）的值触发传输层槽位的大规模一次性分配。
@@ -30,13 +37,13 @@ const (
 	// 连接轮换：长期存活的 TCP+TLS 连接常被中间设备限速——尤其是在高峰时段——
 	// 这也是重新连接后感觉又快了的缘故。连接超过任一上限的槽位不再接受新流，
 	// 其空闲连接会被关闭，于是下一条流会拨号建立新连接（对用户无感）。
-	DefaultConnLifetimeSec = 360               // 6min
-	DefaultConnMaxBytes    = 256 * 1024 * 1024 // 256MB，双向（上下行）累计
+	// 轮换生命周期由基础超时派生（见 ConnLifetime），这里只有字节数上限。
+	DefaultConnMaxBytes = 256 * 1024 * 1024 // 256MB，双向（上下行）累计
 
 	// ExpiringStreamDrainIdle 限定：在即将被淘汰（expiring 或 degraded）的槽位上，
 	// 一条流在客户端提前关闭它之前可保持空闲的最长时间（见 relay.BidirectionalWithDrain）。
 	// 否则，迟迟不退出的 keep-alive 与半关闭流会钉住该槽位的活跃计数，
-	// 把轮换/退役推迟到完整的中继空闲超时（4 x DefaultTimeout = 120s）。
+	// 把轮换/退役推迟到完整的中继空闲超时（8 x DefaultTimeout = 240s）。
 	// 完全静默 30s 即意味着该流实际上已经死亡——正常传输不可能暂停这么久，
 	// 且 cover/padding 流量不会被中继计为活跃——因此关闭它不会打断任何东西。
 	// 活跃流（有数据流动）绝不会被 drain。
@@ -128,8 +135,8 @@ const (
 )
 
 // DefaultStreamIdleTimeout 是构造器在未提供显式值（<= 0）时使用的回退 TCP 流空闲
-// 超时。它通过 config.StreamIdleTimeout 从默认基础超时派生（4 x DefaultTimeout
-// = 120s），使 timeouts.go 中的公式保持为唯一事实来源：正常路径从用户配置的
+// 超时。它通过 config.StreamIdleTimeout 从默认基础超时派生（8 x DefaultTimeout
+// = 240s），使 timeouts.go 中的公式保持为唯一事实来源：正常路径从用户配置的
 // 基础超时派生其超时，从不读取此变量。
 var DefaultStreamIdleTimeout = StreamIdleTimeout(time.Duration(DefaultTimeout) * time.Second)
 
@@ -142,3 +149,9 @@ var DefaultUDPIdleTimeout = UDPIdleTimeout(time.Duration(DefaultTimeout) * time.
 // 通过 config.DialTimeout 派生（DefaultTimeout/3 = 10s，限制在 [3s, 15s]），
 // 使其始终与正常路径从用户配置的基础超时派生的值一致。
 var DefaultDialTimeout = DialTimeout(time.Duration(DefaultTimeout) * time.Second)
+
+// DefaultConnLifetime 是传输层构造器在未提供显式值（<= 0）时使用的回退连接生命周期。
+// 通过 config.ConnLifetime 从默认基础超时派生（12 x DefaultTimeout = 360s），使
+// timeouts.go 中的公式保持为唯一事实来源：正常路径（client.New）始终从用户配置的
+// 基础超时派生其生命周期，从不读取此变量。
+var DefaultConnLifetime = ConnLifetime(time.Duration(DefaultTimeout) * time.Second)

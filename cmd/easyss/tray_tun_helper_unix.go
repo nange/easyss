@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"runtime"
-	"time"
 
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/dns"
@@ -95,12 +94,9 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	// 让 helper 可以通过 GET /tun 获取配置。
 	a.core.HTTPServer.SetTunConfig(tunHTTPCfg)
 
-	// 4. 生成提权 helper。将配置的超时时间（秒）作为生成等待上限；
-	//    未设置或无效时回退到 30s。
-	spawnTimeout := 30 * time.Second
-	if a.cfg.Timeout > 0 {
-		spawnTimeout = time.Duration(a.cfg.Timeout) * time.Second
-	}
+	// 4. 生成提权 helper。将归一化后的基础超时作为生成等待上限
+	//    （未配置时为默认值 30s，越界值已在加载时钳制）。
+	spawnTimeout := a.cfg.TimeoutDuration()
 	fdSocketPath := tunFdSocketPath()
 	fifoWriter, fdListener, err := SpawnTunHelper(a.cfg.Local.HTTPPort, fdSocketPath,
 		a.cfg.Log.FilePath, a.cfg.Log.Level, spawnTimeout)

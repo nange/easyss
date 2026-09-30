@@ -251,7 +251,10 @@ func cleanCertmagicDomainAssets(ctx context.Context, storage certmagic.Storage, 
 func (s *Server) Start() error {
 	cfg := s.cfg
 	srvCfg := cfg.Server
-	log.Info("[SERVER] starting", "listen", srvCfg.Listen, "domain", srvCfg.Domain, "timeout", cfg.Timeout)
+	// 基础超时派生出流空闲、UDP 空闲、拨号与 h2 连接空闲：越界值在这里归一化，
+	// 使启动日志与后续全部派生看到同一个值（见 sharedconfig.NormalizeTimeout）。
+	timeout := sharedconfig.TimeoutDuration(cfg.Timeout)
+	log.Info("[SERVER] starting", "listen", srvCfg.Listen, "domain", srvCfg.Domain, "timeout", int(timeout.Seconds()))
 
 	tlsConfig, err := s.initTLS()
 	if err != nil {
@@ -264,10 +267,6 @@ func (s *Server) Start() error {
 		log.Info("[SERVER] TLS mode: certmagic (Let's Encrypt)", "domain", srvCfg.Domain, "email", srvCfg.Email)
 	}
 
-	timeout := time.Duration(cfg.Timeout) * time.Second
-	if timeout <= 0 {
-		timeout = time.Duration(sharedconfig.DefaultTimeout) * time.Second
-	}
 	timeouts := sharedconfig.NewTimeouts(timeout)
 
 	// 构造本次部署唯一的回退实例：模式配置与部署级身份都在这里一次性确定，

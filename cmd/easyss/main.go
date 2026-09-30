@@ -57,7 +57,7 @@ func main() {
 	flag.StringVar(&sc.ProxyRule, "proxy-rule", "", "proxy rule (auto, reverse_auto, proxy, direct, auto_block)")
 	flag.StringVar(&cmdOutboundProto, "outbound-proto", "", "outbound protocol (native, h2)")
 	flag.IntVar(&sc.LocalPort, "l", 0, "local socks5 port")
-	flag.IntVar(&sc.Timeout, "t", 0, "timeout in seconds")
+	flag.IntVar(&sc.Timeout, "t", 0, "timeout in seconds (clamped to 15-60, the base of all derived timeouts)")
 	flag.StringVar(&sc.LogLevel, "log-level", "", "log level (debug, info, warn, error)")
 	flag.StringVar(&logFile, "log-file", "", "log file path")
 	flag.BoolVar(&sc.EnableQUIC, "enable-quic", false, "enable QUIC protocol")
@@ -187,6 +187,7 @@ Flags:
 		"proxy_rule", cfg.Routing.ProxyRule,
 		"ipv6_rule", cfg.Routing.IPV6Rule,
 		"timeout", cfg.Timeout,
+		"conn_lifetime", cfg.ConnLifetimeDuration(),
 		"direct_file", cfg.Routing.DirectFile,
 		"proxy_file", cfg.Routing.ProxyFile,
 	)
@@ -674,7 +675,6 @@ func exampleV3Config() string {
 			ConnCountMax:      sharedconfig.DefaultConnCountMax,
 			StreamThreshold:   sharedconfig.DefaultStreamThreshold,
 			PrioritySlotRatio: sharedconfig.DefaultPrioritySlotRatio,
-			ConnLifetimeSec:   sharedconfig.DefaultConnLifetimeSec,
 			ConnMaxBytes:      sharedconfig.DefaultConnMaxBytes,
 		},
 		Shaper: config.ShaperConfig{
