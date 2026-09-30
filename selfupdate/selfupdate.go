@@ -32,7 +32,7 @@ func Update(ctx context.Context, localHTTPPort int, rel *Release) error {
 func updateFor(ctx context.Context, c *Client, product Product, rel *Release) error {
 	asset := pickAssetFor(rel, product, runtime.GOOS, runtime.GOARCH)
 	if asset == nil {
-		return fmt.Errorf("no release asset for %s on %s/%s", product, runtime.GOOS, runtime.GOARCH)
+		return fmt.Errorf("release %s has no %s asset for %s/%s", rel.TagName, product, runtime.GOOS, runtime.GOARCH)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, DownloadTimeout)

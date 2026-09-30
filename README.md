@@ -453,7 +453,7 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 
 ### 自更新
 
-客户端（含 headless 无托盘版）与服务端均支持 `selfupdate` 子命令：从 GitHub 检查最新 release，并**原地替换当前二进制**。替换完成后不会自动重启，需要手动（或由 systemd/supervisor 等）重启进程使新版本生效。
+客户端（含 headless 无托盘版）与服务端均支持 `selfupdate` 子命令：从 GitHub 检查最新 release，并**原地替换当前二进制**；也可用 `--version <tag>` 指定安装某个具体版本。替换完成后不会自动重启，需要手动（或由 systemd/supervisor 等）重启进程使新版本生效。
 
 托盘版客户端（`easyss`）启动约 1 分钟后会自动检查一次更新，此后**每约 24 小时（带随机抖动）再检查一次**，只要进程在运行就会持续检查（macOS 上用户常常长时间不退出程序，仅靠启动时检查会错过后续发布的版本）。若检测到新版本，会**同时通过以下方式提醒一次**（每次启动都会重新提醒，直至升级完成）：
 
@@ -474,9 +474,17 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 ./easyss selfupdate
 ./easyss-headless selfupdate
 ./easyss-server selfupdate
+
+# 安装指定版本（调试时可重装当前版本或回退到旧版本）
+./easyss selfupdate --version v3.0.0
+./easyss-server selfupdate --version v3.0.0
+
+# 仅确认指定版本存在，且当前平台有对应发布包（不下载）
+./easyss selfupdate --version v3.0.0 --check
 ```
 
 * `--proxy-port <port>`：若本机同时运行了 easyss 客户端，可指定其 HTTP 代理端口，更新请求优先走本地代理，失败自动回退直连（默认直连）。
+* `--version <tag>`：安装该 release tag 对应的版本，**tag 必须与 release tag 完全一致**（例如 `v3.0.0`、`v3.1.0-rc1`、`nightly-1a2b3c4`），不做 `v` 前缀补全。指定版本时**不与本地版本比较**，因此可以重装当前版本或回退到更旧的版本（调试用）；tag 不存在时以退出码 1 结束并提示。该版本若没有当前平台的发布包，同样以退出码 1 结束。
 * 运行 `<bin> --help`（或 `<bin> selfupdate --help`）可查看各命令的完整参数说明。
 * Windows 下替换时原二进制会保留为 `.old`，下次正常启动时自动清理；Linux/macOS 直接原子替换。
 * Windows 托盘版（`easyss.exe`）因编译时隐藏控制台窗口，CLI 输出不可见，可通过重定向或退出码判断结果；服务端 Windows 版不受影响。
