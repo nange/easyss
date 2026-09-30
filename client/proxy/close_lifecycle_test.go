@@ -18,6 +18,11 @@ import (
 // 把"永久挂住"变成一次快速失败：正常路径远小于该值。
 const closeLifecycleBudget = 10 * time.Second
 
+// closeIdempotentBudget 是第二次 Close 允许消耗的时间上限。幂等路径只是一次
+// sync.Once 命中，但它仍会被调度延迟拉长，因此不按微秒断言；重新探测至少要等满
+// acceptProbeTimeout（3s），依旧会被这个上限抓住。
+const closeIdempotentBudget = 500 * time.Millisecond
+
 // freeLoopbackAddr 返回一个当前无人监听的 127.0.0.1 地址。端口由内核挑选，
 // 因此同一台机器上的并发测试不会互相争抢。
 func freeLoopbackAddr(t *testing.T) string {
@@ -102,6 +107,12 @@ func TestHTTPProxyCloseIsIdempotent(t *testing.T) {
 //
 // 这条路径在托盘上是可达的：更新重启失败后的恢复路径会先 closeService()，
 // restartService() 又会 closeService() 一次（见 cmd/easyss/tray_update.go）。
+//
+// 断言刻意与"这一次探测有没有答上"无关：单次探测预算只有 3s，在 -race 且多个
+// 测试包并行的 CI runner 上曾被调度延迟耗尽（2026-09-29 的 windows/amd64 job
+// 就是这样失败的）。因此这里先等 accept 循环就绪，让第一次 Close 走同步路径；
+// 而幂等性本身只要求第二次返回与第一次相同的结果——探测没答上时那就是同一个
+// errAcceptNotReady，不是"必须为 nil"。
 func TestSocks5CloseIsIdempotent(t *testing.T) {
 	addr := freeLoopbackAddr(t)
 	srv, err := NewSocks5Server(Socks5Options{
@@ -120,16 +131,28 @@ func TestSocks5CloseIsIdempotent(t *testing.T) {
 	srv.MarkStarted()
 	go srv.Start() //nolint:errcheck
 
-	if err := srv.Close(); err != nil && !errors.Is(err, errAcceptNotReady) {
-		t.Fatalf("first Close: %v", err)
+	// 先等 accept 循环真正开始应答：这样第一次 Close 通常落在同步 Shutdown 路径上
+	// （而不是碰运气命中 3s 探测预算）；万一探测仍然没答上，也只是转走补关闭，
+	// 由下面的"返回首次结果"断言覆盖，不会变成失败。
+	if !srv.waitForAcceptWithin(closeLifecycleBudget) {
+		t.Fatal("accept loop did not become ready in time")
 	}
 
-	start := time.Now()
-	if err := srv.Close(); err != nil {
-		t.Fatalf("second Close: %v", err)
+	firstErr := srv.Close()
+	if firstErr != nil && !errors.Is(firstErr, errAcceptNotReady) {
+		t.Fatalf("first Close: %v", firstErr)
 	}
-	if elapsed := time.Since(start); elapsed > acceptProbeInterval {
-		t.Fatalf("second Close took %s, want an immediate no-op", elapsed)
+
+	// 第二次 Close 必须原样返回首次的结果：既不重新探测，也不派发第二个补关闭
+	// goroutine。
+	start := time.Now()
+	secondErr := srv.Close()
+	elapsed := time.Since(start)
+	if secondErr != firstErr {
+		t.Fatalf("second Close = %v, want the cached first result %v", secondErr, firstErr)
+	}
+	if elapsed > closeIdempotentBudget {
+		t.Fatalf("second Close took %s, want an immediate no-op (<= %s)", elapsed, closeIdempotentBudget)
 	}
 }
 
