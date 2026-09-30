@@ -138,6 +138,7 @@ make lint   # 等价: go tool golangci-lint run --timeout 10m --verbose
 - v2 配置自动迁移到 v3：`client/config/migrate.go` 中的 `MigrateV2Config()` 处理转换
 - v3 客户端配置入口：`client/config/config.go` 中的 `ClientConfig` 结构体
 - v3 服务端配置入口：`server/config/config.go` 中的 `FileConfig`/`ServerConfig`
+- `timeout` 是全部派生超时（TCP/UDP 空闲、拨号、DNS 响应、连接轮换、服务端 h2 连接空闲）的唯一旋钮，取值范围 **[15, 60]** 秒：非正值取默认值 30，越界取最近的边界；归一化统一由 `config.NormalizeTimeout`/`config.TimeoutDuration` 负责（客户端 `applyDefaults`/`TimeoutDuration`、简单模式覆盖 `ApplySimpleOverrides`、服务端 `server.Start` 都必须经过它，不要各自判断）
 - 显示完整配置示例：`./easyss -show-config-example`
 
 ## 关键架构要点

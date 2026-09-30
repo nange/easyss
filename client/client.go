@@ -304,7 +304,7 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		MaxSlotCount:      cfg.Transport.ConnCountMax,
 		StreamThreshold:   cfg.Transport.StreamThreshold,
 		PrioritySlotRatio: cfg.Transport.PrioritySlotRatio,
-		ConnLifetime:      time.Duration(cfg.Transport.ConnLifetimeSec) * time.Second,
+		ConnLifetime:      cfg.ConnLifetimeDuration(),
 		ConnMaxBytes:      cfg.Transport.ConnMaxBytes,
 		Timeout:           cfg.TimeoutDuration(),
 		ProbeToken:        probeToken,

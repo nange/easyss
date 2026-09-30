@@ -73,7 +73,7 @@ Easyss v3 支持两种配置模式，自动识别：
 | `local_port` | 否 | 4080 | 本地 SOCKS5 监听端口。`http_port` 自动设为 `local_port + 1000` |
 | `method` | 否 | aes-256-gcm | 加密方式，可选: `aes-256-gcm`, `chacha20-poly1305` |
 | `proxy_rule` | 否 | auto | 代理规则，可选: `auto`, `reverse_auto`, `proxy`, `direct`, `auto_block` |
-| `timeout` | 否 | 30 | 超时时间，单位秒 |
+| `timeout` | 否 | 30 | 基础超时时间，单位秒，取值范围 15-60（越界取边界值）；TCP/UDP 空闲、拨号、DNS 响应与连接轮换均由它派生（见"`timeout` 派生规则"） |
 | `bind_all` | 否 | false | 是否将监听端口绑定到所有本地 IP |
 | `outbound_proto` | 否 | native | 出口协议，可选: `native`, `h2`（效果相同，均为 HTTP/2） |
 | `log_level` | 否 | info | 日志级别，可选: `debug`, `info`, `warn`, `error` |
@@ -154,7 +154,6 @@ Easyss v3 支持两种配置模式，自动识别：
     "conn_count_max": 15,
     "stream_threshold": 4,
     "priority_slot_ratio": 0.4,
-    "conn_lifetime_sec": 360,
     "conn_max_bytes": 268435456
   },
   "shaper": {
@@ -187,8 +186,20 @@ Easyss v3 支持两种配置模式，自动识别：
 | `transport.conn_count_max` | 15 | 最大连接数，懒加载扩容的上限 |
 | `transport.stream_threshold` | 4 | 活跃流达到该阈值且连接数未达上限时，新建连接 |
 | `transport.priority_slot_ratio` | 0.4 | 优先（交互式）槽位占连接数的比例，其余为批量槽位 |
-| `transport.conn_lifetime_sec` | 360 | 单连接最大存活时间（秒），0 使用默认值；到期后停止接收新流并轮换连接 |
 | `transport.conn_max_bytes` | 268435456 | 单连接双向累计最大字节数（256MB），0 使用默认值；超限后轮换连接 |
+
+**`timeout` 派生规则（客户端与服务端共用，以代码为准）：**
+
+| 派生项 | 公式 | 默认值（timeout = 30） |
+| --- | --- | --- |
+| TCP 流空闲超时 | 8 × timeout | 240s |
+| UDP 会话空闲超时 | 2 × timeout | 60s |
+| 出站拨号超时 | timeout ÷ 3，钳制在 [3s, 15s] | 10s |
+| DNS 响应读取超时 | timeout ÷ 3 | 10s |
+| 连接轮换生命周期（客户端） | 12 × timeout | 360s |
+| h2 连接空闲超时（服务端） | 8 × timeout | 240s |
+
+`timeout` 的取值范围为 **15-60** 秒（非正值取默认值 30，超出范围取最近的边界）：它派生出上表全部超时，过小会让空闲连接被频繁误杀、过大则让半开连接长时间占用资源。其中连接轮换到期后槽位停止接收新流、其空闲连接被关闭，下一条流重新拨号（对用户无感），**进行中的流永不被打断**。
 
 **shaper 参数说明：**
 
@@ -362,7 +373,7 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 | `transport.h2_recv_buf_conn` | 否 | 4194304 | 服务端连接级上行窗口（4MB），0 使用默认值 |
 | `transport.h2_recv_buf_stream` | 否 | 1048576 | 服务端流级上行窗口（1MB），0 使用默认值 |
 | `pprof_enabled` | 否 | false | 是否启用 pprof 调试服务（127.0.0.1:6060） |
-| `timeout` | 否 | 30 | 超时时间，单位秒 |
+| `timeout` | 否 | 30 | 基础超时时间，单位秒，取值范围 15-60（越界取边界值）；TCP/UDP 空闲、拨号、DNS 响应与 h2 连接空闲均由它派生（见客户端"`timeout` 派生规则"） |
 
 > **fallback 使用示例**：
 >

@@ -864,8 +864,8 @@ func TestHandleTCPDNSProxyExchangeRecreatedAfterFailure(t *testing.T) {
 // RFC 1928 的客户端（curl、浏览器，以及 TUN 模式下承载系统解析器的 tun2socks）在
 // 拿到 SOCKS5 应答之前不会发送任何字节，因此成功应答必须先于"首报文读取"写出。
 // 把应答推迟到读到首条 DNS 报文之后（#177 的实现），双方互等，连接只能挂到
-// streamIdleTimeout（默认 120s）到期降级成普通中继——DNS 查询因此长时间卡住，
-// 网页与视频加载超时，而且默认日志里没有任何线索。
+// streamIdleTimeout（8 × timeout，默认 240s）到期降级成普通中继——DNS 查询因此
+// 长时间卡住，网页与视频加载超时，而且默认日志里没有任何线索。
 func TestHandleTCPDNSRepliesBeforeAnyQueryArrives(t *testing.T) {
 	rt, err := router.New(router.Config{ProxyRule: router.ProxyRuleAutoBlock, IPV6Rule: router.IPV6RuleDisable})
 	if err != nil {

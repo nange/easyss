@@ -272,7 +272,7 @@ func (lc *slotLifecycle) rotationDue(s *transportSlot, now time.Time) bool {
 // （落在 [0.7×base, 1.3×base] 内）。同一突发中创建的连接（例如多个槽位
 // 同时拨号）随后会在不同的健康周期过期，这样轮换及其后的 TLS 握手不会
 // 聚集成一个可被指纹识别的突发。抖动围绕配置的生命周期对称，因此均值保持
-// 在 base（默认 6 分钟），而同一批连接的超时散布在 3.6 分钟的窗口内
+// 在 base（默认 12 × timeout = 6 分钟），而同一批连接的超时散布在 3.6 分钟的窗口内
 // （大约 43 个健康周期）——没有长尾，整批也不会同时进入 expiring，
 // 始终有健康槽位可供新流分散承载。
 func rotationLifetime(base time.Duration) time.Duration {
