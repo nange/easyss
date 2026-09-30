@@ -9,9 +9,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/nange/easyss/v3/config"
-	"github.com/nange/easyss/v3/protocol"
 )
 
 // closeLifecycleBudget 是"关闭/启动必须在预算内返回"的上限。它的唯一作用是
@@ -114,32 +111,29 @@ func TestHTTPProxyCloseIsIdempotent(t *testing.T) {
 // 而幂等性本身只要求第二次返回与第一次相同的结果——探测没答上时那就是同一个
 // errAcceptNotReady，不是"必须为 nil"。
 func TestSocks5CloseIsIdempotent(t *testing.T) {
-	addr := freeLoopbackAddr(t)
-	srv, err := NewSocks5Server(Socks5Options{
-		ListenAddr: addr,
-		Handler:    newTestStreamHandler(&mockTransport{}),
-		Method:     protocol.MethodAES256GCM,
-		Timeouts: config.Timeouts{
-			Base:       30 * time.Second,
-			Dial:       10 * time.Second,
-			StreamIdle: 30 * time.Second,
-		},
-	})
-	if err != nil {
-		t.Fatalf("NewSocks5Server: %v", err)
-	}
+	srv := newTestSocks5Server(t, freeLoopbackAddr(t))
 	srv.MarkStarted()
-	go srv.Start() //nolint:errcheck
+	startDone := make(chan error, 1)
+	go func() { startDone <- srv.Start() }()
 
 	// 先等 accept 循环真正开始应答：这样第一次 Close 通常落在同步 Shutdown 路径上
 	// （而不是碰运气命中 3s 探测预算）。
 	if !srv.waitForAcceptWithin(closeLifecycleBudget) {
-		// 探测没答上不是回归，不能变成失败（2026-09-30 的 windows-11-arm job
-		// 正是在这里把一次环境抖动当成了失败）：超载 runner 上 accept 循环可能
-		// 迟迟不被调度，预算耗尽只说明这一次覆盖的是补关闭路径。幂等性断言对
-		// 两条路径同样成立——第一次 Close 此时返回 errAcceptNotReady，第二次必须
-		// 原样返回它。该路径的确定性覆盖见 TestSocks5CloseIdempotentWhenAcceptNeverReady。
-		t.Logf("accept loop not ready within %s; asserting the deferred-shutdown path", closeLifecycleBudget)
+		// 探测超时先区分两种世界。在 Close 之前，Start 只可能因监听器绑定/accept
+		// 失败而返回：此时拿到它的返回值就是确定性的启动失败（例如端口被并发
+		// 测试抢走），必须原样报出来——否则测试会在静默走补关闭路径后空转通过。
+		// 而 startDone 仍为空说明 Start 还阻塞在 accept/read 循环上，只是超载
+		// runner 的调度饥饿迟迟没让 accept 循环应答（2026-09-30 的 windows-11-arm
+		// job 就是这一种），那不是回归：预算耗尽只说明这一次覆盖的是补关闭路径。
+		// 幂等性断言对两条路径同样成立——第一次 Close 此时返回 errAcceptNotReady，
+		// 第二次必须原样返回它。该路径的确定性覆盖见
+		// TestSocks5CloseIdempotentWhenAcceptNeverReady。
+		select {
+		case err := <-startDone:
+			t.Fatalf("Start returned before the accept loop was ready: %v", err)
+		default:
+			t.Logf("accept loop not ready within %s; asserting the deferred-shutdown path", closeLifecycleBudget)
+		}
 	}
 
 	firstErr := srv.Close()
@@ -170,19 +164,7 @@ func TestSocks5CloseIsIdempotent(t *testing.T) {
 // （2026-09-30 的 windows-11-arm job）。而任何机器上 accept 循环一旦真正上线，
 // 就再也构造不出这条路径，因此这里不派发 Start，让它确定可达。
 func TestSocks5CloseIdempotentWhenAcceptNeverReady(t *testing.T) {
-	srv, err := NewSocks5Server(Socks5Options{
-		ListenAddr: freeLoopbackAddr(t),
-		Handler:    newTestStreamHandler(&mockTransport{}),
-		Method:     protocol.MethodAES256GCM,
-		Timeouts: config.Timeouts{
-			Base:       30 * time.Second,
-			Dial:       10 * time.Second,
-			StreamIdle: 30 * time.Second,
-		},
-	})
-	if err != nil {
-		t.Fatalf("NewSocks5Server: %v", err)
-	}
+	srv := newTestSocks5Server(t, freeLoopbackAddr(t))
 	// MarkStarted 之后 Start 迟迟未上线：同步探测必然拿不到应答（监听地址从未
 	// 绑定，拨号立即被拒绝），第一次 Close 只能走补关闭路径。
 	srv.MarkStarted()

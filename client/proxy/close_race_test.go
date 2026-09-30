@@ -7,9 +7,6 @@ import (
 	"runtime"
 	"testing"
 	"time"
-
-	"github.com/nange/easyss/v3/config"
-	"github.com/nange/easyss/v3/protocol"
 )
 
 // closeSyncBudget 是单次 Close 允许消耗的同步时间上限。正常路径只是"一次探测 +
@@ -50,20 +47,7 @@ func TestSocks5CloseRacingStart(t *testing.T) {
 		addr := l.Addr().String()
 		l.Close() //nolint:errcheck
 
-		h := newTestStreamHandler(&mockTransport{})
-		srv, err := NewSocks5Server(Socks5Options{
-			ListenAddr: addr,
-			Handler:    h,
-			Method:     protocol.MethodAES256GCM,
-			Timeouts: config.Timeouts{
-				Base:       30 * time.Second,
-				Dial:       10 * time.Second,
-				StreamIdle: 30 * time.Second,
-			},
-		})
-		if err != nil {
-			t.Fatalf("NewSocks5Server #%d: %v", i, err)
-		}
+		srv := newTestSocks5Server(t, addr)
 		srv.MarkStarted()
 		go srv.Start() //nolint:errcheck
 
@@ -124,19 +108,7 @@ func TestSocks5DeferredShutdownClosesListener(t *testing.T) {
 	addr := l.Addr().String()
 	l.Close() //nolint:errcheck
 
-	srv, err := NewSocks5Server(Socks5Options{
-		ListenAddr: addr,
-		Handler:    newTestStreamHandler(&mockTransport{}),
-		Method:     protocol.MethodAES256GCM,
-		Timeouts: config.Timeouts{
-			Base:       30 * time.Second,
-			Dial:       10 * time.Second,
-			StreamIdle: 30 * time.Second,
-		},
-	})
-	if err != nil {
-		t.Fatalf("NewSocks5Server: %v", err)
-	}
+	srv := newTestSocks5Server(t, addr)
 	srv.MarkStarted()
 
 	start := time.Now()
