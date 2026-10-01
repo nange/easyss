@@ -14,9 +14,19 @@ import (
 )
 
 const (
-	cacheSize   = 2 * 1024 * 1024
+	cacheSize = 2 * 1024 * 1024
+	// minCacheTTL 是上游声明的 TTL 偏短时的缓存下限。普通网站与 CDN 的 TTL 常在
+	// 60~300 秒，照搬会让经隧道的 DNS 查询（缓存 miss 要开一条隧道流再等上游
+	// 应答）过于频繁，因此统一抬到 1 小时；再叠加 jitterTTL 的 [0, ttl) 抖动，
+	// 实际命中窗口为 60~120 分钟。
+	minCacheTTL = 60 * 60
+	// zeroTTLCacheTTL 是 TTL=0 记录的下限。TTL 为 0 表示"立即重新解析"（CDN
+	// 故障切换、动态 DNS），这类记录是刻意声明自己易变的，不能跟着 minCacheTTL
+	// 一起被抬高，因此保持原窗口。
+	zeroTTLCacheTTL = 30 * 60
+	// maxCacheTTL 是上游声明的 TTL 偏长时的上限。抖动在 clamp 之后施加，因此
+	// 这类记录的实际窗口为 2~4 小时。
 	maxCacheTTL = 2 * 60 * 60
-	minCacheTTL = 30 * 60
 )
 
 // Cache 将 DNS 查询结果存储在两个独立的缓存中：一个用于代理（proxied）
@@ -87,6 +97,10 @@ func (c *Cache) Set(msg *dns.Msg, isDirect bool) error {
 // dnsCacheTTL 返回给定 DNS 消息的缓存时长（秒）。代理服务器自身域名的条目
 // 永不过期（freecache 中 0 表示永不过期）；其他域名按应答中最小 TTL 缓存，
 // 并限制在 [minCacheTTL, maxCacheTTL] 区间内。
+//
+// 这个下限是刻意偏离上游声明的：本缓存服务的是单个用户自己的解析路径，它的
+// 应答不会再被上游二次校验，而每次 miss 在代理分支上都要经隧道换一次解析，
+// 代价远高于浏览器多等一次本地查询。TTL 为 0 是唯一的例外（见 zeroTTLCacheTTL）。
 func dnsCacheTTL(msg *dns.Msg, serverDomain string) int {
 	if serverDomain != "" {
 		q := msg.Question[0]
@@ -105,10 +119,10 @@ func dnsCacheTTL(msg *dns.Msg, serverDomain string) int {
 		}
 	}
 	if ttl == 0 {
-		// TTL 为 0 通常表示“立即重新解析”（CDN 故障切换、动态 DNS）。将其
-		// 限制到 *最小* 缓存时长而不是最大时长，这样对新鲜度要求高的记录
-		// 不会滞留 2 小时。
-		ttl = minCacheTTL
+		// TTL 为 0 通常表示“立即重新解析”（CDN 故障切换、动态 DNS）。这类记录
+		// 是上游在明确声明"我随时会变"，因此按专门的短下限缓存，而不是跟着
+		// minCacheTTL 一起被抬高——它恰好是最不该长时间滞留的那一批。
+		return zeroTTLCacheTTL
 	}
 	if ttl > maxCacheTTL {
 		ttl = maxCacheTTL
