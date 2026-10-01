@@ -175,13 +175,25 @@ func TestCache_DirectVsProxied(t *testing.T) {
 }
 
 func TestDNSCacheTTL_Clamp(t *testing.T) {
-	// TTL 低于下限 → clamp 到 30 分钟
+	// TTL 低于下限 → clamp 到 1 小时；叠加抖动后普通域名的实际窗口为 60~120 分钟
 	msgLow := &dns.Msg{}
 	msgLow.SetQuestion("example.com.", dns.TypeA)
 	rrLow, _ := dns.NewRR("example.com. 5 IN A 1.2.3.4")
 	msgLow.Answer = append(msgLow.Answer, rrLow)
-	if ttl := dnsCacheTTL(msgLow, ""); ttl != 30*60 {
-		t.Errorf("low TTL expected %d, got %d", 30*60, ttl)
+	if ttl := dnsCacheTTL(msgLow, ""); ttl != 60*60 {
+		t.Errorf("low TTL expected %d, got %d", 60*60, ttl)
+	} else if eff := jitterTTL(ttl); eff < 60*60 || eff >= 120*60 {
+		t.Errorf("low TTL effective window = %d, want in [%d, %d)", eff, 60*60, 120*60)
+	}
+
+	// TTL=0 是"立即重新解析"（CDN 故障切换、动态 DNS）→ 按专门的短下限缓存，
+	// 不跟着 minCacheTTL 一起被抬高
+	msgZero := &dns.Msg{}
+	msgZero.SetQuestion("example.com.", dns.TypeA)
+	rrZero, _ := dns.NewRR("example.com. 0 IN A 1.2.3.4")
+	msgZero.Answer = append(msgZero.Answer, rrZero)
+	if ttl := dnsCacheTTL(msgZero, ""); ttl != 30*60 {
+		t.Errorf("zero TTL expected %d, got %d", 30*60, ttl)
 	}
 
 	// TTL 高于上限 → clamp 到 2 小时
@@ -215,13 +227,13 @@ func TestDNSCacheTTL_ServerDomain(t *testing.T) {
 	}
 
 	// 非服务器域名 → 正常 clamp
-	if ttl := dnsCacheTTL(msg, "other.net"); ttl != 30*60 {
-		t.Errorf("non-server domain expected %d, got %d", 30*60, ttl)
+	if ttl := dnsCacheTTL(msg, "other.net"); ttl != 60*60 {
+		t.Errorf("non-server domain expected %d, got %d", 60*60, ttl)
 	}
 
 	// serverDomain 为空时不受影响
-	if ttl := dnsCacheTTL(msg, ""); ttl != 30*60 {
-		t.Errorf("empty serverDomain expected %d, got %d", 30*60, ttl)
+	if ttl := dnsCacheTTL(msg, ""); ttl != 60*60 {
+		t.Errorf("empty serverDomain expected %d, got %d", 60*60, ttl)
 	}
 }
 
