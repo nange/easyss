@@ -10,7 +10,6 @@ import (
 	clientconfig "github.com/nange/easyss/v3/client/config"
 	easydns "github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/router"
-	"github.com/txthinking/socks5"
 )
 
 // startUDPDNSResponderAny 启动一个本地 UDP DNS 应答器：无论 qtype 一律回一条 A
@@ -49,31 +48,6 @@ func startUDPDNSResponderAny(t *testing.T, answerIP string) string {
 	return pc.LocalAddr().String()
 }
 
-// buildUDPDatagram 按 SOCKS5 UDP 请求格式组帧：RSV(2) + FRAG(1) + ATYP(1) +
-// 目标地址 + 目标端口 + 数据。
-func buildUDPDatagram(t *testing.T, target string, data []byte) *socks5.Datagram {
-	t.Helper()
-	addr, port, err := net.SplitHostPort(target)
-	if err != nil {
-		t.Fatalf("split target: %v", err)
-	}
-	ip := net.ParseIP(addr).To4()
-	if ip == nil {
-		t.Fatalf("target %q is not an IPv4 address", target)
-	}
-	portNum, err := net.LookupPort("udp", port)
-	if err != nil {
-		t.Fatalf("parse port: %v", err)
-	}
-	raw := []byte{0, 0, 0, socks5.ATYPIPv4, ip[0], ip[1], ip[2], ip[3], byte(portNum >> 8), byte(portNum)}
-	raw = append(raw, data...)
-	d, err := socks5.NewDatagramFromBytes(raw)
-	if err != nil {
-		t.Fatalf("build datagram: %v", err)
-	}
-	return d
-}
-
 // newUDPDNSTestServer 构造一个可用于 UDP DNS 拦截测试的 Socks5Server，并返回一个
 // 同时充当客户端来源地址与 SOCKS5 UDPConn 的 socket（应答会发回查询来源地址，
 // 因此可直接读回断言），以及记录每次直连拨号地址的通道。
@@ -100,6 +74,9 @@ func newUDPDNSTestServer(t *testing.T, rt *router.Router) (*Socks5Server, *net.U
 	})
 	// 拦截器在构造时持有 router 指针：测试直接注入的两个使用方必须同时更新。
 	srv.router, srv.dns.router = rt, rt
+	// 把这个 socket 注册为当前 UDP 中继：应答（sendToClient/responseDNSMsg）会
+	// 经它写回查询的来源地址，因此可以直接从这里读回断言。
+	srv.registerTestUDPRelay(sock, sock.LocalAddr().(*net.UDPAddr))
 	return srv, sock, dialed
 }
 
@@ -138,7 +115,8 @@ func TestHandleUDPInterceptsNonAddressQtype(t *testing.T) {
 	// 高位端口（CI 上无法绑定 53）。入口门控本身由
 	// TestHandleUDPDNSInterceptionRequiresPort53 与 TestHandleUDPDropsLinkLocalTargets 覆盖。
 	requested := responder
-	if err := srv.handleDNS(&socks5.Server{UDPConn: sock}, clientAddr, buildUDPDatagram(t, requested, data), query); err != nil {
+	frame, _ := buildUDPFrame(t, requested, data)
+	if err := srv.handleDNS(srv.registerTestUDPRelay(sock, clientAddr), frame, query, data); err != nil {
 		t.Fatalf("handleDNS: %v", err)
 	}
 
@@ -150,15 +128,12 @@ func TestHandleUDPInterceptsNonAddressQtype(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read udp reply: %v", err)
 	}
-	reply, err := socks5.NewDatagramFromBytes(buf[:n])
-	if err != nil {
-		t.Fatalf("parse datagram: %v", err)
-	}
-	if got := reply.Address(); got != requested {
-		t.Errorf("reply source = %s, want the client's target %s", got, requested)
+	gotTarget, gotData := parseUDPFrame(t, buf[:n])
+	if gotTarget != requested {
+		t.Errorf("reply source = %s, want the client's target %s", gotTarget, requested)
 	}
 	resp := new(dns.Msg)
-	if err := resp.Unpack(reply.Data); err != nil {
+	if err := resp.Unpack(gotData); err != nil {
 		t.Fatalf("unpack reply: %v", err)
 	}
 	if resp.Id != 0x4321 {

@@ -9,7 +9,6 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/client/router"
-	"github.com/txthinking/socks5"
 )
 
 // nbnsQName 把 NetBIOS 名字编码成 NBNS 查询里的 QNAME：15 字节名字（空格补齐）
@@ -65,6 +64,9 @@ func newUDPTargetTestServer(t *testing.T, rt *router.Router) (*Socks5Server, *ne
 	})
 	// 拦截器在构造时持有 router 指针：两个使用方必须同时更新。
 	srv.router, srv.dns.router = rt, rt
+	// 把这个 socket 注册为当前 UDP 中继：同步 DNS 应答（sendToClient /
+	// responseDNSMsg）会经它写回查询的来源地址，因此可以直接从这里读回断言。
+
 	return srv, sock, dialed
 }
 
@@ -101,8 +103,9 @@ func TestHandleUDPDNSInterceptionRequiresPort53(t *testing.T) {
 
 	srv, sock, dialed := newUDPTargetTestServer(t, newUDPTargetRouter(t))
 	clientAddr := sock.LocalAddr().(*net.UDPAddr)
+	frame, _ := buildUDPFrame(t, target, payload)
 
-	if err := srv.handleUDP(&socks5.Server{UDPConn: sock}, clientAddr, buildUDPDatagram(t, target, payload)); err != nil {
+	if err := srv.handleUDP(srv.registerTestUDPRelay(sock, clientAddr), frame, payload); err != nil {
 		t.Fatalf("handleUDP: %v", err)
 	}
 
@@ -139,8 +142,11 @@ func TestHandleUDPDNSInterceptionOnPort53(t *testing.T) {
 	}
 	srv, sock, dialed := newUDPTargetTestServer(t, rt)
 	clientAddr := sock.LocalAddr().(*net.UDPAddr)
+	// 注意：handleUDP 接收的是 SOCKS5 帧里承载的载荷，不含 RSV/FRAG/ATYP 头，
+	// 与旧库的 socks5.Datagram.Data 语义一致；帧头只用来给出目标地址。
+	frame, _ := buildUDPFrame(t, target, data)
 
-	if err := srv.handleUDP(&socks5.Server{UDPConn: sock}, clientAddr, buildUDPDatagram(t, target, data)); err != nil {
+	if err := srv.handleUDP(srv.registerTestUDPRelay(sock, clientAddr), frame, data); err != nil {
 		t.Fatalf("handleUDP: %v", err)
 	}
 
@@ -152,15 +158,12 @@ func TestHandleUDPDNSInterceptionOnPort53(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read udp reply: %v (a dns query on port 53 must still be intercepted)", err)
 	}
-	reply, err := socks5.NewDatagramFromBytes(buf[:n])
-	if err != nil {
-		t.Fatalf("parse datagram: %v", err)
-	}
-	if got := reply.Address(); got != target {
-		t.Errorf("reply source = %s, want the client's target %s", got, target)
+	replyTarget, replyData := parseUDPFrame(t, buf[:n])
+	if replyTarget != target {
+		t.Errorf("reply source = %s, want the client's target %s", replyTarget, target)
 	}
 	resp := new(dns.Msg)
-	if err := resp.Unpack(reply.Data); err != nil {
+	if err := resp.Unpack(replyData); err != nil {
 		t.Fatalf("unpack reply: %v", err)
 	}
 	if !resp.Response || resp.Id != q.Id {
@@ -211,7 +214,8 @@ func TestHandleUDPDropsLinkLocalTargets(t *testing.T) {
 			srv, sock, dialed := newUDPTargetTestServer(t, newUDPTargetRouter(t))
 			clientAddr := sock.LocalAddr().(*net.UDPAddr)
 
-			if err := srv.handleUDP(&socks5.Server{UDPConn: sock}, clientAddr, buildUDPDatagram(t, tt.target, payload)); err != nil {
+			frame, _ := buildUDPFrame(t, tt.target, payload)
+			if err := srv.handleUDP(srv.registerTestUDPRelay(sock, clientAddr), frame, payload); err != nil {
 				t.Fatalf("handleUDP: %v", err)
 			}
 

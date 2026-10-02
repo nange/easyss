@@ -11,7 +11,6 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/log"
-	"github.com/txthinking/socks5"
 )
 
 // 本文件是 TCP DNS 拦截的前端：DNS over TCP 的帧编解码与连接循环。查询的分流
@@ -117,7 +116,7 @@ func touchReadDeadline(c net.Conn, timeout time.Duration) func() {
 //
 // 应答先行意味着回退路径不能再写应答：已应答的连接遇到 Block/IPv6 门禁只能关闭
 // （见 routeTCPReplied）。
-func (s *Socks5Server) handleTCPDNS(c net.Conn, r *socks5.Request, target, host string) error {
+func (s *Socks5Server) handleTCPDNS(c net.Conn, target, host string) error {
 	if err := writeSocksSuccessReply(c); err != nil {
 		log.Error("[TCP_DNS] reply", "target", target, "err", err)
 		return err
@@ -141,11 +140,11 @@ func (s *Socks5Server) handleTCPDNS(c net.Conn, r *socks5.Request, target, host 
 			return nil
 		}
 		log.Debug("[TCP_DNS] first message unreadable, fallback to relay", "target", target, "err", err)
-		return s.fallbackTCPDNS(c, br, consumed, r, target, host)
+		return s.fallbackTCPDNS(c, br, consumed, target, host)
 	}
 	if !isDNSQueryMsg(first) {
 		log.Debug("[TCP_DNS] first message is not a dns query, fallback to relay", "target", target)
-		return s.fallbackTCPDNS(c, br, consumed, r, target, host)
+		return s.fallbackTCPDNS(c, br, consumed, target, host)
 	}
 
 	sess := s.dns.newTCPSession(c.RemoteAddr())
@@ -186,7 +185,7 @@ func (s *Socks5Server) handleTCPDNS(c net.Conn, r *socks5.Request, target, host 
 // 普通分流（已读字节通过 pending 还给流），并清除本路径设置的读截止时间。
 // 成功应答已经由 handleTCPDNS 写出，因此这里以 replied=true 交回，避免写下第二个
 // 应答把中继数据弄脏。
-func (s *Socks5Server) fallbackTCPDNS(c net.Conn, br *bufio.Reader, pending []byte, r *socks5.Request, target, host string) error {
+func (s *Socks5Server) fallbackTCPDNS(c net.Conn, br *bufio.Reader, pending []byte, target, host string) error {
 	_ = c.SetReadDeadline(time.Time{})
-	return s.routeTCPReplied(newBufferedConn(c, br, pending), r, target, host, true)
+	return s.routeTCPReplied(newBufferedConn(c, br, pending), target, host, true)
 }

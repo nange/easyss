@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"math"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -20,7 +19,7 @@ import (
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/util/bytespool"
-	"github.com/txthinking/socks5"
+	xproxy "golang.org/x/net/proxy"
 )
 
 type reverseProxyBufferPool struct{}
@@ -471,13 +470,76 @@ func writeConnectEstablished(conn net.Conn, target string) error {
 }
 
 func (s *HTTPProxyServer) dialSOCKS5(target string) (net.Conn, error) {
-	// 将超时向上取整，避免亚秒级超时被截断为 0（socks5 库把 0 视为"无超时"）。
-	socksTimeout := max(int(math.Ceil(s.timeout.Seconds())), 1)
-	client, err := socks5.NewClient(s.socksAddr, s.username, s.password, socksTimeout, socksTimeout)
+	var auth *xproxy.Auth
+	if s.username != "" || s.password != "" {
+		auth = &xproxy.Auth{User: s.username, Password: s.password}
+	}
+
+	forward := &socksForwardDialer{timeout: s.timeout}
+	d, err := xproxy.SOCKS5("tcp", s.socksAddr, auth, forward)
 	if err != nil {
 		return nil, err
 	}
-	return client.Dial("tcp", target)
+	cd, ok := d.(xproxy.ContextDialer)
+	if !ok {
+		return nil, fmt.Errorf("socks5 dialer %T does not support context", d)
+	}
+	conn, err := cd.DialContext(context.Background(), "tcp", target)
+	if err != nil {
+		return nil, err
+	}
+	return &socksHalfCloser{Conn: conn, raw: forward.lastConn()}, nil
+}
+
+// socksForwardDialer 是 SOCKS5 客户端拨本地代理入口时使用的底层拨号函数。它把
+// 每次成功建立的裸连接记在 conn 里，供上层在协商成功后还原底层 *net.TCPConn：
+// SOCKS5 协商由库完成，其返回的连接类型不实现 CloseWrite，而中继在干净 EOF 时
+// 依赖 CloseWrite 传播半关闭（见 route.go 的 copyHalfClose）。
+type socksForwardDialer struct {
+	timeout time.Duration
+
+	mu   sync.Mutex
+	conn net.Conn
+}
+
+func (f *socksForwardDialer) Dial(network, address string) (net.Conn, error) {
+	return f.DialContext(context.Background(), network, address)
+}
+
+func (f *socksForwardDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	d := &net.Dialer{Timeout: f.timeout}
+	conn, err := d.DialContext(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	f.conn = conn
+	f.mu.Unlock()
+	return conn, nil
+}
+
+// lastConn 返回最近一次成功建立的裸连接（没有则为 nil）。
+func (f *socksForwardDialer) lastConn() net.Conn {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.conn
+}
+
+// socksHalfCloser 为 SOCKS5 客户端连接补上 CloseWrite：协商完成后裸 TCP 连接
+// 仍是同一个，因此可以断言回 *net.TCPConn 并调用其 CloseWrite，使半关闭像直连
+// 路径一样传播。断言失败时退化为 no-op（而不是伪装成已半关闭），并把原因记进
+// 日志，避免又一处"静默跳过"。
+type socksHalfCloser struct {
+	net.Conn
+	raw net.Conn
+}
+
+func (c *socksHalfCloser) CloseWrite() error {
+	if tc, ok := c.raw.(*net.TCPConn); ok {
+		return tc.CloseWrite()
+	}
+	log.Debug("[HTTP-PROXY] SOCKS5 half-close unavailable, skipping", "raw", fmt.Sprintf("%T", c.raw))
+	return nil
 }
 
 func connectTarget(r *http.Request) string {

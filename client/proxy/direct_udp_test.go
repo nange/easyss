@@ -3,14 +3,12 @@ package proxy
 import (
 	"context"
 	"net"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/protocol"
-	"github.com/txthinking/socks5"
 )
 
 // recordingDialer 包装一个普通的 UDP dialer：记录每个拨号得到的连接，并延迟每次拨号，
@@ -58,9 +56,9 @@ func newDirectUDPTestServer(t *testing.T, dial func(context.Context, string, str
 	return srv
 }
 
-// startSilentRemoteUDP 启动一个本地 UDP"远端"，它静默丢弃所有数据报，这样中继的读循环
-// 永远不会收到数据，也永远不会调用 sendToClient（后者需要一个带 UDPConn 的真实
-// socks5.Server）。
+// startSilentRemoteUDP 启动一个本地 UDP"远端"，它静默丢弃所有数据报，因此中继的读
+// 循环不会收到数据、也就不会产生回包。用例仍然登记一个带真实 socket 的中继
+// （见 newDisposableUDPRelay），使它具备完整的回包能力而不是靠"不会回包"侥幸通过。
 func startSilentRemoteUDP(t *testing.T) string {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -77,12 +75,6 @@ func startSilentRemoteUDP(t *testing.T) string {
 		}
 	}()
 	return pc.LocalAddr().String()
-}
-
-func directTestDatagram(dst string, data byte) *socks5.Datagram {
-	host, portStr, _ := net.SplitHostPort(dst)
-	port, _ := strconv.Atoi(portStr)
-	return socks5.NewDatagram(socks5.ATYPIPv4, net.ParseIP(host).To4(), []byte{byte(port >> 8), byte(port)}, []byte{data})
 }
 
 // TestDirectUDPRelayConcurrentDial 验证针对同一个（client, target）键并发处理的两个
@@ -102,7 +94,7 @@ func TestDirectUDPRelayConcurrentDial(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 2 {
 		wg.Go(func() {
-			if err := srv.directUDPRelay(&socks5.Server{}, clientAddr, directTestDatagram(dst, 1), dst); err != nil {
+			if err := srv.directUDPRelay(newDisposableUDPRelay(t, srv, clientAddr), dst, []byte{1}); err != nil {
 				t.Errorf("directUDPRelay: %v", err)
 			}
 		})
@@ -131,7 +123,7 @@ func TestDirectUDPRelayStaleReadLoopKeepsLiveEntry(t *testing.T) {
 	clientAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 43211}
 	key := "direct_" + clientAddr.String() + "_" + dst
 
-	if err := srv.directUDPRelay(&socks5.Server{}, clientAddr, directTestDatagram(dst, 1), dst); err != nil {
+	if err := srv.directUDPRelay(newDisposableUDPRelay(t, srv, clientAddr), dst, []byte{1}); err != nil {
 		t.Fatalf("directUDPRelay: %v", err)
 	}
 	live, ok := srv.udp.directFor(key)
@@ -146,7 +138,7 @@ func TestDirectUDPRelayStaleReadLoopKeepsLiveEntry(t *testing.T) {
 		t.Fatalf("dial stale conn: %v", err)
 	}
 	stale := &directUDPConn{conn: staleConn}
-	go srv.directUDPReadLoop(&socks5.Server{}, clientAddr, dst, key, stale)
+	go srv.directUDPReadLoop(newDisposableUDPRelay(t, srv, clientAddr), dst, key, stale)
 	_ = staleConn.Close()
 
 	deadline := time.Now().Add(2 * time.Second)

@@ -13,7 +13,7 @@ import (
 	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util"
-	"github.com/txthinking/socks5"
+	xproxy "golang.org/x/net/proxy"
 )
 
 type NextProxy struct {
@@ -237,54 +237,51 @@ func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string
 	if dialTimeout <= 0 {
 		dialTimeout = config.DefaultDialTimeout
 	}
+
+	// forward 是 SOCKS5 客户端拨上游代理时使用的底层拨号函数（等价于旧库的
+	// c.DialTCP）：只拨上游代理地址，并使用带 Timeout 的 net.Dialer。
 	dialer := &net.Dialer{Timeout: dialTimeout}
-	socksTimeout := max(int(dialTimeout.Seconds()), 1)
+	forward := socksDialerFunc(func(ctx context.Context, network, address string) (net.Conn, error) {
+		return dialer.DialContext(ctx, network, address)
+	})
 
-	type result struct {
-		conn net.Conn
-		err  error
+	var auth *xproxy.Auth
+	if username != "" || password != "" {
+		auth = &xproxy.Auth{User: username, Password: password}
 	}
-	ch := make(chan result, 1)
-
-	go func() {
-		c, err := socks5.NewClient(np.url.Host, username, password, socksTimeout, socksTimeout)
-		if err != nil {
-			ch <- result{nil, err}
-			return
-		}
-		c.DialTCP = func(network string, laddr, raddr string) (net.Conn, error) {
-			return dialer.Dial(network, raddr)
-		}
-
-		conn, err := c.Dial(network, addr)
-		if err != nil {
-			ch <- result{nil, err}
-			return
-		}
-
-		// 清除 SOCKS5 协商期间设置的 deadline。socks5 库在 Negotiate() 中为
-		// 握手设置了 SetDeadline(now + TCPTimeout)，但从不清除它，这会导致
-		// 数据传输阶段超过该超时时间后连接超时。
-		_ = conn.SetDeadline(time.Time{})
-
-		ch <- result{conn, nil}
-	}()
-
-	select {
-	case <-ctx.Done():
-		// 排空 dial goroutine，防止连接泄漏。dial goroutine 仍在运行，
-		// 最终会向 ch 发送结果（缓冲区为 1，不会阻塞）。如果拨号成功，
-		// 由于调用方已经放弃，立即关闭该连接。
-		go func() {
-			res := <-ch
-			if res.conn != nil {
-				res.conn.Close() //nolint:errcheck
-			}
-		}()
-		return nil, fmt.Errorf("socks5 dial cancelled: %w", ctx.Err())
-	case res := <-ch:
-		return res.conn, res.err
+	d, err := xproxy.SOCKS5("tcp", np.url.Host, auth, forward)
+	if err != nil {
+		return nil, fmt.Errorf("create socks5 dialer: %w", err)
 	}
+
+	// x/net/proxy 的 SOCKS5 拨号器实现了 DialContext：ctx 在拨号阶段生效，
+	// 并且会透传给上面的 forward，因此不再需要"goroutine + 结果 channel +
+	// 放弃后排空"的手工取消编排——调用方取消时，进行中的拨号会被直接中止。
+	//
+	// 该库也不设置任何 deadline（全包无 SetDeadline），所以旧库 Negotiate()
+	// 留下握手 deadline、需要在成功后手工清除的那段补偿一并消失。
+	cd, ok := d.(xproxy.ContextDialer)
+	if !ok {
+		return nil, fmt.Errorf("socks5 dialer %T does not support context", d)
+	}
+	conn, err := cd.DialContext(ctx, network, addr)
+	if err != nil {
+		return nil, fmt.Errorf("socks5 dial %s: %w", addr, err)
+	}
+	return conn, nil
+}
+
+// socksDialerFunc 是 xproxy.Dialer + ContextDialer 的函数式适配器。它让
+// nextproxy 能把"带 Timeout 的 net.Dialer"直接当作 SOCKS5 客户端的底层拨号
+// 函数注入，同时保留 ctx 取消能力（net.Dialer.DialContext 原生支持）。
+type socksDialerFunc func(ctx context.Context, network, address string) (net.Conn, error)
+
+func (f socksDialerFunc) Dial(network, address string) (net.Conn, error) {
+	return f(context.Background(), network, address)
+}
+
+func (f socksDialerFunc) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	return f(ctx, network, address)
 }
 
 // Host 以 "host:port" 形式返回上游代理地址（nil 接收者时返回 ""）。
