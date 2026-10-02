@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
@@ -78,6 +79,14 @@ const (
 	readinessTimeout = 15 * time.Second
 )
 
+// socks5 端口预留扫描的候选窗口。窗口刻意落在各平台动态端口段（Linux
+// 32768+、macOS/Windows 49152+）之下，减少与内核或其他进程自动分配的端口
+// 撞车；窗口内某个端口不可用时逐个跳过即可（见 reserveSocks5PortAt）。
+const (
+	socks5PortBase = 20000
+	socks5PortSpan = 10000
+)
+
 // testExternalURLs 用于测试完整的代理隧道。
 // 提供多个 URL，以便在某个暂时不可用时进行回退。
 var testExternalURLs = []string{
@@ -147,24 +156,63 @@ func reserveTCPPort(t *testing.T) (int, *portReservation) {
 	return l.Addr().(*net.TCPAddr).Port, r
 }
 
-// reserveSocks5Port 占住一个 TCP 与 UDP 两侧都空闲的 loopback 端口：
+// reserveSocks5Port 挑一个 TCP 与 UDP 两侧都空闲的 loopback 端口并占住它：
 // txthinking/socks5 服务器会在同一地址上同时绑定 TCP 监听器和 UDP socket，
 // 因此仅占住 TCP 侧的端口仍然无法保证它能启动。
 func reserveSocks5Port(t *testing.T) (int, *portReservation) {
 	t.Helper()
 
-	for range 20 {
-		port, r := reserveTCPPort(t)
-		pc, err := net.ListenPacket("udp", loopbackAddr(port))
+	// 随机起点：并行的多个测试二进制不会总是从同一个端口开始扫描而互相推挤。
+	return reserveSocks5PortAt(t, socks5PortBase+rand.IntN(socks5PortSpan))
+}
+
+// reserveSocks5PortAt 从 start 开始按窗口顺序逐个候选端口扫描，返回第一个
+// 双侧都能占住的端口。
+//
+// 候选端口是显式指定的，而不是反复用 ":0" 让内核挑：内核会把刚释放的端口原样
+// 再发一次，而释放占位监听器正是失败分支要做的事，于是"某一侧恰好不可用"的候选
+// 会让重试循环原地打转——20 次重试全落在同一个端口上，一次都没能前进。
+// 2026-10-01 的 windows-arm64 CI 就是这样报出 "no loopback port free on both
+// tcp and udp" 的（同一个提交几分钟前在 PR 分支上还是绿的）。显式换端口保证
+// 每次尝试都是新候选，被单个端口卡住的重试因此不可能发生。
+func reserveSocks5PortAt(t *testing.T, start int) (int, *portReservation) {
+	t.Helper()
+
+	var lastErr error
+	for i := range socks5PortSpan {
+		port := socks5PortBase + (start-socks5PortBase+i)%socks5PortSpan
+		r, err := tryReserveSocks5Port(loopbackAddr(port))
 		if err != nil {
-			r.release()
+			// 记下最后一个错误：扫描全窗口都失败时，它是唯一能说明"是 TCP 侧
+			// 被占、UDP 侧被占，还是端口被系统保留"的证据。
+			lastErr = err
 			continue
 		}
-		r.packet = pc
+		// 兜底：正常路径在派发 Start 前同步 release；harness 中途失败时由
+		// Cleanup 收尾，测试进程退出前不会泄漏占位监听器。
+		t.Cleanup(func() { r.release() })
 		return port, r
 	}
-	t.Fatal("no loopback port free on both tcp and udp")
+	t.Fatalf("no loopback port free on both tcp and udp in [%d, %d), last error: %v",
+		socks5PortBase, socks5PortBase+socks5PortSpan, lastErr)
 	return 0, nil
+}
+
+// tryReserveSocks5Port 尝试在 addr 上完成双侧预留。任一侧不可用即返回错误，
+// 且不留下任何已占用的 socket，由调用方换下一个候选端口。
+func tryReserveSocks5Port(addr string) (*portReservation, error) {
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	pc, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		// TCP 侧已经拿到手：这里必须自己关掉，否则失败分支会把刚释放的端口
+		// 又占回去（调用方的下一个候选未必是它，但泄漏是实打实的）。
+		_ = l.Close()
+		return nil, err
+	}
+	return &portReservation{listener: l, packet: pc}, nil
 }
 
 // release 把端口交还给即将启动的真正服务，必须在派发 Start 的前一行调用。
@@ -688,6 +736,46 @@ func TestReserveSocks5PortHoldsTCPAndUDP(t *testing.T) {
 
 	require.NoError(t, pc.Close())
 	require.NoError(t, l.Close())
+}
+
+// TestReserveSocks5PortSkipsBlockedCandidate 固化"候选端口在某一侧不可用时必须
+// 换下一个，而不是原地重试"：Windows 上内核会把刚释放的端口再发一次，依赖
+// ":0" 的重试循环会一直撞在同一个端口上（见 reserveSocks5PortAt）。
+func TestReserveSocks5PortSkipsBlockedCandidate(t *testing.T) {
+	blocked, blockedPC := blockedSocks5Candidate(t)
+	t.Cleanup(func() { _ = blockedPC.Close() })
+
+	port, r := reserveSocks5PortAt(t, blocked)
+	t.Cleanup(func() { r.release() })
+
+	if port == blocked {
+		t.Fatalf("scanner returned the blocked candidate %d", blocked)
+	}
+	if port < socks5PortBase || port >= socks5PortBase+socks5PortSpan {
+		t.Errorf("scanner returned %d outside the candidate window [%d, %d)",
+			port, socks5PortBase, socks5PortBase+socks5PortSpan)
+	}
+	_, err := net.Listen("tcp", loopbackAddr(port))
+	require.Error(t, err, "returned port must be held on the tcp side")
+	_, err = net.ListenPacket("udp", loopbackAddr(port))
+	require.Error(t, err, "returned port must be held on the udp side")
+}
+
+// blockedSocks5Candidate 在扫描窗口内占住一个候选端口的 UDP 侧，使它在"双侧
+// 都要空闲"的判定下不可用，而 TCP 侧仍然空闲。
+func blockedSocks5Candidate(t *testing.T) (int, net.PacketConn) {
+	t.Helper()
+
+	start := rand.IntN(socks5PortSpan)
+	for i := range 20 {
+		port := socks5PortBase + (start+i)%socks5PortSpan
+		pc, err := net.ListenPacket("udp", loopbackAddr(port))
+		if err == nil {
+			return port, pc
+		}
+	}
+	t.Fatal("no candidate port with a free udp side in the scan window")
+	return 0, nil
 }
 
 // TestWaitForReadyReportsStartError 固化了快速失败契约：启动失败的服务器
