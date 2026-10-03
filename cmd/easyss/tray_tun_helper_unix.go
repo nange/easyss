@@ -24,9 +24,11 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	a.tunHelperMu.Lock()
 	defer a.tunHelperMu.Unlock()
 
-	// 核心在函数入口取一次快照：这条路径要提权、spawn helper、等 fd（最长
-	// 数十秒），期间 Stop/切换可能已经把它取下，中途重新读会读到 nil。
+	// 核心与配置都在函数入口取一次快照：这条路径要提权、spawn helper、等 fd
+	//（最长数十秒），期间 Stop/切换可能已经把它取下或发布新配置；快照保证
+	// 整个流程用的是同一份一致状态，而不是"读到一半被换掉"。
 	core := a.currentCore()
+	cfg := a.currentConfig()
 
 	log.Info("[SYSTRAY] createTun2socksViaHelper called",
 		"tunMgrNil", a.tunMgr == nil,
@@ -58,7 +60,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	// 只做一次有界尝试（预算为 dns.PreResolveTimeout，与启动期预解析同一个
 	// 常量）：这是用户主动触发的操作，失败就报错让用户重试，而不是在界面无
 	// 反馈的情况下把最坏等待叠成"尝试次数 × 总预算"。
-	if serverAddr := a.cfg.DefaultServer().Address; !util.IsIP(serverAddr) {
+	if serverAddr := cfg.DefaultServer().Address; !util.IsIP(serverAddr) {
 		if len(config.DirectDNSServers) == 0 {
 			core.HTTPServer.ClearTunConfig()
 			return fmt.Errorf("failed to pre-resolve server hostname %s: dns cache not available", serverAddr)
@@ -67,7 +69,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 		// 缓存由核心持有（见 runner.Core.PrePopulateServerDomain）：它是 DNS
 		// pinning 与 TUN 系统 DNS 的同一个来源，不再经由本地 SOCKS5 服务器。
 		err := core.PrePopulateServerDomain(ctx, serverAddr, config.DirectDNSServers,
-			a.cfg.Routing.IPV6Rule != "enable")
+			cfg.Routing.IPV6Rule != "enable")
 		cancel()
 		if err != nil {
 			core.HTTPServer.ClearTunConfig()
@@ -81,12 +83,12 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	// 尝试都失败、恰好这次预解析才成功"的情形把 TUN 的系统 DNS 写成已知不可达的
 	// 默认值。
 	//
-	// MTU 取 tmpCfg.MTU（由 a.cfg.TunMTU() 归一化而来），与稍后交给 tun2socks
+	// MTU 取 tmpCfg.MTU（由 cfg.TunMTU() 归一化而来），与稍后交给 tun2socks
 	// netstack 的值同源：helper 把它交给创建脚本写进设备，主进程用它设置
 	// netstack，二者不一致时 netstack 会静默丢弃超过自身 MTU 的包
 	// （见 tun.Manager.engineMTU）。
 	tunHTTPCfg := &proxy.TunConfig{
-		Socks5Addr:     util.Socks5URI(a.cfg.Local.SocksPort),
+		Socks5Addr:     util.Socks5URI(cfg.Local.SocksPort),
 		DNSAddr:        tunDNS(),
 		Device:         devCfg.Device,
 		TunIP:          devCfg.TunIP,
@@ -105,10 +107,10 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 
 	// 4. 生成提权 helper。将归一化后的基础超时作为生成等待上限
 	//    （未配置时为默认值 30s，越界值已在加载时钳制）。
-	spawnTimeout := a.cfg.TimeoutDuration()
+	spawnTimeout := cfg.TimeoutDuration()
 	fdSocketPath := tunFdSocketPath()
-	fifoWriter, fdListener, err := SpawnTunHelper(a.cfg.Local.HTTPPort, fdSocketPath,
-		a.cfg.Log.FilePath, a.cfg.Log.Level, spawnTimeout)
+	fifoWriter, fdListener, err := SpawnTunHelper(cfg.Local.HTTPPort, fdSocketPath,
+		cfg.Log.FilePath, cfg.Log.Level, spawnTimeout)
 	if err != nil {
 		core.HTTPServer.ClearTunConfig()
 		return fmt.Errorf("spawn tun helper: %w", err)
@@ -143,15 +145,18 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	//    tunSession 记下 helper 建立这个会话时用的那一份设备/网关配置：关闭时
 	//    要按它来核对路由与回滚，而下面这个 manager 只知道请求的设备名
 	//    （fd 路径下内核分配的 utunN 只有 helper 见过）。
-	a.cfg.Local.EnableTun2socks = true
+	// 偏好与运行期状态分开落位（见 client.Client.SetTunMode）：前者进不可变
+	// 快照，后者是 core 上的显式开关。
+	a.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = true })
+	core.Client.SetTunMode(true)
 	a.tunSession = &devCfg
 	a.tunMgr = tun.New(tun.Config{
-		Socks5Addr:       util.Socks5URI(a.cfg.Local.SocksPort),
+		Socks5Addr:       util.Socks5URI(cfg.Local.SocksPort),
 		DeviceFD:         fd,
 		SkipRouteCleanup: true, // helper 负责路由/DNS 清理
 		// 设备由 helper 按同一个值创建（见 tunHTTPCfg.MTU）；这里是 netstack
 		// 那一侧。若两者不一致，Manager.engineMTU 会按设备真实值兜底并告警。
-		MTU: a.cfg.TunMTU(),
+		MTU: cfg.TunMTU(),
 	})
 
 	icmpHandler := tun.NewICMPHandler(core.Client.Router())

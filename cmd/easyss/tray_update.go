@@ -122,7 +122,7 @@ func (a *TrayApp) checkUpdate(ctx context.Context, interactive bool) {
 
 	// 获取客户端持有自己的连接池，必须随本次检查回收：托盘是长驻进程，
 	// 检查每天一次且可被反复手动触发（见 selfupdate.Client.Close）。
-	client := selfupdate.NewClient(a.cfg.Local.HTTPPort)
+	client := selfupdate.NewClient(a.currentConfig().Local.HTTPPort)
 	defer client.Close()
 
 	rel, err := a.checkLatest(ctx, client)
@@ -309,7 +309,7 @@ func (a *TrayApp) downloadAndInstall() {
 		ctx, cancel := context.WithTimeout(context.Background(), selfupdate.DownloadTimeout)
 		defer cancel()
 
-		if err := selfupdate.Update(ctx, a.cfg.Local.HTTPPort, rel); err != nil {
+		if err := selfupdate.Update(ctx, a.currentConfig().Local.HTTPPort, rel); err != nil {
 			log.Error("[SYSTRAY] download and install update", "tag", rel.TagName, "err", err)
 			a.setUpdateItem("更新 "+rel.TagName+" 失败，点击重试", false)
 			a.updateState.Store(updateStateAvailable)
@@ -345,7 +345,9 @@ func (a *TrayApp) downloadAndInstall() {
 			if lerr := tryAcquireSingletonLock(); lerr != nil {
 				log.Error("[SYSTRAY] re-acquire singleton lock after failed restart", "err", lerr)
 			}
-			if err := a.restartService(a.cfg.Clone()); err != nil {
+			// 恢复路径不改变服务器：把当前快照当作"意图"传入即可（restartServiceWith
+			// 只读它的服务器下标）。
+			if err := a.restartService(a.currentConfig()); err != nil {
 				log.Error("[SYSTRAY] restore service after failed restart", "err", err)
 			}
 			a.setUpdateItem("更新成功，重启失败，请手动重启", false)
