@@ -281,3 +281,40 @@ func TestCloseFileOutput(t *testing.T) {
 		t.Errorf("Init after CloseFileOutput should reopen the file, content: %q", data)
 	}
 }
+
+// TestCloseFileOutputIsTerminalForStaleLoggers 固定"释放之后迟到的写入不能复活
+// 句柄"这一契约。
+//
+// 换掉包级 logger 只挡住了"之后 Load 到新 logger 的写入"：后台 goroutine 可能
+// 在 CloseFileOutput 之前就已经 Load 到带文件处理器的旧 logger（runner 正是在
+// goroutine 里打 "[SOCKS5] listening"，宿主同时调用 Stop），写入会晚于 Close 到
+// 达 lumberjack；而 lumberjack 写时发现句柄为 nil 会重新打开文件。句柄一旦这样
+// 回来，Windows 上宿主的删除/重命名就被挡住——mobile.TestStartAppliesLogConfig
+// 在 windows-arm64 上的偶发失败正是这条路径。
+func TestCloseFileOutputIsTerminalForStaleLoggers(t *testing.T) {
+	original := Logger()
+	defer SetLogger(original)
+
+	logPath := filepath.Join(t.TempDir(), "stale.log")
+
+	Init(logPath, "debug")
+	// 模拟"在 CloseFileOutput 之前就拿到旧 logger"的后台 goroutine。
+	stale := Logger()
+
+	Info("before close")
+	if err := CloseFileOutput(); err != nil {
+		t.Fatalf("CloseFileOutput: %v", err)
+	}
+
+	// 删掉文件后由旧 logger 再写一次：真释放了就不会把文件写回来。
+	if err := os.Remove(logPath); err != nil {
+		t.Fatalf("remove log file: %v", err)
+	}
+	stale.Info("late write through the stale logger")
+
+	if _, err := os.Stat(logPath); err == nil {
+		t.Error("a late write through a stale logger re-created the log file")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat log file: %v", err)
+	}
+}

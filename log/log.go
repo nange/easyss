@@ -161,13 +161,53 @@ func TextHandler(w io.Writer, level slog.Leveler) slog.Handler {
 	)
 }
 
+// closableFileWriter 包住 lumberjack 写入器，让"关闭"成为终态。
+//
+// 只把包级 logger 换成 stdout-only 不足以释放句柄：后台 goroutine 可能在
+// CloseFileOutput 之前就已经 Load 到带文件处理器的旧 logger（runner 正是在
+// goroutine 里打 "[SOCKS5] listening"，宿主同时调用 Stop），这次写入会晚于
+// Close 到达 lumberjack；而 lumberjack 的语义是"写时若句柄为 nil 就重新打开"，
+// 于是刚释放的句柄被迟到的写入复活——Windows 上宿主随即删不掉日志文件，Android
+// 上的轮转同样被挡（windows-arm64 上 mobile.TestStartAppliesLogConfig 的偶发
+// 失败就是这条路径）。这层包装让 Close 之后的写入被丢弃，句柄不会再回来。
+type closableFileWriter struct {
+	mu     sync.Mutex
+	writer *lumberjack.Logger
+	closed bool
+}
+
+func (w *closableFileWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.closed {
+		// 丢弃而非报错：这条记录通常已经由 MultiHandler 的 stdout 分支写出，
+		// 把错误冒泡给调用方只会让它看到与日志目的无关的失败。
+		return len(p), nil
+	}
+	return w.writer.Write(p)
+}
+
+func (w *closableFileWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.closed {
+		return nil
+	}
+	w.closed = true
+	return w.writer.Close()
+}
+
 func FileWriter(outputFile string) io.WriteCloser {
-	return &lumberjack.Logger{
-		Filename:   outputFile,
-		MaxSize:    10,
-		MaxAge:     1,
-		MaxBackups: 1,
-		LocalTime:  true,
+	return &closableFileWriter{
+		writer: &lumberjack.Logger{
+			Filename:   outputFile,
+			MaxSize:    10,
+			MaxAge:     1,
+			MaxBackups: 1,
+			LocalTime:  true,
+		},
 	}
 }
 
@@ -222,9 +262,9 @@ func CloseFileOutput() error {
 		return nil
 	}
 
-	// 先摘掉文件处理器再关句柄：lumberjack 在句柄为 nil 时会于下一次写入重新
-	// 打开文件，若日志器仍挂着文件处理器，"关闭"就会被紧随其后的写入撤销，
-	// 宿主删除日志文件的操作也就白做了。
+	// 两层都要做：换掉包级 logger 让后续记录只走 stdout，关掉写入器释放句柄。
+	// 前者管住"之后 Load 到新 logger 的写入"，后者（closableFileWriter 的终态
+	// 语义）管住"在此之前就 Load 到旧 logger、写完却晚于本次 Close 的写入"。
 	SetLogger(slog.New(DefaultHandler(&atomicLevel)))
 	return w.Close()
 }
