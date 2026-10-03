@@ -313,6 +313,14 @@ func probeRoutedViaDevice(probe []string, cmd func(string) (string, error), mark
 	return out, err
 }
 
+// routeProbeCmd 执行一次路由表查询（darwin 的 `route -n get`、linux 的
+// `ip route get`），默认实现就是 util.Command。
+//
+// 它是变量以便测试注入确定的输出：残留判定只依赖这份文本里的字段
+// （见 routeFieldsContain），与运行测试的机器当前的路由表无关——真实的残留路由
+// 需要 root 才能造出来。
+var routeProbeCmd = util.Command
+
 // routeFieldsContain 报告路由探测输出里是否出现了 "key value" 这一对字段。
 //
 // 它按空白分词后逐项整体比较，而不是子串匹配：`route -n get` 与 `ip route get`

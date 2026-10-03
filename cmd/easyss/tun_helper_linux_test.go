@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/nange/easyss/v3/scripts"
+	"github.com/stretchr/testify/require"
 )
 
 // 以下 netns 集成测试使用的取值。它们与 TUN 默认值一致：TUN 网关位于
@@ -660,4 +661,51 @@ func newRouteBlock(t *testing.T, raw string) routeBlock {
 		t.Fatalf("unrecognized route block %q", raw)
 		return routeBlock{raw: raw}
 	}
+}
+
+// TestTunRouteResidueUsesTheTunDevice 用注入的探测输出钉住 linux 的残留判定：
+// 路由按设备安装（ip route replace ... dev tun-easyss），因此判据是设备名，
+// 且必须是整词匹配——"dev tun" 不能命中 "dev tun0"。
+//
+// 真实的残留路由需要 root 才能造出来，因此这里替换的是命令执行（routeProbeCmd），
+// 真实系统路由表不参与。
+func TestTunRouteResidueUsesTheTunDevice(t *testing.T) {
+	const (
+		viaTun      = "1.1.1.1 dev tun-easyss src 198.18.0.1 uid 501"
+		viaPhysical = "1.1.1.1 via 192.168.3.1 dev en0 src 192.168.3.20 uid 501"
+	)
+
+	t.Run("still routed via the tun device", func(t *testing.T) {
+		calls := stubRouteProbe(t, viaTun)
+
+		out, leftover := tunRouteResidue("tun-easyss", "")
+		require.True(t, leftover, "traffic still entering the session's device means the teardown failed")
+		require.Contains(t, out, "dev tun-easyss")
+		require.Equal(t, []string{"ip", "route", "get", "1.1.1.1"}, (*calls)[0],
+			"the linux probe is `ip route get <probe>`")
+	})
+
+	t.Run("routed via the physical device", func(t *testing.T) {
+		stubRouteProbe(t, viaPhysical)
+
+		_, leftover := tunRouteResidue("tun-easyss", "")
+		require.False(t, leftover, "the physical device means the teardown worked")
+	})
+
+	t.Run("a device name that is only a prefix does not match", func(t *testing.T) {
+		// 残留判定必须精确：子串匹配会让 "tun" 命中 "tun0"，把另一个 TUN 设备的
+		// 路由误判成本会话的残留，进而触发一次不必要的提权回滚。
+		stubRouteProbe(t, "1.1.1.1 dev tun0 src 198.18.0.1 uid 501")
+
+		_, leftover := tunRouteResidue("tun", "")
+		require.False(t, leftover)
+	})
+
+	t.Run("without a device name there is nothing to judge", func(t *testing.T) {
+		calls := stubRouteProbe(t, viaTun)
+
+		_, leftover := tunRouteResidue("", "")
+		require.False(t, leftover)
+		require.Empty(t, *calls, "no probe may run without a device to look for")
+	})
 }

@@ -52,3 +52,57 @@ func TestBareV6Addr(t *testing.T) {
 	require.Equal(t, "2001:db8::1", bareV6Addr("2001:db8::1"))
 	require.Equal(t, "", bareV6Addr(""))
 }
+
+// TestTunRouteResidueUsesTheTunGateway 用注入的探测输出钉住 darwin 的残留判定：
+// 判据是本会话的 TUN 网关，而不是设备名（内核分配的是 utunN，请求名可能既与别的
+// utun 设备重名、也未必等于实际分配到的名字）。
+//
+// 真实的残留路由需要 root 才能造出来，因此这里替换的是命令执行（routeProbeCmd），
+// 脚本与真实系统路由表都不参与。
+func TestTunRouteResidueUsesTheTunGateway(t *testing.T) {
+	const (
+		viaTun = "   route to: 1.1.1.1\n" +
+			"destination: 1.0.0.0\n" +
+			"       mask: 255.0.0.0\n" +
+			"    gateway: 198.18.0.1\n" +
+			"  interface: utun9\n"
+		viaPhysical = "   route to: 1.1.1.1\n" +
+			"destination: 0.0.0.0\n" +
+			"       mask: 0.0.0.0\n" +
+			"    gateway: 192.168.3.1\n" +
+			"  interface: en0\n"
+	)
+
+	t.Run("still routed via the tun gateway", func(t *testing.T) {
+		calls := stubRouteProbe(t, viaTun)
+
+		out, leftover := tunRouteResidue("utun9", "198.18.0.1")
+		require.True(t, leftover, "the session's own gateway means traffic still enters the dead device")
+		require.Contains(t, out, "gateway: 198.18.0.1")
+		require.Equal(t, []string{"route", "-n", "get", "1.1.1.1"}, (*calls)[0],
+			"the darwin probe is `route -n get <probe>`")
+	})
+
+	t.Run("routed via the physical gateway", func(t *testing.T) {
+		stubRouteProbe(t, viaPhysical)
+
+		_, leftover := tunRouteResidue("utun9", "198.18.0.1")
+		require.False(t, leftover, "the physical default route means the teardown worked")
+	})
+
+	t.Run("without a gateway the device name is the fallback", func(t *testing.T) {
+		// 网关信息缺失时只能退回设备名：这里模拟"另一个 utun 设备占用了请求名"，
+		// 判定结果为残留是这种兜底判据的已知代价，注释与它保持一致。
+		stubRouteProbe(t, viaTun)
+
+		_, leftover := tunRouteResidue("utun9", "")
+		require.True(t, leftover)
+	})
+
+	t.Run("no probe output at all", func(t *testing.T) {
+		stubRouteProbe(t, "")
+
+		_, leftover := tunRouteResidue("utun9", "198.18.0.1")
+		require.False(t, leftover, "unreadable output must not be reported as residue")
+	})
+}

@@ -204,3 +204,20 @@ func TestRouteFieldsContain(t *testing.T) {
 		})
 	}
 }
+
+// stubRouteProbe 用固定的路由表应答替换探测命令（routeProbeCmd），返回记录下来的
+// 调用参数，并在测试结束时还原。它是 routeFieldsContain/tunRouteResidue 那组测试
+// 的共同前置：残留判定只依赖这份文本里的字段，不需要真实的系统路由表。
+func stubRouteProbe(t *testing.T, out string) *[][]string {
+	t.Helper()
+
+	prev := routeProbeCmd
+	t.Cleanup(func() { routeProbeCmd = prev })
+
+	var calls [][]string
+	routeProbeCmd = func(name string, args ...string) (string, error) {
+		calls = append(calls, append([]string{name}, args...))
+		return out, nil
+	}
+	return &calls
+}

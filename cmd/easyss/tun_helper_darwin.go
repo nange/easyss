@@ -138,7 +138,8 @@ func runCloseScript(device, tunGW, localGateway, tunGWV6, serverIPV6, localGatew
 //
 // 按网关判定也正好覆盖最危险的情形：设备已经随最后一个 fd 消失，路由却还在。
 //
-// 它是变量以便测试注入探测结果：真实的残留路由需要 root 才能造出来。
+// 它是变量以便测试注入探测结果（里面的命令执行走 routeProbeCmd，同样是可注入的
+// 变量）：真实的残留路由需要 root 才能造出来。
 var tunRouteResidue = func(device, tunGW string) (string, bool) {
 	key, value := "gateway:", tunGW
 	if value == "" {
@@ -150,7 +151,7 @@ var tunRouteResidue = func(device, tunGW string) (string, bool) {
 
 	var out string
 	for _, target := range tunRouteProbes {
-		got, err := util.Command("route", "-n", "get", target)
+		got, err := routeProbeCmd("route", "-n", "get", target)
 		if err != nil {
 			continue
 		}

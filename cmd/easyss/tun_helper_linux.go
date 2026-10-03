@@ -122,7 +122,8 @@ func runCloseScript(device, tunGW, localGateway, tunGWV6, serverIPV6, localGatew
 // tunRouteResidue 报告探测地址是否仍被路由进 TUN 设备，并返回探测输出。
 //
 // linux 的 TUN 路由按设备安装（ip route replace ... dev tun0），因此按设备名
-// 判定。它是变量以便测试注入探测结果：真实的残留路由需要 root 才能造出来。
+// 判定。它是变量以便测试注入探测结果（里面的命令执行走 routeProbeCmd，同样是
+// 可注入的变量）：真实的残留路由需要 root 才能造出来。
 var tunRouteResidue = func(device, _ string) (string, bool) {
 	if device == "" {
 		return "", false
@@ -130,7 +131,7 @@ var tunRouteResidue = func(device, _ string) (string, bool) {
 
 	var out string
 	for _, target := range tunRouteProbes {
-		got, err := util.Command("ip", "route", "get", target)
+		got, err := routeProbeCmd("ip", "route", "get", target)
 		if err != nil {
 			continue
 		}
