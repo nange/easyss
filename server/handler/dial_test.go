@@ -181,13 +181,55 @@ func TestDialAddrsSharedBudget(t *testing.T) {
 	}
 }
 
+// TestAttemptDeadline 直接钉住预算切分公式本身。它是确定性的：切分只取决于
+// "调用时刻、整体截止时间、剩余候选数"，因此这里用固定时刻验证，不需要真的等，
+// 也不会被调度器拖慢。
+//
+// 公式与 net.Dialer 内部 partialDeadline 同构：剩余预算按剩余候选数均分，低于
+// dialAttemptMinBudget（默认 2s，对应 net.Dialer 的 partialDeadline 下限）时按下限
+// 给，剩余预算本身已经不足下限时就把剩下的全用掉。
+func TestAttemptDeadline(t *testing.T) {
+	now := time.Unix(0, 0)
+
+	for _, tc := range []struct {
+		name           string
+		budget         time.Duration
+		candidatesLeft int
+		want           time.Duration
+	}{
+		{"均分高于下限", 9 * time.Second, 3, 3 * time.Second},
+		{"均分低于下限：按下限给", 10 * time.Second, 10, 2 * time.Second},
+		{"剩余预算本身低于下限：全部用掉", 1500 * time.Millisecond, 10, 1500 * time.Millisecond},
+		{"只剩一个候选：拿到全部剩余", 9 * time.Second, 1, 9 * time.Second},
+		{"预算已耗尽", 0, 5, 0},
+		{"预算已超时", -time.Second, 5, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := attemptDeadline(now, now.Add(tc.budget), tc.candidatesLeft)
+			if want := now.Add(tc.want); !got.Equal(want) {
+				t.Fatalf("attemptDeadline(budget=%v, candidatesLeft=%d) = %v, want %v",
+					tc.budget, tc.candidatesLeft, got.Sub(now), tc.want)
+			}
+		})
+	}
+}
+
 // TestDialAddrsBudgetFloor 验证单个候选的最小预算：按候选数均分后低于
-// dialAttemptMinBudget 时按最小值给（剩余预算不足时给剩余量），因此尝试次数远小于
-// 候选数，并且每个候选拿到的是下限而不是"总预算/候选数"。
+// dialAttemptMinBudget 时按最小值给（剩余预算不足时给剩余量），因此候选不会被逐个
+// 试满，也不会有人拿到"总预算/候选数"之外的份额。
+//
+// 断言的措辞刻意只涉及与调度无关的事实。这里曾经断言"100ms 预算切出 2~4 次尝试"，
+// 但那取决于计时器粒度与调度：CI 的 runner 一旦被拖慢，第一个 40ms 子预算就可能
+// 吃掉整个总预算，循环在 `ctx.Err() != nil` 处退出，只剩一次尝试（在 #203 的
+// Test-MacOS 上确实观察到 attempts = 1）。切分公式本身由 TestAttemptDeadline
+// 精确覆盖，这里只验证它在真实循环里的两个可观察后果。
 func TestDialAddrsBudgetFloor(t *testing.T) {
 	const (
 		budget    = 100 * time.Millisecond
 		minBudget = 40 * time.Millisecond
+		// slack 容忍测量粒度：预算是在假拨号里用 time.Until 读出来的，只会比切分
+		// 出来的份额小，不会更大，留一点余量只为让消息可读。
+		slack = 20 * time.Millisecond
 	)
 	shrinkDialAttemptMinBudget(t, minBudget)
 	records := stubDialAttempt(t, hangUntilBudget)
@@ -200,21 +242,21 @@ func TestDialAddrsBudgetFloor(t *testing.T) {
 		t.Fatal("dialAddrs should fail when every candidate hangs")
 	}
 
-	// 100ms 预算按 40ms 一片只能切出 2~4 次尝试（最后一片按剩余量给，切分点落在
-	// 计时器粒度上时会多切一次）；没有下限时这里会试满 10 个候选。
-	if n := len(*records); n < 2 || n > 4 {
-		t.Fatalf("attempts = %d, want the budget spent in min-budget slices (2..4) instead of one per candidate (%d)",
+	// 候选没有被试满：共享预算确实限制了尝试次数。没有下限时每次尝试只拿
+	// 100ms/10 = 10ms，预算足够试完 10 个候选，这条就会失败。
+	if n := len(*records); n >= len(addrs) {
+		t.Fatalf("attempts = %d, want fewer than the %d candidates: the shared budget must bound the loop",
 			n, len(addrs))
 	}
 
-	// 平摊（100ms/10 = 10ms）与下限（40ms）的区别：至少要有一个候选拿到下限级别
-	// 的预算，否则说明切分退回了平均分配。
-	var largest time.Duration
-	for _, rec := range *records {
-		largest = max(largest, rec.budget)
-	}
-	if largest < 30*time.Millisecond {
-		t.Fatalf("largest per-candidate budget = %v, want the dialAttemptMinBudget floor (%v)", largest, minBudget)
+	// 没有任何候选拿到超过下限的预算：既排除"整份预算给第一个候选"，也排除
+	// "退回按候选数平摊"——后者会让靠后的候选分到越来越大的份额（最后一个拿到
+	// 接近整份预算）。
+	for i, rec := range *records {
+		if rec.budget > minBudget+slack {
+			t.Fatalf("attempt %d (%s) got %v, want at most one min-budget slice (%v): the split must not hand out a flat budget/candidates share",
+				i+1, rec.addr, rec.budget, minBudget)
+		}
 	}
 }
 
