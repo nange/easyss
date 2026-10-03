@@ -168,6 +168,9 @@ func (s *Socks5Server) directUDPRelay(relay *udpRelay, dst string, data []byte) 
 	}
 
 	dc.lastSeen.Store(time.Now().UnixNano())
+	// 直连流量不计入速度计数器：托盘与 /stats 的 upload_speed/download_speed
+	// 只统计经隧道的流量（见 UDPExchange.Send），直连 UDP 与直连 TCP
+	// （route.go 的 relayTCP/copyHalfClose）在这一口径上保持一致。
 	_, err := dc.conn.Write(data)
 	return err
 }
@@ -211,7 +214,7 @@ func (s *Socks5Server) proxyUDPRelay(relay *udpRelay, dst string, data []byte) e
 		// 非 DNS 的 UDP 不能使用较短的读空闲超时：会话可能合法地长时间沉默
 		// （例如纯上传流），因此它只保留默认 60 秒的双向空闲回收器。
 		go s.receiveLoop(ue, relay, dst, key, 0)
-		return nil // 第一个载荷已在握手中发送
+		return nil // 第一个载荷已在握手中发送（其上行记账见 OpenUDPExchange）
 	}
 
 	if err := ue.Send(data); err != nil {

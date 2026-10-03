@@ -664,6 +664,11 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 		if len(firstPayload)+len(target)+9 <= protocol.MaxPlainRecordSize {
 			mergeFirst = true
 			extraFrames = []protocol.Frame{protocol.NewFrameDATAGRAM(firstPayload)}
+			// 合并进引导记录的数据报不走 Send（它是流的第一条记录），因此它的
+			// 上行记账只能在这里补。放在创建点而不是各调用方（proxyUDPRelay、
+			// dnsInterceptor.proxyUDPQuery）：创建者只有一个，调用方却会增多，
+			// 而漏掉任何一个都会让该路径上的速度显示停在 0。
+			stats.RecordRawBytesSent(len(firstPayload))
 			log.Debug("[UDP_EXCHANGE] merged first DATAGRAM into bootstrap record", "bytes", len(firstPayload))
 		} else {
 			log.Debug("[UDP_EXCHANGE] first DATAGRAM too large for bootstrap, sending after handshake", "bytes", len(firstPayload))
@@ -697,11 +702,23 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 	return ue, nil
 }
 
+// Send 把一个数据报推入交换的发送侧。
+//
+// 上行载荷在这里记账，Receive 同理给下行记账：UDP 交换是 QUIC（HTTP/3 视频）、
+// 游戏、VoIP 的唯一承载，与 TCP 中继（copyLocalToRemote/copyRemoteToLocal 各自
+// 记账）不同，它没有经过 relay.Bidirectional，因此这两个方法是 UDP 流量进入
+// 「原始字节」计数器的唯一位置——漏掉它们会让托盘速度在有 QUIC 流量时空转
+// （计数不增长，显示接近 0）。记账点是两个方法而不是它们各自的调用方：
+// 交换（及其首个数据报合并进引导记录）的创建者可能不同（DNS 拦截器、
+// proxyUDPRelay），放在这里才能保证每个数据报恰好被计一次、覆盖所有调用方。
+//
+// 首个数据报合并进引导记录时不会经过这里，它在 OpenUDPExchange 里计入。
 func (ue *UDPExchange) Send(data []byte) error {
 	ue.mu.Lock()
 	defer ue.mu.Unlock()
 	ue.lastSeen.Store(time.Now().UnixNano())
 	frame := protocol.NewFrameDATAGRAM(data)
+	stats.RecordRawBytesSent(len(data))
 	return ue.tx.PushFrame(frame)
 }
 
@@ -717,6 +734,9 @@ func (ue *UDPExchange) Receive() ([]byte, error) {
 		ue.lastSeen.Store(time.Now().UnixNano())
 		switch frame.Type {
 		case protocol.FrameDATAGRAM:
+			// 下行记账与 Send 配对，见 Send 的注释。放在这里而不是帧解码处：
+			// 只有真正交给客户端的 DATAGRAM 才算流量，填充与 cover 帧不算。
+			stats.RecordRawBytesRecv(len(frame.Payload))
 			return frame.Payload, nil
 		case protocol.FrameFIN:
 			return nil, io.EOF
