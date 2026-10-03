@@ -66,8 +66,9 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 	}
 
 	// runScript 用 netsh 和 route 的存根运行创建脚本，返回其退出码、合并输出与
-	// 存根调用日志。serverIPV6 把脚本切到 ipv6 分支。
-	runScript := func(t *testing.T, netshCode, routeCode int, serverIPV6 string) (int, string, string) {
+	// 存根调用日志。serverIPV6 把脚本切到 ipv6 分支，mtu 则决定脚本是否调用
+	// netsh 写适配器的 MTU（空值表示调用方没给，脚本应保持适配器默认配置）。
+	runScript := func(t *testing.T, netshCode, routeCode int, serverIPV6, mtu string) (int, string, string) {
 		t.Helper()
 
 		dir, err := os.MkdirTemp(stubRoot, "stubs")
@@ -78,10 +79,11 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 
 		// 参数形状与 client/tun/tun.go 的 windows 分支一致：6 个设备/路由参数
 		// + 第 7 个服务端 IPv6（没有时为空字符串，与生产路径相同）+ 第 8 个
-		// 系统 DNS（由 cmd/easyss 的 tunDNS 计算后传入）。
+		// 系统 DNS（由 cmd/easyss 的 tunDNS 计算后传入）+ 第 9 个 MTU（来自
+		// local.tun_mtu，tun2socks 自己设不了 wintun 适配器的 MTU）。
 		args := append([]string{"/C", script},
 			"tun-easyss-test", "198.18.0.1", "198.18.0.1", "255.255.0.0",
-			"2001:db8::1/64", "fe80::1", serverIPV6, "223.5.5.5")
+			"2001:db8::1/64", "fe80::1", serverIPV6, "223.5.5.5", mtu)
 
 		cmd := exec.Command(comspec, args...)
 		cmd.Env = append(os.Environ(), "PATH="+dir+";"+os.Getenv("PATH"))
@@ -99,8 +101,10 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 	}
 
 	t.Run("every command succeeds", func(t *testing.T) {
-		code, out, _ := runScript(t, 0, 0, "")
+		code, out, calls := runScript(t, 0, 0, "", "1500")
 		require.Equal(t, 0, code, "the create script must exit 0 when every command succeeds:\n%s", out)
+		require.Contains(t, calls, `interface ipv4 set subinterface "tun-easyss-test" mtu=1500 store=active`,
+			"the mtu passed by the caller must be applied to the adapter:\n%s", calls)
 	})
 
 	// TestCreateTunScriptBranchSelection 的回归目标：Go 把空参数编码为字面 ""，
@@ -109,7 +113,7 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 	// ipv6 分支，把 v6 地址与 ::/1、8000::/1 默认路由装进一条没有服务端 IPv6
 	// 承载它们的隧道。存根永远成功，只有调用日志能区分这两种分支。
 	t.Run("empty server ipv6 keeps the ipv6 branch off", func(t *testing.T) {
-		code, out, calls := runScript(t, 0, 0, "")
+		code, out, calls := runScript(t, 0, 0, "", "1500")
 		require.Equal(t, 0, code, "%s", out)
 		require.Contains(t, calls, "set dns name=tun-easyss-test static 223.5.5.5",
 			"the dns passed by the caller must be applied:\n%s", calls)
@@ -117,23 +121,34 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 			"an empty server ipv6 (Go passes it as a literal \"\") must not install ipv6 routes:\n%s", calls)
 	})
 
+	t.Run("empty mtu keeps the adapter default", func(t *testing.T) {
+		// 调用方没有给 MTU（例如老版本布局）时不得凭空写一个值进去：
+		// 半配置的适配器 MTU 与 netstack 的 MTU 不一致时只会静默丢包。
+		code, out, calls := runScript(t, 0, 0, "", "")
+		require.Equal(t, 0, code, "%s", out)
+		require.NotContains(t, calls, "set subinterface",
+			"an empty mtu must leave the adapter configuration alone:\n%s", calls)
+	})
+
 	t.Run("non-empty server ipv6 installs the ipv6 routes", func(t *testing.T) {
-		code, out, calls := runScript(t, 0, 0, "2001:db8::2")
+		code, out, calls := runScript(t, 0, 0, "2001:db8::2", "1500")
 		require.Equal(t, 0, code, "%s", out)
 		require.Contains(t, calls, "ipv6 add route ::/1",
 			"a server ipv6 must install the ipv6 default routes:\n%s", calls)
+		require.Contains(t, calls, `interface ipv6 set subinterface "tun-easyss-test" mtu=1500 store=active`,
+			"an ipv6-carrying tunnel needs the ipv6 mtu too:\n%s", calls)
 	})
 
 	t.Run("failing netsh fails the script", func(t *testing.T) {
 		// 地址与 DNS 命令失败而路由被安装：这正是过去看起来像成功启动的情形。
-		code, out, _ := runScript(t, 9009, 0, "")
+		code, out, _ := runScript(t, 9009, 0, "", "1500")
 		require.NotEqualf(t, 0, code, "a failing netsh must not leave the script with a zero exit code:\n%s", out)
 		require.Contains(t, out, failureMarker,
 			"the failing step must be reported on stderr so the tray notification can show it")
 	})
 
 	t.Run("failing route fails the script", func(t *testing.T) {
-		code, out, _ := runScript(t, 0, 1, "")
+		code, out, _ := runScript(t, 0, 1, "", "1500")
 		require.NotEqualf(t, 0, code, "a failing route add must not leave the script with a zero exit code:\n%s", out)
 		require.Contains(t, out, failureMarker,
 			"the failing step must be reported on stderr so the tray notification can show it")
@@ -142,11 +157,11 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 	t.Run("failing command in the ipv6 branch fails the script", func(t *testing.T) {
 		// 这里只有 ipv6 块可能失败，意味着 ipv4 地址与路由已先安装：
 		// 正是 Manager.Start 必须回滚的部分配置设备。
-		code, out, _ := runScript(t, 9009, 0, "2001:db8::2")
+		code, out, _ := runScript(t, 9009, 0, "2001:db8::2", "1500")
 		require.NotEqualf(t, 0, code, "an ipv6 command failure must not leave a zero exit code:\n%s", out)
 		require.Contains(t, out, failureMarker)
 
-		code, out, _ = runScript(t, 0, 0, "2001:db8::2")
+		code, out, _ = runScript(t, 0, 0, "2001:db8::2", "1500")
 		require.Equal(t, 0, code, "the ipv6 branch must not fail when every command succeeds:\n%s", out)
 	})
 }

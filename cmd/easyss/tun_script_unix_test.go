@@ -152,13 +152,13 @@ func requireShell(t *testing.T, shell string) {
 
 // linuxScriptArgs 与 client/tun/tun.go 传给 linux 脚本的参数保持一致：
 // device、tun ip/prefix、tun gw、local gw、tun ipv6、tun gw ipv6、
-// server ipv6、local gw ipv6。
+// server ipv6、local gw ipv6、MTU。
 func linuxScriptArgs(withV6 bool) []string {
 	args := []string{"tun-easyss-test", "198.18.0.1/16", "198.18.0.1", "192.168.3.1"}
 	if !withV6 {
-		return args
+		return append(args, "", "", "", "", "1500")
 	}
-	return append(args, "2001:db8::1/64", "fe80::1", "2001:db8::2", "fe80::2")
+	return append(args, "2001:db8::1/64", "fe80::1", "2001:db8::2", "fe80::2", "1500")
 }
 
 // darwinScriptArgs 与 client/tun/tun.go 的 darwinScriptArgs 传给
@@ -168,9 +168,9 @@ func linuxScriptArgs(withV6 bool) []string {
 func darwinScriptArgs(withV6 bool) []string {
 	args := []string{"utun8", "198.18.0.1", "198.18.0.1", "192.168.3.1"}
 	if !withV6 {
-		return args
+		return append(args, "", "", "", "", "1500")
 	}
-	return append(args, "2001:db8::1", "fe80::1", "2001:db8::2", "fe80::2")
+	return append(args, "2001:db8::1", "fe80::1", "2001:db8::2", "fe80::2", "1500")
 }
 
 // TestCreateTunScriptLinuxExitCode 固定 scripts/create_tun_dev.sh 的退出码
@@ -179,10 +179,10 @@ func TestCreateTunScriptLinuxExitCode(t *testing.T) {
 	requireShell(t, "bash")
 
 	const marker = "[create_tun_dev]"
-	// 脚本每个步骤调用一次 "ip"：addr、link 和 8 个路由块，存在服务器 ipv6
+	// 脚本每个步骤调用一次 "ip"：addr、link、mtu 和 8 个路由块，存在服务器 ipv6
 	// 时还有 ipv6 地址和 2 条 ipv6 路由。
-	const stepsV4 = 10
-	const stepsV6 = 13
+	const stepsV4 = 11
+	const stepsV6 = 14
 
 	t.Run("every command succeeds", func(t *testing.T) {
 		dir := t.TempDir()
@@ -233,6 +233,20 @@ func TestCreateTunScriptLinuxExitCode(t *testing.T) {
 		require.Contains(t, out, "failed near: v6-route")
 	})
 
+	t.Run("a missing MTU argument is not fatal", func(t *testing.T) {
+		// 第 9 个实参是可选的：调用方只给 8 个时脚本必须照常配置地址与路由，
+		// 只是跳过 MTU 那一步（保留设备默认值）。若写成 $9，darwin 脚本的
+		// set -u 会让整个脚本以 "unbound variable" 中止，而这里证明两条
+		// 脚本都不会因为少一个参数而放弃整个隧道。
+		dir := t.TempDir()
+		stubTool(t, dir, "ip", 0, marker)
+
+		code, out := runScriptStubbed(t, "bash", string(scripts.CreateTunDevSh), dir, linuxScriptArgs(false)[:8]...)
+		require.Equal(t, 0, code, "an absent MTU argument must not fail the create script:\n%s", out)
+		require.Equal(t, stepsV4-1, toolInvocations(t, dir, "ip"),
+			"only the mtu step may be skipped without the argument")
+	})
+
 	t.Run("already configured state stays successful", func(t *testing.T) {
 		// keep-alive 在休眠/唤醒后会重新运行脚本：对于未干净结束的会话
 		// 遗留下来的状态，iproute2 会应答 "File exists"。这不是失败，不能
@@ -280,7 +294,8 @@ func TestCreateTunScriptDarwinExitCode(t *testing.T) {
 		code, out := runScriptStubbed(t, "sh", string(scripts.CreateTunDevDarwinSh), dir, darwinScriptArgs(false)...)
 		require.Equal(t, 0, code, "the create script must exit 0 when every command succeeds:\n%s", out)
 		require.NotContains(t, out, "failed near")
-		require.Equal(t, 1, toolInvocations(t, dir, "ifconfig"))
+		require.Equal(t, 2, toolInvocations(t, dir, "ifconfig"),
+			"the ipv4 address and the mtu are applied with ifconfig")
 		require.Equal(t, routesV4, toolInvocations(t, dir, "route"))
 	})
 
@@ -348,7 +363,22 @@ func TestCreateTunScriptDarwinExitCode(t *testing.T) {
 
 		code, out := runScriptStubbed(t, "sh", string(scripts.CreateTunDevDarwinSh), dir, darwinScriptArgs(false)...)
 		require.Equal(t, 0, code, "the ipv6 branch must not run without a server ipv6 address:\n%s", out)
-		require.Equal(t, 1, toolInvocations(t, dir, "ifconfig"), "only the ipv4 ifconfig may run")
+		require.Equal(t, 2, toolInvocations(t, dir, "ifconfig"),
+			"only the ipv4 address and the mtu may be applied, never the ipv6 address")
+	})
+
+	t.Run("a missing MTU argument is not fatal", func(t *testing.T) {
+		// 本脚本带 set -u：第 9 个实参写成 $9 时，只给 8 个实参的调用会以
+		// "unbound variable" 中止，连 ifconfig 和路由都不会执行——调用方
+		// 只会看到"脚本失败"，而真正的原因是少了一个可选参数。
+		dir := stubDarwin(t, false, func(int) bool { return false })
+
+		code, out := runScriptStubbed(t, "sh", string(scripts.CreateTunDevDarwinSh), dir, darwinScriptArgs(false)[:8]...)
+		require.Equal(t, 0, code, "an absent MTU argument must not fail the create script:\n%s", out)
+		require.NotContains(t, out, "unbound variable")
+		require.Equal(t, 1, toolInvocations(t, dir, "ifconfig"),
+			"only the ipv4 address may be applied without the argument")
+		require.Equal(t, routesV4, toolInvocations(t, dir, "route"))
 	})
 
 	t.Run("already configured routes stay successful", func(t *testing.T) {

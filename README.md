@@ -514,6 +514,15 @@ Easyss v3 基于 HTTP/2 作为传输层协议，天然兼容反向代理和 CDN 
 在完整模式中设置 `local.enable_tun2socks: true` 和 `local.enable_forward_dns: true`。
 也可通过命令行 `-enable-tun2socks=true` 开启全局代理。
 
+TUN 网卡的 MTU 由 `tun_mtu` 统一控制（完整模式 `local.tun_mtu`，简化模式 `tun_mtu`），
+默认 `1500`，取值范围被钳制在 `[1280, 9000]`。它同时作用于 TUN 设备本身与 tun2socks 的
+用户态协议栈（设备那一侧由各平台的创建脚本写入：linux `ip link set ... mtu`、
+macOS `ifconfig ... mtu`、Windows `netsh ... set subinterface ... mtu=`），两者由同一个值
+推导，不要试图只改其中一处。调大它（例如 8500）能减少内核与 TUN 之间的包数和系统调用数，
+代价是本机 UDP/ICMP 报文的尺寸上限随之抬高（以前会被内核按 1500 分片的报文现在会整包交给
+隧道，再由服务端出口去分片）；只有在确实需要压榨高吞吐、并且实测有收益时才建议调整，
+默认值对绝大多数网络都已足够。
+
 两个开关各自负责一件事，缺一不可：
 
 * `enable_tun2socks`：在本机建立全局透明代理（TUN 网卡 + 路由表），让**经过这台主机的流量**

@@ -44,6 +44,15 @@ var (
 	engineStopFn  = func(reason string) { stopEngine(reason) }
 	// settleDelay 是引擎启动后的停顿，让设备先就绪，随后平台脚本再配置它。
 	settleDelay = func() { time.Sleep(500 * time.Millisecond) }
+	// ifaceMTU 返回接口当前的 MTU。它是包级变量，以便测试注入确定的接口表，
+	// 无需真实创建 TUN 设备（真实设备需要 root 且会改写本机网络配置）。
+	ifaceMTU = func(name string) (int, error) {
+		iface, err := net.InterfaceByName(name)
+		if err != nil {
+			return 0, err
+		}
+		return iface.MTU, nil
+	}
 )
 
 type Config struct {
@@ -51,7 +60,7 @@ type Config struct {
 	Device           string
 	DeviceFD         int  // 若 > 0，使用 fd:// scheme 打开设备而非按名称创建；0 表示按名称创建
 	SkipRouteCleanup bool // darwin：helper 负责路由/DNS 清理，主进程在 Stop() 中跳过
-	MTU              int
+	MTU              int  // TUN 设备与 tun2socks netstack 共用；<=0 取 config.DefaultTunMTU
 	Interface        string
 	UDPTimeout       time.Duration
 	LogLevel         string
@@ -101,9 +110,11 @@ type Manager struct {
 }
 
 func New(cfg Config) *Manager {
-	if cfg.MTU <= 0 {
-		cfg.MTU = 1500
-	}
+	// MTU 的合法区间与默认值由 config.NormalizeTunMTU 统一定义：同一个值还要
+	// 交给设备那一侧（各平台的创建脚本，见 createTunDevAndSetIPRoute；
+	// darwin/linux 的直连路径上 tun2socks 也会按它设置设备），
+	// 各自判断会立刻造成设备与 netstack 的 MTU 偏离。
+	cfg.MTU = sharedconfig.NormalizeTunMTU(cfg.MTU)
 	if cfg.UDPTimeout <= 0 {
 		cfg.UDPTimeout = 5 * time.Minute
 	}
@@ -183,6 +194,72 @@ func manageSystemDNS() bool {
 	return runtime.GOOS == "darwin" || runtime.GOOS == "linux"
 }
 
+// engineMTU 返回交给 tun2socks netstack 的 MTU。
+//
+// fd 路径（设备由提权 helper 创建后把 fd 传回）上设备先于 netstack 存在，而
+// netstack 的 MTU 完全由本配置决定：它一旦小于设备的真实 MTU，tun2socks 的读
+// 循环就会直接丢掉读到的、超过它的包（见 iobased dispatchLoop 的
+// "n > mtu -> continue"）。TCP 恰好不受影响——netstack 通告的 MSS 由它的 MTU
+// 推导，本机应用发不出超过它的段——所以故障只表现为 UDP、ICMP 与 IP 分片静默
+// 失败，且没有任何报错可循。因此这里以设备的真实值为准（宁可偏离用户配置，
+// 也不能静默丢包），并把这次偏离明确记入日志。
+//
+// 非 fd 路径不在这里判断：设备还不存在（或即将由 tun2socks 按同一个值重建），
+// 而设备那一侧统一由创建脚本写入，因此交由 warnOnMTUMismatch 在脚本之后核对。
+func (m *Manager) engineMTU() int {
+	if m.cfg.DeviceFD <= 0 {
+		return m.cfg.MTU
+	}
+
+	devMTU, err := ifaceMTU(m.cfg.Device)
+	if err != nil {
+		// 查不到设备（例如内核还没把接口名暴露出来）时保持配置值：这里既不能
+		// 确认也不能修正，猜测一个 MTU 反而更危险。
+		log.Warn("[TUN] read device mtu", "device", m.cfg.Device, "err", err)
+		return m.cfg.MTU
+	}
+
+	if devMTU > m.cfg.MTU {
+		// 封顶到 MaxTunMTU：设备的 MTU 超出可配置区间只可能是外部改动（例如
+		// 别处执行了 "ip link set mtu"），而 netstack 的 MTU 同时决定每包读取
+		// 缓冲的大小（tun2socks 的读循环按 offset + mtu 分配），没有理由跟着
+		// 一个异常值走。TCP 不受封顶影响——本机应用发出的段不会超过我们通告的
+		// MSS——只有超过该上限的 UDP/ICMP 报文会被丢弃，而这在日志里可见。
+		raised := min(devMTU, sharedconfig.MaxTunMTU)
+		log.Warn("[TUN] device mtu exceeds the configured netstack mtu, raising it to avoid dropping packets",
+			"device", m.cfg.Device, "device_mtu", devMTU, "configured_mtu", m.cfg.MTU, "netstack_mtu", raised)
+		return raised
+	}
+	if devMTU < m.cfg.MTU {
+		// 不会丢包（netstack 的 MTU 只是上限），但设备才是决定本机应用 MSS 的
+		// 那一侧，说明创建脚本没按配置把 MTU 写进设备，配置的 MTU 不会生效。
+		log.Warn("[TUN] device mtu is smaller than the configured mtu, the device decides the path mtu",
+			"device", m.cfg.Device, "device_mtu", devMTU, "configured_mtu", m.cfg.MTU)
+	}
+	return m.cfg.MTU
+}
+
+// warnOnMTUMismatch 在设备侧的 MTU 定稿之后核对它与 netstack 的 MTU 是否一致
+// （调用点在 Start 中创建脚本之后）。非 fd 路径上设备 MTU 由创建脚本设置
+// （Windows 用 netsh 写 wintun 适配器，darwin/linux 的脚本也会再应用一次），
+// 只要有一处没跟上，就会出现 engineMTU 里描述的静默丢包。netstack 的 MTU 在
+// 引擎启动后无法再改，因此这里只做记录——它把"配置了却没生效"变成日志里
+// 看得见的事实。
+func (m *Manager) warnOnMTUMismatch(netstackMTU int) {
+	if m.cfg.DeviceFD > 0 {
+		return // engineMTU 已经按设备真实值对齐过
+	}
+
+	devMTU, err := ifaceMTU(m.cfg.Device)
+	if err != nil {
+		return
+	}
+	if devMTU != netstackMTU {
+		log.Warn("[TUN] device mtu differs from netstack mtu",
+			"device", m.cfg.Device, "device_mtu", devMTU, "netstack_mtu", netstackMTU)
+	}
+}
+
 func (m *Manager) Start() error {
 	if scripts.CreateTunBytes == nil || scripts.CloseTunBytes == nil {
 		return fmt.Errorf("tun: unsupported os %s", runtime.GOOS)
@@ -223,8 +300,12 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("tun: extract wintun.dll: %w", err)
 	}
 
+	// MTU 在插入 key 之前定稿：fd 路径要与设备真实值对齐（见 engineMTU），
+	// 引擎启动后就无法再改 netstack 的 MTU 了。
+	mtu := m.engineMTU()
+
 	key := &engine.Key{
-		MTU:                      m.cfg.MTU,
+		MTU:                      mtu,
 		Device:                   device,
 		LogLevel:                 m.cfg.LogLevel,
 		UDPTimeout:               m.cfg.UDPTimeout,
@@ -290,6 +371,12 @@ func (m *Manager) Start() error {
 			return fmt.Errorf("tun: create device: %w", err)
 		}
 	}
+
+	// MTU 核对放在创建脚本之后：设备侧的值是在那一步最终定稿的（fd 路径由
+	// helper 的脚本写入，非 fd 路径由脚本再应用一次），因此此刻比较才有意义。
+	// 若放在引擎启动之后，改过配置的首次启动会拿上一次会话遗留的适配器 MTU
+	// 与新的 netstack MTU 比较，报出一条毫无意义的告警。
+	m.warnOnMTUMismatch(mtu)
 
 	// 最后检查：如果平台脚本运行期间 Stop() 取消了本次启动，
 	// 撤销刚才建立的一切。
@@ -416,11 +503,15 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 
 	d := m.dev
 
+	// linux 与 darwin 分支的最后一个实参都是 MTU：设备 MTU 由创建脚本设置
+	// （与 Windows 脚本用 netsh 做的同一件事），因为 fd 路径下 tun2socks 拿到
+	// 的只是 fd，改不了设备的 MTU，见 Manager.engineMTU。
 	switch runtime.GOOS {
 	case "linux":
 		cmdArgs := []string{"pkexec", "bash", namePath, d.Device,
 			ipSub(d.TunIP, d.TunMask), d.TunGW, d.LocalGateway,
-			d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6}
+			d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6,
+			strconv.Itoa(m.cfg.MTU)}
 		if os.Geteuid() == 0 {
 			cmdArgs = cmdArgs[1:]
 		}
@@ -440,15 +531,21 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 		// 第 8 个参数是系统 DNS（由 cmd/easyss 的 tunDNS 计算：本会话实测可达的
 		// 内置/系统解析器，与 enable_forward_dns 无关），使 Windows 与
 		// darwin/linux 的取值一致，不再由脚本硬编码。
+		// 第 9 个参数是 MTU：wintun 适配器的 MTU 无法由 tun2socks 设置
+		// （wireguard-go 只把它记在内存里，见 tun_windows.go 的 forcedMTU），
+		// 只能由脚本用 netsh 写进接口；两侧不一致时 netstack 会静默丢弃
+		// 超过自身 MTU 的 UDP/ICMP 包（见 Manager.engineMTU）。
+		// 这里传 m.cfg.MTU：Windows 没有 fd 路径（没有提权 helper），
+		// 因此它正是 engineMTU() 交给 netstack 的那个值。
 		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device,
 			d.TunIP, d.TunGW, d.TunMask, d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6,
-			m.cfg.DNSServer); err != nil {
+			m.cfg.DNSServer, strconv.Itoa(m.cfg.MTU)); err != nil {
 			return fmt.Errorf("tun: exec create script: %w", err)
 		}
 	case "darwin":
 		// 两个分支必须传同一组实参（提权方式不同而已），因此都从
 		// darwinScriptArgs 取值。
-		args := darwinScriptArgs(d)
+		args := darwinScriptArgs(d, m.cfg.MTU)
 		if os.Geteuid() == 0 {
 			if _, err := util.CommandContext(ctx, "sh", append([]string{namePath}, args...)...); err != nil {
 				return fmt.Errorf("tun: exec create script: %w", err)
@@ -626,17 +723,18 @@ func ipSub(ip, mask string) string {
 
 // darwinScriptArgs 返回 create_tun_dev_darwin.sh 的实参，顺序与脚本的位置
 // 参数一致：device、tun ip、tun gw、local gw、tun ipv6、tun gw ipv6、
-// server ipv6、local gw ipv6。
+// server ipv6、local gw ipv6、MTU。
 //
 // tun ipv6 传的是裸地址：darwin 脚本自己把 "/64" 拼到 ifconfig 的 inet6
 // 参数上，而 TunIPV6Sub 是按 linux 脚本的 "ip -6 addr replace" 需要 CIDR
 // 形式携带前缀长度的（默认 "2001:0db8:0:f101::1/64"）。直接把 TunIPV6Sub
 // 交给 darwin 脚本会拼出 "2001:0db8:0:f101::1/64/64"，ifconfig 报
 // "bad value" 并以退出码 1 结束，创建脚本整体失败、TUN 起不来。
-func darwinScriptArgs(d DeviceConfig) []string {
+func darwinScriptArgs(d DeviceConfig, mtu int) []string {
 	return []string{
 		d.Device, d.TunIP, d.TunGW, d.LocalGateway,
 		bareV6Addr(d.TunIPV6Sub), d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6,
+		strconv.Itoa(mtu),
 	}
 }
 

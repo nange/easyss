@@ -55,6 +55,7 @@ type LocalConfig struct {
 	EnableForwardDNS bool            `json:"enable_forward_dns"`
 	EnableTun2socks  bool            `json:"enable_tun2socks"`
 	EnableQUIC       bool            `json:"enable_quic"`
+	TunMTU           int             `json:"tun_mtu,omitempty"`
 	TunConfig        json.RawMessage `json:"tun_config,omitempty"`
 }
 
@@ -132,6 +133,15 @@ func (c *ClientConfig) ConnLifetimeDuration() time.Duration {
 	return config.ConnLifetime(c.TimeoutDuration())
 }
 
+// TunMTU 返回归一化后的 TUN MTU（见 config.NormalizeTunMTU）：它是 TUN 设备
+// 真实 MTU 与 tun2socks netstack MTU 的共同来源，两者必须一致（见
+// client/tun.Manager.engineMTU）。applyDefaults 已把合法值写回结构体，这里
+// 再归一化一次是为了覆盖不经过 applyDefaults 的构造路径（简单模式构建、测试
+// 以及托盘在运行期改写过的内存配置），使任何调用点都不可能拿到越界值。
+func (c *ClientConfig) TunMTU() int {
+	return config.NormalizeTunMTU(c.Local.TunMTU)
+}
+
 func (c *ClientConfig) UTLSConfig() *utls.Config {
 	srv := c.DefaultServer()
 	if srv == nil {
@@ -203,6 +213,10 @@ func applyDefaults(c *ClientConfig) {
 	// 非正值取默认值，越界值钳制到 [MinTimeout, MaxTimeout]，使内存中的配置与
 	// 之后派生的值始终一致（见 config.NormalizeTimeout）。
 	c.Timeout = config.NormalizeTimeout(c.Timeout)
+	// MTU 与 timeout 同理：越界值绝不能留在结构体里再由各消费点各自兜底。
+	// 它同时作用于 TUN 设备与 tun2socks netstack，两者不一致会造成静默丢包，
+	// 因此合法性的判断只走 config.NormalizeTunMTU 这一条路径。
+	c.Local.TunMTU = config.NormalizeTunMTU(c.Local.TunMTU)
 	if c.Transport.Protocol == "" {
 		c.Transport.Protocol = config.DefaultProtocol
 	}

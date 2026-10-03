@@ -5,9 +5,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/nange/easyss/v3/client/proxy"
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/scripts"
 	"github.com/nange/easyss/v3/util"
@@ -24,6 +26,8 @@ func tunFdSocketPath() string {
 
 // openTunDevice 在 macOS 上使用 SYSPROTO_CONTROL 内核控制 socket
 // 机制创建 TUN 设备。它返回原始文件描述符以及内核分配的实际接口名。
+// 设备 MTU 由创建脚本设置（见 runCreateScript 的第 9 个实参）：这里只负责把
+// 设备建出来。
 func openTunDevice(name string) (int, string, error) {
 	ifIndex := -1
 	if name != "utun" {
@@ -69,9 +73,12 @@ func openTunDevice(name string) (int, string, error) {
 }
 
 // runCreateScript 将内嵌的 create_tun_dev_darwin.sh 写入临时文件，
-// 并使用设备配置执行它。
+// 并使用设备配置执行它。mtu 由脚本应用到设备上（第 9 个位置参数）：
+// fd 路径下 tun2socks 只能设置自己 netstack 的 MTU，设备的 MTU 必须由建设备的
+// 这一侧负责，否则 netstack 会静默丢弃设备交上来的超限包（见
+// client/tun.Manager.engineMTU）。
 func runCreateScript(device, tunIP, tunGW, localGateway,
-	tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6 string) error {
+	tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6 string, mtu int) error {
 	if scripts.CreateTunBytes == nil {
 		return fmt.Errorf("no create script for darwin")
 	}
@@ -88,7 +95,7 @@ func runCreateScript(device, tunIP, tunGW, localGateway,
 	// 脚本：否则会拼出 ".../64/64"，ifconfig 报 "bad value" 并以退出码 1
 	// 结束，整个 TUN 启动随之失败。
 	if err := execScriptWithOutput("sh", namePath, device, tunIP, tunGW, localGateway,
-		bareV6Addr(tunIPV6Sub), tunGWV6, serverIPV6, localGatewayV6); err != nil {
+		bareV6Addr(tunIPV6Sub), tunGWV6, serverIPV6, localGatewayV6, strconv.Itoa(mtu)); err != nil {
 		return err
 	}
 	return nil
@@ -157,5 +164,6 @@ func ensureTunRoutes(device string, cfg *proxy.TunConfig) error {
 
 	log.Info("[TUN-HELPER] recreating TUN routes", "device", device)
 	return runCreateScript(device, cfg.TunIP, cfg.TunGW, cfg.LocalGateway,
-		cfg.TunIPV6Sub, cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6)
+		cfg.TunIPV6Sub, cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6,
+		sharedconfig.NormalizeTunMTU(cfg.MTU))
 }

@@ -7,11 +7,21 @@ tun_ip_v6=$5
 tun_gw_v6=$6
 server_ip_v6=$7
 local_gateway_v6=$8
+# 第 9 个参数是可选的，因此用 ${9:-} 取值：
+#   - darwin 脚本带 set -u，直接写 $9 会在调用方只给 8 个实参时以
+#     "unbound variable" 中止，连地址和路由都配不上；
+#   - 空值表示调用方没有传 MTU（老布局），此时保留设备默认值（见下方 mtu 步骤）。
+tun_mtu=${9:-}
 
 # 退出码契约：调用方（fd/helper 路径下的 cmd/easyss/tun_helper_darwin.go，
 # 以及无 helper 路径下的 client/tun/tun.go）仅在本脚本以 0 退出时才保留已
 # 安装的 TUN 路由。所有不允许失败的命令都会调用 fail，把各自的步骤名记录到
 # FAIL 中；脚本最后以显式 exit 结束。
+#
+# 位置参数（顺序是调用方与脚本之间的契约，见 client/tun/tun.go 的
+# darwinScriptArgs 与 cmd/easyss/tun_helper_darwin.go 的 runCreateScript）：
+#   1 设备名 2 tun ip 3 tun gw 4 本地网关 5 tun ipv6（裸地址，脚本自己补 /64）
+#   6 tun gw ipv6 7 服务端 ipv6 8 本地网关 ipv6 9 MTU（空值 = 不设置）
 #
 # 本脚本刻意不使用 "set -e"。它会在睡眠/唤醒后被 helper 的 keep-alive 重新
 # 执行，而一旦启用 "set -e"，第一条"已配置"的路由就会中止脚本，导致缺失的
@@ -64,6 +74,21 @@ if [ -n "$server_ip_v6" ]; then  # 检查 server_ip_v6 是否非空
   # tun_helper_darwin.go 和 client/tun/tun.go）负责剥掉 TunIPV6Sub 自带的
   # 前缀。传入 "2001:db8::1/64" 会拼成 ".../64/64"，ifconfig 报 "bad value"。
   fail ifconfig-ipv6 ifconfig "$tun_device" inet6 "$tun_ip_v6"/64 up
+fi
+
+# 设备 MTU 由这里设置，与 create_tun_dev_windows.bat 用 netsh 做的完全是同一件事：
+# fd 路径下设备是 helper 建的，tun2socks 拿到 fd 后只能设置自己 netstack 的 MTU，
+# 改不了设备的 MTU。两侧不一致时 netstack 会静默丢弃设备交上来的超限包（UDP、
+# ICMP 与 IP 分片，见 client/tun.Manager.engineMTU），因此设备这一侧必须由建设备
+# 的路径负责。放在这里（地址之后、路由之前）而不是 Go 代码里，除了三平台统一之外
+# 还有一个好处：keep-alive 在休眠/唤醒后会重跑本脚本，设备 MTU 被系统改掉或接口
+# 被重建时会自动修回。utun 的默认 MTU 并不保证是 1500（本机既有的 utun 就有
+# 1380/1000/2000 等取值），因此也不能依赖内核默认值。
+#
+# 空值表示调用方没有传 MTU（老布局），此时保留设备默认值——那不是失败，与 Windows
+# 创建脚本对第 9 个参数的处理一致。
+if [ -n "$tun_mtu" ]; then
+  fail mtu ifconfig "$tun_device" mtu "$tun_mtu"
 fi
 
 # 添加 IPv4 路由

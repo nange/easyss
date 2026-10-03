@@ -16,14 +16,17 @@ import (
 //
 // 这里用 New() 的默认值走一遍，断言调用方真正会交给脚本的内容。
 func TestDarwinScriptArgsCarryABareV6Address(t *testing.T) {
-	d := New(Config{Socks5Addr: "socks5://127.0.0.1:1"}).DeviceConfig()
+	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1"})
+	d := m.DeviceConfig()
 	require.Equal(t, "2001:0db8:0:f101::1/64", d.TunIPV6Sub,
 		"the device config keeps the CIDR form the linux script needs")
 
-	args := darwinScriptArgs(d)
-	require.Len(t, args, 8, "the script takes eight positional parameters")
+	args := darwinScriptArgs(d, m.cfg.MTU)
+	require.Len(t, args, 9, "the script takes nine positional parameters")
 	require.Equal(t, "2001:0db8:0:f101::1", args[4],
 		"the darwin script appends the prefix itself, so it must receive a bare address")
+	require.Equal(t, "1500", args[8],
+		"the last argument is the MTU the script writes into the device")
 	for _, arg := range args {
 		require.NotContains(t, arg, "/", "no argument may carry a prefix length: %q", arg)
 	}
@@ -37,9 +40,9 @@ func TestDarwinScriptArgsWithoutV6(t *testing.T) {
 		TunIP:        "198.18.0.1",
 		TunGW:        "198.18.0.1",
 		LocalGateway: "192.168.3.1",
-	})
+	}, 1500)
 
-	require.Len(t, args, 8)
+	require.Len(t, args, 9)
 	require.Equal(t, "", args[6], "an empty server ipv6 keeps the script's ipv6 branch a no-op")
 }
 
@@ -59,11 +62,11 @@ func TestOsascriptRunScriptKeepsPositionalArgs(t *testing.T) {
 		TunGWV6:        "fe80::1",
 		ServerIPV6:     "",
 		LocalGatewayV6: "fe80::2",
-	})
+	}, 1500)
 	require.Equal(t, "", args[6], "the fixture must exercise an empty server ipv6")
 
 	require.Equal(t,
-		`do shell script "sh '/tmp/t.sh' 'utun8' '198.18.0.1' '198.18.0.1' '192.168.3.1' '2001:db8::1' 'fe80::1' '' 'fe80::2'" with administrator privileges`,
+		`do shell script "sh '/tmp/t.sh' 'utun8' '198.18.0.1' '198.18.0.1' '192.168.3.1' '2001:db8::1' 'fe80::1' '' 'fe80::2' '1500'" with administrator privileges`,
 		osascriptRunScript("/tmp/t.sh", args))
 }
 

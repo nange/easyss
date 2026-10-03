@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/client/proxy"
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util"
 	"golang.org/x/sys/unix"
@@ -121,11 +122,18 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	log.Info("[TUN-HELPER] original dns saved", "dns", originDNS)
 
 	// 5. 打开 TUN 设备。
+	//
+	// MTU 也在这一步定稿，但真正写进设备的是第 7 步的创建脚本：fd 路径下设备是
+	// helper 建的，主进程拿到的只是 fd，而 tun2socks 只按配置设置 netstack 的
+	// MTU，改不了设备的 MTU。两侧不一致时 netstack 会静默丢弃超过自身 MTU 的包
+	// （UDP、ICMP 与 IP 分片；见 client/tun.Manager.engineMTU）。取值在这里归一化
+	// 一次，因为它是跨进程传来的：未配置（0）必须落到与主进程相同的默认值。
+	tunMTU := sharedconfig.NormalizeTunMTU(cfg.MTU)
 	tunFd, actualDevice, err := openTunDevice(cfg.Device)
 	if err != nil {
 		return giveUp("open tun device", err)
 	}
-	log.Info("[TUN-HELPER] device created", "requested", cfg.Device, "actual", actualDevice)
+	log.Info("[TUN-HELPER] device created", "requested", cfg.Device, "actual", actualDevice, "mtu", tunMTU)
 
 	// 延迟清理：退出时移除路由并恢复 DNS。
 	defer func() {
@@ -146,10 +154,10 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	_ = runCloseScript(actualDevice, cfg.TunGW, cfg.LocalGateway,
 		cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6)
 
-	// 7. 运行 create 脚本（ifconfig/ip + route add）。
-	log.Info("[TUN-HELPER] creating routes and configuring interface")
+	// 7. 运行 create 脚本（ifconfig/ip + MTU + route add）。
+	log.Info("[TUN-HELPER] creating routes and configuring interface", "mtu", tunMTU)
 	if err := runCreateScript(actualDevice, cfg.TunIP, cfg.TunGW, cfg.LocalGateway,
-		cfg.TunIPV6Sub, cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6); err != nil {
+		cfg.TunIPV6Sub, cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6, tunMTU); err != nil {
 		_ = unix.Close(tunFd)
 		return giveUp("run create script", err)
 	}

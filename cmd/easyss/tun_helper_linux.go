@@ -5,10 +5,12 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"unsafe"
 
 	"github.com/nange/easyss/v3/client/proxy"
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/scripts"
 	"github.com/nange/easyss/v3/util"
@@ -23,7 +25,8 @@ func tunFdSocketPath() string {
 }
 
 // openTunDevice 使用 /dev/net/tun 和 TUNSETIFF ioctl 在 Linux 上创建 TUN 设备。
-// 它返回原始文件描述符以及内核实际分配的接口名。
+// 它返回原始文件描述符以及内核实际分配的接口名。设备 MTU 由创建脚本设置
+// （见 runCreateScript 的第 9 个实参）：这里只负责把设备建出来。
 func openTunDevice(name string) (int, string, error) {
 	fd, err := unix.Open("/dev/net/tun", unix.O_RDWR, 0)
 	if err != nil {
@@ -72,9 +75,12 @@ func openTunDevice(name string) (int, string, error) {
 }
 
 // runCreateScript 将内嵌的 create_tun_dev.sh 写入临时文件，
-// 并使用设备配置执行它。
+// 并使用设备配置执行它。mtu 由脚本应用到设备上（第 9 个位置参数）：
+// fd 路径下 tun2socks 只能设置自己 netstack 的 MTU，设备的 MTU 必须由建设备的
+// 这一侧负责，否则 netstack 会静默丢弃设备交上来的超限包（见
+// client/tun.Manager.engineMTU）。
 func runCreateScript(device, tunIP, tunGW, localGateway,
-	tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6 string) error {
+	tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6 string, mtu int) error {
 	if scripts.CreateTunBytes == nil {
 		return fmt.Errorf("no create script for linux")
 	}
@@ -86,7 +92,7 @@ func runCreateScript(device, tunIP, tunGW, localGateway,
 	defer os.Remove(namePath) //nolint:errcheck
 
 	if err := execScriptWithOutput("bash", namePath, device, tunIP, tunGW, localGateway,
-		tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6); err != nil {
+		tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6, strconv.Itoa(mtu)); err != nil {
 		return err
 	}
 	return nil
@@ -130,6 +136,10 @@ func removeLeftoverDevice(device string) {
 // ensureTunRoutes 校验 TUN 接口仍处于 up 状态且 TUN 路由仍然存在，当它们被清除时
 // （例如 NetworkManager 在连接变更或睡眠/唤醒后所为）重新运行 create 脚本。
 // 重复应用已有配置所产生的错误会被容忍：ip 只会报出 "File exists"。
+//
+// 重跑同时会把设备 MTU 重新写回配置值（脚本的第 9 个位置参数）：设备 MTU 与
+// netstack 的 MTU 不一致时会被静默丢包（见 client/tun.Manager.engineMTU），
+// 因此这条重放路径也是它的自愈点。
 func ensureTunRoutes(device string, cfg *proxy.TunConfig) error {
 	needCreate := false
 
@@ -155,5 +165,6 @@ func ensureTunRoutes(device string, cfg *proxy.TunConfig) error {
 
 	log.Info("[TUN-HELPER] recreating TUN routes", "device", device)
 	return runCreateScript(device, cfg.TunIP, cfg.TunGW, cfg.LocalGateway,
-		cfg.TunIPV6Sub, cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6)
+		cfg.TunIPV6Sub, cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6,
+		sharedconfig.NormalizeTunMTU(cfg.MTU))
 }
