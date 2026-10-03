@@ -24,16 +24,20 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	a.tunHelperMu.Lock()
 	defer a.tunHelperMu.Unlock()
 
+	// 核心在函数入口取一次快照：这条路径要提权、spawn helper、等 fd（最长
+	// 数十秒），期间 Stop/切换可能已经把它取下，中途重新读会读到 nil。
+	core := a.currentCore()
+
 	log.Info("[SYSTRAY] createTun2socksViaHelper called",
 		"tunMgrNil", a.tunMgr == nil,
-		"coreNil", a.core == nil)
+		"coreNil", core == nil)
 
 	if a.tunMgr != nil {
 		log.Warn("[SYSTRAY] tunMgr already set, skipping create")
 		return nil
 	}
 
-	if a.core == nil || a.core.Client == nil {
+	if core == nil || core.Client == nil {
 		return fmt.Errorf("client not initialized")
 	}
 
@@ -44,7 +48,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	tmpMgr := tun.New(tmpCfg)
 	devCfg := tmpMgr.DeviceConfig()
 
-	if a.core.HTTPServer == nil {
+	if core.HTTPServer == nil {
 		return fmt.Errorf("http proxy server not started")
 	}
 
@@ -56,17 +60,17 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	// 反馈的情况下把最坏等待叠成"尝试次数 × 总预算"。
 	if serverAddr := a.cfg.DefaultServer().Address; !util.IsIP(serverAddr) {
 		if len(config.DirectDNSServers) == 0 {
-			a.core.HTTPServer.ClearTunConfig()
+			core.HTTPServer.ClearTunConfig()
 			return fmt.Errorf("failed to pre-resolve server hostname %s: dns cache not available", serverAddr)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), dns.PreResolveTimeout)
 		// 缓存由核心持有（见 runner.Core.PrePopulateServerDomain）：它是 DNS
 		// pinning 与 TUN 系统 DNS 的同一个来源，不再经由本地 SOCKS5 服务器。
-		err := a.core.PrePopulateServerDomain(ctx, serverAddr, config.DirectDNSServers,
+		err := core.PrePopulateServerDomain(ctx, serverAddr, config.DirectDNSServers,
 			a.cfg.Routing.IPV6Rule != "enable")
 		cancel()
 		if err != nil {
-			a.core.HTTPServer.ClearTunConfig()
+			core.HTTPServer.ClearTunConfig()
 			return fmt.Errorf("failed to pre-resolve server hostname %s: %w", serverAddr, err)
 		}
 		log.Info("[SYSTRAY] pre-populated dns cache for server", "host", serverAddr)
@@ -97,7 +101,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	}
 
 	// 让 helper 可以通过 GET /tun 获取配置。
-	a.core.HTTPServer.SetTunConfig(tunHTTPCfg)
+	core.HTTPServer.SetTunConfig(tunHTTPCfg)
 
 	// 4. 生成提权 helper。将归一化后的基础超时作为生成等待上限
 	//    （未配置时为默认值 30s，越界值已在加载时钳制）。
@@ -106,7 +110,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	fifoWriter, fdListener, err := SpawnTunHelper(a.cfg.Local.HTTPPort, fdSocketPath,
 		a.cfg.Log.FilePath, a.cfg.Log.Level, spawnTimeout)
 	if err != nil {
-		a.core.HTTPServer.ClearTunConfig()
+		core.HTTPServer.ClearTunConfig()
 		return fmt.Errorf("spawn tun helper: %w", err)
 	}
 
@@ -118,7 +122,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	}
 	if err != nil {
 		fifoWriter.Close() //nolint:errcheck
-		a.core.HTTPServer.ClearTunConfig()
+		core.HTTPServer.ClearTunConfig()
 		return fmt.Errorf("receive tun fd: %w", err)
 	}
 
@@ -130,7 +134,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 		// Linux 上的 TUN 设备无法随最后一个 fd 消失。
 		_ = unix.Close(fd)
 		fifoWriter.Close() //nolint:errcheck
-		a.core.HTTPServer.ClearTunConfig()
+		core.HTTPServer.ClearTunConfig()
 		return fmt.Errorf("set nonblock: %w", err)
 	}
 
@@ -150,8 +154,8 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 		MTU: a.cfg.TunMTU(),
 	})
 
-	icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
-	icmpHandler.SetProxy(a.core.StreamHandler, a.methodFromServer())
+	icmpHandler := tun.NewICMPHandler(core.Client.Router())
+	icmpHandler.SetProxy(core.StreamHandler, a.methodFromServer())
 	a.tunMgr.SetICMPHandler(icmpHandler)
 
 	startTunEngine(a.tunMgr, "fd")
