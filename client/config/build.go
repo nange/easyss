@@ -39,6 +39,7 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 			EnableForwardDNS: s.EnableForwardDNS,
 			EnableTun2socks:  s.EnableTun2socks,
 			EnableQUIC:       s.EnableQUIC,
+			TunMTU:           s.TunMTU,
 			TunConfig:        jsonTunConfig(s.TunConfig),
 		},
 		Routing: RoutingConfig{
@@ -148,6 +149,10 @@ func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) {
 	}
 	if s.EnableQUIC {
 		cfg.Local.EnableQUIC = true
+	}
+	if s.TunMTU > 0 {
+		// 与上面的 timeout 同理：覆盖值也要过唯一的归一化入口。
+		cfg.Local.TunMTU = sharedconfig.NormalizeTunMTU(s.TunMTU)
 	}
 	if s.BindAll {
 		cfg.Local.BindAll = true

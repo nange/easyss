@@ -33,7 +33,7 @@ func TestRunCreateScriptStripsV6Prefix(t *testing.T) {
 	scripts.CreateTunBytes = []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + marker + "\"\n")
 
 	require.NoError(t, runCreateScript("utun9", "198.18.0.1", "198.18.0.1", "192.168.3.1",
-		"2001:0db8:0:f101::1/64", "fe80::1", "2001:db8::2", "fe80::2"))
+		"2001:0db8:0:f101::1/64", "fe80::1", "2001:db8::2", "fe80::2", 8500))
 
 	data, err := os.ReadFile(marker)
 	require.NoError(t, err, "the create script did not run")
@@ -41,7 +41,7 @@ func TestRunCreateScriptStripsV6Prefix(t *testing.T) {
 	got := strings.Split(strings.TrimSpace(string(data)), "\n")
 	require.Equal(t, []string{
 		"utun9", "198.18.0.1", "198.18.0.1", "192.168.3.1",
-		"2001:0db8:0:f101::1", "fe80::1", "2001:db8::2", "fe80::2",
+		"2001:0db8:0:f101::1", "fe80::1", "2001:db8::2", "fe80::2", "8500",
 	}, got, "the script appends the prefix itself, so the address must arrive bare")
 }
 

@@ -613,6 +613,9 @@ func (a *App) tunConfig() tun.Config {
 	cfg := tun.Config{
 		Socks5Addr: util.Socks5URI(a.cfg.Local.SocksPort),
 		DNSServer:  tunDNS(),
+		// MTU 来自唯一的配置旋钮（a.cfg.TunMTU() 已归一化）：它同时决定设备的
+		// 真实 MTU 与 netstack 的 MTU，两条路径必须拿到同一个值。
+		MTU: a.cfg.TunMTU(),
 	}
 	if a.core != nil && a.core.Client != nil {
 		if ipv6 := a.core.Client.Router().ServerIPV6(); ipv6 != "" {
@@ -664,6 +667,7 @@ func exampleV3Config() string {
 			EnableForwardDNS: false,
 			EnableTun2socks:  false,
 			EnableQUIC:       false,
+			TunMTU:           sharedconfig.DefaultTunMTU,
 		},
 		Routing: config.RoutingConfig{
 			ProxyRule:  sharedconfig.DefaultProxyRule,

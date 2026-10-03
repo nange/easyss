@@ -76,6 +76,11 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	// 之后才可能被记录（见 dns.PreferredSystemDNS）。先取值会让"此前所有标记
 	// 尝试都失败、恰好这次预解析才成功"的情形把 TUN 的系统 DNS 写成已知不可达的
 	// 默认值。
+	//
+	// MTU 取 tmpCfg.MTU（由 a.cfg.TunMTU() 归一化而来），与稍后交给 tun2socks
+	// netstack 的值同源：helper 把它交给创建脚本写进设备，主进程用它设置
+	// netstack，二者不一致时 netstack 会静默丢弃超过自身 MTU 的包
+	// （见 tun.Manager.engineMTU）。
 	tunHTTPCfg := &proxy.TunConfig{
 		Socks5Addr:     util.Socks5URI(a.cfg.Local.SocksPort),
 		DNSAddr:        tunDNS(),
@@ -88,7 +93,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 		ServerIPV6:     devCfg.ServerIPV6,
 		LocalGateway:   devCfg.LocalGateway,
 		LocalGatewayV6: devCfg.LocalGatewayV6,
-		MTU:            1500,
+		MTU:            tmpCfg.MTU,
 	}
 
 	// 让 helper 可以通过 GET /tun 获取配置。
@@ -135,6 +140,9 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 		Socks5Addr:       util.Socks5URI(a.cfg.Local.SocksPort),
 		DeviceFD:         fd,
 		SkipRouteCleanup: true, // helper 负责路由/DNS 清理
+		// 设备由 helper 按同一个值创建（见 tunHTTPCfg.MTU）；这里是 netstack
+		// 那一侧。若两者不一致，Manager.engineMTU 会按设备真实值兜底并告警。
+		MTU: a.cfg.TunMTU(),
 	})
 
 	icmpHandler := tun.NewICMPHandler(a.core.Client.Router())

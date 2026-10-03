@@ -127,7 +127,7 @@ func TestHelperFailureReasonCarriesTheScriptDiagnostics(t *testing.T) {
 	require.NoError(t, os.Setenv("PATH", dir+string(os.PathListSeparator)+origPath))
 	t.Cleanup(func() { _ = os.Setenv("PATH", origPath) })
 
-	err := runCreateScript("tun-easyss-test", "198.18.0.1/16", "198.18.0.1", "192.168.3.1", "", "", "", "")
+	err := runCreateScript("tun-easyss-test", "198.18.0.1/16", "198.18.0.1", "192.168.3.1", "", "", "", "", 1500)
 	require.Error(t, err, "every stubbed tool rejects its call: the script has to report that")
 
 	reason := string(failurePayload(fmt.Errorf("run create script: %w", err)))

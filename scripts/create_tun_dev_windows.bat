@@ -17,6 +17,7 @@ rem inside a rem: cmd rejects the whole script with "usage of the path operator
 rem in batch-parameter substitution is invalid" and nothing below it runs.
 set server_ip_v6=%~7
 set tun_dns=%~8
+set tun_mtu=%~9
 
 rem Exit code contract: the caller (client/tun/tun.go) keeps the TUN routes
 rem installed only when this script exits 0. cmd.exe propagates the exit
@@ -50,6 +51,20 @@ rem a failure.
 rem Keep this block ASCII-only: cmd.exe reads the file in the OEM code page.
 if not "%tun_dns%"=="" call netsh interface ipv4 set dns name=%tun_device% static %tun_dns% || set FAIL=dns
 
+rem The MTU is computed by the caller (client/tun/tun.go, from the single
+rem tun_mtu knob) and passed as the 9th argument. It has to be applied here:
+rem tun2socks cannot set the MTU of a wintun adapter - wireguard-go only keeps
+rem it in memory and reports it back from MTU() (see tun_windows.go's
+rem forcedMTU) - while its netstack runs with that same value and silently
+rem drops any packet read from the device that exceeds its own MTU (UDP, ICMP
+rem and IP fragments). netsh is the only way to move the adapter, and store=active
+rem keeps this a session-scoped change instead of a persistent registry edit.
+rem An empty argument means the caller did not pass an MTU (older layout): the
+rem adapter keeps its default configuration, which is not a failure.
+if "%tun_mtu%"=="" goto no_mtu
+call netsh interface ipv4 set subinterface "%tun_device%" mtu=%tun_mtu% store=active || set FAIL=mtu
+:no_mtu
+
 rem Route everything except 0.0.0.0/8 through the TUN device, mirroring the
 rem darwin script. 0.0.0.1 (used to probe the physical default interface)
 rem must stay outside the TUN routes.
@@ -78,6 +93,14 @@ rem still on the adapter; close_tun_dev_windows.bat deletes it, so this
 rem stays an unconditional add.
 call netsh interface ipv6 add address %tun_device% %tun_ip_sub_v6% || set FAIL=v6-address
 call netsh interface ipv6 set interface %tun_device% forwarding=enabled || set FAIL=v6-forwarding
+rem The ipv6 MTU only matters when the tunnel actually carries ipv6, so it is
+rem applied inside this branch. The 1280 floor is enforced by the caller
+rem (config.NormalizeTunMTU), which is also the ipv6 minimum link MTU.
+rem The goto keeps the "|| set FAIL" outside any if-body, like every other
+rem command in this file.
+if "%tun_mtu%"=="" goto no_v6_mtu
+call netsh interface ipv6 set subinterface "%tun_device%" mtu=%tun_mtu% store=active || set FAIL=v6-mtu
+:no_v6_mtu
 call netsh interface ipv6 add route ::/1 %tun_device% metric=1 || set FAIL=v6-route
 call netsh interface ipv6 add route 8000::/1 %tun_device% metric=1 || set FAIL=v6-route
 

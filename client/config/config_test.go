@@ -815,3 +815,91 @@ func TestResolveFilePaths(t *testing.T) {
 		t.Errorf("Servers[1].CAPath = %q, want empty (unchanged)", cfg.Servers[1].CAPath)
 	}
 }
+
+// TestTunMTU 固定 TUN MTU 旋钮的取值路径：越界值必须在加载时就钳制、默认值必须
+// 来自 config.DefaultTunMTU（而不是散落的字面量），简单模式与命令行覆盖也必须
+// 走同一个归一化入口——它同时决定 TUN 设备的真实 MTU 与 tun2socks netstack 的
+// MTU，两侧一旦偏离就会静默丢包（见 client/tun.Manager.engineMTU）。
+func TestTunMTU(t *testing.T) {
+	t.Run("未配置取默认值", func(t *testing.T) {
+		cfg := DefaultConfig()
+		if got := cfg.TunMTU(); got != config.DefaultTunMTU {
+			t.Errorf("TunMTU() = %d, want %d", got, config.DefaultTunMTU)
+		}
+		if cfg.Local.TunMTU != config.DefaultTunMTU {
+			t.Errorf("Local.TunMTU = %d, want %d (applyDefaults must write it back)",
+				cfg.Local.TunMTU, config.DefaultTunMTU)
+		}
+	})
+
+	t.Run("越界值在加载时钳制", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+
+		v3JSON := `{
+			"version": 3,
+			"servers": [{"address": "example.com", "port": 443, "password": "secret", "default": true}],
+			"local": {"socks_port": 1080, "tun_mtu": 64000}
+		}`
+		if err := os.WriteFile(path, []byte(v3JSON), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := LoadConfig(path)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.Local.TunMTU != config.MaxTunMTU {
+			t.Errorf("Local.TunMTU = %d, want %d (clamped at load time)",
+				cfg.Local.TunMTU, config.MaxTunMTU)
+		}
+		if got := cfg.TunMTU(); got != config.MaxTunMTU {
+			t.Errorf("TunMTU() = %d, want %d", got, config.MaxTunMTU)
+		}
+	})
+
+	t.Run("区间内的值原样保留", func(t *testing.T) {
+		cfg := &ClientConfig{Local: LocalConfig{TunMTU: 8500}}
+		applyDefaults(cfg)
+		if got := cfg.TunMTU(); got != 8500 {
+			t.Errorf("TunMTU() = %d, want 8500 (a valid value must survive normalization)", got)
+		}
+	})
+
+	t.Run("简单模式构建与覆盖", func(t *testing.T) {
+		// BuildSimpleConfig 末尾会调用 applyDefaults，因此越界值同样在构建时就
+		// 被钳制（与 TestTimeoutClampedOnEveryEntry 对 timeout 的要求一致）。
+		built, err := BuildSimpleConfig(&config.SimpleConfig{
+			Server: "example.com", Password: "secret", TunMTU: 60000,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if built.Local.TunMTU != config.MaxTunMTU {
+			t.Errorf("built Local.TunMTU = %d, want %d (clamped)", built.Local.TunMTU, config.MaxTunMTU)
+		}
+
+		valid, err := BuildSimpleConfig(&config.SimpleConfig{
+			Server: "example.com", Password: "secret", TunMTU: 8500,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := valid.TunMTU(); got != 8500 {
+			t.Errorf("built TunMTU() = %d, want 8500 (a valid value must survive normalization)", got)
+		}
+
+		overridden := DefaultConfig()
+		ApplySimpleOverrides(overridden, &config.SimpleConfig{TunMTU: 100})
+		if overridden.Local.TunMTU != config.MinTunMTU {
+			t.Errorf("overridden Local.TunMTU = %d, want %d (clamped)", overridden.Local.TunMTU, config.MinTunMTU)
+		}
+
+		// 未提供覆盖值时不得改动已有配置：0 表示"未配置"，而不是"设成默认值"。
+		untouched := &ClientConfig{Local: LocalConfig{TunMTU: 8500}}
+		ApplySimpleOverrides(untouched, &config.SimpleConfig{})
+		if got := untouched.TunMTU(); got != 8500 {
+			t.Errorf("TunMTU() = %d, want 8500 (an empty override must not reset it)", got)
+		}
+	})
+}

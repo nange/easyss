@@ -15,6 +15,7 @@ type SimpleConfig struct {
 	EnableForwardDNS bool `json:"enable_forward_dns"`
 	EnableTun2socks  bool `json:"enable_tun2socks"`
 	EnableQUIC       bool `json:"enable_quic"`
+	TunMTU           int  `json:"tun_mtu,omitempty"`
 
 	ProxyRule  string `json:"proxy_rule"`
 	IPV6Rule   string `json:"ipv6_rule"`
