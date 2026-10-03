@@ -16,7 +16,15 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-var logger = slog.New(DefaultHandler(slog.LevelInfo))
+// logger 是当前日志器。用原子指针而非普通变量：Init/CloseFileOutput/SetLogger
+// 与后台 goroutine 的日志写入天然并发（例如 runner 在后台启动 socks5 服务器并
+// 输出 "listening"，宿主同时调用 Stop 关闭文件输出），普通变量在这条路径上是
+// 数据竞争，-race 下会直接判失败。
+var logger atomic.Pointer[slog.Logger]
+
+func init() {
+	logger.Store(slog.New(DefaultHandler(slog.LevelInfo)))
+}
 
 // fileOutput 记录当前日志器的文件输出（lumberjack 写入器），使重新初始化和显式
 // 关闭都能释放底层文件句柄。没有这条记录时，句柄只能等 GC 回收——被打开的文件
@@ -50,11 +58,11 @@ func SetLevel(level slog.Level) {
 }
 
 func SetLogger(l *slog.Logger) {
-	logger = l
+	logger.Store(l)
 }
 
 func Logger() *slog.Logger {
-	return logger
+	return logger.Load()
 }
 
 func Debug(msg string, args ...any) {
@@ -74,7 +82,8 @@ func Error(msg string, args ...any) {
 }
 
 func log(level slog.Level, msg string, args ...any) {
-	if !logger.Enabled(context.Background(), level) {
+	l := logger.Load()
+	if !l.Enabled(context.Background(), level) {
 		return
 	}
 	var pcs [1]uintptr
@@ -82,7 +91,7 @@ func log(level slog.Level, msg string, args ...any) {
 	runtime.Callers(3, pcs[:])
 	r := slog.NewRecord(time.Now(), level, msg, pcs[0])
 	r.Add(args...)
-	_ = logger.Handler().Handle(context.Background(), r)
+	_ = l.Handler().Handle(context.Background(), r)
 }
 
 func newReplaceAttrFunc(cn *time.Location) func([]string, slog.Attr) slog.Attr {
