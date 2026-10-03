@@ -80,6 +80,12 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 	req.Header.Set("Cache-Control", "no-store")
 	req.Header.Set("User-Agent", chromeUserAgent())
 
+	// ttfbStart 必须在发起请求之前打点：服务端会先提交响应头再写载荷，
+	// 但客户端读循环与 RoundTrip 是并发的——当连接上还有别的流在传输时，
+	// 载荷可能在 RoundTrip 返回之前就已被读循环缓冲进本流的管道。若把
+	// 基准放在 RoundTrip 之后，量到的就只是"从缓冲区里取走第一个分块"的
+	// 时间（微秒级），真实路径 RTT 会被整段丢掉，统计值随之失真。
+	ttfbStart := time.Now()
 	resp, err := slot.t.RoundTrip(req)
 	if err != nil {
 		// RoundTrip 失败（拨号/TLS/流错误，或响应头到达前超时）：连接已死或
@@ -104,7 +110,6 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 	var total int64
 	var start time.Time
 	timed := false
-	ttfbStart := time.Now()
 	for {
 		n, rErr := resp.Body.Read(buf)
 		if n > 0 {
@@ -112,9 +117,9 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 			if !timed {
 				timed = true
 				start = time.Now()
-				// 响应头已到达，且服务端会立即写入载荷（不涉及源端），因此到
-				// 第一个响应体分块的时间就是纯路径 RTT——与每次请求的 bootstrap
-				// 往返采用相同的测量基准。
+				// 发送请求到首个响应体分块的耗时：服务端在拨号源端之前就已
+				// 提交响应，因此这就是纯 client<->server 路径 RTT——与每次
+				// 请求的 bootstrap 往返采用相同的测量基准。
 				stats.RecordRTT(time.Since(ttfbStart))
 			}
 		}
