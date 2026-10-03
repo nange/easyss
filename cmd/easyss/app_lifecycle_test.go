@@ -99,8 +99,45 @@ func TestAppStartResetsSessionState(t *testing.T) {
 	require.NoError(t, a.Start())
 	t.Cleanup(a.Stop)
 
-	require.Nil(t, a.startupWarn)
+	require.Nil(t, a.currentStartupWarn())
 	require.False(t, a.tunSkippedForNetwork)
+}
+
+// TestAppStartupWarnAccessIsRaceFree 固定 startupWarn 的读侧契约：它由 Start 在
+// stateMu 下重置/写入，而自更新失败后的恢复流程（restartServiceWith）与那次
+// Start 分属不同 goroutine，因此必须走 currentStartupWarn()。直接读字段会让
+// -race 报出数据竞争（旧代码是整个结构体重写，掩盖了这一点）。
+func TestAppStartupWarnAccessIsRaceFree(t *testing.T) {
+	stubRunCore(t)
+	a := &App{cfg: &config.ClientConfig{}}
+
+	var wg sync.WaitGroup
+	stopReading := make(chan struct{})
+	for range 4 {
+		wg.Go(func() {
+			for {
+				select {
+				case <-stopReading:
+					return
+				default:
+				}
+				_ = a.currentStartupWarn()
+			}
+		})
+	}
+
+	wg.Go(func() {
+		defer close(stopReading)
+		for range 200 {
+			if err := a.Start(); err != nil {
+				return
+			}
+			a.Stop()
+		}
+	})
+
+	wg.Wait()
+	require.Nil(t, a.currentStartupWarn())
 }
 
 // TestAppStopTakesTheTunManager 固定"Stop 收走当时的 TUN manager"：交给 Stop

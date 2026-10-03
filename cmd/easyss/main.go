@@ -230,8 +230,8 @@ type App struct {
 	// startupWarn 记录首个非致命启动警告（例如服务端域名解析失败，
 	// 或自定义规则文件加载失败）。客户端继续运行；托盘以系统通知形式
 	// 呈现，headless 构建则记入日志。
-	// 它是会话级状态，由 Start 在会话起点重置，只有 Start 的同一调用链
-	// （buildTray / start.go / restartServiceWith）读取它。
+	// 它是会话级状态：Start 在会话起点重置它（持 stateMu），所有读者
+	// 一律走 currentStartupWarn()，因为恢复流程与切换/启动分属不同 goroutine。
 	startupWarn error
 
 	// tunSkippedForNetwork 记录启动时因服务端域名尚未解析成功（开机网络还
@@ -273,6 +273,17 @@ func (a *App) takeCore() *runner.Core { return a.core.Swap(nil) }
 // 会话级字段由 Start 在 stateMu 下重置，因此这里只换配置指针——不能再整体
 // 重建 App（*a.App = App{...}，见 stateMu 的注释）。
 func (a *App) adoptConfig(cfg *config.ClientConfig) { a.cfg = cfg }
+
+// currentStartupWarn 返回本次会话的启动警告快照。startupWarn 由 Start 在
+// stateMu 下重置/写入，因此凡是不与那次 Start 同 goroutine 的读者都必须走
+// 这里——自更新失败后的恢复流程（restartServiceWith）与切换/启动就分属不同
+// goroutine。同一调用链上的读者（buildTray、start.go、start_headless.go 在
+// Start 返回后立即读）也因此统一走访问器，规则只有一条。
+func (a *App) currentStartupWarn() error {
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	return a.startupWarn
+}
 
 // runCore 启动一次代理核心。它作为变量（与 restartServiceWith 注入 start
 // 是同一模式），使测试能注入零值核心来并发驱动真实的 Start/Stop，而不必
@@ -519,6 +530,7 @@ func notifyTunSkippedNoRoot() {
 
 // setStartupWarn 记录首个非致命启动警告。客户端继续运行；
 // 托盘以系统通知形式呈现，headless 构建则记入日志。
+// 调用方持有 stateMu（只被 App.Start 调用），与 currentStartupWarn 配对。
 func (a *App) setStartupWarn(err error) {
 	if err == nil || a.startupWarn != nil {
 		return

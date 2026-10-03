@@ -26,8 +26,8 @@ func runApp(disableTray, daemon bool, app *App) {
 	// 跳过就意味着用户再无入口打开它，而 headless 客户端本地代理会按
 	// 代理规则分流，直连规则的流量在隧道恢复前也仍然可用。
 	proxyApplied := app.setupSysProxy()
-	if app.startupWarn != nil {
-		log.Warn("[EASYSS-V3] startup warning", "err", app.startupWarn)
+	if warn := app.currentStartupWarn(); warn != nil {
+		log.Warn("[EASYSS-V3] startup warning", "err", warn)
 	}
 	sigWait()
 	// os.Exit 不会执行 defer：撤销必须显式放在 Stop 之前，否则撤销时会话里

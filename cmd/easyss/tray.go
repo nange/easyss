@@ -88,6 +88,7 @@ type TrayApp struct {
 	// （4080/5080）并同时改写 a.cfg，结果可能是没有任何 core 在运行，
 	// 或者两个 core 同时存在。它串行化的是"停+起"这一整段与菜单勾选回滚；
 	// 当前核心本身由 App.core 的原子指针发布，读侧不依赖这把锁。
+	// 自更新失败后的恢复流程（tray_update.go）也是一套停/起，因此同样持有它。
 	serverSwitchMu sync.Mutex
 }
 
@@ -178,8 +179,8 @@ func (a *TrayApp) buildTray() {
 
 	// 非致命启动警告（例如服务端域名解析失败且 TUN 被跳过）以通知形式呈现，
 	// 不阻塞也不退出：代理核心继续运行。
-	if a.startupWarn != nil {
-		a.tray.ShowNotification("Easyss", friendlyStartupWarning(a.startupWarn))
+	if warn := a.currentStartupWarn(); warn != nil {
+		a.tray.ShowNotification("Easyss", friendlyStartupWarning(warn))
 	}
 
 	a.startLocalService()
@@ -919,8 +920,11 @@ func (a *TrayApp) restartServiceWith(newCfg *config.ClientConfig, start func(*co
 		return err
 	}
 
-	if a.startupWarn != nil {
-		log.Warn("[SYSTRAY] restart service: startup warning", "err", a.startupWarn)
+	// startupWarn 由 start 里的那次 Start（或 buildTray 的初始 Start）在
+	// stateMu 下写入；这里的恢复流程与那次 Start 分属不同 goroutine——
+	// serverSwitchMu 只能串行化两套"停/起"，串不住初始 Start，因此必须走访问器。
+	if warn := a.currentStartupWarn(); warn != nil {
+		log.Warn("[SYSTRAY] restart service: startup warning", "err", warn)
 	}
 
 	restoreSysProxy()
