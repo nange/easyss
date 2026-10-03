@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -56,6 +57,22 @@ func releaseFifoOpen(fifoPath string, ch <-chan fifoOpenResult) {
 	_ = rd.Close()
 }
 
+// tunControlLockPath 是提权 TUN helper 的互斥锁文件：helper 在安装路由之前取得
+// 它，直到清理完成并退出才释放。内核会在进程退出时释放 flock（被 kill -9 也一样），
+// 因此"能否立刻拿到这把锁"就是"helper 是否还在"的可靠信号——父进程在关闭 TUN 后
+// 用它等 helper 完成拆除（见 tray_tun_teardown_unix.go 的 waitTunHelperExit）。
+//
+// 它是变量而不是常量，测试可以把它指到临时文件上。
+var tunControlLockPath = "/tmp/easyss-tun.lock"
+
+const (
+	// tunCleanupAttempts/tunCleanupRetryDelay 控制 helper 退出时清理 TUN 路由的
+	// 重试。删除路由是幂等的，而一次没删掉的分流默认路由就会让全机 IPv4 流量
+	// 黑洞，所以这里不吝啬重试。
+	tunCleanupAttempts   = 3
+	tunCleanupRetryDelay = 300 * time.Millisecond
+)
+
 // runTunHelper 是长期运行的特权 TUN 辅助进程的入口。它通过 GET /tun 从主进程
 // 获取配置，打开 TUN 设备，设置路由和 DNS，通过 Unix 域套接字把文件描述符传回，
 // 然后阻塞读取 stdin。当 stdin 返回 EOF（主进程关闭了 FIFO 或已崩溃）时，
@@ -103,7 +120,7 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 
 	// 3. 获取独占文件锁，确保同一时刻只有一个辅助进程在运行。如果前一个辅助进程
 	//    仍在清理中，我们会阻塞等待它退出、内核释放锁（即使 kill -9 也有效）。
-	lockFile, err := os.OpenFile("/tmp/easyss-tun.lock", os.O_CREATE|os.O_RDWR, 0644)
+	lockFile, err := os.OpenFile(tunControlLockPath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return giveUp("open lock file", err)
 	}
@@ -136,11 +153,16 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	log.Info("[TUN-HELPER] device created", "requested", cfg.Device, "actual", actualDevice, "mtu", tunMTU)
 
 	// 延迟清理：退出时移除路由并恢复 DNS。
+	//
+	// 清理是否成功必须记录下来：只要还有一条分流默认路由残留，全机 IPv4 流量就会
+	// 进入一个已经没人读的设备，用户看到的就是"停止 TUN 后断网"。父进程在 helper
+	// 退出后也会自己复核并回滚（见 tray_tun_teardown_unix.go），这里的日志是
+	// 判断"到底谁没做成"的第一手证据。
 	defer func() {
 		log.Info("[TUN-HELPER] cleaning up routes and DNS")
-		_ = runCloseScript(actualDevice, cfg.TunGW, cfg.LocalGateway,
-			cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6)
-		removeLeftoverDevice(actualDevice)
+		if err := cleanupTunRoutes(actualDevice, cfg); err != nil {
+			log.Error("[TUN-HELPER] cleanup left TUN routes behind", "device", actualDevice, "err", err)
+		}
 		_ = util.RestoreSysDNSForTun(actualDevice, originDNS)
 		log.Info("[TUN-HELPER] cleanup done")
 	}()
@@ -150,9 +172,15 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	time.Sleep(200 * time.Millisecond)
 
 	// 6. 清理上次 TUN 会话遗留的过期路由。
+	//
+	//    这是预清理，失败只记 debug：设备是我们刚建出来的、正被本进程持有，
+	//    linux 的关闭脚本里 `ip tuntap del` 必然因此失败，而路由本身马上会被
+	//    第 7 步的创建脚本重写。真正决定成败的是退出时的 cleanupTunRoutes。
 	log.Info("[TUN-HELPER] cleaning stale routes")
-	_ = runCloseScript(actualDevice, cfg.TunGW, cfg.LocalGateway,
-		cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6)
+	if err := runCloseScript(actualDevice, cfg.TunGW, cfg.LocalGateway,
+		cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6); err != nil {
+		log.Debug("[TUN-HELPER] pre-clean routes", "device", actualDevice, "err", err)
+	}
 
 	// 7. 运行 create 脚本（ifconfig/ip + MTU + route add）。
 	log.Info("[TUN-HELPER] creating routes and configuring interface", "mtu", tunMTU)
@@ -220,6 +248,40 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	}
 }
 
+// cleanupTunRoutes 清掉本次会话安装的 TUN 路由（并让设备随 fd 消失），然后校验
+// 它们真的不在系统路由表里了；没清掉就重试。删除路由是幂等的，重试没有副作用。
+//
+// 返回的错误只用于日志与判定，绝不能改变 helper 的退出码：父进程把非零退出码
+// 理解为"提权/启动失败"，用它表达"清理失败"只会让用户看到错误的原因。
+func cleanupTunRoutes(device string, cfg *proxy.TunConfig) error {
+	var lastErr error
+
+	for attempt := 1; attempt <= tunCleanupAttempts; attempt++ {
+		scriptErr := runCloseScript(device, cfg.TunGW, cfg.LocalGateway,
+			cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6)
+		if scriptErr != nil {
+			log.Warn("[TUN-HELPER] close script", "device", device, "attempt", attempt, "err", scriptErr)
+		}
+
+		removeLeftoverDevice(device)
+
+		detail, leftover := tunRouteResidue(device, cfg.TunGW)
+		if !leftover {
+			return nil
+		}
+
+		// 路由仍在：以"残留"为主错误，同时保留关闭脚本自己的失败原因——它通常
+		// 就是根因（例如某条 route delete 被拒绝）。
+		lastErr = errors.Join(scriptErr, fmt.Errorf("TUN routes still present after cleanup: %s", detail))
+
+		if attempt < tunCleanupAttempts {
+			time.Sleep(tunCleanupRetryDelay)
+		}
+	}
+
+	return lastErr
+}
+
 // tunRouteProbes 是必须被 TUN 路由覆盖的目标，用于校验睡眠/唤醒或网络变更后
 // 路由是否仍然存在。darwin/linux/Windows 的 create 脚本把 1.0.0.0/8（以及直到
 // 128.0.0.0/1 的全部网段）路由进 TUN 设备，因此 1.1.1.1——一个真实且广泛使用的
@@ -249,6 +311,30 @@ func probeRoutedViaDevice(probe []string, cmd func(string) (string, error), mark
 		err = fmt.Errorf("no probe resolved via %q (last %s)", marker, lastAddr)
 	}
 	return out, err
+}
+
+// routeProbeCmd 执行一次路由表查询（darwin 的 `route -n get`、linux 的
+// `ip route get`），默认实现就是 util.Command。
+//
+// 它是变量以便测试注入确定的输出：残留判定只依赖这份文本里的字段
+// （见 routeFieldsContain），与运行测试的机器当前的路由表无关——真实的残留路由
+// 需要 root 才能造出来。
+var routeProbeCmd = util.Command
+
+// routeFieldsContain 报告路由探测输出里是否出现了 "key value" 这一对字段。
+//
+// 它按空白分词后逐项整体比较，而不是子串匹配：`route -n get` 与 `ip route get`
+// 的输出里字段是空格分隔的独立单词，子串匹配会让 "dev tun" 命中 "dev tun0"、
+// 让 "gateway: 198.18.0.1" 命中 "gateway: 198.18.0.11"——残留判定必须精确，
+// 否则会误判成残留并触发一次不必要的提权回滚。
+func routeFieldsContain(out, key, value string) bool {
+	fields := strings.Fields(out)
+	for i, field := range fields {
+		if field == key && i+1 < len(fields) && fields[i+1] == value {
+			return true
+		}
+	}
+	return false
 }
 
 // fetchTunConfig 通过 GET /tun 从主进程获取 TUN 配置。它会带退避重试最长约

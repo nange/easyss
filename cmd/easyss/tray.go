@@ -75,6 +75,18 @@ type TrayApp struct {
 	// TUN 助手进程管理（darwin 非 root）。
 	tunHelperStdin io.WriteCloser // FIFO 写入端；关闭以通知助手进程退出
 	tunHelperMu    sync.Mutex
+
+	// tunSession 是当前 TUN 会话在启用时实际使用的设备/网关配置。关闭时用它
+	//（而不是关闭时的 a.tunMgr）核对路由与回滚：fd 路径的 manager 只携带请求
+	// 的设备名，而会话的本地网关等取值到关闭时可能已经变化。
+	// 由 tunHelperMu 保护。
+	tunSession *tun.DeviceConfig
+
+	// serverSwitchMu 串行化服务器切换。每次切换都是一整套"停服务 → 起服务"，
+	// 而托盘的每次点击都会新起一个 goroutine：并发切换会抢同一组本地端口
+	// （4080/5080）并同时改写 a.core/a.cfg，结果可能是没有任何 core 在运行，
+	// 或者两个 core 同时存在。
+	serverSwitchMu sync.Mutex
 }
 
 // startupErrorNotifyDelay 在启动失败通知后让进程存活一段时间，
@@ -354,18 +366,80 @@ func (a *TrayApp) selectServer(idx int) {
 		}
 		addr := a.serverAddrs[idx]
 		log.Info("[SYSTRAY] changing server to", "addr", addr)
-		for _, v := range a.serverMenuItems {
-			v.SetChecked(false)
-		}
-		clone := a.cfg.Clone()
-		clone.SetDefaultServerIndex(idx)
-		if err := a.restartService(clone); err != nil {
+		if err := a.switchServer(idx, a.restartService); err != nil {
 			log.Error("[SYSTRAY] changing server to", "addr", addr, "err", err)
+			a.notifyServerSwitchFailure(addr, err)
 			return
 		}
-		a.serverMenuItems[idx].SetChecked(true)
 		log.Info("[SYSTRAY] changes server success to", "addr", addr)
 	}()
+}
+
+// switchServer 执行一次服务器切换：先在 serverSwitchMu 上排队（连点几下不会
+// 并发跑两套停/起），失败时把菜单勾选还原到真正在运行的那个服务器。
+//
+// restart 由调用方注入（生产代码传 a.restartService），使测试无需真的重启服务、
+// 也不会改写运行测试的机器的系统代理与端口。
+func (a *TrayApp) switchServer(idx int, restart func(*config.ClientConfig) error) error {
+	a.serverSwitchMu.Lock()
+	defer a.serverSwitchMu.Unlock()
+
+	// 排队期间状态可能已经变成"这个服务器正在运行"（上一次点击已经切到它了）：
+	// 此时只需要把勾选确认回来，不必再停一次、起一次。
+	if a.core != nil && a.runningServerIndex() == idx {
+		a.setCheckedServer(idx)
+		return nil
+	}
+
+	a.setCheckedServer(-1)
+
+	clone := a.cfg.Clone()
+	clone.SetDefaultServerIndex(idx)
+	if err := restart(clone); err != nil {
+		// restartService 已经尽力回滚到切换前的服务器：回滚成功（还有 core 在
+		// 运行）就按当前配置勾回它；彻底没有服务在运行时留空——菜单不能声称
+		// 一个没在工作的服务器已选中，那正是"切换失败 + 本机断网"时的样子。
+		if a.core != nil {
+			a.setCheckedServer(a.runningServerIndex())
+		}
+		return err
+	}
+
+	a.setCheckedServer(idx)
+	return nil
+}
+
+// runningServerIndex 返回当前配置指向的服务器在菜单里的下标（找不到返回 -1）。
+// 配置是切换/回滚的唯一事实来源：菜单勾选必须跟着它走。
+func (a *TrayApp) runningServerIndex() int {
+	addr := a.cfg.DefaultServerAddr()
+	for i, candidate := range a.serverAddrs {
+		if candidate == addr {
+			return i
+		}
+	}
+	return -1
+}
+
+// setCheckedServer 只勾选下标 idx 的服务器；idx < 0 表示全部取消勾选。
+func (a *TrayApp) setCheckedServer(idx int) {
+	for i, item := range a.serverMenuItems {
+		item.SetChecked(i == idx)
+	}
+}
+
+// notifyServerSwitchFailure 告知用户切换失败。切换失败不能只写日志：菜单刚刚被
+// 清空过，用户需要知道现在到底跑的是哪个服务器（或者什么都没跑）。
+func (a *TrayApp) notifyServerSwitchFailure(addr string, err error) {
+	msg := fmt.Sprintf("切换到 %s 失败，已回滚到原来的服务器。详情：%v", addr, err)
+	if a.core == nil {
+		msg = fmt.Sprintf("切换到 %s 失败，且未能恢复原来的服务器：本机代理已停止，请重试或重启 Easyss。详情：%v", addr, err)
+	}
+	if !a.trayReady() {
+		log.Warn("[SYSTRAY] notify skipped: tray not ready", "msg", msg)
+		return
+	}
+	a.notifyUser(msg)
 }
 
 func (a *TrayApp) statsRefresher() {
@@ -606,15 +680,24 @@ func (a *TrayApp) exitApp() {
 	}()
 }
 
+// setSysProxyOn/setSysProxyOff 走 sysProxyApply/sysProxyRevert 这两个包级钩子
+// （而不是直接调用实现），使测试可以观察托盘路径上的系统代理改动，
+// 而不必触碰运行测试的机器的真实代理配置。
 func (a *TrayApp) setSysProxyOn() error {
-	return setSysProxy(a.cfg.Local.HTTPPort)
+	return sysProxyApply(a.cfg.Local.HTTPPort)
 }
 
 func (a *TrayApp) setSysProxyOff() error {
-	return unsetSysProxy()
+	return sysProxyRevert()
 }
 
 func (a *TrayApp) createTun2socks() error {
+	// 与 closeTun2socks（以及 helper 路径的 createTun2socksViaHelper）共用同一把
+	// 锁：托盘的每一次点击都在自己的 goroutine 里，启用与关闭会并发执行，而它们
+	// 写的是同一组字段（tunMgr/tunSession/EnableTun2socks）。
+	a.tunHelperMu.Lock()
+	defer a.tunHelperMu.Unlock()
+
 	if a.tunMgr != nil {
 		return nil
 	}
@@ -628,6 +711,8 @@ func (a *TrayApp) createTun2socks() error {
 
 	a.cfg.Local.EnableTun2socks = true
 	a.tunMgr = tun.New(a.tunConfig())
+	dev := a.tunMgr.DeviceConfig()
+	a.tunSession = &dev
 
 	icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
 	icmpHandler.SetProxy(a.core.StreamHandler, a.methodFromServer())
@@ -654,9 +739,24 @@ func (a *TrayApp) revertTunStart() {
 	}
 }
 
+// tunHelperExitTimeout 是关闭/切换服务器时等待提权 helper 释放控制锁的上限。
+// 正常路径上 helper 收到 FIFO 的 EOF 后几十毫秒内就会退出；超时说明它卡在清理里，
+// 继续等只会拖住整个切换流程——此时不再等它，直接由父进程自己复核路由表
+// （见 tray_tun_teardown_unix.go 的 waitTunHelperExit 与 verifyTunTeardown）。
+// 非 darwin/linux 平台没有 helper，这个值不会被用到。
+const tunHelperExitTimeout = 5 * time.Second
+
 func (a *TrayApp) closeTun2socks() error {
 	a.tunHelperMu.Lock()
 	defer a.tunHelperMu.Unlock()
+
+	// 会话配置必须在清空 a.tunMgr 之前取下来：它既用于校验，也用于兜底回滚。
+	session := a.tunSession
+	if session == nil && a.tunMgr != nil {
+		dev := a.tunMgr.DeviceConfig()
+		session = &dev
+	}
+	a.tunSession = nil
 
 	// 1. 先停止 tun2socks 引擎：它会关闭助手进程传给本进程的 TUN fd。
 	//    助手进程的关闭脚本会删除该接口，而 iproute2 无法删除仍附着在
@@ -671,15 +771,34 @@ func (a *TrayApp) closeTun2socks() error {
 
 	// 2. 通过关闭 FIFO 通知助手进程退出。
 	//    助手进程检测到 stdin 上的 EOF 后清理路由/DNS 并退出。
+	//    FIFO 文件本身在 tunHelperStdin 关闭时被删除（见 fifoWriter.Close）。
+	helperSignalled := false
 	if a.tunHelperStdin != nil {
 		log.Info("[SYSTRAY] closeTun2socks: closing helper FIFO")
 		a.tunHelperStdin.Close() //nolint:errcheck
 		a.tunHelperStdin = nil
+		helperSignalled = true
 	}
 
-	// 3. 助手进程通过文件锁（/tmp/easyss-tun.lock）与任何先前实例协调。
-	//    这里无需等待 —— 下一个助手进程会阻塞在锁上，直到本实例退出并释放。
-	//    FIFO 文件本身在 tunHelperStdin 关闭时被删除（见 fifoWriter.Close）。
+	// 3. 等助手进程退出（它通过文件锁与任何先前实例协调；内核在进程退出时释放
+	//    锁），然后自己复核系统路由表。
+	//
+	//    拆除过去是彻底"发射后不管"的：父进程既不等也不看，于是助手进程一旦
+	//    清路由失败，1/8…128/1 这些分流默认路由就留在表里，把全机 IPv4 流量
+	//    （包括 DNS）送进一个已经没人读的设备——表现为"切换服务器后本机断网"。
+	//    这里等不到就往下走：下面的复核会自己发现残留。
+	if helperSignalled {
+		if err := waitTunHelperExit(tunHelperExitTimeout); err != nil {
+			log.Error("[SYSTRAY] closeTun2socks: waiting for tun helper", "err", err)
+		}
+	}
+	if session != nil {
+		if err := verifyTunTeardown(*session); err != nil {
+			log.Error("[SYSTRAY] closeTun2socks: TUN teardown left routes behind", "err", err)
+			a.notifyTunTeardownProblem(
+				"TUN 已停止，但系统路由表里仍残留指向 TUN 的路由，本机可能无法上网。请退出并重新启动 Easyss，或重启系统以恢复网络。详情：" + err.Error())
+		}
+	}
 
 	// 4. 清除 HTTP /tun 配置。
 	if a.core != nil && a.core.HTTPServer != nil {
@@ -688,6 +807,16 @@ func (a *TrayApp) closeTun2socks() error {
 
 	a.cfg.Local.EnableTun2socks = false
 	return nil
+}
+
+// notifyTunTeardownProblem 报告 TUN 拆除不完整（路由残留且回滚失败）。
+// 这是用户必须知道的状态：残留的分流默认路由会把全机流量黑洞掉。
+func (a *TrayApp) notifyTunTeardownProblem(msg string) {
+	if !a.trayReady() {
+		log.Warn("[SYSTRAY] notify skipped: tray not ready", "msg", msg)
+		return
+	}
+	a.notifyUser(msg)
 }
 
 // enableTun2socks 在后台 goroutine 中运行 TUN 启用流程，
@@ -738,34 +867,61 @@ func (a *TrayApp) disableTun2socks() {
 }
 
 func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
+	return a.restartServiceWith(newCfg, func(cfg *config.ClientConfig) error {
+		*a.App = App{
+			cfg: cfg,
+		}
+		return a.Start()
+	})
+}
+
+// restartServiceWith 是 restartService 的实现；start 由调用方注入，使测试可以
+// 驱动"新服务起不来 → 回滚到旧服务器"这条路径，而不必真的启动代理核心。
+func (a *TrayApp) restartServiceWith(newCfg *config.ClientConfig, start func(*config.ClientConfig) error) error {
 	sysProxyEnabled := a.BrowserMenu() != nil && a.BrowserMenu().IsChecked()
 
 	// 停止一切，包括 TUN。在 macOS 上这会提示输入管理员凭据
 	// 以清理路由和 DNS —— 在手动切换服务器期间可以接受。
 	a.closeService()
 
-	// 防止 a.Start() 重新创建 TUN。切换服务器后 TUN 有意保持关闭；
+	// 切换前的配置：新服务起不来时用它把服务恢复起来。失败的切换过去会把用户
+	// 留在"旧服务已停、新服务没起来"的状态——本地端口没人监听，而系统代理还
+	// 指着它，看起来就是"切换失败并且断网"。
+	prevCfg := a.cfg.Clone()
+
+	// 防止 start 重新创建 TUN。切换服务器后 TUN 有意保持关闭；
 	// 托盘菜单与实际（关闭）状态保持同步，用户只需一次点击即可重新启用。
 	newCfg.Local.EnableTun2socks = false
 	if tunMenu := a.TunMenu(); tunMenu != nil {
 		tunMenu.SetChecked(false)
 	}
 
-	*a.App = App{
-		cfg: newCfg,
-	}
-	if err := a.Start(); err != nil {
-		return err
-	}
-	if a.startupWarn != nil {
-		log.Warn("[SYSTRAY] restart service: startup warning", "err", a.startupWarn)
-	}
-
-	if sysProxyEnabled {
+	restoreSysProxy := func() {
+		if !sysProxyEnabled {
+			return
+		}
 		if err := a.setSysProxyOn(); err != nil {
 			log.Error("[SYSTRAY] restart service: restore sysproxy on", "err", err)
 		}
 	}
+
+	if err := start(newCfg); err != nil {
+		// 回滚：先切回原来的服务器并把它重新拉起来。回滚也失败时两个错误一起
+		// 上报（调用方据此判断"完全没有服务在运行"）。
+		if rollbackErr := start(prevCfg); rollbackErr != nil {
+			return errors.Join(err, fmt.Errorf("rollback to %s: %w", prevCfg.DefaultServerAddr(), rollbackErr))
+		}
+		log.Warn("[SYSTRAY] restart service: rolled back to the previous server",
+			"addr", prevCfg.DefaultServerAddr(), "err", err)
+		restoreSysProxy()
+		return err
+	}
+
+	if a.startupWarn != nil {
+		log.Warn("[SYSTRAY] restart service: startup warning", "err", a.startupWarn)
+	}
+
+	restoreSysProxy()
 	return nil
 }
 

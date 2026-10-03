@@ -172,3 +172,52 @@ func TestReceiveFdReceivesTheSentFd(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "tun", string(buf))
 }
+
+// TestRouteFieldsContain 固定残留判定的精确性：路由探测的输出按空白分词后整体
+// 比较字段对。子串匹配会让 "dev tun" 命中 "dev tun0"，把别的 TUN 设备的路由
+// 误判成本会话的残留，进而触发一次不必要的提权回滚。
+func TestRouteFieldsContain(t *testing.T) {
+	darwinUp := "   route to: 1.1.1.1\ndestination: 1.0.0.0\n       mask: 255.0.0.0\n    gateway: 198.18.0.1\n  interface: utun9\n"
+	darwinClean := "   route to: 1.1.1.1\ndestination: 0.0.0.0\n       mask: 0.0.0.0\n    gateway: 192.168.3.1\n  interface: en0\n"
+	linuxUp := "1.1.1.1 dev tun-easyss src 198.18.0.1 uid 501"
+	linuxClean := "1.1.1.1 via 192.168.3.1 dev en0 src 192.168.3.20 uid 501"
+
+	for _, tc := range []struct {
+		name  string
+		out   string
+		key   string
+		value string
+		want  bool
+	}{
+		{"darwin: our gateway", darwinUp, "gateway:", "198.18.0.1", true},
+		{"darwin: physical gateway", darwinClean, "gateway:", "198.18.0.1", false},
+		{"darwin: our interface", darwinUp, "interface:", "utun9", true},
+		{"darwin: gateway is a prefix of another address", "    gateway: 198.18.0.11\n", "gateway:", "198.18.0.1", false},
+		{"linux: our device", linuxUp, "dev", "tun-easyss", true},
+		{"linux: physical device", linuxClean, "dev", "tun-easyss", false},
+		{"linux: device name is a prefix of another device", "1.1.1.1 dev tun0 src 198.18.0.1", "dev", "tun", false},
+		{"missing value", "nothing here", "dev", "tun0", false},
+		{"empty output", "", "dev", "tun0", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, routeFieldsContain(tc.out, tc.key, tc.value))
+		})
+	}
+}
+
+// stubRouteProbe 用固定的路由表应答替换探测命令（routeProbeCmd），返回记录下来的
+// 调用参数，并在测试结束时还原。它是 routeFieldsContain/tunRouteResidue 那组测试
+// 的共同前置：残留判定只依赖这份文本里的字段，不需要真实的系统路由表。
+func stubRouteProbe(t *testing.T, out string) *[][]string {
+	t.Helper()
+
+	prev := routeProbeCmd
+	t.Cleanup(func() { routeProbeCmd = prev })
+
+	var calls [][]string
+	routeProbeCmd = func(name string, args ...string) (string, error) {
+		calls = append(calls, append([]string{name}, args...))
+		return out, nil
+	}
+	return &calls
+}

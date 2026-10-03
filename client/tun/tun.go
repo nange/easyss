@@ -384,7 +384,9 @@ func (m *Manager) Start() error {
 	case <-ctx.Done():
 		engineStopFn("start cancelled")
 		if !fdMode {
-			_ = closeTunDevFn(m)
+			if err := closeTunDevFn(m); err != nil {
+				log.Warn("[TUN] close script after start cancellation", "err", err)
+			}
 		}
 		if manageSystemDNS() {
 			_ = restoreDNSStepFn(m)
@@ -437,7 +439,12 @@ func (m *Manager) Stop() {
 	log.Info("[TUN] Stop: engine.Stop done")
 
 	if !m.cfg.SkipRouteCleanup {
-		_ = closeTunDevFn(m)
+		// 关闭脚本的失败不能改变 Stop 的结果（调用方已经在拆除了），但绝不能
+		// 静默：脚本按"路由是否真的删掉"给出退出码，残留的分流默认路由会把
+		// 全机 IPv4 流量送进一个没人读的 TUN 设备。
+		if err := closeTunDevFn(m); err != nil {
+			log.Warn("[TUN] close script", "err", err)
+		}
 
 		// 在 darwin 和 linux 上恢复原始 DNS。
 		if manageSystemDNS() {
@@ -560,6 +567,12 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 	return nil
 }
 
+// closeTunDevAndDelIPRoute 运行平台的关闭脚本，删除本次会话安装的路由与设备。
+//
+// 它把脚本的失败原样返回（而不是像过去那样只记一条警告）：调用方要么是 Stop()
+// 的拆除路径，要么是 Start() 失败后的回滚路径，还有可能是 fd/helper 路径下的
+// 兜底回滚（见 CleanupTunDevice）。只要有一条分流默认路由残留，全机 IPv4 流量
+// 就会进入一个没人读的 TUN 设备——也就是"停止 TUN 后断网"。
 func (m *Manager) closeTunDevAndDelIPRoute() error {
 	if scripts.CloseTunBytes == nil {
 		return nil
@@ -583,7 +596,7 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 			cmdArgs = cmdArgs[1:]
 		}
 		if _, err := util.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...); err != nil {
-			log.Warn("[TUN] close script", "err", err)
+			return fmt.Errorf("tun: close script: %w", err)
 		}
 	case "windows":
 		dir := filepath.Dir(namePath)
@@ -596,7 +609,7 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 		// 脚本删除持久化的 v6 地址，而创建脚本的
 		// "add address" 会拒绝重复添加它。
 		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device, d.TunGW, bareV6Addr(d.TunIPV6Sub)); err != nil {
-			log.Warn("[TUN] close script", "err", err)
+			return fmt.Errorf("tun: close script: %w", err)
 		}
 	case "darwin":
 		// 与 helper 的 runCloseScript 参数顺序保持一致：
@@ -605,16 +618,27 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 		args := []string{d.Device, d.TunGW, d.LocalGateway, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6}
 		if os.Geteuid() == 0 {
 			if _, err := util.CommandContext(ctx, "sh", append([]string{namePath}, args...)...); err != nil {
-				log.Warn("[TUN] close script", "err", err)
+				return fmt.Errorf("tun: close script: %w", err)
 			}
 		} else {
 			cmd := osascriptRunScript(namePath, args)
 			if _, err := util.CommandContext(ctx, "osascript", "-e", cmd); err != nil {
-				log.Warn("[TUN] close script", "err", err)
+				return fmt.Errorf("tun: close script: %w", err)
 			}
 		}
 	}
 	return nil
+}
+
+// CleanupTunDevice 重新执行平台的关闭脚本，供 fd/提权 helper 路径做兜底回滚：
+// helper 退出后系统路由表里仍有指向 TUN 的路由时，非 root 的主进程自己删不掉
+// 它们，只能再提权执行一次关闭脚本。
+//
+// cfg 必须与建立会话时使用的那一份一致（见 Manager.DeviceConfig 与
+// cmd/easyss 的 tunSession）。它幂等：各平台的关闭脚本把"路由本来就不存在"
+// 当作良性情况（见脚本的退出码契约），因此重复调用不会误报失败。
+func CleanupTunDevice(cfg Config) error {
+	return New(cfg).closeTunDevAndDelIPRoute()
 }
 
 // saveAndSetDNSStep 保存原始系统 DNS，并把系统切换到 TUN resolver。

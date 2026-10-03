@@ -108,21 +108,59 @@ func bareV6Addr(sub string) string {
 	return addr
 }
 
-// runCloseScript 将内嵌的 close_tun_dev_darwin.sh 写入临时文件并执行。
-// 错误会被忽略，因为这是尽力而为的清理。
+// runCloseScript 将内嵌的 close_tun_dev_darwin.sh 写入临时文件并执行，并返回
+// 脚本的真实失败：脚本按"路由是否真的删掉"给出退出码（见脚本的退出码契约），
+// 调用方据此决定是否需要回滚。过去这里的错误被吞掉——残留的分流默认路由会把
+// 全机 IPv4 流量送进一个没人读的设备，也就是"停止 TUN 后断网"。
 func runCloseScript(device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6 string) error {
 	if scripts.CloseTunBytes == nil {
-		return nil
+		return fmt.Errorf("no close script for darwin")
 	}
 
 	namePath, err := util.WriteToTemp(scripts.CloseTunFilename, scripts.CloseTunBytes)
 	if err != nil {
-		return nil
+		return fmt.Errorf("write close script: %w", err)
 	}
 	defer os.Remove(namePath) //nolint:errcheck
 
-	_, _ = util.Command("sh", namePath, device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6)
+	if err := execScriptWithOutput("sh", namePath, device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6); err != nil {
+		return fmt.Errorf("close script: %w", err)
+	}
 	return nil
+}
+
+// tunRouteResidue 报告探测地址是否仍被路由进 TUN 会话，并返回探测输出。
+//
+// 判据是网关：easyss 的 TUN 路由全部由创建脚本按 `route add -net X <tun_gw>`
+// 安装，而网关（198.18.0.1）是只属于本会话的值。设备名不作主判据——内核分配的
+// 是 utunN，而请求名（默认 utun9）既可能与别的 utun 设备重名，也可能与实际分配
+// 到的名字不同，按它判定会把别人的路由误判成残留。没有网关信息时才退回设备名。
+//
+// 按网关判定也正好覆盖最危险的情形：设备已经随最后一个 fd 消失，路由却还在。
+//
+// 它是变量以便测试注入探测结果（里面的命令执行走 routeProbeCmd，同样是可注入的
+// 变量）：真实的残留路由需要 root 才能造出来。
+var tunRouteResidue = func(device, tunGW string) (string, bool) {
+	key, value := "gateway:", tunGW
+	if value == "" {
+		key, value = "interface:", device
+	}
+	if value == "" {
+		return "", false
+	}
+
+	var out string
+	for _, target := range tunRouteProbes {
+		got, err := routeProbeCmd("route", "-n", "get", target)
+		if err != nil {
+			continue
+		}
+		out = got
+		if routeFieldsContain(got, key, value) {
+			return got, true
+		}
+	}
+	return out, false
 }
 
 // removeLeftoverDevice 报告在关闭脚本执行后仍然存在的 TUN 接口。

@@ -135,7 +135,12 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	}
 
 	// 6. 使用接收到的 fd 创建 tun manager。
+	//
+	//    tunSession 记下 helper 建立这个会话时用的那一份设备/网关配置：关闭时
+	//    要按它来核对路由与回滚，而下面这个 manager 只知道请求的设备名
+	//    （fd 路径下内核分配的 utunN 只有 helper 见过）。
 	a.cfg.Local.EnableTun2socks = true
+	a.tunSession = &devCfg
 	a.tunMgr = tun.New(tun.Config{
 		Socks5Addr:       util.Socks5URI(a.cfg.Local.SocksPort),
 		DeviceFD:         fd,
