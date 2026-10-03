@@ -73,13 +73,15 @@ func TestSwitchServerLeavesNothingCheckedWhenTheCoreIsGone(t *testing.T) {
 func TestSwitchServerMarksTheTargetOnSuccess(t *testing.T) {
 	a := newSwitchTestApp(t)
 
+	// 与生产 restartService 一致：由 restart 把"目标服务器"这条增量发布出去
+	//（生产实现见 restartServiceWith；这里省略真正的 Start）。
 	require.NoError(t, a.switchServer(1, func(cfg *config.ClientConfig) error {
-		// 生产代码里 restartService 会通过 adoptConfig 把新配置装回 App，
-		// 这里模拟这一步。
-		a.adoptConfig(cfg)
+		targetIdx := cfg.DefaultServerIndex()
+		a.updateConfig(func(c *config.ClientConfig) { c.SetDefaultServerIndex(targetIdx) })
 		return nil
 	}))
 
+	require.Equal(t, "b.example:443", a.currentConfig().DefaultServerAddr())
 	require.False(t, a.serverMenuItems[0].IsChecked())
 	require.True(t, a.serverMenuItems[1].IsChecked())
 }
@@ -168,7 +170,8 @@ func TestRestartServiceRollsBackToThePreviousServer(t *testing.T) {
 		if cfg.DefaultServerAddr() == "b.example:443" {
 			return errBoom
 		}
-		a.adoptConfig(cfg)
+		// 生产实现不再换装配置（restartServiceWith 已经把增量发布出去），
+		// 因此这里也不 adopt：换装会把并发菜单改动覆盖掉。
 		return nil
 	}
 
@@ -209,11 +212,74 @@ func TestRestartServiceReportsBothFailures(t *testing.T) {
 	require.Contains(t, err.Error(), "rollback to a.example:443")
 }
 
+// TestRestartServiceDoesNotClobberMenuChangesFromAStaleTarget 固定"切换不得用
+// 停服务之前取的旧快照覆盖菜单改动"：#206 review 指出的丢更新窗口——目标配置
+// 在 closeService 之前取好，而 closeService 在 macOS 上要等 TUN 拆除的管理员
+// 凭据（可达数秒）；这期间用户改的代理规则/日志级别会被那份旧全量静默回滚，
+// 单选项却仍勾着新值、再点也不会生效。现在切换只发布"目标服务器 + 关闭 TUN"
+// 两条增量，因此旧快照的其它字段一律不得生效。
+func TestRestartServiceDoesNotClobberMenuChangesFromAStaleTarget(t *testing.T) {
+	stubRunCore(t)
+	stubSysProxy(t, nil)
+	a := newSwitchTestApp(t)
+	t.Cleanup(a.Stop)
+
+	// 停服务期间的菜单点击：撤销系统代理是 closeService 的必经步骤，把这次
+	// 改动挂在那里，就精确落进了"目标配置已取好、但还没起服务"的窗口。
+	revert := sysProxyRevert
+	sysProxyRevert = func() error {
+		a.updateConfig(func(c *config.ClientConfig) { c.Routing.ProxyRule = "direct" })
+		return revert()
+	}
+
+	// 目标配置在这之前就取好了（生产里由 switchServer 取），因此对那次切换而言
+	// 这份代理规则是"新"的。
+	next := a.currentConfig().Clone()
+	next.SetDefaultServerIndex(1)
+
+	require.NoError(t, a.restartService(next))
+
+	require.Equal(t, "b.example:443", a.currentConfig().DefaultServerAddr(),
+		"切换必须生效")
+	require.Equal(t, "direct", a.currentConfig().Routing.ProxyRule,
+		"停服务期间的菜单改动不得被切换前取的旧快照覆盖")
+}
+
+// TestRestartServiceRollbackKeepsMenuChanges 是上一条的回滚分支：回滚同样只
+// 回退"服务器选择 + TUN 偏好"两条增量，保留菜单在这期间的最新改动。
+func TestRestartServiceRollbackKeepsMenuChanges(t *testing.T) {
+	stubSysProxy(t, nil)
+	a := newSwitchTestApp(t)
+	t.Cleanup(a.Stop)
+
+	errBoom := errors.New("new server failed")
+	prevRunCore := runCore
+	runCore = func(cfg *config.ClientConfig) (*runner.Core, error) {
+		if cfg.DefaultServerAddr() == "b.example:443" {
+			// 新服务器起不来的这一刻，用户改了日志级别。
+			a.updateConfig(func(c *config.ClientConfig) { c.Log.Level = "debug" })
+			return nil, errBoom
+		}
+		return &runner.Core{}, nil
+	}
+	t.Cleanup(func() { runCore = prevRunCore })
+
+	next := a.currentConfig().Clone()
+	next.SetDefaultServerIndex(1)
+
+	err := a.restartService(next)
+
+	require.ErrorIs(t, err, errBoom)
+	require.Equal(t, "a.example:443", a.currentConfig().DefaultServerAddr(),
+		"回滚后配置必须指回原服务器")
+	require.Equal(t, "debug", a.currentConfig().Log.Level,
+		"回滚不得覆盖菜单的最新改动")
+}
+
 // TestSwitchServerIsRaceFreeWithStatsReads 固定"切换服务器与后台统计读取不再
 // 竞争当前核心"：-race 下这是回归测试（旧实现里 App.Start 无锁写 a.core，
 // switchServer 与 statsLoop 无锁读同一个普通字段）。restart 复用真实的
-// Start/Stop 与 adoptConfig，等价于生产 restartService，只把核心换成注入的
-// 零值核心。
+// Start/Stop，并按生产 restartService 的方式发布"目标服务器"增量。
 func TestSwitchServerIsRaceFreeWithStatsReads(t *testing.T) {
 	stubRunCore(t)
 	a := newSwitchTestApp(t)
@@ -221,7 +287,8 @@ func TestSwitchServerIsRaceFreeWithStatsReads(t *testing.T) {
 
 	restart := func(cfg *config.ClientConfig) error {
 		a.Stop()
-		a.adoptConfig(cfg)
+		targetIdx := cfg.DefaultServerIndex()
+		a.updateConfig(func(c *config.ClientConfig) { c.SetDefaultServerIndex(targetIdx) })
 		return a.Start()
 	}
 

@@ -345,7 +345,9 @@ func (a *TrayApp) downloadAndInstall() {
 			if lerr := tryAcquireSingletonLock(); lerr != nil {
 				log.Error("[SYSTRAY] re-acquire singleton lock after failed restart", "err", lerr)
 			}
-			if err := a.restartService(a.currentConfig().Clone()); err != nil {
+			// 恢复路径不改变服务器：把当前快照当作"意图"传入即可（restartServiceWith
+			// 只读它的服务器下标）。
+			if err := a.restartService(a.currentConfig()); err != nil {
 				log.Error("[SYSTRAY] restore service after failed restart", "err", err)
 			}
 			a.setUpdateItem("更新成功，重启失败，请手动重启", false)

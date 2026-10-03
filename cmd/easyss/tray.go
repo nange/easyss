@@ -398,6 +398,8 @@ func (a *TrayApp) switchServer(idx int, restart func(*config.ClientConfig) error
 
 	a.setCheckedServer(-1)
 
+	// 目标配置只作为"切换意图"传给 restart（生产实现只看它的服务器下标，见
+	// restartServiceWith）：这里刻意不在停服务之前把整份配置发布出去。
 	clone := a.currentConfig().Clone()
 	clone.SetDefaultServerIndex(idx)
 	if err := restart(clone); err != nil {
@@ -885,29 +887,44 @@ func (a *TrayApp) disableTun2socks() {
 }
 
 func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
-	return a.restartServiceWith(newCfg, func(cfg *config.ClientConfig) error {
-		a.adoptConfig(cfg)
+	return a.restartServiceWith(newCfg, func(*config.ClientConfig) error {
+		// 配置（目标服务器 + TUN 关闭）已经由 restartServiceWith 以增量方式发布
+		// 到当前快照上，Start 读到的就是它。这里刻意不再整体换装：那样会把
+		// closeService 期间发生的菜单改动（代理规则/日志级别）用旧全量覆盖回去。
 		return a.Start()
 	})
 }
 
 // restartServiceWith 是 restartService 的实现；start 由调用方注入，使测试可以
 // 驱动"新服务起不来 → 回滚到旧服务器"这条路径，而不必真的启动代理核心。
+//
+// newCfg 只是"切换意图"的载体：本函数只从它取目标服务器下标，然后把这**一条
+// 增量**应用到当前快照上（见下面的 updateConfig），其余字段一律以当前快照为准。
+// 原因是 closeService 可能要数秒（macOS 上要等 TUN 拆除的管理员凭据），而
+// serverSwitchMu 只串行化两套"停/起"，串不住不持锁的菜单路径——若在这里发布
+// 一份停服务之前取的全量快照，用户在这期间改的代理规则/日志级别就会被静默还原。
+//
+// start 收到的配置是"调用时刻生效的快照"，只读（生产实现忽略它，测试据此判断
+// 目标服务器与注入失败）。
 func (a *TrayApp) restartServiceWith(newCfg *config.ClientConfig, start func(*config.ClientConfig) error) error {
+	targetIdx := newCfg.DefaultServerIndex()
+
+	snap := a.currentConfig()
+	prevIdx, prevTun := snap.DefaultServerIndex(), snap.Local.EnableTun2socks
+
 	sysProxyEnabled := a.BrowserMenu() != nil && a.BrowserMenu().IsChecked()
 
 	// 停止一切，包括 TUN。在 macOS 上这会提示输入管理员凭据
 	// 以清理路由和 DNS —— 在手动切换服务器期间可以接受。
 	a.closeService()
 
-	// 切换前的配置：新服务起不来时用它把服务恢复起来。失败的切换过去会把用户
-	// 留在"旧服务已停、新服务没起来"的状态——本地端口没人监听，而系统代理还
-	// 指着它，看起来就是"切换失败并且断网"。
-	prevCfg := a.currentConfig().Clone()
-
-	// 防止 start 重新创建 TUN。切换服务器后 TUN 有意保持关闭；
-	// 托盘菜单与实际（关闭）状态保持同步，用户只需一次点击即可重新启用。
-	newCfg.Local.EnableTun2socks = false
+	// 停完之后才发布切换意图，且只改这次切换真正要改的两个字段：目标服务器，
+	// 以及"切换后 TUN 保持关闭"（托盘菜单与实际状态同步，用户一次点击即可
+	// 重新启用）。CAS 发布因此会把停服务期间的菜单改动合并进来，而不是覆盖它。
+	a.updateConfig(func(c *config.ClientConfig) {
+		c.SetDefaultServerIndex(targetIdx)
+		c.Local.EnableTun2socks = false
+	})
 	if tunMenu := a.TunMenu(); tunMenu != nil {
 		tunMenu.SetChecked(false)
 	}
@@ -921,14 +938,23 @@ func (a *TrayApp) restartServiceWith(newCfg *config.ClientConfig, start func(*co
 		}
 	}
 
-	if err := start(newCfg); err != nil {
-		// 回滚：先切回原来的服务器并把它重新拉起来。回滚也失败时两个错误一起
-		// 上报（调用方据此判断"完全没有服务在运行"）。
-		if rollbackErr := start(prevCfg); rollbackErr != nil {
-			return errors.Join(err, fmt.Errorf("rollback to %s: %w", prevCfg.DefaultServerAddr(), rollbackErr))
+	if err := start(a.currentConfig()); err != nil {
+		// 回滚同样只回退这次切换改掉的两个字段（服务器选择与 TUN 偏好），
+		// 保留菜单在这期间的最新改动。回滚也失败时两个错误一起上报
+		//（调用方据此判断"完全没有服务在运行"）。
+		a.updateConfig(func(c *config.ClientConfig) {
+			c.SetDefaultServerIndex(prevIdx)
+			c.Local.EnableTun2socks = prevTun
+		})
+		if tunMenu := a.TunMenu(); tunMenu != nil {
+			tunMenu.SetChecked(prevTun)
+		}
+		prevAddr := a.currentConfig().DefaultServerAddr()
+		if rollbackErr := start(a.currentConfig()); rollbackErr != nil {
+			return errors.Join(err, fmt.Errorf("rollback to %s: %w", prevAddr, rollbackErr))
 		}
 		log.Warn("[SYSTRAY] restart service: rolled back to the previous server",
-			"addr", prevCfg.DefaultServerAddr(), "err", err)
+			"addr", prevAddr, "err", err)
 		restoreSysProxy()
 		return err
 	}

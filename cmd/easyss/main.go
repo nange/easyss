@@ -286,10 +286,9 @@ func newApp(cfg *config.ClientConfig, configFile string) *App {
 // 同一份快照（否则可能读到两次发布之间的混合状态）。
 func (a *App) currentConfig() *config.ClientConfig { return a.cfg.Load() }
 
-// adoptConfig 发布一份新的配置快照（整体换装：切换服务器、自更新恢复）。
-// 服务器切换由 serverSwitchMu 串行化；运行中的会话持有一份自己的快照，
-// 因此换装不会影响它——不能再整体重建 App（*a.App = App{...}，见 stateMu）。
-// 调用方必须传一份私有副本（不是 currentConfig() 返回的那一份）。
+// adoptConfig 整体发布一份新的配置快照。运行期的改动一律走 updateConfig 的
+// 增量发布（菜单改动、切换意图都在同一条 CAS 路径上合并），只有 App 的初始
+// 配置（newApp）与测试用它整体换装；发布后调用方不得再改写这份快照。
 func (a *App) adoptConfig(cfg *config.ClientConfig) { a.cfg.Store(cfg) }
 
 // updateConfig 以 copy-on-write 方式修改当前配置快照：克隆 → 应用 fn →
@@ -461,6 +460,10 @@ func (a *App) Start() error {
 	// 核心不再从共享配置里"顺带"看到 TUN 状态（见 client.Client.tunMode）：
 	// 在决定完本会话是否真的启用 TUN 之后显式告知一次。取的是调整之后的偏好，
 	// 因此与拆分前的语义一致（非 root 跳过时仍为 true，降级跳过时已被置为 false）。
+	//
+	// 这里重读 currentConfig()（而不是复用上面的 sessionCfg）是刻意的：这次启动
+	// 可能正与一次 TUN 开关并发，核心应当拿到最新的意图。若"优化"成
+	// SetTunMode(sessionCfg.Local.EnableTun2socks)，并发开关的意图就会被丢掉。
 	// Client 的 nil 守卫与托盘路径一致（测试会注入零值核心）。
 	if core.Client != nil {
 		core.Client.SetTunMode(a.currentConfig().Local.EnableTun2socks)
