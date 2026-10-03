@@ -120,6 +120,12 @@ func logRouteIPV6Rejected(prefix, target string) {
 // idleTimeout 限制中继在两条连接被拆除前可保持空闲的时长，使沉默或半开的对端
 // 无法让两个拷贝 goroutine 及其 socket 永久存活。调用方由用户配置的基础超时
 // 派生它（config.StreamIdleTimeout），使直连路径与代理路径的流空闲超时一致。
+//
+// copyHalfClose 刻意不做速度记账：托盘与 /stats 的 upload_speed/download_speed
+// 只统计经隧道的流量（TCP 见 stream.go 的 copyLocalToRemote/copyRemoteToLocal，
+// UDP 见 UDPExchange.Send/Receive），直连流量不经服务器。直连 UDP 的
+// directUDPRelay/directUDPReadLoop 遵循同一口径；两个入口（SOCKS5 与 HTTP
+// 代理）共用本函数，因此这条规则只需要在这里保持一次。
 func relayTCP(dst, src net.Conn, idleTimeout time.Duration) {
 	result := relay.Bidirectional(idleTimeout, relay.CloseBoth(dst, src),
 		func(signalActivity func()) error { return copyHalfClose(dst, src, signalActivity) },
