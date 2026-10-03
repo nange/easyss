@@ -98,21 +98,48 @@ func runCreateScript(device, tunIP, tunGW, localGateway,
 	return nil
 }
 
-// runCloseScript 将内嵌的 close_tun_dev.sh 写入临时文件并执行它。
-// 由于这是尽力而为的清理操作，错误会被忽略。
+// runCloseScript 将内嵌的 close_tun_dev.sh 写入临时文件并执行，并返回脚本的
+// 真实失败：脚本按"路由与设备是否真的清掉"给出退出码（见脚本的退出码契约），
+// 调用方据此决定是否需要回滚。过去这里的错误被吞掉——残留的分流路由会把全机
+// IPv4 流量送进一个没人读的设备，也就是"停止 TUN 后断网"。
 func runCloseScript(device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6 string) error {
 	if scripts.CloseTunBytes == nil {
-		return nil
+		return fmt.Errorf("no close script for linux")
 	}
 
 	namePath, err := util.WriteToTemp(scripts.CloseTunFilename, scripts.CloseTunBytes)
 	if err != nil {
-		return nil
+		return fmt.Errorf("write close script: %w", err)
 	}
 	defer os.Remove(namePath) //nolint:errcheck
 
-	_, _ = util.Command("bash", namePath, device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6)
+	if err := execScriptWithOutput("bash", namePath, device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6); err != nil {
+		return fmt.Errorf("close script: %w", err)
+	}
 	return nil
+}
+
+// tunRouteResidue 报告探测地址是否仍被路由进 TUN 设备，并返回探测输出。
+//
+// linux 的 TUN 路由按设备安装（ip route replace ... dev tun0），因此按设备名
+// 判定。它是变量以便测试注入探测结果：真实的残留路由需要 root 才能造出来。
+var tunRouteResidue = func(device, _ string) (string, bool) {
+	if device == "" {
+		return "", false
+	}
+
+	var out string
+	for _, target := range tunRouteProbes {
+		got, err := util.Command("ip", "route", "get", target)
+		if err != nil {
+			continue
+		}
+		out = got
+		if routeFieldsContain(got, "dev", device) {
+			return got, true
+		}
+	}
+	return out, false
 }
 
 // removeLeftoverDevice 在 TUN 接口未被 close 脚本删除时将其删除。删除接口会

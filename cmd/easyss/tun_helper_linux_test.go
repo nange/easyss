@@ -526,12 +526,17 @@ func staticRouteDeleteBlocks(t *testing.T, script []byte) []routeBlock {
 	return parseRouteBlocks(t, script, []string{"delete", "del"})
 }
 
-// unwrapScriptHelper 去掉 unix create 脚本放在每个工具调用前的 shell 辅助函数：
-// "run_idem STEP cmd ..."（linux）和 "fail STEP cmd ..."（darwin）。步骤名是
-// 普通单词，linux 用于路由阶梯的步骤名恰好就是 "route"：若保留它，下面的方言
-// 检测会把步骤名当作命令，从而错误解析该行。
+// unwrapScriptHelper 去掉 unix 脚本放在每个工具调用前的 shell 辅助函数：
+// "run_idem STEP cmd ..."（linux create）、"fail STEP cmd ..."（darwin create）
+// 与 "del STEP cmd ..."（darwin close）。步骤名是普通单词，linux 用于路由阶梯的
+// 步骤名恰好就是 "route"：若保留它，下面的方言检测会把步骤名当作命令，
+// 从而错误解析该行。
 func unwrapScriptHelper(fields []string) []string {
-	if len(fields) >= 3 && (fields[0] == "run_idem" || fields[0] == "fail") {
+	if len(fields) < 3 {
+		return fields
+	}
+	switch fields[0] {
+	case "run_idem", "fail", "del":
 		return fields[2:]
 	}
 	return fields
