@@ -85,9 +85,9 @@ type TrayApp struct {
 
 	// serverSwitchMu 串行化服务器切换。每次切换都是一整套"停服务 → 起服务"，
 	// 而托盘的每次点击都会新起一个 goroutine：并发切换会抢同一组本地端口
-	// （4080/5080）并同时改写 a.cfg，结果可能是没有任何 core 在运行，
-	// 或者两个 core 同时存在。它串行化的是"停+起"这一整段与菜单勾选回滚；
-	// 当前核心本身由 App.core 的原子指针发布，读侧不依赖这把锁。
+	// （4080/5080），也会让两套菜单勾选互相覆盖，结果可能是没有任何 core 在
+	// 运行，或者两个 core 同时存在。配置换装（adoptConfig）已经是原子的快照
+	// 发布，不再需要靠这把锁保证不撕裂。
 	// 自更新失败后的恢复流程（tray_update.go）也是一套停/起，因此同样持有它。
 	serverSwitchMu sync.Mutex
 }
@@ -344,15 +344,17 @@ func (a *TrayApp) trayExit() {
 func (a *TrayApp) buildSelectServerMenu() *systray.Menu {
 	m := systray.NewMenu()
 
-	addrs := a.cfg.ServerListAddrs()
+	// 菜单只读一次配置快照：它构建期间不会有发布（buildTray 在 Start 之前）。
+	cfg := a.currentConfig()
+	addrs := cfg.ServerListAddrs()
 	if len(addrs) == 0 {
-		addrs = []string{a.cfg.DefaultServerAddr()}
+		addrs = []string{cfg.DefaultServerAddr()}
 	}
 	a.serverAddrs = addrs
 	a.serverMenuItems = make([]*systray.MenuItem, 0, len(addrs))
 
 	for idx, addr := range addrs {
-		checked := addr == a.cfg.DefaultServerAddr()
+		checked := addr == cfg.DefaultServerAddr()
 		item := m.AddCheckbox(addr, checked, func(idx int) func() {
 			return func() { a.selectServer(idx) }
 		}(idx))
@@ -396,7 +398,7 @@ func (a *TrayApp) switchServer(idx int, restart func(*config.ClientConfig) error
 
 	a.setCheckedServer(-1)
 
-	clone := a.cfg.Clone()
+	clone := a.currentConfig().Clone()
 	clone.SetDefaultServerIndex(idx)
 	if err := restart(clone); err != nil {
 		// restartService 已经尽力回滚到切换前的服务器：回滚成功（还有 core 在
@@ -415,7 +417,7 @@ func (a *TrayApp) switchServer(idx int, restart func(*config.ClientConfig) error
 // runningServerIndex 返回当前配置指向的服务器在菜单里的下标（找不到返回 -1）。
 // 配置是切换/回滚的唯一事实来源：菜单勾选必须跟着它走。
 func (a *TrayApp) runningServerIndex() int {
-	addr := a.cfg.DefaultServerAddr()
+	addr := a.currentConfig().DefaultServerAddr()
 	for i, candidate := range a.serverAddrs {
 		if candidate == addr {
 			return i
@@ -449,7 +451,7 @@ func (a *TrayApp) statsRefresher() {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
-	url := fmt.Sprintf("http://127.0.0.1:%d/stats", a.cfg.Local.HTTPPort)
+	url := fmt.Sprintf("http://127.0.0.1:%d/stats", a.currentConfig().Local.HTTPPort)
 	httpClient := &http.Client{Timeout: 2 * time.Second}
 
 	for {
@@ -506,16 +508,17 @@ func (a *TrayApp) buildProxyRuleMenu() *systray.Menu {
 	m := systray.NewMenu()
 	a.proxyRuleItems = make(map[string]*systray.MenuItem)
 
+	proxyRule := a.currentConfig().Routing.ProxyRule
 	rules := []struct {
 		rule    string
 		label   string
 		checked bool
 	}{
-		{"auto", "自动(自定义规则+绕过大陆IP域名)", a.cfg.Routing.ProxyRule == "auto"},
-		{"auto_block", "自动+屏蔽广告跟踪", a.cfg.Routing.ProxyRule == "auto_block"},
-		{"reverse_auto", "反向自动(国外访问国内)", a.cfg.Routing.ProxyRule == "reverse_auto"},
-		{"proxy", "代理全部(绕过局域网地址)", a.cfg.Routing.ProxyRule == "proxy"},
-		{"direct", "直接连接", a.cfg.Routing.ProxyRule == "direct"},
+		{"auto", "自动(自定义规则+绕过大陆IP域名)", proxyRule == "auto"},
+		{"auto_block", "自动+屏蔽广告跟踪", proxyRule == "auto_block"},
+		{"reverse_auto", "反向自动(国外访问国内)", proxyRule == "reverse_auto"},
+		{"proxy", "代理全部(绕过局域网地址)", proxyRule == "proxy"},
+		{"direct", "直接连接", proxyRule == "direct"},
 	}
 
 	for _, r := range rules {
@@ -539,21 +542,23 @@ func (a *TrayApp) changeProxyRule(rule string) {
 }
 
 func (a *TrayApp) setProxyRule(rule string) {
+	// 运行中的会话立即生效（路由引擎），持久化的偏好走 copy-on-write 快照。
 	if core := a.currentCore(); core != nil && core.Client != nil {
 		core.Client.SetProxyRule(rule)
 	}
-	a.cfg.Routing.ProxyRule = rule
+	a.updateConfig(func(c *config.ClientConfig) { c.Routing.ProxyRule = rule })
 	log.Info("[SYSTRAY] proxy rule changed", "rule", rule)
 }
 
 func (a *TrayApp) buildProxyObjectMenu() *systray.Menu {
 	m := systray.NewMenu()
 
-	browserChecked := !a.cfg.Local.DisableSysProxy
+	cfg := a.currentConfig()
+	browserChecked := !cfg.Local.DisableSysProxy
 	browser := m.AddCheckbox("浏览器(设置系统代理)", browserChecked, a.toggleSysProxy)
 	a.SetBrowserMenu(browser)
 
-	global := m.AddCheckbox("系统全局流量(Tun2socks)", a.cfg.Local.EnableTun2socks, a.toggleTun2socks)
+	global := m.AddCheckbox("系统全局流量(Tun2socks)", cfg.Local.EnableTun2socks, a.toggleTun2socks)
 	a.SetTunMenu(global)
 
 	return m
@@ -596,14 +601,15 @@ func (a *TrayApp) buildLogLevelMenu() *systray.Menu {
 	m := systray.NewMenu()
 	a.logLevelItems = make(map[string]*systray.MenuItem)
 
+	logLevel := a.currentConfig().Log.Level
 	levels := []struct {
 		level   string
 		checked bool
 	}{
-		{"debug", a.cfg.Log.Level == "debug"},
-		{"info", a.cfg.Log.Level == "info" || a.cfg.Log.Level == ""},
-		{"warn", a.cfg.Log.Level == "warn"},
-		{"error", a.cfg.Log.Level == "error"},
+		{"debug", logLevel == "debug"},
+		{"info", logLevel == "info" || logLevel == ""},
+		{"warn", logLevel == "warn"},
+		{"error", logLevel == "error"},
 	}
 
 	for _, l := range levels {
@@ -620,7 +626,7 @@ func (a *TrayApp) changeLogLevel(level string) {
 	if a.logLevelItems[level].IsChecked() {
 		return
 	}
-	a.cfg.Log.Level = level
+	a.updateConfig(func(c *config.ClientConfig) { c.Log.Level = level })
 	log.Info("[SYSTRAY] log level changed", "level", level)
 
 	var slogLevel slog.Level
@@ -644,7 +650,7 @@ func (a *TrayApp) changeLogLevel(level string) {
 // catLogs 从托盘菜单打开日志文件（见 tray_log.go）。失败过去只写入日志文件，
 // 这让菜单项看起来像没有反应，因此现在每个失败也会以通知形式呈现。
 func (a *TrayApp) catLogs() {
-	fallback, err := openLogFile(a.cfg.Log.FilePath)
+	fallback, err := openLogFile(a.currentConfig().Log.FilePath)
 	switch {
 	case err != nil:
 		log.Error("[SYSTRAY] cat log", "err", err)
@@ -687,7 +693,7 @@ func (a *TrayApp) exitApp() {
 // （而不是直接调用实现），使测试可以观察托盘路径上的系统代理改动，
 // 而不必触碰运行测试的机器的真实代理配置。
 func (a *TrayApp) setSysProxyOn() error {
-	return sysProxyApply(a.cfg.Local.HTTPPort)
+	return sysProxyApply(a.currentConfig().Local.HTTPPort)
 }
 
 func (a *TrayApp) setSysProxyOff() error {
@@ -714,7 +720,10 @@ func (a *TrayApp) createTun2socks() error {
 		return fmt.Errorf("client not initialized")
 	}
 
-	a.cfg.Local.EnableTun2socks = true
+	// 偏好（下次启动用）与运行期状态（直连拨号路径用）分别落位：前者走
+	// 不可变快照，后者是 core 上的显式开关（见 client.Client.SetTunMode）。
+	a.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = true })
+	core.Client.SetTunMode(true)
 	a.tunMgr = tun.New(a.tunConfig())
 	dev := a.tunMgr.DeviceConfig()
 	a.tunSession = &dev
@@ -810,7 +819,11 @@ func (a *TrayApp) closeTun2socks() error {
 		core.HTTPServer.ClearTunConfig()
 	}
 
-	a.cfg.Local.EnableTun2socks = false
+	// 5. 关掉运行期的 TUN 状态与持久化偏好（两者过去是同一个共享字段）。
+	if core := a.currentCore(); core != nil && core.Client != nil {
+		core.Client.SetTunMode(false)
+	}
+	a.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = false })
 	return nil
 }
 
@@ -890,7 +903,7 @@ func (a *TrayApp) restartServiceWith(newCfg *config.ClientConfig, start func(*co
 	// 切换前的配置：新服务起不来时用它把服务恢复起来。失败的切换过去会把用户
 	// 留在"旧服务已停、新服务没起来"的状态——本地端口没人监听，而系统代理还
 	// 指着它，看起来就是"切换失败并且断网"。
-	prevCfg := a.cfg.Clone()
+	prevCfg := a.currentConfig().Clone()
 
 	// 防止 start 重新创建 TUN。切换服务器后 TUN 有意保持关闭；
 	// 托盘菜单与实际（关闭）状态保持同步，用户只需一次点击即可重新启用。
@@ -967,7 +980,7 @@ func (a *TrayApp) startLocalService() {
 	// cfg 双向同步，菜单始终反映实际是否启用了 TUN（勾选但未运行会让用户
 	// 需要点两次才能开启）。
 	if a.TunMenu() != nil {
-		a.TunMenu().SetChecked(a.cfg.Local.EnableTun2socks)
+		a.TunMenu().SetChecked(a.currentConfig().Local.EnableTun2socks)
 	}
 }
 

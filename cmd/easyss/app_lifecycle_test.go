@@ -27,7 +27,7 @@ func stubRunCore(t *testing.T) {
 // `a.core != nil && a.core.Client != nil` 这类两次读之间被清空会直接 nil 解引用。
 func TestAppStartStopIsRaceFree(t *testing.T) {
 	stubRunCore(t)
-	a := &App{cfg: &config.ClientConfig{}}
+	a := newApp(&config.ClientConfig{}, "")
 
 	var wg sync.WaitGroup
 	stopReading := make(chan struct{})
@@ -73,7 +73,7 @@ func TestAppStartStopIsRaceFree(t *testing.T) {
 // 多个 Stop 与随后的顺序调用都只能"取下"一次核心，重复调用是空操作；这正是
 // restartService 不再需要整体重建 App（*a.App = App{...}）来重置 once 的前提。
 func TestAppStopIsConcurrentAndIdempotent(t *testing.T) {
-	a := &App{cfg: &config.ClientConfig{}}
+	a := newApp(&config.ClientConfig{}, "")
 	a.installCore(&runner.Core{})
 
 	var wg sync.WaitGroup
@@ -92,7 +92,7 @@ func TestAppStopIsConcurrentAndIdempotent(t *testing.T) {
 // restartServiceWith 重复上报。
 func TestAppStartResetsSessionState(t *testing.T) {
 	stubRunCore(t)
-	a := &App{cfg: &config.ClientConfig{}}
+	a := newApp(&config.ClientConfig{}, "")
 	a.startupWarn = errors.New("stale warning")
 	a.tunSkippedForNetwork = true
 
@@ -109,7 +109,7 @@ func TestAppStartResetsSessionState(t *testing.T) {
 // -race 报出数据竞争（旧代码是整个结构体重写，掩盖了这一点）。
 func TestAppStartupWarnAccessIsRaceFree(t *testing.T) {
 	stubRunCore(t)
-	a := &App{cfg: &config.ClientConfig{}}
+	a := newApp(&config.ClientConfig{}, "")
 
 	var wg sync.WaitGroup
 	stopReading := make(chan struct{})
@@ -140,11 +140,63 @@ func TestAppStartupWarnAccessIsRaceFree(t *testing.T) {
 	require.Nil(t, a.currentStartupWarn())
 }
 
+// TestUpdateConfigIsRaceFreeAndLossless 固定配置快照的 copy-on-write 契约。
+//
+// 两个断言各自对应一种失败：
+//   - 并发读者（切换/自更新的 Clone 与字段读）与发布不得互相竞争——-race 下失败；
+//   - updateConfig 的读改写必须是原子的（CAS 循环），否则两个并发发布者会互相
+//     覆盖、丢增量。因此这里让 N 个写者各做 M 次 +1：只有 CAS 才能得到精确的
+//     N*M（Load→改→Store 的实现在这条断言下几乎必然小于它）。
+//
+// 它取代的正是"菜单原地改写 a.cfg"——那既是数据竞争，也会丢失并发更新。
+func TestUpdateConfigIsRaceFreeAndLossless(t *testing.T) {
+	const writers, perWriter = 4, 200
+	a := newApp(&config.ClientConfig{}, "")
+
+	var writersWG sync.WaitGroup
+	start := make(chan struct{})
+	for range writers {
+		writersWG.Go(func() {
+			<-start
+			for range perWriter {
+				a.updateConfig(func(c *config.ClientConfig) { c.Timeout++ })
+			}
+		})
+	}
+
+	var readersWG sync.WaitGroup
+	stopReading := make(chan struct{})
+	for range 2 {
+		readersWG.Go(func() {
+			for {
+				select {
+				case <-stopReading:
+					return
+				default:
+				}
+				// 切换/自更新恢复路径的读法：整份快照的克隆，外加字段读。
+				if snap := a.currentConfig(); snap != nil {
+					_ = snap.Clone()
+					_ = snap.Local.HTTPPort
+				}
+			}
+		})
+	}
+
+	close(start)
+	writersWG.Wait()
+	close(stopReading)
+	readersWG.Wait()
+
+	require.Equal(t, writers*perWriter, a.currentConfig().Timeout,
+		"并发发布不得丢失更新（CAS 循环应精确累计）")
+}
+
 // TestAppStopTakesTheTunManager 固定"Stop 收走当时的 TUN manager"：交给 Stop
 // 的 manager 必须被停掉并清空。漏掉它意味着那个引擎的分流路由会留在系统路由
 // 表里而无人回收（见 closeTun2socks 的注释），这正是本项修复要保住的性质。
 func TestAppStopTakesTheTunManager(t *testing.T) {
-	a := &App{cfg: &config.ClientConfig{}}
+	a := newApp(&config.ClientConfig{}, "")
 
 	// 零值 manager 的 Stop 是安全的空操作（内部 running 为 false），
 	// 不需要真实设备即可验证"取走并停止"这一步。
@@ -165,7 +217,7 @@ func TestAppStopTakesTheTunManager(t *testing.T) {
 // 这里按开关的形状并发执行"锁内检查核心、锁内安装 manager"与 App.Stop：
 // 任何一方脱离这把锁，-race 都会报出数据竞争。
 func TestAppStopAndTunToggleAreRaceFree(t *testing.T) {
-	a := &App{cfg: &config.ClientConfig{}}
+	a := newApp(&config.ClientConfig{}, "")
 
 	var wg sync.WaitGroup
 	stopToggling := make(chan struct{})

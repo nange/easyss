@@ -123,7 +123,7 @@ func TestCloseTun2socksVerifiesTheRecordedSession(t *testing.T) {
 	stubTunTeardownHooks(t)
 
 	session := tun.DeviceConfig{Device: "utun9", TunGW: "198.18.0.1"}
-	a := &TrayApp{App: &App{cfg: &config.ClientConfig{}}}
+	a := &TrayApp{App: newApp(&config.ClientConfig{}, "")}
 	a.tunSession = &session
 
 	var probed []string
@@ -139,7 +139,7 @@ func TestCloseTun2socksVerifiesTheRecordedSession(t *testing.T) {
 	require.NoError(t, a.closeTun2socks())
 	require.Equal(t, []string{"utun9"}, probed)
 	require.Nil(t, a.tunSession)
-	require.False(t, a.cfg.Local.EnableTun2socks)
+	require.False(t, a.currentConfig().Local.EnableTun2socks)
 }
 
 // TestCloseTun2socksSignalsTheHelperFIFO 确认关闭流程仍然通过关闭 FIFO 通知
@@ -147,7 +147,7 @@ func TestCloseTun2socksVerifiesTheRecordedSession(t *testing.T) {
 func TestCloseTun2socksSignalsTheHelperFIFO(t *testing.T) {
 	stubTunTeardownHooks(t)
 
-	a := &TrayApp{App: &App{cfg: &config.ClientConfig{}}}
+	a := &TrayApp{App: newApp(&config.ClientConfig{}, "")}
 	tunRouteResidue = func(string, string) (string, bool) { return "", false }
 	rollbackTunRoutes = func(tun.DeviceConfig) error { return nil }
 

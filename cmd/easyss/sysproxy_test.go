@@ -32,7 +32,7 @@ func stubSysProxy(t *testing.T, applyErr error) (applied *[]int, reverts *int) {
 }
 
 func testApp(local clientconfig.LocalConfig) *App {
-	return &App{cfg: &clientconfig.ClientConfig{Local: local}}
+	return newApp(&clientconfig.ClientConfig{Local: local}, "")
 }
 
 func TestSetupSysProxyAppliesLocalHTTPPort(t *testing.T) {

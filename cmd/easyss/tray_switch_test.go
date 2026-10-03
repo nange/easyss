@@ -15,7 +15,7 @@ import (
 )
 
 // newSwitchTestApp 构建一个只包含"选择服务器"菜单的最小 TrayApp：切换逻辑只用到
-// serverAddrs/serverMenuItems/a.cfg/当前核心，既不需要托盘，也不需要核心或网络。
+// serverAddrs/serverMenuItems/当前配置快照/当前核心，既不需要托盘，也不需要核心或网络。
 func newSwitchTestApp(t *testing.T) *TrayApp {
 	t.Helper()
 
@@ -23,7 +23,7 @@ func newSwitchTestApp(t *testing.T) *TrayApp {
 		{Address: "a.example", Port: 443, Default: true},
 		{Address: "b.example", Port: 443},
 	}}
-	a := &TrayApp{App: &App{cfg: cfg}}
+	a := &TrayApp{App: newApp(cfg, "")}
 	a.serverAddrs = cfg.ServerListAddrs()
 
 	menu := systray.NewMenu()
@@ -172,16 +172,16 @@ func TestRestartServiceRollsBackToThePreviousServer(t *testing.T) {
 		return nil
 	}
 
-	next := a.cfg.Clone()
+	next := a.currentConfig().Clone()
 	next.SetDefaultServerIndex(1)
 	err := a.restartServiceWith(next, start)
 
 	require.ErrorIs(t, err, errBoom)
 	require.Equal(t, []string{"b.example:443", "a.example:443"}, started,
 		"切换失败后必须用切换前的配置再起一次")
-	require.Equal(t, "a.example:443", a.cfg.DefaultServerAddr())
+	require.Equal(t, "a.example:443", a.currentConfig().DefaultServerAddr())
 	require.GreaterOrEqual(t, *reverts, 1, "closeService 必须先把系统代理撤下来")
-	require.Equal(t, []int{a.cfg.Local.HTTPPort}, *applied,
+	require.Equal(t, []int{a.currentConfig().Local.HTTPPort}, *applied,
 		"回滚成功后必须把系统代理恢复回来")
 }
 
@@ -200,7 +200,7 @@ func TestRestartServiceReportsBothFailures(t *testing.T) {
 		return errRollback
 	}
 
-	next := a.cfg.Clone()
+	next := a.currentConfig().Clone()
 	next.SetDefaultServerIndex(1)
 	err := a.restartServiceWith(next, start)
 

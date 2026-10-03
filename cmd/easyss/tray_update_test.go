@@ -122,7 +122,7 @@ func TestCheckUpdateRequiresIdleState(t *testing.T) {
 	// 更新状态机是菜单处理器、周期循环和安装器之间的唯一守卫：当检查已经
 	// 处于 "checking"（或 "available"/"downloading"）状态时，不得再次查询 API。
 	var calls atomic.Int64
-	a := &TrayApp{App: &App{cfg: &config.ClientConfig{}}}
+	a := &TrayApp{App: newApp(&config.ClientConfig{}, "")}
 	a.checkLatest = func(context.Context, *selfupdate.Client) (*selfupdate.Release, error) {
 		calls.Add(1)
 		return nil, errors.New("offline")

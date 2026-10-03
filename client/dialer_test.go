@@ -84,18 +84,17 @@ func TestRefreshDirectDialer(t *testing.T) {
 }
 
 // newTestClient 构建一个最小化的 Client，带 router，并通过 tunEnabled 切换 TUN 模式。
+// TUN 状态由 SetTunMode 显式设置：它不再来自配置快照（见 Client.tunMode）。
 func newTestClient(t *testing.T, tunEnabled bool) *Client {
 	t.Helper()
-
-	cfg := &config.ClientConfig{}
-	cfg.Local.EnableTun2socks = tunEnabled
 
 	rt, err := router.New(router.Config{})
 	if err != nil {
 		t.Fatalf("router.New: %v", err)
 	}
 
-	c := &Client{cfg: cfg, router: rt}
+	c := &Client{cfg: &config.ClientConfig{}, router: rt}
+	c.SetTunMode(tunEnabled)
 	c.bound.Store(boundIface{name: "en0", index: 4})
 	c.dialer.Store(dialer.New())
 	return c
@@ -174,6 +173,43 @@ func TestDialWithConfigNoRetryOnNonStaleError(t *testing.T) {
 	got, _ := c.bound.Load().(boundIface)
 	if got.name != "en0" {
 		t.Fatalf("bound = %+v, want previous en0 kept", got)
+	}
+}
+
+// TestSetTunModeControlsTheBoundDialPath 固定"运行期 TUN 状态来自 SetTunMode，
+// 而不是配置快照"：TUN 关闭时直连拨号不得走绑定接口的拨号器，SetTunMode(true)
+// 之后才走。配置快照拆分前，dialAddr 每拨号一次都要去读共享配置里的
+// EnableTun2socks——那既让菜单写的普通字段与数据面读构成竞争，也把"配置"
+// 与"运行期状态"混成了一个对象。
+func TestSetTunModeControlsTheBoundDialPath(t *testing.T) {
+	origBound := boundDialContext
+	t.Cleanup(func() { boundDialContext = origBound })
+
+	c := newTestClient(t, false)
+
+	boundCalls := 0
+	boundDialContext = func(*Client, context.Context, string, string) (net.Conn, error) {
+		boundCalls++
+		return &net.TCPConn{}, nil
+	}
+
+	// TUN 关闭：走普通 net.Dialer（刻意拨一个必然被拒绝的端口），
+	// 绑定接口的拨号路径不得被碰到。
+	if _, err := c.dialWithConfig(context.Background(), "tcp", "127.0.0.1:1"); err == nil {
+		t.Fatal("expected an error from the plain dialer")
+	}
+	if boundCalls != 0 {
+		t.Fatalf("bound dial calls = %d, want 0 while TUN is off", boundCalls)
+	}
+
+	// TUN 打开：同一个客户端现在必须走绑定接口的拨号器。
+	c.SetTunMode(true)
+	conn, err := c.dialWithConfig(context.Background(), "tcp", "127.0.0.1:1")
+	if err != nil {
+		t.Fatalf("dialWithConfig after SetTunMode(true): %v", err)
+	}
+	if conn == nil || boundCalls != 1 {
+		t.Fatalf("bound dial calls = %d (conn=%v), want 1 after TUN is on", boundCalls, conn)
 	}
 }
 

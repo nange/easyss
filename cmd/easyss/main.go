@@ -193,7 +193,7 @@ Flags:
 		"proxy_file", cfg.Routing.ProxyFile,
 	)
 
-	app := &App{cfg: cfg, configFile: configFile}
+	app := newApp(cfg, configFile)
 	runApp(disableTray, daemon, app)
 }
 
@@ -204,7 +204,12 @@ func sigWait() {
 }
 
 type App struct {
-	cfg        *config.ClientConfig
+	// cfg 是当前配置快照。它一经发布即视为不可变：菜单改动走 updateConfig
+	//（克隆 → 改 → CAS 交换），启动/切换把快照交给新会话，运行中的会话持有
+	// 自己那一份。过去它是"共享可变对象"，菜单的原地写与切换的 Clone、以及
+	// 运行中核心的运行期读（client.dialAddr 每拨号一次）互相竞争——那正是
+	// 拆分它的原因。
+	cfg        atomic.Pointer[config.ClientConfig]
 	configFile string // 配置文件绝对路径
 
 	// core 是当前运行的代理核心。读者（后台统计循环、托盘菜单处理器）在
@@ -269,10 +274,48 @@ func (a *App) installCore(core *runner.Core) { a.core.Store(core) }
 // 停止的核心。
 func (a *App) takeCore() *runner.Core { return a.core.Swap(nil) }
 
-// adoptConfig 装载新一轮启动的配置。服务器切换由 serverSwitchMu 串行化，
-// 会话级字段由 Start 在 stateMu 下重置，因此这里只换配置指针——不能再整体
-// 重建 App（*a.App = App{...}，见 stateMu 的注释）。
-func (a *App) adoptConfig(cfg *config.ClientConfig) { a.cfg = cfg }
+// newApp 用一个初始配置构造 App：它是 App 持有的第一份不可变快照。
+func newApp(cfg *config.ClientConfig, configFile string) *App {
+	a := &App{configFile: configFile}
+	a.adoptConfig(cfg)
+	return a
+}
+
+// currentConfig 返回当前配置快照。快照发布后不可变（见 updateConfig），
+// 因此读者无需持锁；需要多个字段时必须先取一次到局部变量，保证它们来自
+// 同一份快照（否则可能读到两次发布之间的混合状态）。
+func (a *App) currentConfig() *config.ClientConfig { return a.cfg.Load() }
+
+// adoptConfig 发布一份新的配置快照（整体换装：切换服务器、自更新恢复）。
+// 服务器切换由 serverSwitchMu 串行化；运行中的会话持有一份自己的快照，
+// 因此换装不会影响它——不能再整体重建 App（*a.App = App{...}，见 stateMu）。
+// 调用方必须传一份私有副本（不是 currentConfig() 返回的那一份）。
+func (a *App) adoptConfig(cfg *config.ClientConfig) { a.cfg.Store(cfg) }
+
+// updateConfig 以 copy-on-write 方式修改当前配置快照：克隆 → 应用 fn →
+// CAS 交换；CAS 失败说明有并发发布，带着新克隆重来。fn 因此必须可重复执行
+// （只依赖传入的 cfg，不读外部可变状态）。
+//
+// 它取代了过去的原地改写（`a.cfg.X = v`）：那会让菜单写与切换的 Clone、
+// 运行中核心的运行期读构成数据竞争，也会丢失并发更新。
+func (a *App) updateConfig(fn func(*config.ClientConfig)) {
+	for {
+		cur := a.cfg.Load()
+		var next *config.ClientConfig
+		if cur == nil {
+			next = &config.ClientConfig{}
+		} else if next = cur.Clone(); next == nil {
+			// Clone 是 JSON 往返，理论上只会因不可序列化的字段失败。
+			// 此时保留旧快照：把 nil 发布出去会让所有读者解引用它。
+			log.Error("[EASYSS-V3] update config: clone failed, keeping the current snapshot")
+			return
+		}
+		fn(next)
+		if a.cfg.CompareAndSwap(cur, next) {
+			return
+		}
+	}
+}
 
 // currentStartupWarn 返回本次会话的启动警告快照。startupWarn 由 Start 在
 // stateMu 下重置/写入，因此凡是不与那次 Start 同 goroutine 的读者都必须走
@@ -375,7 +418,11 @@ func (a *App) Start() error {
 	a.startupWarn = nil
 	a.tunSkippedForNetwork = false
 
-	core, err := runCore(a.cfg)
+	// 本次会话的配置快照：它一经发布即不可变，因此可以安全地交给核心
+	//（核心持有它并做运行期读取，见 client.Client.cfg），不会被菜单改动。
+	sessionCfg := a.currentConfig()
+
+	core, err := runCore(sessionCfg)
 	if err != nil {
 		return err
 	}
@@ -385,7 +432,7 @@ func (a *App) Start() error {
 	// 降级启动（开机时网络未就绪、服务端域名暂不可解析）时为 true。
 	domainPending := !canStartTunNow(core)
 
-	if a.cfg.Local.EnableTun2socks {
+	if sessionCfg.Local.EnableTun2socks {
 		// 在 macOS 和 Linux 非 root 环境下，TUN 通过提权启动（助手进程或以 root 重启）。
 		// 这里跳过直接创建，以避免 "operation not permitted"。到达该分支意味着
 		// 用户请求了系统全局流量但无法获得，因此托盘会告知原因，
@@ -404,16 +451,24 @@ func (a *App) Start() error {
 			// 隧道本身（递归）；网络根本没起来时脚本还会因缺默认网关失败。
 			// 因此跳过 TUN，并把配置与托盘勾选同步为"未启用"，等网络恢复后由
 			// 用户手动开启（届时 canStartTunNow 放行）。
-			a.cfg.Local.EnableTun2socks = false
+			a.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = false })
 			a.tunSkippedForNetwork = true
 			log.Warn("[EASYSS-V3] server domain not resolved yet; tun2socks skipped until the network is ready")
 			notifyTunSkippedNetworkUnready()
 		}
 	}
 
+	// 核心不再从共享配置里"顺带"看到 TUN 状态（见 client.Client.tunMode）：
+	// 在决定完本会话是否真的启用 TUN 之后显式告知一次。取的是调整之后的偏好，
+	// 因此与拆分前的语义一致（非 root 跳过时仍为 true，降级跳过时已被置为 false）。
+	// Client 的 nil 守卫与托盘路径一致（测试会注入零值核心）。
+	if core.Client != nil {
+		core.Client.SetTunMode(a.currentConfig().Local.EnableTun2socks)
+	}
+
 	a.startStatsLoop()
 
-	if a.cfg.PprofEnabled {
+	if sessionCfg.PprofEnabled {
 		a.pprofSrv = pprof.StartPprof()
 	}
 
@@ -582,10 +637,11 @@ func (a *App) Stop() {
 // 常常不可达（托盘、--disable-tray 与 headless 三条启动路径共用本函数，
 // 避免对 disable_sys_proxy 的处理分叉）。
 func (a *App) setupSysProxy() bool {
-	if a.cfg.Local.DisableSysProxy || a.cfg.Local.HTTPPort <= 0 {
+	cfg := a.currentConfig()
+	if cfg.Local.DisableSysProxy || cfg.Local.HTTPPort <= 0 {
 		return false
 	}
-	if err := sysProxyApply(a.cfg.Local.HTTPPort); err != nil {
+	if err := sysProxyApply(cfg.Local.HTTPPort); err != nil {
 		log.Warn("[EASYSS-V3] set system proxy failed, you may need to configure it manually", "err", err)
 		return false
 	}
@@ -705,12 +761,14 @@ func (a *App) tunConfig() tun.Config {
 		core.Client.RefreshServerIPV6()
 	}
 
+	// 一次快照供下面两个字段使用：它们必须来自同一份配置（见 currentConfig）。
+	snap := a.currentConfig()
 	cfg := tun.Config{
-		Socks5Addr: util.Socks5URI(a.cfg.Local.SocksPort),
+		Socks5Addr: util.Socks5URI(snap.Local.SocksPort),
 		DNSServer:  tunDNS(),
-		// MTU 来自唯一的配置旋钮（a.cfg.TunMTU() 已归一化）：它同时决定设备的
+		// MTU 来自唯一的配置旋钮（TunMTU() 已归一化）：它同时决定设备的
 		// 真实 MTU 与 netstack 的 MTU，两条路径必须拿到同一个值。
-		MTU: a.cfg.TunMTU(),
+		MTU: snap.TunMTU(),
 	}
 	if core != nil && core.Client != nil {
 		if ipv6 := core.Client.Router().ServerIPV6(); ipv6 != "" {
@@ -723,7 +781,7 @@ func (a *App) tunConfig() tun.Config {
 // methodFromServer 返回配置的 AEAD 加密方法；当配置指定了未知方法时
 // 回退到 AES-256-GCM。
 func (a *App) methodFromServer() protocol.Method {
-	method := protocol.MethodFromString(a.cfg.DefaultServer().Method)
+	method := protocol.MethodFromString(a.currentConfig().DefaultServer().Method)
 	if method == 0 {
 		method = protocol.MethodAES256GCM
 	}

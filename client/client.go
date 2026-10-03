@@ -25,6 +25,10 @@ import (
 )
 
 type Client struct {
+	// cfg 是本会话的配置快照。它在 client.New 之后只读：调用方（App）用
+	// copy-on-write 发布新快照，绝不再原地改写已发布的这一份，因此这里的
+	// 运行期读取（超时、IPv6 规则、TUN 设备名）不需要加锁，也不会被菜单
+	// 改动改到一半。
 	cfg           *config.ClientConfig
 	router        *router.Router
 	transport     transport.Transport
@@ -35,6 +39,12 @@ type Client struct {
 	closeOnce     sync.Once
 	// closed 记录传输层已被拆除：Close 幂等，第二次调用不再重复拆一次。
 	closed atomic.Bool
+
+	// tunMode 是"本会话的 TUN 是否生效"，由 TUN 开关路径显式设置
+	//（见 SetTunMode）。它过去是共享配置对象里的一个字段，直连拨号路径
+	//（dialAddr / dialerRefreshLoop）会反复读它——那既让菜单写的普通字段
+	// 与数据面读构成竞争，也把"配置"和"运行期状态"混成了一个对象。
+	tunMode atomic.Bool
 
 	// serverDomain 是服务端域名（服务端地址是字面 IP 时为空）；serverIPs 是
 	// runner 预解析成功后注入的地址。dialWithConfig 优先拨这些字面 IP 而不是
@@ -290,6 +300,10 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		closeIdleDone: make(chan struct{}),
 	}
 	client.bound.Store(boundIface{})
+	// 用配置里的初值播种 TUN 状态：移动端（mobile）直接调用 runner.Run，
+	// 没有托盘侧的开关路径去调 SetTunMode。App 启动时还会在决定"本会话是否
+	// 真的启用 TUN"之后再显式覆盖一次（见 App.Start）。
+	client.SetTunMode(cfg.Local.EnableTun2socks)
 
 	directIface := client.initDirectDialer()
 
@@ -431,7 +445,7 @@ func (c *Client) dialServerIPs(ctx context.Context, network string, ips []string
 
 // dialAddr 拨一个具体地址（域名或字面 IP）。
 func (c *Client) dialAddr(ctx context.Context, network, addr string) (net.Conn, error) {
-	if c.cfg.Local.EnableTun2socks && c.dialer.Load() != nil {
+	if c.tunModeEnabled() && c.dialer.Load() != nil {
 		// 强制特定 IP 版本，直连拨号器的 socket 绑定（IP_BOUND_IF）
 		// 才能生效。该拨号器只处理 "tcp4"/"udp4"，不处理双栈的
 		// "tcp"/"udp"。
@@ -539,7 +553,7 @@ func (c *Client) dialerRefreshLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			if c.cfg.Local.EnableTun2socks {
+			if c.tunModeEnabled() {
 				c.refreshDirectDialer()
 			}
 		case <-c.closeIdleDone:
@@ -755,8 +769,23 @@ func (c *Client) closeIdleLoop() {
 	}
 }
 
+// SetProxyRule 立即改变运行中会话的代理规则（托盘菜单调用）。
+//
+// 它只更新路由引擎，不再回写 cfg：配置快照现在是不可变的，菜单选择的
+// 持久化由 App 用 copy-on-write 完成（见 App.updateConfig），否则这里就成了
+// "菜单写、切换读同一份共享配置"的竞争入口。
 func (c *Client) SetProxyRule(rule string) {
 	pr := router.ParseProxyRule(rule)
-	c.cfg.Routing.ProxyRule = rule
 	c.router.SetProxyRule(pr)
+}
+
+// SetTunMode 告知本会话 TUN 是否已生效：直连拨号器据此决定是否走绑定接口的
+// 拨号路径（见 dialAddr 与 dialerRefreshLoop）。它由 TUN 开关路径与 App.Start
+// 在引擎真正建立/拆除之后调用。
+func (c *Client) SetTunMode(on bool) {
+	c.tunMode.Store(on)
+}
+
+func (c *Client) tunModeEnabled() bool {
+	return c.tunMode.Load()
 }
