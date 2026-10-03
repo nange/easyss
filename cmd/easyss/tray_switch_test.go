@@ -15,7 +15,7 @@ import (
 )
 
 // newSwitchTestApp 构建一个只包含"选择服务器"菜单的最小 TrayApp：切换逻辑只用到
-// serverAddrs/serverMenuItems/a.cfg/a.core，既不需要托盘，也不需要核心或网络。
+// serverAddrs/serverMenuItems/a.cfg/当前核心，既不需要托盘，也不需要核心或网络。
 func newSwitchTestApp(t *testing.T) *TrayApp {
 	t.Helper()
 
@@ -35,10 +35,10 @@ func newSwitchTestApp(t *testing.T) *TrayApp {
 
 // TestSwitchServerRestoresTheRunningSelectionOnFailure 固定"切换失败不能把用户
 // 留在没有任何服务器被选中"的契约：restartService 已经尽力把服务回滚到切换前的
-// 服务器（因此 a.cfg 仍指向它、a.core 也还在），菜单必须跟着回到那一个。
+// 服务器（因此 a.cfg 仍指向它、核心也还在），菜单必须跟着回到那一个。
 func TestSwitchServerRestoresTheRunningSelectionOnFailure(t *testing.T) {
 	a := newSwitchTestApp(t)
-	a.core = &runner.Core{} // 回滚成功：仍有 core 在运行
+	a.installCore(&runner.Core{}) // 回滚成功：仍有 core 在运行
 
 	errBoom := errors.New("boom")
 	var switchedTo string
@@ -74,8 +74,9 @@ func TestSwitchServerMarksTheTargetOnSuccess(t *testing.T) {
 	a := newSwitchTestApp(t)
 
 	require.NoError(t, a.switchServer(1, func(cfg *config.ClientConfig) error {
-		// 生产代码里 restartService 会把新配置装回 App，这里模拟这一步。
-		*a.App = App{cfg: cfg}
+		// 生产代码里 restartService 会通过 adoptConfig 把新配置装回 App，
+		// 这里模拟这一步。
+		a.adoptConfig(cfg)
 		return nil
 	}))
 
@@ -87,7 +88,7 @@ func TestSwitchServerMarksTheTargetOnSuccess(t *testing.T) {
 // 连点同一个服务器不该再停一次、起一次服务，只需要把勾选确认回来。
 func TestSwitchServerSkipsAServerThatIsAlreadyRunning(t *testing.T) {
 	a := newSwitchTestApp(t)
-	a.core = &runner.Core{}
+	a.installCore(&runner.Core{})
 
 	called := false
 	require.NoError(t, a.switchServer(0, func(*config.ClientConfig) error {
@@ -101,7 +102,7 @@ func TestSwitchServerSkipsAServerThatIsAlreadyRunning(t *testing.T) {
 
 // TestSwitchServerSerializesConcurrentSwitches 固定串行化契约：托盘的每次点击
 // 都会新起一个 goroutine，而一次切换是整套"停服务 → 起服务"（抢同一组本地端口
-// 4080/5080）。并发执行两套会让 a.core/a.cfg 互相覆盖，甚至留下没有任何 core
+// 4080/5080）。并发执行两套会让 a.cfg 互相覆盖，甚至留下没有任何 core
 // 在运行的状态。
 func TestSwitchServerSerializesConcurrentSwitches(t *testing.T) {
 	a := newSwitchTestApp(t)
@@ -167,7 +168,7 @@ func TestRestartServiceRollsBackToThePreviousServer(t *testing.T) {
 		if cfg.DefaultServerAddr() == "b.example:443" {
 			return errBoom
 		}
-		*a.App = App{cfg: cfg}
+		a.adoptConfig(cfg)
 		return nil
 	}
 
@@ -206,4 +207,55 @@ func TestRestartServiceReportsBothFailures(t *testing.T) {
 	require.ErrorIs(t, err, errSwitch)
 	require.ErrorIs(t, err, errRollback)
 	require.Contains(t, err.Error(), "rollback to a.example:443")
+}
+
+// TestSwitchServerIsRaceFreeWithStatsReads 固定"切换服务器与后台统计读取不再
+// 竞争当前核心"：-race 下这是回归测试（旧实现里 App.Start 无锁写 a.core，
+// switchServer 与 statsLoop 无锁读同一个普通字段）。restart 复用真实的
+// Start/Stop 与 adoptConfig，等价于生产 restartService，只把核心换成注入的
+// 零值核心。
+func TestSwitchServerIsRaceFreeWithStatsReads(t *testing.T) {
+	stubRunCore(t)
+	a := newSwitchTestApp(t)
+	a.installCore(&runner.Core{})
+
+	restart := func(cfg *config.ClientConfig) error {
+		a.Stop()
+		a.adoptConfig(cfg)
+		return a.Start()
+	}
+
+	var wg sync.WaitGroup
+	stopReading := make(chan struct{})
+	for range 3 {
+		wg.Go(func() {
+			for {
+				select {
+				case <-stopReading:
+					return
+				default:
+				}
+				a.logStatsOnce()
+			}
+		})
+	}
+
+	writeErr := make(chan error, 1)
+	wg.Go(func() {
+		defer close(stopReading)
+		for i := range 20 {
+			if err := a.switchServer(i%2, restart); err != nil {
+				writeErr <- err
+				return
+			}
+		}
+	})
+
+	wg.Wait()
+	select {
+	case err := <-writeErr:
+		t.Fatalf("switchServer: %v", err)
+	default:
+	}
+	require.NotNil(t, a.currentCore(), "最后一次切换之后服务必须在运行")
 }

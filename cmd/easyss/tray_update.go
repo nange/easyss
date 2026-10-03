@@ -321,6 +321,14 @@ func (a *TrayApp) downloadAndInstall() {
 		a.clearUpdateBadge()
 		a.tray.ShowNotification("Easyss", "已更新到 "+rel.TagName+"，正在重启...")
 
+		// 从这里到本次重启流程结束是一整套"停服务 →（失败时）起服务"，与用户
+		// 在菜单里切换服务器属于同一类临界区：不共用 serverSwitchMu 的话，两套
+		// 停/起会交错抢本地端口，并把配置换装（adoptConfig）与菜单勾选的顺序
+		// 交给调度器——这正是 serverSwitchMu 存在的理由。成功路径紧接着
+		// os.Exit，失败路径一直持有到把服务恢复起来。
+		a.serverSwitchMu.Lock()
+		defer a.serverSwitchMu.Unlock()
+
 		_ = a.setSysProxyOff()
 		a.closeService()
 		// 在重新启动前释放单例锁，这样新进程绝不会与旧进程

@@ -206,36 +206,89 @@ func sigWait() {
 type App struct {
 	cfg        *config.ClientConfig
 	configFile string // 配置文件绝对路径
-	core       *runner.Core
-	tunMgr     *tun.Manager
-	pprofSrv   *http.Server
+
+	// core 是当前运行的代理核心。读者（后台统计循环、托盘菜单处理器）在
+	// 各自 goroutine 上无锁取快照，因此用原子指针发布这个事实：
+	//   - core 一旦发布就不再变化，Start 装载、Stop 取下即停；
+	//   - 读点只 Load 一次到局部变量——旧代码
+	//     `a.core != nil && a.core.Client != nil` 会在两次读之间被 Stop 清空，
+	//     那是 nil 解引用，不只是数据竞争。
+	core atomic.Pointer[runner.Core]
+
+	tunMgr   *tun.Manager
+	pprofSrv *http.Server
+
+	// tunHelperMu 串行化 TUN 会话的建立与拆除。托盘的每次点击都在自己的
+	// goroutine 里（启用与关闭会并发执行），启动期的直接创建（App.Start）
+	// 与收尾（App.Stop）也在其中，而它们写的是同一组字段
+	// （tunMgr 与托盘侧的 tunSession/tunHelperStdin），因此必须共用同一把锁。
+	//
+	// 锁序：stateMu → tunHelperMu。Start/Stop 全程持有 stateMu，在它之内取
+	// 这把锁；TUN 开关路径不会调用 Start/Stop，因此不存在反向顺序。
+	tunHelperMu sync.Mutex
 
 	// startupWarn 记录首个非致命启动警告（例如服务端域名解析失败，
 	// 或自定义规则文件加载失败）。客户端继续运行；托盘以系统通知形式
 	// 呈现，headless 构建则记入日志。
+	// 它是会话级状态：Start 在会话起点重置它（持 stateMu），所有读者
+	// 一律走 currentStartupWarn()，因为恢复流程与切换/启动分属不同 goroutine。
 	startupWarn error
 
 	// tunSkippedForNetwork 记录启动时因服务端域名尚未解析成功（开机网络还
 	// 没就绪）而跳过了 TUN；后台解析恢复后据此在通知里提醒用户手动开启。
 	tunSkippedForNetwork bool
 
-	// statsCloser 用于停止后台统计日志器。它由 statsMu 保护，
-	// 因为 Start/Stop 可能并发执行（托盘菜单处理器），
-	// 而且 Start 失败时会保持未设置：关闭 nil channel 会 panic。
-	statsMu     sync.Mutex
+	// stateMu 串行化一次会话（Start/Stop）对运行期字段的全部改写：
+	// core/tunMgr/pprofSrv/statsCloser（tunMgr 另外还与托盘 TUN 开关共用
+	// tunHelperMu，见下）。读侧不经过它——热点读者只读原子指针，
+	// 否则后台统计 tick 与托盘菜单会阻塞在秒级的 Start（runner.Run）或
+	// 最长可达 60s 的 TUN 拆除上。
+	//
+	// 它取代了过去的 stopOnce：字段在取下后即为 nil，重复的 Stop 自然是空操作，
+	// 因此 restartService 不再需要整体重建 App（*a.App = App{...}）来重置
+	// once——整体重建既复制 App 上的互斥锁与原子字段，也会让并发读者看到
+	// 撕裂状态。startStatsLoop/stopStatsLoop 的调用方持有它（它原先由
+	// statsMu 保护，统计循环的停止通道同属会话状态）。
+	stateMu     sync.Mutex
 	statsCloser chan struct{}
-
-	// stopOnce 使 Stop 幂等。托盘的关闭流程与更新重启路径会各自调用一次
-	// （见 TrayApp.closeService / restartService），若重复执行就会把同一个
-	// 核心与 pprof 服务器关两次。App 在 restartService 中被整体重建
-	// （*a.App = App{...}），once 随之重置，正是所需语义。
-	stopOnce sync.Once
 }
 
 // coreGen 为每次 App.Start 启动的核心分配单调递增的序号，供后台 goroutine
-// 判断自己观察的核心是否仍是当前核心。App 会被 restartService 整体重建
-// （*a.App = App{...}），因此序号不能放在 App 上，否则会与旧实例冲突。
+// 判断自己观察的核心是否仍是当前核心。它留在包级：序号只要求进程内单调，
+// 而 App 的生命周期（包括测试中新建的实例）都共用同一个计数器。
 var coreGen atomic.Uint64
+
+// currentCore 返回当前核心的快照；nil 表示没有会话在运行。
+func (a *App) currentCore() *runner.Core { return a.core.Load() }
+
+// installCore 发布一次 Start 建立的核心（调用方持有 stateMu）。
+func (a *App) installCore(core *runner.Core) { a.core.Store(core) }
+
+// takeCore 取走当前核心的所有权并清空：调用者负责停止它。"取下"与"停止"
+// 是同一步，因此并发/重复的 Stop 不会二次拆除，读侧也绝不会拿到一个正在
+// 停止的核心。
+func (a *App) takeCore() *runner.Core { return a.core.Swap(nil) }
+
+// adoptConfig 装载新一轮启动的配置。服务器切换由 serverSwitchMu 串行化，
+// 会话级字段由 Start 在 stateMu 下重置，因此这里只换配置指针——不能再整体
+// 重建 App（*a.App = App{...}，见 stateMu 的注释）。
+func (a *App) adoptConfig(cfg *config.ClientConfig) { a.cfg = cfg }
+
+// currentStartupWarn 返回本次会话的启动警告快照。startupWarn 由 Start 在
+// stateMu 下重置/写入，因此凡是不与那次 Start 同 goroutine 的读者都必须走
+// 这里——自更新失败后的恢复流程（restartServiceWith）与切换/启动就分属不同
+// goroutine。同一调用链上的读者（buildTray、start.go、start_headless.go 在
+// Start 返回后立即读）也因此统一走访问器，规则只有一条。
+func (a *App) currentStartupWarn() error {
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	return a.startupWarn
+}
+
+// runCore 启动一次代理核心。它作为变量（与 restartServiceWith 注入 start
+// 是同一模式），使测试能注入零值核心来并发驱动真实的 Start/Stop，而不必
+// 监听本地端口或连网络。
+var runCore = runner.Run
 
 // serverDomainReadyNotify 非 nil 时，通过托盘系统通知报告"后台重试已解析出
 // 服务端域名、代理恢复可用"。托盘构建在 buildTray 中安装它；headless 与
@@ -310,11 +363,23 @@ func (a *App) watchServerDomainReady(core serverDomainReadiness, gen uint64, pen
 }
 
 func (a *App) Start() error {
-	core, err := runner.Run(a.cfg)
+	// Start/Stop 全程串行：托盘的切换、自更新重启与退出路径都在各自的
+	// goroutine 里，Stop 还会在启动期间的切换请求里与 Start 交错。
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+
+	// 会话级状态在会话起点重置。过去这一步由 restartService 的整体重建
+	// （*a.App = App{...}）顺带完成；重建移除后必须在这里做，否则上一轮的
+	// 启动警告会既抑制新一轮的 setStartupWarn（它只在 nil 时写入），
+	// 又被 restartServiceWith 重复上报。
+	a.startupWarn = nil
+	a.tunSkippedForNetwork = false
+
+	core, err := runCore(a.cfg)
 	if err != nil {
 		return err
 	}
-	a.core = core
+	a.installCore(core)
 	a.setStartupWarn(core.StartupWarn)
 	gen := coreGen.Add(1)
 	// 降级启动（开机时网络未就绪、服务端域名暂不可解析）时为 true。
@@ -361,10 +426,20 @@ func (a *App) Start() error {
 // startTunEngineAtStartup 在启动路径上创建 TUN 管理器并派发引擎启动。
 // 构造顺序与托盘菜单路径（TrayApp.createTun2socks）保持一致。
 func (a *App) startTunEngineAtStartup() {
+	core := a.currentCore()
+	if core == nil || core.Client == nil {
+		return
+	}
+
+	// 与托盘开关路径（TrayApp.createTun2socks）共用同一把锁：两者写的是同一个
+	// tunMgr，而托盘的菜单在 Start 之前就已经可见，点击与启动期创建会并发。
+	a.tunHelperMu.Lock()
+	defer a.tunHelperMu.Unlock()
+
 	a.tunMgr = tun.New(a.tunConfig())
 
-	icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
-	icmpHandler.SetProxy(a.core.StreamHandler, a.methodFromServer())
+	icmpHandler := tun.NewICMPHandler(core.Client.Router())
+	icmpHandler.SetProxy(core.StreamHandler, a.methodFromServer())
 	a.tunMgr.SetICMPHandler(icmpHandler)
 
 	startTunEngine(a.tunMgr, "device")
@@ -455,6 +530,7 @@ func notifyTunSkippedNoRoot() {
 
 // setStartupWarn 记录首个非致命启动警告。客户端继续运行；
 // 托盘以系统通知形式呈现，headless 构建则记入日志。
+// 调用方持有 stateMu（只被 App.Start 调用），与 currentStartupWarn 配对。
 func (a *App) setStartupWarn(err error) {
 	if err == nil || a.startupWarn != nil {
 		return
@@ -464,25 +540,37 @@ func (a *App) setStartupWarn(err error) {
 }
 
 // Stop 停止核心、TUN 引擎与 pprof 服务器。顺序是硬约束：TUN 依赖核心的本地
-// 代理入口，必须先停。它幂等，并且在停止后清空持有者字段——否则后续的
-// closeService/restartService 会再次 Stop 同一个已停止的对象。
+// 代理入口，必须先停。它幂等，而且是"取下即停"——每个字段在被取走后即为 nil，
+// 因此重复或并发的 Stop 不会二次停止同一个对象，也不需要 stopOnce 那样的
+// 一次性状态（那正是过去 restartService 必须整体重建 App 的原因）。
 func (a *App) Stop() {
-	a.stopOnce.Do(func() {
-		a.stopStatsLoop()
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
 
-		if a.tunMgr != nil {
-			a.tunMgr.Stop()
-			a.tunMgr = nil
-		}
-		if a.core != nil {
-			a.core.Stop()
-			a.core = nil
-		}
-		if a.pprofSrv != nil {
-			pprof.StopPprof(a.pprofSrv)
-			a.pprofSrv = nil
-		}
-	})
+	a.stopStatsLoop()
+
+	// TUN 的收尾与"取下核心"必须共用 tunHelperMu 这把锁（见 App.tunHelperMu）：
+	//   - 托盘的 TUN 开关在锁内检查 currentCore()，这里在同一临界区里把核心
+	//     取下，后到的开关就会看到 nil 并回滚菜单，不会给一个已停止的核心装上
+	//     新的 TUN 引擎；
+	//   - 先到的开关留下的 tunMgr 由这里收走并停止，不会泄漏（它的分流路由
+	//     留在路由表里就是"全机断网"，见 closeTun2socks 的注释）。
+	// 核心的停止放在锁外：它可能等待在飞中继结束，不该挡住 TUN 开关。
+	a.tunHelperMu.Lock()
+	if mgr := a.tunMgr; mgr != nil {
+		a.tunMgr = nil
+		mgr.Stop()
+	}
+	core := a.takeCore()
+	a.tunHelperMu.Unlock()
+
+	if core != nil {
+		core.Stop()
+	}
+	if srv := a.pprofSrv; srv != nil {
+		a.pprofSrv = nil
+		pprof.StopPprof(srv)
+	}
 }
 
 // setupSysProxy 按配置把系统代理指向本地 HTTP 代理（见 setSysProxy）。
@@ -518,9 +606,10 @@ func teardownSysProxy(applied bool) {
 
 // startStatsLoop（重新）启动后台统计日志器，若之前的循环仍在运行则将其停止。
 // 停止 channel 被 goroutine 捕获，因此后续重启不会让旧循环在新 channel 上 select。
+//
+// 调用方必须持有 stateMu（只被 App.Start 调用）：statsCloser 属于会话状态，
+// 与 core/tunMgr/pprofSrv 共用同一把锁。
 func (a *App) startStatsLoop() {
-	a.statsMu.Lock()
-	defer a.statsMu.Unlock()
 	if a.statsCloser != nil {
 		close(a.statsCloser)
 	}
@@ -529,10 +618,8 @@ func (a *App) startStatsLoop() {
 }
 
 // stopStatsLoop 停止后台统计日志器。对从未启动过统计日志器的 App 调用是安全的，
-// 重复调用也是安全的。
+// 重复调用也是安全的。调用方必须持有 stateMu（只被 App.Stop 调用）。
 func (a *App) stopStatsLoop() {
-	a.statsMu.Lock()
-	defer a.statsMu.Unlock()
 	if a.statsCloser != nil {
 		close(a.statsCloser)
 		a.statsCloser = nil
@@ -545,60 +632,68 @@ func (a *App) statsLoop(done <-chan struct{}) {
 	for {
 		select {
 		case <-ticker.C:
-			if a.core == nil || a.core.Client == nil {
-				continue
-			}
-			snap := stats.Collect()
-			snap.TransportStats = a.core.Client.Transport().Stats()
-			log.Info("[STATS]",
-				"uptime", snap.Uptime().Round(time.Second),
-				"conns", snap.Conns,
-				"priority_conns", snap.PriorityConns,
-				"bulk_conns", snap.BulkConns,
-				"priority_conns_status", snap.PriorityConnsStatus,
-				"bulk_conns_status", snap.BulkConnsStatus,
-				"active_streams", snap.ActiveStreams,
-				"priority_active", snap.PriorityActiveStreams,
-				"bulk_active", snap.BulkActiveStreams,
-				"streams(opened)", snap.TotalStreamsOpened,
-				"streams(closed)", snap.TotalStreamsClosed,
-				"priority_opened", snap.PriorityStreamsOpened,
-				"bulk_opened", snap.BulkStreamsOpened,
-				"priority_fallback", snap.PriorityFallback,
-				"bulk_fallback", snap.BulkFallback,
-				"tx", stats.HumanBytes(snap.BytesSent),
-				"rx", stats.HumanBytes(snap.BytesRecv),
-				"raw_tx", stats.HumanBytes(snap.RawBytesSent),
-				"raw_rx", stats.HumanBytes(snap.RawBytesRecv),
-				"upload_speed", snap.UploadSpeedHuman,
-				"download_speed", snap.DownloadSpeedHuman,
-				"proxy_tcp_streams", snap.TCPConnections,
-				"udp_assoc", snap.UDPAssociations,
-				"dns(hit)", snap.DNSCacheHits,
-				"dns(miss)", snap.DNSCacheMisses,
-				"dns(proxy)", snap.DNSProxyQueries,
-				"dns(direct)", snap.DNSDirectQueries,
-				"padding", stats.HumanBytes(snap.PaddingBytes),
-				"records", snap.RecordsWritten,
-				"avg_rtt", snap.AvgRTT().Round(time.Millisecond),
-				"slot_degraded", snap.SlotDegraded,
-				"slot_retired_degraded", snap.SlotRetiredDegraded,
-				"slot_probes", snap.SlotProbes,
-				"slot_probe_slow", snap.SlotProbeSlow,
-				"slot_grown_priority", snap.SlotGrownPriority,
-				"slot_grown_bulk", snap.SlotGrownBulk,
-				"conn_rotated", snap.ConnRotated,
-			)
+			a.logStatsOnce()
 		case <-done:
 			return
 		}
 	}
 }
 
+// logStatsOnce 输出一份统计快照。核心在读取前一次性取快照：它可能在这次
+// tick 与 Stop/切换之间被清空或替换，分两次读 a.core 会读到 nil。
+func (a *App) logStatsOnce() {
+	core := a.currentCore()
+	if core == nil || core.Client == nil {
+		return
+	}
+	snap := stats.Collect()
+	snap.TransportStats = core.Client.Transport().Stats()
+	log.Info("[STATS]",
+		"uptime", snap.Uptime().Round(time.Second),
+		"conns", snap.Conns,
+		"priority_conns", snap.PriorityConns,
+		"bulk_conns", snap.BulkConns,
+		"priority_conns_status", snap.PriorityConnsStatus,
+		"bulk_conns_status", snap.BulkConnsStatus,
+		"active_streams", snap.ActiveStreams,
+		"priority_active", snap.PriorityActiveStreams,
+		"bulk_active", snap.BulkActiveStreams,
+		"streams(opened)", snap.TotalStreamsOpened,
+		"streams(closed)", snap.TotalStreamsClosed,
+		"priority_opened", snap.PriorityStreamsOpened,
+		"bulk_opened", snap.BulkStreamsOpened,
+		"priority_fallback", snap.PriorityFallback,
+		"bulk_fallback", snap.BulkFallback,
+		"tx", stats.HumanBytes(snap.BytesSent),
+		"rx", stats.HumanBytes(snap.BytesRecv),
+		"raw_tx", stats.HumanBytes(snap.RawBytesSent),
+		"raw_rx", stats.HumanBytes(snap.RawBytesRecv),
+		"upload_speed", snap.UploadSpeedHuman,
+		"download_speed", snap.DownloadSpeedHuman,
+		"proxy_tcp_streams", snap.TCPConnections,
+		"udp_assoc", snap.UDPAssociations,
+		"dns(hit)", snap.DNSCacheHits,
+		"dns(miss)", snap.DNSCacheMisses,
+		"dns(proxy)", snap.DNSProxyQueries,
+		"dns(direct)", snap.DNSDirectQueries,
+		"padding", stats.HumanBytes(snap.PaddingBytes),
+		"records", snap.RecordsWritten,
+		"avg_rtt", snap.AvgRTT().Round(time.Millisecond),
+		"slot_degraded", snap.SlotDegraded,
+		"slot_retired_degraded", snap.SlotRetiredDegraded,
+		"slot_probes", snap.SlotProbes,
+		"slot_probe_slow", snap.SlotProbeSlow,
+		"slot_grown_priority", snap.SlotGrownPriority,
+		"slot_grown_bulk", snap.SlotGrownBulk,
+		"conn_rotated", snap.ConnRotated,
+	)
+}
+
 // tunConfig 为本 App 构建 TUN 配置。它是启动路径与托盘开关共享的唯一构造点，
 // 因此两者不会出现偏差（尤其是 server-IPv6 提示，托盘路径过去常常遗漏它）。
 func (a *App) tunConfig() tun.Config {
-	if a.core != nil && a.core.Client != nil {
+	core := a.currentCore()
+	if core != nil && core.Client != nil {
 		// 降级启动（开机时网络未就绪）会让启动期的 IPv6 解析得到空值；这里在
 		// 读取前补一次有界解析，否则 TUN 脚本不会安装 IPv6 默认路由，
 		// IPv6 流量会绕过隧道。已有值时该方法直接返回，不做 DNS 查询。
@@ -607,7 +702,7 @@ func (a *App) tunConfig() tun.Config {
 		// 系统解析器），因此必须在 tunDNS 之前执行：在"此前所有标记尝试都失败、
 		// 恰好这次刷新才成功"的边角情形下，先取 DNS 会让 TUN 拿到默认值而不是
 		// 刚学到的可达服务器。
-		a.core.Client.RefreshServerIPV6()
+		core.Client.RefreshServerIPV6()
 	}
 
 	cfg := tun.Config{
@@ -617,8 +712,8 @@ func (a *App) tunConfig() tun.Config {
 		// 真实 MTU 与 netstack 的 MTU，两条路径必须拿到同一个值。
 		MTU: a.cfg.TunMTU(),
 	}
-	if a.core != nil && a.core.Client != nil {
-		if ipv6 := a.core.Client.Router().ServerIPV6(); ipv6 != "" {
+	if core != nil && core.Client != nil {
+		if ipv6 := core.Client.Router().ServerIPV6(); ipv6 != "" {
 			cfg.ServerIPV6 = ipv6
 		}
 	}

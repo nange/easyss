@@ -72,20 +72,23 @@ type TrayApp struct {
 	uwpMenu  *systray.Menu  //nolint:unused // used in uwp_windows.go
 	uwpItems []*UWPMenuItem //nolint:unused // used in uwp_windows.go
 
-	// TUN 助手进程管理（darwin 非 root）。
+	// TUN 助手进程管理（darwin 非 root）。tunHelperStdin 与 tunSession 都由
+	// App.tunHelperMu 保护（它与 App.tunMgr 共用同一把锁，因为三者描述的是
+	// 同一个 TUN 会话）。
 	tunHelperStdin io.WriteCloser // FIFO 写入端；关闭以通知助手进程退出
-	tunHelperMu    sync.Mutex
 
 	// tunSession 是当前 TUN 会话在启用时实际使用的设备/网关配置。关闭时用它
 	//（而不是关闭时的 a.tunMgr）核对路由与回滚：fd 路径的 manager 只携带请求
 	// 的设备名，而会话的本地网关等取值到关闭时可能已经变化。
-	// 由 tunHelperMu 保护。
+	// 由 App.tunHelperMu 保护。
 	tunSession *tun.DeviceConfig
 
 	// serverSwitchMu 串行化服务器切换。每次切换都是一整套"停服务 → 起服务"，
 	// 而托盘的每次点击都会新起一个 goroutine：并发切换会抢同一组本地端口
-	// （4080/5080）并同时改写 a.core/a.cfg，结果可能是没有任何 core 在运行，
-	// 或者两个 core 同时存在。
+	// （4080/5080）并同时改写 a.cfg，结果可能是没有任何 core 在运行，
+	// 或者两个 core 同时存在。它串行化的是"停+起"这一整段与菜单勾选回滚；
+	// 当前核心本身由 App.core 的原子指针发布，读侧不依赖这把锁。
+	// 自更新失败后的恢复流程（tray_update.go）也是一套停/起，因此同样持有它。
 	serverSwitchMu sync.Mutex
 }
 
@@ -176,8 +179,8 @@ func (a *TrayApp) buildTray() {
 
 	// 非致命启动警告（例如服务端域名解析失败且 TUN 被跳过）以通知形式呈现，
 	// 不阻塞也不退出：代理核心继续运行。
-	if a.startupWarn != nil {
-		a.tray.ShowNotification("Easyss", friendlyStartupWarning(a.startupWarn))
+	if warn := a.currentStartupWarn(); warn != nil {
+		a.tray.ShowNotification("Easyss", friendlyStartupWarning(warn))
 	}
 
 	a.startLocalService()
@@ -386,7 +389,7 @@ func (a *TrayApp) switchServer(idx int, restart func(*config.ClientConfig) error
 
 	// 排队期间状态可能已经变成"这个服务器正在运行"（上一次点击已经切到它了）：
 	// 此时只需要把勾选确认回来，不必再停一次、起一次。
-	if a.core != nil && a.runningServerIndex() == idx {
+	if a.currentCore() != nil && a.runningServerIndex() == idx {
 		a.setCheckedServer(idx)
 		return nil
 	}
@@ -399,7 +402,7 @@ func (a *TrayApp) switchServer(idx int, restart func(*config.ClientConfig) error
 		// restartService 已经尽力回滚到切换前的服务器：回滚成功（还有 core 在
 		// 运行）就按当前配置勾回它；彻底没有服务在运行时留空——菜单不能声称
 		// 一个没在工作的服务器已选中，那正是"切换失败 + 本机断网"时的样子。
-		if a.core != nil {
+		if a.currentCore() != nil {
 			a.setCheckedServer(a.runningServerIndex())
 		}
 		return err
@@ -432,7 +435,7 @@ func (a *TrayApp) setCheckedServer(idx int) {
 // 清空过，用户需要知道现在到底跑的是哪个服务器（或者什么都没跑）。
 func (a *TrayApp) notifyServerSwitchFailure(addr string, err error) {
 	msg := fmt.Sprintf("切换到 %s 失败，已回滚到原来的服务器。详情：%v", addr, err)
-	if a.core == nil {
+	if a.currentCore() == nil {
 		msg = fmt.Sprintf("切换到 %s 失败，且未能恢复原来的服务器：本机代理已停止，请重试或重启 Easyss。详情：%v", addr, err)
 	}
 	if !a.trayReady() {
@@ -536,8 +539,8 @@ func (a *TrayApp) changeProxyRule(rule string) {
 }
 
 func (a *TrayApp) setProxyRule(rule string) {
-	if a.core != nil && a.core.Client != nil {
-		a.core.Client.SetProxyRule(rule)
+	if core := a.currentCore(); core != nil && core.Client != nil {
+		core.Client.SetProxyRule(rule)
 	}
 	a.cfg.Routing.ProxyRule = rule
 	log.Info("[SYSTRAY] proxy rule changed", "rule", rule)
@@ -692,9 +695,10 @@ func (a *TrayApp) setSysProxyOff() error {
 }
 
 func (a *TrayApp) createTun2socks() error {
-	// 与 closeTun2socks（以及 helper 路径的 createTun2socksViaHelper）共用同一把
-	// 锁：托盘的每一次点击都在自己的 goroutine 里，启用与关闭会并发执行，而它们
-	// 写的是同一组字段（tunMgr/tunSession/EnableTun2socks）。
+	// 与 closeTun2socks（以及 helper 路径的 createTun2socksViaHelper、启动期的
+	// startTunEngineAtStartup、停止期的 App.Stop）共用 App.tunHelperMu：托盘的
+	// 每一次点击都在自己的 goroutine 里，启用与关闭会并发执行，而它们写的是
+	// 同一组字段（tunMgr/tunSession/EnableTun2socks）。
 	a.tunHelperMu.Lock()
 	defer a.tunHelperMu.Unlock()
 
@@ -705,7 +709,8 @@ func (a *TrayApp) createTun2socks() error {
 	// core 检查必须早于任何状态写入：如果这里已经留下了 tunMgr 与
 	// EnableTun2socks=true，后续每次点击都会命中顶部的"已设置"保护而静默返回
 	// nil（菜单勾选着，引擎却从未运行、也再没人能 Stop 它）。
-	if a.core == nil || a.core.Client == nil {
+	core := a.currentCore()
+	if core == nil || core.Client == nil {
 		return fmt.Errorf("client not initialized")
 	}
 
@@ -714,8 +719,8 @@ func (a *TrayApp) createTun2socks() error {
 	dev := a.tunMgr.DeviceConfig()
 	a.tunSession = &dev
 
-	icmpHandler := tun.NewICMPHandler(a.core.Client.Router())
-	icmpHandler.SetProxy(a.core.StreamHandler, a.methodFromServer())
+	icmpHandler := tun.NewICMPHandler(core.Client.Router())
+	icmpHandler.SetProxy(core.StreamHandler, a.methodFromServer())
 	a.tunMgr.SetICMPHandler(icmpHandler)
 
 	startTunEngine(a.tunMgr, "device")
@@ -801,8 +806,8 @@ func (a *TrayApp) closeTun2socks() error {
 	}
 
 	// 4. 清除 HTTP /tun 配置。
-	if a.core != nil && a.core.HTTPServer != nil {
-		a.core.HTTPServer.ClearTunConfig()
+	if core := a.currentCore(); core != nil && core.HTTPServer != nil {
+		core.HTTPServer.ClearTunConfig()
 	}
 
 	a.cfg.Local.EnableTun2socks = false
@@ -829,7 +834,7 @@ func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 	// 服务端域名还没解析成功时拒绝启用：TUN 会把系统 DNS 指向本机转发服务器，
 	// 而解析服务端域名又依赖隧道本身，容易形成解析递归；网络未就绪时平台脚本
 	// 还会因缺默认网关失败。恢复后（就绪通道关闭）再点即正常放行。
-	if !canStartTunNow(a.core) {
+	if !canStartTunNow(a.currentCore()) {
 		log.Warn("[SYSTRAY] tun2socks refused: server domain not resolved yet")
 		menu.SetChecked(false)
 		a.notifyTunStartFailure("服务端域名尚未解析成功，暂时无法开启系统全局流量；请等待网络恢复后重试")
@@ -868,9 +873,7 @@ func (a *TrayApp) disableTun2socks() {
 
 func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
 	return a.restartServiceWith(newCfg, func(cfg *config.ClientConfig) error {
-		*a.App = App{
-			cfg: cfg,
-		}
+		a.adoptConfig(cfg)
 		return a.Start()
 	})
 }
@@ -917,8 +920,11 @@ func (a *TrayApp) restartServiceWith(newCfg *config.ClientConfig, start func(*co
 		return err
 	}
 
-	if a.startupWarn != nil {
-		log.Warn("[SYSTRAY] restart service: startup warning", "err", a.startupWarn)
+	// startupWarn 由 start 里的那次 Start（或 buildTray 的初始 Start）在
+	// stateMu 下写入；这里的恢复流程与那次 Start 分属不同 goroutine——
+	// serverSwitchMu 只能串行化两套"停/起"，串不住初始 Start，因此必须走访问器。
+	if warn := a.currentStartupWarn(); warn != nil {
+		log.Warn("[SYSTRAY] restart service: startup warning", "err", warn)
 	}
 
 	restoreSysProxy()
