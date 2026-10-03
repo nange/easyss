@@ -11,12 +11,12 @@ import (
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/util/bytespool"
-	"github.com/txthinking/socks5"
+	"github.com/things-go/go-socks5/statute"
 )
 
-func (s *Socks5Server) handleUDP(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram) error {
-	src := clientAddr.String()
-	dst := d.Address()
+func (s *Socks5Server) handleUDP(relay *udpRelay, d *socks5Frame, data []byte) error {
+	src := relay.datagramSource().String()
+	dst := d.target
 
 	host, port, err := net.SplitHostPort(dst)
 	if err != nil {
@@ -40,7 +40,7 @@ func (s *Socks5Server) handleUDP(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 		return nil
 	}
 
-	// DNS 拦截只针对 53 端口，与 TCP 路径的端口门控一致（见 Socks5Server.TCPHandle）。
+	// DNS 拦截只针对 53 端口，与 TCP 路径的端口门控一致（见 Socks5Server.connectHandler）。
 	// 只按"载荷能否解包成 DNS 查询"判定会连 NBNS(137)/LLMNR(5355)/mDNS(5353) 一起吞掉：
 	// NBNS 查询在 DNS 线格式里就是 QNAME 为 NetBIOS first-level 编码的单标签、
 	// QTYPE=32（DNS 类型表里是 NIMLOC），于是被当成 DNS 查询经隧道送到
@@ -48,12 +48,12 @@ func (s *Socks5Server) handleUDP(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 	// 拿着一个假的否定应答当作 NBNS 服务器的回复。非 53 端口按普通 UDP 分流。
 	if port == "53" {
 		msg := &dns.Msg{}
-		if err := msg.Unpack(d.Data); err == nil && isDNSQueryMsg(msg) {
-			return s.handleDNS(srv, clientAddr, d, msg)
+		if err := msg.Unpack(data); err == nil && isDNSQueryMsg(msg) {
+			return s.handleDNS(relay, d, msg, data)
 		}
 	}
 
-	return s.handleRegularUDP(srv, clientAddr, d, dst)
+	return s.handleRegularUDP(relay, d, dst, data)
 }
 
 // isNonRelayableUDPTarget 报告 host 是否为"只能由本机在物理接口上发出"的目的地：
@@ -81,18 +81,19 @@ func isNonRelayableUDPTarget(host string) bool {
 // msg 通道（直接写回一条应答），异步的代理分支用 raw 通道（应答由 receiveLoop
 // 在任意时刻送回）。两者的组帧都按客户端请求的目标地址进行——透明 NAT
 // （tun2socks）以该地址为 UDP 流建键，声称来自上游地址的数据报会被丢弃。
-func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, msg *dns.Msg) error {
+func (s *Socks5Server) handleDNS(relay *udpRelay, d *socks5Frame, msg *dns.Msg, data []byte) error {
+	clientAddr := relay.datagramSource()
 	return s.dns.handleUDPQuery(clientAddr, udpDNSQuery{
-		raw: d.Data,
+		raw: data,
 		msg: msg,
 		src: clientAddr.String(),
-		dst: d.Address(),
+		dst: d.target,
 		reply: udpReply{
 			msg: func(m *dns.Msg) error {
-				return responseDNSMsg(srv.UDPConn, clientAddr, m, d.Address())
+				return s.responseDNSMsg(relay, m, d.target)
 			},
-			raw: func(data []byte) {
-				s.sendToClient(srv, clientAddr, data, d.Address())
+			raw: func(replyData []byte) {
+				s.sendToClient(relay, replyData, d.target)
 			},
 		},
 	})
@@ -104,27 +105,32 @@ func (s *Socks5Server) handleDNS(srv *socks5.Server, clientAddr *net.UDPAddr, d 
 //
 // 会话生命周期（读空闲定时器、退出时的地图清理与关闭）由 udpPool.receiveLoop
 // 承担，本函数只提供「收到数据报之后做什么」。
-func (s *Socks5Server) receiveLoop(ue *UDPExchange, srv *socks5.Server, clientAddr *net.UDPAddr, target, key string, respTimeout time.Duration) {
+func (s *Socks5Server) receiveLoop(ue *UDPExchange, relay *udpRelay, target, key string, respTimeout time.Duration) {
 	s.udp.receiveLoop(ue, key, respTimeout, func(data []byte) {
-		s.sendToClient(srv, clientAddr, data, target)
+		s.sendToClient(relay, data, target)
 	})
 }
 
-func (s *Socks5Server) sendToClient(srv *socks5.Server, clientAddr *net.UDPAddr, data []byte, target string) {
-	a, addr, port, err := socks5.ParseAddress(target)
+// sendToClient 把一条载荷按 SOCKS5 UDP 应答帧（RSV + FRAG + ATYP + ADDR + PORT
+// + DATA）写回客户端。组帧必须使用客户端请求时的目标地址：透明 NAT
+// （tun2socks）以该地址为 UDP 流建键，源地址不符的数据报会被丢弃。
+func (s *Socks5Server) sendToClient(relay *udpRelay, data []byte, target string) {
+	frame, err := statute.NewDatagram(target, data)
 	if err != nil {
+		log.Debug("[UDP] build datagram", "target", target, "err", err)
 		return
 	}
-	if a == socks5.ATYPDomain {
-		addr = addr[1:]
+	peer := relay.datagramSource()
+	if peer == nil {
+		// 尚未收到过该客户端的任何数据报，无处可回。
+		return
 	}
-	resp := socks5.NewDatagram(a, addr, port, data)
-	if _, err := srv.UDPConn.WriteToUDP(resp.Bytes(), clientAddr); err != nil {
+	if _, err := relay.socket.WriteToUDP(frame.Bytes(), peer); err != nil {
 		log.Debug("[UDP] write to client", "err", err)
 	}
 }
 
-func (s *Socks5Server) handleRegularUDP(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, dst string) error {
+func (s *Socks5Server) handleRegularUDP(relay *udpRelay, d *socks5Frame, dst string, data []byte) error {
 	host, _, err := net.SplitHostPort(dst)
 	if err != nil {
 		return err
@@ -136,16 +142,16 @@ func (s *Socks5Server) handleRegularUDP(srv *socks5.Server, clientAddr *net.UDPA
 		return nil
 	case router.HostRuleDirect:
 		log.Info("[UDP_DIRECT]", "target", dst)
-		return s.directUDPRelay(srv, clientAddr, d, dst)
+		return s.directUDPRelay(relay, dst, data)
 	case router.HostRuleProxy:
 		log.Info("[UDP_PROXY]", "target", dst)
-		return s.proxyUDPRelay(srv, clientAddr, d, dst)
+		return s.proxyUDPRelay(relay, dst, data)
 	}
 	return nil
 }
 
-func (s *Socks5Server) directUDPRelay(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, dst string) error {
-	key := "direct_" + clientAddr.String() + "_" + dst
+func (s *Socks5Server) directUDPRelay(relay *udpRelay, dst string, data []byte) error {
+	key := "direct_" + relay.datagramSource().String() + "_" + dst
 
 	dc, ok := s.udp.directFor(key)
 	if !ok {
@@ -157,12 +163,12 @@ func (s *Socks5Server) directUDPRelay(srv *socks5.Server, clientAddr *net.UDPAdd
 		}
 		// 读取循环由创建者启动：会话池只管理生命周期，不做任何 I/O。
 		if created {
-			go s.directUDPReadLoop(srv, clientAddr, dst, key, dc)
+			go s.directUDPReadLoop(relay, dst, key, dc)
 		}
 	}
 
 	dc.lastSeen.Store(time.Now().UnixNano())
-	_, err := dc.conn.Write(d.Data)
+	_, err := dc.conn.Write(data)
 	return err
 }
 
@@ -171,7 +177,7 @@ func (s *Socks5Server) directUDPRelay(srv *socks5.Server, clientAddr *net.UDPAdd
 // udpIdleTimeout 相同（用户配置超时的 2 倍），镜像服务端 UDP 处理器——它同样以
 // 2 倍超时的空闲截止时间读取。退出时会关闭 socket 并从会话表中移除自己的条目，
 // 但仅在条目仍指向本会话时——绝不会移除指向替换它的新会话的条目。
-func (s *Socks5Server) directUDPReadLoop(srv *socks5.Server, clientAddr *net.UDPAddr, dst, key string, dc *directUDPConn) {
+func (s *Socks5Server) directUDPReadLoop(relay *udpRelay, dst, key string, dc *directUDPConn) {
 	rc := dc.conn
 	defer func() {
 		rc.Close() //nolint:errcheck
@@ -189,14 +195,14 @@ func (s *Socks5Server) directUDPReadLoop(srv *socks5.Server, clientAddr *net.UDP
 		// （UDPExchange.Receive）：一个只持续接收而不再写入的流（一次查询带来
 		// 一长串响应）在仍然活跃时不能被回收。
 		dc.lastSeen.Store(time.Now().UnixNano())
-		s.sendToClient(srv, clientAddr, buf[:n], dst)
+		s.sendToClient(relay, buf[:n], dst)
 	}
 }
 
-func (s *Socks5Server) proxyUDPRelay(srv *socks5.Server, clientAddr *net.UDPAddr, d *socks5.Datagram, dst string) error {
-	key := clientAddr.String() + "_" + dst
+func (s *Socks5Server) proxyUDPRelay(relay *udpRelay, dst string, data []byte) error {
+	key := relay.datagramSource().String() + "_" + dst
 
-	ue, created, err := s.udp.acquireExchange(context.Background(), key, dst, d.Data)
+	ue, created, err := s.udp.acquireExchange(context.Background(), key, dst, data)
 	if err != nil {
 		log.Error("[UDP_PROXY] open exchange", "dst", dst, "err", err)
 		return err
@@ -204,11 +210,11 @@ func (s *Socks5Server) proxyUDPRelay(srv *socks5.Server, clientAddr *net.UDPAddr
 	if created {
 		// 非 DNS 的 UDP 不能使用较短的读空闲超时：会话可能合法地长时间沉默
 		// （例如纯上传流），因此它只保留默认 60 秒的双向空闲回收器。
-		go s.receiveLoop(ue, srv, clientAddr, dst, key, 0)
+		go s.receiveLoop(ue, relay, dst, key, 0)
 		return nil // 第一个载荷已在握手中发送
 	}
 
-	if err := ue.Send(d.Data); err != nil {
+	if err := ue.Send(data); err != nil {
 		log.Error("[UDP_PROXY] send", "err", err)
 		s.udp.removeExchange(key, ue)
 		return err
@@ -216,19 +222,20 @@ func (s *Socks5Server) proxyUDPRelay(srv *socks5.Server, clientAddr *net.UDPAddr
 	return nil
 }
 
-func responseDNSMsg(conn *net.UDPConn, addr *net.UDPAddr, msg *dns.Msg, dst string) error {
+// responseDNSMsg 把一条 DNS 应答按 SOCKS5 UDP 帧写回客户端。
+func (s *Socks5Server) responseDNSMsg(relay *udpRelay, msg *dns.Msg, dst string) error {
 	data, err := msg.Pack()
 	if err != nil {
 		return err
 	}
-	a, addrBytes, port, err := socks5.ParseAddress(dst)
+	frame, err := statute.NewDatagram(dst, data)
 	if err != nil {
 		return err
 	}
-	if a == socks5.ATYPDomain {
-		addrBytes = addrBytes[1:]
+	peer := relay.datagramSource()
+	if peer == nil {
+		return errSocksServerClosed
 	}
-	resp := socks5.NewDatagram(a, addrBytes, port, data)
-	_, err = conn.WriteToUDP(resp.Bytes(), addr)
+	_, err = relay.socket.WriteToUDP(frame.Bytes(), peer)
 	return err
 }

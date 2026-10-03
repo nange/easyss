@@ -20,7 +20,6 @@ import (
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/transport"
-	"github.com/txthinking/socks5"
 )
 
 // testMasterKey 必须与 newTestStreamHandler 中使用的会话主密钥一致，测试才能
@@ -72,7 +71,7 @@ func serveTCPDNSHandler(t *testing.T, srv *Socks5Server, target string) (net.Con
 		}
 		defer conn.Close() //nolint:errcheck
 		host, _, _ := net.SplitHostPort(target)
-		_ = srv.handleTCPDNS(conn, &socks5.Request{}, target, host)
+		_ = srv.handleTCPDNS(conn, target, host)
 	}()
 
 	client, err := net.Dial("tcp", ln.Addr().String())

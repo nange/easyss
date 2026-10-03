@@ -19,7 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/txthinking/socks5"
+	xproxy "golang.org/x/net/proxy"
 
 	"github.com/nange/easyss/v3/client"
 	clientconfig "github.com/nange/easyss/v3/client/config"
@@ -157,8 +157,9 @@ func reserveTCPPort(t *testing.T) (int, *portReservation) {
 }
 
 // reserveSocks5Port 挑一个 TCP 与 UDP 两侧都空闲的 loopback 端口并占住它：
-// txthinking/socks5 服务器会在同一地址上同时绑定 TCP 监听器和 UDP socket，
-// 因此仅占住 TCP 侧的端口仍然无法保证它能启动。
+// SOCKS5 入口会在同一地址上绑定 TCP 监听器（Start）与 UDP 中继 socket
+// （UDP ASSOCIATE 时按 ListenAddr 绑定），因此仅占住 TCP 侧的端口仍然无法
+// 保证它能启动。
 func reserveSocks5Port(t *testing.T) (int, *portReservation) {
 	t.Helper()
 
@@ -359,9 +360,9 @@ type testHarness struct {
 	cli *client.Client
 
 	// closers 按启动顺序保存每个已启动组件的清理函数；Close 按相反顺序执行。
-	// socks5 代理只有在 Start 报告成功之后才会被追加：txthinking/socks5
-	// 会在绑定同一地址的 UDP socket 之前注册 TCP runner，因此一旦 Start
-	// 返回错误，其 Shutdown 会因 runner 组永不关闭的 done channel 而永久阻塞。
+	// socks5 代理只在 Start 报告成功之后才被追加，使清理函数只针对真正启动过
+	// 的组件——Start 失败时它已经把自己创建的监听器释放掉了（见
+	// Socks5Server.Start/Close）。
 	closers []func()
 
 	cleanupOnce sync.Once
@@ -545,23 +546,27 @@ func (h *testHarness) Close() {
 	})
 }
 
+// socks5DialFunc 返回一个 http.Transport 可用的 DialContext：它经 SOCKS5 入口
+// （无认证）连到目标地址。
+//
+// x/net/proxy 的 SOCKS5 客户端不在协商成功后残留 deadline，因此调用方不再需要
+// 像旧库时代那样手工 SetDeadline(time.Time{}) 清理握手 deadline。
+func socks5DialFunc(t *testing.T, socksAddr string) func(context.Context, string, string) (net.Conn, error) {
+	t.Helper()
+	d, err := xproxy.SOCKS5("tcp", socksAddr, nil, xproxy.Direct)
+	require.NoError(t, err)
+	cd, ok := d.(xproxy.ContextDialer)
+	require.True(t, ok, "x/net/proxy SOCKS5 dialer must support contexts")
+	return cd.DialContext
+}
+
 // TestV3Integration_Socks5Proxy 测试通过 v3 隧道经 SOCKS5 代理发起 HTTP 请求
 func TestV3Integration_Socks5Proxy(t *testing.T) {
 	h := newTestHarness(t)
 
-	sc, err := socks5.NewClient(h.socksAddr, "", "", 0, 0)
-	require.NoError(t, err)
-
 	client := &http.Client{
 		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				conn, err := sc.Dial(network, addr)
-				if err != nil {
-					return nil, err
-				}
-				_ = conn.SetDeadline(time.Time{})
-				return conn, nil
-			},
+			DialContext:         socks5DialFunc(t, h.socksAddr),
 			TLSHandshakeTimeout: 30 * time.Second,
 			MaxConnsPerHost:     1,
 		},
@@ -600,19 +605,9 @@ func TestV3Integration_HTTPProxy(t *testing.T) {
 func TestV3Integration_LocalDirect(t *testing.T) {
 	h := newTestHarness(t)
 
-	sc, err := socks5.NewClient(h.socksAddr, "", "", 0, 0)
-	require.NoError(t, err)
-
 	client := &http.Client{
 		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				conn, err := sc.Dial(network, addr)
-				if err != nil {
-					return nil, err
-				}
-				_ = conn.SetDeadline(time.Time{})
-				return conn, nil
-			},
+			DialContext:     socks5DialFunc(t, h.socksAddr),
 			MaxConnsPerHost: 1,
 		},
 		Timeout: 30 * time.Second,
@@ -629,41 +624,94 @@ func TestV3Integration_LocalDirect(t *testing.T) {
 	assert.Contains(t, string(body), "hello-from-target: /direct-test")
 }
 
-// TestV3Integration_CloseWrite 测试通过 SOCKS5 代理进行 TCP 半关闭
+// TestV3Integration_CloseWrite 测试通过 SOCKS5 代理进行 TCP 半关闭。
+//
+// 这里断言的是端到端行为：SOCKS5 入口返回的连接必须实现 CloseWrite，且半关闭要
+// 一路传播到目标、允许反方向继续传输。旧实现用 txthinking/socks5 的 *socks5.Client
+// 作为连接类型，它没有 CloseWrite，于是 relayTCP 的半关闭被静默跳过——当时的测试
+// 只能先断言出具体类型、再手工取出底层的 *net.TCPConn 才能触发半关闭。
 func TestV3Integration_CloseWrite(t *testing.T) {
 	h := newTestHarness(t)
 
 	msg := "hello-closewrite"
 
-	sc, err := socks5.NewClient(h.socksAddr, "", "", 30, 30)
-	require.NoError(t, err)
-
-	conn, err := sc.Dial("tcp", h.echoAddr)
-	require.NoError(t, err)
+	// 用裸 TCP + 手工握手拨号，而不是经 x/net/proxy：后者返回的是一个不透明的
+	// *socks.Conn 包装类型，拿不到底层 *net.TCPConn，也就无法在本机触发半关闭。
+	// 手工握手把断言点放回真正要验证的能力上——SOCKS5 入口把客户端的半关闭一路
+	// 传播到目标，并允许反方向继续传输。
+	conn := socks5HandshakeConnect(t, h.socksAddr, h.echoAddr)
 	defer conn.Close() //nolint:errcheck
 
-	// 清除 SOCKS5 协商设置的任何 deadline
-	_ = conn.SetDeadline(time.Time{})
-
-	// socks5.Client 包装了真实的 TCP 连接；将其取出以执行 CloseWrite
-	socksClient, ok := conn.(*socks5.Client)
-	require.True(t, ok, "expected *socks5.Client from SOCKS5 dial")
-	tcpConn, ok := socksClient.TCPConn.(*net.TCPConn)
-	require.True(t, ok, "expected *net.TCPConn as underlying connection")
-
-	// 发送消息
-	_, err = tcpConn.Write([]byte(msg))
+	_, err := conn.Write([]byte(msg))
 	require.NoError(t, err)
 
-	// 关闭写侧（半关闭）
-	err = tcpConn.CloseWrite()
-	require.NoError(t, err)
+	// 关闭写侧（半关闭）。
+	require.NoError(t, conn.CloseWrite())
 
-	// 读取响应
+	// 读取响应：半关闭不得影响反方向。
 	buf := make([]byte, 1024)
-	nr, err := tcpConn.Read(buf)
+	nr, err := conn.Read(buf)
 	require.NoError(t, err)
 	assert.Equal(t, msg, string(buf[:nr]))
+}
+
+// socks5HandshakeConnect 与 socksAddr 完成一次无认证 SOCKS5 握手并发起 CONNECT，
+// 返回底层 *net.TCPConn（因此调用方可以 CloseWrite 触发半关闭）。
+func socks5HandshakeConnect(t *testing.T, socksAddr, target string) *net.TCPConn {
+	t.Helper()
+
+	conn, err := net.Dial("tcp", socksAddr)
+	require.NoError(t, err)
+	t.Cleanup(func() { conn.Close() }) //nolint:errcheck
+	require.NoError(t, conn.SetDeadline(time.Now().Add(30*time.Second)))
+
+	// 握手：VER + NMETHODS + METHODS（只提供"无认证"）。
+	_, err = conn.Write([]byte{0x05, 0x01, 0x00})
+	require.NoError(t, err)
+	greeting := make([]byte, 2)
+	_, err = io.ReadFull(conn, greeting)
+	require.NoError(t, err)
+	require.Equal(t, []byte{0x05, 0x00}, greeting, "server must select no-auth")
+
+	// CONNECT：VER + CMD + RSV + ATYP=domain + 长度 + 域名 + 端口。
+	host, port, err := net.SplitHostPort(target)
+	require.NoError(t, err)
+	portNum, err := strconv.Atoi(port)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(host), 255)
+
+	req := []byte{0x05, 0x01, 0x00, 0x03, byte(len(host))}
+	req = append(req, host...)
+	req = append(req, byte(portNum>>8), byte(portNum))
+	_, err = conn.Write(req)
+	require.NoError(t, err)
+
+	// 应答：VER + REP + RSV + ATYP + BND.ADDR + BND.PORT。
+	hdr := make([]byte, 4)
+	_, err = io.ReadFull(conn, hdr)
+	require.NoError(t, err)
+	require.Equal(t, byte(0x05), hdr[0], "reply version")
+	require.Equal(t, byte(0x00), hdr[1], "CONNECT must succeed")
+	switch hdr[3] {
+	case 0x01:
+		_, err = io.ReadFull(conn, make([]byte, 6))
+	case 0x04:
+		_, err = io.ReadFull(conn, make([]byte, 18))
+	case 0x03:
+		var ln [1]byte
+		_, err = io.ReadFull(conn, ln[:])
+		require.NoError(t, err)
+		_, err = io.ReadFull(conn, make([]byte, int(ln[0])+2))
+	default:
+		t.Fatalf("unexpected bind atyp %d", hdr[3])
+	}
+	require.NoError(t, err)
+
+	// 之后是纯数据通道，清掉握手期的 deadline。
+	require.NoError(t, conn.SetDeadline(time.Time{}))
+	tcp, ok := conn.(*net.TCPConn)
+	require.True(t, ok, "dial to a local loopback listener must yield *net.TCPConn, got %T", conn)
+	return tcp
 }
 
 // TestV3Integration_Router 测试 router 是否正确地对主机进行分类
@@ -716,8 +764,7 @@ func TestV3Integration_ConfigDefaults(t *testing.T) {
 
 // TestReserveSocks5PortHoldsTCPAndUDP 固化了端口预留的契约：预留保持 TCP
 // 占位监听器与 UDP 占位 socket 打开，因此在 release 之前两侧都无法被其他
-// socket 绑定；release 之后 txthinking/socks5 需要的 TCP+UDP 双绑定即可
-// 成功。
+// socket 绑定；release 之后 SOCKS5 入口需要的 TCP+UDP 双绑定即可成功。
 func TestReserveSocks5PortHoldsTCPAndUDP(t *testing.T) {
 	port, r := reserveSocks5Port(t)
 	t.Cleanup(func() { r.release() })
