@@ -204,8 +204,9 @@ func sigWait() {
 // App 上的一个字段：nil 表示没有界面（原因只写日志），托盘构建在 buildTray 里把
 // 自己装上去，且早于首次 Start——因此引擎 goroutine 与它之间天然有 happens-before。
 type appUI interface {
-	// tunStartFailed 处理一次 TUN 引擎启动失败：回滚界面状态（菜单勾选、已建立
-	// 的提权 helper 会话）并按需说明原因。
+	// tunStartFailed 处理一次 TUN 引擎启动失败：会话已经由
+	// session.rollbackFailedTunStart 按引擎身份拆除，界面只需把自己的状态改回去
+	//（菜单勾选）并按需说明原因。
 	tunStartFailed(err error)
 	// notify 呈现一条面向用户的消息（系统通知，尽力而为）。
 	notify(msg string)

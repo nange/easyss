@@ -226,29 +226,23 @@ func TestFriendlyTunError(t *testing.T) {
 	}
 }
 
-// TestTrayStartTunFailureRevertsTheMenu 固定 appUI 在托盘上的实现：无论失败
-// 原因是什么，菜单都必须回到未勾选、TUN 会话都必须被拆除（"取下即停"）——
-// 否则下次启用会命中 session.tunUp 顶部的"已设置"保护，在菜单声称 TUN 已开启时
-// 静默地什么都不做。
+// TestTrayTunStartFailureUnchecksTheMenu 固定 appUI.tunStartFailed 在托盘上的界面
+// 契约：无论失败原因是什么，菜单都必须回到未勾选 —— 引擎没有在跑，勾着会让用户
+// 以为它在跑。会话的拆除由 session.rollbackFailedTunStart 负责（它还会核对失败的
+// 引擎是否仍属于当前会话），见 tun_start_test.go 的两条身份测试。
 //
 // 这个 TrayApp 没有托盘对象：通知此时只记日志（见 notifyUser 的 nil 守卫），
-// 而回滚是必须发生的部分。面向用户的文案由 TestFriendlyTunError 覆盖。
-func TestTrayStartTunFailureRevertsTheMenu(t *testing.T) {
+// 界面回滚是这里必须发生的部分。面向用户的文案由 TestFriendlyTunError 覆盖。
+func TestTrayTunStartFailureUnchecksTheMenu(t *testing.T) {
 	a := &TrayApp{App: newApp(&config.ClientConfig{}, "")}
 
 	item := systray.NewMenu().AddCheckbox("系统全局流量(Tun2socks)", true, nil)
 	a.SetTunMenu(item)
 
-	// 失败：回滚 + 说明原因（这里只记日志）。
 	a.tunStartFailed(errors.New("tun: create device: boom"))
 	require.False(t, item.IsChecked(), "失败后菜单必须回到未勾选")
 
-	a.sess.tunMu.Lock()
-	mgr := a.sess.tunMgr
-	a.sess.tunMu.Unlock()
-	require.Nil(t, mgr, "失败后必须拆除半启用的 TUN 会话")
-
-	// 主动停止（context.Canceled）：同样回滚，但不打扰用户（消息为空）。
+	// 主动停止（context.Canceled）：同样回滚勾选，但不打扰用户（消息为空）。
 	item.SetChecked(true)
 	a.tunStartFailed(fmt.Errorf("tun: start engine: %w", context.Canceled))
 	require.False(t, item.IsChecked(), "被主动取消的启动同样必须回滚菜单")

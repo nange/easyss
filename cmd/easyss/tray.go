@@ -234,27 +234,14 @@ func friendlyStartupWarning(err error) string {
 	return "启动警告：" + err.Error()
 }
 
-// notifyTunStartFailure 以系统通知形式呈现 TUN 启动失败。
-// 代理核心仍通过 SOCKS5/HTTP 运行 —— 只有系统全局流量受影响，
-// 而这正是用户刚请求的状态 —— 所以只写入日志文件的失败
-// 看起来会像一次静默的无操作。
-//
-// 空消息表示没有需要告知用户的内容（见 friendlyTunError）：
-// 启动是被有意取消的，而不是失败了。
-func (a *TrayApp) notifyTunStartFailure(msg string) {
-	if msg == "" {
-		return
-	}
-	a.notifyUser(msg)
-}
-
 // 以下三个方法是 appUI 的实现（见 main.go）：主程序通过 App.ui 回调它们，
 // 因此不需要条件编译，也不需要过去那四个包级函数变量。
 
-// notify 呈现一条面向用户的消息（等价于过去的 tunStartNotify）。它刻意不检查
-// "托盘是否已就绪"：初始启动期间（buildTray 尚未返回、trayBuilt 还没关闭）TUN 被
-// 跳过的提示必须照常显示，否则"网络尚未就绪"这类开机场景会变得无声无息。
-// 通知本身是尽力而为的，没有托盘时 notifyUser 只记日志。
+// notify 呈现一条面向用户的消息，是托盘上"告知用户"的唯一入口（内部调用与
+// appUI 回调都走它）。它刻意不检查"托盘是否已就绪"：初始启动期间（buildTray
+// 尚未返回、trayBuilt 还没关闭）TUN 被跳过的提示必须照常显示，否则"网络尚未就绪"
+// 这类开机场景会变得无声无息。通知本身是尽力而为的：空消息不打扰用户（见
+// friendlyTunError），没有托盘时 notifyUser 只记日志。
 func (a *TrayApp) notify(msg string) {
 	if msg == "" {
 		return
@@ -268,18 +255,23 @@ func (a *TrayApp) serverDomainReady(msg string) {
 	a.notify(msg)
 }
 
-// tunStartFailed 是"TUN 引擎启动失败"在托盘上的唯一处理者：先回滚界面状态
-// （菜单勾选，以及提权 helper 已经建立的路由/DNS），再按需说明原因。
+// tunStartFailed 是 appUI 的实现：把一次 TUN 引擎启动失败的界面状态改回去，
+// 并按需说明原因。
 //
-// 用户主动造成的失败 —— Stop() 取消启动：关闭开关、切换服务器、退出应用 ——
-// 由 friendlyTunError 归为"无消息"：那不值得打扰用户。回滚仍然无条件执行：
-// 无论谁停止了什么，菜单最终都必须处于未勾选状态。
+// 会话本身已经由 session.rollbackFailedTunStart 拆除（它还会核对那个失败的引擎
+// 是否仍属于当前会话，迟到的回调不会动到新会话），这里只碰界面：取消菜单勾选，
+// 然后说明原因。菜单必须回到未勾选：引擎没有在跑，勾着会让用户以为它在跑。
+//
+// 用户主动造成的失败 —— Stop() 取消启动：关闭开关、切换服务器、退出应用 —— 由
+// friendlyTunError 归为"无消息"：那不值得打扰用户，但菜单同样要回到未勾选。
 func (a *TrayApp) tunStartFailed(err error) {
-	a.revertTunStart()
+	if mi := a.TunMenu(); mi != nil {
+		mi.SetChecked(false)
+	}
 	if err == nil {
 		return
 	}
-	a.notifyTunStartFailure(friendlyTunError(err))
+	a.notify(friendlyTunError(err))
 }
 
 // friendlyTunError 将 tun2socks 启动失败转换为用户友好的中文提示。
@@ -708,21 +700,6 @@ func (a *TrayApp) setSysProxyOff() error {
 	return sysProxyRevert()
 }
 
-// revertTunStart 撤销一次在 manager 构建后失败的 TUN 启动。它是
-// appUI.tunStartFailed 的第一步，因此菜单开关和启动路径都会走到这里。
-//
-// 仅取消菜单勾选还不够：session.tunDown 还会清空 tunMgr，否则下次启用会命中
-// session.tunUp 顶部的"已设置"保护，在菜单声称 TUN 已开启时静默地什么都不做。
-// 在 fd 路径上，助手进程已经安装了路由和 DNS，因此也必须告诉它拆除这些。
-func (a *TrayApp) revertTunStart() {
-	if mi := a.TunMenu(); mi != nil {
-		mi.SetChecked(false)
-	}
-	if err := a.sess.tunDown(); err != nil {
-		log.Error("[SYSTRAY] close tun2socks after start failure", "err", err)
-	}
-}
-
 // enableTun2socks 在后台 goroutine 中运行 TUN 启用流程，
 // 以保持托盘菜单响应。失败时它回滚菜单勾选并通知用户：
 // 否则失败不可见，因为代理核心继续提供 SOCKS5/HTTP 服务，
@@ -736,7 +713,7 @@ func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 	if !canStartTunNow(a.currentCore()) {
 		log.Warn("[SYSTRAY] tun2socks refused: server domain not resolved yet")
 		menu.SetChecked(false)
-		a.notifyTunStartFailure("服务端域名尚未解析成功，暂时无法开启系统全局流量；请等待网络恢复后重试")
+		a.notify("服务端域名尚未解析成功，暂时无法开启系统全局流量；请等待网络恢复后重试")
 		return
 	}
 
@@ -748,14 +725,14 @@ func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 		if err := a.sess.tunUpViaHelper(); err != nil { //nolint:staticcheck // always fails on non-unix builds; branch unreachable
 			log.Error("[SYSTRAY] create tun2socks via helper", "err", err)
 			menu.SetChecked(false)
-			a.notifyTunStartFailure(friendlyTunError(err))
+			a.notify(friendlyTunError(err))
 			return
 		}
 	} else {
 		if err := a.sess.tunUp(); err != nil {
 			log.Error("[SYSTRAY] create tun2socks", "err", err)
 			menu.SetChecked(false)
-			a.notifyTunStartFailure(friendlyTunError(err))
+			a.notify(friendlyTunError(err))
 			return
 		}
 	}

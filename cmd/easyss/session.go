@@ -74,6 +74,12 @@ type session struct {
 	// statsCloser 属于会话状态：start 换新通道，stop 关闭它。
 	statsCloser chan struct{}
 
+	// verifyTeardown 是拆除时"等提权 helper 退出 + 复核系统路由表"这一步，
+	// 由平台文件提供实现（见 tray_tun_teardown_unix.go 的 platformTunTeardown 与
+	// 它在其他平台上的空实现）。它是字段而不是直接调用，使测试可以在任何平台上
+	// 替换它，不必为每个平台写一份按构建标签分文件的测试。
+	verifyTeardown func(dev tun.DeviceConfig, helperSignalled bool) error
+
 	// tunMgr 是当前 TUN 会话的引擎；tunSession 是它启用时实际使用的设备/网关
 	// 配置（关闭时用它——而不是关闭时的 tunMgr——核对路由与回滚：fd 路径的
 	// manager 只携带请求的设备名，而会话的本地网关等取值到关闭时可能已经变化）。
@@ -83,7 +89,9 @@ type session struct {
 	tunHelperStdin io.WriteCloser
 }
 
-func newSession(app *App) *session { return &session{app: app} }
+func newSession(app *App) *session {
+	return &session{app: app, verifyTeardown: platformTunTeardown}
+}
 
 // run 在序列锁下执行一次完整的"停→起"序列。切换服务器、自更新重启与退出拆除
 // 都必须走这里：它们各自由新的 goroutine 驱动（托盘的每次点击一个），并发执行会
@@ -305,13 +313,23 @@ func (s *session) buildICMPHandler(core *runner.Core) {
 	s.tunMgr.SetICMPHandler(icmpHandler)
 }
 
-// tunDown 关闭一次 TUN 会话并撤销它对系统做的改动。
+// tunDown 关闭当前 TUN 会话并撤销它对系统做的改动。
 //
 // 步骤顺序是硬约束（见每一步的注释），因此它同时被托盘开关、切换服务器前的拆除
 // 与 TUN 启动失败的回滚复用。
 func (s *session) tunDown() error {
 	s.tunMu.Lock()
 	defer s.tunMu.Unlock()
+	return s.tunDownLocked(nil)
+}
+
+// tunDownLocked 是拆除本体，调用方持有 tunMu。want 非 nil 时要求它仍是当前会话的
+// 引擎，否则什么都不做：只有迟到的失败回调会这样调用（见 rollbackFailedTunStart），
+// 它针对的会话已经被替换，拆除后来者就是拆掉用户刚打开的那个 TUN。
+func (s *session) tunDownLocked(want *tun.Manager) error {
+	if want != nil && s.tunMgr != want {
+		return nil
+	}
 
 	// 会话配置必须在清空 tunMgr 之前取下来：它既用于校验，也用于兜底回滚。
 	dev := s.tunSession
@@ -343,8 +361,15 @@ func (s *session) tunDown() error {
 		helperSignalled = true
 	}
 
-	// 3. 等助手进程退出并复核系统路由表（仅 darwin/linux 的提权路径）。
-	s.finishTunTeardown(dev, helperSignalled)
+	// 3. 等助手进程退出并复核系统路由表（仅 darwin/linux 的提权路径；其他
+	//    平台与 headless 构建上是空实现）。
+	if dev != nil {
+		if err := s.verifyTeardown(*dev, helperSignalled); err != nil {
+			log.Error("[SYSTRAY] tunDown: TUN teardown left routes behind", "err", err)
+			s.app.notifyTunTeardownProblem(
+				"TUN 已停止，但系统路由表里仍残留指向 TUN 的路由，本机可能无法上网。请退出并重新启动 Easyss，或重启系统以恢复网络。详情：" + err.Error())
+		}
+	}
 
 	// 4. 清除 HTTP /tun 配置。
 	if core := s.currentCore(); core != nil && core.HTTPServer != nil {
@@ -407,11 +432,37 @@ func (s *session) startTunEngine(mgr *tun.Manager, mode string) {
 	go func() {
 		if err := mgr.Start(); err != nil {
 			log.Error("[EASYSS-V3] tun2socks start", "mode", mode, "err", err)
-			if s.app.ui != nil {
-				s.app.ui.tunStartFailed(err)
-			}
+			s.rollbackFailedTunStart(mgr, err)
 		}
 	}()
+}
+
+// rollbackFailedTunStart 回滚一次失败的 TUN 启动：拆掉那次会话，再让界面复原菜单
+// 勾选并说明原因。
+//
+// "核对身份 → 拆除"必须在同一个 tunMu 临界区内完成，因为这条回调可能迟到：
+// tunDown 会取消在飞的 Start（tun.Manager.Stop 等它返回），而那个 goroutine 要等
+// Start 返回之后才走到这里；这期间用户完全可能已经重新打开了 TUN（或换了服务器
+// 又重新打开），此时会话里已经是另一个引擎。按引擎身份过滤后，迟到的回调只留下
+// 一条"已忽略"的日志：它既不会拆掉刚建立的新会话，也不会清掉新会话的启用偏好，
+// 更不会把菜单勾选取消成与实际状态不符。
+//
+// 界面部分放在锁外做：托盘会去改菜单项并弹系统通知，不该在持有 tunMu 时调用。
+func (s *session) rollbackFailedTunStart(mgr *tun.Manager, err error) {
+	s.tunMu.Lock()
+	if s.tunMgr != mgr {
+		s.tunMu.Unlock()
+		log.Info("[EASYSS-V3] tun2socks start failure ignored: its session has been replaced", "err", err)
+		return
+	}
+	if downErr := s.tunDownLocked(mgr); downErr != nil {
+		log.Error("[EASYSS-V3] tun2socks rollback after start failure", "err", downErr)
+	}
+	s.tunMu.Unlock()
+
+	if s.app.ui != nil {
+		s.app.ui.tunStartFailed(err)
+	}
 }
 
 func (s *session) statsLoop(done <-chan struct{}) {
