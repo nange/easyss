@@ -4,27 +4,21 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"sync"
 	"sync/atomic"
 	"syscall"
-	"time"
 	_ "time/tzdata"
 
 	"github.com/nange/easyss/v3/client/config"
 	easydns "github.com/nange/easyss/v3/client/dns"
-	"github.com/nange/easyss/v3/client/tun"
 	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
-	"github.com/nange/easyss/v3/pprof"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/runner"
 	"github.com/nange/easyss/v3/selfupdate"
-	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/version"
 )
@@ -203,6 +197,23 @@ func sigWait() {
 	log.Info("[EASYSS-V3] got signal to exit", "signal", <-c)
 }
 
+// appUI 是运行期向用户呈现状态所需的最小界面。它取代了过去四个包级函数变量
+// （tunStartFailureHook / tunStartNotify / tunStartErrorText / serverDomainReadyNotify）：
+// 那些钩子由托盘在 buildTray 中安装，headless 与 --disable-tray 构建保持 nil，而
+// "装了哪几个、谁在什么时候装、没装时哪条分支静默"只能靠通读代码确认。现在它是
+// App 上的一个字段：nil 表示没有界面（原因只写日志），托盘构建在 buildTray 里把
+// 自己装上去，且早于首次 Start——因此引擎 goroutine 与它之间天然有 happens-before。
+type appUI interface {
+	// tunStartFailed 处理一次 TUN 引擎启动失败：会话已经由
+	// session.rollbackFailedTunStart 按引擎身份拆除，界面只需把自己的状态改回去
+	//（菜单勾选）并按需说明原因。
+	tunStartFailed(err error)
+	// notify 呈现一条面向用户的消息（系统通知，尽力而为）。
+	notify(msg string)
+	// serverDomainReady 报告后台重试已解析出服务端域名、代理恢复可用。
+	serverDomainReady(msg string)
+}
+
 type App struct {
 	// cfg 是当前配置快照。它一经发布即视为不可变：菜单改动走 updateConfig
 	//（克隆 → 改 → CAS 交换），启动/切换把快照交给新会话，运行中的会话持有
@@ -212,71 +223,33 @@ type App struct {
 	cfg        atomic.Pointer[config.ClientConfig]
 	configFile string // 配置文件绝对路径
 
-	// core 是当前运行的代理核心。读者（后台统计循环、托盘菜单处理器）在
-	// 各自 goroutine 上无锁取快照，因此用原子指针发布这个事实：
-	//   - core 一旦发布就不再变化，Start 装载、Stop 取下即停；
-	//   - 读点只 Load 一次到局部变量——旧代码
-	//     `a.core != nil && a.core.Client != nil` 会在两次读之间被 Stop 清空，
-	//     那是 nil 解引用，不只是数据竞争。
-	core atomic.Pointer[runner.Core]
+	// ui 是运行期界面（见 appUI）。托盘在 buildTray 中安装自己；headless 与
+	// --disable-tray 构建保持 nil，此时原因只写日志。
+	ui appUI
 
-	tunMgr   *tun.Manager
-	pprofSrv *http.Server
-
-	// tunHelperMu 串行化 TUN 会话的建立与拆除。托盘的每次点击都在自己的
-	// goroutine 里（启用与关闭会并发执行），启动期的直接创建（App.Start）
-	// 与收尾（App.Stop）也在其中，而它们写的是同一组字段
-	// （tunMgr 与托盘侧的 tunSession/tunHelperStdin），因此必须共用同一把锁。
-	//
-	// 锁序：stateMu → tunHelperMu。Start/Stop 全程持有 stateMu，在它之内取
-	// 这把锁；TUN 开关路径不会调用 Start/Stop，因此不存在反向顺序。
-	tunHelperMu sync.Mutex
-
-	// startupWarn 记录首个非致命启动警告（例如服务端域名解析失败，
-	// 或自定义规则文件加载失败）。客户端继续运行；托盘以系统通知形式
-	// 呈现，headless 构建则记入日志。
-	// 它是会话级状态：Start 在会话起点重置它（持 stateMu），所有读者
-	// 一律走 currentStartupWarn()，因为恢复流程与切换/启动分属不同 goroutine。
-	startupWarn error
-
-	// tunSkippedForNetwork 记录启动时因服务端域名尚未解析成功（开机网络还
-	// 没就绪）而跳过了 TUN；后台解析恢复后据此在通知里提醒用户手动开启。
-	tunSkippedForNetwork bool
-
-	// stateMu 串行化一次会话（Start/Stop）对运行期字段的全部改写：
-	// core/tunMgr/pprofSrv/statsCloser（tunMgr 另外还与托盘 TUN 开关共用
-	// tunHelperMu，见下）。读侧不经过它——热点读者只读原子指针，
-	// 否则后台统计 tick 与托盘菜单会阻塞在秒级的 Start（runner.Run）或
-	// 最长可达 60s 的 TUN 拆除上。
-	//
-	// 它取代了过去的 stopOnce：字段在取下后即为 nil，重复的 Stop 自然是空操作，
-	// 因此 restartService 不再需要整体重建 App（*a.App = App{...}）来重置
-	// once——整体重建既复制 App 上的互斥锁与原子字段，也会让并发读者看到
-	// 撕裂状态。startStatsLoop/stopStatsLoop 的调用方持有它（它原先由
-	// statsMu 保护，统计循环的停止通道同属会话状态）。
-	stateMu     sync.Mutex
-	statsCloser chan struct{}
+	// sess 持有本次会话的全部可变状态与它自己的锁：核心、TUN 引擎、pprof
+	// 服务器、后台统计循环与会话级标量。App 上不再有任何会话锁字段——改写
+	// 会话只能通过 session 的方法（锁序见 session.go）。
+	sess *session
 }
 
-// coreGen 为每次 App.Start 启动的核心分配单调递增的序号，供后台 goroutine
-// 判断自己观察的核心是否仍是当前核心。它留在包级：序号只要求进程内单调，
-// 而 App 的生命周期（包括测试中新建的实例）都共用同一个计数器。
+// coreGen 为每次会话启动的核心分配单调递增的序号，供后台 goroutine 判断自己
+// 观察的核心是否仍是当前核心。它留在包级：序号只要求进程内单调，而 App 的
+// 生命周期（包括测试中新建的实例）都共用同一个计数器。
 var coreGen atomic.Uint64
 
 // currentCore 返回当前核心的快照；nil 表示没有会话在运行。
-func (a *App) currentCore() *runner.Core { return a.core.Load() }
+func (a *App) currentCore() *runner.Core { return a.sess.currentCore() }
 
-// installCore 发布一次 Start 建立的核心（调用方持有 stateMu）。
-func (a *App) installCore(core *runner.Core) { a.core.Store(core) }
-
-// takeCore 取走当前核心的所有权并清空：调用者负责停止它。"取下"与"停止"
-// 是同一步，因此并发/重复的 Stop 不会二次拆除，读侧也绝不会拿到一个正在
-// 停止的核心。
-func (a *App) takeCore() *runner.Core { return a.core.Swap(nil) }
+// currentStartupWarn 返回本次会话的启动警告快照。它由 session.start 在锁内
+// 重置/写入，因此凡是不与那次 start 同 goroutine 的读者都必须走这里——自更新
+// 失败后的恢复流程（restartServiceInSequence）与启动就分属不同 goroutine。
+func (a *App) currentStartupWarn() error { return a.sess.startupWarning() }
 
 // newApp 用一个初始配置构造 App：它是 App 持有的第一份不可变快照。
 func newApp(cfg *config.ClientConfig, configFile string) *App {
 	a := &App{configFile: configFile}
+	a.sess = newSession(a)
 	a.adoptConfig(cfg)
 	return a
 }
@@ -316,26 +289,10 @@ func (a *App) updateConfig(fn func(*config.ClientConfig)) {
 	}
 }
 
-// currentStartupWarn 返回本次会话的启动警告快照。startupWarn 由 Start 在
-// stateMu 下重置/写入，因此凡是不与那次 Start 同 goroutine 的读者都必须走
-// 这里——自更新失败后的恢复流程（restartServiceWith）与切换/启动就分属不同
-// goroutine。同一调用链上的读者（buildTray、start.go、start_headless.go 在
-// Start 返回后立即读）也因此统一走访问器，规则只有一条。
-func (a *App) currentStartupWarn() error {
-	a.stateMu.Lock()
-	defer a.stateMu.Unlock()
-	return a.startupWarn
-}
-
-// runCore 启动一次代理核心。它作为变量（与 restartServiceWith 注入 start
+// runCore 启动一次代理核心。它作为变量（与 restartServiceInSequence 注入 start
 // 是同一模式），使测试能注入零值核心来并发驱动真实的 Start/Stop，而不必
 // 监听本地端口或连网络。
 var runCore = runner.Run
-
-// serverDomainReadyNotify 非 nil 时，通过托盘系统通知报告"后台重试已解析出
-// 服务端域名、代理恢复可用"。托盘构建在 buildTray 中安装它；headless 与
-// --disable-tray 构建保持 nil，此时恢复过程只体现在日志里（由 runner 输出）。
-var serverDomainReadyNotify func(msg string)
 
 // serverDomainReadiness 是启动路径需要的最小核心视图：服务端域名是否已就绪，
 // 以及核心何时停止。抽成接口是为了能在测试中注入假实现
@@ -370,9 +327,9 @@ func canStartTunNow(core serverDomainReadiness) bool {
 // watchServerDomainReady 在降级启动（服务端域名暂不可解析）后，等待后台重试
 // 成功并向用户报告一次。pending 为 false（启动即就绪）时不派发任何 goroutine，
 // 否则每次正常启动都会弹一条无意义通知。tunSkipped 由调用方在派发前读取，
-// 使 goroutine 不必访问会被 restartService 重建的 App 字段。
+// 使 goroutine 不必访问会被下一次启动改写的会话字段。
 func (a *App) watchServerDomainReady(core serverDomainReadiness, gen uint64, pending, tunSkipped bool) {
-	if !pending || core == nil || serverDomainReadyNotify == nil {
+	if !pending || core == nil || a.ui == nil {
 		return
 	}
 	ready, done := core.ServerDomainReady(), core.Done()
@@ -400,235 +357,46 @@ func (a *App) watchServerDomainReady(core serverDomainReadiness, gen uint64, pen
 		if tunSkipped {
 			msg += "；系统全局流量(Tun2socks)启动时已跳过，可在托盘菜单中重新开启"
 		}
-		serverDomainReadyNotify(msg)
+		a.ui.serverDomainReady(msg)
 	}()
 }
 
-func (a *App) Start() error {
-	// Start/Stop 全程串行：托盘的切换、自更新重启与退出路径都在各自的
-	// goroutine 里，Stop 还会在启动期间的切换请求里与 Start 交错。
-	a.stateMu.Lock()
-	defer a.stateMu.Unlock()
+// Start 启动一次代理会话。会话状态与它自己的锁都在 session 里（见 session.go）：
+// App 上不再有会话锁字段，也没有"调用方持有锁"的契约。
+func (a *App) Start() error { return a.sess.start() }
 
-	// 会话级状态在会话起点重置。过去这一步由 restartService 的整体重建
-	// （*a.App = App{...}）顺带完成；重建移除后必须在这里做，否则上一轮的
-	// 启动警告会既抑制新一轮的 setStartupWarn（它只在 nil 时写入），
-	// 又被 restartServiceWith 重复上报。
-	a.startupWarn = nil
-	a.tunSkippedForNetwork = false
-
-	// 本次会话的配置快照：它一经发布即不可变，因此可以安全地交给核心
-	//（核心持有它并做运行期读取，见 client.Client.cfg），不会被菜单改动。
-	sessionCfg := a.currentConfig()
-
-	core, err := runCore(sessionCfg)
-	if err != nil {
-		return err
-	}
-	a.installCore(core)
-	a.setStartupWarn(core.StartupWarn)
-	gen := coreGen.Add(1)
-	// 降级启动（开机时网络未就绪、服务端域名暂不可解析）时为 true。
-	domainPending := !canStartTunNow(core)
-
-	if sessionCfg.Local.EnableTun2socks {
-		// 在 macOS 和 Linux 非 root 环境下，TUN 通过提权启动（助手进程或以 root 重启）。
-		// 这里跳过直接创建，以避免 "operation not permitted"。到达该分支意味着
-		// 用户请求了系统全局流量但无法获得，因此托盘会告知原因，
-		// 而不是留下一个静默未代理的系统。main.go 与 headless 构建共享，
-		// 所以这里通过 tunStartNotify 而非直接使用托盘。
-		if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !IsRoot() {
-			log.Warn("[EASYSS-V3] tun2socks requires root; skipped (use sudo, or run with system tray for automatic elevation)")
-			notifyTunSkippedNoRoot()
-		} else if !domainPending {
-			// runner.Run 已确保服务端主机名可解析并预填充了 DNS 缓存
-			//（resolveServerDomain），因此 TUN 模式的 DNS 永远不会在服务端域名上死锁。
-			a.startTunEngineAtStartup()
-		} else {
-			// 开机时网络常常尚未就绪，服务端域名还没解析出来。此时照常启用 TUN
-			// 会让平台脚本把系统 DNS 指向本机转发服务器，而解析服务端域名又需要
-			// 隧道本身（递归）；网络根本没起来时脚本还会因缺默认网关失败。
-			// 因此跳过 TUN，并把配置与托盘勾选同步为"未启用"，等网络恢复后由
-			// 用户手动开启（届时 canStartTunNow 放行）。
-			a.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = false })
-			a.tunSkippedForNetwork = true
-			log.Warn("[EASYSS-V3] server domain not resolved yet; tun2socks skipped until the network is ready")
-			notifyTunSkippedNetworkUnready()
-		}
-	}
-
-	// 核心不再从共享配置里"顺带"看到 TUN 状态（见 client.Client.tunMode）：
-	// 在决定完本会话是否真的启用 TUN 之后显式告知一次。取的是调整之后的偏好，
-	// 因此与拆分前的语义一致（非 root 跳过时仍为 true，降级跳过时已被置为 false）。
-	//
-	// 这里重读 currentConfig()（而不是复用上面的 sessionCfg）是刻意的：这次启动
-	// 可能正与一次 TUN 开关并发，核心应当拿到最新的意图。若"优化"成
-	// SetTunMode(sessionCfg.Local.EnableTun2socks)，并发开关的意图就会被丢掉。
-	// Client 的 nil 守卫与托盘路径一致（测试会注入零值核心）。
-	if core.Client != nil {
-		core.Client.SetTunMode(a.currentConfig().Local.EnableTun2socks)
-	}
-
-	a.startStatsLoop()
-
-	if sessionCfg.PprofEnabled {
-		a.pprofSrv = pprof.StartPprof()
-	}
-
-	// 降级启动时，网络恢复后向用户报告一次（仅托盘构建安装了 hook）。
-	a.watchServerDomainReady(core, gen, domainPending, a.tunSkippedForNetwork)
-
-	return nil
-}
-
-// startTunEngineAtStartup 在启动路径上创建 TUN 管理器并派发引擎启动。
-// 构造顺序与托盘菜单路径（TrayApp.createTun2socks）保持一致。
-func (a *App) startTunEngineAtStartup() {
-	core := a.currentCore()
-	if core == nil || core.Client == nil {
-		return
-	}
-
-	// 与托盘开关路径（TrayApp.createTun2socks）共用同一把锁：两者写的是同一个
-	// tunMgr，而托盘的菜单在 Start 之前就已经可见，点击与启动期创建会并发。
-	a.tunHelperMu.Lock()
-	defer a.tunHelperMu.Unlock()
-
-	a.tunMgr = tun.New(a.tunConfig())
-
-	icmpHandler := tun.NewICMPHandler(core.Client.Router())
-	icmpHandler.SetProxy(core.StreamHandler, a.methodFromServer())
-	a.tunMgr.SetICMPHandler(icmpHandler)
-
-	startTunEngine(a.tunMgr, "device")
-}
-
-// notifyTunSkippedNetworkUnready 报告 TUN 因服务端域名尚未解析成功而跳过。
-// 与 notifyTunSkippedNoRoot 一样走 tunStartNotify：headless 与 --disable-tray
-// 构建没有托盘 hook，原因只写日志。
-func notifyTunSkippedNetworkUnready() {
-	if tunStartNotify != nil {
-		tunStartNotify("网络尚未就绪：已跳过系统全局流量(Tun2socks)；网络恢复后请在托盘菜单中重新开启")
-	}
-}
-
-// tunStartFailureHook 非 nil 时，会在 TUN 引擎启动失败后执行。
-// 托盘构建在 buildTray 中安装它，这样启动时的失败也会回滚菜单项
-// （见 (*TrayApp).revertTunStart）。headless 和 --disable-tray 构建保持其为 nil：
-// 它们没有可回滚的 UI 状态，引擎由 Stop() 释放。它只被 trayStartTunFailure 调用，
-// 后者还会向用户报告失败原因。
-var tunStartFailureHook func()
-
-// tunStartNotify 非 nil 时，通过托盘的系统通知向用户报告 TUN 启动失败。
-// 托盘构建在 buildTray 中安装它（见 (*TrayApp).notifyTunStartFailure）；
-// headless 和 --disable-tray 构建保持其为 nil，因此原因只会写入日志文件。
-// 没有它，失败将不可见：代理核心继续运行，只是用户刚开启的状态
-// （系统全局流量）缺失。
-var tunStartNotify func(msg string)
-
-// tunStartErrorText 非 nil 时，将 TUN 启动错误转换为展示给用户的消息，
-// 对用户有意造成的失败可返回空字符串（见 tray.go 中的 friendlyTunError，
-// 在 buildTray 中安装）。在 headless 和 --disable-tray 构建中保持为 nil，
-// 此时 trayStartTunFailure 回退到 err.Error() —— main.go 被编译进每个构建，
-// 无法引用 tray.go。
-//
-// 当前值在引擎 goroutine 上读取，因此只在启动期间、任何引擎启动可能失败之前
-// 写入一次。
-var tunStartErrorText func(err error) string
-
-// startTunEngine 在后台启动 tun2socks 引擎。Manager.Start
-// 会阻塞至设备设置、稳定等待延迟和平台路由脚本完成（最长 60 秒），
-// 因此不能放在调用方 goroutine 上运行。
-//
-// mode 表示设备获取方式（"device" 表示按名称、"fd" 表示来自提权助手），
-// 以便失败可追溯到两条路径之一。
-//
-// 上游把启动失败作为错误返回，而不是像过去那样用 log.Fatalf 杀死进程
-// （tun2socks #550/#552），因此半启用状态必须由其持有者撤销，而不是靠退出进程。
-func startTunEngine(mgr *tun.Manager, mode string) {
-	go func() {
-		if err := mgr.Start(); err != nil {
-			log.Error("[EASYSS-V3] tun2socks start", "mode", mode, "err", err)
-			trayStartTunFailure(err)
-		}
-	}()
-}
-
-// trayStartTunFailure 是"TUN 引擎启动失败"的唯一处理者：
-// 它回滚半启用状态（hook）并向用户说明原因（notify）。
-//
-// tunStartErrorText 对用户主动要求而非被动承受的失败可返回空消息
-// （见 friendlyTunError）：Stop() 取消启动 —— 关闭开关、切换服务器、退出应用 ——
-// 都不值得为此打扰用户。这种情况下回滚仍会执行：无论谁停止了什么，
-// 菜单最终都必须处于未勾选状态。
-func trayStartTunFailure(err error) {
-	if tunStartFailureHook != nil {
-		tunStartFailureHook()
-	}
-	if err == nil {
-		return
-	}
-	msg := err.Error()
-	if tunStartErrorText != nil {
-		msg = tunStartErrorText(err)
-	}
-	if msg != "" && tunStartNotify != nil {
-		tunStartNotify(msg)
-	}
-}
+// Stop 停止当前会话：核心、TUN 引擎与 pprof 服务器。它幂等，"取下即停"。
+func (a *App) Stop() { a.sess.stop() }
 
 // notifyTunSkippedNoRoot 报告 TUN 已配置但因缺少管理员权限而无法启动。
 // 提示文本是固定的：没有可附加的底层错误，而且可操作的建议在
 // 到达该路径的所有平台上都一样。
-func notifyTunSkippedNoRoot() {
-	if tunStartNotify != nil {
-		tunStartNotify("Tun2socks 未启用：需要管理员权限，请以 root 运行或使用系统托盘授权")
-	}
+func (a *App) notifyTunSkippedNoRoot() {
+	a.notifyTunSkipped("Tun2socks 未启用：需要管理员权限，请以 root 运行或使用系统托盘授权")
 }
 
-// setStartupWarn 记录首个非致命启动警告。客户端继续运行；
-// 托盘以系统通知形式呈现，headless 构建则记入日志。
-// 调用方持有 stateMu（只被 App.Start 调用），与 currentStartupWarn 配对。
-func (a *App) setStartupWarn(err error) {
-	if err == nil || a.startupWarn != nil {
+// notifyTunSkippedNetworkUnready 报告 TUN 因服务端域名尚未解析成功而跳过。
+func (a *App) notifyTunSkippedNetworkUnready() {
+	a.notifyTunSkipped("网络尚未就绪：已跳过系统全局流量(Tun2socks)；网络恢复后请在托盘菜单中重新开启")
+}
+
+// notifyTunSkipped 通过界面报告"TUN 被跳过"。没有界面（headless 与
+// --disable-tray 构建）时不派发任何东西：原因已由调用方写入日志。
+func (a *App) notifyTunSkipped(msg string) {
+	if a.ui == nil {
 		return
 	}
-	a.startupWarn = err
-	log.Warn("[EASYSS-V3] startup warning", "err", err)
+	a.ui.notify(msg)
 }
 
-// Stop 停止核心、TUN 引擎与 pprof 服务器。顺序是硬约束：TUN 依赖核心的本地
-// 代理入口，必须先停。它幂等，而且是"取下即停"——每个字段在被取走后即为 nil，
-// 因此重复或并发的 Stop 不会二次停止同一个对象，也不需要 stopOnce 那样的
-// 一次性状态（那正是过去 restartService 必须整体重建 App 的原因）。
-func (a *App) Stop() {
-	a.stateMu.Lock()
-	defer a.stateMu.Unlock()
-
-	a.stopStatsLoop()
-
-	// TUN 的收尾与"取下核心"必须共用 tunHelperMu 这把锁（见 App.tunHelperMu）：
-	//   - 托盘的 TUN 开关在锁内检查 currentCore()，这里在同一临界区里把核心
-	//     取下，后到的开关就会看到 nil 并回滚菜单，不会给一个已停止的核心装上
-	//     新的 TUN 引擎；
-	//   - 先到的开关留下的 tunMgr 由这里收走并停止，不会泄漏（它的分流路由
-	//     留在路由表里就是"全机断网"，见 closeTun2socks 的注释）。
-	// 核心的停止放在锁外：它可能等待在飞中继结束，不该挡住 TUN 开关。
-	a.tunHelperMu.Lock()
-	if mgr := a.tunMgr; mgr != nil {
-		a.tunMgr = nil
-		mgr.Stop()
+// notifyTunTeardownProblem 报告 TUN 拆除不完整（路由残留且回滚失败）。
+// 这是用户必须知道的状态：残留的分流默认路由会把全机流量黑洞掉。
+func (a *App) notifyTunTeardownProblem(msg string) {
+	if a.ui == nil {
+		log.Warn("[EASYSS-V3] notify skipped: no ui", "msg", msg)
+		return
 	}
-	core := a.takeCore()
-	a.tunHelperMu.Unlock()
-
-	if core != nil {
-		core.Stop()
-	}
-	if srv := a.pprofSrv; srv != nil {
-		a.pprofSrv = nil
-		pprof.StopPprof(srv)
-	}
+	a.ui.notify(msg)
 }
 
 // setupSysProxy 按配置把系统代理指向本地 HTTP 代理（见 setSysProxy）。
@@ -661,124 +429,6 @@ func teardownSysProxy(applied bool) {
 	if err := sysProxyRevert(); err != nil {
 		log.Warn("[EASYSS-V3] unset system proxy failed, you may need to restore it manually", "err", err)
 	}
-}
-
-// startStatsLoop（重新）启动后台统计日志器，若之前的循环仍在运行则将其停止。
-// 停止 channel 被 goroutine 捕获，因此后续重启不会让旧循环在新 channel 上 select。
-//
-// 调用方必须持有 stateMu（只被 App.Start 调用）：statsCloser 属于会话状态，
-// 与 core/tunMgr/pprofSrv 共用同一把锁。
-func (a *App) startStatsLoop() {
-	if a.statsCloser != nil {
-		close(a.statsCloser)
-	}
-	a.statsCloser = make(chan struct{})
-	go a.statsLoop(a.statsCloser)
-}
-
-// stopStatsLoop 停止后台统计日志器。对从未启动过统计日志器的 App 调用是安全的，
-// 重复调用也是安全的。调用方必须持有 stateMu（只被 App.Stop 调用）。
-func (a *App) stopStatsLoop() {
-	if a.statsCloser != nil {
-		close(a.statsCloser)
-		a.statsCloser = nil
-	}
-}
-
-func (a *App) statsLoop(done <-chan struct{}) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			a.logStatsOnce()
-		case <-done:
-			return
-		}
-	}
-}
-
-// logStatsOnce 输出一份统计快照。核心在读取前一次性取快照：它可能在这次
-// tick 与 Stop/切换之间被清空或替换，分两次读 a.core 会读到 nil。
-func (a *App) logStatsOnce() {
-	core := a.currentCore()
-	if core == nil || core.Client == nil {
-		return
-	}
-	snap := stats.Collect()
-	snap.TransportStats = core.Client.Transport().Stats()
-	log.Info("[STATS]",
-		"uptime", snap.Uptime().Round(time.Second),
-		"conns", snap.Conns,
-		"priority_conns", snap.PriorityConns,
-		"bulk_conns", snap.BulkConns,
-		"priority_conns_status", snap.PriorityConnsStatus,
-		"bulk_conns_status", snap.BulkConnsStatus,
-		"active_streams", snap.ActiveStreams,
-		"priority_active", snap.PriorityActiveStreams,
-		"bulk_active", snap.BulkActiveStreams,
-		"streams(opened)", snap.TotalStreamsOpened,
-		"streams(closed)", snap.TotalStreamsClosed,
-		"priority_opened", snap.PriorityStreamsOpened,
-		"bulk_opened", snap.BulkStreamsOpened,
-		"priority_fallback", snap.PriorityFallback,
-		"bulk_fallback", snap.BulkFallback,
-		"tx", stats.HumanBytes(snap.BytesSent),
-		"rx", stats.HumanBytes(snap.BytesRecv),
-		"raw_tx", stats.HumanBytes(snap.RawBytesSent),
-		"raw_rx", stats.HumanBytes(snap.RawBytesRecv),
-		"upload_speed", snap.UploadSpeedHuman,
-		"download_speed", snap.DownloadSpeedHuman,
-		"proxy_tcp_streams", snap.TCPConnections,
-		"udp_assoc", snap.UDPAssociations,
-		"dns(hit)", snap.DNSCacheHits,
-		"dns(miss)", snap.DNSCacheMisses,
-		"dns(proxy)", snap.DNSProxyQueries,
-		"dns(direct)", snap.DNSDirectQueries,
-		"padding", stats.HumanBytes(snap.PaddingBytes),
-		"records", snap.RecordsWritten,
-		"avg_rtt", snap.AvgRTT().Round(time.Millisecond),
-		"slot_degraded", snap.SlotDegraded,
-		"slot_retired_degraded", snap.SlotRetiredDegraded,
-		"slot_probes", snap.SlotProbes,
-		"slot_probe_slow", snap.SlotProbeSlow,
-		"slot_grown_priority", snap.SlotGrownPriority,
-		"slot_grown_bulk", snap.SlotGrownBulk,
-		"conn_rotated", snap.ConnRotated,
-	)
-}
-
-// tunConfig 为本 App 构建 TUN 配置。它是启动路径与托盘开关共享的唯一构造点，
-// 因此两者不会出现偏差（尤其是 server-IPv6 提示，托盘路径过去常常遗漏它）。
-func (a *App) tunConfig() tun.Config {
-	core := a.currentCore()
-	if core != nil && core.Client != nil {
-		// 降级启动（开机时网络未就绪）会让启动期的 IPv6 解析得到空值；这里在
-		// 读取前补一次有界解析，否则 TUN 脚本不会安装 IPv6 默认路由，
-		// IPv6 流量会绕过隧道。已有值时该方法直接返回，不做 DNS 查询。
-		//
-		// 它同时可能触发一次新的 DNS 探测（resolveServerIPV6 会记录可达的内置/
-		// 系统解析器），因此必须在 tunDNS 之前执行：在"此前所有标记尝试都失败、
-		// 恰好这次刷新才成功"的边角情形下，先取 DNS 会让 TUN 拿到默认值而不是
-		// 刚学到的可达服务器。
-		core.Client.RefreshServerIPV6()
-	}
-
-	// 一次快照供下面两个字段使用：它们必须来自同一份配置（见 currentConfig）。
-	snap := a.currentConfig()
-	cfg := tun.Config{
-		Socks5Addr: util.Socks5URI(snap.Local.SocksPort),
-		DNSServer:  tunDNS(),
-		// MTU 来自唯一的配置旋钮（TunMTU() 已归一化）：它同时决定设备的
-		// 真实 MTU 与 netstack 的 MTU，两条路径必须拿到同一个值。
-		MTU: snap.TunMTU(),
-	}
-	if core != nil && core.Client != nil {
-		if ipv6 := core.Client.Router().ServerIPV6(); ipv6 != "" {
-			cfg.ServerIPV6 = ipv6
-		}
-	}
-	return cfg
 }
 
 // methodFromServer 返回配置的 AEAD 加密方法；当配置指定了未知方法时

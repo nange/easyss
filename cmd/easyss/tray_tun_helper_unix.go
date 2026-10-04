@@ -17,24 +17,25 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// createTun2socksViaHelper 生成一个长期运行的提权 helper 来打开
-// TUN 设备、配置路由/DNS，并将 fd 传回。helper 持续存活，
-// 监控其 stdin（一个 FIFO）以接收主进程的生命周期信号。
-func (a *TrayApp) createTun2socksViaHelper() error {
-	a.tunHelperMu.Lock()
-	defer a.tunHelperMu.Unlock()
+// tunUpViaHelper 生成一个长期运行的提权 helper 来打开 TUN 设备、配置路由/DNS，
+// 并将 fd 传回。helper 持续存活，监控其 stdin（一个 FIFO）以接收主进程的生命周期
+// 信号。它是 macOS/Linux 非 root 场景下的 TUN 启用路径（见 TrayApp.enableTun2socks）。
+func (s *session) tunUpViaHelper() error {
+	// 与另一条启用路径（session.tunUp）和拆除路径（session.tunDown）共用 tunMu。
+	s.tunMu.Lock()
+	defer s.tunMu.Unlock()
 
 	// 核心与配置都在函数入口取一次快照：这条路径要提权、spawn helper、等 fd
 	//（最长数十秒），期间 Stop/切换可能已经把它取下或发布新配置；快照保证
 	// 整个流程用的是同一份一致状态，而不是"读到一半被换掉"。
-	core := a.currentCore()
-	cfg := a.currentConfig()
+	core := s.currentCore()
+	cfg := s.app.currentConfig()
 
-	log.Info("[SYSTRAY] createTun2socksViaHelper called",
-		"tunMgrNil", a.tunMgr == nil,
+	log.Info("[SYSTRAY] tunUpViaHelper called",
+		"tunMgrNil", s.tunMgr == nil,
 		"coreNil", core == nil)
 
-	if a.tunMgr != nil {
+	if s.tunMgr != nil {
 		log.Warn("[SYSTRAY] tunMgr already set, skipping create")
 		return nil
 	}
@@ -46,7 +47,7 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	// 1. 用临时 manager 构建 TunConfig 以获取设备默认值。
 	// manager 配置来自共享 builder，因此此路径与直接路径使用相同的
 	// socks/dns/server-ipv6 值（它同时会刷新服务端 IPv6）。
-	tmpCfg := a.tunConfig()
+	tmpCfg := s.tunConfig()
 	tmpMgr := tun.New(tmpCfg)
 	devCfg := tmpMgr.DeviceConfig()
 
@@ -147,10 +148,10 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 	//    （fd 路径下内核分配的 utunN 只有 helper 见过）。
 	// 偏好与运行期状态分开落位（见 client.Client.SetTunMode）：前者进不可变
 	// 快照，后者是 core 上的显式开关。
-	a.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = true })
+	s.app.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = true })
 	core.Client.SetTunMode(true)
-	a.tunSession = &devCfg
-	a.tunMgr = tun.New(tun.Config{
+	s.tunSession = &devCfg
+	s.tunMgr = tun.New(tun.Config{
 		Socks5Addr:       util.Socks5URI(cfg.Local.SocksPort),
 		DeviceFD:         fd,
 		SkipRouteCleanup: true, // helper 负责路由/DNS 清理
@@ -159,13 +160,10 @@ func (a *TrayApp) createTun2socksViaHelper() error {
 		MTU: cfg.TunMTU(),
 	})
 
-	icmpHandler := tun.NewICMPHandler(core.Client.Router())
-	icmpHandler.SetProxy(core.StreamHandler, a.methodFromServer())
-	a.tunMgr.SetICMPHandler(icmpHandler)
+	s.buildICMPHandler(core)
+	s.startTunEngine(s.tunMgr, "fd")
 
-	startTunEngine(a.tunMgr, "fd")
-
-	a.tunHelperStdin = fifoWriter
+	s.tunHelperStdin = fifoWriter
 
 	return nil
 }

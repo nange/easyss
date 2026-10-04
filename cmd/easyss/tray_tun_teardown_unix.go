@@ -15,6 +15,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// tunHelperExitTimeout 是关闭/切换服务器时等待提权 helper 释放控制锁的上限。
+// 正常路径上 helper 收到 FIFO 的 EOF 后几十毫秒内就会退出；超时说明它卡在清理里，
+// 继续等只会拖住整个切换流程——此时不再等它，直接由父进程自己复核路由表
+// （见 waitTunHelperExit 与 verifyTunTeardown）。
+const tunHelperExitTimeout = 5 * time.Second
+
 // waitTunHelperExit 等待提权 helper 释放 TUN 控制锁，也就是等它完成清理并退出。
 //
 // helper 由 osascript/pkexec 以后台方式拉起（PPID 为 1），父进程既拿不到它的 pid
@@ -43,6 +49,24 @@ func waitTunHelperExit(timeout time.Duration) error {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// platformTunTeardown 是 session 拆除的第 3 步在 darwin/linux 上的实现：
+// 等提权 helper 释放控制锁（即它已完成路由/DNS 清理并退出），然后自己复核一遍
+// 系统路由表。返回非 nil 表示路由仍然残留（且回滚也没能清掉），由 session 负责
+// 记录并告知用户。
+//
+// 拆除过去是彻底"发射后不管"的：父进程既不等也不看，于是助手进程一旦清路由失败，
+// 1/8…128/1 这些分流默认路由就留在表里，把全机 IPv4 流量（包括 DNS）送进一个已经
+// 没人读的设备——表现为"切换服务器后本机断网"。等不到 helper 也往下走：下面的
+// 复核会自己发现残留。Windows 与 headless 构建走空实现（见 tray_tun_teardown_other.go）。
+func platformTunTeardown(dev tun.DeviceConfig, helperSignalled bool) error {
+	if helperSignalled {
+		if err := waitTunHelperExit(tunHelperExitTimeout); err != nil {
+			log.Error("[SYSTRAY] tunDown: waiting for tun helper", "err", err)
+		}
+	}
+	return verifyTunTeardown(dev)
 }
 
 // rollbackTunRoutes 重新执行平台的关闭脚本（必要时由脚本路径再次提权）。

@@ -179,8 +179,14 @@ func updateUpToDateText(tag string) string {
 
 // notifyUser 显示系统通知并记入日志。尽力而为：
 // gogpu/systray 会丢弃平台错误，因此日志条目是通知是否交给操作系统的唯一痕迹。
+//
+// tray 为 nil（尚未构建，或测试里的裸 TrayApp）时只记日志：通知从不是流程的一环，
+// 不该让任何调用方因为"还没有托盘"而崩溃。
 func (a *TrayApp) notifyUser(msg string) {
 	log.Info("[SYSTRAY] notify", "msg", msg)
+	if a.tray == nil {
+		return
+	}
 	a.tray.ShowNotification(updateNotifyTitle, msg)
 }
 
@@ -322,40 +328,38 @@ func (a *TrayApp) downloadAndInstall() {
 		a.tray.ShowNotification("Easyss", "已更新到 "+rel.TagName+"，正在重启...")
 
 		// 从这里到本次重启流程结束是一整套"停服务 →（失败时）起服务"，与用户
-		// 在菜单里切换服务器属于同一类临界区：不共用 serverSwitchMu 的话，两套
-		// 停/起会交错抢本地端口，并把配置换装（adoptConfig）与菜单勾选的顺序
-		// 交给调度器——这正是 serverSwitchMu 存在的理由。成功路径紧接着
-		// os.Exit，失败路径一直持有到把服务恢复起来。
-		a.serverSwitchMu.Lock()
-		defer a.serverSwitchMu.Unlock()
+		// 在菜单里切换服务器属于同一类临界区：不共用会话序列锁的话，两套停/起
+		// 会交错抢本地端口，并把配置发布与菜单勾选的顺序交给调度器——这正是
+		// session.run 存在的理由。成功路径紧接着 os.Exit，序列锁随进程消失。
+		a.sess.run(func() {
+			_ = a.setSysProxyOff()
+			a.stopServiceInSequence()
+			// 在重新启动前释放单例锁，这样新进程绝不会与旧进程
+			// 竞争单例互斥锁。
+			releaseSingletonLock()
 
-		_ = a.setSysProxyOff()
-		a.closeService()
-		// 在重新启动前释放单例锁，这样新进程绝不会与旧进程
-		// 竞争单例互斥锁。
-		releaseSingletonLock()
-
-		if err := selfupdate.Restart(); err != nil {
-			// 新二进制已经就位；让旧版本继续在进程内运行，
-			// 由用户手动重启。
-			log.Error("[SYSTRAY] restart after update", "err", err)
-			a.tray.ShowNotification("Easyss", "重启失败，请手动重启应用完成更新")
-			// 单例锁在重新启动尝试前已释放；重新获取它，
-			// 以便本进程在继续提供服务期间保持唯一实例。
-			if lerr := tryAcquireSingletonLock(); lerr != nil {
-				log.Error("[SYSTRAY] re-acquire singleton lock after failed restart", "err", lerr)
+			if err := selfupdate.Restart(); err != nil {
+				// 新二进制已经就位；让旧版本继续在进程内运行，
+				// 由用户手动重启。
+				log.Error("[SYSTRAY] restart after update", "err", err)
+				a.tray.ShowNotification("Easyss", "重启失败，请手动重启应用完成更新")
+				// 单例锁在重新启动尝试前已释放；重新获取它，
+				// 以便本进程在继续提供服务期间保持唯一实例。
+				if lerr := tryAcquireSingletonLock(); lerr != nil {
+					log.Error("[SYSTRAY] re-acquire singleton lock after failed restart", "err", lerr)
+				}
+				// 恢复路径不改变服务器：把当前快照当作"意图"传入即可
+				//（restartServiceInSequence 只读它的服务器下标）。
+				if err := a.restartService(a.currentConfig()); err != nil {
+					log.Error("[SYSTRAY] restore service after failed restart", "err", err)
+				}
+				a.setUpdateItem("更新成功，重启失败，请手动重启", false)
+				a.updateState.Store(updateStateAvailable)
+				return
 			}
-			// 恢复路径不改变服务器：把当前快照当作"意图"传入即可（restartServiceWith
-			// 只读它的服务器下标）。
-			if err := a.restartService(a.currentConfig()); err != nil {
-				log.Error("[SYSTRAY] restore service after failed restart", "err", err)
-			}
-			a.setUpdateItem("更新成功，重启失败，请手动重启", false)
-			a.updateState.Store(updateStateAvailable)
-			return
-		}
-		// 新进程已在运行；终止本进程。
-		os.Exit(0)
+			// 新进程已在运行；终止本进程。
+			os.Exit(0)
+		})
 	}()
 }
 
