@@ -45,6 +45,30 @@ func waitTunHelperExit(timeout time.Duration) error {
 	}
 }
 
+// finishTunTeardown 是 session.tunDown 的第 3 步在 darwin/linux 上的实现：
+// 等提权 helper 释放控制锁（即它已完成路由/DNS 清理并退出），然后自己复核一遍
+// 系统路由表。
+//
+// 拆除过去是彻底"发射后不管"的：父进程既不等也不看，于是助手进程一旦清路由失败，
+// 1/8…128/1 这些分流默认路由就留在表里，把全机 IPv4 流量（包括 DNS）送进一个已经
+// 没人读的设备——表现为"切换服务器后本机断网"。等不到 helper 也往下走：下面的
+// 复核会自己发现残留。Windows 与 headless 构建走上游的 no-op 版本。
+func (s *session) finishTunTeardown(dev *tun.DeviceConfig, helperSignalled bool) {
+	if helperSignalled {
+		if err := waitTunHelperExit(tunHelperExitTimeout); err != nil {
+			log.Error("[SYSTRAY] tunDown: waiting for tun helper", "err", err)
+		}
+	}
+	if dev == nil {
+		return
+	}
+	if err := verifyTunTeardown(*dev); err != nil {
+		log.Error("[SYSTRAY] tunDown: TUN teardown left routes behind", "err", err)
+		s.app.notifyTunTeardownProblem(
+			"TUN 已停止，但系统路由表里仍残留指向 TUN 的路由，本机可能无法上网。请退出并重新启动 Easyss，或重启系统以恢复网络。详情：" + err.Error())
+	}
+}
+
 // rollbackTunRoutes 重新执行平台的关闭脚本（必要时由脚本路径再次提权）。
 // 它是变量以便测试注入：真实实现会提权并改写运行测试的机器的路由表。
 var rollbackTunRoutes = func(dev tun.DeviceConfig) error {

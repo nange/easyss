@@ -116,7 +116,7 @@ func TestVerifyTunTeardown(t *testing.T) {
 	})
 }
 
-// TestCloseTun2socksVerifiesTheRecordedSession 固定关闭流程的三件事：按启用时
+// TestTunDownVerifiesTheRecordedSession 固定关闭流程的三件事：按启用时
 // 记录的会话（而不是关闭时的 manager）核对路由残留、清空所有会话状态、把
 // EnableTun2socks 落回 false。
 func TestCloseTun2socksVerifiesTheRecordedSession(t *testing.T) {
@@ -124,7 +124,7 @@ func TestCloseTun2socksVerifiesTheRecordedSession(t *testing.T) {
 
 	session := tun.DeviceConfig{Device: "utun9", TunGW: "198.18.0.1"}
 	a := &TrayApp{App: newApp(&config.ClientConfig{}, "")}
-	a.tunSession = &session
+	a.sess.tunSession = &session
 
 	var probed []string
 	tunRouteResidue = func(device, _ string) (string, bool) {
@@ -136,13 +136,13 @@ func TestCloseTun2socksVerifiesTheRecordedSession(t *testing.T) {
 		return nil
 	}
 
-	require.NoError(t, a.closeTun2socks())
+	require.NoError(t, a.sess.tunDown())
 	require.Equal(t, []string{"utun9"}, probed)
-	require.Nil(t, a.tunSession)
+	require.Nil(t, a.sess.tunSession)
 	require.False(t, a.currentConfig().Local.EnableTun2socks)
 }
 
-// TestCloseTun2socksSignalsTheHelperFIFO 确认关闭流程仍然通过关闭 FIFO 通知
+// TestTunDownSignalsTheHelperFIFO 确认关闭流程仍然通过关闭 FIFO 通知
 // helper 退出，并且会等它释放控制锁（这里锁是空闲的，因此立即返回）。
 func TestCloseTun2socksSignalsTheHelperFIFO(t *testing.T) {
 	stubTunTeardownHooks(t)
@@ -154,10 +154,10 @@ func TestCloseTun2socksSignalsTheHelperFIFO(t *testing.T) {
 	rd, wr, err := os.Pipe()
 	require.NoError(t, err)
 	t.Cleanup(func() { rd.Close() }) //nolint:errcheck
-	a.tunHelperStdin = wr
+	a.sess.tunHelperStdin = wr
 
-	require.NoError(t, a.closeTun2socks())
-	require.Nil(t, a.tunHelperStdin, "关闭后必须清空 helper 的 FIFO 写端")
+	require.NoError(t, a.sess.tunDown())
+	require.Nil(t, a.sess.tunHelperStdin, "关闭后必须清空 helper 的 FIFO 写端")
 
 	_, err = wr.Write([]byte("x"))
 	require.Error(t, err, "FIFO 写端必须已经关闭，helper 才能从 stdin 读到 EOF")

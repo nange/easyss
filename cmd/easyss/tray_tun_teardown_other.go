@@ -1,4 +1,4 @@
-//go:build !darwin && !linux && !headless
+//go:build (!darwin && !linux) || headless
 
 package main
 
@@ -7,6 +7,12 @@ import (
 
 	"github.com/nange/easyss/v3/client/tun"
 )
+
+// finishTunTeardown 在非 darwin/linux 平台与 headless 构建上是空操作：前者没有
+// 提权 helper（TUN 路由挂在适配器上，由关闭脚本随适配器一起清理），后者没有运行期
+// 的 TUN 开关路径（TUN 只可能在启动时由 App.Start 直接创建，拆除由 session.stop
+// 收走 manager 完成）。
+func (s *session) finishTunTeardown(*tun.DeviceConfig, bool) {}
 
 // waitTunHelperExit 在非 darwin/linux 平台上是空操作：这些平台没有提权 TUN
 // helper，TUN 设备与路由由 client/tun 自己通过创建/关闭脚本管理。

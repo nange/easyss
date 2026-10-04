@@ -22,9 +22,9 @@ func stubRunCore(t *testing.T) {
 }
 
 // TestAppStartStopIsRaceFree 固定"Start/Stop 改写当前核心时，读者拿到的是一致
-// 快照"。-race 下这是回归测试：旧实现里 a.core 是普通字段，Stop 写 nil 与
-// 统计循环/托盘处理器的无锁读构成数据竞争，而
-// `a.core != nil && a.core.Client != nil` 这类两次读之间被清空会直接 nil 解引用。
+// 快照"。-race 下这是回归测试：过去当前核心是普通字段，Stop 写 nil 与统计循环/
+// 托盘处理器的无锁读构成数据竞争，而 `core != nil && core.Client != nil` 这类
+// 两次读之间被清空会直接 nil 解引用（现在它由 session.core 原子发布）。
 func TestAppStartStopIsRaceFree(t *testing.T) {
 	stubRunCore(t)
 	a := newApp(&config.ClientConfig{}, "")
@@ -39,7 +39,7 @@ func TestAppStartStopIsRaceFree(t *testing.T) {
 					return
 				default:
 				}
-				a.logStatsOnce()
+				a.sess.logStatsOnce()
 				// 托盘处理器的读法：先取一次快照，再判断快照内部的字段。
 				if core := a.currentCore(); core != nil {
 					_ = core.Client
@@ -69,12 +69,12 @@ func TestAppStartStopIsRaceFree(t *testing.T) {
 	require.Nil(t, a.currentCore(), "全部 Stop 之后不应还有核心")
 }
 
-// TestAppStopIsConcurrentAndIdempotent 固定删除 stopOnce 后的幂等语义：并发的
-// 多个 Stop 与随后的顺序调用都只能"取下"一次核心，重复调用是空操作；这正是
-// restartService 不再需要整体重建 App（*a.App = App{...}）来重置 once 的前提。
+// TestAppStopIsConcurrentAndIdempotent 固定"取下即停"的幂等语义：并发的多个
+// Stop 与随后的顺序调用都只能"取下"一次核心，重复调用是空操作；这正是会话重启
+// 不再需要整体重建 App（*a.App = App{...}）来重置一次性状态的前提。
 func TestAppStopIsConcurrentAndIdempotent(t *testing.T) {
 	a := newApp(&config.ClientConfig{}, "")
-	a.installCore(&runner.Core{})
+	a.sess.installCore(&runner.Core{})
 
 	var wg sync.WaitGroup
 	for range 8 {
@@ -87,26 +87,32 @@ func TestAppStopIsConcurrentAndIdempotent(t *testing.T) {
 }
 
 // TestAppStartResetsSessionState 固定"每次 Start 重置会话级状态"：过去这一步由
-// restartService 的整体重建顺带完成，重建移除后必须由会话起点负责，否则上一轮
-// 的启动警告会既抑制新一轮的 setStartupWarn（只在 nil 时写入），又被
-// restartServiceWith 重复上报。
+// 会话重启时的整体重建顺带完成，重建移除后必须由会话起点（session.start）负责，
+// 否则上一轮的启动警告会既抑制新一轮的记录（只在 nil 时写入），又被恢复流程
+// （restartServiceInSequence）重复上报。
 func TestAppStartResetsSessionState(t *testing.T) {
 	stubRunCore(t)
 	a := newApp(&config.ClientConfig{}, "")
-	a.startupWarn = errors.New("stale warning")
-	a.tunSkippedForNetwork = true
+	// 会话级状态是 session 的私有字段：测试在同一把锁下播种。
+	a.sess.mu.Lock()
+	a.sess.startupWarn = errors.New("stale warning")
+	a.sess.tunSkippedForNetwork = true
+	a.sess.mu.Unlock()
 
 	require.NoError(t, a.Start())
 	t.Cleanup(a.Stop)
 
 	require.Nil(t, a.currentStartupWarn())
-	require.False(t, a.tunSkippedForNetwork)
+	a.sess.mu.Lock()
+	skipped := a.sess.tunSkippedForNetwork
+	a.sess.mu.Unlock()
+	require.False(t, skipped)
 }
 
-// TestAppStartupWarnAccessIsRaceFree 固定 startupWarn 的读侧契约：它由 Start 在
-// stateMu 下重置/写入，而自更新失败后的恢复流程（restartServiceWith）与那次
-// Start 分属不同 goroutine，因此必须走 currentStartupWarn()。直接读字段会让
-// -race 报出数据竞争（旧代码是整个结构体重写，掩盖了这一点）。
+// TestAppStartupWarnAccessIsRaceFree 固定 startupWarn 的读侧契约：它由
+// session.start 在会话锁下重置/写入，而自更新失败后的恢复流程
+// （restartServiceInSequence）与那次 start 分属不同 goroutine，因此必须走
+// currentStartupWarn()。直接读字段会让 -race 报出数据竞争。
 func TestAppStartupWarnAccessIsRaceFree(t *testing.T) {
 	stubRunCore(t)
 	a := newApp(&config.ClientConfig{}, "")
@@ -194,28 +200,28 @@ func TestUpdateConfigIsRaceFreeAndLossless(t *testing.T) {
 
 // TestAppStopTakesTheTunManager 固定"Stop 收走当时的 TUN manager"：交给 Stop
 // 的 manager 必须被停掉并清空。漏掉它意味着那个引擎的分流路由会留在系统路由
-// 表里而无人回收（见 closeTun2socks 的注释），这正是本项修复要保住的性质。
+// 表里而无人回收（见 session.tunDown 的注释），这正是本项修复要保住的性质。
 func TestAppStopTakesTheTunManager(t *testing.T) {
 	a := newApp(&config.ClientConfig{}, "")
 
 	// 零值 manager 的 Stop 是安全的空操作（内部 running 为 false），
 	// 不需要真实设备即可验证"取走并停止"这一步。
-	a.tunHelperMu.Lock()
-	a.tunMgr = &tun.Manager{}
-	a.tunHelperMu.Unlock()
+	a.sess.tunMu.Lock()
+	a.sess.tunMgr = &tun.Manager{}
+	a.sess.tunMu.Unlock()
 
 	a.Stop()
 
-	a.tunHelperMu.Lock()
-	defer a.tunHelperMu.Unlock()
-	require.Nil(t, a.tunMgr, "Stop 必须停掉并清空 TUN manager")
+	a.sess.tunMu.Lock()
+	defer a.sess.tunMu.Unlock()
+	require.Nil(t, a.sess.tunMgr, "Stop 必须停掉并清空 TUN manager")
 }
 
 // TestAppStopAndTunToggleAreRaceFree 固定 tunMgr 的锁契约：托盘的 TUN 开关
-// （createTun2socks/closeTun2socks/createTun2socksViaHelper）与启动期的
-// startTunEngineAtStartup/Stop 必须在同一把 App.tunHelperMu 下读写 tunMgr。
-// 这里按开关的形状并发执行"锁内检查核心、锁内安装 manager"与 App.Stop：
-// 任何一方脱离这把锁，-race 都会报出数据竞争。
+// （session.tunUp/tunUpViaHelper/tunDown）与启动期的 startTunEngineAtStartup、
+// 停止期的 stop 必须共用 session.tunMu 读写 tunMgr。这里按开关的形状并发执行
+// "锁内检查核心、锁内安装 manager"与 App.Stop：任何一方脱离这把锁，-race 都会
+// 报出数据竞争。
 func TestAppStopAndTunToggleAreRaceFree(t *testing.T) {
 	a := newApp(&config.ClientConfig{}, "")
 
@@ -229,11 +235,11 @@ func TestAppStopAndTunToggleAreRaceFree(t *testing.T) {
 					return
 				default:
 				}
-				a.tunHelperMu.Lock()
-				if a.currentCore() != nil && a.tunMgr == nil {
-					a.tunMgr = &tun.Manager{}
+				a.sess.tunMu.Lock()
+				if a.currentCore() != nil && a.sess.tunMgr == nil {
+					a.sess.tunMgr = &tun.Manager{}
 				}
-				a.tunHelperMu.Unlock()
+				a.sess.tunMu.Unlock()
 			}
 		})
 	}
@@ -241,7 +247,7 @@ func TestAppStopAndTunToggleAreRaceFree(t *testing.T) {
 	wg.Go(func() {
 		defer close(stopToggling)
 		for range 200 {
-			a.installCore(&runner.Core{})
+			a.sess.installCore(&runner.Core{})
 			a.Stop()
 		}
 	})

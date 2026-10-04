@@ -38,7 +38,7 @@ func newSwitchTestApp(t *testing.T) *TrayApp {
 // 服务器（因此 a.cfg 仍指向它、核心也还在），菜单必须跟着回到那一个。
 func TestSwitchServerRestoresTheRunningSelectionOnFailure(t *testing.T) {
 	a := newSwitchTestApp(t)
-	a.installCore(&runner.Core{}) // 回滚成功：仍有 core 在运行
+	a.sess.installCore(&runner.Core{}) // 回滚成功：仍有 core 在运行
 
 	errBoom := errors.New("boom")
 	var switchedTo string
@@ -74,7 +74,7 @@ func TestSwitchServerMarksTheTargetOnSuccess(t *testing.T) {
 	a := newSwitchTestApp(t)
 
 	// 与生产 restartService 一致：由 restart 把"目标服务器"这条增量发布出去
-	//（生产实现见 restartServiceWith；这里省略真正的 Start）。
+	//（生产实现见 restartServiceInSequence；这里省略真正的 Start）。
 	require.NoError(t, a.switchServer(1, func(cfg *config.ClientConfig) error {
 		targetIdx := cfg.DefaultServerIndex()
 		a.updateConfig(func(c *config.ClientConfig) { c.SetDefaultServerIndex(targetIdx) })
@@ -90,7 +90,7 @@ func TestSwitchServerMarksTheTargetOnSuccess(t *testing.T) {
 // 连点同一个服务器不该再停一次、起一次服务，只需要把勾选确认回来。
 func TestSwitchServerSkipsAServerThatIsAlreadyRunning(t *testing.T) {
 	a := newSwitchTestApp(t)
-	a.installCore(&runner.Core{})
+	a.sess.installCore(&runner.Core{})
 
 	called := false
 	require.NoError(t, a.switchServer(0, func(*config.ClientConfig) error {
@@ -104,8 +104,8 @@ func TestSwitchServerSkipsAServerThatIsAlreadyRunning(t *testing.T) {
 
 // TestSwitchServerSerializesConcurrentSwitches 固定串行化契约：托盘的每次点击
 // 都会新起一个 goroutine，而一次切换是整套"停服务 → 起服务"（抢同一组本地端口
-// 4080/5080）。并发执行两套会让 a.cfg 互相覆盖，甚至留下没有任何 core
-// 在运行的状态。
+// 4080/5080）。并发执行两套会让配置互相覆盖，甚至留下没有任何 core 在运行的
+// 状态。串行化由会话序列锁（session.runErr）提供。
 func TestSwitchServerSerializesConcurrentSwitches(t *testing.T) {
 	a := newSwitchTestApp(t)
 
@@ -170,7 +170,7 @@ func TestRestartServiceRollsBackToThePreviousServer(t *testing.T) {
 		if cfg.DefaultServerAddr() == "b.example:443" {
 			return errBoom
 		}
-		// 生产实现不再换装配置（restartServiceWith 已经把增量发布出去），
+		// 生产实现不再换装配置（restartServiceInSequence 已经把增量发布出去），
 		// 因此这里也不 adopt：换装会把并发菜单改动覆盖掉。
 		return nil
 	}
@@ -237,7 +237,7 @@ func TestRestartServiceDoesNotClobberMenuChangesFromAStaleTarget(t *testing.T) {
 	next := a.currentConfig().Clone()
 	next.SetDefaultServerIndex(1)
 
-	require.NoError(t, a.restartService(next))
+	require.NoError(t, a.restartServiceWith(next, a.startService))
 
 	require.Equal(t, "b.example:443", a.currentConfig().DefaultServerAddr(),
 		"切换必须生效")
@@ -267,7 +267,7 @@ func TestRestartServiceRollbackKeepsMenuChanges(t *testing.T) {
 	next := a.currentConfig().Clone()
 	next.SetDefaultServerIndex(1)
 
-	err := a.restartService(next)
+	err := a.restartServiceWith(next, a.startService)
 
 	require.ErrorIs(t, err, errBoom)
 	require.Equal(t, "a.example:443", a.currentConfig().DefaultServerAddr(),
@@ -277,13 +277,13 @@ func TestRestartServiceRollbackKeepsMenuChanges(t *testing.T) {
 }
 
 // TestSwitchServerIsRaceFreeWithStatsReads 固定"切换服务器与后台统计读取不再
-// 竞争当前核心"：-race 下这是回归测试（旧实现里 App.Start 无锁写 a.core，
-// switchServer 与 statsLoop 无锁读同一个普通字段）。restart 复用真实的
-// Start/Stop，并按生产 restartService 的方式发布"目标服务器"增量。
+// 竞争当前核心"：-race 下这是回归测试（当前核心由 session.core 原子发布，
+// switchServer 与 statsLoop 各自读快照）。restart 复用真实的 Start/Stop，
+// 并按生产 restartService 的方式发布"目标服务器"增量。
 func TestSwitchServerIsRaceFreeWithStatsReads(t *testing.T) {
 	stubRunCore(t)
 	a := newSwitchTestApp(t)
-	a.installCore(&runner.Core{})
+	a.sess.installCore(&runner.Core{})
 
 	restart := func(cfg *config.ClientConfig) error {
 		a.Stop()
@@ -302,7 +302,7 @@ func TestSwitchServerIsRaceFreeWithStatsReads(t *testing.T) {
 					return
 				default:
 				}
-				a.logStatsOnce()
+				a.sess.logStatsOnce()
 			}
 		})
 	}
@@ -325,4 +325,45 @@ func TestSwitchServerIsRaceFreeWithStatsReads(t *testing.T) {
 	default:
 	}
 	require.NotNil(t, a.currentCore(), "最后一次切换之后服务必须在运行")
+}
+
+// TestCloseServiceIsSerializedWithSwitches 固定 A3 之后仍然成立的性质：退出时的
+// 拆除（closeService）与一次切换的"停→起"不会交错。这条互斥过去是 closeService
+// 整段持有 TrayApp.mu 顺带得到的（那把锁只负责两个菜单项指针，却把菜单读挡在
+// 最长可达几十秒的 TUN 拆除之后），现在由会话序列锁显式提供——本测试就是它的
+// 回归防线。
+func TestCloseServiceIsSerializedWithSwitches(t *testing.T) {
+	a := newSwitchTestApp(t)
+	stubSysProxy(t, nil)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	restart := func(*config.ClientConfig) error {
+		close(entered)
+		<-release
+		return nil
+	}
+
+	switched := make(chan struct{})
+	go func() {
+		defer close(switched)
+		_ = a.switchServer(1, restart)
+	}()
+	<-entered
+
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		a.closeService()
+	}()
+
+	select {
+	case <-exited:
+		t.Fatal("closeService 与切换并发执行了：退出拆除必须在会话序列锁上排队")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	<-switched
+	<-exited
 }

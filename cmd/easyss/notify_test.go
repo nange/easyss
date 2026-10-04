@@ -9,12 +9,14 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/gogpu/systray"
+	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/runner"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFriendlyConfigError(t *testing.T) {
@@ -99,16 +101,6 @@ func TestFriendlyStartupWarning(t *testing.T) {
 	}
 }
 
-// fakeDomainReadiness 是 serverDomainReadiness 的测试替身：cmd 包内无法构造
-// 带可用通道的 *runner.Core（字段不可导出）。
-type fakeDomainReadiness struct {
-	ready <-chan struct{}
-	done  <-chan struct{}
-}
-
-func (f fakeDomainReadiness) ServerDomainReady() <-chan struct{} { return f.ready }
-func (f fakeDomainReadiness) Done() <-chan struct{}              { return f.done }
-
 func TestCanStartTunNow(t *testing.T) {
 	if !canStartTunNow(nil) {
 		t.Fatal("nil core must be treated as ready")
@@ -128,14 +120,11 @@ func TestCanStartTunNow(t *testing.T) {
 }
 
 func TestWatchServerDomainReady(t *testing.T) {
-	orig := serverDomainReadyNotify
-	t.Cleanup(func() { serverDomainReadyNotify = orig })
-
-	notified := make(chan string, 4)
-	serverDomainReadyNotify = func(msg string) { notified <- msg }
+	ui := newStubAppUI()
+	notified := ui.domainReady
 
 	ready, done := make(chan struct{}), make(chan struct{})
-	a := &App{}
+	a := &App{ui: ui}
 	gen := coreGen.Add(1)
 	a.watchServerDomainReady(fakeDomainReadiness{ready: ready, done: done}, gen, true, true)
 
@@ -181,7 +170,7 @@ func TestWatchServerDomainReady(t *testing.T) {
 
 	// 核心已停止：就绪信号到达也不通知（TUN 被跳过的提示走同一通道）。
 	ready4, done4 := make(chan struct{}), make(chan struct{})
-	a4 := &App{}
+	a4 := &App{ui: newStubAppUI()}
 	a4.watchServerDomainReady(fakeDomainReadiness{ready: ready4, done: done4}, coreGen.Add(1), true, true)
 	close(done4)
 	close(ready4)
@@ -237,71 +226,43 @@ func TestFriendlyTunError(t *testing.T) {
 	}
 }
 
-func TestTrayStartTunFailureNotifies(t *testing.T) {
-	origHook, origNotify, origText := tunStartFailureHook, tunStartNotify, tunStartErrorText
-	t.Cleanup(func() {
-		tunStartFailureHook, tunStartNotify, tunStartErrorText = origHook, origNotify, origText
-	})
+// TestTrayStartTunFailureRevertsTheMenu 固定 appUI 在托盘上的实现：无论失败
+// 原因是什么，菜单都必须回到未勾选、TUN 会话都必须被拆除（"取下即停"）——
+// 否则下次启用会命中 session.tunUp 顶部的"已设置"保护，在菜单声称 TUN 已开启时
+// 静默地什么都不做。
+//
+// 这个 TrayApp 没有托盘对象：通知此时只记日志（见 notifyUser 的 nil 守卫），
+// 而回滚是必须发生的部分。面向用户的文案由 TestFriendlyTunError 覆盖。
+func TestTrayStartTunFailureRevertsTheMenu(t *testing.T) {
+	a := &TrayApp{App: newApp(&config.ClientConfig{}, "")}
 
-	var (
-		reverted  int
-		notified  []string
-		notifyMu  sync.Mutex
-		tunFailed = errors.New("tun: create device: boom")
-	)
-	tunStartFailureHook = func() { reverted++ }
-	tunStartNotify = func(msg string) {
-		notifyMu.Lock()
-		defer notifyMu.Unlock()
-		notified = append(notified, msg)
-	}
-	tunStartErrorText = friendlyTunError
+	item := systray.NewMenu().AddCheckbox("系统全局流量(Tun2socks)", true, nil)
+	a.SetTunMenu(item)
 
-	trayStartTunFailure(tunFailed)
+	// 失败：回滚 + 说明原因（这里只记日志）。
+	a.tunStartFailed(errors.New("tun: create device: boom"))
+	require.False(t, item.IsChecked(), "失败后菜单必须回到未勾选")
 
-	notifyMu.Lock()
-	got := append([]string(nil), notified...)
-	notifyMu.Unlock()
-	if reverted != 1 {
-		t.Fatalf("revert hook calls = %d, want 1", reverted)
-	}
-	if len(got) != 1 {
-		t.Fatalf("notifications = %q, want exactly one", got)
-	}
-	if !strings.Contains(got[0], tunFailed.Error()) {
-		t.Fatalf("notification %q should carry the underlying reason", got[0])
-	}
+	a.sess.tunMu.Lock()
+	mgr := a.sess.tunMgr
+	a.sess.tunMu.Unlock()
+	require.Nil(t, mgr, "失败后必须拆除半启用的 TUN 会话")
 
-	// 主动停止仍然必须回滚状态（关闭开关的路径依赖于此），但不得通知。
-	trayStartTunFailure(fmt.Errorf("tun: start engine: %w", context.Canceled))
-
-	notifyMu.Lock()
-	defer notifyMu.Unlock()
-	if reverted != 2 {
-		t.Fatalf("revert hook calls after a cancelled start = %d, want 2", reverted)
-	}
-	if len(notified) != 1 {
-		t.Fatalf("a cancelled start notified %q, want no extra notification", notified[1:])
-	}
+	// 主动停止（context.Canceled）：同样回滚，但不打扰用户（消息为空）。
+	item.SetChecked(true)
+	a.tunStartFailed(fmt.Errorf("tun: start engine: %w", context.Canceled))
+	require.False(t, item.IsChecked(), "被主动取消的启动同样必须回滚菜单")
 }
 
-// TestTrayStartTunFailureHeadlessText 固化无 tray.go 构建中 main.go 保留的
-// 回退行为：未安装 tunStartErrorText 时，通知的将是原始错误文本。
-func TestTrayStartTunFailureHeadlessText(t *testing.T) {
-	origHook, origNotify, origText := tunStartFailureHook, tunStartNotify, tunStartErrorText
-	t.Cleanup(func() {
-		tunStartFailureHook, tunStartNotify, tunStartErrorText = origHook, origNotify, origText
-	})
-
-	raw := errors.New("tun: create device: boom")
-	var notified []string
-	tunStartFailureHook = nil
-	tunStartNotify = func(msg string) { notified = append(notified, msg) }
-	tunStartErrorText = nil
-
-	trayStartTunFailure(raw)
-
-	if len(notified) != 1 || notified[0] != raw.Error() {
-		t.Fatalf("headless fallback notified %q, want [%q]", notified, raw.Error())
+// TestTunStartFailureTextIsEmptyForUserCancelledStarts 固化"不打扰用户"的判定：
+// 用户主动造成的失败（停止、关闭开关、取消授权）不产生任何面向用户的消息，
+// 其余失败必须带上下文。
+func TestTunStartFailureTextIsEmptyForUserCancelledStarts(t *testing.T) {
+	if msg := friendlyTunError(context.Canceled); msg != "" {
+		t.Fatalf("a cancelled start must not produce a message, got %q", msg)
+	}
+	msg := friendlyTunError(errors.New("tun: create device: boom"))
+	if !strings.Contains(msg, "Tun2socks 启动失败") {
+		t.Fatalf("a real failure must produce a message, got %q", msg)
 	}
 }

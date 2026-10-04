@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -21,7 +20,6 @@ import (
 
 	"github.com/gogpu/systray"
 	"github.com/nange/easyss/v3/client/config"
-	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/icon"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/runner"
@@ -30,7 +28,11 @@ import (
 
 type TrayApp struct {
 	*App
-	closing     chan struct{}
+	closing chan struct{}
+	// mu 只保护两个菜单项指针（browserMenu/tunMenu）。它们由 buildTray 在
+	// 托盘线程启动之前发布，此后的读者是各菜单回调所在的 goroutine —— 锁在这里
+	// 主要是给竞态检测器一个 happens-before 边。它不承担任何服务生命周期职责：
+	// 停止/启动序列归 session.run（见 A3 的注释）。
 	mu          sync.RWMutex
 	browserMenu *systray.MenuItem
 	tunMenu     *systray.MenuItem
@@ -71,26 +73,11 @@ type TrayApp struct {
 	uwpMu    sync.Mutex     //nolint:unused // used in uwp_windows.go
 	uwpMenu  *systray.Menu  //nolint:unused // used in uwp_windows.go
 	uwpItems []*UWPMenuItem //nolint:unused // used in uwp_windows.go
-
-	// TUN 助手进程管理（darwin 非 root）。tunHelperStdin 与 tunSession 都由
-	// App.tunHelperMu 保护（它与 App.tunMgr 共用同一把锁，因为三者描述的是
-	// 同一个 TUN 会话）。
-	tunHelperStdin io.WriteCloser // FIFO 写入端；关闭以通知助手进程退出
-
-	// tunSession 是当前 TUN 会话在启用时实际使用的设备/网关配置。关闭时用它
-	//（而不是关闭时的 a.tunMgr）核对路由与回滚：fd 路径的 manager 只携带请求
-	// 的设备名，而会话的本地网关等取值到关闭时可能已经变化。
-	// 由 App.tunHelperMu 保护。
-	tunSession *tun.DeviceConfig
-
-	// serverSwitchMu 串行化服务器切换。每次切换都是一整套"停服务 → 起服务"，
-	// 而托盘的每次点击都会新起一个 goroutine：并发切换会抢同一组本地端口
-	// （4080/5080），也会让两套菜单勾选互相覆盖，结果可能是没有任何 core 在
-	// 运行，或者两个 core 同时存在。配置换装（adoptConfig）已经是原子的快照
-	// 发布，不再需要靠这把锁保证不撕裂。
-	// 自更新失败后的恢复流程（tray_update.go）也是一套停/起，因此同样持有它。
-	serverSwitchMu sync.Mutex
 }
+
+// 编译期断言：托盘是运行期界面的实现。headless 与 --disable-tray 构建没有
+// TrayApp，App.ui 保持 nil（见 appUI）。
+var _ appUI = (*TrayApp)(nil)
 
 // startupErrorNotifyDelay 在启动失败通知后让进程存活一段时间，
 // 以便操作系统在客户端退出前显示通知（Windows 气球提示在所属进程退出时消失）。
@@ -150,19 +137,12 @@ func (a *TrayApp) buildTray() {
 	a.tray.Show()
 
 	// 引擎启动失败同样需要回滚托盘状态，而启动路径在 App.Start() 内启动引擎，
-	// 那里无法访问托盘。因此在调用之前安装，且同一个 TrayApp 比每次
-	// App.Start() 更长寿（restartService 只重建内嵌的 App）。
-	// notifier 与 hook 一起安装，因为仅靠 hook 会回滚菜单却不说明原因
-	//（见 trayStartTunFailure）。
-	tunStartFailureHook = a.revertTunStart
-	tunStartNotify = a.notifyTunStartFailure
-	// 降级启动（开机网络未就绪）后，后台重试解析成功时用同一条系统通知通道
-	// 报告一次"网络已恢复、代理可用"。
-	serverDomainReadyNotify = a.notifyServerDomainReady
-	// TUN 失败的面向用户措辞在这里定义，而不是在 main.go 中，
-	// 因为分类需要只有托盘才有的友好文案。直接赋值函数值
-	// 使测试可以按名称调用它。
-	tunStartErrorText = friendlyTunError
+	// 那里无法访问托盘。因此在调用之前把界面装上去（见 appUI），且同一个
+	// TrayApp 比每次 App.Start() 更长寿（切换只重启内嵌的会话）。
+	// 这个赋值必须早于本函数末尾的 a.Start()：引擎 goroutine 与"网络已恢复"
+	// 通知 goroutine 都在那之后才被派发，因此它们读 a.ui 与这里天然有
+	// happens-before（headless 与 --disable-tray 构建从不赋值，保持 nil）。
+	a.ui = a
 
 	// 在菜单填充完成后再启动服务，这样桌面环境
 	//（尤其是带 AppIndicator 的 GNOME）首次查询时能看到非空菜单。
@@ -268,13 +248,38 @@ func (a *TrayApp) notifyTunStartFailure(msg string) {
 	a.notifyUser(msg)
 }
 
-// notifyServerDomainReady 报告后台重试已解析出服务端域名（网络已恢复）。
-// 它安装为 serverDomainReadyNotify，只在降级启动后触发一次。
-func (a *TrayApp) notifyServerDomainReady(msg string) {
+// 以下三个方法是 appUI 的实现（见 main.go）：主程序通过 App.ui 回调它们，
+// 因此不需要条件编译，也不需要过去那四个包级函数变量。
+
+// notify 呈现一条面向用户的消息（等价于过去的 tunStartNotify）。它刻意不检查
+// "托盘是否已就绪"：初始启动期间（buildTray 尚未返回、trayBuilt 还没关闭）TUN 被
+// 跳过的提示必须照常显示，否则"网络尚未就绪"这类开机场景会变得无声无息。
+// 通知本身是尽力而为的，没有托盘时 notifyUser 只记日志。
+func (a *TrayApp) notify(msg string) {
 	if msg == "" {
 		return
 	}
 	a.notifyUser(msg)
+}
+
+// serverDomainReady 报告后台重试已解析出服务端域名（网络已恢复）。
+// 它只在降级启动后触发一次。
+func (a *TrayApp) serverDomainReady(msg string) {
+	a.notify(msg)
+}
+
+// tunStartFailed 是"TUN 引擎启动失败"在托盘上的唯一处理者：先回滚界面状态
+// （菜单勾选，以及提权 helper 已经建立的路由/DNS），再按需说明原因。
+//
+// 用户主动造成的失败 —— Stop() 取消启动：关闭开关、切换服务器、退出应用 ——
+// 由 friendlyTunError 归为"无消息"：那不值得打扰用户。回滚仍然无条件执行：
+// 无论谁停止了什么，菜单最终都必须处于未勾选状态。
+func (a *TrayApp) tunStartFailed(err error) {
+	a.revertTunStart()
+	if err == nil {
+		return
+	}
+	a.notifyTunStartFailure(friendlyTunError(err))
 }
 
 // friendlyTunError 将 tun2socks 启动失败转换为用户友好的中文提示。
@@ -380,40 +385,41 @@ func (a *TrayApp) selectServer(idx int) {
 	}()
 }
 
-// switchServer 执行一次服务器切换：先在 serverSwitchMu 上排队（连点几下不会
-// 并发跑两套停/起），失败时把菜单勾选还原到真正在运行的那个服务器。
+// switchServer 执行一次服务器切换：整段"清空勾选 → 停/起 → 勾选结果"在会话
+// 序列锁内（连点几下不会并发跑两套停/起），失败时把菜单勾选还原到真正在运行
+// 的那个服务器。
 //
 // restart 由调用方注入（生产代码传 a.restartService），使测试无需真的重启服务、
-// 也不会改写运行测试的机器的系统代理与端口。
+// 也不会改写运行测试的机器的系统代理与端口。注意它是序列体：注入的实现自身不得
+// 再取序列锁。
 func (a *TrayApp) switchServer(idx int, restart func(*config.ClientConfig) error) error {
-	a.serverSwitchMu.Lock()
-	defer a.serverSwitchMu.Unlock()
+	return a.sess.runErr(func() error {
+		// 排队期间状态可能已经变成"这个服务器正在运行"（上一次点击已经切到它了）：
+		// 此时只需要把勾选确认回来，不必再停一次、起一次。
+		if a.currentCore() != nil && a.runningServerIndex() == idx {
+			a.setCheckedServer(idx)
+			return nil
+		}
 
-	// 排队期间状态可能已经变成"这个服务器正在运行"（上一次点击已经切到它了）：
-	// 此时只需要把勾选确认回来，不必再停一次、起一次。
-	if a.currentCore() != nil && a.runningServerIndex() == idx {
+		a.setCheckedServer(-1)
+
+		// 目标配置只作为"切换意图"传给 restart（生产实现只看它的服务器下标，见
+		// restartServiceInSequence）：这里刻意不在停服务之前把整份配置发布出去。
+		clone := a.currentConfig().Clone()
+		clone.SetDefaultServerIndex(idx)
+		if err := restart(clone); err != nil {
+			// restartService 已经尽力回滚到切换前的服务器：回滚成功（还有 core
+			// 在运行）就按当前配置勾回它；彻底没有服务在运行时留空——菜单不能
+			// 声称一个没在工作的服务器已选中，那正是"切换失败 + 本机断网"的样子。
+			if a.currentCore() != nil {
+				a.setCheckedServer(a.runningServerIndex())
+			}
+			return err
+		}
+
 		a.setCheckedServer(idx)
 		return nil
-	}
-
-	a.setCheckedServer(-1)
-
-	// 目标配置只作为"切换意图"传给 restart（生产实现只看它的服务器下标，见
-	// restartServiceWith）：这里刻意不在停服务之前把整份配置发布出去。
-	clone := a.currentConfig().Clone()
-	clone.SetDefaultServerIndex(idx)
-	if err := restart(clone); err != nil {
-		// restartService 已经尽力回滚到切换前的服务器：回滚成功（还有 core 在
-		// 运行）就按当前配置勾回它；彻底没有服务在运行时留空——菜单不能声称
-		// 一个没在工作的服务器已选中，那正是"切换失败 + 本机断网"时的样子。
-		if a.currentCore() != nil {
-			a.setCheckedServer(a.runningServerIndex())
-		}
-		return err
-	}
-
-	a.setCheckedServer(idx)
-	return nil
+	})
 }
 
 // runningServerIndex 返回当前配置指向的服务器在菜单里的下标（找不到返回 -1）。
@@ -702,55 +708,17 @@ func (a *TrayApp) setSysProxyOff() error {
 	return sysProxyRevert()
 }
 
-func (a *TrayApp) createTun2socks() error {
-	// 与 closeTun2socks（以及 helper 路径的 createTun2socksViaHelper、启动期的
-	// startTunEngineAtStartup、停止期的 App.Stop）共用 App.tunHelperMu：托盘的
-	// 每一次点击都在自己的 goroutine 里，启用与关闭会并发执行，而它们写的是
-	// 同一组字段（tunMgr/tunSession/EnableTun2socks）。
-	a.tunHelperMu.Lock()
-	defer a.tunHelperMu.Unlock()
-
-	if a.tunMgr != nil {
-		return nil
-	}
-
-	// core 检查必须早于任何状态写入：如果这里已经留下了 tunMgr 与
-	// EnableTun2socks=true，后续每次点击都会命中顶部的"已设置"保护而静默返回
-	// nil（菜单勾选着，引擎却从未运行、也再没人能 Stop 它）。
-	core := a.currentCore()
-	if core == nil || core.Client == nil {
-		return fmt.Errorf("client not initialized")
-	}
-
-	// 偏好（下次启动用）与运行期状态（直连拨号路径用）分别落位：前者走
-	// 不可变快照，后者是 core 上的显式开关（见 client.Client.SetTunMode）。
-	a.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = true })
-	core.Client.SetTunMode(true)
-	a.tunMgr = tun.New(a.tunConfig())
-	dev := a.tunMgr.DeviceConfig()
-	a.tunSession = &dev
-
-	icmpHandler := tun.NewICMPHandler(core.Client.Router())
-	icmpHandler.SetProxy(core.StreamHandler, a.methodFromServer())
-	a.tunMgr.SetICMPHandler(icmpHandler)
-
-	startTunEngine(a.tunMgr, "device")
-
-	return nil
-}
-
-// revertTunStart 撤销一次在 manager 构建后失败的 TUN 启动。
-// 它被安装为 tunStartFailureHook，因此菜单开关和启动路径都会走到这里。
+// revertTunStart 撤销一次在 manager 构建后失败的 TUN 启动。它是
+// appUI.tunStartFailed 的第一步，因此菜单开关和启动路径都会走到这里。
 //
-// 仅取消菜单勾选还不够：closeTun2socks 还会清空 a.tunMgr，
-// 否则下次启用会命中 createTun2socks 顶部的"已设置"保护，
-// 在菜单声称 TUN 已开启时静默地什么都不做。在 fd 路径上，
-// 助手进程已经安装了路由和 DNS，因此也必须告诉它拆除这些。
+// 仅取消菜单勾选还不够：session.tunDown 还会清空 tunMgr，否则下次启用会命中
+// session.tunUp 顶部的"已设置"保护，在菜单声称 TUN 已开启时静默地什么都不做。
+// 在 fd 路径上，助手进程已经安装了路由和 DNS，因此也必须告诉它拆除这些。
 func (a *TrayApp) revertTunStart() {
 	if mi := a.TunMenu(); mi != nil {
 		mi.SetChecked(false)
 	}
-	if err := a.closeTun2socks(); err != nil {
+	if err := a.sess.tunDown(); err != nil {
 		log.Error("[SYSTRAY] close tun2socks after start failure", "err", err)
 	}
 }
@@ -761,83 +729,6 @@ func (a *TrayApp) revertTunStart() {
 // （见 tray_tun_teardown_unix.go 的 waitTunHelperExit 与 verifyTunTeardown）。
 // 非 darwin/linux 平台没有 helper，这个值不会被用到。
 const tunHelperExitTimeout = 5 * time.Second
-
-func (a *TrayApp) closeTun2socks() error {
-	a.tunHelperMu.Lock()
-	defer a.tunHelperMu.Unlock()
-
-	// 会话配置必须在清空 a.tunMgr 之前取下来：它既用于校验，也用于兜底回滚。
-	session := a.tunSession
-	if session == nil && a.tunMgr != nil {
-		dev := a.tunMgr.DeviceConfig()
-		session = &dev
-	}
-	a.tunSession = nil
-
-	// 1. 先停止 tun2socks 引擎：它会关闭助手进程传给本进程的 TUN fd。
-	//    助手进程的关闭脚本会删除该接口，而 iproute2 无法删除仍附着在
-	//    fd 上的设备 —— 会报 "device or resource busy" 并把接口留下来，
-	//    连同所有 TUN 路由（它们都绑定在该接口上）。此后流量仍会进入
-	//    一个无人读取的设备，表现为 TUN 停止后"网络不可用"。
-	if a.tunMgr != nil {
-		log.Info("[SYSTRAY] closeTun2socks: stopping tun2socks engine")
-		a.tunMgr.Stop()
-		a.tunMgr = nil
-	}
-
-	// 2. 通过关闭 FIFO 通知助手进程退出。
-	//    助手进程检测到 stdin 上的 EOF 后清理路由/DNS 并退出。
-	//    FIFO 文件本身在 tunHelperStdin 关闭时被删除（见 fifoWriter.Close）。
-	helperSignalled := false
-	if a.tunHelperStdin != nil {
-		log.Info("[SYSTRAY] closeTun2socks: closing helper FIFO")
-		a.tunHelperStdin.Close() //nolint:errcheck
-		a.tunHelperStdin = nil
-		helperSignalled = true
-	}
-
-	// 3. 等助手进程退出（它通过文件锁与任何先前实例协调；内核在进程退出时释放
-	//    锁），然后自己复核系统路由表。
-	//
-	//    拆除过去是彻底"发射后不管"的：父进程既不等也不看，于是助手进程一旦
-	//    清路由失败，1/8…128/1 这些分流默认路由就留在表里，把全机 IPv4 流量
-	//    （包括 DNS）送进一个已经没人读的设备——表现为"切换服务器后本机断网"。
-	//    这里等不到就往下走：下面的复核会自己发现残留。
-	if helperSignalled {
-		if err := waitTunHelperExit(tunHelperExitTimeout); err != nil {
-			log.Error("[SYSTRAY] closeTun2socks: waiting for tun helper", "err", err)
-		}
-	}
-	if session != nil {
-		if err := verifyTunTeardown(*session); err != nil {
-			log.Error("[SYSTRAY] closeTun2socks: TUN teardown left routes behind", "err", err)
-			a.notifyTunTeardownProblem(
-				"TUN 已停止，但系统路由表里仍残留指向 TUN 的路由，本机可能无法上网。请退出并重新启动 Easyss，或重启系统以恢复网络。详情：" + err.Error())
-		}
-	}
-
-	// 4. 清除 HTTP /tun 配置。
-	if core := a.currentCore(); core != nil && core.HTTPServer != nil {
-		core.HTTPServer.ClearTunConfig()
-	}
-
-	// 5. 关掉运行期的 TUN 状态与持久化偏好（两者过去是同一个共享字段）。
-	if core := a.currentCore(); core != nil && core.Client != nil {
-		core.Client.SetTunMode(false)
-	}
-	a.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = false })
-	return nil
-}
-
-// notifyTunTeardownProblem 报告 TUN 拆除不完整（路由残留且回滚失败）。
-// 这是用户必须知道的状态：残留的分流默认路由会把全机流量黑洞掉。
-func (a *TrayApp) notifyTunTeardownProblem(msg string) {
-	if !a.trayReady() {
-		log.Warn("[SYSTRAY] notify skipped: tray not ready", "msg", msg)
-		return
-	}
-	a.notifyUser(msg)
-}
 
 // enableTun2socks 在后台 goroutine 中运行 TUN 启用流程，
 // 以保持托盘菜单响应。失败时它回滚菜单勾选并通知用户：
@@ -861,14 +752,14 @@ func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 		// 打开 TUN 设备、设置路由并把 fd 传回。
 		// 助手进程在非 unix 构建上总会失败，但该分支在那里不可达
 		//（由 runtime.GOOS 保证）。
-		if err := a.createTun2socksViaHelper(); err != nil { //nolint:staticcheck // always fails on non-unix builds; branch unreachable
+		if err := a.sess.tunUpViaHelper(); err != nil { //nolint:staticcheck // always fails on non-unix builds; branch unreachable
 			log.Error("[SYSTRAY] create tun2socks via helper", "err", err)
 			menu.SetChecked(false)
 			a.notifyTunStartFailure(friendlyTunError(err))
 			return
 		}
 	} else {
-		if err := a.createTun2socks(); err != nil {
+		if err := a.sess.tunUp(); err != nil {
 			log.Error("[SYSTRAY] create tun2socks", "err", err)
 			menu.SetChecked(false)
 			a.notifyTunStartFailure(friendlyTunError(err))
@@ -881,32 +772,47 @@ func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 // 以保持托盘菜单响应。
 func (a *TrayApp) disableTun2socks() {
 	log.Info("[SYSTRAY] disableTun2socks called")
-	if err := a.closeTun2socks(); err != nil {
+	if err := a.sess.tunDown(); err != nil {
 		log.Error("[SYSTRAY] close tun2socks", "err", err)
 	}
 }
 
+// startService 是切换/重启的默认 start 步骤：用当前配置快照启动一个新会话。
+// 参数被刻意忽略（生产语义）：配置由 restartServiceInSequence 以增量方式发布到
+// 当前快照上，App.Start 读到的就是它。
+func (a *TrayApp) startService(*config.ClientConfig) error { return a.Start() }
+
+// restartService 执行一次完整的"停→起"切换，出错时回滚到切换前的服务器。
+// 它是 switchServer 的默认 restart 步骤，因此是序列体：只能在 session.run 内调用
+// （见 restartServiceInSequence）。
 func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
-	return a.restartServiceWith(newCfg, func(*config.ClientConfig) error {
-		// 配置（目标服务器 + TUN 关闭）已经由 restartServiceWith 以增量方式发布
-		// 到当前快照上，Start 读到的就是它。这里刻意不再整体换装：那样会把
-		// closeService 期间发生的菜单改动（代理规则/日志级别）用旧全量覆盖回去。
-		return a.Start()
+	return a.restartServiceInSequence(newCfg, a.startService)
+}
+
+// restartServiceWith 是序列体 restartServiceInSequence 的序列化入口：整段"停→起"
+// 持有 session 的序列锁。它供不持有序列的调用方使用（测试，以及将来需要单独重启
+// 一次会话的路径）。
+//
+// 序列锁不可重入：已经位于 session.run 闭包内的调用方必须直接调用
+// restartServiceInSequence，否则会死锁。
+func (a *TrayApp) restartServiceWith(newCfg *config.ClientConfig, start func(*config.ClientConfig) error) error {
+	return a.sess.runErr(func() error {
+		return a.restartServiceInSequence(newCfg, start)
 	})
 }
 
-// restartServiceWith 是 restartService 的实现；start 由调用方注入，使测试可以
-// 驱动"新服务起不来 → 回滚到旧服务器"这条路径，而不必真的启动代理核心。
+// restartServiceInSequence 是切换的序列体；start 由调用方注入，使测试可以驱动
+// "新服务起不来 → 回滚到旧服务器"这条路径，而不必真的启动代理核心。
 //
 // newCfg 只是"切换意图"的载体：本函数只从它取目标服务器下标，然后把这**一条
 // 增量**应用到当前快照上（见下面的 updateConfig），其余字段一律以当前快照为准。
-// 原因是 closeService 可能要数秒（macOS 上要等 TUN 拆除的管理员凭据），而
-// serverSwitchMu 只串行化两套"停/起"，串不住不持锁的菜单路径——若在这里发布
-// 一份停服务之前取的全量快照，用户在这期间改的代理规则/日志级别就会被静默还原。
+// 原因是 stopServiceInSequence 可能要数秒（macOS 上要等 TUN 拆除的管理员凭据），
+// 而序列锁只串行化两套"停/起"，串不住不持锁的菜单路径——若在这里发布一份停服务
+// 之前取的全量快照，用户在这期间改的代理规则/日志级别就会被静默还原。
 //
 // start 收到的配置是"调用时刻生效的快照"，只读（生产实现忽略它，测试据此判断
 // 目标服务器与注入失败）。
-func (a *TrayApp) restartServiceWith(newCfg *config.ClientConfig, start func(*config.ClientConfig) error) error {
+func (a *TrayApp) restartServiceInSequence(newCfg *config.ClientConfig, start func(*config.ClientConfig) error) error {
 	targetIdx := newCfg.DefaultServerIndex()
 
 	snap := a.currentConfig()
@@ -916,7 +822,7 @@ func (a *TrayApp) restartServiceWith(newCfg *config.ClientConfig, start func(*co
 
 	// 停止一切，包括 TUN。在 macOS 上这会提示输入管理员凭据
 	// 以清理路由和 DNS —— 在手动切换服务器期间可以接受。
-	a.closeService()
+	a.stopServiceInSequence()
 
 	// 停完之后才发布切换意图，且只改这次切换真正要改的两个字段：目标服务器，
 	// 以及"切换后 TUN 保持关闭"（托盘菜单与实际状态同步，用户一次点击即可
@@ -959,9 +865,9 @@ func (a *TrayApp) restartServiceWith(newCfg *config.ClientConfig, start func(*co
 		return err
 	}
 
-	// startupWarn 由 start 里的那次 Start（或 buildTray 的初始 Start）在
-	// stateMu 下写入；这里的恢复流程与那次 Start 分属不同 goroutine——
-	// serverSwitchMu 只能串行化两套"停/起"，串不住初始 Start，因此必须走访问器。
+	// startupWarn 由 start 里的那次 App.Start（或 buildTray 的初始 Start）写入；
+	// 这里的恢复流程与那次 Start 分属不同 goroutine，因此必须走访问器（它读的是
+	// 会话自己的锁，见 session.startupWarn）。
 	if warn := a.currentStartupWarn(); warn != nil {
 		log.Warn("[SYSTRAY] restart service: startup warning", "err", warn)
 	}
@@ -970,10 +876,16 @@ func (a *TrayApp) restartServiceWith(newCfg *config.ClientConfig, start func(*co
 	return nil
 }
 
+// closeService 停止当前会话：撤销系统代理 → 拆 TUN → 停核心。整段在会话序列锁内
+// （见 session.run），因此退出路径与切换/自更新重启不会交错——这个性质过去是
+// closeService 整段持有 TrayApp.mu 顺带得到的（那把锁只负责两个菜单项指针，却把
+// 菜单读挡住了最长可达几十秒的 TUN 拆除），现在由显式的序列锁提供。
 func (a *TrayApp) closeService() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.sess.run(a.stopServiceInSequence)
+}
 
+// stopServiceInSequence 是关闭会话的序列体，只能在 session.run 内调用。
+func (a *TrayApp) stopServiceInSequence() {
 	// 退出时总是尝试清除系统代理，无论菜单勾选状态如何
 	//（由于异步开关或启动顺序，勾选状态可能与实际系统设置不一致）。
 	if err := a.setSysProxyOff(); err != nil {
@@ -982,8 +894,8 @@ func (a *TrayApp) closeService() {
 
 	// 在停止核心服务之前停止 TUN 助手进程和引擎。
 	// 在非 darwin 或 root 环境下，如果 TUN 不是通过助手进程启动的，
-	// closeTun2socks 是空操作。
-	if err := a.closeTun2socks(); err != nil {
+	// session.tunDown 是空操作。
+	if err := a.sess.tunDown(); err != nil {
 		log.Error("[SYSTRAY] close service: close tun2socks", "err", err)
 	}
 
