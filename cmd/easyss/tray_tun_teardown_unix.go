@@ -15,6 +15,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// tunHelperExitTimeout 是关闭/切换服务器时等待提权 helper 释放控制锁的上限。
+// 正常路径上 helper 收到 FIFO 的 EOF 后几十毫秒内就会退出；超时说明它卡在清理里，
+// 继续等只会拖住整个切换流程——此时不再等它，直接由父进程自己复核路由表
+// （见 waitTunHelperExit 与 verifyTunTeardown）。
+const tunHelperExitTimeout = 5 * time.Second
+
 // waitTunHelperExit 等待提权 helper 释放 TUN 控制锁，也就是等它完成清理并退出。
 //
 // helper 由 osascript/pkexec 以后台方式拉起（PPID 为 1），父进程既拿不到它的 pid

@@ -2,24 +2,14 @@
 
 package main
 
-import (
-	"time"
-
-	"github.com/nange/easyss/v3/client/tun"
-)
+import "github.com/nange/easyss/v3/client/tun"
 
 // finishTunTeardown 在非 darwin/linux 平台与 headless 构建上是空操作：前者没有
-// 提权 helper（TUN 路由挂在适配器上，由关闭脚本随适配器一起清理），后者没有运行期
-// 的 TUN 开关路径（TUN 只可能在启动时由 App.Start 直接创建，拆除由 session.stop
-// 收走 manager 完成）。
+// 提权 helper（TUN 路由挂在适配器上，由关闭脚本随适配器一起清理，没有可按网关
+// 探测的残留），后者没有运行期的 TUN 开关路径（TUN 只可能在启动时由 App.Start
+// 直接创建，拆除由 session.stop 收走 manager 完成）。
+//
+// 因此这些平台上没有"等 helper 退出"与"复核路由表"两步，也就不需要它们的存根：
+// waitTunHelperExit 与 verifyTunTeardown 只由 darwin/linux 的实现（见
+// tray_tun_teardown_unix.go）提供，那个实现与这里互斥编译。
 func (s *session) finishTunTeardown(*tun.DeviceConfig, bool) {}
-
-// waitTunHelperExit 在非 darwin/linux 平台上是空操作：这些平台没有提权 TUN
-// helper，TUN 设备与路由由 client/tun 自己通过创建/关闭脚本管理。
-func waitTunHelperExit(time.Duration) error { return nil }
-
-// verifyTunTeardown 在非 darwin/linux 平台上是空操作：Windows 的 TUN 路由挂在
-// 适配器上、由关闭脚本随适配器一起清理，没有可按网关探测的残留；这些平台也没有
-// 提权 helper 会话，因此不需要 tunRouteResidue/rollbackTunRoutes 那套探测与回滚
-// （它们在 darwin/linux 上由 tray_tun_teardown_unix.go 定义）。
-func verifyTunTeardown(tun.DeviceConfig) error { return nil }

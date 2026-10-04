@@ -723,13 +723,6 @@ func (a *TrayApp) revertTunStart() {
 	}
 }
 
-// tunHelperExitTimeout 是关闭/切换服务器时等待提权 helper 释放控制锁的上限。
-// 正常路径上 helper 收到 FIFO 的 EOF 后几十毫秒内就会退出；超时说明它卡在清理里，
-// 继续等只会拖住整个切换流程——此时不再等它，直接由父进程自己复核路由表
-// （见 tray_tun_teardown_unix.go 的 waitTunHelperExit 与 verifyTunTeardown）。
-// 非 darwin/linux 平台没有 helper，这个值不会被用到。
-const tunHelperExitTimeout = 5 * time.Second
-
 // enableTun2socks 在后台 goroutine 中运行 TUN 启用流程，
 // 以保持托盘菜单响应。失败时它回滚菜单勾选并通知用户：
 // 否则失败不可见，因为代理核心继续提供 SOCKS5/HTTP 服务，
