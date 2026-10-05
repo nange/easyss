@@ -137,8 +137,9 @@ make lint   # 等价: go tool golangci-lint run --timeout 10m --verbose
 - 默认配置文件名为 `config.json`，位于二进制同目录
 - v2 配置自动迁移到 v3：`client/config/migrate.go` 中的 `MigrateV2Config()` 处理转换
 - v3 客户端配置入口：`client/config/config.go` 中的 `ClientConfig` 结构体
-- v3 服务端配置入口：`server/config/config.go` 中的 `FileConfig`/`ServerConfig`
-- `timeout` 是全部派生超时（TCP/UDP 空闲、拨号、DNS 响应、连接轮换、服务端 h2 连接空闲）的唯一旋钮，取值范围 **[15, 60]** 秒：非正值取默认值 30，越界取最近的边界；归一化统一由 `config.NormalizeTimeout`/`config.TimeoutDuration` 负责（客户端 `applyDefaults`/`TimeoutDuration`、简单模式覆盖 `ApplySimpleOverrides`、服务端 `server.Start` 都必须经过它，不要各自判断）
+- v3 服务端配置入口：`server/config/config.go` 中的 `FileConfig`/`ServerConfig`。服务端配置的加载与归一化统一走 `config.LoadConfig`（读文件 → 版本校验 `SupportedConfigVersion` → `applyDefaults` → `ResolveFilePaths`），`cmd/easyss-server` 不再自己排列这些步骤；`applyDefaults` 只收编没有其他 owner 的配置策略（`timeout` 写回、`log.level` 取 `sharedconfig.DefaultLogLevel`），`server.allowed_methods`（`GetAllowedMethods`）、`transport.h2_*`（`buildHTTPServer`）与 `shaper.*`（`shaper.Config.Normalize`）的空值/0 值语义仍由各自消费点负责，以免出现第二份默认值
+- `-show-config-example` 的完整示例由 `server/config.ExampleConfig()` 提供（与 `FileConfig` 定义相邻，默认值全部引用 sharedconfig 常量，必填项用占位符），测试固定"示例本身已归一化"
+- `timeout` 是全部派生超时（TCP/UDP 空闲、拨号、DNS 响应、连接轮换、服务端 h2 连接空闲）的唯一旋钮，取值范围 **[15, 60]** 秒：非正值取默认值 30，越界取最近的边界；归一化统一由 `config.NormalizeTimeout`/`config.TimeoutDuration` 负责（客户端 `applyDefaults`/`TimeoutDuration`、简单模式覆盖 `ApplySimpleOverrides`、服务端 `server/config.applyDefaults`（由 `LoadConfig` 调用）与 `server.Start` 都必须经过它，不要各自判断）
 - `tun_mtu`（完整模式 `local.tun_mtu`，简单模式同名 `tun_mtu`，默认 1500，钳制到 **[1280, 9000]**）是 TUN 设备 MTU 与 tun2socks netstack MTU 的**唯一**来源，归一化统一由 `config.NormalizeTunMTU` 负责（客户端 `applyDefaults`/`TunMTU()`、简单模式覆盖、`tun.New`、提权 helper 都必须经过它）。设备那一侧统一由各平台的**创建脚本**写入，MTU 是它们的第 9 个位置参数：linux `ip link set dev ... mtu`、darwin `ifconfig ... mtu`、Windows `netsh interface ipv4/ipv6 set subinterface ... mtu=`（wintun 适配器的 MTU 无法由 tun2socks 设置，wireguard-go 只把它记在内存里）；darwin/linux 的直连路径上 tun2socks 也会按同一个值设置一次（幂等），而脚本是 fd 路径唯一能改设备 MTU 的地方，keep-alive 重跑脚本时也会把它修回。`Manager.engineMTU` 在 fd 路径上以设备真实 MTU 为准兜底（超出配置区间时封顶到上限），`warnOnMTUMismatch` 在创建脚本之后核对设备与 netstack 的 MTU：netstack 的 MTU 小于设备 MTU 时会静默丢弃设备交上来的超限包（UDP、ICMP 与 IP 分片），而 TCP 因 MSS 由 netstack 通告而不受影响
 - 显示完整配置示例：`./easyss -show-config-example`
 

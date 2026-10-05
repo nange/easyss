@@ -14,10 +14,8 @@ import (
 	"time"
 	_ "time/tzdata"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/pprof"
-	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/selfupdate"
 	"github.com/nange/easyss/v3/server"
 	"github.com/nange/easyss/v3/server/config"
@@ -78,40 +76,15 @@ Flags:
 	// 会先在当前工作目录中查找，再回退到可执行文件所在目录。
 	configFile = util.ResolvePath(configFile)
 
-	data, err := os.ReadFile(configFile)
+	// 版本校验、默认值（timeout/log.level）与相对文件路径（证书、代理列表、
+	// 日志文件）解析都在 config.LoadConfig 内完成（见 server/config/config.go）。
+	fileCfg, err := config.LoadConfig(configFile)
 	if err != nil {
-		log.Error("[EASYSS-SERVER-V3] read config", "err", err)
+		log.Error("[EASYSS-SERVER-V3] load config", "err", err, "file", configFile)
 		os.Exit(1)
 	}
-
-	var fileCfg config.FileConfig
-	if err := json.Unmarshal(data, &fileCfg); err != nil {
-		log.Error("[EASYSS-SERVER-V3] parse config", "err", err)
-		os.Exit(1)
-	}
-	// 为其他主版本编写的配置可能包含本二进制会静默忽略（或作不同解释）的字段，
-	// 因此拒绝基于它启动。0 表示该字段不存在（早于该字段的配置），按未设置处理。
-	if fileCfg.ConfigVersion != 0 && fileCfg.ConfigVersion != 3 {
-		log.Error("[EASYSS-SERVER-V3] unsupported config version",
-			"version", fileCfg.ConfigVersion, "supported", 3, "file", configFile)
-		os.Exit(1)
-	}
-	// 将相对文件路径（cert_path/key_path/next_proxy_file）解析为相对
-	// 可执行文件目录的路径，使 macOS launchd（cwd=/）启动时仍能找到
-	// 放在二进制旁边的文件。
-	fileCfg.ResolveFilePaths()
 	if pprofEnabled {
 		fileCfg.PprofEnabled = true
-	}
-	if fileCfg.Log.Level == "" {
-		fileCfg.Log.Level = "info"
-	}
-
-	// 将相对日志文件路径基于可执行文件目录解析为绝对路径。
-	if fileCfg.Log.FilePath != "" && !filepath.IsAbs(fileCfg.Log.FilePath) {
-		if dir := util.CurrentDir(); dir != "" {
-			fileCfg.Log.FilePath = filepath.Join(dir, fileCfg.Log.FilePath)
-		}
 	}
 
 	log.Init(fileCfg.Log.FilePath, fileCfg.Log.Level)
@@ -135,7 +108,7 @@ Flags:
 		pprofSrv = pprof.StartPprof()
 	}
 
-	srv, err := server.New(&fileCfg)
+	srv, err := server.New(fileCfg)
 	if err != nil {
 		log.Error("[EASYSS-SERVER-V3] init server", "err", err)
 		os.Exit(1)
@@ -171,46 +144,6 @@ Flags:
 }
 
 func exampleV3ServerConfig() string {
-	cfg := config.FileConfig{
-		ConfigVersion: 3,
-		Server: config.ServerConfig{
-			Listen:         ":443",
-			Domain:         "your-domain.com",
-			Password:       "your-password",
-			AllowedMethods: []string{protocol.MethodAES256GCM.String(), protocol.MethodChaCha20Poly1305.String()},
-			CertPath:       "",
-			KeyPath:        "",
-			Email:          "",
-		},
-		Fallback: config.FallbackConfig{
-			Target:       "",
-			PreserveHost: false,
-			CDNDomains:   []string{},
-		},
-		Shaper: config.ShaperConfig{
-			BatchWindowMS:    sharedconfig.DefaultBatchWindowMS,
-			CoverBudgetRatio: sharedconfig.DefaultCoverBudgetRatio,
-			CoverBudgetCap:   sharedconfig.DefaultCoverBudgetCap,
-		},
-		Transport: config.TransportConfig{
-			Protocols:       []string{"h2"},
-			H2MaxFrameSize:  sharedconfig.HTTP2ServerMaxReadFrameSize,
-			H2RecvBufConn:   sharedconfig.HTTP2ServerReceiveBufferPerConnection,
-			H2RecvBufStream: sharedconfig.HTTP2ServerReceiveBufferPerStream,
-		},
-		NextProxy: config.NextProxyConfig{
-			URL:           "",
-			NextProxyFile: "",
-			EnableUDP:     false,
-			AllHost:       false,
-		},
-		Log: config.LogConfig{
-			Level:    "info",
-			FilePath: "easyss.log",
-		},
-		PprofEnabled: false,
-		Timeout:      30,
-	}
-	b, _ := json.MarshalIndent(cfg, "", "  ")
+	b, _ := json.MarshalIndent(config.ExampleConfig(), "", "  ")
 	return string(b)
 }

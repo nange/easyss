@@ -251,8 +251,10 @@ func cleanCertmagicDomainAssets(ctx context.Context, storage certmagic.Storage, 
 func (s *Server) Start() error {
 	cfg := s.cfg
 	srvCfg := cfg.Server
-	// 基础超时派生出流空闲、UDP 空闲、拨号与 h2 连接空闲：越界值在这里归一化，
-	// 使启动日志与后续全部派生看到同一个值（见 sharedconfig.NormalizeTimeout）。
+	// 基础超时派生出流空闲、UDP 空闲、拨号与 h2 连接空闲。经 config.LoadConfig
+	// 加载的配置已在 applyDefaults 里归一化并写回，这里再算一次（幂等）是为了
+	// 覆盖不经过配置加载的调用方（测试、嵌入式使用会直接手搓 FileConfig），
+	// 因此启动日志与后续全部派生始终看到同一个值（见 sharedconfig.NormalizeTimeout）。
 	timeout := sharedconfig.TimeoutDuration(cfg.Timeout)
 	log.Info("[SERVER] starting", "listen", srvCfg.Listen, "domain", srvCfg.Domain, "timeout", int(timeout.Seconds()))
 
