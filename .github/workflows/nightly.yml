@@ -43,6 +43,14 @@ jobs:
       - name: Verify (lint + tests)
         run: make verify
 
+      # nightly 的 release tag 由最后一步 action-gh-release 创建，构建时还不存在；
+      # 先在本地打一个同名轻量 tag，让 Makefile 的 `git describe --tags` 距离变成 0，
+      # 注入的 version.GitTag 才会是本次构建的 nightly-<sha>，而不是最近的历史版本 tag
+      # （例如 v3.0.0-rc14-15-g5909694）。-f 兼容同一提交重跑 workflow：此时该 tag
+      # 可能已随 fetch-depth: 0 的 checkout 一起拉下来。远端 tag 仍由 action-gh-release 创建。
+      - name: Tag this build
+        run: git tag -f nightly-$(git rev-parse --short HEAD)
+
       # 一次产出全部平台二进制、14 个 zip 与 Android AAR（见 Makefile 的 build/pack/dist）
       - name: Build release assets
         run: make dist
