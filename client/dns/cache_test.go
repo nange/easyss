@@ -440,12 +440,23 @@ func TestCachePrePopulateWithFallbackBlackholeBuiltin(t *testing.T) {
 // TestCachePrePopulateQueriesAAndAAAAConcurrently 验证同一个条目的 A 与 AAAA
 // 查询并发进行：服务器对两种查询都延迟 60% 的条目预算才应答，串行实现只能赶上
 // 第一条（A），并发实现两条都能在预算内落进缓存。
+//
+// 预算必须夹在「单条延迟」与「两条串行之和」之间，这是判别并发与串行的唯一依据，
+// 不能为了宽裕而破坏这个区间；但绝对值要给足：本地 UDP 往返、Windows 定时器精度
+// 与慢速 runner（windows-11-arm）上的调度开销会实打实吃掉几十毫秒，早先
+// 60ms/100ms 的组合只剩 40ms 余量，曾以 read udp i/o timeout 的形式偶发失败。
+// 现在的 600ms/1s 保持同一比例（60%），余量从 40ms 放大 10 倍到 400ms。
 func TestCachePrePopulateQueriesAAndAAAAConcurrently(t *testing.T) {
+	const (
+		itemTimeout = 1 * time.Second        // > 单条延迟，且 < 两条串行之和（1.2s）
+		serverDelay = 600 * time.Millisecond // 即预算的 60%，串行实现赶不上第二条
+	)
+
 	oldItem := ResolveItemTimeout
-	ResolveItemTimeout = 100 * time.Millisecond
+	ResolveItemTimeout = itemTimeout
 	t.Cleanup(func() { ResolveItemTimeout = oldItem })
 
-	addr := startSlowTestDNSServer(t, 60*time.Millisecond)
+	addr := startSlowTestDNSServer(t, serverDelay)
 
 	c := NewCache("example.com")
 	if _, err := c.PrePopulate(context.Background(), "example.com", addr, true); err != nil {
