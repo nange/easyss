@@ -420,9 +420,7 @@ func TestPeerFacePublishAddr(t *testing.T) {
 	if err := AssertFullAddr(got); err != nil {
 		t.Errorf("peer.txt does not contain a self-contained address: %v", err)
 	}
-	if perm := filePerm(t, path); perm != 0o600 {
-		t.Errorf("peer.txt permission = %o, want 600", perm)
-	}
+	requirePerm(t, "peer.txt", path, 0o600)
 }
 
 // TestPeerFaceStopIsIdempotent 固定 Stop 的幂等性与"未 Start 也能 Stop"。

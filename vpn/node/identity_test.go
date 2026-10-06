@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -20,6 +21,21 @@ func filePerm(t *testing.T, path string) os.FileMode {
 		t.Fatalf("stat %s: %v", path, err)
 	}
 	return st.Mode().Perm()
+}
+
+// requirePerm 断言 path 的权限位。
+//
+// Windows 没有 POSIX 权限位：Go 报告的 Perm() 是从"只读"属性合成的（可写文件
+// 一律 0666、目录 0666），因此那里既不可能满足 0600/0700、断言也不代表任何真实
+// 约束。跳过而不是放宽取值，否则这条用例在 Windows 上会退化成一句同义反复。
+func requirePerm(t *testing.T, what, path string, want os.FileMode) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if got := filePerm(t, path); got != want {
+		t.Errorf("%s permission = %o, want %o", what, got, want)
+	}
 }
 
 // dropKey 从一个 JSON 对象里删掉指定字段，返回新的 JSON（测试用）。
@@ -50,12 +66,8 @@ func TestLoadOrCreateNodeIdentityIsStable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first LoadOrCreateNodeIdentity: %v", err)
 	}
-	if got := filePerm(t, path); got != 0o600 {
-		t.Errorf("key file permission = %o, want 600", got)
-	}
-	if got := filePerm(t, filepath.Dir(path)); got != 0o700 {
-		t.Errorf("state dir permission = %o, want 700", got)
-	}
+	requirePerm(t, "key file", path, 0o600)
+	requirePerm(t, "state dir", filepath.Dir(path), 0o700)
 
 	second, err := LoadOrCreateNodeIdentity(path)
 	if err != nil {

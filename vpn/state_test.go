@@ -3,6 +3,7 @@ package vpn
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -17,6 +18,21 @@ func filePerm(t *testing.T, path string) os.FileMode {
 	return st.Mode().Perm()
 }
 
+// requirePerm 断言 path 的权限位。
+//
+// Windows 没有 POSIX 权限位：Go 报告的 Perm() 是从"只读"属性合成的（可写文件
+// 一律 0666），因此那里既不可能满足 0600、断言也不代表任何真实约束。跳过而不是
+// 放宽取值，否则这条用例在 Windows 上会退化成一句同义反复。
+func requirePerm(t *testing.T, what, path string, want os.FileMode) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if got := filePerm(t, path); got != want {
+		t.Errorf("%s permission = %o, want %o", what, got, want)
+	}
+}
+
 // TestLoadOrCreateKeyIsStable 固定 client key 与 DERP key 的稳定性与权限。
 // client key 跨重启稳定是 vpn.allow_clients 白名单可用的前提。
 func TestLoadOrCreateKeyIsStable(t *testing.T) {
@@ -29,9 +45,7 @@ func TestLoadOrCreateKeyIsStable(t *testing.T) {
 	if first.IsZero() {
 		t.Fatal("generated key is zero")
 	}
-	if got := filePerm(t, path); got != 0o600 {
-		t.Errorf("key file permission = %o, want 600", got)
-	}
+	requirePerm(t, "key file", path, 0o600)
 	if !strings.HasPrefix(NodeKeyString(first), "nodekey:") {
 		t.Errorf("NodeKeyString = %q, want a nodekey: prefix (that is the vpn.allow_clients format)", NodeKeyString(first))
 	}
