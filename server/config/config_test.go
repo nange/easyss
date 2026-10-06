@@ -117,6 +117,7 @@ func TestExampleConfigIsNormalized(t *testing.T) {
 	for _, key := range []string{
 		`"server"`, `"fallback"`, `"shaper"`, `"transport"`,
 		`"next_proxy"`, `"log"`, `"pprof_enabled"`, `"timeout"`,
+		`"vpn"`, `"derp_addr"`,
 	} {
 		require.Contains(t, string(data), key)
 	}

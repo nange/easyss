@@ -79,6 +79,12 @@ type Core struct {
 	// 实例），随 Client.Close 释放——本类型不再单独关闭它。
 	transport transport.Transport
 
+	// vpn 是本节点的 VPN 栈（对端面 + 隧道客户端 + 访问侧注入面）；vpn.enabled
+	// 为 false 时是 nil，此时整条 VPN 路径不存在：不监听、不启 goroutine。
+	// 它由 SOCKS5 入口借用（作为分流面），因此必须在关闭代理入口之后才能关闭，
+	// 见 cleanup 与 vpnStack.close。
+	vpn *vpnStack
+
 	// StartupWarn 保存初始化核心时检测到的非致命警告（例如自定义规则文件
 	// 加载失败，或服务端域名暂时无法解析），调用方可以在不中断启动的情况下
 	// 将其展示给用户。
@@ -142,6 +148,23 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		domainReady:   make(chan struct{}),
 	}
 
+	// VPN 栈必须在本地代理入口之前建立：SOCKS5 服务器要把它作为分流面注入
+	// （见 proxy.Socks5Options.VPN）。此后的任何失败路径都通过 c.cleanup() 收尾，
+	// 因此它也会把已经建好的 VPN 一起拆掉。
+	var vpnRoute proxy.VPNRoute
+	if cfg.VPN.Enabled {
+		// TUN 意图取配置里的偏好（client.New 也用它播种运行期状态）：TUN 与
+		// relay_only=false 不兼容，而强制必须在任何 tailcat 组件启动之前完成
+		//（见 startVPN 与 docs/vpn-design.md 8.1）。
+		stack, err := startVPN(cfg, timeouts, defaultVPNPaths(), cfg.Local.EnableTun2socks)
+		if err != nil {
+			c.cleanup()
+			return nil, fmt.Errorf("start vpn: %w", err)
+		}
+		c.vpn = stack
+		vpnRoute = stack.route
+	}
+
 	// 在启动任何服务器 goroutine 之前，预先绑定所有本地监听地址，
 	// 这样监听失败（例如端口已被占用）会以错误中止启动，
 	// 而不是被记录日志后静默忽略。
@@ -158,7 +181,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 	}
 	if cfg.Local.HTTPPort > 0 {
 		if cfg.Local.SocksPort <= 0 {
-			_ = cli.Close()
+			c.cleanup()
 			return nil, errSocksRequired
 		}
 		httpAddr = "127.0.0.1:" + strconv.Itoa(cfg.Local.HTTPPort)
@@ -198,9 +221,11 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 			Timeouts:          timeouts,
 			DirectDialContext: cli.DialContext,
 			DNSCache:          c.dnsCache,
+			// nil 时 VPN 分流完全关闭（本会话没有 vpn.enabled）。
+			VPN: vpnRoute,
 		})
 		if err != nil {
-			_ = cli.Close()
+			c.cleanup()
 			return nil, err
 		}
 		c.SocksServer = socksServer
@@ -239,7 +264,18 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 	}
 
 	if dnsAddr != "" {
-		c.dnsServer = dns.NewForwardServer(dnsAddr, cli.Router().ShouldIPV6Disable())
+		// 静态名钩子只在 VPN 启用时存在：它把对端名字解析成 overlay IPv4。
+		// 非 VPN 会话传 nil，转发服务器行为逐字节不变。
+		//
+		// 同一份注入也交给 SOCKS5 入口（Socks5Options.VPN 的可选静态名能力）：
+		// TUN 模式下系统解析器写的是公网 DNS，查询经 tun2socks 到达代理的 DNS
+		// 拦截器，那个前端才是 TUN 下真正被用到的路径；这里的转发服务器服务的是
+		// enable_forward_dns 的 LAN 部署（见 docs/vpn-design.md 5.4）。
+		var staticNames dns.StaticNames
+		if c.vpn != nil {
+			staticNames = c.vpn.route
+		}
+		c.dnsServer = dns.NewForwardServer(dnsAddr, cli.Router().ShouldIPV6Disable(), staticNames)
 		log.Info("[EASYSS] starting dns forward server", "addr", dnsAddr)
 		go func() {
 			if err := c.dnsServer.Start(); err != nil {
@@ -573,6 +609,9 @@ func (c *Core) cleanup() {
 	if c.SocksServer != nil {
 		_ = c.SocksServer.Close()
 	}
+	// VPN 在代理入口之后关闭：Socks5Server 借用它作为分流面，反过来会让在飞的
+	// 隧道拨号打到一个已关闭的客户端集合（见 vpnStack.close）。
+	c.StopVPN()
 	if c.Client != nil {
 		_ = c.Client.Close()
 	}

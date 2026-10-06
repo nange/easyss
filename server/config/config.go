@@ -47,13 +47,14 @@ type NextProxyConfig struct {
 // pprof_enabled）只存在于 FileConfig 上：server.Server 读取这一个结构体，
 // 而不是再合并一份副本。
 type ServerConfig struct {
-	Listen         string   `json:"listen"`
-	Domain         string   `json:"domain"`
-	Password       string   `json:"password"`
-	AllowedMethods []string `json:"allowed_methods"`
-	CertPath       string   `json:"cert_path"`
-	KeyPath        string   `json:"key_path"`
-	Email          string   `json:"email"`
+	Listen         string    `json:"listen"`
+	Domain         string    `json:"domain"`
+	Password       string    `json:"password"`
+	AllowedMethods []string  `json:"allowed_methods"`
+	CertPath       string    `json:"cert_path"`
+	KeyPath        string    `json:"key_path"`
+	Email          string    `json:"email"`
+	VPN            VPNConfig `json:"vpn"`
 }
 
 type FileConfig struct {
@@ -93,6 +94,11 @@ func LoadConfig(path string) (*FileConfig, error) {
 	}
 
 	applyDefaults(&fc)
+	// VPN 的启动期契约（derp_path 形态、derp_addr 可推导或可解析）在这里固定，
+	// 且只在 vpn.enabled 时生效：未启用的 VPN 配置不参与运行期。
+	if err := fc.validateVPN(); err != nil {
+		return nil, err
+	}
 	// 相对文件路径（证书、代理列表、日志文件）在这里统一解析。
 	fc.ResolveFilePaths()
 
@@ -167,6 +173,13 @@ func ExampleConfig() FileConfig {
 			Domain:         "your-domain.com",
 			Password:       "your-password",
 			AllowedMethods: DefaultAllowedMethods(),
+			// DERP 的对外 host:port 与 listen/domain 一致时本可以省略
+			// derp_addr（ResolveDERPAddr 会推导），示例里仍然写全：示例是
+			// 字段清单，任何新增字段都不应静默漏在示例之外。
+			VPN: VPNConfig{
+				Enabled:  true,
+				DERPAddr: "your-domain.com:443",
+			},
 		},
 		// 显式给出空切片而不是留 nil：示例里 cdn_domains 应呈现为 []，
 		// 与 README 表格中"默认值 []"一致，而不是序列化成 null。

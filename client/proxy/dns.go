@@ -34,6 +34,13 @@ type dnsOptions struct {
 	Cache  *easydns.Cache
 	// Pool 提供经隧道的 UDP 交换（代理分支）与交换失效回收。
 	Pool *udpPool
+	// Static 是本地静态名来源（VPN 对端名字）；nil 表示没有，行为与今天一致。
+	//
+	// 它是 TUN 模式下对端名字能被解析的**唯一**位置：TUN 写入系统解析器的是一个
+	// 公网 DNS（见 cmd/easyss 的 tunDNS/PreferredSystemDNS），查询经 TUN 到达本
+	// 拦截器，而不是 client/dns 的转发服务器（那个只服务 enable_forward_dns 的
+	// LAN 部署）。两者共用同一份应答语义（easydns.StaticReply）。
+	Static easydns.StaticNames
 	// Dial 打开直连 UDP socket（直连解析）。
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 	// ServerDomain 是代理服务器自身的主机名（字面 IP 时为 ""）。
@@ -49,9 +56,9 @@ type dnsOptions struct {
 	QueryIdle time.Duration
 }
 
-// dnsInterceptor 承担本地代理的 DNS 拦截：它把一条查询分流到 Block / 缓存 /
-// 直连解析 / 经隧道代理四条路径，并把结果写入 easydns.Cache、按自定义域名规则
-// 学习答案。
+// dnsInterceptor 承担本地代理的 DNS 拦截：它把一条查询分流到 Block / 静态名 /
+// 缓存 / 直连解析 / 经隧道代理五条路径，并把结果写入 easydns.Cache、按自定义
+// 域名规则学习答案。
 //
 // UDP 与 TCP 两个前端共用同一个判定（plan）：前端只负责各自的报文封帧与
 // （UDP 的）SOCKS5 数据报组帧，拦截器完全不接触 socks5.Server。
@@ -59,6 +66,7 @@ type dnsInterceptor struct {
 	router       *router.Router
 	cache        *easydns.Cache
 	pool         *udpPool
+	static       easydns.StaticNames
 	dial         func(ctx context.Context, network, addr string) (net.Conn, error)
 	serverDomain string
 	dialTimeout  time.Duration
@@ -78,6 +86,7 @@ func newDNSInterceptor(opts dnsOptions) *dnsInterceptor {
 		router:       opts.Router,
 		cache:        opts.Cache,
 		pool:         opts.Pool,
+		static:       opts.Static,
 		dial:         opts.Dial,
 		serverDomain: opts.ServerDomain,
 		dialTimeout:  opts.DialTimeout,
@@ -94,6 +103,13 @@ func (d *dnsInterceptor) isServerDomain(domain string) bool {
 	return d.serverDomain != "" && strings.EqualFold(domain, d.serverDomain)
 }
 
+// vpnStaticNames 把注入的访问侧升级成静态名解析器（VPNRoute 的可选扩展，见
+// VPNStaticNames）。nil 或未实现时返回 nil，DNS 拦截行为与引入 VPN 之前一致。
+func vpnStaticNames(vpn VPNRoute) easydns.StaticNames {
+	s, _ := vpn.(VPNStaticNames)
+	return s
+}
+
 // dnsAction 是一条查询分流后的动作。
 type dnsAction uint8
 
@@ -102,22 +118,25 @@ const (
 	dnsActionCacheHit
 	dnsActionDirect
 	dnsActionProxy
+	// dnsActionStatic 是本会话配置的 VPN 对端名字：由访问侧就地应答，不查上游。
+	dnsActionStatic
 )
 
-// dnsPlan 是一次查询的分流结果：动作、是否走直连缓存、命中的缓存应答，
-// 以及日志用的域名与 qtype。
+// dnsPlan 是一次查询的分流结果：动作、是否走直连缓存、命中的缓存应答（或静态
+// 应答），以及日志用的域名与 qtype。
 type dnsPlan struct {
 	action dnsAction
 	direct bool
 	cached *dns.Msg
+	static *dns.Msg
 	domain string
 	qtype  string
 }
 
 // plan 判定一条查询的分流动作。UDP 与 TCP 两条拦截路径共用它，使同一域名的
-// 查询不会因为走的协议不同而出现不同的 Block/Direct/Proxy 结果；两条路径原本
-// 逐行重复的这段逻辑（MatchHostRule → Block → 服务器域名 → 缓存 → 直连/代理）
-// 由此收敛到一处。
+// 查询不会因为走的协议不同而出现不同的 Static/Block/Direct/Proxy 结果；两条
+// 路径原本逐行重复的这段逻辑（静态名 → MatchHostRule → Block → 服务器域名 →
+// 缓存 → 直连/代理）由此收敛到一处。
 //
 // 缓存命中的应答已经改写为本条查询的 Id；AAA 剥离也在此完成。
 func (d *dnsInterceptor) plan(msg *dns.Msg) dnsPlan {
@@ -125,6 +144,16 @@ func (d *dnsInterceptor) plan(msg *dns.Msg) dnsPlan {
 	plan := dnsPlan{
 		domain: strings.TrimSuffix(q.Name, "."),
 		qtype:  dns.TypeToString[q.Qtype],
+	}
+
+	// 对端名字先于一切（包括屏蔽规则与缓存）：它是访问侧的本地名字，上游 DNS
+	// 里并不存在，转发出去只会得到 NXDOMAIN（见 docs/vpn-design.md 5.4）。
+	if reply, ok := easydns.StaticReply(d.static, msg); ok {
+		log.Info("[DNS_VPN] static answer", "domain", plan.domain, "qtype", plan.qtype,
+			"answers", util.DNSAnswerStrings(reply))
+		plan.action = dnsActionStatic
+		plan.static = reply
+		return plan
 	}
 
 	rule := d.router.MatchHostRule(plan.domain)

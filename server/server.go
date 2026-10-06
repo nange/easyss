@@ -25,6 +25,7 @@ import (
 	"github.com/nange/easyss/v3/server/nextproxy"
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/stats"
+	"github.com/nange/easyss/v3/vpn"
 )
 
 type Server struct {
@@ -32,6 +33,7 @@ type Server struct {
 	httpServer *http.Server
 	mux        *http.ServeMux
 	certCache  *certmagic.Cache
+	derp       *vpn.DERPServer
 	statsDone  chan struct{}
 	statsOnce  sync.Once
 }
@@ -329,10 +331,21 @@ func (s *Server) Start() error {
 		return fmt.Errorf("probe handler: %w", err)
 	}
 
+	// 顶层处理器：启用 VPN 时把真正的 DERP 流量分流给内嵌中继，其余路径一律走
+	// 伪装页面。分流的理由、以及为什么必须在 `/` 的兜底处理器内部做，见
+	// vpn.NewDERPMount。
+	var root http.Handler = http.HandlerFunc(fallback.Serve)
+	if srvCfg.VPN.Enabled {
+		derpSrv, err := s.startDERP()
+		if err != nil {
+			return err
+		}
+		s.derp = derpSrv
+		root = vpn.NewDERPMount(derpSrv.Handler(), fallback)
+	}
+
 	s.mux = http.NewServeMux()
-	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fallback.Serve(w, r)
-	})
+	s.mux.Handle("/", root)
 	s.mux.Handle(sharedconfig.EndpointTCP, proxyHandler)
 	s.mux.Handle(sharedconfig.EndpointUDP, proxyHandler)
 	s.mux.Handle(sharedconfig.EndpointICMP, proxyHandler)
@@ -340,10 +353,39 @@ func (s *Server) Start() error {
 
 	s.httpServer = buildHTTPServer(cfg, tlsConfig, s.mux, timeout)
 
-	log.Info("[SERVER] listening", "addr", srvCfg.Listen, "routes", []string{"/", sharedconfig.EndpointTCP, sharedconfig.EndpointUDP, sharedconfig.EndpointICMP, sharedconfig.EndpointProbe})
+	routes := []string{"/", sharedconfig.EndpointTCP, sharedconfig.EndpointUDP, sharedconfig.EndpointICMP, sharedconfig.EndpointProbe}
+	if s.derp != nil {
+		routes = append(routes, sharedconfig.DefaultVPNDERPPath)
+	}
+	log.Info("[SERVER] listening", "addr", srvCfg.Listen, "routes", routes)
 	s.statsDone = make(chan struct{})
 	go s.statsLoop()
 	return s.httpServer.ListenAndServeTLS("", "")
+}
+
+// startDERP 装载内嵌 DERP 中继，返回可直接挂到根处理器上的实例。
+//
+// 它只负责"成为一台中继"：DERP 地址（客户端会把它连同 region 一起内嵌进
+// tailcat 地址）由 ResolveDERPAddr 决定，这里把结果打印出来——运维只需要把这一
+// 行交给各节点的 vpn.derp_addr / servers[].derp。地址推导不出来时返回错误，
+// 让服务端启动失败，而不是用一台节点连不上的中继空转。
+func (s *Server) startDERP() (*vpn.DERPServer, error) {
+	addr, err := s.cfg.ResolveDERPAddr()
+	if err != nil {
+		return nil, err
+	}
+	derpKey, err := vpn.LoadOrCreateKey(vpn.DERPKeyPath())
+	if err != nil {
+		log.Error("[SERVER] load derp key failed", "err", err)
+		return nil, err
+	}
+	derpSrv := vpn.NewDERPServer(derpKey)
+	log.Info("[SERVER] embedded DERP enabled",
+		"derp_addr", addr,
+		"path", sharedconfig.DefaultVPNDERPPath,
+		"derp_public_key", derpSrv.PublicKey().String(),
+		"key_file", vpn.DERPKeyPath())
+	return derpSrv, nil
 }
 
 // buildHTTPServer 组装 HTTP 服务器，其 HTTP/2 流控窗口按上传吞吐量来定尺寸：
@@ -394,10 +436,21 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.certCache.Stop()
 		s.certCache = nil
 	}
+
+	var err error
 	if s.httpServer != nil {
-		return s.httpServer.Shutdown(ctx)
+		err = s.httpServer.Shutdown(ctx)
 	}
-	return nil
+	// 先停 HTTP 再收中继：Shutdown 不会等待已被 Hijack 的连接（DERP 的连接都
+	// 是 Hijack 走的），因此这里必须显式收尾，否则中继的收发 goroutine 会一直
+	// 留在进程里。
+	if s.derp != nil {
+		if cerr := s.derp.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+		s.derp = nil
+	}
+	return err
 }
 
 // stdErrorLog 将 Go 内部 http.Server/HTTP2 的日志（连接级错误、PING 超时、

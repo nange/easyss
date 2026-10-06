@@ -35,6 +35,7 @@ func main() {
 	}
 
 	var printVer, showConfigExample, showConfigExampleSimple, daemon, disableTray, enableTun2socks bool
+	var showVPNIdentity bool
 	var configFile, cmdOutboundProto string
 	var pprofEnabled bool
 	var logFile string
@@ -44,6 +45,7 @@ func main() {
 	flag.BoolVar(&printVer, "version", false, "print version")
 	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file (full mode)")
 	flag.BoolVar(&showConfigExampleSimple, "show-config-example-simple", false, "show a example of config file (simple mode)")
+	flag.BoolVar(&showVPNIdentity, "show-vpn-identity", false, "print this node's vpn identity (client nodekey and node address) and exit")
 	flag.StringVar(&sc.Server, "s", "", "server address")
 	flag.IntVar(&sc.ServerPort, "p", 0, "server port")
 	flag.StringVar(&sc.Password, "k", "", "password")
@@ -135,6 +137,16 @@ Flags:
 	// 将相对文件路径（direct_file/proxy_file/ca_path）相对于可执行文件目录解析，
 	// 这样 macOS Finder/launchd 启动（cwd=/）时仍能找到放在二进制/.app 包旁边的文件。
 	cfg.ResolveFilePaths()
+
+	// VPN 身份的输出必须在启动核心之前：它要读（必要时生成）密钥文件并打印出来，
+	// 然后退出，而不是把代理也一起跑起来。见 printVPNIdentity。
+	if showVPNIdentity {
+		if err := printVPNIdentity(cfg); err != nil {
+			fmt.Fprintln(os.Stderr, "show vpn identity:", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 
 	if cfg.Log.FilePath != "" && !filepath.IsAbs(cfg.Log.FilePath) {
 		if dir := util.CurrentDir(); dir != "" {
@@ -454,6 +466,9 @@ func tunDNS() string {
 }
 
 func exampleV3Config() string {
+	// vpn.relay_only 缺省为 true；示例显式写出来，让"默认值是 true"这件事在
+	// 示例里可见（JSON 里省略它会与"配置项不存在"难以区分）。
+	relayOnly := true
 	cfg := config.ClientConfig{
 		ConfigVersion: 3,
 		Servers: []*config.ServerProfile{{
@@ -480,6 +495,22 @@ func exampleV3Config() string {
 			IPV6Rule:   sharedconfig.DefaultIPV6Rule,
 			DirectFile: "",
 			ProxyFile:  "",
+		},
+		// VPN 组网默认关闭。示例里打开会连带一个填了占位符的 peers，反而让
+		// "拿示例直接跑"失败；因此保持 enabled=false，同时把全部字段的形状
+		// 展示出来，用户填空后改成 true 即可。
+		VPN: config.VPNConfig{
+			Enabled:   false,
+			RelayOnly: &relayOnly,
+			PeerPort:  sharedconfig.DefaultVPNPeerPort,
+			// 留空表示按 socks_port + 2000 派生（这里即 4080 → 6080）。
+			OverlayCIDR: sharedconfig.DefaultVPNOverlayCIDR,
+			DERPAddr:    "your-domain.com:443",
+			Peers: []config.VPNPeer{{
+				HostName: "b",
+				Address:  "tc...(copy the full address printed by peer b's vpn startup log)",
+			}},
+			AllowClients: []string{"nodekey:...(optional allowlist; see vpn.allow_clients)"},
 		},
 		Transport: config.TransportConfig{
 			Protocol:          sharedconfig.DefaultProtocol,
@@ -524,4 +555,27 @@ func exampleSimpleConfig() string {
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
 	return string(b)
+}
+
+// printVPNIdentity 输出本机的 VPN 身份（`-show-vpn-identity`）。
+//
+// 分成两半是有意的，因为它们的收件人不同：client nodekey 要填到**对端**的
+// `vpn.allow_clients` 里，本节点地址要填到**对端**的 `vpn.peers[].address` 里。
+// 地址内嵌 preshared key，等价于对端面的接入凭据（见设计文档第 7 节）——所以这里
+// 只逐行打印，不写任何网络位置，交给用户自己复制。
+func printVPNIdentity(cfg *config.ClientConfig) error {
+	id, err := runner.LoadVPNIdentity(cfg)
+	if err != nil {
+		return err
+	}
+	fmt.Println("client nodekey (fill the peer's vpn.allow_clients with it):")
+	fmt.Println("  " + id.ClientNodeKey)
+	if id.AddrErr != nil {
+		fmt.Println("node address (fill the peer's vpn.peers[].address with it): unavailable")
+		fmt.Println("  reason: " + id.AddrErr.Error())
+		return nil
+	}
+	fmt.Println("node address (fill the peer's vpn.peers[].address with it; it is a secret):")
+	fmt.Println("  " + id.TailcatAddr)
+	return nil
 }

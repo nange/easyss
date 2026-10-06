@@ -17,6 +17,7 @@ Easyss是一款兼容socks5的安全代理上网工具，目标是使访问国�
 * 支持系统托盘图标管理客户端 (thanks [systray](https://github.com/gogpu/systray))
 * 可配置多服务器切换; 自定义直连、代理白名单(IP/域名)
 * 支持服务端链式代理
+* 支持节点组网(VPN)：多个 easyss 节点之间互相访问对端自身的服务端口，DERP 中继由 easyss 服务端内嵌，不依赖任何官方服务
 
 ## 下载
 
@@ -590,6 +591,90 @@ sysctl -p
 * `next_proxy.all_host`: 是否对所有请求走链式代理
 
 如果未指定 `next_proxy_file`，则仅按 `all_host` 规则决定是否走链式代理。
+
+### 节点组网(VPN)
+
+多个 easyss 节点之间可以互相访问**对端自身的服务端口**（sshd 的 22、Web 的 8080、
+数据库的 3306 等），从而支持节点间 SSH / HTTP / 数据库互通。DERP 中继由 easyss
+服务端内嵌，**不依赖 Tailscale 官方服务**，也不需要在服务端做任何配置之外的部署。
+
+#### 1. 服务端（DERP 中继主机 S）
+
+```jsonc
+{
+  "server": {
+    "listen": ":443",
+    "domain": "example.com",
+    "password": "your-password",
+    "vpn": {
+      "enabled": true,
+      // 可省略：默认取 domain + listen 的端口（这里即 example.com:443）
+      "derp_addr": "example.com:443"
+    }
+  }
+}
+```
+
+#### 2. 节点
+
+每个节点都要在 `servers[]` 里有一条指向 S 的条目（推荐用 `derp: true` 标记它，
+DERP 位置从该条目派生）：
+
+```jsonc
+{
+  "servers": [
+    { "address": "example.com", "port": 443, "password": "...", "derp": true }
+  ],
+  "vpn": {
+    "enabled": true,
+    "relay_only": true,      // 默认 true：全部经服务端中继，不走节点间直连
+    "peer_port": 6080,       // 可省略：socks_port + 2000
+    "overlay_cidr": "198.19.0.0/24",  // 可省略，仅访问侧本地使用
+    "peers": [
+      { "host_name": "b", "address": "tcXXXXXXXX..." }
+    ]
+  }
+}
+```
+
+#### 3. 首次配置：两个 key 的收件人不同
+
+在节点 X 上执行 `./easyss -show-vpn-identity`（或从启动日志的
+`[VPN] node identity ready` 一行）可以拿到两样东西，**它们要填到对端**：
+
+| 拿到的东西 | 填到哪里 | 作用 |
+|---|---|---|
+| `client_nodekey`（`nodekey:...`） | 对端的 `vpn.allow_clients` | 对端面据此识别访问侧（可选硬化） |
+| `address`（`tc...`） | 对端的 `vpn.peers[].address` | 内嵌公钥 / DERP 位置 / preshared key |
+
+地址同时也写在 `<exe>/vpn/peer.txt` 里。**地址本身是秘密**：它内嵌 preshared
+key，拿到地址就等于拿到对端面的接入能力。
+
+#### 4. 访问对端
+
+```bash
+# 非 TUN：用现有代理 SOCKS5 端口
+curl --socks5-hostname 127.0.0.1:4080 http://b:8080/
+ssh -o ProxyCommand="nc -X 5 -x 127.0.0.1:4080 b 22" user@b
+
+# TUN 模式（系统全局流量）：不需要任何代理参数
+curl http://b:8080/
+ssh user@b
+```
+
+#### 5. 边界与注意事项
+
+* **只能访问对端自身的服务**：对端面只接受字面 loopback 目标，因此对端不可能成为
+  内网跳板；只绑在某个内网 IP 上的服务不可达。
+* TUN 模式（系统全局流量）与 `relay_only=false` 不兼容：TUN 会把节点间直连的 UDP
+  报文捕获并送回 easyss 自己。配置里 `relay_only` 默认就是 `true`；若显式关掉它，
+  启动时若已启用 TUN 会被强制置回（并打警告），运行中再打开 TUN 则会被拒绝并提示。
+* **不支持 ICMP**：`ping b` / traceroute 到对端不通，VPN 只承载 TCP 与 UDP。
+* UDP 单包上限 1232 字节，适合 DNS / QUIC 首包，不适合大包高带宽 UDP。
+* 没有节点自动发现：对端地址由运维配置。
+* `vpn.enabled=false`（默认）时对现有功能零影响。
+
+完整的字段说明、实现细节与安全边界见 [docs/vpn-design.md](docs/vpn-design.md)。
 
 ## LICENSE
 

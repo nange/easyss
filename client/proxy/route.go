@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"time"
 
 	"github.com/nange/easyss/v3/client/router"
@@ -27,6 +28,7 @@ const (
 	routeBlock routeAction = iota
 	routeDirect
 	routeProxy
+	routeVPN
 )
 
 func (a routeAction) String() string {
@@ -35,9 +37,50 @@ func (a routeAction) String() string {
 		return "block"
 	case routeDirect:
 		return "direct"
+	case routeVPN:
+		return "vpn"
 	default:
 		return "proxy"
 	}
+}
+
+// VPNRoute 是访问侧 VPN 的注入面（见 docs/vpn-design.md 5.3）：把「目标是不是
+// 本机配置的对端」与「两条经隧道的拨号路径」暴露给代理层。三处注入式改动
+// （decide、routeTCPReplied、handleRegularUDP）都以它为界，nil 表示功能关闭。
+//
+// 接口定义在消费方（本包）而不是 vpn/node，因为 vpn/node 已经依赖本包——对端面
+// 复用的正是 Socks5Server（见 vpn/node/peerface.go）；反过来依赖会形成导入环。
+type VPNRoute interface {
+	// Lookup 判断 host（对端名或 overlay 字面 IP）是否为本机配置的对端，并返回
+	// 它的规范名（host_name）。规范名用于会话键：同一个对端的两种书写形式必须
+	// 落在同一条流上，否则按 overlay IP 与按名字访问会各自建一条隧道。
+	Lookup(host string) (canonical string, ok bool)
+	// DialTCP 打开一条经隧道到对端服务端口的 TCP 连接。target 是访问侧看到的
+	// 原始目标（host:port）；把它归一化成字面 127.0.0.1:<port> 是实现内部的事
+	// （内层 CONNECT 契约，见 5.1）。
+	DialTCP(ctx context.Context, target string) (net.Conn, error)
+	// DialUDP 打开一条经隧道到对端服务端口的 UDP 流。返回的连接在首次写入时
+	// 自动补上一次性目标头（见 vpn/node/udprelay.go 的 EncodeUDPTarget），因此
+	// 调用方只需按普通 net.Conn 收发数据报。
+	DialUDP(ctx context.Context, target string) (net.Conn, error)
+}
+
+// VPNStaticNames 是 VPNRoute 的**可选**扩展：实现它的访问侧能为对端名字就地
+// 应答 DNS（见 docs/vpn-design.md 5.4）。
+//
+// 做成可选能力而不是第二个注入字段，是因为注入的本来就是同一个对象
+// （`vpn/node.Route` 同时实现两者，runner 只把它交给 `Socks5Options.VPN`）：
+// 再加一个"必须与 VPN 保持同步"的字段只会多一处可以写错的地方。不实现它的
+// 注入面只是让对端名字回到普通转发路径。
+//
+// 这个钩子必须存在于**代理的 DNS 拦截器**上：TUN 模式写进系统解析器的是一个
+// 公网 DNS（`cmd/easyss` 的 tunDNS/PreferredSystemDNS），查询经 TUN 到达本包
+// 的拦截器，而不是 `client/dns` 的转发服务器（那个只服务 enable_forward_dns
+// 的 LAN 部署）。
+type VPNStaticNames interface {
+	// ResolveStatic 报告 name 是否为本机配置的对端名，并给出它的 overlay IPv4。
+	// name 是 DNS 问题名（末尾带根点）。
+	ResolveStatic(name string) (netip.Addr, bool)
 }
 
 // routeDecision 是一次分流判定：动作，以及目标是否被 ipv6 策略门拒绝
@@ -55,6 +98,8 @@ type routePolicyOptions struct {
 	DialTimeout time.Duration
 	// StreamIdleTimeout 是直连 TCP 中继的空闲超时。
 	StreamIdleTimeout time.Duration
+	// VPN 为 nil 时 VPN 分流完全关闭，行为与既有版本一致。
+	VPN VPNRoute
 }
 
 // routePolicy 是两个入口共用的分流策略。
@@ -63,6 +108,7 @@ type routePolicy struct {
 	dial              func(ctx context.Context, network, addr string) (net.Conn, error)
 	dialTimeout       time.Duration
 	streamIdleTimeout time.Duration
+	vpn               VPNRoute
 }
 
 func newRoutePolicy(opts routePolicyOptions) *routePolicy {
@@ -71,12 +117,23 @@ func newRoutePolicy(opts routePolicyOptions) *routePolicy {
 		dial:              opts.Dial,
 		dialTimeout:       opts.DialTimeout,
 		streamIdleTimeout: opts.StreamIdleTimeout,
+		vpn:               opts.VPN,
 	}
 }
 
 // decide 判定目标主机的分流动作。router 为 nil（测试中的裸服务器）时
 // ClassifyHost 自身会回落到 Proxy，因此这里无需额外分支。
+//
+// VPN 对端在**调用 router 之前**判定：host_name 与 overlay IP 都是只有本机才知道
+// 的名字，交给 GeoIP/域名列表去猜只会得到"未知 → 走代理"这个错误答案——那样目标
+// 会被送进 easyss 服务器（它同样不认识这个名字），表现为一次 DNS 失败而不是一次
+// 隧道访问。
 func (p *routePolicy) decide(host string) routeDecision {
+	if p.vpn != nil {
+		if _, ok := p.vpn.Lookup(host); ok {
+			return routeDecision{Action: routeVPN}
+		}
+	}
 	cls := p.router.ClassifyHost(host)
 	decision := routeDecision{IPV6Rejected: cls.IPV6Rejected}
 	switch cls.Rule {

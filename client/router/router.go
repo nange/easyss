@@ -201,6 +201,28 @@ func New(cfg Config) (*Router, error) {
 	return r, nil
 }
 
+// NewDirectOnly 返回一个把所有目标都判为直连的 Router，供 VPN 对端面使用。
+//
+// 对端面（tailcat 隧道内的 SOCKS5）只做一件事：把隧道里收到的连接拨到本机
+// loopback。它没有任何"该不该走代理"的判定，因此：
+//
+//   - proxyRule 恒为 ProxyRuleDirect：MatchHostRule 会在这条规则上短路，
+//     直接返回 HostRuleDirect，不会去查 GeoIP / GeoSite / 自定义规则；
+//   - ipv6Rule 恒为 IPV6RuleEnable：否则 ShouldIPV6Disable 会把字面 IPv6
+//     目标（例如对端面自己 ::1 上的服务）拦成 Block；
+//   - 刻意**不加载** GeoIP 数据库、GeoIP/域名列表与自定义规则文件：一个恒为
+//     直连的路由器不需要它们，而为每个节点再解析一遍几 MB 的 geodata 是纯粹的
+//     浪费（主 Router 已经是一份）。
+//
+// 它返回的 Router 只应交给对端面的 Socks5Server，不要拿去替换主 Router：
+// 那份 Router 承载着用户的真实分流规则。
+func NewDirectOnly() *Router {
+	r := &Router{}
+	r.proxyRule.Store(int32(ProxyRuleDirect))
+	r.ipv6Rule.Store(int32(IPV6RuleEnable))
+	return r
+}
+
 // CustomFileError 返回加载自定义直连/代理规则文件时遇到的第一个失败，
 // 两个文件都加载成功时返回 nil。
 func (r *Router) CustomFileError() error {
@@ -441,6 +463,12 @@ func (r *Router) hostAtCN(host string) bool {
 }
 
 func (r *Router) ipAtCN(ip string) bool {
+	// NewDirectOnly 构造的路由器刻意不加载 geoIP 数据库：恒为 ProxyRuleDirect 时
+	// 根本走不到这里。这个判空是纵深防御——万一有人对那样的路由器调用
+	// SetProxyRule 切到 auto，这里也不会空指针崩溃，只是永远判不出 CN。
+	if r.geoIPDB == nil {
+		return false
+	}
 	_ip := net.ParseIP(ip)
 	if _ip == nil {
 		return false

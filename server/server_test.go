@@ -16,8 +16,28 @@ import (
 	"github.com/caddyserver/certmagic"
 	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/server/config"
+	"github.com/nange/easyss/v3/vpn"
 	"github.com/stretchr/testify/require"
+	"tailscale.com/types/key"
 )
+
+// TestShutdownClosesEmbeddedDERP 固定 Shutdown 会显式收尾内嵌 DERP 中继。
+//
+// 这不是多余的：DERP 的连接全部是 Hijack 走的，而 http.Server.Shutdown 明确
+// 不管也不等待被 Hijack 的连接。少了这一步，中继的收发 goroutine 会一直留在
+// 进程里（服务端收到 SIGTERM 后不退出）。
+func TestShutdownClosesEmbeddedDERP(t *testing.T) {
+	s := &Server{derp: vpn.NewDERPServer(key.NewNode())}
+
+	require.NoError(t, s.Shutdown(context.Background()))
+	require.Nil(t, s.derp, "Shutdown must release the embedded DERP server")
+}
+
+// TestShutdownWithoutVPN 守护"未启用 VPN 时 Shutdown 行为不变"。
+func TestShutdownWithoutVPN(t *testing.T) {
+	s := &Server{}
+	require.NoError(t, s.Shutdown(context.Background()))
+}
 
 func TestCertmagicStoragePathForExecutable(t *testing.T) {
 	exe := filepath.Join("tmp", "easyss", "easyss-server")
