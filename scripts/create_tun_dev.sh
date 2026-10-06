@@ -12,6 +12,9 @@ local_gateway_v6=$8
 #     "unbound variable" 中止，连地址和路由都配不上；
 #   - 空值表示调用方没有传 MTU（老布局），此时保留设备默认值（见下方 mtu 步骤）。
 tun_mtu=${9:-}
+# 第 10 个参数同样是可选的：空格分隔的绕行 IPv4 列表（见下方 bypass 步骤与
+# docs/vpn-design.md 8.2）。空值表示本会话没有需要绕行的 DERP 主机。
+bypass_ips=${10:-}
 
 # 退出码契约：调用方（cmd/easyss/tun_helper_linux.go，以及无 helper 路径下的
 # client/tun/tun.go）仅在本脚本以 0 退出时才保留已安装的 TUN 路由。所有不允许
@@ -21,6 +24,7 @@ tun_mtu=${9:-}
 # cmd/easyss/tun_helper_linux.go 的 runCreateScript）：
 #   1 设备名 2 tun ip/prefix 3 tun gw 4 本地网关 5 tun ipv6/prefix
 #   6 tun gw ipv6 7 服务端 ipv6 8 本地网关 ipv6 9 MTU（空值 = 不设置）
+#   10 绕行 IPv4 列表（空格分隔，空值 = 无）
 #
 # 失败步骤会被上报而不是吞掉，因为本脚本先安装地址、后安装路由：如果一条被
 # 拒绝的 "ip route replace" 之后脚本仍报告成功，就会留下一个半配置的隧道
@@ -118,6 +122,22 @@ run_idem route ip route replace 128.0.0.0/1 via "$tun_gw" dev "$tun_device"
 # `ping <gateway>` 只会报告一条合成的亚毫秒级回复。因此网关必须留在物理
 # 接口上，与 darwin 脚本完全一致——后者在 91bb4c6（"fix: ip route on darwin
 # when enable tun2socks"）中删掉了同一条路由。
+
+# 第 10 个参数是必须绕行 TUN 的 DERP 主机 IPv4 列表（空格分隔，可为空）。
+#
+# 必须绕行的理由：relay_only=true 时 magicsock 不建任何 UDP socket，到 DERP
+# 主机的 TCP 连接是 tailcat 唯一的出网通道；它一旦被上面的 /1 阶梯路由捕获，
+# 就会进入 easyss 自己的 SOCKS5 再回到隧道，形成环路（见
+# docs/vpn-design.md 8.2）。/32 主机路由比阶梯更具体，因此能把它压回物理网关。
+#
+# 网关为空时不安装（"via" 后面不能没有下一跳，否则整条命令被拒绝并让本脚本
+# 以失败退出）。调用方在拿不到网关时也会另行告警（client/tun.Manager），
+# 这里只是防御。路由用 replace，因此 keep-alive 重放是幂等的；空列表不是失败。
+if [ -n "$bypass_ips" ] && [ -n "$local_gateway" ]; then
+  for ip in $bypass_ips; do
+    run_idem bypass ip route replace "$ip/32" via "$local_gateway"
+  done
+fi
 
 # 添加 IPv6 路由
 if [ -n "$server_ip_v6" ]; then  # 检查 server_ip_v6 是否非空

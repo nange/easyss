@@ -22,11 +22,13 @@ func TestDarwinScriptArgsCarryABareV6Address(t *testing.T) {
 		"the device config keeps the CIDR form the linux script needs")
 
 	args := darwinScriptArgs(d, m.cfg.MTU)
-	require.Len(t, args, 9, "the script takes nine positional parameters")
+	require.Len(t, args, 10, "the script takes ten positional parameters")
 	require.Equal(t, "2001:0db8:0:f101::1", args[4],
 		"the darwin script appends the prefix itself, so it must receive a bare address")
 	require.Equal(t, "1500", args[8],
-		"the last argument is the MTU the script writes into the device")
+		"the ninth argument is the MTU the script writes into the device")
+	require.Equal(t, "", args[9],
+		"the tenth argument is the DERP bypass list, empty when no peer needs one")
 	for _, arg := range args {
 		require.NotContains(t, arg, "/", "no argument may carry a prefix length: %q", arg)
 	}
@@ -42,8 +44,25 @@ func TestDarwinScriptArgsWithoutV6(t *testing.T) {
 		LocalGateway: "192.168.3.1",
 	}, 1500)
 
-	require.Len(t, args, 9)
+	require.Len(t, args, 10)
 	require.Equal(t, "", args[6], "an empty server ipv6 keeps the script's ipv6 branch a no-op")
+}
+
+// TestDarwinScriptArgsCarryTheBypassList 固定第 10 个实参的形态：内嵌 DERP 的主机
+// 以空格分隔的单个实参交给脚本，脚本再按空白拆开逐个安装 /32 主机路由（见
+// docs/vpn-design.md 8.2）。空列表必须渲染成空串，脚本据此跳过整个绕行步骤。
+func TestDarwinScriptArgsCarryTheBypassList(t *testing.T) {
+	args := darwinScriptArgs(DeviceConfig{
+		Device:       "utun8",
+		TunIP:        "198.18.0.1",
+		TunGW:        "198.18.0.1",
+		LocalGateway: "192.168.3.1",
+		BypassIPs:    []string{"198.51.100.9", "203.0.113.7"},
+	}, 1500)
+
+	require.Len(t, args, 10)
+	require.Equal(t, "198.51.100.9 203.0.113.7", args[9],
+		"the bypass list is one whitespace separated argument, and its order is preserved")
 }
 
 // TestOsascriptRunScriptKeepsPositionalArgs 固定 darwin 提权命令的拼装方式。
@@ -66,7 +85,7 @@ func TestOsascriptRunScriptKeepsPositionalArgs(t *testing.T) {
 	require.Equal(t, "", args[6], "the fixture must exercise an empty server ipv6")
 
 	require.Equal(t,
-		`do shell script "sh '/tmp/t.sh' 'utun8' '198.18.0.1' '198.18.0.1' '192.168.3.1' '2001:db8::1' 'fe80::1' '' 'fe80::2' '1500'" with administrator privileges`,
+		`do shell script "sh '/tmp/t.sh' 'utun8' '198.18.0.1' '198.18.0.1' '192.168.3.1' '2001:db8::1' 'fe80::1' '' 'fe80::2' '1500' ''" with administrator privileges`,
 		osascriptRunScript("/tmp/t.sh", args))
 }
 

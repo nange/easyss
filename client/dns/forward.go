@@ -20,6 +20,9 @@ type ForwardServer struct {
 	dnsServers  []string
 	disableIPV6 bool
 
+	// static 为 nil 时静态名钩子完全关闭，行为与今天完全一致。
+	static StaticNames
+
 	mu sync.Mutex
 	// pc 是本服务器自己绑定的 UDP socket：Shutdown 直接关闭它，因此即使
 	// Shutdown 落在 dns.Server 尚未置位 started 的窗口里，端口也一定会被释放
@@ -32,7 +35,9 @@ type ForwardServer struct {
 	closing bool
 }
 
-func NewForwardServer(listenAddr string, disableIPV6 bool) *ForwardServer {
+// NewForwardServer 构造转发服务器。static 为 nil 表示没有静态名钩子（VPN 未启用
+// 或本会话没有本地静态名），此时每个查询都按原有路径转发。
+func NewForwardServer(listenAddr string, disableIPV6 bool, static StaticNames) *ForwardServer {
 	servers := config.DirectDNSServers
 	if disableIPV6 {
 		var filtered []string
@@ -50,6 +55,7 @@ func NewForwardServer(listenAddr string, disableIPV6 bool) *ForwardServer {
 		client:      &dns.Client{Timeout: dnsQueryTimeout},
 		dnsServers:  servers,
 		disableIPV6: disableIPV6,
+		static:      static,
 	}
 }
 
@@ -132,6 +138,13 @@ func (s *ForwardServer) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	q := r.Question[0]
+
+	// 静态名先于任何上游查询就地应答：这些名字（VPN 对端）在上游 DNS 里不存在，
+	// 转发出去只会得到 NXDOMAIN。语义与代理侧共用（见 StaticReply）。
+	if reply, ok := StaticReply(s.static, r); ok {
+		_ = w.WriteMsg(reply)
+		return
+	}
 
 	reply, err := s.forwardQuery(r)
 	if err != nil {

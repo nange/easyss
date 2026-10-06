@@ -73,6 +73,11 @@ type Config struct {
 	LocalGateway     string
 	LocalGatewayV6   string
 	DNSServer        string // TUN 模式下要设置的 DNS 服务器（darwin/linux/windows）
+	// BypassIPs 是必须绕行物理网关的 IPv4 列表（内嵌 DERP 的 easyss 服务端
+	// 与全部 VPN 对端的 DERP 主机，见 docs/vpn-design.md 8.2）。脚本给每个地址
+	// 装一条 /32 主机路由，把它从 TUN 的分流阶梯里抢回来；为空表示本会话没有
+	// 需要绕行的目标。
+	BypassIPs []string
 }
 
 type DeviceConfig struct {
@@ -85,6 +90,7 @@ type DeviceConfig struct {
 	ServerIPV6     string
 	LocalGateway   string
 	LocalGatewayV6 string
+	BypassIPs      []string
 }
 
 type Manager struct {
@@ -184,6 +190,7 @@ func New(cfg Config) *Manager {
 			ServerIPV6:     cfg.ServerIPV6,
 			LocalGateway:   cfg.LocalGateway,
 			LocalGatewayV6: cfg.LocalGatewayV6,
+			BypassIPs:      cfg.BypassIPs,
 		},
 	}
 }
@@ -510,15 +517,28 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 
 	d := m.dev
 
+	// 绕行路由的下一跳只能是物理网关：拿不到它时脚本会跳过整个绕行步骤（"via"
+	// 后面不能没有下一跳），而那正是"TUN 一开，某个对端就连不上"的成因，因此必须
+	// 在这里说出来，而不是让它静默发生。
+	if len(d.BypassIPs) > 0 && d.LocalGateway == "" {
+		log.Warn("[TUN] cannot install the DERP bypass routes: the physical gateway is unknown, "+
+			"traffic to these hosts may be captured by the tunnel",
+			"bypass_ips", d.BypassIPs)
+	}
+
 	// linux 与 darwin 分支的最后一个实参都是 MTU：设备 MTU 由创建脚本设置
 	// （与 Windows 脚本用 netsh 做的同一件事），因为 fd 路径下 tun2socks 拿到
 	// 的只是 fd，改不了设备的 MTU，见 Manager.engineMTU。
+	//
+	// 第 10 个实参是绕行 IP 列表（空格分隔，可为空）：内嵌 DERP 的主机必须留在
+	// 物理网卡上，否则 tailcat 到中继的连接会被 TUN 捕获并绕回 easyss 的 SOCKS5
+	// （见 docs/vpn-design.md 8.2 与 Config.BypassIPs）。
 	switch runtime.GOOS {
 	case "linux":
 		cmdArgs := []string{"pkexec", "bash", namePath, d.Device,
 			ipSub(d.TunIP, d.TunMask), d.TunGW, d.LocalGateway,
 			d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6,
-			strconv.Itoa(m.cfg.MTU)}
+			strconv.Itoa(m.cfg.MTU), bypassScriptArg(d.BypassIPs)}
 		if os.Geteuid() == 0 {
 			cmdArgs = cmdArgs[1:]
 		}
@@ -544,9 +564,15 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 		// 超过自身 MTU 的 UDP/ICMP 包（见 Manager.engineMTU）。
 		// 这里传 m.cfg.MTU：Windows 没有 fd 路径（没有提权 helper），
 		// 因此它正是 engineMTU() 交给 netstack 的那个值。
+		//
+		// 第 10 个实参是绕行 IP 列表，由脚本用 shift 取出（cmd.exe 的 %10 不是
+		// 第 10 个参数，而是 %1 后面接一个 "0"，因此脚本必须 shift 9 次）；
+		// 第 11 个是物理网关——Windows 的创建脚本此前没有收到过它，而绕行路由
+		// 的下一跳只能是物理网关（Linux/darwin 脚本已经在第 4 个参数里拿到了）。
 		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device,
 			d.TunIP, d.TunGW, d.TunMask, d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6,
-			m.cfg.DNSServer, strconv.Itoa(m.cfg.MTU)); err != nil {
+			m.cfg.DNSServer, strconv.Itoa(m.cfg.MTU), bypassScriptArg(d.BypassIPs),
+			d.LocalGateway); err != nil {
 			return fmt.Errorf("tun: exec create script: %w", err)
 		}
 	case "darwin":
@@ -747,7 +773,7 @@ func ipSub(ip, mask string) string {
 
 // darwinScriptArgs 返回 create_tun_dev_darwin.sh 的实参，顺序与脚本的位置
 // 参数一致：device、tun ip、tun gw、local gw、tun ipv6、tun gw ipv6、
-// server ipv6、local gw ipv6、MTU。
+// server ipv6、local gw ipv6、MTU、绕行 IP 列表。
 //
 // tun ipv6 传的是裸地址：darwin 脚本自己把 "/64" 拼到 ifconfig 的 inet6
 // 参数上，而 TunIPV6Sub 是按 linux 脚本的 "ip -6 addr replace" 需要 CIDR
@@ -758,8 +784,14 @@ func darwinScriptArgs(d DeviceConfig, mtu int) []string {
 	return []string{
 		d.Device, d.TunIP, d.TunGW, d.LocalGateway,
 		bareV6Addr(d.TunIPV6Sub), d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6,
-		strconv.Itoa(mtu),
+		strconv.Itoa(mtu), bypassScriptArg(d.BypassIPs),
 	}
+}
+
+// bypassScriptArg 把绕行 IP 列表渲染成创建脚本的最后一个位置参数：空格分隔，
+// 空列表渲染成空串（脚本据此跳过绕行步骤）。IP 里不可能有空白，因此不需要引号。
+func bypassScriptArg(ips []string) string {
+	return strings.Join(ips, " ")
 }
 
 // bareV6Addr 从 "address/prefix" 形式的子网字符串中去掉前缀长度

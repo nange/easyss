@@ -45,6 +45,12 @@ type ServerProfile struct {
 	SNI      string `json:"sn"`
 	CAPath   string `json:"ca_path"`
 	Default  bool   `json:"default"`
+
+	// DERP 标记"用这条服务端的 address:port 作为内嵌 DERP 中继的主机与端口"。
+	// 它同时是访问侧拨号的目标与自身地址里通告的 DERP 位置（见
+	// ClientConfig.VPNDERPAddr）。没有任何条目被标记时回退 servers[0]，
+	// 详见 docs/vpn-design.md 4.6。
+	DERP bool `json:"derp,omitempty"`
 }
 
 type LocalConfig struct {
@@ -90,6 +96,7 @@ type ClientConfig struct {
 	Servers       []*ServerProfile `json:"servers"`
 	Local         LocalConfig      `json:"local"`
 	Routing       RoutingConfig    `json:"routing"`
+	VPN           VPNConfig        `json:"vpn"`
 	Transport     TransportConfig  `json:"transport"`
 	Shaper        ShaperConfig     `json:"shaper"`
 	Log           LogConfig        `json:"log"`

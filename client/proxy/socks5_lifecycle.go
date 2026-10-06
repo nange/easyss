@@ -19,27 +19,57 @@ import (
 // 正常返回，绝不留下无人释放的端口。因此不需要调用方事先声明"我要启动了"——
 // 上一版为此保留的 MarkStarted/started 状态已随生命周期重写一起删除。
 func (s *Socks5Server) Start() error {
-	s.udp.start()
-
-	ln, err := net.Listen("tcp", s.listenAddr)
+	ln, err := s.bind()
 	if err != nil {
 		return err
+	}
+	if ln == nil {
+		// Close 先跑：监听器已就地释放，不留下无人释放的端口。
+		return nil
+	}
+	return s.Serve(ln)
+}
+
+// Serve 在调用方提供的监听器上服务，直到该监听器被关闭。
+//
+// 它**不持有**传入的监听器：不登记、也不会被 Close 关闭。因此调用方必须自己
+// 负责它的生命周期（VPN 对端面用的就是 tailcat 在 gVisor netstack 里的监听器，
+// 那种监听器本来就不属于宿主）。Start 是"自己创建 + 自己登记 + Serve"的组合。
+//
+// 与 Start 的唯一行为差异：监听器由调用方提供，因此绑定失败不会走到这里，
+// UDP 会话池的清理 goroutine 也因此不会在启动失败时被启动。
+func (s *Socks5Server) Serve(ln net.Listener) error {
+	// start 只在服务真正开始后调用一次：udpPool.start 不是幂等的（每次调用都会
+	// 起一个清理 goroutine），因此它不能同时留在 Start 里。
+	s.udp.start()
+
+	log.Info("[SOCKS5] serving", "addr", ln.Addr().String())
+	if err := s.srv.Serve(ln); err != nil && !errors.Is(err, net.ErrClosed) {
+		return err
+	}
+	return nil
+}
+
+// bind 创建监听器并在 listenerMu 下登记，使 Close 能关闭它。
+//
+// 返回 (nil, nil) 表示服务器在绑定期间已被关闭——此时监听器已在本地释放，
+// 调用方应当安静地结束。
+func (s *Socks5Server) bind() (net.Listener, error) {
+	ln, err := net.Listen("tcp", s.listenAddr)
+	if err != nil {
+		return nil, err
 	}
 
 	s.listenerMu.Lock()
 	if s.closed {
 		s.listenerMu.Unlock()
 		ln.Close() //nolint:errcheck
-		return nil
+		return nil, nil
 	}
 	s.listener = ln
 	s.listenerMu.Unlock()
 
-	log.Info("[SOCKS5] listening", "addr", ln.Addr().String())
-	if err := s.srv.Serve(ln); err != nil && !errors.Is(err, net.ErrClosed) {
-		return err
-	}
-	return nil
+	return ln, nil
 }
 
 // Close 关闭本服务器持有的资源：TCP 监听器、UDP 中继 socket 与全部 UDP 会话

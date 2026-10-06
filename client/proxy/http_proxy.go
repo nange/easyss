@@ -79,6 +79,9 @@ type TunConfig struct {
 	LocalGateway   string `json:"local_gateway"`
 	LocalGatewayV6 string `json:"local_gateway_v6,omitempty"`
 	MTU            int    `json:"mtu"`
+	// BypassIPs 是必须绕行物理网关的 IPv4 列表（内嵌 DERP 的主机，见
+	// docs/vpn-design.md 8.2）。helper 把它原样交给创建脚本。
+	BypassIPs []string `json:"bypass_ips,omitempty"`
 }
 
 // HTTPProxyOptions 用于配置 NewHTTPProxyServer。它取代了一个已增长到九个参数的

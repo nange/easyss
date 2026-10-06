@@ -76,6 +76,11 @@ func TestResetCounters(t *testing.T) {
 	RecordServerHandshakeError()
 	RecordServerStreamCancel()
 	RecordServerFallbackPage()
+	RecordVPNTCPStream()
+	RecordVPNUDPFlow()
+	RecordVPNDialError()
+	RecordVPNDNSStaticAnswer()
+	RecordVPNPeerFaceStream()
 	g.uploadSpeed.Store(1000)
 	g.downloadSpeed.Store(2000)
 	g.peakUploadSpeed.Store(3000)
@@ -101,7 +106,10 @@ func TestResetCounters(t *testing.T) {
 		snap.ServerTCPStreams != 0 || snap.ServerUDPStreams != 0 ||
 		snap.ServerICMPStreams != 0 || snap.ServerHandshakeErrors != 0 ||
 		snap.ServerStreamCancels != 0 ||
-		snap.ServerFallbackPages != 0 {
+		snap.ServerFallbackPages != 0 ||
+		snap.VPNTCPStreams != 0 || snap.VPNUDPFlows != 0 ||
+		snap.VPNDialErrors != 0 || snap.VPNDNSStaticAnswers != 0 ||
+		snap.VPNPeerFaceStreams != 0 {
 		t.Fatalf("counters not fully reset: %+v", snap)
 	}
 }
