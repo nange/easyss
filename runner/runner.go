@@ -85,6 +85,10 @@ type Core struct {
 	// 见 cleanup 与 vpnStack.close。
 	vpn *vpnStack
 
+	// derpShim 是本进程内 tailcat 通往内嵌 DERP 的唯一出口（见 derpshim.go）。
+	// 它必须在关闭 VPN 栈之后关闭：tailcat 在飞期间仍会经它拨 DERP。
+	derpShim *derpShim
+
 	// StartupWarn 保存初始化核心时检测到的非致命警告（例如自定义规则文件
 	// 加载失败，或服务端域名暂时无法解析），调用方可以在不中断启动的情况下
 	// 将其展示给用户。
@@ -151,18 +155,19 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 	// VPN 栈必须在本地代理入口之前建立：SOCKS5 服务器要把它作为分流面注入
 	// （见 proxy.Socks5Options.VPN）。此后的任何失败路径都通过 c.cleanup() 收尾，
 	// 因此它也会把已经建好的 VPN 一起拆掉。
+	//
+	// 失败在这里**不再中止启动**：VPN 是可选功能，配置写错或本机条件不满足
+	// （例如 Android 上没有 ALL_PROXY 钩子、密钥目录不可写）都只应让 VPN 缺席，
+	// 而不该把基础代理一起拖死（见 AGENTS.md 要点 13 的启动韧性）。
 	var vpnRoute proxy.VPNRoute
 	if cfg.VPN.Enabled {
-		// TUN 意图取配置里的偏好（client.New 也用它播种运行期状态）：TUN 与
-		// relay_only=false 不兼容，而强制必须在任何 tailcat 组件启动之前完成
-		//（见 startVPN 与 docs/vpn-design.md 8.1）。
-		stack, err := startVPN(cfg, timeouts, defaultVPNPaths(), cfg.Local.EnableTun2socks)
+		route, err := c.startVPNSession(cfg, streamHandler, method, timeouts)
 		if err != nil {
-			c.cleanup()
-			return nil, fmt.Errorf("start vpn: %w", err)
+			c.StartupWarn = errors.Join(c.StartupWarn, fmt.Errorf("vpn disabled for this session: %w", err))
+			log.Error("[VPN] disabled for this session", "err", err)
+		} else {
+			vpnRoute = route
 		}
-		c.vpn = stack
-		vpnRoute = stack.route
 	}
 
 	// 在启动任何服务器 goroutine 之前，预先绑定所有本地监听地址，
@@ -612,6 +617,11 @@ func (c *Core) cleanup() {
 	// VPN 在代理入口之后关闭：Socks5Server 借用它作为分流面，反过来会让在飞的
 	// 隧道拨号打到一个已关闭的客户端集合（见 vpnStack.close）。
 	c.StopVPN()
+	// DERP 入口最后关：tailcat 在 VPN 栈关闭的过程中仍可能在飞地经它拨 DERP。
+	if c.derpShim != nil {
+		c.derpShim.close()
+		c.derpShim = nil
+	}
 	if c.Client != nil {
 		_ = c.Client.Close()
 	}

@@ -6,8 +6,10 @@ import (
 	"fmt"
 
 	"github.com/nange/easyss/v3/client/config"
+	"github.com/nange/easyss/v3/client/proxy"
 	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/protocol"
 	vpn "github.com/nange/easyss/v3/vpn"
 	vpnnode "github.com/nange/easyss/v3/vpn/node"
 )
@@ -44,15 +46,38 @@ type vpnStack struct {
 	clients *vpnnode.ClientSet
 	route   *vpnnode.Route
 
-	// bypass 计算 TUN 会话必须绕行的 DERP 主机 IP 并集（见 docs/vpn-design.md 8.2）。
-	bypass *vpnnode.Bypass
-
 	// relayOnly 是本次会话**实际生效**的 relay_only：TUN 打开时它会被强制为
 	// true（见 startVPN），因此不能只看配置里的值来判断 TUN 是否可用。
 	relayOnly bool
 	// peers 是配置的对端数量。没有对端时不存在节点间直连，TUN 与
 	// relay_only=false 也就没有冲突。
 	peers int
+}
+
+// startVPNSession 建立本会话的 VPN，返回注入给代理入口的分流面。
+//
+// 两件事的顺序是有约束的（见 derpshim.go 与 vpnnode.ApplyRelayOnly）：DERP 入口
+// 设置的 ALL_PROXY、以及 relay_only 的进程级开关，都必须在**任何** tailcat 组件
+// 启动之前落位，因此 shim 先于 startVPN，而 startVPN 内部的强制又先于它自己创建
+// 任何 tailcat 对象。
+//
+// 失败时回收已经建好的部分：调用方只需要把错误交给用户。
+func (c *Core) startVPNSession(cfg *config.ClientConfig, handler *proxy.StreamHandler,
+	method protocol.Method, timeouts sharedconfig.Timeouts) (proxy.VPNRoute, error) {
+	shim, err := startDERPShim(handler, method, timeouts, cfg.VPNPeerPort())
+	if err != nil {
+		return nil, err
+	}
+	c.derpShim = shim
+
+	stack, err := startVPN(cfg, timeouts, defaultVPNPaths(), cfg.Local.EnableTun2socks)
+	if err != nil {
+		c.derpShim.close()
+		c.derpShim = nil
+		return nil, err
+	}
+	c.vpn = stack
+	return stack.route, nil
 }
 
 // close 停止对端面并关闭全部隧道客户端。幂等，nil 安全。
@@ -139,7 +164,6 @@ func startVPN(cfg *config.ClientConfig, timeouts sharedconfig.Timeouts, paths vp
 
 	stack := &vpnStack{
 		face:      face,
-		bypass:    vpnnode.NewBypass(vpnnode.BypassOptions{LocalDERPAddr: nc.DERPAddr, Peers: nc.Peers}),
 		relayOnly: relayOnly,
 		peers:     len(nc.Peers),
 	}
@@ -181,6 +205,13 @@ func startVPN(cfg *config.ClientConfig, timeouts sharedconfig.Timeouts, paths vp
 	}
 	stack.route = route
 
+	if len(nc.AllowClients) == 0 {
+		// 地址里内嵌 preshared key，因此"拿到地址"就等于"能接进来"；白名单是
+		// 唯一的额外硬化手段，没配时必须让它在日志里可见（见 docs/vpn-design.md 7.3）。
+		log.Warn("[VPN] vpn.allow_clients is empty: any node that has this node's address can open streams to its peer face " +
+			"(fill vpn.allow_clients with the nodekey printed by each peer's -show-vpn-identity)")
+	}
+
 	// 两个 key 与一个地址是运维要分发的全部信息，字段名直接写清各自该填到哪里。
 	log.Info("[VPN] node identity ready",
 		"address", addr, // 对端的 vpn.peers[].address
@@ -211,27 +242,6 @@ func (c *Core) StopVPN() {
 	if err := stack.close(); err != nil {
 		log.Warn("[VPN] stop", "err", err)
 	}
-}
-
-// VPNBypassIPs 返回 TUN 会话必须绕行物理网关的 DERP 主机 IPv4 并集（见
-// docs/vpn-design.md 8.2）。没有启用 VPN 时返回 nil。
-//
-// 本地标记的 S 复用的是服务端域名预解析的结果（Core.publishServerIPs）：那份地址
-// 是隧道拨号实际使用的权威答案，此刻再做一次解析既没必要，也可能撞上"TUN 路由即将
-// 安装、DNS 还没有可用出口"的窗口。
-func (c *Core) VPNBypassIPs(ctx context.Context) []string {
-	if c == nil || c.vpn == nil || c.vpn.bypass == nil {
-		return nil
-	}
-	addrs := c.vpn.bypass.IPs(ctx, c.publishServerIPs())
-	if len(addrs) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(addrs))
-	for _, a := range addrs {
-		out = append(out, a.String())
-	}
-	return out
 }
 
 // CheckVPNTunCompat 报告"现在能否为本会话启用 TUN"。

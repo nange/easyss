@@ -45,6 +45,7 @@ func TestDERPServerHandlerIsMountable(t *testing.T) {
 	h := NewDERPMount(srv.Handler(), fallback)
 
 	req := httptest.NewRequest(http.MethodGet, "/derp/probe", nil)
+	req.RemoteAddr = "127.0.0.1:51234"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 

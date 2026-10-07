@@ -19,27 +19,6 @@ set server_ip_v6=%~7
 set tun_dns=%~8
 set tun_mtu=%~9
 
-rem Arguments 10 and 11 are reached with "shift": cmd.exe has no ten-argument
-rem token (a percent sign followed by "10" reads as the first parameter plus a
-rem literal zero), so later positions are only addressable after discarding the
-rem first nine. The 10th argument is the space separated IPv4 list of DERP hosts
-rem that must stay outside the tunnel; the 11th is the physical gateway they
-rem have to be routed through (Windows is the only platform whose create script
-rem did not already receive that gateway). Both may be empty: no VPN peers, or a
-rem caller from an older layout. Nine explicit shifts are used on purpose -
-rem "shift" inside a for loop is not reliably scoped to the batch context.
-shift
-shift
-shift
-shift
-shift
-shift
-shift
-shift
-shift
-set bypass_ips=%~1
-set physical_gateway=%~2
-
 rem Exit code contract: the caller (client/tun/tun.go) keeps the TUN routes
 rem installed only when this script exits 0. cmd.exe propagates the exit
 rem code of the LAST executed command, so a batch file without an explicit
@@ -106,21 +85,6 @@ call route add 16.0.0.0 mask 240.0.0.0 %tun_gw% metric 5 || set FAIL=route
 call route add 32.0.0.0 mask 224.0.0.0 %tun_gw% metric 5 || set FAIL=route
 call route add 64.0.0.0 mask 192.0.0.0 %tun_gw% metric 5 || set FAIL=route
 call route add 128.0.0.0 mask 128.0.0.0 %tun_gw% metric 5 || set FAIL=route
-
-rem IPv4 host routes for the DERP hosts that must stay outside the tunnel:
-rem relay_only=true leaves the TCP connection to the DERP host as tailcat's
-rem only way out, so without a more specific route it would be captured by the
-rem ladder above and loop back into easyss' own SOCKS5 (see
-rem docs/vpn-design.md 8.2). /32 always beats the /8../1 ladder, so sharing
-rem metric 5 with those blocks is harmless. An empty list is not a failure,
-rem and the "already exists" error of a repeated add is tolerated by the
-rem route command itself, which keeps the keep-alive replay quiet.
-if "%bypass_ips%"=="" goto no_bypass
-if "%physical_gateway%"=="" goto no_bypass
-for %%i in (%bypass_ips%) do (
-    call route add %%i mask 255.255.255.255 %physical_gateway% metric 5 || set FAIL=bypass
-)
-:no_bypass
 
 if "%server_ip_v6%"=="" goto no_v6
 

@@ -176,8 +176,12 @@ func ExampleConfig() FileConfig {
 			// DERP 的对外 host:port 与 listen/domain 一致时本可以省略
 			// derp_addr（ResolveDERPAddr 会推导），示例里仍然写全：示例是
 			// 字段清单，任何新增字段都不应静默漏在示例之外。
+			//
+			// enabled 默认给 false：内嵌 DERP 虽然只对回环来源提供服务（节点
+			// 经 easyss 隧道抵达，公网上没有任何 DERP 路径），但它会把该服务端
+			// 变成节点组网的中继，运维应当明确地打开它。
 			VPN: VPNConfig{
-				Enabled:  true,
+				Enabled:  false,
 				DERPAddr: "your-domain.com:443",
 			},
 		},

@@ -44,7 +44,8 @@ func newUDPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) 
 	directDialer := outboundDialer(config.DialTimeout(timeout), 0)
 	h := &udpHandler{idleTimeout: idleTimeout, nextProxy: np}
 	h.dial = dialer{
-		nextProxy: np,
+		dialTimeout: config.DialTimeout(timeout),
+		nextProxy:   np,
 		shouldProxy: func(target string) bool {
 			return np.EnableUDP() && np.ShouldProxy(target)
 		},

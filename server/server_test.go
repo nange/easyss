@@ -266,3 +266,38 @@ func TestServerUploadFlowControlWindowsOnWire(t *testing.T) {
 	require.GreaterOrEqual(t, connWindow, 2<<20,
 		"connection upload window must be >= 2MB")
 }
+
+// TestLoopbackListenAddr 固定 server.listen → 内嵌 DERP 回环拨号地址的推导与拒绝
+// 规则。DERP 与代理共用同一个 HTTPS 监听，而节点侧经隧道送来的 DERP 连接会被改拨
+// 到该监听的回环地址（见 handler.dialTarget），因此"监听在回环上不可达"必须是启动
+// 错误，而不是等到节点连不上中继才暴露。
+func TestLoopbackListenAddr(t *testing.T) {
+	for _, tc := range []struct {
+		listen string
+		want   string
+	}{
+		{":443", "127.0.0.1:443"},
+		{"0.0.0.0:8443", "127.0.0.1:8443"},
+		// v6 监听（含通配）一律用 v6 回环拨号：v6 socket 一定能接受 ::1，
+		// 而 127.0.0.1 在 bindv6only=1 的机器上会被拒。
+		{"[::]:8443", "[::1]:8443"},
+		{"127.0.0.1:9443", "127.0.0.1:9443"},
+		// 只绑 v6 回环时不能拨 v4 回环：那个监听根本不接受 127.0.0.1。
+		{"[::1]:9443", "[::1]:9443"},
+	} {
+		got, err := loopbackListenAddr(tc.listen)
+		if err != nil {
+			t.Errorf("loopbackListenAddr(%q): %v", tc.listen, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("loopbackListenAddr(%q) = %q, want %q", tc.listen, got, tc.want)
+		}
+	}
+
+	for _, listen := range []string{"203.0.113.5:443", "example.com:443", "8443", ""} {
+		if got, err := loopbackListenAddr(listen); err == nil {
+			t.Errorf("loopbackListenAddr(%q) = %q, want an error: the embedded DERP could not be reached on loopback", listen, got)
+		}
+	}
+}

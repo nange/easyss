@@ -183,12 +183,9 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	}
 
 	// 7. 运行 create 脚本（ifconfig/ip + MTU + route add）。
-	//    BypassIPs（第 10 个参数）把内嵌 DERP 的主机钉在物理网关上，见
-	//    docs/vpn-design.md 8.2。
-	log.Info("[TUN-HELPER] creating routes and configuring interface", "mtu", tunMTU, "bypass_ips", cfg.BypassIPs)
+	log.Info("[TUN-HELPER] creating routes and configuring interface", "mtu", tunMTU)
 	if err := runCreateScript(actualDevice, cfg.TunIP, cfg.TunGW, cfg.LocalGateway,
-		cfg.TunIPV6Sub, cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6, tunMTU,
-		strings.Join(cfg.BypassIPs, " ")); err != nil {
+		cfg.TunIPV6Sub, cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6, tunMTU); err != nil {
 		_ = unix.Close(tunFd)
 		return giveUp("run create script", err)
 	}

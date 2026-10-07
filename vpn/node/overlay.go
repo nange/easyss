@@ -124,7 +124,10 @@ func (o *Overlay) Addr(hostName string) (netip.Addr, bool) {
 // 这两条路径正是访问侧的全部入口：应用书写的名字（ssh user@b）经本地 DNS 解析
 // 成 overlay IP，TUN 模式下则直接以 overlay IP 到达 SOCKS5，因此两处都必须命中。
 func (o *Overlay) Lookup(host string) (PeerRef, bool) {
-	if po, ok := o.byName[strings.ToLower(host)]; ok {
+	// 名字按 DNS 的写法比较：不区分大小写，并去掉末尾的根点（"b." 与 "b" 是同一个
+	// 名字）。配置侧的 host_name 已在 normalizePeers 里归一化，这里再兜一层是为了
+	// 覆盖"应用直接写 FQDN"的情形。
+	if po, ok := o.byName[strings.ToLower(trimDNSRoot(host))]; ok {
 		return po.ref, true
 	}
 	addr, err := netip.ParseAddr(host)

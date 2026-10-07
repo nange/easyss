@@ -138,9 +138,14 @@ func TestResolveDERPAddrIsIdempotent(t *testing.T) {
 
 // TestExampleConfigVPNIsResolvable 守护示例里的 VPN 配置本身可用：设计文档与
 // 示例给出的默认值不会与运行期的推导规则漂移。
+//
+// enabled 在示例里是 false（内嵌 DERP 会把该服务端变成节点组网的中继，运维应当
+// 自己打开它——见 ExampleConfig 的注释），但 derp_addr 仍然写全，因此"照抄示例后
+// 只把 enabled 改成 true"必须能直接启动。
 func TestExampleConfigVPNIsResolvable(t *testing.T) {
 	fc := ExampleConfig()
-	require.True(t, fc.Server.VPN.Enabled, "example should show the enabled form")
+	require.False(t, fc.Server.VPN.Enabled, "the example must not enable the relay by default")
+	fc.Server.VPN.Enabled = true
 	addr, err := fc.ResolveDERPAddr()
 	require.NoError(t, err)
 	require.Equal(t, "your-domain.com:443", addr)

@@ -84,11 +84,18 @@ func NewConfig(opts Options) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("vpn.overlay_cidr: %w", err)
 	}
-	if _, _, err := sharedconfig.SplitDERPAddr(opts.DERPAddr); err != nil {
+	if _, err := sharedconfig.SplitDERPAddr(opts.DERPAddr); err != nil {
 		return nil, fmt.Errorf("vpn.derp_addr: %w", err)
 	}
 	peers, err := normalizePeers(opts.Peers)
 	if err != nil {
+		return nil, err
+	}
+	// DERP 私有化（见 docs/vpn-design.md 3.3）：节点的 DERP 连接只经 easyss
+	// 隧道到达，由服务端把它映射到自己的回环监听。这条路径要求所有节点通告
+	// 同一个 DERP host:port，否则访问对端时那台 DERP 根本不可达——而这会以
+	// "隧道拨号超时"的形式出现在第一次访问对端时，所以在这里当场拒绝。
+	if err := assertPeersShareDERP(opts.DERPAddr, peers); err != nil {
 		return nil, err
 	}
 	allow, err := parseAllowedClients(opts.AllowClients)
@@ -110,11 +117,15 @@ func NewConfig(opts Options) (*Config, error) {
 // host_name 要求全局唯一（忽略大小写，因为 DNS 名字本身不区分大小写）且不能是
 // IP 字面量：访问侧的查找顺序是"先按 host_name、再按 overlay IP"，一个看起来像
 // IP 的名字会让这两条路径互相遮蔽，配置上应当直接拒绝。
+//
+// 写成 FQDN 的自然形态（"b."）在这里被归一化成 "b"：名字会被用在 URL、host:port
+// 与 DNS 问题名三个地方，而只有 DNS 那一侧会自动去掉根点。不归一化的话，
+// "b." 能通过校验却永远匹配不上（表现为对端神秘不可达）。
 func normalizePeers(peers []PeerRef) ([]PeerRef, error) {
 	out := make([]PeerRef, 0, len(peers))
 	seen := make(map[string]string, len(peers))
 	for i, p := range peers {
-		name := p.HostName
+		name := trimDNSRoot(p.HostName)
 		if name == "" {
 			return nil, fmt.Errorf("vpn.peers[%d]: host_name is required", i)
 		}

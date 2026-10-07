@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"io"
 	stdlog "log"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -307,6 +310,20 @@ func (s *Server) Start() error {
 		log.Info("[SERVER] next proxy configured", "url", cfg.NextProxy.URL, "udp", cfg.NextProxy.EnableUDP, "all_host", cfg.NextProxy.AllHost)
 	}
 
+	// 内嵌 DERP：它只对来自回环的请求提供服务（见 vpn.NewDERPMount），而节点的
+	// DERP 连接经 easyss 隧道到达这里，握手目标正是本服务端对外通告的 DERP 地址。
+	// 因此要先把该地址与它的回环映射算出来，交给 proxyHandler（见
+	// handler.ProxyHandlerConfig.LocalDERPAddr 与 dialTarget）。
+	var derpAddr, derpLoopback string
+	if srvCfg.VPN.Enabled {
+		if derpAddr, err = cfg.ResolveDERPAddr(); err != nil {
+			return err
+		}
+		if derpLoopback, err = loopbackListenAddr(srvCfg.Listen); err != nil {
+			return fmt.Errorf("server.vpn requires a loopback-reachable listen address: %w", err)
+		}
+	}
+
 	proxyHandler := handler.NewProxyHandler(handler.ProxyHandlerConfig{
 		MasterKey:      masterKey,
 		AllowedMethods: srvCfg.GetAllowedMethods(),
@@ -318,8 +335,10 @@ func (s *Server) Start() error {
 				BudgetCap:   cfg.Shaper.CoverBudgetCap,
 			},
 		},
-		NextProxy: np,
-		Fallback:  fallback,
+		NextProxy:         np,
+		Fallback:          fallback,
+		LocalDERPAddr:     derpAddr,
+		LocalDERPLoopback: derpLoopback,
 	})
 
 	probePayload := make([]byte, sharedconfig.ProbePayloadSize)
@@ -336,7 +355,7 @@ func (s *Server) Start() error {
 	// vpn.NewDERPMount。
 	var root http.Handler = http.HandlerFunc(fallback.Serve)
 	if srvCfg.VPN.Enabled {
-		derpSrv, err := s.startDERP()
+		derpSrv, err := s.startDERP(derpAddr)
 		if err != nil {
 			return err
 		}
@@ -363,17 +382,45 @@ func (s *Server) Start() error {
 	return s.httpServer.ListenAndServeTLS("", "")
 }
 
-// startDERP 装载内嵌 DERP 中继，返回可直接挂到根处理器上的实例。
+// loopbackListenAddr 由 server.listen 推导内嵌 DERP 的本机回环拨号地址
+// （127.0.0.1:<listen 端口>）。
 //
-// 它只负责"成为一台中继"：DERP 地址（客户端会把它连同 region 一起内嵌进
-// tailcat 地址）由 ResolveDERPAddr 决定，这里把结果打印出来——运维只需要把这一
-// 行交给各节点的 vpn.derp_addr / servers[].derp。地址推导不出来时返回错误，
-// 让服务端启动失败，而不是用一台节点连不上的中继空转。
-func (s *Server) startDERP() (*vpn.DERPServer, error) {
-	addr, err := s.cfg.ResolveDERPAddr()
+// 之所以能用"公网监听的回环地址"：DERP 与代理共用同一个 HTTPS 监听，而节点经
+// easyss 隧道送来的 DERP 连接会在这里被改拨回环（见 handler.dialTarget）。这要求
+// 该监听在回环上可达——listen 只绑了某一个非回环地址时它不可达，那属于配置错误，
+// 必须在启动时明确拒绝，而不是等到节点连不上才暴露。
+func loopbackListenAddr(listen string) (string, error) {
+	host, _, err := net.SplitHostPort(listen)
 	if err != nil {
-		return nil, err
+		return "", fmt.Errorf("invalid server.listen %q: %w", listen, err)
 	}
+	loopback := "127.0.0.1"
+	if host != "" {
+		ip, err := netip.ParseAddr(strings.Trim(host, "[]"))
+		if err != nil || (!ip.IsUnspecified() && !ip.IsLoopback()) {
+			return "", fmt.Errorf("server.listen %q is bound to %s, so the embedded DERP cannot be reached on loopback; "+
+				"listen on a wildcard address (e.g. \":443\") or on a loopback address", listen, host)
+		}
+		// 地址族必须跟着监听走：只绑在 [::1] 上的监听不会接受 127.0.0.1 的连接，
+		// 而 v6 通配（[::]）对 ::1 一定可用。
+		if ip.Is6() {
+			loopback = "::1"
+		}
+	}
+	port, err := sharedconfig.PortFromListen(listen)
+	if err != nil {
+		return "", err
+	}
+	return net.JoinHostPort(loopback, strconv.Itoa(port)), nil
+}
+
+// startDERP 装载内嵌 DERP 中继，返回可直接挂到根处理器上的实例。addr 是它对
+// 外通告的 host:port（由 ResolveDERPAddr 推导，见调用方）。
+//
+// 它只负责"成为一台中继"：运维只需要把打印出来的这一行交给各节点的
+// vpn.derp_addr / servers[].derp。注意它与公网入口的关系变了——DERP 处理器只会
+// 接待来自回环的请求（见 vpn.NewDERPMount），节点侧经 easyss 隧道抵达。
+func (s *Server) startDERP(addr string) (*vpn.DERPServer, error) {
 	derpKey, err := vpn.LoadOrCreateKey(vpn.DERPKeyPath())
 	if err != nil {
 		log.Error("[SERVER] load derp key failed", "err", err)
