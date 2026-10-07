@@ -583,7 +583,10 @@ sysctl -p
 
 * `next_proxy.url`: 下一级代理地址，格式 `socks5://ip:port`
 * `next_proxy.next_proxy_file`: 指定走链式代理的 IP/CIDR/域名列表文件，每行一条记录，可混放
-* `next_proxy.enable_udp`: 是否转发UDP请求（需要下一级代理支持）
+* `next_proxy.enable_udp`: 是否转发UDP请求（需要下一级代理支持 UDP ASSOCIATE）。为 `true` 时命中的
+  UDP 目标（含经隧道解析的 DNS）走下一级代理；为 `false` 时这些 UDP 一律直连。开启前请确认下一级
+  代理支持 UDP ASSOCIATE——否则它的关联请求会被拒绝，表现为这些目标上的 UDP 全部超时（客户端 TUN
+  模式下即为"TUN 已开启但所有域名都解析不出来"）
 * `next_proxy.all_host`: 是否对所有请求走链式代理
 
 如果未指定 `next_proxy_file`，则仅按 `all_host` 规则决定是否走链式代理。

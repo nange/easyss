@@ -222,12 +222,22 @@ func (np *NextProxy) DialContext(ctx context.Context, network, addr string) (net
 	return np.dialSOCKS5Context(ctx, network, addr)
 }
 
+// dialSOCKS5Context 经上游 SOCKS5 代理打开一条到 addr 的连接。
+//
+// 两个 network 走的是两套不同的 SOCKS5 命令，不能共用 x/net/proxy 的拨号器：
+//
+//   - "tcp" 走 CONNECT，由 x/net/proxy 实现；
+//   - "udp" 走 UDP ASSOCIATE（RFC 1928 §7）：先建立到上游的控制连接并协商
+//     一次关联，此后每个数据报都按 RSV/FRAG/ATYP/DST.ADDR/DST.PORT 封帧，
+//     经上游给出的中继地址转发（见 udpAssociateConn）。
+//
+// x/net/proxy 只实现 CONNECT，因此把 "udp" 交给它会得到一个必然失败的
+// TCP 拨号（"socks connect udp ...: network not implemented"）。这个分支
+// 是旧 socks5 客户端库被替换后丢失的能力，见 README 的 next_proxy.enable_udp。
+//
+// 两条路径都受 ctx 约束：调用方的取消会让进行中的拨号立即中止。
 func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string) (net.Conn, error) {
-	username := ""
-	password := ""
 	if np.url.User != nil {
-		username = np.url.User.Username()
-		password, _ = np.url.User.Password()
 		log.Info("[NEXTPROXY] connecting via SOCKS5 proxy", "addr", np.url.Host, "network", network, "target", addr)
 	} else {
 		log.Debug("[NEXTPROXY] connecting via SOCKS5 proxy", "addr", np.url.Host, "network", network, "target", addr)
@@ -238,6 +248,46 @@ func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string
 		dialTimeout = config.DefaultDialTimeout
 	}
 
+	// ctx 的截止时间优先于 np.dialTimeout：DNS 路径传入
+	// context.Background()，因此实际生效的一直是后者（与既有的 TCP 路径
+	// 一致——拨号侧从不自己取消）。
+	dialCtx := ctx
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		dialCtx, cancel = context.WithTimeout(ctx, dialTimeout)
+		defer cancel()
+	}
+
+	switch network {
+	case "udp", "udp4", "udp6":
+		conn, err := np.dialUDPAssociate(dialCtx, addr)
+		if err != nil {
+			return nil, fmt.Errorf("socks5 dial %s: %w", addr, err)
+		}
+		return conn, nil
+	}
+
+	conn, err := np.dialSOCKS5Connect(dialCtx, network, addr, dialTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("socks5 dial %s: %w", addr, err)
+	}
+	return conn, nil
+}
+
+// dialSOCKS5Connect 是 network=tcp 的路径：x/net/proxy 的 SOCKS5 拨号器
+// 实现了 ContextDialer，ctx 在拨号阶段生效并透传给 forward，因此不需要
+// "goroutine + 结果 channel + 放弃后排空"的手工取消编排。它的握手本身按 ctx
+// 的截止时间设置连接 deadline，并在返回前 defer 清除（见 x/net 的
+// internal/socks/client.go），所以旧库 Negotiate() 留下握手 deadline、
+// 需要成功后手工清除的那段补偿不再需要——本文件为 udp 路径新建的
+// context.WithTimeout/defer cancel() 也是靠这条约定才成立。
+//
+// 注意它与 UDP 路径在**认证方法通告**上刻意不同：本函数交给 x/net，有凭据时
+// 通告 {无认证, 用户名密码} 两个方法；UDP 路径交给 tun2socks 的库，有凭据时
+// 只通告 {用户名密码} 一个方法（与迁移前的 socks5 客户端一致）。因此上游若是
+// "无需认证、但 URL 里带了凭据"的代理，会出现 TCP 通、UDP 报
+// "unsupported method" 的不对称。这是既成行为，不是笔误。
+func (np *NextProxy) dialSOCKS5Connect(ctx context.Context, network, addr string, dialTimeout time.Duration) (net.Conn, error) {
 	// forward 是 SOCKS5 客户端拨上游代理时使用的底层拨号函数（等价于旧库的
 	// c.DialTCP）：只拨上游代理地址，并使用带 Timeout 的 net.Dialer。
 	dialer := &net.Dialer{Timeout: dialTimeout}
@@ -246,29 +296,49 @@ func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string
 	})
 
 	var auth *xproxy.Auth
-	if username != "" || password != "" {
-		auth = &xproxy.Auth{User: username, Password: password}
+	if user, pass, ok := np.credentials(); ok {
+		auth = &xproxy.Auth{User: user, Password: pass}
 	}
 	d, err := xproxy.SOCKS5("tcp", np.url.Host, auth, forward)
 	if err != nil {
 		return nil, fmt.Errorf("create socks5 dialer: %w", err)
 	}
-
-	// x/net/proxy 的 SOCKS5 拨号器实现了 DialContext：ctx 在拨号阶段生效，
-	// 并且会透传给上面的 forward，因此不再需要"goroutine + 结果 channel +
-	// 放弃后排空"的手工取消编排——调用方取消时，进行中的拨号会被直接中止。
-	//
-	// 该库也不设置任何 deadline（全包无 SetDeadline），所以旧库 Negotiate()
-	// 留下握手 deadline、需要在成功后手工清除的那段补偿一并消失。
 	cd, ok := d.(xproxy.ContextDialer)
 	if !ok {
 		return nil, fmt.Errorf("socks5 dialer %T does not support context", d)
 	}
-	conn, err := cd.DialContext(ctx, network, addr)
-	if err != nil {
-		return nil, fmt.Errorf("socks5 dial %s: %w", addr, err)
+	return cd.DialContext(ctx, network, addr)
+}
+
+// credentials 返回上游代理的用户名/密码；两者都为空时 ok 为 false（不启用
+// 认证协商）。UDP ASSOCIATE 与 CONNECT 共用它，使认证只在 URL 解析一处。
+func (np *NextProxy) credentials() (user, password string, ok bool) {
+	if np.url == nil || np.url.User == nil {
+		return "", "", false
 	}
-	return conn, nil
+	user = np.url.User.Username()
+	password, _ = np.url.User.Password()
+	if user == "" && password == "" {
+		return "", "", false
+	}
+	return user, password, true
+}
+
+// dialProxyTCP 建立到上游代理的 TCP 连接，并按 dialCtx 的截止时间约束握手。
+// 返回的 deadline 是调用方在握手/关联成功后必须清除的绝对时间。
+func (np *NextProxy) dialProxyTCP(dialCtx context.Context) (net.Conn, time.Time, error) {
+	conn, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", np.url.Host)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	deadline, _ := dialCtx.Deadline()
+	if !deadline.IsZero() {
+		if err := conn.SetDeadline(deadline); err != nil {
+			conn.Close() //nolint:errcheck
+			return nil, time.Time{}, err
+		}
+	}
+	return conn, deadline, nil
 }
 
 // socksDialerFunc 是 xproxy.Dialer + ContextDialer 的函数式适配器。它让
