@@ -1,11 +1,13 @@
 package nextproxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"io"
 	"net"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -44,7 +46,23 @@ type fakeSocks5UDPProxy struct {
 	gotPass  string
 	authSent bool
 	udpSeen  []string // 收到的每个数据报的 "host:port" 目标
-	closed   chan struct{}
+
+	// closed 在进程收尾时关闭（供 t.Cleanup 使用）；controlClosed 在**某条**
+	// 控制连接被客户端关掉时关闭，让用例能断言"失败后确实回收了控制连接"。
+	closed        chan struct{}
+	controlClosed chan struct{}
+	controlOnce   sync.Once
+}
+
+// waitControlClosed 等待假代理上的控制连接被客户端关闭。它是"失败路径确实回收
+// 了控制连接"的断言入口：连接没被建立时也会超时，因此不能用来证明连接建立过。
+func (p *fakeSocks5UDPProxy) waitControlClosed(timeout time.Duration) bool {
+	select {
+	case <-p.controlClosed:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 func newFakeSocks5UDPProxy(t *testing.T, requireAuth bool, user, password string) *fakeSocks5UDPProxy {
@@ -60,13 +78,14 @@ func newFakeSocks5UDPProxy(t *testing.T, requireAuth bool, user, password string
 	}
 
 	p := &fakeSocks5UDPProxy{
-		t:           t,
-		listener:    ln,
-		relay:       relay,
-		requireAuth: requireAuth,
-		user:        user,
-		password:    password,
-		closed:      make(chan struct{}),
+		t:             t,
+		listener:      ln,
+		relay:         relay,
+		requireAuth:   requireAuth,
+		user:          user,
+		password:      password,
+		closed:        make(chan struct{}),
+		controlClosed: make(chan struct{}),
 	}
 	go p.serve()
 	go p.serveRelay()
@@ -79,6 +98,11 @@ func newFakeSocks5UDPProxy(t *testing.T, requireAuth bool, user, password string
 }
 
 func (p *fakeSocks5UDPProxy) addr() string { return p.listener.Addr().String() }
+
+// markControlClosed 记录"客户端关掉了控制连接"，对多次关闭幂等。
+func (p *fakeSocks5UDPProxy) markControlClosed() {
+	p.controlOnce.Do(func() { close(p.controlClosed) })
+}
 
 func (p *fakeSocks5UDPProxy) authReceived() (string, string, bool) {
 	p.mu.Lock()
@@ -104,6 +128,8 @@ func (p *fakeSocks5UDPProxy) serve() {
 
 func (p *fakeSocks5UDPProxy) handle(conn net.Conn) {
 	defer conn.Close() //nolint:errcheck
+	// 任何退出路径（含在应答前就失败）都说明客户端已经不再持有这条控制连接。
+	defer p.markControlClosed()
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 
 	// 方法协商：VER NMETHODS METHODS...
@@ -228,8 +254,9 @@ func (p *fakeSocks5UDPProxy) readUserPass(conn net.Conn) bool {
 	return status == 0x00
 }
 
-// serveRelay 把收到的数据报按封装里的目标地址真实转发出去，再封装回客户端。
-// 这样测试可以对着一个真实的 UDP 服务端验证完整往返，而不是让假代理自问自答。
+// serveRelay 把收到的数据报**先按字节独立校验**，再按封装里的目标地址真实转发
+// 出去、封装回客户端。这样测试既对着真实 UDP 服务端验证往返，又不依赖被测
+// 实现与它自己的编解码互相印证（唯一复用的 socks5 包在这里只用来取目标地址）。
 func (p *fakeSocks5UDPProxy) serveRelay() {
 	buf := make([]byte, maxUDPDatagram)
 	for {
@@ -237,7 +264,12 @@ func (p *fakeSocks5UDPProxy) serveRelay() {
 		if err != nil {
 			return
 		}
-		addr, payload, parseErr := socks5.DecodeUDPPacket(buf[:n])
+		raw := buf[:n]
+		if _, _, ok := parseVerbatimDatagram(raw); !ok {
+			p.t.Errorf("fake proxy: malformed datagram from client: % x", raw)
+			continue
+		}
+		addr, payload, parseErr := socks5.DecodeUDPPacket(raw)
 		if parseErr != nil {
 			p.t.Errorf("fake proxy: bad datagram from client: %v", parseErr)
 			continue
@@ -248,6 +280,52 @@ func (p *fakeSocks5UDPProxy) serveRelay() {
 
 		go p.forward(clientAddr, addr, payload)
 	}
+}
+
+// parseVerbatimDatagram 按 RFC 1928 §7 手工解一条 SOCKS5 UDP 数据报，返回其
+// 目标地址（"host:port"）与载荷。它刻意不使用 socks5 包：被测的 Read/Write
+// 正是走那个包，如果测试也用它，两侧就会一起错而测试仍然通过。它的长度校验
+// 也是独立的——域名长度字段与实体必须严格吻合（库的 EncodeUDPPacket 不检查
+// 这一点，>255 字节的名字会被写错长度字节）。
+func parseVerbatimDatagram(raw []byte) (dst string, payload []byte, ok bool) {
+	// RSV(2) + FRAG(1) + ATYP(1)
+	if len(raw) < 4 || raw[0] != 0 || raw[1] != 0 || raw[2] != 0 {
+		return "", nil, false
+	}
+
+	var host string
+	offset := 4
+	switch raw[3] {
+	case 0x01: // IPv4
+		if len(raw) < offset+net.IPv4len+2 {
+			return "", nil, false
+		}
+		host = net.IP(raw[offset : offset+net.IPv4len]).String()
+		offset += net.IPv4len
+	case 0x04: // IPv6
+		if len(raw) < offset+net.IPv6len+2 {
+			return "", nil, false
+		}
+		host = net.IP(raw[offset : offset+net.IPv6len]).String()
+		offset += net.IPv6len
+	case 0x03: // 域名：长度字段必须与实体吻合
+		if len(raw) < offset+1 {
+			return "", nil, false
+		}
+		length := int(raw[offset])
+		offset++
+		if len(raw) < offset+length+2 {
+			return "", nil, false
+		}
+		host = string(raw[offset : offset+length])
+		offset += length
+	default:
+		return "", nil, false
+	}
+
+	port := int(raw[offset])<<8 | int(raw[offset+1])
+	offset += 2
+	return net.JoinHostPort(host, strconv.Itoa(port)), raw[offset:], true
 }
 
 func (p *fakeSocks5UDPProxy) forward(clientAddr *net.UDPAddr, dst socks5.Addr, payload []byte) {
@@ -445,14 +523,71 @@ func TestDialUDPAssociateDomainRelay(t *testing.T) {
 	}
 }
 
-// TestDialUDPAssociateMalformedTarget 覆盖畸形目标：调用方给了无法解析的目标
-// 时必须在建立关联之后立刻回收，而不是留一条没人用的控制连接。
+// TestDialUDPAssociateMalformedTarget 覆盖两类非法目标：无法解析的、以及域名
+// 超过 SOCKS5 上限的。两者都必须在拨号之前被拦下：既然没有拨号，假代理就不该
+// 看到任何控制连接（waitControlClosed 在"从未连上"时同样超时）。
 func TestDialUDPAssociateMalformedTarget(t *testing.T) {
+	cases := []struct {
+		name   string
+		target string
+	}{
+		{"无法解析", "not-a-host-port"},
+		// 265 字节域名：库的 SerializeAddr 会把长度字节写成 265 mod 256 = 9，
+		// 后面却仍跟着完整的名字（见 encodeDatagramTarget 的注释）。
+		{"域名超过 255 字节", strings.Repeat("a", 265) + ":53"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proxy := newFakeSocks5UDPProxy(t, false, "", "")
+			np := newTestNextProxy(t, proxy.addr(), true)
+
+			if _, err := np.DialContext(context.Background(), "udp", tc.target); err == nil {
+				t.Fatalf("DialContext(udp) with %s = nil error, want failure", tc.name)
+			}
+
+			if proxy.waitControlClosed(200 * time.Millisecond) {
+				t.Error("假代理上出现过控制连接；非法目标必须在拨号之前就被拦下")
+			}
+		})
+	}
+}
+
+// TestDialUDPAssociateRejectedClosesControl 覆盖"关联建立之后"才发现的失败：
+// 上游拒绝 ASSOCIATE 时，客户端必须把那条件失败的控制连接关掉，而不是留在后台。
+func TestDialUDPAssociateRejectedClosesControl(t *testing.T) {
 	proxy := newFakeSocks5UDPProxy(t, false, "", "")
+	proxy.replyCode = 0x07 // command not supported
 	np := newTestNextProxy(t, proxy.addr(), true)
 
-	if _, err := np.DialContext(context.Background(), "udp", "not-a-host-port"); err == nil {
-		t.Fatal("DialContext(udp) with a malformed target = nil error, want failure")
+	if _, err := np.DialContext(context.Background(), "udp", "8.8.8.8:53"); err == nil {
+		t.Fatal("DialContext(udp) = nil error, want rejection")
+	}
+
+	if !proxy.waitControlClosed(2 * time.Second) {
+		t.Error("被拒绝后控制连接没有被关闭（客户端泄漏了一条连接）")
+	}
+}
+
+// TestEncodeDatagramTarget 钉住长度边界：库的 SerializeAddr 会把域名长度截成
+// uint8 而不报错，所以这条校验必须在库之上补回来，否则 >255 字节的目标会变成
+// 长度字段与实体错位的数据报发给上游。
+func TestEncodeDatagramTarget(t *testing.T) {
+	// 255 字节域名是 SOCKS5 的上限，编出来正好 MaxAddrLen（259）字节。
+	limit := strings.Repeat("a", 255)
+	addr, err := encodeDatagramTarget(limit + ":53")
+	if err != nil {
+		t.Fatalf("encodeDatagramTarget(255-byte domain) = %v, want success", err)
+	}
+	if len(addr) != socks5.MaxAddrLen {
+		t.Errorf("encoded length = %d, want %d", len(addr), socks5.MaxAddrLen)
+	}
+
+	// 再多一个字节就必须被拒（而不是被写成长度 0 的畸形数据报）。
+	if _, err := encodeDatagramTarget(strings.Repeat("a", 256) + ":53"); err == nil {
+		t.Error("encodeDatagramTarget(256-byte domain) = nil error, want failure")
+	}
+	if _, err := encodeDatagramTarget("not-a-host-port"); err == nil {
+		t.Error("encodeDatagramTarget(malformed) = nil error, want failure")
 	}
 }
 
@@ -478,6 +613,95 @@ func TestSplitSocksAddr(t *testing.T) {
 	}
 	if _, _, err := splitSocksAddr(socks5.Addr{socks5.AtypDomainName, 200, 'x'}); err == nil {
 		t.Error("splitSocksAddr with a truncated name = nil error, want failure")
+	}
+}
+
+// TestUDPAssociateConnWriteWireBytes 是数据面的**独立字节级断言**：检查 Write
+// 真正发到中继地址上的字节。
+//
+// 为什么需要它：pipeline 的两侧都用 socks5 包的编解码（生产 Write 用它编码、
+// 假代理用它解码），只靠往返测试的话两侧会一起错而测试仍然通过。这里改用手工
+// 拼出的期望字节比对，协议正确性就不再由被测实现自己证明。
+func TestUDPAssociateConnWriteWireBytes(t *testing.T) {
+	// 测试侧扮演中继地址：Write 用的是已连接 socket 的 Write，因此这里必须
+	// 有一条连到对端的 socket（生产路径上是 net.DialUDP 给的）。对端在另一个
+	// 监听 socket 上收字节，两者不能是同一个 socket——内核不会把数据报回送给
+	// 同一个 socket。
+	peerListener, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen peer: %v", err)
+	}
+	defer peerListener.Close() //nolint:errcheck
+
+	// 本地地址交给内核分配：绑定到已被占用的端口只会 EADDRINUSE。
+	relay, err := net.DialUDP("udp4", nil, peerListener.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatalf("dial relay: %v", err)
+	}
+	defer relay.Close() //nolint:errcheck
+
+	server, client := net.Pipe()
+	defer server.Close() //nolint:errcheck
+	defer client.Close() //nolint:errcheck
+
+	conn := &udpAssociateConn{control: server, relay: relay, dst: socks5.ParseAddrString("8.8.8.8:53")}
+	defer conn.Close() //nolint:errcheck
+
+	payload := []byte("dns-query-bytes")
+	if _, err := conn.Write(payload); err != nil {
+		t.Fatalf("Write = %v", err)
+	}
+
+	if err := peerListener.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline = %v", err)
+	}
+	buf := make([]byte, maxUDPDatagram)
+	n, _, err := peerListener.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("peer read: %v", err)
+	}
+
+	// RSV(2) FRAG(1) ATYP(1)=IPv4 ADDR(4) PORT(2) DATA
+	want := []byte{0x00, 0x00, 0x00, 0x01, 8, 8, 8, 8, 0x00, 0x35}
+	want = append(want, payload...)
+	if got := buf[:n]; !bytes.Equal(got, want) {
+		t.Errorf("wire bytes = % x\n           want % x", got, want)
+	}
+}
+
+// TestUDPAssociateConnReadVerbatimDatagram 是读方向的独立字节级断言：灌进一条
+// 手工拼出的数据报，断言 Read 交出的载荷恰好是去掉头部的那一段（不多不少）。
+func TestUDPAssociateConnReadVerbatimDatagram(t *testing.T) {
+	// Read 走的是未连接 socket 的 ReadFromUDP，因此这里可以直接把数据报发给
+	// 中继 socket 自己的地址。
+	relay, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen relay: %v", err)
+	}
+	defer relay.Close() //nolint:errcheck
+
+	server, client := net.Pipe()
+	defer server.Close() //nolint:errcheck
+	defer client.Close() //nolint:errcheck
+
+	conn := &udpAssociateConn{control: server, relay: relay, dst: socks5.ParseAddrString("8.8.8.8:53")}
+	defer conn.Close() //nolint:errcheck
+
+	payload := []byte("dns-answer")
+	datagram := []byte{0x00, 0x00, 0x00, 0x01, 8, 8, 8, 8, 0x00, 0x35}
+	datagram = append(datagram, payload...)
+	if _, err := relay.WriteToUDP(datagram, relay.LocalAddr().(*net.UDPAddr)); err != nil {
+		t.Fatalf("write datagram: %v", err)
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 64)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("Read = %v", err)
+	}
+	if got := buf[:n]; !bytes.Equal(got, payload) {
+		t.Errorf("Read payload = %q, want %q (read %d bytes)", got, payload, n)
 	}
 }
 

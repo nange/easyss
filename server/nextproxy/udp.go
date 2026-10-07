@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/xjasonlyu/tun2socks/v2/transport/socks5"
 )
@@ -61,6 +62,13 @@ func (np *NextProxy) dialUDPAssociate(ctx context.Context, dst string) (net.Conn
 		return nil, errors.New("next proxy url is not configured")
 	}
 
+	// 目标地址在建立关联之前就编码并校验：畸形/超长目标不该先跟上游握一次手、
+	// 建一条控制连接，再回来拆掉。Write 是逐数据报的热路径，编码只做一次。
+	target, err := encodeDatagramTarget(dst)
+	if err != nil {
+		return nil, err
+	}
+
 	control, deadline, err := np.dialProxyTCP(ctx)
 	if err != nil {
 		return nil, err
@@ -70,7 +78,6 @@ func (np *NextProxy) dialUDPAssociate(ctx context.Context, dst string) (net.Conn
 		control.Close() //nolint:errcheck
 		return nil, err
 	}
-
 	// 凭据只在有值时传入：库据此通告单个认证方法（有凭据=用户名/密码，否则
 	// 无需认证），与迁移前的 socks5 客户端行为一致，也与 CONNECT 路径同源。
 	var user *socks5.User
@@ -91,14 +98,9 @@ func (np *NextProxy) dialUDPAssociate(ctx context.Context, dst string) (net.Conn
 		return fail(fmt.Errorf("dial the udp relay %s: %w", relayAddr, err))
 	}
 
-	// 目标地址提前解析成 SOCKS5 地址：Write 是逐数据报的热路径，不该在那里
-	// 重复解析同一个字符串。解析失败说明调用方给了畸形目标，此时还没有人会
-	// 用它，直接回收。
-	target := socks5.ParseAddrString(dst)
-	if target == nil {
-		relay.Close() //nolint:errcheck
-		return fail(fmt.Errorf("malformed datagram target %q", dst))
-	}
+	// 目标地址已在建立关联之前编码完成（见 encodeDatagramTarget）：Write 是
+	// 逐数据报的热路径，不该在那里重复解析同一个字符串。
+	c := &udpAssociateConn{control: control, relay: relay, dst: target, closed: make(chan struct{})}
 
 	if !deadline.IsZero() {
 		// 握手与关联都已完成，清除拨号截止时间：它的剩余额度不该泄漏到数据面
@@ -109,11 +111,33 @@ func (np *NextProxy) dialUDPAssociate(ctx context.Context, dst string) (net.Conn
 		}
 	}
 
-	c := &udpAssociateConn{control: control, relay: relay, dst: target}
 	// 控制连接是关联的存活信号：上游一旦关闭它，这个关联就不再有效，必须
 	// 立即终止本地 socket，而不是让调用方一直阻塞在 Read 上。
 	go c.monitorControl()
 	return c, nil
+}
+
+// encodeDatagramTarget 把 "host:port" 目标编码成 SOCKS5 地址，并补上库缺失的
+// 长度校验。
+//
+// socks5.ParseAddrString 走的是 SerializeAddr，它对域名只写 uint8(len(domain))
+// 而不做范围检查：256 字节的名字会被写成长度 0x00、265 字节写成 0x09，而后面
+// 仍跟着完整的名字。这种地址 Addr.Valid() 返回 true、EncodeUDPPacket 也不报错，
+// 于是发给上游的是一条长度字段与实体不符、解析错位的数据报（剩余名字会被当成
+// 端口与载荷）。触发源是客户端 HANDSHAKE 里的 target，因此这里必须自己拦。
+//
+// 上限取 MaxAddrLen：合法的 255 字节域名加上 ATYP 与端口正好 259 字节，因此
+// 这条检查不会误杀任何合法目标。
+func encodeDatagramTarget(dst string) (socks5.Addr, error) {
+	addr := socks5.ParseAddrString(dst)
+	if addr == nil {
+		return nil, fmt.Errorf("malformed datagram target %q", dst)
+	}
+	if len(addr) > socks5.MaxAddrLen {
+		return nil, fmt.Errorf("datagram target %q is too long for socks5 (%d > %d bytes)",
+			dst, len(addr), socks5.MaxAddrLen)
+	}
+	return addr, nil
 }
 
 // resolveRelayAddr 把应答里的 BND.ADDR:BND.PORT 解析成可拨号的 UDP 地址。
@@ -226,6 +250,9 @@ type udpAssociateConn struct {
 	dst socks5.Addr
 
 	closeOnce sync.Once
+	// closed 在 Close 时关闭，让 monitorControl 能区分"上游撤销了关联"与
+	// "我们自己收尾"——只有前者值得告警。
+	closed chan struct{}
 	// writeMu 串行化发送：udpHandler 只在主 goroutine 里写，但 net.Conn 的
 	// 契约不承诺这一点。库的 EncodeUDPPacket 每次返回独立缓冲区，因此这里
 	// 不需要为复用而持有共享写缓冲。
@@ -238,15 +265,37 @@ type udpAssociateConn struct {
 
 // monitorControl 阻塞在控制连接上：上游关闭它（关联失效）或控制连接出错时，
 // 立即关闭中继 socket，让阻塞中的 Read 返回，而不是僵死到会话空闲超时。
+//
+// 这里必须留下日志：server/handler 的 targetReadError 会把关闭引起的
+// net.ErrClosed 归一成 io.EOF，于是"上游撤销了关联"和"会话正常收尾"在那边
+// 长得一模一样。没有这条 warn，线上只能看到代理突然不再中转 UDP。
 func (c *udpAssociateConn) monitorControl() {
 	buf := make([]byte, 1)
 	for {
 		if _, err := c.control.Read(buf); err != nil {
+			if !c.isClosed() {
+				log.Warn("[NEXTPROXY] udp association closed by the upstream proxy, tearing down the datagram side",
+					"proxy", c.control.RemoteAddr(), "relay", c.relay.RemoteAddr(), "err", err)
+			}
 			c.Close() //nolint:errcheck
 			return
 		}
 		// 关联建立后上游不应再发送任何字节（数据面走 UDP 中继）。收到就丢弃，
 		// 保持读取以便继续感知控制连接的关闭。
+	}
+}
+
+// isClosed 报告本连接是否已被我们自己关闭（用于区分"上游撤销"与"我们收尾"）。
+// 未初始化 closed 时按"未关闭"处理。
+func (c *udpAssociateConn) isClosed() bool {
+	if c.closed == nil {
+		return false
+	}
+	select {
+	case <-c.closed:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -287,6 +336,11 @@ func (c *udpAssociateConn) Write(b []byte) (int, error) {
 func (c *udpAssociateConn) Close() error {
 	var err error
 	c.closeOnce.Do(func() {
+		// closed 可能为 nil（测试直接构造零值时）：关闭一个 nil 通道会 panic，
+		// 而 Close 必须能在任何构造路径上安全调用。
+		if c.closed != nil {
+			close(c.closed)
+		}
 		err = c.relay.Close()
 		if cerr := c.control.Close(); err == nil {
 			err = cerr

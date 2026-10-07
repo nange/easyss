@@ -276,9 +276,17 @@ func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string
 
 // dialSOCKS5Connect 是 network=tcp 的路径：x/net/proxy 的 SOCKS5 拨号器
 // 实现了 ContextDialer，ctx 在拨号阶段生效并透传给 forward，因此不需要
-// "goroutine + 结果 channel + 放弃后排空"的手工取消编排。该库也不设置任何
-// deadline（全包无 SetDeadline），所以旧库 Negotiate() 留下握手 deadline、
-// 需要成功后手工清除的那段补偿一并消失。
+// "goroutine + 结果 channel + 放弃后排空"的手工取消编排。它的握手本身按 ctx
+// 的截止时间设置连接 deadline，并在返回前 defer 清除（见 x/net 的
+// internal/socks/client.go），所以旧库 Negotiate() 留下握手 deadline、
+// 需要成功后手工清除的那段补偿不再需要——本文件为 udp 路径新建的
+// context.WithTimeout/defer cancel() 也是靠这条约定才成立。
+//
+// 注意它与 UDP 路径在**认证方法通告**上刻意不同：本函数交给 x/net，有凭据时
+// 通告 {无认证, 用户名密码} 两个方法；UDP 路径交给 tun2socks 的库，有凭据时
+// 只通告 {用户名密码} 一个方法（与迁移前的 socks5 客户端一致）。因此上游若是
+// "无需认证、但 URL 里带了凭据"的代理，会出现 TCP 通、UDP 报
+// "unsupported method" 的不对称。这是既成行为，不是笔误。
 func (np *NextProxy) dialSOCKS5Connect(ctx context.Context, network, addr string, dialTimeout time.Duration) (net.Conn, error) {
 	// forward 是 SOCKS5 客户端拨上游代理时使用的底层拨号函数（等价于旧库的
 	// c.DialTCP）：只拨上游代理地址，并使用带 Timeout 的 net.Dialer。

@@ -16,12 +16,16 @@ import (
 // 间接引到它们，二进制会凭空长大十几 MiB（服务端与客户端的体积差异正来源于
 // 此）。这条边界不是靠"别 import 错"的自觉维持的：下面按 go list 的真实依赖
 // 闭包断言，任何一次不经意的间接引用都会在这里失败。
-// allowedTun2socksPrefixes 是允许出现在服务端依赖闭包里的 tun2socks 包前缀。
-// 除协议层外只有 internal/pool——它是协议层 bufferpool 的底层缓冲池，
-// 同样是几十行的工具代码，而不是引擎。
-var allowedTun2socksPrefixes = []string{
-	"github.com/xjasonlyu/tun2socks/v2/transport/",
-	"github.com/xjasonlyu/tun2socks/v2/internal/pool",
+// allowedTun2socksPackages 是允许出现在服务端依赖闭包里的 tun2socks 包的**精确
+// 路径**。刻意不用 "transport/" 这样的前缀：那个前缀会把 transport/shadowsocks
+// 之类的实现一并放行（它同样只依赖 transport/ 下的东西），而本守卫要钉的是
+// "只有 SOCKS5 协议层"。
+//
+// 新增任何一条都需要在这里显式登记——这正是这条守卫的目的。
+var allowedTun2socksPackages = map[string]struct{}{
+	"github.com/xjasonlyu/tun2socks/v2/transport/socks5":              {},
+	"github.com/xjasonlyu/tun2socks/v2/transport/internal/bufferpool": {},
+	"github.com/xjasonlyu/tun2socks/v2/internal/pool":                 {},
 }
 
 // serverPackage 是被检查的入口：服务端二进制的 main 包。
@@ -51,9 +55,8 @@ func TestServerDepsKeepTun2socksProtocolOnly(t *testing.T) {
 			continue
 		}
 		tun2socks = append(tun2socks, dep)
-		if !hasAnyPrefix(dep, allowedTun2socksPrefixes) {
-			t.Errorf("服务端依赖了 %s：只允许 %v 下的协议层与缓冲池",
-				dep, allowedTun2socksPrefixes)
+		if _, ok := allowedTun2socksPackages[dep]; !ok {
+			t.Errorf("服务端依赖了 %s：它不在允许清单里（只允许 SOCKS5 协议层及其缓冲池）", dep)
 		}
 	}
 	if len(tun2socks) == 0 {
@@ -87,14 +90,4 @@ func serverDependencyClosure(t *testing.T) map[string]struct{} {
 		}
 	}
 	return deps
-}
-
-// hasAnyPrefix 报告 pkg 是否落在任一允许前缀之下。
-func hasAnyPrefix(pkg string, prefixes []string) bool {
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(pkg, prefix) {
-			return true
-		}
-	}
-	return false
 }
