@@ -305,3 +305,11 @@ tool (
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 	golang.org/x/mobile/cmd/gobind
 )
+
+// DERP 私有化依赖 tailscale/tailcat 的 DERPDialer 选项（见 runner/derpdialer.go）。
+// 上游接受前，这两个 replace 钉在 fork 的 easyss/derp-dialer 分支的具体 commit 上
+// （github.com/nange/tailscale、github.com/nange/tailcat）；上游合并后删除 replace、
+// 回到原来的版本号即可。
+replace tailscale.com => github.com/nange/tailscale v0.0.0-20261007134803-8452f30bcc38
+
+replace github.com/tailscale/tailcat => github.com/nange/tailcat v0.0.0-20261007163924-90dee2199828

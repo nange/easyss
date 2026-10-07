@@ -59,7 +59,7 @@ func vpnTestTimeouts() sharedconfig.Timeouts {
 // 建起对端面、访问侧与发布地址，而 close 幂等。
 func TestStartVPNBuildsAStackAndStopsCleanly(t *testing.T) {
 	paths := vpnTestPaths(t)
-	stack, err := startVPN(vpnTestConfig(), vpnTestTimeouts(), paths, false)
+	stack, err := startVPN(vpnTestConfig(), vpnTestTimeouts(), paths, false, nil)
 	if err != nil {
 		t.Fatalf("startVPN: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestStopVPNLeavesNoGoroutines(t *testing.T) {
 	runtime.GC()
 	baseline := runtime.NumGoroutine()
 
-	stack, err := startVPN(vpnTestConfig(), vpnTestTimeouts(), vpnTestPaths(t), false)
+	stack, err := startVPN(vpnTestConfig(), vpnTestTimeouts(), vpnTestPaths(t), false, nil)
 	if err != nil {
 		t.Fatalf("startVPN: %v", err)
 	}
@@ -242,13 +242,18 @@ func vpnTestPeer(t *testing.T, derpAddr string) config.VPNPeer {
 	return config.VPNPeer{HostName: "b", Address: identity.Address(region)}
 }
 
+// derpOnlyEnvKnob 是 tailcat 的 DERPOnly 写进去的那个 tailscale 开关（见 tailcat
+// 的 createEngine）。测试直接盯它，是为了保证"会话记录的 relay_only"与"真正生效的
+// 数据面开关"一致，而不是只改前者。
+const derpOnlyEnvKnob = "TS_DEBUG_ALWAYS_USE_DERP"
+
 // TestStartVPNForcesRelayOnlyUnderTun 固定 8.1 的强制：TUN 打开时 relay_only=false
-// 的配置必须在本会话强制为 true，而且必须发生在任何 tailcat 组件启动**之前**。
+// 的配置必须在本会话强制为 true，而且必须发生在 tailcat 创建引擎**之前**。
 //
 // 这是唯一真正生效的时机：tailscale 的开关是 magicsock 建 socket 时读的，之后
-// 再置 true 对已绑好的 UDP socket 没有作用（见 vpnnode.ApplyRelayOnly）。
+// 再置 true 对已绑好的 UDP socket 没有作用（见 tailcat 的 DERPOnly 选项）。
 func TestStartVPNForcesRelayOnlyUnderTun(t *testing.T) {
-	t.Cleanup(func() { vpnnode.ApplyRelayOnly(false) })
+	t.Cleanup(func() { envknob.Setenv(derpOnlyEnvKnob, "false") })
 
 	off := false
 	for _, tc := range []struct {
@@ -270,7 +275,7 @@ func TestStartVPNForcesRelayOnlyUnderTun(t *testing.T) {
 				cfg.VPN.Peers = []config.VPNPeer{vpnTestPeer(t, vpnTestDERPAddr)}
 			}
 
-			stack, err := startVPN(cfg, vpnTestTimeouts(), vpnTestPaths(t), tc.tun)
+			stack, err := startVPN(cfg, vpnTestTimeouts(), vpnTestPaths(t), tc.tun, nil)
 			if err != nil {
 				t.Fatalf("startVPN: %v", err)
 			}
@@ -281,8 +286,8 @@ func TestStartVPNForcesRelayOnlyUnderTun(t *testing.T) {
 			}
 			// 生效的开关必须与栈记录的一致：只改记录而不写 tailscale 的开关
 			// 会让日志与真实数据面互相矛盾。
-			if got := envknob.Bool(vpnnode.RelayOnlyEnvKnob); got != tc.wantOnly {
-				t.Errorf("%s = %v, want %v", vpnnode.RelayOnlyEnvKnob, got, tc.wantOnly)
+			if got := envknob.Bool(derpOnlyEnvKnob); got != tc.wantOnly {
+				t.Errorf("%s = %v, want %v", derpOnlyEnvKnob, got, tc.wantOnly)
 			}
 		})
 	}
@@ -338,9 +343,6 @@ func TestRunDegradesWhenVPNFailsToStart(t *testing.T) {
 
 	if core.vpn != nil {
 		t.Error("a failed VPN start must not leave a stack behind")
-	}
-	if core.derpShim != nil {
-		t.Error("a failed VPN start must not leave the DERP entry behind")
 	}
 	if core.StartupWarn == nil {
 		t.Fatal("the failure must be surfaced as a startup warning")
