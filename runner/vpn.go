@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/proxy"
@@ -56,24 +57,16 @@ type vpnStack struct {
 
 // startVPNSession 建立本会话的 VPN，返回注入给代理入口的分流面。
 //
-// 两件事的顺序是有约束的（见 derpshim.go 与 vpnnode.ApplyRelayOnly）：DERP 入口
-// 设置的 ALL_PROXY、以及 relay_only 的进程级开关，都必须在**任何** tailcat 组件
-// 启动之前落位，因此 shim 先于 startVPN，而 startVPN 内部的强制又先于它自己创建
-// 任何 tailcat 对象。
+// 唯一的顺序约束是 relay_only 的进程级开关：tailcat 在创建 WireGuard 引擎时写它
+// （见 vpnnode 的 DERPOnly 选项），因此它必须先于任何 tailcat 对象落位——这一点由
+// startVPN 内部保证（先算好 relayOnly，再构造对端面与客户端）。
 //
 // 失败时回收已经建好的部分：调用方只需要把错误交给用户。
 func (c *Core) startVPNSession(cfg *config.ClientConfig, handler *proxy.StreamHandler,
 	method protocol.Method, timeouts sharedconfig.Timeouts) (proxy.VPNRoute, error) {
-	shim, err := startDERPShim(handler, method, timeouts, cfg.VPNPeerPort())
+	stack, err := startVPN(cfg, timeouts, defaultVPNPaths(), cfg.Local.EnableTun2socks,
+		newDERPDialer(handler, method))
 	if err != nil {
-		return nil, err
-	}
-	c.derpShim = shim
-
-	stack, err := startVPN(cfg, timeouts, defaultVPNPaths(), cfg.Local.EnableTun2socks)
-	if err != nil {
-		c.derpShim.close()
-		c.derpShim = nil
 		return nil, err
 	}
 	c.vpn = stack
@@ -105,11 +98,15 @@ func (s *vpnStack) close() error {
 //
 // tunWanted 表示本会话已经（或即将）启用 TUN。它参与 relay_only 的强制：TUN 与
 // 节点间直连不兼容（见 docs/vpn-design.md 8.1），而且这个强制**必须在这里**完成
-// ——tailscale 的开关是在 magicsock 建 socket 时读的，等 tailcat Server/Client
-// 起来之后再置 true 对已经绑好的 UDP socket 没有作用。
+// ——tailcat 把 DERPOnly 写进 tailscale 的进程级开关，而 magicsock 是在创建 socket
+// 时读它的，等 Server/Client 起来之后再改对已经绑好的 UDP socket 没有作用。
+//
+// derpDialer 是 tailcat 到 DERP 的拨号器（见 derpdialer.go）：内嵌 DERP 只接待
+// 来自服务端回环的连接，因此节点的 DERP 连接必须经 easyss 隧道送出。
 //
 // 失败时自行回收已经建好的部分，调用方只需要把错误交给用户。
-func startVPN(cfg *config.ClientConfig, timeouts sharedconfig.Timeouts, paths vpnPaths, tunWanted bool) (*vpnStack, error) {
+func startVPN(cfg *config.ClientConfig, timeouts sharedconfig.Timeouts, paths vpnPaths, tunWanted bool,
+	derpDialer func(ctx context.Context, network, addr string) (net.Conn, error)) (*vpnStack, error) {
 	opts, err := vpnOptions(cfg)
 	if err != nil {
 		return nil, err
@@ -130,14 +127,12 @@ func startVPN(cfg *config.ClientConfig, timeouts sharedconfig.Timeouts, paths vp
 	}
 	nc.RelayOnly = relayOnly
 
-	// relay_only 是进程级开关，必须在任何 tailcat Client/Server 启动之前设置
-	// （见 vpnnode.ApplyRelayOnly 的三条约束）。
-	vpnnode.ApplyRelayOnly(relayOnly)
+	// relay_only 由 tailcat 在创建引擎之前写进 tailscale 的进程级开关（见
+	// vpnnode 的 DERPOnly 选项与 docs/vpn-design.md 8.1）。
 	if relayOnly {
-		// 这是 tailscale 的调试开关，且它把服务端变成全部对端流量的带宽瓶颈，
-		// 因此每次启动都明确打出来，而不是只在 debug 级别可见。
-		log.Warn("[VPN] relay_only is on: every peer connection is forced through the DERP relay of the easyss server "+
-			"(relies on the tailscale debug knob "+vpnnode.RelayOnlyEnvKnob+", pinned by the tailscale version in go.mod)",
+		// 它把服务端变成全部对端流量的带宽瓶颈，因此每次启动都明确打出来，
+		// 而不是只在 debug 级别可见。
+		log.Warn("[VPN] relay_only is on: every peer connection is forced through the DERP relay of the easyss server",
 			"derp_addr", nc.DERPAddr)
 	} else {
 		log.Info("[VPN] relay_only is off: nodes may establish direct connections to each other", "derp_addr", nc.DERPAddr)
@@ -157,6 +152,8 @@ func startVPN(cfg *config.ClientConfig, timeouts sharedconfig.Timeouts, paths vp
 		PeerPort:     nc.PeerPort,
 		AllowClients: nc.AllowClients,
 		Timeouts:     timeouts,
+		DERPDialer:   derpDialer,
+		DERPOnly:     relayOnly,
 	})
 	if err != nil {
 		return nil, err
@@ -180,8 +177,10 @@ func startVPN(cfg *config.ClientConfig, timeouts sharedconfig.Timeouts, paths vp
 	}
 
 	clients, err := vpnnode.NewClientSet(vpnnode.ClientSetOptions{
-		KeyPath: paths.clientKey,
-		Peers:   nc.Peers,
+		KeyPath:    paths.clientKey,
+		Peers:      nc.Peers,
+		DERPDialer: derpDialer,
+		DERPOnly:   relayOnly,
 	})
 	if err != nil {
 		_ = stack.close()
@@ -252,9 +251,9 @@ func (c *Core) StopVPN() {
 //
 // 这里刻意**不是**"偷偷把开关置 true 再继续"：tailscale 的开关是在 magicsock
 // 建立 socket 时读的，VPN 栈一旦启动就已经绑好了 UDP socket，再改对它们无效
-// （见 vpnnode.ApplyRelayOnly）。启动路径上的强制已经在 startVPN 里完成——那里
-// 还在建 socket 之前，因此是真正生效的；运行期才发现的话只能拒绝，并让用户把
-// vpn.relay_only 显式打开。
+// （tailcat 的 DERPOnly 只在创建引擎时写它）。启动路径上的强制已经在 startVPN
+// 里完成——那里还在建 socket 之前，因此是真正生效的；运行期才发现的话只能拒绝，
+// 并让用户把 vpn.relay_only 显式打开。
 func (c *Core) CheckVPNTunCompat() error {
 	if c == nil || c.vpn == nil {
 		return nil

@@ -220,9 +220,9 @@ type Socks5Options struct {
 	//
 	// 两个内部入口需要它：VPN 对端面的 UDP 走 tailcat 的 UDP listener + 薄中继
 	// （见 vpn/node/udprelay.go），SOCKS5 的 ASSOCIATE 在那里只是"碰巧因为绑不上
-	// tailcat ULA 而失败"；内嵌 DERP 入口（见 runner 的 derpShim）只需要承载
-	// tailcat 的 TCP 连接，不该顺带成为一个本机可用的 UDP 代理。把设计约束写成
-	// 显式开关，而不是依赖某个 bind 失败的副作用。
+	// tailcat ULA 而失败"；内嵌 DERP 的连接由 runner 的 DERP 拨号器直接给出
+	// （见 runner/derpdialer.go），根本不经过 SOCKS5。把设计约束写成显式开关，
+	// 而不是依赖某个 bind 失败的副作用。
 	DisableUDPAssociate bool
 	// VPN 是访问侧的 VPN 注入面；为 nil 时 VPN 分流完全关闭，本类型的行为与
 	// 引入 VPN 之前逐字节一致。非 nil 时命中对端的目标走隧道（见 VPNRoute）。

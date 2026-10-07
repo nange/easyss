@@ -493,6 +493,12 @@ github.com/nakabonne/nestif v0.3.1 h1:wm28nZjhQY5HyYPx+weN3Q65k6ilSBxDb8v5S81B81
 github.com/nakabonne/nestif v0.3.1/go.mod h1:9EtoZochLn5iUprVDmDjqGKPofoUEBL8U4Ngq6aY7OE=
 github.com/nange/systray v0.3.0-easyss.1 h1:KLjDX7U9rPQMYNRfTiD1VctDD44E2ZItF3XoNB/mM4s=
 github.com/nange/systray v0.3.0-easyss.1/go.mod h1:aoA1tAjYSKH/iVc761t7IVDOaTRYmOwglbcbpcLF1v0=
+github.com/nange/tailcat v0.0.0-20261007163924-90dee2199828 h1:uaEEqhenOAyngIuTFZ3f128N2UcmWzXw+I6//cdZezE=
+github.com/nange/tailcat v0.0.0-20261007163924-90dee2199828/go.mod h1:ux9NIibntkdEPq7Tat5BpT390+xca2PYcTLr6luLwEg=
+github.com/nange/tailscale v0.0.0-20261007134803-8452f30bcc38 h1:psZJFt711TxDMriSf2phxMROOqXh8gTZ+xj/wlwrCOg=
+github.com/nange/tailscale v0.0.0-20261007134803-8452f30bcc38/go.mod h1:VQOMvttDFq1pZkWMaSaFf+HUWfP5QlZUKLW3dCNzWmc=
+github.com/nishanths/exhaustive v0.12.0 h1:vIY9sALmw6T/yxiASewa4TQcFsVYZQQRUQJhKRf3Swg=
+github.com/nishanths/exhaustive v0.12.0/go.mod h1:mEZ95wPIZW+x8kC4TgC+9YCUgiST7ecevsVDTgc2obs=
 github.com/nishanths/exhaustive v0.13.0 h1:Rof0axOSNQaaPaPmLK5RxcRrJV2Vcv+vfUmuRy+2EAM=
 github.com/nishanths/exhaustive v0.13.0/go.mod h1:3/adQjJgvD/UFHHSYBjpK9Wbz8DOvf0FBtzx+zI0Rlo=
 github.com/nishanths/predeclared v0.2.2 h1:V2EPdZPliZymNAn79T8RkNApBjMmVKh5XRpLm/w98Vk=

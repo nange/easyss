@@ -1,8 +1,10 @@
 package vpnnode
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 
 	tailcat "github.com/tailscale/tailcat"
@@ -32,6 +34,10 @@ type ClientSetOptions struct {
 	// 来源。留这个出口是为了两件事：把缓存持久化（tailcat CLI 就是这么做的），
 	// 以及让测试**证明**零访问——那等价于"零官方 DERPMap 请求"（见 4.7 与 12.5）。
 	DERPMapCache tailcat.DERPMapCache
+	// DERPDialer / DERPOnly 交给每个 tailcat 客户端的同名选项（见
+	// PeerFaceOptions 与 docs/vpn-design.md 3.3/8.1）。
+	DERPDialer func(ctx context.Context, network, addr string) (net.Conn, error)
+	DERPOnly   bool
 }
 
 // ClientSet 按对端地址维护 tailcat 客户端，供访问侧拨号。
@@ -45,6 +51,10 @@ type ClientSetOptions struct {
 // 白名单是按 node key 匹配的（见 docs/vpn-design.md 7.3）。
 type ClientSet struct {
 	key key.NodePrivate
+
+	// derpDialer/derpOnly 透传给每个客户端（见 ClientSetOptions）。
+	derpDialer func(ctx context.Context, network, addr string) (net.Conn, error)
+	derpOnly   bool
 
 	// derpMapCache 由调用方给出（见 ClientSetOptions.DERPMapCache），透传给每个
 	// 客户端。
@@ -76,7 +86,13 @@ func NewClientSet(opts ClientSetOptions) (*ClientSet, error) {
 		}
 	}
 
-	return &ClientSet{key: k, derpMapCache: opts.DERPMapCache, clients: make(map[string]*tailcat.Client)}, nil
+	return &ClientSet{
+		key:          k,
+		derpMapCache: opts.DERPMapCache,
+		derpDialer:   opts.DERPDialer,
+		derpOnly:     opts.DERPOnly,
+		clients:      make(map[string]*tailcat.Client),
+	}, nil
 }
 
 // ClientKey 返回访问侧 client 公钥。启动日志把它打印成 nodekey:... 的形态，对端
@@ -100,6 +116,8 @@ func (cs *ClientSet) clientFor(addr string) (*tailcat.Client, error) {
 	// 于是对端上的 allow_clients 白名单每次重启都失效，而失败表现只是"连不上"。
 	c.Key = cs.key
 	c.DERPMapCache = cs.derpMapCache
+	c.DERPDialer = cs.derpDialer
+	c.DERPOnly = cs.derpOnly
 	// 把 tailcat 的 printf 风格日志接到本项目的日志器上，否则它会直接写标准库
 	// log（在托盘应用里没有可读的输出位置）。
 	c.Logf = vpn.Logf

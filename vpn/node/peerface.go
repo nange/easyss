@@ -41,6 +41,13 @@ type PeerFaceOptions struct {
 	AllowClients []key.NodePublic
 	// Timeouts 提供拨号与空闲超时（复用客户端既有的一套派生值）。
 	Timeouts sharedconfig.Timeouts
+	// DERPDialer 是 tailcat 到 DERP 的拨号器（见 runner/derpdialer.go）：内嵌
+	// DERP 只接待来自服务端回环的连接，因此这条连接必须由调用方指定怎么走。
+	// nil 表示用 tailcat 的默认拨号器（只适用于公开可达的 DERP）。
+	DERPDialer func(ctx context.Context, network, addr string) (net.Conn, error)
+	// DERPOnly 交给 tailcat 的同名选项：为 true 时不建 UDP socket，节点间没有
+	// 直连路径（见 docs/vpn-design.md 8.1）。
+	DERPOnly bool
 }
 
 // PeerFace 是本节点的对端面：让别人能通过 tailcat 隧道访问本机的服务端口。
@@ -114,6 +121,8 @@ func (p *PeerFace) Start(ctx context.Context) error {
 	srv := &tailcat.Server{
 		Key:          p.opts.Identity.Private,
 		PresharedKey: p.opts.Identity.Public.PresharedKey,
+		DERPDialer:   p.opts.DERPDialer,
+		DERPOnly:     p.opts.DERPOnly,
 		// Region 必须设置（而不是 RegionID）：只有内嵌完整 region，TailcatAddr()
 		// 才会产出不需要查询任何 DERPMap 的完整格式地址。
 		Region: p.opts.Region,

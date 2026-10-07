@@ -76,12 +76,22 @@ func newTestPeerFace(t *testing.T, region *tailcfg.DERPRegion, allow ...key.Node
 	if err != nil {
 		t.Fatalf("LoadOrCreateNodeIdentity: %v", err)
 	}
-	face, err := NewPeerFace(PeerFaceOptions{
+	return newTestPeerFaceWithOptions(t, PeerFaceOptions{
 		Identity:     identity,
 		Region:       region,
 		PeerPort:     peerTestPort(t),
 		AllowClients: allow,
 	})
+}
+
+// newTestPeerFaceWithOptions 与 newTestPeerFace 相同，但让调用方完全控制选项：
+// relay_only 与自定义 DERP 拨号器都必须在 Start 之前落位，因此需要这个入口。
+func newTestPeerFaceWithOptions(t *testing.T, opts PeerFaceOptions) *PeerFace {
+	t.Helper()
+	if opts.PeerPort == 0 {
+		opts.PeerPort = peerTestPort(t)
+	}
+	face, err := NewPeerFace(opts)
 	if err != nil {
 		t.Fatalf("NewPeerFace: %v", err)
 	}

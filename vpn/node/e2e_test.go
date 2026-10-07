@@ -5,11 +5,13 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	tailcat "github.com/tailscale/tailcat"
 	"tailscale.com/envknob"
+	"tailscale.com/net/netx"
 	"tailscale.com/types/key"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
@@ -54,13 +56,20 @@ func (c *recordingDERPMapCache) accesses() (gets, puts int) {
 // Route），并使用给定的 client key——白名单必须与它是同一份。
 func newAccessSide(t *testing.T, face *PeerFace, clientKey key.NodePrivate, cache tailcat.DERPMapCache) (*Route, *ClientSet) {
 	t.Helper()
+	return newAccessSideWith(t, face, clientKey, cache, ClientSetOptions{})
+}
+
+// newAccessSideWith 与 newAccessSide 相同，但允许调用方追加客户端集合选项
+// （DERPDialer / DERPOnly 都必须在客户端第一次拨号之前落位）。
+func newAccessSideWith(t *testing.T, face *PeerFace, clientKey key.NodePrivate,
+	cache tailcat.DERPMapCache, extra ClientSetOptions) (*Route, *ClientSet) {
+	t.Helper()
 
 	ref := PeerRef{HostName: "b", Address: face.TailcatAddr(), Port: face.opts.PeerPort}
-	clients, err := NewClientSet(ClientSetOptions{
-		Key:          clientKey,
-		Peers:        []PeerRef{ref},
-		DERPMapCache: cache,
-	})
+	extra.Key = clientKey
+	extra.Peers = []PeerRef{ref}
+	extra.DERPMapCache = cache
+	clients, err := NewClientSet(extra)
 	if err != nil {
 		t.Fatalf("NewClientSet: %v", err)
 	}
@@ -168,12 +177,8 @@ func TestVPNNodeEndToEndNeverFetchesTheOfficialDERPMap(t *testing.T) {
 // socket，见 docs/vpn-design.md 8.1）。这里用 DiscoPing 观测：它会主动触发一次直连
 // 路径发现，因此如果 UDP 出口存在，Endpoint 有机会被填上；开了开关则必然为空。
 func TestVPNNodeRelayOnlyUsesTheRelay(t *testing.T) {
-	// 必须在任何 tailcat Server/Client 启动之前生效。
-	ApplyRelayOnly(true)
-	t.Cleanup(func() { ApplyRelayOnly(false) })
-	if !envknob.Bool(RelayOnlyEnvKnob) {
-		t.Fatalf("%s was not set", RelayOnlyEnvKnob)
-	}
+	// 只在 tailcat 创建引擎时生效，因此必须在 Start/首次拨号之前落位。
+	t.Cleanup(func() { envknob.Setenv(derpOnlyEnvKnob, "false") })
 
 	echoAddr, stopEcho := startTCPEchoLocal(t)
 	defer stopEcho()
@@ -187,13 +192,26 @@ func TestVPNNodeRelayOnlyUsesTheRelay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadOrCreateKey: %v", err)
 	}
-	face := newTestPeerFace(t, region, clientKey.Public())
+	identity, err := LoadOrCreateNodeIdentity(peerTestPath(t, "node-identity.json"))
+	if err != nil {
+		t.Fatalf("LoadOrCreateNodeIdentity: %v", err)
+	}
+	face := newTestPeerFaceWithOptions(t, PeerFaceOptions{
+		Identity:     identity,
+		Region:       region,
+		PeerPort:     peerTestPort(t),
+		AllowClients: []key.NodePublic{clientKey.Public()},
+		DERPOnly:     true,
+	})
 	if err := face.Start(context.Background()); err != nil {
 		t.Fatalf("PeerFace.Start: %v", err)
 	}
 	defer func() { _ = face.Stop() }()
+	if !envknob.Bool(derpOnlyEnvKnob) {
+		t.Fatalf("%s was not set by tailcat's DERPOnly", derpOnlyEnvKnob)
+	}
 
-	route, clients := newAccessSide(t, face, clientKey, nil)
+	route, clients := newAccessSideWith(t, face, clientKey, nil, ClientSetOptions{DERPOnly: true})
 
 	// 隧道本身必须照常工作：强制中继不能以"连不上"为代价。
 	dialEchoTCP(t, route, echoPort)
@@ -253,21 +271,10 @@ func TestPeerAddressRegionNumberIsRewritten(t *testing.T) {
 	}
 }
 
-// TestApplyRelayOnlyWritesBothValues 固定"显式写 true 与 false"：同一个进程可能
-// 先后跑多次会话（Android 的启停、托盘的切换），若只在 true 时设置，上一次留下的
-// true 会让下一次的 relay_only=false 静默失效。
-func TestApplyRelayOnlyWritesBothValues(t *testing.T) {
-	t.Cleanup(func() { ApplyRelayOnly(false) })
-
-	ApplyRelayOnly(true)
-	if !envknob.Bool(RelayOnlyEnvKnob) {
-		t.Fatalf("%s = false after ApplyRelayOnly(true)", RelayOnlyEnvKnob)
-	}
-	ApplyRelayOnly(false)
-	if envknob.Bool(RelayOnlyEnvKnob) {
-		t.Fatalf("%s is still true after ApplyRelayOnly(false); a later session could not turn relay_only off", RelayOnlyEnvKnob)
-	}
-}
+// derpOnlyEnvKnob 是 tailcat 的 DERPOnly 写进去的那个 tailscale 开关，用于断言
+// "会话的 relay_only 真的落到了数据面"。显式写 true 与 false 由 tailcat 自己的
+// 测试固定（它现在拥有这个机制）。
+const derpOnlyEnvKnob = "TS_DEBUG_ALWAYS_USE_DERP"
 
 // TestClientSetNeverFetchesWithoutPeers 是上面那条断言的阴性对照：没有对端时
 // 同样不访问 DERP map（访问侧根本不建立隧道）。
@@ -293,4 +300,68 @@ func TestPathString(t *testing.T) {
 	if got := (Path{DERPRegionCode: vpn.RegionCode}).String(); got != "via DERP("+vpn.RegionCode+")" {
 		t.Fatalf("relayed path string = %q", got)
 	}
+}
+
+// TestVPNNodeUsesTheInjectedDERPDialer 是本项目对 tailcat DERPDialer 选项的验收：
+// 一条真实隧道（进程内 DERP + 对端面 + 访问侧）里，双方的 DERP 连接都必须经过调用方
+// 给出的拨号器。
+//
+// 这条断言是 DERP 私有化的地基：easyss 正是靠这个拨号器把 DERP 连接放进自己的隧道
+// （见 runner/derpdialer.go），而 tailcat 的默认拨号器会直连——那在私有化之后是连不
+// 上的。因此这里不仅要"隧道可用"，还要"用了我们的拨号器"。
+func TestVPNNodeUsesTheInjectedDERPDialer(t *testing.T) {
+	echoAddr, stopEcho := startTCPEchoLocal(t)
+	defer stopEcho()
+	_, echoPort, err := net.SplitHostPort(echoAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	region := startTestDERP(t)
+	clientKey, err := vpn.LoadOrCreateKey(peerTestPath(t, "client.key"))
+	if err != nil {
+		t.Fatalf("LoadOrCreateKey: %v", err)
+	}
+	identity, err := LoadOrCreateNodeIdentity(peerTestPath(t, "node-identity.json"))
+	if err != nil {
+		t.Fatalf("LoadOrCreateNodeIdentity: %v", err)
+	}
+
+	// 双方各自记录并转发：转发让隧道真的能用，记录证明走的是这个拨号器。
+	faceDialer, faceDials := recordingDERPDialer(t)
+	clientDialer, clientDials := recordingDERPDialer(t)
+
+	face := newTestPeerFaceWithOptions(t, PeerFaceOptions{
+		Identity:     identity,
+		Region:       region,
+		PeerPort:     peerTestPort(t),
+		AllowClients: []key.NodePublic{clientKey.Public()},
+		DERPDialer:   faceDialer,
+	})
+	if err := face.Start(context.Background()); err != nil {
+		t.Fatalf("PeerFace.Start: %v", err)
+	}
+	defer func() { _ = face.Stop() }()
+
+	route, _ := newAccessSideWith(t, face, clientKey, nil, ClientSetOptions{DERPDialer: clientDialer})
+	dialEchoTCP(t, route, echoPort)
+
+	if faceDials.Load() == 0 {
+		t.Error("the peer face reached DERP without the injected dialer")
+	}
+	if clientDials.Load() == 0 {
+		t.Error("the access side reached DERP without the injected dialer")
+	}
+}
+
+// recordingDERPDialer 返回一个"记录 + 转发"的 DERP 拨号器：目标地址原样拨过去，
+// 同时统计调用次数。
+func recordingDERPDialer(t *testing.T) (netx.DialFunc, *atomic.Int32) {
+	t.Helper()
+	var calls atomic.Int32
+	d := &net.Dialer{Timeout: 10 * time.Second}
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		calls.Add(1)
+		return d.DialContext(ctx, network, addr)
+	}, &calls
 }
