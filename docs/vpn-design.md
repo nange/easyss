@@ -124,20 +124,22 @@ tailcat.Client(B) ──WireGuard / DERP(S)──▶ B 的 tailcat.Server
 
 ### 3.3 DERP 私有化：只经 easyss 隧道，且要求单一 S
 
-**标准做法（已实施，替代本节原先的"DERP 挂在公网 HTTPS 上"）**：内嵌 DERP 只接待来自**本机回环**的请求，节点侧则把 tailscale 的 DERP 连接放进 easyss 隧道。链路是：
+**标准做法（已实施，替代本节原先的"DERP 挂在公网 HTTPS 上"）**：内嵌 DERP 只接待来自**本机回环**的请求，节点侧则把 tailcat 到 DERP 的连接放进 easyss 隧道。链路是：
 
-1. 节点侧：`startVPN` 之前起一个只绑 `127.0.0.1` 的 DERP 入口（`runner/derpshim.go`），并把 `ALL_PROXY` 指向它。tailscale 的 netns 拨号器在非 android/ios/js 的构建里被 `golang.org/x/net/proxy` 包装（`net/netns/socks.go`），因此它**所有**出站拨号都经这个入口进入 easyss 隧道；
+1. 节点侧：`runner.newDERPDialer` 构造一个拨号器交给 tailcat（`Server.DERPDialer`/`Client.DERPDialer`），把每条 DERP TCP 连接经 `StreamHandler.OpenTCPStream` 送进 easyss 隧道（`net.Pipe` 适配：一端交给 handler 搬运，另一端返回给 tailcat）。拨号上下文必须 `context.WithoutCancel`——DERP 客户端在拨号返回后立刻取消它，而这条流的寿命是整个 DERP 连接；
 2. 服务端在握手阶段认出"目标就是我自己的 `derp_addr`"，改拨 `127.0.0.1:<listen>`（`server/handler` 的 `localDERP`/`dialTarget`）；
 3. `vpn.NewDERPMount` 只把来自回环的 DERP 流量交给中继，公网上的 `/derp`（含 `POST /derp/probe` 这类探测）一律得到伪装页面。
 
-收益：内嵌 DERP 不再是公网上的匿名中继（接入控制由 easyss 协议的 master key 承担）、公网上没有任何"回答 DERP 协议"的路径、TUN 模式也不再需要为 DERP 主机装绕行路由（8.2 因此删除，脚本的第 10/11 个参数一并退役）。
+**为什么必须是拨号器选项，而不是环境变量**：tailcat 在自己的 `createEngine` 里调用 `netns.SetEnabled(false)`，于是 `netns.NewDialer` 返回的是**未包装**的普通拨号器，`ALL_PROXY` 那条路在 tailcat 里完全不生效（本项目最初按它实现过一版，测试只覆盖了 netns 层而没有走 tailcat 的真实路径，因此是个假阳性）。拨号器选项还顺带解决了平台差异（netns 的 SOCKS 包装在 android/ios/js 构建里被排除）与"进程级开关只读一次"这两件事。
 
 **代价：只支持单一 S。** 所有节点必须通告同一个 DERP `host:port`——因为 DERP 连接只到得了"本节点自己那台 easyss 服务端"的回环，服务端无法代表节点去连另一台机器。`vpnnode.assertPeersShareDERP` 在启动时校验 `peers[].address` 内嵌的 DERP 主机与本节点一致，不一致直接报错（否则表现为第一次访问对端时隧道拨号超时）。
 
-两个必须知道的约束：
+**依赖面**：这两个选项目前由本项目自己的 fork 提供，`go.mod` 用 `replace` 指向同级目录（`../tailscale`、`../tailcat`，分支 `easyss/derp-dialer`）：
 
-- 平台：`net/netns/socks.go` 的构建标签是 `!ios && !js && !android && !ts_omit_useproxy`，因此 **Android(AAR) 没有这条钩子**——`runner.derpEnvProxySupported` 在被排除的平台上明确拒绝启用 VPN（而不是让它退化成"连不上 DERP"）。
-- 进程级、只读一次：`x/net/proxy` 用 `sync.Once` 缓存 `ALL_PROXY`，所以入口地址必须**确定性**（`peer_port + 1`，不能用 `:0`），且设置时机必须在任何 tailcat 拨号之前。`runner/derpshim_test.go` 的 `TestTailcatDERPDialsUseAllProxy` 是这条依赖的守卫：tailscale 升级若改掉拨号路径，CI 会直接红。
+- tailscale：`derphttp.SetDialer`（并让 region 客户端也走它，原先只有 URL 模式生效）、`magicsock.Options.DERPDialer`、`wgengine.Config.DERPDialer`；
+- tailcat：`Server`/`Client` 的 `DERPDialer` 与 `DERPOnly`（后者把 relay_only 从"调用方去写 tailscale 的调试开关"变成库的公开选项）。
+
+上游接受前，本机验证用相对路径 replace；CI/发布需要换成 GitHub 上的 fork 版本。
 
 ## 4. 配置
 
@@ -603,12 +605,22 @@ TUN 把除 `0.0.0.0/8` 外的所有 IPv4 路由进设备（`create_tun_dev.sh:10
 
 | # | 问题 | 后果 | 修正 |
 |---|---|---|---|
-| 37 | DERP 挂在公网 HTTPS 上（`/derp`），只靠"是否带 Upgrade 头"分流 | 任何知道域名的人都能连上并把它当免费中继（`derpserver` 不设客户端校验、无限速、无连接上限），`POST /derp/probe` 还会拿到一行 derpserver 独有的文案 | DERP 私有化：`ALL_PROXY` 把 tailscale 的出站接进本进程的入口 → easyss 隧道 → 服务端改拨自己的回环监听；`vpn.NewDERPMount` 只对回环来源放行（3.3） |
+| 37 | DERP 挂在公网 HTTPS 上（`/derp`），只靠"是否带 Upgrade 头"分流 | 任何知道域名的人都能连上并把它当免费中继（`derpserver` 不设客户端校验、无限速、无连接上限），`POST /derp/probe` 还会拿到一行 derpserver 独有的文案 | DERP 私有化：节点侧交给 tailcat 一个拨号器（`DERPDialer`）把 DERP 连接放进 easyss 隧道 → 服务端改拨自己的回环监听；`vpn.NewDERPMount` 只对回环来源放行（3.3）。按 `ALL_PROXY` 实现的第一版**不生效**（tailcat 关掉了 netns），已由拨号器取代 |
 | 38 | 需要为 DERP 主机装 TUN 绕行路由（8.2） | 每个 DERP 主机一条 `/32`、三个脚本各加参数（Windows 还要 shift 9 次）、`Bypass` 的 TTL 缓存与"退回上次结果" | 整块删除：回环入口不进 TUN 路由表。`vpn/node/bypass.go`、`Core.VPNBypassIPs`、`Config.BypassIPs`、脚本第 10/11 个参数与相关测试全部退役 |
 | 39 | 跨 S（peer 通告另一台 DERP）在私有化后不可达 | 表现为第一次访问对端时隧道拨号超时，排障成本高 | `vpnnode.assertPeersShareDERP`：启动时校验每个 peer 地址内嵌的 DERP 主机与本节点一致，不一致直接报错并说明"单一 S" |
 | 40 | `relay_only` 的失效无法观测 | tailscale 若改名 `TS_DEBUG_ALWAYS_USE_DERP`，`envknob.Setenv` 只会静默写一个没人读的变量 | 未接线：`PathStatus` 仍只有测试调用。作为替代，`runner/derpshim_test.go` 的 `TestTailcatDERPDialsUseAllProxy` 用子进程守卫 `ALL_PROXY` 钩子本身（tailscale 改拨号路径会红）；relay_only 的运行期自检仍待接 |
 
 本版还顺手修掉了评审中发现的三处缺陷：`overlay_cidr` 缺下界（`0.0.0.0/0` 会让槽位表申请约 4 GiB）、VPN UDP 会话键缺端口（同一对端两个端口会串包）、`config.SplitDERPAddr` 的三返回值签名破坏 Android AAR 的 gobind 绑定（`make easyss-android-aar` 曾在 CI 直接失败）。
+
+### 12.12 DERP 拨号器：从环境变量改为 fork 提供的公开选项
+
+| # | 问题 | 后果 | 修正 |
+|---|---|---|---|
+| 41 | `ALL_PROXY` 方案在 tailcat 上根本不生效 | tailcat 的 `createEngine` 调用 `netns.SetEnabled(false)`，`netns.NewDialer` 因此返回未包装的普通拨号器；节点会直连 `/derp`，而服务端只放行回环来源 → VPN 完全不可用。当时的测试只验证了 netns 层（直接调 `netns.NewDialer`），属于假阳性 | 改为 tailcat 的 `DERPDialer` 选项：`runner/derpdialer.go` 用 `net.Pipe` + `StreamHandler.OpenTCPStream` 把中继式接口适配成拨号器；顺带删掉入口端口派生、`ALL_PROXY` 读写与平台守卫（`derp_env_*.go`） |
+| 42 | `relay_only` 依赖调用方去写 tailscale 的进程级调试开关 | 开关名一变就静默失效；调用方还得自己保证"在任何 tailcat 组件之前"这个顺序 | tailcat 增加 `DERPOnly` 选项，由它在 `createEngine` 里、创建引擎之前写；`vpnnode.ApplyRelayOnly`/`RelayOnlyEnvKnob` 删除 |
+| 43 | 上游没有"给 DERP 连接指定拨号器"的入口 | `derphttp.SetURLDialer` 只对 URL 模式生效，而 magicsock 用的是 region 客户端 | 两个 fork（分支 `easyss/derp-dialer`）：tailscale 侧 `derphttp.SetDialer` + region 客户端支持 + `magicsock.Options.DERPDialer` + `wgengine.Config.DERPDialer`；tailcat 侧 `Server`/`Client` 的 `DERPDialer`/`DERPOnly`。`go.mod` 用 `replace` 指向同级 fork，上游接受后再删 |
+
+验证：`TestRegionClientUsesInjectedDialer`（tailscale，region 客户端确实用了注入的拨号器）、`TestClientCarriesDERPOptions`/`TestServerCarriesDERPOptions`（tailcat，选项落到后端且 DERP-only 在引擎之前生效）、`TestDERPDialerCarriesTheConnectionOverTheTunnel`（easyss，拨号器把连接送进隧道、隧道断开时连接结束）、`TestVPNNodeUsesTheInjectedDERPDialer`（真实隧道里对端面与访问侧**双方**的 DERP 连接都经注入的拨号器）。
 
 ## 附录 A：实测依据
 
