@@ -2,50 +2,47 @@ package nextproxy
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/nange/easyss/v3/protocol"
+	"github.com/xjasonlyu/tun2socks/v2/transport/socks5"
 )
 
 // 本文件实现 next proxy 的 SOCKS5 UDP 转发（RFC 1928 §7 的 UDP ASSOCIATE）。
 //
-// 它由两部分组成，缺一不可：
+// 协议层（方法协商、可选认证、命令应答解析、数据报封帧）由 tun2socks 的
+// transport/socks5 承担：它已经在本进程内被 tun2socks 用来做客户端 UDP
+// ASSOCIATE（proxy/socks5.DialUDP），因此两条路径对上游说的是同一套字节。
+// 本文件只保留库不提供、又由本项目约定决定的那部分适配：
 //
-//   - 一次关联：到上游代理的 TCP 控制连接 + 一条 UDP ASSOCIATE 命令，上游在
-//     应答（BND.ADDR:BND.PORT）里给出中继地址。关联的生命周期等同于这条 TCP
-//     连接的生命周期——所以控制连接必须一直开着，并由本连接的 Close 收尾。
-//   - 逐数据报封帧：RSV(2)/FRAG(1)/ATYP/DST.ADDR/DST.PORT/DATA，经中继地址
-//     发给上游。FRAG 恒为 0（本实现不支持分片，RFC 1928 允许整条丢弃）。
+//   - 关联由一条 TCP 控制连接承载，必须在会话存续期间保持打开（RFC 1928：
+//     控制连接终止即关联终止）。库把它表达为 net.PacketConn（每条数据报自带
+//     目标地址），而 server/handler 的一条 UDP 会话只关心一个目标，需要的是
+//     net.Conn 形态。
+//   - 上游关闭控制连接时必须立刻打断数据面，而不是让调用方阻塞到会话空闲超时。
+//   - 拨号截止时间只能在握手期间生效，不能泄漏到数据面。
+//   - 上游应答通配地址（0.0.0.0:port）时替换为控制连接实际到达的代理地址；
+//     应答域名时解析成字面 IP（库的 Addr.UDPAddr 对域名返回 nil）。
+//   - 本地绑定地址仅在与控制连接同族时使用。
+//   - enable_udp=false 时拒绝建立关联（纵深防御，调用方已门控过一次）。
 //
 // 这正是 x/net/proxy 的 SOCKS5 拨号器不提供的能力：它只实现 CONNECT，把
 // network="udp" 交给它只会得到一次注定失败的 TCP 拨号。
 const (
-	socksVersion5 = 0x05
+	// udpBufSize 是单条 UDP 数据报的载荷上限。它与 server/handler 的 UDP 会话
+	// 共用同一个事实来源（protocol.MaxUDPDataSize），使两个方向的边界一致：
+	// 会话收得下的数据报，这里也必须封得出来。
+	udpBufSize = protocol.MaxUDPDataSize
 
-	socksCmdUDPAssociate = 0x03
-
-	socksReplySucceeded = 0x00
-
-	socksAuthVersion      = 0x01
-	socksAuthStatusOK     = 0x00
-	socksAuthNoneRequired = 0x00
-	socksAuthUserPass     = 0x02
-	socksAuthNoAcceptable = 0xff
-
-	socksATYPIPv4 = 0x01
-	socksATYPFQDN = 0x03
-	socksATYPIPv6 = 0x04
-
-	socksPortLen = 2
-
-	// udpAssociateReadBuffer 是读取上游 SOCKS5 中继数据报的缓冲区大小。
-	// UDP 数据报不可能超过 64KB，一次分配即可覆盖任何合法数据报。
-	udpAssociateReadBuffer = 64 * 1024
+	// maxUDPDatagram 是一条 SOCKS5 UDP 数据报的最大线上长度：载荷上限加上
+	// 最坏情况的头（RSV/FRAG + ATYP + IPv6 地址 + 端口）。接收缓冲按它分配，
+	// 一次即可容纳任何合法数据报。
+	maxUDPDatagram = udpBufSize + 3 + 1 + net.IPv6len + 2
 )
 
 // dialUDPAssociate 与上游 SOCKS5 代理建立一次 UDP 关联，并返回一个 net.Conn：
@@ -74,51 +71,33 @@ func (np *NextProxy) dialUDPAssociate(ctx context.Context, dst string) (net.Conn
 		return nil, err
 	}
 
-	if err := np.negotiate(control); err != nil {
+	// 凭据只在有值时传入：库据此通告单个认证方法（有凭据=用户名/密码，否则
+	// 无需认证），与迁移前的 socks5 客户端行为一致，也与 CONNECT 路径同源。
+	var user *socks5.User
+	if u, p, ok := np.credentials(); ok {
+		user = &socks5.User{Username: u, Password: p}
+	}
+	bindAddr, err := socks5.ClientHandshake(control, socks5.ParseAddrString("0.0.0.0:0"), socks5.CmdUDPAssociate, user)
+	if err != nil {
+		return fail(fmt.Errorf("udp associate: %w", err))
+	}
+	relayAddr, err := resolveRelayAddr(bindAddr, control.RemoteAddr())
+	if err != nil {
 		return fail(err)
 	}
 
-	// UDP ASSOCIATE 请求：VER CMD RSV ATYP(IPv4) 0.0.0.0 0
-	req := []byte{socksVersion5, socksCmdUDPAssociate, 0x00, socksATYPIPv4, 0, 0, 0, 0, 0, 0}
-	if _, err := control.Write(req); err != nil {
-		return fail(fmt.Errorf("send udp associate: %w", err))
-	}
-	relayHost, relayPort, err := readSocks5Reply(control)
-	if err != nil {
-		return fail(fmt.Errorf("udp associate reply: %w", err))
-	}
-
-	// 上游可能应答一个通配地址（0.0.0.0:port），表示"就在你连我的这个地址上
-	// 监听"。0.0.0.0 无法作为发送目标，必须替换成控制连接的对端地址。
-	relayIP := net.ParseIP(relayHost)
-	if relayIP == nil {
-		// 应答里是域名：解析成字面 IP，避免每条数据报都依赖一次解析。
-		resolved, resolveErr := net.ResolveUDPAddr(udpNetworkFor(net.IPv4zero), net.JoinHostPort(relayHost, strconv.Itoa(relayPort)))
-		if resolveErr != nil {
-			return fail(fmt.Errorf("resolve the udp relay %s: %w", relayHost, resolveErr))
-		}
-		relayIP = resolved.IP
-	}
-	if relayIP.IsUnspecified() {
-		proxyHost, _, splitErr := net.SplitHostPort(control.RemoteAddr().String())
-		if splitErr != nil {
-			return fail(fmt.Errorf("resolve the udp relay from %s: %w", control.RemoteAddr(), splitErr))
-		}
-		if ip := net.ParseIP(proxyHost); ip != nil {
-			relayIP = ip
-		} else {
-			resolved, resolveErr := net.ResolveUDPAddr("udp", net.JoinHostPort(proxyHost, strconv.Itoa(relayPort)))
-			if resolveErr != nil {
-				return fail(fmt.Errorf("resolve the upstream proxy address %s: %w", proxyHost, resolveErr))
-			}
-			relayIP = resolved.IP
-		}
-	}
-
-	relayAddr := &net.UDPAddr{IP: relayIP, Port: relayPort}
-	relay, err := net.DialUDP(udpNetworkFor(relayIP), localAddrFor(control, relayIP), relayAddr)
+	relay, err := net.DialUDP(udpNetworkFor(relayAddr.IP), localAddrFor(control, relayAddr.IP), relayAddr)
 	if err != nil {
 		return fail(fmt.Errorf("dial the udp relay %s: %w", relayAddr, err))
+	}
+
+	// 目标地址提前解析成 SOCKS5 地址：Write 是逐数据报的热路径，不该在那里
+	// 重复解析同一个字符串。解析失败说明调用方给了畸形目标，此时还没有人会
+	// 用它，直接回收。
+	target := socks5.ParseAddrString(dst)
+	if target == nil {
+		relay.Close() //nolint:errcheck
+		return fail(fmt.Errorf("malformed datagram target %q", dst))
 	}
 
 	if !deadline.IsZero() {
@@ -130,161 +109,71 @@ func (np *NextProxy) dialUDPAssociate(ctx context.Context, dst string) (net.Conn
 		}
 	}
 
-	c := &udpAssociateConn{control: control, relay: relay, dst: dst}
+	c := &udpAssociateConn{control: control, relay: relay, dst: target}
 	// 控制连接是关联的存活信号：上游一旦关闭它，这个关联就不再有效，必须
 	// 立即终止本地 socket，而不是让调用方一直阻塞在 Read 上。
 	go c.monitorControl()
 	return c, nil
 }
 
-// negotiate 协商认证方式：先通告支持的方法（无认证 + 用户名/密码），再按上游
-// 的选择执行认证。它与 x/net/proxy 的 CONNECT 路径保持同一套语义，使同一条
-// URL 上的 TCP 与 UDP 走完全一致的认证行为。
-func (np *NextProxy) negotiate(conn net.Conn) error {
-	user, password, hasAuth := np.credentials()
-	methods := []byte{socksAuthNoneRequired}
-	if hasAuth {
-		methods = append(methods, socksAuthUserPass)
+// resolveRelayAddr 把应答里的 BND.ADDR:BND.PORT 解析成可拨号的 UDP 地址。
+// 两种情况需要修正而不能直接用库的 Addr.UDPAddr()：
+//
+//   - 上游应答通配地址（0.0.0.0:port），表示"就在你连我的这个地址上监听"。
+//     0.0.0.0 无法作为发送目标，必须替换成控制连接的对端地址。
+//   - 上游应答域名（RFC 1928 允许），而库的 UDPAddr() 对域名返回 nil。
+func resolveRelayAddr(bindAddr socks5.Addr, controlRemote net.Addr) (*net.UDPAddr, error) {
+	if !bindAddr.Valid() {
+		return nil, fmt.Errorf("invalid udp relay address in the associate reply: %#v", []byte(bindAddr))
 	}
-
-	req := make([]byte, 0, 2+len(methods))
-	req = append(req, socksVersion5, byte(len(methods)))
-	req = append(req, methods...)
-	if _, err := conn.Write(req); err != nil {
-		return fmt.Errorf("send auth methods: %w", err)
-	}
-
-	resp := make([]byte, 2)
-	if _, err := io.ReadFull(conn, resp); err != nil {
-		return fmt.Errorf("read auth method: %w", err)
-	}
-	if resp[0] != socksVersion5 {
-		return fmt.Errorf("unexpected protocol version %d", resp[0])
-	}
-	switch resp[1] {
-	case socksAuthNoneRequired:
-		return nil
-	case socksAuthUserPass:
-		if !hasAuth {
-			return errors.New("the upstream proxy requires username/password authentication")
+	if bindAddr[0] == socks5.AtypDomainName {
+		// 域名形态：解析成字面 IP，避免每条数据报都依赖一次解析。
+		host, port, err := splitSocksAddr(bindAddr)
+		if err != nil {
+			return nil, err
 		}
-		return authenticateUserPass(conn, user, password)
-	case socksAuthNoAcceptable:
-		if hasAuth {
-			return errors.New("no acceptable authentication methods")
+		resolved, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, strconv.Itoa(port)))
+		if err != nil {
+			return nil, fmt.Errorf("resolve the udp relay %s: %w", host, err)
 		}
-		return errors.New("the upstream proxy requires authentication but the next proxy url carries no credentials")
-	default:
-		return fmt.Errorf("unsupported authentication method %#x", resp[1])
-	}
-}
-
-// authenticateUserPass 执行 RFC 1929 的用户名/密码认证。
-func authenticateUserPass(conn net.Conn, user, password string) error {
-	if len(user) == 0 || len(user) > 255 || len(password) > 255 {
-		return errors.New("invalid username/password")
-	}
-	req := make([]byte, 0, 3+len(user)+len(password))
-	req = append(req, socksAuthVersion, byte(len(user)))
-	req = append(req, user...)
-	req = append(req, byte(len(password)))
-	req = append(req, password...)
-	if _, err := conn.Write(req); err != nil {
-		return fmt.Errorf("send credentials: %w", err)
+		return resolved, nil
 	}
 
-	resp := make([]byte, 2)
-	if _, err := io.ReadFull(conn, resp); err != nil {
-		return fmt.Errorf("read auth status: %w", err)
+	relay := bindAddr.UDPAddr()
+	if relay == nil {
+		return nil, fmt.Errorf("invalid udp relay address in the associate reply: %#v", []byte(bindAddr))
 	}
-	if resp[0] != socksAuthVersion {
-		return fmt.Errorf("invalid username/password version %d", resp[0])
+	if !relay.IP.IsUnspecified() {
+		return relay, nil
 	}
-	if resp[1] != socksAuthStatusOK {
-		return errors.New("username/password authentication failed")
-	}
-	return nil
-}
 
-// readSocks5Reply 读取并校验一条命令应答，返回其中的 BND.ADDR 与 BND.PORT。
-// 应答里的地址可能是域名（上游只会在极少数部署里这么做），因此返回主机字符串
-// 而不假定是 IP，由调用方决定是否解析。
-func readSocks5Reply(conn net.Conn) (host string, port int, err error) {
-	head := make([]byte, 4)
-	if _, err := io.ReadFull(conn, head); err != nil {
-		return "", 0, err
-	}
-	if head[0] != socksVersion5 {
-		return "", 0, fmt.Errorf("unexpected protocol version %d", head[0])
-	}
-	if head[1] != socksReplySucceeded {
-		return "", 0, fmt.Errorf("upstream proxy rejected the request: %s", socksReplyString(head[1]))
-	}
-	host, err = readSocks5Addr(conn, head[3])
+	// 通配地址：改用控制连接实际到达的代理地址。
+	host, _, err := net.SplitHostPort(controlRemote.String())
 	if err != nil {
-		return "", 0, err
+		return nil, fmt.Errorf("resolve the udp relay from %s: %w", controlRemote, err)
 	}
-	portBytes := make([]byte, socksPortLen)
-	if _, err := io.ReadFull(conn, portBytes); err != nil {
-		return "", 0, err
+	ip := net.ParseIP(host)
+	if ip == nil {
+		resolved, resolveErr := net.ResolveUDPAddr("udp", net.JoinHostPort(host, strconv.Itoa(relay.Port)))
+		if resolveErr != nil {
+			return nil, fmt.Errorf("resolve the upstream proxy address %s: %w", host, resolveErr)
+		}
+		ip = resolved.IP
 	}
-	return host, int(binary.BigEndian.Uint16(portBytes)), nil
+	return &net.UDPAddr{IP: ip, Port: relay.Port}, nil
 }
 
-// readSocks5Addr 读取一个 SOCKS5 地址，返回其主机部分（域名或 IP 字面量）。
-func readSocks5Addr(r io.Reader, atyp byte) (string, error) {
-	switch atyp {
-	case socksATYPIPv4:
-		buf := make([]byte, net.IPv4len)
-		if _, err := io.ReadFull(r, buf); err != nil {
-			return "", err
-		}
-		return net.IP(buf).String(), nil
-	case socksATYPIPv6:
-		buf := make([]byte, net.IPv6len)
-		if _, err := io.ReadFull(r, buf); err != nil {
-			return "", err
-		}
-		return net.IP(buf).String(), nil
-	case socksATYPFQDN:
-		length := make([]byte, 1)
-		if _, err := io.ReadFull(r, length); err != nil {
-			return "", err
-		}
-		buf := make([]byte, int(length[0]))
-		if _, err := io.ReadFull(r, buf); err != nil {
-			return "", err
-		}
-		return string(buf), nil
-	default:
-		return "", fmt.Errorf("unsupported address type %#x", atyp)
+// splitSocksAddr 取出一个域名字段形态的 SOCKS5 地址的域名与端口。
+func splitSocksAddr(addr socks5.Addr) (string, int, error) {
+	if len(addr) < 1+1+2 {
+		return "", 0, fmt.Errorf("short socks5 address: %d bytes", len(addr))
 	}
-}
-
-// socksReplyString 把应答码翻译成 RFC 1928 里的名字，便于排障时直接读懂日志。
-func socksReplyString(code byte) string {
-	switch code {
-	case socksReplySucceeded:
-		return "succeeded"
-	case 0x01:
-		return "general SOCKS server failure"
-	case 0x02:
-		return "connection not allowed by ruleset"
-	case 0x03:
-		return "network unreachable"
-	case 0x04:
-		return "host unreachable"
-	case 0x05:
-		return "connection refused"
-	case 0x06:
-		return "TTL expired"
-	case 0x07:
-		return "command not supported"
-	case 0x08:
-		return "address type not supported"
-	default:
-		return "unknown reply code " + strconv.Itoa(int(code))
+	length := int(addr[1])
+	if len(addr) < 1+1+length+2 {
+		return "", 0, fmt.Errorf("short socks5 address: claims %d name bytes", length)
 	}
+	port := int(addr[len(addr)-2])<<8 | int(addr[len(addr)-1])
+	return string(addr[2 : 2+length]), port, nil
 }
 
 // localAddrFor 选择发送数据报的本地地址。上游可能要求客户端从中继地址所在的
@@ -324,28 +213,25 @@ func udpNetworkFor(ip net.IP) string {
 }
 
 // udpAssociateConn 把一个已建立的 SOCKS5 UDP 关联伪装成 net.Conn，使
-// udpHandler 的中继循环不必知道 SOCKS5 数据报封装的存在：它只看到"读到一个
-// 数据报 / 写入一个数据报"。
+// server/handler 的中继循环不必知道 SOCKS5 数据报封装的存在：它只看到
+// "读到一个数据报 / 写入一个数据报"。
 //
-// Write 把载荷封成一条 SOCKS5 UDP 数据报后发给中继地址，目标地址恒为关联时
-// 上层给定的那个（udpHandler 每条会话只关心一个目标）。读方向剥掉封装：DNS
-// 应答可能来自与查询目标不同的 IP，而 net.Conn 契约不带来源地址，上层按会话
-// 区分目标，因此来源在这里被丢弃、载荷照常返回。
+// Write 按固定的 dst 封帧后发给中继地址，读方向剥掉封装：DNS 应答可能来自与
+// 查询目标不同的 IP，而 net.Conn 契约不带来源地址；上层按会话区分目标，来源
+// 在这里没有去处。
 type udpAssociateConn struct {
 	control net.Conn
 	relay   *net.UDPConn
-	// dst 是本会话经上游转发的目标地址（udpHandler 的一条会话只关心一个目标），
-	// 用于给每条上行数据报写 SOCKS5 头。数据报的发送目的地是中继地址，由
-	// relay 这条已连接 socket 自身承载（见 relay.RemoteAddr）。
-	dst string
+	// dst 是本会话经上游转发的目标地址（已解析为 SOCKS5 地址形式）。
+	dst socks5.Addr
 
 	closeOnce sync.Once
-	// writeMu 串行化发送并保护 frameBuf：udpHandler 只在主 goroutine 里写，
-	// 但 net.Conn 的契约不承诺这一点，而让并发的半截数据报交错会静默损坏流。
-	writeMu  sync.Mutex
-	frameBuf []byte
-	// readMu 只保护 scratch：单次 Read 内完成"读取 → 解析 → 拷贝到调用方
-	// 缓冲区"，因此不需要把整个读取过程串行化。
+	// writeMu 串行化发送：udpHandler 只在主 goroutine 里写，但 net.Conn 的
+	// 契约不承诺这一点。库的 EncodeUDPPacket 每次返回独立缓冲区，因此这里
+	// 不需要为复用而持有共享写缓冲。
+	writeMu sync.Mutex
+	// readMu 保护 scratch：单次 Read 内完成"收包 → 解封装 → 拷贝给调用方"，
+	// 因此不需要把整个读取过程串行化。
 	readMu  sync.Mutex
 	scratch []byte
 }
@@ -369,16 +255,16 @@ func (c *udpAssociateConn) Read(b []byte) (int, error) {
 	defer c.readMu.Unlock()
 
 	if c.scratch == nil {
-		c.scratch = make([]byte, udpAssociateReadBuffer)
+		c.scratch = make([]byte, maxUDPDatagram)
 	}
 	n, _, err := c.relay.ReadFromUDP(c.scratch)
 	if err != nil {
 		return 0, err
 	}
-	_, payload, err := parseSocks5UDPDatagram(c.scratch[:n])
+	_, payload, err := socks5.DecodeUDPPacket(c.scratch[:n])
 	if err != nil {
-		// 畸形/无法解析的数据报：按 0 字节读取丢弃，让中继循环继续读下一条，
-		// 而不是把一条坏数据报当成会话故障。
+		// 畸形/分片/无法解析的数据报：按 0 字节读取丢弃，让中继循环继续读
+		// 下一条，而不是把一条坏数据报当成会话故障（RFC 1928 允许整条丢弃）。
 		return 0, nil
 	}
 	return copy(b, payload), nil
@@ -388,12 +274,11 @@ func (c *udpAssociateConn) Write(b []byte) (int, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 
-	framed, err := frameSocks5UDPDatagram(c.dst, c.frameBuf[:0], b)
+	packet, err := socks5.EncodeUDPPacket(c.dst, b)
 	if err != nil {
 		return 0, err
 	}
-	c.frameBuf = framed
-	if _, err := c.relay.Write(framed); err != nil {
+	if _, err := c.relay.Write(packet); err != nil {
 		return 0, err
 	}
 	return len(b), nil
@@ -426,86 +311,4 @@ func (c *udpAssociateConn) SetReadDeadline(t time.Time) error {
 
 func (c *udpAssociateConn) SetWriteDeadline(t time.Time) error {
 	return c.relay.SetWriteDeadline(t)
-}
-
-// frameSocks5UDPDatagram 把一条载荷封成 SOCKS5 UDP 数据报：先按 dst（"host:port"，
-// host 可以是 IP 字面量或域名——上游代理解析域名正是链式代理的用途之一）写出
-// RSV/FRAG/ATYP/DST.ADDR/DST.PORT 头（追加到 buf 上，供调用方复用），再追加载荷。
-func frameSocks5UDPDatagram(dst string, buf, payload []byte) ([]byte, error) {
-	host, portStr, err := net.SplitHostPort(dst)
-	if err != nil {
-		return nil, fmt.Errorf("malformed datagram target %q: %w", dst, err)
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil || port < 0 || port > 65535 {
-		return nil, fmt.Errorf("malformed datagram target port %q", portStr)
-	}
-
-	// RSV(2) + FRAG(1)：本实现不支持分片，FRAG 恒为 0。
-	buf = append(buf, 0, 0, 0)
-	if ip := net.ParseIP(host); ip != nil {
-		if ip4 := ip.To4(); ip4 != nil {
-			buf = append(buf, socksATYPIPv4)
-			buf = append(buf, ip4...)
-		} else {
-			// ParseIP 已保证 v4/v6 二选一，这里的 else 必然是 v6。
-			buf = append(buf, socksATYPIPv6)
-			buf = append(buf, ip.To16()...)
-		}
-	} else {
-		if len(host) > 255 {
-			return nil, fmt.Errorf("datagram target name too long: %q", host)
-		}
-		buf = append(buf, socksATYPFQDN, byte(len(host)))
-		buf = append(buf, host...)
-	}
-	buf = binary.BigEndian.AppendUint16(buf, uint16(port))
-	return append(buf, payload...), nil
-}
-
-// parseSocks5UDPDatagram 剥掉一条 SOCKS5 UDP 数据报的封装，返回其来源地址与
-// 载荷。它与 frameSocks5UDPDatagram 互为逆操作，也是它唯一的对端实现——两者的
-// 边界判定（ATYP、长度、FRAG）因此在测试里逐条对齐。
-func parseSocks5UDPDatagram(datagram []byte) (src string, payload []byte, err error) {
-	// RSV(2) + FRAG(1) + ATYP(1)
-	if len(datagram) < 4 {
-		return "", nil, fmt.Errorf("short udp datagram: %d bytes", len(datagram))
-	}
-	if datagram[2] != 0 {
-		return "", nil, errors.New("fragmented udp datagrams are not supported")
-	}
-
-	var host string
-	offset := 4
-	switch datagram[3] {
-	case socksATYPIPv4:
-		if len(datagram) < offset+net.IPv4len+socksPortLen {
-			return "", nil, errors.New("short udp datagram: ipv4 header")
-		}
-		host = net.IP(datagram[offset : offset+net.IPv4len]).String()
-		offset += net.IPv4len
-	case socksATYPIPv6:
-		if len(datagram) < offset+net.IPv6len+socksPortLen {
-			return "", nil, errors.New("short udp datagram: ipv6 header")
-		}
-		host = net.IP(datagram[offset : offset+net.IPv6len]).String()
-		offset += net.IPv6len
-	case socksATYPFQDN:
-		if len(datagram) < offset+1 {
-			return "", nil, errors.New("short udp datagram: missing domain length")
-		}
-		length := int(datagram[offset])
-		offset++
-		if len(datagram) < offset+length+socksPortLen {
-			return "", nil, errors.New("short udp datagram: fqdn header")
-		}
-		host = string(datagram[offset : offset+length])
-		offset += length
-	default:
-		return "", nil, fmt.Errorf("unsupported address type %#x", datagram[3])
-	}
-
-	port := binary.BigEndian.Uint16(datagram[offset : offset+socksPortLen])
-	offset += socksPortLen
-	return net.JoinHostPort(host, strconv.Itoa(int(port))), datagram[offset:], nil
 }

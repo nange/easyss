@@ -3,7 +3,6 @@ package nextproxy
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"net"
 	"slices"
@@ -11,11 +10,14 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/xjasonlyu/tun2socks/v2/transport/socks5"
 )
 
 // fakeSocks5UDPProxy 是一个最小的、支持 UDP ASSOCIATE 的 SOCKS5 服务端。
-// 它不依赖被测实现：握手、关联应答与数据报解封装都按 RFC 1928 独立写出，
-// 因此测试验证的是"线上字节"，而不是两份相同的错误假设。
+// 方法协商、认证、命令应答都由它自己按 RFC 1928 读写，因此被测实现面对的是
+// 真实的线上字节。唯一复用的是数据报的封/解封装（socks5 包）：那是对端实现，
+// 不是被测对象——生产代码用的是同一份，这正是本次重构要钉住的复用点。
 type fakeSocks5UDPProxy struct {
 	t *testing.T
 
@@ -33,6 +35,9 @@ type fakeSocks5UDPProxy struct {
 	// wildcardRelay 为 true 时应答 0.0.0.0:<port>，逼客户端用控制连接的对端
 	// 地址替换通配地址。
 	wildcardRelay bool
+	// domainRelay 非空时应答域名形态的中继地址，覆盖库的 Addr.UDPAddr()
+	// 对域名返回 nil 的那条分支。
+	domainRelay string
 
 	mu       sync.Mutex
 	gotUser  string
@@ -106,7 +111,7 @@ func (p *fakeSocks5UDPProxy) handle(conn net.Conn) {
 	if _, err := io.ReadFull(conn, head); err != nil {
 		return
 	}
-	if head[0] != socksVersion5 {
+	if head[0] != socks5.Version {
 		p.t.Errorf("fake proxy: unexpected version %d", head[0])
 		return
 	}
@@ -115,55 +120,70 @@ func (p *fakeSocks5UDPProxy) handle(conn net.Conn) {
 		return
 	}
 
-	chosen := byte(socksAuthNoneRequired)
+	chosen := socks5.MethodNoAuth
 	if p.requireAuth {
-		chosen = socksAuthNoAcceptable
-		if slices.Contains(methods, socksAuthUserPass) {
-			chosen = socksAuthUserPass
+		chosen = 0xff // no acceptable methods
+		if slices.Contains(methods, socks5.MethodUserPass) {
+			chosen = socks5.MethodUserPass
 		}
 	}
-	if _, err := conn.Write([]byte{socksVersion5, chosen}); err != nil {
+	if _, err := conn.Write([]byte{socks5.Version, chosen}); err != nil {
 		return
 	}
-	if chosen == socksAuthNoAcceptable {
+	if chosen == 0xff {
 		return
 	}
-	if chosen == socksAuthUserPass {
+	if chosen == socks5.MethodUserPass {
 		if !p.readUserPass(conn) {
 			return
 		}
 	}
 
-	// 命令请求：VER CMD RSV ATYP ADDR PORT
+	// 命令请求：VER CMD RSV ATYP ADDR PORT。头四字节已经在 req 里，
+	// 因此这里只需按 ATYP 把地址与端口读完（不能再用 socks5.ReadAddr：
+	// 它会从头再读一遍 ATYP）。
 	req := make([]byte, 4)
 	if _, err := io.ReadFull(conn, req); err != nil {
 		return
 	}
-	if req[1] != socksCmdUDPAssociate {
-		_, _ = conn.Write([]byte{socksVersion5, 0x07, 0, socksATYPIPv4, 0, 0, 0, 0, 0, 0})
+	if req[1] != byte(socks5.CmdUDPAssociate) {
+		_, _ = conn.Write([]byte{socks5.Version, 0x07, 0, socks5.AtypIPv4, 0, 0, 0, 0, 0, 0})
 		return
 	}
-	if _, err := readSocks5Addr(conn, req[3]); err != nil {
+	var addrLen int
+	switch req[3] {
+	case socks5.AtypIPv4:
+		addrLen = net.IPv4len
+	case socks5.AtypIPv6:
+		addrLen = net.IPv6len
+	default:
+		p.t.Errorf("fake proxy: unsupported request ATYP %#x", req[3])
 		return
 	}
-	portBytes := make([]byte, socksPortLen)
-	if _, err := io.ReadFull(conn, portBytes); err != nil {
+	if _, err := io.ReadFull(conn, make([]byte, addrLen+2)); err != nil {
 		return
 	}
 
 	if p.replyCode != 0 {
-		_, _ = conn.Write([]byte{socksVersion5, p.replyCode, 0, socksATYPIPv4, 0, 0, 0, 0, 0, 0})
+		_, _ = conn.Write([]byte{socks5.Version, p.replyCode, 0, socks5.AtypIPv4, 0, 0, 0, 0, 0, 0})
 		return
 	}
 
-	relayAddr := p.relay.LocalAddr().(*net.UDPAddr)
-	ip := relayAddr.IP.To4()
-	if p.wildcardRelay {
-		ip = net.IPv4zero.To4()
+	relayPort := uint16(p.relay.LocalAddr().(*net.UDPAddr).Port)
+	// VER REP RSV 之后紧跟 ATYP——这里多写一个 0 会让客户端把 0x00 当成 ATYP。
+	reply := []byte{socks5.Version, 0x00, 0}
+	switch {
+	case p.domainRelay != "":
+		reply = append(reply, socks5.AtypDomainName, byte(len(p.domainRelay)))
+		reply = append(reply, p.domainRelay...)
+	case p.wildcardRelay:
+		reply = append(reply, socks5.AtypIPv4)
+		reply = append(reply, net.IPv4zero.To4()...)
+	default:
+		reply = append(reply, socks5.AtypIPv4)
+		reply = append(reply, p.relay.LocalAddr().(*net.UDPAddr).IP.To4()...)
 	}
-	reply := []byte{socksVersion5, socksReplySucceeded, 0, socksATYPIPv4}
-	reply = append(reply, ip...)
-	reply = binary.BigEndian.AppendUint16(reply, uint16(relayAddr.Port))
+	reply = binary.BigEndian.AppendUint16(reply, relayPort)
 	if _, err := conn.Write(reply); err != nil {
 		return
 	}
@@ -200,38 +220,38 @@ func (p *fakeSocks5UDPProxy) readUserPass(conn net.Conn) bool {
 	p.gotUser, p.gotPass, p.authSent = string(user), string(pass), true
 	p.mu.Unlock()
 
-	status := byte(socksAuthStatusOK)
+	status := byte(0x00)
 	if string(user) != p.user || string(pass) != p.password {
 		status = 0x01
 	}
-	_, _ = conn.Write([]byte{socksAuthVersion, status})
-	return status == socksAuthStatusOK
+	_, _ = conn.Write([]byte{0x01, status})
+	return status == 0x00
 }
 
 // serveRelay 把收到的数据报按封装里的目标地址真实转发出去，再封装回客户端。
 // 这样测试可以对着一个真实的 UDP 服务端验证完整往返，而不是让假代理自问自答。
 func (p *fakeSocks5UDPProxy) serveRelay() {
-	buf := make([]byte, udpAssociateReadBuffer)
+	buf := make([]byte, maxUDPDatagram)
 	for {
 		n, clientAddr, err := p.relay.ReadFromUDP(buf)
 		if err != nil {
 			return
 		}
-		dst, payload, parseErr := parseSocks5UDPDatagram(buf[:n])
+		addr, payload, parseErr := socks5.DecodeUDPPacket(buf[:n])
 		if parseErr != nil {
 			p.t.Errorf("fake proxy: bad datagram from client: %v", parseErr)
 			continue
 		}
 		p.mu.Lock()
-		p.udpSeen = append(p.udpSeen, dst)
+		p.udpSeen = append(p.udpSeen, addr.String())
 		p.mu.Unlock()
 
-		go p.forward(clientAddr, dst, payload)
+		go p.forward(clientAddr, addr, payload)
 	}
 }
 
-func (p *fakeSocks5UDPProxy) forward(clientAddr *net.UDPAddr, dst string, payload []byte) {
-	upstream, err := net.Dial("udp", dst)
+func (p *fakeSocks5UDPProxy) forward(clientAddr *net.UDPAddr, dst socks5.Addr, payload []byte) {
+	upstream, err := net.Dial("udp", dst.String())
 	if err != nil {
 		return
 	}
@@ -240,12 +260,12 @@ func (p *fakeSocks5UDPProxy) forward(clientAddr *net.UDPAddr, dst string, payloa
 	if _, err := upstream.Write(payload); err != nil {
 		return
 	}
-	resp := make([]byte, udpAssociateReadBuffer)
+	resp := make([]byte, maxUDPDatagram)
 	n, err := upstream.Read(resp)
 	if err != nil {
 		return
 	}
-	framed, err := frameSocks5UDPDatagram(dst, make([]byte, 0, n+22), resp[:n])
+	framed, err := socks5.EncodeUDPPacket(dst, resp[:n])
 	if err != nil {
 		return
 	}
@@ -397,6 +417,70 @@ func TestDialUDPAssociateWildcardRelay(t *testing.T) {
 	}
 }
 
+// TestDialUDPAssociateDomainRelay 覆盖上游应答域名形态中继地址的情况：
+// 库的 Addr.UDPAddr() 对域名返回 nil，必须由我们把名字解析成可拨号地址。
+func TestDialUDPAssociateDomainRelay(t *testing.T) {
+	echo := startUDPEcho(t)
+	proxy := newFakeSocks5UDPProxy(t, false, "", "")
+	proxy.domainRelay = "localhost"
+	np := newTestNextProxy(t, proxy.addr(), true)
+
+	conn, err := np.DialContext(context.Background(), "udp", echo)
+	if err != nil {
+		t.Fatalf("DialContext(udp) with a domain relay = %v, want success", err)
+	}
+	defer conn.Close() //nolint:errcheck
+
+	if _, err := conn.Write([]byte("dom")); err != nil {
+		t.Fatalf("Write = %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 64)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("Read = %v", err)
+	}
+	if got := string(buf[:n]); got != "echo:dom" {
+		t.Errorf("Read = %q, want %q", got, "echo:dom")
+	}
+}
+
+// TestDialUDPAssociateMalformedTarget 覆盖畸形目标：调用方给了无法解析的目标
+// 时必须在建立关联之后立刻回收，而不是留一条没人用的控制连接。
+func TestDialUDPAssociateMalformedTarget(t *testing.T) {
+	proxy := newFakeSocks5UDPProxy(t, false, "", "")
+	np := newTestNextProxy(t, proxy.addr(), true)
+
+	if _, err := np.DialContext(context.Background(), "udp", "not-a-host-port"); err == nil {
+		t.Fatal("DialContext(udp) with a malformed target = nil error, want failure")
+	}
+}
+
+// TestResolveRelayAddrRejectsInvalid 覆盖应答地址不合法时的报错，而不是带着
+// 一个无法拨号的地址继续。
+func TestResolveRelayAddrRejectsInvalid(t *testing.T) {
+	if _, err := resolveRelayAddr(nil, nil); err == nil {
+		t.Error("resolveRelayAddr with a nil address = nil error, want failure")
+	}
+	if _, err := resolveRelayAddr(socks5.Addr{0x01}, nil); err == nil {
+		t.Error("resolveRelayAddr with a short address = nil error, want failure")
+	}
+}
+
+// TestSplitSocksAddr 覆盖域名字段形态地址的解析边界。
+func TestSplitSocksAddr(t *testing.T) {
+	host, port, err := splitSocksAddr(socks5.ParseAddrString("relay.example.com:1080"))
+	if err != nil {
+		t.Fatalf("splitSocksAddr = %v", err)
+	}
+	if host != "relay.example.com" || port != 1080 {
+		t.Errorf("splitSocksAddr = (%q,%d), want (relay.example.com,1080)", host, port)
+	}
+	if _, _, err := splitSocksAddr(socks5.Addr{socks5.AtypDomainName, 200, 'x'}); err == nil {
+		t.Error("splitSocksAddr with a truncated name = nil error, want failure")
+	}
+}
+
 // TestDialUDPAssociateRejected 覆盖上游拒绝 ASSOCIATE 时的错误报告：
 // 错误里必须带上 RFC 1928 的应答码含义，而不是一个裸的 EOF。
 func TestDialUDPAssociateRejected(t *testing.T) {
@@ -463,91 +547,42 @@ func TestUDPAssociateConnCloseUnblocksRead(t *testing.T) {
 	}
 }
 
-// TestFrameParseSocks5UDPDatagram 覆盖封帧/解帧的边界：两种地址族、域名目标、
-// 分片标志与各类短报文。解析出的目标必须与封帧时的目标逐字一致。
-func TestFrameParseSocks5UDPDatagram(t *testing.T) {
-	cases := []struct {
-		name    string
-		dst     string
-		payload string
-	}{
-		{"ipv4", "8.8.8.8:53", "query-bytes"},
-		{"ipv6", "[2001:db8::1]:443", "v6-payload"},
-		{"domain", "dns.google:53", "name-payload"},
-		{"empty payload", "1.1.1.1:53", ""},
+// TestUDPAssociateConnDropsMalformedDatagram 钉住"坏数据报按 0 字节读取丢弃"：
+// 数据面上一条无法解析（这里是分片）的数据报是丢包，不是会话故障——中继循环
+// 必须继续读下一条，而不是把整条会话拆掉。它直接构造 udpAssociateConn 并对准
+// 自己的中继 socket，绕开假代理的同名行为（假代理自己也会丢弃这种数据报）。
+func TestUDPAssociateConnDropsMalformedDatagram(t *testing.T) {
+	relay, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen relay: %v", err)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			framed, err := frameSocks5UDPDatagram(tc.dst, nil, []byte(tc.payload))
-			if err != nil {
-				t.Fatalf("frame: %v", err)
-			}
-			src, payload, err := parseSocks5UDPDatagram(framed)
-			if err != nil {
-				t.Fatalf("parse: %v", err)
-			}
-			if src != tc.dst {
-				t.Errorf("parsed source = %q, want %q", src, tc.dst)
-			}
-			if string(payload) != tc.payload {
-				t.Errorf("parsed payload = %q, want %q", payload, tc.payload)
-			}
-		})
+	server, client := net.Pipe()
+	defer server.Close() //nolint:errcheck
+	defer client.Close() //nolint:errcheck
+
+	conn := &udpAssociateConn{control: server, relay: relay, dst: socks5.ParseAddrString("127.0.0.1:53")}
+	defer conn.Close() //nolint:errcheck
+
+	sender, err := net.DialUDP("udp", nil, relay.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatalf("dial relay: %v", err)
+	}
+	defer sender.Close() //nolint:errcheck
+
+	// FRAG != 0 的数据报必须被整条丢弃（RFC 1928 允许不支持分片的实现丢弃它）。
+	fragmented := []byte{0, 0, 0x01, socks5.AtypIPv4, 127, 0, 0, 1, 0, 53, 'x'}
+	if _, err := sender.Write(fragmented); err != nil {
+		t.Fatalf("write fragmented datagram: %v", err)
 	}
 
-	t.Run("bad port", func(t *testing.T) {
-		if _, err := frameSocks5UDPDatagram("1.1.1.1:notaport", nil, nil); err == nil {
-			t.Error("frame with bad port = nil error, want failure")
-		}
-	})
-	t.Run("oversized domain", func(t *testing.T) {
-		if _, err := frameSocks5UDPDatagram(strings.Repeat("a", 300)+":53", nil, nil); err == nil {
-			t.Error("frame with oversized name = nil error, want failure")
-		}
-	})
-	t.Run("short datagram", func(t *testing.T) {
-		if _, _, err := parseSocks5UDPDatagram([]byte{0, 0, 0}); err == nil {
-			t.Error("parse of a 3-byte datagram = nil error, want failure")
-		}
-	})
-	t.Run("fragmented datagram", func(t *testing.T) {
-		framed, err := frameSocks5UDPDatagram("1.1.1.1:53", nil, []byte("x"))
-		if err != nil {
-			t.Fatalf("frame: %v", err)
-		}
-		framed[2] = 1 // FRAG != 0
-		if _, _, err := parseSocks5UDPDatagram(framed); err == nil {
-			t.Error("parse of a fragmented datagram = nil error, want failure")
-		}
-	})
-	t.Run("truncated header", func(t *testing.T) {
-		framed, err := frameSocks5UDPDatagram("1.1.1.1:53", nil, []byte("x"))
-		if err != nil {
-			t.Fatalf("frame: %v", err)
-		}
-		if _, _, err := parseSocks5UDPDatagram(framed[:6]); err == nil {
-			t.Error("parse of a truncated header = nil error, want failure")
-		}
-	})
-	t.Run("unsupported atyp", func(t *testing.T) {
-		if _, _, err := parseSocks5UDPDatagram([]byte{0, 0, 0, 0x09, 1, 2}); err == nil {
-			t.Error("parse with bad ATYP = nil error, want failure")
-		}
-	})
-}
-
-// TestSocksReplyString 钉住应答码翻译，避免排障时只看到一个数字。
-func TestSocksReplyString(t *testing.T) {
-	cases := map[byte]string{
-		socksReplySucceeded: "succeeded",
-		0x07:                "command not supported",
-		0x08:                "address type not supported",
-		0x42:                "unknown reply code 66",
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, 64)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("Read after a malformed datagram = %v, want a 0-byte read", err)
 	}
-	for code, want := range cases {
-		if got := socksReplyString(code); got != want {
-			t.Errorf("socksReplyString(%#x) = %q, want %q", code, got, want)
-		}
+	if n != 0 {
+		t.Errorf("Read = %d bytes, want 0 (the malformed datagram must be dropped)", n)
 	}
 }
 
@@ -617,25 +652,5 @@ func TestCredentials(t *testing.T) {
 	user, pass, ok := np2.credentials()
 	if !ok || user != "user" || pass != "pass" {
 		t.Errorf("credentials() = (%q,%q,%v), want (user,pass,true)", user, pass, ok)
-	}
-}
-
-// TestFrameSocks5UDPDatagramReusesBuffer 钉住"复用调用方缓冲区"这一约定：
-// 传入的 buf 必须被追加而不是被替换，否则每条数据报都会新分配一次——在
-// DNS/QUIC 这种逐包路径上，那是每个数据报一次额外分配。
-func TestFrameSocks5UDPDatagramReusesBuffer(t *testing.T) {
-	buf := make([]byte, 0, 64)
-	framed, err := frameSocks5UDPDatagram("1.1.1.1:53", buf, []byte("payload"))
-	if err != nil {
-		t.Fatalf("frame: %v", err)
-	}
-	if &framed[0] != &buf[:1][0] {
-		t.Error("frameSocks5UDPDatagram allocated a new buffer instead of appending")
-	}
-	if want := 3 + 1 + 4 + 2 + len("payload"); len(framed) != want {
-		t.Errorf("framed length = %d, want %d", len(framed), want)
-	}
-	if !strings.HasPrefix(fmt.Sprintf("% x", framed[:3]), "00 00 00") {
-		t.Errorf("RSV/FRAG prefix = % x, want 00 00 00", framed[:3])
 	}
 }
