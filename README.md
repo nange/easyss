@@ -598,6 +598,16 @@ sysctl -p
 数据库的 3306 等），从而支持节点间 SSH / HTTP / 数据库互通。DERP 中继由 easyss
 服务端内嵌，**不依赖 Tailscale 官方服务**，也不需要在服务端做任何配置之外的部署。
 
+中继本身是**私有端点**：它只接待经 easyss 协议隧道到达的连接，公网上访问 `/derp`
+只会看到与其他未知路径一致的伪装页面。因此不存在"拿你的域名当免费中继"的问题，
+也不需要为它开放额外端口。代价是**只支持一台 DERP 主机（单一 S）**：所有节点的
+`vpn.derp_addr` 必须指向同一台 easyss 服务端，配置不一致会在启动时直接报错。
+
+节点的 `vpn.derp_addr` 要么留空（默认从 `servers[]` 推导），要么写成**与服务端
+`[SERVER] embedded DERP enabled` 日志里 `derp_addr` 完全相同**的 `host:port`——
+服务端靠这个值认出"这条隧道连接是要访问我自己的 DERP"，写法不一致时中继不可达
+（表现为节点日志里反复出现 DERP 连接失败）。
+
 #### 1. 服务端（DERP 中继主机 S）
 
 ```jsonc
@@ -662,6 +672,9 @@ curl http://b:8080/
 ssh user@b
 ```
 
+非 TUN 时请显式使用 SOCKS5 端口：HTTP 代理入口（系统代理里配置的那个）不参与
+节点组网的分流，访问对端名字需要走 SOCKS5。
+
 #### 5. 边界与注意事项
 
 * **只能访问对端自身的服务**：对端面只接受字面 loopback 目标，因此对端不可能成为
@@ -672,6 +685,9 @@ ssh user@b
 * **不支持 ICMP**：`ping b` / traceroute 到对端不通，VPN 只承载 TCP 与 UDP。
 * UDP 单包上限 1232 字节，适合 DNS / QUIC 首包，不适合大包高带宽 UDP。
 * 没有节点自动发现：对端地址由运维配置。
+* **只支持单一 DERP 主机**（见上）：所有节点的 DERP 配置必须一致，否则启动即报错。
+* **Android 客户端暂不支持 VPN**：DERP 私有化依赖 tailscale 的一条拨号钩子，而它在
+  移动端构建里被排除；在 Android 上启用 `vpn` 会被明确拒绝并降级为"仅代理"。
 * `vpn.enabled=false`（默认）时对现有功能零影响。
 
 完整的字段说明、实现细节与安全边界见 [docs/vpn-design.md](docs/vpn-design.md)。

@@ -122,11 +122,22 @@ tailcat.Client(B) ──WireGuard / DERP(S)──▶ B 的 tailcat.Server
 
 内层 CONNECT 的目标契约见 [5.1](#51-对端面复用-proxysocks5server)，这是访问侧与对端面之间**唯一的跨节点协议契约**。
 
-### 3.3 DERP 的选择与跨 S 部署
+### 3.3 DERP 私有化：只经 easyss 隧道，且要求单一 S
 
-- **A 访问 B 时使用的 DERP，来自 B 的地址（B 自己标记的 S），而不是 A 本地标记的 S。** 两者可以不同——这是该设计的优点：节点的可达性不依赖访问方的本地配置。
-- 但访问侧在 TUN 模式下必须为**它实际要连的 DERP 主机**放行绕行路由（见 8.2）。因此 `BypassIPs` 取并集：本地标记的 S + 所有 `peers[].address` 内嵌 DERP 的 `HostName`。
-- **推荐拓扑：所有节点标记同一个 S**（默认即如此）。理由：一条 DERP、一份绕行 IP、一套证书，运维最简。跨 S 可用（`BypassIPs` 的并集已覆盖），但要求每个 S 都对全部节点可达，且会引入多份证书/端口与多条绕行路由。
+**标准做法（已实施，替代本节原先的"DERP 挂在公网 HTTPS 上"）**：内嵌 DERP 只接待来自**本机回环**的请求，节点侧则把 tailscale 的 DERP 连接放进 easyss 隧道。链路是：
+
+1. 节点侧：`startVPN` 之前起一个只绑 `127.0.0.1` 的 DERP 入口（`runner/derpshim.go`），并把 `ALL_PROXY` 指向它。tailscale 的 netns 拨号器在非 android/ios/js 的构建里被 `golang.org/x/net/proxy` 包装（`net/netns/socks.go`），因此它**所有**出站拨号都经这个入口进入 easyss 隧道；
+2. 服务端在握手阶段认出"目标就是我自己的 `derp_addr`"，改拨 `127.0.0.1:<listen>`（`server/handler` 的 `localDERP`/`dialTarget`）；
+3. `vpn.NewDERPMount` 只把来自回环的 DERP 流量交给中继，公网上的 `/derp`（含 `POST /derp/probe` 这类探测）一律得到伪装页面。
+
+收益：内嵌 DERP 不再是公网上的匿名中继（接入控制由 easyss 协议的 master key 承担）、公网上没有任何"回答 DERP 协议"的路径、TUN 模式也不再需要为 DERP 主机装绕行路由（8.2 因此删除，脚本的第 10/11 个参数一并退役）。
+
+**代价：只支持单一 S。** 所有节点必须通告同一个 DERP `host:port`——因为 DERP 连接只到得了"本节点自己那台 easyss 服务端"的回环，服务端无法代表节点去连另一台机器。`vpnnode.assertPeersShareDERP` 在启动时校验 `peers[].address` 内嵌的 DERP 主机与本节点一致，不一致直接报错（否则表现为第一次访问对端时隧道拨号超时）。
+
+两个必须知道的约束：
+
+- 平台：`net/netns/socks.go` 的构建标签是 `!ios && !js && !android && !ts_omit_useproxy`，因此 **Android(AAR) 没有这条钩子**——`runner.derpEnvProxySupported` 在被排除的平台上明确拒绝启用 VPN（而不是让它退化成"连不上 DERP"）。
+- 进程级、只读一次：`x/net/proxy` 用 `sync.Once` 缓存 `ALL_PROXY`，所以入口地址必须**确定性**（`peer_port + 1`，不能用 `:0`），且设置时机必须在任何 tailcat 拨号之前。`runner/derpshim_test.go` 的 `TestTailcatDERPDialsUseAllProxy` 是这条依赖的守卫：tailscale 升级若改掉拨号路径，CI 会直接红。
 
 ## 4. 配置
 
@@ -236,7 +247,7 @@ ssh user@b
 
 | 侧 | 有 `servers[]` 吗 | 默认来源 | 何时必须显式写 |
 |---|---|---|---|
-| **客户端节点** | 有 | `derp: true` 标记的条目 → 否则 `servers[0]` 的 `address:port` | DERP 不在代理服务端上；跨 S |
+| **客户端节点** | 有 | `derp: true` 标记的条目 → 否则 `servers[0]` 的 `address:port` | 一般不需要：DERP 私有化要求单一 S（3.3），显式写只能写成同一台 |
 | **easyss 服务端** | **没有** | `domain` + `listen` 解析出的端口 | DERP 经端口转发/反代暴露（对外 host:port ≠ `domain:listen`） |
 
 `socks_port + 2000` 这类**派生**只适用于有 `servers[]` 的客户端；服务端一律用 `domain` + `listen` 推导，或在 `server.vpn.derp_addr` 里显式给出。
@@ -318,7 +329,7 @@ func (s *Socks5Server) Serve(ln net.Listener) error
 
 ### 5.5 TUN 阶段的脚本改动
 
-见 [8.2](#82-derp-主机需要-32-绕行路由)。
+**已不需要**：DERP 连接走回环入口（3.3），不再有任何"必须绕出 TUN 的 DERP 主机"，因此三个创建脚本保持改动前的 9 个位置参数。
 
 ## 6. 新增 `vpn` 包
 
@@ -375,15 +386,11 @@ TUN 把除 `0.0.0.0/8` 外的所有 IPv4 路由进设备（`create_tun_dev.sh:10
 
 > **实施修正（见 [12.9](#129-阶段-7-的实现记录) 第 29 条）**：这个强制只有在 tailcat 建 socket **之前**才真正生效（magicsock 在建 socket 时读这个开关）。因此启动路径（配置里已要求 TUN）在 `startVPN` 里强制为 true 并告警；运行期才打开 TUN 时改为**拒绝**并提示用户把 `vpn.relay_only` 打开后重启。另外只有 `peers` 非空时才强制/拒绝——没有对端就没有节点间直连，关掉 `relay_only` 只用 TUN 上网是合法组合。
 
-### 8.2 DERP 主机需要 `/32` 绕行路由
+### 8.2 DERP 不再需要绕行路由（原方案已删除）
 
-即便只剩 DERP 的 TCP 连接，它的目标（DERP 主机的公网 IP:端口）也落在 TUN 路由范围内。因此需要给这些 IP 各加一条 `/32` 主机路由走物理网关：
+原设计给 DERP 主机装 `/32` 主机路由，是因为 relay_only 下到 DERP 的 TCP 是 tailcat 唯一的出网通道，被 TUN 阶梯捕获就会绕回 easyss 自己。**DERP 私有化（3.3）后这一整类问题消失**：节点的 DERP 拨号目标是 `socks5://127.0.0.1:<入口端口>`，回环流量从不进 TUN 路由表，而真正的出网连接由 easyss 自己（已绑定物理接口）承担。
 
-- 绕行对象是**并集**：本地标记的 S + 所有 peer 地址内嵌 DERP 的 HostName（跨 S 部署时后者必需，见 [3.3](#33-derp-的选择与跨-s-部署)）。
-- 扩展 `scripts/create_tun_dev.sh`、`create_tun_dev_darwin.sh`、`create_tun_dev_windows.bat`（新增可选参数：绕行 IP 列表；脚本已接收 `local_gateway`）。
-- 由 `client/tun` 与 `cmd/easyss/tun_helper_*` 传入；本地 S 的 IP 复用 easyss 自身的服务端域名预解析结果（`Core.publishServerIPs`）。
-
-> **实施修正（见 [12.9](#129-阶段-7-的实现记录)）**：列表是**第 10 个位置参数**（空格分隔的单个实参，linux/darwin 已有 `local_gateway`）；**Windows 另加第 11 个参数**（物理网关，它此前不需要这个值），因为 cmd.exe 没有 `%10`，脚本用 9 次 `shift` 取这两个参数。只绕行 **IPv4**（`/32` / `-host` / `mask 255.255.255.255`）：只有 AAAA 的 DERP 主机无法绕行并会告警。绕行路由**不在关闭脚本里删除**——它们的下一跳就是物理网关，TUN 关闭后与默认路由同向，不会黑洞流量。
+因此本版删除了 `vpn/node/bypass.go`、`Core.VPNBypassIPs`、`Config.BypassIPs` 与三个创建脚本的第 10/11 个位置参数。今天 TUN 下唯一需要关心的仍然是 8.1 那条：`relay_only=true`。
 
 ### 8.3 overlay 段的选择
 
@@ -430,17 +437,17 @@ TUN 把除 `0.0.0.0/8` 外的所有 IPv4 路由进设备（`create_tun_dev.sh:10
 | 2 | **TUN + tailcat 环路** | 8.1/8.2/8.3 三条前提共同消除；`pathcheck` 提供运行时自检 |
 | 3 | **改动核心代理路径** | 可选注入隔离；以「`VPN==nil` 时既有全部测试全绿」作为阶段 4 硬验收（已达成，见 12.6） |
 | 3b | **`decide()` 每次判定都查一次 overlay** | 命中路径是一次 `map` 查找（未命中再加一次 `netip.ParseAddr`）；相比判定本身（GeoIP/域名列表）可忽略 |
-| 4 | **`relay_only` 依赖 `TS_DEBUG_ALWAYS_USE_DERP`** | 锁 tailscale 版本 + 启动告警（每次启动都打，含开关名）+ `pathcheck` 自检 + 文档写明退路。**已接线**（`vpnnode.ApplyRelayOnly`，见 12.7 第 22 条） |
+| 4 | **`relay_only` 依赖 `TS_DEBUG_ALWAYS_USE_DERP`** | 锁 tailscale 版本 + 启动告警（每次启动都打，含开关名）+ 文档写明退路。接线在 `vpnnode.ApplyRelayOnly`（见 12.7 第 22 条）。**注意 `vpn/node/pathcheck.go` 的 `PathStatus` 目前只有测试在用，"运行时自检"尚未接线**（见 12.11 第 40 条） |
 | 5 | 对端面 UDP 不能复用 `udpAssociate` | tailcat UDP listener + 薄中继；阶段 3 单测覆盖 |
 | 6 | **peer 地址误用短格式 → 拉官方 DERPMap** | 只设 `Server.Region`；`AssertFullAddr` 启动自检 + 配置校验拒收短格式 + 端到端断言零外部请求（4.7） |
 | 7 | **`allow_clients` 配不起来**（client key 每次重启变化 / 无处查看） | client key 持久化（`<exe>/vpn/client.key`）+ 启动日志与 `-show-vpn-identity` 打印 `nodekey`。**已接线**（第 7 节第 3 条、4.4 的取值来源） |
-| 8 | **跨 S 时 DERP 绕行遗漏** | `BypassIPs` 取并集（本地 S + 所有 peer 内嵌 DERP 主机）；文档推荐单一 S（3.3、8.2） |
+| 8 | **跨 S 拓扑** | DERP 私有化（3.3）后跨 S 不再成立：节点只连得到自己那台服务端的回环 DERP。`vpnnode.assertPeersShareDERP` 在启动时拒绝不一致的 peer 地址 |
 | 9 | **`peer_port` 自定义后对端需同步** | 文档与示例明确；默认值下零配置互通 |
 | 10 | **N² 隧道开销**（访问方为每个对端一套 netstack+WireGuard） | 只连需要的对端；文档给出量级；后续若要收敛需引入 hub 转发（需 fork，本期不做） |
 | 11 | UDP 单包 1232 字节 | 已声明适用场景 |
 | 12 | **`relay_only=true` 时服务端成为带宽瓶颈** | 文档明确；非 TUN 场景需要吞吐时可关掉走直连 |
 | 13 | **体积**：引用 tailcat 会把整个 WireGuard 引擎与 gVisor netstack 拖进二进制 | **已实测并解决**。单包时服务端 13.03 → 27.19 MiB（+109%）；按「是否引用 tailcat」拆成 `vpn` + `vpn/node` 后回到 **15.63 MiB**（+2.60 MiB，残留的是 `derpserver`/`tailcfg` 本身）。`vpn/deps_test.go` 用 `go list -deps` 钉住这条不变量，见 12.4 |
-| 14 | **伪装面变化** | `/derp` 是唯一新增显式路径，非 Upgrade 请求仍回 fallback 页面；其余路径语义与统计逐字节不变（阶段 1 路由契约测试守住） |
+| 14 | **伪装面变化** | 公网上**没有**任何 DERP 路径：`/derp` 只对回环来源放行（3.3），非回环请求（含 `Upgrade: derp` 与非 GET 的 `/derp/probe`）一律得到伪装页面；其余路径语义与统计逐字节不变 |
 
 ## 12. 实施记录
 
@@ -591,6 +598,17 @@ TUN 把除 `0.0.0.0/8` 外的所有 IPv4 路由进设备（`create_tun_dev.sh:10
 - **快照字段带 `omitempty`**：`vpn.enabled=false` 时五个计数器恒为零，不应在既有 `/stats` 输出里多出五个 `0` 字段（既有的服务端计数器也是这个惯例）。
 
 阶段 8 的测试面：`stats`（`TestResetCounters` 覆盖新计数器，不回归）、`client/dns`（静态应答计数 +1）、`vpn/node`（一次真实端到端 TCP 访问让两个计数器各 +1、失败数为零；一次真实 UDP 流让 UDP 计数器 +1）。
+
+### 12.11 DERP 私有化与随之而来的简化
+
+| # | 问题 | 后果 | 修正 |
+|---|---|---|---|
+| 37 | DERP 挂在公网 HTTPS 上（`/derp`），只靠"是否带 Upgrade 头"分流 | 任何知道域名的人都能连上并把它当免费中继（`derpserver` 不设客户端校验、无限速、无连接上限），`POST /derp/probe` 还会拿到一行 derpserver 独有的文案 | DERP 私有化：`ALL_PROXY` 把 tailscale 的出站接进本进程的入口 → easyss 隧道 → 服务端改拨自己的回环监听；`vpn.NewDERPMount` 只对回环来源放行（3.3） |
+| 38 | 需要为 DERP 主机装 TUN 绕行路由（8.2） | 每个 DERP 主机一条 `/32`、三个脚本各加参数（Windows 还要 shift 9 次）、`Bypass` 的 TTL 缓存与"退回上次结果" | 整块删除：回环入口不进 TUN 路由表。`vpn/node/bypass.go`、`Core.VPNBypassIPs`、`Config.BypassIPs`、脚本第 10/11 个参数与相关测试全部退役 |
+| 39 | 跨 S（peer 通告另一台 DERP）在私有化后不可达 | 表现为第一次访问对端时隧道拨号超时，排障成本高 | `vpnnode.assertPeersShareDERP`：启动时校验每个 peer 地址内嵌的 DERP 主机与本节点一致，不一致直接报错并说明"单一 S" |
+| 40 | `relay_only` 的失效无法观测 | tailscale 若改名 `TS_DEBUG_ALWAYS_USE_DERP`，`envknob.Setenv` 只会静默写一个没人读的变量 | 未接线：`PathStatus` 仍只有测试调用。作为替代，`runner/derpshim_test.go` 的 `TestTailcatDERPDialsUseAllProxy` 用子进程守卫 `ALL_PROXY` 钩子本身（tailscale 改拨号路径会红）；relay_only 的运行期自检仍待接 |
+
+本版还顺手修掉了评审中发现的三处缺陷：`overlay_cidr` 缺下界（`0.0.0.0/0` 会让槽位表申请约 4 GiB）、VPN UDP 会话键缺端口（同一对端两个端口会串包）、`config.SplitDERPAddr` 的三返回值签名破坏 Android AAR 的 gobind 绑定（`make easyss-android-aar` 曾在 CI 直接失败）。
 
 ## 附录 A：实测依据
 
