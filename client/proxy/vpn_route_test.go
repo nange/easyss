@@ -199,9 +199,14 @@ func TestVPNRouteCarriesUDPToTheProxyLayer(t *testing.T) {
 	if got := fake.udpTargets(); !slices.Equal(got, []string{target}) {
 		t.Fatalf("vpn UDP dials = %v, want exactly [%s]", got, target)
 	}
-	key := "vpn_" + clientSock.LocalAddr().String() + "_b"
+	// 会话键带对端规范名**与目标端口**：同一对端的另一个端口必须是另一条流，
+	// 否则第二个端口的数据报会被投递到第一个端口上（见 vpnUDPRelay）。
+	key := "vpn_" + clientSock.LocalAddr().String() + "_b_5353"
 	if _, ok := srv.udp.directFor(key); !ok {
 		t.Fatalf("the vpn session was not registered under %q", key)
+	}
+	if _, ok := srv.udp.directFor("vpn_" + clientSock.LocalAddr().String() + "_b_5354"); ok {
+		t.Fatalf("a different port on the same peer must not share the session")
 	}
 
 	if err := clientSock.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {

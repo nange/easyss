@@ -1,11 +1,9 @@
 package runner
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -28,12 +26,17 @@ func vpnTestPaths(t *testing.T) vpnPaths {
 	}
 }
 
-// vpnTestConfig 返回一份启用了 VPN 的客户端配置，它的 DERP 指向本机一个没人监听的
-// 端口。
+// vpnTestDERPAddr 是测试配置里本节点通告、且所有对端也必须通告的 DERP 地址
+// （DERP 私有化要求单一 S，见 vpnnode.assertPeersShareDERP）。
 //
 // 用 127.0.0.1:9 而不是一个域名：startVPN 的构造与拆卸都是惰性的（tailcat 到 DERP
 // 的连接在后台按退避重试），因此用例既不需要网络也不会等超时，同时避免在测试里做
 // 真实 DNS 查询。
+const vpnTestDERPAddr = "127.0.0.1:9"
+
+// vpnTestConfig 返回一份启用了 VPN 的客户端配置，它的 DERP 指向本机一个没人监听的
+// 端口。
+
 func vpnTestConfig() *config.ClientConfig {
 	return &config.ClientConfig{
 		Servers: []*config.ServerProfile{{
@@ -222,11 +225,9 @@ func TestVPNPathsAreUnderTheExecutableDir(t *testing.T) {
 	}
 }
 
-// vpnTestPeer 造一个真实的对端引用：地址由本包的 vpn.BuildRegion 与一个临时身份
-// 生成，因此它是完整展开格式，且内嵌的 DERP 主机就是传入的 derpAddr。
-//
-// 用字面 IP（"203.0.113.7:443"）而不是域名：绕行 IP 的计算对字面地址不查 DNS，
-// 因此这些用例既不需要网络，也不会因为解析不到而漏掉断言的依据。
+// vpnTestPeer 造一个真实的对端引用：地址由 vpn.BuildRegion 与一个临时身份生成，
+// 因此它是完整展开格式，且内嵌的 DERP 主机就是传入的 derpAddr——DERP 私有化要求
+// 它与本节点通告的地址一致（见 vpnnode.assertPeersShareDERP）。
 func vpnTestPeer(t *testing.T, derpAddr string) config.VPNPeer {
 	t.Helper()
 
@@ -266,7 +267,7 @@ func TestStartVPNForcesRelayOnlyUnderTun(t *testing.T) {
 			cfg := vpnTestConfig()
 			cfg.VPN.RelayOnly = tc.relay
 			if tc.peers > 0 {
-				cfg.VPN.Peers = []config.VPNPeer{vpnTestPeer(t, "203.0.113.7:443")}
+				cfg.VPN.Peers = []config.VPNPeer{vpnTestPeer(t, vpnTestDERPAddr)}
 			}
 
 			stack, err := startVPN(cfg, vpnTestTimeouts(), vpnTestPaths(t), tc.tun)
@@ -284,34 +285,6 @@ func TestStartVPNForcesRelayOnlyUnderTun(t *testing.T) {
 				t.Errorf("%s = %v, want %v", vpnnode.RelayOnlyEnvKnob, got, tc.wantOnly)
 			}
 		})
-	}
-}
-
-// TestVPNBypassIPsUnionsLocalAndPeerDERPHosts 固定 runner 侧的并集：本地服务端
-// （配置里的 DERP 标记条目）与每个对端地址内嵌的 DERP 主机都必须出现在绕行列表
-// 里，否则那条连接会被 TUN 的阶梯路由捕获（见 docs/vpn-design.md 8.2）。
-func TestVPNBypassIPsUnionsLocalAndPeerDERPHosts(t *testing.T) {
-	cfg := vpnTestConfig()
-	cfg.VPN.Peers = []config.VPNPeer{vpnTestPeer(t, "203.0.113.7:443")}
-
-	stack, err := startVPN(cfg, vpnTestTimeouts(), vpnTestPaths(t), false)
-	if err != nil {
-		t.Fatalf("startVPN: %v", err)
-	}
-	t.Cleanup(func() { _ = stack.close() })
-
-	core := &Core{vpn: stack}
-	got := core.VPNBypassIPs(context.Background())
-	// 本地条目是 127.0.0.1（vpnTestConfig 的 DERP 标记条目），对端内嵌的是
-	// 203.0.113.7；两者都是字面 IP，因此这里没有任何 DNS 查询。
-	want := []string{"127.0.0.1", "203.0.113.7"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("VPNBypassIPs = %v, want %v", got, want)
-	}
-
-	// 没有启用 VPN 的会话上没有需要绕行的东西。
-	if got := (&Core{}).VPNBypassIPs(context.Background()); got != nil {
-		t.Errorf("VPNBypassIPs on a session without VPN = %v, want nil", got)
 	}
 }
 
@@ -344,5 +317,38 @@ func TestCheckVPNTunCompat(t *testing.T) {
 	var nilCore *Core
 	if err := nilCore.CheckVPNTunCompat(); err != nil {
 		t.Fatalf("CheckVPNTunCompat on a nil core = %v, want nil", err)
+	}
+}
+
+// TestRunDegradesWhenVPNFailsToStart 固定"VPN 是可选功能"这条运行期契约：VPN 配置
+// 写错（这里是对端地址非法）时基础代理必须照常起来，并把原因作为启动警告交给调用方
+// （托盘据此提示），而不是把整个客户端拖死。
+func TestRunDegradesWhenVPNFailsToStart(t *testing.T) {
+	cfg := testConfig()
+	cfg.Local.SocksPort = freePort(t)
+	cfg.Local.HTTPPort = 0
+	cfg.VPN.Enabled = true
+	cfg.VPN.Peers = []config.VPNPeer{{HostName: "b", Address: "not-a-tailcat-address"}}
+
+	core, err := Run(cfg)
+	if err != nil {
+		t.Fatalf("Run must keep the proxy running when only the VPN failed: %v", err)
+	}
+	t.Cleanup(core.Stop)
+
+	if core.vpn != nil {
+		t.Error("a failed VPN start must not leave a stack behind")
+	}
+	if core.derpShim != nil {
+		t.Error("a failed VPN start must not leave the DERP entry behind")
+	}
+	if core.StartupWarn == nil {
+		t.Fatal("the failure must be surfaced as a startup warning")
+	}
+	if !strings.Contains(core.StartupWarn.Error(), "invalid tailcat address") {
+		t.Errorf("the startup warning must name the cause, got: %v", core.StartupWarn)
+	}
+	if core.SocksServer == nil {
+		t.Error("the SOCKS5 entry must still be running")
 	}
 }

@@ -53,10 +53,19 @@ const (
 	// 或排障输出里互相混淆。官方编号目前是 1..~30 与 900 附近，这里取 901。
 	DefaultVPNRegionID = 901
 
-	// vpnMinOverlayBits 是 overlay 段允许的最大前缀长度（最小的段）：overlay
+	// vpnMaxOverlayPrefixBits 是 overlay 段允许的最长前缀（最小的段）：overlay
 	// 地址是按对端公钥在其中逐个分配的，/31 与 /32 放不下"若干个对端"，因此
 	// 把它们当作配置错误而不是可用的段。
-	vpnMinOverlayBits = 30
+	vpnMaxOverlayPrefixBits = 30
+
+	// vpnMinOverlayPrefixBits 是 overlay 段允许的最短前缀（最大的段）。
+	//
+	// 这个下界不是审美问题：槽位分配按段容量开一张表（见 vpn/node/overlay.go
+	// 的 Assign），容量是 2^(32-bits)。没有下界时，一份"看起来合法"的
+	// overlay_cidr（例如 0.0.0.0/0 或 10.0.0.0/8）会让启动直接申请 4 GiB /
+	// 16 MiB 并清零，32 位平台上还会因 int 溢出 panic。/16 对应 65534 个槽位
+	// （64 KiB），足以容纳任何现实规模的对端列表。
+	vpnMinOverlayPrefixBits = 16
 )
 
 // NormalizeVPNPeerPort 是 vpn.peer_port 的唯一归一化入口。
@@ -79,8 +88,9 @@ func NormalizeVPNPeerPort(peerPort, socksPort int) int {
 }
 
 // ParseVPNOverlayCIDR 解析并归一化 vpn.overlay_cidr，是它的唯一校验入口：
-// 空值取 DefaultVPNOverlayCIDR；其余值必须是合法的 IPv4 前缀、且前缀长度不
-// 超过 vpnMinOverlayBits，并归一化为网络地址（198.19.0.5/24 → 198.19.0.0/24）。
+// 空值取 DefaultVPNOverlayCIDR；其余值必须是合法的 IPv4 前缀、前缀长度落在
+// [vpnMinOverlayPrefixBits, vpnMaxOverlayPrefixBits] 内，并归一化为网络地址
+// （198.19.0.5/24 → 198.19.0.0/24）。
 //
 // 只接受 IPv4：overlay 地址是给 TUN 模式下的 A 记录应答用的，而本设计的
 // overlay 段刻意只覆盖 IPv4（AAAA 查询一律回 NOERROR 空应答，见
@@ -96,8 +106,9 @@ func ParseVPNOverlayCIDR(s string) (netip.Prefix, error) {
 	if !p.Addr().Is4() {
 		return netip.Prefix{}, fmt.Errorf("invalid overlay CIDR %q: only IPv4 is supported", s)
 	}
-	if p.Bits() > vpnMinOverlayBits {
-		return netip.Prefix{}, fmt.Errorf("invalid overlay CIDR %q: prefix length must be <= %d", s, vpnMinOverlayBits)
+	if p.Bits() > vpnMaxOverlayPrefixBits || p.Bits() < vpnMinOverlayPrefixBits {
+		return netip.Prefix{}, fmt.Errorf("invalid overlay CIDR %q: prefix length must be between /%d and /%d",
+			s, vpnMinOverlayPrefixBits, vpnMaxOverlayPrefixBits)
 	}
 	return p.Masked(), nil
 }
@@ -112,6 +123,16 @@ func DefaultVPNOverlayPrefix() netip.Prefix {
 	return p
 }
 
+// DERPAddr 是一个已校验的 DERP 对外地址（host 与数字端口）。
+//
+// 拆成结构体而不是两个返回值，因为本包是 Android AAR 的绑定面（Makefile 的
+// easyss-android-aar 绑定 ./mobile/ ./config/），而 gobind 要求导出函数最多
+// 返回一个值（外加 error）。同理，这里的字段刻意都是 gobind 支持的基本类型。
+type DERPAddr struct {
+	Host string
+	Port int
+}
+
 // SplitDERPAddr 把 "host:port" 形式的 DERP 地址拆成主机名与端口号，是
 // server.vpn.derp_addr 与 vpn.derp_addr 的共同校验入口。
 //
@@ -119,22 +140,22 @@ func DefaultVPNOverlayPrefix() netip.Prefix {
 // （一个 int），所以端口必须显式且是数字，host 必须非空。服务名（":https"）虽然
 // 对 net.Listen 合法，但在这里必须拒绝——对端把它读成 DERPPort 时没有地方去解析
 // 服务名。
-func SplitDERPAddr(addr string) (host string, port int, err error) {
+func SplitDERPAddr(addr string) (DERPAddr, error) {
 	if addr == "" {
-		return "", 0, fmt.Errorf("DERP address is empty")
+		return DERPAddr{}, fmt.Errorf("DERP address is empty")
 	}
 	host, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
-		return "", 0, fmt.Errorf("invalid DERP address %q: %w", addr, err)
+		return DERPAddr{}, fmt.Errorf("invalid DERP address %q: %w", addr, err)
 	}
 	if host == "" {
-		return "", 0, fmt.Errorf("invalid DERP address %q: host is empty", addr)
+		return DERPAddr{}, fmt.Errorf("invalid DERP address %q: host is empty", addr)
 	}
-	port, err = strconv.Atoi(portStr)
+	port, err := strconv.Atoi(portStr)
 	if err != nil || port <= 0 || port > 65535 {
-		return "", 0, fmt.Errorf("invalid DERP address %q: port %q is not in 1..65535", addr, portStr)
+		return DERPAddr{}, fmt.Errorf("invalid DERP address %q: port %q is not in 1..65535", addr, portStr)
 	}
-	return host, port, nil
+	return DERPAddr{Host: host, Port: port}, nil
 }
 
 // PortFromListen 从监听地址（如 ":443"、"0.0.0.0:8443"、"[::]:https"）解析出

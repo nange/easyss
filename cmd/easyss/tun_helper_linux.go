@@ -79,12 +79,8 @@ func openTunDevice(name string) (int, string, error) {
 // fd 路径下 tun2socks 只能设置自己 netstack 的 MTU，设备的 MTU 必须由建设备的
 // 这一侧负责，否则 netstack 会静默丢弃设备交上来的超限包（见
 // client/tun.Manager.engineMTU）。
-//
-// bypassIPs 是第 10 个位置参数（空格分隔的绕行 IPv4 列表，可为空）：内嵌 DERP
-// 的主机必须留在物理网卡上，否则 tailcat 到中继的连接会被 TUN 捕获并绕回 easyss
-// 自己的 SOCKS5（见 docs/vpn-design.md 8.2）。
 func runCreateScript(device, tunIP, tunGW, localGateway,
-	tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6 string, mtu int, bypassIPs string) error {
+	tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6 string, mtu int) error {
 	if scripts.CreateTunBytes == nil {
 		return fmt.Errorf("no create script for linux")
 	}
@@ -96,7 +92,7 @@ func runCreateScript(device, tunIP, tunGW, localGateway,
 	defer os.Remove(namePath) //nolint:errcheck
 
 	if err := execScriptWithOutput("bash", namePath, device, tunIP, tunGW, localGateway,
-		tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6, strconv.Itoa(mtu), bypassIPs); err != nil {
+		tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6, strconv.Itoa(mtu)); err != nil {
 		return err
 	}
 	return nil
@@ -198,5 +194,5 @@ func ensureTunRoutes(device string, cfg *proxy.TunConfig) error {
 	log.Info("[TUN-HELPER] recreating TUN routes", "device", device)
 	return runCreateScript(device, cfg.TunIP, cfg.TunGW, cfg.LocalGateway,
 		cfg.TunIPV6Sub, cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6,
-		sharedconfig.NormalizeTunMTU(cfg.MTU), strings.Join(cfg.BypassIPs, " "))
+		sharedconfig.NormalizeTunMTU(cfg.MTU))
 }

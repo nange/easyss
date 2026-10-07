@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"net/netip"
+	"testing"
+)
 
 // TestNormalizeVPNPeerPort 固定 vpn.peer_port 归一化的唯一入口：非正值表示
 // "未配置"（从 socks_port 派生），无法派生或派生结果越界时回退默认端口。
@@ -91,10 +94,12 @@ func TestDefaultVPNOverlayIsUsable(t *testing.T) {
 	if !prefix.Addr().Is4() {
 		t.Fatalf("DefaultVPNOverlayCIDR %q is not IPv4", DefaultVPNOverlayCIDR)
 	}
-	cgnat, err := ParseVPNOverlayCIDR("100.64.0.0/10")
-	if err != nil {
-		t.Fatalf("unexpected error parsing the CGNAT range: %v", err)
+	// CGNAT 段（/10）比 overlay 允许的最大段（/16）还大，因此它本身就是被拒收
+	// 的配置：这里按"拒绝"而不是"可解析"来断言，重叠检查用与它同址的更小段。
+	if _, err := ParseVPNOverlayCIDR("100.64.0.0/10"); err == nil {
+		t.Errorf("a /10 overlay must be rejected: the slot table would be %d entries", 1<<(32-10))
 	}
+	cgnat := netip.MustParsePrefix("100.64.0.0/10")
 	if prefix.Overlaps(cgnat) {
 		t.Errorf("DefaultVPNOverlayCIDR %q overlaps the CGNAT range %v", DefaultVPNOverlayCIDR, cgnat)
 	}

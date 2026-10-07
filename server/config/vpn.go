@@ -41,11 +41,11 @@ type VPNConfig struct {
 // server.vpn.derp_addr。
 func (fc *FileConfig) ResolveDERPAddr() (string, error) {
 	if addr := fc.Server.VPN.DERPAddr; addr != "" {
-		host, port, err := sharedconfig.SplitDERPAddr(addr)
+		da, err := sharedconfig.SplitDERPAddr(addr)
 		if err != nil {
 			return "", fmt.Errorf("invalid server.vpn.derp_addr: %w", err)
 		}
-		return net.JoinHostPort(host, strconv.Itoa(port)), nil
+		return net.JoinHostPort(da.Host, strconv.Itoa(da.Port)), nil
 	}
 	if fc.Server.Domain == "" {
 		return "", fmt.Errorf("cannot derive the DERP address: server.domain is empty; set server.vpn.derp_addr explicitly (host:port)")

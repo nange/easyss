@@ -107,9 +107,6 @@ func (s *session) tunUpViaHelper() error {
 		LocalGateway:   devCfg.LocalGateway,
 		LocalGatewayV6: devCfg.LocalGatewayV6,
 		MTU:            tmpCfg.MTU,
-		// 绕行 IP 随配置文件一起交给 helper（见 client/tun.Config.BypassIPs 与
-		// docs/vpn-design.md 8.2）：helper 是真正执行创建脚本的进程。
-		BypassIPs: devCfg.BypassIPs,
 	}
 
 	// 让 helper 可以通过 GET /tun 获取配置。

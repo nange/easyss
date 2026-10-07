@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -421,19 +420,8 @@ func (s *session) tunConfig() tun.Config {
 			cfg.ServerIPV6 = ipv6
 		}
 	}
-	// 内嵌 DERP 的主机必须绕行 TUN（见 docs/vpn-design.md 8.2）。解析预算有界：
-	// 单个主机解析失败只让它的绕行路由缺失（并留下告警日志），不阻塞 TUN 启用。
-	if core != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), tunBypassResolveTimeout)
-		cfg.BypassIPs = core.VPNBypassIPs(ctx)
-		cancel()
-	}
 	return cfg
 }
-
-// tunBypassResolveTimeout 限定一次"计算 TUN 绕行 IP"的解析预算。它只覆盖 peer
-// 侧 DERP 主机名的解析：本地服务端的地址已经由预解析缓存给出，不再查询。
-const tunBypassResolveTimeout = 5 * time.Second
 
 // startTunEngine 在后台启动 tun2socks 引擎。Manager.Start
 // 会阻塞至设备设置、稳定等待延迟和平台路由脚本完成（最长 60 秒），

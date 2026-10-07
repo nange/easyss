@@ -143,6 +143,10 @@ func (p *PeerFace) Start(ctx context.Context) error {
 		// 关闭 53 端口拦截：在对端面上 53 只是一个普通服务端口（如
 		// systemd-resolved），而不是"按查询域名重新分流"的 DNS。
 		DisableDNSIntercept: true,
+		// 关闭 UDP ASSOCIATE：对端面的 UDP 走 tailcat 的 UDP listener + 薄中继
+		// （见 udprelay.go），而不是 SOCKS5 的 ASSOCIATE。这里必须是显式关闭：
+		// 该路径此前只是"碰巧"因为绑不上 tailcat ULA 而失败。
+		DisableUDPAssociate: true,
 		// 唯一的跨节点协议契约：只拨字面 loopback 目标。域名与其他一切目标被拒。
 		DirectDialContext: LoopbackDialContext,
 		Timeouts:          p.opts.Timeouts,

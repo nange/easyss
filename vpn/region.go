@@ -40,7 +40,7 @@ const (
 // 节点不设 STUNPort：本设计只用 DERP 中继与 WireGuard 打洞，不需要 STUN
 // 探测；tailcat 的 wire 编码也会丢弃 STUN-only 节点。
 func BuildRegion(derpAddr string) (*tailcfg.DERPRegion, error) {
-	host, port, err := sharedconfig.SplitDERPAddr(derpAddr)
+	da, err := sharedconfig.SplitDERPAddr(derpAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -51,8 +51,8 @@ func BuildRegion(derpAddr string) (*tailcfg.DERPRegion, error) {
 		Nodes: []*tailcfg.DERPNode{{
 			Name:     DERPNodeName,
 			RegionID: RegionID,
-			HostName: host,
-			DERPPort: port,
+			HostName: da.Host,
+			DERPPort: da.Port,
 		}},
 	}, nil
 }

@@ -505,7 +505,9 @@ func exampleV3Config() string {
 			PeerPort:  sharedconfig.DefaultVPNPeerPort,
 			// 留空表示按 socks_port + 2000 派生（这里即 4080 → 6080）。
 			OverlayCIDR: sharedconfig.DefaultVPNOverlayCIDR,
-			DERPAddr:    "your-domain.com:443",
+			// 一般留空：DERP 私有化要求所有节点共用同一台 DERP 主机，默认取
+			// servers[] 里带 "derp": true 标记（否则 servers[0]）的那一条。
+			DERPAddr: "",
 			Peers: []config.VPNPeer{{
 				HostName: "b",
 				Address:  "tc...(copy the full address printed by peer b's vpn startup log)",

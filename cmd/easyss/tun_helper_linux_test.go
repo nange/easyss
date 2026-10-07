@@ -591,11 +591,11 @@ func parseRouteBlocks(t *testing.T, script []byte, verbs []string) []routeBlock 
 // gatewayIsDestination 报告一行路由命令是否把本地网关安装成**目标**（而不是把它
 // 用作下一跳）。
 //
-// 判据必须落在目标上：把内嵌 DERP 的主机绕出 TUN 时，那些主机路由的下一跳正是物理
-// 网关（linux `ip route replace <ip>/32 via "$local_gateway"`、darwin `route add
-// -host <ip> -gateway "$local_gateway"`），这是正确且必需的用法。被禁止的只有"把
-// 网关**本身**装成一条经由 TUN 的主机路由"——它会压过物理接口对局域网的直连路由，
-// 吞掉内核发给网关的存活探测（见本文件开头的注释与 create_tun_dev.sh 里的说明）。
+// 判据必须落在目标上：网关完全可以在一条路由里充当**下一跳**
+// （如 `ip route replace <net> via "$local_gateway"`），那是正确用法。被禁止的
+// 只有"把网关**本身**装成一条经由 TUN 的主机路由"——它会压过物理接口对局域网的
+// 直连路由，吞掉内核发给网关的存活探测（见本文件开头的注释与 create_tun_dev.sh
+// 里的说明）。
 func gatewayIsDestination(line string) bool {
 	fields := unwrapScriptHelper(strings.Fields(line))
 	idx := slices.IndexFunc(fields, func(f string) bool { return slices.Contains(createRouteVerbs, f) })

@@ -1,7 +1,9 @@
 package vpn
 
 import (
+	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
@@ -16,25 +18,24 @@ type Fallback interface {
 	Serve(w http.ResponseWriter, r *http.Request)
 }
 
-// NewDERPMount 返回 r 的顶层处理器：它把真正的 DERP 流量交给 derpH，其余一律
-// 交给 fallback。
+// NewDERPMount 返回 r 的顶层处理器：只有**来自本机回环**的 DERP 流量才交给
+// derpH，其余一律交给 fallback。
 //
-// 之所以要在 `/` 的兜底处理器内部按路径分流，而不是往 ServeMux 上多注册
-// `/derp`、`/derp/probe` 等模式，是为了**伪装面**：derpserver.Handler 对不带
-// Upgrade 头的请求会返回 426 与一行纯文本 "DERP requires connection upgrade"
-// （derp/derpserver/handler.go:37-44）。那是一个一眼就能认出"这台机器跑 DERP"
-// 的指纹。走这里之后，浏览器或扫描器访问 /derp 只会看到与其它未知路径完全一致
-// 的伪装页面。
+// 为什么 DERP 只接受回环来源（见 docs/vpn-design.md 3.3）：节点不直连服务端的
+// /derp，而是把 DERP 连接放进 easyss 隧道（客户端把 tailscale 的出站接进本地
+// 入口，见 runner/derpshim.go），服务端在握手阶段认出"目标就是我自己的 DERP
+// 地址"后改拨 127.0.0.1:<listen>（见 server/handler 的 dialTarget）。于是：
 //
-// 认账的条件只有两类：
+//   - 内嵌 DERP 不再是公网上的匿名中继：拿到域名的人无法直接用它中转，接入
+//     控制由 easyss 协议（master key）承担；
+//   - 公网上没有任何"回答 DERP 协议"的路径，扫描器看到的始终是伪装站点——
+//     包括 POST /derp/probe 这类探测（derpserver 对非 GET 会回一行独有文案）。
 //
-//   - `Upgrade: derp`（或 websocket，Tailscale 的备用传输）：真实的 DERP 客户端；
-//   - `/derp/probe` 与 `/derp/latency-check`：netcheck 的探测端点。它们是 DERP
-//     家族的固定路径，返回体不含任何 DERP 字样，因此保留不会有指纹问题；反之
-//     若把它们挡住，带 netcheck 的客户端会拿到伪装页而把中继判为不可用。
+// 在 `/` 的兜底处理器内部按来源与路径分流（而不是往 ServeMux 上多注册
+// `/derp`），是为了让"非 DERP 请求"与其它未知路径的响应逐字节一致。
 func NewDERPMount(derpH http.Handler, fallback Fallback) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isDERPRequest(r) {
+		if !isLoopbackRequest(r) || !isDERPRequest(r) {
 			fallback.Serve(w, r)
 			return
 		}
@@ -42,7 +43,35 @@ func NewDERPMount(derpH http.Handler, fallback Fallback) http.Handler {
 	})
 }
 
+// isLoopbackRequest 报告请求是否来自本机回环地址。
+//
+// 服务端的自我拨号（见 server/handler 的 dialTarget）连的是 127.0.0.1，因此
+// 来源必然是回环。任何来自其它地址的请求——无论带不带 DERP 的 Upgrade 头——
+// 都只会看到伪装站点。
+func isLoopbackRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	addr, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	if err != nil {
+		// 来源地址缺失或不可解析（例如手工构造的请求）：按"不是回环"处理。
+		return false
+	}
+	return addr.IsLoopback()
+}
+
 // isDERPRequest 报告一个请求是否属于 DERP 协议族。
+//
+// 认账的条件只有两类：
+//
+//   - `Upgrade: derp`（或 websocket，Tailscale 的备用传输）：真实的 DERP 客户端；
+//   - `/derp/probe` 与 `/derp/latency-check`：netcheck 的探测端点。它们是 DERP
+//     家族的固定路径，返回体不含任何 DERP 字样，因此保留不会有指纹问题；反之
+//     若把它们挡住，带 netcheck 的客户端会拿到伪装页而把中继判为不可用。它们
+//     只认 GET/HEAD——derpserver 的 ProbeHandler 对其它方法会回一行
+//     "bogus probe method"（derp/derpserver/handler.go），那是一个本函数存在的
+//     意义所在：不让任何非 DERP 客户端看到 DERP 独有的字节。
 func isDERPRequest(r *http.Request) bool {
 	path := r.URL.Path
 	if path != sharedconfig.DefaultVPNDERPPath && !strings.HasPrefix(path, sharedconfig.DefaultVPNDERPPath+"/") {
@@ -50,7 +79,7 @@ func isDERPRequest(r *http.Request) bool {
 	}
 	switch path {
 	case sharedconfig.DefaultVPNDERPPath + "/probe", sharedconfig.DefaultVPNDERPPath + "/latency-check":
-		return true
+		return r.Method == http.MethodGet || r.Method == http.MethodHead
 	}
 	if path != sharedconfig.DefaultVPNDERPPath {
 		// /derp 子树下的其它路径不存在，交给伪装页——真实 DERP 服务端也只有

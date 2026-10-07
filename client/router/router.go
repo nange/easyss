@@ -223,6 +223,23 @@ func NewDirectOnly() *Router {
 	return r
 }
 
+// NewProxyOnly 返回一个把所有目标都判为走代理的 Router，供内嵌 DERP 的入口使用。
+//
+// 它是 NewDirectOnly 的镜像：proxyRule 恒为 ProxyRuleProxy，MatchHostRule 在这条
+// 规则上短路，因此目标永远走隧道，不受用户的 proxy_rule / GeoIP / 自定义规则
+// 影响。这一点是必需的——DERP 私有化后（见 docs/vpn-design.md 3.3）tailcat 唯一
+// 的出口就是这条隧道，若让用户的规则把它判成直连，DERP 就会绕过隧道并因此
+// 连不上（服务端只对回环来源提供 DERP）。
+//
+// 与 NewDirectOnly 一样刻意不加载 GeoIP 与域名列表：一个恒定的判定不需要它们。
+// 它返回的 Router 只应交给那个内部入口，不要拿去替换主 Router。
+func NewProxyOnly() *Router {
+	r := &Router{}
+	r.proxyRule.Store(int32(ProxyRuleProxy))
+	r.ipv6Rule.Store(int32(IPV6RuleEnable))
+	return r
+}
+
 // CustomFileError 返回加载自定义直连/代理规则文件时遇到的第一个失败，
 // 两个文件都加载成功时返回 nil。
 func (r *Router) CustomFileError() error {

@@ -215,6 +215,15 @@ type Socks5Options struct {
 	// 监听在 53 的服务（如 systemd-resolved）就无法通过 VPN 访问，而且被拦截的
 	// 流量会按"查询域名"重新分流，与对端面"只拨字面 loopback"的契约相冲突。
 	DisableDNSIntercept bool
+	// DisableUDPAssociate 关闭 UDP ASSOCIATE：该命令一律回
+	// RepCommandNotSupported（RFC 1928 定义的应答），这个入口只剩 CONNECT。
+	//
+	// 两个内部入口需要它：VPN 对端面的 UDP 走 tailcat 的 UDP listener + 薄中继
+	// （见 vpn/node/udprelay.go），SOCKS5 的 ASSOCIATE 在那里只是"碰巧因为绑不上
+	// tailcat ULA 而失败"；内嵌 DERP 入口（见 runner 的 derpShim）只需要承载
+	// tailcat 的 TCP 连接，不该顺带成为一个本机可用的 UDP 代理。把设计约束写成
+	// 显式开关，而不是依赖某个 bind 失败的副作用。
+	DisableUDPAssociate bool
 	// VPN 是访问侧的 VPN 注入面；为 nil 时 VPN 分流完全关闭，本类型的行为与
 	// 引入 VPN 之前逐字节一致。非 nil 时命中对端的目标走隧道（见 VPNRoute）。
 	VPN VPNRoute
@@ -306,12 +315,17 @@ func NewSocks5Server(opts Socks5Options) (*Socks5Server, error) {
 		}
 	}
 
+	associate := thingssocks5.Handler(s.associateHandler)
+	if opts.DisableUDPAssociate {
+		associate = thingssocks5.Handler(s.associateDisabled)
+	}
+
 	s.srv = thingssocks5.NewServer(
 		thingssocks5.WithAuthMethods(authMethods),
 		// 域名必须在业务层判定（见 passthroughResolver），因此让库跳过解析。
 		thingssocks5.WithResolver(passthroughResolver{}),
 		thingssocks5.WithConnectHandle(thingssocks5.Handler(s.connectHandler)),
-		thingssocks5.WithAssociateHandle(thingssocks5.Handler(s.associateHandler)),
+		thingssocks5.WithAssociateHandle(associate),
 	)
 	return s, nil
 }
@@ -519,6 +533,18 @@ func (s *Socks5Server) associateHandler(_ context.Context, writer io.Writer, _ *
 		return fmt.Errorf("socks5 associate: writer is %T, not net.Conn", writer)
 	}
 	return s.udpAssociate(c)
+}
+
+// associateDisabled 是 DisableUDPAssociate 的 handler：按 RFC 1928 回
+// RepCommandNotSupported，而不是断开连接——客户端会得到一个明确的"不支持该
+// 命令"，而不是网络错误。
+func (s *Socks5Server) associateDisabled(_ context.Context, writer io.Writer, _ *thingssocks5.Request) error {
+	c, ok := writer.(net.Conn)
+	if !ok {
+		return fmt.Errorf("socks5 associate: writer is %T, not net.Conn", writer)
+	}
+	log.Debug("[SOCKS5] UDP ASSOCIATE disabled on this entry")
+	return s.replyError(c, repCommandNotSupported)
 }
 
 // udpAssociate 建立 UDP 中继：在与 TCP 入口相同的地址上绑定 UDP socket（与历史
