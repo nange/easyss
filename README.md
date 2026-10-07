@@ -608,6 +608,11 @@ sysctl -p
 服务端靠这个值认出"这条隧道连接是要访问我自己的 DERP"，写法不一致时中继不可达
 （表现为节点日志里反复出现 DERP 连接失败）。
 
+节点侧的 DERP 连接由一个专门的拨号器送进 easyss 隧道（tailcat 的 `DERPDialer`
+选项，见 `go.mod` 里的两个 `replace`：`tailscale.com` 与
+`github.com/tailscale/tailcat`）。该选项目前由本地 fork 提供，上游合并前请按
+`go.mod` 注释切换 replace 的形态。
+
 #### 1. 服务端（DERP 中继主机 S）
 
 ```jsonc
@@ -686,8 +691,8 @@ ssh user@b
 * UDP 单包上限 1232 字节，适合 DNS / QUIC 首包，不适合大包高带宽 UDP。
 * 没有节点自动发现：对端地址由运维配置。
 * **只支持单一 DERP 主机**（见上）：所有节点的 DERP 配置必须一致，否则启动即报错。
-* **Android 客户端暂不支持 VPN**：DERP 私有化依赖 tailscale 的一条拨号钩子，而它在
-  移动端构建里被排除；在 Android 上启用 `vpn` 会被明确拒绝并降级为"仅代理"。
+* **Android 客户端暂不支持 VPN**：DERP 连接走的是 tailcat 的拨号器选项（见下），
+  库层面在 Android 上同样可用；缺的是移动端的 VPN 配置入口与状态目录（当前非目标）。
 * `vpn.enabled=false`（默认）时对现有功能零影响。
 
 完整的字段说明、实现细节与安全边界见 [docs/vpn-design.md](docs/vpn-design.md)。
