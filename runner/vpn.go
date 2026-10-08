@@ -7,6 +7,7 @@ import (
 	"net"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/proxy"
@@ -276,16 +277,51 @@ func warnOnSingleLabelPeerNames(goos string, peers []vpnnode.PeerRef) {
 		"host_names", strings.Join(names, ", "))
 }
 
+// vpnCloseTimeout 是等待 VPN 栈拆除完成的上限。拆除必须是有界的：tailcat →
+// wireguard-go → magicsock 的关闭路径上有会永久阻塞的分支（magicsock 在 DERP-only
+// 模式下重建 UDP socket 时可能把已经 park 的 receive goroutine 遗弃在一个再也不会
+// 被关闭的 blockForeverConn 上，于是 wireguard-go 的 Device.Close 永远停在
+// netc.stopping.Wait()）。无界拆除的表现就是"托盘图标消失了、进程却永不退出"
+// （退出路径），或者"点了切换服务器没有任何反应"（切换路径）——两者都只能强杀
+// 进程。超时后放弃等待：卡住的栈要么随进程退出一起消失（退出路径），要么被留在
+// 日志里（切换路径，error 里会说明处置方式）。
+//
+// 它是变量，以便测试把它缩小到毫秒级（与 runCore、rollbackTunRoutes 同一手法）。
+var vpnCloseTimeout = 10 * time.Second
+
+// closeVPNStack 是 StopVPN 实际执行的关闭体。它是变量，使测试能注入一个永不返回
+// 的关闭过程来验证上面的超时路径，而不必真的构造一个会卡死的 tailcat 引擎。
+var closeVPNStack = func(stack *vpnStack) error { return stack.close() }
+
 // StopVPN 停止本节点的 VPN（对端面与全部隧道客户端）。它幂等，且在没有启用 VPN
 // 的会话上是空操作。
+//
+// 关闭在后台 goroutine 上进行，本函数最多等 vpnCloseTimeout：关闭卡死时不能让
+// 调用方（退出序列或服务器切换序列）跟着一起卡（见 vpnCloseTimeout 的注释）。
 func (c *Core) StopVPN() {
 	stack := c.vpn
 	c.vpn = nil
 	if stack == nil {
 		return
 	}
-	if err := stack.close(); err != nil {
-		log.Warn("[VPN] stop", "err", err)
+
+	// 关闭体在派发前捕获：goroutine 不再读包级变量（与 runCore、rollbackTunRoutes
+	// 的用法一致，也让测试替换注入点时不必与残留 goroutine 竞争）。
+	closeFn := closeVPNStack
+	done := make(chan error, 1)
+	go func() { done <- closeFn(stack) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			log.Warn("[VPN] stop", "err", err)
+		}
+	case <-time.After(vpnCloseTimeout):
+		// 放弃等待，但不放弃告知：卡住的引擎仍在占用内存与 DERP 连接。
+		// 退出路径上进程马上就结束了，切换路径上它会一直留到用户重启。
+		log.Error("[VPN] stop timed out; abandoning this vpn stack",
+			"timeout", vpnCloseTimeout,
+			"hint", "restart easyss if the vpn or server switching misbehaves")
 	}
 }
 
