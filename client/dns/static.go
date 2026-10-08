@@ -8,8 +8,7 @@ import (
 	"github.com/nange/easyss/v3/stats"
 )
 
-// StaticNames 是本地静态名的来源：命中时由 DNS 前端就地应答，不再向上游查询
-// （见 docs/vpn-design.md 5.4）。
+// StaticNames 是本地静态名的来源：命中时由 DNS 前端就地应答，不再向上游查询。
 //
 // 接口定义在消费方（本包）：实现方是 vpn/node 的 Route，而 vpn/node 已经依赖
 // client/proxy，反向依赖会造成导入环。
@@ -34,7 +33,7 @@ const StaticNameTTL = 60
 // 它被**两个 DNS 前端共用**，这是硬要求而不是复用癖：客户端在 TUN 模式下的查询
 // 经 tun2socks 到达代理的 DNS 拦截器（`client/proxy`），而 `enable_forward_dns`
 // 部署（LAN 设备把 DNS 指向本机）走 client/dns 的转发服务器。两条路径各写一份
-// A/AAAA 语义必然漂移，而这里的两条契约都不允许漂移（见 docs/vpn-design.md 5.4）：
+// A/AAAA 语义必然漂移，而这里的两条契约都不允许漂移：
 //
 //   - A 查询返回该名字的 overlay IPv4；
 //   - AAAA 查询返回 NOERROR 且**无记录**——不是 NXDOMAIN。overlay 段只有 IPv4，

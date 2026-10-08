@@ -97,7 +97,7 @@ func TestServeUsesCallerListener(t *testing.T) {
 // （域名、IPv4、IPv6、内网地址）都判为直连，且不会被 IPv6 策略门拦下。
 //
 // 这条不变量是"对端面只可能拨本机 loopback"的实现基础：对端面不做任何分流判定，
-// 唯一的门槛是拨号器自己（见 docs/vpn-design.md 5.1）。
+// 唯一的门槛是拨号器自己。
 func TestNewDirectOnlyRoutesEverythingDirectly(t *testing.T) {
 	rt := router.NewDirectOnly()
 	for _, host := range []string{

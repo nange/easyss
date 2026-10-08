@@ -46,13 +46,13 @@ type PeerFaceOptions struct {
 	// nil 表示用 tailcat 的默认拨号器（只适用于公开可达的 DERP）。
 	DERPDialer func(ctx context.Context, network, addr string) (net.Conn, error)
 	// DERPOnly 交给 tailcat 的同名选项：为 true 时不建 UDP socket，节点间没有
-	// 直连路径（见 docs/vpn-design.md 8.1）。
+	// 直连路径。
 	DERPOnly bool
 }
 
 // PeerFace 是本节点的对端面：让别人能通过 tailcat 隧道访问本机的服务端口。
 //
-// 它的形状由两条实测约束决定（见 docs/vpn-design.md 2.1/2.2）：
+// 它的形状由两条实测约束决定：
 //
 //   - tailcat 客户端完全不接受入站连接，因此"被别人拨进来"只能靠一个
 //     tailcat **Server**；
@@ -61,7 +61,7 @@ type PeerFaceOptions struct {
 //     Socks5Server，UDP 桥到一个同样只接受字面 loopback 目标的薄中继。
 //
 // 两条路径共用同一条安全边界：对端面只可能拨自己的 loopback，绝不可能成为内网
-// 跳板（见 5.1 的内层 CONNECT 契约）。
+// 跳板（内层 CONNECT 契约）。
 type PeerFace struct {
 	opts  PeerFaceOptions
 	srv   *tailcat.Server
@@ -232,7 +232,7 @@ func (p *PeerFace) Stop() error {
 //
 // 写之前重新做一次完整格式自检：这是运维看到地址的最后一道关口，写出去一份短格式
 // 地址等于把"每个对端都会去拉官方 DERPMap"这个隐患发给了所有人。目录 0700、文件
-// 0600——地址里含 preshared key，等价于对端面的接入凭据（见第 7 节）。
+// 0600——地址里含 preshared key，等价于对端面的接入凭据。
 func (p *PeerFace) PublishAddr(path string) (string, error) {
 	addr := p.TailcatAddr()
 	if err := AssertFullAddr(addr); err != nil {
@@ -257,7 +257,7 @@ func (p *PeerFace) PublishAddr(path string) (string, error) {
 
 // LoopbackDialContext 是对端面唯一的拨号器：只接受**字面** loopback 目标。
 //
-// 这是整个 VPN 的安全边界（见 docs/vpn-design.md 5.1）：对端面不解析任何名字，
+// 这是整个 VPN 的安全边界：对端面不解析任何名字，
 // 因此"只可能拨自己的 loopback"不依赖 DNS 是否可信，也不可能成为内网跳板。域名
 // （包括 "localhost"）与其他一切目标一律被拒——即便访问侧本该把目标归一化成字面
 // 127.0.0.1，这里也不假设它会那么做。

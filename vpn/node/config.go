@@ -91,7 +91,7 @@ func NewConfig(opts Options) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	// DERP 私有化（见 docs/vpn-design.md 3.3）：节点的 DERP 连接只经 easyss
+	// DERP 私有化：节点的 DERP 连接只经 easyss
 	// 隧道到达，由服务端把它映射到自己的回环监听。这条路径要求所有节点通告
 	// 同一个 DERP host:port，否则访问对端时那台 DERP 根本不可达——而这会以
 	// "隧道拨号超时"的形式出现在第一次访问对端时，所以在这里当场拒绝。

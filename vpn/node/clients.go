@@ -32,10 +32,10 @@ type ClientSetOptions struct {
 	// 正常情况下这个缓存**永远不会被访问**：peer 地址是完整展开格式（启动时由
 	// AssertFullAddr 保证），`ConnInfo.Expand` 因此直接返回，不需要任何 DERP map
 	// 来源。留这个出口是为了两件事：把缓存持久化（tailcat CLI 就是这么做的），
-	// 以及让测试**证明**零访问——那等价于"零官方 DERPMap 请求"（见 4.7 与 12.5）。
+	// 以及让测试**证明**零访问——那等价于"零官方 DERPMap 请求"。
 	DERPMapCache tailcat.DERPMapCache
 	// DERPDialer / DERPOnly 交给每个 tailcat 客户端的同名选项（见
-	// PeerFaceOptions 与 docs/vpn-design.md 3.3/8.1）。
+	// PeerFaceOptions）。
 	DERPDialer func(ctx context.Context, network, addr string) (net.Conn, error)
 	DERPOnly   bool
 }
@@ -48,7 +48,7 @@ type ClientSetOptions struct {
 // 不会发起任何网络活动，也不会留下 goroutine；没用过的 Client 关闭是空操作。
 //
 // 整组共用一个 client 私钥：它必须在所有对端上一致，因为 `vpn.allow_clients`
-// 白名单是按 node key 匹配的（见 docs/vpn-design.md 7.3）。
+// 白名单是按 node key 匹配的。
 type ClientSet struct {
 	key key.NodePrivate
 

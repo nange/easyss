@@ -146,7 +146,7 @@ func newTestRoute(t *testing.T, peers ...PeerRef) (*Route, *Overlay) {
 // 还是 overlay IP，隧道里传输的 CONNECT 目标**恒为字面 127.0.0.1:<port>**。
 //
 // 这条契约是访问侧与对端面之间唯一的跨节点协议，也是"对端不需要知道访问侧的任何
-// 配置"这一结论的全部依据（见 docs/vpn-design.md 5.1）。
+// 配置"这一结论的全部依据。
 func TestRouteInnerTargetIsLiteralLoopback(t *testing.T) {
 	echoAddr, stopEcho := startTCPEchoLocal(t)
 	defer stopEcho()

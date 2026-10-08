@@ -8,7 +8,7 @@ import (
 // ResolveStatic 把对端名字解析成它的 overlay IPv4。它同时满足两个 DNS 前端的
 // 静态名接口（client/dns.StaticNames 与 client/proxy.VPNStaticNames，两者方法集
 // 相同）：TUN 模式下的查询到达代理的 DNS 拦截器，而 enable_forward_dns 的 LAN
-// 部署走转发服务器——两处都必须命中（见 docs/vpn-design.md 5.4）。
+// 部署走转发服务器——两处都必须命中。
 //
 // 非 TUN 模式下应用书写的对端名由系统解析器处理，那时应用应当显式使用代理
 // SOCKS5 端口。

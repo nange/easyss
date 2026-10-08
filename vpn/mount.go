@@ -21,7 +21,7 @@ type Fallback interface {
 // NewDERPMount 返回 r 的顶层处理器：只有**来自本机回环**的 DERP 流量才交给
 // derpH，其余一律交给 fallback。
 //
-// 为什么 DERP 只接受回环来源（见 docs/vpn-design.md 3.3）：节点不直连服务端的
+// 为什么 DERP 只接受回环来源：节点不直连服务端的
 // /derp，而是把 DERP 连接放进 easyss 隧道（客户端把 tailscale 的出站接进本地
 // 入口，见 runner/derpshim.go），服务端在握手阶段认出"目标就是我自己的 DERP
 // 地址"后改拨 127.0.0.1:<listen>（见 server/handler 的 dialTarget）。于是：

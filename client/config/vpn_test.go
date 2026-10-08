@@ -218,7 +218,7 @@ func TestVPNConfigJSONRoundTrip(t *testing.T) {
 }
 
 // TestVPNConfigParsesFromJSON 固定配置文件里的 vpn 键能完整解析（字段名与
-// README/设计文档一致），并守住 servers[].derp 的解析。
+// README 一致），并守住 servers[].derp 的解析。
 func TestVPNConfigParsesFromJSON(t *testing.T) {
 	cfg, err := ParseConfigJSON(`{
 		"version": 3,

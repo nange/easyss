@@ -18,7 +18,7 @@ type VPNPeer struct {
 	Address  string `json:"address"`
 
 	// Port 是对端"对端面"在隧道内的端口，未配置时取
-	// config.DefaultVPNPeerPort（详见 docs/vpn-design.md 4.3）。
+	// config.DefaultVPNPeerPort。
 	Port int `json:"port,omitempty"`
 }
 
@@ -42,8 +42,7 @@ type VPNConfig struct {
 	PeerPort int `json:"peer_port,omitempty"`
 
 	// OverlayCIDR 是访问侧**本地**给对端分配的 overlay 虚拟 IPv4 段。
-	// 它不进隧道、对端看不到，因此不需要与其他节点一致（见 VPNConfig 的类型注释
-	// 与 docs/vpn-design.md 5.1）。
+	// 它不进隧道、对端看不到，因此不需要与其他节点一致（见 VPNConfig 的类型注释）。
 	OverlayCIDR string `json:"overlay_cidr,omitempty"`
 
 	// DERPAddr 是本节点在自己地址里通告的 DERP host:port。未配置时从被 derp
@@ -62,8 +61,7 @@ type VPNConfig struct {
 // RelayOnlyEnabled 报告是否强制"只经 DERP 中继"。
 //
 // relay_only 缺省为 true（应对跨省 UDP QoS 的默认姿态），且 TUN 模式下必须为
-// true——否则 magicsock 会建 UDP socket，其出网流量被 TUN 捕获后形成环路
-// （见 docs/vpn-design.md 8.1）。
+// true——否则 magicsock 会建 UDP socket，其出网流量被 TUN 捕获后形成环路。
 func (v VPNConfig) RelayOnlyEnabled() bool {
 	return v.RelayOnly == nil || *v.RelayOnly
 }

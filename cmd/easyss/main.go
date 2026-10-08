@@ -563,7 +563,7 @@ func exampleSimpleConfig() string {
 //
 // 分成两半是有意的，因为它们的收件人不同：client nodekey 要填到**对端**的
 // `vpn.allow_clients` 里，本节点地址要填到**对端**的 `vpn.peers[].address` 里。
-// 地址内嵌 preshared key，等价于对端面的接入凭据（见设计文档第 7 节）——所以这里
+// 地址内嵌 preshared key，等价于对端面的接入凭据——所以这里
 // 只逐行打印，不写任何网络位置，交给用户自己复制。
 func printVPNIdentity(cfg *config.ClientConfig) error {
 	id, err := runner.LoadVPNIdentity(cfg)

@@ -35,7 +35,7 @@ func TestPackageDoesNotDependOnTailcat(t *testing.T) {
 		if strings.TrimSpace(line) == "github.com/tailscale/tailcat" {
 			t.Fatalf("vpn must not depend on tailcat: the server binary only needs the DERP relay, " +
 				"and importing tailcat pulls the whole WireGuard engine into it (measured +14 MiB, +109%%); " +
-				"move the tailcat-dependent code to vpn/node (see docs/vpn-design.md 12.5)")
+				"move the tailcat-dependent code to vpn/node")
 		}
 	}
 }

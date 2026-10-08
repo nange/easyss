@@ -48,8 +48,7 @@ type ServerProfile struct {
 
 	// DERP 标记"用这条服务端的 address:port 作为内嵌 DERP 中继的主机与端口"。
 	// 它同时是访问侧拨号的目标与自身地址里通告的 DERP 位置（见
-	// ClientConfig.VPNDERPAddr）。没有任何条目被标记时回退 servers[0]，
-	// 详见 docs/vpn-design.md 4.6。
+	// ClientConfig.VPNDERPAddr）。没有任何条目被标记时回退 servers[0]。
 	DERP bool `json:"derp,omitempty"`
 }
 

@@ -44,7 +44,7 @@ func (a routeAction) String() string {
 	}
 }
 
-// VPNRoute 是访问侧 VPN 的注入面（见 docs/vpn-design.md 5.3）：把「目标是不是
+// VPNRoute 是访问侧 VPN 的注入面：把「目标是不是
 // 本机配置的对端」与「两条经隧道的拨号路径」暴露给代理层。三处注入式改动
 // （decide、routeTCPReplied、handleRegularUDP）都以它为界，nil 表示功能关闭。
 //
@@ -57,7 +57,7 @@ type VPNRoute interface {
 	Lookup(host string) (canonical string, ok bool)
 	// DialTCP 打开一条经隧道到对端服务端口的 TCP 连接。target 是访问侧看到的
 	// 原始目标（host:port）；把它归一化成字面 127.0.0.1:<port> 是实现内部的事
-	// （内层 CONNECT 契约，见 5.1）。
+	// （内层 CONNECT 契约）。
 	DialTCP(ctx context.Context, target string) (net.Conn, error)
 	// DialUDP 打开一条经隧道到对端服务端口的 UDP 流。返回的连接在首次写入时
 	// 自动补上一次性目标头（见 vpn/node/udprelay.go 的 EncodeUDPTarget），因此
@@ -66,7 +66,7 @@ type VPNRoute interface {
 }
 
 // VPNStaticNames 是 VPNRoute 的**可选**扩展：实现它的访问侧能为对端名字就地
-// 应答 DNS（见 docs/vpn-design.md 5.4）。
+// 应答 DNS。
 //
 // 做成可选能力而不是第二个注入字段，是因为注入的本来就是同一个对象
 // （`vpn/node.Route` 同时实现两者，runner 只把它交给 `Socks5Options.VPN`）：

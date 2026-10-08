@@ -23,7 +23,7 @@ import (
 // tailcat 地址本身决定。用 127.0.0.1 而不是对端的 host_name 或 overlay IP 有两条
 // 好处：对端面的拨号器只接受字面 loopback（安全边界因此可证，见
 // LoopbackDialContext），且隧道里不会出现任何只在访问侧才有意义的名字。
-// 这是两端唯一的跨节点协议契约（见 docs/vpn-design.md 5.1）。
+// 这是两端唯一的跨节点协议契约。
 const innerTargetHost = "127.0.0.1"
 
 // RouteOptions 是构造访问侧所需的输入。
@@ -89,7 +89,7 @@ func (r *Route) DialTCP(ctx context.Context, target string) (net.Conn, error) {
 	defer cancel()
 	// 只拨对端在隧道内的对端面端口：对端的其他服务端口由对端面代为拨号，因此
 	// 访问侧不需要（也无法）知道它们。地址不写进错误信息——它内嵌 preshared
-	// key，等价于对端面的接入凭据（见 docs/vpn-design.md 第 7 节）。
+	// key，等价于对端面的接入凭据。
 	conn, err := client.DialTCPPort(ctx, uint16(ref.Port))
 	if err != nil {
 		stats.RecordVPNDialError()

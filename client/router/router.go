@@ -227,7 +227,7 @@ func NewDirectOnly() *Router {
 //
 // 它是 NewDirectOnly 的镜像：proxyRule 恒为 ProxyRuleProxy，MatchHostRule 在这条
 // 规则上短路，因此目标永远走隧道，不受用户的 proxy_rule / GeoIP / 自定义规则
-// 影响。这一点是必需的——DERP 私有化后（见 docs/vpn-design.md 3.3）tailcat 唯一
+// 影响。这一点是必需的——DERP 私有化后 tailcat 唯一
 // 的出口就是这条隧道，若让用户的规则把它判成直连，DERP 就会绕过隧道并因此
 // 连不上（服务端只对回环来源提供 DERP）。
 //

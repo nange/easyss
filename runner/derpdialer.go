@@ -15,7 +15,7 @@ import (
 // newDERPDialer 返回交给 tailcat 的 DERP 拨号器（见 tailcat.Server/Client 的
 // DERPDialer 选项）：tailcat 到内嵌 DERP 的 TCP 连接由此经 easyss 隧道送出。
 //
-// 为什么必须是拨号器，而不是环境变量（见 docs/vpn-design.md 3.3）：
+// 为什么必须是拨号器，而不是环境变量：
 //
 //   - tailcat 在 createEngine 里调用 netns.SetEnabled(false)，因此 netns.NewDialer
 //     返回的是**未包装**的普通拨号器，ALL_PROXY 那条路在 tailcat 里根本不会生效；

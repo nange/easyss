@@ -9,7 +9,7 @@ import (
 
 // VPN 组网（内嵌 DERP 的节点互访）的共享常量与归一化入口。
 //
-// 设计见 docs/vpn-design.md。这里只放"客户端与服务端都必须一致"的那部分，
+// 这里只放"客户端与服务端都必须一致"的那部分，
 // 各自 JSON 视图的默认值仍由 client/config 与 server/config 的 applyDefaults
 // 负责，避免出现第二份定义。
 
@@ -34,7 +34,7 @@ const (
 	// DefaultVPNOverlayCIDR 是访问侧在**本地**给对端分配的 overlay 虚拟 IPv4
 	// 段。它只用于访问侧本地的两件事：TUN 模式下静态解析对端名字的 DNS 应答，
 	// 以及 SOCKS5 路由判定。它**不进隧道**、对端永远看不到，因此不需要与其他
-	// 节点保持一致（见 docs/vpn-design.md 5.1）。
+	// 节点保持一致。
 	//
 	// 选 198.19.0.0/24（RFC 2544 benchmarking 段）而非 100.64.0.0/10（CGNAT）：
 	// 后者在物理接口上常常已经存在一条 on-link 路由，它比 TUN 安装的
@@ -93,8 +93,7 @@ func NormalizeVPNPeerPort(peerPort, socksPort int) int {
 // （198.19.0.5/24 → 198.19.0.0/24）。
 //
 // 只接受 IPv4：overlay 地址是给 TUN 模式下的 A 记录应答用的，而本设计的
-// overlay 段刻意只覆盖 IPv4（AAAA 查询一律回 NOERROR 空应答，见
-// docs/vpn-design.md 5.4）。
+// overlay 段刻意只覆盖 IPv4（AAAA 查询一律回 NOERROR 空应答）。
 func ParseVPNOverlayCIDR(s string) (netip.Prefix, error) {
 	if s == "" {
 		return netip.MustParsePrefix(DefaultVPNOverlayCIDR), nil
