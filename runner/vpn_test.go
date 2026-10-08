@@ -405,6 +405,46 @@ func TestWarnOnSingleLabelPeerNames(t *testing.T) {
 	}
 }
 
+// TestStopVPNAbandonsAStuckStack 固定"关闭卡死时 StopVPN 也必须按时返回"。
+//
+// 这是退出路径（托盘"退出"）与服务器切换路径共用的拆除入口，而 tailcat →
+// wireguard-go → magicsock 的关闭链上存在会永久阻塞的分支：无界等待的表现就是
+// 托盘图标消失了、进程却永远不退出。这里注入一个永不返回的关闭过程，断言调用方
+// 在 vpnCloseTimeout 之后仍能继续往下走（真实卡死现场见 vpnCloseTimeout 的注释）。
+func TestStopVPNAbandonsAStuckStack(t *testing.T) {
+	origClose, origTimeout := closeVPNStack, vpnCloseTimeout
+	t.Cleanup(func() {
+		closeVPNStack, vpnCloseTimeout = origClose, origTimeout
+	})
+
+	// 关闭过程永远不返回；测试结束时才放行，避免它成为永久泄漏的 goroutine。
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	closeVPNStack = func(*vpnStack) error {
+		<-release
+		return nil
+	}
+	vpnCloseTimeout = 50 * time.Millisecond
+
+	core := &Core{}
+	core.vpn = &vpnStack{}
+
+	returned := make(chan struct{})
+	go func() {
+		core.StopVPN()
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StopVPN did not return: a stuck vpn teardown must not block the caller forever")
+	}
+	if core.vpn != nil {
+		t.Error("StopVPN must take the stack off the core even when closing it timed out")
+	}
+}
+
 // TestRunDegradesWhenVPNFailsToStart 固定"VPN 是可选功能"这条运行期契约：VPN 配置
 // 写错（这里是对端地址非法）时基础代理必须照常起来，并把原因作为启动警告交给调用方
 // （托盘据此提示），而不是把整个客户端拖死。
