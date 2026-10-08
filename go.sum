@@ -481,8 +481,8 @@ github.com/nange/systray v0.3.0-easyss.1 h1:KLjDX7U9rPQMYNRfTiD1VctDD44E2ZItF3Xo
 github.com/nange/systray v0.3.0-easyss.1/go.mod h1:aoA1tAjYSKH/iVc761t7IVDOaTRYmOwglbcbpcLF1v0=
 github.com/nange/tailcat v0.0.0-20261007163924-90dee2199828 h1:uaEEqhenOAyngIuTFZ3f128N2UcmWzXw+I6//cdZezE=
 github.com/nange/tailcat v0.0.0-20261007163924-90dee2199828/go.mod h1:ux9NIibntkdEPq7Tat5BpT390+xca2PYcTLr6luLwEg=
-github.com/nange/tailscale v0.0.0-20261007134803-8452f30bcc38 h1:psZJFt711TxDMriSf2phxMROOqXh8gTZ+xj/wlwrCOg=
-github.com/nange/tailscale v0.0.0-20261007134803-8452f30bcc38/go.mod h1:VQOMvttDFq1pZkWMaSaFf+HUWfP5QlZUKLW3dCNzWmc=
+github.com/nange/tailscale v0.0.0-20261008075510-ccb5bfef22c9 h1:SS6e4w1OVWylaG6y7Y/5TvQR1u27hCgjWcgwa1rG6bM=
+github.com/nange/tailscale v0.0.0-20261008075510-ccb5bfef22c9/go.mod h1:VQOMvttDFq1pZkWMaSaFf+HUWfP5QlZUKLW3dCNzWmc=
 github.com/nishanths/exhaustive v0.12.0 h1:vIY9sALmw6T/yxiASewa4TQcFsVYZQQRUQJhKRf3Swg=
 github.com/nishanths/exhaustive v0.12.0/go.mod h1:mEZ95wPIZW+x8kC4TgC+9YCUgiST7ecevsVDTgc2obs=
 github.com/nishanths/exhaustive v0.13.0 h1:Rof0axOSNQaaPaPmLK5RxcRrJV2Vcv+vfUmuRy+2EAM=
