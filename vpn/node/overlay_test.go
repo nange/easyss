@@ -119,7 +119,7 @@ func broadcastAddr(p netip.Prefix) netip.Addr {
 }
 
 // TestAssignLookup 固定访问侧的两条查找路径：host_name（不区分大小写）与
-// overlay 字面 IP。
+// overlay 字面 IP，并固定两条路径都不会把未分配的名字/地址解析成对端。
 func TestAssignLookup(t *testing.T) {
 	prefix := netip.MustParsePrefix("198.19.0.0/24")
 	peers := overlayPeers(t, 3)
@@ -148,12 +148,38 @@ func TestAssignLookup(t *testing.T) {
 	if _, ok := o.Lookup("unknown-node"); ok {
 		t.Error("Lookup of an unknown name hit")
 	}
-	// 段内但未分配，以及段外地址都不该命中。
-	for _, host := range []string{"198.19.0.200", "10.0.0.1", "not-an-ip"} {
+	// 段内但未分配，以及段外地址都不该命中。段内那个地址必须由分配结果推导：
+	// 槽位来自公钥哈希，任何写死的段内地址都可能恰好被本次分配占用（这正是
+	// 这个测试曾经的偶发失败来源）。
+	for _, host := range []string{overlayFreeAddr(t, o), "10.0.0.1", "not-an-ip"} {
 		if _, ok := o.Lookup(host); ok {
 			t.Errorf("Lookup(%q) hit, want miss", host)
 		}
 	}
+}
+
+// overlayFreeAddr 返回 o 的段内一个确定未被分配的宿主地址，用于固定"未分配的
+// overlay 地址不该命中 Lookup"。遍历从网络地址之后开始，跳过广播地址。
+//
+// 段内为空（满段）时无从取未分配地址，直接判失败而不是返回零值——调用方都是
+// 小规模分配，这种情况只可能来自 Assign 自身的缺陷。
+func overlayFreeAddr(t *testing.T, o *Overlay) string {
+	t.Helper()
+	taken := make(map[netip.Addr]bool, len(o.Peers()))
+	for _, p := range o.Peers() {
+		if addr, ok := o.Addr(p.HostName); ok {
+			taken[addr] = true
+		}
+	}
+
+	prefix := o.Prefix()
+	for addr := prefix.Masked().Addr().Next(); prefix.Contains(addr) && addr != broadcastAddr(prefix); addr = addr.Next() {
+		if !taken[addr] {
+			return addr.String()
+		}
+	}
+	t.Fatalf("overlay %v has no free address to probe", prefix)
+	return ""
 }
 
 // TestAssignRejectsDuplicateNode 固定"两个 host_name 指向同一个节点"是配置错误：
