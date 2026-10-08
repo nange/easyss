@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -211,16 +212,47 @@ func TestLoadVPNIdentity(t *testing.T) {
 	}
 }
 
+// lockedLogBuffer 是并发安全的日志缓冲。
+//
+// 断言发生在测试 goroutine 上，而 VPN 栈一启动就有后台 goroutine 在写日志（对端面的
+// SOCKS5 的 "serving"、tailcat 的 DERP 重试等）：用裸 bytes.Buffer 会被 -race 判成
+// 数据竞争——Windows CI 上已经实测命中过一次。
+type lockedLogBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedLogBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedLogBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// captureLogs 把 easyss 的日志器换成写入 lockedLogBuffer 的 slog，并返回该缓冲与
+// 恢复函数（恢复由 t.Cleanup 完成）。日志器本身的换装是原子的（见 log.SetLogger），
+// 唯一需要测试自己保证的是 sink 的并发安全。
+func captureLogs(t *testing.T) *lockedLogBuffer {
+	t.Helper()
+	buf := new(lockedLogBuffer)
+	prev := log.Logger()
+	log.SetLogger(slog.New(slog.NewTextHandler(buf, nil)))
+	t.Cleanup(func() { log.SetLogger(prev) })
+	return buf
+}
+
 // TestStartVPNDoesNotLogTheAddress 是"地址令牌不进日志"的守门测试。
 //
 // tailcat 地址内嵌 preshared key，等价于对端面的接入凭据，而日志文件长期留存、
 // 经常被整体打包带走。启动路径因此只记录 address_file（文件路径）与不含秘密的
 // 中继列表，地址本身只经 `-show-vpn-identity` 与本地文件交付。
 func TestStartVPNDoesNotLogTheAddress(t *testing.T) {
-	var buf bytes.Buffer
-	prev := log.Logger()
-	log.SetLogger(slog.New(slog.NewTextHandler(&buf, nil)))
-	t.Cleanup(func() { log.SetLogger(prev) })
+	logs := captureLogs(t)
 
 	paths := vpnTestPaths(t)
 	stack, err := startVPN(vpnTestConfig(), vpnTestTimeouts(), paths, false, nil)
@@ -238,7 +270,7 @@ func TestStartVPNDoesNotLogTheAddress(t *testing.T) {
 		t.Fatal("the published address is empty; this test would not prove anything")
 	}
 
-	out := buf.String()
+	out := logs.String()
 	if out == "" {
 		t.Fatal("startVPN logged nothing; the assertion below would be vacuous")
 	}
@@ -512,14 +544,11 @@ func TestWarnOnSingleLabelPeerNames(t *testing.T) {
 		{name: "darwin", goos: "darwin", peers: peers, wantWarn: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var buf bytes.Buffer
-			prev := log.Logger()
-			log.SetLogger(slog.New(slog.NewTextHandler(&buf, nil)))
-			t.Cleanup(func() { log.SetLogger(prev) })
+			logs := captureLogs(t)
 
 			warnOnSingleLabelPeerNames(tc.goos, tc.peers)
 
-			out := buf.String()
+			out := logs.String()
 			if !tc.wantWarn {
 				if out != "" {
 					t.Fatalf("warnOnSingleLabelPeerNames(%q) logged %q, want nothing", tc.goos, out)
@@ -619,10 +648,7 @@ func TestRunDegradesWhenVPNFailsToStart(t *testing.T) {
 // 当前服务端不在声明的中继列表里时，日志里必须有一条 ERROR，VPN 本会话缺席，而
 // 基础代理照常可用（与"VPN 是可选功能"的既有契约一致）。
 func TestRunDegradesWhenTheCurrentServerIsNotADERPRelay(t *testing.T) {
-	var buf bytes.Buffer
-	prev := log.Logger()
-	log.SetLogger(slog.New(slog.NewTextHandler(&buf, nil)))
-	t.Cleanup(func() { log.SetLogger(prev) })
+	logs := captureLogs(t)
 
 	cfg := testConfig()
 	cfg.Local.SocksPort = freePort(t)
@@ -652,7 +678,7 @@ func TestRunDegradesWhenTheCurrentServerIsNotADERPRelay(t *testing.T) {
 	if core.SocksServer == nil {
 		t.Error("the SOCKS5 entry must still be running")
 	}
-	out := buf.String()
+	out := logs.String()
 	if !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "other.example.com:443") {
 		t.Errorf("the refusal must be logged at ERROR level and name the server, got:\n%s", out)
 	}
