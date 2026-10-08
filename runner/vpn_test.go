@@ -1,9 +1,12 @@
 package runner
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +15,7 @@ import (
 
 	"github.com/nange/easyss/v3/client/config"
 	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/log"
 	vpn "github.com/nange/easyss/v3/vpn"
 	vpnnode "github.com/nange/easyss/v3/vpn/node"
 )
@@ -74,7 +78,7 @@ func TestStartVPNBuildsAStackAndStopsCleanly(t *testing.T) {
 		}
 	}
 	// peer.txt 里必须是**完整展开格式**的地址：它是运维复制到各访问侧的唯一来源，
-	// 一份短格式地址会让每个对端都去拉官方 DERPMap（见 docs/vpn-design.md 4.7）。
+	// 一份短格式地址会让每个对端都去拉官方 DERPMap。
 	content, err := os.ReadFile(paths.peerAddr)
 	if err != nil {
 		t.Fatalf("read %s: %v", paths.peerAddr, err)
@@ -295,7 +299,7 @@ func TestStartVPNForcesRelayOnlyUnderTun(t *testing.T) {
 
 // TestCheckVPNTunCompat 固定运行期门禁：只有在"VPN 已启用 + relay_only 关闭 +
 // 确实配置了对端"三者同时成立时才拒绝 TUN，因为此时直连报文会被 TUN 捕获并绕回
-// easyss 自己的 SOCKS5（见 docs/vpn-design.md 8.1）。
+// easyss 自己的 SOCKS5。
 func TestCheckVPNTunCompat(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -322,6 +326,82 @@ func TestCheckVPNTunCompat(t *testing.T) {
 	var nilCore *Core
 	if err := nilCore.CheckVPNTunCompat(); err != nil {
 		t.Fatalf("CheckVPNTunCompat on a nil core = %v, want nil", err)
+	}
+}
+
+// TestDotlessHostNames 固定"哪些对端名在 Windows 上注定解析不到"的判定：只看名字
+// 里是否含点，与大小写、长度、位置无关，且保持配置顺序（日志按配置读）。
+func TestDotlessHostNames(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		peers []vpnnode.PeerRef
+		want  []string
+	}{
+		{name: "no peers", peers: nil, want: nil},
+		{name: "every name has a dot", peers: []vpnnode.PeerRef{{HostName: "b.lan"}, {HostName: "easyss-mac.vpn"}}, want: nil},
+		{name: "single label names in config order", peers: []vpnnode.PeerRef{{HostName: "easyss-mac"}, {HostName: "b.lan"}, {HostName: "NAS"}}, want: []string{"easyss-mac", "NAS"}},
+		{name: "the root dot is already stripped by normalizePeers", peers: []vpnnode.PeerRef{{HostName: "b"}}, want: []string{"b"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := dotlessHostNames(tc.peers)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("dotlessHostNames(%+v) = %v, want %v", tc.peers, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestWarnOnSingleLabelPeerNames 固定平台门控：Windows 上必须为无点的对端名打一条
+// 警告（否则用户只看到"名字解析不了"，而日志里连一条 DNS 查询都没有），其他平台上
+// 一条都不打——Linux/macOS 的解析器会把单标签名交给 DNS。
+//
+// 同时固定警告里点名的是**无点的那些**名字：一条笼统的警告对排障没有价值。
+func TestWarnOnSingleLabelPeerNames(t *testing.T) {
+	peers := []vpnnode.PeerRef{{HostName: "easyss-mac"}, {HostName: "b.lan"}, {HostName: "NAS"}}
+
+	for _, tc := range []struct {
+		name     string
+		goos     string
+		peers    []vpnnode.PeerRef
+		wantWarn bool
+	}{
+		{name: "windows with a single label name", goos: "windows", peers: peers, wantWarn: true},
+		{name: "windows with only dotted names", goos: "windows", peers: []vpnnode.PeerRef{{HostName: "b.lan"}}, wantWarn: false},
+		{name: "windows without peers", goos: "windows", peers: nil, wantWarn: false},
+		{name: "linux", goos: "linux", peers: peers, wantWarn: false},
+		{name: "darwin", goos: "darwin", peers: peers, wantWarn: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prev := log.Logger()
+			log.SetLogger(slog.New(slog.NewTextHandler(&buf, nil)))
+			t.Cleanup(func() { log.SetLogger(prev) })
+
+			warnOnSingleLabelPeerNames(tc.goos, tc.peers)
+
+			out := buf.String()
+			if !tc.wantWarn {
+				if out != "" {
+					t.Fatalf("warnOnSingleLabelPeerNames(%q) logged %q, want nothing", tc.goos, out)
+				}
+				return
+			}
+			if !strings.Contains(out, "level=WARN") {
+				t.Fatalf("the warning is not at WARN level: %q", out)
+			}
+			for _, name := range []string{"easyss-mac", "NAS"} {
+				if !strings.Contains(out, name) {
+					t.Errorf("the warning does not name the dotless peer %q: %q", name, out)
+				}
+			}
+			if strings.Contains(out, "b.lan") {
+				t.Errorf("the warning names a peer that has a dot and resolves fine: %q", out)
+			}
+			// 警告必须自带出路：用户看不懂"解析器不发单标签查询"时至少要能照做。
+			if !strings.Contains(out, "dotted host_name") {
+				t.Errorf("the warning does not tell the user what to do about it: %q", out)
+			}
+		})
 	}
 }
 

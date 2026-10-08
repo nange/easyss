@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"runtime"
+	"strings"
 
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/proxy"
@@ -97,7 +99,7 @@ func (s *vpnStack) close() error {
 // SOCKS5 服务器要把返回的访问侧注入进自己的分流策略。
 //
 // tunWanted 表示本会话已经（或即将）启用 TUN。它参与 relay_only 的强制：TUN 与
-// 节点间直连不兼容（见 docs/vpn-design.md 8.1），而且这个强制**必须在这里**完成
+// 节点间直连不兼容，而且这个强制**必须在这里**完成
 // ——tailcat 把 DERPOnly 写进 tailscale 的进程级开关，而 magicsock 是在创建 socket
 // 时读它的，等 Server/Client 起来之后再改对已经绑好的 UDP socket 没有作用。
 //
@@ -122,13 +124,13 @@ func startVPN(cfg *config.ClientConfig, timeouts sharedconfig.Timeouts, paths vp
 	if tunWanted && !relayOnly && len(nc.Peers) > 0 {
 		log.Warn("[VPN] tun2socks is enabled and relay_only is false: forcing relay_only on for this session " +
 			"(a direct node-to-node path would be captured by the TUN routes and loop back into easyss; " +
-			"set vpn.relay_only=true to make this explicit, see docs/vpn-design.md 8.1)")
+			"set vpn.relay_only=true to make this explicit)")
 		relayOnly = true
 	}
 	nc.RelayOnly = relayOnly
 
 	// relay_only 由 tailcat 在创建引擎之前写进 tailscale 的进程级开关（见
-	// vpnnode 的 DERPOnly 选项与 docs/vpn-design.md 8.1）。
+	// vpnnode 的 DERPOnly 选项）。
 	if relayOnly {
 		// 它把服务端变成全部对端流量的带宽瓶颈，因此每次启动都明确打出来，
 		// 而不是只在 debug 级别可见。
@@ -206,7 +208,7 @@ func startVPN(cfg *config.ClientConfig, timeouts sharedconfig.Timeouts, paths vp
 
 	if len(nc.AllowClients) == 0 {
 		// 地址里内嵌 preshared key，因此"拿到地址"就等于"能接进来"；白名单是
-		// 唯一的额外硬化手段，没配时必须让它在日志里可见（见 docs/vpn-design.md 7.3）。
+		// 唯一的额外硬化手段，没配时必须让它在日志里可见。
 		log.Warn("[VPN] vpn.allow_clients is empty: any node that has this node's address can open streams to its peer face " +
 			"(fill vpn.allow_clients with the nodekey printed by each peer's -show-vpn-identity)")
 	}
@@ -226,8 +228,52 @@ func startVPN(cfg *config.ClientConfig, timeouts sharedconfig.Timeouts, paths vp
 		}
 		log.Info("[VPN] peer", "host_name", ref.HostName, "overlay_ip", ip.String(), "port", ref.Port)
 	}
+	// 名字能不能到达静态名钩子取决于**操作系统的解析器**愿不愿意把它交给 DNS，
+	// 与钩子本身的正确性无关。
+	warnOnSingleLabelPeerNames(runtime.GOOS, nc.Peers)
 
 	return stack, nil
+}
+
+// dotlessHostNames 返回 peers 里不含点的 host_name，保持配置顺序。
+//
+// peers 必须是 vpnnode.NewConfig 归一化之后的视图：那里的 normalizePeers 会去掉
+// 一个末尾根点，因此配置里写成 "b." 的名字在这里已经是 "b"——它在 Windows 上同样
+// 解析不到，必须一起报出来。
+func dotlessHostNames(peers []vpnnode.PeerRef) []string {
+	var names []string
+	for _, p := range peers {
+		if !strings.Contains(p.HostName, ".") {
+			names = append(names, p.HostName)
+		}
+	}
+	return names
+}
+
+// warnOnSingleLabelPeerNames 在 goos 的解析器不会把单标签（无点）名字交给 DNS 时，
+// 为本会话配置的对端名打一条启动警告。
+//
+// 只有 Windows 命中：它的 DNS 客户端把无点的名字当成 NetBIOS/LLMNR 与后缀搜索列表
+// 的输入，从不作为查询发给任何 DNS 服务器（实测 `Resolve-DnsName easyss-mac` 直接
+// 返回 ERROR_INVALID_NAME、`ping easyss-mac` 报 "could not find host"，而同名加一个
+// 结尾点就能解析）。于是查询根本到不了 TUN 之后的静态名钩子，用户看到的只是"名字
+// 解析不了"，日志里连一条 DNS 查询都没有——没有这条警告，这个平台差异只能靠读代码
+// 或抓包发现。
+//
+// goos 由调用方传入而不是在这里读 runtime.GOOS：门控必须能在任意平台上被测试。
+func warnOnSingleLabelPeerNames(goos string, peers []vpnnode.PeerRef) {
+	if goos != "windows" {
+		return
+	}
+	names := dotlessHostNames(peers)
+	if len(names) == 0 {
+		return
+	}
+	log.Warn("[VPN] peer names without a dot cannot be resolved on Windows: its resolver does not send "+
+		"single-label names to any DNS server, so the query never reaches the VPN's static DNS answer; "+
+		"give the peer a dotted host_name (e.g. \"easyss-mac.vpn\"), type the name with a trailing dot "+
+		"(\"easyss-mac.\"), or map the overlay IP in the hosts file",
+		"host_names", strings.Join(names, ", "))
 }
 
 // StopVPN 停止本节点的 VPN（对端面与全部隧道客户端）。它幂等，且在没有启用 VPN
@@ -247,7 +293,7 @@ func (c *Core) StopVPN() {
 //
 // 唯一的冲突是 relay_only=false 下的节点间直连：magicsock 的 UDP socket 会把
 // 对端的 disco/WireGuard 报文发进 TUN，而 TUN 又把它们送回 easyss 自己的
-// SOCKS5（见 docs/vpn-design.md 8.1）。
+// SOCKS5。
 //
 // 这里刻意**不是**"偷偷把开关置 true 再继续"：tailscale 的开关是在 magicsock
 // 建立 socket 时读的，VPN 栈一旦启动就已经绑好了 UDP socket，再改对它们无效
@@ -336,7 +382,7 @@ func loadVPNIdentity(cfg *config.ClientConfig, paths vpnPaths) (*VPNIdentity, er
 	}
 	addr := identity.Address(region)
 	// 这是运维复制地址之前的最后一道关口：一份短格式地址会让每个对端都去拉官方
-	// DERPMap（见 4.7）。
+	// DERPMap。
 	if err := vpnnode.AssertFullAddr(addr); err != nil {
 		id.AddrErr = fmt.Errorf("the node address would not be usable by peers: %w", err)
 		return id, nil
