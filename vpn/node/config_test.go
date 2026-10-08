@@ -1,6 +1,7 @@
 package vpnnode
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -19,7 +20,7 @@ func validOptions(t *testing.T) Options {
 		RelayOnly:   true,
 		PeerPort:    sharedconfig.DefaultVPNPeerPort,
 		OverlayCIDR: sharedconfig.DefaultVPNOverlayCIDR,
-		DERPAddr:    "relay.example.com:8443",
+		DERPAddrs:   []string{"relay.example.com:8443"},
 		Peers: []PeerRef{{
 			HostName: "b",
 			Address:  fullAddr(t, "relay.example.com:8443"),
@@ -43,8 +44,8 @@ func TestNewConfigHappyPath(t *testing.T) {
 	if want := sharedconfig.DefaultVPNOverlayPrefix(); cfg.Overlay != want {
 		t.Errorf("Overlay = %v, want %v", cfg.Overlay, want)
 	}
-	if cfg.DERPAddr != "relay.example.com:8443" {
-		t.Errorf("DERPAddr = %q, want relay.example.com:8443", cfg.DERPAddr)
+	if !slices.Equal(cfg.DERPAddrs, []string{"relay.example.com:8443"}) {
+		t.Errorf("DERPAddrs = %v, want [relay.example.com:8443]", cfg.DERPAddrs)
 	}
 	if len(cfg.Peers) != 1 || cfg.Peers[0].HostName != "b" {
 		t.Fatalf("Peers = %+v, want one peer named b", cfg.Peers)
@@ -215,17 +216,39 @@ func TestNewConfigRejectsBadLocalValues(t *testing.T) {
 		}
 	})
 
-	t.Run("derp_addr 非法", func(t *testing.T) {
-		for _, addr := range []string{"", "relay.example.com", ":8443", "relay.example.com:https"} {
+	t.Run("derp 列表非法或为空", func(t *testing.T) {
+		for _, addrs := range [][]string{
+			nil,
+			{},
+			{""},
+			{"relay.example.com"},
+			{":8443"},
+			{"relay.example.com:https"},
+			{"relay.example.com:8443", "relay.example.com"}, // 第二个非法
+		} {
 			opts := validOptions(t)
-			opts.DERPAddr = addr
+			opts.DERPAddrs = addrs
 			_, err := NewConfig(opts)
 			if err == nil {
-				t.Errorf("NewConfig(derp_addr %q) = nil, want error", addr)
+				t.Errorf("NewConfig(derp_addrs %v) = nil, want error", addrs)
+				continue
 			}
-			if err != nil && !strings.Contains(err.Error(), "derp_addr") {
-				t.Errorf("error %q should identify vpn.derp_addr", err)
+			if !strings.Contains(err.Error(), "derp") {
+				t.Errorf("error %q should identify the DERP relay list", err)
 			}
+		}
+	})
+
+	t.Run("多节点列表被原样保留", func(t *testing.T) {
+		opts := validOptions(t)
+		opts.DERPAddrs = []string{"relay-a.example.com:443", "relay-b.example.com:8443"}
+		opts.Peers = []PeerRef{{HostName: "b", Address: fullAddr(t, "relay-a.example.com:443", "relay-b.example.com:8443")}}
+		cfg, err := NewConfig(opts)
+		if err != nil {
+			t.Fatalf("NewConfig: %v", err)
+		}
+		if len(cfg.DERPAddrs) != 2 {
+			t.Errorf("DERPAddrs = %v, want the two declared relays", cfg.DERPAddrs)
 		}
 	})
 }

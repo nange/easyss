@@ -13,9 +13,9 @@ import (
 
 // peerDERPAddrs 返回一个 tailcat 地址里内嵌的全部 DERP host:port。
 //
-// 地址自带 DERP 位置正是"零控制面"的来源，而 DERP
-// 私有化要求所有节点通告同一台 DERP，因此启动时要把这些内嵌位置读出来与本节点的
-// 比较（见 assertPeersShareDERP）。DERPPort 为 0 时按 derphttp 的行为取 443。
+// 地址自带 DERP 位置正是"零控制面"的来源，而 DERP 私有化要求双方通告同一组中继，
+// 因此启动时要把这些内嵌位置读出来与本节点的比较（见 assertPeersShareDERPSet）。
+// DERPPort 为 0 时按 derphttp 的行为取 443。
 func peerDERPAddrs(addr string) ([]string, error) {
 	ci, err := tailcat.ParseAddr(tailcat.Addr(addr))
 	if err != nil {
@@ -37,38 +37,84 @@ func peerDERPAddrs(addr string) ([]string, error) {
 	return out, nil
 }
 
-// assertPeersShareDERP 断言所有对端通告的 DERP 主机与本节点相同。
+// assertPeersShareDERPSet 断言每个对端通告的 DERP 节点集合与本节点相同（顺序无关）。
 //
-// DERP 私有化后，节点的 DERP 连接只经 easyss 隧道到达自己的服务端，并由服务端
-// 映射到本机回环监听。这意味着"跨 S"拓扑不再成立：
-// 对端通告的若是另一台 DERP 主机，访问该对端时的 DERP 连接会被送到本节点自己的
-// 服务端，而它无法代表对方去连另一台机器。与其让它在第一次访问对端时表现成隧道
-// 拨号超时，不如在启动时拒绝。
-func assertPeersShareDERP(ownAddr string, peers []PeerRef) error {
-	own, err := sharedconfig.SplitDERPAddr(ownAddr)
+// 为什么必须是"集合相等"而不是"有交集"：内嵌 DERP 只接待经**本服务端**隧道送达的
+// 连接（服务端把握手目标完全匹配到自己的 derp_addr 后改拨回环），所以节点实际能连上
+// 的中继只能是它此刻隧道所落的那台服务端。于是"本节点能不能连上中继"取决于本节点
+// 当前服务端是否在本节点集合里，"对端通过本节点地址能不能连上"取决于对端当前服务端
+// 是否在本节点集合里。少一个节点就会让某一侧在耗尽列表后彻底连不上，多一个节点则
+// 让对端先浪费一次尝试——两者都以"VPN 时好时坏"的形式出现，因此宁可启动即拒绝。
+func assertPeersShareDERPSet(ownAddrs []string, peers []PeerRef) error {
+	own, err := canonicalDERPSet(ownAddrs)
 	if err != nil {
 		return fmt.Errorf("vpn.derp_addr: %w", err)
 	}
-	ownText := net.JoinHostPort(own.Host, strconv.Itoa(own.Port))
+	ownText := strings.Join(ownAddrs, ", ")
 	for i, p := range peers {
 		addrs, err := peerDERPAddrs(p.Address)
 		if err != nil {
 			return fmt.Errorf("vpn.peers[%d] (%s): %w", i, p.HostName, err)
 		}
-		for _, a := range addrs {
-			da, err := sharedconfig.SplitDERPAddr(a)
-			if err != nil {
-				return fmt.Errorf("vpn.peers[%d] (%s): %w", i, p.HostName, err)
-			}
-			if da.Port == own.Port && strings.EqualFold(da.Host, own.Host) {
-				continue
-			}
-			return fmt.Errorf("vpn.peers[%d] (%s) advertises DERP %s while this node advertises %s: "+
-				"the embedded DERP is private and reachable only through this node's own easyss server, "+
-				"so every node must share one DERP host", i, p.HostName, a, ownText)
+		peer, err := canonicalDERPSet(addrs)
+		if err != nil {
+			return fmt.Errorf("vpn.peers[%d] (%s): %w", i, p.HostName, err)
 		}
+		missing, extra := diffDERPSets(own, peer)
+		if len(missing) == 0 && len(extra) == 0 {
+			continue
+		}
+		return fmt.Errorf("vpn.peers[%d] (%s) advertises DERP nodes (%s) while this node advertises (%s): "+
+			"the embedded DERP is private and reachable only through each node's own easyss server, "+
+			"so every node in a region must declare the same relay set; "+
+			"not declared by this node: %s; not declared by the peer: %s; "+
+			"mark the same servers[] entries with \"derp\": true on every node and regenerate the addresses with -show-vpn-identity",
+			i, p.HostName, strings.Join(addrs, ", "), ownText,
+			strings.Join(extra, ", "), strings.Join(missing, ", "))
 	}
 	return nil
+}
+
+// canonicalDERPSet 把一组 host:port 规范化成"比较用"的集合（保持首次出现的顺序）：
+// 同一个中继的不同书写（大小写、IPv6 括号形态）只算一个。
+func canonicalDERPSet(addrs []string) ([]string, error) {
+	out := make([]string, 0, len(addrs))
+	seen := make(map[string]struct{}, len(addrs))
+	for i, addr := range addrs {
+		canonical, err := sharedconfig.CanonicalDERPAddr(addr)
+		if err != nil {
+			return nil, fmt.Errorf("node %d: %w", i, err)
+		}
+		if _, dup := seen[canonical]; dup {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		out = append(out, canonical)
+	}
+	return out, nil
+}
+
+// diffDERPSets 返回 a 有而 b 没有的（missing）、以及 b 有而 a 没有的（extra）。
+func diffDERPSets(a, b []string) (missing, extra []string) {
+	inB := make(map[string]struct{}, len(b))
+	for _, v := range b {
+		inB[v] = struct{}{}
+	}
+	inA := make(map[string]struct{}, len(a))
+	for _, v := range a {
+		inA[v] = struct{}{}
+	}
+	for _, v := range a {
+		if _, ok := inB[v]; !ok {
+			missing = append(missing, v)
+		}
+	}
+	for _, v := range b {
+		if _, ok := inA[v]; !ok {
+			extra = append(extra, v)
+		}
+	}
+	return missing, extra
 }
 
 // AssertFullAddr 断言一个 tailcat 地址是**完整展开格式**，即它的 DERP region

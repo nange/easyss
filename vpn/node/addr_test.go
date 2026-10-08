@@ -25,14 +25,88 @@ func newConnInfo(regions []*tailcfg.DERPRegion, regionID tailcfg.DERPRegionID, w
 }
 
 // fullAddr 构造一个完整展开格式的地址，其 region 由本包的 vpn.BuildRegion 生成——
-// 也就是说这是对端面真实会打印出来的那种地址。
-func fullAddr(t *testing.T, derpAddr string) string {
+// 也就是说这是对端面真实会打印出来的那种地址。多个 derpAddr 就是同一 region 下的
+// 多个中继节点。
+func fullAddr(t *testing.T, derpAddrs ...string) string {
 	t.Helper()
-	region, err := vpn.BuildRegion(derpAddr)
+	region, err := vpn.BuildRegion(derpAddrs...)
 	if err != nil {
-		t.Fatalf("vpn.BuildRegion(%q): %v", derpAddr, err)
+		t.Fatalf("vpn.BuildRegion(%q): %v", derpAddrs, err)
 	}
 	return string(newConnInfo([]*tailcfg.DERPRegion{region}, 0, true).Addr())
+}
+
+// TestAssertPeersShareDERPSet 固定"双方必须声明同一组中继"这条启动期校验：它是
+// DERP 私有化的直接推论（内嵌 DERP 只接待经本服务端隧道送达的连接，所以只有集合
+// 相等才保证"无论隧道落在哪台服务端，地址里都有它"）。顺序与书写差异不算不一致，
+// 缺一个/多一个都必须在启动时被点名拒绝。
+func TestAssertPeersShareDERPSet(t *testing.T) {
+	own := []string{"relay-a.example.com:443", "relay-b.example.com:8443"}
+
+	t.Run("集合相同且顺序不同也通过", func(t *testing.T) {
+		peer := PeerRef{HostName: "b", Address: fullAddr(t, "relay-b.example.com:8443", "Relay-A.Example.com:443")}
+		if err := assertPeersShareDERPSet(own, []PeerRef{peer}); err != nil {
+			t.Errorf("assertPeersShareDERPSet: %v", err)
+		}
+	})
+
+	t.Run("单节点旧形态", func(t *testing.T) {
+		single := []string{"relay.example.com:8443"}
+		peer := PeerRef{HostName: "b", Address: fullAddr(t, "relay.example.com:8443")}
+		if err := assertPeersShareDERPSet(single, []PeerRef{peer}); err != nil {
+			t.Errorf("assertPeersShareDERPSet: %v", err)
+		}
+	})
+
+	t.Run("对端少一个节点时报错并点名", func(t *testing.T) {
+		peer := PeerRef{HostName: "b", Address: fullAddr(t, "relay-a.example.com:443")}
+		err := assertPeersShareDERPSet(own, []PeerRef{peer})
+		if err == nil {
+			t.Fatal("assertPeersShareDERPSet = nil, want an error for a missing relay")
+		}
+		for _, want := range []string{"b", "relay-b.example.com:8443", "relay-a.example.com:443"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q should mention %q", err, want)
+			}
+		}
+	})
+
+	t.Run("对端多一个节点时报错并点名", func(t *testing.T) {
+		peer := PeerRef{HostName: "b", Address: fullAddr(t, own[0], own[1], "relay-c.example.com:443")}
+		err := assertPeersShareDERPSet(own, []PeerRef{peer})
+		if err == nil {
+			t.Fatal("assertPeersShareDERPSet = nil, want an error for an extra relay")
+		}
+		if !strings.Contains(err.Error(), "relay-c.example.com:443") {
+			t.Errorf("error %q should name the extra relay", err)
+		}
+	})
+
+	t.Run("本节点列表为空或非法时报错", func(t *testing.T) {
+		peer := PeerRef{HostName: "b", Address: fullAddr(t, own[0])}
+		if err := assertPeersShareDERPSet(nil, []PeerRef{peer}); err == nil {
+			t.Error("assertPeersShareDERPSet(nil, ...) = nil, want an error")
+		}
+		if err := assertPeersShareDERPSet([]string{"not-an-addr"}, []PeerRef{peer}); err == nil {
+			t.Error("assertPeersShareDERPSet(invalid, ...) = nil, want an error")
+		}
+	})
+
+	t.Run("没有对端时无从比较", func(t *testing.T) {
+		if err := assertPeersShareDERPSet(own, nil); err != nil {
+			t.Errorf("assertPeersShareDERPSet(own, nil) = %v, want nil", err)
+		}
+		// 空列表本身由 NewConfig 更早地拒绝（"没有任何中继被声明"），这里没有对端
+		// 就无从比较，因此不算错误。
+		if err := assertPeersShareDERPSet(nil, nil); err != nil {
+			t.Errorf("assertPeersShareDERPSet(nil, nil) = %v, want nil", err)
+		}
+		// 但一旦有对端，集合差异立刻暴露：空列表 + 声明了一个中继的对端 = 不一致。
+		peer := PeerRef{HostName: "b", Address: fullAddr(t, "relay-a.example.com:443")}
+		if err := assertPeersShareDERPSet(nil, []PeerRef{peer}); err == nil {
+			t.Error("assertPeersShareDERPSet(nil, [peer]) = nil, want an error")
+		}
+	})
 }
 
 // TestBuildRegionRoundTripsThroughAddr 是"零控制面"的核心断言：由 vpn.BuildRegion

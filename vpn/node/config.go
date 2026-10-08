@@ -38,9 +38,10 @@ type Options struct {
 	// （见 sharedconfig.ParseVPNOverlayCIDR）。
 	OverlayCIDR string
 
-	// DERPAddr 是本节点在自己地址里通告的 DERP host:port。留空不可用：
-	// 必须由调用方推导或显式给出（见 vpn.SplitDERPAddr）。
-	DERPAddr string
+	// DERPAddrs 是本节点在自己地址里通告的全部 DERP host:port（同一 region 下的
+	// 多个中继节点，顺序即 tailcat 尝试顺序）。必须非空：由调用方从配置推导
+	// （见 client/config.ClientConfig.VPNDERPAddrs）。
+	DERPAddrs []string
 
 	// Peers 是要访问的对端列表，可以为空（本节点只做被访问方）。
 	Peers []PeerRef
@@ -61,8 +62,8 @@ type Config struct {
 	// Overlay 是访问侧本地的 overlay 段，用来给对端分配虚拟 IPv4。
 	Overlay netip.Prefix
 
-	// DERPAddr 是本节点在自己地址里通告的 DERP host:port。
-	DERPAddr string
+	// DERPAddrs 是本节点在自己地址里通告的全部 DERP host:port。
+	DERPAddrs []string
 
 	// Peers 是要访问的对端列表。
 	Peers []PeerRef
@@ -84,18 +85,23 @@ func NewConfig(opts Options) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("vpn.overlay_cidr: %w", err)
 	}
-	if _, err := sharedconfig.SplitDERPAddr(opts.DERPAddr); err != nil {
-		return nil, fmt.Errorf("vpn.derp_addr: %w", err)
+	if len(opts.DERPAddrs) == 0 {
+		return nil, fmt.Errorf("vpn: no DERP relay is declared; mark at least one servers[] entry with \"derp\": true or set vpn.derp_addr")
+	}
+	for i, addr := range opts.DERPAddrs {
+		if _, err := sharedconfig.SplitDERPAddr(addr); err != nil {
+			return nil, fmt.Errorf("vpn.derp_addr (node %d): %w", i, err)
+		}
 	}
 	peers, err := normalizePeers(opts.Peers)
 	if err != nil {
 		return nil, err
 	}
-	// DERP 私有化：节点的 DERP 连接只经 easyss
-	// 隧道到达，由服务端把它映射到自己的回环监听。这条路径要求所有节点通告
-	// 同一个 DERP host:port，否则访问对端时那台 DERP 根本不可达——而这会以
-	// "隧道拨号超时"的形式出现在第一次访问对端时，所以在这里当场拒绝。
-	if err := assertPeersShareDERP(opts.DERPAddr, peers); err != nil {
+	// DERP 私有化：节点的 DERP 连接只经 easyss 隧道到达，由服务端把它映射到自己的
+	// 回环监听。这条路径要求双方通告**同一组**中继节点：只有隧道落点的那台中继
+	// 才可能连上，所以对端地址里少一个节点就可能少掉唯一可达的那个。不一致会在
+	// 第一次访问对端时以"隧道拨号失败"的形式出现，因此在这里当场拒绝。
+	if err := assertPeersShareDERPSet(opts.DERPAddrs, peers); err != nil {
 		return nil, err
 	}
 	allow, err := parseAllowedClients(opts.AllowClients)
@@ -106,7 +112,7 @@ func NewConfig(opts Options) (*Config, error) {
 		RelayOnly:    opts.RelayOnly,
 		PeerPort:     opts.PeerPort,
 		Overlay:      overlay,
-		DERPAddr:     opts.DERPAddr,
+		DERPAddrs:    opts.DERPAddrs,
 		Peers:        peers,
 		AllowClients: allow,
 	}, nil

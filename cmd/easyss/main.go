@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	_ "time/tzdata"
@@ -21,6 +23,7 @@ import (
 	"github.com/nange/easyss/v3/selfupdate"
 	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/version"
+	"github.com/nange/easyss/v3/vpn"
 )
 
 func main() {
@@ -141,7 +144,7 @@ Flags:
 	// VPN 身份的输出必须在启动核心之前：它要读（必要时生成）密钥文件并打印出来，
 	// 然后退出，而不是把代理也一起跑起来。见 printVPNIdentity。
 	if showVPNIdentity {
-		if err := printVPNIdentity(cfg); err != nil {
+		if err := printVPNIdentity(os.Stdout, cfg); err != nil {
 			fmt.Fprintln(os.Stderr, "show vpn identity:", err)
 			os.Exit(1)
 		}
@@ -564,20 +567,45 @@ func exampleSimpleConfig() string {
 // 分成两半是有意的，因为它们的收件人不同：client nodekey 要填到**对端**的
 // `vpn.allow_clients` 里，本节点地址要填到**对端**的 `vpn.peers[].address` 里。
 // 地址内嵌 preshared key，等价于对端面的接入凭据——所以这里
-// 只逐行打印，不写任何网络位置，交给用户自己复制。
-func printVPNIdentity(cfg *config.ClientConfig) error {
+// 只逐行打印，不写任何网络位置，交给用户自己复制（它也是唯一会打印地址的地方：
+// 启动日志刻意不打印，见 runner.startVPN）。
+//
+// 中继节点列表单独列出来，因为地址本身是一串不可读的 base64：运维需要一眼看出
+// "这个地址里到底有几个中继"。而"当前服务端不在该列表里"只在 VPN 启动时是致命
+// 错误，这里作为 warning 提示（本命令要能在配置还没配对时用来排障）。
+func printVPNIdentity(w io.Writer, cfg *config.ClientConfig) error {
 	id, err := runner.LoadVPNIdentity(cfg)
 	if err != nil {
 		return err
 	}
-	fmt.Println("client nodekey (fill the peer's vpn.allow_clients with it):")
-	fmt.Println("  " + id.ClientNodeKey)
+	return writeVPNIdentity(w, id, cfg.ValidateDERPServer())
+}
+
+// writeVPNIdentity 是 -show-vpn-identity 的纯格式化部分：它只消费已经算好的身份
+// 与"当前服务端是否在列表中继里"的判定，不碰文件系统与配置。拆出来是为了让输出
+// 契约（尤其是"地址只在这里出现"）可以脱离状态目录被测试。
+//
+// 内容先攒进 builder 再一次性写出：一是只需要检查一次写错误，二是避免多行输出在
+// 写一半时失败留下半截（stdout 是管道时对方可能读到截断的地址）。
+func writeVPNIdentity(w io.Writer, id *runner.VPNIdentity, derpMismatch error) error {
+	var b strings.Builder
+	fmt.Fprintln(&b, "client nodekey (fill the peer's vpn.allow_clients with it):")
+	fmt.Fprintln(&b, "  "+id.ClientNodeKey)
 	if id.AddrErr != nil {
-		fmt.Println("node address (fill the peer's vpn.peers[].address with it): unavailable")
-		fmt.Println("  reason: " + id.AddrErr.Error())
-		return nil
+		fmt.Fprintln(&b, "node address (fill the peer's vpn.peers[].address with it): unavailable")
+		fmt.Fprintln(&b, "  reason: "+id.AddrErr.Error())
+		_, err := io.WriteString(w, b.String())
+		return err
 	}
-	fmt.Println("node address (fill the peer's vpn.peers[].address with it; it is a secret):")
-	fmt.Println("  " + id.TailcatAddr)
-	return nil
+	fmt.Fprintf(&b, "derp nodes in the address (region %d, tried in this order):\n", vpn.RegionID)
+	fmt.Fprintln(&b, "  "+strings.Join(id.DERPNodes, ", "))
+	fmt.Fprintln(&b, "node address (fill the peer's vpn.peers[].address with it; it is a secret):")
+	fmt.Fprintln(&b, "  "+id.TailcatAddr)
+	if derpMismatch != nil {
+		// 不是致命错误：地址本身仍然是对的，运维正需要它去配对端。但这台节点上
+		// VPN 不会工作（见 runner.vpnOptions 的门禁），所以必须当场说出来。
+		fmt.Fprintln(&b, "warning: vpn will not work on this node as configured: "+derpMismatch.Error())
+	}
+	_, err := io.WriteString(w, b.String())
+	return err
 }
