@@ -37,6 +37,12 @@ type Server struct {
 	mux        *http.ServeMux
 	certCache  *certmagic.Cache
 	derp       *vpn.DERPServer
+	// mesh 是同 region 内其他内嵌 DERP 的互联（server.vpn.mesh_*）。未配置时为
+	// nil，此时服务端与既有版本逐字节一致。meshCtx/meshCancel 约束它的生命周期：
+	// Shutdown 先取消再关闭，确保不会再登记新的转发映射。
+	mesh       *vpn.Mesh
+	meshCtx    context.Context
+	meshCancel context.CancelFunc
 	statsDone  chan struct{}
 	statsOnce  sync.Once
 }
@@ -361,6 +367,16 @@ func (s *Server) Start() error {
 		}
 		s.derp = derpSrv
 		root = vpn.NewDERPMount(derpSrv.Handler(), fallback)
+
+		// mesh 必须在 DERP 开始服务之前落位（derpserver 要求 SetMeshKey 早于服务），
+		// 而 mesh 客户端本身是异步拨号 + 重试的，因此这里的顺序只影响"第一个同伴
+		// 何时被认出来"，不影响正确性。
+		if srvCfg.VPN.MeshKey != "" {
+			s.meshCtx, s.meshCancel = context.WithCancel(context.Background())
+			if err := s.startDERPMesh(cfg, derpSrv, np, timeouts.Dial); err != nil {
+				return err
+			}
+		}
 	}
 
 	s.mux = http.NewServeMux()
@@ -485,6 +501,18 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 
 	var err error
+	// 先停 mesh 再停 HTTP：mesh 的订阅循环会往中继里登记转发映射，先取消它就不会
+	// 在收尾过程中出现新的映射（关闭顺序与 DERP 本身的收尾一致，见下）。
+	if s.meshCancel != nil {
+		s.meshCancel()
+		s.meshCancel = nil
+	}
+	if s.mesh != nil {
+		if cerr := s.mesh.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+		s.mesh = nil
+	}
 	if s.httpServer != nil {
 		err = s.httpServer.Shutdown(ctx)
 	}

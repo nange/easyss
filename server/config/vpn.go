@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
@@ -10,9 +11,9 @@ import (
 
 // VPNConfig 恰好持有服务端配置文件 "server.vpn" 键下的全部字段。
 //
-// 服务端在 VPN 组网里只有一个角色：内嵌 DERP 中继。它没有、也不需要 tailcat
-// 客户端侧的 peers[]（那是节点配置的事），因此这里只有"DERP 对外是哪个
-// host:port"一件事。
+// 服务端在 VPN 组网里有三个角色：内嵌 DERP 中继、本机自己的 DERP 地址、以及
+// （可选的）同 region 内与其他中继之间的 mesh。它没有、也不需要 tailcat 客户端侧
+// 的 peers[]（那是节点配置的事）。
 //
 // 这里刻意没有 derp_path：DERP 的挂载路径不可配。客户端侧
 // derphttp.Client.urlString 把路径硬编码为 /derp
@@ -29,6 +30,35 @@ type VPNConfig struct {
 	// listen 的端口推导（见 ResolveDERPAddr）；当 DERP 经端口转发或反向代理
 	// 暴露在与代理监听不同的 host:port 时必须显式给出。
 	DERPAddr string `json:"derp_addr,omitempty"`
+
+	// MeshKey 是同一 region 内所有中继共享的预共享密钥（见
+	// sharedconfig.ParseVPNMeshKey：64 位 hex 原样使用，其余非空字符串按
+	// SHA-256 派生）。它把本中继与其他中继连接起来：对端凭它识别"这是可信的
+	// mesh 同伴"，从而允许订阅连接变化并代其他客户端转发数据包。
+	//
+	// 没有 omitempty 是有意的：示例配置（-show-config-example）要列出这个字段，
+	// 否则"新增字段静默漏在示例之外"。
+	MeshKey string `json:"mesh_key"`
+
+	// MeshPeers 是本中继要与之互联的**其他**中继。每条的 Addr 必须等于对端
+	// 自己的 server.vpn.derp_addr（服务端靠完全匹配认出"这条连接是来访问我的
+	// DERP 的"），并且必须经一个 easyss 客户端（通常是 easyss-headless）的
+	// SOCKS5 送进隧道——内嵌 DERP 只接待回环来源，直连公网端口只会看到伪装页。
+	MeshPeers []MeshPeer `json:"mesh_peers"`
+}
+
+// MeshPeer 是 mesh 里的一个对端中继。
+type MeshPeer struct {
+	// Addr 是对端自己的 server.vpn.derp_addr（host:port）。
+	Addr string `json:"addr"`
+
+	// Proxy 是把该对端的连接送进隧道的 SOCKS5 代理，通常是本机上指向该对端的
+	// easyss-headless 的 socks 端口。留空表示用顶层的 next_proxy.url。
+	Proxy string `json:"proxy,omitempty"`
+
+	// CAFile 是对端使用私有/自签证书时的根证书文件。留空表示用系统根证书
+	// （certmagic 的 Let's Encrypt 证书就是这种情形）。
+	CAFile string `json:"ca_file,omitempty"`
 }
 
 // ResolveDERPAddr 返回本服务端对外通告的 DERP host:port。
@@ -62,11 +92,98 @@ func (fc *FileConfig) ResolveDERPAddr() (string, error) {
 //
 // 只在 vpn.enabled 时校验：未启用的 VPN 配置不参与运行期，不应阻止服务端启动。
 func (fc *FileConfig) validateVPN() error {
-	if !fc.Server.VPN.Enabled {
+	vpnCfg := fc.Server.VPN
+
+	// mesh 配置只在 VPN 启用时才有意义：一份"配了 mesh 但没开 VPN"的配置会让
+	// 运维以为中继在互联，实际上连中继本身都没挂载。
+	if !vpnCfg.Enabled {
+		if vpnCfg.MeshKey != "" || len(vpnCfg.MeshPeers) > 0 {
+			return fmt.Errorf("server.vpn.mesh_key/mesh_peers are set while server.vpn.enabled is false: " +
+				"the embedded DERP relay is not mounted, so there is nothing to mesh with")
+		}
 		return nil
 	}
 	if _, err := fc.ResolveDERPAddr(); err != nil {
 		return err
+	}
+	return fc.validateVPNMesh()
+}
+
+// validateVPNMesh 校验 server.vpn 的 mesh 部分。规则与理由：
+//
+//   - mesh_key 与 mesh_peers 必须同时给出：只有一边时既可能是漏配（中继不会互联，
+//     跨节点的客户端收不到对方的数据包），也可能是误解（以为密钥本身就能发现对端）；
+//   - 每个对端要么自带 proxy，要么全局配了 next_proxy.url：DERP 只在回环上被服务，
+//     直连对端的公网 host:port 只会拿到伪装页，因此"没有代理"不是一种可工作的配置；
+//   - 对端地址不能是本服务端自己的 derp_addr（自连没有意义，而且 mesh 协议会把它
+//     当成自连后放弃），也不能重复。
+func (fc *FileConfig) validateVPNMesh() error {
+	vpnCfg := fc.Server.VPN
+	switch {
+	case vpnCfg.MeshKey == "" && len(vpnCfg.MeshPeers) == 0:
+		return nil
+	case vpnCfg.MeshKey == "":
+		return fmt.Errorf("server.vpn.mesh_peers is set without server.vpn.mesh_key: " +
+			"the mesh key is what lets a peer relay trust this one for connection watching and packet forwarding")
+	case len(vpnCfg.MeshPeers) == 0:
+		return fmt.Errorf("server.vpn.mesh_key is set without server.vpn.mesh_peers: " +
+			"add every other relay of this region (their server.vpn.derp_addr) to mesh_peers")
+	}
+	if _, err := sharedconfig.ParseVPNMeshKey(vpnCfg.MeshKey); err != nil {
+		return fmt.Errorf("server.vpn.mesh_key: %w", err)
+	}
+
+	own, err := fc.ResolveDERPAddr()
+	if err != nil {
+		return err
+	}
+	ownCanonical, err := sharedconfig.CanonicalDERPAddr(own)
+	if err != nil {
+		return err
+	}
+
+	seen := make(map[string]int, len(vpnCfg.MeshPeers))
+	for i, peer := range vpnCfg.MeshPeers {
+		canonical, err := sharedconfig.CanonicalDERPAddr(peer.Addr)
+		if err != nil {
+			return fmt.Errorf("server.vpn.mesh_peers[%d].addr: %w", i, err)
+		}
+		if canonical == ownCanonical {
+			return fmt.Errorf("server.vpn.mesh_peers[%d].addr is this server's own DERP address (%s): "+
+				"mesh_peers lists the *other* relays of the region", i, own)
+		}
+		if prev, dup := seen[canonical]; dup {
+			return fmt.Errorf("server.vpn.mesh_peers[%d].addr duplicates mesh_peers[%d] (%s)", i, prev, peer.Addr)
+		}
+		seen[canonical] = i
+
+		if peer.Proxy == "" {
+			if fc.NextProxy.URL == "" {
+				return fmt.Errorf("server.vpn.mesh_peers[%d] (%s) has no proxy and next_proxy.url is empty: "+
+					"the embedded DERP only accepts connections that arrive through an easyss tunnel, "+
+					"so give this peer a socks5:// proxy (e.g. the local easyss-headless) or set next_proxy.url", i, peer.Addr)
+			}
+			continue
+		}
+		if err := validateMeshProxy(peer.Proxy); err != nil {
+			return fmt.Errorf("server.vpn.mesh_peers[%d].proxy: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// validateMeshProxy 校验 mesh 对端的代理 URL。与 nextproxy.New 保持同一条契约
+// （只支持 socks5），但在这里报错以便配置加载阶段就失败。
+func validateMeshProxy(proxyURL string) error {
+	u, err := url.Parse(proxyURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL %q: %w", proxyURL, err)
+	}
+	if u.Scheme != "socks5" {
+		return fmt.Errorf("unsupported scheme %q in %q: only socks5 is supported", u.Scheme, proxyURL)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("missing host in %q", proxyURL)
 	}
 	return nil
 }

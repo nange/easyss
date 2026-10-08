@@ -135,6 +135,9 @@ func (fc *FileConfig) ResolveFilePaths() {
 	fc.Server.CertPath = util.ResolvePath(fc.Server.CertPath)
 	fc.Server.KeyPath = util.ResolvePath(fc.Server.KeyPath)
 	fc.NextProxy.NextProxyFile = util.ResolvePath(fc.NextProxy.NextProxyFile)
+	for i := range fc.Server.VPN.MeshPeers {
+		fc.Server.VPN.MeshPeers[i].CAFile = util.ResolvePath(fc.Server.VPN.MeshPeers[i].CAFile)
+	}
 
 	// 日志文件路径没有"当前工作目录已存在同名文件则保留"的向后兼容语义
 	// （见 util.ResolvePath）：它一律基于可执行文件目录绝对化，否则 launchd
@@ -180,9 +183,15 @@ func ExampleConfig() FileConfig {
 			// enabled 默认给 false：内嵌 DERP 虽然只对回环来源提供服务（节点
 			// 经 easyss 隧道抵达，公网上没有任何 DERP 路径），但它会把该服务端
 			// 变成节点组网的中继，运维应当明确地打开它。
+			//
+			// mesh_key / mesh_peers 也一并列出（空值）：它们是"同一 region 下
+			// 多个中继互相转发"的开关，只在 enabled 为 true 时才允许非空，
+			// 因此示例里保持空——但字段必须出现，示例就是字段清单。
 			VPN: VPNConfig{
-				Enabled:  false,
-				DERPAddr: "your-domain.com:443",
+				Enabled:   false,
+				DERPAddr:  "your-domain.com:443",
+				MeshKey:   "",
+				MeshPeers: []MeshPeer{},
 			},
 		},
 		// 显式给出空切片而不是留 nil：示例里 cdn_domains 应呈现为 []，

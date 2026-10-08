@@ -1,10 +1,14 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
 	"strconv"
+	"strings"
 )
 
 // VPN 组网（内嵌 DERP 的节点互访）的共享常量与归一化入口。
@@ -155,6 +159,45 @@ func SplitDERPAddr(addr string) (DERPAddr, error) {
 		return DERPAddr{}, fmt.Errorf("invalid DERP address %q: port %q is not in 1..65535", addr, portStr)
 	}
 	return DERPAddr{Host: host, Port: port}, nil
+}
+
+// CanonicalDERPAddr 把一个 DERP host:port 规范化为**可比较**的形态：主机名小写、
+// 端口为十进制数字、IPv6 字面量带方括号。它只用于相等比较，不用于拨号（拨号仍用
+// 配置里书写的原文，以免改变日志与错误信息里的呈现）。
+//
+// 比较必须经过它：配置里 "Relay.Example.com:0443" 与 "relay.example.com:443" 是
+// 同一个中继，直接比较字符串会把同一件事判成两件——那正是"当前服务端不在 DERP
+// 列表里"或"对端通告的节点集合不一致"这类误报的来源。
+func CanonicalDERPAddr(addr string) (string, error) {
+	da, err := SplitDERPAddr(addr)
+	if err != nil {
+		return "", err
+	}
+	return net.JoinHostPort(strings.ToLower(da.Host), strconv.Itoa(da.Port)), nil
+}
+
+// ParseVPNMeshKey 把 server.vpn.mesh_key 归一化为 derpserver 要求的 64 位 hex
+// 形态，是整个 mesh 配置唯一的密钥入口。
+//
+// 接受两种书写：本身就是 64 位 hex 时原样使用（统一转小写），其余非空字符串按
+// SHA-256 派生。这样运维既可以粘贴 `openssl rand -hex 32` 的输出，也可以直接写一
+// 句口令——后者更容易在多个服务端之间保持完全一致，而"不一致"在这个协议里没有
+// 任何报错：对端只是被当成普通 DERP 客户端，mesh 静默地建立不起来。
+//
+// 空值/纯空白报错而不是派生：一个"空的 mesh 密钥"不该把整组服务端连成一个互相
+// 信任的集群。
+func ParseVPNMeshKey(s string) (string, error) {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return "", errors.New("mesh key is empty")
+	}
+	if len(trimmed) == 64 {
+		if _, err := hex.DecodeString(trimmed); err == nil {
+			return strings.ToLower(trimmed), nil
+		}
+	}
+	sum := sha256.Sum256([]byte(trimmed))
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // PortFromListen 从监听地址（如 ":443"、"0.0.0.0:8443"、"[::]:https"）解析出

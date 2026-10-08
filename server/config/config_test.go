@@ -114,10 +114,11 @@ func TestExampleConfigIsNormalized(t *testing.T) {
 	data, err := json.Marshal(fc)
 	require.NoError(t, err)
 	require.Contains(t, string(data), `"cdn_domains":[]`)
+	require.Contains(t, string(data), `"mesh_peers":[]`)
 	for _, key := range []string{
 		`"server"`, `"fallback"`, `"shaper"`, `"transport"`,
 		`"next_proxy"`, `"log"`, `"pprof_enabled"`, `"timeout"`,
-		`"vpn"`, `"derp_addr"`,
+		`"vpn"`, `"derp_addr"`, `"mesh_key"`, `"mesh_peers"`,
 	} {
 		require.Contains(t, string(data), key)
 	}

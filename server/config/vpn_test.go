@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -119,6 +120,123 @@ func TestLoadConfigValidatesVPN(t *testing.T) {
 			"server": {"vpn": {"enabled": false, "derp_addr": "not-a-host-port"}}
 		}`))
 		require.NoError(t, err)
+	})
+}
+
+// TestLoadConfigValidatesVPNMesh 固定 server.vpn 的 mesh 校验矩阵：mesh_key 与
+// mesh_peers 必须成对出现、对端不能是自己也不能重复、每个对端都必须有一条经
+// easyss 隧道的出网路径（自带 proxy 或全局 next_proxy.url）——内嵌 DERP 只在回环
+// 上被服务，直连对端公网端口只会拿到伪装页，因此"没有代理"不是一种可工作的配置。
+func TestLoadConfigValidatesVPNMesh(t *testing.T) {
+	base := func(mesh string) string {
+		return `{
+			"server": {
+				"listen": ":443", "domain": "a.example.com", "vpn": {"enabled": true` + mesh + `}
+			}
+		}`
+	}
+
+	t.Run("完整的 mesh 配置通过", func(t *testing.T) {
+		fc, err := LoadConfig(writeConfig(t, `{
+			"server": {
+				"listen": ":443", "domain": "a.example.com", "vpn": {
+					"enabled": true, "mesh_key": "shared-passphrase",
+					"mesh_peers": [
+						{"addr": "b.example.com:443", "proxy": "socks5://127.0.0.1:1081"},
+						{"addr": "c.example.com:443"}
+					]
+				}
+			},
+			"next_proxy": {"url": "socks5://127.0.0.1:1082"}
+		}`))
+		require.NoError(t, err)
+		require.Len(t, fc.Server.VPN.MeshPeers, 2)
+	})
+
+	t.Run("只有 mesh_key 或只有 mesh_peers 都报错", func(t *testing.T) {
+		for _, mesh := range []string{
+			`, "mesh_key": "shared-passphrase"`,
+			`, "mesh_peers": [{"addr": "b.example.com:443", "proxy": "socks5://127.0.0.1:1081"}]`,
+		} {
+			_, err := LoadConfig(writeConfig(t, base(mesh)))
+			require.Error(t, err, "mesh %q", mesh)
+			require.Contains(t, err.Error(), "server.vpn.mesh")
+		}
+	})
+
+	t.Run("VPN 未启用时配了 mesh 报错", func(t *testing.T) {
+		_, err := LoadConfig(writeConfig(t, `{
+			"server": {"listen": ":443", "domain": "a.example.com", "vpn": {
+				"enabled": false, "mesh_key": "k", "mesh_peers": [{"addr": "b.example.com:443", "proxy": "socks5://127.0.0.1:1081"}]
+			}}
+		}`))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "enabled")
+	})
+
+	t.Run("空 mesh_key 报错", func(t *testing.T) {
+		_, err := LoadConfig(writeConfig(t, base(`,
+			"mesh_key": "   ",
+			"mesh_peers": [{"addr": "b.example.com:443", "proxy": "socks5://127.0.0.1:1081"}]`)))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "mesh_key")
+	})
+
+	t.Run("对端地址非法/自连/重复都报错", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			peers string
+		}{
+			{"非法地址", `[{"addr": "b.example.com", "proxy": "socks5://127.0.0.1:1081"}]`},
+			{"自连", `[{"addr": "a.example.com:443", "proxy": "socks5://127.0.0.1:1081"}]`},
+			{"大小写不同的自连", `[{"addr": "A.Example.com:443", "proxy": "socks5://127.0.0.1:1081"}]`},
+			{"重复对端", `[{"addr": "b.example.com:443", "proxy": "socks5://127.0.0.1:1081"}, {"addr": "b.example.com:443", "proxy": "socks5://127.0.0.1:1082"}]`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := LoadConfig(writeConfig(t, base(`,
+					"mesh_key": "shared-passphrase",
+					"mesh_peers": `+tc.peers)))
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "mesh_peers")
+			})
+		}
+	})
+
+	t.Run("没有 proxy 且没有 next_proxy.url 时报错", func(t *testing.T) {
+		_, err := LoadConfig(writeConfig(t, base(`,
+			"mesh_key": "shared-passphrase",
+			"mesh_peers": [{"addr": "b.example.com:443"}]`)))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "next_proxy.url")
+	})
+
+	t.Run("没有 proxy 但有 next_proxy.url 时通过", func(t *testing.T) {
+		_, err := LoadConfig(writeConfig(t, `{
+			"server": {"listen": ":443", "domain": "a.example.com", "vpn": {
+				"enabled": true, "mesh_key": "shared-passphrase",
+				"mesh_peers": [{"addr": "b.example.com:443"}]
+			}},
+			"next_proxy": {"url": "socks5://127.0.0.1:1081"}
+		}`))
+		require.NoError(t, err)
+	})
+
+	t.Run("非 socks5 的 proxy 报错", func(t *testing.T) {
+		for _, proxy := range []string{"http://127.0.0.1:8080", "socks5://", "::::"} {
+			_, err := LoadConfig(writeConfig(t, base(`,
+				"mesh_key": "shared-passphrase",
+				"mesh_peers": [{"addr": "b.example.com:443", "proxy": "`+proxy+`"}]`)))
+			require.Error(t, err, "proxy %q", proxy)
+		}
+	})
+
+	t.Run("mesh_peers[].ca_file 按可执行文件目录解析", func(t *testing.T) {
+		fc, err := LoadConfig(writeConfig(t, base(`,
+			"mesh_key": "shared-passphrase",
+			"mesh_peers": [{"addr": "b.example.com:443", "proxy": "socks5://127.0.0.1:1081", "ca_file": "mesh-ca.pem"}]`)))
+		require.NoError(t, err)
+		require.True(t, filepath.IsAbs(fc.Server.VPN.MeshPeers[0].CAFile),
+			"ca_file %q should be resolved to an absolute path", fc.Server.VPN.MeshPeers[0].CAFile)
 	})
 }
 

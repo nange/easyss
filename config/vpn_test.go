@@ -2,6 +2,7 @@ package config
 
 import (
 	"net/netip"
+	"strings"
 	"testing"
 )
 
@@ -114,4 +115,100 @@ func TestVPNPortsAreConsistent(t *testing.T) {
 	if got := NormalizeVPNPeerPort(0, DefaultSocksPort); got != DefaultVPNPeerPort {
 		t.Errorf("deriving from the default socks_port yields %d, want DefaultVPNPeerPort %d", got, DefaultVPNPeerPort)
 	}
+}
+
+// TestCanonicalDERPAddr 固定"同一个中继的不同书写必须等价"这条比较语义：多节点
+// 的一致性校验（当前服务端是否在列表里、对端通告的节点集合是否相同）都建立在它
+// 之上，任何一处漏掉规范化都会变成"配置明明一致却启动失败"。
+func TestCanonicalDERPAddr(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"大小写与补零端口归一", "Relay.Example.com:0443", "relay.example.com:443"},
+		{"已规范的值不变", "relay.example.com:443", "relay.example.com:443"},
+		{"IPv4 字面量", "192.0.2.10:8443", "192.0.2.10:8443"},
+		{"IPv6 字面量补方括号", "[2001:db8::1]:443", "[2001:db8::1]:443"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := CanonicalDERPAddr(tc.in)
+			if err != nil {
+				t.Fatalf("CanonicalDERPAddr(%q): %v", tc.in, err)
+			}
+			if got != tc.want {
+				t.Errorf("CanonicalDERPAddr(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("非法值报错", func(t *testing.T) {
+		for _, in := range []string{"", "relay.example.com", ":443", "relay.example.com:", "relay.example.com:https", "relay.example.com:0", "relay.example.com:70000"} {
+			if _, err := CanonicalDERPAddr(in); err == nil {
+				t.Errorf("CanonicalDERPAddr(%q) = nil error, want error", in)
+			}
+		}
+	})
+}
+
+// TestParseVPNMeshKey 固定 mesh_key 的两种书写：64 位 hex 原样（统一小写），其余
+// 非空字符串按 SHA-256 派生。派生必须确定性——同一组服务端各自派生出的密钥只要
+// 有一位不同，mesh 就会静默地建立不起来（对端只被当成普通 DERP 客户端）。
+func TestParseVPNMeshKey(t *testing.T) {
+	t.Run("64 位 hex 原样使用并统一小写", func(t *testing.T) {
+		const in = "0123456789ABCDEF0123456789abcdef0123456789ABCDEF0123456789abcdef"
+		got, err := ParseVPNMeshKey(in)
+		if err != nil {
+			t.Fatalf("ParseVPNMeshKey: %v", err)
+		}
+		if want := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"; got != want {
+			t.Errorf("ParseVPNMeshKey(hex) = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("口令派生为 64 位 hex 且确定", func(t *testing.T) {
+		first, err := ParseVPNMeshKey("mesh-passphrase")
+		if err != nil {
+			t.Fatalf("ParseVPNMeshKey: %v", err)
+		}
+		if len(first) != 64 {
+			t.Fatalf("derived key %q is not 64 hex digits", first)
+		}
+		second, err := ParseVPNMeshKey("  mesh-passphrase  ")
+		if err != nil {
+			t.Fatalf("ParseVPNMeshKey (padded): %v", err)
+		}
+		if first != second {
+			t.Errorf("the same passphrase derived %q and %q; whitespace must not change the key", first, second)
+		}
+		other, err := ParseVPNMeshKey("mesh-passphrase2")
+		if err != nil {
+			t.Fatalf("ParseVPNMeshKey: %v", err)
+		}
+		if first == other {
+			t.Error("different passphrases derived the same key")
+		}
+	})
+
+	t.Run("长度是 64 但不是 hex 时按口令派生", func(t *testing.T) {
+		in := strings.Repeat("z", 64)
+		got, err := ParseVPNMeshKey(in)
+		if err != nil {
+			t.Fatalf("ParseVPNMeshKey: %v", err)
+		}
+		if got == in {
+			t.Error("a 64-character non-hex value must be hashed, not passed through")
+		}
+		if len(got) != 64 {
+			t.Errorf("derived key %q is not 64 hex digits", got)
+		}
+	})
+
+	t.Run("空值与空白报错", func(t *testing.T) {
+		for _, in := range []string{"", "   ", "\t\n"} {
+			if _, err := ParseVPNMeshKey(in); err == nil {
+				t.Errorf("ParseVPNMeshKey(%q) = nil error, want error", in)
+			}
+		}
+	})
 }
