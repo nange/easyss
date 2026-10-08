@@ -5,12 +5,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	tailcat "github.com/tailscale/tailcat"
 	"tailscale.com/envknob"
 
 	"github.com/nange/easyss/v3/client/config"
@@ -30,26 +32,26 @@ func vpnTestPaths(t *testing.T) vpnPaths {
 	}
 }
 
-// vpnTestDERPAddr 是测试配置里本节点通告、且所有对端也必须通告的 DERP 地址
-// （DERP 私有化要求单一 S，见 vpnnode.assertPeersShareDERP）。
+// vpnTestDERPAddrs 是测试配置里本节点通告、且所有对端也必须通告的 DERP 节点集合
+// （DERP 私有化要求双方声明同一组中继，见 vpnnode.assertPeersShareDERPSet）。
 //
-// 用 127.0.0.1:9 而不是一个域名：startVPN 的构造与拆卸都是惰性的（tailcat 到 DERP
-// 的连接在后台按退避重试），因此用例既不需要网络也不会等超时，同时避免在测试里做
-// 真实 DNS 查询。
-const vpnTestDERPAddr = "127.0.0.1:9"
+// 用 127.0.0.1:9 / 127.0.0.2:9 而不是域名：startVPN 的构造与拆卸都是惰性的
+// （tailcat 到 DERP 的连接在后台按退避重试），因此用例既不需要网络也不会等超时，
+// 同时避免在测试里做真实 DNS 查询。
+var vpnTestDERPAddrs = []string{"127.0.0.1:9", "127.0.0.2:9"}
 
-// vpnTestConfig 返回一份启用了 VPN 的客户端配置，它的 DERP 指向本机一个没人监听的
-// 端口。
-
+// vpnTestConfig 返回一份启用了 VPN 的客户端配置：两条服务端条目都标记了 derp，
+// 因此本节点地址里是两个中继节点（同 region 多节点形态），它们的地址都指向本机
+// 没人监听的端口（构造与拨号都是惰性的）。
+//
+// default 标记落在第一条上：需求 4 要求"当前服务端必须在声明的中继列表里"，
+// 否则 VPN 会在启动时被拒绝。
 func vpnTestConfig() *config.ClientConfig {
 	return &config.ClientConfig{
-		Servers: []*config.ServerProfile{{
-			Address:  "127.0.0.1",
-			Port:     9,
-			Password: "test",
-			Method:   sharedconfig.DefaultMethod,
-			DERP:     true,
-		}},
+		Servers: []*config.ServerProfile{
+			{Address: "127.0.0.1", Port: 9, Password: "test", Method: sharedconfig.DefaultMethod, DERP: true, Default: true},
+			{Address: "127.0.0.2", Port: 9, Password: "test", Method: sharedconfig.DefaultMethod, DERP: true},
+		},
 		Local: config.LocalConfig{SocksPort: sharedconfig.DefaultSocksPort},
 		VPN:   config.VPNConfig{Enabled: true},
 	}
@@ -86,6 +88,18 @@ func TestStartVPNBuildsAStackAndStopsCleanly(t *testing.T) {
 	addr := strings.TrimSpace(string(content))
 	if err := vpnnode.AssertFullAddr(addr); err != nil {
 		t.Fatalf("the published address is not usable by peers: %v", err)
+	}
+	// 两个被 derp 标记的服务端都必须出现在同一 region 里（多中继节点）。
+	ci, err := tailcat.ParseAddr(tailcat.Addr(addr))
+	if err != nil {
+		t.Fatalf("parse the published address: %v", err)
+	}
+	if len(ci.Region) != 1 || len(ci.Region[0].Nodes) != 2 {
+		t.Fatalf("published address carries %d regions with %d nodes, want one region with 2 relays", len(ci.Region), len(ci.Region[0].Nodes))
+	}
+	hosts := []string{ci.Region[0].Nodes[0].HostName, ci.Region[0].Nodes[1].HostName}
+	if !slices.Equal(hosts, []string{"127.0.0.1", "127.0.0.2"}) {
+		t.Errorf("published relay hosts = %v, want [127.0.0.1 127.0.0.2] in config order", hosts)
 	}
 
 	if err := stack.close(); err != nil {
@@ -156,6 +170,18 @@ func TestLoadVPNIdentity(t *testing.T) {
 	if err := vpnnode.AssertFullAddr(id.TailcatAddr); err != nil {
 		t.Fatalf("LoadVPNIdentity handed out an unusable address: %v", err)
 	}
+	// 声明的两个中继都必须出现在地址里，并且 DERPNodes 与地址内容一致（运维靠这
+	// 一行判断"地址里到底有几个中继"）。
+	if want := []string{"127.0.0.1:9", "127.0.0.2:9"}; !slices.Equal(id.DERPNodes, want) {
+		t.Errorf("DERPNodes = %v, want %v", id.DERPNodes, want)
+	}
+	ci, err := tailcat.ParseAddr(tailcat.Addr(id.TailcatAddr))
+	if err != nil {
+		t.Fatalf("parse the identity address: %v", err)
+	}
+	if len(ci.Region) != 1 || len(ci.Region[0].Nodes) != 2 {
+		t.Fatalf("identity address carries %d regions with %d nodes, want one region with 2 relays", len(ci.Region), len(ci.Region[0].Nodes))
+	}
 
 	// 同一份路径必须给出同一把 key：allow_clients 白名单的前提是它跨重启稳定。
 	again, err := loadVPNIdentity(vpnTestConfig(), paths)
@@ -185,6 +211,57 @@ func TestLoadVPNIdentity(t *testing.T) {
 	}
 }
 
+// TestStartVPNDoesNotLogTheAddress 是"地址令牌不进日志"的守门测试。
+//
+// tailcat 地址内嵌 preshared key，等价于对端面的接入凭据，而日志文件长期留存、
+// 经常被整体打包带走。启动路径因此只记录 address_file（文件路径）与不含秘密的
+// 中继列表，地址本身只经 `-show-vpn-identity` 与本地文件交付。
+func TestStartVPNDoesNotLogTheAddress(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Logger()
+	log.SetLogger(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { log.SetLogger(prev) })
+
+	paths := vpnTestPaths(t)
+	stack, err := startVPN(vpnTestConfig(), vpnTestTimeouts(), paths, false, nil)
+	if err != nil {
+		t.Fatalf("startVPN: %v", err)
+	}
+	t.Cleanup(func() { _ = stack.close() })
+
+	content, err := os.ReadFile(paths.peerAddr)
+	if err != nil {
+		t.Fatalf("read %s: %v", paths.peerAddr, err)
+	}
+	addr := strings.TrimSpace(string(content))
+	if addr == "" {
+		t.Fatal("the published address is empty; this test would not prove anything")
+	}
+
+	out := buf.String()
+	if out == "" {
+		t.Fatal("startVPN logged nothing; the assertion below would be vacuous")
+	}
+	if strings.Contains(out, addr) {
+		t.Errorf("the startup log contains the tailcat address (it embeds the preshared key):\n%s", out)
+	}
+	// 地址总以 "tc" 开头，用裸前缀再挡一次：即便地址被截断/改写，也不该有任何
+	// 前缀形态出现在日志里。阈值取 16 个字符是为了不误伤 tcp/目标地址之类的普通词。
+	if tailcatAddrInLog.MatchString(out) {
+		t.Errorf("the startup log contains something shaped like a tailcat address:\n%s", out)
+	}
+	if !strings.Contains(out, "address_file") {
+		t.Errorf("the startup log does not point at the address file, so the operator has no way to find the address:\n%s", out)
+	}
+	if !strings.Contains(out, "derp_addrs") {
+		t.Errorf("the startup log does not name the declared relays:\n%s", out)
+	}
+}
+
+// tailcatAddrInLog 匹配"看起来像 tailcat 地址"的 token：tc + 至少 16 个 base64url
+// 字符。真实地址远长于此，而 tcp、target 这类普通词后面跟不出这么长的连续 base64url。
+var tailcatAddrInLog = regexp.MustCompile(`\btc[A-Za-z0-9_-]{16,}`)
+
 // TestLoadVPNIdentityWithoutDERPAddr 固定降级行为：推导不出 DERP 位置时，地址部分
 // 给出原因而不是让整条命令失败——client nodekey 不依赖配置，而它正是"白名单配不起来"
 // 时最需要先拿到的东西。
@@ -205,11 +282,74 @@ func TestLoadVPNIdentityWithoutDERPAddr(t *testing.T) {
 	}
 }
 
+// TestLoadVPNIdentityIgnoresTheCurrentServerCheck 固定 `-show-vpn-identity` 的
+// 定位：它是排障工具，**不**执行"当前服务端必须在声明的中继列表里"这道 VPN 启动
+// 门禁（否则运维在最需要地址的时候反而拿不到地址）。该问题由调用方作为一行 warning
+// 打给用户，而 VPN 是否启动由 vpnOptions 决定。
+func TestLoadVPNIdentityIgnoresTheCurrentServerCheck(t *testing.T) {
+	cfg := vpnTestConfig()
+	// 当前服务端换成一条没有被 derp 标记的条目：VPN 会拒绝启动，但地址仍然要能拿到。
+	cfg.Servers = append(cfg.Servers, &config.ServerProfile{
+		Address: "127.0.0.3", Port: 9, Password: "test", Method: sharedconfig.DefaultMethod, Default: true,
+	})
+	for _, srv := range cfg.Servers[:2] {
+		srv.Default = false
+	}
+
+	if err := cfg.ValidateDERPServer(); err == nil {
+		t.Fatal("ValidateDERPServer() = nil, want an error for an unmarked current server")
+	}
+	if _, err := vpnOptions(cfg); err == nil {
+		t.Fatal("vpnOptions accepted a config whose current server is not a declared relay")
+	}
+
+	id, err := loadVPNIdentity(cfg, vpnTestPaths(t))
+	if err != nil {
+		t.Fatalf("loadVPNIdentity: %v", err)
+	}
+	if id.AddrErr != nil {
+		t.Fatalf("AddrErr = %v, want nil: the address must stay available for troubleshooting", id.AddrErr)
+	}
+	if !slices.Equal(id.DERPNodes, []string{"127.0.0.1:9", "127.0.0.2:9"}) {
+		t.Errorf("DERPNodes = %v, want the two marked relays", id.DERPNodes)
+	}
+}
+
 // TestVPNOptionsRequiresDERPAddr 固定严格失败：一个启用了 VPN 却没有可推导 DERP
 // 位置的配置必须在启动阶段报错，而不是让节点带着一个错的地址跑起来。
 func TestVPNOptionsRequiresDERPAddr(t *testing.T) {
 	if _, err := vpnOptions(&config.ClientConfig{VPN: config.VPNConfig{Enabled: true}}); err == nil {
 		t.Fatal("vpnOptions accepted a config without a derivable DERP host:port")
+	}
+}
+
+// TestVPNOptionsRejectsUndeclaredCurrentServer 固定需求 4 的门禁：当前服务端不在
+// 声明的中继列表里时，VPN 必须在启动阶段被拒绝（由 runCore 记 ERROR、并入
+// StartupWarn），而不是等到第一次访问对端时以"隧道拨号超时"的形式暴露——内嵌
+// DERP 只接待经本服务端隧道送达的连接，声明列表里没有它时中继永远连不上。
+func TestVPNOptionsRejectsUndeclaredCurrentServer(t *testing.T) {
+	cfg := vpnTestConfig()
+	cfg.Servers = append(cfg.Servers, &config.ServerProfile{
+		Address: "127.0.0.3", Port: 9, Password: "test", Method: sharedconfig.DefaultMethod, Default: true,
+	})
+	for _, srv := range cfg.Servers[:2] {
+		srv.Default = false
+	}
+
+	_, err := vpnOptions(cfg)
+	if err == nil {
+		t.Fatal("vpnOptions accepted a current server that is not a declared DERP relay")
+	}
+	for _, want := range []string{"127.0.0.3:9", "127.0.0.1:9", "derp"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should mention %q", err, want)
+		}
+	}
+
+	// 把那条服务端也标记成中继之后必须通过：这是给用户的修复动作。
+	cfg.Servers[2].DERP = true
+	if _, err := vpnOptions(cfg); err != nil {
+		t.Fatalf("vpnOptions rejected the fixed config: %v", err)
 	}
 }
 
@@ -230,14 +370,14 @@ func TestVPNPathsAreUnderTheExecutableDir(t *testing.T) {
 }
 
 // vpnTestPeer 造一个真实的对端引用：地址由 vpn.BuildRegion 与一个临时身份生成，
-// 因此它是完整展开格式，且内嵌的 DERP 主机就是传入的 derpAddr——DERP 私有化要求
-// 它与本节点通告的地址一致（见 vpnnode.assertPeersShareDERP）。
-func vpnTestPeer(t *testing.T, derpAddr string) config.VPNPeer {
+// 因此它是完整展开格式，且内嵌的 DERP 主机就是传入的 derpAddrs——DERP 私有化要求
+// 它与本节点通告的地址集合一致（见 vpnnode.assertPeersShareDERPSet）。
+func vpnTestPeer(t *testing.T, derpAddrs ...string) config.VPNPeer {
 	t.Helper()
 
-	region, err := vpn.BuildRegion(derpAddr)
+	region, err := vpn.BuildRegion(derpAddrs...)
 	if err != nil {
-		t.Fatalf("vpn.BuildRegion(%q): %v", derpAddr, err)
+		t.Fatalf("vpn.BuildRegion(%q): %v", derpAddrs, err)
 	}
 	identity, err := vpnnode.LoadOrCreateNodeIdentity(filepath.Join(t.TempDir(), "peer-identity.json"))
 	if err != nil {
@@ -276,7 +416,7 @@ func TestStartVPNForcesRelayOnlyUnderTun(t *testing.T) {
 			cfg := vpnTestConfig()
 			cfg.VPN.RelayOnly = tc.relay
 			if tc.peers > 0 {
-				cfg.VPN.Peers = []config.VPNPeer{vpnTestPeer(t, vpnTestDERPAddr)}
+				cfg.VPN.Peers = []config.VPNPeer{vpnTestPeer(t, vpnTestDERPAddrs...)}
 			}
 
 			stack, err := startVPN(cfg, vpnTestTimeouts(), vpnTestPaths(t), tc.tun, nil)
@@ -472,5 +612,48 @@ func TestRunDegradesWhenVPNFailsToStart(t *testing.T) {
 	}
 	if core.SocksServer == nil {
 		t.Error("the SOCKS5 entry must still be running")
+	}
+}
+
+// TestRunDegradesWhenTheCurrentServerIsNotADERPRelay 固定需求 4 在运行期的表现：
+// 当前服务端不在声明的中继列表里时，日志里必须有一条 ERROR，VPN 本会话缺席，而
+// 基础代理照常可用（与"VPN 是可选功能"的既有契约一致）。
+func TestRunDegradesWhenTheCurrentServerIsNotADERPRelay(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Logger()
+	log.SetLogger(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { log.SetLogger(prev) })
+
+	cfg := testConfig()
+	cfg.Local.SocksPort = freePort(t)
+	cfg.Local.HTTPPort = 0
+	cfg.VPN.Enabled = true
+	// 一条被标记为中继、一条没有被标记却承担当前连接：后者必须让 VPN 拒绝启动。
+	cfg.Servers = []*config.ServerProfile{
+		{Address: "relay.example.com", Port: 443, Password: "test", Method: sharedconfig.DefaultMethod, DERP: true},
+		{Address: "other.example.com", Port: 443, Password: "test", Method: sharedconfig.DefaultMethod, Default: true},
+	}
+
+	core, err := Run(cfg)
+	if err != nil {
+		t.Fatalf("Run must keep the proxy running when only the VPN failed: %v", err)
+	}
+	t.Cleanup(core.Stop)
+
+	if core.vpn != nil {
+		t.Error("the VPN must not start when the current server is not a declared relay")
+	}
+	if core.StartupWarn == nil {
+		t.Fatal("the failure must be surfaced as a startup warning")
+	}
+	if !strings.Contains(core.StartupWarn.Error(), "other.example.com:443") {
+		t.Errorf("the startup warning must name the current server, got: %v", core.StartupWarn)
+	}
+	if core.SocksServer == nil {
+		t.Error("the SOCKS5 entry must still be running")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "other.example.com:443") {
+		t.Errorf("the refusal must be logged at ERROR level and name the server, got:\n%s", out)
 	}
 }

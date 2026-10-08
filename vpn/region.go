@@ -29,31 +29,58 @@ const (
 // （实测 +10 MiB），因此依赖 tailcat 的那部分（AssertFullAddr、节点身份）都在
 // vpn/node 里。
 //
-// BuildRegion 由对外通告的 DERP host:port 构造一个自包含的 tailcat region，
-// 供 tailcat.Server.Region 使用。
+// BuildRegion 由对外通告的 DERP host:port 列表构造一个自包含的 tailcat region，
+// 供 tailcat.Server.Region 使用。多个 host:port 就是同一个 region 下的多个中继
+// 节点（互为冗余），顺序即 tailcat 尝试节点的顺序（它按 `reg.Nodes` 顺序 dialRegion，
+// 第一个连上的胜出）。
 //
 // 这里是"零控制面"的关键一环：把 DERP 的 host 与 port 内嵌进 region 之后，
 // tailcat 生成的地址（ConnInfo.Addr）会带上完整的节点详情，拿到地址的客户端
-// 无需查询任何 DERPMap。因此 derpAddr 必须是**客户端能直接连上**的 host:port，
-// 即 easyss 服务端自己的对外地址，而不是它的监听地址（0.0.0.0:443 之类）。
+// 无需查询任何 DERPMap。因此每条 derpAddr 都必须是**节点能经自己隧道抵达**的
+// host:port，即该中继所在服务端的对外地址（`server.vpn.derp_addr`），而不是它的
+// 监听地址（0.0.0.0:443 之类）。
 //
 // 节点不设 STUNPort：本设计只用 DERP 中继与 WireGuard 打洞，不需要 STUN
 // 探测；tailcat 的 wire 编码也会丢弃 STUN-only 节点。
-func BuildRegion(derpAddr string) (*tailcfg.DERPRegion, error) {
-	da, err := sharedconfig.SplitDERPAddr(derpAddr)
-	if err != nil {
-		return nil, err
+//
+// 节点名只在**本机**可读（编码进地址时 tailcat 会抹掉它，解析时按 HostName 补回），
+// 因此多节点时给它加序号即可：netcheck 之类的排障输出按 Name 区分节点。
+func BuildRegion(derpAddrs ...string) (*tailcfg.DERPRegion, error) {
+	if len(derpAddrs) == 0 {
+		return nil, errors.New("vpn: no DERP address to advertise; mark at least one servers[] entry with \"derp\": true or set vpn.derp_addr")
+	}
+	seen := make(map[string]struct{}, len(derpAddrs))
+	nodes := make([]*tailcfg.DERPNode, 0, len(derpAddrs))
+	for i, addr := range derpAddrs {
+		da, err := sharedconfig.SplitDERPAddr(addr)
+		if err != nil {
+			return nil, fmt.Errorf("DERP node %d: %w", i, err)
+		}
+		canonical, err := sharedconfig.CanonicalDERPAddr(addr)
+		if err != nil {
+			return nil, fmt.Errorf("DERP node %d: %w", i, err)
+		}
+		if _, dup := seen[canonical]; dup {
+			return nil, fmt.Errorf("vpn: DERP node %s is declared twice; the same relay must not appear twice in one region", addr)
+		}
+		seen[canonical] = struct{}{}
+
+		name := DERPNodeName
+		if len(derpAddrs) > 1 {
+			name = fmt.Sprintf("%s-%d", DERPNodeName, i+1)
+		}
+		nodes = append(nodes, &tailcfg.DERPNode{
+			Name:     name,
+			RegionID: RegionID,
+			HostName: da.Host,
+			DERPPort: da.Port,
+		})
 	}
 	return &tailcfg.DERPRegion{
 		RegionID:   RegionID,
 		RegionCode: RegionCode,
 		RegionName: RegionName,
-		Nodes: []*tailcfg.DERPNode{{
-			Name:     DERPNodeName,
-			RegionID: RegionID,
-			HostName: da.Host,
-			DERPPort: da.Port,
-		}},
+		Nodes:      nodes,
 	}, nil
 }
 

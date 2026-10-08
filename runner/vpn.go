@@ -136,12 +136,13 @@ func startVPN(cfg *config.ClientConfig, timeouts sharedconfig.Timeouts, paths vp
 		// 它把服务端变成全部对端流量的带宽瓶颈，因此每次启动都明确打出来，
 		// 而不是只在 debug 级别可见。
 		log.Warn("[VPN] relay_only is on: every peer connection is forced through the DERP relay of the easyss server",
-			"derp_addr", nc.DERPAddr)
+			"derp_addrs", strings.Join(nc.DERPAddrs, ", "))
 	} else {
-		log.Info("[VPN] relay_only is off: nodes may establish direct connections to each other", "derp_addr", nc.DERPAddr)
+		log.Info("[VPN] relay_only is off: nodes may establish direct connections to each other",
+			"derp_addrs", strings.Join(nc.DERPAddrs, ", "))
 	}
 
-	region, err := vpn.BuildRegion(nc.DERPAddr)
+	region, err := vpn.BuildRegion(nc.DERPAddrs...)
 	if err != nil {
 		return nil, err
 	}
@@ -172,9 +173,8 @@ func startVPN(cfg *config.ClientConfig, timeouts sharedconfig.Timeouts, paths vp
 		return nil, err
 	}
 	// 地址在启动成功之后才发布：先写文件再启动会让"文件存在但进程起不来"看起来
-	// 像一次成功的部署。
-	addr, err := face.PublishAddr(paths.peerAddr)
-	if err != nil {
+	// 像一次成功的部署。返回值不在这里记录（它是秘密，见下面的 identity 日志）。
+	if _, err := face.PublishAddr(paths.peerAddr); err != nil {
 		_ = stack.close()
 		return nil, err
 	}
@@ -215,12 +215,17 @@ func startVPN(cfg *config.ClientConfig, timeouts sharedconfig.Timeouts, paths vp
 	}
 
 	// 两个 key 与一个地址是运维要分发的全部信息，字段名直接写清各自该填到哪里。
+	//
+	// 这里刻意**不打印地址本身**：它内嵌 preshared key，等价于对端面的接入凭据，
+	// 而日志文件是长期留存、经常被整体打包带走的东西。地址只经两条显式路径交给
+	// 运维：`-show-vpn-identity` 与下面的 address_file。字段名仍保留 address_file，
+	// 使"日志里没有、但文件里有"这件事本身被发现。
 	log.Info("[VPN] node identity ready",
-		"address", addr, // 对端的 vpn.peers[].address
-		"address_file", paths.peerAddr,
+		"address_file", paths.peerAddr, // 对端的 vpn.peers[].address（地址本身是秘密，不写日志）
 		"client_nodekey", clients.ClientKey().String(), // 对端的 vpn.allow_clients
 		"peer_port", nc.PeerPort,
 		"relay_only", relayOnly,
+		"derp_addrs", strings.Join(nc.DERPAddrs, ", "), // 中继是哪些主机（非秘密），不含地址令牌
 		"peers", len(nc.Peers))
 	for _, ref := range overlay.Peers() {
 		ip, ok := overlay.Addr(ref.HostName)
@@ -350,11 +355,19 @@ func (c *Core) CheckVPNTunCompat() error {
 
 // vpnOptions 把客户端配置视图翻译成 vpn 包的原始输入（严格校验在
 // vpnnode.NewConfig 里）。
+//
+// 顺序是刻意的：先确认"有没有中继可通告"，再确认"当前服务端是不是其中之一"。
+// 后者是需求 4 的硬门禁——内嵌 DERP 只接待经本服务端隧道送达的连接，声明列表里
+// 没有当前服务端时中继永远连不上，因此 VPN 在本会话直接缺席（错误由 runCore 记
+// ERROR 并入 StartupWarn），而不是让用户在第一次访问对端时看到超时。
 func vpnOptions(cfg *config.ClientConfig) (vpnnode.Options, error) {
-	derpAddr := cfg.VPNDERPAddr()
-	if derpAddr == "" {
-		return vpnnode.Options{}, errors.New("vpn: cannot derive the DERP host:port this node advertises: " +
-			"set vpn.derp_addr, or make sure servers[] has an entry with address/port")
+	derpAddrs := cfg.VPNDERPAddrs()
+	if len(derpAddrs) == 0 {
+		return vpnnode.Options{}, errors.New("vpn: cannot derive any DERP host:port this node advertises: " +
+			"mark the servers[] entries that run the embedded DERP with \"derp\": true, or set vpn.derp_addr")
+	}
+	if err := cfg.ValidateDERPServer(); err != nil {
+		return vpnnode.Options{}, err
 	}
 	peers := make([]vpnnode.PeerRef, 0, len(cfg.VPN.Peers))
 	for _, p := range cfg.VPN.Peers {
@@ -364,7 +377,7 @@ func vpnOptions(cfg *config.ClientConfig) (vpnnode.Options, error) {
 		RelayOnly:    cfg.VPN.RelayOnlyEnabled(),
 		PeerPort:     cfg.VPNPeerPort(),
 		OverlayCIDR:  cfg.VPN.OverlayCIDR,
-		DERPAddr:     derpAddr,
+		DERPAddrs:    derpAddrs,
 		Peers:        peers,
 		AllowClients: cfg.VPN.AllowClients,
 	}, nil
@@ -380,6 +393,10 @@ type VPNIdentity struct {
 	ClientNodeKey string
 	// TailcatAddr 是本节点地址（完整展开格式）。AddrErr 非空时为空。
 	TailcatAddr string
+	// DERPNodes 是地址里内嵌的中继节点（host:port，配置顺序）。它不是秘密，
+	// `-show-vpn-identity` 单独列出来是为了让"地址里到底有几个中继"可见：地址
+	// 本身是一串不可读的 base64。
+	DERPNodes []string
 	// AddrErr 是推导本节点地址失败的原因。此时 ClientNodeKey 仍然有效——它不
 	// 依赖任何配置，这正是"白名单配不起来"时要先拿到的东西。
 	AddrErr error
@@ -397,17 +414,21 @@ func loadVPNIdentity(cfg *config.ClientConfig, paths vpnPaths) (*VPNIdentity, er
 	}
 	id := &VPNIdentity{ClientNodeKey: key.Public().String()}
 
-	// 本节点地址是 (身份, derp_addr) 的函数，**与 peers / overlay / peer_port 无关**。
-	// 这里刻意不经过 vpnnode.NewConfig：运维第一次跑这个命令时 peers 往往还是空的
-	// （他们正需要先拿到地址才能去填对端），若因为 peer 校验失败就报"地址不可用"，
-	// 这个命令在最需要它的场景下恰好不可用。
-	derpAddr := cfg.VPNDERPAddr()
-	if derpAddr == "" {
-		id.AddrErr = errors.New("cannot derive the DERP host:port this node advertises: " +
-			"set vpn.derp_addr, or make sure servers[] has an entry with address/port")
+	// 本节点地址是 (身份, DERP 节点列表) 的函数，**与 peers / overlay / peer_port
+	// 无关**。这里刻意不经过 vpnnode.NewConfig：运维第一次跑这个命令时 peers 往往
+	// 还是空的（他们正需要先拿到地址才能去填对端），若因为 peer 校验失败就报"地址
+	// 不可用"，这个命令在最需要它的场景下恰好不可用。
+	//
+	// 同理也不在这里做"当前服务端必须在列表里"的门禁：那是 VPN 能否工作的判断
+	// （见 vpnOptions），而这个命令要能用来排障——它把该问题作为一行 warning 打给
+	// 用户（见 cmd/easyss 的 printVPNIdentity）。
+	derpAddrs := cfg.VPNDERPAddrs()
+	if len(derpAddrs) == 0 {
+		id.AddrErr = errors.New("cannot derive any DERP host:port this node advertises: " +
+			"mark the servers[] entries that run the embedded DERP with \"derp\": true, or set vpn.derp_addr")
 		return id, nil
 	}
-	region, err := vpn.BuildRegion(derpAddr)
+	region, err := vpn.BuildRegion(derpAddrs...)
 	if err != nil {
 		id.AddrErr = fmt.Errorf("vpn.derp_addr: %w", err)
 		return id, nil
@@ -424,5 +445,6 @@ func loadVPNIdentity(cfg *config.ClientConfig, paths vpnPaths) (*VPNIdentity, er
 		return id, nil
 	}
 	id.TailcatAddr = addr
+	id.DERPNodes = derpAddrs
 	return id, nil
 }

@@ -3,95 +3,134 @@ package config
 import (
 	"encoding/json"
 	"net/netip"
+	"slices"
+	"strings"
 	"testing"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
 )
 
-// TestDERPServerFallback 固定"谁提供内嵌 DERP"的选择规则：第一条被 derp 标记
-// 的条目优先；没有任何条目标记时回退 servers[0]，**不跟随 default 标记**。
+// TestDERPServers 固定"谁提供内嵌 DERP"的选择规则：所有被 derp 标记的条目都进
+// 列表（配置顺序，它们共同构成同一 region 的多个中继）；没有任何条目标记时回退
+// **当前连接的服务端**（default 标记，其次 servers[0]），不再固定取 servers[0]。
 //
-// 不跟随 default 是刻意的：DERP 中继是谁，与"代理走哪条 server"是两个独立的
-// 选择，若跟着 default 走，用户切换默认 server 会静默改掉本节点对外通告的地址，
-// 而每个对端都得跟着改配置。
-func TestDERPServerFallback(t *testing.T) {
-	t.Run("被标记的条目优先", func(t *testing.T) {
+// 回退到当前服务端是必要的：内嵌 DERP 只接待经本服务端隧道送达的连接，所以节点
+// 实际能用的中继永远是它此刻连的那台；固定取 servers[0] 会在默认 server 不是第一
+// 条时派生出一个永远连不上的中继。
+func TestDERPServers(t *testing.T) {
+	t.Run("被标记的条目按配置顺序全部返回", func(t *testing.T) {
 		cfg := &ClientConfig{Servers: []*ServerProfile{
 			{Address: "a.example.com", Port: 443, Default: true},
 			{Address: "b.example.com", Port: 443, DERP: true},
+			{Address: "c.example.com", Port: 8443, DERP: true},
 		}}
-		if got := cfg.DERPServer(); got == nil || got.Address != "b.example.com" {
-			t.Fatalf("DERPServer() = %v, want b.example.com", got)
+		got := cfg.DERPServers()
+		if len(got) != 2 || got[0].Address != "b.example.com" || got[1].Address != "c.example.com" {
+			t.Fatalf("DERPServers() = %v, want [b.example.com c.example.com] in config order", got)
+		}
+		// 单节点视图 = 列表第一个（既有调用点与日志用）。
+		if first := cfg.DERPServer(); first == nil || first.Address != "b.example.com" {
+			t.Fatalf("DERPServer() = %v, want b.example.com", first)
 		}
 	})
 
-	t.Run("无标记时回退 servers[0] 而不是 default 标记", func(t *testing.T) {
+	t.Run("无标记时回退 default 标记而不是 servers[0]", func(t *testing.T) {
 		cfg := &ClientConfig{Servers: []*ServerProfile{
 			{Address: "a.example.com", Port: 443},
 			{Address: "b.example.com", Port: 443, Default: true},
 		}}
-		if got := cfg.DERPServer(); got == nil || got.Address != "a.example.com" {
-			t.Fatalf("DERPServer() = %v, want a.example.com (servers[0])", got)
+		got := cfg.DERPServers()
+		if len(got) != 1 || got[0].Address != "b.example.com" {
+			t.Fatalf("DERPServers() = %v, want the current server b.example.com", got)
 		}
 	})
 
-	t.Run("有标记时忽略 default 标记", func(t *testing.T) {
+	t.Run("无标记且无 default 时回退 servers[0]", func(t *testing.T) {
 		cfg := &ClientConfig{Servers: []*ServerProfile{
-			{Address: "a.example.com", Port: 443, Default: true},
-			{Address: "b.example.com", Port: 443, DERP: true},
-			{Address: "c.example.com", Port: 443, DERP: true},
+			{Address: "a.example.com", Port: 443},
+			{Address: "b.example.com", Port: 443},
 		}}
-		if got := cfg.DERPServer(); got == nil || got.Address != "b.example.com" {
-			t.Fatalf("DERPServer() = %v, want the first derp-marked entry b.example.com", got)
+		got := cfg.DERPServers()
+		if len(got) != 1 || got[0].Address != "a.example.com" {
+			t.Fatalf("DERPServers() = %v, want a.example.com (DefaultServer falls back to servers[0])", got)
 		}
 	})
 
 	t.Run("没有服务端条目", func(t *testing.T) {
+		if got := (&ClientConfig{}).DERPServers(); got != nil {
+			t.Fatalf("DERPServers() = %v, want nil", got)
+		}
 		if got := (&ClientConfig{}).DERPServer(); got != nil {
 			t.Fatalf("DERPServer() = %v, want nil", got)
 		}
 	})
 }
 
-// TestVPNDERPAddr 固定 vpn.derp_addr 的默认来源与覆盖：显式值优先，否则从
-// DERPServer() 派生；派生值必须是 host:port 形态（IPv6 字面量带方括号），
-// 因为对端要把它当作 region 的 HostName/DERPPort 使用。
-func TestVPNDERPAddr(t *testing.T) {
-	t.Run("未配置时从被标记的 server 派生", func(t *testing.T) {
+// TestVPNDERPAddrs 固定通告列表的派生：显式 vpn.derp_addr 退化成单节点，否则由
+// 全部 derp 标记条目派生；返回值必须是 host:port（IPv6 带方括号）、规范化去重且
+// 保持配置顺序（对端会按这个顺序尝试中继节点）。
+func TestVPNDERPAddrs(t *testing.T) {
+	t.Run("多标记派生多个节点并保持顺序", func(t *testing.T) {
 		cfg := &ClientConfig{
 			Servers: []*ServerProfile{
-				{Address: "a.example.com", Port: 8443, Default: true},
+				{Address: "a.example.com", Port: 443, Default: true},
 				{Address: "relay.example.com", Port: 9443, DERP: true},
+				{Address: "backup.example.com", Port: 443, DERP: true},
 			},
 		}
-		if got, want := cfg.VPNDERPAddr(), "relay.example.com:9443"; got != want {
-			t.Errorf("VPNDERPAddr() = %q, want %q", got, want)
+		got := cfg.VPNDERPAddrs()
+		want := []string{"relay.example.com:9443", "backup.example.com:443"}
+		if !slices.Equal(got, want) {
+			t.Errorf("VPNDERPAddrs() = %v, want %v", got, want)
+		}
+		if first := cfg.VPNDERPAddr(); first != want[0] {
+			t.Errorf("VPNDERPAddr() = %q, want the first node %q", first, want[0])
 		}
 	})
 
-	t.Run("未配置且无标记时取 servers[0]", func(t *testing.T) {
+	t.Run("同一中继的不同书写只算一个节点", func(t *testing.T) {
+		cfg := &ClientConfig{
+			Servers: []*ServerProfile{
+				{Address: "relay.example.com", Port: 443, DERP: true},
+				{Address: "Relay.Example.com", Port: 443, DERP: true},
+			},
+		}
+		got := cfg.VPNDERPAddrs()
+		if len(got) != 1 || got[0] != "relay.example.com:443" {
+			t.Errorf("VPNDERPAddrs() = %v, want a single relay.example.com:443", got)
+		}
+	})
+
+	t.Run("未配置且无标记时取当前服务端", func(t *testing.T) {
 		cfg := &ClientConfig{
 			Servers: []*ServerProfile{
 				{Address: "a.example.com", Port: 443},
 				{Address: "b.example.com", Port: 443, Default: true},
 			},
 		}
-		if got, want := cfg.VPNDERPAddr(), "a.example.com:443"; got != want {
-			t.Errorf("VPNDERPAddr() = %q, want %q", got, want)
+		if got, want := cfg.VPNDERPAddr(), "b.example.com:443"; got != want {
+			t.Errorf("VPNDERPAddr() = %q, want %q (the current server)", got, want)
 		}
 	})
 
-	t.Run("显式配置覆盖派生", func(t *testing.T) {
+	t.Run("显式配置覆盖整组节点", func(t *testing.T) {
 		cfg := &ClientConfig{
-			Servers: []*ServerProfile{{Address: "a.example.com", Port: 443}},
-			VPN:     VPNConfig{DERPAddr: "relay.internal:8443"},
+			Servers: []*ServerProfile{
+				{Address: "a.example.com", Port: 443, DERP: true},
+				{Address: "b.example.com", Port: 443, DERP: true},
+			},
+			VPN: VPNConfig{DERPAddr: "relay.internal:8443"},
 		}
-		if got, want := cfg.VPNDERPAddr(), "relay.internal:8443"; got != want {
-			t.Errorf("VPNDERPAddr() = %q, want %q", got, want)
+		got := cfg.VPNDERPAddrs()
+		if !slices.Equal(got, []string{"relay.internal:8443"}) {
+			t.Errorf("VPNDERPAddrs() = %v, want exactly the explicit override", got)
 		}
 	})
 
 	t.Run("没有服务端条目且未显式配置时为空", func(t *testing.T) {
+		if got := (&ClientConfig{}).VPNDERPAddrs(); got != nil {
+			t.Errorf("VPNDERPAddrs() = %v, want nil", got)
+		}
 		if got := (&ClientConfig{}).VPNDERPAddr(); got != "" {
 			t.Errorf("VPNDERPAddr() = %q, want empty", got)
 		}
@@ -110,6 +149,86 @@ func TestVPNDERPAddr(t *testing.T) {
 		}
 		if got, want := cfg.VPNDERPAddr(), "[2001:db8::1]:443"; got != want {
 			t.Errorf("VPNDERPAddr() = %q, want %q", got, want)
+		}
+	})
+}
+
+// TestValidateDERPServer 固定"当前服务端必须是声明的中继之一"这条不变量：内嵌
+// DERP 只接待经本服务端隧道送达的连接，声明列表里没有它时中继永远连不上，因此
+// VPN 必须在启动阶段拒绝（见 runner.vpnOptions）而不是让用户看到"连不上"。
+func TestValidateDERPServer(t *testing.T) {
+	t.Run("当前服务端在列表里", func(t *testing.T) {
+		cfg := &ClientConfig{Servers: []*ServerProfile{
+			{Address: "a.example.com", Port: 443, DERP: true},
+			{Address: "b.example.com", Port: 443, DERP: true, Default: true},
+		}}
+		if err := cfg.ValidateDERPServer(); err != nil {
+			t.Errorf("ValidateDERPServer() = %v, want nil", err)
+		}
+	})
+
+	t.Run("大小写不同不算不匹配", func(t *testing.T) {
+		cfg := &ClientConfig{Servers: []*ServerProfile{
+			{Address: "RELAY.example.com", Port: 443, DERP: true},
+			{Address: "relay.example.com", Port: 443, Default: true},
+		}}
+		if err := cfg.ValidateDERPServer(); err != nil {
+			t.Errorf("ValidateDERPServer() = %v, want nil: the two entries are the same relay", err)
+		}
+	})
+
+	t.Run("当前服务端不在列表里时报错并点名双方", func(t *testing.T) {
+		cfg := &ClientConfig{Servers: []*ServerProfile{
+			{Address: "a.example.com", Port: 443, DERP: true},
+			{Address: "b.example.com", Port: 443, DERP: true},
+			{Address: "c.example.com", Port: 443, Default: true},
+		}}
+		err := cfg.ValidateDERPServer()
+		if err == nil {
+			t.Fatal("ValidateDERPServer() = nil, want an error for an unmarked current server")
+		}
+		for _, want := range []string{"c.example.com:443", "a.example.com:443", "b.example.com:443", "derp"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q should mention %q", err, want)
+			}
+		}
+	})
+
+	t.Run("无标记时当前服务端就是列表本身", func(t *testing.T) {
+		cfg := &ClientConfig{Servers: []*ServerProfile{
+			{Address: "a.example.com", Port: 443},
+			{Address: "b.example.com", Port: 443, Default: true},
+		}}
+		if err := cfg.ValidateDERPServer(); err != nil {
+			t.Errorf("ValidateDERPServer() = %v, want nil", err)
+		}
+	})
+
+	t.Run("显式 derp_addr 与当前服务端不同时报错", func(t *testing.T) {
+		cfg := &ClientConfig{
+			Servers: []*ServerProfile{{Address: "a.example.com", Port: 443, Default: true}},
+			VPN:     VPNConfig{DERPAddr: "relay.internal:8443"},
+		}
+		if err := cfg.ValidateDERPServer(); err == nil {
+			t.Error("ValidateDERPServer() = nil, want an error: the explicit relay is not the current server")
+		}
+	})
+
+	t.Run("没有可用列表时不在这里报错", func(t *testing.T) {
+		if err := (&ClientConfig{}).ValidateDERPServer(); err != nil {
+			t.Errorf("ValidateDERPServer() = %v, want nil (the VPN start path reports the empty list)", err)
+		}
+	})
+
+	t.Run("列表里的地址都非法时不在这里报错", func(t *testing.T) {
+		cfg := &ClientConfig{
+			Servers: []*ServerProfile{{Address: "a.example.com", Port: 443, Default: true}},
+			VPN:     VPNConfig{DERPAddr: "not-a-host-port"},
+		}
+		// 这条配置真正的问题是"derp_addr 非法"，由 vpnnode.NewConfig 带节点序号报出；
+		// 说成"当前服务端不在列表里"会把人引向错误的修法。
+		if err := cfg.ValidateDERPServer(); err != nil {
+			t.Errorf("ValidateDERPServer() = %v, want nil for an unparsable relay list", err)
 		}
 	})
 }
