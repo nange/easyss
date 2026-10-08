@@ -600,45 +600,80 @@ sysctl -p
 
 中继本身是**私有端点**：它只接待经 easyss 协议隧道到达的连接，公网上访问 `/derp`
 只会看到与其他未知路径一致的伪装页面。因此不存在"拿你的域名当免费中继"的问题，
-也不需要为它开放额外端口。代价是**只支持一台 DERP 主机（单一 S）**：所有节点的
-`vpn.derp_addr` 必须指向同一台 easyss 服务端，配置不一致会在启动时直接报错。
+也不需要为它开放额外端口。
 
-节点的 `vpn.derp_addr` 要么留空（默认从 `servers[]` 推导），要么写成**与服务端
-`[SERVER] embedded DERP enabled` 日志里 `derp_addr` 完全相同**的 `host:port`——
-服务端靠这个值认出"这条隧道连接是要访问我自己的 DERP"，写法不一致时中继不可达
-（表现为节点日志里反复出现 DERP 连接失败）。
+**同一个 region 下可以有多台中继**（多个 `derp: true` 的服务端条目，互为冗余），
+它们之间可以组成 mesh：挂在不同中继上的客户端互相发包时，由服务端沿 mesh 连接转发
+一跳（不跨 region），因此"同一 region 的两个客户端落在了不同中继上"不会再导致它们
+失联。运行上的三条硬约束：
 
-节点侧的 DERP 连接由一个专门的拨号器送进 easyss 隧道（tailcat 的 `DERPDialer`
+* **当前服务端必须在声明的中继列表里**。内嵌 DERP 只接待经**本服务端**隧道送达的
+  连接，所以节点实际能连上的中继只能是它此刻隧道所落的那台服务端。`vpn.enabled=true`
+  时若当前服务端不在列表里，启动日志会给出 `level=ERROR`（提示"服务器不在声明的
+  DERP 列表中"），**本会话的 VPN 不工作**（代理照常可用）。修法是把 `servers[]` 里
+  对应该服务端的条目也标上 `"derp": true`（或让 `vpn.derp_addr` 等于它），再用
+  `-show-vpn-identity` 重新生成各节点地址。
+* **所有节点必须声明同一组中继**。对端地址里内嵌的 DERP 节点集合与本节点不一致时
+  启动即报错（缺一个节点就可能让某一侧在耗尽列表后彻底连不上）。
+* **mesh 是可选的**，且只在服务端之间配置：没配 mesh 时跨中继的客户端收不到对方的
+  数据包（包被丢弃并回 `PeerGoneReasonNotHere`），同中继内的客户端不受影响。
+
+地址里内嵌 DERP 节点集合：默认由 `servers[]` 里全部 `derp: true` 的条目派生；没有
+任何条目标记时回退**当前连接的服务端**（因此切换服务端会让地址变化，要对端跟着更新
+——要稳定的多节点地址就显式标记每一个中继）。`vpn.derp_addr` 仍然可以把整组节点显式
+覆盖成它一个。
+
+节点的 DERP 连接由一个专门的拨号器送进 easyss 隧道（tailcat 的 `DERPDialer`
 选项，见 `go.mod` 里的两个 `replace`：`tailscale.com` 与
 `github.com/tailscale/tailcat`）。该选项目前由本地 fork 提供，上游合并前请按
 `go.mod` 注释切换 replace 的形态。
 
-#### 1. 服务端（DERP 中继主机 S）
+#### 1. 服务端（DERP 中继主机 S1）
 
 ```jsonc
 {
   "server": {
     "listen": ":443",
-    "domain": "example.com",
+    "domain": "a.example.com",
     "password": "your-password",
     "vpn": {
       "enabled": true,
-      // 可省略：默认取 domain + listen 的端口（这里即 example.com:443）
-      "derp_addr": "example.com:443"
+      // 可省略：默认取 domain + listen 的端口（这里即 a.example.com:443）
+      "derp_addr": "a.example.com:443",
+      // 可选：同 region 其他中继的互联。两个字段要么都给，要么都不给。
+      // mesh_key 是这组中继共享的口令（任意字符串，内部 SHA-256 成 32 字节密钥）。
+      "mesh_key": "a-long-shared-passphrase",
+      "mesh_peers": [
+        // addr 必须等于对端自己的 server.vpn.derp_addr。
+        // proxy 是把这条连接送进隧道的 SOCKS5——通常是本机上指向该对端的
+        // easyss-headless 的 socks 端口；省略时用顶层 next_proxy.url。
+        { "addr": "b.example.com:443", "proxy": "socks5://127.0.0.1:1081" }
+      ]
     }
   }
 }
 ```
 
+mesh 连接的完整路径是：本机内嵌 DERP → 上面那个 SOCKS5 → easyss-headless 的隧道 →
+对端 easyss 服务端（握手目标正是它自己的 `derp_addr`）→ 对端回环上的内嵌 DERP。
+这不是"优化"，而是唯一可能成功的形态：内嵌 DERP 只接待回环来源，直连对端公网
+`host:port` 只会拿到伪装页面。因此每个 mesh 对端都需要**一条指向它的隧道**（
+N 台中继的全互联 = 每台 N-1 个 easyss-headless，各自只连一个对端），并且该客户端的
+分流规则不能把对端域名判成直连（用 `auto`/`proxy`，别用 `direct`）。
+
+对端使用手工证书/私有 CA 时，用 `mesh_peers[].ca_file` 给出根证书；用 certmagic
+（Let's Encrypt）时留空即可。
+
 #### 2. 节点
 
-每个节点都要在 `servers[]` 里有一条指向 S 的条目（推荐用 `derp: true` 标记它，
-DERP 位置从该条目派生）：
+每个节点都要在 `servers[]` 里为**每一台**运行内嵌 DERP 的服务端各留一条条目，并全部
+标记 `derp: true`（DERP 位置从这些条目派生）：
 
 ```jsonc
 {
   "servers": [
-    { "address": "example.com", "port": 443, "password": "...", "derp": true }
+    { "address": "a.example.com", "port": 443, "password": "...", "derp": true, "default": true },
+    { "address": "b.example.com", "port": 443, "password": "...", "derp": true }
   ],
   "vpn": {
     "enabled": true,
@@ -654,16 +689,20 @@ DERP 位置从该条目派生）：
 
 #### 3. 首次配置：两个 key 的收件人不同
 
-在节点 X 上执行 `./easyss -show-vpn-identity`（或从启动日志的
-`[VPN] node identity ready` 一行）可以拿到两样东西，**它们要填到对端**：
+在节点 X 上执行 `./easyss -show-vpn-identity` 可以拿到两样东西，**它们要填到对端**：
 
 | 拿到的东西 | 填到哪里 | 作用 |
 |---|---|---|
 | `client_nodekey`（`nodekey:...`） | 对端的 `vpn.allow_clients` | 对端面据此识别访问侧（可选硬化） |
 | `address`（`tc...`） | 对端的 `vpn.peers[].address` | 内嵌公钥 / DERP 位置 / preshared key |
 
-地址同时也写在 `<exe>/vpn/peer.txt` 里。**地址本身是秘密**：它内嵌 preshared
-key，拿到地址就等于拿到对端面的接入能力。
+命令还会列出地址里包含的 derp 节点（`derp nodes in the address`）；当前服务端不在该
+列表里时会额外打印一行 `warning:`（见上面的第一条硬约束）。地址同时也写在
+`<exe>/vpn/peer.txt` 里。
+
+**地址本身是秘密**：它内嵌 preshared key，拿到地址就等于拿到对端面的接入能力。因此
+**启动日志刻意不打印地址**（只有 `address_file` 指向那个文件），要分发地址请从
+`-show-vpn-identity` 或该文件复制。
 
 #### 4. 访问对端
 
@@ -690,7 +729,13 @@ ssh user@b
 * **不支持 ICMP**：`ping b` / traceroute 到对端不通，VPN 只承载 TCP 与 UDP。
 * UDP 单包上限 1232 字节，适合 DNS / QUIC 首包，不适合大包高带宽 UDP。
 * 没有节点自动发现：对端地址由运维配置。
-* **只支持单一 DERP 主机**（见上）：所有节点的 DERP 配置必须一致，否则启动即报错。
+* mesh 只在服务端之间、只转发一跳、不跨 region；mesh 未配或对端不可用时，跨中继的
+  数据包按 `PeerGoneReasonNotHere` 丢弃（同中继内不受影响）。
+* **当前服务端必须在声明的 DERP 列表里**（见上）：否则 VPN 本会话不工作，日志给出
+  一条 ERROR，代理功能不受影响。
+* 客户端会按地址里节点的顺序尝试中继：不在它隧道落点上的节点会由服务端直连出去并被
+  伪装页面拒绝（快速失败），随后自动落到它自己的那台上。
+* 地址长度随中继节点数增长。
 * **Android 客户端暂不支持 VPN**：DERP 连接走的是 tailcat 的拨号器选项（见下），
   库层面在 Android 上同样可用；缺的是移动端的 VPN 配置入口与状态目录（当前非目标）。
 * `vpn.enabled=false`（默认）时对现有功能零影响。
