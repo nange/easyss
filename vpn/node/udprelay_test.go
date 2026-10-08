@@ -35,7 +35,7 @@ func TestUDPTargetHeaderRoundTrip(t *testing.T) {
 
 // TestUDPTargetHeaderRejectsNonLoopback 固定对端面的安全边界：这个头是隧道里唯一
 // 声明目标的地方，非 loopback 必须在解码阶段就被拒绝——服务端绝不能凭隧道里的
-// 一句话去打内网（见 docs/vpn-design.md 5.1、第 7 节）。
+// 一句话去打内网。
 func TestUDPTargetHeaderRejectsNonLoopback(t *testing.T) {
 	t.Run("编码阶段", func(t *testing.T) {
 		for _, target := range []string{

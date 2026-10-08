@@ -147,7 +147,7 @@ func (d *dnsInterceptor) plan(msg *dns.Msg) dnsPlan {
 	}
 
 	// 对端名字先于一切（包括屏蔽规则与缓存）：它是访问侧的本地名字，上游 DNS
-	// 里并不存在，转发出去只会得到 NXDOMAIN（见 docs/vpn-design.md 5.4）。
+	// 里并不存在，转发出去只会得到 NXDOMAIN。
 	if reply, ok := easydns.StaticReply(d.static, msg); ok {
 		log.Info("[DNS_VPN] static answer", "domain", plan.domain, "qtype", plan.qtype,
 			"answers", util.DNSAnswerStrings(reply))

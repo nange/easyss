@@ -12,7 +12,7 @@ import (
 //
 // 服务端在 VPN 组网里只有一个角色：内嵌 DERP 中继。它没有、也不需要 tailcat
 // 客户端侧的 peers[]（那是节点配置的事），因此这里只有"DERP 对外是哪个
-// host:port"一件事。设计见 docs/vpn-design.md 3.1、4.1。
+// host:port"一件事。
 //
 // 这里刻意没有 derp_path：DERP 的挂载路径不可配。客户端侧
 // derphttp.Client.urlString 把路径硬编码为 /derp

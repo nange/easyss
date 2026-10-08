@@ -136,8 +136,8 @@ func TestResolveDERPAddrIsIdempotent(t *testing.T) {
 	require.Equal(t, addr, again)
 }
 
-// TestExampleConfigVPNIsResolvable 守护示例里的 VPN 配置本身可用：设计文档与
-// 示例给出的默认值不会与运行期的推导规则漂移。
+// TestExampleConfigVPNIsResolvable 守护示例里的 VPN 配置本身可用：示例给出的
+// 默认值不会与运行期的推导规则漂移。
 //
 // enabled 在示例里是 false（内嵌 DERP 会把该服务端变成节点组网的中继，运维应当
 // 自己打开它——见 ExampleConfig 的注释），但 derp_addr 仍然写全，因此"照抄示例后

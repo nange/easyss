@@ -26,7 +26,7 @@ func (s *stubDERP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // TestDERPMountRouting 固定 /derp 的路由契约。两条核心性质：
 //
 //   - **来源必须是回环**：DERP 私有化之后，只有经 easyss 隧道抵达、由服务端改拨
-//     127.0.0.1 的连接才配得上中继（见 docs/vpn-design.md 3.3）。公网上带着
+//     127.0.0.1 的连接才配得上中继。公网上带着
 //     `Upgrade: derp` 的请求同样只看到伪装页；
 //   - **不带 DERP Upgrade 头的 /derp 必须回伪装页面**：derpserver.Handler 对这类
 //     请求会返回带 "DERP requires connection upgrade" 的 426 —— 一眼可辨的指纹。

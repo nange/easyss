@@ -174,7 +174,7 @@ func TestVPNNodeEndToEndNeverFetchesTheOfficialDERPMap(t *testing.T) {
 // **没有任何直连路径**。
 //
 // "无直连"正是这个开关的定义（magicsock 绑 newBlockForeverConn，完全不创建 UDP
-// socket，见 docs/vpn-design.md 8.1）。这里用 DiscoPing 观测：它会主动触发一次直连
+// socket）。这里用 DiscoPing 观测：它会主动触发一次直连
 // 路径发现，因此如果 UDP 出口存在，Endpoint 有机会被填上；开了开关则必然为空。
 func TestVPNNodeRelayOnlyUsesTheRelay(t *testing.T) {
 	// 只在 tailcat 创建引擎时生效，因此必须在 Start/首次拨号之前落位。
@@ -245,7 +245,7 @@ func TestVPNNodeRelayOnlyUsesTheRelay(t *testing.T) {
 // vpn.RegionID=901。这不影响中继的选择：一份地址只带一个 region，两端各自在自己的
 // DERPMap 里解析对端与 HomeDERP，并且都连到地址里内嵌的**同一个 host:port**——真正
 // 决定位置的是 HostName/DERPPort，它们原样保留（本用例正是断言这一点）。它也解释了
-// PathStatus 的日志里会看到 `via DERP(1)`。见 docs/vpn-design.md 12.6 第 20 条。
+// PathStatus 的日志里会看到 `via DERP(1)`。
 func TestPeerAddressRegionNumberIsRewritten(t *testing.T) {
 	region := startTestDERP(t)
 	face := newTestPeerFace(t, region)

@@ -38,7 +38,7 @@ type ProxyHandler struct {
 // DERP 只接受回环来源（见 vpn.NewDERPMount），节点侧则把 DERP 连接放进 easyss
 // 隧道并原样使用配置里的 vpn.derp_addr 作为目标（见 runner/derpshim.go）。因此
 // 服务端必须在这里把它认出来，并改拨本机回环监听——否则那条连接会去解析并连接
-// 自己的公网地址，而公网入口只提供伪装页面（见 docs/vpn-design.md 3.3）。
+// 自己的公网地址，而公网入口只提供伪装页面。
 type localDERP struct {
 	// match 是本服务端对外通告的 DERP host:port（server.vpn.derp_addr，或由
 	// domain/listen 推导）。为空表示本服务端没有内嵌 DERP。

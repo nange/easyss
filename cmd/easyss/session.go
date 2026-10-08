@@ -292,7 +292,7 @@ func (s *session) tunUp() error {
 		return fmt.Errorf("client not initialized")
 	}
 	// VPN 以 relay_only=false 运行时，对端的直连报文会被 TUN 捕获并绕回 easyss
-	// 自己的 SOCKS5（见 runner.Core.CheckVPNTunCompat 与 docs/vpn-design.md 8.1）。
+	// 自己的 SOCKS5（见 runner.Core.CheckVPNTunCompat）。
 	// 这个强制只在 tailcat 建 socket 之前有效，因此运行期发现时只能拒绝。
 	if err := core.CheckVPNTunCompat(); err != nil {
 		return err

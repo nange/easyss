@@ -19,7 +19,7 @@ import (
 
 // EncodeUDPTarget 把一个目标地址编码成 UDP 流的**一次性**目标头。
 //
-// 目标必须是字面 loopback（见 docs/vpn-design.md 5.1 的内层 CONNECT 契约）：
+// 目标必须是字面 loopback（与 TCP 路径的内层 CONNECT 是同一条契约）：
 // 与 TCP 路径不同，对端面的 UDP 不能复用 SOCKS5 的 ASSOCIATE（那条路径会把中继
 // socket 绑到对端的 tailcat ULA 上，宿主没有这个地址，必然失败），因此由本包
 // 定义这个极简头——第一个数据报携带它，其后全是原始载荷。

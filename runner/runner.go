@@ -271,7 +271,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		// 同一份注入也交给 SOCKS5 入口（Socks5Options.VPN 的可选静态名能力）：
 		// TUN 模式下系统解析器写的是公网 DNS，查询经 tun2socks 到达代理的 DNS
 		// 拦截器，那个前端才是 TUN 下真正被用到的路径；这里的转发服务器服务的是
-		// enable_forward_dns 的 LAN 部署（见 docs/vpn-design.md 5.4）。
+		// enable_forward_dns 的 LAN 部署。
 		var staticNames dns.StaticNames
 		if c.vpn != nil {
 			staticNames = c.vpn.route

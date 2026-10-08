@@ -34,7 +34,7 @@ func (p Path) String() string {
 }
 
 // PathStatus 用一次 disco ping 报告到对端的实际承载路径，用于确认
-// `relay_only` 是否真的生效（见 docs/vpn-design.md 2.4）。
+// `relay_only` 是否真的生效。
 //
 // 为什么不用 Client.Ping：它**总是**测量 DERP 路径（客户端上线前必然先经中继），
 // 因此无论 relay_only 是什么都回报中继，证明不了任何事。DiscoPing 会主动触发

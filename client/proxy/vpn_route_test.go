@@ -40,7 +40,7 @@ func (f *fakeVPNRoute) Lookup(host string) (string, bool) {
 	return name, ok
 }
 
-// ResolveStatic 是可选静态名能力（见 docs/vpn-design.md 5.4）。替身默认实现它，
+// ResolveStatic 是可选静态名能力。替身默认实现它，
 // 因为真实的注入面（vpn/node.Route）也同时实现两者。
 func (f *fakeVPNRoute) ResolveStatic(name string) (netip.Addr, bool) {
 	addr, ok := f.static[name]

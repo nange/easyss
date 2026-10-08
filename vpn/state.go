@@ -36,7 +36,7 @@ func NodeIdentityPath() string { return filepath.Join(StateDir(), "node-identity
 // ClientKeyPath 返回访问侧 client 私钥的文件路径。
 //
 // 它必须跨重启稳定：`vpn.allow_clients` 里的白名单是按 node key 匹配的，
-// 每次重启换一把新 key 会让白名单立刻失效（见 docs/vpn-design.md 7.3）。
+// 每次重启换一把新 key 会让白名单立刻失效。
 func ClientKeyPath() string { return filepath.Join(StateDir(), "client.key") }
 
 // DERPKeyPath 返回内嵌 DERP 中继私钥的文件路径。

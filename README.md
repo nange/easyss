@@ -695,8 +695,6 @@ ssh user@b
   库层面在 Android 上同样可用；缺的是移动端的 VPN 配置入口与状态目录（当前非目标）。
 * `vpn.enabled=false`（默认）时对现有功能零影响。
 
-完整的字段说明、实现细节与安全边界见 [docs/vpn-design.md](docs/vpn-design.md)。
-
 ## LICENSE
 
 MIT License

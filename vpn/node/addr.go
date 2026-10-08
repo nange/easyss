@@ -13,7 +13,7 @@ import (
 
 // peerDERPAddrs 返回一个 tailcat 地址里内嵌的全部 DERP host:port。
 //
-// 地址自带 DERP 位置正是"零控制面"的来源（见 docs/vpn-design.md 4.7），而 DERP
+// 地址自带 DERP 位置正是"零控制面"的来源，而 DERP
 // 私有化要求所有节点通告同一台 DERP，因此启动时要把这些内嵌位置读出来与本节点的
 // 比较（见 assertPeersShareDERP）。DERPPort 为 0 时按 derphttp 的行为取 443。
 func peerDERPAddrs(addr string) ([]string, error) {
@@ -40,7 +40,7 @@ func peerDERPAddrs(addr string) ([]string, error) {
 // assertPeersShareDERP 断言所有对端通告的 DERP 主机与本节点相同。
 //
 // DERP 私有化后，节点的 DERP 连接只经 easyss 隧道到达自己的服务端，并由服务端
-// 映射到本机回环监听（见 docs/vpn-design.md 3.3）。这意味着"跨 S"拓扑不再成立：
+// 映射到本机回环监听。这意味着"跨 S"拓扑不再成立：
 // 对端通告的若是另一台 DERP 主机，访问该对端时的 DERP 连接会被送到本节点自己的
 // 服务端，而它无法代表对方去连另一台机器。与其让它在第一次访问对端时表现成隧道
 // 拨号超时，不如在启动时拒绝。
@@ -72,7 +72,7 @@ func assertPeersShareDERP(ownAddr string, peers []PeerRef) error {
 }
 
 // AssertFullAddr 断言一个 tailcat 地址是**完整展开格式**，即它的 DERP region
-// 详情已内嵌在地址里。这是本设计的硬契约（见 docs/vpn-design.md 4.7）。
+// 详情已内嵌在地址里。这是本设计的硬契约。
 //
 // 反例是"短格式"：只携带一个 region ID 的地址。tailcat 解析它之后会去拉
 // https://tailcat.dev/derpmap.json 才能知道该连哪台中继——那既依赖 Tailscale

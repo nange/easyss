@@ -168,7 +168,7 @@ func RecordServerStreamCancel() { g.serverStreamCancels.Add(1) }
 
 // --- VPN ---
 //
-// 五个计数器覆盖 VPN 数据面的两端与名字解析（见 docs/vpn-design.md 5.3、5.4）：
+// 五个计数器覆盖 VPN 数据面的两端与名字解析：
 // 访问侧成功打开的对端 TCP 流与 UDP 流、访问侧拨号失败、本地静态名应答，以及
 // 本节点对端面接受的对端流。它们只在 vpn.enabled=true 时增长。
 
@@ -183,7 +183,7 @@ func RecordVPNUDPFlow() { g.vpnUDPFlows.Add(1) }
 func RecordVPNDialError() { g.vpnDialErrors.Add(1) }
 
 // RecordVPNDNSStaticAnswer 统计一次由本地静态名钩子直接应答的对端名查询
-// （A 给 overlay 地址、AAAA 给 NOERROR 空应答，见 docs/vpn-design.md 5.4）。
+// （A 给 overlay 地址、AAAA 给 NOERROR 空应答）。
 func RecordVPNDNSStaticAnswer() { g.vpnDNSStaticAnswers.Add(1) }
 
 // RecordVPNPeerFaceStream 统计本节点对端面接受的一条对端流（TCP 或 UDP）。
