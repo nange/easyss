@@ -7,7 +7,7 @@ Easyss 是一款兼容 SOCKS5/HTTP 代理的安全上网工具，客户端+服�
 ## Go 环境
 
 - 模块路径：`github.com/nange/easyss/v3`（根模块原地升级，不维护 v2/v3 双模块）
-- Go 版本：`1.26.3+`（go.mod）
+- Go 版本：`1.27.2+`（go.mod）
 
 ## 核心目录结构
 
