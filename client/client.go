@@ -368,9 +368,12 @@ func (c *Client) dialWithConfig(ctx context.Context, network, addr string) (net.
 			if err == nil {
 				return conn, nil
 			}
-			// 预解析的地址可能已经过期（服务端换了 IP）：丢弃它并回退到域名
-			// 拨号（操作系统解析器），使后续拨号重新解析而不是一直拨旧地址。
-			c.SetServerIPs(nil)
+			// 只有本次回退到域名拨号（操作系统解析器），预解析结果保留：
+			// 一次失败可能只是瞬态（网络切换、接口绑定过期、服务端短暂抖动），
+			// 而丢弃它会让进程在此后的整个生命周期里退化成系统解析器——恰恰
+			// 是 pinning 要防的那种情形（系统 DNS 坏掉或被污染）。地址真的过期
+			// 时，回退路径仍然有预算可用（见 withDomainFallbackReserve），
+			// 每次拨号多花的是 pin 阶段那一次有界尝试，而不是连通性。
 			log.Warn("[CLIENT] dial server by pre-resolved ip failed, falling back to system resolver",
 				"server", host, "ips", ips, "err", err)
 		}
@@ -492,7 +495,7 @@ func (c *Client) dialAddr(ctx context.Context, network, addr string) (net.Conn, 
 
 // SetServerIPs 记录服务端域名预解析得到的地址（由 runner 在预解析成功后注入，
 // 见 runner.Core.publishServerIPs）。传空列表表示丢弃：拨号随即回到由操作系统
-// 解析器解析域名的路径。
+// 解析器解析域名的路径。拨号失败不走这条路（见 dialWithConfig）。
 func (c *Client) SetServerIPs(ips []string) {
 	if len(ips) == 0 {
 		c.serverIPs.Store(nil)

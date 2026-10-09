@@ -196,8 +196,8 @@ func TestDialWithConfigUsesServerIPs(t *testing.T) {
 	assert.Equal(t, ln.Addr().String(), conn.RemoteAddr().String())
 }
 
-// TestDialWithConfigFallsBackWhenServerIPsFail 验证缓存地址过期时的自愈：拨预解析
-// 地址失败后丢弃它并回退到域名拨号（系统解析器），而不是一直拨旧地址。
+// TestDialWithConfigFallsBackWhenServerIPsFail 验证预解析地址拨不通时，本次回退到
+// 域名拨号（系统解析器），但预解析结果本身保留。
 func TestDialWithConfigFallsBackWhenServerIPsFail(t *testing.T) {
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -215,8 +215,43 @@ func TestDialWithConfigFallsBackWhenServerIPsFail(t *testing.T) {
 	require.NoError(t, err, "the domain dial must take over after the stale ip fails")
 	defer conn.Close() //nolint:errcheck
 
-	// 失败后缓存地址被丢弃，后续拨号不再尝试旧地址。
-	assert.Nil(t, c.serverIPs.Load(), "stale pre-resolved ips must be dropped")
+	// 失败不丢弃：一次失败可能只是瞬态，丢了它此后就只剩下系统解析器。
+	require.NotNil(t, c.serverIPs.Load(), "a failed dial must not drop the pre-resolved ips")
+	assert.Equal(t, []string{"127.0.0.2"}, *c.serverIPs.Load())
+}
+
+// TestDialWithConfigKeepsServerIPsAcrossFailures 验证失败后**下一次**拨号仍然优先
+// 尝试预解析的字面地址，而不是已经永久退化成系统解析器：后者正是原实现在一次瞬态
+// 失败（网络切换、接口绑定过期）之后的行为。
+func TestDialWithConfigKeepsServerIPsAcrossFailures(t *testing.T) {
+	origBound := boundDialContext
+	t.Cleanup(func() { boundDialContext = origBound })
+
+	c := newTestClient(t, true) // TUN 模式：dialAddr 走可注入的 boundDialContext
+	c.serverDomain = "server.invalid"
+	c.SetServerIPs([]string{"10.255.255.1"})
+
+	var pinnedDials, domainDials int
+	boundDialContext = func(_ *Client, _ context.Context, _ string, addr string) (net.Conn, error) {
+		host, _, _ := net.SplitHostPort(addr)
+		if host == "10.255.255.1" {
+			pinnedDials++
+			return nil, errors.New("pinned address is stale")
+		}
+		domainDials++
+		return &net.TCPConn{}, nil
+	}
+
+	for i := 1; i <= 2; i++ {
+		conn, err := c.dialWithConfig(context.Background(), "tcp", "server.invalid:443")
+		require.NoError(t, err, "dial %d: the domain fallback must still succeed", i)
+		require.NotNil(t, conn)
+	}
+
+	assert.Equal(t, 2, pinnedDials, "every dial must still try the pre-resolved ip first")
+	assert.Equal(t, 2, domainDials)
+	require.NotNil(t, c.serverIPs.Load(), "a failed dial must not drop the pre-resolved ips")
+	assert.Equal(t, []string{"10.255.255.1"}, *c.serverIPs.Load())
 }
 
 // TestWithDomainFallbackReserve 验证 pin 阶段总预算的切分：只有在总预算大于一次
@@ -302,7 +337,8 @@ func TestDialWithConfigReservesBudgetForDomainFallback(t *testing.T) {
 	if err := <-pinnedBudget; err == nil {
 		t.Fatal("the pinned dial must have failed on an exhausted budget")
 	}
-	assert.Nil(t, c.serverIPs.Load(), "the failed pre-resolved address must be dropped")
+	require.NotNil(t, c.serverIPs.Load(), "a failed dial must not drop the pre-resolved ips")
+	assert.Equal(t, []string{"10.255.255.1"}, *c.serverIPs.Load())
 }
 
 // TestDialServerIPsStopsWhenBudgetExhausted 验证 pin 阶段预算耗尽后不再逐个尝试
