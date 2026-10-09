@@ -105,8 +105,8 @@ func lanHostOf(addr string) string {
 	if host, _, err := net.SplitHostPort(addr); err == nil {
 		return host
 	}
-	if i := strings.LastIndexByte(addr, '%'); i >= 0 {
-		return addr[:i]
+	if host, _, ok := strings.CutLast(addr, "%"); ok {
+		return host
 	}
 	return addr
 }
