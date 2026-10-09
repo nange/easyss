@@ -196,9 +196,9 @@ func setTunLinkDNS(tunDevice string, v []string) error {
 // resolvectlBool 返回 resolvectl 设置输出（如 "Link 2 (eno1): no"）
 // 末尾的 "yes"/"no"，这样链路名称永远不会被误匹配。
 func resolvectlBool(out string) string {
-	idx := strings.LastIndex(out, ":")
-	if idx < 0 {
+	_, after, ok := strings.CutLast(out, ":")
+	if !ok {
 		return ""
 	}
-	return strings.TrimSpace(out[idx+1:])
+	return strings.TrimSpace(after)
 }
