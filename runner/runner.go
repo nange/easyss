@@ -85,6 +85,12 @@ type Core struct {
 	// 见 cleanup 与 vpnStack.close。
 	vpn *vpnStack
 
+	// ServerAddr 是本次会话**实际使用**的服务器（host:port）。会话起点从它那份
+	// 不可变快照里解析一次并记录下来，此后界面层与日志都用这个事实，不再回读配置里的
+	// default 标记——托盘切换、失败回滚与自更新重启都会改写那个标记，而正在跑的会话
+	// 仍停在它启动时选中的那台上（见 vpnOptions 的门禁）。
+	ServerAddr string
+
 	// StartupWarn 保存初始化核心时检测到的非致命警告（例如自定义规则文件
 	// 加载失败，或服务端域名暂时无法解析），调用方可以在不中断启动的情况下
 	// 将其展示给用户。
@@ -143,6 +149,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		Client:        cli,
 		StreamHandler: streamHandler,
 		transport:     cli.Transport(),
+		ServerAddr:    cfg.DefaultServer().HostPort(),
 		StartupWarn:   cli.StartupWarning(),
 		done:          make(chan struct{}),
 		domainReady:   make(chan struct{}),

@@ -188,7 +188,8 @@ func runVPNIdentityCmd(cfg *config.ClientConfig, args []string, stdout, stderr i
 	}
 	// "当前服务端不在声明列表里"只作为一行 warning：地址依然要打印出来，因为运维
 	// 正需要它去配对端，而 VPN 能否工作由启动路径决定（见 runner.vpnOptions）。
-	warn := cfg.ValidateDERPServer()
+	// CLI 没有运行中的会话，因此"当前服务器"就是这份配置选中的那台。
+	warn := cfg.ValidateDERPServerAddr(cfg.DefaultServer().HostPort())
 
 	if fs.Lookup("json").Value.String() == "true" {
 		return writeJSON(stdout, stderr, vpnIdentityOutput(id, warn))
@@ -244,9 +245,9 @@ func runVPNRegenCmd(cfg *config.ClientConfig, args []string, stdout, stderr io.W
 	}
 
 	if fs.Lookup("json").Value.String() == "true" {
-		return writeJSON(stdout, stderr, vpnRegenOutput(res, cfg.ValidateDERPServer()))
+		return writeJSON(stdout, stderr, vpnRegenOutput(res, cfg.ValidateDERPServerAddr(cfg.DefaultServer().HostPort())))
 	}
-	_, _ = fmt.Fprint(stdout, formatVPNRegen(res, cfg.ValidateDERPServer()))
+	_, _ = fmt.Fprint(stdout, formatVPNRegen(res, cfg.ValidateDERPServerAddr(cfg.DefaultServer().HostPort())))
 	return 0
 }
 

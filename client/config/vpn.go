@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -113,7 +114,7 @@ func (c *ClientConfig) VPNDERPAddrs() []string {
 	var out []string
 	seen := make(map[string]struct{})
 	for _, srv := range c.DERPServers() {
-		addr := derpAddrOf(srv)
+		addr := srv.HostPort()
 		if addr == "" {
 			continue
 		}
@@ -143,30 +144,42 @@ func (c *ClientConfig) VPNDERPAddr() string {
 	return ""
 }
 
-// ValidateDERPServer 校验"当前连接的服务端必须是本节点声明的 DERP 中继之一"。
+// ErrCurrentServerNotDERPRelay 标记"当前运行的服务器不能作为本节点的 DERP 中继"
+// （见 ValidateDERPServerAddr）。
+//
+// 它需要身份：这个状态的用户可见表现是"VPN 连不上对端"，而原因是一条配置事实。
+// 调用方（runner → 托盘的启动通知）用 errors.Is 判定它，把"VPN 功能不生效"直接
+// 告诉用户，而不是让人去翻日志里那句英文。
+var ErrCurrentServerNotDERPRelay = errors.New("vpn: the current server is not a usable DERP relay of this node")
+
+// ValidateDERPServerAddr 校验 current（**当前实际在运行**的那台服务器的 host:port）
+// 是本节点声明的 DERP 中继之一。
 //
 // 这条不变量不是可选的：内嵌 DERP 只接待经**本服务端**隧道送达的连接（服务端把
 // 握手目标完全匹配到自己的对外 DERP 地址后改拨回环），因此节点实际能连上的中继只能是
 // 它此刻隧道所落的那台服务端。声明列表里没有它时，中继连接会一路失败，症状是
 // "VPN 一直连不上"而不是一条配置错误——所以这里当场拒绝。
 //
+// current 是显式入参，刻意不在内部取 DefaultServer()：default 标记表示"下次启动用
+// 哪台"，托盘切换、失败回滚与自更新重启都会改写它，而正在跑的会话可能仍停在旧的那台
+// 上。判据必须跟着实际在跑的那台走（runner 用会话快照里解析出的 Core.ServerAddr）。
+//
 // 没有 servers[]（或派生出空列表）时不在这里报错：那种情况下 VPN 本来就无法工作，
 // 由 VPN 启动路径的"无法派生 DERP 地址"分支给出更准确的错误。列表里的地址全都解析
-// 不出来时同样不在这里报错——"地址非法"由 vpnnode.NewConfig 报得更准确（它带节点
-// 序号），把这种配置说成"当前服务端不在列表里"只会把人引向歧途。
-func (c *ClientConfig) ValidateDERPServer() error {
+// 不出来、或 current 本身无法解析时同样不在这里报错——"地址非法"由 vpnnode.NewConfig
+// 报得更准确（它带节点序号），把这种配置说成"当前服务端不在列表里"只会把人引向歧途。
+func (c *ClientConfig) ValidateDERPServerAddr(current string) error {
 	addrs := c.VPNDERPAddrs()
 	if len(addrs) == 0 {
 		return nil
 	}
-	srv := c.DefaultServer()
-	if srv == nil {
+	if current == "" {
 		return nil
 	}
-	current := derpAddrOf(srv)
 	canonicalCurrent, err := sharedconfig.CanonicalDERPAddr(current)
 	if err != nil {
-		return fmt.Errorf("vpn: cannot tell whether the current server %q is one of the DERP relays this node declares: %w", current, err)
+		return fmt.Errorf("%w: cannot tell whether %q is one of them: %v",
+			ErrCurrentServerNotDERPRelay, current, err)
 	}
 	parsed := 0
 	for _, addr := range addrs {
@@ -182,30 +195,30 @@ func (c *ClientConfig) ValidateDERPServer() error {
 	if parsed == 0 {
 		return nil
 	}
-	return fmt.Errorf("vpn: the current server %s is not one of the DERP relays this node declares (%s): "+
+	return fmt.Errorf("%w: %s is not one of the relays this node declares (%s): "+
 		"the embedded DERP is private and every node reaches it through the easyss server it is connected to, "+
 		"so the relay list must contain that server; mark the matching servers[] entry with \"derp\": true, "+
 		"then hand the address printed by \"easyss vpn identity\" to every peer: "+
 		"the advertised relay set is part of the address, so peers holding the old address list no longer match",
-		current, strings.Join(addrs, ", "))
+		ErrCurrentServerNotDERPRelay, current, strings.Join(addrs, ", "))
 }
 
-// derpAddrOf 返回一条 server 条目的对外 host:port。
+// HostPort 返回一条 server 条目的对外 host:port（空地址返回 ""）。
 //
 // 用 net.JoinHostPort 而不是 fmt.Sprintf("%s:%d")：返回值要交给
 // net.SplitHostPort 拆成 HostName 与 DERPPort 写进 DERPMap，IPv6 字面量必须带
-// 方括号才是合法的 host:port。
-func derpAddrOf(srv *ServerProfile) string {
-	if srv == nil || srv.Address == "" {
+// 方括号才是合法的 host:port；它也必须是 ValidateDERPServerAddr 能比较的形态。
+func (s *ServerProfile) HostPort() string {
+	if s == nil || s.Address == "" {
 		return ""
 	}
 	// applyDefaults 已经为 servers[].port 补过默认值，这里再兜一次是为了覆盖
 	// 不经过它与 BuildSimpleConfig 的构造路径（移动端、测试）。
-	port := srv.Port
+	port := s.Port
 	if port <= 0 {
 		port = sharedconfig.DefaultServerPort
 	}
-	return net.JoinHostPort(srv.Address, strconv.Itoa(port))
+	return net.JoinHostPort(s.Address, strconv.Itoa(port))
 }
 
 // VPNPeerPort 返回归一化后的 vpn.peer_port（见 config.NormalizeVPNPeerPort）：

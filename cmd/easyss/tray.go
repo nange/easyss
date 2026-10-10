@@ -158,9 +158,10 @@ func (a *TrayApp) buildTray() {
 	}
 
 	// 非致命启动警告（例如服务端域名解析失败且 TUN 被跳过）以通知形式呈现，
-	// 不阻塞也不退出：代理核心继续运行。
+	// 不阻塞也不退出：代理核心继续运行。VPN 那条走专用文案（见 startupWarningText）：
+	// 它是配置问题，而且要点名本会话实际使用的那台服务器。
 	if warn := a.currentStartupWarn(); warn != nil {
-		a.tray.ShowNotification("Easyss", friendlyStartupWarning(warn))
+		a.tray.ShowNotification("Easyss", a.startupWarningText(warn))
 	}
 
 	a.startLocalService()
@@ -232,6 +233,70 @@ func friendlyStartupWarning(err error) string {
 			"网络恢复后即可正常代理。详情：" + err.Error()
 	}
 	return "启动警告：" + err.Error()
+}
+
+// runningServerAddr 返回运行中会话**实际使用**的服务器（host:port）；空表示没有会话。
+//
+// 它读的是会话起点冻结下来的事实（Core.ServerAddr），而不是 App 快照里的 default
+// 标记：那个标记表示"用户想用哪台"，切换失败回滚、TUN 偏好改写与自更新重启都会替换
+// 快照，而正在跑的会话仍停在它启动时选中的那台上。
+func (a *TrayApp) runningServerAddr() string {
+	core := a.currentCore()
+	if core == nil {
+		return ""
+	}
+	return core.ServerAddr
+}
+
+// startupWarningNotice 报告该启动警告是否需要立刻以系统通知呈现（false = 只写日志）。
+//
+// 目前只有一类命中：VPN 本会话缺席，原因是运行中的服务器不在声明的 DERP 中继列表里。
+// 其余启动警告保持仅日志：启动路径上已经有通知，网络未就绪的恢复提示另有
+// watchServerDomainReady 负责，切换服务器时重复弹窗只会变成噪音。
+func startupWarningNotice(warn error) bool {
+	return warn != nil && errors.Is(warn, config.ErrCurrentServerNotDERPRelay)
+}
+
+// vpnRefusalText 是"VPN 在本会话不生效"的用户文案。
+//
+// server 必须是**运行中会话实际使用**的那台（见 runningServerAddr），而不是 App 快照
+// 的 default 指向的那台：切换服务器之后这两者才可能短暂不同，而用户看到的"VPN 里连不
+// 上对端"说的永远是前者。
+func vpnRefusalText(server string, err error) string {
+	where := "当前使用的服务器"
+	if server != "" {
+		where = "当前使用的服务器 " + server
+	}
+	return "VPN 功能不生效：" + where + " 不在 vpn 声明的中继(DERP)列表里，节点组网在本会话内不可用，" +
+		"VPN 里访问不了任何对端；请在配置文件中给该服务端条目加上 \"derp\": true，" +
+		"或切换到已标记为中继的服务器。代理（SOCKS5/HTTP）仍可正常使用。详情：" + err.Error()
+}
+
+// startupWarningText 渲染一次会话起点的启动警告：VPN 那条用专用文案（并点名运行中的
+// 那台服务器），其余沿用 friendlyStartupWarning。多条警告并存时全部原因都在 详情 里
+// （StartupWarn 是 errors.Join 出来的），因此这里只选一条文案、不重复弹窗。
+func (a *TrayApp) startupWarningText(warn error) string {
+	if startupWarningNotice(warn) {
+		return vpnRefusalText(a.runningServerAddr(), warn)
+	}
+	return friendlyStartupWarning(warn)
+}
+
+// notifyStartupWarning 在切换服务器/自更新重启成功之后呈现"必须让用户知道"的那条警告。
+//
+// 它走 a.ui 而不是直接调用 notifyUser：托盘构建里 a.ui 就是本 TrayApp（见 buildTray），
+// 因此生产行为完全一致（notify → notifyUser → 系统通知），而"切换之后必须通知"这条
+// 契约可以用既有的 appUI 测试替身固定下来。没有界面时（headless/--disable-tray 构建
+// 根本走不到切换路径）静默返回。通知本身是尽力而为的（见 notifyUser），失败只留在日志里。
+func (a *TrayApp) notifyStartupWarning(warn error) {
+	if !startupWarningNotice(warn) {
+		return
+	}
+	msg := a.startupWarningText(warn)
+	if msg == "" || a.ui == nil {
+		return
+	}
+	a.ui.notify(msg)
 }
 
 // 以下三个方法是 appUI 的实现（见 main.go）：主程序通过 App.ui 回调它们，
@@ -840,6 +905,10 @@ func (a *TrayApp) restartServiceInSequence(newCfg *config.ClientConfig, start fu
 	// 会话自己的锁，见 session.startupWarn）。
 	if warn := a.currentStartupWarn(); warn != nil {
 		log.Warn("[SYSTRAY] restart service: startup warning", "err", warn)
+		// 其中"运行中的服务器不在声明的 DERP 中继列表里 → VPN 本会话缺席"必须弹通知：
+		// 用户刚点了另一台服务器，他看到的现象是"VPN 里连不上对端"，而原因是一条配置
+		// 事实（文案里点名的是新会话实际使用的那台，见 startupWarningText）。
+		a.notifyStartupWarning(warn)
 	}
 
 	restoreSysProxy()

@@ -362,13 +362,17 @@ func (c *Core) CheckVPNTunCompat() error {
 // 后者是需求 4 的硬门禁——内嵌 DERP 只接待经本服务端隧道送达的连接，声明列表里
 // 没有当前服务端时中继永远连不上，因此 VPN 在本会话直接缺席（错误由 runCore 记
 // ERROR 并入 StartupWarn），而不是让用户在第一次访问对端时看到超时。
+//
+// 门禁拿到的服务器是**本会话实际要用的那台**：cfg 是会话起点的那份不可变快照，
+// 切换序列在启动新会话之前已经把目标下标发布进去，因此这里的 DefaultServer 就是
+// 托盘此刻勾选、本会话真正会拨的那台（同一个值由 Run 记进 Core.ServerAddr）。
 func vpnOptions(cfg *config.ClientConfig) (vpnnode.Options, error) {
 	derpAddrs := cfg.VPNDERPAddrs()
 	if len(derpAddrs) == 0 {
 		return vpnnode.Options{}, errors.New("vpn: cannot derive any DERP host:port this node advertises: " +
 			"mark the servers[] entries that run the embedded DERP with \"derp\": true")
 	}
-	if err := cfg.ValidateDERPServer(); err != nil {
+	if err := cfg.ValidateDERPServerAddr(cfg.DefaultServer().HostPort()); err != nil {
 		return vpnnode.Options{}, err
 	}
 	peers := make([]vpnnode.PeerRef, 0, len(cfg.VPN.Peers))
