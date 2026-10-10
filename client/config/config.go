@@ -201,13 +201,15 @@ func LoadConfig(path string) (*ClientConfig, error) {
 		Servers       []*ServerProfile `json:"servers"`
 		Server        string           `json:"server"`
 		VPN           struct {
-			DERPAddr string `json:"derp_addr"`
+			DERPAddr    string `json:"derp_addr"`
+			OverlayCIDR string `json:"overlay_cidr"`
 		} `json:"vpn"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return nil, err
 	}
 	warnOnRemovedDERPAddr(probe.VPN.DERPAddr)
+	warnOnRemovedVPNOverlayCIDR(probe.VPN.OverlayCIDR)
 	if probe.ConfigVersion != 3 || len(probe.Servers) == 0 {
 		var s config.SimpleConfig
 		if err := json.Unmarshal(data, &s); err != nil {
@@ -246,6 +248,25 @@ func warnOnRemovedDERPAddr(legacyAddr string) {
 	log.Warn("[CONFIG] vpn.derp_addr was removed and is ignored; "+
 		"the advertised relays are derived from the servers[] entries marked \"derp\": true",
 		"derp_addr", legacyAddr)
+}
+
+// warnOnRemovedVPNOverlayCIDR 对配置里残留的 vpn.overlay_cidr 键告警一次。
+//
+// 该字段已被移除：overlay 段是**访问侧本地**给对端分配虚拟 IPv4 用的，不进隧道、
+// 对端看不到，因此它是实现常量而不是配置项（见 config.DefaultVPNOverlayCIDR）。
+// 残留的键不会被 json.Unmarshal 报错（未知键一律忽略），但它可能正是运维"已经把
+// 这段改成别的"的原因——那段现在是死配置，实际生效的仍是常量，所以必须说出来，
+// 否则"我明明改过还是冲突"会变成一个查不出来的现象。
+//
+// 与原值一并提示"为什么现在不能改"：这个段的唯一出路是换默认常量（一次发版所有
+// 人受益），而不是每个部署各自配置。
+func warnOnRemovedVPNOverlayCIDR(legacyCIDR string) {
+	if legacyCIDR == "" {
+		return
+	}
+	log.Warn("[CONFIG] vpn.overlay_cidr was removed and is ignored; "+
+		"the overlay range is a local implementation constant and is not configurable",
+		"overlay_cidr", legacyCIDR, "in_use", config.DefaultVPNOverlayCIDR)
 }
 
 func applyDefaults(c *ClientConfig) {

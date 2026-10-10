@@ -4,12 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/netip"
 	"strconv"
 	"strings"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
-	"github.com/nange/easyss/v3/log"
 )
 
 // VPNPeer 是一个对端节点在配置里的引用。
@@ -27,12 +25,16 @@ type VPNPeer struct {
 
 // VPNConfig 恰好持有客户端配置文件 "vpn" 键下的全部字段。
 //
-// 这里刻意不写回任何派生值（peer_port / overlay_cidr / DERP 地址都按原样保留），
-// 派生的唯一入口是下面的访问器与 vpn.NewConfig：这样"未配置"与"显式配置为其
-// 默认值"在结构体里仍然可区分，命令行覆盖（--local-port）也能正确地带动
-// peer_port 的派生。DERP 地址更是只有派生一条路（见 ClientConfig.VPNDERPAddrs）：
-// 内嵌 DERP 只接待经本服务端隧道送达的连接，服务端靠"握手目标完全匹配自己的对外
-// 地址"认出它，因此那个地址不可能由节点自己另填一个。
+// 这里刻意不写回任何派生值（peer_port / DERP 地址都按原样保留），派生的唯一入口
+// 是下面的访问器与 vpn.NewConfig：这样"未配置"与"显式配置为其默认值"在结构体里
+// 仍然可区分，命令行覆盖（--local-port）也能正确地带动 peer_port 的派生。DERP
+// 地址更是只有派生一条路（见 ClientConfig.VPNDERPAddrs）：内嵌 DERP 只接待经本
+// 服务端隧道送达的连接，服务端靠"握手目标完全匹配自己的对外地址"认出它，因此那个
+// 地址不可能由节点自己另填一个。
+//
+// 这里也没有 overlay 段（曾经是 vpn.overlay_cidr）：它只决定**本机**给对端分配
+// 的虚拟 IPv4，不进隧道、对端看不到、不需要与任何节点对齐，因此是个实现常量而不是
+// 配置项（见 config.DefaultVPNOverlayCIDR）。残留的旧键由 LoadConfig 告警后忽略。
 type VPNConfig struct {
 	// Enabled 是总开关。关闭时不监听、不启 goroutine、全链路零影响。
 	Enabled bool `json:"enabled"`
@@ -43,12 +45,9 @@ type VPNConfig struct {
 	RelayOnly *bool `json:"relay_only,omitempty"`
 
 	// PeerPort 是本节点对端面在隧道内的端口，也是对端要拨的端口。
-	// 未配置时由 socks_port 派生（见 ClientConfig.VPNPeerPort）。
+	// 未配置时由 socks_port 派生（见 ClientConfig.VPNPeerPort，例如 socks_port
+	// 为 4080 时得到 6080）。
 	PeerPort int `json:"peer_port,omitempty"`
-
-	// OverlayCIDR 是访问侧**本地**给对端分配的 overlay 虚拟 IPv4 段。
-	// 它不进隧道、对端看不到，因此不需要与其他节点一致（见 VPNConfig 的类型注释）。
-	OverlayCIDR string `json:"overlay_cidr,omitempty"`
 
 	// Peers 是本节点要访问的对端列表。
 	Peers []VPNPeer `json:"peers,omitempty"`
@@ -120,9 +119,9 @@ func (c *ClientConfig) VPNDERPAddrs() []string {
 		}
 		canonical, err := sharedconfig.CanonicalDERPAddr(addr)
 		if err != nil {
-			// 非法条目在这里不报错（DHCP/手写配置的容错路径与既有的
-			// VPNOverlayPrefix 一致）：严格校验发生在 vpn.BuildRegion 与
-			// vpnnode.NewConfig，那里能报出"第几个节点"的上下文。
+			// 非法条目在这里不报错（手写配置的容错路径）：严格校验发生在
+			// vpn.BuildRegion 与 vpnnode.NewConfig，那里能报出"第几个节点"的
+			// 上下文。
 			out = append(out, addr)
 			continue
 		}
@@ -278,18 +277,4 @@ func (s *ServerProfile) HostPort() string {
 // socks_port 派生"的结果冻结下来。
 func (c *ClientConfig) VPNPeerPort() int {
 	return sharedconfig.NormalizeVPNPeerPort(c.VPN.PeerPort, c.Local.SocksPort)
-}
-
-// VPNOverlayPrefix 返回归一化后的 overlay 段（见 config.ParseVPNOverlayCIDR）。
-//
-// 配置非法时回退默认段并记录警告：访问器无法返回错误，严格校验（直接让启动
-// 失败）发生在 vpn.NewConfig。
-func (c *ClientConfig) VPNOverlayPrefix() netip.Prefix {
-	p, err := sharedconfig.ParseVPNOverlayCIDR(c.VPN.OverlayCIDR)
-	if err != nil {
-		log.Warn("[CONFIG] invalid vpn.overlay_cidr, falling back to default",
-			"overlay_cidr", c.VPN.OverlayCIDR, "default", sharedconfig.DefaultVPNOverlayCIDR, "err", err)
-		return sharedconfig.DefaultVPNOverlayPrefix()
-	}
-	return p
 }

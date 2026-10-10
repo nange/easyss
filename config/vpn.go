@@ -40,6 +40,11 @@ const (
 	// 以及 SOCKS5 路由判定。它**不进隧道**、对端永远看不到，因此不需要与其他
 	// 节点保持一致。
 	//
+	// 它同时是**唯一**的 overlay 段，没有任何配置项指向它：一个纯本地、只决定
+	// 自己的虚拟 IP 怎么编号的段不可能需要与别处对齐，冲突时的正确出路是换掉这
+	// 个常量（一次发版所有人受益），而不是让每个部署各自配置（配一次只有自己受益）。
+	// 真出现冲突时再谈是否把它暴露成配置项，那时也该先怀疑是不是该换默认值。
+	//
 	// 选 198.19.0.0/24（RFC 2544 benchmarking 段）而非 100.64.0.0/10（CGNAT）：
 	// 后者在物理接口上常常已经存在一条 on-link 路由，它比 TUN 安装的
 	// 128.0.0.0/1 阶梯更具体，会把 overlay 流量压回物理网卡；198.19.0.0/24
@@ -76,16 +81,19 @@ const (
 
 	// vpnMaxOverlayPrefixBits 是 overlay 段允许的最长前缀（最小的段）：overlay
 	// 地址是按对端公钥在其中逐个分配的，/31 与 /32 放不下"若干个对端"，因此
-	// 把它们当作配置错误而不是可用的段。
+	// 它们不是可用的段。
 	vpnMaxOverlayPrefixBits = 30
 
 	// vpnMinOverlayPrefixBits 是 overlay 段允许的最短前缀（最大的段）。
 	//
 	// 这个下界不是审美问题：槽位分配按段容量开一张表（见 vpn/node/overlay.go
-	// 的 Assign），容量是 2^(32-bits)。没有下界时，一份"看起来合法"的
-	// overlay_cidr（例如 0.0.0.0/0 或 10.0.0.0/8）会让启动直接申请 4 GiB /
-	// 16 MiB 并清零，32 位平台上还会因 int 溢出 panic。/16 对应 65534 个槽位
-	// （64 KiB），足以容纳任何现实规模的对端列表。
+	// 的 Assign），容量是 2^(32-bits)。没有下界时，一个"看起来合法"的
+	// DefaultVPNOverlayCIDR（例如 0.0.0.0/0 或 10.0.0.0/8）会让启动直接申请
+	// 4 GiB / 16 MiB 并清零，32 位平台上还会因 int 溢出 panic。/16 对应 65534
+	// 个槽位（64 KiB），足以容纳任何现实规模的对端列表。
+	//
+	// 这两个边界现在只为一件事服务：DefaultVPNOverlayCIDR 是唯一的 overlay 段，
+	// 而它是个写死在代码里的常量，因此区间校验防的是"常量被改坏"，不是配置写错。
 	vpnMinOverlayPrefixBits = 16
 )
 
@@ -108,14 +116,18 @@ func NormalizeVPNPeerPort(peerPort, socksPort int) int {
 	return peerPort
 }
 
-// ParseVPNOverlayCIDR 解析并归一化 vpn.overlay_cidr，是它的唯一校验入口：
+// parseVPNOverlayCIDR 解析并归一化 overlay 段，是它的唯一校验入口：
 // 空值取 DefaultVPNOverlayCIDR；其余值必须是合法的 IPv4 前缀、前缀长度落在
 // [vpnMinOverlayPrefixBits, vpnMaxOverlayPrefixBits] 内，并归一化为网络地址
 // （198.19.0.5/24 → 198.19.0.0/24）。
 //
 // 只接受 IPv4：overlay 地址是给 TUN 模式下的 A 记录应答用的，而本设计的
 // overlay 段刻意只覆盖 IPv4（AAAA 查询一律回 NOERROR 空应答）。
-func ParseVPNOverlayCIDR(s string) (netip.Prefix, error) {
+//
+// 不导出：overlay 段没有配置项，入参只可能是 DefaultVPNOverlayCIDR 本身（空值这条
+// 分支是"没指定"的兜底，生产路径不会走到）。保留"解析 + 校验"这一步是为了让常量被
+// 改坏时在启动的第一时间（DefaultVPNOverlayPrefix）就暴露，而不是等到第一次访问对端。
+func parseVPNOverlayCIDR(s string) (netip.Prefix, error) {
 	if s == "" {
 		return netip.MustParsePrefix(DefaultVPNOverlayCIDR), nil
 	}
@@ -133,10 +145,11 @@ func ParseVPNOverlayCIDR(s string) (netip.Prefix, error) {
 	return p.Masked(), nil
 }
 
-// DefaultVPNOverlayPrefix 返回 DefaultVPNOverlayCIDR 的解析结果。默认值是常量，
-// 因此解析不可能失败；这里 panic 只是为了让"常量被改坏"在测试中就暴露出来。
+// DefaultVPNOverlayPrefix 返回 DefaultVPNOverlayCIDR 的解析结果，是运行期拿到
+// overlay 段的**唯一**入口。默认值是常量，因此解析不可能失败；这里 panic 只是为了
+// 让"常量被改坏"在启动时就暴露出来（启动路径不返回配置错误——它不是配置）。
 func DefaultVPNOverlayPrefix() netip.Prefix {
-	p, err := ParseVPNOverlayCIDR(DefaultVPNOverlayCIDR)
+	p, err := parseVPNOverlayCIDR(DefaultVPNOverlayCIDR)
 	if err != nil {
 		panic(fmt.Sprintf("config.DefaultVPNOverlayCIDR %q is not a valid prefix: %v", DefaultVPNOverlayCIDR, err))
 	}
