@@ -212,6 +212,8 @@ func ExampleConfig() FileConfig {
 			// mesh_key / mesh_peers 也一并列出（空值）：它们是"同一 region 下
 			// 多个中继互相转发"的开关，只在 enabled 为 true 时才允许非空，
 			// 因此示例里保持空——但字段必须出现，示例就是字段清单。
+			// mesh 是全互联，所以 mesh_peers 最多 2 条：本机 + 对端 = 同一
+			// region 最多 3 台中继（推荐 1-2 台），超过即配置错误。
 			VPN: VPNConfig{
 				Enabled:   false,
 				MeshKey:   "",

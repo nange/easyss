@@ -203,6 +203,55 @@ func (c *ClientConfig) ValidateDERPServerAddr(current string) error {
 		ErrCurrentServerNotDERPRelay, current, strings.Join(addrs, ", "))
 }
 
+// ValidateDERPRelays 校验本节点声明的内嵌 DERP 中继数量不超过
+// sharedconfig.MaxVPNRelays。
+//
+// 与 ValidateDERPServerAddr（判定"当前服务端是否在声明的列表里"）不同，这是一条
+// **配置形状**错误：越限的配置没有任何可工作的形态。中继之间必须全互联
+// （server.vpn.mesh_peers 列出其余每一台），而节点地址里内嵌的正是这一组中继、
+// 且必须与每个对端的集合相等，所以第 4 台既进不了地址，也没法与其余中继互通。
+// 因此它由 LoadConfig 在启动阶段直接拒绝（与其它配置错误一样让进程退出），而不是
+// 降到"本会话 VPN 不工作"——后者会让用户以为只是网络问题。
+//
+// 只在 vpn.enabled 时校验：未启用的 VPN 不参与运行期，derp 标记此时没有任何效果，
+// 不该阻止客户端启动（与 server.vpn 的校验同一条原则）。
+//
+// 计数口径与 VPNDERPAddrs 一致：只数**不同的**中继（规范化后去重，同一个中继被
+// 两条条目指向时只算一个）；地址本身非法的条目不在这里报错——"地址非法"由
+// vpnnode.NewConfig 带节点序号报出，在这里再报一次只会掩盖真正的原因。
+func (c *ClientConfig) ValidateDERPRelays() error {
+	if !c.VPN.Enabled {
+		return nil
+	}
+	marked := 0
+	addrs := make([]string, 0, len(c.Servers))
+	seen := make(map[string]struct{}, len(c.Servers))
+	for _, srv := range c.Servers {
+		if srv == nil || !srv.DERP {
+			continue
+		}
+		marked++
+		addr := srv.HostPort()
+		canonical, err := sharedconfig.CanonicalDERPAddr(addr)
+		if err != nil {
+			continue
+		}
+		if _, dup := seen[canonical]; dup {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		addrs = append(addrs, addr)
+	}
+	if len(addrs) <= sharedconfig.MaxVPNRelays {
+		return nil
+	}
+	return fmt.Errorf("servers[] has %d entries marked with \"derp\": true, which declare %d DERP relays (%s), "+
+		"but at most %d relays are supported (1-2 are recommended): the relays of a region must be meshed with "+
+		"one another and the whole set is embedded in this node's address, so delete the extra entries or remove "+
+		"their \"derp\": true mark",
+		marked, len(addrs), strings.Join(addrs, ", "), sharedconfig.MaxVPNRelays)
+}
+
 // HostPort 返回一条 server 条目的对外 host:port（空地址返回 ""）。
 //
 // 用 net.JoinHostPort 而不是 fmt.Sprintf("%s:%d")：返回值要交给

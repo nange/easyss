@@ -49,6 +49,10 @@ type VPNConfig struct {
 	// 匹配认出"这条连接是来访问我的 DERP 的"），并且必须经一个 easyss 客户端
 	// （通常是 easyss-headless）的 SOCKS5 送进隧道——内嵌 DERP 只接待回环来源，
 	// 直连公网端口只会看到伪装页。
+	//
+	// mesh 是全互联，所以"本机 + 这里的条数"就是 region 的中继总数，上限为
+	// sharedconfig.MaxVPNRelays（推荐 1-2 台），即最多 2 条。超限的配置在配置
+	// 加载阶段（validateVPNMesh）就报错拒绝启动。
 	MeshPeers []MeshPeer `json:"mesh_peers"`
 }
 
@@ -115,6 +119,9 @@ func (fc *FileConfig) validateVPN() error {
 //
 //   - mesh_key 与 mesh_peers 必须同时给出：只有一边时既可能是漏配（中继不会互联，
 //     跨节点的客户端收不到对方的数据包），也可能是误解（以为密钥本身就能发现对端）；
+//   - 中继总数（本机 + mesh_peers）不能超过 sharedconfig.MaxVPNRelays：mesh 是全
+//     互联，列出的每一个对端都是一台真实存在的中继，而节点地址里内嵌的正是这一组
+//     中继，所以超限的配置没有可工作的形态；
 //   - 每个对端要么自带 proxy，要么全局配了 next_proxy.url：DERP 只在回环上被服务，
 //     直连对端的公网 host:port 只会拿到伪装页，因此"没有代理"不是一种可工作的配置；
 //   - 对端地址不能是本服务端自己的 DERP 对外地址（自连没有意义，而且 mesh 协议会把它
@@ -130,6 +137,14 @@ func (fc *FileConfig) validateVPNMesh() error {
 	case len(vpnCfg.MeshPeers) == 0:
 		return fmt.Errorf("server.vpn.mesh_key is set without server.vpn.mesh_peers: " +
 			"add every other relay of this region (its own DERP address, i.e. its domain and listen port) to mesh_peers")
+	}
+	// 规模上限跟着 mesh 的"全互联"语义走：每个对端都是一台真实存在的中继，因此
+	// region 的规模是 len(mesh_peers)+1，而不是"每台中继各自连了几台"。
+	if total := len(vpnCfg.MeshPeers) + 1; total > sharedconfig.MaxVPNRelays {
+		return fmt.Errorf("server.vpn.mesh_peers lists %d peer relays, so this region would have %d relays in total: "+
+			"a mesh may contain at most %d relays (1-2 are recommended), because every relay has to be meshed "+
+			"with all the others and every node embeds the whole set in its address",
+			len(vpnCfg.MeshPeers), total, sharedconfig.MaxVPNRelays)
 	}
 	if _, err := sharedconfig.ParseVPNMeshKey(vpnCfg.MeshKey); err != nil {
 		return fmt.Errorf("server.vpn.mesh_key: %w", err)

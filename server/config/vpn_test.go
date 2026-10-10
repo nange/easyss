@@ -182,6 +182,7 @@ func TestLoadConfigValidatesVPNMesh(t *testing.T) {
 	}
 
 	t.Run("完整的 mesh 配置通过", func(t *testing.T) {
+		// 2 个对端 = region 里 3 台中继，正好是 config.MaxVPNRelays 的上限。
 		fc, err := LoadConfig(writeConfig(t, `{
 			"server": {
 				"listen": ":443", "domain": "a.example.com", "vpn": {
@@ -196,6 +197,24 @@ func TestLoadConfigValidatesVPNMesh(t *testing.T) {
 		}`))
 		require.NoError(t, err)
 		require.Len(t, fc.Server.VPN.MeshPeers, 2)
+	})
+
+	t.Run("中继总数超过上限时启动失败", func(t *testing.T) {
+		// mesh 是全互联：列出 3 个对端意味着 region 里有 4 台中继，超过
+		// config.MaxVPNRelays（3 台）。这种配置没有可工作的形态——节点侧同样
+		// 最多只能声明 3 台中继，第 4 台进不了任何地址——所以必须在启动时报错。
+		_, err := LoadConfig(writeConfig(t, base(`,
+			"mesh_key": "shared-passphrase",
+			"mesh_peers": [
+				{"addr": "b.example.com:443", "proxy": "socks5://127.0.0.1:1081"},
+				{"addr": "c.example.com:443", "proxy": "socks5://127.0.0.1:1082"},
+				{"addr": "d.example.com:443", "proxy": "socks5://127.0.0.1:1083"}
+			]`)))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "mesh_peers")
+		require.Contains(t, err.Error(), "4 relays in total")
+		require.Contains(t, err.Error(), "at most 3 relays")
+		require.Contains(t, err.Error(), "1-2")
 	})
 
 	t.Run("只有 mesh_key 或只有 mesh_peers 都报错", func(t *testing.T) {
