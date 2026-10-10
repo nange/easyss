@@ -329,8 +329,8 @@ func TestLoadVPNIdentityIgnoresTheCurrentServerCheck(t *testing.T) {
 		srv.Default = false
 	}
 
-	if err := cfg.ValidateDERPServer(); err == nil {
-		t.Fatal("ValidateDERPServer() = nil, want an error for an unmarked current server")
+	if err := cfg.ValidateDERPServerAddr(cfg.DefaultServer().HostPort()); err == nil {
+		t.Fatal("ValidateDERPServerAddr() = nil, want an error for an unmarked current server")
 	}
 	if _, err := vpnOptions(cfg); err == nil {
 		t.Fatal("vpnOptions accepted a config whose current server is not a declared relay")
@@ -350,9 +350,16 @@ func TestLoadVPNIdentityIgnoresTheCurrentServerCheck(t *testing.T) {
 
 // TestVPNOptionsRequiresDERPAddr 固定严格失败：一个启用了 VPN 却没有可推导 DERP
 // 位置的配置必须在启动阶段报错，而不是让节点带着一个错的地址跑起来。
+//
+// 它同时守护"错误身份不滥用"：这条失败不是"当前服务端不在中继列表里"（那需要先有
+// 列表），托盘因此不会为它弹"VPN 功能不生效"的专用提示。
 func TestVPNOptionsRequiresDERPAddr(t *testing.T) {
-	if _, err := vpnOptions(&config.ClientConfig{VPN: config.VPNConfig{Enabled: true}}); err == nil {
+	_, err := vpnOptions(&config.ClientConfig{VPN: config.VPNConfig{Enabled: true}})
+	if err == nil {
 		t.Fatal("vpnOptions accepted a config without a derivable DERP host:port")
+	}
+	if errors.Is(err, config.ErrCurrentServerNotDERPRelay) {
+		t.Errorf("a missing relay list must not be reported as \"the current server is not a relay\": %v", err)
 	}
 }
 
@@ -372,6 +379,9 @@ func TestVPNOptionsRejectsUndeclaredCurrentServer(t *testing.T) {
 	_, err := vpnOptions(cfg)
 	if err == nil {
 		t.Fatal("vpnOptions accepted a current server that is not a declared DERP relay")
+	}
+	if !errors.Is(err, config.ErrCurrentServerNotDERPRelay) {
+		t.Errorf("the refusal must carry config.ErrCurrentServerNotDERPRelay so the tray can tell the user, got: %v", err)
 	}
 	for _, want := range []string{"127.0.0.3:9", "127.0.0.1:9", "derp"} {
 		if !strings.Contains(err.Error(), want) {
@@ -618,6 +628,10 @@ func TestStopVPNAbandonsAStuckStack(t *testing.T) {
 // TestRunDegradesWhenVPNFailsToStart 固定"VPN 是可选功能"这条运行期契约：VPN 配置
 // 写错（这里是对端地址非法）时基础代理必须照常起来，并把原因作为启动警告交给调用方
 // （托盘据此提示），而不是把整个客户端拖死。
+//
+// 它同时守护两条"身份"契约：这条失败**不**带 ErrCurrentServerNotDERPRelay（它不是
+// "当前服务器不在中继列表里"，托盘因此不会弹那条专用提示），而 Core.ServerAddr 无论
+// VPN 起没起来都被记录（界面层说的是会话实际使用的那台服务器）。
 func TestRunDegradesWhenVPNFailsToStart(t *testing.T) {
 	cfg := testConfig()
 	cfg.Local.SocksPort = freePort(t)
@@ -639,6 +653,12 @@ func TestRunDegradesWhenVPNFailsToStart(t *testing.T) {
 	}
 	if !strings.Contains(core.StartupWarn.Error(), "invalid tailcat address") {
 		t.Errorf("the startup warning must name the cause, got: %v", core.StartupWarn)
+	}
+	if errors.Is(core.StartupWarn, config.ErrCurrentServerNotDERPRelay) {
+		t.Errorf("an invalid peer address is not a relay refusal, got: %v", core.StartupWarn)
+	}
+	if want := cfg.DefaultServer().HostPort(); core.ServerAddr != want {
+		t.Errorf("Core.ServerAddr = %q, want %q: the session must record the server it actually uses", core.ServerAddr, want)
 	}
 	if core.SocksServer == nil {
 		t.Error("the SOCKS5 entry must still be running")
@@ -675,6 +695,14 @@ func TestRunDegradesWhenTheCurrentServerIsNotADERPRelay(t *testing.T) {
 	}
 	if !strings.Contains(core.StartupWarn.Error(), "other.example.com:443") {
 		t.Errorf("the startup warning must name the current server, got: %v", core.StartupWarn)
+	}
+	// 托盘靠这两条把"VPN 功能不生效"翻译成人话：错误身份（决定要不要弹）与会话实际
+	// 使用的那台服务器（弹的内容里点名哪一台）。App 快照此刻指向哪台与它无关。
+	if !errors.Is(core.StartupWarn, config.ErrCurrentServerNotDERPRelay) {
+		t.Errorf("the warning must carry config.ErrCurrentServerNotDERPRelay so the tray notifies, got: %v", core.StartupWarn)
+	}
+	if want := "other.example.com:443"; core.ServerAddr != want {
+		t.Errorf("Core.ServerAddr = %q, want %q (the session server, not the config default)", core.ServerAddr, want)
 	}
 	if core.SocksServer == nil {
 		t.Error("the SOCKS5 entry must still be running")
