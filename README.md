@@ -612,7 +612,7 @@ sysctl -p
   时若当前服务端不在列表里，启动日志会给出 `level=ERROR`（提示"服务器不在声明的
   DERP 列表中"），**本会话的 VPN 不工作**（代理照常可用）。修法是把 `servers[]` 里
   对应该服务端的条目也标上 `"derp": true`（或让 `vpn.derp_addr` 等于它），再用
-  `-show-vpn-identity` 重新生成各节点地址。
+  `./easyss vpn identity` 读出新的地址（地址由配置推导，改了配置它自己就会变）。
 * **所有节点必须声明同一组中继**。对端地址里内嵌的 DERP 节点集合与本节点不一致时
   启动即报错（缺一个节点就可能让某一侧在耗尽列表后彻底连不上）。
 * **mesh 是可选的**，且只在服务端之间配置：没配 mesh 时跨中继的客户端收不到对方的
@@ -689,20 +689,49 @@ N 台中继的全互联 = 每台 N-1 个 easyss-headless，各自只连一个对
 
 #### 3. 首次配置：两个 key 的收件人不同
 
-在节点 X 上执行 `./easyss -show-vpn-identity` 可以拿到两样东西，**它们要填到对端**：
+在节点 X 上执行 `./easyss vpn identity` 可以拿到两样东西，**它们要填到对端**：
+
+```
+client nodekey（填到对端的 vpn.allow_clients）:
+  nodekey:1fb017cf...
+
+地址内嵌的 derp 节点（region 901，按此顺序尝试）:
+  a.example.com:443, b.example.com:443
+
+node address（填到对端的 vpn.peers[].address；属于秘密）:
+  tcpGFwWCAx7-xt-F...
+```
 
 | 拿到的东西 | 填到哪里 | 作用 |
 |---|---|---|
-| `client_nodekey`（`nodekey:...`） | 对端的 `vpn.allow_clients` | 对端面据此识别访问侧（可选硬化） |
-| `address`（`tc...`） | 对端的 `vpn.peers[].address` | 内嵌公钥 / DERP 位置 / preshared key |
+| `client nodekey`（`nodekey:...`） | 对端的 `vpn.allow_clients` | 对端面据此识别访问侧（可选硬化） |
+| `node address`（`tc...`） | 对端的 `vpn.peers[].address` | 内嵌公钥 / DERP 位置 / preshared key |
 
-命令还会列出地址里包含的 derp 节点（`derp nodes in the address`）；当前服务端不在该
-列表里时会额外打印一行 `warning:`（见上面的第一条硬约束）。地址同时也写在
-`<exe>/vpn/peer.txt` 里。
+中继列表那块就是地址里包含的 derp 节点；当前服务端不在该列表里时会额外打印一块
+`注意：...`（见上面的第一条硬约束）。地址同时也写在 `<exe>/vpn/peer.txt` 里。
 
 **地址本身是秘密**：它内嵌 preshared key，拿到地址就等于拿到对端面的接入能力。因此
 **启动日志刻意不打印地址**（只有 `address_file` 指向那个文件），要分发地址请从
-`-show-vpn-identity` 或该文件复制。
+`./easyss vpn identity` 或该文件复制。
+
+地址是 `(身份文件, 当前 servers[] 派生出的中继集合)` 的函数，**不落盘**：改了
+`servers[]`/`vpn.derp_addr` 之后重新执行一次命令就是新地址，不需要"重新生成"。
+需要换的是**身份本身**（例如私钥泄漏、想换掉内嵌的 preshared key）：
+
+```bash
+./easyss vpn identity                 # 打印 client nodekey 与地址（--json 便于脚本消费）
+./easyss vpn regen --dry-run          # 先看看新的身份长什么样，不写任何文件
+./easyss vpn regen                    # 两个都换（= --node --client）
+./easyss vpn regen --node             # 只换 node-identity.json：地址变，client nodekey 不变
+./easyss vpn regen --client           # 只换 client.key：client nodekey 变，地址不变
+```
+
+被替换掉的旧身份备份为 `<file>.bak`，**每次重新生成都覆盖它**，因此每个文件最多只留
+一份备份——它就是"上一次生效的身份"，也是回滚点：把 `.bak` 拷回原名即完成回滚。因此
+**换完必须更新每个对端**：地址变了要改对端的 `vpn.peers[].address`，nodekey 变了要改
+对端的 `vpn.allow_clients`（没配白名单则无感）。`./easyss vpn identity` 在检测到当前
+身份与备份不同（即还没回滚、也没重新分发）时会额外打一块 `提示：...`，提醒手上的
+地址还是旧的，并说明如何用备份回滚。
 
 #### 4. 访问对端
 

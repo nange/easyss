@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"tailscale.com/types/key"
+
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/proxy"
 	sharedconfig "github.com/nange/easyss/v3/config"
@@ -211,14 +213,14 @@ func startVPN(cfg *config.ClientConfig, timeouts sharedconfig.Timeouts, paths vp
 		// 地址里内嵌 preshared key，因此"拿到地址"就等于"能接进来"；白名单是
 		// 唯一的额外硬化手段，没配时必须让它在日志里可见。
 		log.Warn("[VPN] vpn.allow_clients is empty: any node that has this node's address can open streams to its peer face " +
-			"(fill vpn.allow_clients with the nodekey printed by each peer's -show-vpn-identity)")
+			"(fill vpn.allow_clients with the nodekey printed by each peer's \"easyss vpn identity\")")
 	}
 
 	// 两个 key 与一个地址是运维要分发的全部信息，字段名直接写清各自该填到哪里。
 	//
 	// 这里刻意**不打印地址本身**：它内嵌 preshared key，等价于对端面的接入凭据，
 	// 而日志文件是长期留存、经常被整体打包带走的东西。地址只经两条显式路径交给
-	// 运维：`-show-vpn-identity` 与下面的 address_file。字段名仍保留 address_file，
+	// 运维：`easyss vpn identity` 与下面的 address_file。字段名仍保留 address_file，
 	// 使"日志里没有、但文件里有"这件事本身被发现。
 	log.Info("[VPN] node identity ready",
 		"address_file", paths.peerAddr, // 对端的 vpn.peers[].address（地址本身是秘密，不写日志）
@@ -383,7 +385,7 @@ func vpnOptions(cfg *config.ClientConfig) (vpnnode.Options, error) {
 	}, nil
 }
 
-// VPNIdentity 是本机 VPN 身份的可打印形式，供 `-show-vpn-identity` 使用。
+// VPNIdentity 是本机 VPN 身份的可打印形式，供 `easyss vpn identity` 使用。
 //
 // 两半是给不同的收件人用的：ClientNodeKey 填到**对端**的 `vpn.allow_clients` 里
 // （它是对端面识别访问侧的凭据），TailcatAddr 填到**对端**的
@@ -394,12 +396,159 @@ type VPNIdentity struct {
 	// TailcatAddr 是本节点地址（完整展开格式）。AddrErr 非空时为空。
 	TailcatAddr string
 	// DERPNodes 是地址里内嵌的中继节点（host:port，配置顺序）。它不是秘密，
-	// `-show-vpn-identity` 单独列出来是为了让"地址里到底有几个中继"可见：地址
-	// 本身是一串不可读的 base64。
+	// 命令单独列出来是为了让"地址里到底有几个中继"可见：地址本身是一串不可读的
+	// base64。
 	DERPNodes []string
 	// AddrErr 是推导本节点地址失败的原因。此时 ClientNodeKey 仍然有效——它不
 	// 依赖任何配置，这正是"白名单配不起来"时要先拿到的东西。
 	AddrErr error
+}
+
+// VPNKeyKind 是"重新生成哪一半身份"的位掩码，取值与语义都定义在 vpn 包（见 vpn.KeyKind）：
+// 每一半的收件人是身份的属性，提示文案与旧值回显共用同一份判断。
+//
+// 两半的收件人不同，代价也就不同：换掉 node identity 让所有对端的
+// `vpn.peers[].address` 失效，换掉 client key 让所有对端的 `vpn.allow_clients` 失效
+// （没配白名单时无感）。因此它们是两个独立的开关，没有"顺手都换掉"以外的耦合。
+type VPNKeyKind = vpn.KeyKind
+
+const (
+	// RegenNodeIdentity 重新生成 tailcat 服务端身份（地址因此改变，nodekey 不变）。
+	RegenNodeIdentity = vpn.KindNodeIdentity
+	// RegenClientKey 重新生成访问侧 client 私钥（nodekey 因此改变，地址不变）。
+	RegenClientKey = vpn.KindClientKey
+)
+
+// VPNRegenOptions 是 `easyss vpn regen` 的输入。
+type VPNRegenOptions struct {
+	// Kinds 要重新生成的身份。为零表示调用方没有指定，由命令行层决定"两个都换"。
+	Kinds VPNKeyKind
+	// DryRun 只推导并返回**将要**生成的身份，不写任何文件。
+	//
+	// 它的价值在于"先看清楚新地址再决定"：一旦落盘，旧身份就只剩备份文件可回滚，
+	// 而重新生成一次要给每个对端改配置。
+	DryRun bool
+}
+
+// VPNRegenResult 是一次重新生成的结果：新身份、被替换掉的旧值、以及动过的文件。
+//
+// Old* 三个字段在 DryRun 下是"当前生效的身份"（即将被替换的值），在真正生成时是
+// 替换前的实际内容。旧地址要回显是因为它才是运维手上的对照物——对端配置里现在
+// 写的正是它。
+type VPNRegenResult struct {
+	// Identity 是生成后的身份（DryRun 下是"将要生效"的那个）。
+	Identity *VPNIdentity
+	// OldClientNodeKey / OldTailcatAddr 是替换前的身份，不存在时为空。
+	OldClientNodeKey string
+	OldTailcatAddr   string
+	// Backups 是被替换掉的身份文件备份路径（键为文件路径，值为备份路径）。
+	Backups map[string]string
+	// BackupPaths 与 Backups 同源，仅按"被替换的顺序"排列，供输出稳定遍历。
+	BackupPaths []string
+	// Replaced 是**实际被替换掉**的那几半身份。
+	//
+	// 它与输入 VPNRegenOptions.Kinds 的区别正是调用方需要的：Kinds 是"请求换哪一半"，
+	// DryRun 下一半都没换；而"回显旧值、提醒更新对端"这两件事只对真的换掉的那一半成立。
+	// 用 Kinds 判定会打印出"previous node address"而那个地址逐字节没变（`regen --client`），
+	// 于是运维拿着一个假旧值去对照对端配置。
+	Replaced VPNKeyKind
+	// DryRun 回显输入，使输出不必再区分两种调用。
+	DryRun bool
+}
+
+// RegenerateVPNIdentity 重新生成本机的 VPN 身份（生产路径：<exe>/vpn/ 下的三份文件）。
+//
+// 它刻意做成"先推导、后落盘"：地址由 (身份, 中继列表) 推出，而推导会因为配置问题失败
+// （没有任何 derp 中继、中继地址格式错、生成出来的地址不是完整展开格式）。要换身份时
+// 那类问题必须在**任何文件被改写之前**失败：一次算不出地址的重新生成只会让本节点丢掉
+// 地址、所有对端失联，而运维什么都没得到。
+//
+// 生成中途失败时返回的错误已经描述了"现在的状态"：要么什么都没动，要么前半部分的新身份
+// 已经在文件里（换 client key 与换身份是两次独立的文件替换）。因此这里不做多文件的回滚
+// ——重新生成本来就是人显式要求的动作，而备份文件是回滚的凭据（见 vpn.RegenerateFile），
+// 自动回滚反而会把那份凭据弄乱。
+func RegenerateVPNIdentity(cfg *config.ClientConfig, opts VPNRegenOptions) (*VPNRegenResult, error) {
+	return regenerateVPNIdentity(cfg, defaultVPNPaths(), opts)
+}
+
+func regenerateVPNIdentity(cfg *config.ClientConfig, paths vpnPaths, opts VPNRegenOptions) (*VPNRegenResult, error) {
+	res := &VPNRegenResult{DryRun: opts.DryRun, Backups: map[string]string{}}
+
+	// 旧值必须**先**读出来：LoadOrCreateKey / LoadOrCreateNodeIdentity 都会顺手生成
+	// 缺失的文件，等到覆盖之后再读就只能读到新值了。
+	oldID, err := loadVPNIdentity(cfg, paths)
+	if err != nil {
+		return nil, err
+	}
+	res.OldClientNodeKey = oldID.ClientNodeKey
+	res.OldTailcatAddr = oldID.TailcatAddr
+
+	// 新身份先生成好，DryRun 与真写共用同一份字节。把生成留到写入那一步的写法会让
+	// --dry-run 打印出**当前**身份——它与真正要写下的东西毫无关系，而预览的全部价值
+	// 正是"落盘之前先看清楚会变成什么"。
+	newClientKey := key.NewNode()
+	var newIdentity *vpnnode.NodeIdentity
+	if opts.Kinds&RegenNodeIdentity != 0 {
+		newIdentity = vpnnode.NewNodeIdentity()
+	}
+
+	// 真写路径下，没被换掉的那一半要保留当前值参与推导（地址与 nodekey 是两个独立的
+	// 输入）；被换掉的那一半**直接换成新生成的那份**，于是"返回的身份"与"写进文件的
+	// 字节"永远来自同一份物，两种模式下都不必再区分。
+	clientKey, err := vpn.LoadOrCreateKey(paths.clientKey)
+	if err != nil {
+		return nil, err
+	}
+	nodeIdentity, nodeIdentityErr := vpnnode.LoadOrCreateNodeIdentityFile(paths.nodeIdentity)
+	if nodeIdentityErr != nil && newIdentity == nil {
+		// 不换身份时坏文件必须原样报出去；要换身份时它不是致命错误——重新生成恰好
+		// 就是修复它的方式（这个文件马上就要被替换掉），推导用新身份进行。
+		return nil, nodeIdentityErr
+	}
+	if opts.Kinds&RegenClientKey != 0 {
+		clientKey = newClientKey
+	}
+	if newIdentity != nil {
+		nodeIdentity = newIdentity
+	}
+
+	// 推导发生在任何写入之前：它就是"先推导、后落盘"这条约定的落点。
+	id, err := deriveVPNIdentity(cfg, clientKey, nodeIdentity)
+	if err != nil {
+		return res, err
+	}
+	if newIdentity != nil && id.AddrErr != nil {
+		return res, fmt.Errorf("cannot regenerate the node identity: the node address would not be usable (%w); "+
+			"the current identity and its address are unchanged", id.AddrErr)
+	}
+	res.Identity = id
+
+	if opts.Kinds&RegenClientKey != 0 && !opts.DryRun {
+		backup, err := vpn.RegenerateFile(paths.clientKey, "client key", newClientKey.MarshalText)
+		if err != nil {
+			return res, err
+		}
+		res.recordBackup(paths.clientKey, backup)
+		res.Replaced |= RegenClientKey
+	}
+	if newIdentity != nil && !opts.DryRun {
+		backup, err := vpnnode.RegenerateNodeIdentityFile(paths.nodeIdentity, newIdentity)
+		if err != nil {
+			return res, err
+		}
+		res.recordBackup(paths.nodeIdentity, backup)
+		res.Replaced |= RegenNodeIdentity
+	}
+	return res, nil
+}
+
+// recordBackup 记录一次文件替换，同时保持两个视图一致。
+func (r *VPNRegenResult) recordBackup(path, backup string) {
+	if backup == "" {
+		return
+	}
+	r.Backups[path] = backup
+	r.BackupPaths = append(r.BackupPaths, path)
 }
 
 // LoadVPNIdentity 读取（必要时生成）本机的 VPN 身份。
@@ -407,21 +556,38 @@ func LoadVPNIdentity(cfg *config.ClientConfig) (*VPNIdentity, error) {
 	return loadVPNIdentity(cfg, defaultVPNPaths())
 }
 
+// loadVPNIdentity 是"读现有身份"的路径：两份密钥都按需生成，因为运维第一次跑这个
+// 命令时它们本来就不存在，而地址要先拿到才能去配对端。
 func loadVPNIdentity(cfg *config.ClientConfig, paths vpnPaths) (*VPNIdentity, error) {
-	key, err := vpn.LoadOrCreateKey(paths.clientKey)
+	clientKey, err := vpn.LoadOrCreateKey(paths.clientKey)
 	if err != nil {
 		return nil, err
 	}
-	id := &VPNIdentity{ClientNodeKey: key.Public().String()}
+	// 身份文件坏掉时**不**在这里失败：地址那半会带着 AddrErr 返回，client nodekey
+	// 仍然可用（它不依赖身份文件），而这正是要排障的人最需要的东西。缺文件的情形
+	// 由 LoadOrCreate 顺手生成（第一次跑这个命令本来就还没有身份）。
+	nodeIdentity, nodeIdentityErr := vpnnode.LoadOrCreateNodeIdentityFile(paths.nodeIdentity)
+	if nodeIdentityErr != nil {
+		nodeIdentity = nil
+	}
+	return deriveVPNIdentity(cfg, clientKey, nodeIdentity)
+}
 
-	// 本节点地址是 (身份, DERP 节点列表) 的函数，**与 peers / overlay / peer_port
-	// 无关**。这里刻意不经过 vpnnode.NewConfig：运维第一次跑这个命令时 peers 往往
-	// 还是空的（他们正需要先拿到地址才能去填对端），若因为 peer 校验失败就报"地址
-	// 不可用"，这个命令在最需要它的场景下恰好不可用。
-	//
-	// 同理也不在这里做"当前服务端必须在列表里"的门禁：那是 VPN 能否工作的判断
-	// （见 vpnOptions），而这个命令要能用来排障——它把该问题作为一行 warning 打给
-	// 用户（见 cmd/easyss 的 printVPNIdentity）。
+// deriveVPNIdentity 把 (client key, node identity, 配置) 组合成可打印的身份。
+//
+// 本节点地址是 (身份, DERP 节点列表) 的函数，**与 peers / overlay / peer_port
+// 无关**。这里刻意不经过 vpnnode.NewConfig：运维第一次跑这个命令时 peers 往往还是
+// 空的（他们正需要先拿到地址才能去填对端），若因为 peer 校验失败就报"地址不可用"，
+// 这个命令在最需要它的场景下恰好不可用。
+//
+// 同理也不在这里做"当前服务端必须在列表里"的门禁：那是 VPN 能否工作的判断
+// （见 vpnOptions），而这个命令要能用来排障——它把该问题作为一行 warning 打给用户
+// （见 cmd/easyss 的 vpn identity）。
+//
+// nodeIdentity 为 nil 表示身份文件缺失或损坏，此时地址不可用而 nodekey 照常返回。
+func deriveVPNIdentity(cfg *config.ClientConfig, clientKey key.NodePrivate, nodeIdentity *vpnnode.NodeIdentity) (*VPNIdentity, error) {
+	id := &VPNIdentity{ClientNodeKey: clientKey.Public().String()}
+
 	derpAddrs := cfg.VPNDERPAddrs()
 	if len(derpAddrs) == 0 {
 		id.AddrErr = errors.New("cannot derive any DERP host:port this node advertises: " +
@@ -433,11 +599,11 @@ func loadVPNIdentity(cfg *config.ClientConfig, paths vpnPaths) (*VPNIdentity, er
 		id.AddrErr = fmt.Errorf("vpn.derp_addr: %w", err)
 		return id, nil
 	}
-	identity, err := vpnnode.LoadOrCreateNodeIdentity(paths.nodeIdentity)
-	if err != nil {
-		return nil, err
+	if nodeIdentity == nil {
+		id.AddrErr = errors.New("cannot read the node identity: " + vpn.RegenHint)
+		return id, nil
 	}
-	addr := identity.Address(region)
+	addr := nodeIdentity.Address(region)
 	// 这是运维复制地址之前的最后一道关口：一份短格式地址会让每个对端都去拉官方
 	// DERPMap。
 	if err := vpnnode.AssertFullAddr(addr); err != nil {
