@@ -2,6 +2,8 @@ package runner
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -250,7 +252,7 @@ func captureLogs(t *testing.T) *lockedLogBuffer {
 //
 // tailcat 地址内嵌 preshared key，等价于对端面的接入凭据，而日志文件长期留存、
 // 经常被整体打包带走。启动路径因此只记录 address_file（文件路径）与不含秘密的
-// 中继列表，地址本身只经 `-show-vpn-identity` 与本地文件交付。
+// 中继列表，地址本身只经 `easyss vpn identity` 与本地文件交付。
 func TestStartVPNDoesNotLogTheAddress(t *testing.T) {
 	logs := captureLogs(t)
 
@@ -314,7 +316,7 @@ func TestLoadVPNIdentityWithoutDERPAddr(t *testing.T) {
 	}
 }
 
-// TestLoadVPNIdentityIgnoresTheCurrentServerCheck 固定 `-show-vpn-identity` 的
+// TestLoadVPNIdentityIgnoresTheCurrentServerCheck 固定 `easyss vpn identity` 的
 // 定位：它是排障工具，**不**执行"当前服务端必须在声明的中继列表里"这道 VPN 启动
 // 门禁（否则运维在最需要地址的时候反而拿不到地址）。该问题由调用方作为一行 warning
 // 打给用户，而 VPN 是否启动由 vpnOptions 决定。
@@ -681,5 +683,234 @@ func TestRunDegradesWhenTheCurrentServerIsNotADERPRelay(t *testing.T) {
 	out := logs.String()
 	if !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "other.example.com:443") {
 		t.Errorf("the refusal must be logged at ERROR level and name the server, got:\n%s", out)
+	}
+}
+
+// TestRegenerateVPNIdentity 固定"重新生成"的两半语义，因为它们的收件人不同：
+//
+//   - --client 换掉 nodekey（对端的 vpn.allow_clients 失效），地址不变；
+//   - --node 换掉地址（对端的 vpn.peers[].address 失效），nodekey 不变。
+//
+// 两半都不该动到对方，否则"只换一半"这个选择本身就没有意义：运维会不得不同时更新
+// 两类配置。
+func TestRegenerateVPNIdentity(t *testing.T) {
+	paths := vpnTestPaths(t)
+	before, err := loadVPNIdentity(vpnTestConfig(), paths)
+	if err != nil {
+		t.Fatalf("loadVPNIdentity: %v", err)
+	}
+
+	t.Run("只换 client key", func(t *testing.T) {
+		res, err := regenerateVPNIdentity(vpnTestConfig(), paths, VPNRegenOptions{Kinds: RegenClientKey})
+		if err != nil {
+			t.Fatalf("regenerateVPNIdentity: %v", err)
+		}
+		if res.Identity.ClientNodeKey == before.ClientNodeKey {
+			t.Error("the client nodekey did not change")
+		}
+		if res.Identity.TailcatAddr != before.TailcatAddr {
+			t.Error("the node address changed although only the client key was regenerated")
+		}
+		if res.OldClientNodeKey != before.ClientNodeKey {
+			t.Errorf("OldClientNodeKey = %q, want the replaced value %q", res.OldClientNodeKey, before.ClientNodeKey)
+		}
+		if got := res.Backups[paths.clientKey]; got != paths.clientKey+vpn.BackupSuffix {
+			t.Errorf("client key backup = %q, want %q", got, paths.clientKey+vpn.BackupSuffix)
+		}
+		// Replaced 是"实际换掉了哪一半"，调用方靠它决定回显哪个旧值、要不要提醒去改对端：
+		// 它必须只包含本次真的落盘的那一半。
+		if res.Replaced != RegenClientKey {
+			t.Errorf("Replaced = %b, want only RegenClientKey", res.Replaced)
+		}
+		if _, ok := res.Backups[paths.nodeIdentity]; ok {
+			t.Error("the node identity was backed up although it was not regenerated")
+		}
+	})
+
+	t.Run("只换 node identity", func(t *testing.T) {
+		beforeNode, err := loadVPNIdentity(vpnTestConfig(), paths)
+		if err != nil {
+			t.Fatalf("loadVPNIdentity: %v", err)
+		}
+		res, err := regenerateVPNIdentity(vpnTestConfig(), paths, VPNRegenOptions{Kinds: RegenNodeIdentity})
+		if err != nil {
+			t.Fatalf("regenerateVPNIdentity: %v", err)
+		}
+		if res.Identity.ClientNodeKey != beforeNode.ClientNodeKey {
+			t.Error("the client nodekey changed although only the node identity was regenerated")
+		}
+		if res.Identity.TailcatAddr == beforeNode.TailcatAddr {
+			t.Error("the node address did not change")
+		}
+		if err := vpnnode.AssertFullAddr(res.Identity.TailcatAddr); err != nil {
+			t.Errorf("the regenerated address is not usable by peers: %v", err)
+		}
+		if res.OldTailcatAddr != beforeNode.TailcatAddr {
+			t.Errorf("OldTailcatAddr = %q, want the replaced value %q", res.OldTailcatAddr, beforeNode.TailcatAddr)
+		}
+		if got := res.Backups[paths.nodeIdentity]; got != paths.nodeIdentity+vpn.BackupSuffix {
+			t.Errorf("node identity backup = %q, want %q", got, paths.nodeIdentity+vpn.BackupSuffix)
+		}
+		if res.Replaced != RegenNodeIdentity {
+			t.Errorf("Replaced = %b, want only RegenNodeIdentity", res.Replaced)
+		}
+	})
+}
+
+// TestRegenerateVPNIdentityDryRunWritesNothing 固定 --dry-run 的契约：它必须能回答
+// "新地址会长什么样"，同时不替换任何身份——旧身份一旦被替换就只剩备份可回滚，而重新
+// 生成要给每个对端改配置。
+//
+// （节点上还没有密钥文件时，读取"当前身份"这一步会顺手生成它们。这与 LoadVPNIdentity
+// 的既有语义一致：那不改变任何已生效的身份，而预览必须有一份当前身份才能对比。）
+func TestRegenerateVPNIdentityDryRunWritesNothing(t *testing.T) {
+	paths := vpnTestPaths(t)
+	before, err := loadVPNIdentity(vpnTestConfig(), paths)
+	if err != nil {
+		t.Fatalf("loadVPNIdentity: %v", err)
+	}
+	beforeBytes, err := os.ReadFile(paths.nodeIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := regenerateVPNIdentity(vpnTestConfig(), paths, VPNRegenOptions{
+		Kinds:  RegenNodeIdentity | RegenClientKey,
+		DryRun: true,
+	})
+	if err != nil {
+		t.Fatalf("regenerateVPNIdentity: %v", err)
+	}
+	if !res.DryRun {
+		t.Error("DryRun was not echoed into the result")
+	}
+	if res.Identity.ClientNodeKey == before.ClientNodeKey {
+		t.Error("the dry run reports the old client nodekey: it must show what would be generated")
+	}
+	if res.Identity.TailcatAddr == before.TailcatAddr {
+		t.Error("the dry run reports the old address: it must show what would be generated")
+	}
+	if len(res.BackupPaths) != 0 {
+		t.Errorf("BackupPaths = %v, want empty in a dry run", res.BackupPaths)
+	}
+	if res.Replaced != 0 {
+		t.Errorf("Replaced = %b, want 0 in a dry run: nothing was replaced", res.Replaced)
+	}
+	if got, err := os.ReadFile(paths.nodeIdentity); err != nil {
+		t.Fatal(err)
+	} else if string(got) != string(beforeBytes) {
+		t.Error("the identity file changed during a dry run")
+	}
+	after, err := loadVPNIdentity(vpnTestConfig(), paths)
+	if err != nil {
+		t.Fatalf("loadVPNIdentity after the dry run: %v", err)
+	}
+	if after.ClientNodeKey != before.ClientNodeKey || after.TailcatAddr != before.TailcatAddr {
+		t.Error("the effective identity changed during a dry run")
+	}
+	if _, err := os.Stat(paths.clientKey + vpn.BackupSuffix); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a backup was written during a dry run: %v", err)
+	}
+}
+
+// TestRegenerateVPNIdentityWithoutKindsWritesNothing 固定"没有指定任何一半"时不改写
+// 任何文件：命令行的默认值（两个都换）是命令行层的决定，不该由这里替它做主。
+func TestRegenerateVPNIdentityWithoutKindsWritesNothing(t *testing.T) {
+	paths := vpnTestPaths(t)
+	before, err := loadVPNIdentity(vpnTestConfig(), paths)
+	if err != nil {
+		t.Fatalf("loadVPNIdentity: %v", err)
+	}
+
+	res, err := regenerateVPNIdentity(vpnTestConfig(), paths, VPNRegenOptions{})
+	if err != nil {
+		t.Fatalf("regenerateVPNIdentity: %v", err)
+	}
+	if len(res.BackupPaths) != 0 {
+		t.Errorf("BackupPaths = %v, want empty when no kind is selected", res.BackupPaths)
+	}
+	if res.Identity.ClientNodeKey != before.ClientNodeKey || res.Identity.TailcatAddr != before.TailcatAddr {
+		t.Error("the identity changed although no kind was selected")
+	}
+	if res.Replaced != 0 {
+		t.Errorf("Replaced = %b, want 0 when no kind is selected", res.Replaced)
+	}
+}
+
+// TestRegenerateVPNIdentityKeepsTheOldAddressOnFailure 固定"先推导、后落盘"：一个推导
+// 不出地址的配置必须让命令失败，**而且**不能把节点自己的身份弄丢——那份身份（以及它
+// 派生出的地址）正是运维手上唯一的凭据。
+func TestRegenerateVPNIdentityKeepsTheOldAddressOnFailure(t *testing.T) {
+	paths := vpnTestPaths(t)
+	if _, err := loadVPNIdentity(vpnTestConfig(), paths); err != nil {
+		t.Fatalf("loadVPNIdentity: %v", err)
+	}
+	beforeBytes, err := os.ReadFile(paths.nodeIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// vpn.derp_addr 是整组中继的显式覆盖，一个写坏的端口足以让地址推导失败。
+	noRelay := vpnTestConfig()
+	noRelay.VPN.DERPAddr = "127.0.0.1:notaport"
+	res, err := regenerateVPNIdentity(noRelay, paths, VPNRegenOptions{Kinds: RegenNodeIdentity})
+	if err == nil {
+		t.Fatalf("regenerateVPNIdentity = %+v, want an error (the address cannot be derived)", res)
+	}
+	if len(res.BackupPaths) != 0 {
+		t.Errorf("BackupPaths = %v, want empty: nothing may be written before the derivation succeeds", res.BackupPaths)
+	}
+	// 一次算不出地址的重新生成没有给运维任何新东西，却会让所有对端失联，因此它必须
+	// 在任何文件被改写之前失败。
+	if got, err := os.ReadFile(paths.nodeIdentity); err != nil {
+		t.Fatal(err)
+	} else if string(got) != string(beforeBytes) {
+		t.Error("the identity file was replaced although the new address could not be derived")
+	}
+}
+
+// TestRegenerateVPNIdentityReportsPartialReplacement 固定"哪一半真的落盘了"这条报告：
+// 重新生成是两个独立的文件替换，前一个成功、后一个失败时（这里让身份文件指向一个不存在
+// 的目录）返回的结果必须说清 client key 已经换了。
+//
+// 这不是理论情形：调用方就是在出错路径上靠它告诉运维"现在该去改哪些对端"——只说一句
+// "失败"会让一台 client key 已换、nodekey 还没换的节点处于无人知晓的中间态。
+func TestRegenerateVPNIdentityReportsPartialReplacement(t *testing.T) {
+	paths := vpnTestPaths(t)
+	if _, err := loadVPNIdentity(vpnTestConfig(), paths); err != nil {
+		t.Fatalf("loadVPNIdentity: %v", err)
+	}
+	// 把身份文件的路径指到一个不可能写入的位置：同级路径是个普通文件，MkdirAll 必然失败。
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	paths.nodeIdentity = filepath.Join(blocker, "node-identity.json")
+
+	res, err := regenerateVPNIdentity(vpnTestConfig(), paths, VPNRegenOptions{
+		Kinds: RegenNodeIdentity | RegenClientKey,
+	})
+	if err == nil {
+		t.Fatal("regenerateVPNIdentity succeeded although the identity file is unreachable")
+	}
+	if res == nil {
+		t.Fatal("result is nil on a partial failure: the caller cannot tell what was already replaced")
+	}
+	if res.Replaced != RegenClientKey {
+		t.Errorf("Replaced = %b, want only RegenClientKey (the identity write failed)", res.Replaced)
+	}
+	if got := res.Backups[paths.clientKey]; got != paths.clientKey+vpn.BackupSuffix {
+		t.Errorf("client key backup = %q, want %q", got, paths.clientKey+vpn.BackupSuffix)
+	}
+	// 换过的 client key 必须已经生效（这正是"部分完成"的含义），而地址那一半还是旧值。
+	after, err := loadVPNIdentity(vpnTestConfig(), paths)
+	if err != nil {
+		t.Fatalf("loadVPNIdentity after the partial failure: %v", err)
+	}
+	if after.ClientNodeKey == res.OldClientNodeKey {
+		t.Error("the client key was reported as replaced but is still the old one")
+	}
+	if after.TailcatAddr != res.OldTailcatAddr {
+		t.Error("the node address changed although that half failed to be written")
 	}
 }

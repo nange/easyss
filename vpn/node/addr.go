@@ -68,7 +68,8 @@ func assertPeersShareDERPSet(ownAddrs []string, peers []PeerRef) error {
 			"the embedded DERP is private and reachable only through each node's own easyss server, "+
 			"so every node in a region must declare the same relay set; "+
 			"not declared by this node: %s; not declared by the peer: %s; "+
-			"mark the same servers[] entries with \"derp\": true on every node and regenerate the addresses with -show-vpn-identity",
+			"mark the same servers[] entries with \"derp\": true on every node, then re-read each node's address with "+
+			"\"easyss vpn identity\" and update the peers: the address is derived, not stored, so it changes on its own",
 			i, p.HostName, strings.Join(addrs, ", "), ownText,
 			strings.Join(extra, ", "), strings.Join(missing, ", "))
 	}

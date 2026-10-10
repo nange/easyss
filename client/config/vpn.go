@@ -187,7 +187,8 @@ func (c *ClientConfig) ValidateDERPServer() error {
 	return fmt.Errorf("vpn: the current server %s is not one of the DERP relays this node declares (%s): "+
 		"the embedded DERP is private and every node reaches it through the easyss server it is connected to, "+
 		"so the relay list must contain that server; mark the matching servers[] entry with \"derp\": true "+
-		"(or set vpn.derp_addr to it) and regenerate this node's address with -show-vpn-identity",
+		"(or set vpn.derp_addr to it), then hand the address printed by \"easyss vpn identity\" to every peer: "+
+		"the advertised relay set is part of the address, so peers holding the old address list no longer match",
 		current, strings.Join(addrs, ", "))
 }
 
