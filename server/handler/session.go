@@ -140,6 +140,7 @@ type dialCtxKey int
 const (
 	ctxPreferredFamily dialCtxKey = iota
 	ctxResolvedAddrs
+	ctxLocalDERPDial
 )
 
 // withPreferredFamily 返回携带出站地址族偏好的 context；addr 为零值时原样返回
@@ -170,6 +171,24 @@ func withResolvedAddrs(ctx context.Context, addrs []netip.Addr) context.Context 
 func resolvedAddrs(ctx context.Context) ([]netip.Addr, bool) {
 	addrs, ok := ctx.Value(ctxResolvedAddrs).([]netip.Addr)
 	return addrs, ok && len(addrs) > 0
+}
+
+// withLocalDERPDial 返回携带「本机内嵌 DERP 的回环拨号地址」的 context。
+//
+// 它只在握手目标命中本服务端自己的 DERP 地址时设置（见 serve.go 的
+// handshakeResult.localDERP），因此这条特例与任意目标之间没有通道：目标必须与
+// 本服务端对外通告的 DERP 地址完全一致。
+func withLocalDERPDial(ctx context.Context, addr string) context.Context {
+	if addr == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxLocalDERPDial, addr)
+}
+
+// localDERPDial 取出内嵌 DERP 的回环拨号地址，ok 为 false 表示这不是那条特例。
+func localDERPDial(ctx context.Context) (string, bool) {
+	addr, ok := ctx.Value(ctxLocalDERPDial).(string)
+	return addr, ok && addr != ""
 }
 
 // clientPreferredFamily 从客户端到服务端的远端地址推导其接入地址族。
@@ -352,7 +371,9 @@ func outboundDialer(timeout, keepAlive time.Duration) *net.Dialer {
 // next-proxy 路由（带尽力而为的 SSRF 预检查，见 dialTarget）以及只拨校验过的
 // 字面地址的直接拨号（带拨号后的纵深防御断言）。
 type dialer struct {
-	nextProxy *nextproxy.NextProxy
+	// dialTimeout 是拨号预算（含回环特例）。0 表示系统默认。
+	dialTimeout time.Duration
+	nextProxy   *nextproxy.NextProxy
 	// shouldProxy 决定 target 是否经由 next proxy 转发。只有当 nextProxy 非 nil
 	// 时才会被查询，并且只要设置了 nextProxy 就必须同时设置它：
 	// ICMP handler 两者都不设置，因为原始 socket 无法由 SOCKS5 代理承载。
@@ -365,6 +386,19 @@ type dialer struct {
 // 远端地址在这里解析，因为 next-proxy 路径得到的是 SOCKS5 连接，
 // 其 RemoteAddr() 为 nil。
 func (d *dialer) dialTarget(ctx context.Context, network, target string) (net.Conn, string, error) {
+	// 内嵌 DERP 的本机回环（见 ProxyHandlerConfig.LocalDERPAddr）：这条流已经被
+	// 握手阶段确认为"目标就是本服务端自己的 DERP 地址"，因此直接拨回环监听。
+	// 它刻意跳过后面的两道 SSRF 判定与 next proxy——回环目标正是那道防护要拒绝
+	// 的东西，而这里的目标不是客户端选定的，是服务端自己配置的。
+	if addr, ok := localDERPDial(ctx); ok {
+		dialer := outboundDialer(d.dialTimeout, 0)
+		conn, err := dialer.DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, "", fmt.Errorf("dial the embedded DERP on %s: %w", addr, err)
+		}
+		return conn, addr, nil
+	}
+
 	if d.nextProxy != nil && d.shouldProxy(target) {
 		// 这条路径**有意**保持「把域名交给上游代理解析」的语义，因此 SSRF 检查
 		// 与实际连接是两次不同的解析：代理是管理员配置的可信组件，其自身解析器

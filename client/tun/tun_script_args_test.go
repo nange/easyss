@@ -26,7 +26,7 @@ func TestDarwinScriptArgsCarryABareV6Address(t *testing.T) {
 	require.Equal(t, "2001:0db8:0:f101::1", args[4],
 		"the darwin script appends the prefix itself, so it must receive a bare address")
 	require.Equal(t, "1500", args[8],
-		"the last argument is the MTU the script writes into the device")
+		"the ninth argument is the MTU the script writes into the device")
 	for _, arg := range args {
 		require.NotContains(t, arg, "/", "no argument may carry a prefix length: %q", arg)
 	}

@@ -37,6 +37,9 @@ type handshakeResult struct {
 	// 解析失败时为空）。拨号路径复用它，因此一次流只解析一次，SSRF 检查与
 	// 实际连接用的是同一批地址。
 	addrs []netip.Addr
+	// localDERP 表示目标就是本服务端自己的内嵌 DERP（见 localDERP.matches）：
+	// 这条流改拨本机回环监听，跳过 DNS 解析、SSRF 判定与 next proxy。
+	localDERP bool
 }
 
 // ServeHTTP 处理一个请求：先在响应提交之前完成所有可能拒绝握手的前置检查
@@ -154,6 +157,22 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 
 	target := first.Handshake.Target
 
+	// 目标就是本服务端自己的内嵌 DERP（见 localDERP）：这条连接只可能来自持有
+	// master key 的节点经 easyss 隧道发起，服务端在这里把它映射到本机回环监听，
+	// DERP 因此不必、也不再暴露在公网入口上。它必须发生在下面的 DNS/SSRF 判定
+	// 之前：那条路径会把回环目标当作 SSRF 直接拒绝。
+	if h.localDERP.matches(target) {
+		log.Info("[SERVER] embedded DERP target: mapping to the loopback listener", "target", target, "remote", r.RemoteAddr)
+		return handshakeResult{
+			sk:        sk,
+			first:     first,
+			endpoint:  endpoint,
+			target:    target,
+			method:    first.Handshake.Method,
+			localDERP: true,
+		}, true
+	}
+
 	// 拒绝 LAN/私网目标以防止 SSRF 攻击。这必须在响应提交（WriteHeader +
 	// Flush）之前完成：一旦 octet-stream 头被 flush，响应就无法再变成回退
 	// HTML 页面，客户端会收到 200 application/octet-stream 而不是干净的拒绝。
@@ -246,6 +265,10 @@ func (h *ProxyHandler) serveSession(w http.ResponseWriter, r *http.Request, res 
 		// 往往先试 IPv6）。客户端连接的族是这里唯一能观测到的信号。
 		// 握手阶段解析并校验过的目标地址一并传入：拨号只拨它们，不再查 DNS。
 		reqCtx := withResolvedAddrs(withPreferredFamily(r.Context(), clientPreferredFamily(r.RemoteAddr)), res.addrs)
+		if res.localDERP {
+			// 内嵌 DERP：拨本机回环监听（见 dialTarget 与该分支的注释）。
+			reqCtx = withLocalDERPDial(reqCtx, h.localDERP.loopback)
+		}
 		switch res.endpoint {
 		case sharedconfig.EndpointTCP:
 			stats.RecordServerTCPStream()

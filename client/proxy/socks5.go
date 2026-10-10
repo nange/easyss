@@ -133,12 +133,16 @@ func (c socksCredentials) Valid(user, password, _ string) bool {
 type Socks5Server struct {
 	srv *thingssocks5.Server
 
-	handler           *StreamHandler
-	router            *router.Router
-	policy            *routePolicy
-	dns               *dnsInterceptor
-	method            protocol.Method
-	disableQUIC       bool
+	handler     *StreamHandler
+	router      *router.Router
+	policy      *routePolicy
+	dns         *dnsInterceptor
+	method      protocol.Method
+	disableQUIC bool
+	// disableDNSIntercept 关闭 53 端口拦截（见 Socks5Options.DisableDNSIntercept）。
+	disableDNSIntercept bool
+	// vpn 是访问侧的 VPN 注入面；nil 表示 VPN 关闭（见 Socks5Options.VPN）。
+	vpn               VPNRoute
 	directDialContext func(context.Context, string, string) (net.Conn, error)
 	dialTimeout       time.Duration
 	// streamIdleTimeout 限制直连 TCP 中继的空闲时长；由用户配置的基础超时经
@@ -204,6 +208,25 @@ type Socks5Options struct {
 	DNSCache *easydns.Cache
 	// DirectDialContext 打开直连连接；为 nil 时使用普通的 net.Dialer。
 	DirectDialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+	// DisableDNSIntercept 关闭"发往 53 端口的连接按 DNS 处理"的拦截。
+	//
+	// 默认关闭该开关（即保持既有行为：53 端口按 DNS over TCP 分流）。VPN 对端面
+	// 需要打开它：对端面上 53 是一个普通的服务端口，若仍被 DNS 拦截，对端本机
+	// 监听在 53 的服务（如 systemd-resolved）就无法通过 VPN 访问，而且被拦截的
+	// 流量会按"查询域名"重新分流，与对端面"只拨字面 loopback"的契约相冲突。
+	DisableDNSIntercept bool
+	// DisableUDPAssociate 关闭 UDP ASSOCIATE：该命令一律回
+	// RepCommandNotSupported（RFC 1928 定义的应答），这个入口只剩 CONNECT。
+	//
+	// 两个内部入口需要它：VPN 对端面的 UDP 走 tailcat 的 UDP listener + 薄中继
+	// （见 vpn/node/udprelay.go），SOCKS5 的 ASSOCIATE 在那里只是"碰巧因为绑不上
+	// tailcat ULA 而失败"；内嵌 DERP 的连接由 runner 的 DERP 拨号器直接给出
+	// （见 runner/derpdialer.go），根本不经过 SOCKS5。把设计约束写成显式开关，
+	// 而不是依赖某个 bind 失败的副作用。
+	DisableUDPAssociate bool
+	// VPN 是访问侧的 VPN 注入面；为 nil 时 VPN 分流完全关闭，本类型的行为与
+	// 引入 VPN 之前逐字节一致。非 nil 时命中对端的目标走隧道（见 VPNRoute）。
+	VPN VPNRoute
 }
 
 func NewSocks5Server(opts Socks5Options) (*Socks5Server, error) {
@@ -228,15 +251,17 @@ func NewSocks5Server(opts Socks5Options) (*Socks5Server, error) {
 		serverDomain = ""
 	}
 	s := &Socks5Server{
-		handler:           opts.Handler,
-		router:            opts.Router,
-		method:            opts.Method,
-		disableQUIC:       opts.DisableQUIC,
-		directDialContext: directDialContext,
-		dialTimeout:       dialTimeout,
-		streamIdleTimeout: streamIdleTimeout,
-		udpIdleTimeout:    udpIdleTimeout,
-		listenAddr:        opts.ListenAddr,
+		handler:             opts.Handler,
+		router:              opts.Router,
+		method:              opts.Method,
+		disableQUIC:         opts.DisableQUIC,
+		disableDNSIntercept: opts.DisableDNSIntercept,
+		vpn:                 opts.VPN,
+		directDialContext:   directDialContext,
+		dialTimeout:         dialTimeout,
+		streamIdleTimeout:   streamIdleTimeout,
+		udpIdleTimeout:      udpIdleTimeout,
+		listenAddr:          opts.ListenAddr,
 	}
 	// dial 以函数值晚绑定到 s.directDialContext：测试会在构造之后替换该字段
 	// 作为 seam（见 direct_udp_test.go / dnstcp_test.go），会话池与 DNS 拦截器
@@ -255,6 +280,7 @@ func NewSocks5Server(opts Socks5Options) (*Socks5Server, error) {
 		Router:            opts.Router,
 		DialTimeout:       dialTimeout,
 		StreamIdleTimeout: streamIdleTimeout,
+		VPN:               opts.VPN,
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return s.directDialContext(ctx, network, addr)
 		},
@@ -268,9 +294,12 @@ func NewSocks5Server(opts Socks5Options) (*Socks5Server, error) {
 		Cache:        dnsCache,
 		Pool:         s.udp,
 		ServerDomain: serverDomain,
-		DialTimeout:  dialTimeout,
-		RespTimeout:  opts.Timeouts.DNSResp,
-		QueryIdle:    udpIdleTimeout,
+		// VPN 注入面同时（可选地）为对端名字提供本地应答：TUN 模式下系统解析器
+		// 的查询正是到达这里，而不是 client/dns 的转发服务器（见 dnsOptions.Static）。
+		Static:      vpnStaticNames(opts.VPN),
+		DialTimeout: dialTimeout,
+		RespTimeout: opts.Timeouts.DNSResp,
+		QueryIdle:   udpIdleTimeout,
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return s.directDialContext(ctx, network, addr)
 		},
@@ -286,12 +315,17 @@ func NewSocks5Server(opts Socks5Options) (*Socks5Server, error) {
 		}
 	}
 
+	associate := thingssocks5.Handler(s.associateHandler)
+	if opts.DisableUDPAssociate {
+		associate = thingssocks5.Handler(s.associateDisabled)
+	}
+
 	s.srv = thingssocks5.NewServer(
 		thingssocks5.WithAuthMethods(authMethods),
 		// 域名必须在业务层判定（见 passthroughResolver），因此让库跳过解析。
 		thingssocks5.WithResolver(passthroughResolver{}),
 		thingssocks5.WithConnectHandle(thingssocks5.Handler(s.connectHandler)),
-		thingssocks5.WithAssociateHandle(thingssocks5.Handler(s.associateHandler)),
+		thingssocks5.WithAssociateHandle(associate),
 	)
 	return s, nil
 }
@@ -325,14 +359,35 @@ func (s *Socks5Server) connectHandler(ctx context.Context, writer io.Writer, r *
 	// 的契约。
 	stream := newSocks5Stream(c, r.Reader)
 
+	// VPN 对端优先于 53 拦截：对端本机监听在 53 的服务（如 systemd-resolved）在
+	// 这里是一个普通服务端口，而不是"按查询域名重新分流"的 DNS。少了这一步，
+	// 对端面的 53 在 UDP 侧可达、在 TCP 侧却被本机的拦截器吞掉（见 handleUDP
+	// 的同序判定）。
+	if s.isVPNPeer(host) {
+		return s.routeTCP(stream, target, host)
+	}
+
 	// 拦截 DNS over TCP：发往 53 端口的连接按查询域名分流（与 UDP DNS 拦截一致）。
 	// 否则解析器走 TCP 时（如 systemd-resolved 特性集降级）DNS 查询会按目标 IP 判
 	// 直连、从物理网卡发出而绕过隧道，被 GFW 污染。
-	if port == "53" {
+	//
+	// VPN 对端面会关闭这条拦截（见 Socks5Options.DisableDNSIntercept）：在那里 53
+	// 只是一个普通服务端口。
+	if port == "53" && !s.disableDNSIntercept {
 		return s.handleTCPDNS(stream, target, host)
 	}
 
 	return s.routeTCP(stream, target, host)
+}
+
+// isVPNPeer 报告 host 是否为本机配置的 VPN 对端。它为"VPN 优先于公网路径门禁"
+// 这条规则提供一个共同的判定入口（53 拦截、QUIC 屏蔽都按它让路）。
+func (s *Socks5Server) isVPNPeer(host string) bool {
+	if s.vpn == nil {
+		return false
+	}
+	_, ok := s.vpn.Lookup(host)
+	return ok
 }
 
 // routeTCP 对已完成 SOCKS5 CONNECT 的 TCP 连接执行 Block/Direct/Proxy 分流。
@@ -375,6 +430,16 @@ func (s *Socks5Server) routeTCPReplied(c net.Conn, target, host string, replied 
 		defer rc.Close() //nolint:errcheck
 		relayTCP(rc, c, s.policy.streamIdle())
 		log.Debug("[TCP] direct relay finished", "target", target)
+		return nil
+	case routeVPN:
+		rc, err := s.vpnTCPConnect(c, target, replied)
+		if err != nil {
+			log.Error("[TCP] vpn connect", "target", target, "err", err)
+			return err
+		}
+		defer rc.Close() //nolint:errcheck
+		relayTCP(rc, c, s.policy.streamIdle())
+		log.Debug("[TCP] vpn relay finished", "target", target)
 		return nil
 	default:
 		if !replied {
@@ -426,6 +491,35 @@ func (s *Socks5Server) replyError(c net.Conn, code uint8) error {
 	return writeSocksReply(c, code, nil)
 }
 
+// vpnTCPConnect 经 VPN 隧道打开到对端的连接，并把结果写回客户端。replied 的语义
+// 与 directTCPConnect 完全一致（成功应答已写出时不再补写、失败也只能返回错误）。
+//
+// 与直连路径的唯一区别是 BND.ADDR：这里刻意回报 0.0.0.0:0，而不是隧道连接的
+// LocalAddr——那是 WireGuard 的 ULA，对客户端毫无意义（RFC 1928 也允许 CONNECT
+// 的 BND.ADDR 不被使用）。真实可达性由"内层握手是否成功"决定，它已经在本调用返回
+// 之前完成。
+func (s *Socks5Server) vpnTCPConnect(c net.Conn, target string, replied bool) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.dialTimeout)
+	defer cancel()
+
+	rc, err := s.vpn.DialTCP(ctx, target)
+	if err != nil {
+		if !replied {
+			_ = s.replyError(c, repHostUnreachable)
+		}
+		return nil, err
+	}
+
+	if replied {
+		return rc, nil
+	}
+	if err := writeSocksReply(c, repSuccess, nil); err != nil {
+		rc.Close() //nolint:errcheck
+		return nil, err
+	}
+	return rc, nil
+}
+
 // associateHandler 接管 UDP ASSOCIATE。库不再代管 UDP socket（其默认实现会把
 // 数据报直接转发、业务层拿不到内容），改由本服务器自建 socket、自持会话池，从而
 // 保留 DNS 拦截、QUIC 屏蔽与按域名分流。
@@ -439,6 +533,18 @@ func (s *Socks5Server) associateHandler(_ context.Context, writer io.Writer, _ *
 		return fmt.Errorf("socks5 associate: writer is %T, not net.Conn", writer)
 	}
 	return s.udpAssociate(c)
+}
+
+// associateDisabled 是 DisableUDPAssociate 的 handler：按 RFC 1928 回
+// RepCommandNotSupported，而不是断开连接——客户端会得到一个明确的"不支持该
+// 命令"，而不是网络错误。
+func (s *Socks5Server) associateDisabled(_ context.Context, writer io.Writer, _ *thingssocks5.Request) error {
+	c, ok := writer.(net.Conn)
+	if !ok {
+		return fmt.Errorf("socks5 associate: writer is %T, not net.Conn", writer)
+	}
+	log.Debug("[SOCKS5] UDP ASSOCIATE disabled on this entry")
+	return s.replyError(c, repCommandNotSupported)
 }
 
 // udpAssociate 建立 UDP 中继：在与 TCP 入口相同的地址上绑定 UDP socket（与历史

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/util"
 )
@@ -47,13 +48,14 @@ type NextProxyConfig struct {
 // pprof_enabled）只存在于 FileConfig 上：server.Server 读取这一个结构体，
 // 而不是再合并一份副本。
 type ServerConfig struct {
-	Listen         string   `json:"listen"`
-	Domain         string   `json:"domain"`
-	Password       string   `json:"password"`
-	AllowedMethods []string `json:"allowed_methods"`
-	CertPath       string   `json:"cert_path"`
-	KeyPath        string   `json:"key_path"`
-	Email          string   `json:"email"`
+	Listen         string    `json:"listen"`
+	Domain         string    `json:"domain"`
+	Password       string    `json:"password"`
+	AllowedMethods []string  `json:"allowed_methods"`
+	CertPath       string    `json:"cert_path"`
+	KeyPath        string    `json:"key_path"`
+	Email          string    `json:"email"`
+	VPN            VPNConfig `json:"vpn"`
 }
 
 type FileConfig struct {
@@ -86,6 +88,7 @@ func LoadConfig(path string) (*FileConfig, error) {
 	if err := json.Unmarshal(data, &fc); err != nil {
 		return nil, err
 	}
+	warnOnRemovedDERPAddr(data)
 
 	// 0 表示该字段不存在（早于该字段的配置），按未设置处理。
 	if fc.ConfigVersion != 0 && fc.ConfigVersion != SupportedConfigVersion {
@@ -93,10 +96,38 @@ func LoadConfig(path string) (*FileConfig, error) {
 	}
 
 	applyDefaults(&fc)
+	// VPN 的启动期契约（DERP 挂载路径的形态、对外 DERP 地址可推导）在这里固定，
+	// 且只在 vpn.enabled 时生效：未启用的 VPN 配置不参与运行期。
+	if err := fc.validateVPN(); err != nil {
+		return nil, err
+	}
 	// 相对文件路径（证书、代理列表、日志文件）在这里统一解析。
 	fc.ResolveFilePaths()
 
 	return &fc, nil
+}
+
+// warnOnRemovedDERPAddr 对配置里残留的 server.vpn.derp_addr 键告警一次。
+//
+// 该字段已被移除：DERP 的对外地址现在只由 server.domain 与 server.listen 的端口
+// 推导（见 ResolveDERPAddr），端口转发/反向代理那类"对外 host:port 与监听不同"的
+// 形态明确不支持。残留的键不会被 json.Unmarshal 报错（未知键一律忽略），但它可能
+// 正是运维"以为中继在别的 host:port"的原因——那种情况下进程照常启动，而每个节点
+// 的地址里内嵌的却是另一个位置，症状是 VPN 一直连不上。因此这里把它说出来。
+func warnOnRemovedDERPAddr(data []byte) {
+	var legacy struct {
+		Server struct {
+			VPN struct {
+				DERPAddr string `json:"derp_addr"`
+			} `json:"vpn"`
+		} `json:"server"`
+	}
+	if err := json.Unmarshal(data, &legacy); err != nil || legacy.Server.VPN.DERPAddr == "" {
+		return
+	}
+	log.Warn("[CONFIG] server.vpn.derp_addr was removed and is ignored; "+
+		"the DERP address is derived from server.domain and the port of server.listen",
+		"derp_addr", legacy.Server.VPN.DERPAddr)
 }
 
 // applyDefaults 把服务端配置归一化为与运行期消费点一致的有效值，使内存中的
@@ -129,6 +160,9 @@ func (fc *FileConfig) ResolveFilePaths() {
 	fc.Server.CertPath = util.ResolvePath(fc.Server.CertPath)
 	fc.Server.KeyPath = util.ResolvePath(fc.Server.KeyPath)
 	fc.NextProxy.NextProxyFile = util.ResolvePath(fc.NextProxy.NextProxyFile)
+	for i := range fc.Server.VPN.MeshPeers {
+		fc.Server.VPN.MeshPeers[i].CAFile = util.ResolvePath(fc.Server.VPN.MeshPeers[i].CAFile)
+	}
 
 	// 日志文件路径没有"当前工作目录已存在同名文件则保留"的向后兼容语义
 	// （见 util.ResolvePath）：它一律基于可执行文件目录绝对化，否则 launchd
@@ -167,6 +201,24 @@ func ExampleConfig() FileConfig {
 			Domain:         "your-domain.com",
 			Password:       "your-password",
 			AllowedMethods: DefaultAllowedMethods(),
+			// DERP 的对外 host:port 没有配置项：它就是 domain + listen 的端口
+			// （ResolveDERPAddr），端口转发/反向代理那种"对外 host:port 与监听
+			// 不同"的形态明确不支持。
+			//
+			// enabled 默认给 false：内嵌 DERP 虽然只对回环来源提供服务（节点
+			// 经 easyss 隧道抵达，公网上没有任何 DERP 路径），但它会把该服务端
+			// 变成节点组网的中继，运维应当明确地打开它。
+			//
+			// mesh_key / mesh_peers 也一并列出（空值）：它们是"同一 region 下
+			// 多个中继互相转发"的开关，只在 enabled 为 true 时才允许非空，
+			// 因此示例里保持空——但字段必须出现，示例就是字段清单。
+			// mesh 是全互联，所以 mesh_peers 最多 2 条：本机 + 对端 = 同一
+			// region 最多 3 台中继（推荐 1-2 台），超过即配置错误。
+			VPN: VPNConfig{
+				Enabled:   false,
+				MeshKey:   "",
+				MeshPeers: []MeshPeer{},
+			},
 		},
 		// 显式给出空切片而不是留 nil：示例里 cdn_domains 应呈现为 []，
 		// 与 README 表格中"默认值 []"一致，而不是序列化成 null。

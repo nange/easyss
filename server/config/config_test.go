@@ -114,9 +114,14 @@ func TestExampleConfigIsNormalized(t *testing.T) {
 	data, err := json.Marshal(fc)
 	require.NoError(t, err)
 	require.Contains(t, string(data), `"cdn_domains":[]`)
+	require.Contains(t, string(data), `"mesh_peers":[]`)
+	// 已移除的 server.vpn.derp_addr 不该再出现在示例里：DERP 的对外地址由
+	// domain 与 listen 推导，示例里没有任何可写的字段。
+	require.NotContains(t, string(data), `"derp_addr"`)
 	for _, key := range []string{
 		`"server"`, `"fallback"`, `"shaper"`, `"transport"`,
 		`"next_proxy"`, `"log"`, `"pprof_enabled"`, `"timeout"`,
+		`"vpn"`, `"mesh_key"`, `"mesh_peers"`,
 	} {
 		require.Contains(t, string(data), key)
 	}

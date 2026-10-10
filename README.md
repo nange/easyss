@@ -17,6 +17,7 @@ Easyss是一款兼容socks5的安全代理上网工具，目标是使访问国�
 * 支持系统托盘图标管理客户端 (thanks [systray](https://github.com/gogpu/systray))
 * 可配置多服务器切换; 自定义直连、代理白名单(IP/域名)
 * 支持服务端链式代理
+* 支持节点组网(VPN)：多个 easyss 节点之间互相访问对端自身的服务端口，DERP 中继由 easyss 服务端内嵌，不依赖任何官方服务
 
 ## 下载
 
@@ -590,6 +591,207 @@ sysctl -p
 * `next_proxy.all_host`: 是否对所有请求走链式代理
 
 如果未指定 `next_proxy_file`，则仅按 `all_host` 规则决定是否走链式代理。
+
+### 节点组网(VPN)
+
+多个 easyss 节点之间可以互相访问**对端自身的服务端口**（sshd 的 22、Web 的 8080、
+数据库的 3306 等），从而支持节点间 SSH / HTTP / 数据库互通。DERP 中继由 easyss
+服务端内嵌，**不依赖 Tailscale 官方服务**，也不需要在服务端做任何配置之外的部署。
+
+中继本身是**私有端点**：它只接待经 easyss 协议隧道到达的连接，公网上访问 `/derp`
+只会看到与其他未知路径一致的伪装页面。因此不存在"拿你的域名当免费中继"的问题，
+也不需要为它开放额外端口。
+
+**同一个 region 下可以有多台中继**（多个 `derp: true` 的服务端条目，互为冗余），
+它们之间可以组成 mesh：挂在不同中继上的客户端互相发包时，由服务端沿 mesh 连接转发
+一跳（不跨 region），因此"同一 region 的两个客户端落在了不同中继上"不会再导致它们
+失联。运行上的四条硬约束：
+
+* **同一 region 最多 3 台中继（推荐 1-2 台）**。mesh 是全互联（每台中继都列出其余
+  每一台），而节点地址里内嵌的正是这一组中继，因此两侧都把上限当作配置加载阶段的
+  硬约束、**超过就报错拒绝启动**（不会带着一个谁也连不上的中继跑起来）：服务端
+  `server.vpn.mesh_peers` 最多 2 条（本机 + 2 个对端），节点 `servers[]` 里标记
+  `"derp": true` 的条目最多 3 条（规范化去重后，同一个中继写多遍只算一条）。
+  节点侧的校验只在 `vpn.enabled=true` 时生效——没启用 VPN 的配置不参与运行期；
+  `./easyss vpn identity` 走的是同一份校验，越限时它报的就是这条配置错误。
+* **当前服务端必须在声明的中继列表里**。内嵌 DERP 只接待经**本服务端**隧道送达的
+  连接，所以节点实际能连上的中继只能是它此刻隧道所落的那台服务端。`vpn.enabled=true`
+  时若当前服务端不在列表里，启动日志会给出 `level=ERROR`（提示"服务器不在声明的
+  DERP 列表中"），**本会话的 VPN 不工作**（代理照常可用）。托盘版还会弹出系统通知
+  （"VPN 功能不生效：当前使用的服务器 … 不在 vpn 声明的中继(DERP)列表里"）——**启动**
+  与**切换服务器**两条路径都会弹，判据用的是**运行中会话实际使用**的那台服务器，因此
+  在托盘里点了另一台服务器之后立刻按新服务器重新判定。修法是把 `servers[]` 里
+  对应该服务端的条目也标上 `"derp": true`，再用 `./easyss vpn identity` 读出
+  新的地址（地址由配置推导，改了配置它自己就会变）。
+* **所有节点必须声明同一组中继**。对端地址里内嵌的 DERP 节点集合与本节点不一致时
+  启动即报错（缺一个节点就可能让某一侧在耗尽列表后彻底连不上）。
+* **mesh 是可选的**，且只在服务端之间配置：没配 mesh 时跨中继的客户端收不到对方的
+  数据包（包被丢弃并回 `PeerGoneReasonNotHere`），同中继内的客户端不受影响。
+
+地址里内嵌 DERP 节点集合：由 `servers[]` 里全部 `derp: true` 的条目派生；没有任何
+条目标记时回退**当前连接的服务端**（因此切换服务端会让地址变化，要对端跟着更新——
+要稳定的多节点地址就把每一个中继都标记上）。这里**没有**"显式覆盖"的字段：地址里
+那几个 `host:port` 必须与该中继所在服务端的对外地址逐字一致（服务端靠完全匹配把它
+认成"来访问我的 DERP"并改拨回环），而那个对外地址只由服务端的 `server.domain` 与
+`server.listen` 的端口推导——端口转发/反向代理这类"对外 host:port 与监听不同"的
+形态明确不支持。
+
+> **升级说明**：`server.vpn.derp_addr` 与 `vpn.derp_addr` 已移除。老配置里留着它们
+> 不影响启动（未知键被忽略），但启动日志里会出现一条 `was removed and is ignored`
+> 的 `WARN`：请删掉那一行，并确认 `servers[]` 里对应的条目带 `"derp": true`。
+
+节点的 DERP 连接由一个专门的拨号器送进 easyss 隧道（tailcat 的 `DERPDialer`
+选项，见 `go.mod` 里的两个 `replace`：`tailscale.com` 与
+`github.com/tailscale/tailcat`）。该选项目前由本地 fork 提供，上游合并前请按
+`go.mod` 注释切换 replace 的形态。
+
+#### 1. 服务端（DERP 中继主机 S1）
+
+```jsonc
+{
+  "server": {
+    "listen": ":443",
+    "domain": "a.example.com",
+    "password": "your-password",
+    "vpn": {
+      "enabled": true,
+      // 没有 derp_addr 这样的字段：本服务端对外通告的 DERP 地址恒等于
+      // domain + listen 的端口（这里即 a.example.com:443），节点侧从
+      // servers[] 的 "derp": true 标记里拿到同一个值。
+      // 可选：同 region 其他中继的互联。两个字段要么都给，要么都不给。
+      // mesh 是全互联，所以 mesh_peers 最多 2 条：本机 + 对端 = 同一 region
+      // 最多 3 台中继（推荐 1-2 台），超过会让服务端启动失败。
+      // mesh_key 是这组中继共享的口令（任意字符串，内部 SHA-256 成 32 字节密钥）。
+      "mesh_key": "a-long-shared-passphrase",
+      "mesh_peers": [
+        // addr 必须等于对端自己的 DERP 地址（它的 domain + listen 端口）。
+        // proxy 是把这条连接送进隧道的 SOCKS5——通常是本机上指向该对端的
+        // easyss-headless 的 socks 端口；省略时用顶层 next_proxy.url。
+        { "addr": "b.example.com:443", "proxy": "socks5://127.0.0.1:1081" }
+      ]
+    }
+  }
+}
+```
+
+mesh 连接的完整路径是：本机内嵌 DERP → 上面那个 SOCKS5 → easyss-headless 的隧道 →
+对端 easyss 服务端（握手目标正是它自己的 DERP 地址）→ 对端回环上的内嵌 DERP。
+这不是"优化"，而是唯一可能成功的形态：内嵌 DERP 只接待回环来源，直连对端公网
+`host:port` 只会拿到伪装页面。因此每个 mesh 对端都需要**一条指向它的隧道**（
+N 台中继的全互联 = 每台 N-1 个 easyss-headless，各自只连一个对端；N ≤ 3），并且该
+客户端的
+分流规则不能把对端域名判成直连（用 `auto`/`proxy`，别用 `direct`）。
+
+对端使用手工证书/私有 CA 时，用 `mesh_peers[].ca_file` 给出根证书；用 certmagic
+（Let's Encrypt）时留空即可。
+
+#### 2. 节点
+
+每个节点都要在 `servers[]` 里为**每一台**运行内嵌 DERP 的服务端各留一条条目，并全部
+标记 `derp: true`（DERP 位置从这些条目派生；最多 3 条，推荐 1-2 条，超过 3 条启动
+即报错）：
+
+```jsonc
+{
+  "servers": [
+    { "address": "a.example.com", "port": 443, "password": "...", "derp": true, "default": true },
+    { "address": "b.example.com", "port": 443, "password": "...", "derp": true }
+  ],
+  "vpn": {
+    "enabled": true,
+    "relay_only": true,      // 默认 true：全部经服务端中继，不走节点间直连
+    "peer_port": 6080,       // 可省略：socks_port + 2000
+    "peers": [
+      { "host_name": "b", "address": "tcXXXXXXXX..." }
+    ]
+  }
+}
+```
+
+#### 3. 首次配置：两个 key 的收件人不同
+
+在节点 X 上执行 `./easyss vpn identity` 可以拿到两样东西，**它们要填到对端**：
+
+```
+client nodekey（填到对端的 vpn.allow_clients）:
+  nodekey:1fb017cf...
+
+地址内嵌的 derp 节点（region 901，按此顺序尝试）:
+  a.example.com:443, b.example.com:443
+
+node address（填到对端的 vpn.peers[].address；属于秘密）:
+  tcpGFwWCAx7-xt-F...
+```
+
+| 拿到的东西 | 填到哪里 | 作用 |
+|---|---|---|
+| `client nodekey`（`nodekey:...`） | 对端的 `vpn.allow_clients` | 对端面据此识别访问侧（可选硬化） |
+| `node address`（`tc...`） | 对端的 `vpn.peers[].address` | 内嵌公钥 / DERP 位置 / preshared key |
+
+中继列表那块就是地址里包含的 derp 节点；当前服务端不在该列表里时会额外打印一块
+`注意：...`（见上面的第一条硬约束）。地址同时也写在 `<exe>/vpn/peer.txt` 里。
+
+**地址本身是秘密**：它内嵌 preshared key，拿到地址就等于拿到对端面的接入能力。因此
+**启动日志刻意不打印地址**（只有 `address_file` 指向那个文件），要分发地址请从
+`./easyss vpn identity` 或该文件复制。
+
+地址是 `(身份文件, 当前 servers[] 派生出的中继集合)` 的函数，**不落盘**：改了
+`servers[]` 里的 `derp` 标记之后重新执行一次命令就是新地址，不需要"重新生成"。
+需要换的是**身份本身**（例如私钥泄漏、想换掉内嵌的 preshared key）：
+
+```bash
+./easyss vpn identity                 # 打印 client nodekey 与地址（--json 便于脚本消费）
+./easyss vpn regen --dry-run          # 先看看新的身份长什么样，不写任何文件
+./easyss vpn regen                    # 两个都换（= --node --client）
+./easyss vpn regen --node             # 只换 node-identity.json：地址变，client nodekey 不变
+./easyss vpn regen --client           # 只换 client.key：client nodekey 变，地址不变
+```
+
+被替换掉的旧身份备份为 `<file>.bak`，**每次重新生成都覆盖它**，因此每个文件最多只留
+一份备份——它就是"上一次生效的身份"，也是回滚点：把 `.bak` 拷回原名即完成回滚。因此
+**换完必须更新每个对端**：地址变了要改对端的 `vpn.peers[].address`，nodekey 变了要改
+对端的 `vpn.allow_clients`（没配白名单则无感）。`./easyss vpn identity` 在检测到当前
+身份与备份不同（即还没回滚、也没重新分发）时会额外打一块 `提示：...`，提醒手上的
+地址还是旧的，并说明如何用备份回滚。
+
+#### 4. 访问对端
+
+```bash
+# 非 TUN：用现有代理 SOCKS5 端口
+curl --socks5-hostname 127.0.0.1:4080 http://b:8080/
+ssh -o ProxyCommand="nc -X 5 -x 127.0.0.1:4080 b 22" user@b
+
+# TUN 模式（系统全局流量）：不需要任何代理参数
+curl http://b:8080/
+ssh user@b
+```
+
+非 TUN 时请显式使用 SOCKS5 端口：HTTP 代理入口（系统代理里配置的那个）不参与
+节点组网的分流，访问对端名字需要走 SOCKS5。
+
+#### 5. 边界与注意事项
+
+* **只能访问对端自身的服务**：对端面只接受字面 loopback 目标，因此对端不可能成为
+  内网跳板；只绑在某个内网 IP 上的服务不可达。
+* TUN 模式（系统全局流量）与 `relay_only=false` 不兼容：TUN 会把节点间直连的 UDP
+  报文捕获并送回 easyss 自己。配置里 `relay_only` 默认就是 `true`；若显式关掉它，
+  启动时若已启用 TUN 会被强制置回（并打警告），运行中再打开 TUN 则会被拒绝并提示。
+* **不支持 ICMP**：`ping b` / traceroute 到对端不通，VPN 只承载 TCP 与 UDP。
+* UDP 单包上限 1232 字节，适合 DNS / QUIC 首包，不适合大包高带宽 UDP。
+* 没有节点自动发现：对端地址由运维配置。
+* mesh 只在服务端之间、只转发一跳、不跨 region；mesh 未配或对端不可用时，跨中继的
+  数据包按 `PeerGoneReasonNotHere` 丢弃（同中继内不受影响）。
+* **规模上限是同一 region 3 台中继（推荐 1-2 台）**：服务端 `mesh_peers` 最多 2 条、
+  节点最多标记 3 条 `"derp": true`（规范化去重后），两侧都在配置加载阶段报错拒绝
+  启动（`vpn.enabled=false` 时节点侧不校验）。
+* **当前服务端必须在声明的 DERP 列表里**（见上）：否则 VPN 本会话不工作，日志给出
+  一条 ERROR，代理功能不受影响。
+* 客户端会按地址里节点的顺序尝试中继：不在它隧道落点上的节点会由服务端直连出去并被
+  伪装页面拒绝（快速失败），随后自动落到它自己的那台上。
+* 地址长度随中继节点数增长。
+* **Android 客户端暂不支持 VPN**：DERP 连接走的是 tailcat 的拨号器选项（见下），
+  库层面在 Android 上同样可用；缺的是移动端的 VPN 配置入口与状态目录（当前非目标）。
+* `vpn.enabled=false`（默认）时对现有功能零影响。
 
 ## LICENSE
 

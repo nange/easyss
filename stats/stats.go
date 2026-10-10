@@ -85,6 +85,13 @@ type stats struct {
 	serverFallbackPages   atomic.Int64
 	serverProbes          atomic.Int64
 
+	// VPN（仅客户端侧；vpn.enabled=false 时全部为零）
+	vpnTCPStreams       atomic.Int64
+	vpnUDPFlows         atomic.Int64
+	vpnDialErrors       atomic.Int64
+	vpnDNSStaticAnswers atomic.Int64
+	vpnPeerFaceStreams  atomic.Int64
+
 	// startTime 保存单调时钟读数，使 time.Since 不受墙上时钟调整影响；
 	// nil 表示没有活跃会话。
 	startTime atomic.Pointer[time.Time]
@@ -159,6 +166,29 @@ func RecordServerProbe()          { g.serverProbes.Add(1) }
 // 级别记录，计数器使它们仍然可见而不刷日志。
 func RecordServerStreamCancel() { g.serverStreamCancels.Add(1) }
 
+// --- VPN ---
+//
+// 五个计数器覆盖 VPN 数据面的两端与名字解析：
+// 访问侧成功打开的对端 TCP 流与 UDP 流、访问侧拨号失败、本地静态名应答，以及
+// 本节点对端面接受的对端流。它们只在 vpn.enabled=true 时增长。
+
+// RecordVPNTCPStream 统计访问侧成功建立的一条经隧道到对端服务端口的 TCP 连接。
+func RecordVPNTCPStream() { g.vpnTCPStreams.Add(1) }
+
+// RecordVPNUDPFlow 统计访问侧成功建立的一条经隧道到对端服务端口的 UDP 流。
+func RecordVPNUDPFlow() { g.vpnUDPFlows.Add(1) }
+
+// RecordVPNDialError 统计一次失败的对端拨号（隧道建立、内层 SOCKS5 握手或
+// 对端拒绝）。失败不重试，因此这个计数是"用户看到的那些连不上"的量。
+func RecordVPNDialError() { g.vpnDialErrors.Add(1) }
+
+// RecordVPNDNSStaticAnswer 统计一次由本地静态名钩子直接应答的对端名查询
+// （A 给 overlay 地址、AAAA 给 NOERROR 空应答）。
+func RecordVPNDNSStaticAnswer() { g.vpnDNSStaticAnswers.Add(1) }
+
+// RecordVPNPeerFaceStream 统计本节点对端面接受的一条对端流（TCP 或 UDP）。
+func RecordVPNPeerFaceStream() { g.vpnPeerFaceStreams.Add(1) }
+
 // --- 会话生命周期 ---
 
 // ResetStartTime 标记新会话的开始，例如客户端启动时。
@@ -223,6 +253,12 @@ func ResetCounters() {
 	g.serverStreamCancels.Store(0)
 	g.serverFallbackPages.Store(0)
 	g.serverProbes.Store(0)
+
+	g.vpnTCPStreams.Store(0)
+	g.vpnUDPFlows.Store(0)
+	g.vpnDialErrors.Store(0)
+	g.vpnDNSStaticAnswers.Store(0)
+	g.vpnPeerFaceStreams.Store(0)
 }
 
 // --- 快照 ---
@@ -263,6 +299,13 @@ type Snapshot struct {
 	TierHeavyScheduled    int64 `json:"tier_heavy_scheduled"`
 	TierDegradedScheduled int64 `json:"tier_degraded_scheduled"`
 	TierRetiringSkipped   int64 `json:"tier_retiring_skipped"`
+
+	// VPN（仅客户端侧；vpn.enabled=false 时全部为零，因此带 omitempty）
+	VPNTCPStreams       int64 `json:"vpn_tcp_streams,omitempty"`
+	VPNUDPFlows         int64 `json:"vpn_udp_flows,omitempty"`
+	VPNDialErrors       int64 `json:"vpn_dial_errors,omitempty"`
+	VPNDNSStaticAnswers int64 `json:"vpn_dns_static_answers,omitempty"`
+	VPNPeerFaceStreams  int64 `json:"vpn_peer_face_streams,omitempty"`
 
 	// 传输健康度（仅客户端侧；服务端为零）
 	SlotDegraded         int64 `json:"slot_degraded"`
@@ -366,6 +409,11 @@ func Collect() Snapshot {
 		SlotGrownPriority:      g.slotGrownPriority.Load(),
 		SlotGrownBulk:          g.slotGrownBulk.Load(),
 		StreamsDrained:         g.streamsDrained.Load(),
+		VPNTCPStreams:          g.vpnTCPStreams.Load(),
+		VPNUDPFlows:            g.vpnUDPFlows.Load(),
+		VPNDialErrors:          g.vpnDialErrors.Load(),
+		VPNDNSStaticAnswers:    g.vpnDNSStaticAnswers.Load(),
+		VPNPeerFaceStreams:     g.vpnPeerFaceStreams.Load(),
 		UploadSpeed:            upSpeed,
 		DownloadSpeed:          downSpeed,
 		UploadSpeedHuman:       HumanBytes(upSpeed) + "/s",

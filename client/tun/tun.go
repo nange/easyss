@@ -513,6 +513,7 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 	// linux 与 darwin 分支的最后一个实参都是 MTU：设备 MTU 由创建脚本设置
 	// （与 Windows 脚本用 netsh 做的同一件事），因为 fd 路径下 tun2socks 拿到
 	// 的只是 fd，改不了设备的 MTU，见 Manager.engineMTU。
+	//
 	switch runtime.GOOS {
 	case "linux":
 		cmdArgs := []string{"pkexec", "bash", namePath, d.Device,
@@ -544,6 +545,7 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 		// 超过自身 MTU 的 UDP/ICMP 包（见 Manager.engineMTU）。
 		// 这里传 m.cfg.MTU：Windows 没有 fd 路径（没有提权 helper），
 		// 因此它正是 engineMTU() 交给 netstack 的那个值。
+		//
 		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device,
 			d.TunIP, d.TunGW, d.TunMask, d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6,
 			m.cfg.DNSServer, strconv.Itoa(m.cfg.MTU)); err != nil {

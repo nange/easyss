@@ -24,13 +24,17 @@ import (
 )
 
 func main() {
-	// "selfupdate" 和 "tun-helper" 子命令在 flag 解析之前处理，
+	// "selfupdate"、"tun-helper" 与 "vpn" 子命令在 flag 解析之前处理，
 	// 这样它们永远不会与代理参数冲突。selfupdate 会替换当前运行的二进制并退出；
-	// tun-helper 则以提权 TUN 助手模式运行本二进制（由托盘进程内部拉起）并退出。
+	// tun-helper 则以提权 TUN 助手模式运行本二进制（由托盘进程内部拉起）并退出；
+	// vpn 打印或重新生成本机 VPN 身份（见 vpn_cmd.go）。
 	if runSelfupdateSubcommand() {
 		return
 	}
 	if runTunHelperSubcommand() {
+		return
+	}
+	if runVPNCommand() {
 		return
 	}
 
@@ -65,7 +69,7 @@ func main() {
 	flag.StringVar(&sc.ProxyFile, "proxy-file", "", "custom proxy file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
 	flag.BoolVar(&pprofEnabled, "pprof", false, "enable pprof debug server on :6060")
 
-	// 自定义 usage，使 --help/-h 也能介绍 "selfupdate" 和 "tun-helper"
+	// 自定义 usage，使 --help/-h 也能介绍 "selfupdate"、"tun-helper" 与 "vpn"
 	// 子命令——它们在 flag 解析之前处理，否则在帮助中不可见。
 	flag.Usage = func() {
 		bin := filepath.Base(os.Args[0])
@@ -75,6 +79,7 @@ func main() {
 用法:
   %s [flags]              启动代理（托盘版默认带系统托盘，可用 --disable-tray 关闭）
   %s selfupdate [flags]   检查并升级到最新 release
+  %s vpn <subcommand>     节点组网(VPN)：打印或重新生成本机身份（详见 %s vpn -h）
   %s tun-helper [flags]   内部：以提权 TUN 助手模式运行（由主程序自动拉起）
 
 子命令:
@@ -82,12 +87,14 @@ func main() {
                 更新完成后请手动重启进程使新版本生效。支持 --check（仅检查）、
                 --version <tag>（安装指定版本，可重装当前版本或回退，tag 需与
                 release tag 完全一致）、--proxy-port（走本地代理下载）。
+  vpn           identity 打印 client nodekey 与节点地址（都要填到对端配置里），
+                regen 重新生成身份（被替换的文件备份为 <file>.bak）。
   tun-helper    内部子命令：打开 TUN 设备、配置路由/DNS 并把 fd 传回主进程，
                 由主程序在提权场景下自动拉起，请勿手动使用。支持
                 --tun-http-addr/--tun-fd-socket/--log-file/--log-level。
 
 Flags:
-`, bin, bin, bin)
+`, bin, bin, bin, bin, bin)
 		flag.PrintDefaults()
 	}
 
@@ -135,6 +142,9 @@ Flags:
 	// 将相对文件路径（direct_file/proxy_file/ca_path）相对于可执行文件目录解析，
 	// 这样 macOS Finder/launchd 启动（cwd=/）时仍能找到放在二进制/.app 包旁边的文件。
 	cfg.ResolveFilePaths()
+
+	// VPN 身份的输出与重新生成都在 "vpn" 子命令里（见 vpn_cmd.go），它在 flag 解析
+	// 之前就被分派掉了——所以这里不需要"打印完就退出"这类分支，启动路径保持单一。
 
 	if cfg.Log.FilePath != "" && !filepath.IsAbs(cfg.Log.FilePath) {
 		if dir := util.CurrentDir(); dir != "" {
@@ -454,6 +464,9 @@ func tunDNS() string {
 }
 
 func exampleV3Config() string {
+	// vpn.relay_only 缺省为 true；示例显式写出来，让"默认值是 true"这件事在
+	// 示例里可见（JSON 里省略它会与"配置项不存在"难以区分）。
+	relayOnly := true
 	cfg := config.ClientConfig{
 		ConfigVersion: 3,
 		Servers: []*config.ServerProfile{{
@@ -480,6 +493,24 @@ func exampleV3Config() string {
 			IPV6Rule:   sharedconfig.DefaultIPV6Rule,
 			DirectFile: "",
 			ProxyFile:  "",
+		},
+		// VPN 组网默认关闭。示例里打开会连带一个填了占位符的 peers，反而让
+		// "拿示例直接跑"失败；因此保持 enabled=false，同时把全部字段的形状
+		// 展示出来，用户填空后改成 true 即可。
+		VPN: config.VPNConfig{
+			Enabled:   false,
+			RelayOnly: &relayOnly,
+			// peer_port 留空表示按 socks_port + 2000 派生（这里即 4080 → 6080）。
+			PeerPort: sharedconfig.DefaultVPNPeerPort,
+			// DERP 位置没有配置项：它由 servers[] 里带 "derp": true 标记的条目
+			// 共同派生（一条都没有时取当前连接的服务端，即 default 标记的那条）。
+			// 同一 region 最多 3 台（推荐 1-2 台）：标记超过 3 条时客户端启动会
+			// 直接报配置错误退出（见 client/config.ValidateDERPRelays）。
+			Peers: []config.VPNPeer{{
+				HostName: "b",
+				Address:  "tc...(copy the full address printed by peer b's vpn startup log)",
+			}},
+			AllowClients: []string{"nodekey:...(optional allowlist; see vpn.allow_clients)"},
 		},
 		Transport: config.TransportConfig{
 			Protocol:          sharedconfig.DefaultProtocol,

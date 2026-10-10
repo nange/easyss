@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"io"
 	stdlog "log"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +28,7 @@ import (
 	"github.com/nange/easyss/v3/server/nextproxy"
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/stats"
+	"github.com/nange/easyss/v3/vpn"
 )
 
 type Server struct {
@@ -32,6 +36,13 @@ type Server struct {
 	httpServer *http.Server
 	mux        *http.ServeMux
 	certCache  *certmagic.Cache
+	derp       *vpn.DERPServer
+	// mesh 是同 region 内其他内嵌 DERP 的互联（server.vpn.mesh_*）。未配置时为
+	// nil，此时服务端与既有版本逐字节一致。meshCtx/meshCancel 约束它的生命周期：
+	// Shutdown 先取消再关闭，确保不会再登记新的转发映射。
+	mesh       *vpn.Mesh
+	meshCtx    context.Context
+	meshCancel context.CancelFunc
 	statsDone  chan struct{}
 	statsOnce  sync.Once
 }
@@ -305,6 +316,20 @@ func (s *Server) Start() error {
 		log.Info("[SERVER] next proxy configured", "url", cfg.NextProxy.URL, "udp", cfg.NextProxy.EnableUDP, "all_host", cfg.NextProxy.AllHost)
 	}
 
+	// 内嵌 DERP：它只对来自回环的请求提供服务（见 vpn.NewDERPMount），而节点的
+	// DERP 连接经 easyss 隧道到达这里，握手目标正是本服务端对外通告的 DERP 地址。
+	// 因此要先把该地址与它的回环映射算出来，交给 proxyHandler（见
+	// handler.ProxyHandlerConfig.LocalDERPAddr 与 dialTarget）。
+	var derpAddr, derpLoopback string
+	if srvCfg.VPN.Enabled {
+		if derpAddr, err = cfg.ResolveDERPAddr(); err != nil {
+			return err
+		}
+		if derpLoopback, err = loopbackListenAddr(srvCfg.Listen); err != nil {
+			return fmt.Errorf("server.vpn requires a loopback-reachable listen address: %w", err)
+		}
+	}
+
 	proxyHandler := handler.NewProxyHandler(handler.ProxyHandlerConfig{
 		MasterKey:      masterKey,
 		AllowedMethods: srvCfg.GetAllowedMethods(),
@@ -316,8 +341,10 @@ func (s *Server) Start() error {
 				BudgetCap:   cfg.Shaper.CoverBudgetCap,
 			},
 		},
-		NextProxy: np,
-		Fallback:  fallback,
+		NextProxy:         np,
+		Fallback:          fallback,
+		LocalDERPAddr:     derpAddr,
+		LocalDERPLoopback: derpLoopback,
 	})
 
 	probePayload := make([]byte, sharedconfig.ProbePayloadSize)
@@ -329,10 +356,31 @@ func (s *Server) Start() error {
 		return fmt.Errorf("probe handler: %w", err)
 	}
 
+	// 顶层处理器：启用 VPN 时把真正的 DERP 流量分流给内嵌中继，其余路径一律走
+	// 伪装页面。分流的理由、以及为什么必须在 `/` 的兜底处理器内部做，见
+	// vpn.NewDERPMount。
+	var root http.Handler = http.HandlerFunc(fallback.Serve)
+	if srvCfg.VPN.Enabled {
+		derpSrv, err := s.startDERP(derpAddr)
+		if err != nil {
+			return err
+		}
+		s.derp = derpSrv
+		root = vpn.NewDERPMount(derpSrv.Handler(), fallback)
+
+		// mesh 必须在 DERP 开始服务之前落位（derpserver 要求 SetMeshKey 早于服务），
+		// 而 mesh 客户端本身是异步拨号 + 重试的，因此这里的顺序只影响"第一个同伴
+		// 何时被认出来"，不影响正确性。
+		if srvCfg.VPN.MeshKey != "" {
+			s.meshCtx, s.meshCancel = context.WithCancel(context.Background())
+			if err := s.startDERPMesh(cfg, derpSrv, np, timeouts.Dial); err != nil {
+				return err
+			}
+		}
+	}
+
 	s.mux = http.NewServeMux()
-	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fallback.Serve(w, r)
-	})
+	s.mux.Handle("/", root)
 	s.mux.Handle(sharedconfig.EndpointTCP, proxyHandler)
 	s.mux.Handle(sharedconfig.EndpointUDP, proxyHandler)
 	s.mux.Handle(sharedconfig.EndpointICMP, proxyHandler)
@@ -340,10 +388,67 @@ func (s *Server) Start() error {
 
 	s.httpServer = buildHTTPServer(cfg, tlsConfig, s.mux, timeout)
 
-	log.Info("[SERVER] listening", "addr", srvCfg.Listen, "routes", []string{"/", sharedconfig.EndpointTCP, sharedconfig.EndpointUDP, sharedconfig.EndpointICMP, sharedconfig.EndpointProbe})
+	routes := []string{"/", sharedconfig.EndpointTCP, sharedconfig.EndpointUDP, sharedconfig.EndpointICMP, sharedconfig.EndpointProbe}
+	if s.derp != nil {
+		routes = append(routes, sharedconfig.DefaultVPNDERPPath)
+	}
+	log.Info("[SERVER] listening", "addr", srvCfg.Listen, "routes", routes)
 	s.statsDone = make(chan struct{})
 	go s.statsLoop()
 	return s.httpServer.ListenAndServeTLS("", "")
+}
+
+// loopbackListenAddr 由 server.listen 推导内嵌 DERP 的本机回环拨号地址
+// （127.0.0.1:<listen 端口>）。
+//
+// 之所以能用"公网监听的回环地址"：DERP 与代理共用同一个 HTTPS 监听，而节点经
+// easyss 隧道送来的 DERP 连接会在这里被改拨回环（见 handler.dialTarget）。这要求
+// 该监听在回环上可达——listen 只绑了某一个非回环地址时它不可达，那属于配置错误，
+// 必须在启动时明确拒绝，而不是等到节点连不上才暴露。
+func loopbackListenAddr(listen string) (string, error) {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		return "", fmt.Errorf("invalid server.listen %q: %w", listen, err)
+	}
+	loopback := "127.0.0.1"
+	if host != "" {
+		ip, err := netip.ParseAddr(strings.Trim(host, "[]"))
+		if err != nil || (!ip.IsUnspecified() && !ip.IsLoopback()) {
+			return "", fmt.Errorf("server.listen %q is bound to %s, so the embedded DERP cannot be reached on loopback; "+
+				"listen on a wildcard address (e.g. \":443\") or on a loopback address", listen, host)
+		}
+		// 地址族必须跟着监听走：只绑在 [::1] 上的监听不会接受 127.0.0.1 的连接，
+		// 而 v6 通配（[::]）对 ::1 一定可用。
+		if ip.Is6() {
+			loopback = "::1"
+		}
+	}
+	port, err := sharedconfig.PortFromListen(listen)
+	if err != nil {
+		return "", err
+	}
+	return net.JoinHostPort(loopback, strconv.Itoa(port)), nil
+}
+
+// startDERP 装载内嵌 DERP 中继，返回可直接挂到根处理器上的实例。addr 是它对
+// 外通告的 host:port（由 ResolveDERPAddr 推导，见调用方）。
+//
+// 它只负责"成为一台中继"：运维只需要在本节点的 servers[] 里把对应条目标上
+// "derp": true。注意它与公网入口的关系变了——DERP 处理器只会接待来自回环的
+// 请求（见 vpn.NewDERPMount），节点侧经 easyss 隧道抵达。
+func (s *Server) startDERP(addr string) (*vpn.DERPServer, error) {
+	derpKey, err := vpn.LoadOrCreateKey(vpn.DERPKeyPath())
+	if err != nil {
+		log.Error("[SERVER] load derp key failed", "err", err)
+		return nil, err
+	}
+	derpSrv := vpn.NewDERPServer(derpKey)
+	log.Info("[SERVER] embedded DERP enabled",
+		"derp_addr", addr,
+		"path", sharedconfig.DefaultVPNDERPPath,
+		"derp_public_key", derpSrv.PublicKey().String(),
+		"key_file", vpn.DERPKeyPath())
+	return derpSrv, nil
 }
 
 // buildHTTPServer 组装 HTTP 服务器，其 HTTP/2 流控窗口按上传吞吐量来定尺寸：
@@ -394,10 +499,33 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.certCache.Stop()
 		s.certCache = nil
 	}
-	if s.httpServer != nil {
-		return s.httpServer.Shutdown(ctx)
+
+	var err error
+	// 先停 mesh 再停 HTTP：mesh 的订阅循环会往中继里登记转发映射，先取消它就不会
+	// 在收尾过程中出现新的映射（关闭顺序与 DERP 本身的收尾一致，见下）。
+	if s.meshCancel != nil {
+		s.meshCancel()
+		s.meshCancel = nil
 	}
-	return nil
+	if s.mesh != nil {
+		if cerr := s.mesh.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+		s.mesh = nil
+	}
+	if s.httpServer != nil {
+		err = s.httpServer.Shutdown(ctx)
+	}
+	// 先停 HTTP 再收中继：Shutdown 不会等待已被 Hijack 的连接（DERP 的连接都
+	// 是 Hijack 走的），因此这里必须显式收尾，否则中继的收发 goroutine 会一直
+	// 留在进程里。
+	if s.derp != nil {
+		if cerr := s.derp.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+		s.derp = nil
+	}
+	return err
 }
 
 // stdErrorLog 将 Go 内部 http.Server/HTTP2 的日志（连接级错误、PING 超时、

@@ -33,11 +33,16 @@ type udpDNSQuery struct {
 	reply udpReply
 }
 
-// handleUDPQuery 处理一条 UDP DNS 查询：Block 本地屏蔽，缓存命中直接应答，
-// Direct 走直连解析，其余经隧道到 config.ProxyDNSServer。
+// handleUDPQuery 处理一条 UDP DNS 查询：静态名本地应答，Block 本地屏蔽，缓存命中
+// 直接应答，Direct 走直连解析，其余经隧道到 config.ProxyDNSServer。
 func (d *dnsInterceptor) handleUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery) error {
 	plan := d.plan(req.msg)
 	switch plan.action {
+	case dnsActionStatic:
+		// 应答的 Id 必须与查询一致（缓存/直连/代理分支同样如此），否则严格
+		// 客户端会把这条应答丢掉。
+		plan.static.Id = req.msg.Id
+		return req.reply.msg(plan.static)
 	case dnsActionBlock:
 		log.Info("[DNS_BLOCK] blocked", "domain", plan.domain, "qtype", plan.qtype,
 			"src", req.src, "dst", req.dst)

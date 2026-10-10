@@ -164,6 +164,7 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 		code, out, _ = runScript(t, 0, 0, "2001:db8::2", "1500")
 		require.Equal(t, 0, code, "the ipv6 branch must not fail when every command succeeds:\n%s", out)
 	})
+
 }
 
 // TestCloseTunScriptCleanup 用记录存根运行真实的关闭脚本，并钉住它必须

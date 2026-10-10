@@ -4,6 +4,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -152,6 +153,67 @@ func TestSwitchServerSerializesConcurrentSwitches(t *testing.T) {
 
 	close(release)
 	wg.Wait()
+}
+
+// TestSwitchServerNotifiesWhenTheNewServerIsNotADERPRelay 固定切换服务器路径上的通知
+// 契约：新会话的服务器不在 vpn 声明的 DERP 中继列表里时，VPN 本会话缺席（会话已记
+// ERROR，见 runner）——用户必须**当场**知道这件事，否则他看到的现象只是"VPN 里连不上
+// 对端"。文案点名的是新会话实际使用的那台服务器，因此注入的 ServerAddr 就是断言对象。
+func TestSwitchServerNotifiesWhenTheNewServerIsNotADERPRelay(t *testing.T) {
+	stubSysProxy(t, nil)
+	a := newSwitchTestApp(t)
+	ui := newStubAppUI()
+	a.ui = ui
+	t.Cleanup(a.Stop)
+
+	prevRunCore := runCore
+	runCore = func(*config.ClientConfig) (*runner.Core, error) {
+		return &runner.Core{
+			ServerAddr:  "b.example:443",
+			StartupWarn: fmt.Errorf("vpn disabled for this session: %w", config.ErrCurrentServerNotDERPRelay),
+		}, nil
+	}
+	t.Cleanup(func() { runCore = prevRunCore })
+
+	require.NoError(t, a.switchServer(1, a.restartService))
+
+	select {
+	case msg := <-ui.notices:
+		for _, want := range []string{"VPN 功能不生效", "b.example:443", "中继(DERP)列表"} {
+			require.Contains(t, msg, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("切换到不在中继列表里的服务器后，必须用系统通知告知 VPN 不生效")
+	}
+	require.True(t, a.serverMenuItems[1].IsChecked(),
+		"勾选的必须正是通知里点名的那台（运行中的服务器）")
+}
+
+// TestSwitchServerKeepsOtherStartupWarningsLogOnly 守护"不打扰用户"的边界：切换后的
+// 启动警告只有 VPN 那条弹通知，其余（例如新服务器的域名还没解析出来）仍只写日志。
+func TestSwitchServerKeepsOtherStartupWarningsLogOnly(t *testing.T) {
+	stubSysProxy(t, nil)
+	a := newSwitchTestApp(t)
+	ui := newStubAppUI()
+	a.ui = ui
+	t.Cleanup(a.Stop)
+
+	prevRunCore := runCore
+	runCore = func(*config.ClientConfig) (*runner.Core, error) {
+		return &runner.Core{
+			ServerAddr:  "b.example:443",
+			StartupWarn: fmt.Errorf("%w: b.example: dns boom", runner.ErrServerDomainUnresolved),
+		}, nil
+	}
+	t.Cleanup(func() { runCore = prevRunCore })
+
+	require.NoError(t, a.switchServer(1, a.restartService))
+
+	select {
+	case msg := <-ui.notices:
+		t.Fatalf("a non-VPN startup warning must not notify, got %q", msg)
+	case <-time.After(100 * time.Millisecond):
+	}
 }
 
 // TestRestartServiceRollsBackToThePreviousServer 固定"新服务器起不来就退回旧

@@ -163,7 +163,7 @@ func TestCreateScriptsKeepGatewayOutsideTun(t *testing.T) {
 					strings.HasPrefix(strings.ToLower(line), "rem ") {
 					continue
 				}
-				if !strings.Contains(line, "local_gateway") || !addsRoute(line) {
+				if !strings.Contains(line, "local_gateway") || !gatewayIsDestination(line) {
 					continue
 				}
 				t.Errorf("%s: %s routes the local gateway into the TUN device", platform.name, line)
@@ -569,12 +569,14 @@ func parseRouteBlocks(t *testing.T, script []byte, verbs []string) []routeBlock 
 		case "route":
 			// windows：route add 1.0.0.0 mask 254.0.0.0 %tun_gw% metric 5
 			// darwin： route add -net 1.0.0.0/8 "$tun_gw"
+			//          route add -host "$ip" -gateway "$local_gateway"（VPN 绕行，
+			//          目标是 shell 变量，appendStaticBlock 会跳过它）
 			args, ok := routeArgs(fields[1:], verbs)
 			if !ok {
 				continue
 			}
 			switch {
-			case args[0] == "-net" && len(args) >= 2: // darwin
+			case (args[0] == "-net" || args[0] == "-host") && len(args) >= 2: // darwin
 				appendStaticBlock(t, &blocks, args[1])
 			case len(args) >= 3 && args[1] == "mask": // windows
 				appendStaticBlock(t, &blocks, args[0]+" "+args[2])
@@ -586,14 +588,27 @@ func parseRouteBlocks(t *testing.T, script []byte, verbs []string) []routeBlock 
 	return blocks
 }
 
-// addsRoute 报告 line 是否是添加或替换路由的路由命令，覆盖 create 脚本所用的
-// 各种方言（"ip route add|replace ..."、"route add ..."）。
-func addsRoute(line string) bool {
+// gatewayIsDestination 报告一行路由命令是否把本地网关安装成**目标**（而不是把它
+// 用作下一跳）。
+//
+// 判据必须落在目标上：网关完全可以在一条路由里充当**下一跳**
+// （如 `ip route replace <net> via "$local_gateway"`），那是正确用法。被禁止的
+// 只有"把网关**本身**装成一条经由 TUN 的主机路由"——它会压过物理接口对局域网的
+// 直连路由，吞掉内核发给网关的存活探测（见本文件开头的注释与 create_tun_dev.sh
+// 里的说明）。
+func gatewayIsDestination(line string) bool {
 	fields := unwrapScriptHelper(strings.Fields(line))
-	if idx := slices.IndexFunc(fields, func(f string) bool { return f == "ip" || f == "route" }); idx > 0 {
-		fields = fields[idx:]
+	idx := slices.IndexFunc(fields, func(f string) bool { return slices.Contains(createRouteVerbs, f) })
+	if idx < 0 {
+		return false
 	}
-	return slices.ContainsFunc(fields, func(f string) bool { return slices.Contains(createRouteVerbs, f) })
+	for _, f := range fields[idx+1:] {
+		if strings.HasPrefix(f, "-") {
+			continue // darwin 的 -net/-host/-inet6 等只是选项，目标是其后第一项
+		}
+		return strings.Contains(f, "local_gateway")
+	}
+	return false
 }
 
 // routeArgs 返回给定路由动词之后的字段；对既不添加/删除路由、也不涉及静态目标的
