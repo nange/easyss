@@ -7,7 +7,7 @@ import (
 )
 
 // TestBuildRegion 固定内嵌 region 的形态：region 编号非零（tailcat 会把 0 当成
-// "未设置"），节点带上 derp_addr 拆出的 HostName 与 DERPPort（对端据此直连，
+// "未设置"），节点带上 DERP 地址拆出的 HostName 与 DERPPort（对端据此直连，
 // 不做任何 DERPMap 查询）。
 func TestBuildRegion(t *testing.T) {
 	region, err := BuildRegion("relay.example.com:8443")

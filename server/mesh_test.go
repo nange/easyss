@@ -154,17 +154,17 @@ func writeMeshCAFile(t *testing.T, certPEM []byte) string {
 	return path
 }
 
-// meshTestFileConfig 造一份启用了 VPN 与 mesh 的服务端配置（它的 derp_addr 指向本机
-// 一个没人监听的端口：startDERPMesh 只用到地址字符串，不拨它）。
+// meshTestFileConfig 造一份启用了 VPN 与 mesh 的服务端配置（DERP 的对外地址由
+// domain 与 listen 推导，即 a.example.com:443；startDERPMesh 只用到这个字符串，
+// 不拨它）。
 func meshTestFileConfig(peerAddr, peerProxy, meshKey string) *config.FileConfig {
 	return &config.FileConfig{
 		Server: config.ServerConfig{
 			Listen: ":443",
 			Domain: "a.example.com",
 			VPN: config.VPNConfig{
-				Enabled:  true,
-				DERPAddr: "a.example.com:443",
-				MeshKey:  meshKey,
+				Enabled: true,
+				MeshKey: meshKey,
 				MeshPeers: []config.MeshPeer{{
 					Addr:  peerAddr,
 					Proxy: peerProxy,

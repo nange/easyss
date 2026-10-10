@@ -136,8 +136,8 @@ type DERPAddr struct {
 	Port int
 }
 
-// SplitDERPAddr 把 "host:port" 形式的 DERP 地址拆成主机名与端口号，是
-// server.vpn.derp_addr 与 vpn.derp_addr 的共同校验入口。
+// SplitDERPAddr 把 "host:port" 形式的 DERP 地址拆成主机名与端口号，是服务端
+// 推导出的对外地址与节点 servers[] 派生出的地址的共同校验入口。
 //
 // 两端共用它是有必要的：这个值最终会变成 DERPMap 里节点的 HostName 与 DERPPort
 // （一个 int），所以端口必须显式且是数字，host 必须非空。服务名（":https"）虽然

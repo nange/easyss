@@ -66,9 +66,12 @@ func TestDERPServers(t *testing.T) {
 	})
 }
 
-// TestVPNDERPAddrs 固定通告列表的派生：显式 vpn.derp_addr 退化成单节点，否则由
-// 全部 derp 标记条目派生；返回值必须是 host:port（IPv6 带方括号）、规范化去重且
-// 保持配置顺序（对端会按这个顺序尝试中继节点）。
+// TestVPNDERPAddrs 固定通告列表的派生：由全部 `derp: true` 标记条目派生（一条
+// 都没有时是当前连接的服务端）；返回值必须是 host:port（IPv6 带方括号）、规范化
+// 去重且保持配置顺序（对端会按这个顺序尝试中继节点）。
+//
+// 没有"显式覆盖"的入口是有意的：地址里内嵌的位置必须与服务端的对外地址逐字
+// 一致，多节点只能靠多标记几条 `derp: true`。
 func TestVPNDERPAddrs(t *testing.T) {
 	t.Run("多标记派生多个节点并保持顺序", func(t *testing.T) {
 		cfg := &ClientConfig{
@@ -113,21 +116,7 @@ func TestVPNDERPAddrs(t *testing.T) {
 		}
 	})
 
-	t.Run("显式配置覆盖整组节点", func(t *testing.T) {
-		cfg := &ClientConfig{
-			Servers: []*ServerProfile{
-				{Address: "a.example.com", Port: 443, DERP: true},
-				{Address: "b.example.com", Port: 443, DERP: true},
-			},
-			VPN: VPNConfig{DERPAddr: "relay.internal:8443"},
-		}
-		got := cfg.VPNDERPAddrs()
-		if !slices.Equal(got, []string{"relay.internal:8443"}) {
-			t.Errorf("VPNDERPAddrs() = %v, want exactly the explicit override", got)
-		}
-	})
-
-	t.Run("没有服务端条目且未显式配置时为空", func(t *testing.T) {
+	t.Run("没有服务端条目时为空", func(t *testing.T) {
 		if got := (&ClientConfig{}).VPNDERPAddrs(); got != nil {
 			t.Errorf("VPNDERPAddrs() = %v, want nil", got)
 		}
@@ -204,16 +193,6 @@ func TestValidateDERPServer(t *testing.T) {
 		}
 	})
 
-	t.Run("显式 derp_addr 与当前服务端不同时报错", func(t *testing.T) {
-		cfg := &ClientConfig{
-			Servers: []*ServerProfile{{Address: "a.example.com", Port: 443, Default: true}},
-			VPN:     VPNConfig{DERPAddr: "relay.internal:8443"},
-		}
-		if err := cfg.ValidateDERPServer(); err == nil {
-			t.Error("ValidateDERPServer() = nil, want an error: the explicit relay is not the current server")
-		}
-	})
-
 	t.Run("没有可用列表时不在这里报错", func(t *testing.T) {
 		if err := (&ClientConfig{}).ValidateDERPServer(); err != nil {
 			t.Errorf("ValidateDERPServer() = %v, want nil (the VPN start path reports the empty list)", err)
@@ -221,12 +200,13 @@ func TestValidateDERPServer(t *testing.T) {
 	})
 
 	t.Run("列表里的地址都非法时不在这里报错", func(t *testing.T) {
-		cfg := &ClientConfig{
-			Servers: []*ServerProfile{{Address: "a.example.com", Port: 443, Default: true}},
-			VPN:     VPNConfig{DERPAddr: "not-a-host-port"},
-		}
-		// 这条配置真正的问题是"derp_addr 非法"，由 vpnnode.NewConfig 带节点序号报出；
+		// 被标记的条目地址为空 → 派生出一个拆不开的 ":443"；当前服务端本身是好的。
+		// 这条配置真正的问题是"中继地址非法"，由 vpnnode.NewConfig 带节点序号报出；
 		// 说成"当前服务端不在列表里"会把人引向错误的修法。
+		cfg := &ClientConfig{Servers: []*ServerProfile{
+			{Address: "", Port: 443, DERP: true},
+			{Address: "b.example.com", Port: 443, Default: true},
+		}}
 		if err := cfg.ValidateDERPServer(); err != nil {
 			t.Errorf("ValidateDERPServer() = %v, want nil for an unparsable relay list", err)
 		}
@@ -350,7 +330,6 @@ func TestVPNConfigParsesFromJSON(t *testing.T) {
 			"relay_only": false,
 			"peer_port": 7000,
 			"overlay_cidr": "10.9.0.0/24",
-			"derp_addr": "relay.example.com:8443",
 			"peers": [
 				{"host_name": "b", "address": "tcFULL", "port": 6080}
 			],

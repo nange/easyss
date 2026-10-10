@@ -177,7 +177,7 @@ func resolvedAddrs(ctx context.Context) ([]netip.Addr, bool) {
 //
 // 它只在握手目标命中本服务端自己的 DERP 地址时设置（见 serve.go 的
 // handshakeResult.localDERP），因此这条特例与任意目标之间没有通道：目标必须与
-// 配置里的 vpn.derp_addr 完全一致。
+// 本服务端对外通告的 DERP 地址完全一致。
 func withLocalDERPDial(ctx context.Context, addr string) context.Context {
 	if addr == "" {
 		return ctx

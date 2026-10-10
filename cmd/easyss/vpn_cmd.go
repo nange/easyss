@@ -44,7 +44,7 @@ identity:
     client nodekey  填到对端的 vpn.allow_clients（对端面据此识别访问侧）
     node address    填到对端的 vpn.peers[].address（内嵌 preshared key，属于秘密）
   node address 由「身份文件 + 当前 servers[] 派生出的中继集合」实时推导、不落盘，
-  因此改了 servers[] / vpn.derp_addr 之后重新执行本命令即可，不需要重新生成。
+  因此改了 servers[] 里的 derp 标记之后重新执行本命令即可，不需要重新生成。
 
 regen:
   重新生成身份文件。不带 --node / --client 时两个都换：

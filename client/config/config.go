@@ -50,6 +50,10 @@ type ServerProfile struct {
 	// 它同时是访问侧拨号的目标与自身地址里通告的 DERP 位置（见
 	// ClientConfig.VPNDERPAddrs）。可以同时标记多条：它们共同构成同一个 region
 	// 下的多个中继节点（互为冗余）。没有任何条目被标记时回退**当前连接的服务端**。
+	//
+	// 这是声明中继的唯一方式（没有 vpn.derp_addr 那样的显式覆盖项）：标记的值
+	// 必须与服务端自己的 domain + listen 端口一致，否则服务端认不出那条 DERP
+	// 连接（它靠完全匹配自己的对外地址把该连接改拨到回环）。
 	DERP bool `json:"derp,omitempty"`
 }
 
@@ -194,10 +198,14 @@ func LoadConfig(path string) (*ClientConfig, error) {
 		ConfigVersion int              `json:"version"`
 		Servers       []*ServerProfile `json:"servers"`
 		Server        string           `json:"server"`
+		VPN           struct {
+			DERPAddr string `json:"derp_addr"`
+		} `json:"vpn"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return nil, err
 	}
+	warnOnRemovedDERPAddr(probe.VPN.DERPAddr)
 	if probe.ConfigVersion != 3 || len(probe.Servers) == 0 {
 		var s config.SimpleConfig
 		if err := json.Unmarshal(data, &s); err != nil {
@@ -213,6 +221,22 @@ func LoadConfig(path string) (*ClientConfig, error) {
 	applyDefaults(&cfg)
 
 	return &cfg, nil
+}
+
+// warnOnRemovedDERPAddr 对配置里残留的 vpn.derp_addr 键告警一次。
+//
+// 该字段已被移除：本节点通告的中继只从 servers[] 里带 `derp: true` 的条目派生
+// （见 ClientConfig.VPNDERPAddrs），没有任何标记时回退当前连接的服务端。残留的键
+// 不会被 json.Unmarshal 报错（未知键一律忽略），但它可能正是运维"以为中继在别的
+// host:port"的原因——那种情况下 VPN 会按派生结果去连，症状是"一直连不上"而不是
+// 一条配置错误。因此这里把它说出来。
+func warnOnRemovedDERPAddr(legacyAddr string) {
+	if legacyAddr == "" {
+		return
+	}
+	log.Warn("[CONFIG] vpn.derp_addr was removed and is ignored; "+
+		"the advertised relays are derived from the servers[] entries marked \"derp\": true",
+		"derp_addr", legacyAddr)
 }
 
 func applyDefaults(c *ClientConfig) {

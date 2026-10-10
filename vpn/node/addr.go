@@ -40,7 +40,7 @@ func peerDERPAddrs(addr string) ([]string, error) {
 // assertPeersShareDERPSet 断言每个对端通告的 DERP 节点集合与本节点相同（顺序无关）。
 //
 // 为什么必须是"集合相等"而不是"有交集"：内嵌 DERP 只接待经**本服务端**隧道送达的
-// 连接（服务端把握手目标完全匹配到自己的 derp_addr 后改拨回环），所以节点实际能连上
+// 连接（服务端把握手目标完全匹配到自己的对外 DERP 地址后改拨回环），所以节点实际能连上
 // 的中继只能是它此刻隧道所落的那台服务端。于是"本节点能不能连上中继"取决于本节点
 // 当前服务端是否在本节点集合里，"对端通过本节点地址能不能连上"取决于对端当前服务端
 // 是否在本节点集合里。少一个节点就会让某一侧在耗尽列表后彻底连不上，多一个节点则
@@ -48,7 +48,7 @@ func peerDERPAddrs(addr string) ([]string, error) {
 func assertPeersShareDERPSet(ownAddrs []string, peers []PeerRef) error {
 	own, err := canonicalDERPSet(ownAddrs)
 	if err != nil {
-		return fmt.Errorf("vpn.derp_addr: %w", err)
+		return fmt.Errorf("the DERP relay list this node advertises: %w", err)
 	}
 	ownText := strings.Join(ownAddrs, ", ")
 	for i, p := range peers {

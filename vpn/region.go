@@ -37,8 +37,8 @@ const (
 // 这里是"零控制面"的关键一环：把 DERP 的 host 与 port 内嵌进 region 之后，
 // tailcat 生成的地址（ConnInfo.Addr）会带上完整的节点详情，拿到地址的客户端
 // 无需查询任何 DERPMap。因此每条 derpAddr 都必须是**节点能经自己隧道抵达**的
-// host:port，即该中继所在服务端的对外地址（`server.vpn.derp_addr`），而不是它的
-// 监听地址（0.0.0.0:443 之类）。
+// host:port，即该中继所在服务端的对外地址（它的 domain 与 listen 端口），
+// 而不是它的监听地址（0.0.0.0:443 之类）。
 //
 // 节点不设 STUNPort：本设计只用 DERP 中继与 WireGuard 打洞，不需要 STUN
 // 探测；tailcat 的 wire 编码也会丢弃 STUN-only 节点。
@@ -47,7 +47,7 @@ const (
 // 因此多节点时给它加序号即可：netcheck 之类的排障输出按 Name 区分节点。
 func BuildRegion(derpAddrs ...string) (*tailcfg.DERPRegion, error) {
 	if len(derpAddrs) == 0 {
-		return nil, errors.New("vpn: no DERP address to advertise; mark at least one servers[] entry with \"derp\": true or set vpn.derp_addr")
+		return nil, errors.New("vpn: no DERP address to advertise; mark at least one servers[] entry with \"derp\": true")
 	}
 	seen := make(map[string]struct{}, len(derpAddrs))
 	nodes := make([]*tailcfg.DERPNode, 0, len(derpAddrs))
