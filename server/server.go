@@ -433,9 +433,9 @@ func loopbackListenAddr(listen string) (string, error) {
 // startDERP 装载内嵌 DERP 中继，返回可直接挂到根处理器上的实例。addr 是它对
 // 外通告的 host:port（由 ResolveDERPAddr 推导，见调用方）。
 //
-// 它只负责"成为一台中继"：运维只需要把打印出来的这一行交给各节点的
-// vpn.derp_addr / servers[].derp。注意它与公网入口的关系变了——DERP 处理器只会
-// 接待来自回环的请求（见 vpn.NewDERPMount），节点侧经 easyss 隧道抵达。
+// 它只负责"成为一台中继"：运维只需要在本节点的 servers[] 里把对应条目标上
+// "derp": true。注意它与公网入口的关系变了——DERP 处理器只会接待来自回环的
+// 请求（见 vpn.NewDERPMount），节点侧经 easyss 隧道抵达。
 func (s *Server) startDERP(addr string) (*vpn.DERPServer, error) {
 	derpKey, err := vpn.LoadOrCreateKey(vpn.DERPKeyPath())
 	if err != nil {

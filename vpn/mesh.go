@@ -32,16 +32,17 @@ import (
 //   - **必须经 easyss 隧道**：内嵌 DERP 只接待回环来源（见 NewDERPMount），而对端
 //     的公网 host:port 前面站着伪装页面。因此每条 mesh 连接都交给调用方提供的
 //     拨号器（生产上是 nextproxy → 本机 easyss-headless 的 SOCKS5 → 对端服务端），
-//     而服务端在握手阶段把"目标就是我的 derp_addr"改拨回环后，它看到的来源正是
+//     而服务端在握手阶段把"目标就是我的对外 DERP 地址"改拨回环后，它看到的来源正是
 //     回环。直连（不经隧道）在协议上不可能成功，所以 Dial 是必填项。
 //   - **只能连到对端自己的服务端**：localDERP 是完全匹配，落到别台服务端会被当成
-//     普通代理请求直连出去。TLS 证书校验（SNI = 对端 derp_addr 的 host）是这条
+//     普通代理请求直连出去。TLS 证书校验（SNI = 对端 DERP 地址的 host）是这条
 //     约束的守门人；连到本机自己的中继则由下面的"首连观测"报出来。
-//   - **一跳、不跨 region**：只与 derp_addr 明确列在 mesh_peers 里的对端互联，
+//   - **一跳、不跨 region**：只与地址明确列在 mesh_peers 里的对端互联，
 //     derpserver 也不会二次转发已经转发过的包。
 type MeshPeer struct {
-	// Addr 是对端自己的 server.vpn.derp_addr（host:port）。它同时是 TLS SNI 与
-	// 请求路径的 host，因此必须与对端的配置逐字一致（比较在配置层完成）。
+	// Addr 是对端自己的 DERP 对外地址（host:port，即对端的 domain 与 listen
+	// 端口）。它同时是 TLS SNI 与请求路径的 host，因此必须与对端的配置逐字一致
+	// （比较在配置层完成）。
 	Addr string
 
 	// Dial 建立到 Addr 的 TCP 连接，必填：生产上是"经 SOCKS5 → easyss 隧道"，

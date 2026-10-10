@@ -178,7 +178,7 @@ func TestNewConfigPeerPortDefaults(t *testing.T) {
 }
 
 // TestNewConfigRejectsBadLocalValues 固定本地值（peer_port / overlay_cidr /
-// derp_addr）的校验都会在启动阶段报错。
+// DERP 中继列表）的校验都会在启动阶段报错。
 func TestNewConfigRejectsBadLocalValues(t *testing.T) {
 	t.Run("peer_port 越界", func(t *testing.T) {
 		for _, port := range []int{0, -1, 65536} {
@@ -233,7 +233,7 @@ func TestNewConfigRejectsBadLocalValues(t *testing.T) {
 				t.Errorf("NewConfig(derp_addrs %v) = nil, want error", addrs)
 				continue
 			}
-			if !strings.Contains(err.Error(), "derp") {
+			if !strings.Contains(err.Error(), "DERP") {
 				t.Errorf("error %q should identify the DERP relay list", err)
 			}
 		}

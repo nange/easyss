@@ -15,7 +15,16 @@ import (
 // （可选的）同 region 内与其他中继之间的 mesh。它没有、也不需要 tailcat 客户端侧
 // 的 peers[]（那是节点配置的事）。
 //
-// 这里刻意没有 derp_path：DERP 的挂载路径不可配。客户端侧
+// 这里刻意没有 derp_addr：DERP 的对外地址只有一个来源——server.domain 与
+// server.listen 的端口（见 ResolveDERPAddr）。内嵌 DERP 是私有端点，节点只经
+// easyss 隧道抵达，而服务端靠"握手目标完全匹配这个地址"把它认出来并改拨回环
+// （见 handler.ProxyHandlerConfig.LocalDERPAddr），所以它必须与每个节点
+// servers[] 里那条被标记 derp 的条目逐字一致。做成配置项只会提供一个
+// "服务端以为自己叫什么、节点却写在别处"的失配开关——那种失配的症状是 VPN
+// 一直连不上，而不是一条配置错误。端口转发/反向代理这类"对外 host:port 与监听
+// 不同"的形态因此明确不支持：DERP 就挂在 server.listen 这个监听上。
+//
+// 同理没有 derp_path：DERP 的挂载路径不可配。客户端侧
 // derphttp.Client.urlString 把路径硬编码为 /derp
 // （tailscale.com/derp/derphttp/derphttp_client.go:293），derpserver.Handler 也
 // 文档化要求"mounted at /derp"并在内部分流绝对路径 /derp/probe 与
@@ -25,11 +34,6 @@ import (
 type VPNConfig struct {
 	// Enabled 表示在本服务端的 HTTPS 监听上挂载内嵌 DERP 中继。
 	Enabled bool `json:"enabled"`
-
-	// DERPAddr 是本服务端对外通告的 DERP host:port。未配置时由 domain 与
-	// listen 的端口推导（见 ResolveDERPAddr）；当 DERP 经端口转发或反向代理
-	// 暴露在与代理监听不同的 host:port 时必须显式给出。
-	DERPAddr string `json:"derp_addr,omitempty"`
 
 	// MeshKey 是同一 region 内所有中继共享的预共享密钥（见
 	// sharedconfig.ParseVPNMeshKey：64 位 hex 原样使用，其余非空字符串按
@@ -41,15 +45,17 @@ type VPNConfig struct {
 	MeshKey string `json:"mesh_key"`
 
 	// MeshPeers 是本中继要与之互联的**其他**中继。每条的 Addr 必须等于对端
-	// 自己的 server.vpn.derp_addr（服务端靠完全匹配认出"这条连接是来访问我的
-	// DERP 的"），并且必须经一个 easyss 客户端（通常是 easyss-headless）的
-	// SOCKS5 送进隧道——内嵌 DERP 只接待回环来源，直连公网端口只会看到伪装页。
+	// 自己的 DERP 对外地址（由对方的 domain 与 listen 端口推导，服务端靠完全
+	// 匹配认出"这条连接是来访问我的 DERP 的"），并且必须经一个 easyss 客户端
+	// （通常是 easyss-headless）的 SOCKS5 送进隧道——内嵌 DERP 只接待回环来源，
+	// 直连公网端口只会看到伪装页。
 	MeshPeers []MeshPeer `json:"mesh_peers"`
 }
 
 // MeshPeer 是 mesh 里的一个对端中继。
 type MeshPeer struct {
-	// Addr 是对端自己的 server.vpn.derp_addr（host:port）。
+	// Addr 是对端自己的 DERP 对外地址（host:port，即对端的 domain 与 listen
+	// 端口）。
 	Addr string `json:"addr"`
 
 	// Proxy 是把该对端的连接送进隧道的 SOCKS5 代理，通常是本机上指向该对端的
@@ -63,26 +69,22 @@ type MeshPeer struct {
 
 // ResolveDERPAddr 返回本服务端对外通告的 DERP host:port。
 //
-// 服务端没有 servers[]，默认值因此必须自己推导：host 取 server.domain，port 取
+// 服务端没有 servers[]，地址因此只有一个来源：host 取 server.domain，port 取
 // server.listen 的端口——DERP 就挂在这个 HTTPS 监听上，客户端会用同一个
-// host:port 建立 HTTP/1.1 Upgrade 连接。推导不出端口时（例如 listen 只写了
-// 主机名）一律返回错误，由调用方让启动失败，**不退回任何猜测值**：一个猜错的
-// 中继地址会让每个节点都连不上，而错误信息能直接告诉运维改用
-// server.vpn.derp_addr。
+// host:port 建立 HTTP/1.1 Upgrade 连接，并把它内嵌进自己的节点地址。刻意没有
+// "显式覆盖"的配置项：任何与这个推导结果不同的写法（端口转发、反向代理）都会
+// 让服务端的 localDERP 完全匹配失效，节点拿到的中继地址也就永远连不上。
+//
+// 推导不出端口时（例如 listen 只写了主机名）一律返回错误，由调用方让启动失败，
+// **不退回任何猜测值**：一个猜错的中继地址会让每个节点都连不上，而错误信息能
+// 直接指出缺的是 domain 还是端口。
 func (fc *FileConfig) ResolveDERPAddr() (string, error) {
-	if addr := fc.Server.VPN.DERPAddr; addr != "" {
-		da, err := sharedconfig.SplitDERPAddr(addr)
-		if err != nil {
-			return "", fmt.Errorf("invalid server.vpn.derp_addr: %w", err)
-		}
-		return net.JoinHostPort(da.Host, strconv.Itoa(da.Port)), nil
-	}
 	if fc.Server.Domain == "" {
-		return "", fmt.Errorf("cannot derive the DERP address: server.domain is empty; set server.vpn.derp_addr explicitly (host:port)")
+		return "", fmt.Errorf("cannot derive the DERP address: server.domain is empty")
 	}
 	port, err := sharedconfig.PortFromListen(fc.Server.Listen)
 	if err != nil {
-		return "", fmt.Errorf("cannot derive the DERP port from server.listen: %w; set server.vpn.derp_addr explicitly (host:port)", err)
+		return "", fmt.Errorf("cannot derive the DERP port from server.listen: %w", err)
 	}
 	return net.JoinHostPort(fc.Server.Domain, strconv.Itoa(port)), nil
 }
@@ -115,7 +117,7 @@ func (fc *FileConfig) validateVPN() error {
 //     跨节点的客户端收不到对方的数据包），也可能是误解（以为密钥本身就能发现对端）；
 //   - 每个对端要么自带 proxy，要么全局配了 next_proxy.url：DERP 只在回环上被服务，
 //     直连对端的公网 host:port 只会拿到伪装页，因此"没有代理"不是一种可工作的配置；
-//   - 对端地址不能是本服务端自己的 derp_addr（自连没有意义，而且 mesh 协议会把它
+//   - 对端地址不能是本服务端自己的 DERP 对外地址（自连没有意义，而且 mesh 协议会把它
 //     当成自连后放弃），也不能重复。
 func (fc *FileConfig) validateVPNMesh() error {
 	vpnCfg := fc.Server.VPN
@@ -127,7 +129,7 @@ func (fc *FileConfig) validateVPNMesh() error {
 			"the mesh key is what lets a peer relay trust this one for connection watching and packet forwarding")
 	case len(vpnCfg.MeshPeers) == 0:
 		return fmt.Errorf("server.vpn.mesh_key is set without server.vpn.mesh_peers: " +
-			"add every other relay of this region (their server.vpn.derp_addr) to mesh_peers")
+			"add every other relay of this region (its own DERP address, i.e. its domain and listen port) to mesh_peers")
 	}
 	if _, err := sharedconfig.ParseVPNMeshKey(vpnCfg.MeshKey); err != nil {
 		return fmt.Errorf("server.vpn.mesh_key: %w", err)

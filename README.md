@@ -611,17 +611,24 @@ sysctl -p
   连接，所以节点实际能连上的中继只能是它此刻隧道所落的那台服务端。`vpn.enabled=true`
   时若当前服务端不在列表里，启动日志会给出 `level=ERROR`（提示"服务器不在声明的
   DERP 列表中"），**本会话的 VPN 不工作**（代理照常可用）。修法是把 `servers[]` 里
-  对应该服务端的条目也标上 `"derp": true`（或让 `vpn.derp_addr` 等于它），再用
-  `./easyss vpn identity` 读出新的地址（地址由配置推导，改了配置它自己就会变）。
+  对应该服务端的条目也标上 `"derp": true`，再用 `./easyss vpn identity` 读出
+  新的地址（地址由配置推导，改了配置它自己就会变）。
 * **所有节点必须声明同一组中继**。对端地址里内嵌的 DERP 节点集合与本节点不一致时
   启动即报错（缺一个节点就可能让某一侧在耗尽列表后彻底连不上）。
 * **mesh 是可选的**，且只在服务端之间配置：没配 mesh 时跨中继的客户端收不到对方的
   数据包（包被丢弃并回 `PeerGoneReasonNotHere`），同中继内的客户端不受影响。
 
-地址里内嵌 DERP 节点集合：默认由 `servers[]` 里全部 `derp: true` 的条目派生；没有
-任何条目标记时回退**当前连接的服务端**（因此切换服务端会让地址变化，要对端跟着更新
-——要稳定的多节点地址就显式标记每一个中继）。`vpn.derp_addr` 仍然可以把整组节点显式
-覆盖成它一个。
+地址里内嵌 DERP 节点集合：由 `servers[]` 里全部 `derp: true` 的条目派生；没有任何
+条目标记时回退**当前连接的服务端**（因此切换服务端会让地址变化，要对端跟着更新——
+要稳定的多节点地址就把每一个中继都标记上）。这里**没有**"显式覆盖"的字段：地址里
+那几个 `host:port` 必须与该中继所在服务端的对外地址逐字一致（服务端靠完全匹配把它
+认成"来访问我的 DERP"并改拨回环），而那个对外地址只由服务端的 `server.domain` 与
+`server.listen` 的端口推导——端口转发/反向代理这类"对外 host:port 与监听不同"的
+形态明确不支持。
+
+> **升级说明**：`server.vpn.derp_addr` 与 `vpn.derp_addr` 已移除。老配置里留着它们
+> 不影响启动（未知键被忽略），但启动日志里会出现一条 `was removed and is ignored`
+> 的 `WARN`：请删掉那一行，并确认 `servers[]` 里对应的条目带 `"derp": true`。
 
 节点的 DERP 连接由一个专门的拨号器送进 easyss 隧道（tailcat 的 `DERPDialer`
 选项，见 `go.mod` 里的两个 `replace`：`tailscale.com` 与
@@ -638,13 +645,14 @@ sysctl -p
     "password": "your-password",
     "vpn": {
       "enabled": true,
-      // 可省略：默认取 domain + listen 的端口（这里即 a.example.com:443）
-      "derp_addr": "a.example.com:443",
+      // 没有 derp_addr 这样的字段：本服务端对外通告的 DERP 地址恒等于
+      // domain + listen 的端口（这里即 a.example.com:443），节点侧从
+      // servers[] 的 "derp": true 标记里拿到同一个值。
       // 可选：同 region 其他中继的互联。两个字段要么都给，要么都不给。
       // mesh_key 是这组中继共享的口令（任意字符串，内部 SHA-256 成 32 字节密钥）。
       "mesh_key": "a-long-shared-passphrase",
       "mesh_peers": [
-        // addr 必须等于对端自己的 server.vpn.derp_addr。
+        // addr 必须等于对端自己的 DERP 地址（它的 domain + listen 端口）。
         // proxy 是把这条连接送进隧道的 SOCKS5——通常是本机上指向该对端的
         // easyss-headless 的 socks 端口；省略时用顶层 next_proxy.url。
         { "addr": "b.example.com:443", "proxy": "socks5://127.0.0.1:1081" }
@@ -655,7 +663,7 @@ sysctl -p
 ```
 
 mesh 连接的完整路径是：本机内嵌 DERP → 上面那个 SOCKS5 → easyss-headless 的隧道 →
-对端 easyss 服务端（握手目标正是它自己的 `derp_addr`）→ 对端回环上的内嵌 DERP。
+对端 easyss 服务端（握手目标正是它自己的 DERP 地址）→ 对端回环上的内嵌 DERP。
 这不是"优化"，而是唯一可能成功的形态：内嵌 DERP 只接待回环来源，直连对端公网
 `host:port` 只会拿到伪装页面。因此每个 mesh 对端都需要**一条指向它的隧道**（
 N 台中继的全互联 = 每台 N-1 个 easyss-headless，各自只连一个对端），并且该客户端的
@@ -715,7 +723,7 @@ node address（填到对端的 vpn.peers[].address；属于秘密）:
 `./easyss vpn identity` 或该文件复制。
 
 地址是 `(身份文件, 当前 servers[] 派生出的中继集合)` 的函数，**不落盘**：改了
-`servers[]`/`vpn.derp_addr` 之后重新执行一次命令就是新地址，不需要"重新生成"。
+`servers[]` 里的 `derp` 标记之后重新执行一次命令就是新地址，不需要"重新生成"。
 需要换的是**身份本身**（例如私钥泄漏、想换掉内嵌的 preshared key）：
 
 ```bash

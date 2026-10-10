@@ -296,13 +296,12 @@ func TestStartVPNDoesNotLogTheAddress(t *testing.T) {
 // 字符。真实地址远长于此，而 tcp、target 这类普通词后面跟不出这么长的连续 base64url。
 var tailcatAddrInLog = regexp.MustCompile(`\btc[A-Za-z0-9_-]{16,}`)
 
-// TestLoadVPNIdentityWithoutDERPAddr 固定降级行为：推导不出 DERP 位置时，地址部分
-// 给出原因而不是让整条命令失败——client nodekey 不依赖配置，而它正是"白名单配不起来"
-// 时最需要先拿到的东西。
+// TestLoadVPNIdentityWithoutDERPAddr 固定降级行为：推导不出 DERP 位置时（没有
+// servers[] 就没有可通告的中继），地址部分给出原因而不是让整条命令失败——client
+// nodekey 不依赖配置，而它正是"白名单配不起来"时最需要先拿到的东西。
 func TestLoadVPNIdentityWithoutDERPAddr(t *testing.T) {
 	cfg := vpnTestConfig()
 	cfg.Servers = nil
-	cfg.VPN.DERPAddr = ""
 
 	id, err := loadVPNIdentity(cfg, vpnTestPaths(t))
 	if err != nil {
@@ -850,9 +849,10 @@ func TestRegenerateVPNIdentityKeepsTheOldAddressOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// vpn.derp_addr 是整组中继的显式覆盖，一个写坏的端口足以让地址推导失败。
+	// 一个没有被标记 derp 的条目加一个空空如也的 servers[] 是两条"推导不出中继"
+	// 的路径；这里用后者——它同时也是运维最容易踩到的形态（配置里没有任何 DERP）。
 	noRelay := vpnTestConfig()
-	noRelay.VPN.DERPAddr = "127.0.0.1:notaport"
+	noRelay.Servers = nil
 	res, err := regenerateVPNIdentity(noRelay, paths, VPNRegenOptions{Kinds: RegenNodeIdentity})
 	if err == nil {
 		t.Fatalf("regenerateVPNIdentity = %+v, want an error (the address cannot be derived)", res)

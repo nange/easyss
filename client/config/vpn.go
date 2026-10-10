@@ -26,10 +26,12 @@ type VPNPeer struct {
 
 // VPNConfig 恰好持有客户端配置文件 "vpn" 键下的全部字段。
 //
-// 这里刻意不写回任何派生值（peer_port / overlay_cidr / derp_addr 都按原样保留），
+// 这里刻意不写回任何派生值（peer_port / overlay_cidr / DERP 地址都按原样保留），
 // 派生的唯一入口是下面的访问器与 vpn.NewConfig：这样"未配置"与"显式配置为其
 // 默认值"在结构体里仍然可区分，命令行覆盖（--local-port）也能正确地带动
-// peer_port 的派生。校验与报错集中在 vpn.NewConfig，配置层只负责形状。
+// peer_port 的派生。DERP 地址更是只有派生一条路（见 ClientConfig.VPNDERPAddrs）：
+// 内嵌 DERP 只接待经本服务端隧道送达的连接，服务端靠"握手目标完全匹配自己的对外
+// 地址"认出它，因此那个地址不可能由节点自己另填一个。
 type VPNConfig struct {
 	// Enabled 是总开关。关闭时不监听、不启 goroutine、全链路零影响。
 	Enabled bool `json:"enabled"`
@@ -46,11 +48,6 @@ type VPNConfig struct {
 	// OverlayCIDR 是访问侧**本地**给对端分配的 overlay 虚拟 IPv4 段。
 	// 它不进隧道、对端看不到，因此不需要与其他节点一致（见 VPNConfig 的类型注释）。
 	OverlayCIDR string `json:"overlay_cidr,omitempty"`
-
-	// DERPAddr 显式指定本节点在自己地址里通告的 DERP host:port。未配置时从被
-	// derp 标记的 server 条目派生（见 ClientConfig.VPNDERPAddrs）；配置后整组
-	// 节点退化成它一个——多节点请改用多个 `derp: true` 标记。
-	DERPAddr string `json:"derp_addr,omitempty"`
 
 	// Peers 是本节点要访问的对端列表。
 	Peers []VPNPeer `json:"peers,omitempty"`
@@ -104,14 +101,15 @@ func (c *ClientConfig) DERPServer() *ServerProfile {
 	return nil
 }
 
-// VPNDERPAddrs 返回本节点在自己 tailcat 地址里通告的全部 DERP host:port：
-// vpn.derp_addr 显式配置时就是它一个（覆盖整组节点），否则逐个 DERPServers()
-// 派生。返回值按 config.CanonicalDERPAddr 规范化后去重并保持顺序（同一个中继被
-// 两条服务器条目指向时只算一个节点）；没有任何可用条目时返回 nil。
+// VPNDERPAddrs 返回本节点在自己 tailcat 地址里通告的全部 DERP host:port：逐个
+// DERPServers() 派生（`derp: true` 标记的条目，没有任何标记时是当前服务端）。
+// 返回值按 config.CanonicalDERPAddr 规范化后去重并保持顺序（同一个中继被两条
+// 服务器条目指向时只算一个节点）；没有任何可用条目时返回 nil。
+//
+// 没有"显式覆盖"的配置项是有意的：地址里内嵌的 DERP 位置必须与服务端的对外地址
+// 逐字一致（服务端靠完全匹配把它认成"来访问我的 DERP"并改拨回环），而那个对外
+// 地址只由服务端的 domain 与 listen 端口决定。多节点请标记多条 `derp: true`。
 func (c *ClientConfig) VPNDERPAddrs() []string {
-	if c.VPN.DERPAddr != "" {
-		return []string{c.VPN.DERPAddr}
-	}
 	var out []string
 	seen := make(map[string]struct{})
 	for _, srv := range c.DERPServers() {
@@ -148,7 +146,7 @@ func (c *ClientConfig) VPNDERPAddr() string {
 // ValidateDERPServer 校验"当前连接的服务端必须是本节点声明的 DERP 中继之一"。
 //
 // 这条不变量不是可选的：内嵌 DERP 只接待经**本服务端**隧道送达的连接（服务端把
-// 握手目标完全匹配到自己的 derp_addr 后改拨回环），因此节点实际能连上的中继只能是
+// 握手目标完全匹配到自己的对外 DERP 地址后改拨回环），因此节点实际能连上的中继只能是
 // 它此刻隧道所落的那台服务端。声明列表里没有它时，中继连接会一路失败，症状是
 // "VPN 一直连不上"而不是一条配置错误——所以这里当场拒绝。
 //
@@ -186,8 +184,8 @@ func (c *ClientConfig) ValidateDERPServer() error {
 	}
 	return fmt.Errorf("vpn: the current server %s is not one of the DERP relays this node declares (%s): "+
 		"the embedded DERP is private and every node reaches it through the easyss server it is connected to, "+
-		"so the relay list must contain that server; mark the matching servers[] entry with \"derp\": true "+
-		"(or set vpn.derp_addr to it), then hand the address printed by \"easyss vpn identity\" to every peer: "+
+		"so the relay list must contain that server; mark the matching servers[] entry with \"derp\": true, "+
+		"then hand the address printed by \"easyss vpn identity\" to every peer: "+
 		"the advertised relay set is part of the address, so peers holding the old address list no longer match",
 		current, strings.Join(addrs, ", "))
 }

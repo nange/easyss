@@ -86,11 +86,11 @@ func NewConfig(opts Options) (*Config, error) {
 		return nil, fmt.Errorf("vpn.overlay_cidr: %w", err)
 	}
 	if len(opts.DERPAddrs) == 0 {
-		return nil, fmt.Errorf("vpn: no DERP relay is declared; mark at least one servers[] entry with \"derp\": true or set vpn.derp_addr")
+		return nil, fmt.Errorf("vpn: no DERP relay is declared; mark at least one servers[] entry with \"derp\": true")
 	}
 	for i, addr := range opts.DERPAddrs {
 		if _, err := sharedconfig.SplitDERPAddr(addr); err != nil {
-			return nil, fmt.Errorf("vpn.derp_addr (node %d): %w", i, err)
+			return nil, fmt.Errorf("DERP node %d: %w", i, err)
 		}
 	}
 	peers, err := normalizePeers(opts.Peers)

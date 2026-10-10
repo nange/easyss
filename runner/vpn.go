@@ -366,7 +366,7 @@ func vpnOptions(cfg *config.ClientConfig) (vpnnode.Options, error) {
 	derpAddrs := cfg.VPNDERPAddrs()
 	if len(derpAddrs) == 0 {
 		return vpnnode.Options{}, errors.New("vpn: cannot derive any DERP host:port this node advertises: " +
-			"mark the servers[] entries that run the embedded DERP with \"derp\": true, or set vpn.derp_addr")
+			"mark the servers[] entries that run the embedded DERP with \"derp\": true")
 	}
 	if err := cfg.ValidateDERPServer(); err != nil {
 		return vpnnode.Options{}, err
@@ -591,12 +591,12 @@ func deriveVPNIdentity(cfg *config.ClientConfig, clientKey key.NodePrivate, node
 	derpAddrs := cfg.VPNDERPAddrs()
 	if len(derpAddrs) == 0 {
 		id.AddrErr = errors.New("cannot derive any DERP host:port this node advertises: " +
-			"mark the servers[] entries that run the embedded DERP with \"derp\": true, or set vpn.derp_addr")
+			"mark the servers[] entries that run the embedded DERP with \"derp\": true")
 		return id, nil
 	}
 	region, err := vpn.BuildRegion(derpAddrs...)
 	if err != nil {
-		id.AddrErr = fmt.Errorf("vpn.derp_addr: %w", err)
+		id.AddrErr = fmt.Errorf("the declared DERP relay list: %w", err)
 		return id, nil
 	}
 	if nodeIdentity == nil {

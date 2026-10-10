@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/util"
 )
@@ -87,6 +88,7 @@ func LoadConfig(path string) (*FileConfig, error) {
 	if err := json.Unmarshal(data, &fc); err != nil {
 		return nil, err
 	}
+	warnOnRemovedDERPAddr(data)
 
 	// 0 表示该字段不存在（早于该字段的配置），按未设置处理。
 	if fc.ConfigVersion != 0 && fc.ConfigVersion != SupportedConfigVersion {
@@ -94,7 +96,7 @@ func LoadConfig(path string) (*FileConfig, error) {
 	}
 
 	applyDefaults(&fc)
-	// VPN 的启动期契约（derp_path 形态、derp_addr 可推导或可解析）在这里固定，
+	// VPN 的启动期契约（DERP 挂载路径的形态、对外 DERP 地址可推导）在这里固定，
 	// 且只在 vpn.enabled 时生效：未启用的 VPN 配置不参与运行期。
 	if err := fc.validateVPN(); err != nil {
 		return nil, err
@@ -103,6 +105,29 @@ func LoadConfig(path string) (*FileConfig, error) {
 	fc.ResolveFilePaths()
 
 	return &fc, nil
+}
+
+// warnOnRemovedDERPAddr 对配置里残留的 server.vpn.derp_addr 键告警一次。
+//
+// 该字段已被移除：DERP 的对外地址现在只由 server.domain 与 server.listen 的端口
+// 推导（见 ResolveDERPAddr），端口转发/反向代理那类"对外 host:port 与监听不同"的
+// 形态明确不支持。残留的键不会被 json.Unmarshal 报错（未知键一律忽略），但它可能
+// 正是运维"以为中继在别的 host:port"的原因——那种情况下进程照常启动，而每个节点
+// 的地址里内嵌的却是另一个位置，症状是 VPN 一直连不上。因此这里把它说出来。
+func warnOnRemovedDERPAddr(data []byte) {
+	var legacy struct {
+		Server struct {
+			VPN struct {
+				DERPAddr string `json:"derp_addr"`
+			} `json:"vpn"`
+		} `json:"server"`
+	}
+	if err := json.Unmarshal(data, &legacy); err != nil || legacy.Server.VPN.DERPAddr == "" {
+		return
+	}
+	log.Warn("[CONFIG] server.vpn.derp_addr was removed and is ignored; "+
+		"the DERP address is derived from server.domain and the port of server.listen",
+		"derp_addr", legacy.Server.VPN.DERPAddr)
 }
 
 // applyDefaults 把服务端配置归一化为与运行期消费点一致的有效值，使内存中的
@@ -176,9 +201,9 @@ func ExampleConfig() FileConfig {
 			Domain:         "your-domain.com",
 			Password:       "your-password",
 			AllowedMethods: DefaultAllowedMethods(),
-			// DERP 的对外 host:port 与 listen/domain 一致时本可以省略
-			// derp_addr（ResolveDERPAddr 会推导），示例里仍然写全：示例是
-			// 字段清单，任何新增字段都不应静默漏在示例之外。
+			// DERP 的对外 host:port 没有配置项：它就是 domain + listen 的端口
+			// （ResolveDERPAddr），端口转发/反向代理那种"对外 host:port 与监听
+			// 不同"的形态明确不支持。
 			//
 			// enabled 默认给 false：内嵌 DERP 虽然只对回环来源提供服务（节点
 			// 经 easyss 隧道抵达，公网上没有任何 DERP 路径），但它会把该服务端
@@ -189,7 +214,6 @@ func ExampleConfig() FileConfig {
 			// 因此示例里保持空——但字段必须出现，示例就是字段清单。
 			VPN: VPNConfig{
 				Enabled:   false,
-				DERPAddr:  "your-domain.com:443",
 				MeshKey:   "",
 				MeshPeers: []MeshPeer{},
 			},
