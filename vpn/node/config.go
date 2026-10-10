@@ -34,9 +34,9 @@ type Options struct {
 	// （见 sharedconfig.NormalizeVPNPeerPort）。
 	PeerPort int
 
-	// OverlayCIDR 是访问侧本地的 overlay 段，留空取默认段
-	// （见 sharedconfig.ParseVPNOverlayCIDR）。
-	OverlayCIDR string
+	// 这里没有 overlay 段：它是访问侧**本地**的实现常量，只决定本机给对端分配
+	// 的虚拟 IPv4 怎么编号，既没有配置项也不需要有第二个来源，因此由 NewConfig
+	// 直接取 sharedconfig.DefaultVPNOverlayPrefix()。
 
 	// DERPAddrs 是本节点在自己地址里通告的全部 DERP host:port（同一 region 下的
 	// 多个中继节点，顺序即 tailcat 尝试顺序）。必须非空：由调用方从配置推导
@@ -59,7 +59,8 @@ type Config struct {
 	// PeerPort 是本节点对端面在隧道内的监听端口。
 	PeerPort int
 
-	// Overlay 是访问侧本地的 overlay 段，用来给对端分配虚拟 IPv4。
+	// Overlay 是访问侧本地的 overlay 段，用来给对端分配虚拟 IPv4。它只有一个
+	// 来源（sharedconfig.DefaultVPNOverlayPrefix），见 NewConfig。
 	Overlay netip.Prefix
 
 	// DERPAddrs 是本节点在自己地址里通告的全部 DERP host:port。
@@ -77,14 +78,15 @@ type Config struct {
 // 校验集中在一处是有意的：这些错误都属于"配置写错了"，必须在启动阶段就以
 // 明确的错误暴露出来，而不是等到第一次访问对端时以超时或握手失败的形式出现。
 // 调用方（Core.StartVPN）拿到错误后应当让启动失败并原样打印。
+//
+// overlay 段不在这里校验，因为它不是配置：它由 sharedconfig 直接给出，改坏了常量
+// 会在 DefaultVPNOverlayPrefix 里当场 panic，而不是变成一条只有启动才看得到的
+// "vpn.overlay_cidr 非法"（那个配置项已不存在）。
 func NewConfig(opts Options) (*Config, error) {
 	if opts.PeerPort <= 0 || opts.PeerPort > 65535 {
 		return nil, fmt.Errorf("invalid vpn.peer_port %d: must be in 1..65535", opts.PeerPort)
 	}
-	overlay, err := sharedconfig.ParseVPNOverlayCIDR(opts.OverlayCIDR)
-	if err != nil {
-		return nil, fmt.Errorf("vpn.overlay_cidr: %w", err)
-	}
+	overlay := sharedconfig.DefaultVPNOverlayPrefix()
 	if len(opts.DERPAddrs) == 0 {
 		return nil, fmt.Errorf("vpn: no DERP relay is declared; mark at least one servers[] entry with \"derp\": true")
 	}

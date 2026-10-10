@@ -701,7 +701,6 @@ N 台中继的全互联 = 每台 N-1 个 easyss-headless，各自只连一个对
     "enabled": true,
     "relay_only": true,      // 默认 true：全部经服务端中继，不走节点间直连
     "peer_port": 6080,       // 可省略：socks_port + 2000
-    "overlay_cidr": "198.19.0.0/24",  // 可省略，仅访问侧本地使用
     "peers": [
       { "host_name": "b", "address": "tcXXXXXXXX..." }
     ]

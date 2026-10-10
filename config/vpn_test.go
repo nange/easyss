@@ -51,19 +51,22 @@ func TestNormalizeVPNPeerPortIsIdempotent(t *testing.T) {
 
 // TestParseVPNOverlayCIDR 固定 overlay 段的校验与归一化：空值取默认段，非法值
 // 必须报错（而不是静默回退），合法值归一化为网络地址。
+//
+// 入参只剩 DefaultVPNOverlayCIDR 一个来源，所以这一层现在守的是"常量被改坏"：
+// 区间边界（/16 与 /30）只有在这里被固定下来，改坏常量才不会一路走到运行期才炸。
 func TestParseVPNOverlayCIDR(t *testing.T) {
 	t.Run("空值取默认段", func(t *testing.T) {
-		got, err := ParseVPNOverlayCIDR("")
+		got, err := parseVPNOverlayCIDR("")
 		if err != nil {
-			t.Fatalf("ParseVPNOverlayCIDR(\"\") error: %v", err)
+			t.Fatalf("parseVPNOverlayCIDR(\"\") error: %v", err)
 		}
 		if want := DefaultVPNOverlayPrefix(); got != want {
-			t.Errorf("ParseVPNOverlayCIDR(\"\") = %v, want %v", got, want)
+			t.Errorf("parseVPNOverlayCIDR(\"\") = %v, want %v", got, want)
 		}
 	})
 
 	t.Run("合法值归一化为网络地址", func(t *testing.T) {
-		got, err := ParseVPNOverlayCIDR("198.19.0.5/24")
+		got, err := parseVPNOverlayCIDR("198.19.0.5/24")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -79,9 +82,10 @@ func TestParseVPNOverlayCIDR(t *testing.T) {
 			"fd7a:115c:a1e0::/48", // 只支持 IPv4
 			"198.19.0.0/31",       // 段太小，放不下对端
 			"198.19.0.0/32",       // 同上
+			"198.19.0.0/8",        // 段太大，槽位表会申请 MiB~GiB 级内存
 		} {
-			if _, err := ParseVPNOverlayCIDR(in); err == nil {
-				t.Errorf("ParseVPNOverlayCIDR(%q) = nil error, want error", in)
+			if _, err := parseVPNOverlayCIDR(in); err == nil {
+				t.Errorf("parseVPNOverlayCIDR(%q) = nil error, want error", in)
 			}
 		}
 	})
@@ -96,8 +100,8 @@ func TestDefaultVPNOverlayIsUsable(t *testing.T) {
 		t.Fatalf("DefaultVPNOverlayCIDR %q is not IPv4", DefaultVPNOverlayCIDR)
 	}
 	// CGNAT 段（/10）比 overlay 允许的最大段（/16）还大，因此它本身就是被拒收
-	// 的配置：这里按"拒绝"而不是"可解析"来断言，重叠检查用与它同址的更小段。
-	if _, err := ParseVPNOverlayCIDR("100.64.0.0/10"); err == nil {
+	// 的段：这里按"拒绝"而不是"可解析"来断言，重叠检查用与它同址的更小段。
+	if _, err := parseVPNOverlayCIDR("100.64.0.0/10"); err == nil {
 		t.Errorf("a /10 overlay must be rejected: the slot table would be %d entries", 1<<(32-10))
 	}
 	cgnat := netip.MustParsePrefix("100.64.0.0/10")

@@ -382,7 +382,6 @@ func vpnOptions(cfg *config.ClientConfig) (vpnnode.Options, error) {
 	return vpnnode.Options{
 		RelayOnly:    cfg.VPN.RelayOnlyEnabled(),
 		PeerPort:     cfg.VPNPeerPort(),
-		OverlayCIDR:  cfg.VPN.OverlayCIDR,
 		DERPAddrs:    derpAddrs,
 		Peers:        peers,
 		AllowClients: cfg.VPN.AllowClients,

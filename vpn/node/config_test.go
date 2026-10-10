@@ -17,10 +17,9 @@ import (
 func validOptions(t *testing.T) Options {
 	t.Helper()
 	return Options{
-		RelayOnly:   true,
-		PeerPort:    sharedconfig.DefaultVPNPeerPort,
-		OverlayCIDR: sharedconfig.DefaultVPNOverlayCIDR,
-		DERPAddrs:   []string{"relay.example.com:8443"},
+		RelayOnly: true,
+		PeerPort:  sharedconfig.DefaultVPNPeerPort,
+		DERPAddrs: []string{"relay.example.com:8443"},
 		Peers: []PeerRef{{
 			HostName: "b",
 			Address:  fullAddr(t, "relay.example.com:8443"),
@@ -55,6 +54,24 @@ func TestNewConfigHappyPath(t *testing.T) {
 	}
 	if cfg.AllowClients != nil {
 		t.Errorf("AllowClients = %v, want nil for an empty list", cfg.AllowClients)
+	}
+}
+
+// TestNewConfigUsesTheConstantOverlay 固定 overlay 段只有一个来源：它没有配置
+// 项（曾经是 vpn.overlay_cidr），Options 里也没有对应字段，因此运行期视图里的段
+// 必须就是 sharedconfig 的默认常量——这与 HappyPath 里那句断言是同一件事，单独
+// 留一个测试是为了让"它不可配置"这条契约有一个能按名字找到的守门测试。
+func TestNewConfigUsesTheConstantOverlay(t *testing.T) {
+	cfg, err := NewConfig(validOptions(t))
+	if err != nil {
+		t.Fatalf("NewConfig: %v", err)
+	}
+	want := sharedconfig.DefaultVPNOverlayPrefix()
+	if cfg.Overlay != want {
+		t.Errorf("Overlay = %v, want the constant %v", cfg.Overlay, want)
+	}
+	if got := cfg.Overlay.String(); got != sharedconfig.DefaultVPNOverlayCIDR {
+		t.Errorf("Overlay = %q, want %q", got, sharedconfig.DefaultVPNOverlayCIDR)
 	}
 }
 
@@ -177,8 +194,11 @@ func TestNewConfigPeerPortDefaults(t *testing.T) {
 	}
 }
 
-// TestNewConfigRejectsBadLocalValues 固定本地值（peer_port / overlay_cidr /
-// DERP 中继列表）的校验都会在启动阶段报错。
+// TestNewConfigRejectsBadLocalValues 固定本地值（peer_port / DERP 中继列表）的
+// 校验都会在启动阶段报错。
+//
+// overlay 段不在这里：它不是配置，只有一个常量来源，见
+// TestNewConfigUsesTheConstantOverlay。
 func TestNewConfigRejectsBadLocalValues(t *testing.T) {
 	t.Run("peer_port 越界", func(t *testing.T) {
 		for _, port := range []int{0, -1, 65536} {
@@ -187,32 +207,6 @@ func TestNewConfigRejectsBadLocalValues(t *testing.T) {
 			if _, err := NewConfig(opts); err == nil {
 				t.Errorf("NewConfig(peer_port %d) = nil, want error", port)
 			}
-		}
-	})
-
-	t.Run("overlay_cidr 非法", func(t *testing.T) {
-		for _, cidr := range []string{"not-a-cidr", "fd7a:115c:a1e0::/48", "198.19.0.0/31"} {
-			opts := validOptions(t)
-			opts.OverlayCIDR = cidr
-			_, err := NewConfig(opts)
-			if err == nil {
-				t.Errorf("NewConfig(overlay_cidr %q) = nil, want error", cidr)
-			}
-			if err != nil && !strings.Contains(err.Error(), "overlay_cidr") {
-				t.Errorf("error %q should identify vpn.overlay_cidr", err)
-			}
-		}
-	})
-
-	t.Run("overlay_cidr 留空取默认段", func(t *testing.T) {
-		opts := validOptions(t)
-		opts.OverlayCIDR = ""
-		cfg, err := NewConfig(opts)
-		if err != nil {
-			t.Fatalf("NewConfig: %v", err)
-		}
-		if want := sharedconfig.DefaultVPNOverlayPrefix(); cfg.Overlay != want {
-			t.Errorf("Overlay = %v, want %v", cfg.Overlay, want)
 		}
 	})
 

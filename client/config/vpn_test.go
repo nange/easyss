@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/netip"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -406,18 +407,63 @@ func TestVPNPeerPortDerivation(t *testing.T) {
 	}
 }
 
-// TestVPNOverlayPrefixFallback 固定访问器的容错行为：配置非法时回退默认段
-// （并在日志里警告），严格报错由 vpn.NewConfig 负责。
-func TestVPNOverlayPrefixFallback(t *testing.T) {
-	cfg := &ClientConfig{VPN: VPNConfig{OverlayCIDR: "not-a-cidr"}}
-	if got, want := cfg.VPNOverlayPrefix(), sharedconfig.DefaultVPNOverlayPrefix(); got != want {
-		t.Errorf("VPNOverlayPrefix() = %v, want the default %v", got, want)
+// TestLoadConfigWarnsOnRemovedOverlayCIDR 固定已移除字段的降级行为：overlay 段
+// 现在是访问侧本地的实现常量（config.DefaultVPNOverlayCIDR），没有任何配置项指向它。
+// 配置里残留的 vpn.overlay_cidr 是未知键（json.Unmarshal 直接忽略），既不影响
+// 加载，也不会让启动失败，但必须在启动日志里说清楚——它可能正是运维"已经把这段
+// 改成别的"的原因，而那段现在是死配置，实际生效的仍是常量。
+func TestLoadConfigWarnsOnRemovedOverlayCIDR(t *testing.T) {
+	logs := captureLogs(t)
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	body := `{
+		"version": 3,
+		"servers": [{"address": "a.example.com", "port": 443, "password": "p", "default": true}],
+		"vpn": {"enabled": true, "overlay_cidr": "10.9.0.0/24"}
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
-	cfg.VPN.OverlayCIDR = "10.9.0.0/24"
-	want := netip.MustParsePrefix("10.9.0.0/24")
-	if got := cfg.VPNOverlayPrefix(); got != want {
-		t.Errorf("VPNOverlayPrefix() = %v, want %v", got, want)
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if !cfg.VPN.Enabled {
+		t.Error("VPN.Enabled = false, want true: the removed key must not affect the rest of the vpn config")
+	}
+
+	out := logs.String()
+	if !strings.Contains(out, "vpn.overlay_cidr was removed") {
+		t.Errorf("the load log does not report the removed key:\n%s", out)
+	}
+	if !strings.Contains(out, "10.9.0.0/24") {
+		t.Errorf("the load log does not name the ignored value:\n%s", out)
+	}
+	if !strings.Contains(out, sharedconfig.DefaultVPNOverlayCIDR) {
+		t.Errorf("the load log does not name the range actually in use (%s):\n%s", sharedconfig.DefaultVPNOverlayCIDR, out)
+	}
+}
+
+// TestLoadConfigWithoutOverlayCIDRKeyStaysQuiet 守护告警不误报：没有那个键的配置
+// 不该出现任何相关日志（overlay 段是常量，正常的配置里本就不该提到它）。
+func TestLoadConfigWithoutOverlayCIDRKeyStaysQuiet(t *testing.T) {
+	logs := captureLogs(t)
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	body := `{
+		"version": 3,
+		"servers": [{"address": "a.example.com", "port": 443, "password": "p", "default": true}],
+		"vpn": {"enabled": true}
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if out := logs.String(); strings.Contains(out, "overlay_cidr") {
+		t.Errorf("the load log mentions overlay_cidr although the config does not use it:\n%s", out)
 	}
 }
 
@@ -483,6 +529,9 @@ func TestVPNConfigJSONRoundTrip(t *testing.T) {
 
 // TestVPNConfigParsesFromJSON 固定配置文件里的 vpn 键能完整解析（字段名与
 // README 一致），并守住 servers[].derp 的解析。
+//
+// JSON 里刻意不含 overlay_cidr：overlay 段没有配置项，这个测试同时也在证明
+// "README 里列出的字段"就是可配置的全部。
 func TestVPNConfigParsesFromJSON(t *testing.T) {
 	cfg, err := ParseConfigJSON(`{
 		"version": 3,
@@ -494,7 +543,6 @@ func TestVPNConfigParsesFromJSON(t *testing.T) {
 			"enabled": true,
 			"relay_only": false,
 			"peer_port": 7000,
-			"overlay_cidr": "10.9.0.0/24",
 			"peers": [
 				{"host_name": "b", "address": "tcFULL", "port": 6080}
 			],
@@ -546,9 +594,6 @@ func TestVPNDisabledHasNoEffect(t *testing.T) {
 	}
 	if cfg.VPNDERPAddr() != "a.example.com:443" {
 		t.Errorf("VPNDERPAddr() = %q, want a.example.com:443", cfg.VPNDERPAddr())
-	}
-	if got, want := cfg.VPNOverlayPrefix(), sharedconfig.DefaultVPNOverlayPrefix(); got != want {
-		t.Errorf("VPNOverlayPrefix() = %v, want %v", got, want)
 	}
 	if !cfg.VPN.RelayOnlyEnabled() {
 		t.Error("RelayOnlyEnabled() = false, want the default true")
