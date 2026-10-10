@@ -505,6 +505,8 @@ func exampleV3Config() string {
 			OverlayCIDR: sharedconfig.DefaultVPNOverlayCIDR,
 			// DERP 位置没有配置项：它由 servers[] 里带 "derp": true 标记的条目
 			// 共同派生（一条都没有时取当前连接的服务端，即 default 标记的那条）。
+			// 同一 region 最多 3 台（推荐 1-2 台）：标记超过 3 条时客户端启动会
+			// 直接报配置错误退出（见 client/config.ValidateDERPRelays）。
 			Peers: []config.VPNPeer{{
 				HostName: "b",
 				Address:  "tc...(copy the full address printed by peer b's vpn startup log)",

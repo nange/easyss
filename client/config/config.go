@@ -49,7 +49,9 @@ type ServerProfile struct {
 	// DERP 标记"用这条服务端的 address:port 作为内嵌 DERP 中继的主机与端口"。
 	// 它同时是访问侧拨号的目标与自身地址里通告的 DERP 位置（见
 	// ClientConfig.VPNDERPAddrs）。可以同时标记多条：它们共同构成同一个 region
-	// 下的多个中继节点（互为冗余）。没有任何条目被标记时回退**当前连接的服务端**。
+	// 下的多个中继节点（互为冗余），但**总数不能超过 config.MaxVPNRelays**
+	// （3 台，推荐 1-2 台）——超过时客户端在配置加载阶段就报错拒绝启动（见
+	// ClientConfig.ValidateDERPRelays）。没有任何条目被标记时回退**当前连接的服务端**。
 	//
 	// 这是声明中继的唯一方式（没有 vpn.derp_addr 那样的显式覆盖项）：标记的值
 	// 必须与服务端自己的 domain + listen 端口一致，否则服务端认不出那条 DERP
@@ -220,6 +222,13 @@ func LoadConfig(path string) (*ClientConfig, error) {
 	}
 	applyDefaults(&cfg)
 
+	// VPN 声明的中继数量上限在这里把关（见 ValidateDERPRelays）：它是一条配置形状
+	// 错误，与其它配置错误一样让客户端拒绝启动，而不是等到 VPN 启动路径再降级成
+	// "本会话 VPN 不工作"（那种降级是给"当前服务端不在列表里"这类运行期状态用的）。
+	if err := cfg.ValidateDERPRelays(); err != nil {
+		return nil, err
+	}
+
 	return &cfg, nil
 }
 
@@ -345,12 +354,18 @@ func (c *ClientConfig) DefaultServerIndex() int {
 	return 0
 }
 
+// ParseConfigJSON 解析一份 v3 配置文本。校验口径与 LoadConfig 一致：除了默认值，
+// VPN 的中继数量上限也在这里把关，使"解析出来的配置"与"启动用的配置"遵守同一组
+// 硬约束（否则在两条路径之间会出现只有一条会报错的配置）。
 func ParseConfigJSON(jsonStr string) (*ClientConfig, error) {
 	var cfg ClientConfig
 	if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {
 		return nil, err
 	}
 	applyDefaults(&cfg)
+	if err := cfg.ValidateDERPRelays(); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
 }
 

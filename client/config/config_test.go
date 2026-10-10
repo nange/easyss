@@ -561,6 +561,62 @@ func TestLoadConfig(t *testing.T) {
 			t.Error("expected error for missing file")
 		}
 	})
+
+	// VPN 声明的中继数量上限是启动期的硬约束：越限的配置没有可工作的形态
+	// （见 ValidateDERPRelays），必须在 LoadConfig 就拒绝，而不是启动之后才发现
+	// 某些中继连不上。反过来，VPN 未启用时这些标记不参与运行期，不该阻止启动。
+	t.Run("VPN 声明的中继超过上限时拒绝启动", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		v3JSON := `{
+			"version": 3,
+			"servers": [
+				{"address": "a.example.com", "port": 443, "password": "p", "default": true},
+				{"address": "b.example.com", "port": 443, "password": "p", "derp": true},
+				{"address": "c.example.com", "port": 443, "password": "p", "derp": true},
+				{"address": "d.example.com", "port": 443, "password": "p", "derp": true},
+				{"address": "e.example.com", "port": 443, "password": "p", "derp": true}
+			],
+			"vpn": {"enabled": true}
+		}`
+		if err := os.WriteFile(path, []byte(v3JSON), 0644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadConfig(path)
+		if err == nil {
+			t.Fatal("LoadConfig accepted 4 declared DERP relays, want a refusal")
+		}
+		for _, want := range []string{"4 DERP relays", "at most 3 relays", "derp"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q should mention %q", err, want)
+			}
+		}
+	})
+
+	t.Run("VPN 未启用时过多的 derp 标记不阻止启动", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		v3JSON := `{
+			"version": 3,
+			"servers": [
+				{"address": "a.example.com", "port": 443, "password": "p", "default": true},
+				{"address": "b.example.com", "port": 443, "password": "p", "derp": true},
+				{"address": "c.example.com", "port": 443, "password": "p", "derp": true},
+				{"address": "d.example.com", "port": 443, "password": "p", "derp": true},
+				{"address": "e.example.com", "port": 443, "password": "p", "derp": true}
+			]
+		}`
+		if err := os.WriteFile(path, []byte(v3JSON), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfig(path)
+		if err != nil {
+			t.Fatalf("unexpected error while the VPN is disabled: %v", err)
+		}
+		if cfg.VPN.Enabled {
+			t.Error("VPN.Enabled = true for a config without a vpn key")
+		}
+	})
 }
 
 func TestMigrateV2ToV3(t *testing.T) {

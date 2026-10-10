@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
@@ -246,6 +247,103 @@ func TestValidateDERPServerAddr(t *testing.T) {
 		}}
 		if err := cfg.ValidateDERPServerAddr("b.example.com:443"); err != nil {
 			t.Errorf("ValidateDERPServerAddr() = %v, want nil for an unparsable relay list", err)
+		}
+	})
+}
+
+// TestValidateDERPRelays 固定"同一 region 最多 3 台中继（推荐 1-2 台）"这条规模上限
+// （见 sharedconfig.MaxVPNRelays）：mesh 是全互联，而节点地址里内嵌的正是这一组中继，
+// 所以越限的配置没有可工作的形态——第 4 台既进不了地址，也没法与其余中继互通。因此
+// 它必须在启动阶段（LoadConfig）就被拒绝，而不是降级成"VPN 连不上"。
+//
+// 计数口径与 VPNDERPAddrs 一致（规范化去重），且只在 vpn.enabled 时生效：未启用的
+// VPN 不参与运行期，derp 标记此时没有任何效果。
+func TestValidateDERPRelays(t *testing.T) {
+	// relays 造一份"1 条当前服务端 + n 条 derp 标记"的 servers[]。
+	relays := func(n int) []*ServerProfile {
+		out := make([]*ServerProfile, 0, n+1)
+		out = append(out, &ServerProfile{Address: "current.example.com", Port: 443, Default: true})
+		for i := range n {
+			out = append(out, &ServerProfile{
+				Address: fmt.Sprintf("relay%d.example.com", i), Port: 443, DERP: true,
+			})
+		}
+		return out
+	}
+
+	t.Run("上限内通过", func(t *testing.T) {
+		for n := 1; n <= sharedconfig.MaxVPNRelays; n++ {
+			cfg := &ClientConfig{VPN: VPNConfig{Enabled: true}, Servers: relays(n)}
+			if err := cfg.ValidateDERPRelays(); err != nil {
+				t.Errorf("%d relays: ValidateDERPRelays() = %v, want nil", n, err)
+			}
+		}
+	})
+
+	t.Run("超过上限时报错并点名中继", func(t *testing.T) {
+		cfg := &ClientConfig{VPN: VPNConfig{Enabled: true}, Servers: relays(sharedconfig.MaxVPNRelays + 1)}
+		err := cfg.ValidateDERPRelays()
+		if err == nil {
+			t.Fatal("ValidateDERPRelays() = nil, want a refusal for more relays than supported")
+		}
+		for _, want := range []string{
+			`"derp": true`, "4 DERP relays", "at most 3 relays", "1-2",
+			"relay0.example.com:443", "relay3.example.com:443",
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q should mention %q", err, want)
+			}
+		}
+	})
+
+	t.Run("同一中继的不同书写只算一个", func(t *testing.T) {
+		// 同一个中继标记 4 遍（含大小写差异与缺省端口）仍然只有 1 台：计数必须与
+		// VPNDERPAddrs 的去重口径一致，否则"重复条目"会被误判成"中继太多"。
+		cfg := &ClientConfig{VPN: VPNConfig{Enabled: true}, Servers: []*ServerProfile{
+			{Address: "relay.example.com", Port: 443, DERP: true},
+			{Address: "RELAY.example.com", Port: 443, DERP: true},
+			{Address: "Relay.Example.com", Port: 443, DERP: true},
+			{Address: "relay.example.com", Port: 0, DERP: true},
+			{Address: "relay.example.com", Port: 443},
+		}}
+		if err := cfg.ValidateDERPRelays(); err != nil {
+			t.Errorf("ValidateDERPRelays() = %v, want nil: all five entries are the same relay", err)
+		}
+	})
+
+	t.Run("未标记的条目不计数", func(t *testing.T) {
+		cfg := &ClientConfig{VPN: VPNConfig{Enabled: true}, Servers: []*ServerProfile{
+			{Address: "a.example.com", Port: 443, Default: true},
+			{Address: "b.example.com", Port: 443},
+			{Address: "c.example.com", Port: 443},
+			{Address: "d.example.com", Port: 443},
+			{Address: "e.example.com", Port: 443},
+		}}
+		if err := cfg.ValidateDERPRelays(); err != nil {
+			t.Errorf("ValidateDERPRelays() = %v, want nil without any derp mark", err)
+		}
+	})
+
+	t.Run("vpn 未启用时不校验", func(t *testing.T) {
+		cfg := &ClientConfig{VPN: VPNConfig{Enabled: false}, Servers: relays(sharedconfig.MaxVPNRelays + 2)}
+		if err := cfg.ValidateDERPRelays(); err != nil {
+			t.Errorf("ValidateDERPRelays() = %v, want nil while the VPN is disabled", err)
+		}
+	})
+
+	t.Run("地址非法的条目不在这里报错", func(t *testing.T) {
+		// 被标记的条目地址里混进了方括号 → 规范化失败。这些条目真正的问题是
+		// "地址非法"（由 vpnnode.NewConfig 带节点序号报出），把它们算成"中继太多"
+		// 会把人引向错误的修法。
+		cfg := &ClientConfig{VPN: VPNConfig{Enabled: true}, Servers: []*ServerProfile{
+			{Address: "[relay0.example.com", Port: 443, DERP: true},
+			{Address: "[relay1.example.com", Port: 443, DERP: true},
+			{Address: "[relay2.example.com", Port: 443, DERP: true},
+			{Address: "[relay3.example.com", Port: 443, DERP: true},
+			{Address: "", Port: 443, DERP: true},
+		}}
+		if err := cfg.ValidateDERPRelays(); err != nil {
+			t.Errorf("ValidateDERPRelays() = %v, want nil: the real problem is an invalid address", err)
 		}
 	})
 }
