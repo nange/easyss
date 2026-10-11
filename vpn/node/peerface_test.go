@@ -36,8 +36,16 @@ func (stubFallback) Serve(w http.ResponseWriter, r *http.Request) {
 // （HTTP/1.1 Upgrade over TLS）——被替换掉的只有"证书"与"公网主机名"。
 func startTestDERP(t *testing.T) *tailcfg.DERPRegion {
 	t.Helper()
+	return startTestDERPWithDepth(t, 0)
+}
 
-	srv := vpn.NewDERPServer(key.NewNode())
+// startTestDERPWithDepth 与 startTestDERP 相同，但可以指定内嵌中继的每客户端待发
+// 队列深度（0 表示用共享配置的默认值）。吞吐基准用它做 A/B：队列深度是那条路径上
+// 唯一能存住未确认数据的地方，直接决定经中继的单流吞吐。
+func startTestDERPWithDepth(t *testing.T, depth int) *tailcfg.DERPRegion {
+	t.Helper()
+
+	srv := vpn.NewDERPServer(key.NewNode(), depth)
 	ts := httptest.NewTLSServer(vpn.NewDERPMount(srv.Handler(), stubFallback{}))
 	t.Cleanup(func() {
 		_ = srv.Close()

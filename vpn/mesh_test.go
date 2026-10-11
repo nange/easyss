@@ -37,7 +37,7 @@ type meshTestRelay struct {
 
 func newMeshTestRelay(t *testing.T) *meshTestRelay {
 	t.Helper()
-	srv := NewDERPServer(key.NewNode())
+	srv := NewDERPServer(key.NewNode(), 0)
 	hs := httptest.NewUnstartedServer(srv.Handler())
 	hs.StartTLS()
 	t.Cleanup(func() {

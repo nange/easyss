@@ -54,6 +54,27 @@ type VPNConfig struct {
 	// sharedconfig.MaxVPNRelays（推荐 1-2 台），即最多 2 条。超限的配置在配置
 	// 加载阶段（validateVPNMesh）就报错拒绝启动。
 	MeshPeers []MeshPeer `json:"mesh_peers"`
+
+	// DERPSendQueueDepth 是本中继为**每个**已连接客户端缓存多少个待发 DERP 帧。
+	//
+	// 它是这条中继路径上唯一能存住"尚未被确认的数据"的地方，因此单条 TCP 流的
+	// 吞吐 ≈ 本值 × 每帧约 1.4KB / 端到端 RTT：太小会把窗口钉死（tailscale 的
+	// 默认是 32 帧 ≈ 45KB，40Mbps/300ms 的链路只能跑出几百 KB/s，与链路带宽无关），
+	// 太大则白占内存并只在链路饱和时贡献排队延迟。
+	//
+	// 0（或未配置、负值）取 sharedconfig.DefaultDERPSendQueueDepth（1024 帧 ≈ 1.4MB
+	// ≈ 40Mbps × 300ms 的 BDP）；其余值钳制到 [MinDERPSendQueueDepth,
+	// MaxDERPSendQueueDepth]。默认值与钳制只在
+	// sharedconfig.NormalizeDERPSendQueueDepth 里定义一次，由消费点
+	// （vpn.NewDERPServer）落位——这里不做第二份默认值，也不写回字段：
+	// 写回会让"未配置"与"显式配成默认值"无法区分。
+	//
+	// 它是这个深度**唯一**的入口：进程环境里的 TS_DEBUG_DERP_PER_CLIENT_SEND_QUEUE_DEPTH
+	// 只是 vpn 包把它交给钉住的 derpserver 时的实现细节（构造前写入、构造后还原），
+	// 预先设置它对 easyss 没有任何效果。
+	//
+	// 没有 omitempty 是有意的：示例配置要列出这个字段（与 mesh_key 同理）。
+	DERPSendQueueDepth int `json:"derp_send_queue_depth"`
 }
 
 // MeshPeer 是 mesh 里的一个对端中继。

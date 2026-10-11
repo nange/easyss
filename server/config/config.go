@@ -224,10 +224,15 @@ func ExampleConfig() FileConfig {
 			// 因此示例里保持空——但字段必须出现，示例就是字段清单。
 			// mesh 是全互联，所以 mesh_peers 最多 2 条：本机 + 对端 = 同一
 			// region 最多 3 台中继（推荐 1-2 台），超过即配置错误。
+			//
+			// derp_send_queue_depth 给出的是**生效默认值**而不是 0：它是中继
+			// 路径上唯一能存住未确认数据的地方，直接决定经中继的吞吐，所以示例
+			// 应当让运维看到实际在用的深度，而不是一个还要去查文档的 0。
 			VPN: VPNConfig{
-				Enabled:   false,
-				MeshKey:   "",
-				MeshPeers: []MeshPeer{},
+				Enabled:            false,
+				MeshKey:            "",
+				MeshPeers:          []MeshPeer{},
+				DERPSendQueueDepth: sharedconfig.DefaultDERPSendQueueDepth,
 			},
 		},
 		// 显式给出空切片而不是留 nil：示例里 cdn_domains 应呈现为 []，

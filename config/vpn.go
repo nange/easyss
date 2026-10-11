@@ -79,6 +79,25 @@ const (
 	// mesh 客户端（外加一条指向该对端的隧道），地址长度与连接尝试次数都随之增长。
 	MaxVPNRelays = 3
 
+	// DefaultDERPSendQueueDepth 是内嵌 DERP 中继为**每个**已连接客户端缓存多少个
+	// 待发 DERP 帧，即 server.vpn.derp_send_queue_depth 的 0 值落点（单位：帧）。
+	//
+	// 为什么不是 tailscale 的默认 32：这条中继路径上"能存住未被确认数据"的地方
+	// 只有这个队列，于是单条 TCP 流的在途数据被钉在"队列深度 × 每帧约 1.4KB"上，
+	// 吞吐 ≈ 该值 / 端到端 RTT（实测内层 RTT 80ms：32 帧 → 422 KB/s，1024 帧 →
+	// 1253 KB/s）。1024 帧 ≈ 1.4MB，覆盖 40Mbps × 300ms 这类链路的 BDP；代价是
+	// 每个已连接客户端约 1.5MB 内存，以及链路饱和时最多约一个 BDP 的排队延迟。
+	// 想要 tailscale 的原行为就显式配成 32。
+	DefaultDERPSendQueueDepth = 1024
+
+	// MinDERPSendQueueDepth 是队列深度的下界：本配置的目的正是把 tailscale 的 32
+	// 放大，配得比它还小只会让中继路径更差，因此 16 是"仍然可用"的保守下限。
+	MinDERPSendQueueDepth = 16
+
+	// MaxDERPSendQueueDepth 是队列深度的上界（4096 帧 ≈ 6MB/客户端）：它防的是
+	// 一个笔误（例如把字节数当成帧数写进来）把中继变成内存黑洞。
+	MaxDERPSendQueueDepth = 4096
+
 	// vpnMaxOverlayPrefixBits 是 overlay 段允许的最长前缀（最小的段）：overlay
 	// 地址是按对端公钥在其中逐个分配的，/31 与 /32 放不下"若干个对端"，因此
 	// 它们不是可用的段。
@@ -114,6 +133,25 @@ func NormalizeVPNPeerPort(peerPort, socksPort int) int {
 		return DefaultVPNPeerPort
 	}
 	return peerPort
+}
+
+// NormalizeDERPSendQueueDepth 是 server.vpn.derp_send_queue_depth 的唯一归一化
+// 入口：0（含负值、"未配置"）取 DefaultDERPSendQueueDepth，越界取最近的边界——
+// 与 NormalizeTimeout / NormalizeTunMTU 同语义。
+//
+// 它必须在**消费点**（vpn.NewDERPServer，它在构造内嵌中继之前把深度交给
+// derpserver）调用，而不是在配置层写回字段：写回会让"未配置"与"显式配成默认值"
+// 无法区分，也会在 server/config 与 vpn 之间留下第二份默认值。
+func NormalizeDERPSendQueueDepth(depth int) int {
+	switch {
+	case depth <= 0:
+		return DefaultDERPSendQueueDepth
+	case depth < MinDERPSendQueueDepth:
+		return MinDERPSendQueueDepth
+	case depth > MaxDERPSendQueueDepth:
+		return MaxDERPSendQueueDepth
+	}
+	return depth
 }
 
 // parseVPNOverlayCIDR 解析并归一化 overlay 段，是它的唯一校验入口：

@@ -27,7 +27,7 @@ import (
 // 不管也不等待被 Hijack 的连接。少了这一步，中继的收发 goroutine 会一直留在
 // 进程里（服务端收到 SIGTERM 后不退出）。
 func TestShutdownClosesEmbeddedDERP(t *testing.T) {
-	s := &Server{derp: vpn.NewDERPServer(key.NewNode())}
+	s := &Server{derp: vpn.NewDERPServer(key.NewNode(), 0)}
 
 	require.NoError(t, s.Shutdown(context.Background()))
 	require.Nil(t, s.derp, "Shutdown must release the embedded DERP server")

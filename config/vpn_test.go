@@ -216,3 +216,55 @@ func TestParseVPNMeshKey(t *testing.T) {
 		}
 	})
 }
+
+// TestNormalizeDERPSendQueueDepth 固定内嵌中继队列深度的唯一归一化入口：
+// 非正值表示"未配置"（取默认值），越界钳到最近的边界——与 timeout/tun_mtu 同语义。
+//
+// 它是"经中继的单流吞吐 ≈ 深度 × 每帧约 1.4KB / RTT"里唯一的可配置因子，
+// 因此默认值本身也要在这里被钉住：把它改回 tailscale 的 32 等于把中继吞吐
+// 打回原形，必须是一次有意识的改动，而不是顺手改常量。
+func TestNormalizeDERPSendQueueDepth(t *testing.T) {
+	cases := []struct {
+		name string
+		in   int
+		want int
+	}{
+		{"未配置取默认值", 0, DefaultDERPSendQueueDepth},
+		{"负值视为未配置", -1, DefaultDERPSendQueueDepth},
+		{"区间内原样保留", 512, 512},
+		{"显式配成 tailscale 的原默认值也允许", 32, 32},
+		{"低于下界钳到下界", 1, MinDERPSendQueueDepth},
+		{"等于下界保持", MinDERPSendQueueDepth, MinDERPSendQueueDepth},
+		{"高于上界钳到上界", 1 << 20, MaxDERPSendQueueDepth},
+		{"等于上界保持", MaxDERPSendQueueDepth, MaxDERPSendQueueDepth},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := NormalizeDERPSendQueueDepth(tc.in)
+			if got != tc.want {
+				t.Errorf("NormalizeDERPSendQueueDepth(%d) = %d, want %d", tc.in, got, tc.want)
+			}
+			if again := NormalizeDERPSendQueueDepth(got); again != got {
+				t.Errorf("NormalizeDERPSendQueueDepth is not idempotent: %d → %d", got, again)
+			}
+		})
+	}
+}
+
+// TestDERPSendQueueDepthBoundsAreSane 守护常量之间的关系：默认值必须落在区间内，
+// 否则"未配置"会归一化出一个被钳制过的值（默认与钳制互相打架）。
+func TestDERPSendQueueDepthBoundsAreSane(t *testing.T) {
+	if MinDERPSendQueueDepth >= MaxDERPSendQueueDepth {
+		t.Fatalf("MinDERPSendQueueDepth (%d) must be < MaxDERPSendQueueDepth (%d)",
+			MinDERPSendQueueDepth, MaxDERPSendQueueDepth)
+	}
+	if DefaultDERPSendQueueDepth < MinDERPSendQueueDepth || DefaultDERPSendQueueDepth > MaxDERPSendQueueDepth {
+		t.Fatalf("DefaultDERPSendQueueDepth (%d) must fall inside [%d, %d]",
+			DefaultDERPSendQueueDepth, MinDERPSendQueueDepth, MaxDERPSendQueueDepth)
+	}
+	if DefaultDERPSendQueueDepth <= 32 {
+		t.Errorf("DefaultDERPSendQueueDepth = %d: the default must be larger than tailscale's stock 32, "+
+			"otherwise the relay keeps capping a single TCP stream at depth×1.4KB per RTT",
+			DefaultDERPSendQueueDepth)
+	}
+}

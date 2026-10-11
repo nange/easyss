@@ -385,7 +385,7 @@ func (s *Server) Start() error {
 	// vpn.NewDERPMount。
 	var root http.Handler = http.HandlerFunc(fallback.Serve)
 	if srvCfg.VPN.Enabled {
-		derpSrv, err := s.startDERP(derpAddr)
+		derpSrv, err := s.startDERP(derpAddr, srvCfg.VPN.DERPSendQueueDepth)
 		if err != nil {
 			return err
 		}
@@ -460,17 +460,22 @@ func loopbackListenAddr(listen string) (string, error) {
 // 它只负责"成为一台中继"：运维只需要在本节点的 servers[] 里把对应条目标上
 // "derp": true。注意它与公网入口的关系变了——DERP 处理器只会接待来自回环的
 // 请求（见 vpn.NewDERPMount），节点侧经 easyss 隧道抵达。
-func (s *Server) startDERP(addr string) (*vpn.DERPServer, error) {
+//
+// sendQueueDepth 直接来自 server.vpn.derp_send_queue_depth（0 表示未配置）：
+// 归一化与默认值只在 sharedconfig.NormalizeDERPSendQueueDepth 里定义一次，
+// 由 vpn.NewDERPServer 在构造中继之前落位。
+func (s *Server) startDERP(addr string, sendQueueDepth int) (*vpn.DERPServer, error) {
 	derpKey, err := vpn.LoadOrCreateKey(vpn.DERPKeyPath())
 	if err != nil {
 		log.Error("[SERVER] load derp key failed", "err", err)
 		return nil, err
 	}
-	derpSrv := vpn.NewDERPServer(derpKey)
+	derpSrv := vpn.NewDERPServer(derpKey, sendQueueDepth)
 	log.Info("[SERVER] embedded DERP enabled",
 		"derp_addr", addr,
 		"path", sharedconfig.DefaultVPNDERPPath,
 		"derp_public_key", derpSrv.PublicKey().String(),
+		"derp_send_queue_depth", derpSrv.SendQueueDepth(),
 		"key_file", vpn.DERPKeyPath())
 	return derpSrv, nil
 }

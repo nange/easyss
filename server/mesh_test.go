@@ -126,7 +126,7 @@ func startFakeSOCKS5(t *testing.T) (addr string, targets <-chan string) {
 // 对外 host:port、公钥与自签证书（后者用来充当 mesh_peers[].ca_file）。
 func startMeshTestDERP(t *testing.T) (addr string, publicKey key.NodePublic, certPEM []byte) {
 	t.Helper()
-	srv := vpn.NewDERPServer(key.NewNode())
+	srv := vpn.NewDERPServer(key.NewNode(), 0)
 	hs := httptest.NewUnstartedServer(srv.Handler())
 	hs.StartTLS()
 	t.Cleanup(func() {
@@ -314,7 +314,7 @@ func TestStartDERPMeshAndShutdown(t *testing.T) {
 
 	s := &Server{}
 	s.meshCtx, s.meshCancel = context.WithCancel(t.Context())
-	if err := s.startDERPMesh(cfg, vpn.NewDERPServer(key.NewNode()), nil, 5*time.Second); err != nil {
+	if err := s.startDERPMesh(cfg, vpn.NewDERPServer(key.NewNode(), 0), nil, 5*time.Second); err != nil {
 		t.Fatalf("startDERPMesh: %v", err)
 	}
 	if s.mesh == nil {
