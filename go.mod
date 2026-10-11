@@ -17,6 +17,7 @@ require (
 	github.com/oschwald/geoip2-golang v1.13.0
 	github.com/refraction-networking/utls v1.8.2
 	github.com/samber/slog-formatter v1.3.0
+	github.com/smallnest/ringbuffer v0.1.2-0.20260928012340-a3c7188f7e42
 	github.com/stretchr/testify v1.12.1
 	github.com/tailscale/tailcat v0.7.0
 	github.com/things-go/go-socks5 v0.1.3

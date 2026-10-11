@@ -8,8 +8,10 @@ import (
 	"strings"
 
 	"github.com/nange/easyss/v3/client/proxy"
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/util/netpipe"
 )
 
 // newDERPDialer 返回交给 tailcat 的 DERP 拨号器（见 tailcat.Server/Client 的
@@ -22,11 +24,18 @@ import (
 //   - 拨号器还顺带解决了平台差异（netns 的 SOCKS 包装在 android/ios/js 构建里被
 //     排除）与"进程级开关只读一次"这两件事。
 //
-// 实现上把中继式的 StreamHandler.OpenTCPStream 适配成"返回一条连接"：net.Pipe
-// 的两端，一端交给 handler 搬运，另一端返回给 tailcat。这样复用的是**生产路径上
+// 实现上把中继式的 StreamHandler.OpenTCPStream 适配成"返回一条连接"：netpipe 的
+// 两端，一端交给 handler 搬运，另一端返回给 tailcat。这样复用的是**生产路径上
 // 已经在跑的那段中继**（引导记录、整形、空闲超时、槽位排空、半关闭都由它处理），
-// 而不是另写一份读写循环；net.Pipe 自带 deadline 语义，DERP 客户端对连接设置的
+// 而不是另写一份读写循环；netpipe 自带 deadline 语义，DERP 客户端对连接设置的
 // 超时因此照常生效。
+//
+// 为什么不是 net.Pipe：net.Pipe 没有缓冲，于是"DERP 客户端写一个包"必须等中继
+// goroutine 读走，而中继 goroutine 会在隧道写阻塞时停住——背压直接打在 magicsock
+// 那个 32 深、满了丢最旧的 DERP 写队列上，内层 TCP 的拥塞窗口随之崩掉。tailscale
+// 的设计假设是"DERP 连接是真实 TCP 套接字、有几 MB 内核缓冲"，net.Pipe 把这个前提
+// 抽掉了。实测（单程 60ms、内层 RTT 240ms、中继队列 1024 帧）：普通 TCP 套接字
+// 2929 KB/s，无缓冲 net.Pipe 175 KB/s。netpipe 用共享配置里的固定缓冲换回这一项。
 func newDERPDialer(handler *proxy.StreamHandler, method protocol.Method) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		if !strings.HasPrefix(network, "tcp") {
@@ -38,7 +47,7 @@ func newDERPDialer(handler *proxy.StreamHandler, method protocol.Method) func(ct
 		// 取消：流的收尾交给管道关闭（tailcat 关闭连接 → 中继退出 → 流关闭）。
 		streamCtx := context.WithoutCancel(ctx)
 
-		local, remote := net.Pipe()
+		local, remote := netpipe.Pipe(sharedconfig.DERPPipeBufferSize)
 		go func() {
 			err := handler.OpenTCPStream(streamCtx, addr, method, remote)
 			if err != nil && !errors.Is(err, net.ErrClosed) {

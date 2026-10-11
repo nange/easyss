@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/nange/easyss/v3/client/proxy"
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/transport"
@@ -111,5 +112,51 @@ func TestDERPDialerRejectsNonTCP(t *testing.T) {
 		if _, err := dial(context.Background(), network, "derp.example.com:443"); err == nil {
 			t.Errorf("dial(%q) succeeded, want an error", network)
 		}
+	}
+}
+
+// TestDERPDialerBuffersBeforeTheTunnelReads 固定这一层的**缓冲**语义：隧道侧不读时，
+// tailcat 侧写入必须立刻返回，而不是阻塞在"等中继把数据搬走"上。
+//
+// 这正是修复前 net.Pipe 的行为缺陷：DERP 客户端每写一个包都要等中继 goroutine 读走，
+// 而中继 goroutine 会在隧道写阻塞时停住，于是背压直接打在 magicsock 那个 32 深、
+// 满了丢最旧的写队列上（内层 TCP 的拥塞窗口随之崩掉）。这条用例是那件事的钉子。
+func TestDERPDialerBuffersBeforeTheTunnelReads(t *testing.T) {
+	const target = "derp.example.com:443"
+
+	handler, ft := newTestDERPHandler(t)
+	dial := newDERPDialer(handler, protocol.MethodAES256GCM)
+
+	conn, err := dial(context.Background(), "tcp", target)
+	require.NoError(t, err)
+	defer conn.Close() //nolint:errcheck
+
+	select {
+	case <-ft.opened:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the dialer never opened a tunnel stream")
+	}
+	peer := ft.peerConn()
+	require.NotNil(t, peer)
+
+	// 先把引导记录读掉（否则中继会停在写引导记录上，测不到数据面），之后隧道侧
+	// 就不再读了。
+	require.NoError(t, peer.SetReadDeadline(time.Now().Add(5*time.Second)))
+	_, _ = peer.Read(make([]byte, 4096))
+	require.NoError(t, peer.SetReadDeadline(time.Time{}))
+
+	payload := make([]byte, sharedconfig.DERPPipeBufferSize/2)
+	done := make(chan error, 1)
+	go func() {
+		_, werr := conn.Write(payload)
+		done <- werr
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("the DERP connection blocked although the tunnel read nothing: " +
+			"the dialer must buffer (net.Pipe here means every packet waits for the relay goroutine)")
 	}
 }
