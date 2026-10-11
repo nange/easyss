@@ -26,7 +26,7 @@ func writeConfig(t *testing.T, body string) string {
 // 归一化（timeout 写回、log.level 取常量默认值）且相对文件路径已解析，因此
 // cmd/easyss-server 不再需要自己排列这些步骤。
 func TestLoadConfigAppliesDefaults(t *testing.T) {
-	fc, err := LoadConfig(writeConfig(t, `{"server":{"cert_path":"server.crt"},"log":{"file_path":"logs/easyss.log"}}`))
+	fc, err := LoadConfig(writeConfig(t, `{"server":{"cert_path":"server.crt","key_path":"server.key"},"log":{"file_path":"logs/easyss.log"}}`))
 	require.NoError(t, err)
 
 	require.Equal(t, sharedconfig.DefaultTimeout, fc.Timeout)
@@ -54,7 +54,7 @@ func TestLoadConfigClampsTimeout(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		fc, err := LoadConfig(writeConfig(t, fmt.Sprintf(`{"timeout":%d}`, tc.in)))
+		fc, err := LoadConfig(writeConfig(t, fmt.Sprintf(`{"server":{"domain":"example.com"},"timeout":%d}`, tc.in)))
 		require.NoError(t, err)
 		if fc.Timeout != tc.want {
 			t.Errorf("timeout %d -> %d, want %d", tc.in, fc.Timeout, tc.want)
@@ -63,12 +63,16 @@ func TestLoadConfigClampsTimeout(t *testing.T) {
 }
 
 // TestLoadConfigRejectsUnsupportedVersion 固定版本校验的位置与宽容度：其他主版本
-// 的配置被拒绝，而字段缺失（0）与当前版本都被接受。
+// 的配置被拒绝，而版本字段缺失（0）与当前版本都被接受。域名/证书的必填校验是另一
+// 道闸（见 TestLoadConfigValidatesTLS），因此这里的夹具给出一份合法的取证配置。
 func TestLoadConfigRejectsUnsupportedVersion(t *testing.T) {
-	_, err := LoadConfig(writeConfig(t, `{"version":2}`))
+	_, err := LoadConfig(writeConfig(t, `{"version":2,"server":{"domain":"example.com"}}`))
 	require.ErrorContains(t, err, "unsupported config version")
 
-	for _, body := range []string{`{}`, fmt.Sprintf(`{"version":%d}`, SupportedConfigVersion)} {
+	for _, body := range []string{
+		`{"server":{"domain":"example.com"}}`,
+		fmt.Sprintf(`{"version":%d,"server":{"domain":"example.com"}}`, SupportedConfigVersion),
+	} {
 		_, err := LoadConfig(writeConfig(t, body))
 		require.NoError(t, err, "body %s", body)
 	}

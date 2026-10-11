@@ -36,6 +36,16 @@ type Server struct {
 	statsOnce  sync.Once
 }
 
+// acmeProfileShortLived 是 Let's Encrypt 的短生命周期证书 profile（约 160 小时）。
+//
+// 它只为 IP 标识符而设：LE 的 IP 地址证书必须是短生命周期证书（见
+// https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability），而
+// shortlived 正是唯一允许 ip 标识符的 profile（其有效期列在
+// https://letsencrypt.org/docs/profiles/）。名称写错时 acmez 会对着 ACME
+// directory 的 profiles 列表报 `unknown profile name`，因此这是启动期就能暴露的
+// 明确失败，不会静默换成另一种证书。
+const acmeProfileShortLived = "shortlived"
+
 func New(cfg *config.FileConfig) (*Server, error) {
 	for _, p := range cfg.Transport.Protocols {
 		if p != "h2" {
@@ -54,7 +64,7 @@ func (s *Server) initTLS() (*tls.Config, error) {
 	cfg := s.cfg
 	srvCfg := cfg.Server
 
-	if srvCfg.CertPath != "" && srvCfg.KeyPath != "" {
+	if cfg.UsesManualCertificate() {
 		cert, err := tls.LoadX509KeyPair(srvCfg.CertPath, srvCfg.KeyPath)
 		if err != nil {
 			return nil, fmt.Errorf("load cert: %w", err)
@@ -115,6 +125,13 @@ func (s *Server) manageCert(storage certmagic.Storage, disableARI bool) (*tls.Co
 	acmeCfg.Agreed = true
 	acmeCfg.Email = s.cfg.Server.Email
 	acmeCfg.DisableHTTPChallenge = true
+	// IP 标识符必须显式请求短生命周期 profile：LE 对 ip 标识符会自动选它，但"IP
+	// 证书只能是短生命周期证书"是这个模式的硬约束，与其依赖服务端自动选择，不如
+	// 在请求里写明——profile 名不再是 LE 认识的名字时会以 `unknown profile name`
+	// 在启动阶段失败，而不是悄悄换一种证书。域名路径不设 profile，保持既有行为。
+	if s.cfg.ACMESubjectIsIP() {
+		acmeCfg.Profile = acmeProfileShortLived
+	}
 	cmCfg.Issuers = []certmagic.Issuer{certmagic.NewACMEIssuer(cmCfg, acmeCfg)}
 
 	tlsConfig := cmCfg.TLSConfig()
@@ -263,8 +280,15 @@ func (s *Server) Start() error {
 		log.Error("[SERVER] init TLS failed", "err", err)
 		return err
 	}
-	if srvCfg.CertPath != "" && srvCfg.KeyPath != "" {
+	if cfg.UsesManualCertificate() {
 		log.Info("[SERVER] TLS mode: cert files", "cert", srvCfg.CertPath, "key", srvCfg.KeyPath)
+	} else if cfg.ACMESubjectIsIP() {
+		// IP-only 模式：没有域名，Let's Encrypt 直接为这个公网 IPv4 签发 IP 证书。
+		// 它是短生命周期证书（约 160 小时，后台自动续期），且只能用 tls-alpn-01
+		// 验证——公网 443 必须可达，首次签发与每一次续期都一样。
+		log.Info("[SERVER] TLS mode: certmagic (Let's Encrypt IP certificate)",
+			"subject", srvCfg.Domain, "email", srvCfg.Email, "profile", acmeProfileShortLived,
+			"challenge", "tls-alpn-01", "acme_requires", "inbound tcp/443 from the internet")
 	} else {
 		log.Info("[SERVER] TLS mode: certmagic (Let's Encrypt)", "domain", srvCfg.Domain, "email", srvCfg.Email)
 	}

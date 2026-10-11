@@ -1,0 +1,147 @@
+package config
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+// TestValidateTLS 固定"证书从哪来"的校验矩阵：证书文件必须成对配置、ACME 模式下
+// domain 必填、IP-only 只接受公网 IPv4。
+//
+// 这些错误的代价差别很大：漏在配置加载阶段是一条能直接指出缺什么的报错，漏到
+// 运行期则是"进程起不来但看不出为什么"，或更糟——只配了 cert_path 时那份证书被
+// 静默忽略、转而向 Let's Encrypt 申请。
+func TestValidateTLS(t *testing.T) {
+	t.Run("域名与 ACME 模式", func(t *testing.T) {
+		cases := []struct {
+			name   string
+			server ServerConfig
+			want   string
+		}{
+			{"普通域名", ServerConfig{Domain: "example.com"}, ""},
+			{"公网 IPv4", ServerConfig{Domain: "1.2.3.4"}, ""},
+			{"域名与手工证书并存时手工证书优先", ServerConfig{Domain: "example.com", CertPath: "c.pem", KeyPath: "k.pem"}, ""},
+			{"手工证书可以没有 domain", ServerConfig{CertPath: "c.pem", KeyPath: "k.pem"}, ""},
+			{"空 domain 且无手工证书", ServerConfig{}, "server.domain is required"},
+			{"只配 cert_path", ServerConfig{Domain: "example.com", CertPath: "c.pem"}, "must be set together"},
+			{"只配 key_path", ServerConfig{Domain: "example.com", KeyPath: "k.pem"}, "must be set together"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				fc := &FileConfig{Server: tc.server}
+				err := fc.validateTLS()
+				if tc.want == "" {
+					require.NoError(t, err)
+					return
+				}
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.want)
+			})
+		}
+	})
+
+	t.Run("不可公网签发的 IP 字面量", func(t *testing.T) {
+		// 全部落在 util.IsLANIP 覆盖的范围内：Let's Encrypt 验证时会连接该地址的
+		// 443 并拒绝非公网地址，Boulder 侧还有 reserved-IP 兜底，因此这些配置注定
+		// 申请失败——必须在配置加载阶段就说清楚出路，而不是等一轮 ACME 往返。
+		for _, domain := range []string{
+			"10.0.0.1",     // RFC1918
+			"172.16.0.1",   // RFC1918
+			"192.168.1.10", // RFC1918
+			"100.64.0.1",   // CGNAT
+			"127.0.0.1",    // 环回
+			"169.254.1.1",  // 链路本地
+			"0.0.0.0",      // 未指定
+			"192.0.0.1",    // IETF 协议分配段
+			"198.18.0.1",   // 基准测试段
+			"192.0.2.1",    // TEST-NET-1
+			"198.51.100.1", // TEST-NET-2
+			"203.0.113.1",  // TEST-NET-3
+			"224.0.0.1",    // 多播
+			"255.255.255.255",
+		} {
+			t.Run(domain, func(t *testing.T) {
+				fc := &FileConfig{Server: ServerConfig{Domain: domain}}
+				err := fc.validateTLS()
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "public")
+				require.Contains(t, err.Error(), "server.cert_path")
+			})
+		}
+	})
+
+	t.Run("不是纯 IPv4 字面量的 IP 写法", func(t *testing.T) {
+		// 客户端用 https://<address>:<port> 与 <address>:<port> 拼服务端地址，
+		// 这三种写法在那里都无法表达（IPv6 会以 "too many colons" 在 net.Dial
+		// 失败，那个症状看起来与证书无关），因此在配置加载阶段就拒绝。
+		for _, domain := range []string{"2001:db8::1", "[2001:db8::1]", "::ffff:1.2.3.4", "[1.2.3.4]"} {
+			t.Run(domain, func(t *testing.T) {
+				fc := &FileConfig{Server: ServerConfig{Domain: domain}}
+				err := fc.validateTLS()
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "IPv4")
+			})
+		}
+	})
+
+	t.Run("手工证书模式下 IP 形态不参与校验", func(t *testing.T) {
+		// 自签证书部署在 NAT 后面是常见形态：那时 domain 不参与取证，写私有地址
+		// 只是给日志看，不该被 ACME 的公网性要求挡住。
+		fc := &FileConfig{Server: ServerConfig{Domain: "192.168.1.10", CertPath: "c.pem", KeyPath: "k.pem"}}
+		require.NoError(t, fc.validateTLS())
+	})
+}
+
+// TestLoadConfigValidatesTLS 固定校验发生在配置加载阶段（LoadConfig），且不联网：
+// 一份注定签不下证书的 IP-only 配置必须在进程启动前就被拒绝。
+func TestLoadConfigValidatesTLS(t *testing.T) {
+	t.Run("公网 IPv4 通过", func(t *testing.T) {
+		fc, err := LoadConfig(writeConfig(t, `{"server":{"listen":":443","domain":"1.2.3.4","password":"p"}}`))
+		require.NoError(t, err)
+		require.Equal(t, "1.2.3.4", fc.Server.Domain)
+	})
+
+	t.Run("私有地址启动失败", func(t *testing.T) {
+		_, err := LoadConfig(writeConfig(t, `{"server":{"listen":":443","domain":"192.168.1.10","password":"p"}}`))
+		require.ErrorContains(t, err, "private or reserved")
+	})
+
+	t.Run("IPv6 字面量启动失败", func(t *testing.T) {
+		_, err := LoadConfig(writeConfig(t, `{"server":{"listen":":443","domain":"2001:db8::1","password":"p"}}`))
+		require.ErrorContains(t, err, "IPv4")
+	})
+
+	t.Run("证书只配一半启动失败", func(t *testing.T) {
+		_, err := LoadConfig(writeConfig(t, `{"server":{"listen":":443","cert_path":"c.pem"}}`))
+		require.ErrorContains(t, err, "must be set together")
+	})
+}
+
+// TestACMESubjectIsIP 固定"标识符是不是 IP 字面量"只看形态、不看它能否被签发：
+// 它决定是否显式请求短生命周期 profile 与打哪一行启动日志，而公网性由
+// validateTLS 在更早的位置把关（绕过 LoadConfig 的调用方也就能拿到 certmagic
+// 的明确拒绝，而不是一个没有证书的模式）。
+func TestACMESubjectIsIP(t *testing.T) {
+	cases := []struct {
+		name   string
+		server ServerConfig
+		want   bool
+	}{
+		{"域名", ServerConfig{Domain: "example.com"}, false},
+		{"公网 IPv4", ServerConfig{Domain: "1.2.3.4"}, true},
+		{"私有 IPv4 也是 IP 模式", ServerConfig{Domain: "192.168.1.10"}, true},
+		{"空 domain", ServerConfig{}, false},
+		{"IPv6", ServerConfig{Domain: "2001:db8::1"}, false},
+		{"IPv4-mapped", ServerConfig{Domain: "::ffff:1.2.3.4"}, false},
+		{"带方括号", ServerConfig{Domain: "[1.2.3.4]"}, false},
+		{"手工证书模式恒为 false", ServerConfig{Domain: "1.2.3.4", CertPath: "c.pem", KeyPath: "k.pem"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := &FileConfig{Server: tc.server}
+			require.Equal(t, tc.want, fc.ACMESubjectIsIP())
+			require.Equal(t, tc.server.CertPath != "" && tc.server.KeyPath != "", fc.UsesManualCertificate())
+		})
+	}
+}
