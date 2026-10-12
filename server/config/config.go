@@ -74,8 +74,9 @@ type FileConfig struct {
 const SupportedConfigVersion = 3
 
 // LoadConfig 读取并解析服务端配置文件，返回已完成归一化的配置：版本校验、
-// applyDefaults 与 ResolveFilePaths 都在这里完成，调用方（cmd/easyss-server）
-// 拿到的必然是可直接交给 server.New 的有效配置，不再各自排列这些步骤。
+// applyDefaults、validateTLS 与 ResolveFilePaths 都在这里完成，调用方
+// （cmd/easyss-server）拿到的必然是可直接交给 server.New 的有效配置，不再各自
+// 排列这些步骤。
 func LoadConfig(path string) (*FileConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -93,6 +94,11 @@ func LoadConfig(path string) (*FileConfig, error) {
 	}
 
 	applyDefaults(&fc)
+	// 取证书的方式（手工证书 vs Let's Encrypt ACME）在这里固定：证书文件只配了
+	// 一半、以及 IP-only 模式写了个不可公网签发的地址，都在启动时明确报错。
+	if err := fc.validateTLS(); err != nil {
+		return nil, err
+	}
 	// 相对文件路径（证书、代理列表、日志文件）在这里统一解析。
 	fc.ResolveFilePaths()
 
@@ -156,14 +162,18 @@ func (c *ServerConfig) GetAllowedMethods() []string {
 }
 
 // ExampleConfig 返回 -show-config-example 展示的完整配置示例。它放在这里而不是
-// 留在 cmd/easyss-server：示例与 FileConfig 的定义相邻，新增字段时容易发现遗漏，
+// 留在 cmd/easyss-server：示例与 FileConfig 的定义相邻，新增字段时容易遗漏，
 // 且其中的默认值全部引用 sharedconfig 常量。必填项（domain、password）使用
 // 占位符；返回值本身是已归一化的合法配置，可直接交给 server.New。
 func ExampleConfig() FileConfig {
 	return FileConfig{
 		ConfigVersion: SupportedConfigVersion,
 		Server: ServerConfig{
-			Listen:         ":443",
+			Listen: ":443",
+			// domain 是 ACME 标识符：域名，或**公网 IPv4 字面量**（IP-only 模式，
+			// 见 validateTLS 与 README 的"不用域名"一节）。IP-only 时 Let's
+			// Encrypt 只发短生命周期（约 160 小时）的 IP 证书，且只能用
+			// tls-alpn-01 验证——公网 443 必须可达，每次续期也一样。
 			Domain:         "your-domain.com",
 			Password:       "your-password",
 			AllowedMethods: DefaultAllowedMethods(),

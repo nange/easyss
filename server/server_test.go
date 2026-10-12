@@ -66,6 +66,40 @@ func TestCleanCertmagicDomainAssets(t *testing.T) {
 	}
 }
 
+// TestCertmagicAcceptsPublicIPSubject 是 IP-only 模式对依赖的守卫测试：certmagic
+// 用一张硬编码的表判断"某个公网 CA 是否支持 IP 证书"，而这个功能完全依赖那张表里
+// Let's Encrypt 是 true。它不联网（显式设置 Email，PreCheck 因此既不读存储也不
+// 向用户提问），只在升级 certmagic 或改动 CA 时让"IP 证书不再被支持"立刻变红。
+//
+// 同时钉住私有地址确实被预检拒绝：server/config.validateTLS 的判据比它更严（还
+// 覆盖 CGNAT/TEST-NET 等段），但两者对私有地址必须一致，否则配置层那道闸就成了
+// 唯一一道。
+func TestCertmagicAcceptsPublicIPSubject(t *testing.T) {
+	var cmCfg *certmagic.Config
+	cache := certmagic.NewCache(certmagic.CacheOptions{
+		GetConfigForCert: func(certmagic.Certificate) (*certmagic.Config, error) {
+			return cmCfg, nil
+		},
+	})
+	t.Cleanup(cache.Stop)
+
+	cmCfg = certmagic.New(cache, certmagic.Config{
+		Storage: &certmagic.FileStorage{Path: t.TempDir()},
+	})
+
+	acmeCfg := certmagic.DefaultACME
+	acmeCfg.Agreed = true
+	acmeCfg.Email = "admin@example.com"
+	issuer := certmagic.NewACMEIssuer(cmCfg, acmeCfg)
+
+	ctx := context.Background()
+	require.NoError(t, issuer.PreCheck(ctx, []string{"1.1.1.1"}, false), "LE 必须仍然支持公网 IP 证书")
+
+	err := issuer.PreCheck(ctx, []string{"192.168.1.10"}, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "does not qualify for a public certificate")
+}
+
 type errString string
 
 func (e errString) Error() string { return string(e) }
