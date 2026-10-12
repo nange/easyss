@@ -1,13 +1,18 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util"
 )
 
@@ -556,6 +561,62 @@ func TestLoadConfig(t *testing.T) {
 			t.Error("expected error for missing file")
 		}
 	})
+
+	// VPN 声明的中继数量上限是启动期的硬约束：越限的配置没有可工作的形态
+	// （见 ValidateDERPRelays），必须在 LoadConfig 就拒绝，而不是启动之后才发现
+	// 某些中继连不上。反过来，VPN 未启用时这些标记不参与运行期，不该阻止启动。
+	t.Run("VPN 声明的中继超过上限时拒绝启动", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		v3JSON := `{
+			"version": 3,
+			"servers": [
+				{"address": "a.example.com", "port": 443, "password": "p", "default": true},
+				{"address": "b.example.com", "port": 443, "password": "p", "derp": true},
+				{"address": "c.example.com", "port": 443, "password": "p", "derp": true},
+				{"address": "d.example.com", "port": 443, "password": "p", "derp": true},
+				{"address": "e.example.com", "port": 443, "password": "p", "derp": true}
+			],
+			"vpn": {"enabled": true}
+		}`
+		if err := os.WriteFile(path, []byte(v3JSON), 0644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadConfig(path)
+		if err == nil {
+			t.Fatal("LoadConfig accepted 4 declared DERP relays, want a refusal")
+		}
+		for _, want := range []string{"4 DERP relays", "at most 3 relays", "derp"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q should mention %q", err, want)
+			}
+		}
+	})
+
+	t.Run("VPN 未启用时过多的 derp 标记不阻止启动", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		v3JSON := `{
+			"version": 3,
+			"servers": [
+				{"address": "a.example.com", "port": 443, "password": "p", "default": true},
+				{"address": "b.example.com", "port": 443, "password": "p", "derp": true},
+				{"address": "c.example.com", "port": 443, "password": "p", "derp": true},
+				{"address": "d.example.com", "port": 443, "password": "p", "derp": true},
+				{"address": "e.example.com", "port": 443, "password": "p", "derp": true}
+			]
+		}`
+		if err := os.WriteFile(path, []byte(v3JSON), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfig(path)
+		if err != nil {
+			t.Fatalf("unexpected error while the VPN is disabled: %v", err)
+		}
+		if cfg.VPN.Enabled {
+			t.Error("VPN.Enabled = true for a config without a vpn key")
+		}
+	})
 }
 
 func TestMigrateV2ToV3(t *testing.T) {
@@ -902,4 +963,91 @@ func TestTunMTU(t *testing.T) {
 			t.Errorf("TunMTU() = %d, want 8500 (an empty override must not reset it)", got)
 		}
 	})
+}
+
+// lockedLogBuffer / captureLogs 把 easyss 的日志器换成写入内存的 slog，供
+// "残留的已移除字段会被告警"这类测试断言（恢复由 t.Cleanup 完成）。
+type lockedLogBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedLogBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedLogBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+func captureLogs(t *testing.T) *lockedLogBuffer {
+	t.Helper()
+	buf := new(lockedLogBuffer)
+	prev := log.Logger()
+	log.SetLogger(slog.New(slog.NewTextHandler(buf, nil)))
+	t.Cleanup(func() { log.SetLogger(prev) })
+	return buf
+}
+
+// TestLoadConfigWarnsOnRemovedDERPAddr 固定已移除字段的降级行为：配置里残留的
+// vpn.derp_addr 是未知键（json.Unmarshal 直接忽略），既不影响节点通告的中继列表，
+// 也不会让加载失败，但必须在启动日志里说清楚——"以为中继在别的 host:port"正是
+// 那种配置照常加载、VPN 却一直连不上的情形。
+func TestLoadConfigWarnsOnRemovedDERPAddr(t *testing.T) {
+	logs := captureLogs(t)
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	body := `{
+		"version": 3,
+		"servers": [
+			{"address": "a.example.com", "port": 443, "password": "p", "default": true},
+			{"address": "relay.example.com", "port": 8443, "password": "p", "derp": true}
+		],
+		"vpn": {"enabled": true, "derp_addr": "relay.internal:9443"}
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if got, want := cfg.VPNDERPAddr(), "relay.example.com:8443"; got != want {
+		t.Errorf("VPNDERPAddr() = %q, want %q: the removed key must not influence the relay list", got, want)
+	}
+
+	out := logs.String()
+	if !strings.Contains(out, "vpn.derp_addr was removed") {
+		t.Errorf("the load log does not report the removed key:\n%s", out)
+	}
+	if !strings.Contains(out, "relay.internal:9443") {
+		t.Errorf("the load log does not name the ignored value:\n%s", out)
+	}
+}
+
+// TestLoadConfigWithoutDERPAddrKeyStaysQuiet 守护告警不误报：没有那个键的配置
+// 不该出现任何相关日志。
+func TestLoadConfigWithoutDERPAddrKeyStaysQuiet(t *testing.T) {
+	logs := captureLogs(t)
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	body := `{
+		"version": 3,
+		"servers": [{"address": "a.example.com", "port": 443, "password": "p", "default": true, "derp": true}],
+		"vpn": {"enabled": true}
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if out := logs.String(); strings.Contains(out, "derp_addr") {
+		t.Errorf("the load log mentions derp_addr although the config does not use it:\n%s", out)
+	}
 }

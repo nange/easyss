@@ -44,6 +44,12 @@ func (s *session) tunUpViaHelper() error {
 		return fmt.Errorf("client not initialized")
 	}
 
+	// 与直接创建路径（session.tunUp）同一道门禁：relay_only=false 的 VPN 不能与
+	// TUN 同时生效，而运行期再改 tailscale 的开关对已绑定的 socket 无效。
+	if err := core.CheckVPNTunCompat(); err != nil {
+		return err
+	}
+
 	// 1. 用临时 manager 构建 TunConfig 以获取设备默认值。
 	// manager 配置来自共享 builder，因此此路径与直接路径使用相同的
 	// socks/dns/server-ipv6 值（它同时会刷新服务端 IPv6）。

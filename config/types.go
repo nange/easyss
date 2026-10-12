@@ -134,6 +134,30 @@ const (
 	TCPStreamBufferSize       = 15 * 1024 // 客户端，4帧/record (4*(15360+3)=61452 < 64KB)
 	ServerTCPStreamBufferSize = 31 * 1024 // 服务端，2帧/record (2*(31744+3)=63494 < 64KB)
 
+	// DERPPipeBufferSize 是 runner/derpdialer 交给 tailcat 的那条 DERP 连接的内存
+	// 缓冲大小（每个方向各一份，见 util/netpipe）。
+	//
+	// 它是"经中继的单流吞吐"的关键参数之一：DERP 的数据路径上能存住未确认数据的
+	// 地方只有中继的每客户端队列与这条连接的缓冲，因此吞吐 ≈ 可用缓冲 / 端到端 RTT。
+	// 实测（单程 60ms、内层 RTT 240ms、中继队列取默认 1024 帧）：
+	//
+	//	DERP 连接落到普通 TCP 套接字（内核缓冲）          2929 KB/s
+	//	落到**无缓冲** net.Pipe（修复前的形态）            175 KB/s
+	//	落到本常量指定的内存缓冲：32KB → 3 KB/s，64KB → 153 KB/s，
+	//	                          128KB → 1038~1492 KB/s，256KB → 692~1055 KB/s，
+	//	                          512KB → 157 KB/s，1MB → 3 KB/s
+	//
+	// 两端变差的原因不同，也是这个值不能"越大越好"的原因：
+	//
+	//   - 太小（≤64KB）：DERP 客户端很快写满，背压立刻打到 magicsock 那个 32 深
+	//     （约 45KB）、满了丢最旧的写队列上，丢包让内层 TCP 的拥塞窗口崩掉；
+	//   - 太大（≥512KB）：排队延迟被搬进 VPN 路径（1MB 在 40Mbps 上约合 200ms），
+	//     RTT 膨胀与随之而来的丢包同样让吞吐塌陷。
+	//
+	// 128KB 是这条曲线上的平台（约 45KB 的 magicsock 队列之上留了一倍余量，又不至于
+	// 贡献可观的排队），因此作为默认值；它是每个对端 0.25MB 的内存代价，仅客户端侧付费。
+	DERPPipeBufferSize = 128 << 10
+
 	// 端点路径：代理提供的唯一路径（强制 HTTP/2）；
 	// 其余所有路径均返回 fallback HTML 页面。
 	EndpointTCP   = "/v3/tcp"

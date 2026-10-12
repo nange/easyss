@@ -64,6 +64,9 @@ func (s *tcpDNSSession) resolve(msg *dns.Msg, target string) (*dns.Msg, error) {
 	d := s.d
 	plan := d.plan(msg)
 	switch plan.action {
+	case dnsActionStatic:
+		plan.static.Id = msg.Id
+		return plan.static, nil
 	case dnsActionBlock:
 		log.Info("[DNS_BLOCK] blocked", "domain", plan.domain, "qtype", plan.qtype,
 			"src", s.src, "dst", target)

@@ -3,6 +3,8 @@ package handler
 import (
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
@@ -28,6 +30,49 @@ type ProxyHandler struct {
 	saltCache        *saltCache
 	ipLimiter        *ipRateLimiter
 	fallback         *Fallback
+	localDERP        *localDERP
+}
+
+// localDERP 描述"握手目标就是本服务端自己的内嵌 DERP"这一特例。
+//
+// DERP 只接受回环来源（见 vpn.NewDERPMount），节点侧则把 DERP 连接放进 easyss
+// 隧道，并以节点 servers[] 里那条被标记 derp 的条目（即本服务端的 domain 与
+// listen 端口）作为目标（见 runner/derpdialer.go）。因此服务端必须在这里把它认
+// 出来，并改拨本机回环监听——否则那条连接会去解析并连接自己的公网地址，而公网
+// 入口只提供伪装页面。
+type localDERP struct {
+	// match 是本服务端对外通告的 DERP host:port（由 domain 与 listen 端口
+	// 推导，见 server/config.ResolveDERPAddr）。为空表示本服务端没有内嵌 DERP。
+	match string
+	// loopback 是命中后实际拨号的地址：127.0.0.1:<listen 端口>。
+	loopback string
+}
+
+// matches 报告握手目标是否就是本服务端自己的 DERP 地址。
+//
+// host 忽略大小写（DNS 名字不区分大小写，而配置里的大小写由运维书写），端口按
+// 数值比较（"443" 与 "0443" 等价，避免一处写法差异变成"VPN 连不上"）。
+func (l *localDERP) matches(target string) bool {
+	if l == nil || l.match == "" || l.loopback == "" {
+		return false
+	}
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return false
+	}
+	matchHost, matchPort, err := net.SplitHostPort(l.match)
+	if err != nil {
+		return false
+	}
+	targetPort, err := strconv.Atoi(port)
+	if err != nil {
+		return false
+	}
+	wantPort, err := strconv.Atoi(matchPort)
+	if err != nil {
+		return false
+	}
+	return targetPort == wantPort && strings.EqualFold(host, matchHost)
 }
 
 type ProxyHandlerConfig struct {
@@ -45,6 +90,11 @@ type ProxyHandlerConfig struct {
 	HandshakeTimeout time.Duration
 	// Fallback 是服务非代理请求（伪装页面）的实例。nil 表示使用包级内置实例。
 	Fallback *Fallback
+	// LocalDERPAddr / LocalDERPLoopback 打开"目标是本服务端自己的内嵌 DERP"
+	// 这一特例：前者是要匹配的对外 host:port，后者是命中后拨号的回环地址。
+	// 两者任一为空即关闭该特例。
+	LocalDERPAddr     string
+	LocalDERPLoopback string
 }
 
 func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
@@ -89,6 +139,10 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 		saltCache:        newSaltCache(),
 		ipLimiter:        newIPRateLimiter(),
 		fallback:         cfg.Fallback,
+		localDERP: &localDERP{
+			match:    cfg.LocalDERPAddr,
+			loopback: cfg.LocalDERPLoopback,
+		},
 	}
 }
 

@@ -45,6 +45,18 @@ type ServerProfile struct {
 	SNI      string `json:"sn"`
 	CAPath   string `json:"ca_path"`
 	Default  bool   `json:"default"`
+
+	// DERP 标记"用这条服务端的 address:port 作为内嵌 DERP 中继的主机与端口"。
+	// 它同时是访问侧拨号的目标与自身地址里通告的 DERP 位置（见
+	// ClientConfig.VPNDERPAddrs）。可以同时标记多条：它们共同构成同一个 region
+	// 下的多个中继节点（互为冗余），但**总数不能超过 config.MaxVPNRelays**
+	// （3 台，推荐 1-2 台）——超过时客户端在配置加载阶段就报错拒绝启动（见
+	// ClientConfig.ValidateDERPRelays）。没有任何条目被标记时回退**当前连接的服务端**。
+	//
+	// 这是声明中继的唯一方式（没有 vpn.derp_addr 那样的显式覆盖项）：标记的值
+	// 必须与服务端自己的 domain + listen 端口一致，否则服务端认不出那条 DERP
+	// 连接（它靠完全匹配自己的对外地址把该连接改拨到回环）。
+	DERP bool `json:"derp,omitempty"`
 }
 
 type LocalConfig struct {
@@ -90,6 +102,7 @@ type ClientConfig struct {
 	Servers       []*ServerProfile `json:"servers"`
 	Local         LocalConfig      `json:"local"`
 	Routing       RoutingConfig    `json:"routing"`
+	VPN           VPNConfig        `json:"vpn"`
 	Transport     TransportConfig  `json:"transport"`
 	Shaper        ShaperConfig     `json:"shaper"`
 	Log           LogConfig        `json:"log"`
@@ -187,10 +200,16 @@ func LoadConfig(path string) (*ClientConfig, error) {
 		ConfigVersion int              `json:"version"`
 		Servers       []*ServerProfile `json:"servers"`
 		Server        string           `json:"server"`
+		VPN           struct {
+			DERPAddr    string `json:"derp_addr"`
+			OverlayCIDR string `json:"overlay_cidr"`
+		} `json:"vpn"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return nil, err
 	}
+	warnOnRemovedDERPAddr(probe.VPN.DERPAddr)
+	warnOnRemovedVPNOverlayCIDR(probe.VPN.OverlayCIDR)
 	if probe.ConfigVersion != 3 || len(probe.Servers) == 0 {
 		var s config.SimpleConfig
 		if err := json.Unmarshal(data, &s); err != nil {
@@ -205,7 +224,49 @@ func LoadConfig(path string) (*ClientConfig, error) {
 	}
 	applyDefaults(&cfg)
 
+	// VPN 声明的中继数量上限在这里把关（见 ValidateDERPRelays）：它是一条配置形状
+	// 错误，与其它配置错误一样让客户端拒绝启动，而不是等到 VPN 启动路径再降级成
+	// "本会话 VPN 不工作"（那种降级是给"当前服务端不在列表里"这类运行期状态用的）。
+	if err := cfg.ValidateDERPRelays(); err != nil {
+		return nil, err
+	}
+
 	return &cfg, nil
+}
+
+// warnOnRemovedDERPAddr 对配置里残留的 vpn.derp_addr 键告警一次。
+//
+// 该字段已被移除：本节点通告的中继只从 servers[] 里带 `derp: true` 的条目派生
+// （见 ClientConfig.VPNDERPAddrs），没有任何标记时回退当前连接的服务端。残留的键
+// 不会被 json.Unmarshal 报错（未知键一律忽略），但它可能正是运维"以为中继在别的
+// host:port"的原因——那种情况下 VPN 会按派生结果去连，症状是"一直连不上"而不是
+// 一条配置错误。因此这里把它说出来。
+func warnOnRemovedDERPAddr(legacyAddr string) {
+	if legacyAddr == "" {
+		return
+	}
+	log.Warn("[CONFIG] vpn.derp_addr was removed and is ignored; "+
+		"the advertised relays are derived from the servers[] entries marked \"derp\": true",
+		"derp_addr", legacyAddr)
+}
+
+// warnOnRemovedVPNOverlayCIDR 对配置里残留的 vpn.overlay_cidr 键告警一次。
+//
+// 该字段已被移除：overlay 段是**访问侧本地**给对端分配虚拟 IPv4 用的，不进隧道、
+// 对端看不到，因此它是实现常量而不是配置项（见 config.DefaultVPNOverlayCIDR）。
+// 残留的键不会被 json.Unmarshal 报错（未知键一律忽略），但它可能正是运维"已经把
+// 这段改成别的"的原因——那段现在是死配置，实际生效的仍是常量，所以必须说出来，
+// 否则"我明明改过还是冲突"会变成一个查不出来的现象。
+//
+// 与原值一并提示"为什么现在不能改"：这个段的唯一出路是换默认常量（一次发版所有
+// 人受益），而不是每个部署各自配置。
+func warnOnRemovedVPNOverlayCIDR(legacyCIDR string) {
+	if legacyCIDR == "" {
+		return
+	}
+	log.Warn("[CONFIG] vpn.overlay_cidr was removed and is ignored; "+
+		"the overlay range is a local implementation constant and is not configurable",
+		"overlay_cidr", legacyCIDR, "in_use", config.DefaultVPNOverlayCIDR)
 }
 
 func applyDefaults(c *ClientConfig) {
@@ -314,12 +375,18 @@ func (c *ClientConfig) DefaultServerIndex() int {
 	return 0
 }
 
+// ParseConfigJSON 解析一份 v3 配置文本。校验口径与 LoadConfig 一致：除了默认值，
+// VPN 的中继数量上限也在这里把关，使"解析出来的配置"与"启动用的配置"遵守同一组
+// 硬约束（否则在两条路径之间会出现只有一条会报错的配置）。
 func ParseConfigJSON(jsonStr string) (*ClientConfig, error) {
 	var cfg ClientConfig
 	if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {
 		return nil, err
 	}
 	applyDefaults(&cfg)
+	if err := cfg.ValidateDERPRelays(); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
 }
 

@@ -45,7 +45,7 @@ func waitForHeldSocket(s *ForwardServer) bool {
 // 到进程结束——同一个进程里之后的 runner.Run 会在 prebindUDP 直接失败（53 端口
 // 被自己占着），整个客户端再也起不来。
 func TestForwardServerShutdownBeforeStartRefusesLateStart(t *testing.T) {
-	srv := NewForwardServer("127.0.0.1:0", false)
+	srv := NewForwardServer("127.0.0.1:0", false, nil)
 
 	if err := srv.Shutdown(); err != nil {
 		t.Fatalf("Shutdown before Start: %v", err)
@@ -75,7 +75,7 @@ func TestForwardServerShutdownBeforeStartRefusesLateStart(t *testing.T) {
 // 持有监听 socket。
 func TestForwardServerShutdownRacingStartReleasesSocket(t *testing.T) {
 	for i := range 20 {
-		srv := NewForwardServer("127.0.0.1:0", false)
+		srv := NewForwardServer("127.0.0.1:0", false, nil)
 
 		startDone := make(chan error, 1)
 		go func() { startDone <- srv.Start() }()
@@ -101,7 +101,7 @@ func TestForwardServerShutdownRacingStartReleasesSocket(t *testing.T) {
 // 再次进入优雅关闭（第二次对已停止的 dns.Server 只会返回 "server not started"），
 // 也不得 panic；socket 必须在第一次调用后就已释放。
 func TestForwardServerShutdownIsIdempotent(t *testing.T) {
-	srv := NewForwardServer("127.0.0.1:0", false)
+	srv := NewForwardServer("127.0.0.1:0", false, nil)
 
 	startDone := make(chan error, 1)
 	go func() { startDone <- srv.Start() }()

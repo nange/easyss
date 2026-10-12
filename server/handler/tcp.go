@@ -40,6 +40,7 @@ func newTCPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) 
 	directDialer := outboundDialer(config.DialTimeout(timeout), timeout)
 	h := &tcpHandler{idleTimeout: idleTimeout}
 	h.dial = dialer{
+		dialTimeout: config.DialTimeout(timeout),
 		nextProxy:   np,
 		shouldProxy: np.ShouldProxy,
 		direct: func(ctx context.Context, network, target string) (net.Conn, error) {
