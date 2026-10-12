@@ -253,6 +253,12 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 		return nil, t.ctx.Err()
 	}
 
+	// 挂起采样：待机回来的第一个请求往往在醒来后立刻到达（实测中位数 0.0s），
+	// 早于第一个健康周期，因此发现挂起不能只靠定时器——最早的观测者就是请求
+	// 本身，成本是一次采样。采样器与健康循环共享（见 slotLifecycle.suspend），
+	// 所以谁先看到都只算一次；识别结果只武装嫌疑槽位，判死仍由复核给出。
+	t.lifecycle.observeSuspend(time.Now())
+
 	stats.RecordStreamOpened()
 
 	if pool, live := t.sched.grow(req.HighPriority); pool != nil {
@@ -285,6 +291,17 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 		stats.RecordStreamOpenedBulk()
 	}
 	t.sched.mu.RUnlock()
+
+	// 挂起复核：进程刚从睡眠/VM 暂停中回来时，这条连接可能已被中间设备静默
+	// 丢弃（两端都还认为它活着），而 net/http 的空闲回收与 tooIdle 判定都只
+	// 覆盖没有活跃流的连接，因此它仍会被当作可用。判死权交给一次真实往返：
+	// 能用就照常复用（代价一个 RTT），不能用才换连接（见 reverifySlot）。
+	//
+	// 复核在槽位计数已 +1 之后进行：复核期间这条槽位是"在用"的，不会被
+	// 空闲回收或退役摘掉，且调度器不会把更多新流分给它。
+	if slot.reverify.Load() {
+		t.reverifySlot(ctx, slot)
+	}
 
 	parentCtx := ctx
 	ctx, cancel := context.WithCancel(parentCtx)
@@ -357,6 +374,68 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	}()
 
 	return stream, nil
+}
+
+// reverifySlot 复核一个带挂起嫌疑的槽位：用一次轻量往返（HEAD /v3/probe，
+// 见 slotProber.alive）回答"这条底层连接还能不能往返"。四条纪律：
+//
+//   - 时钟离差只产生嫌疑，判死必须由这次真实往返给出。复核通过时连接原封不动
+//     地继续服务——假阳性（NTP/手动调时间、VM 快照恢复）的代价只有一个 RTT，
+//     而不是切断一条完全健康的连接上所有在飞的流；
+//   - 无法判定时保守放行：未配置探测令牌（liveness 为 nil）或探针没能构造出
+//     请求，都退回现状（首请求卡顿后由判死路径自愈），绝不按嫌疑判死；
+//   - 判活是连接级问题，与发起复核的那条流的生死无关：探测跑在剥掉调用方取消
+//     的上下文上（只用复核自己的超时兜底）。否则"本地连接刚被关掉"就会让探测
+//     失败，进而把一条健康连接上其他在飞的流一起切断。调用方已取消时干脆不
+//     复核，把嫌疑留给下一次开流；
+//   - 失效只针对复核开始时观测到的那条连接（身份 CAS）。并发的开流被
+//     slot.reverifyMu 串行化，复核期间新建的连接身份不同，CAS 必然失败，
+//     因此不存在"复核慢了一步、把刚建好的健康连接杀掉"的窗口。
+//
+// 每个槽位在一次嫌疑里只复核一次：结论给出后（无论哪种）清掉标记，后续开流
+// 直接放行。
+func (t *http2Transport) reverifySlot(ctx context.Context, slot *transportSlot) {
+	slot.reverifyMu.Lock()
+	defer slot.reverifyMu.Unlock()
+	// 等锁期间可能已有别的开流完成了复核；标记被清掉就不再重复探测。
+	if !slot.reverify.Load() {
+		return
+	}
+
+	// 先记下要复核的连接身份：这是本次复核唯一有权失效的对象。
+	sc := slot.conn.Load()
+	if sc == nil || t.liveness == nil {
+		// 没有可复核的对象（下一条流本来就会拨号）或没有判活手段：清掉标记，
+		// 不让后续每一次开流都重复进入这条路径。
+		slot.reverify.Store(false)
+		return
+	}
+	if ctx.Err() != nil {
+		// 调用方已取消（本地连接已断、会话正在停止）：这不是连接的结论，
+		// 保留嫌疑交给下一次开流复核。
+		return
+	}
+
+	verifyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sharedconfig.SuspendReverifyTimeout)
+	defer cancel()
+	defer slot.reverify.Store(false)
+
+	alive, known := t.liveness(verifyCtx, slot)
+	if !known {
+		return
+	}
+	if alive {
+		stats.RecordSuspendReverifyAlive()
+		log.Debug("[TRANSPORT] suspend reverify: connection still usable",
+			"slot", slot.idx,
+			"active_streams", slot.active.Load())
+		return
+	}
+	// 这条连接确实不可往返（探测排在同一槽位的连接上，不会偷偷拨新连接，
+	// 见 slotProber.alive）：它已经是死的，换掉不会打断任何还活着的流。
+	if slot.invalidateConnFrom(sc, "suspend reverify failed") {
+		stats.RecordSuspendReverifyReplaced()
+	}
 }
 
 // protoOfEndpoint 把代理端点路径映射为简短协议名，用于增长事件日志；

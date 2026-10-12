@@ -592,6 +592,13 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 // isTransientStreamError 报告流失败是否是瞬时或预期的（空闲超时、对端重置、
 // 握手被拒绝、HTTP/2 连接断开、流已关闭）。这类失败在连接死亡或服务器拒绝时
 // 常会同时命中许多流，应以 Debug 级别记录，而不是逐流刷满 Error 日志。
+//
+// "client connection force closed"是 net/http 的哨兵错误（errClientConnForceClosed）：
+// 只有本进程调用 ClientConn.Close() 才会产生它，而那条路径的唯一入口是传输层
+// 判死（transportSlot.invalidateConnFrom，见 transport/http2 的挂起复核与流判死）。
+// 也就是说它按构造就是"我们自己换掉了一条连接"的连带失败——连接级事件已经由
+// 传输层记一条 Info（[TRANSPORT] connection invalidated，带 reason），逐流再记
+// WARN/ERROR 只会把一次换连接刷成一屏。
 func isTransientStreamError(err error) bool {
 	if errors.Is(err, ErrStreamIdleTimeout) || errors.Is(err, ErrStreamReset) {
 		return true
@@ -604,6 +611,7 @@ func isTransientStreamError(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "client connection lost") ||
+		strings.Contains(msg, "force closed via clientconn.close") ||
 		strings.Contains(msg, "http2: stream closed") ||
 		strings.Contains(msg, "connection reset by peer") ||
 		strings.Contains(msg, "broken pipe") ||

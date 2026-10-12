@@ -100,6 +100,20 @@ const (
 	ProbeMaxPerInterval = 2                // 每个健康周期最多探测数
 	ProbeLinkRefWindow  = 60 * time.Second // 链路参考速度有效窗口
 
+	// 挂起复核：Go 的单调时钟在系统睡眠/VM 暂停期间冻结（darwin 上就是
+	// mach_absolute_time，Apple 明确它不含睡眠时间），墙钟照走，因此"墙钟推进
+	// 减去单调钟推进"就是进程被挂起的时长。超过 SuspendDivergenceThreshold 的
+	// 离差只把槽位标记为"待复核"——它绝不关闭连接：健康连接会在开流前的一次
+	// 往返判活（SuspendReverifyTimeout 内）中被原样放行，只有真的不可往返的
+	// 连接才会被换掉。判据有假阳性（NTP/手动调时间向前跳、VM 快照恢复），
+	// 这正是判死权必须留给一次真实往返的原因。
+	//
+	// 需要复核的原因是：挂起期间底层连接可能已被中间设备静默丢弃（两端都还
+	// 认为它活着），而 net/http 的空闲回收与 tooIdle 判定都只作用于"没有活跃
+	// 流"的连接，因此承载常驻流的槽位仍会把这条死连接当作可用。
+	SuspendDivergenceThreshold = 30 * time.Second
+	SuspendReverifyTimeout     = 2 * time.Second
+
 	// 服务端上行流量控制：流级窗口限定单条上传流在途数据的上限，使其吞吐量大致
 	// 封顶于 window/RTT。在 300ms 链路上，256KB 会把单流上传限制在约 6.8Mbps；
 	// 1MB（stdlib 服务端默认值）可将其提升到约 26Mbps，而 4MB 的连接级窗口可避免
