@@ -14,18 +14,20 @@ import (
 
 // TestSuspendSamplerDetectsSleep 保护挂起判据本身：它必须只由"墙钟推进 − 单调钟
 // 推进"的离差给出，而不能依赖 ticker 的实到间隔——挂起期间单调钟冻结，定时器
-// 在自己的时间轴上并没有迟到。两个读数以标量形式传入，正对应"分别取样、分别
-// 保存"这条要求。
+// 在自己的时间轴上并没有迟到。测试直接驱动标量形式（suspendOffset 的增量），
+// 这正是"两个读数压成一个不可撕裂的标量"这条设计的接口面：offset 的增量就是离差。
 func TestSuspendSamplerDetectsSleep(t *testing.T) {
 	var s suspendSampler
-	const sec = int64(time.Second)
+	// 任意的正起点；真实的 suspendOffset 是 1.7e18 量级（墙钟 UnixNano 减去进程内
+	// 单调读数），零值留给"还没采样过"。
+	const base = int64(100 * time.Second)
 
-	if _, ok := s.observe(0, 0); ok {
+	if _, ok := s.sampleOffset(base); ok {
 		t.Fatal("the first sample has no predecessor: ok must be false")
 	}
 
-	// 正常的一跳：墙钟与单调钟同步推进 5s，离差为 0。
-	div, ok := s.observe(5*sec, 5*sec)
+	// 正常的一跳：墙钟与单调钟同步前进 ⇒ offset 不变，离差为 0。
+	div, ok := s.sampleOffset(base)
 	if !ok {
 		t.Fatal("the second sample must produce a divergence")
 	}
@@ -33,8 +35,8 @@ func TestSuspendSamplerDetectsSleep(t *testing.T) {
 		t.Fatalf("divergence = %v on a normal tick, want 0", div)
 	}
 
-	// 挂起 17 分钟：墙钟照走（再 +17m5s），单调钟只走了 5s。
-	div, ok = s.observe((17*60+10)*sec, 10*sec)
+	// 挂起 17 分钟：墙钟照走、单调钟冻结 ⇒ offset 恰好跳过睡眠时长。
+	div, ok = s.sampleOffset(base + int64(17*time.Minute))
 	if !ok {
 		t.Fatal("the third sample must produce a divergence")
 	}
@@ -45,35 +47,103 @@ func TestSuspendSamplerDetectsSleep(t *testing.T) {
 		t.Fatalf("divergence %v below the threshold %v", div, sharedconfig.SuspendDivergenceThreshold)
 	}
 
-	// 采样器自己也要能把当前时刻换算成这两个标量。跑着的时钟上，相邻两次采样的
-	// 离差只有"读数抖动"的量级（墙钟与单调读数分别取自运行时，可能相差亚微秒，
-	// 因此允许轻微为负），远低于挂起阈值。
-	s2 := suspendSampler{base: time.Now().Add(-time.Hour)}
-	if _, ok := s2.observeNow(time.Now()); ok {
-		t.Fatal("the first observeNow must only establish the baseline")
+	// sample 要把当前时刻换算成这个标量。跑着的时钟上相邻两次采样的离差只有读数
+	// 抖动的量级（墙钟与单调读数分别取自运行时，可能相差亚微秒，因此允许轻微为负），
+	// 远低于挂起阈值。
+	var s2 suspendSampler
+	if _, ok := s2.sample(time.Now()); ok {
+		t.Fatal("the first sample must only establish the baseline")
 	}
-	if div, ok := s2.observeNow(time.Now()); !ok || div > time.Millisecond || div < -time.Millisecond {
-		t.Fatalf("observeNow on a running clock = (%v, %v), want a sub-millisecond divergence", div, ok)
+	if div, ok := s2.sample(time.Now()); !ok || div > time.Millisecond || div < -time.Millisecond {
+		t.Fatalf("sample on a running clock = (%v, %v), want a sub-millisecond divergence", div, ok)
 	}
 }
 
-// TestReportSuspendIsClaimedOnce 固定"一次挂起恰好一条记账"：健康循环与开流路径
-// 会各自独立观测到同一次挂起，甚至并发观测，但只有认领者武装与计数。
-func TestReportSuspendIsClaimedOnce(t *testing.T) {
-	lc, _ := suspectLifecycle(t, 2, func(context.Context, *transportSlot) (float64, probeVerdict) {
-		return 0, probeInconclusive
+// suspendIn 把采样器的基线放到"墙钟比单调钟早 d"的位置，模拟 d 之前睡了一觉：
+// 下一次采样就会量到 d 的离差。真实挂起留下的正是这个形状。priming 自己不得产生
+// 挂起判定（它把基线往回拨，离差是负的）。
+func suspendIn(t *testing.T, s *suspendSampler, d time.Duration) {
+	t.Helper()
+	if div, ok := s.sampleOffset(suspendOffset(time.Now()) - int64(d)); ok &&
+		div >= sharedconfig.SuspendDivergenceThreshold {
+		t.Fatalf("priming the baseline reported a suspension: %v", div)
+	}
+}
+
+// TestObserveSuspendCountsOncePerSuspension 固定"一次挂起恰好一次武装与记账"，
+// 覆盖 reviewer 指出的两种时序：
+//
+//   - 串行：开流路径先观测到挂起并记账，健康循环随后的 tick 观测的是同一条共享
+//     基线，量到的是"两次采样之间"（没有挂起），因此不会重复记账，也不会把已经被
+//     复核过、标记已清掉的槽位重新武装；
+//   - 并发：多个开流同时采样，CAS 只有一个赢家拿得到真实离差。
+func TestObserveSuspendCountsOncePerSuspension(t *testing.T) {
+	probe := func(context.Context, *transportSlot) (float64, probeVerdict) { return 0, probeInconclusive }
+
+	t.Run("sequential observers", func(t *testing.T) {
+		lc, conns := suspectLifecycle(t, 2, probe)
+		stats.ResetCounters()
+
+		suspendIn(t, &lc.suspend, 20*time.Minute)
+		lc.observeSuspend(time.Now()) // 醒来后第一个开流
+
+		if got := stats.Collect().SuspendDetected; got != 1 {
+			t.Fatalf("suspend_detected = %d, want 1", got)
+		}
+		for i, c := range conns {
+			if got := c.closes.Load(); got != 0 {
+				t.Fatalf("connection %d closed %d times on a suspicion, want 0", i, got)
+			}
+		}
+		// 复核完成：标记被清掉——这正是旧实现被重复武装的前提。
+		for _, s := range lc.sched.priority.slots {
+			s.reverify.Store(false)
+		}
+
+		// 健康循环的第一个 tick（≤5s 后）观测同一次挂起。
+		lc.observeSuspend(time.Now().Add(3 * time.Second))
+
+		if got := stats.Collect().SuspendDetected; got != 1 {
+			t.Fatalf("suspend_detected = %d after a late observation, want 1", got)
+		}
+		for i, s := range lc.sched.priority.slots {
+			if s.reverify.Load() {
+				t.Fatalf("slot %d re-armed by a late observation of the same suspension", i)
+			}
+		}
 	})
-	stats.ResetCounters()
 
-	var wg sync.WaitGroup
-	for range 8 {
-		wg.Go(func() { lc.reportSuspend(17 * time.Minute) })
-	}
-	wg.Wait()
+	t.Run("concurrent observers", func(t *testing.T) {
+		lc, _ := suspectLifecycle(t, 2, probe)
+		stats.ResetCounters()
 
-	if got := stats.Collect().SuspendDetected; got != 1 {
-		t.Fatalf("suspend_detected = %d, want exactly 1 per suspension", got)
-	}
+		suspendIn(t, &lc.suspend, 20*time.Minute)
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Go(func() { lc.observeSuspend(time.Now()) })
+		}
+		wg.Wait()
+
+		if got := stats.Collect().SuspendDetected; got != 1 {
+			t.Fatalf("suspend_detected = %d, want exactly 1 per suspension", got)
+		}
+	})
+
+	t.Run("a second suspension is counted again", func(t *testing.T) {
+		lc, _ := suspectLifecycle(t, 2, probe)
+		stats.ResetCounters()
+
+		suspendIn(t, &lc.suspend, 20*time.Minute)
+		lc.observeSuspend(time.Now())
+		lc.observeSuspend(time.Now().Add(3 * time.Second)) // 同一次挂起的迟到观测
+
+		suspendIn(t, &lc.suspend, 20*time.Minute) // 又睡了一觉
+		lc.observeSuspend(time.Now())
+
+		if got := stats.Collect().SuspendDetected; got != 2 {
+			t.Fatalf("suspend_detected = %d, want 2 (one per suspension)", got)
+		}
+	})
 }
 
 // suspectLifecycle 构建一个带连接的槽位集合：priority 池 n 个、bulk 池 1 个，
@@ -99,22 +169,23 @@ func suspectLifecycle(t *testing.T, n int, probe func(context.Context, *transpor
 	return lc, conns
 }
 
-// TestOnSuspendMarksSuspectsWithoutClosing 覆盖挂起处理的两条纪律：只标记
-// 嫌疑，绝不关闭连接（判死权留给开流前的复核）；同时重置健康采样基线，
+// TestSuspendMarksSuspectsWithoutClosing 覆盖挂起处理的两条纪律：只标记嫌疑，
+// 绝不关闭连接（判死权留给开流前的复核）；健康循环侧另有一次采样基线重置，
 // 使挂起期间的"零吞吐"不会被喂给降级检测。
-func TestOnSuspendMarksSuspectsWithoutClosing(t *testing.T) {
+func TestSuspendMarksSuspectsWithoutClosing(t *testing.T) {
 	lc, conns := suspectLifecycle(t, 2, func(context.Context, *transportSlot) (float64, probeVerdict) {
-		return 0, probeInconclusive // 不会被调用：onSuspend 只标记
+		return 0, probeInconclusive // 不会被调用：识别到挂起只做标记
 	})
 
-	lc.onSuspend(17 * time.Minute)
+	suspendIn(t, &lc.suspend, 20*time.Minute)
+	lc.observeSuspend(time.Now())
 
 	for i, s := range append([]*transportSlot{lc.sched.priority.slots[0], lc.sched.priority.slots[1]}, lc.sched.bulk.slots[0]) {
 		if !s.reverify.Load() {
 			t.Fatalf("slot %d: expected a reverify mark", i)
 		}
-		if s.lastHeavy != 0 {
-			t.Fatalf("slot %d: lastHeavy = %d, want the sampling baseline reset", i, s.lastHeavy)
+		if s.lastHeavy == 0 {
+			t.Fatalf("slot %d: lastHeavy already zero, the reset below would be vacuous", i)
 		}
 	}
 	for i, c := range conns {
@@ -122,27 +193,40 @@ func TestOnSuspendMarksSuspectsWithoutClosing(t *testing.T) {
 			t.Fatalf("connection %d closed %d times on a suspicion, want 0", i, got)
 		}
 	}
+
+	// 健康循环消费挂起事件并重置吞吐采样基线（挂起期间的零吞吐不是降级证据）。
+	lc.resetSamplingOnSuspend()
+	for i, s := range append([]*transportSlot{lc.sched.priority.slots[0], lc.sched.priority.slots[1]}, lc.sched.bulk.slots[0]) {
+		if s.lastHeavy != 0 {
+			t.Fatalf("slot %d: lastHeavy = %d, want the sampling baseline reset", i, s.lastHeavy)
+		}
+	}
 }
 
-// TestOnSuspendWithoutProbeTokenDoesNotMark 固定"无法复核就不标记"：
+// TestSuspendWithoutProbeTokenDoesNotMark 固定"无法复核就不标记"：
 // 未配置探测令牌时开流路径没有判活手段，把嫌疑留给它等于按嫌疑判死。
-// 采样基线仍然要重置。
-func TestOnSuspendWithoutProbeTokenDoesNotMark(t *testing.T) {
+// 采样基线仍然要重置（挂起事件的递增与是否有判活手段无关）。
+func TestSuspendWithoutProbeTokenDoesNotMark(t *testing.T) {
 	lc, conns := suspectLifecycle(t, 1, nil)
 
-	lc.onSuspend(17 * time.Minute)
+	suspendIn(t, &lc.suspend, 20*time.Minute)
+	lc.observeSuspend(time.Now())
 
 	for i, s := range lc.sched.priority.slots {
 		if s.reverify.Load() {
 			t.Fatalf("slot %d: marked without any way to reverify", i)
 		}
-		if s.lastHeavy != 0 {
-			t.Fatalf("slot %d: lastHeavy = %d, want the sampling baseline reset", i, s.lastHeavy)
-		}
 	}
 	for i, c := range conns {
 		if got := c.closes.Load(); got != 0 {
 			t.Fatalf("connection %d closed %d times, want 0", i, got)
+		}
+	}
+
+	lc.resetSamplingOnSuspend()
+	for i, s := range lc.sched.priority.slots {
+		if s.lastHeavy != 0 {
+			t.Fatalf("slot %d: lastHeavy = %d, want the sampling baseline reset", i, s.lastHeavy)
 		}
 	}
 }
@@ -372,14 +456,11 @@ func TestMaybeSuspendArmsFromTheOpenPath(t *testing.T) {
 	}
 	stats.ResetCounters()
 
-	// 伪造挂起：墙钟照走 20 分钟，单调钟冻结在当前值。
-	now := time.Now()
-	htr.suspend.observe(
-		now.Add(-20*time.Minute).Round(0).UnixNano(),
-		now.Sub(htr.suspend.base).Nanoseconds(),
-	)
+	// 伪造挂起：把共享基线放到"墙钟比单调钟早 20 分钟"的位置——这正是挂起在采样器
+	// 里留下的形状，下一次采样就会量到约 20 分钟的离差。
+	suspendIn(t, &htr.lifecycle.suspend, 20*time.Minute)
 
-	htr.maybeSuspend()
+	htr.lifecycle.observeSuspend(time.Now())
 	if !slot.reverify.Load() {
 		t.Fatal("the open path must arm the suspect slot by itself")
 	}
@@ -387,10 +468,14 @@ func TestMaybeSuspendArmsFromTheOpenPath(t *testing.T) {
 		t.Fatalf("suspend_detected = %d, want 1", got)
 	}
 
-	// 采样基线已被推进：紧接着的第二次采样不再重复记账。
-	htr.maybeSuspend()
+	// 采样基线已被推进：紧接着的第二次采样（健康循环的第一个 tick 也是这样）
+	// 量到的是"两次采样之间"，不再重复记账。
+	htr.lifecycle.observeSuspend(time.Now().Add(3 * time.Second))
 	if got := stats.Collect().SuspendDetected; got != 1 {
-		t.Fatalf("suspend_detected = %d after a fresh sample, want 1", got)
+		t.Fatalf("suspend_detected = %d after a late observation, want 1", got)
+	}
+	if !slot.reverify.Load() {
+		t.Fatal("the late observation must not touch the armed slot")
 	}
 
 	// 标记接到了闸门上：下一条流先做一次往返复核，活连接被原样保留。
