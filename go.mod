@@ -9,7 +9,7 @@ replace github.com/gogpu/systray => github.com/nange/systray v0.3.0-easyss.1
 
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
-	github.com/caddyserver/certmagic v0.25.4
+	github.com/caddyserver/certmagic v0.25.6
 	github.com/coocood/freecache v1.2.7
 	github.com/gogpu/systray v0.3.0
 	github.com/libp2p/go-netroute v0.4.0
@@ -71,7 +71,7 @@ require (
 	github.com/breml/errchkjson v0.4.1 // indirect
 	github.com/butuzov/ireturn v0.4.1 // indirect
 	github.com/butuzov/mirror v1.3.3 // indirect
-	github.com/caddyserver/zerossl v0.1.5 // indirect
+	github.com/caddyserver/zerossl v0.1.6 // indirect
 	github.com/catenacyber/perfsprint v0.10.1 // indirect
 	github.com/ccojocar/zxcvbn-go v1.0.4 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -153,7 +153,7 @@ require (
 	github.com/kisielk/errcheck v1.20.0 // indirect
 	github.com/kkHAIKE/contextcheck v1.1.6 // indirect
 	github.com/klauspost/compress v1.19.1 // indirect
-	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
+	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/kulti/thelper v0.7.1 // indirect
 	github.com/kunwardeep/paralleltest v1.0.15 // indirect
 	github.com/ldez/exptostd v0.4.5 // indirect
@@ -175,7 +175,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-runewidth v0.0.28 // indirect
 	github.com/mgechev/revive v1.17.0 // indirect
-	github.com/mholt/acmez/v3 v3.1.6 // indirect
+	github.com/mholt/acmez/v3 v3.1.7 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/moricho/tparallel v0.3.2 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
