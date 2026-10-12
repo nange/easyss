@@ -3,6 +3,7 @@ package http2
 import (
 	"context"
 	"math/rand/v2"
+	"sync/atomic"
 	"time"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
@@ -28,8 +29,14 @@ type slotLifecycle struct {
 	linkRefSpeed     float64 // 近期在该链路上观测到的最佳探测速度（字节/秒）
 	linkRefAt        time.Time
 
-	// suspend 是挂起检测的采样器，仅由健康循环 goroutine 访问。
-	suspend suspendWatch
+	// suspend 是健康循环自己的挂起采样器：开流路径另有一份（http2Transport.suspend），
+	// 两份各自维护基线、互不干扰。检测只由健康循环 goroutine 调用，因此这里不需要
+	// 额外的并发纪律。
+	suspend suspendSampler
+	// suspendClaim 认领一次挂起：同一次挂起会被两个采样者各自独立观测到（开流路径
+	// 上的采样甚至可能并发），只有认领者负责武装与记账，因此一次挂起恰好一条日志、
+	// 一个计数。
+	suspendClaim atomic.Bool
 }
 
 // run 驱动周期性的健康评估，直到 ctx 被取消。
@@ -41,7 +48,7 @@ func (lc *slotLifecycle) run(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			now := time.Now()
-			if divergence, ok := lc.suspend.observe(now.Round(0), now); ok &&
+			if divergence, ok := lc.suspend.observeNow(now); ok &&
 				divergence >= sharedconfig.SuspendDivergenceThreshold {
 				lc.onSuspend(divergence)
 			}
@@ -52,52 +59,64 @@ func (lc *slotLifecycle) run(ctx context.Context) {
 	}
 }
 
-// suspendWatch 通过"墙钟推进"与"单调钟推进"的离差识别进程被挂起（系统睡眠、
+// suspendSampler 通过"墙钟推进"与"单调钟推进"的离差识别进程被挂起（系统睡眠、
 // VM 暂停、快照恢复）：Go 的单调时钟在这些状态下冻结（darwin 上就是
 // mach_absolute_time，Apple 明确它不含睡眠时间），墙钟照走。
 //
-// 两个读数必须分别取并分别保存：time.Time.Round(0) 剥掉单调读数，而未剥的
-// Time 参与 Sub 时优先用单调读数——把同一次采样显式拆成"只有墙钟"与"带单调钟"
-// 两个值，判据才是"墙钟差 − 单调差"。用 ticker 的实到间隔是测不到挂起的：
-// 挂起期间单调钟冻结，定时器在自己的时间轴上并没有迟到。
+// 两个读数必须分别取样、分别保存：time.Time.Round(0) 剥掉单调读数，而未剥的
+// Time 参与 Sub 时优先用单调读数——把同一次采样显式拆成两个标量，判据才是
+// "墙钟差 − 单调差"。用 ticker 的实到间隔是测不到挂起的：挂起期间单调钟冻结，
+// 定时器在自己的时间轴上并没有迟到。
+//
+// 两个标量都是原子量，因为开流路径上的采样是并发的（健康循环那份只有一个写入者，
+// 但两者共用这个类型）。并发的采样者最坏会各自得出一次挂起结论——标记与记账都是
+// 幂等的（见 slotLifecycle.reportSuspend）。
 //
 // 它只产生嫌疑：判据本身有假阳性（NTP/手动调时间向前跳、VM 快照恢复），
 // 因此调用方只能用它标记槽位，绝不能据此关闭连接。
-type suspendWatch struct {
-	wall time.Time
-	mono time.Time
-	set  bool
+type suspendSampler struct {
+	// base 把单调读数换算成可原子存储的标量（单调读数无法跨 Time 序列化）。
+	// 构造后只读。
+	base time.Time
+
+	wall atomic.Int64 // 墙钟 UnixNano（已剥掉单调读数）
+	mono atomic.Int64 // now.Sub(base) 的纳秒数
+	set  atomic.Bool
 }
 
-// observe 记录一次采样并返回它与上一次采样的离差；首次采样没有上一次，
-// ok 为 false。wall 必须是剥掉单调读数的采样（now.Round(0)），mono 是同一个
-// 瞬间的完整采样。
-func (w *suspendWatch) observe(wall, mono time.Time) (divergence time.Duration, ok bool) {
-	if !w.set {
-		w.wall, w.mono, w.set = wall, mono, true
+// observeNow 用当前时刻采样一次。
+func (s *suspendSampler) observeNow(now time.Time) (divergence time.Duration, ok bool) {
+	return s.observe(now.Round(0).UnixNano(), now.Sub(s.base).Nanoseconds())
+}
+
+// observe 用两个标量读数推进采样器，返回"墙钟推进 − 单调钟推进"的离差。
+// ok 为 false 表示这是首次采样（只建立基线，没有可比的上一次）。
+func (s *suspendSampler) observe(wallNano, monoNano int64) (divergence time.Duration, ok bool) {
+	prevWall, prevMono := s.wall.Load(), s.mono.Load()
+	s.wall.Store(wallNano)
+	s.mono.Store(monoNano)
+	if !s.set.Swap(true) {
 		return 0, false
 	}
-	divergence = wall.Sub(w.wall) - mono.Sub(w.mono)
-	w.wall, w.mono = wall, mono
-	return divergence, true
+	return time.Duration(wallNano - prevWall - (monoNano - prevMono)), true
 }
 
-// onSuspend 处理一次挂起检测。它做两件事，且都不关闭任何连接：
+// onSuspend 供健康循环在识别到挂起后调用：重置健康采样基线，并尽力武装嫌疑槽位。
 //
-//   - 把承载连接的活跃槽位标记为"待复核"（见 transportSlot.reverify）：挂起
-//     期间底层连接可能已被中间设备静默丢弃，而承载常驻流的槽位永远不会空闲，
-//     net/http 的空闲回收与 tooIdle 判定都不会碰它。判死留给开流前的一次
-//     真实往返（http2Transport.reverifySlot）；
-//   - 重置健康采样的基线：挂起期间的"零吞吐"不是槽位变慢的证据，把它喂给
-//     降级检测会让连接因为一次无效样本被退役。复用"自空闲以来第一条 heavy 流"
-//     的基线语义（lastHeavy 清零 ⇒ 下一次采样只重置基线、不产生结论）。
-//
-// 未配置探测令牌时没有复核手段（probeFunc 与判活探针同源于 ProbeToken），
-// 此时不标记：把无法验证的启发式嫌疑留给开流路径，等于按嫌疑判死。
+// 开流路径上的检测走 reportSuspend（见 http2Transport.maybeSuspend），它不碰
+// 采样基线——lastHeavy 是健康循环 goroutine 的私有状态，别的 goroutine 无权
+// 触摸。两条路各自独立观测到同一次挂起，记账由 reportSuspend 的认领合并成一次。
 func (lc *slotLifecycle) onSuspend(divergence time.Duration) {
-	stats.RecordSuspendDetected()
+	lc.resetSampling()
+	lc.reportSuspend(divergence)
+}
 
-	suspects := 0
+// resetSampling 把健康采样的基线清零：挂起期间的"零吞吐"不是槽位变慢的证据，
+// 把它喂给降级检测会让连接因为一次无效样本被退役。复用"自空闲以来第一条 heavy
+// 流"的基线语义（lastHeavy 清零 ⇒ 下一次采样只重置基线、不产生结论）。
+//
+// 只允许健康循环 goroutine 调用。
+func (lc *slotLifecycle) resetSampling() {
 	for _, pool := range []*slotPool{lc.sched.priority, lc.sched.bulk} {
 		// 与 evaluate 相同的快照纪律：活跃区间可能被 shrink/retire 在写锁下
 		// 交换修改。
@@ -109,24 +128,60 @@ func (lc *slotLifecycle) onSuspend(divergence time.Duration) {
 
 		for _, s := range slots {
 			s.lastHeavy = 0
-			if lc.probeFunc == nil || s.conn.Load() == nil {
-				continue
-			}
-			if !s.reverify.Swap(true) {
-				suspects++
-			}
 		}
 	}
+}
 
-	if lc.probeFunc == nil {
-		// 没有复核手段：只重置基线，退回"首请求卡顿后自愈"的既有行为。
-		log.Debug("[TRANSPORT] suspend detected without a probe token, sampling baselines reset",
+// reportSuspend 认领一次挂起并（尽力）武装嫌疑槽位：把承载连接的活跃槽位标记为
+// "待复核"（见 transportSlot.reverify）。挂起期间底层连接可能已被中间设备静默
+// 丢弃，而承载常驻流的槽位永远不会空闲，net/http 的空闲回收与 tooIdle 判定都
+// 不会碰它；判死留给开流前的一次真实往返（http2Transport.reverifySlot）。
+//
+// 认领：同一次挂起会被健康循环与开流路径各自独立观测到（开流路径上的采样还可能
+// 并发），只有认领者负责武装与记账，因此一次挂起恰好一条 Info、一个计数。
+//
+// 未配置探测令牌时没有复核手段（probeFunc 与判活探针同源于 ProbeToken），此时
+// 不标记：把无法验证的启发式嫌疑留给开流路径，等于按嫌疑判死。
+func (lc *slotLifecycle) reportSuspend(divergence time.Duration) {
+	if !lc.suspendClaim.CompareAndSwap(false, true) {
+		return // 这次挂起已由另一个采样者记账
+	}
+	defer lc.suspendClaim.Store(false)
+
+	armed := lc.armSuspects()
+	if armed == 0 {
+		// 没有承载连接的槽位可标记，或没有判活手段（未配置探测令牌）。
+		log.Debug("[TRANSPORT] suspend detected, no slot armed",
 			"divergence", divergence.Round(time.Second))
 		return
 	}
+	stats.RecordSuspendDetected()
 	log.Info("[TRANSPORT] suspend detected, slots marked for reverify",
 		"divergence", divergence.Round(time.Second),
-		"suspects", suspects)
+		"suspects", armed)
+}
+
+// armSuspects 把所有承载连接的活跃槽位标记为"待复核"（见 transportSlot.reverify），
+// 返回本次新标记的数量。它只做原子写，因此健康循环与开流路径可以并发调用；重复
+// 调用是幂等的，新标记数为 0 说明没有可标记的连接，或这次挂起已被标记过。
+func (lc *slotLifecycle) armSuspects() (armed int) {
+	if lc.probeFunc == nil {
+		return 0
+	}
+	for _, pool := range []*slotPool{lc.sched.priority, lc.sched.bulk} {
+		lc.sched.mu.RLock()
+		live := int(pool.liveCount.Load())
+		slots := make([]*transportSlot, live)
+		copy(slots, pool.slots[:live])
+		lc.sched.mu.RUnlock()
+
+		for _, s := range slots {
+			if s.conn.Load() != nil && !s.reverify.Swap(true) {
+				armed++
+			}
+		}
+	}
+	return armed
 }
 
 // evaluate 遍历两个池的活跃槽位：下载吞吐量输入降级嫌疑检测器，主动探测确认

@@ -2,27 +2,30 @@ package http2
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
 )
 
-// TestSuspendWatchDetectsSleep 保护挂起判据本身：它必须只由"墙钟推进 − 单调钟
+// TestSuspendSamplerDetectsSleep 保护挂起判据本身：它必须只由"墙钟推进 − 单调钟
 // 推进"的离差给出，而不能依赖 ticker 的实到间隔——挂起期间单调钟冻结，定时器
-// 在自己的时间轴上并没有迟到。
-func TestSuspendWatchDetectsSleep(t *testing.T) {
-	var w suspendWatch
-	base := time.Now()
+// 在自己的时间轴上并没有迟到。两个读数以标量形式传入，正对应"分别取样、分别
+// 保存"这条要求。
+func TestSuspendSamplerDetectsSleep(t *testing.T) {
+	var s suspendSampler
+	const sec = int64(time.Second)
 
-	if _, ok := w.observe(base.Round(0), base); ok {
+	if _, ok := s.observe(0, 0); ok {
 		t.Fatal("the first sample has no predecessor: ok must be false")
 	}
 
 	// 正常的一跳：墙钟与单调钟同步推进 5s，离差为 0。
-	div, ok := w.observe(base.Add(5*time.Second).Round(0), base.Add(5*time.Second))
+	div, ok := s.observe(5*sec, 5*sec)
 	if !ok {
 		t.Fatal("the second sample must produce a divergence")
 	}
@@ -30,13 +33,8 @@ func TestSuspendWatchDetectsSleep(t *testing.T) {
 		t.Fatalf("divergence = %v on a normal tick, want 0", div)
 	}
 
-	// 挂起 17 分钟：墙钟照走（+17m5s），单调钟只走了 5s。两个读数必须分别取，
-	// 否则这一步量不出来：Round(0) 剥掉单调读数，未剥的 Time 参与 Sub 时优先
-	// 用单调读数。
-	div, ok = w.observe(
-		base.Add(17*time.Minute+10*time.Second).Round(0),
-		base.Add(10*time.Second),
-	)
+	// 挂起 17 分钟：墙钟照走（再 +17m5s），单调钟只走了 5s。
+	div, ok = s.observe((17*60+10)*sec, 10*sec)
 	if !ok {
 		t.Fatal("the third sample must produce a divergence")
 	}
@@ -45,6 +43,36 @@ func TestSuspendWatchDetectsSleep(t *testing.T) {
 	}
 	if div < sharedconfig.SuspendDivergenceThreshold {
 		t.Fatalf("divergence %v below the threshold %v", div, sharedconfig.SuspendDivergenceThreshold)
+	}
+
+	// 采样器自己也要能把当前时刻换算成这两个标量。跑着的时钟上，相邻两次采样的
+	// 离差只有"读数抖动"的量级（墙钟与单调读数分别取自运行时，可能相差亚微秒，
+	// 因此允许轻微为负），远低于挂起阈值。
+	s2 := suspendSampler{base: time.Now().Add(-time.Hour)}
+	if _, ok := s2.observeNow(time.Now()); ok {
+		t.Fatal("the first observeNow must only establish the baseline")
+	}
+	if div, ok := s2.observeNow(time.Now()); !ok || div > time.Millisecond || div < -time.Millisecond {
+		t.Fatalf("observeNow on a running clock = (%v, %v), want a sub-millisecond divergence", div, ok)
+	}
+}
+
+// TestReportSuspendIsClaimedOnce 固定"一次挂起恰好一条记账"：健康循环与开流路径
+// 会各自独立观测到同一次挂起，甚至并发观测，但只有认领者武装与计数。
+func TestReportSuspendIsClaimedOnce(t *testing.T) {
+	lc, _ := suspectLifecycle(t, 2, func(context.Context, *transportSlot) (float64, probeVerdict) {
+		return 0, probeInconclusive
+	})
+	stats.ResetCounters()
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() { lc.reportSuspend(17 * time.Minute) })
+	}
+	wg.Wait()
+
+	if got := stats.Collect().SuspendDetected; got != 1 {
+		t.Fatalf("suspend_detected = %d, want exactly 1 per suspension", got)
 	}
 }
 
@@ -307,6 +335,85 @@ func TestReverifySlotDetachesProbeFromCallerCancellation(t *testing.T) {
 	if slot.reverify.Load() {
 		t.Fatal("a completed verdict must clear the suspicion")
 	}
+}
+
+// TestMaybeSuspendArmsFromTheOpenPath 覆盖 S4：待机回来的第一个请求往往早于第一个
+// 健康周期，因此开流路径必须自己发现挂起并武装嫌疑，而不是等定时器。测试用"墙钟
+// 基线停在过去、单调钟基线是当前值"伪造一次挂起（这正是挂起在采样器里留下的样子），
+// 然后验证：武装、记账恰好一次、第二个请求的复核把活连接原样放行。
+func TestMaybeSuspendArmsFromTheOpenPath(t *testing.T) {
+	srv, conns := newH2Server(t)
+	tr := newRecoveryTransport(t, srv.URL, "dGVzdHRva2Vu")
+	htr := tr.(*http2Transport)
+	slot := htr.sched.priority.slots[0]
+
+	open := func() transport.Stream {
+		t.Helper()
+		stream, err := tr.Open(context.Background(), transport.OpenRequest{
+			Endpoint:     sharedconfig.EndpointTCP,
+			Salt:         "dGVzdHNhbHR0ZXN0c2FsdA",
+			HighPriority: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stream
+	}
+
+	// 挂起发生时槽位上仍有常驻流：先建立一条真实连接。
+	first := open()
+	if _, err := first.Write([]byte("abcd")); err != nil {
+		t.Fatalf("write on the first stream: %v", err)
+	}
+	awaitResponse(t, first, 2*time.Second)
+	established := slot.conn.Load()
+	if established == nil {
+		t.Fatal("the first stream must have established a connection")
+	}
+	stats.ResetCounters()
+
+	// 伪造挂起：墙钟照走 20 分钟，单调钟冻结在当前值。
+	now := time.Now()
+	htr.suspend.observe(
+		now.Add(-20*time.Minute).Round(0).UnixNano(),
+		now.Sub(htr.suspend.base).Nanoseconds(),
+	)
+
+	htr.maybeSuspend()
+	if !slot.reverify.Load() {
+		t.Fatal("the open path must arm the suspect slot by itself")
+	}
+	if got := stats.Collect().SuspendDetected; got != 1 {
+		t.Fatalf("suspend_detected = %d, want 1", got)
+	}
+
+	// 采样基线已被推进：紧接着的第二次采样不再重复记账。
+	htr.maybeSuspend()
+	if got := stats.Collect().SuspendDetected; got != 1 {
+		t.Fatalf("suspend_detected = %d after a fresh sample, want 1", got)
+	}
+
+	// 标记接到了闸门上：下一条流先做一次往返复核，活连接被原样保留。
+	second := open()
+	defer second.Close() //nolint:errcheck
+	if _, err := second.Write([]byte("abcd")); err != nil {
+		t.Fatalf("write on the second stream: %v", err)
+	}
+	awaitResponse(t, second, 2*time.Second)
+
+	if slot.reverify.Load() {
+		t.Fatal("the verdict must clear the mark")
+	}
+	if got := stats.Collect().SuspendReverifyAlive; got != 1 {
+		t.Fatalf("suspend_reverify_alive = %d, want 1", got)
+	}
+	if slot.conn.Load() != established {
+		t.Fatal("the live connection must be kept")
+	}
+	if got := conns.Load(); got != 1 {
+		t.Fatalf("server saw %d connections, want 1 (no extra dial)", got)
+	}
+	_ = first.Close()
 }
 
 // TestHTTP2Transport_ReverifyKeepsLiveConnection 是端到端的一半：一条健康的

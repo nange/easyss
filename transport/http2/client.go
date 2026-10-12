@@ -40,6 +40,12 @@ type http2Transport struct {
 	// 代理层区分"连接已死"与"服务端还在解析目标域名"。未配置探测令牌时为 nil。
 	liveness func(ctx context.Context, slot *transportSlot) (alive, ok bool)
 
+	// suspend 是开流路径自己的挂起采样器：请求往往在醒来后立刻到达（实测中位数
+	// 0.0s），早于第一个健康周期，因此"发现挂起"不能只靠定时器——最早的观测者
+	// 就是请求本身。健康循环另有一份采样器（slotLifecycle.suspend），两份各自
+	// 维护基线、互不干扰，识别结果通过幂等的槽位标记汇合。
+	suspend suspendSampler
+
 	// growEvents 是近期槽位增长事件的有界环形缓冲，最旧的在最前；
 	// 以最新优先的顺序快照进 TransportStats.GrowEvents。由 growMu 保护。
 	growEvents []transport.GrowEvent
@@ -131,6 +137,7 @@ func New(cfg Config) (transport.Transport, error) {
 		sched:        sched,
 		connLifetime: connLifetime,
 		connMaxBytes: connMaxBytes,
+		suspend:      suspendSampler{base: time.Now()},
 	}
 	var liveness func(ctx context.Context, slot *transportSlot) (alive, ok bool)
 	if cfg.ProbeToken != "" {
@@ -149,6 +156,7 @@ func New(cfg Config) (transport.Transport, error) {
 		lifecycle: lc,
 		serverURL: cfg.ServerURL,
 		liveness:  liveness,
+		suspend:   suspendSampler{base: time.Now()},
 		ctx:       ctx,
 		cancel:    cancel,
 	}
@@ -252,6 +260,11 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	if t.ctx.Err() != nil {
 		return nil, t.ctx.Err()
 	}
+
+	// 挂起采样：待机回来的第一个请求往往在醒来后立刻到达（实测中位数 0.0s），
+	// 早于第一个健康周期，因此发现挂起不能只靠定时器——最早的观测者就是请求
+	// 本身，成本是两次读时钟。识别结果只武装嫌疑槽位，判死仍由复核给出。
+	t.maybeSuspend()
 
 	stats.RecordStreamOpened()
 
@@ -368,6 +381,22 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	}()
 
 	return stream, nil
+}
+
+// maybeSuspend 在开流路径上采样一次挂起判据，并在识别到挂起时武装所有嫌疑槽位。
+//
+// 这一层是必要的：定时器有自己的相位，而待机回来的第一个开流实测发生在醒来后
+// 0.0s（中位数），几乎必然早于第一个健康周期——只靠周期检测，那条流仍会盲踩死
+// 连接，付满引导 4s + 判活 2s 的代价。让它在开流前先武装嫌疑，则同一次挂起里
+// 所有中毒槽位都被覆盖（不只第一个开流者），每条流只需一次往返复核。
+//
+// 它只武装、不关闭：判死仍由 reverifySlot 的一次真实往返给出。
+func (t *http2Transport) maybeSuspend() {
+	divergence, ok := t.suspend.observeNow(time.Now())
+	if !ok || divergence < sharedconfig.SuspendDivergenceThreshold {
+		return
+	}
+	t.lifecycle.reportSuspend(divergence)
 }
 
 // reverifySlot 复核一个带挂起嫌疑的槽位：用一次轻量往返（HEAD /v3/probe，
