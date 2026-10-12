@@ -69,17 +69,21 @@ func formatTitle(addr string, rttMs float64, downSpeed string) string {
 func padToMetricsColumn(addr string) string {
 	addr = truncateToWidth(addr, maxAddressWidth, "…")
 	width := measureTextWidth(addr)
+	// metricsColumnStart 保证列位置至少比地址宽 minMetricsGap，所以这里的填充宽度
+	// 恒 ≥ minMetricsGap，不存在"没有余量、只能贴一个空格"的分支。
+	return addr + titlePad(metricsColumnStart(width)-width)
+}
 
-	target := serverColumnWidth
-	if minStart := width + minMetricsGap; minStart > target {
-		// 地址已经贴到目标列（或多长都留不出 minMetricsGap）时，按 columnStep
-		// 量化列位置，让一批宽度相近的地址仍落在同一列上。
-		target = serverColumnWidth + columnStep*math.Ceil((minStart-serverColumnWidth)/columnStep)
+// metricsColumnStart 返回指标列的起始位置：默认就是 serverColumnWidth；地址已经贴到
+// 该列（再挤就连 minMetricsGap 都留不出）时，按 columnStep 量化右移，让一批宽度相近
+// 的地址仍然落在同一列上。返回值恒 ≥ addrWidth+minMetricsGap。
+func metricsColumnStart(addrWidth float64) float64 {
+	minStart := addrWidth + minMetricsGap
+	if minStart <= serverColumnWidth {
+		return serverColumnWidth
 	}
-	if remaining := target - width; remaining > 0 {
-		return addr + titlePad(remaining)
-	}
-	return addr + " "
+	steps := math.Ceil((minStart - serverColumnWidth) / columnStep)
+	return serverColumnWidth + columnStep*steps
 }
 
 // truncateToWidth 把文本截到 maxWidth（单位 pt）以内，超出时在末尾接省略号。
@@ -100,13 +104,14 @@ func truncateToWidth(s string, maxWidth float64, ellipsis string) string {
 
 // titlePad 用 titlePadSpaces 凑出尽量接近 width 的填充：前三级枚举份数，最细的
 // hair space 直接取最接近目标宽度的份数，再按"整体宽度离目标多远"选最优组合。
+// 没有任何组合比"不填充"更接近时（width 不足半个最细一级空格）返回空串。
 func titlePad(width float64) string {
 	units := make([]float64, len(titlePadSpaces))
 	for i, sp := range titlePadSpaces {
 		units[i] = measureTextWidth(sp)
 	}
 
-	best := []int{}
+	best := make([]int, len(titlePadSpaces))
 	bestDiff := width
 	for i := 0; float64(i)*units[0] <= width+units[0]; i++ {
 		widthI := float64(i) * units[0]
@@ -130,9 +135,6 @@ func titlePad(width float64) string {
 				}
 			}
 		}
-	}
-	if len(best) == 0 {
-		return ""
 	}
 
 	var b strings.Builder

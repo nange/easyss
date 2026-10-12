@@ -34,17 +34,27 @@ func measureTextWidth(s string) float64 {
 }
 
 // charWidth 返回字符宽度，单位为 widthUnit。ASCII 表由 macOS 13pt 菜单字体逐字符
-// 实测得到；用于填充的空格字符（不在 ASCII 表里）用各自的实测宽度，
-// 其余表外字符（IDN 等）按全角估算。
+// 实测得到；用于填充的空格字符（不在 ASCII 表里）用各自的实测宽度；其余表外字符
+// 按全角（1em）估算，见 fullWidthUnits。
 func charWidth(r rune) int {
 	if r < 0x20 || r > 0x7e {
 		if units, ok := padSpaceWidth[r]; ok {
 			return units
 		}
-		return 2 * 2048
+		return fullWidthUnits
 	}
 	return asciiWidthUnits[r-0x20]
 }
+
+// fullWidthUnits 是表外字符（IDN 域名、emoji 等）的估算宽度，按 13pt 菜单字体的
+// CJK 全角字形取值：实测 12.899pt，折算到宽度表是 12.899/(widthUnit*textEstimateScale)
+// ≈ 7491，取 7490。
+//
+// 表外字符字形差异很大，单一常数无法都准（实测 units：CJK 7379、西里尔 7542、
+// 假名 7058、阿拉伯 6692、韩文 6433、全角标点 3762、emoji 10869）。这里取 CJK 一档
+// 而不是折中的半角值：地址里的非 ASCII 基本来自 IDN，以 CJK 为主，且低估会让该项
+// 指标列实际偏右、超长 IDN 不触发截断——宁可略微高估。
+const fullWidthUnits = 7490
 
 // padSpaceWidth 是填充用空格字符的宽度（单位 widthUnit）。数值为
 // 实测 pt / widthUnit / textEstimateScale，与 asciiWidthUnits 同一坐标系。

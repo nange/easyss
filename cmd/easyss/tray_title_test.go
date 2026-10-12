@@ -85,6 +85,24 @@ func TestFormatTitleAlignsMetricsColumn(t *testing.T) {
 	}
 }
 
+// TestMetricsColumnStartKeepsMinimalGap 固化"指标列起点恒 ≥ 地址宽 + minMetricsGap"
+// 这一不变量：padToMetricsColumn 依赖它，所以不需要"余量不足时贴一个空格"的兜底分支。
+func TestMetricsColumnStartKeepsMinimalGap(t *testing.T) {
+	for _, width := range []float64{0, 1, 67.9, 152, 152.001, 168, 200, 1e6} {
+		start := metricsColumnStart(width)
+		require.GreaterOrEqual(t, start-width, minMetricsGap,
+			"地址宽 %.3f 时指标列起点没有留出最小间隔", width)
+
+		if width+minMetricsGap <= serverColumnWidth {
+			require.Equal(t, serverColumnWidth, start, "地址宽 %.3f 应落在基准指标列", width)
+			continue
+		}
+		steps := (start - serverColumnWidth) / columnStep
+		require.InDelta(t, math.Round(steps), steps, 1e-9,
+			"地址宽 %.3f 的列起点必须落在量化列上", width)
+	}
+}
+
 // TestFormatTitlePadsLongAddressWithMinimalGap 覆盖地址本身就超过目标列的情况：
 // 地址先被截断（保证不超 maxAddressWidth），列位置随之右移，但地址与指标之间的
 // 可见间隔不得小于 minMetricsGap（不允许指标贴着地址）。
@@ -142,6 +160,21 @@ func TestMeasureTextWidthFollowsRealGlyphWidths(t *testing.T) {
 	require.Less(t, measureTextWidth("."), measureTextWidth("m"))
 	require.Less(t, measureTextWidth("i"), measureTextWidth("W"))
 	require.Greater(t, measureTextWidth(" "), 0.0)
+}
+
+// TestMeasureTextWidthEstimatesIDNAsFullWidth 固化"表外字符按全角（1em）估算"：
+// 13pt 菜单字体下 CJK 字形实测 ≈12.9pt，不能被当成半角（≈7pt）而低估一半——
+// 低估会让该项指标列实际偏右，超长 IDN 也不会触发截断。
+func TestMeasureTextWidthEstimatesIDNAsFullWidth(t *testing.T) {
+	cjk := measureTextWidth("例")
+	require.InDelta(t, 12.9, cjk, 1.0, "CJK 必须按全角估算")
+	require.Greater(t, cjk, 1.5*measureTextWidth("a"), "全角字形应明显宽于半角字母")
+
+	long := strings.Repeat("例", 30) + ":443"
+	require.Greater(t, measureTextWidth(long), maxAddressWidth,
+		"用例前提：这个 IDN 超出显示上限")
+	require.True(t, strings.HasSuffix(truncateToWidth(long, maxAddressWidth, "…"), "…"),
+		"超长 IDN 也要触发截断")
 }
 
 // TestTruncateToWidthKeepsEllipsis 超长地址截断后必须带省略号，且宽度不再超限。
