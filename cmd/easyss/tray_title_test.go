@@ -34,8 +34,8 @@ func metricsColumnForTest(t *testing.T, title string) float64 {
 		}
 		idx = start
 	}
-	// 必须测量整段前缀（而不是逐字符相加）：菜单排版对每个字形做整数量化，
-	// 逐字符求与会系统性偏大 1~2%。
+	// 必须测量整段前缀（而不是逐字符相加）：度量本身已经是逐字符累加，
+	// 再拆开测只会重复引入同一份误差。
 	return titleWidthForTest(title[:idx])
 }
 
@@ -135,7 +135,7 @@ func TestFormatTitleMetricsVariants(t *testing.T) {
 }
 
 // TestMeasureTextWidthFollowsRealGlyphWidths 确保宽度度量不是"按字符个数算"：
-// 比例字体下 "1" 比 "0" 窄、"." 比 "m" 窄，度量必须跟着走，
+// 比例字体下 "1" 比 "0" 窄、"." 比 "m" 窄，宽度表必须跟着走，
 // 否则列对齐会在不同地址上产生可见偏差。
 func TestMeasureTextWidthFollowsRealGlyphWidths(t *testing.T) {
 	require.Less(t, measureTextWidth("1"), measureTextWidth("0"))

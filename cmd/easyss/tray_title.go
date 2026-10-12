@@ -18,9 +18,9 @@ import (
 // "cn2.example.net:443" 约 24pt）。IP 字面量比域名短、落点靠前，看起来就是
 // 指标"贴着"地址；域名恰好落在 tab stop 附近，于是显得间隔很大。
 //
-// 这里改成自己算列位置（宽度用平台提供的 measureTextWidth）：把地址用不同宽度的
-// 空格补到 serverColumnWidth，所有菜单项的指标都从同一列开始，与地址是 IP 还是
-// 域名无关。
+// 这里改成自己算列位置（宽度用纯 Go 的 measureTextWidth，见 tray_title_measure.go）：
+// 把地址用不同宽度的空格补到 serverColumnWidth，所有菜单项的指标都从同一列开始，
+// 与地址是 IP 还是域名无关。
 const (
 	// serverColumnWidth 是选择服务器菜单里"指标列"的起始位置（单位 pt）。
 	// 取值大于常见 IP 字面量的宽度（"203.0.113.9:443" ≈ 97pt、"[2001:db8::1]:443"
@@ -83,7 +83,7 @@ func padToMetricsColumn(addr string) string {
 }
 
 // truncateToWidth 把文本截到 maxWidth（单位 pt）以内，超出时在末尾接省略号。
-// 按 UTF-16 码元截断，与平台度量函数的单位保持一致。
+// 按 UTF-16 码元截断，与字符串 API 的单位保持一致。
 func truncateToWidth(s string, maxWidth float64, ellipsis string) string {
 	if measureTextWidth(s) <= maxWidth {
 		return s

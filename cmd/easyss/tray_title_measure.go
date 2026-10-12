@@ -1,27 +1,30 @@
-//go:build (!darwin || !cgo) && !headless
+//go:build !headless
 
 package main
 
-// macOS 之外的构建（以及 darwin 上 CGO_ENABLED=0 的默认构建）没有平台字体度量，
-// 这里用一张按 macOS 13pt 菜单字体（.AppleSystemUIFont）逐字符实测的宽度表做估算。
-// 其他平台的字号/字形与 macOS 不完全相同，估算有偏差，但布局只依赖"把地址补到固定
-// 列"这一相对关系，误差量级是几个 pt，视觉上仍然是一个稳定的列。
+// 托盘菜单 label 的文本宽度度量。纯 Go 实现：项目不使用 CGO，所以这里不调系统
+// 字体 API，而是用一张按 macOS 13pt 菜单字体（.AppleSystemUIFont）逐字符实测的
+// 宽度表估算。
 //
-// 宽度表单位是 1/2048 个实测空格（见 widthUnit）；estimateTextWidth 输出的估算 pt
-// 与 macOS cgo 实现的 measureTextWidth 同一坐标系。
+// 宽度表的单位是 1/2048 个实测空格（见 widthUnit）。估算与整串真实排版的偏差
+// 来自"逐字符累加 vs 整串排版"（kerning、亚像素取整），系统性部分由
+// textEstimateScale 压掉，剩下的平均约 1pt、最大约 2pt。Windows/Linux 的菜单
+// 字号与字形与 macOS 不同，估算会有偏差，但版式只依赖"把地址补到固定列"这一
+// 相对关系，视觉上仍然是一个稳定的指标列。
 
 const (
 	// menuFontSpaceWidth 是实测的 U+0020 宽度（pt）。
 	menuFontSpaceWidth = 3.5801
-	// textEstimateScale 把"逐字符实测"折算成估算宽度：逐字符累加会系统性偏大
-	// 约 1.5%（整串排版有 kerning 与亚像素取整），乘上它以后常见地址的估算误差
-	// 在 ±2pt 内。
+	// textEstimateScale 把"逐字符实测"折算成估算宽度：逐字符累加相对整串排版
+	// 系统性偏大（kerning 与亚像素取整），30 个真实形态地址标定的最优系数为
+	// 0.985——此时与真实排版的偏差平均 ≈1pt、最大 ≈2pt；取 1.0 则是 avg ≈1.7pt、
+	// max ≈4.6pt。
 	textEstimateScale = 0.985
 	// widthUnit 是宽度表的单位：menuFontSpaceWidth/2048。
 	widthUnit = menuFontSpaceWidth / 2048
 )
 
-// measureTextWidth 返回文本宽度的估算值（单位 pt）。
+// measureTextWidth 返回文本在托盘菜单字体下的显示宽度估算值（单位 pt）。
 func measureTextWidth(s string) float64 {
 	units := 0
 	for _, r := range s {
@@ -43,11 +46,12 @@ func charWidth(r rune) int {
 	return asciiWidthUnits[r-0x20]
 }
 
-// padSpaceWidth 是填充用空格字符的宽度（单位 widthUnit）。
+// padSpaceWidth 是填充用空格字符的宽度（单位 widthUnit）。数值为
+// 实测 pt / widthUnit / textEstimateScale，与 asciiWidthUnits 同一坐标系。
 var padSpaceWidth = map[rune]int{
-	'\u2003': int(7506.0), // EM SPACE ≈ 12.924pt
-	'\u2002': int(3731.0), // EN SPACE ≈ 6.424pt
-	'\u200a': int(486.0),  // HAIR SPACE ≈ 0.838pt
+	'\u2003': 7506, // EM SPACE：实测 12.924pt
+	'\u2002': 3731, // EN SPACE：实测 6.424pt
+	'\u200a': 487,  // HAIR SPACE：实测 0.838pt
 }
 
 // asciiWidthUnits 是 ASCII 0x20(' ')…0x7e('~') 逐字符实测宽度，单位为 1/2048 空格。
