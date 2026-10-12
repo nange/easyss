@@ -161,8 +161,10 @@ func TestLoadConfigValidatesVPN(t *testing.T) {
 	})
 
 	t.Run("未启用时不校验", func(t *testing.T) {
+		// domain 是 validateTLS 的要求，与 VPN 无关：这里让它成立，从而把
+		// "listen 不带端口、VPN 校验若执行就会失败" 这一条留给 VPN 自己。
 		_, err := LoadConfig(writeConfig(t, `{
-			"server": {"listen": "example.com", "vpn": {"enabled": false}}
+			"server": {"listen": "example.com", "domain": "example.com", "vpn": {"enabled": false}}
 		}`))
 		require.NoError(t, err)
 	})
