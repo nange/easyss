@@ -11,7 +11,6 @@ import (
 	"time"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
-	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
 )
@@ -293,23 +292,13 @@ func (s *http2Stream) ConnAlive(ctx context.Context) (alive, ok bool) {
 // InvalidateConn 强制关闭本流实际使用过的底层连接
 // （见 transport.ConnInvalidator），使下一次 Open 重新拨号。身份 CAS 同时挡住
 // 两件事：同一连接被多条流重复失效（只有赢家执行），以及误杀后来新建的连接
-// （新连接身份不同，CAS 必然失败）。
+// （新连接身份不同，CAS 必然失败）。关闭动作、状态清理与连接级日志都在
+// transportSlot.invalidateConnFrom 里，与挂起复核共用同一条纪律。
 func (s *http2Stream) InvalidateConn() {
-	sc := s.connInUse.Load()
-	if sc == nil || s.slot == nil {
+	if s.slot == nil {
 		return
 	}
-	if s.slot.conn.CompareAndSwap(sc, nil) {
-		s.slot.resetRotation()
-		_ = sc.c.Close()
-		// 这是连接级事件，与 slot grown/rotated/retired 同级放在 Info：身份 CAS
-		// 保证每条被丢弃的连接恰好记一条，同一连接上的多条流同时判死也不会刷屏。
-		// 默认 Info 级别下它是"判死即换连接"唯一可见的锚点（逐流的判死原因与
-		// 重试决策在代理层记 Debug，见 client/proxy/stream.go）。
-		log.Info("[TRANSPORT] connection invalidated",
-			"slot", s.slot.idx,
-			"active_streams", s.slot.active.Load())
-	}
+	s.slot.invalidateConnFrom(s.connInUse.Load(), "stream dead")
 }
 
 func (s *http2Stream) CloseWrite() error {

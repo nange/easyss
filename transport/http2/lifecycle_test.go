@@ -500,6 +500,7 @@ func TestResetRotationClearsMarks(t *testing.T) {
 	// 零字节——这样 rotationDue 绝不会在复用连接的状态上触发。
 	s.degraded.Store(true)
 	s.expiring.Store(true)
+	s.reverify.Store(true) // 挂起嫌疑同样是连接作用域的
 	s.expireAt.Store(time.Now().Add(-time.Minute).UnixNano())
 	s.connBytes.Store(1024)
 
@@ -510,6 +511,9 @@ func TestResetRotationClearsMarks(t *testing.T) {
 	}
 	if s.expiring.Load() {
 		t.Fatal("expected expiring cleared")
+	}
+	if s.reverify.Load() {
+		t.Fatal("expected the suspend suspicion cleared with the connection")
 	}
 	if s.connBytes.Load() != 0 {
 		t.Fatalf("connBytes = %d, want 0", s.connBytes.Load())
@@ -530,6 +534,7 @@ func TestResetConnClearsMarks(t *testing.T) {
 	// 建立新连接后，轮换状态重新开始，旧连接的 degraded 判定失效。
 	s.degraded.Store(true)
 	s.expiring.Store(true)
+	s.reverify.Store(true) // 新连接天然没有挂起嫌疑
 	s.expireAt.Store(time.Now().Add(-time.Minute).UnixNano())
 	s.connBytes.Store(1024)
 
@@ -540,6 +545,9 @@ func TestResetConnClearsMarks(t *testing.T) {
 	}
 	if s.expiring.Load() {
 		t.Fatal("expected expiring cleared on a fresh connection")
+	}
+	if s.reverify.Load() {
+		t.Fatal("expected the suspend suspicion cleared on a fresh connection")
 	}
 	if s.connBytes.Load() != 0 {
 		t.Fatalf("connBytes = %d, want 0", s.connBytes.Load())

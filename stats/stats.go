@@ -65,6 +65,13 @@ type stats struct {
 	// 位于待驱逐槽位（expiring/degraded）上的空闲流在完整空闲超时前
 	// 被关闭，以便轮换/退役及时完成（参见 relay.BidirectionalWithDrain）。
 	streamsDrained atomic.Int64
+	// 挂起复核：suspendDetected 统计识别出的进程挂起（睡眠/VM 暂停）次数；
+	// 每次识别只把槽位标记为"待复核"，结论由开流前的一次往返判活给出——
+	// suspendReverifyAlive 是复核通过（连接照常复用，假阳性只花一个 RTT）、
+	// suspendReverifyReplaced 是被证实不可往返而换掉连接的次数。
+	suspendDetected         atomic.Int64
+	suspendReverifyAlive    atomic.Int64
+	suspendReverifyReplaced atomic.Int64
 
 	rttMu    sync.Mutex
 	rttEWMA  int64 // 纳秒，EWMA 平滑的纯路径 RTT
@@ -130,6 +137,10 @@ func RecordSlotProbeUnsupported() {
 func RecordSlotGrownPriority() { g.slotGrownPriority.Add(1) }
 func RecordSlotGrownBulk()     { g.slotGrownBulk.Add(1) }
 func RecordStreamDrained()     { g.streamsDrained.Add(1) }
+
+func RecordSuspendDetected()         { g.suspendDetected.Add(1) }
+func RecordSuspendReverifyAlive()    { g.suspendReverifyAlive.Add(1) }
+func RecordSuspendReverifyReplaced() { g.suspendReverifyReplaced.Add(1) }
 
 const rttAlpha = 0.35
 
@@ -205,6 +216,9 @@ func ResetCounters() {
 	g.slotGrownPriority.Store(0)
 	g.slotGrownBulk.Store(0)
 	g.streamsDrained.Store(0)
+	g.suspendDetected.Store(0)
+	g.suspendReverifyAlive.Store(0)
+	g.suspendReverifyReplaced.Store(0)
 
 	g.rttMu.Lock()
 	g.rttEWMA = 0
@@ -274,6 +288,11 @@ type Snapshot struct {
 	SlotGrownPriority    int64 `json:"slot_grown_priority"`
 	SlotGrownBulk        int64 `json:"slot_grown_bulk"`
 	StreamsDrained       int64 `json:"streams_drained"`
+
+	// 挂起复核（仅客户端侧；服务端为零）
+	SuspendDetected         int64 `json:"suspend_detected"`
+	SuspendReverifyAlive    int64 `json:"suspend_reverify_alive"`
+	SuspendReverifyReplaced int64 `json:"suspend_reverify_replaced"`
 
 	// 速度
 	UploadSpeed            int64  `json:"upload_speed"`
@@ -375,6 +394,10 @@ func Collect() Snapshot {
 		UptimeSeconds:          uptimeSeconds,
 		AvgRTTMs:               float64(time.Duration(ewma).Microseconds()) / 1000.0,
 		StartTime:              startTime,
+
+		SuspendDetected:         g.suspendDetected.Load(),
+		SuspendReverifyAlive:    g.suspendReverifyAlive.Load(),
+		SuspendReverifyReplaced: g.suspendReverifyReplaced.Load(),
 	}
 }
 
