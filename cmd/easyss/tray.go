@@ -487,23 +487,6 @@ func fetchStats(client *http.Client, url string) (rttMs float64, downSpeed strin
 	return snap.AvgRTTMs, snap.DownloadSpeedHuman
 }
 
-func formatTitle(addr string, rttMs float64, downSpeed string) string {
-	var extra string
-	if rttMs > 0 {
-		extra = fmt.Sprintf("%dms", int64(rttMs))
-	}
-	if downSpeed != "" {
-		if extra != "" {
-			extra += "  "
-		}
-		extra += "↓" + downSpeed
-	}
-	if extra != "" {
-		return addr + "\t" + extra
-	}
-	return addr
-}
-
 func (a *TrayApp) buildProxyRuleMenu() *systray.Menu {
 	m := systray.NewMenu()
 	a.proxyRuleItems = make(map[string]*systray.MenuItem)
