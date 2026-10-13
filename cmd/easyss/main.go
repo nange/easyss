@@ -465,9 +465,10 @@ func exampleV3Config() string {
 			CAPath:   "",
 			Default:  true,
 		}},
+		// 示例不走 applyDefaults（不做推导），因此 http_port 按同一规则显式给出。
 		Local: config.LocalConfig{
 			SocksPort:        sharedconfig.DefaultSocksPort,
-			HTTPPort:         sharedconfig.DefaultHTTPPort,
+			HTTPPort:         sharedconfig.DefaultSocksPort + sharedconfig.DefaultHTTPPortOffset,
 			BindAll:          false,
 			DisableSysProxy:  false,
 			EnableForwardDNS: false,

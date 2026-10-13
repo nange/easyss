@@ -337,11 +337,12 @@ func ParseConfigJSON(jsonStr string) (*ClientConfig, error) {
 }
 
 func DefaultConfig() *ClientConfig {
+	// http_port 不在这里显式给出：applyDefaults 会按 socks_port + 偏移推导
+	// （见 normalizeHTTPPort），使"默认 HTTP 代理端口"只有一条来源。
 	cfg := &ClientConfig{
 		ConfigVersion: 3,
 		Local: LocalConfig{
 			SocksPort: config.DefaultSocksPort,
-			HTTPPort:  config.DefaultHTTPPort,
 		},
 	}
 	applyDefaults(cfg)
