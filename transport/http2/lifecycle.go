@@ -23,6 +23,10 @@ type slotLifecycle struct {
 	// （未配置探测令牌）。
 	probeFunc func(ctx context.Context, slot *transportSlot) (speedBps float64, verdict probeVerdict)
 
+	// slowRTT 是慢路径 RTT 日志的限流器（与传输层、探测共用同一个实例）；
+	// 健康循环只用它做窗口过后的兜底冲刷（见 slowRTTLogLimiter.flushDue）。
+	slowRTT *slowRTTLogLimiter
+
 	// 探测状态，仅由健康循环 goroutine 访问。
 	probeUnsupported bool    // 服务端不提供 /v3/probe：回退为仅被动检测
 	unsupportedCount int     // 已观察到的 unsupported 探测结论次数
@@ -53,6 +57,9 @@ func (lc *slotLifecycle) run(ctx context.Context) {
 			lc.observeSuspend(time.Now())
 			lc.resetSamplingOnSuspend()
 			lc.evaluate(interval)
+			// 慢路径 RTT 的配额汇总兜底：突发结束后不再有新样本触发窗口滚动，
+			// 被配额压掉的最后一批样本只能由这个周期性的观察者交代出来。
+			lc.slowRTT.flushDue(time.Now())
 		case <-ctx.Done():
 			return
 		}

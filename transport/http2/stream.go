@@ -31,6 +31,12 @@ type http2Stream struct {
 	respReady chan struct{}
 	readyOnce sync.Once
 
+	// endpoint/target 是这条流所承载请求的身份（协议端点与目标 host:port）。
+	// 它们不参与任何调度或协议决策，只为日志归因而存在：慢路径 RTT 样本要
+	// 回答"是哪个请求的往返慢"（见 slowRTTLogLimiter）。
+	endpoint string
+	target   string
+
 	// bootstrapSentAt 是客户端完成冲刷加密 bootstrap 记录（请求体）的时刻。
 	// 服务端在拨号源端之前就用响应头应答，因此该时间戳与响应到达之间的
 	// 时间差就是纯粹的 client<->server 路径 RTT（不含源端耗时）。
@@ -45,6 +51,10 @@ type http2Stream struct {
 	// liveness 在本流所在连接上做一次轻量存活探测（见 transport.ConnLiveness）；
 	// 为 nil 时 ConnAlive 报告"无法判定"（未配置探测令牌）。
 	liveness func(ctx context.Context, slot *transportSlot) (alive, ok bool)
+
+	// slowRTT 是所属传输层的慢路径 RTT 日志限流器（见 slowRTTLogLimiter）。
+	// nil 表示未配置限流（测试里裸构造的流）：此时越界样本照常逐条打印。
+	slowRTT *slowRTTLogLimiter
 
 	mu      sync.Mutex
 	r       io.ReadCloser
@@ -247,7 +257,16 @@ func (s *http2Stream) deliver(res roundTripResult) {
 		// 这就是纯路径 RTT——服务端在拨号源端之前就提交了响应。在结果落定的
 		// 时刻采样，避免把代理层等待/调度的时间算进路径 RTT。
 		if t0 := s.bootstrapSentAt.Load(); t0 > 0 {
-			stats.RecordRTT(time.Since(time.Unix(0, t0)))
+			d := time.Since(time.Unix(0, t0))
+			stats.RecordRTT(d)
+			// 越界的样本额外记一条 Warn（按传输层的配额限流）：托盘上的
+			// 平均值只会显示"变慢了"，这条日志回答"是谁的往返慢"。
+			s.slowRTT.log(d, slowRTTSample{
+				source:   slowRTTSourceStream,
+				endpoint: s.endpoint,
+				target:   s.target,
+				slot:     s.slot,
+			})
 		}
 	}
 	s.readyOnce.Do(func() { close(s.respReady) })

@@ -89,6 +89,13 @@ const (
 	DegradedRecoverCycles       = 2
 	DegradedMaxRTT              = 800 * time.Millisecond
 
+	// SlowRTTWarnThreshold 是单次纯路径 RTT 样本被额外记为 Warn 日志的阈值。
+	// 托盘显示的是所有样本（每条流的引导往返 + 每次主动探测）的全局 EWMA，
+	// 它只能说明"变慢了"，无法回答"是谁的往返慢"；越界的样本因此连同请求身份
+	// （endpoint/target）与承载它的连接（槽位、活跃流数、槽位状态）一起打印。
+	// 样本本身照常进入 EWMA，阈值只影响日志的可见性，不影响任何行为。
+	SlowRTTWarnThreshold = 500 * time.Millisecond
+
 	// 主动槽位探测：降级槽位检测的确认步骤——被怀疑降级的槽位（被动吞吐量低于
 	// DegradedThroughputThreshold）通过在其自身连接上下载预生成的随机负载来确认；
 	// 只有探测结果缓慢才会将槽位标记为 degraded。探测只测量客户端<->服务端路径，

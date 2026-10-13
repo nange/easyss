@@ -38,6 +38,8 @@ type slotProber struct {
 	serverURL   string
 	token       string
 	payloadSize int64
+	// slowRTT 是所属传输层的慢路径 RTT 日志限流器；为 nil 表示不限流。
+	slowRTT *slowRTTLogLimiter
 }
 
 // alive 在同一槽位的连接上发起一次 HEAD /v3/probe，用一个 RTT 回答"这条连接
@@ -119,8 +121,16 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 				start = time.Now()
 				// 发送请求到首个响应体分块的耗时：服务端在拨号源端之前就已
 				// 提交响应，因此这就是纯 client<->server 路径 RTT——与每次
-				// 请求的 bootstrap 往返采用相同的测量基准。
-				stats.RecordRTT(time.Since(ttfbStart))
+				// 请求的 bootstrap 往返采用相同的测量基准。越界的样本连同
+				// "来源是探测"一起记 Warn（按传输层的配额限流）：后台探测同样
+				// 会推高托盘上的平均值，不标出来就会与真正慢的请求混为一谈。
+				d := time.Since(ttfbStart)
+				stats.RecordRTT(d)
+				p.slowRTT.log(d, slowRTTSample{
+					source:   slowRTTSourceProbe,
+					endpoint: sharedconfig.EndpointProbe,
+					slot:     slot,
+				})
 			}
 		}
 		if rErr != nil {
