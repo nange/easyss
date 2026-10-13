@@ -40,6 +40,10 @@ type http2Transport struct {
 	// 代理层区分"连接已死"与"服务端还在解析目标域名"。未配置探测令牌时为 nil。
 	liveness func(ctx context.Context, slot *transportSlot) (alive, ok bool)
 
+	// slowRTT 是慢路径 RTT 日志的限流器，与槽位生命周期和探测共用同一个实例
+	// （因此三条采样路径共享同一份窗口配额）。
+	slowRTT *slowRTTLogLimiter
+
 	// growEvents 是近期槽位增长事件的有界环形缓冲，最旧的在最前；
 	// 以最新优先的顺序快照进 TransportStats.GrowEvents。由 growMu 保护。
 	growEvents []transport.GrowEvent
@@ -127,10 +131,15 @@ func New(cfg Config) (transport.Transport, error) {
 
 	sched := newScheduler(maxSlots, slots, threshold, prioritySlots)
 
+	// 慢路径 RTT 日志的限流器由整个传输层共享：请求的引导往返、后台探测与
+	// 健康循环的兜底冲刷都走同一个窗口配额（见 slowRTTLogLimiter）。
+	slowRTT := newSlowRTTLogLimiter()
+
 	lc := &slotLifecycle{
 		sched:        sched,
 		connLifetime: connLifetime,
 		connMaxBytes: connMaxBytes,
+		slowRTT:      slowRTT,
 	}
 	var liveness func(ctx context.Context, slot *transportSlot) (alive, ok bool)
 	if cfg.ProbeToken != "" {
@@ -138,6 +147,7 @@ func New(cfg Config) (transport.Transport, error) {
 			serverURL:   cfg.ServerURL,
 			token:       cfg.ProbeToken,
 			payloadSize: int64(sharedconfig.ProbePayloadSize),
+			slowRTT:     slowRTT,
 		}
 		lc.probeFunc = prober.probe
 		// 同一个探测端点也用于"判活"：HEAD 只花一个 RTT，不需下载载荷。
@@ -149,6 +159,7 @@ func New(cfg Config) (transport.Transport, error) {
 		lifecycle: lc,
 		serverURL: cfg.ServerURL,
 		liveness:  liveness,
+		slowRTT:   slowRTT,
 		ctx:       ctx,
 		cancel:    cancel,
 	}
@@ -350,7 +361,12 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 		done:      doneOnce,
 		slot:      slot,
 		liveness:  t.liveness,
+		slowRTT:   t.slowRTT,
 		startTime: time.Now(),
+		// 请求身份只用于日志归因（慢路径 RTT 样本要能被追到具体请求），
+		// 不参与任何调度或协议决策。
+		endpoint: req.Endpoint,
+		target:   req.Target,
 	}
 
 	go func() {
@@ -438,8 +454,8 @@ func (t *http2Transport) reverifySlot(ctx context.Context, slot *transportSlot) 
 	}
 }
 
-// protoOfEndpoint 把代理端点路径映射为简短协议名，用于增长事件日志；
-// 未知路径原样返回。
+// protoOfEndpoint 把端点路径映射为简短的名字，用于槽位增长事件与慢路径 RTT
+// 日志（请求身份要一眼可读）；未知路径原样返回。
 func protoOfEndpoint(endpoint string) string {
 	switch endpoint {
 	case sharedconfig.EndpointTCP:
@@ -448,6 +464,8 @@ func protoOfEndpoint(endpoint string) string {
 		return "udp"
 	case sharedconfig.EndpointICMP:
 		return "icmp"
+	case sharedconfig.EndpointProbe:
+		return "probe"
 	}
 	return endpoint
 }
