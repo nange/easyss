@@ -77,9 +77,8 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 	if cfg.Routing.IPV6Rule == "" {
 		cfg.Routing.IPV6Rule = sharedconfig.DefaultIPV6Rule
 	}
-	if cfg.Local.HTTPPort == 0 && cfg.Local.SocksPort > 0 {
-		cfg.Local.HTTPPort = cfg.Local.SocksPort + 1000
-	}
+	// http_port 的推导（socks_port + DefaultHTTPPortOffset）在 applyDefaults 里，
+	// 两种模式共用同一实现；这里显式传进来的 HTTPPort 优先，不会被推导覆盖。
 
 	applyDefaults(cfg)
 	return cfg, nil
@@ -109,9 +108,6 @@ func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) {
 	}
 	if s.LocalPort > 0 {
 		cfg.Local.SocksPort = s.LocalPort
-		if cfg.Local.HTTPPort == 0 {
-			cfg.Local.HTTPPort = s.LocalPort + 1000
-		}
 	}
 	if s.HTTPPort > 0 {
 		cfg.Local.HTTPPort = s.HTTPPort
@@ -160,6 +156,10 @@ func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) {
 	if s.TunConfig != "" {
 		cfg.Local.TunConfig = jsonTunConfig(s.TunConfig)
 	}
+
+	// 所有覆盖完成后再按同一规则补齐 http_port：命令行只改本地端口时，端口
+	// 推导与 applyDefaults 保持一致（唯一实现在 normalizeHTTPPort）。
+	normalizeHTTPPort(cfg)
 }
 
 func jsonTunConfig(s string) json.RawMessage {

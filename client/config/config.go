@@ -208,6 +208,16 @@ func LoadConfig(path string) (*ClientConfig, error) {
 	return &cfg, nil
 }
 
+// normalizeHTTPPort 在 http_port 未配置（0）时由 socks_port 推导出本地 HTTP 代理
+// 端口（socks_port + config.DefaultHTTPPortOffset）。简化模式与完整模式共用它：
+// 只在简化模式推导会让完整模式的配置"少一个端口"，而两个端口本就是同一个本地
+// 代理的两种入口。socks_port 为 0（不启动本地代理服务器）时不做推导。
+func normalizeHTTPPort(c *ClientConfig) {
+	if c.Local.HTTPPort == 0 && c.Local.SocksPort > 0 {
+		c.Local.HTTPPort = c.Local.SocksPort + config.DefaultHTTPPortOffset
+	}
+}
+
 func applyDefaults(c *ClientConfig) {
 	// timeout 是全部派生超时（流空闲/UDP 空闲/拨号/DNS 响应/连接轮换）的唯一旋钮：
 	// 非正值取默认值，越界值钳制到 [MinTimeout, MaxTimeout]，使内存中的配置与
@@ -217,6 +227,9 @@ func applyDefaults(c *ClientConfig) {
 	// 它同时作用于 TUN 设备与 tun2socks netstack，两者不一致会造成静默丢包，
 	// 因此合法性的判断只走 config.NormalizeTunMTU 这一条路径。
 	c.Local.TunMTU = config.NormalizeTunMTU(c.Local.TunMTU)
+	// http_port 缺省时由 socks_port 推导：本地代理端口的语义在简化模式与完整
+	// 模式下完全一致，推导只有 normalizeHTTPPort 一处实现。
+	normalizeHTTPPort(c)
 	if c.Transport.Protocol == "" {
 		c.Transport.Protocol = config.DefaultProtocol
 	}
@@ -324,11 +337,12 @@ func ParseConfigJSON(jsonStr string) (*ClientConfig, error) {
 }
 
 func DefaultConfig() *ClientConfig {
+	// http_port 不在这里显式给出：applyDefaults 会按 socks_port + 偏移推导
+	// （见 normalizeHTTPPort），使"默认 HTTP 代理端口"只有一条来源。
 	cfg := &ClientConfig{
 		ConfigVersion: 3,
 		Local: LocalConfig{
 			SocksPort: config.DefaultSocksPort,
-			HTTPPort:  config.DefaultHTTPPort,
 		},
 	}
 	applyDefaults(cfg)
