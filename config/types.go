@@ -51,9 +51,15 @@ const (
 
 	// 由配置构建器、示例配置与运行时回退值共同使用的默认值。
 	// 请把这些常量作为唯一事实来源：任何应用默认值的代码都必须引用常量，而非字面量。
-	DefaultServerPort        = 443
-	DefaultSocksPort         = 4080
-	DefaultHTTPPort          = 5080
+	DefaultServerPort = 443
+	DefaultSocksPort  = 4080
+	DefaultHTTPPort   = 5080
+
+	// DefaultHTTPPortOffset 是 http_port 缺省（0）时相对 socks_port 的固定偏移：
+	// http_port = socks_port + DefaultHTTPPortOffset。简化模式与完整模式共用同一
+	// 推导（client/config.normalizeHTTPPort），不要各自内联这个字面量。
+	DefaultHTTPPortOffset = 1000
+
 	DefaultProtocol          = "h2"
 	DefaultMethod            = "aes-256-gcm"
 	DefaultPrioritySlotRatio = 0.4

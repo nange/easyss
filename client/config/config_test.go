@@ -507,6 +507,47 @@ func TestLoadConfig(t *testing.T) {
 		}
 	})
 
+	// http_port 的推导（socks_port + 1000）在简化模式与完整模式下必须一致：
+	// 只在简化模式推导会让完整模式"少一个本地端口"。
+	t.Run("http_port 由 socks_port 推导", func(t *testing.T) {
+		tests := []struct {
+			name      string
+			localJSON string
+			wantSocks int
+			wantHTTP  int
+		}{
+			{"完整模式未配置 http_port", `{"socks_port": 1080}`, 1080, 2080},
+			{"完整模式显式 http_port 优先", `{"socks_port": 1080, "http_port": 3128}`, 1080, 3128},
+			{"socks_port 为 0 时不推导", `{"socks_port": 0}`, 0, 0},
+			{"未配置 local 时不推导", `{}`, 0, 0},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				dir := t.TempDir()
+				path := filepath.Join(dir, "config.json")
+				v3JSON := `{
+					"version": 3,
+					"servers": [{"address": "example.com", "port": 443, "password": "secret"}],
+					"local": ` + tt.localJSON + `
+				}`
+				if err := os.WriteFile(path, []byte(v3JSON), 0644); err != nil {
+					t.Fatal(err)
+				}
+
+				cfg, err := LoadConfig(path)
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if cfg.Local.SocksPort != tt.wantSocks {
+					t.Errorf("SocksPort = %d, want %d", cfg.Local.SocksPort, tt.wantSocks)
+				}
+				if cfg.Local.HTTPPort != tt.wantHTTP {
+					t.Errorf("HTTPPort = %d, want %d", cfg.Local.HTTPPort, tt.wantHTTP)
+				}
+			})
+		}
+	})
+
 	t.Run("加载 v2 配置自动迁移", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "config.json")

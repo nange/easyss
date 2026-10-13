@@ -120,63 +120,87 @@ Easyss v3 支持两种配置模式，自动识别：
 
 #### 完整模式
 
-支持所有 v3 高级功能（多服务器、流量整形、传输层调参等）：
+支持所有 v3 高级功能（多服务器、流量整形、传输层调参等），最简配置示例：
 
 ```json
 {
   "version": 3,
-  "servers": [{
-    "address": "your-domain.com",
-    "port": 443,
-    "password": "your-password",
-    "method": "aes-256-gcm",
-    "sn": "",
-    "ca_path": "",
-    "default": true
-  }],
+  "servers": [
+    {
+      "address": "your-domain.com",
+      "port": 443,
+      "password": "your-password"
+    }
+  ],
   "local": {
     "socks_port": 4080,
-    "http_port": 5080,
-    "bind_all": false,
-    "disable_sys_proxy": false,
-    "enable_forward_dns": false,
-    "enable_tun2socks": false,
-    "enable_quic": false
-  },
-  "routing": {
-    "proxy_rule": "auto",
-    "ipv6_rule": "auto",
-    "direct_file": "",
-    "proxy_file": ""
-  },
-  "transport": {
-    "protocol": "h2",
-    "conn_count_max": 15,
-    "stream_threshold": 4,
-    "priority_slot_ratio": 0.4,
-    "conn_max_bytes": 268435456
-  },
-  "shaper": {
-    "batch_window_ms": 3,
-    "cover_budget_ratio": 0.03,
-    "cover_budget_cap": 16384
+    "http_port": 5080
   },
   "log": {
     "level": "info",
     "file_path": "easyss.log"
   },
-  "timeout": 30,
-  "auth_username": "",
-  "auth_password": "",
-  "pprof_enabled": false
+  "timeout": 30
 }
 ```
 
-执行以下命令查看完整模式所有可配置字段：
+> **注意**：`"version": 3` 且 `servers` 非空，是识别为完整模式的依据（见"配置模式自动识别"）。
+> `local.socks_port` 是本地代理入口，为 0 时不会启动任何本地代理服务器；`local.http_port`
+> 未配置时由它推导（`socks_port + 1000`），简化模式与完整模式行为一致。
+
+以上为最简配置，其他所有可配置字段（`servers` 的加密方式/SNI/CA、`routing`、`transport`、`shaper`、
+`auth_username` 等）均有默认值，按需配置即可。执行以下命令可查看完整配置示例：
 
 ```bash
 ./easyss -show-config-example
 ```
+
+**servers 参数说明（可配置多个，托盘菜单可切换）：**
+
+| 参数 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `servers[].address` | 是 | - | 服务器地址（域名或 IP） |
+| `servers[].port` | 否 | 443 | 服务器端口 |
+| `servers[].password` | 是 | - | 通信加密密钥 |
+| `servers[].method` | 否 | aes-256-gcm | 加密方式，可选: `aes-256-gcm`, `chacha20-poly1305`；必须在服务端 `allowed_methods` 允许的列表内 |
+| `servers[].sn` | 否 | 空 | TLS SNI 覆盖，留空则使用 `address`。服务端用 IP 证书（IP-only 模式）时必须留空；Cloudflare 优选 IP 场景填对应域名（见"配置Cloudflare优选IP"） |
+| `servers[].ca_path` | 否 | 空 | 自定义 CA 证书路径（服务端使用自签证书时填写，见"自定义证书"） |
+| `servers[].default` | 否 | false | 是否为默认服务器；条目都不填时取列表第一个 |
+
+**local 参数说明：**
+
+| 参数 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `local.socks_port` | 否 | - | 本地 SOCKS5 监听端口（如 4080）；为 0 时不启动本地代理服务器，通常需要填写 |
+| `local.http_port` | 否 | `socks_port + 1000` | 本地 HTTP 代理监听端口（`socks_port` 为 4080 时即 5080）；未配置时由 `socks_port` 推导，显式配置优先。`socks_port` 为 0 时它也是 0（不监听）；它非 0 而 `socks_port` 为 0 时启动会报错 |
+| `local.bind_all` | 否 | false | 是否将监听端口绑定到所有本地 IP |
+| `local.disable_sys_proxy` | 否 | false | 是否不设置系统代理（headless 版默认会设置，见"无托盘（headless）版本的系统代理"） |
+| `local.enable_forward_dns` | 否 | false | 是否在本机所有网卡的 53 端口提供 DNS 转发（供 LAN 设备使用，见"作为透明代理"一节） |
+| `local.enable_tun2socks` | 否 | false | 是否启用 TUN 全局透明代理 |
+| `local.enable_quic` | 否 | false | 是否允许 QUIC（UDP 443）走代理 |
+| `local.tun_mtu` | 否 | 1500 | TUN 设备与 tun2socks 的 MTU，钳制到 [1280, 9000]（见"作为透明代理"一节） |
+| `local.tun_config` | 否 | 空 | TUN 参数覆盖（JSON 字符串），目前仅支持 `{"device": "my-tun9"}` 自定义设备名，一般无需填写 |
+
+**routing 参数说明：**
+
+| 参数 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `routing.proxy_rule` | 否 | auto | 代理规则，可选: `auto`, `reverse_auto`, `proxy`, `direct`, `auto_block` |
+| `routing.ipv6_rule` | 否 | auto | IPv6 规则，可选: `auto`（网络与服务端都支持时才启用）, `enable`（强制启用）, `disable`（禁用）；填其他值等同 `disable` |
+| `routing.direct_file` | 否 | 空 | 自定义直连文件路径（IP/CIDR/域名/正则混写，每行一条，支持 `regexp:` 和 `*` 通配符） |
+| `routing.proxy_file` | 否 | 空 | 自定义代理文件路径（同上格式） |
+
+**其他参数说明：**
+
+| 参数 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `version` | 是 | - | 配置版本，完整模式固定为 `3` |
+| `log.level` | 否 | info | 日志级别，可选: `debug`, `info`, `warn`, `error` |
+| `log.file_path` | 否 | 空 | 日志文件路径，为空则输出到标准输出 |
+| `timeout` | 否 | 30 | 基础超时时间，单位秒，取值范围 15-60（越界取边界值）；TCP/UDP 空闲、拨号、DNS 响应与连接轮换均由它派生（见"`timeout` 派生规则"） |
+| `auth_username` | 否 | 空 | 本地代理的用户名（SOCKS5/HTTP 代理认证），留空表示不校验 |
+| `auth_password` | 否 | 空 | 本地代理的密码 |
+| `pprof_enabled` | 否 | false | 是否启用 pprof 调试服务（127.0.0.1:6060） |
 
 **transport 参数说明（默认值以代码为准，0 表示使用默认值）：**
 
