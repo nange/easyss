@@ -1,9 +1,11 @@
 package scripts
 
 import (
+	"bytes"
 	"regexp"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // invalidTildeModifier 匹配 cmd.exe 不接受的批处理参数路径修饰符（%~ 后面不是
@@ -79,6 +81,75 @@ func TestTunDevBatTildeModifiersAreValid(t *testing.T) {
 		end := min(loc[0]+40, len(content))
 		t.Errorf("%s: %q is not a valid batch-parameter modifier: cmd.exe aborts the whole script",
 			name, content[loc[0]:end])
+	}
+}
+
+// TestCloseTunDevBatHasItsOwnExitCode 固定 Windows 关闭脚本的退出码契约。
+//
+// "引擎先停、关闭脚本后跑"是三个平台共同的顺序（见 client/tun/tun.go 的 Stop），
+// 因此脚本运行时 wintun 适配器通常已经被注销：挂在该接口上的分流路由、v6 地址
+// 随接口一起被 Windows 收走，十一条删除全部扑空。缺了下面两样东西时，这会被
+// 报成一次清理失败——cmd.exe 会把最后一条 netsh 命令的退出码当成脚本的：
+//   - 设备存在性守卫：判据必须是 netsh 的退出码而不是它的输出。接口未注册时
+//     netsh 打印的是 "The filename, directory name, or volume label syntax is
+//     incorrect."，与真正的失败无法从文本上区分，而且随系统语言变化。
+//   - 残留探测：退出码要回答"路由表里还有没有走 TUN 网关的表项"，而不是"某条
+//     netsh 命令是否报错"（v6 地址与路由只在服务端有 ipv6 时才安装，纯 ipv4
+//     会话的删除必然报错）。
+//
+// Windows 的脚本行为测试只在 Windows 上运行（见 cmd/easyss 的
+// tun_script_windows_test.go），所以这里用文本级检查兜住它。
+func TestCloseTunDevBatHasItsOwnExitCode(t *testing.T) {
+	script := string(CloseTunDevBat)
+
+	for _, want := range []string{
+		`call netsh interface show interface name="%tun_device%" >nul 2>&1`,
+		"if errorlevel 1 if not errorlevel 2 exit /b 0",
+		`for /f "tokens=1,2,3" %%a in ('route print -4') do (`,
+		`if "%%c"=="%tun_gw%" for %%p in (1.0.0.0 2.0.0.0 4.0.0.0 8.0.0.0 16.0.0.0 32.0.0.0 64.0.0.0 128.0.0.0) do (`,
+		"residual split routes via %tun_gw%",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("close_tun_dev_windows.bat must contain %q", want)
+		}
+	}
+
+	// 文件末尾必须是一条显式的成功退出：否则 cmd.exe 会把最后一条 netsh 命令的
+	// 退出码当成脚本的（对象已不存在时它同样是 1）。
+	if !strings.HasSuffix(strings.TrimSpace(script), "exit /b 0") {
+		t.Error(`close_tun_dev_windows.bat must end with an explicit "exit /b 0"`)
+	}
+}
+
+// TestTunDevBatsStayCrlfAndBomFree 固定两个批处理脚本的行尾与编码约定。
+//
+// cmd.exe 按 OEM 代码页逐行读取批处理文件。在中文 Windows（OEM 代码页 936）上实测：
+// LF 行尾会让多字节注释的字节与换行错位，注释文字被当成命令执行、真正的命令行被截断
+// （create 脚本一条配置命令都发不出去），而纯 ASCII 注释的 LF 文件不受影响。
+//
+// 运行期已由 client/tun 的 normalizeScriptEOL 兜住（落盘前统一成 CRLF），所以这条断言
+// 守的是仓库约定：.gitattributes 写明 "*.bat text eol=crlf"，检出、diff 与编辑器看到的
+// 都该是 CRLF，别让它被悄悄违反。
+//
+// BOM 一并拒绝：cmd.exe 不把它当空白，它只是第一行多出来的字节。
+func TestTunDevBatsStayCrlfAndBomFree(t *testing.T) {
+	for name, content := range map[string][]byte{
+		"create_tun_dev_windows.bat": CreateTunDevBat,
+		"close_tun_dev_windows.bat":  CloseTunDevBat,
+	} {
+		if bytes.HasPrefix(content, []byte{0xEF, 0xBB, 0xBF}) {
+			t.Errorf("%s must not carry a UTF-8 BOM", name)
+		}
+		if !utf8.Valid(content) {
+			t.Errorf("%s must stay valid UTF-8", name)
+		}
+
+		lf := bytes.Count(content, []byte("\n"))
+		crlf := bytes.Count(content, []byte("\r\n"))
+		if lf != crlf {
+			t.Errorf("%s must use CRLF line endings (%d LF, %d CRLF): .gitattributes declares eol=crlf for *.bat; normalizeScriptEOL in client/tun covers LF at runtime",
+				name, lf, crlf)
+		}
 	}
 }
 

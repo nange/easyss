@@ -502,7 +502,7 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 	ctx, cancel := context.WithTimeout(m.ctx, 60*time.Second)
 	defer cancel()
 
-	namePath, err := util.WriteToTemp(scripts.CreateTunFilename, scripts.CreateTunBytes)
+	namePath, err := WriteScriptToTemp(scripts.CreateTunFilename, scripts.CreateTunBytes)
 	if err != nil {
 		return fmt.Errorf("tun: write create script: %w", err)
 	}
@@ -581,7 +581,7 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	namePath, err := util.WriteToTemp(scripts.CloseTunFilename, scripts.CloseTunBytes)
+	namePath, err := WriteScriptToTemp(scripts.CloseTunFilename, scripts.CloseTunBytes)
 	if err != nil {
 		return fmt.Errorf("tun: write close script: %w", err)
 	}
