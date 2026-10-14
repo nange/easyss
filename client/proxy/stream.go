@@ -118,7 +118,9 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 
 	// 添加随机填充以隐藏引导记录中的目标主机名长度。否则，第一条记录的密文长度
 	// 会直接与 len(target) 相关。
-	if padFrame, ok := shaper.BuildPaddingFrame(encodedLen(frames)); ok {
+	// 预算是 0：bootstrap 记录在客户端手工拼装，尚未进入整形器的池化缓冲区，
+	// 因此按线上格式上限判断填充是否放得下。
+	if padFrame, ok := shaper.BuildPaddingFrame(encodedLen(frames), 0); ok {
 		frames = append(frames, padFrame)
 	}
 

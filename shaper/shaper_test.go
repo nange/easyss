@@ -76,7 +76,7 @@ func TestBuildPaddingFrame(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			frame, ok := BuildPaddingFrame(tt.totalSize)
+			frame, ok := BuildPaddingFrame(tt.totalSize, 0)
 			if !ok {
 				t.Fatal("expected padding frame to be produced")
 			}
@@ -87,6 +87,24 @@ func TestBuildPaddingFrame(t *testing.T) {
 				t.Fatal("padding frame length is 0")
 			}
 		})
+	}
+}
+
+// TestBuildPaddingFrameBudget 固定 budget 的语义：它是"这条记录可用的总空间"，
+// 填充放不下时返回 false，而不是生成一个会撑爆调用方缓冲区的帧。
+// 整形器用当前容量做预算，从而避免"为了填充而把缓冲区从 4KB 撑到 64KB"。
+func TestBuildPaddingFrameBudget(t *testing.T) {
+	// 700 字节的记录会被填充到 1500~2000 字节区间（见 computePadPayloadSize），
+	// 因此 800 一定放不下、4096 一定放得下。
+	if _, ok := BuildPaddingFrame(700, 800); ok {
+		t.Fatal("budget 不足时不应产生填充")
+	}
+	if _, ok := BuildPaddingFrame(700, 4096); !ok {
+		t.Fatal("budget 充足时应产生填充")
+	}
+	// 预算超过线上格式上限时按上限处理，不 panic、不越界。
+	if _, ok := BuildPaddingFrame(700, 1<<20); !ok {
+		t.Fatal("budget 超限时应退化为按线上上限判断")
 	}
 }
 
@@ -142,6 +160,130 @@ func TestBatchShaperFlushesBeforePlainRecordLimit(t *testing.T) {
 	}
 	if records != 2 {
 		t.Fatalf("records = %d, want 2", records)
+	}
+}
+
+// TestBatchShaperStartsWithMinimalBuffer 固定"空闲流只占最小缓冲区"这一内存
+// 契约：服务端内存占用 ≈ 峰值并发流数 × 每流缓冲区大小，而常驻连接、心跳流
+// 与探测流在数量上占绝大多数，它们绝不能各自预留一整块记录缓冲区。
+func TestBatchShaperStartsWithMinimalBuffer(t *testing.T) {
+	masterKey, err := easycrypto.DeriveMasterKey("batch-min-buffer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, err := easycrypto.NewStreamKeys(masterKey, []byte("1234567890123456"), "/v3/tcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	bs := New(newTestWriter(t, sk, &out), Config{BatchWindowMS: 1000})
+	t.Cleanup(func() { _ = bs.Close() })
+
+	impl := bs.(*batchShaper)
+	impl.mu.Lock()
+	got := cap(impl.plaintext)
+	impl.mu.Unlock()
+	if got != protocol.MinRecordBufferSize {
+		t.Fatalf("新流的明文缓冲区 cap = %d, want %d", got, protocol.MinRecordBufferSize)
+	}
+
+	// 只推入少量数据不应触发增长：4KB 之内都属于"小事物流"。
+	impl.mu.Lock()
+	err = impl.appendFrameLocked(protocol.FrameDATA, make([]byte, 512), false)
+	grown := cap(impl.plaintext)
+	impl.mu.Unlock()
+	if err != nil {
+		t.Fatalf("appendFrameLocked: %v", err)
+	}
+	if grown != protocol.MinRecordBufferSize {
+		t.Fatalf("推入 512B 后 cap = %d, want %d（不应增长）", grown, protocol.MinRecordBufferSize)
+	}
+}
+
+// TestBatchShaperBufferGrowsOnDemand 固定按需增长的边界与归还：
+// 攒够数据后缓冲区必须增长（否则 AppendFrame 会自行 realloc 而绕过 BufferPool），
+// 且任何时刻都不会超过 protocol.MaxPlainRecordSize。
+func TestBatchShaperBufferGrowsOnDemand(t *testing.T) {
+	masterKey, err := easycrypto.DeriveMasterKey("batch-grow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, err := easycrypto.NewStreamKeys(masterKey, []byte("1234567890123456"), "/v3/tcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	bs := New(newTestWriter(t, sk, &out), Config{BatchWindowMS: 1000})
+	t.Cleanup(func() { _ = bs.Close() })
+	impl := bs.(*batchShaper)
+
+	// 单帧 32KB 超过初始 4KB，必须增长到足以容纳它（并带上帧头）。
+	if err := bs.PushData(make([]byte, 32*1024)); err != nil {
+		t.Fatalf("PushData: %v", err)
+	}
+	impl.mu.Lock()
+	grown := cap(impl.plaintext)
+	impl.mu.Unlock()
+	if grown < 32*1024+protocol.FrameHeaderSize {
+		t.Fatalf("推入 32KB 后 cap = %d，不足以容纳该帧", grown)
+	}
+	if grown > protocol.MaxPlainRecordSize {
+		t.Fatalf("cap = %d 超过上限 %d", grown, protocol.MaxPlainRecordSize)
+	}
+
+	// 持续推入直到出现冲刷，验证缓冲区在来回冲刷之后仍然受上限约束。
+	// 关键是 Bytes() 与 cap 都不能失控：增长按 2 倍摊销，不能每帧都重新分配。
+	for range 8 {
+		if err := bs.PushData(make([]byte, 16*1024)); err != nil {
+			t.Fatalf("PushData: %v", err)
+		}
+		impl.mu.Lock()
+		cur := cap(impl.plaintext)
+		impl.mu.Unlock()
+		if cur > protocol.MaxPlainRecordSize {
+			t.Fatalf("冲刷后 cap = %d 超过上限 %d", cur, protocol.MaxPlainRecordSize)
+		}
+	}
+	if err := bs.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	impl.mu.Lock()
+	afterFlush := cap(impl.plaintext)
+	impl.mu.Unlock()
+	if afterFlush != protocol.MinRecordBufferSize {
+		t.Fatalf("冲刷后 cap = %d, want %d（大缓冲区应换回初始大小）", afterFlush, protocol.MinRecordBufferSize)
+	}
+}
+
+// TestBatchShaperAcceptsLargeDatagramFrame 固定单帧上限仍是线上格式上限：
+// UDP 数据报帧最大可达 protocol.MaxUDPDataSize(65507)，它超过批处理的冲刷
+// 阈值，但必须被当作合法帧接受（历史缺陷：用阈值去做尺寸校验会把它判成错误）。
+func TestBatchShaperAcceptsLargeDatagramFrame(t *testing.T) {
+	masterKey, err := easycrypto.DeriveMasterKey("batch-large-datagram")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, err := easycrypto.NewStreamKeys(masterKey, []byte("1234567890123456"), "/v3/tcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	bs := New(newTestWriter(t, sk, &out), Config{BatchWindowMS: 1000})
+	t.Cleanup(func() { _ = bs.Close() })
+
+	// 60000 字节：小于 MaxUDPDataSize，但远大于 flushThreshold。
+	payload := make([]byte, 60000)
+	if err := bs.PushData(payload); err != nil {
+		t.Fatalf("PushData(60000B): %v", err)
+	}
+
+	// 单帧超过 MaxPlainRecordSize 时仍必须被拒绝（线上格式的 3 字节长度前缀
+	// 虽能表达更大值，但解码端的上限是 protocol.MaxPlainRecordSize）。
+	if err := bs.PushData(make([]byte, protocol.MaxPlainRecordSize+1)); err == nil {
+		t.Fatal("超过 MaxPlainRecordSize 的帧应被拒绝")
 	}
 }
 

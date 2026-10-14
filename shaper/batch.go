@@ -25,6 +25,7 @@ type batchShaper struct {
 	writeMu        sync.Mutex // 跨 goroutine 串行化 WriteRecord 调用
 	maxChunkSize   int
 	flushThreshold int
+	flushCeiling   int
 	window         time.Duration
 	timerStarted   bool
 	closing        atomic.Bool
@@ -35,21 +36,115 @@ type batchShaper struct {
 
 // New 在给定的 record writer 之上构建一个流量整形器。cfg 在此处规范化
 // （参见 Config.Normalize），因此调用方可以直接传入原始的配置文件值。
+//
+// 明文缓冲区按需增长：流的生命周期从 minRecordBufferSize 起步，只有真正
+// 攒够数据（或出现超大单帧）时才长到 protocol.MaxPlainRecordSize。空闲流、
+// 心跳流与短命流因此只占最少的内存，而不是每条流无条件预留一整块记录缓冲区。
 func New(writer *crypto.RecordWriter, cfg Config) Shaper {
 	cfg = cfg.Normalize()
 
 	bs := &batchShaper{
-		writer:         writer,
-		plaintext:      bytespool.Get(protocol.MaxPlainRecordSize)[:0],
-		maxChunkSize:   protocol.MaxPlainRecordSize,
+		writer: writer,
+		// 缓冲从初始大小起步，按需增长（见 ensureCapacity）。
+		plaintext: bytespool.Get(minRecordBufferSize)[:0],
+		// maxChunkSize 是一条记录的合法上限：UDP 数据报帧最大可达
+		// protocol.MaxUDPDataSize(65507)，因此这里必须是线上格式上限。
+		maxChunkSize: protocol.MaxPlainRecordSize,
+		// flushThreshold 是批处理的目标：攒到上限的 9/10 就冲刷。
 		flushThreshold: protocol.MaxPlainRecordSize * 9 / 10,
-		window:         time.Duration(cfg.BatchWindowMS) * time.Millisecond,
+		// flushCeiling 是"攒到多大就必须先冲刷"的边界。它与 flushThreshold
+		// 分开：单个超过 flushThreshold 的合法帧（大 UDP 数据报）必须能放进
+		// 一条记录，不能被溢出判断挡下来。
+		flushCeiling: protocol.MaxPlainRecordSize,
+		window:       time.Duration(cfg.BatchWindowMS) * time.Millisecond,
 	}
 	bs.timer = time.AfterFunc(bs.window, bs.onTimer)
 	bs.timer.Stop()
 
 	bs.cover = newCoverInjector(cfg.Cover, bs.injectCoverFrame, bs.isClosing)
 	return bs
+}
+
+// minRecordBufferSize 是每条流的明文缓冲区初始大小。它是"流"这个维度的内存
+// 下限：常驻连接、心跳流、探测流在数量上往往占绝大多数，把它们从一整块记录
+// 缓冲区（64KB）降到这么小是这次收敛里收益最大的一项。缓冲按需增长到
+// protocol.MaxPlainRecordSize，见 protocol.MinRecordBufferSize 的说明。
+const minRecordBufferSize = protocol.MinRecordBufferSize
+
+// ensureCapacity 确保明文缓冲区至少能容纳 size 字节，必要时按需增长。
+// 调用方必须持有 bs.mu，且必须保证 size ≤ protocol.MaxPlainRecordSize
+// （两条调用路径都由 appendFrameLocked 的帧级检查或下面的填充预算保证）。
+func (bs *batchShaper) ensureCapacity(size int) {
+	if cap(bs.plaintext) >= size {
+		return
+	}
+	bs.growLocked(size)
+}
+
+// growLocked 把明文缓冲区换到一块更大的池化缓冲区，并归还旧的那块。
+// 增长按 2 倍摊销，但至少满足本次请求，上限是线上格式的 protocol.MaxPlainRecordSize。
+// 调用方必须持有 bs.mu。
+func (bs *batchShaper) growLocked(size int) {
+	newCap := min(max(cap(bs.plaintext)*2, size, minRecordBufferSize), protocol.MaxPlainRecordSize)
+
+	buf := bytespool.Get(newCap)
+	if buf == nil {
+		return
+	}
+	// 明文的前 len 字节必须搬过去：appendFrame 只在 Get 返回的切片上追加。
+	n := copy(buf, bs.plaintext)
+	// 旧缓冲区在搬移之后、覆盖字段之前归还（它已经无人引用）。
+	if old := bs.plaintext; cap(old) > 0 {
+		bytespool.MustPut(old[:cap(old)])
+	}
+	bs.plaintext = buf[:n]
+}
+
+// appendFrameLocked 将指定类型的帧追加到明文缓冲区：当记录即将溢出时
+// 预冲刷，达到阈值时后冲刷，否则重新启动批处理定时器。
+// putPayload 标记来自 bytespool 的 payload，追加完成后必须归还。
+// 调用方必须持有 bs.mu。
+func (bs *batchShaper) appendFrameLocked(ftype protocol.FrameType, payload []byte, putPayload bool) error {
+	frameSize := protocol.FrameHeaderSize + len(payload)
+	if frameSize > bs.maxChunkSize {
+		if putPayload {
+			bs.putPooledPayload(payload)
+		}
+		return fmt.Errorf("shaper: frame size %d exceeds max record size %d", frameSize, bs.maxChunkSize)
+	}
+
+	// 若追加会导致记录溢出，则预先冲刷。这一步必须在容量检查之前：冲刷会
+	// 换出一块空的缓冲区，原来"放不下"的帧因此往往又能放下了（例如缓冲区
+	// 已攒到上限，再来一帧只能放进下一条记录）。
+	if len(bs.plaintext) > 0 && len(bs.plaintext)+frameSize > bs.flushCeiling {
+		if err := bs.flushAndWrite(false); err != nil {
+			// 该帧从未被追加，因此在此归还池化 payload：没有其他人会归还它。
+			if putPayload {
+				bs.putPooledPayload(payload)
+			}
+			return err
+		}
+	}
+
+	// 缓冲不足时按需增长。必须在 AppendFrame 之前做：否则 protocol.AppendFrame
+	// 会在容量不足时自行 realloc，绕过池化缓冲区，使这块内存既不受池的保留
+	// 上限约束，也无法在 Close 时归还。
+	bs.ensureCapacity(len(bs.plaintext) + frameSize)
+
+	bs.plaintext = protocol.AppendFrame(bs.plaintext, protocol.Frame{Type: ftype, Payload: payload})
+
+	if putPayload {
+		bs.putPooledPayload(payload)
+	}
+
+	// 达到阈值后冲刷。
+	if len(bs.plaintext) >= bs.flushThreshold {
+		return bs.flushAndWrite(false)
+	}
+
+	bs.timerStarted = true
+	bs.timer.Reset(bs.window)
+	return nil
 }
 
 // PushData 将原始数据作为 DATA 帧添加。返回时不持有锁。
@@ -95,46 +190,6 @@ func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 		bs.cover.addBudget(f.EncodedLen())
 	}
 	return bs.appendFrameLocked(f.Type, f.Payload, f.Type == protocol.FrameCOVER)
-}
-
-// appendFrameLocked 将指定类型的帧追加到明文缓冲区：当记录即将溢出时
-// 预冲刷，达到阈值时后冲刷，否则重新启动批处理定时器。
-// putPayload 标记来自 bytespool 的 payload，追加完成后必须归还。
-// 调用方必须持有 bs.mu。
-func (bs *batchShaper) appendFrameLocked(ftype protocol.FrameType, payload []byte, putPayload bool) error {
-	frameSize := protocol.FrameHeaderSize + len(payload)
-	if frameSize > bs.maxChunkSize {
-		if putPayload {
-			bs.putPooledPayload(payload)
-		}
-		return fmt.Errorf("shaper: frame size %d exceeds max record size %d", frameSize, bs.maxChunkSize)
-	}
-
-	// 若追加会导致记录溢出，则预先冲刷。
-	if len(bs.plaintext) > 0 && len(bs.plaintext)+frameSize > bs.maxChunkSize {
-		if err := bs.flushAndWrite(false); err != nil {
-			// 该帧从未被追加，因此在此归还池化 payload：没有其他人会归还它。
-			if putPayload {
-				bs.putPooledPayload(payload)
-			}
-			return err
-		}
-	}
-
-	bs.plaintext = protocol.AppendFrame(bs.plaintext, protocol.Frame{Type: ftype, Payload: payload})
-
-	if putPayload {
-		bs.putPooledPayload(payload)
-	}
-
-	// 达到阈值后冲刷。
-	if len(bs.plaintext) >= bs.flushThreshold {
-		return bs.flushAndWrite(false)
-	}
-
-	bs.timerStarted = true
-	bs.timer.Reset(bs.window)
-	return nil
 }
 
 // putPooledPayload 在 cover payload 确实是池缓冲区（容量为池上限内的
@@ -190,14 +245,36 @@ func (bs *batchShaper) flushLocked() []byte {
 	bs.timerStarted = false
 	bs.timer.Stop()
 
-	if padFrame, ok := BuildPaddingFrame(len(bs.plaintext)); ok {
+	// 填充同样要在池化缓冲区里完成：以当前容量为预算生成填充帧（放不下就
+	// 放弃这次填充——它是纯装饰），再按结果增长缓冲区，从而避免 AppendFrame
+	// 因容量不足自行 realloc，把这块内存从池的管理里漏出去。
+	if padFrame, ok := BuildPaddingFrame(len(bs.plaintext), cap(bs.plaintext)); ok {
+		bs.ensureCapacity(len(bs.plaintext) + protocol.FrameHeaderSize + len(padFrame.Payload))
 		bs.plaintext = protocol.AppendFrame(bs.plaintext, padFrame)
 	}
 
-	// 交换缓冲区：将数据交给 I/O，分配一个全新缓冲区，
-	// 以便并发的 PushData / PushFrame 继续接收数据。
+	// 交换缓冲区：把攒好的数据交给 I/O，这条流同时拿到一块新的明文缓冲区，
+	// 因此并发的 PushData / PushFrame 不必等待这次 I/O 完成。
+	//
+	// 未增长过的流（多数流自始至终都在这一档）直接复用同一块缓冲区，
+	// 彻底避免"每次冲刷都取一块新的"；已经增长过的流换回初始大小，
+	// 让它静默后能把大缓冲区让回池里，下一轮增长时正好复用
+	// （Get(4KB) 与 Put(64KB) 走不同档位，不会互相污染）。
 	data := bs.plaintext
-	bs.plaintext = bytespool.Get(protocol.MaxPlainRecordSize)[:0]
+	if cap(bs.plaintext) > minRecordBufferSize {
+		// 换出大缓冲区：data 由 flushAndWrite 在写完记录后归还
+		//（data[:cap(data)] 的 cap 是 2 的幂，符合池的约定）。
+		bs.plaintext = bytespool.Get(minRecordBufferSize)[:0]
+		return data
+	}
+
+	// 小缓冲区：从池里再取一块给流，把 data 原样交给 I/O。
+	// Get 在这些尺寸上按约定不会返回 nil（4KB 是池内合法的 2 的幂档位），
+	// 这里仍做一次守卫：最坏情况是流侧留空缓冲区，下一次 Push 会重新分配，
+	// 而不是让 nil 缓冲区在后续 append 时 panic。
+	if replacement := bytespool.Get(minRecordBufferSize); len(replacement) > 0 {
+		bs.plaintext = replacement[:0]
+	}
 	return data
 }
 

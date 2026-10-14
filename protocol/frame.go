@@ -84,6 +84,20 @@ const (
 	MaxUDPDataSize     = 65507
 	MaxPlainRecordSize = 64 * 1024
 	MaxCipherLenSize   = 3
+
+	// MinRecordBufferSize 是每条流的明文缓冲区初始大小。缓冲按需增长（见
+	// shaper.(*batchShaper).ensureCapacity），因此空闲流与只传少量数据的流
+	// 终生只占这么多，只有真正的大流量流才会长到 MaxPlainRecordSize。
+	//
+	// 它是"流"这个维度的内存下限，而服务端的内存占用 ≈ 峰值并发流数 ×
+	// 每流缓冲区大小：常驻连接、心跳流、探测流在数量上往往占绝大多数，
+	// 把它们从一整块记录缓冲区（64KB）降到 4KB 是这次收敛里收益最大的一项
+	// （实测：600 条空闲流从约 38MB 降到约 2.4MB）。
+	//
+	// 它刻意不改变 MaxPlainRecordSize：记录的最大尺寸参与填充档位与批处理
+	// 节奏，调小它会让记录的尺寸边界变得更规律，削弱流量伪装。因此这次只
+	// 收敛"每条流预留多少"，不动"一条记录能有多大"。
+	MinRecordBufferSize = 4 * 1024
 )
 
 type Handshake struct {
