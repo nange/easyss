@@ -18,6 +18,11 @@ import (
 // 失败时打印到 stderr 的内容（因此也是用户通知所显示的内容）。
 const failureMarker = "[create_tun_dev_windows] failed near:"
 
+// closeFailureMarker 是 close_tun_dev_windows.bat 报告真实清理失败时打印到
+// stderr 的前缀：脚本的退出码只回答"路由到底删干净没有"，原因必须能从输出里
+// 读出来，否则用户看到的只是一条没有下文的告警。
+const closeFailureMarker = "[close_tun_dev_windows]"
+
 // TestCreateTunScriptExitCode 是 Windows 上"静默成功的创建脚本造成 TUN
 // 流量回路"问题的回归测试。
 //
@@ -166,11 +171,24 @@ func TestCreateTunScriptExitCode(t *testing.T) {
 	})
 }
 
-// TestCloseTunScriptCleanup 用记录存根运行真实的关闭脚本，并钉住它必须
-// 发出的命令：创建脚本安装的同一路由阶梯（相同目的与掩码）、两条 ipv6
-// 路由，以及 ipv6 地址——netsh add address 是持久的，创建脚本的无条件
-// "add address" 无法在地址仍在适配器上时重新应用，因此关闭脚本必须删除它
-// （/prefix 处理见 client/tun/tun.go 的 bareV6Addr）。
+// closeScriptStub 描述关闭脚本两条查询命令的存根回答。
+type closeScriptStub struct {
+	// probeCode 是 netsh "show interface" 的退出码：0 = 接口还在，1 = 接口未注册
+	// （引擎停止时 wintun 适配器已经被注销，挂在它上面的路由与 v6 地址同时被
+	// 系统收走——这正是正常关闭的形态），9009 = netsh 本身跑不起来。
+	probeCode int
+	// tableRows 是 route 的 "print -4" 要回放的路由表行；为空表示回放一张空表。
+	tableRows []string
+}
+
+// TestCloseTunScriptCleanup 用记录存根运行真实的关闭脚本，并钉住它的两条契约：
+//
+//   - 必须发出的命令：创建脚本安装的同一路由阶梯（相同目的与掩码）、两条 ipv6
+//     路由，以及 ipv6 地址——netsh add address 是持久的，创建脚本的无条件
+//     "add address" 无法在地址仍在适配器上时重新应用，因此关闭脚本必须删除它
+//     （/prefix 处理见 client/tun/tun.go 的 bareV6Addr）。
+//   - 退出码：设备已经不存在时不得报失败，而路由真的残留下来时必须以非零码退出
+//     ——残留的分流默认路由会把全机 IPv4 流量送进一个没人读的 TUN 设备。
 func TestCloseTunScriptCleanup(t *testing.T) {
 	script, err := filepath.Abs(filepath.Join("..", "..", "scripts", scripts.CloseTunFilename))
 	require.NoError(t, err)
@@ -187,38 +205,98 @@ func TestCloseTunScriptCleanup(t *testing.T) {
 		t.Skipf("temp directory %q contains a space: the stub directory could not be reached unquoted", stubRoot)
 	}
 
-	// runClose 用把每次调用都追加到记录文件的 netsh/route 存根运行关闭
-	// 脚本，并返回记录下来的命令行。
-	runClose := func(t *testing.T, args ...string) []string {
+	// runClose 用 netsh/route 存根运行关闭脚本，返回退出码、合并输出与记录下来的
+	// 命令行。存根按 closeScriptStub 回答脚本的两条查询命令：接口是否还在
+	// （netsh show interface）与路由表的内容（route print -4，默认空表）。
+	// 记录为空（脚本在探测阶段就退出）不是错误：调用方按各子用例的期望断言。
+	runClose := func(t *testing.T, stub closeScriptStub, args ...string) (int, string, []string) {
 		t.Helper()
 
 		dir, err := os.MkdirTemp(stubRoot, "stubs")
 		require.NoError(t, err)
 		record := filepath.Join(dir, "record.txt")
-		body := "@echo off\r\necho %* >> \"" + record + "\"\r\nexit /b 0\r\n"
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "netsh.cmd"), []byte(body), 0o644))
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "route.cmd"), []byte(body), 0o644))
+
+		recordCall := "echo %* >> \"" + record + "\"\r\n"
+
+		// netsh 用退出码回答"接口还在不在"：脚本正是这样判断的——它打印的文本
+		// （未注册接口是 "The filename, directory name, or volume label syntax is
+		// incorrect."）与真正的失败无法区分，而且随系统语言变化。
+		netshBody := "@echo off\r\n" + recordCall +
+			"if \"%1\"==\"interface\" if \"%2\"==\"show\" exit /b " + strconv.Itoa(stub.probeCode) + "\r\n" +
+			"exit /b 0\r\n"
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "netsh.cmd"), []byte(netshBody), 0o644))
+
+		// 回放的表行由各子用例给出（网关列用 198.18.0.1，与脚本里的残留探测
+		// "tokens=1,2,3" 的第 1、3 列一致）。
+		routeBody := "@echo off\r\n" + recordCall
+		if len(stub.tableRows) > 0 {
+			routeBody += "if \"%1\"==\"print\" (\r\n"
+			for _, row := range stub.tableRows {
+				routeBody += "  echo " + row + "\r\n"
+			}
+			routeBody += ")\r\n"
+		}
+		routeBody += "exit /b 0\r\n"
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "route.cmd"), []byte(routeBody), 0o644))
 
 		cmd := exec.Command(comspec, append([]string{"/C", script}, args...)...)
 		cmd.Env = append(os.Environ(), "PATH="+dir+";"+os.Getenv("PATH"))
 		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "the close script must exit 0 when every stub succeeds:\n%s", out)
 
-		content, err := os.ReadFile(record)
-		require.NoError(t, err, "the stub tools were never invoked")
+		code := 0
+		if err != nil {
+			var exitErr *exec.ExitError
+			require.ErrorAs(t, err, &exitErr, "running the close script with stubbed tools: %v\n%s", err, out)
+			code = exitErr.ExitCode()
+		}
+
+		content, readErr := os.ReadFile(record)
+		if readErr != nil {
+			require.ErrorIs(t, readErr, os.ErrNotExist,
+				"reading the stub call log; script output:\n%s", out)
+			return code, string(out), nil
+		}
 		var lines []string
 		for line := range strings.SplitSeq(string(content), "\n") {
 			if line = strings.TrimSpace(line); line != "" {
 				lines = append(lines, line)
 			}
 		}
-		return lines
+		return code, string(out), lines
 	}
 
+	// 正常关闭：引擎先停，wintun 适配器随之注销，路由与 v6 地址也一起消失。
+	// 这是 client/tun/tun.go 的 Stop() 顺序（linux/darwin 同），因此它不是失败：
+	// 过去这里会把十一条"对象已不存在"的删除报成 [TUN] close script 告警。
+	t.Run("a device that is already gone is not a failure", func(t *testing.T) {
+		code, out, lines := runClose(t, closeScriptStub{probeCode: 1},
+			"tun-easyss-test", "198.18.0.1", "2001:db8::1")
+
+		require.Equal(t, 0, code,
+			"an adapter that is already unregistered must not be reported as a cleanup failure:\n%s", out)
+		require.NotContains(t, out, closeFailureMarker, "nothing was left to clean up")
+		require.Len(t, lines, 1, "only the interface probe may run when the device is gone:\n%v", lines)
+		require.Contains(t, lines[0], "show interface")
+	})
+
+	// 守卫只认"接口未注册"（netsh 恰好返回 1）：netsh 自己跑不起来（9009，例如
+	// 环境异常）时必须照常执行删除与残留探测，否则真正残留下来的路由会被
+	// "设备已消失"这个结论掩盖掉。
+	t.Run("a netsh that cannot run does not skip the cleanup", func(t *testing.T) {
+		code, out, lines := runClose(t, closeScriptStub{probeCode: 9009}, "tun-easyss-test", "198.18.0.1")
+
+		require.Equal(t, 0, code, "an empty route table is a clean table:\n%s", out)
+		require.Contains(t, lines, "delete 1.0.0.0 mask 255.0.0.0 198.18.0.1",
+			"the deletions must run when the probe could not answer:\n%v", lines)
+		require.Contains(t, lines, "print -4", "the residue probe must run too:\n%v", lines)
+	})
+
 	t.Run("with a v6 address", func(t *testing.T) {
-		lines := runClose(t, "tun-easyss-test", "198.18.0.1", "2001:db8::1")
+		code, out, lines := runClose(t, closeScriptStub{}, "tun-easyss-test", "198.18.0.1", "2001:db8::1")
+		require.Equal(t, 0, code, "%s", out)
 
 		expected := []string{
+			`interface show interface name="tun-easyss-test"`,
 			"delete 1.0.0.0 mask 255.0.0.0 198.18.0.1",
 			"delete 2.0.0.0 mask 254.0.0.0 198.18.0.1",
 			"delete 4.0.0.0 mask 252.0.0.0 198.18.0.1",
@@ -230,15 +308,54 @@ func TestCloseTunScriptCleanup(t *testing.T) {
 			"interface ipv6 delete route ::/1 tun-easyss-test",
 			"interface ipv6 delete route 8000::/1 tun-easyss-test",
 			"interface ipv6 delete address tun-easyss-test 2001:db8::1",
+			"print -4",
 		}
 		require.Equal(t, expected, lines)
 	})
 
 	t.Run("without a v6 address", func(t *testing.T) {
-		lines := runClose(t, "tun-easyss-test", "198.18.0.1")
-		require.Len(t, lines, 10, "only the routes are deleted")
+		code, out, lines := runClose(t, closeScriptStub{}, "tun-easyss-test", "198.18.0.1")
+		require.Equal(t, 0, code, "%s", out)
+		require.Len(t, lines, 12, "the device probe, the ten route deletions, the residue probe")
 		for _, line := range lines {
 			require.NotContains(t, line, "delete address")
 		}
+	})
+
+	// 删除被真正拒绝（而不是"对象本来就不存在"）时路由会留在表里：那正是
+	// "停止 TUN 后断网"的成因，脚本必须据此以非零码退出并说明原因。
+	t.Run("residual routes fail the script", func(t *testing.T) {
+		code, out, _ := runClose(t, closeScriptStub{tableRows: []string{
+			"Network Destination        Netmask          Gateway       Interface  Metric",
+			"          1.0.0.0        255.0.0.0      198.18.0.1      198.18.0.1      5",
+		}}, "tun-easyss-test", "198.18.0.1")
+
+		require.NotEqualf(t, 0, code, "a split route that survived the deletes must not exit 0:\n%s", out)
+		require.Contains(t, out, closeFailureMarker)
+	})
+
+	// 反过来：表里"以 TUN 网关为网关"的路由并不都是本脚本装的。创建脚本的
+	// "set address ... gateway" 会让适配器自己带一条默认路由（Windows 把它作为
+	// 持久路由留在表里，实测），别的 VPN 客户端也可能装上 0/1、128/1 这类大段路由。
+	// 它们不在本脚本删过的那 8 条里：算成残留只会让每次关闭都告警，而那 8 条其实
+	// 已经删干净了。
+	t.Run("routes the script never installed are not residue", func(t *testing.T) {
+		code, out, _ := runClose(t, closeScriptStub{tableRows: []string{
+			"Network Destination        Netmask          Gateway       Interface  Metric",
+			"          0.0.0.0          0.0.0.0       198.18.0.1       198.18.0.1      1",
+			"       198.18.0.0      255.255.0.0         On-link        198.18.0.1    261",
+		}}, "tun-easyss-test", "198.18.0.1")
+
+		require.Equal(t, 0, code, "a route the close script never installs is not residue:\n%s", out)
+		require.NotContains(t, out, closeFailureMarker)
+	})
+
+	// 网关缺失时既不能删除也不能探测：空网关会让 route delete 丢掉网关参数
+	// （可能删掉物理链路上的同名路由），并让残留探测匹配上每一行无法解析的表项。
+	t.Run("a missing gateway is refused", func(t *testing.T) {
+		code, out, _ := runClose(t, closeScriptStub{}, "tun-easyss-test")
+
+		require.NotEqualf(t, 0, code, "a missing tun gateway must not be treated as success:\n%s", out)
+		require.Contains(t, out, closeFailureMarker)
 	})
 }

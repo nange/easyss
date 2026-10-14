@@ -10,6 +10,7 @@ import (
 	"unsafe"
 
 	"github.com/nange/easyss/v3/client/proxy"
+	"github.com/nange/easyss/v3/client/tun"
 	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/scripts"
@@ -85,7 +86,7 @@ func runCreateScript(device, tunIP, tunGW, localGateway,
 		return fmt.Errorf("no create script for linux")
 	}
 
-	namePath, err := util.WriteToTemp(scripts.CreateTunFilename, scripts.CreateTunBytes)
+	namePath, err := tun.WriteScriptToTemp(scripts.CreateTunFilename, scripts.CreateTunBytes)
 	if err != nil {
 		return fmt.Errorf("write create script: %w", err)
 	}
@@ -107,7 +108,7 @@ func runCloseScript(device, tunGW, localGateway, tunGWV6, serverIPV6, localGatew
 		return fmt.Errorf("no close script for linux")
 	}
 
-	namePath, err := util.WriteToTemp(scripts.CloseTunFilename, scripts.CloseTunBytes)
+	namePath, err := tun.WriteScriptToTemp(scripts.CloseTunFilename, scripts.CloseTunBytes)
 	if err != nil {
 		return fmt.Errorf("write close script: %w", err)
 	}

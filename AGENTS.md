@@ -180,8 +180,9 @@ Makefile 通过 `-ldflags` 向 `version/` 包注入以下变量，其余变量�
 ## Windows 构建注意事项
 
 - 客户端使用纯 Go 系统托盘库 `github.com/gogpu/systray`（零 CGO，Windows 走 Win32、Linux 走 D-Bus SNI、macOS 走 goffi FFI）；服务端禁用 CGO。go.mod 通过 `replace` 指向 `github.com/nange/systray v0.3.0-easyss.1` 分支（import 路径不变），该分支修复了上游 issue #39——菜单打开期间 `SetMenu` 重建会把点击派发到别的菜单项；因此运行时重建菜单树（如 UWP 豁免列表）是安全的
-- 客户端产物连 `-H windowsgui` 标志以隐藏控制台窗口
+- `-H windowsgui` 标志以隐藏控制台窗口
 - `.gitignore` 规则 `cmd/easyss/easyss*` 排除二进制但保留 `easyss_windows.syso`
+- **平台脚本的唯一落盘入口是 `client/tun.WriteScriptToTemp`**（内部 `normalizeScriptEOL`）：本包的 TUN 创建/关闭脚本与 `cmd/easyss` 提权 helper（`tun_helper_linux.go`/`tun_helper_darwin.go`）的脚本都必须走它，`.bat` 会被统一成 CRLF，`.sh` 原样。cmd.exe 按 OEM 代码页逐行读取批处理文件，LF 行尾在中文 Windows（OEM 代码页 936）上会让多字节注释与换行错位、注释被当成命令执行（实测 create 脚本一条配置命令都发不出去），而 `go:embed` 取的是工作区字节——Raw 单文件下载、编辑器存成 LF、第三方镜像都不经过 `.gitattributes` 的 eol 转换。`.sh` 绝不能转成 CRLF（bash 会报 `\r: command not found`）；`scripts_test.go` 另有一条断言守仓库的 CRLF 约定
 
 ## 其他注意事项
 
