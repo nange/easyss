@@ -364,20 +364,29 @@ func (s *Server) Start() error {
 
 	s.httpServer = buildHTTPServer(cfg, tlsConfig, s.mux, timeout)
 
-	log.Info("[SERVER] listening", "addr", srvCfg.Listen, "routes", []string{"/", sharedconfig.EndpointTCP, sharedconfig.EndpointUDP, sharedconfig.EndpointICMP, sharedconfig.EndpointProbe})
+	// 把生效的 HTTP/2 上行参数打进启动日志：上传速度上不去时，第一件事就是确认
+	// 服务端到底给了多大的流级/连接级窗口与多少条并发流（配置覆盖也会体现在这里）。
+	log.Info("[SERVER] listening",
+		"addr", srvCfg.Listen,
+		"routes", []string{"/", sharedconfig.EndpointTCP, sharedconfig.EndpointUDP, sharedconfig.EndpointICMP, sharedconfig.EndpointProbe},
+		"h2_recv_buf_stream", s.httpServer.HTTP2.MaxReceiveBufferPerStream,
+		"h2_recv_buf_conn", s.httpServer.HTTP2.MaxReceiveBufferPerConnection,
+		"h2_max_concurrent_streams", s.httpServer.HTTP2.MaxConcurrentStreams)
 	s.statsDone = make(chan struct{})
 	go s.statsLoop()
 	return s.httpServer.ListenAndServeTLS("", "")
 }
 
-// buildHTTPServer 组装 HTTP 服务器，其 HTTP/2 流控窗口按上传吞吐量来定尺寸：
-// 每流接收窗口限制了单个上传流的在途数据量（吞吐 ≈ 窗口/RTT），因此两个窗口
-// 都必须足够大，以适配高 RTT 链路。
+// buildHTTPServer 组装 HTTP 服务器，其 HTTP/2 参数按上传吞吐量来定尺寸：
+// 流级接收窗口决定单条上传流的在途数据量（吞吐 ≈ 窗口/RTT），连接级窗口则是
+// "已收到但未消费"请求体的每连接上界，并发流上限决定该连接可同时承载的流数与
+// handler 规模（三者语义见 sharedconfig 中对应常量的说明）。
 func buildHTTPServer(cfg *config.FileConfig, tlsConfig *tls.Config, mux *http.ServeMux, timeout time.Duration) *http.Server {
 	http2Cfg := &http.HTTP2Config{
 		MaxReadFrameSize:              sharedconfig.HTTP2ServerMaxReadFrameSize,
 		MaxReceiveBufferPerConnection: sharedconfig.HTTP2ServerReceiveBufferPerConnection,
 		MaxReceiveBufferPerStream:     sharedconfig.HTTP2ServerReceiveBufferPerStream,
+		MaxConcurrentStreams:          sharedconfig.HTTP2ServerMaxConcurrentStreams,
 	}
 	if cfg.Transport.H2MaxFrameSize > 0 {
 		http2Cfg.MaxReadFrameSize = cfg.Transport.H2MaxFrameSize
@@ -387,6 +396,19 @@ func buildHTTPServer(cfg *config.FileConfig, tlsConfig *tls.Config, mux *http.Se
 	}
 	if cfg.Transport.H2RecvBufStream > 0 {
 		http2Cfg.MaxReceiveBufferPerStream = cfg.Transport.H2RecvBufStream
+	}
+	if cfg.Transport.H2MaxConcurrentStreams > 0 {
+		http2Cfg.MaxConcurrentStreams = cfg.Transport.H2MaxConcurrentStreams
+	}
+
+	// 连接级窗口同时是流级窗口的硬上限：每个字节都要同时扣减两个窗口，因此把它配得
+	// 比流级窗口小，单条流的在途额度就由它决定——那正是"上传速度上不去"的一类配置，
+	// 而且不会以任何其他方式暴露出来，所以这里明确告警。只告警不纠正：把连接窗口
+	// 压小往往是有意的内存收敛，替调用方改大反而违背其意图。
+	if http2Cfg.MaxReceiveBufferPerConnection < http2Cfg.MaxReceiveBufferPerStream {
+		log.Warn("[SERVER] h2 connection receive window is smaller than the per-stream window: the effective per-stream in-flight limit is the connection window",
+			"h2_recv_buf_conn", http2Cfg.MaxReceiveBufferPerConnection,
+			"h2_recv_buf_stream", http2Cfg.MaxReceiveBufferPerStream)
 	}
 
 	srv := &http.Server{

@@ -128,13 +128,48 @@ const (
 	SuspendDivergenceThreshold = 30 * time.Second
 	SuspendReverifyTimeout     = 2 * time.Second
 
-	// 服务端上行流量控制：流级窗口限定单条上传流在途数据的上限，使其吞吐量大致
-	// 封顶于 window/RTT。在 300ms 链路上，256KB 会把单流上传限制在约 6.8Mbps；
-	// 1MB（stdlib 服务端默认值）可将其提升到约 26Mbps，而 4MB 的连接级窗口可避免
-	// 聚合上传被约束为每条连接在途约 1MB。
+	// 服务端上行流量控制。稳态吞吐 ≈ 窗口/RTT（HTTP/2 的发送方每 RTT 回收一次
+	// 额度），因此流级窗口决定单条上传流的上限：4MiB-1 在 100/200/300ms 链路上
+	// 分别约 335/168/112Mbps，而此前 stdlib 服务端默认的 1MB 只有 84/42/28Mbps。
+	//
+	// 两个窗口都取 net/http 文档允许的上界（文档原文是 "less than 4MiB"，因此
+	// 4<<20 恰好越界——改前的连接级窗口就是这样，这次一并修正为 4<<20-1）。
+	// 取文档内的值是有意的：实现目前并不校验这个上界（内部钳制区间是
+	// [64KiB, MaxInt32] / [1, MaxInt32]，标准库自己的客户端默认值甚至就是 4<<20），
+	// 但上传吞吐没有理由押在"实现不校验"上。
+	//
+	// 内存代价由**连接级**窗口决定，与流级窗口无关：每个收到的字节都要同时扣减
+	// 连接窗口与流窗口（internal/http2 takeInflows），额度只在 handler 读走后才
+	// 返还，因此"已收到但 handler 未读走"的请求体在每条连接上 ≤ 连接级窗口，与
+	// 并发流数无关。这是**请求体**这一侧的上界，不是该连接的全部内存：handler 读走
+	// 之后的数据由下游持有（源站 socket、中继缓冲区），不受这两个窗口约束。
+	//
+	// 由此得到一条配置不变量：连接级窗口应 ≥ 流级窗口。更小时单条流的在途额度由
+	// 连接窗口决定，相当于把流级窗口静默调小（buildHTTPServer 对此告警）。
+	// 连接窗口保持 4MiB-1 意味着服务端这条每连接上界与改动前持平（单流最坏占用
+	// 由 1MB 升到 4MiB-1，仍被连接窗口兜住）；需要更高的单连接聚合上传上限
+	// （例如多流测速）时显式调大 transport.h2_recv_buf_conn，并接受同比例上界。
+	//
+	// 与下行窗口的关系：客户端下行固定为 6MB/15MB（见下方 HTTP2Client*，镜像
+	// Chrome 的伪装取值，不可配），上行这里由库文档上界决定——两个方向各自有
+	// 唯一理由，数值因此不必相同。
 	HTTP2ServerMaxReadFrameSize           = 1<<24 - 1 // 16MB-1，nginx/Cloudflare 主流值
-	HTTP2ServerReceiveBufferPerConnection = 4 << 20   // 4MB，连接级上行窗口
-	HTTP2ServerReceiveBufferPerStream     = 1 << 20   // 1MB，流级上行窗口（stdlib 服务端默认）
+	HTTP2ServerReceiveBufferPerConnection = 4<<20 - 1 // 4MiB-1，连接级上行窗口（= 每连接未读走请求体上界）
+	HTTP2ServerReceiveBufferPerStream     = 4<<20 - 1 // 4MiB-1，流级上行窗口（= 单条上传流在途上限）
+
+	// HTTP2ServerMaxConcurrentStreams 是服务端宣告的**每条连接**并发流上限。
+	// SETTINGS_MAX_CONCURRENT_STREAMS 每个连接各宣告一次，不是服务器级总量；
+	// 超限时标准库拒绝那条流（RST_STREAM），不断开连接，也不影响该连接上的其他流。
+	// 客户端侧只把它用于"这条连接还能不能接新请求"（internal/http2 transport.go 的
+	// canTakeNewRequest），因此老客户端不会因为它变小而被打断。
+	//
+	// 取 128 是**有意收紧**每连接的承载上限，不是顺手改个默认值：Go stdlib 的 250
+	// 实测在真实站点里没有对应（Cloudflare/Amazon/Apple/淘宝/知乎/新浪/网易/
+	// WordPress 等是 100/128），而它同时决定标准库为该连接并发运行的 handler 数上限
+	// （internal/http2 serverConn.scheduleHandler 以它作为 maxHandlers，超出的流先
+	// 排队，排队超过 4 倍才升级为连接级错误）。共享、多用户服务端需要更大并发时用
+	// transport.h2_max_concurrent_streams 放大。
+	HTTP2ServerMaxConcurrentStreams = 128
 
 	// 客户端 HTTP/2 接收窗口，镜像 Chrome 的取值，使传输层在审查下表现得像真实浏览器。
 	HTTP2ClientMaxReadFrameSize           = 1 * 1024 * 1024  // 1MB，Chrome MAX_FRAME_SIZE
