@@ -28,17 +28,22 @@ type TransportConfig struct {
 	// H2MaxFrameSize 是服务端愿意接收的最大帧（16KiB~16MiB）：客户端据此决定
 	// 每个 DATA 帧的大小，调小会把一条加密记录拆成多个帧。
 	H2MaxFrameSize int `json:"h2_max_frame_size"`
-	// H2RecvBufConn 是连接级上行窗口（字节）。它同时是"已收到但 handler 未读走"
-	// 的请求体在**每个连接**上的上界——每个字节都要同时扣减连接与流两个窗口，
-	// 额度只在 handler 读走后返还，因此并发流数不会突破它。调大它提升同一连接上
-	// 的聚合上传上限（例如多流测速），代价是同比例的内存上界。
+	// H2RecvBufConn 是连接级上行窗口（字节）。它同时是"已收到但 handler 未读走"的
+	// 请求体在**每个连接**上的上界——每个字节都要同时扣减连接与流两个窗口，额度只在
+	// handler 读走后返还，因此并发流数不会突破它。这是请求体这一侧的上界，不是该连接
+	// 的全部内存：handler 读走之后的数据由下游持有，不受它约束。
+	//
+	// 它同时是流级窗口的硬上限，因此应 ≥ H2RecvBufStream（更小时单流的在途额度由它
+	// 决定，server.buildHTTPServer 会告警）。调大它提升同一连接上的聚合上传上限
+	// （例如多流测速），代价是同比例的内存上界。
 	H2RecvBufConn int `json:"h2_recv_buf_conn"`
 	// H2RecvBufStream 是流级上行窗口（字节），决定单条上传流的吞吐上限
 	// （≈ 窗口/RTT）。它不改变服务端的内存上界（那由 H2RecvBufConn 决定）。
 	H2RecvBufStream int `json:"h2_recv_buf_stream"`
 	// H2MaxConcurrentStreams 是每条连接允许的并发流数：超限时服务端拒绝那条流
-	// （RST_STREAM）而不是断开连接，并限制该连接并发运行的 handler 数。
-	// Go stdlib 默认 250，主流站点多为 100/128。
+	// （RST_STREAM），不断开连接，也不影响该连接上的其他流（客户端只用它判断该连接
+	// 还能否接新请求，因此调小不会打断老客户端）。默认 128 相对 Go stdlib 的 250 是
+	// 有意收紧每连接承载上限（实测主流站点多为 100/128）；共享、多用户服务端可放大。
 	H2MaxConcurrentStreams int `json:"h2_max_concurrent_streams"`
 }
 

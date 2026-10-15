@@ -5,20 +5,65 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/caddyserver/certmagic"
 	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/server/config"
 	"github.com/stretchr/testify/require"
 )
+
+// logRecorder 捕获包级日志器的记录，用于断言"配置不当会告警"这类行为。
+// server 包的用例不并行，因此替换包级日志器是安全的（与 transport/http2、
+// server/handler 的用例同一手法）。
+type logRecorder struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (r *logRecorder) Enabled(context.Context, slog.Level) bool { return true }
+
+func (r *logRecorder) Handle(_ context.Context, rec slog.Record) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.records = append(r.records, rec.Clone())
+	return nil
+}
+
+func (r *logRecorder) WithAttrs([]slog.Attr) slog.Handler { return r }
+func (r *logRecorder) WithGroup(string) slog.Handler      { return r }
+
+// warnings 返回级别不低于 Warn 的记录。
+func (r *logRecorder) warnings() []slog.Record {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []slog.Record
+	for _, rec := range r.records {
+		if rec.Level >= slog.LevelWarn {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+func captureServerLogs(t *testing.T) *logRecorder {
+	t.Helper()
+	rec := &logRecorder{}
+	prev := log.Logger()
+	log.SetLogger(slog.New(rec))
+	t.Cleanup(func() { log.SetLogger(prev) })
+	return rec
+}
 
 func TestCertmagicStoragePathForExecutable(t *testing.T) {
 	exe := filepath.Join("tmp", "easyss", "easyss-server")
@@ -235,6 +280,41 @@ func TestBuildHTTPServerH2ConfigOverrides(t *testing.T) {
 	require.Equal(t, sharedconfig.HTTP2ServerMaxConcurrentStreams, srv.HTTP2.MaxConcurrentStreams)
 }
 
+// TestBuildHTTPServerWarnsOnInvertedWindows 固定"连接级窗口应 ≥ 流级窗口"这条
+// 不变量的可见性：连接窗口是流级窗口的硬上限（每个字节都要同时扣减两个窗口），
+// 把它配得更小时单条流的在途额度由它决定——那正是"上传速度上不去"的一类配置，
+// 而且不会以任何其他方式暴露出来，所以启动时必须告警。只告警不纠正：压小连接
+// 窗口往往是有意的内存收敛，替运维改大反而违背其意图。
+func TestBuildHTTPServerWarnsOnInvertedWindows(t *testing.T) {
+	rec := captureServerLogs(t)
+
+	// 默认（连接窗口 == 流级窗口）不是错误配置，不应有告警。
+	buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Listen: ":443"}}, nil, http.NewServeMux(), 30*time.Second)
+	require.Empty(t, rec.warnings(), "equal windows must not warn")
+
+	// 连接窗口 < 流级窗口：必须告警，并带上两个生效值供排查。
+	cfg := &config.FileConfig{
+		Server: config.ServerConfig{Listen: ":443"},
+		Transport: config.TransportConfig{
+			H2RecvBufConn:   1 << 20,
+			H2RecvBufStream: 4<<20 - 1,
+		},
+	}
+	buildHTTPServer(cfg, nil, http.NewServeMux(), 30*time.Second)
+
+	warns := rec.warnings()
+	require.Len(t, warns, 1)
+	require.Contains(t, warns[0].Message, "smaller than the per-stream window")
+
+	attrs := map[string]string{}
+	warns[0].Attrs(func(a slog.Attr) bool {
+		attrs[a.Key] = a.Value.String()
+		return true
+	})
+	require.Equal(t, "1048576", attrs["h2_recv_buf_conn"])
+	require.Equal(t, "4194303", attrs["h2_recv_buf_stream"])
+}
+
 // TestServerUploadFlowControlWindowsOnWire 验证服务端**实际宣告**的上行参数与
 // buildHTTPServer 组装的配置逐字节一致：SETTINGS_INITIAL_WINDOW_SIZE 携带流级
 // 窗口、SETTINGS_MAX_CONCURRENT_STREAMS 携带每连接并发流上限，连接级
@@ -248,12 +328,16 @@ func TestBuildHTTPServerH2ConfigOverrides(t *testing.T) {
 // 1MB/RTT。那正是本测试要拦住的回归。
 func TestServerUploadFlowControlWindowsOnWire(t *testing.T) {
 	built := buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Listen: ":443"}}, nil, http.NewServeMux(), 30*time.Second)
+	// 拷一份再交给 httptest：标准库只在装配连接时读取该配置
+	// （ServeConn → configFromServer），不会回写，但把同一个指针既交给它又留在
+	// 测试局部变量里属于隐式的只读借用前提，复制后就不再依赖那一条。
+	http2Cfg := *built.HTTP2
 
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	ts.EnableHTTP2 = true
 	ts.Config.Protocols = &http.Protocols{}
 	ts.Config.Protocols.SetHTTP2(true)
-	ts.Config.HTTP2 = built.HTTP2
+	ts.Config.HTTP2 = &http2Cfg
 	ts.StartTLS()
 	t.Cleanup(ts.Close)
 
@@ -331,10 +415,17 @@ func TestServerUploadFlowControlWindowsOnWire(t *testing.T) {
 // handler 故意不读请求体，客户端能塞进去的在途字节数就被流控窗口封顶。这条不变式
 // 正是上传吞吐的来源（吞吐 ≈ 窗口/RTT），也是本次改动唯一会改变的量。
 //
+// 服务端配置取自 buildHTTPServer 而不是在这里手抄常量：这样覆盖条件写反、字段接错
+// 这类接线错误同样会被本用例抓住（与 TestServerUploadFlowControlWindowsOnWire
+// 一致）。
+//
 // 两侧都留余量：下界排除"窗口其实还是默认 1MB"这类静默回落，上界排除"窗口被设成
 // 不受限（甚至无限）"这类错误。测量依据"在途量停止增长"而不是计时，因此在 CI 上
 // 不抖动；余量覆盖客户端管道/h2 写入侧一拍（最多两个 64KB 块）的交接。
 func TestServerUploadFlowControlInFlightPerStream(t *testing.T) {
+	built := buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Listen: ":443"}}, nil, http.NewServeMux(), 30*time.Second)
+	http2Cfg := *built.HTTP2
+
 	release := make(chan struct{})
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 读到 release 之前不碰 r.Body：服务端能缓冲的字节数由窗口决定。
@@ -343,10 +434,7 @@ func TestServerUploadFlowControlInFlightPerStream(t *testing.T) {
 	ts.EnableHTTP2 = true
 	ts.Config.Protocols = &http.Protocols{}
 	ts.Config.Protocols.SetHTTP2(true)
-	ts.Config.HTTP2 = &http.HTTP2Config{
-		MaxReceiveBufferPerConnection: sharedconfig.HTTP2ServerReceiveBufferPerConnection,
-		MaxReceiveBufferPerStream:     sharedconfig.HTTP2ServerReceiveBufferPerStream,
-	}
+	ts.Config.HTTP2 = &http2Cfg
 	ts.StartTLS()
 	t.Cleanup(func() {
 		close(release)
@@ -407,9 +495,9 @@ func TestServerUploadFlowControlInFlightPerStream(t *testing.T) {
 	}
 
 	// 在途上限是流级与连接级窗口的较小者：单流能占多少受流窗口限制，但整条连接
-	// 的信用额度（连接窗口）无论如何不会超过。两个窗口取当前默认值时二者相等，
-	// 这里显式取 min，使测试在将来把连接窗口调小/调大时依然描述正确的不变式。
-	window := min(int64(sharedconfig.HTTP2ServerReceiveBufferPerStream), int64(sharedconfig.HTTP2ServerReceiveBufferPerConnection))
+	// 的信用额度（连接窗口）无论如何不会超过。取生效配置（而不是常量）描述这条
+	// 不变式，字段接错时本用例同样会失败。
+	window := int64(min(http2Cfg.MaxReceiveBufferPerStream, http2Cfg.MaxReceiveBufferPerConnection))
 	require.GreaterOrEqual(t, inFlight, window-256<<10,
 		"client must be able to fill the configured per-stream window before backpressure")
 	require.LessOrEqual(t, inFlight, window+512<<10,

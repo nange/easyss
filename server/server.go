@@ -401,6 +401,16 @@ func buildHTTPServer(cfg *config.FileConfig, tlsConfig *tls.Config, mux *http.Se
 		http2Cfg.MaxConcurrentStreams = cfg.Transport.H2MaxConcurrentStreams
 	}
 
+	// 连接级窗口同时是流级窗口的硬上限：每个字节都要同时扣减两个窗口，因此把它配得
+	// 比流级窗口小，单条流的在途额度就由它决定——那正是"上传速度上不去"的一类配置，
+	// 而且不会以任何其他方式暴露出来，所以这里明确告警。只告警不纠正：把连接窗口
+	// 压小往往是有意的内存收敛，替调用方改大反而违背其意图。
+	if http2Cfg.MaxReceiveBufferPerConnection < http2Cfg.MaxReceiveBufferPerStream {
+		log.Warn("[SERVER] h2 connection receive window is smaller than the per-stream window: the effective per-stream in-flight limit is the connection window",
+			"h2_recv_buf_conn", http2Cfg.MaxReceiveBufferPerConnection,
+			"h2_recv_buf_stream", http2Cfg.MaxReceiveBufferPerStream)
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.Server.Listen,
 		TLSConfig:         tlsConfig,
