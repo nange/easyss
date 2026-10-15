@@ -16,7 +16,7 @@ import (
 	"github.com/nange/easyss/v3/server/nextproxy"
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/stats"
-	"github.com/nange/easyss/v3/util/bytespool"
+	"github.com/nange/easyss/v3/util/netbuf"
 )
 
 type tcpHandler struct {
@@ -131,16 +131,32 @@ func (h *tcpHandler) copyFromClient(dr *crypto.DecryptedReader, dst net.Conn, si
 }
 
 func (h *tcpHandler) copyFromTarget(src net.Conn, s2c shaper.Shaper, signalActivity func(), m *stats.StreamMeter) error {
-	buf := bytespool.Get(config.ServerTCPStreamBufferSize)
-	defer bytespool.MustPut(buf)
+	// 读缓冲按需增长：流的起点只占 protocol.MinRecordBufferSize (4KB)，读满一档
+	// 才升一档，上限是 config.ServerTCPStreamBufferSize（该值刻意让 2 帧落进一条
+	// 64KB 记录，不要改成 2 的幂）。此前是无条件借出 31744 字节并钉到流结束，
+	// 而 goroutine 大多数时间正阻塞在 src.Read 上持着它，因此空闲流、心跳流与
+	// 只传少量数据的流各自白占 31KB——服务端常驻内存因此随峰值并发流数增长。
+	//
+	// 增长对 TCP 是无损的：缓冲短了只会多几次 Read，数据不会丢，因此这里可以
+	// 只按"这次读满了"这一个信号升档（UDP 不能这么做，超长数据报会被静默截断）。
+	r := netbuf.NewReader(protocol.MinRecordBufferSize, config.ServerTCPStreamBufferSize)
+	defer r.Release()
+
 	for {
 		m.SetState("read_target")
+		buf := r.Buf()
 		n, err := src.Read(buf)
 		if n > 0 {
 			signalActivity()
 			m.SetState("write_http2")
 			if wErr := s2c.PushData(buf[:n]); wErr != nil {
 				return wErr
+			}
+			// 增长必须在 PushData 之后：Grow 会把这块缓冲归还池，而 buf[:n]
+			// 正指向它。先把数据交给整形器（它在写锁内拷进自己的明文缓冲），
+			// 再换档，否则后续写入会落进一块已经入池、可能被别的流取走的缓冲。
+			if n == len(buf) {
+				r.Grow()
 			}
 			m.Add(n, "read_target")
 		}

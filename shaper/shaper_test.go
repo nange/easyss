@@ -322,6 +322,66 @@ func TestBatchShaperAcceptsLargeDatagramFrame(t *testing.T) {
 	}
 }
 
+// TestBatchShaperMaxDatagramStaysIn64KRecordCeiling 固定"记录明文上限扣掉 AEAD
+// 标签"这条约束链的两个方向：
+//
+//   - 它绝不能把最大的合法单帧判成超限：UDP 数据报上限 65,507 字节，加上 3 字节
+//     帧头是 65,510，必须仍然放得下（这正是 4a5ef00 里 maxChunkSize 不能降的理由，
+//     本测试守住"只降 16 字节的标签开销不会误伤它"）；
+//   - 它必须真的生效：产生出来的记录不超过 recordCeiling，因为一条记录占用的
+//     池缓冲是 3 字节长度前缀 + 明文 + 16 字节标签，明文一旦超过 65,517，
+//     密文缓冲就会从池的 64KB 档跳到 128KB 档——为十几字节的溢出付一倍的池
+//     保留与瞬时分配。
+func TestBatchShaperMaxDatagramStaysIn64KRecordCeiling(t *testing.T) {
+	masterKey, err := easycrypto.DeriveMasterKey("batch-ceiling-test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, err := easycrypto.NewStreamKeys(masterKey, []byte("1234567890123456"), "/v3/udp")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	bs := New(newTestWriter(t, sk, &out), Config{BatchWindowMS: 1000})
+	t.Cleanup(func() { _ = bs.Close() })
+	impl := bs.(*batchShaper)
+
+	// 约束链必须自洽：最大单帧放得进单帧上限，且记录线上长度上界仍落在
+	// 池的 64KB 档位内。
+	if maxFrame := protocol.MaxUDPDataSize + protocol.FrameHeaderSize; maxFrame > impl.maxChunkSize {
+		t.Fatalf("最大单帧 %d 超过单帧上限 %d，会被误判为超限", maxFrame, impl.maxChunkSize)
+	}
+	if got := impl.recordCeiling + protocol.MaxCipherLenSize + protocol.MaxTagOverhead; got > 64*1024 {
+		t.Fatalf("记录线上长度上界 %d 超过 64KB 池档位", got)
+	}
+
+	// 推入一个最大数据报：必须被接受，而不是报"超过最大记录尺寸"。
+	if err := bs.PushData(make([]byte, protocol.MaxUDPDataSize)); err != nil {
+		t.Fatalf("PushData(MaxUDPDataSize): %v", err)
+	}
+	// 先冻结写入端再读，理由见 TestBatchShaperFlushesBeforePlainRecordLimit
+	// 对 cover 注入器与批处理定时器的说明。
+	if err := bs.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	rr := newTestReader(t, sk, &out)
+	for {
+		plaintext, err := rr.ReadRecord()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(plaintext) > impl.recordCeiling {
+			t.Fatalf("记录明文 %d 超过上限 %d（密文缓冲会落到 128KB 档）",
+				len(plaintext), impl.recordCeiling)
+		}
+	}
+}
+
 // TestCoverNormalizeClampsFrameSize 验证 Config.Normalize 会将配置错误的
 // cover 尺寸钳制到线缆格式上限，使过大的 MaxSize 不会产生截断的 uint16
 // 长度或 bytespool.Get 的 nil panic payload。
@@ -934,4 +994,70 @@ func newTestReader(t *testing.T, sk *easycrypto.StreamKeys, r io.Reader) *easycr
 		t.Fatal(err)
 	}
 	return rr
+}
+
+// TestPushFrameDoesNotRetainCallerPayload 固定**载荷所有权契约的另一半**：
+// 除 FrameCOVER 之外，PushFrame 返回后调用方可以立刻复用载荷缓冲。
+//
+// 服务端 UDP 下行（handler/udp.go）与客户端 UDP 上行（proxy/stream.go 的
+// UDPExchange.Send）都依赖它来避免每个数据报一次多余复制：它们用
+// protocol.NewFrameWithPayload 直接包装调用方的缓冲，而不是先复制一份。
+// 如果哪天 shaper 改成"归还任何池化载荷"或把载荷留到 flush 之后才读，
+// 那两处会安静地把仍在使用的缓冲归还池——跨流数据污染，且不会有任何报错。
+//
+// 这里用"PushFrame 返回后立刻覆写载荷"来暴露这种保留：若载荷被延后读取，
+// 解密出的记录里就会是覆写后的字节，而不是原始内容。
+func TestPushFrameDoesNotRetainCallerPayload(t *testing.T) {
+	masterKey, err := easycrypto.DeriveMasterKey("batch-payload-ownership")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, err := easycrypto.NewStreamKeys(masterKey, []byte("1234567890123456"), "/v3/udp")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	bs := New(newTestWriter(t, sk, &out), Config{BatchWindowMS: 1000})
+	t.Cleanup(func() { _ = bs.Close() })
+
+	// 载荷来自池外的堆切片（模拟 handler 从读缓冲拷出的数据报）：整形器
+	// 绝不能把它当作可归还的池缓冲。
+	payload := make([]byte, 1400)
+	for i := range payload {
+		payload[i] = 0x5A
+	}
+	frame := protocol.NewFrameWithPayload(protocol.FrameDATAGRAM, payload)
+	if err := bs.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame: %v", err)
+	}
+
+	// 返回即复用：覆写整块载荷。
+	for i := range payload {
+		payload[i] = 0xA5
+	}
+
+	if err := bs.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	rr := newTestReader(t, sk, &out)
+	got, err := rr.ReadRecord()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, _, err := protocol.DecodeFrame(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Type != protocol.FrameDATAGRAM {
+		t.Fatalf("frame type = %d, want DATAGRAM", decoded.Type)
+	}
+	// 同一记录里还会跟着 flush 追加的 PADDING 帧，因此只校验数据报载荷本身。
+	for i, b := range decoded.Payload {
+		if b != 0x5A {
+			t.Fatalf("载荷第 %d 字节 = %#x, want 0x5a：PushFrame 保留了调用方的缓冲，"+
+				"调用方按契约覆写它造成了数据污染", i, b)
+		}
+	}
 }

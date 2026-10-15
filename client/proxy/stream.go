@@ -21,6 +21,7 @@ import (
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
 	"github.com/nange/easyss/v3/util/bytespool"
+	"github.com/nange/easyss/v3/util/netbuf"
 )
 
 var ErrStreamIdleTimeout = errors.New("stream idle timeout")
@@ -406,7 +407,11 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 	var extraFrames []protocol.Frame
 	if localConn != nil {
 		_ = localConn.SetReadDeadline(time.Now().Add(8 * time.Millisecond))
-		buf := bytespool.Get(config.TCPStreamBufferSize)
+		// 这一读只取"连接建立时已经到达的首批数据"，随后就要进引导握手，
+		// 因此用最小档位起步：绝大多数连接在这一刻只有零到几百字节。
+		// NewFrameDATA 会复制载荷，所以这里的缓冲可以在拼帧后立即归还，
+		// 不必随 bootstrap 记录一起存活。
+		buf := bytespool.Get(protocol.MinRecordBufferSize)
 		n, rErr := localConn.Read(buf)
 		_ = localConn.SetReadDeadline(time.Time{})
 		if n > 0 {
@@ -472,10 +477,14 @@ func (h *StreamHandler) relay(target string, localConn net.Conn, tx shaper.Shape
 	return nil
 }
 
+// 读缓冲按需增长（起点 protocol.MinRecordBufferSize，上限 TCPStreamBufferSize）：
+// 上传方向此前为每条流无条件借出并钉住 15KB，而多数本地连接只在小数据量上活动。
+// TCP 上缩短缓冲只会多几次 Read，不会丢数据。
 func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signalActivity func()) error {
-	buf := bytespool.Get(config.TCPStreamBufferSize)
-	defer bytespool.MustPut(buf)
+	r := netbuf.NewReader(protocol.MinRecordBufferSize, config.TCPStreamBufferSize)
+	defer r.Release()
 	for {
+		buf := r.Buf()
 		n, err := src.Read(buf)
 		if n > 0 {
 			signalActivity()
@@ -486,6 +495,10 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 					return nil
 				}
 				return pErr
+			}
+			// 交出数据之后才换档：Grow 会把 buf 归还池。
+			if n == len(buf) {
+				r.Grow()
 			}
 		}
 		if err != nil {
@@ -727,7 +740,14 @@ func (ue *UDPExchange) Send(data []byte) error {
 	ue.mu.Lock()
 	defer ue.mu.Unlock()
 	ue.lastSeen.Store(time.Now().UnixNano())
-	frame := protocol.NewFrameDATAGRAM(data)
+	// 用 NewFrameWithPayload 而非 NewFrameDATAGRAM：后者会 append 复制一份载荷，
+	// 而整形器在 PushFrame 内就会把载荷拷进自己的明文缓冲，因此这次复制纯属多余
+	//（每个数据报都产生一个绕过池的堆块）。载荷所有权不变：DATAGRAM 的
+	// putPayload 为 false（见 shaper.appendFrameLocked），PushFrame 返回后调用方
+	// 仍拥有 data，可以立即复用——现在的调用方正是这么做的（SOCKS5 中继循环在
+	// 下一次 ReadFromUDP 时就覆盖了同一块缓冲）。若 shaper 将来改成归还任何池化
+	// 载荷，这里会变成把仍在使用的缓冲归还池。
+	frame := protocol.NewFrameWithPayload(protocol.FrameDATAGRAM, data)
 	stats.RecordRawBytesSent(len(data))
 	return ue.tx.PushFrame(frame)
 }

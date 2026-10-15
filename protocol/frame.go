@@ -85,6 +85,18 @@ const (
 	MaxPlainRecordSize = 64 * 1024
 	MaxCipherLenSize   = 3
 
+	// MaxTagOverhead 是本项目两种 AEAD（AES-256-GCM 与 ChaCha20-Poly1305）
+	// 认证标签的上界。记录层要它才能算出"明文上限"与"池档位"之间的正确关系：
+	// 一条记录的线上长度是 MaxCipherLenSize + 明文 + 标签，而 bytespool 的
+	// 档位必须容纳这三者之和，否则密文缓冲会从 64KB 档跳到 128KB 档——为十几
+	// 字节的溢出付一倍代价。
+	//
+	// 它是常量而不是运行时从 Encryptor.Overhead() 读取，因为 protocol 是记录
+	// 格式的定义方，不应该依赖 crypto 包；两个 AEAD 的标签都是 16 字节，
+	// 若将来引入更长的标签，这里必须同步上调（crypto 侧的测试会比对
+	// Encryptor.Overhead()）。
+	MaxTagOverhead = 16
+
 	// MinRecordBufferSize 是每条流的明文缓冲区初始大小。缓冲按需增长（见
 	// shaper.(*batchShaper).ensureCapacity），因此空闲流与只传少量数据的流
 	// 终生只占这么多，只有真正的大流量流才会长到 MaxPlainRecordSize。

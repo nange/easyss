@@ -217,7 +217,15 @@ func (s *udpSession) run() (out streamResult) {
 			if s.dns.intercept {
 				s.learnFromDNS(res.payload)
 			}
-			if err := s.s2c.PushFrame(protocol.NewFrameDATAGRAM(res.payload)); err != nil {
+			// 用 NewFrameWithPayload 而非 NewFrameDATAGRAM：后者内部会 append
+			// 复制一份载荷，而载荷已经由 readFromTarget 从读缓冲拷出来，第二次
+			// 复制纯属多余（大报文时还会每次都产生一个绕过池的堆块）。
+			// 所有权：PushFrame 在 bs.mu 下把载荷拷进整形器的明文缓冲后即返回，
+			// 调用方仍拥有 res.payload，因此这里不需要复制。它的成立条件是
+			// shaper 对 DATAGRAM 恒不归还载荷（putPayload 仅对 FrameCOVER 为真，
+			// 见 shaper.appendFrameLocked）——若将来改成"归还任何池化载荷"，
+			// 这里会立即变成跨流数据污染。
+			if err := s.s2c.PushFrame(protocol.NewFrameWithPayload(protocol.FrameDATAGRAM, res.payload)); err != nil {
 				return streamResult{Err: err}
 			}
 		case res := <-frameCh:

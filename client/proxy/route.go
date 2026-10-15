@@ -9,8 +9,9 @@ import (
 
 	"github.com/nange/easyss/v3/client/router"
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/relay"
-	"github.com/nange/easyss/v3/util/bytespool"
+	"github.com/nange/easyss/v3/util/netbuf"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
 )
@@ -150,15 +151,24 @@ func logRelayResult(prefix, target string, result relay.Result) {
 
 // copyHalfClose 将 src 流式拷贝到 dst，每次读取时发出活动信号，并在干净 EOF
 // 时对 dst 执行半关闭。
+//
+// 读缓冲按需增长（起点 protocol.MinRecordBufferSize，上限 TCPStreamBufferSize）：
+// 直连中继此前会为每条流无条件借出并钉住一整块 15KB 读缓冲，而绝大多数直连流
+// （本机服务、少量往返）远用不到它。TCP 上缩短缓冲只会多几次 Read，不会丢数据。
 func copyHalfClose(dst, src net.Conn, signalActivity func()) error {
-	buf := bytespool.Get(sharedconfig.TCPStreamBufferSize)
-	defer bytespool.MustPut(buf)
+	r := netbuf.NewReader(protocol.MinRecordBufferSize, sharedconfig.TCPStreamBufferSize)
+	defer r.Release()
 	for {
+		buf := r.Buf()
 		n, rErr := src.Read(buf)
 		if n > 0 {
 			signalActivity()
 			if _, wErr := dst.Write(buf[:n]); wErr != nil {
 				return wErr
+			}
+			// 写完之后才换档：Grow 会把 buf 归还池，而 buf[:n] 刚被写完。
+			if n == len(buf) {
+				r.Grow()
 			}
 		}
 		if rErr != nil {

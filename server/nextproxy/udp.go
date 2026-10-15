@@ -11,6 +11,7 @@ import (
 
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/xjasonlyu/tun2socks/v2/transport/socks5"
 )
 
@@ -257,10 +258,10 @@ type udpAssociateConn struct {
 	// 契约不承诺这一点。库的 EncodeUDPPacket 每次返回独立缓冲区，因此这里
 	// 不需要为复用而持有共享写缓冲。
 	writeMu sync.Mutex
-	// readMu 保护 scratch：单次 Read 内完成"收包 → 解封装 → 拷贝给调用方"，
-	// 因此不需要把整个读取过程串行化。
-	readMu  sync.Mutex
-	scratch []byte
+	// readMu 串行化读取：单次 Read 内完成"收包 → 解封装 → 拷贝给调用方"。
+	// 接收缓冲本身是逐次借还的（见 Read），因此这个锁只负责串行化，不再保护
+	// 任何常驻缓冲。
+	readMu sync.Mutex
 }
 
 // monitorControl 阻塞在控制连接上：上游关闭它（关联失效）或控制连接出错时，
@@ -299,23 +300,33 @@ func (c *udpAssociateConn) isClosed() bool {
 	}
 }
 
+// Read 读取一条经上游转发的数据报。它原本为每条关联惰性分配并常驻一块
+// maxUDPDatagram(65529) 的接收缓冲，直到连接关闭——空闲的上游 UDP 关联因此
+// 各自钉住 64KB，且这块内存完全不受池的保留上限约束。改为逐次借还后，空闲
+// 关联不再持有任何接收缓冲，稳态上界变成池的每档 64 块。
+//
+// 借出的是池内 64KB 档位：maxUDPDatagram 不是 2 的幂，因此**必须**用
+// bytespool.Get(65529)（它落 65536 档）而不是 make/append——否则 MustPut 会因为
+// "cap 不是 2 的幂"而 panic。归还时传完整切片（或 buf[:maxUDPDatagram]，切片保留
+// cap）即可，绝不能传 append 出来的拷贝。
 func (c *udpAssociateConn) Read(b []byte) (int, error) {
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
 
-	if c.scratch == nil {
-		c.scratch = make([]byte, maxUDPDatagram)
-	}
-	n, _, err := c.relay.ReadFromUDP(c.scratch)
+	buf := bytespool.Get(maxUDPDatagram)
+	defer bytespool.MustPut(buf)
+
+	n, _, err := c.relay.ReadFromUDP(buf)
 	if err != nil {
 		return 0, err
 	}
-	_, payload, err := socks5.DecodeUDPPacket(c.scratch[:n])
+	_, payload, err := socks5.DecodeUDPPacket(buf[:n])
 	if err != nil {
 		// 畸形/分片/无法解析的数据报：按 0 字节读取丢弃，让中继循环继续读
 		// 下一条，而不是把一条坏数据报当成会话故障（RFC 1928 允许整条丢弃）。
 		return 0, nil
 	}
+	// payload 别名 buf，但它在返回前就被拷进调用方的 b，因此 buf 可以立即归还。
 	return copy(b, payload), nil
 }
 

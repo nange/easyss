@@ -123,3 +123,70 @@ func TestCollectConcurrentWithReset(t *testing.T) {
 	}
 	<-done
 }
+
+// TestStreamMeterStartsLoopLazily 固定"未越过停顿阈值就不起观察 goroutine"
+// 这一内存/调度契约：停顿判定要求 total ≥ stallThreshold，在那之前观测没有
+// 任何意义，而此前每条 TCP 流都无条件带一个 goroutine 加一个 5s ticker。
+func TestStreamMeterStartsLoopLazily(t *testing.T) {
+	m := NewStreamMeter("test", "example.com:80")
+	defer m.Close()
+
+	if m.loopStarted.Load() {
+		t.Fatal("构造时不应启动观察 goroutine")
+	}
+
+	// 累计到阈值以下：仍然不应启动。
+	m.Add(int(stallThreshold)-1, "read_target")
+	if m.loopStarted.Load() {
+		t.Fatalf("未越过阈值 (%d) 就不应启动观察 goroutine", m.Bytes())
+	}
+
+	// 越过阈值：此时才启动。
+	m.Add(1, "read_target")
+	if !m.loopStarted.Load() {
+		t.Fatal("越过阈值后应启动观察 goroutine")
+	}
+}
+
+// TestStreamMeterCloseBeforeThreshold 固定"从未启动观察 goroutine 时 Close
+// 不能阻塞"：loopFinished 只有 loop 退出时才关闭，因此 Close 必须先用
+// loopStarted 区分两种情形，否则这条路径会永久挂住——而它正是绝大多数流的
+// 路径（短命流、空闲长连接）。
+func TestStreamMeterCloseBeforeThreshold(t *testing.T) {
+	m := NewStreamMeter("test", "example.com:80")
+	m.Add(1024, "read_target")
+
+	done := make(chan struct{})
+	go func() {
+		m.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("未启动观察 goroutine 时 Close 不应阻塞")
+	}
+}
+
+// TestStreamMeterCloseIsIdempotent 固定 Close 幂等：TCP handler 与各中继路径
+// 都可能在 defer 之外再关一次，而关闭已关闭的 channel 会 panic。
+func TestStreamMeterCloseIsIdempotent(t *testing.T) {
+	m := NewStreamMeter("test", "example.com:80")
+	m.Add(int(stallThreshold), "read_target") // 让观察 goroutine 真的起来
+	m.Close()
+	m.Close()
+}
+
+// TestStreamMeterBytesCountsAllAdds 固定计数语义不因惰性化而改变。
+func TestStreamMeterBytesCountsAllAdds(t *testing.T) {
+	m := NewStreamMeter("test", "example.com:80")
+	defer m.Close()
+
+	m.Add(100, "read_target")
+	m.Add(0, "read_target")
+	m.Add(-5, "read_target")
+	if got := m.Bytes(); got != 100 {
+		t.Fatalf("Bytes() = %d, want 100（只累计正数）", got)
+	}
+}

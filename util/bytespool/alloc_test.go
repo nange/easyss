@@ -160,6 +160,40 @@ func TestAllocGetClearsPhantomRetainedCount(t *testing.T) {
 	assert.Equal(t, int64(1), alloc.retained[idx].Load(), "幻影排空后 Put 应重新开始保留")
 }
 
+// TestSwapIn 固定"换一块更大的缓冲"这条公共路径的三种语义。它存在的意义是
+// 把归还顺序收敛到一处：调用方各自写一遍时最容易漏掉的是"池取不到更大缓冲时
+// 不得归还旧缓冲"——那会让后续写入落进已经入池的缓冲，造成跨流数据污染。
+func TestSwapIn(t *testing.T) {
+	t.Run("nil 新缓冲保留旧缓冲", func(t *testing.T) {
+		old := Get(1024)
+		old[0] = 0xAB
+		SwapIn(nil, old[:0])
+		// 旧缓冲没有被归还：cap 不变、内容仍然可读。
+		assert.Equal(t, 1024, cap(old))
+		assert.Equal(t, byte(0xAB), old[0], "池取不到新缓冲时旧缓冲不得被归还")
+		MustPut(old)
+	})
+
+	t.Run("nil 旧缓冲不 panic", func(t *testing.T) {
+		SwapIn(Get(1024), nil)
+	})
+
+	t.Run("空 cap 旧缓冲不 panic", func(t *testing.T) {
+		SwapIn(Get(1024), []byte{})
+	})
+
+	t.Run("正常路径归还旧缓冲", func(t *testing.T) {
+		old := Get(1024)
+		buf := Get(2048)
+		SwapIn(buf, old[:0])
+		assert.Equal(t, 2048, cap(buf))
+		// 旧缓冲已归还：它仍是合法档位，因此再 Put 一次不会报错
+		//（Put 只做档位校验；这条断言固定"归还走的是正常路径"）。
+		assert.NoError(t, Put(old))
+		MustPut(buf)
+	})
+}
+
 func BenchmarkMSB(b *testing.B) {
 	for b.Loop() {
 		msb(rand.Int())

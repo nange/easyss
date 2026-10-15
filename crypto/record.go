@@ -36,6 +36,14 @@ func NewRecordWriter(w io.Writer, enc Encryptor, counter *CounterNonce, aad []by
 	}
 }
 
+// WriteRecord 把一条明文记录加密后写出。线上格式是
+// MaxCipherLenSize(3) 字节的大端密文长度 + 密文。
+//
+// 长度前缀刻意不放进池化缓冲：缓冲按"密文长度"取块，因此密文恰好落在
+// bytespool 的 64KB 档位内（见 protocol.MaxTagOverhead）；若把 3 字节前缀
+// 也算进同一次 Get，最大记录会因这 3 字节跳到 128KB 档，为十几字节的溢出
+// 付一倍的池保留与瞬时分配。代价是每条记录两次 Write——两者都落到同一层
+// 缓冲（bufio 或 HTTP/2 framer），且都不会单独 flush。
 func (rw *RecordWriter) WriteRecord(plaintext []byte) error {
 	if len(plaintext) > rw.maxPlain {
 		return fmt.Errorf("crypto: plaintext exceeds max %d bytes", rw.maxPlain)
@@ -48,30 +56,43 @@ func (rw *RecordWriter) WriteRecord(plaintext []byte) error {
 		return fmt.Errorf("crypto: ciphertext too large: %d bytes", cipherLen)
 	}
 
-	record := bytespool.Get(protocol.MaxCipherLenSize + cipherLen)
-	record[0] = byte(cipherLen >> 16)
-	record[1] = byte(cipherLen >> 8)
-	record[2] = byte(cipherLen)
-
-	ciphertext, err := rw.enc.EncryptInto(record[protocol.MaxCipherLenSize:], plaintext, rw.aad, nonce[:])
+	prefix := [protocol.MaxCipherLenSize]byte{
+		byte(cipherLen >> 16), byte(cipherLen >> 8), byte(cipherLen),
+	}
+	buf := bytespool.Get(cipherLen)
+	ciphertext, err := rw.enc.EncryptInto(buf, plaintext, rw.aad, nonce[:])
 	if err != nil {
-		bytespool.MustPut(record)
+		bytespool.MustPut(buf)
 		return fmt.Errorf("crypto: encrypt record: %w", err)
 	}
 
 	recordLen := protocol.MaxCipherLenSize + len(ciphertext)
-	n, err := rw.w.Write(record[:recordLen])
-	bytespool.MustPut(record)
+	err = writeFully(rw.w, prefix[:])
+	if err == nil {
+		err = writeFully(rw.w, ciphertext)
+	}
+	bytespool.MustPut(buf)
 	if err != nil {
 		return fmt.Errorf("crypto: write record: %w", err)
-	}
-	if n != recordLen {
-		return io.ErrShortWrite
 	}
 
 	stats.RecordBytesSent(recordLen)
 	stats.RecordRecordWritten()
 
+	return nil
+}
+
+// writeFully 写出全部字节，短写（io.Writer 允许）归一为 io.ErrShortWrite，
+// 因此调用方不必自行判断部分写入——部分写出后该流已不可信，只能整体报错，
+// 与改动前"一次 Write 后检查 n == recordLen"的语义一致。
+func writeFully(w io.Writer, p []byte) error {
+	n, err := w.Write(p)
+	if err != nil {
+		return err
+	}
+	if n != len(p) {
+		return io.ErrShortWrite
+	}
 	return nil
 }
 
