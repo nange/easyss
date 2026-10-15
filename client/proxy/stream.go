@@ -113,10 +113,12 @@ var (
 // 写入上限是同一个值，因此"放不下就退避"这条规则同时守住了两件事：整条记录落进
 // 池的 64KB 档位，以及写入不会被加密层拒绝。
 //
-// 引导记录由客户端手工拼装、不经过整形器的预冲刷边界，这层保证只能在这里自己做：
-// 返回的明文一定能被 WriteRecord 接受，由 TestBootstrapRecordFitsWriteLimit 用
-// 真实 writer 守住。
-func buildBootstrapPlaintext(target string, proto protocol.Proto, method protocol.Method, extraFrames []protocol.Frame) []byte {
+// 引导记录由客户端手工拼装、不经过整形器的预冲刷边界，所以这层保证只能在这里
+// 自己做：填充能退避，额外帧不能，因此函数自己校验额外帧的线上总长，超限时返回
+// 错误而不是把问题留给加密层。于是"返回的明文一定能被 WriteRecord 接受"是函数
+// 自身的不变量（而不再依赖三条调用点的自律），由
+// TestBootstrapRecordFitsWriteLimit 用真实 writer 守住。
+func buildBootstrapPlaintext(target string, proto protocol.Proto, method protocol.Method, extraFrames []protocol.Frame) ([]byte, error) {
 	hsFrame := protocol.NewFrameHANDSHAKE(protocol.Handshake{
 		Version: protocol.Version3,
 		Proto:   proto,
@@ -125,17 +127,28 @@ func buildBootstrapPlaintext(target string, proto protocol.Proto, method protoco
 	})
 	frames := append([]protocol.Frame{hsFrame}, extraFrames...)
 
+	// 先校验"填充之前"的长度：额外帧自身放不进一条记录时，交给填充退避也救不回来。
+	// 宁可在这里报出是谁越了界，也不要让明文走到 WriteRecord 才被拒绝——那里只能
+	// 报"plaintext exceeds max"，看不出根因。
+	if size := encodedLen(frames); size > protocol.MaxRecordPlaintext {
+		return nil, fmt.Errorf("bootstrap record plaintext %d exceeds max %d bytes (target %q, %d extra frames)",
+			size, protocol.MaxRecordPlaintext, target, len(extraFrames))
+	}
+
 	// 添加随机填充以隐藏引导记录中的目标主机名长度。否则，第一条记录的密文长度
 	// 会直接与 len(target) 相关。
 	if padFrame, ok := shaper.BuildPaddingFrame(encodedLen(frames), protocol.MaxRecordPlaintext); ok {
 		frames = append(frames, padFrame)
 	}
 
-	return protocol.EncodeFrames(frames)
+	return protocol.EncodeFrames(frames), nil
 }
 
 func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, proto protocol.Proto, target string, method protocol.Method, extraFrames []protocol.Frame) (*bootstrapSession, error) {
-	plaintext := buildBootstrapPlaintext(target, proto, method, extraFrames)
+	plaintext, err := buildBootstrapPlaintext(target, proto, method, extraFrames)
+	if err != nil {
+		return nil, err
+	}
 
 	var lastErr error
 	for attempt := 1; attempt <= bootstrapMaxAttempts; attempt++ {

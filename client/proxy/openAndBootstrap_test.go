@@ -550,12 +550,17 @@ func TestOpenAndBootstrap_FreshSaltPerAttempt(t *testing.T) {
 // 字节起间歇性失败（随机填充 1~63 字节把明文顶过上限），≥ 65,483 起必然失败。
 //
 // 断言直接对着真实 writer：只要 buildBootstrapPlaintext 返回的明文能被
-// WriteRecord 接受，判据、填充预算与加密层上限三者就是自洽的。
+// WriteRecord 接受，判据、填充预算与加密层上限三者就是自洽的。同时固定"超限的
+// 额外帧由拼装函数自己拒绝"，这样这条不变量不再依赖三条调用点的自律。
 func TestBootstrapRecordFitsWriteLimit(t *testing.T) {
 	const target = "example.com:443"
 	const method = protocol.MethodAES256GCM
 	datagram := func(size int) []protocol.Frame {
 		return []protocol.Frame{protocol.NewFrameDATAGRAM(make([]byte, size))}
+	}
+	build := func(extra []protocol.Frame) ([]byte, error) {
+		t.Helper()
+		return buildBootstrapPlaintext(target, protocol.ProtoUDP, method, extra)
 	}
 	write := func(plaintext []byte) error {
 		t.Helper()
@@ -576,7 +581,10 @@ func TestBootstrapRecordFitsWriteLimit(t *testing.T) {
 
 	maxPayload := bootstrapMaxPayload(target)
 	for _, size := range []int{0, 1, 1400, maxPayload - 1, maxPayload} {
-		plaintext := buildBootstrapPlaintext(target, protocol.ProtoUDP, method, datagram(size))
+		plaintext, err := build(datagram(size))
+		if err != nil {
+			t.Fatalf("payload=%d: 判据说可以合并，拼装却拒绝了：%v", size, err)
+		}
 		if len(plaintext) > protocol.MaxRecordPlaintext {
 			t.Fatalf("payload=%d: 明文 %d 超过写入上限 %d",
 				size, len(plaintext), protocol.MaxRecordPlaintext)
@@ -586,13 +594,23 @@ func TestBootstrapRecordFitsWriteLimit(t *testing.T) {
 		}
 	}
 
-	// 判据的边界必须正好贴着写入上限：再多 1 字节就写不进去，因此"改为在握手之后
-	// 立即发送"的兜底分支是必需的，而不是永不触发的保险。这个长度下填充也放不下，
-	// 因此明文长度恰好是上限 + 1。
-	over := buildBootstrapPlaintext(target, protocol.ProtoUDP, method, datagram(maxPayload+1))
-	if len(over) <= protocol.MaxRecordPlaintext {
-		t.Fatalf("超出判据的载荷拼出的明文 %d 未超过上限 %d", len(over), protocol.MaxRecordPlaintext)
+	// 判据的边界必须正好贴着写入上限：再多 1 字节就放不下，因此"改为在握手之后
+	// 立即发送"的兜底分支是必需的，而不是永不触发的保险。这个长度连填充也放不下，
+	// 所以拼装函数必须自己拒绝它——而不是拼出一段加密层不收的明文。
+	if _, err := build(datagram(maxPayload + 1)); err == nil {
+		t.Fatal("超出判据的载荷必须被拼装函数拒绝")
 	}
+	// 同一个越界长度也要确认加密层确实不收：判据、拼装校验与写入上限三者夹的是
+	// 同一条线。
+	over := protocol.EncodeFrames([]protocol.Frame{
+		protocol.NewFrameHANDSHAKE(protocol.Handshake{
+			Version: protocol.Version3,
+			Proto:   protocol.ProtoUDP,
+			Method:  method,
+			Target:  target,
+		}),
+		protocol.NewFrameDATAGRAM(make([]byte, maxPayload+1)),
+	})
 	if err := write(over); err == nil {
 		t.Fatal("超出判据的载荷本应无法写入引导记录")
 	}
@@ -601,7 +619,10 @@ func TestBootstrapRecordFitsWriteLimit(t *testing.T) {
 	// 修复前 payload=65450 时约 40% 的次数会因填充把明文顶过上限而写入失败。
 	const nearLimit = 65450
 	for i := range 200 {
-		plaintext := buildBootstrapPlaintext(target, protocol.ProtoUDP, method, datagram(nearLimit))
+		plaintext, err := build(datagram(nearLimit))
+		if err != nil {
+			t.Fatalf("第 %d 次：%v", i, err)
+		}
 		if len(plaintext) > protocol.MaxRecordPlaintext {
 			t.Fatalf("第 %d 次：填充把明文顶到 %d，超过上限 %d",
 				i, len(plaintext), protocol.MaxRecordPlaintext)
