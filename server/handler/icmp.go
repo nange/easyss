@@ -186,9 +186,14 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) (reply []byte,
 		}
 
 		// 读满即可能被截断（"大于缓冲"与"恰好等于缓冲"无法区分，报文长度分布
-		// 连续，因此按可能截断处理）。此时升到上限换一块大缓冲重读一次：
-		// 缓冲从最小档位起步是为了常规 ping 不占 64KB，而不是为了在小报文上
-		// 保持小缓冲。只升一次；到上限后再读满就无法再分辨，与改动前一致。
+		// 连续，因此按可能截断处理）。此时升到上限再继续读——注意**被截断的那一条
+		// 救不回来**：raw socket 已经把它消费掉，重读只会读到下一条报文，升档的
+		// 作用仅仅是让后续报文不再被截断（原先注释写的"重读一次"是错的）。
+		//
+		// 按 icmpFirstReadBufSize 的推导，首读截断要求应答的 IP 头 > 56 字节
+		// （IPv4 带选项）或 IPv6 扩展头格外多，都是罕见情况，因此这里保留这段
+		// 增长作为兜底：缓冲从最小档位起步是为了常规 ping 不占 64KB，而不是为了
+		// 在小报文上保持小缓冲。只升一次；到上限后再读满就无法再分辨，与改动前一致。
 		if n == len(rb) && len(rb) < icmpMaxReadBufSize {
 			bigger := bytespool.Get(icmpMaxReadBufSize)
 			bytespool.SwapIn(bigger, rb[:0])

@@ -143,10 +143,12 @@ const (
 	HTTP2ClientMaxDecoderHeaderTableSize  = 65536            // Chrome HEADER_TABLE_SIZE
 	HTTP2ClientMaxResponseHeaderBytes     = 262144           // 256KB，Chrome MAX_HEADER_LIST_SIZE
 
-	// TCP 流缓冲区大小：选取为每个批处理记录都保持在 64KB HTTP/2 帧上限以内
-	// （客户端每记录打包 4 帧，服务端 2 帧）。
-	TCPStreamBufferSize       = 15 * 1024 // 客户端，4帧/record (4*(15360+3)=61452 < 64KB)
-	ServerTCPStreamBufferSize = 31 * 1024 // 服务端，2帧/record (2*(31744+3)=63494 < 64KB)
+	// TCP 流缓冲区大小：它们是读缓冲的**上限**，实际档位由 netbuf 向上取到池的
+	// 2 的幂（15360 → 16384，31744 → 32768）。因此"每记录几帧"由取整后的档位
+	// 决定，而不是这里的字面值：满档时客户端 3 帧（3×(16384+3)=49161），服务端
+	// 1 帧（2×(32768+3) 放不进一条记录，见 protocol.MaxRecordPlaintext）。
+	TCPStreamBufferSize       = 15 * 1024 // 客户端，满档 3 帧/record
+	ServerTCPStreamBufferSize = 31 * 1024 // 服务端，满档 1 帧/record
 
 	// 端点路径：代理提供的唯一路径（强制 HTTP/2）；
 	// 其余所有路径均返回 fallback HTML 页面。

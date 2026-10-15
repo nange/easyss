@@ -36,8 +36,13 @@ type Reader struct {
 // NewReader 返回一个初始档位为 hint 的读缓冲。hint <= 0 时取 Hint；hint
 // 超过 max 时取 max。两个值都会被归一到 bytespool 的合法档位（2 的幂：
 // 池的 Get 按档位返回，Put 也要求 cap 恰好是 2 的幂）。
+//
+// max 另被钳到 bytespool.MaxSize：池对更大的请求返回 nil，若放任 max 超过它，
+// Grow 就会在末档拿到 nil（旧缓冲被丢给 GC，Buf() 变成 nil，调用方的
+// Read(nil) 会立刻返回 (0, nil) 变成空转）。钳在构造期而不是在 Grow 里加守卫，
+// 是为了让"Get(next) 必定成功"成为本类型的不变量。
 func NewReader(hint, max int) *Reader {
-	max = normalized(max, Hint)
+	max = min(normalized(max, Hint), bytespool.MaxSize)
 	hint = min(normalized(hint, Hint), max)
 	return &Reader{buf: bytespool.Get(hint), max: max}
 }
@@ -58,8 +63,8 @@ func (r *Reader) Cap() int {
 // 判断"是否读满"，这个前提只能由调用方用 `n == len(buf)` 保证。
 //
 // 达到上限后它是 no-op：继续增长既没有收益，也超出调用方声明的预算。
-// 换下来的旧缓冲通过 bytespool.SwapIn 归还；如果池取不到新缓冲（档位超过
-// MaxSize），SwapIn 保留旧缓冲，本方法也不会让 r.buf 变成 nil。
+// 换下来的旧缓冲通过 bytespool.SwapIn 归还；max 已在 NewReader 里钳到
+// bytespool.MaxSize，因此 Get 必定拿得到新缓冲，r.buf 不会变成 nil。
 func (r *Reader) Grow() {
 	cur := cap(r.buf)
 	next := r.max

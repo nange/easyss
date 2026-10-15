@@ -51,9 +51,11 @@ func NewStreamMeter(component, target string) *StreamMeter {
 func (m *StreamMeter) Add(n int, state string) {
 	if n > 0 {
 		total := m.total.Add(int64(n))
-		// 越过阈值之后观察者才有可判定的事可做。CAS 保证并发的 Add 不会启动
-		// 多个 goroutine。
-		if total >= stallThreshold && m.loopStarted.CompareAndSwap(false, true) {
+		// 越过阈值之后观察者才有可判定的事可做。先做一次只读的 Load 再 CAS：
+		// total 只会继续增长，少了这层短路，热路径上每次 Add 都要付一次注定
+		// 失败的原子 RMW。CAS 仍然负责并发下的唯一性（Load 为 false 也不代表
+		// 我们抢到了启动权）。
+		if total >= stallThreshold && !m.loopStarted.Load() && m.loopStarted.CompareAndSwap(false, true) {
 			go m.loop()
 		}
 	}

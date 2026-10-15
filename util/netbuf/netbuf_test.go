@@ -57,6 +57,24 @@ func TestGrowNonPowerOfTwoMax(t *testing.T) {
 	assert.Equal(t, 32768, r.Cap())
 }
 
+// TestNewReaderClampsMaxToPoolSize 固定"max 不得超过池的上限"：bytespool.Get 对
+// 超过 MaxSize 的请求返回 nil，若放任 max 超过去，Grow 在末档就会把缓冲换成 nil
+// ——旧缓冲丢给 GC，Buf() 返回 nil，调用方的 Read(nil) 立刻返回 (0, nil) 变成
+// 100% CPU 空转。钳在构造期而不是在 Grow 里加守卫，是为了让"Get(next) 必定成功"
+// 成为本类型的不变量。
+func TestNewReaderClampsMaxToPoolSize(t *testing.T) {
+	r := NewReader(0, 1<<30)
+	defer r.Release()
+	assert.Equal(t, bytespool.MaxSize, r.max, "max 必须被钳到池的上限")
+
+	for range 32 {
+		r.Grow()
+	}
+	assert.Equal(t, bytespool.MaxSize, r.Cap(), "增长应停在池的上限")
+	assert.NotNil(t, r.Buf(), "Grow 绝不能让缓冲变成 nil")
+	assert.Equal(t, bytespool.MaxSize, len(r.Buf()), "Buf 的 len 与 cap 必须相等")
+}
+
 // TestReleaseReturnsBufferToPool 固定归还语义：Release 之后该缓冲可被同档位
 // 的 Get 复用。借"归还后 Put 必须成功"这一点反证 Release 归还的是合法档位
 // （cap 是 2 的幂），否则 MustPut 会 panic。
