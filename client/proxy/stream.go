@@ -108,7 +108,15 @@ var (
 	bootstrapSettleTimeout   = 100 * time.Millisecond
 )
 
-func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, proto protocol.Proto, target string, method protocol.Method, extraFrames []protocol.Frame) (*bootstrapSession, error) {
+// buildBootstrapPlaintext 拼装引导记录的明文：HANDSHAKE 帧 + 调用方的额外帧 +
+// 随机填充。填充预算取 protocol.MaxRecordPlaintext——它与 crypto.RecordWriter 的
+// 写入上限是同一个值，因此"放不下就退避"这条规则同时守住了两件事：整条记录落进
+// 池的 64KB 档位，以及写入不会被加密层拒绝。
+//
+// 引导记录由客户端手工拼装、不经过整形器的预冲刷边界，这层保证只能在这里自己做：
+// 返回的明文一定能被 WriteRecord 接受，由 TestBootstrapRecordFitsWriteLimit 用
+// 真实 writer 守住。
+func buildBootstrapPlaintext(target string, proto protocol.Proto, method protocol.Method, extraFrames []protocol.Frame) []byte {
 	hsFrame := protocol.NewFrameHANDSHAKE(protocol.Handshake{
 		Version: protocol.Version3,
 		Proto:   proto,
@@ -119,13 +127,15 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 
 	// 添加随机填充以隐藏引导记录中的目标主机名长度。否则，第一条记录的密文长度
 	// 会直接与 len(target) 相关。
-	// 预算是 0：bootstrap 记录在客户端手工拼装，尚未进入整形器的池化缓冲区，
-	// 因此按线上格式上限判断填充是否放得下。
-	if padFrame, ok := shaper.BuildPaddingFrame(encodedLen(frames), 0); ok {
+	if padFrame, ok := shaper.BuildPaddingFrame(encodedLen(frames), protocol.MaxRecordPlaintext); ok {
 		frames = append(frames, padFrame)
 	}
 
-	plaintext := protocol.EncodeFrames(frames)
+	return protocol.EncodeFrames(frames)
+}
+
+func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, proto protocol.Proto, target string, method protocol.Method, extraFrames []protocol.Frame) (*bootstrapSession, error) {
+	plaintext := buildBootstrapPlaintext(target, proto, method, extraFrames)
 
 	var lastErr error
 	for attempt := 1; attempt <= bootstrapMaxAttempts; attempt++ {
@@ -672,19 +682,30 @@ type UDPExchange struct {
 	closeOnce sync.Once
 }
 
+// bootstrapMaxPayload 返回可以合并进引导记录的首个数据报的最大长度：引导记录由
+// 客户端手工拼装，不经过整形器的预冲刷边界，因此合并判据必须自己保证拼出来的明文
+// 不超过 protocol.MaxRecordPlaintext（= crypto.RecordWriter 的写入上限）。
+// 9 = HANDSHAKE 帧头 3 + 握手体固定字段 3 + DATAGRAM 帧头 3。
+//
+// 判据与 buildBootstrapPlaintext 的填充预算取自同一个常量，因此"判据说能合并"
+// 与"加密层一定接受"是同一件事——这条等价关系由 TestBootstrapRecordFitsWriteLimit
+// 直接对着真实 writer 断言。
+func bootstrapMaxPayload(target string) int {
+	return protocol.MaxRecordPlaintext - len(target) - 9
+}
+
 func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, method protocol.Method, firstPayload []byte) (*UDPExchange, error) {
 	stats.RecordUDPAssociation()
 	log.Debug("[UDP_EXCHANGE] opening", "target", target)
 
-	// 仅在合并后的明文保证能放进 MaxPlainRecordSize 时，才把第一个数据报合并进
-	// 引导记录：HANDSHAKE 帧（3 + 3 + len(target)）加上 DATAGRAM 帧头（3）再
-	// 加上载荷，填充会自行适应（记录将要溢出时 BuildPaddingFrame 会退避）。
-	// 过大的首个数据报（例如巨型包加上很长的目标名）改为在握手之后立即发送，
-	// 而不是让整个交换失败。
+	// 仅在合并后的明文保证能被加密层接受时，才把第一个数据报合并进引导记录：
+	// 判据见 bootstrapMaxPayload（填充会自行适应——记录将要溢出时
+	// BuildPaddingFrame 会退避）。过大的首个数据报（例如巨型包加上很长的目标名）
+	// 改为在握手之后立即发送，而不是让整个交换失败。
 	var extraFrames []protocol.Frame
 	mergeFirst := false
 	if len(firstPayload) > 0 {
-		if len(firstPayload)+len(target)+9 <= protocol.MaxPlainRecordSize {
+		if len(firstPayload) <= bootstrapMaxPayload(target) {
 			mergeFirst = true
 			extraFrames = []protocol.Frame{protocol.NewFrameDATAGRAM(firstPayload)}
 			// 合并进引导记录的数据报不走 Send（它是流的第一条记录），因此它的

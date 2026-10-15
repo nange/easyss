@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/transport"
@@ -509,6 +510,8 @@ func (t *saltCapturingTransport) CloseIdle()                      {}
 func (t *saltCapturingTransport) Stats() transport.TransportStats { return transport.TransportStats{} }
 func (t *saltCapturingTransport) Close() error                    { return t.inner.Close() }
 
+// TestOpenAndBootstrap_FreshSaltPerAttempt 验证每次尝试都重新生成 salt（服务端的
+// 重放保护因此不会把重试当成重放）。
 func TestOpenAndBootstrap_FreshSaltPerAttempt(t *testing.T) {
 	tr := &mockTransport{
 		streams: []transport.Stream{
@@ -535,5 +538,76 @@ func TestOpenAndBootstrap_FreshSaltPerAttempt(t *testing.T) {
 	}
 	if wrapped.salts[0] == wrapped.salts[1] {
 		t.Error("expected different salts for each retry attempt")
+	}
+}
+
+// TestBootstrapRecordFitsWriteLimit 固定"手工拼装的引导记录一定能被加密层接受"。
+//
+// 引导记录是唯一不走整形器的明文写入路径：它由客户端自己拼装，既没有单帧校验，
+// 也没有预冲刷边界。历史缺陷：写入上限收紧到 protocol.MaxRecordPlaintext(65,510)
+// 之后，这里的合并判据与填充预算仍按线上格式上限(65,536) 判断，于是首个大包被判成
+// "可以合并"、随后被 WriteRecord 拒绝，整个 UDP 交换失败——首个数据报 ≥ 65,421
+// 字节起间歇性失败（随机填充 1~63 字节把明文顶过上限），≥ 65,483 起必然失败。
+//
+// 断言直接对着真实 writer：只要 buildBootstrapPlaintext 返回的明文能被
+// WriteRecord 接受，判据、填充预算与加密层上限三者就是自洽的。
+func TestBootstrapRecordFitsWriteLimit(t *testing.T) {
+	const target = "example.com:443"
+	const method = protocol.MethodAES256GCM
+	datagram := func(size int) []protocol.Frame {
+		return []protocol.Frame{protocol.NewFrameDATAGRAM(make([]byte, size))}
+	}
+	write := func(plaintext []byte) error {
+		t.Helper()
+		key := make([]byte, 32)
+		for i := range key {
+			key[i] = byte(i + 1)
+		}
+		sk, err := crypto.NewStreamKeys(key, []byte("1234567890123456"), "/v3/udp")
+		if err != nil {
+			t.Fatalf("stream keys: %v", err)
+		}
+		w, err := sk.BootstrapWriter(io.Discard)
+		if err != nil {
+			t.Fatalf("bootstrap writer: %v", err)
+		}
+		return w.WriteRecord(plaintext)
+	}
+
+	maxPayload := bootstrapMaxPayload(target)
+	for _, size := range []int{0, 1, 1400, maxPayload - 1, maxPayload} {
+		plaintext := buildBootstrapPlaintext(target, protocol.ProtoUDP, method, datagram(size))
+		if len(plaintext) > protocol.MaxRecordPlaintext {
+			t.Fatalf("payload=%d: 明文 %d 超过写入上限 %d",
+				size, len(plaintext), protocol.MaxRecordPlaintext)
+		}
+		if err := write(plaintext); err != nil {
+			t.Fatalf("payload=%d: 判据说可以合并，加密层却拒绝了：%v", size, err)
+		}
+	}
+
+	// 判据的边界必须正好贴着写入上限：再多 1 字节就写不进去，因此"改为在握手之后
+	// 立即发送"的兜底分支是必需的，而不是永不触发的保险。这个长度下填充也放不下，
+	// 因此明文长度恰好是上限 + 1。
+	over := buildBootstrapPlaintext(target, protocol.ProtoUDP, method, datagram(maxPayload+1))
+	if len(over) <= protocol.MaxRecordPlaintext {
+		t.Fatalf("超出判据的载荷拼出的明文 %d 未超过上限 %d", len(over), protocol.MaxRecordPlaintext)
+	}
+	if err := write(over); err == nil {
+		t.Fatal("超出判据的载荷本应无法写入引导记录")
+	}
+
+	// 填充长度是随机的（1~63 字节），因此贴着上限的载荷要重复多次才抓得住：
+	// 修复前 payload=65450 时约 40% 的次数会因填充把明文顶过上限而写入失败。
+	const nearLimit = 65450
+	for i := range 200 {
+		plaintext := buildBootstrapPlaintext(target, protocol.ProtoUDP, method, datagram(nearLimit))
+		if len(plaintext) > protocol.MaxRecordPlaintext {
+			t.Fatalf("第 %d 次：填充把明文顶到 %d，超过上限 %d",
+				i, len(plaintext), protocol.MaxRecordPlaintext)
+		}
+		if err := write(plaintext); err != nil {
+			t.Fatalf("第 %d 次：%v", i, err)
+		}
 	}
 }
