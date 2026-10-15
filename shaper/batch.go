@@ -18,14 +18,26 @@ import (
 )
 
 type batchShaper struct {
-	writer         *crypto.RecordWriter
-	plaintext      []byte
-	timer          *time.Timer
-	mu             sync.Mutex
-	writeMu        sync.Mutex // 跨 goroutine 串行化 WriteRecord 调用
-	maxChunkSize   int
+	writer    *crypto.RecordWriter
+	plaintext []byte
+	timer     *time.Timer
+	mu        sync.Mutex
+	writeMu   sync.Mutex // 跨 goroutine 串行化 WriteRecord 调用
+	// maxChunkSize 同时充当两个边界，这是由约束链决定的，不是可以分别调整的两个值：
+	//
+	//   a) 单帧合法性：UDP 数据报帧最大 protocol.MaxUDPDataSize(65507)，
+	//      因此单帧上限必须 ≥ 该值 → 只能是 protocol.MaxPlainRecordSize；
+	//   b) 记录填充边界：攒到 len+frameSize 超过它就先把当前记录冲刷掉。
+	//      若把它调到单帧上限以下，一个大 UDP 数据报会被误判为"溢出"，
+	//      而冲刷之后它仍然放不下——行为就是错的。
+	//
+	// 记录本身还能更大（线上格式的 3 字节长度前缀可表达 16MB，缓冲上限也按
+	// MaxPlainRecordSize 裁剪），但那个更大的尺寸只用于解码既有记录，见
+	// crypto.MaxCipherRecordSize。
+	maxChunkSize int
+	// flushThreshold 是批处理的目标：攒到它的 9/10 就冲刷，让记录尺寸落在
+	// 填充的目标档位附近，而不是每次都顶到上限。
 	flushThreshold int
-	flushCeiling   int
 	window         time.Duration
 	timerStarted   bool
 	closing        atomic.Bool
@@ -47,16 +59,12 @@ func New(writer *crypto.RecordWriter, cfg Config) Shaper {
 		writer: writer,
 		// 缓冲从初始大小起步，按需增长（见 ensureCapacity）。
 		plaintext: bytespool.Get(minRecordBufferSize)[:0],
-		// maxChunkSize 是一条记录的合法上限：UDP 数据报帧最大可达
-		// protocol.MaxUDPDataSize(65507)，因此这里必须是线上格式上限。
+		// maxChunkSize 取线上格式上限，理由见字段上的约束链说明：
+		// 它既要容纳最大的合法单帧（UDP 数据报 65507B），又要作为记录填充边界。
 		maxChunkSize: protocol.MaxPlainRecordSize,
 		// flushThreshold 是批处理的目标：攒到上限的 9/10 就冲刷。
 		flushThreshold: protocol.MaxPlainRecordSize * 9 / 10,
-		// flushCeiling 是"攒到多大就必须先冲刷"的边界。它与 flushThreshold
-		// 分开：单个超过 flushThreshold 的合法帧（大 UDP 数据报）必须能放进
-		// 一条记录，不能被溢出判断挡下来。
-		flushCeiling: protocol.MaxPlainRecordSize,
-		window:       time.Duration(cfg.BatchWindowMS) * time.Millisecond,
+		window:         time.Duration(cfg.BatchWindowMS) * time.Millisecond,
 	}
 	bs.timer = time.AfterFunc(bs.window, bs.onTimer)
 	bs.timer.Stop()
@@ -121,7 +129,9 @@ func (bs *batchShaper) appendFrameLocked(ftype protocol.FrameType, payload []byt
 	// 若追加会导致记录溢出，则预先冲刷。这一步必须在容量检查之前：冲刷会
 	// 换出一块空的缓冲区，原来"放不下"的帧因此往往又能放下了（例如缓冲区
 	// 已攒到上限，再来一帧只能放进下一条记录）。
-	if len(bs.plaintext) > 0 && len(bs.plaintext)+frameSize > bs.flushCeiling {
+	// 边界取 maxChunkSize 而不是 flushThreshold：单个超过阈值的大帧
+	//（UDP 数据报）也是合法帧，必须能放进一条记录。
+	if len(bs.plaintext) > 0 && len(bs.plaintext)+frameSize > bs.maxChunkSize {
 		if err := bs.flushAndWrite(false); err != nil {
 			// 该帧从未被追加，因此在此归还池化 payload：没有其他人会归还它。
 			if putPayload {
