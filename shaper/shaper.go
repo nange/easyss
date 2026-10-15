@@ -98,14 +98,21 @@ func (c Config) Normalize() Config {
 // 填充大小根据 totalSize 通过分级算法推导，瞄准常见的记录大小区间，
 // 以掩盖真实 payload 长度。
 //
-// 返回的 bool 表示是否生成了填充。当算法判定无需填充，或帧会超出
-// MaxPlainRecordSize 时为 false。
-func BuildPaddingFrame(totalSize int) (protocol.Frame, bool) {
+// budget 是这条记录可用的总空间（含帧头），<=0 表示按线上格式上限
+// protocol.MaxPlainRecordSize 计算。调用方传入自己缓冲区的实际容量，可以在
+// 缓冲尚未增长到上限时也做一次判断，而不是先生成再丢弃。
+//
+// 返回的 bool 表示是否生成了填充。当算法判定无需填充，或帧会超出 budget
+// （以及线上格式上限）时为 false。
+func BuildPaddingFrame(totalSize, budget int) (protocol.Frame, bool) {
+	if budget <= 0 || budget > protocol.MaxPlainRecordSize {
+		budget = protocol.MaxPlainRecordSize
+	}
 	padSize := computePadPayloadSize(totalSize)
 	if padSize <= 0 {
 		return protocol.Frame{}, false
 	}
-	if totalSize+protocol.FrameHeaderSize+padSize > protocol.MaxPlainRecordSize {
+	if totalSize+protocol.FrameHeaderSize+padSize > budget {
 		return protocol.Frame{}, false
 	}
 
