@@ -83,17 +83,22 @@ func (bs *batchShaper) ensureCapacity(size int) {
 
 // growLocked 把明文缓冲区换到一块更大的池化缓冲区，并归还旧的那块。
 // 增长按 2 倍摊销，但至少满足本次请求，上限是线上格式的 protocol.MaxPlainRecordSize。
+//
+// 这里不检查 bytespool.Get 的返回值：newCap 由上面的裁剪保证落在
+// [minRecordBufferSize, protocol.MaxPlainRecordSize] 之内，是池内合法的 2 的幂
+// 档位，Get 必定返回可用的缓冲区。而且这个函数**必须**真的把缓冲区换大——
+// 静默跳过会让紧随其后的 protocol.AppendFrame 因容量不足自行 realloc，
+// 从而绕过池，正是这次改动要杜绝的路径。
+//
 // 调用方必须持有 bs.mu。
 func (bs *batchShaper) growLocked(size int) {
 	newCap := min(max(cap(bs.plaintext)*2, size, minRecordBufferSize), protocol.MaxPlainRecordSize)
 
 	buf := bytespool.Get(newCap)
-	if buf == nil {
-		return
-	}
 	// 明文的前 len 字节必须搬过去：appendFrame 只在 Get 返回的切片上追加。
 	n := copy(buf, bs.plaintext)
 	// 旧缓冲区在搬移之后、覆盖字段之前归还（它已经无人引用）。
+	// 缓冲区为 nil 时（尚未分配）跳过：nil 的 cap 是 0。
 	if old := bs.plaintext; cap(old) > 0 {
 		bytespool.MustPut(old[:cap(old)])
 	}
@@ -245,9 +250,13 @@ func (bs *batchShaper) flushLocked() []byte {
 	bs.timerStarted = false
 	bs.timer.Stop()
 
-	// 填充同样要在池化缓冲区里完成：以当前容量为预算生成填充帧（放不下就
-	// 放弃这次填充——它是纯装饰），再按结果增长缓冲区，从而避免 AppendFrame
-	// 因容量不足自行 realloc，把这块内存从池的管理里漏出去。
+	// 填充同样要在池化缓冲区里完成：以当前容量为预算生成填充帧，再按结果增长
+	// 缓冲区，从而避免 AppendFrame 因容量不足自行 realloc，把这块内存从池的
+	// 管理里漏出去。
+	//
+	// 代价是贴着容量上限的记录会丢掉尾部填充（在 4KB 档位上是最后 66 字节）：
+	// 那些记录本来就落在填充的目标尺寸档位上，少掉的是 1~63 字节的尾部随机化，
+	// 属可接受；不为它先增长一档。
 	if padFrame, ok := BuildPaddingFrame(len(bs.plaintext), cap(bs.plaintext)); ok {
 		bs.ensureCapacity(len(bs.plaintext) + protocol.FrameHeaderSize + len(padFrame.Payload))
 		bs.plaintext = protocol.AppendFrame(bs.plaintext, padFrame)
@@ -269,12 +278,10 @@ func (bs *batchShaper) flushLocked() []byte {
 	}
 
 	// 小缓冲区：从池里再取一块给流，把 data 原样交给 I/O。
-	// Get 在这些尺寸上按约定不会返回 nil（4KB 是池内合法的 2 的幂档位），
-	// 这里仍做一次守卫：最坏情况是流侧留空缓冲区，下一次 Push 会重新分配，
-	// 而不是让 nil 缓冲区在后续 append 时 panic。
-	if replacement := bytespool.Get(minRecordBufferSize); len(replacement) > 0 {
-		bs.plaintext = replacement[:0]
-	}
+	// Get(4096) 必定返回可用的缓冲区（池内合法的 2 的幂档位），因此这里不需要
+	// 守卫；而万一流侧拿不到新缓冲区，也绝不能让它继续指向即将被归还给池的
+	// data——那会让后续 append 写进已入池的缓冲区，造成跨流数据污染。
+	bs.plaintext = bytespool.Get(minRecordBufferSize)[:0]
 	return data
 }
 

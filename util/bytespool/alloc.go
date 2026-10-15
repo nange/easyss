@@ -75,20 +75,25 @@ func (alloc *Allocator) Get(size int) []byte {
 	return alloc.get(bits + 1)[:size]
 }
 
-// get 从指定档位取出一块缓冲区：优先复用池中的，池为空时按 New 新分配。
+// get 从指定档位取出一块缓冲区。
+//
+// 每个档位的 New 在构造时都已设置，因此 sync.Pool.Get 不会返回 nil、类型断言
+// 恒真；池为空时由 New 现场分配。不在类型断言上分叉，是因为那会把下面这条
+// load-bearing 的行为拆成两个分支。
+//
+// 每次 Get 都递减保留计数，**包括命中 New 的那一次**：计数只在 Put 时递增，
+// 而 GC 清空 sync.Pool 不会通知我们，于是计数会留下"幻影"（偏大而池实际为空）。
+// 命中 New 说明池里确实没有这一块，此时递减正是把幻影排掉的唯一时机；若改成
+// "仅命中池时才递减"，档位会在第一次 GC 清池后永久停止保留（计数再也降不下来，
+// Put 会一直被判定为超额）。偏大方向的偏差只让 Put 更早停止保留，属安全侧。
 func (alloc *Allocator) get(bits uint16) []byte {
-	if buf, ok := alloc.buffers[bits].Get().([]byte); ok {
-		// 从池中取出才递减：命中 New 时池里本来就没有这一块。
-		decRetained(&alloc.retained[bits])
-		return buf
-	}
-	return make([]byte, 1<<uint32(bits))
+	decRetained(&alloc.retained[bits])
+	return alloc.buffers[bits].Get().([]byte)
 }
 
 // decRetained 递减保留计数，并把可能的负值 CAS 修正回 0。
 //
-// 计数只可能偏大（GC 清空池时不通知我们），此时 Get 找不到块、不会走到这里；
-// 并发 Get 与 GC 清池交错时可能出现短暂的负值，用 CAS 修正而非直接 Store，
+// 并发 Get 与 GC 清池交错时计数可能短暂为负，用 CAS 修正而非直接 Store，
 // 以免并发的另一个 Get 刚加上的额度被一并抹掉。
 func decRetained(c *atomic.Int64) {
 	for {

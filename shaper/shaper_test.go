@@ -163,6 +163,41 @@ func TestBatchShaperFlushesBeforePlainRecordLimit(t *testing.T) {
 	}
 }
 
+// TestBatchShaperGrowFromNilBuffer 固定 growLocked 对未分配缓冲区的行为：
+// 流侧缓冲区为 nil（cap 0）时必须照常增长并搬运，且不因归还未分配的缓冲区
+// 而 panic。它同时是"增长不得静默跳过"的回归：静默跳过会让 AppendFrame
+// 自行 realloc，绕过池。
+func TestBatchShaperGrowFromNilBuffer(t *testing.T) {
+	masterKey, err := easycrypto.DeriveMasterKey("batch-grow-nil")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, err := easycrypto.NewStreamKeys(masterKey, []byte("1234567890123456"), "/v3/tcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	bs := New(newTestWriter(t, sk, &out), Config{BatchWindowMS: 1000})
+	t.Cleanup(func() { _ = bs.Close() })
+	impl := bs.(*batchShaper)
+
+	impl.mu.Lock()
+	impl.plaintext = nil
+	impl.mu.Unlock()
+
+	// 从 nil 起步推入数据：必须成功且缓冲区落到合法档位。
+	if err := bs.PushData(make([]byte, 1024)); err != nil {
+		t.Fatalf("PushData 在 nil 缓冲区上失败: %v", err)
+	}
+	impl.mu.Lock()
+	got := cap(impl.plaintext)
+	impl.mu.Unlock()
+	if got < 1024+protocol.FrameHeaderSize || got > protocol.MaxPlainRecordSize {
+		t.Fatalf("nil 缓冲区增长后 cap = %d，超出预期区间", got)
+	}
+}
+
 // TestBatchShaperStartsWithMinimalBuffer 固定"空闲流只占最小缓冲区"这一内存
 // 契约：服务端内存占用 ≈ 峰值并发流数 × 每流缓冲区大小，而常驻连接、心跳流
 // 与探测流在数量上占绝大多数，它们绝不能各自预留一整块记录缓冲区。

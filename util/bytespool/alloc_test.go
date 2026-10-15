@@ -124,6 +124,42 @@ func TestAllocRetainedCounterDoesNotBlockReuse(t *testing.T) {
 	assert.Equal(t, 512, cap(buf))
 }
 
+// TestAllocGetClearsPhantomRetainedCount 固定一条 load-bearing 的行为：
+// Get 必须递减保留计数，**包括池为空、由 New 现场分配的那一次**。
+//
+// 计数只在 Put 时递增，而 GC 清空 sync.Pool 不会通知我们，于是计数会留下
+// "幻影"（偏大而池实际为空）。命中 New 说明池里确实没有这一块，此时递减
+// 正是排掉幻影的唯一时机；若改成"仅命中池时才递减"，档位会在第一次 GC 清池
+// 后永久停止保留——计数再也降不下来，Put 会一直被判定为超额。
+func TestAllocGetClearsPhantomRetainedCount(t *testing.T) {
+	const limit = 8
+	alloc := NewAllocatorWithLimit(limit)
+	idx := msb(512)
+
+	// 池是空的，计数器却很大：这就是 GC 清池之后的形态。
+	alloc.retained[idx].Store(1000)
+
+	// pool-hit 与 New-hit 在返回值上无法区分（每个档位的 New 恒定设置），
+	// 但两者都必须递减计数。
+	_ = alloc.Get(512)
+	assert.Less(t, alloc.retained[idx].Load(), int64(1000), "Get 应递减保留计数")
+
+	// 幻影未排空期间，Put 一律被判定为超额而丢弃。
+	assert.Nil(t, alloc.Put(make([]byte, 512)))
+	assert.LessOrEqual(t, alloc.retained[idx].Load(), int64(1000)-1,
+		"幻影未排空时 Put 不应递增计数")
+
+	// 持续 Get 会把幻影彻底排空——这正是"仅 pool-hit 才递减"做不到的事。
+	for alloc.retained[idx].Load() > 0 {
+		_ = alloc.Get(512)
+	}
+	assert.Zero(t, alloc.retained[idx].Load(), "幻影计数应被排空")
+
+	// 排空之后 Put 必须重新开始保留：借"计数器被占用"这一可观测状态断言。
+	assert.Nil(t, alloc.Put(make([]byte, 512)))
+	assert.Equal(t, int64(1), alloc.retained[idx].Load(), "幻影排空后 Put 应重新开始保留")
+}
+
 func BenchmarkMSB(b *testing.B) {
 	for b.Loop() {
 		msb(rand.Int())
