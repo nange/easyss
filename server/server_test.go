@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -193,32 +194,66 @@ func TestResolveEmail_Generated(t *testing.T) {
 	require.True(t, matched, "unexpected generated email format: %s", s.cfg.Server.Email)
 }
 
-// TestBuildHTTPServerUploadFlowControl 用字面下界固定上传侧的流控窗口
+// TestBuildHTTPServerUploadFlowControl 用字面量固定上传侧的 HTTP/2 参数
 // （而不是直接引用常量本身，这样缩小常量的回归同样会让本测试失败）：
-// 单个上传流大约被限制在 window/RTT，因此每流窗口必须至少 1MB
-// （300ms 链路上约 26Mbps），连接窗口至少 2MB。
+// 单条上传流的吞吐 ≈ 窗口/RTT，两个窗口都取 net/http 文档允许的上界
+// （文档要求"小于 4MiB"，因此最大合法值就是 4<<20-1；4<<20 恰好越界，而改前的
+// 连接级窗口正是这个越界值）。并发流上限取实测主流站点的 128，而不是 Go stdlib
+// 默认的 250。
 func TestBuildHTTPServerUploadFlowControl(t *testing.T) {
 	srv := buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Listen: ":443"}}, nil, http.NewServeMux(), 30*time.Second)
 	require.NotNil(t, srv.HTTP2)
-	require.GreaterOrEqual(t, srv.HTTP2.MaxReceiveBufferPerStream, 1<<20,
-		"per-stream upload window must be >= 1MB")
-	require.GreaterOrEqual(t, srv.HTTP2.MaxReceiveBufferPerConnection, 2<<20,
-		"connection upload window must be >= 2MB")
+	require.Equal(t, (4<<20)-1, srv.HTTP2.MaxReceiveBufferPerStream,
+		"per-stream upload window must be the documented upper bound (<4MiB)")
+	require.Equal(t, (4<<20)-1, srv.HTTP2.MaxReceiveBufferPerConnection,
+		"connection upload window is also the per-connection unconsumed-body bound")
+	require.Equal(t, 128, srv.HTTP2.MaxConcurrentStreams,
+		"per-connection stream limit should match mainstream servers, not Go's 250")
 }
 
-// TestServerUploadFlowControlWindowsOnWire 验证服务端实际向客户端宣告的窗口：
-// SETTINGS_INITIAL_WINDOW_SIZE 携带每流上传窗口，连接级 WINDOW_UPDATE 在
-// RFC 7540 初始 65535 字节的基础上授予连接窗口。标准库服务端会排队其 SETTINGS，
-// 并在客户端 preface 一到就立即刷新，因此 preface 之后这些帧立即可读。
+// TestBuildHTTPServerH2ConfigOverrides 固定 transport.h2_* 的覆盖语义：显式正值
+// 覆盖默认值，0 表示"使用默认值"（文档化的字段语义，兜底在 buildHTTPServer）。
+func TestBuildHTTPServerH2ConfigOverrides(t *testing.T) {
+	cfg := &config.FileConfig{
+		Server: config.ServerConfig{Listen: ":443"},
+		Transport: config.TransportConfig{
+			H2RecvBufStream:        2 << 20,
+			H2RecvBufConn:          8 << 20,
+			H2MaxConcurrentStreams: 64,
+		},
+	}
+	srv := buildHTTPServer(cfg, nil, http.NewServeMux(), 30*time.Second)
+	require.Equal(t, 2<<20, srv.HTTP2.MaxReceiveBufferPerStream)
+	require.Equal(t, 8<<20, srv.HTTP2.MaxReceiveBufferPerConnection)
+	require.Equal(t, 64, srv.HTTP2.MaxConcurrentStreams)
+
+	// 未配置（0 值）时回到共享常量：两处默认值不会各自漂移。
+	cfg.Transport = config.TransportConfig{}
+	srv = buildHTTPServer(cfg, nil, http.NewServeMux(), 30*time.Second)
+	require.Equal(t, sharedconfig.HTTP2ServerReceiveBufferPerStream, srv.HTTP2.MaxReceiveBufferPerStream)
+	require.Equal(t, sharedconfig.HTTP2ServerReceiveBufferPerConnection, srv.HTTP2.MaxReceiveBufferPerConnection)
+	require.Equal(t, sharedconfig.HTTP2ServerMaxConcurrentStreams, srv.HTTP2.MaxConcurrentStreams)
+}
+
+// TestServerUploadFlowControlWindowsOnWire 验证服务端**实际宣告**的上行参数与
+// buildHTTPServer 组装的配置逐字节一致：SETTINGS_INITIAL_WINDOW_SIZE 携带流级
+// 窗口、SETTINGS_MAX_CONCURRENT_STREAMS 携带每连接并发流上限，连接级
+// WINDOW_UPDATE 在 RFC 7540 初始 65535 字节的基础上补齐连接窗口。标准库服务端会
+// 排队其 SETTINGS，并在客户端 preface 一到就立即刷新，因此 preface 之后这些帧
+// 立即可读。
+//
+// 断言刻意用 Equal 而不是">= 下界"：net/http 文档把这两个窗口字段的合法值写在
+// "小于 4MiB"，而实现当前并不校验它（内部钳制区间是 [64KiB, MaxInt32]）。一旦
+// 某个 Go 版本开始校验，我们的值会被**静默**换成默认值 1MB——上传吞吐直接掉回
+// 1MB/RTT。那正是本测试要拦住的回归。
 func TestServerUploadFlowControlWindowsOnWire(t *testing.T) {
+	built := buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Listen: ":443"}}, nil, http.NewServeMux(), 30*time.Second)
+
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	ts.EnableHTTP2 = true
 	ts.Config.Protocols = &http.Protocols{}
 	ts.Config.Protocols.SetHTTP2(true)
-	ts.Config.HTTP2 = &http.HTTP2Config{
-		MaxReceiveBufferPerConnection: sharedconfig.HTTP2ServerReceiveBufferPerConnection,
-		MaxReceiveBufferPerStream:     sharedconfig.HTTP2ServerReceiveBufferPerStream,
-	}
+	ts.Config.HTTP2 = built.HTTP2
 	ts.StartTLS()
 	t.Cleanup(ts.Close)
 
@@ -237,13 +272,14 @@ func TestServerUploadFlowControlWindowsOnWire(t *testing.T) {
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
 
 	const (
-		frameSettings   = 0x4
-		frameWindowUpd  = 0x8
-		settingInitWin  = 0x4
-		initialConnWin  = 65535 // RFC 7540 初始连接窗口
-		maxFramesToRead = 16
+		frameSettings     = 0x4
+		frameWindowUpd    = 0x8
+		settingMaxStreams = 0x3
+		settingInitWin    = 0x4
+		initialConnWin    = 65535 // RFC 7540 初始连接窗口
+		maxFramesToRead   = 16
 	)
-	var streamWindow, connWindow = 0, initialConnWin
+	var streamWindow, maxStreams, connWindow = 0, 0, initialConnWin
 	for range maxFramesToRead {
 		var hdr [9]byte
 		_, err := io.ReadFull(conn, hdr[:])
@@ -261,8 +297,11 @@ func TestServerUploadFlowControlWindowsOnWire(t *testing.T) {
 				id := binary.BigEndian.Uint16(payload[:2])
 				val := binary.BigEndian.Uint32(payload[2:6])
 				payload = payload[6:]
-				if id == settingInitWin {
+				switch id {
+				case settingInitWin:
 					streamWindow = int(val)
+				case settingMaxStreams:
+					maxStreams = int(val)
 				}
 			}
 		case frameWindowUpd:
@@ -270,13 +309,109 @@ func TestServerUploadFlowControlWindowsOnWire(t *testing.T) {
 				connWindow += int(binary.BigEndian.Uint32(payload))
 			}
 		}
-		if streamWindow > 0 && connWindow > initialConnWin {
+		if streamWindow > 0 && maxStreams > 0 && connWindow > initialConnWin {
 			break
 		}
 	}
 
-	require.GreaterOrEqual(t, streamWindow, 1<<20,
-		"advertised per-stream upload window must be >= 1MB")
-	require.GreaterOrEqual(t, connWindow, 2<<20,
-		"connection upload window must be >= 2MB")
+	// 与常量同源（生产配置与文档不会各自漂移）……
+	require.Equal(t, sharedconfig.HTTP2ServerReceiveBufferPerStream, streamWindow,
+		"advertised per-stream upload window")
+	require.Equal(t, sharedconfig.HTTP2ServerReceiveBufferPerConnection, connWindow,
+		"advertised connection upload window")
+	require.Equal(t, sharedconfig.HTTP2ServerMaxConcurrentStreams, maxStreams,
+		"advertised per-connection concurrency limit")
+	// ……并且就是文档允许的上界（写死字面量，防止常量被整体调小）。
+	require.Equal(t, (4<<20)-1, streamWindow)
+	require.Equal(t, (4<<20)-1, connWindow)
+	require.Equal(t, 128, maxStreams)
+}
+
+// TestServerUploadFlowControlInFlightPerStream 端到端固定**流级**窗口的语义：
+// handler 故意不读请求体，客户端能塞进去的在途字节数就被流控窗口封顶。这条不变式
+// 正是上传吞吐的来源（吞吐 ≈ 窗口/RTT），也是本次改动唯一会改变的量。
+//
+// 两侧都留余量：下界排除"窗口其实还是默认 1MB"这类静默回落，上界排除"窗口被设成
+// 不受限（甚至无限）"这类错误。测量依据"在途量停止增长"而不是计时，因此在 CI 上
+// 不抖动；余量覆盖客户端管道/h2 写入侧一拍（最多两个 64KB 块）的交接。
+func TestServerUploadFlowControlInFlightPerStream(t *testing.T) {
+	release := make(chan struct{})
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 读到 release 之前不碰 r.Body：服务端能缓冲的字节数由窗口决定。
+		<-release
+	}))
+	ts.EnableHTTP2 = true
+	ts.Config.Protocols = &http.Protocols{}
+	ts.Config.Protocols.SetHTTP2(true)
+	ts.Config.HTTP2 = &http.HTTP2Config{
+		MaxReceiveBufferPerConnection: sharedconfig.HTTP2ServerReceiveBufferPerConnection,
+		MaxReceiveBufferPerStream:     sharedconfig.HTTP2ServerReceiveBufferPerStream,
+	}
+	ts.StartTLS()
+	t.Cleanup(func() {
+		close(release)
+		ts.Close()
+	})
+
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // 测试专用的自签名证书
+		Protocols:       &http.Protocols{},
+	}
+	tr.Protocols.SetHTTP2(true)
+	t.Cleanup(tr.CloseIdleConnections)
+
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pr.CloseWithError(io.ErrClosedPipe) })
+
+	req, err := http.NewRequest(http.MethodPost, ts.URL+sharedconfig.EndpointTCP, pr)
+	require.NoError(t, err)
+	go func() {
+		// 结果无关紧要：只要 handler 不读 body，这个请求就会一直停在流控上。
+		resp, err := tr.RoundTrip(req)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+
+	// 持续写 64KB 块，直到因流控阻塞。
+	chunk := make([]byte, 64<<10)
+	var written atomic.Int64
+	go func() {
+		for {
+			n, err := pw.Write(chunk)
+			written.Add(int64(n))
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// 在途量停止增长即代表额度耗尽（handler 不读 → 不会再有 WINDOW_UPDATE）。
+	var inFlight int64
+	stableSince := time.Now()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		time.Sleep(100 * time.Millisecond)
+		cur := written.Load()
+		if cur != inFlight {
+			inFlight = cur
+			stableSince = time.Now()
+			continue
+		}
+		if time.Since(stableSince) >= time.Second {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("in-flight bytes never stabilized, written=%d", cur)
+		}
+	}
+
+	// 在途上限是流级与连接级窗口的较小者：单流能占多少受流窗口限制，但整条连接
+	// 的信用额度（连接窗口）无论如何不会超过。两个窗口取当前默认值时二者相等，
+	// 这里显式取 min，使测试在将来把连接窗口调小/调大时依然描述正确的不变式。
+	window := min(int64(sharedconfig.HTTP2ServerReceiveBufferPerStream), int64(sharedconfig.HTTP2ServerReceiveBufferPerConnection))
+	require.GreaterOrEqual(t, inFlight, window-256<<10,
+		"client must be able to fill the configured per-stream window before backpressure")
+	require.LessOrEqual(t, inFlight, window+512<<10,
+		"in-flight data must be bounded by the configured per-stream window")
 }

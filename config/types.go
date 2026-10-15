@@ -128,13 +128,38 @@ const (
 	SuspendDivergenceThreshold = 30 * time.Second
 	SuspendReverifyTimeout     = 2 * time.Second
 
-	// 服务端上行流量控制：流级窗口限定单条上传流在途数据的上限，使其吞吐量大致
-	// 封顶于 window/RTT。在 300ms 链路上，256KB 会把单流上传限制在约 6.8Mbps；
-	// 1MB（stdlib 服务端默认值）可将其提升到约 26Mbps，而 4MB 的连接级窗口可避免
-	// 聚合上传被约束为每条连接在途约 1MB。
+	// 服务端上行流量控制。稳态吞吐 ≈ 窗口/RTT（HTTP/2 的发送方每 RTT 回收一次
+	// 额度），因此流级窗口决定单条上传流的上限：4MiB-1 在 100/200/300ms 链路上
+	// 分别约 335/168/112Mbps，而此前 stdlib 服务端默认的 1MB 只有 84/42/28Mbps。
+	//
+	// 两个窗口都取 net/http 文档允许的上界（文档原文是 "less than 4MiB"，因此
+	// 4<<20 恰好越界——改前的连接级窗口就是这样，这次一并修正为 4<<20-1）。
+	// 取文档内的值是有意的：实现目前并不校验这个上界（内部钳制区间是
+	// [64KiB, MaxInt32] / [1, MaxInt32]，标准库自己的客户端默认值甚至就是 4<<20），
+	// 但上传吞吐没有理由押在"实现不校验"上。
+	//
+	// 内存代价由**连接级**窗口决定，与流级窗口无关：每个收到的字节都要同时扣减
+	// 连接窗口与流窗口（internal/http2 takeInflows），额度只在 handler 读走后才
+	// 返还，因此"已收到但未消费"的请求体总量 ≤ 连接级窗口，与并发流数无关。
+	// 连接窗口保持 4MiB-1 意味着服务端这条每连接上界与改动前持平（单流最坏占用
+	// 由 1MB 升到 4MiB-1，仍被连接窗口兜住）；需要更高的单连接聚合上传上限
+	// （例如多流测速）时显式调大 transport.h2_recv_buf_conn，并接受同比例上界。
+	//
+	// 与下行窗口的关系：客户端下行固定为 6MB/15MB（见下方 HTTP2Client*，镜像
+	// Chrome 的伪装取值，不可配），上行这里由库文档上界决定——两个方向各自有
+	// 唯一理由，数值因此不必相同。
 	HTTP2ServerMaxReadFrameSize           = 1<<24 - 1 // 16MB-1，nginx/Cloudflare 主流值
-	HTTP2ServerReceiveBufferPerConnection = 4 << 20   // 4MB，连接级上行窗口
-	HTTP2ServerReceiveBufferPerStream     = 1 << 20   // 1MB，流级上行窗口（stdlib 服务端默认）
+	HTTP2ServerReceiveBufferPerConnection = 4<<20 - 1 // 4MiB-1，连接级上行窗口（= 每连接未消费请求体上界）
+	HTTP2ServerReceiveBufferPerStream     = 4<<20 - 1 // 4MiB-1，流级上行窗口（= 单条上传流在途上限）
+
+	// HTTP2ServerMaxConcurrentStreams 是服务端宣告的**每条连接**并发流上限。
+	// SETTINGS_MAX_CONCURRENT_STREAMS 每个连接各宣告一次，不是服务器级总量；
+	// 超限时标准库拒绝那条流（RST_STREAM）而不是断开连接，同时该连接并发运行的
+	// handler 数受同一上限约束。Go stdlib 默认 250，而实测主流站点是 100/128
+	// （Cloudflare/Amazon/Apple/淘宝/知乎/新浪/网易/WordPress 等），128 因此既
+	// 贴近真实服务器，也把每连接的并发 handler 规模收敛约一半。
+	// 可用 transport.h2_max_concurrent_streams 覆盖。
+	HTTP2ServerMaxConcurrentStreams = 128
 
 	// 客户端 HTTP/2 接收窗口，镜像 Chrome 的取值，使传输层在审查下表现得像真实浏览器。
 	HTTP2ClientMaxReadFrameSize           = 1 * 1024 * 1024  // 1MB，Chrome MAX_FRAME_SIZE

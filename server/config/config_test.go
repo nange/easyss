@@ -121,9 +121,31 @@ func TestExampleConfigIsNormalized(t *testing.T) {
 	for _, key := range []string{
 		`"server"`, `"fallback"`, `"shaper"`, `"transport"`,
 		`"next_proxy"`, `"log"`, `"pprof_enabled"`, `"timeout"`,
+		// HTTP/2 上行参数必须在示例里可见：用户排查上传速度时就是照这些键调。
+		`"h2_max_frame_size"`, `"h2_recv_buf_conn"`, `"h2_recv_buf_stream"`,
+		`"h2_max_concurrent_streams"`,
 	} {
 		require.Contains(t, string(data), key)
 	}
+}
+
+// TestTransportConfigH2KeysJSON 固定 HTTP/2 传输键的对外名字与"显式值原样保留"
+// 的语义（README 表格、-show-config-example 与配置解析共用这一组键名）。
+func TestTransportConfigH2KeysJSON(t *testing.T) {
+	var fc FileConfig
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"transport": {
+			"h2_max_frame_size": 65536,
+			"h2_recv_buf_conn": 8388608,
+			"h2_recv_buf_stream": 2097152,
+			"h2_max_concurrent_streams": 64
+		}
+	}`), &fc))
+
+	require.Equal(t, 65536, fc.Transport.H2MaxFrameSize)
+	require.Equal(t, 8388608, fc.Transport.H2RecvBufConn)
+	require.Equal(t, 2097152, fc.Transport.H2RecvBufStream)
+	require.Equal(t, 64, fc.Transport.H2MaxConcurrentStreams)
 }
 
 // TestDefaultAllowedMethods 固定默认加密方式列表，并守护每次返回新切片，
