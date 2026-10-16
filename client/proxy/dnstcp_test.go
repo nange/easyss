@@ -89,14 +89,17 @@ func serveTCPDNSHandler(t *testing.T, srv *Socks5Server, target string) (net.Con
 // s2c 方向写回一条 DATAGRAM 应答。这样代理 DNS 的成功路径（而不只是上游沉默的
 // 失败路径）可以在没有真实传输层的情况下被端到端验证。
 type fakeEncryptedUpstream struct {
-	mu         sync.Mutex
-	written    []byte // c2s：客户端写入的字节
-	resp       []byte // s2c：测试回写的应答记录
-	separating bool   // serve 开始回写应答后置位，后续 Write 落入 resp
-	dataReady  chan struct{}
-	readyOnce  sync.Once
-	closed     chan struct{}
-	closeOnce  sync.Once
+	mu      sync.Mutex
+	written []byte // c2s：客户端写入的字节
+	// firstPayload 是引导记录里第一条 DATAGRAM 的原始载荷，即**服务端实际会收到的
+	// 那段字节**。它是"TCP DNS 经隧道后与 UDP DNS 同形"这一接口事实的断言入口。
+	firstPayload []byte
+	resp         []byte // s2c：测试回写的应答记录
+	separating   bool   // serve 开始回写应答后置位，后续 Write 落入 resp
+	dataReady    chan struct{}
+	readyOnce    sync.Once
+	closed       chan struct{}
+	closeOnce    sync.Once
 }
 
 func newFakeEncryptedUpstream() *fakeEncryptedUpstream {
@@ -199,6 +202,7 @@ func (f *fakeEncryptedUpstream) serve(salt []byte, masterKey []byte, responder f
 		if frame.Type != protocol.FrameDATAGRAM {
 			continue
 		}
+		f.firstPayload = append([]byte(nil), frame.Payload...)
 		query = new(dns.Msg)
 		if err := query.Unpack(frame.Payload); err != nil {
 			return err
@@ -603,6 +607,28 @@ func TestHandleTCPDNSProxySuccess(t *testing.T) {
 	}
 	if cached := srv.dns.cache.Get("proxy.example.com.", "A", false); cached == nil {
 		t.Error("proxied answer not cached")
+	}
+
+	// 隧道里携带的必须是**裸 DNS 报文**：TCP DNS 的两字节长度前缀在读帧时就已剥掉
+	// （见 readFirstTCPDNS），送进交换的是 msg.Pack() 的结果，与 UDP DNS 查询同形。
+	// 服务端因此不需要为"DNS over TCP"另写一条按域名路由的路径——它进入的就是端口
+	// 53 的 UDP 会话，QNAME 可解析（服务端侧为 dnsQueryDomain）。
+	stream.mu.Lock()
+	payload := append([]byte(nil), stream.firstPayload...)
+	stream.mu.Unlock()
+	packed, err := q.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(payload, packed) {
+		t.Fatalf("tunnel payload = % x, want exactly msg.Pack() = % x", payload, packed)
+	}
+	decoded := new(dns.Msg)
+	if err := decoded.Unpack(payload); err != nil {
+		t.Fatalf("the tunnel payload must be a bare DNS message: %v", err)
+	}
+	if len(decoded.Question) != 1 || decoded.Question[0].Name != "proxy.example.com." {
+		t.Fatalf("question = %v, want proxy.example.com.", decoded.Question)
 	}
 }
 
