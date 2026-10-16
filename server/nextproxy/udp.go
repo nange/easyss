@@ -11,6 +11,7 @@ import (
 
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/xjasonlyu/tun2socks/v2/transport/socks5"
 )
 
@@ -257,10 +258,10 @@ type udpAssociateConn struct {
 	// 契约不承诺这一点。库的 EncodeUDPPacket 每次返回独立缓冲区，因此这里
 	// 不需要为复用而持有共享写缓冲。
 	writeMu sync.Mutex
-	// readMu 保护 scratch：单次 Read 内完成"收包 → 解封装 → 拷贝给调用方"，
-	// 因此不需要把整个读取过程串行化。
-	readMu  sync.Mutex
-	scratch []byte
+	// readMu 串行化读取：单次 Read 内完成"收包 → 解封装 → 拷贝给调用方"。
+	// 接收缓冲本身是逐次借还的（见 Read），因此这个锁只负责串行化，不再保护
+	// 任何常驻缓冲。
+	readMu sync.Mutex
 }
 
 // monitorControl 阻塞在控制连接上：上游关闭它（关联失效）或控制连接出错时，
@@ -299,23 +300,44 @@ func (c *udpAssociateConn) isClosed() bool {
 	}
 }
 
+// Read 读取一条经上游转发的数据报。它原本为每条关联惰性分配并常驻一块
+// maxUDPDatagram(65529) 的接收缓冲，直到连接关闭——空闲的上游 UDP 关联因此
+// 各自钉住 64KB，且这块内存完全不受池的保留上限约束。改为逐次借还后，空闲
+// 关联不再持有任何接收缓冲，稳态上界变成池的每档 64 块。
+//
+// 逐次借还是"用分配率换常驻量"，代价落在一个前提上：**同时在读的关联数**。
+// 池每档只保留 64 块，超过之后 Put 会因超额被直接丢弃、Get 转而走
+// sync.Pool.New 现场分配，于是每个数据报一次 64KB 分配（相对约 1.4KB 的载荷
+// 放大 40 倍）——并发关联数 N 远超 64 时，基本每次读取都要分配。常驻量仍然
+// 有界（64 × 64KB = 4MB），而且是净收益：改前是每条关联终身钉住 64KB 且不受
+// 任何上限约束。readMu 保证每条关联至多一块在飞，因此这里的并发数就是活跃
+// 关联数，不会翻倍。
+//
+// 若将来要同时兼顾高并发与低分配率，做法是"活跃期间持有、空闲后归还"（例如
+// 空闲计时器触发释放），而不是把接收缓冲重新钉回连接的整个生命周期。
+//
+// 借出的是池内 64KB 档位：maxUDPDatagram 不是 2 的幂，因此**必须**用
+// bytespool.Get(65529)（它落 65536 档）而不是 make/append——否则 MustPut 会因为
+// "cap 不是 2 的幂"而 panic。归还时传完整切片（或 buf[:maxUDPDatagram]，切片保留
+// cap）即可，绝不能传 append 出来的拷贝。
 func (c *udpAssociateConn) Read(b []byte) (int, error) {
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
 
-	if c.scratch == nil {
-		c.scratch = make([]byte, maxUDPDatagram)
-	}
-	n, _, err := c.relay.ReadFromUDP(c.scratch)
+	buf := bytespool.Get(maxUDPDatagram)
+	defer bytespool.MustPut(buf)
+
+	n, _, err := c.relay.ReadFromUDP(buf)
 	if err != nil {
 		return 0, err
 	}
-	_, payload, err := socks5.DecodeUDPPacket(c.scratch[:n])
+	_, payload, err := socks5.DecodeUDPPacket(buf[:n])
 	if err != nil {
 		// 畸形/分片/无法解析的数据报：按 0 字节读取丢弃，让中继循环继续读
 		// 下一条，而不是把一条坏数据报当成会话故障（RFC 1928 允许整条丢弃）。
 		return 0, nil
 	}
+	// payload 别名 buf，但它在返回前就被拷进调用方的 b，因此 buf 可以立即归还。
 	return copy(b, payload), nil
 }
 

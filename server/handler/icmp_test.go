@@ -40,3 +40,39 @@ func TestLanHostOfSSRFGuard(t *testing.T) {
 		}
 	}
 }
+
+// TestICMPFirstReadBufSize 固定"常规 ping 只借小缓冲"这条内存契约：ICMP 交换
+// 此前无条件借出 65535 字节（池内 64KB 档）的读取缓冲，而回显应答的数据部分
+// 由请求决定，一次常规 ping 只承载几十字节。缓冲改为按请求推导后，只有大请求
+// 才会触及 64KB 档，其余落在 4KB 档。
+//
+// 这里断言纯函数而不是真实交换：真实 ICMP 需要 root 权限与可达目标，
+// 无法作为"借了多大缓冲"的稳定断言基础。
+func TestICMPFirstReadBufSize(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload int
+		want    int
+	}{
+		// 常规 ping：8 字节 ICMP 头 + 56 字节数据 → 远小于最小档位，取最小档位。
+		{"shell ping", 8 + 56, icmpMinReadBufSize},
+		{"empty request", 4, icmpMinReadBufSize},
+		// 恰好落在最小档位边界。
+		{"exactly min", icmpMinReadBufSize - icmpIPHeaderReserve + 4, icmpMinReadBufSize},
+		// 超过最小档位后按请求增长（数据部分 + IP 头预留）。
+		{"grows with request", 8192 + 4, 8192 + icmpIPHeaderReserve},
+		// 超过上限时钳制到单个 IP 报文的最大长度。
+		{"clamped to ip max", 70000, icmpMaxReadBufSize},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := icmpFirstReadBufSize(make([]byte, tt.payload))
+			if got != tt.want {
+				t.Fatalf("icmpFirstReadBufSize(%d) = %d, want %d", tt.payload, got, tt.want)
+			}
+			if got < icmpMinReadBufSize || got > icmpMaxReadBufSize {
+				t.Fatalf("size %d 超出 [%d, %d]", got, icmpMinReadBufSize, icmpMaxReadBufSize)
+			}
+		})
+	}
+}

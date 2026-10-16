@@ -85,6 +85,37 @@ const (
 	MaxPlainRecordSize = 64 * 1024
 	MaxCipherLenSize   = 3
 
+	// MaxTagOverhead 是本项目两种 AEAD（AES-256-GCM 与 ChaCha20-Poly1305）
+	// 认证标签的上界。记录层要它才能算出"明文上限"与"池档位"之间的正确关系：
+	// 一条记录的线上长度是 MaxCipherLenSize + 明文 + 标签，而 bytespool 的
+	// 档位必须容纳这三者之和，否则密文缓冲会从 64KB 档跳到 128KB 档——为十几
+	// 字节的溢出付一倍代价。
+	//
+	// 它是常量而不是运行时从 Encryptor.Overhead() 读取，因为 protocol 是记录
+	// 格式的定义方，不应该依赖 crypto 包；两个 AEAD 的标签都是 16 字节，
+	// 若将来引入更长的标签，这里必须同步上调。这条耦合由 crypto 包的
+	// TestAEADOverheadMatchesProtocolCeiling 守住（两种 AEAD 都断言
+	// Overhead() <= MaxTagOverhead）。
+	MaxTagOverhead = 16
+
+	// MaxRecordPlaintext 是一条记录里明文的实际上限，比线上格式上限
+	// MaxPlainRecordSize 小 26 字节。原因是一条记录在池里的落点是"3 字节长度
+	// 前缀 + 明文 + AEAD 标签共用一块 2 的幂缓冲"，明文超过它就使整块记录跳到
+	// 128KB 档，为最后十几字节付一倍的池保留与瞬时分配。
+	//
+	// 它是**加密侧与整形侧共用的同一个上限**，两侧必须一致：
+	//   - crypto.RecordWriter 用它做写入校验（超过即报错）；
+	//   - shaper 用它做单帧校验与预冲刷边界（否则它能攒出 WriteRecord 拒绝的
+	//     明文，把一条正常的流打断）。
+	//
+	// 取值是**最大合法单帧**（最大 UDP 数据报 + 帧头）而不是算术上界 65,517：
+	// 下界由帧协议决定——最大的数据报必须能完整落进一条记录；而它自身已经满足
+	// 池档位约束（65,510 + 3 + 16 = 65,529 <= 64KB）。
+	//
+	// 读侧不受它约束：MaxCipherRecordSize 仍按线上格式上限推导，以便解码旧对端
+	// 发来的、明文到 64KB 的记录。
+	MaxRecordPlaintext = MaxUDPDataSize + FrameHeaderSize
+
 	// MinRecordBufferSize 是每条流的明文缓冲区初始大小。缓冲按需增长（见
 	// shaper.(*batchShaper).ensureCapacity），因此空闲流与只传少量数据的流
 	// 终生只占这么多，只有真正的大流量流才会长到 MaxPlainRecordSize。

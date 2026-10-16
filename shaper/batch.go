@@ -23,18 +23,23 @@ type batchShaper struct {
 	timer     *time.Timer
 	mu        sync.Mutex
 	writeMu   sync.Mutex // 跨 goroutine 串行化 WriteRecord 调用
-	// maxChunkSize 同时充当两个边界，这是由约束链决定的，不是可以分别调整的两个值：
+	// recordCeiling 是一条记录的明文上限，也是本类型唯一的尺寸边界：单帧校验、
+	// 预冲刷边界、填充预算三处都用它。它的取值由两侧夹定，不是可以随手调的：
 	//
-	//   a) 单帧合法性：UDP 数据报帧最大 protocol.MaxUDPDataSize(65507)，
-	//      因此单帧上限必须 ≥ 该值 → 只能是 protocol.MaxPlainRecordSize；
-	//   b) 记录填充边界：攒到 len+frameSize 超过它就先把当前记录冲刷掉。
-	//      若把它调到单帧上限以下，一个大 UDP 数据报会被误判为"溢出"，
-	//      而冲刷之后它仍然放不下——行为就是错的。
+	//   a) 下界：最大的合法单帧必须能完整落进一条记录。UDP 数据报帧最大
+	//      protocol.MaxUDPDataSize(65507) + 帧头(3) = 65,510；
+	//   b) 上界：一条记录占用的池缓冲是 MaxCipherLenSize + 明文 + AEAD 标签
+	//      （长度前缀与密文取样于同一块 2 的幂缓冲），明文一旦超过
+	//      65,536 - 3 - 16 = 65,517，整块记录就从 64KB 档跳到 128KB 档——为
+	//      十几字节的溢出付一倍的池保留与瞬时分配。协议常量
+	//      protocol.MaxRecordPlaintext 正是这两者夹出的结果（= 最大合法单帧）。
 	//
-	// 记录本身还能更大（线上格式的 3 字节长度前缀可表达 16MB，缓冲上限也按
-	// MaxPlainRecordSize 裁剪），但那个更大的尺寸只用于解码既有记录，见
-	// crypto.MaxCipherRecordSize。
-	maxChunkSize int
+	// 它同时必须与加密侧的写入上限一致（crypto.RecordWriter.maxPlain 用的是同一个
+	// 常量）：整形侧一旦攒出比它更大的明文，WriteRecord 会直接报错并打断这条流。
+	//
+	// 记录本身在线上格式上还能更大（3 字节长度前缀可表达 16MB），但那个更大的
+	// 尺寸只用于解码既有记录，见 crypto.MaxCipherRecordSize。
+	recordCeiling int
 	// flushThreshold 是批处理的目标：攒到它的 9/10 就冲刷，让记录尺寸落在
 	// 填充的目标档位附近，而不是每次都顶到上限。
 	flushThreshold int
@@ -59,9 +64,9 @@ func New(writer *crypto.RecordWriter, cfg Config) Shaper {
 		writer: writer,
 		// 缓冲从初始大小起步，按需增长（见 ensureCapacity）。
 		plaintext: bytespool.Get(minRecordBufferSize)[:0],
-		// maxChunkSize 取线上格式上限，理由见字段上的约束链说明：
-		// 它既要容纳最大的合法单帧（UDP 数据报 65507B），又要作为记录填充边界。
-		maxChunkSize: protocol.MaxPlainRecordSize,
+		// recordCeiling 是唯一的尺寸边界（单帧、预冲刷、填充预算共用），
+		// 与加密侧的写入上限是同一个协议常量，理由见字段说明。
+		recordCeiling: protocol.MaxRecordPlaintext,
 		// flushThreshold 是批处理的目标：攒到上限的 9/10 就冲刷。
 		flushThreshold: protocol.MaxPlainRecordSize * 9 / 10,
 		window:         time.Duration(cfg.BatchWindowMS) * time.Millisecond,
@@ -80,8 +85,8 @@ func New(writer *crypto.RecordWriter, cfg Config) Shaper {
 const minRecordBufferSize = protocol.MinRecordBufferSize
 
 // ensureCapacity 确保明文缓冲区至少能容纳 size 字节，必要时按需增长。
-// 调用方必须持有 bs.mu，且必须保证 size ≤ protocol.MaxPlainRecordSize
-// （两条调用路径都由 appendFrameLocked 的帧级检查或下面的填充预算保证）。
+// 调用方必须持有 bs.mu，且必须保证 size ≤ bs.recordCeiling（两条调用路径都由
+// appendFrameLocked 的单帧检查加预冲刷边界、或下面的填充预算保证）。
 func (bs *batchShaper) ensureCapacity(size int) {
 	if cap(bs.plaintext) >= size {
 		return
@@ -90,7 +95,9 @@ func (bs *batchShaper) ensureCapacity(size int) {
 }
 
 // growLocked 把明文缓冲区换到一块更大的池化缓冲区，并归还旧的那块。
-// 增长按 2 倍摊销，但至少满足本次请求，上限是线上格式的 protocol.MaxPlainRecordSize。
+// 增长按 2 倍摊销，但至少满足本次请求，上限是线上格式的 protocol.MaxPlainRecordSize
+// （实际请求量不会超过 bs.recordCeiling，这个更松的上限只是防止档位溢出池的
+// 64KB 档）。
 //
 // 这里不检查 bytespool.Get 的返回值：newCap 由上面的裁剪保证落在
 // [minRecordBufferSize, protocol.MaxPlainRecordSize] 之内，是池内合法的 2 的幂
@@ -113,25 +120,35 @@ func (bs *batchShaper) growLocked(size int) {
 	bs.plaintext = buf[:n]
 }
 
-// appendFrameLocked 将指定类型的帧追加到明文缓冲区：当记录即将溢出时
-// 预冲刷，达到阈值时后冲刷，否则重新启动批处理定时器。
+// appendFrameLocked 将指定类型的帧追加到明文缓冲区：当记录即将溢出时先冲刷，
+// 缓冲不足时按需增长，最后把帧编码进去（载荷始终被复制进 bs.plaintext）。
 // putPayload 标记来自 bytespool 的 payload，追加完成后必须归还。
 // 调用方必须持有 bs.mu。
+//
+// putPayload 只对 FrameCOVER 为真，这是**载荷所有权契约的另一半**：其余帧类型
+// （DATA/DATAGRAM/FIN/RST/PADDING）的载荷一律不归还、不保留，因此调用方可以在
+// PushFrame 返回后立刻复用它。服务端 UDP 数据报路径（handler/udp.go 的
+// NewFrameWithPayload）与客户端 UDP 上行（proxy/stream.go 的 UDPExchange.Send）
+// 都依赖这一点来避免每数据报一次多余复制：若改成"归还任何 cap 是 2 的幂的
+// 载荷"，这两处会变成把仍在使用的缓冲归还池，造成跨流数据污染。
 func (bs *batchShaper) appendFrameLocked(ftype protocol.FrameType, payload []byte, putPayload bool) error {
 	frameSize := protocol.FrameHeaderSize + len(payload)
-	if frameSize > bs.maxChunkSize {
+	if frameSize > bs.recordCeiling {
 		if putPayload {
 			bs.putPooledPayload(payload)
 		}
-		return fmt.Errorf("shaper: frame size %d exceeds max record size %d", frameSize, bs.maxChunkSize)
+		return fmt.Errorf("shaper: frame size %d exceeds max record size %d", frameSize, bs.recordCeiling)
 	}
 
 	// 若追加会导致记录溢出，则预先冲刷。这一步必须在容量检查之前：冲刷会
 	// 换出一块空的缓冲区，原来"放不下"的帧因此往往又能放下了（例如缓冲区
 	// 已攒到上限，再来一帧只能放进下一条记录）。
-	// 边界取 maxChunkSize 而不是 flushThreshold：单个超过阈值的大帧
-	//（UDP 数据报）也是合法帧，必须能放进一条记录。
-	if len(bs.plaintext) > 0 && len(bs.plaintext)+frameSize > bs.maxChunkSize {
+	//
+	// 边界必须取 recordCeiling 而不是 flushThreshold：单个超过阈值的大帧
+	// （UDP 数据报）也是合法帧，必须能放进一条记录。它同时也是"记录明文不超过
+	// 上限"这条不变量的唯一执行点：少了它，多帧累积可以顶到 65,536，让整块记录
+	// 跳进池的 128KB 档——而单帧校验（上面那条）管不到累积。
+	if len(bs.plaintext) > 0 && len(bs.plaintext)+frameSize > bs.recordCeiling {
 		if err := bs.flushAndWrite(false); err != nil {
 			// 该帧从未被追加，因此在此归还池化 payload：没有其他人会归还它。
 			if putPayload {
@@ -260,14 +277,14 @@ func (bs *batchShaper) flushLocked() []byte {
 	bs.timerStarted = false
 	bs.timer.Stop()
 
-	// 填充同样要在池化缓冲区里完成：以当前容量为预算生成填充帧，再按结果增长
+	// 填充同样要在池化缓冲区里完成：以记录上限为预算生成填充帧，再按结果增长
 	// 缓冲区，从而避免 AppendFrame 因容量不足自行 realloc，把这块内存从池的
-	// 管理里漏出去。
+	// 管理里漏出去。预算取 recordCeiling：填充后的记录在加过 3 字节长度前缀与
+	// 16 字节 AEAD 标签之后仍须落进 64KB 档位，也仍须不越过加密侧的写入上限。
 	//
-	// 代价是贴着容量上限的记录会丢掉尾部填充（在 4KB 档位上是最后 66 字节）：
-	// 那些记录本来就落在填充的目标尺寸档位上，少掉的是 1~63 字节的尾部随机化，
-	// 属可接受；不为它先增长一档。
-	if padFrame, ok := BuildPaddingFrame(len(bs.plaintext), cap(bs.plaintext)); ok {
+	// 代价是贴着记录上限的记录会丢掉尾部填充：那些记录本来就落在填充的目标尺寸
+	// 档位上，少掉的是 1~63 字节的尾部随机化，属可接受；不为它先增长一档。
+	if padFrame, ok := BuildPaddingFrame(len(bs.plaintext), bs.recordCeiling); ok {
 		bs.ensureCapacity(len(bs.plaintext) + protocol.FrameHeaderSize + len(padFrame.Payload))
 		bs.plaintext = protocol.AppendFrame(bs.plaintext, padFrame)
 	}

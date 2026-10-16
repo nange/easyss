@@ -21,6 +21,7 @@ import (
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
 	"github.com/nange/easyss/v3/util/bytespool"
+	"github.com/nange/easyss/v3/util/netbuf"
 )
 
 var ErrStreamIdleTimeout = errors.New("stream idle timeout")
@@ -107,7 +108,17 @@ var (
 	bootstrapSettleTimeout   = 100 * time.Millisecond
 )
 
-func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, proto protocol.Proto, target string, method protocol.Method, extraFrames []protocol.Frame) (*bootstrapSession, error) {
+// buildBootstrapPlaintext 拼装引导记录的明文：HANDSHAKE 帧 + 调用方的额外帧 +
+// 随机填充。填充预算取 protocol.MaxRecordPlaintext——它与 crypto.RecordWriter 的
+// 写入上限是同一个值，因此"放不下就退避"这条规则同时守住了两件事：整条记录落进
+// 池的 64KB 档位，以及写入不会被加密层拒绝。
+//
+// 引导记录由客户端手工拼装、不经过整形器的预冲刷边界，所以这层保证只能在这里
+// 自己做：填充能退避，额外帧不能，因此函数自己校验额外帧的线上总长，超限时返回
+// 错误而不是把问题留给加密层。于是"返回的明文一定能被 WriteRecord 接受"是函数
+// 自身的不变量（而不再依赖三条调用点的自律），由
+// TestBootstrapRecordFitsWriteLimit 用真实 writer 守住。
+func buildBootstrapPlaintext(target string, proto protocol.Proto, method protocol.Method, extraFrames []protocol.Frame) ([]byte, error) {
 	hsFrame := protocol.NewFrameHANDSHAKE(protocol.Handshake{
 		Version: protocol.Version3,
 		Proto:   proto,
@@ -116,15 +127,28 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 	})
 	frames := append([]protocol.Frame{hsFrame}, extraFrames...)
 
+	// 先校验"填充之前"的长度：额外帧自身放不进一条记录时，交给填充退避也救不回来。
+	// 宁可在这里报出是谁越了界，也不要让明文走到 WriteRecord 才被拒绝——那里只能
+	// 报"plaintext exceeds max"，看不出根因。
+	if size := encodedLen(frames); size > protocol.MaxRecordPlaintext {
+		return nil, fmt.Errorf("bootstrap record plaintext %d exceeds max %d bytes (target %q, %d extra frames)",
+			size, protocol.MaxRecordPlaintext, target, len(extraFrames))
+	}
+
 	// 添加随机填充以隐藏引导记录中的目标主机名长度。否则，第一条记录的密文长度
 	// 会直接与 len(target) 相关。
-	// 预算是 0：bootstrap 记录在客户端手工拼装，尚未进入整形器的池化缓冲区，
-	// 因此按线上格式上限判断填充是否放得下。
-	if padFrame, ok := shaper.BuildPaddingFrame(encodedLen(frames), 0); ok {
+	if padFrame, ok := shaper.BuildPaddingFrame(encodedLen(frames), protocol.MaxRecordPlaintext); ok {
 		frames = append(frames, padFrame)
 	}
 
-	plaintext := protocol.EncodeFrames(frames)
+	return protocol.EncodeFrames(frames), nil
+}
+
+func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, proto protocol.Proto, target string, method protocol.Method, extraFrames []protocol.Frame) (*bootstrapSession, error) {
+	plaintext, err := buildBootstrapPlaintext(target, proto, method, extraFrames)
+	if err != nil {
+		return nil, err
+	}
 
 	var lastErr error
 	for attempt := 1; attempt <= bootstrapMaxAttempts; attempt++ {
@@ -406,7 +430,11 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 	var extraFrames []protocol.Frame
 	if localConn != nil {
 		_ = localConn.SetReadDeadline(time.Now().Add(8 * time.Millisecond))
-		buf := bytespool.Get(config.TCPStreamBufferSize)
+		// 这一读只取"连接建立时已经到达的首批数据"，随后就要进引导握手，
+		// 因此用最小档位起步：绝大多数连接在这一刻只有零到几百字节。
+		// NewFrameDATA 会复制载荷，所以这里的缓冲可以在拼帧后立即归还，
+		// 不必随 bootstrap 记录一起存活。
+		buf := bytespool.Get(protocol.MinRecordBufferSize)
 		n, rErr := localConn.Read(buf)
 		_ = localConn.SetReadDeadline(time.Time{})
 		if n > 0 {
@@ -472,10 +500,14 @@ func (h *StreamHandler) relay(target string, localConn net.Conn, tx shaper.Shape
 	return nil
 }
 
+// 读缓冲按需增长（起点 protocol.MinRecordBufferSize，上限 TCPStreamBufferSize）：
+// 上传方向此前为每条流无条件借出并钉住 15KB，而多数本地连接只在小数据量上活动。
+// TCP 上缩短缓冲只会多几次 Read，不会丢数据。
 func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signalActivity func()) error {
-	buf := bytespool.Get(config.TCPStreamBufferSize)
-	defer bytespool.MustPut(buf)
+	r := netbuf.NewReader(protocol.MinRecordBufferSize, config.TCPStreamBufferSize)
+	defer r.Release()
 	for {
+		buf := r.Buf()
 		n, err := src.Read(buf)
 		if n > 0 {
 			signalActivity()
@@ -486,6 +518,10 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 					return nil
 				}
 				return pErr
+			}
+			// 交出数据之后才换档：Grow 会把 buf 归还池。
+			if n == len(buf) {
+				r.Grow()
 			}
 		}
 		if err != nil {
@@ -659,19 +695,30 @@ type UDPExchange struct {
 	closeOnce sync.Once
 }
 
+// bootstrapMaxPayload 返回可以合并进引导记录的首个数据报的最大长度：引导记录由
+// 客户端手工拼装，不经过整形器的预冲刷边界，因此合并判据必须自己保证拼出来的明文
+// 不超过 protocol.MaxRecordPlaintext（= crypto.RecordWriter 的写入上限）。
+// 9 = HANDSHAKE 帧头 3 + 握手体固定字段 3 + DATAGRAM 帧头 3。
+//
+// 判据与 buildBootstrapPlaintext 的填充预算取自同一个常量，因此"判据说能合并"
+// 与"加密层一定接受"是同一件事——这条等价关系由 TestBootstrapRecordFitsWriteLimit
+// 直接对着真实 writer 断言。
+func bootstrapMaxPayload(target string) int {
+	return protocol.MaxRecordPlaintext - len(target) - 9
+}
+
 func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, method protocol.Method, firstPayload []byte) (*UDPExchange, error) {
 	stats.RecordUDPAssociation()
 	log.Debug("[UDP_EXCHANGE] opening", "target", target)
 
-	// 仅在合并后的明文保证能放进 MaxPlainRecordSize 时，才把第一个数据报合并进
-	// 引导记录：HANDSHAKE 帧（3 + 3 + len(target)）加上 DATAGRAM 帧头（3）再
-	// 加上载荷，填充会自行适应（记录将要溢出时 BuildPaddingFrame 会退避）。
-	// 过大的首个数据报（例如巨型包加上很长的目标名）改为在握手之后立即发送，
-	// 而不是让整个交换失败。
+	// 仅在合并后的明文保证能被加密层接受时，才把第一个数据报合并进引导记录：
+	// 判据见 bootstrapMaxPayload（填充会自行适应——记录将要溢出时
+	// BuildPaddingFrame 会退避）。过大的首个数据报（例如巨型包加上很长的目标名）
+	// 改为在握手之后立即发送，而不是让整个交换失败。
 	var extraFrames []protocol.Frame
 	mergeFirst := false
 	if len(firstPayload) > 0 {
-		if len(firstPayload)+len(target)+9 <= protocol.MaxPlainRecordSize {
+		if len(firstPayload) <= bootstrapMaxPayload(target) {
 			mergeFirst = true
 			extraFrames = []protocol.Frame{protocol.NewFrameDATAGRAM(firstPayload)}
 			// 合并进引导记录的数据报不走 Send（它是流的第一条记录），因此它的
@@ -727,7 +774,14 @@ func (ue *UDPExchange) Send(data []byte) error {
 	ue.mu.Lock()
 	defer ue.mu.Unlock()
 	ue.lastSeen.Store(time.Now().UnixNano())
-	frame := protocol.NewFrameDATAGRAM(data)
+	// 用 NewFrameWithPayload 而非 NewFrameDATAGRAM：后者会 append 复制一份载荷，
+	// 而整形器在 PushFrame 内就会把载荷拷进自己的明文缓冲，因此这次复制纯属多余
+	//（每个数据报都产生一个绕过池的堆块）。载荷所有权不变：DATAGRAM 的
+	// putPayload 为 false（见 shaper.appendFrameLocked），PushFrame 返回后调用方
+	// 仍拥有 data，可以立即复用——现在的调用方正是这么做的（SOCKS5 中继循环在
+	// 下一次 ReadFromUDP 时就覆盖了同一块缓冲）。若 shaper 将来改成归还任何池化
+	// 载荷，这里会变成把仍在使用的缓冲归还池。
+	frame := protocol.NewFrameWithPayload(protocol.FrameDATAGRAM, data)
 	stats.RecordRawBytesSent(len(data))
 	return ue.tx.PushFrame(frame)
 }

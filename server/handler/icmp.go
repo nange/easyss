@@ -18,17 +18,38 @@ import (
 	"golang.org/x/net/ipv6"
 )
 
-// icmpHandler 的常量。两者都是该协议本身的属性，不是可调参数，因此集中在此
+// icmpHandler 的常量。它们都是该协议本身的属性，不是可调参数，因此集中在此
 // 并注释来源，而不是散落在交换逻辑里。
 const (
 	// icmpExchangeDeadline 限定一次回显请求的发送与应答等待。ICMP 交换是
 	// 一次性、无 context 的，这个截止时间就是它唯一的生命周期上限。
 	icmpExchangeDeadline = 5 * time.Second
 
-	// icmpReadBufSize 是回显应答的读取缓冲区：单个 IP 报文的最大长度
+	// icmpMaxReadBufSize 是回显应答读取缓冲的上限：单个 IP 报文的最大长度
 	// （IPv4 总长度字段只有 16 位），因此足够容纳任何可读到的应答。
-	icmpReadBufSize = 65535
+	icmpMaxReadBufSize = 65535
+
+	// icmpMinReadBufSize 是回显应答读取缓冲的起点。回显应答的数据部分由请求
+	// 决定（服务端回显 payload[4:]），而 VPS 上绝大多数 ICMP 是一次常规 ping
+	// 或探活，因此从最小档位起步，只有"确实读满"时才升到上限——否则每次交换
+	// 都要借出一整块 64KB 缓冲，而它只承载几十字节。
+	icmpMinReadBufSize = 4 * 1024
+
+	// icmpIPHeaderReserve 预留给链路层之下可能附带的 IP 头。Linux/Windows 的
+	// 原始 "ip4:icmp" socket 会把 IPv4 头一并交给用户态（解析前已被剥掉，
+	// 见 icmpExchange），IPv4 头最长 60 字节，这里取够。
+	icmpIPHeaderReserve = 64
 )
+
+// icmpFirstReadBufSize 返回首次读取使用的缓冲大小：请求载荷加上可能的 IP 头，
+// 再钳制到 [icmpMinReadBufSize, icmpMaxReadBufSize]。
+//
+// 它是纯函数，因此"小请求只借小缓冲"这条内存契约可以被直接单测——真实 ICMP
+// 交换需要 root 与外部可达目标，不适合做断言基础。
+func icmpFirstReadBufSize(requestPayload []byte) int {
+	size := len(requestPayload) - 4 + icmpIPHeaderReserve
+	return min(max(size, icmpMinReadBufSize), icmpMaxReadBufSize)
+}
 
 type icmpHandler struct {
 	dial dialer
@@ -145,8 +166,8 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) (reply []byte,
 		return nil, "", err
 	}
 
-	rb := bytespool.Get(icmpReadBufSize)
-	defer bytespool.MustPut(rb)
+	rb := bytespool.Get(icmpFirstReadBufSize(payload))
+	defer func() { bytespool.MustPut(rb) }()
 
 	// 原始 ICMP socket 会收到送达本机的所有匹配 ICMP 报文，而不只是本 socket
 	// 自己请求的应答：并发访问同一目标的流可能产生 ID/Seq 属于其他流的应答。
@@ -162,6 +183,20 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) (reply []byte,
 				log.Error("[ICMP] read failed", "target", target, "err", err)
 			}
 			return nil, "", err
+		}
+
+		// 读满即可能被截断（"大于缓冲"与"恰好等于缓冲"无法区分，报文长度分布
+		// 连续，因此按可能截断处理）。此时升到上限再继续读——注意**被截断的那一条
+		// 救不回来**：raw socket 已经把它消费掉，重读只会读到下一条报文，升档的
+		// 作用仅仅是让后续报文不再被截断（原先注释写的"重读一次"是错的）。
+		//
+		// 按 icmpFirstReadBufSize 的推导，首读截断要求应答的 IP 头 > 56 字节
+		// （IPv4 带选项）或 IPv6 扩展头格外多，都是罕见情况，因此这里保留这段
+		// 增长作为兜底：缓冲从最小档位起步是为了常规 ping 不占 64KB，而不是为了
+		// 在小报文上保持小缓冲。只升一次；到上限后再读满就无法再分辨，与改动前一致。
+		if n == len(rb) && len(rb) < icmpMaxReadBufSize {
+			bytespool.SwapIn(&rb, bytespool.Get(icmpMaxReadBufSize))
+			continue
 		}
 
 		data := rb[:n]
