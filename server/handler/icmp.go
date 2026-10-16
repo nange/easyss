@@ -195,9 +195,7 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) (reply []byte,
 		// 增长作为兜底：缓冲从最小档位起步是为了常规 ping 不占 64KB，而不是为了
 		// 在小报文上保持小缓冲。只升一次；到上限后再读满就无法再分辨，与改动前一致。
 		if n == len(rb) && len(rb) < icmpMaxReadBufSize {
-			bigger := bytespool.Get(icmpMaxReadBufSize)
-			bytespool.SwapIn(bigger, rb[:0])
-			rb = bigger
+			bytespool.SwapIn(&rb, bytespool.Get(icmpMaxReadBufSize))
 			continue
 		}
 

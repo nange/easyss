@@ -74,12 +74,9 @@ func (r *Reader) Grow() {
 	if next <= cur {
 		return
 	}
-	// 先取新缓冲、再归还旧的、最后才换字段：SwapIn 之后旧缓冲已入池，
-	// 而字段仍指向它，因此赋值必须紧跟在 SwapIn 之后（中间不能有任何可能
-	// 提前返回或读取 r.buf 的语句）。
-	buf := bytespool.Get(next)
-	bytespool.SwapIn(buf, r.buf[:0])
-	r.buf = buf
+	// 先取新缓冲、再归还旧的、最后换字段——三步都在 SwapIn 内完成，因此没有
+	// "取到新缓冲却忘了赋值"的窗口（那会让 r.buf 指向一块已入池的缓冲）。
+	bytespool.SwapIn(&r.buf, bytespool.Get(next))
 }
 
 // Release 把当前缓冲归还池。调用方必须保证此后不再使用 Buf 的结果（通常

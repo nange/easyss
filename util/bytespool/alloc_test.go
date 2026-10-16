@@ -160,37 +160,51 @@ func TestAllocGetClearsPhantomRetainedCount(t *testing.T) {
 	assert.Equal(t, int64(1), alloc.retained[idx].Load(), "幻影排空后 Put 应重新开始保留")
 }
 
-// TestSwapIn 固定"换一块更大的缓冲"这条公共路径的三种语义。它存在的意义是
-// 把归还顺序收敛到一处：调用方各自写一遍时最容易漏掉的是"池取不到更大缓冲时
-// 不得归还旧缓冲"——那会让后续写入落进已经入池的缓冲，造成跨流数据污染。
+// TestSwapIn 固定"换一块更大的缓冲"这条公共路径的语义。它存在的意义是把
+// "取新 → 还旧 → 赋值"三步收敛到一处：调用方各自写一遍时最容易漏掉的是
+// "池取不到更大缓冲时不得归还旧缓冲"（那会让后续写入落进已经入池的缓冲，
+// 造成跨流数据污染），以及"赋值"本身（忘了它，*dst 就指向一块已入池的缓冲）。
 func TestSwapIn(t *testing.T) {
 	t.Run("nil 新缓冲保留旧缓冲", func(t *testing.T) {
 		old := Get(1024)
 		old[0] = 0xAB
-		SwapIn(nil, old[:0])
-		// 旧缓冲没有被归还：cap 不变、内容仍然可读。
+		SwapIn(&old, nil)
+		// 旧缓冲没有被归还：cap 不变、内容仍然可读，且 *dst 仍指向它。
 		assert.Equal(t, 1024, cap(old))
 		assert.Equal(t, byte(0xAB), old[0], "池取不到新缓冲时旧缓冲不得被归还")
 		MustPut(old)
 	})
 
 	t.Run("nil 旧缓冲不 panic", func(t *testing.T) {
-		SwapIn(Get(1024), nil)
+		var dst []byte
+		SwapIn(&dst, Get(1024))
+		MustPut(dst)
 	})
 
 	t.Run("空 cap 旧缓冲不 panic", func(t *testing.T) {
-		SwapIn(Get(1024), []byte{})
+		dst := []byte{}
+		SwapIn(&dst, Get(1024))
+		MustPut(dst)
 	})
 
-	t.Run("正常路径归还旧缓冲", func(t *testing.T) {
+	t.Run("正常路径装上新缓冲并归还旧缓冲", func(t *testing.T) {
 		old := Get(1024)
-		buf := Get(2048)
-		SwapIn(buf, old[:0])
-		assert.Equal(t, 2048, cap(buf))
-		// 旧缓冲已归还：它仍是合法档位，因此再 Put 一次不会报错
-		//（Put 只做档位校验；这条断言固定"归还走的是正常路径"）。
-		assert.NoError(t, Put(old))
-		MustPut(buf)
+		// 基线取在 Get(1024) 之后：Get 递减该档位的保留计数、Put 递增，因此差值
+		// 就是"旧缓冲真的回到池里"的直接证据——Put 只做档位校验，光断言它不报错
+		// 什么都证明不了（旧缓冲不归还也同样通过）。也正因为旧缓冲已被 SwapIn
+		// 归还，这里绝不能再 Put(old) 一次：那会把同一块数组在池里放两遍，后续
+		// 两次 Get(1024) 就可能拿到同一块，正是本函数要防的跨流污染。
+		idx := msb(1024)
+		retained := defaultAllocator.retained[idx].Load()
+
+		dst := old
+		SwapIn(&dst, Get(2048))
+		// 赋值由 SwapIn 自己完成：调用方忘了它也不会指向已入池的缓冲。
+		assert.Equal(t, 2048, cap(dst))
+		assert.NotSame(t, &old[0], &dst[0], "新旧缓冲必须是两块不同的内存")
+		assert.Equal(t, retained+1, defaultAllocator.retained[idx].Load(),
+			"旧缓冲必须真的回到池里，而不是泄漏给 GC")
+		MustPut(dst)
 	})
 }
 
