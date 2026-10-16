@@ -192,8 +192,11 @@ func newCountingSlot(conn net.Conn) (*transportSlot, *slotConn) {
 }
 
 // livenessStream 构造一条已提交到槽位当前一代、带判活探针的流：ConnAlive 是
-// 连接作用域的，探测对象是流自己那一代（见 http2Stream.ConnAlive）。
+// 连接作用域的，探测对象是流自己那一代（见 http2Stream.ConnAlive）。这一代必须
+// 已经有一条连接身份——"这一代没有连接就不探测"（见 slotProber.alive）由
+// probe_test 单独覆盖，这里测的是探测结论本身。
 func livenessStream(slot *transportSlot, liveness func(context.Context, *slotTransport) (bool, bool)) *http2Stream {
+	attachConn(slot, &countingConn{})
 	s := &http2Stream{slot: slot, liveness: liveness}
 	if gen := slot.generation(); gen != nil {
 		s.gen.Store(gen)

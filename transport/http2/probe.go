@@ -51,8 +51,21 @@ type slotProber struct {
 // 探测对象由调用方给定（流的判活是"本流提交到的那一代"，槽位复核是"当前那一
 // 代"）：判死换池之后，旧一代的流必须得到关于自己那条连接的结论，而不是被新
 // 连接的健康状况顶替。
-// 返回的 ok=false 表示"无法判定"（未配置探测令牌），调用方应按判死处理。
+//
+// 这一代已经没有连接时（判死关闭，或被 net/http 回收）直接报告"无法判定"：绑在
+// 它上面的流注定失败，探测只会为一条死连接在已被替换的池上白拨一条新连接（那条
+// 连接还会滞留在无人再引用的池里直到空闲超时），而拿到响应给出的"alive"也只是
+// 关于那条新连接的。判死因此交给调用方，与 reverifySlot 自己的 sc == nil 预检
+// 语义一致（流在飞时它所在代的 gen.conn 必然非空：MaxConnsPerHost=1，在飞的连接
+// 占着那一代）。
+//
+// 返回的 ok=false 表示"无法判定"（未配置探测令牌，或上面这种"没有可探测的连接"），
+// 调用方应按判死处理。
 func (p *slotProber) alive(ctx context.Context, gen *slotTransport) (alive, ok bool) {
+	if gen == nil || gen.conn.Load() == nil {
+		return false, false
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, p.serverURL+sharedconfig.EndpointProbe, nil)
 	if err != nil {
 		return false, false
