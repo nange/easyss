@@ -70,8 +70,9 @@ func TestRecordWriterFlushesAfterCompleteRecord(t *testing.T) {
 	rw.Flush()
 	require.Equal(t, 1, w.flushes, "explicit Flush() should flush")
 
-	// 大记录同样不应自动 flush。
-	large := make([]byte, 32*1024)
+	// 大记录同样不应自动 flush。"大"取写入上限本身：它既是最大的一条记录，
+	// 也是唯一会走到池档位边界的尺寸。
+	large := make([]byte, protocol.MaxRecordPlaintext)
 	w2 := &flushBuffer{}
 	enc2, counter2, err := sk.newEncryptor(sessionPhase, DirS2C, protocol.MethodAES256GCM)
 	require.NoError(t, err)
@@ -163,14 +164,14 @@ func TestRecordWriterSingleWriteKeepsWireFormat(t *testing.T) {
 	}
 }
 
-// TestRecordWriterKeepsCipherBufferIn64KClass 固定"整条记录取样于池的 64KB 档"：
-// 记录占用的池请求是 3 字节长度前缀 + 明文 + AEAD 标签，因此明文上限
-// (protocol.MaxRecordPlaintext) 处仍落在 64KB 档；上限一旦被调高到 65,518 以上，
-// 整块记录就会跳到 128KB 档，为最后十几字节付一倍的池保留与瞬时分配。
+// TestRecordWriterKeepsCipherBufferInPoolClass 固定"整条记录取样于 protocol
+// 承诺的池档位"：记录占用的池请求是 3 字节长度前缀 + 明文 + AEAD 标签，因此明文
+// 上限 (protocol.MaxRecordPlaintext) 处仍落在 protocol.MaxPoolClass 档；上限一旦
+// 被调高，整块记录就会向上跳一档，为最后十几字节付一倍的池保留与瞬时分配。
 //
 // 断言的是交给 io.Writer 的那块缓冲的 cap，因为字节池传下去的就是它本身——
 // 这是"没有额外复制"的直接证据。
-func TestRecordWriterKeepsCipherBufferIn64KClass(t *testing.T) {
+func TestRecordWriterKeepsCipherBufferInPoolClass(t *testing.T) {
 	masterKey, _ := DeriveMasterKey("cipher-class-key")
 	salt, _ := GenerateSalt()
 	endpoint := "/v3/tcp"
@@ -188,8 +189,8 @@ func TestRecordWriterKeepsCipherBufferIn64KClass(t *testing.T) {
 	require.Len(t, rec.parts, recordWriteCalls)
 	require.Equal(t, protocol.MaxCipherLenSize+len(plaintext)+protocol.MaxTagOverhead, rec.parts[0],
 		"整条记录（前缀 + 密文）必须在同一笔写入里")
-	require.Equal(t, 64*1024, rec.caps[0],
-		"明文上限处的记录必须仍落在池的 64KB 档位")
+	require.Equal(t, protocol.MaxPoolClass, rec.caps[0],
+		"明文上限处的记录必须仍落在承诺的池档位内")
 }
 
 // TestWriteRecordRejectsPlaintextAboveRecordCeiling 固定**写入侧**的上限就是
@@ -207,11 +208,11 @@ func TestWriteRecordRejectsPlaintextAboveRecordCeiling(t *testing.T) {
 	require.NoError(t, err)
 	aad := buildAAD(endpoint, salt, "s2c", "session", protocol.MethodAES256GCM)
 
-	// 约束链本身必须自洽：最大合法单帧放得下，且线上长度仍落在 64KB 档内。
+	// 约束链本身必须自洽：最大合法单帧放得下，且线上长度仍落在承诺的池档位内。
 	require.GreaterOrEqual(t, protocol.MaxRecordPlaintext, protocol.MaxUDPDataSize+protocol.FrameHeaderSize,
 		"明文上限小于最大合法单帧，最大的 UDP 数据报会被判成超限")
-	require.LessOrEqual(t, protocol.MaxRecordPlaintext+protocol.MaxCipherLenSize+protocol.MaxTagOverhead, 64*1024,
-		"明文上限越过了池的 64KB 档位")
+	require.LessOrEqual(t, protocol.MaxRecordPlaintext+protocol.MaxCipherLenSize+protocol.MaxTagOverhead, protocol.MaxPoolClass,
+		"明文上限越过了承诺的池档位")
 	require.Greater(t, MaxCipherRecordSize, protocol.MaxRecordPlaintext+protocol.MaxTagOverhead,
 		"解码侧上限不应跟着写入侧一起收紧，否则无法解码旧对端的最大记录")
 
@@ -227,8 +228,8 @@ func TestWriteRecordRejectsPlaintextAboveRecordCeiling(t *testing.T) {
 
 // TestAEADOverheadMatchesProtocolCeiling 守住 protocol.MaxTagOverhead 与真实
 // AEAD 标签长度的耦合：protocol 是记录格式的定义方、不依赖 crypto 包，因此这条
-// 关系只能由测试约束。标签一旦变长，"明文上限 + 3 + 标签 ≤ 64KB"的算术就不再
-// 成立，整条记录会跳进 128KB 档。
+// 关系只能由测试约束。标签一旦变长，"明文上限 + 3 + 标签 ≤ 池档位"的算术就不再
+// 成立，整条记录会向上跳一档。
 func TestAEADOverheadMatchesProtocolCeiling(t *testing.T) {
 	masterKey, _ := DeriveMasterKey("tag-overhead-key")
 	salt, _ := GenerateSalt()

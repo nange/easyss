@@ -125,8 +125,13 @@ func TestBatchShaperFlushesBeforePlainRecordLimit(t *testing.T) {
 	// 提前登记补偿关闭：PushData/Flush 中途失败时也不能把活着的注入器与定时器
 	// 留给后面的测试。
 	t.Cleanup(func() { _ = bs.Close() })
-	payload := make([]byte, 16*1024)
-	for range 4 {
+	// 载荷取记录上限的一半：两条加上帧头就越过批处理阈值而被冲刷，而没有任何
+	// 一条记录能顶上记录上限。取值锚在协议常量上（而不是 16KB 之类的字面量），
+	// 这样上限调整时这条用例仍然守着"预冲刷边界"本身，不会因为某个字面量突然
+	// 超限而失败。
+	const pushes = 4
+	payload := make([]byte, protocol.MaxRecordPlaintext/2)
+	for range pushes {
 		if err := bs.PushData(payload); err != nil {
 			t.Fatal(err)
 		}
@@ -145,6 +150,7 @@ func TestBatchShaperFlushesBeforePlainRecordLimit(t *testing.T) {
 
 	rr := newTestReader(t, sk, &out)
 	records := 0
+	total := 0
 	for {
 		plaintext, err := rr.ReadRecord()
 		if errors.Is(err, io.EOF) {
@@ -153,13 +159,25 @@ func TestBatchShaperFlushesBeforePlainRecordLimit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(plaintext) > protocol.MaxPlainRecordSize {
-			t.Fatalf("record plaintext size %d exceeds max %d", len(plaintext), protocol.MaxPlainRecordSize)
+		// 记录明文不得超过记录上限——它才是写入侧的真实边界，线上格式上限
+		// (protocol.MaxPlainRecordSize) 只是解码侧的天花板，用它断言等于没断言。
+		// 这条断言与下面的字节守恒一起，就是"预冲刷边界生效且不丢帧"的完整判据：
+		// 少了预冲刷，多帧累积会把记录顶过上限；少了字节守恒，多冲刷会丢帧。
+		if len(plaintext) > protocol.MaxRecordPlaintext {
+			t.Fatalf("record plaintext size %d exceeds max %d", len(plaintext), protocol.MaxRecordPlaintext)
 		}
+		total += len(plaintext)
 		records++
 	}
-	if records != 2 {
-		t.Fatalf("records = %d, want 2", records)
+	// 载荷一字节不少地落在记录里：预冲刷只改变记录边界，绝不能丢帧
+	// （多帧累积顶过上限时报错、或静默丢弃，都会在这里暴露）。
+	if want := pushes*len(payload) + pushes*protocol.FrameHeaderSize; total < want {
+		t.Fatalf("记录里的帧字节 = %d, want >= %d（预冲刷丢帧了）", total, want)
+	}
+	// 记录条数不做断言：它由批处理阈值（记录上限的 9/10）决定，而不是由本用例
+	// 要守的预冲刷边界决定——锚在它上面只会让用例随阈值调整而碎。
+	if records == 0 {
+		t.Fatal("没有写出任何记录")
 	}
 }
 
@@ -186,14 +204,16 @@ func TestBatchShaperGrowFromNilBuffer(t *testing.T) {
 	impl.plaintext = nil
 	impl.mu.Unlock()
 
-	// 从 nil 起步推入数据：必须成功且缓冲区落到合法档位。
+	// 从 nil 起步推入数据：必须成功且缓冲区落到合法档位。上界取池档位
+	// (protocol.MaxPoolClass) 而不是线上格式上限：后者与每流常驻内存无关，
+	// 用它做断言等于没断言。
 	if err := bs.PushData(make([]byte, 1024)); err != nil {
 		t.Fatalf("PushData 在 nil 缓冲区上失败: %v", err)
 	}
 	impl.mu.Lock()
 	got := cap(impl.plaintext)
 	impl.mu.Unlock()
-	if got < 1024+protocol.FrameHeaderSize || got > protocol.MaxPlainRecordSize {
+	if got < 1024+protocol.FrameHeaderSize || got > protocol.MaxPoolClass {
 		t.Fatalf("nil 缓冲区增长后 cap = %d，超出预期区间", got)
 	}
 }
@@ -238,7 +258,15 @@ func TestBatchShaperStartsWithMinimalBuffer(t *testing.T) {
 
 // TestBatchShaperBufferGrowsOnDemand 固定按需增长的边界与归还：
 // 攒够数据后缓冲区必须增长（否则 AppendFrame 会自行 realloc 而绕过 BufferPool），
-// 且任何时刻都不会超过 protocol.MaxPlainRecordSize。
+// 且任何时刻都不会超过**池档位**——后者是每个流的常驻上限，也是这套按需增长
+// 存在的全部理由。
+//
+// 注意这里断言的是 protocol.MaxPoolClass 而不是更小的 protocol.MaxRecordPlaintext：
+// 明文缓冲的请求量是"帧 + 帧头"，按 2 的幂取整后可以比记录上限大一档（记录上限
+// = 档位 - 3 - 16），这一档余量是正常的；跨过档位才是回归。
+//
+// 观察点必须落在"没有触发冲刷"的帧上：冲刷一旦发生，缓冲区就被换出并归还池，
+// 手上的 cap 会是换回来的那块最小缓冲，测到的是冲刷后的状态而不是增长后的状态。
 func TestBatchShaperBufferGrowsOnDemand(t *testing.T) {
 	masterKey, err := easycrypto.DeriveMasterKey("batch-grow")
 	if err != nil {
@@ -254,31 +282,39 @@ func TestBatchShaperBufferGrowsOnDemand(t *testing.T) {
 	t.Cleanup(func() { _ = bs.Close() })
 	impl := bs.(*batchShaper)
 
-	// 单帧 32KB 超过初始 4KB，必须增长到足以容纳它（并带上帧头）。
-	if err := bs.PushData(make([]byte, 32*1024)); err != nil {
+	// 单帧 8KB：超过初始 4KB 必须增长，但不到冲刷阈值（记录上限的 9/10），
+	// 因此增长后的缓冲区会留在流里，可以被观察到。
+	const frame = 8 * 1024
+	if frame+protocol.FrameHeaderSize >= impl.flushThreshold {
+		t.Fatalf("测试自身选错了载荷：%d 字节的帧会直接触发冲刷", frame)
+	}
+	if err := bs.PushData(make([]byte, frame)); err != nil {
 		t.Fatalf("PushData: %v", err)
 	}
 	impl.mu.Lock()
 	grown := cap(impl.plaintext)
 	impl.mu.Unlock()
-	if grown < 32*1024+protocol.FrameHeaderSize {
-		t.Fatalf("推入 32KB 后 cap = %d，不足以容纳该帧", grown)
+	if grown < frame+protocol.FrameHeaderSize {
+		t.Fatalf("推入 %d 字节后 cap = %d，不足以容纳该帧", frame, grown)
 	}
-	if grown > protocol.MaxPlainRecordSize {
-		t.Fatalf("cap = %d 超过上限 %d", grown, protocol.MaxPlainRecordSize)
+	if grown > protocol.MaxPoolClass {
+		t.Fatalf("cap = %d 超过池档位 %d", grown, protocol.MaxPoolClass)
 	}
 
-	// 持续推入直到出现冲刷，验证缓冲区在来回冲刷之后仍然受上限约束。
-	// 关键是 Bytes() 与 cap 都不能失控：增长按 2 倍摊销，不能每帧都重新分配。
+	// 再把缓冲区推到尺寸边界：推入最大合法数据报（它必然触发冲刷，因此不看 cap），
+	// 随后持续推入并检查——无论走预冲刷还是阈值冲刷，缓冲区都不得越过池档位。
+	if err := bs.PushData(make([]byte, protocol.MaxUDPDataSize)); err != nil {
+		t.Fatalf("PushData(最大数据报): %v", err)
+	}
 	for range 8 {
-		if err := bs.PushData(make([]byte, 16*1024)); err != nil {
+		if err := bs.PushData(make([]byte, 8*1024)); err != nil {
 			t.Fatalf("PushData: %v", err)
 		}
 		impl.mu.Lock()
 		cur := cap(impl.plaintext)
 		impl.mu.Unlock()
-		if cur > protocol.MaxPlainRecordSize {
-			t.Fatalf("冲刷后 cap = %d 超过上限 %d", cur, protocol.MaxPlainRecordSize)
+		if cur > protocol.MaxPoolClass {
+			t.Fatalf("冲刷后 cap = %d 超过池档位 %d", cur, protocol.MaxPoolClass)
 		}
 	}
 	if err := bs.Flush(); err != nil {
@@ -292,9 +328,9 @@ func TestBatchShaperBufferGrowsOnDemand(t *testing.T) {
 	}
 }
 
-// TestBatchShaperAcceptsLargeDatagramFrame 固定单帧上限仍是线上格式上限：
-// UDP 数据报帧最大可达 protocol.MaxUDPDataSize(65507)，它超过批处理的冲刷
-// 阈值，但必须被当作合法帧接受（历史缺陷：用阈值去做尺寸校验会把它判成错误）。
+// TestBatchShaperAcceptsLargeDatagramFrame 固定单帧上限是记录上限：
+// UDP 数据报帧最大可达 protocol.MaxUDPDataSize，它必然超过批处理的冲刷阈值，
+// 但必须被当作合法帧接受（历史缺陷：用阈值去做尺寸校验会把它判成错误）。
 func TestBatchShaperAcceptsLargeDatagramFrame(t *testing.T) {
 	masterKey, err := easycrypto.DeriveMasterKey("batch-large-datagram")
 	if err != nil {
@@ -309,31 +345,32 @@ func TestBatchShaperAcceptsLargeDatagramFrame(t *testing.T) {
 	bs := New(newTestWriter(t, sk, &out), Config{BatchWindowMS: 1000})
 	t.Cleanup(func() { _ = bs.Close() })
 
-	// 60000 字节：小于 MaxUDPDataSize，但远大于 flushThreshold。
-	payload := make([]byte, 60000)
+	// 最大合法数据报：它与记录上限只差一个帧头，因此必然超过批处理的冲刷阈值，
+	// 但必须被当作合法帧接受（历史缺陷：用阈值去做尺寸校验会把它判成错误）。
+	payload := make([]byte, protocol.MaxUDPDataSize)
 	if err := bs.PushData(payload); err != nil {
-		t.Fatalf("PushData(60000B): %v", err)
+		t.Fatalf("PushData(MaxUDPDataSize): %v", err)
 	}
 
-	// 单帧超过 MaxPlainRecordSize 时仍必须被拒绝（线上格式的 3 字节长度前缀
-	// 虽能表达更大值，但解码端的上限是 protocol.MaxPlainRecordSize）。
-	if err := bs.PushData(make([]byte, protocol.MaxPlainRecordSize+1)); err == nil {
-		t.Fatal("超过 MaxPlainRecordSize 的帧应被拒绝")
+	// 单帧超过记录上限时仍必须被拒绝（线上格式的 3 字节长度前缀虽能表达更大值，
+	// 但写入侧的上限是 protocol.MaxRecordPlaintext）。
+	if err := bs.PushData(make([]byte, protocol.MaxRecordPlaintext+1)); err == nil {
+		t.Fatal("超过 MaxRecordPlaintext 的帧应被拒绝")
 	}
 }
 
-// TestBatchShaperMaxDatagramStaysIn64KRecordCeiling 固定"记录明文上限"这条约束链
+// TestBatchShaperMaxDatagramStaysInPoolClass 固定"记录明文上限"这条约束链
 // 的三个方向：
 //
-//   - 下界：它绝不能把最大的合法单帧判成超限——UDP 数据报上限 65,507 字节，加上
-//     3 字节帧头是 65,510，必须仍然放得下（这也是它不能取更整齐的 65,500 之类的
-//     原因：那会把最大数据报挡在门外）；
+//   - 下界：它绝不能把最大的合法单帧判成超限——UDP 数据报上限加上 3 字节帧头是
+//     记录上限本身，必须放得下（这也是协议里 MaxUDPDataSize 由记录上限反推、
+//     而不是取某个"整齐"数值的原因）；
 //   - 上界：一条记录占用的池缓冲是 3 字节长度前缀 + 明文 + 16 字节标签，明文一旦
-//     超过 65,517，整块记录就从池的 64KB 档跳到 128KB 档——为十几字节的溢出付
-//     一倍的池保留与瞬时分配；
+//     超过档位减去这两者，整块记录就向上跳一档——为十几字节的溢出付一倍的池保留
+//     与瞬时分配；
 //   - 一致性：它必须与加密侧的写入上限是同一个值，否则整形器能攒出 WriteRecord
 //     拒绝的明文，把一条正常的流打断。
-func TestBatchShaperMaxDatagramStaysIn64KRecordCeiling(t *testing.T) {
+func TestBatchShaperMaxDatagramStaysInPoolClass(t *testing.T) {
 	masterKey, err := easycrypto.DeriveMasterKey("batch-ceiling-test-key")
 	if err != nil {
 		t.Fatal(err)
@@ -351,8 +388,8 @@ func TestBatchShaperMaxDatagramStaysIn64KRecordCeiling(t *testing.T) {
 	if maxFrame := protocol.MaxUDPDataSize + protocol.FrameHeaderSize; maxFrame > impl.recordCeiling {
 		t.Fatalf("最大单帧 %d 超过记录上限 %d，会被误判为超限", maxFrame, impl.recordCeiling)
 	}
-	if got := impl.recordCeiling + protocol.MaxCipherLenSize + protocol.MaxTagOverhead; got > 64*1024 {
-		t.Fatalf("记录线上长度上界 %d 超过 64KB 池档位", got)
+	if got := impl.recordCeiling + protocol.MaxCipherLenSize + protocol.MaxTagOverhead; got > protocol.MaxPoolClass {
+		t.Fatalf("记录线上长度上界 %d 超过池档位 %d", got, protocol.MaxPoolClass)
 	}
 	if impl.recordCeiling != protocol.MaxRecordPlaintext {
 		t.Fatalf("记录上限 %d 与加密侧的写入上限 %d 不一致",
@@ -402,11 +439,11 @@ func (p *recordProbe) Write(b []byte) (int, error) {
 
 // TestBatchShaperRecordStaysUnderCeilingOnAccumulation 固定"**多帧累积**也不能越过
 // 记录明文上限"：单帧校验管不到累积，唯一能守住它的地方是 appendFrameLocked 的
-// 预冲刷边界。历史缺陷：边界取的是线上格式上限(65,536)，于是"两帧之和落在
-// 65,518~65,536 这条窄缝里"的记录会带着 128KB 档的缓冲被加密出去——而
-// TestBatchShaperMaxDatagramStaysIn64KRecordCeiling 只压单帧，走不到那条路径。
+// 预冲刷边界。历史缺陷：边界取的是线上格式上限，于是"多帧之和落在记录上限与该
+// 上限之间"的记录会带着更大档位的缓冲被加密出去——而
+// TestBatchShaperMaxDatagramStaysInPoolClass 只压单帧，走不到那条路径。
 //
-// 因此每一轮刻意推两帧、长度之和固定落在旧边界与记录上限之间，并覆盖从"小帧在
+// 因此每一轮刻意推两帧、长度之和固定落在记录上限与池档位之间，并覆盖从"小帧在
 // 前"到"满上限帧在前"的不同切分方式。
 func TestBatchShaperRecordStaysUnderCeilingOnAccumulation(t *testing.T) {
 	masterKey, err := easycrypto.DeriveMasterKey("batch-accumulation-key")
@@ -423,24 +460,42 @@ func TestBatchShaperRecordStaysUnderCeilingOnAccumulation(t *testing.T) {
 	t.Cleanup(func() { _ = bs.Close() })
 	impl := bs.(*batchShaper)
 
-	// targetSum 是两帧载荷之和：加过两个帧头(6)之后落在 (recordCeiling, 旧边界]
-	// 之内，也就是修复前必然越界、修复后被预冲刷切开的那个窗口。
-	const targetSum = 65520
-	if got := targetSum + 2*protocol.FrameHeaderSize; got <= impl.recordCeiling || got > protocol.MaxPlainRecordSize {
-		t.Fatalf("测试自身的窗口 %d 不在 (%d, %d] 内", got, impl.recordCeiling, protocol.MaxPlainRecordSize)
-	}
+	// 两帧载荷之和的**目标**取"整块记录正好占满档位"再扣掉两个帧头，但真正的
+	// 判据是实际组合：两帧的载荷之和加帧头必须落在 (recordCeiling, MaxPoolClass]
+	// 这条窄缝里。逐组合校验，因为窗口宽度只有 MaxCipherLenSize+MaxTagOverhead，
+	// 而单帧还各自受 MaxUDPDataSize 约束——两条约束会挤掉一部分组合。
+	limitSum := protocol.MaxPoolClass - 2*protocol.FrameHeaderSize
 
 	pushed := 0
-	for _, first := range []int{13, 100, 4096, 20000, 32750, protocol.MaxUDPDataSize} {
-		for _, size := range []int{first, targetSum - first} {
+	pairs := 0
+	for _, first := range []int{13, 100, 4096, 8192, protocol.MaxUDPDataSize / 2, protocol.MaxUDPDataSize} {
+		second := limitSum - first
+		if second < 0 {
+			t.Fatalf("第一帧 %d 已经吃掉了整个窗口 %d", first, limitSum)
+		}
+		// 单帧超过最大数据报就不是"合法帧"了，整对跳过而不是只压一半——压一半会
+		// 破坏"两帧之和落在窗口内"这个前提，让用例测不到它想测的东西。
+		if first > protocol.MaxUDPDataSize || second > protocol.MaxUDPDataSize {
+			continue
+		}
+		sum := first + second + 2*protocol.FrameHeaderSize
+		if sum <= impl.recordCeiling || sum > protocol.MaxPoolClass {
+			continue
+		}
+		for _, size := range []int{first, second} {
 			if err := bs.PushData(make([]byte, size)); err != nil {
 				t.Fatalf("PushData(%d): %v", size, err)
 			}
 			pushed += size
 		}
+		pairs++
 		if err := bs.Flush(); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// 窗口本身必须真的被覆盖到：全部组合被跳过等于这条用例什么也没测。
+	if pairs == 0 {
+		t.Fatal("没有任何一对帧落在测试窗口内，用例退化为空转")
 	}
 	// 先冻结写入端再读，理由见 TestBatchShaperFlushesBeforePlainRecordLimit。
 	if err := bs.Close(); err != nil {
@@ -453,11 +508,12 @@ func TestBatchShaperRecordStaysUnderCeilingOnAccumulation(t *testing.T) {
 	for i, l := range probe.lens {
 		plaintext := l - protocol.MaxCipherLenSize - protocol.MaxTagOverhead
 		if plaintext > impl.recordCeiling {
-			t.Fatalf("第 %d 条记录明文 %d 超过上限 %d（整块记录会落到 128KB 档）",
+			t.Fatalf("第 %d 条记录明文 %d 超过上限 %d（整块记录会向上跳档）",
 				i, plaintext, impl.recordCeiling)
 		}
-		if probe.caps[i] > 64*1024 {
-			t.Fatalf("第 %d 条记录引用 cap = %d 的池缓冲，超过 64KB 档位", i, probe.caps[i])
+		if probe.caps[i] > protocol.MaxPoolClass {
+			t.Fatalf("第 %d 条记录引用 cap = %d 的池缓冲，超过档位 %d",
+				i, probe.caps[i], protocol.MaxPoolClass)
 		}
 	}
 
@@ -949,7 +1005,11 @@ func TestBatchShaperCoverInjectInFlightDuringClose(t *testing.T) {
 	rw := newTestWriter(t, sk, bw)
 	bs := New(rw, Config{BatchWindowMS: 10000})
 
-	bigPayload := make([]byte, 58720)
+	// 载荷取 9KB（最大数据报的一半）：它必须超过批处理阈值（记录上限的 9/10），
+	// 从而在 PushData 内部同步触发一次冲刷、把写入端卡在 blockingWriter 上——
+	// 本用例要的正是"冲刷在飞时"这个窗口。不能用最大数据报：那会让随后的插入帧
+	// 撞上预冲刷边界，反而在 PushData 里就多冲一次。
+	bigPayload := make([]byte, 9*1024)
 	if err := bs.PushData(bigPayload); err != nil {
 		t.Fatal(err)
 	}

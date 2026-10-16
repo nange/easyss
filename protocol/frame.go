@@ -81,15 +81,34 @@ func (m Method) String() string {
 }
 
 const (
-	MaxUDPDataSize     = 65507
+	// MaxPoolClass 是记录层承诺使用的 bytespool 档位上限，也是下面三个上限的
+	// 唯一来源。取 16KB 的理由是"够用"与"每条会话的常驻内存":最大的合法 UDP
+	// 数据报由 MaxUDPDataSize 界定，而它只需覆盖局域网巨型帧(9216)与本项目
+	// 自己宣告的 DNS EDNS0 上限(8192，见 client/dns 与 client/proxy/dns.go)；
+	// 走 TUN 的流量更永远不超过 tun_mtu(默认 1500)。
+	//
+	// 线上格式本身能表达 16MB（3 字节长度前缀），所以这不是协议能力上限，
+	// 而是"本进程愿意为一条记录预留多大池缓冲"的取舍：超过这一档就不再是
+	// 一条记录的尺寸问题，而是每条流各钉一块更大缓冲的内存问题。
+	//
+	// 它是导出的，因为这条承诺要能被跨包断言：crypto 的
+	// TestRecordWriterKeepsCipherBufferInPoolClass 与 protocol 的
+	// TestRecordSizesStayInOnePoolClass 都对着它检查，而不是各自写死 16KB。
+	MaxPoolClass = 16 * 1024
+
+	// MaxPlainRecordSize 是线上格式的明文上限（长度前缀是 3 字节，16MB），
+	// **只是解码侧的天花板**，不是写入侧的尺寸：本进程写出的记录不超过
+	// MaxRecordPlaintext。留它不变是为了继续接受旧对端发来的大记录
+	// （见 crypto.MaxCipherRecordSize 的推导）。
 	MaxPlainRecordSize = 64 * 1024
-	MaxCipherLenSize   = 3
+
+	MaxCipherLenSize = 3
 
 	// MaxTagOverhead 是本项目两种 AEAD（AES-256-GCM 与 ChaCha20-Poly1305）
 	// 认证标签的上界。记录层要它才能算出"明文上限"与"池档位"之间的正确关系：
 	// 一条记录的线上长度是 MaxCipherLenSize + 明文 + 标签，而 bytespool 的
-	// 档位必须容纳这三者之和，否则密文缓冲会从 64KB 档跳到 128KB 档——为十几
-	// 字节的溢出付一倍代价。
+	// 档位必须容纳这三者之和，否则密文缓冲会向上跳一档——为十几字节的溢出
+	// 付一倍的池保留与瞬时分配。
 	//
 	// 它是常量而不是运行时从 Encryptor.Overhead() 读取，因为 protocol 是记录
 	// 格式的定义方，不应该依赖 crypto 包；两个 AEAD 的标签都是 16 字节，
@@ -98,36 +117,57 @@ const (
 	// Overhead() <= MaxTagOverhead）。
 	MaxTagOverhead = 16
 
-	// MaxRecordPlaintext 是一条记录里明文的实际上限，比线上格式上限
-	// MaxPlainRecordSize 小 26 字节。原因是一条记录在池里的落点是"3 字节长度
-	// 前缀 + 明文 + AEAD 标签共用一块 2 的幂缓冲"，明文超过它就使整块记录跳到
-	// 128KB 档，为最后十几字节付一倍的池保留与瞬时分配。
+	// MaxRecordPlaintext 是一条记录里明文的实际上限：池档位减去长度前缀与
+	// AEAD 标签。**它不是"最大合法单帧"，而是"一条记录能有多大"**——后者必须
+	// 由它反推（见 MaxUDPDataSize），否则就会出现"最大帧放不进一条同档记录"的
+	// 矛盾。
 	//
 	// 它是**加密侧与整形侧共用的同一个上限**，两侧必须一致：
 	//   - crypto.RecordWriter 用它做写入校验（超过即报错）；
-	//   - shaper 用它做单帧校验与预冲刷边界（否则它能攒出 WriteRecord 拒绝的
-	//     明文，把一条正常的流打断）。
-	//
-	// 取值是**最大合法单帧**（最大 UDP 数据报 + 帧头）而不是算术上界 65,517：
-	// 下界由帧协议决定——最大的数据报必须能完整落进一条记录；而它自身已经满足
-	// 池档位约束（65,510 + 3 + 16 = 65,529 <= 64KB）。
+	//   - shaper 用它做单帧校验、预冲刷边界与填充预算（否则它能攒出 WriteRecord
+	//     拒绝的明文，把一条正常的流打断）。
 	//
 	// 读侧不受它约束：MaxCipherRecordSize 仍按线上格式上限推导，以便解码旧对端
 	// 发来的、明文到 64KB 的记录。
-	MaxRecordPlaintext = MaxUDPDataSize + FrameHeaderSize
+	MaxRecordPlaintext = MaxPoolClass - MaxCipherLenSize - MaxTagOverhead // 16,365
+
+	// MaxUDPDataSize 是单个 UDP 数据报的载荷上限。它由 MaxRecordPlaintext 减去
+	// 帧头反推，**而不是直接取某个档位或某个协议层最大值**：这条链路上一共有
+	// 三块池缓冲会按数据报长度申请内存（P 为载荷长度）——
+	//
+	//	1) socket 读缓冲   bytespool.Get(P)                        = P
+	//	2) 整形器明文缓冲  protocol.AppendFrame(DATAGRAM, payload)  = P + 3（帧头）
+	//	3) 记录密文缓冲    crypto.RecordWriter.WriteRecord          = P + 3 + 16
+	//	                                                              （前缀 + 明文 + 标签）
+	//
+	// 三者必须落在同一档位内，(3) 是其中最紧的一条（它比 (2) 多一个 3 字节的
+	// cipher_len 前缀）：P + 19 <= 16KB。取 16,362 正是这个解——比"看起来更整齐"
+	// 的档位值小 22 字节，却决定了这条链路上**每一块缓冲**都停在 16KB 档；多这
+	// 22 字节就会让密文缓冲跳到 32KB 档，而每条记录都要现场分配一块它。
+	// 由 TestRecordSizesStayInOnePoolClass 守住这条不变量的三个方向。
+	//
+	// 顺带的影响是 server/nextproxy 的 maxUDPDatagram(= 本值 + 22) 正好等于
+	// 档位大小，池请求零浪费。
+	//
+	// 历史取值是 65,507（IPv4 下 UDP 载荷的算术上限 = 65,535 - 20 - 8）。它对
+	// 应的是"单个 IP 报文理论上能有多大"，而那个尺寸在本项目里不可达：走 TUN 的
+	// 流量被 tun_mtu 限死在 1500，DNS 被自家宣告的 EDNS0 上限 8192 封顶，环回
+	// 上真正会出现的大包是 9216 的巨型帧。为这三者都不可能达到的 64KB 让每条
+	// UDP 会话各钉一块 64KB 读缓冲（客户端 128 条并发交换即 8MB），不划算。
+	MaxUDPDataSize = MaxRecordPlaintext - FrameHeaderSize // 16,362
 
 	// MinRecordBufferSize 是每条流的明文缓冲区初始大小。缓冲按需增长（见
 	// shaper.(*batchShaper).ensureCapacity），因此空闲流与只传少量数据的流
-	// 终生只占这么多，只有真正的大流量流才会长到 MaxPlainRecordSize。
+	// 终生只占这么多，只有真正的大流量流才会长到 MaxRecordPlaintext。
 	//
 	// 它是"流"这个维度的内存下限，而服务端的内存占用 ≈ 峰值并发流数 ×
 	// 每流缓冲区大小：常驻连接、心跳流、探测流在数量上往往占绝大多数，
 	// 把它们从一整块记录缓冲区（64KB）降到 4KB 是这次收敛里收益最大的一项
 	// （实测：600 条空闲流从约 38MB 降到约 2.4MB）。
 	//
-	// 它刻意不改变 MaxPlainRecordSize：记录的最大尺寸参与填充档位与批处理
-	// 节奏，调小它会让记录的尺寸边界变得更规律，削弱流量伪装。因此这次只
-	// 收敛"每条流预留多少"，不动"一条记录能有多大"。
+	// 它刻意不改变 MaxPlainRecordSize：线上格式的最大尺寸参与旧对端的解码能力，
+	// 调小它会让更新的版本无法解码老版本客户端发出的记录。因此这次只收敛
+	// "每条流预留多少"，不动"线上格式能表达多大"。
 	MinRecordBufferSize = 4 * 1024
 )
 

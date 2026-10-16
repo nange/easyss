@@ -111,7 +111,7 @@ var (
 // buildBootstrapPlaintext 拼装引导记录的明文：HANDSHAKE 帧 + 调用方的额外帧 +
 // 随机填充。填充预算取 protocol.MaxRecordPlaintext——它与 crypto.RecordWriter 的
 // 写入上限是同一个值，因此"放不下就退避"这条规则同时守住了两件事：整条记录落进
-// 池的 64KB 档位，以及写入不会被加密层拒绝。
+// 协议承诺的池档位（protocol.MaxPoolClass），以及写入不会被加密层拒绝。
 //
 // 引导记录由客户端手工拼装、不经过整形器的预冲刷边界，所以这层保证只能在这里
 // 自己做：填充能退避，额外帧不能，因此函数自己校验额外帧的线上总长，超限时返回
@@ -358,8 +358,8 @@ func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto p
 	log.Debug("[STREAM] merged ICMP echo payload into bootstrap record", "bytes", len(echoPayload))
 	defer s.stream.Close() //nolint:errcheck
 	// 此路径只接收：echo 载荷已随引导记录发送，tx 永远不会被写入。它仍然持有
-	// 一个池化的 64KB 记录缓冲区（shaper.New 从 bytespool 取出，只有 Close 会
-	// 归还）和一个 cover 注入器，因此必须关闭。它声明在 stream 的 defer 之后，
+	// 一块池化的记录缓冲区（shaper.New 从 bytespool 取出，只有 Close 会归还）
+	// 和一个 cover 注入器，因此必须关闭。它声明在 stream 的 defer 之后，
 	// 因此会先执行（LIFO），避免向已关闭的流做冲刷。
 	defer s.tx.Close() //nolint:errcheck
 

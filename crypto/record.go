@@ -14,7 +14,7 @@ const (
 	// MaxCipherRecordSize 是**解码侧**的密文长度上限，按线上格式上限推导而非按
 	// 本进程的写入上限：它必须继续接受旧对端发来的、明文到 64KB 的记录
 	// （那些记录由旧版 RecordWriter 用 128KB 档的缓冲产生）。写入侧的更紧上限
-	// 见 protocol.MaxRecordPlaintext。
+	// 见 protocol.MaxRecordPlaintext——它比这里小得多，由记录层的池档位反推而来。
 	MaxCipherRecordSize = protocol.MaxPlainRecordSize + 16 // 最大明文 + AEAD 认证标签
 )
 
@@ -45,8 +45,9 @@ func NewRecordWriter(w io.Writer, enc Encryptor, counter *CounterNonce, aad []by
 //
 // 长度前缀与密文共用同一块池化缓冲，也只写一次：一条记录在池里的落点就是
 // "3 字节前缀 + 明文 + AEAD 标签"，明文不超过 protocol.MaxRecordPlaintext
-// 时整块记录落在池的 64KB 档位内，超过它才会因为那十几字节跳到 128KB 档
-// （这正是 maxPlain 取该常量而不是线上格式上限的原因）。
+// 时整块记录落在同一档位内，超过它才会因为那十几字节向上跳一档
+// （这正是 maxPlain 取该常量而不是线上格式上限的原因——后者与档位无关，
+// 用它会让每一条 16KB 级的记录都去申请一块更大的缓冲）。
 //
 // 刻意只写一次：上游 writer 完全可能对每次 Write 都立即落地——客户端写的是
 // 裸 io.PipeWriter（transport/http2 的请求体），而 net/http 的 HTTP/2 transport

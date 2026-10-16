@@ -616,8 +616,10 @@ func TestBootstrapRecordFitsWriteLimit(t *testing.T) {
 	}
 
 	// 填充长度是随机的（1~63 字节），因此贴着上限的载荷要重复多次才抓得住：
-	// 修复前 payload=65450 时约 40% 的次数会因填充把明文顶过上限而写入失败。
-	const nearLimit = 65450
+	// 修复前拿 60 字节的余量做过这件事——payload 距上限 60 字节时约 40% 的次数会因
+	// 填充把明文顶过上限而写入失败。余量从判据反推而不是写死，上限调整后这条用例
+	// 仍然压在同一个位置上。
+	nearLimit := maxPayload - 60
 	for i := range 200 {
 		plaintext, err := build(datagram(nearLimit))
 		if err != nil {
