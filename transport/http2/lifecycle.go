@@ -409,7 +409,7 @@ func (lc *slotLifecycle) probeSlot(idx int, s *transportSlot, now time.Time) {
 func (lc *slotLifecycle) evaluateRotation(idx int, s *transportSlot) {
 	if s.expiring.Load() {
 		if s.active.Load() == 0 {
-			s.t.CloseIdleConnections()
+			s.transport().CloseIdleConnections()
 			s.expiring.Store(false)
 			// 疲惫的连接已被回收：把截止时间和字节数清零，使 rotationDue
 			// 不会因旧连接的状态再次触发——否则连接已被关闭（空闲超时、
@@ -461,7 +461,7 @@ func rotationLifetime(base time.Duration) time.Duration {
 // retire 关闭降级槽位的空闲连接，并在槽位不再承载任何流时把它从活跃集合中
 // 移除。
 func (lc *slotLifecycle) retire(idx int, s *transportSlot) {
-	s.t.CloseIdleConnections()
+	s.transport().CloseIdleConnections()
 	if !lc.sched.remove(s) {
 		return
 	}

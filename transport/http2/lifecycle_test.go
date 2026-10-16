@@ -16,7 +16,7 @@ func TestEvaluateSlotHealth(t *testing.T) {
 	lc := &slotLifecycle{probeUnsupported: true}
 
 	newHeavySlot := func() *transportSlot {
-		s := &transportSlot{t: &http.Transport{}}
+		s := slotWithPool(&http.Transport{})
 		s.heavy.Store(1)
 		return s
 	}
@@ -80,7 +80,7 @@ func TestEvaluateSlotHealth(t *testing.T) {
 	})
 
 	t.Run("slots without heavy streams never degrade", func(t *testing.T) {
-		s := &transportSlot{t: &http.Transport{}}
+		s := slotWithPool(&http.Transport{})
 		for range sharedconfig.DegradedPersistCycles + 2 {
 			lowThroughput(s)
 		}
@@ -125,7 +125,7 @@ func TestEvaluateSlotHealth(t *testing.T) {
 func newTestLifecycle(n int, probe func(context.Context, *transportSlot) (float64, probeVerdict)) (*slotLifecycle, *slotScheduler) {
 	slots := make([]*transportSlot, n)
 	for i := range slots {
-		slots[i] = &transportSlot{t: &http.Transport{}}
+		slots[i] = slotWithPool(&http.Transport{})
 	}
 	sch := &slotScheduler{
 		priority: &slotPool{
@@ -134,7 +134,7 @@ func newTestLifecycle(n int, probe func(context.Context, *transportSlot) (float6
 			base:     8,
 		},
 		bulk: &slotPool{
-			slots:    []*transportSlot{{t: &http.Transport{}}},
+			slots:    []*transportSlot{slotWithPool(&http.Transport{})},
 			maxSlots: 1,
 			base:     16,
 		},
@@ -152,7 +152,7 @@ func TestSuspicionInsteadOfDirectMark(t *testing.T) {
 	lc := &slotLifecycle{probeFunc: func(context.Context, *transportSlot) (float64, probeVerdict) {
 		return 0, probeInconclusive
 	}}
-	s := &transportSlot{t: &http.Transport{}}
+	s := slotWithPool(&http.Transport{})
 	s.heavy.Store(1)
 
 	low := func() {
@@ -186,7 +186,7 @@ func TestNoProbeFuncFallsBackToPassive(t *testing.T) {
 	interval := sharedconfig.HealthCheckInterval
 	// 未配置探测函数（例如没有探测令牌）：被动采样器保持传统的直接标记。
 	lc := &slotLifecycle{}
-	s := &transportSlot{t: &http.Transport{}}
+	s := slotWithPool(&http.Transport{})
 	s.heavy.Store(1)
 
 	lc.evaluateSlotHealth(0, s, interval, true) // 基线重置
@@ -451,7 +451,7 @@ func TestRotationLifetimeJitter(t *testing.T) {
 func TestEvaluateRotation(t *testing.T) {
 	t.Run("marks expiring and completes rotation when idle", func(t *testing.T) {
 		lc := &slotLifecycle{connLifetime: time.Minute}
-		s := &transportSlot{t: &http.Transport{}}
+		s := slotWithPool(&http.Transport{})
 		s.expireAt.Store(time.Now().Add(-2 * time.Minute).UnixNano())
 		s.connBytes.Store(1024)
 		s.active.Store(1)
@@ -483,7 +483,7 @@ func TestEvaluateRotation(t *testing.T) {
 
 	t.Run("fresh connection not expiring", func(t *testing.T) {
 		lc := &slotLifecycle{connLifetime: time.Hour}
-		s := &transportSlot{t: &http.Transport{}}
+		s := slotWithPool(&http.Transport{})
 		s.expireAt.Store(time.Now().Add(time.Hour).UnixNano())
 		lc.evaluateRotation(0, s)
 		if s.expiring.Load() {

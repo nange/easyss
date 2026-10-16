@@ -1097,9 +1097,9 @@ func TestGrowResetsRevivedSlotState(t *testing.T) {
 }
 
 func TestRemoveShrinksLiveCountAndLocatesPool(t *testing.T) {
-	s0 := &transportSlot{t: &http.Transport{}}
+	s0 := slotWithPool(&http.Transport{})
 	s0.active.Store(1)
-	s1 := &transportSlot{t: &http.Transport{}}
+	s1 := slotWithPool(&http.Transport{})
 	s1.degraded.Store(true)
 	sch := newScheduler(2, []*transportSlot{s0, s1}, 4, 1) // priority 1, bulk 1
 	sch.priority.liveCount.Store(1)

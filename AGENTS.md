@@ -147,7 +147,7 @@ make lint   # 等价: go tool golangci-lint run --timeout 10m --verbose
 
 ## 关键架构要点
 
-1. **传输层**：基于 Go 1.26 标准库 HTTP/2（不依赖 `golang.org/x/net/http2`），初始 1 个 `http.Transport`（`MaxConnsPerHost=1`），按需懒加载扩容（活跃流达到 `stream_threshold` 阈值且仍小于 `conn_count_max` 上限时新建连接），通过 least-active 策略调度；TLS 握手使用 uTLS Chrome 指纹伪装；服务端和客户端 HTTP/2 参数（帧大小、窗口大小、HEADER TABLE SIZE）分别配置以增强伪装效果
+1. **传输层**：基于 Go 1.26 标准库 HTTP/2（不依赖 `golang.org/x/net/http2`），初始 1 个 `http.Transport`（`MaxConnsPerHost=1`），按需懒加载扩容（活跃流达到 `stream_threshold` 阈值且仍小于 `conn_count_max` 上限时新建连接），通过 least-active 策略调度；TLS 握手使用 uTLS Chrome 指纹伪装；服务端和客户端 HTTP/2 参数（帧大小、窗口大小、HEADER TABLE SIZE）分别配置以增强伪装效果。**「判死即换连接」由换池保证**：判死只关得掉底层 `net.Conn`，而 net/http 的池没有关闭承载活跃流的连接的 API，那条 h2 `ClientConn` 何时被移出池取决于 stdlib 内部清理的调度时机，因此 `transportSlot.invalidateConnFrom` 在关闭连接的同时整体换掉该槽位的 `http.Transport`（`replacePool`），下一次 `Open` 只能拨号；`CloseIdleConnections` 的异步收敛不再是这条保证的一部分（#226），池一律通过 `transportSlot.transport()` 读取
 2. **应用帧协议**：HTTP/2 stream 内封装 app 帧（HANDSHAKE/DATA/DATAGRAM/FIN/RST/PADDING/COVER），`cipher_len:3 + ciphertext` 作为 CryptoRecord 边界；`protocol.ReadFrame/WriteFrame` 处理帧级别的编解码
 3. **两阶段加密**：① Bootstrap 阶段：AES-256-GCM 加密初始握手帧（含目标地址和方法协商）；② Session 阶段：协商后的 AEAD（AES-256-GCM 或 ChaCha20-Poly1305），HKDF+salt 派生 C2S/S2C 方向独立密钥，每方向独立计数器 nonce
 4. **回落对抗**：服务端首个 CryptoRecord 解密/验证失败时，回落成正常 HTML 首页（伪装为普通网站）；一旦发送 octet-stream 响应头则只能 close/RST stream。fallback 由 `handler.NewFallback(FallbackConfig)` 构造出 `*Fallback` 实例，在 `server.Start()` 中一次性注入 `ProxyHandler`/`ProbeHandler` 与 `/` 路由：模式配置与部署身份在构造后只读，实例级缓存有界，因此不存在包级可变状态，也没有"必须在使用前调用"的隐式顺序契约（未注入的零值 handler 回落到包级内置实例）。伪装强度分两层：

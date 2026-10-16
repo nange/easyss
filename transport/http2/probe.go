@@ -57,7 +57,7 @@ func (p *slotProber) alive(ctx context.Context, slot *transportSlot) (alive, ok 
 	req.Header.Set("Cache-Control", "no-store")
 	req.Header.Set("User-Agent", chromeUserAgent())
 
-	resp, err := slot.t.RoundTrip(req)
+	resp, err := slot.transport().RoundTrip(req)
 	if err != nil {
 		// 不可往返：连接已死（黑洞、接口消失、连接被关闭）。MaxConnsPerHost=1
 		// 使这次探测排在本流仍在占用的那条连接之后，而不是偷偷拨一条新连接。
@@ -88,7 +88,7 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 	// 基准放在 RoundTrip 之后，量到的就只是"从缓冲区里取走第一个分块"的
 	// 时间（微秒级），真实路径 RTT 会被整段丢掉，统计值随之失真。
 	ttfbStart := time.Now()
-	resp, err := slot.t.RoundTrip(req)
+	resp, err := slot.transport().RoundTrip(req)
 	if err != nil {
 		// RoundTrip 失败（拨号/TLS/流错误，或响应头到达前超时）：连接已死或
 		// 服务端不可达——不产生结论，这些情况由流错误和轮换处理。RoundTrip

@@ -92,9 +92,10 @@ type bootstrapSession struct {
 //   - bootstrapLivenessTimeout：窗口到点后，在同一条连接上做一次存活探测的预算。
 //     探测用来把"连接已死"与"服务端还在解析目标域名/链路很慢"区分开，因此窗口
 //     可以取得小而不误伤慢服务端。
-//   - bootstrapSettleTimeout：判死重试前等待本流 RoundTrip 收敛的上限，使
-//     CloseIdle() 能可靠地把这条连接从 net/http 的池里摘掉（见 settleDeadStream）。
-//     正常在微秒级返回，这个上限只是防御性的。
+//   - bootstrapSettleTimeout：判死重试前等待本流 RoundTrip 收敛的上限（见
+//     settleDeadStream）：换连接由传输层在判死时换池保证，这一步只负责按顺序
+//     收敛本流并在随后丢掉各槽位的空闲连接。正常在微秒级返回，这个上限只是
+//     防御性的。
 //
 // bootstrapMaxAttempts 是"应用尚未收到任何数据"这一阶段允许的总尝试次数：第 1 次
 // 通常踩在死连接上、第 2 次在判死路径（失效 + settle + 丢弃空闲连接）之后必然拿到
@@ -191,7 +192,7 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 					"attempt", attempt, "target", target, "err", err)
 				// 等本流收敛并丢掉其余空闲连接：它们多半也绑在旧网络上，否则
 				// 后续请求会逐个再踩一次死连接。判死瞬间做这件事，而不是等
-				// 240s 的池级回收（见 settleDeadStream 对顺序的说明）。
+				// 240s 的池级回收（换连接本身已由判死换池保证，见 settleDeadStream）。
 				settleDeadStream(stream)
 				h.transport.CloseIdle()
 				continue
@@ -238,7 +239,7 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 		if attempt < bootstrapMaxAttempts {
 			log.Debug("[STREAM] bootstrap timed out, retrying on a new connection",
 				"attempt", attempt, "target", target, "err", lastErr)
-			// 必须先等本流的 RoundTrip 收敛，再丢弃空闲连接（见 settleDeadStream）。
+			// 先等本流的 RoundTrip 收敛，再丢弃空闲连接（见 settleDeadStream）。
 			settleDeadStream(stream)
 			h.transport.CloseIdle()
 			continue
@@ -308,12 +309,12 @@ func invalidateDeadStream(stream transport.Stream) {
 
 // settleDeadStream 用有界窗口等待一条已关闭的流的 RoundTrip 收敛。
 //
-// 判死路径必须在 CloseIdle() 之前等这一步：InvalidateConn 关掉底层连接后，
-// net/http 的读循环是异步感知并回收它的；在那之前这条连接仍被本流"占用"，
-// 而 CloseIdleConnections 只回收空闲连接——于是下一次 Open 会把这条正在死去的
-// 连接再次交付出来，引导记录写入立即以 io.ErrClosedPipe 失败，白白消耗一次尝试
-// （判死即换连接的核心保证也就不严格成立）。等本流的 RoundTrip 返回后，连接才
-// 真正转为空闲，CloseIdle() 能可靠地把它从池里摘掉。
+// "判死即换连接"本身由传输层保证：InvalidateConn 在关掉底层连接的同时换掉槽位的
+// 连接池（transport/http2 的 transportSlot.replacePool），下一次 Open 只能拨号，
+// 因此不再依赖连接池的异步收敛（那条依赖时序的版本曾在 CI 上偶发失败，见 #226）。
+// 这一步与随后的 CloseIdle() 保留下来是为了按顺序收敛本流、并在判死瞬间丢掉其余
+// 槽位的空闲连接——它们多半也绑在旧网络上，否则后续请求会逐个再踩一次死连接，
+// 而不是等 240s 的池级回收。
 //
 // 实测这一步在本地约 25µs；未实现 transport.ResponseAwaiter 的传输层没有这个
 // 问题（也不会被等待）。
