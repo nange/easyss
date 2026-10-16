@@ -6,35 +6,30 @@ import (
 	"io"
 	"net"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/server/nextproxy"
 	"github.com/nange/easyss/v3/shaper"
-	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/util/bytespool"
 )
 
 const udpBufSize = protocol.MaxUDPDataSize
 
-// dnsPort 是触发"按查询域名路由"的端口。指向该端口的 UDP 会话承载的是 DNS
-// 查询，因此它的出站目标要等读出 QNAME 之后才能决定（见 udpHandler.Handle）。
-const dnsPort = "53"
-
+// udpHandler 是 UDP 端点的 handler：它持有会话共享的依赖（空闲超时、next
+// proxy、出站拨号器），并为每条流创建一个 udpSession。
 type udpHandler struct {
 	idleTimeout time.Duration
 	// nextProxy 在这里单独保存（而不仅存在于 dial 内部），因为只有 UDP
 	// 会在数据报流上用它进行 DNS 应答学习，与当前目标是否经由它路由无关。
 	nextProxy *nextproxy.NextProxy
 	dial      dialer
-	// route 把"这条 DNS 查询该走直连还是下一级代理"的判定与真正的拨号绑在
-	// 一起（见 dnsRouter）。nextProxy 为 nil 时它也是 nil，所有查询直接出网。
+	// route 是 DNS 查询的路由判定与拨号（见 udp_dns.go）。nextProxy 为 nil
+	// 时它也是 nil，所有查询直接出网。
 	route dnsRouter
 }
 
@@ -66,75 +61,6 @@ func newUDPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) 
 		h.route = udpRouteDialer{dialer: h.dial, nextProxy: np}
 	}
 	return h
-}
-
-// dnsRoute 是一条 DNS 查询的出站路径。
-type dnsRoute uint8
-
-const (
-	// dnsRouteDirect 是直接向查询目标（客户端配置的解析器，通常是 8.8.8.8:53）
-	// 发出查询。
-	dnsRouteDirect dnsRoute = iota
-	// dnsRouteNextProxy 是把查询交给下一级 SOCKS5 代理去解析。
-	dnsRouteNextProxy
-)
-
-func (r dnsRoute) viaNextProxy() bool { return r == dnsRouteNextProxy }
-
-// dnsRouter 是 DNS 查询的出站路由：判定用域名（只有它才知道这条查询该不该走
-// 下一级代理），拨号用会话目标。两者必须同源，否则"判定说走代理、拨号却直连"
-// 会成为可能——因此拨号也由它提供，会话只拿结果，不再持有第二份 dialer。
-type dnsRouter interface {
-	routeForDomain(domain string) dnsRoute
-	dialRoute(ctx context.Context, network, target, domain string, route dnsRoute) (net.Conn, string, error)
-}
-
-// udpRouteDialer 是 serving 环境的 dnsRouter：路由判定读 nextProxy 的文件
-// 配置（glob/regexp/精确域名/IP/CIDR），拨号复用共享的 dialer（含 SSRF
-// 预检查与 next-proxy 的 SOCKS5 拨号）。
-//
-// 只有 UDP 走这条路径：DNS 查询的 QNAME 让"按域名路由"成为可能，而 TCP/ICMP
-// 的拨号目标在握手阶段就已确定（见 tcp.go / icmp.go）。
-type udpRouteDialer struct {
-	dialer    dialer
-	nextProxy *nextproxy.NextProxy
-}
-
-// dnsProxyAvailable 报告下一级代理是否具备承载 UDP 的能力。配置了 next_proxy
-// 但未开 enable_udp 时，命中的 UDP 目标一律直连（见 README 的 next_proxy
-// 一节）：此时 DNS 会退回直连解析，而不是让查询停在一个不会成功的关联请求上。
-func (d udpRouteDialer) dnsProxyAvailable() bool {
-	return d.nextProxy != nil && d.nextProxy.EnableUDP()
-}
-
-func (d udpRouteDialer) routeForDomain(domain string) dnsRoute {
-	// 判定复用 ShouldProxy：它与下一级代理的 IP/CIDR/域名/通配符配置是同一份
-	// 规则，因此"某个域名走链式代理"在 TCP、UDP 与 DNS 三条路径上语义一致。
-	if d.dnsProxyAvailable() && domain != "" && d.nextProxy.ShouldProxy(domain) {
-		return dnsRouteNextProxy
-	}
-	return dnsRouteDirect
-}
-
-// dialRoute 按路由拨号：只有代理路由才走 dialVia 的代理分支，直连路由一律走
-// 直连分支。把直连也交给代理分支会让目标被当作"仅代理侧可解析的域名"处理——
-// 那会先解析再把它交给上游代理，对命中直连的域名既多一跳，也会在域名解析到
-// LAN 地址时得到一个毫无意义的 SSRF 拒绝（目标本来就是服务端要直连解析器）。
-func (d udpRouteDialer) dialRoute(ctx context.Context, network, target, domain string, route dnsRoute) (net.Conn, string, error) {
-	if !route.viaNextProxy() {
-		return d.dialer.dialVia(ctx, network, target, "", false)
-	}
-	return d.dialer.dialVia(ctx, network, target, domain, true)
-}
-
-// dnsLearnHint 是由主 goroutine 独占的学习状态：DNS 会话里每条查询都能直接
-// 判定为查询（目标是 53 端口），非 DNS 会话则只在第一个客户端帧上判定一次
-// （一个会话只承载一次 DNS 查询的开端）。此后的 DNS 应答才允许被学习。
-type dnsLearnHint struct {
-	// checked 表示"第一个客户端帧"的判定已经完成（只对非 DNS 会话有效）。
-	checked bool
-	// intercept 表示该会话确实发出过一次 DNS 查询。
-	intercept bool
 }
 
 // Handle 在客户端流与目标之间中继 UDP 数据报，并以结构化结果返回已推送的
@@ -186,16 +112,6 @@ func (h *udpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 	return result
 }
 
-// isDNSPort 报告目标是否是 53 端口（TCP/UDP 的 DNS）。解析失败时按"不是 DNS"
-// 处理：只有明确的目标才值得为它推迟拨号。
-func isDNSPort(target string) bool {
-	_, port, err := net.SplitHostPort(target)
-	if err != nil {
-		return false
-	}
-	return port == dnsPort
-}
-
 // udpSession 承载一次 UDP 中继的全部状态。所有跨 goroutine 的协调都收敛在
 // 这里：done 是唯一的关闭信号，close 是唯一的收尾入口（是否发 RST 由调用方
 // 按结果决定），run 的返回值是唯一的退出原因。读取 goroutine 只经 resultCh
@@ -206,8 +122,6 @@ type udpSession struct {
 	conn   net.Conn
 	remote string
 	target string
-	// dnsSession 表示目标是 DNS 端口：出站连接由查询域名决定，可以中途重绑。
-	dnsSession bool
 
 	dr         *crypto.DecryptedReader
 	s2c        shaper.Shaper
@@ -218,20 +132,10 @@ type udpSession struct {
 	ctx         context.Context
 	idleTimeout time.Duration
 	nextProxy   *nextproxy.NextProxy
-	route       dnsRouter
 	dial        dialer
-	// routeSel 是最近一条查询要求的路由，只由 dnsSession 的会话写入：其他
-	// 会话的路由由 dialTarget 按目标一次性决定，不经过这里。
-	routeSel dnsRoute
-	// connRoute 是**当前出站连接**实际使用的路由，与 routeSel 相互独立：
-	// 首帧不是合法查询时（53 端口上的畸形流量）会话会按直连兜底先拨一条，
-	// 此后第一条真实查询就必须与它比较才能发现"要换路由"——只比较连续两条
-	// 查询的 routeSel 会漏掉这一段（routeSel 在兜底时无人写入）。
-	// 仅主 goroutine 读写（拨号与查询判定都在主循环上）。
-	connRoute dnsRoute
-	// dialDomain 是最近一次触发路由判定的域名，只用于拨号日志（"是哪条查询
-	// 让这条连接走下一级代理的"）。
-	dialDomain string
+	// dns 是这个会话的 DNS 状态：是否按查询域名路由、当前连接用的路由、以及
+	// 应答学习门控（见 udp_dns.go）。非 DNS 会话里它只承载学习门控。
+	dns dnsState
 
 	mu sync.Mutex
 
@@ -255,8 +159,6 @@ type udpSession struct {
 	readerRunning bool
 	// resultCh 携带目标侧读到的每个数据报。
 	resultCh chan udpDatagram
-	// dns 是完全由主 goroutine 私有的学习状态（读取侧只回传已解析的报文）。
-	dns dnsLearnHint
 
 	// transferred 是服务端到客户端方向已推送的载荷字节数。它只由主
 	// goroutine 写入（读取侧经 resultCh 回传后累加），因此没有并发访问。
@@ -265,9 +167,10 @@ type udpSession struct {
 
 // udpSessionConfig 是 udpSession 的构造参数。
 type udpSessionConfig struct {
-	conn       net.Conn
-	remote     string
-	target     string
+	conn   net.Conn
+	remote string
+	target string
+	// dnsSession 表示目标是 53 端口：出站连接由查询域名决定，可中途重绑。
 	dnsSession bool
 	dr         *crypto.DecryptedReader
 	s2c        shaper.Shaper
@@ -290,15 +193,14 @@ func newUDPSession(cfg udpSessionConfig) *udpSession {
 		conn:        cfg.conn,
 		remote:      cfg.remote,
 		target:      cfg.target,
-		dnsSession:  cfg.dnsSession,
 		dr:          cfg.dr,
 		s2c:         cfg.s2c,
 		cancelRead:  cfg.cancelRead,
 		ctx:         cfg.ctx,
 		idleTimeout: cfg.idleTimeout,
 		nextProxy:   cfg.nextProxy,
-		route:       cfg.route,
 		dial:        cfg.dial,
+		dns:         dnsState{enabled: cfg.dnsSession, router: cfg.route},
 		done:        make(chan struct{}),
 		closed:      make(chan struct{}),
 		resultCh:    make(chan udpDatagram, 1),
@@ -458,22 +360,9 @@ func (s *udpSession) observeClientFrame(f protocol.Frame) (alive bool, err error
 		}
 	}
 
-	if s.dnsSession {
-		// DNS 会话：每条查询的 QNAME 都可能改变出站路由（见 rebindRoute）。
-		s.noteDNSQuery(f.Payload)
-	} else if !s.dns.checked {
-		// 非 DNS 会话只在第一个数据报上判定一次：一个会话只承载一次 DNS
-		// 查询的开端，后续数据报（QUIC 等）不该再被解析。
-		s.dns.checked = true
-		if domain, ok := dnsQueryDomain(f.Payload); ok {
-			s.dns.intercept = true
-			// 非 DNS 会话的路由在建立连接时就按目标定下了：这里用与 dialTarget
-			// 同一个谓词重新判定，而不是读只对 DNS 会话有意义的 routeSel
-			// （它的零值会让这条日志在经代理的目标上失真）。
-			log.Info("[UDP_DNS]", "domain", domain, "target", s.target,
-				"via_next_proxy", s.connRouteForTarget().viaNextProxy())
-		}
-	}
+	// DNS 侧的判定（学习门控、路由选择、按需重绑）在 udp_dns.go；它返回时
+	// "这条数据报该往哪条连接写"已经确定。
+	s.observeDNSFrame(f.Payload)
 
 	conn, err := s.upstreamOrDial()
 	if err != nil {
@@ -498,12 +387,12 @@ func (s *udpSession) upstreamOrDial() (net.Conn, error) {
 	// 而重绑）；其他会话（含未配置下一级代理的 DNS 会话）按目标一次性判定，
 	// 与 dialTarget 同源。
 	route := dnsRouteDirect
-	if s.dnsSession && s.route != nil {
-		route = s.routeSel
-	} else if !s.dnsSession {
-		route = s.connRouteForTarget()
+	if s.dns.enabled && s.dns.router != nil {
+		route = s.dns.routeSel
+	} else if !s.dns.enabled {
+		route = s.targetRoute()
 	}
-	if err := s.dialUpstream(s.ctx, s.dialDomain, route); err != nil {
+	if err := s.dialUpstream(s.ctx, s.dns.dialDomain, route); err != nil {
 		return nil, err
 	}
 	conn = s.upstream()
@@ -513,59 +402,6 @@ func (s *udpSession) upstreamOrDial() (net.Conn, error) {
 	return conn, nil
 }
 
-// noteDNSQuery 在 DNS 会话里处理一条查询：学习门控、路由判定与路由变化后的
-// 重绑。它是主 goroutine 私有的状态转换，与数据报的发送顺序一致。
-func (s *udpSession) noteDNSQuery(payload []byte) {
-	domain, ok := dnsQueryDomain(payload)
-	if !ok {
-		return
-	}
-	s.dns.intercept = true
-
-	route := dnsRouteDirect
-	if s.route != nil {
-		route = s.route.routeForDomain(domain)
-	}
-	s.routeSel = route
-	s.dialDomain = domain
-
-	// 重绑的判据是"当前连接的路由与这条查询要求的不一致"，而不是"与上一条查询
-	// 不一致"：后者会漏掉"首帧畸形 → 直连兜底 → 首条真实查询"这条序列（兜底
-	// 时没有查询、也就没有 routeSel 可供比较），让命中代理的查询被写进直连连接。
-	changed := s.upstream() != nil && s.connRoute != route
-	logDNSRoute(domain, s.target, route, changed)
-	if changed {
-		s.rebindRoute(domain)
-	}
-}
-
-// logDNSRoute 输出一条 DNS 查询的路由判定。via_next_proxy 是这条查询**实际**
-// 使用的出站路径，不再是"承载它的会话碰巧怎么拨的"：只有域名命中下一级代理
-// 的规则、且 next_proxy.enable_udp 为真时它才为 true。
-//
-// 日志级别按"是否值得留痕"分：会话首条查询（还没有连接）与改变路由的查询记
-// Info——它们决定了出站路径；路由未变化的后续查询记 Debug。客户端把同一 socket
-// 的所有查询复用在一条流上，全部记 Info 会让日志量随查询数线性增长。
-func logDNSRoute(domain, target string, route dnsRoute, changed bool) {
-	attrs := []any{"domain", domain, "target", target, "via_next_proxy", route.viaNextProxy()}
-	if changed {
-		log.Info("[UDP_DNS]", append(attrs, "route_changed", true)...)
-		return
-	}
-	log.Debug("[UDP_DNS]", attrs...)
-}
-
-// rebindRoute 按新的路由重建出站连接：先摘除并关闭旧连接（读取它的 goroutine
-// 会因此返回并退出），再按新路由拨号并为其启动新的读取 goroutine。旧连接上
-// 尚未回包的查询由客户端自己重试——DNS 客户端对超时查询的重试是标准行为。
-func (s *udpSession) rebindRoute(domain string) {
-	s.closeUpstream()
-	if err := s.dialUpstream(s.ctx, domain, s.routeSel); err != nil {
-		log.Warn("[UDP_DNS] rebind upstream failed", "target", s.target,
-			"via_next_proxy", s.routeSel.viaNextProxy(), "err", err)
-	}
-}
-
 // dialUpstream 按给定路由拨号出站连接。这是会话里唯一建立出站连接的地方：
 // 建立（DNS 会话的首条查询、非 DNS 会话的 Handle）与重绑（rebindRoute）共用它，
 // 因此"判定—拨号—记录路由与远端"只有一套。
@@ -573,50 +409,17 @@ func (s *udpSession) rebindRoute(domain string) {
 // 路由是参数而不是从会话状态里推出来的：DNS 会话的兜底拨号（首帧不是查询）与
 // 查询驱动的拨号走的是同一条路径，区别只在路由由谁决定。
 func (s *udpSession) dialUpstream(ctx context.Context, domain string, route dnsRoute) error {
-	var (
-		conn   net.Conn
-		remote string
-		err    error
-	)
 	// 有 dnsRouter 时全部交给它：判定与拨号必须同源，两条路由都由它分派
 	// （udpRouteDialer.dialRoute 内部对直连路由走共享 dialer 的直连分支）。
 	// 没有它时（未配置下一级代理、或其他会话）由会话自己按路由拨。
-	if s.route != nil {
-		conn, remote, err = s.route.dialRoute(ctx, "udp", s.target, domain, route)
-	} else {
-		conn, remote, err = s.dial.dialVia(ctx, "udp", s.target, "", route.viaNextProxy())
-	}
+	// 装连接与启动读取侧都在 dialRoute 里（见 udp_dns.go）。
+	remote, err := s.dialRoute(ctx, domain, route)
 	if err != nil {
 		return err
 	}
-	s.connRoute = route
-	s.setUpstream(conn, remote, s.readerRunning)
 	log.Info("[UDP] upstream connected", "target", s.target, "remote", remote,
 		"via_next_proxy", route.viaNextProxy())
 	return nil
-}
-
-// connRouteForTarget 返回按**目标**判定的路由，与 dialTarget 用的是同一个
-// shouldProxy 谓词。非 DNS 会话的唯一路由来源；它保证"日志里说的路由"与
-// "连接实际怎么拨的"不会各说各话。
-func (s *udpSession) connRouteForTarget() dnsRoute {
-	if s.nextProxy != nil && s.nextProxy.EnableUDP() && s.nextProxy.ShouldProxy(s.target) {
-		return dnsRouteNextProxy
-	}
-	return dnsRouteDirect
-}
-
-// dnsQueryDomain 解出一次 DNS 查询的 QNAME；不是查询（解析失败、是应答、
-// 没有 Question）时 ok 为 false。
-func dnsQueryDomain(payload []byte) (string, bool) {
-	msg := &dns.Msg{}
-	if err := msg.Unpack(payload); err != nil {
-		return "", false
-	}
-	if !util.IsDNSRequest(msg) {
-		return "", false
-	}
-	return strings.TrimSuffix(msg.Question[0].Name, "."), true
 }
 
 // startUpstreamReader 为当前出站连接启动一个读取 goroutine。连接被重绑时旧
@@ -694,51 +497,6 @@ func (s *udpSession) targetReadError(err error) error {
 	}
 	log.Error("[UDP] read from target failed", "target", s.remoteAddr(), "err", err)
 	return err
-}
-
-// maybeDNS 解析一个疑似 DNS 应答；不是 DNS 应答时返回 nil。它只由主
-// goroutine 调用，且调用点已用学习状态门控，因此普通中继流量（QUIC 等）
-// 不会被解析，`*dns.Msg` 也不会跨 goroutine 传递。
-func (s *udpSession) maybeDNS(payload []byte) *dns.Msg {
-	if len(payload) == 0 {
-		return nil
-	}
-	msg := &dns.Msg{}
-	if err := msg.Unpack(payload); err != nil {
-		return nil
-	}
-	if !util.IsDNSResponse(msg) {
-		return nil
-	}
-	return msg
-}
-
-// learnFromDNS 用指向自定义域名的 DNS 应答喂给 next proxy 的动态路由表
-// （CNAME 目标与解析出的 IP）。
-//
-// 它自带双门控，因为调用点（主循环的目标侧分支）是每个数据报都会经过的
-// 热路径：nextProxy 未配置、或会话从未观察到 DNS 查询时直接返回，普通中继
-// 流量（QUIC 等）因此不会被解析。intercept 是主 goroutine 私有状态，读取侧
-// 不参与该判定。
-func (s *udpSession) learnFromDNS(payload []byte) {
-	if s.nextProxy == nil || !s.dns.intercept {
-		return
-	}
-	msg := s.maybeDNS(payload)
-	if msg == nil {
-		return
-	}
-	domain := strings.TrimSuffix(msg.Question[0].Name, ".")
-	if !s.nextProxy.IsCustomDomain(domain) {
-		return
-	}
-	util.ForEachDNSAnswer(msg, func(kind, value string) {
-		if kind == "CNAME" {
-			s.nextProxy.AddDomain(value)
-			return
-		}
-		s.nextProxy.AddIP(value)
-	})
 }
 
 // udpFrameResult 是客户端帧读取 goroutine 回传的一个结果。
