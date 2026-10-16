@@ -364,8 +364,19 @@ type dialer struct {
 // dialTarget 打开出站连接，并连同可打印的远端地址一起返回用于日志。
 // 远端地址在这里解析，因为 next-proxy 路径得到的是 SOCKS5 连接，
 // 其 RemoteAddr() 为 nil。
+//
+// 它按**目标**决定路由；需要按域名决定路由的调用方（DNS 查询，见
+// udpRouteDialer）改用 dialVia，两条路径共用下面的同一个实现。
 func (d *dialer) dialTarget(ctx context.Context, network, target string) (net.Conn, string, error) {
-	if d.nextProxy != nil && d.shouldProxy(target) {
+	return d.dialVia(ctx, network, target, "", d.nextProxy != nil && d.shouldProxy(target))
+}
+
+// dialVia 是出站拨号的唯一实现：viaNextProxy 由调用方决定（按目标，或像 DNS
+// 查询那样按域名），两个分支的 SSRF 检查与日志因此只有一份。
+//
+// name 只用于日志（DNS 查询的域名），为空时日志里的 target 已经足够。
+func (d *dialer) dialVia(ctx context.Context, network, target, name string, viaNextProxy bool) (net.Conn, string, error) {
+	if viaNextProxy && d.nextProxy != nil {
 		// 这条路径**有意**保持「把域名交给上游代理解析」的语义，因此 SSRF 检查
 		// 与实际连接是两次不同的解析：代理是管理员配置的可信组件，其自身解析器
 		// 是明确接受的残余风险（而不是遗漏）。这里的检查只是尽力而为的早退，
@@ -385,7 +396,7 @@ func (d *dialer) dialTarget(ctx context.Context, network, target string) (net.Co
 		}
 		// 地址族刻意不下推到这一层：这里连的是上游 SOCKS5 代理而不是目标，
 		// 把客户端的地址族套到代理地址上只会让上游不可达。
-		log.Info("[HANDLE] dialing via next proxy", "target", target, "proxy", d.nextProxy.Host())
+		log.Info("[HANDLE] dialing via next proxy", "target", target, "name", name, "proxy", d.nextProxy.Host())
 		conn, err := d.nextProxy.DialContext(ctx, network, target)
 		if err != nil {
 			return nil, "", err
