@@ -310,8 +310,10 @@ func invalidateDeadStream(stream transport.Stream) {
 // settleDeadStream 用有界窗口等待一条已关闭的流的 RoundTrip 收敛。
 //
 // "判死即换连接"本身由传输层保证：InvalidateConn 在关掉底层连接的同时换掉槽位的
-// 连接池（transport/http2 的 transportSlot.replacePool），下一次 Open 只能拨号，
-// 因此不再依赖连接池的异步收敛（那条依赖时序的版本曾在 CI 上偶发失败，见 #226）。
+// 连接池（transport/http2 的 transportSlot.replacePool），下一次 Open 只能拨号；
+// 连接身份与池同源（slotTransport），因此判死只可能关掉本流提交时那一代里
+// 自己用过的那条连接。不再依赖连接池的异步收敛（那条依赖时序的版本曾在 CI 上
+// 偶发失败，见 #226）。
 // 这一步与随后的 CloseIdle() 保留下来是为了按顺序收敛本流、并在判死瞬间丢掉其余
 // 槽位的空闲连接——它们多半也绑在旧网络上，否则后续请求会逐个再踩一次死连接，
 // 而不是等 240s 的池级回收。

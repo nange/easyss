@@ -156,7 +156,7 @@ func suspectLifecycle(t *testing.T, n int, probe func(context.Context, *transpor
 	var conns []*countingConn
 	attach := func(s *transportSlot) {
 		c := &countingConn{}
-		s.conn.Store(&slotConn{c: c})
+		attachConn(s, c)
 		// 模拟"有活跃流、刚刚还在采样"的槽位：baseline 非零，且被标记过 heavy。
 		s.lastHeavy = 1
 		s.bytesRecv.Store(1024)
@@ -232,26 +232,27 @@ func TestSuspendWithoutProbeTokenDoesNotMark(t *testing.T) {
 }
 
 // TestSlotInvalidateConnFromIdentityCAS 覆盖复核失效所依赖的身份纪律：
-// 只有"仍是当前连接"的那条会被关闭，复核慢了一步也不会误杀之后新建的连接。
+// 只有 (那一代, 那条连接) 这一对仍是该代的当前连接时才会被关闭，复核或判死
+// 慢了一步也不会误杀之后新建的连接。
 func TestSlotInvalidateConnFromIdentityCAS(t *testing.T) {
 	t.Run("matching identity is closed exactly once", func(t *testing.T) {
 		conn := &countingConn{}
 		slot, sc := newCountingSlot(conn)
 		slot.expiring.Store(true)
 
-		if !slot.invalidateConnFrom(sc, "test") {
+		if !slot.invalidateConnFrom(slot.generation(), sc, "test") {
 			t.Fatal("expected this call to be the closer")
 		}
 		if got := conn.closes.Load(); got != 1 {
 			t.Fatalf("closes = %d, want 1", got)
 		}
-		if slot.conn.Load() != nil {
-			t.Fatal("the slot conn pointer must be cleared")
+		if slot.connIdentity() != nil {
+			t.Fatal("the generation's conn pointer must be cleared")
 		}
 		if slot.expiring.Load() {
 			t.Fatal("connection-scoped marks must be cleared with the connection")
 		}
-		if slot.invalidateConnFrom(sc, "test") {
+		if slot.invalidateConnFrom(slot.generation(), sc, "test") {
 			t.Fatal("a second invalidation of the same identity must be a no-op")
 		}
 		if got := conn.closes.Load(); got != 1 {
@@ -259,31 +260,45 @@ func TestSlotInvalidateConnFromIdentityCAS(t *testing.T) {
 		}
 	})
 
-	t.Run("stale identity never kills a newer connection", func(t *testing.T) {
+	t.Run("a retired generation never kills the newer connection", func(t *testing.T) {
 		oldConn := &countingConn{}
-		slot, oldSC := newCountingSlot(oldConn)
 		newConn := &countingConn{}
-		newSC := &slotConn{c: newConn}
-		slot.conn.Store(newSC) // 复核期间新连接已经顶上
 
-		if slot.invalidateConnFrom(oldSC, "test") {
-			t.Fatal("a stale identity must not win the CAS")
+		slot := slotWithGenFactory()
+		oldGen := slot.generation()
+		oldSC := attachConn(slot, oldConn)
+		// 另一条流判死：旧连接被关掉，槽位换到新一代，新一代拨出了自己的连接。
+		if !slot.invalidateConnFrom(oldGen, oldSC, "test") {
+			t.Fatal("the first invalidation must win")
 		}
-		if got := oldConn.closes.Load(); got != 0 {
-			t.Fatalf("old connection closed %d times, want 0", got)
+		newGen := slot.generation()
+		newSC := attachConn(slot, newConn)
+
+		// 复核/判死慢了一步：手里拿的还是旧一代（已换代）的身份。
+		if slot.invalidateConnFrom(oldGen, oldSC, "test") {
+			t.Fatal("a retired identity must not win its CAS twice")
+		}
+		if got := oldConn.closes.Load(); got != 1 {
+			t.Fatalf("old connection closed %d times, want 1 (the first invalidation only)", got)
 		}
 		if got := newConn.closes.Load(); got != 0 {
 			t.Fatalf("new connection closed %d times, want 0", got)
 		}
-		if slot.conn.Load() != newSC {
-			t.Fatal("the newer connection must stay installed")
+		if slot.generation() != newGen {
+			t.Fatal("a retired generation must not replace the current pool")
+		}
+		if newGen.conn.Load() != newSC {
+			t.Fatal("the current generation must keep its own connection")
 		}
 	})
 
 	t.Run("nil identity is a no-op", func(t *testing.T) {
 		slot := &transportSlot{}
-		if slot.invalidateConnFrom(nil, "test") {
+		if slot.invalidateConnFrom(nil, nil, "test") {
 			t.Fatal("nil identity must not be reported as closed")
+		}
+		if slot.invalidateConnFrom(slot.generation(), nil, "test") {
+			t.Fatal("nil connection must not be reported as closed")
 		}
 	})
 }
@@ -293,25 +308,25 @@ func TestSlotInvalidateConnFromIdentityCAS(t *testing.T) {
 func TestReverifySlotDecisions(t *testing.T) {
 	tests := []struct {
 		name       string
-		liveness   func(ctx context.Context, slot *transportSlot) (bool, bool)
+		liveness   func(ctx context.Context, gen *slotTransport) (bool, bool)
 		wantClosed int32
 		wantCalls  int32
 	}{
 		{
 			name:       "alive keeps the connection",
-			liveness:   func(context.Context, *transportSlot) (bool, bool) { return true, true },
+			liveness:   func(context.Context, *slotTransport) (bool, bool) { return true, true },
 			wantClosed: 0,
 			wantCalls:  1,
 		},
 		{
 			name:       "unreachable replaces the connection",
-			liveness:   func(context.Context, *transportSlot) (bool, bool) { return false, true },
+			liveness:   func(context.Context, *slotTransport) (bool, bool) { return false, true },
 			wantClosed: 1,
 			wantCalls:  1,
 		},
 		{
 			name:       "unknown verdict keeps the connection",
-			liveness:   func(context.Context, *transportSlot) (bool, bool) { return false, false },
+			liveness:   func(context.Context, *slotTransport) (bool, bool) { return false, false },
 			wantClosed: 0,
 			wantCalls:  1,
 		},
@@ -332,9 +347,9 @@ func TestReverifySlotDecisions(t *testing.T) {
 			var calls atomic.Int32
 			tr := &http2Transport{}
 			if tt.liveness != nil {
-				tr.liveness = func(ctx context.Context, s *transportSlot) (bool, bool) {
+				tr.liveness = func(ctx context.Context, gen *slotTransport) (bool, bool) {
 					calls.Add(1)
-					return tt.liveness(ctx, s)
+					return tt.liveness(ctx, gen)
 				}
 			}
 
@@ -363,7 +378,7 @@ func TestReverifySlotCanceledCallerKeepsSuspicion(t *testing.T) {
 
 	var calls atomic.Int32
 	tr := &http2Transport{
-		liveness: func(context.Context, *transportSlot) (bool, bool) {
+		liveness: func(context.Context, *slotTransport) (bool, bool) {
 			calls.Add(1)
 			return false, true // 若被调用就会判死
 		},
@@ -395,7 +410,7 @@ func TestReverifySlotDetachesProbeFromCallerCancellation(t *testing.T) {
 	probeStarted := make(chan struct{})
 	verdict := make(chan bool, 1)
 	tr := &http2Transport{
-		liveness: func(ctx context.Context, _ *transportSlot) (bool, bool) {
+		liveness: func(ctx context.Context, _ *slotTransport) (bool, bool) {
 			close(probeStarted)
 			verdict <- ctx.Err() == nil // 探测自己看到的上下文
 			return true, true
@@ -450,7 +465,7 @@ func TestMaybeSuspendArmsFromTheOpenPath(t *testing.T) {
 		t.Fatalf("write on the first stream: %v", err)
 	}
 	awaitResponse(t, first, 2*time.Second)
-	established := slot.conn.Load()
+	established := slot.connIdentity()
 	if established == nil {
 		t.Fatal("the first stream must have established a connection")
 	}
@@ -492,7 +507,7 @@ func TestMaybeSuspendArmsFromTheOpenPath(t *testing.T) {
 	if got := stats.Collect().SuspendReverifyAlive; got != 1 {
 		t.Fatalf("suspend_reverify_alive = %d, want 1", got)
 	}
-	if slot.conn.Load() != established {
+	if slot.connIdentity() != established {
 		t.Fatal("the live connection must be kept")
 	}
 	if got := conns.Load(); got != 1 {
@@ -537,7 +552,7 @@ func TestHTTP2Transport_ReverifyKeepsLiveConnection(t *testing.T) {
 	awaitResponse(t, first, 2*time.Second)
 	_ = first.Close()
 
-	established := slot.conn.Load()
+	established := slot.connIdentity()
 	if established == nil {
 		t.Fatal("the first stream must have established a connection")
 	}
@@ -557,7 +572,7 @@ func TestHTTP2Transport_ReverifyKeepsLiveConnection(t *testing.T) {
 	if slot.reverify.Load() {
 		t.Fatal("the reverify mark must be cleared after the verdict")
 	}
-	if slot.conn.Load() != established {
+	if slot.connIdentity() != established {
 		t.Fatal("a healthy connection must be kept, not replaced")
 	}
 	if got := conns.Load(); got != 1 {
@@ -575,7 +590,7 @@ func TestHTTP2Transport_ReverifyReplacesUnreachableConnection(t *testing.T) {
 	htr := tr.(*http2Transport)
 
 	var probes atomic.Int32
-	htr.liveness = func(context.Context, *transportSlot) (bool, bool) {
+	htr.liveness = func(context.Context, *slotTransport) (bool, bool) {
 		probes.Add(1)
 		return false, true // 连接不再能往返
 	}
@@ -601,7 +616,7 @@ func TestHTTP2Transport_ReverifyReplacesUnreachableConnection(t *testing.T) {
 	}
 	awaitResponse(t, first, 2*time.Second)
 
-	stale := slot.conn.Load()
+	stale := slot.connIdentity()
 	if stale == nil {
 		t.Fatal("the first stream must have established a connection")
 	}
@@ -616,7 +631,7 @@ func TestHTTP2Transport_ReverifyReplacesUnreachableConnection(t *testing.T) {
 	if slot.reverify.Load() {
 		t.Fatal("the reverify mark must be cleared after the verdict")
 	}
-	if slot.conn.Load() == stale {
+	if slot.connIdentity() == stale {
 		t.Fatal("the unreachable connection must be dropped")
 	}
 

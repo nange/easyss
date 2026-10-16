@@ -211,7 +211,7 @@ func (lc *slotLifecycle) armSuspects() (armed int) {
 		lc.sched.mu.RUnlock()
 
 		for _, s := range slots {
-			if s.conn.Load() != nil && !s.reverify.Swap(true) {
+			if s.connIdentity() != nil && !s.reverify.Swap(true) {
 				armed++
 			}
 		}

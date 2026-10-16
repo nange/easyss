@@ -43,14 +43,20 @@ type http2Stream struct {
 	// 以 UnixNano 存储；0 表示从未打戳。
 	bootstrapSentAt atomic.Int64
 
-	// connInUse 是本流实际使用过的底层连接身份，在第一次 body 写完成时快照
-	// （见 snapshotConnInUse）。InvalidateConn 只关闭它，并按槽位指针的身份
-	// CAS 决定唯一赢家。
+	// gen 是本流提交请求时所用的那一代连接池（见 slotTransport）：它同时携带
+	// 这一代的连接身份，因此"本流实际用过的那条连接"与"本流提交到的池"永远
+	// 同源，不会与判死换池之后新建的连接错位。由发起 RoundTrip 的 goroutine
+	// 在提交前写入；nil 表示本流还没有提交到任何一代上（判活因此无法判定，
+	// 判死也没有对象可关）。
+	gen atomic.Pointer[slotTransport]
+	// connInUse 是本流实际使用过的底层连接身份，在第一次 body 写完成时从 gen
+	// 那一代里快照（见 snapshotConnInUse）。InvalidateConn 只关闭它。
 	connInUse atomic.Pointer[slotConn]
 
-	// liveness 在本流所在连接上做一次轻量存活探测（见 transport.ConnLiveness）；
-	// 为 nil 时 ConnAlive 报告"无法判定"（未配置探测令牌）。
-	liveness func(ctx context.Context, slot *transportSlot) (alive, ok bool)
+	// liveness 在本流提交到的那一代连接上做一次轻量存活探测
+	// （见 transport.ConnLiveness）；为 nil 时 ConnAlive 报告"无法判定"
+	// （未配置探测令牌）。
+	liveness func(ctx context.Context, gen *slotTransport) (alive, ok bool)
 
 	// slowRTT 是所属传输层的慢路径 RTT 日志限流器（见 slowRTTLogLimiter）。
 	// nil 表示未配置限流（测试里裸构造的流）：此时越界样本照常逐条打印。
@@ -218,14 +224,19 @@ func (s *http2Stream) Write(p []byte) (int, error) {
 }
 
 // snapshotConnInUse 记住承载本流的底层连接。第一次 body 写完成时连接必然已经
-// 建立：net/http 必须先写出请求头、拿到连接，才会去读取请求体；而每个槽位的
-// http.Transport 设了 MaxConnsPerHost=1，同一时刻至多一条连接，因此这个快照
-// 就是"我自己实际用过的那条"。InvalidateConn 据此只关闭它。
+// 建立：net/http 必须先写出请求头、拿到连接，才会去读取请求体；而本流的身份
+// 锚定在提交请求时的那一代池上（gen），因此读到的永远是"本流自己用过的那张池
+// 里的那条连接"。判死换池之后另一条流拨出的新连接属于新的一代，本流读不到它，
+// 也就不可能把新连接记成自己的身份（见 slotTransport）。
 func (s *http2Stream) snapshotConnInUse() {
-	if s.slot == nil || s.connInUse.Load() != nil {
+	if s.connInUse.Load() != nil {
 		return
 	}
-	if sc := s.slot.conn.Load(); sc != nil {
+	gen := s.gen.Load()
+	if gen == nil {
+		return
+	}
+	if sc := gen.conn.Load(); sc != nil {
 		s.connInUse.CompareAndSwap(nil, sc)
 	}
 }
@@ -298,26 +309,39 @@ func (s *http2Stream) AwaitResponse(ctx context.Context) error {
 	}
 }
 
-// ConnAlive 在本流所在槽位的连接上做一次轻量存活探测
-// （见 transport.ConnLiveness）。ok=false 表示无法判定（未配置探测令牌），
-// 调用方应按判死处理。
+// ConnAlive 在本流提交到的那一代连接上做一次轻量存活探测
+// （见 transport.ConnLiveness）。ok=false 表示无法判定（未配置探测令牌，或本流
+// 还没有提交到任何一代池上），调用方应按判死处理。
+//
+// 探测对象必须是本流自己那一代，而不是槽位的"当前一代"：判死换池之后，一条
+// 仍绑在旧连接上的流不该被新连接的健康状况顶替成"活着"（那会让它继续等一条
+// 已经死掉的连接）。
 func (s *http2Stream) ConnAlive(ctx context.Context) (alive, ok bool) {
-	if s.slot == nil || s.liveness == nil {
+	if s.liveness == nil {
 		return false, false
 	}
-	return s.liveness(ctx, s.slot)
+	gen := s.gen.Load()
+	if gen == nil {
+		return false, false
+	}
+	return s.liveness(ctx, gen)
 }
 
 // InvalidateConn 强制关闭本流实际使用过的底层连接
-// （见 transport.ConnInvalidator），使下一次 Open 重新拨号。身份 CAS 同时挡住
+// （见 transport.ConnInvalidator），使下一次 Open 重新拨号。(gen, conn) 是一对
+// 不可分割的身份：连接身份只在它所属的那一代里比较，因此身份 CAS 同时挡住
 // 两件事：同一连接被多条流重复失效（只有赢家执行），以及误杀后来新建的连接
-// （新连接身份不同，CAS 必然失败）。关闭动作、状态清理与连接级日志都在
+// （新一代的连接身份不同，CAS 必然失败）。关闭动作、状态清理与连接级日志都在
 // transportSlot.invalidateConnFrom 里，与挂起复核共用同一条纪律。
 func (s *http2Stream) InvalidateConn() {
 	if s.slot == nil {
 		return
 	}
-	s.slot.invalidateConnFrom(s.connInUse.Load(), "stream dead")
+	gen := s.gen.Load()
+	if gen == nil {
+		return
+	}
+	s.slot.invalidateConnFrom(gen, s.connInUse.Load(), "stream dead")
 }
 
 func (s *http2Stream) CloseWrite() error {

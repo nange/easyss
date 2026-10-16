@@ -81,7 +81,7 @@ func TestHTTP2Stream_ConnAlive(t *testing.T) {
 	t.Run("probe payload counts as alive", func(t *testing.T) {
 		ts, token := newProbeServer(t)
 		prober := &slotProber{serverURL: ts.URL, token: token, payloadSize: testProbePayloadSize}
-		s := &http2Stream{slot: newProbeSlot(), liveness: prober.alive}
+		s := livenessStream(newProbeSlot(), prober.alive)
 
 		alive, ok := s.ConnAlive(context.Background())
 		if !ok || !alive {
@@ -95,7 +95,7 @@ func TestHTTP2Stream_ConnAlive(t *testing.T) {
 		}))
 		t.Cleanup(ts.Close)
 		prober := &slotProber{serverURL: ts.URL, token: "unused", payloadSize: testProbePayloadSize}
-		s := &http2Stream{slot: newProbeSlot(), liveness: prober.alive}
+		s := livenessStream(newProbeSlot(), prober.alive)
 
 		alive, ok := s.ConnAlive(context.Background())
 		if !ok || !alive {
@@ -110,7 +110,7 @@ func TestHTTP2Stream_ConnAlive(t *testing.T) {
 		}))
 		t.Cleanup(ts.Close)
 		prober := &slotProber{serverURL: ts.URL, token: "unused", payloadSize: testProbePayloadSize}
-		s := &http2Stream{slot: newProbeSlot(), liveness: prober.alive}
+		s := livenessStream(newProbeSlot(), prober.alive)
 
 		alive, ok := s.ConnAlive(context.Background())
 		if !ok || !alive {
@@ -123,7 +123,7 @@ func TestHTTP2Stream_ConnAlive(t *testing.T) {
 		deadURL := ts.URL
 		ts.Close()
 		prober := &slotProber{serverURL: deadURL, token: token, payloadSize: testProbePayloadSize}
-		s := &http2Stream{slot: newProbeSlot(), liveness: prober.alive}
+		s := livenessStream(newProbeSlot(), prober.alive)
 
 		alive, ok := s.ConnAlive(context.Background())
 		if !ok || alive {
@@ -141,7 +141,7 @@ func TestHTTP2Stream_ConnAlive(t *testing.T) {
 			ts.Close()
 		})
 		prober := &slotProber{serverURL: ts.URL, token: "unused", payloadSize: testProbePayloadSize}
-		s := &http2Stream{slot: newProbeSlot(), liveness: prober.alive}
+		s := livenessStream(newProbeSlot(), prober.alive)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
@@ -161,6 +161,18 @@ func TestHTTP2Stream_ConnAlive(t *testing.T) {
 			t.Fatalf("ConnAlive = (%v, %v), want (false, false) without a slot", alive, ok)
 		}
 	})
+
+	t.Run("stream not submitted yet cannot judge", func(t *testing.T) {
+		// 探针有了，但这条流还没有提交到任何一代池上：判活探测的对象是"本流
+		// 用过的那一代连接"，此时没有对象可探测，只能如实报告"无法判定"
+		// （调用方按判死处理）。
+		slot := newProbeSlot()
+		prober := &slotProber{serverURL: "https://127.0.0.1:1", token: "unused", payloadSize: testProbePayloadSize}
+		s := &http2Stream{slot: slot, liveness: prober.alive}
+		if alive, ok := s.ConnAlive(context.Background()); ok || alive {
+			t.Fatalf("ConnAlive = (%v, %v), want (false, false) before the request is submitted", alive, ok)
+		}
+	})
 }
 
 // countingConn 只用于断言底层连接被关闭了几次；其余方法由内嵌的 net.Conn 提供。
@@ -175,10 +187,18 @@ func (c *countingConn) Close() error {
 }
 
 func newCountingSlot(conn net.Conn) (*transportSlot, *slotConn) {
-	sc := &slotConn{c: conn}
-	slot := &transportSlot{}
-	slot.conn.Store(sc)
-	return slot, sc
+	slot := slotWithPool(&http.Transport{})
+	return slot, attachConn(slot, conn)
+}
+
+// livenessStream 构造一条已提交到槽位当前一代、带判活探针的流：ConnAlive 是
+// 连接作用域的，探测对象是流自己那一代（见 http2Stream.ConnAlive）。
+func livenessStream(slot *transportSlot, liveness func(context.Context, *slotTransport) (bool, bool)) *http2Stream {
+	s := &http2Stream{slot: slot, liveness: liveness}
+	if gen := slot.generation(); gen != nil {
+		s.gen.Store(gen)
+	}
+	return s
 }
 
 // TestHTTP2Stream_InvalidateConnClosesExactlyOnce 覆盖 §4.8(a)：同一连接上的多条
@@ -186,11 +206,13 @@ func newCountingSlot(conn net.Conn) (*transportSlot, *slotConn) {
 func TestHTTP2Stream_InvalidateConnClosesExactlyOnce(t *testing.T) {
 	conn := &countingConn{}
 	slot, sc := newCountingSlot(conn)
+	gen := slot.generation()
 
 	const streams = 8
 	streamsOnConn := make([]*http2Stream, 0, streams)
 	for range streams {
 		s := &http2Stream{slot: slot}
+		s.gen.Store(gen)
 		s.connInUse.Store(sc)
 		streamsOnConn = append(streamsOnConn, s)
 	}
@@ -204,34 +226,101 @@ func TestHTTP2Stream_InvalidateConnClosesExactlyOnce(t *testing.T) {
 	if got := conn.closes.Load(); got != 1 {
 		t.Fatalf("underlying Close called %d times, want exactly 1", got)
 	}
-	if slot.conn.Load() != nil {
-		t.Fatal("slot conn pointer must be cleared after invalidation")
+	if slot.connIdentity() != nil {
+		t.Fatal("the generation's conn pointer must be cleared after invalidation")
 	}
 }
 
 // TestHTTP2Stream_InvalidateConnDoesNotKillNewConnection 覆盖 §4.8(b)：流记住的是
-// 自己用过的那条连接，若槽位指针已经指向新连接，身份 CAS 必然失败——健康的新连接
-// 不会被误杀。
+// 自己提交时那一代的连接，若槽位已经换到新一代并拨出了新连接，旧一代的身份既
+// 杀不掉新连接，也不会动新一代的池。
 func TestHTTP2Stream_InvalidateConnDoesNotKillNewConnection(t *testing.T) {
 	stale := &countingConn{}
 	newConn := &countingConn{}
-	slot, _ := newCountingSlot(newConn)
-	// 槽位现在指向新连接；流记住的仍是它当年用过的那条旧连接。
-	newSC := slot.conn.Load()
-	staleSC := &slotConn{c: stale}
 
+	slot := slotWithGenFactory()
+	oldGen := slot.generation()
+	oldSC := attachConn(slot, stale)
+	// 另一条流已经把这条连接判死：旧连接被关掉，槽位换到新一代。
+	if !slot.invalidateConnFrom(oldGen, oldSC, "other stream") {
+		t.Fatal("the first invalidation must win")
+	}
+	newGen := slot.generation()
+	if newGen == oldGen {
+		t.Fatal("the pool must have been replaced")
+	}
+	newSC := attachConn(slot, newConn)
+
+	// 本流记住的是它当年用过的那一代（旧一代）的连接。
 	s := &http2Stream{slot: slot}
-	s.connInUse.Store(staleSC)
+	s.gen.Store(oldGen)
+	s.connInUse.Store(oldSC)
 	s.InvalidateConn()
 
+	if got := stale.closes.Load(); got != 1 {
+		t.Fatalf("stale connection closed %d times, want 1 (the first invalidation only)", got)
+	}
 	if got := newConn.closes.Load(); got != 0 {
 		t.Fatalf("new connection was closed %d times, want 0", got)
 	}
-	if got := stale.closes.Load(); got != 0 {
-		t.Fatalf("stale connection was closed %d times, want 0 (it is not the current one)", got)
+	if slot.generation() != newGen {
+		t.Fatal("a retired generation's identity must not replace the current pool")
 	}
-	if slot.conn.Load() != newSC {
-		t.Fatal("slot conn pointer must keep pointing at the new connection")
+	if newGen.conn.Load() != newSC {
+		t.Fatal("the newer generation must keep its own connection")
+	}
+}
+
+// TestHTTP2Stream_SnapshotStaysInItsGeneration 是本次修复的回归测试：
+// snapshotConnInUse 必须在**本流提交时的那一代**里读连接，而不是读槽位的
+// "当前连接"。否则在"某流已判死 → 槽位换到新一代 → 另一条流拨出新连接"的
+// 窗口里，一条稍后才完成第一次 body 写的旧流会把新连接记成自己的身份，之后
+// 一次 InvalidateConn 就误杀健康连接。
+//
+// 窗口的两半都被固定住：旧流所在的这一代已经被判死并换掉（槽位指向新一代），
+// 而新一代已经拨出了自己的连接。此时旧流才完成第一次 body 写。
+func TestHTTP2Stream_SnapshotStaysInItsGeneration(t *testing.T) {
+	dead := &countingConn{}
+	healthy := &countingConn{}
+
+	slot := slotWithGenFactory()
+	deadGen := slot.generation()
+	deadSC := attachConn(slot, dead)
+	// 某条流判死这条连接：旧连接被关掉，槽位换到新一代。
+	if !slot.invalidateConnFrom(deadGen, deadSC, "stream dead") {
+		t.Fatal("the invalidation must win")
+	}
+	newGen := slot.generation()
+	if newGen == deadGen {
+		t.Fatal("the pool must have been replaced")
+	}
+	healthySC := attachConn(slot, healthy)
+
+	// 一条仍绑在旧一代上的流：它稍后才完成第一次 body 写，然后才被判死。
+	s := &http2Stream{slot: slot}
+	s.gen.Store(deadGen)
+	s.snapshotConnInUse()
+
+	if got := s.connInUse.Load(); got != nil {
+		t.Fatal("the stream snapshotted a connection outside its own generation as its identity")
+	}
+
+	// 即使这条旧流手里真的握着新一代连接的身份（修复前正是这样记下来的），
+	// 身份比较也只在自己那一代里进行，新一代的连接不会被误杀。
+	s.connInUse.Store(healthySC)
+	s.InvalidateConn()
+
+	if got := dead.closes.Load(); got != 1 {
+		t.Fatalf("the judged-dead connection closed %d times, want 1 (the original invalidation only)", got)
+	}
+	if got := healthy.closes.Load(); got != 0 {
+		t.Fatalf("the healthy connection on the new generation was closed %d times, want 0", got)
+	}
+	if slot.generation() != newGen {
+		t.Fatal("the new generation must stay installed")
+	}
+	if newGen.conn.Load() != healthySC {
+		t.Fatal("the new generation must keep its healthy connection")
 	}
 }
 
@@ -242,29 +331,39 @@ func TestHTTP2Stream_InvalidateConnWithoutSnapshotIsNoOp(t *testing.T) {
 	slot, sc := newCountingSlot(conn)
 
 	s := &http2Stream{slot: slot}
+	s.gen.Store(slot.generation())
 	s.InvalidateConn() // connInUse 为 nil
 
 	if conn.closes.Load() != 0 {
 		t.Fatal("no connection may be closed without an identity snapshot")
 	}
-	if slot.conn.Load() != sc {
-		t.Fatal("slot conn pointer must be untouched without an identity snapshot")
+	if slot.connIdentity() != sc {
+		t.Fatal("the connection identity must be untouched without a snapshot")
 	}
 
+	// 还没提交到任何一代上的流同样是无操作，且不得 panic。
+	notSubmitted := &http2Stream{slot: slot}
+	notSubmitted.InvalidateConn()
+
 	noSlot := &http2Stream{}
-	noSlot.InvalidateConn() // 不得 panic
+	noSlot.InvalidateConn()
 }
 
-// TestTrackedConnCloseKeepsNewerPointer 验证 net/http 自己回收连接时只清除自己的
-// 指针（CAS）：若槽位已指向新连接，旧连接的关闭不得把它清空。
+// TestTrackedConnCloseKeepsNewerPointer 验证 net/http 自己回收连接时只清除自己那
+// 一代的指针（CAS）：槽位已经换到新一代时，旧连接的关闭不得碰到新一代的连接。
 func TestTrackedConnCloseKeepsNewerPointer(t *testing.T) {
 	old := &countingConn{}
 	newConn := &countingConn{}
-	slot, _ := newCountingSlot(newConn)
-	newSC := slot.conn.Load()
-	oldSC := &slotConn{c: old}
 
-	tracked := &trackedConn{Conn: old, slot: slot, self: oldSC}
+	slot := slotWithGenFactory()
+	oldGen := slot.generation()
+	oldSC := attachConn(slot, old)
+	newGen := slot.newGen()
+	newSC := &slotConn{c: newConn}
+	newGen.conn.Store(newSC)
+	slot.gen.Store(newGen)
+
+	tracked := &trackedConn{Conn: old, gen: oldGen, self: oldSC}
 	if err := tracked.Close(); err != nil {
 		t.Fatalf("trackedConn.Close: %v", err)
 	}
@@ -272,15 +371,18 @@ func TestTrackedConnCloseKeepsNewerPointer(t *testing.T) {
 	if got := old.closes.Load(); got != 1 {
 		t.Fatalf("old connection closed %d times, want 1", got)
 	}
-	if slot.conn.Load() != newSC {
-		t.Fatal("trackedConn.Close must not clear a newer slot conn pointer")
+	if oldGen.conn.Load() != nil {
+		t.Fatal("trackedConn.Close must clear the pointer it owns")
+	}
+	if newGen.conn.Load() != newSC {
+		t.Fatal("trackedConn.Close must not clear a newer generation's pointer")
 	}
 
-	// 反过来：它仍指向自己时，关闭会清空指针。
-	tracked2 := &trackedConn{Conn: old, slot: slot, self: newSC}
-	_ = tracked2.Close()
-	if slot.conn.Load() != nil {
-		t.Fatal("trackedConn.Close must clear the pointer it owns")
+	// 反向：旧一代的连接身份也不能用来清掉新一代的连接。
+	stale := &trackedConn{Conn: newConn, gen: oldGen, self: newSC}
+	_ = stale.Close()
+	if newGen.conn.Load() != newSC {
+		t.Fatal("a retired generation's identity must not clear the current connection")
 	}
 }
 
