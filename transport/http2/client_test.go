@@ -30,13 +30,13 @@ func TestUTLSDialUsesHTTP2(t *testing.T) {
 		InsecureSkipVerify: true,
 		NextProtos:         sharedconfig.NextProtos,
 	}, time.Second, nil, time.Minute)
-	t.Cleanup(slot.t.CloseIdleConnections)
+	t.Cleanup(slot.transport().CloseIdleConnections)
 
 	req, err := http.NewRequest(http.MethodPost, srv.URL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := slot.t.RoundTrip(req)
+	resp, err := slot.transport().RoundTrip(req)
 	if err != nil {
 		t.Fatal(err)
 	}

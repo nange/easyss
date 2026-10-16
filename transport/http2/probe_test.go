@@ -50,7 +50,7 @@ func newProbeSlot() *transportSlot {
 		ForceAttemptHTTP2: true,
 		MaxConnsPerHost:   1,
 	}
-	return &transportSlot{t: tr}
+	return slotWithPool(tr)
 }
 
 func TestSlotProberFast(t *testing.T) {

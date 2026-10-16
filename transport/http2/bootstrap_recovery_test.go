@@ -330,9 +330,11 @@ func newRecoveryTransport(t *testing.T, serverURL, probeToken string) transport.
 // 的 settleDeadStream）之后，下一次 Open 必然建立一条新的底层连接
 // （httptest 的 ConnState 计数）。
 //
-// 顺序是必须的：InvalidateConn 只关闭底层连接，net/http 的读循环异步感知并回收
-// 它；在那之前 CloseIdleConnections 仍把这条连接当作被活跃流占用而不回收，下一次
-// Open 就会再次拿到它（写引导记录立即失败）。
+// 保证来自判死本身：InvalidateConn 在关掉底层连接的同时换掉整个连接池
+// （transportSlot.replacePool），下一次 Open 只能拨号。后面的收敛等待与
+// CloseIdle() 照生产顺序保留，但结论不再依赖它们的收敛时机——那条依赖时序的
+// 版本在 CI 上偶发失败（#226），窗口固定后的确定性版本见
+// TestHTTP2Transport_InvalidateConnReplacesPool。
 func TestHTTP2Transport_InvalidateConnForcesNewConnection(t *testing.T) {
 	srv, conns := newH2Server(t)
 	tr := newRecoveryTransport(t, srv.URL, "")
@@ -362,6 +364,7 @@ func TestHTTP2Transport_InvalidateConnForcesNewConnection(t *testing.T) {
 	_ = first.Close()
 
 	// 判死路径在 CloseIdle() 之前等待本流收敛（见 client/proxy.settleDeadStream）。
+	// 判死换连接已由 InvalidateConn 换池保证，这一步只是照生产顺序收敛本流。
 	awaitResponse(t, first, time.Second)
 	tr.CloseIdle()
 
@@ -530,5 +533,171 @@ func TestHTTP2Transport_LivenessSharesInflightConnection(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
 		t.Fatalf("liveness probe took %v, want it served concurrently on the shared connection", elapsed)
+	}
+}
+
+// laggingConn 把"底层连接已关闭"这个错误扣在 h2 readLoop 之外：真实实现里，
+// ClientConn 只有在它自己的一次读返回错误之后才会走 cleanup（标记已关闭、把
+// 自己移出连接池）。扣住这个错误就等价于"readLoop 还没有被调度到"——这是 CI 上
+// 偶发失败的那段窗口，也是判死路径唯一无法自己消除的时序：写路径的通知同样
+// 依赖某个 goroutine 跑到 cc.Close()。
+type laggingConn struct {
+	net.Conn
+	closed  atomic.Bool
+	release chan struct{}
+}
+
+func (c *laggingConn) Close() error {
+	c.closed.Store(true)
+	return c.Conn.Close()
+}
+
+func (c *laggingConn) Read(p []byte) (int, error) {
+	if c.closed.Load() {
+		<-c.release
+		return 0, net.ErrClosed
+	}
+	n, err := c.Conn.Read(p)
+	if err != nil && c.closed.Load() {
+		<-c.release
+	}
+	return n, err
+}
+
+// TestHTTP2Transport_InvalidateConnReplacesPool 是判死换连接的**确定性**回归
+// 测试：把 CI 上偶发的那段窗口固定下来，验证判死之后的下一条流必定拨号建立
+// 新连接（而不是等连接池自己收敛）。
+//
+// 窗口的两半都被固定住：
+//
+//   - h2 客户端栈尚未察觉连接已死（laggingConn 扣住关闭引起的读错误），池里那条
+//     ClientConn 仍然自认为可用、仍可被 ReserveNewRequest 选中；
+//   - 被判死的流仍然注册在那条 ClientConn 上（服务端一直读它的请求体：既不结束
+//     也不重置它），因此 CloseIdleConnections 里的 closeIfIdle 只会空转——连接
+//     不会因为"空闲"而被回收。
+//
+// 在这种状态下，"CloseIdle() 之后池会自己收敛"这条路必然失效：下一条流会被交给
+// 那条已经关闭的连接，引导记录写入再也回不来（issue #226 里是撞上已关闭的 pipe）。
+// transportSlot.replacePool 把保证变成结构性的——因此这里即使照生产判死路径调用
+// CloseIdle()，也不再看它的收敛结果。
+func TestHTTP2Transport_InvalidateConnReplacesPool(t *testing.T) {
+	const bootstrapSalt = "dGVzdHNhbHR0ZXN0c2FsdA"
+
+	var requests atomic.Int32
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		buf := make([]byte, 4)
+		_, _ = io.ReadFull(r.Body, buf)
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+		// 显式冲刷：Go 的 h2 服务端要等 handler 返回才提交响应，而这里要一直
+		// 挂着不返回（请求体不结束，服务端就不会结束或重置这条流，客户端连接上
+		// 的 streams 集合因此始终保持非空）。
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	srv.EnableHTTP2 = true
+	srv.Config.Protocols = &http.Protocols{}
+	srv.Config.Protocols.SetHTTP2(true)
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	var dials atomic.Int32
+	tr, err := New(Config{
+		ServerURL:    srv.URL,
+		TLSConfig:    &utls.Config{InsecureSkipVerify: true, NextProtos: sharedconfig.NextProtos},
+		MaxSlotCount: 1,
+		Timeout:      time.Second,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			c, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			dials.Add(1)
+			return &laggingConn{Conn: c, release: release}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { unblock(); _ = tr.Close() })
+
+	open := func() transport.Stream {
+		t.Helper()
+		stream, err := tr.Open(context.Background(), transport.OpenRequest{
+			Endpoint:     sharedconfig.EndpointTCP,
+			Salt:         bootstrapSalt,
+			HighPriority: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stream
+	}
+
+	// 这条流的连接被判死。它自己也没有善终（连接死了），但测试刻意不去关闭它：
+	// 一旦它开始清理，清理路径会往这条死连接上写 RST_STREAM，那次写入失败就会把
+	// 死讯告知 h2 栈——窗口随之关闭。这里要固定住的正是"栈还不知道"的状态。
+	dead := open()
+	// 测试结束（判死窗口之外）再关闭它，避免留下悬挂的流。
+	t.Cleanup(func() { _ = dead.Close() })
+	if _, err := dead.Write([]byte("abcd")); err != nil {
+		t.Fatalf("write bootstrap: %v", err)
+	}
+	awaitResponse(t, dead, time.Second)
+
+	inv, ok := dead.(transport.ConnInvalidator)
+	if !ok {
+		t.Fatal("http2Stream must implement transport.ConnInvalidator")
+	}
+	inv.InvalidateConn()
+	// 照生产判死路径（client/proxy.settleDeadStream + CloseIdle）丢掉空闲连接：
+	// 但它对那条已死的连接无能为力——连接上还有这条流。
+	tr.CloseIdle()
+
+	before := dials.Load()
+	second := open()
+	defer second.Close() //nolint:errcheck
+
+	writeDone := make(chan error, 1)
+	go func() {
+		_, werr := second.Write([]byte("abcd"))
+		writeDone <- werr
+	}()
+	var writeErr error
+	select {
+	case writeErr = <-writeDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the stream after invalidation was still bound to the invalidated connection " +
+			"(its write never completed): the connection pool was not replaced")
+	}
+	if writeErr != nil {
+		t.Fatalf("write on the stream after invalidation: %v", writeErr)
+	}
+
+	if got := dials.Load(); got != before+1 {
+		t.Fatalf("dials after invalidation = %d, want %d: the next stream must dial a fresh connection",
+			got, before+1)
+	}
+	// 写入成功只说明记录离开了客户端：等它在服务端被真正处理，才能确认这条流
+	// 落在了一条新的、可用的连接上。
+	awaitResponse(t, second, time.Second)
+	deadline := time.Now().Add(2 * time.Second)
+	for requests.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("server handled %d requests, want 2 (the judged-dead one + the one after invalidation)", got)
 	}
 }

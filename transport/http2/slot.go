@@ -27,7 +27,14 @@ type transportSlot struct {
 	// idx 用于统计上报。
 	idx int
 
-	t      *http.Transport
+	// pool 是槽位当前的 net/http 连接池。MaxConnsPerHost=1 把它固定到一条
+	// 连接上，因此"池"与"那条连接"是同一件事；判死换连接就是换掉整个池
+	// （见 replacePool），读取一律走 transport()。
+	pool atomic.Pointer[http.Transport]
+	// newPool 按构造时的参数重建一个池，供 replacePool 使用。只有 newSlot 建出的
+	// 槽位有工厂；测试里裸构造的零值槽位没有池可换，判死路径因此跳过重建。
+	newPool func() *http.Transport
+
 	active atomic.Int32
 	heavy  atomic.Int32 // 活跃 heavy 流数量（>= HeavyStreamThreshold 字节）
 
@@ -105,11 +112,53 @@ func (s *transportSlot) resetConn(connLifetime time.Duration) {
 	s.expireAt.Store(time.Now().Add(rotationLifetime(connLifetime)).UnixNano())
 }
 
+// transport 返回槽位当前的连接池。判死会整体替换它（见 replacePool），
+// 因此任何使用池的地方都必须通过这个访问器读取，而不是缓存它。
+func (s *transportSlot) transport() *http.Transport {
+	return s.pool.Load()
+}
+
+// replacePool 换上一个全新的连接池，使下一条流必定重新拨号。
+//
+// 判死只关得掉底层 net.Conn：net/http 的连接池没有"关闭承载活跃流的连接"的
+// API，而池里那条 h2 ClientConn 在底层连接关闭之后是否还"可被 ReserveNewRequest
+// 选中"，只取决于 h2 客户端栈内部清理的调度时机——readLoop 何时被调度到、
+// 下一次写何时失败（写失败要等 cleanupWriteRequest 里的 cc.Close()）、
+// 或者 CloseIdleConnections 恰好看到它空闲。这些都不受本层控制，于是
+// "判死即换连接"会退化成一次异步收敛：收敛完成之前，下一条流仍可能被交给
+// 那条已经死掉的连接（判死重试白费一次尝试，见 TestHTTP2Transport_
+// InvalidateConnReplacesPool）。换池把这个保证变回结构性的：新池是空的，
+// 下一条流只能拨号。
+//
+// 旧池原地放弃即可：它最多只有那一条已被关闭的连接，其 h2 栈会自行收敛并
+// 退出；这里再调一次 CloseIdleConnections，使旧池在收敛过程中真正空闲下来
+// 的连接立即被回收，而不是留到空闲超时。没有池工厂的槽位（测试里的零值）跳过
+// 重建——它们本来就没有池。
+func (s *transportSlot) replacePool() {
+	if s.newPool == nil {
+		return
+	}
+	old := s.pool.Load()
+	s.pool.Store(s.newPool())
+	if old != nil {
+		old.CloseIdleConnections()
+	}
+}
+
 // invalidateConnFrom 按身份关闭槽位当前承载的底层连接：只有当 sc 仍是槽位的
 // "当前连接"时才关闭它（CAS），因此持有一条连接身份的调用方可以安全地
 // "只在它仍是当前连接时"关闭它，而不会误杀之后新建的连接。判死路径
 // （http2Stream.InvalidateConn）与挂起复核（http2Transport.reverifySlot）
 // 共用这条纪律，且它是唯一会关闭承载活跃流的连接的地方。
+//
+// 判死的同时换掉整个连接池（见 replacePool）：这是"判死即换连接"的结构性
+// 保证——池里的 h2 ClientConn 是否还认为这条连接可用取决于 stdlib 内部的
+// 清理时机，不能作为调度依据。
+//
+// 换池先于关闭连接：换池之后读池的开流只能落在新池上拨号，若反过来（先关闭、
+// 再换池），并发的开流仍可能在这两行之间从旧池拿到那条刚被关掉的连接——正是
+// 本函数要消灭的那个失败（只是窗口窄得多）。先换池把这个窗口彻底关死；随后
+// 关闭连接不会碰到新池拨出的连接，因为 sc 是赢家直接持有的旧连接身份。
 //
 // 返回本次调用是否执行了关闭（即是那个赢家）。连接级事件在这里统一记一条
 // Info：默认级别下它是"判死即换连接"唯一可见的锚点，逐流的失败原因与重试
@@ -119,6 +168,7 @@ func (s *transportSlot) invalidateConnFrom(sc *slotConn, reason string) bool {
 		return false
 	}
 	s.resetRotation()
+	s.replacePool()
 	_ = sc.c.Close()
 	log.Info("[TRANSPORT] connection invalidated",
 		"slot", s.idx,

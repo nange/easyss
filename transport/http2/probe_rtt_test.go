@@ -71,7 +71,7 @@ func TestProbeRTTCountsRequestToFirstBodyByte(t *testing.T) {
 		MaxConnsPerHost:   1,
 	}
 	t.Cleanup(tr.CloseIdleConnections)
-	slot := &transportSlot{t: tr}
+	slot := slotWithPool(tr)
 
 	// 用超大请求体占住这条连接：写入阻塞在流控窗口上，probe 请求因此要排队。
 	pr, pw := io.Pipe()

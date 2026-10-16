@@ -173,7 +173,19 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 	}
 
 	slot := &transportSlot{}
+	// 池由工厂构建，使判死路径能换上一个同样配置的空池（见
+	// transportSlot.replacePool）。
+	slot.newPool = func() *http.Transport {
+		return buildTransport(slot, utlsCfg, timeout, dialContext, connLifetime)
+	}
+	slot.pool.Store(slot.newPool())
+	return slot
+}
 
+// buildTransport 构建槽位的一代连接池：一个把 MaxConnsPerHost 固定为 1 的
+// net/http Transport，以及它那条连接的拨号路径（uTLS 指纹 + 服务端 h2 校验）。
+// 判死会用它重建一个新池，因此这里的一切都必须是"每次构建都一样"的纯配置。
+func buildTransport(slot *transportSlot, utlsCfg *utls.Config, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error), connLifetime time.Duration) *http.Transport {
 	protos := &http.Protocols{}
 	protos.SetHTTP2(true)
 	protos.SetUnencryptedHTTP2(true)
@@ -233,8 +245,7 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 			return &trackedConn{Conn: uconn, slot: slot, self: sc}, nil
 		},
 	}
-	slot.t = tr
-	return slot
+	return tr
 }
 
 // trackedConn 是 DialTLSContext 返回给 net/http 的连接：转发关闭是它的契约
@@ -370,7 +381,8 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	}
 
 	go func() {
-		resp, err := slot.t.RoundTrip(httpReq)
+		// 池在读到的这一刻取用：判死换池之后开出的流必须落在新池上。
+		resp, err := slot.transport().RoundTrip(httpReq)
 		if err != nil {
 			_ = pw.CloseWithError(err)
 		}
@@ -495,7 +507,7 @@ func (t *http2Transport) CloseIdle() {
 	t.sched.mu.RLock()
 	for _, pool := range []*slotPool{t.sched.priority, t.sched.bulk} {
 		for _, s := range pool.slots {
-			s.t.CloseIdleConnections()
+			s.transport().CloseIdleConnections()
 		}
 	}
 	t.sched.mu.RUnlock()
@@ -629,7 +641,7 @@ func (t *http2Transport) Close() error {
 	for _, pool := range []*slotPool{t.sched.priority, t.sched.bulk} {
 		live := int(pool.liveCount.Load())
 		for _, s := range pool.slots[:live] {
-			s.t.CloseIdleConnections()
+			s.transport().CloseIdleConnections()
 		}
 	}
 	t.sched.mu.RUnlock()
