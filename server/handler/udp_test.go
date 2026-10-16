@@ -180,7 +180,7 @@ func newUDPSessionFixtureWithWriter(t *testing.T, targetConn net.Conn, target st
 		dr:          dr,
 		s2c:         shaper.New(s2cWriter, shaper.Config{BatchWindowMS: 1}),
 		idleTimeout: idleTimeout,
-		dialTimeout: dialTimeout,
+		ctx:         context.Background(),
 		nextProxy:   np,
 		route:       route,
 		dial:        d,
@@ -490,8 +490,12 @@ type dnsDial struct {
 // 的事实，而不必真的去连下一级代理。
 type fakeDNSRouter struct {
 	proxyDomain string
-	available   []net.Conn
-	dials       []dnsDial
+	// proxyConns/directConns 是两条路由各自的预置连接，按先后顺序取出。
+	proxyConns  []net.Conn
+	directConns []net.Conn
+	// dials 记录每一次拨号（两条路由都记），使"这条查询走了哪条路、有没有重拨"
+	// 成为可直接断言的事实。
+	dials []dnsDial
 }
 
 func (f *fakeDNSRouter) routeForDomain(domain string) dnsRoute {
@@ -502,16 +506,16 @@ func (f *fakeDNSRouter) routeForDomain(domain string) dnsRoute {
 }
 
 func (f *fakeDNSRouter) dialRoute(_ context.Context, _, target, _ string, route dnsRoute) (net.Conn, string, error) {
-	if len(f.available) == 0 {
-		return nil, "", errors.New("fake dns router: no more connections")
-	}
-	conn := f.available[0]
-	f.available = f.available[1:]
-	f.dials = append(f.dials, dnsDial{route: route, target: target, conn: conn})
-	remote := "127.0.0.1:53"
+	pool, remote := &f.directConns, "direct"
 	if route.viaNextProxy() {
-		remote = "socks5://proxy.example.com:1080"
+		pool, remote = &f.proxyConns, "socks5://proxy.example.com:1080"
 	}
+	if len(*pool) == 0 {
+		return nil, "", fmt.Errorf("fake dns router: no more %s connections", remote)
+	}
+	conn := (*pool)[0]
+	*pool = (*pool)[1:]
+	f.dials = append(f.dials, dnsDial{route: route, target: target, conn: conn})
 	return conn, remote, nil
 }
 
@@ -632,9 +636,9 @@ func packDNSQuery(t *testing.T, domain string) []byte {
 // 不在建立时拨号，而是读出 QNAME 之后按域名决定出站路由——命中下一级代理规则
 // 的域名走代理，未命中的走直连，路由变化会重绑出站连接，未变化则复用。
 func TestDNSSessionRoutesQueryByDomain(t *testing.T) {
-	local0, local1, local2 := newDNSTargetConn(), newDNSTargetConn(), newDNSTargetConn()
+	local0, local1 := newDNSTargetConn(), newDNSTargetConn()
 
-	router := &fakeDNSRouter{proxyDomain: "google", available: []net.Conn{local0, local1, local2}}
+	router := &fakeDNSRouter{proxyDomain: "google", proxyConns: []net.Conn{local0}, directConns: []net.Conn{local1}}
 	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
 	s.route = router
 
@@ -673,8 +677,8 @@ func TestDNSSessionRoutesQueryByDomain(t *testing.T) {
 	if s.upstream() != local1 {
 		t.Fatal("the session must rebind to the direct connection")
 	}
-	if !s.routeSet || s.routeSel != dnsRouteDirect {
-		t.Fatalf("routeSel = %v (set=%v), want dnsRouteDirect", s.routeSel, s.routeSet)
+	if s.routeSel != dnsRouteDirect || s.connRoute != dnsRouteDirect {
+		t.Fatalf("routeSel = %v, connRoute = %v, want both dnsRouteDirect", s.routeSel, s.connRoute)
 	}
 
 	// 第三条查询：与当前路由一致，不产生多余的拨号。
@@ -689,9 +693,9 @@ func TestDNSSessionRoutesQueryByDomain(t *testing.T) {
 	}
 	// 每条查询确实发到了当次路由的连接上：第一条走代理连接，后两条都走
 	// 重绑后的直连连接（第三条复用同一条，因此不产生第三次拨号）。
-	if local0.writeCount() != 1 || local1.writeCount() != 2 || local2.writeCount() != 0 {
-		t.Fatalf("writes per connection = %d/%d/%d, want 1/2/0",
-			local0.writeCount(), local1.writeCount(), local2.writeCount())
+	if local0.writeCount() != 1 || local1.writeCount() != 2 {
+		t.Fatalf("writes per connection = %d/%d, want 1/2",
+			local0.writeCount(), local1.writeCount())
 	}
 	// 重绑必须拆掉旧连接，否则它会一直占着一条 SOCKS5 关联直到会话结束。
 	if !local0.isClosed() {
@@ -707,7 +711,8 @@ func TestDNSSessionRoutesQueryByDomain(t *testing.T) {
 func TestDNSSessionRouteUnchangedKeepsUpstream(t *testing.T) {
 	local0, local1 := newDNSTargetConn(), newDNSTargetConn()
 
-	router := &fakeDNSRouter{proxyDomain: "google", available: []net.Conn{local0, local1}}
+	// 第二个连接只是"若发生重拨就会被取走"的探针：本用例断言它没被用到。
+	router := &fakeDNSRouter{proxyDomain: "google", proxyConns: []net.Conn{local0, local1}}
 	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
 	s.route = router
 
@@ -729,12 +734,9 @@ func TestDNSSessionRouteUnchangedKeepsUpstream(t *testing.T) {
 // 并且不因此开启 DNS 应答学习。
 func TestDNSSessionIgnoresNonDNSDatagram(t *testing.T) {
 	fallback := newDNSTargetConn()
-	router := &fakeDNSRouter{proxyDomain: "google"}
+	router := &fakeDNSRouter{proxyDomain: "google", directConns: []net.Conn{fallback}}
 	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
 	s.route = router
-	s.dial = dialer{direct: func(context.Context, string, string) (net.Conn, error) {
-		return fallback, nil
-	}}
 
 	alive, err := s.observeClientFrame(protocol.NewFrameDATAGRAM([]byte("not a dns message")))
 	if err != nil {
@@ -743,11 +745,15 @@ func TestDNSSessionIgnoresNonDNSDatagram(t *testing.T) {
 	if !alive {
 		t.Fatal("a datagram frame must keep the session alive")
 	}
-	if len(router.dials) != 0 {
-		t.Fatalf("dials = %d, want 0 (a non-DNS payload must not pick a route)", len(router.dials))
+	// 只有兜底那一次直连拨号：没有查询就没有路由判定，因此绝不会走下一级代理。
+	if len(router.dials) != 1 || router.dials[0].route != dnsRouteDirect {
+		t.Fatalf("dials = %+v, want exactly one direct fallback dial", router.dials)
 	}
-	if s.routeSet {
-		t.Fatal("a non-DNS payload must not decide the route")
+	if s.upstream() != fallback {
+		t.Fatal("a non-DNS payload must go out over the direct fallback connection")
+	}
+	if s.connRoute != dnsRouteDirect {
+		t.Fatalf("connRoute = %v, want the direct fallback route", s.connRoute)
 	}
 	if s.dns.intercept {
 		t.Fatal("a non-DNS payload must not arm answer interception")
@@ -1205,7 +1211,7 @@ func TestDNSSessionServesAnswerAfterRebind(t *testing.T) {
 	directConn.send(answer)
 	directConn.releaseAfter(proxyConn.closed)
 
-	router := &fakeDNSRouter{proxyDomain: "google", available: []net.Conn{proxyConn, directConn}}
+	router := &fakeDNSRouter{proxyDomain: "google", proxyConns: []net.Conn{proxyConn}, directConns: []net.Conn{directConn}}
 	frames := make(chan protocol.Frame, 4)
 	frames <- protocol.NewFrameDATAGRAM(packDNSQuery(t, "mtalk.google.com"))
 
@@ -1352,5 +1358,107 @@ func TestUDPHandlerRoutesDNSQueryThroughNextProxy(t *testing.T) {
 		"the query never reached the upstream proxy")
 	if targets := upstream.datagramTargets(); targets[0] != "8.8.8.8:53" {
 		t.Fatalf("datagrams seen by the upstream proxy = %v, want one to 8.8.8.8:53", targets)
+	}
+}
+
+// TestDNSSessionGarbageThenProxyQuery 是 review 指出的边界回归：首帧是 53 端口上的
+// 非 DNS 载荷时会按直连兜底拨一条连接，此后第一条真实查询必须能发现"当前连接的
+// 路由与它要求的不一致"并重绑到下一级代理。
+//
+// 判据是"查询要求的路由 vs connRoute"，而不是"与上一条查询的路由比较"：后者在
+// 兜底时无人写入（兜底没有查询），会把命中代理的查询写进直连兜底连接——正是本
+// PR 要修的隐私问题在这条路径上原样复现，且日志还会显示 via_next_proxy=true。
+func TestDNSSessionGarbageThenProxyQuery(t *testing.T) {
+	fallback, proxyConn := newDNSTargetConn(), newDNSTargetConn()
+	router := &fakeDNSRouter{proxyDomain: "google", proxyConns: []net.Conn{proxyConn}, directConns: []net.Conn{fallback}}
+	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
+	s.route = router
+
+	// 第 1 帧：非 DNS 载荷 → 直连兜底拨号（设计如此）。
+	if _, err := s.observeClientFrame(protocol.NewFrameDATAGRAM([]byte("not a dns message"))); err != nil {
+		t.Fatalf("observeClientFrame(garbage): %v", err)
+	}
+	if s.upstream() != fallback || s.connRoute != dnsRouteDirect {
+		t.Fatalf("the garbage frame must go out over the direct fallback (conn=%v route=%v)",
+			s.upstream() == fallback, s.connRoute)
+	}
+
+	// 第 2 帧：命中代理规则的查询 → 必须重绑到下一级代理，而不是复用兜底连接。
+	if _, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "mtalk.google.com"))); err != nil {
+		t.Fatalf("observeClientFrame(query): %v", err)
+	}
+	if len(router.dials) != 2 || router.dials[1].route != dnsRouteNextProxy {
+		t.Fatalf("dials = %+v, want a direct fallback then a next-proxy dial", router.dials)
+	}
+	if s.upstream() != proxyConn {
+		t.Fatal("the proxied query must be sent over the next-proxy connection")
+	}
+	if s.connRoute != dnsRouteNextProxy {
+		t.Fatalf("connRoute = %v, want dnsRouteNextProxy", s.connRoute)
+	}
+	// 兜底连接必须被拆掉：否则它会一直占着一条直连 socket，且查询已经不再走它。
+	if !fallback.isClosed() {
+		t.Fatal("rebinding must close the direct fallback connection")
+	}
+	if proxyConn.writeCount() != 1 {
+		t.Fatalf("proxy writes = %d, want 1 (the query must go through the next proxy)", proxyConn.writeCount())
+	}
+}
+
+// TestDNSSessionDialHonorsSessionContext 固定拨号使用 Handle 的请求上下文：客户端
+// 断开后，一次进行中的 DNS 拨号会被取消，而不是白等到拨号超时。
+func TestDNSSessionDialHonorsSessionContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
+	s.ctx = ctx
+	s.route = nil
+	s.dial = dialer{direct: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return nil, ctx.Err() // 真实拨号器在 ctx 取消时会返回取消错误
+	}}
+
+	cancel()
+	_, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "mtalk.google.com")))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("observeClientFrame error = %v, want context.Canceled", err)
+	}
+}
+
+// errReadConn 的 Read 返回一个**真实的非超时错误**（不是 net.ErrClosed 或超时），
+// 因此会走到 targetReadError 末尾那条带远端地址的错误日志——review 指出的
+// s.remote 无锁读就在那里。此前所有 fake conn 的错误都在函数前段提前返回，
+// 该路径没有任何用例覆盖。
+type errReadConn struct {
+	closed chan struct{}
+	once   sync.Once
+	boom   error
+}
+
+func newErrReadConn(boom error) *errReadConn {
+	return &errReadConn{closed: make(chan struct{}), boom: boom}
+}
+
+func (c *errReadConn) Read([]byte) (int, error)         { return 0, c.boom }
+func (c *errReadConn) Write(p []byte) (int, error)      { return len(p), nil }
+func (c *errReadConn) Close() error                     { c.once.Do(func() { close(c.closed) }); return nil }
+func (c *errReadConn) LocalAddr() net.Addr              { return &net.UDPAddr{} }
+func (c *errReadConn) RemoteAddr() net.Addr             { return &net.UDPAddr{} }
+func (c *errReadConn) SetDeadline(time.Time) error      { return nil }
+func (c *errReadConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *errReadConn) SetWriteDeadline(time.Time) error { return nil }
+
+// TestDNSSessionRemoteReadPathOnRealError 覆盖 targetReadError 末尾那条真实故障
+// 日志（带远端地址）：fake conn 的错误若是 net.ErrClosed 或超时会在函数前段提前
+// 返回，走不到那里。这条用例保证该路径可用且远端地址通过锁读取（-race 下验证）。
+func TestDNSSessionRemoteReadPathOnRealError(t *testing.T) {
+	boom := errors.New("read failed")
+	broken := newErrReadConn(boom)
+	s, _ := newUDPSessionFixture(t, broken, "8.8.8.8:53", time.Second, nil, newBlockingConn())
+
+	result := s.run()
+	if !errors.Is(result.Err, boom) {
+		t.Fatalf("run error = %v, want the target read failure", result.Err)
+	}
+	if !result.needsRST() {
+		t.Fatal("a real target failure must ask for an RST")
 	}
 }

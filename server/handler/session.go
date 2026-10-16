@@ -396,7 +396,13 @@ func (d *dialer) dialVia(ctx context.Context, network, target, name string, viaN
 		}
 		// 地址族刻意不下推到这一层：这里连的是上游 SOCKS5 代理而不是目标，
 		// 把客户端的地址族套到代理地址上只会让上游不可达。
-		log.Info("[HANDLE] dialing via next proxy", "target", target, "name", name, "proxy", d.nextProxy.Host())
+		// name 只在按域名路由时才有值（DNS 查询）；按目标路由时省略该属性，
+		// 而不是打一个空的 name=""。
+		attrs := []any{"target", target, "proxy", d.nextProxy.Host()}
+		if name != "" {
+			attrs = append(attrs, "name", name)
+		}
+		log.Info("[HANDLE] dialing via next proxy", attrs...)
 		conn, err := d.nextProxy.DialContext(ctx, network, target)
 		if err != nil {
 			return nil, "", err

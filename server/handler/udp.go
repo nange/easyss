@@ -29,7 +29,6 @@ const dnsPort = "53"
 
 type udpHandler struct {
 	idleTimeout time.Duration
-	dialTimeout time.Duration
 	// nextProxy 在这里单独保存（而不仅存在于 dial 内部），因为只有 UDP
 	// 会在数据报流上用它进行 DNS 应答学习，与当前目标是否经由它路由无关。
 	nextProxy *nextproxy.NextProxy
@@ -49,9 +48,8 @@ func newUDPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) 
 	if timeout <= 0 {
 		timeout = time.Duration(config.DefaultTimeout) * time.Second
 	}
-	dialTimeout := config.DialTimeout(timeout)
-	directDialer := outboundDialer(dialTimeout, 0)
-	h := &udpHandler{idleTimeout: idleTimeout, dialTimeout: dialTimeout, nextProxy: np}
+	directDialer := outboundDialer(config.DialTimeout(timeout), 0)
+	h := &udpHandler{idleTimeout: idleTimeout, nextProxy: np}
 	h.dial = dialer{
 		nextProxy: np,
 		shouldProxy: func(target string) bool {
@@ -118,8 +116,15 @@ func (d udpRouteDialer) routeForDomain(domain string) dnsRoute {
 	return dnsRouteDirect
 }
 
+// dialRoute 按路由拨号：只有代理路由才走 dialVia 的代理分支，直连路由一律走
+// 直连分支。把直连也交给代理分支会让目标被当作"仅代理侧可解析的域名"处理——
+// 那会先解析再把它交给上游代理，对命中直连的域名既多一跳，也会在域名解析到
+// LAN 地址时得到一个毫无意义的 SSRF 拒绝（目标本来就是服务端要直连解析器）。
 func (d udpRouteDialer) dialRoute(ctx context.Context, network, target, domain string, route dnsRoute) (net.Conn, string, error) {
-	return d.dialer.dialVia(ctx, network, target, domain, route.viaNextProxy())
+	if !route.viaNextProxy() {
+		return d.dialer.dialVia(ctx, network, target, "", false)
+	}
+	return d.dialer.dialVia(ctx, network, target, domain, true)
 }
 
 // dnsLearnHint 是由主 goroutine 独占的学习状态：DNS 会话里每条查询都能直接
@@ -168,8 +173,8 @@ func (h *udpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 		dr:          dr,
 		s2c:         s2c,
 		cancelRead:  cancelRead,
+		ctx:         ctx,
 		idleTimeout: h.idleTimeout,
-		dialTimeout: h.dialTimeout,
 		nextProxy:   h.nextProxy,
 		route:       h.route,
 		dial:        h.dial,
@@ -204,19 +209,26 @@ type udpSession struct {
 	// dnsSession 表示目标是 DNS 端口：出站连接由查询域名决定，可以中途重绑。
 	dnsSession bool
 
-	dr          *crypto.DecryptedReader
-	s2c         shaper.Shaper
-	cancelRead  func()
+	dr         *crypto.DecryptedReader
+	s2c        shaper.Shaper
+	cancelRead func()
+	// ctx 是 Handle 的请求上下文。DNS 会话的首条查询与每次重绑都要拨号，而
+	// 拨号只发生在主循环上，因此这里持有它是安全的；它让"客户端已经断开"能
+	// 中止一次进行中的拨号，而不是白等到拨号超时。
+	ctx         context.Context
 	idleTimeout time.Duration
-	dialTimeout time.Duration
 	nextProxy   *nextproxy.NextProxy
 	route       dnsRouter
 	dial        dialer
-	// routeSel 是当前查询选定的出站路由，只由 dnsSession 的会话写入：其他
+	// routeSel 是最近一条查询要求的路由，只由 dnsSession 的会话写入：其他
 	// 会话的路由由 dialTarget 按目标一次性决定，不经过这里。
 	routeSel dnsRoute
-	// routeSet 表示 routeSel 已经由一条 DNS 查询确定（DNS 会话的第一条查询）。
-	routeSet bool
+	// connRoute 是**当前出站连接**实际使用的路由，与 routeSel 相互独立：
+	// 首帧不是合法查询时（53 端口上的畸形流量）会话会按直连兜底先拨一条，
+	// 此后第一条真实查询就必须与它比较才能发现"要换路由"——只比较连续两条
+	// 查询的 routeSel 会漏掉这一段（routeSel 在兜底时无人写入）。
+	// 仅主 goroutine 读写（拨号与查询判定都在主循环上）。
+	connRoute dnsRoute
 	// dialDomain 是最近一次触发路由判定的域名，只用于拨号日志（"是哪条查询
 	// 让这条连接走下一级代理的"）。
 	dialDomain string
@@ -253,15 +265,18 @@ type udpSession struct {
 
 // udpSessionConfig 是 udpSession 的构造参数。
 type udpSessionConfig struct {
-	conn        net.Conn
-	remote      string
-	target      string
-	dnsSession  bool
-	dr          *crypto.DecryptedReader
-	s2c         shaper.Shaper
-	cancelRead  func()
+	conn       net.Conn
+	remote     string
+	target     string
+	dnsSession bool
+	dr         *crypto.DecryptedReader
+	s2c        shaper.Shaper
+	cancelRead func()
+	// ctx 是 Handle 的请求上下文。DNS 会话的首条查询与每次重绑都要拨号，而
+	// 拨号只发生在主循环上，因此这里持有它是安全的；它让"客户端已经断开"能
+	// 中止一次进行中的拨号，而不是白等到拨号超时。
+	ctx         context.Context
 	idleTimeout time.Duration
-	dialTimeout time.Duration
 	nextProxy   *nextproxy.NextProxy
 	route       dnsRouter
 	dial        dialer
@@ -279,8 +294,8 @@ func newUDPSession(cfg udpSessionConfig) *udpSession {
 		dr:          cfg.dr,
 		s2c:         cfg.s2c,
 		cancelRead:  cfg.cancelRead,
+		ctx:         cfg.ctx,
 		idleTimeout: cfg.idleTimeout,
-		dialTimeout: cfg.dialTimeout,
 		nextProxy:   cfg.nextProxy,
 		route:       cfg.route,
 		dial:        cfg.dial,
@@ -314,6 +329,14 @@ func (s *udpSession) setUpstream(conn net.Conn, remote string, watch bool) strin
 		s.startUpstreamReader()
 	}
 	return addr
+}
+
+// remoteAddr 在锁下取当前连接的远端地址，供读取 goroutine 记日志使用
+// （setUpstream 会在重绑时改写它）。
+func (s *udpSession) remoteAddr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.remote
 }
 
 // closeUpstream 关闭并摘除当前出站连接；返回被摘除的连接（没有则 nil）。
@@ -444,10 +467,11 @@ func (s *udpSession) observeClientFrame(f protocol.Frame) (alive bool, err error
 		s.dns.checked = true
 		if domain, ok := dnsQueryDomain(f.Payload); ok {
 			s.dns.intercept = true
-			// 非 DNS 会话的路由在建立连接时就已按目标定下；routeSel 为未设置
-			// 的零值（直连），与 dialTarget 的判定一致。
+			// 非 DNS 会话的路由在建立连接时就按目标定下了：这里用与 dialTarget
+			// 同一个谓词重新判定，而不是读只对 DNS 会话有意义的 routeSel
+			// （它的零值会让这条日志在经代理的目标上失真）。
 			log.Info("[UDP_DNS]", "domain", domain, "target", s.target,
-				"via_next_proxy", s.routeSel.viaNextProxy())
+				"via_next_proxy", s.connRouteForTarget().viaNextProxy())
 		}
 	}
 
@@ -469,7 +493,17 @@ func (s *udpSession) upstreamOrDial() (net.Conn, error) {
 	if conn != nil {
 		return conn, nil
 	}
-	if err := s.dialUpstream(context.Background(), s.dialDomain); err != nil {
+	// 有路由判定能力的 DNS 会话按当前查询选定的路由（首帧不是合法查询时
+	// routeSel 仍是零值，即直连兜底——随后真正的查询会因与 connRoute 不一致
+	// 而重绑）；其他会话（含未配置下一级代理的 DNS 会话）按目标一次性判定，
+	// 与 dialTarget 同源。
+	route := dnsRouteDirect
+	if s.dnsSession && s.route != nil {
+		route = s.routeSel
+	} else if !s.dnsSession {
+		route = s.connRouteForTarget()
+	}
+	if err := s.dialUpstream(s.ctx, s.dialDomain, route); err != nil {
 		return nil, err
 	}
 	conn = s.upstream()
@@ -492,11 +526,13 @@ func (s *udpSession) noteDNSQuery(payload []byte) {
 	if s.route != nil {
 		route = s.route.routeForDomain(domain)
 	}
-	changed := s.routeSet && s.routeSel != route
 	s.routeSel = route
-	s.routeSet = true
 	s.dialDomain = domain
 
+	// 重绑的判据是"当前连接的路由与这条查询要求的不一致"，而不是"与上一条查询
+	// 不一致"：后者会漏掉"首帧畸形 → 直连兜底 → 首条真实查询"这条序列（兜底
+	// 时没有查询、也就没有 routeSel 可供比较），让命中代理的查询被写进直连连接。
+	changed := s.upstream() != nil && s.connRoute != route
 	logDNSRoute(domain, s.target, route, changed)
 	if changed {
 		s.rebindRoute(domain)
@@ -505,14 +541,18 @@ func (s *udpSession) noteDNSQuery(payload []byte) {
 
 // logDNSRoute 输出一条 DNS 查询的路由判定。via_next_proxy 是这条查询**实际**
 // 使用的出站路径，不再是"承载它的会话碰巧怎么拨的"：只有域名命中下一级代理
-// 的规则、且 next_proxy.enable_udp 为真时它才为 true。changed 只在会话中途
-// 换过路由时为真，避免同一会话里的重复查询刷屏。
+// 的规则、且 next_proxy.enable_udp 为真时它才为 true。
+//
+// 日志级别按"是否值得留痕"分：会话首条查询（还没有连接）与改变路由的查询记
+// Info——它们决定了出站路径；路由未变化的后续查询记 Debug。客户端把同一 socket
+// 的所有查询复用在一条流上，全部记 Info 会让日志量随查询数线性增长。
 func logDNSRoute(domain, target string, route dnsRoute, changed bool) {
 	attrs := []any{"domain", domain, "target", target, "via_next_proxy", route.viaNextProxy()}
 	if changed {
-		attrs = append(attrs, "route_changed", true)
+		log.Info("[UDP_DNS]", append(attrs, "route_changed", true)...)
+		return
 	}
-	log.Info("[UDP_DNS]", attrs...)
+	log.Debug("[UDP_DNS]", attrs...)
 }
 
 // rebindRoute 按新的路由重建出站连接：先摘除并关闭旧连接（读取它的 goroutine
@@ -520,47 +560,50 @@ func logDNSRoute(domain, target string, route dnsRoute, changed bool) {
 // 尚未回包的查询由客户端自己重试——DNS 客户端对超时查询的重试是标准行为。
 func (s *udpSession) rebindRoute(domain string) {
 	s.closeUpstream()
-	if err := s.dialUpstream(context.Background(), domain); err != nil {
+	if err := s.dialUpstream(s.ctx, domain, s.routeSel); err != nil {
 		log.Warn("[UDP_DNS] rebind upstream failed", "target", s.target,
 			"via_next_proxy", s.routeSel.viaNextProxy(), "err", err)
 	}
 }
 
-// dialUpstream 拨号出站连接，并按当前路由判定是否经由下一级代理。这是会话
-// 里唯一建立出站连接的地方：建立（DNS 会话的第一条查询、非 DNS 会话的
-// Handle）与重绑（rebindRoute）共用它，因此"判定—拨号—记录远端"只有一套。
-func (s *udpSession) dialUpstream(ctx context.Context, domain string) error {
+// dialUpstream 按给定路由拨号出站连接。这是会话里唯一建立出站连接的地方：
+// 建立（DNS 会话的首条查询、非 DNS 会话的 Handle）与重绑（rebindRoute）共用它，
+// 因此"判定—拨号—记录路由与远端"只有一套。
+//
+// 路由是参数而不是从会话状态里推出来的：DNS 会话的兜底拨号（首帧不是查询）与
+// 查询驱动的拨号走的是同一条路径，区别只在路由由谁决定。
+func (s *udpSession) dialUpstream(ctx context.Context, domain string, route dnsRoute) error {
 	var (
-		conn         net.Conn
-		remote       string
-		viaNextProxy bool
-		err          error
+		conn   net.Conn
+		remote string
+		err    error
 	)
-	switch {
-	case s.dnsSession && s.route != nil:
-		if !s.routeSet {
-			// 还没有解析出任何 DNS 查询（首帧不是合法查询，例如被填充帧隔开，
-			// 或客户端发来了畸形报文）：按直连兜底，让这些数据报仍然能出去；
-			// 真正的查询一到达就会按域名判定并按需重绑（noteDNSQuery）。
-			conn, remote, err = s.dial.dialVia(ctx, "udp", s.target, "", false)
-			break
-		}
-		viaNextProxy = s.routeSel.viaNextProxy()
-		conn, remote, err = s.route.dialRoute(ctx, "udp", s.target, domain, s.routeSel)
-	case s.dnsSession:
-		// 未配置下一级代理：DNS 查询一律直连（route 为 nil）。
-		conn, remote, err = s.dial.dialVia(ctx, "udp", s.target, "", false)
-	default:
-		viaNextProxy = s.nextProxy != nil && s.nextProxy.EnableUDP() && s.nextProxy.ShouldProxy(s.target)
-		conn, remote, err = s.dial.dialVia(ctx, "udp", s.target, "", viaNextProxy)
+	// 有 dnsRouter 时全部交给它：判定与拨号必须同源，两条路由都由它分派
+	// （udpRouteDialer.dialRoute 内部对直连路由走共享 dialer 的直连分支）。
+	// 没有它时（未配置下一级代理、或其他会话）由会话自己按路由拨。
+	if s.route != nil {
+		conn, remote, err = s.route.dialRoute(ctx, "udp", s.target, domain, route)
+	} else {
+		conn, remote, err = s.dial.dialVia(ctx, "udp", s.target, "", route.viaNextProxy())
 	}
 	if err != nil {
 		return err
 	}
+	s.connRoute = route
 	s.setUpstream(conn, remote, s.readerRunning)
 	log.Info("[UDP] upstream connected", "target", s.target, "remote", remote,
-		"via_next_proxy", viaNextProxy)
+		"via_next_proxy", route.viaNextProxy())
 	return nil
+}
+
+// connRouteForTarget 返回按**目标**判定的路由，与 dialTarget 用的是同一个
+// shouldProxy 谓词。非 DNS 会话的唯一路由来源；它保证"日志里说的路由"与
+// "连接实际怎么拨的"不会各说各话。
+func (s *udpSession) connRouteForTarget() dnsRoute {
+	if s.nextProxy != nil && s.nextProxy.EnableUDP() && s.nextProxy.ShouldProxy(s.target) {
+		return dnsRouteNextProxy
+	}
+	return dnsRouteDirect
 }
 
 // dnsQueryDomain 解出一次 DNS 查询的 QNAME；不是查询（解析失败、是应答、
@@ -649,7 +692,7 @@ func (s *udpSession) targetReadError(err error) error {
 		return io.EOF
 	default:
 	}
-	log.Error("[UDP] read from target failed", "target", s.remote, "err", err)
+	log.Error("[UDP] read from target failed", "target", s.remoteAddr(), "err", err)
 	return err
 }
 
