@@ -151,9 +151,14 @@ func (s *transportSlot) replacePool() {
 // （http2Stream.InvalidateConn）与挂起复核（http2Transport.reverifySlot）
 // 共用这条纪律，且它是唯一会关闭承载活跃流的连接的地方。
 //
-// 关掉连接之后立刻换掉整个连接池（见 replacePool）：这是"判死即换连接"
-// 的结构性保证——池里的 h2 ClientConn 是否还认为这条连接可用取决于 stdlib
-// 内部的清理时机，不能作为调度依据。
+// 判死的同时换掉整个连接池（见 replacePool）：这是"判死即换连接"的结构性
+// 保证——池里的 h2 ClientConn 是否还认为这条连接可用取决于 stdlib 内部的
+// 清理时机，不能作为调度依据。
+//
+// 换池先于关闭连接：换池之后读池的开流只能落在新池上拨号，若反过来（先关闭、
+// 再换池），并发的开流仍可能在这两行之间从旧池拿到那条刚被关掉的连接——正是
+// 本函数要消灭的那个失败（只是窗口窄得多）。先换池把这个窗口彻底关死；随后
+// 关闭连接不会碰到新池拨出的连接，因为 sc 是赢家直接持有的旧连接身份。
 //
 // 返回本次调用是否执行了关闭（即是那个赢家）。连接级事件在这里统一记一条
 // Info：默认级别下它是"判死即换连接"唯一可见的锚点，逐流的失败原因与重试
@@ -163,8 +168,8 @@ func (s *transportSlot) invalidateConnFrom(sc *slotConn, reason string) bool {
 		return false
 	}
 	s.resetRotation()
-	_ = sc.c.Close()
 	s.replacePool()
+	_ = sc.c.Close()
 	log.Info("[TRANSPORT] connection invalidated",
 		"slot", s.idx,
 		"active_streams", s.active.Load(),
