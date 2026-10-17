@@ -208,7 +208,7 @@ func livenessStream(slot *transportSlot, liveness func(context.Context, *slotTra
 // 流并发判定死亡时，底层 Close 恰好发生一次，其余调用是无操作。
 func TestHTTP2Stream_InvalidateConnClosesExactlyOnce(t *testing.T) {
 	conn := &countingConn{}
-	slot, sc := newCountingSlot(conn)
+	slot, _ := newCountingSlot(conn)
 	gen := slot.generation()
 
 	const streams = 8
@@ -216,7 +216,6 @@ func TestHTTP2Stream_InvalidateConnClosesExactlyOnce(t *testing.T) {
 	for range streams {
 		s := &http2Stream{slot: slot}
 		s.gen.Store(gen)
-		s.connInUse.Store(sc)
 		streamsOnConn = append(streamsOnConn, s)
 	}
 
@@ -234,127 +233,120 @@ func TestHTTP2Stream_InvalidateConnClosesExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestHTTP2Stream_InvalidateConnDoesNotKillNewConnection 覆盖 §4.8(b)：流记住的是
-// 自己提交时那一代的连接，若槽位已经换到新一代并拨出了新连接，旧一代的身份既
-// 杀不掉新连接，也不会动新一代的池。
+// TestHTTP2Stream_InvalidateConnDoesNotKillNewConnection 是"把新连接记成自己的
+// 身份、之后误杀健康连接"这个既有窗口的回归测试（#229 之后仍然存在的问题）：
+// 流只持有自己提交时的那一代，槽位换到新一代并拨出新连接之后，旧一代的判死
+// 既杀不掉新连接，也不会动新一代的池。
 func TestHTTP2Stream_InvalidateConnDoesNotKillNewConnection(t *testing.T) {
 	stale := &countingConn{}
-	newConn := &countingConn{}
+	healthy := &countingConn{}
 
 	slot := slotWithGenFactory()
 	oldGen := slot.generation()
-	oldSC := attachConn(slot, stale)
-	// 另一条流已经把这条连接判死：旧连接被关掉，槽位换到新一代。
-	if !slot.invalidateConnFrom(oldGen, oldSC, "other stream") {
+	attachConn(slot, stale)
+	// 另一条流（或 net/http 自己）已经让这条连接作废：旧连接被关掉，槽位换代。
+	if !slot.invalidateConn(oldGen, "other stream") {
 		t.Fatal("the first invalidation must win")
 	}
 	newGen := slot.generation()
 	if newGen == oldGen {
 		t.Fatal("the pool must have been replaced")
 	}
-	newSC := attachConn(slot, newConn)
+	healthySC := attachConn(slot, healthy)
 
-	// 本流记住的是它当年用过的那一代（旧一代）的连接。
+	// 一条仍绑在旧一代上的流，之后才被判死。
 	s := &http2Stream{slot: slot}
 	s.gen.Store(oldGen)
-	s.connInUse.Store(oldSC)
 	s.InvalidateConn()
 
 	if got := stale.closes.Load(); got != 1 {
 		t.Fatalf("stale connection closed %d times, want 1 (the first invalidation only)", got)
 	}
-	if got := newConn.closes.Load(); got != 0 {
-		t.Fatalf("new connection was closed %d times, want 0", got)
-	}
-	if slot.generation() != newGen {
-		t.Fatal("a retired generation's identity must not replace the current pool")
-	}
-	if newGen.conn.Load() != newSC {
-		t.Fatal("the newer generation must keep its own connection")
-	}
-}
-
-// TestHTTP2Stream_SnapshotStaysInItsGeneration 是本次修复的回归测试：
-// snapshotConnInUse 必须在**本流提交时的那一代**里读连接，而不是读槽位的
-// "当前连接"。否则在"某流已判死 → 槽位换到新一代 → 另一条流拨出新连接"的
-// 窗口里，一条稍后才完成第一次 body 写的旧流会把新连接记成自己的身份，之后
-// 一次 InvalidateConn 就误杀健康连接。
-//
-// 窗口的两半都被固定住：旧流所在的这一代已经被判死并换掉（槽位指向新一代），
-// 而新一代已经拨出了自己的连接。此时旧流才完成第一次 body 写。
-func TestHTTP2Stream_SnapshotStaysInItsGeneration(t *testing.T) {
-	dead := &countingConn{}
-	healthy := &countingConn{}
-
-	slot := slotWithGenFactory()
-	deadGen := slot.generation()
-	deadSC := attachConn(slot, dead)
-	// 某条流判死这条连接：旧连接被关掉，槽位换到新一代。
-	if !slot.invalidateConnFrom(deadGen, deadSC, "stream dead") {
-		t.Fatal("the invalidation must win")
-	}
-	newGen := slot.generation()
-	if newGen == deadGen {
-		t.Fatal("the pool must have been replaced")
-	}
-	healthySC := attachConn(slot, healthy)
-
-	// 一条仍绑在旧一代上的流：它稍后才完成第一次 body 写，然后才被判死。
-	s := &http2Stream{slot: slot}
-	s.gen.Store(deadGen)
-	s.snapshotConnInUse()
-
-	if got := s.connInUse.Load(); got != nil {
-		t.Fatal("the stream snapshotted a connection outside its own generation as its identity")
-	}
-
-	// 即使这条旧流手里真的握着新一代连接的身份（修复前正是这样记下来的），
-	// 身份比较也只在自己那一代里进行，新一代的连接不会被误杀。
-	s.connInUse.Store(healthySC)
-	s.InvalidateConn()
-
-	if got := dead.closes.Load(); got != 1 {
-		t.Fatalf("the judged-dead connection closed %d times, want 1 (the original invalidation only)", got)
-	}
 	if got := healthy.closes.Load(); got != 0 {
 		t.Fatalf("the healthy connection on the new generation was closed %d times, want 0", got)
 	}
 	if slot.generation() != newGen {
-		t.Fatal("the new generation must stay installed")
+		t.Fatal("a retired generation's identity must not replace the current pool")
 	}
 	if newGen.conn.Load() != healthySC {
-		t.Fatal("the new generation must keep its healthy connection")
+		t.Fatal("the newer generation must keep its own connection")
 	}
 }
 
-// TestHTTP2Stream_InvalidateConnWithoutSnapshotIsNoOp 覆盖 §4.8 的残余窗口：
-// 流还没完成第一次 body 写（没有连接身份快照）时调用失效必须安全返回。
-func TestHTTP2Stream_InvalidateConnWithoutSnapshotIsNoOp(t *testing.T) {
+// TestHTTP2Stream_InvalidateConnWithoutGenerationIsNoOp 覆盖两条安全边界：还没
+// 提交到任何一代上的流（没有身份可判）以及这一代已经没有连接（已关闭/已作废）
+// 时，失效必须安全返回。
+func TestHTTP2Stream_InvalidateConnWithoutGenerationIsNoOp(t *testing.T) {
 	conn := &countingConn{}
 	slot, sc := newCountingSlot(conn)
 
-	s := &http2Stream{slot: slot}
-	s.gen.Store(slot.generation())
-	s.InvalidateConn() // connInUse 为 nil
-
+	s := &http2Stream{slot: slot} // gen 为 nil：请求还没提交
+	s.InvalidateConn()
 	if conn.closes.Load() != 0 {
-		t.Fatal("no connection may be closed without an identity snapshot")
+		t.Fatal("no connection may be closed before the request is submitted")
 	}
 	if slot.connIdentity() != sc {
-		t.Fatal("the connection identity must be untouched without a snapshot")
+		t.Fatal("the connection identity must be untouched")
 	}
 
-	// 还没提交到任何一代上的流同样是无操作，且不得 panic。
-	notSubmitted := &http2Stream{slot: slot}
-	notSubmitted.InvalidateConn()
+	// 这一代没有连接（从未拨号，或已被回收）：无操作，不得换代。
+	empty := slotWithGenFactory()
+	emptyGen := empty.generation()
+	noConn := &http2Stream{slot: empty}
+	noConn.gen.Store(emptyGen)
+	noConn.InvalidateConn()
+	if empty.generation() != emptyGen {
+		t.Fatal("invalidating a generation without a connection must not replace the pool")
+	}
 
 	noSlot := &http2Stream{}
 	noSlot.InvalidateConn()
 }
 
-// TestTrackedConnCloseKeepsNewerPointer 验证 net/http 自己回收连接时只清除自己那
-// 一代的指针（CAS）：槽位已经换到新一代时，旧连接的关闭不得碰到新一代的连接。
-func TestTrackedConnCloseKeepsNewerPointer(t *testing.T) {
+// TestTrackedConnCloseRetiresGeneration 固定"代 == 连接"不变量的执行点：
+// net/http 自然回收连接（trackedConn.Close）之后，这一代连同它的连接身份一起
+// 作废，槽位换到新一代——下一条流只能拨号，而持有旧一代的流已经读不到任何连接。
+func TestTrackedConnCloseRetiresGeneration(t *testing.T) {
+	conn := &countingConn{}
+
+	slot := slotWithGenFactory()
+	gen := slot.generation()
+	oldPool := slot.transport()
+	sc := attachConn(slot, conn)
+
+	tracked := &trackedConn{Conn: conn, gen: gen, self: sc}
+	if err := tracked.Close(); err != nil {
+		t.Fatalf("trackedConn.Close: %v", err)
+	}
+
+	if got := conn.closes.Load(); got != 1 {
+		t.Fatalf("connection closed %d times, want 1", got)
+	}
+	if gen.conn.Load() != nil {
+		t.Fatal("the retired generation must not keep a connection identity")
+	}
+	if slot.generation() == gen {
+		t.Fatal("closing the connection must advance the generation")
+	}
+	if slot.connIdentity() != nil {
+		t.Fatal("the new generation must start without a connection")
+	}
+	if slot.transport() == oldPool {
+		t.Fatal("the new generation must have its own pool")
+	}
+
+	// 重复关闭是幂等的：这一代已经作废，不得再换代一次。
+	next := slot.generation()
+	_ = tracked.Close()
+	if slot.generation() != next {
+		t.Fatal("a repeated close must not advance the generation again")
+	}
+}
+
+// TestTrackedConnCloseKeepsNewerGeneration 验证 stale 连接被 net/http 回收时只
+// 作废自己那一代：槽位已经换代时，旧连接的关闭既不清新连接的身份，也不把新池
+// 顶掉。
+func TestTrackedConnCloseKeepsNewerGeneration(t *testing.T) {
 	old := &countingConn{}
 	newConn := &countingConn{}
 
@@ -377,11 +369,14 @@ func TestTrackedConnCloseKeepsNewerPointer(t *testing.T) {
 	if oldGen.conn.Load() != nil {
 		t.Fatal("trackedConn.Close must clear the pointer it owns")
 	}
+	if slot.generation() != newGen {
+		t.Fatal("a stale generation must not replace the current pool")
+	}
 	if newGen.conn.Load() != newSC {
 		t.Fatal("trackedConn.Close must not clear a newer generation's pointer")
 	}
 
-	// 反向：旧一代的连接身份也不能用来清掉新一代的连接。
+	// 反向：旧一代的跟踪对象也不能用来清掉新一代的连接。
 	stale := &trackedConn{Conn: newConn, gen: oldGen, self: newSC}
 	_ = stale.Close()
 	if newGen.conn.Load() != newSC {
@@ -436,7 +431,7 @@ func newRecoveryTransport(t *testing.T, serverURL, probeToken string) transport.
 // （httptest 的 ConnState 计数）。
 //
 // 保证来自判死本身：InvalidateConn 在关掉底层连接的同时换掉整个连接池
-// （transportSlot.replacePool），下一次 Open 只能拨号。后面的收敛等待与
+// （transportSlot.advanceGeneration），下一次 Open 只能拨号。后面的收敛等待与
 // CloseIdle() 照生产顺序保留，但结论不再依赖它们的收敛时机——那条依赖时序的
 // 版本在 CI 上偶发失败（#226），窗口固定后的确定性版本见
 // TestHTTP2Transport_InvalidateConnReplacesPool。
@@ -683,7 +678,7 @@ func (c *laggingConn) Read(p []byte) (int, error) {
 //
 // 在这种状态下，"CloseIdle() 之后池会自己收敛"这条路必然失效：下一条流会被交给
 // 那条已经关闭的连接，引导记录写入再也回不来（issue #226 里是撞上已关闭的 pipe）。
-// transportSlot.replacePool 把保证变成结构性的——因此这里即使照生产判死路径调用
+// transportSlot.advanceGeneration 把保证变成结构性的——因此这里即使照生产判死路径调用
 // CloseIdle()，也不再看它的收敛结果。
 func TestHTTP2Transport_InvalidateConnReplacesPool(t *testing.T) {
 	const bootstrapSalt = "dGVzdHNhbHR0ZXN0c2FsdA"

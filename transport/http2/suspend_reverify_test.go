@@ -231,16 +231,16 @@ func TestSuspendWithoutProbeTokenDoesNotMark(t *testing.T) {
 	}
 }
 
-// TestSlotInvalidateConnFromIdentityCAS 覆盖复核失效所依赖的身份纪律：
-// 只有 (那一代, 那条连接) 这一对仍是该代的当前连接时才会被关闭，复核或判死
-// 慢了一步也不会误杀之后新建的连接。
-func TestSlotInvalidateConnFromIdentityCAS(t *testing.T) {
+// TestSlotInvalidateConnIdentity 覆盖复核失效所依赖的身份纪律：身份就是调用方
+// 持有的那一代（见 slotTransport），只有它仍是当前一代、且仍持有那条连接时才
+// 会被关闭；复核或判死慢了一步，也不会误杀之后新建的连接。
+func TestSlotInvalidateConnIdentity(t *testing.T) {
 	t.Run("matching identity is closed exactly once", func(t *testing.T) {
 		conn := &countingConn{}
-		slot, sc := newCountingSlot(conn)
+		slot, _ := newCountingSlot(conn)
 		slot.expiring.Store(true)
 
-		if !slot.invalidateConnFrom(slot.generation(), sc, "test") {
+		if !slot.invalidateConn(slot.generation(), "test") {
 			t.Fatal("expected this call to be the closer")
 		}
 		if got := conn.closes.Load(); got != 1 {
@@ -252,7 +252,7 @@ func TestSlotInvalidateConnFromIdentityCAS(t *testing.T) {
 		if slot.expiring.Load() {
 			t.Fatal("connection-scoped marks must be cleared with the connection")
 		}
-		if slot.invalidateConnFrom(slot.generation(), sc, "test") {
+		if slot.invalidateConn(slot.generation(), "test") {
 			t.Fatal("a second invalidation of the same identity must be a no-op")
 		}
 		if got := conn.closes.Load(); got != 1 {
@@ -266,16 +266,16 @@ func TestSlotInvalidateConnFromIdentityCAS(t *testing.T) {
 
 		slot := slotWithGenFactory()
 		oldGen := slot.generation()
-		oldSC := attachConn(slot, oldConn)
+		attachConn(slot, oldConn)
 		// 另一条流判死：旧连接被关掉，槽位换到新一代，新一代拨出了自己的连接。
-		if !slot.invalidateConnFrom(oldGen, oldSC, "test") {
+		if !slot.invalidateConn(oldGen, "test") {
 			t.Fatal("the first invalidation must win")
 		}
 		newGen := slot.generation()
 		newSC := attachConn(slot, newConn)
 
 		// 复核/判死慢了一步：手里拿的还是旧一代（已换代）的身份。
-		if slot.invalidateConnFrom(oldGen, oldSC, "test") {
+		if slot.invalidateConn(oldGen, "test") {
 			t.Fatal("a retired identity must not win its CAS twice")
 		}
 		if got := oldConn.closes.Load(); got != 1 {
@@ -294,11 +294,11 @@ func TestSlotInvalidateConnFromIdentityCAS(t *testing.T) {
 
 	t.Run("nil identity is a no-op", func(t *testing.T) {
 		slot := &transportSlot{}
-		if slot.invalidateConnFrom(nil, nil, "test") {
+		if slot.invalidateConn(nil, "test") {
 			t.Fatal("nil identity must not be reported as closed")
 		}
-		if slot.invalidateConnFrom(slot.generation(), nil, "test") {
-			t.Fatal("nil connection must not be reported as closed")
+		if slot.invalidateConn(slot.generation(), "test") {
+			t.Fatal("a generation without a connection must not be reported as closed")
 		}
 	})
 }

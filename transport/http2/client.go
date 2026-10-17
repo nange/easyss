@@ -175,10 +175,10 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 	}
 
 	slot := &transportSlot{}
-	// 一代池由工厂构建，使判死路径能换上一个同样配置的空池（见
-	// transportSlot.replacePool）。
+	// 一代池由工厂构建，使判死与连接回收都能换上一个同样配置的空池（见
+	// transportSlot.advanceGeneration）。
 	slot.newGen = func() *slotTransport {
-		gen := &slotTransport{}
+		gen := &slotTransport{slot: slot}
 		gen.tr = buildTransport(slot, gen, utlsCfg, timeout, dialContext, connLifetime)
 		return gen
 	}
@@ -248,7 +248,7 @@ func buildTransport(slot *transportSlot, gen *slotTransport, utlsCfg *utls.Confi
 
 			// 记录这条连接的身份，使判死路径能精确关闭承载活跃流的连接
 			// （http.Transport 自己关不掉它）。只有这里写入指针；清除一律走
-			// CAS（trackedConn.Close、invalidateConnFrom）。
+			// CAS（trackedConn.Close、invalidateConn）。
 			sc := &slotConn{c: uconn}
 			gen.conn.Store(sc)
 			return &trackedConn{Conn: uconn, gen: gen, self: sc}, nil
@@ -258,9 +258,10 @@ func buildTransport(slot *transportSlot, gen *slotTransport, utlsCfg *utls.Confi
 }
 
 // trackedConn 是 DialTLSContext 返回给 net/http 的连接：转发关闭是它的契约
-// （net/http 回收连接时调用），但清除连接身份必须走 CAS——net/http 关闭的
-// 可能是一条早已被轮换掉的连接，绝不能把新连接的身份清掉。它同时持有所属的
-// 那一代：CAS 只在自己那一代的 conn 指针上做，因此旧连接的关闭碰不到新池。
+// （net/http 回收连接时调用），并且关闭即"整代作废"——这条连接已经不在了，
+// 它所属的那一代不能再承载新流，槽位换到新一代（见 retireGeneration）。
+// 清除身份与换代都必须走 CAS：net/http 关闭的可能是一条早已被轮换掉的连接，
+// 绝不能把新连接的身份清掉、更不能把新池顶掉。
 type trackedConn struct {
 	net.Conn
 	gen  *slotTransport
@@ -269,7 +270,7 @@ type trackedConn struct {
 
 func (c *trackedConn) Close() error {
 	err := c.Conn.Close()
-	c.gen.conn.CompareAndSwap(c.self, nil)
+	c.gen.slot.retireGeneration(c.gen, c.self)
 	return err
 }
 
@@ -391,10 +392,9 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	}
 
 	go func() {
-		// 池在提交这一刻取用，并且本流的连接身份就锚定在这一代上：判死换池之后
-		// 开出的流必须落在新池上，而"本流实际用过的那条连接"只能从这一次提交
-		// 所用的那一代里读——两者同源，身份因此不可能与后来新建的连接错位
-		// （见 slotTransport）。
+		// 池在提交这一刻取用，本流的连接身份就锚定在这一代上（见 slotTransport）：
+		// 判死换池之后开出的流必须落在新池上；而一"代"最多只有一条连接、连接一关
+		// 这一代就作废，因此这一代就是本流实际用过的那条连接的身份。
 		gen := slot.generation()
 		stream.gen.Store(gen)
 		resp, err := gen.tr.RoundTrip(httpReq)
@@ -431,11 +431,11 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 //     的上下文上（只用复核自己的超时兜底）。否则"本地连接刚被关掉"就会让探测
 //     失败，进而把一条健康连接上其他在飞的流一起切断。调用方已取消时干脆不
 //     复核，把嫌疑留给下一次开流；
-//   - 失效只针对复核开始时观测到的那一代连接（(gen, conn) 身份 CAS，见
-//     transportSlot.invalidateConnFrom）。并发的开流被 slot.reverifyMu 串行化，
-//     复核期间新建的连接属于新的一代，CAS 必然失败，因此不存在"复核慢了一步、
-//     把刚建好的健康连接杀掉"的窗口。探测本身也发给那一代，而不是"复核结束时
-//     槽位的当前一代"：结论与身份必须来自同一条连接。
+//   - 失效只针对复核开始时观测到的那一代连接（见 transportSlot.invalidateConn）。
+//     并发的开流被 slot.reverifyMu 串行化；复核期间这一代若已被换掉（连接关闭后
+//     整代作废），身份认领必然失败，因此不存在"复核慢了一步、把刚建好的健康
+//     连接杀掉"的窗口。探测本身也发给那一代，而不是"复核结束时槽位的当前一代"：
+//     结论与身份必须来自同一条连接。
 //
 // 每个槽位在一次嫌疑里只复核一次：结论给出后（无论哪种）清掉标记，后续开流
 // 直接放行。
@@ -455,9 +455,8 @@ func (t *http2Transport) reverifySlot(ctx context.Context, slot *transportSlot) 
 		slot.reverify.Store(false)
 		return
 	}
-	sc := gen.conn.Load()
-	if sc == nil {
-		// 这一代还没有连接（下一条流本来就会拨号）：清掉标记。
+	if gen.conn.Load() == nil {
+		// 这一代已经没有连接了（已关闭/已作废，或本来就会重新拨号）：清掉标记。
 		slot.reverify.Store(false)
 		return
 	}
@@ -484,7 +483,7 @@ func (t *http2Transport) reverifySlot(ctx context.Context, slot *transportSlot) 
 	}
 	// 这条连接确实不可往返（探测排在同一代的连接上，不会偷偷拨新连接，
 	// 见 slotProber.alive）：它已经是死的，换掉不会打断任何还活着的流。
-	if slot.invalidateConnFrom(gen, sc, "suspend reverify failed") {
+	if slot.invalidateConn(gen, "suspend reverify failed") {
 		stats.RecordSuspendReverifyReplaced()
 	}
 }
