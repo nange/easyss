@@ -240,10 +240,17 @@ func buildTransport(slot *transportSlot, gen *slotTransport, utlsCfg *utls.Confi
 			}
 			// 新连接会重置轮换状态：生命周期截止时间（含每连接抖动）、
 			// 已承载字节数和 expiring 标记都从零开始。只有这一代仍是当前一代
-			// 时才这么做：一代被替换之后才完成的拨号（例如对旧一代的判活探测）
-			// 不得把新一代的轮换状态抹掉。
+			// 时才这么做：一代被替换之后才完成的拨号（提交后恰逢回收的请求，
+			// 或对旧一代的判活探测）不得把新一代的轮换状态抹掉。
 			if slot.generation() == gen {
 				slot.resetConn(connLifetime)
+			} else {
+				// 这条连接落在了一个已被回收的一代上：它能正常服务触发它的
+				// 那条流，但不参与槽位的健康循环/轮换，直到自己的空闲超时
+				// （见 retireGeneration）。记一条 Debug，便于解释"多出来的
+				// 连接"（连接数统计里看不到它）。
+				log.Debug("[TRANSPORT] dial landed on a retired generation",
+					"slot", slot.idx)
 			}
 
 			// 记录这条连接的身份，使判死路径能精确关闭承载活跃流的连接

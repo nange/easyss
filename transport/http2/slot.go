@@ -235,8 +235,20 @@ func (s *transportSlot) takeConn(gen *slotTransport, expect *slotConn) *slotConn
 //
 // 这是"代 == 连接"不变量的执行点。只有赢得连接身份 CAS 的调用者会执行，因此
 // 同一条连接不会作废两代；它只清掉自己那一代的连接指针，碰不到新池。
+//
 // 连接作用域的状态（轮换截止时间/字节数/降级/嫌疑）不在这里清理：连接是自然
-// 结束的，下一次拨号的 resetConn 会从零开始。
+// 结束的，**当前一代**的下一次拨号会通过 resetConn 从零开始；即使没有拨号，
+// 槽位空闲时健康循环的 evaluateRotation 也会清掉 expiring/expireAt/connBytes
+// （见 lifecycle.go）。
+//
+// 一个已知的、非正确性的副作用：流在提交请求时记下这一代、拨号却在这之后才
+// 完成时（提交与拨号之间发生了自然回收），连接会建立在一个**已被回收的一代**
+// 上。这种连接不调用 resetConn（它不属于当前代，不能覆盖当前连接的轮换状态），
+// 也不在 connIdentity() 的视野里，因此不参与健康循环/挂起复核，rotation 与
+// retire 的 CloseIdleConnections 也打不到它——它会一直服务触发它的那些流，直到
+// 自己的 h2 空闲超时（IdleConnTimeout = 6×timeout）才被回收。身份仍然是正确的
+// （这些流的判死仍能精准命中自己那一代的连接），代价只是这段时间里多一条不受
+// 槽位管理的连接，属于这个简单模型的已知代价。
 func (s *transportSlot) retireGeneration(gen *slotTransport, conn *slotConn) {
 	if s.takeConn(gen, conn) != nil {
 		s.advanceGeneration(gen)
