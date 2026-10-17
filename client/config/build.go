@@ -23,7 +23,7 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 	cfg := &ClientConfig{
 		ConfigVersion: 3,
 		Servers: []*ServerProfile{{
-			Address:  s.Server,
+			Host:     s.Server,
 			Port:     s.ServerPort,
 			Password: s.Password,
 			Method:   s.Method,
@@ -81,14 +81,22 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 	// 两种模式共用同一实现；这里显式传进来的 HTTPPort 优先，不会被推导覆盖。
 
 	applyDefaults(cfg)
+	if err := cfg.validateServers(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
 }
 
-func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) {
+// ApplySimpleOverrides 把命令行的简化模式参数覆盖到已加载的完整配置上。
+//
+// 覆盖后的配置必须再过一次 validateServers：加载期的校验只覆盖文件内容，
+// 命令行同样可能把端口写进 host（-s example.com:443），不校验就会拼出
+// https://example.com:443:443 这种要等到拨号才暴露的错误。
+func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) error {
 	srv := cfg.DefaultServer()
 	if srv != nil {
 		if s.Server != "" {
-			srv.Address = s.Server
+			srv.Host = s.Server
 		}
 		if s.ServerPort > 0 {
 			srv.Port = s.ServerPort
@@ -160,6 +168,8 @@ func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) {
 	// 所有覆盖完成后再按同一规则补齐 http_port：命令行只改本地端口时，端口
 	// 推导与 applyDefaults 保持一致（唯一实现在 normalizeHTTPPort）。
 	normalizeHTTPPort(cfg)
+
+	return cfg.validateServers()
 }
 
 func jsonTunConfig(s string) json.RawMessage {

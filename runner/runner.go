@@ -180,8 +180,8 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 
 	if socksAddr != "" {
 		serverDomain := ""
-		if svr := cfg.DefaultServer(); svr != nil && !util.IsIP(svr.Address) {
-			serverDomain = svr.Address
+		if svr := cfg.DefaultServer(); svr != nil && !util.IsIP(svr.Host) {
+			serverDomain = svr.Host
 		}
 		// DNS 缓存由核心持有：服务端域名的预解析与 DNS pinning 地址发布是核心的
 		// 启动编排，代理服务器只是这份缓存的又一个使用者。
@@ -254,7 +254,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 	if err := c.resolveServerDomain(cfg); err != nil {
 		host := ""
 		if svr := cfg.DefaultServer(); svr != nil {
-			host = svr.Address
+			host = svr.Host
 		}
 		c.StartupWarn = errors.Join(c.StartupWarn,
 			fmt.Errorf("%w: %s: %w", ErrServerDomainUnresolved, host, err))
@@ -301,7 +301,7 @@ func (c *Core) Stop() {
 // socks5 服务时无需解析，直接返回 nil。
 func (c *Core) resolveServerDomain(cfg *config.ClientConfig) error {
 	svr := cfg.DefaultServer()
-	if svr == nil || util.IsIP(svr.Address) {
+	if svr == nil || util.IsIP(svr.Host) {
 		return nil
 	}
 	// 没有本地代理入口时没有需要预填充的 DNS 缓存。
@@ -316,18 +316,18 @@ func (c *Core) resolveServerDomain(cfg *config.ClientConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), serverStartupResolveTimeout)
 	defer cancel()
 
-	err := prePopulateServerDomain(c.dnsCache, ctx, svr.Address, config.DirectDNSServers,
+	err := prePopulateServerDomain(c.dnsCache, ctx, svr.Host, config.DirectDNSServers,
 		cfg.Routing.IPV6Rule != "enable")
 	if err != nil {
 		log.Warn("[EASYSS] server domain resolution failed at startup",
-			"host", svr.Address,
+			"host", svr.Host,
 			"elapsed_ms", time.Since(start).Milliseconds(),
 			"err", err,
 		)
-		return fmt.Errorf("server domain %s resolution failed: %w", svr.Address, err)
+		return fmt.Errorf("server domain %s resolution failed: %w", svr.Host, err)
 	}
 	log.Info("[EASYSS] server domain resolved at startup",
-		"host", svr.Address,
+		"host", svr.Host,
 		"elapsed_ms", time.Since(start).Milliseconds(),
 		"ips", c.publishServerIPs(),
 	)
@@ -406,13 +406,13 @@ func (c *Core) retryServerDomain(cfg *config.ClientConfig, r serverDomainRetry) 
 
 		ctx, cancel := context.WithTimeout(context.Background(), r.timeout)
 		c.setRetryCancel(cancel)
-		err := r.prePopulate(c.dnsCache, ctx, svr.Address, r.dnsServers, r.requireIPv4)
+		err := r.prePopulate(c.dnsCache, ctx, svr.Host, r.dnsServers, r.requireIPv4)
 		cancel()
 		c.clearRetryCancel()
 
 		if err == nil {
 			log.Info("[EASYSS] server domain resolved by background retry",
-				"host", svr.Address,
+				"host", svr.Host,
 				"attempts", attempt,
 				"ips", c.publishServerIPs(),
 			)
@@ -422,7 +422,7 @@ func (c *Core) retryServerDomain(cfg *config.ClientConfig, r serverDomainRetry) 
 		// 首次失败已在 resolveServerDomain 里以 Warn 记录；后续尝试走 Debug，
 		// 使长时间离线不会刷爆日志。
 		log.Debug("[EASYSS] server domain retry failed",
-			"host", svr.Address, "attempt", attempt, "err", err)
+			"host", svr.Host, "attempt", attempt, "err", err)
 
 		if delay = min(delay*2, r.max); delay < r.base {
 			delay = r.base

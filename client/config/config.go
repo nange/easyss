@@ -4,7 +4,11 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
@@ -37,14 +41,44 @@ const ProxyDNSServer = "8.8.8.8:53"
 // "全部内置 DNS 都不可用"的网络）——两者都没有记录时才回退到这里。
 const DefaultSystemDNS = "223.5.5.5"
 
+// ServerProfile 描述一个服务端端点。Host 是主机名或 IP 字面量，不含端口；
+// 旧版完整模式配置里的 servers[].address 由 UnmarshalJSON 映射到 Host。
 type ServerProfile struct {
-	Address  string `json:"address"`
+	Host     string `json:"host"`
 	Port     int    `json:"port"`
 	Password string `json:"password"`
 	Method   string `json:"method"`
 	SNI      string `json:"sn"`
 	CAPath   string `json:"ca_path"`
 	Default  bool   `json:"default"`
+}
+
+// UnmarshalJSON 兼容旧版完整模式配置里的 servers[].address：它等价于
+// servers[].host。新旧键同时出现属于歧义配置，直接报错而不是静默选择其中一个。
+func (s *ServerProfile) UnmarshalJSON(data []byte) error {
+	type plain ServerProfile
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+
+	var legacy struct {
+		Address string `json:"address"`
+	}
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+
+	if legacy.Address != "" {
+		if p.Host != "" {
+			return fmt.Errorf(`servers[]: both "host" (%q) and deprecated "address" (%q) are set; use "host" only`,
+				p.Host, legacy.Address)
+		}
+		p.Host = legacy.Address
+	}
+
+	*s = ServerProfile(p)
+	return nil
 }
 
 type LocalConfig struct {
@@ -85,6 +119,8 @@ type LogConfig struct {
 	FilePath string `json:"file_path"`
 }
 
+// ClientConfig 是完整模式客户端配置。配置版本仍为 3：servers[].address →
+// servers[].host 的字段改名由 ServerProfile.UnmarshalJSON 兼容，不升版本。
 type ClientConfig struct {
 	ConfigVersion int              `json:"version"`
 	Servers       []*ServerProfile `json:"servers"`
@@ -97,6 +133,26 @@ type ClientConfig struct {
 	AuthUsername  string           `json:"auth_username"`
 	AuthPassword  string           `json:"auth_password"`
 	PprofEnabled  bool             `json:"pprof_enabled"`
+}
+
+// validateServers 固定完整模式服务端条目的基本契约：host 必填，且不得把端口
+// 写进 host。冒号只有在 host 是合法 IP 字面量（IPv6）时才允许——域名带端口会
+// 被拼成 https://<host>:<port>:<port>，失败点离配置很远。地址拼装统一走
+// net.JoinHostPort（见 ServerURL/DefaultServerAddr/ServerListAddrs），IPv6
+// 字面量会自动加上方括号。
+func (c *ClientConfig) validateServers() error {
+	for i, srv := range c.Servers {
+		if srv == nil {
+			return fmt.Errorf("servers[%d] is null", i)
+		}
+		if srv.Host == "" {
+			return fmt.Errorf("servers[%d].host is required", i)
+		}
+		if _, err := netip.ParseAddr(srv.Host); err != nil && strings.Contains(srv.Host, ":") {
+			return fmt.Errorf("servers[%d].host %q must not include a port; use servers[%d].port", i, srv.Host, i)
+		}
+	}
+	return nil
 }
 
 func (c *ClientConfig) DefaultServer() *ServerProfile {
@@ -116,7 +172,7 @@ func (c *ClientConfig) ServerURL() string {
 	if srv == nil {
 		return ""
 	}
-	return fmt.Sprintf("https://%s:%d", srv.Address, srv.Port)
+	return "https://" + net.JoinHostPort(srv.Host, strconv.Itoa(srv.Port))
 }
 
 // TimeoutDuration 返回归一化后的基础超时：非正值取默认值，越界值钳制到
@@ -150,7 +206,7 @@ func (c *ClientConfig) UTLSConfig() *utls.Config {
 
 	sni := srv.SNI
 	if sni == "" {
-		sni = srv.Address
+		sni = srv.Host
 	}
 
 	utlsCfg := &utls.Config{
@@ -204,6 +260,9 @@ func LoadConfig(path string) (*ClientConfig, error) {
 		return nil, err
 	}
 	applyDefaults(&cfg)
+	if err := cfg.validateServers(); err != nil {
+		return nil, err
+	}
 
 	return &cfg, nil
 }
@@ -305,7 +364,7 @@ func (c *ClientConfig) SetDefaultServerIndex(i int) {
 func (c *ClientConfig) ServerListAddrs() []string {
 	var addrs []string
 	for _, s := range c.Servers {
-		addrs = append(addrs, fmt.Sprintf("%s:%d", s.Address, s.Port))
+		addrs = append(addrs, serverAddr(s))
 	}
 	return addrs
 }
@@ -315,7 +374,13 @@ func (c *ClientConfig) DefaultServerAddr() string {
 	if srv == nil {
 		return ""
 	}
-	return fmt.Sprintf("%s:%d", srv.Address, srv.Port)
+	return serverAddr(srv)
+}
+
+// serverAddr 是 host:port 的唯一拼装入口：IPv6 字面量必须带方括号才是合法的
+// dial 地址与 URL authority（net.JoinHostPort 负责加，域名/IPv4 输出不变）。
+func serverAddr(s *ServerProfile) string {
+	return net.JoinHostPort(s.Host, strconv.Itoa(s.Port))
 }
 
 func (c *ClientConfig) DefaultServerIndex() int {
@@ -333,6 +398,9 @@ func ParseConfigJSON(jsonStr string) (*ClientConfig, error) {
 		return nil, err
 	}
 	applyDefaults(&cfg)
+	if err := cfg.validateServers(); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
 }
 

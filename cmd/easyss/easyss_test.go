@@ -416,7 +416,8 @@ func newTestHarness(t *testing.T) *testHarness {
 	serverCfg := &serverconfig.FileConfig{
 		Timeout: 30,
 		Server: serverconfig.ServerConfig{
-			Listen:   h.serverAddr,
+			Bind:     testServerAddr,
+			Port:     serverPort,
 			Password: testPassword,
 			CertPath: h.certPath,
 			KeyPath:  h.keyPath,
@@ -444,7 +445,7 @@ func newTestHarness(t *testing.T) *testHarness {
 		ConfigVersion: 3,
 		Servers: []*clientconfig.ServerProfile{
 			{
-				Address:  testServerAddr,
+				Host:     testServerAddr,
 				Port:     serverPort,
 				Password: testPassword,
 				Method:   "aes-256-gcm",

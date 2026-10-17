@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ func TestDefaultConfig(t *testing.T) {
 func TestClone(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Servers = []*ServerProfile{
-		{Address: "example.com", Port: 443, Password: "secret", Default: true},
+		{Host: "example.com", Port: 443, Password: "secret", Default: true},
 	}
 
 	clone := cfg.Clone()
@@ -55,8 +56,8 @@ func TestClone(t *testing.T) {
 	if clone.ConfigVersion != cfg.ConfigVersion {
 		t.Error("ConfigVersion mismatch")
 	}
-	if clone.Servers[0].Address != cfg.Servers[0].Address {
-		t.Error("Server address mismatch")
+	if clone.Servers[0].Host != cfg.Servers[0].Host {
+		t.Error("Server host mismatch")
 	}
 
 	// 验证深拷贝：修改 clone 不影响原对象
@@ -70,7 +71,7 @@ func TestDefaultServer(t *testing.T) {
 	tests := []struct {
 		name    string
 		servers []*ServerProfile
-		want    string // 期望返回的 Address，空表示 nil
+		want    string // 期望返回的 Host，空表示 nil
 	}{
 		{
 			name:    "空服务器列表",
@@ -80,25 +81,25 @@ func TestDefaultServer(t *testing.T) {
 		{
 			name: "有默认标记的服务器",
 			servers: []*ServerProfile{
-				{Address: "s1.example.com", Default: false},
-				{Address: "s2.example.com", Default: true},
-				{Address: "s3.example.com", Default: false},
+				{Host: "s1.example.com", Default: false},
+				{Host: "s2.example.com", Default: true},
+				{Host: "s3.example.com", Default: false},
 			},
 			want: "s2.example.com",
 		},
 		{
 			name: "无默认标记时返回第一个",
 			servers: []*ServerProfile{
-				{Address: "s1.example.com", Default: false},
-				{Address: "s2.example.com", Default: false},
+				{Host: "s1.example.com", Default: false},
+				{Host: "s2.example.com", Default: false},
 			},
 			want: "s1.example.com",
 		},
 		{
 			name: "多个默认标记时返回第一个",
 			servers: []*ServerProfile{
-				{Address: "s1.example.com", Default: true},
-				{Address: "s2.example.com", Default: true},
+				{Host: "s1.example.com", Default: true},
+				{Host: "s2.example.com", Default: true},
 			},
 			want: "s1.example.com",
 		},
@@ -116,8 +117,8 @@ func TestDefaultServer(t *testing.T) {
 				if srv == nil {
 					t.Fatal("got nil, want non-nil")
 				}
-				if srv.Address != tt.want {
-					t.Errorf("Address = %q, want %q", srv.Address, tt.want)
+				if srv.Host != tt.want {
+					t.Errorf("Host = %q, want %q", srv.Host, tt.want)
 				}
 			}
 		})
@@ -128,11 +129,22 @@ func TestServerURL(t *testing.T) {
 	t.Run("有默认服务器", func(t *testing.T) {
 		cfg := &ClientConfig{
 			Servers: []*ServerProfile{
-				{Address: "example.com", Port: 443, Default: true},
+				{Host: "example.com", Port: 443, Default: true},
 			},
 		}
 		if url := cfg.ServerURL(); url != "https://example.com:443" {
 			t.Errorf("ServerURL = %q, want https://example.com:443", url)
+		}
+	})
+
+	t.Run("IPv6 字面量自动加方括号", func(t *testing.T) {
+		cfg := &ClientConfig{
+			Servers: []*ServerProfile{
+				{Host: "2001:db8::1", Port: 443, Default: true},
+			},
+		}
+		if url := cfg.ServerURL(); url != "https://[2001:db8::1]:443" {
+			t.Errorf("ServerURL = %q, want bracketed IPv6", url)
 		}
 	})
 
@@ -212,9 +224,9 @@ func TestConnLifetimeDuration(t *testing.T) {
 func TestSetDefaultServerIndex(t *testing.T) {
 	cfg := &ClientConfig{
 		Servers: []*ServerProfile{
-			{Address: "s1.example.com"},
-			{Address: "s2.example.com"},
-			{Address: "s3.example.com"},
+			{Host: "s1.example.com"},
+			{Host: "s2.example.com"},
+			{Host: "s3.example.com"},
 		},
 	}
 
@@ -240,8 +252,8 @@ func TestServerListAddrs(t *testing.T) {
 	t.Run("多服务器", func(t *testing.T) {
 		cfg := &ClientConfig{
 			Servers: []*ServerProfile{
-				{Address: "s1.example.com", Port: 443},
-				{Address: "s2.example.com", Port: 8443},
+				{Host: "s1.example.com", Port: 443},
+				{Host: "s2.example.com", Port: 8443},
 			},
 		}
 		addrs := cfg.ServerListAddrs()
@@ -253,6 +265,16 @@ func TestServerListAddrs(t *testing.T) {
 		}
 		if addrs[1] != "s2.example.com:8443" {
 			t.Errorf("addrs[1] = %q", addrs[1])
+		}
+	})
+
+	t.Run("IPv6 字面量自动加方括号", func(t *testing.T) {
+		cfg := &ClientConfig{
+			Servers: []*ServerProfile{{Host: "2001:db8::1", Port: 443}},
+		}
+		addrs := cfg.ServerListAddrs()
+		if len(addrs) != 1 || addrs[0] != "[2001:db8::1]:443" {
+			t.Errorf("addrs = %v", addrs)
 		}
 	})
 
@@ -269,11 +291,22 @@ func TestDefaultServerAddr(t *testing.T) {
 	t.Run("有默认服务器", func(t *testing.T) {
 		cfg := &ClientConfig{
 			Servers: []*ServerProfile{
-				{Address: "example.com", Port: 443, Default: true},
+				{Host: "example.com", Port: 443, Default: true},
 			},
 		}
 		if addr := cfg.DefaultServerAddr(); addr != "example.com:443" {
 			t.Errorf("DefaultServerAddr = %q", addr)
+		}
+	})
+
+	t.Run("IPv6 字面量自动加方括号", func(t *testing.T) {
+		cfg := &ClientConfig{
+			Servers: []*ServerProfile{
+				{Host: "2001:db8::1", Port: 443, Default: true},
+			},
+		}
+		if addr := cfg.DefaultServerAddr(); addr != "[2001:db8::1]:443" {
+			t.Errorf("DefaultServerAddr = %q, want bracketed IPv6", addr)
 		}
 	})
 
@@ -289,8 +322,8 @@ func TestDefaultServerIndex(t *testing.T) {
 	t.Run("有默认标记", func(t *testing.T) {
 		cfg := &ClientConfig{
 			Servers: []*ServerProfile{
-				{Address: "s1.example.com"},
-				{Address: "s2.example.com", Default: true},
+				{Host: "s1.example.com"},
+				{Host: "s2.example.com", Default: true},
 			},
 		}
 		if idx := cfg.DefaultServerIndex(); idx != 1 {
@@ -301,8 +334,8 @@ func TestDefaultServerIndex(t *testing.T) {
 	t.Run("无默认标记返回0", func(t *testing.T) {
 		cfg := &ClientConfig{
 			Servers: []*ServerProfile{
-				{Address: "s1.example.com"},
-				{Address: "s2.example.com"},
+				{Host: "s1.example.com"},
+				{Host: "s2.example.com"},
 			},
 		}
 		if idx := cfg.DefaultServerIndex(); idx != 0 {
@@ -349,8 +382,8 @@ func TestMigrateV2Config(t *testing.T) {
 		if v3.ConfigVersion != 3 {
 			t.Errorf("ConfigVersion = %d", v3.ConfigVersion)
 		}
-		if v3.Servers[0].Address != "example.com" {
-			t.Errorf("Address = %q", v3.Servers[0].Address)
+		if v3.Servers[0].Host != "example.com" {
+			t.Errorf("Host = %q", v3.Servers[0].Host)
 		}
 		if v3.Servers[0].Port != 443 {
 			t.Errorf("Port = %d", v3.Servers[0].Port)
@@ -441,6 +474,78 @@ func TestMigrateV2Config(t *testing.T) {
 	})
 }
 
+// TestSimpleOverridesUseHost 固定简化模式覆盖写入的是 Host（而不是旧的
+// Address 字段），与 BuildSimpleConfig 的构建路径保持一致。
+func TestSimpleOverridesUseHost(t *testing.T) {
+	cfg := &ClientConfig{
+		Servers: []*ServerProfile{{Host: "old.example", Port: 443}},
+	}
+	if err := ApplySimpleOverrides(cfg, &config.SimpleConfig{Server: "new.example", ServerPort: 8443}); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Servers[0].Host != "new.example" {
+		t.Errorf("Host = %q, want new.example", cfg.Servers[0].Host)
+	}
+	if cfg.Servers[0].Port != 8443 {
+		t.Errorf("Port = %d, want 8443", cfg.Servers[0].Port)
+	}
+}
+
+// TestApplySimpleOverridesRejectsHostWithPort 固定命令行覆盖也要过与文件加载
+// 相同的 host 校验：-s 里带端口不能留到拨号时才以 "too many colons" 暴露。
+func TestApplySimpleOverridesRejectsHostWithPort(t *testing.T) {
+	cfg := &ClientConfig{Servers: []*ServerProfile{{Host: "old.example", Port: 443}}}
+	err := ApplySimpleOverrides(cfg, &config.SimpleConfig{Server: "new.example:443"})
+	if err == nil {
+		t.Fatal("expected error for host with port")
+	}
+	if !strings.Contains(err.Error(), "must not include a port") {
+		t.Errorf("error = %v, want port hint", err)
+	}
+}
+
+// TestValidateServers 固定 host 的基本契约：必填、允许 IPv6 字面量，但不得把
+// 端口写进 host（否则 ServerURL 会拼出 https://host:port:port）。
+func TestValidateServers(t *testing.T) {
+	cases := []struct {
+		name    string
+		host    string
+		wantErr bool
+	}{
+		{"域名", "example.com", false},
+		{"IPv4", "1.2.3.4", false},
+		{"IPv6 字面量", "2001:db8::1", false},
+		{"域名带端口", "example.com:443", true},
+		{"IPv4 带端口", "1.2.3.4:443", true},
+		{"IPv6 带端口", "[2001:db8::1]:443", true},
+		{"空 host", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &ClientConfig{Servers: []*ServerProfile{{Host: tc.host}}}
+			err := cfg.validateServers()
+			if tc.wantErr && err == nil {
+				t.Errorf("expected error for host %q", tc.host)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("host %q: unexpected error: %v", tc.host, err)
+			}
+		})
+	}
+
+	if err := (&ClientConfig{Servers: []*ServerProfile{nil}}).validateServers(); err == nil {
+		t.Error("expected error for nil server entry")
+	}
+}
+
+// TestBuildSimpleConfigRejectsHostWithPort 固定简化模式也不会把 host:port 当成
+// 合法主机名，避免迁移时在运行期才拼出错误地址。
+func TestBuildSimpleConfigRejectsHostWithPort(t *testing.T) {
+	if _, err := BuildSimpleConfig(&config.SimpleConfig{Server: "example.com:443", Password: "secret"}); err == nil {
+		t.Error("expected error for host with port")
+	}
+}
+
 func TestOutboundProtoToProtocol(t *testing.T) {
 	tests := []struct {
 		proto   string
@@ -480,7 +585,7 @@ func TestLoadConfig(t *testing.T) {
 
 		v3JSON := `{
 			"version": 3,
-			"servers": [{"address": "example.com", "port": 443, "password": "secret", "default": true}],
+			"servers": [{"host": "example.com", "port": 443, "password": "secret", "default": true}],
 			"local": {"socks_port": 1080},
 			"routing": {"proxy_rule": "proxy"},
 			"transport": {},
@@ -496,14 +601,92 @@ func TestLoadConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if cfg.Servers[0].Address != "example.com" {
-			t.Errorf("Address = %q", cfg.Servers[0].Address)
+		if cfg.Servers[0].Host != "example.com" {
+			t.Errorf("Host = %q", cfg.Servers[0].Host)
 		}
 		if cfg.Routing.ProxyRule != "proxy" {
 			t.Errorf("ProxyRule = %q", cfg.Routing.ProxyRule)
 		}
 		if cfg.Log.Level != "debug" {
 			t.Errorf("LogLevel = %q", cfg.Log.Level)
+		}
+	})
+
+	t.Run("旧 address 兼容", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		body := `{
+			"version": 3,
+			"servers": [{"address": "example.com", "port": 8443, "password": "secret"}]
+		}`
+		if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfig(path)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.Servers[0].Host != "example.com" {
+			t.Errorf("Host = %q", cfg.Servers[0].Host)
+		}
+		if cfg.Servers[0].Port != 8443 {
+			t.Errorf("Port = %d", cfg.Servers[0].Port)
+		}
+	})
+
+	t.Run("host 与 address 冲突", func(t *testing.T) {
+		_, err := ParseConfigJSON(`{"servers":[{"host":"a.example","address":"b.example"}]}`)
+		if err == nil {
+			t.Error("expected error for host+address")
+		}
+	})
+
+	t.Run("host 带端口启动失败", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		body := `{"version":3,"servers":[{"host":"example.com:443","port":443,"password":"secret"}]}`
+		if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadConfig(path)
+		if err == nil {
+			t.Error("expected error for host with port")
+		}
+	})
+
+	t.Run("host 为空启动失败", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		body := `{"version":3,"servers":[{"port":443,"password":"secret"}]}`
+		if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadConfig(path)
+		if err == nil {
+			t.Error("expected error for empty host")
+		}
+	})
+
+	t.Run("序列化只输出 host", func(t *testing.T) {
+		cfg := &ClientConfig{
+			ConfigVersion: 3,
+			Servers:       []*ServerProfile{{Host: "example.com", Port: 443}},
+		}
+		data, err := json.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var raw struct {
+			Servers []map[string]json.RawMessage `json:"servers"`
+		}
+		if err := json.Unmarshal(data, &raw); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := raw.Servers[0]["host"]; !ok {
+			t.Errorf("serialized config missing host: %s", data)
+		}
+		if _, ok := raw.Servers[0]["address"]; ok {
+			t.Errorf("serialized config must not contain address: %s", data)
 		}
 	})
 
@@ -527,7 +710,7 @@ func TestLoadConfig(t *testing.T) {
 				path := filepath.Join(dir, "config.json")
 				v3JSON := `{
 					"version": 3,
-					"servers": [{"address": "example.com", "port": 443, "password": "secret"}],
+					"servers": [{"host": "example.com", "port": 443, "password": "secret"}],
 					"local": ` + tt.localJSON + `
 				}`
 				if err := os.WriteFile(path, []byte(v3JSON), 0644); err != nil {
@@ -570,8 +753,8 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.ConfigVersion != 3 {
 			t.Errorf("ConfigVersion = %d, want 3", cfg.ConfigVersion)
 		}
-		if cfg.Servers[0].Address != "example.com" {
-			t.Errorf("Address = %q", cfg.Servers[0].Address)
+		if cfg.Servers[0].Host != "example.com" {
+			t.Errorf("Host = %q", cfg.Servers[0].Host)
 		}
 		if cfg.Servers[0].Port != 8443 {
 			t.Errorf("Port = %d", cfg.Servers[0].Port)
@@ -631,8 +814,21 @@ func TestMigrateV2ToV3(t *testing.T) {
 	if v3.ConfigVersion != 3 {
 		t.Errorf("ConfigVersion = %d", v3.ConfigVersion)
 	}
-	if v3.Servers[0].Address != "example.com" {
-		t.Errorf("Address = %q", v3.Servers[0].Address)
+	if v3.Servers[0].Host != "example.com" {
+		t.Errorf("Host = %q", v3.Servers[0].Host)
+	}
+
+	var raw struct {
+		Servers []map[string]json.RawMessage `json:"servers"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw.Servers[0]["host"]; !ok {
+		t.Errorf("migrated config missing host: %s", data)
+	}
+	if _, ok := raw.Servers[0]["address"]; ok {
+		t.Errorf("migrated config must not contain address: %s", data)
 	}
 }
 
@@ -640,8 +836,8 @@ func TestApplyDefaults(t *testing.T) {
 	t.Run("填充所有默认值", func(t *testing.T) {
 		cfg := &ClientConfig{
 			Servers: []*ServerProfile{
-				{Address: "example.com"},
-				{Address: "example2.com"},
+				{Host: "example.com"},
+				{Host: "example2.com"},
 			},
 		}
 		applyDefaults(cfg)
@@ -727,7 +923,7 @@ func TestApplyDefaults(t *testing.T) {
 	t.Run("钳制退化配置到合法范围", func(t *testing.T) {
 		cfg := &ClientConfig{
 			Servers: []*ServerProfile{
-				{Address: "example.com"},
+				{Host: "example.com"},
 			},
 			Transport: TransportConfig{
 				// conn_count_max=1 会让调度器 panic（空的 bulk 池）；
@@ -744,7 +940,7 @@ func TestApplyDefaults(t *testing.T) {
 
 		cfg2 := &ClientConfig{
 			Servers: []*ServerProfile{
-				{Address: "example.com"},
+				{Host: "example.com"},
 			},
 			Transport: TransportConfig{
 				ConnCountMax:    1 << 20,
@@ -809,13 +1005,17 @@ func TestTimeoutClampedOnEveryEntry(t *testing.T) {
 
 	t.Run("简单模式覆盖", func(t *testing.T) {
 		cfg := &ClientConfig{Timeout: config.DefaultTimeout}
-		ApplySimpleOverrides(cfg, &config.SimpleConfig{Timeout: 1})
+		if err := ApplySimpleOverrides(cfg, &config.SimpleConfig{Timeout: 1}); err != nil {
+			t.Fatal(err)
+		}
 		if cfg.Timeout != config.MinTimeout {
 			t.Errorf("Timeout = %d, want clamped to %d", cfg.Timeout, config.MinTimeout)
 		}
 
 		// 未提供覆盖（0）时保持配置中的值，不会被当成"钳制到下限"。
-		ApplySimpleOverrides(cfg, &config.SimpleConfig{})
+		if err := ApplySimpleOverrides(cfg, &config.SimpleConfig{}); err != nil {
+			t.Fatal(err)
+		}
 		if cfg.Timeout != config.MinTimeout {
 			t.Errorf("Timeout = %d, want unchanged %d", cfg.Timeout, config.MinTimeout)
 		}
@@ -879,7 +1079,7 @@ func TestTunMTU(t *testing.T) {
 
 		v3JSON := `{
 			"version": 3,
-			"servers": [{"address": "example.com", "port": 443, "password": "secret", "default": true}],
+			"servers": [{"host": "example.com", "port": 443, "password": "secret", "default": true}],
 			"local": {"socks_port": 1080, "tun_mtu": 64000}
 		}`
 		if err := os.WriteFile(path, []byte(v3JSON), 0644); err != nil {
@@ -931,14 +1131,18 @@ func TestTunMTU(t *testing.T) {
 		}
 
 		overridden := DefaultConfig()
-		ApplySimpleOverrides(overridden, &config.SimpleConfig{TunMTU: 100})
+		if err := ApplySimpleOverrides(overridden, &config.SimpleConfig{TunMTU: 100}); err != nil {
+			t.Fatal(err)
+		}
 		if overridden.Local.TunMTU != config.MinTunMTU {
 			t.Errorf("overridden Local.TunMTU = %d, want %d (clamped)", overridden.Local.TunMTU, config.MinTunMTU)
 		}
 
 		// 未提供覆盖值时不得改动已有配置：0 表示"未配置"，而不是"设成默认值"。
 		untouched := &ClientConfig{Local: LocalConfig{TunMTU: 8500}}
-		ApplySimpleOverrides(untouched, &config.SimpleConfig{})
+		if err := ApplySimpleOverrides(untouched, &config.SimpleConfig{}); err != nil {
+			t.Fatal(err)
+		}
 		if got := untouched.TunMTU(); got != 8500 {
 			t.Errorf("TunMTU() = %d, want 8500 (an empty override must not reset it)", got)
 		}

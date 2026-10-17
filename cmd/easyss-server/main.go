@@ -96,8 +96,8 @@ Flags:
 	log.Info("[EASYSS-SERVER-V3] " + version.String())
 	log.Info("[EASYSS-SERVER-V3] config loaded",
 		"config_file", configFile,
-		"listen", fileCfg.Server.Listen,
-		"domain", fileCfg.Server.Domain,
+		"listen", fileCfg.Server.ListenAddr(),
+		"host", fileCfg.Server.Host,
 		"next_proxy_file", fileCfg.NextProxy.NextProxyFile,
 		"cert", fileCfg.Server.CertPath,
 		"key", fileCfg.Server.KeyPath,

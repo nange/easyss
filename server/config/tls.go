@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/netip"
+	"strings"
 
 	"github.com/nange/easyss/v3/util"
 )
@@ -28,7 +29,7 @@ func (fc *FileConfig) ACMESubjectIsIP() bool {
 	if fc.UsesManualCertificate() {
 		return false
 	}
-	addr, ok := parseIPLiteral(fc.Server.Domain)
+	addr, ok := parseIPLiteral(fc.Server.Host)
 	return ok && addr.Is4()
 }
 
@@ -40,8 +41,12 @@ func (fc *FileConfig) ACMESubjectIsIP() bool {
 //  1. cert_path/key_path 恰好只配了一个 → 配置错误。两个都配才是手工证书模式
 //     （tls.LoadX509KeyPair 需要两份文件），只配一个时旧行为是**静默忽略**它、
 //     转而向 Let's Encrypt 申请——运维以为自己用的是自己的证书，实际不是。
-//  2. 两个都配 → 手工证书模式：domain 不参与取证（它只进日志），因此不做约束。
-//  3. 都没配 → ACME 模式：domain 必填；若写的是 IP 字面量，只接受**公网 IPv4**。
+//  2. 两个都配 → 手工证书模式：host 不参与取证（它只进日志），因此不校验公网性。
+//  3. 都没配 → ACME 模式：host 必填；若写的是 IP 字面量，只接受**公网 IPv4**。
+//
+// 与取证模式无关的前置约束：host 不得包含端口，也不得写成带方括号的 IP 字面量。
+// 这一步放在取证模式判定之前，因此手工证书模式同样适用——那时 host 只进启动日志，
+// 但契约是"host 不含端口"，否则日志与 ACME 标识符都会出现误导性内容。
 //
 // 为什么 IP-only 只接受公网 IPv4：
 //
@@ -52,7 +57,7 @@ func (fc *FileConfig) ACMESubjectIsIP() bool {
 //     TEST-NET、240/4 等段，只靠 CA 侧兜底）：与其让运维等一轮 ACME 往返才看到
 //     拒绝，不如在配置加载阶段就说清楚出路（公网 IP，或自签证书 + 客户端 ca_path）。
 //     不要为了"和 certmagic 对齐"而放宽这里。
-//   - IPv4：客户端用 `https://<address>:<port>` 与 `<address>:<port>` 拼服务端
+//   - IPv4：客户端用 `https://<host>:<port>` 与 `<host>:<port>` 拼服务端
 //     地址，IPv6 字面量（以及 IPv4-mapped 的 ::ffff:a.b.c.d、带方括号的写法）
 //     在这两处都无法表达，net.Dial 会以 "too many colons" 失败——那是运行期才
 //     暴露的症状，而且看起来与证书无关。
@@ -62,6 +67,21 @@ func (fc *FileConfig) ACMESubjectIsIP() bool {
 // 只能是短生命周期证书（约 160 小时），续期同样要重新验证。
 func (fc *FileConfig) validateTLS() error {
 	srvCfg := fc.Server
+
+	// host 与 port 已经拆开：host 里再出现冒号只可能是把端口写了进来，写成
+	// 带方括号的 IP 字面量则不是客户端能拼出的地址形态。这两条约束与证书来源
+	// 无关，一律在加载阶段拒绝——ACME 模式会把它当成无法解析的标识符，手工证书
+	// 模式则只是让启动日志出现一个不存在的主机名。
+	if srvCfg.Host != "" {
+		if _, isIP := parseIPLiteral(srvCfg.Host); !isIP {
+			if isBracketedIPLiteral(srvCfg.Host) {
+				return errNotPlainIPv4Literal(srvCfg.Host)
+			}
+			if strings.Contains(srvCfg.Host, ":") {
+				return fmt.Errorf("server.host %q must not include a port; use server.port for the listen port", srvCfg.Host)
+			}
+		}
+	}
 
 	certSet := srvCfg.CertPath != ""
 	keySet := srvCfg.KeyPath != ""
@@ -73,34 +93,32 @@ func (fc *FileConfig) validateTLS() error {
 		return nil
 	}
 
-	if srvCfg.Domain == "" {
-		return fmt.Errorf("server.domain is required unless server.cert_path and server.key_path are both set")
+	if srvCfg.Host == "" {
+		return fmt.Errorf("server.host is required unless server.cert_path and server.key_path are both set")
 	}
 
-	addr, isIP := parseIPLiteral(srvCfg.Domain)
+	addr, isIP := parseIPLiteral(srvCfg.Host)
 	if !isIP {
-		if isBracketedIPLiteral(srvCfg.Domain) {
-			return errNotPlainIPv4Literal(srvCfg.Domain)
-		}
-		// 域名：公网性与可解析性由 certmagic/ACME 侧判断。
+		// 域名：公网性与可解析性由 certmagic/ACME 侧判断（形态已在上面的
+		// "host 不含端口"前置约束里校验过）。
 		return nil
 	}
 	if !addr.Is4() {
-		return errNotPlainIPv4Literal(srvCfg.Domain)
+		return errNotPlainIPv4Literal(srvCfg.Host)
 	}
-	if util.IsLANIP(srvCfg.Domain) {
-		return fmt.Errorf("server.domain %q is a private or reserved address, for which Let's Encrypt cannot issue "+
+	if util.IsLANIP(srvCfg.Host) {
+		return fmt.Errorf("server.host %q is a private or reserved address, for which Let's Encrypt cannot issue "+
 			"a certificate (it validates by connecting to the address on port 443 and refuses non-public addresses); "+
 			"use the server's public IPv4 address, or set server.cert_path/server.key_path and hand clients "+
-			"the matching server.ca_path", srvCfg.Domain)
+			"the matching server.ca_path", srvCfg.Host)
 	}
 	return nil
 }
 
-func errNotPlainIPv4Literal(domain string) error {
-	return fmt.Errorf("server.domain %q is an IP literal, but only a plain IPv4 literal is supported: "+
+func errNotPlainIPv4Literal(host string) error {
+	return fmt.Errorf("server.host %q is an IP literal, but only a plain IPv4 literal is supported: "+
 		"the client builds https://<address>:<port> from this value, which cannot express an IPv6 or "+
-		"IPv4-mapped address (write 1.2.3.4, not [1.2.3.4] or ::ffff:1.2.3.4)", domain)
+		"IPv4-mapped address (write 1.2.3.4, not [1.2.3.4] or ::ffff:1.2.3.4)", host)
 }
 
 // parseIPLiteral 解析规范写法的 IP 字面量。netip.ParseAddr 本身就不接受方括号、

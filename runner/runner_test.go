@@ -21,7 +21,7 @@ func testConfig() *config.ClientConfig {
 		// 使用字面 IP 让测试不涉及启动阶段的 DNS 工作：
 		// resolveServerDomain（以及 client.New 中的 IPv6 解析）都会跳过
 		// 字面 IP，因此测试永远不会发起真实的 DNS 查询。
-		Address:  "127.0.0.1",
+		Host:     "127.0.0.1",
 		Port:     443,
 		Password: "test-password",
 		Method:   "aes-256-gcm",
@@ -210,7 +210,7 @@ func TestResolveServerDomain(t *testing.T) {
 	serverStartupResolveTimeout = 50 * time.Millisecond
 
 	// 字面 IP 无需解析：不触碰 DNS 直接跳过。
-	cfgIP := testConfig() // Address 是 127.0.0.1
+	cfgIP := testConfig() // Host 是 127.0.0.1
 	attempts := 0
 	prePopulateServerDomain = func(*dns.Cache, context.Context, string, []string, bool) error {
 		attempts++
@@ -234,7 +234,7 @@ func TestResolveServerDomain(t *testing.T) {
 
 	// 没有本地 socks5 服务：没有可预填充的 DNS 缓存，跳过。
 	cfgDomain := testConfig()
-	cfgDomain.Servers[0].Address = "proxy.example.com"
+	cfgDomain.Servers[0].Host = "proxy.example.com"
 	c = &Core{}
 	if err := c.resolveServerDomain(cfgDomain); err != nil {
 		t.Fatalf("no socks5 server should not resolve: %v", err)
@@ -261,7 +261,7 @@ func TestResolveServerDomain(t *testing.T) {
 
 	// TUN 模式失败同样只尝试一次：重试由 Run 派发到后台，不再阻塞启动。
 	cfgTun := testConfig()
-	cfgTun.Servers[0].Address = "proxy.example.com"
+	cfgTun.Servers[0].Host = "proxy.example.com"
 	cfgTun.Local.EnableTun2socks = true
 	attempts = 0
 	c = &Core{dnsCache: dns.NewCache("")}
@@ -349,7 +349,7 @@ func TestRunDegradesWhenServerDomainUnresolved(t *testing.T) {
 	}
 
 	cfg := testConfig()
-	cfg.Servers[0].Address = "proxy.example.com"
+	cfg.Servers[0].Host = "proxy.example.com"
 	cfg.Local.SocksPort = freePort(t)
 	cfg.Local.HTTPPort = 0
 
@@ -399,7 +399,7 @@ func TestRunServerDomainReadyImmediately(t *testing.T) {
 		return nil
 	}
 
-	cfg := testConfig() // Address 是字面 IP
+	cfg := testConfig() // Host 是字面 IP
 	cfg.Local.SocksPort = freePort(t)
 	cfg.Local.HTTPPort = 0
 
@@ -437,7 +437,7 @@ func TestServerDomainRetryStopsOnStop(t *testing.T) {
 	}
 
 	cfg := testConfig()
-	cfg.Servers[0].Address = "proxy.example.com"
+	cfg.Servers[0].Host = "proxy.example.com"
 	cfg.Local.SocksPort = freePort(t)
 	cfg.Local.HTTPPort = 0
 

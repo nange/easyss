@@ -44,7 +44,7 @@ func main() {
 	flag.BoolVar(&printVer, "version", false, "print version")
 	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file (full mode)")
 	flag.BoolVar(&showConfigExampleSimple, "show-config-example-simple", false, "show a example of config file (simple mode)")
-	flag.StringVar(&sc.Server, "s", "", "server address")
+	flag.StringVar(&sc.Server, "s", "", "server host (domain or IP, without port)")
 	flag.IntVar(&sc.ServerPort, "p", 0, "server port")
 	flag.StringVar(&sc.Password, "k", "", "password")
 	flag.StringVar(&sc.Method, "m", "", "encryption method (aes-256-gcm, chacha20-poly1305)")
@@ -128,8 +128,13 @@ Flags:
 			}
 			os.Exit(1)
 		}
-	} else {
-		config.ApplySimpleOverrides(cfg, sc)
+	} else if err := config.ApplySimpleOverrides(cfg, sc); err != nil {
+		// 命令行覆盖同样要过加载期那套校验（例如 -s 里带了端口）。
+		log.Error("[EASYSS-V3] apply simple overrides", "err", err)
+		if !disableTray {
+			notifyConfigError(err)
+		}
+		os.Exit(1)
 	}
 
 	// 将相对文件路径（direct_file/proxy_file/ca_path）相对于可执行文件目录解析，
@@ -457,7 +462,7 @@ func exampleV3Config() string {
 	cfg := config.ClientConfig{
 		ConfigVersion: 3,
 		Servers: []*config.ServerProfile{{
-			Address:  "your-domain.com",
+			Host:     "your-domain.com",
 			Port:     sharedconfig.DefaultServerPort,
 			Password: "your-password",
 			Method:   sharedconfig.DefaultMethod,

@@ -23,14 +23,15 @@ func writeConfig(t *testing.T, body string) string {
 }
 
 // TestLoadConfigAppliesDefaults 固定 LoadConfig 的契约：调用方拿到的配置已经
-// 归一化（timeout 写回、log.level 取常量默认值）且相对文件路径已解析，因此
-// cmd/easyss-server 不再需要自己排列这些步骤。
+// 归一化（timeout 写回、log.level 与 server.port 取常量默认值）且相对文件路径
+// 已解析，因此 cmd/easyss-server 不再需要自己排列这些步骤。
 func TestLoadConfigAppliesDefaults(t *testing.T) {
 	fc, err := LoadConfig(writeConfig(t, `{"server":{"cert_path":"server.crt","key_path":"server.key"},"log":{"file_path":"logs/easyss.log"}}`))
 	require.NoError(t, err)
 
 	require.Equal(t, sharedconfig.DefaultTimeout, fc.Timeout)
 	require.Equal(t, sharedconfig.DefaultLogLevel, fc.Log.Level)
+	require.Equal(t, sharedconfig.DefaultServerPort, fc.Server.Port)
 	if want := filepath.Join(util.CurrentDir(), "server.crt"); fc.Server.CertPath != want {
 		t.Errorf("CertPath = %q, want %q", fc.Server.CertPath, want)
 	}
@@ -54,7 +55,7 @@ func TestLoadConfigClampsTimeout(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		fc, err := LoadConfig(writeConfig(t, fmt.Sprintf(`{"server":{"domain":"example.com"},"timeout":%d}`, tc.in)))
+		fc, err := LoadConfig(writeConfig(t, fmt.Sprintf(`{"server":{"host":"example.com"},"timeout":%d}`, tc.in)))
 		require.NoError(t, err)
 		if fc.Timeout != tc.want {
 			t.Errorf("timeout %d -> %d, want %d", tc.in, fc.Timeout, tc.want)
@@ -66,12 +67,12 @@ func TestLoadConfigClampsTimeout(t *testing.T) {
 // 的配置被拒绝，而版本字段缺失（0）与当前版本都被接受。域名/证书的必填校验是另一
 // 道闸（见 TestLoadConfigValidatesTLS），因此这里的夹具给出一份合法的取证配置。
 func TestLoadConfigRejectsUnsupportedVersion(t *testing.T) {
-	_, err := LoadConfig(writeConfig(t, `{"version":2,"server":{"domain":"example.com"}}`))
+	_, err := LoadConfig(writeConfig(t, `{"version":2,"server":{"host":"example.com"}}`))
 	require.ErrorContains(t, err, "unsupported config version")
 
 	for _, body := range []string{
-		`{"server":{"domain":"example.com"}}`,
-		fmt.Sprintf(`{"version":%d,"server":{"domain":"example.com"}}`, SupportedConfigVersion),
+		`{"server":{"host":"example.com"}}`,
+		fmt.Sprintf(`{"version":%d,"server":{"host":"example.com"}}`, SupportedConfigVersion),
 	} {
 		_, err := LoadConfig(writeConfig(t, body))
 		require.NoError(t, err, "body %s", body)
@@ -94,6 +95,7 @@ func TestApplyDefaultsIsIdempotent(t *testing.T) {
 
 	require.Equal(t, sharedconfig.MaxTimeout, fc.Timeout)
 	require.Equal(t, "debug", fc.Log.Level)
+	require.Equal(t, sharedconfig.DefaultServerPort, fc.Server.Port)
 
 	once := fc
 	applyDefaults(&fc)
@@ -112,20 +114,28 @@ func TestExampleConfigIsNormalized(t *testing.T) {
 	require.Equal(t, DefaultAllowedMethods(), fc.Server.AllowedMethods)
 	require.Equal(t, []string{sharedconfig.DefaultProtocol}, fc.Transport.Protocols)
 	require.Equal(t, SupportedConfigVersion, fc.ConfigVersion)
+	require.Equal(t, "your-domain.com", fc.Server.Host)
+	require.Equal(t, sharedconfig.DefaultServerPort, fc.Server.Port)
+	require.NoError(t, fc.validateListen())
 
-	// 示例必须能完整序列化出全部字段（新增字段时不会静默漏在示例之外），
-	// 且空列表呈现为 []（与 README 的"默认值 []"一致），不是 null。
+	// 示例必须能完整序列化出全部字段（新增字段时不会静默漏在示例之外；
+	// bind 是可选高级项，默认为空，故不出现在示例中），且空列表呈现为 []
+	// （与 README 的"默认值 []"一致），不是 null。
 	data, err := json.Marshal(fc)
 	require.NoError(t, err)
 	require.Contains(t, string(data), `"cdn_domains":[]`)
 	for _, key := range []string{
 		`"server"`, `"fallback"`, `"shaper"`, `"transport"`,
 		`"next_proxy"`, `"log"`, `"pprof_enabled"`, `"timeout"`,
+		`"host"`, `"port"`,
 		// HTTP/2 上行参数必须在示例里可见：用户排查上传速度时就是照这些键调。
 		`"h2_max_frame_size"`, `"h2_recv_buf_conn"`, `"h2_recv_buf_stream"`,
 	} {
 		require.Contains(t, string(data), key)
 	}
+	require.NotContains(t, string(data), `"domain"`)
+	require.NotContains(t, string(data), `"listen"`)
+	require.NotContains(t, string(data), `"address"`)
 }
 
 // TestTransportConfigH2KeysJSON 固定 HTTP/2 传输键的对外名字与"显式值原样保留"
@@ -180,8 +190,8 @@ func TestFileConfigJSON(t *testing.T) {
 	data := []byte(`{
 			"version": 3,
 		"server": {
-			"listen": ":443",
-			"domain": "example.com",
+			"port": 443,
+			"host": "example.com",
 			"password": "secret",
 			"allowed_methods": ["aes-256-gcm"],
 			"timeout": 99,
@@ -195,7 +205,9 @@ func TestFileConfigJSON(t *testing.T) {
 
 	var fc FileConfig
 	require.NoError(t, json.Unmarshal(data, &fc))
-	require.Equal(t, ":443", fc.Server.Listen)
+	require.Equal(t, "example.com", fc.Server.Host)
+	require.Equal(t, 443, fc.Server.Port)
+	require.Empty(t, fc.Server.Bind)
 	require.Equal(t, "secret", fc.Server.Password)
 	require.Equal(t, []string{"aes-256-gcm"}, fc.Server.AllowedMethods)
 	require.Equal(t, "fallback.html", fc.Fallback.Target)
@@ -203,6 +215,143 @@ func TestFileConfigJSON(t *testing.T) {
 	require.Equal(t, "socks5://127.0.0.1:1080", fc.NextProxy.URL)
 	require.True(t, fc.NextProxy.EnableUDP)
 	require.True(t, fc.PprofEnabled)
+}
+
+// TestServerConfigLegacyKeys 固定旧键 domain/listen 的映射：domain 映射到 host，
+// listen 拆成 bind+port（含 IPv6 与不带主机名的通配写法）。
+func TestServerConfigLegacyKeys(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		host string
+		bind string
+		port int
+		addr string
+	}{
+		{
+			name: "通配监听",
+			body: `{"domain":"example.com","listen":":8443"}`,
+			host: "example.com",
+			port: 8443,
+			addr: ":8443",
+		},
+		{
+			name: "指定 IPv4 网卡",
+			body: `{"domain":"example.com","listen":"127.0.0.1:8443"}`,
+			host: "example.com",
+			bind: "127.0.0.1",
+			port: 8443,
+			addr: "127.0.0.1:8443",
+		},
+		{
+			name: "指定 IPv6 网卡",
+			body: `{"domain":"example.com","listen":"[::1]:8443"}`,
+			host: "example.com",
+			bind: "::1",
+			port: 8443,
+			addr: "[::1]:8443",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var sc ServerConfig
+			require.NoError(t, json.Unmarshal([]byte(tc.body), &sc))
+			require.Equal(t, tc.host, sc.Host)
+			require.Equal(t, tc.bind, sc.Bind)
+			require.Equal(t, tc.port, sc.Port)
+			require.Equal(t, tc.addr, sc.ListenAddr())
+		})
+	}
+}
+
+// TestServerConfigRejectsAmbiguousKeys 固定新旧键不能同时出现：否则无法判断
+// 哪一个才是用户意图，静默选择任意一个都会让配置与运行行为不一致。
+func TestServerConfigRejectsAmbiguousKeys(t *testing.T) {
+	for _, body := range []string{
+		`{"host":"example.com","domain":"other.example.com"}`,
+		`{"host":"example.com","port":443,"listen":":443"}`,
+		`{"host":"example.com","bind":"127.0.0.1","listen":":443"}`,
+		`{"host":"example.com","listen":":443"}`,
+		`{"domain":"example.com","bind":"127.0.0.1"}`,
+	} {
+		var sc ServerConfig
+		err := json.Unmarshal([]byte(body), &sc)
+		require.Error(t, err, "body %s", body)
+	}
+}
+
+// TestServerConfigRejectsInvalidListen 固定旧 listen 必须是 host:port 形态：
+// 缺端口时在加载阶段就报错，而不是留到运行期。
+func TestServerConfigRejectsInvalidListen(t *testing.T) {
+	for _, body := range []string{
+		`{"listen":"443"}`,
+		`{"listen":"127.0.0.1"}`,
+	} {
+		var sc ServerConfig
+		err := json.Unmarshal([]byte(body), &sc)
+		require.Error(t, err, "body %s", body)
+	}
+}
+
+// TestServerConfigListenAddr 固定监听地址的唯一格式化入口：空 bind 表示所有
+// 网卡，IPv6 会自动加方括号。
+func TestServerConfigListenAddr(t *testing.T) {
+	cases := []struct {
+		name string
+		bind string
+		port int
+		want string
+	}{
+		{"通配", "", 443, ":443"},
+		{"未配置端口回退默认值", "", 0, ":443"},
+		{"IPv4", "127.0.0.1", 8443, "127.0.0.1:8443"},
+		{"IPv6", "::1", 8443, "[::1]:8443"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sc := ServerConfig{Bind: tc.bind, Port: tc.port}
+			require.Equal(t, tc.want, sc.ListenAddr())
+		})
+	}
+}
+
+// TestLoadConfigPortDefaultAndValidation 固定 port 的默认值与边界：0 取默认 443，
+// 越界值直接报配置错误（不钳制）。
+func TestLoadConfigPortDefaultAndValidation(t *testing.T) {
+	fc, err := LoadConfig(writeConfig(t, `{"server":{"host":"example.com"}}`))
+	require.NoError(t, err)
+	require.Equal(t, sharedconfig.DefaultServerPort, fc.Server.Port)
+	require.Equal(t, ":443", fc.Server.ListenAddr())
+
+	fc, err = LoadConfig(writeConfig(t, `{"server":{"host":"example.com","port":8443}}`))
+	require.NoError(t, err)
+	require.Equal(t, 8443, fc.Server.Port)
+
+	for _, port := range []int{-1, 65536} {
+		_, err := LoadConfig(writeConfig(t, fmt.Sprintf(`{"server":{"host":"example.com","port":%d}}`, port)))
+		require.ErrorContains(t, err, "server.port", "port %d", port)
+	}
+}
+
+// TestLoadConfigLegacyListen 固定旧配置能完整加载并保留绑定地址。
+func TestLoadConfigLegacyListen(t *testing.T) {
+	fc, err := LoadConfig(writeConfig(t, `{"server":{"listen":"127.0.0.1:8443","domain":"example.com","password":"p"}}`))
+	require.NoError(t, err)
+	require.Equal(t, "example.com", fc.Server.Host)
+	require.Equal(t, 8443, fc.Server.Port)
+	require.Equal(t, "127.0.0.1", fc.Server.Bind)
+	require.Equal(t, "127.0.0.1:8443", fc.Server.ListenAddr())
+}
+
+// TestLoadConfigRejectsInvalidBind 固定 bind 只接受主机名或 IP 字面量：带端口或
+// 方括号的写法在加载阶段就报错。
+func TestLoadConfigRejectsInvalidBind(t *testing.T) {
+	for _, bind := range []string{"127.0.0.1:8443", "[::1]", "host:port"} {
+		body := fmt.Sprintf(`{"server":{"host":"example.com","bind":%q}}`, bind)
+		_, err := LoadConfig(writeConfig(t, body))
+		require.ErrorContains(t, err, "server.bind", "bind %q", bind)
+	}
 }
 
 func TestResolveFilePaths(t *testing.T) {
