@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -136,6 +137,17 @@ func TestServerURL(t *testing.T) {
 		}
 	})
 
+	t.Run("IPv6 字面量自动加方括号", func(t *testing.T) {
+		cfg := &ClientConfig{
+			Servers: []*ServerProfile{
+				{Host: "2001:db8::1", Port: 443, Default: true},
+			},
+		}
+		if url := cfg.ServerURL(); url != "https://[2001:db8::1]:443" {
+			t.Errorf("ServerURL = %q, want bracketed IPv6", url)
+		}
+	})
+
 	t.Run("无服务器", func(t *testing.T) {
 		cfg := &ClientConfig{}
 		if url := cfg.ServerURL(); url != "" {
@@ -256,6 +268,16 @@ func TestServerListAddrs(t *testing.T) {
 		}
 	})
 
+	t.Run("IPv6 字面量自动加方括号", func(t *testing.T) {
+		cfg := &ClientConfig{
+			Servers: []*ServerProfile{{Host: "2001:db8::1", Port: 443}},
+		}
+		addrs := cfg.ServerListAddrs()
+		if len(addrs) != 1 || addrs[0] != "[2001:db8::1]:443" {
+			t.Errorf("addrs = %v", addrs)
+		}
+	})
+
 	t.Run("空列表", func(t *testing.T) {
 		cfg := &ClientConfig{}
 		addrs := cfg.ServerListAddrs()
@@ -274,6 +296,17 @@ func TestDefaultServerAddr(t *testing.T) {
 		}
 		if addr := cfg.DefaultServerAddr(); addr != "example.com:443" {
 			t.Errorf("DefaultServerAddr = %q", addr)
+		}
+	})
+
+	t.Run("IPv6 字面量自动加方括号", func(t *testing.T) {
+		cfg := &ClientConfig{
+			Servers: []*ServerProfile{
+				{Host: "2001:db8::1", Port: 443, Default: true},
+			},
+		}
+		if addr := cfg.DefaultServerAddr(); addr != "[2001:db8::1]:443" {
+			t.Errorf("DefaultServerAddr = %q, want bracketed IPv6", addr)
 		}
 	})
 
@@ -447,12 +480,27 @@ func TestSimpleOverridesUseHost(t *testing.T) {
 	cfg := &ClientConfig{
 		Servers: []*ServerProfile{{Host: "old.example", Port: 443}},
 	}
-	ApplySimpleOverrides(cfg, &config.SimpleConfig{Server: "new.example", ServerPort: 8443})
+	if err := ApplySimpleOverrides(cfg, &config.SimpleConfig{Server: "new.example", ServerPort: 8443}); err != nil {
+		t.Fatal(err)
+	}
 	if cfg.Servers[0].Host != "new.example" {
 		t.Errorf("Host = %q, want new.example", cfg.Servers[0].Host)
 	}
 	if cfg.Servers[0].Port != 8443 {
 		t.Errorf("Port = %d, want 8443", cfg.Servers[0].Port)
+	}
+}
+
+// TestApplySimpleOverridesRejectsHostWithPort 固定命令行覆盖也要过与文件加载
+// 相同的 host 校验：-s 里带端口不能留到拨号时才以 "too many colons" 暴露。
+func TestApplySimpleOverridesRejectsHostWithPort(t *testing.T) {
+	cfg := &ClientConfig{Servers: []*ServerProfile{{Host: "old.example", Port: 443}}}
+	err := ApplySimpleOverrides(cfg, &config.SimpleConfig{Server: "new.example:443"})
+	if err == nil {
+		t.Fatal("expected error for host with port")
+	}
+	if !strings.Contains(err.Error(), "must not include a port") {
+		t.Errorf("error = %v, want port hint", err)
 	}
 }
 
@@ -957,13 +1005,17 @@ func TestTimeoutClampedOnEveryEntry(t *testing.T) {
 
 	t.Run("简单模式覆盖", func(t *testing.T) {
 		cfg := &ClientConfig{Timeout: config.DefaultTimeout}
-		ApplySimpleOverrides(cfg, &config.SimpleConfig{Timeout: 1})
+		if err := ApplySimpleOverrides(cfg, &config.SimpleConfig{Timeout: 1}); err != nil {
+			t.Fatal(err)
+		}
 		if cfg.Timeout != config.MinTimeout {
 			t.Errorf("Timeout = %d, want clamped to %d", cfg.Timeout, config.MinTimeout)
 		}
 
 		// 未提供覆盖（0）时保持配置中的值，不会被当成"钳制到下限"。
-		ApplySimpleOverrides(cfg, &config.SimpleConfig{})
+		if err := ApplySimpleOverrides(cfg, &config.SimpleConfig{}); err != nil {
+			t.Fatal(err)
+		}
 		if cfg.Timeout != config.MinTimeout {
 			t.Errorf("Timeout = %d, want unchanged %d", cfg.Timeout, config.MinTimeout)
 		}
@@ -1079,14 +1131,18 @@ func TestTunMTU(t *testing.T) {
 		}
 
 		overridden := DefaultConfig()
-		ApplySimpleOverrides(overridden, &config.SimpleConfig{TunMTU: 100})
+		if err := ApplySimpleOverrides(overridden, &config.SimpleConfig{TunMTU: 100}); err != nil {
+			t.Fatal(err)
+		}
 		if overridden.Local.TunMTU != config.MinTunMTU {
 			t.Errorf("overridden Local.TunMTU = %d, want %d (clamped)", overridden.Local.TunMTU, config.MinTunMTU)
 		}
 
 		// 未提供覆盖值时不得改动已有配置：0 表示"未配置"，而不是"设成默认值"。
 		untouched := &ClientConfig{Local: LocalConfig{TunMTU: 8500}}
-		ApplySimpleOverrides(untouched, &config.SimpleConfig{})
+		if err := ApplySimpleOverrides(untouched, &config.SimpleConfig{}); err != nil {
+			t.Fatal(err)
+		}
 		if got := untouched.TunMTU(); got != 8500 {
 			t.Errorf("TunMTU() = %d, want 8500 (an empty override must not reset it)", got)
 		}

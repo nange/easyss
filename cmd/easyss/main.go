@@ -128,8 +128,13 @@ Flags:
 			}
 			os.Exit(1)
 		}
-	} else {
-		config.ApplySimpleOverrides(cfg, sc)
+	} else if err := config.ApplySimpleOverrides(cfg, sc); err != nil {
+		// 命令行覆盖同样要过加载期那套校验（例如 -s 里带了端口）。
+		log.Error("[EASYSS-V3] apply simple overrides", "err", err)
+		if !disableTray {
+			notifyConfigError(err)
+		}
+		os.Exit(1)
 	}
 
 	// 将相对文件路径（direct_file/proxy_file/ca_path）相对于可执行文件目录解析，

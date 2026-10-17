@@ -41,8 +41,12 @@ func (fc *FileConfig) ACMESubjectIsIP() bool {
 //  1. cert_path/key_path 恰好只配了一个 → 配置错误。两个都配才是手工证书模式
 //     （tls.LoadX509KeyPair 需要两份文件），只配一个时旧行为是**静默忽略**它、
 //     转而向 Let's Encrypt 申请——运维以为自己用的是自己的证书，实际不是。
-//  2. 两个都配 → 手工证书模式：host 不参与取证（它只进日志），因此不做约束。
+//  2. 两个都配 → 手工证书模式：host 不参与取证（它只进日志），因此不校验公网性。
 //  3. 都没配 → ACME 模式：host 必填；若写的是 IP 字面量，只接受**公网 IPv4**。
+//
+// 与取证模式无关的前置约束：host 不得包含端口，也不得写成带方括号的 IP 字面量。
+// 这一步放在取证模式判定之前，因此手工证书模式同样适用——那时 host 只进启动日志，
+// 但契约是"host 不含端口"，否则日志与 ACME 标识符都会出现误导性内容。
 //
 // 为什么 IP-only 只接受公网 IPv4：
 //
@@ -64,6 +68,21 @@ func (fc *FileConfig) ACMESubjectIsIP() bool {
 func (fc *FileConfig) validateTLS() error {
 	srvCfg := fc.Server
 
+	// host 与 port 已经拆开：host 里再出现冒号只可能是把端口写了进来，写成
+	// 带方括号的 IP 字面量则不是客户端能拼出的地址形态。这两条约束与证书来源
+	// 无关，一律在加载阶段拒绝——ACME 模式会把它当成无法解析的标识符，手工证书
+	// 模式则只是让启动日志出现一个不存在的主机名。
+	if srvCfg.Host != "" {
+		if _, isIP := parseIPLiteral(srvCfg.Host); !isIP {
+			if isBracketedIPLiteral(srvCfg.Host) {
+				return errNotPlainIPv4Literal(srvCfg.Host)
+			}
+			if strings.Contains(srvCfg.Host, ":") {
+				return fmt.Errorf("server.host %q must not include a port; use server.port for the listen port", srvCfg.Host)
+			}
+		}
+	}
+
 	certSet := srvCfg.CertPath != ""
 	keySet := srvCfg.KeyPath != ""
 	switch {
@@ -80,16 +99,8 @@ func (fc *FileConfig) validateTLS() error {
 
 	addr, isIP := parseIPLiteral(srvCfg.Host)
 	if !isIP {
-		if isBracketedIPLiteral(srvCfg.Host) {
-			return errNotPlainIPv4Literal(srvCfg.Host)
-		}
-		// host 与 port 已经拆开；域名里再带冒号只会被 certmagic 当作一个
-		// 无法解析的标识符，报出与端口无关的 ACME 错误。这里直接拒绝，
-		// 同时覆盖 "example.com:443" 与 "[::1]:443" 这类写法。
-		if strings.Contains(srvCfg.Host, ":") {
-			return fmt.Errorf("server.host %q must not include a port; use server.port for the listen port", srvCfg.Host)
-		}
-		// 域名：公网性与可解析性由 certmagic/ACME 侧判断。
+		// 域名：公网性与可解析性由 certmagic/ACME 侧判断（形态已在上面的
+		// "host 不含端口"前置约束里校验过）。
 		return nil
 	}
 	if !addr.Is4() {

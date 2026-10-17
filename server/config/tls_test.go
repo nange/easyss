@@ -26,6 +26,9 @@ func TestValidateTLS(t *testing.T) {
 			{"空 host 且无手工证书", ServerConfig{}, "server.host is required"},
 			{"host 不得包含端口", ServerConfig{Host: "example.com:443"}, "must not include a port"},
 			{"IPv4 host 不得包含端口", ServerConfig{Host: "1.2.3.4:443"}, "must not include a port"},
+			// host 的形态约束与取证模式无关：手工证书模式下它只进日志，
+			// 但同样不允许把端口写进来。
+			{"手工证书下 host 也不得包含端口", ServerConfig{Host: "example.com:443", CertPath: "c.pem", KeyPath: "k.pem"}, "must not include a port"},
 			{"只配 cert_path", ServerConfig{Host: "example.com", CertPath: "c.pem"}, "must be set together"},
 			{"只配 key_path", ServerConfig{Host: "example.com", KeyPath: "k.pem"}, "must be set together"},
 		}
@@ -121,6 +124,11 @@ func TestLoadConfigValidatesTLS(t *testing.T) {
 
 	t.Run("host 带端口启动失败", func(t *testing.T) {
 		_, err := LoadConfig(writeConfig(t, `{"server":{"host":"example.com:443","port":443,"password":"p"}}`))
+		require.ErrorContains(t, err, "must not include a port")
+	})
+
+	t.Run("手工证书模式下 host 带端口同样失败", func(t *testing.T) {
+		_, err := LoadConfig(writeConfig(t, `{"server":{"host":"example.com:443","port":443,"cert_path":"c.pem","key_path":"k.pem","password":"p"}}`))
 		require.ErrorContains(t, err, "must not include a port")
 	})
 }

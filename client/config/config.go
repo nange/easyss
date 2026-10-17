@@ -4,8 +4,10 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -135,7 +137,9 @@ type ClientConfig struct {
 
 // validateServers 固定完整模式服务端条目的基本契约：host 必填，且不得把端口
 // 写进 host。冒号只有在 host 是合法 IP 字面量（IPv6）时才允许——域名带端口会
-// 被拼成 https://<host>:<port>:<port>，失败点离配置很远。
+// 被拼成 https://<host>:<port>:<port>，失败点离配置很远。地址拼装统一走
+// net.JoinHostPort（见 ServerURL/DefaultServerAddr/ServerListAddrs），IPv6
+// 字面量会自动加上方括号。
 func (c *ClientConfig) validateServers() error {
 	for i, srv := range c.Servers {
 		if srv == nil {
@@ -168,7 +172,7 @@ func (c *ClientConfig) ServerURL() string {
 	if srv == nil {
 		return ""
 	}
-	return fmt.Sprintf("https://%s:%d", srv.Host, srv.Port)
+	return "https://" + net.JoinHostPort(srv.Host, strconv.Itoa(srv.Port))
 }
 
 // TimeoutDuration 返回归一化后的基础超时：非正值取默认值，越界值钳制到
@@ -360,7 +364,7 @@ func (c *ClientConfig) SetDefaultServerIndex(i int) {
 func (c *ClientConfig) ServerListAddrs() []string {
 	var addrs []string
 	for _, s := range c.Servers {
-		addrs = append(addrs, fmt.Sprintf("%s:%d", s.Host, s.Port))
+		addrs = append(addrs, serverAddr(s))
 	}
 	return addrs
 }
@@ -370,7 +374,13 @@ func (c *ClientConfig) DefaultServerAddr() string {
 	if srv == nil {
 		return ""
 	}
-	return fmt.Sprintf("%s:%d", srv.Host, srv.Port)
+	return serverAddr(srv)
+}
+
+// serverAddr 是 host:port 的唯一拼装入口：IPv6 字面量必须带方括号才是合法的
+// dial 地址与 URL authority（net.JoinHostPort 负责加，域名/IPv4 输出不变）。
+func serverAddr(s *ServerProfile) string {
+	return net.JoinHostPort(s.Host, strconv.Itoa(s.Port))
 }
 
 func (c *ClientConfig) DefaultServerIndex() int {
