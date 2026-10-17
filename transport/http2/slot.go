@@ -51,6 +51,10 @@ type slotConn struct {
 // 时 16 个并发请求只有 3 个完成。Go 自己的
 // TestTransportPoolConnHTTP2StrictMaxConcurrentRequests 至今仍是 t.Skip。因此这个
 // 例外只靠"固定 128 + 调度器摊流"把门槛压到实际不可达，不做额外处理。
+//
+// 这条路径不是静默的：DialTLSContext 用 Swap 写入连接身份，命中"这一代已经有
+// 身份"时记一条 Warn 并累加 stats.SecondConnInGeneration（见 issue #231），
+// 线上据此判断这个例外到底有没有发生过（正常恒为 0）。
 type slotTransport struct {
 	// slot 是这一代所属的槽位：连接关闭时要通过它把槽位换到新一代
 	// （见 retireGeneration）。

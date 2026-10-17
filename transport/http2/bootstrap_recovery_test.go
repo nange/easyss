@@ -16,6 +16,7 @@ import (
 	utls "github.com/refraction-networking/utls"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
 )
 
@@ -800,4 +801,95 @@ func TestHTTP2Transport_InvalidateConnReplacesPool(t *testing.T) {
 	if got := requests.Load(); got != 2 {
 		t.Fatalf("server handled %d requests, want 2 (the judged-dead one + the one after invalidation)", got)
 	}
+}
+
+// TestHTTP2Transport_SecondConnInGenerationIsObservable 固定 issue #231 里的已知
+// 例外可被观测：服务端每连接只允许一条并发流时，同一槽位上的第二条流会让
+// net/http 在同一张池里再拨一条——它会先丢掉 persistConn、让出 MaxConnsPerHost
+// 的计数再重拨，因此那个配置挡不住这条路径。传输层必须把这件事记成
+// stats.SecondConnInGeneration + 一条 Warn，而不是静默覆盖连接身份。
+func TestHTTP2Transport_SecondConnInGenerationIsObservable(t *testing.T) {
+	var conns atomic.Int32
+	started := make(chan struct{}, 2)
+	// 第一个到达的 handler 一直占住服务端唯一的流槽，直到测试在断言之后放行——
+	// 这是让"第二条流只能触发同池重拨"成为确定性条件的关键（用 sleep 占槽位会
+	// 把结论交给时序：CI 负载高时第一条流可能先返回，槽位让出，第二条流复用同一
+	// 条连接，计数就为 0）。
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, 4)
+		if _, err := io.ReadFull(r.Body, buf); err != nil {
+			return
+		}
+		started <- struct{}{}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	srv.EnableHTTP2 = true
+	srv.Config.Protocols = &http.Protocols{}
+	srv.Config.Protocols.SetHTTP2(true)
+	srv.Config.HTTP2 = &http.HTTP2Config{MaxConcurrentStreams: 1}
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	stats.ResetCounters()
+	tr := newRecoveryTransport(t, srv.URL, "")
+
+	open := func() transport.Stream {
+		t.Helper()
+		stream, err := tr.Open(context.Background(), transport.OpenRequest{
+			Endpoint:     sharedconfig.EndpointTCP,
+			Salt:         "dGVzdHNhbHR0ZXN0c2FsdA",
+			HighPriority: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := stream.Write([]byte("abcd")); err != nil {
+			t.Fatalf("write bootstrap record: %v", err)
+		}
+		return stream
+	}
+
+	first := open()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the first stream never reached the server")
+	}
+
+	// 第一条流仍被服务端持有（唯一槽位已满），第二条流只能触发同池重拨。
+	second := open()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the second stream never reached the server")
+	}
+
+	if got := stats.Collect().SecondConnInGeneration; got < 1 {
+		t.Fatalf("second dial in one generation was not counted (got %d)", got)
+	}
+	if got := conns.Load(); got < 2 {
+		t.Fatalf("server saw %d connections, want at least 2 (one per concurrent stream)", got)
+	}
+
+	unblock()
+	_, _ = io.Copy(io.Discard, first)
+	_, _ = io.Copy(io.Discard, second)
+	_ = first.Close()
+	_ = second.Close()
 }

@@ -256,8 +256,20 @@ func buildTransport(slot *transportSlot, gen *slotTransport, utlsCfg *utls.Confi
 			// 记录这条连接的身份，使判死路径能精确关闭承载活跃流的连接
 			// （http.Transport 自己关不掉它）。只有这里写入指针；清除一律走
 			// CAS（trackedConn.Close、invalidateConn）。
+			//
+			// 用 Swap 而不是 Store：归还的非 nil 旧身份说明这一代已经登记过一条
+			// 连接——net/http 在连接满流时会丢掉 persistConn、让出 MaxConnsPerHost
+			// 的计数，然后在同一张池里再拨一条（见 issue #231），因此
+			// MaxConnsPerHost=1 挡不住这条路径。身份仍按"最新连接"覆盖以保持既有
+			// 语义；但这条路径此前完全静默，这里把它变成 Warn + 计数，先回答
+			// "线上到底触发过没有"。
 			sc := &slotConn{c: uconn}
-			gen.conn.Store(sc)
+			if gen.conn.Swap(sc) != nil {
+				stats.RecordSecondConnInGeneration()
+				log.Warn("[TRANSPORT] second connection dialed in one generation",
+					"slot", slot.idx,
+					"active_streams", slot.active.Load())
+			}
 			return &trackedConn{Conn: uconn, gen: gen, self: sc}, nil
 		},
 	}
