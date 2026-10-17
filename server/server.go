@@ -365,7 +365,8 @@ func (s *Server) Start() error {
 	s.httpServer = buildHTTPServer(cfg, tlsConfig, s.mux, timeout)
 
 	// 把生效的 HTTP/2 上行参数打进启动日志：上传速度上不去时，第一件事就是确认
-	// 服务端到底给了多大的流级/连接级窗口与多少条并发流（配置覆盖也会体现在这里）。
+	// 服务端到底给了多大的流级/连接级窗口与多少条并发流（两个窗口可被配置覆盖，
+	// 并发流上限固定为 sharedconfig.HTTP2ServerMaxConcurrentStreams）。
 	log.Info("[SERVER] listening",
 		"addr", srvCfg.Listen,
 		"routes", []string{"/", sharedconfig.EndpointTCP, sharedconfig.EndpointUDP, sharedconfig.EndpointICMP, sharedconfig.EndpointProbe},
@@ -396,9 +397,6 @@ func buildHTTPServer(cfg *config.FileConfig, tlsConfig *tls.Config, mux *http.Se
 	}
 	if cfg.Transport.H2RecvBufStream > 0 {
 		http2Cfg.MaxReceiveBufferPerStream = cfg.Transport.H2RecvBufStream
-	}
-	if cfg.Transport.H2MaxConcurrentStreams > 0 {
-		http2Cfg.MaxConcurrentStreams = cfg.Transport.H2MaxConcurrentStreams
 	}
 
 	// 连接级窗口同时是流级窗口的硬上限：每个字节都要同时扣减两个窗口，因此把它配得

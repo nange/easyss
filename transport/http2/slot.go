@@ -12,29 +12,58 @@ import (
 
 // slotConn 标识一条底层连接。net/http 的 http.Transport 没有关闭"正在承载活跃流"
 // 的连接的 API（CloseIdleConnections 只回收空闲连接），因此传输层自己记录连接
-// 身份：DialTLSContext 写入新连接，trackedConn.Close 与 invalidateConnFrom 都
-// 通过 CAS 清除这个指针——"先比较身份再置空"保证同一时刻只有一个赢家，既不会
+// 身份：DialTLSContext 写入新连接，trackedConn.Close 与 invalidateConn 都
+// 通过 CAS 认领/清除这个指针——"先比较身份再置空"保证同一时刻只有一个赢家，既不会
 // 重复关闭，也不会误杀后来新建的连接。
 type slotConn struct {
 	c net.Conn
 }
 
 // slotTransport 是槽位连接池的一"代"：一个把 MaxConnsPerHost 固定为 1 的
-// net/http 连接池，以及由这张池的拨号路径建立的那条连接的稳定身份。
+// net/http 连接池，以及由这张池的拨号路径建立的那一条连接。
 //
-// 池与连接身份必须打包在一起，因为它们说的是同一件事：一条流"实际用过的那条
-// 连接"只能是"它提交请求时那张池里的那条连接"。分开记录就会错位——判死换池之后
-// 另一条流拨了新连接，而一条正在死去的流还持有槽位的"当前连接"作为自己的身份，
-// 于是把新连接记成自己的身份，之后误杀健康连接（判死换池（#226）修好之后仍然
-// 存在的既有窗口）。让身份随池走之后，这个窗口在结构上不存在：流读到的是自己
-// 那一代里的连接，新一代的连接它永远看不到。
+// 不变量：一"代"最多只有一条连接，而且这条连接一旦关闭（无论 net/http 回收还是
+// 本层判死），这一代立即作废——`retireGeneration` 把槽位换到新一代，旧一代的
+// conn 指针从此为空。于是"代"本身就是完整的连接身份：流在提交请求时记下当前这
+// 一代（http2Stream.gen），就等于记下了自己实际用过的那条连接，不需要再在写
+// 路径上"快照"槽位的当前连接。判死（invalidateConn）与判活（ConnAlive）都只在
+// 自己那一代里进行，一条正在死去的流永远碰不到后来新建的连接——判死换池
+// （#226）之后仍然存在的"把新连接记成自己身份、之后误杀健康连接"的窗口因此
+// 在结构上不存在。
+//
+// 唯一已知的例外来自 net/http 自己：一条连接达到服务端通告的
+// maxConcurrentStreams（固定 128，见 sharedconfig.HTTP2ServerMaxConcurrentStreams）
+// 时，h2 栈会把请求报成 ErrNoCachedConn；外层 transport 丢掉那条 persistConn、
+// connsPerHost 减一，然后在同一张池里再拨一条，而旧的 h2 连接不会被关闭（它的
+// 生命周期归 h2 栈，alt roundtripper 不实现 io.Closer）。MaxConnsPerHost=1 挡不住
+// 这条路径——它计的是 net/http 自己的 persistConn 数，而这里正是主动把那个计数
+// 让出来去"再拨一条 TCP 连接"（净效应：一张池里短暂地有两条连接，"代 == 连接"
+// 不再成立）。撞上它需要单条连接上 128 条并发流，而调度器按 least-active 把流摊到
+// 最多 conn_count_max（默认 15）个槽位，实际要上千条同时打开的流（每条被代理的
+// TCP 连接 = 一条流）。
+//
+// 不能用 HTTP2Config.StrictMaxConcurrentRequests 关掉这个行为：在当前标准库实现
+// 里它会卡死。strict 模式下每个请求在 ReserveNewRequest 时占一个预约，预约要到
+// 拿到 reqHeaderMu 之后才释放；而第一个进入 awaitOpenSlotForStreamLocked 的请求
+// 握着 reqHeaderMu 等待"活跃流 + 预约 < 上限"，排队者的预约又让这个条件永远达不到
+// （internal/http2 transport.go 的 decrStreamReservationsLocked / awaitOpenSlotForStreamLocked）。
+// 实测（服务端宣告 1 条并发流）：4 个并发请求只有 1 个完成、其余全部超时；宣告 4 条
+// 时 16 个并发请求只有 3 个完成。Go 自己的
+// TestTransportPoolConnHTTP2StrictMaxConcurrentRequests 至今仍是 t.Skip。因此这个
+// 例外只靠"固定 128 + 调度器摊流"把门槛压到实际不可达，不做额外处理。
+//
+// 这条路径不是静默的：DialTLSContext 用 Swap 写入连接身份，命中"这一代已经有
+// 身份"时记一条 Warn 并累加 stats.SecondConnInGeneration（见 issue #231），
+// 线上据此判断这个例外到底有没有发生过（正常恒为 0）。
 type slotTransport struct {
+	// slot 是这一代所属的槽位：连接关闭时要通过它把槽位换到新一代
+	// （见 retireGeneration）。
+	slot *transportSlot
 	// tr 是这一代的连接池。使用方必须持有这一代本身，而不是反复读槽位的
-	// "当前一代"：只有这样"读到的连接身份"与"提交请求用的池"才必然同源。
+	// "当前一代"：只有这样"连接身份"与"提交请求用的池"才必然同源。
 	tr *http.Transport
-	// conn 是这一代拨号路径建立的连接（MaxConnsPerHost=1，同一时刻至多一条）。
-	// 只有这一代的 DialTLSContext 写入；清除一律走 CAS（trackedConn.Close、
-	// invalidateConnFrom）。
+	// conn 是这一代拨号路径建立的连接（不变量：一代至多一条）。只有这一代的
+	// DialTLSContext 写入；清除一律走 takeConn 的 CAS。
 	conn atomic.Pointer[slotConn]
 }
 
@@ -46,13 +75,12 @@ type transportSlot struct {
 	// idx 用于统计上报。
 	idx int
 
-	// gen 是槽位当前的连接池"代"（池 + 该池建立的连接身份，见 slotTransport）。
-	// MaxConnsPerHost=1 把一代池固定到一条连接上，因此"池"与"那条连接"是同一
-	// 件事；判死换连接就是换掉整个一代（见 replacePool），读取一律走
-	// generation()/transport()。
+	// gen 是槽位当前的连接池"代"（池 + 该池建立的唯一一条连接，见
+	// slotTransport）。判死与连接回收都会把槽位换到新一代（advanceGeneration），
+	// 读取一律走 generation()/transport()。
 	gen atomic.Pointer[slotTransport]
-	// newGen 按构造时的参数重建一代，供 replacePool 使用。只有 newSlot 建出的
-	// 槽位有工厂；测试里裸构造的零值槽位没有池可换，判死路径因此跳过重建。
+	// newGen 按构造时的参数重建一代，供 advanceGeneration 使用。只有 newSlot
+	// 建出的槽位有工厂；测试里裸构造的零值槽位没有池可换，换代路径因此跳过。
 	newGen func() *slotTransport
 
 	active atomic.Int32
@@ -128,13 +156,14 @@ func (s *transportSlot) resetConn(connLifetime time.Duration) {
 	s.expireAt.Store(time.Now().Add(rotationLifetime(connLifetime)).UnixNano())
 }
 
-// generation 返回槽位当前的连接池"代"。需要"本流实际用过的那条连接"的地方
-// 必须持有它读到的那一代（见 slotTransport），而不是每次重新读这里。
+// generation 返回槽位当前的连接池"代"。"本流用的是哪条连接"由流提交时记下的
+// 那一代回答（见 slotTransport），因此需要连接身份的地方必须持有那一代，
+// 而不是每次重新读这里。
 func (s *transportSlot) generation() *slotTransport {
 	return s.gen.Load()
 }
 
-// transport 返回槽位当前一代的连接池。判死会整体替换它（见 replacePool），
+// transport 返回槽位当前一代的连接池。换代（判死、连接回收）会整体替换它，
 // 因此任何使用池的地方都必须通过这个访问器读取，而不是缓存它。
 func (s *transportSlot) transport() *http.Transport {
 	if gen := s.gen.Load(); gen != nil {
@@ -144,8 +173,8 @@ func (s *transportSlot) transport() *http.Transport {
 }
 
 // connIdentity 返回槽位当前一代承载的连接身份（这一代还没有连接时为 nil）。
-// 健康循环用它判断"这个槽位是否有连接需要复核"；需要精确判死的地方必须用
-// (generation, conn) 这一对，而不是这里的"当前"值。
+// 健康循环用它判断"这个槽位是否有连接需要复核"；判死与判活必须持有自己那一代
+// （见 slotTransport），而不是这里的"当前"值。
 func (s *transportSlot) connIdentity() *slotConn {
 	if gen := s.gen.Load(); gen != nil {
 		return gen.conn.Load()
@@ -153,73 +182,121 @@ func (s *transportSlot) connIdentity() *slotConn {
 	return nil
 }
 
-// replacePool 换上一代全新的连接池，使下一条流必定重新拨号。
+// advanceGeneration 把当前一代换成一代全新的空池：下一条 Open 只能拨号。
 //
-// 判死只关得掉底层 net.Conn：net/http 的连接池没有"关闭承载活跃流的连接"的
-// API，而池里那条 h2 ClientConn 在底层连接关闭之后是否还"可被 ReserveNewRequest
-// 选中"，只取决于 h2 客户端栈内部清理的调度时机——readLoop 何时被调度到、
-// 下一次写何时失败（写失败要等 cleanupWriteRequest 里的 cc.Close()）、
-// 或者 CloseIdleConnections 恰好看到它空闲。这些都不受本层控制，于是
-// "判死即换连接"会退化成一次异步收敛：收敛完成之前，下一条流仍可能被交给
+// 只换"池 + 连接身份"，连接本身由调用方处理（判死要关闭它，自然回收时它已经
+// 关闭）。只有 gen 仍是当前一代时才换：槽位已经换代时，当前池属于更新的一代
+// （甚至已经拨出了健康连接），绝不能把它顶掉。没有池工厂的槽位（测试里的裸
+// 构造）跳过重建——它们本来就没有池。
+//
+// 为什么判死必须换代：判死只关得掉底层 net.Conn，而 net/http 的连接池没有
+// "关闭承载活跃流的连接"的 API，那条 h2 ClientConn 在底层连接关闭之后是否还
+// "可被 ReserveNewRequest 选中"，只取决于 h2 客户端栈内部清理的调度时机——
+// readLoop 何时被调度到、下一次写何时失败（要等 cleanupWriteRequest 里的
+// cc.Close()）、或者 CloseIdleConnections 恰好看到它空闲。这些都不受本层控制，
+// 于是"判死即换连接"会退化成一次异步收敛：收敛完成之前，下一条流仍可能被交给
 // 那条已经死掉的连接（判死重试白费一次尝试，见 TestHTTP2Transport_
-// InvalidateConnReplacesPool）。换池把这个保证变回结构性的：新池是空的，
+// InvalidateConnReplacesPool）。换代把这个保证变回结构性的：新池是空的，
 // 下一条流只能拨号。
 //
-// 换池同时也是"连接身份换代"：旧的一代连同它的连接身份一起被放弃，因此持有
-// 旧一代的流（哪怕它稍后才完成第一次 body 写）读到的仍是旧一代的连接，绝不
-// 会把新池拨出的连接记成自己的身份（见 slotTransport）。
-//
 // 旧池原地放弃即可：它最多只有那一条已被关闭的连接，其 h2 栈会自行收敛并
-// 退出；这里再调一次 CloseIdleConnections，使旧池在收敛过程中真正空闲下来
-// 的连接立即被回收，而不是留到空闲超时。没有池工厂的槽位（测试里的零值）跳过
-// 重建——它们本来就没有池。
-func (s *transportSlot) replacePool() {
-	if s.newGen == nil {
-		return
+// 退出；判死路径还会对旧池补一次 CloseIdleConnections，使它在收敛过程中真正
+// 空闲下来的连接立即被回收，而不是留到空闲超时。
+func (s *transportSlot) advanceGeneration(gen *slotTransport) bool {
+	if s.newGen == nil || gen == nil {
+		return false
 	}
-	old := s.gen.Load()
-	s.gen.Store(s.newGen())
-	if old != nil {
-		old.tr.CloseIdleConnections()
+	return s.gen.CompareAndSwap(gen, s.newGen())
+}
+
+// takeConn 认领一代的连接身份：赢下 gen.conn 的 CAS 之后，返回值从此为空，并且
+// 只有这个赢家有权关闭它、让这一代作废。expect 非 nil 时要求"它仍是这条连接"
+// （trackedConn 关闭自己那条连接）；为 nil 时认领这一代当前的连接（判死路径：
+// 身份就是这一代本身，见 slotTransport 的不变量）。
+//
+// 返回 nil 表示这一代已经没有连接了（已关闭、已作废，或从未拨号），调用方应当
+// 把它当作无操作。
+func (s *transportSlot) takeConn(gen *slotTransport, expect *slotConn) *slotConn {
+	if gen == nil {
+		return nil
+	}
+	if expect == nil {
+		expect = gen.conn.Load()
+		if expect == nil {
+			return nil
+		}
+	}
+	if !gen.conn.CompareAndSwap(expect, nil) {
+		return nil
+	}
+	return expect
+}
+
+// retireGeneration 让一代作废：它的连接已经关闭（net/http 回收连接时经
+// trackedConn.Close 调用），这一代不能再承载任何新流。槽位换到新一代之后，
+// 持有旧一代的流读到的 gen.conn 是空的——它们本来就绑在已关闭的连接上，判死
+// 路径对它们自然是无操作。
+//
+// 这是"代 == 连接"不变量的执行点。只有赢得连接身份 CAS 的调用者会执行，因此
+// 同一条连接不会作废两代；它只清掉自己那一代的连接指针，碰不到新池。
+//
+// 连接作用域的状态（轮换截止时间/字节数/降级/嫌疑）不在这里清理：连接是自然
+// 结束的，**当前一代**的下一次拨号会通过 resetConn 从零开始；即使没有拨号，
+// 槽位空闲时健康循环的 evaluateRotation 也会清掉 expiring/expireAt/connBytes
+// （见 lifecycle.go）。
+//
+// 一个已知的、非正确性的副作用：流在提交请求时记下这一代、拨号却在这之后才
+// 完成时（提交与拨号之间发生了自然回收），连接会建立在一个**已被回收的一代**
+// 上。这种连接不调用 resetConn（它不属于当前代，不能覆盖当前连接的轮换状态），
+// 也不在 connIdentity() 的视野里，因此不参与健康循环/挂起复核，rotation 与
+// retire 的 CloseIdleConnections 也打不到它——它会一直服务触发它的那些流，直到
+// 自己的 h2 空闲超时（IdleConnTimeout = 6×timeout）才被回收。身份仍然是正确的
+// （这些流的判死仍能精准命中自己那一代的连接），代价只是这段时间里多一条不受
+// 槽位管理的连接，属于这个简单模型的已知代价。
+func (s *transportSlot) retireGeneration(gen *slotTransport, conn *slotConn) {
+	if s.takeConn(gen, conn) != nil {
+		s.advanceGeneration(gen)
 	}
 }
 
-// invalidateConnFrom 按身份关闭某一代承载的底层连接：只有当 (gen, sc) 这一对
-// 仍是那一代的"当前连接"时才关闭它（在 gen.conn 上 CAS），因此持有一条连接
-// 身份的调用方可以安全地"只在它仍是那一代的当前连接时"关闭它，而不会误杀
-// 后来新建的连接。判死路径（http2Stream.InvalidateConn）与挂起复核
-// （http2Transport.reverifySlot）共用这条纪律，且它是唯一会关闭承载活跃流的
-// 连接的地方。
+// invalidateConn 判死一代承载的连接：按身份关闭它（takeConn 的 CAS 决定唯一
+// 赢家），并把槽位换到新一代，使下一次 Open 必定拨号。判死路径
+// （http2Stream.InvalidateConn）与挂起复核（http2Transport.reverifySlot）共用
+// 这条纪律，且它是唯一会关闭承载活跃流的连接的地方。
 //
-// 身份的 CAS 目标必须是调用方持有的那一代，而不是槽位的"当前一代"：身份与池
-// 同源之后，旧一代的流连新一代连接的身份都拿不到（见 slotTransport），这条
-// CAS 因此同时挡住了"重复失效"与"误杀新连接"两件事。
+// 身份就是调用方持有的那一代（见 slotTransport）：旧一代的流连新一代连接的身份
+// 都拿不到，因此这条路径同时挡住了"同一条连接被多条流重复失效"（只有赢家执行）
+// 与"误杀后来新建的连接"（换代之后的判死是无操作）。判死与自然回收的区别只在
+// 收尾：判死是"这条连接坏了"，连接作用域的轮换/降级/嫌疑状态一并清零。
 //
-// 判死的同时换掉整个连接池（见 replacePool，仅在这一代仍是当前一代时）：这是
-// "判死即换连接"的结构性保证——池里的 h2 ClientConn 是否还认为这条连接可用
-// 取决于 stdlib 内部的清理时机，不能作为调度依据。
-//
-// 换池先于关闭连接：换池之后读池的开流只能落在新池上拨号，若反过来（先关闭、
-// 再换池），并发的开流仍可能在这两行之间从旧池拿到那条刚被关掉的连接——正是
-// 本函数要消灭的那个失败（只是窗口窄得多）。先换池把这个窗口彻底关死；随后
-// 关闭连接不会碰到新池拨出的连接，因为 sc 是赢家直接持有的旧一代的连接身份。
+// 换代先于关闭连接：换代之后读池的开流只能落在新池上拨号，若反过来（先关闭、
+// 再换代），并发的开流仍可能在这两行之间从旧池拿到那条刚被关掉的连接——正是
+// 本函数要消灭的那个失败（只是窗口窄得多）。先换代把这个窗口彻底关死；随后
+// 关闭连接不会碰到新池拨出的连接，因为 sc 是赢家直接持有的旧一代的连接。
 //
 // 返回本次调用是否执行了关闭（即是那个赢家）。连接级事件在这里统一记一条
 // Info：默认级别下它是"判死即换连接"唯一可见的锚点，逐流的失败原因与重试
 // 决策在代理层记 Debug。
-func (s *transportSlot) invalidateConnFrom(gen *slotTransport, sc *slotConn, reason string) bool {
-	if gen == nil || sc == nil || !gen.conn.CompareAndSwap(sc, nil) {
+func (s *transportSlot) invalidateConn(gen *slotTransport, reason string) bool {
+	sc := s.takeConn(gen, nil)
+	if sc == nil {
 		return false
 	}
-	// 只有这一代仍是当前一代时才清连接作用域状态并换池：判死的对象是"这条连接
+	// 只有这一代仍是当前一代时才清连接作用域状态并换代：判死的对象是"这条连接
 	// 所属的那一代"，若它已经是旧的一代，当前池属于更新的一代（甚至已经拨出了
 	// 健康连接），绝不能连带抛弃它，也不能清掉它的轮换/嫌疑状态。
 	//
-	// 赢下上面那次 CAS 之后这个判断是稳定的：换池只能由"赢下当前一代的 conn
+	// 赢下上面那次 CAS 之后这个判断是稳定的：换代只能由"赢下当前一代的 conn
 	// CAS"触发，而那一代的 conn 已经被本调用置空，其他调用者不可能再赢一次。
 	if s.gen.Load() == gen {
 		s.resetRotation()
-		s.replacePool()
+		if s.advanceGeneration(gen) {
+			// 旧池原样放弃之前补一次空闲回收：它在收敛过程中真正空闲下来的连接
+			// 立即释放，而不是留到空闲超时。这件事不能放进 advanceGeneration：
+			// 自然回收（trackedConn.Close）那条路径可能正跑在 h2 的空闲回收里，
+			// 对同一张池重入 CloseIdleConnections 会重复加同一把锁。
+			gen.tr.CloseIdleConnections()
+		}
 	}
 	_ = sc.c.Close()
 	log.Info("[TRANSPORT] connection invalidated",

@@ -310,7 +310,7 @@ func invalidateDeadStream(stream transport.Stream) {
 // settleDeadStream 用有界窗口等待一条已关闭的流的 RoundTrip 收敛。
 //
 // "判死即换连接"本身由传输层保证：InvalidateConn 在关掉底层连接的同时换掉槽位的
-// 连接池（transport/http2 的 transportSlot.replacePool），下一次 Open 只能拨号；
+// 连接池（transport/http2 的 transportSlot.advanceGeneration），下一次 Open 只能拨号；
 // 连接身份与池同源（slotTransport），因此判死只可能关掉本流提交时那一代里
 // 自己用过的那条连接。不再依赖连接池的异步收敛（那条依赖时序的版本曾在 CI 上
 // 偶发失败，见 #226）。
@@ -636,7 +636,7 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 //
 // "client connection force closed"是 net/http 的哨兵错误（errClientConnForceClosed）：
 // 只有本进程调用 ClientConn.Close() 才会产生它，而那条路径的唯一入口是传输层
-// 判死（transportSlot.invalidateConnFrom，见 transport/http2 的挂起复核与流判死）。
+// 判死（transportSlot.invalidateConn，见 transport/http2 的挂起复核与流判死）。
 // 也就是说它按构造就是"我们自己换掉了一条连接"的连带失败——连接级事件已经由
 // 传输层记一条 Info（[TRANSPORT] connection invalidated，带 reason），逐流再记
 // WARN/ERROR 只会把一次换连接刷成一屏。

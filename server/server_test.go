@@ -262,15 +262,13 @@ func TestBuildHTTPServerH2ConfigOverrides(t *testing.T) {
 	cfg := &config.FileConfig{
 		Server: config.ServerConfig{Listen: ":443"},
 		Transport: config.TransportConfig{
-			H2RecvBufStream:        2 << 20,
-			H2RecvBufConn:          8 << 20,
-			H2MaxConcurrentStreams: 64,
+			H2RecvBufStream: 2 << 20,
+			H2RecvBufConn:   8 << 20,
 		},
 	}
 	srv := buildHTTPServer(cfg, nil, http.NewServeMux(), 30*time.Second)
 	require.Equal(t, 2<<20, srv.HTTP2.MaxReceiveBufferPerStream)
 	require.Equal(t, 8<<20, srv.HTTP2.MaxReceiveBufferPerConnection)
-	require.Equal(t, 64, srv.HTTP2.MaxConcurrentStreams)
 
 	// 未配置（0 值）时回到共享常量：两处默认值不会各自漂移。
 	cfg.Transport = config.TransportConfig{}

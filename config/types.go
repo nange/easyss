@@ -167,8 +167,15 @@ const (
 	// 实测在真实站点里没有对应（Cloudflare/Amazon/Apple/淘宝/知乎/新浪/网易/
 	// WordPress 等是 100/128），而它同时决定标准库为该连接并发运行的 handler 数上限
 	// （internal/http2 serverConn.scheduleHandler 以它作为 maxHandlers，超出的流先
-	// 排队，排队超过 4 倍才升级为连接级错误）。共享、多用户服务端需要更大并发时用
-	// transport.h2_max_concurrent_streams 放大。
+	// 排队，排队超过 4 倍才升级为连接级错误）。
+	//
+	// **这个值不开放配置**，两个理由：
+	//   - 它是 SETTINGS 帧里可被动的特征（服务端指纹的一部分），可配置意味着部署之间
+	//     出现非主流的取值；
+	//   - 客户端侧（net/http）用它判断"这条连接还能不能接新请求"。调小会让同一张连接
+	//     池更早认为连接已满，从而在池内**再拨一条连接**（ErrNoCachedConn 路径，见
+	//     transport/http2 的 slotTransport 注释），破坏"一个槽位一条连接"的模型；调大
+	//     则缓解这一点。固定 128（主流站点取值）让两个方向都落在可预期的一侧。
 	HTTP2ServerMaxConcurrentStreams = 128
 
 	// 客户端 HTTP/2 接收窗口，镜像 Chrome 的取值，使传输层在审查下表现得像真实浏览器。

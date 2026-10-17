@@ -65,6 +65,13 @@ type stats struct {
 	// 位于待驱逐槽位（expiring/degraded）上的空闲流在完整空闲超时前
 	// 被关闭，以便轮换/退役及时完成（参见 relay.BidirectionalWithDrain）。
 	streamsDrained atomic.Int64
+	// secondConnInGeneration 统计"net/http 在同一代连接池里拨出第二条连接"的次数：
+	// 连接达到服务端通告的并发流上限时，net/http 会丢掉 persistConn、让出
+	// MaxConnsPerHost 的计数，然后在同一张池里再拨一条（详见 issue #231）。
+	// 正常情况下恒为 0——一代池只应有一条连接；非 0 说明传输层的
+	// "代 == 连接"不变量被标准库破坏过，是收编 StrictMaxConcurrentRequests
+	// 之前"线上到底触发过没有"的唯一证据。
+	secondConnInGeneration atomic.Int64
 	// 挂起复核：suspendDetected 统计识别出的进程挂起（睡眠/VM 暂停）次数；
 	// 每次识别只把槽位标记为"待复核"，结论由开流前的一次往返判活给出——
 	// suspendReverifyAlive 是复核通过（连接照常复用，假阳性只花一个 RTT）、
@@ -138,6 +145,9 @@ func RecordSlotGrownPriority() { g.slotGrownPriority.Add(1) }
 func RecordSlotGrownBulk()     { g.slotGrownBulk.Add(1) }
 func RecordStreamDrained()     { g.streamsDrained.Add(1) }
 
+// RecordSecondConnInGeneration 记录一次"同一代连接池里的第二条连接"（见 issue #231）。
+func RecordSecondConnInGeneration() { g.secondConnInGeneration.Add(1) }
+
 func RecordSuspendDetected()         { g.suspendDetected.Add(1) }
 func RecordSuspendReverifyAlive()    { g.suspendReverifyAlive.Add(1) }
 func RecordSuspendReverifyReplaced() { g.suspendReverifyReplaced.Add(1) }
@@ -210,6 +220,7 @@ func ResetCounters() {
 	g.slotDegraded.Store(0)
 	g.slotRetiredDegraded.Store(0)
 	g.connRotated.Store(0)
+	g.secondConnInGeneration.Store(0)
 	g.slotProbes.Store(0)
 	g.slotProbeSlow.Store(0)
 	g.slotProbeUnsupported.Store(0)
@@ -279,15 +290,18 @@ type Snapshot struct {
 	TierRetiringSkipped   int64 `json:"tier_retiring_skipped"`
 
 	// 传输健康度（仅客户端侧；服务端为零）
-	SlotDegraded         int64 `json:"slot_degraded"`
-	SlotRetiredDegraded  int64 `json:"slot_retired_degraded"`
-	ConnRotated          int64 `json:"conn_rotated"`
-	SlotProbes           int64 `json:"slot_probes"`
-	SlotProbeSlow        int64 `json:"slot_probe_slow"`
-	SlotProbeUnsupported int64 `json:"slot_probe_unsupported"`
-	SlotGrownPriority    int64 `json:"slot_grown_priority"`
-	SlotGrownBulk        int64 `json:"slot_grown_bulk"`
-	StreamsDrained       int64 `json:"streams_drained"`
+	SlotDegraded        int64 `json:"slot_degraded"`
+	SlotRetiredDegraded int64 `json:"slot_retired_degraded"`
+	ConnRotated         int64 `json:"conn_rotated"`
+	// SecondConnInGeneration 是"net/http 在同一代连接池里拨出第二条连接"的次数
+	// （见 issue #231）。恒为 0 说明传输层的"代 == 连接"不变量没有被破坏过。
+	SecondConnInGeneration int64 `json:"second_conn_in_generation"`
+	SlotProbes             int64 `json:"slot_probes"`
+	SlotProbeSlow          int64 `json:"slot_probe_slow"`
+	SlotProbeUnsupported   int64 `json:"slot_probe_unsupported"`
+	SlotGrownPriority      int64 `json:"slot_grown_priority"`
+	SlotGrownBulk          int64 `json:"slot_grown_bulk"`
+	StreamsDrained         int64 `json:"streams_drained"`
 
 	// 挂起复核（仅客户端侧；服务端为零）
 	SuspendDetected         int64 `json:"suspend_detected"`
@@ -379,6 +393,7 @@ func Collect() Snapshot {
 		SlotDegraded:           g.slotDegraded.Load(),
 		SlotRetiredDegraded:    g.slotRetiredDegraded.Load(),
 		ConnRotated:            g.connRotated.Load(),
+		SecondConnInGeneration: g.secondConnInGeneration.Load(),
 		SlotProbes:             g.slotProbes.Load(),
 		SlotProbeSlow:          g.slotProbeSlow.Load(),
 		SlotProbeUnsupported:   g.slotProbeUnsupported.Load(),

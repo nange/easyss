@@ -123,7 +123,6 @@ func TestExampleConfigIsNormalized(t *testing.T) {
 		`"next_proxy"`, `"log"`, `"pprof_enabled"`, `"timeout"`,
 		// HTTP/2 上行参数必须在示例里可见：用户排查上传速度时就是照这些键调。
 		`"h2_max_frame_size"`, `"h2_recv_buf_conn"`, `"h2_recv_buf_stream"`,
-		`"h2_max_concurrent_streams"`,
 	} {
 		require.Contains(t, string(data), key)
 	}
@@ -137,15 +136,27 @@ func TestTransportConfigH2KeysJSON(t *testing.T) {
 		"transport": {
 			"h2_max_frame_size": 65536,
 			"h2_recv_buf_conn": 8388608,
-			"h2_recv_buf_stream": 2097152,
-			"h2_max_concurrent_streams": 64
+			"h2_recv_buf_stream": 2097152
 		}
 	}`), &fc))
 
 	require.Equal(t, 65536, fc.Transport.H2MaxFrameSize)
 	require.Equal(t, 8388608, fc.Transport.H2RecvBufConn)
 	require.Equal(t, 2097152, fc.Transport.H2RecvBufStream)
-	require.Equal(t, 64, fc.Transport.H2MaxConcurrentStreams)
+}
+
+// TestLoadConfigIgnoresRemovedH2MaxConcurrentStreams 固定"删除
+// h2_max_concurrent_streams 键"是向后兼容的：老配置里仍带着它时必须照常启动
+// （未知字段被忽略），并发流上限固定由 sharedconfig.HTTP2ServerMaxConcurrentStreams
+// 决定，不能再被配置改写。
+func TestLoadConfigIgnoresRemovedH2MaxConcurrentStreams(t *testing.T) {
+	fc, err := LoadConfig(writeConfig(t, `{
+		"server": {"cert_path": "server.crt", "key_path": "server.key"},
+		"transport": {"h2_max_concurrent_streams": 64, "h2_recv_buf_stream": 2097152}
+	}`))
+	require.NoError(t, err)
+	// 其余传输键照常生效；被删除的那个键既不报错也不留下任何痕迹。
+	require.Equal(t, 2097152, fc.Transport.H2RecvBufStream)
 }
 
 // TestDefaultAllowedMethods 固定默认加密方式列表，并守护每次返回新切片，

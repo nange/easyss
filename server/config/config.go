@@ -20,9 +20,9 @@ type LogConfig struct {
 // sharedconfig 中的默认值"（由 server.buildHTTPServer 就地兜底），这里不存
 // 第二份默认值。
 //
-// 四个 h2_* 字段都作用在**每一个连接**上（SETTINGS 与连接级 WINDOW_UPDATE 每个
-// 连接各一份），其中 h2_max_concurrent_streams 是"每条连接允许的并发流数"，
-// 不是服务器级总量。
+// 三个 h2_* 字段都作用在**每一个连接**上（SETTINGS 与连接级 WINDOW_UPDATE 每个
+// 连接各一份）。每条连接的并发流上限**不可配**：它固定为
+// sharedconfig.HTTP2ServerMaxConcurrentStreams（128），见该常量的说明。
 type TransportConfig struct {
 	Protocols []string `json:"protocols"`
 	// H2MaxFrameSize 是服务端愿意接收的最大帧（16KiB~16MiB）：客户端据此决定
@@ -40,11 +40,6 @@ type TransportConfig struct {
 	// H2RecvBufStream 是流级上行窗口（字节），决定单条上传流的吞吐上限
 	// （≈ 窗口/RTT）。它不改变服务端的内存上界（那由 H2RecvBufConn 决定）。
 	H2RecvBufStream int `json:"h2_recv_buf_stream"`
-	// H2MaxConcurrentStreams 是每条连接允许的并发流数：超限时服务端拒绝那条流
-	// （RST_STREAM），不断开连接，也不影响该连接上的其他流（客户端只用它判断该连接
-	// 还能否接新请求，因此调小不会打断老客户端）。默认 128 相对 Go stdlib 的 250 是
-	// 有意收紧每连接承载上限（实测主流站点多为 100/128）；共享、多用户服务端可放大。
-	H2MaxConcurrentStreams int `json:"h2_max_concurrent_streams"`
 }
 
 type FallbackConfig struct {
@@ -213,11 +208,10 @@ func ExampleConfig() FileConfig {
 			CoverBudgetCap:   sharedconfig.DefaultCoverBudgetCap,
 		},
 		Transport: TransportConfig{
-			Protocols:              []string{sharedconfig.DefaultProtocol},
-			H2MaxFrameSize:         sharedconfig.HTTP2ServerMaxReadFrameSize,
-			H2RecvBufConn:          sharedconfig.HTTP2ServerReceiveBufferPerConnection,
-			H2RecvBufStream:        sharedconfig.HTTP2ServerReceiveBufferPerStream,
-			H2MaxConcurrentStreams: sharedconfig.HTTP2ServerMaxConcurrentStreams,
+			Protocols:       []string{sharedconfig.DefaultProtocol},
+			H2MaxFrameSize:  sharedconfig.HTTP2ServerMaxReadFrameSize,
+			H2RecvBufConn:   sharedconfig.HTTP2ServerReceiveBufferPerConnection,
+			H2RecvBufStream: sharedconfig.HTTP2ServerReceiveBufferPerStream,
 		},
 		Log: LogConfig{
 			Level:    sharedconfig.DefaultLogLevel,
