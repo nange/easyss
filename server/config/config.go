@@ -133,10 +133,15 @@ func (c *ServerConfig) UnmarshalJSON(data []byte) error {
 }
 
 // ListenAddr 返回 HTTP 服务端实际使用的监听地址：Bind 为空时监听所有网卡，
-// 否则只监听指定地址。它是监听地址的唯一格式化入口（LoadConfig 会保证 Port
-// 已归一化为非零值；直接构造配置的调用方需要自行设置 Port）。
+// 否则只监听指定地址。它是监听地址的唯一格式化入口。Port 为 0 时回退到
+// sharedconfig.DefaultServerPort，使绕过 LoadConfig 直接构造配置的调用方
+// （测试、嵌入式）不会静默监听随机端口；正常加载路径已由 applyDefaults 写回。
 func (c *ServerConfig) ListenAddr() string {
-	return net.JoinHostPort(c.Bind, strconv.Itoa(c.Port))
+	port := c.Port
+	if port == 0 {
+		port = sharedconfig.DefaultServerPort
+	}
+	return net.JoinHostPort(c.Bind, strconv.Itoa(port))
 }
 
 type FileConfig struct {

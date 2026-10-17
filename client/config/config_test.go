@@ -456,6 +456,48 @@ func TestSimpleOverridesUseHost(t *testing.T) {
 	}
 }
 
+// TestValidateServers 固定 host 的基本契约：必填、允许 IPv6 字面量，但不得把
+// 端口写进 host（否则 ServerURL 会拼出 https://host:port:port）。
+func TestValidateServers(t *testing.T) {
+	cases := []struct {
+		name    string
+		host    string
+		wantErr bool
+	}{
+		{"域名", "example.com", false},
+		{"IPv4", "1.2.3.4", false},
+		{"IPv6 字面量", "2001:db8::1", false},
+		{"域名带端口", "example.com:443", true},
+		{"IPv4 带端口", "1.2.3.4:443", true},
+		{"IPv6 带端口", "[2001:db8::1]:443", true},
+		{"空 host", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &ClientConfig{Servers: []*ServerProfile{{Host: tc.host}}}
+			err := cfg.validateServers()
+			if tc.wantErr && err == nil {
+				t.Errorf("expected error for host %q", tc.host)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("host %q: unexpected error: %v", tc.host, err)
+			}
+		})
+	}
+
+	if err := (&ClientConfig{Servers: []*ServerProfile{nil}}).validateServers(); err == nil {
+		t.Error("expected error for nil server entry")
+	}
+}
+
+// TestBuildSimpleConfigRejectsHostWithPort 固定简化模式也不会把 host:port 当成
+// 合法主机名，避免迁移时在运行期才拼出错误地址。
+func TestBuildSimpleConfigRejectsHostWithPort(t *testing.T) {
+	if _, err := BuildSimpleConfig(&config.SimpleConfig{Server: "example.com:443", Password: "secret"}); err == nil {
+		t.Error("expected error for host with port")
+	}
+}
+
 func TestOutboundProtoToProtocol(t *testing.T) {
 	tests := []struct {
 		proto   string
@@ -548,6 +590,32 @@ func TestLoadConfig(t *testing.T) {
 		_, err := ParseConfigJSON(`{"servers":[{"host":"a.example","address":"b.example"}]}`)
 		if err == nil {
 			t.Error("expected error for host+address")
+		}
+	})
+
+	t.Run("host 带端口启动失败", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		body := `{"version":3,"servers":[{"host":"example.com:443","port":443,"password":"secret"}]}`
+		if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadConfig(path)
+		if err == nil {
+			t.Error("expected error for host with port")
+		}
+	})
+
+	t.Run("host 为空启动失败", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		body := `{"version":3,"servers":[{"port":443,"password":"secret"}]}`
+		if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadConfig(path)
+		if err == nil {
+			t.Error("expected error for empty host")
 		}
 	})
 

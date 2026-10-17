@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/netip"
+	"strings"
 
 	"github.com/nange/easyss/v3/util"
 )
@@ -81,6 +82,12 @@ func (fc *FileConfig) validateTLS() error {
 	if !isIP {
 		if isBracketedIPLiteral(srvCfg.Host) {
 			return errNotPlainIPv4Literal(srvCfg.Host)
+		}
+		// host 与 port 已经拆开；域名里再带冒号只会被 certmagic 当作一个
+		// 无法解析的标识符，报出与端口无关的 ACME 错误。这里直接拒绝，
+		// 同时覆盖 "example.com:443" 与 "[::1]:443" 这类写法。
+		if strings.Contains(srvCfg.Host, ":") {
+			return fmt.Errorf("server.host %q must not include a port; use server.port for the listen port", srvCfg.Host)
 		}
 		// 域名：公网性与可解析性由 certmagic/ACME 侧判断。
 		return nil

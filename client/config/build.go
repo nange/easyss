@@ -81,6 +81,9 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 	// 两种模式共用同一实现；这里显式传进来的 HTTPPort 优先，不会被推导覆盖。
 
 	applyDefaults(cfg)
+	if err := cfg.validateServers(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
 }
 

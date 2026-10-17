@@ -4,7 +4,9 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
+	"strings"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
@@ -67,7 +69,8 @@ func (s *ServerProfile) UnmarshalJSON(data []byte) error {
 
 	if legacy.Address != "" {
 		if p.Host != "" {
-			return fmt.Errorf(`servers[]: both "host" and deprecated "address" are set; use "host" only`)
+			return fmt.Errorf(`servers[]: both "host" (%q) and deprecated "address" (%q) are set; use "host" only`,
+				p.Host, legacy.Address)
 		}
 		p.Host = legacy.Address
 	}
@@ -128,6 +131,24 @@ type ClientConfig struct {
 	AuthUsername  string           `json:"auth_username"`
 	AuthPassword  string           `json:"auth_password"`
 	PprofEnabled  bool             `json:"pprof_enabled"`
+}
+
+// validateServers 固定完整模式服务端条目的基本契约：host 必填，且不得把端口
+// 写进 host。冒号只有在 host 是合法 IP 字面量（IPv6）时才允许——域名带端口会
+// 被拼成 https://<host>:<port>:<port>，失败点离配置很远。
+func (c *ClientConfig) validateServers() error {
+	for i, srv := range c.Servers {
+		if srv == nil {
+			return fmt.Errorf("servers[%d] is null", i)
+		}
+		if srv.Host == "" {
+			return fmt.Errorf("servers[%d].host is required", i)
+		}
+		if _, err := netip.ParseAddr(srv.Host); err != nil && strings.Contains(srv.Host, ":") {
+			return fmt.Errorf("servers[%d].host %q must not include a port; use servers[%d].port", i, srv.Host, i)
+		}
+	}
+	return nil
 }
 
 func (c *ClientConfig) DefaultServer() *ServerProfile {
@@ -235,6 +256,9 @@ func LoadConfig(path string) (*ClientConfig, error) {
 		return nil, err
 	}
 	applyDefaults(&cfg)
+	if err := cfg.validateServers(); err != nil {
+		return nil, err
+	}
 
 	return &cfg, nil
 }
@@ -364,6 +388,9 @@ func ParseConfigJSON(jsonStr string) (*ClientConfig, error) {
 		return nil, err
 	}
 	applyDefaults(&cfg)
+	if err := cfg.validateServers(); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
 }
 

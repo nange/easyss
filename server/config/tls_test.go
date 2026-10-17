@@ -24,6 +24,8 @@ func TestValidateTLS(t *testing.T) {
 			{"域名与手工证书并存时手工证书优先", ServerConfig{Host: "example.com", CertPath: "c.pem", KeyPath: "k.pem"}, ""},
 			{"手工证书可以没有 host", ServerConfig{CertPath: "c.pem", KeyPath: "k.pem"}, ""},
 			{"空 host 且无手工证书", ServerConfig{}, "server.host is required"},
+			{"host 不得包含端口", ServerConfig{Host: "example.com:443"}, "must not include a port"},
+			{"IPv4 host 不得包含端口", ServerConfig{Host: "1.2.3.4:443"}, "must not include a port"},
 			{"只配 cert_path", ServerConfig{Host: "example.com", CertPath: "c.pem"}, "must be set together"},
 			{"只配 key_path", ServerConfig{Host: "example.com", KeyPath: "k.pem"}, "must be set together"},
 		}
@@ -115,6 +117,11 @@ func TestLoadConfigValidatesTLS(t *testing.T) {
 	t.Run("证书只配一半启动失败", func(t *testing.T) {
 		_, err := LoadConfig(writeConfig(t, `{"server":{"port":443,"cert_path":"c.pem"}}`))
 		require.ErrorContains(t, err, "must be set together")
+	})
+
+	t.Run("host 带端口启动失败", func(t *testing.T) {
+		_, err := LoadConfig(writeConfig(t, `{"server":{"host":"example.com:443","port":443,"password":"p"}}`))
+		require.ErrorContains(t, err, "must not include a port")
 	})
 }
 
