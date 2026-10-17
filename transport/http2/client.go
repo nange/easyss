@@ -36,9 +36,11 @@ type http2Transport struct {
 
 	serverURL string
 
-	// liveness 在某个槽位的连接上做一次轻量存活探测（HEAD /v3/probe），供
-	// 代理层区分"连接已死"与"服务端还在解析目标域名"。未配置探测令牌时为 nil。
-	liveness func(ctx context.Context, slot *transportSlot) (alive, ok bool)
+	// liveness 在某一代连接上做一次轻量存活探测（HEAD /v3/probe），供
+	// 代理层区分"连接已死"与"服务端还在解析目标域名"。探测对象是"那一代连接"
+	// 而不是槽位的当前连接：判死换池之后，旧一代的流必须得到关于自己那条连接
+	// 的结论，而不是被新连接的健康状况顶替。未配置探测令牌时为 nil。
+	liveness func(ctx context.Context, gen *slotTransport) (alive, ok bool)
 
 	// slowRTT 是慢路径 RTT 日志的限流器，与槽位生命周期和探测共用同一个实例
 	// （因此三条采样路径共享同一份窗口配额）。
@@ -141,7 +143,7 @@ func New(cfg Config) (transport.Transport, error) {
 		connMaxBytes: connMaxBytes,
 		slowRTT:      slowRTT,
 	}
-	var liveness func(ctx context.Context, slot *transportSlot) (alive, ok bool)
+	var liveness func(ctx context.Context, gen *slotTransport) (alive, ok bool)
 	if cfg.ProbeToken != "" {
 		prober := &slotProber{
 			serverURL:   cfg.ServerURL,
@@ -173,19 +175,22 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 	}
 
 	slot := &transportSlot{}
-	// 池由工厂构建，使判死路径能换上一个同样配置的空池（见
+	// 一代池由工厂构建，使判死路径能换上一个同样配置的空池（见
 	// transportSlot.replacePool）。
-	slot.newPool = func() *http.Transport {
-		return buildTransport(slot, utlsCfg, timeout, dialContext, connLifetime)
+	slot.newGen = func() *slotTransport {
+		gen := &slotTransport{}
+		gen.tr = buildTransport(slot, gen, utlsCfg, timeout, dialContext, connLifetime)
+		return gen
 	}
-	slot.pool.Store(slot.newPool())
+	slot.gen.Store(slot.newGen())
 	return slot
 }
 
-// buildTransport 构建槽位的一代连接池：一个把 MaxConnsPerHost 固定为 1 的
+// buildTransport 构建某一代连接池：一个把 MaxConnsPerHost 固定为 1 的
 // net/http Transport，以及它那条连接的拨号路径（uTLS 指纹 + 服务端 h2 校验）。
-// 判死会用它重建一个新池，因此这里的一切都必须是"每次构建都一样"的纯配置。
-func buildTransport(slot *transportSlot, utlsCfg *utls.Config, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error), connLifetime time.Duration) *http.Transport {
+// 它把建立起来的连接写进 gen.conn——连接身份与池是同源的（见 slotTransport）。
+// 判死会重建一代，因此这里的一切都必须是"每次构建都一样"的纯配置。
+func buildTransport(slot *transportSlot, gen *slotTransport, utlsCfg *utls.Config, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error), connLifetime time.Duration) *http.Transport {
 	protos := &http.Protocols{}
 	protos.SetHTTP2(true)
 	protos.SetUnencryptedHTTP2(true)
@@ -234,32 +239,37 @@ func buildTransport(slot *transportSlot, utlsCfg *utls.Config, timeout time.Dura
 				return nil, fmt.Errorf("server negotiated %q, want h2", proto)
 			}
 			// 新连接会重置轮换状态：生命周期截止时间（含每连接抖动）、
-			// 已承载字节数和 expiring 标记都从零开始。
-			slot.resetConn(connLifetime)
+			// 已承载字节数和 expiring 标记都从零开始。只有这一代仍是当前一代
+			// 时才这么做：一代被替换之后才完成的拨号（例如对旧一代的判活探测）
+			// 不得把新一代的轮换状态抹掉。
+			if slot.generation() == gen {
+				slot.resetConn(connLifetime)
+			}
 
 			// 记录这条连接的身份，使判死路径能精确关闭承载活跃流的连接
 			// （http.Transport 自己关不掉它）。只有这里写入指针；清除一律走
-			// CAS（trackedConn.Close、http2Stream.InvalidateConn）。
+			// CAS（trackedConn.Close、invalidateConnFrom）。
 			sc := &slotConn{c: uconn}
-			slot.conn.Store(sc)
-			return &trackedConn{Conn: uconn, slot: slot, self: sc}, nil
+			gen.conn.Store(sc)
+			return &trackedConn{Conn: uconn, gen: gen, self: sc}, nil
 		},
 	}
 	return tr
 }
 
 // trackedConn 是 DialTLSContext 返回给 net/http 的连接：转发关闭是它的契约
-// （net/http 回收连接时调用），但清除槽位指针必须走 CAS——net/http 关闭的
-// 可能是一条早已被轮换掉的连接，绝不能把新连接的指针清掉。
+// （net/http 回收连接时调用），但清除连接身份必须走 CAS——net/http 关闭的
+// 可能是一条早已被轮换掉的连接，绝不能把新连接的身份清掉。它同时持有所属的
+// 那一代：CAS 只在自己那一代的 conn 指针上做，因此旧连接的关闭碰不到新池。
 type trackedConn struct {
 	net.Conn
-	slot *transportSlot
+	gen  *slotTransport
 	self *slotConn
 }
 
 func (c *trackedConn) Close() error {
 	err := c.Conn.Close()
-	c.slot.conn.CompareAndSwap(c.self, nil)
+	c.gen.conn.CompareAndSwap(c.self, nil)
 	return err
 }
 
@@ -381,8 +391,13 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	}
 
 	go func() {
-		// 池在读到的这一刻取用：判死换池之后开出的流必须落在新池上。
-		resp, err := slot.transport().RoundTrip(httpReq)
+		// 池在提交这一刻取用，并且本流的连接身份就锚定在这一代上：判死换池之后
+		// 开出的流必须落在新池上，而"本流实际用过的那条连接"只能从这一次提交
+		// 所用的那一代里读——两者同源，身份因此不可能与后来新建的连接错位
+		// （见 slotTransport）。
+		gen := slot.generation()
+		stream.gen.Store(gen)
+		resp, err := gen.tr.RoundTrip(httpReq)
 		if err != nil {
 			_ = pw.CloseWithError(err)
 		}
@@ -416,9 +431,11 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 //     的上下文上（只用复核自己的超时兜底）。否则"本地连接刚被关掉"就会让探测
 //     失败，进而把一条健康连接上其他在飞的流一起切断。调用方已取消时干脆不
 //     复核，把嫌疑留给下一次开流；
-//   - 失效只针对复核开始时观测到的那条连接（身份 CAS）。并发的开流被
-//     slot.reverifyMu 串行化，复核期间新建的连接身份不同，CAS 必然失败，
-//     因此不存在"复核慢了一步、把刚建好的健康连接杀掉"的窗口。
+//   - 失效只针对复核开始时观测到的那一代连接（(gen, conn) 身份 CAS，见
+//     transportSlot.invalidateConnFrom）。并发的开流被 slot.reverifyMu 串行化，
+//     复核期间新建的连接属于新的一代，CAS 必然失败，因此不存在"复核慢了一步、
+//     把刚建好的健康连接杀掉"的窗口。探测本身也发给那一代，而不是"复核结束时
+//     槽位的当前一代"：结论与身份必须来自同一条连接。
 //
 // 每个槽位在一次嫌疑里只复核一次：结论给出后（无论哪种）清掉标记，后续开流
 // 直接放行。
@@ -430,11 +447,17 @@ func (t *http2Transport) reverifySlot(ctx context.Context, slot *transportSlot) 
 		return
 	}
 
-	// 先记下要复核的连接身份：这是本次复核唯一有权失效的对象。
-	sc := slot.conn.Load()
-	if sc == nil || t.liveness == nil {
+	// 先记下要复核的那一代连接身份：这是本次复核唯一有权失效的对象。
+	gen := slot.generation()
+	if gen == nil || t.liveness == nil {
 		// 没有可复核的对象（下一条流本来就会拨号）或没有判活手段：清掉标记，
 		// 不让后续每一次开流都重复进入这条路径。
+		slot.reverify.Store(false)
+		return
+	}
+	sc := gen.conn.Load()
+	if sc == nil {
+		// 这一代还没有连接（下一条流本来就会拨号）：清掉标记。
 		slot.reverify.Store(false)
 		return
 	}
@@ -448,7 +471,7 @@ func (t *http2Transport) reverifySlot(ctx context.Context, slot *transportSlot) 
 	defer cancel()
 	defer slot.reverify.Store(false)
 
-	alive, known := t.liveness(verifyCtx, slot)
+	alive, known := t.liveness(verifyCtx, gen)
 	if !known {
 		return
 	}
@@ -459,9 +482,9 @@ func (t *http2Transport) reverifySlot(ctx context.Context, slot *transportSlot) 
 			"active_streams", slot.active.Load())
 		return
 	}
-	// 这条连接确实不可往返（探测排在同一槽位的连接上，不会偷偷拨新连接，
+	// 这条连接确实不可往返（探测排在同一代的连接上，不会偷偷拨新连接，
 	// 见 slotProber.alive）：它已经是死的，换掉不会打断任何还活着的流。
-	if slot.invalidateConnFrom(sc, "suspend reverify failed") {
+	if slot.invalidateConnFrom(gen, sc, "suspend reverify failed") {
 		stats.RecordSuspendReverifyReplaced()
 	}
 }

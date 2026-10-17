@@ -3,8 +3,10 @@ package http2
 import (
 	"context"
 	"crypto/tls"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
@@ -136,5 +138,40 @@ func TestSlotProberInconclusiveOnDialError(t *testing.T) {
 
 	if verdict != probeInconclusive {
 		t.Fatalf("verdict = %v, want probeInconclusive", verdict)
+	}
+}
+
+// TestSlotProberAliveWithoutConnectionCannotJudge 固定判活的"没有可探测的连接"
+// 语义：一代的连接已经被关闭/回收（gen.conn 为空）时，探测必须报告"无法判定"，
+// 而不是在那一代上白拨一条新连接——那条新连接既会给出关于另一条连接的"alive"
+// 结论，又会在无人再引用的池里滞留到空闲超时。绑定在这条连接上的流注定失败，
+// 调用方按"无法判定 → 判死"处理正是想要的结论。
+func TestSlotProberAliveWithoutConnectionCannotJudge(t *testing.T) {
+	ts, token := newProbeServer(t)
+	prober := &slotProber{serverURL: ts.URL, token: token, payloadSize: testProbePayloadSize}
+
+	var dials atomic.Int32
+	gen := &slotTransport{tr: &http.Transport{
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // 测试服务器证书
+		ForceAttemptHTTP2: true,
+		MaxConnsPerHost:   1,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dials.Add(1)
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		},
+	}}
+	// gen.conn 保持为空：这一代的连接已经不在了。
+
+	alive, ok := prober.alive(context.Background(), gen)
+	if ok || alive {
+		t.Fatalf("alive = (%v, %v), want (false, false) without a connection", alive, ok)
+	}
+	if got := dials.Load(); got != 0 {
+		t.Fatalf("dials = %d, want 0: a generation without a connection must not be dialed", got)
+	}
+
+	// 连一代都没有时同理，且不得 panic。
+	if alive, ok := prober.alive(context.Background(), nil); ok || alive {
+		t.Fatalf("alive = (%v, %v), want (false, false) without a generation", alive, ok)
 	}
 }

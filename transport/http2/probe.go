@@ -42,13 +42,30 @@ type slotProber struct {
 	slowRTT *slowRTTLogLimiter
 }
 
-// alive 在同一槽位的连接上发起一次 HEAD /v3/probe，用一个 RTT 回答"这条连接
-// 还能不能往返"（见 transport.ConnLiveness）。它复用探测端点与能力令牌，但
-// 不下载载荷：net/http 服务端对 HEAD 会丢弃响应体，因此开销只有一个 RTT。
+// alive 在指定的那一代连接上发起一次 HEAD /v3/probe，用一个 RTT 回答"这条
+// 连接还能不能往返"（见 transport.ConnLiveness）。它复用探测端点与能力令牌，
+// 但不下载载荷：net/http 服务端对 HEAD 会丢弃响应体，因此开销只有一个 RTT。
 // 判活标准与探测的吞吐量结论无关——拿到任何响应（200、429 限流、fallback
 // 页面）都证明连接是活的；只有 RoundTrip 报错或超时才判死。
-// 返回的 ok=false 表示"无法判定"（未配置探测令牌），调用方应按判死处理。
-func (p *slotProber) alive(ctx context.Context, slot *transportSlot) (alive, ok bool) {
+//
+// 探测对象由调用方给定（流的判活是"本流提交到的那一代"，槽位复核是"当前那一
+// 代"）：判死换池之后，旧一代的流必须得到关于自己那条连接的结论，而不是被新
+// 连接的健康状况顶替。
+//
+// 这一代已经没有连接时（判死关闭，或被 net/http 回收）直接报告"无法判定"：绑在
+// 它上面的流注定失败，探测只会为一条死连接在已被替换的池上白拨一条新连接（那条
+// 连接还会滞留在无人再引用的池里直到空闲超时），而拿到响应给出的"alive"也只是
+// 关于那条新连接的。判死因此交给调用方，与 reverifySlot 自己的 sc == nil 预检
+// 语义一致（流在飞时它所在代的 gen.conn 必然非空：MaxConnsPerHost=1，在飞的连接
+// 占着那一代）。
+//
+// 返回的 ok=false 表示"无法判定"（未配置探测令牌，或上面这种"没有可探测的连接"），
+// 调用方应按判死处理。
+func (p *slotProber) alive(ctx context.Context, gen *slotTransport) (alive, ok bool) {
+	if gen == nil || gen.conn.Load() == nil {
+		return false, false
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, p.serverURL+sharedconfig.EndpointProbe, nil)
 	if err != nil {
 		return false, false
@@ -57,10 +74,10 @@ func (p *slotProber) alive(ctx context.Context, slot *transportSlot) (alive, ok 
 	req.Header.Set("Cache-Control", "no-store")
 	req.Header.Set("User-Agent", chromeUserAgent())
 
-	resp, err := slot.transport().RoundTrip(req)
+	resp, err := gen.tr.RoundTrip(req)
 	if err != nil {
 		// 不可往返：连接已死（黑洞、接口消失、连接被关闭）。MaxConnsPerHost=1
-		// 使这次探测排在本流仍在占用的那条连接之后，而不是偷偷拨一条新连接。
+		// 使这次探测排在这一代仍在占用的那条连接之后，而不是偷偷拨一条新连接。
 		return false, true
 	}
 	_ = resp.Body.Close()
