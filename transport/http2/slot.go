@@ -32,12 +32,25 @@ type slotConn struct {
 // 在结构上不存在。
 //
 // 唯一已知的例外来自 net/http 自己：一条连接达到服务端通告的
-// maxConcurrentStreams 时，h2 栈会把请求报成 ErrNoCachedConn，外层 transport
-// 丢掉那条 persistConn、connsPerHost 减一，然后在同一张池里再拨一条——此时
-// 一张池里短暂地有两条连接，"代 == 连接"不再成立。触发它需要单条连接上
-// ≥ maxConcurrentStreams（Go 默认 250）条并发流，而调度器按 least-active 把流
-// 摊到多个槽位，实际要几百上千条并发流；同一个前提也是"一个槽位一条连接"这个
-// 模型本身的前提。
+// maxConcurrentStreams（固定 128，见 sharedconfig.HTTP2ServerMaxConcurrentStreams）
+// 时，h2 栈会把请求报成 ErrNoCachedConn；外层 transport 丢掉那条 persistConn、
+// connsPerHost 减一，然后在同一张池里再拨一条，而旧的 h2 连接不会被关闭（它的
+// 生命周期归 h2 栈，alt roundtripper 不实现 io.Closer）。MaxConnsPerHost=1 挡不住
+// 这条路径——它计的是 net/http 自己的 persistConn 数，而这里正是主动把那个计数
+// 让出来去"再拨一条 TCP 连接"（净效应：一张池里短暂地有两条连接，"代 == 连接"
+// 不再成立）。撞上它需要单条连接上 128 条并发流，而调度器按 least-active 把流摊到
+// 最多 conn_count_max（默认 15）个槽位，实际要上千条同时打开的流（每条被代理的
+// TCP 连接 = 一条流）。
+//
+// 不能用 HTTP2Config.StrictMaxConcurrentRequests 关掉这个行为：在当前标准库实现
+// 里它会卡死。strict 模式下每个请求在 ReserveNewRequest 时占一个预约，预约要到
+// 拿到 reqHeaderMu 之后才释放；而第一个进入 awaitOpenSlotForStreamLocked 的请求
+// 握着 reqHeaderMu 等待"活跃流 + 预约 < 上限"，排队者的预约又让这个条件永远达不到
+// （internal/http2 transport.go 的 decrStreamReservationsLocked / awaitOpenSlotForStreamLocked）。
+// 实测（服务端宣告 1 条并发流）：4 个并发请求只有 1 个完成、其余全部超时；宣告 4 条
+// 时 16 个并发请求只有 3 个完成。Go 自己的
+// TestTransportPoolConnHTTP2StrictMaxConcurrentRequests 至今仍是 t.Skip。因此这个
+// 例外只靠"固定 128 + 调度器摊流"把门槛压到实际不可达，不做额外处理。
 type slotTransport struct {
 	// slot 是这一代所属的槽位：连接关闭时要通过它把槽位换到新一代
 	// （见 retireGeneration）。
