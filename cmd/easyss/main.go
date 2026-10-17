@@ -44,7 +44,7 @@ func main() {
 	flag.BoolVar(&printVer, "version", false, "print version")
 	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file (full mode)")
 	flag.BoolVar(&showConfigExampleSimple, "show-config-example-simple", false, "show a example of config file (simple mode)")
-	flag.StringVar(&sc.Server, "s", "", "server address")
+	flag.StringVar(&sc.Server, "s", "", "server host (domain or IP, without port)")
 	flag.IntVar(&sc.ServerPort, "p", 0, "server port")
 	flag.StringVar(&sc.Password, "k", "", "password")
 	flag.StringVar(&sc.Method, "m", "", "encryption method (aes-256-gcm, chacha20-poly1305)")
@@ -457,7 +457,7 @@ func exampleV3Config() string {
 	cfg := config.ClientConfig{
 		ConfigVersion: 3,
 		Servers: []*config.ServerProfile{{
-			Address:  "your-domain.com",
+			Host:     "your-domain.com",
 			Port:     sharedconfig.DefaultServerPort,
 			Password: "your-password",
 			Method:   sharedconfig.DefaultMethod,

@@ -20,8 +20,8 @@ func newSwitchTestApp(t *testing.T) *TrayApp {
 	t.Helper()
 
 	cfg := &config.ClientConfig{Servers: []*config.ServerProfile{
-		{Address: "a.example", Port: 443, Default: true},
-		{Address: "b.example", Port: 443},
+		{Host: "a.example", Port: 443, Default: true},
+		{Host: "b.example", Port: 443},
 	}}
 	a := &TrayApp{App: newApp(cfg, "")}
 	a.serverAddrs = cfg.ServerListAddrs()

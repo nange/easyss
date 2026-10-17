@@ -67,7 +67,7 @@ Easyss v3 支持两种配置模式，自动识别：
 
 | 参数 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `server` | 是 | - | 服务器地址（域名或IP） |
+| `server` | 是 | - | 服务器地址（域名或 IP，不含端口） |
 | `server_port` | 是 | - | 服务器端口 |
 | `password` | 是 | - | 通信加密密钥 |
 | `local_port` | 否 | 4080 | 本地 SOCKS5 监听端口。`http_port` 自动设为 `local_port + 1000` |
@@ -95,7 +95,7 @@ Easyss v3 支持两种配置模式，自动识别：
 
 | 参数 | 说明 |
 | --- | --- |
-| `-s` | 服务器地址 |
+| `-s` | 服务器地址（域名或 IP，不含端口） |
 | `-p` | 服务器端口 |
 | `-k` | 通信加密密钥 |
 | `-l` | 本地 SOCKS5 端口 |
@@ -127,7 +127,7 @@ Easyss v3 支持两种配置模式，自动识别：
   "version": 3,
   "servers": [
     {
-      "address": "your-domain.com",
+      "host": "your-domain.com",
       "port": 443,
       "password": "your-password"
     }
@@ -159,13 +159,16 @@ Easyss v3 支持两种配置模式，自动识别：
 
 | 参数 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `servers[].address` | 是 | - | 服务器地址（域名或 IP） |
+| `servers[].host` | 是 | - | 服务器主机名或 IP（不含端口） |
 | `servers[].port` | 否 | 443 | 服务器端口 |
 | `servers[].password` | 是 | - | 通信加密密钥 |
 | `servers[].method` | 否 | aes-256-gcm | 加密方式，可选: `aes-256-gcm`, `chacha20-poly1305`；必须在服务端 `allowed_methods` 允许的列表内 |
-| `servers[].sn` | 否 | 空 | TLS SNI 覆盖，留空则使用 `address`。服务端用 IP 证书（IP-only 模式）时必须留空；Cloudflare 优选 IP 场景填对应域名（见"配置Cloudflare优选IP"） |
+| `servers[].sn` | 否 | 空 | TLS SNI 覆盖，留空则使用 `host`。服务端用 IP 证书（IP-only 模式）时必须留空；Cloudflare 优选 IP 场景填对应域名（见"配置Cloudflare优选IP"） |
 | `servers[].ca_path` | 否 | 空 | 自定义 CA 证书路径（服务端使用自签证书时填写，见"自定义证书"） |
 | `servers[].default` | 否 | false | 是否为默认服务器；条目都不填时取列表第一个 |
+
+> **兼容性**：旧版完整模式中的 `servers[].address` 仍可读取，等价于 `servers[].host`；
+> 新旧键同时出现会报错。简化模式的 `server` / `server_port` 属于 v2 兼容格式，保持不变。
 
 **local 参数说明：**
 
@@ -194,7 +197,7 @@ Easyss v3 支持两种配置模式，自动识别：
 
 | 参数 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `version` | 是 | - | 配置版本，完整模式固定为 `3` |
+| `version` | 是 | - | 配置版本，完整模式固定为 `3`；字段改名（如 `address`→`host`）不改变该版本号 |
 | `log.level` | 否 | info | 日志级别，可选: `debug`, `info`, `warn`, `error` |
 | `log.file_path` | 否 | 空 | 日志文件路径，为空则输出到标准输出 |
 | `timeout` | 否 | 30 | 基础超时时间，单位秒，取值范围 15-60（越界取边界值）；TCP/UDP 空闲、拨号、DNS 响应与连接轮换均由它派生（见"`timeout` 派生规则"） |
@@ -357,8 +360,8 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 {
   "version": 3,
   "server": {
-    "listen": ":443",
-    "domain": "your-domain.com",
+    "host": "your-domain.com",
+    "port": 443,
     "password": "your-password"
   },
   "log": {
@@ -369,7 +372,7 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 }
 ```
 
-> **注意**：`server.domain` 填**你自己的真实域名**（如 `example.com`，需已解析到本服务器 IP），或**公网 IPv4 字面量**（如 `203.0.114.1`，即"不用域名"的 IP-only 模式，见下文）。除非你配置了自定义证书（`cert_path` + `key_path` 都填写），否则此项**必填**——留空、或填了私有/保留地址，都会在启动时（配置加载阶段）直接报错。
+> **注意**：`server.host` 填**你自己的真实域名**（如 `example.com`，需已解析到本服务器 IP），或**公网 IPv4 字面量**（如 `203.0.114.1`，即"不用域名"的 IP-only 模式，见下文）。除非你配置了自定义证书（`cert_path` + `key_path` 都填写），否则此项**必填**——留空、或填了私有/保留地址，都会在启动时（配置加载阶段）直接报错。
 
 以上为最简配置，其他所有可配置字段（fallback、shaper、transport、next_proxy、pprof 等）均有默认值，按需配置即可。执行以下命令可查看完整配置示例：
 
@@ -381,8 +384,9 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 
 | 参数 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `server.listen` | 是 | - | 服务器监听地址，如 `:443` |
-| `server.domain` | 条件必填 | - | 服务器域名**或公网 IPv4 字面量**，即自动申请证书时提交给 Let's Encrypt 的标识符：域名需已解析到本服务器 IP，公网 IP 走 IP-only 模式（见"不用域名（IP-only）"一节），两者都会自动取证。留空会被拒绝，除非同时配置了 `cert_path` 和 `key_path`；填私有/保留地址或 IPv6 字面量会在启动时直接报错 |
+| `server.host` | 条件必填 | - | 服务器主机名（域名）**或公网 IPv4 字面量**，即自动申请证书时提交给 Let's Encrypt 的标识符：域名需已解析到本服务器 IP，公网 IP 走 IP-only 模式（见"不用域名（IP-only）"一节），两者都会自动取证。留空会被拒绝，除非同时配置了 `cert_path` 和 `key_path`；填私有/保留地址或 IPv6 字面量会在启动时直接报错 |
+| `server.port` | 否 | 443 | 服务器监听端口，默认监听所有网卡；需要绑定指定网卡时使用可选的 `server.bind` |
+| `server.bind` | 否 | 空 | 可选的监听网卡地址（主机名或 IP，不含端口），默认空表示所有网卡。一般不需要；旧配置 `server.listen` 的主机部分会自动映射到这里 |
 | `server.password` | 是 | - | 通信加密密钥 |
 | `server.allowed_methods` | 否 | aes-256-gcm, chacha20-poly1305 | 允许的加密方式列表 |
 | `server.cert_path` | 否 | - | 自定义证书文件路径。**必须与 `key_path` 成对配置**：只配一个会在启动时报错（以前会静默忽略该文件、转而申请 Let's Encrypt 证书） |
@@ -400,6 +404,10 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 | `transport.h2_recv_buf_stream` | 否 | 4194303 | 服务端流级上行窗口（4MiB-1），0 使用默认值 |
 | `pprof_enabled` | 否 | false | 是否启用 pprof 调试服务（127.0.0.1:6060） |
 | `timeout` | 否 | 30 | 基础超时时间，单位秒，取值范围 15-60（越界取边界值）；TCP/UDP 空闲、拨号、DNS 响应与 h2 连接空闲均由它派生（见客户端"`timeout` 派生规则"） |
+
+> **兼容性**：旧版配置中的 `server.domain` / `server.listen` 仍可直接使用：
+> `domain` 等价于 `host`，`listen`（如 `:443` 或 `127.0.0.1:443`）会拆成 `port` 与可选的 `bind`。
+> 新配置请使用 `host` / `port`；新旧键同时出现会报错。配置版本仍为 `3`，无需修改 `version`。
 
 > **上传/下载速度上限由窗口决定（上传速度上不去时先看这里）**：HTTP/2 的接收方向窗口是接收方授予的信用额度，稳态吞吐 ≈ **窗口 / RTT**。两个方向的窗口由各自接收方决定，取值因此不同：
 >
@@ -473,26 +481,26 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 nohup ./easyss-server > easyss-server.log 2>&1  # 后台运行
 ```
 
-**注意：在没有使用自定义证书情况下，服务器的443端口必须对外可访问，用于自动获取证书的TLS校验使用（无论 `server.domain` 填的是域名还是公网 IP）；IP 证书是短生命周期证书，每次续期都要重新验证，因此这个端口要一直保持可访问。
+**注意：在没有使用自定义证书情况下，服务器的443端口必须对外可访问，用于自动获取证书的TLS校验使用（无论 `server.host` 填的是域名还是公网 IP）；IP 证书是短生命周期证书，每次续期都要重新验证，因此这个端口要一直保持可访问。
 同时需要sudo权限运行`easyss-server`。如果需要支持`ping`命令，也需要sudo权限运行`easyss-server`。**
 
 #### 不用域名（IP-only）：直接用公网 IP 自动申请证书
 
-如果这台服务器有**公网 IPv4**、且公网 443 可以直接访问，那么**不需要域名**：把 `server.domain` 填成该 IP，
+如果这台服务器有**公网 IPv4**、且公网 443 可以直接访问，那么**不需要域名**：把 `server.host` 填成该 IP，
 `easyss-server` 会自动向 Let's Encrypt 申请（并自动续期）一张 **IP 地址证书**。
 
 ```json
 {
   "version": 3,
   "server": {
-    "listen": ":443",
-    "domain": "203.0.114.1",
+    "host": "203.0.114.1",
+    "port": 443,
     "password": "your-password"
   }
 }
 ```
 
-客户端填同一个 IP 即可：完整模式把 `servers[].address` 填该 IP、`sn` 留空（证书里就是 IP，TLS 校验用的正是它）；
+客户端填同一个 IP 即可：完整模式把 `servers[].host` 填该 IP、`sn` 留空（证书里就是 IP，TLS 校验用的正是它）；
 简化模式把 `server` 填该 IP、`sn` 留空。启动日志会出现
 `[SERVER] TLS mode: certmagic (Let's Encrypt IP certificate)`。
 
@@ -502,9 +510,9 @@ nohup ./easyss-server > easyss-server.log 2>&1  # 后台运行
   不需要你干预；但**`certmagic/` 证书目录不要删**——反复重新签发会撞速率限制
   （同一个 IP 每 7 天最多 5 张，ARI 协调的续期不计入）。
 * **只能用 tls-alpn-01 验证**：公网 443 要在**首次签发与每一次续期**时都能被 Let's Encrypt 访问。
-  `server.listen` 不是 443 时，需要把公网 443 转发到它（验证方只连 443）。
+  `server.port` 不是 443 时，需要把公网 443 转发到它（验证方只连 443）。
 * **必须是公网地址**：私有/保留/CGNAT 地址（如 `10.x`、`192.168.x`、`100.64.0.0/10`、`192.168.1.10`）
-  无法签发，这类部署请用下面的自定义证书方案；`domain` 填这类地址会在启动时直接报错。
+  无法签发，这类部署请用下面的自定义证书方案；`host` 填这类地址会在启动时直接报错。
   IPv6 字面量目前不支持（客户端与服务端的地址都是 `IP:port` 形态，写 IPv6 会被配置校验拒绝）。
 * 证书会进入 CT 日志（公网可用 crt.sh 搜该 IP 查到），此外客户端对这个 IP 不会发送 SNI
   ——浏览器直接访问 IP 时也是同样行为。
@@ -517,7 +525,7 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 
 默认情况下，`easyss-server`端部署时配置了域名，则会自动从`Let's Encrypt`获取tls证书，用户无需操心证书配置。
 这通常要求我们有自己的域名，但这并不是唯一的办法：如果服务器的公网 IPv4 可以直接访问（公网 443 可达），
-把 `server.domain` 填成该 IP 也能自动获取证书（即上面的 IP-only 模式）。
+把 `server.host` 填成该 IP 也能自动获取证书（即上面的 IP-only 模式）。
 而如果我们既没有域名、服务器又在私有网络（家用宽带、NAT 之后）里，则可以通过自定义tls证书来使用Easyss。
 
 #### 生成自定义证书
@@ -582,7 +590,7 @@ Easyss v3 基于 HTTP/2 作为传输层协议，天然兼容反向代理和 CDN 
 使用Cloudflare CDN通常会配合其优选IP同时使用，这样可以大幅提高访问速度和降低网络延迟。
 
 在简化模式中，将 `server` 字段配置为优选IP，`sn` 字段配置为Cloudflare后台管理的域名即可。
-在完整模式中，将 `servers[].address` 配置为优选IP，`servers[].sn` 配置为对应的域名。
+在完整模式中，将 `servers[].host` 配置为优选IP，`servers[].sn` 配置为对应的域名。
 
 注意这与上面的 IP-only 模式（服务端用 IP 证书）正好相反：那里 `sn` 必须留空，因为证书里就是 IP；
 这里 `sn` 必须是域名，因为证书是 Cloudflare 为你的域名签发的，靠 `sn` 才能通过校验。

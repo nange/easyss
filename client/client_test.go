@@ -56,12 +56,12 @@ func startLocalDNSServer(t *testing.T) (string, func()) {
 
 func TestResolveServerIPV6IPServer(t *testing.T) {
 	cfg := &config.ClientConfig{
-		Servers: []*config.ServerProfile{{Address: "2001:db8::1", Default: true}},
+		Servers: []*config.ServerProfile{{Host: "2001:db8::1", Default: true}},
 	}
 	assert.Equal(t, "2001:db8::1", resolveServerIPV6(context.Background(), cfg))
 
 	cfg = &config.ClientConfig{
-		Servers: []*config.ServerProfile{{Address: "1.2.3.4", Default: true}},
+		Servers: []*config.ServerProfile{{Host: "1.2.3.4", Default: true}},
 	}
 	assert.Equal(t, "", resolveServerIPV6(context.Background(), cfg))
 }
@@ -75,7 +75,7 @@ func TestResolveServerIPV6BoundedByContext(t *testing.T) {
 	easydns.MarkBuiltinDNSAvailable()
 
 	cfg := &config.ClientConfig{
-		Servers: []*config.ServerProfile{{Address: "proxy.example.com", Default: true}},
+		Servers: []*config.ServerProfile{{Host: "proxy.example.com", Default: true}},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -96,7 +96,7 @@ func TestResolveServerIPV6WithLocalDNS(t *testing.T) {
 	easydns.MarkBuiltinDNSAvailable()
 
 	cfg := &config.ClientConfig{
-		Servers: []*config.ServerProfile{{Address: "test.local", Default: true}},
+		Servers: []*config.ServerProfile{{Host: "test.local", Default: true}},
 	}
 	got := resolveServerIPV6(context.Background(), cfg)
 	assert.Equal(t, net.ParseIP("::1").String(), got)
@@ -116,7 +116,7 @@ func TestRefreshServerIPV6(t *testing.T) {
 	}
 	domainCfg := func(rule string) *config.ClientConfig {
 		return &config.ClientConfig{
-			Servers: []*config.ServerProfile{{Address: "proxy.example.com", Default: true}},
+			Servers: []*config.ServerProfile{{Host: "proxy.example.com", Default: true}},
 			Routing: config.RoutingConfig{IPV6Rule: rule},
 		}
 	}
@@ -132,7 +132,7 @@ func TestRefreshServerIPV6(t *testing.T) {
 
 	// 服务器是字面 IPv4：无需解析。
 	c = newClient(t, &config.ClientConfig{
-		Servers: []*config.ServerProfile{{Address: "1.2.3.4", Default: true}},
+		Servers: []*config.ServerProfile{{Host: "1.2.3.4", Default: true}},
 		Routing: config.RoutingConfig{IPV6Rule: "auto"},
 	})
 	assert.Equal(t, "", c.RefreshServerIPV6())
@@ -151,7 +151,7 @@ func TestRefreshServerIPV6(t *testing.T) {
 	easydns.MarkBuiltinDNSAvailable()
 
 	cfg := &config.ClientConfig{
-		Servers: []*config.ServerProfile{{Address: "test.local", Default: true}},
+		Servers: []*config.ServerProfile{{Host: "test.local", Default: true}},
 		Routing: config.RoutingConfig{IPV6Rule: "auto"},
 	}
 	c = newClient(t, cfg)
@@ -167,7 +167,7 @@ func newDialTestClient(t *testing.T, ipv6Rule, serverAddr string) *Client {
 	require.NoError(t, err)
 	return &Client{
 		cfg: &config.ClientConfig{
-			Servers: []*config.ServerProfile{{Address: serverAddr, Default: true}},
+			Servers: []*config.ServerProfile{{Host: serverAddr, Default: true}},
 			Routing: config.RoutingConfig{IPV6Rule: ipv6Rule},
 		},
 		router:       rt,

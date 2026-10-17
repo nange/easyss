@@ -61,7 +61,7 @@ func (s *session) tunUpViaHelper() error {
 	// 只做一次有界尝试（预算为 dns.PreResolveTimeout，与启动期预解析同一个
 	// 常量）：这是用户主动触发的操作，失败就报错让用户重试，而不是在界面无
 	// 反馈的情况下把最坏等待叠成"尝试次数 × 总预算"。
-	if serverAddr := cfg.DefaultServer().Address; !util.IsIP(serverAddr) {
+	if serverAddr := cfg.DefaultServer().Host; !util.IsIP(serverAddr) {
 		if len(config.DirectDNSServers) == 0 {
 			core.HTTPServer.ClearTunConfig()
 			return fmt.Errorf("failed to pre-resolve server hostname %s: dns cache not available", serverAddr)

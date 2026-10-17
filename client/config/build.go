@@ -23,7 +23,7 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 	cfg := &ClientConfig{
 		ConfigVersion: 3,
 		Servers: []*ServerProfile{{
-			Address:  s.Server,
+			Host:     s.Server,
 			Port:     s.ServerPort,
 			Password: s.Password,
 			Method:   s.Method,
@@ -88,7 +88,7 @@ func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) {
 	srv := cfg.DefaultServer()
 	if srv != nil {
 		if s.Server != "" {
-			srv.Address = s.Server
+			srv.Host = s.Server
 		}
 		if s.ServerPort > 0 {
 			srv.Port = s.ServerPort

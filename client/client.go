@@ -285,7 +285,7 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 
 	tlsCfg := cfg.UTLSConfig()
 
-	serverDomain := cfg.DefaultServer().Address
+	serverDomain := cfg.DefaultServer().Host
 	if util.IsIP(serverDomain) {
 		// 字面 IP 无需解析，也就没有 DNS pinning 可言。
 		serverDomain = ""
@@ -590,9 +590,9 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 	if svr == nil {
 		return ""
 	}
-	if ip := net.ParseIP(svr.Address); ip != nil {
+	if ip := net.ParseIP(svr.Host); ip != nil {
 		if ip.To4() == nil {
-			return svr.Address
+			return svr.Host
 		}
 		return ""
 	}
@@ -608,17 +608,17 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 		for _, dnsServer := range config.DirectDNSServers {
 			if builtinCtx.Err() != nil {
 				log.Warn("[CLIENT] server ipv6 resolution budget exhausted, skipping remaining builtin dns servers",
-					"server", svr.Address, "err", builtinCtx.Err())
+					"server", svr.Host, "err", builtinCtx.Err())
 				break
 			}
 			// 每个条目独立预算，避免一个黑洞服务器吃掉整个内置分支
 			// （见 dns.ResolveItemTimeout）。
 			itemCtx, cancelItem := context.WithTimeout(builtinCtx, dns.ResolveItemTimeout)
-			ips, err := dns.LookupIPV6FromContext(itemCtx, dnsServer, svr.Address)
+			ips, err := dns.LookupIPV6FromContext(itemCtx, dnsServer, svr.Host)
 			cancelItem()
 			if err != nil {
 				if ctx.Err() != nil {
-					log.Warn("[CLIENT] server ipv6 resolution timed out", "server", svr.Address, "err", ctx.Err())
+					log.Warn("[CLIENT] server ipv6 resolution timed out", "server", svr.Host, "err", ctx.Err())
 					return ""
 				}
 				continue
@@ -642,7 +642,7 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 			if len(dns.SystemDNSServers()) > 0 {
 				dns.MarkBuiltinDNSUnavailable()
 			}
-			log.Warn("[CLIENT] all builtin direct dns servers failed to resolve server ipv6, fallback to system dns", "server", svr.Address)
+			log.Warn("[CLIENT] all builtin direct dns servers failed to resolve server ipv6, fallback to system dns", "server", svr.Host)
 		}
 	}
 
@@ -650,11 +650,11 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 	for _, dnsServer := range dns.SystemDNSServers() {
 		if ctx.Err() != nil {
 			log.Warn("[CLIENT] server ipv6 resolution budget exhausted, skipping remaining system dns servers",
-				"server", svr.Address, "err", ctx.Err())
+				"server", svr.Host, "err", ctx.Err())
 			break
 		}
 		itemCtx, cancelItem := context.WithTimeout(ctx, dns.ResolveItemTimeout)
-		ips, err := dns.LookupIPV6FromContext(itemCtx, dnsServer, svr.Address)
+		ips, err := dns.LookupIPV6FromContext(itemCtx, dnsServer, svr.Host)
 		cancelItem()
 		if err == nil {
 			// 记录已确认可达的系统 DNS，供"内置 DNS 全不可用"的网络里挑选
@@ -663,14 +663,14 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 		}
 		if err != nil || len(ips) == 0 {
 			if ctx.Err() != nil {
-				log.Warn("[CLIENT] server ipv6 resolution timed out", "server", svr.Address, "err", ctx.Err())
+				log.Warn("[CLIENT] server ipv6 resolution timed out", "server", svr.Host, "err", ctx.Err())
 				return ""
 			}
 			continue
 		}
 		return ips[0].String()
 	}
-	log.Warn("[CLIENT] failed to resolve server ipv6 via all direct and system dns servers", "server", svr.Address)
+	log.Warn("[CLIENT] failed to resolve server ipv6 via all direct and system dns servers", "server", svr.Host)
 	return ""
 }
 
@@ -695,7 +695,7 @@ func (c *Client) RefreshServerIPV6() string {
 	if router.ParseIPV6Rule(c.cfg.Routing.IPV6Rule) == router.IPV6RuleDisable {
 		return ""
 	}
-	if svr := c.cfg.DefaultServer(); svr == nil || net.ParseIP(svr.Address) != nil {
+	if svr := c.cfg.DefaultServer(); svr == nil || net.ParseIP(svr.Host) != nil {
 		return ""
 	}
 

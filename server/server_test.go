@@ -245,8 +245,22 @@ func TestResolveEmail_Generated(t *testing.T) {
 // （文档要求"小于 4MiB"，因此最大合法值就是 4<<20-1；4<<20 恰好越界，而改前的
 // 连接级窗口正是这个越界值）。并发流上限取实测主流站点的 128，而不是 Go stdlib
 // 默认的 250。
+// TestBuildHTTPServerUsesListenAddr 固定监听地址只由 ServerConfig.ListenAddr
+// 格式化：bind 与 port 必须原样进入 http.Server.Addr。
+func TestBuildHTTPServerUsesListenAddr(t *testing.T) {
+	srv := buildHTTPServer(&config.FileConfig{
+		Server: config.ServerConfig{Bind: "127.0.0.1", Port: 8443},
+	}, nil, http.NewServeMux(), 30*time.Second)
+	require.Equal(t, "127.0.0.1:8443", srv.Addr)
+
+	srv = buildHTTPServer(&config.FileConfig{
+		Server: config.ServerConfig{Port: 443},
+	}, nil, http.NewServeMux(), 30*time.Second)
+	require.Equal(t, ":443", srv.Addr)
+}
+
 func TestBuildHTTPServerUploadFlowControl(t *testing.T) {
-	srv := buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Listen: ":443"}}, nil, http.NewServeMux(), 30*time.Second)
+	srv := buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Port: 443}}, nil, http.NewServeMux(), 30*time.Second)
 	require.NotNil(t, srv.HTTP2)
 	require.Equal(t, (4<<20)-1, srv.HTTP2.MaxReceiveBufferPerStream,
 		"per-stream upload window must be the documented upper bound (<4MiB)")
@@ -260,7 +274,7 @@ func TestBuildHTTPServerUploadFlowControl(t *testing.T) {
 // 覆盖默认值，0 表示"使用默认值"（文档化的字段语义，兜底在 buildHTTPServer）。
 func TestBuildHTTPServerH2ConfigOverrides(t *testing.T) {
 	cfg := &config.FileConfig{
-		Server: config.ServerConfig{Listen: ":443"},
+		Server: config.ServerConfig{Port: 443},
 		Transport: config.TransportConfig{
 			H2RecvBufStream: 2 << 20,
 			H2RecvBufConn:   8 << 20,
@@ -287,12 +301,12 @@ func TestBuildHTTPServerWarnsOnInvertedWindows(t *testing.T) {
 	rec := captureServerLogs(t)
 
 	// 默认（连接窗口 == 流级窗口）不是错误配置，不应有告警。
-	buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Listen: ":443"}}, nil, http.NewServeMux(), 30*time.Second)
+	buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Port: 443}}, nil, http.NewServeMux(), 30*time.Second)
 	require.Empty(t, rec.warnings(), "equal windows must not warn")
 
 	// 连接窗口 < 流级窗口：必须告警，并带上两个生效值供排查。
 	cfg := &config.FileConfig{
-		Server: config.ServerConfig{Listen: ":443"},
+		Server: config.ServerConfig{Port: 443},
 		Transport: config.TransportConfig{
 			H2RecvBufConn:   1 << 20,
 			H2RecvBufStream: 4<<20 - 1,
@@ -325,7 +339,7 @@ func TestBuildHTTPServerWarnsOnInvertedWindows(t *testing.T) {
 // 某个 Go 版本开始校验，我们的值会被**静默**换成默认值 1MB——上传吞吐直接掉回
 // 1MB/RTT。那正是本测试要拦住的回归。
 func TestServerUploadFlowControlWindowsOnWire(t *testing.T) {
-	built := buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Listen: ":443"}}, nil, http.NewServeMux(), 30*time.Second)
+	built := buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Port: 443}}, nil, http.NewServeMux(), 30*time.Second)
 	// 拷一份再交给 httptest：标准库只在装配连接时读取该配置
 	// （ServeConn → configFromServer），不会回写，但把同一个指针既交给它又留在
 	// 测试局部变量里属于隐式的只读借用前提，复制后就不再依赖那一条。
@@ -421,7 +435,7 @@ func TestServerUploadFlowControlWindowsOnWire(t *testing.T) {
 // 不受限（甚至无限）"这类错误。测量依据"在途量停止增长"而不是计时，因此在 CI 上
 // 不抖动；余量覆盖客户端管道/h2 写入侧一拍（最多两个 64KB 块）的交接。
 func TestServerUploadFlowControlInFlightPerStream(t *testing.T) {
-	built := buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Listen: ":443"}}, nil, http.NewServeMux(), 30*time.Second)
+	built := buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Port: 443}}, nil, http.NewServeMux(), 30*time.Second)
 	http2Cfg := *built.HTTP2
 
 	release := make(chan struct{})

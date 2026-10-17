@@ -93,7 +93,7 @@ func (s *Server) initTLS() (*tls.Config, error) {
 		if cache != nil {
 			cache.Stop()
 		}
-		_ = cleanCertmagicDomainAssets(context.Background(), storage, srvCfg.Domain)
+		_ = cleanCertmagicDomainAssets(context.Background(), storage, srvCfg.Host)
 		tlsConfig, cache, err = s.manageCert(storage, true)
 	}
 	if err != nil {
@@ -135,7 +135,7 @@ func (s *Server) manageCert(storage certmagic.Storage, disableARI bool) (*tls.Co
 	cmCfg.Issuers = []certmagic.Issuer{certmagic.NewACMEIssuer(cmCfg, acmeCfg)}
 
 	tlsConfig := cmCfg.TLSConfig()
-	err := cmCfg.ManageSync(context.Background(), []string{s.cfg.Server.Domain})
+	err := cmCfg.ManageSync(context.Background(), []string{s.cfg.Server.Host})
 	if err != nil {
 		return nil, cache, err
 	}
@@ -273,7 +273,7 @@ func (s *Server) Start() error {
 	// 覆盖不经过配置加载的调用方（测试、嵌入式使用会直接手搓 FileConfig），
 	// 因此启动日志与后续全部派生始终看到同一个值（见 sharedconfig.NormalizeTimeout）。
 	timeout := sharedconfig.TimeoutDuration(cfg.Timeout)
-	log.Info("[SERVER] starting", "listen", srvCfg.Listen, "domain", srvCfg.Domain, "timeout", int(timeout.Seconds()))
+	log.Info("[SERVER] starting", "listen", srvCfg.ListenAddr(), "host", srvCfg.Host, "timeout", int(timeout.Seconds()))
 
 	tlsConfig, err := s.initTLS()
 	if err != nil {
@@ -287,10 +287,10 @@ func (s *Server) Start() error {
 		// 它是短生命周期证书（约 160 小时，后台自动续期），且只能用 tls-alpn-01
 		// 验证——公网 443 必须可达，首次签发与每一次续期都一样。
 		log.Info("[SERVER] TLS mode: certmagic (Let's Encrypt IP certificate)",
-			"subject", srvCfg.Domain, "email", srvCfg.Email, "profile", acmeProfileShortLived,
+			"subject", srvCfg.Host, "email", srvCfg.Email, "profile", acmeProfileShortLived,
 			"challenge", "tls-alpn-01", "acme_requires", "inbound tcp/443 from the internet")
 	} else {
-		log.Info("[SERVER] TLS mode: certmagic (Let's Encrypt)", "domain", srvCfg.Domain, "email", srvCfg.Email)
+		log.Info("[SERVER] TLS mode: certmagic (Let's Encrypt)", "host", srvCfg.Host, "email", srvCfg.Email)
 	}
 
 	timeouts := sharedconfig.NewTimeouts(timeout)
@@ -368,7 +368,7 @@ func (s *Server) Start() error {
 	// 服务端到底给了多大的流级/连接级窗口与多少条并发流（两个窗口可被配置覆盖，
 	// 并发流上限固定为 sharedconfig.HTTP2ServerMaxConcurrentStreams）。
 	log.Info("[SERVER] listening",
-		"addr", srvCfg.Listen,
+		"addr", srvCfg.ListenAddr(),
 		"routes", []string{"/", sharedconfig.EndpointTCP, sharedconfig.EndpointUDP, sharedconfig.EndpointICMP, sharedconfig.EndpointProbe},
 		"h2_recv_buf_stream", s.httpServer.HTTP2.MaxReceiveBufferPerStream,
 		"h2_recv_buf_conn", s.httpServer.HTTP2.MaxReceiveBufferPerConnection,
@@ -410,7 +410,7 @@ func buildHTTPServer(cfg *config.FileConfig, tlsConfig *tls.Config, mux *http.Se
 	}
 
 	srv := &http.Server{
-		Addr:              cfg.Server.Listen,
+		Addr:              cfg.Server.ListenAddr(),
 		TLSConfig:         tlsConfig,
 		Handler:           mux,
 		ErrorLog:          stdErrorLog(),

@@ -37,14 +37,43 @@ const ProxyDNSServer = "8.8.8.8:53"
 // "全部内置 DNS 都不可用"的网络）——两者都没有记录时才回退到这里。
 const DefaultSystemDNS = "223.5.5.5"
 
+// ServerProfile 描述一个服务端端点。Host 是主机名或 IP 字面量，不含端口；
+// 旧版完整模式配置里的 servers[].address 由 UnmarshalJSON 映射到 Host。
 type ServerProfile struct {
-	Address  string `json:"address"`
+	Host     string `json:"host"`
 	Port     int    `json:"port"`
 	Password string `json:"password"`
 	Method   string `json:"method"`
 	SNI      string `json:"sn"`
 	CAPath   string `json:"ca_path"`
 	Default  bool   `json:"default"`
+}
+
+// UnmarshalJSON 兼容旧版完整模式配置里的 servers[].address：它等价于
+// servers[].host。新旧键同时出现属于歧义配置，直接报错而不是静默选择其中一个。
+func (s *ServerProfile) UnmarshalJSON(data []byte) error {
+	type plain ServerProfile
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+
+	var legacy struct {
+		Address string `json:"address"`
+	}
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+
+	if legacy.Address != "" {
+		if p.Host != "" {
+			return fmt.Errorf(`servers[]: both "host" and deprecated "address" are set; use "host" only`)
+		}
+		p.Host = legacy.Address
+	}
+
+	*s = ServerProfile(p)
+	return nil
 }
 
 type LocalConfig struct {
@@ -85,6 +114,8 @@ type LogConfig struct {
 	FilePath string `json:"file_path"`
 }
 
+// ClientConfig 是完整模式客户端配置。配置版本仍为 3：servers[].address →
+// servers[].host 的字段改名由 ServerProfile.UnmarshalJSON 兼容，不升版本。
 type ClientConfig struct {
 	ConfigVersion int              `json:"version"`
 	Servers       []*ServerProfile `json:"servers"`
@@ -116,7 +147,7 @@ func (c *ClientConfig) ServerURL() string {
 	if srv == nil {
 		return ""
 	}
-	return fmt.Sprintf("https://%s:%d", srv.Address, srv.Port)
+	return fmt.Sprintf("https://%s:%d", srv.Host, srv.Port)
 }
 
 // TimeoutDuration 返回归一化后的基础超时：非正值取默认值，越界值钳制到
@@ -150,7 +181,7 @@ func (c *ClientConfig) UTLSConfig() *utls.Config {
 
 	sni := srv.SNI
 	if sni == "" {
-		sni = srv.Address
+		sni = srv.Host
 	}
 
 	utlsCfg := &utls.Config{
@@ -305,7 +336,7 @@ func (c *ClientConfig) SetDefaultServerIndex(i int) {
 func (c *ClientConfig) ServerListAddrs() []string {
 	var addrs []string
 	for _, s := range c.Servers {
-		addrs = append(addrs, fmt.Sprintf("%s:%d", s.Address, s.Port))
+		addrs = append(addrs, fmt.Sprintf("%s:%d", s.Host, s.Port))
 	}
 	return addrs
 }
@@ -315,7 +346,7 @@ func (c *ClientConfig) DefaultServerAddr() string {
 	if srv == nil {
 		return ""
 	}
-	return fmt.Sprintf("%s:%d", srv.Address, srv.Port)
+	return fmt.Sprintf("%s:%d", srv.Host, srv.Port)
 }
 
 func (c *ClientConfig) DefaultServerIndex() int {

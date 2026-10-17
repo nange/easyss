@@ -3,8 +3,12 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/protocol"
@@ -65,14 +69,74 @@ type NextProxyConfig struct {
 // （version、timeout、fallback、shaper、transport、next_proxy、log、
 // pprof_enabled）只存在于 FileConfig 上：server.Server 读取这一个结构体，
 // 而不是再合并一份副本。
+//
+// Host 是 ACME 标识符（域名或公网 IPv4 字面量）；Port 是监听端口，默认由
+// applyDefaults 写为 443；Bind 是可选的监听网卡地址（不含端口，默认空表示
+// 所有网卡），主要承接旧配置 server.listen 的主机部分。
 type ServerConfig struct {
-	Listen         string   `json:"listen"`
-	Domain         string   `json:"domain"`
+	Host           string   `json:"host"`
+	Port           int      `json:"port"`
+	Bind           string   `json:"bind,omitempty"`
 	Password       string   `json:"password"`
 	AllowedMethods []string `json:"allowed_methods"`
 	CertPath       string   `json:"cert_path"`
 	KeyPath        string   `json:"key_path"`
 	Email          string   `json:"email"`
+}
+
+// UnmarshalJSON 兼容 v3 早期配置里的 server.domain 与 server.listen：
+// domain 直接映射到 host；listen（":443" 或 "127.0.0.1:443"）拆成 bind+port。
+// 新旧键同时出现属于歧义配置，直接报错而不是静默选择其中一个。
+func (c *ServerConfig) UnmarshalJSON(data []byte) error {
+	type plain ServerConfig
+	var pc plain
+	if err := json.Unmarshal(data, &pc); err != nil {
+		return err
+	}
+
+	var legacy struct {
+		Domain string `json:"domain"`
+		Listen string `json:"listen"`
+	}
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+
+	// 旧配置整组使用 domain/listen，新配置整组使用 host/port/bind；混用会让
+	// "这个字段到底是旧键还是新键"无法判断，直接拒绝。
+	legacyUsed := legacy.Domain != "" || legacy.Listen != ""
+	newUsed := pc.Host != "" || pc.Port != 0 || pc.Bind != ""
+	if legacyUsed && newUsed {
+		return fmt.Errorf(`server: do not mix deprecated "domain"/"listen" with "host"/"port"/"bind"`)
+	}
+
+	if legacy.Domain != "" {
+		pc.Host = legacy.Domain
+	}
+	if legacy.Listen != "" {
+		host, portStr, err := net.SplitHostPort(legacy.Listen)
+		if err != nil {
+			return fmt.Errorf("server.listen %q: %w; use server.port in new configs", legacy.Listen, err)
+		}
+		// 旧 listen 允许服务名端口（如 ":https"），LookupPort 同时接受数字与
+		// 服务名，最终统一为数字 Port。
+		port, err := net.LookupPort("tcp", portStr)
+		if err != nil {
+			return fmt.Errorf("server.listen %q: %w; use server.port in new configs", legacy.Listen, err)
+		}
+		pc.Bind = host
+		pc.Port = port
+	}
+
+	*c = ServerConfig(pc)
+	return nil
+}
+
+// ListenAddr 返回 HTTP 服务端实际使用的监听地址：Bind 为空时监听所有网卡，
+// 否则只监听指定地址。它是监听地址的唯一格式化入口（LoadConfig 会保证 Port
+// 已归一化为非零值；直接构造配置的调用方需要自行设置 Port）。
+func (c *ServerConfig) ListenAddr() string {
+	return net.JoinHostPort(c.Bind, strconv.Itoa(c.Port))
 }
 
 type FileConfig struct {
@@ -90,12 +154,15 @@ type FileConfig struct {
 // SupportedConfigVersion 是本二进制理解的服务端配置版本。为其他主版本编写的
 // 配置可能包含本二进制会静默忽略（或作不同解释）的字段，因此 LoadConfig 会
 // 拒绝基于它启动。
+//
+// 字段改名（domain→host、listen→port/bind）不升版本：旧键仍由
+// ServerConfig.UnmarshalJSON 兼容读取，版本 3 的配置在升级前后都能加载。
 const SupportedConfigVersion = 3
 
 // LoadConfig 读取并解析服务端配置文件，返回已完成归一化的配置：版本校验、
-// applyDefaults、validateTLS 与 ResolveFilePaths 都在这里完成，调用方
-// （cmd/easyss-server）拿到的必然是可直接交给 server.New 的有效配置，不再各自
-// 排列这些步骤。
+// applyDefaults、validateListen、validateTLS 与 ResolveFilePaths 都在这里完成，
+// 调用方（cmd/easyss-server）拿到的必然是可直接交给 server.New 的有效配置，
+// 不再各自排列这些步骤。
 func LoadConfig(path string) (*FileConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -113,6 +180,11 @@ func LoadConfig(path string) (*FileConfig, error) {
 	}
 
 	applyDefaults(&fc)
+	// 监听端点（端口范围、绑定地址）在配置加载阶段固定，避免留到 net.Listen
+	// 才以 "too many colons" 之类难以定位的症状暴露。
+	if err := fc.validateListen(); err != nil {
+		return nil, err
+	}
 	// 取证书的方式（手工证书 vs Let's Encrypt ACME）在这里固定：证书文件只配了
 	// 一半、以及 IP-only 模式写了个不可公网签发的地址，都在启动时明确报错。
 	if err := fc.validateTLS(); err != nil {
@@ -135,7 +207,9 @@ func LoadConfig(path string) (*FileConfig, error) {
 //   - shaper.*：默认值与边界由 shaper.Config.Normalize 唯一持有，在
 //     handler.NewProxyHandler 构造整形器时应用；
 //   - server.allowed_methods：空值语义由 ServerConfig.GetAllowedMethods 负责，
-//     它不依赖配置对象的构造路径（测试与嵌入式调用方会直接手搓 FileConfig）。
+//     它不依赖配置对象的构造路径（测试与嵌入式调用方会直接手搓 FileConfig）；
+//   - server.port：0 表示未配置，取 sharedconfig.DefaultServerPort。监听地址的
+//     格式化由 ServerConfig.ListenAddr 负责，这里不保存第二份地址。
 func applyDefaults(fc *FileConfig) {
 	// timeout 是全部派生超时的唯一旋钮：非正值取默认值，越界值钳制到
 	// [MinTimeout, MaxTimeout]。这里把结果写回结构体，使内存中的配置与
@@ -144,6 +218,31 @@ func applyDefaults(fc *FileConfig) {
 	if fc.Log.Level == "" {
 		fc.Log.Level = sharedconfig.DefaultLogLevel
 	}
+	if fc.Server.Port == 0 {
+		fc.Server.Port = sharedconfig.DefaultServerPort
+	}
+}
+
+// validateListen 在配置加载阶段固定监听端点的契约：端口必须落在可绑定范围内；
+// bind 只接受主机名或 IP 字面量（不含端口与方括号）。这些错误若留到 net.Listen
+// 才暴露，症状会变成含义不清的 ": too many colons" 之类。
+func (fc *FileConfig) validateListen() error {
+	if fc.Server.Port < 1 || fc.Server.Port > 65535 {
+		return fmt.Errorf("server.port %d is out of range [1, 65535]", fc.Server.Port)
+	}
+	bind := fc.Server.Bind
+	if bind == "" {
+		return nil
+	}
+	if strings.ContainsAny(bind, "[]") {
+		return fmt.Errorf("server.bind %q must not contain brackets; write an IPv6 literal as ::1", bind)
+	}
+	if strings.Contains(bind, ":") {
+		if _, err := netip.ParseAddr(bind); err != nil {
+			return fmt.Errorf("server.bind %q must be a host name or IP literal without a port", bind)
+		}
+	}
+	return nil
 }
 
 // ResolveFilePaths 将配置中的相对文件路径解析为相对可执行文件目录的路径，
@@ -182,18 +281,20 @@ func (c *ServerConfig) GetAllowedMethods() []string {
 
 // ExampleConfig 返回 -show-config-example 展示的完整配置示例。它放在这里而不是
 // 留在 cmd/easyss-server：示例与 FileConfig 的定义相邻，新增字段时容易遗漏，
-// 且其中的默认值全部引用 sharedconfig 常量。必填项（domain、password）使用
+// 且其中的默认值全部引用 sharedconfig 常量。必填项（host、password）使用
 // 占位符；返回值本身是已归一化的合法配置，可直接交给 server.New。
 func ExampleConfig() FileConfig {
 	return FileConfig{
 		ConfigVersion: SupportedConfigVersion,
 		Server: ServerConfig{
-			Listen: ":443",
-			// domain 是 ACME 标识符：域名，或**公网 IPv4 字面量**（IP-only 模式，
+			// host 是 ACME 标识符：域名，或**公网 IPv4 字面量**（IP-only 模式，
 			// 见 validateTLS 与 README 的"不用域名"一节）。IP-only 时 Let's
 			// Encrypt 只发短生命周期（约 160 小时）的 IP 证书，且只能用
 			// tls-alpn-01 验证——公网 443 必须可达，每次续期也一样。
-			Domain:         "your-domain.com",
+			Host: "your-domain.com",
+			// port 默认 443，监听所有网卡；需要绑定指定网卡时使用可选字段
+			// server.bind。bind 默认为空，因此不会出现在示例里。
+			Port:           sharedconfig.DefaultServerPort,
 			Password:       "your-password",
 			AllowedMethods: DefaultAllowedMethods(),
 		},
