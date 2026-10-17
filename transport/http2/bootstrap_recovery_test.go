@@ -810,8 +810,9 @@ func TestHTTP2Transport_InvalidateConnReplacesPool(t *testing.T) {
 // stats.SecondConnInGeneration + 一条 Warn，而不是静默覆盖连接身份。
 func TestHTTP2Transport_SecondConnInGenerationIsObservable(t *testing.T) {
 	var conns atomic.Int32
+	var requests atomic.Int32
 	started := make(chan struct{}, 2)
-	// 第一个到达的 handler 一直占住服务端唯一的流槽，直到测试在断言之后放行——
+	// 除热身请求外的 handler 一直占住服务端唯一的流槽，直到测试在断言之后放行——
 	// 这是让"第二条流只能触发同池重拨"成为确定性条件的关键（用 sleep 占槽位会
 	// 把结论交给时序：CI 负载高时第一条流可能先返回，槽位让出，第二条流复用同一
 	// 条连接，计数就为 0）。
@@ -823,6 +824,16 @@ func TestHTTP2Transport_SecondConnInGenerationIsObservable(t *testing.T) {
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		buf := make([]byte, 4)
 		if _, err := io.ReadFull(r.Body, buf); err != nil {
+			return
+		}
+		// 第一条是热身请求：让它正常完成。客户端能读到它的响应，就说明服务端的
+		// SETTINGS（maxConcurrentStreams=1）已经被应用——服务端先发 SETTINGS 再发
+		// 响应，h2 读循环按序处理。否则第二条流可能在客户端还没学到上限时就被发到
+		// 同一条连接上，服务端把 handler 排队而不是触发同池重拨（Windows ARM64 CI
+		// 上实际踩到过：第二条流 2s 都没到达服务端）。
+		if requests.Add(1) == 1 {
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write([]byte("ok"))
 			return
 		}
 		started <- struct{}{}
@@ -865,10 +876,15 @@ func TestHTTP2Transport_SecondConnInGenerationIsObservable(t *testing.T) {
 		return stream
 	}
 
+	// 热身：让客户端应用服务端宣告的并发流上限，之后两条真实流的行为才是确定的。
+	warmup := open()
+	_, _ = io.Copy(io.Discard, warmup)
+	_ = warmup.Close()
+
 	first := open()
 	select {
 	case <-started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("the first stream never reached the server")
 	}
 
@@ -876,7 +892,7 @@ func TestHTTP2Transport_SecondConnInGenerationIsObservable(t *testing.T) {
 	second := open()
 	select {
 	case <-started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("the second stream never reached the server")
 	}
 
