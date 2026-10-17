@@ -70,8 +70,9 @@ func TestRecordWriterFlushesAfterCompleteRecord(t *testing.T) {
 	rw.Flush()
 	require.Equal(t, 1, w.flushes, "explicit Flush() should flush")
 
-	// 大记录同样不应自动 flush。
-	large := make([]byte, 32*1024)
+	// 大记录同样不应自动 flush。"大"取写入上限本身：它既是最大的一条记录，
+	// 也是唯一会走到池档位边界的尺寸。
+	large := make([]byte, protocol.MaxWriteRecordPlaintext)
 	w2 := &flushBuffer{}
 	enc2, counter2, err := sk.newEncryptor(sessionPhase, DirS2C, protocol.MethodAES256GCM)
 	require.NoError(t, err)
@@ -132,7 +133,7 @@ func TestRecordWriterSingleWriteKeepsWireFormat(t *testing.T) {
 
 	aad := buildAAD(endpoint, salt, "s2c", "session", protocol.MethodAES256GCM)
 
-	for _, size := range []int{0, 1, 13, 1024, protocol.MaxRecordPlaintext} {
+	for _, size := range []int{0, 1, 13, 1024, protocol.MaxWriteRecordPlaintext} {
 		t.Run(fmt.Sprintf("plaintext=%d", size), func(t *testing.T) {
 			plaintext := make([]byte, size)
 			for i := range plaintext {
@@ -163,14 +164,16 @@ func TestRecordWriterSingleWriteKeepsWireFormat(t *testing.T) {
 	}
 }
 
-// TestRecordWriterKeepsCipherBufferIn64KClass 固定"整条记录取样于池的 64KB 档"：
-// 记录占用的池请求是 3 字节长度前缀 + 明文 + AEAD 标签，因此明文上限
-// (protocol.MaxRecordPlaintext) 处仍落在 64KB 档；上限一旦被调高到 65,518 以上，
-// 整块记录就会跳到 128KB 档，为最后十几字节付一倍的池保留与瞬时分配。
+// TestRecordWriterKeepsCipherBufferInPoolClass 固定两条尺寸链在加密侧的落点：
+// 记录占用的池请求是 3 字节长度前缀 + 明文 + AEAD 标签。
 //
-// 断言的是交给 io.Writer 的那块缓冲的 cap，因为字节池传下去的就是它本身——
-// 这是"没有额外复制"的直接证据。
-func TestRecordWriterKeepsCipherBufferIn64KClass(t *testing.T) {
+//   - 数据报链路的上限（MaxUDPDataSize + 帧头 = 16,365）仍落在 16KB 档；
+//   - 记录写入上限（MaxWriteRecordPlaintext = 65,517）正好落在 64KB 档。
+//
+// 上限一旦被调大，整块记录就会向上跳一档，为最后十几字节付一倍的池保留与瞬时
+// 分配。断言的是交给 io.Writer 的那块缓冲的 cap，因为字节池传下去的就是它
+// 本身——这是"没有额外复制"的直接证据。
+func TestRecordWriterKeepsCipherBufferInPoolClass(t *testing.T) {
 	masterKey, _ := DeriveMasterKey("cipher-class-key")
 	salt, _ := GenerateSalt()
 	endpoint := "/v3/tcp"
@@ -179,21 +182,33 @@ func TestRecordWriterKeepsCipherBufferIn64KClass(t *testing.T) {
 	require.NoError(t, err)
 	aad := buildAAD(endpoint, salt, "s2c", "session", protocol.MethodAES256GCM)
 
-	plaintext := make([]byte, protocol.MaxRecordPlaintext)
-	rec := &capRecordingBuffer{}
-	enc, counter, err := sk.newEncryptor(sessionPhase, DirS2C, protocol.MethodAES256GCM)
-	require.NoError(t, err)
-	require.NoError(t, NewRecordWriter(rec, enc, counter, aad).WriteRecord(plaintext))
+	tests := []struct {
+		name      string
+		plaintext int
+		wantCap   int
+	}{
+		{"datagram frame", protocol.MaxUDPDataSize + protocol.FrameHeaderSize, protocol.UDPPoolClassSize},
+		{"record ceiling", protocol.MaxWriteRecordPlaintext, protocol.MaxReadRecordPlaintext},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plaintext := make([]byte, tt.plaintext)
+			rec := &capRecordingBuffer{}
+			enc, counter, err := sk.newEncryptor(sessionPhase, DirS2C, protocol.MethodAES256GCM)
+			require.NoError(t, err)
+			require.NoError(t, NewRecordWriter(rec, enc, counter, aad).WriteRecord(plaintext))
 
-	require.Len(t, rec.parts, recordWriteCalls)
-	require.Equal(t, protocol.MaxCipherLenSize+len(plaintext)+protocol.MaxTagOverhead, rec.parts[0],
-		"整条记录（前缀 + 密文）必须在同一笔写入里")
-	require.Equal(t, 64*1024, rec.caps[0],
-		"明文上限处的记录必须仍落在池的 64KB 档位")
+			require.Len(t, rec.parts, recordWriteCalls)
+			require.Equal(t, protocol.MaxCipherLenSize+len(plaintext)+protocol.MaxTagOverhead, rec.parts[0],
+				"整条记录（前缀 + 密文）必须在同一笔写入里")
+			require.Equal(t, tt.wantCap, rec.caps[0],
+				"满记录必须仍落在对应的池档位内")
+		})
+	}
 }
 
 // TestWriteRecordRejectsPlaintextAboveRecordCeiling 固定**写入侧**的上限就是
-// protocol.MaxRecordPlaintext：它同时被 shaper 用作单帧校验、预冲刷边界与填充
+// protocol.MaxWriteRecordPlaintext：它同时被 shaper 用作单帧校验、预冲刷边界与填充
 // 预算，两侧不一致会让整形器攒出加密层拒绝的明文，把正常的流打断。
 //
 // 读侧刻意更宽松（MaxCipherRecordSize 仍按线上格式推导），以便解码旧对端发来的
@@ -207,28 +222,29 @@ func TestWriteRecordRejectsPlaintextAboveRecordCeiling(t *testing.T) {
 	require.NoError(t, err)
 	aad := buildAAD(endpoint, salt, "s2c", "session", protocol.MethodAES256GCM)
 
-	// 约束链本身必须自洽：最大合法单帧放得下，且线上长度仍落在 64KB 档内。
-	require.GreaterOrEqual(t, protocol.MaxRecordPlaintext, protocol.MaxUDPDataSize+protocol.FrameHeaderSize,
-		"明文上限小于最大合法单帧，最大的 UDP 数据报会被判成超限")
-	require.LessOrEqual(t, protocol.MaxRecordPlaintext+protocol.MaxCipherLenSize+protocol.MaxTagOverhead, 64*1024,
-		"明文上限越过了池的 64KB 档位")
-	require.Greater(t, MaxCipherRecordSize, protocol.MaxRecordPlaintext+protocol.MaxTagOverhead,
+	// 约束链本身必须自洽：最大数据报帧放得下，且满记录正好落在 64KB 档位内。
+	require.GreaterOrEqual(t, protocol.MaxWriteRecordPlaintext, protocol.MaxUDPDataSize+protocol.FrameHeaderSize,
+		"明文上限小于最大数据报帧，最大的 UDP 数据报会被判成超限")
+	require.Equal(t, protocol.MaxReadRecordPlaintext,
+		protocol.MaxWriteRecordPlaintext+protocol.MaxCipherLenSize+protocol.MaxTagOverhead,
+		"明文上限没有贴紧 64KB 档位")
+	require.Greater(t, MaxCipherRecordSize, protocol.MaxWriteRecordPlaintext+protocol.MaxTagOverhead,
 		"解码侧上限不应跟着写入侧一起收紧，否则无法解码旧对端的最大记录")
 
 	enc, counter, err := sk.newEncryptor(sessionPhase, DirS2C, protocol.MethodAES256GCM)
 	require.NoError(t, err)
 	rw := NewRecordWriter(&bytes.Buffer{}, enc, counter, aad)
 
-	require.NoError(t, rw.WriteRecord(make([]byte, protocol.MaxRecordPlaintext)),
+	require.NoError(t, rw.WriteRecord(make([]byte, protocol.MaxWriteRecordPlaintext)),
 		"上限本身必须可写")
-	require.Error(t, rw.WriteRecord(make([]byte, protocol.MaxRecordPlaintext+1)),
+	require.Error(t, rw.WriteRecord(make([]byte, protocol.MaxWriteRecordPlaintext+1)),
 		"超过上限的明文必须被拒绝，而不是落进 128KB 档")
 }
 
 // TestAEADOverheadMatchesProtocolCeiling 守住 protocol.MaxTagOverhead 与真实
 // AEAD 标签长度的耦合：protocol 是记录格式的定义方、不依赖 crypto 包，因此这条
-// 关系只能由测试约束。标签一旦变长，"明文上限 + 3 + 标签 ≤ 64KB"的算术就不再
-// 成立，整条记录会跳进 128KB 档。
+// 关系只能由测试约束。标签一旦变长，"明文上限 + 3 + 标签 = 64KB"的算术就不再
+// 成立，整条记录会向上跳一档。
 func TestAEADOverheadMatchesProtocolCeiling(t *testing.T) {
 	masterKey, _ := DeriveMasterKey("tag-overhead-key")
 	salt, _ := GenerateSalt()

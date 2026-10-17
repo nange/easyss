@@ -24,15 +24,15 @@ type batchShaper struct {
 	mu        sync.Mutex
 	writeMu   sync.Mutex // 跨 goroutine 串行化 WriteRecord 调用
 	// recordCeiling 是一条记录的明文上限，也是本类型唯一的尺寸边界：单帧校验、
-	// 预冲刷边界、填充预算三处都用它。它的取值由两侧夹定，不是可以随手调的：
+	// 预冲刷边界、填充预算三处都用它。它的取值由池的 64KB 档位反推：
+	// protocol.MaxWriteRecordPlaintext = MaxReadRecordPlaintext - 3 - 16 = 65,517，
+	// 一条满记录加前缀与标签正好是 65,536，不会向上跳档。
 	//
-	//   a) 下界：最大的合法单帧必须能完整落进一条记录。UDP 数据报帧最大
-	//      protocol.MaxUDPDataSize(65507) + 帧头(3) = 65,510；
-	//   b) 上界：一条记录占用的池缓冲是 MaxCipherLenSize + 明文 + AEAD 标签
-	//      （长度前缀与密文取样于同一块 2 的幂缓冲），明文一旦超过
-	//      65,536 - 3 - 16 = 65,517，整块记录就从 64KB 档跳到 128KB 档——为
-	//      十几字节的溢出付一倍的池保留与瞬时分配。协议常量
-	//      protocol.MaxRecordPlaintext 正是这两者夹出的结果（= 最大合法单帧）。
+	// 下界不由它决定：TCP 的 DATA 帧来自 netbuf 读缓冲（客户端 16,384、服务端
+	// 32,768，最大帧 32,771），UDP 数据报帧受 protocol.MaxUDPDataSize 约束
+	// （16,365）。两者都必须能完整落进一条记录，因此这个上限不能跟着 UDP 缩到
+	// 16KB——那会让 TCP 读满时在单帧校验处直接报错。UDP 链路另有一条更紧的档位
+	// 承诺：MaxUDPDataSize + 3 + 3 + 16 = protocol.UDPPoolClassSize。
 	//
 	// 它同时必须与加密侧的写入上限一致（crypto.RecordWriter.maxPlain 用的是同一个
 	// 常量）：整形侧一旦攒出比它更大的明文，WriteRecord 会直接报错并打断这条流。
@@ -42,6 +42,10 @@ type batchShaper struct {
 	recordCeiling int
 	// flushThreshold 是批处理的目标：攒到它的 9/10 就冲刷，让记录尺寸落在
 	// 填充的目标档位附近，而不是每次都顶到上限。
+	//
+	// 它从 recordCeiling 推导而不是从线上格式上限（protocol.MaxReadRecordPlaintext）
+	// 取：后者与记录上限只差 19 字节，但锚在 recordCeiling 上能让"阈值永远低于
+	// 上限"成为结构性保证，不必在改上限时再验算一遍。
 	flushThreshold int
 	window         time.Duration
 	timerStarted   bool
@@ -55,7 +59,7 @@ type batchShaper struct {
 // （参见 Config.Normalize），因此调用方可以直接传入原始的配置文件值。
 //
 // 明文缓冲区按需增长：流的生命周期从 minRecordBufferSize 起步，只有真正
-// 攒够数据（或出现超大单帧）时才长到 protocol.MaxPlainRecordSize。空闲流、
+// 攒够数据（或出现超大单帧）时才长到 protocol.MaxWriteRecordPlaintext。空闲流、
 // 心跳流与短命流因此只占最少的内存，而不是每条流无条件预留一整块记录缓冲区。
 func New(writer *crypto.RecordWriter, cfg Config) Shaper {
 	cfg = cfg.Normalize()
@@ -66,9 +70,9 @@ func New(writer *crypto.RecordWriter, cfg Config) Shaper {
 		plaintext: bytespool.Get(minRecordBufferSize)[:0],
 		// recordCeiling 是唯一的尺寸边界（单帧、预冲刷、填充预算共用），
 		// 与加密侧的写入上限是同一个协议常量，理由见字段说明。
-		recordCeiling: protocol.MaxRecordPlaintext,
+		recordCeiling: protocol.MaxWriteRecordPlaintext,
 		// flushThreshold 是批处理的目标：攒到上限的 9/10 就冲刷。
-		flushThreshold: protocol.MaxPlainRecordSize * 9 / 10,
+		flushThreshold: protocol.MaxWriteRecordPlaintext * 9 / 10,
 		window:         time.Duration(cfg.BatchWindowMS) * time.Millisecond,
 	}
 	bs.timer = time.AfterFunc(bs.window, bs.onTimer)
@@ -80,8 +84,8 @@ func New(writer *crypto.RecordWriter, cfg Config) Shaper {
 
 // minRecordBufferSize 是每条流的明文缓冲区初始大小。它是"流"这个维度的内存
 // 下限：常驻连接、心跳流、探测流在数量上往往占绝大多数，把它们从一整块记录
-// 缓冲区（64KB）降到这么小是这次收敛里收益最大的一项。缓冲按需增长到
-// protocol.MaxPlainRecordSize，见 protocol.MinRecordBufferSize 的说明。
+// 缓冲区降到这么小是这次收敛里收益最大的一项。缓冲按需增长到
+// protocol.MaxWriteRecordPlaintext，见 protocol.MinRecordBufferSize 的说明。
 const minRecordBufferSize = protocol.MinRecordBufferSize
 
 // ensureCapacity 确保明文缓冲区至少能容纳 size 字节，必要时按需增长。
@@ -95,19 +99,19 @@ func (bs *batchShaper) ensureCapacity(size int) {
 }
 
 // growLocked 把明文缓冲区换到一块更大的池化缓冲区，并归还旧的那块。
-// 增长按 2 倍摊销，但至少满足本次请求，上限是线上格式的 protocol.MaxPlainRecordSize
-// （实际请求量不会超过 bs.recordCeiling，这个更松的上限只是防止档位溢出池的
-// 64KB 档）。
+// 增长按 2 倍摊销，但至少满足本次请求，上限是 protocol.MaxReadRecordPlaintext
+// （实际请求量不会超过 bs.recordCeiling，这个更松的上限只是兜住更小的
+// minRecordBufferSize 与档位之间的算术）。
 //
 // 这里不检查 bytespool.Get 的返回值：newCap 由上面的裁剪保证落在
-// [minRecordBufferSize, protocol.MaxPlainRecordSize] 之内，是池内合法的 2 的幂
+// [minRecordBufferSize, protocol.MaxReadRecordPlaintext] 之内，是池内合法的 2 的幂
 // 档位，Get 必定返回可用的缓冲区。而且这个函数**必须**真的把缓冲区换大——
 // 静默跳过会让紧随其后的 protocol.AppendFrame 因容量不足自行 realloc，
 // 从而绕过池，正是这次改动要杜绝的路径。
 //
 // 调用方必须持有 bs.mu。
 func (bs *batchShaper) growLocked(size int) {
-	newCap := min(max(cap(bs.plaintext)*2, size, minRecordBufferSize), protocol.MaxPlainRecordSize)
+	newCap := min(max(cap(bs.plaintext)*2, size, minRecordBufferSize), protocol.MaxReadRecordPlaintext)
 
 	buf := bytespool.Get(newCap)
 	// 明文的前 len 字节必须搬过去：appendFrame 只在 Get 返回的切片上追加。
@@ -145,9 +149,10 @@ func (bs *batchShaper) appendFrameLocked(ftype protocol.FrameType, payload []byt
 	// 已攒到上限，再来一帧只能放进下一条记录）。
 	//
 	// 边界必须取 recordCeiling 而不是 flushThreshold：单个超过阈值的大帧
-	// （UDP 数据报）也是合法帧，必须能放进一条记录。它同时也是"记录明文不超过
-	// 上限"这条不变量的唯一执行点：少了它，多帧累积可以顶到 65,536，让整块记录
-	// 跳进池的 128KB 档——而单帧校验（上面那条）管不到累积。
+	// （TCP 读缓冲满档、UDP 数据报）也是合法帧，必须能放进一条记录。它同时
+	// 是"记录明文不超过上限"这条不变量的唯一执行点：少了它，多帧累积可以
+	// 顶到档位边界，让整块记录跳进池的更大档位——而单帧校验（上面那条）管
+	// 不到累积。
 	if len(bs.plaintext) > 0 && len(bs.plaintext)+frameSize > bs.recordCeiling {
 		if err := bs.flushAndWrite(false); err != nil {
 			// 该帧从未被追加，因此在此归还池化 payload：没有其他人会归还它。
@@ -295,7 +300,7 @@ func (bs *batchShaper) flushLocked() []byte {
 	// 未增长过的流（多数流自始至终都在这一档）直接复用同一块缓冲区，
 	// 彻底避免"每次冲刷都取一块新的"；已经增长过的流换回初始大小，
 	// 让它静默后能把大缓冲区让回池里，下一轮增长时正好复用
-	// （Get(4KB) 与 Put(64KB) 走不同档位，不会互相污染）。
+	// （Get(4KB) 与 Put(记录上限档) 走不同档位，不会互相污染）。
 	data := bs.plaintext
 	if cap(bs.plaintext) > minRecordBufferSize {
 		// 换出大缓冲区：data 由 flushAndWrite 在写完记录后归还

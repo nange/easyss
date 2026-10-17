@@ -188,7 +188,7 @@ const (
 	// TCP 流缓冲区大小：它们是读缓冲的**上限**，实际档位由 netbuf 向上取到池的
 	// 2 的幂（15360 → 16384，31744 → 32768）。因此"每记录几帧"由取整后的档位
 	// 决定，而不是这里的字面值：满档时客户端 3 帧（3×(16384+3)=49161），服务端
-	// 1 帧（2×(32768+3) 放不进一条记录，见 protocol.MaxRecordPlaintext）。
+	// 1 帧（2×(32768+3) 放不进一条记录，见 protocol.MaxWriteRecordPlaintext）。
 	TCPStreamBufferSize       = 15 * 1024 // 客户端，满档 3 帧/record
 	ServerTCPStreamBufferSize = 31 * 1024 // 服务端，满档 1 帧/record
 

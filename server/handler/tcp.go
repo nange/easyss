@@ -135,7 +135,7 @@ func (h *tcpHandler) copyFromTarget(src net.Conn, s2c shaper.Shaper, signalActiv
 	// 才升一档，上限是 config.ServerTCPStreamBufferSize。注意该常量会被 netbuf
 	// 向上取到池的 2 的幂档位（31744 → 32768），因此满档时是 1 帧/记录而不是
 	// 常量注释里写的 2 帧（2×(32768+3) 放不进一条记录，见
-	// protocol.MaxRecordPlaintext）——记录因此约 32KB，落在 64KB 池档位内，
+	// protocol.MaxWriteRecordPlaintext）——记录因此约 32KB，落在 64KB 池档位内，
 	// 行为无害，只是批处理密度比常量设计时低。此前是无条件借出 31744 字节并钉到
 	// 流结束，而 goroutine 大多数时间正阻塞在 src.Read 上持着它，因此空闲流、
 	// 心跳流与只传少量数据的流各自白占 31KB——服务端常驻内存因此随峰值并发流数增长。
