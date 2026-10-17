@@ -81,26 +81,28 @@ func (m Method) String() string {
 }
 
 const (
-	// MaxPoolClass 是记录层承诺使用的 bytespool 档位上限，也是下面三个上限的
-	// 唯一来源。取 16KB 的理由是"够用"与"每条会话的常驻内存":最大的合法 UDP
-	// 数据报由 MaxUDPDataSize 界定，而它只需覆盖局域网巨型帧(9216)与本项目
-	// 自己宣告的 DNS EDNS0 上限(8192，见 client/dns 与 client/proxy/dns.go)；
-	// 走 TUN 的流量更永远不超过 tun_mtu(默认 1500)。
+	// UDPPoolClassSize 是 **UDP 数据报链路**承诺使用的 bytespool 档位大小，也是
+	// MaxUDPDataSize 的唯一来源。取 16KB 的理由是"够用"与"每条会话的常驻内存"：
+	// UDP 数据报的常见上限是局域网巨型帧(9216)与本项目自己宣告的 DNS EDNS0
+	// 上限(8192，见 client/dns 与 client/proxy/dns.go)；更大的数据报（NFS over
+	// UDP 之类）不值得让每条会话各钉一块 64KB 读缓冲（客户端 128 条并发交换
+	// 即 8MB）。
 	//
-	// 线上格式本身能表达 16MB（3 字节长度前缀），所以这不是协议能力上限，
-	// 而是"本进程愿意为一条记录预留多大池缓冲"的取舍：超过这一档就不再是
-	// 一条记录的尺寸问题，而是每条流各钉一块更大缓冲的内存问题。
+	// 它**不是整个记录层的上限**：TCP 字节流记录的写入上限是 MaxWriteRecordPlaintext
+	// (65,517)，仍会用到池的 64KB 档——读缓冲由 netbuf 按 2 的幂取档（客户端
+	// 16,384、服务端 32,768），单帧最大 32,771 字节。把记录上限压到 16KB 会让
+	// 这些读缓冲在单帧校验处直接报错，见 shaper.(*batchShaper).appendFrameLocked。
 	//
-	// 它是导出的，因为这条承诺要能被跨包断言：crypto 的
-	// TestRecordWriterKeepsCipherBufferInPoolClass 与 protocol 的
-	// TestRecordSizesStayInOnePoolClass 都对着它检查，而不是各自写死 16KB。
-	MaxPoolClass = 16 * 1024
+	// 它是导出的，因为数据报链路的不变量要能被跨包断言：crypto 与 protocol 的
+	// 测试都对着它检查，而不是各自写死 16KB。
+	UDPPoolClassSize = 16 * 1024
 
-	// MaxPlainRecordSize 是线上格式的明文上限（长度前缀是 3 字节，16MB），
-	// **只是解码侧的天花板**，不是写入侧的尺寸：本进程写出的记录不超过
-	// MaxRecordPlaintext。留它不变是为了继续接受旧对端发来的大记录
-	// （见 crypto.MaxCipherRecordSize 的推导）。
-	MaxPlainRecordSize = 64 * 1024
+	// MaxReadRecordPlaintext 是**解码侧**接受的明文上限（线上格式的长度前缀能
+	// 表达 16MB，这里按 64KB 收口），同时是写入侧上限的出处：
+	// MaxWriteRecordPlaintext = MaxReadRecordPlaintext - MaxCipherLenSize -
+	// MaxTagOverhead，正好把一条满记录填进池的 64KB 档。留它不变是为了继续接受
+	// 旧对端发来的大记录（见 crypto.MaxCipherRecordSize 的推导）。
+	MaxReadRecordPlaintext = 64 * 1024
 
 	MaxCipherLenSize = 3
 
@@ -117,23 +119,24 @@ const (
 	// Overhead() <= MaxTagOverhead）。
 	MaxTagOverhead = 16
 
-	// MaxRecordPlaintext 是一条记录里明文的实际上限：池档位减去长度前缀与
-	// AEAD 标签。**它不是"最大合法单帧"，而是"一条记录能有多大"**——后者必须
-	// 由它反推（见 MaxUDPDataSize），否则就会出现"最大帧放不进一条同档记录"的
-	// 矛盾。
+	// MaxWriteRecordPlaintext 是一条记录里明文的**写入上限**，由解码侧上限减去
+	// 长度前缀与 AEAD 标签反推：65,517 + 3 + 16 = 64KB，正好用满池的该档位。
 	//
 	// 它是**加密侧与整形侧共用的同一个上限**，两侧必须一致：
 	//   - crypto.RecordWriter 用它做写入校验（超过即报错）；
 	//   - shaper 用它做单帧校验、预冲刷边界与填充预算（否则它能攒出 WriteRecord
 	//     拒绝的明文，把一条正常的流打断）。
 	//
-	// 读侧不受它约束：MaxCipherRecordSize 仍按线上格式上限推导，以便解码旧对端
-	// 发来的、明文到 64KB 的记录。
-	MaxRecordPlaintext = MaxPoolClass - MaxCipherLenSize - MaxTagOverhead // 16,365
+	// 它**不是最大合法单帧**：TCP 的 DATA 帧由 netbuf 读缓冲决定（客户端
+	// 16,384、服务端 32,768，见 config.TCPStreamBufferSize /
+	// ServerTCPStreamBufferSize），最大 32,771 字节，必须远小于它；UDP 数据报帧
+	// 则另有更紧的 MaxUDPDataSize。读侧不受它约束：MaxCipherRecordSize 仍按解码
+	// 侧上限推导，以便解码旧对端发来的、明文到 64KB 的记录。
+	MaxWriteRecordPlaintext = MaxReadRecordPlaintext - MaxCipherLenSize - MaxTagOverhead // 65,517
 
-	// MaxUDPDataSize 是单个 UDP 数据报的载荷上限。它由 MaxRecordPlaintext 减去
-	// 帧头反推，**而不是直接取某个档位或某个协议层最大值**：这条链路上一共有
-	// 三块池缓冲会按数据报长度申请内存（P 为载荷长度）——
+	// MaxUDPDataSize 是单个 UDP 数据报的载荷上限，也是 UDP 读缓冲的容量。它由
+	// **数据报链路的池档位**反推，而不是由记录上限反推：这条链路上一共有三块
+	// 池缓冲会按数据报长度申请内存（P 为载荷长度）——
 	//
 	//	1) socket 读缓冲   bytespool.Get(P)                        = P
 	//	2) 整形器明文缓冲  protocol.AppendFrame(DATAGRAM, payload)  = P + 3（帧头）
@@ -144,28 +147,33 @@ const (
 	// cipher_len 前缀）：P + 19 <= 16KB。取 16,362 正是这个解——比"看起来更整齐"
 	// 的档位值小 22 字节，却决定了这条链路上**每一块缓冲**都停在 16KB 档；多这
 	// 22 字节就会让密文缓冲跳到 32KB 档，而每条记录都要现场分配一块它。
-	// 由 TestRecordSizesStayInOnePoolClass 守住这条不变量的三个方向。
+	// 注意 (3) 是"记录里只有这一条数据报"时的请求量：多条数据报仍可能被批进
+	// 同一条记录，此时密文缓冲按整条记录申请（最大到 64KB 档），但那是批处理的
+	// 瞬时开销，不影响本常量控制的每会话读缓冲。
+	// 由 TestRecordSizesStayInTheirPoolClasses 守住这条不变量。
+	//
+	// 它**不是协议上限**：帧长是 uint16，解码侧仍接受旧对端发来的最大 65,535
+	// 字节的帧。不要拿它去限制解码，否则旧客户端的大数据报会被直接拒掉。
 	//
 	// 顺带的影响是 server/nextproxy 的 maxUDPDatagram(= 本值 + 22) 正好等于
 	// 档位大小，池请求零浪费。
 	//
 	// 历史取值是 65,507（IPv4 下 UDP 载荷的算术上限 = 65,535 - 20 - 8）。它对
-	// 应的是"单个 IP 报文理论上能有多大"，而那个尺寸在本项目里不可达：走 TUN 的
-	// 流量被 tun_mtu 限死在 1500，DNS 被自家宣告的 EDNS0 上限 8192 封顶，环回
-	// 上真正会出现的大包是 9216 的巨型帧。为这三者都不可能达到的 64KB 让每条
-	// UDP 会话各钉一块 64KB 读缓冲（客户端 128 条并发交换即 8MB），不划算。
-	MaxUDPDataSize = MaxRecordPlaintext - FrameHeaderSize // 16,362
+	// 应的是"单个 IP 报文理论上能有多大"，而真实 UDP 数据报绝大多数在 MTU 以内，
+	// 本项目自己宣告的 DNS EDNS0 也只有 8192；为 64KB 让每条 UDP 会话各钉一块
+	// 64KB 读缓冲（客户端 128 条并发交换即 8MB），不划算。
+	MaxUDPDataSize = UDPPoolClassSize - MaxCipherLenSize - MaxTagOverhead - FrameHeaderSize // 16,362
 
 	// MinRecordBufferSize 是每条流的明文缓冲区初始大小。缓冲按需增长（见
 	// shaper.(*batchShaper).ensureCapacity），因此空闲流与只传少量数据的流
-	// 终生只占这么多，只有真正的大流量流才会长到 MaxRecordPlaintext。
+	// 终生只占这么多，只有真正的大流量流才会长到 MaxWriteRecordPlaintext。
 	//
 	// 它是"流"这个维度的内存下限，而服务端的内存占用 ≈ 峰值并发流数 ×
 	// 每流缓冲区大小：常驻连接、心跳流、探测流在数量上往往占绝大多数，
 	// 把它们从一整块记录缓冲区（64KB）降到 4KB 是这次收敛里收益最大的一项
 	// （实测：600 条空闲流从约 38MB 降到约 2.4MB）。
 	//
-	// 它刻意不改变 MaxPlainRecordSize：线上格式的最大尺寸参与旧对端的解码能力，
+	// 它刻意不改变 MaxReadRecordPlaintext：线上格式的最大尺寸参与旧对端的解码能力，
 	// 调小它会让更新的版本无法解码老版本客户端发出的记录。因此这次只收敛
 	// "每条流预留多少"，不动"线上格式能表达多大"。
 	MinRecordBufferSize = 4 * 1024

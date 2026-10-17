@@ -45,7 +45,7 @@ const (
 	// 最坏情况的头（RSV/FRAG + ATYP + IPv6 地址 + 端口）。接收缓冲按它分配，
 	// 一次即可容纳任何合法数据报。
 	//
-	// 它正好等于记录层的池档位（protocol.MaxUDPDataSize + 22 = 16KB），因此这里
+	// 它正好等于数据报链路的池档位（protocol.MaxUDPDataSize + 22 = 16KB），因此这里
 	// 借出的缓冲与 UDP 中继链路上其余三块（socket 读缓冲、整形器明文缓冲、记录
 	// 密文缓冲）落在同一档位，没有一块会向上跳档。
 	maxUDPDatagram = udpBufSize + 3 + 1 + net.IPv6len + 2

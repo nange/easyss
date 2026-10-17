@@ -109,9 +109,9 @@ var (
 )
 
 // buildBootstrapPlaintext 拼装引导记录的明文：HANDSHAKE 帧 + 调用方的额外帧 +
-// 随机填充。填充预算取 protocol.MaxRecordPlaintext——它与 crypto.RecordWriter 的
+// 随机填充。填充预算取 protocol.MaxWriteRecordPlaintext——它与 crypto.RecordWriter 的
 // 写入上限是同一个值，因此"放不下就退避"这条规则同时守住了两件事：整条记录落进
-// 协议承诺的池档位（protocol.MaxPoolClass），以及写入不会被加密层拒绝。
+// 池的 64KB 档位，以及写入不会被加密层拒绝。
 //
 // 引导记录由客户端手工拼装、不经过整形器的预冲刷边界，所以这层保证只能在这里
 // 自己做：填充能退避，额外帧不能，因此函数自己校验额外帧的线上总长，超限时返回
@@ -130,14 +130,14 @@ func buildBootstrapPlaintext(target string, proto protocol.Proto, method protoco
 	// 先校验"填充之前"的长度：额外帧自身放不进一条记录时，交给填充退避也救不回来。
 	// 宁可在这里报出是谁越了界，也不要让明文走到 WriteRecord 才被拒绝——那里只能
 	// 报"plaintext exceeds max"，看不出根因。
-	if size := encodedLen(frames); size > protocol.MaxRecordPlaintext {
+	if size := encodedLen(frames); size > protocol.MaxWriteRecordPlaintext {
 		return nil, fmt.Errorf("bootstrap record plaintext %d exceeds max %d bytes (target %q, %d extra frames)",
-			size, protocol.MaxRecordPlaintext, target, len(extraFrames))
+			size, protocol.MaxWriteRecordPlaintext, target, len(extraFrames))
 	}
 
 	// 添加随机填充以隐藏引导记录中的目标主机名长度。否则，第一条记录的密文长度
 	// 会直接与 len(target) 相关。
-	if padFrame, ok := shaper.BuildPaddingFrame(encodedLen(frames), protocol.MaxRecordPlaintext); ok {
+	if padFrame, ok := shaper.BuildPaddingFrame(encodedLen(frames), protocol.MaxWriteRecordPlaintext); ok {
 		frames = append(frames, padFrame)
 	}
 
@@ -697,14 +697,14 @@ type UDPExchange struct {
 
 // bootstrapMaxPayload 返回可以合并进引导记录的首个数据报的最大长度：引导记录由
 // 客户端手工拼装，不经过整形器的预冲刷边界，因此合并判据必须自己保证拼出来的明文
-// 不超过 protocol.MaxRecordPlaintext（= crypto.RecordWriter 的写入上限）。
+// 不超过 protocol.MaxWriteRecordPlaintext（= crypto.RecordWriter 的写入上限）。
 // 9 = HANDSHAKE 帧头 3 + 握手体固定字段 3 + DATAGRAM 帧头 3。
 //
 // 判据与 buildBootstrapPlaintext 的填充预算取自同一个常量，因此"判据说能合并"
 // 与"加密层一定接受"是同一件事——这条等价关系由 TestBootstrapRecordFitsWriteLimit
 // 直接对着真实 writer 断言。
 func bootstrapMaxPayload(target string) int {
-	return protocol.MaxRecordPlaintext - len(target) - 9
+	return protocol.MaxWriteRecordPlaintext - len(target) - 9
 }
 
 func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, method protocol.Method, firstPayload []byte) (*UDPExchange, error) {

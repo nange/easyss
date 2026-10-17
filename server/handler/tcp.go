@@ -133,13 +133,12 @@ func (h *tcpHandler) copyFromClient(dr *crypto.DecryptedReader, dst net.Conn, si
 func (h *tcpHandler) copyFromTarget(src net.Conn, s2c shaper.Shaper, signalActivity func(), m *stats.StreamMeter) error {
 	// 读缓冲按需增长：流的起点只占 protocol.MinRecordBufferSize (4KB)，读满一档
 	// 才升一档，上限是 config.ServerTCPStreamBufferSize。注意该常量会被 netbuf
-	// 向上取到池的 2 的幂档位（31744 → 32768），而单条记录的明文上限是
-	// protocol.MaxRecordPlaintext——满档读到的一帧因此比一条记录还大，会被整形器
-	// 的预冲刷边界切成两条记录（每条仍落在池档位内）。行为无损，只是记录尺寸不再
-	// 与读缓冲一一对应：TCP 缓冲短了只会多几次 Read，数据不会丢。
-	// 此前是无条件借出 31744 字节并钉到流结束，而 goroutine 大多数时间正阻塞在
-	// src.Read 上持着它，因此空闲流、心跳流与只传少量数据的流各自白占 31KB——
-	// 服务端常驻内存因此随峰值并发流数增长。
+	// 向上取到池的 2 的幂档位（31744 → 32768），因此满档时是 1 帧/记录而不是
+	// 常量注释里写的 2 帧（2×(32768+3) 放不进一条记录，见
+	// protocol.MaxWriteRecordPlaintext）——记录因此约 32KB，落在 64KB 池档位内，
+	// 行为无害，只是批处理密度比常量设计时低。此前是无条件借出 31744 字节并钉到
+	// 流结束，而 goroutine 大多数时间正阻塞在 src.Read 上持着它，因此空闲流、
+	// 心跳流与只传少量数据的流各自白占 31KB——服务端常驻内存因此随峰值并发流数增长。
 	//
 	// 增长对 TCP 是无损的：缓冲短了只会多几次 Read，数据不会丢，因此这里可以
 	// 只按"这次读满了"这一个信号升档（UDP 不能这么做，超长数据报会被静默截断）。
