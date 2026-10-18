@@ -135,7 +135,7 @@ func startTestDNSHandler(t *testing.T, handler dns.HandlerFunc) string {
 // startCorruptEDNS0DNSServer 复现"OPT 记录被放进 ANSWER 段、真正的记录被挤到
 // ADDITIONAL 段"这一类畸形应答（部分家用路由器/缓存对 EDNS0 查询就是这样应答
 // 的）。严格解析器（dig/BIND）判为畸形报文，宽松解析器（Go 标准库解析器）只
-// 看到一条 41 类型记录、拿不到任何地址，表现为解析失败（见 normalizeEDNS0Answer）。
+// 看到一条 41 类型记录、拿不到任何地址，表现为解析失败（见 NormalizeEDNS0Answer）。
 func startCorruptEDNS0DNSServer(t *testing.T) string {
 	t.Helper()
 	return startTestDNSHandler(t, dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {

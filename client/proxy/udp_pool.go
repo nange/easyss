@@ -192,20 +192,16 @@ func (p *udpPool) acquireExchange(ctx context.Context, key, dst string, firstPay
 	return ue, !shared, nil
 }
 
-// removeExchange 无条件地把 key 从会话表中删除并关闭交换。它服务于
-// 「本次调用拥有该交换」的两条路径：发送失败后的立即回收，以及 receiveLoop
-// 退出时的收尾。
+// removeExchange 在会话表条目仍指向 ue 时删除并关闭它。它服务三条收尾路径：
+// 发送失败后的立即回收、receiveLoop 退出时的收尾，以及 TCP DNS 会话失效后的
+// 重建（一条连接会跨多条查询复用自己的交换，失效后必须让下一次查询重建，而
+// 不是命中残留的已关闭交换）。
+//
+// 删除必须校验身份，与 removeDirect 一致：驱逐或空闲清理摘除旧交换后，同一
+// key 可能已经登记了新交换，而旧 receiveLoop 的 defer 会晚一步执行。无条件
+// delete 会把新条目一并删掉，池从此对这条交换失明（非 DNS 的 UDP 交换没有读
+// 空闲定时器，可能一直泄漏到进程退出）。
 func (p *udpPool) removeExchange(key string, ue *UDPExchange) {
-	p.mu.Lock()
-	delete(p.exchanges, key)
-	p.mu.Unlock()
-	ue.Close() //nolint:errcheck
-}
-
-// invalidateExchange 只在会话表条目仍指向 ue 时才删除并关闭它，避免误删并发
-// 重建后的新交换（TCP DNS 的一条连接会跨多条查询复用自己的交换，失效后必须
-// 让下一次查询重建，而不是命中残留的已关闭交换）。
-func (p *udpPool) invalidateExchange(key string, ue *UDPExchange) {
 	if ue == nil {
 		return
 	}

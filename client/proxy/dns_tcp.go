@@ -9,6 +9,7 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/client/config"
+	easydns "github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/util"
@@ -48,7 +49,7 @@ func (s *tcpDNSSession) invalidate() {
 	if s.ue == nil {
 		return
 	}
-	s.d.pool.invalidateExchange(s.key, s.ue)
+	s.d.pool.removeExchange(s.key, s.ue)
 	s.ue = nil
 }
 
@@ -90,6 +91,9 @@ func (s *tcpDNSSession) resolve(msg *dns.Msg, target string) (*dns.Msg, error) {
 		if err != nil {
 			return nil, err
 		}
+		// 与 UDP 代理路径一致：缓存和客户端（TCP 前端负责 Pack）都使用规范化
+		// 后的应答，避免畸形 EDNS0 留在缓存里。
+		easydns.NormalizeEDNS0Answer(resp)
 		log.Info("[DNS_PROXY] result", "domain", plan.domain, "qtype", plan.qtype,
 			"answers", util.DNSAnswerStrings(resp), "src", s.src, "dst", target)
 		if d.router.ShouldIPV6Disable() && msg.Question[0].Qtype == dns.TypeAAAA {

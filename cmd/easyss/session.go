@@ -168,6 +168,11 @@ func (s *session) start() error {
 		// 静默未代理的系统。main.go 与 headless 构建共享，所以提示走 appUI。
 		if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !IsRoot() {
 			log.Warn("[EASYSS-V3] tun2socks requires root; skipped (use sudo, or run with system tray for automatic elevation)")
+			// 与网络未就绪分支一致，把“下次启动的偏好”落回 false：托盘菜单按
+			// currentConfig 勾选，只提示不落状态会让用户看到“系统全局流量已开启”
+			// 而 tunMgr 为 nil，第一次点击还会走“关闭”分支（空操作）。用户仍可
+			// 从托盘重新开启，届时走提权 helper。
+			s.app.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = false })
 			s.app.notifyTunSkippedNoRoot()
 		} else if !domainPending {
 			// runner.Run 已确保服务端主机名可解析并预填充了 DNS 缓存
@@ -187,8 +192,9 @@ func (s *session) start() error {
 	}
 
 	// 核心不再从共享配置里"顺带"看到 TUN 状态（见 client.Client.tunMode）：
-	// 在决定完本会话是否真的启用 TUN 之后显式告知一次。取的是调整之后的偏好，
-	// 因此与拆分前的语义一致（非 root 跳过时仍为 true，降级跳过时已被置为 false）。
+	// 在决定完本会话是否真的启用 TUN 之后显式告知一次。取的是调整之后的偏好：
+	// 非 root 跳过与网络未就绪跳过都已把它落回 false，只有真正启动 TUN（或
+	// 并发的一次托盘开关）才会是 true。
 	//
 	// 这里重读 currentConfig()（而不是复用上面的 sessionCfg）是刻意的：这次启动
 	// 可能正与一次 TUN 开关并发，核心应当拿到最新的意图。若"优化"成

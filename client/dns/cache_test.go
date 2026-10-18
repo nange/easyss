@@ -472,7 +472,7 @@ func TestCachePrePopulateQueriesAAndAAAAConcurrently(t *testing.T) {
 
 // TestCachePrePopulateNormalizesCorruptEDNS0Answer 验证"OPT 在 ANSWER 段"的畸形
 // 应答不会让预解析失败：被挤到 ADDITIONAL 段的真实记录会被回收，缓存里拿到可用
-// 地址，且不会把 OPT 一起缓存下来（见 normalizeEDNS0Answer）。
+// 地址，且不会把 OPT 一起缓存下来（见 NormalizeEDNS0Answer）。
 func TestCachePrePopulateNormalizesCorruptEDNS0Answer(t *testing.T) {
 	addr := startCorruptEDNS0DNSServer(t)
 

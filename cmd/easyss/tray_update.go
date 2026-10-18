@@ -108,12 +108,57 @@ func timedUpdateCheckInterval() time.Duration {
 	return time.Duration(float64(updateCheckInterval) * factor)
 }
 
+// beginUpdateCheck 尝试把更新状态推进到“检查中”。它接受 Idle 与 Available
+// 两种起点：第一次发现新版本后状态停在 Available，若只接受 Idle，此后的周期
+// 检查会被 CAS 永远挡掉（见 finishUpdateCheck）。返回 wasAvailable 以便检查
+// 结束后恢复到正确状态。
+func (a *TrayApp) beginUpdateCheck() (wasAvailable, ok bool) {
+	for {
+		prev := a.updateState.Load()
+		if prev != updateStateIdle && prev != updateStateAvailable {
+			return false, false
+		}
+		if a.updateState.CompareAndSwap(prev, updateStateChecking) {
+			return prev == updateStateAvailable, true
+		}
+	}
+}
+
+// pendingUpdateTag 返回当前待处理更新的 tag；没有时返回 ""。
+func (a *TrayApp) pendingUpdateTag() string {
+	a.updateMu.Lock()
+	defer a.updateMu.Unlock()
+	if a.pendingUpdate == nil {
+		return ""
+	}
+	return a.pendingUpdate.TagName
+}
+
+// finishUpdateCheck 在检查没有发现更新（失败，或没有比当前/待处理版本更新的
+// release）时恢复状态。此前处于 Available 时必须回到 Available 并保留菜单
+// 标签，不能一律走 scheduleUpdateMenuReset——那会把状态降成 Idle，待处理更新
+// 就从界面上消失了。
+func (a *TrayApp) finishUpdateCheck(wasAvailable bool) {
+	if !wasAvailable {
+		a.scheduleUpdateMenuReset()
+		return
+	}
+	tag := a.pendingUpdateTag()
+	if tag == "" || !selfupdate.HasNewVersion(version.Tag(), tag) {
+		a.scheduleUpdateMenuReset()
+		return
+	}
+	a.updateState.Store(updateStateAvailable)
+	a.setUpdateItem(updateAvailableItemLabel(tag), false)
+}
+
 // checkUpdate 执行一次更新检查。它是同步的：调用方在自己的 goroutine 上运行它
 // （托盘菜单处理器、周期循环），且更新状态机会让并发第二次调用变成空操作。
 // ctx 限定检查的范围。只有交互式检查（菜单点击）会报告失败或已是最新的结果；
 // 自动检查保持静默，除非出现新版本。
 func (a *TrayApp) checkUpdate(ctx context.Context, interactive bool) {
-	if !a.updateState.CompareAndSwap(updateStateIdle, updateStateChecking) {
+	wasAvailable, ok := a.beginUpdateCheck()
+	if !ok {
 		return
 	}
 	if interactive {
@@ -132,17 +177,24 @@ func (a *TrayApp) checkUpdate(ctx context.Context, interactive bool) {
 			a.setUpdateItem("检查更新失败", true)
 			a.notifyOnInteractive("检查更新失败：" + err.Error())
 		}
-		a.scheduleUpdateMenuReset()
+		a.finishUpdateCheck(wasAvailable)
 		return
 	}
 
 	if !selfupdate.HasNewVersion(version.Tag(), rel.TagName) {
-		log.Info("[SYSTRAY] check update: already up to date", "version", version.Tag())
-		if interactive {
-			a.setUpdateItem(updateUpToDateText(version.Tag()), true)
-			a.notifyOnInteractive(updateUpToDateText(version.Tag()))
+		if wasAvailable {
+			// 这是周期检查（交互式检查在 Available 状态会直接进入下载），
+			// 且已有一个待处理更新；不要覆盖成“已是最新版本”。
+			log.Info("[SYSTRAY] check update: no release newer than the pending update",
+				"version", version.Tag(), "pending", a.pendingUpdateTag())
+		} else {
+			log.Info("[SYSTRAY] check update: already up to date", "version", version.Tag())
+			if interactive {
+				a.setUpdateItem(updateUpToDateText(version.Tag()), true)
+				a.notifyOnInteractive(updateUpToDateText(version.Tag()))
+			}
 		}
-		a.scheduleUpdateMenuReset()
+		a.finishUpdateCheck(wasAvailable)
 		return
 	}
 
