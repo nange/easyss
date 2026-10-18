@@ -74,6 +74,15 @@ func (d *dnsInterceptor) directUDPQuery(req udpDNSQuery, plan dnsPlan) error {
 // proxyUDPQuery 把一条查询交给经隧道的 UDP 交换。首载荷合并进引导记录时不需要
 // 额外发送；后续查询直接复用现有交换。应答由 receiveLoop 异步送回。
 func (d *dnsInterceptor) proxyUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery, plan dnsPlan) error {
+	// 上游解析器依据查询里的 EDNS0 尺寸决定应答上限；不钳制的话，一个宣告
+	// 64KB 的查询可以让应答超过隧道读缓冲，被截断检测丢弃。
+	if clampDNSEDNS0(req.msg) {
+		if packed, err := req.msg.Pack(); err == nil {
+			req.raw = packed
+		} else {
+			log.Warn("[DNS_PROXY] repack clamped query", "err", err)
+		}
+	}
 	// upstream 是本代理解析查询的位置；客户端请求的是其自身解析器所配置的
 	// 服务器，而应答必须伪装成来自该地址（req.dst），与其他所有 DNS 分支
 	// 一致。如果改用 upstream 来封装应答，透明 NAT（tun2socks）会把它丢弃：

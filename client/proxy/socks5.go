@@ -587,10 +587,19 @@ func (s *Socks5Server) udpRelayLoop(relay *udpRelay) {
 	uc := relay.socket
 	buf := bytespool.Get(protocol.MaxUDPDataSize)
 	defer bytespool.MustPut(buf)
+	// 读满整个池档位，而不是只读预算长度：MaxUDPDataSize 比档位小 22 字节，
+	// 因此 n == len(readBuf) 只可能意味着"原始 SOCKS5 数据报至少有这么长"，
+	// 既可能是恰好落在档位边界，也可能是被内核截断——两者都超出数据报预算，
+	// 丢弃即可。只读 16,362 字节则无法区分"恰好等于预算"与"被截断"。
+	readBuf := buf[:cap(buf)]
 
 	for {
-		n, src, err := uc.ReadFromUDP(buf)
+		n, src, err := uc.ReadFromUDP(readBuf)
 		if err != nil {
+			if protocol.IsUDPMessageTooLong(err) {
+				log.Warn("[UDP] dropping oversized datagram", "src", src, "err", err)
+				continue
+			}
 			return
 		}
 		if src == nil || !src.IP.Equal(relay.clientIP) {
@@ -599,7 +608,12 @@ func (s *Socks5Server) udpRelayLoop(relay *udpRelay) {
 		}
 		// 记下真实来源地址：应答（含异步的 DNS 应答）要写回这里。
 		relay.setDatagramSource(src)
-		frame, err := statute.ParseDatagram(buf[:n])
+		if n == len(readBuf) {
+			log.Warn("[UDP] dropping truncated datagram", "src", src, "n", n,
+				"limit", protocol.MaxUDPDataSize)
+			continue
+		}
+		frame, err := statute.ParseDatagram(readBuf[:n])
 		if err != nil {
 			log.Debug("[UDP] malformed datagram dropped", "src", src, "err", err)
 			continue
@@ -609,6 +623,13 @@ func (s *Socks5Server) udpRelayLoop(relay *udpRelay) {
 		// 从来看不到分片）。不丢就会把残缺的分片当成完整载荷中继出去。
 		if frame.Frag != 0 {
 			log.Debug("[UDP] fragmented datagram dropped", "src", src, "frag", frame.Frag)
+			continue
+		}
+		// SOCKS5 头也占整包长度：整包读满档位时，IPv4 头（10 字节）仍可能让
+		// 解析后的载荷越过预算，跨过数据报链路承诺的池档位。
+		if len(frame.Data) > protocol.MaxUDPDataSize {
+			log.Warn("[UDP] dropping oversized datagram", "src", src,
+				"payload", len(frame.Data), "limit", protocol.MaxUDPDataSize)
 			continue
 		}
 		// handleUDP 的错误只影响这一条数据报，不能中断整个中继循环。

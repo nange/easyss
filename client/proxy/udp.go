@@ -188,17 +188,30 @@ func (s *Socks5Server) directUDPReadLoop(relay *udpRelay, dst, key string, dc *d
 	}()
 	buf := bytespool.Get(protocol.MaxUDPDataSize)
 	defer bytespool.MustPut(buf)
+	// 读满整个池档位：n == len(readBuf) 说明数据报至少填满了档位（被截断，
+	// 或恰好等于档位），两者都超过 MaxUDPDataSize，丢弃比把截断的内容转发给
+	// 应用更安全。n > MaxUDPDataSize 则是未截断但越预算的报文。
+	readBuf := buf[:cap(buf)]
 	for {
 		_ = rc.SetReadDeadline(time.Now().Add(s.udpIdleTimeout))
-		n, err := rc.Read(buf)
+		n, err := rc.Read(readBuf)
 		if err != nil {
+			if protocol.IsUDPMessageTooLong(err) {
+				log.Warn("[UDP] dropping oversized datagram", "err", err)
+				continue
+			}
 			return
+		}
+		if n > protocol.MaxUDPDataSize {
+			log.Warn("[UDP] dropping oversized datagram", "n", n,
+				"limit", protocol.MaxUDPDataSize, "truncated", n == len(readBuf))
+			continue
 		}
 		// 接收时也刷新空闲时间戳，与发送一致，镜像代理路径
 		// （UDPExchange.Receive）：一个只持续接收而不再写入的流（一次查询带来
 		// 一长串响应）在仍然活跃时不能被回收。
 		dc.lastSeen.Store(time.Now().UnixNano())
-		s.sendToClient(relay, buf[:n], dst)
+		s.sendToClient(relay, readBuf[:n], dst)
 	}
 }
 

@@ -80,13 +80,16 @@ func (c Config) Normalize() Config {
 	if c.Cover.MaxSize <= 0 {
 		c.Cover.MaxSize = defaultCoverMaxSize
 	}
-	// 钳制到线缆格式：Frame.Length 是 uint16，且 cover payload 来自字节池，
-	// 因此过大的值会破坏记录流。配置错误的预算上限绝不能造成这种后果。
-	if c.Cover.MinSize > protocol.MaxUDPDataSize {
-		c.Cover.MinSize = protocol.MaxUDPDataSize
+	// 钳制到记录上限：Frame.Length 是 uint16，且 cover payload 必须放得进一条
+	// 记录（否则会被整形器的单帧校验拒绝）。配置错误的预算上限绝不能造成这种
+	// 后果。注意这里不能用 protocol.MaxUDPDataSize——它是 UDP 数据报的读缓冲
+	// 上限，比记录上限紧得多，会把合法的 cover 配置一并削掉。
+	maxFramePayload := protocol.MaxWriteRecordPlaintext - protocol.FrameHeaderSize
+	if c.Cover.MinSize > maxFramePayload {
+		c.Cover.MinSize = maxFramePayload
 	}
-	if c.Cover.MaxSize > protocol.MaxUDPDataSize {
-		c.Cover.MaxSize = protocol.MaxUDPDataSize
+	if c.Cover.MaxSize > maxFramePayload {
+		c.Cover.MaxSize = maxFramePayload
 	}
 	if c.Cover.MaxSize < c.Cover.MinSize {
 		c.Cover.MaxSize = c.Cover.MinSize
@@ -99,14 +102,14 @@ func (c Config) Normalize() Config {
 // 以掩盖真实 payload 长度。
 //
 // budget 是这条记录可用的总空间（含帧头），<=0 表示按线上格式上限
-// protocol.MaxPlainRecordSize 计算。调用方传入自己缓冲区的实际容量，可以在
+// protocol.MaxReadRecordPlaintext 计算。调用方传入自己缓冲区的实际容量，可以在
 // 缓冲尚未增长到上限时也做一次判断，而不是先生成再丢弃。
 //
 // 返回的 bool 表示是否生成了填充。当算法判定无需填充，或帧会超出 budget
 // （以及线上格式上限）时为 false。
 func BuildPaddingFrame(totalSize, budget int) (protocol.Frame, bool) {
-	if budget <= 0 || budget > protocol.MaxPlainRecordSize {
-		budget = protocol.MaxPlainRecordSize
+	if budget <= 0 || budget > protocol.MaxReadRecordPlaintext {
+		budget = protocol.MaxReadRecordPlaintext
 	}
 	padSize := computePadPayloadSize(totalSize)
 	if padSize <= 0 {

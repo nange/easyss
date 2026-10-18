@@ -439,6 +439,10 @@ func (s *udpSession) startUpstreamReader() {
 func (s *udpSession) readFromTarget() {
 	buf := bytespool.Get(udpBufSize)
 	defer bytespool.MustPut(buf)
+	// 读满整个池档位：n == len(readBuf) 说明数据报至少填满了档位（被截断，
+	// 或恰好等于档位），两者都超过 udpBufSize，丢弃而不是把截断的应答转发给
+	// 客户端。只读 16,362 字节则无法区分"恰好等于预算"与"被截断"。
+	readBuf := buf[:cap(buf)]
 
 	// 连接在进入本 goroutine 时固定：路由重绑必然发生在客户端帧的处理过程中
 	// （主 goroutine），而重绑会先把旧连接换掉并关闭——从这里取到的连接要么是
@@ -451,8 +455,12 @@ func (s *udpSession) readFromTarget() {
 
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(s.idleTimeout))
-		n, err := conn.Read(buf)
+		n, err := conn.Read(readBuf)
 		if err != nil {
+			if protocol.IsUDPMessageTooLong(err) {
+				log.Warn("[UDP] dropping oversized datagram", "err", err)
+				continue
+			}
 			if conn != s.upstream() {
 				// 这条连接已经被重绑替换：它的错误是拆连接的预期结果，不是目标
 				// 故障，也不该拿去结束会话——新连接的读取 goroutine 已经接手。
@@ -461,7 +469,12 @@ func (s *udpSession) readFromTarget() {
 			s.sendResult(udpDatagram{err: s.targetReadError(err)})
 			return
 		}
-		payload := append([]byte(nil), buf[:n]...)
+		if n > udpBufSize {
+			log.Warn("[UDP] dropping oversized datagram", "n", n,
+				"limit", udpBufSize, "truncated", n == len(readBuf))
+			continue
+		}
+		payload := append([]byte(nil), readBuf[:n]...)
 		if !s.sendResult(udpDatagram{payload: payload}) {
 			return
 		}

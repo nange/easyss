@@ -13,6 +13,7 @@ import (
 	easydns "github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/router"
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/util"
 )
 
@@ -25,6 +26,18 @@ import (
 // 动态域名学习使用，在那里放宽会改变拦截门控（例如让 MX 应答也进入学习路径）。
 func isDNSQueryMsg(msg *dns.Msg) bool {
 	return msg != nil && len(msg.Question) > 0 && !msg.Response
+}
+
+// clampDNSEDNS0 把查询里宣告的 EDNS0 接收尺寸钳到隧道 UDP 数据报预算内，
+// 使上游解析器合法地不会发出超过服务端读缓冲的应答。没有 OPT 或尺寸已在
+// 预算内时返回 false，调用方无需重新打包。
+func clampDNSEDNS0(msg *dns.Msg) bool {
+	opt := msg.IsEdns0()
+	if opt == nil || opt.UDPSize() <= protocol.MaxUDPDataSize {
+		return false
+	}
+	opt.SetUDPSize(uint16(protocol.MaxUDPDataSize))
+	return true
 }
 
 // dnsOptions 是构造 dnsInterceptor 所需的全部依赖。Dial 以函数值注入（前端用

@@ -117,6 +117,67 @@ func (c *blockingConn) isClosed() bool {
 	}
 }
 
+// oversizedReadConn 按脚本依次返回：读满整个池档位（模拟被内核截断的超大
+// UDP 读）、略超预算但未截断的读、一条正常载荷；之后按截止时间返回
+// os.ErrDeadlineExceeded。它让"丢弃超限数据报"的逻辑不依赖平台能否真的发送
+// 16KB 的 UDP 数据报（macOS 默认 net.inet.udp.maxdgram 只有 9216）。
+type oversizedReadConn struct {
+	mu   sync.Mutex
+	step int
+}
+
+func (c *oversizedReadConn) Read(p []byte) (int, error) {
+	c.mu.Lock()
+	step := c.step
+	c.step++
+	c.mu.Unlock()
+
+	switch step {
+	case 0:
+		return len(p), nil
+	case 1:
+		return udpBufSize + 1, nil
+	case 2:
+		return copy(p, []byte("normal-response")), nil
+	default:
+		return 0, os.ErrDeadlineExceeded
+	}
+}
+
+func (c *oversizedReadConn) Write(p []byte) (int, error)      { return len(p), nil }
+func (c *oversizedReadConn) Close() error                     { return nil }
+func (c *oversizedReadConn) LocalAddr() net.Addr              { return &net.UDPAddr{} }
+func (c *oversizedReadConn) RemoteAddr() net.Addr             { return &net.UDPAddr{} }
+func (c *oversizedReadConn) SetDeadline(time.Time) error      { return nil }
+func (c *oversizedReadConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *oversizedReadConn) SetWriteDeadline(time.Time) error { return nil }
+
+// TestUDPSessionReadFromTargetDropsOversized 固定目标侧的读循环不会把被内核
+// 截断的数据报（n == 读缓冲长度）或超过预算的数据报转发给客户端；读循环必须
+// 跳过它们，只推送随后那条正常的载荷。
+func TestUDPSessionReadFromTargetDropsOversized(t *testing.T) {
+	s := newUDPSession(udpSessionConfig{
+		conn:        &oversizedReadConn{},
+		target:      "8.8.8.8:53",
+		idleTimeout: time.Second,
+		ctx:         context.Background(),
+	})
+	go s.readFromTarget()
+	defer close(s.done)
+
+	select {
+	case res := <-s.resultCh:
+		if res.err != nil {
+			t.Fatalf("readFromTarget returned error %v, want the normal datagram", res.err)
+		}
+		if got := string(res.payload); got != "normal-response" {
+			t.Fatalf("payload = %q, want %q（超限/截断的数据报必须被丢弃）", got, "normal-response")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for the normal datagram")
+	}
+}
+
 // newUDPSessionFixture 组装一个可控的 udpSession：客户端帧读取侧来自 body，
 // s2c 写入落到内存缓冲，目标侧由调用方提供。
 //
