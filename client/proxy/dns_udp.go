@@ -7,6 +7,7 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/client/config"
+	easydns "github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/util"
@@ -118,18 +119,27 @@ func (d *dnsInterceptor) proxyUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery,
 	return nil
 }
 
-// postProcessProxied 处理一条经隧道返回的 DNS 应答：按 ipv6 策略剥离 AAAA、
-// 写入代理缓存、记录结果并按自定义域名规则学习。解包失败或不是响应时原样返回。
-// src/dst 只用于日志，与对应的 [DNS_PROXY] 查询行配对。
+// postProcessProxied 处理一条经隧道返回的 DNS 应答：规范化畸形 EDNS0、按 ipv6
+// 策略剥离 AAAA、写入代理缓存、记录结果并按自定义域名规则学习。解包失败或不是
+// 响应时原样返回。src/dst 只用于日志，与对应的 [DNS_PROXY] 查询行配对。
 func (d *dnsInterceptor) postProcessProxied(data []byte, src, dst string) []byte {
 	msg := &dns.Msg{}
 	if err := msg.Unpack(data); err != nil || !util.IsDNSResponse(msg) {
 		return data
 	}
+	// 代理路径的上游通常不会返回畸形 EDNS0，但 next_proxy 出口与中间设备都
+	// 可能改写应答；缓存和客户端必须看到同一份规范化后的报文，否则坏应答会在
+	// 缓存里停留 1~4 小时。data 是原始字节，改动后要重新 Pack 才能交给客户端。
+	changed := easydns.NormalizeEDNS0Answer(msg)
 	if d.router.ShouldIPV6Disable() && msg.Question[0].Qtype == dns.TypeAAAA {
 		msg.Answer = nil
+		changed = true
+	}
+	if changed {
 		if packed, packErr := msg.Pack(); packErr == nil {
 			data = packed
+		} else {
+			log.Warn("[DNS_PROXY] repack normalized answer", "err", packErr)
 		}
 	}
 	_ = d.cache.Set(msg, false)

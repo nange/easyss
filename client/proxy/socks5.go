@@ -476,18 +476,19 @@ func (s *Socks5Server) udpAssociate(c net.Conn) error {
 	}
 	clientIP := remote.IP
 
-	if err := writeSocksReply(c, repSuccess, uc.LocalAddr()); err != nil {
-		uc.Close() //nolint:errcheck
-		return err
-	}
-
-	// 登记到中继集合。多个关联并存，绝不顶掉已有的中继。登记与 Close 的
-	// udpRelaysClosed 检查在同一把锁下裁决：Close 已经扫过表之后再插入的
-	// socket 不会再有人关闭，只能由这里拒绝并自行关闭。
+	// 先登记再回 success：登记失败时客户端应收到失败应答，而不是一个指向
+	// 立刻关闭 socket 的 BND 地址。登记与 Close 的 udpRelaysClosed 检查在同一
+	// 把锁下裁决：Close 已经扫过表之后再插入的 socket 不会再有人关闭，只能由
+	// 这里拒绝并自行关闭。多个关联并存，绝不顶掉已有的中继。
 	relay := &udpRelay{socket: uc, clientIP: clientIP}
 	if !s.addUDPRelay(relay) {
 		uc.Close() //nolint:errcheck
+		_ = s.replyError(c, repServerFailure)
 		return errSocksServerClosed
+	}
+	if err := writeSocksReply(c, repSuccess, uc.LocalAddr()); err != nil {
+		s.removeUDPRelay(relay)
+		return err
 	}
 	log.Debug("[SOCKS5] udp associate", "client", c.RemoteAddr().String(), "udp", uc.LocalAddr().String())
 

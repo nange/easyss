@@ -44,7 +44,13 @@ func queryMsg(ctx context.Context, dnsType uint16, dnsServer, domain string) (*d
 }
 
 // NormalizeEDNS0Answer 规范化应答里的 OPT 记录，使报文既可以被严格解析器接受，
-// 也可以被安全地缓存后回放给客户端。
+// 也可以被安全地缓存后回放给客户端。返回是否改动了消息；把字节流直接交给
+// 客户端的调用方（例如 client/proxy 的代理 DNS 应答）应在返回 true 时重新 Pack。
+//
+// 它面向所有与上游交换 DNS 的调用方，而不是只服务本包：查询可能由客户端携带
+// EDNS0（见 client/proxy 的 clampDNSEDNS0），因此不能假定“应答里的 OPT 没有
+// 调用方需要”。丢弃 OPT 仍然是对的：OPT 描述的是传输参数，缓存或回放它只会让
+// 严格解析器面对一条没有被请求过的记录。
 //
 // 部分家用路由器/缓存的 EDNS0 应答会把 OPT 记录放进 ANSWER 段并使头部计数不
 // 自洽（ancount 只覆盖排在第一位的那条 OPT），真正的 A/AAAA 记录被挤到
@@ -52,19 +58,18 @@ func queryMsg(ctx context.Context, dnsType uint16, dnsServer, domain string) (*d
 // 标准库解析器）则只看到一条 41 类型记录、拿不到任何地址——现象是"域名解析
 // 不到"（no such host），而同一台服务器对不带 EDNS0 的查询却一切正常。
 // 这里把 ADDITIONAL 段里同名的请求类型记录搬回 ANSWER 段，并丢弃 OPT。
-//
-// 本包的查询从不带 EDNS0，因此应答里的 OPT 没有任何调用方需要：留着它只会让
-// 缓存下来的应答在回放给客户端时多出一条它们没有请求过的 OPT。
-func NormalizeEDNS0Answer(msg *dns.Msg) {
+func NormalizeEDNS0Answer(msg *dns.Msg) bool {
 	if msg == nil || len(msg.Question) == 0 {
-		return
+		return false
 	}
 
+	changed := false
 	optInAnswer := false
 	answers := msg.Answer[:0]
 	for _, rr := range msg.Answer {
 		if rr.Header().Rrtype == dns.TypeOPT {
 			optInAnswer = true
+			changed = true
 			continue
 		}
 		answers = append(answers, rr)
@@ -96,11 +101,14 @@ func NormalizeEDNS0Answer(msg *dns.Msg) {
 
 	extra := msg.Extra[:0]
 	for _, rr := range msg.Extra {
-		if rr.Header().Rrtype != dns.TypeOPT {
-			extra = append(extra, rr)
+		if rr.Header().Rrtype == dns.TypeOPT {
+			changed = true
+			continue
 		}
+		extra = append(extra, rr)
 	}
 	msg.Extra = extra
+	return changed
 }
 
 // LookupIPV6FromContext 从指定的 DNS 服务器解析 domain 的 IPv6 地址，受 ctx
