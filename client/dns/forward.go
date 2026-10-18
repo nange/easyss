@@ -181,9 +181,9 @@ func (s *ForwardServer) exchangeWithServers(servers []string, msg *dns.Msg) (*dn
 		case r := <-ch:
 			if r.err == nil && r.reply != nil && r.reply.Rcode == dns.RcodeSuccess {
 				// 上游可能返回"OPT 在 ANSWER 段"的畸形 EDNS0 应答（见
-				// normalizeEDNS0Answer）；转交给客户端前先规范化，否则客户端
+				// NormalizeEDNS0Answer）；转交给客户端前先规范化，否则客户端
 				// 的严格解析器会判为畸形报文、宽松解析器则拿不到任何地址。
-				normalizeEDNS0Answer(r.reply)
+				NormalizeEDNS0Answer(r.reply)
 				return r.reply, nil
 			}
 			if r.err != nil {

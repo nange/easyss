@@ -357,7 +357,15 @@ func (d *dnsInterceptor) exchangeDirectDNS(ctx context.Context, msg *dns.Msg, ad
 	if err := dnsConn.WriteMsg(msg); err != nil {
 		return nil, err
 	}
-	return dnsConn.ReadMsg()
+	resp, err := dnsConn.ReadMsg()
+	if err != nil {
+		return nil, err
+	}
+	// 与 client/dns 的 lookup/forward 路径保持一致：部分家用路由器会把 OPT
+	// 放进 ANSWER 段，真正的 A/AAAA 记录被挤到 ADDITIONAL。不规范化就写入
+	// 缓存，后续 1~4 小时的查询都会回放这条坏应答（见 NormalizeEDNS0Answer）。
+	easydns.NormalizeEDNS0Answer(resp)
+	return resp, nil
 }
 
 // blockedDNSReply 把 msg 原地改造成一个"按策略屏蔽"的应答：响应位置位、清空

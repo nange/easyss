@@ -118,9 +118,10 @@ func TestShouldNotifyOncePerTag(t *testing.T) {
 	}
 }
 
-func TestCheckUpdateRequiresIdleState(t *testing.T) {
-	// 更新状态机是菜单处理器、周期循环和安装器之间的唯一守卫：当检查已经
-	// 处于 "checking"（或 "available"/"downloading"）状态时，不得再次查询 API。
+func TestCheckUpdateRefusesActiveStates(t *testing.T) {
+	// 更新状态机是菜单处理器、周期循环和安装器之间的唯一守卫：检查中与下载中
+	// 不得再次查询 API。Available 是例外：周期检查必须能从它重新进入 Checking，
+	// 否则第一次发现更新后就再也发现不了后续 release（见 TestBeginUpdateCheckAcceptsAvailable）。
 	var calls atomic.Int64
 	a := &TrayApp{App: newApp(&config.ClientConfig{}, "")}
 	a.checkLatest = func(context.Context, *selfupdate.Client) (*selfupdate.Release, error) {
@@ -133,6 +134,42 @@ func TestCheckUpdateRequiresIdleState(t *testing.T) {
 
 	if got := calls.Load(); got != 0 {
 		t.Fatalf("checkLatest calls = %d, want 0 while an update is downloading", got)
+	}
+}
+
+// TestBeginUpdateCheckAcceptsAvailable 固定“发现更新后周期检查仍能继续”：状态
+// 停在 Available 时，下一次检查必须能重新进入 Checking，否则 24h 周期循环会
+// 永远被 CAS 挡掉。
+func TestBeginUpdateCheckAcceptsAvailable(t *testing.T) {
+	a := &TrayApp{}
+	a.updateState.Store(updateStateAvailable)
+
+	wasAvailable, ok := a.beginUpdateCheck()
+	if !ok {
+		t.Fatal("check must be allowed to start while an update is available")
+	}
+	if !wasAvailable {
+		t.Fatal("beginUpdateCheck must report that the previous state was Available")
+	}
+	if got := a.updateState.Load(); got != updateStateChecking {
+		t.Fatalf("state = %d, want checking", got)
+	}
+}
+
+// TestFinishUpdateCheckRestoresAvailable 固定“没有发现更新时不能丢掉待处理更新”：
+// 检查结束必须回到 Available 并保留菜单标签（setUpdateItem 在测试里是 nil 安全的）。
+func TestFinishUpdateCheckRestoresAvailable(t *testing.T) {
+	a := &TrayApp{}
+	a.pendingUpdate = &selfupdate.Release{TagName: "v99.0.0"}
+	a.updateState.Store(updateStateChecking)
+
+	a.finishUpdateCheck(true)
+
+	if got := a.updateState.Load(); got != updateStateAvailable {
+		t.Fatalf("state = %d, want available", got)
+	}
+	if got := a.pendingUpdateTag(); got != "v99.0.0" {
+		t.Fatalf("pending update = %q, want v99.0.0", got)
 	}
 }
 

@@ -23,6 +23,19 @@ type batchShaper struct {
 	timer     *time.Timer
 	mu        sync.Mutex
 	writeMu   sync.Mutex // 跨 goroutine 串行化 WriteRecord 调用
+
+	// 记录必须按 flushLocked 的换出顺序写出，而不是按谁先抢到 writeMu 的顺序：
+	// flushAndWrite 在 bs.mu 下换出缓冲、然后释放 bs.mu 再做 I/O（避免阻塞
+	// PushData），因此两个并发的 flush 完全可能后换出的先拿到 writeMu。若不
+	// 排序，定时器冲刷与数据冲刷同时发生时，后一段 DATA 可能先写到线上，TCP
+	// 字节流被静默重排。
+	//
+	// writeSeq 在 bs.mu 下分配（与换出顺序一致），writeNext 在 writeMu 下推进；
+	// 拿到 writeMu 但轮到自己的序号之前，flush 在 writeCond 上等待。这样换出
+	// 仍然可以并发，只有写出被排序。
+	writeCond *sync.Cond
+	writeSeq  uint64 // 已分配的写出序号，受 bs.mu 保护
+	writeNext uint64 // 下一个允许写出的序号，受 writeMu 保护
 	// recordCeiling 是一条记录的明文上限，也是本类型唯一的尺寸边界：单帧校验、
 	// 预冲刷边界、填充预算三处都用它。它的取值由池的 64KB 档位反推：
 	// protocol.MaxWriteRecordPlaintext = MaxReadRecordPlaintext - 3 - 16 = 65,517，
@@ -75,6 +88,7 @@ func New(writer *crypto.RecordWriter, cfg Config) Shaper {
 		flushThreshold: protocol.MaxWriteRecordPlaintext * 9 / 10,
 		window:         time.Duration(cfg.BatchWindowMS) * time.Millisecond,
 	}
+	bs.writeCond = sync.NewCond(&bs.writeMu)
 	bs.timer = time.AfterFunc(bs.window, bs.onTimer)
 	bs.timer.Stop()
 
@@ -327,27 +341,48 @@ func (bs *batchShaper) flushAndWrite(forceFlush bool) error {
 		return nil
 	}
 
+	// 序号必须与缓冲换出在同一临界区内分配：换出顺序就是线上顺序，而 writeMu
+	// 的抢占顺序不是（见 writeCond 的字段说明）。
+	seq := bs.writeSeq
+	bs.writeSeq++
 	bs.mu.Unlock()
 
-	bs.writeMu.Lock()
-	if bs.writeClosed.Load() {
-		bs.writeMu.Unlock()
-		bytespool.MustPut(data[:cap(data)])
-		bs.mu.Lock()
-		return nil
-	}
-	err := bs.writer.WriteRecord(data)
-	if err == nil && forceFlush {
-		bs.writer.Flush()
-	}
-	bs.writeMu.Unlock()
-
+	err := bs.writeRecordInOrder(seq, data, forceFlush)
 	bytespool.MustPut(data[:cap(data)])
 
 	bs.mu.Lock()
 	if err != nil {
 		bs.err = err
 	}
+	return err
+}
+
+// writeRecordInOrder 按 seq 顺序写出记录。调用方必须先通过 flushLocked 换出
+// 缓冲并在 bs.mu 下分配 seq，然后释放 bs.mu 再调用本函数：这样写出被排序，而
+// PushData 仍可在 I/O 期间继续往新缓冲里追加。
+//
+// 后到的 flush 可能先拿到 writeMu；它在 writeCond 上等待，直到前一个序号写完。
+// 关闭路径也必须推进 writeNext 并广播，否则等待中的 flush 永远不会退出。
+func (bs *batchShaper) writeRecordInOrder(seq uint64, data []byte, forceFlush bool) error {
+	bs.writeMu.Lock()
+	for seq != bs.writeNext {
+		bs.writeCond.Wait()
+	}
+	if bs.writeClosed.Load() {
+		// Close 之后到达的记录一律丢弃，但必须把序号推进并唤醒下一个等待者：
+		// 每个等待者会依次走这个分支，形成一条排空链。
+		bs.writeNext++
+		bs.writeCond.Broadcast()
+		bs.writeMu.Unlock()
+		return nil
+	}
+	err := bs.writer.WriteRecord(data)
+	if err == nil && forceFlush {
+		bs.writer.Flush()
+	}
+	bs.writeNext++
+	bs.writeCond.Broadcast()
+	bs.writeMu.Unlock()
 	return err
 }
 

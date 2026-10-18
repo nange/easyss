@@ -35,7 +35,7 @@ func queryMsg(ctx context.Context, dnsType uint16, dnsServer, domain string) (*d
 	if err != nil {
 		return nil, err
 	}
-	normalizeEDNS0Answer(r)
+	NormalizeEDNS0Answer(r)
 	if r.Rcode != dns.RcodeSuccess {
 		return nil, fmt.Errorf("dns query response Rcode:%v not equals RcodeSuccess", r.Rcode)
 	}
@@ -43,7 +43,7 @@ func queryMsg(ctx context.Context, dnsType uint16, dnsServer, domain string) (*d
 	return r, nil
 }
 
-// normalizeEDNS0Answer 规范化应答里的 OPT 记录，使报文既可以被严格解析器接受，
+// NormalizeEDNS0Answer 规范化应答里的 OPT 记录，使报文既可以被严格解析器接受，
 // 也可以被安全地缓存后回放给客户端。
 //
 // 部分家用路由器/缓存的 EDNS0 应答会把 OPT 记录放进 ANSWER 段并使头部计数不
@@ -55,7 +55,7 @@ func queryMsg(ctx context.Context, dnsType uint16, dnsServer, domain string) (*d
 //
 // 本包的查询从不带 EDNS0，因此应答里的 OPT 没有任何调用方需要：留着它只会让
 // 缓存下来的应答在回放给客户端时多出一条它们没有请求过的 OPT。
-func normalizeEDNS0Answer(msg *dns.Msg) {
+func NormalizeEDNS0Answer(msg *dns.Msg) {
 	if msg == nil || len(msg.Question) == 0 {
 		return
 	}

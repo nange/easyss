@@ -158,8 +158,9 @@ type Socks5Server struct {
 	// tun2socks 为每条 UDP 流各建一个关联，它们会并行存在（DNS 与 QUIC、多个上游
 	// 的并行查询），任何一个都不该被后来者顶掉。每个中继的 socket 由本服务器创建
 	// 并负责关闭。
-	udpMu     sync.RWMutex
-	udpRelays map[*udpRelay]struct{}
+	udpMu           sync.RWMutex
+	udpRelays       map[*udpRelay]struct{}
+	udpRelaysClosed bool // Close 之后拒绝登记新中继，见 addUDPRelay
 
 	// listener 由 Start 创建、Close 关闭。库不提供 Shutdown，监听器的生命周期
 	// 完全由本类型持有（见 socks5_lifecycle.go）。
@@ -480,9 +481,14 @@ func (s *Socks5Server) udpAssociate(c net.Conn) error {
 		return err
 	}
 
-	// 登记到中继集合。多个关联并存，绝不顶掉已有的中继。
+	// 登记到中继集合。多个关联并存，绝不顶掉已有的中继。登记与 Close 的
+	// udpRelaysClosed 检查在同一把锁下裁决：Close 已经扫过表之后再插入的
+	// socket 不会再有人关闭，只能由这里拒绝并自行关闭。
 	relay := &udpRelay{socket: uc, clientIP: clientIP}
-	s.addUDPRelay(relay)
+	if !s.addUDPRelay(relay) {
+		uc.Close() //nolint:errcheck
+		return errSocksServerClosed
+	}
 	log.Debug("[SOCKS5] udp associate", "client", c.RemoteAddr().String(), "udp", uc.LocalAddr().String())
 
 	// RFC 1928：UDP 关联在承载它的 TCP 控制连接终止时结束。中继循环阻塞在 UDP
@@ -544,14 +550,20 @@ func (r *udpRelay) setDatagramSource(addr *net.UDPAddr) {
 	r.peerMu.Unlock()
 }
 
-// addUDPRelay 登记一个新的中继。
-func (s *Socks5Server) addUDPRelay(r *udpRelay) {
+// addUDPRelay 登记一个新的中继，返回 false 表示服务器已经关闭、调用方必须
+// 自行关闭 socket。检查与插入必须和 closeUDPRelays 的扫描/置位处于同一把锁：
+// 否则在两者之间插入的 socket 永远不会被任何一方关闭。
+func (s *Socks5Server) addUDPRelay(r *udpRelay) bool {
 	s.udpMu.Lock()
+	defer s.udpMu.Unlock()
+	if s.udpRelaysClosed {
+		return false
+	}
 	if s.udpRelays == nil {
 		s.udpRelays = make(map[*udpRelay]struct{})
 	}
 	s.udpRelays[r] = struct{}{}
-	s.udpMu.Unlock()
+	return true
 }
 
 // removeUDPRelay 注销一个中继并关闭它的 socket。多次调用是安全的。
@@ -564,9 +576,11 @@ func (s *Socks5Server) removeUDPRelay(r *udpRelay) {
 	r.socket.Close() //nolint:errcheck
 }
 
-// closeUDPRelays 供 Close 调用：关闭全部存活的中继。
+// closeUDPRelays 供 Close 调用：关闭全部存活的中继，并拒绝之后的新登记
+// （见 addUDPRelay）。
 func (s *Socks5Server) closeUDPRelays() {
 	s.udpMu.Lock()
+	s.udpRelaysClosed = true
 	relays := make([]*udpRelay, 0, len(s.udpRelays))
 	for r := range s.udpRelays {
 		relays = append(relays, r)
