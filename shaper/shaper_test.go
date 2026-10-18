@@ -151,7 +151,7 @@ func TestBatchShaperFlushesBeforePlainRecordLimit(t *testing.T) {
 
 	rr := newTestReader(t, sk, &out)
 	records := 0
-	total := 0
+	dataBytes := 0
 	for {
 		plaintext, err := rr.ReadRecord()
 		if errors.Is(err, io.EOF) {
@@ -167,13 +167,24 @@ func TestBatchShaperFlushesBeforePlainRecordLimit(t *testing.T) {
 		if len(plaintext) > protocol.MaxWriteRecordPlaintext {
 			t.Fatalf("record plaintext size %d exceeds max %d", len(plaintext), protocol.MaxWriteRecordPlaintext)
 		}
-		total += len(plaintext)
+		// 只统计 DATA 载荷：PADDING/COVER 帧会混进记录明文，按总长度比较
+		// 理论上能掩盖丢帧（cover 默认开启，idle 300ms 就会注入）。
+		for len(plaintext) > 0 {
+			f, n, err := protocol.DecodeFrame(plaintext)
+			if err != nil {
+				t.Fatalf("DecodeFrame: %v", err)
+			}
+			if f.Type == protocol.FrameDATA {
+				dataBytes += len(f.Payload)
+			}
+			plaintext = plaintext[n:]
+		}
 		records++
 	}
 	// 载荷一字节不少地落在记录里：预冲刷只改变记录边界，绝不能丢帧
 	// （多帧累积顶过上限时报错、或静默丢弃，都会在这里暴露）。
-	if want := pushes*len(payload) + pushes*protocol.FrameHeaderSize; total < want {
-		t.Fatalf("记录里的帧字节 = %d, want >= %d（预冲刷丢帧了）", total, want)
+	if want := pushes * len(payload); dataBytes != want {
+		t.Fatalf("记录里的 DATA 字节 = %d，want %d（预冲刷丢帧了）", dataBytes, want)
 	}
 	// 记录条数不做断言：它由预冲刷边界与批处理阈值共同决定，而不是由本用例
 	// 要守的单一关系决定——锚在它上面只会让用例随阈值调整而碎。

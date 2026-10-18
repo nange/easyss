@@ -1,9 +1,6 @@
 package protocol
 
-import (
-	"math/bits"
-	"testing"
-)
+import "testing"
 
 // TestRecordSizesStayInTheirPoolClasses 固定两条**互不推导**的尺寸链：
 //
@@ -19,9 +16,6 @@ func TestRecordSizesStayInTheirPoolClasses(t *testing.T) {
 	// 会因 "cap 不是 2 的幂" 而 panic，数据报链路的其余部分都建立在它之上。
 	if UDPPoolClassSize <= 0 || UDPPoolClassSize&(UDPPoolClassSize-1) != 0 {
 		t.Fatalf("UDPPoolClassSize = %d 不是 2 的幂，不是 bytespool 的合法档位", UDPPoolClassSize)
-	}
-	if got := bits.Len32(uint32(UDPPoolClassSize)) - 1; 1<<got != UDPPoolClassSize {
-		t.Fatalf("UDPPoolClassSize = %d 无法表示为单个档位", UDPPoolClassSize)
 	}
 
 	// 数据报链路：P + 帧头 + 长度前缀 + 标签 = 16KB，且 P 由档位反推。

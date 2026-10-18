@@ -12,11 +12,10 @@ import (
 
 const (
 	// MaxCipherRecordSize 是**解码侧**的密文长度上限，按解码侧明文上限
-	// （protocol.MaxReadRecordPlaintext）推导而非按本进程的写入上限：它必须继续
-	// 接受旧对端发来的、明文到 64KB 的记录
-	// （那些记录由旧版 RecordWriter 用更大的缓冲产生）。写入侧上限
-	// protocol.MaxWriteRecordPlaintext 比它小 19 字节（长度前缀 + 认证标签），正好让
-	// 一条满记录落在池的 64KB 档位内。
+	// （protocol.MaxReadRecordPlaintext）加 AEAD 标签推导，而非按本进程的写入
+	// 上限：它必须继续接受旧对端发来的、明文到 64KB 的记录。写入侧上限
+	// protocol.MaxWriteRecordPlaintext 比 MaxReadRecordPlaintext 小 19 字节
+	// （3 字节长度前缀 + 16 字节标签），正好让一条满记录落在池的 64KB 档位内。
 	MaxCipherRecordSize = protocol.MaxReadRecordPlaintext + 16 // 最大明文 + AEAD 认证标签
 )
 

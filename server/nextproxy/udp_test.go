@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -702,6 +703,55 @@ func TestUDPAssociateConnReadVerbatimDatagram(t *testing.T) {
 	}
 	if got := buf[:n]; !bytes.Equal(got, payload) {
 		t.Errorf("Read payload = %q, want %q (read %d bytes)", got, payload, n)
+	}
+}
+
+// TestUDPAssociateConnReadDropsTruncatedDatagram 固定超过档位的上游数据报
+// 不会被截断后交给客户端：Read 必须丢弃它并继续读下一条，而不是把前
+// maxUDPDatagram 字节当成一个完整数据报返回。
+//
+// 两条超限路径都覆盖：p = udpBufSize+1（未截断，靠载荷长度判据丢弃）与
+// p = udpBufSize+100（整包超过档位，n == len(buf)，靠截断判据丢弃）。
+func TestUDPAssociateConnReadDropsTruncatedDatagram(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		// macOS 的 net.inet.udp.maxdgram 默认是 9216，回环上无法发送 16KB 的
+		// UDP 数据报；这条用例在 Linux/Windows CI 上覆盖真实截断路径。
+		t.Skip("macOS net.inet.udp.maxdgram defaults to 9216")
+	}
+	relay, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen relay: %v", err)
+	}
+	defer relay.Close() //nolint:errcheck
+
+	server, client := net.Pipe()
+	defer server.Close() //nolint:errcheck
+	defer client.Close() //nolint:errcheck
+
+	conn := &udpAssociateConn{control: server, relay: relay, dst: socks5.ParseAddrString("8.8.8.8:53")}
+	defer conn.Close() //nolint:errcheck
+
+	header := []byte{0x00, 0x00, 0x00, 0x01, 8, 8, 8, 8, 0x00, 0x35}
+	send := func(payload []byte) {
+		t.Helper()
+		datagram := append(append([]byte(nil), header...), payload...)
+		if _, err := relay.WriteToUDP(datagram, relay.LocalAddr().(*net.UDPAddr)); err != nil {
+			t.Fatalf("write datagram: %v", err)
+		}
+	}
+	send(bytes.Repeat([]byte{0xAA}, udpBufSize+1))   // 未截断，但载荷越过预算
+	send(bytes.Repeat([]byte{0xBB}, udpBufSize+100)) // 整包越过档位，被截断
+	want := []byte("dns-answer")
+	send(want)
+
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 64)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("Read = %v", err)
+	}
+	if got := buf[:n]; !bytes.Equal(got, want) {
+		t.Fatalf("Read payload = %q, want %q（超限数据报必须被丢弃）", got, want)
 	}
 }
 

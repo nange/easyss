@@ -108,6 +108,9 @@ func (s *tcpDNSSession) resolve(msg *dns.Msg, target string) (*dns.Msg, error) {
 // 会话在连接生命周期内复用同一个 UDP 交换；每次查询都必须发送，只有"创建时首
 // 载荷已合并进引导记录"的那一次免于重复发送。
 func (s *tcpDNSSession) resolveProxy(msg *dns.Msg) (*dns.Msg, error) {
+	// 与 UDP 代理路径相同：把查询宣告的 EDNS0 尺寸钳到隧道预算内，避免
+	// 上游合法地发出超过服务端读缓冲的应答。
+	clampDNSEDNS0(msg)
 	data, err := msg.Pack()
 	if err != nil {
 		return nil, err
