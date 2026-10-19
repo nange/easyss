@@ -56,22 +56,22 @@ var (
 )
 
 type Config struct {
-	Socks5Addr       string
-	Device           string
-	DeviceFD         int  // 若 > 0，使用 fd:// scheme 打开设备而非按名称创建；0 表示按名称创建
-	MTU              int  // TUN 设备与 tun2socks netstack 共用；<=0 取 config.DefaultTunMTU
-	Interface        string
-	UDPTimeout       time.Duration
-	LogLevel         string
-	TunIP            string
-	TunGW            string
-	TunMask          string
-	TunIPV6Sub       string
-	TunGWV6          string
-	ServerIPV6       string
-	LocalGateway     string
-	LocalGatewayV6   string
-	DNSServer        string // TUN 模式下要设置的 DNS 服务器（darwin/linux/windows）
+	Socks5Addr     string
+	Device         string
+	DeviceFD       int // 若 > 0，使用 fd:// scheme 打开设备而非按名称创建；0 表示按名称创建
+	MTU            int // TUN 设备与 tun2socks netstack 共用；<=0 取 config.DefaultTunMTU
+	Interface      string
+	UDPTimeout     time.Duration
+	LogLevel       string
+	TunIP          string
+	TunGW          string
+	TunMask        string
+	TunIPV6Sub     string
+	TunGWV6        string
+	ServerIPV6     string
+	LocalGateway   string
+	LocalGatewayV6 string
+	DNSServer      string // TUN 模式下要设置的 DNS 服务器（darwin/linux/windows）
 }
 
 type DeviceConfig struct {
@@ -322,7 +322,11 @@ func (m *Manager) Start() (err error) {
 		if ctx.Err() != nil {
 			reason = ReasonStartCancelled
 		}
-		m.teardown(reason, owner)
+		if terr := m.teardown(reason, owner); terr != nil {
+			// 拆除失败不改变 Start 的错误（它已经说明了问题），但必须在日志里
+			// 留下痕迹：残留的路由是"停止 TUN 后断网"的成因。
+			log.Warn("[TUN] start rollback left something behind", "reason", reason.String(), "err", terr)
+		}
 		close(done)
 	}()
 

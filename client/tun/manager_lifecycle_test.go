@@ -206,4 +206,3 @@ func TestManagerStartRunsExactlyOnce(t *testing.T) {
 		t.Fatal("the second Start on the same manager must be rejected")
 	}
 }
-

@@ -82,34 +82,34 @@ func TestTeardownMatrix(t *testing.T) {
 		wantDNSRestor int
 	}{
 		{
-			name:        "local: engine, device and dns are all ours",
-			owner:       OwnerLocal,
+			name:     "local: engine, device and dns are all ours",
+			owner:    OwnerLocal,
 			engineUp: true, deviceUp: true, dnsTouched: true,
-			wantEngine:  true, wantClose: 1, wantDNSRestor: 1,
+			wantEngine: true, wantClose: 1, wantDNSRestor: 1,
 		},
 		{
-			name:        "local: create script never ran",
-			owner:       OwnerLocal,
-			engineUp: true,
-			wantEngine:  true, wantClose: 0, wantDNSRestor: 0,
+			name:       "local: create script never ran",
+			owner:      OwnerLocal,
+			engineUp:   true,
+			wantEngine: true, wantClose: 0, wantDNSRestor: 0,
 		},
 		{
-			name:        "local: create script failed halfway, routes may exist",
-			owner:       OwnerLocal,
+			name:     "local: create script failed halfway, routes may exist",
+			owner:    OwnerLocal,
 			engineUp: true, deviceUp: true,
-			wantEngine:  true, wantClose: 1, wantDNSRestor: 0,
+			wantEngine: true, wantClose: 1, wantDNSRestor: 0,
 		},
 		{
-			name:        "helper: engine only, routes and dns belong to the helper",
-			owner:       OwnerHelper,
+			name:     "helper: engine only, routes and dns belong to the helper",
+			owner:    OwnerHelper,
 			engineUp: true, deviceUp: true, dnsTouched: true,
-			wantEngine:  true, wantClose: 0, wantDNSRestor: 0,
+			wantEngine: true, wantClose: 0, wantDNSRestor: 0,
 		},
 		{
-			name:        "helper: nothing but the engine came up",
-			owner:       OwnerHelper,
-			engineUp: true,
-			wantEngine:  true, wantClose: 0, wantDNSRestor: 0,
+			name:       "helper: nothing but the engine came up",
+			owner:      OwnerHelper,
+			engineUp:   true,
+			wantEngine: true, wantClose: 0, wantDNSRestor: 0,
 		},
 	}
 
