@@ -117,9 +117,11 @@ func QueryWithBuiltinFirst(builtin, system []string, try func(servers []string) 
 		return try(system)
 	}
 	if route == BuiltinRouteRetry {
-		// 熔断已置位但没有兜底：明确记录"冷却被无视"，否则这条路径在日志里
-		// 与健康路径完全无法区分。
-		log.Warn("[DNS] builtin dns breaker is armed but no system dns is available, retrying builtin servers")
+		// 熔断已置位但没有兜底：记录"冷却被无视"。这里必须是 Debug——本函数在
+		// 本地转发服务器里是**每条 DNS 查询**调用一次，Warn 会按查询刷屏，而
+		// 这条消息描述的是一个会持续数分钟的状态，不是一次需要处置的事件。
+		// 低频的预解析路径（Cache.PrePopulateWithFallback）仍然用 Warn。
+		log.Debug("[DNS] builtin dns breaker is armed but no system dns is available, retrying builtin servers")
 	}
 	reply, err := try(builtin)
 	if err == nil {

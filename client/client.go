@@ -601,6 +601,12 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 	// 不为这次 IPv6 解析额外付出一次系统 DNS 发现的开销（见 dns.BuiltinRouteFor）。
 	hasFailover := func() bool { return len(dns.SystemDNSServers()) > 0 }
 	route := dns.BuiltinRouteFor(hasFailover)
+	if route == dns.BuiltinRouteRetry {
+		// 与 Cache.PrePopulateWithFallback 同一口径：这条路径低频（启动一次、
+		// TUN 启用前按需一次），因此用 Warn；每查询一次的那条用 Debug。
+		log.Warn("[CLIENT] builtin dns breaker is armed but no system dns is available, retrying builtin servers",
+			"server", svr.Host)
+	}
 	if route != dns.BuiltinRouteSkip {
 		// 内置分支只能花掉总预算里除预留量以外的部分：黑洞内置 DNS（丢包而非
 		// 立即拒绝）会把整个预算耗在一次查询上，系统 DNS 兜底复用同一个已过期
