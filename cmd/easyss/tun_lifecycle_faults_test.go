@@ -18,13 +18,18 @@ import (
 
 // 本文件是 TUN 生命周期收口之后的三条故障注入测试，对应验收清单：
 //
-//  1. 创建中途失败（TestFaultCreateFailsHalfway）；
+//  1. 启动失败后的会话回滚（TestFaultStartFailureRollsBackTheSession）；
 //  2. Stop 与 Start 并发（TestFaultStopRacesWithStart）；
 //  3. 路由残留（TestFaultLeftoverRoutesAreRolledBack）。
 //
 // 它们都通过包级钩子/注入点驱动，不需要 root、不需要 TUN 设备，也不会改写
 // 运行测试的机器的网络配置：真实的创建脚本、pkexec/osascript 与系统路由表
 // 都在进程之外，而在那些路径上只能靠"检查调用"来证明顺序。
+//
+// 注意第 1 条的边界：**创建脚本中途失败**本身由 client/tun 覆盖
+// （tun_rollback_regression_test.go 的 TestStartRollbackAfterCreateFailure 与
+// TestStartCreateScriptFailureEndToEnd，它们能直接替换包内的 createTunDevFn）；
+// 本文件守的是它对**会话层**的后果。
 
 // stubTunLifecycleHooks 把 client/tun 里会触碰系统的那几个钩子换成记录器。
 // 它是故障注入的共同前置：注入点必须能被观察到"跑了没有、跑了几次、什么顺序"。
@@ -39,18 +44,19 @@ func stubTunLifecycle(t *testing.T) {
 	t.Cleanup(func() { tunRouteResidue, rollbackTunRoutes = origResidue, origRollback })
 }
 
-// TestFaultCreateFailsHalfway 注入"创建脚本中途失败"。
+// TestFaultStartFailureRollsBackTheSession 注入"一次启动失败"，并固定它对
+// **会话层**的后果：那次会话必须被拆掉、偏好必须回落、所有权必须回到默认值、
+// 界面必须收到真实原因。
 //
-// 平台脚本先装地址、再装路由，最后才按退出码汇报；它完全可能在拒掉某条命令
-// 之前已经把地址与部分路由装进了系统。此时 Start 必须走拆除：只停引擎会让
-// 那些路由留在表里，把流量送进一个没人读的设备——也就是"开了 TUN 却断网"。
+// 为什么这里是"启动失败"而不是"创建中途失败"：创建钩子（createTunDevFn）是
+// client/tun 的包内变量，跨包无法替换，因此从会话这一层注入的失败具体由哪一步
+// 产生并不重要——rollbackFailedTunStart 对它们的处理是同一条路径。真正"创建
+// 脚本半途失败→删路由/恢复 DNS"的注入在 client/tun 内部完成（见
+// TestStartRollbackAfterCreateFailure 与 teardown 矩阵）。
 //
-// 注入点是一个真实的 manager + 一个必定失败的创建钩子。client/tun 的钩子是
-// 包内私有的，因此这里改用它的公开等价物：Start 在 fd 路径之外调用的
-// createTunDevFn，其生产实现就是脚本执行——测试用一个"半途失败"的错误路径
-// 覆盖它，见 client/tun 的 TestTeardownMatrix 与 TestStartRollbackAfterCreateFailure。
-// 本测试守的是 session 这一侧：失败的会话必须被拆掉、偏好必须回落、界面必须知情。
-func TestFaultCreateFailsHalfway(t *testing.T) {
+// 用 failedTunManager 是刻意的：它的 LogLevel 非法，Start 会在 validateEngineKey
+// 处早退，从而不需要 root、不碰设备、也不会把测试机的网络搞坏。
+func TestFaultStartFailureRollsBackTheSession(t *testing.T) {
 	a := newApp(&config.ClientConfig{}, "")
 	ui := newStubAppUI()
 	a.ui = ui
@@ -71,8 +77,8 @@ func TestFaultCreateFailsHalfway(t *testing.T) {
 	a.sess.tunOwner = tun.OwnerLocal
 	a.sess.tunMu.Unlock()
 
-	errCreate := errors.New("tun: create device: exit status 1")
-	a.sess.rollbackFailedTunStart(mgr, errCreate)
+	errStart := errors.New("tun: create device: exit status 1")
+	a.sess.rollbackFailedTunStart(mgr, errStart)
 
 	a.sess.tunMu.Lock()
 	remaining, dev, owner := a.sess.tunMgr, a.sess.tunSession, a.sess.tunOwner
@@ -87,9 +93,9 @@ func TestFaultCreateFailsHalfway(t *testing.T) {
 
 	select {
 	case got := <-ui.tunFailures:
-		require.ErrorIs(t, got, errCreate, "界面必须收到创建失败的真实原因")
+		require.ErrorIs(t, got, errStart, "界面必须收到启动失败的真实原因")
 	default:
-		t.Fatal("the UI was not told about the failed create")
+		t.Fatal("the UI was not told about the failed start")
 	}
 }
 

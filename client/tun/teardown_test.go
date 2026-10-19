@@ -208,3 +208,26 @@ func TestStopTearsDownAHalfStartedSession(t *testing.T) {
 		require.Equal(t, 1, rec.dnsRestores, "半途失败改过的系统 DNS 必须恢复")
 	}
 }
+
+// TestCreateScriptFailureUsesItsOwnReason 固定 ReasonCreateFailed 真的由创建
+// 脚本失败产生。
+//
+// 它是五个拆除入口里唯一"必然有东西要删"的一个：平台脚本先装地址、再装路由，
+// 最后才按退出码汇报，因此在报告失败之前很可能已经把部分路由写进了系统。
+// 这个原因值如果只存在于枚举和测试里、生产路径永远算不出来，那它就是死代码；
+// 本测试同时钉住"它会被算出来"与"它带着 deviceUp 进入拆除"。
+func TestCreateScriptFailureUsesItsOwnReason(t *testing.T) {
+	stubTeardownHooks(t)
+
+	var reasons []string
+	engineStopFn = func(reason string) { reasons = append(reasons, reason) }
+
+	// 创建脚本失败，但失败之前可能已经装上了地址与路由。
+	createTunDevFn = func(*Manager) error { return errCreateFailed }
+
+	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "tun-easyss-test"})
+	require.Error(t, m.Start())
+
+	require.Equal(t, []string{ReasonCreateFailed.String()}, reasons,
+		"创建脚本失败必须带着它自己的 reason 进入拆除，而不是笼统的 start-failed")
+}

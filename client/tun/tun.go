@@ -332,6 +332,11 @@ func (m *Manager) Start() (err error) {
 	ctx, done, owner := m.ctx, m.done, m.owner
 	m.mu.Unlock()
 
+	// createFailed 标记"失败发生在创建脚本里"。创建脚本可能在汇报失败之前
+	// 已经装上了地址与部分路由，是唯一一类"必然有东西要删"的失败，因此它
+	// 有自己的 TeardownReason（日志与错误呈现口径不同）。
+	createFailed := false
+
 	// 无论从哪条路径退出都会走这里：成功则只关 done（拆除归 Stop），失败或
 	// 被取消则由本次 Start 自己拆掉已经建起来的东西。reason 只影响日志与错误
 	// 呈现口径：取消是用户操作的结果，失败需要用户看错误，两者可操作性不同。
@@ -341,8 +346,11 @@ func (m *Manager) Start() (err error) {
 			return
 		}
 		reason := ReasonStartFailed
-		if ctx.Err() != nil {
+		switch {
+		case ctx.Err() != nil:
 			reason = ReasonStartCancelled
+		case createFailed:
+			reason = ReasonCreateFailed
 		}
 		if terr := m.teardown(reason, owner); terr != nil {
 			// 拆除失败不改变 Start 的错误（它已经说明了问题），但必须在日志里
@@ -454,6 +462,7 @@ func (m *Manager) Start() (err error) {
 		m.deviceUp = true
 		m.mu.Unlock()
 		if err := createTunDevFn(m); err != nil {
+			createFailed = true
 			return fmt.Errorf("tun: create device: %w", err)
 		}
 	}

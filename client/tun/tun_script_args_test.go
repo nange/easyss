@@ -185,3 +185,24 @@ func TestShellQuote(t *testing.T) {
 	require.Equal(t, "'/tmp/create tun.sh'", shellQuote("/tmp/create tun.sh"))
 	require.Equal(t, `'it'\''s'`, shellQuote("it's"))
 }
+
+// TestZeroScriptArgsRenderAnEmptyMTU 固定本类型的零值安全。
+//
+// CreateFor 曾经无条件渲染 strconv.Itoa(a.MTU)，于是直接构造 ScriptArgs{}
+// 会得到第 9 个实参 "0"——两个创建脚本都会把它当成真实值执行
+// "ip link set dev ... mtu 0" / "ifconfig ... mtu 0"，整体失败。生产路径
+// 因为 NewScriptArgs 会先把 MTU 归一到 [1280, 9000]（0 → 1500）而看不到这个
+// 问题，但零值安全是类型自己的性质，不该依赖调用方总是走构造器。
+func TestZeroScriptArgsRenderAnEmptyMTU(t *testing.T) {
+	var zero ScriptArgs
+	for _, platform := range []ScriptPlatform{PlatformLinux, PlatformDarwin, PlatformWindows} {
+		args := zero.CreateFor(platform)
+		require.Len(t, args, 9, "%s: the create script takes nine positional parameters", platform)
+		require.Equal(t, "", args[8],
+			"%s: 非正 MTU 必须渲染成空串，脚本据此跳过 MTU 步骤", platform)
+	}
+
+	// 负值同样不能渲染成 "-1"。
+	neg := ScriptArgs{MTU: -5}
+	require.Equal(t, "", neg.CreateFor(PlatformLinux)[8])
+}

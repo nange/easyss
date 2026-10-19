@@ -38,8 +38,14 @@ type ScriptArgs struct {
 	// DNSServer 只被 windows 创建脚本使用（netsh set dns），其余平台忽略；
 	// 空值表示不改适配器 DNS。
 	DNSServer string
-	// MTU 是设备侧的 MTU，作为两个创建脚本的第 9 个位置参数。<=0 表示不传，
-	// 脚本保留设备默认值（历史上只有 8 个实参的旧布局）。
+	// MTU 是设备侧的 MTU，作为两个创建脚本的第 9 个位置参数。非正值渲染为
+	// 空串：unix 的创建脚本用 ${9:-} 取值，空串时跳过 MTU 步骤、保留设备
+	// 默认值（见 create_tun_dev*.sh 的 mtu 段）。
+	//
+	// 生产路径不会走到空串：NewScriptArgs 已经用 config.NormalizeTunMTU 把它
+	// 归一到合法区间。这条分支存在的意义是让本类型的**零值安全**——直接构造
+	// ScriptArgs{} 时渲染出的是空串而不是 "0"，后者会让脚本执行
+	// "ip link set dev ... mtu 0" 并整体失败。
 	MTU int
 }
 
@@ -66,7 +72,11 @@ func (a ScriptArgs) Close() []string { return a.CloseFor(Platform()) }
 //     tun gw ipv6, server ipv6, dns, mtu
 func (a ScriptArgs) CreateFor(platform ScriptPlatform) []string {
 	d := a.Dev
-	mtu := strconv.Itoa(a.MTU)
+	// 非正值渲染成空串：脚本据此跳过 MTU 步骤（见 MTU 字段的说明）。
+	mtu := ""
+	if a.MTU > 0 {
+		mtu = strconv.Itoa(a.MTU)
+	}
 
 	switch platform {
 	case PlatformLinux:
