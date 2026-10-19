@@ -192,7 +192,7 @@ func TestHasDomainIgnoresIPShape(t *testing.T) {
 // TestNilSet 固定 nil 接收者的安全性：router 与 nextproxy 都允许"未配置"。
 func TestNilSet(t *testing.T) {
 	var set *Set
-	if set.MatchHost("example.com") || set.HasDomain("example.com") || set.MatchIP("1.2.3.4") {
+	if set.MatchHost("example.com") || set.HasDomain("example.com") {
 		t.Error("nil Set must never match")
 	}
 	set.AddIP("1.2.3.4") // 不应 panic

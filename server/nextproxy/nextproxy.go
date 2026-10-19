@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
@@ -23,7 +24,12 @@ type NextProxy struct {
 	// rules 是"目标是否走下一级代理"的规则集合：文件配置的条目与 DNS 学习
 	// 到的条目都在里面。解析、IP 归一化与域名匹配由 rule 包统一实现
 	// （与 client/router 的自定义规则文件共用同一份语义）。
-	rules *rule.Set
+	//
+	// 用 atomic.Pointer 而不是裸指针：LoadProxyFile 会整体替换集合，而
+	// ShouldProxy/AddIP/AddDomain 可能在任意 goroutine 上读它。生产路径只在
+	// server.Start 里、开始服务之前装载一次，但让发布本身是原子的，比把
+	// "只许启动期调用"这条隐式约束留给调用方更可靠。
+	rules atomic.Pointer[rule.Set]
 
 	// learnedMu 只保护下面两个学习计数：规则集合自己有锁，但"这条是新增的吗"
 	// 与"预算还有吗"必须是同一个临界区，否则并发学习会一起越过上限。
@@ -52,8 +58,8 @@ func New(proxyURL string, enableUDP, allHost bool) (*NextProxy, error) {
 		// 默认值同样只有一个出口：config.NewTimeouts(0) 就是在默认基础超时上
 		// 跑一遍派生公式。生产路径随后会用 SetDialTimeout 覆盖它。
 		dialTimeout: sharedconfig.NewTimeouts(0).Dial,
-		rules:       rule.New(),
 	}
+	np.rules.Store(rule.New())
 	return np, nil
 }
 
@@ -75,7 +81,7 @@ func (np *NextProxy) LoadProxyFile(proxyFile string) error {
 	if err := rule.FileError(proxyFile, parseErrs); err != nil {
 		return err
 	}
-	np.rules = set
+	np.rules.Store(set)
 
 	domains, ips, cidrs, patterns := set.Counts()
 	log.Info("[NEXTPROXY] loaded proxy file", "file", proxyFile,
@@ -90,7 +96,7 @@ func (np *NextProxy) ShouldProxy(host string) bool {
 	if np.allHost {
 		return true
 	}
-	return np.rules.MatchHost(host)
+	return np.rules.Load().MatchHost(host)
 }
 
 // IsCustomDomain 检查域名是否在自定义域名列表中，
@@ -99,7 +105,7 @@ func (np *NextProxy) IsCustomDomain(domain string) bool {
 	if np == nil {
 		return false
 	}
-	return np.rules.HasDomain(domain)
+	return np.rules.Load().HasDomain(domain)
 }
 
 // maxLearnedEntries 限制动态学习的 IP/域名集合的大小：自定义域名的 DNS 响应
@@ -120,7 +126,7 @@ func (np *NextProxy) AddIP(ip string) {
 	if np.learnedIPs >= maxLearnedEntries {
 		return
 	}
-	if np.rules.AddIP(ip) {
+	if np.rules.Load().AddIP(ip) {
 		np.learnedIPs++
 	}
 }
@@ -136,7 +142,7 @@ func (np *NextProxy) AddDomain(domain string) {
 	if np.learnedDomains >= maxLearnedEntries {
 		return
 	}
-	if np.rules.AddDomain(domain) {
+	if np.rules.Load().AddDomain(domain) {
 		np.learnedDomains++
 	}
 }

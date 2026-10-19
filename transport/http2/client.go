@@ -65,10 +65,10 @@ type Config struct {
 	MaxSlotCount      int
 	StreamThreshold   int
 	PrioritySlotRatio float64
-	// Timeouts 是调用方已派生的超时集合：Base 用于拨号预算与 http.Transport 的
-	// 空闲/握手/HTTP2 ping 派生，Dial 是单次拨号上限，ConnLifetime 是连接轮换
-	// 前的最大存活时长。零值由 config.Timeouts.Normalize 填充，本类型不再各自
-	// 维护第二份默认值——否则"连接生命周期"会有两个事实来源。
+	// Timeouts 是调用方已派生的超时集合：Base 用于 http.Transport 的空闲/HTTP2
+	// ping 派生，Dial 是单次 TCP 拨号上限（含建立到服务端的连接），ConnLifetime
+	// 是连接轮换前的最大存活时长。零值由 config.Timeouts.Normalize 填充，本类型
+	// 不再各自维护第二份默认值——否则"连接生命周期"会有两个事实来源。
 	Timeouts     sharedconfig.Timeouts
 	ConnMaxBytes int64 // 轮换前连接在任一方向承载的最大字节数（0：使用默认值）
 	DialContext  func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -128,7 +128,7 @@ func New(cfg Config) (transport.Transport, error) {
 	// 每个池内的稳定索引由 newScheduler 分配。
 	slots := make([]*transportSlot, maxSlots)
 	for i := range slots {
-		slots[i] = newSlot(cfg.TLSConfig, timeout, dialCtx, connLifetime)
+		slots[i] = newSlot(cfg.TLSConfig, timeout, dialCtx, connLifetime, timeouts.Dial)
 	}
 
 	sched := newScheduler(maxSlots, slots, threshold, prioritySlots)
@@ -169,7 +169,7 @@ func New(cfg Config) (transport.Transport, error) {
 	return tr, nil
 }
 
-func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error), connLifetime time.Duration) *transportSlot {
+func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error), connLifetime, dialBudget time.Duration) *transportSlot {
 	if dialContext == nil {
 		dialContext = defaultDialContext
 	}
@@ -179,7 +179,7 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 	// transportSlot.advanceGeneration）。
 	slot.newGen = func() *slotTransport {
 		gen := &slotTransport{slot: slot}
-		gen.tr = buildTransport(slot, gen, utlsCfg, timeout, dialContext, connLifetime)
+		gen.tr = buildTransport(slot, gen, utlsCfg, timeout, dialContext, connLifetime, dialBudget)
 		return gen
 	}
 	slot.gen.Store(slot.newGen())
@@ -190,7 +190,7 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 // net/http Transport，以及它那条连接的拨号路径（uTLS 指纹 + 服务端 h2 校验）。
 // 它把建立起来的连接写进 gen.conn——连接身份与池是同源的（见 slotTransport）。
 // 判死会重建一代，因此这里的一切都必须是"每次构建都一样"的纯配置。
-func buildTransport(slot *transportSlot, gen *slotTransport, utlsCfg *utls.Config, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error), connLifetime time.Duration) *http.Transport {
+func buildTransport(slot *transportSlot, gen *slotTransport, utlsCfg *utls.Config, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error), connLifetime, dialBudget time.Duration) *http.Transport {
 	protos := &http.Protocols{}
 	protos.SetHTTP2(true)
 	protos.SetUnencryptedHTTP2(true)
@@ -213,7 +213,10 @@ func buildTransport(slot *transportSlot, gen *slotTransport, utlsCfg *utls.Confi
 		IdleConnTimeout:        6 * timeout,
 		MaxResponseHeaderBytes: sharedconfig.HTTP2ClientMaxResponseHeaderBytes,
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			dialCtx, cancel := context.WithTimeout(ctx, timeout/2)
+			// 拨号预算用 Timeouts.Dial（base/3，钳制在 [3s,15s]），与客户端直连
+			// 拨号、服务端 handler 拨号同源；此前这里手写 timeout/2，是唯一一处
+			// "base/2" 的派生。它只包住 TCP 建连，TLS 握手由下面的 ctx 约束。
+			dialCtx, cancel := context.WithTimeout(ctx, dialBudget)
 			defer cancel()
 
 			tcpConn, err := dialContext(dialCtx, network, addr)

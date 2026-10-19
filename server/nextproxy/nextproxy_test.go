@@ -74,7 +74,16 @@ func newTestProxy(t *testing.T, lines ...string) *NextProxy {
 	if len(errs) != 0 {
 		t.Fatalf("parse rules: %v", errs)
 	}
-	return &NextProxy{rules: set}
+	np := &NextProxy{}
+	np.rules.Store(set)
+	return np
+}
+
+// newEmptyTestProxy 构造一个规则集合为空、可直接学习的 NextProxy。
+func newEmptyTestProxy() *NextProxy {
+	np := &NextProxy{}
+	np.rules.Store(rule.New())
+	return np
 }
 
 func TestShouldProxy(t *testing.T) {
@@ -322,7 +331,7 @@ func TestAddIP(t *testing.T) {
 	})
 
 	t.Run("添加 IP", func(t *testing.T) {
-		np := &NextProxy{rules: rule.New()}
+		np := newEmptyTestProxy()
 		np.AddIP("1.2.3.4")
 		if !np.ShouldProxy("1.2.3.4") {
 			t.Error("should proxy after AddIP")
@@ -330,16 +339,16 @@ func TestAddIP(t *testing.T) {
 	})
 
 	t.Run("去重", func(t *testing.T) {
-		np := &NextProxy{rules: rule.New()}
+		np := newEmptyTestProxy()
 		np.AddIP("1.2.3.4")
 		np.AddIP("1.2.3.4")
-		if got := np.rules.Len(); got != 1 {
+		if got := np.rules.Load().Len(); got != 1 {
 			t.Errorf("expected 1 IP, got %d", got)
 		}
 	})
 
 	t.Run("IPv6", func(t *testing.T) {
-		np := &NextProxy{rules: rule.New()}
+		np := newEmptyTestProxy()
 		np.AddIP("::1")
 		if !np.ShouldProxy("::1") {
 			t.Error("should proxy IPv6 after AddIP")
@@ -349,7 +358,7 @@ func TestAddIP(t *testing.T) {
 	// 学习路径写入 IPv4-mapped 形式时必须与拨号目标的 IPv4 字面量匹配
 	// （两边的归一化此前并不对称）。
 	t.Run("IPv4-mapped 归一化", func(t *testing.T) {
-		np := &NextProxy{rules: rule.New()}
+		np := newEmptyTestProxy()
 		np.AddIP("::ffff:1.2.3.4")
 		if !np.ShouldProxy("1.2.3.4") {
 			t.Error("IPv4-mapped learned IP should match the plain IPv4 target")
@@ -358,7 +367,7 @@ func TestAddIP(t *testing.T) {
 
 	// 学习预算必须有界：超过 maxLearnedEntries 后不再增长。
 	t.Run("学习预算有界", func(t *testing.T) {
-		np := &NextProxy{rules: rule.New()}
+		np := newEmptyTestProxy()
 		for i := range maxLearnedEntries + 10 {
 			np.AddIP(fmt.Sprintf("10.%d.%d.%d", i>>16&0xff, i>>8&0xff, i&0xff))
 		}
@@ -375,7 +384,7 @@ func TestAddDomain(t *testing.T) {
 	})
 
 	t.Run("添加域名", func(t *testing.T) {
-		np := &NextProxy{rules: rule.New()}
+		np := newEmptyTestProxy()
 		np.AddDomain("cdn.example.com")
 		if !np.ShouldProxy("cdn.example.com") {
 			t.Error("should proxy after AddDomain")
@@ -387,16 +396,16 @@ func TestAddDomain(t *testing.T) {
 	})
 
 	t.Run("去重", func(t *testing.T) {
-		np := &NextProxy{rules: rule.New()}
+		np := newEmptyTestProxy()
 		np.AddDomain("cdn.example.com")
 		np.AddDomain("cdn.example.com")
-		if got := np.rules.Len(); got != 1 {
+		if got := np.rules.Load().Len(); got != 1 {
 			t.Errorf("expected 1 domain, got %d", got)
 		}
 	})
 
 	t.Run("大小写归一化", func(t *testing.T) {
-		np := &NextProxy{rules: rule.New()}
+		np := newEmptyTestProxy()
 		np.AddDomain("CDN.Example.COM")
 		if !np.ShouldProxy("cdn.example.com") {
 			t.Error("learned domain should be normalized to lower case")
@@ -430,7 +439,7 @@ func TestSubDomains(t *testing.T) {
 }
 
 func TestConcurrentAddIP(t *testing.T) {
-	np := &NextProxy{rules: rule.New()}
+	np := newEmptyTestProxy()
 	done := make(chan struct{})
 	go func() {
 		for range 100 {

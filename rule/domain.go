@@ -39,7 +39,7 @@ func ParseDomainSet(data []byte) (*DomainSet, int) {
 		}
 		switch {
 		case strings.HasPrefix(trimmed, "full:"):
-			ds.full[NormalizeHost(strings.TrimPrefix(trimmed, "full:"))] = struct{}{}
+			ds.full[normalizeDomainKey(strings.TrimPrefix(trimmed, "full:"))] = struct{}{}
 		case strings.HasPrefix(trimmed, "regexp:"):
 			re, err := regexp.Compile("(?i)" + strings.TrimPrefix(trimmed, "regexp:"))
 			if err != nil {
@@ -48,7 +48,7 @@ func ParseDomainSet(data []byte) (*DomainSet, int) {
 			}
 			ds.patterns = append(ds.patterns, re)
 		default:
-			ds.domains[NormalizeHost(trimmed)] = struct{}{}
+			ds.domains[normalizeDomainKey(trimmed)] = struct{}{}
 		}
 	}
 	return ds, skipped

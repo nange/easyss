@@ -117,17 +117,15 @@ func prepareProxied(msg *dns.Msg, raw []byte) ([]byte, error) {
 // 返回 true 表示消息被改写，调用方在使用原始字节（UDP 路径）时必须重新 Pack，
 // 否则客户端与缓存会看到两份不同的报文。changed 的语义因此同时覆盖"规范化"
 // 与"AAAA 剥离"，不再由两个前端各自维护。
-func (d *dnsInterceptor) finishProxied(msg *dns.Msg, domain, src, dst string) (changed bool) {
-	if msg == nil {
+func (d *dnsInterceptor) finishProxied(msg *dns.Msg, domain, src, dst string) bool {
+	// guard 必须在任何改写之前：没有 Question 的应答不是一次可归属的解析结果
+	// （缓存会写入一条没有键的消息，学习会拿错域名），整条丢弃。放在归一化之后
+	// 会让"已发生的改写"与返回的 changed 不一致，TCP 前端（直接 Pack msg）与
+	// UDP 前端（原样返回字节）就会发出不同的报文——正是本文件要消灭的那类漂移。
+	if msg == nil || len(msg.Question) == 0 {
 		return false
 	}
-	changed = easydns.NormalizeEDNS0Answer(msg)
-
-	// 没有 Question 的应答不是一次可归属的解析结果：缓存会因此写入一条没有
-	// 键的消息，学习也会拿错域名。整条丢弃（返回 false 让调用方原样送出）。
-	if len(msg.Question) == 0 {
-		return false
-	}
+	changed := easydns.NormalizeEDNS0Answer(msg)
 	qtype := msg.Question[0].Qtype
 	if d.router.ShouldIPV6Disable() && qtype == dns.TypeAAAA {
 		msg.Answer = nil

@@ -178,30 +178,35 @@ func TestQueryWithBuiltinFirstArmedBreakerWithoutFallback(t *testing.T) {
 	}
 }
 
-// TestBuiltinAttempt 固定熔断判定的两条规则：熔断未置位时总是应该试内置池；
-// 已置位时只有"没有系统兜底"才仍然试（否则冷却期会变成彻底的中断）。
-//
-// 同时固定"只有存在兜底才熔断"这条共享规则——三条调用路径（并发竞争、串行带
-// 预算、逐条目预算）都读它，把熔断判定收敛到一处的原因就在这里。
-func TestBuiltinAttempt(t *testing.T) {
+// TestBuiltinRouteFor 固定熔断判定的三个互斥状态。用三态而不是两个布尔，
+// 是因为"熔断中且没有兜底"必须与"健康"区分开：前者要打一条"冷却被无视"的
+// 警告，后者不打；此前两个布尔让这两态在调用方看起来相同，于是其中一条分支
+// 永远是死代码。
+func TestBuiltinRouteFor(t *testing.T) {
 	MarkBuiltinDNSAvailable()
 	t.Cleanup(MarkBuiltinDNSAvailable)
 
 	for _, failover := range []bool{true, false} {
-		try, arm := BuiltinAttempt(failover)
-		if !try {
-			t.Errorf("BuiltinAttempt(%v) with a healthy breaker = (false, _), want try", failover)
-		}
-		if arm != failover {
-			t.Errorf("BuiltinAttempt(%v) arm = %v, want %v", failover, arm, failover)
+		if got := BuiltinRouteFor(func() bool { return failover }); got != BuiltinRouteFirst {
+			t.Errorf("BuiltinRouteFor(failover=%v) with a healthy breaker = %v, want %v",
+				failover, got, BuiltinRouteFirst)
 		}
 	}
 
 	MarkBuiltinDNSUnavailable()
-	if try, _ := BuiltinAttempt(true); try {
-		t.Error("armed breaker with a system failover must skip the builtin pool")
+	if got := BuiltinRouteFor(func() bool { return true }); got != BuiltinRouteSkip {
+		t.Errorf("armed breaker with a system failover = %v, want %v", got, BuiltinRouteSkip)
 	}
-	if try, _ := BuiltinAttempt(false); !try {
-		t.Error("armed breaker without any failover must still try the builtin pool")
+	if got := BuiltinRouteFor(func() bool { return false }); got != BuiltinRouteRetry {
+		t.Errorf("armed breaker without any failover = %v, want %v", got, BuiltinRouteRetry)
+	}
+
+	// 熔断器健康时不得求值 hasFailover：那是系统 DNS 发现（darwin 上走
+	// networksetup，约 48ms），预解析不该为它付出代价。
+	MarkBuiltinDNSAvailable()
+	called := false
+	BuiltinRouteFor(func() bool { called = true; return true })
+	if called {
+		t.Error("BuiltinRouteFor must not probe the system fallback while the breaker is healthy")
 	}
 }

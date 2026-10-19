@@ -245,12 +245,6 @@ func (r *Router) MatchHostRule(host string) HostRule {
 	return HostRuleProxy
 }
 
-// hostMatchCustomRule 报告 host 是否命中给定集合（不含日志）。
-func (r *Router) hostMatchCustomRule(set *rule.Set, host string) bool {
-	ok, _ := r.hostMatchCustom(set, host)
-	return ok
-}
-
 // hostMatchCustom 在给定集合里匹配 host，并返回命中的规则形态（用于日志）。
 func (r *Router) hostMatchCustom(set *rule.Set, host string) (bool, string) {
 	kind, ok := set.MatchHostKind(host)

@@ -175,22 +175,6 @@ func (s *Set) MatchHostKind(host string) (Kind, bool) {
 	return s.matchDomainLocked(host)
 }
 
-// MatchIP 报告 ip 是否命中精确条目或网段。它用于"已经解析出地址"的调用方
-// （例如从 DNS 应答里学到的地址）。
-func (s *Set) MatchIP(ip string) bool {
-	if s == nil {
-		return false
-	}
-	parsed := net.ParseIP(ip)
-	if parsed == nil {
-		return false
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	_, ok := s.matchIPLocked(parsed)
-	return ok
-}
-
 // HasDomain 报告 domain（或它的任一父域名）是否精确出现在域名集合里，以及
 // 是否命中任一 glob/regexp 模式。它与 MatchHost 的区别只有一点：绝不按 IP
 // 处理，因此调用方可以放心传入一个长得像 IP 的域名。
@@ -347,7 +331,7 @@ func (b *builder) add(line string) *Error {
 
 	// 剩下的都按域名处理。这里只做小写归一，不做格式校验：规则文件里允许出现
 	// 只匹配标签片段的写法（例如单标签域名），历史上也能命中。
-	b.s.addDomainLocked(NormalizeHost(line))
+	b.s.addDomainLocked(normalizeDomainKey(line))
 	return nil
 }
 
@@ -360,14 +344,30 @@ func NormalizeHost(host string) string {
 	if host == "" {
 		return ""
 	}
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
-		// 形如 "[2001:db8::1]"（无端口）：SplitHostPort 会失败。
-		host = host[1 : len(host)-1]
+	// 快路径：只有带端口或带方括号的形态才可能需要拆分。裸域名/裸 IP 上直接
+	// 调用 SplitHostPort，失败时它会分配一个 error（约 32B/次）——而本函数在
+	// 每条连接（SOCKS5 / HTTP CONNECT / UDP / TUN ICMP）的匹配路径上都要跑。
+	// 冒号只会出现在 "host:port" 与 IPv6 字面量里，方括号只出现在 "[v6]:port"
+	// 或 "[v6]" 里，因此这个判断不会漏掉任何需要归一化的输入。
+	if strings.IndexByte(host, ':') >= 0 || strings.HasPrefix(host, "[") {
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+			// 形如 "[2001:db8::1]"（无端口）：SplitHostPort 会失败。
+			host = host[1 : len(host)-1]
+		}
 	}
 	host = strings.TrimSuffix(host, ".")
 	return strings.ToLower(host)
+}
+
+// normalizeDomainKey 是"规则文件里的一条域名"的归一化：规则条目本身不可能带
+// 端口或方括号，因此省掉 NormalizeHost 里的端口探测（在 30 万行的内置列表上
+// 逐条调用时，那两次字符串扫描是可见的启动成本）。
+//
+// 匹配侧仍然走 NormalizeHost：那里的输入来自网络，形态不可控。
+func normalizeDomainKey(domain string) string {
+	return strings.ToLower(strings.TrimSuffix(domain, "."))
 }
 
 // canonicalIP 返回 IP 的规范字符串：IPv4 与 IPv4-mapped 的 IPv6 都折叠成

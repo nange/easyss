@@ -472,10 +472,10 @@ func TestRouter_AddIPAfterMatch(t *testing.T) {
 	r := newRouterWithSets(t, nil, nil)
 
 	// 初始状态：IP 不在列表中
-	if r.hostMatchCustomRule(r.customDirect, "1.2.3.4") {
+	if ok, _ := r.hostMatchCustom(r.customDirect, "1.2.3.4"); ok {
 		t.Error("1.2.3.4 should not match before AddDirectIP")
 	}
-	if r.hostMatchCustomRule(r.customProxy, "5.6.7.8") {
+	if ok, _ := r.hostMatchCustom(r.customProxy, "5.6.7.8"); ok {
 		t.Error("5.6.7.8 should not match before AddProxyIP")
 	}
 
@@ -484,10 +484,10 @@ func TestRouter_AddIPAfterMatch(t *testing.T) {
 	r.AddProxyIP("5.6.7.8")
 
 	// 添加后应匹配
-	if !r.hostMatchCustomRule(r.customDirect, "1.2.3.4") {
+	if ok, _ := r.hostMatchCustom(r.customDirect, "1.2.3.4"); !ok {
 		t.Error("1.2.3.4 should match after AddDirectIP")
 	}
-	if !r.hostMatchCustomRule(r.customProxy, "5.6.7.8") {
+	if ok, _ := r.hostMatchCustom(r.customProxy, "5.6.7.8"); !ok {
 		t.Error("5.6.7.8 should match after AddProxyIP")
 	}
 }
@@ -586,7 +586,7 @@ func TestRouter_RegexpAndGlobCustomDomain(t *testing.T) {
 	}
 	for _, tt := range directTests {
 		t.Run("direct/"+tt.host, func(t *testing.T) {
-			got := r.hostMatchCustomRule(r.customDirect, tt.host)
+			got, _ := r.hostMatchCustom(r.customDirect, tt.host)
 			if got != tt.want {
 				t.Errorf("direct match(%q) = %v, want %v", tt.host, got, tt.want)
 			}
@@ -608,7 +608,7 @@ func TestRouter_RegexpAndGlobCustomDomain(t *testing.T) {
 	}
 	for _, tt := range proxyTests {
 		t.Run("proxy/"+tt.host, func(t *testing.T) {
-			got := r.hostMatchCustomRule(r.customProxy, tt.host)
+			got, _ := r.hostMatchCustom(r.customProxy, tt.host)
 			if got != tt.want {
 				t.Errorf("proxy match(%q) = %v, want %v", tt.host, got, tt.want)
 			}

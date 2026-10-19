@@ -563,3 +563,35 @@ func TestCachePrePopulateWithFallbackBoundedByContext(t *testing.T) {
 		t.Fatalf("pre-population took %v, want bounded by the context deadline", elapsed)
 	}
 }
+
+// TestCachePrePopulateDoesNotProbeSystemDNSWhenBuiltinWorks 固定系统 DNS 的
+// 惰性获取：内置池成功时不得调用 systemDNSServersFunc。darwin 上它走
+// networksetup，一次约 48ms（虽有 5 分钟缓存），而预解析是启动路径。
+//
+// 这条约束在把熔断判定收进 BuiltinRouteFor 时一度丢失——判定需要知道"有没有
+// 兜底"，最直接的写法是在进入分支之前就取一次系统 DNS。BuiltinRouteFor 的
+// hasFailover 参数因此是惰性的函数值而不是 bool。
+func TestCachePrePopulateDoesNotProbeSystemDNSWhenBuiltinWorks(t *testing.T) {
+	resetBuiltinDNSCircuit()
+	okAddr := startTestDNSServer(t, false)
+
+	old := systemDNSServersFunc
+	probes := 0
+	systemDNSServersFunc = func() []string {
+		probes++
+		return nil
+	}
+	t.Cleanup(func() {
+		systemDNSServersFunc = old
+		resetSystemDNSCache()
+		resetBuiltinDNSCircuit()
+	})
+
+	c := NewCache("example.com")
+	if err := c.PrePopulateWithFallback(context.Background(), "example.com", []string{okAddr}, true); err != nil {
+		t.Fatalf("PrePopulateWithFallback error: %v", err)
+	}
+	if probes != 0 {
+		t.Errorf("system DNS was probed %d time(s) while the builtin pool succeeded, want 0", probes)
+	}
+}

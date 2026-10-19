@@ -597,8 +597,11 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 		return ""
 	}
 
-	attemptBuiltin, armOnFailure := dns.BuiltinAttempt(len(dns.SystemDNSServers()) > 0)
-	if attemptBuiltin {
+	// 系统 DNS 惰性获取：route 判定只在熔断已置位时才会调用它，因此健康路径
+	// 不为这次 IPv6 解析额外付出一次系统 DNS 发现的开销（见 dns.BuiltinRouteFor）。
+	hasFailover := func() bool { return len(dns.SystemDNSServers()) > 0 }
+	route := dns.BuiltinRouteFor(hasFailover)
+	if route != dns.BuiltinRouteSkip {
 		// 内置分支只能花掉总预算里除预留量以外的部分：黑洞内置 DNS（丢包而非
 		// 立即拒绝）会把整个预算耗在一次查询上，系统 DNS 兜底复用同一个已过期
 		// 的 ctx 就会在毫秒内全部失败（见 dns.WithSystemDNSFallbackReserve）。
@@ -637,10 +640,10 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 			return ips[0].String()
 		}
 		if !reachable {
-			// 熔断判定集中在 dns.BuiltinAttempt：只有存在系统 DNS 兜底时才熔断。
-			// 无兜底时熔断会让后续解析在冷却期内直接跳过仍可能可用的内置服务器
-			// （Android 上系统 DNS 对应用不可见，正是这种情形）。
-			if armOnFailure {
+			// 熔断判定：只有存在系统 DNS 兜底时才熔断。无兜底时熔断会让后续解析
+			// 在冷却期内直接跳过仍可能可用的内置服务器（Android 上系统 DNS 对
+			// 应用不可见，正是这种情形）。
+			if hasFailover() {
 				dns.MarkBuiltinDNSUnavailable()
 			}
 			log.Warn("[CLIENT] all builtin direct dns servers failed to resolve server ipv6, fallback to system dns", "server", svr.Host)

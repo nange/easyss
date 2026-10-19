@@ -366,41 +366,52 @@ func (c *Cache) PrePopulateWithFallback(ctx context.Context, domain string, dnsS
 		return false
 	}
 
-	// 系统 DNS 惰性获取：内置可用时不应为此付出一次系统 DNS 发现的开销。
-	// 但熔断判定需要知道"有没有兜底"，因此这里先取一次（结果被下面复用）。
-	systemServers := systemDNSServersFunc()
-	attempt, armOnFailure := BuiltinAttempt(len(systemServers) > 0)
-	if attempt {
+	// 系统 DNS 惰性获取：route 判定只在熔断已置位时才会真正调用它，健康路径
+	// 不会为一次预解析付出系统 DNS 发现的开销（见 BuiltinRouteFor）。
+	var systemServers []string
+	systemLoaded := false
+	loadSystem := func() []string {
+		if !systemLoaded {
+			systemServers = systemDNSServersFunc()
+			systemLoaded = true
+		}
+		return systemServers
+	}
+
+	switch BuiltinRouteFor(func() bool { return len(loadSystem()) > 0 }) {
+	case BuiltinRouteSkip:
+		// 熔断生效且有系统兜底：直接走系统 DNS。
+		if tryAll(ctx, loadSystem(), trySystem) {
+			return nil
+		}
+
+	case BuiltinRouteRetry:
+		// 熔断生效但没有任何兜底：无视冷却继续试内置池。明确记录这一点，
+		// 否则这条路径在日志里与健康路径无法区分。
+		log.Warn("[DNS] builtin dns breaker is armed but no system dns is available, retrying builtin servers",
+			"domain", domain)
 		if tryAll(builtinCtx, dnsServers, tryBuiltin) {
 			MarkBuiltinDNSAvailable()
 			return nil
 		}
 
-		// 熔断判定集中在 BuiltinAttempt：只有确实存在系统兜底时才置位。
-		if armOnFailure {
-			MarkBuiltinDNSUnavailable()
-			log.Warn("[DNS] all builtin dns servers failed, fallback to system dns",
-				"domain", domain, "system_servers", systemServers, "err", lastErr)
-		} else {
-			log.Debug("[DNS] all builtin dns servers failed and no system dns is available", "domain", domain, "err", lastErr)
-		}
-
-		if tryAll(ctx, systemServers, trySystem) {
+	default: // BuiltinRouteFirst
+		if tryAll(builtinCtx, dnsServers, tryBuiltin) {
+			MarkBuiltinDNSAvailable()
 			return nil
 		}
-	} else {
-		// 熔断已置位：正常跳过内置服务器。但它可能是在"当时还有系统兜底"的情况下
-		// 置位的，而现在兜底已经消失（Android 上系统 DNS 对应用不可见，正是这种
-		// 情形）——此时冷却期会变成彻底的解析中断。没有兜底就无视冷却，仍然尝试
-		// 内置池（判定同样来自 BuiltinAttempt）。
-		if attempt {
-			log.Warn("[DNS] builtin dns breaker is armed but no system dns is available, retrying builtin servers",
-				"domain", domain)
-			if tryAll(builtinCtx, dnsServers, tryBuiltin) {
-				MarkBuiltinDNSAvailable()
-				return nil
-			}
-		} else if tryAll(ctx, systemServers, trySystem) {
+
+		// 熔断规则：只有确实存在系统兜底时才置位。
+		servers := loadSystem()
+		if len(servers) > 0 {
+			MarkBuiltinDNSUnavailable()
+			log.Warn("[DNS] all builtin dns servers failed, fallback to system dns",
+				"domain", domain, "system_servers", servers, "err", lastErr)
+		} else {
+			log.Debug("[DNS] all builtin dns servers failed and no system dns is available",
+				"domain", domain, "err", lastErr)
+		}
+		if tryAll(ctx, servers, trySystem) {
 			return nil
 		}
 	}
