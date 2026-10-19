@@ -366,18 +366,18 @@ func (c *Cache) PrePopulateWithFallback(ctx context.Context, domain string, dnsS
 		return false
 	}
 
-	if BuiltinDNSAvailable() {
+	// 系统 DNS 惰性获取：内置可用时不应为此付出一次系统 DNS 发现的开销。
+	// 但熔断判定需要知道"有没有兜底"，因此这里先取一次（结果被下面复用）。
+	systemServers := systemDNSServersFunc()
+	attempt, armOnFailure := BuiltinAttempt(len(systemServers) > 0)
+	if attempt {
 		if tryAll(builtinCtx, dnsServers, tryBuiltin) {
 			MarkBuiltinDNSAvailable()
 			return nil
 		}
 
-		// 惰性获取系统 DNS：内置可用时不应为此付出一次系统 DNS 发现的开销。
-		systemServers := systemDNSServersFunc()
-		// 只有确实存在系统 DNS 兜底时才熔断内置服务器。无兜底时熔断会让冷却
-		// 期内每一次解析都在这条空回退上立刻失败，而内置服务器此时仍可能可用
-		// （Android 上系统 DNS 对应用不可见，正是这种情形）。
-		if len(systemServers) > 0 {
+		// 熔断判定集中在 BuiltinAttempt：只有确实存在系统兜底时才置位。
+		if armOnFailure {
 			MarkBuiltinDNSUnavailable()
 			log.Warn("[DNS] all builtin dns servers failed, fallback to system dns",
 				"domain", domain, "system_servers", systemServers, "err", lastErr)
@@ -392,9 +392,8 @@ func (c *Cache) PrePopulateWithFallback(ctx context.Context, domain string, dnsS
 		// 熔断已置位：正常跳过内置服务器。但它可能是在"当时还有系统兜底"的情况下
 		// 置位的，而现在兜底已经消失（Android 上系统 DNS 对应用不可见，正是这种
 		// 情形）——此时冷却期会变成彻底的解析中断。没有兜底就无视冷却，仍然尝试
-		// 内置池。
-		systemServers := systemDNSServersFunc()
-		if len(systemServers) == 0 {
+		// 内置池（判定同样来自 BuiltinAttempt）。
+		if attempt {
 			log.Warn("[DNS] builtin dns breaker is armed but no system dns is available, retrying builtin servers",
 				"domain", domain)
 			if tryAll(builtinCtx, dnsServers, tryBuiltin) {

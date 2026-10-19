@@ -287,41 +287,6 @@ func awaitSocks5Reply(t *testing.T, client net.Conn, br *bufio.Reader) {
 	}
 }
 
-// startUDPDNSResponder 启动一个本地 UDP DNS 应答器：任意 A 查询回 answerIP。
-func startUDPDNSResponder(t *testing.T, answerIP string) string {
-	t.Helper()
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen udp responder: %v", err)
-	}
-	t.Cleanup(func() { pc.Close() }) //nolint:errcheck
-	go func() {
-		buf := make([]byte, 2048)
-		for {
-			n, addr, err := pc.ReadFrom(buf)
-			if err != nil {
-				return
-			}
-			req := new(dns.Msg)
-			if err := req.Unpack(buf[:n]); err != nil {
-				continue
-			}
-			resp := new(dns.Msg)
-			resp.SetReply(req)
-			resp.Answer = append(resp.Answer, &dns.A{
-				Hdr: dns.RR_Header{Name: req.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
-				A:   net.ParseIP(answerIP),
-			})
-			data, err := resp.Pack()
-			if err != nil {
-				continue
-			}
-			_, _ = pc.WriteTo(data, addr)
-		}
-	}()
-	return pc.LocalAddr().String()
-}
-
 func TestTCPDNSMessageFraming(t *testing.T) {
 	// round-trip：写入的帧能被 readTCPDNSMessage 原样读出。
 	client, server := net.Pipe()
@@ -371,7 +336,7 @@ func (b *bytesReader) Read(p []byte) (int, error) {
 
 func TestHandleTCPDNSDirect(t *testing.T) {
 	easydns.ResetResolveState()
-	requested := startUDPDNSResponder(t, "1.2.3.4")
+	requested := startUDPDNSResponderAny(t, "1.2.3.4")
 	// 内置列表故意指向一个必然拨不通的地址：只有真正使用客户端请求的解析器
 	// （requested），这个用例才会拿到应答；若代码忽略请求地址而转投内置列表，
 	// 这里就会变成 SERVFAIL。
@@ -429,7 +394,7 @@ func TestHandleTCPDNSDirect(t *testing.T) {
 func TestHandleTCPDNSDirectFallsBackToBuiltinList(t *testing.T) {
 	easydns.ResetResolveState()
 	oldDNS := clientconfig.DirectDNSServers
-	clientconfig.DirectDNSServers = []string{startUDPDNSResponder(t, "5.6.7.8")}
+	clientconfig.DirectDNSServers = []string{startUDPDNSResponderAny(t, "5.6.7.8")}
 	t.Cleanup(func() { clientconfig.DirectDNSServers = oldDNS })
 
 	rt, err := router.New(router.Config{ProxyRule: router.ProxyRuleAuto, IPV6Rule: router.IPV6RuleDisable})
@@ -775,7 +740,7 @@ func TestHandleTCPDNSFallbackNonDNS(t *testing.T) {
 func TestHandleTCPDNSMultipleQueries(t *testing.T) {
 	easydns.ResetResolveState()
 	oldDNS := clientconfig.DirectDNSServers
-	clientconfig.DirectDNSServers = []string{startUDPDNSResponder(t, "1.2.3.4")}
+	clientconfig.DirectDNSServers = []string{startUDPDNSResponderAny(t, "1.2.3.4")}
 	t.Cleanup(func() { clientconfig.DirectDNSServers = oldDNS })
 
 	rt, err := router.New(router.Config{ProxyRule: router.ProxyRuleAuto, IPV6Rule: router.IPV6RuleDisable})

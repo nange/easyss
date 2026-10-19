@@ -177,3 +177,31 @@ func TestQueryWithBuiltinFirstArmedBreakerWithoutFallback(t *testing.T) {
 		t.Fatal("a successful builtin query must clear the breaker")
 	}
 }
+
+// TestBuiltinAttempt 固定熔断判定的两条规则：熔断未置位时总是应该试内置池；
+// 已置位时只有"没有系统兜底"才仍然试（否则冷却期会变成彻底的中断）。
+//
+// 同时固定"只有存在兜底才熔断"这条共享规则——三条调用路径（并发竞争、串行带
+// 预算、逐条目预算）都读它，把熔断判定收敛到一处的原因就在这里。
+func TestBuiltinAttempt(t *testing.T) {
+	MarkBuiltinDNSAvailable()
+	t.Cleanup(MarkBuiltinDNSAvailable)
+
+	for _, failover := range []bool{true, false} {
+		try, arm := BuiltinAttempt(failover)
+		if !try {
+			t.Errorf("BuiltinAttempt(%v) with a healthy breaker = (false, _), want try", failover)
+		}
+		if arm != failover {
+			t.Errorf("BuiltinAttempt(%v) arm = %v, want %v", failover, arm, failover)
+		}
+	}
+
+	MarkBuiltinDNSUnavailable()
+	if try, _ := BuiltinAttempt(true); try {
+		t.Error("armed breaker with a system failover must skip the builtin pool")
+	}
+	if try, _ := BuiltinAttempt(false); !try {
+		t.Error("armed breaker without any failover must still try the builtin pool")
+	}
+}
