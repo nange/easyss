@@ -78,7 +78,11 @@ type session struct {
 	// 由平台文件提供实现（见 tray_tun_teardown_unix.go 的 platformTunTeardown 与
 	// 它在其他平台上的空实现）。它是字段而不是直接调用，使测试可以在任何平台上
 	// 替换它，不必为每个平台写一份按构建标签分文件的测试。
-	verifyTeardown func(dev tun.DeviceConfig, helperSignalled bool) error
+	//
+	// 第一个参数是本次会话的所有权（tun.Owner）：只有 helper 装的会话才需要
+	// "等它退出"，只有本进程装的会话才值得为路由残留告警——那两类判据过去是由
+	// helperSignalled 与 dev 是否为 nil 推出来的。
+	verifyTeardown func(dev tun.DeviceConfig, owner tun.Owner, helperSignalled bool) error
 
 	// tunMgr 是当前 TUN 会话的引擎；tunSession 是它启用时实际使用的设备/网关
 	// 配置（关闭时用它——而不是关闭时的 tunMgr——核对路由与回滚：fd 路径的
@@ -87,6 +91,10 @@ type session struct {
 	tunMgr         *tun.Manager
 	tunSession     *tun.DeviceConfig
 	tunHelperStdin io.WriteCloser
+	// tunOwner 记录这次会话的系统改动归谁回收（见 tun.Owner）：直连路径与启动期
+	// 创建是 OwnerLocal，提权 helper 路径是 OwnerHelper。它必须在建立会话时写入，
+	// 而不是在拆除时重新猜——拆除时的配置可能已经被下一次启用改过。
+	tunOwner tun.Owner
 }
 
 func newSession(app *App) *session {
@@ -273,6 +281,7 @@ func (s *session) startTunEngineAtStartup() {
 	defer s.tunMu.Unlock()
 
 	s.tunMgr = tun.New(s.tunConfig())
+	s.tunOwner = tun.OwnerLocal
 	s.buildICMPHandler(core)
 	s.startTunEngine(s.tunMgr, "device")
 }
@@ -305,6 +314,7 @@ func (s *session) tunUp() error {
 	s.tunMgr = tun.New(s.tunConfig())
 	dev := s.tunMgr.DeviceConfig()
 	s.tunSession = &dev
+	s.tunOwner = tun.OwnerLocal
 
 	s.buildICMPHandler(core)
 	s.startTunEngine(s.tunMgr, "device")
@@ -332,6 +342,11 @@ func (s *session) tunDown() error {
 // tunDownLocked 是拆除本体，调用方持有 tunMu。want 非 nil 时要求它仍是当前会话的
 // 引擎，否则什么都不做：只有迟到的失败回调会这样调用（见 rollbackFailedTunStart），
 // 它针对的会话已经被替换，拆除后来者就是拆掉用户刚打开的那个 TUN。
+//
+// 本进程负责哪一半改动由会话自己记着（tunOwner）：helper 路径上路由与系统 DNS
+// 归 helper 回收，主进程只停引擎、关 FIFO，再等 helper 退出并复核路由表。过去这一步
+// 是靠"FIFO 是否非 nil"（helperSignalled）推出来的，而它只是一个"有没有关过 FIFO"
+// 的事实，与"该不该等 helper、该不该复核路由"并不等价。
 func (s *session) tunDownLocked(want *tun.Manager) error {
 	if want != nil && s.tunMgr != want {
 		return nil
@@ -345,13 +360,21 @@ func (s *session) tunDownLocked(want *tun.Manager) error {
 	}
 	s.tunSession = nil
 
+	// 本次会话的所有权：Owner 的零值就是 OwnerLocal（直连路径与启动期创建都是
+	// 这种情况），因此没有显式记录的会话自然落在"本进程自己装的"这一侧，也不会
+	// 去等一个不存在的 helper。
+	owner := s.tunOwner
+
 	// 1. 先停止 tun2socks 引擎：它会关闭助手进程传给本进程的 TUN fd。
 	//    助手进程的关闭脚本会删除该接口，而 iproute2 无法删除仍附着在
 	//    fd 上的设备 —— 会报 "device or resource busy" 并把接口留下来，
 	//    连同所有 TUN 路由（它们都绑定在该接口上）。此后流量仍会进入
 	//    一个无人读取的设备，表现为 TUN 停止后"网络不可用"。
+	//
+	//    引擎停下来之后，Manager 自己的 teardown 只做它那一半：helper 路径上
+	//    它不跑关闭脚本、不恢复 DNS（那些归 helper），见 tun.Owner。
 	if s.tunMgr != nil {
-		log.Info("[SYSTRAY] tunDown: stopping tun2socks engine")
+		log.Info("[SYSTRAY] tunDown: stopping tun2socks engine", "owner", owner.String())
 		s.tunMgr.Stop()
 		s.tunMgr = nil
 	}
@@ -366,11 +389,12 @@ func (s *session) tunDownLocked(want *tun.Manager) error {
 		s.tunHelperStdin = nil
 		helperSignalled = true
 	}
+	s.tunOwner = tun.OwnerLocal
 
 	// 3. 等助手进程退出并复核系统路由表（仅 darwin/linux 的提权路径；其他
 	//    平台与 headless 构建上是空实现）。
 	if dev != nil {
-		if err := s.verifyTeardown(*dev, helperSignalled); err != nil {
+		if err := s.verifyTeardown(*dev, owner, helperSignalled); err != nil {
 			log.Error("[SYSTRAY] tunDown: TUN teardown left routes behind", "err", err)
 			s.app.notifyTunTeardownProblem(
 				"TUN 已停止，但系统路由表里仍残留指向 TUN 的路由，本机可能无法上网。请退出并重新启动 Easyss，或重启系统以恢复网络。详情：" + err.Error())

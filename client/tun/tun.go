@@ -59,7 +59,6 @@ type Config struct {
 	Socks5Addr       string
 	Device           string
 	DeviceFD         int  // 若 > 0，使用 fd:// scheme 打开设备而非按名称创建；0 表示按名称创建
-	SkipRouteCleanup bool // darwin：helper 负责路由/DNS 清理，主进程在 Stop() 中跳过
 	MTU              int  // TUN 设备与 tun2socks netstack 共用；<=0 取 config.DefaultTunMTU
 	Interface        string
 	UDPTimeout       time.Duration
@@ -114,6 +113,15 @@ type Manager struct {
 	ctx     context.Context    // 用于取消进行中的 Start()；New 时创建
 	cancel  context.CancelFunc // 供 Stop() 表达"停止"意图；New 时创建
 	done    chan struct{}      // Start() 结束（成功或失败）时关闭
+
+	// 拆除状态（见 teardown.go）。owner 在 Start 认领会话时定稿，之后只读；
+	// 三个 bool 记录本次会话真的做成了哪几步，拆除按它们决定回收什么——
+	// 这就是过去 fdMode / SkipRouteCleanup / helperSignalled 三套隐式条件的替代。
+	owner      Owner // 路由与 DNS 归谁回收
+	engineUp   bool  // engineStartFn 已成功
+	deviceUp   bool  // 创建脚本可能已装上东西（失败时也可能是 true）
+	dnsTouched bool  // 系统 DNS 已被本进程改动
+	tornDown   bool  // teardown 已执行（关脚本与恢复 DNS 只能做一次）
 
 	// stopMu 把整个 Stop 串行化：并发的第二个 Stop 必须等第一次拆除完成再返回，
 	// 否则调用方会以为 TUN 已经停了（App.Stop 依赖"TUN 先于核心停止"这一顺序）。
@@ -279,7 +287,7 @@ func (m *Manager) warnOnMTUMismatch(netstackMTU int) {
 	}
 }
 
-func (m *Manager) Start() error {
+func (m *Manager) Start() (err error) {
 	if scripts.CreateTunBytes == nil || scripts.CloseTunBytes == nil {
 		return fmt.Errorf("tun: unsupported os %s", runtime.GOOS)
 	}
@@ -294,9 +302,29 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("tun: manager already started")
 	}
 	m.started = true
-	ctx, done := m.ctx, m.done
+	if m.cfg.DeviceFD > 0 {
+		m.owner = OwnerHelper
+	} else {
+		m.owner = OwnerLocal
+	}
+	ctx, done, owner := m.ctx, m.done, m.owner
 	m.mu.Unlock()
-	defer close(done)
+
+	// 无论从哪条路径退出都会走这里：成功则只关 done（拆除归 Stop），失败或
+	// 被取消则由本次 Start 自己拆掉已经建起来的东西。reason 只影响日志与错误
+	// 呈现口径：取消是用户操作的结果，失败需要用户看错误，两者可操作性不同。
+	defer func() {
+		if err == nil {
+			close(done)
+			return
+		}
+		reason := ReasonStartFailed
+		if ctx.Err() != nil {
+			reason = ReasonStartCancelled
+		}
+		m.teardown(reason, owner)
+		close(done)
+	}()
 
 	// 快速路径：还没开始就被取消了（Stop 先到，或调用方在 stop 之后再 Start）。
 	select {
@@ -312,9 +340,8 @@ func (m *Manager) Start() error {
 		engine.SetICMPHandler(icmpH)
 	}
 
-	fdMode := m.cfg.DeviceFD > 0
 	device := m.cfg.Device
-	if fdMode {
+	if owner == OwnerHelper {
 		device = "fd://" + strconv.Itoa(m.cfg.DeviceFD)
 	}
 
@@ -344,52 +371,42 @@ func (m *Manager) Start() error {
 	// 并释放 Start 在 core.CreateStack 失败之前可能已打开的
 	// TUN 设备。
 	if err := engineStartFn(); err != nil {
-		engineStopFn("start failed")
+		// 引擎在自己的失败路径里可能已经打开了设备，但本进程还没碰过路由与
+		// DNS（helper 路径上更不归我们），因此只需要 engine.Stop 的幂等释放：
+		// engineUp 不置位，teardown 就只关 done、不做多余动作。
 		return fmt.Errorf("tun: start engine: %w", err)
 	}
+	m.mu.Lock()
+	m.engineUp = true
+	m.mu.Unlock()
 
 	// 在改动路由 / DNS 之前，允许 Stop() 取消本次启动。
 	select {
 	case <-ctx.Done():
-		engineStopFn("start cancelled")
 		return ctx.Err()
 	default:
 	}
 
 	settleDelay()
 
-	if !fdMode {
+	if owner == OwnerLocal {
 		// 在 darwin 和 linux 上保存原始 DNS 并设置 TUN DNS。
 		if manageSystemDNS() {
 			if err := saveAndSetDNSStepFn(m); err != nil {
 				log.Warn("[TUN] set system dns", "err", err)
 			}
+			m.mu.Lock()
+			m.dnsTouched = true
+			m.mu.Unlock()
 		}
 
+		// 创建脚本可能在报告失败之前已经装上了地址与部分路由，因此
+		// deviceUp 在调用之前就置位：拆除必须假设"路由可能已经在了"。
+		// 删除路由是幂等的，只在这条刚运行过创建脚本的路径上才有意义。
+		m.mu.Lock()
+		m.deviceUp = true
+		m.mu.Unlock()
 		if err := createTunDevFn(m); err != nil {
-			engineStopFn("create device failed")
-			// 平台脚本可能在半途失败（它先安装地址，再安装路由），
-			// 而只停止 engine 时，它已经添加的路由仍留在系统路由表里：
-			// 下面的 Stop() 因为 m.running 还是 false 而提前返回，
-			// 所以没有任何东西会再去移除它们。
-			// 残留的路由会把流量送进一个无人读取的 TUN 设备，
-			// 看起来就像网络死了。
-			// 删除这些路由是幂等的，并且只在刚运行过创建脚本的
-			// 路径上才有意义。
-			if closeErr := closeTunDevFn(m); closeErr != nil {
-				log.Warn("[TUN] rollback routes after create failure", "err", closeErr)
-			}
-			// 系统 DNS 在设备存在之前就已切换到 TUN resolver。
-			// m.running 为 false 时 Stop() 会提前返回，
-			// 所以失败路径必须自己把 DNS 恢复：
-			// 若继续指向一个无人应答的 TUN 设备（或一个只能通过隧道
-			// 访问的公共解析器），即使代理核心仍在运行，
-			// 全系统的域名解析也会瘫痪。
-			if manageSystemDNS() {
-				if dnsErr := restoreDNSStepFn(m); dnsErr != nil {
-					log.Warn("[TUN] rollback system dns after create failure", "err", dnsErr)
-				}
-			}
 			return fmt.Errorf("tun: create device: %w", err)
 		}
 	}
@@ -400,19 +417,10 @@ func (m *Manager) Start() error {
 	// 与新的 netstack MTU 比较，报出一条毫无意义的告警。
 	m.warnOnMTUMismatch(mtu)
 
-	// 最后检查：如果平台脚本运行期间 Stop() 取消了本次启动，
-	// 撤销刚才建立的一切。
+	// 最后检查：如果平台脚本运行期间 Stop() 取消了本次启动，defer 里的
+	// teardown 会撤销刚才建立的一切。
 	select {
 	case <-ctx.Done():
-		engineStopFn("start cancelled")
-		if !fdMode {
-			if err := closeTunDevFn(m); err != nil {
-				log.Warn("[TUN] close script after start cancellation", "err", err)
-			}
-		}
-		if manageSystemDNS() {
-			_ = restoreDNSStepFn(m)
-		}
 		return ctx.Err()
 	default:
 	}
@@ -452,37 +460,31 @@ func (m *Manager) Stop() {
 	}
 
 	m.mu.Lock()
-	if !m.running {
-		m.mu.Unlock()
-		log.Info("[TUN] Stop: not running, returning")
-		return
-	}
-	// 先落 running=false 再拆除：重复 Stop 与并发 Stop 都不会二次执行清理
-	// （engine.Stop / 关脚本 / 恢复 DNS 都是"只能做一次"的动作）。
+	owner, running := m.owner, m.running
 	m.running = false
 	m.mu.Unlock()
 
-	log.Info("[TUN] Stop: calling engine.Stop")
-	engineStopFn("stop")
-	log.Info("[TUN] Stop: engine.Stop done")
-
-	if !m.cfg.SkipRouteCleanup {
-		// 关闭脚本的失败不能改变 Stop 的结果（调用方已经在拆除了），但绝不能
-		// 静默：脚本按"路由是否真的删掉"给出退出码，残留的分流默认路由会把
-		// 全机 IPv4 流量送进一个没人读的 TUN 设备。
-		if err := closeTunDevFn(m); err != nil {
-			log.Warn("[TUN] close script", "err", err)
-		}
-
-		// 在 darwin 和 linux 上恢复原始 DNS。
-		if manageSystemDNS() {
-			if err := restoreDNSStepFn(m); err != nil {
-				log.Warn("[TUN] restore system dns", "err", err)
-			}
-		}
+	// 拆除与"是否曾成功启动"无关：Start 的失败路径可能已经装上了部分路由与
+	// 系统 DNS，而它自己的 teardown 与这里共用同一个 tornDown 标记，先到者
+	// 负责，后到者是空操作。running 仍是"托盘该显示开还是关"的判据。
+	if !running && !m.hasSomethingToTearDown() {
+		log.Info("[TUN] Stop: nothing to tear down, returning")
+		return
 	}
 
+	if err := m.teardown(ReasonStop, owner); err != nil {
+		log.Warn("[TUN] Stop: teardown reported a failure", "err", err)
+	}
 	log.Info("[TUN] tun2socks stopped")
+}
+
+// hasSomethingToTearDown 报告本次会话是否留下过需要回收的东西。它让 Stop 在
+// "从未 Start 过"时保持空操作（不跑关闭脚本、不碰系统 DNS），同时不会漏掉
+// Start 半途失败留下的残局。
+func (m *Manager) hasSomethingToTearDown() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.engineUp || m.deviceUp || m.dnsTouched
 }
 
 // stopEngine 停止 tun2socks engine，把错误记入日志而不是向上传播：
