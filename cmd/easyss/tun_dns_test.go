@@ -24,7 +24,7 @@ func TestTunDNS(t *testing.T) {
 	easydns.ResetResolveState()
 	t.Cleanup(easydns.ResetResolveState)
 
-	cfg := config.DefaultConfig()
+	cfg := config.ClientConfig{}
 
 	// 没有任何可达记录时：两个开关取值都回退到内置池第一个 IPv4 项。
 	cfg.Local.EnableForwardDNS = false

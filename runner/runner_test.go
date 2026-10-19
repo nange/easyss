@@ -14,20 +14,21 @@ import (
 	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/client/config"
 	easydns "github.com/nange/easyss/v3/client/dns"
+	sharedconfig "github.com/nange/easyss/v3/config"
 )
 
 func testConfig() *config.ClientConfig {
-	cfg := config.DefaultConfig()
-	cfg.Servers = []*config.ServerProfile{{
-		// 使用字面 IP 让测试不涉及启动阶段的 DNS 工作：
-		// resolveServerDomain（以及 client.New 中的 IPv6 解析）都会跳过
-		// 字面 IP，因此测试永远不会发起真实的 DNS 查询。
-		Host:     "127.0.0.1",
-		Port:     443,
+	// 使用字面 IP 让测试不涉及启动阶段的 DNS 工作：resolveServerDomain
+	// （以及 client.New 中的 IPv6 解析）都会跳过字面 IP，因此测试永远不会
+	// 发起真实的 DNS 查询。BuildSimpleConfig 同时负责默认值归一化（端口、
+	// method、timeout），与生产加载简化配置走同一条路径。
+	cfg, err := config.BuildSimpleConfig(&sharedconfig.SimpleConfig{
+		Server:   "127.0.0.1",
 		Password: "test-password",
-		Method:   "aes-256-gcm",
-		Default:  true,
-	}}
+	})
+	if err != nil {
+		panic(err)
+	}
 	// 跳过客户端初始化期间通过直连 DNS 服务器进行的 IPv6 解析，
 	// 否则测试中每次查询都会阻塞数秒。
 	cfg.Routing.IPV6Rule = "disable"

@@ -20,6 +20,8 @@ import (
 
 	"github.com/gogpu/systray"
 	"github.com/nange/easyss/v3/client/config"
+	"github.com/nange/easyss/v3/client/tun"
+	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/icon"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/runner"
@@ -212,12 +214,11 @@ func friendlyStartupError(err error) string {
 	if isAddrInUse(err) {
 		return "服务启动失败：本地端口可能被占用，请关闭占用该端口的程序后重试。详情：" + err.Error()
 	}
-	// 以下分类按稳定错误文本匹配（均为各自包内固定的字面量错误，
-	// 不随平台/环境变化）。匹配失败则回退到通用提示。
-	if strings.Contains(err.Error(), "crypto: password is empty") {
+	// 以下分类走导出哨兵，不依赖错误文本；详情仍带原始错误，便于排查。
+	if errors.Is(err, crypto.ErrPasswordEmpty) {
 		return "配置错误：服务器密码为空，请在配置文件（或 -k 参数）中设置 password。详情：" + err.Error()
 	}
-	if strings.Contains(err.Error(), "http proxy requires socks_port to be enabled") {
+	if errors.Is(err, runner.ErrSocksRequired) {
 		return "配置错误：启用 HTTP 代理需要先启用 SOCKS5 代理（socks_port 需大于 0）。详情：" + err.Error()
 	}
 	return "服务启动失败：" + err.Error()
@@ -280,19 +281,18 @@ func friendlyTunError(err error) string {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return ""
 	}
-	// 用户已明确取消提权授权对话：错误文本是 root_linux.go / root_darwin.go
-	// 各自的固定字面量（"pkexec/osascript exited before tun helper started"），
-	// 属于用户意图而非故障，再弹一次通知只会变成骚扰。
-	if strings.Contains(err.Error(), "exited before tun helper started") {
+	// 用户已明确取消提权授权对话：提权器在 helper 启动前退出，属于用户意图
+	// 而非故障，再弹一次通知只会变成骚扰。
+	if errors.Is(err, errTunHelperStartup) {
 		return ""
 	}
-	if strings.Contains(err.Error(), "requires root") || errors.Is(err, fs.ErrPermission) {
+	if errors.Is(err, fs.ErrPermission) {
 		return "Tun2socks 启动失败：需要管理员权限，请以 root/管理员身份运行或重试授权。详情：" + err.Error()
 	}
 	// 设备/路由配置脚本执行失败（例如 Windows 上 netsh 设置地址或 route
 	// add 阶梯路由被拒绝）：这类失败会由 Start() 先回滚已写入的路由，所以
 	// 文案要说明流量没有被接管，而不是让用户以为只是"没生效"。
-	if strings.Contains(err.Error(), "create device") {
+	if errors.Is(err, tun.ErrCreateDevice) {
 		return "Tun2socks 启动失败：TUN 设备/路由配置未完成，已回滚，系统全局流量未被接管；代理（SOCKS5/HTTP）仍可正常使用，可在托盘中重试。详情：" + err.Error()
 	}
 	return "Tun2socks 启动失败：系统全局流量未生效，代理（SOCKS5/HTTP）仍可正常使用，可在托盘中重试。详情：" + err.Error()

@@ -15,6 +15,8 @@ import (
 
 	"github.com/gogpu/systray"
 	"github.com/nange/easyss/v3/client/config"
+	"github.com/nange/easyss/v3/client/tun"
+	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/runner"
 	"github.com/stretchr/testify/require"
 )
@@ -62,14 +64,14 @@ func TestFriendlyStartupError(t *testing.T) {
 		t.Fatalf("windows in-use error should get the hint: %q", msg)
 	}
 
-	// 空密码（crypto.DeriveMasterKey）。
-	passwordErr := errors.New("crypto: password is empty")
+	// 空密码（crypto.ErrPasswordEmpty）。
+	passwordErr := fmt.Errorf("derive master key: %w", crypto.ErrPasswordEmpty)
 	if msg := friendlyStartupError(passwordErr); !strings.Contains(msg, "服务器密码为空") {
 		t.Fatalf("empty-password error should get the config hint: %q", msg)
 	}
 
-	// HTTP 代理未启用 socks_port（runner.errSocksRequired）。
-	socksRequiredErr := errors.New("http proxy requires socks_port to be enabled")
+	// HTTP 代理未启用 socks_port（runner.ErrSocksRequired）。
+	socksRequiredErr := fmt.Errorf("runner: %w", runner.ErrSocksRequired)
 	if msg := friendlyStartupError(socksRequiredErr); !strings.Contains(msg, "socks_port 需大于 0") {
 		t.Fatalf("socks-required error should get the config hint: %q", msg)
 	}
@@ -194,25 +196,27 @@ func TestFriendlyTunError(t *testing.T) {
 		t.Fatalf("nil error must not notify, got %q", msg)
 	}
 
-	// 用户取消了 pkexec/osascript 授权对话框：平台包装层会发出这些固定
-	// 字面量，这是用户意图而非故障，因此同样保持静默。
-	cancelled := errors.New("pkexec exited before tun helper started: exit status 126: Error executing command as another user: Request dismissed")
+	// 用户取消了 pkexec/osascript 授权对话框：提权器在 helper 启动前退出，
+	// 这是用户意图而非故障，因此同样保持静默。
+	cancelled := fmt.Errorf("%w: pkexec: exit status 126: Request dismissed", errTunHelperStartup)
 	if msg := friendlyTunError(cancelled); msg != "" {
 		t.Fatalf("a cancelled auth dialog must not notify, got %q", msg)
 	}
-	osascript := errors.New("osascript exited before tun helper started: exit status 1: User canceled.")
+	osascript := fmt.Errorf("%w: osascript: exit status 1: User canceled", errTunHelperStartup)
 	if msg := friendlyTunError(osascript); msg != "" {
 		t.Fatalf("a cancelled admin dialog must not notify, got %q", msg)
 	}
 
 	// 缺少权限时保留可操作的建议提示。
-	denied := errors.New("tun2socks requires root on this platform")
-	if msg := friendlyTunError(denied); !strings.Contains(msg, "需要管理员权限") || !strings.Contains(msg, denied.Error()) {
-		t.Fatalf("a permission failure should get the elevation hint: %q", msg)
-	}
 	perm := fmt.Errorf("tun: create device: open /dev/net/tun: %w", fs.ErrPermission)
 	if msg := friendlyTunError(perm); !strings.Contains(msg, "需要管理员权限") {
 		t.Fatalf("an fs.ErrPermission failure should get the elevation hint: %q", msg)
+	}
+
+	// 创建脚本失败（非权限原因）走 typed sentinel，文案说明已回滚。
+	createErr := fmt.Errorf("%w: exit status 1", tun.ErrCreateDevice)
+	if msg := friendlyTunError(createErr); !strings.Contains(msg, "已回滚") {
+		t.Fatalf("a create-device failure should get the rollback hint: %q", msg)
 	}
 
 	// 其他任何错误都会同时说明缺失的功能、代理核心仍然可用的事实，
@@ -239,7 +243,7 @@ func TestTrayTunStartFailureUnchecksTheMenu(t *testing.T) {
 	item := systray.NewMenu().AddCheckbox("系统全局流量(Tun2socks)", true, nil)
 	a.SetTunMenu(item)
 
-	a.tunStartFailed(errors.New("tun: create device: boom"))
+	a.tunStartFailed(fmt.Errorf("%w: boom", tun.ErrCreateDevice))
 	require.False(t, item.IsChecked(), "失败后菜单必须回到未勾选")
 
 	// 主动停止（context.Canceled）：同样回滚勾选，但不打扰用户（消息为空）。
@@ -255,7 +259,7 @@ func TestTunStartFailureTextIsEmptyForUserCancelledStarts(t *testing.T) {
 	if msg := friendlyTunError(context.Canceled); msg != "" {
 		t.Fatalf("a cancelled start must not produce a message, got %q", msg)
 	}
-	msg := friendlyTunError(errors.New("tun: create device: boom"))
+	msg := friendlyTunError(fmt.Errorf("%w: boom", tun.ErrCreateDevice))
 	if !strings.Contains(msg, "Tun2socks 启动失败") {
 		t.Fatalf("a real failure must produce a message, got %q", msg)
 	}

@@ -79,7 +79,6 @@ func (h *udpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 		var err error
 		conn, remote, err = h.dial.dialTarget(ctx, "udp", target)
 		if err != nil {
-			log.Error("[UDP] dial target failed", "target", target, "err", err)
 			sendRST(s2c)
 			return streamResult{Err: err}
 		}
@@ -255,14 +254,6 @@ func (s *udpSession) installUpstream(conn net.Conn, remote string, route dnsRout
 		s.startUpstreamReader(conn)
 	}
 	return old
-}
-
-// remoteAddr 在锁下取当前连接的远端地址，供读取 goroutine 记日志使用
-// （installUpstream 会在重绑时改写它）。
-func (s *udpSession) remoteAddr() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.remote
 }
 
 // closeUpstream 关闭并摘除当前出站连接及其路由。路由与连接一起清空，因此
@@ -531,7 +522,8 @@ func (s *udpSession) targetReadError(err error) error {
 		return io.EOF
 	default:
 	}
-	log.Error("[UDP] read from target failed", "target", s.remoteAddr(), "err", err)
+	// 真实故障的原样返回给 run，由 serveSession 的唯一结果日志记录；
+	// 这里不再先打一条 Error，否则同一次失败会出现两条日志。
 	return err
 }
 

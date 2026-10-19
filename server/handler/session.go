@@ -402,7 +402,9 @@ func (d *dialer) dialVia(ctx context.Context, network, target, name string, viaN
 		if name != "" {
 			attrs = append(attrs, "name", name)
 		}
-		log.Info("[HANDLE] dialing via next proxy", attrs...)
+		// 下一级代理是流级别的路径细节：入口已有 `[SERVER] proxy`，结果日志
+		// 会带 upstream（即代理地址），这里只保留 Debug 供排查。
+		log.Debug("[HANDLE] dialing via next proxy", attrs...)
 		conn, err := d.nextProxy.DialContext(ctx, network, target)
 		if err != nil {
 			return nil, "", err

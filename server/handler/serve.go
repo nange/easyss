@@ -195,6 +195,8 @@ const udpBatchWindowMS = 1
 // WriteHeader 开始的所有事情都发生在这里：响应已无法再变成回退 HTML 页面，
 // 因此此后出现的失败表现为流级别的 RST 而不是 HTTP 错误。
 func (h *ProxyHandler) serveSession(w http.ResponseWriter, r *http.Request, res handshakeResult) {
+	// 每条流的入口日志只此一条；退出只有 logHandlerResult 一条结果日志。
+	// handler 内部不再打印拨号/连接/失败步骤，避免一条流刷出多条 Info。
 	log.Info("[SERVER] proxy", "target", res.target, "client", r.RemoteAddr)
 
 	// 在提交响应之前预先创建并校验会话的 reader/writer。

@@ -159,9 +159,9 @@ func spawnTunHelper(ev tunHelperElevator, httpPort int, fdSocketPath, logFile, l
 				detail = strings.TrimSpace(elevOut.String())
 			}
 			if detail != "" {
-				return nil, nil, fmt.Errorf("%s exited before tun helper started: %v: %s", ev.label, err, detail)
+				return nil, nil, fmt.Errorf("%w: %s: %v: %s", errTunHelperStartup, ev.label, err, detail)
 			}
-			return nil, nil, fmt.Errorf("%s exited before tun helper started: %w", ev.label, err)
+			return nil, nil, fmt.Errorf("%w: %s: %w", errTunHelperStartup, ev.label, err)
 		case <-deadline.C:
 			// 超时：用户可能取消了认证对话框，或 helper 启动失败。
 			// 杀掉提权器，使迟到的授权无法针对即将被移除的 socket

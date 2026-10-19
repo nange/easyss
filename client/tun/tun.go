@@ -2,6 +2,7 @@ package tun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -23,6 +24,10 @@ const (
 	tunTCPSendBufferSize    = "1MB"
 	tunTCPReceiveBufferSize = "256KB"
 )
+
+// ErrCreateDevice 标记平台创建脚本失败（设备/地址/路由未配置完成）。
+// 托盘据此给出"已回滚、系统流量未被接管"的专用提示，而不是匹配错误文本。
+var ErrCreateDevice = errors.New("tun: create device")
 
 // hooks 是测试用来模拟 Start() 失败路径的替换点，无需 TUN 设备、管理员权限
 // 或正在运行的 tun2socks engine：平台脚本和 DNS 设置只能以 root 身份真实运行，
@@ -463,7 +468,7 @@ func (m *Manager) Start() (err error) {
 		m.mu.Unlock()
 		if err := createTunDevFn(m); err != nil {
 			createFailed = true
-			return fmt.Errorf("tun: create device: %w", err)
+			return fmt.Errorf("%w: %w", ErrCreateDevice, err)
 		}
 	}
 

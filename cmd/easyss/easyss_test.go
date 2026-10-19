@@ -744,7 +744,14 @@ func TestV3Integration_Router(t *testing.T) {
 
 // TestV3Integration_ConfigDefaults 测试配置默认值是否正确生效
 func TestV3Integration_ConfigDefaults(t *testing.T) {
-	cfg := clientconfig.DefaultConfig()
+	// 走生产加载简化配置的同一条路径：BuildSimpleConfig 负责把 0 值归一化
+	// 成默认端口、规则与超时，而不是依赖一个只给测试用的构造器。
+	cfg, err := clientconfig.BuildSimpleConfig(&sharedconfig.SimpleConfig{
+		Server:    "example.com",
+		Password:  "secret",
+		LocalPort: sharedconfig.DefaultSocksPort,
+	})
+	require.NoError(t, err)
 
 	assert.Equal(t, 3, cfg.ConfigVersion)
 	assert.Equal(t, 4080, cfg.Local.SocksPort)
@@ -758,9 +765,9 @@ func TestV3Integration_ConfigDefaults(t *testing.T) {
 	clone := cfg.Clone()
 	assert.Equal(t, cfg.Local.SocksPort, clone.Local.SocksPort)
 
-	// 未配置任何服务器时 DefaultServer 返回 nil
-	assert.Nil(t, cfg.DefaultServer())
-	assert.Equal(t, "", cfg.ServerURL())
+	// 未配置任何服务器时 DefaultServer 返回 nil（零值配置的契约）。
+	assert.Nil(t, (&clientconfig.ClientConfig{}).DefaultServer())
+	assert.Equal(t, "", (&clientconfig.ClientConfig{}).ServerURL())
 }
 
 // TestReserveSocks5PortHoldsTCPAndUDP 固化了端口预留的契约：预留保持 TCP

@@ -25,7 +25,9 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-var errSocksRequired = errors.New("http proxy requires socks_port to be enabled")
+// ErrSocksRequired 表示配置启用了 HTTP 代理却没有启用 SOCKS5 入口
+// （socks_port <= 0）。托盘的中文提示用 errors.Is 识别它；不要再匹配文本。
+var ErrSocksRequired = errors.New("http proxy requires socks_port to be enabled")
 
 // ErrServerDomainUnresolved 标记"启动时服务端域名尚未解析成功"这一非致命启动
 // 警告：进程继续运行并在后台重试解析。调用方（托盘/headless）用 errors.Is
@@ -184,7 +186,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		if cfg.Local.SocksPort <= 0 {
 			closeListeners()
 			_ = cli.Close()
-			return nil, errSocksRequired
+			return nil, ErrSocksRequired
 		}
 		httpAddr = "127.0.0.1:" + strconv.Itoa(cfg.Local.HTTPPort)
 		if cfg.Local.BindAll {

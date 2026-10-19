@@ -22,9 +22,13 @@ const (
 	probeKDFInfo     = "easyss-v3-probe"
 )
 
+// ErrPasswordEmpty 表示配置里没有可用的 master password。调用方（例如
+// 托盘的中文错误提示）可以用 errors.Is 识别它，而不必匹配错误文本。
+var ErrPasswordEmpty = errors.New("crypto: password is empty")
+
 func DeriveMasterKey(password string) ([]byte, error) {
 	if password == "" {
-		return nil, errors.New("crypto: password is empty")
+		return nil, ErrPasswordEmpty
 	}
 	key := pbkdf2.Key([]byte(password), []byte(masterKDFInfo), masterKDFIterations, keySize, sha256.New)
 	if len(key) != keySize {
