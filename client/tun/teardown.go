@@ -44,6 +44,16 @@ func (o Owner) String() string {
 	}
 }
 
+// ownerForConfig 是 Owner 的唯一推导点：fd 路径（设备由提权 helper 创建后把
+// fd 传回）归 helper 回收，其余（直连路径，含 Windows）归本进程。Start 认领
+// 会话时用它定稿；平台矩阵测试也直接调它，而不是在测试里再抄一份规则。
+func ownerForConfig(cfg Config) Owner {
+	if cfg.DeviceFD > 0 {
+		return OwnerHelper
+	}
+	return OwnerLocal
+}
+
 // TeardownReason 说明"为什么拆"。它不决定做哪些步骤（那是 Owner 的事），
 // 只决定日志与错误的呈现方式：用户主动关闭与启动失败的可操作性完全不同。
 type TeardownReason int

@@ -26,8 +26,9 @@ type platformCase struct {
 	owner Owner
 	// runsCloseScript 表示拆除时本进程要不要跑平台关闭脚本。
 	runsCloseScript bool
-	// managesDNS 表示这个平台的脚本自己配适配器 DNS（windows），因此系统 DNS
-	// 从不被本进程改动，拆除时也就没有"恢复"这一步。
+	// managesDNS 表示这个平台由 client/tun 管理系统 DNS（linux/darwin）；
+	// windows 由脚本自己用 netsh 配适配器 DNS，因此系统 DNS 从不被本进程改动，
+	// 拆除时也就没有"恢复"这一步。
 	managesDNS bool
 }
 
@@ -64,17 +65,11 @@ func platformMatrix() []platformCase {
 	}
 }
 
-// ownerFor 是生产代码里决定所有权的那条规则的测试镜像：DeviceFD>0 即 fd 路径
-// （只有提权 helper 会传 fd）。Start 里的实现必须与它一致。
-func ownerFor(cfg Config) Owner {
-	if cfg.DeviceFD > 0 {
-		return OwnerHelper
-	}
-	return OwnerLocal
-}
-
 // TestPlatformMatrixOwnership 固定矩阵的所有权推导：每个平台的每种启用方式都
 // 必须落到预期的 Owner 上，且拆除步骤与它一致。
+//
+// 它直接调用生产代码的推导点（ownerForConfig），而不是在测试里抄一份规则：
+// 后者只能证明两份规则此刻恰好相同，证明不了 Start 真的按它执行。
 //
 // 它是 "fdMode / SkipRouteCleanup / helperSignalled 三套隐式条件" 的替代验证：
 // 过去这些字段各自独立赋值，漏一个就会让非 root 的主进程去 pkexec 跑关闭脚本
@@ -87,7 +82,7 @@ func TestPlatformMatrixOwnership(t *testing.T) {
 				cfg.DeviceFD = 7
 			}
 
-			require.Equal(t, tc.owner, ownerFor(cfg),
+			require.Equal(t, tc.owner, ownerForConfig(cfg),
 				"%s: fd 路径必须由 helper 拥有，其余归本进程", tc.name)
 		})
 	}
@@ -158,12 +153,13 @@ func TestPlatformMatrixTeardownSteps(t *testing.T) {
 
 			// DNS 恢复由三个条件共同决定：这次会话真的改过系统 DNS、所有权在
 			// 本进程、且本平台确实由 client/tun 管系统 DNS（windows 的脚本自己
-			// 用 netsh 配适配器 DNS，manageSystemDNS() 恒为 false）。
+			// 用 netsh 配适配器 DNS）。
 			//
-			// manageSystemDNS() 问的是**运行平台**，因此这条断言只对宿主平台
-			// 有意义：矩阵里其他平台的行描述的语义在当前构建上不可达。
+			// teardown 问的是**运行平台**（它在一个真实进程里只有一个平台），
+			// 因此这条断言只对宿主平台的行有意义；矩阵里其余平台的行由
+			// TestWindowsNeverManagesSystemDNS 与 ownership/close-script 断言覆盖。
 			wantDNS := 0
-			if tc.managesDNS && tc.owner == OwnerLocal && manageSystemDNS() {
+			if tc.managesDNS && tc.owner == OwnerLocal && managesSystemDNSFor(Platform()) {
 				wantDNS = 1
 			}
 			if tc.platform == Platform() {
@@ -193,18 +189,15 @@ func TestPlatformMatrixCoversEverySupportedOS(t *testing.T) {
 
 // TestWindowsNeverManagesSystemDNS 固定矩阵里 windows 那一行的前提：windows
 // 的创建/关闭脚本自己用 netsh 配适配器 DNS，client/tun 从不改动系统 DNS，
-// 因此拆除时不会有"恢复"这一步。两个独立事实一起说明这一点，缺一个，矩阵里
-// managesDNS:false 就只是一句注释。
+// 因此拆除时不会有"恢复"这一步。
+//
+// 判据本身接受显式平台（managesSystemDNSFor），因此这条断言在任意宿主机上
+// 都真正执行，而不是只在本机恰好是 windows 时才有意义。
 func TestWindowsNeverManagesSystemDNS(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		require.False(t, manageSystemDNS(),
-			"windows 由脚本配置适配器 DNS，client/tun 不得再动系统 DNS")
-		return
-	}
-
-	// 非 windows 主机上无法直接问 manageSystemDNS()（它读的是运行平台），
-	// 因此改为断言"这条豁免只挂在 darwin/linux 上"这一事实本身：
-	// manageSystemDNS() 的定义必须只认这两个平台。
-	require.False(t, ScriptPlatform("windows") == PlatformLinux || ScriptPlatform("windows") == PlatformDarwin,
-		"sanity: windows 既不是 linux 也不是 darwin, 因此 manageSystemDNS() 对它恒为 false")
+	require.False(t, managesSystemDNSFor(PlatformWindows),
+		"windows 由脚本配置适配器 DNS，client/tun 不得再动系统 DNS")
+	require.True(t, managesSystemDNSFor(PlatformLinux), "linux 由 client/tun 管理系统 DNS")
+	require.True(t, managesSystemDNSFor(PlatformDarwin), "darwin 由 client/tun 管理系统 DNS")
+	require.Equal(t, managesSystemDNSFor(Platform()), manageSystemDNS(),
+		"manageSystemDNS 必须只是本机平台的那条判据，不能有第二份规则")
 }

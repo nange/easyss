@@ -62,8 +62,8 @@ func TestCreateScriptArgsLayoutPerPlatform(t *testing.T) {
 
 // TestCloseScriptArgsLayoutPerPlatform 固定关闭脚本的位次：windows 只取三个
 // 参数且第 3 位是裸 IPv6 地址（netsh delete address 拒绝带前缀的地址），
-// linux/darwin 是六个按统一顺序补齐的网关（linux 脚本只读设备名，但它带
-// set -u，实参个数必须对得上）。
+// linux/darwin 是六个按统一顺序补齐的网关（linux 脚本只读设备名，其余实参
+// 仅为与 darwin 共用同一套布局）。
 func TestCloseScriptArgsLayoutPerPlatform(t *testing.T) {
 	args := NewScriptArgs(scriptFixture(), "8.8.8.8", 1500)
 

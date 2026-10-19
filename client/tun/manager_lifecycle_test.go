@@ -206,3 +206,38 @@ func TestManagerStartRunsExactlyOnce(t *testing.T) {
 		t.Fatal("the second Start on the same manager must be rejected")
 	}
 }
+
+// TestManagerEngineStartFailureReleasesTheDevice 固定"engine 启动失败必须自己
+// 释放设备"。
+//
+// tun2socks 的 engine.Start 先 parseDevice（打开 TUN 设备 / 包装 helper 传来的
+// fd）再 core.CreateStack，而它的失败路径不会清理已打开的设备（tun2socks
+// #550/#552）。此时 engineUp 尚未置位，teardown 不会替我们调 engine.Stop，
+// 因此 Start 必须在返回错误前显式释放：否则设备（fd 路径上是 helper 传来的
+// fd）会泄漏到下一次启用，Linux 上设备还会随这个 fd 一直存活。
+func TestManagerEngineStartFailureReleasesTheDevice(t *testing.T) {
+	stubManagerHooks(t)
+
+	errStart := errors.New("create stack: permission denied")
+	var reasons []string
+	engineStartFn = func() error { return errStart }
+	engineStopFn = func(reason string) { reasons = append(reasons, reason) }
+
+	m := newTestManager()
+	err := m.Start()
+	if !errors.Is(err, errStart) {
+		t.Fatalf("Start = %v, want the engine error", err)
+	}
+	if len(reasons) != 1 {
+		t.Fatalf("engine stopped %d times, want exactly 1: the device opened before CreateStack failed must be released", len(reasons))
+	}
+	if m.IsRunning() {
+		t.Fatal("manager reports running after a failed engine start")
+	}
+
+	// 清理已在 Start 的失败路径里做过，之后的 Stop 不得再停一次。
+	m.Stop()
+	if len(reasons) != 1 {
+		t.Fatalf("engine stopped %d times after Stop, want still 1", len(reasons))
+	}
+}

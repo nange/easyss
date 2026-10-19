@@ -91,7 +91,8 @@ func (a ScriptArgs) CreateFor(platform ScriptPlatform) []string {
 
 // CloseFor 按给定平台的布局渲染关闭脚本的位置参数：
 //   - linux/darwin: device, tun gw, local gw, tun gw ipv6, server ipv6, local gw ipv6
-//     （linux 的脚本只读设备名，其余按统一顺序补齐——脚本带 set -u）
+//     （linux 的脚本只读设备名，其余实参无害；补齐它们是为了让直连路径、
+//     helper 与 darwin 共用同一套布局，而不是各自手写不同长度的切片）
 //   - windows:      device, tun gw, 裸 tun ipv6（netsh delete address 要不带前缀的地址）
 func (a ScriptArgs) CloseFor(platform ScriptPlatform) []string {
 	d := a.Dev
