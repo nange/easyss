@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"unsafe"
 
 	"github.com/nange/easyss/v3/client/proxy"

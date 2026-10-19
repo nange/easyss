@@ -1,4 +1,4 @@
-//go:build !headless
+//go:build (darwin || linux) && !headless
 
 package main
 
