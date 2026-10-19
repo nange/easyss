@@ -1298,3 +1298,121 @@ func TestPushFrameDoesNotRetainCallerPayload(t *testing.T) {
 		}
 	}
 }
+
+// TestCloseFlushesEveryAllocatedSequence 是 Close 排空逻辑的回归测试，
+// 对应 CI 上 TestBatchShaperConcurrentFlushNoNonceDesync 在 Windows + race
+// 偶发 "no records decrypted"（round 6）的那次失败。
+//
+// 缺陷在 Close：它先冲刷自己的缓冲区，然后直接置 writeClosed。但定时器可能
+// 在 closing 置位之前就换出了缓冲区并分配好 seq，此刻正等 writeCond 轮到自己。
+// writeClosed 一置位，那条记录就走进 writeRecordInOrder 的丢弃分支被静默扔掉，
+// 而 Close 自己的 flush 往往因为缓冲区已被换走而拿到 nil、不分配 seq——于是
+// 整条记录流可以是空的。
+//
+// 修法是 Close 在置 writeClosed 之前把 writeNext 排空到 writeSeq，且排空与
+// 置位在同一个 writeMu 临界区内完成（见 batch.go 的 Close）。
+//
+// 注意这是一条压测而非确定性复现：触发条件是"某条 flush 在 bs.mu 释放之后、
+// writeMu 之前被抢占"，在本机（多核、快调度）极难命中，CI 的 Windows 双核 +
+// race 才稳定踩到。因此它的价值是"在会命中的环境里失败"，本地通过并不能
+// 证明旧代码正确——真正的证据是上面那段时序分析。
+func TestCloseFlushesEveryAllocatedSequence(t *testing.T) {
+	const rounds = 50
+	const goroutines = 4
+	const pushesPerGoroutine = 40
+	const payloadSize = 64
+
+	masterKey, err := easycrypto.DeriveMasterKey("close-drains-allocated-seqs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, err := easycrypto.NewStreamKeys(masterKey, []byte("1234567890123456"), "/v3/tcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	totalPushes := goroutines * pushesPerGoroutine
+
+	for round := range rounds {
+		t.Run(fmt.Sprintf("round_%d", round), func(t *testing.T) {
+			out := &lockedBuffer{}
+			bs := New(newTestWriter(t, sk, out), Config{
+				// 1ms 窗口让定时器冲刷与 Close 频繁交错，正是缺陷的触发条件。
+				BatchWindowMS: 1,
+				Cover: CoverConfig{
+					BudgetRatio: 0.5,
+					IdleTimeout: 5,
+					MinSize:     64,
+					MaxSize:     512,
+					BudgetCap:   1 << 20,
+				},
+			})
+
+			var wg sync.WaitGroup
+			for g := range goroutines {
+				wg.Add(1)
+				go func(gid int) {
+					defer wg.Done()
+					for i := range pushesPerGoroutine {
+						seq := uint32(gid*pushesPerGoroutine + i)
+						payload := make([]byte, payloadSize)
+						binary.BigEndian.PutUint32(payload[:4], seq)
+						if err := bs.PushData(payload); err != nil {
+							t.Errorf("PushData failed (goroutine %d, push %d): %v", gid, i, err)
+							return
+						}
+						// 并发 flush：让多条记录同时竞争 writeMu 顺序，
+						// 从而放大 Close 与它们交错的窗口。
+						if i%8 == 0 {
+							if err := bs.Flush(); err != nil {
+								t.Errorf("Flush failed (goroutine %d): %v", gid, err)
+								return
+							}
+						}
+					}
+				}(g)
+			}
+			wg.Wait()
+
+			if err := bs.Close(); err != nil {
+				t.Fatalf("Close failed: %v", err)
+			}
+
+			// 读回全部记录。任何"已换出但被丢弃"的记录都会表现为缺失的 seq。
+			rr := newTestReader(t, sk, bytes.NewReader(out.Snapshot()))
+			seenSeqs := make(map[uint32]bool, totalPushes)
+			recordCount := 0
+			for {
+				plaintext, err := rr.ReadRecord()
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					t.Fatalf("record %d decrypt failed: %v", recordCount, err)
+				}
+				recordCount++
+
+				remaining := plaintext
+				for len(remaining) > 0 {
+					frame, n, err := protocol.DecodeFrame(remaining)
+					if err != nil {
+						t.Fatalf("decode frame failed in record %d", recordCount-1)
+					}
+					remaining = remaining[n:]
+					if frame.Type == protocol.FrameDATA && len(frame.Payload) >= 4 {
+						seenSeqs[binary.BigEndian.Uint32(frame.Payload[:4])] = true
+					}
+				}
+			}
+
+			if recordCount == 0 {
+				t.Fatalf("no records decrypted in round %d: Close dropped an allocated sequence", round)
+			}
+			for i := range totalPushes {
+				if !seenSeqs[uint32(i)] {
+					t.Fatalf("sequence %d missing in round %d: a record was dropped before writeClosed", i, round)
+				}
+			}
+		})
+	}
+}

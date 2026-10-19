@@ -270,11 +270,36 @@ func (bs *batchShaper) Close() error {
 
 	err := bs.flush(true)
 
+	// 先把已分配的序号写完，再关闭写入。
+	//
+	// 这里必须排空，而不是直接置 writeClosed：定时器可能在 bs.closing 置位
+	// 之前就已经换出了缓冲区并分配好 seq，正在 writeCond 上等轮到它。若此时
+	// 直接置 writeClosed，那条记录会走进 writeRecordInOrder 的丢弃分支被静默
+	// 扔掉——而它可能正是这次会话里唯一携带数据的记录（Close 自己的 flush
+	// 常常因为缓冲区已被定时器换走而拿到 nil，不分配 seq）。表现就是"整条
+	// 记录流为空"：TestBatchShaperConcurrentFlushNoNonceDesync 在 Windows
+	// 双核 + race 的调度下踩到过（round 6，no records decrypted）。
+	//
+	// 置位之后到达的 flush 才是真正的"晚到"（会话已经结束），丢弃它们正是
+	// writeClosed 的本意，因此排空必须排在 Store 之前。
+	//
+	// Wait 由 sync.Cond 保证"原子地释放 writeMu、唤醒后重新获取"，因此等待
+	// 期间其他 flush 仍能推进 writeNext，不会死锁；每次推进都会 Broadcast，
+	// 最后一次唤醒时已没有待写记录。
+	//
+	// 条件取 writeNext < writeSeq 而不是 !=：生产路径上 writeNext 只由
+	// writeRecordInOrder 推进，而每次写出之前都先分配过 seq，因此两者只会相等
+	// 或后者更大。但 order_test.go 直接调用 writeRecordInOrder 来验证写出顺序，
+	// 那里不分配 seq，writeNext 会大于 writeSeq——用 != 会让那条测试的
+	// defer Close 永远等下去（实测会挂到 go test 超时）。
+	bs.writeMu.Lock()
+	for bs.writeNext < bs.writeSeq {
+		bs.writeCond.Wait()
+	}
 	// 与 writeMu 串行化：此后任何获取 writeMu 的 flushAndWrite 都会看到
 	// writeClosed 并丢弃其数据，防止向已结束的 HTTP handler 写入。
-	// 此前已获取 writeMu 的冲刷会正常完成；我们在此阻塞直到它们结束。
-	bs.writeMu.Lock()
 	bs.writeClosed.Store(true)
+	bs.writeCond.Broadcast()
 	bs.writeMu.Unlock()
 
 	bs.mu.Lock()
