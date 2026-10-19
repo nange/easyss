@@ -98,10 +98,21 @@ type Manager struct {
 	// cmd/easyss.startTunEngine），而 Stop 可能来自托盘菜单或退出路径，
 	// 两者并发执行：没有这把锁时，Stop 可能读到已发布但尚未创建的 done，
 	// 从而在 nil channel 上永久阻塞（并因托盘持有 tunHelperMu 而卡住菜单）。
+	//
+	// 会话状态在 New 里就建好（而不是在 Start 里）：Start 由调用方派发的
+	// goroutine 执行，从 tunUp 返回到那个 goroutine 真正进入 Start 之间有一个
+	// 调度窗口，托盘的下一次点击可以在窗口内到达 Stop。若 ctx/cancel 只在
+	// Start 里创建，Stop 在那个窗口里只会看到"从未启动"并直接返回，而 Start
+	// 随后照常把引擎、路由与系统 DNS 全部建立起来——session 那边却已经把
+	// manager 收走并发布了 EnableTun2socks=false：界面说关了，流量还在隧道里，
+	// 而且再没有人持有这个 manager 去停它（下一次点击会新建一套，engine 的包级
+	// 默认设备被覆盖，前一套再也停不掉）。因此停止意图必须有一个在 New 时就
+	// 存在的落点。
 	mu      sync.Mutex
-	running bool
-	ctx     context.Context    // 用于取消进行中的 Start()
-	cancel  context.CancelFunc // 保存下来，供 Stop() 取消 Start() goroutine
+	started bool               // Start 已进入（决定 Stop 是否需要等 done）
+	running bool               // 本次会话已成功建立（Stop 后的拆除以它为准）
+	ctx     context.Context    // 用于取消进行中的 Start()；New 时创建
+	cancel  context.CancelFunc // 供 Stop() 表达"停止"意图；New 时创建
 	done    chan struct{}      // Start() 结束（成功或失败）时关闭
 
 	// stopMu 把整个 Stop 串行化：并发的第二个 Stop 必须等第一次拆除完成再返回，
@@ -172,8 +183,16 @@ func New(cfg Config) *Manager {
 		cfg.TunGWV6 = "fe80::30ff:1eff:feff:aaff"
 	}
 
+	// 会话状态在这里建好：Stop 可能在 Start 所在 goroutine 被调度之前就到达
+	// （见 mu 字段的说明）。done 保持打开，直到 Start 真正跑完才关闭。
+	startCtx, cancel := context.WithCancel(context.Background())
+	startDone := make(chan struct{})
+
 	return &Manager{
-		cfg: cfg,
+		cfg:    cfg,
+		ctx:    startCtx,
+		cancel: cancel,
+		done:   startDone,
 		dev: DeviceConfig{
 			Device:         cfg.Device,
 			TunIP:          cfg.TunIP,
@@ -265,18 +284,21 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("tun: unsupported os %s", runtime.GOOS)
 	}
 
-	// 先建 done 再发布 cancel：Stop 是按"有 cancel 就等 done"的顺序工作的，
-	// 反过来发布会让 Stop 在两步之间读到非 nil 的 cancel 与 nil 的 done，
-	// 从而在 nil channel 上永久阻塞（见 mu 字段的说明）。
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-
+	// 会话状态由 New 建立（见 mu 字段），这里只认领它：Start 只能跑一次，
+	// 且必须在做任何系统改动之前就让 Stop 能看见"启动已进入"——否则 Stop
+	// 会等到一个永远不会关闭的 done，或者（更糟）在 Start 之前返回而让这次
+	// 启动照常成功。
 	m.mu.Lock()
-	m.ctx, m.cancel, m.done = ctx, cancel, done
+	if m.started {
+		m.mu.Unlock()
+		return fmt.Errorf("tun: manager already started")
+	}
+	m.started = true
+	ctx, done := m.ctx, m.done
 	m.mu.Unlock()
 	defer close(done)
 
-	// 快速路径：还没开始就被取消了。
+	// 快速路径：还没开始就被取消了（Stop 先到，或调用方在 stop 之后再 Start）。
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -405,19 +427,25 @@ func (m *Manager) Start() error {
 // Stop 停止 tun2socks 并撤销它对系统做的改动。它幂等：对从未 Start 过、
 // 或已经停止的实例调用都是安全的空操作；并发的 Stop 会串行执行，第二个调用者
 // 等第一次拆除完成后再返回。
+//
+// "从未 Start"与"Start 还没被调度到"是两件不同的事，而调用方（托盘）分不出它们：
+// session.tunUp 先在锁内发布 manager、再派发 goroutine，随后用户的下一次点击
+// 可能落在那个 goroutine 进入 Start 之前。因此这里无条件落下停止意图（cancel），
+// 并且只在 Start 真的已经进入时才等 done——两者在 mu 下一起快照，不存在
+// "读到 cancel 却等一个永远不会关闭的 done"的窗口。
 func (m *Manager) Stop() {
 	m.stopMu.Lock()
 	defer m.stopMu.Unlock()
 
-	// 如果 Start() 仍在进行中，先取消它，
-	// 等它完成清理后再继续。cancel/done 在同一把锁下快照：Start 先建 done
-	// 再发布 cancel，因此这里绝不会在 nil channel 上等待。
 	m.mu.Lock()
-	cancel, done := m.cancel, m.done
+	if m.cancel != nil {
+		// 无论 Start 是否已进入：先到的停止意图必须能被后到的 Start 看见。
+		m.cancel()
+	}
+	started, done := m.started, m.done
 	m.mu.Unlock()
 
-	if cancel != nil && done != nil {
-		cancel()
+	if started {
 		log.Info("[TUN] Stop: waiting for Start goroutine to finish")
 		<-done
 		log.Info("[TUN] Stop: Start goroutine done")
