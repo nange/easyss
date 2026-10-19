@@ -491,7 +491,7 @@ func newTestHarness(t *testing.T) *testHarness {
 			BudgetRatio: clientCfg.Shaper.CoverBudgetRatio,
 		},
 	}
-	handler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, timeouts.StreamIdle)
+	handler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, timeouts)
 
 	// 启动 SOCKS5 代理
 	socksServer, err := proxy.NewSocks5Server(proxy.Socks5Options{
@@ -519,7 +519,7 @@ func newTestHarness(t *testing.T) *testHarness {
 	httpProxy, err := proxy.NewHTTPProxyServer(proxy.HTTPProxyOptions{
 		ListenAddr: h.httpAddr,
 		SocksAddr:  h.socksAddr,
-		Timeout:    timeouts.Base,
+		Timeouts:   timeouts,
 		Handler:    handler,
 		Router:     cli.Router(),
 		Method:     method,

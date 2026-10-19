@@ -206,24 +206,11 @@ const (
 	DefaultTunDeviceNameDarwin = "utun9"
 )
 
-// DefaultStreamIdleTimeout 是构造器在未提供显式值（<= 0）时使用的回退 TCP 流空闲
-// 超时。它通过 config.StreamIdleTimeout 从默认基础超时派生（8 x DefaultTimeout
-// = 240s），使 timeouts.go 中的公式保持为唯一事实来源：正常路径从用户配置的
-// 基础超时派生其超时，从不读取此变量。
-var DefaultStreamIdleTimeout = StreamIdleTimeout(time.Duration(DefaultTimeout) * time.Second)
-
-// DefaultUDPIdleTimeout 是构造器在未提供显式值（<= 0）时使用的回退 UDP 会话
-// 空闲/读取超时。通过 config.UDPIdleTimeout 派生（2 x DefaultTimeout = 60s），
-// 使其始终与正常路径从用户配置的基础超时派生的值一致。
-var DefaultUDPIdleTimeout = UDPIdleTimeout(time.Duration(DefaultTimeout) * time.Second)
-
-// DefaultDialTimeout 是构造器在未提供显式值（<= 0）时使用的回退出站拨号超时。
-// 通过 config.DialTimeout 派生（DefaultTimeout/3 = 10s，限制在 [3s, 15s]），
-// 使其始终与正常路径从用户配置的基础超时派生的值一致。
-var DefaultDialTimeout = DialTimeout(time.Duration(DefaultTimeout) * time.Second)
-
-// DefaultConnLifetime 是传输层构造器在未提供显式值（<= 0）时使用的回退连接生命周期。
-// 通过 config.ConnLifetime 从默认基础超时派生（12 x DefaultTimeout = 360s），使
-// timeouts.go 中的公式保持为唯一事实来源：正常路径（client.New）始终从用户配置的
-// 基础超时派生其生命周期，从不读取此变量。
-var DefaultConnLifetime = ConnLifetime(time.Duration(DefaultTimeout) * time.Second)
+// 各派生超时的默认值不再单独导出：它们全部是"在默认基础超时上求一次公式"的结果，
+// 唯一的出口是 Timeouts.Normalize（见 timeouts.go）。此前这里有四个
+// DefaultXxxTimeout 变量，每个构造器又各自判断一次零值，于是"默认值是什么"有了
+// 多个事实来源；现在构造器只接收归一化后的 Timeouts，默认值只在一个地方求得。
+//
+// 测试仍然可以按需自建期望值，写法与校验目标一致：
+//
+//	want := sharedconfig.StreamIdleTimeout(time.Duration(sharedconfig.DefaultTimeout) * time.Second)

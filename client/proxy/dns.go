@@ -12,6 +12,7 @@ import (
 	"github.com/nange/easyss/v3/client/config"
 	easydns "github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/router"
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/util"
@@ -51,15 +52,11 @@ type dnsOptions struct {
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 	// ServerDomain 是代理服务器自身的主机名（字面 IP 时为 ""）。
 	ServerDomain string
-	// DialTimeout 是一次直连解析（并发竞争多个上游）的共享预算。
-	DialTimeout time.Duration
-	// RespTimeout 限制代理 DNS 交换在没有任何服务器响应的情况下可保持多久
-	// （读空闲超时）；0 表示禁用该机制。它存在的原因是：当客户端不断重试查询
-	// （每次 Send 都会刷新 lastSeen）而上游 DNS 服务器一直沉默时，默认的空闲
-	// 回收器永远不会触发。TCP DNS 的同步等待也用它。
-	RespTimeout time.Duration
-	// QueryIdle 是 TCP DNS 拦截逐条查询之间的读空闲超时；0 使用默认值。
-	QueryIdle time.Duration
+	// Timeouts 是构造时归一化过的派生超时（见 config.Timeouts.Normalize）：
+	// Dial 是一次直连解析（并发竞争多个上游）的共享预算，DNSResp 是代理 DNS
+	// 交换的读空闲超时，UDPIdle 兼作 TCP DNS 逐条查询之间的读空闲超时。
+	// 拦截器不再为其中任何一项维护自己的默认值。
+	Timeouts sharedconfig.Timeouts
 }
 
 // dnsInterceptor 承担本地代理的 DNS 拦截：它把一条查询分流到 Block / 缓存 /
@@ -79,23 +76,17 @@ type dnsInterceptor struct {
 	queryIdle    time.Duration
 }
 
-// defaultTCPDNSIdleTimeout 是未提供 QueryIdle 时逐条 TCP DNS 查询之间的间隔。
-const defaultTCPDNSIdleTimeout = 30 * time.Second
-
 func newDNSInterceptor(opts dnsOptions) *dnsInterceptor {
-	queryIdle := opts.QueryIdle
-	if queryIdle <= 0 {
-		queryIdle = defaultTCPDNSIdleTimeout
-	}
+	timeouts := opts.Timeouts.Normalize()
 	return &dnsInterceptor{
 		router:       opts.Router,
 		cache:        opts.Cache,
 		pool:         opts.Pool,
 		dial:         opts.Dial,
 		serverDomain: opts.ServerDomain,
-		dialTimeout:  opts.DialTimeout,
-		respTimeout:  opts.RespTimeout,
-		queryIdle:    queryIdle,
+		dialTimeout:  timeouts.Dial,
+		respTimeout:  timeouts.DNSResp,
+		queryIdle:    timeouts.UDPIdle,
 	}
 }
 

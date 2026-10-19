@@ -65,10 +65,13 @@ type Config struct {
 	MaxSlotCount      int
 	StreamThreshold   int
 	PrioritySlotRatio float64
-	ConnLifetime      time.Duration // 连接轮换前的最大存活时长（0：回退 DefaultConnLifetime）
-	ConnMaxBytes      int64         // 轮换前连接在任一方向承载的最大字节数（0：使用默认值）
-	Timeout           time.Duration
-	DialContext       func(ctx context.Context, network, addr string) (net.Conn, error)
+	// Timeouts 是调用方已派生的超时集合：Base 用于拨号预算与 http.Transport 的
+	// 空闲/握手/HTTP2 ping 派生，Dial 是单次拨号上限，ConnLifetime 是连接轮换
+	// 前的最大存活时长。零值由 config.Timeouts.Normalize 填充，本类型不再各自
+	// 维护第二份默认值——否则"连接生命周期"会有两个事实来源。
+	Timeouts     sharedconfig.Timeouts
+	ConnMaxBytes int64 // 轮换前连接在任一方向承载的最大字节数（0：使用默认值）
+	DialContext  func(ctx context.Context, network, addr string) (net.Conn, error)
 	// ProbeToken 是服务端 /v3/probe 端点的能力令牌（由主密钥派生）。
 	// 为空则禁用主动探测，只保留被动式降级检测。
 	ProbeToken string
@@ -102,20 +105,17 @@ func New(cfg Config) (transport.Transport, error) {
 	}
 	prioritySlots := min(max(int(float64(maxSlots)*ratio), 1), maxSlots)
 
-	timeout := cfg.Timeout
-	if timeout <= 0 {
-		timeout = time.Duration(sharedconfig.DefaultTimeout) * time.Second
-	}
+	// 超时集合的零值填充只在 config.Timeouts.Normalize 一处发生（base/3 的拨号、
+	// 8 倍的空闲、12 倍的连接生命周期都由它派生），本类型不再维护任何默认值。
+	timeouts := cfg.Timeouts.Normalize()
+	timeout := timeouts.Base
 
 	dialCtx := cfg.DialContext
 	if dialCtx == nil {
 		dialCtx = defaultDialContext
 	}
 
-	connLifetime := cfg.ConnLifetime
-	if connLifetime <= 0 {
-		connLifetime = sharedconfig.DefaultConnLifetime
-	}
+	connLifetime := timeouts.ConnLifetime
 	connMaxBytes := cfg.ConnMaxBytes
 	if connMaxBytes <= 0 {
 		connMaxBytes = sharedconfig.DefaultConnMaxBytes

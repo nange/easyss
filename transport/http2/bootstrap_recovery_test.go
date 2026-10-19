@@ -416,7 +416,7 @@ func newRecoveryTransport(t *testing.T, serverURL, probeToken string) transport.
 		ServerURL:    serverURL,
 		TLSConfig:    &utls.Config{InsecureSkipVerify: true, NextProtos: sharedconfig.NextProtos},
 		MaxSlotCount: 1,
-		Timeout:      time.Second,
+		Timeouts:     sharedconfig.Timeouts{Base: time.Second},
 		ProbeToken:   probeToken,
 	})
 	if err != nil {
@@ -719,7 +719,7 @@ func TestHTTP2Transport_InvalidateConnReplacesPool(t *testing.T) {
 		ServerURL:    srv.URL,
 		TLSConfig:    &utls.Config{InsecureSkipVerify: true, NextProtos: sharedconfig.NextProtos},
 		MaxSlotCount: 1,
-		Timeout:      time.Second,
+		Timeouts:     sharedconfig.Timeouts{Base: time.Second},
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			c, err := (&net.Dialer{}).DialContext(ctx, network, addr)
 			if err != nil {

@@ -208,18 +208,13 @@ type Socks5Options struct {
 }
 
 func NewSocks5Server(opts Socks5Options) (*Socks5Server, error) {
-	dialTimeout := opts.Timeouts.Dial
-	if dialTimeout <= 0 {
-		dialTimeout = config.DefaultDialTimeout
-	}
-	udpIdleTimeout := opts.Timeouts.UDPIdle
-	if udpIdleTimeout <= 0 {
-		udpIdleTimeout = config.DefaultUDPIdleTimeout
-	}
-	streamIdleTimeout := opts.Timeouts.StreamIdle
-	if streamIdleTimeout <= 0 {
-		streamIdleTimeout = config.DefaultStreamIdleTimeout
-	}
+	// 零值填充只发生在这里（见 config.Timeouts.Normalize）：本类型与其下的
+	// 会话池、DNS 拦截器都只读归一化后的字段，不再各自判断零值。这正是
+	// "构造器里 17 处 if timeout <= 0" 收敛的入口。
+	timeouts := opts.Timeouts.Normalize()
+	dialTimeout := timeouts.Dial
+	udpIdleTimeout := timeouts.UDPIdle
+	streamIdleTimeout := timeouts.StreamIdle
 	directDialContext := opts.DirectDialContext
 	if directDialContext == nil {
 		directDialContext = defaultDirectDialContext
@@ -269,9 +264,7 @@ func NewSocks5Server(opts Socks5Options) (*Socks5Server, error) {
 		Cache:        dnsCache,
 		Pool:         s.udp,
 		ServerDomain: serverDomain,
-		DialTimeout:  dialTimeout,
-		RespTimeout:  opts.Timeouts.DNSResp,
-		QueryIdle:    udpIdleTimeout,
+		Timeouts:     timeouts,
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return s.directDialContext(ctx, network, addr)
 		},

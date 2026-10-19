@@ -259,7 +259,7 @@ func (c *stubConn) isClosed() bool {
 }
 
 func TestTCPHandler_CancelReadOnIdleTimeout(t *testing.T) {
-	h := newTCPHandler(150*time.Millisecond, 5*time.Second, nil)
+	h := newTCPHandler(sharedconfig.Timeouts{StreamIdle: 150 * time.Millisecond, Base: 5 * time.Second}, nil)
 	// 一个静默对端：stub 接受写入但从不产生数据，使用公网远端地址
 	// 以便通过拨号后的 SSRF 防护。
 	stub := newStubConn(&net.TCPAddr{IP: net.ParseIP("8.8.8.8"), Port: 53})

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nange/easyss/v3/config"
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util"
 	xproxy "golang.org/x/net/proxy"
@@ -52,8 +52,11 @@ func New(proxyURL string, enableUDP, allHost bool) (*NextProxy, error) {
 		url:       u,
 		enableUDP: enableUDP,
 		allHost:   allHost,
-		ips:       make(map[string]struct{}),
-		domains:   make(map[string]struct{}),
+		// 默认值同样只有一个出口：config.NewTimeouts(0) 就是在默认基础超时上
+		// 跑一遍派生公式。生产路径随后会用 SetDialTimeout 覆盖它。
+		dialTimeout: sharedconfig.NewTimeouts(0).Dial,
+		ips:         make(map[string]struct{}),
+		domains:     make(map[string]struct{}),
 	}
 	return np, nil
 }
@@ -243,10 +246,10 @@ func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string
 		log.Debug("[NEXTPROXY] connecting via SOCKS5 proxy", "addr", np.url.Host, "network", network, "target", addr)
 	}
 
+	// 拨号超时由 New（默认派生值）与 SetDialTimeout（调用方已派生的值）提供，
+	// 本路径不再维护第二份默认值：零值意味着"未配置"，会被 ctx 的截止时间或
+	// 拨号器自身的默认行为覆盖，而不是悄悄换成另一个数字。
 	dialTimeout := np.dialTimeout
-	if dialTimeout <= 0 {
-		dialTimeout = config.DefaultDialTimeout
-	}
 
 	// ctx 的截止时间优先于 np.dialTimeout：DNS 路径传入
 	// context.Background()，因此实际生效的一直是后者（与既有的 TCP 路径

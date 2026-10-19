@@ -52,15 +52,17 @@ type StreamHandler struct {
 	drainIdle time.Duration
 }
 
-func NewStreamHandler(tr transport.Transport, masterKey []byte, shaperCfg shaper.Config, streamIdleTimeout time.Duration) *StreamHandler {
-	if streamIdleTimeout <= 0 {
-		streamIdleTimeout = config.DefaultStreamIdleTimeout
-	}
+// NewStreamHandler 用调用方已派生的超时集合构建流处理器。
+//
+// 它接收整份 config.Timeouts 而不是单个时长：中继空闲超时是"基础超时的 8 倍"
+// 这一派生只应发生在 config 包（见 config.Timeouts.Normalize），本类型不再为
+// 零值维护第二份默认值。
+func NewStreamHandler(tr transport.Transport, masterKey []byte, shaperCfg shaper.Config, timeouts config.Timeouts) *StreamHandler {
 	return &StreamHandler{
 		transport:         tr,
 		masterKey:         masterKey,
 		shaperCfg:         shaperCfg,
-		streamIdleTimeout: streamIdleTimeout,
+		streamIdleTimeout: timeouts.Normalize().StreamIdle,
 	}
 }
 

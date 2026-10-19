@@ -67,7 +67,7 @@ func TestHTTP2Transport_Non200StatusIsRejected(t *testing.T) {
 			InsecureSkipVerify: true,
 			NextProtos:         sharedconfig.NextProtos,
 		},
-		Timeout: time.Second,
+		Timeouts: sharedconfig.Timeouts{Base: time.Second},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +113,7 @@ func TestHTTP2Transport_200StatusReadsBody(t *testing.T) {
 			InsecureSkipVerify: true,
 			NextProtos:         sharedconfig.NextProtos,
 		},
-		Timeout: time.Second,
+		Timeouts: sharedconfig.Timeouts{Base: time.Second},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +161,7 @@ func TestHTTP2Transport_GrowEventAttribution(t *testing.T) {
 			InsecureSkipVerify: true,
 			NextProtos:         sharedconfig.NextProtos,
 		},
-		Timeout: time.Second,
+		Timeouts: sharedconfig.Timeouts{Base: time.Second},
 	})
 	if err != nil {
 		t.Fatal(err)

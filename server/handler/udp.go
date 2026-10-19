@@ -33,18 +33,12 @@ type udpHandler struct {
 	route dnsRouter
 }
 
-// newUDPHandler 用给定的空闲超时和基础超时创建 udpHandler。
-// 与 newTCPHandler 一样，拨号超时通过 config.DialTimeout 派生
-// （base/3，限制在 [3s, 15s]），而不是复用长得多的空闲超时。
-func newUDPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) *udpHandler {
-	if idleTimeout <= 0 {
-		idleTimeout = config.DefaultUDPIdleTimeout
-	}
-	if timeout <= 0 {
-		timeout = time.Duration(config.DefaultTimeout) * time.Second
-	}
-	directDialer := outboundDialer(config.DialTimeout(timeout), 0)
-	h := &udpHandler{idleTimeout: idleTimeout, nextProxy: np}
+// newUDPHandler 用已归一化的超时集合创建 udpHandler：UDPIdle 是会话空闲/读取
+// 超时，Dial 是出站拨号超时（与 TCP 相同，而不是复用长得多的空闲超时）。
+// 零值由 config.Timeouts.Normalize 填充，本函数不再维护任何默认值。
+func newUDPHandler(timeouts config.Timeouts, np *nextproxy.NextProxy) *udpHandler {
+	directDialer := outboundDialer(timeouts.Dial, 0)
+	h := &udpHandler{idleTimeout: timeouts.UDPIdle, nextProxy: np}
 	h.dial = dialer{
 		nextProxy: np,
 		shouldProxy: func(target string) bool {

@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	sharedconfig "github.com/nange/easyss/v3/config"
 )
 
 // closeLifecycleBudget 是"关闭/启动必须在预算内返回"的上限。它的唯一作用是
@@ -48,7 +50,7 @@ func TestHTTPProxyCloseBeforeStartReleasesListener(t *testing.T) {
 	srv, err := NewHTTPProxyServer(HTTPProxyOptions{
 		ListenAddr: addr,
 		SocksAddr:  "127.0.0.1:1",
-		Timeout:    time.Second,
+		Timeouts:   sharedconfig.Timeouts{Base: time.Second},
 	})
 	if err != nil {
 		t.Fatalf("NewHTTPProxyServer: %v", err)
@@ -85,7 +87,7 @@ func TestHTTPProxyCloseIsIdempotent(t *testing.T) {
 	srv, err := NewHTTPProxyServer(HTTPProxyOptions{
 		ListenAddr: freeLoopbackAddr(t),
 		SocksAddr:  "127.0.0.1:1",
-		Timeout:    time.Second,
+		Timeouts:   sharedconfig.Timeouts{Base: time.Second},
 	})
 	if err != nil {
 		t.Fatalf("NewHTTPProxyServer: %v", err)
@@ -285,7 +287,7 @@ func TestHTTPProxyCloseReleasesReverseProxyIdleConns(t *testing.T) {
 	srv, err := NewHTTPProxyServer(HTTPProxyOptions{
 		ListenAddr: freeLoopbackAddr(t),
 		SocksAddr:  socksAddr,
-		Timeout:    5 * time.Second,
+		Timeouts:   sharedconfig.Timeouts{Base: 5 * time.Second},
 	})
 	if err != nil {
 		t.Fatalf("NewHTTPProxyServer: %v", err)

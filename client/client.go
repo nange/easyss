@@ -16,6 +16,7 @@ import (
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/router"
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/transport"
@@ -318,9 +319,8 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		MaxSlotCount:      cfg.Transport.ConnCountMax,
 		StreamThreshold:   cfg.Transport.StreamThreshold,
 		PrioritySlotRatio: cfg.Transport.PrioritySlotRatio,
-		ConnLifetime:      cfg.ConnLifetimeDuration(),
+		Timeouts:          sharedconfig.NewTimeouts(cfg.TimeoutDuration()),
 		ConnMaxBytes:      cfg.Transport.ConnMaxBytes,
-		Timeout:           cfg.TimeoutDuration(),
 		ProbeToken:        probeToken,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return client.dialWithConfig(ctx, network, addr)

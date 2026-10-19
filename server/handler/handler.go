@@ -66,31 +66,32 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 	}
 
 	shaperCfg := cfg.Shaper.Normalize()
+	// 零值填充只在这里发生一次（见 config.Timeouts.Normalize），三个子 handler
+	// 都接收已归一化的集合，不再各自判断零值。
+	timeouts := cfg.Timeouts.Normalize()
 
 	// 限制等待 bootstrap 记录的时间。整个等待期间一个握手请求会占用两个
 	// goroutine（handler 加首记录读取器），而任何带有格式正确的 x-es 头的
 	// 请求——无需密码——都能占用它们，因此过于宽松的超时是一个廉价的 DoS
 	// 放大通道。合法客户端在打开流之后立即写入 bootstrap 记录，
 	// 所以即使是高 RTT 链路也远低于此上限完成。
+	//
+	// HandshakeTimeout 是**覆盖值**而不是派生值：0 表示沿用 Timeouts.Base，
+	// 因此这里的零值判断属于该字段本身的语义，不是又一处默认值。
 	handshakeTimeout := cfg.HandshakeTimeout
 	if handshakeTimeout <= 0 {
-		handshakeTimeout = cfg.Timeouts.Base
+		handshakeTimeout = timeouts.Base
 	}
-	if handshakeTimeout <= 0 {
-		handshakeTimeout = maxHandshakeTimeout
-	}
-	if handshakeTimeout > maxHandshakeTimeout {
-		handshakeTimeout = maxHandshakeTimeout
-	}
+	handshakeTimeout = min(handshakeTimeout, maxHandshakeTimeout)
 
 	return &ProxyHandler{
 		masterKey:        cfg.MasterKey,
 		allowedMethods:   allowed,
 		handshakeTimeout: handshakeTimeout,
 		shaperCfg:        shaperCfg,
-		tcp:              newTCPHandler(cfg.Timeouts.StreamIdle, cfg.Timeouts.Base, cfg.NextProxy),
-		udp:              newUDPHandler(cfg.Timeouts.UDPIdle, cfg.Timeouts.Base, cfg.NextProxy),
-		icmp:             newICMPHandler(cfg.Timeouts.Base),
+		tcp:              newTCPHandler(timeouts, cfg.NextProxy),
+		udp:              newUDPHandler(timeouts, cfg.NextProxy),
+		icmp:             newICMPHandler(timeouts),
 		saltCache:        newSaltCache(),
 		ipLimiter:        newIPRateLimiter(),
 		fallback:         cfg.Fallback,
