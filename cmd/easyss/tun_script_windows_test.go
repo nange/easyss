@@ -186,7 +186,7 @@ type closeScriptStub struct {
 //   - 必须发出的命令：创建脚本安装的同一路由阶梯（相同目的与掩码）、两条 ipv6
 //     路由，以及 ipv6 地址——netsh add address 是持久的，创建脚本的无条件
 //     "add address" 无法在地址仍在适配器上时重新应用，因此关闭脚本必须删除它
-//     （/prefix 处理见 client/tun/tun.go 的 bareV6Addr）。
+//     （/prefix 处理见 client/tun/script_args.go 的 ScriptArgs）。
 //   - 退出码：设备已经不存在时不得报失败，而路由真的残留下来时必须以非零码退出
 //     ——残留的分流默认路由会把全机 IPv4 流量送进一个没人读的 TUN 设备。
 func TestCloseTunScriptCleanup(t *testing.T) {

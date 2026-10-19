@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nange/easyss/v3/client/proxy"
+	"github.com/nange/easyss/v3/client/tun"
 	"github.com/stretchr/testify/require"
 )
 
@@ -127,7 +129,13 @@ func TestHelperFailureReasonCarriesTheScriptDiagnostics(t *testing.T) {
 	require.NoError(t, os.Setenv("PATH", dir+string(os.PathListSeparator)+origPath))
 	t.Cleanup(func() { _ = os.Setenv("PATH", origPath) })
 
-	err := runCreateScript("tun-easyss-test", "198.18.0.1/16", "198.18.0.1", "192.168.3.1", "", "", "", "", 1500)
+	err := runCreateScript("tun-easyss-test", tun.NewScriptArgs(tun.DeviceConfig{
+		Device:       "tun-easyss-test",
+		TunIP:        "198.18.0.1",
+		TunGW:        "198.18.0.1",
+		TunMask:      "255.255.0.0",
+		LocalGateway: "192.168.3.1",
+	}, "", 1500))
 	require.Error(t, err, "every stubbed tool rejects its call: the script has to report that")
 
 	reason := string(failurePayload(fmt.Errorf("run create script: %w", err)))
@@ -220,4 +228,65 @@ func stubRouteProbe(t *testing.T, out string) *[][]string {
 		return out, nil
 	}
 	return &calls
+}
+
+// TestHelperAndDirectPathsShareTheScriptArgs 是"两条启用路径装出同一个 TUN 子网"
+// 的回归测试。
+//
+// 同一份设备配置会从两个地方变成位置参数：直连路径（root 的 Linux/macOS、
+// Windows）走 client/tun.Manager，非 root 的 darwin/linux 走提权 helper
+// （GET /tun 拿到 proxy.TunConfig 再交给脚本）。helper 过去自己拼实参，
+// 把 TunIP 裸着传给 linux 脚本，而直连路径传的是"地址/掩码"：同一次会话
+// 因此得到 /32 与 /16 两种直连路由。两者都能上网，所以这个偏差永远不会报错，
+// 只会让两条路径的 TUN 子网语义不同。
+//
+// 现在两边都只经过 tun.ScriptArgs，这里断言它们逐项相等。
+func TestHelperAndDirectPathsShareTheScriptArgs(t *testing.T) {
+	cfg := &proxy.TunConfig{
+		Device:         "tun-easyss-test",
+		TunIP:          "198.18.0.1",
+		TunGW:          "198.18.0.1",
+		TunMask:        "255.255.0.0",
+		TunIPV6Sub:     "2001:0db8:0:f101::1/64",
+		TunGWV6:        "fe80::1",
+		ServerIPV6:     "2001:db8::2",
+		LocalGateway:   "192.168.3.1",
+		LocalGatewayV6: "fe80::2",
+		DNSAddr:        "127.0.0.1:5353",
+		MTU:            1500,
+	}
+
+	// 直连路径：Manager 从同一份配置构造的实参。第 8 位（适配器 DNS）在两条
+	// 路径上都是空：windows 没有提权 helper，它的脚本从 cmd/easyss 拿到 DNS；
+	// 而 darwin/linux 的 helper 自己用 DNSAddr 调 util.SetSysDNSForTun，
+	// 从不把它交给脚本（脚本也没有这个位置参数）。
+	direct := tun.NewScriptArgs(tun.DeviceConfig{
+		Device:         cfg.Device,
+		TunIP:          cfg.TunIP,
+		TunGW:          cfg.TunGW,
+		TunMask:        cfg.TunMask,
+		TunIPV6Sub:     cfg.TunIPV6Sub,
+		TunGWV6:        cfg.TunGWV6,
+		ServerIPV6:     cfg.ServerIPV6,
+		LocalGateway:   cfg.LocalGateway,
+		LocalGatewayV6: cfg.LocalGatewayV6,
+	}, "", cfg.MTU)
+
+	viaHelper := scriptArgsFor(cfg)
+
+	// 逐平台比较，而不是只比本机平台：本测试在任何主机上都要能抓住这个分叉，
+	// 而掩码只在 linux 布局里出现（darwin/windows 的地址位是裸地址）。
+	for _, platform := range []tun.ScriptPlatform{
+		tun.PlatformLinux, tun.PlatformDarwin, tun.PlatformWindows,
+	} {
+		require.Equal(t, direct.CreateFor(platform), viaHelper.CreateFor(platform),
+			"%s: the helper must hand the create script the same positional arguments as the direct path",
+			platform)
+		require.Equal(t, direct.CloseFor(platform), viaHelper.CloseFor(platform),
+			"%s: the helper must hand the close script the same positional arguments as the direct path",
+			platform)
+	}
+
+	require.Equal(t, "198.18.0.1/255.255.0.0", viaHelper.CreateFor(tun.PlatformLinux)[1],
+		"linux 的地址位必须带掩码：裸地址会装成 /32 直连路由")
 }

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/nange/easyss/v3/client/proxy"
+	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/scripts"
 	"github.com/stretchr/testify/require"
 )
@@ -23,22 +24,43 @@ import (
 // 也就是"停止 TUN 后断网"。反过来，"路由本来就不存在 / bad value / 设备已消失"
 // 必须保持良性，否则重复关闭与 keep-alive 重放会每次都报错，把真正的失败淹掉。
 
-// darwinCloseScriptArgs 与 cmd/easyss/tun_helper_darwin.go 的 runCloseScript、以及
-// client/tun/tun.go 的 closeTunDevAndDelIPRoute 传给 close_tun_dev_darwin.sh 的参数
-// 保持一致：设备名、tun gw、本地网关、tun gw ipv6、服务端 ipv6、本地网关 ipv6。
-func darwinCloseScriptArgs(withV6 bool) []string {
-	args := []string{"utun8", "198.18.0.1", "192.168.3.1"}
-	if !withV6 {
-		return append(args, "", "", "")
+// scriptArgsFixture 返回一份填满字段的脚本实参（IPv6 字段可置空）。
+//
+// 这里不再手写位置参数：位次由 client/tun.ScriptArgs 渲染，测试只描述设备配置。
+// 过去两个平台的期望切片各写一遍，等于把"契约"变成三份互相独立的字面量
+// （生产代码两份、测试一份），任何一处挪位都要靠运行脚本才能发现。
+func scriptArgsFixture(withV6 bool) tun.ScriptArgs {
+	dev := tun.DeviceConfig{
+		Device:       "tun-easyss-test",
+		TunIP:        "198.18.0.1",
+		TunGW:        "198.18.0.1",
+		TunMask:      "255.255.0.0",
+		LocalGateway: "192.168.3.1",
 	}
-	return append(args, "fe80::1", "2001:db8::2", "fe80::2")
+	if withV6 {
+		dev.TunIPV6Sub = "2001:db8::1/64"
+		dev.TunGWV6 = "fe80::1"
+		dev.ServerIPV6 = "2001:db8::2"
+		dev.LocalGatewayV6 = "fe80::2"
+	}
+	return tun.NewScriptArgs(dev, "", 1500)
 }
 
-// linuxCloseScriptArgs 与 cmd/easyss/tun_helper_linux.go 的 runCloseScript 保持一致：
-// linux 的关闭脚本只读第 1 个参数（设备名），其余按调用方顺序补齐，使两条路径传
-// 同样多的实参（脚本带 set -u）。
+// darwinCloseScriptArgs / linuxCloseScriptArgs 保留为"本平台关闭脚本的实参"，
+// 但内容来自 ScriptArgs：darwin 的测试用 utun8，linux 用 tun-easyss-test。
+func darwinCloseScriptArgs(withV6 bool) []string {
+	args := scriptArgsFixture(withV6)
+	args.Dev.Device = "utun8"
+	return args.CloseFor(tun.PlatformDarwin)
+}
+
 func linuxCloseScriptArgs() []string {
-	return []string{"tun-easyss-test", "198.18.0.1", "192.168.3.1", "fe80::1", "2001:db8::2", "fe80::2"}
+	return scriptArgsFixture(true).CloseFor(tun.PlatformLinux)
+}
+
+// testCloseScriptArgs 是 runCloseScript 的实参夹具（helper 侧调用点）。
+func testCloseScriptArgs() tun.ScriptArgs {
+	return scriptArgsFixture(true)
 }
 
 // TestCloseTunScriptDarwinExitCode 固定 close_tun_dev_darwin.sh 的退出码契约。
@@ -215,16 +237,16 @@ func TestRunCloseScriptReportsFailures(t *testing.T) {
 	t.Cleanup(func() { scripts.CloseTunBytes, scripts.CloseTunFilename = origBytes, origName })
 	scripts.CloseTunFilename = "close_tun_dev_reporting_test.sh"
 
-	args := []string{"tun-easyss-test", "198.18.0.1", "192.168.3.1", "fe80::1", "2001:db8::2", "fe80::2"}
+	scriptArgs := testCloseScriptArgs()
 
 	scripts.CloseTunBytes = []byte("#!/bin/sh\necho 'route: permission denied' >&2\nexit 1\n")
-	err := runCloseScript(args[0], args[1], args[2], args[3], args[4], args[5])
+	err := runCloseScript("tun-easyss-test", scriptArgs)
 	require.Error(t, err, "a failed close script must be reported, not swallowed")
 	require.Contains(t, err.Error(), "permission denied",
 		"the script diagnostics must survive, they are the root cause the rollback logs")
 
 	scripts.CloseTunBytes = []byte("#!/bin/sh\nexit 0\n")
-	require.NoError(t, runCloseScript(args[0], args[1], args[2], args[3], args[4], args[5]))
+	require.NoError(t, runCloseScript("tun-easyss-test", scriptArgs))
 }
 
 // TestCleanupTunRoutesVerifiesAndRetries 固定 helper 退出时的清理契约：关闭脚本的

@@ -151,10 +151,12 @@ func (s *session) tunUpViaHelper() error {
 	s.app.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = true })
 	core.Client.SetTunMode(true)
 	s.tunSession = &devCfg
+	s.tunOwner = tun.OwnerHelper
 	s.tunMgr = tun.New(tun.Config{
-		Socks5Addr:       util.Socks5URI(cfg.Local.SocksPort),
-		DeviceFD:         fd,
-		SkipRouteCleanup: true, // helper 负责路由/DNS 清理
+		Socks5Addr: util.Socks5URI(cfg.Local.SocksPort),
+		// DeviceFD>0 即 fd 路径：owner 由它推导为 OwnerHelper（见 tun.Owner），
+		// 路由与系统 DNS 归 helper 回收，主进程只停自己的引擎并关闭 fd。
+		DeviceFD: fd,
 		// 设备由 helper 按同一个值创建（见 tunHTTPCfg.MTU）；这里是 netstack
 		// 那一侧。若两者不一致，Manager.engineMTU 会按设备真实值兜底并告警。
 		MTU: cfg.TunMTU(),

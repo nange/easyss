@@ -1,6 +1,8 @@
 package tun
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -141,5 +143,101 @@ func TestManagerStopIsIdempotent(t *testing.T) {
 	}
 	if engineStops != 1 {
 		t.Fatalf("engine stopped %d times, want exactly 1", engineStops)
+	}
+}
+
+// TestManagerStopBeforeStartGoroutineRuns 固定"停止先到、启动后到"这一时序。
+//
+// session.tunUp / tunUpViaHelper 在 tunMu 内发布 manager 之后才派发 goroutine
+// 去调用 Start（见 cmd/easyss 的 startTunEngine），用户的下一次点击完全可以落在
+// 那个 goroutine 被调度之前。此时 Stop 若只按"有没有 cancel"判断，就会当作
+// "从未启动"直接返回，而 Start 随后照常把引擎、设备、路由与系统 DNS 全部建立
+// 起来：session 那边已经把这个 manager 收走并发布了 EnableTun2socks=false，
+// 于是界面说"已关闭"、流量却仍在隧道里，而且再没有人持有这个 manager 去停它。
+// 下一次点击会新建一套，engine 的包级默认设备被覆盖，前一套永远停不掉。
+//
+// 因此：Stop 之后再 Start 必须失败，且不得留下任何系统改动。
+func TestManagerStopBeforeStartGoroutineRuns(t *testing.T) {
+	stubManagerHooks(t)
+
+	var (
+		engineStarts int
+		creates      int
+	)
+	engineStartFn = func() error { engineStarts++; return nil }
+	createTunDevFn = func(*Manager) error { creates++; return nil }
+
+	m := newTestManager()
+
+	// 模拟"goroutine 还没被调度到"：Stop 先执行，Start 之后才进入。
+	m.Stop()
+
+	err := m.Start()
+	if err == nil {
+		t.Fatal("Start succeeded after Stop: the session layer already dropped this manager")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Start after Stop = %v, want context.Canceled", err)
+	}
+	if m.IsRunning() {
+		t.Fatal("manager reports running after a Stop that arrived first")
+	}
+	if engineStarts != 0 {
+		t.Fatalf("engine started %d times: a cancelled start must not touch the system", engineStarts)
+	}
+	if creates != 0 {
+		t.Fatalf("create script ran %d times: a cancelled start must not touch the network config", creates)
+	}
+}
+
+// TestManagerStartRunsExactlyOnce 固定"一个 Manager 只承载一次会话"。重复 Start
+// 过去会覆盖 engine 的包级默认设备（tun2socks 的 Stop 只认全局默认值），让第一套
+// 设备与协议栈无人能停；现在它必须显式失败。
+func TestManagerStartRunsExactlyOnce(t *testing.T) {
+	stubManagerHooks(t)
+
+	m := newTestManager()
+	if err := m.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(m.Stop)
+
+	if err := m.Start(); err == nil {
+		t.Fatal("the second Start on the same manager must be rejected")
+	}
+}
+
+// TestManagerEngineStartFailureReleasesTheDevice 固定"engine 启动失败必须自己
+// 释放设备"。
+//
+// tun2socks 的 engine.Start 先 parseDevice（打开 TUN 设备 / 包装 helper 传来的
+// fd）再 core.CreateStack，而它的失败路径不会清理已打开的设备（tun2socks
+// #550/#552）。此时 engineUp 尚未置位，teardown 不会替我们调 engine.Stop，
+// 因此 Start 必须在返回错误前显式释放：否则设备（fd 路径上是 helper 传来的
+// fd）会泄漏到下一次启用，Linux 上设备还会随这个 fd 一直存活。
+func TestManagerEngineStartFailureReleasesTheDevice(t *testing.T) {
+	stubManagerHooks(t)
+
+	errStart := errors.New("create stack: permission denied")
+	var reasons []string
+	engineStartFn = func() error { return errStart }
+	engineStopFn = func(reason string) { reasons = append(reasons, reason) }
+
+	m := newTestManager()
+	err := m.Start()
+	if !errors.Is(err, errStart) {
+		t.Fatalf("Start = %v, want the engine error", err)
+	}
+	if len(reasons) != 1 {
+		t.Fatalf("engine stopped %d times, want exactly 1: the device opened before CreateStack failed must be released", len(reasons))
+	}
+	if m.IsRunning() {
+		t.Fatal("manager reports running after a failed engine start")
+	}
+
+	// 清理已在 Start 的失败路径里做过，之后的 Stop 不得再停一次。
+	m.Stop()
+	if len(reasons) != 1 {
+		t.Fatalf("engine stopped %d times after Stop, want still 1", len(reasons))
 	}
 }

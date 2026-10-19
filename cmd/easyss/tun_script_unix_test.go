@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/scripts"
 	"github.com/stretchr/testify/require"
 )
@@ -150,27 +151,24 @@ func requireShell(t *testing.T, shell string) {
 	}
 }
 
-// linuxScriptArgs 与 client/tun/tun.go 传给 linux 脚本的参数保持一致：
-// device、tun ip/prefix、tun gw、local gw、tun ipv6、tun gw ipv6、
-// server ipv6、local gw ipv6、MTU。
+// linuxScriptArgs / darwinScriptArgs 返回创建脚本的实参，内容来自
+// client/tun.ScriptArgs（生产代码用的同一个构造器）。
+//
+// 这里过去手写两份字面量切片，等于把"脚本契约"抄成第三份：位次一挪，只有真正
+// 跑起脚本才会暴露。darwin 的第 5 位是裸 IPv6 地址（脚本自己补 /64），这份差异
+// 现在也由构造器负责。
 func linuxScriptArgs(withV6 bool) []string {
-	args := []string{"tun-easyss-test", "198.18.0.1/16", "198.18.0.1", "192.168.3.1"}
-	if !withV6 {
-		return append(args, "", "", "", "", "1500")
-	}
-	return append(args, "2001:db8::1/64", "fe80::1", "2001:db8::2", "fe80::2", "1500")
+	args := scriptArgsFixture(withV6)
+	args.Dev.TunIPV6Sub = "2001:db8::1/64"
+	args.Dev.Device = "tun-easyss-test"
+	return args.CreateFor(tun.PlatformLinux)
 }
 
-// darwinScriptArgs 与 client/tun/tun.go 的 darwinScriptArgs 传给
-// create_tun_dev_darwin.sh 的参数保持一致：第五个参数是裸的 IPv6 地址，
-// 因为脚本自己把 "/64" 拼到 ifconfig 的 inet6 参数上，由调用方负责剥掉
-// TunIPV6Sub 自带的前缀长度。
 func darwinScriptArgs(withV6 bool) []string {
-	args := []string{"utun8", "198.18.0.1", "198.18.0.1", "192.168.3.1"}
-	if !withV6 {
-		return append(args, "", "", "", "", "1500")
-	}
-	return append(args, "2001:db8::1", "fe80::1", "2001:db8::2", "fe80::2", "1500")
+	args := scriptArgsFixture(withV6)
+	args.Dev.TunIPV6Sub = "2001:db8::1/64"
+	args.Dev.Device = "utun8"
+	return args.CreateFor(tun.PlatformDarwin)
 }
 
 // TestCreateTunScriptLinuxExitCode 固定 scripts/create_tun_dev.sh 的退出码

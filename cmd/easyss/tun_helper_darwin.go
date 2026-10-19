@@ -5,12 +5,10 @@ package main
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/tun"
-	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/scripts"
 	"github.com/nange/easyss/v3/util"
@@ -78,8 +76,11 @@ func openTunDevice(name string) (int, string, error) {
 // fd 路径下 tun2socks 只能设置自己 netstack 的 MTU，设备的 MTU 必须由建设备的
 // 这一侧负责，否则 netstack 会静默丢弃设备交上来的超限包（见
 // client/tun.Manager.engineMTU）。
-func runCreateScript(device, tunIP, tunGW, localGateway,
-	tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6 string, mtu int) error {
+//
+// 位置参数由 tun.ScriptArgs 统一渲染（见 client/tun/script_args.go）：darwin
+// 的第 5 位必须是裸 IPv6 地址（脚本自己补 /64），这份差异也由它负责，
+// 调用点不再各写一遍。
+func runCreateScript(device string, args tun.ScriptArgs) error {
 	if scripts.CreateTunBytes == nil {
 		return fmt.Errorf("no create script for darwin")
 	}
@@ -90,30 +91,20 @@ func runCreateScript(device, tunIP, tunGW, localGateway,
 	}
 	defer os.Remove(namePath) //nolint:errcheck
 
-	// create_tun_dev_darwin.sh 会自己给地址拼上 "/64"（ifconfig 的 inet6
-	// 参数必须带前缀长度），而 TunIPV6Sub 是按 linux 脚本的
-	// "ip -6 addr replace" 以 CIDR 形式携带前缀的，因此先剥掉前缀再交给
-	// 脚本：否则会拼出 ".../64/64"，ifconfig 报 "bad value" 并以退出码 1
-	// 结束，整个 TUN 启动随之失败。
-	if err := execScriptWithOutput("sh", namePath, device, tunIP, tunGW, localGateway,
-		bareV6Addr(tunIPV6Sub), tunGWV6, serverIPV6, localGatewayV6, strconv.Itoa(mtu)); err != nil {
+	// 设备名以调用方传入的为准：helper 拿到的是内核实际分配的名字，
+	// 而配置里那个只是"请求名"。
+	args.Dev.Device = device
+	if err := execScriptWithOutput("sh", namePath, args.Create()...); err != nil {
 		return err
 	}
 	return nil
-}
-
-// bareV6Addr 去掉 IPv6 地址上的前缀长度（"2001:db8::1/64" -> "2001:db8::1"），
-// 因为 create_tun_dev_darwin.sh 会自己补上 "/64"。
-func bareV6Addr(sub string) string {
-	addr, _, _ := strings.Cut(sub, "/")
-	return addr
 }
 
 // runCloseScript 将内嵌的 close_tun_dev_darwin.sh 写入临时文件并执行，并返回
 // 脚本的真实失败：脚本按"路由是否真的删掉"给出退出码（见脚本的退出码契约），
 // 调用方据此决定是否需要回滚。过去这里的错误被吞掉——残留的分流默认路由会把
 // 全机 IPv4 流量送进一个没人读的设备，也就是"停止 TUN 后断网"。
-func runCloseScript(device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6 string) error {
+func runCloseScript(device string, args tun.ScriptArgs) error {
 	if scripts.CloseTunBytes == nil {
 		return fmt.Errorf("no close script for darwin")
 	}
@@ -124,7 +115,8 @@ func runCloseScript(device, tunGW, localGateway, tunGWV6, serverIPV6, localGatew
 	}
 	defer os.Remove(namePath) //nolint:errcheck
 
-	if err := execScriptWithOutput("sh", namePath, device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6); err != nil {
+	args.Dev.Device = device
+	if err := execScriptWithOutput("sh", namePath, args.Close()...); err != nil {
 		return fmt.Errorf("close script: %w", err)
 	}
 	return nil
@@ -202,7 +194,5 @@ func ensureTunRoutes(device string, cfg *proxy.TunConfig) error {
 	}
 
 	log.Info("[TUN-HELPER] recreating TUN routes", "device", device)
-	return runCreateScript(device, cfg.TunIP, cfg.TunGW, cfg.LocalGateway,
-		cfg.TunIPV6Sub, cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6,
-		sharedconfig.NormalizeTunMTU(cfg.MTU))
+	return runCreateScript(device, scriptArgsFor(cfg))
 }

@@ -56,23 +56,22 @@ var (
 )
 
 type Config struct {
-	Socks5Addr       string
-	Device           string
-	DeviceFD         int  // 若 > 0，使用 fd:// scheme 打开设备而非按名称创建；0 表示按名称创建
-	SkipRouteCleanup bool // darwin：helper 负责路由/DNS 清理，主进程在 Stop() 中跳过
-	MTU              int  // TUN 设备与 tun2socks netstack 共用；<=0 取 config.DefaultTunMTU
-	Interface        string
-	UDPTimeout       time.Duration
-	LogLevel         string
-	TunIP            string
-	TunGW            string
-	TunMask          string
-	TunIPV6Sub       string
-	TunGWV6          string
-	ServerIPV6       string
-	LocalGateway     string
-	LocalGatewayV6   string
-	DNSServer        string // TUN 模式下要设置的 DNS 服务器（darwin/linux/windows）
+	Socks5Addr     string
+	Device         string
+	DeviceFD       int // 若 > 0，使用 fd:// scheme 打开设备而非按名称创建；0 表示按名称创建
+	MTU            int // TUN 设备与 tun2socks netstack 共用；<=0 取 config.DefaultTunMTU
+	Interface      string
+	UDPTimeout     time.Duration
+	LogLevel       string
+	TunIP          string
+	TunGW          string
+	TunMask        string
+	TunIPV6Sub     string
+	TunGWV6        string
+	ServerIPV6     string
+	LocalGateway   string
+	LocalGatewayV6 string
+	DNSServer      string // TUN 模式下要设置的 DNS 服务器（darwin/linux/windows）
 }
 
 type DeviceConfig struct {
@@ -98,11 +97,31 @@ type Manager struct {
 	// cmd/easyss.startTunEngine），而 Stop 可能来自托盘菜单或退出路径，
 	// 两者并发执行：没有这把锁时，Stop 可能读到已发布但尚未创建的 done，
 	// 从而在 nil channel 上永久阻塞（并因托盘持有 tunHelperMu 而卡住菜单）。
+	//
+	// 会话状态在 New 里就建好（而不是在 Start 里）：Start 由调用方派发的
+	// goroutine 执行，从 tunUp 返回到那个 goroutine 真正进入 Start 之间有一个
+	// 调度窗口，托盘的下一次点击可以在窗口内到达 Stop。若 ctx/cancel 只在
+	// Start 里创建，Stop 在那个窗口里只会看到"从未启动"并直接返回，而 Start
+	// 随后照常把引擎、路由与系统 DNS 全部建立起来——session 那边却已经把
+	// manager 收走并发布了 EnableTun2socks=false：界面说关了，流量还在隧道里，
+	// 而且再没有人持有这个 manager 去停它（下一次点击会新建一套，engine 的包级
+	// 默认设备被覆盖，前一套再也停不掉）。因此停止意图必须有一个在 New 时就
+	// 存在的落点。
 	mu      sync.Mutex
-	running bool
-	ctx     context.Context    // 用于取消进行中的 Start()
-	cancel  context.CancelFunc // 保存下来，供 Stop() 取消 Start() goroutine
+	started bool               // Start 已进入（决定 Stop 是否需要等 done）
+	running bool               // 本次会话已成功建立（Stop 后的拆除以它为准）
+	ctx     context.Context    // 用于取消进行中的 Start()；New 时创建
+	cancel  context.CancelFunc // 供 Stop() 表达"停止"意图；New 时创建
 	done    chan struct{}      // Start() 结束（成功或失败）时关闭
+
+	// 拆除状态（见 teardown.go）。owner 在 Start 认领会话时定稿，之后只读；
+	// 三个 bool 记录本次会话真的做成了哪几步，拆除按它们决定回收什么——
+	// 这就是过去 fdMode / SkipRouteCleanup / helperSignalled 三套隐式条件的替代。
+	owner      Owner // 路由与 DNS 归谁回收
+	engineUp   bool  // engineStartFn 已成功
+	deviceUp   bool  // 创建脚本可能已装上东西（失败时也可能是 true）
+	dnsTouched bool  // 系统 DNS 已被本进程改动
+	tornDown   bool  // teardown 已执行（关脚本与恢复 DNS 只能做一次）
 
 	// stopMu 把整个 Stop 串行化：并发的第二个 Stop 必须等第一次拆除完成再返回，
 	// 否则调用方会以为 TUN 已经停了（App.Stop 依赖"TUN 先于核心停止"这一顺序）。
@@ -172,8 +191,16 @@ func New(cfg Config) *Manager {
 		cfg.TunGWV6 = "fe80::30ff:1eff:feff:aaff"
 	}
 
+	// 会话状态在这里建好：Stop 可能在 Start 所在 goroutine 被调度之前就到达
+	// （见 mu 字段的说明）。done 保持打开，直到 Start 真正跑完才关闭。
+	startCtx, cancel := context.WithCancel(context.Background())
+	startDone := make(chan struct{})
+
 	return &Manager{
-		cfg: cfg,
+		cfg:    cfg,
+		ctx:    startCtx,
+		cancel: cancel,
+		done:   startDone,
 		dev: DeviceConfig{
 			Device:         cfg.Device,
 			TunIP:          cfg.TunIP,
@@ -191,7 +218,33 @@ func New(cfg Config) *Manager {
 // manageSystemDNS 报告当前平台是否在 TUN 会话期间把系统 DNS 切换到 TUN
 // resolver。Windows 不会：它的创建/关闭脚本自己配置适配器 DNS。
 func manageSystemDNS() bool {
-	return runtime.GOOS == "darwin" || runtime.GOOS == "linux"
+	return managesSystemDNSFor(Platform())
+}
+
+// managesSystemDNSFor 是"该平台是否由 client/tun 管理系统 DNS"的唯一判据。
+// 它接收显式的 ScriptPlatform（而不是读 runtime.GOOS），使得平台矩阵可以在
+// 任何宿主机上断言 windows 的豁免——否则那条断言只能在 windows 上运行。
+func managesSystemDNSFor(platform ScriptPlatform) bool {
+	return platform == PlatformDarwin || platform == PlatformLinux
+}
+
+// releaseUnownedFD 在**本 goroutine 能证明 fd 尚未进入引擎**的两处早退点关掉
+// 它（fd 路径），并返回原错误。
+//
+// 只有这两处是安全的：一是在 engine.Insert 之前就被取消，二是 validateEngineKey
+// 拒绝了配置。两者都还没调用 engine.Start，fd 的所有权毫无疑问仍在本次调用手里。
+// 一旦进了 engine.Start，fd 的归属就交给上游了（parseDevice 内部可能已包装成
+// 设备、也可能在它之前失败），那时的失败由 engine.Stop 兜底，本进程不再插手：
+// 只看得到一个整数是没法安全判断"这个号码现在还是不是我的设备"的。
+func (m *Manager) releaseUnownedFD(cause error) error {
+	fd := m.cfg.DeviceFD
+	if fd <= 0 {
+		return cause
+	}
+	if err := closeRawDeviceFD(fd); err != nil {
+		log.Warn("[TUN] release unowned device fd", "fd", fd, "err", err)
+	}
+	return cause
 }
 
 // engineMTU 返回交给 tun2socks netstack 的 MTU。
@@ -260,26 +313,59 @@ func (m *Manager) warnOnMTUMismatch(netstackMTU int) {
 	}
 }
 
-func (m *Manager) Start() error {
+func (m *Manager) Start() (err error) {
 	if scripts.CreateTunBytes == nil || scripts.CloseTunBytes == nil {
 		return fmt.Errorf("tun: unsupported os %s", runtime.GOOS)
 	}
 
-	// 先建 done 再发布 cancel：Stop 是按"有 cancel 就等 done"的顺序工作的，
-	// 反过来发布会让 Stop 在两步之间读到非 nil 的 cancel 与 nil 的 done，
-	// 从而在 nil channel 上永久阻塞（见 mu 字段的说明）。
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-
+	// 会话状态由 New 建立（见 mu 字段），这里只认领它：Start 只能跑一次，
+	// 且必须在做任何系统改动之前就让 Stop 能看见"启动已进入"——否则 Stop
+	// 会等到一个永远不会关闭的 done，或者（更糟）在 Start 之前返回而让这次
+	// 启动照常成功。
 	m.mu.Lock()
-	m.ctx, m.cancel, m.done = ctx, cancel, done
+	if m.started {
+		m.mu.Unlock()
+		return fmt.Errorf("tun: manager already started")
+	}
+	m.started = true
+	m.owner = ownerForConfig(m.cfg)
+	ctx, done, owner := m.ctx, m.done, m.owner
 	m.mu.Unlock()
-	defer close(done)
 
-	// 快速路径：还没开始就被取消了。
+	// createFailed 标记"失败发生在创建脚本里"。创建脚本可能在汇报失败之前
+	// 已经装上了地址与部分路由，是唯一一类"必然有东西要删"的失败，因此它
+	// 有自己的 TeardownReason（日志与错误呈现口径不同）。
+	createFailed := false
+
+	// 无论从哪条路径退出都会走这里：成功则只关 done（拆除归 Stop），失败或
+	// 被取消则由本次 Start 自己拆掉已经建起来的东西。reason 只影响日志与错误
+	// 呈现口径：取消是用户操作的结果，失败需要用户看错误，两者可操作性不同。
+	defer func() {
+		if err == nil {
+			close(done)
+			return
+		}
+		reason := ReasonStartFailed
+		switch {
+		case ctx.Err() != nil:
+			reason = ReasonStartCancelled
+		case createFailed:
+			reason = ReasonCreateFailed
+		}
+		if terr := m.teardown(reason, owner); terr != nil {
+			// 拆除失败不改变 Start 的错误（它已经说明了问题），但必须在日志里
+			// 留下痕迹：残留的路由是"停止 TUN 后断网"的成因。
+			log.Warn("[TUN] start rollback left something behind", "reason", reason.String(), "err", terr)
+		}
+		close(done)
+	}()
+
+	// 快速路径：还没开始就被取消了（Stop 先到，或调用方在 stop 之后再 Start）。
+	// 这里 fd 显然还没进入引擎，因此由本进程关它是安全的——再往后就不再有
+	// "显然"可言了，见下面 validateEngineKey 的说明。
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return m.releaseUnownedFD(ctx.Err())
 	default:
 	}
 
@@ -290,9 +376,8 @@ func (m *Manager) Start() error {
 		engine.SetICMPHandler(icmpH)
 	}
 
-	fdMode := m.cfg.DeviceFD > 0
 	device := m.cfg.Device
-	if fdMode {
+	if owner == OwnerHelper {
 		device = "fd://" + strconv.Itoa(m.cfg.DeviceFD)
 	}
 
@@ -315,6 +400,16 @@ func (m *Manager) Start() error {
 		TCPReceiveBufferSize:     tunTCPReceiveBufferSize,
 	}
 
+	// 引擎会在 parseDevice 之前的步骤里拒绝的配置，必须先在这里拒掉：那一步
+	// 之后 fd 已经归 tun2socks，失败时它既不会记进 _defaultDevice（engine.Stop
+	// 因此是空操作），也可能已经把它包装成设备。也就是说，"engine.Start 失败
+	// 时 fd 归谁"在 parseDevice 之前是不确定的，而在它之前拒掉这类配置，
+	// 就把这个不确定区间缩到了 "fd 已经交给引擎" 之后——那里由 engine.Stop
+	// 负责关闭，不需要本进程再猜。
+	if err := validateEngineKey(key); err != nil {
+		return m.releaseUnownedFD(err)
+	}
+
 	engine.Insert(key)
 
 	// 上游把 Start 改成了返回错误而不是 log.Fatalf
@@ -322,52 +417,52 @@ func (m *Manager) Start() error {
 	// 并释放 Start 在 core.CreateStack 失败之前可能已打开的
 	// TUN 设备。
 	if err := engineStartFn(); err != nil {
-		engineStopFn("start failed")
+		// 走到这里说明 validateEngineKey 已经放行，因此失败必然发生在
+		// parseDevice 或其之后：fd 已被引擎接管，而 tun2socks 的失败路径
+		// 不清理（#550/#552），关闭权只在这里的 engine.Stop。
+		//
+		// engineUp 尚未置位，teardown 不会替我们调它，所以必须显式释放。
+		// engine.Stop 是幂等的：parseDevice 内部失败时它也安全。
+		//
+		// 这次释放不在 teardown 的 tornDown 状态机里，但 Start 只成功认领
+		// 一次会话，因此最多执行一次；之后的 Stop 依赖 engine.Stop 幂等
+		// （回归测试 TestManagerEngineStartFailureReleasesTheDevice 钉住了
+		// "Stop 不会再停一次"）。
+		engineStopFn(ReasonStartFailed.String())
 		return fmt.Errorf("tun: start engine: %w", err)
 	}
+	m.mu.Lock()
+	m.engineUp = true
+	m.mu.Unlock()
 
 	// 在改动路由 / DNS 之前，允许 Stop() 取消本次启动。
 	select {
 	case <-ctx.Done():
-		engineStopFn("start cancelled")
 		return ctx.Err()
 	default:
 	}
 
 	settleDelay()
 
-	if !fdMode {
+	if owner == OwnerLocal {
 		// 在 darwin 和 linux 上保存原始 DNS 并设置 TUN DNS。
 		if manageSystemDNS() {
 			if err := saveAndSetDNSStepFn(m); err != nil {
 				log.Warn("[TUN] set system dns", "err", err)
 			}
+			m.mu.Lock()
+			m.dnsTouched = true
+			m.mu.Unlock()
 		}
 
+		// 创建脚本可能在报告失败之前已经装上了地址与部分路由，因此
+		// deviceUp 在调用之前就置位：拆除必须假设"路由可能已经在了"。
+		// 删除路由是幂等的，只在这条刚运行过创建脚本的路径上才有意义。
+		m.mu.Lock()
+		m.deviceUp = true
+		m.mu.Unlock()
 		if err := createTunDevFn(m); err != nil {
-			engineStopFn("create device failed")
-			// 平台脚本可能在半途失败（它先安装地址，再安装路由），
-			// 而只停止 engine 时，它已经添加的路由仍留在系统路由表里：
-			// 下面的 Stop() 因为 m.running 还是 false 而提前返回，
-			// 所以没有任何东西会再去移除它们。
-			// 残留的路由会把流量送进一个无人读取的 TUN 设备，
-			// 看起来就像网络死了。
-			// 删除这些路由是幂等的，并且只在刚运行过创建脚本的
-			// 路径上才有意义。
-			if closeErr := closeTunDevFn(m); closeErr != nil {
-				log.Warn("[TUN] rollback routes after create failure", "err", closeErr)
-			}
-			// 系统 DNS 在设备存在之前就已切换到 TUN resolver。
-			// m.running 为 false 时 Stop() 会提前返回，
-			// 所以失败路径必须自己把 DNS 恢复：
-			// 若继续指向一个无人应答的 TUN 设备（或一个只能通过隧道
-			// 访问的公共解析器），即使代理核心仍在运行，
-			// 全系统的域名解析也会瘫痪。
-			if manageSystemDNS() {
-				if dnsErr := restoreDNSStepFn(m); dnsErr != nil {
-					log.Warn("[TUN] rollback system dns after create failure", "err", dnsErr)
-				}
-			}
+			createFailed = true
 			return fmt.Errorf("tun: create device: %w", err)
 		}
 	}
@@ -378,19 +473,10 @@ func (m *Manager) Start() error {
 	// 与新的 netstack MTU 比较，报出一条毫无意义的告警。
 	m.warnOnMTUMismatch(mtu)
 
-	// 最后检查：如果平台脚本运行期间 Stop() 取消了本次启动，
-	// 撤销刚才建立的一切。
+	// 最后检查：如果平台脚本运行期间 Stop() 取消了本次启动，defer 里的
+	// teardown 会撤销刚才建立的一切。
 	select {
 	case <-ctx.Done():
-		engineStopFn("start cancelled")
-		if !fdMode {
-			if err := closeTunDevFn(m); err != nil {
-				log.Warn("[TUN] close script after start cancellation", "err", err)
-			}
-		}
-		if manageSystemDNS() {
-			_ = restoreDNSStepFn(m)
-		}
 		return ctx.Err()
 	default:
 	}
@@ -405,56 +491,56 @@ func (m *Manager) Start() error {
 // Stop 停止 tun2socks 并撤销它对系统做的改动。它幂等：对从未 Start 过、
 // 或已经停止的实例调用都是安全的空操作；并发的 Stop 会串行执行，第二个调用者
 // 等第一次拆除完成后再返回。
+//
+// "从未 Start"与"Start 还没被调度到"是两件不同的事，而调用方（托盘）分不出它们：
+// session.tunUp 先在锁内发布 manager、再派发 goroutine，随后用户的下一次点击
+// 可能落在那个 goroutine 进入 Start 之前。因此这里无条件落下停止意图（cancel），
+// 并且只在 Start 真的已经进入时才等 done——两者在 mu 下一起快照，不存在
+// "读到 cancel 却等一个永远不会关闭的 done"的窗口。
 func (m *Manager) Stop() {
 	m.stopMu.Lock()
 	defer m.stopMu.Unlock()
 
-	// 如果 Start() 仍在进行中，先取消它，
-	// 等它完成清理后再继续。cancel/done 在同一把锁下快照：Start 先建 done
-	// 再发布 cancel，因此这里绝不会在 nil channel 上等待。
 	m.mu.Lock()
-	cancel, done := m.cancel, m.done
+	if m.cancel != nil {
+		// 无论 Start 是否已进入：先到的停止意图必须能被后到的 Start 看见。
+		m.cancel()
+	}
+	started, done := m.started, m.done
 	m.mu.Unlock()
 
-	if cancel != nil && done != nil {
-		cancel()
+	if started {
 		log.Info("[TUN] Stop: waiting for Start goroutine to finish")
 		<-done
 		log.Info("[TUN] Stop: Start goroutine done")
 	}
 
 	m.mu.Lock()
-	if !m.running {
-		m.mu.Unlock()
-		log.Info("[TUN] Stop: not running, returning")
-		return
-	}
-	// 先落 running=false 再拆除：重复 Stop 与并发 Stop 都不会二次执行清理
-	// （engine.Stop / 关脚本 / 恢复 DNS 都是"只能做一次"的动作）。
+	owner, running := m.owner, m.running
 	m.running = false
 	m.mu.Unlock()
 
-	log.Info("[TUN] Stop: calling engine.Stop")
-	engineStopFn("stop")
-	log.Info("[TUN] Stop: engine.Stop done")
-
-	if !m.cfg.SkipRouteCleanup {
-		// 关闭脚本的失败不能改变 Stop 的结果（调用方已经在拆除了），但绝不能
-		// 静默：脚本按"路由是否真的删掉"给出退出码，残留的分流默认路由会把
-		// 全机 IPv4 流量送进一个没人读的 TUN 设备。
-		if err := closeTunDevFn(m); err != nil {
-			log.Warn("[TUN] close script", "err", err)
-		}
-
-		// 在 darwin 和 linux 上恢复原始 DNS。
-		if manageSystemDNS() {
-			if err := restoreDNSStepFn(m); err != nil {
-				log.Warn("[TUN] restore system dns", "err", err)
-			}
-		}
+	// 拆除与"是否曾成功启动"无关：Start 的失败路径可能已经装上了部分路由与
+	// 系统 DNS，而它自己的 teardown 与这里共用同一个 tornDown 标记，先到者
+	// 负责，后到者是空操作。running 仍是"托盘该显示开还是关"的判据。
+	if !running && !m.hasSomethingToTearDown() {
+		log.Info("[TUN] Stop: nothing to tear down, returning")
+		return
 	}
 
+	if err := m.teardown(ReasonStop, owner); err != nil {
+		log.Warn("[TUN] Stop: teardown reported a failure", "err", err)
+	}
 	log.Info("[TUN] tun2socks stopped")
+}
+
+// hasSomethingToTearDown 报告本次会话是否留下过需要回收的东西。它让 Stop 在
+// "从未 Start 过"时保持空操作（不跑关闭脚本、不碰系统 DNS），同时不会漏掉
+// Start 半途失败留下的残局。
+func (m *Manager) hasSomethingToTearDown() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.engineUp || m.deviceUp || m.dnsTouched
 }
 
 // stopEngine 停止 tun2socks engine，把错误记入日志而不是向上传播：
@@ -510,15 +596,14 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 
 	d := m.dev
 
-	// linux 与 darwin 分支的最后一个实参都是 MTU：设备 MTU 由创建脚本设置
-	// （与 Windows 脚本用 netsh 做的同一件事），因为 fd 路径下 tun2socks 拿到
-	// 的只是 fd，改不了设备的 MTU，见 Manager.engineMTU。
+	// 位置参数一律由 ScriptArgs 渲染（见 script_args.go）：三平台的位次不同
+	// （windows 的第 4 位是掩码、第 8 位是 DNS），过去每个调用点各写一份字面量
+	// 切片，抄错只会在运行时由脚本的 "failed near" 暴露。
+	args := NewScriptArgs(d, m.cfg.DNSServer, m.cfg.MTU).Create()
+
 	switch runtime.GOOS {
 	case "linux":
-		cmdArgs := []string{"pkexec", "bash", namePath, d.Device,
-			ipSub(d.TunIP, d.TunMask), d.TunGW, d.LocalGateway,
-			d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6,
-			strconv.Itoa(m.cfg.MTU)}
+		cmdArgs := append([]string{"pkexec", "bash", namePath}, args...)
 		if os.Geteuid() == 0 {
 			cmdArgs = cmdArgs[1:]
 		}
@@ -535,24 +620,12 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 		// 脚本用非零退出码报告失败（参见
 		// create_tun_dev_windows.bat 中的退出码契约）；
 		// 它的输出会包含在返回的错误里。
-		// 第 8 个参数是系统 DNS（由 cmd/easyss 的 tunDNS 计算：本会话实测可达的
-		// 内置/系统解析器，与 enable_forward_dns 无关），使 Windows 与
-		// darwin/linux 的取值一致，不再由脚本硬编码。
-		// 第 9 个参数是 MTU：wintun 适配器的 MTU 无法由 tun2socks 设置
-		// （wireguard-go 只把它记在内存里，见 tun_windows.go 的 forcedMTU），
-		// 只能由脚本用 netsh 写进接口；两侧不一致时 netstack 会静默丢弃
-		// 超过自身 MTU 的 UDP/ICMP 包（见 Manager.engineMTU）。
-		// 这里传 m.cfg.MTU：Windows 没有 fd 路径（没有提权 helper），
-		// 因此它正是 engineMTU() 交给 netstack 的那个值。
-		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device,
-			d.TunIP, d.TunGW, d.TunMask, d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6,
-			m.cfg.DNSServer, strconv.Itoa(m.cfg.MTU)); err != nil {
+		if _, err := util.CommandContext(ctx, "cmd.exe", append([]string{"/C", namePath}, args...)...); err != nil {
 			return fmt.Errorf("tun: exec create script: %w", err)
 		}
 	case "darwin":
-		// 两个分支必须传同一组实参（提权方式不同而已），因此都从
-		// darwinScriptArgs 取值。
-		args := darwinScriptArgs(d, m.cfg.MTU)
+		// 两个分支必须传同一组实参（提权方式不同而已），因此都从同一个
+		// args 取值。
 		if os.Geteuid() == 0 {
 			if _, err := util.CommandContext(ctx, "sh", append([]string{namePath}, args...)...); err != nil {
 				return fmt.Errorf("tun: exec create script: %w", err)
@@ -587,11 +660,14 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 	}
 	defer os.RemoveAll(namePath) //nolint:errcheck
 
-	d := m.dev
+	// 关闭脚本的位次也由 ScriptArgs 统一渲染：windows 的第 3 位是裸 IPv6 地址，
+	// linux/darwin 是六个按统一顺序补齐的网关（linux 的脚本只读设备名，多传的
+	// 实参无害，只是与 darwin/helper 共用同一套布局）。
+	args := NewScriptArgs(m.dev, m.cfg.DNSServer, m.cfg.MTU).Close()
 
 	switch runtime.GOOS {
 	case "linux":
-		cmdArgs := []string{"pkexec", "bash", namePath, d.Device}
+		cmdArgs := append([]string{"pkexec", "bash", namePath}, args...)
 		if os.Geteuid() == 0 {
 			cmdArgs = cmdArgs[1:]
 		}
@@ -605,17 +681,11 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 			return fmt.Errorf("tun: rename close script: %w", err)
 		}
 		namePath = newNamePath
-		// 第三个参数是 TUN 设备的裸 IPv6 地址（不带 /prefix）：
-		// 脚本删除持久化的 v6 地址，而创建脚本的
-		// "add address" 会拒绝重复添加它。
-		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device, d.TunGW, bareV6Addr(d.TunIPV6Sub)); err != nil {
+		if _, err := util.CommandContext(ctx, "cmd.exe", append([]string{"/C", namePath}, args...)...); err != nil {
 			return fmt.Errorf("tun: close script: %w", err)
 		}
 	case "darwin":
-		// 与 helper 的 runCloseScript 参数顺序保持一致：
-		// device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6。
 		// 两个分支必须传同一组实参（提权方式不同而已），因此都在这里构造。
-		args := []string{d.Device, d.TunGW, d.LocalGateway, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6}
 		if os.Geteuid() == 0 {
 			if _, err := util.CommandContext(ctx, "sh", append([]string{namePath}, args...)...); err != nil {
 				return fmt.Errorf("tun: close script: %w", err)
@@ -736,39 +806,6 @@ func stringSliceEqual(a, b []string) bool {
 		}
 	}
 	return true
-}
-
-func ipSub(ip, mask string) string {
-	if ip == "" || mask == "" {
-		return ""
-	}
-	return ip + "/" + mask
-}
-
-// darwinScriptArgs 返回 create_tun_dev_darwin.sh 的实参，顺序与脚本的位置
-// 参数一致：device、tun ip、tun gw、local gw、tun ipv6、tun gw ipv6、
-// server ipv6、local gw ipv6、MTU。
-//
-// tun ipv6 传的是裸地址：darwin 脚本自己把 "/64" 拼到 ifconfig 的 inet6
-// 参数上，而 TunIPV6Sub 是按 linux 脚本的 "ip -6 addr replace" 需要 CIDR
-// 形式携带前缀长度的（默认 "2001:0db8:0:f101::1/64"）。直接把 TunIPV6Sub
-// 交给 darwin 脚本会拼出 "2001:0db8:0:f101::1/64/64"，ifconfig 报
-// "bad value" 并以退出码 1 结束，创建脚本整体失败、TUN 起不来。
-func darwinScriptArgs(d DeviceConfig, mtu int) []string {
-	return []string{
-		d.Device, d.TunIP, d.TunGW, d.LocalGateway,
-		bareV6Addr(d.TunIPV6Sub), d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6,
-		strconv.Itoa(mtu),
-	}
-}
-
-// bareV6Addr 从 "address/prefix" 形式的子网字符串中去掉前缀长度
-// （"2001:db8::1/64" -> "2001:db8::1"）：windows 关闭脚本里的
-// netsh delete address 需要不带前缀的纯地址，而 darwin 创建脚本会自己
-// 补上前缀长度，两者都拒绝 TunIPV6Sub 携带的 CIDR 形式。
-func bareV6Addr(sub string) string {
-	addr, _, _ := strings.Cut(sub, "/")
-	return addr
 }
 
 // osascriptRunScript 返回以管理员权限执行 sh 脚本的 AppleScript 源码。

@@ -5,13 +5,11 @@ package main
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"unsafe"
 
 	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/tun"
-	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/scripts"
 	"github.com/nange/easyss/v3/util"
@@ -80,8 +78,12 @@ func openTunDevice(name string) (int, string, error) {
 // fd 路径下 tun2socks 只能设置自己 netstack 的 MTU，设备的 MTU 必须由建设备的
 // 这一侧负责，否则 netstack 会静默丢弃设备交上来的超限包（见
 // client/tun.Manager.engineMTU）。
-func runCreateScript(device, tunIP, tunGW, localGateway,
-	tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6 string, mtu int) error {
+//
+// 位置参数由 tun.ScriptArgs 统一渲染（见 client/tun/script_args.go）。这里过去
+// 自己拼一份 8 个 string + mtu 的切片，漏掉了 linux 要求的"地址/掩码"形式：
+// 主进程直连路径传 198.18.0.1/255.255.0.0，fd 路径却传裸的 198.18.0.1，
+// 于是同一个 TUN 地址在两条路径上装成了 /16 与 /32 两种直连路由。
+func runCreateScript(device string, args tun.ScriptArgs) error {
 	if scripts.CreateTunBytes == nil {
 		return fmt.Errorf("no create script for linux")
 	}
@@ -92,8 +94,10 @@ func runCreateScript(device, tunIP, tunGW, localGateway,
 	}
 	defer os.Remove(namePath) //nolint:errcheck
 
-	if err := execScriptWithOutput("bash", namePath, device, tunIP, tunGW, localGateway,
-		tunIPV6Sub, tunGWV6, serverIPV6, localGatewayV6, strconv.Itoa(mtu)); err != nil {
+	// 设备名以调用方传入的为准：helper 拿到的是内核实际分配的名字，
+	// 而配置里那个只是"请求名"。
+	args.Dev.Device = device
+	if err := execScriptWithOutput("bash", namePath, args.Create()...); err != nil {
 		return err
 	}
 	return nil
@@ -103,7 +107,7 @@ func runCreateScript(device, tunIP, tunGW, localGateway,
 // 真实失败：脚本按"路由与设备是否真的清掉"给出退出码（见脚本的退出码契约），
 // 调用方据此决定是否需要回滚。过去这里的错误被吞掉——残留的分流路由会把全机
 // IPv4 流量送进一个没人读的设备，也就是"停止 TUN 后断网"。
-func runCloseScript(device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6 string) error {
+func runCloseScript(device string, args tun.ScriptArgs) error {
 	if scripts.CloseTunBytes == nil {
 		return fmt.Errorf("no close script for linux")
 	}
@@ -114,7 +118,8 @@ func runCloseScript(device, tunGW, localGateway, tunGWV6, serverIPV6, localGatew
 	}
 	defer os.Remove(namePath) //nolint:errcheck
 
-	if err := execScriptWithOutput("bash", namePath, device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6); err != nil {
+	args.Dev.Device = device
+	if err := execScriptWithOutput("bash", namePath, args.Close()...); err != nil {
 		return fmt.Errorf("close script: %w", err)
 	}
 	return nil
@@ -193,7 +198,5 @@ func ensureTunRoutes(device string, cfg *proxy.TunConfig) error {
 	}
 
 	log.Info("[TUN-HELPER] recreating TUN routes", "device", device)
-	return runCreateScript(device, cfg.TunIP, cfg.TunGW, cfg.LocalGateway,
-		cfg.TunIPV6Sub, cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6,
-		sharedconfig.NormalizeTunMTU(cfg.MTU))
+	return runCreateScript(device, scriptArgsFor(cfg))
 }

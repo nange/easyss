@@ -53,7 +53,7 @@ func failedTunManager() *tun.Manager {
 // stubPlatformTeardown 把"等 helper 退出 + 复核系统路由表"这一步换成空实现：
 // 真实实现会读运行测试的机器的路由表，必要时还会执行平台脚本去删路由。
 func stubPlatformTeardown(s *session) {
-	s.verifyTeardown = func(tun.DeviceConfig, bool) error { return nil }
+	s.verifyTeardown = func(tun.DeviceConfig, tun.Owner, bool) error { return nil }
 }
 
 // TestStartTunEngineReportsFailureToUI 固定界面所依赖的契约：引擎启动失败必须

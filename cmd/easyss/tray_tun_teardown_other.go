@@ -12,4 +12,4 @@ import "github.com/nange/easyss/v3/client/tun"
 // 因此这些平台上没有"等 helper 退出"与"复核路由表"两步，也就不需要它们的存根：
 // waitTunHelperExit 与 verifyTunTeardown 只由 darwin/linux 的实现（见
 // tray_tun_teardown_unix.go）提供，那个实现与这里互斥编译。
-func platformTunTeardown(tun.DeviceConfig, bool) error { return nil }
+func platformTunTeardown(tun.DeviceConfig, tun.Owner, bool) error { return nil }

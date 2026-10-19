@@ -60,8 +60,11 @@ func waitTunHelperExit(timeout time.Duration) error {
 // 1/8…128/1 这些分流默认路由就留在表里，把全机 IPv4 流量（包括 DNS）送进一个已经
 // 没人读的设备——表现为"切换服务器后本机断网"。等不到 helper 也往下走：下面的
 // 复核会自己发现残留。Windows 与 headless 构建走空实现（见 tray_tun_teardown_other.go）。
-func platformTunTeardown(dev tun.DeviceConfig, helperSignalled bool) error {
-	if helperSignalled {
+func platformTunTeardown(dev tun.DeviceConfig, owner tun.Owner, helperSignalled bool) error {
+	// 只有 helper 装的会话才有"等它退出"这一步：路由与 DNS 归它回收，主进程
+	// 停下来时它可能还在跑关闭脚本。直连路径上根本没有 helper，helperSignalled
+	// 只说明 FIFO 被关过（直连路径上它永远是 false）。
+	if owner == tun.OwnerHelper && helperSignalled {
 		if err := waitTunHelperExit(tunHelperExitTimeout); err != nil {
 			log.Error("[SYSTRAY] tunDown: waiting for tun helper", "err", err)
 		}
