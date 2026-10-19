@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/miekg/dns"
 	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/server/nextproxy"
 	"github.com/nange/easyss/v3/shaper"
@@ -162,7 +164,7 @@ func TestUDPSessionReadFromTargetDropsOversized(t *testing.T) {
 		idleTimeout: time.Second,
 		ctx:         context.Background(),
 	})
-	go s.readFromTarget()
+	go s.readFromTarget(s.upstream())
 	defer close(s.done)
 
 	select {
@@ -554,9 +556,15 @@ type fakeDNSRouter struct {
 	// proxyConns/directConns 是两条路由各自的预置连接，按先后顺序取出。
 	proxyConns  []net.Conn
 	directConns []net.Conn
-	// dials 记录每一次拨号（两条路由都记），使"这条查询走了哪条路、有没有重拨"
-	// 成为可直接断言的事实。
+	// dials 记录每一次**成功**的拨号（两条路由都记），使"这条查询走了哪条路、
+	// 有没有重拨"成为可直接断言的事实。
 	dials []dnsDial
+	// attempts 记录每一次 dialRoute 调用（含失败），用于断言"一帧最多拨一次"：
+	// 只看 dials 无法区分"没有拨"与"拨了但失败"。
+	attempts []dnsRoute
+	// dialHook 在每次拨号真正执行之前调用，供用例把"重绑进行中"变成可观测的
+	// 时序（例如阻塞代理路由的拨号，等新查询入队后再放行）。
+	dialHook func(route dnsRoute)
 }
 
 func (f *fakeDNSRouter) routeForDomain(domain string) dnsRoute {
@@ -567,6 +575,10 @@ func (f *fakeDNSRouter) routeForDomain(domain string) dnsRoute {
 }
 
 func (f *fakeDNSRouter) dialRoute(_ context.Context, _, target, _ string, route dnsRoute) (net.Conn, string, error) {
+	f.attempts = append(f.attempts, route)
+	if f.dialHook != nil {
+		f.dialHook(route)
+	}
 	pool, remote := &f.directConns, "direct"
 	if route.viaNextProxy() {
 		pool, remote = &f.proxyConns, "socks5://proxy.example.com:1080"
@@ -682,12 +694,13 @@ func (c *dnsTargetConn) writeCount() int {
 }
 
 // connRoute 返回当前连接实际使用的路由；没有连接时返回直连（零值），
-// 与 dnsState.connRoute 为 nil 的语义一致。
+// 与 udpSession.upstreamRoute 为 nil 的语义一致。
 func connRoute(s *udpSession) dnsRoute {
-	if s.dns.connRoute == nil {
+	route, ok := s.upstreamRoute()
+	if !ok {
 		return dnsRouteDirect
 	}
-	return *s.dns.connRoute
+	return route
 }
 
 // packDNSQuery 打包一条 A 记录查询。
@@ -760,6 +773,11 @@ func TestDNSSessionRoutesQueryByDomain(t *testing.T) {
 	}
 	if s.upstream() != local1 {
 		t.Fatal("a query on the current route must reuse the existing connection")
+	}
+	// 每次路由变化只拨一次：失败路径的"一帧最多拨一次"在这里同样成立（成功
+	// 路径上 rebindRoute 拨一次，upstreamOrDial 看到 conn 非 nil 直接复用）。
+	if len(router.attempts) != 2 {
+		t.Fatalf("dial attempts = %v, want exactly 2 (one per route change)", router.attempts)
 	}
 	// 每条查询确实发到了当次路由的连接上：第一条走代理连接，后两条都走
 	// 重绑后的直连连接（第三条复用同一条，因此不产生第三次拨号）。
@@ -1475,6 +1493,231 @@ func TestDNSSessionGarbageThenProxyQuery(t *testing.T) {
 	}
 }
 
+// TestDNSSessionRebindDialFailureKeepsUpstream 固定重绑失败时的降级语义：新路由
+// 拨号失败必须**保留旧连接与旧路由**，本次查询继续走旧连接，且同一帧只拨一次
+// （不能像旧实现那样先关旧连接、再由 upstreamOrDial 在同一帧里补拨第二次）。
+func TestDNSSessionRebindDialFailureKeepsUpstream(t *testing.T) {
+	fallback := newDNSTargetConn()
+	// 代理路由没有任何预置连接：第一次命中代理的查询会在 rebind 时失败。
+	router := &fakeDNSRouter{proxyDomain: "google", directConns: []net.Conn{fallback}}
+	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
+	s.dns.router = router
+
+	// 第 1 帧：非 DNS 载荷 → 直连兜底，建立旧连接。
+	if _, err := s.observeClientFrame(protocol.NewFrameDATAGRAM([]byte("not a dns message"))); err != nil {
+		t.Fatalf("observeClientFrame(garbage): %v", err)
+	}
+	if s.upstream() != fallback || connRoute(s) != dnsRouteDirect {
+		t.Fatalf("the garbage frame must establish the direct fallback (conn=%v route=%v)",
+			s.upstream() == fallback, connRoute(s))
+	}
+
+	// 第 2 帧：命中代理规则的查询 → 重绑拨号失败。它必须仍被送到旧连接上，
+	// 会话不因一次路由切换失败而结束。
+	alive, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "mtalk.google.com")))
+	if err != nil {
+		t.Fatalf("observeClientFrame must survive a failed rebind: %v", err)
+	}
+	if !alive {
+		t.Fatal("a failed rebind must not end the session")
+	}
+	if got := router.attempts; len(got) != 2 {
+		t.Fatalf("dial attempts = %v, want exactly 2 (fallback + one rebind attempt)", got)
+	}
+	if s.upstream() != fallback {
+		t.Fatal("a failed rebind must keep the old upstream connection")
+	}
+	if !fallback.isOpen() {
+		t.Fatal("a failed rebind must not close the old upstream connection")
+	}
+	if connRoute(s) != dnsRouteDirect {
+		t.Fatalf("connRoute = %v, want the old direct route to be preserved", connRoute(s))
+	}
+	if fallback.writeCount() != 2 {
+		t.Fatalf("fallback writes = %d, want 2 (the failed-to-rebind query must still go out)",
+			fallback.writeCount())
+	}
+	if s.dns.routeSel != dnsRouteNextProxy {
+		t.Fatalf("routeSel = %v, want the query's requested route to be recorded", s.dns.routeSel)
+	}
+
+	// 第 3 帧：同一条查询再来一次（客户端重试）→ 冷却窗口内不得再次拨号，
+	// 否则 next proxy 长时间不可用时每个查询都会同步吃满一次 DialTimeout。
+	alive, err = s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "mtalk.google.com")))
+	if err != nil {
+		t.Fatalf("observeClientFrame(retry): %v", err)
+	}
+	if !alive {
+		t.Fatal("a retried query must keep the session alive")
+	}
+	if got := router.attempts; len(got) != 2 {
+		t.Fatalf("dial attempts = %v, want exactly 2 (the retry must be suppressed by the cooldown)", got)
+	}
+	if s.upstream() != fallback || connRoute(s) != dnsRouteDirect {
+		t.Fatalf("the retry must keep using the old connection/route (conn=%v route=%v)",
+			s.upstream() == fallback, connRoute(s))
+	}
+	if fallback.writeCount() != 3 {
+		t.Fatalf("fallback writes = %d, want 3", fallback.writeCount())
+	}
+
+	// 冷却结束后必须重新尝试：网络恢复时不能永久停在旧路由上。
+	s.dns.rebindFailedAt = time.Now().Add(-rebindCooldown - time.Second)
+	if _, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "mtalk.google.com"))); err != nil {
+		t.Fatalf("observeClientFrame(after cooldown): %v", err)
+	}
+	if got := router.attempts; len(got) != 3 {
+		t.Fatalf("dial attempts = %v, want 3 after the cooldown expired", got)
+	}
+}
+
+// TestDNSSessionQueryDuringRebindUsesNewRoute 覆盖"重绑期间新查询"：当一次重绑
+// 正在拨号时，后续查询会在主循环的 frameCh 里排队；重绑成功后它们必须被送到
+// **新**连接，而不是继续写旧连接，也不得触发额外的重拨。
+func TestDNSSessionQueryDuringRebindUsesNewRoute(t *testing.T) {
+	fallback, proxyConn := newDNSTargetConn(), newDNSTargetConn()
+	router := &fakeDNSRouter{proxyDomain: "google", proxyConns: []net.Conn{proxyConn}, directConns: []net.Conn{fallback}}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	router.dialHook = func(route dnsRoute) {
+		if route != dnsRouteNextProxy {
+			return
+		}
+		select {
+		case <-entered:
+			return
+		default:
+		}
+		close(entered)
+		<-release
+	}
+
+	// 三帧按生产时序交给 run 的主循环串行处理：兜底建立旧连接 → 命中代理触发
+	// 重绑（在拨号里阻塞）→ 重绑期间到达的第三条查询在 frameCh 里排队。
+	frames := make(chan protocol.Frame, 4)
+	frames <- protocol.NewFrameDATAGRAM([]byte("not a dns message"))
+	frames <- protocol.NewFrameDATAGRAM(packDNSQuery(t, "mtalk.google.com"))
+	frames <- protocol.NewFrameDATAGRAM(packDNSQuery(t, "www.google.com"))
+
+	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", 5*time.Second, nil,
+		newStreamingFrameReader(t, frames))
+	s.dns.router = router
+
+	runDone := make(chan streamResult, 1)
+	runStopped := make(chan struct{})
+	go func() {
+		defer close(runStopped)
+		runDone <- s.run()
+	}()
+	// 断言失败时也要拆掉会话：否则 run goroutine 与两个 reader 会一直挂着，
+	// 并把 frame reader 的 pipe 留在半开状态。runStopped 在 run 返回时关闭，
+	// 与 runDone 是否已被正常路径取走无关，因此 Cleanup 可以幂等等待。
+	t.Cleanup(func() {
+		s.close()
+		select {
+		case <-runStopped:
+		case <-time.After(2 * time.Second):
+			t.Error("run did not return during cleanup")
+		}
+	})
+
+	// 第 2 帧触发重绑并阻塞在拨号里；此时第 3 帧已经在 frameCh 中排队。
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the rebind dial was never entered")
+	}
+
+	// 重绑仍在进行：旧连接必须仍然安装着且未被关闭（先拨后换）。
+	if s.upstream() != fallback || !fallback.isOpen() {
+		t.Fatal("the old connection must stay installed while the new one is dialing")
+	}
+
+	// 放行重绑。第 2、3 帧都由主循环继续处理：第 2 帧写入新连接，第 3 帧复用
+	// 新连接，不产生额外拨号。
+	close(release)
+
+	waitFor(t, 2*time.Second, func() bool { return proxyConn.writeCount() == 2 },
+		"both queued queries must be written to the rebind connection")
+	if got := router.attempts; len(got) != 2 {
+		t.Fatalf("dial attempts = %v, want exactly 2 (fallback + one rebind)", got)
+	}
+	if s.upstream() != proxyConn {
+		t.Fatal("the successful rebind must install the new connection")
+	}
+	if !fallback.isClosed() {
+		t.Fatal("the successful rebind must close the old connection")
+	}
+	if connRoute(s) != dnsRouteNextProxy {
+		t.Fatalf("connRoute = %v, want dnsRouteNextProxy", connRoute(s))
+	}
+	// 旧连接上只有兜底那一帧，重绑后的两条查询都不得再写到它上面。
+	if fallback.writeCount() != 1 {
+		t.Fatalf("fallback writes = %d, want 1", fallback.writeCount())
+	}
+
+	// 正常路径也走一次收尾（Cleanup 里的 close/等待因此是幂等的空操作）。
+	s.close()
+	select {
+	case <-runDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not return after close")
+	}
+	select {
+	case <-runStopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run goroutine did not finish")
+	}
+}
+
+// TestDNSSessionRebindFailureLogsActualPath 固定重绑失败后的日志语义：
+// via_next_proxy 必须描述**实际**写出的路径（旧连接），而不是查询希望走的路由；
+// 同时带 route_pending=true 表明下一帧仍会尝试重绑。日志在重绑之后输出，因此
+// 不会出现"日志说走了代理、数据却写进直连连接"的误导。
+func TestDNSSessionRebindFailureLogsActualPath(t *testing.T) {
+	fallback := newDNSTargetConn()
+	router := &fakeDNSRouter{proxyDomain: "google", directConns: []net.Conn{fallback}}
+	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
+	s.dns.router = router
+
+	rec := &recordingHandler{}
+	prev := log.Logger()
+	log.SetLogger(slog.New(rec))
+	t.Cleanup(func() { log.SetLogger(prev) })
+
+	if _, err := s.observeClientFrame(protocol.NewFrameDATAGRAM([]byte("not a dns message"))); err != nil {
+		t.Fatalf("observeClientFrame(garbage): %v", err)
+	}
+	if _, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "mtalk.google.com"))); err != nil {
+		t.Fatalf("observeClientFrame(query): %v", err)
+	}
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	var found bool
+	for _, r := range rec.records {
+		if !strings.HasPrefix(r.Message, "[UDP_DNS]") {
+			continue
+		}
+		attrs := attrsOf(r)
+		if attrs["domain"] != "mtalk.google.com" {
+			continue
+		}
+		found = true
+		if attrs["via_next_proxy"] != "false" {
+			t.Fatalf("via_next_proxy = %q, want false (the query actually used the old direct connection)",
+				attrs["via_next_proxy"])
+		}
+		if attrs["route_pending"] != "true" {
+			t.Fatalf("route_pending = %q, want true after a failed rebind", attrs["route_pending"])
+		}
+	}
+	if !found {
+		t.Fatal("no [UDP_DNS] record for the query")
+	}
+}
+
 // TestDNSSessionDialHonorsSessionContext 固定拨号使用 Handle 的请求上下文：客户端
 // 断开后，一次进行中的 DNS 拨号会被取消，而不是白等到拨号超时。
 func TestDNSSessionDialHonorsSessionContext(t *testing.T) {
@@ -1530,5 +1773,60 @@ func TestDNSSessionRemoteReadPathOnRealError(t *testing.T) {
 	}
 	if !result.needsRST() {
 		t.Fatal("a real target failure must ask for an RST")
+	}
+}
+
+// TestUDPTargetReadErrorCarriesSource 固定读取侧把产生错误的连接随结果带回来：
+// run 只能据此判断错误是否来自已被重绑替换的连接（TestUDPSessionIgnores...
+// 覆盖主循环的判定，本用例覆盖来源标记本身）。
+func TestUDPTargetReadErrorCarriesSource(t *testing.T) {
+	boom := errors.New("read failed")
+	broken := newErrReadConn(boom)
+	s, _ := newUDPSessionFixture(t, broken, "8.8.8.8:53", time.Second, nil, newBlockingConn())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.readFromTarget(broken)
+	}()
+
+	select {
+	case res := <-s.resultCh:
+		if res.conn != broken {
+			t.Fatalf("result source = %v, want the broken target connection", res.conn)
+		}
+		if !errors.Is(res.err, boom) {
+			t.Fatalf("result error = %v, want %v", res.err, boom)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("readFromTarget did not report the error")
+	}
+	<-done
+	s.close()
+}
+
+// TestUDPSessionIgnoresRetiredConnReadError 固定错误结果的来源身份：读取
+// goroutine 完成"是否仍是当前连接"的快照后，主 goroutine 仍可能完成一次重绑；
+// 此时旧连接上的真实错误必须被丢弃，不能让一条新连接仍健康的会话结束。
+func TestUDPSessionIgnoresRetiredConnReadError(t *testing.T) {
+	current := newDNSTargetConn()
+	s, _ := newUDPSessionFixture(t, current, "8.8.8.8:53", time.Second, nil, newBlockingConn())
+	retired := newDNSTargetConn()
+	s.resultCh <- udpDatagram{conn: retired, err: errors.New("retired read failed")}
+
+	done := make(chan streamResult, 1)
+	go func() { done <- s.run() }()
+
+	select {
+	case res := <-done:
+		t.Fatalf("a retired connection error ended the session: %v", res.Err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	s.close()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not return after close")
 	}
 }

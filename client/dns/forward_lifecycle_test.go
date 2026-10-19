@@ -42,7 +42,7 @@ func waitForHeldSocket(s *ForwardServer) bool {
 // 登记任何监听 socket。
 //
 // 旧形态下 Shutdown 只看到 dnsServer 尚未置位就返回 nil，随后 Start 绑定并服务
-// 到进程结束——同一个进程里之后的 runner.Run 会在 prebindUDP 直接失败（53 端口
+// 到进程结束——同一个进程里之后的 runner.Run 会在绑定 UDP socket 时直接失败（53 端口
 // 被自己占着），整个客户端再也起不来。
 func TestForwardServerShutdownBeforeStartRefusesLateStart(t *testing.T) {
 	srv := NewForwardServer("127.0.0.1:0", false)

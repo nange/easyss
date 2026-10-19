@@ -182,15 +182,23 @@ func (s *HTTPProxyServer) newReverseProxy() *httputil.ReverseProxy {
 	}
 }
 
-// Start 绑定监听地址并开始服务。Close 先于 Start 发生时，迟到的 Start 会关掉
-// 自己刚绑定的监听器并返回 http.ErrServerClosed，而不是让一个无人引用的服务器
-// 永久占用端口（调用方已把该错误视为正常停止，见 runner 的错误过滤）。
+// Start 自行绑定监听地址并开始服务。它是 Serve(net.Listen(...)) 的便捷形式；
+// runner 使用 Serve 直接交入它在启动主 goroutine 上同步绑定好的监听器。
 func (s *HTTPProxyServer) Start() error {
 	listener, err := net.Listen("tcp", s.listenAddr)
 	if err != nil {
 		return fmt.Errorf("http proxy listen: %w", err)
 	}
+	return s.Serve(listener)
+}
 
+// Serve 在调用方提供的监听器上服务。监听器的所有权转移给本服务器：Close 会
+// 通过 http.Server.Shutdown 关闭它。
+//
+// Close 先于 Serve 发生时，迟到的 Serve 会关掉传入的监听器并返回
+// http.ErrServerClosed，而不是让一个无人引用的服务器永久占用端口（调用方已把
+// 该错误视为正常停止，见 runner 的错误过滤）。
+func (s *HTTPProxyServer) Serve(listener net.Listener) error {
 	httpServer := &http.Server{Handler: s}
 	s.mu.Lock()
 	if s.closing {
@@ -201,7 +209,7 @@ func (s *HTTPProxyServer) Start() error {
 	s.server = httpServer
 	s.mu.Unlock()
 
-	log.Info("[HTTP-PROXY] listening", "addr", s.listenAddr, "socks5", s.socksURL.Redacted())
+	log.Info("[HTTP-PROXY] listening", "addr", listener.Addr().String(), "socks5", s.socksURL.Redacted())
 
 	return httpServer.Serve(listener)
 }

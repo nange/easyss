@@ -46,13 +46,17 @@ type Server struct {
 // 明确失败，不会静默换成另一种证书。
 const acmeProfileShortLived = "shortlived"
 
+// New 接受一份服务端配置。它自己校验一次（config.FileConfig.Validate），而不是
+// 假定调用方一定走 config.LoadConfig：New 是导出 API，测试与嵌入式调用会直接
+// 手搓 FileConfig，把校验只放在配置文件路径上等于给它们留一条绕过校验的口子
+// （未知 allowed_methods 被静默丢弃、越界 h2_* 被标准库静默替换）。
+//
+// LoadConfig 的调用方不会因此多付一次成本：Validate 是纯内存检查，且对已归一化
+// 的配置幂等。
 func New(cfg *config.FileConfig) (*Server, error) {
-	for _, p := range cfg.Transport.Protocols {
-		if p != "h2" {
-			return nil, fmt.Errorf("unsupported transport protocol %q (only h2 is supported)", p)
-		}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
 	}
-
 	s := &Server{
 		cfg: cfg,
 	}
@@ -370,6 +374,7 @@ func (s *Server) Start() error {
 	log.Info("[SERVER] listening",
 		"addr", srvCfg.ListenAddr(),
 		"routes", []string{"/", sharedconfig.EndpointTCP, sharedconfig.EndpointUDP, sharedconfig.EndpointICMP, sharedconfig.EndpointProbe},
+		"h2_max_frame_size", s.httpServer.HTTP2.MaxReadFrameSize,
 		"h2_recv_buf_stream", s.httpServer.HTTP2.MaxReceiveBufferPerStream,
 		"h2_recv_buf_conn", s.httpServer.HTTP2.MaxReceiveBufferPerConnection,
 		"h2_max_concurrent_streams", s.httpServer.HTTP2.MaxConcurrentStreams)
@@ -382,21 +387,17 @@ func (s *Server) Start() error {
 // 流级接收窗口决定单条上传流的在途数据量（吞吐 ≈ 窗口/RTT），连接级窗口则是
 // "已收到但未消费"请求体的每连接上界，并发流上限决定该连接可同时承载的流数与
 // handler 规模（三者语义见 sharedconfig 中对应常量的说明）。
+//
+// 它只读取已归一化的配置（经 config.LoadConfig 的调用方拿到的是写回了默认值的
+// 结构体），因此这里不再保留第二套 >0 兜底：那会让"0 使用默认值"与"越界值被
+// 标准库替换"看起来都像正常配置。直接手搓 FileConfig 的调用方（测试、嵌入式）
+// 仍会拿到 sharedconfig 常量，因为 applyDefaults 之外这里也把 0 视作默认。
 func buildHTTPServer(cfg *config.FileConfig, tlsConfig *tls.Config, mux *http.ServeMux, timeout time.Duration) *http.Server {
 	http2Cfg := &http.HTTP2Config{
-		MaxReadFrameSize:              sharedconfig.HTTP2ServerMaxReadFrameSize,
-		MaxReceiveBufferPerConnection: sharedconfig.HTTP2ServerReceiveBufferPerConnection,
-		MaxReceiveBufferPerStream:     sharedconfig.HTTP2ServerReceiveBufferPerStream,
+		MaxReadFrameSize:              effectiveH2(cfg.Transport.H2MaxFrameSize, sharedconfig.HTTP2ServerMaxReadFrameSize),
+		MaxReceiveBufferPerConnection: effectiveH2(cfg.Transport.H2RecvBufConn, sharedconfig.HTTP2ServerReceiveBufferPerConnection),
+		MaxReceiveBufferPerStream:     effectiveH2(cfg.Transport.H2RecvBufStream, sharedconfig.HTTP2ServerReceiveBufferPerStream),
 		MaxConcurrentStreams:          sharedconfig.HTTP2ServerMaxConcurrentStreams,
-	}
-	if cfg.Transport.H2MaxFrameSize > 0 {
-		http2Cfg.MaxReadFrameSize = cfg.Transport.H2MaxFrameSize
-	}
-	if cfg.Transport.H2RecvBufConn > 0 {
-		http2Cfg.MaxReceiveBufferPerConnection = cfg.Transport.H2RecvBufConn
-	}
-	if cfg.Transport.H2RecvBufStream > 0 {
-		http2Cfg.MaxReceiveBufferPerStream = cfg.Transport.H2RecvBufStream
 	}
 
 	// 连接级窗口同时是流级窗口的硬上限：每个字节都要同时扣减两个窗口，因此把它配得
@@ -422,6 +423,16 @@ func buildHTTPServer(cfg *config.FileConfig, tlsConfig *tls.Config, mux *http.Se
 	srv.Protocols.SetHTTP1(true)
 	srv.Protocols.SetHTTP2(true)
 	return srv
+}
+
+// effectiveH2 返回一个 h2 参数的生效值：配置为 0 时取默认值，否则原样返回。
+// 越界值由 config.LoadConfig 拒绝；这里保留 0 值兜底是为了让绕过配置加载的
+// 调用方（测试、嵌入式）仍然得到 sharedconfig 的默认值，而不是 0。
+func effectiveH2(v, def int) int {
+	if v == 0 {
+		return def
+	}
+	return v
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {

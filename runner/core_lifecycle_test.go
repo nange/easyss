@@ -39,7 +39,7 @@ func waitPortBindable(port int) bool {
 // 托盘切换服务器、mobile.Stop、测试都是这条路径。GOMAXPROCS(1) 让"Close 先于
 // Start 的 Listen 生效"这一窗口尽可能暴露：旧形态下 HTTP 入口的 Close 会因为
 // 自己还没有登记监听器而变成空操作，迟到的 Start 于是永久占住端口，下一次
-// runner.Run 会在 prebindTCP 直接失败。
+// runner.Run 会在同步绑定监听器时直接失败。
 func TestCoreStopReleasesAllListeners(t *testing.T) {
 	old := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(old)

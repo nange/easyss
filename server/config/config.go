@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"net/netip"
 	"os"
@@ -21,15 +22,17 @@ type LogConfig struct {
 }
 
 // TransportConfig 是服务端的 HTTP/2 传输参数。字段的 0 值一律表示"使用
-// sharedconfig 中的默认值"（由 server.buildHTTPServer 就地兜底），这里不存
-// 第二份默认值。
+// sharedconfig 中的默认值"（由 applyDefaults 写回；buildHTTPServer 只对绕过
+// 加载、仍为 0 的调用方保留 effectiveH2 兜底），这里不存第二份默认值。
 //
 // 三个 h2_* 字段都作用在**每一个连接**上（SETTINGS 与连接级 WINDOW_UPDATE 每个
 // 连接各一份）。每条连接的并发流上限**不可配**：它固定为
 // sharedconfig.HTTP2ServerMaxConcurrentStreams（128），见该常量的说明。
+//
+// 取值范围与标准库的实际接受区间一致（见 validateTransport）：越界值必须在
+// 加载期被拒绝，而不是留给 net/http 静默替换成它自己的 1MiB 默认值。
 type TransportConfig struct {
-	Protocols []string `json:"protocols"`
-	// H2MaxFrameSize 是服务端愿意接收的最大帧（16KiB~16MiB）：客户端据此决定
+	// H2MaxFrameSize 是服务端愿意接收的最大帧（16KiB~16MiB-1）：客户端据此决定
 	// 每个 DATA 帧的大小，调小会把一条加密记录拆成多个帧。
 	H2MaxFrameSize int `json:"h2_max_frame_size"`
 	// H2RecvBufConn 是连接级上行窗口（字节）。它同时是"已收到但 handler 未读走"的
@@ -165,9 +168,13 @@ type FileConfig struct {
 const SupportedConfigVersion = 3
 
 // LoadConfig 读取并解析服务端配置文件，返回已完成归一化的配置：版本校验、
-// applyDefaults、validateListen、validateTLS 与 ResolveFilePaths 都在这里完成，
-// 调用方（cmd/easyss-server）拿到的必然是可直接交给 server.New 的有效配置，
-// 不再各自排列这些步骤。
+// applyDefaults、Validate（allowed_methods / h2_* / TLS / 监听端点）与
+// ResolveFilePaths 都在这里完成，调用方（cmd/easyss-server）拿到的必然是可直接
+// 交给 server.New 的有效配置，不再各自排列这些步骤。
+//
+// 所有"写错了却不报错"的配置都收口在这里：allowed_methods 的未知值、h2_* 的
+// 越界值、端口与 bind 的非法值都在加载期直接失败，而不是被 handler/标准库静默
+// 丢弃或替换，或留到 net.Listen 才以难以定位的症状暴露。
 func LoadConfig(path string) (*FileConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -184,15 +191,12 @@ func LoadConfig(path string) (*FileConfig, error) {
 		return nil, fmt.Errorf("unsupported config version %d (supported %d)", fc.ConfigVersion, SupportedConfigVersion)
 	}
 
+	// 显式值与默认值在同一处归一化：applyDefaults 写回 timeout/log.level/port
+	// 与 h2_*，Validate 只负责拒绝无法归一化的值。在默认值写回之后校验 h2_*
+	// 同时守住 sharedconfig 的默认值常量本身——默认值一旦落到标准库接受区间
+	// 之外，"没配"也会被静默替换。
 	applyDefaults(&fc)
-	// 监听端点（端口范围、绑定地址）在配置加载阶段固定，避免留到 net.Listen
-	// 才以 "too many colons" 之类难以定位的症状暴露。
-	if err := fc.validateListen(); err != nil {
-		return nil, err
-	}
-	// 取证书的方式（手工证书 vs Let's Encrypt ACME）在这里固定：证书文件只配了
-	// 一半、以及 IP-only 模式写了个不可公网签发的地址，都在启动时明确报错。
-	if err := fc.validateTLS(); err != nil {
+	if err := fc.Validate(); err != nil {
 		return nil, err
 	}
 	// 相对文件路径（证书、代理列表、日志文件）在这里统一解析。
@@ -201,20 +205,100 @@ func LoadConfig(path string) (*FileConfig, error) {
 	return &fc, nil
 }
 
+// Validate 校验启动前可判定的配置约束：allowed_methods、h2_*、证书来源
+// （validateTLS）与监听端点（validateListen）。LoadConfig 与 server.New 共用
+// 它——server.New 是导出 API，测试与嵌入式调用会直接手搓 FileConfig，不能只
+// 依赖配置文件路径上的校验。
+//
+// 监听端点的校验使用 ListenAddr 的默认值语义：Port==0 按 sharedconfig
+// 的默认端口校验，因此直接构造的 FileConfig 不必先经过 applyDefaults。
+func (fc *FileConfig) Validate() error {
+	if err := fc.validateAllowedMethods(); err != nil {
+		return err
+	}
+	if err := fc.validateTransport(); err != nil {
+		return err
+	}
+	if err := fc.validateTLS(); err != nil {
+		return err
+	}
+	return fc.validateListenOrDefault()
+}
+
+// validateAllowedMethods 拒绝 allowed_methods 里的未知加密方式。
+//
+// 旧行为是 handler.NewProxyHandler 把无法识别的值静默丢弃（protocol.MethodFromString
+// 返回 0），全部写错时过滤结果为空、于是回落到"两种都允许"——一条写错的限制配置
+// 反而把服务端放开成接受所有方法，且启动日志没有任何提示。这里在加载期直接失败，
+// 让配置错误以它本来的样子暴露。
+//
+// 空列表仍是文档化的"使用默认对"（见 GetAllowedMethods），不在这里报错。
+func (fc *FileConfig) validateAllowedMethods() error {
+	for i, name := range fc.Server.AllowedMethods {
+		if protocol.MethodFromString(name) == 0 {
+			return fmt.Errorf("server.allowed_methods[%d] %q is not a supported method; valid values are %s",
+				i, name, strings.Join(DefaultAllowedMethods(), ", "))
+		}
+	}
+	return nil
+}
+
+// validateTransport 校验 transport.h2_* 的取值范围，使越界值在加载期报错，而不是
+// 被 net/http 在内部静默替换成它自己的默认值。
+//
+// 边界取标准库**实际**的接受区间（net/http/internal/http2 的 setConfigDefaults）：
+//
+//   - MaxReadFrameSize: [16KiB, 16MiB-1]；
+//   - MaxReceiveBufferPerConnection: [64KiB-1, MaxInt32]（实现以 initialWindowSize
+//     65535 为下界）；
+//   - MaxReceiveBufferPerStream: [1, MaxInt32]。
+//
+// 注意文档把两个窗口写成"小于 4MiB"，但实现接受 4MiB..MaxInt32；这里按实现校验，
+// 否则 4MiB-1 以上的合法（且被既有测试使用的）配置会被误拒。0 是文档化的
+// "使用默认值"，负值则没有语义，一并拒绝。
+func (fc *FileConfig) validateTransport() error {
+	tr := fc.Transport
+	if v := tr.H2MaxFrameSize; v != 0 && (v < h2MinMaxFrameSize || v > h2MaxMaxFrameSize) {
+		return fmt.Errorf("transport.h2_max_frame_size %d is out of range [%d, %d] (0 means the default)",
+			v, h2MinMaxFrameSize, h2MaxMaxFrameSize)
+	}
+	if v := tr.H2RecvBufConn; v != 0 && (v < h2MinRecvBufConn || v > math.MaxInt32) {
+		return fmt.Errorf("transport.h2_recv_buf_conn %d is out of range [%d, %d] (0 means the default)",
+			v, h2MinRecvBufConn, math.MaxInt32)
+	}
+	if v := tr.H2RecvBufStream; v != 0 && (v < h2MinRecvBufStream || v > math.MaxInt32) {
+		return fmt.Errorf("transport.h2_recv_buf_stream %d is out of range [%d, %d] (0 means the default)",
+			v, h2MinRecvBufStream, math.MaxInt32)
+	}
+	return nil
+}
+
+// h2_* 的边界与 net/http 内部校验保持一致。它们不是配置默认值（默认值由
+// sharedconfig 常量持有），而是"标准库会静默替换"的临界点，因此只在加载期校验
+// 中使用。
+const (
+	h2MinMaxFrameSize  = 1 << 14 // 16KiB，SETTINGS_MAX_FRAME_SIZE 的协议下界
+	h2MaxMaxFrameSize  = 1<<24 - 1
+	h2MinRecvBufConn   = 1<<16 - 1 // 65535，即 HTTP/2 初始窗口
+	h2MinRecvBufStream = 1
+)
+
 // applyDefaults 把服务端配置归一化为与运行期消费点一致的有效值，使内存中的
 // 配置本身就是有效的，而不是把合法性的判断留给每个消费点。
 //
-// 它只处理没有其他 owner 的配置策略，其余字段的默认值各有唯一出处，在这里
-// 再存一份副本正是它们会彼此偏离的原因：
+// 它只处理没有其他 owner 的配置策略；其余字段的默认值各有唯一出处，不在这里
+// 存第二份副本，否则它们会彼此偏离：
 //
-//   - transport.h2_*：默认值由 sharedconfig 常量持有，"0 使用默认值"是
-//     文档化的字段语义，由 server.buildHTTPServer 就地兜底；
 //   - shaper.*：默认值与边界由 shaper.Config.Normalize 唯一持有，在
 //     handler.NewProxyHandler 构造整形器时应用；
 //   - server.allowed_methods：空值语义由 ServerConfig.GetAllowedMethods 负责，
 //     它不依赖配置对象的构造路径（测试与嵌入式调用方会直接手搓 FileConfig）；
 //   - server.port：0 表示未配置，取 sharedconfig.DefaultServerPort。监听地址的
 //     格式化由 ServerConfig.ListenAddr 负责，这里不保存第二份地址。
+//
+// transport.h2_* 的 0 值在这里写回 sharedconfig 默认值：越界值已由
+// validateTransport 拒绝，因此写回之后 buildHTTPServer 看到的就是标准库实际
+// 接受的生效值，启动日志也不会再打印"原始但无效"的数字。
 func applyDefaults(fc *FileConfig) {
 	// timeout 是全部派生超时的唯一旋钮：非正值取默认值，越界值钳制到
 	// [MinTimeout, MaxTimeout]。这里把结果写回结构体，使内存中的配置与
@@ -226,16 +310,43 @@ func applyDefaults(fc *FileConfig) {
 	if fc.Server.Port == 0 {
 		fc.Server.Port = sharedconfig.DefaultServerPort
 	}
+	if fc.Transport.H2MaxFrameSize == 0 {
+		fc.Transport.H2MaxFrameSize = sharedconfig.HTTP2ServerMaxReadFrameSize
+	}
+	if fc.Transport.H2RecvBufConn == 0 {
+		fc.Transport.H2RecvBufConn = sharedconfig.HTTP2ServerReceiveBufferPerConnection
+	}
+	if fc.Transport.H2RecvBufStream == 0 {
+		fc.Transport.H2RecvBufStream = sharedconfig.HTTP2ServerReceiveBufferPerStream
+	}
 }
 
 // validateListen 在配置加载阶段固定监听端点的契约：端口必须落在可绑定范围内；
 // bind 只接受主机名或 IP 字面量（不含端口与方括号）。这些错误若留到 net.Listen
 // 才暴露，症状会变成含义不清的 ": too many colons" 之类。
+//
+// 它要求 Port 已经是最终值；Port==0 的默认值语义由 validateListenOrDefault
+// 与 ServerConfig.ListenAddr 处理。
 func (fc *FileConfig) validateListen() error {
-	if fc.Server.Port < 1 || fc.Server.Port > 65535 {
-		return fmt.Errorf("server.port %d is out of range [1, 65535]", fc.Server.Port)
+	return validateListenEndpoint(fc.Server.Port, fc.Server.Bind)
+}
+
+// validateListenOrDefault 用 ListenAddr 相同的默认值语义校验监听端点：Port==0
+// 表示 sharedconfig.DefaultServerPort。它供**绕过 LoadConfig（未执行
+// applyDefaults）** 的 server.New 调用方使用。
+func (fc *FileConfig) validateListenOrDefault() error {
+	if fc.Server.Port != 0 {
+		return fc.validateListen()
 	}
-	bind := fc.Server.Bind
+	return validateListenEndpoint(sharedconfig.DefaultServerPort, fc.Server.Bind)
+}
+
+// validateListenEndpoint 是 validateListen 与 validateListenOrDefault 的共享
+// 实现，只接受已经确定下来的端口值。
+func validateListenEndpoint(port int, bind string) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("server.port %d is out of range [1, 65535]", port)
+	}
 	if bind == "" {
 		return nil
 	}
@@ -314,7 +425,6 @@ func ExampleConfig() FileConfig {
 			CoverBudgetCap:   sharedconfig.DefaultCoverBudgetCap,
 		},
 		Transport: TransportConfig{
-			Protocols:       []string{sharedconfig.DefaultProtocol},
 			H2MaxFrameSize:  sharedconfig.HTTP2ServerMaxReadFrameSize,
 			H2RecvBufConn:   sharedconfig.HTTP2ServerReceiveBufferPerConnection,
 			H2RecvBufStream: sharedconfig.HTTP2ServerReceiveBufferPerStream,
