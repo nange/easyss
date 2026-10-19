@@ -538,15 +538,14 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 
 	d := m.dev
 
-	// linux 与 darwin 分支的最后一个实参都是 MTU：设备 MTU 由创建脚本设置
-	// （与 Windows 脚本用 netsh 做的同一件事），因为 fd 路径下 tun2socks 拿到
-	// 的只是 fd，改不了设备的 MTU，见 Manager.engineMTU。
+	// 位置参数一律由 ScriptArgs 渲染（见 script_args.go）：三平台的位次不同
+	// （windows 的第 4 位是掩码、第 8 位是 DNS），过去每个调用点各写一份字面量
+	// 切片，抄错只会在运行时由脚本的 "failed near" 暴露。
+	args := NewScriptArgs(d, m.cfg.DNSServer, m.cfg.MTU).Create()
+
 	switch runtime.GOOS {
 	case "linux":
-		cmdArgs := []string{"pkexec", "bash", namePath, d.Device,
-			ipSub(d.TunIP, d.TunMask), d.TunGW, d.LocalGateway,
-			d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6,
-			strconv.Itoa(m.cfg.MTU)}
+		cmdArgs := append([]string{"pkexec", "bash", namePath}, args...)
 		if os.Geteuid() == 0 {
 			cmdArgs = cmdArgs[1:]
 		}
@@ -563,24 +562,12 @@ func (m *Manager) createTunDevAndSetIPRoute() error {
 		// 脚本用非零退出码报告失败（参见
 		// create_tun_dev_windows.bat 中的退出码契约）；
 		// 它的输出会包含在返回的错误里。
-		// 第 8 个参数是系统 DNS（由 cmd/easyss 的 tunDNS 计算：本会话实测可达的
-		// 内置/系统解析器，与 enable_forward_dns 无关），使 Windows 与
-		// darwin/linux 的取值一致，不再由脚本硬编码。
-		// 第 9 个参数是 MTU：wintun 适配器的 MTU 无法由 tun2socks 设置
-		// （wireguard-go 只把它记在内存里，见 tun_windows.go 的 forcedMTU），
-		// 只能由脚本用 netsh 写进接口；两侧不一致时 netstack 会静默丢弃
-		// 超过自身 MTU 的 UDP/ICMP 包（见 Manager.engineMTU）。
-		// 这里传 m.cfg.MTU：Windows 没有 fd 路径（没有提权 helper），
-		// 因此它正是 engineMTU() 交给 netstack 的那个值。
-		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device,
-			d.TunIP, d.TunGW, d.TunMask, d.TunIPV6Sub, d.TunGWV6, d.ServerIPV6,
-			m.cfg.DNSServer, strconv.Itoa(m.cfg.MTU)); err != nil {
+		if _, err := util.CommandContext(ctx, "cmd.exe", append([]string{"/C", namePath}, args...)...); err != nil {
 			return fmt.Errorf("tun: exec create script: %w", err)
 		}
 	case "darwin":
-		// 两个分支必须传同一组实参（提权方式不同而已），因此都从
-		// darwinScriptArgs 取值。
-		args := darwinScriptArgs(d, m.cfg.MTU)
+		// 两个分支必须传同一组实参（提权方式不同而已），因此都从同一个
+		// args 取值。
 		if os.Geteuid() == 0 {
 			if _, err := util.CommandContext(ctx, "sh", append([]string{namePath}, args...)...); err != nil {
 				return fmt.Errorf("tun: exec create script: %w", err)
@@ -615,11 +602,14 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 	}
 	defer os.RemoveAll(namePath) //nolint:errcheck
 
-	d := m.dev
+	// 关闭脚本的位次也由 ScriptArgs 统一渲染：windows 的第 3 位是裸 IPv6 地址，
+	// linux/darwin 是六个按统一顺序补齐的网关（linux 的脚本只读设备名，但它带
+	// set -u，实参个数必须对得上）。
+	args := NewScriptArgs(m.dev, m.cfg.DNSServer, m.cfg.MTU).Close()
 
 	switch runtime.GOOS {
 	case "linux":
-		cmdArgs := []string{"pkexec", "bash", namePath, d.Device}
+		cmdArgs := append([]string{"pkexec", "bash", namePath}, args...)
 		if os.Geteuid() == 0 {
 			cmdArgs = cmdArgs[1:]
 		}
@@ -633,17 +623,11 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 			return fmt.Errorf("tun: rename close script: %w", err)
 		}
 		namePath = newNamePath
-		// 第三个参数是 TUN 设备的裸 IPv6 地址（不带 /prefix）：
-		// 脚本删除持久化的 v6 地址，而创建脚本的
-		// "add address" 会拒绝重复添加它。
-		if _, err := util.CommandContext(ctx, "cmd.exe", "/C", namePath, d.Device, d.TunGW, bareV6Addr(d.TunIPV6Sub)); err != nil {
+		if _, err := util.CommandContext(ctx, "cmd.exe", append([]string{"/C", namePath}, args...)...); err != nil {
 			return fmt.Errorf("tun: close script: %w", err)
 		}
 	case "darwin":
-		// 与 helper 的 runCloseScript 参数顺序保持一致：
-		// device, tunGW, localGateway, tunGWV6, serverIPV6, localGatewayV6。
 		// 两个分支必须传同一组实参（提权方式不同而已），因此都在这里构造。
-		args := []string{d.Device, d.TunGW, d.LocalGateway, d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6}
 		if os.Geteuid() == 0 {
 			if _, err := util.CommandContext(ctx, "sh", append([]string{namePath}, args...)...); err != nil {
 				return fmt.Errorf("tun: close script: %w", err)
@@ -764,39 +748,6 @@ func stringSliceEqual(a, b []string) bool {
 		}
 	}
 	return true
-}
-
-func ipSub(ip, mask string) string {
-	if ip == "" || mask == "" {
-		return ""
-	}
-	return ip + "/" + mask
-}
-
-// darwinScriptArgs 返回 create_tun_dev_darwin.sh 的实参，顺序与脚本的位置
-// 参数一致：device、tun ip、tun gw、local gw、tun ipv6、tun gw ipv6、
-// server ipv6、local gw ipv6、MTU。
-//
-// tun ipv6 传的是裸地址：darwin 脚本自己把 "/64" 拼到 ifconfig 的 inet6
-// 参数上，而 TunIPV6Sub 是按 linux 脚本的 "ip -6 addr replace" 需要 CIDR
-// 形式携带前缀长度的（默认 "2001:0db8:0:f101::1/64"）。直接把 TunIPV6Sub
-// 交给 darwin 脚本会拼出 "2001:0db8:0:f101::1/64/64"，ifconfig 报
-// "bad value" 并以退出码 1 结束，创建脚本整体失败、TUN 起不来。
-func darwinScriptArgs(d DeviceConfig, mtu int) []string {
-	return []string{
-		d.Device, d.TunIP, d.TunGW, d.LocalGateway,
-		bareV6Addr(d.TunIPV6Sub), d.TunGWV6, d.ServerIPV6, d.LocalGatewayV6,
-		strconv.Itoa(mtu),
-	}
-}
-
-// bareV6Addr 从 "address/prefix" 形式的子网字符串中去掉前缀长度
-// （"2001:db8::1/64" -> "2001:db8::1"）：windows 关闭脚本里的
-// netsh delete address 需要不带前缀的纯地址，而 darwin 创建脚本会自己
-// 补上前缀长度，两者都拒绝 TunIPV6Sub 携带的 CIDR 形式。
-func bareV6Addr(sub string) string {
-	addr, _, _ := strings.Cut(sub, "/")
-	return addr
 }
 
 // osascriptRunScript 返回以管理员权限执行 sh 脚本的 AppleScript 源码。

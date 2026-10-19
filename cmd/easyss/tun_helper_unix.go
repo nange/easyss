@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/client/proxy"
+	"github.com/nange/easyss/v3/client/tun"
 	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util"
@@ -177,15 +178,13 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	//    linux 的关闭脚本里 `ip tuntap del` 必然因此失败，而路由本身马上会被
 	//    第 7 步的创建脚本重写。真正决定成败的是退出时的 cleanupTunRoutes。
 	log.Info("[TUN-HELPER] cleaning stale routes")
-	if err := runCloseScript(actualDevice, cfg.TunGW, cfg.LocalGateway,
-		cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6); err != nil {
+	if err := runCloseScript(actualDevice, scriptArgsFor(cfg)); err != nil {
 		log.Debug("[TUN-HELPER] pre-clean routes", "device", actualDevice, "err", err)
 	}
 
 	// 7. 运行 create 脚本（ifconfig/ip + MTU + route add）。
 	log.Info("[TUN-HELPER] creating routes and configuring interface", "mtu", tunMTU)
-	if err := runCreateScript(actualDevice, cfg.TunIP, cfg.TunGW, cfg.LocalGateway,
-		cfg.TunIPV6Sub, cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6, tunMTU); err != nil {
+	if err := runCreateScript(actualDevice, scriptArgsFor(cfg)); err != nil {
 		_ = unix.Close(tunFd)
 		return giveUp("run create script", err)
 	}
@@ -248,6 +247,34 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	}
 }
 
+// scriptArgsFor 把 helper 从 GET /tun 拿到的配置翻译成脚本实参。它是这条
+// 跨进程链路上唯一的转换点：TunConfig 是 JSON 契约（主进程写、helper 读），
+// 而位置参数由 tun.ScriptArgs 统一渲染（三平台位次不同，见 script_args.go）。
+//
+// 关键的一步是 TunIP + TunMask：主进程直连路径一直传"地址/掩码"形式，
+// 而 helper 过去只传裸地址，于是同一次会话在 fd 路径上装出 /32 直连路由、
+// 在直连路径上装出 /16。两者都"能上网"，因此这个偏差不会报错，只会让两条
+// 路径上的 TUN 子网语义不同（子网内地址不再经由 TUN 直连）。
+//
+// DNS 位刻意留空：TunConfig.DNSAddr 是 TUN resolver 的监听地址
+// （"127.0.0.1:5353"），而创建脚本的第 8 位要的是一个解析器 IP（windows 的
+// netsh set dns）。darwin/linux 的 helper 本来就用 DNSAddr 自己调
+// util.SetSysDNSForTun（见 runTunHelper 第 8 步），脚本里没有这个位置参数；
+// 把监听地址填进去只会在 windows 布局上写出一个非法 DNS。
+func scriptArgsFor(cfg *proxy.TunConfig) tun.ScriptArgs {
+	return tun.NewScriptArgs(tun.DeviceConfig{
+		Device:         cfg.Device,
+		TunIP:          cfg.TunIP,
+		TunGW:          cfg.TunGW,
+		TunMask:        cfg.TunMask,
+		TunIPV6Sub:     cfg.TunIPV6Sub,
+		TunGWV6:        cfg.TunGWV6,
+		ServerIPV6:     cfg.ServerIPV6,
+		LocalGateway:   cfg.LocalGateway,
+		LocalGatewayV6: cfg.LocalGatewayV6,
+	}, "", cfg.MTU)
+}
+
 // cleanupTunRoutes 清掉本次会话安装的 TUN 路由（并让设备随 fd 消失），然后校验
 // 它们真的不在系统路由表里了；没清掉就重试。删除路由是幂等的，重试没有副作用。
 //
@@ -257,8 +284,7 @@ func cleanupTunRoutes(device string, cfg *proxy.TunConfig) error {
 	var lastErr error
 
 	for attempt := 1; attempt <= tunCleanupAttempts; attempt++ {
-		scriptErr := runCloseScript(device, cfg.TunGW, cfg.LocalGateway,
-			cfg.TunGWV6, cfg.ServerIPV6, cfg.LocalGatewayV6)
+		scriptErr := runCloseScript(device, scriptArgsFor(cfg))
 		if scriptErr != nil {
 			log.Warn("[TUN-HELPER] close script", "device", device, "attempt", attempt, "err", scriptErr)
 		}

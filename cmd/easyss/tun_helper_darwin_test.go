@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/scripts"
 	"github.com/stretchr/testify/require"
 )
@@ -32,8 +33,18 @@ func TestRunCreateScriptStripsV6Prefix(t *testing.T) {
 	scripts.CreateTunFilename = "create_tun_dev_darwin_args_test.sh"
 	scripts.CreateTunBytes = []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + marker + "\"\n")
 
-	require.NoError(t, runCreateScript("utun9", "198.18.0.1", "198.18.0.1", "192.168.3.1",
-		"2001:0db8:0:f101::1/64", "fe80::1", "2001:db8::2", "fe80::2", 8500))
+	args := tun.NewScriptArgs(tun.DeviceConfig{
+		Device:         "utun9",
+		TunIP:          "198.18.0.1",
+		TunGW:          "198.18.0.1",
+		TunMask:        "255.255.0.0",
+		TunIPV6Sub:     "2001:0db8:0:f101::1/64",
+		TunGWV6:        "fe80::1",
+		ServerIPV6:     "2001:db8::2",
+		LocalGateway:   "192.168.3.1",
+		LocalGatewayV6: "fe80::2",
+	}, "", 8500)
+	require.NoError(t, runCreateScript("utun9", args))
 
 	data, err := os.ReadFile(marker)
 	require.NoError(t, err, "the create script did not run")
@@ -45,12 +56,14 @@ func TestRunCreateScriptStripsV6Prefix(t *testing.T) {
 	}, got, "the script appends the prefix itself, so the address must arrive bare")
 }
 
-// TestBareV6Addr 覆盖 helper 侧的去前缀辅助函数：带前缀的输入去掉前缀，
-// 不带前缀的输入原样返回（TunIPV6Sub 也可能已经是裸地址）。
+// TestBareV6Addr 覆盖去前缀的辅助函数（现在只有 client/tun.ScriptArgs 一个实现）：
+// 带前缀的输入去掉前缀，不带前缀的输入原样返回（TunIPV6Sub 也可能已经是裸地址）。
 func TestBareV6Addr(t *testing.T) {
-	require.Equal(t, "2001:db8::1", bareV6Addr("2001:db8::1/64"))
-	require.Equal(t, "2001:db8::1", bareV6Addr("2001:db8::1"))
-	require.Equal(t, "", bareV6Addr(""))
+	require.Equal(t, "2001:db8::1", tun.NewScriptArgs(tun.DeviceConfig{TunIPV6Sub: "2001:db8::1/64"}, "", 1500).
+		CreateFor(tun.PlatformDarwin)[4])
+	require.Equal(t, "2001:db8::1", tun.NewScriptArgs(tun.DeviceConfig{TunIPV6Sub: "2001:db8::1"}, "", 1500).
+		CreateFor(tun.PlatformDarwin)[4])
+	require.Equal(t, "", tun.NewScriptArgs(tun.DeviceConfig{}, "", 1500).CreateFor(tun.PlatformDarwin)[4])
 }
 
 // TestTunRouteResidueUsesTheTunGateway 用注入的探测输出钉住 darwin 的残留判定：
