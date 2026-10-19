@@ -218,7 +218,33 @@ func New(cfg Config) *Manager {
 // manageSystemDNS 报告当前平台是否在 TUN 会话期间把系统 DNS 切换到 TUN
 // resolver。Windows 不会：它的创建/关闭脚本自己配置适配器 DNS。
 func manageSystemDNS() bool {
-	return runtime.GOOS == "darwin" || runtime.GOOS == "linux"
+	return managesSystemDNSFor(Platform())
+}
+
+// managesSystemDNSFor 是"该平台是否由 client/tun 管理系统 DNS"的唯一判据。
+// 它接收显式的 ScriptPlatform（而不是读 runtime.GOOS），使得平台矩阵可以在
+// 任何宿主机上断言 windows 的豁免——否则那条断言只能在 windows 上运行。
+func managesSystemDNSFor(platform ScriptPlatform) bool {
+	return platform == PlatformDarwin || platform == PlatformLinux
+}
+
+// releaseUnownedFD 在**本 goroutine 能证明 fd 尚未进入引擎**的两处早退点关掉
+// 它（fd 路径），并返回原错误。
+//
+// 只有这两处是安全的：一是在 engine.Insert 之前就被取消，二是 validateEngineKey
+// 拒绝了配置。两者都还没调用 engine.Start，fd 的所有权毫无疑问仍在本次调用手里。
+// 一旦进了 engine.Start，fd 的归属就交给上游了（parseDevice 内部可能已包装成
+// 设备、也可能在它之前失败），那时的失败由 engine.Stop 兜底，本进程不再插手：
+// 只看得到一个整数是没法安全判断"这个号码现在还是不是我的设备"的。
+func (m *Manager) releaseUnownedFD(cause error) error {
+	fd := m.cfg.DeviceFD
+	if fd <= 0 {
+		return cause
+	}
+	if err := closeRawDeviceFD(fd); err != nil {
+		log.Warn("[TUN] release unowned device fd", "fd", fd, "err", err)
+	}
+	return cause
 }
 
 // engineMTU 返回交给 tun2socks netstack 的 MTU。
@@ -302,11 +328,7 @@ func (m *Manager) Start() (err error) {
 		return fmt.Errorf("tun: manager already started")
 	}
 	m.started = true
-	if m.cfg.DeviceFD > 0 {
-		m.owner = OwnerHelper
-	} else {
-		m.owner = OwnerLocal
-	}
+	m.owner = ownerForConfig(m.cfg)
 	ctx, done, owner := m.ctx, m.done, m.owner
 	m.mu.Unlock()
 
@@ -331,9 +353,11 @@ func (m *Manager) Start() (err error) {
 	}()
 
 	// 快速路径：还没开始就被取消了（Stop 先到，或调用方在 stop 之后再 Start）。
+	// 这里 fd 显然还没进入引擎，因此由本进程关它是安全的——再往后就不再有
+	// "显然"可言了，见下面 validateEngineKey 的说明。
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return m.releaseUnownedFD(ctx.Err())
 	default:
 	}
 
@@ -368,6 +392,16 @@ func (m *Manager) Start() (err error) {
 		TCPReceiveBufferSize:     tunTCPReceiveBufferSize,
 	}
 
+	// 引擎会在 parseDevice 之前的步骤里拒绝的配置，必须先在这里拒掉：那一步
+	// 之后 fd 已经归 tun2socks，失败时它既不会记进 _defaultDevice（engine.Stop
+	// 因此是空操作），也可能已经把它包装成设备。也就是说，"engine.Start 失败
+	// 时 fd 归谁"在 parseDevice 之前是不确定的，而在它之前拒掉这类配置，
+	// 就把这个不确定区间缩到了 "fd 已经交给引擎" 之后——那里由 engine.Stop
+	// 负责关闭，不需要本进程再猜。
+	if err := validateEngineKey(key); err != nil {
+		return m.releaseUnownedFD(err)
+	}
+
 	engine.Insert(key)
 
 	// 上游把 Start 改成了返回错误而不是 log.Fatalf
@@ -375,9 +409,18 @@ func (m *Manager) Start() (err error) {
 	// 并释放 Start 在 core.CreateStack 失败之前可能已打开的
 	// TUN 设备。
 	if err := engineStartFn(); err != nil {
-		// 引擎在自己的失败路径里可能已经打开了设备，但本进程还没碰过路由与
-		// DNS（helper 路径上更不归我们），因此只需要 engine.Stop 的幂等释放：
-		// engineUp 不置位，teardown 就只关 done、不做多余动作。
+		// 走到这里说明 validateEngineKey 已经放行，因此失败必然发生在
+		// parseDevice 或其之后：fd 已被引擎接管，而 tun2socks 的失败路径
+		// 不清理（#550/#552），关闭权只在这里的 engine.Stop。
+		//
+		// engineUp 尚未置位，teardown 不会替我们调它，所以必须显式释放。
+		// engine.Stop 是幂等的：parseDevice 内部失败时它也安全。
+		//
+		// 这次释放不在 teardown 的 tornDown 状态机里，但 Start 只成功认领
+		// 一次会话，因此最多执行一次；之后的 Stop 依赖 engine.Stop 幂等
+		// （回归测试 TestManagerEngineStartFailureReleasesTheDevice 钉住了
+		// "Stop 不会再停一次"）。
+		engineStopFn(ReasonStartFailed.String())
 		return fmt.Errorf("tun: start engine: %w", err)
 	}
 	m.mu.Lock()
@@ -609,8 +652,8 @@ func (m *Manager) closeTunDevAndDelIPRoute() error {
 	defer os.RemoveAll(namePath) //nolint:errcheck
 
 	// 关闭脚本的位次也由 ScriptArgs 统一渲染：windows 的第 3 位是裸 IPv6 地址，
-	// linux/darwin 是六个按统一顺序补齐的网关（linux 的脚本只读设备名，但它带
-	// set -u，实参个数必须对得上）。
+	// linux/darwin 是六个按统一顺序补齐的网关（linux 的脚本只读设备名，多传的
+	// 实参无害，只是与 darwin/helper 共用同一套布局）。
 	args := NewScriptArgs(m.dev, m.cfg.DNSServer, m.cfg.MTU).Close()
 
 	switch runtime.GOOS {
