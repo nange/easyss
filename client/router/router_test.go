@@ -1,9 +1,11 @@
 package router
 
 import (
-	"regexp"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/nange/easyss/v3/rule"
 	"github.com/nange/easyss/v3/util"
 )
 
@@ -97,35 +99,36 @@ regexp:^.*\.test\.com$
 		t.Fatal("NewGeoSite returned nil")
 	}
 
-	// 验证 domain 条目
-	if _, ok := gs.domain["example.com"]; !ok {
-		t.Error("expected example.com in domain map")
+	// 三类条目各自的匹配语义（具体表示由 rule.DomainSet 持有，不再断言内部
+	// map：那是共享包的实现细节）。
+	if !gs.Match("example.com", false) {
+		t.Error("expected example.com to match")
 	}
-	// 验证 full 条目
-	if _, ok := gs.fullDomain["www.example.com"]; !ok {
-		t.Error("expected www.example.com in fullDomain map")
+	if !gs.Match("www.example.com", false) {
+		t.Error("expected full:www.example.com to match")
 	}
-	// 验证 regexp 条目
-	if len(gs.regexpDomain) != 1 {
-		t.Fatalf("expected 1 regexp entry, got %d", len(gs.regexpDomain))
+	if !gs.Match("a.test.com", true) {
+		t.Error("expected the regexp entry to match")
 	}
-
-	// 验证空行被跳过
-	if len(gs.domain) != 1 {
-		t.Errorf("expected 1 domain entry, got %d", len(gs.domain))
+	// 验证空行被跳过、且条目总数符合预期（1 domain + 1 full + 1 regexp）
+	if got := gs.Len(); got != 3 {
+		t.Errorf("Len() = %d, want 3", got)
 	}
 }
 
 func TestNewGeoSite_InvalidRegexp(t *testing.T) {
-	// 无效正则表达式应被静默跳过
-	data := []byte(`regexp:[invalid`)
+	// 无效正则表达式被跳过（并计入 skipped），其余条目照常生效。
+	data := []byte("example.com\nregexp:[invalid\n")
 	gs := NewGeoSite(data)
-	if len(gs.regexpDomain) != 0 {
-		t.Errorf("expected 0 regexp entries, got %d", len(gs.regexpDomain))
+	if !gs.Match("example.com", false) {
+		t.Error("valid entries should survive an unparsable regexp")
+	}
+	if gs.Match("invalid", true) {
+		t.Error("unparsable regexp must not match")
 	}
 }
 
-func TestGeoSite_SimpleMatch(t *testing.T) {
+func TestGeoSite_Match(t *testing.T) {
 	gs := NewGeoSite([]byte(`
 example.com
 full:exact.match.com
@@ -149,15 +152,15 @@ full:exact.match.com
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := gs.SimpleMatch(tt.domain, tt.matchSub)
+			got := gs.Match(tt.domain, tt.matchSub)
 			if got != tt.want {
-				t.Errorf("SimpleMatch(%q, %v) = %v, want %v", tt.domain, tt.matchSub, got, tt.want)
+				t.Errorf("Match(%q, %v) = %v, want %v", tt.domain, tt.matchSub, got, tt.want)
 			}
 		})
 	}
 }
 
-func TestGeoSite_FullMatch(t *testing.T) {
+func TestGeoSite_MatchWithPatterns(t *testing.T) {
 	gs := NewGeoSite([]byte(`
 example.com
 full:exact.match.com
@@ -169,8 +172,7 @@ regexp:^sub\d+\.test\.com$
 		domain string
 		want   bool
 	}{
-		{"SimpleMatch 匹配", "example.com", true},
-		{"SimpleMatch 子域名", "sub.example.com", true},
+		{"子域名匹配", "sub.example.com", true},
 		{"fullDomain 匹配", "exact.match.com", true},
 		{"regexp 匹配", "sub123.test.com", true},
 		{"regexp 不匹配", "other.test.com", false},
@@ -179,11 +181,22 @@ regexp:^sub\d+\.test\.com$
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := gs.FullMatch(tt.domain)
+			got := gs.Match(tt.domain, true)
 			if got != tt.want {
-				t.Errorf("FullMatch(%q) = %v, want %v", tt.domain, got, tt.want)
+				t.Errorf("Match(%q, true) = %v, want %v", tt.domain, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestGeoSite_MatchIsCaseInsensitive 固定本次合并修掉的语义差异：内置列表里
+// 混有大小写混杂的条目（例如 AUSpolice.com），而 DNS 名不区分大小写。
+func TestGeoSite_MatchIsCaseInsensitive(t *testing.T) {
+	gs := NewGeoSite([]byte("Example.COM\nfull:Exact.Match.Com\n"))
+	for _, domain := range []string{"example.com", "EXAMPLE.COM", "exact.match.com", "EXACT.MATCH.COM"} {
+		if !gs.Match(domain, false) {
+			t.Errorf("Match(%q, false) = false, want true", domain)
+		}
 	}
 }
 
@@ -324,96 +337,85 @@ func TestRouter_isLANHost(t *testing.T) {
 }
 
 func TestRouter_AddDirectIP(t *testing.T) {
-	r := &Router{
-		customDirectIPs: make(map[string]struct{}),
-	}
+	r := &Router{customDirect: rule.New()}
 
 	r.AddDirectIP("1.2.3.4")
 	r.AddDirectIP("::1")
 
-	r.customMu.RLock()
-	defer r.customMu.RUnlock()
-	if _, ok := r.customDirectIPs["1.2.3.4"]; !ok {
-		t.Error("expected 1.2.3.4 in customDirectIPs")
+	if !r.customDirect.MatchHost("1.2.3.4") {
+		t.Error("expected 1.2.3.4 in the direct set")
 	}
-	if _, ok := r.customDirectIPs["::1"]; !ok {
-		t.Error("expected ::1 in customDirectIPs")
+	if !r.customDirect.MatchHost("::1") {
+		t.Error("expected ::1 in the direct set")
 	}
-	if len(r.customDirectIPs) != 2 {
-		t.Errorf("expected 2 entries, got %d", len(r.customDirectIPs))
+	if got := r.customDirect.Len(); got != 2 {
+		t.Errorf("expected 2 entries, got %d", got)
 	}
 }
 
 func TestRouter_AddProxyIP(t *testing.T) {
-	r := &Router{
-		customProxyIPs: make(map[string]struct{}),
-	}
+	r := &Router{customProxy: rule.New()}
 
 	r.AddProxyIP("10.0.0.1")
 	r.AddProxyIP("fd00::1")
 
-	r.customMu.RLock()
-	defer r.customMu.RUnlock()
-	if _, ok := r.customProxyIPs["10.0.0.1"]; !ok {
-		t.Error("expected 10.0.0.1 in customProxyIPs")
+	if !r.customProxy.MatchHost("10.0.0.1") {
+		t.Error("expected 10.0.0.1 in the proxy set")
 	}
-	if _, ok := r.customProxyIPs["fd00::1"]; !ok {
-		t.Error("expected fd00::1 in customProxyIPs")
+	if !r.customProxy.MatchHost("fd00::1") {
+		t.Error("expected fd00::1 in the proxy set")
 	}
-	if len(r.customProxyIPs) != 2 {
-		t.Errorf("expected 2 entries, got %d", len(r.customProxyIPs))
+	if got := r.customProxy.Len(); got != 2 {
+		t.Errorf("expected 2 entries, got %d", got)
 	}
 }
 
 func TestRouter_AddDirectDomain(t *testing.T) {
-	r := &Router{
-		customDirectDomains: make(map[string]struct{}),
-	}
+	r := &Router{customDirect: rule.New()}
 
 	r.AddDirectDomain("cdn.example.com")
 	r.AddDirectDomain("cdn2.example.com")
 
-	r.customMu.RLock()
-	defer r.customMu.RUnlock()
-	if _, ok := r.customDirectDomains["cdn.example.com"]; !ok {
-		t.Error("expected cdn.example.com in customDirectDomains")
+	for _, domain := range []string{"cdn.example.com", "cdn2.example.com"} {
+		if !r.customDirect.HasDomain(domain) {
+			t.Errorf("expected %s in the direct set", domain)
+		}
 	}
-	if _, ok := r.customDirectDomains["cdn2.example.com"]; !ok {
-		t.Error("expected cdn2.example.com in customDirectDomains")
-	}
-	if len(r.customDirectDomains) != 2 {
-		t.Errorf("expected 2 entries, got %d", len(r.customDirectDomains))
+	if got := r.customDirect.Len(); got != 2 {
+		t.Errorf("expected 2 entries, got %d", got)
 	}
 }
 
 func TestRouter_AddProxyDomain(t *testing.T) {
-	r := &Router{
-		customProxyDomains: make(map[string]struct{}),
-	}
+	r := &Router{customProxy: rule.New()}
 
 	r.AddProxyDomain("google.com")
 	r.AddProxyDomain("youtube.com")
 
-	r.customMu.RLock()
-	defer r.customMu.RUnlock()
-	if _, ok := r.customProxyDomains["google.com"]; !ok {
-		t.Error("expected google.com in customProxyDomains")
+	for _, domain := range []string{"google.com", "youtube.com"} {
+		if !r.customProxy.HasDomain(domain) {
+			t.Errorf("expected %s in the proxy set", domain)
+		}
 	}
-	if _, ok := r.customProxyDomains["youtube.com"]; !ok {
-		t.Error("expected youtube.com in customProxyDomains")
-	}
-	if len(r.customProxyDomains) != 2 {
-		t.Errorf("expected 2 entries, got %d", len(r.customProxyDomains))
+	if got := r.customProxy.Len(); got != 2 {
+		t.Errorf("expected 2 entries, got %d", got)
 	}
 }
 
-func TestRouter_IsCustomDirectDomain(t *testing.T) {
-	r := &Router{
-		customDirectDomains: map[string]struct{}{
-			"example.com": {},
-			"test.cn":     {},
-		},
+func newRouterWithSets(t *testing.T, direct, proxy []string) *Router {
+	t.Helper()
+	directSet, directErrs := rule.ParseLines(direct, rule.Options{})
+	proxySet, proxyErrs := rule.ParseLines(proxy, rule.Options{})
+	if len(directErrs)+len(proxyErrs) != 0 {
+		t.Fatalf("unexpected rule parse errors: %v %v", directErrs, proxyErrs)
 	}
+	r := &Router{customDirect: directSet, customProxy: proxySet}
+	r.proxyRule.Store(int32(ProxyRuleAuto))
+	return r
+}
+
+func TestRouter_IsCustomDirectDomain(t *testing.T) {
+	r := newRouterWithSets(t, []string{"example.com", "test.cn"}, nil)
 
 	tests := []struct {
 		name   string
@@ -440,12 +442,7 @@ func TestRouter_IsCustomDirectDomain(t *testing.T) {
 }
 
 func TestRouter_IsCustomProxyDomain(t *testing.T) {
-	r := &Router{
-		customProxyDomains: map[string]struct{}{
-			"google.com":  {},
-			"youtube.com": {},
-		},
-	}
+	r := newRouterWithSets(t, nil, []string{"google.com", "youtube.com"})
 
 	tests := []struct {
 		name   string
@@ -472,21 +469,13 @@ func TestRouter_IsCustomProxyDomain(t *testing.T) {
 
 func TestRouter_AddIPAfterMatch(t *testing.T) {
 	// 验证动态添加 IP 后，后续 MatchHostRule 可以基于 IP 匹配
-	r := &Router{
-		customDirectIPs:     make(map[string]struct{}),
-		customDirectCIDRIPs: nil,
-		customDirectDomains: nil,
-		customProxyIPs:      make(map[string]struct{}),
-		customProxyCIDRIPs:  nil,
-		customProxyDomains:  nil,
-	}
-	r.proxyRule.Store(int32(ProxyRuleAuto))
+	r := newRouterWithSets(t, nil, nil)
 
 	// 初始状态：IP 不在列表中
-	if r.hostMatchCustomDirect("1.2.3.4") {
+	if r.hostMatchCustomRule(r.customDirect, "1.2.3.4") {
 		t.Error("1.2.3.4 should not match before AddDirectIP")
 	}
-	if r.hostMatchCustomProxy("5.6.7.8") {
+	if r.hostMatchCustomRule(r.customProxy, "5.6.7.8") {
 		t.Error("5.6.7.8 should not match before AddProxyIP")
 	}
 
@@ -495,10 +484,10 @@ func TestRouter_AddIPAfterMatch(t *testing.T) {
 	r.AddProxyIP("5.6.7.8")
 
 	// 添加后应匹配
-	if !r.hostMatchCustomDirect("1.2.3.4") {
+	if !r.hostMatchCustomRule(r.customDirect, "1.2.3.4") {
 		t.Error("1.2.3.4 should match after AddDirectIP")
 	}
-	if !r.hostMatchCustomProxy("5.6.7.8") {
+	if !r.hostMatchCustomRule(r.customProxy, "5.6.7.8") {
 		t.Error("5.6.7.8 should match after AddProxyIP")
 	}
 }
@@ -575,29 +564,14 @@ func TestGlobToRegexp(t *testing.T) {
 }
 
 func TestRouter_RegexpAndGlobCustomDomain(t *testing.T) {
-	// 构造 Router，仅测试自定义正则/通配符规则（不依赖文件读取）
-	r := &Router{
-		customDirectIPs:     make(map[string]struct{}),
-		customDirectCIDRIPs: nil,
-		customDirectDomains: make(map[string]struct{}),
-		customDirectRegexps: nil,
-		customProxyIPs:      make(map[string]struct{}),
-		customProxyCIDRIPs:  nil,
-		customProxyDomains:  make(map[string]struct{}),
-		customProxyRegexps:  nil,
-	}
-	r.proxyRule.Store(int32(ProxyRuleAuto))
+	// 规则来自"文件行"而不是手工构造的 *regexp.Regexp：解析（regexp:/glob）现在
+	// 由 rule 包统一负责，测试因此改成走同一条路径。
+	r := newRouterWithSets(t,
+		[]string{`regexp:^.*\.baidu\.com$`, "*taobao*"},
+		[]string{"*google*", `regexp:^.*\.youtube\..*$`},
+	)
 
-	// 手动添加 regexp 和 glob 规则（模拟 loadCustomIPDomains 的行为）
-	directRe1, _ := regexp.Compile(`^.*\.baidu\.com$`) // regexp: 前缀
-	directRe2, _ := util.GlobToRegexp("*taobao*")      // glob 通配符
-	r.customDirectRegexps = append(r.customDirectRegexps, directRe1, directRe2)
-
-	proxyRe1, _ := util.GlobToRegexp("*google*")       // glob 通配符
-	proxyRe2, _ := regexp.Compile(`^.*\.youtube\..*$`) // regexp: 前缀
-	r.customProxyRegexps = append(r.customProxyRegexps, proxyRe1, proxyRe2)
-
-	// === 测试 hostMatchCustomDirect ===
+	// === 测试自定义直连匹配 ===
 	directTests := []struct {
 		host string
 		want bool
@@ -612,14 +586,14 @@ func TestRouter_RegexpAndGlobCustomDomain(t *testing.T) {
 	}
 	for _, tt := range directTests {
 		t.Run("direct/"+tt.host, func(t *testing.T) {
-			got := r.hostMatchCustomDirect(tt.host)
+			got := r.hostMatchCustomRule(r.customDirect, tt.host)
 			if got != tt.want {
-				t.Errorf("hostMatchCustomDirect(%q) = %v, want %v", tt.host, got, tt.want)
+				t.Errorf("direct match(%q) = %v, want %v", tt.host, got, tt.want)
 			}
 		})
 	}
 
-	// === 测试 hostMatchCustomProxy ===
+	// === 测试自定义代理匹配 ===
 	proxyTests := []struct {
 		host string
 		want bool
@@ -634,9 +608,9 @@ func TestRouter_RegexpAndGlobCustomDomain(t *testing.T) {
 	}
 	for _, tt := range proxyTests {
 		t.Run("proxy/"+tt.host, func(t *testing.T) {
-			got := r.hostMatchCustomProxy(tt.host)
+			got := r.hostMatchCustomRule(r.customProxy, tt.host)
 			if got != tt.want {
-				t.Errorf("hostMatchCustomProxy(%q) = %v, want %v", tt.host, got, tt.want)
+				t.Errorf("proxy match(%q) = %v, want %v", tt.host, got, tt.want)
 			}
 		})
 	}
@@ -697,27 +671,35 @@ func TestRouter_RegexpAndGlobCustomDomain(t *testing.T) {
 	}
 }
 
-func TestRouter_RegexpInvalidSkips(t *testing.T) {
-	// 验证无效的正则表达式被静默跳过（与 NewGeoSite 行为一致）
-	invalidRe, _ := regexp.Compile(`^valid$`) // 末尾加一个无效的不会被添加
-	r := &Router{
-		customDirectRegexps: []*regexp.Regexp{invalidRe},
-		customDirectIPs:     make(map[string]struct{}),
-		customDirectCIDRIPs: nil,
-		customDirectDomains: make(map[string]struct{}),
-		customProxyIPs:      make(map[string]struct{}),
-		customProxyCIDRIPs:  nil,
-		customProxyDomains:  make(map[string]struct{}),
-		customProxyRegexps:  nil,
+// TestRouter_InvalidRulesAreReported 固定本次合并修掉的第二个语义差异：写错的
+// 规则不再被静默丢弃，而是作为规则文件错误暴露给启动告警。
+func TestRouter_InvalidRulesAreReported(t *testing.T) {
+	directFile := filepath.Join(t.TempDir(), "direct.txt")
+	if err := os.WriteFile(directFile, []byte("good.example\nregexp:[broken\n"), 0o600); err != nil {
+		t.Fatalf("write direct file: %v", err)
 	}
-	r.proxyRule.Store(int32(ProxyRuleAuto))
 
-	// valid 正则应匹配
-	if !r.hostMatchCustomDirect("valid") {
-		t.Error("expected 'valid' to match")
+	r, err := New(Config{ProxyRule: ProxyRuleAuto, IPV6Rule: IPV6RuleAuto, DirectFile: directFile})
+	if err != nil {
+		t.Fatalf("New() with a bad rule line should stay non-fatal: %v", err)
 	}
-	// 无效的正则应不匹配
-	if r.hostMatchCustomDirect("invalid") {
-		t.Error("expected 'invalid' not to match")
+	if r.CustomFileError() == nil {
+		t.Fatal("expected the unparsable regexp to be reported")
+	}
+	// 好的规则仍然生效。
+	if !r.IsCustomDirectDomain("good.example") {
+		t.Error("valid rules should still be loaded next to the broken one")
+	}
+}
+
+// TestRouter_MatchHostRuleIsCaseInsensitive 固定路由匹配与 DNS 缓存一致的大小写
+// 语义：同一个域名按不同大小写必须得到同一个路由结论。
+func TestRouter_MatchHostRuleIsCaseInsensitive(t *testing.T) {
+	r := newRouterWithSets(t, []string{"Example.COM"}, nil)
+
+	for _, host := range []string{"example.com", "EXAMPLE.COM", "WWW.Example.Com", "example.com:443", "example.com."} {
+		if got := r.MatchHostRule(host); got != HostRuleDirect {
+			t.Errorf("MatchHostRule(%q) = %d, want HostRuleDirect", host, got)
+		}
 	}
 }
