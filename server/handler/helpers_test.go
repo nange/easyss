@@ -159,7 +159,7 @@ func TestNewProxyHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("无效 method 名称被忽略", func(t *testing.T) {
+	t.Run("无效 method 名称被丢弃且不 fail-open", func(t *testing.T) {
 		cfg := ProxyHandlerConfig{
 			MasterKey:      []byte("test-key-32-bytes-long!!!!!!!"),
 			AllowedMethods: []string{"invalid-method", "aes-256-gcm"},
@@ -168,6 +168,18 @@ func TestNewProxyHandler(t *testing.T) {
 		h := NewProxyHandler(cfg)
 		if len(h.allowedMethods) != 1 {
 			t.Errorf("expected 1 valid method, got %d", len(h.allowedMethods))
+		}
+
+		// 全部非法时不能回落到"两种都允许"：那正是配置层要拒绝的 fail-open。
+		// handler 自己保持 fail-closed（空集合），配置校验（FileConfig.Validate）
+		// 则会在启动期直接报错。
+		allInvalid := NewProxyHandler(ProxyHandlerConfig{
+			MasterKey:      []byte("test-key-32-bytes-long!!!!!!!"),
+			AllowedMethods: []string{"invalid-method", "also-invalid"},
+			Timeouts:       sharedconfig.NewTimeouts(5 * time.Second),
+		})
+		if len(allInvalid.allowedMethods) != 0 {
+			t.Errorf("all-invalid methods must not fall back to the defaults, got %v", allInvalid.allowedMethods)
 		}
 	})
 

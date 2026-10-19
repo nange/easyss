@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -142,22 +143,46 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		domainReady:   make(chan struct{}),
 	}
 
-	// 在启动任何服务器 goroutine 之前，预先绑定所有本地监听地址，
-	// 这样监听失败（例如端口已被占用）会以错误中止启动，
-	// 而不是被记录日志后静默忽略。
-	var socksAddr, httpAddr, dnsAddr string
+	// 在启动任何服务器 goroutine 之前，同步绑定所有本地监听地址，并把监听器
+	// 直接交给对应的服务器。监听失败（端口被占用、fd 耗尽等）因此会在 Run 返回
+	// 之前以错误暴露，而不是在 goroutine 里记一条日志、让 UI 显示"已启动"而代理
+	// 实际不可用。绑定与派发之间没有窗口，也就不存在 prebind 的 TOCTOU。
+	//
+	// 这个"同步返回"是用户可见行为的一部分，不能改成后台绑定：托盘的 buildTray
+	// 在 App.Start 返回错误时会弹系统通知，并让进程存活 startupErrorNotifyDelay
+	// （5s）以便用户读到原因。把 net.Listen 挪回 goroutine 会让端口冲突重新变成
+	// "只记日志"，用户看不到任何通知。
+	var (
+		socksAddr, httpAddr, dnsAddr string
+		socksLn                      net.Listener
+		httpLn                       net.Listener
+		dnsPC                        net.PacketConn
+		// listeners 记录已经绑定、但尚未交给服务器的监听器：任何一步失败都要
+		// 关掉它们，避免 Run 返回错误后端口仍被本进程占着（重试启动会因此失败）。
+		listeners []io.Closer
+	)
+	closeListeners := func() {
+		for _, l := range listeners {
+			_ = l.Close()
+		}
+	}
+
 	if cfg.Local.SocksPort > 0 {
 		socksAddr = "127.0.0.1:" + strconv.Itoa(cfg.Local.SocksPort)
 		if cfg.Local.BindAll {
 			socksAddr = "[::]:" + strconv.Itoa(cfg.Local.SocksPort)
 		}
-		if err := prebindTCP(socksAddr); err != nil {
+		ln, err := net.Listen("tcp", socksAddr)
+		if err != nil {
 			c.cleanup()
 			return nil, fmt.Errorf("socks5 server listen %s: %w", socksAddr, err)
 		}
+		socksLn = ln
+		listeners = append(listeners, ln)
 	}
 	if cfg.Local.HTTPPort > 0 {
 		if cfg.Local.SocksPort <= 0 {
+			closeListeners()
 			_ = cli.Close()
 			return nil, errSocksRequired
 		}
@@ -165,20 +190,28 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		if cfg.Local.BindAll {
 			httpAddr = "[::]:" + strconv.Itoa(cfg.Local.HTTPPort)
 		}
-		if err := prebindTCP(httpAddr); err != nil {
+		ln, err := net.Listen("tcp", httpAddr)
+		if err != nil {
+			closeListeners()
 			c.cleanup()
 			return nil, fmt.Errorf("http proxy server listen %s: %w", httpAddr, err)
 		}
+		httpLn = ln
+		listeners = append(listeners, ln)
 	}
 	if cfg.Local.EnableForwardDNS {
 		dnsAddr = forwardDNSListenAddr()
-		if err := prebindUDP(dnsAddr); err != nil {
+		pc, err := net.ListenPacket("udp", dnsAddr)
+		if err != nil {
+			closeListeners()
 			c.cleanup()
 			return nil, forwardDNSListenError(dnsAddr, err)
 		}
+		dnsPC = pc
+		listeners = append(listeners, pc)
 	}
 
-	if socksAddr != "" {
+	if socksLn != nil {
 		serverDomain := ""
 		if svr := cfg.DefaultServer(); svr != nil && !util.IsIP(svr.Host) {
 			serverDomain = svr.Host
@@ -200,19 +233,14 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 			DNSCache:          c.dnsCache,
 		})
 		if err != nil {
+			closeListeners()
 			_ = cli.Close()
 			return nil, err
 		}
 		c.SocksServer = socksServer
-		log.Info("[EASYSS] starting socks5 server", "addr", socksAddr)
-		go func() {
-			if err := c.SocksServer.Start(); err != nil && !errors.Is(err, net.ErrClosed) {
-				log.Error("[EASYSS] socks5 server", "err", err)
-			}
-		}()
 	}
 
-	if httpAddr != "" {
+	if httpLn != nil {
 		socksAddr := "127.0.0.1:" + strconv.Itoa(cfg.Local.SocksPort)
 		httpServer, err := proxy.NewHTTPProxyServer(proxy.HTTPProxyOptions{
 			ListenAddr: httpAddr,
@@ -226,23 +254,39 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 			Dial:       cli.DialContext,
 		})
 		if err != nil {
+			closeListeners()
 			c.cleanup()
 			return nil, err
 		}
 		c.HTTPServer = httpServer
-		log.Info("[EASYSS] starting http proxy server", "addr", httpAddr)
+	}
+
+	if dnsPC != nil {
+		c.dnsServer = dns.NewForwardServer(dnsAddr, cli.Router().ShouldIPV6Disable())
+	}
+
+	// 所有服务器都构造成功后才派发 goroutine：任何构造失败都已在上面关闭监听器
+	// 并返回错误，因此"Run 成功"意味着端口确实已经在监听。
+	if c.SocksServer != nil {
+		log.Info("[EASYSS] starting socks5 server", "addr", socksLn.Addr().String())
 		go func() {
-			if err := c.HTTPServer.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err := c.SocksServer.Serve(socksLn); err != nil && !errors.Is(err, net.ErrClosed) {
+				log.Error("[EASYSS] socks5 server", "err", err)
+			}
+		}()
+	}
+	if c.HTTPServer != nil {
+		log.Info("[EASYSS] starting http proxy server", "addr", httpLn.Addr().String())
+		go func() {
+			if err := c.HTTPServer.Serve(httpLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Error("[EASYSS] http proxy server", "err", err)
 			}
 		}()
 	}
-
-	if dnsAddr != "" {
-		c.dnsServer = dns.NewForwardServer(dnsAddr, cli.Router().ShouldIPV6Disable())
-		log.Info("[EASYSS] starting dns forward server", "addr", dnsAddr)
+	if c.dnsServer != nil {
+		log.Info("[EASYSS] starting dns forward server", "addr", dnsPC.LocalAddr().String())
 		go func() {
-			if err := c.dnsServer.Start(); err != nil {
+			if err := c.dnsServer.Serve(dnsPC); err != nil && !errors.Is(err, net.ErrClosed) {
 				log.Error("[EASYSS] dns forward server", "err", err)
 			}
 		}()
@@ -511,33 +555,16 @@ func (c *Core) Done() <-chan struct{} {
 	return c.done
 }
 
-// prebindTCP 在服务器 goroutine 启动前验证给定的 TCP 地址可绑定，
-// 使监听失败（例如端口已被占用）能快速以错误失败，
-// 而不是被记录日志后静默忽略。
-func prebindTCP(addr string) error {
-	l, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
-	return l.Close()
-}
-
-// prebindUDP 是 prebindTCP 的 UDP 对应版本，供监听 UDP 的 DNS
-// 转发服务器使用。
-func prebindUDP(addr string) error {
-	pc, err := net.ListenPacket("udp", addr)
-	if err != nil {
-		return err
-	}
-	return pc.Close()
-}
-
 // forwardDNSListenAddr 返回 forward DNS 服务器的监听地址。它刻意监听所有
 // 网卡的 53 端口：该功能面向"把 easyss 部署在路由器/软路由上、LAN 设备的
 // DNS 指向这台路由器"的场景，只监听回环时 LAN 设备根本够不到（见 README
 // 的透明代理章节）。通配地址在支持双栈的平台上同时接受 IPv4 与 IPv6 查询，
 // 应答的源地址由内核按客户端所在网段选取，因此多网口路由器无需额外配置。
-func forwardDNSListenAddr() string {
+//
+// 它是变量而非常量：绑定 53 端口需要 root，CI 与开发机上通常做不到，而
+// "监听器在 Run 里同步绑定、失败即返回错误"这条路径必须可测。测试把它指向
+// 回环上的临时端口，生产路径保持不变。
+var forwardDNSListenAddr = func() string {
 	return ":53"
 }
 

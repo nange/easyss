@@ -133,7 +133,7 @@ func TestStartFailureReleasesFileOutput(t *testing.T) {
 	original := log.Logger()
 	defer log.SetLogger(original)
 
-	// 占住将要监听的 SOCKS 端口，使 runner.Run 在 prebind 阶段失败。保持监听器
+	// 占住将要监听的 SOCKS 端口，使 runner.Run 在绑定监听器时失败。保持监听器
 	// 打开，直到 Start 返回之后才释放。
 	occupied, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

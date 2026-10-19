@@ -47,15 +47,20 @@ type ProxyHandlerConfig struct {
 	Fallback *Fallback
 }
 
+// NewProxyHandler 组装代理 handler。
+//
+// 未知的 AllowedMethods 会被保留在 map 之外，并由调用方在配置加载阶段拒绝
+// （见 server/config.validateAllowedMethods 与 server.New 的 Validate）。这里
+// 不再保留"全部非法就回落到两种都允许"的第二套逻辑：那会让一条写错的限制配置
+// 反而把服务端放开，且与配置校验给出互相矛盾的结论。
 func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 	allowed := make(map[protocol.Method]bool)
 	for _, m := range cfg.AllowedMethods {
-		method := protocol.MethodFromString(m)
-		if method != 0 {
+		if method := protocol.MethodFromString(m); method != 0 {
 			allowed[method] = true
 		}
 	}
-	if len(allowed) == 0 {
+	if len(allowed) == 0 && len(cfg.AllowedMethods) == 0 {
 		allowed[protocol.MethodAES256GCM] = true
 		allowed[protocol.MethodChaCha20Poly1305] = true
 	}

@@ -27,8 +27,8 @@ type ForwardServer struct {
 	pc net.PacketConn
 	// dnsServer 与 pc 一同登记，供 Shutdown 优雅关闭（等待在飞查询）。
 	dnsServer *dns.Server
-	// closing 由 Shutdown 在 mu 下置位；Start 在登记 socket 之前检查它，
-	// 使"先 Shutdown 再 Start"不会把服务器重新拉起来。
+	// closing 由 Shutdown 在 mu 下置位；Serve 在登记 socket 之前检查它，
+	// 使"先 Shutdown 再 Serve/Start"不会把服务器重新拉起来。
 	closing bool
 }
 
@@ -53,14 +53,24 @@ func NewForwardServer(listenAddr string, disableIPV6 bool) *ForwardServer {
 	}
 }
 
-// Start 绑定监听 socket 并开始服务。socket 在向内部状态登记之前就已绑定，
-// 因此无论 Shutdown 落在哪个时刻，端口都会被释放（见 pc 字段）。
+// Start 自行绑定监听 socket 并开始服务。它是 Serve(net.ListenPacket(...)) 的
+// 便捷形式；runner 使用 Serve 直接交入它在启动主 goroutine 上同步绑定好的
+// socket，使绑定失败在 Run 返回之前就以错误暴露。
 func (s *ForwardServer) Start() error {
 	pc, err := net.ListenPacket("udp", s.listenAddr)
 	if err != nil {
 		return err
 	}
+	return s.Serve(pc)
+}
 
+// Serve 在调用方提供的 socket 上服务。socket 的所有权转移给本服务器：Shutdown
+// 会关闭它（见 pc 字段）。
+//
+// socket 在向内部状态登记之前就已由调用方绑定，因此无论 Shutdown 落在哪个时刻，
+// 端口都会被释放；Shutdown 已发生时，迟到的 Serve 会自己关掉传入的 socket 并
+// 返回 net.ErrClosed。
+func (s *ForwardServer) Serve(pc net.PacketConn) error {
 	srv := &dns.Server{
 		PacketConn: pc,
 		Handler:    dns.HandlerFunc(s.handleDNS),
@@ -78,7 +88,7 @@ func (s *ForwardServer) Start() error {
 	s.dnsServer = srv
 	s.mu.Unlock()
 
-	log.Info("[DNS-FORWARD] starting forward dns server", "addr", s.listenAddr)
+	log.Info("[DNS-FORWARD] starting forward dns server", "addr", pc.LocalAddr().String())
 
 	return srv.ActivateAndServe()
 }

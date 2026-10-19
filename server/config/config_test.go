@@ -87,6 +87,89 @@ func TestLoadConfigReadAndParseErrors(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestLoadConfigRejectsUnknownAllowedMethods 固定 allowed_methods 的加载期校验：
+// 未知值不再被 handler 静默丢弃，更不允许"全部写错 → 回落到两种都允许"的
+// fail-open 行为。空列表仍是文档化的默认对。
+func TestLoadConfigRejectsUnknownAllowedMethods(t *testing.T) {
+	for _, body := range []string{
+		`["aes-gcm"]`,
+		`["aes-256-gcm-typo"]`,
+		`["AES-256-GCM"]`,
+		`["aes-256-gcm","foo"]`,
+		`[""]`,
+	} {
+		cfg := fmt.Sprintf(`{"server":{"host":"example.com","allowed_methods":%s}}`, body)
+		_, err := LoadConfig(writeConfig(t, cfg))
+		require.ErrorContains(t, err, "server.allowed_methods", "allowed_methods %s", body)
+	}
+
+	// 合法值（含空列表）必须照常加载：空列表由 GetAllowedMethods 回落默认对。
+	fc, err := LoadConfig(writeConfig(t, `{"server":{"host":"example.com","allowed_methods":["aes-256-gcm"]}}`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"aes-256-gcm"}, fc.Server.AllowedMethods)
+
+	fc, err = LoadConfig(writeConfig(t, `{"server":{"host":"example.com"}}`))
+	require.NoError(t, err)
+	require.Equal(t, DefaultAllowedMethods(), fc.Server.GetAllowedMethods())
+}
+
+// TestLoadConfigRejectsOutOfRangeH2 固定 h2_* 的加载期边界：标准库会把越界值
+// 静默替换成它自己的 1MiB 默认值，因此这些值必须在加载期失败，而不是留下
+// "日志打印原始值、实际生效另一套"的配置。边界取标准库实际接受区间。
+func TestLoadConfigRejectsOutOfRangeH2(t *testing.T) {
+	cases := []struct {
+		key  string
+		vals []int
+	}{
+		{"h2_max_frame_size", []int{-1, 1<<14 - 1, 1<<24 - 1 + 1}},
+		{"h2_recv_buf_conn", []int{-1, 1, 1<<16 - 2}},
+		{"h2_recv_buf_stream", []int{-1}},
+	}
+	for _, tc := range cases {
+		for _, v := range tc.vals {
+			body := fmt.Sprintf(`{"server":{"host":"example.com"},"transport":{%q:%d}}`, tc.key, v)
+			_, err := LoadConfig(writeConfig(t, body))
+			require.ErrorContains(t, err, "transport."+tc.key, "%s=%d", tc.key, v)
+		}
+	}
+
+	// 边界值与 4MiB 以上的窗口（标准库实现接受、既有测试也在用）必须通过。
+	for _, body := range []string{
+		`{"server":{"host":"example.com"},"transport":{"h2_max_frame_size":16384}}`,
+		`{"server":{"host":"example.com"},"transport":{"h2_max_frame_size":16777215}}`,
+		`{"server":{"host":"example.com"},"transport":{"h2_recv_buf_conn":65535}}`,
+		`{"server":{"host":"example.com"},"transport":{"h2_recv_buf_conn":8388608}}`,
+		`{"server":{"host":"example.com"},"transport":{"h2_recv_buf_stream":1}}`,
+		`{"server":{"host":"example.com"},"transport":{"h2_recv_buf_stream":8388608}}`,
+	} {
+		_, err := LoadConfig(writeConfig(t, body))
+		require.NoError(t, err, "body %s", body)
+	}
+}
+
+// TestLoadConfigNormalizesH2Defaults 固定"0 使用默认值"在加载期写回：加载后的
+// 配置里是 sharedconfig 的默认值，而不是 0——启动日志与 buildHTTPServer 因此
+// 看到的是同一个生效值。
+func TestLoadConfigNormalizesH2Defaults(t *testing.T) {
+	fc, err := LoadConfig(writeConfig(t, `{"server":{"host":"example.com"}}`))
+	require.NoError(t, err)
+	require.Equal(t, sharedconfig.HTTP2ServerMaxReadFrameSize, fc.Transport.H2MaxFrameSize)
+	require.Equal(t, sharedconfig.HTTP2ServerReceiveBufferPerConnection, fc.Transport.H2RecvBufConn)
+	require.Equal(t, sharedconfig.HTTP2ServerReceiveBufferPerStream, fc.Transport.H2RecvBufStream)
+}
+
+// TestLoadConfigIgnoresRemovedTransportProtocols 固定"删除 transport.protocols"
+// 的向后兼容：老配置里仍带着该键时必须照常启动（未知字段被忽略），实际协议
+// 集合由 buildHTTPServer 决定（h2 强制、h1 供 fallback 使用）。
+func TestLoadConfigIgnoresRemovedTransportProtocols(t *testing.T) {
+	fc, err := LoadConfig(writeConfig(t, `{
+		"server": {"host": "example.com"},
+		"transport": {"protocols": ["h2"], "h2_recv_buf_stream": 2097152}
+	}`))
+	require.NoError(t, err)
+	require.Equal(t, 2097152, fc.Transport.H2RecvBufStream)
+}
+
 // TestApplyDefaultsIsIdempotent 守护"已归一化的配置再次归一化不变"，也固定它
 // 只覆盖没有其他 owner 的字段：显式配置的日志级别必须原样保留。
 func TestApplyDefaultsIsIdempotent(t *testing.T) {
@@ -112,11 +195,12 @@ func TestExampleConfigIsNormalized(t *testing.T) {
 	require.Equal(t, fc, normalized)
 
 	require.Equal(t, DefaultAllowedMethods(), fc.Server.AllowedMethods)
-	require.Equal(t, []string{sharedconfig.DefaultProtocol}, fc.Transport.Protocols)
 	require.Equal(t, SupportedConfigVersion, fc.ConfigVersion)
 	require.Equal(t, "your-domain.com", fc.Server.Host)
 	require.Equal(t, sharedconfig.DefaultServerPort, fc.Server.Port)
 	require.NoError(t, fc.validateListen())
+	require.NoError(t, fc.validateTransport())
+	require.NoError(t, fc.validateAllowedMethods())
 
 	// 示例必须能完整序列化出全部字段（新增字段时不会静默漏在示例之外；
 	// bind 是可选高级项，默认为空，故不出现在示例中），且空列表呈现为 []
@@ -332,6 +416,21 @@ func TestLoadConfigPortDefaultAndValidation(t *testing.T) {
 		_, err := LoadConfig(writeConfig(t, fmt.Sprintf(`{"server":{"host":"example.com","port":%d}}`, port)))
 		require.ErrorContains(t, err, "server.port", "port %d", port)
 	}
+}
+
+// TestValidateTreatsZeroPortAsDefault 固定 FileConfig.Validate 的直接调用语义：
+// 它不要求调用方先执行 applyDefaults，Port==0 按 ListenAddr 的默认端口校验；
+// 非零端口与 bind 仍必须在这里被拒绝（server.New 依赖这一点）。
+func TestValidateTreatsZeroPortAsDefault(t *testing.T) {
+	fc := &FileConfig{Server: ServerConfig{Host: "example.com"}}
+	require.NoError(t, fc.Validate())
+
+	fc.Server.Port = 70000
+	require.ErrorContains(t, fc.Validate(), "server.port")
+
+	fc.Server.Port = 0
+	fc.Server.Bind = "127.0.0.1:443"
+	require.ErrorContains(t, fc.Validate(), "server.bind")
 }
 
 // TestLoadConfigLegacyListen 固定旧配置能完整加载并保留绑定地址。

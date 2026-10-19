@@ -7,24 +7,28 @@ import (
 	"github.com/nange/easyss/v3/log"
 )
 
-// Start 创建监听器并开始服务，直到监听器被关闭（见 Close）。
+// Start 自行绑定监听地址并开始服务，直到监听器被关闭（见 Close）。
 //
-// 监听器的绑定在调用方 goroutine 上同步完成。与上一版实现的区别：库只提供
-// Serve(net.Listener)，不再代管监听器，也不再有 Shutdown 语义不明的
-// runnergroup——因此这里既不调用库的关闭方法，也不需要靠"一次真实 SOCKS5 问候
-// 收到应答"来证明 accept 循环已启动（那是为绕开 runnergroup 的 Done-before-Wait
-// 永久阻塞与 runner 未注册时监听器泄漏而做的探测，见旧版 waitForAccept）。
-//
-// 与 Close 的竞争由一个互斥量裁决：Close 先跑则本函数拿到的监听器立即释放并
-// 正常返回，绝不留下无人释放的端口。因此不需要调用方事先声明"我要启动了"——
-// 上一版为此保留的 MarkStarted/started 状态已随生命周期重写一起删除。
+// 它是 Serve(net.Listen(...)) 的便捷形式；runner 使用 Serve 直接交入它在启动
+// 主 goroutine 上同步绑定好的监听器，使"端口被占"在 Run 返回之前就以错误暴露。
 func (s *Socks5Server) Start() error {
-	s.udp.start()
-
 	ln, err := net.Listen("tcp", s.listenAddr)
 	if err != nil {
 		return err
 	}
+	return s.Serve(ln)
+}
+
+// Serve 在调用方提供的监听器上服务，直到它被关闭（见 Close）。
+//
+// 监听器的所有权转移给本服务器：Close 会关闭它。调用方因此必须在**启动主
+// goroutine 上**完成绑定并把错误返回给启动路径，而不是在后台 goroutine 里
+// Listen 后只记日志——那正是"UI 已启动、代理却不可用"的来源。
+//
+// 与 Close 的竞争由一个互斥量裁决：Close 先跑则本函数拿到的监听器立即释放并
+// 正常返回，绝不留下无人释放的端口。因此不需要调用方事先声明"我要启动了"。
+func (s *Socks5Server) Serve(ln net.Listener) error {
+	s.udp.start()
 
 	s.listenerMu.Lock()
 	if s.closed {

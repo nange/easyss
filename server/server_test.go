@@ -70,17 +70,58 @@ func TestCertmagicStoragePathForExecutable(t *testing.T) {
 	require.Equal(t, filepath.Join("tmp", "easyss", "certmagic"), certmagicStoragePathForExecutable(exe))
 }
 
-func TestNewTransportProtocolsValidation(t *testing.T) {
-	require.NoError(t, mustNewServer(t, nil))
-	require.NoError(t, mustNewServer(t, []string{"h2"}))
-	require.Error(t, mustNewServer(t, []string{"h3"}))
-	require.Error(t, mustNewServer(t, []string{"h2", "h3"}))
+func TestNewDoesNotValidateProtocols(t *testing.T) {
+	// transport.protocols 已删除：老配置里的该键由 json.Unmarshal 忽略，New 不再
+	// 读取它。这里守住"删除后不会因为残留字段而拒绝启动"。
+	require.NoError(t, mustNewServer(t))
 }
 
-func mustNewServer(t *testing.T, protocols []string) error {
+// TestNewValidatesConfig 固定 server.New 也是校验入口：它是导出 API，测试与
+// 嵌入式调用会绕过 config.LoadConfig 直接手搓 FileConfig，因此不能把
+// allowed_methods/h2_*/监听端点的校验只留在配置文件路径上。
+func TestNewValidatesConfig(t *testing.T) {
+	cfg := &config.FileConfig{
+		Server: config.ServerConfig{
+			Host:           "example.com",
+			AllowedMethods: []string{"aes-gcm"},
+		},
+	}
+	_, err := New(cfg)
+	require.ErrorContains(t, err, "server.allowed_methods")
+
+	cfg = &config.FileConfig{
+		Server:    config.ServerConfig{Host: "example.com"},
+		Transport: config.TransportConfig{H2MaxFrameSize: 10000},
+	}
+	_, err = New(cfg)
+	require.ErrorContains(t, err, "transport.h2_max_frame_size")
+
+	cfg = &config.FileConfig{
+		Server:    config.ServerConfig{Host: "example.com"},
+		Transport: config.TransportConfig{H2RecvBufConn: 1000},
+	}
+	_, err = New(cfg)
+	require.ErrorContains(t, err, "transport.h2_recv_buf_conn")
+
+	// Port==0 仍有 ListenAddr 的默认值语义；非法端口与带端口的 bind 必须在
+	// New 就失败，而不是留到 Start 的 net.Listen。
+	cfg = &config.FileConfig{
+		Server: config.ServerConfig{Host: "example.com", Port: 70000},
+	}
+	_, err = New(cfg)
+	require.ErrorContains(t, err, "server.port")
+
+	cfg = &config.FileConfig{
+		Server: config.ServerConfig{Host: "example.com", Bind: "127.0.0.1:443"},
+	}
+	_, err = New(cfg)
+	require.ErrorContains(t, err, "server.bind")
+}
+
+func mustNewServer(t *testing.T) error {
 	t.Helper()
 	_, err := New(&config.FileConfig{
-		Transport: config.TransportConfig{Protocols: protocols},
+		Server: config.ServerConfig{Host: "example.com"},
 	})
 	return err
 }

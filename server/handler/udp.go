@@ -117,11 +117,18 @@ func (h *udpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 // 按结果决定），run 的返回值是唯一的退出原因。读取 goroutine 只经 resultCh
 // 回传结果，不持有任何会被其他 goroutine 修改的状态。
 type udpSession struct {
-	// conn 是当前出站连接。DNS 会话会在查询路由变化时重绑它（见 rebindRoute），
-	// 因此它由 mu 保护；其他会话在整个会话期间只写一次。
-	conn   net.Conn
-	remote string
-	target string
+	// conn 是当前出站连接，remote 是它的远端地址（仅用于日志）。DNS 会话会在
+	// 查询路由变化时重绑它们（见 rebindRoute），因此两者都由 mu 保护；其他
+	// 会话在整个会话期间只写一次。
+	//
+	// connRoute 是**当前连接实际使用的路由**，与 conn 同生共死：它由
+	// installUpstream 在同一个临界区里写入，closeUpstream 在摘除连接时一并清空。
+	// 因此"conn 非 nil 但路由是上一条连接的"这种中间态不存在（重绑失败时旧连接
+	// 与旧路由一起原样保留）。
+	conn      net.Conn
+	remote    string
+	connRoute *dnsRoute
+	target    string
 
 	dr         *crypto.DecryptedReader
 	s2c        shaper.Shaper
@@ -151,8 +158,9 @@ type udpSession struct {
 	// 退出后返回，因此"会话结束后没有读取 goroutine 残留"是收尾的一部分，而
 	// 不是一个只能靠 sleep 观察的猜测。
 	//
-	// 目标侧在重绑时会为**新**连接再登记一个 goroutine：旧 goroutine 总是先因
-	// 旧连接被关闭而退出，所以"Wait 与 Add 并发"永远不会发生。
+	// 目标侧在重绑时会为**新**连接再登记一个 goroutine。Add 与 Wait 都只在
+	// 主 goroutine（run/close）上发生，因此"Wait 与 Add 并发"永远不会发生；
+	// 新旧两个读取 goroutine 允许短暂并存，各自只读进入时固定的那条连接。
 	readers sync.WaitGroup
 	// readerRunning 表示 run 已接管目标侧读取侧：此后的连接安装（DNS 会话的
 	// 首条连接、以及每次重绑）都要顺带启动读取 goroutine，否则新连接会没人读。
@@ -214,49 +222,77 @@ func (s *udpSession) upstream() net.Conn {
 	return s.conn
 }
 
-// setUpstream 安装一条新的出站连接，并按需为它补上读取侧。返回值是写给日志的
-// 远端地址。
+// upstreamRoute 返回**当前连接**实际使用的路由；没有连接时 ok 为 false。
+//
+// 它与 upstream 读的是同一把锁下的同一份状态：conn 与 connRoute 只在
+// installUpstream 里一起写入、只在 closeUpstream 里一起清空，因此调用方不会
+// 读到"连接已经换了、路由还是旧的"这种撕裂状态。
+func (s *udpSession) upstreamRoute() (dnsRoute, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conn == nil || s.connRoute == nil {
+		return dnsRouteDirect, false
+	}
+	return *s.connRoute, true
+}
+
+// installUpstream 一次性安装新连接、远端地址与它实际使用的路由，并按需为它补上
+// 读取侧；返回被替换掉的旧连接（没有则 nil），由调用方在锁外关闭。
+//
+// 把三者放进同一个临界区是"conn 与 connRoute 同生共死"的实现：任何读者要么
+// 看到旧连接+旧路由，要么看到新连接+新路由。旧连接在这里只被摘除、不被关闭，
+// 因此重绑可以在拨号失败时原样保留它（见 rebindRoute）。
 //
 // watch 为真表示"这次安装发生在 run 已经接管读取侧之后"，也就是 DNS 会话的
-// 第一条连接（由主循环在处理第一个查询时安装）与之后每次重绑——两种情况下旧
-// 连接的读取 goroutine 都已退出，因此必须补一个新的。非 DNS 会话建立连接时
-// watch 为假：它的读取 goroutine 由 run 统一启动，重复登记会让同一条连接被读两次。
-func (s *udpSession) setUpstream(conn net.Conn, remote string, watch bool) string {
+// 第一条连接（由主循环在处理第一个查询时安装）与之后每次重绑——两种情况下都
+// 必须为新连接补一个读取 goroutine。非 DNS 会话建立连接时 watch 为假：它的
+// 读取 goroutine 由 run 统一启动，重复登记会让同一条连接被读两次。
+//
+// 新 reader 在旧连接关闭之前登记（见 rebindRoute），两者允许短暂并存：每个
+// reader 的连接由参数固定，只读自己那条连接，旧连接关闭后它自行退出。
+func (s *udpSession) installUpstream(conn net.Conn, remote string, route dnsRoute, watch bool) net.Conn {
 	s.mu.Lock()
+	old := s.conn
 	s.conn = conn
 	s.remote = remote
-	addr := remote
+	s.connRoute = &route
 	s.mu.Unlock()
 	if watch {
-		s.startUpstreamReader()
+		s.startUpstreamReader(conn)
 	}
-	return addr
+	return old
 }
 
 // remoteAddr 在锁下取当前连接的远端地址，供读取 goroutine 记日志使用
-// （setUpstream 会在重绑时改写它）。
+// （installUpstream 会在重绑时改写它）。
 func (s *udpSession) remoteAddr() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.remote
 }
 
-// closeUpstream 关闭并摘除当前出站连接；返回被摘除的连接（没有则 nil）。
-func (s *udpSession) closeUpstream() net.Conn {
+// closeUpstream 关闭并摘除当前出站连接及其路由。路由与连接一起清空，因此
+// 关闭之后 upstreamRoute 必然为 nil。
+func (s *udpSession) closeUpstream() {
 	s.mu.Lock()
 	conn := s.conn
 	s.conn = nil
+	s.connRoute = nil
 	s.mu.Unlock()
 	if conn != nil {
 		conn.Close() //nolint:errcheck
 	}
-	return conn
 }
 
 // udpDatagram 是读取 goroutine 回传给主 goroutine 的一个目标侧数据报。
 // 它只携带原始载荷：DNS 解析由主 goroutine 按学习状态门控（见 maybeDNS），
 // 读取侧因此不对普通中继流量（QUIC 等）做任何解析。
+//
+// conn 是产生该结果的出站连接。错误必须带上它：读取 goroutine 与重绑并发，
+// 一次"检查时仍是当前连接、送达到主循环时已被替换"的错误不能结束已经有健康
+// 新连接的会话（见 run 对 res.conn 的判断）。
 type udpDatagram struct {
+	conn    net.Conn
 	payload []byte
 	err     error
 }
@@ -273,12 +309,12 @@ func (s *udpSession) run() (out streamResult) {
 		out.Bytes = s.transferred
 	}()
 
-	// 从这里起"安装连接"（DNS 会话的首条查询、或重绑）都必须由 setUpstream
-	// 补上读取侧：DNS 会话在 run 开始时还没有连接，它的第一条连接正是由主循环
-	// 在处理第一个查询时安装的。
+	// 从这里起"安装连接"（DNS 会话的首条查询、或重绑）都必须由
+	// installUpstream 补上读取侧：DNS 会话在 run 开始时还没有连接，它的第一条
+	// 连接正是由主循环在处理第一个查询时安装的。
 	s.readerRunning = true
-	if s.upstream() != nil {
-		s.startUpstreamReader()
+	if conn := s.upstream(); conn != nil {
+		s.startUpstreamReader(conn)
 	}
 
 	frameCh := make(chan udpFrameResult, 1)
@@ -299,7 +335,14 @@ func (s *udpSession) run() (out streamResult) {
 			return streamResult{}
 		case res := <-s.resultCh:
 			if res.err != nil {
-				return streamResult{Err: res.err}
+				// 读取 goroutine 在报错前会检查一次连接身份，但检查与送达之间
+				// 仍可能发生重绑：此时这条错误来自已经被替换的旧连接，不能让
+				// 它结束一条新连接仍健康的会话。来源连接由 readFromTarget 随
+				// 结果一起带回来，主 goroutine 在这里做最终判定。
+				if res.conn != nil && res.conn != s.upstream() {
+					continue
+				}
+				return streamResult{Err: s.targetReadError(res.err)}
 			}
 			s.transferred += int64(len(res.payload))
 			// 门控解析：只有确实发出过 DNS 查询的会话才尝试 Unpack 应答。
@@ -392,7 +435,7 @@ func (s *udpSession) upstreamOrDial() (net.Conn, error) {
 	} else if !s.dns.enabled {
 		route = s.targetRoute()
 	}
-	if err := s.dialUpstream(s.ctx, s.dns.dialDomain, route); err != nil {
+	if err := s.openUpstream(s.ctx, s.dns.dialDomain, route); err != nil {
 		return nil, err
 	}
 	conn = s.upstream()
@@ -402,41 +445,31 @@ func (s *udpSession) upstreamOrDial() (net.Conn, error) {
 	return conn, nil
 }
 
-// dialUpstream 按给定路由拨号出站连接。这是会话里唯一建立出站连接的地方：
-// 建立（DNS 会话的首条查询、非 DNS 会话的 Handle）与重绑（rebindRoute）共用它，
-// 因此"判定—拨号—记录路由与远端"只有一套。
-//
-// 路由是参数而不是从会话状态里推出来的：DNS 会话的兜底拨号（首帧不是查询）与
-// 查询驱动的拨号走的是同一条路径，区别只在路由由谁决定。
-func (s *udpSession) dialUpstream(ctx context.Context, domain string, route dnsRoute) error {
-	// 有 dnsRouter 时全部交给它：判定与拨号必须同源，两条路由都由它分派
-	// （udpRouteDialer.dialRoute 内部对直连路由走共享 dialer 的直连分支）。
-	// 没有它时（未配置下一级代理、或其他会话）由会话自己按路由拨。
-	// 装连接与启动读取侧都在 dialRoute 里（见 udp_dns.go）。
-	remote, err := s.dialRoute(ctx, domain, route)
-	if err != nil {
-		return err
-	}
-	log.Info("[UDP] upstream connected", "target", s.target, "remote", remote,
-		"via_next_proxy", route.viaNextProxy())
-	return nil
-}
+// openUpstream 与 dialRoute 的说明见 udp_dns.go：前者负责"建立并安装第一条
+// 连接"，后者只负责"拨"。会话里不再有第二套安装逻辑。
 
-// startUpstreamReader 为当前出站连接启动一个读取 goroutine。连接被重绑时旧
-// goroutine 会因旧连接被关闭而自然结束，随后由这里为同一时刻安装上的新连接再
-// 起一个——两者是严格串行的，因此 readers.WaitGroup 不会出现"Wait 与 Add 并发"
-// 的用法（关闭路径只等待已经登记的 goroutine）。
-func (s *udpSession) startUpstreamReader() {
-	s.readers.Go(s.readFromTarget)
+// startUpstreamReader 为给定连接启动一个读取 goroutine。
+//
+// 连接是**参数**而不是 goroutine 启动后再从 s.upstream() 取：后者会让 reader
+// 在"go 之后、第一次执行之前"碰上重绑时读到新连接，于是新连接上出现两个
+// reader、旧连接一个都没有，旧连接上的在飞应答随之丢失。参数化之后
+// "一条连接一个 reader"是结构性保证，不依赖调度顺序。
+//
+// 重绑时新连接的 reader 在旧连接被关闭之前就会登记（见 rebindRoute），两者
+// 可能短暂并存：每个 reader 只读自己参数里的那条连接，旧连接关闭后它自行退出。
+// readers.WaitGroup 的 Add 与 Wait 都只发生在主 goroutine 上，因此不会出现
+// "Wait 与 Add 并发"的用法（关闭路径只等待已经登记的 goroutine）。
+func (s *udpSession) startUpstreamReader(conn net.Conn) {
+	s.readers.Go(func() { s.readFromTarget(conn) })
 }
 
 // readFromTarget 读取**一条**出站连接并把原始报文回传给主 goroutine；是否解析、
-// 是否学习、是否推送都由主 goroutine 决定。它读取的连接在进入时固定（见下），
-// 因此不需要在读取中途切换目标。
+// 是否学习、是否推送都由主 goroutine 决定。连接由调用方作为参数传入，在
+// goroutine 启动前就已固定，因此读取中途不需要（也不会）切换目标。
 //
 // 回传（含错误）都遵守 done：会话一旦收尾，读取侧必须能立即退出，而不是
 // 卡在向一个已经没有接收者的通道发送上——close 会等待这个 goroutine。
-func (s *udpSession) readFromTarget() {
+func (s *udpSession) readFromTarget(conn net.Conn) {
 	buf := bytespool.Get(udpBufSize)
 	defer bytespool.MustPut(buf)
 	// 读满整个池档位：n == len(readBuf) 说明数据报至少填满了档位（被截断，
@@ -444,29 +477,22 @@ func (s *udpSession) readFromTarget() {
 	// 客户端。只读 16,362 字节则无法区分"恰好等于预算"与"被截断"。
 	readBuf := buf[:cap(buf)]
 
-	// 连接在进入本 goroutine 时固定：路由重绑必然发生在客户端帧的处理过程中
-	// （主 goroutine），而重绑会先把旧连接换掉并关闭——从这里取到的连接要么是
-	// 重绑前的那条（随后被关闭，读取返回错误并按正常收尾），要么是重绑后的
-	// 新连接（由 startUpstreamReader 再起的 goroutine 负责）。
-	conn := s.upstream()
-	if conn == nil {
-		return
-	}
-
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(s.idleTimeout))
 		n, err := conn.Read(readBuf)
 		if err != nil {
-			if protocol.IsUDPMessageTooLong(err) {
-				log.Warn("[UDP] dropping oversized datagram", "err", err)
-				continue
-			}
 			if conn != s.upstream() {
 				// 这条连接已经被重绑替换：它的错误是拆连接的预期结果，不是目标
 				// 故障，也不该拿去结束会话——新连接的读取 goroutine 已经接手。
 				return
 			}
-			s.sendResult(udpDatagram{err: s.targetReadError(err)})
+			if protocol.IsUDPMessageTooLong(err) {
+				log.Warn("[UDP] dropping oversized datagram", "err", err)
+				continue
+			}
+			// 带上来源连接：主 goroutine 收到时可能已经完成另一次重绑，需要
+			// 用这个身份丢弃旧连接的错误（见 run 对 res.conn 的判断）。
+			s.sendResult(udpDatagram{conn: conn, err: err})
 			return
 		}
 		if n > udpBufSize {
@@ -475,7 +501,7 @@ func (s *udpSession) readFromTarget() {
 			continue
 		}
 		payload := append([]byte(nil), readBuf[:n]...)
-		if !s.sendResult(udpDatagram{payload: payload}) {
+		if !s.sendResult(udpDatagram{conn: conn, payload: payload}) {
 			return
 		}
 	}
@@ -494,6 +520,9 @@ func (s *udpSession) sendResult(d udpDatagram) bool {
 // targetReadError 归一化目标侧读取错误：读取截止时间与连接关闭都是会话
 // 结束的正常路径（前者由空闲计时器或 close 触发），返回 io.EOF 让主
 // goroutine 走正常收尾；只有在会话仍然存活时才是真实故障。
+//
+// 它由 run 在确认错误来自当前连接后调用（见 udpDatagram.conn），因此这里
+// 记录的远端地址不会来自已经被重绑替换的连接。
 func (s *udpSession) targetReadError(err error) error {
 	if errors.Is(err, net.ErrClosed) || errors.Is(err, os.ErrDeadlineExceeded) {
 		return io.EOF
