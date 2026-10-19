@@ -1,11 +1,15 @@
 package dns
 
 import (
+	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/nange/easyss/v3/log"
 )
 
 // resetBuiltinDNSCircuit 清除内置 DNS 熔断器状态与可达记录（TUN 系统 DNS
@@ -175,5 +179,106 @@ func TestQueryWithBuiltinFirstArmedBreakerWithoutFallback(t *testing.T) {
 	}
 	if !BuiltinDNSAvailable() {
 		t.Fatal("a successful builtin query must clear the breaker")
+	}
+}
+
+// TestBuiltinRouteFor 固定熔断判定的三个互斥状态。用三态而不是两个布尔，
+// 是因为"熔断中且没有兜底"必须与"健康"区分开：前者要打一条"冷却被无视"的
+// 警告，后者不打；此前两个布尔让这两态在调用方看起来相同，于是其中一条分支
+// 永远是死代码。
+func TestBuiltinRouteFor(t *testing.T) {
+	MarkBuiltinDNSAvailable()
+	t.Cleanup(MarkBuiltinDNSAvailable)
+
+	for _, failover := range []bool{true, false} {
+		if got := BuiltinRouteFor(func() bool { return failover }); got != BuiltinRouteFirst {
+			t.Errorf("BuiltinRouteFor(failover=%v) with a healthy breaker = %v, want %v",
+				failover, got, BuiltinRouteFirst)
+		}
+	}
+
+	MarkBuiltinDNSUnavailable()
+	if got := BuiltinRouteFor(func() bool { return true }); got != BuiltinRouteSkip {
+		t.Errorf("armed breaker with a system failover = %v, want %v", got, BuiltinRouteSkip)
+	}
+	if got := BuiltinRouteFor(func() bool { return false }); got != BuiltinRouteRetry {
+		t.Errorf("armed breaker without any failover = %v, want %v", got, BuiltinRouteRetry)
+	}
+
+	// 熔断器健康时不得求值 hasFailover：那是系统 DNS 发现（darwin 上走
+	// networksetup，约 48ms），预解析不该为它付出代价。
+	MarkBuiltinDNSAvailable()
+	called := false
+	BuiltinRouteFor(func() bool { called = true; return true })
+	if called {
+		t.Error("BuiltinRouteFor must not probe the system fallback while the breaker is healthy")
+	}
+}
+
+// recordingHandler 记录所有日志记录，供"这条路径不得刷屏"这类断言使用。
+type recordingHandler struct {
+	records []slog.Record
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.records = append(h.records, r)
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *recordingHandler) at(level slog.Level) []slog.Record {
+	var out []slog.Record
+	for _, r := range h.records {
+		if r.Level == level {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// TestQueryWithBuiltinFirstRetryDoesNotWarn 固定日志级别与调用频率的对应关系：
+// QueryWithBuiltinFirst 在本地转发服务器里是**每条 DNS 查询**调用一次，因此
+// Retry 态（熔断已置位、但没有系统兜底）只能记 Debug；记 Warn 会按查询刷屏，
+// 而这条消息描述的是一个持续数分钟的状态，不是一次需要处置的事件。
+//
+// 低频的预解析路径（Cache.PrePopulateWithFallback 与 client.resolveServerIPV6）
+// 仍然用 Warn——那里一次运行只出现一条。
+func TestQueryWithBuiltinFirstRetryDoesNotWarn(t *testing.T) {
+	resetBuiltinDNSCircuit()
+	MarkBuiltinDNSUnavailable() // 熔断已置位
+	t.Cleanup(resetBuiltinDNSCircuit)
+
+	rec := &recordingHandler{}
+	prev := log.Logger()
+	log.SetLogger(slog.New(rec))
+	t.Cleanup(func() { log.SetLogger(prev) })
+
+	failure := errors.New("builtin unreachable")
+	for range 3 {
+		_, err := QueryWithBuiltinFirst(
+			[]string{"192.0.2.1:53"},
+			nil, // 没有系统兜底 → BuiltinRouteRetry
+			func([]string) (*dns.Msg, error) { return nil, failure },
+		)
+		if !errors.Is(err, failure) {
+			t.Fatalf("QueryWithBuiltinFirst error = %v, want the builtin failure", err)
+		}
+	}
+
+	if warns := rec.at(slog.LevelWarn); len(warns) != 0 {
+		t.Fatalf("retry state produced %d Warn records over 3 queries, want 0: %v", len(warns), warns)
+	}
+	var retryDebugs int
+	for _, r := range rec.at(slog.LevelDebug) {
+		if strings.Contains(r.Message, "breaker is armed but no system dns") {
+			retryDebugs++
+		}
+	}
+	if retryDebugs != 3 {
+		t.Fatalf("retry state produced %d retry-Debug records over 3 queries, want 3", retryDebugs)
 	}
 }

@@ -131,7 +131,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 
 	timeouts := sharedconfig.NewTimeouts(cfg.TimeoutDuration())
 
-	streamHandler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, timeouts.StreamIdle)
+	streamHandler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, timeouts)
 
 	c := &Core{
 		cfg:           cfg,
@@ -247,7 +247,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 			SocksAddr:  socksAddr,
 			Username:   cfg.AuthUsername,
 			Password:   cfg.AuthPassword,
-			Timeout:    timeouts.Base,
+			Timeouts:   timeouts,
 			Handler:    streamHandler,
 			Router:     cli.Router(),
 			Method:     method,

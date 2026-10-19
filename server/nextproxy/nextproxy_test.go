@@ -1,13 +1,13 @@
 package nextproxy
 
 import (
-	"net"
+	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/nange/easyss/v3/rule"
 	"github.com/nange/easyss/v3/util"
 )
 
@@ -66,6 +66,26 @@ func TestNew(t *testing.T) {
 	})
 }
 
+// newTestProxy 构造一个只带规则集合的 NextProxy（不拨号、不读文件），
+// 规则行按生产路径解析，使测试覆盖的语义与运行时完全一致。
+func newTestProxy(t *testing.T, lines ...string) *NextProxy {
+	t.Helper()
+	set, errs := rule.ParseLines(lines, rule.Options{AllowComments: true})
+	if len(errs) != 0 {
+		t.Fatalf("parse rules: %v", errs)
+	}
+	np := &NextProxy{}
+	np.rules.Store(set)
+	return np
+}
+
+// newEmptyTestProxy 构造一个规则集合为空、可直接学习的 NextProxy。
+func newEmptyTestProxy() *NextProxy {
+	np := &NextProxy{}
+	np.rules.Store(rule.New())
+	return np
+}
+
 func TestShouldProxy(t *testing.T) {
 	t.Run("nil receiver", func(t *testing.T) {
 		var np *NextProxy
@@ -82,7 +102,7 @@ func TestShouldProxy(t *testing.T) {
 	})
 
 	t.Run("IP 精确匹配", func(t *testing.T) {
-		np := &NextProxy{ips: map[string]struct{}{"10.0.0.1": {}}}
+		np := newTestProxy(t, "10.0.0.1")
 		if !np.ShouldProxy("10.0.0.1") {
 			t.Error("should proxy matching IP")
 		}
@@ -92,14 +112,7 @@ func TestShouldProxy(t *testing.T) {
 	})
 
 	t.Run("CIDR 匹配", func(t *testing.T) {
-		np, err := New("socks5://proxy:1080", false, false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		np.ips = map[string]struct{}{}
-		_ = np.LoadProxyFile("")
-		np.cidrIPs = append(np.cidrIPs, mustParseCIDR(t, "192.168.0.0/16"))
-
+		np := newTestProxy(t, "192.168.0.0/16")
 		if !np.ShouldProxy("192.168.1.1") {
 			t.Error("should proxy CIDR-matching IP")
 		}
@@ -109,7 +122,7 @@ func TestShouldProxy(t *testing.T) {
 	})
 
 	t.Run("域名匹配", func(t *testing.T) {
-		np := &NextProxy{domains: map[string]struct{}{"example.com": {}}}
+		np := newTestProxy(t, "example.com")
 		if !np.ShouldProxy("example.com") {
 			t.Error("should proxy matching domain")
 		}
@@ -119,7 +132,7 @@ func TestShouldProxy(t *testing.T) {
 	})
 
 	t.Run("子域名匹配", func(t *testing.T) {
-		np := &NextProxy{domains: map[string]struct{}{"example.com": {}}}
+		np := newTestProxy(t, "example.com")
 		if !np.ShouldProxy("www.example.com") {
 			t.Error("should proxy subdomain")
 		}
@@ -132,10 +145,7 @@ func TestShouldProxy(t *testing.T) {
 	})
 
 	t.Run("带端口的 host", func(t *testing.T) {
-		np := &NextProxy{
-			ips:     map[string]struct{}{"10.0.0.1": {}},
-			domains: map[string]struct{}{"example.com": {}},
-		}
+		np := newTestProxy(t, "10.0.0.1", "example.com")
 		if !np.ShouldProxy("10.0.0.1:8080") {
 			t.Error("should proxy IP:port")
 		}
@@ -145,9 +155,7 @@ func TestShouldProxy(t *testing.T) {
 	})
 
 	t.Run("glob 模式匹配", func(t *testing.T) {
-		np := &NextProxy{}
-		re, _ := util.GlobToRegexp("*google*")
-		np.domainPatterns = append(np.domainPatterns, re)
+		np := newTestProxy(t, "*google*")
 		if !np.ShouldProxy("www.google.com") {
 			t.Error("should proxy glob-matching domain")
 		}
@@ -160,14 +168,22 @@ func TestShouldProxy(t *testing.T) {
 	})
 
 	t.Run("regexp 模式匹配", func(t *testing.T) {
-		np := &NextProxy{}
-		re, _ := regexp.Compile(`^.*\.youtube\..*$`)
-		np.domainPatterns = append(np.domainPatterns, re)
+		np := newTestProxy(t, `regexp:^.*\.youtube\..*$`)
 		if !np.ShouldProxy("www.youtube.com") {
 			t.Error("should proxy regexp-matching domain")
 		}
 		if np.ShouldProxy("youtube-not.com") {
 			t.Error("should not proxy non-matching domain")
+		}
+	})
+
+	// 大小写不敏感：DNS 名本身不区分大小写，规则匹配必须与之一致。
+	t.Run("大小写不敏感", func(t *testing.T) {
+		np := newTestProxy(t, "Example.COM", "*Google*")
+		for _, host := range []string{"example.com", "EXAMPLE.COM", "www.Google.com"} {
+			if !np.ShouldProxy(host) {
+				t.Errorf("ShouldProxy(%q) = false, want true", host)
+			}
 		}
 	})
 }
@@ -228,7 +244,6 @@ regexp:^.*\.youtube\..*$
 	if err != nil {
 		t.Fatal(err)
 	}
-	np.ips = map[string]struct{}{}
 	if err := np.LoadProxyFile(file); err != nil {
 		t.Fatal(err)
 	}
@@ -253,15 +268,6 @@ regexp:^.*\.youtube\..*$
 	}
 }
 
-func mustParseCIDR(t *testing.T, s string) *net.IPNet {
-	t.Helper()
-	_, ipnet, err := net.ParseCIDR(s)
-	if err != nil {
-		t.Fatalf("ParseCIDR(%q): %v", s, err)
-	}
-	return ipnet
-}
-
 func TestIsCustomDomain(t *testing.T) {
 	t.Run("nil receiver", func(t *testing.T) {
 		var np *NextProxy
@@ -271,14 +277,14 @@ func TestIsCustomDomain(t *testing.T) {
 	})
 
 	t.Run("精确匹配", func(t *testing.T) {
-		np := &NextProxy{domains: map[string]struct{}{"example.com": {}}}
+		np := newTestProxy(t, "example.com")
 		if !np.IsCustomDomain("example.com") {
 			t.Error("should match exact domain")
 		}
 	})
 
 	t.Run("子域名匹配", func(t *testing.T) {
-		np := &NextProxy{domains: map[string]struct{}{"example.com": {}}}
+		np := newTestProxy(t, "example.com")
 		if !np.IsCustomDomain("www.example.com") {
 			t.Error("should match subdomain")
 		}
@@ -288,7 +294,7 @@ func TestIsCustomDomain(t *testing.T) {
 	})
 
 	t.Run("不匹配", func(t *testing.T) {
-		np := &NextProxy{domains: map[string]struct{}{"example.com": {}}}
+		np := newTestProxy(t, "example.com")
 		if np.IsCustomDomain("other.com") {
 			t.Error("should not match unrelated domain")
 		}
@@ -298,9 +304,7 @@ func TestIsCustomDomain(t *testing.T) {
 	})
 
 	t.Run("glob 模式匹配", func(t *testing.T) {
-		np := &NextProxy{}
-		re, _ := util.GlobToRegexp("*google*")
-		np.domainPatterns = append(np.domainPatterns, re)
+		np := newTestProxy(t, "*google*")
 		if !np.IsCustomDomain("www.google.com") {
 			t.Error("should match glob pattern")
 		}
@@ -310,9 +314,7 @@ func TestIsCustomDomain(t *testing.T) {
 	})
 
 	t.Run("regexp 模式匹配", func(t *testing.T) {
-		np := &NextProxy{}
-		re, _ := regexp.Compile(`^.*\.baidu\.com$`)
-		np.domainPatterns = append(np.domainPatterns, re)
+		np := newTestProxy(t, `regexp:^.*\.baidu\.com$`)
 		if !np.IsCustomDomain("www.baidu.com") {
 			t.Error("should match regexp pattern")
 		}
@@ -329,7 +331,7 @@ func TestAddIP(t *testing.T) {
 	})
 
 	t.Run("添加 IP", func(t *testing.T) {
-		np := &NextProxy{ips: make(map[string]struct{})}
+		np := newEmptyTestProxy()
 		np.AddIP("1.2.3.4")
 		if !np.ShouldProxy("1.2.3.4") {
 			t.Error("should proxy after AddIP")
@@ -337,23 +339,40 @@ func TestAddIP(t *testing.T) {
 	})
 
 	t.Run("去重", func(t *testing.T) {
-		np := &NextProxy{ips: make(map[string]struct{})}
+		np := newEmptyTestProxy()
 		np.AddIP("1.2.3.4")
 		np.AddIP("1.2.3.4")
-		count := 0
-		np.mu.RLock()
-		count = len(np.ips)
-		np.mu.RUnlock()
-		if count != 1 {
-			t.Errorf("expected 1 IP, got %d", count)
+		if got := np.rules.Load().Len(); got != 1 {
+			t.Errorf("expected 1 IP, got %d", got)
 		}
 	})
 
 	t.Run("IPv6", func(t *testing.T) {
-		np := &NextProxy{ips: make(map[string]struct{})}
+		np := newEmptyTestProxy()
 		np.AddIP("::1")
 		if !np.ShouldProxy("::1") {
 			t.Error("should proxy IPv6 after AddIP")
+		}
+	})
+
+	// 学习路径写入 IPv4-mapped 形式时必须与拨号目标的 IPv4 字面量匹配
+	// （两边的归一化此前并不对称）。
+	t.Run("IPv4-mapped 归一化", func(t *testing.T) {
+		np := newEmptyTestProxy()
+		np.AddIP("::ffff:1.2.3.4")
+		if !np.ShouldProxy("1.2.3.4") {
+			t.Error("IPv4-mapped learned IP should match the plain IPv4 target")
+		}
+	})
+
+	// 学习预算必须有界：超过 maxLearnedEntries 后不再增长。
+	t.Run("学习预算有界", func(t *testing.T) {
+		np := newEmptyTestProxy()
+		for i := range maxLearnedEntries + 10 {
+			np.AddIP(fmt.Sprintf("10.%d.%d.%d", i>>16&0xff, i>>8&0xff, i&0xff))
+		}
+		if got := np.learnedIPs; got != maxLearnedEntries {
+			t.Errorf("learnedIPs = %d, want %d", got, maxLearnedEntries)
 		}
 	})
 }
@@ -365,7 +384,7 @@ func TestAddDomain(t *testing.T) {
 	})
 
 	t.Run("添加域名", func(t *testing.T) {
-		np := &NextProxy{domains: make(map[string]struct{})}
+		np := newEmptyTestProxy()
 		np.AddDomain("cdn.example.com")
 		if !np.ShouldProxy("cdn.example.com") {
 			t.Error("should proxy after AddDomain")
@@ -377,15 +396,19 @@ func TestAddDomain(t *testing.T) {
 	})
 
 	t.Run("去重", func(t *testing.T) {
-		np := &NextProxy{domains: make(map[string]struct{})}
+		np := newEmptyTestProxy()
 		np.AddDomain("cdn.example.com")
 		np.AddDomain("cdn.example.com")
-		count := 0
-		np.mu.RLock()
-		count = len(np.domains)
-		np.mu.RUnlock()
-		if count != 1 {
-			t.Errorf("expected 1 domain, got %d", count)
+		if got := np.rules.Load().Len(); got != 1 {
+			t.Errorf("expected 1 domain, got %d", got)
+		}
+	})
+
+	t.Run("大小写归一化", func(t *testing.T) {
+		np := newEmptyTestProxy()
+		np.AddDomain("CDN.Example.COM")
+		if !np.ShouldProxy("cdn.example.com") {
+			t.Error("learned domain should be normalized to lower case")
 		}
 	})
 }
@@ -416,7 +439,7 @@ func TestSubDomains(t *testing.T) {
 }
 
 func TestConcurrentAddIP(t *testing.T) {
-	np := &NextProxy{ips: make(map[string]struct{})}
+	np := newEmptyTestProxy()
 	done := make(chan struct{})
 	go func() {
 		for range 100 {

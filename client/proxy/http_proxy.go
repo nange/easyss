@@ -38,7 +38,7 @@ type HTTPProxyServer struct {
 	socksURL   *url.URL
 	username   string
 	password   string
-	timeout    time.Duration
+	timeouts   config.Timeouts
 	handler    *StreamHandler
 	// policy 与 SOCKS5 入口共用同一套 Block/Direct/Proxy 判定（见 route.go），
 	// 也是本入口唯一的路由规则持有者。
@@ -95,8 +95,13 @@ type HTTPProxyOptions struct {
 	SocksAddr  string
 	Username   string
 	Password   string
-	// Timeout 是反向代理出站请求与空闲处理所用的基础超时。
-	Timeout time.Duration
+	// Timeouts 是与 SOCKS5 入口共用的同一份派生超时集合（见 config.NewTimeouts）：
+	// Dial 用于直连拨号与反向代理拨本地 SOCKS5 入口，StreamIdle 用于直连中继。
+	//
+	// 它此前是一个单独的 Timeout 基础超时，本入口再自行派生——于是同一个直连
+	// 目标在 SOCKS5 入口按 base/3（默认 10s）超时、在这里按整个基础超时
+	// （默认 30s）超时。派生只应发生一次，入口之间不该各有一份。
+	Timeouts config.Timeouts
 	// Handler 是借用的隧道流处理器（由 runner 创建并与 SOCKS5 入口共用）。
 	Handler *StreamHandler
 	// Router 是借用的路由引擎（同样与 SOCKS5 入口共用）。
@@ -112,10 +117,7 @@ func NewHTTPProxyServer(opts HTTPProxyOptions) (*HTTPProxyServer, error) {
 	if socksAddr == "" {
 		return nil, fmt.Errorf("http proxy requires a local socks5 address")
 	}
-	timeout := opts.Timeout
-	if timeout <= 0 {
-		timeout = time.Duration(config.DefaultTimeout) * time.Second
-	}
+	timeouts := opts.Timeouts.Normalize()
 	dial := opts.Dial
 	if dial == nil {
 		dial = defaultDirectDialContext
@@ -132,18 +134,18 @@ func NewHTTPProxyServer(opts HTTPProxyOptions) (*HTTPProxyServer, error) {
 		socksURL:   socksURL,
 		username:   opts.Username,
 		password:   opts.Password,
-		timeout:    timeout,
+		timeouts:   timeouts,
 		handler:    opts.Handler,
 		method:     opts.Method,
 		dial:       dial,
 	}
-	// 中继空闲超时与 SOCKS5 入口同源（config.StreamIdleTimeout 是唯一事实来源），
-	// 只是本入口持有的是基础超时而非派生值。
+	// 直连中继的空闲超时与 SOCKS5 入口同源（config.Timeouts.StreamIdle）：
+	// 两个入口对同一条直连连接用同一个超时，不再各自派生。
 	s.policy = newRoutePolicy(routePolicyOptions{
 		Router:            opts.Router,
 		Dial:              dial,
-		DialTimeout:       timeout,
-		StreamIdleTimeout: config.StreamIdleTimeout(timeout),
+		DialTimeout:       timeouts.Dial,
+		StreamIdleTimeout: timeouts.StreamIdle,
 	})
 	s.rp = s.newReverseProxy()
 	return s, nil
@@ -156,7 +158,9 @@ func (s *HTTPProxyServer) newReverseProxy() *httputil.ReverseProxy {
 		Proxy: func(*http.Request) (*url.URL, error) {
 			return s.socksURL, nil
 		},
-		TLSHandshakeTimeout: s.timeout / 3,
+		// 握手超时沿用同一个派生值（base/3，限制在 [3s,15s]）：默认基础超时下
+		// 与旧的 s.timeout/3 相同，但用户把 timeout 调小时不再各自漂移。
+		TLSHandshakeTimeout: s.timeouts.Dial,
 	}
 	s.rpTransport = tr
 
@@ -483,7 +487,10 @@ func (s *HTTPProxyServer) dialSOCKS5(target string) (net.Conn, error) {
 		auth = &xproxy.Auth{User: s.username, Password: s.password}
 	}
 
-	forward := &socksForwardDialer{timeout: s.timeout}
+	// 拨本地 SOCKS5 入口同样是"一次出站拨号"，因此与直连拨号共用 Dial 超时
+	// （base/3，默认 10s）。此前它拿的是 30s 的整个基础超时，比 SOCKS5 入口
+	// 自己拨同一个目标宽三倍。
+	forward := &socksForwardDialer{timeout: s.timeouts.Dial}
 	d, err := xproxy.SOCKS5("tcp", s.socksAddr, auth, forward)
 	if err != nil {
 		return nil, err

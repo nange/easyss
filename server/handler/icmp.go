@@ -55,15 +55,11 @@ type icmpHandler struct {
 	dial dialer
 }
 
-// newICMPHandler 创建一个 icmpHandler。出站 ICMP 拨号超时通过
-// config.DialTimeout 派生（base/3，限制在 [3s, 15s]），与 TCP/UDP handler
-// 的拨号共用同一套派生。
-func newICMPHandler(timeout time.Duration) *icmpHandler {
-	if timeout <= 0 {
-		timeout = time.Duration(config.DefaultTimeout) * time.Second
-	}
-	dialTimeout := config.DialTimeout(timeout)
-	directDialer := outboundDialer(dialTimeout, 0)
+// newICMPHandler 创建一个 icmpHandler。出站 ICMP 拨号与 TCP/UDP handler 共用
+// 同一个 Dial 超时（已由 config.Timeouts.Normalize 派生），因此这里不再自己
+// 判断零值。
+func newICMPHandler(timeouts config.Timeouts) *icmpHandler {
+	directDialer := outboundDialer(timeouts.Dial, 0)
 	return &icmpHandler{
 		dial: dialer{
 			direct: func(ctx context.Context, network, target string) (net.Conn, error) {

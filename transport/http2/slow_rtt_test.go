@@ -384,7 +384,7 @@ func TestHTTP2Transport_SlowBootstrapLogsRequestIdentity(t *testing.T) {
 			InsecureSkipVerify: true,
 			NextProtos:         sharedconfig.NextProtos,
 		},
-		Timeout: 5 * time.Second,
+		Timeouts: sharedconfig.Timeouts{Base: 5 * time.Second},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -456,7 +456,7 @@ func TestHTTP2Transport_SlowBootstrapLogsRequestIdentity(t *testing.T) {
 				InsecureSkipVerify: true,
 				NextProtos:         sharedconfig.NextProtos,
 			},
-			Timeout: 5 * time.Second,
+			Timeouts: sharedconfig.Timeouts{Base: 5 * time.Second},
 		})
 		if err != nil {
 			t.Fatal(err)

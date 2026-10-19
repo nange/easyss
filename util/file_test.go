@@ -35,21 +35,11 @@ func TestWriteToTemp(t *testing.T) {
 	assert.True(t, e)
 }
 
-func TestReadFileLinesMap(t *testing.T) {
-	filePath, err := WriteToTemp("test.dat", []byte("Hello world!\nNi hao!"))
-	assert.Nil(t, err)
-
-	m, err := ReadFileLinesMap(filePath)
-	assert.Nil(t, err)
-	assert.Len(t, m, 2)
-	_, ok := m["Ni hao!"]
-	assert.True(t, ok)
-}
-
-func TestReadFileLinesMapMissingFile(t *testing.T) {
+func TestReadFileLinesMissingFile(t *testing.T) {
 	// 缺失的文件必须作为错误上报，而不是被静默当作空行列表处理
-	// （配置错误的规则文件路径不能被调用方忽视）。
-	_, err := ReadFileLinesMap("definitely-not-exists.txt")
+	// （配置错误的规则文件路径不能被调用方忽视）。rule.ParseFile 直接依赖
+	// 这条语义把"路径写错"升级为启动错误。
+	_, err := ReadFileLines("definitely-not-exists.txt")
 	assert.NotNil(t, err)
 	assert.True(t, errors.Is(err, os.ErrNotExist))
 }

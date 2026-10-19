@@ -140,19 +140,3 @@ func ReadFileLines(file string) ([]string, error) {
 
 	return lines, nil
 }
-
-func ReadFileLinesMap(file string) (map[string]struct{}, error) {
-	lines, err := ReadFileLines(file)
-	if err != nil {
-		return nil, err
-	}
-
-	m := make(map[string]struct{})
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			m[line] = struct{}{}
-		}
-	}
-	return m, nil
-}

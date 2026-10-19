@@ -3,14 +3,11 @@ package proxy
 import (
 	"context"
 	"net"
-	"strings"
 
 	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/client/config"
-	easydns "github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/stats"
-	"github.com/nange/easyss/v3/util"
 )
 
 // udpReply 把一条 DNS 应答交回客户端：msg 供同步分支（屏蔽/缓存/直连）使用，
@@ -34,56 +31,34 @@ type udpDNSQuery struct {
 	reply udpReply
 }
 
-// handleUDPQuery 处理一条 UDP DNS 查询：Block 本地屏蔽，缓存命中直接应答，
-// Direct 走直连解析，其余经隧道到 config.ProxyDNSServer。
+// handleUDPQuery 处理一条 UDP DNS 查询：Block/缓存/直连三条同步分支交给共享
+// 执行器（dns_exec.go），代理分支走本前端自己的异步投递（应答由 receiveLoop
+// 在任意时刻送回）。前端因此只负责封帧与投递模型。
 func (d *dnsInterceptor) handleUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery) error {
 	plan := d.plan(req.msg)
-	switch plan.action {
-	case dnsActionBlock:
-		log.Info("[DNS_BLOCK] blocked", "domain", plan.domain, "qtype", plan.qtype,
-			"src", req.src, "dst", req.dst)
-		return req.reply.msg(blockedDNSReply(req.msg))
-	case dnsActionCacheHit:
-		return req.reply.msg(plan.cached)
-	case dnsActionDirect:
-		return d.directUDPQuery(req, plan)
-	default:
-		return d.proxyUDPQuery(clientAddr, req, plan)
+	ex := dnsExchange{plan: plan, src: req.src, dst: req.dst}
+
+	if plan.action != dnsActionProxy {
+		resp, err := d.executeSync(ex, req.msg, req.dst)
+		if err != nil {
+			return err
+		}
+		return req.reply.msg(resp)
 	}
-}
-
-// directUDPQuery 同步解析一条直连查询并立即应答：客户端显式请求的解析器
-// （req.dst）优先，失败回落到内置/系统 DNS。
-func (d *dnsInterceptor) directUDPQuery(req udpDNSQuery, plan dnsPlan) error {
-	log.Info("[DNS_DIRECT]", "domain", plan.domain, "qtype", plan.qtype,
-		"src", req.src, "dst", req.dst)
-	stats.RecordDNSDirectQuery()
-
-	resp, err := d.resolveDirectDNS(req.msg, plan.domain, req.dst)
-	if err != nil {
-		log.Error("[DNS_DIRECT]", "domain", plan.domain, "err", err,
-			"src", req.src, "dst", req.dst)
-		return err
-	}
-	log.Info("[DNS_DIRECT] result", "domain", plan.domain, "qtype", plan.qtype,
-		"answers", util.DNSAnswerStrings(resp), "src", req.src, "dst", req.dst)
-
-	resp.Id = req.msg.Id
-	return req.reply.msg(resp)
+	return d.proxyUDPQuery(clientAddr, req, ex)
 }
 
 // proxyUDPQuery 把一条查询交给经隧道的 UDP 交换。首载荷合并进引导记录时不需要
 // 额外发送；后续查询直接复用现有交换。应答由 receiveLoop 异步送回。
-func (d *dnsInterceptor) proxyUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery, plan dnsPlan) error {
-	// 上游解析器依据查询里的 EDNS0 尺寸决定应答上限；不钳制的话，一个宣告
-	// 64KB 的查询可以让应答超过隧道读缓冲，被截断检测丢弃。
-	if clampDNSEDNS0(req.msg) {
-		if packed, err := req.msg.Pack(); err == nil {
-			req.raw = packed
-		} else {
-			log.Warn("[DNS_PROXY] repack clamped query", "err", err)
-		}
+func (d *dnsInterceptor) proxyUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery, ex dnsExchange) error {
+	// 上游解析器依据查询里的 EDNS0 尺寸决定应答上限；钳制与重新封包由执行器
+	// 统一处理（与 TCP 路径共用同一段逻辑）。
+	payload, err := prepareProxied(req.msg, req.raw)
+	if err != nil {
+		log.Warn("[DNS_PROXY] repack clamped query", "err", err)
+		payload = req.raw
 	}
+
 	// upstream 是本代理解析查询的位置；客户端请求的是其自身解析器所配置的
 	// 服务器，而应答必须伪装成来自该地址（req.dst），与其他所有 DNS 分支
 	// 一致。如果改用 upstream 来封装应答，透明 NAT（tun2socks）会把它丢弃：
@@ -92,18 +67,18 @@ func (d *dnsInterceptor) proxyUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery,
 	upstream := config.ProxyDNSServer
 	key := clientAddr.String() + "_" + upstream
 
-	log.Info("[DNS_PROXY]", "domain", plan.domain, "qtype", plan.qtype,
-		"src", req.src, "dst", req.dst)
+	log.Info("[DNS_PROXY]", "domain", ex.plan.domain, "qtype", ex.plan.qtype,
+		"src", ex.src, "dst", ex.dst)
 	stats.RecordDNSProxyQuery()
 
-	ue, created, err := d.pool.acquireExchange(context.Background(), key, upstream, req.raw)
+	ue, created, err := d.pool.acquireExchange(context.Background(), key, upstream, payload)
 	if err != nil {
 		log.Error("[UDP_PROXY] open exchange", "dst", upstream, "err", err)
 		return err
 	}
 	onData := func(data []byte) {
 		if req.reply.raw != nil {
-			req.reply.raw(d.postProcessProxied(data, req.src, req.dst))
+			req.reply.raw(d.postProcessProxied(data, ex.src, ex.dst))
 		}
 	}
 	if created {
@@ -111,44 +86,10 @@ func (d *dnsInterceptor) proxyUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery,
 		return nil // 第一个载荷已在握手中发送
 	}
 
-	if err := ue.Send(req.raw); err != nil {
+	if err := ue.Send(payload); err != nil {
 		log.Error("[UDP_PROXY] send", "err", err)
 		d.pool.removeExchange(key, ue)
 		return err
 	}
 	return nil
-}
-
-// postProcessProxied 处理一条经隧道返回的 DNS 应答：规范化畸形 EDNS0、按 ipv6
-// 策略剥离 AAAA、写入代理缓存、记录结果并按自定义域名规则学习。解包失败或不是
-// 响应时原样返回。src/dst 只用于日志，与对应的 [DNS_PROXY] 查询行配对。
-func (d *dnsInterceptor) postProcessProxied(data []byte, src, dst string) []byte {
-	msg := &dns.Msg{}
-	if err := msg.Unpack(data); err != nil || !util.IsDNSResponse(msg) {
-		return data
-	}
-	// 代理路径的上游通常不会返回畸形 EDNS0，但 next_proxy 出口与中间设备都
-	// 可能改写应答；缓存和客户端必须看到同一份规范化后的报文，否则坏应答会在
-	// 缓存里停留 1~4 小时。data 是原始字节，改动后要重新 Pack 才能交给客户端。
-	changed := easydns.NormalizeEDNS0Answer(msg)
-	if d.router.ShouldIPV6Disable() && msg.Question[0].Qtype == dns.TypeAAAA {
-		msg.Answer = nil
-		changed = true
-	}
-	if changed {
-		if packed, packErr := msg.Pack(); packErr == nil {
-			data = packed
-		} else {
-			log.Warn("[DNS_PROXY] repack normalized answer", "err", packErr)
-		}
-	}
-	_ = d.cache.Set(msg, false)
-
-	domain := strings.TrimSuffix(msg.Question[0].Name, ".")
-	qtype := dns.TypeToString[msg.Question[0].Qtype]
-	log.Info("[DNS_PROXY] result", "domain", domain, "qtype", qtype,
-		"answers", util.DNSAnswerStrings(msg), "src", src, "dst", dst)
-
-	d.learnDNSAnswers(msg, domain, false)
-	return data
 }

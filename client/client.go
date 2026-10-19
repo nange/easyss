@@ -16,6 +16,7 @@ import (
 	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/router"
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/transport"
@@ -318,9 +319,8 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		MaxSlotCount:      cfg.Transport.ConnCountMax,
 		StreamThreshold:   cfg.Transport.StreamThreshold,
 		PrioritySlotRatio: cfg.Transport.PrioritySlotRatio,
-		ConnLifetime:      cfg.ConnLifetimeDuration(),
+		Timeouts:          sharedconfig.NewTimeouts(cfg.TimeoutDuration()),
 		ConnMaxBytes:      cfg.Transport.ConnMaxBytes,
-		Timeout:           cfg.TimeoutDuration(),
 		ProbeToken:        probeToken,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return client.dialWithConfig(ctx, network, addr)
@@ -597,7 +597,17 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 		return ""
 	}
 
-	if dns.BuiltinDNSAvailable() {
+	// 系统 DNS 惰性获取：route 判定只在熔断已置位时才会调用它，因此健康路径
+	// 不为这次 IPv6 解析额外付出一次系统 DNS 发现的开销（见 dns.BuiltinRouteFor）。
+	hasFailover := func() bool { return len(dns.SystemDNSServers()) > 0 }
+	route := dns.BuiltinRouteFor(hasFailover)
+	if route == dns.BuiltinRouteRetry {
+		// 与 Cache.PrePopulateWithFallback 同一口径：这条路径低频（启动一次、
+		// TUN 启用前按需一次），因此用 Warn；每查询一次的那条用 Debug。
+		log.Warn("[CLIENT] builtin dns breaker is armed but no system dns is available, retrying builtin servers",
+			"server", svr.Host)
+	}
+	if route != dns.BuiltinRouteSkip {
 		// 内置分支只能花掉总预算里除预留量以外的部分：黑洞内置 DNS（丢包而非
 		// 立即拒绝）会把整个预算耗在一次查询上，系统 DNS 兜底复用同一个已过期
 		// 的 ctx 就会在毫秒内全部失败（见 dns.WithSystemDNSFallbackReserve）。
@@ -636,10 +646,10 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 			return ips[0].String()
 		}
 		if !reachable {
-			// 只有存在系统 DNS 兜底时才熔断内置服务器：无兜底时熔断会让后续
-			// 解析在冷却期内直接跳过仍可能可用的内置服务器（Android 上系统
-			// DNS 对应用不可见，正是这种情形）。
-			if len(dns.SystemDNSServers()) > 0 {
+			// 熔断判定：只有存在系统 DNS 兜底时才熔断。无兜底时熔断会让后续解析
+			// 在冷却期内直接跳过仍可能可用的内置服务器（Android 上系统 DNS 对
+			// 应用不可见，正是这种情形）。
+			if hasFailover() {
 				dns.MarkBuiltinDNSUnavailable()
 			}
 			log.Warn("[CLIENT] all builtin direct dns servers failed to resolve server ipv6, fallback to system dns", "server", svr.Host)

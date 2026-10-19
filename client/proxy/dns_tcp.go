@@ -2,21 +2,15 @@ package proxy
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"time"
 
 	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/client/config"
-	easydns "github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/stats"
-	"github.com/nange/easyss/v3/util"
 )
-
-// errDNSResponseTimeout 表示代理 DNS 上游在等待窗口内没有任何应答。
-var errDNSResponseTimeout = errors.New("dns response timeout")
 
 // tcpDNSSession 持有一条 TCP DNS 连接生命周期内复用的代理上游交换。只有代理
 // 分支（经隧道到 config.ProxyDNSServer）使用它；直连分支每个查询独立拨号。
@@ -57,53 +51,31 @@ func (s *tcpDNSSession) close() {
 	s.invalidate()
 }
 
-// resolve 按查询域名解析单条 TCP DNS 查询：Block 本地屏蔽，
-// Direct/服务器域名用 target（客户端请求的解析器）直连解析，其余经隧道到
-// config.ProxyDNSServer。结果写入缓存（代理分支）并按自定义域名规则学习。
-// 分流判定与 UDP 路径共用 dnsInterceptor.plan。
+// resolve 按查询域名解析单条 TCP DNS 查询：Block/缓存/直连三条同步分支交给
+// 共享执行器（dns_exec.go），代理分支由本前端同步等待（一条连接顺序使用自己
+// 的交换，因此 Receive 不会并发）。
+//
+// 结果的后处理——规范化、AAAA 剥离、写缓存、学习——由 finishProxied 统一完成，
+// 与 UDP 路径是同一段代码。
 func (s *tcpDNSSession) resolve(msg *dns.Msg, target string) (*dns.Msg, error) {
 	d := s.d
 	plan := d.plan(msg)
-	switch plan.action {
-	case dnsActionBlock:
-		log.Info("[DNS_BLOCK] blocked", "domain", plan.domain, "qtype", plan.qtype,
-			"src", s.src, "dst", target)
-		return blockedDNSReply(msg), nil
-	case dnsActionCacheHit:
-		return plan.cached, nil
-	case dnsActionDirect:
-		log.Info("[DNS_DIRECT]", "domain", plan.domain, "qtype", plan.qtype,
-			"src", s.src, "dst", target)
-		stats.RecordDNSDirectQuery()
-		resp, err := d.resolveDirectDNS(msg, plan.domain, target)
-		if err != nil {
-			return nil, err
-		}
-		log.Info("[DNS_DIRECT] result", "domain", plan.domain, "qtype", plan.qtype,
-			"answers", util.DNSAnswerStrings(resp), "src", s.src, "dst", target)
-		resp.Id = msg.Id
-		return resp, nil
-	default:
-		log.Info("[DNS_PROXY]", "domain", plan.domain, "qtype", plan.qtype,
-			"src", s.src, "dst", target)
-		stats.RecordDNSProxyQuery()
-		resp, err := s.resolveProxy(msg)
-		if err != nil {
-			return nil, err
-		}
-		// 与 UDP 代理路径一致：缓存和客户端（TCP 前端负责 Pack）都使用规范化
-		// 后的应答，避免畸形 EDNS0 留在缓存里。
-		easydns.NormalizeEDNS0Answer(resp)
-		log.Info("[DNS_PROXY] result", "domain", plan.domain, "qtype", plan.qtype,
-			"answers", util.DNSAnswerStrings(resp), "src", s.src, "dst", target)
-		if d.router.ShouldIPV6Disable() && msg.Question[0].Qtype == dns.TypeAAAA {
-			resp.Answer = nil
-		}
-		_ = d.cache.Set(resp, false)
-		d.learnDNSAnswers(resp, plan.domain, false)
-		resp.Id = msg.Id
-		return resp, nil
+	ex := dnsExchange{plan: plan, src: s.src, dst: target}
+
+	if plan.action != dnsActionProxy {
+		return d.executeSync(ex, msg, target)
 	}
+
+	log.Info("[DNS_PROXY]", "domain", plan.domain, "qtype", plan.qtype,
+		"src", s.src, "dst", target)
+	stats.RecordDNSProxyQuery()
+	resp, err := s.resolveProxy(msg)
+	if err != nil {
+		return nil, err
+	}
+	d.finishProxied(resp, plan.domain, s.src, target)
+	resp.Id = msg.Id
+	return resp, nil
 }
 
 // resolveProxy 把 DNS 查询经隧道发给 config.ProxyDNSServer（8.8.8.8:53），
@@ -112,10 +84,8 @@ func (s *tcpDNSSession) resolve(msg *dns.Msg, target string) (*dns.Msg, error) {
 // 会话在连接生命周期内复用同一个 UDP 交换；每次查询都必须发送，只有"创建时首
 // 载荷已合并进引导记录"的那一次免于重复发送。
 func (s *tcpDNSSession) resolveProxy(msg *dns.Msg) (*dns.Msg, error) {
-	// 与 UDP 代理路径相同：把查询宣告的 EDNS0 尺寸钳到隧道预算内，避免
-	// 上游合法地发出超过服务端读缓冲的应答。
-	clampDNSEDNS0(msg)
-	data, err := msg.Pack()
+	// 与 UDP 代理路径共用同一段准备逻辑：钳制 EDNS0 并重新封包。
+	data, err := prepareProxied(msg, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -151,12 +121,10 @@ func (s *tcpDNSSession) resolveProxy(msg *dns.Msg) (*dns.Msg, error) {
 // waitResponse 同步等待代理 DNS 交换返回一条应答，超时后关闭交换使阻塞
 // 的 Receive 退出（调用方随后会作废该交换）。交换只被本连接顺序使用，因此
 // Receive 不会并发。
+//
+// respTimeout 由构造期归一化保证为正（见 newDNSInterceptor）：它在此处是
+// 同步等待的上限，而不是 UDP 路径上那个"<= 0 即关闭读空闲"的功能开关。
 func (s *tcpDNSSession) waitResponse() (*dns.Msg, error) {
-	timeout := s.d.respTimeout
-	if timeout <= 0 {
-		timeout = 5 * time.Second
-	}
-
 	type result struct {
 		data []byte
 		err  error
@@ -167,7 +135,7 @@ func (s *tcpDNSSession) waitResponse() (*dns.Msg, error) {
 		ch <- result{data: data, err: err}
 	}()
 
-	timer := time.NewTimer(timeout)
+	timer := time.NewTimer(s.d.respTimeout)
 	defer timer.Stop()
 
 	select {

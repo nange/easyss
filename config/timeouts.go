@@ -62,12 +62,18 @@ func DialTimeout(base time.Duration) time.Duration {
 // Timeouts 是一个 core 所需的完整派生超时集合。调用方基于配置的基础超时一次性
 // 构建它并向下传递，而不是各层各自重新计算（甚至更糟地手写）某个值——此前客户端
 // 直接把 timeout/3 用作 DNS 响应超时，而服务端则通过 DialTimeout 派生其拨号超时。
+//
+// 每一个消费方（客户端 SOCKS5/HTTP 入口、服务端 handler、传输层、上游代理）
+// 都只读这里的字段，绝不自己再判断零值：零值填充只发生在 Normalize 一处。
+// 这也是"同一个直连目标在 SOCKS5 入口 10s 超时、在 HTTP 入口 30s 超时"那类
+// 派生漂移的根因——HTTP 入口此前只拿到基础超时，于是把 30s 当成了拨号超时。
 type Timeouts struct {
-	Base       time.Duration // 用户配置的基础超时
-	Dial       time.Duration // 出站拨号（base/3，限制在 [3s,15s]）
-	StreamIdle time.Duration // TCP 流空闲（8 倍 base）
-	UDPIdle    time.Duration // UDP 会话空闲（2 倍 base）
-	DNSResp    time.Duration // DNS 响应读取空闲（base/3，不限制）
+	Base         time.Duration // 用户配置的基础超时
+	Dial         time.Duration // 出站拨号（base/3，限制在 [3s,15s]）
+	StreamIdle   time.Duration // TCP 流空闲（8 倍 base）
+	UDPIdle      time.Duration // UDP 会话空闲（2 倍 base）
+	DNSResp      time.Duration // DNS 响应读取空闲（base/3，不限制）
+	ConnLifetime time.Duration // 传输层连接轮换前的最大存活时长（12 倍 base）
 }
 
 // NewTimeouts 从用户配置的基础超时派生整个超时集合
@@ -77,10 +83,47 @@ func NewTimeouts(base time.Duration) Timeouts {
 		base = time.Duration(DefaultTimeout) * time.Second
 	}
 	return Timeouts{
-		Base:       base,
-		Dial:       DialTimeout(base),
-		StreamIdle: StreamIdleTimeout(base),
-		UDPIdle:    UDPIdleTimeout(base),
-		DNSResp:    base / 3,
+		Base:         base,
+		Dial:         DialTimeout(base),
+		StreamIdle:   StreamIdleTimeout(base),
+		UDPIdle:      UDPIdleTimeout(base),
+		DNSResp:      base / 3,
+		ConnLifetime: ConnLifetime(base),
 	}
+}
+
+// Normalize 返回一个零值字段已被填好的副本：Base 缺失时取默认基础超时，
+// 随后其余字段按各自的派生公式从 Base 重新计算，**但调用方显式设置（非零）的
+// 字段一律保留**。
+//
+// 这个"只填零值"的语义是刻意的：它让嵌入式调用方与测试可以只钉住自己关心的
+// 那一项（例如 DNSResp 用 200ms 验证读空闲），而不必把其余派生值也照抄一遍，
+// 同时消除各构造器里散落的 `if x <= 0 { x = DefaultX }` 二次默认值
+// ——那些判断各自维护着一份"默认值是什么"的知识，且彼此已经在漂移。
+//
+// 它只填零值，**不**钳制显式给出的 Base：区间钳制属于用户输入（见
+// NormalizeTimeout），而测试与嵌入式调用方需要能构造远小于 MinTimeout 的集合。
+//
+// 每个公开构造器入口调用它一次即可；内部函数不再重复判断零值。
+func (t Timeouts) Normalize() Timeouts {
+	normalized := t
+	if normalized.Base <= 0 {
+		normalized.Base = TimeoutDuration(0)
+	}
+	if normalized.Dial <= 0 {
+		normalized.Dial = DialTimeout(normalized.Base)
+	}
+	if normalized.StreamIdle <= 0 {
+		normalized.StreamIdle = StreamIdleTimeout(normalized.Base)
+	}
+	if normalized.UDPIdle <= 0 {
+		normalized.UDPIdle = UDPIdleTimeout(normalized.Base)
+	}
+	if normalized.DNSResp <= 0 {
+		normalized.DNSResp = normalized.Base / 3
+	}
+	if normalized.ConnLifetime <= 0 {
+		normalized.ConnLifetime = ConnLifetime(normalized.Base)
+	}
+	return normalized
 }

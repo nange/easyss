@@ -1,16 +1,15 @@
 package router
 
 import (
-	"bytes"
+	"errors"
 	"fmt"
 	"net"
-	"regexp"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/nange/easyss/v3/assets"
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/rule"
 	"github.com/nange/easyss/v3/util"
 	"github.com/oschwald/geoip2-golang"
 )
@@ -69,70 +68,19 @@ func ParseIPV6Rule(s string) IPV6Rule {
 	}
 }
 
-type GeoSite struct {
-	domain       map[string]struct{}
-	fullDomain   map[string]struct{}
-	regexpDomain []*regexp.Regexp
-}
+// GeoSite 是内置直连/屏蔽域名列表。它只是 rule.DomainSet 的类型别名：
+// 解析（含 full:/regexp: 前缀）、大小写归一化与父域名展开都由 rule 包
+// 统一实现，本包不再维护第二份。
+type GeoSite = rule.DomainSet
 
+// NewGeoSite 解析内置 geosite 列表。无法编译的正则被跳过——内置列表由发布
+// 流程生成，出错属于数据缺陷而不是用户配置错误，因此只记一条告警。
 func NewGeoSite(data []byte) *GeoSite {
-	gs := &GeoSite{
-		domain:     make(map[string]struct{}),
-		fullDomain: make(map[string]struct{}),
+	gs, skipped := rule.ParseDomainSet(data)
+	if skipped > 0 {
+		log.Warn("[ROUTER] skipped unparsable regexp entries in the builtin list", "count", skipped)
 	}
-
-	lines := bytes.SplitSeq(data, []byte("\n"))
-	for line := range lines {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		if bytes.HasPrefix(line, []byte("full:")) {
-			gs.fullDomain[string(line[5:])] = struct{}{}
-			continue
-		}
-		if bytes.HasPrefix(line, []byte("regexp:")) {
-			re, err := regexp.Compile(string(line[7:]))
-			if err != nil {
-				continue
-			}
-			gs.regexpDomain = append(gs.regexpDomain, re)
-			continue
-		}
-		gs.domain[string(line)] = struct{}{}
-	}
-
 	return gs
-}
-
-func (gs *GeoSite) SimpleMatch(domain string, matchSub bool) bool {
-	if _, ok := gs.fullDomain[domain]; ok {
-		return true
-	}
-	if _, ok := gs.domain[domain]; ok {
-		return true
-	}
-	if matchSub {
-		subs := util.SubDomains(domain)
-		for _, sub := range subs {
-			if _, ok := gs.domain[sub]; ok {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (gs *GeoSite) FullMatch(domain string) bool {
-	if gs.SimpleMatch(domain, true) {
-		return true
-	}
-	for _, re := range gs.regexpDomain {
-		if re.MatchString(domain) {
-			return true
-		}
-	}
-	return false
 }
 
 type Config struct {
@@ -161,19 +109,15 @@ type Router struct {
 	geoSiteDirect *GeoSite
 	geoSiteBlock  *GeoSite
 
-	customMu            sync.RWMutex
-	customDirectIPs     map[string]struct{}
-	customDirectCIDRIPs []*net.IPNet
-	customDirectDomains map[string]struct{}
-	customDirectRegexps []*regexp.Regexp
-	customProxyIPs      map[string]struct{}
-	customProxyCIDRIPs  []*net.IPNet
-	customProxyDomains  map[string]struct{}
-	customProxyRegexps  []*regexp.Regexp
+	// customDirect/customProxy 是配置文件与动态学习共用的两个规则集合。
+	// direct/proxy 两半此前是八个字段、四对几乎逐行重复的匹配函数（dupl 报了
+	// 4 处），现在各自只是一个 rule.Set。
+	customDirect *rule.Set
+	customProxy  *rule.Set
 
-	// customFileErr 记录加载自定义直连/代理规则文件时遇到的第一个失败。
+	// customFileErr 记录加载自定义直连/代理规则文件时遇到的失败。
 	// 加载刻意设计为非致命（路由器仍保留内置规则），但该错误会作为启动警告
-	// 暴露出来，让用户知道自己的自定义规则没有被应用。
+	// 暴露出来，让用户知道自己的自定义规则没有被（完整）应用。
 	customFileErr error
 }
 
@@ -188,12 +132,14 @@ func New(cfg Config) (*Router, error) {
 		geoIPDB:       db,
 		geoSiteDirect: NewGeoSite(assets.GeoSiteDirect),
 		geoSiteBlock:  NewGeoSite(assets.GeoSiteBlock),
+		customDirect:  rule.New(),
+		customProxy:   rule.New(),
 	}
 	r.proxyRule.Store(int32(cfg.ProxyRule))
 	r.ipv6Rule.Store(int32(cfg.IPV6Rule))
 	r.SetIPV6Info(cfg.IPV6NetWorking, cfg.ServerIPV6)
 
-	if err := r.loadCustomIPDomains(); err != nil {
+	if err := r.loadCustomRuleFiles(); err != nil {
 		r.customFileErr = fmt.Errorf("load custom rule file: %w", err)
 		log.Error("[ROUTER] load custom ip/domains", "err", err)
 	}
@@ -201,101 +147,43 @@ func New(cfg Config) (*Router, error) {
 	return r, nil
 }
 
-// CustomFileError 返回加载自定义直连/代理规则文件时遇到的第一个失败，
+// CustomFileError 返回加载自定义直连/代理规则文件时遇到的失败，
 // 两个文件都加载成功时返回 nil。
 func (r *Router) CustomFileError() error {
 	return r.customFileErr
 }
 
-func (r *Router) loadCustomIPDomains() error {
-	r.customDirectIPs = make(map[string]struct{})
-	r.customDirectDomains = make(map[string]struct{})
-	r.customProxyIPs = make(map[string]struct{})
-	r.customProxyDomains = make(map[string]struct{})
-
-	if r.cfg.DirectFile != "" {
-		entries, err := util.ReadFileLinesMap(r.cfg.DirectFile)
+// loadCustomRuleFiles 读取并装载两个规则文件。行级错误不中止加载（其余规则
+// 仍然生效），但会被汇总进 CustomFileErr，让用户在启动时就知道有规则没被应用
+// ——此前这些错误是静默丢弃的，写错的正则或 glob 只会表现为"规则没生效"。
+func (r *Router) loadCustomRuleFiles() error {
+	var errs []error
+	load := func(path, label string, dst **rule.Set) {
+		if path == "" {
+			return
+		}
+		set, parseErrs, err := rule.ParseFile(path, rule.Options{AllowComments: true})
 		if err != nil {
-			return err
+			errs = append(errs, err)
+			return
 		}
-		for k := range entries {
-			if strings.HasPrefix(k, "regexp:") {
-				re, err := regexp.Compile(k[7:])
-				if err == nil {
-					r.customDirectRegexps = append(r.customDirectRegexps, re)
-				}
-				continue
-			}
-			if strings.Contains(k, "*") {
-				re, err := util.GlobToRegexp(k)
-				if err == nil {
-					r.customDirectRegexps = append(r.customDirectRegexps, re)
-				}
-				continue
-			}
-			_, ipnet, err := net.ParseCIDR(k)
-			if err == nil && ipnet != nil {
-				r.customDirectCIDRIPs = append(r.customDirectCIDRIPs, ipnet)
-				continue
-			}
-			if util.IsIP(k) {
-				r.customDirectIPs[k] = struct{}{}
-				continue
-			}
-			r.customDirectDomains[k] = struct{}{}
+		if len(parseErrs) > 0 {
+			errs = append(errs, rule.FileError(path, parseErrs))
 		}
-		log.Info("[ROUTER] loaded direct file",
-			"file", r.cfg.DirectFile,
-			"total", len(entries),
-			"ips", len(r.customDirectIPs),
-			"cidrs", len(r.customDirectCIDRIPs),
-			"domains", len(r.customDirectDomains),
-			"patterns", len(r.customDirectRegexps),
+		*dst = set
+
+		domains, ips, cidrs, patterns := set.Counts()
+		log.Info("[ROUTER] loaded "+label+" file",
+			"file", path,
+			"domains", domains,
+			"ips", ips,
+			"cidrs", cidrs,
+			"patterns", patterns,
 		)
 	}
-
-	if r.cfg.ProxyFile != "" {
-		entries, err := util.ReadFileLinesMap(r.cfg.ProxyFile)
-		if err != nil {
-			return err
-		}
-		for k := range entries {
-			if strings.HasPrefix(k, "regexp:") {
-				re, err := regexp.Compile(k[7:])
-				if err == nil {
-					r.customProxyRegexps = append(r.customProxyRegexps, re)
-				}
-				continue
-			}
-			if strings.Contains(k, "*") {
-				re, err := util.GlobToRegexp(k)
-				if err == nil {
-					r.customProxyRegexps = append(r.customProxyRegexps, re)
-				}
-				continue
-			}
-			_, ipnet, err := net.ParseCIDR(k)
-			if err == nil && ipnet != nil {
-				r.customProxyCIDRIPs = append(r.customProxyCIDRIPs, ipnet)
-				continue
-			}
-			if util.IsIP(k) {
-				r.customProxyIPs[k] = struct{}{}
-				continue
-			}
-			r.customProxyDomains[k] = struct{}{}
-		}
-		log.Info("[ROUTER] loaded proxy file",
-			"file", r.cfg.ProxyFile,
-			"total", len(entries),
-			"ips", len(r.customProxyIPs),
-			"cidrs", len(r.customProxyCIDRIPs),
-			"domains", len(r.customProxyDomains),
-			"patterns", len(r.customProxyRegexps),
-		)
-	}
-
-	return nil
+	load(r.cfg.DirectFile, "direct", &r.customDirect)
+	load(r.cfg.ProxyFile, "proxy", &r.customProxy)
+	return errors.Join(errs...)
 }
 
 // HostClassification 是针对目标主机的路由决策结果。
@@ -323,108 +211,47 @@ func (r *Router) ClassifyHost(host string) HostClassification {
 }
 
 func (r *Router) MatchHostRule(host string) HostRule {
-	rule := ProxyRule(r.proxyRule.Load())
-	if rule == ProxyRuleDirect || r.isLANHost(host) {
+	mode := ProxyRule(r.proxyRule.Load())
+	if mode == ProxyRuleDirect || r.isLANHost(host) {
 		return HostRuleDirect
 	}
-	if rule == ProxyRuleProxy {
+	if mode == ProxyRuleProxy {
 		return HostRuleProxy
 	}
-	if r.hostMatchCustomDirect(host) {
+	// 命中日志只在这里打一次：两个规则集合的匹配各自只返回布尔值，因此
+	// "为什么这条请求走了直连"仍能在日志里看到，而匹配逻辑不必知道日志格式。
+	if match, kind := r.hostMatchCustom(r.customDirect, host); match {
+		log.Info("[ROUTER] custom direct matched", "host", host, "rule", kind)
 		return HostRuleDirect
 	}
-	if r.hostMatchCustomProxy(host) {
+	if match, kind := r.hostMatchCustom(r.customProxy, host); match {
+		log.Info("[ROUTER] custom proxy matched", "host", host, "rule", kind)
 		return HostRuleProxy
 	}
-	if rule == ProxyRuleAutoBlock && !util.IsIP(host) {
-		if r.geoSiteDirect.SimpleMatch(host, false) {
+	if mode == ProxyRuleAutoBlock && !util.IsIP(host) {
+		if r.geoSiteDirect.Match(host, false) {
 			return HostRuleDirect
 		}
-		if r.geoSiteBlock.SimpleMatch(host, true) {
+		if r.geoSiteBlock.Match(host, true) {
 			return HostRuleBlock
 		}
 	}
-	if rule == ProxyRuleReverseAuto && !r.hostAtCN(host) {
+	if mode == ProxyRuleReverseAuto && !r.hostAtCN(host) {
 		return HostRuleDirect
 	}
-	if rule != ProxyRuleReverseAuto && r.hostAtCN(host) {
+	if mode != ProxyRuleReverseAuto && r.hostAtCN(host) {
 		return HostRuleDirect
 	}
 	return HostRuleProxy
 }
 
-func (r *Router) hostMatchCustomDirect(host string) bool {
-	r.customMu.RLock()
-	defer r.customMu.RUnlock()
-
-	if util.IsIP(host) {
-		if _, ok := r.customDirectIPs[host]; ok {
-			log.Info("[ROUTER] custom direct ip matched", "host", host)
-			return true
-		}
-		for _, cidr := range r.customDirectCIDRIPs {
-			if cidr.Contains(net.ParseIP(host)) {
-				log.Info("[ROUTER] custom direct cidr matched", "host", host, "cidr", cidr.String())
-				return true
-			}
-		}
-	} else {
-		if _, ok := r.customDirectDomains[host]; ok {
-			log.Info("[ROUTER] custom direct domain matched", "host", host)
-			return true
-		}
-		subs := util.SubDomains(host)
-		for _, sub := range subs {
-			if _, ok := r.customDirectDomains[sub]; ok {
-				log.Info("[ROUTER] custom direct subdomain matched", "host", host, "subdomain", sub)
-				return true
-			}
-		}
-		for _, re := range r.customDirectRegexps {
-			if re.MatchString(host) {
-				log.Info("[ROUTER] custom direct regexp matched", "host", host, "pattern", re.String())
-				return true
-			}
-		}
+// hostMatchCustom 在给定集合里匹配 host，并返回命中的规则形态（用于日志）。
+func (r *Router) hostMatchCustom(set *rule.Set, host string) (bool, string) {
+	kind, ok := set.MatchHostKind(host)
+	if !ok {
+		return false, ""
 	}
-	return false
-}
-
-func (r *Router) hostMatchCustomProxy(host string) bool {
-	r.customMu.RLock()
-	defer r.customMu.RUnlock()
-
-	if util.IsIP(host) {
-		if _, ok := r.customProxyIPs[host]; ok {
-			log.Info("[ROUTER] custom proxy ip matched", "host", host)
-			return true
-		}
-		for _, cidr := range r.customProxyCIDRIPs {
-			if cidr.Contains(net.ParseIP(host)) {
-				log.Info("[ROUTER] custom proxy cidr matched", "host", host, "cidr", cidr.String())
-				return true
-			}
-		}
-	} else {
-		if _, ok := r.customProxyDomains[host]; ok {
-			log.Info("[ROUTER] custom proxy domain matched", "host", host)
-			return true
-		}
-		subs := util.SubDomains(host)
-		for _, sub := range subs {
-			if _, ok := r.customProxyDomains[sub]; ok {
-				log.Info("[ROUTER] custom proxy subdomain matched", "host", host, "subdomain", sub)
-				return true
-			}
-		}
-		for _, re := range r.customProxyRegexps {
-			if re.MatchString(host) {
-				log.Info("[ROUTER] custom proxy regexp matched", "host", host, "pattern", re.String())
-				return true
-			}
-		}
-	}
-	return false
+	return true, kind.String()
 }
 
 func (r *Router) hostAtCN(host string) bool {
@@ -437,7 +264,7 @@ func (r *Router) hostAtCN(host string) bool {
 	if strings.HasSuffix(host, ".cn") {
 		return true
 	}
-	return r.geoSiteDirect.FullMatch(host)
+	return r.geoSiteDirect.Match(host, true)
 }
 
 func (r *Router) ipAtCN(ip string) bool {
@@ -453,6 +280,8 @@ func (r *Router) ipAtCN(ip string) bool {
 }
 
 func (r *Router) isLANHost(host string) bool {
+	// 与 rule 包一致：host 在这里可能带端口、可能是 FQDN 或大写形式。
+	host = rule.NormalizeHost(host)
 	if host == "localhost" {
 		return true
 	}
@@ -461,72 +290,41 @@ func (r *Router) isLANHost(host string) bool {
 
 // AddDirectIP 向自定义直连 IP 集合中添加一个 IP（线程安全）。
 func (r *Router) AddDirectIP(ip string) {
-	r.customMu.Lock()
-	r.customDirectIPs[ip] = struct{}{}
-	r.customMu.Unlock()
+	r.customDirect.AddIP(ip)
 }
 
 // AddProxyIP 向自定义代理 IP 集合中添加一个 IP（线程安全）。
 func (r *Router) AddProxyIP(ip string) {
-	r.customMu.Lock()
-	r.customProxyIPs[ip] = struct{}{}
-	r.customMu.Unlock()
+	r.customProxy.AddIP(ip)
 }
 
 // AddDirectDomain 向自定义直连域名集合中添加一个域名（线程安全）。
 func (r *Router) AddDirectDomain(domain string) {
-	r.customMu.Lock()
-	r.customDirectDomains[domain] = struct{}{}
-	r.customMu.Unlock()
+	r.customDirect.AddDomain(domain)
 }
 
 // AddProxyDomain 向自定义代理域名集合中添加一个域名（线程安全）。
 func (r *Router) AddProxyDomain(domain string) {
-	r.customMu.Lock()
-	r.customProxyDomains[domain] = struct{}{}
-	r.customMu.Unlock()
+	r.customProxy.AddDomain(domain)
 }
 
 // IsCustomDirectDomain 检查域名是否在自定义直连域名列表中
 // （包括子域名匹配以及 regexp/glob 规则）。
 func (r *Router) IsCustomDirectDomain(domain string) bool {
-	r.customMu.RLock()
-	defer r.customMu.RUnlock()
-	if _, ok := r.customDirectDomains[domain]; ok {
-		return true
-	}
-	for _, sub := range util.SubDomains(domain) {
-		if _, ok := r.customDirectDomains[sub]; ok {
-			return true
-		}
-	}
-	for _, re := range r.customDirectRegexps {
-		if re.MatchString(domain) {
-			return true
-		}
-	}
-	return false
+	return r.isCustomDomain(r.customDirect, domain)
 }
 
 // IsCustomProxyDomain 检查域名是否在自定义代理域名列表中
 // （包括子域名匹配以及 regexp/glob 规则）。
 func (r *Router) IsCustomProxyDomain(domain string) bool {
-	r.customMu.RLock()
-	defer r.customMu.RUnlock()
-	if _, ok := r.customProxyDomains[domain]; ok {
-		return true
+	return r.isCustomDomain(r.customProxy, domain)
+}
+
+func (r *Router) isCustomDomain(set *rule.Set, domain string) bool {
+	if r == nil || set == nil {
+		return false
 	}
-	for _, sub := range util.SubDomains(domain) {
-		if _, ok := r.customProxyDomains[sub]; ok {
-			return true
-		}
-	}
-	for _, re := range r.customProxyRegexps {
-		if re.MatchString(domain) {
-			return true
-		}
-	}
-	return false
+	return set.HasDomain(domain)
 }
 
 func (r *Router) ShouldIPV6Disable() bool {

@@ -396,7 +396,7 @@ func TestUDPProxyDNSRepliesCountRawBytes(t *testing.T) {
 			}
 		}},
 	}
-	if err := d.proxyUDPQuery(&net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 43213}, req, dnsPlan{}); err != nil {
+	if err := d.proxyUDPQuery(&net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 43213}, req, dnsExchange{plan: dnsPlan{domain: "www.youtube.com", qtype: "A", action: dnsActionProxy}}); err != nil {
 		t.Fatalf("proxyUDPQuery: %v", err)
 	}
 

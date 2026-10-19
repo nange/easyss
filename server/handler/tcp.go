@@ -26,19 +26,13 @@ type tcpHandler struct {
 	dial        dialer
 }
 
-// newTCPHandler 用给定的空闲超时和基础超时创建 tcpHandler。
-// 拨号超时通过 config.DialTimeout 派生（base/3，限制在 [3s, 15s]），与客户端
-// 共用；KeepAlive 取完整的基础超时，这样长连接流由内核回收，而不会在对端
-// 消失后一直半开残留。
-func newTCPHandler(idleTimeout, timeout time.Duration, np *nextproxy.NextProxy) *tcpHandler {
-	if idleTimeout <= 0 {
-		idleTimeout = config.DefaultStreamIdleTimeout
-	}
-	if timeout <= 0 {
-		timeout = time.Duration(config.DefaultTimeout) * time.Second
-	}
-	directDialer := outboundDialer(config.DialTimeout(timeout), timeout)
-	h := &tcpHandler{idleTimeout: idleTimeout}
+// newTCPHandler 用已归一化的超时集合创建 tcpHandler：StreamIdle 是中继空闲
+// 超时，Dial 是出站拨号超时，Base 用作 KeepAlive（长连接流由内核回收，而不会
+// 在对端消失后一直半开残留）。零值由 config.Timeouts.Normalize 填充，本函数
+// 不再维护任何默认值。
+func newTCPHandler(timeouts config.Timeouts, np *nextproxy.NextProxy) *tcpHandler {
+	directDialer := outboundDialer(timeouts.Dial, timeouts.Base)
+	h := &tcpHandler{idleTimeout: timeouts.StreamIdle}
 	h.dial = dialer{
 		nextProxy:   np,
 		shouldProxy: np.ShouldProxy,

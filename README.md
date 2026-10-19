@@ -318,8 +318,10 @@ Easyss 支持开机自启动。开机时 WiFi/网络往往还没有初始化完�
 baidu.com
 taobao.com
 your-custom-domain.com
-*cn-*                    # glob 通配符：匹配所有包含 "cn-" 的域名
-regexp:^.*\.mycdn\.com$  # 正则表达式：匹配 mycdn.com 及其子域名
+# 注释独占一行；glob 通配符匹配所有包含 "cn-" 的域名
+*cn-*
+# 正则表达式匹配 mycdn.com 及其子域名
+regexp:^.*\.mycdn\.com$
 ```
 
 `proxy.txt` 示例（代理白名单，匹配到则强制走代理）：
@@ -329,8 +331,10 @@ regexp:^.*\.mycdn\.com$  # 正则表达式：匹配 mycdn.com 及其子域名
 10.0.0.0/8
 google.com
 twitter.com
-*google*                 # glob 通配符：匹配所有包含 "google" 的域名
-regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
+# glob 通配符：匹配所有包含 "google" 的域名
+*google*
+# 正则表达式：匹配包含 .youtube. 的域名
+regexp:^.*\.youtube\..*$
 ```
 
 **匹配规则：**
@@ -338,11 +342,15 @@ regexp:^.*\.youtube\..*$ # 正则表达式：匹配包含 .youtube. 的域名
 * 每行自动识别类型（按优先级）：
     1. `regexp:` 前缀 → Go 正则表达式匹配
     2. 包含 `*` → glob 通配符匹配（`*` 匹配任意字符序列）
-    3. IP → 精确匹配
-    4. CIDR → 网段匹配
+    3. CIDR → 网段匹配
+    4. IP → 精确匹配
     5. 其他 → 域名匹配（支持子域名）
-* 域名支持子域名匹配（如配置 `google.com`，则 `www.google.com`、`mail.google.com` 也会匹配）
+* 空行与以 `#` **开头**的整行注释会被跳过。**不支持行尾注释**：`#` 在正则与 glob 里都可能是规则的一部分，就地截断会把一条有效规则改写成另一条，因此注释必须独占一行。
+* **大小写不敏感**：域名按 DNS 的语义比较，`Example.COM` 与 `example.com` 等价（glob 与 `regexp:` 同样按大小写不敏感编译）。
+* 域名支持子域名匹配（如配置 `google.com`，则 `www.google.com`、`mail.google.com` 也会匹配）。
+* IP 会归一化后比较：`::ffff:1.2.3.4` 与 `1.2.3.4` 视为同一个地址。
 * 路由优先级：自定义直连 > 自定义代理 > auto/geo 规则
+* **写错的规则不再被静默丢弃**：客户端把无法编译的 `regexp:`/glob 记为启动告警（其余规则照常生效，见 `[ROUTER] load custom rule file`）；服务端 `next_proxy_file` 里出现同样的错误会直接让启动失败——上游代理列表缺项意味着"本该走代理的域名悄悄直连出网"。两类告警都会带上**行号**。
 
 ### 手机客户端
 
@@ -673,7 +681,10 @@ sysctl -p
 ```
 
 * `next_proxy.url`: 下一级代理地址，格式 `socks5://ip:port`
-* `next_proxy.next_proxy_file`: 指定走链式代理的 IP/CIDR/域名列表文件，每行一条记录，可混放
+* `next_proxy.next_proxy_file`: 指定走链式代理的 IP/CIDR/域名列表文件，每行一条记录，可混放。格式与
+  客户端的 `direct_file`/`proxy_file` **完全一致**（`regexp:` 正则、`*` glob、CIDR、IP、域名，大小写不敏感，
+  空行与整行 `#` 注释被跳过，见"自定义直连/代理白名单"一节）；区别只在于错误策略——这里**无法编译的规则会让
+  服务端启动失败**，而不是只记一条告警
 * `next_proxy.enable_udp`: 是否转发UDP请求（需要下一级代理支持 UDP ASSOCIATE）。为 `true` 时命中的
   UDP 目标（含经隧道解析的 DNS）走下一级代理；为 `false` 时这些 UDP 一律直连。开启前请确认下一级
   代理支持 UDP ASSOCIATE——否则它的关联请求会被拒绝，表现为这些目标上的 UDP 全部超时（客户端 TUN

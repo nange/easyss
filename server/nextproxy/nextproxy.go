@@ -5,14 +5,13 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"regexp"
-	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/nange/easyss/v3/config"
+	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
-	"github.com/nange/easyss/v3/util"
+	"github.com/nange/easyss/v3/rule"
 	xproxy "golang.org/x/net/proxy"
 )
 
@@ -22,15 +21,19 @@ type NextProxy struct {
 	allHost     bool
 	dialTimeout time.Duration
 
-	mu             sync.RWMutex
-	ips            map[string]struct{}
-	cidrIPs        []*net.IPNet
-	domains        map[string]struct{}
-	domainPatterns []*regexp.Regexp
+	// rules 是"目标是否走下一级代理"的规则集合：文件配置的条目与 DNS 学习
+	// 到的条目都在里面。解析、IP 归一化与域名匹配由 rule 包统一实现
+	// （与 client/router 的自定义规则文件共用同一份语义）。
+	//
+	// 用 atomic.Pointer 而不是裸指针：LoadProxyFile 会整体替换集合，而
+	// ShouldProxy/AddIP/AddDomain 可能在任意 goroutine 上读它。生产路径只在
+	// server.Start 里、开始服务之前装载一次，但让发布本身是原子的，比把
+	// "只许启动期调用"这条隐式约束留给调用方更可靠。
+	rules atomic.Pointer[rule.Set]
 
-	// learnedIPs/learnedDomains 只统计由 AddIP/AddDomain 添加的条目。
-	// 上面的 map 中还包含文件配置的条目，因此不能用 len(ips)/len(domains)
-	// 作为学习预算：否则一个较大的代理配置文件会禁用动态学习。
+	// learnedMu 只保护下面两个学习计数：规则集合自己有锁，但"这条是新增的吗"
+	// 与"预算还有吗"必须是同一个临界区，否则并发学习会一起越过上限。
+	learnedMu      sync.Mutex
 	learnedIPs     int
 	learnedDomains int
 }
@@ -52,9 +55,11 @@ func New(proxyURL string, enableUDP, allHost bool) (*NextProxy, error) {
 		url:       u,
 		enableUDP: enableUDP,
 		allHost:   allHost,
-		ips:       make(map[string]struct{}),
-		domains:   make(map[string]struct{}),
+		// 默认值同样只有一个出口：config.NewTimeouts(0) 就是在默认基础超时上
+		// 跑一遍派生公式。生产路径随后会用 SetDialTimeout 覆盖它。
+		dialTimeout: sharedconfig.NewTimeouts(0).Dial,
 	}
+	np.rules.Store(rule.New())
 	return np, nil
 }
 
@@ -62,47 +67,25 @@ func (np *NextProxy) LoadProxyFile(proxyFile string) error {
 	if np == nil {
 		return nil
 	}
-
 	if proxyFile == "" {
 		return nil
 	}
 
-	entries, err := util.ReadFileLinesMap(proxyFile)
+	set, parseErrs, err := rule.ParseFile(proxyFile, rule.Options{AllowComments: true})
 	if err != nil {
 		return err
 	}
-
-	np.mu.Lock()
-	defer np.mu.Unlock()
-
-	for k := range entries {
-		if strings.HasPrefix(k, "regexp:") {
-			re, err := regexp.Compile(k[7:])
-			if err == nil {
-				np.domainPatterns = append(np.domainPatterns, re)
-			}
-			continue
-		}
-		if strings.Contains(k, "*") {
-			re, err := util.GlobToRegexp(k)
-			if err == nil {
-				np.domainPatterns = append(np.domainPatterns, re)
-			}
-			continue
-		}
-		_, ipnet, err2 := net.ParseCIDR(k)
-		if err2 == nil && ipnet != nil {
-			np.cidrIPs = append(np.cidrIPs, ipnet)
-			continue
-		}
-		if util.IsIP(k) {
-			np.ips[k] = struct{}{}
-			continue
-		}
-		np.domains[k] = struct{}{}
+	// 与服务端其它配置错误一致：规则文件里写错的行是**致命**的。客户端路由
+	// 那边同样的错误只记启动告警（内置规则仍可工作），但服务端的上游代理列表
+	// 一旦缺项，"本该走代理的域名悄悄直连出网"就是一个静默的流量泄漏。
+	if err := rule.FileError(proxyFile, parseErrs); err != nil {
+		return err
 	}
-	log.Info("[NEXTPROXY] loaded proxy file", "file", proxyFile, "total", len(entries), "ips", len(np.ips), "cidrs", len(np.cidrIPs), "domains", len(np.domains), "patterns", len(np.domainPatterns))
+	np.rules.Store(set)
 
+	domains, ips, cidrs, patterns := set.Counts()
+	log.Info("[NEXTPROXY] loaded proxy file", "file", proxyFile,
+		"ips", ips, "cidrs", cidrs, "domains", domains, "patterns", patterns)
 	return nil
 }
 
@@ -110,29 +93,10 @@ func (np *NextProxy) ShouldProxy(host string) bool {
 	if np == nil {
 		return false
 	}
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
 	if np.allHost {
 		return true
 	}
-
-	np.mu.RLock()
-	defer np.mu.RUnlock()
-
-	if util.IsIP(host) {
-		if _, ok := np.ips[host]; ok {
-			return true
-		}
-		for _, cidr := range np.cidrIPs {
-			if cidr.Contains(net.ParseIP(host)) {
-				return true
-			}
-		}
-	} else {
-		return np.matchesDomainLocked(host)
-	}
-	return false
+	return np.rules.Load().MatchHost(host)
 }
 
 // IsCustomDomain 检查域名是否在自定义域名列表中，
@@ -141,31 +105,7 @@ func (np *NextProxy) IsCustomDomain(domain string) bool {
 	if np == nil {
 		return false
 	}
-
-	np.mu.RLock()
-	defer np.mu.RUnlock()
-
-	return np.matchesDomainLocked(domain)
-}
-
-// matchesDomainLocked 报告 host、其任一父域名或任一配置模式是否命中配置的
-// 域名集合。调用方必须持有 np.mu：ShouldProxy 和 IsCustomDomain 是它的
-// 仅有两个调用方，此前各自维护一份相同的遍历逻辑副本。
-func (np *NextProxy) matchesDomainLocked(host string) bool {
-	if _, ok := np.domains[host]; ok {
-		return true
-	}
-	for _, sub := range util.SubDomains(host) {
-		if _, ok := np.domains[sub]; ok {
-			return true
-		}
-	}
-	for _, re := range np.domainPatterns {
-		if re.MatchString(host) {
-			return true
-		}
-	}
-	return false
+	return np.rules.Load().HasDomain(domain)
 }
 
 // maxLearnedEntries 限制动态学习的 IP/域名集合的大小：自定义域名的 DNS 响应
@@ -174,26 +114,21 @@ func (np *NextProxy) matchesDomainLocked(host string) bool {
 // 停止；配置（文件加载）的条目不受影响。
 const maxLearnedEntries = 4096
 
-// AddIP 向路由列表中添加一个 IP（线程安全）。学习的 IP 会做归一化
-// （IPv4 映射的 IPv6 折叠为 IPv4），以便与 dial 目标中观测到的字面 IP
+// AddIP 向路由列表中添加一个 IP（线程安全）。学习的 IP 由 rule 包做归一化
+// （IPv4-mapped 的 IPv6 折叠为 IPv4），以便与 dial 目标中观测到的字面 IP
 // 匹配。超过 maxLearnedEntries 后条目被丢弃，以保持集合有界。
 func (np *NextProxy) AddIP(ip string) {
-	if np == nil {
+	if np == nil || net.ParseIP(ip) == nil {
 		return
 	}
-	if parsed := net.ParseIP(ip); parsed != nil {
-		if ip4 := parsed.To4(); ip4 != nil {
-			ip = ip4.String()
-		} else {
-			ip = parsed.String()
-		}
+	np.learnedMu.Lock()
+	defer np.learnedMu.Unlock()
+	if np.learnedIPs >= maxLearnedEntries {
+		return
 	}
-	np.mu.Lock()
-	if _, exists := np.ips[ip]; !exists && np.learnedIPs < maxLearnedEntries {
-		np.ips[ip] = struct{}{}
+	if np.rules.Load().AddIP(ip) {
 		np.learnedIPs++
 	}
-	np.mu.Unlock()
 }
 
 // AddDomain 向路由列表中添加一个域名（线程安全）。超过 maxLearnedEntries
@@ -202,15 +137,19 @@ func (np *NextProxy) AddDomain(domain string) {
 	if np == nil {
 		return
 	}
-	np.mu.Lock()
-	if _, exists := np.domains[domain]; !exists && np.learnedDomains < maxLearnedEntries {
-		np.domains[domain] = struct{}{}
+	np.learnedMu.Lock()
+	defer np.learnedMu.Unlock()
+	if np.learnedDomains >= maxLearnedEntries {
+		return
+	}
+	if np.rules.Load().AddDomain(domain) {
 		np.learnedDomains++
 	}
-	np.mu.Unlock()
 }
 
-// SetDialTimeout 设置拨号连接 SOCKS5 代理的超时时间。
+// SetDialTimeout 设置拨号连接 SOCKS5 代理的超时时间。它是本类型拨号超时的
+// 唯一入口：New 已用默认派生值播种，拨号路径因此不再判断零值（见
+// dialSOCKS5Context）。
 func (np *NextProxy) SetDialTimeout(d time.Duration) {
 	if np == nil {
 		return
@@ -243,10 +182,10 @@ func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string
 		log.Debug("[NEXTPROXY] connecting via SOCKS5 proxy", "addr", np.url.Host, "network", network, "target", addr)
 	}
 
+	// 拨号超时由 New（默认派生值）与 SetDialTimeout（调用方已派生的值）提供，
+	// 本路径不再维护第二份默认值：零值意味着"未配置"，会被 ctx 的截止时间或
+	// 拨号器自身的默认行为覆盖，而不是悄悄换成另一个数字。
 	dialTimeout := np.dialTimeout
-	if dialTimeout <= 0 {
-		dialTimeout = config.DefaultDialTimeout
-	}
 
 	// ctx 的截止时间优先于 np.dialTimeout：DNS 路径传入
 	// context.Background()，因此实际生效的一直是后者（与既有的 TCP 路径

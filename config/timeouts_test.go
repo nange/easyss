@@ -5,56 +5,78 @@ import (
 	"time"
 )
 
-// TestDefaultStreamIdleTimeoutDerived 守护单一事实来源约束：回退默认值必须始终等于
-// 在默认基础超时下求得的公式结果，绝不允许出现第二个魔法数字。
-func TestDefaultStreamIdleTimeoutDerived(t *testing.T) {
-	want := StreamIdleTimeout(time.Duration(DefaultTimeout) * time.Second)
-	if DefaultStreamIdleTimeout != want {
-		t.Errorf("DefaultStreamIdleTimeout = %v, want StreamIdleTimeout(DefaultTimeout) = %v", DefaultStreamIdleTimeout, want)
+// TestTimeoutsNormalizeFillsDefaults 守护单一事实来源约束：零值字段必须被填充成
+// "在默认基础超时上按公式求一次"的结果，绝不允许出现第二个魔法数字。
+//
+// 这正是替代原先四个 DefaultXxxTimeout 变量的地方：那些变量由各构造器自行判断
+// 零值时才使用，于是默认值既有一份导出变量、又有 17 处 `if x <= 0` 判断。
+func TestTimeoutsNormalizeFillsDefaults(t *testing.T) {
+	want := NewTimeouts(time.Duration(DefaultTimeout) * time.Second)
+	if got := (Timeouts{}).Normalize(); got != want {
+		t.Errorf("Timeouts{}.Normalize() = %#v, want %#v", got, want)
 	}
-	if DefaultStreamIdleTimeout <= 0 {
-		t.Fatalf("DefaultStreamIdleTimeout must be positive, got %v", DefaultStreamIdleTimeout)
-	}
-}
-
-// TestDefaultUDPIdleTimeoutDerived 为 UDP 回退值守护同样的约束：它必须等于
-// UDPIdleTimeout(DefaultTimeout)，使回退值永不偏离正常路径所使用的派生值。
-func TestDefaultUDPIdleTimeoutDerived(t *testing.T) {
-	want := UDPIdleTimeout(time.Duration(DefaultTimeout) * time.Second)
-	if DefaultUDPIdleTimeout != want {
-		t.Errorf("DefaultUDPIdleTimeout = %v, want UDPIdleTimeout(DefaultTimeout) = %v", DefaultUDPIdleTimeout, want)
-	}
-	if DefaultUDPIdleTimeout <= 0 {
-		t.Fatalf("DefaultUDPIdleTimeout must be positive, got %v", DefaultUDPIdleTimeout)
-	}
-}
-
-// TestDefaultDialTimeoutDerived 为拨号回退值守护同样的约束：它必须等于
-// DialTimeout(DefaultTimeout)。
-func TestDefaultDialTimeoutDerived(t *testing.T) {
-	want := DialTimeout(time.Duration(DefaultTimeout) * time.Second)
-	if DefaultDialTimeout != want {
-		t.Errorf("DefaultDialTimeout = %v, want DialTimeout(DefaultTimeout) = %v", DefaultDialTimeout, want)
-	}
-	if DefaultDialTimeout <= 0 {
-		t.Fatalf("DefaultDialTimeout must be positive, got %v", DefaultDialTimeout)
+	for name, d := range map[string]time.Duration{
+		"Base":         want.Base,
+		"Dial":         want.Dial,
+		"StreamIdle":   want.StreamIdle,
+		"UDPIdle":      want.UDPIdle,
+		"DNSResp":      want.DNSResp,
+		"ConnLifetime": want.ConnLifetime,
+	} {
+		if d <= 0 {
+			t.Errorf("%s must be positive, got %v", name, d)
+		}
 	}
 }
 
-// TestDefaultConnLifetimeDerived 为连接轮换生命周期的回退值守护同样的约束：
-// 它必须等于 ConnLifetime(DefaultTimeout)，使回退值永不偏离正常路径所使用的派生值。
-func TestDefaultConnLifetimeDerived(t *testing.T) {
-	want := ConnLifetime(time.Duration(DefaultTimeout) * time.Second)
-	if DefaultConnLifetime != want {
-		t.Errorf("DefaultConnLifetime = %v, want ConnLifetime(DefaultTimeout) = %v", DefaultConnLifetime, want)
+// TestTimeoutsNormalizeKeepsExplicitValues 固定"只填零值"的语义：调用方显式设置
+// 的字段必须原样保留，否则嵌入式调用方与测试就无法只钉住自己关心的那一项。
+func TestTimeoutsNormalizeKeepsExplicitValues(t *testing.T) {
+	in := Timeouts{
+		Base:         5 * time.Second,
+		Dial:         2 * time.Second,
+		StreamIdle:   3 * time.Second,
+		UDPIdle:      4 * time.Second,
+		DNSResp:      200 * time.Millisecond,
+		ConnLifetime: 6 * time.Second,
 	}
-	if DefaultConnLifetime <= 0 {
-		t.Fatalf("DefaultConnLifetime must be positive, got %v", DefaultConnLifetime)
+	if got := in.Normalize(); got != in {
+		t.Errorf("Normalize() = %#v, want the explicit values untouched", got)
 	}
 }
 
-// TestNormalizeTimeout 固定基础超时的归一化：非正值取默认值，越界值钳制到
-// [MinTimeout, MaxTimeout]（它派生出全部空闲/拨号/轮换超时，因此不能随意设置）。
+// TestTimeoutsNormalizePartial 覆盖只设置部分字段的情形：已设置的保留，其余按
+// Base 重新派生（而不是退回默认基础超时）。
+func TestTimeoutsNormalizePartial(t *testing.T) {
+	got := (Timeouts{Base: 5 * time.Second}).Normalize()
+	if got.Dial != DialTimeout(5*time.Second) {
+		t.Errorf("Dial = %v, want %v", got.Dial, DialTimeout(5*time.Second))
+	}
+	if got.StreamIdle != StreamIdleTimeout(5*time.Second) {
+		t.Errorf("StreamIdle = %v, want %v", got.StreamIdle, StreamIdleTimeout(5*time.Second))
+	}
+	if got.UDPIdle != UDPIdleTimeout(5*time.Second) {
+		t.Errorf("UDPIdle = %v, want %v", got.UDPIdle, UDPIdleTimeout(5*time.Second))
+	}
+	if got.DNSResp != 5*time.Second/3 {
+		t.Errorf("DNSResp = %v, want %v", got.DNSResp, 5*time.Second/3)
+	}
+	if got.ConnLifetime != ConnLifetime(5*time.Second) {
+		t.Errorf("ConnLifetime = %v, want %v", got.ConnLifetime, ConnLifetime(5*time.Second))
+	}
+}
+
+// TestTimeoutsNormalizeDoesNotClamp 固定归一化的边界：它只填零值，**不**钳制
+// 调用方显式给出的基础超时。区间钳制发生在配置层（NormalizeTimeout，用户输入的
+// timeout 秒数），测试与嵌入式调用方因此仍可以用远小于 MinTimeout 的值构建集合。
+func TestTimeoutsNormalizeDoesNotClamp(t *testing.T) {
+	for _, base := range []time.Duration{time.Second, time.Hour} {
+		if got := (Timeouts{Base: base}).Normalize().Base; got != base {
+			t.Errorf("Normalize() with explicit Base = %v changed it to %v", base, got)
+		}
+	}
+}
+
 func TestNormalizeTimeout(t *testing.T) {
 	tests := []struct {
 		name string

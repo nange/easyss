@@ -75,7 +75,7 @@ func newTwoPoolScheduler(pSpecs, bSpecs [][2]int32) *slotScheduler {
 // 槽位数组（回归测试：bulk 流曾经以 index out of range 崩溃）。
 func TestSchedulerSingleSlot(t *testing.T) {
 	slots := make([]*transportSlot, 1)
-	slots[0] = newSlot(nil, time.Second, nil, time.Minute)
+	slots[0] = newSlot(nil, time.Second, nil, time.Minute, time.Second/3)
 	sch := newScheduler(1, slots, 4, 1)
 
 	if sch.bulk.maxSlots != 0 || len(sch.bulk.slots) != 0 {
