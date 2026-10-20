@@ -14,21 +14,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 关闭脚本的退出码契约在这里钉住，与创建脚本的契约测试（tun_script_unix_test.go）
-// 同构：stub 工具放在 PATH 最前，两个脚本都被真实执行，只有脚本以 0 退出，调用方
-// 才认为路由（与设备）已经清理干净。
-//
-// 为什么这条契约必须在 CI 里：helper 退出时的清理、以及父进程发现残留后的兜底回滚，
-// 都以脚本的退出码为准。过去每一条 route delete 的失败都被吞掉，只要残留一条
-// 1/8…128/1 的分流默认路由，全机 IPv4 流量（含 DNS）就会进入一个没人读的设备，
-// 也就是"停止 TUN 后断网"。反过来，"路由本来就不存在 / bad value / 设备已消失"
-// 必须保持良性，否则重复关闭与 keep-alive 重放会每次都报错，把真正的失败淹掉。
+// 关闭脚本的退出码契约：stub 工具放在 PATH 最前、脚本真实执行，只有以 0 退出调用方才认为
+// 路由与设备已清理。漏删一条分流默认路由会让全机 IPv4 流量进一个没人读的设备（"停止 TUN 后断网"），
+// 而"路由本就不存在 / 设备已消失"必须良性，否则重复关闭与 keep-alive 重放会淹没真正的失败。
 
-// scriptArgsFixture 返回一份填满字段的脚本实参（IPv6 字段可置空）。
-//
-// 这里不再手写位置参数：位次由 client/tun.ScriptArgs 渲染，测试只描述设备配置。
-// 过去两个平台的期望切片各写一遍，等于把"契约"变成三份互相独立的字面量
-// （生产代码两份、测试一份），任何一处挪位都要靠运行脚本才能发现。
+// scriptArgsFixture 返回一份填满字段的脚本实参（IPv6 字段可置空），位次由
+// client/tun.ScriptArgs 渲染，测试不手写位置参数。
 func scriptArgsFixture(withV6 bool) tun.ScriptArgs {
 	dev := tun.DeviceConfig{
 		Device:       "tun-easyss-test",
@@ -46,8 +37,7 @@ func scriptArgsFixture(withV6 bool) tun.ScriptArgs {
 	return tun.NewScriptArgs(dev, "", 1500)
 }
 
-// darwinCloseScriptArgs / linuxCloseScriptArgs 保留为"本平台关闭脚本的实参"，
-// 但内容来自 ScriptArgs：darwin 的测试用 utun8，linux 用 tun-easyss-test。
+// darwinCloseScriptArgs / linuxCloseScriptArgs 是本平台关闭脚本的实参，内容由 ScriptArgs 渲染。
 func darwinCloseScriptArgs(withV6 bool) []string {
 	args := scriptArgsFixture(withV6)
 	args.Dev.Device = "utun8"
@@ -58,7 +48,6 @@ func linuxCloseScriptArgs() []string {
 	return scriptArgsFixture(true).CloseFor(tun.PlatformLinux)
 }
 
-// testCloseScriptArgs 是 runCloseScript 的实参夹具（helper 侧调用点）。
 func testCloseScriptArgs() tun.ScriptArgs {
 	return scriptArgsFixture(true)
 }
@@ -68,7 +57,7 @@ func TestCloseTunScriptDarwinExitCode(t *testing.T) {
 	requireShell(t, "sh")
 
 	const marker = "[close_tun_dev_darwin]"
-	// 9 条分流默认路由 + 1 条历史遗留的本地网关路由；存在 server ipv6 时再加 2 条。
+	// 9 条分流默认路由 + 1 条本地网关路由；存在 server ipv6 时再加 2 条。
 	const deletesV4 = 10
 	const deletesV6 = 12
 
@@ -84,8 +73,7 @@ func TestCloseTunScriptDarwinExitCode(t *testing.T) {
 	})
 
 	t.Run("routes that are already gone stay successful", func(t *testing.T) {
-		// 重复关闭、keep-alive 重放、以及从未安装过 v6 路由的会话都会看到
-		// "not in table"：这不是失败，否则每次正常关闭都会报错。
+		// 重复关闭、keep-alive 重放与从未装过 v6 路由的会话都会看到 "not in table"，这不是失败。
 		dir := t.TempDir()
 		failTool(t, dir, "route", "'route: writing to routing socket: not in table'", 1)
 
@@ -97,8 +85,8 @@ func TestCloseTunScriptDarwinExitCode(t *testing.T) {
 	})
 
 	t.Run("a rejected delete fails the script and names the step", func(t *testing.T) {
-		// 第三条路由（4.0.0.0/6）被拒绝：退出码必须非 0，且后面的删除仍要尝试
-		//（残留判定与回滚都以"整条阶梯都跑过"为前提）。
+		// 第三条路由（4.0.0.0/6）被拒绝：退出码必须非 0，且后面的删除仍要尝试——
+		// 残留判定与回滚都以"整条阶梯都跑过"为前提。
 		dir := t.TempDir()
 		sequenceTool(t, dir, "route", "'route: permission denied'", stubStep{}, stubStep{}, stubStep{fail: true})
 
@@ -111,8 +99,8 @@ func TestCloseTunScriptDarwinExitCode(t *testing.T) {
 	})
 
 	t.Run("a missing tun gateway refuses to run", func(t *testing.T) {
-		// 网关为空时 `route delete -net 1.0.0.0/8 ""` 可能被解释成"不指定网关地
-		// 删除该前缀"，从而删掉物理网卡上的同名路由：宁可拒绝执行。
+		// 网关为空时 `route delete -net 1.0.0.0/8 ""` 可能被解释成不指定网关地删除该前缀，
+		// 从而删掉物理网卡上的同名路由：宁可拒绝执行。
 		dir := t.TempDir()
 		stubTool(t, dir, "route", 0, marker)
 
@@ -148,9 +136,8 @@ func TestCloseTunScriptLinuxExitCode(t *testing.T) {
 	const marker = "[close_tun_dev]"
 
 	t.Run("a device that is already gone is not a failure", func(t *testing.T) {
-		// 非持久化 tun 设备随最后一个 fd 消失（fd 路径的常态：主进程先停引擎关闭
-		// fd，helper 随后才清理），内核会同时删掉它上面的路由。此时脚本必须静默
-		// 成功，且不再尝试 flush/删除。
+		// 非持久化 tun 设备随最后一个 fd 消失（fd 路径的常态），内核会同时删掉它上面的路由：
+		// 此时脚本必须静默成功，且不再尝试 flush/删除。
 		dir := t.TempDir()
 		failTool(t, dir, "ip", "'Cannot find device'", 1)
 
@@ -167,8 +154,8 @@ func TestCloseTunScriptLinuxExitCode(t *testing.T) {
 		code, out := runScriptStubbed(t, "bash", string(scripts.CloseTunDevSh), dir, linuxCloseScriptArgs()...)
 		require.Equal(t, 0, code, "the close script must exit 0 when every command succeeds:\n%s", out)
 		require.NotContains(t, out, "failed near")
-		// 顺序也是契约：路由必须先清掉，再删设备（设备还在时 `ip tuntap del`
-		// 会以 "device or resource busy" 失败，只删设备会把分流路由留下）。
+		// 顺序也是契约：设备还在时 `ip tuntap del` 会以 "device or resource busy" 失败，
+		// 只删设备会把分流路由留下。
 		require.Equal(t, []string{
 			"link show tun-easyss-test",
 			"route flush dev tun-easyss-test",
@@ -218,8 +205,7 @@ func TestCloseTunScriptLinuxExitCode(t *testing.T) {
 	})
 }
 
-// closeScriptShell 返回本平台 runCloseScript 使用的解释器：darwin 用 sh，
-// linux 用 bash（见 tun_helper_darwin.go / tun_helper_linux.go）。
+// closeScriptShell 返回本平台 runCloseScript 使用的解释器：darwin 用 sh，linux 用 bash。
 func closeScriptShell() string {
 	if runtime.GOOS == "darwin" {
 		return "sh"
@@ -227,9 +213,8 @@ func closeScriptShell() string {
 	return "bash"
 }
 
-// TestRunCloseScriptReportsFailures 固定在 Go 这一层不再吞掉关闭脚本的失败：残留的
-// 分流默认路由会把全机 IPv4 流量送进一个没人读的设备，而"脚本失败被当成清理成功"
-// 正是那条路径的起点。
+// TestRunCloseScriptReportsFailures 固定在 Go 这一层不再吞掉关闭脚本的失败：把"脚本失败"
+// 当成"清理成功"，残留的分流默认路由就会把全机 IPv4 流量送进一个没人读的设备。
 func TestRunCloseScriptReportsFailures(t *testing.T) {
 	requireShell(t, closeScriptShell())
 
@@ -249,9 +234,8 @@ func TestRunCloseScriptReportsFailures(t *testing.T) {
 	require.NoError(t, runCloseScript("tun-easyss-test", scriptArgs))
 }
 
-// TestCleanupTunRoutesVerifiesAndRetries 固定 helper 退出时的清理契约：关闭脚本的
-// 失败只在"路由确实还在"时才算失败，而残留会被重试并按 ERROR 上报——父进程的复核
-// 与提权回滚都以这条结论为依据。
+// TestCleanupTunRoutesVerifiesAndRetries 固定 helper 退出时的清理契约：关闭脚本失败只在
+// "路由确实还在"时才算失败，残留会被重试并按 ERROR 上报——父进程复核与提权回滚以此为依据。
 func TestCleanupTunRoutesVerifiesAndRetries(t *testing.T) {
 	requireShell(t, closeScriptShell())
 

@@ -45,11 +45,8 @@ func (h *ICMPHandler) HandlePacket(pkt adapter.Packet) bool {
 	id := pkt.ID()
 	dstAddr := id.LocalAddress.String()
 
-	// 只有 echo 请求才值得用 INFO 级别记录路由决策：其他 ICMP 类型（echo 回复、
-	// 错误、邻居发现）永远不会被代理，tun2socks 的默认 forwarder 反正也会丢弃
-	// 它们，所以把它们的分类结果记成 INFO 日志既无解释意义，又会刷屏日志。局域网
-	// 网关每秒探测一次本机就足以产生每秒数条这样的日志，因为内核对这些探测的回复
-	// 会被路由进 TUN 设备（参见 create_tun_dev.sh 中的路由说明）。
+	// 只有 echo 请求才值得记 INFO：其他类型永远不会被代理，tun2socks 的默认 forwarder
+	// 反正会丢弃，记 INFO 只会在局域网网关每秒探测本机时刷屏。
 	icmpType, echoRequest := icmpEchoRequest(pkt)
 	if !echoRequest {
 		log.Debug("[ICMP_DROP]", "dst", dstAddr, "type", icmpType, "reason", "non-echo")
@@ -80,9 +77,8 @@ func (h *ICMPHandler) HandlePacket(pkt adapter.Packet) bool {
 	}
 }
 
-// icmpEchoRequest 报告 pkt 是否为 ICMPv4/ICMPv6 echo 请求——这是本 handler
-// 唯一能路由或代理的 ICMP 报文——并返回其 ICMP 类型用于日志记录。短到装不下
-// ICMP 头的报文一律视为非 echo，与 handleProxyICMP 中的头部检查保持一致。
+// 报告 pkt 是否为 ICMPv4/ICMPv6 echo 请求——本 handler 唯一能路由或代理的 ICMP 报文——
+// 并返回类型用于日志；短到装不下 ICMP 头的报文一律视为非 echo。
 func icmpEchoRequest(pkt adapter.Packet) (icmpType uint8, ok bool) {
 	buf := pkt.Buffer()
 	if buf == nil {

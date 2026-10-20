@@ -103,10 +103,8 @@ func TestSwitchServerSkipsAServerThatIsAlreadyRunning(t *testing.T) {
 	require.True(t, a.serverMenuItems[0].IsChecked())
 }
 
-// TestSwitchServerSerializesConcurrentSwitches 固定串行化契约：托盘的每次点击
-// 都会新起一个 goroutine，而一次切换是整套"停服务 → 起服务"（抢同一组本地端口
-// 4080/5080）。并发执行两套会让配置互相覆盖，甚至留下没有任何 core 在运行的
-// 状态。串行化由会话序列锁（session.runErr）提供。
+// TestSwitchServerSerializesConcurrentSwitches 守住串行化：托盘每次点击都新起 goroutine，
+// 并发执行两套"停服务 → 起服务"会让配置互相覆盖，甚至留下没有 core 在运行的状态。
 func TestSwitchServerSerializesConcurrentSwitches(t *testing.T) {
 	a := newSwitchTestApp(t)
 
@@ -156,7 +154,7 @@ func TestSwitchServerSerializesConcurrentSwitches(t *testing.T) {
 }
 
 // TestRestartServiceRollsBackToThePreviousServer 固定"新服务器起不来就退回旧
-// 服务器"的契约：失败的切换过去会把用户留在旧服务已停、新服务没起来的状态
+// 服务器"的契约：新服务器起不来时必须退回旧服务器，否则用户会停在旧服务已停、
 // （本地端口没人监听，系统代理还指着它），也就是"切换失败并且断网"。
 func TestRestartServiceRollsBackToThePreviousServer(t *testing.T) {
 	a := newSwitchTestApp(t)
@@ -214,12 +212,8 @@ func TestRestartServiceReportsBothFailures(t *testing.T) {
 	require.Contains(t, err.Error(), "rollback to a.example:443")
 }
 
-// TestRestartServiceDoesNotClobberMenuChangesFromAStaleTarget 固定"切换不得用
-// 停服务之前取的旧快照覆盖菜单改动"：#206 review 指出的丢更新窗口——目标配置
-// 在 closeService 之前取好，而 closeService 在 macOS 上要等 TUN 拆除的管理员
-// 凭据（可达数秒）；这期间用户改的代理规则/日志级别会被那份旧全量静默回滚，
-// 单选项却仍勾着新值、再点也不会生效。现在切换只发布"目标服务器 + 关闭 TUN"
-// 两条增量，因此旧快照的其它字段一律不得生效。
+// TestRestartServiceDoesNotClobberMenuChangesFromAStaleTarget 守住丢更新：closeService 在
+// macOS 上要等 TUN 拆除的管理员凭据（可达数秒），这期间用户改的菜单项不能被旧快照静默回滚。
 func TestRestartServiceDoesNotClobberMenuChangesFromAStaleTarget(t *testing.T) {
 	stubRunCore(t)
 	stubSysProxy(t, nil)
@@ -278,10 +272,8 @@ func TestRestartServiceRollbackKeepsMenuChanges(t *testing.T) {
 		"回滚不得覆盖菜单的最新改动")
 }
 
-// TestSwitchServerIsRaceFreeWithStatsReads 固定"切换服务器与后台统计读取不再
-// 竞争当前核心"：-race 下这是回归测试（当前核心由 session.core 原子发布，
-// switchServer 与 statsLoop 各自读快照）。restart 复用真实的 Start/Stop，
-// 并按生产 restartService 的方式发布"目标服务器"增量。
+// TestSwitchServerIsRaceFreeWithStatsReads 守住切换与后台统计读当前核心的数据竞争
+// （-race 下回归）：当前核心由 session.core 原子发布，两边各自读快照。
 func TestSwitchServerIsRaceFreeWithStatsReads(t *testing.T) {
 	stubRunCore(t)
 	a := newSwitchTestApp(t)
@@ -329,11 +321,8 @@ func TestSwitchServerIsRaceFreeWithStatsReads(t *testing.T) {
 	require.NotNil(t, a.currentCore(), "最后一次切换之后服务必须在运行")
 }
 
-// TestCloseServiceIsSerializedWithSwitches 固定 A3 之后仍然成立的性质：退出时的
-// 拆除（closeService）与一次切换的"停→起"不会交错。这条互斥过去是 closeService
-// 整段持有 TrayApp.mu 顺带得到的（那把锁只负责两个菜单项指针，却把菜单读挡在
-// 最长可达几十秒的 TUN 拆除之后），现在由会话序列锁显式提供——本测试就是它的
-// 回归防线。
+// TestCloseServiceIsSerializedWithSwitches 守住退出拆除（closeService）与切换的"停→起"
+// 不交错：互斥由会话序列锁提供，不能靠 TrayApp.mu 顺带获得。
 func TestCloseServiceIsSerializedWithSwitches(t *testing.T) {
 	a := newSwitchTestApp(t)
 	stubSysProxy(t, nil)

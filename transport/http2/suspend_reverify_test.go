@@ -12,10 +12,8 @@ import (
 	"github.com/nange/easyss/v3/transport"
 )
 
-// TestSuspendSamplerDetectsSleep 保护挂起判据本身：它必须只由"墙钟推进 − 单调钟
-// 推进"的离差给出，而不能依赖 ticker 的实到间隔——挂起期间单调钟冻结，定时器
-// 在自己的时间轴上并没有迟到。测试直接驱动标量形式（suspendOffset 的增量），
-// 这正是"两个读数压成一个不可撕裂的标量"这条设计的接口面：offset 的增量就是离差。
+// TestSuspendSamplerDetectsSleep 守住判据：挂起只体现为墙钟推进减单调钟推进的离差，
+// ticker 的实到间隔量不到它（定时器在自己的时间轴上并没有迟到）。
 func TestSuspendSamplerDetectsSleep(t *testing.T) {
 	var s suspendSampler
 	// 任意的正起点；真实的 suspendOffset 是 1.7e18 量级（墙钟 UnixNano 减去进程内
@@ -70,13 +68,8 @@ func suspendIn(t *testing.T, s *suspendSampler, d time.Duration) {
 	}
 }
 
-// TestObserveSuspendCountsOncePerSuspension 固定"一次挂起恰好一次武装与记账"，
-// 覆盖 reviewer 指出的两种时序：
-//
-//   - 串行：开流路径先观测到挂起并记账，健康循环随后的 tick 观测的是同一条共享
-//     基线，量到的是"两次采样之间"（没有挂起），因此不会重复记账，也不会把已经被
-//     复核过、标记已清掉的槽位重新武装；
-//   - 并发：多个开流同时采样，CAS 只有一个赢家拿得到真实离差。
+// TestObserveSuspendCountsOncePerSuspension 固定"一次挂起恰好一次武装与记账"：迟到的
+// 观测不会重复记账或重新武装槽位，并发采样只有 CAS 的赢家拿到离差。
 func TestObserveSuspendCountsOncePerSuspension(t *testing.T) {
 	probe := func(context.Context, *transportSlot) (float64, probeVerdict) { return 0, probeInconclusive }
 
@@ -436,10 +429,8 @@ func TestReverifySlotDetachesProbeFromCallerCancellation(t *testing.T) {
 	}
 }
 
-// TestMaybeSuspendArmsFromTheOpenPath 覆盖 S4：待机回来的第一个请求往往早于第一个
-// 健康周期，因此开流路径必须自己发现挂起并武装嫌疑，而不是等定时器。测试用"墙钟
-// 基线停在过去、单调钟基线是当前值"伪造一次挂起（这正是挂起在采样器里留下的样子），
-// 然后验证：武装、记账恰好一次、第二个请求的复核把活连接原样放行。
+// TestMaybeSuspendArmsFromTheOpenPath 守住开流路径自己的挂起检测：待机回来的第一个
+// 请求往往早于第一个健康周期，只靠定时器那条流仍会盲踩死连接。
 func TestMaybeSuspendArmsFromTheOpenPath(t *testing.T) {
 	srv, conns := newH2Server(t)
 	tr := newRecoveryTransport(t, srv.URL, "dGVzdHRva2Vu")
@@ -580,10 +571,8 @@ func TestHTTP2Transport_ReverifyKeepsLiveConnection(t *testing.T) {
 	}
 }
 
-// TestHTTP2Transport_ReverifyReplacesUnreachableConnection 是端到端的另一半：
-// 复核判死时，那条连接被按身份关闭，随后同一槽位的流在新建的连接上继续。
-// 判活结论由桩给出（真实的"静默丢包"无法在进程内构造），这里验证的是决策被
-// 真的接到了 Open 路径上。
+// TestHTTP2Transport_ReverifyReplacesUnreachableConnection 守住复核判死的落地：连接按
+// 身份关闭后，同一槽位的流改走新建连接（静默丢包无法在进程内构造，判活结论由桩给出）。
 func TestHTTP2Transport_ReverifyReplacesUnreachableConnection(t *testing.T) {
 	srv, conns := newH2Server(t)
 	tr := newRecoveryTransport(t, srv.URL, "dGVzdHRva2Vu")

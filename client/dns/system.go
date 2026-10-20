@@ -25,10 +25,8 @@ var (
 	systemDNSTime   time.Time
 )
 
-// SystemDNSServers 以 host:port 地址的形式返回系统 DNS 服务器，从操作系统
-// 惰性发现并短暂缓存。当所有内置直连 DNS 服务器都不可用时作为回退使用。
-// 空结果也会被缓存，这样失败的发现（例如缓慢的 ipconfig 调用）不会在每次
-// DNS 查询时重复执行。
+// SystemDNSServers 以 host:port 返回系统 DNS 服务器，惰性发现并短暂缓存。空结果也缓存，
+// 失败发现（例如缓慢的 ipconfig）才不会在每次查询时重跑。
 func SystemDNSServers() []string {
 	systemDNSMu.Lock()
 	defer systemDNSMu.Unlock()
@@ -53,18 +51,8 @@ func SystemDNSServers() []string {
 	return addrs
 }
 
-// WithSystemDNSFallbackReserve 返回内置 DNS 分支应使用的 context：ctx 带截止
-// 时间且剩余预算大于预留量时，把内置分支的截止时间提前一个 ResolveItemTimeout
-// （即一个完整条目的预算），这样系统 DNS 兜底至少还能拿到这段时间。
-//
-// 内置 DNS 若是黑洞（丢包，而不是 RST/SERVFAIL 那种立即失败），单次查询会一直
-// 等到超时；没有这层切分，预解析的整个预算会被内置服务器吃掉，随后复用同一个
-// （已过期的）context 的系统 DNS 兜底就会在毫秒内以 dial i/o timeout 全部失败
-// ——即使系统 DNS（DHCP/内网解析器）本身完全可用。
-//
-// 无截止时间（调用方不设总预算）或剩余预算已不足预留量时原样返回，不做切分。
-// 覆盖内置 + 系统两段分支的调用方应在进入内置分支前调用它，并把返回的 context
-// 只用于内置分支；系统兜底分支继续用原来的 ctx，从而仍然受总预算约束。
+// 把内置分支的截止时间提前一个 ResolveItemTimeout，给系统 DNS 兜底留出至少一个条目的预算；
+// 内置 DNS 若是黑洞，兜底复用同一个已过期的 ctx 会立刻全部超时。返回的 ctx 只用于内置分支。
 func WithSystemDNSFallbackReserve(ctx context.Context) (context.Context, context.CancelFunc) {
 	deadline, ok := ctx.Deadline()
 	if !ok {

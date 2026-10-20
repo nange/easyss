@@ -51,14 +51,9 @@ func TestRecordWriterFlushesAfterCompleteRecord(t *testing.T) {
 	require.NoError(t, err)
 	aad := buildAAD(endpoint, salt, "s2c", "session", protocol.MethodAES256GCM)
 
-	// WriteRecord 不应自动 flush，无论记录多大。
-	// 由调用方（shaper）负责调用 Flush()。
-	//
-	// writes 计数为 1 是刻意的：长度前缀与密文共用同一块池缓冲、一次写出，
-	// 好让整条记录（前缀 + 明文 + 标签）落在 bytespool 的 64KB 档位内。上游
-	// writer 完全可能对每次 Write 都立即落地（客户端的裸 io.PipeWriter 就是，
-	// 见 RecordWriter.WriteRecord 的说明），所以这个次数是线上字节之外的
-	// 真实成本，不能随手拆成两次。
+	// WriteRecord 不自动 flush，由调用方（shaper）负责 Flush()。writes 计数为 1 是刻意的：
+	// 前缀与密文共用同一块池缓冲、一次写出，整条记录才落在 bytespool 的 64KB 档位内，
+	// 而上游 writer 可能对每次 Write 都立即落地，所以这个次数是真实成本。
 	w := &flushBuffer{}
 	rw := NewRecordWriter(w, enc, counter, aad)
 	require.NoError(t, rw.WriteRecord([]byte("hello")))
@@ -66,12 +61,10 @@ func TestRecordWriterFlushesAfterCompleteRecord(t *testing.T) {
 	require.Equal(t, 0, w.flushes, "WriteRecord should not auto-flush")
 	require.Greater(t, w.Len(), 3)
 
-	// 显式调用 Flush() 应始终执行 flush。
 	rw.Flush()
 	require.Equal(t, 1, w.flushes, "explicit Flush() should flush")
 
-	// 大记录同样不应自动 flush。"大"取写入上限本身：它既是最大的一条记录，
-	// 也是唯一会走到池档位边界的尺寸。
+	// 大记录同样不自动 flush。"大"取写入上限本身：它既是最大的一条记录，也是唯一会走到池档位边界的尺寸。
 	large := make([]byte, protocol.MaxWriteRecordPlaintext)
 	w2 := &flushBuffer{}
 	enc2, counter2, err := sk.newEncryptor(sessionPhase, DirS2C, protocol.MethodAES256GCM)
@@ -84,8 +77,7 @@ func TestRecordWriterFlushesAfterCompleteRecord(t *testing.T) {
 	require.Equal(t, 1, w2.flushes, "explicit Flush() should flush after large record")
 }
 
-// recordWriteCalls 是一条记录落到 io.Writer 上的写次数：长度前缀与密文共用
-// 同一块池缓冲，因此一次搞定。
+// recordWriteCalls 是一条记录落到 io.Writer 上的写次数：前缀与密文共用同一块池缓冲，一次搞定。
 const recordWriteCalls = 1
 
 type flushBuffer struct {
@@ -103,8 +95,7 @@ func (fb *flushBuffer) Flush() {
 	fb.flushes++
 }
 
-// capRecordingBuffer 记录每一笔写入的长度与容量，用来断言"整条记录（前缀 +
-// 密文）取样于同一块池缓冲，且落在 64KB 档位内"。
+// capRecordingBuffer 记录每笔写入的长度与容量，用来断言整条记录取样于同一块池缓冲且落在 64KB 档位内。
 type capRecordingBuffer struct {
 	parts []int // 每笔写入的长度
 	caps  []int // 每笔写入引用的缓冲区容量
@@ -116,13 +107,8 @@ func (b *capRecordingBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// TestRecordWriterSingleWriteKeepsWireFormat 固定"记录层只写一次、且线上格式
-// 不变"：写出的字节必须与"长度前缀 + 独立加密出的密文"逐字节相等。线上格式是
-// 跨版本契约，任何重构都不允许让它漂移。
-//
-// 它同时是"前缀与密文确实共用同一块缓冲"的证据：WriteRecord 用 buf[3:3] 作为
-// Seal 的目标、再从 buf 切出记录，一旦 Seal 另分配了一块，写出去的字节就会是
-// 缓冲区里的残留数据，下面的等值断言立刻失败。
+// TestRecordWriterSingleWriteKeepsWireFormat 固定线上格式（长度前缀 + 独立加密的密文）不漂移，
+// 同时证明前缀与密文共用同一块缓冲：WriteRecord 用 buf[3:3] 作 Seal 目标，一旦另分配就会写出残留数据。
 func TestRecordWriterSingleWriteKeepsWireFormat(t *testing.T) {
 	masterKey, _ := DeriveMasterKey("single-write-key")
 	salt, _ := GenerateSalt()
@@ -164,15 +150,9 @@ func TestRecordWriterSingleWriteKeepsWireFormat(t *testing.T) {
 	}
 }
 
-// TestRecordWriterKeepsCipherBufferInPoolClass 固定两条尺寸链在加密侧的落点：
-// 记录占用的池请求是 3 字节长度前缀 + 明文 + AEAD 标签。
-//
-//   - 数据报链路的上限（MaxUDPDataSize + 帧头 = 16,365）仍落在 16KB 档；
-//   - 记录写入上限（MaxWriteRecordPlaintext = 65,517）正好落在 64KB 档。
-//
-// 上限一旦被调大，整块记录就会向上跳一档，为最后十几字节付一倍的池保留与瞬时
-// 分配。断言的是交给 io.Writer 的那块缓冲的 cap，因为字节池传下去的就是它
-// 本身——这是"没有额外复制"的直接证据。
+// TestRecordWriterKeepsCipherBufferInPoolClass 固定两条尺寸链的池档位：数据报上限
+// （MaxUDPDataSize + 帧头 = 16,365）落在 16KB 档，记录写入上限（65,517）落在 64KB 档。
+// 上限调大整块就跳一档；断言交给 io.Writer 那块缓冲的 cap，"没有额外复制"的直接证据。
 func TestRecordWriterKeepsCipherBufferInPoolClass(t *testing.T) {
 	masterKey, _ := DeriveMasterKey("cipher-class-key")
 	salt, _ := GenerateSalt()
@@ -207,12 +187,9 @@ func TestRecordWriterKeepsCipherBufferInPoolClass(t *testing.T) {
 	}
 }
 
-// TestWriteRecordRejectsPlaintextAboveRecordCeiling 固定**写入侧**的上限就是
-// protocol.MaxWriteRecordPlaintext：它同时被 shaper 用作单帧校验、预冲刷边界与填充
-// 预算，两侧不一致会让整形器攒出加密层拒绝的明文，把正常的流打断。
-//
-// 读侧刻意更宽松（MaxCipherRecordSize 仍按线上格式推导），以便解码旧对端发来的
-// 64KB 明文记录；这条不对称是本测试要守住的。
+// TestWriteRecordRejectsPlaintextAboveRecordCeiling 固定写入侧上限就是 protocol.MaxWriteRecordPlaintext：
+// shaper 同时用它做单帧校验、预冲刷边界与填充预算，两侧不一致会让整形器攒出加密层拒绝的明文。
+// 读侧刻意更宽松（MaxCipherRecordSize 仍按线上格式推导），以便解码旧对端的 64KB 明文记录。
 func TestWriteRecordRejectsPlaintextAboveRecordCeiling(t *testing.T) {
 	masterKey, _ := DeriveMasterKey("record-ceiling-key")
 	salt, _ := GenerateSalt()
@@ -241,10 +218,8 @@ func TestWriteRecordRejectsPlaintextAboveRecordCeiling(t *testing.T) {
 		"超过上限的明文必须被拒绝，而不是落进 128KB 档")
 }
 
-// TestAEADOverheadMatchesProtocolCeiling 守住 protocol.MaxTagOverhead 与真实
-// AEAD 标签长度的耦合：protocol 是记录格式的定义方、不依赖 crypto 包，因此这条
-// 关系只能由测试约束。标签一旦变长，"明文上限 + 3 + 标签 = 64KB"的算术就不再
-// 成立，整条记录会向上跳一档。
+// TestAEADOverheadMatchesProtocolCeiling 守住 protocol.MaxTagOverhead 与真实 AEAD 标签长度的耦合：
+// protocol 不依赖 crypto，只能由测试约束；标签变长后"明文上限 + 3 + 标签 = 64KB"的算术就不再成立。
 func TestAEADOverheadMatchesProtocolCeiling(t *testing.T) {
 	masterKey, _ := DeriveMasterKey("tag-overhead-key")
 	salt, _ := GenerateSalt()

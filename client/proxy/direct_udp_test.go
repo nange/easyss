@@ -77,11 +77,8 @@ func startSilentRemoteUDP(t *testing.T) string {
 	return pc.LocalAddr().String()
 }
 
-// TestDirectUDPRelayConcurrentDial 验证针对同一个（client, target）键并发处理的两个
-// 数据报只会创建一个直连 UDP 会话。修复前的代码在查 map 与插入之间存在竞争，导致两个
-// 处理器都拨号：一个 socket 成为孤儿（连同其读协程一起泄漏，最多持续到读空闲截止时间），
-// 而孤儿的清理随后删除了仍在使用的 map 条目，使长连接流（QUIC、游戏、VoIP）每约
-// udpIdleTimeout（默认 60s）就换一个新 socket。
+// TestDirectUDPRelayConcurrentDial 守住同一个 (client, target) 键并发时只拨一个 socket：
+// 查 map 与插入之间的竞争会让孤儿 socket 的清理删掉仍在使用的条目，长流每约 60s 换一次 socket。
 func TestDirectUDPRelayConcurrentDial(t *testing.T) {
 	dst := startSilentRemoteUDP(t)
 

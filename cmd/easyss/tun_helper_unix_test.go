@@ -20,9 +20,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fdTestSocketPath 在独立目录中返回一个较短的 socket 路径：Unix socket 的
-// sun_path 长度限制约为 104 字节，而 t.TempDir() 会嵌入测试名，其长度在
-// macOS 上足以超出该限制。
+// fdTestSocketPath 在独立目录里返回短 socket 路径：sun_path 上限约 104 字节，
+// 而 t.TempDir() 嵌了测试名，在 macOS 上会超。
 func fdTestSocketPath(t *testing.T) string {
 	t.Helper()
 
@@ -33,12 +32,9 @@ func fdTestSocketPath(t *testing.T) string {
 	return filepath.Join(dir, "fd.sock")
 }
 
-// TestReceiveFdReportsAFailedHelperImmediately 是针对 fd socket 上盲目等待的
-// 回归测试：helper 在能发送 fd 之前就失败（例如创建脚本以非零码退出）时，它
-// 远早于父进程 30 秒的 accept 截止时间就失败了，而用户看到的却是超时而不是
-// 该失败。现在 helper 通过连接 socket 但不携带 fd 来宣告放弃（参见
-// notifyStartFailure），父进程必须立即连同原因一起报告它，这样托盘就不必
-// 让用户去翻日志文件。
+// TestReceiveFdReportsAFailedHelperImmediately 防止父进程在 fd socket 上盲等：helper
+// 在发出 fd 之前就失败（如创建脚本非零退出）时，必须靠 notifyStartFailure 连接但不
+// 带 fd 宣告放弃，让父进程立刻连同原因报告，而不是等满 30s 的 accept 截止时间。
 func TestReceiveFdReportsAFailedHelperImmediately(t *testing.T) {
 	const reason = `run create script: exit status 1: "[create_tun_dev] failed near: route"`
 
@@ -65,8 +61,8 @@ func TestReceiveFdReportsAFailedHelperImmediately(t *testing.T) {
 		"the failure reason the helper sent has to reach the caller: it is what the tray notification shows")
 }
 
-// TestReceiveFdReportsAGiveUpWithoutReason 覆盖无法给出原因的 helper：仅凭
-// 这次连接本身也必须让启动失败，而不是让父进程等待一个永远不会到来的 fd。
+// TestReceiveFdReportsAGiveUpWithoutReason 覆盖不带原因的 helper：仅凭这次连接本身
+// 也必须让启动失败，而不是等一个永远不会到来的 fd。
 func TestReceiveFdReportsAGiveUpWithoutReason(t *testing.T) {
 	socketPath := fdTestSocketPath(t)
 	listener, err := net.Listen("unix", socketPath)
@@ -85,16 +81,15 @@ func TestReceiveFdReportsAGiveUpWithoutReason(t *testing.T) {
 	require.Error(t, err, "a helper that gave up without a reason still did not start")
 }
 
-// TestFailurePayload 保证失败文本可以用于桌面通知：即使失败的平台脚本带有
-// 换行，也始终是一行，并且长度不会超过父进程读取的 socket 消息。
+// TestFailurePayload 保证失败文本能直接用于桌面通知：始终一行，且不超过父进程读取的
+// socket 消息长度。
 func TestFailurePayload(t *testing.T) {
 	require.Nil(t, failurePayload(nil), "a helper without a reason sends nothing")
 
 	payload := string(failurePayload(errors.New("run create script: \n  \"bash /tmp/x.sh\":\texit status 1\n")))
 	require.Equal(t, `run create script: "bash /tmp/x.sh": exit status 1`, payload)
 
-	// 超过上限时两端都要保留：开头是失败的步骤，结尾是脚本自己的
-	// "failed near:" 摘要。
+	// 截断时两端都要留：开头是失败的步骤，结尾是脚本自己的 "failed near:" 摘要。
 	long := string(failurePayload(errors.New("start of the reason " +
 		strings.Repeat("x", 4*maxHelperFailureReason) + " failed near: route")))
 	require.Len(t, long, maxHelperFailureReason, "the parent reads exactly one message of this size")
@@ -103,13 +98,8 @@ func TestFailurePayload(t *testing.T) {
 	require.Contains(t, long, " ... ")
 }
 
-// TestHelperFailureReasonCarriesTheScriptDiagnostics 固定了托盘通知所显示的
-// 内容：这里用拒绝一切调用的 stub 工具真实运行当前平台的创建脚本，helper
-// 交给父进程的原因必须携带脚本自身的诊断信息——失败的是什么以及它的
-// "failed near:" 摘要——而不只是 "exit status 1"。
-//
-// stub 工具还能防止测试重新配置运行它的机器：linux 脚本只会用到 "ip"，
-// darwin 脚本只会用到 "ifconfig" 和 "route"。
+// TestHelperFailureReasonCarriesTheScriptDiagnostics 守住托盘通知带的是脚本自身的诊断
+// （失败步骤 + "failed near:" 摘要）而不只是 "exit status 1"；stub 工具同时保证测试不改写本机网络。
 func TestHelperFailureReasonCarriesTheScriptDiagnostics(t *testing.T) {
 	shell, tools := "bash", []string{"ip"}
 	if runtime.GOOS == "darwin" {
@@ -147,8 +137,8 @@ func TestHelperFailureReasonCarriesTheScriptDiagnostics(t *testing.T) {
 	require.LessOrEqual(t, len(reason), maxHelperFailureReason)
 }
 
-// TestReceiveFdReceivesTheSentFd 从另一侧守护同一条路径：放弃信号绝不能
-// 让父进程拒绝健康 helper 发来的 fd。
+// TestReceiveFdReceivesTheSentFd 从另一侧守护同一条路径：放弃信号不能让父进程拒绝
+// 健康 helper 发来的 fd。
 func TestReceiveFdReceivesTheSentFd(t *testing.T) {
 	socketPath := fdTestSocketPath(t)
 	listener, err := net.Listen("unix", socketPath)
@@ -169,7 +159,7 @@ func TestReceiveFdReceivesTheSentFd(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, <-sent, "the helper failed to send its fd")
 
-	// 收到的描述符必须是 "helper" 发送的管道读端，而不只是某个数字。
+	// 收到的必须是 helper 发出的管道读端，而不只是某个数字。
 	received := os.NewFile(uintptr(fd), "received-fd")
 	t.Cleanup(func() { received.Close() }) //nolint:errcheck
 
@@ -181,9 +171,8 @@ func TestReceiveFdReceivesTheSentFd(t *testing.T) {
 	require.Equal(t, "tun", string(buf))
 }
 
-// TestRouteFieldsContain 固定残留判定的精确性：路由探测的输出按空白分词后整体
-// 比较字段对。子串匹配会让 "dev tun" 命中 "dev tun0"，把别的 TUN 设备的路由
-// 误判成本会话的残留，进而触发一次不必要的提权回滚。
+// TestRouteFieldsContain 固定残留判定的精确性：按空白分词后整对比较字段。子串匹配
+// 会让 "dev tun" 命中 "dev tun0"，把别的设备误判成残留并触发多余的提权回滚。
 func TestRouteFieldsContain(t *testing.T) {
 	darwinUp := "   route to: 1.1.1.1\ndestination: 1.0.0.0\n       mask: 255.0.0.0\n    gateway: 198.18.0.1\n  interface: utun9\n"
 	darwinClean := "   route to: 1.1.1.1\ndestination: 0.0.0.0\n       mask: 0.0.0.0\n    gateway: 192.168.3.1\n  interface: en0\n"
@@ -213,9 +202,8 @@ func TestRouteFieldsContain(t *testing.T) {
 	}
 }
 
-// stubRouteProbe 用固定的路由表应答替换探测命令（routeProbeCmd），返回记录下来的
-// 调用参数，并在测试结束时还原。它是 routeFieldsContain/tunRouteResidue 那组测试
-// 的共同前置：残留判定只依赖这份文本里的字段，不需要真实的系统路由表。
+// stubRouteProbe 用固定输出替换 routeProbeCmd 并返回记录的调用参数：残留判定只看这
+// 份文本里的字段，不需要真实的系统路由表。
 func stubRouteProbe(t *testing.T, out string) *[][]string {
 	t.Helper()
 
@@ -230,17 +218,8 @@ func stubRouteProbe(t *testing.T, out string) *[][]string {
 	return &calls
 }
 
-// TestHelperAndDirectPathsShareTheScriptArgs 是"两条启用路径装出同一个 TUN 子网"
-// 的回归测试。
-//
-// 同一份设备配置会从两个地方变成位置参数：直连路径（root 的 Linux/macOS、
-// Windows）走 client/tun.Manager，非 root 的 darwin/linux 走提权 helper
-// （GET /tun 拿到 proxy.TunConfig 再交给脚本）。helper 过去自己拼实参，
-// 把 TunIP 裸着传给 linux 脚本，而直连路径传的是"地址/掩码"：同一次会话
-// 因此得到 /32 与 /16 两种直连路由。两者都能上网，所以这个偏差永远不会报错，
-// 只会让两条路径的 TUN 子网语义不同。
-//
-// 现在两边都只经过 tun.ScriptArgs，这里断言它们逐项相等。
+// TestHelperAndDirectPathsShareTheScriptArgs 钉住两条启用路径都只经过 tun.ScriptArgs：
+// 否则 helper 会把裸地址传给 linux 脚本，同一次会话装出 /32 与 /16 两种路由，偏差永远不报错。
 func TestHelperAndDirectPathsShareTheScriptArgs(t *testing.T) {
 	cfg := &proxy.TunConfig{
 		Device:         "tun-easyss-test",
@@ -256,10 +235,9 @@ func TestHelperAndDirectPathsShareTheScriptArgs(t *testing.T) {
 		MTU:            1500,
 	}
 
-	// 直连路径：Manager 从同一份配置构造的实参。第 8 位（适配器 DNS）在两条
-	// 路径上都是空：windows 没有提权 helper，它的脚本从 cmd/easyss 拿到 DNS；
-	// 而 darwin/linux 的 helper 自己用 DNSAddr 调 util.SetSysDNSForTun，
-	// 从不把它交给脚本（脚本也没有这个位置参数）。
+	// 直连路径：Manager 从同一份配置构造的实参。第 8 位（适配器 DNS）在两条路径上都是空：
+	// windows 的脚本从 cmd/easyss 拿 DNS，darwin/linux 的 helper 自己用 DNSAddr 调
+	// util.SetSysDNSForTun，脚本没有这个位置参数。
 	direct := tun.NewScriptArgs(tun.DeviceConfig{
 		Device:         cfg.Device,
 		TunIP:          cfg.TunIP,
@@ -274,8 +252,7 @@ func TestHelperAndDirectPathsShareTheScriptArgs(t *testing.T) {
 
 	viaHelper := scriptArgsFor(cfg)
 
-	// 逐平台比较，而不是只比本机平台：本测试在任何主机上都要能抓住这个分叉，
-	// 而掩码只在 linux 布局里出现（darwin/windows 的地址位是裸地址）。
+	// 逐平台比较而非只比本机：掩码只出现在 linux 布局里，任何主机上都要抓得住分叉。
 	for _, platform := range []tun.ScriptPlatform{
 		tun.PlatformLinux, tun.PlatformDarwin, tun.PlatformWindows,
 	} {

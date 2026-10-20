@@ -20,8 +20,6 @@ import (
 	"github.com/nange/easyss/v3/transport"
 )
 
-// newRecoveryStream 构造一条用于引导恢复测试的流：结果落定前
-// Read/AwaitResponse 会等待，Close 可以由用例触发。
 func newRecoveryStream(t *testing.T) *http2Stream {
 	t.Helper()
 	s, pr := newTestStream()
@@ -32,8 +30,7 @@ func newRecoveryStream(t *testing.T) *http2Stream {
 	return s
 }
 
-// TestHTTP2Stream_AwaitResponse 覆盖 transport.ResponseAwaiter 的四种结果，
-// 关键是"服务端拒绝"必须被视为结果已就绪，而不是网络故障。
+// 四种结果里最要命的是"服务端拒绝"：那是结果已就绪，不是网络故障。
 func TestHTTP2Stream_AwaitResponse(t *testing.T) {
 	t.Run("response ready", func(t *testing.T) {
 		s := newRecoveryStream(t)
@@ -76,8 +73,7 @@ func TestHTTP2Stream_AwaitResponse(t *testing.T) {
 	})
 }
 
-// TestHTTP2Stream_ConnAlive 验证判活语义："拿到任何响应"即活，只有不可往返才判死；
-// 未配置探测令牌时报告"无法判定"。
+// "拿到任何响应"即活，只有不可往返才判死；没有探测令牌时报告"无法判定"。
 func TestHTTP2Stream_ConnAlive(t *testing.T) {
 	t.Run("probe payload counts as alive", func(t *testing.T) {
 		ts, token := newProbeServer(t)
@@ -164,9 +160,7 @@ func TestHTTP2Stream_ConnAlive(t *testing.T) {
 	})
 
 	t.Run("stream not submitted yet cannot judge", func(t *testing.T) {
-		// 探针有了，但这条流还没有提交到任何一代池上：判活探测的对象是"本流
-		// 用过的那一代连接"，此时没有对象可探测，只能如实报告"无法判定"
-		// （调用方按判死处理）。
+		// 流还没提交到任何一代池上，没有对象可探测，只能如实报告"无法判定"。
 		slot := newProbeSlot()
 		prober := &slotProber{serverURL: "https://127.0.0.1:1", token: "unused", payloadSize: testProbePayloadSize}
 		s := &http2Stream{slot: slot, liveness: prober.alive}
@@ -176,7 +170,6 @@ func TestHTTP2Stream_ConnAlive(t *testing.T) {
 	})
 }
 
-// countingConn 只用于断言底层连接被关闭了几次；其余方法由内嵌的 net.Conn 提供。
 type countingConn struct {
 	net.Conn
 	closes atomic.Int32
@@ -192,10 +185,8 @@ func newCountingSlot(conn net.Conn) (*transportSlot, *slotConn) {
 	return slot, attachConn(slot, conn)
 }
 
-// livenessStream 构造一条已提交到槽位当前一代、带判活探针的流：ConnAlive 是
-// 连接作用域的，探测对象是流自己那一代（见 http2Stream.ConnAlive）。这一代必须
-// 已经有一条连接身份——"这一代没有连接就不探测"（见 slotProber.alive）由
-// probe_test 单独覆盖，这里测的是探测结论本身。
+// livenessStream 的流已提交到槽位当前一代：判活探测的对象是流自己那一代。
+// "这一代没有连接就不探测"由 probe_test 覆盖，这里测的是探测结论。
 func livenessStream(slot *transportSlot, liveness func(context.Context, *slotTransport) (bool, bool)) *http2Stream {
 	attachConn(slot, &countingConn{})
 	s := &http2Stream{slot: slot, liveness: liveness}
@@ -205,8 +196,6 @@ func livenessStream(slot *transportSlot, liveness func(context.Context, *slotTra
 	return s
 }
 
-// TestHTTP2Stream_InvalidateConnClosesExactlyOnce 覆盖 §4.8(a)：同一连接上的多条
-// 流并发判定死亡时，底层 Close 恰好发生一次，其余调用是无操作。
 func TestHTTP2Stream_InvalidateConnClosesExactlyOnce(t *testing.T) {
 	conn := &countingConn{}
 	slot, _ := newCountingSlot(conn)
@@ -234,10 +223,8 @@ func TestHTTP2Stream_InvalidateConnClosesExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestHTTP2Stream_InvalidateConnDoesNotKillNewConnection 是"把新连接记成自己的
-// 身份、之后误杀健康连接"这个既有窗口的回归测试（#229 之后仍然存在的问题）：
-// 流只持有自己提交时的那一代，槽位换到新一代并拨出新连接之后，旧一代的判死
-// 既杀不掉新连接，也不会动新一代的池。
+// 流只持有自己提交时的那一代：槽位换代并拨出新连接后，旧一代的判死既杀不掉
+// 新连接，也不会动新一代的池。
 func TestHTTP2Stream_InvalidateConnDoesNotKillNewConnection(t *testing.T) {
 	stale := &countingConn{}
 	healthy := &countingConn{}
@@ -245,7 +232,6 @@ func TestHTTP2Stream_InvalidateConnDoesNotKillNewConnection(t *testing.T) {
 	slot := slotWithGenFactory()
 	oldGen := slot.generation()
 	attachConn(slot, stale)
-	// 另一条流（或 net/http 自己）已经让这条连接作废：旧连接被关掉，槽位换代。
 	if !slot.invalidateConn(oldGen, "other stream") {
 		t.Fatal("the first invalidation must win")
 	}
@@ -255,7 +241,6 @@ func TestHTTP2Stream_InvalidateConnDoesNotKillNewConnection(t *testing.T) {
 	}
 	healthySC := attachConn(slot, healthy)
 
-	// 一条仍绑在旧一代上的流，之后才被判死。
 	s := &http2Stream{slot: slot}
 	s.gen.Store(oldGen)
 	s.InvalidateConn()
@@ -274,9 +259,6 @@ func TestHTTP2Stream_InvalidateConnDoesNotKillNewConnection(t *testing.T) {
 	}
 }
 
-// TestHTTP2Stream_InvalidateConnWithoutGenerationIsNoOp 覆盖两条安全边界：还没
-// 提交到任何一代上的流（没有身份可判）以及这一代已经没有连接（已关闭/已作废）
-// 时，失效必须安全返回。
 func TestHTTP2Stream_InvalidateConnWithoutGenerationIsNoOp(t *testing.T) {
 	conn := &countingConn{}
 	slot, sc := newCountingSlot(conn)
@@ -290,7 +272,6 @@ func TestHTTP2Stream_InvalidateConnWithoutGenerationIsNoOp(t *testing.T) {
 		t.Fatal("the connection identity must be untouched")
 	}
 
-	// 这一代没有连接（从未拨号，或已被回收）：无操作，不得换代。
 	empty := slotWithGenFactory()
 	emptyGen := empty.generation()
 	noConn := &http2Stream{slot: empty}
@@ -304,9 +285,7 @@ func TestHTTP2Stream_InvalidateConnWithoutGenerationIsNoOp(t *testing.T) {
 	noSlot.InvalidateConn()
 }
 
-// TestTrackedConnCloseRetiresGeneration 固定"代 == 连接"不变量的执行点：
-// net/http 自然回收连接（trackedConn.Close）之后，这一代连同它的连接身份一起
-// 作废，槽位换到新一代——下一条流只能拨号，而持有旧一代的流已经读不到任何连接。
+// "代 == 连接"：net/http 回收连接后这一代连同连接身份一起作废，下一条流只能拨号。
 func TestTrackedConnCloseRetiresGeneration(t *testing.T) {
 	conn := &countingConn{}
 
@@ -336,7 +315,6 @@ func TestTrackedConnCloseRetiresGeneration(t *testing.T) {
 		t.Fatal("the new generation must have its own pool")
 	}
 
-	// 重复关闭是幂等的：这一代已经作废，不得再换代一次。
 	next := slot.generation()
 	_ = tracked.Close()
 	if slot.generation() != next {
@@ -344,9 +322,7 @@ func TestTrackedConnCloseRetiresGeneration(t *testing.T) {
 	}
 }
 
-// TestTrackedConnCloseKeepsNewerGeneration 验证 stale 连接被 net/http 回收时只
-// 作废自己那一代：槽位已经换代时，旧连接的关闭既不清新连接的身份，也不把新池
-// 顶掉。
+// stale 连接被回收时只作废自己那一代，既不清新连接的身份，也不把新池顶掉。
 func TestTrackedConnCloseKeepsNewerGeneration(t *testing.T) {
 	old := &countingConn{}
 	newConn := &countingConn{}
@@ -377,7 +353,6 @@ func TestTrackedConnCloseKeepsNewerGeneration(t *testing.T) {
 		t.Fatal("trackedConn.Close must not clear a newer generation's pointer")
 	}
 
-	// 反向：旧一代的跟踪对象也不能用来清掉新一代的连接。
 	stale := &trackedConn{Conn: newConn, gen: oldGen, self: newSC}
 	_ = stale.Close()
 	if newGen.conn.Load() != newSC {
@@ -385,12 +360,10 @@ func TestTrackedConnCloseKeepsNewerGeneration(t *testing.T) {
 	}
 }
 
-// newH2Server 启动一个记录连接数的真实 HTTP/2 测试服务器。
 func newH2Server(t *testing.T) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	var conns atomic.Int32
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 先读满 4 字节请求体，使客户端写入 bootstrap 记录时连接必然已经建立。
 		buf := make([]byte, 4)
 		_, _ = io.ReadFull(r.Body, buf)
 		w.Header().Set("Content-Type", "application/octet-stream")
@@ -426,16 +399,8 @@ func newRecoveryTransport(t *testing.T, serverURL, probeToken string) transport.
 	return tr
 }
 
-// TestHTTP2Transport_InvalidateConnForcesNewConnection 验证端到端效果：判死路径
-// （失效连接 → 关闭流 → 等本流 RoundTrip 收敛 → 丢弃空闲连接，见 client/proxy
-// 的 settleDeadStream）之后，下一次 Open 必然建立一条新的底层连接
-// （httptest 的 ConnState 计数）。
-//
-// 保证来自判死本身：InvalidateConn 在关掉底层连接的同时换掉整个连接池
-// （transportSlot.advanceGeneration），下一次 Open 只能拨号。后面的收敛等待与
-// CloseIdle() 照生产顺序保留，但结论不再依赖它们的收敛时机——那条依赖时序的
-// 版本在 CI 上偶发失败（#226），窗口固定后的确定性版本见
-// TestHTTP2Transport_InvalidateConnReplacesPool。
+// 判死之后下一次 Open 必然建立新的底层连接：InvalidateConn 在关连接的同时换掉整个池
+// （transportSlot.advanceGeneration），结论不依赖连接池自己收敛的时机（#226 就是那样偶发失败的）。
 func TestHTTP2Transport_InvalidateConnForcesNewConnection(t *testing.T) {
 	srv, conns := newH2Server(t)
 	tr := newRecoveryTransport(t, srv.URL, "")
@@ -464,7 +429,6 @@ func TestHTTP2Transport_InvalidateConnForcesNewConnection(t *testing.T) {
 	inv.InvalidateConn()
 	_ = first.Close()
 
-	// 判死路径在 CloseIdle() 之前等待本流收敛（见 client/proxy.settleDeadStream）。
 	// 判死换连接已由 InvalidateConn 换池保证，这一步只是照生产顺序收敛本流。
 	awaitResponse(t, first, time.Second)
 	tr.CloseIdle()
@@ -481,7 +445,6 @@ func TestHTTP2Transport_InvalidateConnForcesNewConnection(t *testing.T) {
 	}
 }
 
-// awaitResponse 等待流的 RoundTrip 结果落定（有界）。
 func awaitResponse(t *testing.T, stream transport.Stream, timeout time.Duration) {
 	t.Helper()
 	ra, ok := stream.(transport.ResponseAwaiter)
@@ -493,8 +456,6 @@ func awaitResponse(t *testing.T, stream transport.Stream, timeout time.Duration)
 	_ = ra.AwaitResponse(ctx)
 }
 
-// TestHTTP2Transport_DoesNotImplementOptionalInterfacesWhenUnprobed 验证未配置探测
-// 令牌时传输层仍提供判活接口，但如实报告"无法判定"（调用方按判死处理）。
 func TestHTTP2Transport_AwaitAndLivenessWiring(t *testing.T) {
 	srv, _ := newH2Server(t)
 	tr := newRecoveryTransport(t, srv.URL, "")
@@ -521,8 +482,8 @@ func TestHTTP2Transport_AwaitAndLivenessWiring(t *testing.T) {
 	}
 }
 
-// TestHTTP2Stream_CloseClosesLateResponseBody 覆盖 §4.3 的小修复：无论流先被关闭
-// 还是响应先到达，未曾交付给调用方的响应体都必须被关闭，不遗留无人读取的 HTTP/2 流。
+// 无论流先关闭还是响应先到达，未曾交付给调用方的响应体都必须关闭，
+// 否则遗留无人读取的 HTTP/2 流。
 func TestHTTP2Stream_CloseClosesLateResponseBody(t *testing.T) {
 	newBody := func() *countingReadCloser {
 		return &countingReadCloser{ReadCloser: io.NopCloser(strings.NewReader("late"))}
@@ -571,10 +532,8 @@ var (
 	_ net.Conn = (*trackedConn)(nil)
 )
 
-// TestHTTP2Transport_LivenessSharesInflightConnection 验证判活探测与在飞流共享
-// 同一条 HTTP/2 连接：MaxConnsPerHost=1 时探测既不会另拨新连接（那会把死连接
-// 判成活的），也不会排在在飞流的响应之后一直等到超时（那会把"服务端还在解析
-// 目标域名"误判成断网）。这是 §4.4 判活语义成立的前提。
+// 判活探测与在飞流共享同一条连接：MaxConnsPerHost=1 时另拨一条会把死连接判成活，
+// 排在在飞流响应之后又会把"服务端还在解析域名"误判成断网。
 func TestHTTP2Transport_LivenessSharesInflightConnection(t *testing.T) {
 	inflight := make(chan struct{})
 	release := make(chan struct{})
@@ -637,11 +596,8 @@ func TestHTTP2Transport_LivenessSharesInflightConnection(t *testing.T) {
 	}
 }
 
-// laggingConn 把"底层连接已关闭"这个错误扣在 h2 readLoop 之外：真实实现里，
-// ClientConn 只有在它自己的一次读返回错误之后才会走 cleanup（标记已关闭、把
-// 自己移出连接池）。扣住这个错误就等价于"readLoop 还没有被调度到"——这是 CI 上
-// 偶发失败的那段窗口，也是判死路径唯一无法自己消除的时序：写路径的通知同样
-// 依赖某个 goroutine 跑到 cc.Close()。
+// laggingConn 扣住"连接已关闭"的读错误，等价于 readLoop 还没被调度到：
+// 真实 ClientConn 只有在自己的读返回错误之后才会 cleanup。
 type laggingConn struct {
 	net.Conn
 	closed  atomic.Bool
@@ -665,22 +621,8 @@ func (c *laggingConn) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// TestHTTP2Transport_InvalidateConnReplacesPool 是判死换连接的**确定性**回归
-// 测试：把 CI 上偶发的那段窗口固定下来，验证判死之后的下一条流必定拨号建立
-// 新连接（而不是等连接池自己收敛）。
-//
-// 窗口的两半都被固定住：
-//
-//   - h2 客户端栈尚未察觉连接已死（laggingConn 扣住关闭引起的读错误），池里那条
-//     ClientConn 仍然自认为可用、仍可被 ReserveNewRequest 选中；
-//   - 被判死的流仍然注册在那条 ClientConn 上（服务端一直读它的请求体：既不结束
-//     也不重置它），因此 CloseIdleConnections 里的 closeIfIdle 只会空转——连接
-//     不会因为"空闲"而被回收。
-//
-// 在这种状态下，"CloseIdle() 之后池会自己收敛"这条路必然失效：下一条流会被交给
-// 那条已经关闭的连接，引导记录写入再也回不来（issue #226 里是撞上已关闭的 pipe）。
-// transportSlot.advanceGeneration 把保证变成结构性的——因此这里即使照生产判死路径调用
-// CloseIdle()，也不再看它的收敛结果。
+// 判死换连接的确定性回归：h2 栈还没察觉连接已死、被判死的流仍注册在那条 ClientConn 上，
+// 此时"CloseIdle() 之后池会自己收敛"必然失效，下一条流会被交给已关闭的连接（#226）。
 func TestHTTP2Transport_InvalidateConnReplacesPool(t *testing.T) {
 	const bootstrapSalt = "dGVzdHNhbHR0ZXN0c2FsdA"
 
@@ -697,9 +639,8 @@ func TestHTTP2Transport_InvalidateConnReplacesPool(t *testing.T) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
-		// 显式冲刷：Go 的 h2 服务端要等 handler 返回才提交响应，而这里要一直
-		// 挂着不返回（请求体不结束，服务端就不会结束或重置这条流，客户端连接上
-		// 的 streams 集合因此始终保持非空）。
+		// h2 服务端要等 handler 返回才提交响应，因此这里一直挂着：请求体不结束，
+		// 服务端就不会结束或重置这条流，客户端连接上的 streams 集合始终非空。
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
@@ -747,11 +688,9 @@ func TestHTTP2Transport_InvalidateConnReplacesPool(t *testing.T) {
 		return stream
 	}
 
-	// 这条流的连接被判死。它自己也没有善终（连接死了），但测试刻意不去关闭它：
-	// 一旦它开始清理，清理路径会往这条死连接上写 RST_STREAM，那次写入失败就会把
-	// 死讯告知 h2 栈——窗口随之关闭。这里要固定住的正是"栈还不知道"的状态。
+	// 刻意不关闭这条流：它一开始清理就会往死连接上写 RST_STREAM，写入失败会把死讯告知
+	// h2 栈，窗口随之关闭。
 	dead := open()
-	// 测试结束（判死窗口之外）再关闭它，避免留下悬挂的流。
 	t.Cleanup(func() { _ = dead.Close() })
 	if _, err := dead.Write([]byte("abcd")); err != nil {
 		t.Fatalf("write bootstrap: %v", err)
@@ -763,8 +702,7 @@ func TestHTTP2Transport_InvalidateConnReplacesPool(t *testing.T) {
 		t.Fatal("http2Stream must implement transport.ConnInvalidator")
 	}
 	inv.InvalidateConn()
-	// 照生产判死路径（client/proxy.settleDeadStream + CloseIdle）丢掉空闲连接：
-	// 但它对那条已死的连接无能为力——连接上还有这条流。
+	// 照生产判死路径调用 CloseIdle()，但它对这条已死的连接无能为力（上面还有流）。
 	tr.CloseIdle()
 
 	before := dials.Load()
@@ -791,8 +729,7 @@ func TestHTTP2Transport_InvalidateConnReplacesPool(t *testing.T) {
 		t.Fatalf("dials after invalidation = %d, want %d: the next stream must dial a fresh connection",
 			got, before+1)
 	}
-	// 写入成功只说明记录离开了客户端：等它在服务端被真正处理，才能确认这条流
-	// 落在了一条新的、可用的连接上。
+	// 写入成功只说明记录离开了客户端，还要等它在服务端被处理才能确认落在新连接上。
 	awaitResponse(t, second, time.Second)
 	deadline := time.Now().Add(2 * time.Second)
 	for requests.Load() < 2 && time.Now().Before(deadline) {
@@ -803,19 +740,15 @@ func TestHTTP2Transport_InvalidateConnReplacesPool(t *testing.T) {
 	}
 }
 
-// TestHTTP2Transport_SecondConnInGenerationIsObservable 固定 issue #231 里的已知
-// 例外可被观测：服务端每连接只允许一条并发流时，同一槽位上的第二条流会让
-// net/http 在同一张池里再拨一条——它会先丢掉 persistConn、让出 MaxConnsPerHost
-// 的计数再重拨，因此那个配置挡不住这条路径。传输层必须把这件事记成
+// 服务端每连接只允许一条并发流时，同一槽位上的第二条流会让 net/http 在同一张池里再拨一条
+// （先丢掉 persistConn、让出 MaxConnsPerHost 计数再重拨）。传输层必须把它记成
 // stats.SecondConnInGeneration + 一条 Warn，而不是静默覆盖连接身份。
 func TestHTTP2Transport_SecondConnInGenerationIsObservable(t *testing.T) {
 	var conns atomic.Int32
 	var requests atomic.Int32
 	started := make(chan struct{}, 2)
-	// 除热身请求外的 handler 一直占住服务端唯一的流槽，直到测试在断言之后放行——
-	// 这是让"第二条流只能触发同池重拨"成为确定性条件的关键（用 sleep 占槽位会
-	// 把结论交给时序：CI 负载高时第一条流可能先返回，槽位让出，第二条流复用同一
-	// 条连接，计数就为 0）。
+	// 除热身请求外的 handler 一直占住服务端唯一的流槽：用 sleep 占槽位会把结论交给时序，
+	// CI 负载高时第一条流先返回、第二条流复用同一连接，计数就为 0。
 	release := make(chan struct{})
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
@@ -826,10 +759,8 @@ func TestHTTP2Transport_SecondConnInGenerationIsObservable(t *testing.T) {
 		if _, err := io.ReadFull(r.Body, buf); err != nil {
 			return
 		}
-		// 第一条是热身请求：让它正常完成。客户端能读到它的响应，就说明服务端的
-		// SETTINGS（maxConcurrentStreams=1）已经被应用——服务端先发 SETTINGS 再发
-		// 响应，h2 读循环按序处理。否则第二条流可能在客户端还没学到上限时就被发到
-		// 同一条连接上，服务端把 handler 排队而不是触发同池重拨（Windows ARM64 CI
+		// 第一条是热身请求：客户端读到它的响应说明服务端的 SETTINGS（maxConcurrentStreams=1）
+		// 已被应用，否则第二条流可能在还没学到上限时就被发到同一条连接上（Windows ARM64 CI
 		// 上实际踩到过：第二条流 2s 都没到达服务端）。
 		if requests.Add(1) == 1 {
 			w.Header().Set("Content-Type", "application/octet-stream")
@@ -876,7 +807,6 @@ func TestHTTP2Transport_SecondConnInGenerationIsObservable(t *testing.T) {
 		return stream
 	}
 
-	// 热身：让客户端应用服务端宣告的并发流上限，之后两条真实流的行为才是确定的。
 	warmup := open()
 	_, _ = io.Copy(io.Discard, warmup)
 	_ = warmup.Close()
@@ -888,7 +818,6 @@ func TestHTTP2Transport_SecondConnInGenerationIsObservable(t *testing.T) {
 		t.Fatal("the first stream never reached the server")
 	}
 
-	// 第一条流仍被服务端持有（唯一槽位已满），第二条流只能触发同池重拨。
 	second := open()
 	select {
 	case <-started:

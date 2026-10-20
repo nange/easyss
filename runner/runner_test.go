@@ -18,10 +18,8 @@ import (
 )
 
 func testConfig() *config.ClientConfig {
-	// 使用字面 IP 让测试不涉及启动阶段的 DNS 工作：resolveServerDomain
-	// （以及 client.New 中的 IPv6 解析）都会跳过字面 IP，因此测试永远不会
-	// 发起真实的 DNS 查询。BuildSimpleConfig 同时负责默认值归一化（端口、
-	// method、timeout），与生产加载简化配置走同一条路径。
+	// 字面 IP 让 resolveServerDomain 与 client.New 的 IPv6 解析直接跳过，测试因此
+	// 不会发出真实 DNS 查询。
 	cfg, err := config.BuildSimpleConfig(&sharedconfig.SimpleConfig{
 		Server:   "127.0.0.1",
 		Password: "test-password",
@@ -35,10 +33,8 @@ func testConfig() *config.ClientConfig {
 	return cfg
 }
 
-// TestStopImmediatelyAfterRun 防止 Socks5Server.Close 与 Start goroutine 的
-// accept 循环初始化竞争时发生的死锁。GOMAXPROCS(1) 强制主 goroutine 先运行到
-// Shutdown 的位置，然后服务器 goroutine 才建立 accept 循环，从而确定性地
-// 暴露该竞争。Run 之后必须能立即安全地 Stop。
+// TestStopImmediatelyAfterRun 守住 Socks5Server.Close 与 Start 的 accept 循环初始化
+// 之间的死锁：GOMAXPROCS(1) 让主 goroutine 先跑到 Shutdown，确定性地暴露该竞争。
 func TestStopImmediatelyAfterRun(t *testing.T) {
 	old := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(old)
@@ -112,12 +108,8 @@ func TestRunFailsFastOnHTTPPortConflict(t *testing.T) {
 	}
 }
 
-// TestRunFailsFastOnForwardDNSConflict 固定 forward DNS 的绑定失败也会中止
-// Run：它现在与 SOCKS5/HTTP 一样在 Run 里同步绑定，因此端口被占用时返回的
-// 是启动错误，而不是一个"已启动但没有 DNS"的核心。
-//
-// 监听地址通过 forwardDNSListenAddr 注入到回环临时端口：绑定 :53 需要 root，
-// 否则本用例会在多数 CI 上被跳过，DNS 监听器的交接路径就没有覆盖。
+// TestRunFailsFastOnForwardDNSConflict 守住 forward DNS 绑定失败同样中止 Run（与
+// SOCKS5/HTTP 一样在 Run 里同步绑定）；注入回环临时端口是因为绑定 :53 需要 root。
 func TestRunFailsFastOnForwardDNSConflict(t *testing.T) {
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
@@ -188,11 +180,8 @@ func TestRunServesForwardDNSOnInjectedAddr(t *testing.T) {
 	t.Fatalf("the injected forward dns socket never answered: %v", lastErr)
 }
 
-// TestForwardDNSListenAddr 钉住 forward DNS 的监听地址：必须是所有网卡上的
-// 53 端口。只监听回环（历史上的 127.0.0.1:53）会让该功能的既定场景不可用——
-// LAN 设备的 DNS 指向路由器时根本连不上这个解析器。这里只断言地址本身，
-// 不去真的绑定 53 端口（CI 环境不一定允许，也可能被 dnsmasq/systemd-resolved
-// 占着）。
+// TestForwardDNSListenAddr 钉住 forward DNS 必须监听所有网卡的 53 端口：只监听回环会让
+// LAN 设备（DNS 指向路由器）连不上。只断言地址，不去真的绑定 53。
 func TestForwardDNSListenAddr(t *testing.T) {
 	addr := forwardDNSListenAddr()
 	if addr != ":53" {
@@ -244,10 +233,8 @@ func TestRunOKWhenPortsAreFree(t *testing.T) {
 	core.Stop()
 }
 
-// TestResolveServerDomain 通过注入 prePopulateServerDomain 覆盖启动时的
-// 服务器域名解析，确保测试中永远不会发出真实的 DNS 查询。
-// 它只做一次有界尝试，失败以错误返回（是否致命由 Run 决定，见
-// TestRunDegradesWhenServerDomainUnresolved）。
+// TestResolveServerDomain 注入 prePopulateServerDomain，测试中不发出真实的 DNS 查询；
+// 预解析只做一次有界尝试，失败以错误返回（是否致命由 Run 决定）。
 func TestResolveServerDomain(t *testing.T) {
 	oldFn := prePopulateServerDomain
 	oldTimeout := serverStartupResolveTimeout

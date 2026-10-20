@@ -29,12 +29,8 @@ func TestNewReaderClampsHintToMax(t *testing.T) {
 	assert.Equal(t, 4096, r.Cap())
 }
 
-// TestGrowDoublesUpToMax 固定增长曲线：2 倍摊销到 max 为止，超过上限后
-// 不再增长（继续增长既无收益，也超出调用方声明的预算）。
-//
-// 它同时固定了"是否读满"这个判断的归属：Reader 不知道也不猜测读到了多少，
-// 调用方必须先确认 n == len(buf) 才调用 Grow。因此下面每一次 Grow 都是一次
-// 显式的"上一次读满了"声明，而不是由 Reader 推断出来的。
+// TestGrowDoublesUpToMax 固定 2 倍增长到 max 为止；"是否读满"由调用方判断，
+// Reader 不猜测读到了多少，每次 Grow 都是一次显式的"上一次读满了"声明。
 func TestGrowDoublesUpToMax(t *testing.T) {
 	r := NewReader(0, 32768)
 	defer r.Release()
@@ -57,11 +53,8 @@ func TestGrowNonPowerOfTwoMax(t *testing.T) {
 	assert.Equal(t, 32768, r.Cap())
 }
 
-// TestNewReaderClampsMaxToPoolSize 固定"max 不得超过池的上限"：bytespool.Get 对
-// 超过 MaxSize 的请求返回 nil，若放任 max 超过去，Grow 在末档就会把缓冲换成 nil
-// ——旧缓冲丢给 GC，Buf() 返回 nil，调用方的 Read(nil) 立刻返回 (0, nil) 变成
-// 100% CPU 空转。钳在构造期而不是在 Grow 里加守卫，是为了让"Get(next) 必定成功"
-// 成为本类型的不变量。
+// TestNewReaderClampsMaxToPoolSize 守住 max 不得超过池上限：bytespool.Get 对超限请求
+// 返回 nil，Grow 会把缓冲换成 nil，调用方 Read(nil) 立刻返回 (0, nil) 变成 100% CPU 空转。
 func TestNewReaderClampsMaxToPoolSize(t *testing.T) {
 	r := NewReader(0, 1<<30)
 	defer r.Release()
@@ -93,11 +86,8 @@ func TestReleaseReturnsBufferToPool(t *testing.T) {
 	bytespool.MustPut(buf)
 }
 
-// TestGrowthSurvivesPoolReuse 固定"增长过程中不泄漏旧缓冲"：反复增长后，
-// 每个中间档位都应有一次可回收的归还，而不是被 GC 悄悄收走。
-//
-// 这里不做精确计数（GC 会静默清空 sync.Pool，计数器只是近似量），只固定
-// 可观测的行为：多轮增长不 panic、档位正确。
+// TestGrowthSurvivesPoolReuse 守住增长过程中不泄漏旧缓冲：每个中间档位都要归还一次。
+// 不做精确计数——GC 会静默清空 sync.Pool，计数器只是近似量。
 func TestGrowthSurvivesPoolReuse(t *testing.T) {
 	for range 32 {
 		r := NewReader(0, 32768)

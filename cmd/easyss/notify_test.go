@@ -223,13 +223,8 @@ func TestFriendlyTunError(t *testing.T) {
 	}
 }
 
-// TestTrayTunStartFailureUnchecksTheMenu 固定 appUI.tunStartFailed 在托盘上的界面
-// 契约：无论失败原因是什么，菜单都必须回到未勾选 —— 引擎没有在跑，勾着会让用户
-// 以为它在跑。会话的拆除由 session.rollbackFailedTunStart 负责（它还会核对失败的
-// 引擎是否仍属于当前会话），见 tun_start_test.go 的两条身份测试。
-//
-// 这个 TrayApp 没有托盘对象：通知此时只记日志（见 notifyUser 的 nil 守卫），
-// 界面回滚是这里必须发生的部分。面向用户的文案由 TestFriendlyTunError 覆盖。
+// TestTrayTunStartFailureUnchecksTheMenu 守住失败后菜单必须回到未勾选：引擎没在跑，
+// 勾着会让用户以为它在跑。会话拆除由 session.rollbackFailedTunStart 负责，不在此用例范围。
 func TestTrayTunStartFailureUnchecksTheMenu(t *testing.T) {
 	a := &TrayApp{App: newApp(&config.ClientConfig{}, "")}
 

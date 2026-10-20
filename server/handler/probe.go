@@ -15,10 +15,8 @@ import (
 // 使载荷以真实的网络速度到达客户端，而不是在服务端被缓冲。
 const probeChunkSize = 32 * 1024
 
-// ProbeHandler 提供预先生成的随机载荷，供客户端主动测量自身连接的下载吞吐量。
-// 有效请求必须在 x-es 头中携带由主密钥派生的能力令牌（与代理握手的 salt
-// 使用相同的头名称和线上格式）；其他任何请求都会得到伪装回退页面，
-// 使服务器与真实网站无法区分。
+// ProbeHandler 提供预生成的随机载荷供客户端测量下载吞吐量。有效请求必须在 x-es 头
+// 携带主密钥派生的能力令牌（与代理握手 salt 同名同格式）；其他请求得到伪装回退页。
 type ProbeHandler struct {
 	payload  []byte
 	token    []byte
@@ -26,9 +24,7 @@ type ProbeHandler struct {
 	fallback *Fallback
 }
 
-// NewProbeHandler 构建 /v3/probe handler。载荷必须在服务器启动时生成；
-// 复用同一个缓冲区使该端点开销极低且不可缓存（Cache-Control: no-store）。
-// fallback 为 nil 时回落到包级内置回退实例。
+// 载荷在服务器启动时生成后复用；fallback 为 nil 时回落到包级内置回退实例。
 func NewProbeHandler(masterKey, payload []byte, fallback *Fallback) (*ProbeHandler, error) {
 	tokenB64, err := crypto.ProbeToken(masterKey)
 	if err != nil {
@@ -77,8 +73,7 @@ func (h *ProbeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 按源 IP 限制 probe 下载；token 错误的请求永远不会到达这里
-	// （它们会得到廉价的回退页面）。
+	// 只对通过令牌校验的请求按源 IP 限速，令牌错误的请求早已得到廉价的回退页。
 	if !h.limiter.Allow(clientIP(r)) {
 		log.Error("[SERVER] probe rate limited", "remote", r.RemoteAddr)
 		serveReject(w, http.StatusTooManyRequests)

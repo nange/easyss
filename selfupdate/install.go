@@ -16,15 +16,12 @@ import (
 const stagingPrefix = ".easyss-update-"
 
 const (
-	// cleanupRetryDelay 是 CleanupOld 在重试删除前的首次等待时长。删除失败通常
-	// 是因为上一个进程仍持有该文件（Windows），或杀毒软件正在扫描刚重命名的
-	// 二进制。每轮重试后等待时间翻倍，总共覆盖约 90 秒的时间窗口。
+	// 删除失败多半是上一个进程仍持有文件（Windows）或杀软在扫描，等待时间每轮翻倍。
 	cleanupRetryDelay = 3 * time.Second
-	// cleanupRetries 限制重试轮数。
-	cleanupRetries = 5
+	cleanupRetries    = 5
 )
 
-// resolvedExe 返回正在运行的可执行文件的真实路径（符号链接已解析）。
+// resolvedExe 返回符号链接已解析的可执行文件路径。
 func resolvedExe() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -36,8 +33,7 @@ func resolvedExe() (string, error) {
 	return exe, nil
 }
 
-// installTargetDir 返回承载安装产物的目录：在 macOS 上是 .app bundle 的
-// 父目录，否则是可执行文件所在目录。
+// installTargetDir 返回安装产物的目录：macOS 上是 .app bundle 的父目录，否则是可执行文件所在目录。
 func installTargetDir() (string, error) {
 	exe, err := resolvedExe()
 	if err != nil {
@@ -49,8 +45,7 @@ func installTargetDir() (string, error) {
 	return filepath.Dir(exe), nil
 }
 
-// appBundleRoot 返回包含 exePath 的 .app bundle 目录；当可执行文件不在
-// macOS bundle 内时返回空字符串。
+// appBundleRoot 返回包含 exePath 的 .app 目录，不在 macOS bundle 内时返回空。
 func appBundleRoot(exePath string) string {
 	dir := filepath.Dir(exePath)
 	if filepath.Base(dir) != "MacOS" {
@@ -67,10 +62,8 @@ func appBundleRoot(exePath string) string {
 	return bundle
 }
 
-// installFor 将 stagingDir 中暂存的产物移动到给定产品的安装位置。
-// Windows 无法覆盖正在运行的可执行文件，因此先把运行中的二进制重命名到一旁
-// （允许这样做），并在下次启动时删除；unix 通过 rename 原子替换文件；
-// macOS 则整体替换 .app bundle。
+// installFor 把 stagingDir 中暂存的产物移动到产品的安装位置。
+// Windows 不能覆盖正在运行的二进制，只能先重命名到一旁等下次启动删除；unix 靠 rename 原子替换。
 func installFor(stagingDir string, product Product) error {
 	exe, err := resolvedExe()
 	if err != nil {
@@ -79,8 +72,7 @@ func installFor(stagingDir string, product Product) error {
 	return installAt(exe, stagingDir, product)
 }
 
-// permissionHint 将权限错误改写为对用户友好的提示信息，因为原始错误原因
-// 通常不直观（例如 Windows 的 Program Files 或 macOS 的 /Applications）。
+// permissionHint 把权限错误改写成用户能看懂的提示，原始原因通常指向不清的空间。
 func permissionHint(action string, err error) error {
 	if os.IsPermission(err) {
 		return fmt.Errorf("%s: 安装目录无写权限，请以管理员身份运行后重试", action)
@@ -88,9 +80,8 @@ func permissionHint(action string, err error) error {
 	return fmt.Errorf("%s: %w", action, err)
 }
 
-// clearQuarantine 移除新安装的 app bundle 上的 macOS 隔离属性，避免
-// Gatekeeper 在首次启动时拦截它。这与 README 中手动执行 `xattr -cr` 的步骤
-// 一致。尽力而为：失败仅记录日志，不会导致安装失败。
+// clearQuarantine 移除新 bundle 上的 macOS 隔离属性，否则 Gatekeeper 会在首次启动时拦截它。
+// 尽力而为，失败只记日志。
 func clearQuarantine(path string) {
 	if runtime.GOOS != "darwin" {
 		return
@@ -143,8 +134,7 @@ func stagedBinary(stagingDir string, product Product) (string, error) {
 	return p, nil
 }
 
-// installBundle 用从 release zip 中暂存的 bundle 替换包含当前运行进程的
-// .app bundle。
+// installBundle 用暂存的 bundle 替换包含当前运行进程的 .app。
 func installBundle(stagingDir, bundle string) error {
 	staged, err := stagedBundle(stagingDir)
 	if err != nil {
@@ -178,9 +168,7 @@ func stagedBundle(stagingDir string) (string, error) {
 	return "", errors.New("no .app bundle found in release zip")
 }
 
-// CleanupOld 清理上次自更新遗留的文件：为 Windows/macOS 保留的重命名后的
-// 运行中二进制/bundle，以及崩溃的更新可能遗留的暂存目录。它是尽力而为的，
-// 出错时不会向调用方返回错误（仅记录日志）。
+// CleanupOld 清理自更新遗留的 .old 与暂存目录，尽力而为，失败只记日志。
 func CleanupOld() {
 	exe, err := resolvedExe()
 	if err != nil {
@@ -214,8 +202,7 @@ func CleanupOld() {
 		}
 	}
 	if len(retry) > 0 {
-		// 上一个进程可能仍持有重命名后的二进制/bundle 的句柄（Windows），
-		// 因此按退避策略重试，直到它退出。
+		// 上一个进程可能仍持有句柄（Windows），只能退避重试到它退出。
 		go func() {
 			delay := cleanupRetryDelay
 			pending := retry

@@ -17,10 +17,8 @@ const (
 	DownloadTimeout = 10 * time.Minute
 )
 
-// Update 下载当前平台的发布资产，解压并安装以覆盖正在运行的可执行文件
-// （macOS 上为整个 .app bundle）。成功后新二进制已就位，调用方应重启进程
-// （参见 Restart）。localHTTPPort 是获取时优先尝试的本地 HTTP 代理端口；
-// 失败时回退到直连。
+// Update 下载、解压并安装当前平台的发布资产，覆盖正在运行的可执行文件（macOS 上为整个
+// .app bundle）；成功后调用方必须重启进程。下载优先走 localHTTPPort，失败回退直连。
 func Update(ctx context.Context, localHTTPPort int, rel *Release) error {
 	c := NewClient(localHTTPPort)
 	// 下载用的连接池随本次更新结束一起回收，不留给长驻进程（见 Client.Close）。

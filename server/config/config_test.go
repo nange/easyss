@@ -239,10 +239,8 @@ func TestTransportConfigH2KeysJSON(t *testing.T) {
 	require.Equal(t, 2097152, fc.Transport.H2RecvBufStream)
 }
 
-// TestLoadConfigIgnoresRemovedH2MaxConcurrentStreams 固定"删除
-// h2_max_concurrent_streams 键"是向后兼容的：老配置里仍带着它时必须照常启动
-// （未知字段被忽略），并发流上限固定由 sharedconfig.HTTP2ServerMaxConcurrentStreams
-// 决定，不能再被配置改写。
+// TestLoadConfigIgnoresRemovedH2MaxConcurrentStreams 守住向后兼容：配置里残留已废弃的
+// h2_max_concurrent_streams 时仍须照常启动，并发流上限固定不可配。
 func TestLoadConfigIgnoresRemovedH2MaxConcurrentStreams(t *testing.T) {
 	fc, err := LoadConfig(writeConfig(t, `{
 		"server": {"cert_path": "server.crt", "key_path": "server.key"},
@@ -500,9 +498,7 @@ func TestResolveFilePathsEmpty(t *testing.T) {
 	}
 }
 
-// TestResolveFilePathsCarriesIntoResolvedPaths 固定 ResolveFilePaths 就地
-// 改写字段的行为：在移除 EffectiveServerConfig 合并之后，已不存在需要保持
-// 同步的第二份副本。
+// TestResolveFilePathsResolvedInPlace 固定 ResolveFilePaths 就地改写字段。
 func TestResolveFilePathsResolvedInPlace(t *testing.T) {
 	fc := &FileConfig{
 		Server: ServerConfig{

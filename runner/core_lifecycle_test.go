@@ -33,13 +33,8 @@ func waitPortBindable(port int) bool {
 	}
 }
 
-// TestCoreStopReleasesAllListeners 固定"核心停止后所有本地监听端口都被释放"。
-//
-// 本地代理服务器都在 goroutine 中被派发（见 Run），而核心可能随即被停止——
-// 托盘切换服务器、mobile.Stop、测试都是这条路径。GOMAXPROCS(1) 让"Close 先于
-// Start 的 Listen 生效"这一窗口尽可能暴露：旧形态下 HTTP 入口的 Close 会因为
-// 自己还没有登记监听器而变成空操作，迟到的 Start 于是永久占住端口，下一次
-// runner.Run 会在同步绑定监听器时直接失败。
+// TestCoreStopReleasesAllListeners 守住端口不泄漏：本地代理在 goroutine 里派发，核心可能
+// 随即停止，若其 Close 早于 Start 的 Listen 就变成空操作，端口被永久占住。GOMAXPROCS(1) 放大该窗口。
 func TestCoreStopReleasesAllListeners(t *testing.T) {
 	old := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(old)
@@ -65,10 +60,8 @@ func TestCoreStopReleasesAllListeners(t *testing.T) {
 	}
 }
 
-// TestCoreStopIsIdempotent 固定 Stop 的幂等性。托盘的关闭流程与更新重启路径
-// 会对同一个核心各调一次 Stop（见 cmd/easyss 的 closeService/restartService），
-// 旧形态下第二次会重新拆除一遍：Socks5Server.Close 在已关闭的监听地址上做
-// accept 探测，白等 acceptProbeTimeout 并留下一个 30 秒的后台补关闭 goroutine。
+// TestCoreStopIsIdempotent 守住 Stop 幂等：托盘关闭与更新重启会对同一核心各调一次，
+// 重复拆除会让关闭路径白等一次 accept 探测。
 func TestCoreStopIsIdempotent(t *testing.T) {
 	cfg := testConfig()
 	cfg.Local.SocksPort = freePort(t)
@@ -87,11 +80,8 @@ func TestCoreStopIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestRunFailureReleasesBoundListeners 守护 Run 的统一清理路径：SOCKS5 监听
-// 已经绑定、后续步骤却失败（HTTP 端口或 forward DNS 端口冲突）时，已经绑定的
-// 端口必须随错误返回一起释放。旧实现已在六个分支里各自调用了 closeListeners，
-// 因此这不是历史泄漏的回归测试；它的作用是防止后续新增资源或错误分支时漏接
-// 统一清理（端口被占住，重试启动会一直失败）。
+// TestRunFailureReleasesBoundListeners 守住 Run 的统一清理路径：SOCKS5 已绑定而后续步骤
+// 失败时端口必须随错误一起释放，新增资源或错误分支漏接会让重试启动一直失败。
 func TestRunFailureReleasesBoundListeners(t *testing.T) {
 	t.Run("http port conflict", func(t *testing.T) {
 		_, httpPort := occupyTCPPort(t)

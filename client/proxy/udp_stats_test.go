@@ -20,18 +20,11 @@ import (
 	"github.com/nange/easyss/v3/transport"
 )
 
-// 本文件覆盖 UDP 中继对「原始字节」计数器的记账。托盘下载速度与 /stats 的
-// upload_speed/download_speed 只由 rawBytesSent/rawBytesRecv 驱动（见
-// stats.speedLoop），而 UDP 交换不经过 relay.Bidirectional——经隧道的 TCP 中继
-// 唯一的记账点，因此所有经隧道的 UDP 路径都必须自己记账：漏掉任何一条，只要该
-// 路径上有流量（最典型的是 QUIC/HTTP-3 的 4K 视频），速度显示就会长时间停在 0，
-// 而隧道其实正在满速传输。
-//
-// 口径是"只统计经隧道的流量"：直连 UDP 与直连 TCP（route.go 的 relayTCP/
-// copyHalfClose）都不计入，因为直连流量不经服务器。
+// 本文件覆盖 UDP 中继对「原始字节」计数器的记账：托盘速度与 /stats 只由 rawBytesSent/rawBytesRecv
+// 驱动，而 UDP 交换不经过 relay.Bidirectional，因此每条经隧道的 UDP 路径都必须自己记账，漏一条速度就停在 0。
+// 口径只统计经隧道的流量，直连 UDP/TCP 不经服务器，都不计入。
 
-// scriptedUDPStream 是一个 transport.Stream：Write 追加到可回读的缓冲（供用例
-// 解密客户端写出的记录），Read 从注入缓冲读取（供用例冒充服务端下发记录）。
+// scriptedUDPStream 是 transport.Stream：Write 追加到可回读缓冲，Read 从注入缓冲读取。
 type scriptedUDPStream struct {
 	mu       sync.Mutex
 	written  []byte
@@ -70,7 +63,6 @@ func (s *scriptedUDPStream) Read(p []byte) (int, error) {
 func (s *scriptedUDPStream) CloseWrite() error { return nil }
 func (s *scriptedUDPStream) Close() error      { return nil }
 
-// inject 追加一段用例预先加密好的 s2c 记录，并唤醒阻塞中的 Read。
 func (s *scriptedUDPStream) inject(record []byte) {
 	s.mu.Lock()
 	s.injected.Write(record)
@@ -87,8 +79,7 @@ func (s *scriptedUDPStream) writtenBytes() []byte {
 	return append([]byte(nil), s.written...)
 }
 
-// udpSessionCodec 用交换创建时的 salt 派生出同一套会话密钥，使用例能像服务端
-// 一样解码客户端写出的记录、编码下发记录。
+// udpSessionCodec 用交换创建时的 salt 派生出同一套会话密钥，像服务端一样编解码记录。
 type udpSessionCodec struct {
 	sk     *crypto.StreamKeys
 	method protocol.Method
@@ -108,10 +99,8 @@ func newUDPSessionCodec(t *testing.T, masterKey []byte, saltB64 string) *udpSess
 	return &udpSessionCodec{sk: sk, method: protocol.MethodAES256GCM}
 }
 
-// parseWrittenDatagrams 解密目前已写出的全部记录，返回其中的 DATAGRAM 载荷。
-// 它镜像服务端的读取顺序：首条记录是 bootstrap 阶段（握手 + 合并进来的首个
-// DATAGRAM + padding），其余是 session 阶段。尾部不完整的记录（shaper 正在写）
-// 直接忽略：调用方用 waitFor 轮询重试。
+// parseWrittenDatagrams 解密目前已写出的记录并返回其中的 DATAGRAM 载荷，顺序与服务端一致：
+// 首条是 bootstrap 阶段，其余是 session 阶段；尾部不完整的记录直接忽略，由调用方轮询重试。
 func (c *udpSessionCodec) parseWrittenDatagrams(t *testing.T, raw []byte) [][]byte {
 	t.Helper()
 	if len(raw) < protocol.MaxCipherLenSize {
@@ -150,8 +139,6 @@ func (c *udpSessionCodec) parseWrittenDatagrams(t *testing.T, raw []byte) [][]by
 	}
 }
 
-// serverRecord 编码一条由服务端发往客户端的记录，其中只含一个 DATAGRAM 帧
-// （即服务端从远端读到的数据报，不带填充与 cover）。
 func (c *udpSessionCodec) serverRecord(t *testing.T, payload []byte) []byte {
 	t.Helper()
 
@@ -166,8 +153,7 @@ func (c *udpSessionCodec) serverRecord(t *testing.T, payload []byte) []byte {
 	return buf.Bytes()
 }
 
-// newUDPStatsServer 构造一个使用给定 StreamHandler（其传输层交付用例控制的流）
-// 的 SOCKS5 服务器，并登记一个带真实 socket 的 UDP 中继。
+// newUDPStatsServer 构造使用给定 StreamHandler 的 SOCKS5 服务器，并登记一个带真实 socket 的 UDP 中继。
 func newUDPStatsServer(t *testing.T, h *StreamHandler, clientPort int) (*Socks5Server, *udpRelay) {
 	t.Helper()
 
@@ -188,9 +174,8 @@ func newUDPStatsServer(t *testing.T, h *StreamHandler, clientPort int) (*Socks5S
 	return srv, newDisposableUDPRelay(t, srv, client)
 }
 
-// TestUDPProxyRelayCountsRawBytes 覆盖经隧道的 UDP 中继（QUIC/HTTP-3 的主力路径）：
-// 交换创建时的首个数据报（会合并进引导记录，因此不走 UDPExchange.Send）与后续
-// 数据报都必须计入上行，服务端下发的数据报必须计入下行。
+// TestUDPProxyRelayCountsRawBytes 覆盖经隧道的 UDP 中继（QUIC 主力路径）：首个数据报会合并进
+// 引导记录、不走 UDPExchange.Send，它和后续数据报都必须计入上行，服务端下发的计入下行。
 func TestUDPProxyRelayCountsRawBytes(t *testing.T) {
 	stream := newScriptedUDPStream()
 	tr := &saltCapturingTransport{inner: &mockTransport{streams: []transport.Stream{stream}}}
@@ -213,7 +198,6 @@ func TestUDPProxyRelayCountsRawBytes(t *testing.T) {
 		t.Fatalf("proxyUDPRelay(follow): %v", err)
 	}
 
-	// 用例冒充服务端下发一条数据报。
 	codec := newUDPSessionCodec(t, h.masterKey, tr.salts[0])
 	stream.inject(codec.serverRecord(t, reply))
 
@@ -230,9 +214,8 @@ func TestUDPProxyRelayCountsRawBytes(t *testing.T) {
 	}
 }
 
-// TestUDPProxyRelayTunnelsEachPayloadOnce 固化"每个数据报恰好被隧道化一次"：首个
-// 数据报合并进引导记录、后续走 Send，解密后的 DATAGRAM 序列必须与客户端发出的
-// 一致（记账不应改变转发行为，反之亦然）。
+// TestUDPProxyRelayTunnelsEachPayloadOnce 固化每个数据报恰好隧道化一次：解密后的 DATAGRAM 序列
+// 必须与发出的完全一致（记账不得改变转发行为）。
 func TestUDPProxyRelayTunnelsEachPayloadOnce(t *testing.T) {
 	stream := newScriptedUDPStream()
 	tr := &saltCapturingTransport{inner: &mockTransport{streams: []transport.Stream{stream}}}
@@ -257,8 +240,7 @@ func TestUDPProxyRelayTunnelsEachPayloadOnce(t *testing.T) {
 
 	codec := newUDPSessionCodec(t, h.masterKey, tr.salts[0])
 	var got [][]byte
-	// shaper 以 1ms 批处理窗口异步冲刷，且首个数据报由引导记录承载，因此轮询
-	// 直到解析出全部数据报。
+	// shaper 异步冲刷且首个数据报由引导记录承载，只能轮询到全部数据报出现。
 	waitFor(t, 5*time.Second, func() bool {
 		got = codec.parseWrittenDatagrams(t, stream.writtenBytes())
 		return len(got) >= len(payloads)
@@ -273,13 +255,8 @@ func TestUDPProxyRelayTunnelsEachPayloadOnce(t *testing.T) {
 	}
 }
 
-// TestUDPDirectRelayExcludedFromSpeedCounters 固化直连 UDP 与速度计数器的关系：
-// 计数器只统计经隧道的流量，直连流量（不经服务器）不计入。这条口径必须与直连
-// TCP（route.go 的 relayTCP/copyHalfClose）一致，否则同一条直连规则下的 QUIC
-// 与 TCP 会得到两种口径。
-//
-// 用例走完整的 SOCKS5 UDP ASSOCIATE 路径：回声必须真的回到客户端，否则"没有
-// 计数"可能只是中继根本没跑起来。
+// TestUDPDirectRelayExcludedFromSpeedCounters 固化直连流量不计入速度计数器，口径与直连 TCP 一致；
+// 用例走完整 ASSOCIATE 路径并断言回声真的回来了，否则"没有计数"可能只是中继没跑起来。
 func TestUDPDirectRelayExcludedFromSpeedCounters(t *testing.T) {
 	echoAddr, stopEcho := startUDPEcho(t)
 	defer stopEcho()
@@ -342,8 +319,8 @@ func TestUDPDirectRelayExcludedFromSpeedCounters(t *testing.T) {
 	}
 }
 
-// TestUDPProxyDNSRepliesCountRawBytes 覆盖经隧道的 DNS 交换：它是 udpPool.receiveLoop
-// 的第二个使用者（应答走 onData 回调而非 SOCKS5 中继），上下行都必须记账。
+// TestUDPProxyDNSRepliesCountRawBytes 覆盖经隧道的 DNS 交换：应答走 onData 回调而非 SOCKS5 中继，
+// 上下行都必须记账。
 func TestUDPProxyDNSRepliesCountRawBytes(t *testing.T) {
 	stream := newScriptedUDPStream()
 	tr := &saltCapturingTransport{inner: &mockTransport{streams: []transport.Stream{stream}}}
@@ -357,8 +334,7 @@ func TestUDPProxyDNSRepliesCountRawBytes(t *testing.T) {
 	pool.start()
 	t.Cleanup(pool.close)
 
-	// 应答会走完整的代理 DNS 后处理（AAAA 剥离、缓存、学习），因此拦截器需要
-	// 真实的 Router 与 Cache。
+	// 应答要经过完整的 DNS 后处理（AAAA 剥离、缓存、学习），拦截器需要真实的 Router 与 Cache。
 	rt, err := router.New(router.Config{})
 	if err != nil {
 		t.Fatalf("router.New: %v", err)
@@ -418,7 +394,7 @@ func TestUDPProxyDNSRepliesCountRawBytes(t *testing.T) {
 	}
 }
 
-// waitFor 轮询 cond 直到为真或超时，使用例不依赖固定 sleep。
+// waitFor 轮询 cond 直到为真或超时，避免固定 sleep。
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

@@ -11,10 +11,8 @@ import (
 	"github.com/nange/easyss/v3/log"
 )
 
-// DNSMsgTypeAContext 向指定服务器发送 domain 的 DNS A 记录查询。
-// 它是受 ctx 约束的查询：只要 context 结束查询即失败，即使单次查询的客户端
-// 超时（dnsQueryTimeout）尚未到。所有调用方都是启动/预解析路径，它们不能在
-// 不可达的 DNS 服务器上阻塞代理初始化。
+// DNSMsgTypeAContext 向指定服务器发送 domain 的 A 记录查询，受 ctx 约束：ctx 结束即失败，
+// 即使单次往返的 dnsQueryTimeout 还没到——启动/预解析路径不能在不可达的 DNS 上阻塞初始化。
 func DNSMsgTypeAContext(ctx context.Context, dnsServer, domain string) (*dns.Msg, error) {
 	return queryMsg(ctx, dns.TypeA, dnsServer, domain)
 }
@@ -43,21 +41,9 @@ func queryMsg(ctx context.Context, dnsType uint16, dnsServer, domain string) (*d
 	return r, nil
 }
 
-// NormalizeEDNS0Answer 规范化应答里的 OPT 记录，使报文既可以被严格解析器接受，
-// 也可以被安全地缓存后回放给客户端。返回是否改动了消息；把字节流直接交给
-// 客户端的调用方（例如 client/proxy 的代理 DNS 应答）应在返回 true 时重新 Pack。
-//
-// 它面向所有与上游交换 DNS 的调用方，而不是只服务本包：查询可能由客户端携带
-// EDNS0（见 client/proxy 的 clampDNSEDNS0），因此不能假定“应答里的 OPT 没有
-// 调用方需要”。丢弃 OPT 仍然是对的：OPT 描述的是传输参数，缓存或回放它只会让
-// 严格解析器面对一条没有被请求过的记录。
-//
-// 部分家用路由器/缓存的 EDNS0 应答会把 OPT 记录放进 ANSWER 段并使头部计数不
-// 自洽（ancount 只覆盖排在第一位的那条 OPT），真正的 A/AAAA 记录被挤到
-// ADDITIONAL 段。严格解析器（dig/BIND）会直接判为畸形报文，宽松解析器（Go
-// 标准库解析器）则只看到一条 41 类型记录、拿不到任何地址——现象是"域名解析
-// 不到"（no such host），而同一台服务器对不带 EDNS0 的查询却一切正常。
-// 这里把 ADDITIONAL 段里同名的请求类型记录搬回 ANSWER 段，并丢弃 OPT。
+// 丢弃应答里的 OPT，并把被挤到 ADDITIONAL 段的同名答案搬回 ANSWER：部分家用路由器把 OPT 放进
+// ANSWER 且 ancount 只覆盖它，Go 标准库只看到类型 41 记录、拿不到地址（表现为 no such host）；
+// 返回是否改动消息，直接转发字节流的调用方须在 true 时重新 Pack。
 func NormalizeEDNS0Answer(msg *dns.Msg) bool {
 	if msg == nil || len(msg.Question) == 0 {
 		return false
@@ -85,8 +71,7 @@ func NormalizeEDNS0Answer(msg *dns.Msg) bool {
 			if h.Rrtype == dns.TypeOPT {
 				continue
 			}
-			// ADDITIONAL 段里同名的请求类型记录几乎只可能来自上面那种头部
-			// 计数错位，因此当作被挤走的答案回收。
+			// ADDITIONAL 段里同名的请求类型记录几乎只可能来自上面那种头部计数错位。
 			if h.Rrtype == q.Qtype && strings.EqualFold(h.Name, q.Name) {
 				salvaged = append(salvaged, rr)
 				continue
@@ -111,10 +96,8 @@ func NormalizeEDNS0Answer(msg *dns.Msg) bool {
 	return changed
 }
 
-// LookupIPV6FromContext 从指定的 DNS 服务器解析 domain 的 IPv6 地址，受 ctx
-// 约束（见 DNSMsgTypeAContext）。
-// 服务器应答 NODATA（NOERROR 但没有 AAAA 记录）时返回空列表且不报错：
-// "解析器可达但没有该记录"与"解析失败"是两件事，调用方据此区分可达性。
+// LookupIPV6FromContext 受 ctx 约束（见 DNSMsgTypeAContext）。服务器应答 NODATA
+// （NOERROR 但没有 AAAA 记录）时返回空列表且不报错，调用方据此区分可达性与解析失败。
 func LookupIPV6FromContext(ctx context.Context, dnsServer, domain string) ([]net.IP, error) {
 	msgAAAA, err := DNSMsgTypeAAAAContext(ctx, dnsServer, domain)
 	if err != nil || msgAAAA == nil {

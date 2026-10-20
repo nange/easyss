@@ -12,11 +12,8 @@ import (
 // 才能让同一个 socket 测试在所有平台上通过。
 const maxUnixSocketPath = 104
 
-// waylandRuntimeDir 返回一个短目录作为会话运行时目录，可选地在其内
-// 放置一个真实的 wayland-0 socket。Unix socket 的 sun_path 限制约为
-// 104 字节，而 t.TempDir() 会嵌入测试名，长度足以在 macOS 和 Windows
-// 上超过该限制——此时 bind 会以 "invalid argument" 失败，
-// 而不是任何能指出真正原因的错误。
+// waylandRuntimeDir 返回一个短目录：Unix socket 的 sun_path 约限 104 字节，而 t.TempDir()
+// 会嵌入测试名，超限时 bind 只会报 "invalid argument"，看不出真正原因。
 func waylandRuntimeDir(t *testing.T, withSocket bool) string {
 	t.Helper()
 

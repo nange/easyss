@@ -2,23 +2,15 @@
 
 package main
 
-// 托盘菜单 label 的文本宽度度量。纯 Go 实现：项目不使用 CGO，所以这里不调系统
-// 字体 API，而是用一张按 macOS 13pt 菜单字体（.AppleSystemUIFont）逐字符实测的
-// 宽度表估算。
-//
-// 宽度表的单位是 1/2048 个实测空格（见 widthUnit）。估算与整串真实排版的偏差
-// 来自"逐字符累加 vs 整串排版"（kerning、亚像素取整），系统性部分由
-// textEstimateScale 压掉，剩下的平均约 1pt、最大约 2pt。Windows/Linux 的菜单
-// 字号与字形与 macOS 不同，估算会有偏差，但版式只依赖"把地址补到固定列"这一
-// 相对关系，视觉上仍然是一个稳定的指标列。
+// 托盘菜单 label 的文本宽度度量。项目不使用 CGO，因此不调系统字体 API，而是用一张按
+// macOS 13pt 菜单字体（.AppleSystemUIFont）逐字符实测的宽度表估算；"逐字符累加 vs
+// 整串排版"的系统性偏差（kerning、亚像素取整）由 textEstimateScale 压掉。
 
 const (
 	// menuFontSpaceWidth 是实测的 U+0020 宽度（pt）。
 	menuFontSpaceWidth = 3.5801
-	// textEstimateScale 把"逐字符实测"折算成估算宽度：逐字符累加相对整串排版
-	// 系统性偏大（kerning 与亚像素取整），30 个真实形态地址标定的最优系数为
-	// 0.985——此时与真实排版的偏差平均 ≈1pt、最大 ≈2pt；取 1.0 则是 avg ≈1.7pt、
-	// max ≈4.6pt。
+	// textEstimateScale 把逐字符实测折算成整串排版：逐字符累加系统性偏大（kerning
+	// 与亚像素取整），用 30 个真实形态地址标定的最优系数是 0.985；取 1.0 偏差会翻倍。
 	textEstimateScale = 0.985
 	// widthUnit 是宽度表的单位：menuFontSpaceWidth/2048。
 	widthUnit = menuFontSpaceWidth / 2048
@@ -33,9 +25,8 @@ func measureTextWidth(s string) float64 {
 	return float64(units) * widthUnit * textEstimateScale
 }
 
-// charWidth 返回字符宽度，单位为 widthUnit。ASCII 表由 macOS 13pt 菜单字体逐字符
-// 实测得到；用于填充的空格字符（不在 ASCII 表里）用各自的实测宽度；其余表外字符
-// 按全角（1em）估算，见 fullWidthUnits。
+// charWidth 返回字符宽度，单位为 widthUnit。ASCII 表由 macOS 13pt 菜单字体逐字符实测；
+// 填充用空格用各自的实测宽度；其余表外字符按全角（1em）估算，见 fullWidthUnits。
 func charWidth(r rune) int {
 	if r < 0x20 || r > 0x7e {
 		if units, ok := padSpaceWidth[r]; ok {
@@ -46,18 +37,12 @@ func charWidth(r rune) int {
 	return asciiWidthUnits[r-0x20]
 }
 
-// fullWidthUnits 是表外字符（IDN 域名、emoji 等）的估算宽度，按 13pt 菜单字体的
-// CJK 全角字形取值：实测 12.899pt，折算到宽度表是 12.899/(widthUnit*textEstimateScale)
-// ≈ 7491，取 7490。
-//
-// 表外字符字形差异很大，单一常数无法都准（实测 units：CJK 7379、西里尔 7542、
-// 假名 7058、阿拉伯 6692、韩文 6433、全角标点 3762、emoji 10869）。这里取 CJK 一档
-// 而不是折中的半角值：地址里的非 ASCII 基本来自 IDN，以 CJK 为主，且低估会让该项
-// 指标列实际偏右、超长 IDN 不触发截断——宁可略微高估。
+// fullWidthUnits 是表外字符（IDN 域名、emoji 等）的估算宽度，按 13pt 菜单字体的 CJK
+// 全角字形实测 12.899pt 折算（约 7491，取 7490）。取 CJK 一档是因为地址里的非 ASCII
+// 基本来自 IDN；低估会让指标列实际偏右且超长 IDN 不触发截断。
 const fullWidthUnits = 7490
 
-// padSpaceWidth 是填充用空格字符的宽度（单位 widthUnit）。数值为
-// 实测 pt / widthUnit / textEstimateScale，与 asciiWidthUnits 同一坐标系。
+// padSpaceWidth 是填充用空格字符的宽度（单位 widthUnit），与 asciiWidthUnits 同一坐标系。
 var padSpaceWidth = map[rune]int{
 	'\u2003': 7506, // EM SPACE：实测 12.924pt
 	'\u2002': 3731, // EN SPACE：实测 6.424pt

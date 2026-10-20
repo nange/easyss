@@ -13,54 +13,31 @@ import (
 type probeVerdict int
 
 const (
-	// probeInconclusive：探测在任一响应体字节到达前失败（RoundTrip 错误、
-	// 非 200 状态）：连接要么已死（由流错误/轮换处理），要么被临时性拒绝
-	// （429），因此不产生结论。
+	// probeInconclusive：首个响应体字节前失败（RoundTrip 错误或非 200），不产生结论。
 	probeInconclusive probeVerdict = iota
 	// probeFast：载荷以不低于降级吞吐量阈值的速度送达。
 	probeFast
 	// probeSlow：探测超时内没有字节到达，或响应体吞吐量低于降级阈值。
 	probeSlow
-	// probeUnsupported：服务端返回 200 但不是探测载荷（Content-Type/
-	// Content-Length 不符），即它不提供 /v3/probe 端点，客户端必须回退到
-	// 被动检测。
+	// probeUnsupported：服务端返回 200 但不是探测载荷，即不提供 /v3/probe。
 	probeUnsupported
 )
 
-// maxProbeSpeed 对测量到的吞吐量设上限，使单次瞬时（elapsed==0）探测无法把
-// 链路参考速度锁定到一个荒谬的值。
+// maxProbeSpeed 限制测量值，使单次瞬时（elapsed==0）探测无法把参考速度锁到荒谬的值。
 const maxProbeSpeed = 1 << 30 // 1GB/s
 
-// slotProber 通过槽位的 http.Transport 下载服务端预生成的随机载荷，主动测量
-// 某个槽位自身连接的下载吞吐量（MaxConnsPerHost=1 把 transport 固定到那一条
-// 连接上，因此探测字节恰好经过被测连接）。
+// slotProber 下载服务端预生成的随机载荷测量吞吐量。MaxConnsPerHost=1 把池固定在那一条
+// 连接上，因此探测字节恰好经过被测连接。
 type slotProber struct {
 	serverURL   string
 	token       string
 	payloadSize int64
-	// slowRTT 是所属传输层的慢路径 RTT 日志限流器；为 nil 表示不限流。
+	// slowRTT 是所属传输层的慢路径 RTT 日志限流器，nil 表示不限流。
 	slowRTT *slowRTTLogLimiter
 }
 
-// alive 在指定的那一代连接上发起一次 HEAD /v3/probe，用一个 RTT 回答"这条
-// 连接还能不能往返"（见 transport.ConnLiveness）。它复用探测端点与能力令牌，
-// 但不下载载荷：net/http 服务端对 HEAD 会丢弃响应体，因此开销只有一个 RTT。
-// 判活标准与探测的吞吐量结论无关——拿到任何响应（200、429 限流、fallback
-// 页面）都证明连接是活的；只有 RoundTrip 报错或超时才判死。
-//
-// 探测对象由调用方给定（流的判活是"本流提交到的那一代"，槽位复核是"当前那一
-// 代"）：判死换池之后，旧一代的流必须得到关于自己那条连接的结论，而不是被新
-// 连接的健康状况顶替。
-//
-// 这一代已经没有连接时（判死关闭，或被 net/http 回收）直接报告"无法判定"：绑在
-// 它上面的流注定失败，探测只会为一条死连接在已被替换的池上白拨一条新连接（那条
-// 连接还会滞留在无人再引用的池里直到空闲超时），而拿到响应给出的"alive"也只是
-// 关于那条新连接的。判死因此交给调用方，与 reverifySlot 自己的 sc == nil 预检
-// 语义一致（流在飞时它所在代的 gen.conn 必然非空：MaxConnsPerHost=1，在飞的连接
-// 占着那一代）。
-//
-// 返回的 ok=false 表示"无法判定"（未配置探测令牌，或上面这种"没有可探测的连接"），
-// 调用方应按判死处理。
+// alive 在指定那一代连接上发起 HEAD /v3/probe，用一个 RTT 回答这条连接还能不能往返。拿到任何
+// 响应（含 429、fallback 页面）都算活着，只有 RoundTrip 报错才判死；这一代已无连接时返回 ok=false。
 func (p *slotProber) alive(ctx context.Context, gen *slotTransport) (alive, ok bool) {
 	if gen == nil || gen.conn.Load() == nil {
 		return false, false
@@ -76,17 +53,14 @@ func (p *slotProber) alive(ctx context.Context, gen *slotTransport) (alive, ok b
 
 	resp, err := gen.tr.RoundTrip(req)
 	if err != nil {
-		// 不可往返：连接已死（黑洞、接口消失、连接被关闭）。MaxConnsPerHost=1
-		// 使这次探测排在这一代仍在占用的那条连接之后，而不是偷偷拨一条新连接。
+		// MaxConnsPerHost=1 使探测排在这一代占用的连接之后，而不是偷偷拨一条新连接。
 		return false, true
 	}
 	_ = resp.Body.Close()
 	return true, true
 }
 
-// probe 通过槽位连接下载探测载荷并报告响应体吞吐量（不含 TTFB：计时从第一个
-// 响应体分块开始）。结论依据绝对的降级阈值判定；生命周期在此基础上再应用
-// 链路参考值的细化。
+// probe 下载探测载荷并报告响应体吞吐量（不含 TTFB），结论按绝对降级阈值给出。
 func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, probeVerdict) {
 	probeCtx, cancel := context.WithTimeout(ctx, sharedconfig.ProbeTimeout)
 	defer cancel()
@@ -99,29 +73,21 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 	req.Header.Set("Cache-Control", "no-store")
 	req.Header.Set("User-Agent", chromeUserAgent())
 
-	// ttfbStart 必须在发起请求之前打点：服务端会先提交响应头再写载荷，
-	// 但客户端读循环与 RoundTrip 是并发的——当连接上还有别的流在传输时，
-	// 载荷可能在 RoundTrip 返回之前就已被读循环缓冲进本流的管道。若把
-	// 基准放在 RoundTrip 之后，量到的就只是"从缓冲区里取走第一个分块"的
-	// 时间（微秒级），真实路径 RTT 会被整段丢掉，统计值随之失真。
+	// 必须在发起请求之前打点：客户端读循环与 RoundTrip 是并发的，连接上还有别的流时载荷
+	// 可能已被缓冲进管道，把基准放在 RoundTrip 之后只会量到微秒级的取块时间。
 	ttfbStart := time.Now()
 	resp, err := slot.transport().RoundTrip(req)
 	if err != nil {
-		// RoundTrip 失败（拨号/TLS/流错误，或响应头到达前超时）：连接已死或
-		// 服务端不可达——不产生结论，这些情况由流错误和轮换处理。RoundTrip
-		// 内部的健康重拨能完成请求，因此新连接绝不会被误判为慢。
 		return 0, probeInconclusive
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		// 拒绝（例如 429 限流）：是临时性的，稍后重新探测。
 		return 0, probeInconclusive
 	}
 	if resp.ContentLength != p.payloadSize ||
 		resp.Header.Get("Content-Type") != "application/octet-stream" {
-		// 服务端返回 200 但不是探测载荷（例如来自不支持 /v3/probe 的服务器的
-		// fallback HTML 页面）。
+		// 200 但不是探测载荷（例如回落到 fallback HTML 页面）。
 		return 0, probeUnsupported
 	}
 
@@ -136,11 +102,8 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 			if !timed {
 				timed = true
 				start = time.Now()
-				// 发送请求到首个响应体分块的耗时：服务端在拨号源端之前就已
-				// 提交响应，因此这就是纯 client<->server 路径 RTT——与每次
-				// 请求的 bootstrap 往返采用相同的测量基准。越界的样本连同
-				// "来源是探测"一起记 Warn（按传输层的配额限流）：后台探测同样
-				// 会推高托盘上的平均值，不标出来就会与真正慢的请求混为一谈。
+				// 服务端在拨号源端之前就已提交响应，因此这是纯路径 RTT。越界样本
+				// 标上与请求不同的来源，否则会与真正慢的请求混为一谈。
 				d := time.Since(ttfbStart)
 				stats.RecordRTT(d)
 				p.slowRTT.log(d, slowRTTSample{
@@ -156,8 +119,8 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 	}
 
 	if total == 0 {
-		// 探测超时内没有任何字节到达（或响应体立即被截断）：在任何正常的
-		// 链路上，128KB 的首批字节都远在 3 秒内到达，因此把它当作慢的证据。
+		// 探测超时内没有字节到达或被立即截断：正常链路上 128KB 首批字节远在 3 秒内
+		// 到达，因此算作慢的证据。
 		return 0, probeSlow
 	}
 

@@ -8,9 +8,8 @@ import (
 	"time"
 )
 
-// HandshakeRejectedError 报告服务器以非 200 状态（例如 408 Request Timeout、
-// 400 Bad Request）应答 bootstrap 握手，意味着流在交换任何会话记录之前
-// 就被拒绝。客户端在首次读取时快速失败，而不是把拒绝正文误解析为加密记录。
+// HandshakeRejectedError 表示服务器以非 200 状态应答 bootstrap 握手，流在交换任何会话记录
+// 之前就被拒绝。客户端据此快速失败，而不是把拒绝正文误解析为密文。
 type HandshakeRejectedError struct {
 	StatusCode int
 	Status     string
@@ -23,16 +22,14 @@ func (e *HandshakeRejectedError) Error() string {
 	return fmt.Sprintf("handshake rejected: server returned HTTP %d", e.StatusCode)
 }
 
-// IsHandshakeRejected 报告 err 是否表示服务器以非 200 状态拒绝了握手。
+// IsHandshakeRejected 报告 err 是否为握手被拒。
 func IsHandshakeRejected(err error) bool {
 	var e *HandshakeRejectedError
 	return errors.As(err, &e)
 }
 
-// ErrConnRetired 表示流所属的连接代已经作废：它可能是被本进程判死
-// （transportSlot.invalidateConn），也可能是被 net/http 自然回收。流在读写时
-// 一旦观察到自己的代已经不是槽位的当前代，就用它包装底层错误；代理层据此把
-// "连接被换掉"与真正的目标错误区分开，不必再匹配 stdlib 的错误文本。
+// ErrConnRetired 表示流所属的连接代已作废。代理层据此把"连接被换掉"与真正的目标错误区分开，
+// 不必匹配 stdlib 的错误文本。
 var ErrConnRetired = errors.New("transport: connection retired")
 
 type Stream interface {
@@ -42,49 +39,32 @@ type Stream interface {
 	Close() error
 }
 
-// SlotDrainingStream 由底层连接槽位即将被驱逐的流实现：expiring
-// （连接超过其寿命或字节限制）或 degraded（确认持续低速）。代理层断言
-// 这个可选接口以提前排空空闲流（见 relay.BidirectionalWithDrain），
-// 使残留的 keep-alive 与半关闭连接无法把槽位的轮换/退役推迟到完整的中继
-// 空闲超时。未实现该接口的流永远不会排空。
+// SlotDrainingStream 由槽位即将被驱逐的流实现，代理层断言它以提前排空空闲流，使残留的
+// keep-alive 与半关闭连接无法把轮换推迟到完整的中继空闲超时。
 type SlotDrainingStream interface {
 	SlotDraining() bool
 }
 
-// BootstrapSentMarker 由传输层采样纯客户端<->服务器路径 RTT 的流实现：
-// 代理标记 bootstrap 记录刷出的时刻，使传输层能在响应头到达时记录往返
-// （服务器在拨号源站之前就提交响应，因此源站延迟永远不会进入样本）。
-// 未实现该接口的流不做 RTT 采样。
+// BootstrapSentMarker 由能采样纯 client<->server 路径 RTT 的流实现：代理标记 bootstrap 记录
+// 刷出的时刻，传输层在响应头到达时记录往返（服务器在拨号源站之前就提交响应，源站延迟不进入样本）。
 type BootstrapSentMarker interface {
 	MarkBootstrapSent()
 }
 
-// ResponseAwaiter 由能在不消费响应体的情况下等待"响应已就绪"的传输层流实现：
-// 代理层据此在引导阶段用一个有界窗口等待服务端响应，而不是写完引导记录就
-// 假定连接可用。契约必须精确，否则会把"服务端拒绝"误当成网络故障：
-//
-//   - 响应已就绪（含服务端以非 200 拒绝握手，传输层已把它转成
-//     HandshakeRejectedError）→ nil；
-//   - 传输层错误 → 该错误；
-//   - ctx 结束 → ctx.Err()。
-//
-// 未实现该接口的流保持原有行为：代理层不等待。
+// ResponseAwaiter 由能在不消费响应体的情况下等待响应就绪的流实现。响应已就绪（含以非 200
+// 拒绝握手，已转成 HandshakeRejectedError）返回 nil，传输层错误返回该错误，ctx 结束返回 ctx.Err()。
 type ResponseAwaiter interface {
 	AwaitResponse(ctx context.Context) error
 }
 
-// ConnLiveness 由能在本流所在连接上做一次轻量存活探测的传输层流实现：
-// 响应头迟到既可能是"连接已死"（网络切换/漫游），也可能是"服务端仍在解析
-// 目标域名"，判活探测用来区分二者。ok=false 表示无法判定（服务端不提供
-// /v3/probe，或客户端未配置探测令牌），此时调用方应按判死处理。
+// ConnLiveness 由能在本流所在连接上做存活探测的流实现：响应头迟到既可能是连接已死，也可能是
+// 服务端仍在解析目标域名。ok=false 表示无法判定，调用方按原样返回超时错误。
 type ConnLiveness interface {
 	ConnAlive(ctx context.Context) (alive, ok bool)
 }
 
-// ConnInvalidator 由能强制关闭本流所在底层连接的传输层流实现。
-// http.Transport 只暴露 CloseIdleConnections，它关不掉正在承载活跃流的连接，
-// 因此"判死即换连接重试"需要传输层按连接身份精确关闭。未实现该接口的流
-// 永远不会被调用。
+// ConnInvalidator 由能强制关闭本流底层连接的流实现。http.Transport 只暴露
+// CloseIdleConnections，关不掉承载活跃流的连接，判死重试因此需要按连接身份精确关闭。
 type ConnInvalidator interface {
 	InvalidateConn()
 }
@@ -93,9 +73,7 @@ type OpenRequest struct {
 	Endpoint     string
 	Salt         string
 	HighPriority bool
-	// Target 是流的目标地址 "host:port"（域名或 IP）。它从不参与调度——
-	// 带上它只是为了把槽位增长事件归因于触发它的请求
-	// （见 TransportStats.GrowEvents）。
+	// Target 是目标地址 "host:port"，从不参与调度，只用于把槽位增长事件归因到触发它的请求。
 	Target string
 }
 
@@ -106,24 +84,14 @@ type TransportStats struct {
 	BulkActiveStreams     int `json:"bulk_active_streams"`
 	PriorityConns         int `json:"priority_conns"`
 	BulkConns             int `json:"bulk_conns"`
-	// PriorityConnsStatus 是 priority 池的紧凑逐连接状态摘要，
-	// 例如 "[0:3:degraded, 1:2:expiring, 2:1:active]"。每个元素形如
-	// "<index>:<active streams>:<status>"：索引从 0 连续递增（按稳定的
-	// 连接身份排序），状态为 idle/active/heavy/degraded/expiring 之一，
-	// 多个标记用 "+" 连接。"idle" 表示不承载任何流的健康连接（热连接），
-	// 使过去突发增长出来的池与活跃流量可区分。bulk 池以相同方式
-	// 渲染进 BulkConnsStatus。
+	// PriorityConnsStatus 是 priority 池逐连接状态摘要，元素形如 "<index>:<active>:<status>"。
 	PriorityConnsStatus string `json:"priority_conns_status,omitempty"`
 	BulkConnsStatus     string `json:"bulk_conns_status,omitempty"`
-	// GrowEvents 列出最近的槽位增长事件（懒加载扩容调度器激活的新连接），
-	// 最新在前，在传输实现中限制为一个小型环形缓冲。每个事件记录增长的池、
-	// 增长后的存活槽位数，以及触发增长的请求的 endpoint/target，
-	// 让连接数的突然跳升可以归因到造成它的流量。
+	// GrowEvents 是最近的槽位增长事件，最新在前，使连接数的突然跳升可以归因到触发它的流量。
 	GrowEvents []GrowEvent `json:"recent_grow_events,omitempty"`
 }
 
-// GrowEvent 是一次槽位增长（新的存活连接）：哪个池增长、
-// 增长后的存活槽位数，以及触发它的请求（其协议端点与目标 host:port）。
+// GrowEvent 是一次槽位增长：哪个池、增长后的存活槽位数与触发它的请求。
 type GrowEvent struct {
 	Time     time.Time `json:"time"`
 	Pool     string    `json:"pool"` // "priority" 或 "bulk"

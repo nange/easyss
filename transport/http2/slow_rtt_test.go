@@ -310,13 +310,8 @@ func TestLogSlowPathRTTOnSlowProbe(t *testing.T) {
 	}
 }
 
-// TestSlowPathRTTLogLineRendersWithRealHandler 用与生产同一条路径的 handler
-// （log.TextHandler：AddSource + ReplaceAttr）渲染这条日志。
-//
-// 它保护的是自定义属性名与 slog 内建键的冲突：source 键由 handler 自己填入
-// "文件:行号"，而 log.newReplaceAttrFunc 对该键的值做 *slog.Source 断言，
-// 同名的自定义属性会让默认 handler 在渲染时 panic——托盘与客户端用的正是
-// 这个 handler，因此这条用例是崩溃回归测试，不是格式偏好。
+// TestSlowPathRTTLogLineRendersWithRealHandler 守住自定义属性名与 slog 内建 source 键的
+// 冲突：log.newReplaceAttrFunc 对该键做 *slog.Source 断言，同名属性会让生产 handler 渲染时 panic。
 func TestSlowPathRTTLogLineRendersWithRealHandler(t *testing.T) {
 	var buf bytes.Buffer
 	prev := log.Logger()
@@ -487,10 +482,8 @@ func TestHTTP2Transport_SlowBootstrapLogsRequestIdentity(t *testing.T) {
 	})
 }
 
-// TestSlowRTTLogLimiterQuotaAndFlushSummary 验证配额与汇总：一个窗口内只逐条
-// 打印 quota 条越界样本，其余压成一条汇总记录（带上被压掉的数量与其中越界最
-// 狠的那一条）。突发结束后没有新样本触发窗口滚动，因此由健康循环的 flushDue
-// 兜底交代——这正是"链路整体变差"时的典型形状。
+// TestSlowRTTLogLimiterQuotaAndFlushSummary 守住配额与汇总：突发结束后没有新样本触发
+// 窗口滚动，必须由健康循环的 flushDue 兜底交代，否则被压掉的越界样本无声消失。
 func TestSlowRTTLogLimiterQuotaAndFlushSummary(t *testing.T) {
 	rec := captureSlowRTTLogs(t)
 	lim := &slowRTTLogLimiter{window: time.Minute, quota: 2}

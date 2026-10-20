@@ -50,14 +50,9 @@ func TestUpdateCheckLoopRepeats(t *testing.T) {
 	closing := make(chan struct{})
 	a := &TrayApp{closing: closing, updateCheckEvery: 10 * time.Millisecond}
 
-	// 该循环只在关闭时停止，因此测试在自己的 goroutine 中运行它，并通过
-	// closing channel 停止它。这里刻意测试 runUpdateCheckLoop 而不是
-	// autoCheckUpdate：后者会先等待 updateCheckDelay（一分钟），并且对未注入
-	// git tag 的构建会完全跳过该循环，两者都会使此测试变成空操作。
-	// 这里的 check 回调故意使用桩函数：真实的 checkUpdate 路径会让更新状态
-	// 保持为 "checking"，直到 4 秒后 scheduleUpdateMenuReset 触发，这会把
-	// 一个定时器回调泄漏到测试二进制的其余部分。状态机本身由
-	// TestCheckUpdateRequiresIdleState 覆盖。
+	// 测 runUpdateCheckLoop 而非 autoCheckUpdate：后者先等 updateCheckDelay（一分钟），且对未注入
+	// git tag 的构建完全跳过循环。check 用桩函数——真实路径会把状态留在 "checking" 直到 4 秒后的
+	// scheduleUpdateMenuReset，等于把定时器回调泄漏到测试二进制的其余部分。
 	checked := make(chan struct{})
 	var once sync.Once
 	var checks atomic.Int64
@@ -119,9 +114,8 @@ func TestShouldNotifyOncePerTag(t *testing.T) {
 }
 
 func TestCheckUpdateRefusesActiveStates(t *testing.T) {
-	// 更新状态机是菜单处理器、周期循环和安装器之间的唯一守卫：检查中与下载中
-	// 不得再次查询 API。Available 是例外：周期检查必须能从它重新进入 Checking，
-	// 否则第一次发现更新后就再也发现不了后续 release（见 TestBeginUpdateCheckAcceptsAvailable）。
+	// 状态机是菜单处理器、周期循环与安装器之间的唯一守卫：检查中与下载中不得再查 API。
+	// Available 是例外——周期检查必须能从它重进 Checking，否则发现一次更新后再也看不到后续 release。
 	var calls atomic.Int64
 	a := &TrayApp{App: newApp(&config.ClientConfig{}, "")}
 	a.checkLatest = func(context.Context, *selfupdate.Client) (*selfupdate.Release, error) {
@@ -137,9 +131,8 @@ func TestCheckUpdateRefusesActiveStates(t *testing.T) {
 	}
 }
 
-// TestBeginUpdateCheckAcceptsAvailable 固定“发现更新后周期检查仍能继续”：状态
-// 停在 Available 时，下一次检查必须能重新进入 Checking，否则 24h 周期循环会
-// 永远被 CAS 挡掉。
+// TestBeginUpdateCheckAcceptsAvailable 固定状态停在 Available 时下一次检查仍能进 Checking，
+// 否则 24h 周期循环永远被 CAS 挡掉。
 func TestBeginUpdateCheckAcceptsAvailable(t *testing.T) {
 	a := &TrayApp{}
 	a.updateState.Store(updateStateAvailable)
@@ -156,8 +149,7 @@ func TestBeginUpdateCheckAcceptsAvailable(t *testing.T) {
 	}
 }
 
-// TestFinishUpdateCheckRestoresAvailable 固定“没有发现更新时不能丢掉待处理更新”：
-// 检查结束必须回到 Available 并保留菜单标签（setUpdateItem 在测试里是 nil 安全的）。
+// TestFinishUpdateCheckRestoresAvailable 固定没发现更新时也回到 Available 并保留菜单标签，不能丢掉待处理更新。
 func TestFinishUpdateCheckRestoresAvailable(t *testing.T) {
 	a := &TrayApp{}
 	a.pendingUpdate = &selfupdate.Release{TagName: "v99.0.0"}
@@ -206,8 +198,7 @@ func TestUpdateBadge(t *testing.T) {
 }
 
 func TestUpdateBadgeKeepsTransparency(t *testing.T) {
-	// 模板图标（macOS）是单色蒙版：透明度必须穿过角标叠加层保留下来，
-	// 否则菜单栏会显示一个黑色方块。
+	// 模板图标（macOS）是单色蒙版：透明度必须穿过角标叠加层，否则菜单栏显示一个黑色方块。
 	transparent := image.NewRGBA(image.Rect(0, 0, 44, 44))
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, transparent); err != nil {
@@ -247,7 +238,6 @@ func TestUpdateBadgeDecodeError(t *testing.T) {
 	}
 }
 
-// solidImage 返回一个用 c 填充的、指定大小的 PNG 编码图像。
 func solidImage(w, h int, c color.Color) []byte {
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
 	for y := range h {
@@ -263,7 +253,6 @@ func solidImage(w, h int, c color.Color) []byte {
 	return buf.Bytes()
 }
 
-// decodePNG 将 PNG 数据解码回图像，用于像素断言。
 func decodePNG(t *testing.T, data []byte) image.Image {
 	t.Helper()
 

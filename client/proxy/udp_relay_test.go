@@ -23,13 +23,8 @@ func (s *Socks5Server) udpRelayCount() int {
 	return len(s.udpRelays)
 }
 
-// newDisposableUDPRelay 登记一个使用**真实**（但一次性、测试自有的）UDP socket 的
-// 中继，并返回该中继。
-//
-// 为什么不用 nil socket：这类用例的目标是"中继侧有没有正确拨号/记账"，静默远端
-// 不会产生回包，所以 nil 也能跑。但那样中继就失去了回包能力——一旦日后在这些用例
-// 里补一条回包断言，或者被中继的代码路径改成先回包，就会在 nil 上 panic。给一个真
-// socket 让每条用例都具备完整的回包能力，代价只是每例一个 socket。
+// newDisposableUDPRelay 登记一个使用真实一次性 UDP socket 的中继：nil socket 也能跑
+// 现有用例，但中继会失去回包能力，补一条回包断言就会 panic。
 func newDisposableUDPRelay(t *testing.T, s *Socks5Server, clientAddr *net.UDPAddr) *udpRelay {
 	t.Helper()
 	socket, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})

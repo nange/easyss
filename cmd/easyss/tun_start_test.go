@@ -10,11 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// stubAppUI 是 appUI 的测试替身：记录主程序呈现给界面的状态。它取代了过去那四个
-// 包级函数变量（tunStartFailureHook/tunStartNotify/tunStartErrorText/
-// serverDomainReadyNotify），因此测试不再需要全局替换与逐个还原。
-//
-// 通道都带缓冲：生产代码在引擎 goroutine 上调用它，测试不读时也不能阻塞。
+// stubAppUI 是 appUI 的测试替身：通道都带缓冲，因为生产代码在引擎 goroutine 上
+// 调用它，测试不读时也不能阻塞。
 type stubAppUI struct {
 	tunFailures chan error
 	notices     chan string
@@ -58,10 +55,8 @@ func stubPlatformTeardown(s *session) {
 	s.verifyTeardown = func(tun.DeviceConfig, tun.Owner, bool) error { return nil }
 }
 
-// TestStartTunEngineReportsFailureToUI 固定界面所依赖的契约：引擎启动失败必须
-// 到达 appUI.tunStartFailed —— 托盘据此复原菜单项，用户才知道系统全局流量没有生效。
-// 同时固定它会拆掉那次半启用的会话：留着 tunMgr 会让下次启用命中 session.tunUp
-// 顶部的"已设置"保护，在菜单勾着时静默地什么都不做。
+// TestStartTunEngineReportsFailureToUI 守住两个后果：失败必须到达 appUI.tunStartFailed，
+// 且半启用的会话必须被拆掉，否则下次启用会命中"已设置"保护、静默什么都不做。
 func TestStartTunEngineReportsFailureToUI(t *testing.T) {
 	a := newApp(&config.ClientConfig{}, "")
 	ui := newStubAppUI()
@@ -93,12 +88,8 @@ func TestStartTunEngineReportsFailureToUI(t *testing.T) {
 	require.Nil(t, remaining, "失败的会话必须被拆掉，下次启用才能装上新引擎")
 }
 
-// TestStaleTunStartFailureLeavesTheCurrentSessionAlone 固定"失败回调只回滚它自己
-// 那次会话"的身份契约。它可能迟到：session.tunDown 会取消在飞的 Start
-// （tun.Manager.Stop 等它返回），而被取消的引擎要等 Start 返回之后才报告失败；
-// 这期间用户完全可能已经重新打开了 TUN。那次迟到的失败绝不能拆掉刚建立的新会话
-// —— 引擎、启用偏好、菜单勾选都会被误伤，而且 friendlyTunError 对"被取消"的消息
-// 是空的，用户连提示都看不到。
+// TestStaleTunStartFailureLeavesTheCurrentSessionAlone 守住迟到的失败回调只回滚它
+// 自己那次会话：这期间用户可能已重新开启 TUN，拆错会话连提示都没有。
 func TestStaleTunStartFailureLeavesTheCurrentSessionAlone(t *testing.T) {
 	a := newApp(&config.ClientConfig{}, "")
 	ui := newStubAppUI()
@@ -160,7 +151,7 @@ func TestTunStartFailureRollsBackOnlyItsOwnSession(t *testing.T) {
 
 // TestNotifyWithoutUIIsLogOnly 固定 headless 与 --disable-tray 构建的行为：
 // App.ui 为 nil（没有界面）时，通知与"网络已恢复"的观察都只写日志，不 panic、
-// 也不派发任何东西。这些入口过去靠"钩子为 nil"隐式短路，现在是显式的 nil 检查。
+// 也不派发任何东西。这些入口必须显式判 nil，不能靠"钩子为 nil"隐式短路。
 func TestNotifyWithoutUIIsLogOnly(t *testing.T) {
 	a := &App{} // 没有界面，也没有会话：这些入口都不该依赖会话状态
 	if a.ui != nil {

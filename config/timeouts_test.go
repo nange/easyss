@@ -5,11 +5,8 @@ import (
 	"time"
 )
 
-// TestTimeoutsNormalizeFillsDefaults 守护单一事实来源约束：零值字段必须被填充成
-// "在默认基础超时上按公式求一次"的结果，绝不允许出现第二个魔法数字。
-//
-// 这正是替代原先四个 DefaultXxxTimeout 变量的地方：那些变量由各构造器自行判断
-// 零值时才使用，于是默认值既有一份导出变量、又有 17 处 `if x <= 0` 判断。
+// TestTimeoutsNormalizeFillsDefaults 守护单一事实来源：零值字段必须由
+// Timeouts.Normalize 按默认基础超时算一次，不允许出现第二个魔法数字。
 func TestTimeoutsNormalizeFillsDefaults(t *testing.T) {
 	want := NewTimeouts(time.Duration(DefaultTimeout) * time.Second)
 	if got := (Timeouts{}).Normalize(); got != want {

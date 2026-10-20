@@ -4,11 +4,8 @@ package util
 
 import "slices"
 
-// SetSysDNSForTun 为 TUN 模式配置 DNS 解析。除 Linux 外的平台在网络服务或
-// 连接层面维护自己的 DNS 配置（macOS 用 networksetup，Windows 用注册表），
-// 并通过路由表解析，因此 TUN 路由会把查询带入隧道，而无需任何按链路
-// （per-link）的解析器状态：
-// 普通的系统 DNS 就已足够。
+// 除 Linux 外的平台按网络服务/连接维护 DNS 并经由路由表解析，因此 TUN 路由会把
+// 查询带入隧道，不需要任何按链路（per-link）的解析器状态。
 func SetSysDNSForTun(_ string, v []string) error {
 	return SetSysDNS(v)
 }

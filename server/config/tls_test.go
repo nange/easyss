@@ -6,12 +6,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestValidateTLS 固定"证书从哪来"的校验矩阵：证书文件必须成对配置、ACME 模式下
-// host 必填、IP-only 只接受公网 IPv4。
-//
-// 这些错误的代价差别很大：漏在配置加载阶段是一条能直接指出缺什么的报错，漏到
-// 运行期则是"进程起不来但看不出为什么"，或更糟——只配了 cert_path 时那份证书被
-// 静默忽略、转而向 Let's Encrypt 申请。
+// TestValidateTLS 守住配置加载阶段的校验：证书文件必须成对、ACME 模式下 host 必填、
+// IP-only 只接受公网 IPv4。漏到运行期只会表现为"进程起不来"，或只配 cert_path 时静默改走 ACME。
 func TestValidateTLS(t *testing.T) {
 	t.Run("域名与 ACME 模式", func(t *testing.T) {
 		cases := []struct {
@@ -133,10 +129,8 @@ func TestLoadConfigValidatesTLS(t *testing.T) {
 	})
 }
 
-// TestACMESubjectIsIP 固定"标识符是不是 IP 字面量"只看形态、不看它能否被签发：
-// 它决定是否显式请求短生命周期 profile 与打哪一行启动日志，而公网性由
-// validateTLS 在更早的位置把关（绕过 LoadConfig 的调用方也就能拿到 certmagic
-// 的明确拒绝，而不是一个没有证书的模式）。
+// TestACMESubjectIsIP 守住只看形态、不看能否签发：它决定是否显式请求短生命周期 profile，
+// 公网性由 validateTLS 在更早的位置把关。
 func TestACMESubjectIsIP(t *testing.T) {
 	cases := []struct {
 		name   string

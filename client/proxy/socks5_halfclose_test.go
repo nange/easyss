@@ -81,13 +81,8 @@ func socksHalfCloseStub(t *testing.T) (addr string, connected, sawEOF chan struc
 	return ln.Addr().String(), connected, sawEOF
 }
 
-// TestDialSOCKS5SupportsHalfClose 固定 http proxy 经本地 SOCKS5 入口建立的中继
-// 支持半关闭。
-//
-// 背景：旧实现用 txthinking/socks5 的 *socks5.Client 作为 net.Conn，而该类型
-// 没有 CloseWrite 方法，于是 route.go 的 copyHalfClose 里那句鸭子类型断言失败、
-// 半关闭被静默跳过——与直连路径（dst 是 *net.TCPConn）行为不一致。本测试要求
-// 客户端 CloseWrite 后服务端立刻看到 EOF，同时反方向数据仍可送达。
+// TestDialSOCKS5SupportsHalfClose 守住经本地 SOCKS5 入口的中继支持半关闭：客户端
+// CloseWrite 后服务端必须立刻看到 EOF，同时反方向数据仍可送达；否则与直连路径行为不一致。
 func TestDialSOCKS5SupportsHalfClose(t *testing.T) {
 	stubAddr, connected, sawEOF := socksHalfCloseStub(t)
 

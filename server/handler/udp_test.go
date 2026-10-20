@@ -25,10 +25,8 @@ import (
 	socks5 "github.com/xjasonlyu/tun2socks/v2/transport/socks5"
 )
 
-// deadlineConn 模拟真实 UDP socket 的读取语义：Read 一直阻塞，直到一个被
-// 推迟的读取截止时间到期（SetReadDeadline 被视为"截止时间已到"），或连接被
-// 关闭（net.ErrClosed）。它用来断言会话关闭会主动把截止时间提前，使读取
-// goroutine 立即退出，而不是滞留等满一个完整的空闲超时。
+// deadlineConn 把 SetReadDeadline 当作截止已到，用于断言 close 主动提前截止时间、
+// 而不是等满一个空闲超时。
 type deadlineConn struct {
 	closed   chan struct{}
 	once     sync.Once
@@ -53,8 +51,6 @@ func (c *deadlineConn) Close() error {
 	return nil
 }
 
-// SetReadDeadline 记录截止时间（并唤醒阻塞中的 Read——真实 socket 在截止时间
-// 到期时会返回 os.ErrDeadlineExceeded）。
 func (c *deadlineConn) SetReadDeadline(t time.Time) error {
 	c.mu.Lock()
 	c.deadline = t
@@ -65,8 +61,6 @@ func (c *deadlineConn) SetReadDeadline(t time.Time) error {
 	return nil
 }
 
-// wokeUp 报告是否有一个被设为"此刻或更早"的读取截止时间——即会话是否主动
-// 提前了截止时间来解除读取侧的阻塞。
 func (c *deadlineConn) wokeUp() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -80,8 +74,7 @@ func (c *deadlineConn) RemoteAddr() net.Addr {
 func (c *deadlineConn) SetDeadline(t time.Time) error    { return c.SetReadDeadline(t) }
 func (c *deadlineConn) SetWriteDeadline(time.Time) error { return nil }
 
-// blockingConn 的 Read 只在 Close 之后返回：它让客户端帧读取 goroutine 真正
-// 停在 ReadFrame 上，从而断言会话收尾确实解除了那次阻塞。
+// blockingConn 的 Read 只在 Close 后返回，让客户端帧读取真的卡在 ReadFrame 上。
 type blockingConn struct {
 	closed chan struct{}
 	once   sync.Once
@@ -109,7 +102,6 @@ func (c *blockingConn) SetDeadline(time.Time) error      { return nil }
 func (c *blockingConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *blockingConn) SetWriteDeadline(time.Time) error { return nil }
 
-// isClosed 报告 cancelRead 是否已经关闭了它。
 func (c *blockingConn) isClosed() bool {
 	select {
 	case <-c.closed:
@@ -119,10 +111,8 @@ func (c *blockingConn) isClosed() bool {
 	}
 }
 
-// oversizedReadConn 按脚本依次返回：读满整个池档位（模拟被内核截断的超大
-// UDP 读）、略超预算但未截断的读、一条正常载荷；之后按截止时间返回
-// os.ErrDeadlineExceeded。它让"丢弃超限数据报"的逻辑不依赖平台能否真的发送
-// 16KB 的 UDP 数据报（macOS 默认 net.inet.udp.maxdgram 只有 9216）。
+// 按脚本返回超限读与正常载荷：macOS 默认 net.inet.udp.maxdgram 只有 9216，
+// 发不出真的 16KB UDP 数据报。
 type oversizedReadConn struct {
 	mu   sync.Mutex
 	step int
@@ -154,9 +144,7 @@ func (c *oversizedReadConn) SetDeadline(time.Time) error      { return nil }
 func (c *oversizedReadConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *oversizedReadConn) SetWriteDeadline(time.Time) error { return nil }
 
-// TestUDPSessionReadFromTargetDropsOversized 固定目标侧的读循环不会把被内核
-// 截断的数据报（n == 读缓冲长度）或超过预算的数据报转发给客户端；读循环必须
-// 跳过它们，只推送随后那条正常的载荷。
+// 防回归：被内核截断（n == 缓冲长度）或超出预算的数据报不能转发给客户端。
 func TestUDPSessionReadFromTargetDropsOversized(t *testing.T) {
 	s := newUDPSession(udpSessionConfig{
 		conn:        &oversizedReadConn{},
@@ -180,19 +168,13 @@ func TestUDPSessionReadFromTargetDropsOversized(t *testing.T) {
 	}
 }
 
-// newUDPSessionFixture 组装一个可控的 udpSession：客户端帧读取侧来自 body，
-// s2c 写入落到内存缓冲，目标侧由调用方提供。
-//
-// 目标是 53 端口时按 DNS 会话构造（dnsSession=true，出站连接由查询域名决定，
-// 见 udpHandler.Handle），并装上与生产同构的 dnsRouter/dialer：测试可以替换
-// s.dns.router 来固定路由判定，替换 s.dial 来固定拨号结果。
+// newUDPSessionFixture 组装可控的 udpSession：目标是 53 端口时按 DNS 会话构造，
+// 出站连接由查询域名决定，测试替换 s.dns.router 与 s.dial 即可固定路由与拨号。
 func newUDPSessionFixture(t *testing.T, targetConn net.Conn, target string, idleTimeout time.Duration, np *nextproxy.NextProxy, body io.Reader) (*udpSession, *countingWriter) {
 	t.Helper()
 	return newUDPSessionFixtureWithWriter(t, targetConn, target, idleTimeout, np, body, nil)
 }
 
-// newUDPSessionFixtureWithWriter 与 newUDPSessionFixture 相同，但允许把 s2c
-// 记录流写到调用方提供的 sink（端到端用例需要一边跑会话一边解出推送的帧）。
 func newUDPSessionFixtureWithWriter(t *testing.T, targetConn net.Conn, target string, idleTimeout time.Duration, np *nextproxy.NextProxy, body io.Reader, sink io.Writer) (*udpSession, *countingWriter) {
 	t.Helper()
 
@@ -254,8 +236,6 @@ func newUDPSessionFixtureWithWriter(t *testing.T, targetConn net.Conn, target st
 	return s, out
 }
 
-// countingWriter 是只给单测用的小型 io.Writer（crypto.RecordWriter 只需要它），
-// 同时记录写入量，用于断言客户端方向确实收到了数据。
 type countingWriter struct {
 	mu  sync.Mutex
 	buf []byte
@@ -274,13 +254,7 @@ func (b *countingWriter) Len() int {
 	return len(b.buf)
 }
 
-// TestUDPSessionCloseExitsReaderGoroutines 是阶段 2 的验收回归：会话关闭后，
-// 两个读取 goroutine 必须在"一个读截止时间"内退出，而不是滞留在阻塞的 Read
-// 上等满一个完整的空闲超时（默认 60s）。close 会等待读取 goroutine 退出后才
-// 返回，而这里的目标连接只在被关闭后才让 Read 返回、客户端帧读取也停在
-// cancelRead 之后，因此断言窗口（1s）远小于空闲超时（30s）时，只有 close
-// 主动解除了两处阻塞才能通过。它同时固定 run 必须观察 done：客户端与目标
-// 两侧都沉默时，外部 close 是结束会话的唯一信号。
+// 防回归：会话关闭要立刻解除两处读取阻塞而不是等满空闲超时，run 也必须观察 done。
 func TestUDPSessionCloseExitsReaderGoroutines(t *testing.T) {
 	conn := newDeadlineConn()
 	body := newBlockingConn()
@@ -289,7 +263,6 @@ func TestUDPSessionCloseExitsReaderGoroutines(t *testing.T) {
 	runDone := make(chan streamResult, 1)
 	go func() { runDone <- s.run() }()
 
-	// 让两个读取 goroutine 都进入阻塞状态。
 	time.Sleep(50 * time.Millisecond)
 
 	start := time.Now()
@@ -314,8 +287,7 @@ func TestUDPSessionCloseExitsReaderGoroutines(t *testing.T) {
 	}
 }
 
-// TestUDPSessionFINEndsStream 固定终止判定只有一处：客户端发来 FIN 时会话
-// 立即以"正常结束"收尾（Err 为 nil，不触发 RST），而不是继续等到空闲超时。
+// 防回归：客户端 FIN 以正常结束收尾，不触发 RST，也不等到空闲超时。
 func TestUDPSessionFINEndsStream(t *testing.T) {
 	conn := newDeadlineConn()
 	body := newFrameReader(t, []protocol.Frame{protocol.NewFrameFIN()})
@@ -330,8 +302,6 @@ func TestUDPSessionFINEndsStream(t *testing.T) {
 	}
 }
 
-// TestUDPSessionIdleTimeoutEndsStream 固定空闲超时路径：没有任何帧往来的会话
-// 在空闲超时后以 TimedOut 收尾（而不是错误）。
 func TestUDPSessionIdleTimeoutEndsStream(t *testing.T) {
 	conn := newDeadlineConn()
 	body := newBlockingConn()
@@ -350,9 +320,7 @@ func TestUDPSessionIdleTimeoutEndsStream(t *testing.T) {
 	}
 }
 
-// TestUDPSessionTargetReadErrorIsReported 固定真实故障路径：目标连接报出
-// 非拆连接错误时会话以该错误结束（并因此触发 RST），而拆连接错误会被归一化
-// 为正常结束，不会刷 Error 日志。
+// 防回归：真实读错误触发 RST，拆连接错误归一化为正常结束。
 func TestUDPSessionTargetReadErrorIsReported(t *testing.T) {
 	boom := errors.New("udp read: connection refused")
 	conn := newErrorConn(boom)
@@ -367,7 +335,6 @@ func TestUDPSessionTargetReadErrorIsReported(t *testing.T) {
 	}
 }
 
-// errorConn 的 Read 立即返回给定的错误。
 type errorConn struct{ err error }
 
 func newErrorConn(err error) *errorConn { return &errorConn{err: err} }
@@ -381,11 +348,8 @@ func (c *errorConn) SetDeadline(time.Time) error      { return nil }
 func (c *errorConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *errorConn) SetWriteDeadline(time.Time) error { return nil }
 
-// TestUDPSessionLearnsDNSAnswers 固定 UDP 上的动态路由学习：会话看到指向
-// 自定义域名的 DNS 查询后，用同一会话里返回的 DNS 应答喂养 next proxy 的
-// 路由表（CNAME 目标与解析出的 IP）。学习状态由主 goroutine 独占，这里直接
-// 驱动它的两个入口（noteDNSQuery / learnFromDNS），并模拟主循环的门控：
-// 只有 intercept 为真时才解析应答，否则普通中继流量不该被解析（见 maybeDNS）。
+// 防回归：DNS 应答的 A 记录与 CNAME 目标都要喂给 next proxy，
+// 没见过查询的会话不得学习。
 func TestUDPSessionLearnsDNSAnswers(t *testing.T) {
 	np, err := nextproxy.New("socks5://proxy.example.com:1080", true, false)
 	if err != nil {
@@ -419,7 +383,6 @@ func TestUDPSessionLearnsDNSAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 主循环的热路径入口：自带 intercept 门控。
 	s.learnFromDNS(ps)
 
 	if !np.ShouldProxy("93.184.216.34") {
@@ -429,7 +392,6 @@ func TestUDPSessionLearnsDNSAnswers(t *testing.T) {
 		t.Fatal("the CNAME target from the DNS answer was not learned by the next proxy")
 	}
 
-	// 未启用拦截（没有见过 DNS 查询）时不得学习。
 	other, err := nextproxy.New("socks5://proxy.example.com:1080", true, false)
 	if err != nil {
 		t.Fatal(err)
@@ -442,10 +404,7 @@ func TestUDPSessionLearnsDNSAnswers(t *testing.T) {
 	}
 }
 
-// TestUDPSessionLearnFromDNSGate 是非 DNS 中继流量（QUIC 等）的性能回归：
-// 主循环的热路径只有 s.dns.intercept 为真时才会走到解析，而 learnFromDNS
-// 自身也保持这道门控。这里用一个*确实能被解析成 DNS 应答*的载荷来证明
-// "没解析就不学习"——若门控被去掉，解析与学习都会发生，测试即失败。
+// 防回归：非 DNS 中继流量（QUIC 等）不解析也不学习，门控被去掉时这条会失败。
 func TestUDPSessionLearnFromDNSGate(t *testing.T) {
 	np, err := nextproxy.New("socks5://proxy.example.com:1080", true, false)
 	if err != nil {
@@ -466,7 +425,6 @@ func TestUDPSessionLearnFromDNSGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 载荷本身是合法的 DNS 应答，唯一的差别只在门控状态。
 	if s.maybeDNS(msg) == nil {
 		t.Fatal("the fixture payload should be parseable as a DNS response")
 	}
@@ -479,7 +437,6 @@ func TestUDPSessionLearnFromDNSGate(t *testing.T) {
 		t.Fatal("an un-intercepted session must not parse or learn the datagram")
 	}
 
-	// 门控打开后同一份载荷才会被解析并学习。
 	s.dns.intercept = true
 	s.learnFromDNS(msg)
 	if !np.ShouldProxy("93.184.216.34") {
@@ -487,8 +444,6 @@ func TestUDPSessionLearnFromDNSGate(t *testing.T) {
 	}
 }
 
-// TestUDPSessionObserveClientFrame 固定客户端帧的分类：DATAGRAM 写入目标后
-// 会话继续，FIN/RST 正常结束，PADDING/COVER 被忽略但不结束会话。
 func TestUDPSessionObserveClientFrame(t *testing.T) {
 	s, _ := newUDPSessionFixture(t, newDeadlineConn(), "8.8.8.8:53", time.Second, nil, newBlockingConn())
 
@@ -515,7 +470,6 @@ func TestUDPSessionObserveClientFrame(t *testing.T) {
 	}
 }
 
-// newFrameReader 把一批帧编码成客户端记录流，供会话读取。
 func newFrameReader(t *testing.T, frames []protocol.Frame) io.Reader {
 	t.Helper()
 	sk, err := crypto.NewStreamKeys(
@@ -541,29 +495,22 @@ func newFrameReader(t *testing.T, frames []protocol.Frame) io.Reader {
 	return strings.NewReader(buf.String())
 }
 
-// dnsDial 是 fakeDNSRouter 记录的一次拨号。
 type dnsDial struct {
 	route  dnsRoute
 	target string
 	conn   net.Conn
 }
 
-// fakeDNSRouter 是 dnsRouter 的可控实现：路由判定按域名固定命中下一级代理，
-// 拨号按顺序取出预先摆好的连接并记录调用，使"哪条查询走了哪条路"成为可断言
-// 的事实，而不必真的去连下一级代理。
+// fakeDNSRouter 按域名固定路由、按顺序发放预置连接，让"哪条查询走了哪条路"可断言。
 type fakeDNSRouter struct {
 	proxyDomain string
-	// proxyConns/directConns 是两条路由各自的预置连接，按先后顺序取出。
 	proxyConns  []net.Conn
 	directConns []net.Conn
-	// dials 记录每一次**成功**的拨号（两条路由都记），使"这条查询走了哪条路、
-	// 有没有重拨"成为可直接断言的事实。
+	// dials 只记成功的拨号，用于断言"这条查询走了哪条路"。
 	dials []dnsDial
-	// attempts 记录每一次 dialRoute 调用（含失败），用于断言"一帧最多拨一次"：
-	// 只看 dials 无法区分"没有拨"与"拨了但失败"。
+	// attempts 含失败的尝试，区分得出"没拨"与"拨了但失败"。
 	attempts []dnsRoute
-	// dialHook 在每次拨号真正执行之前调用，供用例把"重绑进行中"变成可观测的
-	// 时序（例如阻塞代理路由的拨号，等新查询入队后再放行）。
+	// dialHook 在拨号真正执行前调用，把"重绑进行中"变成可观测的时序。
 	dialHook func(route dnsRoute)
 }
 
@@ -592,14 +539,8 @@ func (f *fakeDNSRouter) dialRoute(_ context.Context, _, target, _ string, route 
 	return conn, remote, nil
 }
 
-// dnsTargetConn 是 DNS 会话出站连接的假实现：写入落到内存（可断言"这条查询
-// 发到了哪条连接"），Close 可观测（可断言重绑拆掉了旧连接），读取则从 recv
-// 通道取数据——测试用 send 模拟上游解析器的应答；没有数据时读取阻塞，与真实
-// UDP socket 的等待语义一致，同时不会像 net.Pipe 那样因无人读取而卡住写入。
-//
-// after 闸门让测试能表达"旧连接被拆掉之后新连接才回包"这类顺序约束，reading
-// 通知让测试能观察到"读取侧已经切到这条连接上"，两者都用于避免 sleep 与轮询
-// 会话内部状态（那既是数据竞争，也让时序不可复现）。
+// dnsTargetConn 的读取阻塞在 recv 上，不会像 net.Pipe 那样因无人读取而卡住写入。
+// after 闸门表达"旧连接拆掉后新连接才回包"，reading 通知读取侧已切到这条连接。
 type dnsTargetConn struct {
 	recv    chan []byte
 	closed  chan struct{}
@@ -617,11 +558,9 @@ func newDNSTargetConn() *dnsTargetConn {
 	}
 }
 
-// send 排入一条上游应答。
 func (c *dnsTargetConn) send(payload []byte) { c.recv <- payload }
 
-// releaseAfter 让本连接的读取在 gate 关闭之后才交付排队的应答。gate 为 nil 时
-// 没有闸门（立即交付）。它必须在连接被交给会话之前调用。
+// releaseAfter 必须在连接交给会话之前调用。
 func (c *dnsTargetConn) releaseAfter(gate chan struct{}) {
 	if gate == nil {
 		return
@@ -686,15 +625,12 @@ func (c *dnsTargetConn) isOpen() bool {
 	}
 }
 
-// writeCount 返回这条连接上收到的数据报数。
 func (c *dnsTargetConn) writeCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.writes)
 }
 
-// connRoute 返回当前连接实际使用的路由；没有连接时返回直连（零值），
-// 与 udpSession.upstreamRoute 为 nil 的语义一致。
 func connRoute(s *udpSession) dnsRoute {
 	route, ok := s.upstreamRoute()
 	if !ok {
@@ -703,7 +639,6 @@ func connRoute(s *udpSession) dnsRoute {
 	return route
 }
 
-// packDNSQuery 打包一条 A 记录查询。
 func packDNSQuery(t *testing.T, domain string) []byte {
 	t.Helper()
 	q := &dns.Msg{}
@@ -715,9 +650,7 @@ func packDNSQuery(t *testing.T, domain string) []byte {
 	return b
 }
 
-// TestDNSSessionRoutesQueryByDomain 固定本次改动的核心：目标是 53 端口的会话
-// 不在建立时拨号，而是读出 QNAME 之后按域名决定出站路由——命中下一级代理规则
-// 的域名走代理，未命中的走直连，路由变化会重绑出站连接，未变化则复用。
+// 防回归：53 端口在首条查询到达前不拨号，之后按域名定路由，路由变了才重绑。
 func TestDNSSessionRoutesQueryByDomain(t *testing.T) {
 	local0, local1 := newDNSTargetConn(), newDNSTargetConn()
 
@@ -725,7 +658,6 @@ func TestDNSSessionRoutesQueryByDomain(t *testing.T) {
 	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
 	s.dns.router = router
 
-	// 第一条查询：域名命中下一级代理，出站连接在此时才建立。
 	alive, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "mtalk.google.com")))
 	if err != nil {
 		t.Fatalf("observeClientFrame: %v", err)
@@ -743,7 +675,6 @@ func TestDNSSessionRoutesQueryByDomain(t *testing.T) {
 		t.Fatal("the session must send the query over the next-proxy connection")
 	}
 
-	// 第二条查询：域名未命中，路由变化 → 重绑到直连连接。
 	alive, err = s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "example.com")))
 	if err != nil {
 		t.Fatalf("observeClientFrame: %v", err)
@@ -764,7 +695,6 @@ func TestDNSSessionRoutesQueryByDomain(t *testing.T) {
 		t.Fatalf("routeSel = %v, connRoute = %v, want both dnsRouteDirect", s.dns.routeSel, connRoute(s))
 	}
 
-	// 第三条查询：与当前路由一致，不产生多余的拨号。
 	if _, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "www.example.org"))); err != nil {
 		t.Fatalf("observeClientFrame: %v", err)
 	}
@@ -774,18 +704,15 @@ func TestDNSSessionRoutesQueryByDomain(t *testing.T) {
 	if s.upstream() != local1 {
 		t.Fatal("a query on the current route must reuse the existing connection")
 	}
-	// 每次路由变化只拨一次：失败路径的"一帧最多拨一次"在这里同样成立（成功
-	// 路径上 rebindRoute 拨一次，upstreamOrDial 看到 conn 非 nil 直接复用）。
+	// 每次路由变化只拨一次：重绑拨一次，upstreamOrDial 见 conn 非 nil 直接复用。
 	if len(router.attempts) != 2 {
 		t.Fatalf("dial attempts = %v, want exactly 2 (one per route change)", router.attempts)
 	}
-	// 每条查询确实发到了当次路由的连接上：第一条走代理连接，后两条都走
-	// 重绑后的直连连接（第三条复用同一条，因此不产生第三次拨号）。
 	if local0.writeCount() != 1 || local1.writeCount() != 2 {
 		t.Fatalf("writes per connection = %d/%d, want 1/2",
 			local0.writeCount(), local1.writeCount())
 	}
-	// 重绑必须拆掉旧连接，否则它会一直占着一条 SOCKS5 关联直到会话结束。
+	// 重绑不拆旧连接，它会一直占着一条 SOCKS5 关联直到会话结束。
 	if !local0.isClosed() {
 		t.Fatal("rebinding must close the previous upstream connection")
 	}
@@ -794,12 +721,9 @@ func TestDNSSessionRoutesQueryByDomain(t *testing.T) {
 	}
 }
 
-// TestDNSSessionRouteUnchangedKeepsUpstream 固定"路由未变不重绑"：同一路由下的
-// 连续查询复用同一条出站连接，而不是每次查询都重拨。
 func TestDNSSessionRouteUnchangedKeepsUpstream(t *testing.T) {
 	local0, local1 := newDNSTargetConn(), newDNSTargetConn()
 
-	// 第二个连接只是"若发生重拨就会被取走"的探针：本用例断言它没被用到。
 	router := &fakeDNSRouter{proxyDomain: "google", proxyConns: []net.Conn{local0, local1}}
 	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
 	s.dns.router = router
@@ -817,9 +741,7 @@ func TestDNSSessionRouteUnchangedKeepsUpstream(t *testing.T) {
 	}
 }
 
-// TestDNSSessionIgnoresNonDNSDatagram 固定非 DNS 载荷不参与路由判定：端口是 53
-// 但载荷不是 DNS 查询（伪造/扫描流量）时不判定路由，按直连兜底把它发出去，
-// 并且不因此开启 DNS 应答学习。
+// 防回归：53 端口上的非 DNS 载荷走直连兜底，不判定路由也不开启应答学习。
 func TestDNSSessionIgnoresNonDNSDatagram(t *testing.T) {
 	fallback := newDNSTargetConn()
 	router := &fakeDNSRouter{proxyDomain: "google", directConns: []net.Conn{fallback}}
@@ -833,7 +755,6 @@ func TestDNSSessionIgnoresNonDNSDatagram(t *testing.T) {
 	if !alive {
 		t.Fatal("a datagram frame must keep the session alive")
 	}
-	// 只有兜底那一次直连拨号：没有查询就没有路由判定，因此绝不会走下一级代理。
 	if len(router.dials) != 1 || router.dials[0].route != dnsRouteDirect {
 		t.Fatalf("dials = %+v, want exactly one direct fallback dial", router.dials)
 	}
@@ -851,8 +772,6 @@ func TestDNSSessionIgnoresNonDNSDatagram(t *testing.T) {
 	}
 }
 
-// TestUDPRouteDialerRouteForDomain 固定生产实现的路由判定：命中 next_proxy_file
-// 的域名走下一级代理，未命中的直连；enable_udp=false 时一律直连。
 func TestUDPRouteDialerRouteForDomain(t *testing.T) {
 	writeProxyFile := func(t *testing.T) string {
 		t.Helper()
@@ -885,15 +804,13 @@ func TestUDPRouteDialerRouteForDomain(t *testing.T) {
 		t.Fatalf("routeForDomain(\"\") = %v, want the direct route", got)
 	}
 
-	// enable_udp=false：下一级代理无法承载 UDP，命中的域名也必须退回直连，
-	// 否则查询会停在一个不会成功的 SOCKS5 UDP 关联上。
+	// enable_udp=false 时下一级代理承载不了 UDP，命中的域名也必须退回直连。
 	noUDP := udpRouteDialer{nextProxy: newProxy(t, false)}
 	if got := noUDP.routeForDomain("mtalk.google.com"); got != dnsRouteDirect {
 		t.Fatalf("routeForDomain with enable_udp=false = %v, want the direct route", got)
 	}
 }
 
-// TestIsDNSPort 固定触发"按域名迟拨"的判据：只有 53 端口的目标是 DNS 会话。
 func TestIsDNSPort(t *testing.T) {
 	tests := []struct {
 		target string
@@ -913,8 +830,6 @@ func TestIsDNSPort(t *testing.T) {
 	}
 }
 
-// TestUDPHandleDefersDNSDial 固定 Handle 的分流：53 端口目标在建立会话时不出站
-// （首个查询到达才拨号），非 DNS 目标维持"建立会话即按目标拨号"。
 func TestUDPHandleDefersDNSDial(t *testing.T) {
 	t.Run("dns target defers the dial", func(t *testing.T) {
 		np, err := nextproxy.New("socks5://proxy.example.com:1080", true, false)
@@ -958,8 +873,7 @@ func TestUDPHandleDefersDNSDial(t *testing.T) {
 	})
 }
 
-// waitFor 轮询一个条件直到成立或超时。它用于等待"另一侧真的观察到了某个事实"，
-// 而不是对异步进度做 sleep 猜测。
+// waitFor 等另一侧真的观察到事实，不用 sleep 猜异步进度。
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool, msg string) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -972,10 +886,7 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool, msg string) 
 	t.Fatal(msg)
 }
 
-// testSocks5UDPUpstream 是一个最小的、支持 UDP ASSOCIATE 的 SOCKS5 服务端：
-// 它只用于让"经下一级代理的 DNS 查询"走完真实的 SOCKS5 拨号，关联建立后把收到的
-// 数据报原样回显（DNS 查询与应答在这里是对称的，回显足以证明查询确实从这条链路
-// 出去了）。协议细节照 server/nextproxy 的测试上游实现。
+// testSocks5UDPUpstream 支持 UDP ASSOCIATE，让 DNS 查询走完真实的 SOCKS5 拨号。
 type testSocks5UDPUpstream struct {
 	t       *testing.T
 	tcpAddr string
@@ -1011,8 +922,7 @@ func newTestSocks5UDPUpstream(t *testing.T) *testSocks5UDPUpstream {
 	}()
 	go func() {
 		buf := make([]byte, 2048)
-		// ReadAddr 要求一个至少 MaxAddrLen 字节的缓冲（它按 io.Reader 读地址，
-		// 传 nil 会得到 io.ErrShortBuffer）。
+		// ReadAddr 要求至少 MaxAddrLen 字节的缓冲，传 nil 会得到 io.ErrShortBuffer。
 		addrBuf := make([]byte, socks5.MaxAddrLen)
 		for {
 			n, addr, err := relay.ReadFromUDP(buf)
@@ -1038,8 +948,6 @@ func newTestSocks5UDPUpstream(t *testing.T) *testSocks5UDPUpstream {
 	return u
 }
 
-// dnsEchoReply 把一条经代理收到的 DNS 查询变成一条带 A 记录的应答；载荷不是
-// 可解析的 DNS 查询时原样回显。
 func dnsEchoReply(t *testing.T, payload []byte) []byte {
 	t.Helper()
 	query := &dns.Msg{}
@@ -1065,10 +973,8 @@ func dnsEchoReply(t *testing.T, payload []byte) []byte {
 	return out
 }
 
-// proxyURL 返回喂给 nextproxy.New 的代理地址。
 func (u *testSocks5UDPUpstream) proxyURL() string { return "socks5://" + u.tcpAddr }
 
-// datagramTargets 返回代理侧收到的数据报目标，用于断言"查询确实经它转发"。
 func (u *testSocks5UDPUpstream) datagramTargets() []string {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -1127,8 +1033,6 @@ func (u *testSocks5UDPUpstream) handle(conn net.Conn, relay *net.UDPConn) {
 	_, _ = io.Copy(io.Discard, conn)
 }
 
-// newClientStream 造出 Handle 需要的客户端解密读取器与 s2c 整形器，并把 s2c
-// 记录流写到 sink 上。
 func newClientStream(t *testing.T, body io.Reader, sink io.Writer) (*crypto.DecryptedReader, shaper.Shaper) {
 	t.Helper()
 	sk, err := crypto.NewStreamKeys(
@@ -1150,9 +1054,7 @@ func newClientStream(t *testing.T, body io.Reader, sink io.Writer) (*crypto.Decr
 	return dr, shaper.New(w, shaper.Config{BatchWindowMS: 1})
 }
 
-// newStreamingFrameReader 把一批**按需到达**的帧编码成客户端记录流：调用方在
-// 测试过程中通过 channel 追加帧，读取侧会一直等待新帧（直到 channel 关闭）。
-// 它让"会话运行到某一步之后再发下一帧"成为可能，而不必预先排好全部帧。
+// newStreamingFrameReader 的帧按需到达，测试可以先跑会话到某一步再发下一帧。
 func newStreamingFrameReader(t *testing.T, frames <-chan protocol.Frame) io.Reader {
 	t.Helper()
 	sk, err := crypto.NewStreamKeys(
@@ -1182,9 +1084,7 @@ func newStreamingFrameReader(t *testing.T, frames <-chan protocol.Frame) io.Read
 	return pr
 }
 
-// syncBuffer 是"边写边读"的同步缓冲：读取在无数据时阻塞等待写入或 Close，
-// 而不是返回 EOF。会话的 s2c 推送与断言侧的读取是并发进行的，用普通的
-// bytes.Buffer 会让读取在两次推送之间误判为流已结束。
+// syncBuffer 无数据时阻塞而不是返回 EOF，否则两次推送之间会被误判为流已结束。
 type syncBuffer struct {
 	mu     sync.Mutex
 	cond   *sync.Cond
@@ -1218,7 +1118,6 @@ func (b *syncBuffer) Read(p []byte) (int, error) {
 	return b.buf.Read(p)
 }
 
-// Len 返回已写入但可能尚未被读取的字节数（只用于"确实推送过数据"这类断言）。
 func (b *syncBuffer) Len() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1233,8 +1132,6 @@ func (b *syncBuffer) Close() error {
 	return nil
 }
 
-// readFramesUntil 从 s2c 记录流里解出客户端方向收到的帧，直到收集到 want 条
-// DATAGRAM 或超时。会话的推送与这里的读取是并发进行的，因此必须持续读取。
 func readFramesUntil(t *testing.T, r io.Reader, want int, timeout time.Duration) ([][]byte, error) {
 	t.Helper()
 	type frameResult struct {
@@ -1282,20 +1179,14 @@ func readFramesUntil(t *testing.T, r io.Reader, want int, timeout time.Duration)
 	return got, nil
 }
 
-// TestDNSSessionServesAnswerAfterRebind 端到端固定：一条 DNS 会话里，命中代理
-// 的查询与直连的查询各自走自己的连接，重绑后从新连接读回的应答仍然会被推送给
-// 客户端——路由切换不能把读取侧留在旧连接上。
-//
-// 用例按读取侧的真实进度推进（由 dnsPeerConn.reading 通知），不使用 sleep 或
-// 轮询会话内部状态：那样既是数据竞争，也会让时序不可复现。
+// 防回归：重绑后从新连接读回的应答仍要推给客户端，读取侧不能留在旧连接上。
 func TestDNSSessionServesAnswerAfterRebind(t *testing.T) {
 	answer := []byte("answer-from-direct-resolver")
 	proxyConn, directConn := newDNSTargetConn(), newDNSTargetConn()
 	defer proxyConn.Close()  //nolint:errcheck
 	defer directConn.Close() //nolint:errcheck
 	directConn.reading = make(chan struct{}, 4)
-	// 直连连接上先排好应答，但闸门挂在代理连接上：代理连接被关闭（即重绑完成）
-	// 之后，读取侧才会从这个新连接上读到答案。
+	// 应答的闸门挂在代理连接上：它被关闭（重绑完成）后读取侧才读到答案。
 	directConn.send(answer)
 	directConn.releaseAfter(proxyConn.closed)
 
@@ -1322,20 +1213,15 @@ func TestDNSSessionServesAnswerAfterRebind(t *testing.T) {
 	runDone := make(chan streamResult, 1)
 	go func() { runDone <- s.run() }()
 
-	// 第二条查询未命中代理规则：它触发重绑（并因此拆掉代理连接，放行应答）。
 	frames <- protocol.NewFrameDATAGRAM(packDNSQuery(t, "example.com"))
 
-	// 等读取侧真的切到重绑后的直连连接；这同时说明旧连接已被拆掉（应答的闸门
-	// 挂在它上面），应答此刻才会被交付。
 	select {
 	case <-directConn.reading:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the reader never switched to the rebound connection")
 	}
 
-	// 必须等应答真的被推给客户端之后再发 FIN：FIN 会让会话立即收尾，若它与
-	// 应答同时就绪，"先取 FIN"就会把刚读到的答案一起丢掉（真实客户端也不会
-	// 在一个应答到达前就拆流，因此这不是生产路径的行为）。
+	// 等应答推给客户端后再发 FIN：两者同时就绪时先取 FIN 会把答案一起丢掉。
 	select {
 	case res := <-collected:
 		if res.err != nil {
@@ -1367,16 +1253,8 @@ func TestDNSSessionServesAnswerAfterRebind(t *testing.T) {
 	}
 }
 
-// TestUDPHandlerRoutesDNSQueryThroughNextProxy 覆盖生产装配的全链路：newUDPHandler
-// 造出的会话在收到命中 next_proxy_file 的 DNS 查询时，拨号真的走下一级代理
-// （dialVia 收到 viaNextProxy=true 与代理域名），并且查询确实从 SOCKS5 的 UDP
-// 关联转发出去——上游按真实协议观察到的数据报目标就是 DNS 目标。
-//
-// "应答回读并推给客户端"由 TestDNSSessionServesAnswerAfterRebind 覆盖，这条
-// 用例只钉住路由与转发这一段，避免把两个关注点混在一个用例里。
+// 防回归：DNS 查询经真实的 SOCKS5 UDP 关联转发，上游看到的数据报目标就是解析器。
 func TestUDPHandlerRoutesDNSQueryThroughNextProxy(t *testing.T) {
-	// 上游是一个真实完成 SOCKS5 UDP 关联的测试代理：这条用例走的是真实的
-	// SOCKS5 拨号路径，只有"最终拨到哪条连接"被替换成可控连接。
 	upstream := newTestSocks5UDPUpstream(t)
 	np, err := nextproxy.New(upstream.proxyURL(), true, false)
 	if err != nil {
@@ -1396,8 +1274,6 @@ func TestUDPHandlerRoutesDNSQueryThroughNextProxy(t *testing.T) {
 		t.Fatal("a configured next proxy must provide a DNS router")
 	}
 
-	// direct 分支记录被拨到的目标：DNS 查询不该落到它上面。它可能被拨号路径与
-	// 读取侧并发访问，因此用互斥锁保护。
 	var (
 		mu          sync.Mutex
 		directCalls []string
@@ -1408,7 +1284,7 @@ func TestUDPHandlerRoutesDNSQueryThroughNextProxy(t *testing.T) {
 		mu.Unlock()
 		return newDNSTargetConn(), nil
 	}
-	// dnsRouter 内部的 dialer 必须是同一个实例，否则上面的替换不会生效。
+	// dnsRouter 内部的 dialer 必须是同一个实例，否则上面的替换不生效。
 	rd, ok := h.route.(udpRouteDialer)
 	if !ok {
 		t.Fatalf("route type = %T, want udpRouteDialer", h.route)
@@ -1423,7 +1299,7 @@ func TestUDPHandlerRoutesDNSQueryThroughNextProxy(t *testing.T) {
 		protocol.NewFrameFIN(),
 	}), pushed)
 
-	// 一边跑会话一边消费 s2c：否则应答可能让会话停在推送背压上。
+	// 一边跑会话一边消费 s2c，否则应答会让会话卡在推送背压上。
 	drained := make(chan struct{})
 	go func() {
 		defer close(drained)
@@ -1449,20 +1325,14 @@ func TestUDPHandlerRoutesDNSQueryThroughNextProxy(t *testing.T) {
 	}
 }
 
-// TestDNSSessionGarbageThenProxyQuery 是 review 指出的边界回归：首帧是 53 端口上的
-// 非 DNS 载荷时会按直连兜底拨一条连接，此后第一条真实查询必须能发现"当前连接的
-// 路由与它要求的不一致"并重绑到下一级代理。
-//
-// 判据是"查询要求的路由 vs connRoute"，而不是"与上一条查询的路由比较"：后者在
-// 兜底时无人写入（兜底没有查询），会把命中代理的查询写进直连兜底连接——正是本
-// PR 要修的隐私问题在这条路径上原样复现，且日志还会显示 via_next_proxy=true。
+// 防回归：首帧是非 DNS 载荷留下的直连兜底连接，必须被第一条真实查询发现并重绑。
+// 判据是"查询要求的路由 vs connRoute"：与上一条查询比较时兜底那帧无人写入，会漏掉它。
 func TestDNSSessionGarbageThenProxyQuery(t *testing.T) {
 	fallback, proxyConn := newDNSTargetConn(), newDNSTargetConn()
 	router := &fakeDNSRouter{proxyDomain: "google", proxyConns: []net.Conn{proxyConn}, directConns: []net.Conn{fallback}}
 	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
 	s.dns.router = router
 
-	// 第 1 帧：非 DNS 载荷 → 直连兜底拨号（设计如此）。
 	if _, err := s.observeClientFrame(protocol.NewFrameDATAGRAM([]byte("not a dns message"))); err != nil {
 		t.Fatalf("observeClientFrame(garbage): %v", err)
 	}
@@ -1471,7 +1341,6 @@ func TestDNSSessionGarbageThenProxyQuery(t *testing.T) {
 			s.upstream() == fallback, connRoute(s))
 	}
 
-	// 第 2 帧：命中代理规则的查询 → 必须重绑到下一级代理，而不是复用兜底连接。
 	if _, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "mtalk.google.com"))); err != nil {
 		t.Fatalf("observeClientFrame(query): %v", err)
 	}
@@ -1484,7 +1353,6 @@ func TestDNSSessionGarbageThenProxyQuery(t *testing.T) {
 	if connRoute(s) != dnsRouteNextProxy {
 		t.Fatalf("connRoute = %v, want dnsRouteNextProxy", connRoute(s))
 	}
-	// 兜底连接必须被拆掉：否则它会一直占着一条直连 socket，且查询已经不再走它。
 	if !fallback.isClosed() {
 		t.Fatal("rebinding must close the direct fallback connection")
 	}
@@ -1493,17 +1361,13 @@ func TestDNSSessionGarbageThenProxyQuery(t *testing.T) {
 	}
 }
 
-// TestDNSSessionRebindDialFailureKeepsUpstream 固定重绑失败时的降级语义：新路由
-// 拨号失败必须**保留旧连接与旧路由**，本次查询继续走旧连接，且同一帧只拨一次
-// （不能像旧实现那样先关旧连接、再由 upstreamOrDial 在同一帧里补拨第二次）。
+// 防回归：重绑拨号失败要保留旧连接与旧路由，同一帧只拨一次。
 func TestDNSSessionRebindDialFailureKeepsUpstream(t *testing.T) {
 	fallback := newDNSTargetConn()
-	// 代理路由没有任何预置连接：第一次命中代理的查询会在 rebind 时失败。
 	router := &fakeDNSRouter{proxyDomain: "google", directConns: []net.Conn{fallback}}
 	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
 	s.dns.router = router
 
-	// 第 1 帧：非 DNS 载荷 → 直连兜底，建立旧连接。
 	if _, err := s.observeClientFrame(protocol.NewFrameDATAGRAM([]byte("not a dns message"))); err != nil {
 		t.Fatalf("observeClientFrame(garbage): %v", err)
 	}
@@ -1512,8 +1376,6 @@ func TestDNSSessionRebindDialFailureKeepsUpstream(t *testing.T) {
 			s.upstream() == fallback, connRoute(s))
 	}
 
-	// 第 2 帧：命中代理规则的查询 → 重绑拨号失败。它必须仍被送到旧连接上，
-	// 会话不因一次路由切换失败而结束。
 	alive, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "mtalk.google.com")))
 	if err != nil {
 		t.Fatalf("observeClientFrame must survive a failed rebind: %v", err)
@@ -1541,8 +1403,7 @@ func TestDNSSessionRebindDialFailureKeepsUpstream(t *testing.T) {
 		t.Fatalf("routeSel = %v, want the query's requested route to be recorded", s.dns.routeSel)
 	}
 
-	// 第 3 帧：同一条查询再来一次（客户端重试）→ 冷却窗口内不得再次拨号，
-	// 否则 next proxy 长时间不可用时每个查询都会同步吃满一次 DialTimeout。
+	// 冷却窗口内不重拨，否则下一级代理长时间不可用时每个查询都同步吃满一次 DialTimeout。
 	alive, err = s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "mtalk.google.com")))
 	if err != nil {
 		t.Fatalf("observeClientFrame(retry): %v", err)
@@ -1561,7 +1422,6 @@ func TestDNSSessionRebindDialFailureKeepsUpstream(t *testing.T) {
 		t.Fatalf("fallback writes = %d, want 3", fallback.writeCount())
 	}
 
-	// 冷却结束后必须重新尝试：网络恢复时不能永久停在旧路由上。
 	s.dns.rebindFailedAt = time.Now().Add(-rebindCooldown - time.Second)
 	if _, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "mtalk.google.com"))); err != nil {
 		t.Fatalf("observeClientFrame(after cooldown): %v", err)
@@ -1571,9 +1431,7 @@ func TestDNSSessionRebindDialFailureKeepsUpstream(t *testing.T) {
 	}
 }
 
-// TestDNSSessionQueryDuringRebindUsesNewRoute 覆盖"重绑期间新查询"：当一次重绑
-// 正在拨号时，后续查询会在主循环的 frameCh 里排队；重绑成功后它们必须被送到
-// **新**连接，而不是继续写旧连接，也不得触发额外的重拨。
+// 防回归：重绑期间在 frameCh 排队的查询要写到新连接，不写旧连接，也不额外重拨。
 func TestDNSSessionQueryDuringRebindUsesNewRoute(t *testing.T) {
 	fallback, proxyConn := newDNSTargetConn(), newDNSTargetConn()
 	router := &fakeDNSRouter{proxyDomain: "google", proxyConns: []net.Conn{proxyConn}, directConns: []net.Conn{fallback}}
@@ -1593,8 +1451,6 @@ func TestDNSSessionQueryDuringRebindUsesNewRoute(t *testing.T) {
 		<-release
 	}
 
-	// 三帧按生产时序交给 run 的主循环串行处理：兜底建立旧连接 → 命中代理触发
-	// 重绑（在拨号里阻塞）→ 重绑期间到达的第三条查询在 frameCh 里排队。
 	frames := make(chan protocol.Frame, 4)
 	frames <- protocol.NewFrameDATAGRAM([]byte("not a dns message"))
 	frames <- protocol.NewFrameDATAGRAM(packDNSQuery(t, "mtalk.google.com"))
@@ -1610,9 +1466,7 @@ func TestDNSSessionQueryDuringRebindUsesNewRoute(t *testing.T) {
 		defer close(runStopped)
 		runDone <- s.run()
 	}()
-	// 断言失败时也要拆掉会话：否则 run goroutine 与两个 reader 会一直挂着，
-	// 并把 frame reader 的 pipe 留在半开状态。runStopped 在 run 返回时关闭，
-	// 与 runDone 是否已被正常路径取走无关，因此 Cleanup 可以幂等等待。
+	// 断言失败时也要拆会话，否则 run goroutine 与两个 reader 会一直挂着。
 	t.Cleanup(func() {
 		s.close()
 		select {
@@ -1622,20 +1476,16 @@ func TestDNSSessionQueryDuringRebindUsesNewRoute(t *testing.T) {
 		}
 	})
 
-	// 第 2 帧触发重绑并阻塞在拨号里；此时第 3 帧已经在 frameCh 中排队。
 	select {
 	case <-entered:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the rebind dial was never entered")
 	}
 
-	// 重绑仍在进行：旧连接必须仍然安装着且未被关闭（先拨后换）。
 	if s.upstream() != fallback || !fallback.isOpen() {
 		t.Fatal("the old connection must stay installed while the new one is dialing")
 	}
 
-	// 放行重绑。第 2、3 帧都由主循环继续处理：第 2 帧写入新连接，第 3 帧复用
-	// 新连接，不产生额外拨号。
 	close(release)
 
 	waitFor(t, 2*time.Second, func() bool { return proxyConn.writeCount() == 2 },
@@ -1652,12 +1502,10 @@ func TestDNSSessionQueryDuringRebindUsesNewRoute(t *testing.T) {
 	if connRoute(s) != dnsRouteNextProxy {
 		t.Fatalf("connRoute = %v, want dnsRouteNextProxy", connRoute(s))
 	}
-	// 旧连接上只有兜底那一帧，重绑后的两条查询都不得再写到它上面。
 	if fallback.writeCount() != 1 {
 		t.Fatalf("fallback writes = %d, want 1", fallback.writeCount())
 	}
 
-	// 正常路径也走一次收尾（Cleanup 里的 close/等待因此是幂等的空操作）。
 	s.close()
 	select {
 	case <-runDone:
@@ -1671,10 +1519,7 @@ func TestDNSSessionQueryDuringRebindUsesNewRoute(t *testing.T) {
 	}
 }
 
-// TestDNSSessionRebindFailureLogsActualPath 固定重绑失败后的日志语义：
-// via_next_proxy 必须描述**实际**写出的路径（旧连接），而不是查询希望走的路由；
-// 同时带 route_pending=true 表明下一帧仍会尝试重绑。日志在重绑之后输出，因此
-// 不会出现"日志说走了代理、数据却写进直连连接"的误导。
+// 防回归：重绑失败后 via_next_proxy 必须描述实际写出的旧连接，并带 route_pending=true。
 func TestDNSSessionRebindFailureLogsActualPath(t *testing.T) {
 	fallback := newDNSTargetConn()
 	router := &fakeDNSRouter{proxyDomain: "google", directConns: []net.Conn{fallback}}
@@ -1718,8 +1563,6 @@ func TestDNSSessionRebindFailureLogsActualPath(t *testing.T) {
 	}
 }
 
-// TestDNSSessionDialHonorsSessionContext 固定拨号使用 Handle 的请求上下文：客户端
-// 断开后，一次进行中的 DNS 拨号会被取消，而不是白等到拨号超时。
 func TestDNSSessionDialHonorsSessionContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
@@ -1736,10 +1579,7 @@ func TestDNSSessionDialHonorsSessionContext(t *testing.T) {
 	}
 }
 
-// errReadConn 的 Read 返回一个**真实的非超时错误**（不是 net.ErrClosed 或超时），
-// 因此 targetReadError 不会把它归一化成 io.EOF，而是原样返回给 run，最终由
-// serveSession 的唯一结果日志记录。此前所有 fake conn 的错误都在函数前段提前
-// 返回，该路径没有任何用例覆盖。
+// errReadConn 返回真实的非超时错误，才会走到 targetReadError 原样返回的分支。
 type errReadConn struct {
 	closed chan struct{}
 	once   sync.Once
@@ -1759,10 +1599,7 @@ func (c *errReadConn) SetDeadline(time.Time) error      { return nil }
 func (c *errReadConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *errReadConn) SetWriteDeadline(time.Time) error { return nil }
 
-// TestDNSSessionTargetReadErrorReturnsFailure 覆盖 targetReadError 对真实非超时
-// 错误的处理：它不能被归一化成 io.EOF（那是会话正常收尾），而应作为会话失败
-// 返回，并由 serveSession 的唯一结果日志记录。fake conn 的错误若是 net.ErrClosed
-// 或超时会在函数前段提前返回，走不到这条分支。
+// 防回归：真实读错误不能被归一化成 io.EOF，要作为会话失败返回。
 func TestDNSSessionTargetReadErrorReturnsFailure(t *testing.T) {
 	boom := errors.New("read failed")
 	broken := newErrReadConn(boom)
@@ -1777,9 +1614,7 @@ func TestDNSSessionTargetReadErrorReturnsFailure(t *testing.T) {
 	}
 }
 
-// TestUDPTargetReadErrorCarriesSource 固定读取侧把产生错误的连接随结果带回来：
-// run 只能据此判断错误是否来自已被重绑替换的连接（TestUDPSessionIgnores...
-// 覆盖主循环的判定，本用例覆盖来源标记本身）。
+// 防回归：错误结果必须带回产生它的连接，run 才能丢弃已退役连接的错误。
 func TestUDPTargetReadErrorCarriesSource(t *testing.T) {
 	boom := errors.New("read failed")
 	broken := newErrReadConn(boom)
@@ -1806,9 +1641,7 @@ func TestUDPTargetReadErrorCarriesSource(t *testing.T) {
 	s.close()
 }
 
-// TestUDPSessionIgnoresRetiredConnReadError 固定错误结果的来源身份：读取
-// goroutine 完成"是否仍是当前连接"的快照后，主 goroutine 仍可能完成一次重绑；
-// 此时旧连接上的真实错误必须被丢弃，不能让一条新连接仍健康的会话结束。
+// 防回归：读取侧快照之后主 goroutine 可能完成重绑，旧连接的错误不得结束新连接健康的会话。
 func TestUDPSessionIgnoresRetiredConnReadError(t *testing.T) {
 	current := newDNSTargetConn()
 	s, _ := newUDPSessionFixture(t, current, "8.8.8.8:53", time.Second, nil, newBlockingConn())

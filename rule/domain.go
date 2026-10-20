@@ -8,24 +8,16 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-// DomainSet 是只含域名的匹配集合，语义是 geosite 列表的那三种行：
-//
-//	example.com           域名（含所有父域名匹配）
-//	full:www.example.com  精确匹配，不做父域名展开
-//	regexp:^.+\.foo\.com$ 正则
-//
-// 它与 Set 的区别是**没有 IP/CIDR 条目**：内置直连/屏蔽列表是纯域名数据，
-// 让它们走 IP 解析既浪费启动时间，也会把 "1.2.3.4" 这种并不存在的 TLD 规则
-// 误当成 IP。两套列表的格式因此各自解析、共享同一份归一化与匹配语义。
+// DomainSet 是只含域名的匹配集合：裸域名（含父域名匹配）、full: 精确匹配、regexp: 正则。
+// 内置直连/屏蔽列表是纯域名数据，走 IP 解析会浪费启动时间，还会把 "1.2.3.4" 当成 IP。
 type DomainSet struct {
 	domains  map[string]struct{}
 	full     map[string]struct{}
 	patterns []*regexp.Regexp
 }
 
-// ParseDomainSet 解析内置/自定义 geosite 风格列表。无法编译的正则被跳过并
-// 计数返回（内置列表由发布流程生成，出错属于数据缺陷而不是用户配置错误，
-// 因此调用方通常只记一条启动日志）。
+// ParseDomainSet 解析内置/自定义 geosite 风格列表。无法编译的正则被跳过并计数返回
+// （内置列表由发布流程生成，出错属于数据缺陷而不是用户配置错误）。
 func ParseDomainSet(data []byte) (*DomainSet, int) {
 	ds := &DomainSet{
 		domains: make(map[string]struct{}),
@@ -54,15 +46,8 @@ func ParseDomainSet(data []byte) (*DomainSet, int) {
 	return ds, skipped
 }
 
-// Match 报告 domain 是否命中集合。
-//
-// withSub 为 false 时只做精确匹配（含 full: 条目，但不做父域名展开，也不算
-// 正则）——"这条域名本身是否被明确列出"；为 true 时再叠加父域名展开与
-// regexp 模式，即"这个域名的任何一层是否被列入"。
-//
-// 这一对参数保留了 router 里 SimpleMatch(domain, matchSub) 与
-// FullMatch(domain) 的既有语义：屏蔽列表用 withSub=false 是为了避免
-// "某个被屏蔽的父域名"把整棵子树都算进来，而直连判定用 withSub=true。
+// withSub 为 false 时只做精确匹配（含 full: 条目，不做父域名展开，也不算正则）；
+// 屏蔽列表必须用 false，否则被屏蔽的父域名会把整棵子树都算进来。
 func (ds *DomainSet) Match(domain string, withSub bool) bool {
 	if ds == nil {
 		return false

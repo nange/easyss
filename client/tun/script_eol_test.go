@@ -9,12 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestNormalizeScriptEOL 钉住落盘前对批处理脚本行尾的统一。
-//
-// 它是"工作区字节可能是 LF"这一事实的唯一出口：cmd.exe 在中文 Windows（OEM 代码页 936）
-// 上执行 LF 的批处理文件时会把多字节注释的字节与换行错位，注释被当成命令执行、真正的
-// 命令行被截断（实测 create 脚本一条配置命令都发不出去）。而 go:embed 取的是工作区字节，
-// Raw 单文件下载、编辑器存成 LF、第三方镜像都不经过 .gitattributes 的 eol 转换。
+// TestNormalizeScriptEOL 钉住落盘前统一 .bat 行尾：cmd.exe 在中文 Windows（OEM 936）上执行
+// LF 批处理会把多字节注释与换行错位、注释被当成命令执行，而 go:embed 取的是工作区原始字节。
 func TestNormalizeScriptEOL(t *testing.T) {
 	t.Run("批处理脚本统一成 CRLF", func(t *testing.T) {
 		got := normalizeScriptEOL("create_tun_dev_windows.bat", []byte("@echo off\nrem 中文注释\n"))

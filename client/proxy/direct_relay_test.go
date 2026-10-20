@@ -73,11 +73,8 @@ func TestRelayTCPIdleTimeoutClosesBoth(t *testing.T) {
 	}
 }
 
-// TestRelayTCPHalfCloseAndCompletion 以贴近真实的拓扑验证直连中继的半关闭语义：
-// 两对独立的 TCP 连接分别模拟"本地应用 <-> 代理"和"代理 <-> 远端服务器"两段，
-// 由中继桥接代理侧的两个 socket。每个 socket 恰好有一个读方和一个写方，与生产环境
-// 一致。一段的 FIN 通过 CloseWrite 传播到另一端，同时反向方向继续传输；只有两个
-// 方向都完成后（代理侧两个 socket 都已关闭），中继才返回。
+// TestRelayTCPHalfCloseAndCompletion 用两对真实 TCP 连接验证直连中继的半关闭：
+// 一段的 FIN 经 CloseWrite 传到另一端时反向仍可传输，两个方向都完成后中继才返回。
 func TestRelayTCPHalfCloseAndCompletion(t *testing.T) {
 	app, proxyC := tcpPair(t)     // 本地应用 <-> 代理
 	proxyRC, remote := tcpPair(t) // 代理 <-> 远端服务器

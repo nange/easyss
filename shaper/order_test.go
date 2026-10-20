@@ -11,12 +11,8 @@ import (
 	easycrypto "github.com/nange/easyss/v3/crypto"
 )
 
-// TestBatchShaperWritesRecordsInFlushOrder 固定"记录按 flush 换出顺序写出"：
-// flushAndWrite 在 bs.mu 下换出缓冲，随后才去抢 writeMu；并发的 flush 因此
-// 可能后换出、先抢到写锁。若写出不按序号排序，定时器冲刷与数据冲刷重叠时，
-// 后一段 DATA 会先落到线上，TCP 字节流被静默重排。
-//
-// 这里直接让序号 1 先到、序号 0 后到：前者必须等后者写完，否则顺序就反了。
+// TestBatchShaperWritesRecordsInFlushOrder 守住记录必须按 flush 换出顺序写出：并发 flush
+// 可能后换出却先抢到 writeMu，不按序号排序时后一段 DATA 先落盘，字节流被静默重排。
 func TestBatchShaperWritesRecordsInFlushOrder(t *testing.T) {
 	masterKey, err := easycrypto.DeriveMasterKey("batch-flush-order")
 	if err != nil {

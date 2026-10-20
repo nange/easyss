@@ -38,12 +38,8 @@ func nbnsQueryPayload(name string, suffix byte) []byte {
 	return append(data, 0x00, 0x00, 0x20, 0x00, 0x01)
 }
 
-// newUDPTargetTestServer 构造一个用于 UDP 入口判定的 Socks5Server：返回的 socket
-// 同时充当客户端来源地址与 SOCKS5 UDPConn，以及记录直连拨号地址的通道。
-//
-// 直连拨号被替换为"记录目标后拨到本机静默对端"：用例只关心某条数据报有没有被拨到，
-// 既不希望（255.255.255.255/198.18.255.255 这类目标在本机会被路由进 TUN，真的发出去）
-// 也不依赖本机路由表能否连上目标。
+// newUDPTargetTestServer 里直连拨号被换成"记录目标后拨到本机静默对端"：用例只关心
+// 某条数据报有没有被拨到，既不真的把 255.255.255.255 这类目标发出去，也不依赖本机路由表。
 func newUDPTargetTestServer(t *testing.T, rt *router.Router) (*Socks5Server, *net.UDPConn, chan string) {
 	t.Helper()
 	sock, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -239,7 +235,7 @@ func TestHandleUDPDropsLinkLocalTargets(t *testing.T) {
 
 // TestIsNonRelayableUDPTarget 固定判定的边界：只丢弃受限广播/多播/链路本地单播，
 // 子网广播（198.18.255.255、192.168.1.255）是 global unicast，直连拨号会绑定物理
-// 接口，历史上一直按直连中继，行为必须保持不变。
+// 接口，按直连中继处理。
 func TestIsNonRelayableUDPTarget(t *testing.T) {
 	tests := []struct {
 		host string

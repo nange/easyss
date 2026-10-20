@@ -14,17 +14,14 @@ import (
 	sharedconfig "github.com/nange/easyss/v3/config"
 )
 
-// closeLifecycleBudget 是"关闭/启动必须在预算内返回"的上限。它的唯一作用是
-// 把"永久挂住"变成一次快速失败：正常路径远小于该值。
+// closeLifecycleBudget 把"永久挂住"变成一次快速失败；正常路径远小于该值。
 const closeLifecycleBudget = 10 * time.Second
 
-// closeIdempotentBudget 是第二次 Close 允许消耗的时间上限。幂等路径只是一次
-// sync.Once 命中，但它仍会被调度延迟拉长，因此不按微秒断言；重新探测至少要等满
-// acceptProbeTimeout（3s），依旧会被这个上限抓住。
+// closeIdempotentBudget 是第二次 Close 的耗时上限：幂等路径只是 sync.Once 命中，
+// 但会被调度延迟拉长，因此不按微秒断言。
 const closeIdempotentBudget = 500 * time.Millisecond
 
-// freeLoopbackAddr 返回一个当前无人监听的 127.0.0.1 地址。端口由内核挑选，
-// 因此同一台机器上的并发测试不会互相争抢。
+// freeLoopbackAddr 返回一个当前无人监听的 127.0.0.1 地址，端口由内核挑选以免并发测试争抢。
 func freeLoopbackAddr(t *testing.T) string {
 	t.Helper()
 
@@ -37,14 +34,9 @@ func freeLoopbackAddr(t *testing.T) string {
 	return addr
 }
 
-// TestHTTPProxyCloseBeforeStartReleasesListener 固定"Close 先于 Start"这一时序：
-// 迟到的 Start 必须自己关掉刚绑定的监听器并返回 http.ErrServerClosed，而不是让
-// 一个无人引用的服务器永久占用端口。
-//
-// 这不是假想时序：runner 在 goroutine 中派发 Start（runner.Run），核心可能随即
-// 被停止（托盘切换服务器、mobile.Stop），随后同一个进程会再次启动核心——端口
-// 如果被泄漏的服务器占着，重启就会以 "address already in use" 失败。
-// 旧形态下本测试会在预算耗尽时失败（Start 永久阻塞在 Serve 上）。
+// TestHTTPProxyCloseBeforeStartReleasesListener 固定 Close 先于 Start 的时序：迟到的 Start 必须自己
+// 关掉刚绑定的监听器并返回 http.ErrServerClosed。runner 在 goroutine 里派发 Start，核心可能随即被停止
+// 并再次启动，泄漏的监听器会让重启以 "address already in use" 失败。
 func TestHTTPProxyCloseBeforeStartReleasesListener(t *testing.T) {
 	addr := freeLoopbackAddr(t)
 	srv, err := NewHTTPProxyServer(HTTPProxyOptions{
@@ -56,7 +48,6 @@ func TestHTTPProxyCloseBeforeStartReleasesListener(t *testing.T) {
 		t.Fatalf("NewHTTPProxyServer: %v", err)
 	}
 
-	// Close 先于 Start：此时还没有监听器，Close 必须是安全的。
 	if err := srv.Close(); err != nil {
 		t.Fatalf("Close before Start: %v", err)
 	}
@@ -73,7 +64,6 @@ func TestHTTPProxyCloseBeforeStartReleasesListener(t *testing.T) {
 		t.Fatal("Start after Close kept serving (listener leaked, port held forever)")
 	}
 
-	// 端口必须可以立刻重新绑定。
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		t.Fatalf("port %s is still held after Close: %v", addr, err)
@@ -81,8 +71,7 @@ func TestHTTPProxyCloseBeforeStartReleasesListener(t *testing.T) {
 	l.Close() //nolint:errcheck
 }
 
-// TestHTTPProxyCloseIsIdempotent 固定 Close 的幂等性：第二次调用不得再次
-// Shutdown（那会重复等待在飞请求），也不得 panic。
+// TestHTTPProxyCloseIsIdempotent 固定 Close 的幂等性：第二次调用不得再次 Shutdown（会重复等待在飞请求）。
 func TestHTTPProxyCloseIsIdempotent(t *testing.T) {
 	srv, err := NewHTTPProxyServer(HTTPProxyOptions{
 		ListenAddr: freeLoopbackAddr(t),
@@ -101,22 +90,15 @@ func TestHTTPProxyCloseIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestSocks5CloseIsIdempotent 固定 Socks5Server.Close 的幂等性。
-//
-// 旧形态下第二次 Close 会重新走 shutdown：accept 探测在已关闭的监听地址上必然
-// 失败，于是阻塞 acceptProbeTimeout（3s）并留下一个 30s 的后台补关闭 goroutine。
-// 现在 Close 只是关掉自己持有的监听器与 UDP 会话，因此第二次调用必须是纯粹的
-// 立即 no-op，并原样返回首次的结果。
-//
-// 这条路径在托盘上是可达的：更新重启失败后的恢复路径会先 closeService()，
-// restartService() 又会 closeService() 一次（见 cmd/easyss/tray_update.go）。
+// TestSocks5CloseIsIdempotent 固定 Socks5Server.Close 的幂等性：第二次调用必须立即
+// no-op 并原样返回首次结果。更新重启失败的恢复流程会连调两次 closeService()
+// （见 cmd/easyss/tray_update.go）。
 func TestSocks5CloseIsIdempotent(t *testing.T) {
 	srv := newTestSocks5Server(t, freeLoopbackAddr(t))
 	startDone := make(chan error, 1)
 	go func() { startDone <- srv.Start() }()
 
 	// 等 Start 真正绑上端口，让第一次 Close 覆盖"服务器已在运行"这条路径。
-	// 端口先探测后关闭，避免占用一个固定端口。
 	if err := waitListenerUp(srv.listenAddr, closeLifecycleBudget); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +108,6 @@ func TestSocks5CloseIsIdempotent(t *testing.T) {
 		t.Fatalf("first Close: %v", firstErr)
 	}
 
-	// 第二次 Close 必须原样返回首次的结果，且不得重新做任何工作。
 	start := time.Now()
 	secondErr := srv.Close()
 	elapsed := time.Since(start)
@@ -137,7 +118,6 @@ func TestSocks5CloseIsIdempotent(t *testing.T) {
 		t.Fatalf("second Close took %s, want an immediate no-op (<= %s)", elapsed, closeIdempotentBudget)
 	}
 
-	// Start 必须随之返回，端口必须释放。
 	select {
 	case err := <-startDone:
 		if err != nil {
@@ -151,7 +131,6 @@ func TestSocks5CloseIsIdempotent(t *testing.T) {
 	}
 }
 
-// waitListenerUp 等待 addr 开始接受 TCP 连接，报告监听器是否在预算内就绪。
 func waitListenerUp(addr string, budget time.Duration) error {
 	deadline := time.Now().Add(budget)
 	for {
@@ -167,9 +146,8 @@ func waitListenerUp(addr string, budget time.Duration) error {
 	}
 }
 
-// socks5Stub 是最小的 SOCKS5 服务端桩：完成无认证握手与 CONNECT 应答，回一个
-// 最小 HTTP 响应，然后把连接保持打开，直到对端关闭。它记录当前打开的连接数，
-// 使"连接池有没有被关闭"可以被直接观测（见 TestHTTPProxyCloseReleases...）。
+// socks5Stub 是最小的 SOCKS5 服务端桩：完成无认证握手与 CONNECT 应答，回一个最小 HTTP 响应后保持
+// 连接打开。它记录当前打开的连接数，使"连接池有没有被关闭"可以被直接观测。
 type socks5Stub struct {
 	ln     net.Listener
 	open   atomic.Int64
@@ -267,8 +245,7 @@ func (s *socks5Stub) serve(conn net.Conn) {
 		return
 	}
 
-	// 保持连接（keep-alive）：客户端会把它放回连接池，只有连接池被关闭时
-	// 这里才会读到 EOF。
+	// keep-alive：客户端会把它放回连接池，只有池被关闭时这里才读到 EOF。
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 		if _, err := conn.Read(buf); err != nil {
@@ -277,10 +254,8 @@ func (s *socks5Stub) serve(conn net.Conn) {
 	}
 }
 
-// TestHTTPProxyCloseReleasesReverseProxyIdleConns 固定"Close 关闭自己创建的
-// 连接池"：反向代理的 http.Transport 拨的是本地 SOCKS5 入口，池中的每条空闲
-// 连接都占着一个 SOCKS5 侧 handler 与一条隧道流。旧形态只关监听器，这个连接池
-// 无人可达、永远不回收。
+// TestHTTPProxyCloseReleasesReverseProxyIdleConns 固定 Close 关闭自己创建的连接池：反向代理的
+// http.Transport 拨的是本地 SOCKS5 入口，每条空闲连接都占着一个 SOCKS5 handler 与一条隧道流。
 func TestHTTPProxyCloseReleasesReverseProxyIdleConns(t *testing.T) {
 	stub, socksAddr := startSocks5Stub(t)
 
@@ -304,7 +279,6 @@ func TestHTTPProxyCloseReleasesReverseProxyIdleConns(t *testing.T) {
 	}
 	defer client.CloseIdleConnections()
 
-	// 普通 HTTP 请求（非 CONNECT）走反向代理路径：HTTP 入口 -> SOCKS5 隧道。
 	var resp *http.Response
 	deadline := time.Now().Add(closeLifecycleBudget)
 	for {
@@ -323,7 +297,6 @@ func TestHTTPProxyCloseReleasesReverseProxyIdleConns(t *testing.T) {
 		t.Fatalf("unexpected response: %d %q", resp.StatusCode, body)
 	}
 
-	// 请求结束后连接应回到反向代理自己的连接池里。
 	if !waitForStubConns(t, stub, 1) {
 		t.Fatal("reverse proxy did not pool its SOCKS5 connection")
 	}
@@ -332,13 +305,12 @@ func TestHTTPProxyCloseReleasesReverseProxyIdleConns(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// Close 之后空闲连接必须被回收，否则它会一直占着 SOCKS5 侧的资源。
+	// Close 之后空闲连接必须被回收，否则一直占着 SOCKS5 侧的资源。
 	if !waitForStubConns(t, stub, 0) {
 		t.Fatal("Close left the reverse proxy's idle SOCKS5 connection open")
 	}
 }
 
-// waitForStubConns 等待桩上的打开连接数降到 want（或达到 want 的稳定状态）。
 func waitForStubConns(t *testing.T, stub *socks5Stub, want int64) bool {
 	t.Helper()
 

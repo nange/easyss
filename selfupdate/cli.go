@@ -14,28 +14,18 @@ import (
 	"github.com/nange/easyss/v3/version"
 )
 
-// errUpToDate 表示本地构建已与最新 release 一致。
-// runCheck 在无需更新时返回该错误。
+// errUpToDate 表示本地构建已与最新 release 一致，runCheck 在无需更新时返回它。
 var errUpToDate = errors.New("already up to date")
 
-// checkCLI 检查 release：wantTag 为空时是最新已发布 release，存在更新版本时
-// 返回它；wantTag 非空时返回该 tag 对应的 release（不与本地版本比较，因此可以
-// 重装当前版本或回退到旧版本）。它从不下载任何内容，也不关心产品：产品只决定
-// 资产名，而资产是否存在由调用方用 pickAssetFor 判断。
-// proxyPort > 0 时，请求经由本地 easyss HTTP 代理（127.0.0.1:<proxyPort>）转发；
-// 否则使用直连。
+// checkCLI 检查 release：wantTag 为空时找最新 release，存在更新版本才返回；非空时返回该 tag
+// 的 release，刻意不与本地版本比较（可重装或回退）。它从不下载。
 func checkCLI(ctx context.Context, proxyPort int, wantTag string) (*Release, error) {
 	c := NewClient(proxyPort)
 	defer c.Close()
 	return resolveRelease(ctx, c, version.Tag(), wantTag)
 }
 
-// runCLI 从命令行对给定产品执行一次性自更新：确定目标 release 后下载发布资产
-// 并原地替换正在运行的二进制。它从不重启进程——调用方随后退出，由用户或服务
-// 管理器启动新二进制。wantTag 为空时目标是最新 release，本地构建已是最新时
-// 返回 errUpToDate；wantTag 非空时目标是该 tag 的 release，且刻意不与本地版本
-// 比较（调试时需要重装当前版本或回退到旧版本）。proxyPort > 0 时，请求经由本地
-// easyss HTTP 代理（127.0.0.1:<proxyPort>）转发；否则使用直连。
+// runCLI 从命令行执行一次性自更新：确定目标 release 后下载资产并原地替换二进制，从不重启进程。
 func runCLI(ctx context.Context, proxyPort int, product Product, wantTag string) error {
 	c := NewClient(proxyPort)
 	defer c.Close()
@@ -51,10 +41,7 @@ func runCLI(ctx context.Context, proxyPort int, product Product, wantTag string)
 	return nil
 }
 
-// RunCLICommand 为给定产品运行 "selfupdate" 子命令：解析
-// --check/--version/--proxy-port，在 --help/--h 时打印子命令帮助，并返回进程
-// 退出码（0 = 成功或已显示帮助，1 = 失败，2 = 参数错误）。它从不重启进程；
-// 调用方随后退出，由用户或服务管理器启动新二进制。
+// RunCLICommand 运行 selfupdate 子命令并返回进程退出码（0 成功或已显示帮助，1 失败，2 参数错误）。
 func RunCLICommand(args []string, product Product) int {
 	fs := flag.NewFlagSet("selfupdate", flag.ContinueOnError)
 	var proxyPort int
@@ -77,17 +64,16 @@ func RunCLICommand(args []string, product Product) int {
 		}
 		return 2
 	}
-	// 版本只能通过 --version 指定：静默忽略位置参数会让
-	// "selfupdate v3.0.0" 变成一次意外的升级到最新操作。
+	// 版本只能通过 --version 指定：静默忽略位置参数会让 "selfupdate v3.0.0"
+	// 变成一次意外的升级到最新操作。
 	if fs.NArg() > 0 {
 		_, _ = fmt.Fprintf(fs.Output(), "意外的参数 %q：指定版本请使用 --version <tag>\n", fs.Arg(0))
 		return 2
 	}
 	wantTag = strings.TrimSpace(wantTag)
 
-	// 检查阶段由 runCheck/checkTagRelease 各自施加 CheckTimeout；下载阶段由
-	// updateFor 施加 DownloadTimeout。因此这里不套外层超时——否则父 ctx 的
-	// 15 秒预算会覆盖 DownloadTimeout，让较慢的下载必然失败。
+	// 不套外层超时：检查阶段由 runCheck/checkTagRelease 施加 CheckTimeout，下载阶段由
+	// updateFor 施加 DownloadTimeout，外层预算会覆盖后者，让较慢的下载必然失败。
 	ctx := context.Background()
 	bin := filepath.Base(os.Args[0])
 
@@ -127,8 +113,8 @@ func RunCLICommand(args []string, product Product) int {
 	return 0
 }
 
-// reportTagAvailability 报告显式指定的版本能否在当前平台安装：release 存在、
-// 且带有匹配当前产品与 GOOS/GOARCH 的发布资产时返回 0，否则返回 1。
+// reportTagAvailability 报告显式指定的版本能否在当前平台安装：release 存在且带有匹配当前产品与
+// GOOS/GOARCH 的资产时返回 0，否则返回 1。
 func reportTagAvailability(rel *Release, product Product, bin string) int {
 	if a := pickAssetFor(rel, product, runtime.GOOS, runtime.GOARCH); a == nil {
 		fmt.Printf("版本 %s 存在，但没有 %s/%s 的发布资产（%s）\n",
@@ -140,8 +126,7 @@ func reportTagAvailability(rel *Release, product Product, bin string) int {
 	return 0
 }
 
-// reportVersionError 在显式指定版本却查不到 release 时向用户打印一行中文提示。
-// 日志中的原始错误仍由调用方记录；未指定版本时不打印任何内容。
+// reportVersionError 在显式指定版本却查不到 release 时打印一行中文提示，未指定版本时不打印。
 func reportVersionError(err error, wantTag string) {
 	if wantTag == "" || !errors.Is(err, errReleaseNotFound) {
 		return
@@ -149,8 +134,7 @@ func reportVersionError(err error, wantTag string) {
 	fmt.Fprintf(os.Stderr, "未找到版本 %q 对应的 release；tag 需与 release tag 完全一致（例如 v3.0.0）\n", wantTag)
 }
 
-// runCheck 获取最新 release，并报告 currentTag 是否落后于它。
-// 整个检查过程应用 CheckTimeout 超时。
+// runCheck 获取最新 release 并判断 currentTag 是否落后，全程应用 CheckTimeout。
 func runCheck(ctx context.Context, c *Client, currentTag string) (*Release, error) {
 	checkCtx, cancel := context.WithTimeout(ctx, CheckTimeout)
 	defer cancel()
@@ -165,7 +149,7 @@ func runCheck(ctx context.Context, c *Client, currentTag string) (*Release, erro
 	return rel, nil
 }
 
-// checkTagRelease 获取指定 tag 的 release，整个查询过程应用 CheckTimeout 超时。
+// checkTagRelease 获取指定 tag 的 release，全程应用 CheckTimeout。
 func checkTagRelease(ctx context.Context, c *Client, tag string) (*Release, error) {
 	checkCtx, cancel := context.WithTimeout(ctx, CheckTimeout)
 	defer cancel()
@@ -177,10 +161,8 @@ func checkTagRelease(ctx context.Context, c *Client, tag string) (*Release, erro
 	return rel, nil
 }
 
-// resolveRelease 返回本次操作要安装的 release。wantTag 为空时取最新已发布
-// release，并在本地构建已不落后于它时返回 errUpToDate；wantTag 非空时取该 tag
-// 对应的 release，且刻意不与本地版本比较——显式指定版本意味着用户可以重装当前
-// 版本或回退到更旧的版本（调试需要），因此 errUpToDate 永不适用于该路径。
+// resolveRelease 返回本次要安装的 release。显式指定 wantTag 时路径上永不适用 errUpToDate：
+// 用户可能正是在重装当前版本或回退到更旧的版本。
 func resolveRelease(ctx context.Context, c *Client, currentTag, wantTag string) (*Release, error) {
 	if wantTag == "" {
 		return runCheck(ctx, c, currentTag)

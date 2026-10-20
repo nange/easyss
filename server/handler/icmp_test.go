@@ -41,13 +41,8 @@ func TestLanHostOfSSRFGuard(t *testing.T) {
 	}
 }
 
-// TestICMPFirstReadBufSize 固定"常规 ping 只借小缓冲"这条内存契约：ICMP 交换
-// 此前无条件借出 65535 字节（池内 64KB 档）的读取缓冲，而回显应答的数据部分
-// 由请求决定，一次常规 ping 只承载几十字节。缓冲改为按请求推导后，只有大请求
-// 才会触及 64KB 档，其余落在 4KB 档。
-//
-// 这里断言纯函数而不是真实交换：真实 ICMP 需要 root 权限与可达目标，
-// 无法作为"借了多大缓冲"的稳定断言基础。
+// TestICMPFirstReadBufSize 守住常规 ping 只借小缓冲：回显应答的数据部分由请求决定，
+// 按请求推导后只有大请求才触及 64KB 档。断言纯函数是因为真实 ICMP 需要 root 与可达目标。
 func TestICMPFirstReadBufSize(t *testing.T) {
 	tests := []struct {
 		name    string

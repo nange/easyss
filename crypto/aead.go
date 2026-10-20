@@ -11,12 +11,8 @@ import (
 
 type Encryptor interface {
 	Encrypt(plaintext, aad []byte, nonce []byte) ([]byte, error)
-	// EncryptInto 把密文写进 dst 的**底层数组**（从 dst 的起点开始，等价于
-	// dst[:0] + Seal），从而避免为每条记录再做一次分配。它必须原地写入 dst 的
-	// 可用容量：调用方按 dst 的容量取池化缓冲，并依赖返回的切片仍指回同一块
-	// 内存（RecordWriter 把长度前缀写在密文之前，记录整体切自那块缓冲）。
-	// 实现一旦改成"容量不足就另分配"，写出去的记录就会是缓冲里的残留数据——
-	// 这是线上正确性问题，不是性能问题。
+	// EncryptInto 必须原地写入 dst 的底层数组（从 dst 起点开始），调用方依赖返回切片
+	// 仍指回同一块缓冲；容量不足就另分配会让写出的记录变成缓冲残留数据，是线上正确性问题。
 	EncryptInto(dst, plaintext, aad, nonce []byte) ([]byte, error)
 	Decrypt(ciphertext, aad []byte, nonce []byte) ([]byte, error)
 	NonceSize() int

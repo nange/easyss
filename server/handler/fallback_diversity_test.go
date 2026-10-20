@@ -16,18 +16,11 @@ import (
 	"github.com/nange/easyss/v3/crypto"
 )
 
-// ---------------------------------------------------------------------------
-// 部署级随机化
-// ---------------------------------------------------------------------------
-
-// depState 是当前测试部署身份的只读别名，指向 withDeployment 最近构造出的
-// 实例，仅用于断言（它是测试专用变量，生产代码里不存在对应的包级状态）。
+// depState 是 withDeployment 最近构造出的实例的部署身份，仅用于断言。
 var depState *deployment
 
-// withDeployment 用固定种子/主题构造一个独立的 fallback 实例，并把它设为
-// handler 未注入时的包级内置实例（这样 serveProbe / 零值 ProxyHandler 也拿到
-// 同一套身份），测试结束后清空该内置实例。它返回该实例，调用方通过它服务
-// 请求，因此不需要重置任何回退状态。
+// withDeployment 用固定种子/主题构造独立实例并设为包级内置实例
+// （serveProbe 与零值 ProxyHandler 也拿到同一套身份），测试结束清空。
 func withDeployment(t *testing.T, seed []byte, theme string) *Fallback {
 	t.Helper()
 	fb, err := NewFallback(FallbackConfig{}, WithSeed(seed), WithTheme(theme))
@@ -48,12 +41,10 @@ func seedOf(n int) []byte {
 	return s[:]
 }
 
-// seed32 与 seedOf 同源，供需要固定 [32]byte 的函数使用。
 func seed32(n int) [32]byte {
 	return sha256.Sum256([]byte(fmt.Sprintf("test-seed-%d", n)))
 }
 
-// TestInitFallback_Deterministic 验证同一种子得到逐字节相同的页面与响应头。
 func TestInitFallback_Deterministic(t *testing.T) {
 	first := renderAll(t, seedOf(1))
 	second := renderAll(t, seedOf(1))
@@ -65,9 +56,6 @@ func TestInitFallback_Deterministic(t *testing.T) {
 	}
 }
 
-// TestFallbackInstance_Isolated 验证两个实例互不影响：不同种子的身份与渲染
-// 结果都不同，且各自在同一路径上稳定（对应旧的"重复初始化只生效一次"，
-// 现在由构造语义表达）。
 func TestFallbackInstance_Isolated(t *testing.T) {
 	first := withDeployment(t, seedOf(2), "")
 	firstHome := first.renderPage("/")
@@ -86,8 +74,7 @@ func TestFallbackInstance_Isolated(t *testing.T) {
 	}
 }
 
-// TestBuiltinFallback_ConcurrentInit 验证包级内置实例的惰性构造在并发调用下
-// 是安全的，并且所有调用者拿到同一个实例（在 -race 下同样成立）。
+// 包级内置实例的惰性构造在并发下安全，且所有调用者拿到同一个实例。
 func TestBuiltinFallback_ConcurrentInit(t *testing.T) {
 	fb, err := NewFallback(FallbackConfig{}, WithSeed(seedOf(4)))
 	if err != nil {
@@ -116,8 +103,7 @@ func TestBuiltinFallback_ConcurrentInit(t *testing.T) {
 	}
 }
 
-// TestInitFallback_DifferentSeedsDiffer 覆盖成功标准 1：不同部署的首页字节
-// 差异率必须足够高，并且站点名、Last-Modified 都要不同。
+// 不同部署的首页字节差异率要足够高，站点名与 Last-Modified 也要不同。
 func TestInitFallback_DifferentSeedsDiffer(t *testing.T) {
 	a := renderAll(t, seedOf(10))
 	depA := depState.site.Name
@@ -142,8 +128,6 @@ func TestInitFallback_DifferentSeedsDiffer(t *testing.T) {
 	}
 }
 
-// TestInitFallback_DeploymentSpace 验证随机化空间：50 个种子应产生接近 50 个
-// 互不相同的调色板与首页。
 func TestInitFallback_DeploymentSpace(t *testing.T) {
 	palettes := make(map[string]int)
 	homes := make(map[string]int)
@@ -161,19 +145,11 @@ func TestInitFallback_DeploymentSpace(t *testing.T) {
 	}
 }
 
-// TestVisibleCombinationSpace 覆盖成功标准 2：首页可见组合空间必须远大于改造前
-// 的 5 主题 × 5 文案 = 25。
-//
-// 组合空间（跨部署）=
-//
-//	色相 × 饱和度 × 半径 × 卡片宽度 × 行高 × 标题字号 × tagline 透明度 × 字体栈
-//	× 站点名 × tagline × 导航组合 × 标题 × 一级标题 × 正文段落组合
-//
-// 用各池实际规模相乘得到下界，而不是靠估数：任何一个池被改小都会让这条断言失败。
+// 首页可见组合空间（跨部署）必须远大于固定主题与文案的乘积。
+// 用各池实际规模相乘得到下界：任何一个池被改小，这条断言就会失败。
 func TestVisibleCombinationSpace(t *testing.T) {
 	withDeployment(t, seedOf(900), "")
 
-	// 主题内部的连续/离散参数（themePalette 的取值域）。
 	const (
 		hues        = 360 // 基准色相
 		saturations = 26  // 30-55%
@@ -204,13 +180,11 @@ func TestVisibleCombinationSpace(t *testing.T) {
 	if space < wantSpace {
 		t.Errorf("visible combination space = %d, want >= %d", space, wantSpace)
 	}
-	// 站点名的规模必须远大于原先固定 5 个标题名。
 	if siteNames < 100 {
 		t.Errorf("site name space = %d, want >= 100", siteNames)
 	}
 }
 
-// combinationCount 返回 C(n, k)；k > n 时为 0。
 func combinationCount(n, k int) int {
 	if k > n {
 		return 0
@@ -222,7 +196,6 @@ func combinationCount(n, k int) int {
 	return result
 }
 
-// TestNewSiteIdentity_PoolCoverage 验证站点名取自组合池而不是固定值。
 func TestNewSiteIdentity_PoolCoverage(t *testing.T) {
 	names := make(map[string]bool)
 	for i := range 200 {
@@ -233,14 +206,9 @@ func TestNewSiteIdentity_PoolCoverage(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 主题与调色板
-// ---------------------------------------------------------------------------
-
-// placeholderRe 匹配未替换的 {{token}} 占位符。
 var placeholderRe = regexp.MustCompile(`\{\{\w+\}\}`)
 
-// TestThemeCSSTokensResolved 覆盖"任何一次派生都不把占位符发给扫描器"。
+// 任何一次派生都不得把 {{token}} 占位符发给扫描器。
 func TestThemeCSSTokensResolved(t *testing.T) {
 	for i := range 20 {
 		fb := withDeployment(t, seedOf(300+i), "")
@@ -252,15 +220,13 @@ func TestThemeCSSTokensResolved(t *testing.T) {
 		if strings.Contains(css, "{{") || strings.Contains(css, "}}") {
 			t.Fatalf("seed %d: leftover braces in theme CSS", i)
 		}
-		// 调色板不允许留有任何硬编码的色值。
 		if strings.Contains(css, "#") && strings.Contains(css, "{{") {
 			t.Fatalf("seed %d: mixed tokens and literals", i)
 		}
 	}
 }
 
-// TestThemeCSS_Contrast 验证任意一次派生都得到可读配色，而不是随机撞色。
-// 这里直接校验调色板本身：主题 CSS 里的 token 已被替换，无法再用于配对。
+// 任意一次派生都要得到可读配色：主题 CSS 里的 token 已被替换，只能直接校验调色板。
 func TestThemeCSS_Contrast(t *testing.T) {
 	for i := range 40 {
 		fb := withDeployment(t, seedOf(400+i), "")
@@ -273,8 +239,7 @@ func TestThemeCSS_Contrast(t *testing.T) {
 	}
 }
 
-// TestThemesJSON_TokenWhitelist 保证资源文件里不会出现拼错的 token：
-// 一旦拼错，它会原样出现在发给扫描器的 CSS 里。
+// 拼错的 token 会原样出现在发给扫描器的 CSS 里。
 func TestThemesJSON_TokenWhitelist(t *testing.T) {
 	allowed := map[string]bool{
 		"font_body": true, "bg": true, "surface": true, "text": true, "text_muted": true,
@@ -294,7 +259,6 @@ func TestThemesJSON_TokenWhitelist(t *testing.T) {
 			seen[m[1]] = true
 		}
 	}
-	// 每个允许的 token 都应至少被一个主题用到，否则是死 token。
 	for name := range allowed {
 		if !seen[name] {
 			t.Errorf("token %q is declared but never used in themes.json", name)
@@ -307,12 +271,6 @@ func TestThemesJSON_TokenWhitelist(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 内容组合
-// ---------------------------------------------------------------------------
-
-// TestComposeContent_Shape 验证拼装出的页面结构合理：3-5 段、标题/一级标题
-// 非空、页脚含站点名与年份。
 func TestComposeContent_Shape(t *testing.T) {
 	fb := withDeployment(t, seedOf(500), "")
 
@@ -327,7 +285,7 @@ func TestComposeContent_Shape(t *testing.T) {
 		if strings.TrimSpace(content.Footer) == "" {
 			t.Errorf("path %q: empty footer", path)
 		}
-		// 页脚的 {site}/{year} 占位符必须都已解析，否则会把字面占位符发给扫描器。
+		// 页脚的 {site}/{year} 未解析就会把字面占位符发给扫描器。
 		if strings.ContainsAny(content.Footer, "{}") {
 			t.Errorf("path %q: footer %q has unresolved placeholders", path, content.Footer)
 		}
@@ -339,8 +297,7 @@ func TestComposeContent_Shape(t *testing.T) {
 	}
 }
 
-// TestComposeContent_EmptyPools 验证资源文件缺字段时不 panic：
-// rand.IntN(0) 会 panic，因此空池必须有守卫。
+// 资源文件缺字段时不能 panic：rand.IntN(0) 会 panic，空池必须有守卫。
 func TestComposeContent_EmptyPools(t *testing.T) {
 	fb := withDeployment(t, seedOf(501), "")
 
@@ -362,8 +319,6 @@ func TestComposeContent_EmptyPools(t *testing.T) {
 	}
 }
 
-// TestLegacyContentPool 验证旧式"整篇文案"格式（只有 <pageType> 数组、
-// 没有片段池）仍然可以渲染出页面。
 func TestLegacyContentPool(t *testing.T) {
 	fb := withDeployment(t, seedOf(502), "")
 
@@ -382,12 +337,6 @@ func TestLegacyContentPool(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 导航
-// ---------------------------------------------------------------------------
-
-// TestNavItems_LinksResolve 验证导航里不会出现死链：每个 href 都必须能被
-// detectPageType 归入一个真实存在的页面族。
 func TestNavItems_LinksResolve(t *testing.T) {
 	for i := range 50 {
 		fb := withDeployment(t, seedOf(600+i), "")
@@ -412,8 +361,6 @@ func TestNavItems_LinksResolve(t *testing.T) {
 	}
 }
 
-// TestNavItems_SpaceCoversAliases 验证导航组合本身也在变化，
-// 而不是每部署固定一套标签。
 func TestNavItems_SpaceCoversAliases(t *testing.T) {
 	combos := make(map[string]bool)
 	for i := range 50 {
@@ -429,10 +376,6 @@ func TestNavItems_SpaceCoversAliases(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// HTTP 真实性层
-// ---------------------------------------------------------------------------
-
 func doFallback(fb *Fallback, target string, headers map[string]string, method string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, target, nil)
 	for k, v := range headers {
@@ -443,7 +386,6 @@ func doFallback(fb *Fallback, target string, headers map[string]string, method s
 	return rec
 }
 
-// TestServeFallback_ContentHeaders 验证真实 nginx 会发而 Go 默认不发的响应头。
 func TestServeFallback_ContentHeaders(t *testing.T) {
 	fb := withDeployment(t, seedOf(800), "")
 
@@ -462,14 +404,12 @@ func TestServeFallback_ContentHeaders(t *testing.T) {
 	if got := rec.Header().Get("Server"); got != "nginx" {
 		t.Errorf("Server = %q, want nginx", got)
 	}
-	// Last-Modified 必须是可解析的 HTTP 日期。
 	if _, err := http.ParseTime(rec.Header().Get("Last-Modified")); err != nil {
 		t.Errorf("Last-Modified not parseable: %v", err)
 	}
 }
 
-// TestServeFallback_UnknownPathStatus 验证浏览器式的内容请求对未知路径返回 404，
-// 而非内容请求（客户端探测）保持 200 + 页面正文。
+// 浏览器式请求（Accept 含 text/html）对未知路径返回 404，客户端探测仍保持 200。
 func TestServeFallback_UnknownPathStatus(t *testing.T) {
 	fb := withDeployment(t, seedOf(801), "")
 
@@ -482,15 +422,13 @@ func TestServeFallback_UnknownPathStatus(t *testing.T) {
 			t.Errorf("known path %q: status = %d, want 200", path, rec.Code)
 		}
 	}
-	// 客户端探测不带 text/html：保持 200，避免改变既有客户端看到的响应形状。
+	// 客户端探测不带 text/html，保持 200 以维持既有响应形状。
 	if rec := doFallback(fb, "/x9f2ab", nil, http.MethodGet); rec.Code != http.StatusOK {
 		t.Errorf("unknown path without Accept: status = %d, want 200", rec.Code)
 	}
 }
 
-// clientStreamHeaders 是 transport/http2 打开流时实际发送的请求头
-// （见 transport/http2/client.go 的 Open）。
-// 关键点是**没有 Accept 头**：服务端的 404 判定只看 Accept 是否含 text/html，
+// 客户端打开的流不带 Accept 头，服务端的 404 判定只看 Accept 是否含 text/html，
 // 因此客户端的请求永远不会拿到 404。
 func clientStreamHeaders(salt string) map[string]string {
 	h := map[string]string{
@@ -528,19 +466,10 @@ func serveProbe(t *testing.T, seed []byte, headers map[string]string) *httptest.
 	return rec
 }
 
-// TestClientRequestShapes_Always200 是本次改造的核心回归保护：客户端会遇到的
-// 每一个 fallback 触发点都必须保持 200 + 页面正文。
-//
-// 判据不是"看起来对"，而是客户端自己的解析规则：
-//   - 会话读取（client/proxy/stream.go:157）：非 200 → HandshakeRejectedError，
-//     200 + HTML → 在记录解析层暴露异常。两条路都会失败，但只有 200 保留
-//     原有的错误分类与日志/降级行为。
-//   - 探测（transport/http2/probe.go:73-82）：非 200 → probeInconclusive
-//     （当作临时拒绝、保持当前状态）；200 但非载荷 → probeUnsupported
-//     （两次后永久转为被动检测）。若这里变成 404，客户端对"不提供 /v3/probe
-//     的老服务端"的降级判定将永远无法完成。
+// 客户端会遇到的每个 fallback 触发点都必须保持 200 + 页面正文：
+// 非 200 会让会话读取报 HandshakeRejectedError、让探测判成 probeInconclusive
+// （对不提供 /v3/probe 的老服务端的降级判定永远无法完成）。
 func TestClientRequestShapes_Always200(t *testing.T) {
-	// /v3/probe 上的两种非认证请求都由 ProbeHandler 触发 fallback。
 	for _, tt := range []struct {
 		name    string
 		headers map[string]string
@@ -563,8 +492,7 @@ func TestClientRequestShapes_Always200(t *testing.T) {
 		})
 	}
 
-	// 握手路径上的非 POST / 缺 x-es 请求同样落到 fallback。带有效 x-es 的
-	// 解密失败路径由 reject_test.go 覆盖（同样断言 200）。
+	// 带有效 x-es 的解密失败路径由 reject_test.go 覆盖（同样断言 200）。
 	h := NewProxyHandler(ProxyHandlerConfig{
 		MasterKey: masterKeyForTest(),
 		Timeouts:  sharedconfig.NewTimeouts(time.Second),
@@ -597,10 +525,8 @@ func TestClientRequestShapes_Always200(t *testing.T) {
 	}
 }
 
-// TestEndpointRoutingContract 固化服务端 mux 的路由行为：/v3/* 四个端点都必须
-// 命中各自 handler，绝不会掉进 "/" 的 fallback（否则客户端会因为路径不存在而
-// 收到 404 之前的旧行为）。这四个 Handle 调用与 server/server.go 中注册的
-// 模式必须保持一致。
+// /v3/* 四个端点都必须命中各自 handler，绝不掉进 "/" 的 fallback；
+// 这四个 Handle 调用与 server/server.go 的注册模式必须一致。
 func TestEndpointRoutingContract(t *testing.T) {
 	const probeStub = "/v3/probe-stub"
 
@@ -622,7 +548,6 @@ func TestEndpointRoutingContract(t *testing.T) {
 		fb.Serve(w, r)
 	})
 
-	// 每个端点都必须命中自己的 handler，而不是 "/" 的 fallback。
 	for _, endpoint := range []string{"/v3/tcp", "/v3/udp", "/v3/icmp", probeStub} {
 		req := httptest.NewRequest(http.MethodPost, endpoint, nil)
 		rec := httptest.NewRecorder()
@@ -632,7 +557,6 @@ func TestEndpointRoutingContract(t *testing.T) {
 		}
 	}
 
-	// 未知路径在客户端形状下仍是 200 + HTML（而非 404）。
 	req := httptest.NewRequest(http.MethodGet, "/x9f2ab", nil)
 	req.Header.Set("User-Agent", clientStreamHeaders("")["User-Agent"])
 	rec := httptest.NewRecorder()
@@ -641,7 +565,6 @@ func TestEndpointRoutingContract(t *testing.T) {
 		t.Errorf("client-shaped unknown path: status = %d, want 200", rec.Code)
 	}
 
-	// 浏览器形状的未知路径得到 404。
 	req = httptest.NewRequest(http.MethodGet, "/x9f2ab", nil)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
 	rec = httptest.NewRecorder()
@@ -651,7 +574,6 @@ func TestEndpointRoutingContract(t *testing.T) {
 	}
 }
 
-// TestServeFallback_NotModified 覆盖条件请求矩阵。
 func TestServeFallback_NotModified(t *testing.T) {
 	fb := withDeployment(t, seedOf(802), "")
 
@@ -730,7 +652,6 @@ func TestServeFallback_NotModified(t *testing.T) {
 	}
 }
 
-// TestServeFallback_Head 验证 HEAD 与 GET 报出相同的长度但无正文。
 func TestServeFallback_Head(t *testing.T) {
 	fb := withDeployment(t, seedOf(803), "")
 
@@ -741,15 +662,12 @@ func TestServeFallback_Head(t *testing.T) {
 		t.Errorf("HEAD Content-Length = %q, GET = %q",
 			head.Header().Get("Content-Length"), get.Header().Get("Content-Length"))
 	}
-	// httptest.ResponseRecorder 不做 HEAD 去体（那是 net/http.Server 的职责），
-	// 因此这里只断言长度契约。
+	// ResponseRecorder 不做 HEAD 去体（那是 net/http.Server 的职责），只断言长度契约。
 	if head.Header().Get("Content-Length") == "" {
 		t.Error("HEAD response lacks Content-Length")
 	}
 }
 
-// TestServeFallback_ETagStablePerDeployment 验证同一路径的 ETag 在一个部署内
-// 稳定，跨部署变化。真实静态文件的 ETag 也具备这两个性质。
 func TestServeFallback_ETagStablePerDeployment(t *testing.T) {
 	fb := withDeployment(t, seedOf(804), "")
 	first := doFallback(fb, "/about", nil, http.MethodGet).Header().Get("ETag")
@@ -765,8 +683,6 @@ func TestServeFallback_ETagStablePerDeployment(t *testing.T) {
 	}
 }
 
-// TestServeFallback_CustomModesUnchanged 验证目录/自定义模式的行为与状态码
-// 不受真实性层影响。
 func TestServeFallback_CustomModesUnchanged(t *testing.T) {
 	fb := withDeployment(t, seedOf(806), "")
 
@@ -791,8 +707,7 @@ func TestServeFallback_CustomModesUnchanged(t *testing.T) {
 	}
 }
 
-// TestThemesJSON_Structure 约束主题资源的结构，避免"改了资源、随机参数却失效"：
-// token 必须落在模板里真实存在的元素上，且主题不能与模板脱节。
+// token 必须落在模板里真实存在的元素上，主题不能与模板脱节。
 func TestThemesJSON_Structure(t *testing.T) {
 	body := string(mustReadFallback("assets/fallback/template.html"))
 	for _, want := range []string{
@@ -808,7 +723,6 @@ func TestThemesJSON_Structure(t *testing.T) {
 		}
 	}
 
-	// 主题不能与模板脱节：头部的 tagline 必须包在可独立设置透明度的 <span> 里。
 	for _, theme := range themes {
 		if !strings.Contains(string(theme.CSS), "header p span{opacity:{{tagline_opacity}}}") {
 			t.Errorf("theme %q: tagline opacity is not scoped to the template's <span>", theme.Name)
@@ -819,11 +733,6 @@ func TestThemesJSON_Structure(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 渲染辅助
-// ---------------------------------------------------------------------------
-
-// renderAll 用给定种子渲染一组路径，返回 路径→字节。
 func renderAll(t *testing.T, seed []byte) map[string][]byte {
 	t.Helper()
 	fb := withDeployment(t, seed, "")
@@ -834,7 +743,6 @@ func renderAll(t *testing.T, seed []byte) map[string][]byte {
 	return out
 }
 
-// byteDiffRatio 返回两个字节串中不同位置的相对数量。
 func byteDiffRatio(a, b []byte) float64 {
 	if len(a) == 0 && len(b) == 0 {
 		return 0

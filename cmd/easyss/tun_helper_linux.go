@@ -16,16 +16,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// tunFdSocketPath 返回用于传递文件描述符的抽象 Unix 套接字路径。
-// 抽象套接字（以 @ 开头）不需要文件系统条目，也不会受到 pkexec 的挂载命名空间
-// 隔离影响。
+// 抽象套接字（@ 开头）不需要文件系统条目，也不受 pkexec 的挂载命名空间隔离影响。
 func tunFdSocketPath() string {
 	return fmt.Sprintf("@easyss-tun-fd-%d", os.Getpid())
 }
 
-// openTunDevice 使用 /dev/net/tun 和 TUNSETIFF ioctl 在 Linux 上创建 TUN 设备。
-// 它返回原始文件描述符以及内核实际分配的接口名。设备 MTU 由创建脚本设置
-// （见 runCreateScript 的第 9 个实参）：这里只负责把设备建出来。
+// 设备 MTU 由创建脚本的第 9 个实参设置，这里只负责把设备建出来。
 func openTunDevice(name string) (int, string, error) {
 	fd, err := unix.Open("/dev/net/tun", unix.O_RDWR, 0)
 	if err != nil {
@@ -60,12 +56,9 @@ func openTunDevice(name string) (int, string, error) {
 	}
 	actualName := string(ifr.name[:namelen])
 
-	// 该接口可能已经以*持久化* TUN 设备的形式存在：旧版 easyss 由 create 脚本通过
-	// "ip tuntap add mode tun" 创建它，上面的 TUNSETIFF 会重新挂接到这种设备，
-	// 而不会触及持久化标志。持久化设备比持有它的 fd 存活得更久，因此关闭时删除
-	// 失败（参见 removeLeftoverDevice）会让接口及其全部 TUN 路由永远留在路由表中。
-	// 清除该标志后，设备会随最后一个 fd 一起消失，这正是 fd 传递型辅助进程设计
-	// 所期望的行为。
+	// TUNSETIFF 会重新挂接已存在的持久化 TUN 设备而不碰持久化标志，而持久化设备比持有它的 fd 活得更久：
+	// 关闭时删除失败（见 removeLeftoverDevice）会让接口及其全部 TUN 路由永远留在路由表里。
+	// 清掉该标志后设备随最后一个 fd 消失，这才是 fd 传递型 helper 想要的行为。
 	if err := unix.IoctlSetInt(fd, unix.TUNSETPERSIST, 0); err != nil {
 		log.Warn("[TUN-HELPER] clear tun persist flag", "device", actualName, "err", err)
 	}
@@ -73,16 +66,9 @@ func openTunDevice(name string) (int, string, error) {
 	return fd, actualName, nil
 }
 
-// runCreateScript 将内嵌的 create_tun_dev.sh 写入临时文件，
-// 并使用设备配置执行它。mtu 由脚本应用到设备上（第 9 个位置参数）：
-// fd 路径下 tun2socks 只能设置自己 netstack 的 MTU，设备的 MTU 必须由建设备的
-// 这一侧负责，否则 netstack 会静默丢弃设备交上来的超限包（见
-// client/tun.Manager.engineMTU）。
-//
-// 位置参数由 tun.ScriptArgs 统一渲染（见 client/tun/script_args.go）。这里过去
-// 自己拼一份 8 个 string + mtu 的切片，漏掉了 linux 要求的"地址/掩码"形式：
-// 主进程直连路径传 198.18.0.1/255.255.0.0，fd 路径却传裸的 198.18.0.1，
-// 于是同一个 TUN 地址在两条路径上装成了 /16 与 /32 两种直连路由。
+// fd 路径下 tun2socks 只能设自己 netstack 的 MTU，设备 MTU 必须由建设备的这一侧写入（第 9 个位置参数），
+// 否则 netstack 会静默丢弃设备交上来的超限包（见 client/tun.Manager.engineMTU）。
+// 位置参数由 tun.ScriptArgs 统一渲染，包括 linux 要求的"地址/掩码"形式。
 func runCreateScript(device string, args tun.ScriptArgs) error {
 	if scripts.CreateTunBytes == nil {
 		return fmt.Errorf("no create script for linux")
@@ -94,8 +80,7 @@ func runCreateScript(device string, args tun.ScriptArgs) error {
 	}
 	defer os.Remove(namePath) //nolint:errcheck
 
-	// 设备名以调用方传入的为准：helper 拿到的是内核实际分配的名字，
-	// 而配置里那个只是"请求名"。
+	// 以调用方传入的为准：helper 拿到的是内核实际分配的名字，配置里那个只是请求名。
 	args.Dev.Device = device
 	if err := execScriptWithOutput("bash", namePath, args.Create()...); err != nil {
 		return err
@@ -103,10 +88,8 @@ func runCreateScript(device string, args tun.ScriptArgs) error {
 	return nil
 }
 
-// runCloseScript 将内嵌的 close_tun_dev.sh 写入临时文件并执行，并返回脚本的
-// 真实失败：脚本按"路由与设备是否真的清掉"给出退出码（见脚本的退出码契约），
-// 调用方据此决定是否需要回滚。过去这里的错误被吞掉——残留的分流路由会把全机
-// IPv4 流量送进一个没人读的设备，也就是"停止 TUN 后断网"。
+// 脚本按"路由与设备是否真的清掉"给出退出码，调用方据此决定是否回滚：
+// 残留的分流路由会把全机 IPv4 流量送进没人读的设备，也就是"停止 TUN 后断网"。
 func runCloseScript(device string, args tun.ScriptArgs) error {
 	if scripts.CloseTunBytes == nil {
 		return fmt.Errorf("no close script for linux")
@@ -125,11 +108,8 @@ func runCloseScript(device string, args tun.ScriptArgs) error {
 	return nil
 }
 
-// tunRouteResidue 报告探测地址是否仍被路由进 TUN 设备，并返回探测输出。
-//
-// linux 的 TUN 路由按设备安装（ip route replace ... dev tun0），因此按设备名
-// 判定。它是变量以便测试注入探测结果（里面的命令执行走 routeProbeCmd，同样是
-// 可注入的变量）：真实的残留路由需要 root 才能造出来。
+// linux 的 TUN 路由按设备安装（ip route replace ... dev tun0），因此按设备名判定。
+// 变量以便测试注入探测结果：真实的残留路由需要 root 才能造出来。
 var tunRouteResidue = func(device, _ string) (string, bool) {
 	if device == "" {
 		return "", false
@@ -149,13 +129,8 @@ var tunRouteResidue = func(device, _ string) (string, bool) {
 	return out, false
 }
 
-// removeLeftoverDevice 在 TUN 接口未被 close 脚本删除时将其删除。删除接口会
-// 一并带走其上的 TUN 路由；而只要有进程仍持有设备打开，close 脚本自身的
-// "ip tuntap del" 就做不到这一点：iproute2 通过 TUNSETIFF 挂接设备，内核会拒绝
-// 再次挂接一个已挂接的设备（报 "device or resource busy"）。客户端与 close 脚本
-// 并发地关闭其 fd，因此那次删除曾经失败，接口及其全部分流路由都留在路由表中：
-// 所有流量随后进入一个无人读取的设备，停止 TUN 后便表现为"网络已断开"。
-// "ip link del" 无论 fd 是否仍处于打开状态都会拆除接口。
+// 只要有进程仍持有设备打开，close 脚本的 "ip tuntap del" 就会被内核拒绝（"device or resource busy"），
+// 接口及其分流路由于是留在路由表里，所有流量进入无人读取的设备；`ip link del` 不受 fd 打开状态影响。
 func removeLeftoverDevice(device string) {
 	if _, err := util.Command("ip", "link", "show", device); err != nil {
 		return // the close script already deleted it
@@ -167,13 +142,8 @@ func removeLeftoverDevice(device string) {
 	}
 }
 
-// ensureTunRoutes 校验 TUN 接口仍处于 up 状态且 TUN 路由仍然存在，当它们被清除时
-// （例如 NetworkManager 在连接变更或睡眠/唤醒后所为）重新运行 create 脚本。
-// 重复应用已有配置所产生的错误会被容忍：ip 只会报出 "File exists"。
-//
-// 重跑同时会把设备 MTU 重新写回配置值（脚本的第 9 个位置参数）：设备 MTU 与
-// netstack 的 MTU 不一致时会被静默丢包（见 client/tun.Manager.engineMTU），
-// 因此这条重放路径也是它的自愈点。
+// 接口不在 up 或路由已被清掉（NetworkManager 在连接变更、睡眠/唤醒后所为）时重跑 create 脚本；
+// "File exists" 之类的重复应用错误会被容忍。重跑同时把设备 MTU 写回配置值，这是它的自愈点。
 func ensureTunRoutes(device string, cfg *proxy.TunConfig) error {
 	needCreate := false
 

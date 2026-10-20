@@ -253,10 +253,8 @@ func TestNewTCPHandler(t *testing.T) {
 	}
 }
 
-// TestTCPHandlerDialTarget 覆盖 TCP handler 共享的拨号部分：直连拨号把网络名
-// 与目标原样下传（地址族由 dialOutbound 决定），拨号后的 SSRF 防护会拒绝 LAN
-// 远端地址。拨号超时和 keepalive 都无法从已建立的连接上观测到，因此它们由
-// TestOutboundDialer 覆盖。
+// TestTCPHandlerDialTarget 守住直连拨号把网络名与目标原样下传，且拨号后的 SSRF 防护
+// 拒绝 LAN 远端地址（拨号超时与 keepalive 无法从已建立连接上观测，由 TestOutboundDialer 覆盖）。
 func TestTCPHandlerDialTarget(t *testing.T) {
 	t.Run("网络名与目标原样下传", func(t *testing.T) {
 		h := newTCPHandler(sharedconfig.Timeouts{StreamIdle: 120 * time.Second, Base: 30 * time.Second}, nil)

@@ -20,23 +20,17 @@ type StreamMeter struct {
 	last         atomic.Int64
 	state        atomic.Value
 	lastLoggedAt atomic.Int64
-	// done 停止观察 goroutine（若已启动）。
-	done chan struct{}
-	// loopStarted 保证观察 goroutine 至多启动一次，并让 Close 能区分
-	// "已启动、需要等待它退出"与"从未启动、不能等"（见 Close）。
+	// done 停止观察 goroutine（若已启动）；loopStarted 保证它至多启动一次，并让 Close 能区分
+	// "已启动、需要等待它退出"与"从未启动、不能等"。
+	done         chan struct{}
 	loopStarted  atomic.Bool
 	loopFinished chan struct{}
 	closeOnce    sync.Once
 }
 
-// NewStreamMeter 创建一条流的字节计数与停顿探测器。
-//
-// 观察 goroutine **不在构造时启动**：停顿判定要求 total ≥ stallThreshold(1MB)，
-// 在那之前计数器读数没有任何意义，因此绝大多数流（短命流、空闲的长连接、
-// 心跳流）一生都用不到它。此前每条 TCP 流都无条件带一个 goroutine 加一个 5s
-// ticker，而它每次都只是空转——每条流约 1KB 常驻加一次每 5s 的唤醒，在成百
-// 上千条并发流上纯属浪费。惰性化不改变可观测语义：从未越过阈值的流，此前也
-// 永远不会打出停顿日志。
+// NewStreamMeter 创建一条流的字节计数与停顿探测器。观察 goroutine 不在构造时启动：停顿判定
+// 要求 total ≥ stallThreshold，绝大多数流（短命流、空闲长连接、心跳流）一生都用不到它，惰性
+// 化因此省掉每条流一个 goroutine 加一个 5s ticker，且不改变可观测语义。
 func NewStreamMeter(component, target string) *StreamMeter {
 	m := &StreamMeter{
 		component:    component,
@@ -51,10 +45,8 @@ func NewStreamMeter(component, target string) *StreamMeter {
 func (m *StreamMeter) Add(n int, state string) {
 	if n > 0 {
 		total := m.total.Add(int64(n))
-		// 越过阈值之后观察者才有可判定的事可做。先做一次只读的 Load 再 CAS：
-		// total 只会继续增长，少了这层短路，热路径上每次 Add 都要付一次注定
-		// 失败的原子 RMW。CAS 仍然负责并发下的唯一性（Load 为 false 也不代表
-		// 我们抢到了启动权）。
+		// 先做只读的 Load 再 CAS：total 只会继续增长，少了这层短路，热路径上每次 Add
+		// 都要付一次注定失败的原子 RMW；CAS 仍负责并发下的唯一性。
 		if total >= stallThreshold && !m.loopStarted.Load() && m.loopStarted.CompareAndSwap(false, true) {
 			go m.loop()
 		}
@@ -68,15 +60,12 @@ func (m *StreamMeter) SetState(state string) {
 	}
 }
 
-// Bytes 返回该流中继的总字节数。
 func (m *StreamMeter) Bytes() int64 {
 	return m.total.Load()
 }
 
-// Close 停止停顿探测，并等待观察 goroutine（若已启动）退出。它是幂等的。
-//
-// 只有真正启动过 goroutine 时才等待：未启动时 loopFinished 永远不会关闭，
-// 在那里等待就是永久阻塞。
+// Close 停止停顿探测并等待观察 goroutine 退出，幂等。只有真正启动过 goroutine 时才等待：
+// 未启动时 loopFinished 永远不会关闭，在那里等待就是永久阻塞。
 func (m *StreamMeter) Close() {
 	m.closeOnce.Do(func() { close(m.done) })
 	if m.loopStarted.Load() {

@@ -50,10 +50,8 @@ func startTestDNSServer(t *testing.T, fail bool) string {
 	return pc.LocalAddr().String()
 }
 
-// startBlackholeDNSServer 在随机端口上启动一个只收不回的 UDP 服务，模拟
-// "黑洞"上游：查询一直不产生应答，客户端只能等到自己的截止时间。被墙的公共
-// DNS、或指向不可达网段的错误配置都是这种形态（区别于 SERVFAIL/RST 那种
-// 立即失败）。返回地址并注册清理函数。
+// startBlackholeDNSServer 模拟"黑洞"上游：只收不回，客户端只能等到自己的截止时间
+// （区别于 SERVFAIL/RST 那种立即失败）。
 func startBlackholeDNSServer(t *testing.T) string {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -132,10 +130,8 @@ func startTestDNSHandler(t *testing.T, handler dns.HandlerFunc) string {
 	return pc.LocalAddr().String()
 }
 
-// startCorruptEDNS0DNSServer 复现"OPT 记录被放进 ANSWER 段、真正的记录被挤到
-// ADDITIONAL 段"这一类畸形应答（部分家用路由器/缓存对 EDNS0 查询就是这样应答
-// 的）。严格解析器（dig/BIND）判为畸形报文，宽松解析器（Go 标准库解析器）只
-// 看到一条 41 类型记录、拿不到任何地址，表现为解析失败（见 NormalizeEDNS0Answer）。
+// startCorruptEDNS0DNSServer 复现家用路由器常见的畸形 EDNS0 应答：OPT 被放进 ANSWER
+// 段，Go 标准库解析器只看到一条 41 类型记录、拿不到地址，表现为解析失败。
 func startCorruptEDNS0DNSServer(t *testing.T) string {
 	t.Helper()
 	return startTestDNSHandler(t, dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
@@ -234,13 +230,8 @@ func TestForwardQueryAllServersUnavailable(t *testing.T) {
 	}
 }
 
-// TestForwardQuerySkipsSelfAsUpstream 验证转发服务器永远不会把自身作为回退
-// 上游。若没有该过滤，回退会递归进自身，堆积 goroutine 和 UDP socket，直到
-// 单次查询超时解开这条链。
-//
-// 构造必须用生产监听地址（":53"）：过滤条件曾经是 listenAddr 的字符串相等，
-// 于是改用通配地址后它永不命中——而 SystemDNSServers 的条目一律是 host:port，
-// 永远不可能等于 ":53"。用 127.0.0.1:53 构造的测试会"通过但空转"，掩盖该回归。
+// TestForwardQuerySkipsSelfAsUpstream 守住自身地址过滤：漏掉它会递归进自身堆积 goroutine
+// 与 socket。必须用生产监听地址 ":53" 构造，用 127.0.0.1:53 的测试会"通过但空转"。
 func TestForwardQuerySkipsSelfAsUpstream(t *testing.T) {
 	old := systemDNSServersFunc
 	systemDNSServersFunc = func() []string {

@@ -126,7 +126,7 @@ func TestCollectConcurrentWithReset(t *testing.T) {
 
 // TestStreamMeterStartsLoopLazily 固定"未越过停顿阈值就不起观察 goroutine"
 // 这一内存/调度契约：停顿判定要求 total ≥ stallThreshold，在那之前观测没有
-// 任何意义，而此前每条 TCP 流都无条件带一个 goroutine 加一个 5s ticker。
+// 任何意义，而每条流都无条件带一个 goroutine 加一个 5s ticker 的代价太大。
 func TestStreamMeterStartsLoopLazily(t *testing.T) {
 	m := NewStreamMeter("test", "example.com:80")
 	defer m.Close()
@@ -148,10 +148,8 @@ func TestStreamMeterStartsLoopLazily(t *testing.T) {
 	}
 }
 
-// TestStreamMeterCloseBeforeThreshold 固定"从未启动观察 goroutine 时 Close
-// 不能阻塞"：loopFinished 只有 loop 退出时才关闭，因此 Close 必须先用
-// loopStarted 区分两种情形，否则这条路径会永久挂住——而它正是绝大多数流的
-// 路径（短命流、空闲长连接）。
+// TestStreamMeterCloseBeforeThreshold 守住从未启动观察 goroutine 时 Close 不能阻塞：
+// loopFinished 只在 loop 退出时关闭，Close 必须先用 loopStarted 区分两种情形。
 func TestStreamMeterCloseBeforeThreshold(t *testing.T) {
 	m := NewStreamMeter("test", "example.com:80")
 	m.Add(1024, "read_target")

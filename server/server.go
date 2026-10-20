@@ -38,23 +38,12 @@ type Server struct {
 	statsOnce  sync.Once
 }
 
-// acmeProfileShortLived 是 Let's Encrypt 的短生命周期证书 profile（约 160 小时）。
-//
-// 它只为 IP 标识符而设：LE 的 IP 地址证书必须是短生命周期证书（见
-// https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability），而
-// shortlived 正是唯一允许 ip 标识符的 profile（其有效期列在
-// https://letsencrypt.org/docs/profiles/）。名称写错时 acmez 会对着 ACME
-// directory 的 profiles 列表报 `unknown profile name`，因此这是启动期就能暴露的
-// 明确失败，不会静默换成另一种证书。
+// acmeProfileShortLived 只为 IP 标识符而设：LE 的 IP 地址证书必须是短生命周期证书，
+// shortlived 是唯一允许 ip 标识符的 profile，名称写错会在启动期报 unknown profile name。
 const acmeProfileShortLived = "shortlived"
 
-// New 接受一份服务端配置。它自己校验一次（config.FileConfig.Validate），而不是
-// 假定调用方一定走 config.LoadConfig：New 是导出 API，测试与嵌入式调用会直接
-// 手搓 FileConfig，把校验只放在配置文件路径上等于给它们留一条绕过校验的口子
-// （未知 allowed_methods 被静默丢弃、越界 h2_* 被标准库静默替换）。
-//
-// LoadConfig 的调用方不会因此多付一次成本：Validate 是纯内存检查，且对已归一化
-// 的配置幂等。
+// New 自己校验一次：测试与嵌入式调用会直接手搓 FileConfig，只靠配置加载路径校验等于留一条
+// 绕过口子。Validate 是纯内存检查且幂等。
 func New(cfg *config.FileConfig) (*Server, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -131,10 +120,8 @@ func (s *Server) manageCert(storage certmagic.Storage, disableARI bool) (*tls.Co
 	acmeCfg.Agreed = true
 	acmeCfg.Email = s.cfg.Server.Email
 	acmeCfg.DisableHTTPChallenge = true
-	// IP 标识符必须显式请求短生命周期 profile：LE 对 ip 标识符会自动选它，但"IP
-	// 证书只能是短生命周期证书"是这个模式的硬约束，与其依赖服务端自动选择，不如
-	// 在请求里写明——profile 名不再是 LE 认识的名字时会以 `unknown profile name`
-	// 在启动阶段失败，而不是悄悄换一种证书。域名路径不设 profile，保持既有行为。
+	// IP 标识符必须显式请求短生命周期 profile：LE 对 ip 标识符会自动选它，但"IP 证书只能是
+	// 短生命周期证书"是这个模式的硬约束，写在请求里才不依赖服务端的自动选择。
 	if s.cfg.ACMESubjectIsIP() {
 		acmeCfg.Profile = acmeProfileShortLived
 	}
@@ -248,11 +235,10 @@ func shouldRetryFreshCertificate(err error) bool {
 	if err == nil {
 		return false
 	}
-	// ACME 的失败是 acme.Problem：优先按类型/状态码分类，detail 文本只在
-	// Problem 类型本身不足以区分时兜底。
+	// 按类型分类 ACME 失败：detail 文本只在 Problem 类型本身不足以区分时兜底。
 	if problem, ok := errors.AsType[acme.Problem](err); ok {
-		// 404 在 ACME 语义下基本只来自 ARI（certID 不存在）；它比 detail 文本
-		// 略宽，但重签只发生在启动阶段，接受这个已知的宽判据。
+		// 404 在 ACME 语义下基本只来自 ARI（certID 不存在）。它比 detail 文本略宽，
+		// 但重签只发生在启动阶段，接受这个已知的宽判据。
 		if problem.Type == acme.ProblemTypeAlreadyReplaced ||
 			problem.Status == http.StatusNotFound {
 			return true
@@ -262,7 +248,7 @@ func shouldRetryFreshCertificate(err error) bool {
 			strings.Contains(detail, "could not validate ari") ||
 			strings.Contains(detail, "requested certificate was not found")
 	}
-	// 兼容没有 acme.Problem 包装的路径（例如上层把错误文本重新包装）。
+	// 兼容没有 acme.Problem 包装的路径（上层可能把错误文本重新包装）。
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "replaces field") ||
 		strings.Contains(msg, "could not validate ari") ||
@@ -289,10 +275,7 @@ func cleanCertmagicDomainAssets(ctx context.Context, storage certmagic.Storage, 
 func (s *Server) Start() error {
 	cfg := s.cfg
 	srvCfg := cfg.Server
-	// 基础超时派生出流空闲、UDP 空闲、拨号与 h2 连接空闲。经 config.LoadConfig
-	// 加载的配置已在 applyDefaults 里归一化并写回，这里再算一次（幂等）是为了
-	// 覆盖不经过配置加载的调用方（测试、嵌入式使用会直接手搓 FileConfig），
-	// 因此启动日志与后续全部派生始终看到同一个值（见 sharedconfig.NormalizeTimeout）。
+	// 这里再算一次（幂等）是为了覆盖不经过配置加载的调用方，启动日志与后续派生看到同一个值。
 	timeout := sharedconfig.TimeoutDuration(cfg.Timeout)
 	log.Info("[SERVER] starting", "listen", srvCfg.ListenAddr(), "host", srvCfg.Host, "timeout", int(timeout.Seconds()))
 
@@ -304,9 +287,8 @@ func (s *Server) Start() error {
 	if cfg.UsesManualCertificate() {
 		log.Info("[SERVER] TLS mode: cert files", "cert", srvCfg.CertPath, "key", srvCfg.KeyPath)
 	} else if cfg.ACMESubjectIsIP() {
-		// IP-only 模式：没有域名，Let's Encrypt 直接为这个公网 IPv4 签发 IP 证书。
-		// 它是短生命周期证书（约 160 小时，后台自动续期），且只能用 tls-alpn-01
-		// 验证——公网 443 必须可达，首次签发与每一次续期都一样。
+		// IP-only 模式：LE 直接为这个公网 IPv4 签发短生命周期证书，只能用 tls-alpn-01 验证，
+		// 因此公网 443 在首次签发与每次续期时都必须可达。
 		log.Info("[SERVER] TLS mode: certmagic (Let's Encrypt IP certificate)",
 			"subject", srvCfg.Host, "email", srvCfg.Email, "profile", acmeProfileShortLived,
 			"challenge", "tls-alpn-01", "acme_requires", "inbound tcp/443 from the internet")
@@ -316,9 +298,6 @@ func (s *Server) Start() error {
 
 	timeouts := sharedconfig.NewTimeouts(timeout)
 
-	// 构造本次部署唯一的回退实例：模式配置与部署级身份都在这里一次性确定，
-	// 随后由各个 handler 共享。构造失败会直接让服务器启动失败，不会留下
-	// 部分改写的可见状态。
 	fallback, err := handler.NewFallback(handler.FallbackConfig{
 		Target:       cfg.Fallback.Target,
 		PreserveHost: cfg.Fallback.PreserveHost,
@@ -385,9 +364,7 @@ func (s *Server) Start() error {
 
 	s.httpServer = buildHTTPServer(cfg, tlsConfig, s.mux, timeout)
 
-	// 把生效的 HTTP/2 上行参数打进启动日志：上传速度上不去时，第一件事就是确认
-	// 服务端到底给了多大的流级/连接级窗口与多少条并发流（两个窗口可被配置覆盖，
-	// 并发流上限固定为 sharedconfig.HTTP2ServerMaxConcurrentStreams）。
+	// 打进生效的 HTTP/2 参数：上传速度上不去时，第一件事是确认服务端给了多大的窗口与并发流。
 	log.Info("[SERVER] listening",
 		"addr", srvCfg.ListenAddr(),
 		"routes", []string{"/", sharedconfig.EndpointTCP, sharedconfig.EndpointUDP, sharedconfig.EndpointICMP, sharedconfig.EndpointProbe},
@@ -400,15 +377,8 @@ func (s *Server) Start() error {
 	return s.httpServer.ListenAndServeTLS("", "")
 }
 
-// buildHTTPServer 组装 HTTP 服务器，其 HTTP/2 参数按上传吞吐量来定尺寸：
-// 流级接收窗口决定单条上传流的在途数据量（吞吐 ≈ 窗口/RTT），连接级窗口则是
-// "已收到但未消费"请求体的每连接上界，并发流上限决定该连接可同时承载的流数与
-// handler 规模（三者语义见 sharedconfig 中对应常量的说明）。
-//
-// 它只读取已归一化的配置（经 config.LoadConfig 的调用方拿到的是写回了默认值的
-// 结构体），因此这里不再保留第二套 >0 兜底：那会让"0 使用默认值"与"越界值被
-// 标准库替换"看起来都像正常配置。直接手搓 FileConfig 的调用方（测试、嵌入式）
-// 仍会拿到 sharedconfig 常量，因为 applyDefaults 之外这里也把 0 视作默认。
+// buildHTTPServer 的 HTTP/2 参数按上传吞吐量定尺寸：流级接收窗口决定单条上传流的在途数据量
+// （吞吐 ≈ 窗口/RTT），连接级窗口是每连接上界。这里只保留 0 值兜底。
 func buildHTTPServer(cfg *config.FileConfig, tlsConfig *tls.Config, mux *http.ServeMux, timeout time.Duration) *http.Server {
 	http2Cfg := &http.HTTP2Config{
 		MaxReadFrameSize:              effectiveH2(cfg.Transport.H2MaxFrameSize, sharedconfig.HTTP2ServerMaxReadFrameSize),
@@ -417,10 +387,8 @@ func buildHTTPServer(cfg *config.FileConfig, tlsConfig *tls.Config, mux *http.Se
 		MaxConcurrentStreams:          sharedconfig.HTTP2ServerMaxConcurrentStreams,
 	}
 
-	// 连接级窗口同时是流级窗口的硬上限：每个字节都要同时扣减两个窗口，因此把它配得
-	// 比流级窗口小，单条流的在途额度就由它决定——那正是"上传速度上不去"的一类配置，
-	// 而且不会以任何其他方式暴露出来，所以这里明确告警。只告警不纠正：把连接窗口
-	// 压小往往是有意的内存收敛，替调用方改大反而违背其意图。
+	// 连接级窗口同时是流级窗口的硬上限：配得比流级窗口小，单条流的在途额度就由它决定，
+	// 且不会以其他方式暴露。只告警不纠正：压小连接窗口往往是有意的内存收敛。
 	if http2Cfg.MaxReceiveBufferPerConnection < http2Cfg.MaxReceiveBufferPerStream {
 		log.Warn("[SERVER] h2 connection receive window is smaller than the per-stream window: the effective per-stream in-flight limit is the connection window",
 			"h2_recv_buf_conn", http2Cfg.MaxReceiveBufferPerConnection,
@@ -442,9 +410,7 @@ func buildHTTPServer(cfg *config.FileConfig, tlsConfig *tls.Config, mux *http.Se
 	return srv
 }
 
-// effectiveH2 返回一个 h2 参数的生效值：配置为 0 时取默认值，否则原样返回。
-// 越界值由 config.LoadConfig 拒绝；这里保留 0 值兜底是为了让绕过配置加载的
-// 调用方（测试、嵌入式）仍然得到 sharedconfig 的默认值，而不是 0。
+// 越界值由 config.LoadConfig 拒绝；0 值兜底让绕过配置加载的调用方拿到默认值而不是 0。
 func effectiveH2(v, def int) int {
 	if v == 0 {
 		return def
@@ -455,7 +421,6 @@ func effectiveH2(v, def int) int {
 func (s *Server) Shutdown(ctx context.Context) error {
 	log.Info("[SERVER] shutting down")
 
-	// 停止 stats 循环 goroutine，使其不会在关闭后泄漏。
 	s.statsOnce.Do(func() {
 		if s.statsDone != nil {
 			close(s.statsDone)
@@ -472,9 +437,8 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// stdErrorLog 将 Go 内部 http.Server/HTTP2 的日志（连接级错误、PING 超时、
-// 协议错误、TLS 握手错误等）转接到 easyss 的 slog 日志器。handler 的 panic
-// 由 ProxyHandler.ServeHTTP 中的 recover 单独处理。
+// stdErrorLog 把 http.Server/HTTP2 的内部日志（连接级错误、PING 超时、TLS 握手错误）转接到
+// easyss 的 slog 日志器。
 func stdErrorLog() *stdlog.Logger {
 	return stdlog.New(slogErrorWriter{}, "", 0)
 }

@@ -31,9 +31,8 @@ func (s *mockStream) Write(p []byte) (int, error) {
 func (s *mockStream) CloseWrite() error { return nil }
 func (s *mockStream) Close() error      { return nil }
 
-// awaitableStream 是实现了三个可选引导接口的测试流（transport.ResponseAwaiter/
-// ConnLiveness/ConnInvalidator），用来验证代理层的引导状态机：判死重试、判活后
-// 继续等待，以及调用顺序（失效连接必须先于关闭流）。
+// awaitableStream 实现 ResponseAwaiter/ConnLiveness/ConnInvalidator 三个可选接口，
+// 用来驱动引导状态机：判死重试、判活后继续等、以及"失效连接先于关闭流"的顺序。
 type awaitableStream struct {
 	mockStream
 
@@ -92,13 +91,11 @@ var (
 	_ transport.ConnInvalidator = (*awaitableStream)(nil)
 )
 
-// alwaysDeadline 模拟"窗口到点且连接不可往返"：AwaitResponse 直接报告窗口超时，
-// 判活返回"无法判定"。
+// alwaysDeadline 模拟窗口到点且连接不可往返：AwaitResponse 直接报告超时。
 func alwaysDeadline(context.Context) error { return context.DeadlineExceeded }
 
-// TestOpenAndBootstrap_DeadlineRetriesOnFreshConnection 验证引导阶段的判死重试：
-// 等待窗口到点且判活无法确认时，失效并关闭本流所在的连接、丢弃其余空闲连接，
-// 然后在新的连接上重试，应用侧只看到一次成功的引导。
+// TestOpenAndBootstrap_DeadlineRetriesOnFreshConnection 验证判死重试：窗口到点且无法
+// 判活时，失效并关闭本流所在连接、丢弃其余空闲连接，再在新连接上重试。
 func TestOpenAndBootstrap_DeadlineRetriesOnFreshConnection(t *testing.T) {
 	first := &awaitableStream{await: alwaysDeadline}
 	second := &awaitableStream{}
@@ -122,9 +119,8 @@ func TestOpenAndBootstrap_DeadlineRetriesOnFreshConnection(t *testing.T) {
 	}
 }
 
-// TestOpenAndBootstrap_LateResponseKeepsAliveConnection 验证判活的用途：等待窗口
-// 到点但同连接探测确认可往返（服务端只是还在解析目标域名）时不重试、不关连接，
-// 交回中继继续等——这正是"慢"与"死"的分界。
+// TestOpenAndBootstrap_LateResponseKeepsAliveConnection 验证判活的用途：探测确认同
+// 连接可往返（服务端只是还在解析目标域名）时不重试、不关连接——"慢"与"死"的分界。
 func TestOpenAndBootstrap_LateResponseKeepsAliveConnection(t *testing.T) {
 	first := &awaitableStream{await: alwaysDeadline, alive: true, aliveKnown: true}
 	tr := &mockTransport{streams: []transport.Stream{first}}
@@ -147,8 +143,8 @@ func TestOpenAndBootstrap_LateResponseKeepsAliveConnection(t *testing.T) {
 	}
 }
 
-// TestOpenAndBootstrap_TransportErrorRetriesImmediately 验证传输层错误（连接在
-// 写入/响应阶段就坏了）立即换连接重试，不必等满窗口，也不做判活探测。
+// TestOpenAndBootstrap_TransportErrorRetriesImmediately 验证传输层错误立即换连接重试，
+// 不等满窗口，也不做判活探测。
 func TestOpenAndBootstrap_TransportErrorRetriesImmediately(t *testing.T) {
 	first := &awaitableStream{await: func(context.Context) error { return errors.New("connection reset by peer") }}
 	second := &awaitableStream{}
@@ -169,9 +165,8 @@ func TestOpenAndBootstrap_TransportErrorRetriesImmediately(t *testing.T) {
 	}
 }
 
-// TestOpenAndBootstrap_ExhaustedAttemptsReportError 验证尝试次数耗尽后把最后一次
-// 的失败交给应用，并且每次放弃都丢弃了其余空闲连接（否则后续请求会逐个再踩一遍
-// 旧网络上的死连接）。
+// TestOpenAndBootstrap_ExhaustedAttemptsReportError 验证次数耗尽后把最后一次失败交给
+// 应用，且每次放弃都丢弃其余空闲连接——否则后续请求会逐个再踩一遍旧网络的死连接。
 func TestOpenAndBootstrap_ExhaustedAttemptsReportError(t *testing.T) {
 	streams := make([]transport.Stream, 0, bootstrapMaxAttempts)
 	for range bootstrapMaxAttempts {
@@ -195,8 +190,8 @@ func TestOpenAndBootstrap_ExhaustedAttemptsReportError(t *testing.T) {
 	}
 }
 
-// TestOpenAndBootstrap_ContextCanceledNoRetry 验证上层取消（核心停止、本地连接
-// 已断）时立即上报 ctx 错误，不做重试，也不丢弃连接池。
+// TestOpenAndBootstrap_ContextCanceledNoRetry 验证上层取消（核心停止、本地连接已断）
+// 时立即上报 ctx 错误，不重试也不丢弃连接池。
 func TestOpenAndBootstrap_ContextCanceledNoRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	first := &awaitableStream{await: func(context.Context) error {
@@ -216,15 +211,14 @@ func TestOpenAndBootstrap_ContextCanceledNoRetry(t *testing.T) {
 	if tr.closeIdleCalls() != 0 {
 		t.Errorf("expected no CloseIdle call after cancellation, got %d", tr.closeIdleCalls())
 	}
-	// 取消不是判死：只关闭本流，绝不能失效连接——这条连接是健康的，且被同槽位
-	// 其他在飞流共享，关掉它会连带中断它们。
+	// 取消不是判死：只关本流，绝不失效连接——它健康且被同槽位的在飞流共享。
 	if _, _, invalidates, closes := first.counters(); invalidates != 0 || closes != 1 {
 		t.Errorf("first stream: invalidates=%d closes=%d, want 0/1", invalidates, closes)
 	}
 }
 
-// TestOpenAndBootstrap_ResponseReadyNoRetry 验证"响应已就绪"（含服务端拒绝）不
-// 触发任何重试或连接失效：分类交给首次 Read。
+// TestOpenAndBootstrap_ResponseReadyNoRetry 验证"响应已就绪"（含服务端拒绝）不触发
+// 重试或连接失效，分类交给首次 Read。
 func TestOpenAndBootstrap_ResponseReadyNoRetry(t *testing.T) {
 	first := &awaitableStream{await: func(context.Context) error { return nil }}
 	tr := &mockTransport{streams: []transport.Stream{first}}
@@ -244,10 +238,9 @@ func TestOpenAndBootstrap_ResponseReadyNoRetry(t *testing.T) {
 	}
 }
 
-// TestOpenAndBootstrap_SettlesBeforeDroppingIdleConnections 验证判死路径的动作
-// 顺序：失效连接 → 关闭流 → 等本流 RoundTrip 收敛 → CloseIdle()。顺序反了
-// （尤其是 CloseIdle 提前）会让 CloseIdleConnections 漏掉这条仍被在飞流占用的
-// 连接，重试的 Open 会再次拿到它，白费一次尝试。
+// TestOpenAndBootstrap_SettlesBeforeDroppingIdleConnections 验证判死路径的顺序：
+// 失效连接 → 关闭流 → 等本流 RoundTrip 收敛 → CloseIdle()。CloseIdle 提前会漏掉这条
+// 仍被在飞流占用的连接，重试的 Open 再次拿到它，白费一次尝试。
 func TestOpenAndBootstrap_SettlesBeforeDroppingIdleConnections(t *testing.T) {
 	settledAfterClose := false
 	first := &awaitableStream{}
@@ -280,30 +273,26 @@ func TestOpenAndBootstrap_SettlesBeforeDroppingIdleConnections(t *testing.T) {
 	}
 }
 
-// TestOpenAndBootstrap_ResponseWindowIsBounded 验证等待窗口真的被应用于
-// AwaitResponse：一个在窗口到点前不会自己返回的流，最终仍由引导窗口打断。
+// TestOpenAndBootstrap_ResponseWindowIsBounded 验证引导窗口真的作用到 AwaitResponse：
+// 在窗口到点前不会自己返回的流，最终仍由该窗口打断。
 func TestOpenAndBootstrap_ResponseWindowIsBounded(t *testing.T) {
 	const window = 20 * time.Millisecond
 	old := bootstrapResponseTimeout
 	bootstrapResponseTimeout = window
 	t.Cleanup(func() { bootstrapResponseTimeout = old })
 
-	// 第一次 AwaitResponse 是引导等待窗口；后续调用是判死后的 settle 等待，
-	// 只记录第一次的耗时。
+	// 第一次 AwaitResponse 是引导等待窗口，后续是判死后的 settle，只记第一次耗时。
 	windowEnded := make(chan time.Duration, 1)
 	var recordOnce sync.Once
 	await := func(ctx context.Context) error {
 		<-ctx.Done()
 
-		// 窗口起点必须由 deadline 反推，而不是在 AwaitResponse 内部取 now：
-		// 窗口由 awaitBootstrapResponse 里的 context.WithTimeout 创建，两者之间
-		// 还隔着一次接口调用与并发原语开销，定时器却只在 deadline 之后触发，
-		// 因此"从调用内部起算"量出的值恒小于窗口，只靠定时器过冲掩盖。Windows
-		// 上该开销会被调度放大到毫秒级（实测 18.3ms < 20ms），断言便会偶发失败。
+		// 窗口起点必须由 deadline 反推：窗口在 awaitBootstrapResponse 的
+		// context.WithTimeout 处创建，与这里的接口调用之间还有开销，从调用内部起算
+		// 量出的值恒小于窗口；Windows 上该开销被调度放大到毫秒级，断言会偶发失败。
 		deadline, ok := ctx.Deadline()
 		if !ok {
-			// 没有 deadline 就没法衡量窗口：直接失败，而不是让 <-ctx.Done()
-			// 永远阻塞（那只会把失败变成测试超时挂起）。
+			// 没有 deadline 就无从衡量窗口：直接失败，别让 <-ctx.Done() 挂起成测试超时。
 			return errors.New("AwaitResponse was called without the bootstrap window")
 		}
 		recordOnce.Do(func() { windowEnded <- time.Since(deadline.Add(-window)) })
@@ -336,7 +325,7 @@ type mockTransport struct {
 	closeIdleCount int
 	streams        []transport.Stream
 	openErrs       []error
-	// onCloseIdle 在 CloseIdle 递增计数后被调用，供用例断言判死路径的动作顺序。
+	// onCloseIdle 在计数递增后回调，供用例断言判死路径的动作顺序。
 	onCloseIdle func()
 }
 
@@ -493,7 +482,7 @@ func TestOpenAndBootstrap_OpenFailureNoRetry(t *testing.T) {
 	}
 }
 
-// saltCapturingTransport 包装一个 Transport，并记录每次 Open 调用中的 Salt。
+// saltCapturingTransport 包装 Transport 并记录每次 Open 的 Salt。
 type saltCapturingTransport struct {
 	inner transport.Transport
 	mu    sync.Mutex
@@ -511,8 +500,8 @@ func (t *saltCapturingTransport) CloseIdle()                      {}
 func (t *saltCapturingTransport) Stats() transport.TransportStats { return transport.TransportStats{} }
 func (t *saltCapturingTransport) Close() error                    { return t.inner.Close() }
 
-// TestOpenAndBootstrap_FreshSaltPerAttempt 验证每次尝试都重新生成 salt（服务端的
-// 重放保护因此不会把重试当成重放）。
+// TestOpenAndBootstrap_FreshSaltPerAttempt 验证每次尝试都重新生成 salt，服务端的重放
+// 保护因此不会把重试当成重放。
 func TestOpenAndBootstrap_FreshSaltPerAttempt(t *testing.T) {
 	tr := &mockTransport{
 		streams: []transport.Stream{
@@ -542,17 +531,10 @@ func TestOpenAndBootstrap_FreshSaltPerAttempt(t *testing.T) {
 	}
 }
 
-// TestBootstrapRecordFitsWriteLimit 固定"手工拼装的引导记录一定能被加密层接受"。
-//
-// 引导记录是唯一不走整形器的明文写入路径：它由客户端自己拼装，既没有单帧校验，
-// 也没有预冲刷边界。历史缺陷（当时的写入上限为 65,510）：写入上限收紧之后，
-// 这里的合并判据与填充预算仍按解码侧上限(65,536) 判断，于是首个大包被判成
-// "可以合并"、随后被 WriteRecord 拒绝，整个 UDP 交换失败——首个数据报 ≥ 65,421
-// 字节起间歇性失败（随机填充 1~63 字节把明文顶过上限），≥ 65,483 起必然失败。
-//
-// 断言直接对着真实 writer：只要 buildBootstrapPlaintext 返回的明文能被
-// WriteRecord 接受，判据、填充预算与加密层上限三者就是自洽的。同时固定"超限的
-// 额外帧由拼装函数自己拒绝"，这样这条不变量不再依赖三条调用点的自律。
+// TestBootstrapRecordFitsWriteLimit 固定"手工拼装的引导记录一定能被加密层接受"：引导
+// 记录是唯一不走整形器的明文写入路径，没有单帧校验也没有预冲刷边界，合并判据与填充
+// 预算必须与 WriteRecord 的上限自洽，否则大包会在 UDP 交换中途被拒。断言直接对着真实
+// writer，并固定超限的额外帧由拼装函数自己拒绝。
 func TestBootstrapRecordFitsWriteLimit(t *testing.T) {
 	const target = "example.com:443"
 	const method = protocol.MethodAES256GCM
@@ -595,14 +577,11 @@ func TestBootstrapRecordFitsWriteLimit(t *testing.T) {
 		}
 	}
 
-	// 判据的边界必须正好贴着写入上限：再多 1 字节就放不下，因此"改为在握手之后
-	// 立即发送"的兜底分支是必需的，而不是永不触发的保险。这个长度连填充也放不下，
-	// 所以拼装函数必须自己拒绝它——而不是拼出一段加密层不收的明文。
+	// 判据边界正好贴着写入上限：再多 1 字节连填充也放不下，拼装函数必须自己拒绝。
 	if _, err := build(datagram(maxPayload + 1)); err == nil {
 		t.Fatal("超出判据的载荷必须被拼装函数拒绝")
 	}
-	// 同一个越界长度也要确认加密层确实不收：判据、拼装校验与写入上限三者夹的是
-	// 同一条线。
+	// 同一个越界长度也要确认加密层确实不收：三者夹的是同一条线。
 	over := protocol.EncodeFrames([]protocol.Frame{
 		protocol.NewFrameHANDSHAKE(protocol.Handshake{
 			Version: protocol.Version3,
@@ -616,10 +595,8 @@ func TestBootstrapRecordFitsWriteLimit(t *testing.T) {
 		t.Fatal("超出判据的载荷本应无法写入引导记录")
 	}
 
-	// 填充长度是随机的（1~63 字节），因此贴着上限的载荷要重复多次才抓得住：
-	// 修复前拿 60 字节的余量做过这件事——payload 距上限 60 字节时约 40% 的次数会因
-	// 填充把明文顶过上限而写入失败。余量从判据反推而不是写死，上限调整后这条用例
-	// 仍然压在同一个位置上。
+	// 填充长度随机（1~63 字节），距上限 60 字节的载荷约有四成次数会被顶过上限，
+	// 故重复 200 次才抓得住。余量从判据反推而非写死，上限调整后仍压在同一个位置。
 	nearLimit := maxPayload - 60
 	for i := range 200 {
 		plaintext, err := build(datagram(nearLimit))

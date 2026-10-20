@@ -97,8 +97,8 @@ func TestMatchHostDomainSemantics(t *testing.T) {
 	}
 }
 
-// TestMatchHostIsCaseInsensitive 是本次合并修掉的语义差异之一：DNS 名大小写
-// 不敏感，路由匹配此前却区分大小写，导致同一条查询按大小写不同得到不同路由。
+// TestMatchHostIsCaseInsensitive 固定 DNS 名大小写不敏感：匹配必须与之一致，
+// 否则同一条查询会按大小写得到不同路由。
 func TestMatchHostIsCaseInsensitive(t *testing.T) {
 	set, _ := ParseLines([]string{
 		"Example.COM",
@@ -141,7 +141,7 @@ func TestMatchHostStripsPortAndTrailingDot(t *testing.T) {
 }
 
 // TestMatchHostIPv4Mapped 固定 IP 归一化的对称性：学习路径写入 IPv4-mapped
-// 形式时，必须与拨号目标里的 IPv4 字面量匹配（此前两边的归一化并不对称）。
+// 形式时，必须与拨号目标里的 IPv4 字面量匹配（两边的归一化必须对称）。
 func TestMatchHostIPv4Mapped(t *testing.T) {
 	set := New()
 	set.AddIP("::ffff:1.2.3.4")

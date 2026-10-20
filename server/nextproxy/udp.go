@@ -15,60 +15,29 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/transport/socks5"
 )
 
-// 本文件实现 next proxy 的 SOCKS5 UDP 转发（RFC 1928 §7 的 UDP ASSOCIATE）。
-//
-// 协议层（方法协商、可选认证、命令应答解析、数据报封帧）由 tun2socks 的
-// transport/socks5 承担：它已经在本进程内被 tun2socks 用来做客户端 UDP
-// ASSOCIATE（proxy/socks5.DialUDP），因此两条路径对上游说的是同一套字节。
-// 本文件只保留库不提供、又由本项目约定决定的那部分适配：
-//
-//   - 关联由一条 TCP 控制连接承载，必须在会话存续期间保持打开（RFC 1928：
-//     控制连接终止即关联终止）。库把它表达为 net.PacketConn（每条数据报自带
-//     目标地址），而 server/handler 的一条 UDP 会话只关心一个目标，需要的是
-//     net.Conn 形态。
-//   - 上游关闭控制连接时必须立刻打断数据面，而不是让调用方阻塞到会话空闲超时。
-//   - 拨号截止时间只能在握手期间生效，不能泄漏到数据面。
-//   - 上游应答通配地址（0.0.0.0:port）时替换为控制连接实际到达的代理地址；
-//     应答域名时解析成字面 IP（库的 Addr.UDPAddr 对域名返回 nil）。
-//   - 本地绑定地址仅在与控制连接同族时使用。
-//   - enable_udp=false 时拒绝建立关联（纵深防御，调用方已门控过一次）。
-//
-// 这正是 x/net/proxy 的 SOCKS5 拨号器不提供的能力：它只实现 CONNECT，把
-// network="udp" 交给它只会得到一次注定失败的 TCP 拨号。
+// next proxy 的 SOCKS5 UDP 转发（RFC 1928 §7 的 UDP ASSOCIATE）。x/net/proxy 的 SOCKS5
+// 拨号器只实现 CONNECT，因此协议层交给 tun2socks 的库。
 const (
-	// udpBufSize 是单条 UDP 数据报的载荷上限。它与 server/handler 的 UDP 会话
-	// 共用同一个事实来源（protocol.MaxUDPDataSize），使两个方向的边界一致：
-	// 会话收得下的数据报，这里也必须封得出来。
+	// udpBufSize 与 server/handler 的 UDP 会话共用 protocol.MaxUDPDataSize，两个方向的边界
+	// 因此一致：会话收得下的数据报，这里也必须封得出来。
 	udpBufSize = protocol.MaxUDPDataSize
 
-	// maxUDPDatagram 是一条 SOCKS5 UDP 数据报的最大线上长度：载荷上限加上
-	// 最坏情况的头（RSV/FRAG + ATYP + IPv6 地址 + 端口）。接收缓冲按它分配，
-	// 一次即可容纳任何合法数据报。
-	//
-	// 它正好等于数据报链路的池档位（protocol.MaxUDPDataSize + 22 = 16KB），因此这里
-	// 借出的缓冲与 UDP 中继链路上其余三块（socket 读缓冲、整形器明文缓冲、记录
-	// 密文缓冲）落在同一档位，没有一块会向上跳档。
+	// maxUDPDatagram 是载荷上限加最坏情况的头（RSV/FRAG + ATYP + IPv6 地址 + 端口），
+	// 正好等于数据报链路的池档位（16KB）。
 	maxUDPDatagram = udpBufSize + 3 + 1 + net.IPv6len + 2
 )
 
-// dialUDPAssociate 与上游 SOCKS5 代理建立一次 UDP 关联，并返回一个 net.Conn：
-// 每次 Write 把载荷作为一个数据报经上游转发，每次 Read 返回中继回来的载荷。
-//
-// 关联请求里的 DST.ADDR/DST.PORT 填 0.0.0.0:0：那是"客户端将用来发送数据报的
-// 地址"；我们只用一条未绑定的 socket 发送，明确通告 "unspecified" 是 RFC 1928
-// 允许且最不依赖客户端网络位置的形式。
+// 关联请求的 DST 填 0.0.0.0:0：我们只用一条未绑定的 socket 发送，通告 "unspecified" 是
+// RFC 1928 允许且最不依赖客户端网络位置的形式。
 func (np *NextProxy) dialUDPAssociate(ctx context.Context, dst string) (net.Conn, error) {
 	if !np.enableUDP {
-		// 调用方（udpHandler 的 shouldProxy）已经用 EnableUDP() 门控过一次，
-		// 这里是纵深防御：配置关闭时绝不悄悄建立关联。
 		return nil, errors.New("udp forwarding is not enabled for the next proxy")
 	}
 	if np.url == nil {
 		return nil, errors.New("next proxy url is not configured")
 	}
 
-	// 目标地址在建立关联之前就编码并校验：畸形/超长目标不该先跟上游握一次手、
-	// 建一条控制连接，再回来拆掉。Write 是逐数据报的热路径，编码只做一次。
+	// 先编码并校验目标：Write 是逐数据报的热路径，编码只能做一次。
 	target, err := encodeDatagramTarget(dst)
 	if err != nil {
 		return nil, err
@@ -78,13 +47,11 @@ func (np *NextProxy) dialUDPAssociate(ctx context.Context, dst string) (net.Conn
 	if err != nil {
 		return nil, err
 	}
-	// 后续每个失败分支都要关掉控制连接（关联本身也由它承载）。
 	fail := func(err error) (net.Conn, error) {
 		control.Close() //nolint:errcheck
 		return nil, err
 	}
-	// 凭据只在有值时传入：库据此通告单个认证方法（有凭据=用户名/密码，否则
-	// 无需认证），与迁移前的 socks5 客户端行为一致，也与 CONNECT 路径同源。
+	// 凭据只在有值时传入：库据此通告单个认证方法（有凭据即用户名/密码，否则无需认证）。
 	var user *socks5.User
 	if u, p, ok := np.credentials(); ok {
 		user = &socks5.User{Username: u, Password: p}
@@ -103,36 +70,23 @@ func (np *NextProxy) dialUDPAssociate(ctx context.Context, dst string) (net.Conn
 		return fail(fmt.Errorf("dial the udp relay %s: %w", relayAddr, err))
 	}
 
-	// 目标地址已在建立关联之前编码完成（见 encodeDatagramTarget）：Write 是
-	// 逐数据报的热路径，不该在那里重复解析同一个字符串。
 	c := &udpAssociateConn{control: control, relay: relay, dst: target, closed: make(chan struct{})}
 
 	if !deadline.IsZero() {
-		// 握手与关联都已完成，清除拨号截止时间：它的剩余额度不该泄漏到数据面
-		// ——一次长会话里的静默期可以远超拨号超时。
+		// 拨号截止时间的剩余额度不该泄漏到数据面：长会话的静默期可以远超拨号超时。
 		if err := control.SetDeadline(time.Time{}); err != nil {
 			relay.Close() //nolint:errcheck
 			return fail(err)
 		}
 	}
 
-	// 控制连接是关联的存活信号：上游一旦关闭它，这个关联就不再有效，必须
-	// 立即终止本地 socket，而不是让调用方一直阻塞在 Read 上。
+	// 控制连接是关联的存活信号（RFC 1928：控制连接终止即关联终止）。
 	go c.monitorControl()
 	return c, nil
 }
 
-// encodeDatagramTarget 把 "host:port" 目标编码成 SOCKS5 地址，并补上库缺失的
-// 长度校验。
-//
-// socks5.ParseAddrString 走的是 SerializeAddr，它对域名只写 uint8(len(domain))
-// 而不做范围检查：256 字节的名字会被写成长度 0x00、265 字节写成 0x09，而后面
-// 仍跟着完整的名字。这种地址 Addr.Valid() 返回 true、EncodeUDPPacket 也不报错，
-// 于是发给上游的是一条长度字段与实体不符、解析错位的数据报（剩余名字会被当成
-// 端口与载荷）。触发源是客户端 HANDSHAKE 里的 target，因此这里必须自己拦。
-//
-// 上限取 MaxAddrLen：合法的 255 字节域名加上 ATYP 与端口正好 259 字节，因此
-// 这条检查不会误杀任何合法目标。
+// 补上库缺失的长度校验：socks5.ParseAddrString 对域名只写 uint8(len(domain)) 而不做范围
+// 检查，256 字节的名字会写成长度 0x00 并仍跟着完整名字。
 func encodeDatagramTarget(dst string) (socks5.Addr, error) {
 	addr := socks5.ParseAddrString(dst)
 	if addr == nil {
@@ -145,18 +99,14 @@ func encodeDatagramTarget(dst string) (socks5.Addr, error) {
 	return addr, nil
 }
 
-// resolveRelayAddr 把应答里的 BND.ADDR:BND.PORT 解析成可拨号的 UDP 地址。
-// 两种情况需要修正而不能直接用库的 Addr.UDPAddr()：
-//
-//   - 上游应答通配地址（0.0.0.0:port），表示"就在你连我的这个地址上监听"。
-//     0.0.0.0 无法作为发送目标，必须替换成控制连接的对端地址。
-//   - 上游应答域名（RFC 1928 允许），而库的 UDPAddr() 对域名返回 nil。
+// 解析应答里的 BND.ADDR:BND.PORT。上游应答通配地址（0.0.0.0:port）表示"就在你连我的这个
+// 地址上监听"，必须换成控制连接的对端地址；应答域名时库的 UDPAddr() 返回 nil，要自己解析。
 func resolveRelayAddr(bindAddr socks5.Addr, controlRemote net.Addr) (*net.UDPAddr, error) {
 	if !bindAddr.Valid() {
 		return nil, fmt.Errorf("invalid udp relay address in the associate reply: %#v", []byte(bindAddr))
 	}
 	if bindAddr[0] == socks5.AtypDomainName {
-		// 域名形态：解析成字面 IP，避免每条数据报都依赖一次解析。
+		// 解析成字面 IP，数据面不必每条数据报都解析一次。
 		host, port, err := splitSocksAddr(bindAddr)
 		if err != nil {
 			return nil, err
@@ -176,7 +126,6 @@ func resolveRelayAddr(bindAddr socks5.Addr, controlRemote net.Addr) (*net.UDPAdd
 		return relay, nil
 	}
 
-	// 通配地址：改用控制连接实际到达的代理地址。
 	host, _, err := net.SplitHostPort(controlRemote.String())
 	if err != nil {
 		return nil, fmt.Errorf("resolve the udp relay from %s: %w", controlRemote, err)
@@ -192,7 +141,6 @@ func resolveRelayAddr(bindAddr socks5.Addr, controlRemote net.Addr) (*net.UDPAdd
 	return &net.UDPAddr{IP: ip, Port: relay.Port}, nil
 }
 
-// splitSocksAddr 取出一个域名字段形态的 SOCKS5 地址的域名与端口。
 func splitSocksAddr(addr socks5.Addr) (string, int, error) {
 	if len(addr) < 1+1+2 {
 		return "", 0, fmt.Errorf("short socks5 address: %d bytes", len(addr))
@@ -205,10 +153,8 @@ func splitSocksAddr(addr socks5.Addr) (string, int, error) {
 	return string(addr[2 : 2+length]), port, nil
 }
 
-// localAddrFor 选择发送数据报的本地地址。上游可能要求客户端从中继地址所在的
-// 主机发送数据报，因此优先把本地地址钉在控制连接所用的接口地址上——它与中继
-// 地址同族时才可用，否则把 v4 地址绑给 v6 socket（或反之）只会让拨号失败。
-// 找不到同族地址时返回 nil，让内核按路由表选择。
+// 把本地地址钉在控制连接所用的接口地址上，上游才可能接受这些数据报。与中继地址同族时才
+// 可用，否则返回 nil 让内核按路由表选择。
 func localAddrFor(control net.Conn, relayIP net.IP) *net.UDPAddr {
 	host, _, err := net.SplitHostPort(control.LocalAddr().String())
 	if err != nil {
@@ -221,7 +167,6 @@ func localAddrFor(control net.Conn, relayIP net.IP) *net.UDPAddr {
 	return &net.UDPAddr{IP: ip}
 }
 
-// udpAddrFamily 返回地址的 IP 族（4 或 6），无法归入任何一族时返回 0。
 func udpAddrFamily(ip net.IP) int {
 	if ip.To4() != nil {
 		return 4
@@ -232,8 +177,7 @@ func udpAddrFamily(ip net.IP) int {
 	return 0
 }
 
-// udpNetworkFor 返回与给定 IP 族匹配的 UDP network，使中继地址的族决定本地
-// socket 的族，而不是依赖系统默认（双栈主机上的默认值可能与中继地址不符）。
+// 让中继地址的族决定本地 socket 的族，双栈主机上的系统默认值可能与中继地址不符。
 func udpNetworkFor(ip net.IP) string {
 	if udpAddrFamily(ip) == 6 {
 		return "udp6"
@@ -241,39 +185,25 @@ func udpNetworkFor(ip net.IP) string {
 	return "udp4"
 }
 
-// udpAssociateConn 把一个已建立的 SOCKS5 UDP 关联伪装成 net.Conn，使
-// server/handler 的中继循环不必知道 SOCKS5 数据报封装的存在：它只看到
-// "读到一个数据报 / 写入一个数据报"。
-//
-// Write 按固定的 dst 封帧后发给中继地址，读方向剥掉封装：DNS 应答可能来自与
-// 查询目标不同的 IP，而 net.Conn 契约不带来源地址；上层按会话区分目标，来源
-// 在这里没有去处。
+// DNS 应答可能来自与查询目标不同的 IP，而 net.Conn 契约不带来源地址，因此写按固定的 dst
+// 封帧发给中继地址，读只剥封装。
 type udpAssociateConn struct {
 	control net.Conn
 	relay   *net.UDPConn
-	// dst 是本会话经上游转发的目标地址（已解析为 SOCKS5 地址形式）。
+	// dst 是本会话经上游转发的目标地址，已编码为 SOCKS5 地址。
 	dst socks5.Addr
 
 	closeOnce sync.Once
-	// closed 在 Close 时关闭，让 monitorControl 能区分"上游撤销了关联"与
-	// "我们自己收尾"——只有前者值得告警。
+	// closed 让 monitorControl 区分"上游撤销了关联"与"我们自己收尾"，只有前者值得告警。
 	closed chan struct{}
-	// writeMu 串行化发送：udpHandler 只在主 goroutine 里写，但 net.Conn 的
-	// 契约不承诺这一点。库的 EncodeUDPPacket 每次返回独立缓冲区，因此这里
-	// 不需要为复用而持有共享写缓冲。
+	// writeMu 串行化发送：udpHandler 只在主 goroutine 里写，但 net.Conn 契约不承诺这点。
 	writeMu sync.Mutex
-	// readMu 串行化读取：单次 Read 内完成"收包 → 解封装 → 拷贝给调用方"。
-	// 接收缓冲本身是逐次借还的（见 Read），因此这个锁只负责串行化，不再保护
-	// 任何常驻缓冲。
+	// readMu 串行化"收包 → 解封装 → 拷贝"这一整次 Read，保证每条关联至多一块缓冲在飞。
 	readMu sync.Mutex
 }
 
-// monitorControl 阻塞在控制连接上：上游关闭它（关联失效）或控制连接出错时，
-// 立即关闭中继 socket，让阻塞中的 Read 返回，而不是僵死到会话空闲超时。
-//
-// 这里必须留下日志：server/handler 的 targetReadError 会把关闭引起的
-// net.ErrClosed 归一成 io.EOF，于是"上游撤销了关联"和"会话正常收尾"在那边
-// 长得一模一样。没有这条 warn，线上只能看到代理突然不再中转 UDP。
+// 上游关闭控制连接时立即关闭中继 socket，让阻塞中的 Read 返回而不是僵死到会话空闲超时。必须在这里
+// 留日志：server/handler 的 targetReadError 把 net.ErrClosed 归一成 io.EOF，两者在那边无法区分。
 func (c *udpAssociateConn) monitorControl() {
 	buf := make([]byte, 1)
 	for {
@@ -285,13 +215,11 @@ func (c *udpAssociateConn) monitorControl() {
 			c.Close() //nolint:errcheck
 			return
 		}
-		// 关联建立后上游不应再发送任何字节（数据面走 UDP 中继）。收到就丢弃，
-		// 保持读取以便继续感知控制连接的关闭。
+		// 关联建立后上游不应再发送任何字节，收到就丢弃，保持读取以便继续感知关闭。
 	}
 }
 
-// isClosed 报告本连接是否已被我们自己关闭（用于区分"上游撤销"与"我们收尾"）。
-// 未初始化 closed 时按"未关闭"处理。
+// isClosed 未初始化 closed 时按"未关闭"处理。
 func (c *udpAssociateConn) isClosed() bool {
 	if c.closed == nil {
 		return false
@@ -304,27 +232,8 @@ func (c *udpAssociateConn) isClosed() bool {
 	}
 }
 
-// Read 读取一条经上游转发的数据报。它原本为每条关联惰性分配并常驻一块
-// maxUDPDatagram 的接收缓冲，直到连接关闭——空闲的上游 UDP 关联因此各自钉住
-// 一整块缓冲（上限下调前是 64KB，现在与 UDP 链路上其余缓冲一样是 16KB 档），
-// 且这块内存完全不受池的保留上限约束。改为逐次借还后，空闲关联不再持有任何
-// 接收缓冲，稳态上界变成池的每档 64 块。
-//
-// 逐次借还是"用分配率换常驻量"，代价落在一个前提上：**同时在读的关联数**。
-// 池每档只保留 64 块，超过之后 Put 会因超额被直接丢弃、Get 转而走
-// sync.Pool.New 现场分配，于是每个数据报一次整档分配（相对约 1.4KB 的真实
-// 载荷放大十余倍）——并发关联数 N 远超 64 时，基本每次读取都要分配。常驻量仍然
-// 有界（64 × 档位 = 1MB），而且是净收益：改前是每条关联终身钉住一整档且不受
-// 任何上限约束。readMu 保证每条关联至多一块在飞，因此这里的并发数就是活跃
-// 关联数，不会翻倍。
-//
-// 若将来要同时兼顾高并发与低分配率，做法是"活跃期间持有、空闲后归还"（例如
-// 空闲计时器触发释放），而不是把接收缓冲重新钉回连接的整个生命周期。
-//
-// 借出的是池内 16KB 档位（maxUDPDatagram 正好等于档位大小，见常量的说明）：
-// 因此**必须**用 bytespool.Get(maxUDPDatagram) 而不是 make/append——否则 MustPut
-// 会因为 "cap 不是 2 的幂" 而 panic。归还时传完整切片（或 buf[:maxUDPDatagram]，
-// 切片保留 cap）即可，绝不能传 append 出来的拷贝。
+// 逐次借还接收缓冲，常驻会让空闲关联各钉住一整档。必须用 bytespool.Get(maxUDPDatagram) 而非
+// make/append，否则 MustPut 会因 cap 不是 2 的幂 panic；归还时传完整切片，不能传 append 出来的拷贝。
 func (c *udpAssociateConn) Read(b []byte) (int, error) {
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
@@ -341,9 +250,7 @@ func (c *udpAssociateConn) Read(b []byte) (int, error) {
 			}
 			return 0, err
 		}
-		// 读满档位：既可能是恰好 16,384 的合法上限（载荷 16,362 + IPv6 头），
-		// 也可能是被内核截断。二者无法区分，而把截断的载荷转发给客户端比丢弃
-		// 更糟，因此一并丢弃并继续读下一条（UDP 语义上等同丢包）。
+		// 读满档位既可能是合法上限也可能被内核截断，二者无法区分，而转发截断的载荷比丢弃更糟。
 		if n == len(buf) {
 			log.Warn("[NEXTPROXY] dropping truncated udp datagram", "n", n,
 				"limit", udpBufSize)
@@ -351,18 +258,16 @@ func (c *udpAssociateConn) Read(b []byte) (int, error) {
 		}
 		_, payload, err := socks5.DecodeUDPPacket(buf[:n])
 		if err != nil {
-			// 畸形/分片/无法解析的数据报：按 0 字节读取丢弃，让中继循环继续读
-			// 下一条，而不是把一条坏数据报当成会话故障（RFC 1928 允许整条丢弃）。
+			// 按 0 字节读取丢弃，不把一条坏数据报当成会话故障（RFC 1928 允许整条丢弃）。
 			return 0, nil
 		}
-		// IPv4 头只有 10 字节，读满档位以下的整包仍可能解析出超过 udpBufSize
-		// 的载荷；超过预算就丢弃，避免让记录缓冲跨出 16KB 档位。
+		// 档位之下的整包仍可能解析出超过预算的载荷，超过就丢弃，避免记录缓冲跨出 16KB 档位。
 		if len(payload) > udpBufSize {
 			log.Warn("[NEXTPROXY] dropping oversized udp datagram",
 				"payload", len(payload), "limit", udpBufSize)
 			continue
 		}
-		// payload 别名 buf，但它在返回前就被拷进调用方的 b，因此 buf 可以立即归还。
+		// payload 别名 buf，但它返回前就被拷进调用方的 b，buf 可以立即归还。
 		return copy(b, payload), nil
 	}
 }
@@ -384,8 +289,7 @@ func (c *udpAssociateConn) Write(b []byte) (int, error) {
 func (c *udpAssociateConn) Close() error {
 	var err error
 	c.closeOnce.Do(func() {
-		// closed 可能为 nil（测试直接构造零值时）：关闭一个 nil 通道会 panic，
-		// 而 Close 必须能在任何构造路径上安全调用。
+		// closed 可能为 nil（测试直接构造零值），关闭 nil 通道会 panic。
 		if c.closed != nil {
 			close(c.closed)
 		}

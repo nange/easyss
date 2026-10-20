@@ -6,12 +6,8 @@ import (
 	"time"
 )
 
-// TestSendToClientFramesReplyFromClientTarget 固定了每个 DNS 分支都依赖的不变式：
-// 应答使用客户端发送查询时所用的地址组帧，绝不使用本代理解析到的上游地址。
-// 前置的透明 NAT（tun2socks）在对称 NAT 模式下以该地址为 UDP 流建键，并丢弃任何
-// 源地址与之不同的数据报，因此用上游地址组帧的应答会让查询看起来无人应答——
-// 对每个上游（config.ProxyDNSServer，8.8.8.8:53）与客户端所询问的解析器
-// （如 TUN 模式配置的 223.5.5.5）不同的代理查询都是如此。
+// TestSendToClientFramesReplyFromClientTarget 守住应答必须用客户端查询的来源地址组帧：
+// tun2socks 在对称 NAT 模式下以该地址为 UDP 流建键，用上游地址组帧的应答会被丢弃。
 func TestSendToClientFramesReplyFromClientTarget(t *testing.T) {
 	clientConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {

@@ -8,23 +8,12 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-// UsesManualCertificate 报告本次部署的证书来自 server.cert_path/server.key_path。
-//
-// 它是"证书从哪来"的唯一判定入口：initTLS 与启动日志都读它，而不是各自判断两个
-// 字段是否非空——那种重复判断正是"只配了一个路径"的半配置能逃过校验、最终却在
-// 运行期静默忽略该文件的原因（见 validateTLS）。
+// UsesManualCertificate 是"证书从哪来"的唯一判定入口，initTLS 与启动日志都读它。
 func (fc *FileConfig) UsesManualCertificate() bool {
 	return fc.Server.CertPath != "" && fc.Server.KeyPath != ""
 }
 
-// ACMESubjectIsIP 报告自动申请证书的标识符是 IP 字面量（而不是域名）。
-//
-// 它只回答"形态"这一件事：该地址能否被公网 CA 签发由 validateTLS 在配置加载
-// 阶段把关，所以这里不做公网性判断——绕过 LoadConfig 的调用方（测试、嵌入式）
-// 手搓一份私有地址的配置时，仍然应该拿到"IP 模式"的行为（显式请求短生命周期
-// profile、打 IP 模式的启动日志），随后由 certmagic 的预检明确拒绝。
-//
-// 手工证书模式下恒为 false：那时标识符不参与取证，IP 与否没有运行期含义。
+// ACMESubjectIsIP 只回答"形态"这一件事，公网性由 validateTLS 把关；手工证书模式下恒为 false。
 func (fc *FileConfig) ACMESubjectIsIP() bool {
 	if fc.UsesManualCertificate() {
 		return false
@@ -33,45 +22,13 @@ func (fc *FileConfig) ACMESubjectIsIP() bool {
 	return ok && addr.Is4()
 }
 
-// validateTLS 固定"证书从哪来"这一启动期契约，由 LoadConfig 调用，使这些错误在
-// 进程启动时（而不是第一次 ACME 申请、更不是运行期）以明确的配置错误暴露。
-//
-// 判定顺序：
-//
-//  1. cert_path/key_path 恰好只配了一个 → 配置错误。两个都配才是手工证书模式
-//     （tls.LoadX509KeyPair 需要两份文件），只配一个时旧行为是**静默忽略**它、
-//     转而向 Let's Encrypt 申请——运维以为自己用的是自己的证书，实际不是。
-//  2. 两个都配 → 手工证书模式：host 不参与取证（它只进日志），因此不校验公网性。
-//  3. 都没配 → ACME 模式：host 必填；若写的是 IP 字面量，只接受**公网 IPv4**。
-//
-// 与取证模式无关的前置约束：host 不得包含端口，也不得写成带方括号的 IP 字面量。
-// 这一步放在取证模式判定之前，因此手工证书模式同样适用——那时 host 只进启动日志，
-// 但契约是"host 不含端口"，否则日志与 ACME 标识符都会出现误导性内容。
-//
-// 为什么 IP-only 只接受公网 IPv4：
-//
-//   - 公网性：Let's Encrypt 的 IP 地址证书（RFC 8738、2026-01 GA）在验证时会连接
-//     该地址的 443 端口，并拒绝私有/保留/环回/链路本地/CGNAT 等不可公网验证的
-//     地址，因此这类地址写进来必然申请失败。这里的判据是 util.IsLANIP，它**故意
-//     比 certmagic 的 SubjectQualifiesForPublicCert 更严**（后者不含 CGNAT、
-//     TEST-NET、240/4 等段，只靠 CA 侧兜底）：与其让运维等一轮 ACME 往返才看到
-//     拒绝，不如在配置加载阶段就说清楚出路（公网 IP，或自签证书 + 客户端 ca_path）。
-//     不要为了"和 certmagic 对齐"而放宽这里。
-//   - IPv4：客户端用 `https://<host>:<port>` 与 `<host>:<port>` 拼服务端
-//     地址，IPv6 字面量（以及 IPv4-mapped 的 ::ffff:a.b.c.d、带方括号的写法）
-//     在这两处都无法表达，net.Dial 会以 "too many colons" 失败——那是运行期才
-//     暴露的症状，而且看起来与证书无关。
-//
-// IP-only 模式的运行期前提（README 有面向运维的说明）：Let's Encrypt 对 IP 标识符
-// 只能用 tls-alpn-01（dns-01 被 RFC 8738 禁止），所以公网 443 必须可达；IP 证书
-// 只能是短生命周期证书（约 160 小时），续期同样要重新验证。
+// validateTLS 在进程启动时以明确的配置错误暴露问题。公网性判据是 util.IsLANIP，故意比
+// certmagic 的 SubjectQualifiesForPublicCert 更严，不要为"对齐"放宽。只接受 IPv4：客户端用
+// https://<host>:<port> 拼服务端地址，IPv6 字面量在那里会以 "too many colons" 失败。
 func (fc *FileConfig) validateTLS() error {
 	srvCfg := fc.Server
 
-	// host 与 port 已经拆开：host 里再出现冒号只可能是把端口写了进来，写成
-	// 带方括号的 IP 字面量则不是客户端能拼出的地址形态。这两条约束与证书来源
-	// 无关，一律在加载阶段拒绝——ACME 模式会把它当成无法解析的标识符，手工证书
-	// 模式则只是让启动日志出现一个不存在的主机名。
+	// host 里出现冒号只可能是把端口写了进来；带方括号的字面量不是客户端能拼出的形态。
 	if srvCfg.Host != "" {
 		if _, isIP := parseIPLiteral(srvCfg.Host); !isIP {
 			if isBracketedIPLiteral(srvCfg.Host) {
@@ -99,8 +56,7 @@ func (fc *FileConfig) validateTLS() error {
 
 	addr, isIP := parseIPLiteral(srvCfg.Host)
 	if !isIP {
-		// 域名：公网性与可解析性由 certmagic/ACME 侧判断（形态已在上面的
-		// "host 不含端口"前置约束里校验过）。
+		// 域名：公网性与可解析性由 certmagic/ACME 侧判断，形态已在前面校验过。
 		return nil
 	}
 	if !addr.Is4() {
@@ -121,8 +77,8 @@ func errNotPlainIPv4Literal(host string) error {
 		"IPv4-mapped address (write 1.2.3.4, not [1.2.3.4] or ::ffff:1.2.3.4)", host)
 }
 
-// parseIPLiteral 解析规范写法的 IP 字面量。netip.ParseAddr 本身就不接受方括号、
-// 前导零与结尾空白，因此"能解析"等价于"是逐字可用的字面量"。
+// parseIPLiteral 依赖 netip.ParseAddr 不接受方括号、前导零与结尾空白，"能解析"因此等价于
+// "是逐字可用的字面量"。
 func parseIPLiteral(s string) (netip.Addr, bool) {
 	addr, err := netip.ParseAddr(s)
 	if err != nil {
@@ -131,10 +87,8 @@ func parseIPLiteral(s string) (netip.Addr, bool) {
 	return addr, true
 }
 
-// isBracketedIPLiteral 报告 s 是不是带方括号的 IP 字面量（[1.2.3.4]、[2001:db8::1]）。
-// 它只用于把这类写法从"域名"里挑出来给出明确报错：否则它们会一路走到 ACME，
-// 最后以"subject '[1.2.3.4]' does not qualify for a public certificate"这种
-// 看不出问题在哪的报错结束。
+// isBracketedIPLiteral 把这类写法从"域名"里挑出来明确报错：否则它们会一路走到 ACME，
+// 以看不出问题在哪的 "does not qualify for a public certificate" 结束。
 func isBracketedIPLiteral(s string) bool {
 	if len(s) < 2 || s[0] != '[' || s[len(s)-1] != ']' {
 		return false

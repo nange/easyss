@@ -15,18 +15,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// tunHelperExitTimeout 是关闭/切换服务器时等待提权 helper 释放控制锁的上限。
-// 正常路径上 helper 收到 FIFO 的 EOF 后几十毫秒内就会退出；超时说明它卡在清理里，
-// 继续等只会拖住整个切换流程——此时不再等它，直接由父进程自己复核路由表
-// （见 waitTunHelperExit 与 verifyTunTeardown）。
+// 正常路径上 helper 收到 FIFO 的 EOF 后几十毫秒内退出；超时说明它卡在清理里，
+// 继续等只会拖住整个切换流程，此时由父进程自己复核路由表。
 const tunHelperExitTimeout = 5 * time.Second
 
-// waitTunHelperExit 等待提权 helper 释放 TUN 控制锁，也就是等它完成清理并退出。
-//
-// helper 由 osascript/pkexec 以后台方式拉起（PPID 为 1），父进程既拿不到它的 pid
-// 也无法 Wait；但它在整个生命周期里持有 tunControlLockPath 的排他 flock，而内核
-// 会在进程退出时释放它（被 kill -9 也一样）。因此"能否立刻取得这把锁"就是
-// "helper 是否已经退出"的可靠信号。
+// helper 由 osascript/pkexec 以后台方式拉起（PPID 为 1），父进程既拿不到 pid 也无法 Wait；
+// 但它整个生命周期持有 tunControlLockPath 的排他 flock，而内核在进程退出（含 kill -9）时释放它。
 func waitTunHelperExit(timeout time.Duration) error {
 	lock, err := os.OpenFile(tunControlLockPath, os.O_RDONLY, 0)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -40,8 +34,7 @@ func waitTunHelperExit(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
 		if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err == nil {
-			// 只是为了探测"锁是否已释放"：立刻还回去，否则会挡住紧接着要启动的
-			// 下一个 helper。
+			// 只为探测锁是否已释放，立刻还回去，否则会挡住紧接着启动的下一个 helper。
 			return util.Unflock(lock)
 		}
 		if time.Now().After(deadline) {
@@ -51,19 +44,11 @@ func waitTunHelperExit(timeout time.Duration) error {
 	}
 }
 
-// platformTunTeardown 是 session 拆除的第 3 步在 darwin/linux 上的实现：
-// 等提权 helper 释放控制锁（即它已完成路由/DNS 清理并退出），然后自己复核一遍
-// 系统路由表。返回非 nil 表示路由仍然残留（且回滚也没能清掉），由 session 负责
-// 记录并告知用户。
-//
-// 拆除过去是彻底"发射后不管"的：父进程既不等也不看，于是助手进程一旦清路由失败，
-// 1/8…128/1 这些分流默认路由就留在表里，把全机 IPv4 流量（包括 DNS）送进一个已经
-// 没人读的设备——表现为"切换服务器后本机断网"。等不到 helper 也往下走：下面的
-// 复核会自己发现残留。Windows 与 headless 构建走空实现（见 tray_tun_teardown_other.go）。
+// 等 helper 释放控制锁后自己复核一遍路由表，返回非 nil 表示路由仍残留且回滚没清掉。
+// 只要有一条分流默认路由（1/8…128/1）留下，全机 IPv4 流量就会进入没人读的设备，表现为切换服务器后断网。
+// 等不到 helper 也往下走：下面的复核会自己发现残留。
 func platformTunTeardown(dev tun.DeviceConfig, owner tun.Owner, helperSignalled bool) error {
-	// 只有 helper 装的会话才有"等它退出"这一步：路由与 DNS 归它回收，主进程
-	// 停下来时它可能还在跑关闭脚本。直连路径上根本没有 helper，helperSignalled
-	// 只说明 FIFO 被关过（直连路径上它永远是 false）。
+	// 只有 helper 装的会话才有"等它退出"这一步；直连路径没有 helper，helperSignalled 恒为 false。
 	if owner == tun.OwnerHelper && helperSignalled {
 		if err := waitTunHelperExit(tunHelperExitTimeout); err != nil {
 			log.Error("[SYSTRAY] tunDown: waiting for tun helper", "err", err)
@@ -72,8 +57,7 @@ func platformTunTeardown(dev tun.DeviceConfig, owner tun.Owner, helperSignalled 
 	return verifyTunTeardown(dev)
 }
 
-// rollbackTunRoutes 重新执行平台的关闭脚本（必要时由脚本路径再次提权）。
-// 它是变量以便测试注入：真实实现会提权并改写运行测试的机器的路由表。
+// 变量以便测试注入：真实实现会提权并改写运行测试的机器的路由表。
 var rollbackTunRoutes = func(dev tun.DeviceConfig) error {
 	return tun.CleanupTunDevice(tun.Config{
 		Device:         dev.Device,
@@ -88,12 +72,8 @@ var rollbackTunRoutes = func(dev tun.DeviceConfig) error {
 	})
 }
 
-// verifyTunTeardown 核对一次 TUN 会话留下的系统改动是否真的撤销了，返回非 nil
-// 表示"路由仍然残留，且回滚也没能清掉"，由调用方负责告知用户。
-//
-// 拆除是 helper 异步完成的，父进程过去既不等也不查：只要有一条分流默认路由
-// （1/8…128/1）残留，全机 IPv4 流量就会进入一个没人读的设备——用户看到的就是
-// "切换服务器后本机断网"。这里在 helper 退出后自己复核一遍，必要时提权回滚。
+// 返回非 nil 表示路由仍然残留且回滚也没清掉，由调用方告知用户。
+// helper 的拆除是异步的，这里在它退出后自己复核一遍，必要时提权回滚。
 func verifyTunTeardown(dev tun.DeviceConfig) error {
 	detail, leftover := tunRouteResidue(dev.Device, dev.TunGW)
 	if !leftover {

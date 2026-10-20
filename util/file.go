@@ -24,14 +24,8 @@ func FileExists(path string) (bool, error) {
 	return false, err
 }
 
-// ResolvePath 在相对文件路径无法于当前工作目录中找到时，将其解析为绝对路径。
-// 在 macOS 上，应用常由 Finder 或 launchd 以 cwd=/ 启动（LaunchAgent 的
-// plist 没有 WorkingDirectory），因此配置文件（direct.txt、proxy.txt、
-// ca_path、证书文件等）中的相对路径即使与二进制/.app bundle 位于同一目录，
-// 也永远无法被找到。
-//
-// 空字符串和绝对路径原样返回；存在于当前工作目录中的相对路径为了向后兼容
-// 保持原样；其余情况则与可执行文件所在目录拼接（参见 CurrentDir）。
+// 相对路径在当前工作目录不存在时改按可执行文件目录解析：macOS 上 Finder/launchd 常以
+// cwd=/ 启动，配置里的相对路径否则永远找不到；空字符串与绝对路径原样返回。
 func ResolvePath(p string) string {
 	if p == "" || filepath.IsAbs(p) {
 		return p
@@ -53,10 +47,10 @@ func CurrentDir() string {
 
 	dir := filepath.Dir(path)
 
-	// 如果从 macOS .app bundle 内部运行，返回包含 .app 的目录，
-	// 使配置文件与 bundle 放在一起。
+	// 从 macOS .app bundle 内部运行时，返回包含 .app 的目录，
+	// 让配置文件与 bundle 放在一起。
 	if isAppBundleDir(dir) {
-		// dir 为 .../Easyss.app/Contents/MacOS → 向上 3 级 → .app 的父目录
+		// dir 为 .../Easyss.app/Contents/MacOS → 向上 3 级
 		return filepath.Dir(filepath.Dir(filepath.Dir(dir)))
 	}
 
@@ -114,9 +108,8 @@ func ReadFileLines(file string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		// FileExists 对不存在的文件返回 (false, nil)；这里将其转换为
-		// 真正的错误返回，而不是静默返回空行列表
-		// （否则会掩盖配置错误的规则文件路径）。
+		// FileExists 对不存在的文件返回 (false, nil)，这里必须转成错误，
+		// 否则配置里写错的规则文件路径会被静默当成空文件。
 		return nil, fmt.Errorf("%s: %w", file, os.ErrNotExist)
 	}
 	f, err := os.Open(file)

@@ -40,7 +40,7 @@ func metricsColumnForTest(t *testing.T, title string) float64 {
 }
 
 // TestFormatTitleAlignsMetricsColumn 固定这个问题本身：不管地址是 IP 字面量还是
-// 域名，指标都要从同一列开始（此前用 "\t" 时，28pt 的默认 tab 间隔让间隔随地址
+// 域名，指标都要从同一列开始（不能用 "\t"：28pt 的默认 tab 间隔会让列宽随地址
 // 长度乱跳，IP 看起来"贴着"地址）。
 func TestFormatTitleAlignsMetricsColumn(t *testing.T) {
 	addrs := []string{

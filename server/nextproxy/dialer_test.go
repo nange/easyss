@@ -12,7 +12,6 @@ import (
 	"time"
 )
 
-// socks5ConnRequest 记录一次 SOCKS5 CONNECT 请求中被观测到的字段，供测试断言。
 type socks5ConnRequest struct {
 	atyp    byte
 	host    string
@@ -22,9 +21,8 @@ type socks5ConnRequest struct {
 	hasAuth bool
 }
 
-// startSocks5HandshakeStub 启动一个最小的 SOCKS5 服务端桩：完成握手与 CONNECT
-// 应答，并记录收到的目标地址与凭据。它在"协商成功后仍保持连接打开"这一点上
-// 模拟真实代理，使拨号返回后的连接可直接用于读写断言。
+// startSocks5HandshakeStub 启动最小的 SOCKS5 服务端桩：完成握手与 CONNECT 应答并记录目标与凭据，
+// 协商后保持连接打开（与真实代理一致），拨号返回的连接因此可直接读写。
 func startSocks5HandshakeStub(t *testing.T, wantAuth bool) (string, <-chan socks5ConnRequest) {
 	t.Helper()
 
@@ -49,7 +47,6 @@ func startSocks5HandshakeStub(t *testing.T, wantAuth bool) (string, <-chan socks
 					return
 				}
 				got <- req
-				// 保持连接，直到对端关闭。
 				_, _ = io.Copy(io.Discard, c)
 			}(conn)
 		}
@@ -57,7 +54,6 @@ func startSocks5HandshakeStub(t *testing.T, wantAuth bool) (string, <-chan socks
 	return ln.Addr().String(), got
 }
 
-// socks5ServeHandshake 完成一次无认证或用户名/密码认证的握手与 CONNECT 应答。
 func socks5ServeHandshake(c net.Conn, wantAuth bool) (socks5ConnRequest, error) {
 	var req socks5ConnRequest
 
@@ -150,8 +146,7 @@ func socks5ServeHandshake(c net.Conn, wantAuth bool) (socks5ConnRequest, error) 
 	return req, nil
 }
 
-// TestDialContextThroughStub 固定 DialContext 经真实 SOCKS5 协商后返回可用连接，
-// 且目标以域名（ATYP=0x03）形式交给代理，不做本地解析。
+// TestDialContextThroughStub 固定目标以域名（ATYP=0x03）交给代理、不做本地解析。
 func TestDialContextThroughStub(t *testing.T) {
 	addr, got := startSocks5HandshakeStub(t, false)
 
@@ -182,8 +177,7 @@ func TestDialContextThroughStub(t *testing.T) {
 	}
 }
 
-// TestDialContextSendsCredentials 固定 URL 中的凭据会以 RFC 1929 用户名/密码
-// 方式协商。
+// TestDialContextSendsCredentials 固定 URL 中的凭据以 RFC 1929 用户名/密码方式协商。
 func TestDialContextSendsCredentials(t *testing.T) {
 	addr, got := startSocks5HandshakeStub(t, true)
 
@@ -205,15 +199,9 @@ func TestDialContextSendsCredentials(t *testing.T) {
 	}
 }
 
-// TestDialContextHonorsContextCancellation 固定 ctx 取消能中止拨号。旧实现靠
-// "goroutine + 结果 channel + 放弃后排空"手工编排取消；改用 x/net/proxy 的
-// DialContext 后该行为必须保持不变。
-//
-// 语义差异（已知且可接受）：x/net/proxy 只在"拨通上游代理"这一步检查 ctx，
-// SOCKS5 握手本身的读写不带 deadline，因此 ctx 到期时错误通常表现为
-// i/o timeout 而不是包装后的 context.DeadlineExceeded。拨号仍然有界——由
-// SetDialTimeout 派生的 net.Dialer.Timeout 兜底——所以这里断言的是"被及时
-// 中止"，而不是具体的错误类型。
+// TestDialContextHonorsContextCancellation 固定 ctx 取消能中止拨号，但只断言"被及时中止"而不核对错误类型：
+// x/net/proxy 只在拨通上游代理时检查 ctx，SOCKS5 握手读写不带 deadline，到期常表现为 i/o timeout，
+// 真正的上界来自 SetDialTimeout 派生的 net.Dialer.Timeout。
 func TestDialContextHonorsContextCancellation(t *testing.T) {
 	// 一个只接受连接、不对握手作任何应答的服务端：拨号只能靠 ctx 结束。
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -221,8 +209,7 @@ func TestDialContextHonorsContextCancellation(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-	// 已接受的连接记在 sync.Map 里，由 Cleanup 统一关闭：accept goroutine 与
-	// 测试 goroutine 并发，普通切片会引入数据竞争。
+	// 已接受的连接记在 sync.Map 里：accept goroutine 与测试 goroutine 并发，普通切片会引入数据竞争。
 	var accepted sync.Map
 	t.Cleanup(func() {
 		accepted.Range(func(_, v any) bool {
@@ -264,8 +251,7 @@ func TestDialContextHonorsContextCancellation(t *testing.T) {
 	}
 }
 
-// TestDialContextFailsWhenProxyRefuses 固定上游代理不可达时返回错误而不是挂起，
-// 并且错误里带有目标地址，便于排障。
+// TestDialContextFailsWhenProxyRefuses 固定上游代理不可达时返回错误而不是挂起，且错误里带目标地址。
 func TestDialContextFailsWhenProxyRefuses(t *testing.T) {
 	// 先占一个端口再释放，得到一个几乎肯定无人监听的地址。
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

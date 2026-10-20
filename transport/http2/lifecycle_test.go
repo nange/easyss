@@ -494,10 +494,8 @@ func TestEvaluateRotation(t *testing.T) {
 
 func TestResetRotationClearsMarks(t *testing.T) {
 	s := &transportSlot{}
-	// 被 grow 重新激活（或完成轮换后）的槽位带着前一条连接的状态：
-	// 过期的截止时间、承载的字节数以及 expiring/degraded 判定。
-	// resetRotation 必须把它恢复到"无连接"基线：无标记、零截止时间、
-	// 零字节——这样 rotationDue 绝不会在复用连接的状态上触发。
+	// 槽位复用时会带着前一条连接的状态；resetRotation 必须恢复到"无连接"基线，
+	// 否则 rotationDue 会在复用连接上触发。
 	s.degraded.Store(true)
 	s.expiring.Store(true)
 	s.reverify.Store(true) // 挂起嫌疑同样是连接作用域的
