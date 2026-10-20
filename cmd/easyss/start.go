@@ -49,11 +49,11 @@ func runApp(disableTray, daemon bool, app *App) {
 		_ = ta.tray.Run()
 		ta.trayExit()
 	} else {
-		proxyWasSet := app.setupSysProxy()
+		app.setupSysProxy()
 
 		if err := app.Start(); err != nil {
 			log.Error("[EASYSS-V3] start", "err", err)
-			teardownSysProxy(proxyWasSet)
+			app.Stop()
 			os.Exit(1)
 		}
 		if warn := app.currentStartupWarn(); warn != nil {
@@ -61,7 +61,6 @@ func runApp(disableTray, daemon bool, app *App) {
 		}
 		sigWait()
 
-		teardownSysProxy(proxyWasSet)
 		app.Stop()
 		os.Exit(0)
 	}

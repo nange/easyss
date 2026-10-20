@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"strings"
@@ -53,6 +54,9 @@ func nextClientFrame(dr *crypto.DecryptedReader) (frame protocol.Frame, done boo
 // transientStreamPatterns 列出表示"对端已离开该流"的错误片段（全部小写）。
 // 客户端正常拆除（关闭本地连接 → RST_STREAM(CANCEL) → 服务端读请求体失败）
 // 会让每个流都产生一条这样的错误，因此它们不能按故障记录。
+//
+// 能 typed 的都已经 typed（见 isTransientStreamError）；这里只剩 stdlib 未导出
+// 的 HTTP/2 流级错误与 RFC 9113 的连接拆除文本。
 var transientStreamPatterns = []string{
 	// HTTP/2 流级取消：标准库用未导出的哨兵包装，只能靠字符串匹配。
 	"stream error: stream id ",
@@ -60,12 +64,11 @@ var transientStreamPatterns = []string{
 	// 客户端连接消失：net/http 用它关闭该连接上残留的所有流。
 	"client disconnected",
 	"client connection lost",
-	// net/http：请求体在我们自己关闭（中继终止）之后仍被读取。
-	"invalid read on closed body",
-	// relay：正常的流生命周期结束。
-	"idle timeout",
-	"stream drained",
 }
+
+// errStreamIdleTimeout 是中继空闲超时的哨兵：tcp handler 用它包装真实的超时
+// 值（"tcp stream idle timeout after 2m0s"），分类时不必再匹配 "idle timeout"。
+var errStreamIdleTimeout = errors.New("tcp stream idle timeout")
 
 // isTransientStreamError 报告流失败是否是预期的拆除路径（对端离开该流、
 // 中继空闲超时），而不是真正的故障。这类失败在客户端断开或回收连接时会同时
@@ -81,11 +84,12 @@ func isTransientStreamError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// net.ErrClosed 同时覆盖 net.Conn 与 net/http 的请求体
-	// （http.ErrBodyReadAfterClose 就是用 net.ErrClosed 包装的）；
+	// net.ErrClosed 同时覆盖 net.Conn 与 net/http 的请求体；
+	// http.ErrBodyReadAfterClose 是它在中继终止后继续读请求体时的显式错误；
 	// io.ErrClosedPipe 来自我们主动关闭的流，同样属于拆除路径。
 	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) ||
-		errors.Is(err, errClientGone) || errors.Is(err, os.ErrDeadlineExceeded) {
+		errors.Is(err, errClientGone) || errors.Is(err, os.ErrDeadlineExceeded) ||
+		errors.Is(err, http.ErrBodyReadAfterClose) || errors.Is(err, errStreamIdleTimeout) {
 		return true
 	}
 	msg := strings.ToLower(err.Error())

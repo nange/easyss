@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -69,14 +70,12 @@ func TestIsTransientStreamError(t *testing.T) {
 		{"http2 stream closed", errors.New("crypto: write record: http2: stream closed")},
 		{"http2 client disconnected", errors.New("crypto: read cipher_len: client disconnected")},
 		{"http2 connection lost", errors.New("crypto: read cipher_len: http2: client connection lost")},
-		{"poisoned request body", errors.New("crypto: read cipher_len: http: invalid Read on closed Body")},
-		{"relay idle timeout", errors.New("tcp stream idle timeout after 2m0s")},
-		{"relay drained", errors.New("stream drained: idle for 5s while the slot is due for eviction")},
+		{"poisoned request body", http.ErrBodyReadAfterClose},
+		{"relay idle timeout", fmt.Errorf("%w after 2m0s", errStreamIdleTimeout)},
 		{"client gone after cancel", errClientGone},
 		{"closed conn", net.ErrClosed},
 		{"wrapped errClientGone", fmt.Errorf("dial: %w", errClientGone)},
 		{"io closed pipe", io.ErrClosedPipe},
-		{"body read after close", errors.New("http: invalid Read on closed Body")},
 	}
 
 	for _, tt := range transient {

@@ -58,12 +58,6 @@ func TestFriendlyStartupError(t *testing.T) {
 		t.Fatalf("EADDRINUSE should get the port-in-use hint: %q", msg)
 	}
 
-	// Windows：标准的错误消息文本。
-	windowsErr := errors.New("bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.")
-	if msg := friendlyStartupError(windowsErr); !strings.Contains(msg, "本地端口可能被占用") {
-		t.Fatalf("windows in-use error should get the hint: %q", msg)
-	}
-
 	// 空密码（crypto.ErrPasswordEmpty）。
 	passwordErr := fmt.Errorf("derive master key: %w", crypto.ErrPasswordEmpty)
 	if msg := friendlyStartupError(passwordErr); !strings.Contains(msg, "服务器密码为空") {

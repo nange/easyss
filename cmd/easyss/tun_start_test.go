@@ -32,6 +32,8 @@ func newStubAppUI() *stubAppUI {
 func (s *stubAppUI) tunStartFailed(err error)     { s.tunFailures <- err }
 func (s *stubAppUI) notify(msg string)            { s.notices <- msg }
 func (s *stubAppUI) serverDomainReady(msg string) { s.domainReady <- msg }
+func (s *stubAppUI) browserProxyEnabled() bool    { return false }
+func (s *stubAppUI) setTunMenuChecked(bool)       {}
 
 // fakeDomainReadiness 是 serverDomainReadiness 的测试替身：cmd 包内无法构造
 // 带可用通道的 *runner.Core（字段不可导出）。

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -217,6 +218,11 @@ type appUI interface {
 	notify(msg string)
 	// serverDomainReady 报告后台重试已解析出服务端域名、代理恢复可用。
 	serverDomainReady(msg string)
+	// browserProxyEnabled 报告"系统代理"菜单当前是否勾选。headless 没有菜单，
+	// 因此实现必须返回 false。
+	browserProxyEnabled() bool
+	// setTunMenuChecked 把 TUN 菜单勾选同步到指定状态；没有菜单时为空操作。
+	setTunMenuChecked(checked bool)
 }
 
 type App struct {
@@ -231,6 +237,11 @@ type App struct {
 	// ui 是运行期界面（见 appUI）。托盘在 buildTray 中安装自己；headless 与
 	// --disable-tray 构建保持 nil，此时原因只写日志。
 	ui appUI
+
+	// sysProxyApplied 记录本进程是否成功改过系统代理。系统代理的 apply/revert
+	// 现在归 App 所有：托盘菜单、headless 启动与 App.Stop 都通过它判断是否需要
+	// 撤销，避免"菜单勾选状态"和实际系统状态各说各话。
+	sysProxyApplied atomic.Bool
 
 	// sess 持有本次会话的全部可变状态与它自己的锁：核心、TUN 引擎、pprof
 	// 服务器、后台统计循环与会话级标量。App 上不再有任何会话锁字段——改写
@@ -370,8 +381,113 @@ func (a *App) watchServerDomainReady(core serverDomainReadiness, gen uint64, pen
 // App 上不再有会话锁字段，也没有"调用方持有锁"的契约。
 func (a *App) Start() error { return a.sess.start() }
 
-// Stop 停止当前会话：核心、TUN 引擎与 pprof 服务器。它幂等，"取下即停"。
-func (a *App) Stop() { a.sess.stop() }
+// Stop 停止当前会话：撤销系统代理 → 拆 TUN → 停核心。它与 Close 共同构成
+// 三条启动路径与托盘关闭/切换的退出序列；顺序是硬约束（TUN 依赖核心的本地
+// 代理入口，必须先拆 TUN）。Stop 幂等，"取下即停"。
+func (a *App) Stop() {
+	a.teardownSysProxy()
+
+	// 在停止核心服务之前停止 TUN 助手进程和引擎。非 darwin/linux 或 root 下
+	// 如果 TUN 不是通过助手进程启动的，tunDown 是空操作。
+	if err := a.sess.tunDown(); err != nil {
+		log.Error("[EASYSS-V3] stop: close tun2socks", "err", err)
+	}
+
+	a.sess.stop()
+}
+
+// Close 是托盘的退出/切换序列：与 Stop 的区别是它无条件撤销系统代理，即使
+// sysProxyApplied 为假——托盘要清理上一次运行或异步开关留下的、可能指向本地
+// 端口的系统代理。headless 与 --disable-tray 不调用它，只撤销自己设置过的代理。
+func (a *App) Close() {
+	if err := a.setSysProxyOff(); err != nil {
+		log.Error("[EASYSS-V3] close: set sysproxy off", "err", err)
+	}
+	a.Stop()
+}
+
+// restartServiceInSequence 是服务器切换的序列体；start 由调用方注入，使测试可以
+// 驱动"新服务起不来 → 回滚到旧服务器"这条路径，而不必真的启动代理核心。
+//
+// newCfg 只是"切换意图"的载体：本函数只从它取目标服务器下标，然后把这**一条
+// 增量**应用到当前快照上（见下面的 updateConfig），其余字段一律以当前快照为准。
+// 原因是 Close 可能要数秒（macOS 上要等 TUN 拆除的管理员凭据），而序列锁只
+// 串行化两套"停/起"，串不住不持锁的菜单路径——若在这里发布一份停服务之前取
+// 的全量快照，用户在这期间改的代理规则/日志级别就会被静默还原。
+//
+// start 收到的配置是"调用时刻生效的快照"，只读（生产实现忽略它，测试据此判断
+// 目标服务器与注入失败）。
+func (a *App) restartServiceInSequence(newCfg *config.ClientConfig, start func(*config.ClientConfig) error) error {
+	targetIdx := newCfg.DefaultServerIndex()
+
+	snap := a.currentConfig()
+	prevIdx, prevTun := snap.DefaultServerIndex(), snap.Local.EnableTun2socks
+
+	sysProxyEnabled := a.browserProxyEnabled()
+
+	// 停止一切，包括 TUN。在 macOS 上这会提示输入管理员凭据
+	// 以清理路由和 DNS —— 在手动切换服务器期间可以接受。
+	a.Close()
+
+	// 停完之后才发布切换意图，且只改这次切换真正要改的两个字段：目标服务器，
+	// 以及"切换后 TUN 保持关闭"（托盘菜单与实际状态同步，用户一次点击即可
+	// 重新启用）。CAS 发布因此会把停服务期间的菜单改动合并进来，而不是覆盖它。
+	a.updateConfig(func(c *config.ClientConfig) {
+		c.SetDefaultServerIndex(targetIdx)
+		c.Local.EnableTun2socks = false
+	})
+	a.setTunMenuChecked(false)
+
+	restoreSysProxy := func() {
+		if !sysProxyEnabled {
+			return
+		}
+		if err := a.setSysProxyOn(); err != nil {
+			log.Error("[EASYSS-V3] restart service: restore sysproxy on", "err", err)
+		}
+	}
+
+	if err := start(a.currentConfig()); err != nil {
+		// 回滚同样只回退这次切换改掉的两个字段（服务器选择与 TUN 偏好），
+		// 保留菜单在这期间的最新改动。回滚也失败时两个错误一起上报
+		//（调用方据此判断"完全没有服务在运行"）。
+		a.updateConfig(func(c *config.ClientConfig) {
+			c.SetDefaultServerIndex(prevIdx)
+			c.Local.EnableTun2socks = prevTun
+		})
+		a.setTunMenuChecked(prevTun)
+		prevAddr := a.currentConfig().DefaultServerAddr()
+		if rollbackErr := start(a.currentConfig()); rollbackErr != nil {
+			return errors.Join(err, fmt.Errorf("rollback to %s: %w", prevAddr, rollbackErr))
+		}
+		log.Warn("[EASYSS-V3] restart service: rolled back to the previous server",
+			"addr", prevAddr, "err", err)
+		restoreSysProxy()
+		return err
+	}
+
+	// startupWarn 由 start 里的那次 App.Start（或 buildTray 的初始 Start）写入；
+	// 这里的恢复流程与那次 Start 分属不同 goroutine，因此必须走访问器（它读的是
+	// 会话自己的锁，见 session.startupWarn）。
+	if warn := a.currentStartupWarn(); warn != nil {
+		log.Warn("[EASYSS-V3] restart service: startup warning", "err", warn)
+	}
+
+	restoreSysProxy()
+	return nil
+}
+
+// browserProxyEnabled / setTunMenuChecked 把可选界面包装成 nil 安全的方法：
+// headless 没有 ui，重启序列只由托盘触发，但 App 本身不应假设 ui 一定存在。
+func (a *App) browserProxyEnabled() bool {
+	return a.ui != nil && a.ui.browserProxyEnabled()
+}
+
+func (a *App) setTunMenuChecked(checked bool) {
+	if a.ui != nil {
+		a.ui.setTunMenuChecked(checked)
+	}
+}
 
 // notifyTunSkippedNoRoot 报告 TUN 已配置但因缺少管理员权限而无法启动。
 // 提示文本是固定的：没有可附加的底层错误，而且可操作的建议在
@@ -405,7 +521,8 @@ func (a *App) notifyTunTeardownProblem(msg string) {
 }
 
 // setupSysProxy 按配置把系统代理指向本地 HTTP 代理（见 setSysProxy）。
-// 返回 true 表示系统代理已被改动，调用方在退出前必须用 teardownSysProxy 撤销它。
+// 返回 true 表示系统代理已被改动；实际状态同时记入 sysProxyApplied，退出时
+// 由 App.Stop 统一撤销。
 //
 // 配置禁用（disable_sys_proxy）或本地 HTTP 端口无效时它什么都不做；设置失败
 // 也只记一条警告：用户仍可手动配置代理，启动不应因此失败——这条降级逻辑
@@ -421,19 +538,40 @@ func (a *App) setupSysProxy() bool {
 		log.Warn("[EASYSS-V3] set system proxy failed, you may need to configure it manually", "err", err)
 		return false
 	}
+	a.sysProxyApplied.Store(true)
 	return true
 }
 
-// teardownSysProxy 撤销 setupSysProxy 的改动；applied 为 false 时是空操作。
-// 是否应用由调用方传入而不是用 defer 表达，因为无托盘的启动路径最后用
-// os.Exit 退出，defer 不会执行。
-func teardownSysProxy(applied bool) {
-	if !applied {
+// teardownSysProxy 撤销 setupSysProxy/托盘菜单的改动。它只在 sysProxyApplied
+// 为真时调用 sysProxyRevert，因此重复 Stop、切换失败回滚与 headless 退出路径
+// 可以无脑调用，不会把别人的系统代理设置误撤掉。
+func (a *App) teardownSysProxy() {
+	if !a.sysProxyApplied.Swap(false) {
 		return
 	}
 	if err := sysProxyRevert(); err != nil {
 		log.Warn("[EASYSS-V3] unset system proxy failed, you may need to restore it manually", "err", err)
 	}
+}
+
+// setSysProxyOn/setSysProxyOff 走 sysProxyApply/sysProxyRevert 这两个包级钩子
+// （而不是直接调用实现），使测试可以观察托盘路径上的系统代理改动，而不必触碰
+// 运行测试的机器的真实代理配置。两者同时维护 sysProxyApplied，App.Stop 与托盘
+// 退出因此共享同一份实际状态。
+func (a *App) setSysProxyOn() error {
+	err := sysProxyApply(a.currentConfig().Local.HTTPPort)
+	if err == nil {
+		a.sysProxyApplied.Store(true)
+	}
+	return err
+}
+
+func (a *App) setSysProxyOff() error {
+	err := sysProxyRevert()
+	if err == nil {
+		a.sysProxyApplied.Store(false)
+	}
+	return err
 }
 
 // methodFromServer 返回配置的 AEAD 加密方法；当配置指定了未知方法时

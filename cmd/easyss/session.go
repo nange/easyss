@@ -374,7 +374,7 @@ func (s *session) tunDownLocked(want *tun.Manager) error {
 	//    引擎停下来之后，Manager 自己的 teardown 只做它那一半：helper 路径上
 	//    它不跑关闭脚本、不恢复 DNS（那些归 helper），见 tun.Owner。
 	if s.tunMgr != nil {
-		log.Info("[SYSTRAY] tunDown: stopping tun2socks engine", "owner", owner.String())
+		log.Info("[EASYSS-V3] tunDown: stopping tun2socks engine", "owner", owner.String())
 		s.tunMgr.Stop()
 		s.tunMgr = nil
 	}
@@ -384,7 +384,7 @@ func (s *session) tunDownLocked(want *tun.Manager) error {
 	//    FIFO 文件本身在 tunHelperStdin 关闭时被删除（见 fifoWriter.Close）。
 	helperSignalled := false
 	if s.tunHelperStdin != nil {
-		log.Info("[SYSTRAY] tunDown: closing helper FIFO")
+		log.Info("[EASYSS-V3] tunDown: closing helper FIFO")
 		s.tunHelperStdin.Close() //nolint:errcheck
 		s.tunHelperStdin = nil
 		helperSignalled = true
@@ -395,7 +395,7 @@ func (s *session) tunDownLocked(want *tun.Manager) error {
 	//    平台与 headless 构建上是空实现）。
 	if dev != nil {
 		if err := s.verifyTeardown(*dev, owner, helperSignalled); err != nil {
-			log.Error("[SYSTRAY] tunDown: TUN teardown left routes behind", "err", err)
+			log.Error("[EASYSS-V3] tunDown: TUN teardown left routes behind", "err", err)
 			s.app.notifyTunTeardownProblem(
 				"TUN 已停止，但系统路由表里仍残留指向 TUN 的路由，本机可能无法上网。请退出并重新启动 Easyss，或重启系统以恢复网络。详情：" + err.Error())
 		}
