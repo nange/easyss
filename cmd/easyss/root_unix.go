@@ -44,12 +44,16 @@ type tunHelperElevator struct {
 // 它创建一个 FIFO 用于生命周期信号（关闭写端触发 helper 退出），
 // 以及一个用于接收 TUN 文件描述符的 Unix socket。
 //
+// httpAddr 是本进程本地 HTTP 入口的拨号地址（见 util.LocalProxyDialAddr）：
+// helper 用它 GET /tun 取配置。调用方负责按 bind_all 选同族回环，这一层不再
+// 自己拼 127.0.0.1。
+//
 // 返回：
 //   - fifoWriter：关闭以通知 helper 关闭
 //   - fdListener：接受连接并调用 ReceiveFd 获取 TUN fd
-func spawnTunHelper(ev tunHelperElevator, httpPort int, fdSocketPath, logFile, logLevel string, timeout time.Duration) (io.WriteCloser, net.Listener, error) {
+func spawnTunHelper(ev tunHelperElevator, httpAddr string, fdSocketPath, logFile, logLevel string, timeout time.Duration) (io.WriteCloser, net.Listener, error) {
 	log.Info("[SYSTRAY] SpawnTunHelper called",
-		"httpPort", httpPort, "fdSocket", fdSocketPath,
+		"httpAddr", httpAddr, "fdSocket", fdSocketPath,
 		"logFile", logFile, "logLevel", logLevel)
 
 	exe, err := util.ExecutablePath()
@@ -85,10 +89,9 @@ func spawnTunHelper(ev tunHelperElevator, httpPort int, fdSocketPath, logFile, l
 	// 构建 helper 命令。helper 以 "tun-helper" 子命令运行，
 	// 通过 GET /tun 读取配置，并通过 Unix socket 发送 fd。
 	// Stdin 连接到 FIFO。
-	tunHTTPAddr := fmt.Sprintf("127.0.0.1:%d", httpPort)
 	helperArgs := []string{
 		"tun-helper",
-		"--tun-http-addr", tunHTTPAddr,
+		"--tun-http-addr", httpAddr,
 		"--tun-fd-socket", fdSocketPath,
 	}
 	if logFile != "" {

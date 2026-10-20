@@ -24,6 +24,7 @@ import (
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/runner"
 	"github.com/nange/easyss/v3/selfupdate"
+	"github.com/nange/easyss/v3/util"
 )
 
 type TrayApp struct {
@@ -441,7 +442,8 @@ func (a *TrayApp) statsRefresher() {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
-	url := fmt.Sprintf("http://127.0.0.1:%d/stats", a.currentConfig().Local.HTTPPort)
+	cfg := a.currentConfig()
+	url := fmt.Sprintf("http://%s/stats", util.LocalProxyDialAddr(cfg.Local.BindAll, cfg.Local.HTTPPort))
 	httpClient := &http.Client{Timeout: 2 * time.Second}
 
 	for {
@@ -548,7 +550,7 @@ func (a *TrayApp) toggleSysProxy() {
 			}
 		} else {
 			mi.SetChecked(true)
-			if err := a.setSysProxyOn(a.currentConfig().Local.HTTPPort); err != nil {
+			if err := a.setSysProxyOn(sysProxyAddr(a.currentConfig())); err != nil {
 				log.Error("[SYSTRAY] set sys-proxy on", "err", err)
 				mi.SetChecked(false) // 失败时回滚
 			}
@@ -752,7 +754,7 @@ func (a *TrayApp) setTunMenuChecked(checked bool) {
 
 func (a *TrayApp) startLocalService() {
 	if a.BrowserMenu() != nil && a.BrowserMenu().IsChecked() {
-		if err := a.setSysProxyOn(a.currentConfig().Local.HTTPPort); err != nil {
+		if err := a.setSysProxyOn(sysProxyAddr(a.currentConfig())); err != nil {
 			log.Error("[SYSTRAY] start local: set sysproxy on", "err", err)
 		}
 	} else {

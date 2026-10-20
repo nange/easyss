@@ -3,9 +3,10 @@ package main
 import (
 	"errors"
 	"fmt"
-	"strconv"
 
+	"github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/util"
 	"github.com/wzshiming/sysproxy"
 )
 
@@ -17,22 +18,31 @@ var (
 	sysProxyRevert = unsetSysProxy
 )
 
+// sysProxyAddr 返回系统代理与会话环境应指向的本地 HTTP 入口地址。它与入口的
+// 监听地址同源（见 util.LocalProxyDialAddr）：bind_all 时入口监听 [::]，这里
+// 必须给同族回环 [::1]——在只接受 IPv6 回环的环境里，写死 127.0.0.1 的系统
+// 代理指向一个连不上的入口，浏览器与终端全部无法上网。
+func sysProxyAddr(cfg *config.ClientConfig) string {
+	return util.LocalProxyDialAddr(cfg.Local.BindAll, cfg.Local.HTTPPort)
+}
+
 // setSysProxy 通过两种可用机制把系统指向本地 HTTP 代理：
 // 桌面代理设置（GNOME 的 gsettings、KDE 的 kioslaverc、
 // Windows 的注册表、macOS 的 networksetup）以及 —— Linux 上 —— 会话环境。
 // 后者供不读取桌面设置的程序使用；例如 Chromium 会在所有它无法识别的
 // 桌面环境（包括 Hyprland）上忽略 gsettings。
 //
+// addr 是本地 HTTP 入口的拨号地址（见 sysProxyAddr），而不是端口：两个机制
+// 都需要完整的地址，各自拼 127.0.0.1 会让它们与 bind_all 漂移。
+//
 // 只要两种机制之一生效，返回的 error 即为 nil，
 // 因此调用方可以依赖 unsetSysProxy 再次撤销它。
-func setSysProxy(port int) error {
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-
+func setSysProxy(addr string) error {
 	settingsErr := errors.Join(
 		wrapProxyErr("set http proxy", sysproxy.OnHTTP(addr)),
 		wrapProxyErr("set https proxy", sysproxy.OnHTTPS(addr)),
 	)
-	envApplied, envErr := setSysProxyEnv(port)
+	envApplied, envErr := setSysProxyEnv(addr)
 
 	if settingsErr != nil && !envApplied {
 		return errors.Join(settingsErr, envErr)
@@ -44,7 +54,7 @@ func setSysProxy(port int) error {
 		log.Warn("[SYSPROXY] session environment not updated", "err", envErr)
 	}
 
-	log.Info("[SYSPROXY] proxy enabled", "port", strconv.Itoa(port))
+	log.Info("[SYSPROXY] proxy enabled", "addr", addr)
 	return nil
 }
 

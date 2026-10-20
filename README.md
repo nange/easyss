@@ -74,7 +74,7 @@ Easyss v3 支持两种配置模式，自动识别：
 | `method` | 否 | aes-256-gcm | 加密方式，可选: `aes-256-gcm`, `chacha20-poly1305` |
 | `proxy_rule` | 否 | auto | 代理规则，可选: `auto`, `reverse_auto`, `proxy`, `direct`, `auto_block` |
 | `timeout` | 否 | 30 | 基础超时时间，单位秒，取值范围 15-60（越界取边界值）；TCP/UDP 空闲、拨号、DNS 响应与连接轮换均由它派生（见"`timeout` 派生规则"） |
-| `bind_all` | 否 | false | 是否将监听端口绑定到所有本地 IP |
+| `bind_all` | 否 | false | 是否将监听端口绑定到所有本地 IP；开启时监听 `[::]`，系统代理与 TUN 等本机自用端点改用同族回环 `[::1]` 访问本地代理 |
 | `outbound_proto` | 否 | native | 出口协议，可选: `native`, `h2`（效果相同，均为 HTTP/2） |
 | `log_level` | 否 | info | 日志级别，可选: `debug`, `info`, `warn`, `error` |
 | `log_file_path` | 否 | 空 | 日志文件路径，为空则输出到标准输出 |
@@ -178,7 +178,7 @@ Easyss v3 支持两种配置模式，自动识别：
 | --- | --- | --- | --- |
 | `local.socks_port` | 否 | - | 本地 SOCKS5 监听端口（如 4080）；为 0 时不启动本地代理服务器，通常需要填写 |
 | `local.http_port` | 否 | `socks_port + 1000` | 本地 HTTP 代理监听端口（`socks_port` 为 4080 时即 5080）；未配置时由 `socks_port` 推导，显式配置优先。`socks_port` 为 0 时它也是 0（不监听）；它非 0 而 `socks_port` 为 0 时启动会报错 |
-| `local.bind_all` | 否 | false | 是否将监听端口绑定到所有本地 IP |
+| `local.bind_all` | 否 | false | 是否将监听端口绑定到所有本地 IP；开启时监听 `[::]`，系统代理与 TUN 等本机自用端点改用同族回环 `[::1]` 访问本地代理 |
 | `local.disable_sys_proxy` | 否 | false | 是否不设置系统代理（headless 版默认会设置，见"无托盘（headless）版本的系统代理"） |
 | `local.enable_forward_dns` | 否 | false | 是否在本机所有网卡的 53 端口提供 DNS 转发（供 LAN 设备使用，见"作为透明代理"一节） |
 | `local.enable_tun2socks` | 否 | false | 是否启用 TUN 全局透明代理 |

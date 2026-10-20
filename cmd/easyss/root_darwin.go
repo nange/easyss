@@ -20,7 +20,7 @@ import (
 // 返回：
 //   - fifoWriter：关闭以通知 helper 关闭
 //   - fdListener：接受连接并调用 ReceiveFd 获取 TUN fd
-func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeout time.Duration) (io.WriteCloser, net.Listener, error) {
+func SpawnTunHelper(httpAddr string, fdSocketPath, logFile, logLevel string, timeout time.Duration) (io.WriteCloser, net.Listener, error) {
 	// macOS 没有抽象 Unix socket：fd socket 是文件系统条目，
 	// 必须在 listen 前清理陈旧文件，并在之后让提权的（root）helper
 	// 可以访问。
@@ -44,5 +44,5 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 		cleanupSocket: func(fdSocketPath string) {
 			os.Remove(fdSocketPath) //nolint:errcheck
 		},
-	}, httpPort, fdSocketPath, logFile, logLevel, timeout)
+	}, httpAddr, fdSocketPath, logFile, logLevel, timeout)
 }

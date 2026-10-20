@@ -19,7 +19,7 @@ import (
 // 返回：
 //   - fifoWriter：关闭以通知 helper 关闭
 //   - fdListener：接受连接并调用 ReceiveFd 获取 TUN fd
-func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeout time.Duration) (io.WriteCloser, net.Listener, error) {
+func SpawnTunHelper(httpAddr string, fdSocketPath, logFile, logLevel string, timeout time.Duration) (io.WriteCloser, net.Listener, error) {
 	// Linux 使用抽象 socket（@ 前缀）：它没有文件系统条目
 	// （无需清理陈旧文件、无需 chmod），也不受 pkexec 挂载
 	// 命名空间隔离的影响。
@@ -37,5 +37,5 @@ func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeou
 		innerCmd: func(exe, helperArgs, fifoPath string) string {
 			return fmt.Sprintf("nohup '%s' %s < '%s' >/dev/null 2>&1 &", exe, helperArgs, fifoPath)
 		},
-	}, httpPort, fdSocketPath, logFile, logLevel, timeout)
+	}, httpAddr, fdSocketPath, logFile, logLevel, timeout)
 }

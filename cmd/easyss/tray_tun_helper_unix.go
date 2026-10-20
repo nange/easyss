@@ -89,7 +89,7 @@ func (s *session) tunUpViaHelper() error {
 	// netstack，二者不一致时 netstack 会静默丢弃超过自身 MTU 的包
 	// （见 tun.Manager.engineMTU）。
 	tunHTTPCfg := &proxy.TunConfig{
-		Socks5Addr:     util.Socks5URI(cfg.Local.SocksPort),
+		Socks5Addr:     util.Socks5URI(cfg.Local.BindAll, cfg.Local.SocksPort),
 		DNSAddr:        tunDNS(),
 		Device:         devCfg.Device,
 		TunIP:          devCfg.TunIP,
@@ -107,10 +107,14 @@ func (s *session) tunUpViaHelper() error {
 	core.HTTPServer.SetTunConfig(tunHTTPCfg)
 
 	// 4. 生成提权 helper。将归一化后的基础超时作为生成等待上限
-	//    （未配置时为默认值 30s，越界值已在加载时钳制）。
+	//    （未配置时为默认值 30s，越界值已在加载时钳制）。helper 通过这个地址
+	//    GET /tun 取配置，因此它与本地 HTTP 入口的监听同源（见
+	//    util.LocalProxyDialAddr）；写死 127.0.0.1 会在 bind_all 且监听只接受
+	//    IPv6 回环时让 helper 取不到配置、TUN 根本无法启用。
 	spawnTimeout := cfg.TimeoutDuration()
 	fdSocketPath := tunFdSocketPath()
-	fifoWriter, fdListener, err := SpawnTunHelper(cfg.Local.HTTPPort, fdSocketPath,
+	httpAddr := util.LocalProxyDialAddr(cfg.Local.BindAll, cfg.Local.HTTPPort)
+	fifoWriter, fdListener, err := SpawnTunHelper(httpAddr, fdSocketPath,
 		cfg.Log.FilePath, cfg.Log.Level, spawnTimeout)
 	if err != nil {
 		core.HTTPServer.ClearTunConfig()
@@ -153,7 +157,7 @@ func (s *session) tunUpViaHelper() error {
 	s.tunSession = &devCfg
 	s.tunOwner = tun.OwnerHelper
 	s.tunMgr = tun.New(tun.Config{
-		Socks5Addr: util.Socks5URI(cfg.Local.SocksPort),
+		Socks5Addr: util.Socks5URI(cfg.Local.BindAll, cfg.Local.SocksPort),
 		// DeviceFD>0 即 fd 路径：owner 由它推导为 OwnerHelper（见 tun.Owner），
 		// 路由与系统 DNS 归 helper 回收，主进程只停自己的引擎并关闭 fd。
 		DeviceFD: fd,

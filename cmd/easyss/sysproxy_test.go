@@ -8,9 +8,9 @@ import (
 	clientconfig "github.com/nange/easyss/v3/client/config"
 )
 
-// stubSysProxy 替换系统代理的设置/撤销钩子，记录被设置的端口与撤销次数，
+// stubSysProxy 替换系统代理的设置/撤销钩子，记录被设置的地址与撤销次数，
 // 使测试不必触碰运行测试的机器的真实系统代理配置。
-func stubSysProxy(t *testing.T, applyErr error) (applied *[]int, reverts *int) {
+func stubSysProxy(t *testing.T, applyErr error) (applied *[]string, reverts *int) {
 	t.Helper()
 
 	prevApply, prevRevert := sysProxyApply, sysProxyRevert
@@ -18,10 +18,10 @@ func stubSysProxy(t *testing.T, applyErr error) (applied *[]int, reverts *int) {
 		sysProxyApply, sysProxyRevert = prevApply, prevRevert
 	})
 
-	applied = &[]int{}
+	applied = &[]string{}
 	reverts = new(int)
-	sysProxyApply = func(port int) error {
-		*applied = append(*applied, port)
+	sysProxyApply = func(addr string) error {
+		*applied = append(*applied, addr)
 		return applyErr
 	}
 	sysProxyRevert = func() error {
@@ -35,15 +35,30 @@ func testApp(local clientconfig.LocalConfig) *App {
 	return newApp(&clientconfig.ClientConfig{Local: local}, "")
 }
 
-func TestSetupSysProxyAppliesLocalHTTPPort(t *testing.T) {
+func TestSetupSysProxyAppliesLocalHTTPAddr(t *testing.T) {
 	applied, _ := stubSysProxy(t, nil)
 
 	app := testApp(clientconfig.LocalConfig{HTTPPort: 5080})
 	if !app.setupSysProxy() {
 		t.Fatal("setupSysProxy = false, want true")
 	}
-	if want := []int{5080}; !slices.Equal(*applied, want) {
-		t.Fatalf("applied ports = %v, want %v", *applied, want)
+	if want := []string{"127.0.0.1:5080"}; !slices.Equal(*applied, want) {
+		t.Fatalf("applied addrs = %v, want %v", *applied, want)
+	}
+}
+
+// TestSetupSysProxyFollowsBindAll 守护本 issue 的核心失败模式：bind_all 时本地
+// HTTP 入口监听 [::]，系统代理必须指向同族回环 [::1]。写死 127.0.0.1 的实现
+// 在只接受 IPv6 回环的环境里把系统指向一个连不上的入口（浏览器全部无法上网）。
+func TestSetupSysProxyFollowsBindAll(t *testing.T) {
+	applied, _ := stubSysProxy(t, nil)
+
+	app := testApp(clientconfig.LocalConfig{HTTPPort: 5080, BindAll: true})
+	if !app.setupSysProxy() {
+		t.Fatal("setupSysProxy = false, want true")
+	}
+	if want := []string{"[::1]:5080"}; !slices.Equal(*applied, want) {
+		t.Fatalf("applied addrs = %v, want %v", *applied, want)
 	}
 }
 
@@ -55,7 +70,7 @@ func TestSetupSysProxyHonorsDisableSwitch(t *testing.T) {
 		t.Fatal("setupSysProxy = true, want false when disable_sys_proxy is set")
 	}
 	if len(*applied) != 0 {
-		t.Fatalf("applied ports = %v, want none", *applied)
+		t.Fatalf("applied addrs = %v, want none", *applied)
 	}
 }
 
@@ -67,7 +82,7 @@ func TestSetupSysProxySkipsInvalidHTTPPort(t *testing.T) {
 		t.Fatal("setupSysProxy = true, want false without a local HTTP port")
 	}
 	if len(*applied) != 0 {
-		t.Fatalf("applied ports = %v, want none", *applied)
+		t.Fatalf("applied addrs = %v, want none", *applied)
 	}
 }
 
