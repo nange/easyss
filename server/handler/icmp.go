@@ -125,7 +125,6 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) (reply []byte,
 	// 拨号后的 SSRF 防护在 dialTarget 内部执行。
 	conn, connRemote, err := h.dial.dialTarget(context.Background(), dialNet, target)
 	if err != nil {
-		log.Error("[ICMP] dial target failed", "target", target, "err", err)
 		return nil, "", err
 	}
 	defer conn.Close() //nolint:errcheck
@@ -158,7 +157,6 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) (reply []byte,
 	}
 
 	if _, err := conn.Write(wb); err != nil {
-		log.Error("[ICMP] write failed", "target", target, "err", err)
 		return nil, "", err
 	}
 
@@ -175,8 +173,6 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) (reply []byte,
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				log.Debug("[ICMP] read timed out", "target", target)
-			} else {
-				log.Error("[ICMP] read failed", "target", target, "err", err)
 			}
 			return nil, "", err
 		}

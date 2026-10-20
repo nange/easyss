@@ -12,11 +12,19 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-func TestDefaultConfig(t *testing.T) {
-	cfg := DefaultConfig()
-	if cfg == nil {
-		t.Fatal("DefaultConfig returned nil")
+// testDefaultConfig 构造一份已归一化的默认配置。生产加载路径不经过它：
+// 完整模式走 LoadConfig/ParseConfigJSON，简化模式走 BuildSimpleConfig。
+func testDefaultConfig() *ClientConfig {
+	cfg := &ClientConfig{
+		ConfigVersion: 3,
+		Local:         LocalConfig{SocksPort: config.DefaultSocksPort},
 	}
+	applyDefaults(cfg)
+	return cfg
+}
+
+func TestApplyDefaultsLocalPorts(t *testing.T) {
+	cfg := testDefaultConfig()
 	if cfg.ConfigVersion != 3 {
 		t.Errorf("ConfigVersion = %d, want 3", cfg.ConfigVersion)
 	}
@@ -41,7 +49,7 @@ func TestDefaultConfig(t *testing.T) {
 }
 
 func TestClone(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := testDefaultConfig()
 	cfg.Servers = []*ServerProfile{
 		{Host: "example.com", Port: 443, Password: "secret", Default: true},
 	}
@@ -351,8 +359,8 @@ func TestDefaultServerIndex(t *testing.T) {
 	})
 }
 
-func TestMigrateV2Config(t *testing.T) {
-	t.Run("完整 v2 配置迁移", func(t *testing.T) {
+func TestBuildSimpleConfig(t *testing.T) {
+	t.Run("完整简化配置构建", func(t *testing.T) {
 		v2 := config.SimpleConfig{
 			Server:           "example.com",
 			ServerPort:       443,
@@ -374,7 +382,7 @@ func TestMigrateV2Config(t *testing.T) {
 			OutboundProto:    "h2",
 		}
 
-		v3, err := MigrateV2Config(v2)
+		v3, err := BuildSimpleConfig(&v2)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -414,13 +422,13 @@ func TestMigrateV2Config(t *testing.T) {
 		}
 	})
 
-	t.Run("v2 配置默认值填充", func(t *testing.T) {
+	t.Run("简化配置默认值填充", func(t *testing.T) {
 		v2 := config.SimpleConfig{
 			Server:   "example.com",
 			Password: "secret",
 		}
 
-		v3, err := MigrateV2Config(v2)
+		v3, err := BuildSimpleConfig(&v2)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -442,7 +450,7 @@ func TestMigrateV2Config(t *testing.T) {
 		}
 	})
 
-	t.Run("v2 HTTPPort 自动计算", func(t *testing.T) {
+	t.Run("简化配置 HTTPPort 自动计算", func(t *testing.T) {
 		v2 := config.SimpleConfig{
 			Server:    "example.com",
 			Password:  "secret",
@@ -450,7 +458,7 @@ func TestMigrateV2Config(t *testing.T) {
 			// HTTPPort 未设置
 		}
 
-		v3, err := MigrateV2Config(v2)
+		v3, err := BuildSimpleConfig(&v2)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -460,14 +468,14 @@ func TestMigrateV2Config(t *testing.T) {
 		}
 	})
 
-	t.Run("v2 OutboundProto 校验", func(t *testing.T) {
+	t.Run("简化配置 OutboundProto 校验", func(t *testing.T) {
 		v2 := config.SimpleConfig{
 			Server:        "example.com",
 			Password:      "secret",
 			OutboundProto: "invalid",
 		}
 
-		_, err := MigrateV2Config(v2)
+		_, err := BuildSimpleConfig(&v2)
 		if err == nil {
 			t.Error("expected error for invalid outbound_proto")
 		}
@@ -731,7 +739,7 @@ func TestLoadConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("加载 v2 配置自动迁移", func(t *testing.T) {
+	t.Run("加载 v2 配置自动转换", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "config.json")
 
@@ -780,56 +788,6 @@ func TestLoadConfig(t *testing.T) {
 			t.Error("expected error for missing file")
 		}
 	})
-}
-
-func TestMigrateV2ToV3(t *testing.T) {
-	dir := t.TempDir()
-
-	v2Path := filepath.Join(dir, "v2_config.json")
-	v2JSON := `{
-		"server": "example.com",
-		"server_port": 443,
-		"password": "secret",
-		"local_port": 1080
-	}`
-	if err := os.WriteFile(v2Path, []byte(v2JSON), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	v3Path := filepath.Join(dir, "v3_config.json")
-	if err := MigrateV2ToV3(v2Path, v3Path); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// 验证 v3 文件存在且内容正确
-	data, err := os.ReadFile(v3Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var v3 ClientConfig
-	if err := json.Unmarshal(data, &v3); err != nil {
-		t.Fatal(err)
-	}
-	if v3.ConfigVersion != 3 {
-		t.Errorf("ConfigVersion = %d", v3.ConfigVersion)
-	}
-	if v3.Servers[0].Host != "example.com" {
-		t.Errorf("Host = %q", v3.Servers[0].Host)
-	}
-
-	var raw struct {
-		Servers []map[string]json.RawMessage `json:"servers"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := raw.Servers[0]["host"]; !ok {
-		t.Errorf("migrated config missing host: %s", data)
-	}
-	if _, ok := raw.Servers[0]["address"]; ok {
-		t.Errorf("migrated config must not contain address: %s", data)
-	}
 }
 
 func TestApplyDefaults(t *testing.T) {
@@ -1063,7 +1021,7 @@ func TestResolveFilePaths(t *testing.T) {
 // MTU，两侧一旦偏离就会静默丢包（见 client/tun.Manager.engineMTU）。
 func TestTunMTU(t *testing.T) {
 	t.Run("未配置取默认值", func(t *testing.T) {
-		cfg := DefaultConfig()
+		cfg := testDefaultConfig()
 		if got := cfg.TunMTU(); got != config.DefaultTunMTU {
 			t.Errorf("TunMTU() = %d, want %d", got, config.DefaultTunMTU)
 		}
@@ -1130,7 +1088,7 @@ func TestTunMTU(t *testing.T) {
 			t.Errorf("built TunMTU() = %d, want 8500 (a valid value must survive normalization)", got)
 		}
 
-		overridden := DefaultConfig()
+		overridden := testDefaultConfig()
 		if err := ApplySimpleOverrides(overridden, &config.SimpleConfig{TunMTU: 100}); err != nil {
 			t.Fatal(err)
 		}

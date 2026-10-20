@@ -255,16 +255,10 @@ func LoadConfig(path string) (*ClientConfig, error) {
 		return BuildSimpleConfig(&s)
 	}
 
-	var cfg ClientConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, err
-	}
-	applyDefaults(&cfg)
-	if err := cfg.validateServers(); err != nil {
-		return nil, err
-	}
-
-	return &cfg, nil
+	// 完整模式与 ParseConfigJSON 共用同一条解析/归一化/校验路径：
+	// 两处各写一遍 unmarshal + applyDefaults + validateServers 曾导致
+	// "从文件加载"和"从字符串加载"对同一份配置给出不同结果。
+	return ParseConfigJSON(string(data))
 }
 
 // normalizeHTTPPort 在 http_port 未配置（0）时由 socks_port 推导出本地 HTTP 代理
@@ -392,6 +386,9 @@ func (c *ClientConfig) DefaultServerIndex() int {
 	return 0
 }
 
+// ParseConfigJSON 解析完整模式（v3）配置。它是完整模式唯一的
+// unmarshal + applyDefaults + validateServers 入口：LoadConfig 读完文件、
+// 判定不是简化模式之后直接调用它。
 func ParseConfigJSON(jsonStr string) (*ClientConfig, error) {
 	var cfg ClientConfig
 	if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {
@@ -402,17 +399,4 @@ func ParseConfigJSON(jsonStr string) (*ClientConfig, error) {
 		return nil, err
 	}
 	return &cfg, nil
-}
-
-func DefaultConfig() *ClientConfig {
-	// http_port 不在这里显式给出：applyDefaults 会按 socks_port + 偏移推导
-	// （见 normalizeHTTPPort），使"默认 HTTP 代理端口"只有一条来源。
-	cfg := &ClientConfig{
-		ConfigVersion: 3,
-		Local: LocalConfig{
-			SocksPort: config.DefaultSocksPort,
-		},
-	}
-	applyDefaults(cfg)
-	return cfg
 }

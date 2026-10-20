@@ -10,7 +10,6 @@ import (
 
 	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
-	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/relay"
 	"github.com/nange/easyss/v3/server/nextproxy"
@@ -48,20 +47,19 @@ func newTCPHandler(timeouts config.Timeouts, np *nextproxy.NextProxy) *tcpHandle
 }
 
 // Handle 在客户端与目标之间中继 TCP 流，并以结构化结果返回中继字节数与退出
-// 原因（由 serveSession 统一记录，handler 自己不再打印"流已结束"）。
+// 原因。入口只有 serveSession 的 `[SERVER] proxy` 一条 Info，退出只有
+// logHandlerResult 一条结果日志；handler 内部不再打印拨号/连接/失败日志，
+// 失败阶段由 streamResult 的 err 携带。
 // cancelRead 在中继终止（超时/错误/完成）时被调用；
 // 它会解除可能正阻塞在读取客户端数据（如 HTTP/2 请求体）上的拷贝 goroutine，
 // 从而在 handler 返回后不会有 goroutine 残留。
 func (h *tcpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c shaper.Shaper, target string, cancelRead func()) (out streamResult) {
-	log.Info("[TCP_HANDLE] dialing target", "target", target)
 	targetConn, remote, err := h.dial.dialTarget(ctx, "tcp", target)
 	if err != nil {
-		log.Error("[TCP_HANDLE] dial failed", "target", target, "err", err)
 		sendRST(s2c)
 		return streamResult{Err: err}
 	}
 	defer targetConn.Close() //nolint:errcheck
-	log.Info("[TCP_HANDLE] target connected", "target", target, "remote", remote)
 	m := stats.NewStreamMeter("tcp_handle", target)
 	// 先取字节数再关闭 meter，使 handler 返回时 out.Bytes 已经是最终值
 	// （defer 按后进先出执行，这里注册的清理在返回前完成）。

@@ -357,8 +357,7 @@ func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto p
 	s, err := h.newSession(ctx, endpoint, proto, target, method,
 		[]protocol.Frame{protocol.NewFrameDATA(echoPayload)}, 0)
 	if err != nil {
-		log.Error("[STREAM] icmp bootstrap", "target", target, "err", err)
-		return nil, err
+		return nil, fmt.Errorf("icmp bootstrap: %w", err)
 	}
 	log.Debug("[STREAM] merged ICMP echo payload into bootstrap record", "bytes", len(echoPayload))
 	defer s.stream.Close() //nolint:errcheck
@@ -371,12 +370,10 @@ func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto p
 	frame, err := s.rx.ReadFrame()
 	err = classifyFirstReadError(err)
 	if err != nil {
-		log.Error("[STREAM] icmp read reply", "target", target, "err", err)
 		return nil, fmt.Errorf("read first reply frame: %w", err)
 	}
 
 	if frame.Type == protocol.FrameRST {
-		log.Error("[STREAM] icmp rejected", "target", target)
 		return nil, fmt.Errorf("icmp rejected by server")
 	}
 
@@ -451,8 +448,9 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 
 	s, err := h.newSession(ctx, endpoint, proto, target, method, extraFrames, 0)
 	if err != nil {
-		log.Error("[STREAM] bootstrap", "endpoint", endpoint, "target", target, "err", err)
-		return err
+		// 失败由调用方（SOCKS5/HTTP 入口）统一记录一次；这里只补阶段上下文，
+		// 否则同一次 bootstrap 失败会在两层各打一条。
+		return fmt.Errorf("tcp bootstrap: %w", err)
 	}
 	defer s.tx.Close() //nolint:errcheck
 	log.Debug("[STREAM] handshake sent", "target", target)
@@ -742,8 +740,8 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 	// 延迟限制在约 1ms。
 	s, err := h.newSession(ctx, config.EndpointUDP, protocol.ProtoUDP, target, method, extraFrames, 1)
 	if err != nil {
-		log.Error("[UDP_EXCHANGE] bootstrap", "target", target, "err", err)
-		return nil, err
+		// 调用方（udpPool 的上层）负责记录这次失败。
+		return nil, fmt.Errorf("udp bootstrap: %w", err)
 	}
 
 	log.Debug("[UDP_EXCHANGE] opened", "target", target)
