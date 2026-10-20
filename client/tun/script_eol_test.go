@@ -12,6 +12,8 @@ import (
 // TestNormalizeScriptEOL 钉住落盘前统一 .bat 行尾：cmd.exe 在中文 Windows（OEM 936）上执行
 // LF 批处理会把多字节注释与换行错位、注释被当成命令执行，而 go:embed 取的是工作区原始字节。
 func TestNormalizeScriptEOL(t *testing.T) {
+	t.Parallel()
+
 	t.Run("批处理脚本统一成 CRLF", func(t *testing.T) {
 		got := normalizeScriptEOL("create_tun_dev_windows.bat", []byte("@echo off\nrem 中文注释\n"))
 		require.Equal(t, "@echo off\r\nrem 中文注释\r\n", string(got))

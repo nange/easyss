@@ -214,6 +214,8 @@ type App struct {
 
 	// 本次会话的全部可变状态，锁序见 session.go。
 	sess *session
+
+	deps appDeps
 }
 
 var coreGen atomic.Uint64
@@ -224,7 +226,7 @@ func (a *App) currentCore() *runner.Core { return a.sess.currentCore() }
 func (a *App) currentStartupWarn() error { return a.sess.startupWarning() }
 
 func newApp(cfg *config.ClientConfig, configFile string) *App {
-	a := &App{configFile: configFile}
+	a := &App{configFile: configFile, deps: defaultAppDeps()}
 	a.sess = newSession(a)
 	a.adoptConfig(cfg)
 	return a
@@ -257,7 +259,24 @@ func (a *App) updateConfig(fn func(*config.ClientConfig)) {
 	}
 }
 
-var runCore = runner.Run
+// appDeps 是可注入的进程级依赖：核心启动器、系统代理开关与日志查看器。
+type appDeps struct {
+	runCore        func(*config.ClientConfig) (*runner.Core, error)
+	sysProxyApply  func(string) error
+	sysProxyRevert func() error
+	log            logOpener
+}
+
+// env 记录本 App 对桌面会话环境的改动，撤销系统代理时据此恢复发布前的值。
+func defaultAppDeps() appDeps {
+	env := newProxyEnvState()
+	return appDeps{
+		runCore:        runner.Run,
+		sysProxyApply:  func(addr string) error { return setSysProxy(env, addr) },
+		sysProxyRevert: func() error { return unsetSysProxy(env) },
+		log:            defaultLogOpener(),
+	}
+}
 
 type serverDomainReadiness interface {
 	ServerDomainReady() <-chan struct{}
@@ -446,13 +465,13 @@ func (a *App) teardownSysProxy() {
 	if !a.sysProxyApplied.Swap(false) {
 		return
 	}
-	if err := sysProxyRevert(); err != nil {
+	if err := a.deps.sysProxyRevert(); err != nil {
 		log.Warn("[EASYSS-V3] unset system proxy failed, you may need to restore it manually", "err", err)
 	}
 }
 
 func (a *App) setSysProxyOn(addr string) error {
-	err := sysProxyApply(addr)
+	err := a.deps.sysProxyApply(addr)
 	if err == nil {
 		a.sysProxyApplied.Store(true)
 	}
@@ -460,7 +479,7 @@ func (a *App) setSysProxyOn(addr string) error {
 }
 
 func (a *App) setSysProxyOff() error {
-	err := sysProxyRevert()
+	err := a.deps.sysProxyRevert()
 	if err == nil {
 		a.sysProxyApplied.Store(false)
 	}

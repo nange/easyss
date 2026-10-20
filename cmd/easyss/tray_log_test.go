@@ -62,13 +62,8 @@ func TestBinName(t *testing.T) {
 	}
 }
 
-func withLookPath(t *testing.T, lookup func(string) (string, error)) {
-	t.Helper()
-
-	previous := lookPath
-	lookPath = lookup
-	t.Cleanup(func() { lookPath = previous })
-}
+// testLogOpener 返回带生产实现的日志查看器，测试在构造后只覆盖自己需要的那一项。
+func testLogOpener() logOpener { return defaultLogOpener() }
 
 func TestLogViewerArgv(t *testing.T) {
 	const logPath = "/home/nange/Easyss/easyss.log"
@@ -153,9 +148,10 @@ func TestLogViewerArgv(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Setenv("TERMINAL", c.terminal)
-			withLookPath(t, fakeLookPath(c.installed...))
+			o := testLogOpener()
+			o.lookPath = fakeLookPath(c.installed...)
 
-			got, err := logViewerArgv(logPath)
+			got, err := o.logViewerArgv(logPath)
 			if err != nil {
 				t.Fatalf("logViewerArgv returned an error: %v", err)
 			}
@@ -168,10 +164,11 @@ func TestLogViewerArgv(t *testing.T) {
 
 func TestLogViewerArgvQuotesPathsInShellStrings(t *testing.T) {
 	t.Setenv("TERMINAL", "")
-	withLookPath(t, fakeLookPath("xfce4-terminal"))
+	o := testLogOpener()
+	o.lookPath = fakeLookPath("xfce4-terminal")
 
 	const logPath = "/home/nange/Easyss dir/it's.log"
-	got, err := logViewerArgv(logPath)
+	got, err := o.logViewerArgv(logPath)
 	if err != nil {
 		t.Fatalf("logViewerArgv returned an error: %v", err)
 	}
@@ -184,9 +181,10 @@ func TestLogViewerArgvQuotesPathsInShellStrings(t *testing.T) {
 
 func TestLogViewerArgvWithoutTerminal(t *testing.T) {
 	t.Setenv("TERMINAL", "")
-	withLookPath(t, fakeLookPath())
+	o := testLogOpener()
+	o.lookPath = fakeLookPath()
 
-	_, err := logViewerArgv("/tmp/easyss.log")
+	_, err := o.logViewerArgv("/tmp/easyss.log")
 	if !errors.Is(err, errNoTerminalEmulator) {
 		t.Fatalf("expected errNoTerminalEmulator, got %v", err)
 	}
@@ -202,13 +200,13 @@ func TestLogViewerArgvWithoutTerminal(t *testing.T) {
 
 func TestOpenLogFileErrors(t *testing.T) {
 	for _, filePath := range []string{"", "   "} {
-		if _, err := openLogFile(filePath); !errors.Is(err, errLogFileNotConfigured) {
+		if _, err := testLogOpener().openLogFile(filePath); !errors.Is(err, errLogFileNotConfigured) {
 			t.Fatalf("expected errLogFileNotConfigured for %q, got %v", filePath, err)
 		}
 	}
 
 	missing := filepath.Join(t.TempDir(), "not-there.log")
-	if _, err := openLogFile(missing); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := testLogOpener().openLogFile(missing); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("expected fs.ErrNotExist for a missing log file, got %v", err)
 	}
 }
@@ -229,18 +227,13 @@ func writeTestLog(t *testing.T, lines int) string {
 	return filePath
 }
 
-// stubDefaultApp 捕获交给桌面默认应用程序的路径，而不真正打开窗口。
-func stubDefaultApp(t *testing.T) *string {
-	t.Helper()
-
+// stubDefaultApp 让 opener 记录交给桌面默认应用程序的路径，而不真正打开窗口。
+func stubDefaultApp(o *logOpener) *string {
 	opened := new(string)
-	previous := openWithDefaultApp
-	openWithDefaultApp = func(path string) error {
+	o.open = func(path string) error {
 		*opened = path
 		return nil
 	}
-	t.Cleanup(func() { openWithDefaultApp = previous })
-
 	return opened
 }
 
@@ -251,9 +244,10 @@ func TestOpenLogSnapshot(t *testing.T) {
 
 	const totalLines = logSnapshotLines + 50
 	logPath := writeTestLog(t, totalLines)
-	opened := stubDefaultApp(t)
+	o := testLogOpener()
+	opened := stubDefaultApp(&o)
 
-	if err := openLogSnapshot(logPath); err != nil {
+	if err := o.openLogSnapshot(logPath); err != nil {
 		t.Fatalf("openLogSnapshot failed: %v", err)
 	}
 	if *opened == "" {
@@ -295,10 +289,11 @@ func TestOpenLogFileFallsBackWithoutTerminal(t *testing.T) {
 
 	logPath := writeTestLog(t, 5)
 	t.Setenv("TERMINAL", "")
-	withLookPath(t, fakeLookPath())
-	opened := stubDefaultApp(t)
+	o := testLogOpener()
+	o.lookPath = fakeLookPath()
+	opened := stubDefaultApp(&o)
 
-	fallback, err := openLogFile(logPath)
+	fallback, err := o.openLogFile(logPath)
 	if err != nil {
 		t.Fatalf("openLogFile failed: %v", err)
 	}
@@ -340,7 +335,8 @@ func TestLogViewerArgvOnHost(t *testing.T) {
 	}
 
 	const logPath = "/tmp/easyss.log"
-	argv, err := logViewerArgv(logPath)
+	o := testLogOpener()
+	argv, err := o.logViewerArgv(logPath)
 	if err != nil {
 		t.Skipf("no terminal emulator available on this host: %v", err)
 	}

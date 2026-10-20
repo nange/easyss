@@ -57,7 +57,7 @@ type session struct {
 }
 
 func newSession(app *App) *session {
-	return &session{app: app, verifyTeardown: platformTunTeardown}
+	return &session{app: app, verifyTeardown: defaultTunOps().teardown}
 }
 
 // 并发执行会抢同一组本地端口，因此整个"停→起"都在序列锁下。序列锁不可重入。
@@ -95,7 +95,7 @@ func (s *session) start() error {
 	// 配置快照一经发布即不可变，可以安全地交给核心长期持有。
 	sessionCfg := s.app.currentConfig()
 
-	core, err := runCore(sessionCfg)
+	core, err := s.app.deps.runCore(sessionCfg)
 	if err != nil {
 		return err
 	}

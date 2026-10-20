@@ -48,6 +48,9 @@ type Client struct {
 	fileWarn error
 
 	mu sync.RWMutex
+
+	// sys 是直连拨号的系统依赖；零值回落到生产实现。
+	sys sysDeps
 }
 
 type boundIface struct {
@@ -57,7 +60,7 @@ type boundIface struct {
 
 // 探测目标取 0.0.0.1 而非公网地址：TUN 的路由从 1.0.0.0/8 起，该网段永远路由到物理
 // 接口，绑到 TUN 设备会形成环路。
-var detectDialIface = func() (*net.Interface, error) {
+func detectDefaultIface() (*net.Interface, error) {
 	iface, _, err := util.SysDefaultRoute()
 	if err != nil {
 		iface, err = probeDialIface()
@@ -125,15 +128,54 @@ func (c *Client) isTunIface(iface *net.Interface) bool {
 	return name != "" && iface.Name == name
 }
 
-var listInterfaces = net.Interfaces
+// sysDeps 是直连拨号的系统依赖：接口探测、地址读取与绑定拨号。字段为 nil 时回落到
+// 生产实现，零值 Client 因此也可用；测试只覆盖自己需要的那几项。
+type sysDeps struct {
+	detectIface     func() (*net.Interface, error)
+	listInterfaces  func() ([]net.Interface, error)
+	ifaceAddrs      func(*net.Interface) ([]net.Addr, error)
+	bindUnsupported func() bool
+	dialBound       func(*Client, context.Context, string, string) (net.Conn, error)
+}
 
-var ifaceAddrs = func(iface *net.Interface) ([]net.Addr, error) { return iface.Addrs() }
+func (s sysDeps) iface() (*net.Interface, error) {
+	if s.detectIface == nil {
+		return detectDefaultIface()
+	}
+	return s.detectIface()
+}
 
-var ifaceBindUnsupported = util.SysDirectIfaceBindUnsupported
+func (s sysDeps) interfaces() ([]net.Interface, error) {
+	if s.listInterfaces == nil {
+		return net.Interfaces()
+	}
+	return s.listInterfaces()
+}
+
+func (s sysDeps) addrs(iface *net.Interface) ([]net.Addr, error) {
+	if s.ifaceAddrs == nil {
+		return iface.Addrs()
+	}
+	return s.ifaceAddrs(iface)
+}
+
+func (s sysDeps) unbindable() bool {
+	if s.bindUnsupported == nil {
+		return util.SysDirectIfaceBindUnsupported()
+	}
+	return s.bindUnsupported()
+}
+
+func (s sysDeps) dial(c *Client, ctx context.Context, network, addr string) (net.Conn, error) {
+	if s.dialBound == nil {
+		return c.dialer.Load().DialContext(ctx, network, addr)
+	}
+	return s.dialBound(c, ctx, network, addr)
+}
 
 // android 上接口绑定不可用，此时返回空名称。
 func (c *Client) initDirectDialer() string {
-	if ifaceBindUnsupported() {
+	if c.sys.unbindable() {
 		c.dialer.Store(dialer.New())
 		return ""
 	}
@@ -150,7 +192,7 @@ func (c *Client) initDirectDialer() string {
 
 // 优先路由探测，但拒绝 easyss TUN 设备（崩溃的 TUN 会话可能留下把它重定向过去的陈旧路由）。
 func (c *Client) startupDialIface() *net.Interface {
-	iface, err := detectDialIface()
+	iface, err := c.sys.iface()
 	if err == nil && iface != nil && !c.isTunIface(iface) {
 		return iface
 	}
@@ -160,7 +202,7 @@ func (c *Client) startupDialIface() *net.Interface {
 		log.Warn("[CLIENT] detected easyss TUN device as default interface, falling back to interface enumeration", "iface", iface.Name)
 	}
 
-	ifaces, err := listInterfaces()
+	ifaces, err := c.sys.interfaces()
 	if err != nil {
 		log.Warn("[CLIENT] list interfaces failed", "err", err)
 		return nil
@@ -170,7 +212,7 @@ func (c *Client) startupDialIface() *net.Interface {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 || c.isTunIface(iface) {
 			continue
 		}
-		addrs, err := ifaceAddrs(iface)
+		addrs, err := c.sys.addrs(iface)
 		if err != nil {
 			continue
 		}
@@ -184,15 +226,8 @@ func (c *Client) startupDialIface() *net.Interface {
 	return nil
 }
 
-var boundDialContext = func(c *Client, ctx context.Context, network, addr string) (net.Conn, error) {
-	return c.dialer.Load().DialContext(ctx, network, addr)
-}
-
 // 限定"拨某个预解析字面地址"的单次尝试：地址可能已被黑洞，剩余预算要留给域名回退。
 const serverIPDialTimeout = 5 * time.Second
-
-// 与启动期预解析共用 dns.PreResolveTimeout；每个条目另受 dns.ResolveItemTimeout 限制。
-var serverIPV6ResolveTimeout = dns.PreResolveTimeout
 
 func New(cfg *config.ClientConfig) (*Client, error) {
 	start := time.Now()
@@ -216,7 +251,7 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 	ipv6Networking := false
 	if router.ParseIPV6Rule(cfg.Routing.IPV6Rule) != router.IPV6RuleDisable {
 		// 约束整个解析过程（内置 + 系统 DNS 回退），不可达的 DNS 不能把启动拖住。
-		ctx, cancel := context.WithTimeout(context.Background(), serverIPV6ResolveTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), dns.PreResolveTimeout)
 		serverIPV6 = resolveServerIPV6(ctx, cfg)
 		cancel()
 		ipv6Networking = detectIPV6Networking()
@@ -399,7 +434,7 @@ func (c *Client) dialAddr(ctx context.Context, network, addr string) (net.Conn, 
 			}
 		}
 
-		conn, err := boundDialContext(c, ctx, network, addr)
+		conn, err := c.sys.dial(c, ctx, network, addr)
 		if err == nil || !isInterfaceStaleError(err) {
 			return conn, err
 		}
@@ -407,7 +442,7 @@ func (c *Client) dialAddr(ctx context.Context, network, addr string) (net.Conn, 
 		// 绑定的接口过期了（休眠/唤醒、网络切换）：重建拨号器后重试一次。
 		log.Warn("[CLIENT] direct dial failed, refreshing interface binding", "addr", addr, "err", err)
 		if c.refreshDirectDialer() {
-			return boundDialContext(c, ctx, network, addr)
+			return c.sys.dial(c, ctx, network, addr)
 		}
 		return conn, err
 	}
@@ -430,10 +465,10 @@ func (c *Client) SetServerIPs(ips []string) {
 
 // 绑定变更（名称或索引）时重建；检测失败保留现有拨号器，避免瞬态网络进一步降低连通性。
 func (c *Client) refreshDirectDialer() bool {
-	if ifaceBindUnsupported() {
+	if c.sys.unbindable() {
 		return false
 	}
-	iface, err := detectDialIface()
+	iface, err := c.sys.iface()
 	if err != nil {
 		log.Warn("[CLIENT] refresh direct dialer: detect interface failed", "err", err)
 		return false
@@ -598,7 +633,7 @@ func (c *Client) RefreshServerIPV6() string {
 		return ""
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), serverIPV6ResolveTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), dns.PreResolveTimeout)
 	defer cancel()
 
 	serverIPV6 := resolveServerIPV6(ctx, c.cfg)

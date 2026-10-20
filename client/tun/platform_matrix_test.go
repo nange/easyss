@@ -54,6 +54,8 @@ func platformMatrix() []platformCase {
 // 直接调用生产代码的推导点 ownerForConfig，不从测试里抄规则——抄一份只能证明两份规则此刻相同。
 // 推错会让非 root 的主进程去 pkexec 跑关闭脚本与 helper 抢，或让 helper 会话的路由无人回收。
 func TestPlatformMatrixOwnership(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range platformMatrix() {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "tun-easyss-test"}
@@ -68,6 +70,8 @@ func TestPlatformMatrixOwnership(t *testing.T) {
 }
 
 func TestPlatformMatrixScriptLayout(t *testing.T) {
+	t.Parallel()
+
 	dev := scriptFixture()
 	args := NewScriptArgs(dev, "8.8.8.8", 1500)
 
@@ -100,11 +104,12 @@ func TestPlatformMatrixScriptLayout(t *testing.T) {
 // TestPlatformMatrixTeardownSteps 把矩阵与拆除步骤绑在一起：直接构造带对应所有权的 Manager
 // 驱动真实 teardown，观测点只有 Hook 跑没跑——矩阵的意义正是覆盖本机拿不到 root 的平台。
 func TestPlatformMatrixTeardownSteps(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range platformMatrix() {
 		t.Run(tc.name, func(t *testing.T) {
-			rec := stubTeardownHooks(t)
-
 			m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "tun-easyss-test"})
+			rec := stubTeardownHooks(m)
 			m.owner = tc.owner
 			m.engineUp = true
 			m.deviceUp = true
@@ -140,6 +145,8 @@ func TestPlatformMatrixTeardownSteps(t *testing.T) {
 // TestPlatformMatrixCoversEverySupportedOS 保证矩阵不漏平台：新增支持时必须在这里报到，
 // 否则它会在没有任何布局/所有权断言的情况下上线。
 func TestPlatformMatrixCoversEverySupportedOS(t *testing.T) {
+	t.Parallel()
+
 	covered := make(map[ScriptPlatform]bool)
 	for _, tc := range platformMatrix() {
 		covered[tc.platform] = true
@@ -155,6 +162,8 @@ func TestPlatformMatrixCoversEverySupportedOS(t *testing.T) {
 // TestWindowsNeverManagesSystemDNS 固定 windows 那行的前提：脚本自己用 netsh 配适配器 DNS，
 // client/tun 从不改动系统 DNS。判据接受显式平台，这条断言在任意宿主机上都真正执行。
 func TestWindowsNeverManagesSystemDNS(t *testing.T) {
+	t.Parallel()
+
 	require.False(t, managesSystemDNSFor(PlatformWindows),
 		"windows 由脚本配置适配器 DNS，client/tun 不得再动系统 DNS")
 	require.True(t, managesSystemDNSFor(PlatformLinux), "linux 由 client/tun 管理系统 DNS")

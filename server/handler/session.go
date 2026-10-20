@@ -86,7 +86,7 @@ func lanHostOf(addr string) string {
 	return addr
 }
 
-// 拨号前的校验已在 dialCandidates 里做完，这里兜住绕过 dialOutbound 的拨号路径。
+// 拨号前的校验已在 candidates 里做完，这里兜住绕过 outbound 的拨号路径。
 func rejectLANConn(conn net.Conn) error {
 	if ra := conn.RemoteAddr(); ra != nil {
 		if host := lanHostOf(ra.String()); util.IsLANIP(host) {
@@ -97,8 +97,24 @@ func rejectLANConn(conn net.Conn) error {
 	return nil
 }
 
-// 全包唯一的域名解析入口，测试替换它以注入确定性的解析结果。
-var resolveHost = util.ResolveHostIPs
+// outboundDeps 是出站拨号的外部依赖：域名解析与单次尝试。指针在 handler、三个子
+// dialer 与握手期 SSRF 校验之间共享，任何一处替换都会同时被所有读者看到。
+type outboundDeps struct {
+	resolve func(ctx context.Context, host string) ([]netip.Addr, error)
+	attempt func(d *net.Dialer, ctx context.Context, network, addr string) (net.Conn, error)
+}
+
+// 对应 net.Dialer 内部 partialDeadline 的 2s 下限，低于它就不值得再切分。
+const defaultDialAttemptMinBudget = 2 * time.Second
+
+func defaultOutboundDeps() *outboundDeps {
+	return &outboundDeps{
+		resolve: util.ResolveHostIPs,
+		attempt: func(d *net.Dialer, ctx context.Context, network, addr string) (net.Conn, error) {
+			return d.DialContext(ctx, network, addr)
+		},
+	}
+}
 
 // 把客户端地址族与握手阶段校验过的目标地址从 ServeHTTP 传到拨号路径。
 type dialCtxKey int
@@ -170,11 +186,11 @@ func orderByFamily(addrs []netip.Addr, prefer netip.Addr) []netip.Addr {
 
 // 优先复用握手阶段已解析并校验过的地址，没有时才自行解析。任一候选落在 LAN/私网/保留网段
 // 即拒绝整个目标：校验与实际连接共用同一批地址，DNS-rebinding 因此没有翻转答案的窗口。
-func dialCandidates(ctx context.Context, target string) ([]netip.Addr, error) {
+func (d *dialer) candidates(ctx context.Context, target string) ([]netip.Addr, error) {
 	addrs, ok := resolvedAddrs(ctx)
 	if !ok {
 		var err error
-		addrs, err = resolveHost(ctx, target)
+		addrs, err = d.deps.resolve(ctx, target)
 		if err != nil {
 			return nil, err
 		}
@@ -199,39 +215,31 @@ func dialAddr(addr netip.Addr, target string) string {
 	return net.JoinHostPort(addr.String(), port)
 }
 
-// 变量而非常量，测试才能用确定性的假拨号验证预算切分，而不依赖真实网络里的黑洞地址。
-var dialAttempt = func(d *net.Dialer, ctx context.Context, network, addr string) (net.Conn, error) {
-	return d.DialContext(ctx, network, addr)
-}
-
-// 对应 net.Dialer 内部 partialDeadline 的 2s 下限，低于它就不值得再切分。
-var dialAttemptMinBudget = 2 * time.Second
-
-// 把剩余预算按剩余候选数均分，但不低于 dialAttemptMinBudget：与 net.Dialer 内部
-// partialDeadline 同构，第一个候选挂起时最多吃掉一个子预算。
-func attemptDeadline(now, deadline time.Time, candidatesLeft int) time.Time {
+// 把剩余预算按剩余候选数均分，但不低于 minBudget：与 net.Dialer 内部 partialDeadline
+// 同构，第一个候选挂起时最多吃掉一个子预算。
+func attemptDeadline(now, deadline time.Time, candidatesLeft int, minBudget time.Duration) time.Time {
 	left := deadline.Sub(now)
 	if left <= 0 {
 		return now
 	}
 	share := left / time.Duration(candidatesLeft)
-	if share < dialAttemptMinBudget {
-		share = min(left, dialAttemptMinBudget)
+	if share < minBudget {
+		share = min(left, minBudget)
 	}
 	return now.Add(share)
 }
 
 // 整批候选共享一份 d.Timeout 预算（与把域名交给 net.Dialer 时一致）：每个候选各吃满一份会让
 // N 个挂起的候选把一条流卡住 N×d.Timeout，且没有整体上界。
-func dialAddrs(ctx context.Context, d *net.Dialer, network, target string, addrs []netip.Addr) (net.Conn, error) {
+func (d *dialer) dialAddrs(ctx context.Context, nd *net.Dialer, network, target string, addrs []netip.Addr) (net.Conn, error) {
 	if len(addrs) == 0 {
 		return nil, errors.New("no candidate addresses to dial")
 	}
 
 	caller := ctx
-	if d.Timeout > 0 {
+	if nd.Timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, d.Timeout)
+		ctx, cancel = context.WithTimeout(ctx, nd.Timeout)
 		defer cancel()
 	}
 
@@ -240,9 +248,10 @@ func dialAddrs(ctx context.Context, d *net.Dialer, network, target string, addrs
 		attemptCtx := ctx
 		var cancel context.CancelFunc
 		if deadline, ok := ctx.Deadline(); ok {
-			attemptCtx, cancel = context.WithDeadline(ctx, attemptDeadline(time.Now(), deadline, len(addrs)-i))
+			attemptCtx, cancel = context.WithDeadline(ctx,
+				attemptDeadline(time.Now(), deadline, len(addrs)-i, d.attemptMinBudget))
 		}
-		conn, err := dialAttempt(d, attemptCtx, network, dialAddr(addr, target))
+		conn, err := d.deps.attempt(nd, attemptCtx, network, dialAddr(addr, target))
 		if cancel != nil {
 			cancel()
 		}
@@ -262,12 +271,12 @@ func dialAddrs(ctx context.Context, d *net.Dialer, network, target string, addrs
 }
 
 // 只拨校验过的字面地址，目标原文永远不传给拨号器，避免产生第二次未校验的解析。
-func dialOutbound(ctx context.Context, d *net.Dialer, network, target string) (net.Conn, error) {
-	addrs, err := dialCandidates(ctx, target)
+func (d *dialer) outbound(ctx context.Context, nd *net.Dialer, network, target string) (net.Conn, error) {
+	addrs, err := d.candidates(ctx, target)
 	if err != nil {
 		return nil, err
 	}
-	return dialAddrs(ctx, d, network, target, addrs)
+	return d.dialAddrs(ctx, nd, network, target, addrs)
 }
 
 // keepAlive 为 0 表示系统默认（UDP/ICMP 没有长连接语义）。Timeout 必须显式设置：它既是
@@ -282,6 +291,18 @@ type dialer struct {
 	// 两个都为空。
 	shouldProxy func(target string) bool
 	direct      func(ctx context.Context, network, target string) (net.Conn, error)
+	deps        *outboundDeps
+	// 每个候选至少拿到这么多预算，否则挂起的候选会让后面的候选只剩毫秒级窗口。
+	attemptMinBudget time.Duration
+}
+
+func newDialer(np *nextproxy.NextProxy, shouldProxy func(target string) bool, deps *outboundDeps) dialer {
+	return dialer{
+		nextProxy:        np,
+		shouldProxy:      shouldProxy,
+		deps:             deps,
+		attemptMinBudget: defaultDialAttemptMinBudget,
+	}
 }
 
 // 入口日志与拨号路径共用它，日志里的路由才与实际拨号一致。
@@ -302,7 +323,7 @@ func (d *dialer) dialVia(ctx context.Context, network, target, name string, viaN
 		addrs, ok := resolvedAddrs(ctx)
 		if !ok {
 			var err error
-			if addrs, err = resolveHost(ctx, target); err != nil {
+			if addrs, err = d.deps.resolve(ctx, target); err != nil {
 				log.Debug("[HANDLE] next proxy target resolve failed, handing the name to the proxy", "target", target, "err", err)
 			}
 		}

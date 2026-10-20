@@ -573,9 +573,9 @@ func TestTunRouteResidueUsesTheTunDevice(t *testing.T) {
 	)
 
 	t.Run("still routed via the tun device", func(t *testing.T) {
-		calls := stubRouteProbe(t, viaTun)
+		run, calls := stubRouteProbe(viaTun)
 
-		out, leftover := tunRouteResidue("tun-easyss", "")
+		out, leftover := probeTunRouteResidue(run, "tun-easyss", "")
 		require.True(t, leftover, "traffic still entering the session's device means the teardown failed")
 		require.Contains(t, out, "dev tun-easyss")
 		require.Equal(t, []string{"ip", "route", "get", "1.1.1.1"}, (*calls)[0],
@@ -583,23 +583,23 @@ func TestTunRouteResidueUsesTheTunDevice(t *testing.T) {
 	})
 
 	t.Run("routed via the physical device", func(t *testing.T) {
-		stubRouteProbe(t, viaPhysical)
+		run, _ := stubRouteProbe(viaPhysical)
 
-		_, leftover := tunRouteResidue("tun-easyss", "")
+		_, leftover := probeTunRouteResidue(run, "tun-easyss", "")
 		require.False(t, leftover, "the physical device means the teardown worked")
 	})
 
 	t.Run("a device name that is only a prefix does not match", func(t *testing.T) {
-		stubRouteProbe(t, "1.1.1.1 dev tun0 src 198.18.0.1 uid 501")
+		run, _ := stubRouteProbe("1.1.1.1 dev tun0 src 198.18.0.1 uid 501")
 
-		_, leftover := tunRouteResidue("tun", "")
+		_, leftover := probeTunRouteResidue(run, "tun", "")
 		require.False(t, leftover)
 	})
 
 	t.Run("without a device name there is nothing to judge", func(t *testing.T) {
-		calls := stubRouteProbe(t, viaTun)
+		run, calls := stubRouteProbe(viaTun)
 
-		_, leftover := tunRouteResidue("", "")
+		_, leftover := probeTunRouteResidue(run, "", "")
 		require.False(t, leftover)
 		require.Empty(t, *calls, "no probe may run without a device to look for")
 	})

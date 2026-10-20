@@ -72,6 +72,8 @@ func icmpv6Msg(typ header.ICMPv6Type) []byte {
 }
 
 func TestICMPEchoRequest(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name      string
 		netProto  tcpip.NetworkProtocolNumber
@@ -108,6 +110,8 @@ func TestICMPEchoRequest(t *testing.T) {
 }
 
 func TestICMPEchoRequestMalformed(t *testing.T) {
+	t.Parallel()
+
 	// 短到装不下 ICMP 头的报文（截断的抓包）必须被报告为非 echo，而不是 panic。
 	t.Run("empty transport header", func(t *testing.T) {
 		pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
@@ -132,7 +136,10 @@ func TestICMPEchoRequestMalformed(t *testing.T) {
 // 每台主机，一旦网关地址被路由进 TUN，这些回复（ICMP 类型 0）就会到达这里，
 // 记成 INFO 是每秒数行的永久洪泛。只有 echo 请求——真正携带路由决策的报文——
 // 才进 INFO，其他类型一律 Debug。
+//
+// 必须串行：它替换进程级 logger，与同包的并行测试同时运行会互相吞掉日志。
 func TestHandlePacketLogsOnlyEchoRequests(t *testing.T) {
+
 	// 在替换 logger 之前先构建 router：router.New 会记录它加载的规则文件，
 	// 而那段输出不在本测试的断言范围内。
 	rt, err := router.New(router.Config{ProxyRule: router.ProxyRuleAuto})

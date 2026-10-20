@@ -118,16 +118,15 @@ func TestRunFailsFastOnForwardDNSConflict(t *testing.T) {
 	defer pc.Close() //nolint:errcheck
 
 	addr := pc.LocalAddr().String()
-	prev := forwardDNSListenAddr
-	forwardDNSListenAddr = func() string { return addr }
-	t.Cleanup(func() { forwardDNSListenAddr = prev })
+	opts := defaultOptions()
+	opts.forwardDNSListenAddr = addr
 
 	cfg := testConfig()
 	cfg.Local.SocksPort = freePort(t)
 	cfg.Local.HTTPPort = 0
 	cfg.Local.EnableForwardDNS = true
 
-	core, err := Run(cfg)
+	core, err := runWithOptions(cfg, opts)
 	if err == nil {
 		core.Stop()
 		t.Fatal("expected error when the forward dns port is occupied")
@@ -147,16 +146,15 @@ func TestRunServesForwardDNSOnInjectedAddr(t *testing.T) {
 	addr := pc.LocalAddr().String()
 	_ = pc.Close() // 让 Run 去绑定同一个地址
 
-	prev := forwardDNSListenAddr
-	forwardDNSListenAddr = func() string { return addr }
-	t.Cleanup(func() { forwardDNSListenAddr = prev })
+	opts := defaultOptions()
+	opts.forwardDNSListenAddr = addr
 
 	cfg := testConfig()
 	cfg.Local.SocksPort = freePort(t)
 	cfg.Local.HTTPPort = 0
 	cfg.Local.EnableForwardDNS = true
 
-	core, err := Run(cfg)
+	core, err := runWithOptions(cfg, opts)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -183,9 +181,11 @@ func TestRunServesForwardDNSOnInjectedAddr(t *testing.T) {
 // TestForwardDNSListenAddr 钉住 forward DNS 必须监听所有网卡的 53 端口：只监听回环会让
 // LAN 设备（DNS 指向路由器）连不上。只断言地址，不去真的绑定 53。
 func TestForwardDNSListenAddr(t *testing.T) {
-	addr := forwardDNSListenAddr()
+	t.Parallel()
+
+	addr := defaultOptions().forwardDNSListenAddr
 	if addr != ":53" {
-		t.Fatalf("forwardDNSListenAddr() = %q, want \":53\"", addr)
+		t.Fatalf("forwardDNSListenAddr = %q, want \":53\"", addr)
 	}
 
 	host, port, err := net.SplitHostPort(addr)
@@ -205,6 +205,8 @@ func TestForwardDNSListenAddr(t *testing.T) {
 // 带上排查方向：路由器上最常见的占用者是 dnsmasq/systemd-resolved，用户只看
 // 到裸的 "address already in use" 无法知道下一步该做什么。
 func TestForwardDNSListenErrorMentionsPortConflict(t *testing.T) {
+	t.Parallel()
+
 	sentinel := errors.New("bind: address already in use")
 	err := forwardDNSListenError(":53", sentinel)
 
@@ -233,26 +235,21 @@ func TestRunOKWhenPortsAreFree(t *testing.T) {
 	core.Stop()
 }
 
-// TestResolveServerDomain 注入 prePopulateServerDomain，测试中不发出真实的 DNS 查询；
-// 预解析只做一次有界尝试，失败以错误返回（是否致命由 Run 决定）。
+// TestResolveServerDomain 覆盖启动期解析的各条早退与失败路径，全程不发真实 DNS 查询。
 func TestResolveServerDomain(t *testing.T) {
-	oldFn := prePopulateServerDomain
-	oldTimeout := serverStartupResolveTimeout
-	t.Cleanup(func() {
-		prePopulateServerDomain = oldFn
-		serverStartupResolveTimeout = oldTimeout
-	})
-	serverStartupResolveTimeout = 50 * time.Millisecond
+	newCore := func(opts options) *Core {
+		return &Core{dnsCache: easydns.NewCache(""), opts: opts}
+	}
 
 	// 字面 IP 无需解析：不触碰 DNS 直接跳过。
 	cfgIP := testConfig() // Host 是 127.0.0.1
 	attempts := 0
-	prePopulateServerDomain = func(*easydns.Cache, context.Context, string, []string, bool) error {
+	opts := testOptions()
+	opts.prePopulate = func(*easydns.Cache, context.Context, string, []string, bool) error {
 		attempts++
 		return nil
 	}
-	c := &Core{}
-	if err := c.resolveServerDomain(cfgIP); err != nil {
+	if err := newCore(opts).resolveServerDomain(cfgIP); err != nil {
 		t.Fatalf("IP address should not resolve: %v", err)
 	}
 	if attempts != 0 {
@@ -262,28 +259,25 @@ func TestResolveServerDomain(t *testing.T) {
 	// 没有默认服务器：跳过。
 	cfgNone := testConfig()
 	cfgNone.Servers = nil
-	c = &Core{}
-	if err := c.resolveServerDomain(cfgNone); err != nil {
+	if err := newCore(opts).resolveServerDomain(cfgNone); err != nil {
 		t.Fatalf("no server should not resolve: %v", err)
 	}
 
 	// 没有本地 socks5 服务：没有可预填充的 DNS 缓存，跳过。
 	cfgDomain := testConfig()
 	cfgDomain.Servers[0].Host = "proxy.example.com"
-	c = &Core{}
-	if err := c.resolveServerDomain(cfgDomain); err != nil {
+	if err := newCore(opts).resolveServerDomain(cfgDomain); err != nil {
 		t.Fatalf("no socks5 server should not resolve: %v", err)
 	}
 
 	// 非 TUN 模式失败：仅一次有界尝试，返回错误。
 	cfgDomain.Local.EnableTun2socks = false
-	prePopulateServerDomain = func(*easydns.Cache, context.Context, string, []string, bool) error {
+	opts.prePopulate = func(*easydns.Cache, context.Context, string, []string, bool) error {
 		attempts++
 		return errors.New("dns boom")
 	}
 	attempts = 0
-	c = &Core{dnsCache: easydns.NewCache("")}
-	err := c.resolveServerDomain(cfgDomain)
+	err := newCore(opts).resolveServerDomain(cfgDomain)
 	if err == nil {
 		t.Fatal("expected error on resolution failure")
 	}
@@ -299,8 +293,7 @@ func TestResolveServerDomain(t *testing.T) {
 	cfgTun.Servers[0].Host = "proxy.example.com"
 	cfgTun.Local.EnableTun2socks = true
 	attempts = 0
-	c = &Core{dnsCache: easydns.NewCache("")}
-	if err := c.resolveServerDomain(cfgTun); err == nil {
+	if err := newCore(opts).resolveServerDomain(cfgTun); err == nil {
 		t.Fatal("expected error on TUN resolution failure")
 	}
 	if attempts != 1 {
@@ -308,13 +301,12 @@ func TestResolveServerDomain(t *testing.T) {
 	}
 
 	// 成功：无错误。
-	prePopulateServerDomain = func(*easydns.Cache, context.Context, string, []string, bool) error {
+	opts.prePopulate = func(*easydns.Cache, context.Context, string, []string, bool) error {
 		attempts++
 		return nil
 	}
 	attempts = 0
-	c = &Core{dnsCache: easydns.NewCache("")}
-	if err := c.resolveServerDomain(cfgDomain); err != nil {
+	if err := newCore(opts).resolveServerDomain(cfgDomain); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if attempts != 1 {
@@ -326,8 +318,7 @@ func TestResolveServerDomain(t *testing.T) {
 	config.DirectDNSServers = nil
 	t.Cleanup(func() { config.DirectDNSServers = oldDirect })
 	attempts = 0
-	c = &Core{dnsCache: easydns.NewCache("")}
-	if err := c.resolveServerDomain(cfgDomain); err == nil {
+	if err := newCore(opts).resolveServerDomain(cfgDomain); err == nil {
 		t.Fatal("expected error when no dns servers configured")
 	}
 	if attempts != 0 {
@@ -335,40 +326,28 @@ func TestResolveServerDomain(t *testing.T) {
 	}
 }
 
-// setShortDomainRetry 把后台重试的时序参数与外部副作用缩到测试尺度，
-// 并在测试结束时还原。
-func setShortDomainRetry(t *testing.T) {
-	t.Helper()
-
-	oldBase, oldMax := serverDomainRetryBase, serverDomainRetryMax
-	oldTimeout := serverStartupResolveTimeout
-	oldReset := resetResolveState
-	t.Cleanup(func() {
-		serverDomainRetryBase, serverDomainRetryMax = oldBase, oldMax
-		serverStartupResolveTimeout = oldTimeout
-		resetResolveState = oldReset
-	})
-
-	serverStartupResolveTimeout = 50 * time.Millisecond
-	serverDomainRetryBase = 10 * time.Millisecond
-	serverDomainRetryMax = 20 * time.Millisecond
-	// DNS 包的熔断/系统 DNS 缓存是进程级状态，测试里不触碰它。
-	resetResolveState = func() {}
+// testOptions 把后台重试的时序缩到测试尺度；DNS 包的熔断/系统 DNS 缓存是进程级
+// 状态，测试里不触碰它。
+func testOptions() options {
+	o := defaultOptions()
+	o.startupResolveTimeout = 50 * time.Millisecond
+	o.retryBase = 10 * time.Millisecond
+	o.retryMax = 20 * time.Millisecond
+	o.reset = func() {}
+	return o
 }
 
 // TestRunDegradesWhenServerDomainUnresolved 验证服务器域名解析失败不再中止
 // 启动：Run 正常返回核心，警告带上专用哨兵，后台重试成功后关闭就绪通道。
 func TestRunDegradesWhenServerDomainUnresolved(t *testing.T) {
-	oldFn := prePopulateServerDomain
-	t.Cleanup(func() { prePopulateServerDomain = oldFn })
-	setShortDomainRetry(t)
+	opts := testOptions()
 
 	var (
 		mu       sync.Mutex
 		attempts int
 		resets   int
 	)
-	prePopulateServerDomain = func(*easydns.Cache, context.Context, string, []string, bool) error {
+	opts.prePopulate = func(*easydns.Cache, context.Context, string, []string, bool) error {
 		mu.Lock()
 		defer mu.Unlock()
 		attempts++
@@ -377,7 +356,7 @@ func TestRunDegradesWhenServerDomainUnresolved(t *testing.T) {
 		}
 		return nil
 	}
-	resetResolveState = func() {
+	opts.reset = func() {
 		mu.Lock()
 		defer mu.Unlock()
 		resets++
@@ -388,7 +367,7 @@ func TestRunDegradesWhenServerDomainUnresolved(t *testing.T) {
 	cfg.Local.SocksPort = freePort(t)
 	cfg.Local.HTTPPort = 0
 
-	core, err := Run(cfg)
+	core, err := runWithOptions(cfg, opts)
 	if err != nil {
 		t.Fatalf("Run must not fail when the server domain is unresolved: %v", err)
 	}
@@ -417,19 +396,17 @@ func TestRunDegradesWhenServerDomainUnresolved(t *testing.T) {
 	}
 	// 前台那次尝试不清缓存；此后每次后台尝试都先清一次。
 	if gotResets != gotAttempts-1 {
-		t.Fatalf("resetResolveState calls = %d, want one per background attempt (%d)", gotResets, gotAttempts-1)
+		t.Fatalf("resolve-state resets = %d, want one per background attempt (%d)", gotResets, gotAttempts-1)
 	}
 }
 
 // TestRunServerDomainReadyImmediately 验证无需解析（字面 IP）时启动即就绪，
 // 且不会派发任何后台解析尝试。
 func TestRunServerDomainReadyImmediately(t *testing.T) {
-	oldFn := prePopulateServerDomain
-	t.Cleanup(func() { prePopulateServerDomain = oldFn })
-	setShortDomainRetry(t)
+	opts := testOptions()
 
 	var attempts atomic.Int64
-	prePopulateServerDomain = func(*easydns.Cache, context.Context, string, []string, bool) error {
+	opts.prePopulate = func(*easydns.Cache, context.Context, string, []string, bool) error {
 		attempts.Add(1)
 		return nil
 	}
@@ -438,7 +415,7 @@ func TestRunServerDomainReadyImmediately(t *testing.T) {
 	cfg.Local.SocksPort = freePort(t)
 	cfg.Local.HTTPPort = 0
 
-	core, err := Run(cfg)
+	core, err := runWithOptions(cfg, opts)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -453,7 +430,7 @@ func TestRunServerDomainReadyImmediately(t *testing.T) {
 		t.Fatal("ready channel must be closed for a literal server IP")
 	}
 
-	time.Sleep(5 * serverDomainRetryMax)
+	time.Sleep(5 * opts.retryMax)
 	if got := attempts.Load(); got != 0 {
 		t.Fatalf("literal IP must not trigger resolution attempts, got %d", got)
 	}
@@ -461,12 +438,10 @@ func TestRunServerDomainReadyImmediately(t *testing.T) {
 
 // TestServerDomainRetryStopsOnStop 验证核心停止后后台重试不再发起新的解析。
 func TestServerDomainRetryStopsOnStop(t *testing.T) {
-	oldFn := prePopulateServerDomain
-	t.Cleanup(func() { prePopulateServerDomain = oldFn })
-	setShortDomainRetry(t)
+	opts := testOptions()
 
 	var attempts atomic.Int64
-	prePopulateServerDomain = func(*easydns.Cache, context.Context, string, []string, bool) error {
+	opts.prePopulate = func(*easydns.Cache, context.Context, string, []string, bool) error {
 		attempts.Add(1)
 		return errors.New("dns boom")
 	}
@@ -476,7 +451,7 @@ func TestServerDomainRetryStopsOnStop(t *testing.T) {
 	cfg.Local.SocksPort = freePort(t)
 	cfg.Local.HTTPPort = 0
 
-	core, err := Run(cfg)
+	core, err := runWithOptions(cfg, opts)
 	if err != nil {
 		t.Fatalf("Run must not fail when the server domain is unresolved: %v", err)
 	}
@@ -492,11 +467,11 @@ func TestServerDomainRetryStopsOnStop(t *testing.T) {
 
 	core.Stop()
 
-	// 让进行中的那次尝试收尾（最坏 serverStartupResolveTimeout），随后取样两次：
+	// 让进行中的那次尝试收尾（最坏 startupResolveTimeout），随后取样两次：
 	// 停止之后不允许再出现新的尝试。
-	time.Sleep(3 * serverStartupResolveTimeout)
+	time.Sleep(3 * opts.startupResolveTimeout)
 	settled := attempts.Load()
-	time.Sleep(5 * serverDomainRetryMax)
+	time.Sleep(5 * opts.retryMax)
 	if got := attempts.Load(); got != settled {
 		t.Fatalf("retry kept running after Stop: %d -> %d", settled, got)
 	}

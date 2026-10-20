@@ -26,13 +26,19 @@ const (
 	testPublicV6 = "2606:2800:220:1:248:1893:25c8:1946"
 )
 
-// stubResolveHost 替换包内的解析入口，使 SSRF 校验与拨号不依赖真实 DNS。
+// newTestDialer 返回生产默认依赖的 dialer，测试只改自己需要的那一项。
+func newTestDialer() *dialer {
+	d := newDialer(nil, nil, defaultOutboundDeps())
+	return &d
+}
+
+// stubResolveHost 让解析返回给定结果，使 SSRF 校验与拨号不依赖真实 DNS。
 // 返回的计数器用于断言「一次流只解析一次」：复用握手结果时它必须保持为 0。
-func stubResolveHost(t *testing.T, addrs []string, err error) *atomic.Int32 {
+func stubResolveHost(t *testing.T, addrs []string, err error) (*atomic.Int32, *dialer) {
 	t.Helper()
 	calls := &atomic.Int32{}
-	prev := resolveHost
-	resolveHost = func(context.Context, string) ([]netip.Addr, error) {
+	d := newTestDialer()
+	d.deps.resolve = func(context.Context, string) ([]netip.Addr, error) {
 		calls.Add(1)
 		if err != nil {
 			return nil, err
@@ -43,20 +49,22 @@ func stubResolveHost(t *testing.T, addrs []string, err error) *atomic.Int32 {
 		}
 		return out, nil
 	}
-	t.Cleanup(func() { resolveHost = prev })
-	return calls
+	return calls, d
 }
 
 // TestDialCandidates 守住 SSRF 检查与拨号用的是同一次解析：候选永远是字面地址，ctx 里已有
 // 握手阶段校验过的地址时不再查 DNS，不给 DNS-rebinding 留第二次解析。
 func TestDialCandidates(t *testing.T) {
+	t.Parallel()
+
 	v4 := netip.MustParseAddr(testPublicV4)
 	v6 := netip.MustParseAddr(testPublicV6)
 
 	t.Run("字面公网地址", func(t *testing.T) {
-		got, err := dialCandidates(t.Context(), testPublicV4+":443")
+		t.Parallel()
+		got, err := newTestDialer().candidates(t.Context(), testPublicV4+":443")
 		if err != nil {
-			t.Fatalf("dialCandidates: %v", err)
+			t.Fatalf("candidates: %v", err)
 		}
 		if len(got) != 1 || got[0] != v4 {
 			t.Fatalf("candidates = %v, want [%v]", got, v4)
@@ -64,33 +72,37 @@ func TestDialCandidates(t *testing.T) {
 	})
 
 	t.Run("字面 LAN 地址被拒绝", func(t *testing.T) {
-		_, err := dialCandidates(t.Context(), "127.0.0.1:80")
+		t.Parallel()
+		_, err := newTestDialer().candidates(t.Context(), "127.0.0.1:80")
 		if err == nil || !strings.Contains(err.Error(), "ssrf: rejected lan destination") {
-			t.Fatalf("dialCandidates = %v, want an ssrf rejection", err)
+			t.Fatalf("candidates = %v, want an ssrf rejection", err)
 		}
 	})
 
 	t.Run("域名解析到 LAN 被拒绝", func(t *testing.T) {
-		stubResolveHost(t, []string{testPublicV4, "10.0.0.1"}, nil)
-		_, err := dialCandidates(t.Context(), "example.com:443")
+		t.Parallel()
+		_, d := stubResolveHost(t, []string{testPublicV4, "10.0.0.1"}, nil)
+		_, err := d.candidates(t.Context(), "example.com:443")
 		if err == nil || !strings.Contains(err.Error(), "ssrf: rejected lan destination 10.0.0.1") {
-			t.Fatalf("dialCandidates = %v, want a rejection naming the LAN address", err)
+			t.Fatalf("candidates = %v, want a rejection naming the LAN address", err)
 		}
 	})
 
 	t.Run("解析失败直接返回错误", func(t *testing.T) {
-		stubResolveHost(t, nil, errors.New("dns boom"))
-		if _, err := dialCandidates(t.Context(), "example.com:443"); err == nil {
-			t.Fatal("dialCandidates should report the resolution failure")
+		t.Parallel()
+		_, d := stubResolveHost(t, nil, errors.New("dns boom"))
+		if _, err := d.candidates(t.Context(), "example.com:443"); err == nil {
+			t.Fatal("candidates should report the resolution failure")
 		}
 	})
 
 	t.Run("优先族排前", func(t *testing.T) {
-		stubResolveHost(t, []string{testPublicV6, testPublicV4}, nil)
+		t.Parallel()
+		_, d := stubResolveHost(t, []string{testPublicV6, testPublicV4}, nil)
 		ctx := withPreferredFamily(t.Context(), v4)
-		got, err := dialCandidates(ctx, "example.com:443")
+		got, err := d.candidates(ctx, "example.com:443")
 		if err != nil {
-			t.Fatalf("dialCandidates: %v", err)
+			t.Fatalf("candidates: %v", err)
 		}
 		if len(got) != 2 || got[0] != v4 || got[1] != v6 {
 			t.Fatalf("candidates = %v, want the v4 address first", got)
@@ -98,10 +110,11 @@ func TestDialCandidates(t *testing.T) {
 	})
 
 	t.Run("无偏好保持解析器顺序", func(t *testing.T) {
-		stubResolveHost(t, []string{testPublicV6, testPublicV4}, nil)
-		got, err := dialCandidates(t.Context(), "example.com:443")
+		t.Parallel()
+		_, d := stubResolveHost(t, []string{testPublicV6, testPublicV4}, nil)
+		got, err := d.candidates(t.Context(), "example.com:443")
 		if err != nil {
-			t.Fatalf("dialCandidates: %v", err)
+			t.Fatalf("candidates: %v", err)
 		}
 		if len(got) != 2 || got[0] != v6 || got[1] != v4 {
 			t.Fatalf("candidates = %v, want the resolver order preserved", got)
@@ -111,12 +124,13 @@ func TestDialCandidates(t *testing.T) {
 	// rebinding 回归：即使此刻的解析会返回 LAN，拨号也只使用握手阶段已经
 	// 校验过的地址，因为根本不会再解析。
 	t.Run("复用握手结果时不再解析", func(t *testing.T) {
-		calls := stubResolveHost(t, []string{"127.0.0.1"}, nil)
+		t.Parallel()
+		calls, d := stubResolveHost(t, []string{"127.0.0.1"}, nil)
 		ctx := withResolvedAddrs(t.Context(), []netip.Addr{v4})
 
-		got, err := dialCandidates(ctx, "example.com:443")
+		got, err := d.candidates(ctx, "example.com:443")
 		if err != nil {
-			t.Fatalf("dialCandidates: %v", err)
+			t.Fatalf("candidates: %v", err)
 		}
 		if len(got) != 1 || got[0] != v4 {
 			t.Fatalf("candidates = %v, want the pinned %v", got, v4)
@@ -130,6 +144,8 @@ func TestDialCandidates(t *testing.T) {
 // TestDialAddr 覆盖拨号地址的拼接：端口字符串原样沿用，无端口的目标（ICMP）
 // 拨裸 IP——给原始套接字的目标带上端口会让 net.Dial 直接失败。
 func TestDialAddr(t *testing.T) {
+	t.Parallel()
+
 	v4 := netip.MustParseAddr(testPublicV4)
 	v6 := netip.MustParseAddr(testPublicV6)
 
@@ -146,6 +162,7 @@ func TestDialAddr(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := dialAddr(tt.addr, tt.target); got != tt.want {
 				t.Fatalf("dialAddr(%v, %q) = %q, want %q", tt.addr, tt.target, got, tt.want)
 			}
@@ -172,14 +189,15 @@ func TestDialAddrs(t *testing.T) {
 		}
 	}()
 
-	dialer := outboundDialer(5*time.Second, 0)
+	nd := outboundDialer(5*time.Second, 0)
+	d := newTestDialer()
 	target := ln.Addr().String()
 
 	t.Run("第一个候选失败时回退", func(t *testing.T) {
 		// ::1 上没有监听者，连接会立刻被拒绝；第二个候选才是监听的 127.0.0.1。
 		addrs := []netip.Addr{netip.IPv6Loopback(), netip.MustParseAddr("127.0.0.1")}
 
-		conn, err := dialAddrs(t.Context(), dialer, "tcp", target, addrs)
+		conn, err := d.dialAddrs(t.Context(), nd, "tcp", target, addrs)
 		if err != nil {
 			t.Fatalf("dialAddrs: %v", err)
 		}
@@ -198,7 +216,7 @@ func TestDialAddrs(t *testing.T) {
 		target := closed.Addr().String()
 		_ = closed.Close()
 
-		if _, err := dialAddrs(t.Context(), dialer, "tcp", target, addrs); err == nil {
+		if _, err := d.dialAddrs(t.Context(), nd, "tcp", target, addrs); err == nil {
 			t.Fatal("dialAddrs should return the failure of the last candidate")
 		}
 	})
@@ -208,7 +226,7 @@ func TestDialAddrs(t *testing.T) {
 		cancel()
 
 		addrs := []netip.Addr{netip.MustParseAddr(testPublicV4)}
-		if _, err := dialAddrs(ctx, dialer, "tcp", testPublicV4+":443", addrs); !errors.Is(err, errClientGone) {
+		if _, err := d.dialAddrs(ctx, nd, "tcp", testPublicV4+":443", addrs); !errors.Is(err, errClientGone) {
 			t.Fatalf("dialAddrs = %v, want errClientGone once the caller's context is gone", err)
 		}
 	})
@@ -257,7 +275,7 @@ func (c *stubConn) isClosed() bool {
 }
 
 func TestTCPHandler_CancelReadOnIdleTimeout(t *testing.T) {
-	h := newTCPHandler(sharedconfig.Timeouts{StreamIdle: 150 * time.Millisecond, Base: 5 * time.Second}, nil)
+	h := newTCPHandler(sharedconfig.Timeouts{StreamIdle: 150 * time.Millisecond, Base: 5 * time.Second}, nil, defaultOutboundDeps())
 	// 一个静默对端：stub 接受写入但从不产生数据，使用公网远端地址
 	// 以便通过拨号后的 SSRF 防护。
 	stub := newStubConn(&net.TCPAddr{IP: net.ParseIP("8.8.8.8"), Port: 53})

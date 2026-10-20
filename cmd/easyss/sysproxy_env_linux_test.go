@@ -20,29 +20,26 @@ type recordedProxyEnvCmd struct {
 	args []string
 }
 
-// installProxyEnvExec 在测试期间替换命令执行器，并收集发出的每一条命令。
-func installProxyEnvExec(t *testing.T, run func(name string, args []string) (string, error)) *[]recordedProxyEnvCmd {
+// newTestProxyEnvState 返回一个独立的会话环境状态，命令执行器被换成记录器：测试之间
+// 不共享任何进程级状态，可以并行。
+func newTestProxyEnvState(t *testing.T, run func(name string, args []string) (string, error)) (*proxyEnvState, *[]recordedProxyEnvCmd) {
 	t.Helper()
 
 	cmds := &[]recordedProxyEnvCmd{}
-
-	original := proxyEnvExec
-	t.Cleanup(func() { proxyEnvExec = original })
-
-	proxyEnvExec = func(name string, args ...string) (string, error) {
+	state := &proxyEnvState{exec: func(name string, args ...string) (string, error) {
 		*cmds = append(*cmds, recordedProxyEnvCmd{name: name, args: slices.Clone(args)})
 		return run(name, args)
-	}
+	}}
 
-	return cmds
+	return state, cmds
 }
 
 // stubProxyEnvExec 让每条命令都成功，并为 `systemctl --user show-environment`
 // 提供 dump 内容；fail 为 true 时则让所有命令都失败。
-func stubProxyEnvExec(t *testing.T, dump string, fail bool) *[]recordedProxyEnvCmd {
+func stubProxyEnvExec(t *testing.T, dump string, fail bool) (*proxyEnvState, *[]recordedProxyEnvCmd) {
 	t.Helper()
 
-	return installProxyEnvExec(t, func(name string, args []string) (string, error) {
+	return newTestProxyEnvState(t, func(name string, args []string) (string, error) {
 		if fail {
 			return "", fmt.Errorf("%s: unavailable", name)
 		}
@@ -54,10 +51,10 @@ func stubProxyEnvExec(t *testing.T, dump string, fail bool) *[]recordedProxyEnvC
 }
 
 // stubFailingCommand 只让 failName 失败，以便测试回退到另一个环境存储的逻辑。
-func stubFailingCommand(t *testing.T, failName string) *[]recordedProxyEnvCmd {
+func stubFailingCommand(t *testing.T, failName string) (*proxyEnvState, *[]recordedProxyEnvCmd) {
 	t.Helper()
 
-	return installProxyEnvExec(t, func(name string, args []string) (string, error) {
+	return newTestProxyEnvState(t, func(name string, args []string) (string, error) {
 		if name == "systemctl" && slices.Contains(args, "show-environment") {
 			return sysProxyEnvDump, nil
 		}
@@ -66,16 +63,6 @@ func stubFailingCommand(t *testing.T, failName string) *[]recordedProxyEnvCmd {
 		}
 		return "", nil
 	})
-}
-
-func resetSysProxyEnvState(t *testing.T) {
-	t.Helper()
-
-	sysProxyEnv.mu.Lock()
-	defer sysProxyEnv.mu.Unlock()
-
-	sysProxyEnv.previous = nil
-	sysProxyEnv.store = proxyEnvStoreNone
 }
 
 func sysProxyAssignments(addr string) []string {
@@ -122,6 +109,8 @@ func assertNoDBusSystemdFlag(t *testing.T, cmds []recordedProxyEnvCmd) {
 }
 
 func TestSysProxyEnvValuesCoverEveryKey(t *testing.T) {
+	t.Parallel()
+
 	values := sysProxyEnvValues("127.0.0.1:5080")
 
 	if len(values) != len(sysProxyEnvKeys) {
@@ -150,6 +139,8 @@ func TestSysProxyEnvValuesCoverEveryKey(t *testing.T) {
 // [::] 时 http_proxy 必须写同族回环 [::1]，否则不读桌面代理设置的程序
 // （Hyprland 上的 Chromium、终端里的 curl）会连一个连不上的地址。
 func TestSysProxyEnvValuesFollowBindAll(t *testing.T) {
+	t.Parallel()
+
 	values := sysProxyEnvValues("[::1]:5080")
 
 	const addr = "http://[::1]:5080"
@@ -160,16 +151,17 @@ func TestSysProxyEnvValuesFollowBindAll(t *testing.T) {
 	}
 }
 
-func TestSetSysProxyEnvPublishesToSystemdUserManager(t *testing.T) {
-	resetSysProxyEnvState(t)
-	cmds := stubProxyEnvExec(t, sysProxyEnvDump, false)
+func TestProxyEnvStateSetPublishesToSystemdUserManager(t *testing.T) {
+	t.Parallel()
 
-	applied, err := setSysProxyEnv("127.0.0.1:5080")
+	state, cmds := stubProxyEnvExec(t, sysProxyEnvDump, false)
+
+	applied, err := state.set("127.0.0.1:5080")
 	if err != nil {
-		t.Fatalf("setSysProxyEnv: %v", err)
+		t.Fatalf("set: %v", err)
 	}
 	if !applied {
-		t.Fatal("setSysProxyEnv reported that nothing was applied")
+		t.Fatal("set reported that nothing was applied")
 	}
 
 	wanted := append([]string{"--user", "set-environment"}, sysProxyAssignments("127.0.0.1:5080")...)
@@ -184,21 +176,22 @@ func TestSetSysProxyEnvPublishesToSystemdUserManager(t *testing.T) {
 	}
 }
 
-func TestUnsetSysProxyEnvRestoresPreviousValues(t *testing.T) {
-	resetSysProxyEnvState(t)
-	cmds := stubProxyEnvExec(t, sysProxyEnvDump, false)
+func TestProxyEnvStateUnsetRestoresPreviousValues(t *testing.T) {
+	t.Parallel()
 
-	if _, err := setSysProxyEnv("127.0.0.1:5080"); err != nil {
-		t.Fatalf("setSysProxyEnv: %v", err)
+	state, cmds := stubProxyEnvExec(t, sysProxyEnvDump, false)
+
+	if _, err := state.set("127.0.0.1:5080"); err != nil {
+		t.Fatalf("set: %v", err)
 	}
 	*cmds = nil
 
-	applied, err := unsetSysProxyEnv()
+	applied, err := state.unset()
 	if err != nil {
-		t.Fatalf("unsetSysProxyEnv: %v", err)
+		t.Fatalf("unset: %v", err)
 	}
 	if !applied {
-		t.Fatal("unsetSysProxyEnv reported that nothing was restored")
+		t.Fatal("unset reported that nothing was restored")
 	}
 
 	// easyss 启动前已存在的变量会被恢复。
@@ -229,16 +222,17 @@ func TestUnsetSysProxyEnvRestoresPreviousValues(t *testing.T) {
 	assertNoDBusSystemdFlag(t, *cmds)
 }
 
-func TestSetSysProxyEnvFallsBackToDBus(t *testing.T) {
-	resetSysProxyEnvState(t)
-	cmds := stubFailingCommand(t, "systemctl")
+func TestProxyEnvStateSetFallsBackToDBus(t *testing.T) {
+	t.Parallel()
 
-	applied, err := setSysProxyEnv("127.0.0.1:5080")
+	state, cmds := stubFailingCommand(t, "systemctl")
+
+	applied, err := state.set("127.0.0.1:5080")
 	if err != nil {
-		t.Fatalf("setSysProxyEnv: %v", err)
+		t.Fatalf("set: %v", err)
 	}
 	if !applied {
-		t.Fatal("setSysProxyEnv did not fall back to the D-Bus activation environment")
+		t.Fatal("set did not fall back to the D-Bus activation environment")
 	}
 
 	if args := findProxyEnvCmd(*cmds, "dbus-update-activation-environment", sysProxyAssignments("127.0.0.1:5080")...); args == nil {
@@ -248,8 +242,8 @@ func TestSetSysProxyEnvFallsBackToDBus(t *testing.T) {
 
 	*cmds = nil
 
-	if _, err := unsetSysProxyEnv(); err != nil {
-		t.Fatalf("unsetSysProxyEnv: %v", err)
+	if _, err := state.unset(); err != nil {
+		t.Fatalf("unset: %v", err)
 	}
 
 	// dbus-daemon 无法删除变量，因此预先存在的值会被放回，而 easyss 添加
@@ -263,46 +257,48 @@ func TestSetSysProxyEnvFallsBackToDBus(t *testing.T) {
 	}
 }
 
-func TestUnsetSysProxyEnvWithoutApplyIsNoop(t *testing.T) {
-	resetSysProxyEnvState(t)
-	cmds := stubProxyEnvExec(t, sysProxyEnvDump, false)
+func TestProxyEnvStateUnsetWithoutApplyIsNoop(t *testing.T) {
+	t.Parallel()
 
-	applied, err := unsetSysProxyEnv()
+	state, cmds := stubProxyEnvExec(t, sysProxyEnvDump, false)
+
+	applied, err := state.unset()
 	if err != nil {
-		t.Fatalf("unsetSysProxyEnv: %v", err)
+		t.Fatalf("unset: %v", err)
 	}
 	if applied {
-		t.Fatal("unsetSysProxyEnv claimed to restore something without a preceding set")
+		t.Fatal("unset claimed to restore something without a preceding set")
 	}
 	if len(*cmds) != 0 {
 		t.Fatalf("unexpected commands: %v", *cmds)
 	}
 }
 
-func TestSetSysProxyEnvReportsFailureWhenNoStoreIsReachable(t *testing.T) {
-	resetSysProxyEnvState(t)
-	stubProxyEnvExec(t, sysProxyEnvDump, true)
+func TestProxyEnvStateSetReportsFailureWhenNoStoreIsReachable(t *testing.T) {
+	t.Parallel()
 
-	applied, err := setSysProxyEnv("127.0.0.1:5080")
+	state, _ := stubProxyEnvExec(t, sysProxyEnvDump, true)
+
+	applied, err := state.set("127.0.0.1:5080")
 	if applied {
-		t.Fatal("setSysProxyEnv reported success although every command failed")
+		t.Fatal("set reported success although every command failed")
 	}
 	if err == nil {
 		t.Fatal("expected an error when no environment store could be updated")
 	}
 
 	// 失败的 set 不能让后续的 unset 误以为有工作要做。
-	unsetApplied, unsetErr := unsetSysProxyEnv()
+	unsetApplied, unsetErr := state.unset()
 	if unsetApplied || unsetErr != nil {
-		t.Fatalf("unsetSysProxyEnv = (%v, %v), want (false, nil)", unsetApplied, unsetErr)
+		t.Fatalf("unset = (%v, %v), want (false, nil)", unsetApplied, unsetErr)
 	}
 }
 
-func TestUnsetSysProxyEnvKeepsStateWhenRestoreFails(t *testing.T) {
-	resetSysProxyEnvState(t)
+func TestProxyEnvStateUnsetKeepsStateWhenRestoreFails(t *testing.T) {
+	t.Parallel()
 
 	failSystemd := false
-	installProxyEnvExec(t, func(name string, args []string) (string, error) {
+	state, _ := newTestProxyEnvState(t, func(name string, args []string) (string, error) {
 		if name == "systemctl" && slices.Contains(args, "show-environment") {
 			return sysProxyEnvDump, nil
 		}
@@ -312,23 +308,23 @@ func TestUnsetSysProxyEnvKeepsStateWhenRestoreFails(t *testing.T) {
 		return "", nil
 	})
 
-	if _, err := setSysProxyEnv("127.0.0.1:5080"); err != nil {
-		t.Fatalf("setSysProxyEnv: %v", err)
+	if _, err := state.set("127.0.0.1:5080"); err != nil {
+		t.Fatalf("set: %v", err)
 	}
 
 	failSystemd = true
-	if applied, err := unsetSysProxyEnv(); applied || err == nil {
-		t.Fatalf("unsetSysProxyEnv = (%v, %v), want a failure", applied, err)
+	if applied, err := state.unset(); applied || err == nil {
+		t.Fatalf("unset = (%v, %v), want a failure", applied, err)
 	}
 
 	// 快照在失败后仍然保留，因此重试——托盘撤销勾选并让用户再次点击——
 	// 仍然可以恢复这些值。
 	failSystemd = false
-	applied, err := unsetSysProxyEnv()
+	applied, err := state.unset()
 	if err != nil {
-		t.Fatalf("retry of unsetSysProxyEnv: %v", err)
+		t.Fatalf("retry of unset: %v", err)
 	}
 	if !applied {
-		t.Fatal("retry of unsetSysProxyEnv restored nothing")
+		t.Fatal("retry of unset restored nothing")
 	}
 }

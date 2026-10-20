@@ -11,9 +11,5 @@ func ResetResolveState() {
 	builtinDNSMu.Unlock()
 
 	clearReachableDNSServers()
-
-	systemDNSMu.Lock()
-	systemDNSCached = nil
-	systemDNSTime = time.Time{}
-	systemDNSMu.Unlock()
+	defaultSystemDNS.reset()
 }

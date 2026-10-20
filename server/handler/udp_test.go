@@ -202,14 +202,11 @@ func newUDPSessionFixtureWithWriter(t *testing.T, targetConn net.Conn, target st
 
 	dialTimeout := sharedconfig.DialTimeout(30 * time.Second)
 	directDialer := outboundDialer(dialTimeout, 0)
-	d := dialer{
-		nextProxy: np,
-		shouldProxy: func(t string) bool {
-			return np != nil && np.EnableUDP() && np.ShouldProxy(t)
-		},
-		direct: func(ctx context.Context, network, target string) (net.Conn, error) {
-			return dialOutbound(ctx, directDialer, network, target)
-		},
+	d := newDialer(np, func(t string) bool {
+		return np != nil && np.EnableUDP() && np.ShouldProxy(t)
+	}, defaultOutboundDeps())
+	d.direct = func(ctx context.Context, network, target string) (net.Conn, error) {
+		return d.outbound(ctx, directDialer, network, target)
 	}
 	dnsSession := isDNSPort(target)
 	var route dnsRouter
@@ -836,7 +833,7 @@ func TestUDPHandleDefersDNSDial(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		h := newUDPHandler(sharedconfig.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, np)
+		h := newUDPHandler(sharedconfig.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, np, defaultOutboundDeps())
 		if h.route == nil {
 			t.Fatal("a configured next proxy must provide a DNS router")
 		}
@@ -846,7 +843,7 @@ func TestUDPHandleDefersDNSDial(t *testing.T) {
 	})
 
 	t.Run("unconfigured next proxy leaves the router nil", func(t *testing.T) {
-		h := newUDPHandler(sharedconfig.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, nil)
+		h := newUDPHandler(sharedconfig.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, nil, defaultOutboundDeps())
 		if h.route != nil {
 			t.Fatal("without a next proxy every query must go direct (nil router)")
 		}
@@ -857,7 +854,7 @@ func TestUDPHandleDefersDNSDial(t *testing.T) {
 
 	t.Run("non dns target dials eagerly", func(t *testing.T) {
 		conn := newDeadlineConn()
-		h := newUDPHandler(sharedconfig.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, nil)
+		h := newUDPHandler(sharedconfig.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, nil, defaultOutboundDeps())
 		h.dial.direct = func(context.Context, string, string) (net.Conn, error) { return conn, nil }
 
 		got, remote, err := h.dial.dialTarget(context.Background(), "udp", "1.1.1.1:443")
@@ -1269,7 +1266,7 @@ func TestUDPHandlerRoutesDNSQueryThroughNextProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := newUDPHandler(sharedconfig.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, np)
+	h := newUDPHandler(sharedconfig.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, np, defaultOutboundDeps())
 	if h.route == nil {
 		t.Fatal("a configured next proxy must provide a DNS router")
 	}
@@ -1520,6 +1517,7 @@ func TestDNSSessionQueryDuringRebindUsesNewRoute(t *testing.T) {
 }
 
 // 防回归：重绑失败后 via_next_proxy 必须描述实际写出的旧连接，并带 route_pending=true。
+// 必须串行：它替换进程级 logger，与同包并行测试同时运行会互相吞掉日志。
 func TestDNSSessionRebindFailureLogsActualPath(t *testing.T) {
 	fallback := newDNSTargetConn()
 	router := &fakeDNSRouter{proxyDomain: "google", directConns: []net.Conn{fallback}}
@@ -1568,9 +1566,10 @@ func TestDNSSessionDialHonorsSessionContext(t *testing.T) {
 	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
 	s.ctx = ctx
 	s.dns.router = nil
-	s.dial = dialer{direct: func(ctx context.Context, _, _ string) (net.Conn, error) {
+	s.dial = newDialer(nil, nil, defaultOutboundDeps())
+	s.dial.direct = func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return nil, ctx.Err() // 真实拨号器在 ctx 取消时会返回取消错误
-	}}
+	}
 
 	cancel()
 	_, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "mtalk.google.com")))

@@ -82,13 +82,17 @@ func saltToB64(salt []byte) string {
 }
 
 func newRejectHandler(handshakeTimeout time.Duration) http.Handler {
-	return NewProxyHandler(ProxyHandlerConfig{
+	return newRejectHandlerWith(defaultOutboundDeps(), handshakeTimeout)
+}
+
+func newRejectHandlerWith(deps *outboundDeps, handshakeTimeout time.Duration) http.Handler {
+	return newProxyHandlerWithDeps(ProxyHandlerConfig{
 		MasterKey:        bytes.Repeat([]byte{0x42}, 32),
 		AllowedMethods:   []string{protocol.MethodAES256GCM.String()},
 		Timeouts:         sharedconfig.NewTimeouts(5 * time.Second),
 		HandshakeTimeout: handshakeTimeout,
 		Shaper:           shaper.Config{BatchWindowMS: 1},
-	})
+	}, deps)
 }
 
 // TestServeHTTP_HandshakeTimeout408 验证从未完整到达的 bootstrap 记录会得到
@@ -199,9 +203,9 @@ func TestServeHTTP_LANTarget400(t *testing.T) {
 // TestServeHTTP_DomainResolvingToLAN400 验证解析到 LAN 的域名同样在握手阶段被
 // 400 拒绝（DNS-rebinding 的检查侧）；解析入口被替换，因此不依赖真实 DNS。
 func TestServeHTTP_DomainResolvingToLAN400(t *testing.T) {
-	srv := newRejectTestServer(t, newRejectHandler(time.Second))
+	_, d := stubResolveHost(t, []string{"127.0.0.1"}, nil)
+	srv := newRejectTestServer(t, newRejectHandlerWith(d.deps, time.Second))
 	tr := newRejectTestClient(t)
-	stubResolveHost(t, []string{"127.0.0.1"}, nil)
 
 	masterKey := bytes.Repeat([]byte{0x42}, 32)
 	saltB64, body := buildBootstrapRecord(t, masterKey, sharedconfig.EndpointTCP,

@@ -10,14 +10,6 @@ import (
 	"github.com/wzshiming/sysproxy"
 )
 
-// sysProxyApply 与 sysProxyRevert 是变量，以便启动路径的测试能观察设置/撤销调用，
-// 而不改动运行测试的机器的真实系统代理配置（与 sysproxy_env_linux.go 中的
-// proxyEnvExec 同一手法）。
-var (
-	sysProxyApply  = setSysProxy
-	sysProxyRevert = unsetSysProxy
-)
-
 // sysProxyAddr 返回系统代理与会话环境应指向的本地 HTTP 入口地址，与入口的监听地址
 // 同源（见 util.LocalProxyDialAddr）：bind_all 时入口监听 [::]，这里必须给同族回环
 // [::1]，写死 127.0.0.1 会让系统代理指向一个连不上的入口。
@@ -28,12 +20,12 @@ func sysProxyAddr(cfg *config.ClientConfig) string {
 // setSysProxy 通过桌面代理设置（gsettings/kioslaverc/注册表/networksetup）与 Linux 的
 // 会话环境两种机制指向本地 HTTP 代理——Chromium 在无法识别的桌面（含 Hyprland）上忽略
 // gsettings。任一机制生效即返回 nil，调用方可以依赖 unsetSysProxy 再次撤销它。
-func setSysProxy(addr string) error {
+func setSysProxy(env *proxyEnvState, addr string) error {
 	settingsErr := errors.Join(
 		wrapProxyErr("set http proxy", sysproxy.OnHTTP(addr)),
 		wrapProxyErr("set https proxy", sysproxy.OnHTTPS(addr)),
 	)
-	envApplied, envErr := setSysProxyEnv(addr)
+	envApplied, envErr := env.set(addr)
 
 	if settingsErr != nil && !envApplied {
 		return errors.Join(settingsErr, envErr)
@@ -49,12 +41,12 @@ func setSysProxy(addr string) error {
 	return nil
 }
 
-func unsetSysProxy() error {
+func unsetSysProxy(env *proxyEnvState) error {
 	settingsErr := errors.Join(
 		wrapProxyErr("unset http proxy", sysproxy.OffHTTP()),
 		wrapProxyErr("unset https proxy", sysproxy.OffHTTPS()),
 	)
-	envApplied, envErr := unsetSysProxyEnv()
+	envApplied, envErr := env.unset()
 
 	if settingsErr != nil && !envApplied {
 		return errors.Join(settingsErr, envErr)

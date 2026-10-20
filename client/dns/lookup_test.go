@@ -67,6 +67,8 @@ func startLocalDNSServer(t *testing.T) (string, func()) {
 // TestLookupFromContext 覆盖生产实际使用的受 ctx 约束的查询路径：把查询结果
 // 解析成 IP 列表。
 func TestLookupFromContext(t *testing.T) {
+	t.Parallel()
+
 	addr, shutdown := startLocalDNSServer(t)
 	defer shutdown()
 
@@ -85,6 +87,8 @@ func TestLookupFromContext(t *testing.T) {
 // 被挤到 ADDITIONAL 段）时回收记录并丢弃 OPT；正常应答（OPT 在 ADDITIONAL 段）
 // 时保持原样。
 func TestNormalizeEDNS0Answer(t *testing.T) {
+	t.Parallel()
+
 	newMsg := func() *dns.Msg {
 		m := &dns.Msg{}
 		m.SetQuestion("example.com.", dns.TypeA)

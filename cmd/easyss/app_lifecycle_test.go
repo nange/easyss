@@ -13,18 +13,15 @@ import (
 
 // stubRunCore 注入零值核心，使测试能并发驱动真实的 App.Start/App.Stop 而不监听端口。
 // 零值核心对 Stop 安全：runner.Core.cleanup 每一步都有 nil 守卫。
-func stubRunCore(t *testing.T) {
-	t.Helper()
-	prev := runCore
-	runCore = func(*config.ClientConfig) (*runner.Core, error) { return &runner.Core{}, nil }
-	t.Cleanup(func() { runCore = prev })
+func stubRunCore(a *App) {
+	a.deps.runCore = func(*config.ClientConfig) (*runner.Core, error) { return &runner.Core{}, nil }
 }
 
 // TestAppStartStopIsRaceFree 固定"核心读写拿到的是一致快照"：两次独立的非原子读之间被
 // Stop 清空会直接 nil 解引用，-race 下最先暴露。核心由 session.core 原子发布。
 func TestAppStartStopIsRaceFree(t *testing.T) {
-	stubRunCore(t)
 	a := newApp(&config.ClientConfig{}, "")
+	stubRunCore(a)
 
 	var wg sync.WaitGroup
 	stopReading := make(chan struct{})
@@ -84,8 +81,8 @@ func TestAppStopIsConcurrentAndIdempotent(t *testing.T) {
 // TestAppStartResetsSessionState 固定"每次 Start 重置会话级状态"：漏掉的话上一轮的启动
 // 警告会既抑制新一轮记录（只在 nil 时写入），又被 restartServiceInSequence 重复上报。
 func TestAppStartResetsSessionState(t *testing.T) {
-	stubRunCore(t)
 	a := newApp(&config.ClientConfig{}, "")
+	stubRunCore(a)
 	a.sess.mu.Lock()
 	a.sess.startupWarn = errors.New("stale warning")
 	a.sess.tunSkippedForNetwork = true
@@ -104,8 +101,8 @@ func TestAppStartResetsSessionState(t *testing.T) {
 // TestAppStartupWarnAccessIsRaceFree 固定 startupWarn 的读侧契约：它由 session.start 在会话锁下
 // 写，而 restartServiceInSequence 与那次 start 不同 goroutine，必须走 currentStartupWarn()。
 func TestAppStartupWarnAccessIsRaceFree(t *testing.T) {
-	stubRunCore(t)
 	a := newApp(&config.ClientConfig{}, "")
+	stubRunCore(a)
 
 	var wg sync.WaitGroup
 	stopReading := make(chan struct{})

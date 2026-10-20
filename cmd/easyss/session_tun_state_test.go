@@ -16,8 +16,8 @@ func TestNonRootTunStartClearsPreference(t *testing.T) {
 		t.Skip("running as root: the non-root TUN branch is not taken")
 	}
 
-	stubRunCore(t)
 	a := newApp(&config.ClientConfig{}, "")
+	stubRunCore(a)
 	a.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = true })
 
 	if err := a.Start(); err != nil {

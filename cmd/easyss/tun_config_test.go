@@ -11,6 +11,8 @@ import (
 // 拨 127.0.0.1 的话，在只接受 IPv6 回环的环境里 TUN 设备建得起来、引擎却连不上
 // 本地 SOCKS5——表现为开启系统全局流量后全部流量中断。
 func TestTunConfigSocksAddrFollowsBindAll(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name    string
 		bindAll bool

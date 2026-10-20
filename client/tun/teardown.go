@@ -83,7 +83,7 @@ func (m *Manager) teardown(reason TeardownReason, owner Owner) error {
 	// 必须先停引擎再碰设备与路由：iproute2 删不掉仍附着在 fd 上的设备，会报
 	// "device or resource busy" 并留下接口与路由。
 	if engineUp {
-		engineStopFn(reason.String())
+		m.plat.engineStop(reason.String())
 	}
 
 	if owner != OwnerLocal {
@@ -93,7 +93,7 @@ func (m *Manager) teardown(reason TeardownReason, owner Owner) error {
 	}
 
 	if deviceUp {
-		if err := closeTunDevFn(m); err != nil {
+		if err := m.plat.closeDev(m); err != nil {
 			// 清理失败不改变拆除结果，但绝不能静默：残留的分流默认路由会把全机 IPv4
 			// 流量送进一个没人读的设备。
 			log.Warn("[TUN] close script", "reason", reason.String(), "err", err)
@@ -104,7 +104,7 @@ func (m *Manager) teardown(reason TeardownReason, owner Owner) error {
 	// 仅在本次会话改过系统 DNS 时才恢复：darwin 上恢复从未动过的 DNS 会清空 DHCP
 	// 提供的服务器。
 	if dnsTouched && manageSystemDNS() {
-		if err := restoreDNSStepFn(m); err != nil {
+		if err := m.plat.restoreDNS(m); err != nil {
 			log.Warn("[TUN] restore system dns", "reason", reason.String(), "err", err)
 			errs = append(errs, err)
 		}

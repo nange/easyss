@@ -160,7 +160,7 @@ func TestRestartServiceRollsBackToThePreviousServer(t *testing.T) {
 	a := newSwitchTestApp(t)
 	// 系统代理开着，才能验证回滚之后它被恢复回来。
 	a.SetBrowserMenu(systray.NewMenu().AddCheckbox("系统代理", true, nil))
-	applied, reverts := stubSysProxy(t, nil)
+	applied, reverts := stubSysProxy(a.App, nil)
 	a.updateConfig(func(c *config.ClientConfig) { c.Local.HTTPPort = 5080 })
 
 	errBoom := errors.New("listen tcp 127.0.0.1:4080: bind: address already in use")
@@ -192,7 +192,7 @@ func TestRestartServiceRollsBackToThePreviousServer(t *testing.T) {
 // 调用方才能判断"现在完全没有服务在运行"。
 func TestRestartServiceReportsBothFailures(t *testing.T) {
 	a := newSwitchTestApp(t)
-	stubSysProxy(t, nil)
+	stubSysProxy(a.App, nil)
 
 	errSwitch := errors.New("switch failed")
 	errRollback := errors.New("rollback failed")
@@ -215,15 +215,15 @@ func TestRestartServiceReportsBothFailures(t *testing.T) {
 // TestRestartServiceDoesNotClobberMenuChangesFromAStaleTarget 守住丢更新：closeService 在
 // macOS 上要等 TUN 拆除的管理员凭据（可达数秒），这期间用户改的菜单项不能被旧快照静默回滚。
 func TestRestartServiceDoesNotClobberMenuChangesFromAStaleTarget(t *testing.T) {
-	stubRunCore(t)
-	stubSysProxy(t, nil)
 	a := newSwitchTestApp(t)
+	stubRunCore(a.App)
+	stubSysProxy(a.App, nil)
 	t.Cleanup(a.Stop)
 
 	// 停服务期间的菜单点击：撤销系统代理是 closeService 的必经步骤，把这次
 	// 改动挂在那里，就精确落进了"目标配置已取好、但还没起服务"的窗口。
-	revert := sysProxyRevert
-	sysProxyRevert = func() error {
+	revert := a.deps.sysProxyRevert
+	a.deps.sysProxyRevert = func() error {
 		a.updateConfig(func(c *config.ClientConfig) { c.Routing.ProxyRule = "direct" })
 		return revert()
 	}
@@ -244,13 +244,13 @@ func TestRestartServiceDoesNotClobberMenuChangesFromAStaleTarget(t *testing.T) {
 // TestRestartServiceRollbackKeepsMenuChanges 是上一条的回滚分支：回滚同样只
 // 回退"服务器选择 + TUN 偏好"两条增量，保留菜单在这期间的最新改动。
 func TestRestartServiceRollbackKeepsMenuChanges(t *testing.T) {
-	stubSysProxy(t, nil)
 	a := newSwitchTestApp(t)
+	stubSysProxy(a.App, nil)
 	t.Cleanup(a.Stop)
 
 	errBoom := errors.New("new server failed")
-	prevRunCore := runCore
-	runCore = func(cfg *config.ClientConfig) (*runner.Core, error) {
+	prevRunCore := a.deps.runCore
+	a.deps.runCore = func(cfg *config.ClientConfig) (*runner.Core, error) {
 		if cfg.DefaultServerAddr() == "b.example:443" {
 			// 新服务器起不来的这一刻，用户改了日志级别。
 			a.updateConfig(func(c *config.ClientConfig) { c.Log.Level = "debug" })
@@ -258,7 +258,7 @@ func TestRestartServiceRollbackKeepsMenuChanges(t *testing.T) {
 		}
 		return &runner.Core{}, nil
 	}
-	t.Cleanup(func() { runCore = prevRunCore })
+	t.Cleanup(func() { a.deps.runCore = prevRunCore })
 
 	next := a.currentConfig().Clone()
 	next.SetDefaultServerIndex(1)
@@ -275,8 +275,8 @@ func TestRestartServiceRollbackKeepsMenuChanges(t *testing.T) {
 // TestSwitchServerIsRaceFreeWithStatsReads 守住切换与后台统计读当前核心的数据竞争
 // （-race 下回归）：当前核心由 session.core 原子发布，两边各自读快照。
 func TestSwitchServerIsRaceFreeWithStatsReads(t *testing.T) {
-	stubRunCore(t)
 	a := newSwitchTestApp(t)
+	stubRunCore(a.App)
 	a.sess.installCore(&runner.Core{})
 
 	restart := func(cfg *config.ClientConfig) error {
@@ -325,7 +325,7 @@ func TestSwitchServerIsRaceFreeWithStatsReads(t *testing.T) {
 // 不交错：互斥由会话序列锁提供，不能靠 TrayApp.mu 顺带获得。
 func TestCloseServiceIsSerializedWithSwitches(t *testing.T) {
 	a := newSwitchTestApp(t)
-	stubSysProxy(t, nil)
+	stubSysProxy(a.App, nil)
 
 	entered := make(chan struct{})
 	release := make(chan struct{})

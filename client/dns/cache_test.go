@@ -12,6 +12,8 @@ import (
 )
 
 func TestNewCache(t *testing.T) {
+	t.Parallel()
+
 	c := NewCache("")
 	if c == nil {
 		t.Fatal("NewCache returned nil")
@@ -22,6 +24,8 @@ func TestNewCache(t *testing.T) {
 }
 
 func TestCache_SetAndGet(t *testing.T) {
+	t.Parallel()
+
 	c := NewCache("")
 
 	msg := &dns.Msg{}
@@ -54,6 +58,8 @@ func TestCache_SetAndGet(t *testing.T) {
 }
 
 func TestCache_SetAndGet_AAAA(t *testing.T) {
+	t.Parallel()
+
 	c := NewCache("")
 
 	msg := &dns.Msg{}
@@ -78,6 +84,8 @@ func TestCache_SetAndGet_AAAA(t *testing.T) {
 }
 
 func TestCache_Get_Miss(t *testing.T) {
+	t.Parallel()
+
 	c := NewCache("")
 
 	if got := c.Get("nonexistent.com.", "A", false); got != nil {
@@ -86,6 +94,8 @@ func TestCache_Get_Miss(t *testing.T) {
 }
 
 func TestCache_Set_NilMsg(t *testing.T) {
+	t.Parallel()
+
 	c := NewCache("")
 
 	if err := c.Set(nil, false); err != nil {
@@ -94,6 +104,8 @@ func TestCache_Set_NilMsg(t *testing.T) {
 }
 
 func TestCache_Set_EmptyQuestion(t *testing.T) {
+	t.Parallel()
+
 	c := NewCache("")
 
 	msg := &dns.Msg{} // 无 Question
@@ -103,6 +115,8 @@ func TestCache_Set_EmptyQuestion(t *testing.T) {
 }
 
 func TestCache_Set_NonARecord(t *testing.T) {
+	t.Parallel()
+
 	c := NewCache("")
 
 	msg := &dns.Msg{}
@@ -124,6 +138,8 @@ func TestCache_Set_NonARecord(t *testing.T) {
 }
 
 func TestCache_Get_UnpackError(t *testing.T) {
+	t.Parallel()
+
 	c := NewCache("")
 
 	key := []byte("test.com.A")
@@ -137,6 +153,8 @@ func TestCache_Get_UnpackError(t *testing.T) {
 }
 
 func TestCache_DirectVsProxied(t *testing.T) {
+	t.Parallel()
+
 	c := NewCache("")
 
 	msgProxied := &dns.Msg{}
@@ -163,6 +181,8 @@ func TestCache_DirectVsProxied(t *testing.T) {
 }
 
 func TestDNSCacheTTL_Clamp(t *testing.T) {
+	t.Parallel()
+
 	// TTL 低于下限 clamp 到 1 小时；叠加抖动后普通域名的实际窗口为 60~120 分钟。
 	msgLow := &dns.Msg{}
 	msgLow.SetQuestion("example.com.", dns.TypeA)
@@ -202,6 +222,8 @@ func TestDNSCacheTTL_Clamp(t *testing.T) {
 }
 
 func TestDNSCacheTTL_ServerDomain(t *testing.T) {
+	t.Parallel()
+
 	msg := &dns.Msg{}
 	msg.SetQuestion("mysite.net.", dns.TypeA)
 	rr, _ := dns.NewRR("mysite.net. 5 IN A 1.2.3.4")
@@ -222,6 +244,8 @@ func TestDNSCacheTTL_ServerDomain(t *testing.T) {
 }
 
 func TestCache_ServerDomain_NeverExpires(t *testing.T) {
+	t.Parallel()
+
 	c := NewCache("mysite.net")
 
 	msg := &dns.Msg{}
@@ -254,6 +278,8 @@ func TestCache_ServerDomain_NeverExpires(t *testing.T) {
 }
 
 func TestJitterTTL_NeverExpire(t *testing.T) {
+	t.Parallel()
+
 	// TTL 0（服务器域名永不过期）必须原样返回。
 	if ttl := jitterTTL(0); ttl != 0 {
 		t.Errorf("jitterTTL(0) expected 0, got %d", ttl)
@@ -265,6 +291,8 @@ func TestJitterTTL_NeverExpire(t *testing.T) {
 }
 
 func TestJitterTTL_Range(t *testing.T) {
+	t.Parallel()
+
 	const base = 1800
 	seen := make(map[int]bool)
 	for range 1000 {
@@ -284,17 +312,13 @@ func TestJitterTTL_Range(t *testing.T) {
 func TestCachePrePopulateWithFallback(t *testing.T) {
 	failAddr := startTestDNSServer(t, true) // 回复 SERVFAIL，快速失败
 	okAddr := startTestDNSServer(t, false)  // 正常应答 A/AAAA 记录
-	old := systemDNSServersFunc
-	systemDNSServersFunc = func() []string {
+	sysServers := systemServersFunc(func() []string {
 		return []string{okAddr}
-	}
-	t.Cleanup(func() {
-		systemDNSServersFunc = old
-		resetSystemDNSCache()
-		resetBuiltinDNSCircuit()
 	})
+	t.Cleanup(resetBuiltinDNSCircuit)
 
 	c := NewCache("example.com")
+	c.system = sysServers
 	if err := c.PrePopulateWithFallback(context.Background(), "example.com", []string{failAddr}, true); err != nil {
 		t.Fatalf("PrePopulateWithFallback error: %v", err)
 	}
@@ -309,17 +333,13 @@ func TestCachePrePopulateWithFallbackRecordsSystemDNS(t *testing.T) {
 	resetBuiltinDNSCircuit()
 	failAddr := startTestDNSServer(t, true)
 	okAddr := startTestDNSServer(t, false)
-	old := systemDNSServersFunc
-	systemDNSServersFunc = func() []string {
+	sysServers := systemServersFunc(func() []string {
 		return []string{okAddr}
-	}
-	t.Cleanup(func() {
-		systemDNSServersFunc = old
-		resetSystemDNSCache()
-		resetBuiltinDNSCircuit()
 	})
+	t.Cleanup(resetBuiltinDNSCircuit)
 
 	c := NewCache("example.com")
+	c.system = sysServers
 	if err := c.PrePopulateWithFallback(context.Background(), "example.com", []string{failAddr}, true); err != nil {
 		t.Fatalf("PrePopulateWithFallback error: %v", err)
 	}
@@ -337,17 +357,13 @@ func TestCachePrePopulateWithFallbackRecordsSystemDNS(t *testing.T) {
 
 func TestCachePrePopulateWithFallbackAllFail(t *testing.T) {
 	failAddr := startTestDNSServer(t, true)
-	old := systemDNSServersFunc
-	systemDNSServersFunc = func() []string {
+	sysServers := systemServersFunc(func() []string {
 		return nil
-	}
-	t.Cleanup(func() {
-		systemDNSServersFunc = old
-		resetSystemDNSCache()
-		resetBuiltinDNSCircuit()
 	})
+	t.Cleanup(resetBuiltinDNSCircuit)
 
 	c := NewCache("example.com")
+	c.system = sysServers
 	if err := c.PrePopulateWithFallback(context.Background(), "example.com", []string{failAddr}, true); err == nil {
 		t.Fatal("expected error")
 	}
@@ -362,18 +378,14 @@ func TestCachePrePopulateWithFallbackAllFail(t *testing.T) {
 func TestCachePrePopulateWithFallbackArmedBreakerWithoutSystemDNS(t *testing.T) {
 	resetBuiltinDNSCircuit()
 	okAddr := startTestDNSServer(t, false)
-	old := systemDNSServersFunc
-	systemDNSServersFunc = func() []string {
+	sysServers := systemServersFunc(func() []string {
 		return nil
-	}
-	t.Cleanup(func() {
-		systemDNSServersFunc = old
-		resetSystemDNSCache()
-		resetBuiltinDNSCircuit()
 	})
+	t.Cleanup(resetBuiltinDNSCircuit)
 	MarkBuiltinDNSUnavailable() // 先有兜底、后兜底消失
 
 	c := NewCache("example.com")
+	c.system = sysServers
 	if err := c.PrePopulateWithFallback(context.Background(), "example.com", []string{okAddr}, true); err != nil {
 		t.Fatalf("PrePopulateWithFallback error: %v", err)
 	}
@@ -391,20 +403,18 @@ func TestCachePrePopulateWithFallbackBlackholeBuiltin(t *testing.T) {
 	resetBuiltinDNSCircuit()
 	blackhole := startBlackholeDNSServer(t)
 	okAddr := startTestDNSServer(t, false) // 正常应答 A/AAAA 记录
-	oldServers := systemDNSServersFunc
-	systemDNSServersFunc = func() []string {
+	sysServers := systemServersFunc(func() []string {
 		return []string{okAddr}
-	}
+	})
 	oldItem := ResolveItemTimeout
 	ResolveItemTimeout = 100 * time.Millisecond
 	t.Cleanup(func() {
-		systemDNSServersFunc = oldServers
 		ResolveItemTimeout = oldItem
-		resetSystemDNSCache()
 		resetBuiltinDNSCircuit()
 	})
 
 	c := NewCache("example.com")
+	c.system = sysServers
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
@@ -488,6 +498,8 @@ func TestCachePrePopulateRejectsAnswerWithoutRecords(t *testing.T) {
 }
 
 func TestCacheServerAddrs(t *testing.T) {
+	t.Parallel()
+
 	addr := startTestDNSServer(t, false)
 	c := NewCache("example.com")
 	if _, err := c.PrePopulate(context.Background(), "example.com", addr, true); err != nil {
@@ -507,17 +519,13 @@ func TestCacheServerAddrs(t *testing.T) {
 // 否则黑洞服务器会让每种记录类型各等满 5s。
 func TestCachePrePopulateWithFallbackBoundedByContext(t *testing.T) {
 	blackhole := startBlackholeDNSServer(t)
-	old := systemDNSServersFunc
-	systemDNSServersFunc = func() []string {
+	sysServers := systemServersFunc(func() []string {
 		return nil
-	}
-	t.Cleanup(func() {
-		systemDNSServersFunc = old
-		resetSystemDNSCache()
-		resetBuiltinDNSCircuit()
 	})
+	t.Cleanup(resetBuiltinDNSCircuit)
 
 	c := NewCache("example.com")
+	c.system = sysServers
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
@@ -538,19 +546,15 @@ func TestCachePrePopulateDoesNotProbeSystemDNSWhenBuiltinWorks(t *testing.T) {
 	resetBuiltinDNSCircuit()
 	okAddr := startTestDNSServer(t, false)
 
-	old := systemDNSServersFunc
 	probes := 0
-	systemDNSServersFunc = func() []string {
+	sysServers := systemServersFunc(func() []string {
 		probes++
 		return nil
-	}
-	t.Cleanup(func() {
-		systemDNSServersFunc = old
-		resetSystemDNSCache()
-		resetBuiltinDNSCircuit()
 	})
+	t.Cleanup(resetBuiltinDNSCircuit)
 
 	c := NewCache("example.com")
+	c.system = sysServers
 	if err := c.PrePopulateWithFallback(context.Background(), "example.com", []string{okAddr}, true); err != nil {
 		t.Fatalf("PrePopulateWithFallback error: %v", err)
 	}

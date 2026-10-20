@@ -244,7 +244,7 @@ func TestOutboundDialer(t *testing.T) {
 }
 
 func TestNewTCPHandler(t *testing.T) {
-	h := newTCPHandler(sharedconfig.Timeouts{StreamIdle: 120 * time.Second, Base: 30 * time.Second}, nil)
+	h := newTCPHandler(sharedconfig.Timeouts{StreamIdle: 120 * time.Second, Base: 30 * time.Second}, nil, defaultOutboundDeps())
 	if h == nil {
 		t.Fatal("newTCPHandler returned nil")
 	}
@@ -257,7 +257,7 @@ func TestNewTCPHandler(t *testing.T) {
 // 拒绝 LAN 远端地址（拨号超时与 keepalive 无法从已建立连接上观测，由 TestOutboundDialer 覆盖）。
 func TestTCPHandlerDialTarget(t *testing.T) {
 	t.Run("网络名与目标原样下传", func(t *testing.T) {
-		h := newTCPHandler(sharedconfig.Timeouts{StreamIdle: 120 * time.Second, Base: 30 * time.Second}, nil)
+		h := newTCPHandler(sharedconfig.Timeouts{StreamIdle: 120 * time.Second, Base: 30 * time.Second}, nil, defaultOutboundDeps())
 		var gotNetwork, gotTarget string
 		h.dialContext = func(_ context.Context, network, target string) (net.Conn, error) {
 			gotNetwork, gotTarget = network, target
@@ -273,7 +273,7 @@ func TestTCPHandlerDialTarget(t *testing.T) {
 	})
 
 	t.Run("拨号后拒绝 LAN 目标", func(t *testing.T) {
-		h := newTCPHandler(sharedconfig.Timeouts{StreamIdle: 120 * time.Second, Base: 30 * time.Second}, nil)
+		h := newTCPHandler(sharedconfig.Timeouts{StreamIdle: 120 * time.Second, Base: 30 * time.Second}, nil, defaultOutboundDeps())
 		stub := newStubConn(&net.TCPAddr{IP: net.ParseIP("192.168.7.7"), Port: 80})
 		h.dialContext = func(context.Context, string, string) (net.Conn, error) { return stub, nil }
 
@@ -287,7 +287,7 @@ func TestTCPHandlerDialTarget(t *testing.T) {
 }
 
 func TestNewUDPHandler(t *testing.T) {
-	h := newUDPHandler(sharedconfig.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, nil)
+	h := newUDPHandler(sharedconfig.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, nil, defaultOutboundDeps())
 	if h == nil {
 		t.Fatal("newUDPHandler returned nil")
 	}
@@ -303,7 +303,7 @@ func TestNewUDPHandler(t *testing.T) {
 // （由 TestTCPHandlerDialTarget 覆盖），而真正进行 ICMP 交换需要原始套接字权限。
 // 拨号超时通过 config.DialTimeout 派生，由 config.TestDialTimeout 固定。
 func TestNewICMPHandler(t *testing.T) {
-	h := newICMPHandler(sharedconfig.Timeouts{Base: 30 * time.Second})
+	h := newICMPHandler(sharedconfig.Timeouts{Base: 30 * time.Second}, defaultOutboundDeps())
 	if h == nil {
 		t.Fatal("newICMPHandler returned nil")
 	}

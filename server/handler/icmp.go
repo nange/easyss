@@ -47,15 +47,13 @@ type icmpHandler struct {
 }
 
 // newICMPHandler 的出站超时与 TCP/UDP handler 共用同一个 Dial 值，零值已由 config.Timeouts.Normalize 派生。
-func newICMPHandler(timeouts config.Timeouts) *icmpHandler {
+func newICMPHandler(timeouts config.Timeouts, deps *outboundDeps) *icmpHandler {
 	directDialer := outboundDialer(timeouts.Dial, 0)
-	return &icmpHandler{
-		dial: dialer{
-			direct: func(ctx context.Context, network, target string) (net.Conn, error) {
-				return dialOutbound(ctx, directDialer, network, target)
-			},
-		},
+	h := &icmpHandler{dial: newDialer(nil, nil, deps)}
+	h.dial.direct = func(ctx context.Context, network, target string) (net.Conn, error) {
+		return h.dial.outbound(ctx, directDialer, network, target)
 	}
+	return h
 }
 
 // Handle 完成一次 ICMP 回显交换：读一个回显请求，以回显应答加 FIN 回复。签名与 TCP/UDP handler

@@ -27,18 +27,15 @@ type tcpHandler struct {
 
 // 零值已由 config.Timeouts.Normalize 填充；Base 用作 KeepAlive，长连接不会在对端消失后
 // 一直半开残留。
-func newTCPHandler(timeouts config.Timeouts, np *nextproxy.NextProxy) *tcpHandler {
+func newTCPHandler(timeouts config.Timeouts, np *nextproxy.NextProxy, deps *outboundDeps) *tcpHandler {
 	directDialer := outboundDialer(timeouts.Dial, timeouts.Base)
 	h := &tcpHandler{idleTimeout: timeouts.StreamIdle}
-	h.dial = dialer{
-		nextProxy:   np,
-		shouldProxy: np.ShouldProxy,
-		direct: func(ctx context.Context, network, target string) (net.Conn, error) {
-			if h.dialContext != nil {
-				return h.dialContext(ctx, network, target)
-			}
-			return dialOutbound(ctx, directDialer, network, target)
-		},
+	h.dial = newDialer(np, np.ShouldProxy, deps)
+	h.dial.direct = func(ctx context.Context, network, target string) (net.Conn, error) {
+		if h.dialContext != nil {
+			return h.dialContext(ctx, network, target)
+		}
+		return h.dial.outbound(ctx, directDialer, network, target)
 	}
 	return h
 }

@@ -26,6 +26,8 @@ func scriptFixture() DeviceConfig {
 // TestCreateScriptArgsLayoutPerPlatform 固定三平台创建脚本的位次：脚本契约就是位置参数，
 // 而三套位次并不相同。挪位必须在这里失败，而不是等运行时由脚本报出 "failed near"。
 func TestCreateScriptArgsLayoutPerPlatform(t *testing.T) {
+	t.Parallel()
+
 	args := NewScriptArgs(scriptFixture(), "8.8.8.8", 1500)
 
 	t.Run("linux", func(t *testing.T) {
@@ -57,6 +59,8 @@ func TestCreateScriptArgsLayoutPerPlatform(t *testing.T) {
 // TestCloseScriptArgsLayoutPerPlatform 固定关闭脚本的位次：windows 只取三个参数且第 3 位是裸 IPv6
 // （netsh delete address 拒绝带前缀的地址），linux/darwin 是六个按统一顺序补齐的网关。
 func TestCloseScriptArgsLayoutPerPlatform(t *testing.T) {
+	t.Parallel()
+
 	args := NewScriptArgs(scriptFixture(), "8.8.8.8", 1500)
 
 	require.Equal(t, []string{
@@ -72,6 +76,8 @@ func TestCloseScriptArgsLayoutPerPlatform(t *testing.T) {
 
 // TestScriptArgsWithoutV6 确认服务端没有 IPv6 时第 7 位是空串：创建脚本靠它决定是否装 IPv6 地址与默认路由。
 func TestScriptArgsWithoutV6(t *testing.T) {
+	t.Parallel()
+
 	dev := DeviceConfig{
 		Device:       "utun8",
 		TunIP:        "198.18.0.1",
@@ -90,6 +96,8 @@ func TestScriptArgsWithoutV6(t *testing.T) {
 // TestNewScriptArgsNormalizesMTU 固定 MTU 在这里归一：它跨进程传递（helper 从 GET /tun 拿到），
 // 0 必须落到与主进程相同的默认值，否则设备侧与 netstack 会悄悄分叉。
 func TestNewScriptArgsNormalizesMTU(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		in   int
@@ -109,6 +117,8 @@ func TestNewScriptArgsNormalizesMTU(t *testing.T) {
 }
 
 func TestPlatformMatchesTheRunningOS(t *testing.T) {
+	t.Parallel()
+
 	require.Equal(t, ScriptPlatform(runtime.GOOS), Platform())
 
 	args := NewScriptArgs(scriptFixture(), "8.8.8.8", 1500)
@@ -120,6 +130,8 @@ func TestPlatformMatchesTheRunningOS(t *testing.T) {
 // ifconfig 补 "/64"，而 TunIPV6Sub 为 linux 的 "ip -6 addr replace" 保留 CIDR 形式，叠加会拼出
 // "...::1/64/64"——ifconfig 报 bad value、创建脚本以 1 退出，已配好的地址与路由全被回滚。
 func TestDarwinScriptArgsCarryABareV6Address(t *testing.T) {
+	t.Parallel()
+
 	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1"})
 	d := m.DeviceConfig()
 	require.Equal(t, "2001:0db8:0:f101::1/64", d.TunIPV6Sub,
@@ -140,6 +152,8 @@ func TestDarwinScriptArgsCarryABareV6Address(t *testing.T) {
 // 未加引号的空实参会被 shell 词分割丢掉、后面的参数整体前移——创建脚本会把本地网关 v6 当成 server_ipv6
 // 照样装 ::/0 路由，关闭脚本则会把 local_gateway_v6 删成空串。
 func TestOsascriptRunScriptKeepsPositionalArgs(t *testing.T) {
+	t.Parallel()
+
 	dev := DeviceConfig{
 		Device:         "utun8",
 		TunIP:          "198.18.0.1",
@@ -159,6 +173,8 @@ func TestOsascriptRunScriptKeepsPositionalArgs(t *testing.T) {
 
 // TestShellQuote 固定引号处理：空串变成可保留的空位置参数，含空格的仍是一个参数，单引号按 POSIX 惯例转义。
 func TestShellQuote(t *testing.T) {
+	t.Parallel()
+
 	require.Equal(t, "''", shellQuote(""))
 	require.Equal(t, "'/tmp/create tun.sh'", shellQuote("/tmp/create tun.sh"))
 	require.Equal(t, `'it'\''s'`, shellQuote("it's"))
@@ -168,6 +184,8 @@ func TestShellQuote(t *testing.T) {
 // 渲染成 "0" 会让创建脚本执行 "ip link set dev ... mtu 0"，整条命令失败。零值安全是类型自己的性质，
 // 不能依赖调用方总走 NewScriptArgs（它会把 MTU 归一到 [1280, 9000]）。
 func TestZeroScriptArgsRenderAnEmptyMTU(t *testing.T) {
+	t.Parallel()
+
 	var zero ScriptArgs
 	for _, platform := range []ScriptPlatform{PlatformLinux, PlatformDarwin, PlatformWindows} {
 		args := zero.CreateFor(platform)

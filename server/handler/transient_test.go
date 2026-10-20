@@ -1,5 +1,7 @@
 package handler
 
+// 本文件的测试必须串行：它们替换进程级 logger，并按捕获到的日志断言级别。
+
 import (
 	"context"
 	"errors"

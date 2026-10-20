@@ -171,17 +171,13 @@ func startNODATADNSServer(t *testing.T) string {
 
 func TestForwardQueryFallsBackToSystemDNS(t *testing.T) {
 	sysAddr := startTestDNSServer(t, false)
-	old := systemDNSServersFunc
-	systemDNSServersFunc = func() []string {
+	sysServers := systemServersFunc(func() []string {
 		return []string{sysAddr}
-	}
-	t.Cleanup(func() {
-		systemDNSServersFunc = old
-		resetSystemDNSCache()
-		resetBuiltinDNSCircuit()
 	})
+	t.Cleanup(resetBuiltinDNSCircuit)
 
 	fs := NewForwardServer("127.0.0.1:0", false)
+	fs.system = sysServers
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	// 不可达的本地地址强制走回退路径
 	fs.dnsServers = []string{"127.0.0.1:1"}
@@ -205,17 +201,13 @@ func TestForwardQueryFallsBackToSystemDNS(t *testing.T) {
 }
 
 func TestForwardQueryAllServersUnavailable(t *testing.T) {
-	old := systemDNSServersFunc
-	systemDNSServersFunc = func() []string {
+	sysServers := systemServersFunc(func() []string {
 		return nil
-	}
-	t.Cleanup(func() {
-		systemDNSServersFunc = old
-		resetSystemDNSCache()
-		resetBuiltinDNSCircuit()
 	})
+	t.Cleanup(resetBuiltinDNSCircuit)
 
 	fs := NewForwardServer("127.0.0.1:0", false)
+	fs.system = sysServers
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	fs.dnsServers = []string{"127.0.0.1:1"}
 
@@ -233,19 +225,15 @@ func TestForwardQueryAllServersUnavailable(t *testing.T) {
 // TestForwardQuerySkipsSelfAsUpstream 守住自身地址过滤：漏掉它会递归进自身堆积 goroutine
 // 与 socket。必须用生产监听地址 ":53" 构造，用 127.0.0.1:53 的测试会"通过但空转"。
 func TestForwardQuerySkipsSelfAsUpstream(t *testing.T) {
-	old := systemDNSServersFunc
-	systemDNSServersFunc = func() []string {
+	sysServers := systemServersFunc(func() []string {
 		// 路由器上 /etc/resolv.conf 的常见形态：回环（dnsmasq 惯例）与
 		// 本机网卡地址，外加一个不可达的额外服务器。
 		return []string{"127.0.0.1:53", "[::1]:53", localIPv4(t) + ":53", "127.0.0.1:1"}
-	}
-	t.Cleanup(func() {
-		systemDNSServersFunc = old
-		resetSystemDNSCache()
-		resetBuiltinDNSCircuit()
 	})
+	t.Cleanup(resetBuiltinDNSCircuit)
 
 	fs := NewForwardServer(":53", false)
+	fs.system = sysServers
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	fs.dnsServers = []string{"127.0.0.1:1"} // 内置服务器全部不可达
 
@@ -295,6 +283,8 @@ func localIPv4(t *testing.T) string {
 // 非本机地址不是，本机网卡地址只在端口相同时才算自环（另一端口上的本机解析器
 // 并不会打回自己）。
 func TestIsSelfUpstreamAddr(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name       string
 		addr       string
