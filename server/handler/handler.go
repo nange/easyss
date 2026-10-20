@@ -24,8 +24,9 @@ type ProxyHandler struct {
 	saltCache        *saltCache
 	ipLimiter        *ipRateLimiter
 	fallback         *Fallback
-	// deps 与三个子 handler 共用：握手期 SSRF 校验与拨号必须是同一批地址。
-	deps outboundDeps
+	// deps 与三个子 handler 共用同一个实例：握手期 SSRF 校验与拨号必须是同一个解析器，
+	// 否则构造后改一项就会让两者看到不同的答案。
+	deps *outboundDeps
 }
 
 type ProxyHandlerConfig struct {
@@ -48,7 +49,7 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 	return newProxyHandlerWithDeps(cfg, defaultOutboundDeps())
 }
 
-func newProxyHandlerWithDeps(cfg ProxyHandlerConfig, deps outboundDeps) *ProxyHandler {
+func newProxyHandlerWithDeps(cfg ProxyHandlerConfig, deps *outboundDeps) *ProxyHandler {
 	allowed := make(map[protocol.Method]bool)
 	for _, m := range cfg.AllowedMethods {
 		if method := protocol.MethodFromString(m); method != 0 {

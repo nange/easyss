@@ -1,5 +1,8 @@
 package dns
 
+// 本文件的测试必须串行：ResetResolveState 清的是包级 defaultSystemDNS 缓存与内置熔断，
+// 并行测试看到的会是别人复位后的状态。
+
 import (
 	"testing"
 	"time"

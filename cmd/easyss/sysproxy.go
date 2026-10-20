@@ -20,12 +20,12 @@ func sysProxyAddr(cfg *config.ClientConfig) string {
 // setSysProxy 通过桌面代理设置（gsettings/kioslaverc/注册表/networksetup）与 Linux 的
 // 会话环境两种机制指向本地 HTTP 代理——Chromium 在无法识别的桌面（含 Hyprland）上忽略
 // gsettings。任一机制生效即返回 nil，调用方可以依赖 unsetSysProxy 再次撤销它。
-func setSysProxy(addr string) error {
+func setSysProxy(env *proxyEnvState, addr string) error {
 	settingsErr := errors.Join(
 		wrapProxyErr("set http proxy", sysproxy.OnHTTP(addr)),
 		wrapProxyErr("set https proxy", sysproxy.OnHTTPS(addr)),
 	)
-	envApplied, envErr := setSysProxyEnv(addr)
+	envApplied, envErr := env.set(addr)
 
 	if settingsErr != nil && !envApplied {
 		return errors.Join(settingsErr, envErr)
@@ -41,12 +41,12 @@ func setSysProxy(addr string) error {
 	return nil
 }
 
-func unsetSysProxy() error {
+func unsetSysProxy(env *proxyEnvState) error {
 	settingsErr := errors.Join(
 		wrapProxyErr("unset http proxy", sysproxy.OffHTTP()),
 		wrapProxyErr("unset https proxy", sysproxy.OffHTTPS()),
 	)
-	envApplied, envErr := unsetSysProxyEnv()
+	envApplied, envErr := env.unset()
 
 	if settingsErr != nil && !envApplied {
 		return errors.Join(settingsErr, envErr)

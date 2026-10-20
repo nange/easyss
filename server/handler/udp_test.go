@@ -204,7 +204,7 @@ func newUDPSessionFixtureWithWriter(t *testing.T, targetConn net.Conn, target st
 	directDialer := outboundDialer(dialTimeout, 0)
 	d := newDialer(np, func(t string) bool {
 		return np != nil && np.EnableUDP() && np.ShouldProxy(t)
-	})
+	}, defaultOutboundDeps())
 	d.direct = func(ctx context.Context, network, target string) (net.Conn, error) {
 		return d.outbound(ctx, directDialer, network, target)
 	}
@@ -1517,6 +1517,7 @@ func TestDNSSessionQueryDuringRebindUsesNewRoute(t *testing.T) {
 }
 
 // 防回归：重绑失败后 via_next_proxy 必须描述实际写出的旧连接，并带 route_pending=true。
+// 必须串行：它替换进程级 logger，与同包并行测试同时运行会互相吞掉日志。
 func TestDNSSessionRebindFailureLogsActualPath(t *testing.T) {
 	fallback := newDNSTargetConn()
 	router := &fakeDNSRouter{proxyDomain: "google", directConns: []net.Conn{fallback}}
@@ -1565,9 +1566,10 @@ func TestDNSSessionDialHonorsSessionContext(t *testing.T) {
 	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
 	s.ctx = ctx
 	s.dns.router = nil
-	s.dial = dialer{direct: func(ctx context.Context, _, _ string) (net.Conn, error) {
+	s.dial = newDialer(nil, nil, defaultOutboundDeps())
+	s.dial.direct = func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return nil, ctx.Err() // 真实拨号器在 ctx 取消时会返回取消错误
-	}}
+	}
 
 	cancel()
 	_, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "mtalk.google.com")))

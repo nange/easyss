@@ -1,3 +1,5 @@
+//go:build darwin || linux
+
 package main
 
 import "github.com/nange/easyss/v3/client/tun"

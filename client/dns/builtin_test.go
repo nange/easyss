@@ -1,5 +1,8 @@
 package dns
 
+// 本文件的测试必须串行：内置 DNS 熔断、可达系统服务器记录与全局 logger 都是进程级状态，
+// 并行测试会互相复位或串台。
+
 import (
 	"context"
 	"errors"

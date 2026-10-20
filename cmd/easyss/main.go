@@ -267,11 +267,13 @@ type appDeps struct {
 	log            logOpener
 }
 
+// env 记录本 App 对桌面会话环境的改动，撤销系统代理时据此恢复发布前的值。
 func defaultAppDeps() appDeps {
+	env := newProxyEnvState()
 	return appDeps{
 		runCore:        runner.Run,
-		sysProxyApply:  setSysProxy,
-		sysProxyRevert: unsetSysProxy,
+		sysProxyApply:  func(addr string) error { return setSysProxy(env, addr) },
+		sysProxyRevert: func() error { return unsetSysProxy(env) },
 		log:            defaultLogOpener(),
 	}
 }

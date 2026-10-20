@@ -97,24 +97,22 @@ func rejectLANConn(conn net.Conn) error {
 	return nil
 }
 
-// outboundDeps 是出站拨号的全部外部依赖：域名解析、单次尝试与单个候选的最小预算。
-// 归 dialer 所有，握手期的 SSRF 校验与拨号路径共用同一份。
+// outboundDeps 是出站拨号的外部依赖：域名解析与单次尝试。指针在 handler、三个子
+// dialer 与握手期 SSRF 校验之间共享，任何一处替换都会同时被所有读者看到。
 type outboundDeps struct {
-	resolve          func(ctx context.Context, host string) ([]netip.Addr, error)
-	attempt          func(d *net.Dialer, ctx context.Context, network, addr string) (net.Conn, error)
-	attemptMinBudget time.Duration
+	resolve func(ctx context.Context, host string) ([]netip.Addr, error)
+	attempt func(d *net.Dialer, ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 // 对应 net.Dialer 内部 partialDeadline 的 2s 下限，低于它就不值得再切分。
 const defaultDialAttemptMinBudget = 2 * time.Second
 
-func defaultOutboundDeps() outboundDeps {
-	return outboundDeps{
+func defaultOutboundDeps() *outboundDeps {
+	return &outboundDeps{
 		resolve: util.ResolveHostIPs,
 		attempt: func(d *net.Dialer, ctx context.Context, network, addr string) (net.Conn, error) {
 			return d.DialContext(ctx, network, addr)
 		},
-		attemptMinBudget: defaultDialAttemptMinBudget,
 	}
 }
 
@@ -251,7 +249,7 @@ func (d *dialer) dialAddrs(ctx context.Context, nd *net.Dialer, network, target 
 		var cancel context.CancelFunc
 		if deadline, ok := ctx.Deadline(); ok {
 			attemptCtx, cancel = context.WithDeadline(ctx,
-				attemptDeadline(time.Now(), deadline, len(addrs)-i, d.deps.attemptMinBudget))
+				attemptDeadline(time.Now(), deadline, len(addrs)-i, d.attemptMinBudget))
 		}
 		conn, err := d.deps.attempt(nd, attemptCtx, network, dialAddr(addr, target))
 		if cancel != nil {
@@ -293,11 +291,18 @@ type dialer struct {
 	// 两个都为空。
 	shouldProxy func(target string) bool
 	direct      func(ctx context.Context, network, target string) (net.Conn, error)
-	deps        outboundDeps
+	deps        *outboundDeps
+	// 每个候选至少拿到这么多预算，否则挂起的候选会让后面的候选只剩毫秒级窗口。
+	attemptMinBudget time.Duration
 }
 
-func newDialer(np *nextproxy.NextProxy, shouldProxy func(target string) bool) dialer {
-	return dialer{nextProxy: np, shouldProxy: shouldProxy, deps: defaultOutboundDeps()}
+func newDialer(np *nextproxy.NextProxy, shouldProxy func(target string) bool, deps *outboundDeps) dialer {
+	return dialer{
+		nextProxy:        np,
+		shouldProxy:      shouldProxy,
+		deps:             deps,
+		attemptMinBudget: defaultDialAttemptMinBudget,
+	}
 }
 
 // 入口日志与拨号路径共用它，日志里的路由才与实际拨号一致。

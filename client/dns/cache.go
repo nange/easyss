@@ -28,18 +28,18 @@ type Cache struct {
 	proxied      *freecache.Cache
 	direct       *freecache.Cache
 	serverDomain string
-	// systemServers 是系统 DNS 兜底列表的来源，归实例所有以便测试注入。
-	systemServers func() []string
+	// system 是系统 DNS 兜底列表的来源，归实例所有以便测试注入。
+	system systemServers
 }
 
 // serverDomain（通常是代理服务器自己的域名）的条目永不过期，TTL 到期不会触发针对它的
 // 并发直连查询突发。
 func NewCache(serverDomain string) *Cache {
 	return &Cache{
-		proxied:       freecache.NewCache(cacheSize),
-		direct:        freecache.NewCache(cacheSize),
-		serverDomain:  serverDomain,
-		systemServers: SystemDNSServers,
+		proxied:      freecache.NewCache(cacheSize),
+		direct:       freecache.NewCache(cacheSize),
+		serverDomain: serverDomain,
+		system:       defaultSystemDNS,
 	}
 }
 
@@ -314,7 +314,7 @@ func (c *Cache) PrePopulateWithFallback(ctx context.Context, domain string, dnsS
 	systemLoaded := false
 	loadSystem := func() []string {
 		if !systemLoaded {
-			systemServers = c.systemServers()
+			systemServers = c.system.Servers()
 			systemLoaded = true
 		}
 		return systemServers

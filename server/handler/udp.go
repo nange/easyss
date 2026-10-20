@@ -29,13 +29,12 @@ type udpHandler struct {
 	route dnsRouter
 }
 
-func newUDPHandler(timeouts config.Timeouts, np *nextproxy.NextProxy, deps outboundDeps) *udpHandler {
+func newUDPHandler(timeouts config.Timeouts, np *nextproxy.NextProxy, deps *outboundDeps) *udpHandler {
 	directDialer := outboundDialer(timeouts.Dial, 0)
 	h := &udpHandler{idleTimeout: timeouts.UDPIdle, nextProxy: np}
 	h.dial = newDialer(np, func(target string) bool {
 		return np != nil && np.EnableUDP() && np.ShouldProxy(target)
-	})
-	h.dial.deps = deps
+	}, deps)
 	h.dial.direct = func(ctx context.Context, network, target string) (net.Conn, error) {
 		return h.dial.outbound(ctx, directDialer, network, target)
 	}

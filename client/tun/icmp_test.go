@@ -136,8 +136,9 @@ func TestICMPEchoRequestMalformed(t *testing.T) {
 // 每台主机，一旦网关地址被路由进 TUN，这些回复（ICMP 类型 0）就会到达这里，
 // 记成 INFO 是每秒数行的永久洪泛。只有 echo 请求——真正携带路由决策的报文——
 // 才进 INFO，其他类型一律 Debug。
+//
+// 必须串行：它替换进程级 logger，与同包的并行测试同时运行会互相吞掉日志。
 func TestHandlePacketLogsOnlyEchoRequests(t *testing.T) {
-	t.Parallel()
 
 	// 在替换 logger 之前先构建 router：router.New 会记录它加载的规则文件，
 	// 而那段输出不在本测试的断言范围内。

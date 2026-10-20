@@ -12,9 +12,15 @@ import (
 
 const systemDNSCacheTTL = 5 * time.Minute
 
-// SystemDNS 发现并缓存系统 DNS 服务器。缓存属于实例：测试构造独立实例即可避免
+// systemServers 给出去重后的系统 DNS 兜底地址（host:port）。生产实现是 *systemDNS，
+// 测试用静态列表替换。
+type systemServers interface {
+	Servers() []string
+}
+
+// systemDNS 发现并缓存系统 DNS 服务器。缓存属于实例：测试构造独立实例即可避免
 // 进程级状态互相污染。
-type SystemDNS struct {
+type systemDNS struct {
 	discover func() ([]string, error)
 
 	mu     sync.Mutex
@@ -22,13 +28,13 @@ type SystemDNS struct {
 	at     time.Time
 }
 
-func NewSystemDNS(discover func() ([]string, error)) *SystemDNS {
-	return &SystemDNS{discover: discover}
+func newSystemDNS(discover func() ([]string, error)) *systemDNS {
+	return &systemDNS{discover: discover}
 }
 
 // Servers 以 host:port 返回系统 DNS 服务器，惰性发现并短暂缓存。空结果也缓存，
 // 失败发现（例如缓慢的 ipconfig）才不会在每次查询时重跑。
-func (s *SystemDNS) Servers() []string {
+func (s *systemDNS) Servers() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -52,7 +58,7 @@ func (s *SystemDNS) Servers() []string {
 	return addrs
 }
 
-func (s *SystemDNS) reset() {
+func (s *systemDNS) reset() {
 	s.mu.Lock()
 	s.cached = nil
 	s.at = time.Time{}
@@ -60,7 +66,7 @@ func (s *SystemDNS) reset() {
 }
 
 // defaultSystemDNS 是进程的唯一系统 DNS 发现器；ResetResolveState 清的就是它的缓存。
-var defaultSystemDNS = NewSystemDNS(util.SysDNS)
+var defaultSystemDNS = newSystemDNS(util.SysDNS)
 
 func SystemDNSServers() []string {
 	return defaultSystemDNS.Servers()

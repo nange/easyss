@@ -312,13 +312,13 @@ func TestJitterTTL_Range(t *testing.T) {
 func TestCachePrePopulateWithFallback(t *testing.T) {
 	failAddr := startTestDNSServer(t, true) // 回复 SERVFAIL，快速失败
 	okAddr := startTestDNSServer(t, false)  // 正常应答 A/AAAA 记录
-	systemServers := func() []string {
+	sysServers := systemServersFunc(func() []string {
 		return []string{okAddr}
-	}
+	})
 	t.Cleanup(resetBuiltinDNSCircuit)
 
 	c := NewCache("example.com")
-	c.systemServers = systemServers
+	c.system = sysServers
 	if err := c.PrePopulateWithFallback(context.Background(), "example.com", []string{failAddr}, true); err != nil {
 		t.Fatalf("PrePopulateWithFallback error: %v", err)
 	}
@@ -333,13 +333,13 @@ func TestCachePrePopulateWithFallbackRecordsSystemDNS(t *testing.T) {
 	resetBuiltinDNSCircuit()
 	failAddr := startTestDNSServer(t, true)
 	okAddr := startTestDNSServer(t, false)
-	systemServers := func() []string {
+	sysServers := systemServersFunc(func() []string {
 		return []string{okAddr}
-	}
+	})
 	t.Cleanup(resetBuiltinDNSCircuit)
 
 	c := NewCache("example.com")
-	c.systemServers = systemServers
+	c.system = sysServers
 	if err := c.PrePopulateWithFallback(context.Background(), "example.com", []string{failAddr}, true); err != nil {
 		t.Fatalf("PrePopulateWithFallback error: %v", err)
 	}
@@ -357,13 +357,13 @@ func TestCachePrePopulateWithFallbackRecordsSystemDNS(t *testing.T) {
 
 func TestCachePrePopulateWithFallbackAllFail(t *testing.T) {
 	failAddr := startTestDNSServer(t, true)
-	systemServers := func() []string {
+	sysServers := systemServersFunc(func() []string {
 		return nil
-	}
+	})
 	t.Cleanup(resetBuiltinDNSCircuit)
 
 	c := NewCache("example.com")
-	c.systemServers = systemServers
+	c.system = sysServers
 	if err := c.PrePopulateWithFallback(context.Background(), "example.com", []string{failAddr}, true); err == nil {
 		t.Fatal("expected error")
 	}
@@ -378,14 +378,14 @@ func TestCachePrePopulateWithFallbackAllFail(t *testing.T) {
 func TestCachePrePopulateWithFallbackArmedBreakerWithoutSystemDNS(t *testing.T) {
 	resetBuiltinDNSCircuit()
 	okAddr := startTestDNSServer(t, false)
-	systemServers := func() []string {
+	sysServers := systemServersFunc(func() []string {
 		return nil
-	}
+	})
 	t.Cleanup(resetBuiltinDNSCircuit)
 	MarkBuiltinDNSUnavailable() // 先有兜底、后兜底消失
 
 	c := NewCache("example.com")
-	c.systemServers = systemServers
+	c.system = sysServers
 	if err := c.PrePopulateWithFallback(context.Background(), "example.com", []string{okAddr}, true); err != nil {
 		t.Fatalf("PrePopulateWithFallback error: %v", err)
 	}
@@ -403,9 +403,9 @@ func TestCachePrePopulateWithFallbackBlackholeBuiltin(t *testing.T) {
 	resetBuiltinDNSCircuit()
 	blackhole := startBlackholeDNSServer(t)
 	okAddr := startTestDNSServer(t, false) // 正常应答 A/AAAA 记录
-	systemServers := func() []string {
+	sysServers := systemServersFunc(func() []string {
 		return []string{okAddr}
-	}
+	})
 	oldItem := ResolveItemTimeout
 	ResolveItemTimeout = 100 * time.Millisecond
 	t.Cleanup(func() {
@@ -414,7 +414,7 @@ func TestCachePrePopulateWithFallbackBlackholeBuiltin(t *testing.T) {
 	})
 
 	c := NewCache("example.com")
-	c.systemServers = systemServers
+	c.system = sysServers
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
@@ -519,13 +519,13 @@ func TestCacheServerAddrs(t *testing.T) {
 // 否则黑洞服务器会让每种记录类型各等满 5s。
 func TestCachePrePopulateWithFallbackBoundedByContext(t *testing.T) {
 	blackhole := startBlackholeDNSServer(t)
-	systemServers := func() []string {
+	sysServers := systemServersFunc(func() []string {
 		return nil
-	}
+	})
 	t.Cleanup(resetBuiltinDNSCircuit)
 
 	c := NewCache("example.com")
-	c.systemServers = systemServers
+	c.system = sysServers
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
@@ -547,14 +547,14 @@ func TestCachePrePopulateDoesNotProbeSystemDNSWhenBuiltinWorks(t *testing.T) {
 	okAddr := startTestDNSServer(t, false)
 
 	probes := 0
-	systemServers := func() []string {
+	sysServers := systemServersFunc(func() []string {
 		probes++
 		return nil
-	}
+	})
 	t.Cleanup(resetBuiltinDNSCircuit)
 
 	c := NewCache("example.com")
-	c.systemServers = systemServers
+	c.system = sysServers
 	if err := c.PrePopulateWithFallback(context.Background(), "example.com", []string{okAddr}, true); err != nil {
 		t.Fatalf("PrePopulateWithFallback error: %v", err)
 	}

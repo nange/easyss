@@ -28,7 +28,8 @@ const (
 
 // newTestDialer 返回生产默认依赖的 dialer，测试只改自己需要的那一项。
 func newTestDialer() *dialer {
-	return &dialer{deps: defaultOutboundDeps()}
+	d := newDialer(nil, nil, defaultOutboundDeps())
+	return &d
 }
 
 // stubResolveHost 让解析返回给定结果，使 SSRF 校验与拨号不依赖真实 DNS。

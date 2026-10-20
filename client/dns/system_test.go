@@ -7,11 +7,16 @@ import (
 	"time"
 )
 
+// systemServersFunc 让测试用一段函数替代系统 DNS 发现，不必构造带缓存的 systemDNS。
+type systemServersFunc func() []string
+
+func (f systemServersFunc) Servers() []string { return f() }
+
 func TestSystemDNSServers(t *testing.T) {
 	t.Parallel()
 
 	calls := 0
-	s := NewSystemDNS(func() ([]string, error) {
+	s := newSystemDNS(func() ([]string, error) {
 		calls++
 		return []string{"192.168.1.1", "2400:3200::1"}, nil
 	})
@@ -38,7 +43,7 @@ func TestSystemDNSServersCachesEmptyResult(t *testing.T) {
 	t.Parallel()
 
 	calls := 0
-	s := NewSystemDNS(func() ([]string, error) {
+	s := newSystemDNS(func() ([]string, error) {
 		calls++
 		return nil, nil
 	})
@@ -55,7 +60,7 @@ func TestSystemDNSServersCachesEmptyResult(t *testing.T) {
 func TestSystemDNSServersError(t *testing.T) {
 	t.Parallel()
 
-	s := NewSystemDNS(func() ([]string, error) {
+	s := newSystemDNS(func() ([]string, error) {
 		return nil, errors.New("discovery failed")
 	})
 

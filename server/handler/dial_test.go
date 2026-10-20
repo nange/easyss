@@ -44,7 +44,7 @@ func refuseNow(_ context.Context, addr string) (net.Conn, error) {
 
 // shrinkDialAttemptMinBudget 调小候选的最小预算，让测试用毫秒级总预算验证切分，不必等满 2s。
 func shrinkDialAttemptMinBudget(d *dialer, budget time.Duration) {
-	d.deps.attemptMinBudget = budget
+	d.attemptMinBudget = budget
 }
 
 func testAddrs(t *testing.T, raw ...string) []netip.Addr {
@@ -126,7 +126,7 @@ func TestOrderByFamily(t *testing.T) {
 	}
 }
 
-// TestDialCandidatesInterleavesFamilies 验证 dialCandidates 端到端使用交错排序。
+// TestDialCandidatesInterleavesFamilies 验证 dialer.candidates 端到端使用交错排序。
 func TestDialCandidatesInterleavesFamilies(t *testing.T) {
 	t.Parallel()
 

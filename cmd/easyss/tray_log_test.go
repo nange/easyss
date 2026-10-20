@@ -62,7 +62,7 @@ func TestBinName(t *testing.T) {
 	}
 }
 
-// testLogOpener 返回可注入的日志查看器；lookup 为 nil 时保留真实的 PATH 解析。
+// testLogOpener 返回带生产实现的日志查看器，测试在构造后只覆盖自己需要的那一项。
 func testLogOpener() logOpener { return defaultLogOpener() }
 
 func TestLogViewerArgv(t *testing.T) {

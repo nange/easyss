@@ -85,7 +85,7 @@ func newRejectHandler(handshakeTimeout time.Duration) http.Handler {
 	return newRejectHandlerWith(defaultOutboundDeps(), handshakeTimeout)
 }
 
-func newRejectHandlerWith(deps outboundDeps, handshakeTimeout time.Duration) http.Handler {
+func newRejectHandlerWith(deps *outboundDeps, handshakeTimeout time.Duration) http.Handler {
 	return newProxyHandlerWithDeps(ProxyHandlerConfig{
 		MasterKey:        bytes.Repeat([]byte{0x42}, 32),
 		AllowedMethods:   []string{protocol.MethodAES256GCM.String()},
