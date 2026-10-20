@@ -1737,9 +1737,9 @@ func TestDNSSessionDialHonorsSessionContext(t *testing.T) {
 }
 
 // errReadConn 的 Read 返回一个**真实的非超时错误**（不是 net.ErrClosed 或超时），
-// 因此会走到 targetReadError 末尾那条带远端地址的错误日志——review 指出的
-// s.remote 无锁读就在那里。此前所有 fake conn 的错误都在函数前段提前返回，
-// 该路径没有任何用例覆盖。
+// 因此 targetReadError 不会把它归一化成 io.EOF，而是原样返回给 run，最终由
+// serveSession 的唯一结果日志记录。此前所有 fake conn 的错误都在函数前段提前
+// 返回，该路径没有任何用例覆盖。
 type errReadConn struct {
 	closed chan struct{}
 	once   sync.Once
@@ -1759,10 +1759,11 @@ func (c *errReadConn) SetDeadline(time.Time) error      { return nil }
 func (c *errReadConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *errReadConn) SetWriteDeadline(time.Time) error { return nil }
 
-// TestDNSSessionRemoteReadPathOnRealError 覆盖 targetReadError 末尾那条真实故障
-// 日志（带远端地址）：fake conn 的错误若是 net.ErrClosed 或超时会在函数前段提前
-// 返回，走不到那里。这条用例保证该路径可用且远端地址通过锁读取（-race 下验证）。
-func TestDNSSessionRemoteReadPathOnRealError(t *testing.T) {
+// TestDNSSessionTargetReadErrorReturnsFailure 覆盖 targetReadError 对真实非超时
+// 错误的处理：它不能被归一化成 io.EOF（那是会话正常收尾），而应作为会话失败
+// 返回，并由 serveSession 的唯一结果日志记录。fake conn 的错误若是 net.ErrClosed
+// 或超时会在函数前段提前返回，走不到这条分支。
+func TestDNSSessionTargetReadErrorReturnsFailure(t *testing.T) {
 	boom := errors.New("read failed")
 	broken := newErrReadConn(boom)
 	s, _ := newUDPSessionFixture(t, broken, "8.8.8.8:53", time.Second, nil, newBlockingConn())

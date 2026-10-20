@@ -191,13 +191,26 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 // 而 1ms 足以把同一突发里的数据报合并进单个加密记录，同时不引入可感知的延迟。
 const udpBatchWindowMS = 1
 
+// sessionLogAttrs 返回一条流的入口日志字段。TCP 的 next-proxy 决策在这里
+// 与拨号路径共用 dialer.usesNextProxy，避免日志说直连、实际却走了代理。
+// 结果日志在成功时是 Debug，因此这条 Info 是成功流唯一能看到路由的出口。
+func (h *ProxyHandler) sessionLogAttrs(res handshakeResult, client string) []any {
+	attrs := []any{"target", res.target, "client", client}
+	if res.endpoint == sharedconfig.EndpointTCP && h.tcp != nil && h.tcp.dial.usesNextProxy(res.target) {
+		attrs = append(attrs, "via_next_proxy", true, "proxy", h.tcp.dial.nextProxy.Host())
+	}
+	return attrs
+}
+
 // serveSession 在响应上提交加密会话并分派给端点 handler。从第一次
 // WriteHeader 开始的所有事情都发生在这里：响应已无法再变成回退 HTML 页面，
 // 因此此后出现的失败表现为流级别的 RST 而不是 HTTP 错误。
 func (h *ProxyHandler) serveSession(w http.ResponseWriter, r *http.Request, res handshakeResult) {
 	// 每条流的入口日志只此一条；退出只有 logHandlerResult 一条结果日志。
 	// handler 内部不再打印拨号/连接/失败步骤，避免一条流刷出多条 Info。
-	log.Info("[SERVER] proxy", "target", res.target, "client", r.RemoteAddr)
+	// TCP 的 next-proxy 路由决策并入这里，因此成功流在默认 Info 级别仍能看出
+	// 它走的是哪条出站路径（结果日志成功时是 Debug，不能承担这个信息）。
+	log.Info("[SERVER] proxy", h.sessionLogAttrs(res, r.RemoteAddr)...)
 
 	// 在提交响应之前预先创建并校验会话的 reader/writer。
 	// 一旦调用 WriteHeader + Flush，响应就无法再变成回退 HTML 页面。

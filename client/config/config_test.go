@@ -739,7 +739,7 @@ func TestLoadConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("加载 v2 配置自动迁移", func(t *testing.T) {
+	t.Run("加载 v2 配置自动转换", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "config.json")
 

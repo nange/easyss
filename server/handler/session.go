@@ -361,6 +361,12 @@ type dialer struct {
 	direct func(ctx context.Context, network, target string) (net.Conn, error)
 }
 
+// usesNextProxy 报告按目标路由时是否会走下一级代理。入口日志与拨号路径共用
+// 它，因此日志里的路由不会与实际拨号各说各话。
+func (d *dialer) usesNextProxy(target string) bool {
+	return d.nextProxy != nil && d.shouldProxy != nil && d.shouldProxy(target)
+}
+
 // dialTarget 打开出站连接，并连同可打印的远端地址一起返回用于日志。
 // 远端地址在这里解析，因为 next-proxy 路径得到的是 SOCKS5 连接，
 // 其 RemoteAddr() 为 nil。
@@ -368,7 +374,7 @@ type dialer struct {
 // 它按**目标**决定路由；需要按域名决定路由的调用方（DNS 查询，见
 // udpRouteDialer）改用 dialVia，两条路径共用下面的同一个实现。
 func (d *dialer) dialTarget(ctx context.Context, network, target string) (net.Conn, string, error) {
-	return d.dialVia(ctx, network, target, "", d.nextProxy != nil && d.shouldProxy(target))
+	return d.dialVia(ctx, network, target, "", d.usesNextProxy(target))
 }
 
 // dialVia 是出站拨号的唯一实现：viaNextProxy 由调用方决定（按目标，或像 DNS
@@ -402,8 +408,8 @@ func (d *dialer) dialVia(ctx context.Context, network, target, name string, viaN
 		if name != "" {
 			attrs = append(attrs, "name", name)
 		}
-		// 下一级代理是流级别的路径细节：入口已有 `[SERVER] proxy`，结果日志
-		// 会带 upstream（即代理地址），这里只保留 Debug 供排查。
+		// 下一级代理的路由信息已经并入入口日志（serveSession 的
+		// via_next_proxy/proxy），这里保留 Debug 供排查更细的拨号细节。
 		log.Debug("[HANDLE] dialing via next proxy", attrs...)
 		conn, err := d.nextProxy.DialContext(ctx, network, target)
 		if err != nil {
