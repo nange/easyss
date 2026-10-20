@@ -82,7 +82,7 @@ func (h *tcpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 	out.Remote = remote
 	out.TimedOut = result.TimedOut
 	if result.TimedOut {
-		out.Err = fmt.Errorf("tcp stream idle timeout after %v", h.idleTimeout)
+		out.Err = fmt.Errorf("%w after %v", errStreamIdleTimeout, h.idleTimeout)
 	} else {
 		out.Err = result.Err
 	}

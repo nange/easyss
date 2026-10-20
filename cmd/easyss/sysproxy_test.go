@@ -87,14 +87,59 @@ func TestSetupSysProxyFailureIsNotFatal(t *testing.T) {
 
 func TestTeardownSysProxyOnlyRevertsWhenApplied(t *testing.T) {
 	_, reverts := stubSysProxy(t, nil)
+	app := testApp(clientconfig.LocalConfig{HTTPPort: 5080})
 
-	teardownSysProxy(false)
+	app.teardownSysProxy()
 	if *reverts != 0 {
 		t.Fatalf("reverts = %d, want 0 without a preceding apply", *reverts)
 	}
 
-	teardownSysProxy(true)
+	if !app.setupSysProxy() {
+		t.Fatal("setupSysProxy = false, want true")
+	}
+	app.teardownSysProxy()
 	if *reverts != 1 {
 		t.Fatalf("reverts = %d, want 1", *reverts)
+	}
+
+	// 状态已在第一次撤销时清掉，重复调用不得再次撤别人的系统代理。
+	app.teardownSysProxy()
+	if *reverts != 1 {
+		t.Fatalf("reverts = %d, want 1 after a repeated teardown", *reverts)
+	}
+}
+
+// TestAppStopRevertsSysProxyAndStopsOnce 固定 App.Stop 成为唯一的退出序列：
+// 撤销系统代理与停止会话都只发生一次，headless/托盘/无托盘路径共享它。
+func TestAppStopRevertsSysProxyAndStopsOnce(t *testing.T) {
+	_, reverts := stubSysProxy(t, nil)
+	app := testApp(clientconfig.LocalConfig{HTTPPort: 5080})
+	if !app.setupSysProxy() {
+		t.Fatal("setupSysProxy = false, want true")
+	}
+
+	app.Stop()
+	app.Stop()
+	if *reverts != 1 {
+		t.Fatalf("reverts = %d, want 1 across repeated Stop calls", *reverts)
+	}
+}
+
+// TestAppCloseRevertsEvenWhenNotApplied 固定 Close 与 Stop 的唯一语义差异：
+// 托盘退出必须清理上一次运行/异步开关留下的系统代理，因此即使本进程没有
+// 成功 apply 过（flag 为假），Close 仍会执行一次 revert。
+func TestAppCloseRevertsEvenWhenNotApplied(t *testing.T) {
+	_, reverts := stubSysProxy(t, nil)
+	app := testApp(clientconfig.LocalConfig{HTTPPort: 5080})
+	if app.sysProxyApplied.Load() {
+		t.Fatal("a fresh App must not claim it applied the system proxy")
+	}
+
+	app.Close()
+	if *reverts != 1 {
+		t.Fatalf("reverts = %d, want 1 even without a preceding apply", *reverts)
+	}
+	if app.sysProxyApplied.Load() {
+		t.Fatal("Close must leave sysProxyApplied false")
 	}
 }

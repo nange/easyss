@@ -24,6 +24,7 @@ func newSwitchTestApp(t *testing.T) *TrayApp {
 		{Host: "b.example", Port: 443},
 	}}
 	a := &TrayApp{App: newApp(cfg, "")}
+	a.ui = a
 	a.serverAddrs = cfg.ServerListAddrs()
 
 	menu := systray.NewMenu()

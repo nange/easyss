@@ -384,8 +384,7 @@ func (a *TrayApp) downloadAndInstall() {
 		// 会交错抢本地端口，并把配置发布与菜单勾选的顺序交给调度器——这正是
 		// session.run 存在的理由。成功路径紧接着 os.Exit，序列锁随进程消失。
 		a.sess.run(func() {
-			_ = a.setSysProxyOff()
-			a.stopServiceInSequence()
+			a.Close()
 			// 在重新启动前释放单例锁，这样新进程绝不会与旧进程
 			// 竞争单例互斥锁。
 			releaseSingletonLock()

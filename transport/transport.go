@@ -29,6 +29,12 @@ func IsHandshakeRejected(err error) bool {
 	return errors.As(err, &e)
 }
 
+// ErrConnRetired 表示流所属的连接代已经作废：它可能是被本进程判死
+// （transportSlot.invalidateConn），也可能是被 net/http 自然回收。流在读写时
+// 一旦观察到自己的代已经不是槽位的当前代，就用它包装底层错误；代理层据此把
+// "连接被换掉"与真正的目标错误区分开，不必再匹配 stdlib 的错误文本。
+var ErrConnRetired = errors.New("transport: connection retired")
+
 type Stream interface {
 	io.Reader
 	io.Writer

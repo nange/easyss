@@ -12,10 +12,8 @@ import (
 	"net/http"
 	"os"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/gogpu/systray"
@@ -316,14 +314,6 @@ func friendlyCatLogError(err error) string {
 	}
 }
 
-// isAddrInUse 判断错误是否为"端口已被占用"的绑定失败（Unix 走 errno，
-// Windows 走消息匹配，两者兼顾以保证跨平台）。
-func isAddrInUse(err error) bool {
-	return errors.Is(err, syscall.EADDRINUSE) ||
-		strings.Contains(err.Error(), "address already in use") ||
-		strings.Contains(err.Error(), "Only one usage of each socket address")
-}
-
 func (a *TrayApp) trayExit() {
 	select {
 	case a.closing <- struct{}{}:
@@ -558,7 +548,7 @@ func (a *TrayApp) toggleSysProxy() {
 			}
 		} else {
 			mi.SetChecked(true)
-			if err := a.setSysProxyOn(); err != nil {
+			if err := a.setSysProxyOn(a.currentConfig().Local.HTTPPort); err != nil {
 				log.Error("[SYSTRAY] set sys-proxy on", "err", err)
 				mi.SetChecked(false) // 失败时回滚
 			}
@@ -672,17 +662,6 @@ func (a *TrayApp) exitApp() {
 	}()
 }
 
-// setSysProxyOn/setSysProxyOff 走 sysProxyApply/sysProxyRevert 这两个包级钩子
-// （而不是直接调用实现），使测试可以观察托盘路径上的系统代理改动，
-// 而不必触碰运行测试的机器的真实代理配置。
-func (a *TrayApp) setSysProxyOn() error {
-	return sysProxyApply(a.currentConfig().Local.HTTPPort)
-}
-
-func (a *TrayApp) setSysProxyOff() error {
-	return sysProxyRevert()
-}
-
 // enableTun2socks 在后台 goroutine 中运行 TUN 启用流程，
 // 以保持托盘菜单响应。失败时它回滚菜单勾选并通知用户：
 // 否则失败不可见，因为代理核心继续提供 SOCKS5/HTTP 服务，
@@ -725,9 +704,8 @@ func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 // 以保持托盘菜单响应。
 func (a *TrayApp) disableTun2socks() {
 	log.Info("[SYSTRAY] disableTun2socks called")
-	if err := a.sess.tunDown(); err != nil {
-		log.Error("[SYSTRAY] close tun2socks", "err", err)
-	}
+	// teardown 中发现的问题由 tunDown 自己记日志/通知界面，不中止退出流程。
+	a.sess.tunDown()
 }
 
 // startService 是切换/重启的默认 start 步骤：用当前配置快照启动一个新会话。
@@ -754,110 +732,27 @@ func (a *TrayApp) restartServiceWith(newCfg *config.ClientConfig, start func(*co
 	})
 }
 
-// restartServiceInSequence 是切换的序列体；start 由调用方注入，使测试可以驱动
-// "新服务起不来 → 回滚到旧服务器"这条路径，而不必真的启动代理核心。
-//
-// newCfg 只是"切换意图"的载体：本函数只从它取目标服务器下标，然后把这**一条
-// 增量**应用到当前快照上（见下面的 updateConfig），其余字段一律以当前快照为准。
-// 原因是 stopServiceInSequence 可能要数秒（macOS 上要等 TUN 拆除的管理员凭据），
-// 而序列锁只串行化两套"停/起"，串不住不持锁的菜单路径——若在这里发布一份停服务
-// 之前取的全量快照，用户在这期间改的代理规则/日志级别就会被静默还原。
-//
-// start 收到的配置是"调用时刻生效的快照"，只读（生产实现忽略它，测试据此判断
-// 目标服务器与注入失败）。
-func (a *TrayApp) restartServiceInSequence(newCfg *config.ClientConfig, start func(*config.ClientConfig) error) error {
-	targetIdx := newCfg.DefaultServerIndex()
-
-	snap := a.currentConfig()
-	prevIdx, prevTun := snap.DefaultServerIndex(), snap.Local.EnableTun2socks
-
-	sysProxyEnabled := a.BrowserMenu() != nil && a.BrowserMenu().IsChecked()
-
-	// 停止一切，包括 TUN。在 macOS 上这会提示输入管理员凭据
-	// 以清理路由和 DNS —— 在手动切换服务器期间可以接受。
-	a.stopServiceInSequence()
-
-	// 停完之后才发布切换意图，且只改这次切换真正要改的两个字段：目标服务器，
-	// 以及"切换后 TUN 保持关闭"（托盘菜单与实际状态同步，用户一次点击即可
-	// 重新启用）。CAS 发布因此会把停服务期间的菜单改动合并进来，而不是覆盖它。
-	a.updateConfig(func(c *config.ClientConfig) {
-		c.SetDefaultServerIndex(targetIdx)
-		c.Local.EnableTun2socks = false
-	})
-	if tunMenu := a.TunMenu(); tunMenu != nil {
-		tunMenu.SetChecked(false)
-	}
-
-	restoreSysProxy := func() {
-		if !sysProxyEnabled {
-			return
-		}
-		if err := a.setSysProxyOn(); err != nil {
-			log.Error("[SYSTRAY] restart service: restore sysproxy on", "err", err)
-		}
-	}
-
-	if err := start(a.currentConfig()); err != nil {
-		// 回滚同样只回退这次切换改掉的两个字段（服务器选择与 TUN 偏好），
-		// 保留菜单在这期间的最新改动。回滚也失败时两个错误一起上报
-		//（调用方据此判断"完全没有服务在运行"）。
-		a.updateConfig(func(c *config.ClientConfig) {
-			c.SetDefaultServerIndex(prevIdx)
-			c.Local.EnableTun2socks = prevTun
-		})
-		if tunMenu := a.TunMenu(); tunMenu != nil {
-			tunMenu.SetChecked(prevTun)
-		}
-		prevAddr := a.currentConfig().DefaultServerAddr()
-		if rollbackErr := start(a.currentConfig()); rollbackErr != nil {
-			return errors.Join(err, fmt.Errorf("rollback to %s: %w", prevAddr, rollbackErr))
-		}
-		log.Warn("[SYSTRAY] restart service: rolled back to the previous server",
-			"addr", prevAddr, "err", err)
-		restoreSysProxy()
-		return err
-	}
-
-	// startupWarn 由 start 里的那次 App.Start（或 buildTray 的初始 Start）写入；
-	// 这里的恢复流程与那次 Start 分属不同 goroutine，因此必须走访问器（它读的是
-	// 会话自己的锁，见 session.startupWarn）。
-	if warn := a.currentStartupWarn(); warn != nil {
-		log.Warn("[SYSTRAY] restart service: startup warning", "err", warn)
-	}
-
-	restoreSysProxy()
-	return nil
-}
-
-// closeService 停止当前会话：撤销系统代理 → 拆 TUN → 停核心。整段在会话序列锁内
-// （见 session.run），因此退出路径与切换/自更新重启不会交错——这个性质过去是
-// closeService 整段持有 TrayApp.mu 顺带得到的（那把锁只负责两个菜单项指针，却把
-// 菜单读挡住了最长可达几十秒的 TUN 拆除），现在由显式的序列锁提供。
+// closeService 停止当前会话：App.Close 按“撤销系统代理 → 拆 TUN → 停核心”收尾。
+// 整段在会话序列锁内（见 session.run），因此退出路径与切换/自更新重启不会交错。
 func (a *TrayApp) closeService() {
-	a.sess.run(a.stopServiceInSequence)
+	a.sess.run(a.Close)
 }
 
-// stopServiceInSequence 是关闭会话的序列体，只能在 session.run 内调用。
-func (a *TrayApp) stopServiceInSequence() {
-	// 退出时总是尝试清除系统代理，无论菜单勾选状态如何
-	//（由于异步开关或启动顺序，勾选状态可能与实际系统设置不一致）。
-	if err := a.setSysProxyOff(); err != nil {
-		log.Error("[SYSTRAY] close service: set sysproxy off", "err", err)
-	}
+// browserProxyEnabled / setTunMenuChecked 是 appUI 的实现：切换序列已经移到
+// App.restartServiceInSequence，托盘只提供菜单状态。
+func (a *TrayApp) browserProxyEnabled() bool {
+	return a.BrowserMenu() != nil && a.BrowserMenu().IsChecked()
+}
 
-	// 在停止核心服务之前停止 TUN 助手进程和引擎。
-	// 在非 darwin 或 root 环境下，如果 TUN 不是通过助手进程启动的，
-	// session.tunDown 是空操作。
-	if err := a.sess.tunDown(); err != nil {
-		log.Error("[SYSTRAY] close service: close tun2socks", "err", err)
+func (a *TrayApp) setTunMenuChecked(checked bool) {
+	if mi := a.TunMenu(); mi != nil {
+		mi.SetChecked(checked)
 	}
-
-	a.Stop()
 }
 
 func (a *TrayApp) startLocalService() {
 	if a.BrowserMenu() != nil && a.BrowserMenu().IsChecked() {
-		if err := a.setSysProxyOn(); err != nil {
+		if err := a.setSysProxyOn(a.currentConfig().Local.HTTPPort); err != nil {
 			log.Error("[SYSTRAY] start local: set sysproxy on", "err", err)
 		}
 	} else {

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -52,16 +51,10 @@ func TestFriendlyConfigError(t *testing.T) {
 }
 
 func TestFriendlyStartupError(t *testing.T) {
-	// Unix：基于 errno 的检测。
-	msg := friendlyStartupError(syscall.EADDRINUSE)
+	// 当前平台的 net 错误：Unix 是 EADDRINUSE，Windows 是 WSAEADDRINUSE。
+	msg := friendlyStartupError(addrInUseTestErr())
 	if !strings.Contains(msg, "本地端口可能被占用") {
 		t.Fatalf("EADDRINUSE should get the port-in-use hint: %q", msg)
-	}
-
-	// Windows：标准的错误消息文本。
-	windowsErr := errors.New("bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.")
-	if msg := friendlyStartupError(windowsErr); !strings.Contains(msg, "本地端口可能被占用") {
-		t.Fatalf("windows in-use error should get the hint: %q", msg)
 	}
 
 	// 空密码（crypto.ErrPasswordEmpty）。

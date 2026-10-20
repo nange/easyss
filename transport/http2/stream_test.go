@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/stats"
+	"github.com/nange/easyss/v3/transport"
 )
 
 func newTestStream() (*http2Stream, *io.PipeReader) {
@@ -241,5 +242,40 @@ func TestHTTP2Stream_SlotDraining(t *testing.T) {
 	ns := &http2Stream{}
 	if ns.SlotDraining() {
 		t.Fatal("nil slot must not report draining")
+	}
+}
+
+// TestHTTP2StreamWrapRetired 固定"连接代作废"的 typed 标记：同一代里的错误
+// 原样返回，换代之后才包 transport.ErrConnRetired；io.EOF 与已经包装过的错误
+// 不重复包装。
+func TestHTTP2StreamWrapRetired(t *testing.T) {
+	slot := slotWithGenFactory()
+	gen := slot.generation()
+	s := &http2Stream{slot: slot}
+	s.gen.Store(gen)
+
+	raw := errors.New("read: client connection lost")
+	if got := s.wrapRetired(raw); got != raw {
+		t.Fatalf("same-generation error = %v, want the original", got)
+	}
+
+	if !slot.advanceGeneration(gen) {
+		t.Fatal("advanceGeneration must replace the generation")
+	}
+	got := s.wrapRetired(raw)
+	if !errors.Is(got, transport.ErrConnRetired) {
+		t.Fatalf("retired-generation error = %v, want ErrConnRetired", got)
+	}
+	if !errors.Is(got, raw) {
+		t.Fatalf("retired-generation error = %v, want the original cause preserved", got)
+	}
+	if again := s.wrapRetired(got); again != got {
+		t.Fatalf("already wrapped error = %v, want no double wrap", again)
+	}
+	if got := s.wrapRetired(io.EOF); got != io.EOF {
+		t.Fatalf("io.EOF = %v, want io.EOF unchanged", got)
+	}
+	if got := s.wrapRetired(nil); got != nil {
+		t.Fatalf("nil = %v, want nil", got)
 	}
 }

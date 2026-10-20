@@ -184,7 +184,7 @@ func (s *http2Stream) Read(p []byte) (int, error) {
 	if r == nil {
 		s.done()
 		if respErr != nil {
-			return 0, respErr
+			return 0, s.wrapRetired(respErr)
 		}
 		return 0, io.EOF
 	}
@@ -195,6 +195,7 @@ func (s *http2Stream) Read(p []byte) (int, error) {
 	}
 	if err != nil {
 		s.done()
+		err = s.wrapRetired(err)
 	}
 	return n, err
 }
@@ -213,11 +214,27 @@ func (s *http2Stream) Write(p []byte) (int, error) {
 			if rtErr != nil {
 				// 同时包裹两个错误，使调用方仍能匹配 io.ErrClosedPipe 做重试
 				// 决策，同时也能看到根本原因。
-				return n, fmt.Errorf("%w: %w", io.ErrClosedPipe, rtErr)
+				return n, s.wrapRetired(fmt.Errorf("%w: %w", io.ErrClosedPipe, rtErr))
 			}
 		}
+		return n, s.wrapRetired(err)
 	}
 	return n, err
+}
+
+// wrapRetired 给"本流所属连接代已作废"的读写错误加上 transport.ErrConnRetired。
+// 判断依据是流提交时持有的那一代与槽位当前代是否仍相同：判死会先换代再关连接，
+// net/http 自然回收连接也会换代，因此代不一致就说明这条流已经不可能再健康。
+// io.EOF 是正常的流结束，不能包装。
+func (s *http2Stream) wrapRetired(err error) error {
+	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, transport.ErrConnRetired) {
+		return err
+	}
+	gen := s.gen.Load()
+	if gen == nil || s.slot == nil || s.slot.generation() == gen {
+		return err
+	}
+	return fmt.Errorf("%w: %w", transport.ErrConnRetired, err)
 }
 
 // deliver 落定 RoundTrip 的结果：先存入 r/respErr（Write 的诊断与
@@ -267,7 +284,7 @@ func (s *http2Stream) deliver(res roundTripResult) {
 func (s *http2Stream) roundTripErr() error {
 	s.rtErrMu.Lock()
 	defer s.rtErrMu.Unlock()
-	return s.rtErr
+	return s.wrapRetired(s.rtErr)
 }
 
 // AwaitResponse 等待 RoundTrip 结果就绪而不消费响应体

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/caddyserver/certmagic"
+	"github.com/mholt/acmez/v3/acme"
 	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/server/config"
@@ -127,9 +129,35 @@ func mustNewServer(t *testing.T) error {
 }
 
 func TestShouldRetryFreshCertificate(t *testing.T) {
+	// typed problem：alreadyReplaced 与 404 不依赖 detail 文本。
+	require.True(t, shouldRetryFreshCertificate(acme.Problem{
+		Type:   acme.ProblemTypeAlreadyReplaced,
+		Status: http.StatusConflict,
+	}))
+	require.True(t, shouldRetryFreshCertificate(acme.Problem{
+		Type:   acme.ProblemTypeMalformed,
+		Status: http.StatusNotFound,
+	}))
+	// 同一个 Problem 类型下，detail 仍用于区分 ARI replaces 的具体拒绝。
+	require.True(t, shouldRetryFreshCertificate(acme.Problem{
+		Type:   acme.ProblemTypeMalformed,
+		Status: http.StatusBadRequest,
+		Detail: "Could not validate ARI 'replaces' field",
+	}))
+	require.True(t, shouldRetryFreshCertificate(fmt.Errorf("certmagic: %w", acme.Problem{
+		Type:   acme.ProblemTypeMalformed,
+		Status: http.StatusBadRequest,
+		Detail: "Requested certificate was not found",
+	})))
+
+	// 非 Problem 包装的兼容路径仍然保留。
 	require.True(t, shouldRetryFreshCertificate(errString("Could not validate ARI 'replaces' field")))
 	require.True(t, shouldRetryFreshCertificate(errString("Requested certificate was not found")))
 	require.False(t, shouldRetryFreshCertificate(errString("dial tcp: i/o timeout")))
+	require.False(t, shouldRetryFreshCertificate(acme.Problem{
+		Type:   acme.ProblemTypeRateLimited,
+		Status: http.StatusTooManyRequests,
+	}))
 }
 
 func TestCleanCertmagicDomainAssets(t *testing.T) {

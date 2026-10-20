@@ -637,14 +637,20 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 // "client connection force closed"是 net/http 的哨兵错误（errClientConnForceClosed）：
 // 只有本进程调用 ClientConn.Close() 才会产生它，而那条路径的唯一入口是传输层
 // 判死（transportSlot.invalidateConn，见 transport/http2 的挂起复核与流判死）。
-// 也就是说它按构造就是"我们自己换掉了一条连接"的连带失败——连接级事件已经由
-// 传输层记一条 Info（[TRANSPORT] connection invalidated，带 reason），逐流再记
-// WARN/ERROR 只会把一次换连接刷成一屏。
+// 传输层会在流读写的错误上包 transport.ErrConnRetired，代理层据此识别这条
+// 连接级失败；连接级事件已经由传输层记一条 Info（[TRANSPORT] connection
+// invalidated，带 reason），逐流再记 WARN/ERROR 只会把一次换连接刷成一屏。
+//
+// 剩下的文本匹配只针对 stdlib 未导出的 http2 流级错误（"stream closed"），
+// 以及传输层换代与 net/http 回收之间可能存在的极短窗口。
 func isTransientStreamError(err error) bool {
 	if errors.Is(err, ErrStreamIdleTimeout) || errors.Is(err, ErrStreamReset) {
 		return true
 	}
 	if errors.Is(err, ErrServerRejectedHandshake) || transport.IsHandshakeRejected(err) {
+		return true
+	}
+	if errors.Is(err, transport.ErrConnRetired) {
 		return true
 	}
 	if err == nil {
