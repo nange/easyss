@@ -86,3 +86,54 @@ func TestCoreStopIsIdempotent(t *testing.T) {
 		t.Fatalf("second Stop took %s, want an immediate no-op", elapsed)
 	}
 }
+
+// TestRunFailureReleasesBoundListeners 守护 Run 的统一清理路径：SOCKS5 监听
+// 已经绑定、后续步骤却失败（HTTP 端口或 forward DNS 端口冲突）时，已经绑定的
+// 端口必须随错误返回一起释放。旧实现已在六个分支里各自调用了 closeListeners，
+// 因此这不是历史泄漏的回归测试；它的作用是防止后续新增资源或错误分支时漏接
+// 统一清理（端口被占住，重试启动会一直失败）。
+func TestRunFailureReleasesBoundListeners(t *testing.T) {
+	t.Run("http port conflict", func(t *testing.T) {
+		_, httpPort := occupyTCPPort(t)
+		socksPort := freePort(t)
+
+		cfg := testConfig()
+		cfg.Local.SocksPort = socksPort
+		cfg.Local.HTTPPort = httpPort
+
+		if core, err := Run(cfg); err == nil {
+			core.Stop()
+			t.Fatal("expected Run to fail when the http port is occupied")
+		}
+		if !waitPortBindable(socksPort) {
+			t.Fatalf("socks5 port %d leaked after a failed Run", socksPort)
+		}
+	})
+
+	t.Run("forward dns port conflict", func(t *testing.T) {
+		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen packet: %v", err)
+		}
+		defer pc.Close() //nolint:errcheck
+
+		addr := pc.LocalAddr().String()
+		prev := forwardDNSListenAddr
+		forwardDNSListenAddr = func() string { return addr }
+		t.Cleanup(func() { forwardDNSListenAddr = prev })
+
+		socksPort := freePort(t)
+		cfg := testConfig()
+		cfg.Local.SocksPort = socksPort
+		cfg.Local.HTTPPort = 0
+		cfg.Local.EnableForwardDNS = true
+
+		if core, err := Run(cfg); err == nil {
+			core.Stop()
+			t.Fatal("expected Run to fail when the forward dns port is occupied")
+		}
+		if !waitPortBindable(socksPort) {
+			t.Fatalf("socks5 port %d leaked after a failed Run", socksPort)
+		}
+	})
+}

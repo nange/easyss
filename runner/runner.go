@@ -155,28 +155,35 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 	// （5s）以便用户读到原因。把 net.Listen 挪回 goroutine 会让端口冲突重新变成
 	// "只记日志"，用户看不到任何通知。
 	var (
-		socksAddr, httpAddr, dnsAddr string
-		socksLn                      net.Listener
-		httpLn                       net.Listener
-		dnsPC                        net.PacketConn
-		// listeners 记录已经绑定、但尚未交给服务器的监听器：任何一步失败都要
-		// 关掉它们，避免 Run 返回错误后端口仍被本进程占着（重试启动会因此失败）。
+		socksAddr, socksDialAddr, httpAddr, dnsAddr string
+		socksLn                                     net.Listener
+		httpLn                                      net.Listener
+		dnsPC                                       net.PacketConn
+		// listeners 记录已经绑定、但尚未交给服务器的监听器。
 		listeners []io.Closer
 	)
-	closeListeners := func() {
+	// 清理只有一条路径：Run 以错误返回时，先关闭尚未移交的监听器，再交给
+	// Core.cleanup 关闭已构造的服务器与 client。成功返回前把 transferred
+	// 置位，表示监听器与服务器已随 Serve goroutine 移交。每个错误分支因此只
+	// 需要 return——不再把 closeListeners、Client.Close 与 Core.cleanup 三种
+	// 清理方式在六个分支里手工组合（新增一种资源时最容易漏关的正是这种结构：
+	// 端口仍被本进程占着，下一次启动会失败）。
+	transferred := false
+	defer func() {
+		if transferred {
+			return
+		}
 		for _, l := range listeners {
 			_ = l.Close()
 		}
-	}
+		c.cleanup()
+	}()
 
 	if cfg.Local.SocksPort > 0 {
-		socksAddr = "127.0.0.1:" + strconv.Itoa(cfg.Local.SocksPort)
-		if cfg.Local.BindAll {
-			socksAddr = "[::]:" + strconv.Itoa(cfg.Local.SocksPort)
-		}
+		socksAddr = localProxyListenAddr(cfg.Local.BindAll, cfg.Local.SocksPort)
+		socksDialAddr = localProxyDialAddr(socksAddr)
 		ln, err := net.Listen("tcp", socksAddr)
 		if err != nil {
-			c.cleanup()
 			return nil, fmt.Errorf("socks5 server listen %s: %w", socksAddr, err)
 		}
 		socksLn = ln
@@ -184,18 +191,12 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 	}
 	if cfg.Local.HTTPPort > 0 {
 		if cfg.Local.SocksPort <= 0 {
-			closeListeners()
-			_ = cli.Close()
 			return nil, ErrSocksRequired
 		}
-		httpAddr = "127.0.0.1:" + strconv.Itoa(cfg.Local.HTTPPort)
-		if cfg.Local.BindAll {
-			httpAddr = "[::]:" + strconv.Itoa(cfg.Local.HTTPPort)
-		}
+		// HTTP 入口只监听，不拨自己，因此只需要监听地址。
+		httpAddr = localProxyListenAddr(cfg.Local.BindAll, cfg.Local.HTTPPort)
 		ln, err := net.Listen("tcp", httpAddr)
 		if err != nil {
-			closeListeners()
-			c.cleanup()
 			return nil, fmt.Errorf("http proxy server listen %s: %w", httpAddr, err)
 		}
 		httpLn = ln
@@ -205,8 +206,6 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		dnsAddr = forwardDNSListenAddr()
 		pc, err := net.ListenPacket("udp", dnsAddr)
 		if err != nil {
-			closeListeners()
-			c.cleanup()
 			return nil, forwardDNSListenError(dnsAddr, err)
 		}
 		dnsPC = pc
@@ -235,18 +234,19 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 			DNSCache:          c.dnsCache,
 		})
 		if err != nil {
-			closeListeners()
-			_ = cli.Close()
 			return nil, err
 		}
 		c.SocksServer = socksServer
 	}
 
 	if httpLn != nil {
-		socksAddr := "127.0.0.1:" + strconv.Itoa(cfg.Local.SocksPort)
+		// SocksAddr 必须与上面 SOCKS5 入口的监听地址同源：bind_all 时它由
+		// localProxyDialAddr 给出同族回环地址 [::1]（监听可能只接受 IPv6，
+		// 127.0.0.1 会连不上）。这里绝不能再用 := 重新拼一个 127.0.0.1:port，
+		// 那会让 HTTP 入口的反向代理与回退路径忽略 bind_all。
 		httpServer, err := proxy.NewHTTPProxyServer(proxy.HTTPProxyOptions{
 			ListenAddr: httpAddr,
-			SocksAddr:  socksAddr,
+			SocksAddr:  socksDialAddr,
 			Username:   cfg.AuthUsername,
 			Password:   cfg.AuthPassword,
 			Timeouts:   timeouts,
@@ -256,8 +256,6 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 			Dial:       cli.DialContext,
 		})
 		if err != nil {
-			closeListeners()
-			c.cleanup()
 			return nil, err
 		}
 		c.HTTPServer = httpServer
@@ -267,8 +265,8 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		c.dnsServer = dns.NewForwardServer(dnsAddr, cli.Router().ShouldIPV6Disable())
 	}
 
-	// 所有服务器都构造成功后才派发 goroutine：任何构造失败都已在上面关闭监听器
-	// 并返回错误，因此"Run 成功"意味着端口确实已经在监听。
+	// 所有服务器都构造成功后才派发 goroutine：任何构造失败都已由上面的 defer
+	// 统一清理并返回错误，因此"Run 成功"意味着端口确实已经在监听。
 	if c.SocksServer != nil {
 		log.Info("[EASYSS] starting socks5 server", "addr", socksLn.Addr().String())
 		go func() {
@@ -324,6 +322,10 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 	stats.ResetStartTime()
 	stats.ResetCounters()
 	stats.StartSpeedMonitor()
+
+	// 只有走到这里才移交所有权：此前任何错误返回（包括将来新增在派发 Serve
+	// goroutine 之后的分支）都会触发上面的 defer 清理。
+	transferred = true
 	return c, nil
 }
 
@@ -555,6 +557,38 @@ func (c *Core) Done() <-chan struct{} {
 		return nil
 	}
 	return c.done
+}
+
+// localProxyListenAddr 返回本地代理入口的监听地址：bind_all 时监听 IPv6
+// 通配地址（双栈平台上同时接受 IPv4，覆盖所有本地 IP），否则只监听 IPv4 回环。
+func localProxyListenAddr(bindAll bool, port int) string {
+	if bindAll {
+		return net.JoinHostPort("::", strconv.Itoa(port))
+	}
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+}
+
+// localProxyDialAddr 返回拨本地代理监听地址时使用的回环地址。它由监听地址
+// 唯一推导，而不是再写一份 bind_all 判断：通配地址不能作为拨号目标，而监听
+// 实际只接受 IPv6 的平台（例如不支持 IPv4-mapped 的 BSD，或 IPV6_V6ONLY
+// 无法覆盖的环境）只接受 IPv6 回环，拨 127.0.0.1 会连不上。
+//
+// linux/darwin/windows 上 Go 通常会把 [::] 通配监听设为双栈（显式
+// IPV6_V6ONLY=0），此时 127.0.0.1 往往也能连上；这里按监听地址选同族回环，
+// 是为了不依赖该实现细节，并让拨号方向始终与 bind_all 同源。
+func localProxyDialAddr(listenAddr string) string {
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return listenAddr
+	}
+	switch host {
+	case "::":
+		return net.JoinHostPort("::1", port)
+	case "", "0.0.0.0":
+		return net.JoinHostPort("127.0.0.1", port)
+	default:
+		return listenAddr
+	}
 }
 
 // forwardDNSListenAddr 返回 forward DNS 服务器的监听地址。它刻意监听所有
