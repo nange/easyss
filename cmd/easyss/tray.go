@@ -29,15 +29,14 @@ import (
 
 type TrayApp struct {
 	*App
-	closing chan struct{}
+
+	shell *trayShell
+	uwp   uwpMenu
+
 	// 只保护两个菜单项指针；停/起序列归 session.run，与本锁无关。
 	mu          sync.RWMutex
 	browserMenu *systray.MenuItem
 	tunMenu     *systray.MenuItem
-
-	tray      *systray.SystemTray
-	rootMenu  *systray.Menu
-	trayBuilt chan struct{}
 
 	serverMenuItems []*systray.MenuItem
 	serverAddrs     []string
@@ -54,13 +53,6 @@ type TrayApp struct {
 	checkLatest     func(context.Context, *selfupdate.Client) (*selfupdate.Release, error)
 	// 含抖动，只在循环启动前写入。
 	updateCheckEvery time.Duration
-	// systray 保护菜单项，但不保护图标/tooltip 字段，更新流程里的 UI 变更必须经它串行化。
-	updateUIMu sync.Mutex
-
-	// UWP 回环豁免菜单（仅 Windows）。
-	uwpMu    sync.Mutex     //nolint:unused // used in uwp_windows.go
-	uwpMenu  *systray.Menu  //nolint:unused // used in uwp_windows.go
-	uwpItems []*UWPMenuItem //nolint:unused // used in uwp_windows.go
 }
 
 var _ appUI = (*TrayApp)(nil)
@@ -68,21 +60,8 @@ var _ appUI = (*TrayApp)(nil)
 // 保留进程存活一段时间，让操作系统显示通知；Windows 气球提示在所属进程退出时消失。
 const startupErrorNotifyDelay = 5 * time.Second
 
-type UWPApp struct {
-	Name              string `json:"Name"`
-	PackageFamilyName string `json:"PackageFamilyName"`
-	Exempt            bool
-}
-
-type UWPMenuItem struct {
-	MenuItem *systray.MenuItem
-	App      *UWPApp
-	Mu       sync.RWMutex
-}
-
 func (a *TrayApp) buildTray() {
-	root := systray.NewMenu()
-	a.rootMenu = root
+	root := a.shell.root
 
 	root.AddSubmenu("选择服务器", a.buildSelectServerMenu())
 	root.AddSeparator()
@@ -93,7 +72,7 @@ func (a *TrayApp) buildTray() {
 	root.AddSubmenu("代理对象", a.buildProxyObjectMenu())
 	root.AddSeparator()
 
-	a.addUWPLoopbackMenu(root)
+	a.uwp.install(root, a.shell.rebuildMenu)
 
 	root.AddSubmenu("日志级别", a.buildLogLevelMenu())
 	root.AddSeparator()
@@ -107,16 +86,7 @@ func (a *TrayApp) buildTray() {
 	a.updateItem = root.Add("检查更新", a.onUpdateClicked)
 	root.Add("退出", a.exitApp)
 
-	a.tray = systray.New()
-	if runtime.GOOS == "darwin" {
-		// 模板图标只在 macOS 生效（单色，随菜单栏主题自适应），Windows/Linux 用 SetIcon。
-		a.tray.SetTemplateIcon(icon.TrayData)
-	} else {
-		a.tray.SetIcon(icon.TrayData)
-	}
-	a.tray.SetTooltip("Easyss")
-	a.tray.SetMenu(root)
-	a.tray.Show()
+	a.shell.show()
 
 	// 必须在 a.Start() 之前装上界面：引擎与通知 goroutine 都在其后派发，读 a.ui 与这里有
 	// happens-before。
@@ -125,7 +95,7 @@ func (a *TrayApp) buildTray() {
 	// 菜单填充完成后再启动服务：带 AppIndicator 的 GNOME 首次查询时能看到非空菜单。
 	if err := a.Start(); err != nil {
 		log.Error("[EASYSS-V3] tray start", "err", err)
-		a.tray.ShowNotification("Easyss", friendlyStartupError(err))
+		a.shell.notify(friendlyStartupError(err))
 		// 让托盘及其通知短暂存活，用户能读到原因后再退出。刻意不调用 Run()：macOS 每进程只
 		// 允许一次 Run()，而系统级通知无需消息循环。
 		time.Sleep(startupErrorNotifyDelay)
@@ -134,7 +104,7 @@ func (a *TrayApp) buildTray() {
 
 	// 非致命启动警告只通知，不阻塞也不退出。
 	if warn := a.currentStartupWarn(); warn != nil {
-		a.tray.ShowNotification("Easyss", friendlyStartupWarning(warn))
+		a.shell.notify(friendlyStartupWarning(warn))
 	}
 
 	a.startLocalService()
@@ -142,6 +112,7 @@ func (a *TrayApp) buildTray() {
 	a.checkLatest = selfupdate.CheckLatest
 	a.updateCheckEvery = timedUpdateCheckInterval()
 	go a.autoCheckUpdate()
+	a.shell.markBuilt()
 }
 
 // 用临时托盘呈现配置加载失败（真正的托盘尚未构建）。刻意不调用 Run()：没有 GUI 会话时进程
@@ -151,11 +122,11 @@ func notifyConfigError(err error) {
 	menu := systray.NewMenu()
 	menu.Add("退出", func() { tray.Remove() })
 	tray.SetIcon(icon.TrayData).
-		SetTooltip("Easyss").
+		SetTooltip(trayAppName).
 		SetMenu(menu)
 
 	tray.Show()
-	tray.ShowNotification("Easyss", friendlyConfigError(err))
+	tray.ShowNotification(trayAppName, friendlyConfigError(err))
 
 	// Windows 气泡提示在属主进程退出时会消失，因此要等通知显示出来。
 	time.Sleep(startupErrorNotifyDelay)
@@ -199,12 +170,7 @@ func friendlyStartupWarning(err error) string {
 }
 
 // 初始启动期间托盘尚未就绪也必须照常显示，否则"网络尚未就绪"这类开机场景会无声无息。
-func (a *TrayApp) notify(msg string) {
-	if msg == "" {
-		return
-	}
-	a.notifyUser(msg)
-}
+func (a *TrayApp) notify(msg string) { a.shell.notify(msg) }
 
 func (a *TrayApp) serverDomainReady(msg string) {
 	a.notify(msg)
@@ -259,10 +225,7 @@ func friendlyCatLogError(err error) string {
 }
 
 func (a *TrayApp) trayExit() {
-	select {
-	case a.closing <- struct{}{}:
-	default:
-	}
+	a.shell.requestExit()
 	a.closeService()
 
 	// 即使 closeService 出错（例如 DNS 恢复期间 osascript 超时），也要清除系统代理。
@@ -360,11 +323,11 @@ func (a *TrayApp) notifyServerSwitchFailure(addr string, err error) {
 	if a.currentCore() == nil {
 		msg = fmt.Sprintf("切换到 %s 失败，且未能恢复原来的服务器：本机代理已停止，请重试或重启 Easyss。详情：%v", addr, err)
 	}
-	if !a.trayReady() {
+	if !a.shell.ready() {
 		log.Warn("[SYSTRAY] notify skipped: tray not ready", "msg", msg)
 		return
 	}
-	a.notifyUser(msg)
+	a.shell.notify(msg)
 }
 
 func (a *TrayApp) statsRefresher() {
@@ -385,7 +348,7 @@ func (a *TrayApp) statsRefresher() {
 					break
 				}
 			}
-		case <-a.closing:
+		case <-a.shell.closing:
 			return
 		}
 	}
@@ -557,9 +520,9 @@ func (a *TrayApp) catLogs() {
 	switch {
 	case err != nil:
 		log.Error("[SYSTRAY] cat log", "err", err)
-		a.tray.ShowNotification("Easyss", friendlyCatLogError(err))
+		a.shell.notify(friendlyCatLogError(err))
 	case fallback:
-		a.tray.ShowNotification("Easyss", "未找到终端模拟器，已在默认程序中打开日志快照（最近 500 行）")
+		a.shell.notify("未找到终端模拟器，已在默认程序中打开日志快照（最近 500 行）")
 	}
 }
 
@@ -588,7 +551,7 @@ func (a *TrayApp) exitApp() {
 		// 同步清除系统代理（很快、无需提权）；TUN 清理交给 trayExit()，避免在 osascript 上阻塞
 		// 菜单。
 		_ = a.setSysProxyOff()
-		a.tray.Remove()
+		a.shell.remove()
 	}()
 }
 

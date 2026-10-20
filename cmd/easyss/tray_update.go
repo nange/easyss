@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
-	"runtime"
 	"time"
 
 	"github.com/nange/easyss/v3/icon"
@@ -23,8 +22,6 @@ const (
 	// 带抖动，否则所有运行中的客户端会同时访问 GitHub API，检查节奏也像固定信标。
 	updateCheckJitter = 0.10
 	updateMenuReset   = 4 * time.Second
-	// 所有更新通知的标题，也是托盘 tooltip 的默认文本。
-	updateNotifyTitle = "Easyss"
 	// Windows 的 NOTIFYICONDATA.szTip 只能容纳 128 个 UTF-16 码元，因此在交给外壳前截断。
 	updateTooltipMax = 120
 )
@@ -58,7 +55,7 @@ func (a *TrayApp) autoCheckUpdate() {
 	}
 	select {
 	case <-time.After(updateCheckDelay):
-	case <-a.closing:
+	case <-a.shell.closing:
 		return
 	}
 	a.runUpdateCheckLoop(func() { a.checkUpdate(context.Background(), false) })
@@ -80,7 +77,7 @@ func (a *TrayApp) runUpdateCheckLoop(check func()) {
 
 		select {
 		case <-ticker.C:
-		case <-a.closing:
+		case <-a.shell.closing:
 			return
 		}
 	}
@@ -149,7 +146,7 @@ func (a *TrayApp) checkUpdate(ctx context.Context, interactive bool) {
 		log.Error("[SYSTRAY] check update", "err", err)
 		if interactive {
 			a.setUpdateItem("检查更新失败", true)
-			a.notifyOnInteractive("检查更新失败：" + err.Error())
+			a.shell.notifyIfReady("检查更新失败：" + err.Error())
 		}
 		a.finishUpdateCheck(wasAvailable)
 		return
@@ -164,7 +161,7 @@ func (a *TrayApp) checkUpdate(ctx context.Context, interactive bool) {
 			log.Info("[SYSTRAY] check update: already up to date", "version", version.Tag())
 			if interactive {
 				a.setUpdateItem(updateUpToDateText(version.Tag()), true)
-				a.notifyOnInteractive(updateUpToDateText(version.Tag()))
+				a.shell.notifyIfReady(updateUpToDateText(version.Tag()))
 			}
 		}
 		a.finishUpdateCheck(wasAvailable)
@@ -184,7 +181,7 @@ func updateAvailableItemLabel(tag string) string {
 }
 
 func updateTooltipText(tag string) string {
-	text := fmt.Sprintf("%s: 发现新版本 %s，点击托盘菜单更新", updateNotifyTitle, tag)
+	text := fmt.Sprintf("%s: 发现新版本 %s，点击托盘菜单更新", trayAppName, tag)
 	if len([]rune(text)) > updateTooltipMax {
 		text = string([]rune(text)[:updateTooltipMax])
 	}
@@ -196,37 +193,6 @@ func updateUpToDateText(tag string) string {
 	return fmt.Sprintf("已是最新版本(%s)", tag)
 }
 
-// gogpu/systray 会丢弃平台错误，日志是通知是否交给操作系统的唯一痕迹。
-func (a *TrayApp) notifyUser(msg string) {
-	log.Info("[SYSTRAY] notify", "msg", msg)
-	if a.tray == nil {
-		return
-	}
-	a.tray.ShowNotification(updateNotifyTitle, msg)
-}
-
-// 刻意的过度近似：a.tray 在 channel 关闭前不久赋值，理论上可能误报；但它只控制可选通知。
-func (a *TrayApp) trayReady() bool {
-	select {
-	case <-a.trayBuilt:
-		return true
-	default:
-		return false
-	}
-}
-
-func (a *TrayApp) notifyUserSkipped(msg string) {
-	log.Warn("[SYSTRAY] notify skipped: tray not ready", "msg", msg)
-}
-
-func (a *TrayApp) notifyOnInteractive(msg string) {
-	if !a.trayReady() {
-		a.notifyUserSkipped(msg)
-		return
-	}
-	a.notifyUser(msg)
-}
-
 // "发现新版本"的唯一入口，四个渠道按可靠性排序：菜单项、图标徽标、tooltip、系统通知
 // （尽力而为）。前三个每次检测都刷新，系统通知每个 tag 只发一次。
 func (a *TrayApp) notifyUpdateAvailable(tag string) {
@@ -235,7 +201,7 @@ func (a *TrayApp) notifyUpdateAvailable(tag string) {
 	if !a.shouldNotify(tag) {
 		return
 	}
-	a.notifyUser(updateTooltipText(tag))
+	a.shell.notify(updateTooltipText(tag))
 	log.Info("[SYSTRAY] update notification sent", "latest", tag,
 		"channels", "system-notification,tray-badge,tray-tooltip,tray-menu-item")
 }
@@ -253,38 +219,19 @@ func (a *TrayApp) shouldNotify(tag string) bool {
 
 // 缺少图标渲染支持时降级为仅 tooltip 提醒。
 func (a *TrayApp) applyUpdateBadge(tag string) {
-	a.updateUIMu.Lock()
-	defer a.updateUIMu.Unlock()
-
 	badged, err := icon.UpdateBadge(icon.TrayData)
 	if err != nil {
 		log.Warn("[SYSTRAY] update badge unavailable, falling back to tooltip", "err", err)
-		a.tray.SetTooltip(updateTooltipText(tag))
+		a.shell.setTooltip(updateTooltipText(tag))
 		return
 	}
 
-	a.applyTrayIcon(badged)
-	a.tray.SetTooltip(updateTooltipText(tag))
+	a.shell.setIconAndTooltip(badged, updateTooltipText(tag))
 }
 
 // 防御性：成功安装后进程随即重启。
 func (a *TrayApp) clearUpdateBadge() {
-	a.updateUIMu.Lock()
-	defer a.updateUIMu.Unlock()
-
-	a.applyTrayIcon(icon.TrayData)
-	a.tray.SetTooltip(updateNotifyTitle)
-}
-
-// macOS 用模板（单色）图片，其他平台用普通 PNG。必须同时设置暗色模式图标槽位，否则
-// Windows 主题切换会用无徽标的图标覆盖徽标（其他平台上空操作）。
-func (a *TrayApp) applyTrayIcon(png []byte) {
-	if runtime.GOOS == "darwin" {
-		a.tray.SetTemplateIcon(png)
-	} else {
-		a.tray.SetIcon(png)
-	}
-	a.tray.SetDarkModeIcon(png)
+	a.shell.setIconAndTooltip(icon.TrayData, trayAppName)
 }
 
 func (a *TrayApp) downloadAndInstall() {
@@ -307,13 +254,13 @@ func (a *TrayApp) downloadAndInstall() {
 			log.Error("[SYSTRAY] download and install update", "tag", rel.TagName, "err", err)
 			a.setUpdateItem("更新 "+rel.TagName+" 失败，点击重试", false)
 			a.updateState.Store(updateStateAvailable)
-			a.tray.ShowNotification("Easyss", "更新失败："+err.Error())
+			a.shell.notify("更新失败：" + err.Error())
 			return
 		}
 
 		log.Info("[SYSTRAY] update installed, restarting", "tag", rel.TagName)
 		a.clearUpdateBadge()
-		a.tray.ShowNotification("Easyss", "已更新到 "+rel.TagName+"，正在重启...")
+		a.shell.notify("已更新到 " + rel.TagName + "，正在重启...")
 
 		// 与菜单切换服务器属同一类临界区：不共用会话序列锁会让两套停/起交错抢本地端口。
 		a.sess.run(func() {
@@ -324,7 +271,7 @@ func (a *TrayApp) downloadAndInstall() {
 			if err := selfupdate.Restart(); err != nil {
 				// 新二进制已就位，让旧版本继续运行，由用户手动重启。
 				log.Error("[SYSTRAY] restart after update", "err", err)
-				a.tray.ShowNotification("Easyss", "重启失败，请手动重启应用完成更新")
+				a.shell.notify("重启失败，请手动重启应用完成更新")
 				// 重新获取单例锁，本进程继续提供服务期间保持唯一实例。
 				if lerr := tryAcquireSingletonLock(); lerr != nil {
 					log.Error("[SYSTRAY] re-acquire singleton lock after failed restart", "err", lerr)

@@ -22,11 +22,7 @@ func runApp(disableTray, daemon bool, app *App) {
 	defer releaseSingletonLock()
 
 	if !disableTray && (runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux") {
-		ta := &TrayApp{
-			App:       app,
-			closing:   make(chan struct{}),
-			trayBuilt: make(chan struct{}),
-		}
+		ta := &TrayApp{App: app, shell: newTrayShell()}
 
 		go func() {
 			c := make(chan os.Signal, 1)
@@ -35,18 +31,17 @@ func runApp(disableTray, daemon bool, app *App) {
 			select {
 			case sig := <-c:
 				log.Info("[EASYSS-V3] got signal to exit", "signal", sig)
-				// 等待 buildTray() 完成，这样托盘非 nil，
-				// Remove() 才能终止消息循环。
-				<-ta.trayBuilt
-				ta.tray.Remove()
-			case <-ta.closing:
+				// 等待 buildTray() 完成，这样托盘已有消息循环，
+				// Remove() 才能终止它。
+				ta.shell.waitBuilt()
+				ta.shell.remove()
+			case <-ta.shell.closing:
 				log.Info("[EASYSS-V3] easyss exiting...")
 			}
 		}()
 
 		ta.buildTray()
-		close(ta.trayBuilt)
-		_ = ta.tray.Run()
+		_ = ta.shell.run()
 		ta.trayExit()
 	} else {
 		app.setupSysProxy()

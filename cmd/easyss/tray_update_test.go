@@ -27,7 +27,7 @@ func TestUpdateAvailableLabels(t *testing.T) {
 	}
 
 	tooltip := updateTooltipText("v3.0.1")
-	if !strings.HasPrefix(tooltip, updateNotifyTitle+": ") {
+	if !strings.HasPrefix(tooltip, trayAppName+": ") {
 		t.Fatalf("tooltip should start with the app name: %q", tooltip)
 	}
 	if !strings.Contains(tooltip, "v3.0.1") {
@@ -47,8 +47,7 @@ func TestUpdateUpToDateText(t *testing.T) {
 }
 
 func TestUpdateCheckLoopRepeats(t *testing.T) {
-	closing := make(chan struct{})
-	a := &TrayApp{closing: closing, updateCheckEvery: 10 * time.Millisecond}
+	a := &TrayApp{shell: newTrayShell(), updateCheckEvery: 10 * time.Millisecond}
 
 	// 测 runUpdateCheckLoop 而非 autoCheckUpdate：后者先等 updateCheckDelay（一分钟），且对未注入
 	// git tag 的构建完全跳过循环。check 用桩函数——真实路径会把状态留在 "checking" 直到 4 秒后的
@@ -72,7 +71,7 @@ func TestUpdateCheckLoopRepeats(t *testing.T) {
 		t.Fatal("periodic update check did not repeat")
 	}
 
-	close(closing)
+	close(a.shell.closing)
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
