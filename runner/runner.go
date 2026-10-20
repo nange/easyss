@@ -8,7 +8,6 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 
@@ -180,8 +179,8 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 	}()
 
 	if cfg.Local.SocksPort > 0 {
-		socksAddr = localProxyListenAddr(cfg.Local.BindAll, cfg.Local.SocksPort)
-		socksDialAddr = localProxyDialAddr(socksAddr)
+		socksAddr = util.LocalProxyListenAddr(cfg.Local.BindAll, cfg.Local.SocksPort)
+		socksDialAddr = util.LocalProxyDialAddr(cfg.Local.BindAll, cfg.Local.SocksPort)
 		ln, err := net.Listen("tcp", socksAddr)
 		if err != nil {
 			return nil, fmt.Errorf("socks5 server listen %s: %w", socksAddr, err)
@@ -194,7 +193,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 			return nil, ErrSocksRequired
 		}
 		// HTTP 入口只监听，不拨自己，因此只需要监听地址。
-		httpAddr = localProxyListenAddr(cfg.Local.BindAll, cfg.Local.HTTPPort)
+		httpAddr = util.LocalProxyListenAddr(cfg.Local.BindAll, cfg.Local.HTTPPort)
 		ln, err := net.Listen("tcp", httpAddr)
 		if err != nil {
 			return nil, fmt.Errorf("http proxy server listen %s: %w", httpAddr, err)
@@ -241,7 +240,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 
 	if httpLn != nil {
 		// SocksAddr 必须与上面 SOCKS5 入口的监听地址同源：bind_all 时它由
-		// localProxyDialAddr 给出同族回环地址 [::1]（监听可能只接受 IPv6，
+		// util.LocalProxyDialAddr 给出同族回环地址 [::1]（监听可能只接受 IPv6，
 		// 127.0.0.1 会连不上）。这里绝不能再用 := 重新拼一个 127.0.0.1:port，
 		// 那会让 HTTP 入口的反向代理与回退路径忽略 bind_all。
 		httpServer, err := proxy.NewHTTPProxyServer(proxy.HTTPProxyOptions{
@@ -557,38 +556,6 @@ func (c *Core) Done() <-chan struct{} {
 		return nil
 	}
 	return c.done
-}
-
-// localProxyListenAddr 返回本地代理入口的监听地址：bind_all 时监听 IPv6
-// 通配地址（双栈平台上同时接受 IPv4，覆盖所有本地 IP），否则只监听 IPv4 回环。
-func localProxyListenAddr(bindAll bool, port int) string {
-	if bindAll {
-		return net.JoinHostPort("::", strconv.Itoa(port))
-	}
-	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-}
-
-// localProxyDialAddr 返回拨本地代理监听地址时使用的回环地址。它由监听地址
-// 唯一推导，而不是再写一份 bind_all 判断：通配地址不能作为拨号目标，而监听
-// 实际只接受 IPv6 的平台（例如不支持 IPv4-mapped 的 BSD，或 IPV6_V6ONLY
-// 无法覆盖的环境）只接受 IPv6 回环，拨 127.0.0.1 会连不上。
-//
-// linux/darwin/windows 上 Go 通常会把 [::] 通配监听设为双栈（显式
-// IPV6_V6ONLY=0），此时 127.0.0.1 往往也能连上；这里按监听地址选同族回环，
-// 是为了不依赖该实现细节，并让拨号方向始终与 bind_all 同源。
-func localProxyDialAddr(listenAddr string) string {
-	host, port, err := net.SplitHostPort(listenAddr)
-	if err != nil {
-		return listenAddr
-	}
-	switch host {
-	case "::":
-		return net.JoinHostPort("::1", port)
-	case "", "0.0.0.0":
-		return net.JoinHostPort("127.0.0.1", port)
-	default:
-		return listenAddr
-	}
 }
 
 // forwardDNSListenAddr 返回 forward DNS 服务器的监听地址。它刻意监听所有

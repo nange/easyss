@@ -441,7 +441,7 @@ func (a *App) restartServiceInSequence(newCfg *config.ClientConfig, start func(*
 		if !sysProxyEnabled {
 			return
 		}
-		if err := a.setSysProxyOn(a.currentConfig().Local.HTTPPort); err != nil {
+		if err := a.setSysProxyOn(sysProxyAddr(a.currentConfig())); err != nil {
 			log.Error("[EASYSS-V3] restart service: restore sysproxy on", "err", err)
 		}
 	}
@@ -535,7 +535,7 @@ func (a *App) setupSysProxy() bool {
 	}
 	// 状态维护只发生在 setSysProxyOn/Off：启动路径与托盘菜单不能各自复制一份
 	// apply + Store，否则两处迟早漂移。
-	if err := a.setSysProxyOn(cfg.Local.HTTPPort); err != nil {
+	if err := a.setSysProxyOn(sysProxyAddr(cfg)); err != nil {
 		log.Warn("[EASYSS-V3] set system proxy failed, you may need to configure it manually", "err", err)
 		return false
 	}
@@ -556,11 +556,12 @@ func (a *App) teardownSysProxy() {
 
 // setSysProxyOn/setSysProxyOff 走 sysProxyApply/sysProxyRevert 这两个包级钩子
 // （而不是直接调用实现），使测试可以观察托盘路径上的系统代理改动，而不必触碰
-// 运行测试的机器的真实代理配置。端口由调用方传入，使 setupSysProxy 校验的值与
-// 实际应用的值结构上一致；sysProxyApplied 只在函数内维护：apply 成功置真、
-// revert 成功置假，setupSysProxy 与托盘菜单都复用它们。
-func (a *App) setSysProxyOn(port int) error {
-	err := sysProxyApply(port)
+// 运行测试的机器的真实代理配置。地址由调用方传入（见 sysProxyAddr），使
+// setupSysProxy 校验的那份配置与实际应用的值结构上一致；sysProxyApplied 只在
+// 函数内维护：apply 成功置真、revert 成功置假，setupSysProxy 与托盘菜单都复用
+// 它们。
+func (a *App) setSysProxyOn(addr string) error {
+	err := sysProxyApply(addr)
 	if err == nil {
 		a.sysProxyApplied.Store(true)
 	}

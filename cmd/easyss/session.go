@@ -436,7 +436,9 @@ func (s *session) tunConfig() tun.Config {
 	// 一次快照供下面两个字段使用：它们必须来自同一份配置（见 currentConfig）。
 	snap := s.app.currentConfig()
 	cfg := tun.Config{
-		Socks5Addr: util.Socks5URI(snap.Local.SocksPort),
+		// SOCKS5 端点与本地监听同源（见 util.Socks5URI）：bind_all 时入口监听
+		// [::]，引擎必须拨同族回环 [::1]，否则在只接受 IPv6 回环的环境里连不上。
+		Socks5Addr: util.Socks5URI(snap.Local.BindAll, snap.Local.SocksPort),
 		DNSServer:  tunDNS(),
 		// MTU 来自唯一的配置旋钮（TunMTU() 已归一化）：它同时决定设备的
 		// 真实 MTU 与 netstack 的 MTU，两条路径必须拿到同一个值。

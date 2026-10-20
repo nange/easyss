@@ -163,6 +163,7 @@ func TestRestartServiceRollsBackToThePreviousServer(t *testing.T) {
 	// 系统代理开着，才能验证回滚之后它被恢复回来。
 	a.SetBrowserMenu(systray.NewMenu().AddCheckbox("系统代理", true, nil))
 	applied, reverts := stubSysProxy(t, nil)
+	a.updateConfig(func(c *config.ClientConfig) { c.Local.HTTPPort = 5080 })
 
 	errBoom := errors.New("listen tcp 127.0.0.1:4080: bind: address already in use")
 	var started []string
@@ -185,8 +186,8 @@ func TestRestartServiceRollsBackToThePreviousServer(t *testing.T) {
 		"切换失败后必须用切换前的配置再起一次")
 	require.Equal(t, "a.example:443", a.currentConfig().DefaultServerAddr())
 	require.GreaterOrEqual(t, *reverts, 1, "closeService 必须先把系统代理撤下来")
-	require.Equal(t, []int{a.currentConfig().Local.HTTPPort}, *applied,
-		"回滚成功后必须把系统代理恢复回来")
+	require.Equal(t, []string{"127.0.0.1:5080"}, *applied,
+		"回滚成功后必须把系统代理恢复回来，且地址来自当前配置的本地 HTTP 入口")
 }
 
 // TestRestartServiceReportsBothFailures 覆盖回滚也失败的情形：两个错误都要上报，

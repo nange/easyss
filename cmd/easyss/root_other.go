@@ -16,6 +16,6 @@ func IsRoot() bool {
 }
 
 // SpawnTunHelper 在此平台不受支持：提权 helper 流程只存在于 darwin/linux。
-func SpawnTunHelper(httpPort int, fdSocketPath, logFile, logLevel string, timeout time.Duration) (io.WriteCloser, net.Listener, error) {
+func SpawnTunHelper(httpAddr string, fdSocketPath, logFile, logLevel string, timeout time.Duration) (io.WriteCloser, net.Listener, error) {
 	return nil, nil, fmt.Errorf("SpawnTunHelper is not supported on this platform")
 }

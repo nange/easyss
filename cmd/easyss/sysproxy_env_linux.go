@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"errors"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,8 +15,8 @@ import (
 
 const (
 	// sysProxyNoProxy 让发往本机自身的流量不经过代理。
-	// 没有它，对 http://127.0.0.1:<http_port>/stats 的请求
-	// 会被发送到监听在同一地址的代理上。
+	// 没有它，对本地 HTTP 入口 /stats 的请求（监听只绑 IPv4 回环时是
+	// 127.0.0.1，bind_all 时是 [::1]）会被发送到监听在同一地址的代理上。
 	sysProxyNoProxy = "localhost,127.0.0.1,::1"
 
 	// proxyEnvTimeout 限制下面外部命令的执行时间，
@@ -69,13 +68,14 @@ var sysProxyEnv struct {
 	store    proxyEnvStore
 }
 
-// setSysProxyEnv 把给定本地 HTTP 代理端口的代理配置发布到会话环境。
+// setSysProxyEnv 把指向本地 HTTP 代理的配置发布到会话环境。addr 是入口的拨号
+// 地址（见 sysProxyAddr），由调用方按 bind_all 选好同族回环。
 // 它报告环境是否已更新；在没有 systemd 用户管理器也没有 D-Bus
 // 会话总线的会话上返回 false。
 //
 // 只有此调用之后启动的应用才会继承新变量：
 // 已在运行的浏览器必须重启才能使用该代理。
-func setSysProxyEnv(port int) (bool, error) {
+func setSysProxyEnv(addr string) (bool, error) {
 	sysProxyEnv.mu.Lock()
 	defer sysProxyEnv.mu.Unlock()
 
@@ -83,7 +83,7 @@ func setSysProxyEnv(port int) (bool, error) {
 		sysProxyEnv.previous = snapshotSysProxyEnv()
 	}
 
-	store, err := applySysProxyEnv(sysProxyEnvValues(port))
+	store, err := applySysProxyEnv(sysProxyEnvValues(addr))
 	if store == proxyEnvStoreNone {
 		return false, err
 	}
@@ -114,16 +114,17 @@ func unsetSysProxyEnv() (bool, error) {
 	return true, nil
 }
 
-// sysProxyEnvValues 返回 easyss 为给定本地 HTTP 代理端口发布的会话环境。
-func sysProxyEnvValues(port int) map[string]string {
-	addr := "http://127.0.0.1:" + strconv.Itoa(port)
+// sysProxyEnvValues 返回 easyss 为给定本地 HTTP 代理地址发布的会话环境。
+// 地址本身不带 scheme（桌面代理设置要的是 host:port），由这里补上。
+func sysProxyEnvValues(addr string) map[string]string {
+	proxyURL := "http://" + addr
 
 	return map[string]string{
-		"http_proxy":  addr,
-		"https_proxy": addr,
+		"http_proxy":  proxyURL,
+		"https_proxy": proxyURL,
 		"no_proxy":    sysProxyNoProxy,
-		"HTTP_PROXY":  addr,
-		"HTTPS_PROXY": addr,
+		"HTTP_PROXY":  proxyURL,
+		"HTTPS_PROXY": proxyURL,
 		"NO_PROXY":    sysProxyNoProxy,
 	}
 }

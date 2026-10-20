@@ -78,8 +78,8 @@ func resetSysProxyEnvState(t *testing.T) {
 	sysProxyEnv.store = proxyEnvStoreNone
 }
 
-func sysProxyAssignments(port int) []string {
-	values := sysProxyEnvValues(port)
+func sysProxyAssignments(addr string) []string {
+	values := sysProxyEnvValues(addr)
 
 	assignments := make([]string, 0, len(sysProxyEnvKeys))
 	for _, key := range sysProxyEnvKeys {
@@ -122,7 +122,7 @@ func assertNoDBusSystemdFlag(t *testing.T, cmds []recordedProxyEnvCmd) {
 }
 
 func TestSysProxyEnvValuesCoverEveryKey(t *testing.T) {
-	values := sysProxyEnvValues(5080)
+	values := sysProxyEnvValues("127.0.0.1:5080")
 
 	if len(values) != len(sysProxyEnvKeys) {
 		t.Fatalf("values cover %d keys, sysProxyEnvKeys lists %d", len(values), len(sysProxyEnvKeys))
@@ -146,11 +146,25 @@ func TestSysProxyEnvValuesCoverEveryKey(t *testing.T) {
 	}
 }
 
+// TestSysProxyEnvValuesFollowBindAll 固定会话环境与 bind_all 同源：入口监听
+// [::] 时 http_proxy 必须写同族回环 [::1]，否则不读桌面代理设置的程序
+// （Hyprland 上的 Chromium、终端里的 curl）会连一个连不上的地址。
+func TestSysProxyEnvValuesFollowBindAll(t *testing.T) {
+	values := sysProxyEnvValues("[::1]:5080")
+
+	const addr = "http://[::1]:5080"
+	for _, key := range []string{"http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"} {
+		if values[key] != addr {
+			t.Fatalf("%s = %q, want %q", key, values[key], addr)
+		}
+	}
+}
+
 func TestSetSysProxyEnvPublishesToSystemdUserManager(t *testing.T) {
 	resetSysProxyEnvState(t)
 	cmds := stubProxyEnvExec(t, sysProxyEnvDump, false)
 
-	applied, err := setSysProxyEnv(5080)
+	applied, err := setSysProxyEnv("127.0.0.1:5080")
 	if err != nil {
 		t.Fatalf("setSysProxyEnv: %v", err)
 	}
@@ -158,7 +172,7 @@ func TestSetSysProxyEnvPublishesToSystemdUserManager(t *testing.T) {
 		t.Fatal("setSysProxyEnv reported that nothing was applied")
 	}
 
-	wanted := append([]string{"--user", "set-environment"}, sysProxyAssignments(5080)...)
+	wanted := append([]string{"--user", "set-environment"}, sysProxyAssignments("127.0.0.1:5080")...)
 	if args := findProxyEnvCmd(*cmds, "systemctl", wanted...); args == nil {
 		t.Fatalf("systemd user manager not updated, commands: %v", *cmds)
 	}
@@ -174,7 +188,7 @@ func TestUnsetSysProxyEnvRestoresPreviousValues(t *testing.T) {
 	resetSysProxyEnvState(t)
 	cmds := stubProxyEnvExec(t, sysProxyEnvDump, false)
 
-	if _, err := setSysProxyEnv(5080); err != nil {
+	if _, err := setSysProxyEnv("127.0.0.1:5080"); err != nil {
 		t.Fatalf("setSysProxyEnv: %v", err)
 	}
 	*cmds = nil
@@ -219,7 +233,7 @@ func TestSetSysProxyEnvFallsBackToDBus(t *testing.T) {
 	resetSysProxyEnvState(t)
 	cmds := stubFailingCommand(t, "systemctl")
 
-	applied, err := setSysProxyEnv(5080)
+	applied, err := setSysProxyEnv("127.0.0.1:5080")
 	if err != nil {
 		t.Fatalf("setSysProxyEnv: %v", err)
 	}
@@ -227,7 +241,7 @@ func TestSetSysProxyEnvFallsBackToDBus(t *testing.T) {
 		t.Fatal("setSysProxyEnv did not fall back to the D-Bus activation environment")
 	}
 
-	if args := findProxyEnvCmd(*cmds, "dbus-update-activation-environment", sysProxyAssignments(5080)...); args == nil {
+	if args := findProxyEnvCmd(*cmds, "dbus-update-activation-environment", sysProxyAssignments("127.0.0.1:5080")...); args == nil {
 		t.Fatalf("D-Bus activation environment not updated, commands: %v", *cmds)
 	}
 	assertNoDBusSystemdFlag(t, *cmds)
@@ -269,7 +283,7 @@ func TestSetSysProxyEnvReportsFailureWhenNoStoreIsReachable(t *testing.T) {
 	resetSysProxyEnvState(t)
 	stubProxyEnvExec(t, sysProxyEnvDump, true)
 
-	applied, err := setSysProxyEnv(5080)
+	applied, err := setSysProxyEnv("127.0.0.1:5080")
 	if applied {
 		t.Fatal("setSysProxyEnv reported success although every command failed")
 	}
@@ -298,7 +312,7 @@ func TestUnsetSysProxyEnvKeepsStateWhenRestoreFails(t *testing.T) {
 		return "", nil
 	})
 
-	if _, err := setSysProxyEnv(5080); err != nil {
+	if _, err := setSysProxyEnv("127.0.0.1:5080"); err != nil {
 		t.Fatalf("setSysProxyEnv: %v", err)
 	}
 
