@@ -251,6 +251,9 @@ func (s *session) stop() {
 	}
 
 	s.tunMu.Lock()
+	// 防御性保留：生产路径的 App.Stop 已经先调用 tunDown 把 manager 取走，因此
+	// 这里通常不可达。它只停引擎，不跑平台关闭脚本、不恢复系统 DNS——直接调用
+	// sess.stop 不能替代完整的 TUN 拆除；完整拆除只走 App.Stop/tunDown。
 	if mgr := s.tunMgr; mgr != nil {
 		s.tunMgr = nil
 		mgr.Stop()
@@ -333,6 +336,9 @@ func (s *session) buildICMPHandler(core *runner.Core) {
 //
 // 步骤顺序是硬约束（见每一步的注释），因此它同时被托盘开关、切换服务器前的拆除
 // 与 TUN 启动失败的回滚复用。
+//
+// 返回值目前恒为 nil：teardown 过程中发现的问题通过日志与界面通知报告，不中止
+// 退出流程；保留 error 签名是为了让调用方/测试保持统一的形状。
 func (s *session) tunDown() error {
 	s.tunMu.Lock()
 	defer s.tunMu.Unlock()

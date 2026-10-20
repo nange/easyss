@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -52,8 +51,8 @@ func TestFriendlyConfigError(t *testing.T) {
 }
 
 func TestFriendlyStartupError(t *testing.T) {
-	// Unix：基于 errno 的检测。
-	msg := friendlyStartupError(syscall.EADDRINUSE)
+	// 当前平台的 net 错误：Unix 是 EADDRINUSE，Windows 是 WSAEADDRINUSE。
+	msg := friendlyStartupError(addrInUseTestErr())
 	if !strings.Contains(msg, "本地端口可能被占用") {
 		t.Fatalf("EADDRINUSE should get the port-in-use hint: %q", msg)
 	}

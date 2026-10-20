@@ -251,6 +251,8 @@ func shouldRetryFreshCertificate(err error) bool {
 	// ACME 的失败是 acme.Problem：优先按类型/状态码分类，detail 文本只在
 	// Problem 类型本身不足以区分时兜底。
 	if problem, ok := errors.AsType[acme.Problem](err); ok {
+		// 404 在 ACME 语义下基本只来自 ARI（certID 不存在）；它比 detail 文本
+		// 略宽，但重签只发生在启动阶段，接受这个已知的宽判据。
 		if problem.Type == acme.ProblemTypeAlreadyReplaced ||
 			problem.Status == http.StatusNotFound {
 			return true

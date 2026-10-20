@@ -704,9 +704,9 @@ func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 // 以保持托盘菜单响应。
 func (a *TrayApp) disableTun2socks() {
 	log.Info("[SYSTRAY] disableTun2socks called")
-	if err := a.sess.tunDown(); err != nil {
-		log.Error("[SYSTRAY] close tun2socks", "err", err)
-	}
+	// tunDown 当前通过日志/界面报告 teardown 问题，返回值恒为 nil；显式忽略，
+	// 不用一个永远不成立的 if 制造"这里可能失败"的假象。
+	_ = a.sess.tunDown()
 }
 
 // startService 是切换/重启的默认 start 步骤：用当前配置快照启动一个新会话。
