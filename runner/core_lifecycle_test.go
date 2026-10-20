@@ -87,10 +87,11 @@ func TestCoreStopIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestRunFailureReleasesBoundListeners 固定 Run 的统一清理路径：SOCKS5 监听已经
-// 绑定、后续步骤却失败（HTTP 端口或 forward DNS 端口冲突）时，已经绑定的端口
-// 必须随错误返回一起释放。否则进程里留着一个无人引用的监听器，用户重试启动
-// 只会一直撞上 "address already in use"。
+// TestRunFailureReleasesBoundListeners 守护 Run 的统一清理路径：SOCKS5 监听
+// 已经绑定、后续步骤却失败（HTTP 端口或 forward DNS 端口冲突）时，已经绑定的
+// 端口必须随错误返回一起释放。旧实现已在六个分支里各自调用了 closeListeners，
+// 因此这不是历史泄漏的回归测试；它的作用是防止后续新增资源或错误分支时漏接
+// 统一清理（端口被占住，重试启动会一直失败）。
 func TestRunFailureReleasesBoundListeners(t *testing.T) {
 	t.Run("http port conflict", func(t *testing.T) {
 		_, httpPort := occupyTCPPort(t)
