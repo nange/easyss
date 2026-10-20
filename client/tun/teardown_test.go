@@ -15,51 +15,37 @@ type teardownRecorder struct {
 	dnsRestores  int
 }
 
-// stubTeardownHooks 把会触碰真实设备与系统 DNS 的钩子换成记录器。它是
-// stubManagerHooks 的"可观测"版本：后者只保证测试不碰系统，这个版本还要
-// 能回答"哪一步跑了、跑了几次"。
-func stubTeardownHooks(t *testing.T) *teardownRecorder {
-	t.Helper()
-
+// stubTeardownHooks 把会触碰真实设备与系统 DNS 的平台操作换成记录器，用来回答
+// "哪一步跑了、跑了几次"。
+func stubTeardownHooks(m *Manager) *teardownRecorder {
 	rec := &teardownRecorder{}
-
-	createDev, closeDev := createTunDevFn, closeTunDevFn
-	saveDNS, restoreDNS := saveAndSetDNSStepFn, restoreDNSStepFn
-	startEngine, stopEngineHook := engineStartFn, engineStopFn
-	settle := settleDelay
-	t.Cleanup(func() {
-		createTunDevFn, closeTunDevFn = createDev, closeDev
-		saveAndSetDNSStepFn, restoreDNSStepFn = saveDNS, restoreDNS
-		engineStartFn, engineStopFn = startEngine, stopEngineHook
-		settleDelay = settle
-	})
-
-	createTunDevFn = func(*Manager) error { return nil }
-	closeTunDevFn = func(*Manager) error {
+	m.plat.createDev = func(*Manager) error { return nil }
+	m.plat.closeDev = func(*Manager) error {
 		rec.closeScripts++
 		return nil
 	}
-	saveAndSetDNSStepFn = func(m *Manager) error {
+	m.plat.saveDNS = func(m *Manager) error {
 		// 与真实实现一致：只有真的改过系统 DNS 时 dnsChanged 才为 true，
 		// 而 teardown 只恢复"改过"的那一次。
 		m.originDNS = []string{"192.168.1.1"}
 		m.dnsChanged = true
 		return nil
 	}
-	restoreDNSStepFn = func(*Manager) error {
+	m.plat.restoreDNS = func(*Manager) error {
 		rec.dnsRestores++
 		return nil
 	}
-	engineStartFn = func() error { return nil }
-	engineStopFn = func(reason string) { rec.engineStops = append(rec.engineStops, reason) }
-	settleDelay = func() {}
-
+	m.plat.engineStart = func() error { return nil }
+	m.plat.engineStop = func(reason string) { rec.engineStops = append(rec.engineStops, reason) }
+	m.plat.settle = func() {}
 	return rec
 }
 
 // TestTeardownMatrix 固定 (owner × 已建立步骤) → 执行哪些清理：helper 路径只能停引擎
 // （路由与 DNS 归 helper，主进程去动只会与它抢），创建脚本失败则要跑关闭脚本。
 func TestTeardownMatrix(t *testing.T) {
+	t.Parallel()
+
 	if !manageSystemDNS() {
 		t.Skip("this platform does not switch the system DNS for TUN")
 	}
@@ -108,9 +94,8 @@ func TestTeardownMatrix(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rec := stubTeardownHooks(t)
-
 			m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "tun-easyss-test"})
+			rec := stubTeardownHooks(m)
 			m.owner = tc.owner
 			m.engineUp = tc.engineUp
 			m.deviceUp = tc.deviceUp
@@ -135,9 +120,10 @@ func TestTeardownMatrix(t *testing.T) {
 // 先后到达 teardown（Stop 等在 done 上，Start 的 defer 也走拆除），而关脚本与
 // 恢复 DNS 都是只能做一次的动作——重复跑会让第二次的失败被记成用户可见的错误。
 func TestTeardownRunsOnce(t *testing.T) {
-	rec := stubTeardownHooks(t)
+	t.Parallel()
 
 	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "tun-easyss-test"})
+	rec := stubTeardownHooks(m)
 	m.owner = OwnerLocal
 	m.engineUp, m.deviceUp, m.dnsTouched, m.dnsChanged = true, true, true, true
 
@@ -155,11 +141,12 @@ func TestTeardownRunsOnce(t *testing.T) {
 // 调用方已经处在拆除路径上，关闭脚本失败唯一能做的就是让调用方知道（它的日志
 // 与通知是第一手证据），绝不能让它误以为整次拆除失败了。
 func TestTeardownReportsCleanupFailures(t *testing.T) {
-	rec := stubTeardownHooks(t)
-	errBoom := errors.New("route: permission denied")
-	closeTunDevFn = func(*Manager) error { return errBoom }
+	t.Parallel()
 
 	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "tun-easyss-test"})
+	rec := stubTeardownHooks(m)
+	errBoom := errors.New("route: permission denied")
+	m.plat.closeDev = func(*Manager) error { return errBoom }
 	m.owner = OwnerLocal
 	m.engineUp, m.deviceUp = true, true
 
@@ -172,9 +159,10 @@ func TestTeardownReportsCleanupFailures(t *testing.T) {
 // 并且这一次确实什么都不做：没有引擎要停、没有关闭脚本要跑（跑它会去提权，
 // 还可能删掉别的会话的路由）。
 func TestStopIsANoOpOnAFreshManager(t *testing.T) {
-	rec := stubTeardownHooks(t)
+	t.Parallel()
 
 	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "tun-easyss-test"})
+	rec := stubTeardownHooks(m)
 	m.Stop()
 
 	require.Zero(t, len(rec.engineStops), "a manager that never started has no engine to stop")
@@ -185,9 +173,10 @@ func TestStopIsANoOpOnAFreshManager(t *testing.T) {
 // TestStopTearsDownAHalfStartedSession 固定另一半：Start 半途失败之后 Stop 仍然
 // 能把残局收干净。Stop 不能靠 m.running 提前返回，否则创建脚本装上的路由没人删。
 func TestStopTearsDownAHalfStartedSession(t *testing.T) {
-	rec := stubTeardownHooks(t)
+	t.Parallel()
 
 	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "tun-easyss-test"})
+	rec := stubTeardownHooks(m)
 	m.engineUp = true
 	m.deviceUp = true
 	m.dnsTouched = true
@@ -205,15 +194,15 @@ func TestStopTearsDownAHalfStartedSession(t *testing.T) {
 // TestCreateScriptFailureUsesItsOwnReason 固定 ReasonCreateFailed 真的能由创建脚本失败
 // 算出来：脚本先装地址再装路由，失败时可能已把部分路由写进系统，必须带着 deviceUp 进入拆除。
 func TestCreateScriptFailureUsesItsOwnReason(t *testing.T) {
-	stubTeardownHooks(t)
+	t.Parallel()
 
 	var reasons []string
-	engineStopFn = func(reason string) { reasons = append(reasons, reason) }
-
-	// 创建脚本失败，但失败之前可能已经装上了地址与路由。
-	createTunDevFn = func(*Manager) error { return errCreateFailed }
 
 	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "tun-easyss-test"})
+	stubTeardownHooks(m)
+	m.plat.engineStop = func(reason string) { reasons = append(reasons, reason) }
+	// 创建脚本失败，但失败之前可能已经装上了地址与路由。
+	m.plat.createDev = func(*Manager) error { return errCreateFailed }
 	require.Error(t, m.Start())
 
 	require.Equal(t, []string{ReasonCreateFailed.String()}, reasons,

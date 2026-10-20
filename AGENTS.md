@@ -203,7 +203,7 @@ Makefile 通过 `-ldflags` 向 `version/` 包注入以下变量，其余变量�
 ## 其他注意事项
 
 - 日志约定：服务端每条 TCP/ICMP 流只保留入口 `[SERVER] proxy` 一条 Info 与结束时的 `logHandlerResult` 一条结果日志；UDP 会话的连接/路由变化事件（`[UDP] upstream connected`、`[UDP_DNS]`）仍按原级别保留，因为一条会话可能重绑多次。客户端流内生命周期用 Debug，失败由入口（SOCKS5/HTTP）记录一次。handler 内部不要为拨号/连接/失败再打 Info/Error；需要区分失败阶段时用错误包装（`fmt.Errorf("...: %w", err)`）或 `streamResult` 携带
-- 测试注入约定：新代码不再新增包级可变函数钩子（`var x = func...`）；优先用构造器参数、结构体字段或接口注入。存量包级钩子按包逐步迁移，迁移完一个包后再为该包启用 `t.Parallel`（当前全仓库 `t.Parallel` 仍为 0）
+- 测试注入约定：**不新增包级可变函数钩子**（`var x = func...`），一律用构造器参数、结构体字段或接口注入；测试只改自己构造的实例（`sysDeps`/`platform`/`outboundDeps`/`options`/`appDeps`/`tunOps` 等），需要替换的行为在构造后按字段注入。`t.Parallel` 已按包启用；仍需串行的只有共享进程级状态的测试（fd 号、`sysProxyEnv`、`scripts.*`、`t.Setenv`、真实端口），它们各自在文件顶部注明原因
 - 注释约定：代码注释只写"读代码看不出来、写错会静默出错"的两类事实——顺序/锁/生命周期约束，以及外部系统行为或跨包契约。不写代码演进史（"过去…现在…"、"取代了某某"），不写枚举式清单（"只有这五个方法会写这个字段"）——这类表述一旦过时就成了错误文档；设计取舍与历史写在 commit message 或本文件。单个注释块不超过 3 行，函数名已经说清楚的不要再加 godoc
 - 始终使用简体中文回复我
 - git commit 信息使用英文，尽量简洁，格式参考 git log 历史记录

@@ -19,6 +19,8 @@ type ForwardServer struct {
 	client      *dns.Client
 	dnsServers  []string
 	disableIPV6 bool
+	// systemServers 是系统 DNS 兜底列表的来源，归实例所有以便测试注入。
+	systemServers func() []string
 
 	mu sync.Mutex
 	// pc 由 Shutdown 直接关闭：落在 dns.Server 尚未置位 started 的窗口里时端口也必须释放。
@@ -42,10 +44,11 @@ func NewForwardServer(listenAddr string, disableIPV6 bool) *ForwardServer {
 		}
 	}
 	return &ForwardServer{
-		listenAddr:  listenAddr,
-		client:      &dns.Client{Timeout: dnsQueryTimeout},
-		dnsServers:  servers,
-		disableIPV6: disableIPV6,
+		listenAddr:    listenAddr,
+		client:        &dns.Client{Timeout: dnsQueryTimeout},
+		dnsServers:    servers,
+		disableIPV6:   disableIPV6,
+		systemServers: SystemDNSServers,
 	}
 }
 
@@ -191,7 +194,7 @@ func (s *ForwardServer) exchangeWithServers(servers []string, msg *dns.Msg) (*dn
 // 回退上游里必须过滤掉会打回本转发服务器的条目：监听通配地址时"自环"还包括本机所有网卡
 // 地址，用它作上游会递归回自身并一直堆积查询直到超时。
 func (s *ForwardServer) systemDNSServers() []string {
-	servers := systemDNSServersFunc()
+	servers := s.systemServers()
 
 	var filtered []string
 	for _, srv := range servers {

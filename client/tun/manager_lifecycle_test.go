@@ -11,40 +11,37 @@ import (
 // 快速失败。
 const managerLifecycleBudget = 10 * time.Second
 
-// stubManagerHooks 把会触碰设备、路由表与系统 DNS 的 hook 换成空实现：生命周期测试
-// 不需要 root，也不能改写测试机的网络配置。
-func stubManagerHooks(t *testing.T) {
-	t.Helper()
+// noopPlatform 返回不触碰设备、路由表与系统 DNS 的平台操作：生命周期测试不需要 root。
+func noopPlatform() platform {
+	return platform{
+		createDev:   func(*Manager) error { return nil },
+		closeDev:    func(*Manager) error { return nil },
+		saveDNS:     func(*Manager) error { return nil },
+		restoreDNS:  func(*Manager) error { return nil },
+		engineStart: func() error { return nil },
+		engineStop:  func(string) {},
+		settle:      func() {},
+		ifaceMTU:    func(string) (int, error) { return 1500, nil },
+	}
+}
 
-	createDev, closeDev := createTunDevFn, closeTunDevFn
-	saveDNS, restoreDNS := saveAndSetDNSStepFn, restoreDNSStepFn
-	startEngine, stopEngineHook := engineStartFn, engineStopFn
-	settle := settleDelay
-	t.Cleanup(func() {
-		createTunDevFn, closeTunDevFn = createDev, closeDev
-		saveAndSetDNSStepFn, restoreDNSStepFn = saveDNS, restoreDNS
-		engineStartFn, engineStopFn = startEngine, stopEngineHook
-		settleDelay = settle
-	})
-
-	createTunDevFn = func(*Manager) error { return nil }
-	closeTunDevFn = func(*Manager) error { return nil }
-	saveAndSetDNSStepFn = func(*Manager) error { return nil }
-	restoreDNSStepFn = func(*Manager) error { return nil }
-	engineStartFn = func() error { return nil }
-	engineStopFn = func(string) {}
-	settleDelay = func() {}
+// newStubManager 返回使用空平台操作的 Manager，测试再按需覆盖单项。
+func newStubManager(cfg Config) *Manager {
+	m := New(cfg)
+	m.plat = noopPlatform()
+	return m
 }
 
 func newTestManager() *Manager {
-	return New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "tun-easyss-test"})
+	return newStubManager(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "tun-easyss-test"})
 }
 
 // TestManagerStopWithoutStartDoesNotHang 固定"从未 Start 过的管理器可以安全 Stop"，
 // 这是托盘的常态路径：Stop 若依赖"cancel 非 nil ⇒ done 非 nil"，就会在 nil channel
 // 上永久阻塞，而托盘是在持有 tunMu 时调用它。
 func TestManagerStopWithoutStartDoesNotHang(t *testing.T) {
-	stubManagerHooks(t)
+	t.Parallel()
+
 	m := newTestManager()
 
 	done := make(chan struct{})
@@ -67,11 +64,12 @@ func TestManagerStopWithoutStartDoesNotHang(t *testing.T) {
 // TestManagerStopWhileStarting 固定"Start 进行中被 Stop 取消"：两者都必须有界返回，
 // 且管理器最终不处于运行状态。
 func TestManagerStopWhileStarting(t *testing.T) {
-	stubManagerHooks(t)
+	t.Parallel()
 
-	// engineStartFn 在 Start 发布 ctx/done 之后调用，故这个信号表示"正在进行中"。
+	// engineStart 在 Start 发布 ctx/done 之后调用，故这个信号表示"正在进行中"。
 	inStart := make(chan struct{}, 1)
-	engineStartFn = func() error {
+	m := newTestManager()
+	m.plat.engineStart = func() error {
 		select {
 		case inStart <- struct{}{}:
 		default:
@@ -79,8 +77,6 @@ func TestManagerStopWhileStarting(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		return nil
 	}
-
-	m := newTestManager()
 
 	startDone := make(chan error, 1)
 	go func() { startDone <- m.Start() }()
@@ -116,12 +112,11 @@ func TestManagerStopWhileStarting(t *testing.T) {
 
 // TestManagerStopIsIdempotent 固定 Stop 的幂等性：关闭脚本与系统 DNS 恢复只能做一次。
 func TestManagerStopIsIdempotent(t *testing.T) {
-	stubManagerHooks(t)
+	t.Parallel()
 
 	var engineStops int
-	engineStopFn = func(string) { engineStops++ }
-
 	m := newTestManager()
+	m.plat.engineStop = func(string) { engineStops++ }
 	if err := m.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -143,16 +138,15 @@ func TestManagerStopIsIdempotent(t *testing.T) {
 // TestManagerStopBeforeStartGoroutineRuns 守住"停止先到、启动后到"：Stop 若按"没有 cancel"
 // 当作从未启动返回，Start 随后照常建起引擎与设备，界面说关了、流量还在隧道里，且没人能停它。
 func TestManagerStopBeforeStartGoroutineRuns(t *testing.T) {
-	stubManagerHooks(t)
+	t.Parallel()
 
 	var (
 		engineStarts int
 		creates      int
 	)
-	engineStartFn = func() error { engineStarts++; return nil }
-	createTunDevFn = func(*Manager) error { creates++; return nil }
-
 	m := newTestManager()
+	m.plat.engineStart = func() error { engineStarts++; return nil }
+	m.plat.createDev = func(*Manager) error { creates++; return nil }
 
 	// 模拟"goroutine 还没被调度到"：Stop 先执行，Start 之后才进入。
 	m.Stop()
@@ -179,7 +173,7 @@ func TestManagerStopBeforeStartGoroutineRuns(t *testing.T) {
 // 覆盖 engine 的包级默认设备（tun2socks 的 Stop 只认全局默认值），让第一套设备与
 // 协议栈无人能停，因此必须显式失败。
 func TestManagerStartRunsExactlyOnce(t *testing.T) {
-	stubManagerHooks(t)
+	t.Parallel()
 
 	m := newTestManager()
 	if err := m.Start(); err != nil {
@@ -195,14 +189,13 @@ func TestManagerStartRunsExactlyOnce(t *testing.T) {
 // TestManagerEngineStartFailureReleasesTheDevice 守住 engine 启动失败必须自己释放设备：
 // tun2socks 的 engine.Start 先 parseDevice 再 CreateStack，失败路径不清理，而 teardown 也不会调 Stop。
 func TestManagerEngineStartFailureReleasesTheDevice(t *testing.T) {
-	stubManagerHooks(t)
+	t.Parallel()
 
 	errStart := errors.New("create stack: permission denied")
 	var reasons []string
-	engineStartFn = func() error { return errStart }
-	engineStopFn = func(reason string) { reasons = append(reasons, reason) }
-
 	m := newTestManager()
+	m.plat.engineStart = func() error { return errStart }
+	m.plat.engineStop = func(reason string) { reasons = append(reasons, reason) }
 	err := m.Start()
 	if !errors.Is(err, errStart) {
 		t.Fatalf("Start = %v, want the engine error", err)

@@ -8,19 +8,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// stubIfaceMTU 替换包级接口 MTU 查询，让 fd 路径的 MTU 对齐逻辑无需真实 TUN 设备；
+// stubIfaceMTU 让该 Manager 的接口 MTU 查询返回固定值，无需真实 TUN 设备；
 // 返回的调用次数也是断言对象（非 fd 路径不应去查设备）。
-func stubIfaceMTU(t *testing.T, mtu int, err error) *int {
-	t.Helper()
-
-	orig := ifaceMTU
+func stubIfaceMTU(m *Manager, mtu int, err error) *int {
 	calls := 0
-	ifaceMTU = func(string) (int, error) {
+	m.plat.ifaceMTU = func(string) (int, error) {
 		calls++
 		return mtu, err
 	}
-	t.Cleanup(func() { ifaceMTU = orig })
-
 	return &calls
 }
 
@@ -28,6 +23,8 @@ func stubIfaceMTU(t *testing.T, mtu int, err error) *int {
 // 未配置（或非法）的值必须落到与设备创建方相同的默认值。若这里保留字面量，
 // 配置层面改了默认值就会让 netstack 与设备的 MTU 悄悄分叉。
 func TestNewNormalizesMTU(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		in   int
@@ -49,9 +46,10 @@ func TestNewNormalizesMTU(t *testing.T) {
 // TestEngineMTURaisesTheNetstackMTUOnTheFDPath 守住静默丢包：fd 路径上设备由 helper
 // 创建，主进程只能设 netstack 的 MTU，而 tun2socks 会直接丢掉超过它的包。
 func TestEngineMTURaisesTheNetstackMTUOnTheFDPath(t *testing.T) {
-	stubIfaceMTU(t, 8500, nil)
+	t.Parallel()
 
 	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "utun9", DeviceFD: 7, MTU: 1500})
+	stubIfaceMTU(m, 8500, nil)
 	require.Equal(t, 8500, m.engineMTU(), "the device mtu must win: a smaller netstack mtu drops packets")
 }
 
@@ -59,9 +57,10 @@ func TestEngineMTURaisesTheNetstackMTUOnTheFDPath(t *testing.T) {
 // 区间只可能是外部改动，netstack 的 MTU 同时也是每包读取缓冲的大小，因此不能
 // 无上限地跟着走。TCP 不受影响（本机应用发出的段不会超过通告的 MSS）。
 func TestEngineMTUCapsAnOutOfRangeDeviceMTU(t *testing.T) {
-	stubIfaceMTU(t, 1<<16-1, nil)
+	t.Parallel()
 
 	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "utun9", DeviceFD: 7, MTU: 1500})
+	stubIfaceMTU(m, 1<<16-1, nil)
 	require.Equal(t, sharedconfig.MaxTunMTU, m.engineMTU())
 }
 
@@ -69,27 +68,30 @@ func TestEngineMTUCapsAnOutOfRangeDeviceMTU(t *testing.T) {
 // 设备更小不会丢包（netstack 的 MTU 只是上限），因此不能反过来把配置值悄悄
 // 改小——那等于在用户不知情的情况下改掉了他设置的 MTU。
 func TestEngineMTUKeepsTheConfiguredMTUWhenTheDeviceIsSmaller(t *testing.T) {
-	stubIfaceMTU(t, 1400, nil)
+	t.Parallel()
 
 	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "utun9", DeviceFD: 7, MTU: 1500})
+	stubIfaceMTU(m, 1400, nil)
 	require.Equal(t, 1500, m.engineMTU())
 }
 
 // TestEngineMTUFallsBackToTheConfiguredMTUWhenTheDeviceIsUnknown 固定查询失败
 // 时的行为：既不能确认也不能修正，因此保持配置值——猜一个 MTU 更危险。
 func TestEngineMTUFallsBackToTheConfiguredMTUWhenTheDeviceIsUnknown(t *testing.T) {
-	stubIfaceMTU(t, 0, errors.New("no such interface"))
+	t.Parallel()
 
 	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "utun9", DeviceFD: 7, MTU: 1500})
+	stubIfaceMTU(m, 0, errors.New("no such interface"))
 	require.Equal(t, 1500, m.engineMTU())
 }
 
 // TestEngineMTUSkipsTheDeviceProbeWithoutFD 说明非 fd 路径的分工：设备还不存在，
 // 或者即将由 tun2socks 按同一个值重建，因此这一侧不做查询也不做修正。
 func TestEngineMTUSkipsTheDeviceProbeWithoutFD(t *testing.T) {
-	calls := stubIfaceMTU(t, 8500, nil)
+	t.Parallel()
 
 	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "utun9", MTU: 1500})
+	calls := stubIfaceMTU(m, 8500, nil)
 	require.Equal(t, 1500, m.engineMTU())
 	require.Zero(t, *calls, "the device does not exist yet on the name path")
 }
@@ -98,9 +100,10 @@ func TestEngineMTUSkipsTheDeviceProbeWithoutFD(t *testing.T) {
 // 由 engineMTU 对齐，不必再查一次；非 fd 路径（Windows 的 wintun 适配器只能由
 // 创建脚本设置 MTU）才需要把"配置了却没生效"记进日志。
 func TestWarnOnMTUMismatchOnlyProbesTheNamePath(t *testing.T) {
-	calls := stubIfaceMTU(t, 1400, nil)
+	t.Parallel()
 
 	fd := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "utun9", DeviceFD: 7, MTU: 1500})
+	calls := stubIfaceMTU(fd, 1400, nil)
 	probes := fd.engineMTU()
 	require.Equal(t, 1, *calls, "engineMTU resolves the device mtu on the fd path")
 	*calls = 0
@@ -108,10 +111,12 @@ func TestWarnOnMTUMismatchOnlyProbesTheNamePath(t *testing.T) {
 	require.Zero(t, *calls, "the fd path is already reconciled by engineMTU")
 
 	named := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "utun9", MTU: 1500})
+	namedCalls := stubIfaceMTU(named, 1400, nil)
 	named.warnOnMTUMismatch(named.cfg.MTU)
-	require.Equal(t, 1, *calls, "the name path must verify what the device actually got")
+	require.Equal(t, 1, *namedCalls, "the name path must verify what the device actually got")
 
 	// 查不到设备时保持静默：这只说明接口名还没出现，不代表配置有问题。
-	stubIfaceMTU(t, 0, errors.New("no such interface"))
+	unknown := stubIfaceMTU(named, 0, errors.New("no such interface"))
 	named.warnOnMTUMismatch(named.cfg.MTU)
+	require.Equal(t, 1, *unknown, "the probe still runs, it just does not log")
 }

@@ -240,11 +240,10 @@ func TestCleanupTunRoutesVerifiesAndRetries(t *testing.T) {
 	requireShell(t, closeScriptShell())
 
 	origBytes, origName := scripts.CloseTunBytes, scripts.CloseTunFilename
-	origResidue := tunRouteResidue
 	t.Cleanup(func() {
 		scripts.CloseTunBytes, scripts.CloseTunFilename = origBytes, origName
-		tunRouteResidue = origResidue
 	})
+	ops := testTunOps(t)
 	scripts.CloseTunFilename = "close_tun_dev_cleanup_test.sh"
 
 	cfg := &proxy.TunConfig{
@@ -259,22 +258,22 @@ func TestCleanupTunRoutesVerifiesAndRetries(t *testing.T) {
 	t.Run("a failed script is fine when the routes are gone", func(t *testing.T) {
 		// 关闭脚本可能因为"设备已经消失"而报错，但真正的判据是路由还在不在。
 		scripts.CloseTunBytes = []byte("#!/bin/sh\nexit 1\n")
-		tunRouteResidue = func(string, string) (string, bool) { return "", false }
+		ops.probe = func(string, string) (string, bool) { return "", false }
 
-		require.NoError(t, cleanupTunRoutes(cfg.Device, cfg))
+		require.NoError(t, cleanupTunRoutes(ops, cfg.Device, cfg))
 	})
 
 	t.Run("leftover routes are retried and reported", func(t *testing.T) {
 		scripts.CloseTunBytes = []byte("#!/bin/sh\nexit 1\n")
 		attempts := 0
-		tunRouteResidue = func(device, tunGW string) (string, bool) {
+		ops.probe = func(device, tunGW string) (string, bool) {
 			attempts++
 			require.Equal(t, cfg.Device, device)
 			require.Equal(t, cfg.TunGW, tunGW)
 			return "gateway: 198.18.0.1", true
 		}
 
-		err := cleanupTunRoutes(cfg.Device, cfg)
+		err := cleanupTunRoutes(ops, cfg.Device, cfg)
 		require.Error(t, err, "routes that survived the cleanup must be reported")
 		require.Contains(t, err.Error(), "still present")
 		require.Equal(t, tunCleanupAttempts, attempts, "residue must be retried up to the limit")
@@ -283,12 +282,12 @@ func TestCleanupTunRoutesVerifiesAndRetries(t *testing.T) {
 	t.Run("an attempt that clears the routes succeeds", func(t *testing.T) {
 		scripts.CloseTunBytes = []byte("#!/bin/sh\nexit 0\n")
 		attempts := 0
-		tunRouteResidue = func(string, string) (string, bool) {
+		ops.probe = func(string, string) (string, bool) {
 			attempts++
 			return "gateway: 198.18.0.1", attempts < 2
 		}
 
-		require.NoError(t, cleanupTunRoutes(cfg.Device, cfg))
+		require.NoError(t, cleanupTunRoutes(ops, cfg.Device, cfg))
 		require.Equal(t, 2, attempts, "the retry must stop as soon as the probe reports clean")
 	})
 }

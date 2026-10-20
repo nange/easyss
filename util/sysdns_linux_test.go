@@ -8,8 +8,7 @@ import (
 	"testing"
 )
 
-// recordingTunDNS 替换 tunDNSCommand，以便在不触碰运行测试的机器
-// 的解析器的情况下断言 DNS 配置。
+// recordingTunDNS 记录 resolvectl 命令，使断言 DNS 配置不触碰运行测试的机器的解析器。
 type recordingTunDNS struct {
 	commands [][]string
 	replies  map[string]string
@@ -21,14 +20,6 @@ func (r *recordingTunDNS) run(name string, args ...string) (string, error) {
 	return r.replies[strings.Join(cmd, " ")], nil
 }
 
-func (r *recordingTunDNS) install(t *testing.T) {
-	t.Helper()
-
-	restore := tunDNSCommand
-	tunDNSCommand = r.run
-	t.Cleanup(func() { tunDNSCommand = restore })
-}
-
 func TestSetTunLinkDNSPinsResolverToTun(t *testing.T) {
 	iface, err := defaultInterface()
 	if err != nil {
@@ -36,9 +27,8 @@ func TestSetTunLinkDNSPinsResolverToTun(t *testing.T) {
 	}
 
 	rec := &recordingTunDNS{}
-	rec.install(t)
 
-	if err := setTunLinkDNS("tun-easyss", []string{"223.5.5.5"}); err != nil {
+	if err := setTunLinkDNS("tun-easyss", []string{"223.5.5.5"}, rec.run); err != nil {
 		t.Fatalf("setTunLinkDNS: %v", err)
 	}
 
@@ -75,13 +65,14 @@ func TestEnsureSysDNSForTunReassertsState(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			rec := &recordingTunDNS{replies: map[string]string{
 				"resolvectl default-route " + iface: tc.reply,
 			}}
-			rec.install(t)
 
-			if err := EnsureSysDNSForTun("tun-easyss", []string{"223.5.5.5"}); err != nil {
-				t.Fatalf("EnsureSysDNSForTun: %v", err)
+			if err := ensureSysDNSForTun("tun-easyss", []string{"223.5.5.5"}, rec.run); err != nil {
+				t.Fatalf("ensureSysDNSForTun: %v", err)
 			}
 			if len(rec.commands) != tc.wantCmds {
 				t.Errorf("issued %d commands (%v), want %d", len(rec.commands), rec.commands, tc.wantCmds)

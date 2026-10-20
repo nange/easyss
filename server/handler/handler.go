@@ -24,6 +24,8 @@ type ProxyHandler struct {
 	saltCache        *saltCache
 	ipLimiter        *ipRateLimiter
 	fallback         *Fallback
+	// deps 与三个子 handler 共用：握手期 SSRF 校验与拨号必须是同一批地址。
+	deps outboundDeps
 }
 
 type ProxyHandlerConfig struct {
@@ -43,6 +45,10 @@ type ProxyHandlerConfig struct {
 // NewProxyHandler 组装代理 handler。未知的 AllowedMethods 被保留在 map 之外，由调用方在配置
 // 加载阶段拒绝（见 server/config.validateAllowedMethods），这里不做"全部非法就放行"的兜底。
 func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
+	return newProxyHandlerWithDeps(cfg, defaultOutboundDeps())
+}
+
+func newProxyHandlerWithDeps(cfg ProxyHandlerConfig, deps outboundDeps) *ProxyHandler {
 	allowed := make(map[protocol.Method]bool)
 	for _, m := range cfg.AllowedMethods {
 		if method := protocol.MethodFromString(m); method != 0 {
@@ -72,12 +78,13 @@ func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
 		allowedMethods:   allowed,
 		handshakeTimeout: handshakeTimeout,
 		shaperCfg:        shaperCfg,
-		tcp:              newTCPHandler(timeouts, cfg.NextProxy),
-		udp:              newUDPHandler(timeouts, cfg.NextProxy),
-		icmp:             newICMPHandler(timeouts),
+		tcp:              newTCPHandler(timeouts, cfg.NextProxy, deps),
+		udp:              newUDPHandler(timeouts, cfg.NextProxy, deps),
+		icmp:             newICMPHandler(timeouts, deps),
 		saltCache:        newSaltCache(),
 		ipLimiter:        newIPRateLimiter(),
 		fallback:         cfg.Fallback,
+		deps:             deps,
 	}
 }
 

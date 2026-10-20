@@ -202,20 +202,15 @@ func TestRouteFieldsContain(t *testing.T) {
 	}
 }
 
-// stubRouteProbe 用固定输出替换 routeProbeCmd 并返回记录的调用参数：残留判定只看这
-// 份文本里的字段，不需要真实的系统路由表。
-func stubRouteProbe(t *testing.T, out string) *[][]string {
-	t.Helper()
-
-	prev := routeProbeCmd
-	t.Cleanup(func() { routeProbeCmd = prev })
-
+// stubRouteProbe 返回固定输出的路由查询函数与调用记录：残留判定只看这份文本里的
+// 字段，不需要真实的系统路由表。
+func stubRouteProbe(out string) (func(string, ...string) (string, error), *[][]string) {
 	var calls [][]string
-	routeProbeCmd = func(name string, args ...string) (string, error) {
+	run := func(name string, args ...string) (string, error) {
 		calls = append(calls, append([]string{name}, args...))
 		return out, nil
 	}
-	return &calls
+	return run, &calls
 }
 
 // TestHelperAndDirectPathsShareTheScriptArgs 钉住两条启用路径都只经过 tun.ScriptArgs：

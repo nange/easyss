@@ -20,16 +20,6 @@ import (
 // 钩子驱动，不需要 root 与 TUN 设备，也不碰测试机的网络。创建脚本中途失败本身由
 // client/tun 覆盖（它能替换包内的 createTunDevFn），本文件守的是它对**会话层**的后果。
 
-// stubTunLifecycle 是故障注入的共同前置：client/tun 的钩子是包级未导出变量，
-// cmd/easyss 只能替换自己的 tunRouteResidue/rollbackTunRoutes，并借助 Manager 的
-// Start/Stop 行为与 session 的所有权字段观察"跑了没有、什么顺序"。
-func stubTunLifecycle(t *testing.T) {
-	t.Helper()
-
-	origResidue, origRollback := tunRouteResidue, rollbackTunRoutes
-	t.Cleanup(func() { tunRouteResidue, rollbackTunRoutes = origResidue, origRollback })
-}
-
 // TestFaultStartFailureRollsBackTheSession 固定一次启动失败对**会话层**的后果：会话被
 // 拆掉、偏好回落、所有权回到默认值、界面收到真实原因。failedTunManager 的 LogLevel
 // 非法，Start 在 validateEngineKey 处早退，故全程不需要 root、不碰设备。
@@ -37,8 +27,6 @@ func TestFaultStartFailureRollsBackTheSession(t *testing.T) {
 	a := newApp(&config.ClientConfig{}, "")
 	ui := newStubAppUI()
 	a.ui = ui
-	stubTunLifecycle(t)
-
 	var teardownOwners []tun.Owner
 	a.sess.verifyTeardown = func(_ tun.DeviceConfig, owner tun.Owner, _ bool) error {
 		teardownOwners = append(teardownOwners, owner)
@@ -80,7 +68,6 @@ func TestFaultStartFailureRollsBackTheSession(t *testing.T) {
 // Stop 若看到"从未启动"直接返回，Start 仍会建起隧道，而再没人持有它去停。
 func TestFaultStopRacesWithStart(t *testing.T) {
 	a := newApp(&config.ClientConfig{}, "")
-	stubTunLifecycle(t)
 	a.sess.verifyTeardown = func(tun.DeviceConfig, tun.Owner, bool) error { return nil }
 
 	const rounds = 50
@@ -130,25 +117,22 @@ func TestFaultStopRacesWithStart(t *testing.T) {
 // TestFaultLeftoverRoutesAreRolledBack 注入最危险的一种失败：关闭脚本失败后残留的分流
 // 默认路由仍指向没人读的设备，全机流量连同 DNS 一起黑洞（表现为"停 TUN 后断网"）。
 func TestFaultLeftoverRoutesAreRolledBack(t *testing.T) {
-	stubTunLifecycle(t)
-
 	t.Run("residue is rolled back and the user is not bothered", func(t *testing.T) {
 		a := newApp(&config.ClientConfig{}, "")
 		ui := newStubAppUI()
 		a.ui = ui
 
 		probes, rollbacks := 0, 0
-		tunRouteResidue = func(string, string) (string, bool) {
+		ops := testTunOps(t)
+		ops.probe = func(string, string) (string, bool) {
 			probes++
 			return "gateway: 198.18.0.1", probes == 1 // 回滚后干净
 		}
-		rollbackTunRoutes = func(tun.DeviceConfig) error {
+		ops.rollback = func(tun.DeviceConfig) error {
 			rollbacks++
 			return nil
 		}
-		a.sess.verifyTeardown = func(dev tun.DeviceConfig, _ tun.Owner, _ bool) error {
-			return verifyTunTeardown(dev)
-		}
+		a.sess.verifyTeardown = ops.teardown
 		a.sess.tunSession = &tun.DeviceConfig{Device: "utun9", TunGW: "198.18.0.1"}
 
 		a.sess.tunDown()
@@ -166,13 +150,11 @@ func TestFaultLeftoverRoutesAreRolledBack(t *testing.T) {
 		ui := newStubAppUI()
 		a.ui = ui
 
-		tunRouteResidue = func(string, string) (string, bool) {
+		ops := testTunOps(t)
+		ops.probe = func(string, string) (string, bool) {
 			return "gateway: 198.18.0.1", true // 一直残留
 		}
-		rollbackTunRoutes = func(tun.DeviceConfig) error { return nil }
-		a.sess.verifyTeardown = func(dev tun.DeviceConfig, _ tun.Owner, _ bool) error {
-			return verifyTunTeardown(dev)
-		}
+		a.sess.verifyTeardown = ops.teardown
 		a.sess.tunSession = &tun.DeviceConfig{Device: "utun9", TunGW: "198.18.0.1"}
 
 		a.sess.tunDown()
@@ -193,8 +175,6 @@ func TestFaultHelperOwnerSkipsLocalCleanup(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("the helper path only exists on darwin/linux")
 	}
-	stubTunLifecycle(t)
-
 	a := newApp(&config.ClientConfig{}, "")
 	a.sess.tunSession = &tun.DeviceConfig{Device: "utun9", TunGW: "198.18.0.1"}
 	a.sess.tunOwner = tun.OwnerHelper

@@ -109,15 +109,14 @@ func runCloseScript(device string, args tun.ScriptArgs) error {
 }
 
 // linux 的 TUN 路由按设备安装（ip route replace ... dev tun0），因此按设备名判定。
-// 变量以便测试注入探测结果：真实的残留路由需要 root 才能造出来。
-var tunRouteResidue = func(device, _ string) (string, bool) {
+func probeTunRouteResidue(run func(string, ...string) (string, error), device, _ string) (string, bool) {
 	if device == "" {
 		return "", false
 	}
 
 	var out string
 	for _, target := range tunRouteProbes {
-		got, err := routeProbeCmd("ip", "route", "get", target)
+		got, err := run("ip", "route", "get", target)
 		if err != nil {
 			continue
 		}

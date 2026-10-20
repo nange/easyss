@@ -75,9 +75,9 @@ func TestTunRouteResidueUsesTheTunGateway(t *testing.T) {
 	)
 
 	t.Run("still routed via the tun gateway", func(t *testing.T) {
-		calls := stubRouteProbe(t, viaTun)
+		run, calls := stubRouteProbe(viaTun)
 
-		out, leftover := tunRouteResidue("utun9", "198.18.0.1")
+		out, leftover := probeTunRouteResidue(run, "utun9", "198.18.0.1")
 		require.True(t, leftover, "the session's own gateway means traffic still enters the dead device")
 		require.Contains(t, out, "gateway: 198.18.0.1")
 		require.Equal(t, []string{"route", "-n", "get", "1.1.1.1"}, (*calls)[0],
@@ -85,24 +85,24 @@ func TestTunRouteResidueUsesTheTunGateway(t *testing.T) {
 	})
 
 	t.Run("routed via the physical gateway", func(t *testing.T) {
-		stubRouteProbe(t, viaPhysical)
+		run, _ := stubRouteProbe(viaPhysical)
 
-		_, leftover := tunRouteResidue("utun9", "198.18.0.1")
+		_, leftover := probeTunRouteResidue(run, "utun9", "198.18.0.1")
 		require.False(t, leftover, "the physical default route means the teardown worked")
 	})
 
 	t.Run("without a gateway the device name is the fallback", func(t *testing.T) {
 		// 没有网关时只能退回设备名：别的 utun 占用该名字会被误判为残留，是已知代价。
-		stubRouteProbe(t, viaTun)
+		run, _ := stubRouteProbe(viaTun)
 
-		_, leftover := tunRouteResidue("utun9", "")
+		_, leftover := probeTunRouteResidue(run, "utun9", "")
 		require.True(t, leftover)
 	})
 
 	t.Run("no probe output at all", func(t *testing.T) {
-		stubRouteProbe(t, "")
+		run, _ := stubRouteProbe("")
 
-		_, leftover := tunRouteResidue("utun9", "198.18.0.1")
+		_, leftover := probeTunRouteResidue(run, "utun9", "198.18.0.1")
 		require.False(t, leftover, "unreadable output must not be reported as residue")
 	})
 }

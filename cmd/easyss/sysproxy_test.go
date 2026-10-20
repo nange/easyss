@@ -10,21 +10,14 @@ import (
 
 // stubSysProxy 替换系统代理的设置/撤销钩子，记录被设置的地址与撤销次数，
 // 使测试不必触碰运行测试的机器的真实系统代理配置。
-func stubSysProxy(t *testing.T, applyErr error) (applied *[]string, reverts *int) {
-	t.Helper()
-
-	prevApply, prevRevert := sysProxyApply, sysProxyRevert
-	t.Cleanup(func() {
-		sysProxyApply, sysProxyRevert = prevApply, prevRevert
-	})
-
+func stubSysProxy(a *App, applyErr error) (applied *[]string, reverts *int) {
 	applied = &[]string{}
 	reverts = new(int)
-	sysProxyApply = func(addr string) error {
+	a.deps.sysProxyApply = func(addr string) error {
 		*applied = append(*applied, addr)
 		return applyErr
 	}
-	sysProxyRevert = func() error {
+	a.deps.sysProxyRevert = func() error {
 		*reverts++
 		return nil
 	}
@@ -36,9 +29,8 @@ func testApp(local clientconfig.LocalConfig) *App {
 }
 
 func TestSetupSysProxyAppliesLocalHTTPAddr(t *testing.T) {
-	applied, _ := stubSysProxy(t, nil)
-
 	app := testApp(clientconfig.LocalConfig{HTTPPort: 5080})
+	applied, _ := stubSysProxy(app, nil)
 	if !app.setupSysProxy() {
 		t.Fatal("setupSysProxy = false, want true")
 	}
@@ -51,9 +43,8 @@ func TestSetupSysProxyAppliesLocalHTTPAddr(t *testing.T) {
 // HTTP 入口监听 [::]，系统代理必须指向同族回环 [::1]。写死 127.0.0.1 的实现
 // 在只接受 IPv6 回环的环境里把系统指向一个连不上的入口（浏览器全部无法上网）。
 func TestSetupSysProxyFollowsBindAll(t *testing.T) {
-	applied, _ := stubSysProxy(t, nil)
-
 	app := testApp(clientconfig.LocalConfig{HTTPPort: 5080, BindAll: true})
+	applied, _ := stubSysProxy(app, nil)
 	if !app.setupSysProxy() {
 		t.Fatal("setupSysProxy = false, want true")
 	}
@@ -63,9 +54,8 @@ func TestSetupSysProxyFollowsBindAll(t *testing.T) {
 }
 
 func TestSetupSysProxyHonorsDisableSwitch(t *testing.T) {
-	applied, _ := stubSysProxy(t, nil)
-
 	app := testApp(clientconfig.LocalConfig{HTTPPort: 5080, DisableSysProxy: true})
+	applied, _ := stubSysProxy(app, nil)
 	if app.setupSysProxy() {
 		t.Fatal("setupSysProxy = true, want false when disable_sys_proxy is set")
 	}
@@ -75,9 +65,8 @@ func TestSetupSysProxyHonorsDisableSwitch(t *testing.T) {
 }
 
 func TestSetupSysProxySkipsInvalidHTTPPort(t *testing.T) {
-	applied, _ := stubSysProxy(t, nil)
-
 	app := testApp(clientconfig.LocalConfig{HTTPPort: 0})
+	applied, _ := stubSysProxy(app, nil)
 	if app.setupSysProxy() {
 		t.Fatal("setupSysProxy = true, want false without a local HTTP port")
 	}
@@ -89,9 +78,8 @@ func TestSetupSysProxySkipsInvalidHTTPPort(t *testing.T) {
 // setupSysProxy 失败只记警告并返回 false：调用方据此不撤销，
 // 启动流程本身不会失败。
 func TestSetupSysProxyFailureIsNotFatal(t *testing.T) {
-	applied, _ := stubSysProxy(t, errors.New("gsettings: command not found"))
-
 	app := testApp(clientconfig.LocalConfig{HTTPPort: 5080})
+	applied, _ := stubSysProxy(app, errors.New("gsettings: command not found"))
 	if app.setupSysProxy() {
 		t.Fatal("setupSysProxy = true, want false when applying fails")
 	}
@@ -101,8 +89,8 @@ func TestSetupSysProxyFailureIsNotFatal(t *testing.T) {
 }
 
 func TestTeardownSysProxyOnlyRevertsWhenApplied(t *testing.T) {
-	_, reverts := stubSysProxy(t, nil)
 	app := testApp(clientconfig.LocalConfig{HTTPPort: 5080})
+	_, reverts := stubSysProxy(app, nil)
 
 	app.teardownSysProxy()
 	if *reverts != 0 {
@@ -127,8 +115,8 @@ func TestTeardownSysProxyOnlyRevertsWhenApplied(t *testing.T) {
 // TestAppStopRevertsSysProxyAndStopsOnce 固定 App.Stop 成为唯一的退出序列：
 // 撤销系统代理与停止会话都只发生一次，headless/托盘/无托盘路径共享它。
 func TestAppStopRevertsSysProxyAndStopsOnce(t *testing.T) {
-	_, reverts := stubSysProxy(t, nil)
 	app := testApp(clientconfig.LocalConfig{HTTPPort: 5080})
+	_, reverts := stubSysProxy(app, nil)
 	if !app.setupSysProxy() {
 		t.Fatal("setupSysProxy = false, want true")
 	}
@@ -144,8 +132,8 @@ func TestAppStopRevertsSysProxyAndStopsOnce(t *testing.T) {
 // 托盘退出必须清理上一次运行/异步开关留下的系统代理，因此即使本进程没有
 // 成功 apply 过（flag 为假），Close 仍会执行一次 revert。
 func TestAppCloseRevertsEvenWhenNotApplied(t *testing.T) {
-	_, reverts := stubSysProxy(t, nil)
 	app := testApp(clientconfig.LocalConfig{HTTPPort: 5080})
+	_, reverts := stubSysProxy(app, nil)
 	if app.sysProxyApplied.Load() {
 		t.Fatal("a fresh App must not claim it applied the system proxy")
 	}

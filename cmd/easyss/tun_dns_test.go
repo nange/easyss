@@ -12,6 +12,8 @@ import (
 // config.DefaultSystemDNS。转发服务器只服务 LAN 设备，本机 TUN 指向 127.0.0.1 会绕开按
 // 域名直连/代理的拆分，故与 enable_forward_dns 无关。
 func TestTunDNS(t *testing.T) {
+	t.Parallel()
+
 	// 记录与熔断状态是包级变量，测试间必须复位。
 	easydns.ResetResolveState()
 	t.Cleanup(easydns.ResetResolveState)

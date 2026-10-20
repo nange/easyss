@@ -26,10 +26,10 @@ func installProxyEnvExec(t *testing.T, run func(name string, args []string) (str
 
 	cmds := &[]recordedProxyEnvCmd{}
 
-	original := proxyEnvExec
-	t.Cleanup(func() { proxyEnvExec = original })
+	original := sysProxyEnv.exec
+	t.Cleanup(func() { sysProxyEnv.exec = original })
 
-	proxyEnvExec = func(name string, args ...string) (string, error) {
+	sysProxyEnv.exec = func(name string, args ...string) (string, error) {
 		*cmds = append(*cmds, recordedProxyEnvCmd{name: name, args: slices.Clone(args)})
 		return run(name, args)
 	}

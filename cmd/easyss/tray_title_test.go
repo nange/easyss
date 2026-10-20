@@ -43,6 +43,8 @@ func metricsColumnForTest(t *testing.T, title string) float64 {
 // 域名，指标都要从同一列开始（不能用 "\t"：28pt 的默认 tab 间隔会让列宽随地址
 // 长度乱跳，IP 看起来"贴着"地址）。
 func TestFormatTitleAlignsMetricsColumn(t *testing.T) {
+	t.Parallel()
+
 	addrs := []string{
 		"1.2.3.4:443",
 		"203.0.113.9:443",
@@ -88,6 +90,8 @@ func TestFormatTitleAlignsMetricsColumn(t *testing.T) {
 // TestMetricsColumnStartKeepsMinimalGap 固化"指标列起点恒 ≥ 地址宽 + minMetricsGap"
 // 这一不变量：padToMetricsColumn 依赖它，所以不需要"余量不足时贴一个空格"的兜底分支。
 func TestMetricsColumnStartKeepsMinimalGap(t *testing.T) {
+	t.Parallel()
+
 	for _, width := range []float64{0, 1, 67.9, 152, 152.001, 168, 200, 1e6} {
 		start := metricsColumnStart(width)
 		require.GreaterOrEqual(t, start-width, minMetricsGap,
@@ -107,6 +111,8 @@ func TestMetricsColumnStartKeepsMinimalGap(t *testing.T) {
 // 地址先被截断（保证不超 maxAddressWidth），列位置随之右移，但地址与指标之间的
 // 可见间隔不得小于 minMetricsGap（不允许指标贴着地址）。
 func TestFormatTitlePadsLongAddressWithMinimalGap(t *testing.T) {
+	t.Parallel()
+
 	addr := "very.long.hostname.for.a.branch.office.example.com:443"
 	require.Greater(t, titleWidthForTest(addr), serverColumnWidth, "用例前提：地址超出目标列")
 
@@ -127,6 +133,8 @@ func TestFormatTitlePadsLongAddressWithMinimalGap(t *testing.T) {
 
 // TestFormatTitleWithoutMetrics 指标都拿不到时保持纯地址，不产生多余留白。
 func TestFormatTitleWithoutMetrics(t *testing.T) {
+	t.Parallel()
+
 	require.Equal(t, "1.2.3.4:443", formatTitle("1.2.3.4:443", 0, ""))
 	require.Equal(t, "1.2.3.4:443", formatTitle("1.2.3.4:443", -1, ""))
 }
@@ -134,6 +142,8 @@ func TestFormatTitleWithoutMetrics(t *testing.T) {
 // TestFormatTitleMetricsVariants 只要有一项指标可用就排到指标列：
 // 只有 RTT、只有下载速度、以及两者都有。
 func TestFormatTitleMetricsVariants(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name      string
 		rttMs     float64
@@ -156,6 +166,8 @@ func TestFormatTitleMetricsVariants(t *testing.T) {
 // 比例字体下 "1" 比 "0" 窄、"." 比 "m" 窄，宽度表必须跟着走，
 // 否则列对齐会在不同地址上产生可见偏差。
 func TestMeasureTextWidthFollowsRealGlyphWidths(t *testing.T) {
+	t.Parallel()
+
 	require.Less(t, measureTextWidth("1"), measureTextWidth("0"))
 	require.Less(t, measureTextWidth("."), measureTextWidth("m"))
 	require.Less(t, measureTextWidth("i"), measureTextWidth("W"))
@@ -166,6 +178,8 @@ func TestMeasureTextWidthFollowsRealGlyphWidths(t *testing.T) {
 // 13pt 菜单字体下 CJK 字形实测 ≈12.9pt，不能被当成半角（≈7pt）而低估一半——
 // 低估会让该项指标列实际偏右，超长 IDN 也不会触发截断。
 func TestMeasureTextWidthEstimatesIDNAsFullWidth(t *testing.T) {
+	t.Parallel()
+
 	cjk := measureTextWidth("例")
 	require.InDelta(t, 12.9, cjk, 1.0, "CJK 必须按全角估算")
 	require.Greater(t, cjk, 1.5*measureTextWidth("a"), "全角字形应明显宽于半角字母")
@@ -179,6 +193,8 @@ func TestMeasureTextWidthEstimatesIDNAsFullWidth(t *testing.T) {
 
 // TestTruncateToWidthKeepsEllipsis 超长地址截断后必须带省略号，且宽度不再超限。
 func TestTruncateToWidthKeepsEllipsis(t *testing.T) {
+	t.Parallel()
+
 	addr := "a.very.long.hostname.for.a.branch.office.example.com:443"
 	got := truncateToWidth(addr, maxAddressWidth, "…")
 	require.True(t, strings.HasSuffix(got, "…"), "截断结果需要省略号: %q", got)
@@ -190,6 +206,8 @@ func TestTruncateToWidthKeepsEllipsis(t *testing.T) {
 // TestTitlePadNeverOvershoots 填充只允许为了更接近目标宽度而略微超过（最多半个
 // 最细一级空格），不允许出现"把地址推过目标列"的粗放填充。
 func TestTitlePadNeverOvershoots(t *testing.T) {
+	t.Parallel()
+
 	for _, target := range []float64{3, 7.5, 12.9, 30.2, 61.7, 120.4, 167.9} {
 		pad := titlePad(target)
 		width := titleWidthForTest(pad)

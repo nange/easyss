@@ -57,7 +57,7 @@ func releaseFifoOpen(fifoPath string, ch <-chan fifoOpenResult) {
 
 // helper 装路由前取得它，直到清理完成退出才释放；内核在进程退出（含 kill -9）时释放 flock，
 // 因此"能否立刻拿到这把锁"就是"helper 是否还在"。
-var tunControlLockPath = "/tmp/easyss-tun.lock"
+const tunControlLockPath = "/tmp/easyss-tun.lock"
 
 const (
 	// 删除路由是幂等的，而残留一条分流默认路由就会让全机 IPv4 流量黑洞。
@@ -100,7 +100,8 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	log.Info("[TUN-HELPER] config received", "device", cfg.Device)
 
 	// 上一个 helper 若仍在清理，这里会阻塞到它退出、内核释放锁。
-	lockFile, err := os.OpenFile(tunControlLockPath, os.O_CREATE|os.O_RDWR, 0644)
+	ops := defaultTunOps()
+	lockFile, err := os.OpenFile(ops.lockPath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return giveUp("open lock file", err)
 	}
@@ -130,7 +131,7 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	// 残留一条分流默认路由，全机 IPv4 流量就会进入没人读的设备，用户看到的是"停止 TUN 后断网"。
 	defer func() {
 		log.Info("[TUN-HELPER] cleaning up routes and DNS")
-		if err := cleanupTunRoutes(actualDevice, cfg); err != nil {
+		if err := cleanupTunRoutes(ops, actualDevice, cfg); err != nil {
 			log.Error("[TUN-HELPER] cleanup left TUN routes behind", "device", actualDevice, "err", err)
 		}
 		_ = util.RestoreSysDNSForTun(actualDevice, originDNS)
@@ -222,7 +223,7 @@ func scriptArgsFor(cfg *proxy.TunConfig) tun.ScriptArgs {
 
 // 删除路由是幂等的，没清掉就重试。返回的错误绝不能改变退出码：父进程把非零退出码理解为
 // "提权/启动失败"。
-func cleanupTunRoutes(device string, cfg *proxy.TunConfig) error {
+func cleanupTunRoutes(ops tunOps, device string, cfg *proxy.TunConfig) error {
 	var lastErr error
 
 	for attempt := 1; attempt <= tunCleanupAttempts; attempt++ {
@@ -233,7 +234,7 @@ func cleanupTunRoutes(device string, cfg *proxy.TunConfig) error {
 
 		removeLeftoverDevice(device)
 
-		detail, leftover := tunRouteResidue(device, cfg.TunGW)
+		detail, leftover := ops.probe(device, cfg.TunGW)
 		if !leftover {
 			return nil
 		}
@@ -271,10 +272,6 @@ func probeRoutedViaDevice(probe []string, cmd func(string) (string, error), mark
 	}
 	return out, err
 }
-
-// 执行一次路由表查询（darwin 的 `route -n get`、linux 的 `ip route get`）。变量以便测试注入
-// 输出：真实的残留路由需要 root 才能造出来。
-var routeProbeCmd = util.Command
 
 // 按空白分词后整体比较，不用子串匹配：否则 "dev tun" 会命中 "dev tun0"，误判成残留要付
 // 一次多余的提权回滚。

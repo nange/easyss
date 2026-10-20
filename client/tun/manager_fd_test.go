@@ -2,6 +2,9 @@
 
 package tun
 
+// 本文件的测试必须串行：它们通过 fd 号判断"文件描述符是否仍被持有"，而 fd 号是
+// 进程级资源——并行测试关掉一个 fd 后，另一个测试新建的文件会复用同一个号码。
+
 import (
 	"context"
 	"errors"
@@ -38,17 +41,14 @@ func fdStillOpen(fd int) bool {
 // TestManagerReleasesTheHelperFDWhenCancelledEarly 守住早于 Start 的取消失败要关掉 fd：
 // 否则设备随 fd 活到进程退出，helper 的关闭脚本还会因 "device or resource busy" 删不掉它。
 func TestManagerReleasesTheHelperFDWhenCancelledEarly(t *testing.T) {
-	stubManagerHooks(t)
-
 	var engineStarts int
-	engineStartFn = func() error { engineStarts++; return nil }
-
 	fd := openTestFD(t)
-	m := New(Config{
+	m := newStubManager(Config{
 		Socks5Addr: "socks5://127.0.0.1:1",
 		Device:     "tun-easyss-test",
 		DeviceFD:   fd,
 	})
+	m.plat.engineStart = func() error { engineStarts++; return nil }
 
 	// Stop 先到、Start 后到：manager 已登记，而 Start 的 goroutine 还没被调度。
 	m.Stop()
@@ -97,16 +97,15 @@ func TestManagerRejectsInvalidConfigBeforeTakingTheFD(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			stubManagerHooks(t)
-
 			var engineStarts int
-			engineStartFn = func() error { engineStarts++; return nil }
-
 			fd := openTestFD(t)
 			tc.cfg.Device = "tun-easyss-test"
 			tc.cfg.DeviceFD = fd
 
-			err := New(tc.cfg).Start()
+			m := newStubManager(tc.cfg)
+			m.plat.engineStart = func() error { engineStarts++; return nil }
+
+			err := m.Start()
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tc.want)
 
@@ -122,16 +121,13 @@ func TestManagerRejectsInvalidConfigBeforeTakingTheFD(t *testing.T) {
 // engine.Start 后 fd 归 tun2socks（parseDevice 包装设备，失败时也可能已关闭），
 // Manager 再关就是猜。
 func TestManagerLeavesTheFDOwnershipToTheEngineOnceItStarts(t *testing.T) {
-	stubManagerHooks(t)
-
-	engineStartFn = func() error { return errEngineRejected }
-
 	fd := openTestFD(t)
-	m := New(Config{
+	m := newStubManager(Config{
 		Socks5Addr: "socks5://127.0.0.1:1",
 		Device:     "tun-easyss-test",
 		DeviceFD:   fd,
 	})
+	m.plat.engineStart = func() error { return errEngineRejected }
 
 	require.Error(t, m.Start())
 

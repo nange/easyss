@@ -553,7 +553,7 @@ func (a *TrayApp) changeLogLevel(level string) {
 
 // 失败只写日志会让菜单项看起来像没反应，因此每个失败也以通知呈现。
 func (a *TrayApp) catLogs() {
-	fallback, err := openLogFile(a.currentConfig().Log.FilePath)
+	fallback, err := a.deps.log.openLogFile(a.currentConfig().Log.FilePath)
 	switch {
 	case err != nil:
 		log.Error("[SYSTRAY] cat log", "err", err)

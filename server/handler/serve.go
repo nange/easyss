@@ -133,7 +133,7 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 
 	// 拒绝 LAN/私网目标以防 SSRF，且必须在响应提交之前完成。解析出的地址一路传给拨号路径，拨号
 	// 只拨这些字面地址，DNS-rebinding 没有可翻转的第二次解析。解析失败不拒绝，拨号层会重新解析校验。
-	addrs, err := resolveHost(r.Context(), target)
+	addrs, err := h.deps.resolve(r.Context(), target)
 	if err == nil {
 		if lan := util.FirstLANAddr(addrs); lan.IsValid() {
 			log.Error("[SERVER] rejected LAN target", "target", target, "resolved", lan, "remote", r.RemoteAddr)

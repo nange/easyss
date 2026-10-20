@@ -73,18 +73,17 @@ var termLaunchers = []termLauncher{
 	{"st", []string{"-e"}, termStyleArgs},
 }
 
-// lookPath 即 exec.LookPath，是变量以便测试用一组模拟的已安装终端解析该表。
-var lookPath = exec.LookPath
-
-// openWithDefaultApp 是变量，以便测试无需弹出 GUI 窗口即可覆盖回退逻辑。
-var openWithDefaultApp = func(path string) error {
-	argv := sessionLaunch([]string{"xdg-open", path})
-
-	return util.StartDetached(argv)
+func defaultLogOpener() logOpener {
+	return logOpener{
+		lookPath: exec.LookPath,
+		open: func(path string) error {
+			return util.StartDetached(sessionLaunch([]string{"xdg-open", path}))
+		},
+	}
 }
 
 // fallback 报告是否走了快照路径，调用方据此告知用户日志为何不是实时更新。
-func openLogFile(filePath string) (fallback bool, err error) {
+func (l logOpener) openLogFile(filePath string) (fallback bool, err error) {
 	if strings.TrimSpace(filePath) == "" {
 		return false, errLogFileNotConfigured
 	}
@@ -96,7 +95,7 @@ func openLogFile(filePath string) (fallback bool, err error) {
 
 	switch runtime.GOOS {
 	case "linux":
-		return openLogFileLinux(filePath)
+		return l.openLogFileLinux(filePath)
 	case "windows":
 		argv := []string{"cmd", "/c", "start", "powershell", "-NoExit", "-Command",
 			fmt.Sprintf("Get-Content -Wait -Tail 100 '%s'", filePath)}
@@ -113,8 +112,8 @@ func openLogFile(filePath string) (fallback bool, err error) {
 
 // openLogFileLinux 在终端中实时跟踪日志，找不到任何终端时回退到快照查看器，这样在最小化
 // 的桌面上菜单项仍能展示内容。
-func openLogFileLinux(filePath string) (fallback bool, err error) {
-	argv, resolveErr := logViewerArgv(filePath)
+func (l logOpener) openLogFileLinux(filePath string) (fallback bool, err error) {
+	argv, resolveErr := l.logViewerArgv(filePath)
 	if resolveErr == nil {
 		argv = sessionLaunch(argv)
 		startErr := util.StartDetached(argv)
@@ -126,7 +125,7 @@ func openLogFileLinux(filePath string) (fallback bool, err error) {
 	}
 	log.Warn("[SYSTRAY] cannot open the log in a terminal", "err", resolveErr)
 
-	if snapshotErr := openLogSnapshot(filePath); snapshotErr != nil {
+	if snapshotErr := l.openLogSnapshot(filePath); snapshotErr != nil {
 		return false, errors.Join(resolveErr, snapshotErr)
 	}
 
@@ -134,21 +133,21 @@ func openLogFileLinux(filePath string) (fallback bool, err error) {
 }
 
 // 优先用可用的 $TERMINAL，否则用 termLaunchers 中第一个已安装的条目。
-func logViewerArgv(filePath string) ([]string, error) {
+func (l logOpener) logViewerArgv(filePath string) ([]string, error) {
 	viewer := []string{"tail", "-n", strconv.Itoa(logTailLines), "-f", filePath}
 
-	if argv, ok := terminalFromEnv(viewer); ok {
+	if argv, ok := l.terminalFromEnv(viewer); ok {
 		return argv, nil
 	}
 
 	checked := make([]string, 0, len(termLaunchers))
-	for _, l := range termLaunchers {
-		checked = append(checked, l.bin)
-		bin, err := lookPath(l.bin)
+	for _, entry := range termLaunchers {
+		checked = append(checked, entry.bin)
+		bin, err := l.lookPath(entry.bin)
 		if err != nil {
 			continue
 		}
-		return launcherArgv(bin, l, viewer), nil
+		return launcherArgv(bin, entry, viewer), nil
 	}
 
 	return nil, fmt.Errorf("%w (tried $TERMINAL and %s)", errNoTerminalEmulator, strings.Join(checked, ", "))
@@ -156,7 +155,7 @@ func logViewerArgv(filePath string) ([]string, error) {
 
 // terminalFromEnv 解析 $TERMINAL。已知终端保留其表条目的参数风格（二进制名之后的额外单词
 // 会被丢弃，因为它们会落在命令分隔符之后）；未知终端按 xterm 风格的 -e 约定传入命令。
-func terminalFromEnv(viewer []string) ([]string, bool) {
+func (l logOpener) terminalFromEnv(viewer []string) ([]string, bool) {
 	term := strings.TrimSpace(os.Getenv("TERMINAL"))
 	if term == "" {
 		return nil, false
@@ -166,19 +165,19 @@ func terminalFromEnv(viewer []string) ([]string, bool) {
 	base := filepath.Base(fields[0])
 
 	known := false
-	for _, l := range termLaunchers {
-		if l.bin != base {
+	for _, entry := range termLaunchers {
+		if entry.bin != base {
 			continue
 		}
 		known = true
-		if bin, err := lookPath(fields[0]); err == nil {
-			return launcherArgv(bin, l, viewer), true
+		if bin, err := l.lookPath(fields[0]); err == nil {
+			return launcherArgv(bin, entry, viewer), true
 		}
 		break
 	}
 
 	if !known {
-		if bin, err := lookPath(fields[0]); err == nil {
+		if bin, err := l.lookPath(fields[0]); err == nil {
 			generic := termLauncher{args: []string{"-e"}, style: termStyleArgs}
 			return launcherArgv(bin, generic, viewer), true
 		}
@@ -219,7 +218,7 @@ func sessionLaunch(argv []string) []string {
 }
 
 // 没有终端可用时的最后手段。
-func openLogSnapshot(filePath string) error {
+func (l logOpener) openLogSnapshot(filePath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), logSnapshotTimeout)
 	defer cancel()
 
@@ -242,7 +241,7 @@ func openLogSnapshot(filePath string) error {
 		return fmt.Errorf("chmod log snapshot: %w", err)
 	}
 
-	if err := openWithDefaultApp(f.Name()); err != nil {
+	if err := l.open(f.Name()); err != nil {
 		return fmt.Errorf("open %s: %w", f.Name(), err)
 	}
 	log.Info("[SYSTRAY] log snapshot opened", "file", f.Name())

@@ -10,45 +10,60 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-// sysDNSFunc 负责发现系统 DNS 服务器，可在测试中覆盖。
-var sysDNSFunc = util.SysDNS
-
-// systemDNSServersFunc 返回格式化后的系统 DNS 服务器列表，供回退路径使用，
-// 可在测试中覆盖。
-var systemDNSServersFunc = SystemDNSServers
-
 const systemDNSCacheTTL = 5 * time.Minute
 
-var (
-	systemDNSMu     sync.Mutex
-	systemDNSCached []string
-	systemDNSTime   time.Time
-)
+// SystemDNS 发现并缓存系统 DNS 服务器。缓存属于实例：测试构造独立实例即可避免
+// 进程级状态互相污染。
+type SystemDNS struct {
+	discover func() ([]string, error)
 
-// SystemDNSServers 以 host:port 返回系统 DNS 服务器，惰性发现并短暂缓存。空结果也缓存，
+	mu     sync.Mutex
+	cached []string
+	at     time.Time
+}
+
+func NewSystemDNS(discover func() ([]string, error)) *SystemDNS {
+	return &SystemDNS{discover: discover}
+}
+
+// Servers 以 host:port 返回系统 DNS 服务器，惰性发现并短暂缓存。空结果也缓存，
 // 失败发现（例如缓慢的 ipconfig）才不会在每次查询时重跑。
-func SystemDNSServers() []string {
-	systemDNSMu.Lock()
-	defer systemDNSMu.Unlock()
+func (s *SystemDNS) Servers() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	if time.Since(systemDNSTime) < systemDNSCacheTTL {
-		return systemDNSCached
+	if time.Since(s.at) < systemDNSCacheTTL {
+		return s.cached
 	}
 
-	servers, err := sysDNSFunc()
+	servers, err := s.discover()
 	if err != nil {
 		log.Warn("[DNS] get system dns servers", "err", err)
 	}
 	var addrs []string
-	for _, s := range servers {
-		if s == "" {
+	for _, server := range servers {
+		if server == "" {
 			continue
 		}
-		addrs = append(addrs, net.JoinHostPort(s, "53"))
+		addrs = append(addrs, net.JoinHostPort(server, "53"))
 	}
-	systemDNSCached = addrs
-	systemDNSTime = time.Now()
+	s.cached = addrs
+	s.at = time.Now()
 	return addrs
+}
+
+func (s *SystemDNS) reset() {
+	s.mu.Lock()
+	s.cached = nil
+	s.at = time.Time{}
+	s.mu.Unlock()
+}
+
+// defaultSystemDNS 是进程的唯一系统 DNS 发现器；ResetResolveState 清的就是它的缓存。
+var defaultSystemDNS = NewSystemDNS(util.SysDNS)
+
+func SystemDNSServers() []string {
+	return defaultSystemDNS.Servers()
 }
 
 // 把内置分支的截止时间提前一个 ResolveItemTimeout，给系统 DNS 兜底留出至少一个条目的预算；

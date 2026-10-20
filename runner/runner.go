@@ -31,21 +31,33 @@ var ErrSocksRequired = errors.New("http proxy requires socks_port to be enabled"
 // errors.Is 识别并提示"网络可能尚未就绪"。
 var ErrServerDomainUnresolved = errors.New("server domain unresolved")
 
-// serverStartupResolveTimeout 取 dns.PreResolveTimeout（预解析总预算的唯一事实来源，
-// client.New 与 TUN helper 共用）。退避区间是变量，以便测试缩短。
-var (
-	serverStartupResolveTimeout = dns.PreResolveTimeout
-	serverDomainRetryBase       = time.Second
-	serverDomainRetryMax        = 15 * time.Second
-)
-
-// 包级变量以便测试注入确定性的失败。
-var prePopulateServerDomain = func(cache *dns.Cache, ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error {
-	return cache.PrePopulateWithFallback(ctx, domain, dnsServers, requireIPv4)
+// options 是一次 Run 的可注入依赖：解析策略、退避窗口与 forward DNS 监听地址。
+// 生产路径用 defaultOptions，测试构造自己的实例即可，无需改动包级状态。
+type options struct {
+	// startupResolveTimeout 取 dns.PreResolveTimeout（预解析总预算的唯一事实来源，
+	// client.New 与 TUN helper 共用）。
+	startupResolveTimeout time.Duration
+	retryBase             time.Duration
+	retryMax              time.Duration
+	prePopulate           func(cache *dns.Cache, ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error
+	reset                 func()
+	// forwardDNSListenAddr 刻意监听所有网卡的 53 端口：该功能面向"把 easyss 部署在
+	// 路由器上、LAN 设备的 DNS 指向它"的场景，只监听回环时 LAN 设备够不到。
+	forwardDNSListenAddr string
 }
 
-// 包级变量以便测试注入空操作。
-var resetResolveState = dns.ResetResolveState
+func defaultOptions() options {
+	return options{
+		startupResolveTimeout: dns.PreResolveTimeout,
+		retryBase:             time.Second,
+		retryMax:              15 * time.Second,
+		prePopulate: func(cache *dns.Cache, ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error {
+			return cache.PrePopulateWithFallback(ctx, domain, dnsServers, requireIPv4)
+		},
+		reset:                dns.ResetResolveState,
+		forwardDNSListenAddr: ":53",
+	}
+}
 
 // Core 持有一次客户端会话的全部组件，并唯一负责它们的关闭顺序。Client 是传输层与
 // 路由引擎的所有者，其余服务器只借用它们，因此调用方只需 Core.Stop。
@@ -77,9 +89,15 @@ type Core struct {
 	// 取消进行中的后台解析尝试，受 retryMu 保护。
 	retryMu     sync.Mutex
 	retryCancel context.CancelFunc
+
+	opts options
 }
 
 func Run(cfg *config.ClientConfig) (*Core, error) {
+	return runWithOptions(cfg, defaultOptions())
+}
+
+func runWithOptions(cfg *config.ClientConfig, opts options) (*Core, error) {
 	start := time.Now()
 
 	cli, err := client.New(cfg)
@@ -113,6 +131,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		StartupWarn:   cli.StartupWarning(),
 		done:          make(chan struct{}),
 		domainReady:   make(chan struct{}),
+		opts:          opts,
 	}
 
 	// 在派发任何服务器 goroutine 之前同步绑定所有监听地址：监听失败（端口占用、
@@ -159,7 +178,7 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		listeners = append(listeners, ln)
 	}
 	if cfg.Local.EnableForwardDNS {
-		dnsAddr = forwardDNSListenAddr()
+		dnsAddr = opts.forwardDNSListenAddr
 		pc, err := net.ListenPacket("udp", dnsAddr)
 		if err != nil {
 			return nil, forwardDNSListenError(dnsAddr, err)
@@ -253,13 +272,13 @@ func Run(cfg *config.ClientConfig) (*Core, error) {
 		c.StartupWarn = errors.Join(c.StartupWarn,
 			fmt.Errorf("%w: %s: %w", ErrServerDomainUnresolved, host, err))
 		go c.retryServerDomain(cfg, serverDomainRetry{
-			prePopulate: prePopulateServerDomain,
-			reset:       resetResolveState,
+			prePopulate: opts.prePopulate,
+			reset:       opts.reset,
 			dnsServers:  config.DirectDNSServers,
 			requireIPv4: cfg.Routing.IPV6Rule != "enable",
-			timeout:     serverStartupResolveTimeout,
-			base:        serverDomainRetryBase,
-			max:         serverDomainRetryMax,
+			timeout:     opts.startupResolveTimeout,
+			base:        opts.retryBase,
+			max:         opts.retryMax,
 		})
 	} else {
 		c.markServerDomainReady()
@@ -298,10 +317,10 @@ func (c *Core) resolveServerDomain(cfg *config.ClientConfig) error {
 	}
 
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), serverStartupResolveTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), c.opts.startupResolveTimeout)
 	defer cancel()
 
-	err := prePopulateServerDomain(c.dnsCache, ctx, svr.Host, config.DirectDNSServers,
+	err := c.opts.prePopulate(c.dnsCache, ctx, svr.Host, config.DirectDNSServers,
 		cfg.Routing.IPV6Rule != "enable")
 	if err != nil {
 		log.Warn("[EASYSS] server domain resolution failed at startup",
@@ -465,12 +484,6 @@ func (c *Core) Done() <-chan struct{} {
 		return nil
 	}
 	return c.done
-}
-
-// forwardDNSListenAddr 刻意监听所有网卡的 53 端口：该功能面向"把 easyss 部署在路由器
-// 上、LAN 设备的 DNS 指向它"的场景，只监听回环时 LAN 设备够不到。变量以便测试改端口。
-var forwardDNSListenAddr = func() string {
-	return ":53"
 }
 
 // forwardDNSListenError 把排查方向写进错误信息：53 端口常被 dnsmasq 或

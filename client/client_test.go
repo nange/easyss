@@ -55,6 +55,8 @@ func startLocalDNSServer(t *testing.T) (string, func()) {
 }
 
 func TestResolveServerIPV6IPServer(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.ClientConfig{
 		Servers: []*config.ServerProfile{{Host: "2001:db8::1", Default: true}},
 	}
@@ -179,6 +181,8 @@ func newDialTestClient(t *testing.T, ipv6Rule, serverAddr string) *Client {
 // 解析时，传输层仍然能连上——它拨的是预解析注入的字面 IP（而 TLS 的 SNI 仍来自
 // addr 里的域名）。
 func TestDialWithConfigUsesServerIPs(t *testing.T) {
+	t.Parallel()
+
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })
@@ -199,6 +203,8 @@ func TestDialWithConfigUsesServerIPs(t *testing.T) {
 // TestDialWithConfigFallsBackWhenServerIPsFail 验证预解析地址拨不通时，本次回退到
 // 域名拨号（系统解析器），但预解析结果本身保留。
 func TestDialWithConfigFallsBackWhenServerIPsFail(t *testing.T) {
+	t.Parallel()
+
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })
@@ -224,15 +230,14 @@ func TestDialWithConfigFallsBackWhenServerIPsFail(t *testing.T) {
 // 尝试预解析的字面地址，而不是已经永久退化成系统解析器：后者正是原实现在一次瞬态
 // 失败（网络切换、接口绑定过期）之后的行为。
 func TestDialWithConfigKeepsServerIPsAcrossFailures(t *testing.T) {
-	origBound := boundDialContext
-	t.Cleanup(func() { boundDialContext = origBound })
+	t.Parallel()
 
-	c := newTestClient(t, true) // TUN 模式：dialAddr 走可注入的 boundDialContext
+	c := newTestClient(t, true) // TUN 模式：dialAddr 走可注入的绑定拨号
 	c.serverDomain = "server.invalid"
 	c.SetServerIPs([]string{"10.255.255.1"})
 
 	var pinnedDials, domainDials int
-	boundDialContext = func(_ *Client, _ context.Context, _ string, addr string) (net.Conn, error) {
+	c.sys.dialBound = func(_ *Client, _ context.Context, _ string, addr string) (net.Conn, error) {
 		host, _, _ := net.SplitHostPort(addr)
 		if host == "10.255.255.1" {
 			pinnedDials++
@@ -257,6 +262,8 @@ func TestDialWithConfigKeepsServerIPsAcrossFailures(t *testing.T) {
 // TestWithDomainFallbackReserve 验证 pin 阶段总预算的切分：只有在总预算大于一次
 // 拨号预算（serverIPDialTimeout）时才提前扣掉它，保证域名回退至少有一次机会。
 func TestWithDomainFallbackReserve(t *testing.T) {
+	t.Parallel()
+
 	t.Run("no deadline is left untouched", func(t *testing.T) {
 		ctx, cancel := withDomainFallbackReserve(context.Background())
 		defer cancel()
@@ -301,16 +308,15 @@ func TestWithDomainFallbackReserve(t *testing.T) {
 // 的部分，域名回退才有机会成功。没有这层预留，域名回退会复用同一个已过期的
 // context 在毫秒内失败——即使操作系统解析器完全可用。
 func TestDialWithConfigReservesBudgetForDomainFallback(t *testing.T) {
-	origBound := boundDialContext
-	t.Cleanup(func() { boundDialContext = origBound })
+	t.Parallel()
 
-	c := newTestClient(t, true) // TUN 模式：dialAddr 走可注入的 boundDialContext
+	c := newTestClient(t, true) // TUN 模式：dialAddr 走可注入的绑定拨号
 	c.serverDomain = "server.invalid"
 	c.SetServerIPs([]string{"10.255.255.1"})
 
 	var domainDials int
 	pinnedBudget := make(chan error, 1)
-	boundDialContext = func(_ *Client, ctx context.Context, _ string, addr string) (net.Conn, error) {
+	c.sys.dialBound = func(_ *Client, ctx context.Context, _ string, addr string) (net.Conn, error) {
 		host, _, _ := net.SplitHostPort(addr)
 		if host == "10.255.255.1" {
 			<-ctx.Done() // 黑洞：只收不回，一直等到 pin 阶段预算耗尽
@@ -344,12 +350,11 @@ func TestDialWithConfigReservesBudgetForDomainFallback(t *testing.T) {
 // TestDialServerIPsStopsWhenBudgetExhausted 验证 pin 阶段预算耗尽后不再逐个尝试
 // 剩余字面地址：它们只会各记一次瞬时失败，剩余预算要留给域名回退。
 func TestDialServerIPsStopsWhenBudgetExhausted(t *testing.T) {
-	origBound := boundDialContext
-	t.Cleanup(func() { boundDialContext = origBound })
+	t.Parallel()
 
 	c := newTestClient(t, true)
 	var calls int
-	boundDialContext = func(_ *Client, _ context.Context, _, _ string) (net.Conn, error) {
+	c.sys.dialBound = func(_ *Client, _ context.Context, _, _ string) (net.Conn, error) {
 		calls++
 		return nil, errors.New("unreachable")
 	}

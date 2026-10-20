@@ -56,25 +56,28 @@ func TestCloseTunDevRunsTheCloseScript(t *testing.T) {
 // TestStartRollbackAfterCreateFailure 守住回滚顺序"停引擎 → 跑关闭脚本 → 恢复系统 DNS"：
 // 漏掉 DNS 恢复会把系统 DNS 一直指向 TUN 解析器。
 func TestStartRollbackAfterCreateFailure(t *testing.T) {
+	t.Parallel()
+
 	var order []string
 
-	stubStartHooks(t)
-	saveAndSetDNSStepFn = func(m *Manager) error {
+	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "tun-easyss-test"})
+	stubStartHooks(m)
+	m.plat.saveDNS = func(m *Manager) error {
 		order = append(order, "save-dns")
 		// 这是 saveAndSetDNSStep 在改动系统 DNS 后记录的内容。
 		m.originDNS = []string{"192.168.1.1"}
 		m.dnsChanged = true
 		return nil
 	}
-	createTunDevFn = func(*Manager) error {
+	m.plat.createDev = func(*Manager) error {
 		order = append(order, "create")
 		return errCreateFailed
 	}
-	closeTunDevFn = func(*Manager) error {
+	m.plat.closeDev = func(*Manager) error {
 		order = append(order, "close")
 		return nil
 	}
-	restoreDNSStepFn = func(m *Manager) error {
+	m.plat.restoreDNS = func(m *Manager) error {
 		order = append(order, "restore-dns")
 		require.True(t, m.dnsChanged,
 			"the failure path must restore the DNS it changed, and dnsChanged is what restoreDNSStep acts on")
@@ -86,8 +89,6 @@ func TestStartRollbackAfterCreateFailure(t *testing.T) {
 	if manageSystemDNS() {
 		want = []string{"save-dns", "create", "close", "restore-dns"}
 	}
-
-	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "tun-easyss-test"})
 
 	err := m.Start()
 	require.Error(t, err, "a failed create script must fail the start")
@@ -101,27 +102,27 @@ func TestStartRollbackAfterCreateFailure(t *testing.T) {
 // TestStartRollbackSkipsUntouchedDNS 守住 DNS 回滚的另一半：没改过系统 DNS 的启动
 // 不得把它写回去，darwin 上恢复 "empty" 会清空 DHCP 提供的 DNS 服务器。
 func TestStartRollbackSkipsUntouchedDNS(t *testing.T) {
+	t.Parallel()
+
 	if !manageSystemDNS() {
 		t.Skip("this platform does not switch the system DNS for TUN")
 	}
 
 	var restoreCalled bool
 
-	stubStartHooks(t)
-	saveAndSetDNSStepFn = func(m *Manager) error {
+	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "tun-easyss-test"})
+	stubStartHooks(m)
+	m.plat.saveDNS = func(m *Manager) error {
 		// darwin 手工配置了 DNS：dnsChanged 为 false，无需恢复。
 		m.originDNS = []string{"192.168.1.1"}
 		m.dnsChanged = false
 		return nil
 	}
-	createTunDevFn = func(*Manager) error { return errCreateFailed }
-	closeTunDevFn = func(*Manager) error { return nil }
-	restoreDNSStepFn = func(*Manager) error {
+	m.plat.createDev = func(*Manager) error { return errCreateFailed }
+	m.plat.restoreDNS = func(*Manager) error {
 		restoreCalled = true
 		return nil
 	}
-
-	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "tun-easyss-test"})
 	require.Error(t, m.Start())
 
 	require.True(t, restoreCalled, "the failure path calls the restore step")
@@ -153,12 +154,11 @@ func TestStartCreateScriptFailureEndToEnd(t *testing.T) {
 	scripts.CloseTunFilename = "close_tun_dev_test.sh"
 	scripts.CloseTunBytes = []byte("#!/bin/sh\necho ran > \"" + closeRan + "\"\n")
 
-	stubStartHooks(t)
-	// 这里必须是真实实现：本测试验证的正是写脚本、经平台解释器运行、读回退出码这条管道。
-	createTunDevFn = func(m *Manager) error { return m.createTunDevAndSetIPRoute() }
-	closeTunDevFn = func(m *Manager) error { return m.closeTunDevAndDelIPRoute() }
-
 	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "tun-easyss-test"})
+	stubStartHooks(m)
+	// 这里必须是真实实现：本测试验证的正是写脚本、经平台解释器运行、读回退出码这条管道。
+	m.plat.createDev = func(m *Manager) error { return m.createTunDevAndSetIPRoute() }
+	m.plat.closeDev = func(m *Manager) error { return m.closeTunDevAndDelIPRoute() }
 	err := m.Start()
 	require.Error(t, err, "the create script exited 1: Start must not report a running tunnel")
 	require.Contains(t, err.Error(), "create device")
@@ -169,31 +169,16 @@ func TestStartCreateScriptFailureEndToEnd(t *testing.T) {
 	require.NoError(t, statErr, "the close script did not run: the routes of the failed start would stay behind")
 }
 
-// stubStartHooks 用空操作钩子替换引擎、就绪停顿、DNS 步骤与平台脚本，并在
-// Cleanup 里复原：它避免真的启动 tun2socks（要打开 TUN 设备、需要 root）。
-// 需要钩子做事的测试在本函数之后再赋值。
-func stubStartHooks(t *testing.T) {
-	t.Helper()
-
-	origStart, origStop := engineStartFn, engineStopFn
-	origDelay := settleDelay
-	origSave, origRestore := saveAndSetDNSStepFn, restoreDNSStepFn
-	origCreate, origClose := createTunDevFn, closeTunDevFn
-
-	engineStartFn = func() error { return nil }
-	engineStopFn = func(string) {}
-	settleDelay = func() {}
-	saveAndSetDNSStepFn = func(*Manager) error { return nil }
-	restoreDNSStepFn = func(*Manager) error { return nil }
-	createTunDevFn = func(*Manager) error { return nil }
-	closeTunDevFn = func(*Manager) error { return nil }
-
-	t.Cleanup(func() {
-		engineStartFn, engineStopFn = origStart, origStop
-		settleDelay = origDelay
-		saveAndSetDNSStepFn, restoreDNSStepFn = origSave, origRestore
-		createTunDevFn, closeTunDevFn = origCreate, origClose
-	})
+// stubStartHooks 用空操作替换引擎、就绪停顿、DNS 步骤与平台脚本：不真正启动
+// tun2socks（要打开 TUN 设备、需要 root）。需要钩子做事的测试在本函数之后再赋值。
+func stubStartHooks(m *Manager) {
+	m.plat.engineStart = func() error { return nil }
+	m.plat.engineStop = func(string) {}
+	m.plat.settle = func() {}
+	m.plat.saveDNS = func(*Manager) error { return nil }
+	m.plat.restoreDNS = func(*Manager) error { return nil }
+	m.plat.createDev = func(*Manager) error { return nil }
+	m.plat.closeDev = func(*Manager) error { return nil }
 }
 
 // closeScriptName 返回按平台分支交给解释器执行的关闭脚本名。

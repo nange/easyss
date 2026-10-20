@@ -28,23 +28,37 @@ const (
 // 平台创建脚本失败的标记：托盘靠 errors.Is 区分，而不是匹配错误文本。
 var ErrCreateDevice = errors.New("tun: create device")
 
-// 测试替换点：平台脚本与 DNS 设置只能以 root 真实运行。
-var (
-	createTunDevFn      = func(m *Manager) error { return m.createTunDevAndSetIPRoute() }
-	closeTunDevFn       = func(m *Manager) error { return m.closeTunDevAndDelIPRoute() }
-	saveAndSetDNSStepFn = func(m *Manager) error { return m.saveAndSetDNSStep() }
-	restoreDNSStepFn    = func(m *Manager) error { return m.restoreDNSStep() }
-	engineStartFn       = func() error { return engine.Start() }
-	engineStopFn        = func(reason string) { stopEngine(reason) }
-	settleDelay         = func() { time.Sleep(500 * time.Millisecond) }
-	ifaceMTU            = func(name string) (int, error) {
-		iface, err := net.InterfaceByName(name)
-		if err != nil {
-			return 0, err
-		}
-		return iface.MTU, nil
+// platform 是 TUN 会话的平台操作：设备脚本、系统 DNS 与 tun2socks 引擎。归 Manager
+// 所有，测试构造自己的实例即可注入，无需改动包级状态。
+type platform struct {
+	createDev   func(*Manager) error
+	closeDev    func(*Manager) error
+	saveDNS     func(*Manager) error
+	restoreDNS  func(*Manager) error
+	engineStart func() error
+	engineStop  func(string)
+	settle      func()
+	ifaceMTU    func(string) (int, error)
+}
+
+func defaultPlatform() platform {
+	return platform{
+		createDev:   func(m *Manager) error { return m.createTunDevAndSetIPRoute() },
+		closeDev:    func(m *Manager) error { return m.closeTunDevAndDelIPRoute() },
+		saveDNS:     func(m *Manager) error { return m.saveAndSetDNSStep() },
+		restoreDNS:  func(m *Manager) error { return m.restoreDNSStep() },
+		engineStart: func() error { return engine.Start() },
+		engineStop:  func(reason string) { stopEngine(reason) },
+		settle:      func() { time.Sleep(500 * time.Millisecond) },
+		ifaceMTU: func(name string) (int, error) {
+			iface, err := net.InterfaceByName(name)
+			if err != nil {
+				return 0, err
+			}
+			return iface.MTU, nil
+		},
 	}
-)
+}
 
 type Config struct {
 	Socks5Addr     string
@@ -101,6 +115,8 @@ type Manager struct {
 
 	// 整个 Stop 串行化：并发的第二个 Stop 必须等第一次拆除完成，否则调用方会以为 TUN 已经停了。
 	stopMu sync.Mutex
+
+	plat platform
 }
 
 func New(cfg Config) *Manager {
@@ -171,6 +187,7 @@ func New(cfg Config) *Manager {
 		ctx:    startCtx,
 		cancel: cancel,
 		done:   startDone,
+		plat:   defaultPlatform(),
 		dev: DeviceConfig{
 			Device:         cfg.Device,
 			TunIP:          cfg.TunIP,
@@ -214,7 +231,7 @@ func (m *Manager) engineMTU() int {
 		return m.cfg.MTU
 	}
 
-	devMTU, err := ifaceMTU(m.cfg.Device)
+	devMTU, err := m.plat.ifaceMTU(m.cfg.Device)
 	if err != nil {
 		// 查不到设备时保持配置值：既不能确认也不能修正，猜一个 MTU 更危险。
 		log.Warn("[TUN] read device mtu", "device", m.cfg.Device, "err", err)
@@ -241,7 +258,7 @@ func (m *Manager) warnOnMTUMismatch(netstackMTU int) {
 		return // engineMTU 已按设备真实值对齐
 	}
 
-	devMTU, err := ifaceMTU(m.cfg.Device)
+	devMTU, err := m.plat.ifaceMTU(m.cfg.Device)
 	if err != nil {
 		return
 	}
@@ -335,10 +352,10 @@ func (m *Manager) Start() (err error) {
 	engine.Insert(key)
 
 	// 上游 engine.Start 返回错误而不是 log.Fatalf，失败时它可能已打开 TUN 设备。
-	if err := engineStartFn(); err != nil {
+	if err := m.plat.engineStart(); err != nil {
 		// validateEngineKey 已放行，因此失败必然发生在 parseDevice 或其之后：fd 已被引擎接管，
 		// 而 tun2socks 的失败路径不清理，关闭权只在这里的 engine.Stop。
-		engineStopFn(ReasonStartFailed.String())
+		m.plat.engineStop(ReasonStartFailed.String())
 		return fmt.Errorf("tun: start engine: %w", err)
 	}
 	m.mu.Lock()
@@ -351,11 +368,11 @@ func (m *Manager) Start() (err error) {
 	default:
 	}
 
-	settleDelay()
+	m.plat.settle()
 
 	if owner == OwnerLocal {
 		if manageSystemDNS() {
-			if err := saveAndSetDNSStepFn(m); err != nil {
+			if err := m.plat.saveDNS(m); err != nil {
 				log.Warn("[TUN] set system dns", "err", err)
 			}
 			m.mu.Lock()
@@ -367,7 +384,7 @@ func (m *Manager) Start() (err error) {
 		m.mu.Lock()
 		m.deviceUp = true
 		m.mu.Unlock()
-		if err := createTunDevFn(m); err != nil {
+		if err := m.plat.createDev(m); err != nil {
 			createFailed = true
 			return fmt.Errorf("%w: %w", ErrCreateDevice, err)
 		}

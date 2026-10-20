@@ -10,14 +10,6 @@ import (
 	"github.com/wzshiming/sysproxy"
 )
 
-// sysProxyApply 与 sysProxyRevert 是变量，以便启动路径的测试能观察设置/撤销调用，
-// 而不改动运行测试的机器的真实系统代理配置（与 sysproxy_env_linux.go 中的
-// proxyEnvExec 同一手法）。
-var (
-	sysProxyApply  = setSysProxy
-	sysProxyRevert = unsetSysProxy
-)
-
 // sysProxyAddr 返回系统代理与会话环境应指向的本地 HTTP 入口地址，与入口的监听地址
 // 同源（见 util.LocalProxyDialAddr）：bind_all 时入口监听 [::]，这里必须给同族回环
 // [::1]，写死 127.0.0.1 会让系统代理指向一个连不上的入口。

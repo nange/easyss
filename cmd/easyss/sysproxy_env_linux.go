@@ -42,18 +42,25 @@ type proxyEnvCmd struct {
 	args []string
 }
 
-var proxyEnvExec = func(name string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), proxyEnvTimeout)
-	defer cancel()
-
-	return util.CommandContext(ctx, name, args...)
-}
-
-var sysProxyEnv struct {
+type proxyEnvState struct {
 	mu sync.Mutex
 	// previous 保存 easyss 修改会话环境前的值，缺失的键表示该变量未被设置过。
 	previous map[string]string
 	store    proxyEnvStore
+	// exec 为 nil 时用生产实现；测试注入确定性的命令结果。
+	exec func(name string, args ...string) (string, error)
+}
+
+var sysProxyEnv proxyEnvState
+
+func (e *proxyEnvState) run(name string, args ...string) (string, error) {
+	if e.exec != nil {
+		return e.exec(name, args...)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), proxyEnvTimeout)
+	defer cancel()
+
+	return util.CommandContext(ctx, name, args...)
 }
 
 // setSysProxyEnv 把本地 HTTP 代理发布到会话环境，addr 由调用方按 bind_all 选好同族回环。只有
@@ -188,12 +195,12 @@ func restoreSysProxyEnv(store proxyEnvStore, previous map[string]string) error {
 }
 
 func runProxyEnvCmd(cmd proxyEnvCmd) error {
-	_, err := proxyEnvExec(cmd.name, cmd.args...)
+	_, err := sysProxyEnv.run(cmd.name, cmd.args...)
 	return err
 }
 
 func systemdUserEnv() (map[string]string, error) {
-	out, err := proxyEnvExec("systemctl", "--user", "show-environment")
+	out, err := sysProxyEnv.run("systemctl", "--user", "show-environment")
 	if err != nil {
 		return nil, err
 	}

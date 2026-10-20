@@ -102,46 +102,52 @@ func SetSysDNSViaOSAScript(servers []string) error {
 	return fmt.Errorf("SetSysDNSViaOSAScript is only supported on macOS")
 }
 
-// tunDNSCommand 是 TUN DNS 配置里所有 resolvectl 调用的唯一出口，做成变量
-// 以便测试断言命令而不触碰本机解析器。
-var tunDNSCommand = func(name string, args ...string) (string, error) {
-	return Command(name, args...)
-}
+// tunDNSCmd 执行一条 resolvectl 命令。TUN DNS 变更经由参数注入，测试因此可以断言
+// 命令序列而不触碰本机解析器。
+type tunDNSCmd func(name string, args ...string) (string, error)
 
 // SetSysDNSForTun 为 TUN 模式配置 DNS 解析。按链路配置才是关键：systemd-resolved
 // 查询某条链路的解析器时把 socket 固定到该链路的设备上，物理链路的解析器因此从
 // 物理网卡发出查询、绕过 TUN，客户端会连到被污染路径返回的任意地址。
 func SetSysDNSForTun(tunDevice string, v []string) error {
 	// 仍要写系统 DNS：读 /etc/resolv.conf 或查询链路配置的程序走这条路径，尽力而为。
-	return errors.Join(setTunLinkDNS(tunDevice, v), SetSysDNS(v))
+	return errors.Join(setTunLinkDNS(tunDevice, v, Command), SetSysDNS(v))
 }
 
 // EnsureSysDNSForTun 重新断言 TUN DNS 状态：NetworkManager 在漫游、DHCP 续租时
 // 重写链路 DNS，其中一种重写会让物理链路重新成为 DNS 默认路由、解析绕过隧道。
 func EnsureSysDNSForTun(tunDevice string, v []string) error {
+	return ensureSysDNSForTun(tunDevice, v, Command)
+}
+
+func ensureSysDNSForTun(tunDevice string, v []string, run tunDNSCmd) error {
 	iface, err := defaultInterface()
 	if err != nil {
 		return fmt.Errorf("find default interface: %w", err)
 	}
 
-	out, err := tunDNSCommand("resolvectl", "default-route", iface)
+	out, err := run("resolvectl", "default-route", iface)
 	if err == nil && resolvectlBool(out) == "no" {
 		return nil
 	}
-	return setTunLinkDNS(tunDevice, v)
+	return setTunLinkDNS(tunDevice, v, run)
 }
 
 // RestoreSysDNSForTun 撤销 SetSysDNSForTun：TUN 链路的设置随接口一起消失，
 // 只需把物理链路交还给解析器并恢复调用方保存的服务器。
 func RestoreSysDNSForTun(tunDevice string, origin []string) error {
+	return restoreSysDNSForTun(tunDevice, origin, Command)
+}
+
+func restoreSysDNSForTun(tunDevice string, origin []string, run tunDNSCmd) error {
 	var errs []error
 
 	// 接口此时通常已消失，revert 失败属常态。
-	if _, err := tunDNSCommand("resolvectl", "revert", tunDevice); err != nil {
+	if _, err := run("resolvectl", "revert", tunDevice); err != nil {
 		errs = append(errs, fmt.Errorf("resolvectl revert %s: %w", tunDevice, err))
 	}
 	if iface, err := defaultInterface(); err == nil {
-		if _, err := tunDNSCommand("resolvectl", "default-route", iface, "yes"); err != nil {
+		if _, err := run("resolvectl", "default-route", iface, "yes"); err != nil {
 			errs = append(errs, fmt.Errorf("resolvectl default-route %s yes: %w", iface, err))
 		}
 	}
@@ -160,14 +166,14 @@ func RestoreSysDNSForTun(tunDevice string, origin []string) error {
 }
 
 // setTunLinkDNS 把解析器固定到 TUN 设备，并把物理链路移出 DNS 默认路由。
-func setTunLinkDNS(tunDevice string, v []string) error {
+func setTunLinkDNS(tunDevice string, v []string, run tunDNSCmd) error {
 	iface, err := defaultInterface()
 	if err != nil {
 		return fmt.Errorf("find default interface: %w", err)
 	}
 
 	args := append([]string{"dns", tunDevice}, v...)
-	if _, err := tunDNSCommand("resolvectl", args...); err != nil {
+	if _, err := run("resolvectl", args...); err != nil {
 		return fmt.Errorf("resolvectl dns %s: %w", tunDevice, err)
 	}
 
@@ -176,7 +182,7 @@ func setTunLinkDNS(tunDevice string, v []string) error {
 		{"default-route", tunDevice, "yes"},
 		{"default-route", iface, "no"},
 	} {
-		if _, err := tunDNSCommand("resolvectl", cmd...); err != nil {
+		if _, err := run("resolvectl", cmd...); err != nil {
 			return fmt.Errorf("resolvectl %s: %w", strings.Join(cmd, " "), err)
 		}
 	}

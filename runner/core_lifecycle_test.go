@@ -108,9 +108,8 @@ func TestRunFailureReleasesBoundListeners(t *testing.T) {
 		defer pc.Close() //nolint:errcheck
 
 		addr := pc.LocalAddr().String()
-		prev := forwardDNSListenAddr
-		forwardDNSListenAddr = func() string { return addr }
-		t.Cleanup(func() { forwardDNSListenAddr = prev })
+		opts := defaultOptions()
+		opts.forwardDNSListenAddr = addr
 
 		socksPort := freePort(t)
 		cfg := testConfig()
@@ -118,7 +117,7 @@ func TestRunFailureReleasesBoundListeners(t *testing.T) {
 		cfg.Local.HTTPPort = 0
 		cfg.Local.EnableForwardDNS = true
 
-		if core, err := Run(cfg); err == nil {
+		if core, err := runWithOptions(cfg, opts); err == nil {
 			core.Stop()
 			t.Fatal("expected Run to fail when the forward dns port is occupied")
 		}

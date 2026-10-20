@@ -110,8 +110,8 @@ func runCloseScript(device string, args tun.ScriptArgs) error {
 }
 
 // 主判据是网关：TUN 路由按 `route add -net X <tun_gw>` 安装，而设备名可能重名或与内核实际名不符，
-// 按它判定会误判别人的路由；无网关信息时才退回设备名。变量以便测试注入。
-var tunRouteResidue = func(device, tunGW string) (string, bool) {
+// 按它判定会误判别人的路由；无网关信息时才退回设备名。
+func probeTunRouteResidue(run func(string, ...string) (string, error), device, tunGW string) (string, bool) {
 	key, value := "gateway:", tunGW
 	if value == "" {
 		key, value = "interface:", device
@@ -122,7 +122,7 @@ var tunRouteResidue = func(device, tunGW string) (string, bool) {
 
 	var out string
 	for _, target := range tunRouteProbes {
-		got, err := routeProbeCmd("route", "-n", "get", target)
+		got, err := run("route", "-n", "get", target)
 		if err != nil {
 			continue
 		}
