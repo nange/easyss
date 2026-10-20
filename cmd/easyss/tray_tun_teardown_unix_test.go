@@ -136,7 +136,7 @@ func TestCloseTun2socksVerifiesTheRecordedSession(t *testing.T) {
 		return nil
 	}
 
-	require.NoError(t, a.sess.tunDown())
+	a.sess.tunDown()
 	require.Equal(t, []string{"utun9"}, probed)
 	require.Nil(t, a.sess.tunSession)
 	require.False(t, a.currentConfig().Local.EnableTun2socks)
@@ -156,7 +156,7 @@ func TestCloseTun2socksSignalsTheHelperFIFO(t *testing.T) {
 	t.Cleanup(func() { rd.Close() }) //nolint:errcheck
 	a.sess.tunHelperStdin = wr
 
-	require.NoError(t, a.sess.tunDown())
+	a.sess.tunDown()
 	require.Nil(t, a.sess.tunHelperStdin, "关闭后必须清空 helper 的 FIFO 写端")
 
 	_, err = wr.Write([]byte("x"))

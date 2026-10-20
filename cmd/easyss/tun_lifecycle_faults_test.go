@@ -134,7 +134,7 @@ func TestFaultStopRacesWithStart(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			_ = a.sess.tunDown()
+			a.sess.tunDown()
 		}()
 		wg.Wait()
 
@@ -186,7 +186,7 @@ func TestFaultLeftoverRoutesAreRolledBack(t *testing.T) {
 		}
 		a.sess.tunSession = &tun.DeviceConfig{Device: "utun9", TunGW: "198.18.0.1"}
 
-		require.NoError(t, a.sess.tunDown())
+		a.sess.tunDown()
 		require.Equal(t, 1, rollbacks, "残留必须触发一次提权回滚")
 		require.Equal(t, 2, probes, "回滚之后必须重新探测")
 		select {
@@ -210,7 +210,7 @@ func TestFaultLeftoverRoutesAreRolledBack(t *testing.T) {
 		}
 		a.sess.tunSession = &tun.DeviceConfig{Device: "utun9", TunGW: "198.18.0.1"}
 
-		require.NoError(t, a.sess.tunDown())
+		a.sess.tunDown()
 
 		select {
 		case msg := <-ui.notices:
@@ -249,7 +249,7 @@ func TestFaultHelperOwnerSkipsLocalCleanup(t *testing.T) {
 	require.NoError(t, err)
 	a.sess.tunHelperStdin = writer
 
-	require.NoError(t, a.sess.tunDown())
+	a.sess.tunDown()
 
 	require.Equal(t, tun.OwnerHelper, gotOwner, "helper 会话的拆除必须带着 helper 所有权")
 	require.True(t, gotSignalled, "helper 会话必须先关 FIFO，才能等到它退出")

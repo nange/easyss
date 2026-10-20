@@ -548,7 +548,7 @@ func (a *TrayApp) toggleSysProxy() {
 			}
 		} else {
 			mi.SetChecked(true)
-			if err := a.setSysProxyOn(); err != nil {
+			if err := a.setSysProxyOn(a.currentConfig().Local.HTTPPort); err != nil {
 				log.Error("[SYSTRAY] set sys-proxy on", "err", err)
 				mi.SetChecked(false) // 失败时回滚
 			}
@@ -704,9 +704,8 @@ func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
 // 以保持托盘菜单响应。
 func (a *TrayApp) disableTun2socks() {
 	log.Info("[SYSTRAY] disableTun2socks called")
-	// tunDown 当前通过日志/界面报告 teardown 问题，返回值恒为 nil；显式忽略，
-	// 不用一个永远不成立的 if 制造"这里可能失败"的假象。
-	_ = a.sess.tunDown()
+	// teardown 中发现的问题由 tunDown 自己记日志/通知界面，不中止退出流程。
+	a.sess.tunDown()
 }
 
 // startService 是切换/重启的默认 start 步骤：用当前配置快照启动一个新会话。
@@ -753,7 +752,7 @@ func (a *TrayApp) setTunMenuChecked(checked bool) {
 
 func (a *TrayApp) startLocalService() {
 	if a.BrowserMenu() != nil && a.BrowserMenu().IsChecked() {
-		if err := a.setSysProxyOn(); err != nil {
+		if err := a.setSysProxyOn(a.currentConfig().Local.HTTPPort); err != nil {
 			log.Error("[SYSTRAY] start local: set sysproxy on", "err", err)
 		}
 	} else {

@@ -388,10 +388,9 @@ func (a *App) Stop() {
 	a.teardownSysProxy()
 
 	// 在停止核心服务之前停止 TUN 助手进程和引擎。非 darwin/linux 或 root 下
-	// 如果 TUN 不是通过助手进程启动的，tunDown 是空操作。teardown 的问题由
-	// tunDown 自己记日志/通知界面，当前恒返回 nil；这里显式忽略，避免留下一个
-	// 永远不会进入的错误分支。
-	_ = a.sess.tunDown()
+	// 如果 TUN 不是通过助手进程启动的，tunDown 是空操作；teardown 的问题由
+	// tunDown 自己记日志/通知界面，不中止退出流程。
+	a.sess.tunDown()
 
 	a.sess.stop()
 }
@@ -442,7 +441,7 @@ func (a *App) restartServiceInSequence(newCfg *config.ClientConfig, start func(*
 		if !sysProxyEnabled {
 			return
 		}
-		if err := a.setSysProxyOn(); err != nil {
+		if err := a.setSysProxyOn(a.currentConfig().Local.HTTPPort); err != nil {
 			log.Error("[EASYSS-V3] restart service: restore sysproxy on", "err", err)
 		}
 	}
@@ -536,7 +535,7 @@ func (a *App) setupSysProxy() bool {
 	}
 	// 状态维护只发生在 setSysProxyOn/Off：启动路径与托盘菜单不能各自复制一份
 	// apply + Store，否则两处迟早漂移。
-	if err := a.setSysProxyOn(); err != nil {
+	if err := a.setSysProxyOn(cfg.Local.HTTPPort); err != nil {
 		log.Warn("[EASYSS-V3] set system proxy failed, you may need to configure it manually", "err", err)
 		return false
 	}
@@ -557,10 +556,11 @@ func (a *App) teardownSysProxy() {
 
 // setSysProxyOn/setSysProxyOff 走 sysProxyApply/sysProxyRevert 这两个包级钩子
 // （而不是直接调用实现），使测试可以观察托盘路径上的系统代理改动，而不必触碰
-// 运行测试的机器的真实代理配置。sysProxyApplied 只在函数内维护：apply 成功
-// 置真、revert 成功置假，setupSysProxy 与托盘菜单都复用它们。
-func (a *App) setSysProxyOn() error {
-	err := sysProxyApply(a.currentConfig().Local.HTTPPort)
+// 运行测试的机器的真实代理配置。端口由调用方传入，使 setupSysProxy 校验的值与
+// 实际应用的值结构上一致；sysProxyApplied 只在函数内维护：apply 成功置真、
+// revert 成功置假，setupSysProxy 与托盘菜单都复用它们。
+func (a *App) setSysProxyOn(port int) error {
+	err := sysProxyApply(port)
 	if err == nil {
 		a.sysProxyApplied.Store(true)
 	}

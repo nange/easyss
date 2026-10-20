@@ -335,14 +335,12 @@ func (s *session) buildICMPHandler(core *runner.Core) {
 // tunDown 关闭当前 TUN 会话并撤销它对系统做的改动。
 //
 // 步骤顺序是硬约束（见每一步的注释），因此它同时被托盘开关、切换服务器前的拆除
-// 与 TUN 启动失败的回滚复用。
-//
-// 返回值目前恒为 nil：teardown 过程中发现的问题通过日志与界面通知报告，不中止
-// 退出流程；保留 error 签名是为了让调用方/测试保持统一的形状。
-func (s *session) tunDown() error {
+// 与 TUN 启动失败的回滚复用。teardown 中发现的问题通过日志与界面通知报告，不中止
+// 退出流程，因此它不返回错误。
+func (s *session) tunDown() {
 	s.tunMu.Lock()
 	defer s.tunMu.Unlock()
-	return s.tunDownLocked(nil)
+	s.tunDownLocked(nil)
 }
 
 // tunDownLocked 是拆除本体，调用方持有 tunMu。want 非 nil 时要求它仍是当前会话的
@@ -353,9 +351,9 @@ func (s *session) tunDown() error {
 // 归 helper 回收，主进程只停引擎、关 FIFO，再等 helper 退出并复核路由表。过去这一步
 // 是靠"FIFO 是否非 nil"（helperSignalled）推出来的，而它只是一个"有没有关过 FIFO"
 // 的事实，与"该不该等 helper、该不该复核路由"并不等价。
-func (s *session) tunDownLocked(want *tun.Manager) error {
+func (s *session) tunDownLocked(want *tun.Manager) {
 	if want != nil && s.tunMgr != want {
-		return nil
+		return
 	}
 
 	// 会话配置必须在清空 tunMgr 之前取下来：它既用于校验，也用于兜底回滚。
@@ -417,7 +415,6 @@ func (s *session) tunDownLocked(want *tun.Manager) error {
 		core.Client.SetTunMode(false)
 	}
 	s.app.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = false })
-	return nil
 }
 
 // tunConfig 为一次 TUN 会话构建配置。它是启动路径与托盘开关共享的唯一构造点，
@@ -491,9 +488,7 @@ func (s *session) rollbackFailedTunStart(mgr *tun.Manager, err error) {
 		log.Info("[EASYSS-V3] tun2socks start failure ignored: its session has been replaced", "err", err)
 		return
 	}
-	if downErr := s.tunDownLocked(mgr); downErr != nil {
-		log.Error("[EASYSS-V3] tun2socks rollback after start failure", "err", downErr)
-	}
+	s.tunDownLocked(mgr)
 	s.tunMu.Unlock()
 
 	if s.app.ui != nil {
