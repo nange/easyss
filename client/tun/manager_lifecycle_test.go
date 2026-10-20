@@ -7,12 +7,12 @@ import (
 	"time"
 )
 
-// managerLifecycleBudget 是"Start/Stop 必须在预算内返回"的上限：把"永久挂住"
-// 变成一次快速失败。正常路径远小于该值。
+// managerLifecycleBudget 是"Start/Stop 必须在预算内返回"的上限：把永久挂住变成一次
+// 快速失败。
 const managerLifecycleBudget = 10 * time.Second
 
-// stubManagerHooks 把会触碰真实 TUN 设备、路由表与系统 DNS 的 hook 全部替换为
-// 空实现：管理器的生命周期测试不需要 root，也不能改写运行测试的机器的网络配置。
+// stubManagerHooks 把会触碰设备、路由表与系统 DNS 的 hook 换成空实现：生命周期测试
+// 不需要 root，也不能改写测试机的网络配置。
 func stubManagerHooks(t *testing.T) {
 	t.Helper()
 
@@ -40,12 +40,9 @@ func newTestManager() *Manager {
 	return New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "tun-easyss-test"})
 }
 
-// TestManagerStopWithoutStartDoesNotHang 固定"从未 Start 过的管理器可以安全
-// Stop"。这是托盘的常态路径：用户从未开启过 TUN 就退出/切换服务器。
-//
-// 旧形态下 Stop 依赖"cancel 非 nil ⇒ done 非 nil"这一未受保护的假设，两者
-// 分两步发布时 Stop 会在 nil channel 上永久阻塞；而托盘调用 Stop 时持有
-// tunHelperMu，卡住的是整个菜单。
+// TestManagerStopWithoutStartDoesNotHang 固定"从未 Start 过的管理器可以安全 Stop"，
+// 这是托盘的常态路径：Stop 若依赖"cancel 非 nil ⇒ done 非 nil"，就会在 nil channel
+// 上永久阻塞，而托盘是在持有 tunMu 时调用它。
 func TestManagerStopWithoutStartDoesNotHang(t *testing.T) {
 	stubManagerHooks(t)
 	m := newTestManager()
@@ -67,14 +64,12 @@ func TestManagerStopWithoutStartDoesNotHang(t *testing.T) {
 	}
 }
 
-// TestManagerStopWhileStarting 固定"Start 进行中被 Stop 取消"这一并发路径：
-// Start 在后台 goroutine 上运行（startTunEngine），Stop 可以来自托盘或退出
-// 路径。两者都必须有界返回，且管理器最终不处于运行状态。
+// TestManagerStopWhileStarting 固定"Start 进行中被 Stop 取消"：两者都必须有界返回，
+// 且管理器最终不处于运行状态。
 func TestManagerStopWhileStarting(t *testing.T) {
 	stubManagerHooks(t)
 
-	// engineStartFn 在 Start 发布 ctx/done 之后被调用，因此这个信号可靠地
-	// 表示"Start 正在进行中"（而不是还没开始）。
+	// engineStartFn 在 Start 发布 ctx/done 之后调用，故这个信号表示"正在进行中"。
 	inStart := make(chan struct{}, 1)
 	engineStartFn = func() error {
 		select {
@@ -119,8 +114,7 @@ func TestManagerStopWhileStarting(t *testing.T) {
 	}
 }
 
-// TestManagerStopIsIdempotent 固定 Stop 的幂等性：关闭脚本与系统 DNS 恢复
-// 都是"只能做一次"的动作，重复 Stop 不得再执行一遍。
+// TestManagerStopIsIdempotent 固定 Stop 的幂等性：关闭脚本与系统 DNS 恢复只能做一次。
 func TestManagerStopIsIdempotent(t *testing.T) {
 	stubManagerHooks(t)
 
@@ -146,17 +140,8 @@ func TestManagerStopIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestManagerStopBeforeStartGoroutineRuns 固定"停止先到、启动后到"这一时序。
-//
-// session.tunUp / tunUpViaHelper 在 tunMu 内发布 manager 之后才派发 goroutine
-// 去调用 Start（见 cmd/easyss 的 startTunEngine），用户的下一次点击完全可以落在
-// 那个 goroutine 被调度之前。此时 Stop 若只按"有没有 cancel"判断，就会当作
-// "从未启动"直接返回，而 Start 随后照常把引擎、设备、路由与系统 DNS 全部建立
-// 起来：session 那边已经把这个 manager 收走并发布了 EnableTun2socks=false，
-// 于是界面说"已关闭"、流量却仍在隧道里，而且再没有人持有这个 manager 去停它。
-// 下一次点击会新建一套，engine 的包级默认设备被覆盖，前一套永远停不掉。
-//
-// 因此：Stop 之后再 Start 必须失败，且不得留下任何系统改动。
+// TestManagerStopBeforeStartGoroutineRuns 守住"停止先到、启动后到"：Stop 若按"没有 cancel"
+// 当作从未启动返回，Start 随后照常建起引擎与设备，界面说关了、流量还在隧道里，且没人能停它。
 func TestManagerStopBeforeStartGoroutineRuns(t *testing.T) {
 	stubManagerHooks(t)
 
@@ -190,9 +175,9 @@ func TestManagerStopBeforeStartGoroutineRuns(t *testing.T) {
 	}
 }
 
-// TestManagerStartRunsExactlyOnce 固定"一个 Manager 只承载一次会话"。重复 Start
-// 过去会覆盖 engine 的包级默认设备（tun2socks 的 Stop 只认全局默认值），让第一套
-// 设备与协议栈无人能停；现在它必须显式失败。
+// TestManagerStartRunsExactlyOnce 固定"一个 Manager 只承载一次会话"：重复 Start 会
+// 覆盖 engine 的包级默认设备（tun2socks 的 Stop 只认全局默认值），让第一套设备与
+// 协议栈无人能停，因此必须显式失败。
 func TestManagerStartRunsExactlyOnce(t *testing.T) {
 	stubManagerHooks(t)
 
@@ -207,14 +192,8 @@ func TestManagerStartRunsExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestManagerEngineStartFailureReleasesTheDevice 固定"engine 启动失败必须自己
-// 释放设备"。
-//
-// tun2socks 的 engine.Start 先 parseDevice（打开 TUN 设备 / 包装 helper 传来的
-// fd）再 core.CreateStack，而它的失败路径不会清理已打开的设备（tun2socks
-// #550/#552）。此时 engineUp 尚未置位，teardown 不会替我们调 engine.Stop，
-// 因此 Start 必须在返回错误前显式释放：否则设备（fd 路径上是 helper 传来的
-// fd）会泄漏到下一次启用，Linux 上设备还会随这个 fd 一直存活。
+// TestManagerEngineStartFailureReleasesTheDevice 守住 engine 启动失败必须自己释放设备：
+// tun2socks 的 engine.Start 先 parseDevice 再 CreateStack，失败路径不清理，而 teardown 也不会调 Stop。
 func TestManagerEngineStartFailureReleasesTheDevice(t *testing.T) {
 	stubManagerHooks(t)
 

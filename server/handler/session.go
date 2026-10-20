@@ -20,20 +20,13 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-// sendRST 通过 s2c shaper 推送一个 RST 帧并 flush：这是所有 handler
-// 在响应提交后向客户端告知其流失败的统一方式。
-//
-// 它刻意吞掉写入错误：RST 是发给一条已经死掉的流的最佳努力通知，
-// 失败（流已被客户端取消、连接已断）没有任何可执行的补救，也会在每条正常
-// 拆除的流上制造噪声。这里显式声明该契约，使"不检查返回值"与其他地方的
-// PushFrame/PushData 错误检查区分开，而不是看起来像遗漏。
+// 刻意吞掉写入错误：RST 只是发给一条可能已经死掉的流的最佳努力通知，失败无可补救。
 func sendRST(s2c shaper.Shaper) {
 	_ = s2c.PushFrame(protocol.NewFrameRST())
 	_ = s2c.Flush()
 }
 
-// nextClientFrame 从客户端流中读取下一个可处理的帧，跳过 PADDING/COVER。
-// done 表示流已结束（FIN 或 RST），此时返回的帧就是终止帧。err 会中止一切。
+// done 表示流已结束（FIN 或 RST），此时返回的帧就是终止帧。
 func nextClientFrame(dr *crypto.DecryptedReader) (frame protocol.Frame, done bool, err error) {
 	for {
 		f, err := dr.ReadFrame()
@@ -51,42 +44,22 @@ func nextClientFrame(dr *crypto.DecryptedReader) (frame protocol.Frame, done boo
 	}
 }
 
-// transientStreamPatterns 列出表示"对端已离开该流"的错误片段（全部小写）。
-// 客户端正常拆除（关闭本地连接 → RST_STREAM(CANCEL) → 服务端读请求体失败）
-// 会让每个流都产生一条这样的错误，因此它们不能按故障记录。
-//
-// 能 typed 的都已经 typed（见 isTransientStreamError）；这里只剩 stdlib 未导出
-// 的 HTTP/2 流级错误与 RFC 9113 的连接拆除文本。
+// 标准库未导出这些 HTTP/2 流级错误与 RFC 9113 的连接拆除文本，只能匹配字符串。
 var transientStreamPatterns = []string{
-	// HTTP/2 流级取消：标准库用未导出的哨兵包装，只能靠字符串匹配。
 	"stream error: stream id ",
 	"stream closed",
-	// 客户端连接消失：net/http 用它关闭该连接上残留的所有流。
 	"client disconnected",
 	"client connection lost",
 }
 
-// errStreamIdleTimeout 是中继空闲超时的哨兵：tcp handler 用它包装真实的超时
-// 值（"tcp stream idle timeout after 2m0s"），分类时不必再匹配 "idle timeout"。
 var errStreamIdleTimeout = errors.New("tcp stream idle timeout")
 
-// isTransientStreamError 报告流失败是否是预期的拆除路径（对端离开该流、
-// 中继空闲超时），而不是真正的故障。这类失败在客户端断开或回收连接时会同时
-// 命中许多流，应以 Debug 级别记录，而不是逐流刷满 Info。
-//
-// 这里刻意不判定 context.Canceled：net 在拨号被取消时返回的取消错误
-// （"operation was canceled"）满足 errors.Is(err, context.Canceled)，直接按它
-// 归类会把真正的拨号故障一起静音。只有我们自己的 errClientGone 才代表客户端离开。
-//
-// "connection reset by peer"/"broken pipe" 这类传输层文本则不区分方向：目标侧
-// 被 RST（排查被墙主机时最想看到的信号）会一并被静音，因此不列入。
+// 判定预期的拆除路径（对端离开该流、中继空闲超时），这类失败在客户端断开时会同时命中许多
+// 流，只能记 Debug。刻意不判定 context.Canceled：net 拨号被取消时返回的错误也满足它。
 func isTransientStreamError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// net.ErrClosed 同时覆盖 net.Conn 与 net/http 的请求体；
-	// http.ErrBodyReadAfterClose 是它在中继终止后继续读请求体时的显式错误；
-	// io.ErrClosedPipe 来自我们主动关闭的流，同样属于拆除路径。
 	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) ||
 		errors.Is(err, errClientGone) || errors.Is(err, os.ErrDeadlineExceeded) ||
 		errors.Is(err, http.ErrBodyReadAfterClose) || errors.Is(err, errStreamIdleTimeout) {
@@ -101,10 +74,8 @@ func isTransientStreamError(err error) bool {
 	return false
 }
 
-// lanHostOf 提取远端地址的主机部分，支持 "host:port"（TCPAddr/UDPAddr）
-// 或裸 IP 形式（IPConn）。IPConn 的 RemoteAddr 是 *net.IPAddr，
-// 其 String() 不带端口——链路本地 IPv6 可能带也可能不带 %zone 后缀——
-// 因此仅靠 net.SplitHostPort 对它必然失败，SSRF 检查将永远不会触发。
+// 也要接受裸 IP：IPConn 的 RemoteAddr 是不带端口的 *net.IPAddr，只用 net.SplitHostPort
+// 会解析失败，SSRF 检查将永远不会触发。
 func lanHostOf(addr string) string {
 	if host, _, err := net.SplitHostPort(addr); err == nil {
 		return host
@@ -115,10 +86,7 @@ func lanHostOf(addr string) string {
 	return addr
 }
 
-// rejectLANConn 当 conn 的远端地址是 LAN/私网 IP 时关闭它并返回拒绝错误。
-// 它现在是纵深防御的断言：拨号前已经用同一次解析的结果校验过候选地址，
-// 所有出站连接都只拨那些字面地址，因此正常情况下不会触发。保留它是因为
-// 成本为零，且能兜住未来新增的、绕过 dialOutbound 的拨号路径。
+// 拨号前的校验已在 dialCandidates 里做完，这里兜住绕过 dialOutbound 的拨号路径。
 func rejectLANConn(conn net.Conn) error {
 	if ra := conn.RemoteAddr(); ra != nil {
 		if host := lanHostOf(ra.String()); util.IsLANIP(host) {
@@ -129,16 +97,10 @@ func rejectLANConn(conn net.Conn) error {
 	return nil
 }
 
-// ---------------------------------------------------------------------------
-// 出站地址校验与地址族偏好
-// ---------------------------------------------------------------------------
-
-// resolveHost 是全包唯一的域名解析入口；测试替换它以注入确定性的解析结果，
-// 使 SSRF 校验与拨号都不依赖真实 DNS。
+// 全包唯一的域名解析入口，测试替换它以注入确定性的解析结果。
 var resolveHost = util.ResolveHostIPs
 
-// dialCtxKey 是未导出的 context 键类型，把「客户端接入服务端所用的地址族」与
-// 「握手阶段解析并校验过的目标地址」从 ServeHTTP 传到各 handler 的拨号路径。
+// 把客户端地址族与握手阶段校验过的目标地址从 ServeHTTP 传到拨号路径。
 type dialCtxKey int
 
 const (
@@ -146,8 +108,6 @@ const (
 	ctxResolvedAddrs
 )
 
-// withPreferredFamily 返回携带出站地址族偏好的 context；addr 为零值时原样返回
-// （无偏好 = 由系统按 RFC 6724 排序）。
 func withPreferredFamily(ctx context.Context, addr netip.Addr) context.Context {
 	if !addr.IsValid() {
 		return ctx
@@ -155,14 +115,12 @@ func withPreferredFamily(ctx context.Context, addr netip.Addr) context.Context {
 	return context.WithValue(ctx, ctxPreferredFamily, addr)
 }
 
-// preferredFamily 取出拨号应优先使用的地址族，ok 为 false 表示无偏好。
 func preferredFamily(ctx context.Context) (netip.Addr, bool) {
 	addr, ok := ctx.Value(ctxPreferredFamily).(netip.Addr)
 	return addr, ok && addr.IsValid()
 }
 
-// withResolvedAddrs 返回携带「握手阶段已解析并校验过的目标地址」的 context。
-// 拨号路径优先复用它们，因此一次流只解析一次：检查与连接用的是同一批地址。
+// 拨号路径必须优先复用它们：一次流只解析一次，检查与连接才是同一批地址。
 func withResolvedAddrs(ctx context.Context, addrs []netip.Addr) context.Context {
 	if len(addrs) == 0 {
 		return ctx
@@ -170,14 +128,11 @@ func withResolvedAddrs(ctx context.Context, addrs []netip.Addr) context.Context 
 	return context.WithValue(ctx, ctxResolvedAddrs, addrs)
 }
 
-// resolvedAddrs 取出已校验的目标地址，ok 为 false 表示 ctx 中没有（需要自行解析）。
 func resolvedAddrs(ctx context.Context) ([]netip.Addr, bool) {
 	addrs, ok := ctx.Value(ctxResolvedAddrs).([]netip.Addr)
 	return addrs, ok && len(addrs) > 0
 }
 
-// clientPreferredFamily 从客户端到服务端的远端地址推导其接入地址族。
-// IPv4-mapped 形式（::ffff:a.b.c.d）折叠为 IPv4；无法解析时返回零值（无偏好）。
 func clientPreferredFamily(remoteAddr string) netip.Addr {
 	ap, err := netip.ParseAddrPort(remoteAddr)
 	if err != nil {
@@ -186,15 +141,8 @@ func clientPreferredFamily(remoteAddr string) netip.Addr {
 	return ap.Addr().Unmap()
 }
 
-// orderByFamily 返回按族偏好重排后的候选：prefer 所属族的地址先出现，两族随后
-// 交错排列。族内保持解析器给出的原序（RFC 6724 已经排过，这里只调整族的优先级）。
-//
-// 交错而不是整族分组，是因为候选由 dialAddrs **串行**尝试：若把首选族整族排在
-// 前面，该族第一个地址挂起（被墙 IP 的 SYN 黑洞）时，另一个族的候选要等完整族
-// 的预算才轮到；交错后只需等一个候选的子预算（见 attemptDeadline）。
-//
-// 它不修改入参（ctx 里的切片是共享的），且只是偏好而非过滤：目标只有另一族时
-// 依旧可连。
+// 首选族与另一族必须交错排列而不是整族分组：候选由 dialAddrs 串行尝试，整族排在前面时该族
+// 第一个挂起的地址（被墙 IP 的 SYN 黑洞）会让另一族等完整族的预算。它只是偏好而非过滤。
 func orderByFamily(addrs []netip.Addr, prefer netip.Addr) []netip.Addr {
 	if !prefer.IsValid() || len(addrs) < 2 {
 		return addrs
@@ -220,11 +168,8 @@ func orderByFamily(addrs []netip.Addr, prefer netip.Addr) []netip.Addr {
 	return ordered
 }
 
-// dialCandidates 返回可拨号的字面地址，并按客户端地址族偏好重排（见
-// orderByFamily）。它优先复用握手阶段已解析并校验过的地址（这一次流不再查
-// DNS），没有时才自行解析。任一候选为 LAN/私网/保留地址时拒绝整个目标：SSRF
-// 校验与实际连接共用同一批地址，DNS-rebinding 没有在检查与连接之间翻转答案的
-// 窗口。
+// 优先复用握手阶段已解析并校验过的地址，没有时才自行解析。任一候选落在 LAN/私网/保留网段
+// 即拒绝整个目标：校验与实际连接共用同一批地址，DNS-rebinding 因此没有翻转答案的窗口。
 func dialCandidates(ctx context.Context, target string) ([]netip.Addr, error) {
 	addrs, ok := resolvedAddrs(ctx)
 	if !ok {
@@ -241,14 +186,11 @@ func dialCandidates(ctx context.Context, target string) ([]netip.Addr, error) {
 	return orderByFamily(addrs, prefer), nil
 }
 
-// errClientGone 表示拨号期间客户端已经离开（请求 context 已失效）。它是显式
-// 类型而不是裸 context.Canceled：net 把取消转成 "operation was canceled" 的
-// 取消错误，其 Is(context.Canceled) 为真，依赖这一点会让客户端拆除与真正的
-// 拨号故障混在一起（见 isTransientStreamError）。
+// 必须是显式错误而不是裸 context.Canceled：net 的取消错误也满足 Is(context.Canceled)，
+// 客户端拆除与真正的拨号故障会混在一起。
 var errClientGone = errors.New("client gone")
 
-// dialAddr 把候选地址拼成拨号用的目标：端口字符串原样沿用（不做服务名重解析），
-// 无端口的目标（ICMP）拨裸 IP——给原始套接字的目标带上端口会让 net.Dial 失败。
+// 无端口的目标（ICMP）必须拨裸 IP，给原始套接字的目标带上端口会让 net.Dial 失败。
 func dialAddr(addr netip.Addr, target string) string {
 	_, port, err := net.SplitHostPort(target)
 	if err != nil {
@@ -257,23 +199,16 @@ func dialAddr(addr netip.Addr, target string) string {
 	return net.JoinHostPort(addr.String(), port)
 }
 
-// dialAttempt 执行对单个字面地址的一次拨号。它是包级变量，使测试可以用确定性的
-// 假拨号（记录候选顺序与各自拿到的截止时间、并按预算阻塞）验证预算切分，而不必
-// 依赖真实网络里恰好存在的黑洞地址。
+// 变量而非常量，测试才能用确定性的假拨号验证预算切分，而不依赖真实网络里的黑洞地址。
 var dialAttempt = func(d *net.Dialer, ctx context.Context, network, addr string) (net.Conn, error) {
 	return d.DialContext(ctx, network, addr)
 }
 
-// dialAttemptMinBudget 是单个候选能分到的最小拨号预算，对应 net.Dialer 内部
-// partialDeadline 的 2s 下限：低于它就不值得再切分。它是变量，使测试能用更小的
-// 数值验证切分，而不必让测试真的等满 2s。
+// 对应 net.Dialer 内部 partialDeadline 的 2s 下限，低于它就不值得再切分。
 var dialAttemptMinBudget = 2 * time.Second
 
-// attemptDeadline 返回单个候选的拨号截止时间：把整体的剩余预算按剩余候选数均分，
-// 但不低于 dialAttemptMinBudget（剩余预算本身更少时就直接用掉它）。这与
-// net.Dialer 内部 partialDeadline 的切分同构——rc13 之前域名交给 net.Dialer 时，
-// 同一个族内的候选拿到的就是这种子预算，因此"第一个候选挂起"最多只吃掉一个子
-// 预算，而不是一整个拨号超时。
+// 把剩余预算按剩余候选数均分，但不低于 dialAttemptMinBudget：与 net.Dialer 内部
+// partialDeadline 同构，第一个候选挂起时最多吃掉一个子预算。
 func attemptDeadline(now, deadline time.Time, candidatesLeft int) time.Time {
 	left := deadline.Sub(now)
 	if left <= 0 {
@@ -281,20 +216,13 @@ func attemptDeadline(now, deadline time.Time, candidatesLeft int) time.Time {
 	}
 	share := left / time.Duration(candidatesLeft)
 	if share < dialAttemptMinBudget {
-		// 剩余预算不足最小值时只能把它全用掉，否则给足最小值。
 		share = min(left, dialAttemptMinBudget)
 	}
 	return now.Add(share)
 }
 
-// dialAddrs 逐个拨给定的字面地址，整批候选**共享一份**拨号预算：预算取
-// d.Timeout——把域名交给 net.Dialer 时，一次名字解析的所有地址尝试共享的正是
-// 这一份——并按 attemptDeadline 给每个候选切分剩余预算。
-//
-// 每个候选各吃满一份 d.Timeout 会让 N 个挂起的候选把一条流卡住 N×d.Timeout
-// （默认 10s×N）且没有任何整体上界；共享预算后总时长回到单份 d.Timeout 之内，
-// 换候选的等待也降到一个子预算。全部候选失败时返回最后一个错误，调用方（客户端
-// 流）中途离开则返回 errClientGone。
+// 整批候选共享一份 d.Timeout 预算（与把域名交给 net.Dialer 时一致）：每个候选各吃满一份会让
+// N 个挂起的候选把一条流卡住 N×d.Timeout，且没有整体上界。
 func dialAddrs(ctx context.Context, d *net.Dialer, network, target string, addrs []netip.Addr) (net.Conn, error) {
 	if len(addrs) == 0 {
 		return nil, errors.New("no candidate addresses to dial")
@@ -322,8 +250,7 @@ func dialAddrs(ctx context.Context, d *net.Dialer, network, target string, addrs
 			return conn, nil
 		}
 		lastErr = err
-		// 调用方离开优先于预算耗尽：前者要被标记成 errClientGone 让上层按预期的
-		// 拆除处理，后者只是一次普通的拨号失败（保留最后一个真实错误）。
+		// 调用方离开优先于预算耗尽：前者要标成 errClientGone 让上层按预期的拆除处理。
 		if caller.Err() != nil {
 			return nil, fmt.Errorf("%w: %v", errClientGone, err)
 		}
@@ -334,8 +261,7 @@ func dialAddrs(ctx context.Context, d *net.Dialer, network, target string, addrs
 	return nil, lastErr
 }
 
-// dialOutbound 解析并校验目标（域名只解析一次，优先复用握手结果），然后只拨
-// 校验过的字面地址。目标原文永远不会传给拨号器，避免产生第二次、未校验的解析。
+// 只拨校验过的字面地址，目标原文永远不传给拨号器，避免产生第二次未校验的解析。
 func dialOutbound(ctx context.Context, d *net.Dialer, network, target string) (net.Conn, error) {
 	addrs, err := dialCandidates(ctx, target)
 	if err != nil {
@@ -344,56 +270,35 @@ func dialOutbound(ctx context.Context, d *net.Dialer, network, target string) (n
 	return dialAddrs(ctx, d, network, target, addrs)
 }
 
-// outboundDialer 返回直接出站拨号器；keepAlive 为 0 表示系统默认
-// （UDP/ICMP 没有长连接语义）。Timeout 必须显式设置：它既是 dialAddrs 分给整批
-// 候选的总预算，也是单个候选在一次 DialContext 内的上限；缺少它会让拨号在 SYN
-// 黑洞（被墙目标的常态）上一直挂到客户端放弃。
+// keepAlive 为 0 表示系统默认（UDP/ICMP 没有长连接语义）。Timeout 必须显式设置：它既是
+// dialAddrs 的总预算也是单次 DialContext 的上限，缺少它拨号会在 SYN 黑洞上挂到客户端放弃。
 func outboundDialer(timeout, keepAlive time.Duration) *net.Dialer {
 	return &net.Dialer{Timeout: timeout, KeepAlive: keepAlive}
 }
 
-// dialer 是 TCP/UDP/ICMP handler 共享的出站拨号组件：
-// next-proxy 路由（带尽力而为的 SSRF 预检查，见 dialTarget）以及只拨校验过的
-// 字面地址的直接拨号（带拨号后的纵深防御断言）。
 type dialer struct {
 	nextProxy *nextproxy.NextProxy
-	// shouldProxy 决定 target 是否经由 next proxy 转发。只有当 nextProxy 非 nil
-	// 时才会被查询，并且只要设置了 nextProxy 就必须同时设置它：
-	// ICMP handler 两者都不设置，因为原始 socket 无法由 SOCKS5 代理承载。
+	// 只要设置了 nextProxy 就必须同时设置它；ICMP 的原始 socket 无法由 SOCKS5 承载，
+	// 两个都为空。
 	shouldProxy func(target string) bool
-	// direct 打开直接出站连接，地址族由 dialOutbound 按 ctx 中的偏好决定。
-	direct func(ctx context.Context, network, target string) (net.Conn, error)
+	direct      func(ctx context.Context, network, target string) (net.Conn, error)
 }
 
-// usesNextProxy 报告按目标路由时是否会走下一级代理。入口日志与拨号路径共用
-// 它，因此日志里的路由不会与实际拨号各说各话。
+// 入口日志与拨号路径共用它，日志里的路由才与实际拨号一致。
 func (d *dialer) usesNextProxy(target string) bool {
 	return d.nextProxy != nil && d.shouldProxy != nil && d.shouldProxy(target)
 }
 
-// dialTarget 打开出站连接，并连同可打印的远端地址一起返回用于日志。
-// 远端地址在这里解析，因为 next-proxy 路径得到的是 SOCKS5 连接，
-// 其 RemoteAddr() 为 nil。
-//
-// 它按**目标**决定路由；需要按域名决定路由的调用方（DNS 查询，见
-// udpRouteDialer）改用 dialVia，两条路径共用下面的同一个实现。
+// 按目标决定路由；需要按域名决定路由的调用方（DNS 查询）改用 dialVia。
 func (d *dialer) dialTarget(ctx context.Context, network, target string) (net.Conn, string, error) {
 	return d.dialVia(ctx, network, target, "", d.usesNextProxy(target))
 }
 
-// dialVia 是出站拨号的唯一实现：viaNextProxy 由调用方决定（按目标，或像 DNS
-// 查询那样按域名），两个分支的 SSRF 检查与日志因此只有一份。
-//
-// name 只用于日志（DNS 查询的域名），为空时日志里的 target 已经足够。
+// 出站拨号的唯一实现，viaNextProxy 由调用方决定（按目标或按域名）；name 只用于日志。
 func (d *dialer) dialVia(ctx context.Context, network, target, name string, viaNextProxy bool) (net.Conn, string, error) {
 	if viaNextProxy && d.nextProxy != nil {
-		// 这条路径**有意**保持「把域名交给上游代理解析」的语义，因此 SSRF 检查
-		// 与实际连接是两次不同的解析：代理是管理员配置的可信组件，其自身解析器
-		// 是明确接受的残余风险（而不是遗漏）。这里的检查只是尽力而为的早退，
-		// 并复用握手阶段的解析结果；解析失败时放行（让代理去解析），因为被墙/
-		// 仅代理侧可解析的域名正是 next proxy 的用途之一。要彻底关掉这个窗口，
-		// 需要改成把服务端解析并校验过的字面 IP 交给代理——那会牺牲上述场景，
-		// 因此没有默认启用。
+		// 有意保留「把域名交给上游代理解析」的语义：被墙或仅代理侧可解析的域名正是
+		// next proxy 的用途，因此这里的检查只是尽力而为的早退，解析失败也放行。
 		addrs, ok := resolvedAddrs(ctx)
 		if !ok {
 			var err error
@@ -404,16 +309,11 @@ func (d *dialer) dialVia(ctx context.Context, network, target, name string, viaN
 		if lan := util.FirstLANAddr(addrs); lan.IsValid() {
 			return nil, "", fmt.Errorf("ssrf: rejected lan destination %s (target %s)", lan, target)
 		}
-		// 地址族刻意不下推到这一层：这里连的是上游 SOCKS5 代理而不是目标，
-		// 把客户端的地址族套到代理地址上只会让上游不可达。
-		// name 只在按域名路由时才有值（DNS 查询）；按目标路由时省略该属性，
-		// 而不是打一个空的 name=""。
+		// 地址族刻意不下推到这一层：这里连的是上游 SOCKS5 代理而不是目标。
 		attrs := []any{"target", target, "proxy", d.nextProxy.Host()}
 		if name != "" {
 			attrs = append(attrs, "name", name)
 		}
-		// 下一级代理的路由信息已经并入入口日志（serveSession 的
-		// via_next_proxy/proxy），这里保留 Debug 供排查更细的拨号细节。
 		log.Debug("[HANDLE] dialing via next proxy", attrs...)
 		conn, err := d.nextProxy.DialContext(ctx, network, target)
 		if err != nil {

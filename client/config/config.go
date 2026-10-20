@@ -18,11 +18,8 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-// DirectDNSServers 是用于直连（不走代理）DNS 查询的公共 DNS 服务器列表。
-// IPv4 项在前、IPv6 项在后，顺序是唯一的优先级依据：服务端域名的预解析按顺序
-// 串行尝试（见 dns.Cache.PrePopulateWithFallback），在线查询则把整个列表并发
-// 下发、取首个成功结果（见 dns.QueryWithBuiltinFirst 与 proxy.resolveDirectDNS）。
-// 区域内可达性有差异的服务器（如北京联通 123.123.123.123）排在国家级公共 DNS 之后。
+// DirectDNSServers 是直连 DNS 查询的公共 DNS 列表，IPv4 在前、IPv6 在后。顺序即优先级：
+// 预解析按顺序串行尝试，在线查询并发下发取首个成功。
 var DirectDNSServers = []string{
 	"223.5.5.5:53",       // AliDNS
 	"119.29.29.29:53",    // DNSPod
@@ -32,17 +29,13 @@ var DirectDNSServers = []string{
 	"[2400:3200:baba::1]:53",
 }
 
-// ProxyDNSServer 是通过隧道代理 DNS 查询时使用的上游 DNS 服务器。
 const ProxyDNSServer = "8.8.8.8:53"
 
-// DefaultSystemDNS 是写入系统解析器配置的保底裸 IPv4，等于 DirectDNSServers
-// 中第一个 IPv4 项。TUN 启动时实际取值优先用 dns.PreferredSystemDNS()——本会话
-// 实测可达的内置直连 DNS，其次是实测可达的系统 DNS（DHCP/内网解析器，覆盖
-// "全部内置 DNS 都不可用"的网络）——两者都没有记录时才回退到这里。
+// DefaultSystemDNS 是写入系统解析器配置的保底裸 IPv4，等于 DirectDNSServers 的第一个 IPv4
+// 项。TUN 启动时优先用 dns.PreferredSystemDNS()，都没有记录时才回退到这里。
 const DefaultSystemDNS = "223.5.5.5"
 
-// ServerProfile 描述一个服务端端点。Host 是主机名或 IP 字面量，不含端口；
-// 旧版完整模式配置里的 servers[].address 由 UnmarshalJSON 映射到 Host。
+// ServerProfile 描述一个服务端端点。Host 是主机名或 IP 字面量，不含端口。
 type ServerProfile struct {
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
@@ -53,8 +46,8 @@ type ServerProfile struct {
 	Default  bool   `json:"default"`
 }
 
-// UnmarshalJSON 兼容旧版完整模式配置里的 servers[].address：它等价于
-// servers[].host。新旧键同时出现属于歧义配置，直接报错而不是静默选择其中一个。
+// UnmarshalJSON 兼容旧版完整模式配置里的 servers[].address（等价于 host）。新旧键同时出现
+// 属于歧义配置，直接报错而不是静默选择其中一个。
 func (s *ServerProfile) UnmarshalJSON(data []byte) error {
 	type plain ServerProfile
 	var p plain
@@ -105,7 +98,7 @@ type TransportConfig struct {
 	ConnCountMax      int     `json:"conn_count_max"`
 	StreamThreshold   int     `json:"stream_threshold"`
 	PrioritySlotRatio float64 `json:"priority_slot_ratio"`
-	ConnMaxBytes      int64   `json:"conn_max_bytes"` // 连接在任一方向上承载的最大字节数，0 表示使用默认值
+	ConnMaxBytes      int64   `json:"conn_max_bytes"` // 单个连接在任一方向承载的最大字节数，0 用默认值
 }
 
 type ShaperConfig struct {
@@ -119,8 +112,7 @@ type LogConfig struct {
 	FilePath string `json:"file_path"`
 }
 
-// ClientConfig 是完整模式客户端配置。配置版本仍为 3：servers[].address →
-// servers[].host 的字段改名由 ServerProfile.UnmarshalJSON 兼容，不升版本。
+// ClientConfig 是完整模式客户端配置。
 type ClientConfig struct {
 	ConfigVersion int              `json:"version"`
 	Servers       []*ServerProfile `json:"servers"`
@@ -135,11 +127,8 @@ type ClientConfig struct {
 	PprofEnabled  bool             `json:"pprof_enabled"`
 }
 
-// validateServers 固定完整模式服务端条目的基本契约：host 必填，且不得把端口
-// 写进 host。冒号只有在 host 是合法 IP 字面量（IPv6）时才允许——域名带端口会
-// 被拼成 https://<host>:<port>:<port>，失败点离配置很远。地址拼装统一走
-// net.JoinHostPort（见 ServerURL/DefaultServerAddr/ServerListAddrs），IPv6
-// 字面量会自动加上方括号。
+// validateServers 固定服务端条目的契约：host 必填且不得含端口。冒号只在 host 是合法 IP
+// 字面量（IPv6）时才允许——带端口的域名会被拼成 https://<host>:<port>:<port>，失败点离配置很远。
 func (c *ClientConfig) validateServers() error {
 	for i, srv := range c.Servers {
 		if srv == nil {
@@ -175,25 +164,18 @@ func (c *ClientConfig) ServerURL() string {
 	return "https://" + net.JoinHostPort(srv.Host, strconv.Itoa(srv.Port))
 }
 
-// TimeoutDuration 返回归一化后的基础超时：非正值取默认值，越界值钳制到
-// [config.MinTimeout, config.MaxTimeout]（见 config.NormalizeTimeout）。
 func (c *ClientConfig) TimeoutDuration() time.Duration {
 	return config.TimeoutDuration(c.Timeout)
 }
 
-// ConnLifetimeDuration 返回传输层连接轮换前的最大存活时长，由基础超时派生
-// （config.ConnLifetime = 12 倍 timeout，默认 360s）。该值刻意不可配置：
-// 单一旋钮 timeout 即同时缩放空闲、拨号与轮换节奏，慢链路把 timeout 调大时
-// 连接不会相对更频繁地被轮换。
+// ConnLifetimeDuration 是连接轮换前的最大存活时长，由基础超时派生（12 倍，默认 360s）。
+// 刻意不可配置：单一旋钮 timeout 同时缩放空闲、拨号与轮换节奏。
 func (c *ClientConfig) ConnLifetimeDuration() time.Duration {
 	return config.ConnLifetime(c.TimeoutDuration())
 }
 
-// TunMTU 返回归一化后的 TUN MTU（见 config.NormalizeTunMTU）：它是 TUN 设备
-// 真实 MTU 与 tun2socks netstack MTU 的共同来源，两者必须一致（见
-// client/tun.Manager.engineMTU）。applyDefaults 已把合法值写回结构体，这里
-// 再归一化一次是为了覆盖不经过 applyDefaults 的构造路径（简单模式构建、测试
-// 以及托盘在运行期改写过的内存配置），使任何调用点都不可能拿到越界值。
+// TunMTU 返回归一化后的 TUN MTU，它是设备真实 MTU 与 tun2socks netstack MTU 的共同来源。
+// 再归一化一次是为了覆盖不经过 applyDefaults 的构造路径。
 func (c *ClientConfig) TunMTU() int {
 	return config.NormalizeTunMTU(c.Local.TunMTU)
 }
@@ -255,16 +237,13 @@ func LoadConfig(path string) (*ClientConfig, error) {
 		return BuildSimpleConfig(&s)
 	}
 
-	// 完整模式与 ParseConfigJSON 共用同一条解析/归一化/校验路径：
-	// 两处各写一遍 unmarshal + applyDefaults + validateServers 曾导致
-	// "从文件加载"和"从字符串加载"对同一份配置给出不同结果。
+	// 完整模式与 ParseConfigJSON 共用同一条解析/归一化/校验路径，否则"从文件加载"与
+	// "从字符串加载"会对同一份配置给出不同结果。
 	return ParseConfigJSON(string(data))
 }
 
-// normalizeHTTPPort 在 http_port 未配置（0）时由 socks_port 推导出本地 HTTP 代理
-// 端口（socks_port + config.DefaultHTTPPortOffset）。简化模式与完整模式共用它：
-// 只在简化模式推导会让完整模式的配置"少一个端口"，而两个端口本就是同一个本地
-// 代理的两种入口。socks_port 为 0（不启动本地代理服务器）时不做推导。
+// normalizeHTTPPort 在 http_port 未配置（0）时由 socks_port 推导。socks_port 为 0（不启动
+// 本地代理）时不推导。
 func normalizeHTTPPort(c *ClientConfig) {
 	if c.Local.HTTPPort == 0 && c.Local.SocksPort > 0 {
 		c.Local.HTTPPort = c.Local.SocksPort + config.DefaultHTTPPortOffset
@@ -272,16 +251,11 @@ func normalizeHTTPPort(c *ClientConfig) {
 }
 
 func applyDefaults(c *ClientConfig) {
-	// timeout 是全部派生超时（流空闲/UDP 空闲/拨号/DNS 响应/连接轮换）的唯一旋钮：
-	// 非正值取默认值，越界值钳制到 [MinTimeout, MaxTimeout]，使内存中的配置与
-	// 之后派生的值始终一致（见 config.NormalizeTimeout）。
+	// timeout 是全部派生超时的唯一旋钮：越界值绝不留到各消费点去兜底，否则内存中的配置与
+	// 派生的值会不一致。
 	c.Timeout = config.NormalizeTimeout(c.Timeout)
-	// MTU 与 timeout 同理：越界值绝不能留在结构体里再由各消费点各自兜底。
-	// 它同时作用于 TUN 设备与 tun2socks netstack，两者不一致会造成静默丢包，
-	// 因此合法性的判断只走 config.NormalizeTunMTU 这一条路径。
+	// MTU 与 timeout 同理：它同时作用于 TUN 设备与 netstack，两者不一致会造成静默丢包。
 	c.Local.TunMTU = config.NormalizeTunMTU(c.Local.TunMTU)
-	// http_port 缺省时由 socks_port 推导：本地代理端口的语义在简化模式与完整
-	// 模式下完全一致，推导只有 normalizeHTTPPort 一处实现。
 	normalizeHTTPPort(c)
 	if c.Transport.Protocol == "" {
 		c.Transport.Protocol = config.DefaultProtocol
@@ -304,8 +278,8 @@ func applyDefaults(c *ClientConfig) {
 	if c.Transport.ConnMaxBytes <= 0 {
 		c.Transport.ConnMaxBytes = config.DefaultConnMaxBytes
 	}
-	// shaper 设置在构建 shaper 时归一化（shaper.Config.Normalize），
-	// 由它持有这些默认值与边界；在这里再保留一份副本正是导致两者偏离的原因。
+	// shaper 设置在构建 shaper 时由 shaper.Config.Normalize 归一化并持有默认值与边界，
+	// 在这里再保留一份副本正是两者偏离的原因。
 	if c.Routing.ProxyRule == "" {
 		c.Routing.ProxyRule = config.DefaultProxyRule
 	}
@@ -325,10 +299,8 @@ func applyDefaults(c *ClientConfig) {
 	}
 }
 
-// ResolveFilePaths 将配置中的相对文件路径解析为相对可执行文件目录的路径，
-// 前提是这些路径无法在当前工作目录中找到。在 macOS 上应用常由 Finder/launchd
-// 以 cwd=/ 启动，因此 direct.txt、proxy.txt 或 ca_path 等相对路径即使与
-// 二进制/.app bundle 位于同一目录，也照样无法被找到。
+// ResolveFilePaths 把相对路径解析为相对可执行文件目录（前提是当前工作目录找不到）。macOS
+// 上应用常由 Finder/launchd 以 cwd=/ 启动，相对路径即使与二进制同目录也找不到。
 func (c *ClientConfig) ResolveFilePaths() {
 	c.Routing.DirectFile = util.ResolvePath(c.Routing.DirectFile)
 	c.Routing.ProxyFile = util.ResolvePath(c.Routing.ProxyFile)
@@ -371,8 +343,8 @@ func (c *ClientConfig) DefaultServerAddr() string {
 	return serverAddr(srv)
 }
 
-// serverAddr 是 host:port 的唯一拼装入口：IPv6 字面量必须带方括号才是合法的
-// dial 地址与 URL authority（net.JoinHostPort 负责加，域名/IPv4 输出不变）。
+// serverAddr 是 host:port 的唯一拼装入口：IPv6 字面量必须带方括号才是合法的 dial 地址与
+// URL authority（net.JoinHostPort 负责加）。
 func serverAddr(s *ServerProfile) string {
 	return net.JoinHostPort(s.Host, strconv.Itoa(s.Port))
 }
@@ -386,9 +358,6 @@ func (c *ClientConfig) DefaultServerIndex() int {
 	return 0
 }
 
-// ParseConfigJSON 解析完整模式（v3）配置。它是完整模式唯一的
-// unmarshal + applyDefaults + validateServers 入口：LoadConfig 读完文件、
-// 判定不是简化模式之后直接调用它。
 func ParseConfigJSON(jsonStr string) (*ClientConfig, error) {
 	var cfg ClientConfig
 	if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {

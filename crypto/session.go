@@ -15,8 +15,7 @@ const (
 	sessionPhase   = "session"
 )
 
-// Direction 标识会话的一侧：客户端到服务端或服务端到客户端。
-// 每个方向拥有独立的密钥与 nonce 计数器。
+// Direction 标识会话的一侧，每个方向拥有独立的密钥与 nonce 计数器。
 type Direction uint8
 
 const (
@@ -36,9 +35,7 @@ func (d Direction) String() string {
 }
 
 // ErrHandshakeTimeout 报告在握手超时时间内未收到完整的 bootstrap 记录。
-// 此时服务端返回 408 Request Timeout（镜像 nginx client_body_timeout 的行为）
-// 而不是伪装 fallback 页面，这样记录只是延迟到达的合法客户端会收到干净的
-// 拒绝，而不是把 HTML 误解析为会话记录。
+// 此时服务端返回 408 而不是 fallback 页面，延迟到达的合法客户端才会收到干净的拒绝。
 var ErrHandshakeTimeout = errors.New("crypto: bootstrap handshake timeout")
 
 type FirstRecord struct {
@@ -91,8 +88,7 @@ func NewStreamKeys(masterKey, salt []byte, endpoint string) (*StreamKeys, error)
 }
 
 // BootstrapWriter 返回流的首条记录（携带握手的 bootstrap 记录）的写入器。
-// bootstrap 阶段始终在 c2s 密钥上使用 AES-256-GCM，因此调用方无法选择
-// 不匹配的方法。
+// bootstrap 阶段始终在 c2s 密钥上用 AES-256-GCM，调用方无法选择不匹配的方法。
 func (sk *StreamKeys) BootstrapWriter(w io.Writer) (*RecordWriter, error) {
 	return sk.newRecordWriter(w, bootstrapPhase, DirC2S, protocol.MethodAES256GCM)
 }
@@ -102,10 +98,8 @@ func (sk *StreamKeys) NewWriter(w io.Writer, dir Direction, method protocol.Meth
 	return sk.newRecordWriter(w, sessionPhase, dir, method)
 }
 
-// NewReader 返回给定方向的会话阶段记录读取器。读取器与写入器连同各自的
-// AAD、加密器和 nonce 计数器一起创建，三者永远不会不一致，且一个方向的
-// 计数器只实例化一次（对同一方向调用两次 newEncryptor 会重启 nonce 计数器
-// 并复用密钥流）。
+// NewReader 返回给定方向的会话阶段记录读取器。一个方向的 nonce 计数器只能实例化一次：
+// 对同一方向调用两次 newEncryptor 会重启计数器并复用密钥流。
 func (sk *StreamKeys) NewReader(r io.Reader, dir Direction, method protocol.Method) (*DecryptedReader, error) {
 	enc, counter, err := sk.newEncryptor(sessionPhase, dir, method)
 	if err != nil {
@@ -114,8 +108,7 @@ func (sk *StreamKeys) NewReader(r io.Reader, dir Direction, method protocol.Meth
 	return NewDecryptedReader(r, sk.aad(dir, sessionPhase, method), enc, counter), nil
 }
 
-// NewRecordReader 是不带帧层的 NewReader，供自行解码记录的调用方使用
-// （例如测试和 bootstrap 首条记录读取）。
+// NewRecordReader 是不带帧层的 NewReader，供自行解码记录的调用方使用。
 func (sk *StreamKeys) NewRecordReader(r io.Reader, dir Direction, method protocol.Method) (*RecordReader, error) {
 	enc, counter, err := sk.newEncryptor(sessionPhase, dir, method)
 	if err != nil {

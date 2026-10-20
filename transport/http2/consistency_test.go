@@ -12,11 +12,8 @@ import (
 	"github.com/nange/easyss/v3/transport"
 )
 
-// TestStatsConnsStatusConsistencyUnderShrink 用 shrinker goroutine
-// （模拟 closeIdleLoop）压力测试调度器，同时让一个 stats 读取 goroutine
-// （模拟 /stats 轮询）渲染每个池的 conns_status。若渲染出的条目数超过
-// 并发报告的每池 Conns 值，或任一池渲染出的索引不是从 0 连续递增，
-// 则测试失败。
+// TestStatsConnsStatusConsistencyUnderShrink 用 shrinker 与 stats 读取两个 goroutine
+// 压调度器：渲染出的 conns_status 条目数不得超过并发报告的每池 Conns 值，索引须从 0 连续递增。
 func TestStatsConnsStatusConsistencyUnderShrink(t *testing.T) {
 	slots := make([]*transportSlot, 6)
 	for i := range slots {

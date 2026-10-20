@@ -25,9 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// logRecorder 捕获包级日志器的记录，用于断言"配置不当会告警"这类行为。
-// server 包的用例不并行，因此替换包级日志器是安全的（与 transport/http2、
-// server/handler 的用例同一手法）。
+// logRecorder 捕获包级日志器的记录。server 包的用例不并行，替换包级日志器是安全的。
 type logRecorder struct {
 	mu      sync.Mutex
 	records []slog.Record
@@ -73,14 +71,12 @@ func TestCertmagicStoragePathForExecutable(t *testing.T) {
 }
 
 func TestNewDoesNotValidateProtocols(t *testing.T) {
-	// transport.protocols 已删除：老配置里的该键由 json.Unmarshal 忽略，New 不再
-	// 读取它。这里守住"删除后不会因为残留字段而拒绝启动"。
+	// 老配置里的 transport.protocols 由 json.Unmarshal 忽略，New 不读它。
 	require.NoError(t, mustNewServer(t))
 }
 
-// TestNewValidatesConfig 固定 server.New 也是校验入口：它是导出 API，测试与
-// 嵌入式调用会绕过 config.LoadConfig 直接手搓 FileConfig，因此不能把
-// allowed_methods/h2_*/监听端点的校验只留在配置文件路径上。
+// TestNewValidatesConfig 固定 server.New 也是校验入口：导出 API 会被绕过
+// config.LoadConfig 的调用方直接手搓 FileConfig，校验不能只留在配置文件路径上。
 func TestNewValidatesConfig(t *testing.T) {
 	cfg := &config.FileConfig{
 		Server: config.ServerConfig{
@@ -105,8 +101,7 @@ func TestNewValidatesConfig(t *testing.T) {
 	_, err = New(cfg)
 	require.ErrorContains(t, err, "transport.h2_recv_buf_conn")
 
-	// Port==0 仍有 ListenAddr 的默认值语义；非法端口与带端口的 bind 必须在
-	// New 就失败，而不是留到 Start 的 net.Listen。
+	// 非法端口与带端口的 bind 必须在 New 就失败，而不是留到 Start 的 net.Listen。
 	cfg = &config.FileConfig{
 		Server: config.ServerConfig{Host: "example.com", Port: 70000},
 	}
@@ -129,7 +124,6 @@ func mustNewServer(t *testing.T) error {
 }
 
 func TestShouldRetryFreshCertificate(t *testing.T) {
-	// typed problem：alreadyReplaced 与 404 不依赖 detail 文本。
 	require.True(t, shouldRetryFreshCertificate(acme.Problem{
 		Type:   acme.ProblemTypeAlreadyReplaced,
 		Status: http.StatusConflict,
@@ -150,7 +144,6 @@ func TestShouldRetryFreshCertificate(t *testing.T) {
 		Detail: "Requested certificate was not found",
 	})))
 
-	// 非 Problem 包装的兼容路径仍然保留。
 	require.True(t, shouldRetryFreshCertificate(errString("Could not validate ARI 'replaces' field")))
 	require.True(t, shouldRetryFreshCertificate(errString("Requested certificate was not found")))
 	require.False(t, shouldRetryFreshCertificate(errString("dial tcp: i/o timeout")))
@@ -181,14 +174,8 @@ func TestCleanCertmagicDomainAssets(t *testing.T) {
 	}
 }
 
-// TestCertmagicAcceptsPublicIPSubject 是 IP-only 模式对依赖的守卫测试：certmagic
-// 用一张硬编码的表判断"某个公网 CA 是否支持 IP 证书"，而这个功能完全依赖那张表里
-// Let's Encrypt 是 true。它不联网（显式设置 Email，PreCheck 因此既不读存储也不
-// 向用户提问），只在升级 certmagic 或改动 CA 时让"IP 证书不再被支持"立刻变红。
-//
-// 同时钉住私有地址确实被预检拒绝：server/config.validateTLS 的判据比它更严（还
-// 覆盖 CGNAT/TEST-NET 等段），但两者对私有地址必须一致，否则配置层那道闸就成了
-// 唯一一道。
+// TestCertmagicAcceptsPublicIPSubject 守住 IP-only 模式的依赖假设：certmagic 用硬编码表
+// 判断公网 CA 是否支持 IP 证书，升级 certmagic 时本测试变红；私有地址须与 validateTLS 一致地被拒。
 func TestCertmagicAcceptsPublicIPSubject(t *testing.T) {
 	var cmCfg *certmagic.Config
 	cache := certmagic.NewCache(certmagic.CacheOptions{
@@ -230,9 +217,6 @@ func TestFindExistingACMEEmail(t *testing.T) {
 	tmpDir := t.TempDir()
 	storagePath := filepath.Join(tmpDir, "certmagic")
 
-	// 创建模拟 certmagic 的目录结构：
-	// certmagic/acme/acme-v02.api.letsencrypt.org-directory/users/old@example.com/
-	// certmagic/acme/acme-v02.api.letsencrypt.org-directory/users/new@example.com/
 	usersPath := filepath.Join(storagePath, "acme", "acme-v02.api.letsencrypt.org-directory", "users")
 	oldEmailDir := filepath.Join(usersPath, "old@example.com")
 	newEmailDir := filepath.Join(usersPath, "new@example.com")
@@ -240,7 +224,6 @@ func TestFindExistingACMEEmail(t *testing.T) {
 	require.NoError(t, os.MkdirAll(oldEmailDir, 0700))
 	require.NoError(t, os.MkdirAll(newEmailDir, 0700))
 
-	// 确保旧邮箱的修改时间更早
 	oldTime := time.Now().Add(-1 * time.Hour)
 	require.NoError(t, os.Chtimes(oldEmailDir, oldTime, oldTime))
 
@@ -251,7 +234,6 @@ func TestFindExistingACMEEmail(t *testing.T) {
 func TestFindExistingACMEEmail_Empty(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// 完全没有 acme 目录
 	result := findExistingACMEEmail(tmpDir)
 	require.Equal(t, "", result)
 }
@@ -259,7 +241,6 @@ func TestFindExistingACMEEmail_Empty(t *testing.T) {
 func TestFindExistingACMEEmail_NoUsers(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// acme 目录存在但没有 users 子目录
 	acmePath := filepath.Join(tmpDir, "acme", "some-ca")
 	require.NoError(t, os.MkdirAll(acmePath, 0700))
 
@@ -281,7 +262,6 @@ func TestResolveEmail_Reuse(t *testing.T) {
 	tmpDir := t.TempDir()
 	storagePath := filepath.Join(tmpDir, "certmagic")
 
-	// 在磁盘上创建已存在的邮箱
 	usersPath := filepath.Join(storagePath, "acme", "acme-v02.api.letsencrypt.org-directory", "users")
 	existingEmail := "reused@example.com"
 	require.NoError(t, os.MkdirAll(filepath.Join(usersPath, existingEmail), 0700))
@@ -308,12 +288,6 @@ func TestResolveEmail_Generated(t *testing.T) {
 	require.True(t, matched, "unexpected generated email format: %s", s.cfg.Server.Email)
 }
 
-// TestBuildHTTPServerUploadFlowControl 用字面量固定上传侧的 HTTP/2 参数
-// （而不是直接引用常量本身，这样缩小常量的回归同样会让本测试失败）：
-// 单条上传流的吞吐 ≈ 窗口/RTT，两个窗口都取 net/http 文档允许的上界
-// （文档要求"小于 4MiB"，因此最大合法值就是 4<<20-1；4<<20 恰好越界，而改前的
-// 连接级窗口正是这个越界值）。并发流上限取实测主流站点的 128，而不是 Go stdlib
-// 默认的 250。
 // TestBuildHTTPServerUsesListenAddr 固定监听地址只由 ServerConfig.ListenAddr
 // 格式化：bind 与 port 必须原样进入 http.Server.Addr。
 func TestBuildHTTPServerUsesListenAddr(t *testing.T) {
@@ -328,6 +302,9 @@ func TestBuildHTTPServerUsesListenAddr(t *testing.T) {
 	require.Equal(t, ":443", srv.Addr)
 }
 
+// TestBuildHTTPServerUploadFlowControl 用字面量（而非常量引用）固定上传侧参数，缩小
+// 常量同样会让本测试失败：吞吐 ≈ 窗口/RTT，故两窗口都取 4<<20-1，即 net/http 文档
+// "小于 4MiB"允许的上界；并发流上限取主流站点的 128，而非 stdlib 默认的 250。
 func TestBuildHTTPServerUploadFlowControl(t *testing.T) {
 	srv := buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Port: 443}}, nil, http.NewServeMux(), 30*time.Second)
 	require.NotNil(t, srv.HTTP2)
@@ -361,15 +338,13 @@ func TestBuildHTTPServerH2ConfigOverrides(t *testing.T) {
 	require.Equal(t, sharedconfig.HTTP2ServerMaxConcurrentStreams, srv.HTTP2.MaxConcurrentStreams)
 }
 
-// TestBuildHTTPServerWarnsOnInvertedWindows 固定"连接级窗口应 ≥ 流级窗口"这条
-// 不变量的可见性：连接窗口是流级窗口的硬上限（每个字节都要同时扣减两个窗口），
-// 把它配得更小时单条流的在途额度由它决定——那正是"上传速度上不去"的一类配置，
-// 而且不会以任何其他方式暴露出来，所以启动时必须告警。只告警不纠正：压小连接
-// 窗口往往是有意的内存收敛，替运维改大反而违背其意图。
+// TestBuildHTTPServerWarnsOnInvertedWindows 固定"连接级窗口应 ≥ 流级窗口"的可见性：
+// 连接窗口是流级窗口的硬上限（每个字节同时扣减两个窗口），配得更小会压死单流在途
+// 额度且不报错，故启动必须告警。只告警不纠正：压小窗口常是有意的内存收敛。
 func TestBuildHTTPServerWarnsOnInvertedWindows(t *testing.T) {
 	rec := captureServerLogs(t)
 
-	// 默认（连接窗口 == 流级窗口）不是错误配置，不应有告警。
+	// 两个窗口相等不是错误配置，不应有告警。
 	buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Port: 443}}, nil, http.NewServeMux(), 30*time.Second)
 	require.Empty(t, rec.warnings(), "equal windows must not warn")
 
@@ -396,22 +371,12 @@ func TestBuildHTTPServerWarnsOnInvertedWindows(t *testing.T) {
 	require.Equal(t, "4194303", attrs["h2_recv_buf_stream"])
 }
 
-// TestServerUploadFlowControlWindowsOnWire 验证服务端**实际宣告**的上行参数与
-// buildHTTPServer 组装的配置逐字节一致：SETTINGS_INITIAL_WINDOW_SIZE 携带流级
-// 窗口、SETTINGS_MAX_CONCURRENT_STREAMS 携带每连接并发流上限，连接级
-// WINDOW_UPDATE 在 RFC 7540 初始 65535 字节的基础上补齐连接窗口。标准库服务端会
-// 排队其 SETTINGS，并在客户端 preface 一到就立即刷新，因此 preface 之后这些帧
-// 立即可读。
-//
-// 断言刻意用 Equal 而不是">= 下界"：net/http 文档把这两个窗口字段的合法值写在
-// "小于 4MiB"，而实现当前并不校验它（内部钳制区间是 [64KiB, MaxInt32]）。一旦
-// 某个 Go 版本开始校验，我们的值会被**静默**换成默认值 1MB——上传吞吐直接掉回
-// 1MB/RTT。那正是本测试要拦住的回归。
+// TestServerUploadFlowControlWindowsOnWire 守住服务端实际宣告的窗口与配置逐字节一致：
+// 4<<20-1 一旦被 Go 校验会静默换成默认 1MB，吞吐掉回 1MB/RTT，因此必须用 Equal 而非下界。
 func TestServerUploadFlowControlWindowsOnWire(t *testing.T) {
 	built := buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Port: 443}}, nil, http.NewServeMux(), 30*time.Second)
-	// 拷一份再交给 httptest：标准库只在装配连接时读取该配置
-	// （ServeConn → configFromServer），不会回写，但把同一个指针既交给它又留在
-	// 测试局部变量里属于隐式的只读借用前提，复制后就不再依赖那一条。
+	// 拷一份再交给 httptest：标准库只在装配连接时读该配置不回写，但共享指针暗含
+	// 只读借用前提，复制后不再依赖它。
 	http2Cfg := *built.HTTP2
 
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
@@ -430,8 +395,7 @@ func TestServerUploadFlowControlWindowsOnWire(t *testing.T) {
 	defer conn.Close() //nolint:errcheck
 	require.Equal(t, "h2", conn.ConnectionState().NegotiatedProtocol)
 
-	// 发送 HTTP/2 客户端 preface：服务端一旦读到它，就会刷新自己的 SETTINGS
-	// 和连接级 WINDOW_UPDATE。
+	// 服务端读到客户端 preface 后立即刷新自己的 SETTINGS 与连接级 WINDOW_UPDATE。
 	_, err = conn.Write([]byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"))
 	require.NoError(t, err)
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
@@ -479,37 +443,28 @@ func TestServerUploadFlowControlWindowsOnWire(t *testing.T) {
 		}
 	}
 
-	// 与常量同源（生产配置与文档不会各自漂移）……
+	// 与共享常量同源，生产配置不会各自漂移。
 	require.Equal(t, sharedconfig.HTTP2ServerReceiveBufferPerStream, streamWindow,
 		"advertised per-stream upload window")
 	require.Equal(t, sharedconfig.HTTP2ServerReceiveBufferPerConnection, connWindow,
 		"advertised connection upload window")
 	require.Equal(t, sharedconfig.HTTP2ServerMaxConcurrentStreams, maxStreams,
 		"advertised per-connection concurrency limit")
-	// ……并且就是文档允许的上界（写死字面量，防止常量被整体调小）。
+	// 字面量固定文档允许的上界，防止常量被整体调小。
 	require.Equal(t, (4<<20)-1, streamWindow)
 	require.Equal(t, (4<<20)-1, connWindow)
 	require.Equal(t, 128, maxStreams)
 }
 
-// TestServerUploadFlowControlInFlightPerStream 端到端固定**流级**窗口的语义：
-// handler 故意不读请求体，客户端能塞进去的在途字节数就被流控窗口封顶。这条不变式
-// 正是上传吞吐的来源（吞吐 ≈ 窗口/RTT），也是本次改动唯一会改变的量。
-//
-// 服务端配置取自 buildHTTPServer 而不是在这里手抄常量：这样覆盖条件写反、字段接错
-// 这类接线错误同样会被本用例抓住（与 TestServerUploadFlowControlWindowsOnWire
-// 一致）。
-//
-// 两侧都留余量：下界排除"窗口其实还是默认 1MB"这类静默回落，上界排除"窗口被设成
-// 不受限（甚至无限）"这类错误。测量依据"在途量停止增长"而不是计时，因此在 CI 上
-// 不抖动；余量覆盖客户端管道/h2 写入侧一拍（最多两个 64KB 块）的交接。
+// TestServerUploadFlowControlInFlightPerStream 端到端守住流级窗口真的封住请求体：handler
+// 故意不读请求体，在途字节数必须停止增长；配置取自 buildHTTPServer，字段接错会失败。
 func TestServerUploadFlowControlInFlightPerStream(t *testing.T) {
 	built := buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Port: 443}}, nil, http.NewServeMux(), 30*time.Second)
 	http2Cfg := *built.HTTP2
 
 	release := make(chan struct{})
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 读到 release 之前不碰 r.Body：服务端能缓冲的字节数由窗口决定。
+		// 读到 release 之前不碰 r.Body：能缓冲的字节数由窗口决定。
 		<-release
 	}))
 	ts.EnableHTTP2 = true
@@ -535,14 +490,14 @@ func TestServerUploadFlowControlInFlightPerStream(t *testing.T) {
 	req, err := http.NewRequest(http.MethodPost, ts.URL+sharedconfig.EndpointTCP, pr)
 	require.NoError(t, err)
 	go func() {
-		// 结果无关紧要：只要 handler 不读 body，这个请求就会一直停在流控上。
+		// 结果无关紧要：handler 不读 body，请求会一直停在流控上。
 		resp, err := tr.RoundTrip(req)
 		if err == nil {
 			_ = resp.Body.Close()
 		}
 	}()
 
-	// 持续写 64KB 块，直到因流控阻塞。
+	// 持续写 64KB 块直到被流控阻塞。
 	chunk := make([]byte, 64<<10)
 	var written atomic.Int64
 	go func() {
@@ -555,7 +510,7 @@ func TestServerUploadFlowControlInFlightPerStream(t *testing.T) {
 		}
 	}()
 
-	// 在途量停止增长即代表额度耗尽（handler 不读 → 不会再有 WINDOW_UPDATE）。
+	// 在途量停止增长即额度耗尽（handler 不读就不会再有 WINDOW_UPDATE）。
 	var inFlight int64
 	stableSince := time.Now()
 	deadline := time.Now().Add(20 * time.Second)
@@ -575,9 +530,7 @@ func TestServerUploadFlowControlInFlightPerStream(t *testing.T) {
 		}
 	}
 
-	// 在途上限是流级与连接级窗口的较小者：单流能占多少受流窗口限制，但整条连接
-	// 的信用额度（连接窗口）无论如何不会超过。取生效配置（而不是常量）描述这条
-	// 不变式，字段接错时本用例同样会失败。
+	// 在途上限取两个窗口的较小者：单流受流窗口限制，整条连接不会超过连接窗口。
 	window := int64(min(http2Cfg.MaxReceiveBufferPerStream, http2Cfg.MaxReceiveBufferPerConnection))
 	require.GreaterOrEqual(t, inFlight, window-256<<10,
 		"client must be able to fill the configured per-stream window before backpressure")

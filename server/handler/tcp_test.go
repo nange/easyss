@@ -47,10 +47,8 @@ func stubResolveHost(t *testing.T, addrs []string, err error) *atomic.Int32 {
 	return calls
 }
 
-// TestDialCandidates 覆盖 SSRF 校验与拨号候选的构造：候选永远是字面地址
-// （域名不会被交给拨号器），任一候选为 LAN 时整个目标被拒绝，且 ctx 中已有
-// 握手阶段校验过的地址时不再查 DNS——检查与连接之间没有可供 DNS-rebinding
-// 翻转答案的第二次解析。
+// TestDialCandidates 守住 SSRF 检查与拨号用的是同一次解析：候选永远是字面地址，ctx 里已有
+// 握手阶段校验过的地址时不再查 DNS，不给 DNS-rebinding 留第二次解析。
 func TestDialCandidates(t *testing.T) {
 	v4 := netip.MustParseAddr(testPublicV4)
 	v6 := netip.MustParseAddr(testPublicV6)

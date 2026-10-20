@@ -13,16 +13,12 @@ import (
 	"github.com/nange/easyss/v3/protocol"
 )
 
-// 本文件守护"DNS 执行器只有一份"这条结构性约束：同一条查询无论从 UDP 还是
-// TCP 前端进来，都必须产生**完全相同**的缓存条目与 AAAA 剥离结果。
-//
-// 这类一致性此前没有任何测试守着——两个前端各写一遍后处理，任何一步只改一边
-// 都不会让现有测试失败（UDP 的用例看 UDP，TCP 的用例看 TCP）。
+// 本文件守护"DNS 执行器只有一份"：同一条查询无论从 UDP 还是 TCP 前端进来，
+// 都必须产生完全相同的缓存条目与 AAAA 剥离结果。只按前端分开测，一边改错不会
+// 让另一边的用例失败。
 
-// TestProxiedPostProcessingIsShared 固定代理分支的后处理只存在于一处：
-// finishProxied 同时完成规范化、AAAA 剥离、缓存写入与学习。UDP 前端通过
-// postProcessProxied 间接调用它，TCP 前端直接调用它，两条路径的结果必须逐项
-// 相同。
+// TestProxiedPostProcessingIsShared 固定代理分支的后处理只存在于 finishProxied：
+// UDP 前端经 postProcessProxied 间接调用它，TCP 前端直接调用它。
 func TestProxiedPostProcessingIsShared(t *testing.T) {
 	tests := []struct {
 		name            string

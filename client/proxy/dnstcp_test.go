@@ -84,10 +84,8 @@ func serveTCPDNSHandler(t *testing.T, srv *Socks5Server, target string) (net.Con
 	return client, bufio.NewReader(client)
 }
 
-// fakeEncryptedUpstream 让 mockTransport 产出的流"会应答"：它在服务端侧扮演
-// 加密会话的远端，读出客户端写来的引导记录（含 DNS 查询），再用同一套密钥在
-// s2c 方向写回一条 DATAGRAM 应答。这样代理 DNS 的成功路径（而不只是上游沉默的
-// 失败路径）可以在没有真实传输层的情况下被端到端验证。
+// fakeEncryptedUpstream 让 mockTransport 的流"会应答"，代理 DNS 的成功路径因此
+// 能在没有真实传输层时被端到端验证（否则只能测到上游沉默的失败路径）。
 type fakeEncryptedUpstream struct {
 	mu      sync.Mutex
 	written []byte // c2s：客户端写入的字节
@@ -174,7 +172,7 @@ func (f *fakeEncryptedUpstream) Close() error {
 
 // serve 读取客户端写来的引导记录（含 DNS 查询），再用同一套密钥在 s2c 方向
 // 加密回写一条 DATAGRAM 应答。responder 返回 nil 表示故意沉默，交由调用方的
-// DNS 响应读空闲超时（dnsOptions.RespTimeout）处理。
+// DNS 响应读空闲超时（dnsInterceptor.respTimeout）处理。
 func (f *fakeEncryptedUpstream) serve(salt []byte, masterKey []byte, responder func(*dns.Msg) *dns.Msg) error {
 	// 客户端在引导记录写出之前不会去读应答（Receive 紧随 Open 之后），因此这里
 	// 必须等到引导记录（含 DNS 查询）真正落盘，否则应答会先于引导记录被读走。
@@ -464,7 +462,7 @@ func TestHandleTCPDNSBlock(t *testing.T) {
 }
 
 // upstreamTransport 记录最近一次 Open 请求里的 salt，使测试能构造出与服务端
-// 完全一致的加密密钥；应答流由调用方通过 customStream 提供。
+// 完全一致的加密密钥；承载应答的流由调用方通过 newTCPDNSProxyServer 传入。
 type upstreamTransport struct {
 	*mockTransport
 	mu   sync.Mutex
@@ -574,10 +572,8 @@ func TestHandleTCPDNSProxySuccess(t *testing.T) {
 		t.Error("proxied answer not cached")
 	}
 
-	// 隧道里携带的必须是**裸 DNS 报文**：TCP DNS 的两字节长度前缀在读帧时就已剥掉
-	// （见 readFirstTCPDNS），送进交换的是 msg.Pack() 的结果，与 UDP DNS 查询同形。
-	// 服务端因此不需要为"DNS over TCP"另写一条按域名路由的路径——它进入的就是端口
-	// 53 的 UDP 会话，QNAME 可解析（服务端侧为 dnsQueryDomain）。
+	// 隧道里必须是裸 DNS 报文：TCP DNS 的两字节长度前缀在 `readFirstTCPDNS` 里已剥掉，
+	// 服务端因此按端口 53 的 UDP 会话处理，无需为 DNS over TCP 另写路由。
 	stream.mu.Lock()
 	payload := append([]byte(nil), stream.firstPayload...)
 	stream.mu.Unlock()
@@ -597,10 +593,8 @@ func TestHandleTCPDNSProxySuccess(t *testing.T) {
 	}
 }
 
-// TestHandleTCPDNSFallbackNonDNSDirectCrossPath 覆盖回退的另一半：首条报文不是
-// DNS 查询时，连接必须被完整交回 routeTCP（写回 SOCKS5 成功应答并按规则分流），
-// 而不是留下一个从未应答的 SOCKS5 连接。这里用自定义直连域名 + 本地 TCP 目标，
-// 使回退路径与既有 TestHandleTCPDNSFallbackNonDNS 走的分支不同。
+// TestHandleTCPDNSFallbackNonDNSDirectCrossPath 守住首条报文不是 DNS 查询时的回退：
+// 连接必须完整交回 routeTCP，而不是留下一个从未应答的 SOCKS5 连接。
 func TestHandleTCPDNSFallbackNonDNSDirectCrossPath(t *testing.T) {
 	rt, err := router.New(router.Config{ProxyRule: router.ProxyRuleAuto, IPV6Rule: router.IPV6RuleDisable})
 	if err != nil {
@@ -800,10 +794,8 @@ func TestHandleTCPDNSMultipleQueries(t *testing.T) {
 	}
 }
 
-// TestHandleTCPDNSProxyExchangeRecreatedAfterFailure 覆盖失效交换残留的回归：
-// 第一次代理查询失败（上游静默 → SERVFAIL）后，残留的已关闭交换必须从
-// 会话池移除，第二次代理查询要重建新交换（transport openCalls 增加到 2），
-// 而不是命中残留交换导致该连接后续代理查询永久 SERVFAIL。
+// TestHandleTCPDNSProxyExchangeRecreatedAfterFailure 守住失效交换的清理：失败后残留的
+// 已关闭交换必须移出会话池，否则该连接后续代理查询永远 SERVFAIL。
 func TestHandleTCPDNSProxyExchangeRecreatedAfterFailure(t *testing.T) {
 	rt, err := router.New(router.Config{ProxyRule: router.ProxyRuleAuto, IPV6Rule: router.IPV6RuleDisable})
 	if err != nil {
@@ -850,12 +842,8 @@ func TestHandleTCPDNSProxyExchangeRecreatedAfterFailure(t *testing.T) {
 	}
 }
 
-// TestHandleTCPDNSRepliesBeforeAnyQueryArrives 锁住 TCP DNS 拦截的应答顺序：
-// RFC 1928 的客户端（curl、浏览器，以及 TUN 模式下承载系统解析器的 tun2socks）在
-// 拿到 SOCKS5 应答之前不会发送任何字节，因此成功应答必须先于"首报文读取"写出。
-// 把应答推迟到读到首条 DNS 报文之后（#177 的实现），双方互等，连接只能挂到
-// streamIdleTimeout（8 × timeout，默认 240s）到期降级成普通中继——DNS 查询因此
-// 长时间卡住，网页与视频加载超时，而且默认日志里没有任何线索。
+// TestHandleTCPDNSRepliesBeforeAnyQueryArrives 锁住应答顺序：RFC 1928 客户端在拿到
+// SOCKS5 应答前不发送任何字节，把应答推迟到读到首条 DNS 报文之后就会双方互等。
 func TestHandleTCPDNSRepliesBeforeAnyQueryArrives(t *testing.T) {
 	rt, err := router.New(router.Config{ProxyRule: router.ProxyRuleAutoBlock, IPV6Rule: router.IPV6RuleDisable})
 	if err != nil {

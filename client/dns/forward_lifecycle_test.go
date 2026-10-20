@@ -11,12 +11,8 @@ import (
 // 变成一次快速失败。正常路径远小于该值。
 const forwardLifecycleBudget = 10 * time.Second
 
-// heldSocket 返回服务器当前持有的监听 socket（未持有时为 nil）。
-//
-// 测试断言的是这个状态，而不是"同端口能否重新绑定"或"能不能从 socket 上读到
-// 关闭错误"：绑定探测依赖平台语义（Windows 上 Go 不为监听 socket 设置
-// SO_REUSEADDR，探测本身还会抢走端口，让服务器的绑定失败），而对同一 socket
-// 并发读会与 serve 循环争抢 poll fd 的读锁、把测试挂死。
+// heldSocket 返回服务器当前持有的监听 socket（未持有时为 nil）。断言这个状态而不是
+// 端口可重绑：Windows 上 Go 不设 SO_REUSEADDR，探测会抢走端口；并发读还会与 serve 循环争锁挂死测试。
 func (s *ForwardServer) heldSocket() net.PacketConn {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -37,13 +33,8 @@ func waitForHeldSocket(s *ForwardServer) bool {
 	}
 }
 
-// TestForwardServerShutdownBeforeStartRefusesLateStart 固定"Shutdown 先于 Start"
-// 这一时序：迟到的 Start 必须关掉它刚绑定的 socket 并返回 net.ErrClosed，绝不
-// 登记任何监听 socket。
-//
-// 旧形态下 Shutdown 只看到 dnsServer 尚未置位就返回 nil，随后 Start 绑定并服务
-// 到进程结束——同一个进程里之后的 runner.Run 会在绑定 UDP socket 时直接失败（53 端口
-// 被自己占着），整个客户端再也起不来。
+// TestForwardServerShutdownBeforeStartRefusesLateStart 守住该时序：迟到的 Start 必须关掉
+// 刚绑定的 socket 并返回 net.ErrClosed，否则 53 端口被自己占着，runner.Run 再也绑不上。
 func TestForwardServerShutdownBeforeStartRefusesLateStart(t *testing.T) {
 	srv := NewForwardServer("127.0.0.1:0", false)
 
@@ -68,11 +59,8 @@ func TestForwardServerShutdownBeforeStartRefusesLateStart(t *testing.T) {
 	}
 }
 
-// TestForwardServerShutdownRacingStartReleasesSocket 覆盖 Shutdown 与 Start 真正
-// 并发的情形：miekg/dns 的 started 标志在绑定成功之后才置位，因此 Shutdown 落在
-// 这个窗口里时它只会返回 "server not started"，什么都不做（旧形态因此泄漏
-// socket）。这里不依赖调度顺序断言：无论谁先跑，Shutdown 返回后服务器都不得再
-// 持有监听 socket。
+// TestForwardServerShutdownRacingStartReleasesSocket 覆盖 Shutdown 与 Start 并发：miekg/dns
+// 的 started 标志在绑定成功后才置位，落在这个窗口的 Shutdown 只返回 "server not started"。
 func TestForwardServerShutdownRacingStartReleasesSocket(t *testing.T) {
 	for i := range 20 {
 		srv := NewForwardServer("127.0.0.1:0", false)

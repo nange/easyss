@@ -141,11 +141,9 @@ func TestSlotProberInconclusiveOnDialError(t *testing.T) {
 	}
 }
 
-// TestSlotProberAliveWithoutConnectionCannotJudge 固定判活的"没有可探测的连接"
-// 语义：一代的连接已经被关闭/回收（gen.conn 为空）时，探测必须报告"无法判定"，
-// 而不是在那一代上白拨一条新连接——那条新连接既会给出关于另一条连接的"alive"
-// 结论，又会在无人再引用的池里滞留到空闲超时。绑定在这条连接上的流注定失败，
-// 调用方按"无法判定 → 判死"处理正是想要的结论。
+// TestSlotProberAliveWithoutConnectionCannotJudge 固定"没有可探测的连接"的语义：
+// 一代的连接已被关闭或回收时必须报"无法判定"，不能白拨一条新连接——那会给出
+// 关于另一条连接的 alive 结论，还会在无人引用的池里滞留到空闲超时。
 func TestSlotProberAliveWithoutConnectionCannotJudge(t *testing.T) {
 	ts, token := newProbeServer(t)
 	prober := &slotProber{serverURL: ts.URL, token: token, payloadSize: testProbePayloadSize}

@@ -46,13 +46,8 @@ func TestAllocPutThenGet(t *testing.T) {
 	assert.Equal(t, cap(data), cap(newData), "different cap while alloc.Get()")
 }
 
-// TestAllocRetentionLimitDoesNotBreakCallers 固定"达到保留上限只是丢弃，
-// 不是错误"这一契约：调用方（多为 MustPut）无需区分"池满"与"成功"，
-// 池满时缓冲区交给 GC，Get 始终可用。
-//
-// 这里不断言计数器的具体数值：GC 会静默清空 sync.Pool，使计数器相对池的
-// 真实内容偏大（偏大只会让 Put 更早停止保留，属安全侧），因此计数器是
-// 近似量，不是可断言的精确量。
+// TestAllocRetentionLimitDoesNotBreakCallers 守住"达到保留上限只是丢弃、不是错误"：
+// 调用方无需区分池满与成功。计数器只是近似量——GC 会静默清空 sync.Pool。
 func TestAllocRetentionLimitDoesNotBreakCallers(t *testing.T) {
 	const limit = 4
 	alloc := NewAllocatorWithLimit(limit)
@@ -65,11 +60,8 @@ func TestAllocRetentionLimitDoesNotBreakCallers(t *testing.T) {
 	}
 }
 
-// TestAllocRetentionLimitDropsInsteadOfAllocating 验证"超过上限的缓冲区被丢弃，
-// 且丢弃动作本身不做任何分配"——它只是把缓冲区交给 GC，既不阻塞也不额外分配。
-//
-// 缓冲区在测量窗口之外预先建好：make([]byte, ...) 自身就是一次分配，
-// 把它算进来这条断言就失去意义了。
+// TestAllocRetentionLimitDropsInsteadOfAllocating 守住超额缓冲区只是交给 GC、丢弃本身
+// 不做任何分配：缓冲区必须在测量窗口之外建好，make([]byte, ...) 自身也是一次分配。
 func TestAllocRetentionLimitDropsInsteadOfAllocating(t *testing.T) {
 	const limit = 4
 	alloc := NewAllocatorWithLimit(limit)
@@ -98,10 +90,8 @@ func TestAllocRetentionLimitDropsInsteadOfAllocating(t *testing.T) {
 	}
 }
 
-// TestAllocRetentionLimitUnlimited 验证 maxRetained <= 0 表示不限制保留。
-//
-// 这种模式下计数器刻意不递增（没有上限就无需跟踪），因此不断言计数器，
-// 只固定它对调用方可见的行为：Put/Get 照常工作。
+// TestAllocRetentionLimitUnlimited 守住 maxRetained <= 0 表示不限制保留：该模式下
+// 计数器刻意不递增，因此只断言 Put/Get 对调用方照常工作。
 func TestAllocRetentionLimitUnlimited(t *testing.T) {
 	alloc := NewAllocatorWithLimit(0)
 	for range 200 {
@@ -124,13 +114,8 @@ func TestAllocRetainedCounterDoesNotBlockReuse(t *testing.T) {
 	assert.Equal(t, 512, cap(buf))
 }
 
-// TestAllocGetClearsPhantomRetainedCount 固定一条 load-bearing 的行为：
-// Get 必须递减保留计数，**包括池为空、由 New 现场分配的那一次**。
-//
-// 计数只在 Put 时递增，而 GC 清空 sync.Pool 不会通知我们，于是计数会留下
-// "幻影"（偏大而池实际为空）。命中 New 说明池里确实没有这一块，此时递减
-// 正是排掉幻影的唯一时机；若改成"仅命中池时才递减"，档位会在第一次 GC 清池
-// 后永久停止保留——计数再也降不下来，Put 会一直被判定为超额。
+// TestAllocGetClearsPhantomRetainedCount 守住 Get 递减保留计数必须包括池为空、由 New
+// 现场分配的那一次：GC 清空 sync.Pool 不通知我们，只在命中池时递减会让档位永久停止保留。
 func TestAllocGetClearsPhantomRetainedCount(t *testing.T) {
 	const limit = 8
 	alloc := NewAllocatorWithLimit(limit)
@@ -160,10 +145,8 @@ func TestAllocGetClearsPhantomRetainedCount(t *testing.T) {
 	assert.Equal(t, int64(1), alloc.retained[idx].Load(), "幻影排空后 Put 应重新开始保留")
 }
 
-// TestSwapIn 固定"换一块更大的缓冲"这条公共路径的语义。它存在的意义是把
-// "取新 → 还旧 → 赋值"三步收敛到一处：调用方各自写一遍时最容易漏掉的是
-// "池取不到更大缓冲时不得归还旧缓冲"（那会让后续写入落进已经入池的缓冲，
-// 造成跨流数据污染），以及"赋值"本身（忘了它，*dst 就指向一块已入池的缓冲）。
+// TestSwapIn 守住"取新 → 还旧 → 赋值"的三步语义：池取不到更大缓冲时不得归还旧缓冲
+// （后续写入会落进已入池的缓冲，造成跨流数据污染），也不能漏掉赋值。
 func TestSwapIn(t *testing.T) {
 	t.Run("nil 新缓冲保留旧缓冲", func(t *testing.T) {
 		old := Get(1024)
@@ -189,11 +172,8 @@ func TestSwapIn(t *testing.T) {
 
 	t.Run("正常路径装上新缓冲并归还旧缓冲", func(t *testing.T) {
 		old := Get(1024)
-		// 基线取在 Get(1024) 之后：Get 递减该档位的保留计数、Put 递增，因此差值
-		// 就是"旧缓冲真的回到池里"的直接证据——Put 只做档位校验，光断言它不报错
-		// 什么都证明不了（旧缓冲不归还也同样通过）。也正因为旧缓冲已被 SwapIn
-		// 归还，这里绝不能再 Put(old) 一次：那会把同一块数组在池里放两遍，后续
-		// 两次 Get(1024) 就可能拿到同一块，正是本函数要防的跨流污染。
+		// 保留计数的差值才是"旧缓冲真的回到池里"的证据（Put 只做档位校验）；旧缓冲
+		// 已由 SwapIn 归还，这里不能再 Put(old) 一次，否则池里会有同一块数组的两份。
 		idx := msb(1024)
 		retained := defaultAllocator.retained[idx].Load()
 

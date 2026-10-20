@@ -98,11 +98,8 @@ func TestIsTunIface(t *testing.T) {
 			t.Fatalf("expected %s to be recognized as the TUN device", name)
 		}
 	}
-	// 给合成的接口一个不可能存在的 Index：在 darwin 上 Index 为 0
-	// 会使 Addrs() 返回所有主机接口的地址（包括 easyss TUN 设备
-	// 启动时的 198.18.0.1），这会错误地触发下面的子网匹配。
-	// 不存在的 Index 会让 Addrs() 在所有平台上返回空，
-	// 因此无论主机接口状态如何，这个反向断言都成立。
+	// Index 取一个不可能存在的值：darwin 上 Index 为 0 会让 Addrs() 返回所有主机
+	// 接口的地址（含 TUN 的 198.18.0.1），反向断言就失去意义了。
 	if IsTunIface(&net.Interface{Name: "Ethernet", Index: 1 << 24}) {
 		t.Fatal("expected a plain interface name to not be recognized")
 	}

@@ -6,12 +6,9 @@ import (
 	"testing"
 )
 
-// buildUDPFrame 按 SOCKS5 UDP 请求格式手工组帧：RSV(2) + FRAG(1) + ATYP(1) +
-// 目标地址 + 目标端口 + 数据，并同时返回解析后的帧与原始字节。
-//
-// 这里刻意手写线格式而不是调用库的组帧器：旧实现直接借用了
-// socks5.NewDatagramFromBytes / socks5.NewDatagram，一旦换库这些调用点就会散落
-// 在各测试里。手写一份既让测试独立于具体库，也顺带固化了线格式本身。
+// buildUDPFrame 按 SOCKS5 UDP 请求格式手工组帧（RSV/FRAG/ATYP/地址/端口/数据），
+// 同时返回解析后的帧与原始字节。刻意不借库的组帧器：换库不会波及测试，线格式
+// 也被测试固化。
 func buildUDPFrame(t *testing.T, target string, data []byte) (*socks5Frame, []byte) {
 	t.Helper()
 	host, portStr, err := net.SplitHostPort(target)

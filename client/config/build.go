@@ -87,11 +87,8 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 	return cfg, nil
 }
 
-// ApplySimpleOverrides 把命令行的简化模式参数覆盖到已加载的完整配置上。
-//
-// 覆盖后的配置必须再过一次 validateServers：加载期的校验只覆盖文件内容，
-// 命令行同样可能把端口写进 host（-s example.com:443），不校验就会拼出
-// https://example.com:443:443 这种要等到拨号才暴露的错误。
+// 覆盖后必须再过一次 validateServers：命令行同样可能把端口写进 host（-s example.com:443），
+// 不校验就会拼出 https://example.com:443:443 这种要等到拨号才暴露的错误。
 func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) error {
 	srv := cfg.DefaultServer()
 	if srv != nil {
@@ -165,8 +162,7 @@ func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) error
 		cfg.Local.TunConfig = jsonTunConfig(s.TunConfig)
 	}
 
-	// 所有覆盖完成后再按同一规则补齐 http_port：命令行只改本地端口时，端口
-	// 推导与 applyDefaults 保持一致（唯一实现在 normalizeHTTPPort）。
+	// 覆盖完成后再补齐 http_port，与 applyDefaults 共用唯一实现 normalizeHTTPPort。
 	normalizeHTTPPort(cfg)
 
 	return cfg.validateServers()
@@ -179,9 +175,6 @@ func jsonTunConfig(s string) json.RawMessage {
 	return json.RawMessage(s)
 }
 
-// OutboundProtoToProtocol 将面向用户的 outbound_proto 值映射为传输协议。
-// 目前只实现了 h2，因此 "native"（历史上的空值）和 "h2" 都选中它——该映射
-// 由配置文件与 --outbound-proto 标志共用，两者不会发生偏离。
 func OutboundProtoToProtocol(proto string) (string, error) {
 	switch proto {
 	case "", "native":

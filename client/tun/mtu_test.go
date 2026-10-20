@@ -8,10 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// stubIfaceMTU 替换包级的接口 MTU 查询，使 fd 路径的 MTU 对齐逻辑可以在
-// 没有真实 TUN 设备（需要 root，且会改写本机网络配置）的情况下被断言。
-// 它返回一个记录调用次数的闭包，调用次数本身也是断言对象：非 fd 路径不应该
-// 去查设备。
+// stubIfaceMTU 替换包级接口 MTU 查询，让 fd 路径的 MTU 对齐逻辑无需真实 TUN 设备；
+// 返回的调用次数也是断言对象（非 fd 路径不应去查设备）。
 func stubIfaceMTU(t *testing.T, mtu int, err error) *int {
 	t.Helper()
 
@@ -48,10 +46,8 @@ func TestNewNormalizesMTU(t *testing.T) {
 	}
 }
 
-// TestEngineMTURaisesTheNetstackMTUOnTheFDPath 是"设备 MTU 大于 netstack MTU
-// 会静默丢包"的回归测试：fd 路径上设备由提权 helper 创建，主进程只能设置
-// netstack 的 MTU，而 tun2socks 的读循环会直接丢掉超过它的包（UDP/ICMP 表现为
-// 无任何报错的失败）。此时必须以设备的真实值为准。
+// TestEngineMTURaisesTheNetstackMTUOnTheFDPath 守住静默丢包：fd 路径上设备由 helper
+// 创建，主进程只能设 netstack 的 MTU，而 tun2socks 会直接丢掉超过它的包。
 func TestEngineMTURaisesTheNetstackMTUOnTheFDPath(t *testing.T) {
 	stubIfaceMTU(t, 8500, nil)
 

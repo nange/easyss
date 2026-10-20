@@ -56,10 +56,8 @@ func (cancelledDialError) Is(target error) bool {
 	return target == context.Canceled
 }
 
-// TestIsTransientStreamError 固定"对端已离开该流"的判定：客户端正常拆除
-// （HTTP/2 RST_STREAM(CANCEL)、请求体已被关闭）、传输层断开、中继空闲超时
-// 都属于预期路径，必须与真正的故障区分开。这里出现的字符串都取自真实运行
-// 日志（见 issue 报告）与 net/http/http2 的公开错误文本。
+// TestIsTransientStreamError 守住"对端已离开该流"与真正故障的区分：客户端正常拆除、
+// 传输层断开、中继空闲超时都是预期路径，判定用的字符串取自真实日志与 net/http 错误文本。
 func TestIsTransientStreamError(t *testing.T) {
 	transient := []struct {
 		name string
@@ -116,11 +114,8 @@ func TestIsTransientStreamError(t *testing.T) {
 	}
 }
 
-// TestIsTransientStreamErrorCancelledDial 是"客户端拆除期间拨号被 context 取消"
-// 的回归测试：net 把取消转成未导出的取消错误（"operation was canceled"），而
-// 它的 Is(context.Canceled) 为真。这一点会让 errors.Is(err, context.Canceled)
-// 成立，因此 client-gone 必须由 dialOutbound 用 errClientGone 显式标记，
-// 而不是依赖字符串匹配去猜（标记行为由 TestDialOutbound 覆盖）。
+// TestIsTransientStreamErrorCancelledDial 守住取消拨号不能靠猜：net 的未导出取消错误
+// 让 errors.Is(err, context.Canceled) 成立，client-gone 必须由 dialOutbound 用 errClientGone 标记。
 func TestIsTransientStreamErrorCancelledDial(t *testing.T) {
 	dialErr := &net.OpError{Op: "dial", Net: "tcp4", Err: cancelledDialError{}}
 	if isTransientStreamError(dialErr) {
@@ -154,10 +149,8 @@ func attrsOf(r slog.Record) map[string]string {
 	return attrs
 }
 
-// TestLogHandlerResult 是针对"每关闭一个连接就刷一条 Info 错误"的回归测试：
-// 客户端正常拆除（stream CANCEL）必须降到 Debug 并计入 stream_cancels，
-// 而真正的目标侧故障仍然留在 Info 且带 err=。同时固定"一条流恰好一条结果日志、
-// RecordServerStreamCancel 恰好 +1"这一验收契约。
+// TestLogHandlerResult 守住"每关闭一个连接就刷一条 Info"的回归：客户端正常拆除必须降到
+// Debug 并计入 stream_cancels，真正的目标侧故障留在 Info；一条流恰好一条结果日志、计数 +1。
 func TestLogHandlerResult(t *testing.T) {
 	rec := &recordingHandler{}
 	prev := log.Logger()

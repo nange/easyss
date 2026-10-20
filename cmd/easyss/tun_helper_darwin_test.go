@@ -13,18 +13,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRunCreateScriptStripsV6Prefix 固定 helper 路径上的实参契约：
-// runCreateScript 交给 create_tun_dev_darwin.sh 的 IPv6 地址必须是裸地址。
-//
-// 脚本自己把 "/64" 拼到 ifconfig 的 inet6 参数上，而 TunIPV6Sub 来自
-// client/tun 的默认值 "2001:0db8:0:f101::1/64"（linux 脚本的
-// "ip -6 addr replace" 需要 CIDR 形式），直接透传会拼出 ".../64/64"。
-// ifconfig 报 "bad value" 并以退出码 1 结束，helper 于是对托盘报告
-// "run create script" 失败，TUN 完全起不来——正是这个测试要拦住的回归。
-//
-// 真实的创建脚本需要 root 而且会重配运行测试的机器的网络，因此这里把内嵌
-// 脚本替换成记录自身实参的脚本：本测试要证明的是传给脚本的参数，
-// 而不是脚本本身（脚本由 tun_script_unix_test.go 覆盖）。
+// TestRunCreateScriptStripsV6Prefix 固定 helper 路径的实参契约：交给
+// create_tun_dev_darwin.sh 的 IPv6 地址必须裸地址。脚本自己拼 "/64"，而 TunIPV6Sub
+// 默认带前缀（linux 需要 CIDR），透传会拼出 "/64/64"，ifconfig 报 "bad value" 退出 1，
+// TUN 完全起不来。内嵌脚本换成只记录实参的桩：要证明的是参数。
 func TestRunCreateScriptStripsV6Prefix(t *testing.T) {
 	origBytes, origName := scripts.CreateTunBytes, scripts.CreateTunFilename
 	t.Cleanup(func() { scripts.CreateTunBytes, scripts.CreateTunFilename = origBytes, origName })
@@ -56,8 +48,7 @@ func TestRunCreateScriptStripsV6Prefix(t *testing.T) {
 	}, got, "the script appends the prefix itself, so the address must arrive bare")
 }
 
-// TestBareV6Addr 覆盖去前缀的辅助函数（现在只有 client/tun.ScriptArgs 一个实现）：
-// 带前缀的输入去掉前缀，不带前缀的输入原样返回（TunIPV6Sub 也可能已经是裸地址）。
+// TestBareV6Addr 覆盖 ScriptArgs 的去前缀：带前缀去掉，裸地址原样返回。
 func TestBareV6Addr(t *testing.T) {
 	require.Equal(t, "2001:db8::1", tun.NewScriptArgs(tun.DeviceConfig{TunIPV6Sub: "2001:db8::1/64"}, "", 1500).
 		CreateFor(tun.PlatformDarwin)[4])
@@ -66,12 +57,9 @@ func TestBareV6Addr(t *testing.T) {
 	require.Equal(t, "", tun.NewScriptArgs(tun.DeviceConfig{}, "", 1500).CreateFor(tun.PlatformDarwin)[4])
 }
 
-// TestTunRouteResidueUsesTheTunGateway 用注入的探测输出钉住 darwin 的残留判定：
-// 判据是本会话的 TUN 网关，而不是设备名（内核分配的是 utunN，请求名可能既与别的
-// utun 设备重名、也未必等于实际分配到的名字）。
-//
-// 真实的残留路由需要 root 才能造出来，因此这里替换的是命令执行（routeProbeCmd），
-// 脚本与真实系统路由表都不参与。
+// TestTunRouteResidueUsesTheTunGateway 钉住 darwin 的残留判定：判据是本会话的 TUN
+// 网关而不是设备名——内核分配的是 utunN，请求名可能与别的 utun 重名、也未必等于
+// 实际分配到的名字。造真实残留路由需要 root，故只替换 routeProbeCmd。
 func TestTunRouteResidueUsesTheTunGateway(t *testing.T) {
 	const (
 		viaTun = "   route to: 1.1.1.1\n" +
@@ -104,8 +92,7 @@ func TestTunRouteResidueUsesTheTunGateway(t *testing.T) {
 	})
 
 	t.Run("without a gateway the device name is the fallback", func(t *testing.T) {
-		// 网关信息缺失时只能退回设备名：这里模拟"另一个 utun 设备占用了请求名"，
-		// 判定结果为残留是这种兜底判据的已知代价，注释与它保持一致。
+		// 没有网关时只能退回设备名：别的 utun 占用该名字会被误判为残留，是已知代价。
 		stubRouteProbe(t, viaTun)
 
 		_, leftover := tunRouteResidue("utun9", "")

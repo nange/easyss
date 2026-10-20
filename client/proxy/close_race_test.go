@@ -17,14 +17,8 @@ const closeSyncBudget = 15 * time.Second
 // 持有的监听器，因此端口应当立刻不可用。
 const closeFastReleaseBudget = 2 * time.Second
 
-// TestSocks5CloseRacingStart 防护"刚启动 socks5 服务器就立即关闭"的场景。
-// GOMAXPROCS(1) 强制 Close 先于 Start 的监听器绑定执行，覆盖 Start/Close 之间
-// 唯一的竞争窗口（由 Socks5Server.listenerMu 裁决，见 socks5_lifecycle.go）。
-//
-// 这里断言的两条不变量都与调度快慢无关：
-//  1. Close 必须在有界时间内返回；
-//  2. 监听器必须被释放，且迟到的 Start 必须自行退出——若 Start 在 Close 之后
-//     绑定了监听器而不释放，端口会被永久占住。
+// TestSocks5CloseRacingStart 守住 Close 与 Start 的竞争窗口（由 Socks5Server.listenerMu
+// 裁决）：Close 必须在有界时间内返回，且迟到的 Start 必须自行释放监听器，否则端口被永久占住。
 func TestSocks5CloseRacingStart(t *testing.T) {
 	old := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(old)
@@ -53,13 +47,8 @@ func TestSocks5CloseRacingStart(t *testing.T) {
 	}
 }
 
-// TestSocks5CloseBeforeStartReleasesListener 覆盖"Close 先于 Start"的时序：此时
-// 还没有监听器，Close 必须安全返回；随后真正执行的 Start 必须自行释放它创建的
-// 监听器并立即返回，而不是把一个无人引用的服务器永久留在端口上。
-//
-// 这不是假想时序：runner 在 goroutine 中派发 Start（runner.Run），核心可能随即
-// 被停止（托盘切换服务器、mobile.Stop），随后同一个进程会再次启动核心——端口
-// 如果被泄漏的服务器占着，重启就会以 "address already in use" 失败。
+// TestSocks5CloseBeforeStartReleasesListener 守住"Close 先于 Start"：迟到的 Start 必须释放
+// 自己创建的监听器。runner 在 goroutine 里派发 Start，核心可能随即被停，端口泄漏会让重启失败。
 func TestSocks5CloseBeforeStartReleasesListener(t *testing.T) {
 	addr := reserveLoopbackAddr(t)
 

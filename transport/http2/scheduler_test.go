@@ -8,9 +8,6 @@ import (
 	"time"
 )
 
-// newTestPool 构建一个带显式 active/heavy 计数器的单活池。
-// 槽位内的 Transport 结构体留空——调度测试从不拨号。
-// liveCount 被设置为 specs 的数量。
 func newTestPool(base int32, specs ...[2]int32) *slotPool {
 	slots := make([]*transportSlot, len(specs))
 	for i, s := range specs {
@@ -23,8 +20,6 @@ func newTestPool(base int32, specs ...[2]int32) *slotPool {
 	return p
 }
 
-// newTestScheduler 构建一个调度器：其 priority 池持有全部给定 specs（存活），
-// bulk 池为空。threshold 为 4，因此 priority 池的 base 是 4，bulk 池的 base 是 8。
 func newTestScheduler(specs ...[2]int32) *slotScheduler {
 	pSlots := make([]*transportSlot, len(specs))
 	for i, s := range specs {
@@ -48,8 +43,6 @@ func newTestScheduler(specs ...[2]int32) *slotScheduler {
 	return sch
 }
 
-// newTwoPoolScheduler 通过生产构造函数构建调度器，并给定每个池的 specs：
-// 前 len(pSpecs) 项构成 priority 池（base 4），其余构成 bulk 池（base 8）。
 func newTwoPoolScheduler(pSpecs, bSpecs [][2]int32) *slotScheduler {
 	all := make([]*transportSlot, 0, len(pSpecs)+len(bSpecs))
 	for i, s := range pSpecs {
@@ -70,9 +63,8 @@ func newTwoPoolScheduler(pSpecs, bSpecs [][2]int32) *slotScheduler {
 	return sch
 }
 
-// TestSchedulerSingleSlot 覆盖 maxSlots == 1 的退化拆分：bulk 池必须保持为空
-// （maxSlots 0），这样 poolOf 会回退到 priority 池，而不是索引一个空的
-// 槽位数组（回归测试：bulk 流曾经以 index out of range 崩溃）。
+// 防回归：maxSlots==1 时 bulk 池必须为空，否则 poolOf 会回退到 priority
+// 而不是索引空槽位数组。
 func TestSchedulerSingleSlot(t *testing.T) {
 	slots := make([]*transportSlot, 1)
 	slots[0] = newSlot(nil, time.Second, nil, time.Minute, time.Second/3)
@@ -93,7 +85,6 @@ func TestSchedulerSingleSlot(t *testing.T) {
 		slot.active.Add(-1)
 	}
 
-	// bulk 增长绝不能激活超过 priority 池所拥有的槽位数。
 	sch.grow(false)
 	if got := int(sch.priority.liveCount.Load()); got != 1 {
 		t.Fatalf("priority liveCount = %d, want 1", got)
@@ -102,8 +93,6 @@ func TestSchedulerSingleSlot(t *testing.T) {
 		t.Fatalf("bulk liveCount = %d, want 0", got)
 	}
 
-	// 饱和唯一的 priority 槽位：pick 绝不能尝试向空的 bulk 池借用
-	// （回归测试：在空池上执行 tieredSelect 会以 index out of range 崩溃）。
 	slots[0].active.Store(4)
 	for _, highPriority := range []bool{true, false} {
 		slot := sch.pick(highPriority)
@@ -154,12 +143,12 @@ func TestPressureLevel(t *testing.T) {
 			actives []int32
 			want    int32
 		}{
-			{[]int32{7, 7}, 0},   // 低于 base
-			{[]int32{8, 8}, 1},   // 首个阈值
-			{[]int32{15, 15}, 1}, // 仍低于 2x base
-			{[]int32{16, 16}, 2}, // 2x base
-			{[]int32{31, 31}, 2}, // 低于 4x base
-			{[]int32{32, 32}, 3}, // 4x base
+			{[]int32{7, 7}, 0},
+			{[]int32{8, 8}, 1},
+			{[]int32{15, 15}, 1},
+			{[]int32{16, 16}, 2},
+			{[]int32{31, 31}, 2},
+			{[]int32{32, 32}, 3},
 		}
 		for _, c := range cases {
 			p := newTestPool(8, [2]int32{c.actives[0], 0}, [2]int32{c.actives[1], 0})
@@ -173,7 +162,6 @@ func TestPressureLevel(t *testing.T) {
 		p := newTestPool(8, [2]int32{0, 0}, [2]int32{1, 0})
 		p.slots[0].expiring.Store(true)
 		p.slots[1].expiring.Store(true)
-		// active 层为空：池最小值（0）被钳制到 base，因此级别在 1 而非 0 处生效。
 		if got := p.pressureLevel(int(p.liveCount.Load())); got != 1 {
 			t.Fatalf("pressureLevel = %d, want 1", got)
 		}
@@ -205,19 +193,16 @@ func TestTierCap(t *testing.T) {
 		base  int32
 		want  int32
 	}{
-		{tierActive, 0, 8, 8},   // 级别 0：active 最多承载到 base
-		{tierActive, 1, 8, 0},   // 级别>=1：active 只由 fallback 承接
-		{tierExpiring, 0, 8, 0}, // 级别 0 时负向层级禁用
-		// 级别 1 的加权负载容量：heavy 槽位最多承载 base/4 条流（权重 4），
-		// expiring 为 base/8（权重 8），degraded 为 base/16（权重 16）——
-		// 1 条 heavy 流相当于 4 条健康流，1 条 degraded 相当于 16，
-		// 1 条 expiring 相当于 8。
+		{tierActive, 0, 8, 8},
+		{tierActive, 1, 8, 0},
+		{tierExpiring, 0, 8, 0},
+		// 加权负载：heavy 流权重 4、expiring 8、degraded 16，层级容量按 base 折算。
 		{tierExpiring, 1, 8, 8},
 		{tierHeavy, 1, 8, 8},
 		{tierDegraded, 1, 8, 8},
-		{tierExpiring, 2, 8, 16}, // 翻倍
-		{tierExpiring, 3, 8, 32}, // 再次翻倍
-		{tierExpiring, 1, 4, 4},  // priority base
+		{tierExpiring, 2, 8, 16},
+		{tierExpiring, 3, 8, 32},
+		{tierExpiring, 1, 4, 4},
 	}
 	for _, tt := range tests {
 		if got := tierCap(tt.tier, tt.level, tt.base); got != tt.want {
@@ -282,8 +267,7 @@ func TestTieredSelectLevel0(t *testing.T) {
 	})
 
 	t.Run("does not engage lower tiers while active has capacity", func(t *testing.T) {
-		// 健康槽位低于 base 时，绝不能选择空闲的 expiring 槽位：
-		// 优先使用健康连接。
+		// 健康槽位仍有容量时不得启用下层（负向）槽位。
 		p := newTestPool(8, [2]int32{0, 0}, [2]int32{3, 0})
 		p.slots[0].expiring.Store(true)
 		slot, saturated := p.tieredSelect()
@@ -295,8 +279,6 @@ func TestTieredSelectLevel0(t *testing.T) {
 
 func TestTieredSelectLevel1(t *testing.T) {
 	t.Run("expiring slot with one stream is already full at bulk level 1", func(t *testing.T) {
-		// 单条 expiring 流权重 8 = 层级容量：级别 1 的 expiring 层级不再
-		// 接受新流，因此该流溢出到 heavy 槽位（1 条流权重 4 < 8）。
 		p := newTestPool(8, [2]int32{8, 0}, [2]int32{1, 0}, [2]int32{1, 0})
 		p.slots[1].expiring.Store(true)
 		p.slots[2].heavy.Store(1)
@@ -317,8 +299,7 @@ func TestTieredSelectLevel1(t *testing.T) {
 	})
 
 	t.Run("heavy slots are full with two streams at bulk level 1", func(t *testing.T) {
-		// 含 2 条流的 heavy 槽位权重 8 = 层级容量：所有负向层级都已满，
-		// 因此池回退到负载最少的健康槽位。
+		// 负向层级全满时回退到负载最少的健康槽位，平局按 negativeScore 打破。
 		p := newTestPool(8, [2]int32{8, 0}, [2]int32{4, 0}, [2]int32{2, 0})
 		p.slots[1].expiring.Store(true)
 		p.slots[2].heavy.Store(1)
@@ -333,8 +314,6 @@ func TestTieredSelectLevel1(t *testing.T) {
 		p.slots[1].expiring.Store(true)
 		p.slots[2].heavy.Store(1)
 		p.slots[3].degraded.Store(true)
-		// 一条 degraded 流权重 16 >= 层级容量：degraded 层级已满，
-		// 因此池回退到负载最少的槽位——健康的那个（平局按 negativeScore 打破）。
 		slot, saturated := p.tieredSelect()
 		if !saturated || slot != p.slots[0] {
 			t.Fatalf("got slot %d saturated=%v, want fallback slot 0 with saturated=true", slot.idx, saturated)
@@ -346,8 +325,6 @@ func TestTieredSelectLevel1(t *testing.T) {
 		p.slots[1].expiring.Store(true)
 		p.slots[2].heavy.Store(1)
 		p.slots[3].degraded.Store(true)
-		// 每个层级都已达容量（加权负载 32/16/32 >= 8）；回退目标是按加权负载
-		// 计算的最少负载槽位，平局按 negativeScore 打破。
 		slot, saturated := p.tieredSelect()
 		if !saturated || slot != p.slots[0] {
 			t.Fatalf("got slot %d saturated=%v, want fallback slot 0 with saturated=true", slot.idx, saturated)
@@ -359,8 +336,6 @@ func TestTieredSelectLevel2CapsDouble(t *testing.T) {
 	t.Run("expiring capacity doubles to base", func(t *testing.T) {
 		p := newTestPool(8, [2]int32{16, 0}, [2]int32{1, 0})
 		p.slots[1].expiring.Store(true)
-		// 1 条 expiring 流权重 8 < 翻倍后的容量 16：级别 2 时 expiring
-		// 层级可承载一条流（级别 1 时已满）。
 		slot, saturated := p.tieredSelect()
 		if saturated || slot != p.slots[1] {
 			t.Fatalf("got slot %d saturated=%v, want expiring slot 1 (active=1, weighted 8 < 16)", slot.idx, saturated)
@@ -380,8 +355,6 @@ func TestTieredSelectLevel2CapsDouble(t *testing.T) {
 
 func TestTieredSelectPrefersLessNegative(t *testing.T) {
 	t.Run("among heavy slots prefers heavy-only over heavy+expiring", func(t *testing.T) {
-		// 两者都承载 1 条流；仅 heavy 的槽位权重 4 < 8 且开放，
-		// heavy+expiring 的槽位权重 32 且已满。
 		p := newTestPool(8, [2]int32{8, 0}, [2]int32{1, 1}, [2]int32{1, 1})
 		p.slots[2].expiring.Store(true)
 		slot, saturated := p.tieredSelect()
@@ -391,8 +364,6 @@ func TestTieredSelectPrefersLessNegative(t *testing.T) {
 	})
 
 	t.Run("among degraded slots prefers degraded-only over degraded+heavy", func(t *testing.T) {
-		// 级别 3（容量 32）：单条 degraded 流（权重 16）仍开放，
-		// 而 degraded+heavy（权重 32）已满。
 		p := newTestPool(8, [2]int32{32, 0}, [2]int32{1, 0}, [2]int32{1, 1})
 		p.slots[1].degraded.Store(true)
 		p.slots[2].degraded.Store(true)
@@ -405,16 +376,12 @@ func TestTieredSelectPrefersLessNegative(t *testing.T) {
 
 func TestTieredSelectExcludesRetiring(t *testing.T) {
 	t.Run("degraded tier prefers degraded-only over idle retiring", func(t *testing.T) {
-		// 级别 3（容量 32）：expiring/heavy 层级已满，单条 degraded 流
-		// （权重 16 < 32）仍开放；空闲的 retiring 槽位被排除，绝不能赢得该层级。
 		p := newTestPool(8, [2]int32{32, 0}, [2]int32{4, 0}, [2]int32{8, 0}, [2]int32{0, 0}, [2]int32{1, 0})
 		p.slots[1].expiring.Store(true)
 		p.slots[2].heavy.Store(1)
 		p.slots[3].degraded.Store(true)
-		p.slots[3].expiring.Store(true) // 空闲 retiring 槽位：被排除
+		p.slots[3].expiring.Store(true)
 		p.slots[4].degraded.Store(true)
-		// 空闲 retiring 槽位绝不能赢得 degraded 层级：retiring 槽位被排除，
-		// 因此承载一条流的仅 degraded 槽位被选中。
 		slot, saturated := p.tieredSelect()
 		if saturated || slot != p.slots[4] {
 			t.Fatalf("got slot %d saturated=%v, want degraded-only slot 4 (active=1, weighted 16 < 32)", slot.idx, saturated)
@@ -428,8 +395,6 @@ func TestTieredSelectExcludesRetiring(t *testing.T) {
 		p.slots[3].degraded.Store(true)
 		p.slots[4].degraded.Store(true)
 		p.slots[4].expiring.Store(true)
-		// 每个层级都已达容量；空闲 retiring 槽位（下限权重 128）本就不会是
-		// 全局负载最少的槽位，但无论如何都必须越过它，选择负载最少的健康槽位。
 		slot, saturated := p.tieredSelect()
 		if !saturated || slot != p.slots[0] {
 			t.Fatalf("got slot %d saturated=%v, want fallback slot 0 with saturated=true", slot.idx, saturated)
@@ -437,14 +402,12 @@ func TestTieredSelectExcludesRetiring(t *testing.T) {
 	})
 
 	t.Run("all live slots retiring returns the least-loaded retiring slot", func(t *testing.T) {
+		// pick 绝不能失败：全都 retiring 时返回负载最少的那个，健康循环随后退役它们。
 		p := newTestPool(8, [2]int32{2, 0}, [2]int32{0, 0})
 		p.slots[0].degraded.Store(true)
 		p.slots[0].expiring.Store(true)
 		p.slots[1].degraded.Store(true)
 		p.slots[1].expiring.Store(true)
-		// 没有其他选择：pick 绝不能失败，因此返回负载最少的 retiring 槽位
-		// （健康循环很快会把两者都退役）；空闲的那个（下限权重 128）
-		// 胜过忙碌的那个（256）。
 		slot, saturated := p.tieredSelect()
 		if !saturated || slot != p.slots[1] {
 			t.Fatalf("got slot %d saturated=%v, want least-loaded retiring slot 1", slot.idx, saturated)
@@ -457,8 +420,7 @@ func TestTieredSelectExcludesRetiring(t *testing.T) {
 		p.slots[0].expiring.Store(true)
 		p.slots[1].degraded.Store(true)
 		p.slots[1].expiring.Store(true)
-		// 两者权重都是 128（空闲槽位按下限标记权重计）：平局归于忙碌槽位，
-		// 使空闲槽位保持空闲，由健康循环将其退役而不是被重新激活。
+		// 平局归于忙碌槽位：空闲槽位留给健康循环退役，而不是在这里被重新激活。
 		slot, saturated := p.tieredSelect()
 		if !saturated || slot != p.slots[0] {
 			t.Fatalf("got slot %d saturated=%v, want busy retiring slot 0", slot.idx, saturated)
@@ -470,9 +432,7 @@ func TestTieredSelectDraining(t *testing.T) {
 	t.Run("idle expiring slot is not revived at bulk level 1", func(t *testing.T) {
 		p := newTestPool(8, [2]int32{8, 0}, [2]int32{0, 0})
 		p.slots[1].expiring.Store(true)
-		// 健康槽位在 base（级别 1）而 expiring 槽位空闲——draining：
-		// 层级搜索跳过它，fallback 也排除它，因此该流落在健康槽位上，
-		// 池报告饱和（随后 grow 拨号新连接，而不是重新激活疲惫的连接）。
+		// 空闲的 expiring 槽位处于 draining：层级搜索与 fallback 都跳过它，池因此报告饱和。
 		slot, saturated := p.tieredSelect()
 		if !saturated || slot != p.slots[0] {
 			t.Fatalf("got slot %d saturated=%v, want healthy slot 0 with saturated=true", slot.idx, saturated)
@@ -480,8 +440,6 @@ func TestTieredSelectDraining(t *testing.T) {
 	})
 
 	t.Run("busy degraded slot preferred over idle degraded slot", func(t *testing.T) {
-		// 级别 3（容量 32）：单条 degraded 流（权重 16）仍开放；
-		// 空闲的那个处于 draining，被跳过。
 		p := newTestPool(8, [2]int32{32, 0}, [2]int32{1, 0}, [2]int32{0, 0})
 		p.slots[1].degraded.Store(true)
 		p.slots[2].degraded.Store(true)
@@ -497,9 +455,6 @@ func TestTieredSelectDraining(t *testing.T) {
 		p.slots[2].heavy.Store(1)
 		p.slots[3].degraded.Store(true)
 		p.slots[4].expiring.Store(true)
-		// 每个层级都已达容量；空闲 expiring 槽位（下限权重 8）本会是全局
-		// 负载最少的槽位，但它处于 draining，必须越过它选择负载最少的
-		// 健康槽位。
 		slot, saturated := p.tieredSelect()
 		if !saturated || slot != p.slots[0] {
 			t.Fatalf("got slot %d saturated=%v, want fallback slot 0 with saturated=true", slot.idx, saturated)
@@ -507,12 +462,10 @@ func TestTieredSelectDraining(t *testing.T) {
 	})
 
 	t.Run("all live slots draining returns the least-loaded draining slot", func(t *testing.T) {
+		// pick 绝不能失败：全都 draining 时返回负载最少的那个。
 		p := newTestPool(8, [2]int32{0, 0}, [2]int32{0, 0})
 		p.slots[0].expiring.Store(true)
 		p.slots[1].degraded.Store(true)
-		// 没有其他选择：pick 绝不能失败，因此返回负载最少的 draining 槽位
-		// （健康循环很快会轮换/退役它们）；空闲 expiring 槽位（权重 8）
-		// 胜过空闲 degraded 槽位（权重 16）。
 		slot, saturated := p.tieredSelect()
 		if !saturated || slot != p.slots[0] {
 			t.Fatalf("got slot %d saturated=%v, want least-loaded draining slot 0", slot.idx, saturated)
@@ -521,9 +474,6 @@ func TestTieredSelectDraining(t *testing.T) {
 }
 
 func TestGrowReplacesDrainingSlot(t *testing.T) {
-	// 一个在 base 的健康槽位加一个空闲 expiring 槽位：draining 槽位
-	// 被排除在选择之外，因此池计为饱和，随后生长一条新连接，
-	// 而不是重新激活疲惫的连接。
 	sch := newGrowTestScheduler(10, 5, 0, 2)
 	sch.bulk.slots[0].active.Store(8)
 	sch.bulk.slots[1].expiring.Store(true)
@@ -539,8 +489,6 @@ func TestPickDoesNotBorrowDrainingSlot(t *testing.T) {
 		[][2]int32{{8, 0}, {0, 0}},
 	)
 	sch.bulk.slots[1].expiring.Store(true)
-	// bulk 池唯一不 draining 的槽位在 base；空闲 expiring 槽位处于
-	// draining，不得被借用——该流停留在本池的 fallback 上。
 	if got := sch.pick(true); got != sch.priority.slots[0] {
 		t.Fatalf("pick(true) = slot %d, want own pool fallback slot 0", got.idx)
 	}
@@ -551,11 +499,6 @@ func TestTieredSelectNoHealthyEngagesLowerTiers(t *testing.T) {
 		p := newTestPool(8, [2]int32{0, 0}, [2]int32{1, 0})
 		p.slots[0].expiring.Store(true)
 		p.slots[1].expiring.Store(true)
-		// 槽位 0 空闲且 expiring——draining：新流不得重新激活它
-		// （重新激活会推迟它的轮换）。忙碌的 expiring 槽位 1 也已满
-		// （1 条流权重 8 = 层级容量），因此 fallback 仍落在它上面——
-		// 唯一不 draining 的候选——池报告饱和，于是 grow 拨号一条
-		// 新连接，而不是重新激活任一疲惫的槽位。
 		slot, saturated := p.tieredSelect()
 		if !saturated || slot != p.slots[1] {
 			t.Fatalf("got slot %d saturated=%v, want busy expiring slot 1 with saturated=true", slot.idx, saturated)
@@ -574,8 +517,6 @@ func TestTieredSelectNoHealthyEngagesLowerTiers(t *testing.T) {
 }
 
 func TestPriorityVsBulkBase(t *testing.T) {
-	// 两个各 5 条流的健康槽位：对 priority 流（base 4）已饱和，
-	// 对 bulk 流（base 8）仍开放。
 	p4 := newTestPool(4, [2]int32{5, 0}, [2]int32{5, 0})
 	if slot, saturated := p4.tieredSelect(); !saturated || slot == nil {
 		t.Fatalf("priority base: expected saturated fallback, got slot=%v saturated=%v", slot, saturated)
@@ -589,11 +530,10 @@ func TestPriorityVsBulkBase(t *testing.T) {
 func TestPickBorrowsOtherPoolWhenSaturated(t *testing.T) {
 	t.Run("priority borrows healthy bulk slot", func(t *testing.T) {
 		sch := newTwoPoolScheduler(
-			[][2]int32{{4, 0}}, // priority 池在 base 4 处饱和
+			[][2]int32{{4, 0}},
 			[][2]int32{{1, 0}, {2, 0}},
 		)
 		sch.bulk.slots[0].expiring.Store(true)
-		// bulk 池健康层中负载最少的是 active=2 的槽位。
 		if got := sch.pick(true); got != sch.bulk.slots[1] {
 			t.Fatalf("pick(true) = slot %d, want borrowed bulk slot (active=2)", got.idx)
 		}
@@ -605,8 +545,6 @@ func TestPickBorrowsOtherPoolWhenSaturated(t *testing.T) {
 			[][2]int32{{16, 0}, {1, 0}},
 		)
 		sch.bulk.slots[1].expiring.Store(true)
-		// bulk 池：健康层在 16（级别 2）-> expiring 层级
-		// （active=1，权重 8 < 16）。
 		if got := sch.pick(true); got != sch.bulk.slots[1] {
 			t.Fatalf("pick(true) = slot %d, want borrowed expiring bulk slot 1", got.idx)
 		}
@@ -615,9 +553,8 @@ func TestPickBorrowsOtherPoolWhenSaturated(t *testing.T) {
 	t.Run("bulk borrows healthy priority slot", func(t *testing.T) {
 		sch := newTwoPoolScheduler(
 			[][2]int32{{1, 0}},
-			[][2]int32{{8, 0}}, // bulk 池在 base 8 处饱和
+			[][2]int32{{8, 0}},
 		)
-		// priority 池有健康容量（active=1 < 4）。
 		if got := sch.pick(false); got != sch.priority.slots[0] {
 			t.Fatalf("pick(false) = slot %d, want borrowed priority slot 0", got.idx)
 		}
@@ -634,10 +571,6 @@ func TestPickBorrowsOtherPoolWhenSaturated(t *testing.T) {
 	})
 
 	t.Run("borrows other pool fallback when it is less loaded", func(t *testing.T) {
-		// priority 池饱和（heavy 槽位 8 条流，fallback 权重 32）；bulk 池
-		// 同样饱和（heavy 槽位 2/8 条流，权重 8/32 >= base 8），但其
-		// fallback 槽位承载 2 条流（权重 8），对比我们的 32——新流必须
-		// 去那里，而不是堆到 8 条流的槽位上。
 		sch := newTwoPoolScheduler(
 			[][2]int32{{8, 1}},
 			[][2]int32{{2, 1}, {8, 1}},
@@ -654,10 +587,6 @@ func TestPickBorrowsOtherPoolWhenSaturated(t *testing.T) {
 			[][2]int32{{4, 1}, {8, 1}},
 		)
 		sch.priority.slots[0].heavy.Store(1)
-		// priority 池：heavy 槽位 2 条流，权重 8 = 其 base 4 的 2 倍，
-		// 因此饱和并回退到槽位 0（权重 8）。bulk 池：heavy 槽位 4/8 条流
-		// （权重 16/32）同样饱和，其 fallback 在 4 条流——负载并不更小，
-		// 因此该流留在本池。
 		if got := sch.pick(true); got != sch.priority.slots[0] {
 			t.Fatalf("pick(true) = slot %d, want own pool fallback slot 0", got.idx)
 		}
@@ -667,13 +596,11 @@ func TestPickBorrowsOtherPoolWhenSaturated(t *testing.T) {
 func TestPickExcludesRetiringInBorrow(t *testing.T) {
 	t.Run("borrows healthy bulk slot over idle retiring bulk slot", func(t *testing.T) {
 		sch := newTwoPoolScheduler(
-			[][2]int32{{4, 0}}, // priority 池在 base 4 处饱和
+			[][2]int32{{4, 0}},
 			[][2]int32{{0, 0}, {1, 0}},
 		)
 		sch.bulk.slots[0].degraded.Store(true)
 		sch.bulk.slots[0].expiring.Store(true)
-		// 空闲 retiring 的 bulk 槽位绝不能赢得借用：改为借用健康的
-		// bulk 槽位（active=1）。
 		if got := sch.pick(true); got != sch.bulk.slots[1] {
 			t.Fatalf("pick(true) = slot %d, want borrowed healthy bulk slot 1", got.idx)
 		}
@@ -688,18 +615,12 @@ func TestPickExcludesRetiringInBorrow(t *testing.T) {
 		sch.bulk.slots[0].expiring.Store(true)
 		sch.bulk.slots[1].degraded.Store(true)
 		sch.bulk.slots[1].expiring.Store(true)
-		// bulk 池整体处于 retiring：其 fallback（忙碌槽位，权重 128——
-		// 空闲槽位被钳制到相同的 128）超过本池 fallback（权重 4），
-		// 因此该流留在本池，而不是重新激活一条注定要退役的连接。
 		if got := sch.pick(true); got != sch.priority.slots[0] {
 			t.Fatalf("pick(true) = slot %d, want own pool fallback slot 0", got.idx)
 		}
 	})
 }
 
-// newGrowTestScheduler 通过生产构造函数构建调度器：共 maxSlots 个槽位，
-// 其中 prioritySlots 个为 priority 类，threshold 4，并按给定每池存活数
-// （其余槽位作为 bulk 存活）。
 func newGrowTestScheduler(maxSlots, prioritySlots, pLive, bLive int) *slotScheduler {
 	slots := make([]*transportSlot, maxSlots)
 	for i := range slots {
@@ -712,18 +633,14 @@ func newGrowTestScheduler(maxSlots, prioritySlots, pLive, bLive int) *slotSchedu
 }
 
 func TestGrowBulkPoolIndependentOfPriority(t *testing.T) {
-	// priority 池有 5 个槽位（0-4），bulk 池 5 个（5-9）。仅一个 bulk 槽位存活。
 	sch := newGrowTestScheduler(10, 5, 0, 1)
 
-	// bulk 槽位低于 bulk 阈值（8）：不生长。
 	sch.bulk.slots[0].active.Store(7)
 	sch.grow(false)
 	if got := sch.bulk.liveCount.Load(); got != 1 {
 		t.Fatalf("bulk liveCount = %d, want 1 while bulk slot has capacity", got)
 	}
 
-	// bulk 槽位饱和：生长——与（空的）priority 池无关，
-	// 每个池按各自需求独立生长。
 	sch.bulk.slots[0].active.Store(8)
 	sch.grow(false)
 	if got := sch.bulk.liveCount.Load(); got != 2 {
@@ -737,7 +654,6 @@ func TestGrowBulkPoolIndependentOfPriority(t *testing.T) {
 func TestGrowPriorityPool(t *testing.T) {
 	sch := newGrowTestScheduler(10, 5, 3, 0)
 
-	// priority 槽位低于阈值（4）：不生长。
 	sch.priority.slots[0].active.Store(4)
 	sch.priority.slots[1].active.Store(4)
 	sch.priority.slots[2].active.Store(3)
@@ -746,7 +662,6 @@ func TestGrowPriorityPool(t *testing.T) {
 		t.Fatalf("priority liveCount = %d, want 3 while priority slot has capacity", got)
 	}
 
-	// 所有存活 priority 槽位到达阈值：生长。
 	sch.priority.slots[2].active.Store(4)
 	sch.grow(true)
 	if got := sch.priority.liveCount.Load(); got != 4 {
@@ -757,9 +672,6 @@ func TestGrowPriorityPool(t *testing.T) {
 func TestNoGrowthWhileNegativeTiersHaveCapacity(t *testing.T) {
 	sch := newGrowTestScheduler(10, 5, 5, 2)
 
-	// 级别 1 时 expiring 槽位单条流即满，因此容量检查在级别 2 进行
-	// （健康槽位在 16）：expiring 槽位仍有容量（1 条流权重 8 < 16），
-	// 该流在那里得到服务，不生长。
 	sch.bulk.slots[0].active.Store(16)
 	sch.bulk.slots[1].expiring.Store(true)
 	sch.bulk.slots[1].active.Store(1)
@@ -768,7 +680,6 @@ func TestNoGrowthWhileNegativeTiersHaveCapacity(t *testing.T) {
 		t.Fatalf("bulk liveCount = %d, want 2 while expiring slot has capacity", got)
 	}
 
-	// 负向层级也饱和（2 条 expiring 流权重 16 >= 16）：生长。
 	sch.bulk.slots[1].active.Store(2)
 	sch.grow(false)
 	if got := sch.bulk.liveCount.Load(); got != 3 {
@@ -779,9 +690,6 @@ func TestNoGrowthWhileNegativeTiersHaveCapacity(t *testing.T) {
 func TestGrowWhenOnlyRetiringCapacityRemains(t *testing.T) {
 	sch := newGrowTestScheduler(10, 5, 0, 2)
 
-	// 一个健康槽位在 8 处饱和；另一个槽位 retiring（degraded+expiring）
-	// 且空闲。其加权负载为 0，但 retiring 槽位被排除在选择之外，
-	// 因此池计为饱和，生长一条新连接来替换这个注定失败的槽位。
 	sch.bulk.slots[0].active.Store(8)
 	sch.bulk.slots[1].degraded.Store(true)
 	sch.bulk.slots[1].expiring.Store(true)
@@ -793,8 +701,6 @@ func TestGrowWhenOnlyRetiringCapacityRemains(t *testing.T) {
 
 func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 	t.Run("priority pool full grows unactivated bulk pool", func(t *testing.T) {
-		// priority 池（5 槽位）处于上限且每个槽位都在阈值上，bulk 池从未
-		// 使用：新 priority 流需要新连接，因此生长兄弟池（带首次激活 +2 语义）。
 		sch := newGrowTestScheduler(10, 5, 5, 0)
 		for i := range 5 {
 			sch.priority.slots[i].active.Store(4)
@@ -809,8 +715,6 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 	})
 
 	t.Run("grows sibling when both pools are saturated", func(t *testing.T) {
-		// 本池处于上限且每个槽位都在阈值（4），兄弟池的槽位也饱和
-		// （各 8）：确实需要新连接，因此兄弟池生长。
 		sch := newGrowTestScheduler(10, 5, 5, 2)
 		for i := range 5 {
 			sch.priority.slots[i].active.Store(4)
@@ -824,9 +728,6 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 	})
 
 	t.Run("does not grow sibling while own pool still has tier capacity", func(t *testing.T) {
-		// 上报的快照：priority 池处于连接上限，但其槽位承载 3-4 条流
-		// （健康层最小值低于阈值 4）——priority 槽位仍可服务流时，
-		// 绝不能膨胀 bulk 池。
 		sch := newGrowTestScheduler(10, 5, 5, 2)
 		sch.priority.slots[0].active.Store(3)
 		sch.priority.slots[1].active.Store(3)
@@ -841,9 +742,6 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 	})
 
 	t.Run("does not grow sibling while sibling has tier capacity", func(t *testing.T) {
-		// priority 池饱和，bulk 池有两个 heavy 槽位分别 1 和 8 条流：
-		// 1 条流的槽位权重 4 < base 8，因此 bulk 池仍有层级容量——
-		// 流借用它而不是生长它。跨池生长受兄弟池自身槽位阈值的节制。
 		sch := newGrowTestScheduler(10, 5, 5, 2)
 		for i := range 5 {
 			sch.priority.slots[i].active.Store(4)
@@ -859,9 +757,6 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 	})
 
 	t.Run("does not inflate a healthy sibling stream by stream", func(t *testing.T) {
-		// 上报的快照：priority 池饱和（健康槽位在 4，heavy 槽位在 4/4/3
-		// ——3 条 heavy 流权重 12 >= base 4），bulk 池持有七个各 1 条流的
-		// 健康槽位：远低于其阈值 8，因此绝不能生长。
 		sch := newGrowTestScheduler(14, 5, 5, 9)
 		sch.priority.slots[0].active.Store(4)
 		sch.priority.slots[1].active.Store(4)
@@ -907,9 +802,7 @@ func TestGrowGrowsSiblingPoolWhenOwnPoolFull(t *testing.T) {
 	})
 }
 
-// TestGrowConcurrent 压力测试 grow 的双检锁：并发的生长方必须在写锁上
-// 串行化并在锁下重新评估，因此流突发永远不会过度生长池——且恰好只有一个
-// 生长方报告生长（即真正激活了槽位的那个请求）。
+// 防回归：并发生长必须在写锁下重新评估，恰好一个生长方报告生长。
 func TestGrowConcurrent(t *testing.T) {
 	t.Run("concurrent growers activate the sibling once", func(t *testing.T) {
 		sch := newGrowTestScheduler(10, 5, 5, 0)
@@ -966,13 +859,10 @@ func TestGrowConcurrent(t *testing.T) {
 	})
 }
 
-// TestGrowReturnValue 验证 grow 的报告契约：未生长时返回 nil，
-// 否则返回生长后的池及其增长后的存活数——Open 用它把槽位扩容
-// 归因于触发它的请求。
 func TestGrowReturnValue(t *testing.T) {
 	t.Run("nil while the pool has tier capacity", func(t *testing.T) {
 		sch := newGrowTestScheduler(10, 5, 1, 1)
-		sch.priority.slots[0].active.Store(3) // 低于阈值 4
+		sch.priority.slots[0].active.Store(3)
 		if pool, live := sch.grow(true); pool != nil {
 			t.Fatalf("grow returned pool=%p live=%d with capacity left", pool, live)
 		}
@@ -980,7 +870,7 @@ func TestGrowReturnValue(t *testing.T) {
 
 	t.Run("grows own pool once saturated", func(t *testing.T) {
 		sch := newGrowTestScheduler(10, 5, 1, 1)
-		sch.priority.slots[0].active.Store(4) // 到达阈值
+		sch.priority.slots[0].active.Store(4)
 		pool, live := sch.grow(true)
 		if pool != sch.priority {
 			t.Fatalf("grow returned %v, want the priority pool", pool)
@@ -1033,7 +923,6 @@ func TestGrowReturnValue(t *testing.T) {
 func TestGrowFirstActivationPerPool(t *testing.T) {
 	sch := newGrowTestScheduler(10, 5, 0, 0)
 
-	// 首条 priority 流激活 2 条 priority 连接...
 	sch.grow(true)
 	if got := sch.priority.liveCount.Load(); got != 2 {
 		t.Fatalf("priority liveCount = %d, want 2 on first activation", got)
@@ -1042,7 +931,6 @@ func TestGrowFirstActivationPerPool(t *testing.T) {
 		t.Fatalf("bulk liveCount = %d, want 0 (lazy, not yet used)", got)
 	}
 
-	// ...而首条 bulk 流（例如 DNS 查询）激活它自己的 2 条 bulk 连接。
 	sch.grow(false)
 	if got := sch.bulk.liveCount.Load(); got != 2 {
 		t.Fatalf("bulk liveCount = %d, want 2 on first activation", got)
@@ -1050,13 +938,9 @@ func TestGrowFirstActivationPerPool(t *testing.T) {
 }
 
 func TestGrowResetsRevivedSlotState(t *testing.T) {
-	// 被 grow 重新激活的槽位不得继承前一条连接的轮换状态：shrink/retire
-	// 通过交换删除把槽位移出存活集合，却不清理其标记，否则重新激活的槽位
-	// 会被判为过期（expiring）并保持 degraded，直到其首次拨号完成——
-	// 即"新槽位立即过期"的症状。
+	// shrink/retire 把槽位移出存活集合却不清理标记，重新激活的槽位会被判成过期
+	// 并保持 degraded 到首次拨号完成。
 	sch := newGrowTestScheduler(6, 3, 0, 0)
-	// bulk 槽位 0/1 在带着旧连接状态被 shrink 掉：已过期的截止时间、
-	// 承载的字节数、degraded/expiring 判定。
 	sch.bulk.slots[0].degraded.Store(true)
 	sch.bulk.slots[0].expiring.Store(true)
 	sch.bulk.slots[0].expireAt.Store(time.Now().Add(-time.Minute).UnixNano())
@@ -1064,7 +948,6 @@ func TestGrowResetsRevivedSlotState(t *testing.T) {
 	sch.bulk.slots[1].degraded.Store(true)
 	sch.bulk.slots[1].expireAt.Store(time.Now().Add(-time.Minute).UnixNano())
 
-	// 首次激活同时重新激活两个槽位，且必须重置两者。
 	sch.grow(false)
 	if got := sch.bulk.liveCount.Load(); got != 2 {
 		t.Fatalf("bulk liveCount = %d, want 2 on first activation", got)
@@ -1090,7 +973,6 @@ func TestGrowResetsRevivedSlotState(t *testing.T) {
 			t.Fatalf("slot %d: tier = %v, want tierActive", i, slotTierOf(s))
 		}
 	}
-	// 重新激活的槽位立即可选择（非 draining/retiring）。
 	if got := sch.pick(false); got != sch.bulk.slots[0] {
 		t.Fatalf("pick(false) = slot %d, want revived bulk slot 0", got.idx)
 	}
@@ -1105,7 +987,6 @@ func TestRemoveShrinksLiveCountAndLocatesPool(t *testing.T) {
 	sch.priority.liveCount.Store(1)
 	sch.bulk.liveCount.Store(1)
 
-	// s1 位于 bulk 池（构造函数按池分配索引，remove 通过扫描两个池定位）。
 	if !sch.remove(s1) {
 		t.Fatal("idle bulk slot must be removable")
 	}
@@ -1116,7 +997,6 @@ func TestRemoveShrinksLiveCountAndLocatesPool(t *testing.T) {
 		t.Fatalf("priority liveCount = %d, want 1 (untouched)", got)
 	}
 
-	// 忙碌槽位永不移除。
 	if sch.remove(s0) {
 		t.Fatal("busy slot must not be removable")
 	}

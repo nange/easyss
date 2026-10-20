@@ -4,12 +4,7 @@ package util
 
 import "strings"
 
-// parseDNSServersFromIPConfig 从 `ipconfig /all` 的输出中解析 DNS 服务器。
-//
-// 它通过形如 "DNS Servers" 或 "DNS 服务器"（utf-8 或 gbk 编码）的标签行
-// 定位 DNS 服务器段落，然后收集其后连续的纯 IP 行作为 DNS 服务器，直到
-// 遇到下一个非空且非 IP 的行。结果会去重，
-// 并保持原有顺序。
+// 解析 `ipconfig /all` 的输出：DNS 条目以纯 IP 行续行，遇到非空且非 IP 的行即结束本段。
 func parseDNSServersFromIPConfig(output string) []string {
 	var ret []string
 	seen := make(map[string]struct{})
@@ -41,8 +36,7 @@ func isIPConfigDNSLabel(line string) bool {
 		return false
 	}
 
-	// "DNS Servers" 用于英文版 Windows，"DNS 服务器" 用于中文版 Windows，
-	// 后者可能是 utf-8 或 gbk(cp936) 编码。
+	// 英文版为 "DNS Servers"，中文版为 "DNS 服务器"，后者可能是 utf-8 或 gbk(cp936)。
 	return strings.Contains(line, "Servers") ||
 		strings.Contains(line, "服务器") ||
 		strings.Contains(line, "\xB7\xFE\xCE\xF1\xC6\xF7") // "服务器" 的 gbk 编码

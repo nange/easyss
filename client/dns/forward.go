@@ -21,14 +21,10 @@ type ForwardServer struct {
 	disableIPV6 bool
 
 	mu sync.Mutex
-	// pc 是本服务器自己绑定的 UDP socket：Shutdown 直接关闭它，因此即使
-	// Shutdown 落在 dns.Server 尚未置位 started 的窗口里，端口也一定会被释放
-	// （miekg/dns 的 ShutdownContext 对未启动的服务器只返回错误，什么都不做）。
-	pc net.PacketConn
-	// dnsServer 与 pc 一同登记，供 Shutdown 优雅关闭（等待在飞查询）。
+	// pc 由 Shutdown 直接关闭：落在 dns.Server 尚未置位 started 的窗口里时端口也必须释放。
+	pc        net.PacketConn
 	dnsServer *dns.Server
-	// closing 由 Shutdown 在 mu 下置位；Serve 在登记 socket 之前检查它，
-	// 使"先 Shutdown 再 Serve/Start"不会把服务器重新拉起来。
+	// closing 在 mu 下置位，Serve 登记 socket 前检查它，迟到的 Serve 不得把服务器拉起来。
 	closing bool
 }
 
@@ -53,9 +49,7 @@ func NewForwardServer(listenAddr string, disableIPV6 bool) *ForwardServer {
 	}
 }
 
-// Start 自行绑定监听 socket 并开始服务。它是 Serve(net.ListenPacket(...)) 的
-// 便捷形式；runner 使用 Serve 直接交入它在启动主 goroutine 上同步绑定好的
-// socket，使绑定失败在 Run 返回之前就以错误暴露。
+// Start 自行绑定 socket；需要绑定失败在 Run 返回前暴露的调用方用 Serve 交入 socket。
 func (s *ForwardServer) Start() error {
 	pc, err := net.ListenPacket("udp", s.listenAddr)
 	if err != nil {
@@ -64,12 +58,7 @@ func (s *ForwardServer) Start() error {
 	return s.Serve(pc)
 }
 
-// Serve 在调用方提供的 socket 上服务。socket 的所有权转移给本服务器：Shutdown
-// 会关闭它（见 pc 字段）。
-//
-// socket 在向内部状态登记之前就已由调用方绑定，因此无论 Shutdown 落在哪个时刻，
-// 端口都会被释放；Shutdown 已发生时，迟到的 Serve 会自己关掉传入的 socket 并
-// 返回 net.ErrClosed。
+// Serve 接管调用方已绑定的 socket；Shutdown 先到时它关掉该 socket 并返回 net.ErrClosed。
 func (s *ForwardServer) Serve(pc net.PacketConn) error {
 	srv := &dns.Server{
 		PacketConn: pc,
@@ -78,8 +67,6 @@ func (s *ForwardServer) Serve(pc net.PacketConn) error {
 
 	s.mu.Lock()
 	if s.closing {
-		// Shutdown 已发生：绝不把这个迟到的 socket 留在服务状态里，
-		// 否则它就再也没人关了。
 		s.mu.Unlock()
 		_ = pc.Close()
 		return net.ErrClosed
@@ -93,15 +80,7 @@ func (s *ForwardServer) Serve(pc net.PacketConn) error {
 	return srv.ActivateAndServe()
 }
 
-// Shutdown 关闭监听 socket 并等待在飞查询结束。它是幂等的，且不依赖 dns.Server
-// 是否已进入 started 状态：自己持有的 PacketConn 一定会被关闭，端口也就一定会
-// 释放（dns.Server.ShutdownContext 在未启动时只返回 "server not started"，不会
-// 关闭任何东西）。
-//
-// 返回时 s.pc 已被清空：本类型"最多持有一个监听 socket，Shutdown 之后不再持有"
-// 这一状态是自明的，调用方与测试不必再去探测 socket 或尝试重新绑定端口。
-//
-// 它不关闭借用的依赖：client/dnsServers 由本类型构造期持有，无需释放。
+// Shutdown 幂等，不依赖 dns.Server 是否已启动：PacketConn 一定会被关闭，端口必然释放。
 func (s *ForwardServer) Shutdown() error {
 	s.mu.Lock()
 	alreadyClosed := s.closing
@@ -118,9 +97,7 @@ func (s *ForwardServer) Shutdown() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := srv.ShutdownContext(ctx); err != nil {
-			// "server not started"（Shutdown 早于 serve 循环）与超时都在这里：
-			// 前者的端口由下面的 pc.Close 释放，后者说明在飞查询没能在预算内
-			// 结束，socket 同样会被关掉。
+			// 含 Shutdown 早于 serve 循环的 "server not started"，其 socket 由 pc.Close 释放。
 			log.Warn("[DNS-FORWARD] graceful shutdown incomplete", "err", err)
 		}
 	}
@@ -128,8 +105,6 @@ func (s *ForwardServer) Shutdown() error {
 		_ = pc.Close()
 	}
 
-	// closing 已在上面置位：此后 Start 会在登记之前拒绝，因此这里不可能把
-	// 一个刚登记的 socket 漏掉。
 	s.mu.Lock()
 	s.pc = nil
 	s.mu.Unlock()
@@ -168,8 +143,8 @@ func (s *ForwardServer) exchangeWithServers(servers []string, msg *dns.Msg) (*dn
 		return nil, errors.New("no dns server available")
 	}
 
-	// 并发查询每个上游服务器并取第一个成功结果。串行扫描会让一个挂起的
-	// 上游占用整个客户端超时时间；整个查询共享同一个超时预算。
+	// 并发查询全部上游并取第一个成功结果，整个查询共享一个超时预算：串行扫描会让一个
+	// 挂起的上游吃掉客户端整个读超时。
 	ctx, cancel := context.WithTimeout(context.Background(), s.client.Timeout)
 	defer cancel()
 
@@ -190,9 +165,8 @@ func (s *ForwardServer) exchangeWithServers(servers []string, msg *dns.Msg) (*dn
 		select {
 		case r := <-ch:
 			if r.err == nil && r.reply != nil && r.reply.Rcode == dns.RcodeSuccess {
-				// 上游可能返回"OPT 在 ANSWER 段"的畸形 EDNS0 应答（见
-				// NormalizeEDNS0Answer）；转交给客户端前先规范化，否则客户端
-				// 的严格解析器会判为畸形报文、宽松解析器则拿不到任何地址。
+				// 上游可能返回"OPT 在 ANSWER 段"的畸形 EDNS0 应答：不规范化则严格解析器判畸形、
+				// 宽松解析器拿不到地址。
 				NormalizeEDNS0Answer(r.reply)
 				return r.reply, nil
 			}
@@ -214,13 +188,8 @@ func (s *ForwardServer) exchangeWithServers(servers []string, msg *dns.Msg) (*dn
 	return nil, lastErr
 }
 
-// systemDNSServers 返回系统 DNS 服务器作为回退上游，禁用 IPv6 时过滤掉
-// IPv6 服务器。会打回本转发服务器自身的条目总是被丢弃：转发服务器监听通配
-// 地址（见 runner.forwardDNSListenAddr），因此"自环地址"不只是 127.0.0.1，
-// 还包括本机所有网卡地址——系统解析器可能被配置为本机地址（路由器上
-// /etc/resolv.conf 指向 127.0.0.1 是 dnsmasq 的惯例），把它用作回退上游会
-// 递归回自身（查询 -> 回退 -> 本机:53 -> 同一查询），堆积 goroutine 和 UDP
-// socket，直到单次查询的超时解开这条链。判定见 isSelfUpstreamAddr。
+// 回退上游里必须过滤掉会打回本转发服务器的条目：监听通配地址时"自环"还包括本机所有网卡
+// 地址，用它作上游会递归回自身并一直堆积查询直到超时。
 func (s *ForwardServer) systemDNSServers() []string {
 	servers := systemDNSServersFunc()
 

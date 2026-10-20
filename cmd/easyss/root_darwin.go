@@ -12,18 +12,11 @@ import (
 	"time"
 )
 
-// SpawnTunHelper 通过带管理员权限的 osascript 启动一个常驻的提权 TUN
-// helper 进程。它创建一个 FIFO 用于生命周期信号（关闭写端触发 helper
-// 退出），以及一个用于接收 TUN 文件描述符的 Unix socket。完整生命周期
-// 见 spawnTunHelper。
-//
-// 返回：
-//   - fifoWriter：关闭以通知 helper 关闭
-//   - fdListener：接受连接并调用 ReceiveFd 获取 TUN fd
+// SpawnTunHelper 通过带管理员权限的 osascript 启动一个常驻的提权 TUN helper 进程；
+// 完整生命周期见 spawnTunHelper。
 func SpawnTunHelper(httpAddr string, fdSocketPath, logFile, logLevel string, timeout time.Duration) (io.WriteCloser, net.Listener, error) {
-	// macOS 没有抽象 Unix socket：fd socket 是文件系统条目，
-	// 必须在 listen 前清理陈旧文件，并在之后让提权的（root）helper
-	// 可以访问。
+	// macOS 没有抽象 Unix socket：fd socket 是文件系统条目，必须在 listen 前清理陈旧
+	// 文件，并在之后让提权的（root）helper 可以访问。
 	return spawnTunHelper(tunHelperElevator{
 		label: "osascript",
 		command: func(innerCmd string) *exec.Cmd {

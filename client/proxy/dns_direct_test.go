@@ -10,10 +10,9 @@ import (
 )
 
 // TestExchangeDirectDNSNormalizesEDNS0Answer 固定直连 DNS 拦截路径也会规范化
-// 畸形 EDNS0 应答。client/dns 的 lookup/forward 路径已经调用了
-// NormalizeEDNS0Answer，但拦截器此前自己手写了一次 dns.Conn 往返，漏掉了这一步：
-// 家用路由器把 OPT 放进 ANSWER 段时，应答会被原样写入缓存（TTL 1~4 小时），
-// 后续重试全部命中坏缓存。
+// 畸形 EDNS0 应答：拦截器自己手写 dns.Conn 往返时也必须调用
+// NormalizeEDNS0Answer。漏掉它，家用路由器把 OPT 放进 ANSWER 段的应答会被原样
+// 写入缓存（TTL 1~4 小时），后续重试全部命中坏缓存。
 func TestExchangeDirectDNSNormalizesEDNS0Answer(t *testing.T) {
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {

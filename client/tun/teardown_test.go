@@ -7,11 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// teardownRecorder 记录一次 teardown 真正执行了哪些清理动作。
-//
-// 它是 (reason × owner) 矩阵的观测点：矩阵断言的是"做了什么"，而不是
-// 代码里怎么判断的——这正是把 fdMode / SkipRouteCleanup / helperSignalled
-// 三套隐式条件换成显式所有权之后需要锁住的东西。
+// teardownRecorder 记录一次 teardown 真正执行了哪些清理动作，矩阵断言的是
+// "做了什么"而非"代码里怎么判断的"。
 type teardownRecorder struct {
 	engineStops  []string
 	closeScripts int
@@ -60,12 +57,8 @@ func stubTeardownHooks(t *testing.T) *teardownRecorder {
 	return rec
 }
 
-// TestTeardownMatrix 固定 (owner × 已建立步骤) → 执行哪些清理 的完整矩阵。
-//
-// 三套旧条件的每一种组合都在这里：直连路径必须跑关闭脚本并恢复 DNS；
-// helper 路径必须只停引擎（路由与 DNS 归 helper，主进程去跑只会与它抢）；
-// 创建脚本失败时路由可能已经装上了，因此关闭脚本必须跑；还没碰过系统就
-// 失败时什么都不该做。
+// TestTeardownMatrix 固定 (owner × 已建立步骤) → 执行哪些清理：helper 路径只能停引擎
+// （路由与 DNS 归 helper，主进程去动只会与它抢），创建脚本失败则要跑关闭脚本。
 func TestTeardownMatrix(t *testing.T) {
 	if !manageSystemDNS() {
 		t.Skip("this platform does not switch the system DNS for TUN")
@@ -190,7 +183,7 @@ func TestStopIsANoOpOnAFreshManager(t *testing.T) {
 }
 
 // TestStopTearsDownAHalfStartedSession 固定另一半：Start 半途失败之后 Stop 仍然
-// 能把残局收干净。它过去靠 m.running 提前返回，于是创建脚本装上的路由没人删。
+// 能把残局收干净。Stop 不能靠 m.running 提前返回，否则创建脚本装上的路由没人删。
 func TestStopTearsDownAHalfStartedSession(t *testing.T) {
 	rec := stubTeardownHooks(t)
 
@@ -209,13 +202,8 @@ func TestStopTearsDownAHalfStartedSession(t *testing.T) {
 	}
 }
 
-// TestCreateScriptFailureUsesItsOwnReason 固定 ReasonCreateFailed 真的由创建
-// 脚本失败产生。
-//
-// 它是五个拆除入口里唯一"必然有东西要删"的一个：平台脚本先装地址、再装路由，
-// 最后才按退出码汇报，因此在报告失败之前很可能已经把部分路由写进了系统。
-// 这个原因值如果只存在于枚举和测试里、生产路径永远算不出来，那它就是死代码；
-// 本测试同时钉住"它会被算出来"与"它带着 deviceUp 进入拆除"。
+// TestCreateScriptFailureUsesItsOwnReason 固定 ReasonCreateFailed 真的能由创建脚本失败
+// 算出来：脚本先装地址再装路由，失败时可能已把部分路由写进系统，必须带着 deviceUp 进入拆除。
 func TestCreateScriptFailureUsesItsOwnReason(t *testing.T) {
 	stubTeardownHooks(t)
 

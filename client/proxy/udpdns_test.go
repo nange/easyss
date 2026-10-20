@@ -83,10 +83,8 @@ func newUDPDNSTestServer(t *testing.T, rt *router.Router) (*Socks5Server, *net.U
 	return srv, sock, dialed
 }
 
-// TestHandleUDPInterceptsNonAddressQtype 覆盖 UDP/TCP 判定统一后的行为：MX/TXT/
-// HTTPS 等非 A/AAAA 查询过去会因为 util.IsDNSRequest 只认 A/AAAA 而落入普通 UDP
-// 分流（按目标 IP 直连出网），现在必须同样按查询域名走 DNS 拦截。用例同时验证
-// 直连分支拨的是客户端请求的解析器地址，而不是内置列表。
+// TestHandleUDPInterceptsNonAddressQtype 守住 MX/TXT/HTTPS 等非 A/AAAA 查询同样按查询
+// 域名走 DNS 拦截，而不是落入普通 UDP 分流按目标 IP 直连出网。
 func TestHandleUDPInterceptsNonAddressQtype(t *testing.T) {
 	easydns.ResetResolveState()
 	responder := startUDPDNSResponderAny(t, "1.2.3.4")
@@ -111,12 +109,8 @@ func TestHandleUDPInterceptsNonAddressQtype(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pack query: %v", err)
 	}
-	// 客户端显式请求的解析器就是本地应答器本身：它必须被真正拨到。
-	//
-	// 这里走 handleDNS 而不是 handleUDP：handleUDP 只把 53 端口的数据报交给 DNS
-	// 拦截，而本用例要验证"客户端请求的解析器被真正拨到"，需要应答器监听一个可绑定的
-	// 高位端口（CI 上无法绑定 53）。入口门控本身由
-	// TestHandleUDPDNSInterceptionRequiresPort53 与 TestHandleUDPDropsLinkLocalTargets 覆盖。
+	// 这里走 handleDNS 而不是 handleUDP：handleUDP 只把 53 端口的数据报交给 DNS 拦截，
+	// 而本用例需要应答器监听可绑定的高位端口（CI 上无法绑定 53）。
 	requested := responder
 	frame, _ := buildUDPFrame(t, requested, data)
 	if err := srv.handleDNS(srv.registerTestUDPRelay(sock, clientAddr), frame, query, data); err != nil {
@@ -168,13 +162,8 @@ func TestHandleUDPInterceptsNonAddressQtype(t *testing.T) {
 	}
 }
 
-// newDNSMultiplexTestServer 构造一个用于观察"查询复用"的 Socks5Server：
-//
-//   - DNSResp 取生产量级（2×base）而不是短超时：交换的空闲回收是独立机制（由
-//     TestUDPExchangeDNSResponseTimeout 覆盖），在这里引入 200ms 的回收窗口只会
-//     让"两条查询复用同一个交换"的断言与回收时机赛跑；
-//   - 传输层用可记录 openCount 的 mockTransport，因此"复用"可以直接由"传输层开了
-//     几条流"证明，而不必依赖池内指针的瞬时相等。
+// newDNSMultiplexTestServer 的 DNSResp 取生产量级而不是短超时：交换空闲回收是独立机制，
+// 短窗口会让"两条查询复用同一个交换"的断言与回收时机赛跑。
 func newDNSMultiplexTestServer(t *testing.T) (*Socks5Server, *mockTransport) {
 	t.Helper()
 	tr := &mockTransport{streams: []transport.Stream{newBlockingStream(), newBlockingStream()}}
@@ -195,13 +184,8 @@ func newDNSMultiplexTestServer(t *testing.T) (*Socks5Server, *mockTransport) {
 	return srv, tr
 }
 
-// TestProxyDNSQueriesShareOneTunnelExchange 固定"客户端把一个 socket 上的所有查询
-// 复用到同一条隧道流"这一既有行为——它是服务端"同一条 UDP 会话里可能看到不同域名"
-// 的前提，也是"路由中途变化需要重绑上游"的由来。
-//
-// 键是「客户端数据报来源地址 + 上游」，与域名无关，因此两个不同域名的查询只应
-// 打开一条流；断言落在传输层的 openCount 上，这样它证明的是"复用"本身，而不是
-// 一次恰好还没被回收的池内命中。
+// TestProxyDNSQueriesShareOneTunnelExchange 守住同一个 socket 上的查询（键是来源地址 +
+// 上游，与域名无关）只开一条隧道流——这是服务端"一条会话里可能看到不同域名"的前提。
 func TestProxyDNSQueriesShareOneTunnelExchange(t *testing.T) {
 	// 内置直连列表指向拨不通的地址：第二个域名必须走代理分支，而不是被判为直连后
 	// 在本地解析（那不会打开任何流，见下一条用例）。

@@ -5,11 +5,9 @@ import (
 	"testing"
 )
 
-// TestNewClientBoundsIdleConnections 固定获取客户端的连接池上限。
-//
-// 托盘是长驻进程，每次检查（启动后一次、每 24 小时一次、每次手动点击）都会新建
-// 一个 Client；本地 HTTP 代理侧没有 IdleTimeout，因此传输层如果没有
-// IdleConnTimeout，每条 keep-alive 连接都会永久占住一条隧道流与两个 goroutine。
+// TestNewClientBoundsIdleConnections 固定连接池上限：托盘每次检查都新建一个 Client，
+// 本地 HTTP 代理侧没有 IdleTimeout，缺了 IdleConnTimeout，每条 keep-alive 连接都会
+// 永久占住一条隧道流与两个 goroutine。
 func TestNewClientBoundsIdleConnections(t *testing.T) {
 	c := NewClient(8080)
 	t.Cleanup(c.Close)

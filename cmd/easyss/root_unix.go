@@ -21,36 +21,22 @@ func IsRoot() bool {
 	return os.Geteuid() == 0
 }
 
-// tunHelperElevator 抽象提权 TUN helper 的启动方式：Linux 上为 pkexec，
-// macOS 上为带管理员权限的 osascript。两个平台仅在提权命令、把 helper
-// 放入后台的 shell 行以及 fd-socket 生命周期上不同；其余一切
-// （FIFO 生命周期、等待循环、清理）由 spawnTunHelper 共享。
+// tunHelperElevator 抽象提权 TUN helper 的启动方式：Linux 上为 pkexec，macOS 上为带管理员
+// 权限的 osascript。其余（FIFO 生命周期、等待循环、清理）由 spawnTunHelper 共享。
 type tunHelperElevator struct {
 	// label 在错误消息中命名该提权器（"pkexec"/"osascript"）。
-	label string
-	// command 构建运行 innerCmd 的提权命令。
+	label   string
 	command func(innerCmd string) *exec.Cmd
-	// innerCmd 构建把 helper 放入后台的 shell 行：必须以分离方式运行
-	// `'<exe>' <args> < '<fifo>'`，丢弃输出。
+	// innerCmd 必须把 helper 以分离方式后台运行：`'<exe>' <args> < '<fifo>'`，并丢弃输出。
 	innerCmd func(exe, helperArgs, fifoPath string) string
-	// Socket 生命周期钩子，不需要的平台为 nil（Linux 使用抽象 socket，
-	// 没有文件系统条目）。
+	// Socket 生命周期钩子，该平台不需要时为 nil（Linux 用抽象 socket，没有文件系统条目）。
 	beforeListen  func(fdSocketPath string)
 	afterListen   func(fdSocketPath string)
 	cleanupSocket func(fdSocketPath string)
 }
 
-// spawnTunHelper 通过平台提权器启动一个常驻的提权 TUN helper 进程。
-// 它创建一个 FIFO 用于生命周期信号（关闭写端触发 helper 退出），
-// 以及一个用于接收 TUN 文件描述符的 Unix socket。
-//
-// httpAddr 是本进程本地 HTTP 入口的拨号地址（见 util.LocalProxyDialAddr）：
-// helper 用它 GET /tun 取配置。调用方负责按 bind_all 选同族回环，这一层不再
-// 自己拼 127.0.0.1。
-//
-// 返回：
-//   - fifoWriter：关闭以通知 helper 关闭
-//   - fdListener：接受连接并调用 ReceiveFd 获取 TUN fd
+// spawnTunHelper 通过平台提权器启动常驻的 TUN helper：FIFO 关闭写端即通知它退出，TUN 文件
+// 描述符经 Unix socket 接收。httpAddr 是本地 HTTP 入口的拨号地址，helper 用它 GET /tun 取配置。
 func spawnTunHelper(ev tunHelperElevator, httpAddr string, fdSocketPath, logFile, logLevel string, timeout time.Duration) (io.WriteCloser, net.Listener, error) {
 	log.Info("[SYSTRAY] SpawnTunHelper called",
 		"httpAddr", httpAddr, "fdSocket", fdSocketPath,
@@ -61,18 +47,15 @@ func spawnTunHelper(ev tunHelperElevator, httpAddr string, fdSocketPath, logFile
 		return nil, nil, fmt.Errorf("get executable: %w", err)
 	}
 
-	// 创建用于生命周期信号的命名 FIFO。先清理陈旧文件。
 	fifoPath := fmt.Sprintf("/tmp/easyss-tun-ctrl-%d.fifo", os.Getpid())
 	os.Remove(fifoPath) //nolint:errcheck
 	if err := unix.Mkfifo(fifoPath, 0600); err != nil {
 		return nil, nil, fmt.Errorf("mkfifo %s: %w", fifoPath, err)
 	}
 
-	// 在 goroutine 中以写模式打开 FIFO（阻塞到 helper 通过 stdin 重定向
-	// 以读模式打开它）。
+	// 以写模式打开会阻塞到 helper 打开读端，因此放到 goroutine 里。
 	fifoCh := openFifoForWriteAsync(fifoPath)
 
-	// 创建用于传递 fd 的 Unix socket。
 	if ev.beforeListen != nil {
 		ev.beforeListen(fdSocketPath)
 	}
@@ -86,9 +69,6 @@ func spawnTunHelper(ev tunHelperElevator, httpAddr string, fdSocketPath, logFile
 		ev.afterListen(fdSocketPath)
 	}
 
-	// 构建 helper 命令。helper 以 "tun-helper" 子命令运行，
-	// 通过 GET /tun 读取配置，并通过 Unix socket 发送 fd。
-	// Stdin 连接到 FIFO。
 	helperArgs := []string{
 		"tun-helper",
 		"--tun-http-addr", httpAddr,
@@ -101,8 +81,7 @@ func spawnTunHelper(ev tunHelperElevator, httpAddr string, fdSocketPath, logFile
 		helperArgs = append(helperArgs, "--log-level", logLevel)
 	}
 
-	// 通过提权器启动。helper 被放入后台（&），因此提权器立即返回；
-	// helper 保持存活，监视其 stdin（FIFO）等待主进程的生命周期信号。
+	// 提权器把 helper 放入后台后立即返回，helper 继续存活并监视其 stdin（FIFO）。
 	elevCmd := ev.command(ev.innerCmd(exe, util.ShellJoin(helperArgs), fifoPath))
 	var elevOut, elevErr bytes.Buffer
 	elevCmd.Stdout = &elevOut
@@ -117,15 +96,15 @@ func spawnTunHelper(ev tunHelperElevator, httpAddr string, fdSocketPath, logFile
 		return nil, nil, fmt.Errorf("start %s: %w", ev.label, err)
 	}
 
-	// 在后台等待提权器，使提前退出（认证被取消/拒绝、提权器错误）
-	// 立即以真实原因呈现，而不是盲等 FIFO 超时。
+	// 在后台等待提权器：提前退出（认证被取消/拒绝、提权器错误）能立即以真实原因呈现，
+	// 而不是盲等 FIFO 超时。
 	elevCh := make(chan error, 1)
 	go func() {
 		elevCh <- elevCmd.Wait()
 	}()
 
-	// 等待 FIFO 写端被打开（helper 已打开读端）。
-	// 如果用户取消认证对话框，这里会带着底层错误提前返回。
+	// 等待 FIFO 写端被打开（helper 已打开读端）。用户取消认证对话框时这里会带着底层错误
+	// 提前返回。
 	timeout = max(timeout, 10*time.Second)
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
@@ -144,13 +123,11 @@ func spawnTunHelper(ev tunHelperElevator, httpAddr string, fdSocketPath, logFile
 			return &fifoWriter{File: r.f, path: fifoPath}, fdListener, nil
 		case err := <-elevCh:
 			if err == nil {
-				// 提权器成功；helper 可能在其返回后片刻才启动，
-				// 因此继续等待 FIFO。
+				// 提权器成功；helper 可能在其返回后片刻才启动，因此继续等待 FIFO。
 				elevCh = nil
 				continue
 			}
-			// 提权器在 helper 启动前以错误退出
-			// （例如用户取消了认证对话框）。
+			// 提权器在 helper 启动前以错误退出（例如用户取消了认证对话框）。
 			fdListener.Close() //nolint:errcheck
 			releaseFifoOpen(fifoPath, fifoCh)
 			os.Remove(fifoPath) //nolint:errcheck
@@ -166,9 +143,8 @@ func spawnTunHelper(ev tunHelperElevator, httpAddr string, fdSocketPath, logFile
 			}
 			return nil, nil, fmt.Errorf("%w: %s: %w", errTunHelperStartup, ev.label, err)
 		case <-deadline.C:
-			// 超时：用户可能取消了认证对话框，或 helper 启动失败。
-			// 杀掉提权器，使迟到的授权无法针对即将被移除的 socket
-			// 生成 helper。
+			// 超时：可能用户取消了认证对话框，或 helper 启动失败。杀掉提权器，使迟到的
+			// 授权无法针对即将被移除的 socket 生成 helper。
 			elevCmd.Process.Kill() //nolint:errcheck
 			fdListener.Close()     //nolint:errcheck
 			releaseFifoOpen(fifoPath, fifoCh)

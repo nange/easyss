@@ -15,8 +15,7 @@ import (
 // errEngineRejected 代表 tun2socks 拒绝了这次启动（引擎内部失败）。
 var errEngineRejected = errors.New("engine: create stack failed")
 
-// openTestFD 打开一个真实的 fd，当作提权 helper 传回的 TUN fd。它不要求 root：
-// 这些用例只关心 fd 的归属，不关心它指向什么设备。
+// openTestFD 打开一个真实 fd 当作 helper 传回的 TUN fd：用例只关心 fd 归属，不要求 root。
 func openTestFD(t *testing.T) int {
 	t.Helper()
 
@@ -36,17 +35,8 @@ func fdStillOpen(fd int) bool {
 	return err == nil
 }
 
-// TestManagerReleasesTheHelperFDWhenCancelledEarly 固定 fd 路径上的另一半。
-//
-// 非 root 的提权 helper 把 TUN fd 传回主进程之后，Start 可能还没被调度到就
-// 收到了 Stop（见 TestManagerStopBeforeStartGoroutineRuns）。此时 Start 在动
-// 任何系统状态之前就返回 context.Canceled，那个 fd 从未进入 tun2socks：
-// 不关掉它，设备会随 fd 存活到进程退出，helper 的关闭脚本还会因
-// "device or resource busy" 删不掉它。
-//
-// 这个关闭是安全的，因为调用点本身就在证明"还没进引擎"——而不是事后按 fd
-// 身份去猜（两个独立 socket 的 ino/dev 都是 0，字符设备的 dev/ino/rdev/mode
-// 也完全相同，猜不准）。
+// TestManagerReleasesTheHelperFDWhenCancelledEarly 守住早于 Start 的取消失败要关掉 fd：
+// 否则设备随 fd 活到进程退出，helper 的关闭脚本还会因 "device or resource busy" 删不掉它。
 func TestManagerReleasesTheHelperFDWhenCancelledEarly(t *testing.T) {
 	stubManagerHooks(t)
 
@@ -60,8 +50,7 @@ func TestManagerReleasesTheHelperFDWhenCancelledEarly(t *testing.T) {
 		DeviceFD:   fd,
 	})
 
-	// Stop 先到、Start 后到：tunUpViaHelper 登记 manager 之后，Start 所在
-	// goroutine 可能还没被调度到。
+	// Stop 先到、Start 后到：manager 已登记，而 Start 的 goroutine 还没被调度。
 	m.Stop()
 	require.ErrorIs(t, m.Start(), context.Canceled)
 
@@ -70,12 +59,9 @@ func TestManagerReleasesTheHelperFDWhenCancelledEarly(t *testing.T) {
 		"the helper fd must be released: nothing else will ever close it")
 }
 
-// TestManagerRejectsInvalidConfigBeforeTakingTheFD 是方案 A 的核心：
-// 引擎在 parseDevice 之前就会拒绝的配置，必须在 fd 交出去之前被拒掉，
-// 并且在同一个调用里把 fd 收掉（此时"还没进引擎"是调用点自己的事实）。
-//
-// 这样一来，"engine.Start 失败"只可能发生在 fd 已经被引擎接管之后——那一段
-// 由 engine.Stop 负责关闭，Manager 不需要（也不应该）去猜 fd 的归属。
+// TestManagerRejectsInvalidConfigBeforeTakingTheFD 固定 fd 的交接顺序：引擎在
+// parseDevice 之前就会拒绝的配置，必须提前拒掉并在同一处收走 fd。于是"engine.Start
+// 失败"只可能发生在 fd 已被引擎接管之后，那一段由 engine.Stop 关，Manager 不必猜归属。
 func TestManagerRejectsInvalidConfigBeforeTakingTheFD(t *testing.T) {
 	cases := []struct {
 		name string
@@ -132,9 +118,9 @@ func TestManagerRejectsInvalidConfigBeforeTakingTheFD(t *testing.T) {
 	}
 }
 
-// TestManagerLeavesTheFDOwnershipToTheEngineOnceItStarts 是上一条的边界：
-// 一旦进入 engine.Start，fd 就归 tun2socks 了（它在 parseDevice 里包装设备，
-// 失败时也可能已经关闭），Manager 不得再插手动它。
+// TestManagerLeavesTheFDOwnershipToTheEngineOnceItStarts 是上一条的边界：进入
+// engine.Start 后 fd 归 tun2socks（parseDevice 包装设备，失败时也可能已关闭），
+// Manager 再关就是猜。
 func TestManagerLeavesTheFDOwnershipToTheEngineOnceItStarts(t *testing.T) {
 	stubManagerHooks(t)
 

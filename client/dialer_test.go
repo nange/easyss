@@ -176,11 +176,9 @@ func TestDialWithConfigNoRetryOnNonStaleError(t *testing.T) {
 	}
 }
 
-// TestSetTunModeControlsTheBoundDialPath 固定"运行期 TUN 状态来自 SetTunMode，
-// 而不是配置快照"：TUN 关闭时直连拨号不得走绑定接口的拨号器，SetTunMode(true)
-// 之后才走。配置快照拆分前，dialAddr 每拨号一次都要去读共享配置里的
-// EnableTun2socks——那既让菜单写的普通字段与数据面读构成竞争，也把"配置"
-// 与"运行期状态"混成了一个对象。
+// TestSetTunModeControlsTheBoundDialPath 固定"运行期 TUN 状态来自 SetTunMode、
+// 不来自配置快照"：TUN 关闭时直连拨号不得走绑定接口的拨号器，SetTunMode(true)
+// 之后才走。
 func TestSetTunModeControlsTheBoundDialPath(t *testing.T) {
 	origBound := boundDialContext
 	t.Cleanup(func() { boundDialContext = origBound })

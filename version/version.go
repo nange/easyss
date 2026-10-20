@@ -16,37 +16,28 @@ const (
 // Compiler 是 runtime.Compiler 的便捷别名。
 const Compiler = runtime.Compiler
 
-// 版本信息
+// 这些变量由 Makefile 的 -ldflags 注入，其余在 init 里从构建信息与 runtime 补齐。
 var (
-	// GoVersion 是构建该二进制所用的 Go 工具链版本（例如 "go1.19.2"）。
-	// 未显式覆盖时默认为 runtime.Version() 的值。
+	// GoVersion 是构建该二进制所用的 Go 工具链版本，未注入时取 runtime.Version()。
 	GoVersion = unknownProperty
-	// GitCommit 是构建时 Git 仓库 HEAD 的提交哈希。
-	// 未显式覆盖时默认为 runtime/debug 包收集到的值。
+	// GitCommit 是构建时 Git 仓库 HEAD 的提交哈希，未注入时由 runtime/debug 收集。
 	GitCommit = unknownProperty
 	// GitCommitDate 是 GitCommit 的提交日期，RFC3339 格式。
-	// 未显式覆盖时默认为 runtime/debug 包收集到的值。
 	GitCommitDate = unknownProperty
-	// GitTreeState 在构建时源码树有本地修改时为 "dirty"。
-	// 否则保持为空，这种情况下 Print 不会显示它。
+	// GitTreeState 在构建时源码树有本地修改时为 "dirty"，否则为空。
 	GitTreeState = unknownProperty
-	// GitTag 旨在通过 `go -ldflags` 在构建时注入与 GitCommit 关联的标签名。
-	// 否则保持为空，这种情况下 Print 不会显示它。
+	// GitTag 是构建时注入的标签名，为空时 Print 不显示它。
 	GitTag = unknownProperty
-	// BuildDate 旨在通过 `go -ldflags` 在构建时注入表示构建时间的字符串。
-	// 否则保持为空，这种情况下 Print 不会显示它。
+	// BuildDate 是构建时注入的构建时间字符串，为空时 Print 不显示它。
 	BuildDate = unknownProperty
 	// Platform 是 "GOOS/GOARCH" 形式的字符串，例如 "linux/amd64"。
 	Platform = unknownProperty
-	// BuildComments 可用于通过 `go -ldflags` 在构建时注入与二进制
-	// 关联的任意附加信息。
+	// BuildComments 可用于在构建时注入与二进制关联的任意附加信息。
 	BuildComments = unknownProperty
-	// Name 旨在通过 `go -ldflags` 在构建时注入二进制的预期名称。
-	// 否则保持为空，这种情况下 Print 不会显示它。
+	// Name 是构建时注入的二进制名称，为空时 Print 不显示它。
 	Name = unknownProperty
 )
 
-// 用于防止访问未填充的属性。
 func init() {
 	collectFromBuildInfo()
 	collectFromRuntime()
@@ -100,8 +91,7 @@ func String() string {
 	return builder.String()
 }
 
-// collectFromBuildInfo 尝试设置 Go module 嵌入在运行二进制中的构建信息。
-// 如果数据已由 Go -ldflags 设置，则不覆盖。
+// collectFromBuildInfo 尝试设置 Go module 嵌入的构建信息，已由 -ldflags 设置的值不覆盖。
 func collectFromBuildInfo() {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
@@ -127,8 +117,7 @@ func collectFromBuildInfo() {
 	}
 }
 
-// collectFromRuntime 尝试设置 go runtime 嵌入在运行二进制中的构建信息。
-// 如果数据已由 Go -ldflags 设置，则不覆盖。
+// collectFromRuntime 尝试设置 go runtime 嵌入的构建信息，已由 -ldflags 设置的值不覆盖。
 func collectFromRuntime() {
 	if GoVersion == unknownProperty {
 		GoVersion = runtime.Version()

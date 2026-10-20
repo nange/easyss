@@ -21,18 +21,12 @@ type NextProxy struct {
 	allHost     bool
 	dialTimeout time.Duration
 
-	// rules 是"目标是否走下一级代理"的规则集合：文件配置的条目与 DNS 学习
-	// 到的条目都在里面。解析、IP 归一化与域名匹配由 rule 包统一实现
-	// （与 client/router 的自定义规则文件共用同一份语义）。
-	//
-	// 用 atomic.Pointer 而不是裸指针：LoadProxyFile 会整体替换集合，而
-	// ShouldProxy/AddIP/AddDomain 可能在任意 goroutine 上读它。生产路径只在
-	// server.Start 里、开始服务之前装载一次，但让发布本身是原子的，比把
-	// "只许启动期调用"这条隐式约束留给调用方更可靠。
+	// rules 同时承载文件配置与 DNS 学到的条目。用 atomic.Pointer：LoadProxyFile 整体替换集合，
+	// 而 ShouldProxy/AddIP/AddDomain 可能在任意 goroutine 上读它。
 	rules atomic.Pointer[rule.Set]
 
-	// learnedMu 只保护下面两个学习计数：规则集合自己有锁，但"这条是新增的吗"
-	// 与"预算还有吗"必须是同一个临界区，否则并发学习会一起越过上限。
+	// learnedMu 保护下面两个学习计数："是否新增"与"预算是否还有"必须在同一个临界区，
+	// 否则并发学习会一起越过上限。
 	learnedMu      sync.Mutex
 	learnedIPs     int
 	learnedDomains int
@@ -55,8 +49,7 @@ func New(proxyURL string, enableUDP, allHost bool) (*NextProxy, error) {
 		url:       u,
 		enableUDP: enableUDP,
 		allHost:   allHost,
-		// 默认值同样只有一个出口：config.NewTimeouts(0) 就是在默认基础超时上
-		// 跑一遍派生公式。生产路径随后会用 SetDialTimeout 覆盖它。
+		// 默认值只有 config.NewTimeouts(0) 一个出口，生产路径随后用 SetDialTimeout 覆盖。
 		dialTimeout: sharedconfig.NewTimeouts(0).Dial,
 	}
 	np.rules.Store(rule.New())
@@ -75,9 +68,8 @@ func (np *NextProxy) LoadProxyFile(proxyFile string) error {
 	if err != nil {
 		return err
 	}
-	// 与服务端其它配置错误一致：规则文件里写错的行是**致命**的。客户端路由
-	// 那边同样的错误只记启动告警（内置规则仍可工作），但服务端的上游代理列表
-	// 一旦缺项，"本该走代理的域名悄悄直连出网"就是一个静默的流量泄漏。
+	// 规则文件写错的行在服务端是致命的：上游代理列表一旦缺项，"本该走代理的域名悄悄直连出网"
+	// 就是静默的流量泄漏。
 	if err := rule.FileError(proxyFile, parseErrs); err != nil {
 		return err
 	}
@@ -99,8 +91,6 @@ func (np *NextProxy) ShouldProxy(host string) bool {
 	return np.rules.Load().MatchHost(host)
 }
 
-// IsCustomDomain 检查域名是否在自定义域名列表中，
-// 包括子域名匹配以及 glob/regexp 模式。
 func (np *NextProxy) IsCustomDomain(domain string) bool {
 	if np == nil {
 		return false
@@ -108,15 +98,10 @@ func (np *NextProxy) IsCustomDomain(domain string) bool {
 	return np.rules.Load().HasDomain(domain)
 }
 
-// maxLearnedEntries 限制动态学习的 IP/域名集合的大小：自定义域名的 DNS 响应
-// 会在每次查询时喂给 AddIP/AddDomain，长期运行在大型 CDN 池（或记录频繁轮换
-// 的域名）之后的服务端若不加限制，这些 map 会无限增长。集合达到上限后学习
-// 停止；配置（文件加载）的条目不受影响。
+// maxLearnedEntries 限制动态学习的条目数：DNS 响应会随每次查询喂给 AddIP/AddDomain，跟在大型
+// CDN 池之后的服务端不加限制就会无限增长。文件配置的条目不受影响。
 const maxLearnedEntries = 4096
 
-// AddIP 向路由列表中添加一个 IP（线程安全）。学习的 IP 由 rule 包做归一化
-// （IPv4-mapped 的 IPv6 折叠为 IPv4），以便与 dial 目标中观测到的字面 IP
-// 匹配。超过 maxLearnedEntries 后条目被丢弃，以保持集合有界。
 func (np *NextProxy) AddIP(ip string) {
 	if np == nil || net.ParseIP(ip) == nil {
 		return
@@ -131,8 +116,6 @@ func (np *NextProxy) AddIP(ip string) {
 	}
 }
 
-// AddDomain 向路由列表中添加一个域名（线程安全）。超过 maxLearnedEntries
-// 后条目被丢弃，以保持集合有界。
 func (np *NextProxy) AddDomain(domain string) {
 	if np == nil {
 		return
@@ -147,9 +130,7 @@ func (np *NextProxy) AddDomain(domain string) {
 	}
 }
 
-// SetDialTimeout 设置拨号连接 SOCKS5 代理的超时时间。它是本类型拨号超时的
-// 唯一入口：New 已用默认派生值播种，拨号路径因此不再判断零值（见
-// dialSOCKS5Context）。
+// SetDialTimeout 是拨号超时的唯一入口，New 已用默认派生值播种，拨号路径不再判断零值。
 func (np *NextProxy) SetDialTimeout(d time.Duration) {
 	if np == nil {
 		return
@@ -161,20 +142,8 @@ func (np *NextProxy) DialContext(ctx context.Context, network, addr string) (net
 	return np.dialSOCKS5Context(ctx, network, addr)
 }
 
-// dialSOCKS5Context 经上游 SOCKS5 代理打开一条到 addr 的连接。
-//
-// 两个 network 走的是两套不同的 SOCKS5 命令，不能共用 x/net/proxy 的拨号器：
-//
-//   - "tcp" 走 CONNECT，由 x/net/proxy 实现；
-//   - "udp" 走 UDP ASSOCIATE（RFC 1928 §7）：先建立到上游的控制连接并协商
-//     一次关联，此后每个数据报都按 RSV/FRAG/ATYP/DST.ADDR/DST.PORT 封帧，
-//     经上游给出的中继地址转发（见 udpAssociateConn）。
-//
-// x/net/proxy 只实现 CONNECT，因此把 "udp" 交给它会得到一个必然失败的
-// TCP 拨号（"socks connect udp ...: network not implemented"）。这个分支
-// 是旧 socks5 客户端库被替换后丢失的能力，见 README 的 next_proxy.enable_udp。
-//
-// 两条路径都受 ctx 约束：调用方的取消会让进行中的拨号立即中止。
+// dialSOCKS5Context 的 "tcp" 走 CONNECT（由 x/net/proxy 实现），"udp" 走 UDP ASSOCIATE
+// （见 udpAssociateConn）。
 func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string) (net.Conn, error) {
 	if np.url.User != nil {
 		log.Info("[NEXTPROXY] connecting via SOCKS5 proxy", "addr", np.url.Host, "network", network, "target", addr)
@@ -182,14 +151,10 @@ func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string
 		log.Debug("[NEXTPROXY] connecting via SOCKS5 proxy", "addr", np.url.Host, "network", network, "target", addr)
 	}
 
-	// 拨号超时由 New（默认派生值）与 SetDialTimeout（调用方已派生的值）提供，
-	// 本路径不再维护第二份默认值：零值意味着"未配置"，会被 ctx 的截止时间或
-	// 拨号器自身的默认行为覆盖，而不是悄悄换成另一个数字。
 	dialTimeout := np.dialTimeout
 
-	// ctx 的截止时间优先于 np.dialTimeout：DNS 路径传入
-	// context.Background()，因此实际生效的一直是后者（与既有的 TCP 路径
-	// 一致——拨号侧从不自己取消）。
+	// ctx 的截止时间优先于 np.dialTimeout：DNS 路径传入 background context，实际生效的
+	// 一直是后者。
 	dialCtx := ctx
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -213,22 +178,9 @@ func (np *NextProxy) dialSOCKS5Context(ctx context.Context, network, addr string
 	return conn, nil
 }
 
-// dialSOCKS5Connect 是 network=tcp 的路径：x/net/proxy 的 SOCKS5 拨号器
-// 实现了 ContextDialer，ctx 在拨号阶段生效并透传给 forward，因此不需要
-// "goroutine + 结果 channel + 放弃后排空"的手工取消编排。它的握手本身按 ctx
-// 的截止时间设置连接 deadline，并在返回前 defer 清除（见 x/net 的
-// internal/socks/client.go），所以旧库 Negotiate() 留下握手 deadline、
-// 需要成功后手工清除的那段补偿不再需要——本文件为 udp 路径新建的
-// context.WithTimeout/defer cancel() 也是靠这条约定才成立。
-//
-// 注意它与 UDP 路径在**认证方法通告**上刻意不同：本函数交给 x/net，有凭据时
-// 通告 {无认证, 用户名密码} 两个方法；UDP 路径交给 tun2socks 的库，有凭据时
-// 只通告 {用户名密码} 一个方法（与迁移前的 socks5 客户端一致）。因此上游若是
-// "无需认证、但 URL 里带了凭据"的代理，会出现 TCP 通、UDP 报
-// "unsupported method" 的不对称。这是既成行为，不是笔误。
+// 认证方法通告与 UDP 路径刻意不同：x/net 有凭据时通告 {无认证，用户名密码}，UDP 路径的库
+// 只通告 {用户名密码}，于是"无需认证但 URL 带凭据"的上游会 TCP 通、UDP 报 unsupported method。
 func (np *NextProxy) dialSOCKS5Connect(ctx context.Context, network, addr string, dialTimeout time.Duration) (net.Conn, error) {
-	// forward 是 SOCKS5 客户端拨上游代理时使用的底层拨号函数（等价于旧库的
-	// c.DialTCP）：只拨上游代理地址，并使用带 Timeout 的 net.Dialer。
 	dialer := &net.Dialer{Timeout: dialTimeout}
 	forward := socksDialerFunc(func(ctx context.Context, network, address string) (net.Conn, error) {
 		return dialer.DialContext(ctx, network, address)
@@ -249,8 +201,6 @@ func (np *NextProxy) dialSOCKS5Connect(ctx context.Context, network, addr string
 	return cd.DialContext(ctx, network, addr)
 }
 
-// credentials 返回上游代理的用户名/密码；两者都为空时 ok 为 false（不启用
-// 认证协商）。UDP ASSOCIATE 与 CONNECT 共用它，使认证只在 URL 解析一处。
 func (np *NextProxy) credentials() (user, password string, ok bool) {
 	if np.url == nil || np.url.User == nil {
 		return "", "", false
@@ -263,7 +213,6 @@ func (np *NextProxy) credentials() (user, password string, ok bool) {
 	return user, password, true
 }
 
-// dialProxyTCP 建立到上游代理的 TCP 连接，并按 dialCtx 的截止时间约束握手。
 // 返回的 deadline 是调用方在握手/关联成功后必须清除的绝对时间。
 func (np *NextProxy) dialProxyTCP(dialCtx context.Context) (net.Conn, time.Time, error) {
 	conn, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", np.url.Host)
@@ -280,9 +229,7 @@ func (np *NextProxy) dialProxyTCP(dialCtx context.Context) (net.Conn, time.Time,
 	return conn, deadline, nil
 }
 
-// socksDialerFunc 是 xproxy.Dialer + ContextDialer 的函数式适配器。它让
-// nextproxy 能把"带 Timeout 的 net.Dialer"直接当作 SOCKS5 客户端的底层拨号
-// 函数注入，同时保留 ctx 取消能力（net.Dialer.DialContext 原生支持）。
+// socksDialerFunc 把带 Timeout 的 net.Dialer 适配成 x/net/proxy 的底层拨号函数。
 type socksDialerFunc func(ctx context.Context, network, address string) (net.Conn, error)
 
 func (f socksDialerFunc) Dial(network, address string) (net.Conn, error) {
@@ -293,8 +240,6 @@ func (f socksDialerFunc) DialContext(ctx context.Context, network, address strin
 	return f(ctx, network, address)
 }
 
-// Host 以 "host:port" 形式返回上游代理地址（nil 接收者时返回 ""）。
-// 调用方只需要它用于拨号和日志，因此不暴露内部的 *url.URL。
 func (np *NextProxy) Host() string {
 	if np == nil || np.url == nil {
 		return ""

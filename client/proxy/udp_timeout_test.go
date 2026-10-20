@@ -94,7 +94,7 @@ func waitExchangeReaped(t *testing.T, s *Socks5Server, key string) {
 	}
 }
 
-// TestUDPExchangeDNSResponseTimeout 验证当 DNS 响应读空闲超时（dnsOptions.RespTimeout）
+// TestUDPExchangeDNSResponseTimeout 验证当 DNS 响应读空闲超时（dnsInterceptor.respTimeout）
 // 到期后，没有服务器响应的
 // 代理 DNS 交换会被关闭（流被关闭、键被移除），这样静默的上游 DNS 服务器就无法堆积
 // HTTP/2 流和 receiveLoop 协程。

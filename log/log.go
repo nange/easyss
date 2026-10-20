@@ -16,20 +16,16 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// logger 是当前日志器。用原子指针而非普通变量：Init/CloseFileOutput/SetLogger
-// 与后台 goroutine 的日志写入天然并发（例如 runner 在后台启动 socks5 服务器并
-// 输出 "listening"，宿主同时调用 Stop 关闭文件输出），普通变量在这条路径上是
-// 数据竞争，-race 下会直接判失败。
+// logger 是当前日志器。必须用原子指针：Init/CloseFileOutput 与后台 goroutine
+// 的日志写入天然并发，普通变量在 -race 下会直接判数据竞争。
 var logger atomic.Pointer[slog.Logger]
 
 func init() {
 	logger.Store(slog.New(DefaultHandler(slog.LevelInfo)))
 }
 
-// fileOutput 记录当前日志器的文件输出（lumberjack 写入器），使重新初始化和显式
-// 关闭都能释放底层文件句柄。没有这条记录时，句柄只能等 GC 回收——被打开的文件
-// 在 Windows 上无法删除或重命名，而 Android 绑定会在同一个进程里反复走
-// Start/Stop，宿主删除日志文件的操作会被遗留句柄挡住（见 CloseFileOutput）。
+// fileOutput 记录当前的文件输出，使重新初始化与显式关闭都能释放底层句柄。
+// 只靠 GC 不够：Windows 上被打开的文件无法删除或重命名。
 var (
 	fileOutputMu sync.Mutex
 	fileOutput   io.Closer
@@ -40,12 +36,10 @@ type AtomicLevel struct {
 	level atomic.Int32
 }
 
-// Level 返回当前日志级别。
 func (al *AtomicLevel) Level() slog.Level {
 	return slog.Level(al.level.Load())
 }
 
-// SetLevel 设置日志级别。
 func (al *AtomicLevel) SetLevel(level slog.Level) {
 	al.level.Store(int32(level))
 }
@@ -161,15 +155,8 @@ func TextHandler(w io.Writer, level slog.Leveler) slog.Handler {
 	)
 }
 
-// closableFileWriter 包住 lumberjack 写入器，让"关闭"成为终态。
-//
-// 只把包级 logger 换成 stdout-only 不足以释放句柄：后台 goroutine 可能在
-// CloseFileOutput 之前就已经 Load 到带文件处理器的旧 logger（runner 正是在
-// goroutine 里打 "[SOCKS5] listening"，宿主同时调用 Stop），这次写入会晚于
-// Close 到达 lumberjack；而 lumberjack 的语义是"写时若句柄为 nil 就重新打开"，
-// 于是刚释放的句柄被迟到的写入复活——Windows 上宿主随即删不掉日志文件，Android
-// 上的轮转同样被挡（windows-arm64 上 mobile.TestStartAppliesLogConfig 的偶发
-// 失败就是这条路径）。这层包装让 Close 之后的写入被丢弃，句柄不会再回来。
+// closableFileWriter 让"关闭"成为终态：后台 goroutine 可能在 Close 之前就 Load 到旧 logger，
+// 而 lumberjack 的语义是"写时句柄为 nil 就重新打开"，迟到的写入会把刚释放的句柄复活。
 type closableFileWriter struct {
 	mu     sync.Mutex
 	writer *lumberjack.Logger
@@ -181,8 +168,8 @@ func (w *closableFileWriter) Write(p []byte) (int, error) {
 	defer w.mu.Unlock()
 
 	if w.closed {
-		// 丢弃而非报错：这条记录通常已经由 MultiHandler 的 stdout 分支写出，
-		// 把错误冒泡给调用方只会让它看到与日志目的无关的失败。
+		// 丢弃而不报错：这条记录通常已由 MultiHandler 的 stdout 分支写出，
+		// 冒泡错误只会让调用方看到与日志目的无关的失败。
 		return len(p), nil
 	}
 	return w.writer.Write(p)
@@ -223,8 +210,8 @@ func Init(outputFile, level string) {
 	}
 	atomicLevel.SetLevel(l)
 
-	// 先摘下旧的文件输出（安装完新日志器后再关闭它）：初始化可能被同一进程
-	// 反复调用，不接管上一个写入器就会累积已打开的文件句柄。
+	// 先摘下旧的文件输出、装完新日志器后再关闭它：Init 可能被同一进程反复调用，
+	// 不接管上一个写入器就会累积已打开的句柄。
 	fileOutputMu.Lock()
 	prev := fileOutput
 	fileOutput = nil
@@ -245,13 +232,8 @@ func Init(outputFile, level string) {
 	}
 }
 
-// CloseFileOutput 关闭文件输出，并把日志器切回"只写 stdout、级别不变"的状态；
-// 下一次 Init 会按传入的路径重新打开文件。没有文件输出时它是空操作，因此可以
-// 重复调用。
-//
-// 释放句柄这件事必须由初始化日志的一方在停止时显式完成：被打开的文件在
-// Windows 上无法删除/重命名，宿主（Android 绑定、托盘）在服务停止后清理或轮转
-// 日志文件时会被遗留句柄挡住。
+// CloseFileOutput 关闭文件输出并把日志器切回"只写 stdout、级别不变"，没有文件输出时是空操作。
+// 句柄必须由初始化日志的一方显式释放，否则 Windows 上无法删除/重命名被占用的日志文件。
 func CloseFileOutput() error {
 	fileOutputMu.Lock()
 	w := fileOutput
@@ -262,9 +244,8 @@ func CloseFileOutput() error {
 		return nil
 	}
 
-	// 两层都要做：换掉包级 logger 让后续记录只走 stdout，关掉写入器释放句柄。
-	// 前者管住"之后 Load 到新 logger 的写入"，后者（closableFileWriter 的终态
-	// 语义）管住"在此之前就 Load 到旧 logger、写完却晚于本次 Close 的写入"。
+	// 两层缺一不可：换掉包级 logger 管住之后的写入，关闭写入器（终态语义）管住先已 Load
+	// 到旧 logger、却晚于本次 Close 的写入。
 	SetLogger(slog.New(DefaultHandler(&atomicLevel)))
 	return w.Close()
 }

@@ -151,7 +151,7 @@ func TestQueryWithBuiltinFirstNoSystemFallback(t *testing.T) {
 }
 
 // TestQueryWithBuiltinFirstArmedBreakerWithoutFallback 覆盖 F3：熔断可能是在
-// "当时还有系统 DNS"的情况下置位的，随后兜底消失（Android 上系统 DNS 对应用
+// "当时还有系统 DNS"的情况下置位的，之后兜底消失（Android 上系统 DNS 对应用
 // 不可见）。此时必须无视冷却仍然尝试内置池，否则冷却期会变成彻底的解析中断。
 func TestQueryWithBuiltinFirstArmedBreakerWithoutFallback(t *testing.T) {
 	resetBuiltinDNSCircuit()
@@ -182,10 +182,8 @@ func TestQueryWithBuiltinFirstArmedBreakerWithoutFallback(t *testing.T) {
 	}
 }
 
-// TestBuiltinRouteFor 固定熔断判定的三个互斥状态。用三态而不是两个布尔，
-// 是因为"熔断中且没有兜底"必须与"健康"区分开：前者要打一条"冷却被无视"的
-// 警告，后者不打；此前两个布尔让这两态在调用方看起来相同，于是其中一条分支
-// 永远是死代码。
+// TestBuiltinRouteFor 守住熔断判定必须是三个互斥状态：两个布尔会让"熔断中且没有兜底"
+// 与"健康"在调用方看起来相同，于是"无视冷却重试"那条分支永远不可达。
 func TestBuiltinRouteFor(t *testing.T) {
 	MarkBuiltinDNSAvailable()
 	t.Cleanup(MarkBuiltinDNSAvailable)
@@ -240,13 +238,8 @@ func (h *recordingHandler) at(level slog.Level) []slog.Record {
 	return out
 }
 
-// TestQueryWithBuiltinFirstRetryDoesNotWarn 固定日志级别与调用频率的对应关系：
-// QueryWithBuiltinFirst 在本地转发服务器里是**每条 DNS 查询**调用一次，因此
-// Retry 态（熔断已置位、但没有系统兜底）只能记 Debug；记 Warn 会按查询刷屏，
-// 而这条消息描述的是一个持续数分钟的状态，不是一次需要处置的事件。
-//
-// 低频的预解析路径（Cache.PrePopulateWithFallback 与 client.resolveServerIPV6）
-// 仍然用 Warn——那里一次运行只出现一条。
+// TestQueryWithBuiltinFirstRetryDoesNotWarn 守住日志级别与调用频率对应：QueryWithBuiltinFirst
+// 每条 DNS 查询调用一次，Retry 态只能记 Debug，记 Warn 会按查询刷屏；低频预解析路径仍用 Warn。
 func TestQueryWithBuiltinFirstRetryDoesNotWarn(t *testing.T) {
 	resetBuiltinDNSCircuit()
 	MarkBuiltinDNSUnavailable() // 熔断已置位

@@ -22,69 +22,32 @@ type batchShaper struct {
 	plaintext []byte
 	timer     *time.Timer
 	mu        sync.Mutex
-	writeMu   sync.Mutex // 跨 goroutine 串行化 WriteRecord 调用
+	writeMu   sync.Mutex
 
-	// 记录必须按 flushLocked 的换出顺序写出，而不是按谁先抢到 writeMu 的顺序：
-	// flushAndWrite 在 bs.mu 下换出缓冲、然后释放 bs.mu 再做 I/O（避免阻塞
-	// PushData），因此两个并发的 flush 完全可能后换出的先拿到 writeMu。若不
-	// 排序，定时器冲刷与数据冲刷同时发生时，后一段 DATA 可能先写到线上，TCP
-	// 字节流被静默重排。
-	//
-	// writeSeq 在 bs.mu 下分配（与换出顺序一致），writeNext 在 writeMu 下推进；
-	// 拿到 writeMu 但轮到自己的序号之前，flush 在 writeCond 上等待。这样换出
-	// 仍然可以并发，只有写出被排序。
+	// 记录必须按换出顺序写出：释放 bs.mu 之后才做 I/O，后换出的可能先拿到
+	// writeMu，把 DATA 段静默重排。
 	writeCond *sync.Cond
-	writeSeq  uint64 // 已分配的写出序号，受 bs.mu 保护
-	writeNext uint64 // 下一个允许写出的序号，受 writeMu 保护
-	// recordCeiling 是一条记录的明文上限，也是本类型唯一的尺寸边界：单帧校验、
-	// 预冲刷边界、填充预算三处都用它。它的取值由池的 64KB 档位反推：
-	// protocol.MaxWriteRecordPlaintext = MaxReadRecordPlaintext - 3 - 16 = 65,517，
-	// 一条满记录加前缀与标签正好是 65,536，不会向上跳档。
-	//
-	// 下界不由它决定：TCP 的 DATA 帧来自 netbuf 读缓冲（客户端 16,384、服务端
-	// 32,768，最大帧 32,771），UDP 数据报帧受 protocol.MaxUDPDataSize 约束
-	// （16,365）。两者都必须能完整落进一条记录，因此这个上限不能跟着 UDP 缩到
-	// 16KB——那会让 TCP 读满时在单帧校验处直接报错。UDP 链路另有一条更紧的档位
-	// 承诺：MaxUDPDataSize + 3 + 3 + 16 = protocol.UDPPoolClassSize。
-	//
-	// 它同时必须与加密侧的写入上限一致（crypto.RecordWriter.maxPlain 用的是同一个
-	// 常量）：整形侧一旦攒出比它更大的明文，WriteRecord 会直接报错并打断这条流。
-	//
-	// 记录本身在线上格式上还能更大（3 字节长度前缀可表达 16MB），但那个更大的
-	// 尺寸只用于解码既有记录，见 crypto.MaxCipherRecordSize。
-	recordCeiling int
-	// flushThreshold 是批处理的目标：攒到它的 9/10 就冲刷，让记录尺寸落在
-	// 填充的目标档位附近，而不是每次都顶到上限。
-	//
-	// 它从 recordCeiling 推导而不是从线上格式上限（protocol.MaxReadRecordPlaintext）
-	// 取：后者与记录上限只差 19 字节，但锚在 recordCeiling 上能让"阈值永远低于
-	// 上限"成为结构性保证，不必在改上限时再验算一遍。
+	writeSeq  uint64
+	writeNext uint64
+	// recordCeiling 是一条记录的明文上限，与 crypto.RecordWriter 的写入上限是
+	// 同一个常量：攒出更长的明文会让 WriteRecord 报错并打断这条流。
+	recordCeiling  int
 	flushThreshold int
 	window         time.Duration
 	timerStarted   bool
 	closing        atomic.Bool
-	writeClosed    atomic.Bool // 在 Close 的 flush 之后置位；防止 handler 返回后继续写入
+	writeClosed    atomic.Bool // 在 Close 的 flush 之后置位，防止 handler 返回后继续写入
 	err            error
 	cover          *coverInjector
 }
 
-// New 在给定的 record writer 之上构建一个流量整形器。cfg 在此处规范化
-// （参见 Config.Normalize），因此调用方可以直接传入原始的配置文件值。
-//
-// 明文缓冲区按需增长：流的生命周期从 minRecordBufferSize 起步，只有真正
-// 攒够数据（或出现超大单帧）时才长到 protocol.MaxWriteRecordPlaintext。空闲流、
-// 心跳流与短命流因此只占最少的内存，而不是每条流无条件预留一整块记录缓冲区。
 func New(writer *crypto.RecordWriter, cfg Config) Shaper {
 	cfg = cfg.Normalize()
 
 	bs := &batchShaper{
-		writer: writer,
-		// 缓冲从初始大小起步，按需增长（见 ensureCapacity）。
-		plaintext: bytespool.Get(minRecordBufferSize)[:0],
-		// recordCeiling 是唯一的尺寸边界（单帧、预冲刷、填充预算共用），
-		// 与加密侧的写入上限是同一个协议常量，理由见字段说明。
-		recordCeiling: protocol.MaxWriteRecordPlaintext,
-		// flushThreshold 是批处理的目标：攒到上限的 9/10 就冲刷。
+		writer:         writer,
+		plaintext:      bytespool.Get(minRecordBufferSize)[:0],
+		recordCeiling:  protocol.MaxWriteRecordPlaintext,
 		flushThreshold: protocol.MaxWriteRecordPlaintext * 9 / 10,
 		window:         time.Duration(cfg.BatchWindowMS) * time.Millisecond,
 	}
@@ -96,15 +59,9 @@ func New(writer *crypto.RecordWriter, cfg Config) Shaper {
 	return bs
 }
 
-// minRecordBufferSize 是每条流的明文缓冲区初始大小。它是"流"这个维度的内存
-// 下限：常驻连接、心跳流、探测流在数量上往往占绝大多数，把它们从一整块记录
-// 缓冲区降到这么小是这次收敛里收益最大的一项。缓冲按需增长到
-// protocol.MaxWriteRecordPlaintext，见 protocol.MinRecordBufferSize 的说明。
 const minRecordBufferSize = protocol.MinRecordBufferSize
 
-// ensureCapacity 确保明文缓冲区至少能容纳 size 字节，必要时按需增长。
-// 调用方必须持有 bs.mu，且必须保证 size ≤ bs.recordCeiling（两条调用路径都由
-// appendFrameLocked 的单帧检查加预冲刷边界、或下面的填充预算保证）。
+// 调用方必须持有 bs.mu。
 func (bs *batchShaper) ensureCapacity(size int) {
 	if cap(bs.plaintext) >= size {
 		return
@@ -112,43 +69,21 @@ func (bs *batchShaper) ensureCapacity(size int) {
 	bs.growLocked(size)
 }
 
-// growLocked 把明文缓冲区换到一块更大的池化缓冲区，并归还旧的那块。
-// 增长按 2 倍摊销，但至少满足本次请求，上限是 protocol.MaxReadRecordPlaintext
-// （实际请求量不会超过 bs.recordCeiling，这个更松的上限只是兜住更小的
-// minRecordBufferSize 与档位之间的算术）。
-//
-// 这里不检查 bytespool.Get 的返回值：newCap 由上面的裁剪保证落在
-// [minRecordBufferSize, protocol.MaxReadRecordPlaintext] 之内，是池内合法的 2 的幂
-// 档位，Get 必定返回可用的缓冲区。而且这个函数**必须**真的把缓冲区换大——
-// 静默跳过会让紧随其后的 protocol.AppendFrame 因容量不足自行 realloc，
-// 从而绕过池，正是这次改动要杜绝的路径。
-//
-// 调用方必须持有 bs.mu。
+// growLocked 换到更大的池化缓冲区，调用方必须持有 bs.mu。必须真的换大：容量
+// 不足时 protocol.AppendFrame 会自行 realloc，绕过缓冲池。
 func (bs *batchShaper) growLocked(size int) {
 	newCap := min(max(cap(bs.plaintext)*2, size, minRecordBufferSize), protocol.MaxReadRecordPlaintext)
 
 	buf := bytespool.Get(newCap)
-	// 明文的前 len 字节必须搬过去：appendFrame 只在 Get 返回的切片上追加。
 	n := copy(buf, bs.plaintext)
-	// 旧缓冲区在搬移之后、覆盖字段之前归还（它已经无人引用）。
-	// 缓冲区为 nil 时（尚未分配）跳过：nil 的 cap 是 0。
 	if old := bs.plaintext; cap(old) > 0 {
 		bytespool.MustPut(old[:cap(old)])
 	}
 	bs.plaintext = buf[:n]
 }
 
-// appendFrameLocked 将指定类型的帧追加到明文缓冲区：当记录即将溢出时先冲刷，
-// 缓冲不足时按需增长，最后把帧编码进去（载荷始终被复制进 bs.plaintext）。
-// putPayload 标记来自 bytespool 的 payload，追加完成后必须归还。
-// 调用方必须持有 bs.mu。
-//
-// putPayload 只对 FrameCOVER 为真，这是**载荷所有权契约的另一半**：其余帧类型
-// （DATA/DATAGRAM/FIN/RST/PADDING）的载荷一律不归还、不保留，因此调用方可以在
-// PushFrame 返回后立刻复用它。服务端 UDP 数据报路径（handler/udp.go 的
-// NewFrameWithPayload）与客户端 UDP 上行（proxy/stream.go 的 UDPExchange.Send）
-// 都依赖这一点来避免每数据报一次多余复制：若改成"归还任何 cap 是 2 的幂的
-// 载荷"，这两处会变成把仍在使用的缓冲归还池，造成跨流数据污染。
+// appendFrameLocked 追加一帧。putPayload 只对 FrameCOVER 为真：其余帧的载荷不
+// 归还、不保留，调用方返回后即可复用；按 cap 判断会把仍在用的缓冲归还池。
 func (bs *batchShaper) appendFrameLocked(ftype protocol.FrameType, payload []byte, putPayload bool) error {
 	frameSize := protocol.FrameHeaderSize + len(payload)
 	if frameSize > bs.recordCeiling {
@@ -158,18 +93,11 @@ func (bs *batchShaper) appendFrameLocked(ftype protocol.FrameType, payload []byt
 		return fmt.Errorf("shaper: frame size %d exceeds max record size %d", frameSize, bs.recordCeiling)
 	}
 
-	// 若追加会导致记录溢出，则预先冲刷。这一步必须在容量检查之前：冲刷会
-	// 换出一块空的缓冲区，原来"放不下"的帧因此往往又能放下了（例如缓冲区
-	// 已攒到上限，再来一帧只能放进下一条记录）。
-	//
-	// 边界必须取 recordCeiling 而不是 flushThreshold：单个超过阈值的大帧
-	// （TCP 读缓冲满档、UDP 数据报）也是合法帧，必须能放进一条记录。它同时
-	// 是"记录明文不超过上限"这条不变量的唯一执行点：少了它，多帧累积可以
-	// 顶到档位边界，让整块记录跳进池的更大档位——而单帧校验（上面那条）管
-	// 不到累积。
+	// 预冲刷必须排在容量检查之前：冲刷换出空缓冲，原本"放不下"的帧往往又能
+	// 放下。边界取 recordCeiling 而非 flushThreshold，超阈值的大帧也是合法帧。
 	if len(bs.plaintext) > 0 && len(bs.plaintext)+frameSize > bs.recordCeiling {
 		if err := bs.flushAndWrite(false); err != nil {
-			// 该帧从未被追加，因此在此归还池化 payload：没有其他人会归还它。
+			// 帧未被追加，池化 payload 由此处唯一归还。
 			if putPayload {
 				bs.putPooledPayload(payload)
 			}
@@ -177,9 +105,6 @@ func (bs *batchShaper) appendFrameLocked(ftype protocol.FrameType, payload []byt
 		}
 	}
 
-	// 缓冲不足时按需增长。必须在 AppendFrame 之前做：否则 protocol.AppendFrame
-	// 会在容量不足时自行 realloc，绕过池化缓冲区，使这块内存既不受池的保留
-	// 上限约束，也无法在 Close 时归还。
 	bs.ensureCapacity(len(bs.plaintext) + frameSize)
 
 	bs.plaintext = protocol.AppendFrame(bs.plaintext, protocol.Frame{Type: ftype, Payload: payload})
@@ -188,7 +113,6 @@ func (bs *batchShaper) appendFrameLocked(ftype protocol.FrameType, payload []byt
 		bs.putPooledPayload(payload)
 	}
 
-	// 达到阈值后冲刷。
 	if len(bs.plaintext) >= bs.flushThreshold {
 		return bs.flushAndWrite(false)
 	}
@@ -198,7 +122,6 @@ func (bs *batchShaper) appendFrameLocked(ftype protocol.FrameType, payload []byt
 	return nil
 }
 
-// PushData 将原始数据作为 DATA 帧添加。返回时不持有锁。
 func (bs *batchShaper) PushData(data []byte) error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
@@ -216,7 +139,6 @@ func (bs *batchShaper) PushData(data []byte) error {
 	return bs.appendFrameLocked(protocol.FrameDATA, data, false)
 }
 
-// PushFrame 添加一个预先构建好的帧（FIN、RST、COVER 等）。返回时不持有锁。
 func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
@@ -228,10 +150,8 @@ func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 		return bs.err
 	}
 
-	// 让 Length 与 payload 保持一致：下面的记录大小检查和整形器的 cover 预算
-	// 都使用 EncodedLen（3 + Length），因此 Length 与 payload 不一致的帧
-	// 会让超大帧绕过这些检查。线缆上的头部由 protocol.AppendFrame 根据
-	// len(Payload) 推导。
+	// Length 必须与 payload 一致：记录大小检查与 cover 预算都用 EncodedLen，不一致
+	// 会让超大帧绕过检查。
 	if len(f.Payload) > math.MaxUint16 {
 		return fmt.Errorf("shaper: frame payload too large: %d", len(f.Payload))
 	}
@@ -243,21 +163,17 @@ func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 	return bs.appendFrameLocked(f.Type, f.Payload, f.Type == protocol.FrameCOVER)
 }
 
-// putPooledPayload 在 cover payload 确实是池缓冲区（容量为池上限内的
-// 2 的幂）时将其归还 bytespool。调用方提供的堆切片会使 MustPut
-// 因 2 的幂不变式而 panic，因此这类 payload 留给 GC 回收。
+// putPooledPayload 只归还池内 2 的幂档位缓冲；堆切片交给 GC，MustPut 会 panic。
 func (bs *batchShaper) putPooledPayload(payload []byte) {
 	if len(payload) > 0 && cap(payload) <= bytespool.MaxSize && cap(payload)&(cap(payload)-1) == 0 {
 		bytespool.MustPut(payload)
 	}
 }
 
-// Flush 触发立即冲刷。不要求调用方持有锁。
 func (bs *batchShaper) Flush() error {
 	return bs.flush(true)
 }
 
-// Close 停止 cover 流量，冲刷剩余数据，并将缓冲区归还池。
 func (bs *batchShaper) Close() error {
 	bs.mu.Lock()
 	bs.closing.Store(true)
@@ -270,34 +186,13 @@ func (bs *batchShaper) Close() error {
 
 	err := bs.flush(true)
 
-	// 先把已分配的序号写完，再关闭写入。
-	//
-	// 这里必须排空，而不是直接置 writeClosed：定时器可能在 bs.closing 置位
-	// 之前就已经换出了缓冲区并分配好 seq，正在 writeCond 上等轮到它。若此时
-	// 直接置 writeClosed，那条记录会走进 writeRecordInOrder 的丢弃分支被静默
-	// 扔掉——而它可能正是这次会话里唯一携带数据的记录（Close 自己的 flush
-	// 常常因为缓冲区已被定时器换走而拿到 nil，不分配 seq）。表现就是"整条
-	// 记录流为空"：TestBatchShaperConcurrentFlushNoNonceDesync 在 Windows
-	// 双核 + race 的调度下踩到过（round 6，no records decrypted）。
-	//
-	// 置位之后到达的 flush 才是真正的"晚到"（会话已经结束），丢弃它们正是
-	// writeClosed 的本意，因此排空必须排在 Store 之前。
-	//
-	// Wait 由 sync.Cond 保证"原子地释放 writeMu、唤醒后重新获取"，因此等待
-	// 期间其他 flush 仍能推进 writeNext，不会死锁；每次推进都会 Broadcast，
-	// 最后一次唤醒时已没有待写记录。
-	//
-	// 条件取 writeNext < writeSeq 而不是 !=：生产路径上 writeNext 只由
-	// writeRecordInOrder 推进，而每次写出之前都先分配过 seq，因此两者只会相等
-	// 或后者更大。但 order_test.go 直接调用 writeRecordInOrder 来验证写出顺序，
-	// 那里不分配 seq，writeNext 会大于 writeSeq——用 != 会让那条测试的
-	// defer Close 永远等下去（实测会挂到 go test 超时）。
+	// 必须先排空已分配的序号再置 writeClosed：定时器可能早已换出缓冲、分配好
+	// seq 并等在 writeCond 上，直接置位会让那条记录走丢弃分支。
 	bs.writeMu.Lock()
 	for bs.writeNext < bs.writeSeq {
 		bs.writeCond.Wait()
 	}
-	// 与 writeMu 串行化：此后任何获取 writeMu 的 flushAndWrite 都会看到
-	// writeClosed 并丢弃其数据，防止向已结束的 HTTP handler 写入。
+	// 此后拿到 writeMu 的 flushAndWrite 看到 writeClosed 就丢弃，不再写已结束的 handler。
 	bs.writeClosed.Store(true)
 	bs.writeCond.Broadcast()
 	bs.writeMu.Unlock()
@@ -311,8 +206,7 @@ func (bs *batchShaper) Close() error {
 	return err
 }
 
-// flushLocked 停止定时器，追加填充，并交换明文缓冲区。
-// 必须在持有 mu 时调用。返回待写入的数据，缓冲区为空时返回 nil。
+// 调用方必须持有 bs.mu。
 func (bs *batchShaper) flushLocked() []byte {
 	if len(bs.plaintext) == 0 {
 		return nil
@@ -321,53 +215,31 @@ func (bs *batchShaper) flushLocked() []byte {
 	bs.timerStarted = false
 	bs.timer.Stop()
 
-	// 填充同样要在池化缓冲区里完成：以记录上限为预算生成填充帧，再按结果增长
-	// 缓冲区，从而避免 AppendFrame 因容量不足自行 realloc，把这块内存从池的
-	// 管理里漏出去。预算取 recordCeiling：填充后的记录在加过 3 字节长度前缀与
-	// 16 字节 AEAD 标签之后仍须落进 64KB 档位，也仍须不越过加密侧的写入上限。
-	//
-	// 代价是贴着记录上限的记录会丢掉尾部填充：那些记录本来就落在填充的目标尺寸
-	// 档位上，少掉的是 1~63 字节的尾部随机化，属可接受；不为它先增长一档。
+	// 先按记录上限生成填充帧再增长，避免 AppendFrame 自行 realloc 漏出池外。
 	if padFrame, ok := BuildPaddingFrame(len(bs.plaintext), bs.recordCeiling); ok {
 		bs.ensureCapacity(len(bs.plaintext) + protocol.FrameHeaderSize + len(padFrame.Payload))
 		bs.plaintext = protocol.AppendFrame(bs.plaintext, padFrame)
 	}
 
-	// 交换缓冲区：把攒好的数据交给 I/O，这条流同时拿到一块新的明文缓冲区，
-	// 因此并发的 PushData / PushFrame 不必等待这次 I/O 完成。
-	//
-	// 未增长过的流（多数流自始至终都在这一档）直接复用同一块缓冲区，
-	// 彻底避免"每次冲刷都取一块新的"；已经增长过的流换回初始大小，
-	// 让它静默后能把大缓冲区让回池里，下一轮增长时正好复用
-	// （Get(4KB) 与 Put(记录上限档) 走不同档位，不会互相污染）。
+	// 流侧绝不能继续指向即将归还的 data，否则后续 append 会写进已入池的缓冲。
 	data := bs.plaintext
 	if cap(bs.plaintext) > minRecordBufferSize {
-		// 换出大缓冲区：data 由 flushAndWrite 在写完记录后归还
-		//（data[:cap(data)] 的 cap 是 2 的幂，符合池的约定）。
 		bs.plaintext = bytespool.Get(minRecordBufferSize)[:0]
 		return data
 	}
 
-	// 小缓冲区：从池里再取一块给流，把 data 原样交给 I/O。
-	// Get(4096) 必定返回可用的缓冲区（池内合法的 2 的幂档位），因此这里不需要
-	// 守卫；而万一流侧拿不到新缓冲区，也绝不能让它继续指向即将被归还给池的
-	// data——那会让后续 append 写进已入池的缓冲区，造成跨流数据污染。
 	bs.plaintext = bytespool.Get(minRecordBufferSize)[:0]
 	return data
 }
 
-// flushAndWrite 冲刷当前缓冲区并写出加密记录。
-// 必须在持有 mu 时调用。I/O 期间临时释放 mu，返回前重新获取。
-// 当 forceFlush 为 true 时，写入后会触发显式的 HTTP/2 flush，
-// 以确保立即投递。
+// flushAndWrite 写出加密记录；调用方必须持有 bs.mu，I/O 期间临时释放。
 func (bs *batchShaper) flushAndWrite(forceFlush bool) error {
 	data := bs.flushLocked()
 	if data == nil {
 		return nil
 	}
 
-	// 序号必须与缓冲换出在同一临界区内分配：换出顺序就是线上顺序，而 writeMu
-	// 的抢占顺序不是（见 writeCond 的字段说明）。
+	// 序号必须与缓冲换出在同一临界区内分配：换出顺序才是线上顺序。
 	seq := bs.writeSeq
 	bs.writeSeq++
 	bs.mu.Unlock()
@@ -382,20 +254,13 @@ func (bs *batchShaper) flushAndWrite(forceFlush bool) error {
 	return err
 }
 
-// writeRecordInOrder 按 seq 顺序写出记录。调用方必须先通过 flushLocked 换出
-// 缓冲并在 bs.mu 下分配 seq，然后释放 bs.mu 再调用本函数：这样写出被排序，而
-// PushData 仍可在 I/O 期间继续往新缓冲里追加。
-//
-// 后到的 flush 可能先拿到 writeMu；它在 writeCond 上等待，直到前一个序号写完。
-// 关闭路径也必须推进 writeNext 并广播，否则等待中的 flush 永远不会退出。
 func (bs *batchShaper) writeRecordInOrder(seq uint64, data []byte, forceFlush bool) error {
 	bs.writeMu.Lock()
 	for seq != bs.writeNext {
 		bs.writeCond.Wait()
 	}
 	if bs.writeClosed.Load() {
-		// Close 之后到达的记录一律丢弃，但必须把序号推进并唤醒下一个等待者：
-		// 每个等待者会依次走这个分支，形成一条排空链。
+		// 丢弃 Close 之后到达的记录，但必须推进序号并唤醒等待者，否则它们永远退出不了。
 		bs.writeNext++
 		bs.writeCond.Broadcast()
 		bs.writeMu.Unlock()
@@ -411,8 +276,7 @@ func (bs *batchShaper) writeRecordInOrder(seq uint64, data []byte, forceFlush bo
 	return err
 }
 
-// flush 获取锁，冲刷缓冲区，然后释放锁。
-// 调用方不得持有 bs.mu。
+// 调用方不得持有 bs.mu，取锁由本方法负责。
 func (bs *batchShaper) flush(forceFlush bool) error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
@@ -428,8 +292,6 @@ func (bs *batchShaper) onTimer() {
 	bs.mu.Unlock()
 	if err := bs.flush(true); err != nil {
 		if isClosedStreamError(err) {
-			// 对端已关闭该流（例如 handler 仍在关闭 relay 时收到
-			// RST_STREAM/FIN）。失败的冲刷只是拆除路径收尾，并非真正的错误。
 			log.Debug("[SHAPER] timer flush aborted, stream closed", "err", err)
 			return
 		}
@@ -437,9 +299,6 @@ func (bs *batchShaper) onTimer() {
 	}
 }
 
-// isClosedStreamError 报告 err 是否表明底层流已被对端关闭
-// （HTTP/2 流重置、管道关闭、连接关闭）。这类错误在拆除阶段是无害的：
-// 对端已放弃该流，失败的冲刷只是 relay 收尾。
 func isClosedStreamError(err error) bool {
 	if err == nil {
 		return false
@@ -447,9 +306,7 @@ func isClosedStreamError(err error) bool {
 	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
 		return true
 	}
-	// "http2: stream closed" 是标准库中未导出的哨兵错误，因此只能通过
-	// 字符串匹配。crypto 会保留错误链（"crypto: write record: ..."），
-	// 所以子串匹配就足够了。
+	// "http2: stream closed" 是标准库未导出的哨兵错误，只能字符串匹配。
 	return strings.Contains(strings.ToLower(err.Error()), "stream closed")
 }
 

@@ -116,7 +116,7 @@ func TestVerifyTunTeardown(t *testing.T) {
 	})
 }
 
-// TestTunDownVerifiesTheRecordedSession 固定关闭流程的三件事：按启用时
+// TestCloseTun2socksVerifiesTheRecordedSession 固定关闭流程的三件事：按启用时
 // 记录的会话（而不是关闭时的 manager）核对路由残留、清空所有会话状态、把
 // EnableTun2socks 落回 false。
 func TestCloseTun2socksVerifiesTheRecordedSession(t *testing.T) {
@@ -142,7 +142,7 @@ func TestCloseTun2socksVerifiesTheRecordedSession(t *testing.T) {
 	require.False(t, a.currentConfig().Local.EnableTun2socks)
 }
 
-// TestTunDownSignalsTheHelperFIFO 确认关闭流程仍然通过关闭 FIFO 通知
+// TestCloseTun2socksSignalsTheHelperFIFO 确认关闭流程仍然通过关闭 FIFO 通知
 // helper 退出，并且会等它释放控制锁（这里锁是空闲的，因此立即返回）。
 func TestCloseTun2socksSignalsTheHelperFIFO(t *testing.T) {
 	stubTunTeardownHooks(t)

@@ -28,9 +28,7 @@ type coverInjector struct {
 	stopped          atomic.Bool
 }
 
-// newCoverInjector 为已规范化的配置构建 cover 流量注入器
-// （参见 Config.Normalize，它是 cover 默认值的唯一出处）。
-// BudgetRatio 为零时禁用 cover 流量。
+// 配置必须已经过 Config.Normalize——cover 默认值的唯一出处；BudgetRatio 为零时禁用。
 func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClosing func() bool) *coverInjector {
 	if cfg.BudgetRatio == 0 {
 		return nil
@@ -136,10 +134,8 @@ func (ci *coverInjector) coverFrameSizeRange() (minSize, maxSize int) {
 	cfgMin, cfgMax := ci.cfg.MinSize, ci.cfg.MaxSize
 	span := float64(cfgMax - cfgMin)
 
-	// 初始阶段以接近 cfgMin 的小尺寸为主，模拟空闲连接的小数据包特征；
-	// 随累计真实流量平滑过渡到接近真实 DATA 帧的尺寸分布。
-	// 默认配置（MinSize=128, MaxSize=1500）下：
-	//   ratio=0 -> [128, 509],  ratio=1 -> [512, 1500]
+	// 初始阶段以接近 cfgMin 的小尺寸模拟空闲连接，随累计真实流量平滑过渡到
+	// 接近真实 DATA 帧的尺寸分布，避免 cover 帧在流量画像上过于显眼。
 	const (
 		minSteadyRatio = 0.28
 		maxStartRatio  = 0.278

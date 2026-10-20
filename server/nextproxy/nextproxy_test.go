@@ -356,7 +356,7 @@ func TestAddIP(t *testing.T) {
 	})
 
 	// 学习路径写入 IPv4-mapped 形式时必须与拨号目标的 IPv4 字面量匹配
-	// （两边的归一化此前并不对称）。
+	// （两边的归一化必须对称）。
 	t.Run("IPv4-mapped 归一化", func(t *testing.T) {
 		np := newEmptyTestProxy()
 		np.AddIP("::ffff:1.2.3.4")

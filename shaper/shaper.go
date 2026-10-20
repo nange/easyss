@@ -13,8 +13,7 @@ import (
 func newSeededChaCha8() *rand.ChaCha8 {
 	var seed [32]byte
 	if _, err := cryptorand.Read(seed[:]); err != nil {
-		// CSPRNG 失败会让 cover/padding 内容退化为确定性流——
-		// 这对流量伪装层是致命的。应快速失败，而不是在零种子下静默运行。
+		// CSPRNG 失败会让 cover/padding 退化为确定性流，对伪装层是致命的，直接 panic。
 		panic("shaper: crypto/rand unavailable: " + err.Error())
 	}
 	return rand.NewChaCha8(seed)
@@ -45,8 +44,8 @@ type Config struct {
 	Cover         CoverConfig
 }
 
-// maxBatchWindowMS 限制批处理延迟，下方的 cover 流量参数没有对应的配置
-// 字段：它们是伪装层的固定属性，在此处定义为唯一事实来源。
+// maxBatchWindowMS 限制批处理延迟；下面的 cover 参数是伪装层的固定属性，
+// 在此处定义为唯一事实来源。
 const (
 	maxBatchWindowMS = 10
 
@@ -55,8 +54,6 @@ const (
 	defaultCoverMaxSize       = 1500
 )
 
-// Normalize 应用所有构造路径共享的默认值和边界，使有效的整形器设置只有
-// 一处定义，而不再由客户端配置层、服务端 handler 和 New 各自重复钳制。
 func (c Config) Normalize() Config {
 	if c.BatchWindowMS <= 0 {
 		c.BatchWindowMS = sharedconfig.DefaultBatchWindowMS
@@ -80,10 +77,8 @@ func (c Config) Normalize() Config {
 	if c.Cover.MaxSize <= 0 {
 		c.Cover.MaxSize = defaultCoverMaxSize
 	}
-	// 钳制到记录上限：Frame.Length 是 uint16，且 cover payload 必须放得进一条
-	// 记录（否则会被整形器的单帧校验拒绝）。配置错误的预算上限绝不能造成这种
-	// 后果。注意这里不能用 protocol.MaxUDPDataSize——它是 UDP 数据报的读缓冲
-	// 上限，比记录上限紧得多，会把合法的 cover 配置一并削掉。
+	// 钳制到记录上限：Frame.Length 是 uint16，cover payload 必须放得进一条记录，
+	// 否则会被单帧校验拒绝。不能用 protocol.MaxUDPDataSize，它会把合法 cover 配置一并削掉。
 	maxFramePayload := protocol.MaxWriteRecordPlaintext - protocol.FrameHeaderSize
 	if c.Cover.MinSize > maxFramePayload {
 		c.Cover.MinSize = maxFramePayload
@@ -97,16 +92,9 @@ func (c Config) Normalize() Config {
 	return c
 }
 
-// BuildPaddingFrame 返回一个适合追加到当前明文缓冲区的 PADDING 帧。
-// 填充大小根据 totalSize 通过分级算法推导，瞄准常见的记录大小区间，
-// 以掩盖真实 payload 长度。
-//
-// budget 是这条记录可用的总空间（含帧头），<=0 表示按线上格式上限
-// protocol.MaxReadRecordPlaintext 计算。调用方传入自己缓冲区的实际容量，可以在
-// 缓冲尚未增长到上限时也做一次判断，而不是先生成再丢弃。
-//
-// 返回的 bool 表示是否生成了填充。当算法判定无需填充，或帧会超出 budget
-// （以及线上格式上限）时为 false。
+// BuildPaddingFrame 生成 PADDING 帧，把记录尺寸推向常见档位以掩盖真实 payload 长度。
+// budget 是这条记录可用的总空间（含帧头），≤0 按线上格式上限计算；
+// 超出 budget 或无需填充时返回 false。
 func BuildPaddingFrame(totalSize, budget int) (protocol.Frame, bool) {
 	if budget <= 0 || budget > protocol.MaxReadRecordPlaintext {
 		budget = protocol.MaxReadRecordPlaintext
@@ -121,8 +109,7 @@ func BuildPaddingFrame(totalSize, budget int) (protocol.Frame, bool) {
 
 	stats.RecordPaddingBytes(padSize)
 	frame := protocol.NewFramePADDING(uint16(padSize))
-	// 包级 RNG 在多个流之间共享；math/rand/v2 的随机源不适合并发使用，
-	// 因此用互斥锁保护填充操作。
+	// math/rand/v2 的随机源不适合并发使用，包级 RNG 由互斥锁保护。
 	paddingRNGMu.Lock()
 	_, _ = paddingRNG.Read(frame.Payload)
 	paddingRNGMu.Unlock()
@@ -139,8 +126,7 @@ func computePadPayloadSize(totalSize int) int {
 	case totalSize <= 1500:
 		target = 1500 + randomInt(500)
 	default:
-		// 确保至少有 1 字节填充：零长度填充无法掩盖任何信息，
-		// 还会让调用方的 ok=false 结果变得不确定。
+		// 至少 1 字节填充：零长度填充掩盖不了任何信息。
 		add := 1 + randomInt(63)
 		target = totalSize + add
 	}

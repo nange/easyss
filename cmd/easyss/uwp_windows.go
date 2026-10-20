@@ -23,17 +23,9 @@ func (a *TrayApp) addUWPLoopbackMenu(root *systray.Menu) {
 	go a.uwpRefresh()
 }
 
-// refreshUWPAppItems 按当前已安装应用重建 UWP 子菜单的列表。
-//
-// 菜单列表是动态的：已存在的条目就地更新，新安装的应用追加到末尾，
-// 已卸载/已消失的应用对应的条目置灰（systray 没有移除菜单项的 API，
-// 列表可能随着时间增长，但只会显示当前有效的应用）。只要菜单形状
-// 发生变化就调用一次 SetMenu，让原生菜单与这份列表同步。
-//
-// 这样做的前提是 nange/systray 修复了 gogpu/systray issue #39：
-// 每个菜单项使用稳定的命令 ID，且在菜单显示期间到达的重建请求会被排队，
-// 等菜单关闭后再应用，因此重建绝不会把用户的点击派发到另一个菜单项，
-// 也不会销毁正在被 TrackPopupMenu 跟踪的 HMENU。
+// refreshUWPAppItems 按当前已安装应用重建 UWP 子菜单的列表：已存在的条目就地更新，
+// 新应用追加，已消失的应用置灰（systray 没有移除菜单项的 API）。重建安全的前提是
+// nange/systray 修复了 issue #39：菜单显示期间的重建请求排队到关闭后再应用。
 func (a *TrayApp) refreshUWPAppItems(apps []UWPApp) {
 	needsRebuild := false
 	appIndex := 0
@@ -65,8 +57,7 @@ func (a *TrayApp) refreshUWPAppItems(apps []UWPApp) {
 		appIndex++
 	}
 
-	// 剩余条目对应的应用已不存在：置灰并清空目标应用，
-	// 这样点击它们不会对任何应用生效。
+	// 剩余条目对应的应用已不存在：置灰并清空目标应用，点击它们不会对任何应用生效。
 	for i := appIndex; i < len(a.uwpItems); i++ {
 		uwpItem := a.uwpItems[i]
 		uwpItem.MenuItem.SetDisabled(true)
@@ -76,8 +67,8 @@ func (a *TrayApp) refreshUWPAppItems(apps []UWPApp) {
 	}
 
 	if needsRebuild && a.tray != nil {
-		// 重建发生在持有 uwpMu 期间：systray 的重建请求在菜单显示期间会被排队，
-		// 因此这里不会与正在浏览菜单的用户产生竞争（托盘未构建时为无操作）。
+		// 重建发生在持有 uwpMu 期间：systray 会排队菜单显示期间的重建请求，不会与
+		// 正在浏览菜单的用户竞争（托盘未构建时是无操作）。
 		a.tray.SetMenu(a.rootMenu)
 	}
 }
