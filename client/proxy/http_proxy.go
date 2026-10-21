@@ -185,13 +185,14 @@ func (s *HTTPProxyServer) Serve(listener net.Listener) error {
 }
 
 func (s *HTTPProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// /tun 在认证之前提供（提权的 TUN 辅助程序没有凭据），只接受回环来源，因此在 bind_all
-	// 时也不会暴露到网络上。
+	// 控制端点（/tun、/stats）即使代理监听所有接口也只从本机可达。
+	if r.URL.Host == "" && (r.URL.Path == "/tun" || r.URL.Path == "/stats") && !isLoopbackRequest(r) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	// /tun 在认证之前提供（提权的 TUN 辅助程序没有凭据）。
 	if r.URL.Host == "" && r.URL.Path == "/tun" {
-		if !isLoopbackRequest(r) {
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
 		if r.Method == http.MethodGet {
 			s.handleTunGET(w)
 		} else {
