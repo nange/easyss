@@ -284,9 +284,6 @@ func (m *Manager) Start() (err error) {
 	ctx, done, owner := m.ctx, m.done, m.owner
 	m.mu.Unlock()
 
-	// 创建脚本可能在报失败之前已装上地址与部分路由。
-	createFailed := false
-
 	// 成功只关 done（拆除归 Stop），失败或被取消则由本次 Start 自己拆掉已建起的东西。
 	defer func() {
 		if err == nil {
@@ -297,7 +294,7 @@ func (m *Manager) Start() (err error) {
 		switch {
 		case ctx.Err() != nil:
 			reason = ReasonStartCancelled
-		case createFailed:
+		case errors.Is(err, ErrCreateDevice):
 			reason = ReasonCreateFailed
 		}
 		if terr := m.teardown(reason, owner); terr != nil {
@@ -342,8 +339,7 @@ func (m *Manager) Start() (err error) {
 	m.plat.settle()
 
 	if owner == OwnerLocal {
-		createFailed, err = m.configureLocalDevice()
-		if err != nil {
+		if err := m.configureLocalDevice(); err != nil {
 			return err
 		}
 	}
@@ -410,7 +406,7 @@ func (m *Manager) startEngine(key *engine.Key) error {
 }
 
 // configureLocalDevice 处理本进程拥有设备的分支：保存 DNS、标记 deviceUp 并执行创建脚本。
-func (m *Manager) configureLocalDevice() (bool, error) {
+func (m *Manager) configureLocalDevice() error {
 	if manageSystemDNS() {
 		if err := m.plat.saveDNS(m); err != nil {
 			log.Warn("[TUN] set system dns", "err", err)
@@ -425,9 +421,9 @@ func (m *Manager) configureLocalDevice() (bool, error) {
 	m.deviceUp = true
 	m.mu.Unlock()
 	if err := m.plat.createDev(m); err != nil {
-		return true, fmt.Errorf("%w: %w", ErrCreateDevice, err)
+		return fmt.Errorf("%w: %w", ErrCreateDevice, err)
 	}
-	return false, nil
+	return nil
 }
 
 // 从调用方看不出"从未 Start"与"Start 还没被调度到"的区别，因此无条件落下停止意图，

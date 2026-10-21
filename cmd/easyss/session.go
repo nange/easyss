@@ -186,10 +186,10 @@ func (s *session) startTunEngineAtStartup() {
 	s.tunMu.Lock()
 	defer s.tunMu.Unlock()
 
-	s.tunMgr = tun.New(s.tunConfig())
-	s.tunOwner = tun.OwnerLocal
+	mgr := tun.New(s.tunConfig())
+	s.adoptTunManager(mgr, nil, tun.OwnerLocal)
 	s.buildICMPHandler(core)
-	s.startTunEngine(s.tunMgr, "device")
+	s.startTunEngine(mgr, "device")
 }
 
 // 直接创建设备（Windows，或 darwin/linux 上的 root）；全程持有 tunMu，托盘会并发开关。

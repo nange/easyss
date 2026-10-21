@@ -79,18 +79,9 @@ func (s *session) tunUpViaHelper() error {
 	if err != nil {
 		return err
 	}
-	handedOff := false
-	defer func() {
-		if handedOff {
-			return
-		}
-		_ = fifo.Close()
-		_ = unix.Close(fd)
-	}()
 
-	s.installHelperTun(core, cfg, fd, &devCfg)
+	s.installHelperTun(core, cfg, fd, devCfg)
 	s.tunHelperStdin = fifo
-	handedOff = true
 	ok = true
 	return nil
 }
@@ -170,7 +161,7 @@ func spawnHelperTun(cfg *config.ClientConfig) (int, io.WriteCloser, error) {
 	return fd, fifoWriter, nil
 }
 
-func (s *session) installHelperTun(core *runner.Core, cfg *config.ClientConfig, fd int, dev *tun.DeviceConfig) {
+func (s *session) installHelperTun(core *runner.Core, cfg *config.ClientConfig, fd int, dev tun.DeviceConfig) {
 	// 偏好进不可变快照，运行期状态是 core 上的显式开关（见 client.Client.SetTunMode）。
 	s.app.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = true })
 	core.Client.SetTunMode(true)
@@ -184,7 +175,7 @@ func (s *session) installHelperTun(core *runner.Core, cfg *config.ClientConfig, 
 	})
 	// 记下 helper 建立会话时用的设备/网关配置：关闭时要按它核对路由与回滚，而 manager 只知道请求的设备名
 	// （fd 路径下内核分配的 utunN 只有 helper 见过）。
-	s.adoptTunManager(mgr, dev, tun.OwnerHelper)
+	s.adoptTunManager(mgr, &dev, tun.OwnerHelper)
 	s.buildICMPHandler(core)
 	s.startTunEngine(mgr, "fd")
 }
