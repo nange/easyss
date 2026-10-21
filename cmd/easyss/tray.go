@@ -29,8 +29,6 @@ type TrayApp struct {
 	uwp   uwpMenu
 
 	server *serverMenu
-	rule   *radioMenu
-	level  *radioMenu
 	object *proxyObjectMenu
 
 	autoStartItem *systray.MenuItem
@@ -289,7 +287,7 @@ func (a *TrayApp) notifyServerSwitchFailure(addr string, err error) {
 func (a *TrayApp) buildProxyRuleMenu() *systray.Menu {
 	m := systray.NewMenu()
 	rule := a.currentConfig().Routing.ProxyRule
-	a.rule = newRadioMenu(m, []radioOption{
+	newRadioMenu(m, []radioOption{
 		{"auto", "自动(自定义规则+绕过大陆IP域名)", rule == "auto"},
 		{"auto_block", "自动+屏蔽广告跟踪", rule == "auto_block"},
 		{"reverse_auto", "反向自动(国外访问国内)", rule == "reverse_auto"},
@@ -342,7 +340,7 @@ func (a *TrayApp) toggleTun2socks() {
 func (a *TrayApp) buildLogLevelMenu() *systray.Menu {
 	m := systray.NewMenu()
 	level := a.currentConfig().Log.Level
-	a.level = newRadioMenu(m, []radioOption{
+	newRadioMenu(m, []radioOption{
 		{"debug", "debug", level == "debug"},
 		{"info", "info", level == "info" || level == ""},
 		{"warn", "warn", level == "warn"},
@@ -395,8 +393,8 @@ func (a *TrayApp) toggleAutoStart() {
 		}
 		log.Info("[SYSTRAY] auto-start disabled")
 		return nil
-	}, func(_ bool, err error) {
-		log.Error("[SYSTRAY] toggle auto-start", "err", err)
+	}, func(on bool, err error) {
+		log.Error("[SYSTRAY] toggle auto-start", "on", on, "err", err)
 	})
 }
 
