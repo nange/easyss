@@ -111,12 +111,10 @@ func runWithOptions(cfg *config.ClientConfig, opts options) (*Core, error) {
 
 	timeouts := sharedconfig.NewTimeouts(cfg.TimeoutDuration())
 
-	streamHandler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), cfg.Shaper, timeouts)
-
 	c := &Core{
 		cfg:           cfg,
 		Client:        cli,
-		StreamHandler: streamHandler,
+		StreamHandler: proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), cfg.Shaper, timeouts),
 		transport:     cli.Transport(),
 		StartupWarn:   cli.StartupWarning(),
 		done:          make(chan struct{}),
@@ -124,15 +122,9 @@ func runWithOptions(cfg *config.ClientConfig, opts options) (*Core, error) {
 		opts:          opts,
 	}
 
-	// 在派发任何服务器 goroutine 之前同步绑定所有监听地址：监听失败（端口占用、
-	// fd 耗尽）因此在 Run 返回前暴露，而不是让 UI 显示"已启动"而代理实际不可用。
-	eps, err := openLocalEndpoints(cfg, opts)
-	if err != nil {
-		c.cleanup()
-		return nil, err
-	}
 	// 清理只有一条路径：错误返回时先关闭尚未移交的监听器，再交给 c.cleanup。
 	transferred := false
+	var eps *localEndpoints
 	defer func() {
 		if transferred {
 			return
@@ -140,6 +132,16 @@ func runWithOptions(cfg *config.ClientConfig, opts options) (*Core, error) {
 		eps.Close()
 		c.cleanup()
 	}()
+
+	// 在派发任何服务器 goroutine 之前完成校验与监听绑定：监听失败（端口占用、
+	// fd 耗尽）因此在 Run 返回前暴露，而不是让 UI 显示"已启动"而代理实际不可用。
+	if err := validateLocalEndpoints(cfg); err != nil {
+		return nil, err
+	}
+	eps, err = openLocalEndpoints(cfg, opts)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := c.buildLocalServers(cfg, eps, method, timeouts); err != nil {
 		return nil, err
@@ -214,7 +216,7 @@ func (c *Core) buildLocalServers(cfg *config.ClientConfig, eps *localEndpoints, 
 
 // serveLocal 在所有服务器构造成功后才派发 goroutine，"Run 成功"因此意味着端口确实在监听。
 func (c *Core) serveLocal(eps *localEndpoints) {
-	if c.SocksServer != nil {
+	if eps.socksLn != nil {
 		log.Info("[EASYSS] starting socks5 server", "addr", eps.socksLn.Addr().String())
 		go func() {
 			if err := c.SocksServer.Serve(eps.socksLn); err != nil && !errors.Is(err, net.ErrClosed) {
@@ -222,7 +224,7 @@ func (c *Core) serveLocal(eps *localEndpoints) {
 			}
 		}()
 	}
-	if c.HTTPServer != nil {
+	if eps.httpLn != nil {
 		log.Info("[EASYSS] starting http proxy server", "addr", eps.httpLn.Addr().String())
 		go func() {
 			if err := c.HTTPServer.Serve(eps.httpLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -230,7 +232,7 @@ func (c *Core) serveLocal(eps *localEndpoints) {
 			}
 		}()
 	}
-	if c.dnsServer != nil {
+	if eps.dnsPC != nil {
 		log.Info("[EASYSS] starting dns forward server", "addr", eps.dnsPC.LocalAddr().String())
 		go func() {
 			if err := c.dnsServer.Serve(eps.dnsPC); err != nil && !errors.Is(err, net.ErrClosed) {

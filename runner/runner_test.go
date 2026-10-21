@@ -108,21 +108,50 @@ func TestRunFailsFastOnHTTPPortConflict(t *testing.T) {
 	}
 }
 
-// TestRunRequiresSocksForHTTP 守住 HTTP 入口对 SOCKS5 的依赖：检查发生在绑定之前，
-// 失败时不会留下任何监听器。
-func TestRunRequiresSocksForHTTP(t *testing.T) {
-	cfg := testConfig()
-	cfg.Local.SocksPort = 0
-	cfg.Local.HTTPPort = freePort(t)
+// TestRunValidatesHTTPWithoutSocksBeforeBinding 守住"先校验后绑定"：HTTP 需要 SOCKS5
+// 是配置错误，必须在任何监听器绑定之前返回。两个子用例分别占用 HTTP/DNS 端口，校验若
+// 被挪到对应绑定之后，错误会变成绑定失败而不是 ErrSocksRequired。
+func TestRunValidatesHTTPWithoutSocksBeforeBinding(t *testing.T) {
+	t.Run("http port occupied", func(t *testing.T) {
+		_, httpPort := occupyTCPPort(t)
+		cfg := testConfig()
+		cfg.Local.SocksPort = 0
+		cfg.Local.HTTPPort = httpPort
 
-	core, err := Run(cfg)
-	if core != nil {
-		core.Stop()
-		t.Fatal("expected no core when socks_port is disabled")
-	}
-	if !errors.Is(err, ErrSocksRequired) {
-		t.Fatalf("expected ErrSocksRequired, got: %v", err)
-	}
+		core, err := Run(cfg)
+		if core != nil {
+			core.Stop()
+			t.Fatal("expected no core when socks_port is disabled")
+		}
+		if !errors.Is(err, ErrSocksRequired) {
+			t.Fatalf("expected ErrSocksRequired before binding, got: %v", err)
+		}
+	})
+
+	t.Run("forward dns port occupied", func(t *testing.T) {
+		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen packet: %v", err)
+		}
+		defer pc.Close() //nolint:errcheck
+
+		opts := defaultOptions()
+		opts.forwardDNSListenAddr = pc.LocalAddr().String()
+
+		cfg := testConfig()
+		cfg.Local.SocksPort = 0
+		cfg.Local.HTTPPort = freePort(t)
+		cfg.Local.EnableForwardDNS = true
+
+		core, err := runWithOptions(cfg, opts)
+		if core != nil {
+			core.Stop()
+			t.Fatal("expected no core when socks_port is disabled")
+		}
+		if !errors.Is(err, ErrSocksRequired) {
+			t.Fatalf("expected ErrSocksRequired before binding, got: %v", err)
+		}
+	})
 }
 
 // TestRunFailsFastOnForwardDNSConflict 守住 forward DNS 绑定失败同样中止 Run（与

@@ -2,7 +2,6 @@ package runner
 
 import (
 	"fmt"
-	"io"
 	"net"
 
 	"github.com/nange/easyss/v3/client/config"
@@ -15,13 +14,19 @@ type localEndpoints struct {
 	socksAddr     string
 	socksDialAddr string
 	httpAddr      string
-	dnsAddr       string
+	dnsAddr       string // 配置监听地址；self-upstream 判定依赖它，不能用 LocalAddr 代替
 
 	socksLn net.Listener
 	httpLn  net.Listener
 	dnsPC   net.PacketConn
+}
 
-	closers []io.Closer
+// validateLocalEndpoints 只做配置校验，必须在任何监听器绑定之前调用。
+func validateLocalEndpoints(cfg *config.ClientConfig) error {
+	if cfg.Local.HTTPPort > 0 && cfg.Local.SocksPort <= 0 {
+		return ErrSocksRequired
+	}
+	return nil
 }
 
 func openLocalEndpoints(cfg *config.ClientConfig, opts options) (*localEndpoints, error) {
@@ -34,7 +39,7 @@ func openLocalEndpoints(cfg *config.ClientConfig, opts options) (*localEndpoints
 }
 
 // bind 按 socks → http → dns 的顺序同步绑定；任一步失败时已绑定的监听器由
-// openLocalEndpoints 统一关闭。
+// openLocalEndpoints 统一关闭。配置合法性由 validateLocalEndpoints 预先保证。
 func (e *localEndpoints) bind(cfg *config.ClientConfig, opts options) error {
 	if cfg.Local.SocksPort > 0 {
 		e.socksAddr = util.LocalProxyListenAddr(cfg.Local.BindAll, cfg.Local.SocksPort)
@@ -44,20 +49,15 @@ func (e *localEndpoints) bind(cfg *config.ClientConfig, opts options) error {
 			return fmt.Errorf("socks5 server listen %s: %w", e.socksAddr, err)
 		}
 		e.socksLn = ln
-		e.closers = append(e.closers, ln)
 	}
 
 	if cfg.Local.HTTPPort > 0 {
-		if cfg.Local.SocksPort <= 0 {
-			return ErrSocksRequired
-		}
 		e.httpAddr = util.LocalProxyListenAddr(cfg.Local.BindAll, cfg.Local.HTTPPort)
 		ln, err := net.Listen("tcp", e.httpAddr)
 		if err != nil {
 			return fmt.Errorf("http proxy server listen %s: %w", e.httpAddr, err)
 		}
 		e.httpLn = ln
-		e.closers = append(e.closers, ln)
 	}
 
 	if cfg.Local.EnableForwardDNS {
@@ -67,7 +67,6 @@ func (e *localEndpoints) bind(cfg *config.ClientConfig, opts options) error {
 			return forwardDNSListenError(e.dnsAddr, err)
 		}
 		e.dnsPC = pc
-		e.closers = append(e.closers, pc)
 	}
 
 	return nil
@@ -77,8 +76,16 @@ func (e *localEndpoints) Close() {
 	if e == nil {
 		return
 	}
-	for _, closer := range e.closers {
-		_ = closer.Close()
+	if e.socksLn != nil {
+		_ = e.socksLn.Close()
+		e.socksLn = nil
 	}
-	e.closers = nil
+	if e.httpLn != nil {
+		_ = e.httpLn.Close()
+		e.httpLn = nil
+	}
+	if e.dnsPC != nil {
+		_ = e.dnsPC.Close()
+		e.dnsPC = nil
+	}
 }
