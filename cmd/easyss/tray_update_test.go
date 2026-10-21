@@ -15,10 +15,44 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nange/easyss/v3/client/config"
+	"github.com/gogpu/systray"
 	"github.com/nange/easyss/v3/icon"
 	"github.com/nange/easyss/v3/selfupdate"
 )
+
+// fakeUpdateUI 记录状态机写了哪些界面动作；真实托盘上的徽标与通知无法断言。
+type fakeUpdateUI struct {
+	notified     []string
+	readyNotices []string
+	badges       int
+	badgeTooltip string
+	tooltips     []string
+}
+
+func (f *fakeUpdateUI) notify(msg string) { f.notified = append(f.notified, msg) }
+
+func (f *fakeUpdateUI) notifyIfReady(msg string) { f.readyNotices = append(f.readyNotices, msg) }
+
+func (f *fakeUpdateUI) setIconAndTooltip(_ []byte, tooltip string) {
+	f.badges++
+	f.badgeTooltip = tooltip
+}
+
+func (f *fakeUpdateUI) setTooltip(text string) { f.tooltips = append(f.tooltips, text) }
+
+func newTestUpdater(ui updateUI) *updater {
+	return newUpdater(updateDeps{
+		menu: systray.NewMenu(),
+		ui:   ui,
+		port: func() int { return 0 },
+		check: func(context.Context, *selfupdate.Client) (*selfupdate.Release, error) {
+			return nil, errors.New("offline")
+		},
+		install: func() error { return nil },
+		every:   time.Hour,
+		closing: make(chan struct{}),
+	})
+}
 
 func TestUpdateAvailableLabels(t *testing.T) {
 	label := updateAvailableItemLabel("v3.0.1")
@@ -47,10 +81,21 @@ func TestUpdateUpToDateText(t *testing.T) {
 }
 
 func TestUpdateCheckLoopRepeats(t *testing.T) {
-	a := &TrayApp{shell: newTrayShell(), updateCheckEvery: 10 * time.Millisecond}
+	closing := make(chan struct{})
+	u := newUpdater(updateDeps{
+		menu: systray.NewMenu(),
+		ui:   &fakeUpdateUI{},
+		port: func() int { return 0 },
+		check: func(context.Context, *selfupdate.Client) (*selfupdate.Release, error) {
+			return nil, errors.New("offline")
+		},
+		install: func() error { return nil },
+		every:   10 * time.Millisecond,
+		closing: closing,
+	})
 
 	// 测 runUpdateCheckLoop 而非 autoCheckUpdate：后者先等 updateCheckDelay（一分钟），且对未注入
-	// git tag 的构建完全跳过循环。check 用桩函数——真实路径会把状态留在 "checking" 直到 4 秒后的
+	// git tag 的构建完全跳过循环。run 用桩函数——真实路径会把状态留在 "checking" 直到 4 秒后的
 	// scheduleUpdateMenuReset，等于把定时器回调泄漏到测试二进制的其余部分。
 	checked := make(chan struct{})
 	var once sync.Once
@@ -58,7 +103,7 @@ func TestUpdateCheckLoopRepeats(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		a.runUpdateCheckLoop(func() {
+		u.runUpdateCheckLoop(func() {
 			if checks.Add(1) >= 2 {
 				once.Do(func() { close(checked) })
 			}
@@ -71,7 +116,7 @@ func TestUpdateCheckLoopRepeats(t *testing.T) {
 		t.Fatal("periodic update check did not repeat")
 	}
 
-	close(a.shell.closing)
+	close(closing)
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
@@ -99,15 +144,15 @@ func TestTimedUpdateCheckIntervalJitter(t *testing.T) {
 }
 
 func TestShouldNotifyOncePerTag(t *testing.T) {
-	a := &TrayApp{}
+	u := &updater{}
 
-	if !a.shouldNotify("v3.0.1") {
+	if !u.shouldNotify("v3.0.1") {
 		t.Fatal("first notification for a tag should be shown")
 	}
-	if a.shouldNotify("v3.0.1") {
+	if u.shouldNotify("v3.0.1") {
 		t.Fatal("the same tag must not notify twice (e.g. on the next periodic check)")
 	}
-	if !a.shouldNotify("v3.0.2") {
+	if !u.shouldNotify("v3.0.2") {
 		t.Fatal("a newer tag should notify again")
 	}
 }
@@ -116,51 +161,86 @@ func TestCheckUpdateRefusesActiveStates(t *testing.T) {
 	// 状态机是菜单处理器、周期循环与安装器之间的唯一守卫：检查中与下载中不得再查 API。
 	// Available 是例外——周期检查必须能从它重进 Checking，否则发现一次更新后再也看不到后续 release。
 	var calls atomic.Int64
-	a := &TrayApp{App: newApp(&config.ClientConfig{}, "")}
-	a.checkLatest = func(context.Context, *selfupdate.Client) (*selfupdate.Release, error) {
+	u := newTestUpdater(&fakeUpdateUI{})
+	u.check = func(context.Context, *selfupdate.Client) (*selfupdate.Release, error) {
 		calls.Add(1)
 		return nil, errors.New("offline")
 	}
-	a.updateState.Store(updateStateDownloading)
+	u.state.Store(updateStateDownloading)
 
-	a.checkUpdate(context.Background(), false)
+	u.checkUpdate(context.Background(), false)
 
 	if got := calls.Load(); got != 0 {
-		t.Fatalf("checkLatest calls = %d, want 0 while an update is downloading", got)
+		t.Fatalf("check calls = %d, want 0 while an update is downloading", got)
 	}
 }
 
 // TestBeginUpdateCheckAcceptsAvailable 固定状态停在 Available 时下一次检查仍能进 Checking，
 // 否则 24h 周期循环永远被 CAS 挡掉。
 func TestBeginUpdateCheckAcceptsAvailable(t *testing.T) {
-	a := &TrayApp{}
-	a.updateState.Store(updateStateAvailable)
+	u := &updater{}
+	u.state.Store(updateStateAvailable)
 
-	wasAvailable, ok := a.beginUpdateCheck()
+	wasAvailable, ok := u.beginUpdateCheck()
 	if !ok {
 		t.Fatal("check must be allowed to start while an update is available")
 	}
 	if !wasAvailable {
 		t.Fatal("beginUpdateCheck must report that the previous state was Available")
 	}
-	if got := a.updateState.Load(); got != updateStateChecking {
+	if got := u.state.Load(); got != updateStateChecking {
 		t.Fatalf("state = %d, want checking", got)
 	}
 }
 
 // TestFinishUpdateCheckRestoresAvailable 固定没发现更新时也回到 Available 并保留菜单标签，不能丢掉待处理更新。
 func TestFinishUpdateCheckRestoresAvailable(t *testing.T) {
-	a := &TrayApp{}
-	a.pendingUpdate = &selfupdate.Release{TagName: "v99.0.0"}
-	a.updateState.Store(updateStateChecking)
+	u := newTestUpdater(&fakeUpdateUI{})
+	u.pendingUpdate = &selfupdate.Release{TagName: "v99.0.0"}
+	u.state.Store(updateStateChecking)
 
-	a.finishUpdateCheck(true)
+	u.finishUpdateCheck(true)
 
-	if got := a.updateState.Load(); got != updateStateAvailable {
+	if got := u.state.Load(); got != updateStateAvailable {
 		t.Fatalf("state = %d, want available", got)
 	}
-	if got := a.pendingUpdateTag(); got != "v99.0.0" {
+	if got := u.pendingUpdateTag(); got != "v99.0.0" {
 		t.Fatalf("pending update = %q, want v99.0.0", got)
+	}
+}
+
+// TestNotifyUpdateAvailableRefreshesBadgeOncePerTag 固定四个渠道的契约：徽标/tooltip/菜单项
+// 每次检测都刷新，系统通知每个 tag 只发一次。
+func TestNotifyUpdateAvailableRefreshesBadgeOncePerTag(t *testing.T) {
+	ui := &fakeUpdateUI{}
+	u := newTestUpdater(ui)
+
+	u.notifyUpdateAvailable("v3.0.1")
+	u.notifyUpdateAvailable("v3.0.1")
+
+	if got := len(ui.notified); got != 1 {
+		t.Fatalf("system notifications = %d, want 1 for a repeated tag", got)
+	}
+	if got := ui.badges + len(ui.tooltips); got != 2 {
+		t.Fatalf("badge/tooltip refreshes = %d, want 2 (one per check)", got)
+	}
+}
+
+// TestInteractiveCheckReportsFailure 固定交互式检查的失败会经界面通知，而不是只写日志。
+func TestInteractiveCheckReportsFailure(t *testing.T) {
+	ui := &fakeUpdateUI{}
+	u := newTestUpdater(ui)
+	u.check = func(context.Context, *selfupdate.Client) (*selfupdate.Release, error) {
+		return nil, errors.New("network down")
+	}
+
+	u.checkUpdate(context.Background(), true)
+
+	if len(ui.readyNotices) != 1 {
+		t.Fatalf("ready notices = %d, want 1", len(ui.readyNotices))
+	}
+	if !strings.Contains(ui.readyNotices[0], "检查更新失败") {
+		t.Fatalf("unexpected failure notice: %q", ui.readyNotices[0])
 	}
 }
 

@@ -13,7 +13,6 @@ import (
 	"os"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gogpu/systray"
@@ -44,15 +43,7 @@ type TrayApp struct {
 	logLevelItems   map[string]*systray.MenuItem
 	autoStartItem   *systray.MenuItem
 
-	updateItem    *systray.MenuItem
-	updateState   atomic.Int32
-	pendingUpdate *selfupdate.Release
-	updateMu      sync.Mutex
-	// 已展示过"新版本"通知的 tag：周期性检查只为同一 release 刷新徽标，不得重复弹通知。
-	lastNotifiedTag string
-	checkLatest     func(context.Context, *selfupdate.Client) (*selfupdate.Release, error)
-	// 含抖动，只在循环启动前写入。
-	updateCheckEvery time.Duration
+	updater *updater
 }
 
 var _ appUI = (*TrayApp)(nil)
@@ -83,7 +74,15 @@ func (a *TrayApp) buildTray() {
 	a.autoStartItem = root.AddCheckbox("开机启动", IsAutoStartEnabled(), a.toggleAutoStart)
 	root.AddSeparator()
 
-	a.updateItem = root.Add("检查更新", a.onUpdateClicked)
+	a.updater = newUpdater(updateDeps{
+		menu:    root,
+		ui:      a.shell,
+		port:    func() int { return a.currentConfig().Local.HTTPPort },
+		check:   selfupdate.CheckLatest,
+		install: a.restartAfterUpdate,
+		every:   timedUpdateCheckInterval(),
+		closing: a.shell.closing,
+	})
 	root.Add("退出", a.exitApp)
 
 	a.shell.show()
@@ -113,9 +112,7 @@ func (a *TrayApp) buildTray() {
 
 	a.startLocalService()
 	go a.statsRefresher()
-	a.checkLatest = selfupdate.CheckLatest
-	a.updateCheckEvery = timedUpdateCheckInterval()
-	go a.autoCheckUpdate()
+	go a.updater.autoCheckUpdate()
 	a.shell.markBuilt()
 }
 
@@ -613,6 +610,34 @@ func (a *TrayApp) restartServiceWith(newCfg *config.ClientConfig, start func(*co
 // 整段在会话序列锁内，退出路径与切换/自更新重启不会交错。
 func (a *TrayApp) closeService() {
 	a.sess.run(a.Close)
+}
+
+// restartAfterUpdate 在安装完成后重启进程；失败时恢复服务并把错误交给调用方。
+// 与菜单切换服务器属同一类临界区：不共用会话序列锁会让两套停/起交错抢本地端口。
+func (a *TrayApp) restartAfterUpdate() error {
+	var restartErr error
+	a.sess.run(func() {
+		a.Close()
+		// 先释放单例锁，新进程才不会与旧进程竞争单例互斥锁。
+		releaseSingletonLock()
+
+		if err := selfupdate.Restart(); err != nil {
+			// 新二进制已就位，让旧版本继续运行，由用户手动重启。
+			log.Error("[SYSTRAY] restart after update", "err", err)
+			// 重新获取单例锁，本进程继续提供服务期间保持唯一实例。
+			if lerr := tryAcquireSingletonLock(); lerr != nil {
+				log.Error("[SYSTRAY] re-acquire singleton lock after failed restart", "err", lerr)
+			}
+			// 恢复路径不改变服务器：当前快照当作"意图"传入即可，只读其服务器下标。
+			if rerr := a.restartService(a.currentConfig()); rerr != nil {
+				log.Error("[SYSTRAY] restore service after failed restart", "err", rerr)
+			}
+			restartErr = err
+			return
+		}
+		os.Exit(0)
+	})
+	return restartErr
 }
 
 // 托盘只提供菜单状态，切换序列在 App.restartServiceInSequence。
