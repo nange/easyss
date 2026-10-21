@@ -198,9 +198,15 @@ func FileWriter(outputFile string) io.WriteCloser {
 	}
 }
 
-func Init(outputFile, level string) {
+// Config 是日志配置的线格式（客户端与服务端共用），Init 是唯一的应用入口。
+type Config struct {
+	Level    string `json:"level"`
+	FilePath string `json:"file_path"`
+}
+
+func Init(cfg Config) {
 	l := slog.LevelInfo
-	switch level {
+	switch cfg.Level {
 	case "debug":
 		l = slog.LevelDebug
 	case "warn":
@@ -217,8 +223,8 @@ func Init(outputFile, level string) {
 	fileOutput = nil
 	fileOutputMu.Unlock()
 
-	if outputFile != "" {
-		w := FileWriter(outputFile)
+	if cfg.FilePath != "" {
+		w := FileWriter(cfg.FilePath)
 		fileOutputMu.Lock()
 		fileOutput = w
 		fileOutputMu.Unlock()

@@ -33,7 +33,7 @@ func Start(cfg *sharedconfig.SimpleConfig) error {
 
 	// 必须在 runner.Run 之前用 log.Init 装配：默认 logger 的处理器持有静态 LevelInfo，
 	// 只调 log.SetLevel 改不动它；输出仍写 stdout，给了文件路径时额外落一份文件。
-	log.Init(clientCfg.Log.FilePath, clientCfg.Log.Level)
+	log.Init(clientCfg.Log)
 
 	core, err := runner.Run(clientCfg)
 	if err != nil {

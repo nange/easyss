@@ -91,7 +91,7 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	}
 
 	// 尽早初始化日志器，错误才会进日志文件，而不是经由 stderr 丢到 /dev/null。
-	log.Init(logFilePath, logLevel)
+	log.Init(log.Config{FilePath: logFilePath, Level: logLevel})
 
 	cfg, err := fetchTunConfig(httpAddr)
 	if err != nil {

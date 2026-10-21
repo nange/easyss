@@ -87,7 +87,7 @@ Flags:
 		fileCfg.PprofEnabled = true
 	}
 
-	log.Init(fileCfg.Log.FilePath, fileCfg.Log.Level)
+	log.Init(fileCfg.Log)
 
 	// 清理上一次自更新遗留的残留文件（Windows 上保留的重命名旧二进制
 	// 以及过期的暂存目录）。

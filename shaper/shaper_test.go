@@ -26,38 +26,40 @@ func TestConfigNormalize(t *testing.T) {
 	if got.BatchWindowMS != sharedconfig.DefaultBatchWindowMS {
 		t.Errorf("BatchWindowMS = %d, want %d", got.BatchWindowMS, sharedconfig.DefaultBatchWindowMS)
 	}
-	if got.Cover.BudgetRatio != sharedconfig.DefaultCoverBudgetRatio {
-		t.Errorf("BudgetRatio = %v, want %v", got.Cover.BudgetRatio, sharedconfig.DefaultCoverBudgetRatio)
+	if got.BudgetRatio != sharedconfig.DefaultCoverBudgetRatio {
+		t.Errorf("BudgetRatio = %v, want %v", got.BudgetRatio, sharedconfig.DefaultCoverBudgetRatio)
 	}
-	if got.Cover.BudgetCap != sharedconfig.DefaultCoverBudgetCap {
-		t.Errorf("BudgetCap = %d, want %d", got.Cover.BudgetCap, sharedconfig.DefaultCoverBudgetCap)
+	if got.BudgetCap != sharedconfig.DefaultCoverBudgetCap {
+		t.Errorf("BudgetCap = %d, want %d", got.BudgetCap, sharedconfig.DefaultCoverBudgetCap)
 	}
-	if got.Cover.IdleTimeout != defaultCoverIdleTimeoutMS {
-		t.Errorf("IdleTimeout = %d, want %d", got.Cover.IdleTimeout, defaultCoverIdleTimeoutMS)
+	if got.IdleTimeout != defaultCoverIdleTimeoutMS {
+		t.Errorf("IdleTimeout = %d, want %d", got.IdleTimeout, defaultCoverIdleTimeoutMS)
 	}
-	if got.Cover.MinSize != defaultCoverMinSize || got.Cover.MaxSize != defaultCoverMaxSize {
-		t.Errorf("size range = [%d,%d], want [%d,%d]", got.Cover.MinSize, got.Cover.MaxSize, defaultCoverMinSize, defaultCoverMaxSize)
+	if got.MinSize != defaultCoverMinSize || got.MaxSize != defaultCoverMaxSize {
+		t.Errorf("size range = [%d,%d], want [%d,%d]", got.MinSize, got.MaxSize, defaultCoverMinSize, defaultCoverMaxSize)
 	}
 
 	capped := Config{
 		BatchWindowMS: 100,
-		Cover:         CoverConfig{BudgetRatio: 2, BudgetCap: -1, IdleTimeout: -5},
+		BudgetRatio:   2,
+		BudgetCap:     -1,
+		IdleTimeout:   -5,
 	}.Normalize()
 	if capped.BatchWindowMS != maxBatchWindowMS {
 		t.Errorf("BatchWindowMS = %d, want %d", capped.BatchWindowMS, maxBatchWindowMS)
 	}
-	if capped.Cover.BudgetRatio != sharedconfig.DefaultCoverBudgetRatio {
-		t.Errorf("BudgetRatio = %v, want the default", capped.Cover.BudgetRatio)
+	if capped.BudgetRatio != sharedconfig.DefaultCoverBudgetRatio {
+		t.Errorf("BudgetRatio = %v, want the default", capped.BudgetRatio)
 	}
-	if capped.Cover.BudgetCap != sharedconfig.DefaultCoverBudgetCap {
-		t.Errorf("BudgetCap = %d, want the default", capped.Cover.BudgetCap)
+	if capped.BudgetCap != sharedconfig.DefaultCoverBudgetCap {
+		t.Errorf("BudgetCap = %d, want the default", capped.BudgetCap)
 	}
-	if capped.Cover.IdleTimeout != defaultCoverIdleTimeoutMS {
-		t.Errorf("IdleTimeout = %d, want the default", capped.Cover.IdleTimeout)
+	if capped.IdleTimeout != defaultCoverIdleTimeoutMS {
+		t.Errorf("IdleTimeout = %d, want the default", capped.IdleTimeout)
 	}
 
-	kept := Config{BatchWindowMS: 7, Cover: CoverConfig{BudgetRatio: 0.5, BudgetCap: 4096}}.Normalize()
-	if kept.BatchWindowMS != 7 || kept.Cover.BudgetRatio != 0.5 || kept.Cover.BudgetCap != 4096 {
+	kept := Config{BatchWindowMS: 7, BudgetRatio: 0.5, BudgetCap: 4096}.Normalize()
+	if kept.BatchWindowMS != 7 || kept.BudgetRatio != 0.5 || kept.BudgetCap != 4096 {
 		t.Errorf("in-range values changed: %+v", kept)
 	}
 }
@@ -543,19 +545,19 @@ func TestBatchShaperRecordStaysUnderCeilingOnAccumulation(t *testing.T) {
 
 // cover 尺寸必须钳到线缆格式上限，否则会写出截断的 uint16 长度，或让 bytespool.Get 返回 nil。
 func TestCoverNormalizeClampsFrameSize(t *testing.T) {
-	cfg := Config{Cover: CoverConfig{
+	cfg := Config{
 		BudgetRatio: 0.10,
 		MinSize:     200_000, // > 65535 且 > bytespool 上限
 		MaxSize:     1_000_000,
 		BudgetCap:   2_000_000,
-	}}.Normalize()
+	}.Normalize()
 
 	maxFramePayload := protocol.MaxWriteRecordPlaintext - protocol.FrameHeaderSize
-	if cfg.Cover.MinSize > maxFramePayload || cfg.Cover.MaxSize > maxFramePayload {
-		t.Fatalf("cover size range not clamped: min=%d max=%d", cfg.Cover.MinSize, cfg.Cover.MaxSize)
+	if cfg.MinSize > maxFramePayload || cfg.MaxSize > maxFramePayload {
+		t.Fatalf("cover size range not clamped: min=%d max=%d", cfg.MinSize, cfg.MaxSize)
 	}
-	if cfg.Cover.MaxSize < cfg.Cover.MinSize {
-		t.Fatalf("MaxSize %d < MinSize %d after clamping", cfg.Cover.MaxSize, cfg.Cover.MinSize)
+	if cfg.MaxSize < cfg.MinSize {
+		t.Fatalf("MaxSize %d < MinSize %d after clamping", cfg.MaxSize, cfg.MinSize)
 	}
 
 	ci := newCoverInjector(cfg.Cover, func(protocol.Frame) error { return nil }, func() bool { return false })
@@ -575,7 +577,7 @@ func TestCoverInjectorSkipsDuringActiveStreaming(t *testing.T) {
 	var mu sync.Mutex
 	closed := atomic.Bool{}
 
-	ci := newCoverInjector(CoverConfig{
+	ci := newCoverInjector(Cover{
 		BudgetRatio: 0.10,
 		IdleTimeout: 50,
 		MinSize:     64,
@@ -628,7 +630,7 @@ func TestCoverInjectorSkipsDuringActiveStreaming(t *testing.T) {
 
 func TestCoverInjectorFrameSizeRange(t *testing.T) {
 	ci := &coverInjector{
-		cfg: CoverConfig{MinSize: 128, MaxSize: 1500},
+		cfg: Cover{MinSize: 128, MaxSize: 1500},
 	}
 
 	minSize, maxSize := ci.coverFrameSizeRange()
@@ -660,7 +662,7 @@ func TestCoverInjectorFrameSizeRange(t *testing.T) {
 
 func TestCoverInjectorFrameSizeRangeRespectsConfig(t *testing.T) {
 	ci := &coverInjector{
-		cfg: CoverConfig{MinSize: 256, MaxSize: 8192},
+		cfg: Cover{MinSize: 256, MaxSize: 8192},
 	}
 
 	minSize, maxSize := ci.coverFrameSizeRange()
@@ -686,7 +688,7 @@ func TestCoverInjectorKeepsInjectingAfterLargeTraffic(t *testing.T) {
 	var mu sync.Mutex
 	closed := atomic.Bool{}
 
-	ci := newCoverInjector(CoverConfig{
+	ci := newCoverInjector(Cover{
 		BudgetRatio: 0.10,
 		IdleTimeout: 50,
 		MinSize:     64,
@@ -784,13 +786,11 @@ func TestBatchShaperConcurrentFlushNoNonceDesync(t *testing.T) {
 			out := &lockedBuffer{}
 			bs := New(newTestWriter(t, sk, out), Config{
 				BatchWindowMS: 1,
-				Cover: CoverConfig{
-					BudgetRatio: 0.5,
-					IdleTimeout: 5,
-					MinSize:     64,
-					MaxSize:     512,
-					BudgetCap:   1 << 20,
-				},
+				BudgetRatio:   0.5,
+				IdleTimeout:   5,
+				MinSize:       64,
+				MaxSize:       512,
+				BudgetCap:     1 << 20,
 			})
 
 			var wg sync.WaitGroup
@@ -994,7 +994,7 @@ func TestBatchShaperCoverInjectInFlightDuringClose(t *testing.T) {
 	rw := newTestWriter(t, sk, bw)
 	// cover 空闲阈值拉到 10s：要的是手动注入的 COVER 帧触发冲刷，
 	// 否则后台注入器抢先冲刷会让 PushData 同步阻塞，走不到"冲刷在飞时"这个窗口。
-	bs := New(rw, Config{BatchWindowMS: 10000, Cover: CoverConfig{IdleTimeout: 10000}})
+	bs := New(rw, Config{BatchWindowMS: 10000, IdleTimeout: 10000})
 	bsImpl := bs.(*batchShaper)
 
 	// 载荷压在批处理阈值下方 100 字节：手动注入的 COVER 帧（256+帧头=259）正好把记录推过阈值，
@@ -1229,13 +1229,11 @@ func TestCloseFlushesEveryAllocatedSequence(t *testing.T) {
 			bs := New(newTestWriter(t, sk, out), Config{
 				// 1ms 窗口让定时器冲刷与 Close 频繁交错，正是缺陷的触发条件。
 				BatchWindowMS: 1,
-				Cover: CoverConfig{
-					BudgetRatio: 0.5,
-					IdleTimeout: 5,
-					MinSize:     64,
-					MaxSize:     512,
-					BudgetCap:   1 << 20,
-				},
+				BudgetRatio:   0.5,
+				IdleTimeout:   5,
+				MinSize:       64,
+				MaxSize:       512,
+				BudgetCap:     1 << 20,
 			})
 
 			var wg sync.WaitGroup

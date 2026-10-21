@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/util"
 )
 
@@ -840,7 +842,7 @@ func TestApplyDefaults(t *testing.T) {
 	})
 
 	t.Run("Shaper 取值原样保留，归一化在 shaper 层", func(t *testing.T) {
-		cfg := &ClientConfig{Shaper: ShaperConfig{BatchWindowMS: 100}}
+		cfg := &ClientConfig{Shaper: shaper.Config{BatchWindowMS: 100}}
 		applyDefaults(cfg)
 		if cfg.Shaper.BatchWindowMS != 100 {
 			t.Errorf("BatchWindowMS = %d, want 100 (untouched)", cfg.Shaper.BatchWindowMS)
@@ -857,7 +859,7 @@ func TestApplyDefaults(t *testing.T) {
 				ProxyRule: "direct",
 				IPV6Rule:  "disable",
 			},
-			Log: LogConfig{Level: "error"},
+			Log: log.Config{Level: "error"},
 		}
 		applyDefaults(cfg)
 

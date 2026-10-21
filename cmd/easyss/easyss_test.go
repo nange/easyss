@@ -26,6 +26,7 @@ import (
 	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/router"
 	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	server "github.com/nange/easyss/v3/server"
 	serverconfig "github.com/nange/easyss/v3/server/config"
@@ -409,10 +410,10 @@ func newTestHarness(t *testing.T) *testHarness {
 			Protocol:     "h2",
 			ConnCountMax: 4,
 		},
-		Shaper: clientconfig.ShaperConfig{
+		Shaper: shaper.Config{
 			BatchWindowMS: 3,
 		},
-		Log: clientconfig.LogConfig{
+		Log: log.Config{
 			Level: "warn",
 		},
 		Timeout: 30,
@@ -426,13 +427,7 @@ func newTestHarness(t *testing.T) *testHarness {
 	method := protocol.MethodFromString("aes-256-gcm")
 
 	timeouts := sharedconfig.NewTimeouts(clientCfg.TimeoutDuration())
-	shaperCfg := shaper.Config{
-		BatchWindowMS: clientCfg.Shaper.BatchWindowMS,
-		Cover: shaper.CoverConfig{
-			BudgetRatio: clientCfg.Shaper.CoverBudgetRatio,
-		},
-	}
-	handler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, timeouts)
+	handler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), clientCfg.Shaper, timeouts)
 
 	socksServer, err := proxy.NewSocks5Server(proxy.Socks5Options{
 		ListenAddr:        h.socksAddr,
