@@ -11,9 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestEnsureWintunSerializesConcurrentExtraction 钉住进程内并发首次解压：并行测试
-// 同时 Start 时只有一个 goroutine 写文件，其余在锁内看到完整文件后直接返回。
-func TestEnsureWintunSerializesConcurrentExtraction(t *testing.T) {
+// TestEnsureWintunConcurrentCallsSucceed 固定并发首次解压的最终状态：所有调用都成功，
+// 且留下完整文件。它不区分是谁写的，因此只是行为冒烟，不证明单写者。
+func TestEnsureWintunConcurrentCallsSucceed(t *testing.T) {
 	t.Parallel()
 
 	target := filepath.Join(t.TempDir(), "wintun.dll")

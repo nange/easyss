@@ -37,11 +37,8 @@ func ensureWintunAt(target string) error {
 	}
 
 	// 旧版本或上次中断留下的只读文件必须先恢复可写，否则覆盖会失败。
-	if info, err := os.Stat(target); err == nil && !info.IsDir() {
-		if err := os.Chmod(target, 0o644); err != nil {
-			return err
-		}
-	}
+	// 不存在/无法修改时忽略：下一步的 WriteFile 会给出真实错误。
+	_ = os.Chmod(target, 0o644)
 
 	if err := os.WriteFile(target, assets.WintunDLL, 0o444); err != nil {
 		if wintunReady(target) {
