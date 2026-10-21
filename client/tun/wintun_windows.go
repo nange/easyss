@@ -26,7 +26,16 @@ func ensureWintun() error {
 		return nil
 	}
 
+	return writeWintun(target)
+}
+
+// 并发首次解压时胜者写成 0444，败者的写入会失败；复核到完整文件即视为成功。
+func writeWintun(target string) error {
 	if err := os.WriteFile(target, assets.WintunDLL, 0o444); err != nil {
+		if info, statErr := os.Stat(target); statErr == nil && !info.IsDir() &&
+			info.Size() == int64(len(assets.WintunDLL)) {
+			return nil
+		}
 		return err
 	}
 
