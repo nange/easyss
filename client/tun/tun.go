@@ -284,9 +284,6 @@ func (m *Manager) Start() (err error) {
 	ctx, done, owner := m.ctx, m.done, m.owner
 	m.mu.Unlock()
 
-	// 创建脚本可能在报失败之前已装上地址与部分路由。
-	createFailed := false
-
 	// 成功只关 done（拆除归 Stop），失败或被取消则由本次 Start 自己拆掉已建起的东西。
 	defer func() {
 		if err == nil {
@@ -297,7 +294,7 @@ func (m *Manager) Start() (err error) {
 		switch {
 		case ctx.Err() != nil:
 			reason = ReasonStartCancelled
-		case createFailed:
+		case errors.Is(err, ErrCreateDevice):
 			reason = ReasonCreateFailed
 		}
 		if terr := m.teardown(reason, owner); terr != nil {
@@ -325,8 +322,48 @@ func (m *Manager) Start() (err error) {
 		device = "fd://" + strconv.Itoa(m.cfg.DeviceFD)
 	}
 
+	key, err := m.prepareEngine(device)
+	if err != nil {
+		return err
+	}
+	if err := m.startEngine(key); err != nil {
+		return err
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	m.plat.settle()
+
+	if owner == OwnerLocal {
+		if err := m.configureLocalDevice(); err != nil {
+			return err
+		}
+	}
+
+	// 核对放在创建脚本之后：设备侧的值在那一步才定稿，否则会拿上一次会话遗留的适配器 MTU 比较。
+	m.warnOnMTUMismatch(key.MTU)
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	m.mu.Lock()
+	m.running = true
+	m.mu.Unlock()
+	log.Info("[TUN] tun2socks started", "device", device, "proxy", m.cfg.Socks5Addr)
+	return nil
+}
+
+// prepareEngine 构造并校验 engine.Key；validateEngineKey 拒绝时释放尚未交给引擎的 fd。
+func (m *Manager) prepareEngine(device string) (*engine.Key, error) {
 	if err := ensureWintun(); err != nil {
-		return fmt.Errorf("tun: extract wintun.dll: %w", err)
+		return nil, fmt.Errorf("tun: extract wintun.dll: %w", err)
 	}
 
 	// MTU 必须在插入 key 之前定稿：引擎启动后就无法再改 netstack 的 MTU。
@@ -346,9 +383,13 @@ func (m *Manager) Start() (err error) {
 	// 引擎在 parseDevice 之前就会拒绝的配置必须先在这里拒掉：进入 engine.Start 之后 fd 已归 tun2socks，
 	// 失败时 engine.Stop 是空操作（设备没记进 _defaultDevice）。
 	if err := validateEngineKey(key); err != nil {
-		return m.releaseUnownedFD(err)
+		return nil, m.releaseUnownedFD(err)
 	}
+	return key, nil
+}
 
+// startEngine 把 key 插入引擎并启动；失败时 engine.Stop 是唯一能关闭已打开设备的路径。
+func (m *Manager) startEngine(key *engine.Key) error {
 	engine.Insert(key)
 
 	// 上游 engine.Start 返回错误而不是 log.Fatalf，失败时它可能已打开 TUN 设备。
@@ -361,48 +402,27 @@ func (m *Manager) Start() (err error) {
 	m.mu.Lock()
 	m.engineUp = true
 	m.mu.Unlock()
+	return nil
+}
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	m.plat.settle()
-
-	if owner == OwnerLocal {
-		if manageSystemDNS() {
-			if err := m.plat.saveDNS(m); err != nil {
-				log.Warn("[TUN] set system dns", "err", err)
-			}
-			m.mu.Lock()
-			m.dnsTouched = true
-			m.mu.Unlock()
+// configureLocalDevice 处理本进程拥有设备的分支：保存 DNS、标记 deviceUp 并执行创建脚本。
+func (m *Manager) configureLocalDevice() error {
+	if manageSystemDNS() {
+		if err := m.plat.saveDNS(m); err != nil {
+			log.Warn("[TUN] set system dns", "err", err)
 		}
-
-		// 创建脚本可能在报失败之前已装上地址与部分路由，因此 deviceUp 在调用之前置位。
 		m.mu.Lock()
-		m.deviceUp = true
+		m.dnsTouched = true
 		m.mu.Unlock()
-		if err := m.plat.createDev(m); err != nil {
-			createFailed = true
-			return fmt.Errorf("%w: %w", ErrCreateDevice, err)
-		}
 	}
 
-	// 核对放在创建脚本之后：设备侧的值在那一步才定稿，否则会拿上一次会话遗留的适配器 MTU 比较。
-	m.warnOnMTUMismatch(mtu)
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
+	// 创建脚本可能在报失败之前已装上地址与部分路由，因此 deviceUp 在调用之前置位。
 	m.mu.Lock()
-	m.running = true
+	m.deviceUp = true
 	m.mu.Unlock()
-	log.Info("[TUN] tun2socks started", "device", device, "proxy", m.cfg.Socks5Addr)
+	if err := m.plat.createDev(m); err != nil {
+		return fmt.Errorf("%w: %w", ErrCreateDevice, err)
+	}
 	return nil
 }
 

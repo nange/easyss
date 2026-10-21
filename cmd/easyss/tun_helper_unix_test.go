@@ -132,7 +132,7 @@ func TestHelperFailureReasonCarriesTheScriptDiagnostics(t *testing.T) {
 	require.Contains(t, reason, "stub tool rejects the call", "the reason has to carry what the script reported")
 	require.Contains(t, reason, "failed near:", "the script's summary is the part the user acts on")
 	require.Equal(t, 1, strings.Count(reason, "create script"),
-		"only giveUp names the step: the error it wraps must not repeat it: %q", reason)
+		"only the failure wrapper names the step: the error it wraps must not repeat it: %q", reason)
 	require.NotContains(t, reason, "\n", "a notification cannot render the script's newlines")
 	require.LessOrEqual(t, len(reason), maxHelperFailureReason)
 }

@@ -17,10 +17,8 @@ import (
 
 	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/tun"
-	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/scripts"
-	"github.com/nange/easyss/v3/util"
 	"golang.org/x/sys/unix"
 )
 
@@ -76,135 +74,31 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 
 	// 父进程阻塞在 ReceiveFd 等 helper 连套接字；在能发送 fd 之前就放弃的 helper 必须自己敲它，
 	// 否则父进程要空等到 30 秒 accept 超时。
-	var (
-		fdSent  bool
-		failure error
-	)
+	h := &tunHelper{fd: -1}
 	defer func() {
-		if !fdSent {
-			notifyStartFailure(fdSocketPath, failure)
+		if !h.fdSent {
+			notifyStartFailure(fdSocketPath, h.failure)
 		}
 	}()
-
-	giveUp := func(step string, err error) int {
-		failure = fmt.Errorf("%s: %w", step, err)
-		log.Error("[TUN-HELPER] "+step, "err", err)
-		return 1
-	}
 
 	// 尽早初始化日志器，错误才会进日志文件，而不是经由 stderr 丢到 /dev/null。
 	log.Init(log.Config{FilePath: logFilePath, Level: logLevel})
 
-	cfg, err := fetchTunConfig(httpAddr)
+	step, err := h.setup(httpAddr)
 	if err != nil {
-		return giveUp("fetch tun config", err)
+		return h.fail(step, err)
 	}
-	log.Info("[TUN-HELPER] config received", "device", cfg.Device)
+	defer h.cleanup()
 
-	// 上一个 helper 若仍在清理，这里会阻塞到它退出、内核释放锁。
-	ops := defaultTunOps()
-	lockFile, err := os.OpenFile(ops.lockPath, os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return giveUp("open lock file", err)
+	if err := h.configure(); err != nil {
+		return h.fail("run create script", err)
 	}
-	if err := util.FlockWait(lockFile, 30*time.Second); err != nil {
-		lockFile.Close() //nolint:errcheck
-		return giveUp("acquire lock", err)
-	}
-	log.Info("[TUN-HELPER] lock acquired")
-	defer lockFile.Close() //nolint:errcheck
-
-	// 必须在改动系统 DNS 之前保存原始配置。
-	originDNS, err := util.SysDNS()
-	if err != nil {
-		log.Warn("[TUN-HELPER] read original dns", "err", err)
-	}
-	log.Info("[TUN-HELPER] original dns saved", "dns", originDNS)
-
-	// 设备由 helper 创建，tun2socks 只设 netstack 的 MTU：两侧不一致时 netstack 会静默丢弃超过
-	// 自身 MTU 的包（UDP、ICMP 与 IP 分片），因此 0 值必须落到与主进程相同的默认值。
-	tunMTU := sharedconfig.NormalizeTunMTU(cfg.MTU)
-	tunFd, actualDevice, err := openTunDevice(cfg.Device)
-	if err != nil {
-		return giveUp("open tun device", err)
-	}
-	log.Info("[TUN-HELPER] device created", "requested", cfg.Device, "actual", actualDevice, "mtu", tunMTU)
-
-	// 残留一条分流默认路由，全机 IPv4 流量就会进入没人读的设备，用户看到的是"停止 TUN 后断网"。
-	defer func() {
-		log.Info("[TUN-HELPER] cleaning up routes and DNS")
-		if err := cleanupTunRoutes(ops, actualDevice, cfg); err != nil {
-			log.Error("[TUN-HELPER] cleanup left TUN routes behind", "device", actualDevice, "err", err)
-		}
-		_ = util.RestoreSysDNSForTun(actualDevice, originDNS)
-		log.Info("[TUN-HELPER] cleanup done")
-	}()
-
-	// 给内核一点时间初始化接口。
-	log.Info("[TUN-HELPER] waiting for kernel interface init")
-	time.Sleep(200 * time.Millisecond)
-
-	// 预清理失败只记 debug：设备刚被本进程建出并占用，linux 关闭脚本里的 `ip tuntap del` 必然
-	// 失败，路由也马上会被创建脚本重写。
-	log.Info("[TUN-HELPER] cleaning stale routes")
-	if err := runCloseScript(actualDevice, scriptArgsFor(cfg)); err != nil {
-		log.Debug("[TUN-HELPER] pre-clean routes", "device", actualDevice, "err", err)
+	if err := h.sendFD(fdSocketPath); err != nil {
+		return h.fail("send fd to parent", err)
 	}
 
-	log.Info("[TUN-HELPER] creating routes and configuring interface", "mtu", tunMTU)
-	if err := runCreateScript(actualDevice, scriptArgsFor(cfg)); err != nil {
-		_ = unix.Close(tunFd)
-		return giveUp("run create script", err)
-	}
-	log.Info("[TUN-HELPER] routes and interface configured")
-
-	if cfg.DNSAddr != "" {
-		log.Info("[TUN-HELPER] setting system dns", "dns", cfg.DNSAddr)
-		if err := util.SetSysDNSForTun(actualDevice, []string{cfg.DNSAddr}); err != nil {
-			log.Warn("[TUN-HELPER] set dns", "err", err)
-		}
-	}
-
-	log.Info("[TUN-HELPER] sending tun fd to parent", "socket", fdSocketPath)
-	if err := sendFdToParent(fdSocketPath, tunFd); err != nil {
-		_ = unix.Close(tunFd)
-		return giveUp("send fd to parent", err)
-	}
-	fdSent = true
-
-	_ = unix.Close(tunFd)
-	log.Info("[TUN-HELPER] fd sent and closed")
-
-	log.Info("[TUN-HELPER] ready, waiting for shutdown signal on stdin")
-
-	// 阻塞到 stdin EOF：主进程关闭 FIFO 写端即关闭信号，主进程崩溃（含 kill -9）时内核也会关闭它。
-	// 等待期间定期补装路由——macOS 在睡眠/唤醒或网络变更后可能清除非持久路由，静默禁用 TUN 模式。
-	stdinDone := make(chan struct{})
-	go func() {
-		_, _ = io.ReadAll(os.Stdin)
-		close(stdinDone)
-	}()
-
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-stdinDone:
-			log.Info("[TUN-HELPER] received shutdown signal")
-			return 0
-		case <-ticker.C:
-			if err := ensureTunRoutes(actualDevice, cfg); err != nil {
-				log.Warn("[TUN-HELPER] route keep-alive check failed", "device", actualDevice, "err", err)
-			}
-			// NetworkManager 在连接变更时会重写链路 DNS 设置，可能把 DNS 默认路由交还物理链路，
-			// 使解析再次绕过隧道。
-			if cfg.DNSAddr != "" {
-				if err := util.EnsureSysDNSForTun(actualDevice, []string{cfg.DNSAddr}); err != nil {
-					log.Warn("[TUN-HELPER] dns keep-alive check failed", "device", actualDevice, "err", err)
-				}
-			}
-		}
-	}
+	h.keepAlive()
+	return 0
 }
 
 // tunScript 是一次平台脚本执行：写临时文件、注入内核实际分配的设备名、执行并清理。

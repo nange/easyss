@@ -186,10 +186,10 @@ func (s *session) startTunEngineAtStartup() {
 	s.tunMu.Lock()
 	defer s.tunMu.Unlock()
 
-	s.tunMgr = tun.New(s.tunConfig())
-	s.tunOwner = tun.OwnerLocal
+	mgr := tun.New(s.tunConfig())
+	s.adoptTunManager(mgr, nil, tun.OwnerLocal)
 	s.buildICMPHandler(core)
-	s.startTunEngine(s.tunMgr, "device")
+	s.startTunEngine(mgr, "device")
 }
 
 // 直接创建设备（Windows，或 darwin/linux 上的 root）；全程持有 tunMu，托盘会并发开关。
@@ -211,15 +211,24 @@ func (s *session) tunUp() error {
 	// 偏好写配置快照、运行期状态写 core 上的开关，两者必须同时更新。
 	s.app.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = true })
 	core.Client.SetTunMode(true)
-	s.tunMgr = tun.New(s.tunConfig())
-	dev := s.tunMgr.DeviceConfig()
-	s.tunSession = &dev
-	s.tunOwner = tun.OwnerLocal
+	mgr := tun.New(s.tunConfig())
+	s.adoptTunManager(mgr, nil, tun.OwnerLocal)
 
 	s.buildICMPHandler(core)
-	s.startTunEngine(s.tunMgr, "device")
+	s.startTunEngine(mgr, "device")
 
 	return nil
+}
+
+// adoptTunManager 一次发布 manager、设备快照与 owner：拆除路径不应看到三者的混合状态。
+func (s *session) adoptTunManager(mgr *tun.Manager, dev *tun.DeviceConfig, owner tun.Owner) {
+	if dev == nil {
+		snapshot := mgr.DeviceConfig()
+		dev = &snapshot
+	}
+	s.tunMgr = mgr
+	s.tunSession = dev
+	s.tunOwner = owner
 }
 
 func (s *session) buildICMPHandler(core *runner.Core) {
