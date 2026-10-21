@@ -3,9 +3,7 @@ package util
 import (
 	"errors"
 	"net"
-	"os/exec"
 	"runtime"
-	"strconv"
 
 	netroute "github.com/libp2p/go-netroute"
 
@@ -43,31 +41,6 @@ func IsTunIface(iface *net.Interface) bool {
 		}
 	}
 	return false
-}
-
-func SysSupportPowershell() bool {
-	return SysSupport("powershell")
-}
-
-func SysSupport(bin string) bool {
-	lp, err := exec.LookPath(bin)
-	if lp != "" && err == nil {
-		return true
-	}
-	return false
-}
-
-func SysPowershellMajorVersion() int {
-	buf, err := Command("powershell", "-Command", "$PSVersionTable.PSVersion")
-	if err != nil {
-		return 0
-	}
-	bs := []byte(buf)
-	if len(bs) < 64 {
-		return 0
-	}
-	v, _ := strconv.ParseInt(string(bs[64]), 10, 32)
-	return int(v)
 }
 
 var errUnsupportedPlatform = errors.New("unsupported platform")

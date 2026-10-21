@@ -9,12 +9,13 @@ import (
 	"unsafe"
 
 	"github.com/nange/easyss/v3/client/proxy"
-	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/log"
-	"github.com/nange/easyss/v3/scripts"
 	"github.com/nange/easyss/v3/util"
 	"golang.org/x/sys/unix"
 )
+
+// linux 的 create/close 脚本使用 bash（set -o pipefail）。
+const tunScriptShell = "bash"
 
 // 抽象套接字（@ 开头）不需要文件系统条目，也不受 pkexec 的挂载命名空间隔离影响。
 func tunFdSocketPath() string {
@@ -64,48 +65,6 @@ func openTunDevice(name string) (int, string, error) {
 	}
 
 	return fd, actualName, nil
-}
-
-// fd 路径下 tun2socks 只能设自己 netstack 的 MTU，设备 MTU 必须由建设备的这一侧写入（第 9 个位置参数），
-// 否则 netstack 会静默丢弃设备交上来的超限包（见 client/tun.Manager.engineMTU）。
-// 位置参数由 tun.ScriptArgs 统一渲染，包括 linux 要求的"地址/掩码"形式。
-func runCreateScript(device string, args tun.ScriptArgs) error {
-	if scripts.CreateTunBytes == nil {
-		return fmt.Errorf("no create script for linux")
-	}
-
-	namePath, err := tun.WriteScriptToTemp(scripts.CreateTunFilename, scripts.CreateTunBytes)
-	if err != nil {
-		return fmt.Errorf("write create script: %w", err)
-	}
-	defer os.Remove(namePath) //nolint:errcheck
-
-	// 以调用方传入的为准：helper 拿到的是内核实际分配的名字，配置里那个只是请求名。
-	args.Dev.Device = device
-	if err := execScriptWithOutput("bash", namePath, args.Create()...); err != nil {
-		return err
-	}
-	return nil
-}
-
-// 脚本按"路由与设备是否真的清掉"给出退出码，调用方据此决定是否回滚：
-// 残留的分流路由会把全机 IPv4 流量送进没人读的设备，也就是"停止 TUN 后断网"。
-func runCloseScript(device string, args tun.ScriptArgs) error {
-	if scripts.CloseTunBytes == nil {
-		return fmt.Errorf("no close script for linux")
-	}
-
-	namePath, err := tun.WriteScriptToTemp(scripts.CloseTunFilename, scripts.CloseTunBytes)
-	if err != nil {
-		return fmt.Errorf("write close script: %w", err)
-	}
-	defer os.Remove(namePath) //nolint:errcheck
-
-	args.Dev.Device = device
-	if err := execScriptWithOutput("bash", namePath, args.Close()...); err != nil {
-		return fmt.Errorf("close script: %w", err)
-	}
-	return nil
 }
 
 // linux 的 TUN 路由按设备安装（ip route replace ... dev tun0），因此按设备名判定。

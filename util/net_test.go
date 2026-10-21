@@ -18,9 +18,6 @@ func TestIP(t *testing.T) {
 
 	assert.False(t, IsLANIP("183.47.103.43"))
 
-	assert.True(t, IsLoopbackIP("127.0.0.1"))
-	assert.True(t, IsLoopbackIP("::1"))
-
 	assert.True(t, IsIPV6("::0"))
 	assert.False(t, IsIPV6("127.0.1"))
 }
@@ -120,31 +117,6 @@ func TestIsLANIP_EdgeCases(t *testing.T) {
 	}
 }
 
-func TestIsLoopbackIP_EdgeCases(t *testing.T) {
-	tests := []struct {
-		input string
-		want  bool
-	}{
-		{"127.0.0.1", true},
-		{"127.0.0.0", true},
-		{"127.255.255.255", true},
-		{"::1", true},
-		{"192.168.1.1", false},
-		{"8.8.8.8", false},
-		{"", false},
-		{"not-an-ip", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := IsLoopbackIP(tt.input)
-			if got != tt.want {
-				t.Errorf("IsLoopbackIP(%q) = %v, want %v", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestIsIPV6_EdgeCases(t *testing.T) {
 	tests := []struct {
 		input string
@@ -191,53 +163,6 @@ func TestIsIPV6Addr(t *testing.T) {
 			got := IsIPV6Addr(tt.input)
 			if got != tt.want {
 				t.Errorf("IsIPV6Addr(%q) = %v, want %v", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestIsLANHost(t *testing.T) {
-	tests := []struct {
-		input string
-		want  bool
-	}{
-		// IPv4 私有地址 + 端口
-		{"10.0.0.1:8080", true},
-		{"172.16.0.1:443", true},
-		{"192.168.1.1:80", true},
-		// IPv4 回环 + 端口
-		{"127.0.0.1:6379", true},
-		{"127.0.0.1:0", true},
-		// IPv6 私有地址 + 端口
-		{"[fd00::1]:8080", true},
-		// IPv6 回环 + 端口
-		{"[::1]:8080", true},
-		// 链路本地 + 端口
-		{"169.254.0.1:80", true},
-		{"[fe80::1]:443", true},
-		// 公网 IP + 端口
-		{"8.8.8.8:53", false},
-		{"1.1.1.1:443", false},
-		{"[2001:db8::1]:8080", false},
-		// 纯 IP 不带端口（如 ICMP target）
-		{"127.0.0.1", true},
-		{"192.168.1.1", true},
-		{"10.0.0.1", true},
-		{"8.8.8.8", false},
-		// 域名（非 IP）
-		{"example.com:443", false},
-		{"api.example.com:8080", false},
-		// 无效输入
-		{"", false},
-		{":8080", false},
-		{"invalid", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := IsLANHost(tt.input)
-			if got != tt.want {
-				t.Errorf("IsLANHost(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
 	}
@@ -316,40 +241,4 @@ func TestFirstLANAddr(t *testing.T) {
 			assert.Equal(t, tt.want, got.String())
 		})
 	}
-}
-
-func TestMapKeys(t *testing.T) {
-	t.Run("string keys", func(t *testing.T) {
-		m := map[string]int{"a": 1, "b": 2, "c": 3}
-		keys := MapKeys(m)
-		if len(keys) != 3 {
-			t.Errorf("len = %d, want 3", len(keys))
-		}
-		// 验证所有 key 都在结果中
-		seen := make(map[string]bool)
-		for _, k := range keys {
-			seen[k] = true
-		}
-		for k := range m {
-			if !seen[k] {
-				t.Errorf("key %q missing from result", k)
-			}
-		}
-	})
-
-	t.Run("empty map", func(t *testing.T) {
-		m := map[string]int{}
-		keys := MapKeys(m)
-		if len(keys) != 0 {
-			t.Errorf("len = %d, want 0", len(keys))
-		}
-	})
-
-	t.Run("int keys", func(t *testing.T) {
-		m := map[int]string{1: "one", 2: "two"}
-		keys := MapKeys(m)
-		if len(keys) != 2 {
-			t.Errorf("len = %d, want 2", len(keys))
-		}
-	})
 }

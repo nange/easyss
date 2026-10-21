@@ -70,21 +70,6 @@ func isAppBundleDir(dir string) bool {
 	return strings.HasSuffix(appDir, ".app")
 }
 
-func DirFileList(dir string) ([]string, error) {
-	list, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-
-	var files []string
-	for _, v := range list {
-		if !v.IsDir() {
-			files = append(files, v.Name())
-		}
-	}
-	return files, nil
-}
-
 func WriteToTemp(filename string, content []byte) (namePath string, err error) {
 	ext := filepath.Ext(filename)
 	base := strings.TrimSuffix(filename, ext)

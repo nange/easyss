@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/nange/easyss/v3/client/tun"
 	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/scripts"
 	"github.com/nange/easyss/v3/util"
 	"golang.org/x/sys/unix"
 )
@@ -203,6 +205,59 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 			}
 		}
 	}
+}
+
+// tunScript 是一次平台脚本执行：写临时文件、注入内核实际分配的设备名、执行并清理。
+type tunScript struct {
+	kind     string
+	filename string
+	content  []byte
+	render   func(tun.ScriptArgs) []string
+	// execPrefix 非空时给执行错误加前缀：create 的失败由调用方命名，close 需要自带上下文。
+	execPrefix string
+}
+
+// 创建脚本是 fd 路径上唯一能写设备 MTU 的地方（第 9 个位置参数），实参由 tun.ScriptArgs 统一渲染。
+func runCreateScript(device string, args tun.ScriptArgs) error {
+	return tunScript{
+		kind:     "create",
+		filename: scripts.CreateTunFilename,
+		content:  scripts.CreateTunBytes,
+		render:   tun.ScriptArgs.Create,
+	}.run(device, args)
+}
+
+// 关闭脚本按路由是否真的清掉给出退出码，调用方据此决定是否回滚；残留的分流路由会让停止 TUN 后断网。
+func runCloseScript(device string, args tun.ScriptArgs) error {
+	return tunScript{
+		kind:       "close",
+		filename:   scripts.CloseTunFilename,
+		content:    scripts.CloseTunBytes,
+		render:     tun.ScriptArgs.Close,
+		execPrefix: "close script",
+	}.run(device, args)
+}
+
+func (s tunScript) run(device string, args tun.ScriptArgs) error {
+	if s.content == nil {
+		return fmt.Errorf("no %s script for %s", s.kind, runtime.GOOS)
+	}
+
+	namePath, err := tun.WriteScriptToTemp(s.filename, s.content)
+	if err != nil {
+		return fmt.Errorf("write %s script: %w", s.kind, err)
+	}
+	defer os.Remove(namePath) //nolint:errcheck
+
+	// 以调用方传入的为准：helper 拿到的是内核实际分配的名字，配置里那个只是请求名。
+	args.Dev.Device = device
+	if err := execScriptWithOutput(tunScriptShell, namePath, s.render(args)...); err != nil {
+		if s.execPrefix != "" {
+			return fmt.Errorf("%s: %w", s.execPrefix, err)
+		}
+		return err
+	}
+	return nil
 }
 
 // TunMask 必须带上，否则同一次会话在 fd 路径装出 /32、直连路径装出 /16，两者都能上网，偏差不会

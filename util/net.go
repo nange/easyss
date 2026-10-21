@@ -41,25 +41,6 @@ func IsLANIP(ip string) bool {
 		_ip.IsInterfaceLocalMulticast()
 }
 
-func IsLoopbackIP(ip string) bool {
-	_ip := net.ParseIP(ip)
-	if _ip == nil {
-		return false
-	}
-
-	return _ip.IsLoopback()
-}
-
-// IsLANHost 检查主机（带或不带端口）是否为 LAN/私有地址，用于在快速路径上
-// 拦截 SSRF。它不解析域名：解析到内网地址的域名会漏过。
-func IsLANHost(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		host = addr
-	}
-	return IsLANIP(host)
-}
-
 // 调用方必须校验全部返回地址并只拨这些字面地址：SSRF 检查与实际连接共用同一次解析，
 // DNS-rebinding 没有翻转答案的窗口；字面 IP 直接返回，ctx 无截止时间时套 3s 兜底。
 func ResolveHostIPs(ctx context.Context, addr string) ([]netip.Addr, error) {

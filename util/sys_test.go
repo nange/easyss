@@ -9,22 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestSysSupportPowershell(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.SkipNow()
-	}
-	s := SysSupportPowershell()
-	assert.True(t, s)
-}
-
-func TestSysPowershellMajorVersion(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.SkipNow()
-	}
-	v := SysPowershellMajorVersion()
-	assert.GreaterOrEqual(t, v, 0)
-}
-
 func TestSysGatewayAndDevice(t *testing.T) {
 	gw, dev, err := SysGatewayAndDevice()
 	switch runtime.GOOS {

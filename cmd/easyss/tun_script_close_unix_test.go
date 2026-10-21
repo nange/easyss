@@ -4,7 +4,6 @@ package main
 
 import (
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -205,18 +204,10 @@ func TestCloseTunScriptLinuxExitCode(t *testing.T) {
 	})
 }
 
-// closeScriptShell 返回本平台 runCloseScript 使用的解释器：darwin 用 sh，linux 用 bash。
-func closeScriptShell() string {
-	if runtime.GOOS == "darwin" {
-		return "sh"
-	}
-	return "bash"
-}
-
 // TestRunCloseScriptReportsFailures 固定在 Go 这一层不再吞掉关闭脚本的失败：把"脚本失败"
 // 当成"清理成功"，残留的分流默认路由就会把全机 IPv4 流量送进一个没人读的设备。
 func TestRunCloseScriptReportsFailures(t *testing.T) {
-	requireShell(t, closeScriptShell())
+	requireShell(t, tunScriptShell)
 
 	origBytes, origName := scripts.CloseTunBytes, scripts.CloseTunFilename
 	t.Cleanup(func() { scripts.CloseTunBytes, scripts.CloseTunFilename = origBytes, origName })
@@ -237,7 +228,7 @@ func TestRunCloseScriptReportsFailures(t *testing.T) {
 // TestCleanupTunRoutesVerifiesAndRetries 固定 helper 退出时的清理契约：关闭脚本失败只在
 // "路由确实还在"时才算失败，残留会被重试并按 ERROR 上报——父进程复核与提权回滚以此为依据。
 func TestCleanupTunRoutesVerifiesAndRetries(t *testing.T) {
-	requireShell(t, closeScriptShell())
+	requireShell(t, tunScriptShell)
 
 	origBytes, origName := scripts.CloseTunBytes, scripts.CloseTunFilename
 	t.Cleanup(func() {

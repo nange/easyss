@@ -8,14 +8,17 @@ import (
 	"strings"
 
 	"github.com/nange/easyss/v3/client/proxy"
-	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/log"
-	"github.com/nange/easyss/v3/scripts"
 	"github.com/nange/easyss/v3/util"
 	"golang.org/x/sys/unix"
 )
 
-const utunControlName = "com.apple.net.utun_control"
+const (
+	utunControlName = "com.apple.net.utun_control"
+
+	// darwin 的 create/close 脚本是 POSIX sh。
+	tunScriptShell = "sh"
+)
 
 // macOS 不支持抽象 Unix socket。
 func tunFdSocketPath() string {
@@ -66,47 +69,6 @@ func openTunDevice(name string) (int, string, error) {
 	}
 
 	return fd, actualName, nil
-}
-
-// fd 路径下设备 MTU 只能由创建脚本第 9 个位置参数写入，否则 netstack 静默丢弃超限包；
-// 位置参数由 tun.ScriptArgs 渲染，darwin 的第 5 位必须是裸 IPv6 地址。
-func runCreateScript(device string, args tun.ScriptArgs) error {
-	if scripts.CreateTunBytes == nil {
-		return fmt.Errorf("no create script for darwin")
-	}
-
-	namePath, err := tun.WriteScriptToTemp(scripts.CreateTunFilename, scripts.CreateTunBytes)
-	if err != nil {
-		return fmt.Errorf("write create script: %w", err)
-	}
-	defer os.Remove(namePath) //nolint:errcheck
-
-	// 以调用方传入的为准：helper 拿到的是内核实际分配的名字，配置里那个只是请求名。
-	args.Dev.Device = device
-	if err := execScriptWithOutput("sh", namePath, args.Create()...); err != nil {
-		return err
-	}
-	return nil
-}
-
-// 脚本按"路由是否真的删掉"给出退出码，调用方据此决定是否回滚：
-// 残留的分流默认路由会把全机 IPv4 流量送进没人读的设备，也就是"停止 TUN 后断网"。
-func runCloseScript(device string, args tun.ScriptArgs) error {
-	if scripts.CloseTunBytes == nil {
-		return fmt.Errorf("no close script for darwin")
-	}
-
-	namePath, err := tun.WriteScriptToTemp(scripts.CloseTunFilename, scripts.CloseTunBytes)
-	if err != nil {
-		return fmt.Errorf("write close script: %w", err)
-	}
-	defer os.Remove(namePath) //nolint:errcheck
-
-	args.Dev.Device = device
-	if err := execScriptWithOutput("sh", namePath, args.Close()...); err != nil {
-		return fmt.Errorf("close script: %w", err)
-	}
-	return nil
 }
 
 // 主判据是网关：TUN 路由按 `route add -net X <tun_gw>` 安装，而设备名可能重名或与内核实际名不符，
