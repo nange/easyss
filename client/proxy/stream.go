@@ -443,33 +443,47 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 	}
 }
 
-func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Conn, signalActivity func(), m *stats.StreamMeter) error {
-	type frameItem struct {
-		data []byte
-		fin  bool
-		rst  bool
-	}
+// 下行预读必须与本地写解耦：h2 连接级窗口只在应用读 body 时归还，本地写一阻塞就会把本流的
+// 接收窗口钉死，进而拖住同一连接上的其他流。队列满即恢复背压，深度决定单流最多预读多少帧
+// （约 1–2MB 明文）。
+const remotePrefetchFrames = 64
 
-	ch := make(chan frameItem, 64)
-	readDone := make(chan error, 1)
+// prefetchedFrame 的 err 非空表示读端已终止；终态与数据走同一条队列，不再需要第二组完成信号。
+type prefetchedFrame struct {
+	data []byte
+	fin  bool
+	rst  bool
+	err  error
+}
+
+func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Conn, signalActivity func(), m *stats.StreamMeter) error {
+	frames := make(chan prefetchedFrame, remotePrefetchFrames)
 	done := make(chan struct{})
 	defer close(done)
 
 	go func() {
-		defer close(ch)
+		defer close(frames)
 		first := true
 		for {
+			// 消费者已返回时不再解密下一帧：send 上的 select 在两边都就绪时会随机选中队列。
+			select {
+			case <-done:
+				return
+			default:
+			}
+
 			frame, err := rx.ReadFrame()
 			if first {
 				first = false
 				err = classifyFirstReadError(err)
 			}
 			if err != nil {
-				if errors.Is(err, io.EOF) {
-					readDone <- nil
-				} else {
+				if !errors.Is(err, io.EOF) {
 					log.Debug("[STREAM] remote read error", "err", err)
-					readDone <- err
+					select {
+					case frames <- prefetchedFrame{err: err}:
+					case <-done:
+					}
 				}
 				return
 			}
@@ -477,36 +491,36 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 			switch frame.Type {
 			case protocol.FrameDATA:
 				signalActivity()
-				if len(frame.Payload) > 0 {
-					select {
-					case ch <- frameItem{data: frame.Payload}:
-					case <-done:
-						readDone <- nil
-						return
-					}
+				if len(frame.Payload) == 0 {
+					continue
+				}
+				select {
+				case frames <- prefetchedFrame{data: frame.Payload}:
+				case <-done:
+					return
 				}
 			case protocol.FrameFIN:
 				signalActivity()
 				select {
-				case ch <- frameItem{fin: true}:
+				case frames <- prefetchedFrame{fin: true}:
 				case <-done:
 				}
-				readDone <- nil
 				return
 			case protocol.FrameRST:
 				select {
-				case ch <- frameItem{rst: true}:
+				case frames <- prefetchedFrame{rst: true}:
 				case <-done:
 				}
-				readDone <- nil
 				return
 			case protocol.FramePADDING, protocol.FrameCOVER:
-				continue
 			}
 		}
 	}()
 
-	for item := range ch {
+	for item := range frames {
+		if item.err != nil {
+			return item.err
+		}
 		if item.rst {
 			return fmt.Errorf("%w", ErrStreamReset)
 		}
@@ -524,8 +538,7 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 		stats.RecordRawBytesRecv(len(item.data))
 		m.Add(len(item.data), "read_remote")
 	}
-
-	return <-readDone
+	return nil
 }
 
 // 瞬时或预期的流失败（空闲超时、对端重置、握手被拒、连接断开等）记 Debug：
