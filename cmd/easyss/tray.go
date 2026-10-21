@@ -75,13 +75,14 @@ func (a *TrayApp) buildTray() {
 	root.AddSeparator()
 
 	a.updater = newUpdater(updateDeps{
-		menu:    root,
-		ui:      a.shell,
-		port:    func() int { return a.currentConfig().Local.HTTPPort },
-		check:   selfupdate.CheckLatest,
-		install: a.restartAfterUpdate,
-		every:   timedUpdateCheckInterval(),
-		closing: a.shell.closing,
+		menu:     root,
+		ui:       a.shell,
+		port:     func() int { return a.currentConfig().Local.HTTPPort },
+		check:    selfupdate.CheckLatest,
+		download: selfupdate.Update,
+		install:  a.restartAfterUpdate,
+		every:    timedUpdateCheckInterval(),
+		closing:  a.shell.closing,
 	})
 	root.Add("退出", a.exitApp)
 

@@ -48,7 +48,11 @@ func newTestUpdater(ui updateUI) *updater {
 		check: func(context.Context, *selfupdate.Client) (*selfupdate.Release, error) {
 			return nil, errors.New("offline")
 		},
-		install: func() error { return nil },
+		// 真实实现成功时会退出进程；测试若误走下载/重启路径，返回错误比 nil 更早暴露。
+		download: func(context.Context, int, *selfupdate.Release) error {
+			return errors.New("download is not expected in this test")
+		},
+		install: func() error { return errors.New("install is not expected in this test") },
 		every:   time.Hour,
 		closing: make(chan struct{}),
 	})
@@ -221,8 +225,73 @@ func TestNotifyUpdateAvailableRefreshesBadgeOncePerTag(t *testing.T) {
 	if got := len(ui.notified); got != 1 {
 		t.Fatalf("system notifications = %d, want 1 for a repeated tag", got)
 	}
+	if !strings.Contains(ui.notified[0], "v3.0.1") {
+		t.Fatalf("notification lost the tag: %q", ui.notified[0])
+	}
 	if got := ui.badges + len(ui.tooltips); got != 2 {
 		t.Fatalf("badge/tooltip refreshes = %d, want 2 (one per check)", got)
+	}
+	if ui.badges > 0 {
+		if !strings.Contains(ui.badgeTooltip, "v3.0.1") {
+			t.Fatalf("badge tooltip lost the tag: %q", ui.badgeTooltip)
+		}
+	} else if !strings.Contains(ui.tooltips[0], "v3.0.1") {
+		t.Fatalf("fallback tooltip lost the tag: %q", ui.tooltips[0])
+	}
+}
+
+// TestRunDownloadReportsDownloadFailure 固定下载失败要回到 Available 并让菜单项可重试。
+func TestRunDownloadReportsDownloadFailure(t *testing.T) {
+	ui := &fakeUpdateUI{}
+	u := newTestUpdater(ui)
+	u.download = func(context.Context, int, *selfupdate.Release) error {
+		return errors.New("download failed")
+	}
+	u.install = func() error {
+		t.Fatal("install must not run after a failed download")
+		return nil
+	}
+	u.state.Store(updateStateDownloading)
+	u.setUpdateItem("正在下载 v3.0.1 ...", true)
+
+	u.runDownload(context.Background(), &selfupdate.Release{TagName: "v3.0.1"})
+
+	if got := u.state.Load(); got != updateStateAvailable {
+		t.Fatalf("state = %d, want available", got)
+	}
+	if u.item.IsDisabled() {
+		t.Fatal("菜单项必须恢复为可点击")
+	}
+	if len(ui.notified) != 1 || !strings.Contains(ui.notified[0], "更新失败") {
+		t.Fatalf("unexpected notifications: %q", ui.notified)
+	}
+}
+
+// TestRunDownloadReportsRestartFailure 固定"下载成功但重启失败"的收尾：通知、菜单项与状态都要回滚。
+func TestRunDownloadReportsRestartFailure(t *testing.T) {
+	ui := &fakeUpdateUI{}
+	u := newTestUpdater(ui)
+	u.download = func(context.Context, int, *selfupdate.Release) error { return nil }
+	u.install = func() error { return errors.New("restart failed") }
+	u.state.Store(updateStateDownloading)
+	u.setUpdateItem("正在下载 v3.0.1 ...", true)
+
+	u.runDownload(context.Background(), &selfupdate.Release{TagName: "v3.0.1"})
+
+	if got := u.state.Load(); got != updateStateAvailable {
+		t.Fatalf("state = %d, want available", got)
+	}
+	if u.item.IsDisabled() {
+		t.Fatal("菜单项必须恢复为可点击")
+	}
+	if len(ui.notified) != 2 {
+		t.Fatalf("notifications = %q, want update + restart failure", ui.notified)
+	}
+	if !strings.Contains(ui.notified[0], "已更新到 v3.0.1") {
+		t.Fatalf("first notification should report the installed tag: %q", ui.notified[0])
+	}
+	if !strings.Contains(ui.notified[1], "重启失败") {
+		t.Fatalf("second notification should report the restart failure: %q", ui.notified[1])
 	}
 }
 

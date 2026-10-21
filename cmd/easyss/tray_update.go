@@ -47,10 +47,12 @@ var _ updateUI = (*trayShell)(nil)
 
 // updateDeps 全部由构造方注入；closing 归调用方所有，测试可以自己关闭它。
 type updateDeps struct {
-	menu    *systray.Menu
-	ui      updateUI
-	port    func() int
-	check   func(context.Context, *selfupdate.Client) (*selfupdate.Release, error)
+	menu     *systray.Menu
+	ui       updateUI
+	port     func() int
+	check    func(context.Context, *selfupdate.Client) (*selfupdate.Release, error)
+	download func(context.Context, int, *selfupdate.Release) error
+	// install 只在重启失败时返回：成功路径由实现直接退出进程，返回 nil 会让状态停在 Downloading。
 	install func() error
 	every   time.Duration // 必须为正，构造后不再变化
 	closing <-chan struct{}
@@ -59,13 +61,14 @@ type updateDeps struct {
 // updater 是自更新的状态机与"检查更新"菜单项。安装后的重启属于进程生命周期，
 // 由 install 注入（TrayApp.restartAfterUpdate）。
 type updater struct {
-	item    *systray.MenuItem
-	ui      updateUI
-	port    func() int
-	check   func(context.Context, *selfupdate.Client) (*selfupdate.Release, error)
-	install func() error
-	every   time.Duration
-	closing <-chan struct{}
+	item     *systray.MenuItem
+	ui       updateUI
+	port     func() int
+	check    func(context.Context, *selfupdate.Client) (*selfupdate.Release, error)
+	download func(context.Context, int, *selfupdate.Release) error
+	install  func() error
+	every    time.Duration
+	closing  <-chan struct{}
 
 	state atomic.Int32
 
@@ -77,12 +80,13 @@ type updater struct {
 
 func newUpdater(d updateDeps) *updater {
 	u := &updater{
-		ui:      d.ui,
-		port:    d.port,
-		check:   d.check,
-		install: d.install,
-		every:   d.every,
-		closing: d.closing,
+		ui:       d.ui,
+		port:     d.port,
+		check:    d.check,
+		download: d.download,
+		install:  d.install,
+		every:    d.every,
+		closing:  d.closing,
 	}
 	// 菜单项在构造时建好：状态机每次写标签都假定它存在。
 	u.item = d.menu.Add("检查更新", u.onUpdateClicked)
@@ -299,25 +303,29 @@ func (u *updater) downloadAndInstall() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), selfupdate.DownloadTimeout)
 		defer cancel()
-
-		if err := selfupdate.Update(ctx, u.port(), rel); err != nil {
-			log.Error("[SYSTRAY] download and install update", "tag", rel.TagName, "err", err)
-			u.setUpdateItem("更新 "+rel.TagName+" 失败，点击重试", false)
-			u.state.Store(updateStateAvailable)
-			u.ui.notify("更新失败：" + err.Error())
-			return
-		}
-
-		log.Info("[SYSTRAY] update installed, restarting", "tag", rel.TagName)
-		u.clearUpdateBadge()
-		u.ui.notify("已更新到 " + rel.TagName + "，正在重启...")
-
-		if err := u.install(); err != nil {
-			u.ui.notify("重启失败，请手动重启应用完成更新")
-			u.setUpdateItem("更新成功，重启失败，请手动重启", false)
-			u.state.Store(updateStateAvailable)
-		}
+		u.runDownload(ctx, rel)
 	}()
+}
+
+// 下载与安装在调用方 goroutine 上同步执行，失败要回到 Available，成功则由 install 决定是否退出进程。
+func (u *updater) runDownload(ctx context.Context, rel *selfupdate.Release) {
+	if err := u.download(ctx, u.port(), rel); err != nil {
+		log.Error("[SYSTRAY] download and install update", "tag", rel.TagName, "err", err)
+		u.setUpdateItem("更新 "+rel.TagName+" 失败，点击重试", false)
+		u.state.Store(updateStateAvailable)
+		u.ui.notify("更新失败：" + err.Error())
+		return
+	}
+
+	log.Info("[SYSTRAY] update installed, restarting", "tag", rel.TagName)
+	u.clearUpdateBadge()
+	u.ui.notify("已更新到 " + rel.TagName + "，正在重启...")
+
+	if err := u.install(); err != nil {
+		u.ui.notify("重启失败，请手动重启应用完成更新")
+		u.setUpdateItem("更新成功，重启失败，请手动重启", false)
+		u.state.Store(updateStateAvailable)
+	}
 }
 
 func (u *updater) scheduleUpdateMenuReset() {
