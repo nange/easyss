@@ -56,8 +56,9 @@ func (h *StreamHandler) Transport() transport.Transport {
 	return h.transport
 }
 
-// streamRequest 是一条流的不可变请求。endpoint 与 proto 必须成对，由 tcp/udp/icmp
-// 构造函数保证；frames 是合并进引导记录的首批帧（TCP 首批数据 / ICMP echo / UDP 首个数据报）。
+// streamRequest 是一条流的不可变请求。endpoint 由 proto 唯一派生（见 newStreamRequest），
+// 调用方无法传入不匹配的组合；frames 是合并进引导记录的首批帧（TCP 首批数据 /
+// ICMP echo / UDP 首个数据报）。
 type streamRequest struct {
 	endpoint      string
 	proto         protocol.Proto
@@ -68,19 +69,29 @@ type streamRequest struct {
 }
 
 func tcpStreamRequest(target string, method protocol.Method) streamRequest {
-	return newStreamRequest(config.EndpointTCP, protocol.ProtoTCP, target, method)
+	return newStreamRequest(protocol.ProtoTCP, target, method)
 }
 
 func udpStreamRequest(target string, method protocol.Method) streamRequest {
-	return newStreamRequest(config.EndpointUDP, protocol.ProtoUDP, target, method)
+	return newStreamRequest(protocol.ProtoUDP, target, method)
 }
 
 func icmpStreamRequest(target string, method protocol.Method) streamRequest {
-	return newStreamRequest(config.EndpointICMP, protocol.ProtoICMP, target, method)
+	return newStreamRequest(protocol.ProtoICMP, target, method)
 }
 
-func newStreamRequest(endpoint string, proto protocol.Proto, target string, method protocol.Method) streamRequest {
-	return streamRequest{endpoint: endpoint, proto: proto, target: target, method: method}
+// endpoint 由 proto 唯一派生：配对只在这里存在，调用方无法再传入不匹配的组合。
+func newStreamRequest(proto protocol.Proto, target string, method protocol.Method) streamRequest {
+	req := streamRequest{proto: proto, target: target, method: method}
+	switch proto {
+	case protocol.ProtoTCP:
+		req.endpoint = config.EndpointTCP
+	case protocol.ProtoUDP:
+		req.endpoint = config.EndpointUDP
+	case protocol.ProtoICMP:
+		req.endpoint = config.EndpointICMP
+	}
+	return req
 }
 
 func (r streamRequest) withFrames(frames ...protocol.Frame) streamRequest {

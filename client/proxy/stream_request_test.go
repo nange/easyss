@@ -3,8 +3,36 @@ package proxy
 import (
 	"testing"
 
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/protocol"
 )
+
+func TestNewStreamRequestDerivesEndpointFromProto(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		proto    protocol.Proto
+		endpoint string
+	}{
+		{proto: protocol.ProtoTCP, endpoint: config.EndpointTCP},
+		{proto: protocol.ProtoUDP, endpoint: config.EndpointUDP},
+		{proto: protocol.ProtoICMP, endpoint: config.EndpointICMP},
+	}
+	for _, tc := range cases {
+		t.Run(tc.endpoint, func(t *testing.T) {
+			t.Parallel()
+
+			req := newStreamRequest(tc.proto, "example.com:443", protocol.MethodAES256GCM)
+			if req.endpoint != tc.endpoint {
+				t.Fatalf("endpoint = %q, want %q", req.endpoint, tc.endpoint)
+			}
+		})
+	}
+
+	if req := newStreamRequest(protocol.Proto(0), "example.com:443", protocol.MethodAES256GCM); req.endpoint != "" {
+		t.Errorf("unknown proto endpoint = %q, want empty", req.endpoint)
+	}
+}
 
 func TestStreamRequestConstructorsKeepEndpointAndProtoPaired(t *testing.T) {
 	t.Parallel()
