@@ -60,6 +60,13 @@ func bidirectional(idleTimeout time.Duration, drainWhen func() bool, drainIdle t
 	go func() { errCh <- srcToDst(signalActivity) }()
 	go func() { errCh <- dstToSrc(signalActivity) }()
 
+	if onClose == nil {
+		onClose = func() {}
+	}
+	// 终止时恰好一次。errCh 的容量覆盖两个方向，未读走的结果不会阻塞发送方，因此这里
+	// 不等拷贝 goroutine 退出：调用方不得在返回后复用连接。
+	defer onClose()
+
 	timer := time.NewTimer(idleTimeout)
 	defer timer.Stop()
 
@@ -80,19 +87,16 @@ func bidirectional(idleTimeout time.Duration, drainWhen func() bool, drainIdle t
 		drainC = drainTicker.C
 	}
 
-	done := 0
+	received := 0
 	var firstErr error
-	for done < 2 {
+	for received < 2 {
 		select {
 		case err := <-errCh:
-			done++
+			received++
 			if err != nil && !errors.Is(err, io.EOF) && firstErr == nil {
 				firstErr = err
 			}
-			if firstErr != nil || done == 2 {
-				if onClose != nil {
-					onClose()
-				}
+			if firstErr != nil || received == 2 {
 				return Result{Err: firstErr}
 			}
 			resetIdle()
@@ -100,16 +104,6 @@ func bidirectional(idleTimeout time.Duration, drainWhen func() bool, drainIdle t
 			resetIdle()
 		case <-drainC:
 			if drainWhen() && time.Since(idleSince) >= drainIdle {
-				if onClose != nil {
-					onClose()
-				}
-				// 非阻塞排空，让两个 goroutine 能干净退出。
-				for range 2 {
-					select {
-					case <-errCh:
-					default:
-					}
-				}
 				return Result{
 					Err:      fmt.Errorf("stream drained: idle for %v while the slot is due for eviction", drainIdle),
 					TimedOut: true,
@@ -117,22 +111,12 @@ func bidirectional(idleTimeout time.Duration, drainWhen func() bool, drainIdle t
 				}
 			}
 		case <-timer.C:
-			if onClose != nil {
-				onClose()
-			}
-			// 非阻塞排空，让两个 goroutine 能干净退出。
-			for range 2 {
-				select {
-				case <-errCh:
-				default:
-				}
-			}
 			return Result{
 				Err:      fmt.Errorf("relay idle timeout after %v", idleTimeout),
 				TimedOut: true,
 			}
 		}
 	}
-	// 实际不可达：所有把 done 增到 2 的路径都已直接返回。
+	// 实际不可达：所有把 received 增到 2 的路径都已直接返回。
 	return Result{Err: firstErr}
 }

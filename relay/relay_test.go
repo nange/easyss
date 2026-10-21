@@ -155,3 +155,37 @@ func TestBidirectionalWithDrainResetByActivity(t *testing.T) {
 		t.Fatalf("onClose called %d times, want 1", closed)
 	}
 }
+
+// TestBidirectionalNilOnClose 覆盖 onClose 的入口归一化：三个终止路径都不允许 nil 回调。
+func TestBidirectionalNilOnClose(t *testing.T) {
+	t.Run("completion", func(t *testing.T) {
+		result := Bidirectional(time.Minute, nil,
+			func(func()) error { return nil },
+			func(func()) error { return nil },
+		)
+		if result.Err != nil {
+			t.Fatalf("unexpected result: %+v", result)
+		}
+	})
+
+	t.Run("idle timeout", func(t *testing.T) {
+		block := make(chan struct{})
+		defer close(block)
+		copyBlock := func(func()) error { <-block; return nil }
+		result := Bidirectional(50*time.Millisecond, nil, copyBlock, copyBlock)
+		if !result.TimedOut {
+			t.Fatalf("expected TimedOut, got %+v", result)
+		}
+	})
+
+	t.Run("drain", func(t *testing.T) {
+		block := make(chan struct{})
+		defer close(block)
+		copyBlock := func(func()) error { <-block; return nil }
+		result := BidirectionalWithDrain(time.Minute, func() bool { return true }, 50*time.Millisecond,
+			nil, copyBlock, copyBlock)
+		if !result.Drained || !result.TimedOut {
+			t.Fatalf("expected drained+timed out result, got %+v", result)
+		}
+	})
+}
