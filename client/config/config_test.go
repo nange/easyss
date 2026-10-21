@@ -2,8 +2,10 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +76,87 @@ func TestClone(t *testing.T) {
 	clone.Servers[0].Port = 8443
 	if cfg.Servers[0].Port == 8443 {
 		t.Error("Clone did not deep copy servers")
+	}
+
+	// json:"-" 字段不在线格式里，但属于快照的一部分：JSON 往返会把它清零。
+	cfg.Shaper.IdleTimeout = 500
+	cfg.Local.TunConfig = json.RawMessage(`{"device":"utun9"}`)
+	clone = cfg.Clone()
+	if clone.Shaper.IdleTimeout != 500 {
+		t.Errorf("Clone lost json:\"-\" field: IdleTimeout = %d, want 500", clone.Shaper.IdleTimeout)
+	}
+	clone.Local.TunConfig[0] = 'x'
+	if cfg.Local.TunConfig[0] == 'x' {
+		t.Error("Clone shares the Local.TunConfig backing array")
+	}
+}
+
+// TestCloneSharesNoMutableState 按类型遍历而不是按字段清单，因此新增 slice/map/指针字段
+// 却忘了在 Clone 里复制时，这里必然失败。
+func TestCloneSharesNoMutableState(t *testing.T) {
+	src := testDefaultConfig()
+	src.Servers = []*ServerProfile{
+		{Host: "example.com", Port: 443, Password: "secret", Default: true},
+		{Host: "192.0.2.1", Port: 443},
+	}
+	src.Local.TunConfig = json.RawMessage(`{"device":"utun9"}`)
+	src.Shaper.IdleTimeout = 500
+
+	clone := src.Clone()
+	assertNoSharedRefs(t, "ClientConfig", reflect.ValueOf(*src), reflect.ValueOf(*clone))
+}
+
+// assertNoSharedRefs 报告 clone 与 src 之间仍然共享的可变引用。字符串与函数值按值语义
+// 共享，不在此列。
+func assertNoSharedRefs(t *testing.T, path string, src, clone reflect.Value) {
+	t.Helper()
+	if src.Type() != clone.Type() {
+		t.Fatalf("%s: type mismatch: %s vs %s", path, src.Type(), clone.Type())
+	}
+	switch src.Kind() {
+	case reflect.Struct:
+		for i := range src.NumField() {
+			assertNoSharedRefs(t, path+"."+src.Type().Field(i).Name, src.Field(i), clone.Field(i))
+		}
+	case reflect.Array:
+		for i := range src.Len() {
+			assertNoSharedRefs(t, fmt.Sprintf("%s[%d]", path, i), src.Index(i), clone.Index(i))
+		}
+	case reflect.Slice:
+		if src.IsNil() != clone.IsNil() {
+			t.Errorf("%s: Clone changed nil-ness", path)
+			return
+		}
+		if src.Len() > 0 && src.Pointer() == clone.Pointer() {
+			t.Errorf("%s: Clone shares the backing array", path)
+			return
+		}
+		for i := range src.Len() {
+			assertNoSharedRefs(t, fmt.Sprintf("%s[%d]", path, i), src.Index(i), clone.Index(i))
+		}
+	case reflect.Pointer, reflect.Map:
+		if src.IsNil() != clone.IsNil() {
+			t.Errorf("%s: Clone changed nil-ness", path)
+			return
+		}
+		if src.IsNil() {
+			return
+		}
+		if src.Pointer() == clone.Pointer() {
+			t.Errorf("%s: Clone shares the %s", path, src.Kind())
+			return
+		}
+		if src.Kind() == reflect.Pointer {
+			assertNoSharedRefs(t, path, src.Elem(), clone.Elem())
+		}
+	case reflect.Interface:
+		if src.IsNil() != clone.IsNil() {
+			t.Errorf("%s: Clone changed nil-ness", path)
+			return
+		}
+		if !src.IsNil() {
+			assertNoSharedRefs(t, path, src.Elem(), clone.Elem())
+		}
 	}
 }
 
@@ -482,6 +565,22 @@ func TestBuildSimpleConfig(t *testing.T) {
 			t.Error("expected error for invalid outbound_proto")
 		}
 	})
+
+	t.Run("简化配置 tun_config 校验", func(t *testing.T) {
+		valid := config.SimpleConfig{Server: "example.com", Password: "secret", TunConfig: `{"device":"utun9"}`}
+		v3, err := BuildSimpleConfig(&valid)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if string(v3.Local.TunConfig) != `{"device":"utun9"}` {
+			t.Errorf("TunConfig = %q", v3.Local.TunConfig)
+		}
+
+		invalid := config.SimpleConfig{Server: "example.com", Password: "secret", TunConfig: `{invalid`}
+		if _, err := BuildSimpleConfig(&invalid); err == nil {
+			t.Error("expected error for malformed tun_config")
+		}
+	})
 }
 
 // TestSimpleOverridesUseHost 固定简化模式覆盖写入的是 Host（而不是旧的
@@ -511,6 +610,19 @@ func TestApplySimpleOverridesRejectsHostWithPort(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "must not include a port") {
 		t.Errorf("error = %v, want port hint", err)
+	}
+}
+
+// TestApplySimpleOverridesRejectsInvalidTunConfig 与 tun_config 的加载路径同一条判据：
+// 非法 JSON 会在消费点静默失效，必须在覆盖阶段就报错。
+func TestApplySimpleOverridesRejectsInvalidTunConfig(t *testing.T) {
+	cfg := &ClientConfig{Servers: []*ServerProfile{{Host: "old.example", Port: 443}}}
+	err := ApplySimpleOverrides(cfg, &config.SimpleConfig{TunConfig: `{invalid`})
+	if err == nil {
+		t.Fatal("expected error for malformed tun_config")
+	}
+	if !strings.Contains(err.Error(), "tun_config") {
+		t.Errorf("error = %v, want tun_config hint", err)
 	}
 }
 

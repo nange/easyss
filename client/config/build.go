@@ -21,6 +21,10 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	tunConfig, err := jsonTunConfig(s.TunConfig)
+	if err != nil {
+		return nil, err
+	}
 
 	cfg := &ClientConfig{
 		ConfigVersion: 3,
@@ -42,7 +46,7 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 			EnableTun2socks:  s.EnableTun2socks,
 			EnableQUIC:       s.EnableQUIC,
 			TunMTU:           s.TunMTU,
-			TunConfig:        jsonTunConfig(s.TunConfig),
+			TunConfig:        tunConfig,
 		},
 		Routing: RoutingConfig{
 			ProxyRule:  s.ProxyRule,
@@ -161,7 +165,11 @@ func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) error
 		cfg.Local.BindAll = true
 	}
 	if s.TunConfig != "" {
-		cfg.Local.TunConfig = jsonTunConfig(s.TunConfig)
+		tunConfig, err := jsonTunConfig(s.TunConfig)
+		if err != nil {
+			return err
+		}
+		cfg.Local.TunConfig = tunConfig
 	}
 
 	// 覆盖完成后再补齐 http_port，与 applyDefaults 共用唯一实现 normalizeHTTPPort。
@@ -170,11 +178,16 @@ func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) error
 	return cfg.validateServers()
 }
 
-func jsonTunConfig(s string) json.RawMessage {
+// jsonTunConfig 把简化模式里的 tun_config 字符串转成 RawMessage。消费点只认合法 JSON，
+// 写错时会静默退回默认值（例如自定义设备名失效），因此在加载阶段就拒绝。
+func jsonTunConfig(s string) (json.RawMessage, error) {
 	if s == "" {
-		return nil
+		return nil, nil
 	}
-	return json.RawMessage(s)
+	if !json.Valid([]byte(s)) {
+		return nil, fmt.Errorf("tun_config is not valid JSON: %q", s)
+	}
+	return json.RawMessage(s), nil
 }
 
 func OutboundProtoToProtocol(proto string) (string, error) {

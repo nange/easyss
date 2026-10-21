@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
@@ -299,14 +300,20 @@ func (c *ClientConfig) ResolveFilePaths() {
 	}
 }
 
+// Clone 返回深拷贝。值拷贝覆盖标量与 json:"-" 字段，引用类型必须逐个复制；新增引用
+// 字段时这里与 TestClone 一起改，否则并发读者会看到半更新的快照。
 func (c *ClientConfig) Clone() *ClientConfig {
-	data, err := json.Marshal(c)
-	if err != nil {
-		return nil
-	}
-	var clone ClientConfig
-	if err := json.Unmarshal(data, &clone); err != nil {
-		return nil
+	clone := *c
+	clone.Local.TunConfig = bytes.Clone(c.Local.TunConfig)
+	if c.Servers != nil {
+		clone.Servers = make([]*ServerProfile, len(c.Servers))
+		for i, srv := range c.Servers {
+			if srv == nil {
+				continue
+			}
+			v := *srv
+			clone.Servers[i] = &v
+		}
 	}
 	return &clone
 }
