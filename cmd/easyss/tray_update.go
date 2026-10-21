@@ -6,9 +6,11 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
-	"os"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/gogpu/systray"
 	"github.com/nange/easyss/v3/icon"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/selfupdate"
@@ -33,51 +35,103 @@ const (
 	updateStateDownloading
 )
 
-func (a *TrayApp) onUpdateClicked() {
+// updateUI 是自更新用到的界面操作，生产实现是 trayShell。
+type updateUI interface {
+	notify(msg string)
+	notifyIfReady(msg string)
+	setIconAndTooltip(png []byte, tooltip string)
+	setTooltip(text string)
+}
+
+var _ updateUI = (*trayShell)(nil)
+
+// updateDeps 全部由构造方注入；closing 归调用方所有，测试可以自己关闭它。
+type updateDeps struct {
+	menu     *systray.Menu
+	ui       updateUI
+	port     func() int
+	check    func(context.Context, *selfupdate.Client) (*selfupdate.Release, error)
+	download func(context.Context, int, *selfupdate.Release) error
+	// install 只在重启失败时返回：成功路径由实现直接退出进程，返回 nil 会让状态停在 Downloading。
+	install func() error
+	every   time.Duration // 必须为正，构造后不再变化
+	closing <-chan struct{}
+}
+
+// updater 是自更新的状态机与"检查更新"菜单项。安装后的重启属于进程生命周期，
+// 由 install 注入（TrayApp.restartAfterUpdate）。
+type updater struct {
+	item     *systray.MenuItem
+	ui       updateUI
+	port     func() int
+	check    func(context.Context, *selfupdate.Client) (*selfupdate.Release, error)
+	download func(context.Context, int, *selfupdate.Release) error
+	install  func() error
+	every    time.Duration
+	closing  <-chan struct{}
+
+	state atomic.Int32
+
+	// 只保护 pendingUpdate 与 lastNotifiedTag。
+	mu              sync.Mutex
+	pendingUpdate   *selfupdate.Release
+	lastNotifiedTag string
+}
+
+func newUpdater(d updateDeps) *updater {
+	u := &updater{
+		ui:       d.ui,
+		port:     d.port,
+		check:    d.check,
+		download: d.download,
+		install:  d.install,
+		every:    d.every,
+		closing:  d.closing,
+	}
+	// 菜单项在构造时建好：状态机每次写标签都假定它存在。
+	u.item = d.menu.Add("检查更新", u.onUpdateClicked)
+	return u
+}
+
+func (u *updater) onUpdateClicked() {
 	go func() {
-		switch a.updateState.Load() {
+		switch u.state.Load() {
 		case updateStateIdle:
 			ctx, cancel := context.WithTimeout(context.Background(), selfupdate.CheckTimeout)
 			defer cancel()
-			a.checkUpdate(ctx, true)
+			u.checkUpdate(ctx, true)
 		case updateStateAvailable:
-			a.downloadAndInstall()
-		default:
+			u.downloadAndInstall()
 		}
 	}()
 }
 
 // 进程生命周期内静默检查：启动后不久一次，之后每 updateCheckInterval（±抖动）一次。
-func (a *TrayApp) autoCheckUpdate() {
+func (u *updater) autoCheckUpdate() {
 	if version.Tag() == "" {
 		log.Info("[SYSTRAY] auto check update skipped: build has no version tag")
 		return
 	}
 	select {
 	case <-time.After(updateCheckDelay):
-	case <-a.shell.closing:
+	case <-u.closing:
 		return
 	}
-	a.runUpdateCheckLoop(func() { a.checkUpdate(context.Background(), false) })
+	u.runUpdateCheckLoop(func() { u.checkUpdate(context.Background(), false) })
 }
 
 // check 在循环 goroutine 上同步运行，因此两次检查绝不会重叠。
-func (a *TrayApp) runUpdateCheckLoop(check func()) {
-	interval := a.updateCheckEvery
-	if interval <= 0 {
-		// 未通过 buildTray 构建的 TrayApp（测试）回退到真实间隔，避免 NewTicker panic。
-		interval = timedUpdateCheckInterval()
-	}
-	ticker := time.NewTicker(interval)
+func (u *updater) runUpdateCheckLoop(run func()) {
+	ticker := time.NewTicker(u.every)
 	defer ticker.Stop()
 
 	for {
-		log.Info("[SYSTRAY] auto check update starting", "interval", interval)
-		check()
+		log.Info("[SYSTRAY] auto check update starting", "interval", u.every)
+		run()
 
 		select {
 		case <-ticker.C:
-		case <-a.shell.closing:
+		case <-u.closing:
 			return
 		}
 	}
@@ -90,65 +144,65 @@ func timedUpdateCheckInterval() time.Duration {
 
 // 接受 Idle 与 Available 两种起点：发现新版本后状态停在 Available，只接受 Idle 会让周期检查
 // 被 CAS 永远挡掉。
-func (a *TrayApp) beginUpdateCheck() (wasAvailable, ok bool) {
+func (u *updater) beginUpdateCheck() (wasAvailable, ok bool) {
 	for {
-		prev := a.updateState.Load()
+		prev := u.state.Load()
 		if prev != updateStateIdle && prev != updateStateAvailable {
 			return false, false
 		}
-		if a.updateState.CompareAndSwap(prev, updateStateChecking) {
+		if u.state.CompareAndSwap(prev, updateStateChecking) {
 			return prev == updateStateAvailable, true
 		}
 	}
 }
 
-func (a *TrayApp) pendingUpdateTag() string {
-	a.updateMu.Lock()
-	defer a.updateMu.Unlock()
-	if a.pendingUpdate == nil {
+func (u *updater) pendingUpdateTag() string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.pendingUpdate == nil {
 		return ""
 	}
-	return a.pendingUpdate.TagName
+	return u.pendingUpdate.TagName
 }
 
 // 调用前处于 Available 时必须回到 Available 并保留标签，降成 Idle 会让待处理更新从界面上消失。
-func (a *TrayApp) finishUpdateCheck(wasAvailable bool) {
+func (u *updater) finishUpdateCheck(wasAvailable bool) {
 	if !wasAvailable {
-		a.scheduleUpdateMenuReset()
+		u.scheduleUpdateMenuReset()
 		return
 	}
-	tag := a.pendingUpdateTag()
+	tag := u.pendingUpdateTag()
 	if tag == "" || !selfupdate.HasNewVersion(version.Tag(), tag) {
-		a.scheduleUpdateMenuReset()
+		u.scheduleUpdateMenuReset()
 		return
 	}
-	a.updateState.Store(updateStateAvailable)
-	a.setUpdateItem(updateAvailableItemLabel(tag), false)
+	u.state.Store(updateStateAvailable)
+	u.setUpdateItem(updateAvailableItemLabel(tag), false)
 }
 
 // 同步执行，调用方在自己的 goroutine 上运行，更新状态机让并发的第二次调用变成空操作。
 // 只有交互式检查会报告失败或已是最新。
-func (a *TrayApp) checkUpdate(ctx context.Context, interactive bool) {
-	wasAvailable, ok := a.beginUpdateCheck()
+func (u *updater) checkUpdate(ctx context.Context, interactive bool) {
+	wasAvailable, ok := u.beginUpdateCheck()
 	if !ok {
 		return
 	}
 	if interactive {
-		a.setUpdateItem("检查更新中...", true)
+		u.setUpdateItem("检查更新中...", true)
 	}
 
 	// 客户端持有自己的连接池，必须随本次检查回收：托盘长驻且检查可被反复手动触发。
-	client := selfupdate.NewClient(a.currentConfig().Local.HTTPPort)
+	client := selfupdate.NewClient(u.port())
 	defer client.Close()
 
-	rel, err := a.checkLatest(ctx, client)
+	rel, err := u.check(ctx, client)
 	if err != nil {
 		log.Error("[SYSTRAY] check update", "err", err)
 		if interactive {
-			a.setUpdateItem("检查更新失败", true)
-			a.shell.notifyIfReady("检查更新失败：" + err.Error())
+			u.setUpdateItem("检查更新失败", true)
+			u.ui.notifyIfReady("检查更新失败：" + err.Error())
 		}
-		a.finishUpdateCheck(wasAvailable)
+		u.finishUpdateCheck(wasAvailable)
 		return
 	}
 
@@ -156,23 +210,23 @@ func (a *TrayApp) checkUpdate(ctx context.Context, interactive bool) {
 		if wasAvailable {
 			// 周期检查且已有待处理更新：不要覆盖成"已是最新版本"。
 			log.Info("[SYSTRAY] check update: no release newer than the pending update",
-				"version", version.Tag(), "pending", a.pendingUpdateTag())
+				"version", version.Tag(), "pending", u.pendingUpdateTag())
 		} else {
 			log.Info("[SYSTRAY] check update: already up to date", "version", version.Tag())
 			if interactive {
-				a.setUpdateItem(updateUpToDateText(version.Tag()), true)
-				a.shell.notifyIfReady(updateUpToDateText(version.Tag()))
+				u.setUpdateItem(updateUpToDateText(version.Tag()), true)
+				u.ui.notifyIfReady(updateUpToDateText(version.Tag()))
 			}
 		}
-		a.finishUpdateCheck(wasAvailable)
+		u.finishUpdateCheck(wasAvailable)
 		return
 	}
 
-	a.updateMu.Lock()
-	a.pendingUpdate = rel
-	a.updateMu.Unlock()
-	a.updateState.Store(updateStateAvailable)
-	a.notifyUpdateAvailable(rel.TagName)
+	u.mu.Lock()
+	u.pendingUpdate = rel
+	u.mu.Unlock()
+	u.state.Store(updateStateAvailable)
+	u.notifyUpdateAvailable(rel.TagName)
 	log.Info("[SYSTRAY] new version available", "current", version.Tag(), "latest", rel.TagName)
 }
 
@@ -195,113 +249,94 @@ func updateUpToDateText(tag string) string {
 
 // "发现新版本"的唯一入口，四个渠道按可靠性排序：菜单项、图标徽标、tooltip、系统通知
 // （尽力而为）。前三个每次检测都刷新，系统通知每个 tag 只发一次。
-func (a *TrayApp) notifyUpdateAvailable(tag string) {
-	a.setUpdateItem(updateAvailableItemLabel(tag), false)
-	a.applyUpdateBadge(tag)
-	if !a.shouldNotify(tag) {
+func (u *updater) notifyUpdateAvailable(tag string) {
+	u.setUpdateItem(updateAvailableItemLabel(tag), false)
+	u.applyUpdateBadge(tag)
+	if !u.shouldNotify(tag) {
 		return
 	}
-	a.shell.notify(updateTooltipText(tag))
+	u.ui.notify(updateTooltipText(tag))
 	log.Info("[SYSTRAY] update notification sent", "latest", tag,
 		"channels", "system-notification,tray-badge,tray-tooltip,tray-menu-item")
 }
 
 // tag 只在进程生命周期内记住：手动检查或重启会再次提醒。
-func (a *TrayApp) shouldNotify(tag string) bool {
-	a.updateMu.Lock()
-	defer a.updateMu.Unlock()
-	if a.lastNotifiedTag == tag {
+func (u *updater) shouldNotify(tag string) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.lastNotifiedTag == tag {
 		return false
 	}
-	a.lastNotifiedTag = tag
+	u.lastNotifiedTag = tag
 	return true
 }
 
 // 缺少图标渲染支持时降级为仅 tooltip 提醒。
-func (a *TrayApp) applyUpdateBadge(tag string) {
+func (u *updater) applyUpdateBadge(tag string) {
 	badged, err := icon.UpdateBadge(icon.TrayData)
 	if err != nil {
 		log.Warn("[SYSTRAY] update badge unavailable, falling back to tooltip", "err", err)
-		a.shell.setTooltip(updateTooltipText(tag))
+		u.ui.setTooltip(updateTooltipText(tag))
 		return
 	}
 
-	a.shell.setIconAndTooltip(badged, updateTooltipText(tag))
+	u.ui.setIconAndTooltip(badged, updateTooltipText(tag))
 }
 
 // 防御性：成功安装后进程随即重启。
-func (a *TrayApp) clearUpdateBadge() {
-	a.shell.setIconAndTooltip(icon.TrayData, trayAppName)
+func (u *updater) clearUpdateBadge() {
+	u.ui.setIconAndTooltip(icon.TrayData, trayAppName)
 }
 
-func (a *TrayApp) downloadAndInstall() {
-	a.updateMu.Lock()
-	rel := a.pendingUpdate
-	a.updateMu.Unlock()
+func (u *updater) downloadAndInstall() {
+	u.mu.Lock()
+	rel := u.pendingUpdate
+	u.mu.Unlock()
 	if rel == nil {
 		return
 	}
-	if !a.updateState.CompareAndSwap(updateStateAvailable, updateStateDownloading) {
+	if !u.state.CompareAndSwap(updateStateAvailable, updateStateDownloading) {
 		return
 	}
-	a.setUpdateItem("正在下载 "+rel.TagName+" ...", true)
+	u.setUpdateItem("正在下载 "+rel.TagName+" ...", true)
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), selfupdate.DownloadTimeout)
 		defer cancel()
-
-		if err := selfupdate.Update(ctx, a.currentConfig().Local.HTTPPort, rel); err != nil {
-			log.Error("[SYSTRAY] download and install update", "tag", rel.TagName, "err", err)
-			a.setUpdateItem("更新 "+rel.TagName+" 失败，点击重试", false)
-			a.updateState.Store(updateStateAvailable)
-			a.shell.notify("更新失败：" + err.Error())
-			return
-		}
-
-		log.Info("[SYSTRAY] update installed, restarting", "tag", rel.TagName)
-		a.clearUpdateBadge()
-		a.shell.notify("已更新到 " + rel.TagName + "，正在重启...")
-
-		// 与菜单切换服务器属同一类临界区：不共用会话序列锁会让两套停/起交错抢本地端口。
-		a.sess.run(func() {
-			a.Close()
-			// 先释放单例锁，新进程才不会与旧进程竞争单例互斥锁。
-			releaseSingletonLock()
-
-			if err := selfupdate.Restart(); err != nil {
-				// 新二进制已就位，让旧版本继续运行，由用户手动重启。
-				log.Error("[SYSTRAY] restart after update", "err", err)
-				a.shell.notify("重启失败，请手动重启应用完成更新")
-				// 重新获取单例锁，本进程继续提供服务期间保持唯一实例。
-				if lerr := tryAcquireSingletonLock(); lerr != nil {
-					log.Error("[SYSTRAY] re-acquire singleton lock after failed restart", "err", lerr)
-				}
-				// 恢复路径不改变服务器：当前快照当作"意图"传入即可，只读其服务器下标。
-				if err := a.restartService(a.currentConfig()); err != nil {
-					log.Error("[SYSTRAY] restore service after failed restart", "err", err)
-				}
-				a.setUpdateItem("更新成功，重启失败，请手动重启", false)
-				a.updateState.Store(updateStateAvailable)
-				return
-			}
-			os.Exit(0)
-		})
+		u.runDownload(ctx, rel)
 	}()
 }
 
-func (a *TrayApp) scheduleUpdateMenuReset() {
+// 下载与安装在调用方 goroutine 上同步执行，失败要回到 Available，成功则由 install 决定是否退出进程。
+func (u *updater) runDownload(ctx context.Context, rel *selfupdate.Release) {
+	if err := u.download(ctx, u.port(), rel); err != nil {
+		log.Error("[SYSTRAY] download and install update", "tag", rel.TagName, "err", err)
+		u.setUpdateItem("更新 "+rel.TagName+" 失败，点击重试", false)
+		u.state.Store(updateStateAvailable)
+		u.ui.notify("更新失败：" + err.Error())
+		return
+	}
+
+	log.Info("[SYSTRAY] update installed, restarting", "tag", rel.TagName)
+	u.clearUpdateBadge()
+	u.ui.notify("已更新到 " + rel.TagName + "，正在重启...")
+
+	if err := u.install(); err != nil {
+		u.ui.notify("重启失败，请手动重启应用完成更新")
+		u.setUpdateItem("更新成功，重启失败，请手动重启", false)
+		u.state.Store(updateStateAvailable)
+	}
+}
+
+func (u *updater) scheduleUpdateMenuReset() {
 	time.AfterFunc(updateMenuReset, func() {
-		if a.updateState.CompareAndSwap(updateStateChecking, updateStateIdle) {
-			a.setUpdateItem("检查更新", false)
+		if u.state.CompareAndSwap(updateStateChecking, updateStateIdle) {
+			u.setUpdateItem("检查更新", false)
 		}
 	})
 }
 
-// 定时器回调中运行，因此要防住更新项尚不存在（托盘未构建）时迟到的回调 panic。
-func (a *TrayApp) setUpdateItem(label string, disabled bool) {
-	if a.updateItem == nil {
-		return
-	}
-	a.updateItem.SetLabel(label)
-	a.updateItem.SetDisabled(disabled)
+func (u *updater) setUpdateItem(label string, disabled bool) {
+	u.item.SetLabel(label)
+	u.item.SetDisabled(disabled)
 }
