@@ -15,6 +15,7 @@ import (
 
 	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/util"
 )
 
@@ -101,17 +102,6 @@ type TransportConfig struct {
 	ConnMaxBytes      int64   `json:"conn_max_bytes"` // 单个连接在任一方向承载的最大字节数，0 用默认值
 }
 
-type ShaperConfig struct {
-	BatchWindowMS    int     `json:"batch_window_ms"`
-	CoverBudgetRatio float64 `json:"cover_budget_ratio"`
-	CoverBudgetCap   int     `json:"cover_budget_cap"`
-}
-
-type LogConfig struct {
-	Level    string `json:"level"`
-	FilePath string `json:"file_path"`
-}
-
 // ClientConfig 是完整模式客户端配置。
 type ClientConfig struct {
 	ConfigVersion int              `json:"version"`
@@ -119,8 +109,8 @@ type ClientConfig struct {
 	Local         LocalConfig      `json:"local"`
 	Routing       RoutingConfig    `json:"routing"`
 	Transport     TransportConfig  `json:"transport"`
-	Shaper        ShaperConfig     `json:"shaper"`
-	Log           LogConfig        `json:"log"`
+	Shaper        shaper.Config    `json:"shaper"`
+	Log           log.Config       `json:"log"`
 	Timeout       int              `json:"timeout"`
 	AuthUsername  string           `json:"auth_username"`
 	AuthPassword  string           `json:"auth_password"`

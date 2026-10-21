@@ -20,6 +20,7 @@ import (
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/runner"
 	"github.com/nange/easyss/v3/selfupdate"
+	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/version"
 )
@@ -142,7 +143,7 @@ Flags:
 	}
 
 	log.Info("[EASYSS-V3] set log-level", "level", cfg.Log.Level)
-	log.Init(cfg.Log.FilePath, cfg.Log.Level)
+	log.Init(cfg.Log)
 	log.Info("[EASYSS-V3] " + version.String())
 
 	// 须在 log.Init 之后，清理日志才写到配置的输出而不是 GUI 中不可见的 stdout。
@@ -536,12 +537,12 @@ func exampleV3Config() string {
 			PrioritySlotRatio: sharedconfig.DefaultPrioritySlotRatio,
 			ConnMaxBytes:      sharedconfig.DefaultConnMaxBytes,
 		},
-		Shaper: config.ShaperConfig{
-			BatchWindowMS:    sharedconfig.DefaultBatchWindowMS,
-			CoverBudgetRatio: sharedconfig.DefaultCoverBudgetRatio,
-			CoverBudgetCap:   sharedconfig.DefaultCoverBudgetCap,
+		Shaper: shaper.Config{
+			BatchWindowMS: sharedconfig.DefaultBatchWindowMS,
+			BudgetRatio:   sharedconfig.DefaultCoverBudgetRatio,
+			BudgetCap:     sharedconfig.DefaultCoverBudgetCap,
 		},
-		Log: config.LogConfig{
+		Log: log.Config{
 			Level:    sharedconfig.DefaultLogLevel,
 			FilePath: "easyss.log",
 		},

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/util"
 )
@@ -173,7 +174,7 @@ func TestLoadConfigIgnoresRemovedTransportProtocols(t *testing.T) {
 // TestApplyDefaultsIsIdempotent 守护"已归一化的配置再次归一化不变"，也固定它
 // 只覆盖没有其他 owner 的字段：显式配置的日志级别必须原样保留。
 func TestApplyDefaultsIsIdempotent(t *testing.T) {
-	fc := FileConfig{Timeout: sharedconfig.MaxTimeout + 1, Log: LogConfig{Level: "debug"}}
+	fc := FileConfig{Timeout: sharedconfig.MaxTimeout + 1, Log: log.Config{Level: "debug"}}
 	applyDefaults(&fc)
 
 	require.Equal(t, sharedconfig.MaxTimeout, fc.Timeout)
@@ -467,7 +468,7 @@ func TestResolveFilePaths(t *testing.T) {
 		NextProxy: NextProxyConfig{
 			NextProxyFile: relNextProxy,
 		},
-		Log: LogConfig{
+		Log: log.Config{
 			FilePath: filepath.Join("logs", "easyss.log"),
 		},
 	}

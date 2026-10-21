@@ -192,11 +192,11 @@ func TestNewProxyHandler(t *testing.T) {
 		if h.shaperCfg.BatchWindowMS != sharedconfig.DefaultBatchWindowMS {
 			t.Errorf("BatchWindowMS = %d, want %d", h.shaperCfg.BatchWindowMS, sharedconfig.DefaultBatchWindowMS)
 		}
-		if h.shaperCfg.Cover.BudgetRatio != sharedconfig.DefaultCoverBudgetRatio {
-			t.Errorf("CoverBudgetRatio = %v, want %v", h.shaperCfg.Cover.BudgetRatio, sharedconfig.DefaultCoverBudgetRatio)
+		if h.shaperCfg.BudgetRatio != sharedconfig.DefaultCoverBudgetRatio {
+			t.Errorf("CoverBudgetRatio = %v, want %v", h.shaperCfg.BudgetRatio, sharedconfig.DefaultCoverBudgetRatio)
 		}
-		if h.shaperCfg.Cover.BudgetCap != sharedconfig.DefaultCoverBudgetCap {
-			t.Errorf("CoverBudgetCap = %d, want %d", h.shaperCfg.Cover.BudgetCap, sharedconfig.DefaultCoverBudgetCap)
+		if h.shaperCfg.BudgetCap != sharedconfig.DefaultCoverBudgetCap {
+			t.Errorf("CoverBudgetCap = %d, want %d", h.shaperCfg.BudgetCap, sharedconfig.DefaultCoverBudgetCap)
 		}
 	})
 

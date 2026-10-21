@@ -18,7 +18,6 @@ import (
 	sharedconfig "github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
-	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
 	"github.com/nange/easyss/v3/util"
@@ -111,17 +110,9 @@ func runWithOptions(cfg *config.ClientConfig, opts options) (*Core, error) {
 		method = protocol.MethodAES256GCM
 	}
 
-	shaperCfg := shaper.Config{
-		BatchWindowMS: cfg.Shaper.BatchWindowMS,
-		Cover: shaper.CoverConfig{
-			BudgetRatio: cfg.Shaper.CoverBudgetRatio,
-			BudgetCap:   cfg.Shaper.CoverBudgetCap,
-		},
-	}
-
 	timeouts := sharedconfig.NewTimeouts(cfg.TimeoutDuration())
 
-	streamHandler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), shaperCfg, timeouts)
+	streamHandler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), cfg.Shaper, timeouts)
 
 	c := &Core{
 		cfg:           cfg,

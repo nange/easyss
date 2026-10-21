@@ -15,7 +15,7 @@ var (
 )
 
 type coverInjector struct {
-	cfg              CoverConfig
+	cfg              Cover
 	mu               sync.Mutex
 	budget           float64
 	timer            *time.Timer
@@ -29,7 +29,7 @@ type coverInjector struct {
 }
 
 // 配置必须已经过 Config.Normalize——cover 默认值的唯一出处；BudgetRatio 为零时禁用。
-func newCoverInjector(cfg CoverConfig, inject func(protocol.Frame) error, isClosing func() bool) *coverInjector {
+func newCoverInjector(cfg Cover, inject func(protocol.Frame) error, isClosing func() bool) *coverInjector {
 	if cfg.BudgetRatio == 0 {
 		return nil
 	}

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestLogOutput(t *testing.T) {
@@ -134,28 +136,28 @@ func TestInit(t *testing.T) {
 	original := Logger()
 
 	t.Run("debug level", func(t *testing.T) {
-		Init("", "debug")
+		Init(Config{Level: "debug"})
 		if Logger() == nil {
 			t.Error("logger is nil after Init")
 		}
 	})
 
 	t.Run("warn level", func(t *testing.T) {
-		Init("", "warn")
+		Init(Config{Level: "warn"})
 		if Logger() == nil {
 			t.Error("logger is nil after Init")
 		}
 	})
 
 	t.Run("error level", func(t *testing.T) {
-		Init("", "error")
+		Init(Config{Level: "error"})
 		if Logger() == nil {
 			t.Error("logger is nil after Init")
 		}
 	})
 
 	t.Run("默认 info level", func(t *testing.T) {
-		Init("", "")
+		Init(Config{})
 		if Logger() == nil {
 			t.Error("logger is nil after Init")
 		}
@@ -170,7 +172,7 @@ func TestInit_WithFile(t *testing.T) {
 
 	original := Logger()
 
-	Init(logPath, "info")
+	Init(Config{FilePath: logPath, Level: "info"})
 
 	if Logger() == nil {
 		t.Error("logger is nil after Init with file")
@@ -220,7 +222,7 @@ func TestCloseFileOutput(t *testing.T) {
 
 	logPath := filepath.Join(t.TempDir(), "close.log")
 
-	Init(logPath, "debug")
+	Init(Config{FilePath: logPath, Level: "debug"})
 	t.Cleanup(func() {
 		// 兜底释放：否则 Windows 上的临时目录清理会再失败一次，把断言失败变成误导性的清理错误。
 		_ = CloseFileOutput()
@@ -257,7 +259,7 @@ func TestCloseFileOutput(t *testing.T) {
 	}
 	Info("after close")
 
-	Init(logPath, "info")
+	Init(Config{FilePath: logPath, Level: "info"})
 	Info("reopened")
 	data, err := os.ReadFile(logPath)
 	if err != nil {
@@ -277,7 +279,7 @@ func TestCloseFileOutputIsTerminalForStaleLoggers(t *testing.T) {
 
 	logPath := filepath.Join(t.TempDir(), "stale.log")
 
-	Init(logPath, "debug")
+	Init(Config{FilePath: logPath, Level: "debug"})
 	// 模拟在 CloseFileOutput 之前就拿到旧 logger 的后台 goroutine。
 	stale := Logger()
 
@@ -296,4 +298,16 @@ func TestCloseFileOutputIsTerminalForStaleLoggers(t *testing.T) {
 	} else if !os.IsNotExist(err) {
 		t.Fatalf("stat log file: %v", err)
 	}
+}
+
+// 固定 log.* 的键名（JSON 对象键序不属于契约）：客户端与服务端直接复用 Config，
+// file_path 之类的键名漂移会让用户配置静默失效。
+func TestConfigJSONShape(t *testing.T) {
+	data, err := json.Marshal(Config{Level: "debug", FilePath: "easyss.log"})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"level":"debug","file_path":"easyss.log"}`, string(data))
+
+	var got Config
+	require.NoError(t, json.Unmarshal([]byte(`{"level":"warn","file_path":"/tmp/easyss.log"}`), &got))
+	require.Equal(t, Config{Level: "warn", FilePath: "/tmp/easyss.log"}, got)
 }

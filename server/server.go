@@ -25,7 +25,6 @@ import (
 	"github.com/nange/easyss/v3/server/config"
 	"github.com/nange/easyss/v3/server/handler"
 	"github.com/nange/easyss/v3/server/nextproxy"
-	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/stats"
 )
 
@@ -333,15 +332,9 @@ func (s *Server) Start() error {
 		MasterKey:      masterKey,
 		AllowedMethods: srvCfg.GetAllowedMethods(),
 		Timeouts:       timeouts,
-		Shaper: shaper.Config{
-			BatchWindowMS: cfg.Shaper.BatchWindowMS,
-			Cover: shaper.CoverConfig{
-				BudgetRatio: cfg.Shaper.CoverBudgetRatio,
-				BudgetCap:   cfg.Shaper.CoverBudgetCap,
-			},
-		},
-		NextProxy: np,
-		Fallback:  fallback,
+		Shaper:         cfg.Shaper,
+		NextProxy:      np,
+		Fallback:       fallback,
 	})
 
 	probePayload := make([]byte, sharedconfig.ProbePayloadSize)

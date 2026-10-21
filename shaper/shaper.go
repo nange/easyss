@@ -31,17 +31,20 @@ type Shaper interface {
 	Close() error
 }
 
-type CoverConfig struct {
-	BudgetRatio float64 // cover 流量相对真实流量的预算比例，0.0-1.0（默认 0.03）
-	IdleTimeout int     // 发送 cover 帧前的空闲超时（毫秒）（默认 300）
-	MinSize     int     // cover 帧 payload 最小尺寸（字节）（默认 128）
-	MaxSize     int     // cover 帧 payload 最大尺寸（字节）（默认 1500）
-	BudgetCap   int     // 累计 cover 预算上限（字节），<=0 时使用默认值（16KB）
+// Cover 是 cover traffic 的参数：BudgetRatio/BudgetCap 是配置项，其余是伪装层固定属性。
+// 匿名嵌入 Config 后 encoding/json 会把配置项平铺成 shaper.* 的线格式，给嵌入字段加 tag 会变回嵌套。
+type Cover struct {
+	BudgetRatio float64 `json:"cover_budget_ratio"` // cover 流量相对真实流量的预算比例，0.0-1.0（默认 0.03）
+	IdleTimeout int     `json:"-"`                  // 发送 cover 帧前的空闲超时（毫秒）（默认 300）
+	MinSize     int     `json:"-"`                  // cover 帧 payload 最小尺寸（字节）（默认 128）
+	MaxSize     int     `json:"-"`                  // cover 帧 payload 最大尺寸（字节）（默认 1500）
+	BudgetCap   int     `json:"cover_budget_cap"`   // 累计 cover 预算上限（字节），<=0 时使用默认值（16KB）
 }
 
+// Config 同时是 shaper.* 的线格式（客户端与服务端共用）与运行时配置。
 type Config struct {
-	BatchWindowMS int
-	Cover         CoverConfig
+	BatchWindowMS int `json:"batch_window_ms"`
+	Cover
 }
 
 // maxBatchWindowMS 限制批处理延迟；下面的 cover 参数是伪装层的固定属性，
@@ -62,32 +65,32 @@ func (c Config) Normalize() Config {
 		c.BatchWindowMS = maxBatchWindowMS
 	}
 
-	if c.Cover.BudgetRatio <= 0 || c.Cover.BudgetRatio > 1 {
-		c.Cover.BudgetRatio = sharedconfig.DefaultCoverBudgetRatio
+	if c.BudgetRatio <= 0 || c.BudgetRatio > 1 {
+		c.BudgetRatio = sharedconfig.DefaultCoverBudgetRatio
 	}
-	if c.Cover.BudgetCap <= 0 {
-		c.Cover.BudgetCap = sharedconfig.DefaultCoverBudgetCap
+	if c.BudgetCap <= 0 {
+		c.BudgetCap = sharedconfig.DefaultCoverBudgetCap
 	}
-	if c.Cover.IdleTimeout <= 0 {
-		c.Cover.IdleTimeout = defaultCoverIdleTimeoutMS
+	if c.IdleTimeout <= 0 {
+		c.IdleTimeout = defaultCoverIdleTimeoutMS
 	}
-	if c.Cover.MinSize <= 0 {
-		c.Cover.MinSize = defaultCoverMinSize
+	if c.MinSize <= 0 {
+		c.MinSize = defaultCoverMinSize
 	}
-	if c.Cover.MaxSize <= 0 {
-		c.Cover.MaxSize = defaultCoverMaxSize
+	if c.MaxSize <= 0 {
+		c.MaxSize = defaultCoverMaxSize
 	}
 	// 钳制到记录上限：Frame.Length 是 uint16，cover payload 必须放得进一条记录，
 	// 否则会被单帧校验拒绝。不能用 protocol.MaxUDPDataSize，它会把合法 cover 配置一并削掉。
 	maxFramePayload := protocol.MaxWriteRecordPlaintext - protocol.FrameHeaderSize
-	if c.Cover.MinSize > maxFramePayload {
-		c.Cover.MinSize = maxFramePayload
+	if c.MinSize > maxFramePayload {
+		c.MinSize = maxFramePayload
 	}
-	if c.Cover.MaxSize > maxFramePayload {
-		c.Cover.MaxSize = maxFramePayload
+	if c.MaxSize > maxFramePayload {
+		c.MaxSize = maxFramePayload
 	}
-	if c.Cover.MaxSize < c.Cover.MinSize {
-		c.Cover.MaxSize = c.Cover.MinSize
+	if c.MaxSize < c.MinSize {
+		c.MaxSize = c.MinSize
 	}
 	return c
 }

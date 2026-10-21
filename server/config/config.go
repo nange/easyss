@@ -12,14 +12,11 @@ import (
 	"strings"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/util"
 )
-
-type LogConfig struct {
-	Level    string `json:"level"`
-	FilePath string `json:"file_path"`
-}
 
 // 0 值表示"使用 sharedconfig 中的默认值"（由 applyDefaults 写回）。每条连接的并发
 // 流上限不可配，固定为 sharedconfig.HTTP2ServerMaxConcurrentStreams。
@@ -38,12 +35,6 @@ type FallbackConfig struct {
 	Target       string   `json:"target"`
 	PreserveHost bool     `json:"preserve_host"`
 	CDNDomains   []string `json:"cdn_domains"`
-}
-
-type ShaperConfig struct {
-	BatchWindowMS    int     `json:"batch_window_ms"`
-	CoverBudgetRatio float64 `json:"cover_budget_ratio"`
-	CoverBudgetCap   int     `json:"cover_budget_cap"`
 }
 
 type NextProxyConfig struct {
@@ -124,10 +115,10 @@ type FileConfig struct {
 	ConfigVersion int             `json:"version"`
 	Server        ServerConfig    `json:"server"`
 	Fallback      FallbackConfig  `json:"fallback"`
-	Shaper        ShaperConfig    `json:"shaper"`
+	Shaper        shaper.Config   `json:"shaper"`
 	Transport     TransportConfig `json:"transport"`
 	NextProxy     NextProxyConfig `json:"next_proxy"`
-	Log           LogConfig       `json:"log"`
+	Log           log.Config      `json:"log"`
 	PprofEnabled  bool            `json:"pprof_enabled"`
 	Timeout       int             `json:"timeout"`
 }
@@ -313,17 +304,17 @@ func ExampleConfig() FileConfig {
 		Fallback: FallbackConfig{
 			CDNDomains: []string{},
 		},
-		Shaper: ShaperConfig{
-			BatchWindowMS:    sharedconfig.DefaultBatchWindowMS,
-			CoverBudgetRatio: sharedconfig.DefaultCoverBudgetRatio,
-			CoverBudgetCap:   sharedconfig.DefaultCoverBudgetCap,
+		Shaper: shaper.Config{
+			BatchWindowMS: sharedconfig.DefaultBatchWindowMS,
+			BudgetRatio:   sharedconfig.DefaultCoverBudgetRatio,
+			BudgetCap:     sharedconfig.DefaultCoverBudgetCap,
 		},
 		Transport: TransportConfig{
 			H2MaxFrameSize:  sharedconfig.HTTP2ServerMaxReadFrameSize,
 			H2RecvBufConn:   sharedconfig.HTTP2ServerReceiveBufferPerConnection,
 			H2RecvBufStream: sharedconfig.HTTP2ServerReceiveBufferPerStream,
 		},
-		Log: LogConfig{
+		Log: log.Config{
 			Level:    sharedconfig.DefaultLogLevel,
 			FilePath: "easyss.log",
 		},

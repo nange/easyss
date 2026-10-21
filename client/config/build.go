@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/shaper"
 )
 
 func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
@@ -52,10 +54,10 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 			Protocol:     proto,
 			ConnCountMax: sharedconfig.DefaultConnCountMax,
 		},
-		Shaper: ShaperConfig{
+		Shaper: shaper.Config{
 			BatchWindowMS: sharedconfig.DefaultBatchWindowMS,
 		},
-		Log: LogConfig{
+		Log: log.Config{
 			Level:    s.LogLevel,
 			FilePath: s.LogFilePath,
 		},
