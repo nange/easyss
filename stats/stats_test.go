@@ -1,6 +1,9 @@
 package stats
 
 import (
+	"encoding/json"
+	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -45,64 +48,151 @@ func TestClearStartTime(t *testing.T) {
 	}
 }
 
-func TestResetCounters(t *testing.T) {
-	RecordStreamOpened()
-	RecordStreamOpened()
-	RecordStreamClosed()
-	RecordBytesSent(100)
-	RecordBytesRecv(200)
-	RecordRawBytesSent(300)
-	RecordRawBytesRecv(400)
-	RecordTCPConnection()
-	RecordUDPAssociation()
-	RecordDNSCacheHit()
-	RecordDNSCacheMiss()
-	RecordDNSProxyQuery()
-	RecordDNSDirectQuery()
-	RecordPaddingBytes(500)
-	RecordRecordWritten()
-	RecordStreamOpenedPriority()
-	RecordStreamOpenedBulk()
-	RecordPriorityFallback()
-	RecordBulkFallback()
-	RecordTierExpiring()
-	RecordTierHeavy()
-	RecordTierDegraded()
-	RecordTierRetiringSkipped()
-	RecordRTT(100 * time.Millisecond)
-	RecordServerTCPStream()
-	RecordServerUDPStream()
-	RecordServerICMPStream()
-	RecordServerHandshakeError()
-	RecordServerStreamCancel()
-	RecordServerFallbackPage()
-	g.uploadSpeed.Store(1000)
-	g.downloadSpeed.Store(2000)
-	g.peakUploadSpeed.Store(3000)
-	g.peakDownloadSpeed.Store(4000)
+// TestCounterTableCoversEveryAtomicField 守住"一个计数器 = 表里一行"：stats 里新增
+// atomic.Int64 却没登记，Reset/Collect 都会静默漏掉它，因此这里让构建失败。
+func TestCounterTableCoversEveryAtomicField(t *testing.T) {
+	registered := make(map[uintptr]string, len(counters)+2)
+	for i, c := range counters {
+		addr := reflect.ValueOf(c.ptr).Pointer()
+		if prev, dup := registered[addr]; dup {
+			t.Fatalf("counters[%d] repeats the counter registered by %s", i, prev)
+		}
+		registered[addr] = "counters"
+	}
+	for _, c := range derivedCounters {
+		addr := reflect.ValueOf(c.ptr).Pointer()
+		if prev, dup := registered[addr]; dup {
+			t.Fatalf("derived counter repeats the counter registered by %s", prev)
+		}
+		registered[addr] = "derivedCounters"
+	}
 
+	rv := reflect.ValueOf(g).Elem()
+	atomicFields := 0
+	for i := range rv.NumField() {
+		f := rv.Field(i)
+		if f.Type() != reflect.TypeFor[atomic.Int64]() {
+			continue
+		}
+		atomicFields++
+		name := rv.Type().Field(i).Name
+		addr := f.Addr().Pointer()
+		if _, ok := registered[addr]; !ok {
+			t.Fatalf("atomic counter %s is missing from counters", name)
+		}
+		delete(registered, addr)
+	}
+	if len(registered) != 0 {
+		t.Fatalf("%d registered counters do not belong to stats", len(registered))
+	}
+	if want := len(counters) + len(derivedCounters); atomicFields != want {
+		t.Fatalf("stats has %d atomic counters, tables register %d", atomicFields, want)
+	}
+}
+
+// TestCounterTableTargetsEverySnapshotField 守住映射的另一端：每个 int64 快照字段都要有
+// 且只有一个来源，否则 Collect 会留下恒为 0 的字段或让两个计数器互相覆盖。
+func TestCounterTableTargetsEverySnapshotField(t *testing.T) {
+	var snap Snapshot
+	targets := make(map[uintptr]int, len(counters))
+	for i, c := range counters {
+		addr := reflect.ValueOf(c.dst(&snap)).Pointer()
+		if prev, dup := targets[addr]; dup {
+			t.Fatalf("counters[%d] and counters[%d] write the same snapshot field", prev, i)
+		}
+		targets[addr] = i
+	}
+
+	var uncovered []string
+	walkInt64Fields(reflect.ValueOf(&snap).Elem(), "", func(name string, addr uintptr) {
+		if _, ok := targets[addr]; !ok {
+			uncovered = append(uncovered, name)
+		}
+	})
+	// RTTEWMA 由 RecordRTT 在 mutex 下维护，不是原子计数器。
+	if len(uncovered) != 1 || uncovered[0] != "RTTStats.RTTEWMA" {
+		t.Fatalf("snapshot int64 fields without a counter: %v", uncovered)
+	}
+}
+
+func walkInt64Fields(v reflect.Value, prefix string, fn func(string, uintptr)) {
+	if v.Kind() != reflect.Struct {
+		return
+	}
+	for i := range v.NumField() {
+		f := v.Field(i)
+		name := prefix + v.Type().Field(i).Name
+		switch {
+		case f.Type() == reflect.TypeFor[time.Time]():
+		case f.Kind() == reflect.Struct:
+			walkInt64Fields(f, name+".", fn)
+		case f.Type() == reflect.TypeFor[int64]():
+			fn(name, f.Addr().Pointer())
+		}
+	}
+}
+
+// TestCountersRoundTrip 让每个计数器经过 Collect 与 Reset 各一次：表里的 dst 指错字段
+// （与另一个计数器互换）会在这里表现为重复或遗漏，而 Reset 漏项同样会被抓到。
+func TestCountersRoundTrip(t *testing.T) {
+	t.Cleanup(ResetCounters)
 	ResetCounters()
 
+	for i, c := range counters {
+		c.ptr.Store(int64(i + 1))
+	}
+	g.peakUploadSpeed.Store(1 << 20)
+	g.peakDownloadSpeed.Store(2 << 20)
+
 	snap := Collect()
-	if snap.TotalStreamsOpened != 0 || snap.TotalStreamsClosed != 0 ||
-		snap.BytesSent != 0 || snap.BytesRecv != 0 ||
-		snap.RawBytesSent != 0 || snap.RawBytesRecv != 0 ||
-		snap.TCPConnections != 0 || snap.UDPAssociations != 0 ||
-		snap.DNSCacheHits != 0 || snap.DNSCacheMisses != 0 ||
-		snap.DNSProxyQueries != 0 || snap.DNSDirectQueries != 0 ||
-		snap.PaddingBytes != 0 || snap.RecordsWritten != 0 ||
-		snap.PriorityStreamsOpened != 0 || snap.BulkStreamsOpened != 0 ||
-		snap.PriorityFallback != 0 || snap.BulkFallback != 0 ||
-		snap.TierExpiringScheduled != 0 || snap.TierHeavyScheduled != 0 ||
-		snap.TierDegradedScheduled != 0 || snap.TierRetiringSkipped != 0 ||
-		snap.RTTCount != 0 || snap.RTTEWMA != 0 ||
-		snap.UploadSpeed != 0 || snap.DownloadSpeed != 0 ||
-		snap.PeakUploadSpeedHuman != "0 B/s" || snap.PeakDownloadSpeedHuman != "0 B/s" ||
-		snap.ServerTCPStreams != 0 || snap.ServerUDPStreams != 0 ||
-		snap.ServerICMPStreams != 0 || snap.ServerHandshakeErrors != 0 ||
-		snap.ServerStreamCancels != 0 ||
-		snap.ServerFallbackPages != 0 {
-		t.Fatalf("counters not fully reset: %+v", snap)
+	for i, c := range counters {
+		if got := *c.dst(&snap); got != int64(i+1) {
+			t.Fatalf("counters[%d]: snapshot value = %d, want %d", i, got, i+1)
+		}
+	}
+	if snap.PeakUploadSpeedHuman != "1.0 MB/s" || snap.PeakDownloadSpeedHuman != "2.0 MB/s" {
+		t.Fatalf("peak speed human strings = %q, %q", snap.PeakUploadSpeedHuman, snap.PeakDownloadSpeedHuman)
+	}
+
+	ResetCounters()
+	snap = Collect()
+	for i, c := range counters {
+		if got := *c.dst(&snap); got != 0 {
+			t.Fatalf("counters[%d] not reset: %d", i, got)
+		}
+	}
+	if snap.RTTEWMA != 0 {
+		t.Fatalf("RTTEWMA not reset: %d", snap.RTTEWMA)
+	}
+	if snap.PeakUploadSpeedHuman != "0 B/s" || snap.PeakDownloadSpeedHuman != "0 B/s" {
+		t.Fatalf("peak speed not reset: %q, %q", snap.PeakUploadSpeedHuman, snap.PeakDownloadSpeedHuman)
+	}
+}
+
+// TestSnapshotJSONStaysFlat 守住对外契约：分段只是代码组织方式，JSON 仍然是原来的平铺键。
+func TestSnapshotJSONStaysFlat(t *testing.T) {
+	ResetCounters()
+	b, err := json.Marshal(Collect())
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal snapshot: %v", err)
+	}
+	for _, key := range []string{
+		"total_streams_opened", "bytes_sent", "dns_cache_hits", "upload_speed",
+		"priority_fallback", "rtt_count", "avg_rtt_ms", "conn_rotated",
+		"suspend_detected", "uptime_seconds",
+	} {
+		if _, ok := decoded[key]; !ok {
+			t.Errorf("snapshot JSON lost the flat key %q", key)
+		}
+	}
+	for _, key := range []string{"SessionStats", "TransportHealthStats", "RTTStats"} {
+		if _, ok := decoded[key]; ok {
+			t.Errorf("snapshot JSON leaked the section %q", key)
+		}
 	}
 }
 
@@ -130,7 +220,6 @@ func TestCollectConcurrentWithReset(t *testing.T) {
 func TestStreamMeterStartsLoopLazily(t *testing.T) {
 	m := NewStreamMeter("test", "example.com:80")
 	defer m.Close()
-
 	if m.loopStarted.Load() {
 		t.Fatal("构造时不应启动观察 goroutine")
 	}
@@ -138,7 +227,7 @@ func TestStreamMeterStartsLoopLazily(t *testing.T) {
 	// 累计到阈值以下：仍然不应启动。
 	m.Add(int(stallThreshold)-1, "read_target")
 	if m.loopStarted.Load() {
-		t.Fatalf("未越过阈值 (%d) 就不应启动观察 goroutine", m.Bytes())
+		t.Fatalf("未越过阈值 (%d) 就不应启动观察 goroutine", stallThreshold)
 	}
 
 	// 越过阈值：此时才启动。

@@ -167,103 +167,148 @@ func ClearStartTime() {
 	g.startTime.Store(nil)
 }
 
-func ResetCounters() {
-	g.totalStreamsOpened.Store(0)
-	g.totalStreamsClosed.Store(0)
-	g.bytesSent.Store(0)
-	g.bytesRecv.Store(0)
-	g.rawBytesSent.Store(0)
-	g.rawBytesRecv.Store(0)
-	g.tcpConnections.Store(0)
-	g.udpAssociations.Store(0)
-	g.dnsCacheHits.Store(0)
-	g.dnsCacheMisses.Store(0)
-	g.dnsProxyQueries.Store(0)
-	g.dnsDirectQueries.Store(0)
-	g.paddingBytes.Store(0)
-	g.recordsWritten.Store(0)
-	g.priorityStreamsOpened.Store(0)
-	g.bulkStreamsOpened.Store(0)
-	g.priorityFallback.Store(0)
-	g.bulkFallback.Store(0)
-	g.tierExpiringScheduled.Store(0)
-	g.tierHeavyScheduled.Store(0)
-	g.tierDegradedScheduled.Store(0)
-	g.tierRetiringSkipped.Store(0)
-	g.slotDegraded.Store(0)
-	g.slotRetiredDegraded.Store(0)
-	g.connRotated.Store(0)
-	g.secondConnInGeneration.Store(0)
-	g.slotProbes.Store(0)
-	g.slotProbeSlow.Store(0)
-	g.slotProbeUnsupported.Store(0)
-	g.slotGrownPriority.Store(0)
-	g.slotGrownBulk.Store(0)
-	g.streamsDrained.Store(0)
-	g.suspendDetected.Store(0)
-	g.suspendReverifyAlive.Store(0)
-	g.suspendReverifyReplaced.Store(0)
+// counter 把一个全局计数器绑定到快照里的 int64 字段。ResetCounters 与 Collect 都只遍历这张表，
+// 新增计数器时若漏登记，stats 包的测试会失败。
+type counter struct {
+	ptr *atomic.Int64
+	dst func(*Snapshot) *int64
+}
 
+// derivedCounter 是没有 int64 快照字段、只派生为字符串的计数器（峰值速度）。
+type derivedCounter struct {
+	ptr   *atomic.Int64
+	apply func(*Snapshot, int64)
+}
+
+var counters = []counter{
+	{&g.totalStreamsOpened, func(s *Snapshot) *int64 { return &s.TotalStreamsOpened }},
+	{&g.totalStreamsClosed, func(s *Snapshot) *int64 { return &s.TotalStreamsClosed }},
+	{&g.bytesSent, func(s *Snapshot) *int64 { return &s.BytesSent }},
+	{&g.bytesRecv, func(s *Snapshot) *int64 { return &s.BytesRecv }},
+	{&g.rawBytesSent, func(s *Snapshot) *int64 { return &s.RawBytesSent }},
+	{&g.rawBytesRecv, func(s *Snapshot) *int64 { return &s.RawBytesRecv }},
+	{&g.tcpConnections, func(s *Snapshot) *int64 { return &s.TCPConnections }},
+	{&g.udpAssociations, func(s *Snapshot) *int64 { return &s.UDPAssociations }},
+	{&g.paddingBytes, func(s *Snapshot) *int64 { return &s.PaddingBytes }},
+	{&g.recordsWritten, func(s *Snapshot) *int64 { return &s.RecordsWritten }},
+
+	{&g.dnsCacheHits, func(s *Snapshot) *int64 { return &s.DNSCacheHits }},
+	{&g.dnsCacheMisses, func(s *Snapshot) *int64 { return &s.DNSCacheMisses }},
+	{&g.dnsProxyQueries, func(s *Snapshot) *int64 { return &s.DNSProxyQueries }},
+	{&g.dnsDirectQueries, func(s *Snapshot) *int64 { return &s.DNSDirectQueries }},
+
+	{&g.uploadSpeed, func(s *Snapshot) *int64 { return &s.UploadSpeed }},
+	{&g.downloadSpeed, func(s *Snapshot) *int64 { return &s.DownloadSpeed }},
+
+	{&g.priorityStreamsOpened, func(s *Snapshot) *int64 { return &s.PriorityStreamsOpened }},
+	{&g.bulkStreamsOpened, func(s *Snapshot) *int64 { return &s.BulkStreamsOpened }},
+	{&g.priorityFallback, func(s *Snapshot) *int64 { return &s.PriorityFallback }},
+	{&g.bulkFallback, func(s *Snapshot) *int64 { return &s.BulkFallback }},
+
+	{&g.rttCount, func(s *Snapshot) *int64 { return &s.RTTCount }},
+
+	{&g.tierExpiringScheduled, func(s *Snapshot) *int64 { return &s.TierExpiringScheduled }},
+	{&g.tierHeavyScheduled, func(s *Snapshot) *int64 { return &s.TierHeavyScheduled }},
+	{&g.tierDegradedScheduled, func(s *Snapshot) *int64 { return &s.TierDegradedScheduled }},
+	{&g.tierRetiringSkipped, func(s *Snapshot) *int64 { return &s.TierRetiringSkipped }},
+	{&g.slotDegraded, func(s *Snapshot) *int64 { return &s.SlotDegraded }},
+	{&g.slotRetiredDegraded, func(s *Snapshot) *int64 { return &s.SlotRetiredDegraded }},
+	{&g.connRotated, func(s *Snapshot) *int64 { return &s.ConnRotated }},
+	{&g.secondConnInGeneration, func(s *Snapshot) *int64 { return &s.SecondConnInGeneration }},
+	{&g.slotProbes, func(s *Snapshot) *int64 { return &s.SlotProbes }},
+	{&g.slotProbeSlow, func(s *Snapshot) *int64 { return &s.SlotProbeSlow }},
+	{&g.slotProbeUnsupported, func(s *Snapshot) *int64 { return &s.SlotProbeUnsupported }},
+	{&g.slotGrownPriority, func(s *Snapshot) *int64 { return &s.SlotGrownPriority }},
+	{&g.slotGrownBulk, func(s *Snapshot) *int64 { return &s.SlotGrownBulk }},
+	{&g.streamsDrained, func(s *Snapshot) *int64 { return &s.StreamsDrained }},
+	{&g.suspendDetected, func(s *Snapshot) *int64 { return &s.SuspendDetected }},
+	{&g.suspendReverifyAlive, func(s *Snapshot) *int64 { return &s.SuspendReverifyAlive }},
+	{&g.suspendReverifyReplaced, func(s *Snapshot) *int64 { return &s.SuspendReverifyReplaced }},
+
+	{&g.serverTCPStreams, func(s *Snapshot) *int64 { return &s.ServerTCPStreams }},
+	{&g.serverUDPStreams, func(s *Snapshot) *int64 { return &s.ServerUDPStreams }},
+	{&g.serverICMPStreams, func(s *Snapshot) *int64 { return &s.ServerICMPStreams }},
+	{&g.serverHandshakeErrors, func(s *Snapshot) *int64 { return &s.ServerHandshakeErrors }},
+	{&g.serverStreamCancels, func(s *Snapshot) *int64 { return &s.ServerStreamCancels }},
+	{&g.serverFallbackPages, func(s *Snapshot) *int64 { return &s.ServerFallbackPages }},
+	{&g.serverProbes, func(s *Snapshot) *int64 { return &s.ServerProbes }},
+}
+
+var derivedCounters = []derivedCounter{
+	{&g.peakUploadSpeed, func(s *Snapshot, v int64) { s.PeakUploadSpeedHuman = HumanBytes(v) + "/s" }},
+	{&g.peakDownloadSpeed, func(s *Snapshot, v int64) { s.PeakDownloadSpeedHuman = HumanBytes(v) + "/s" }},
+}
+
+func ResetCounters() {
+	for _, c := range counters {
+		c.ptr.Store(0)
+	}
+	for _, c := range derivedCounters {
+		c.ptr.Store(0)
+	}
 	g.rttMu.Lock()
 	g.rttEWMA = 0
 	g.rttMu.Unlock()
-	g.rttCount.Store(0)
-
-	g.uploadSpeed.Store(0)
-	g.downloadSpeed.Store(0)
-	g.peakUploadSpeed.Store(0)
-	g.peakDownloadSpeed.Store(0)
-
-	g.serverTCPStreams.Store(0)
-	g.serverUDPStreams.Store(0)
-	g.serverICMPStreams.Store(0)
-	g.serverHandshakeErrors.Store(0)
-	g.serverStreamCancels.Store(0)
-	g.serverFallbackPages.Store(0)
-	g.serverProbes.Store(0)
 }
 
-// Snapshot 是所有计数器和派生指标的时点副本。
-type Snapshot struct {
-	TotalStreamsOpened    int64 `json:"total_streams_opened"`
-	TotalStreamsClosed    int64 `json:"total_streams_closed"`
-	BytesSent             int64 `json:"bytes_sent"`
-	BytesRecv             int64 `json:"bytes_recv"`
-	RawBytesSent          int64 `json:"raw_bytes_sent"`
-	RawBytesRecv          int64 `json:"raw_bytes_recv"`
-	TCPConnections        int64 `json:"tcp_connections"`
-	UDPAssociations       int64 `json:"udp_associations"`
-	DNSCacheHits          int64 `json:"dns_cache_hits"`
-	DNSCacheMisses        int64 `json:"dns_cache_misses"`
-	DNSProxyQueries       int64 `json:"dns_proxy_queries"`
-	DNSDirectQueries      int64 `json:"dns_direct_queries"`
-	PaddingBytes          int64 `json:"padding_bytes"`
-	RecordsWritten        int64 `json:"records_written"`
-	RTTCount              int64 `json:"rtt_count"`
-	RTTEWMA               int64 `json:"rtt_ewma_ns"`
-	ServerTCPStreams      int64 `json:"server_tcp_streams,omitempty"`
-	ServerUDPStreams      int64 `json:"server_udp_streams,omitempty"`
-	ServerICMPStreams     int64 `json:"server_icmp_streams,omitempty"`
-	ServerHandshakeErrors int64 `json:"server_handshake_errors,omitempty"`
-	ServerStreamCancels   int64 `json:"server_stream_cancels,omitempty"`
-	ServerFallbackPages   int64 `json:"server_fallback_pages,omitempty"`
-	ServerProbes          int64 `json:"server_probes,omitempty"`
+// SessionStats 是会话累计量：流、原始/加密字节与连接次数。
+type SessionStats struct {
+	TotalStreamsOpened int64 `json:"total_streams_opened"`
+	TotalStreamsClosed int64 `json:"total_streams_closed"`
+	BytesSent          int64 `json:"bytes_sent"`
+	BytesRecv          int64 `json:"bytes_recv"`
+	RawBytesSent       int64 `json:"raw_bytes_sent"`
+	RawBytesRecv       int64 `json:"raw_bytes_recv"`
+	TCPConnections     int64 `json:"tcp_connections"`
+	UDPAssociations    int64 `json:"udp_associations"`
+	PaddingBytes       int64 `json:"padding_bytes"`
+	RecordsWritten     int64 `json:"records_written"`
+}
+
+// DNSStats 是客户端 DNS 拦截与缓存的分流计数。
+type DNSStats struct {
+	DNSCacheHits     int64 `json:"dns_cache_hits"`
+	DNSCacheMisses   int64 `json:"dns_cache_misses"`
+	DNSProxyQueries  int64 `json:"dns_proxy_queries"`
+	DNSDirectQueries int64 `json:"dns_direct_queries"`
+}
+
+// SpeedStats 是速度监控器维护的吞吐量；Human 字段是快照时点的派生字符串，峰值只以字符串形式暴露。
+type SpeedStats struct {
+	UploadSpeed            int64  `json:"upload_speed"`
+	DownloadSpeed          int64  `json:"download_speed"`
+	UploadSpeedHuman       string `json:"upload_speed_human"`
+	DownloadSpeedHuman     string `json:"download_speed_human"`
+	PeakUploadSpeedHuman   string `json:"peak_upload_speed_human"`
+	PeakDownloadSpeedHuman string `json:"peak_download_speed_human"`
+}
+
+// DispatchStats 是分档调度的结果（仅客户端侧）。
+type DispatchStats struct {
 	PriorityStreamsOpened int64 `json:"priority_streams_opened"`
 	BulkStreamsOpened     int64 `json:"bulk_streams_opened"`
 	PriorityFallback      int64 `json:"priority_fallback"`
 	BulkFallback          int64 `json:"bulk_fallback"`
+}
 
-	// 分档调度（仅客户端侧，服务端为零）
+// RTTStats 是纯路径 RTT。除计数器外还有健康循环的判据（AvgRTT），不是纯诊断数据。
+type RTTStats struct {
+	RTTCount int64   `json:"rtt_count"`
+	RTTEWMA  int64   `json:"rtt_ewma_ns"`
+	AvgRTTMs float64 `json:"avg_rtt_ms"`
+}
+
+// TransportHealthStats 是客户端传输层启发式的内部仪表盘（tier 选择、槽位探测/退役、轮换、
+// 挂起复核与"代 == 连接"不变量）。它们只描述本进程的判断过程，字段名不承诺兼容。
+type TransportHealthStats struct {
 	TierExpiringScheduled int64 `json:"tier_expiring_scheduled"`
 	TierHeavyScheduled    int64 `json:"tier_heavy_scheduled"`
 	TierDegradedScheduled int64 `json:"tier_degraded_scheduled"`
 	TierRetiringSkipped   int64 `json:"tier_retiring_skipped"`
 
-	// 传输健康度（仅客户端侧，服务端为零）
-	SlotDegraded        int64 `json:"slot_degraded"`
-	SlotRetiredDegraded int64 `json:"slot_retired_degraded"`
-	ConnRotated         int64 `json:"conn_rotated"`
-	// SecondConnInGeneration 恒为 0 说明传输层的"代 == 连接"不变量没有被破坏过。
+	SlotDegraded           int64 `json:"slot_degraded"`
+	SlotRetiredDegraded    int64 `json:"slot_retired_degraded"`
+	ConnRotated            int64 `json:"conn_rotated"`
 	SecondConnInGeneration int64 `json:"second_conn_in_generation"`
 	SlotProbes             int64 `json:"slot_probes"`
 	SlotProbeSlow          int64 `json:"slot_probe_slow"`
@@ -272,25 +317,37 @@ type Snapshot struct {
 	SlotGrownBulk          int64 `json:"slot_grown_bulk"`
 	StreamsDrained         int64 `json:"streams_drained"`
 
-	// 挂起复核（仅客户端侧，服务端为零）
 	SuspendDetected         int64 `json:"suspend_detected"`
 	SuspendReverifyAlive    int64 `json:"suspend_reverify_alive"`
 	SuspendReverifyReplaced int64 `json:"suspend_reverify_replaced"`
+}
 
-	UploadSpeed            int64  `json:"upload_speed"`
-	DownloadSpeed          int64  `json:"download_speed"`
-	UploadSpeedHuman       string `json:"upload_speed_human"`
-	DownloadSpeedHuman     string `json:"download_speed_human"`
-	PeakUploadSpeedHuman   string `json:"peak_upload_speed_human"`
-	PeakDownloadSpeedHuman string `json:"peak_download_speed_human"`
+// ServerStats 只在服务端有值。
+type ServerStats struct {
+	ServerTCPStreams      int64 `json:"server_tcp_streams,omitempty"`
+	ServerUDPStreams      int64 `json:"server_udp_streams,omitempty"`
+	ServerICMPStreams     int64 `json:"server_icmp_streams,omitempty"`
+	ServerHandshakeErrors int64 `json:"server_handshake_errors,omitempty"`
+	ServerStreamCancels   int64 `json:"server_stream_cancels,omitempty"`
+	ServerFallbackPages   int64 `json:"server_fallback_pages,omitempty"`
+	ServerProbes          int64 `json:"server_probes,omitempty"`
+}
 
-	// 传输统计（内嵌，仅客户端侧，服务端为零）
+// Snapshot 是所有计数器和派生指标的时点副本。计数器按语义分段嵌入，JSON 仍然是平铺的。
+type Snapshot struct {
+	SessionStats
+	DNSStats
+	SpeedStats
+	DispatchStats
+	RTTStats
+	TransportHealthStats
+	ServerStats
+
+	// 传输层实时状态（连接数与在飞流），由调用方从 Transport 取得后填入。
 	transport.TransportStats
 
-	UptimeSeconds float64 `json:"uptime_seconds"`
-	AvgRTTMs      float64 `json:"avg_rtt_ms"`
-
-	StartTime time.Time `json:"start_time"`
+	UptimeSeconds float64   `json:"uptime_seconds"`
+	StartTime     time.Time `json:"start_time"`
 }
 
 func (s Snapshot) AvgRTT() time.Duration {
@@ -309,77 +366,27 @@ func (s Snapshot) Uptime() time.Duration {
 }
 
 func Collect() Snapshot {
+	var s Snapshot
+	for _, c := range counters {
+		*c.dst(&s) = c.ptr.Load()
+	}
+	for _, c := range derivedCounters {
+		c.apply(&s, c.ptr.Load())
+	}
+
 	g.rttMu.Lock()
-	ewma := g.rttEWMA
+	s.RTTEWMA = g.rttEWMA
 	g.rttMu.Unlock()
 
-	upSpeed := g.uploadSpeed.Load()
-	downSpeed := g.downloadSpeed.Load()
+	s.UploadSpeedHuman = HumanBytes(s.UploadSpeed) + "/s"
+	s.DownloadSpeedHuman = HumanBytes(s.DownloadSpeed) + "/s"
+	s.AvgRTTMs = float64(time.Duration(s.RTTEWMA).Microseconds()) / 1000.0
 
-	start := g.startTime.Load()
-	var startTime time.Time
-	var uptimeSeconds float64
-	if start != nil {
-		startTime = *start
-		uptimeSeconds = time.Since(startTime).Seconds()
+	if start := g.startTime.Load(); start != nil {
+		s.StartTime = *start
+		s.UptimeSeconds = time.Since(*start).Seconds()
 	}
-
-	return Snapshot{
-		TotalStreamsOpened:     g.totalStreamsOpened.Load(),
-		TotalStreamsClosed:     g.totalStreamsClosed.Load(),
-		BytesSent:              g.bytesSent.Load(),
-		BytesRecv:              g.bytesRecv.Load(),
-		RawBytesSent:           g.rawBytesSent.Load(),
-		RawBytesRecv:           g.rawBytesRecv.Load(),
-		TCPConnections:         g.tcpConnections.Load(),
-		UDPAssociations:        g.udpAssociations.Load(),
-		DNSCacheHits:           g.dnsCacheHits.Load(),
-		DNSCacheMisses:         g.dnsCacheMisses.Load(),
-		DNSProxyQueries:        g.dnsProxyQueries.Load(),
-		DNSDirectQueries:       g.dnsDirectQueries.Load(),
-		PaddingBytes:           g.paddingBytes.Load(),
-		RecordsWritten:         g.recordsWritten.Load(),
-		RTTEWMA:                ewma,
-		RTTCount:               g.rttCount.Load(),
-		ServerTCPStreams:       g.serverTCPStreams.Load(),
-		ServerUDPStreams:       g.serverUDPStreams.Load(),
-		ServerICMPStreams:      g.serverICMPStreams.Load(),
-		ServerHandshakeErrors:  g.serverHandshakeErrors.Load(),
-		ServerStreamCancels:    g.serverStreamCancels.Load(),
-		ServerFallbackPages:    g.serverFallbackPages.Load(),
-		ServerProbes:           g.serverProbes.Load(),
-		PriorityStreamsOpened:  g.priorityStreamsOpened.Load(),
-		BulkStreamsOpened:      g.bulkStreamsOpened.Load(),
-		PriorityFallback:       g.priorityFallback.Load(),
-		BulkFallback:           g.bulkFallback.Load(),
-		TierExpiringScheduled:  g.tierExpiringScheduled.Load(),
-		TierHeavyScheduled:     g.tierHeavyScheduled.Load(),
-		TierDegradedScheduled:  g.tierDegradedScheduled.Load(),
-		TierRetiringSkipped:    g.tierRetiringSkipped.Load(),
-		SlotDegraded:           g.slotDegraded.Load(),
-		SlotRetiredDegraded:    g.slotRetiredDegraded.Load(),
-		ConnRotated:            g.connRotated.Load(),
-		SecondConnInGeneration: g.secondConnInGeneration.Load(),
-		SlotProbes:             g.slotProbes.Load(),
-		SlotProbeSlow:          g.slotProbeSlow.Load(),
-		SlotProbeUnsupported:   g.slotProbeUnsupported.Load(),
-		SlotGrownPriority:      g.slotGrownPriority.Load(),
-		SlotGrownBulk:          g.slotGrownBulk.Load(),
-		StreamsDrained:         g.streamsDrained.Load(),
-		UploadSpeed:            upSpeed,
-		DownloadSpeed:          downSpeed,
-		UploadSpeedHuman:       HumanBytes(upSpeed) + "/s",
-		DownloadSpeedHuman:     HumanBytes(downSpeed) + "/s",
-		PeakUploadSpeedHuman:   HumanBytes(g.peakUploadSpeed.Load()) + "/s",
-		PeakDownloadSpeedHuman: HumanBytes(g.peakDownloadSpeed.Load()) + "/s",
-		UptimeSeconds:          uptimeSeconds,
-		AvgRTTMs:               float64(time.Duration(ewma).Microseconds()) / 1000.0,
-		StartTime:              startTime,
-
-		SuspendDetected:         g.suspendDetected.Load(),
-		SuspendReverifyAlive:    g.suspendReverifyAlive.Load(),
-		SuspendReverifyReplaced: g.suspendReverifyReplaced.Load(),
-	}
+	return s
 }
 
 func HumanBytes(n int64) string {
