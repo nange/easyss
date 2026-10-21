@@ -56,13 +56,58 @@ func (h *StreamHandler) Transport() transport.Transport {
 	return h.transport
 }
 
+// streamRequest 是一条流的不可变请求。endpoint 与 proto 必须成对，由 tcp/udp/icmp
+// 构造函数保证；frames 是合并进引导记录的首批帧（TCP 首批数据 / ICMP echo / UDP 首个数据报）。
+type streamRequest struct {
+	endpoint      string
+	proto         protocol.Proto
+	target        string
+	method        protocol.Method
+	frames        []protocol.Frame
+	batchWindowMS int
+}
+
+func tcpStreamRequest(target string, method protocol.Method) streamRequest {
+	return newStreamRequest(config.EndpointTCP, protocol.ProtoTCP, target, method)
+}
+
+func udpStreamRequest(target string, method protocol.Method) streamRequest {
+	return newStreamRequest(config.EndpointUDP, protocol.ProtoUDP, target, method)
+}
+
+func icmpStreamRequest(target string, method protocol.Method) streamRequest {
+	return newStreamRequest(config.EndpointICMP, protocol.ProtoICMP, target, method)
+}
+
+func newStreamRequest(endpoint string, proto protocol.Proto, target string, method protocol.Method) streamRequest {
+	return streamRequest{endpoint: endpoint, proto: proto, target: target, method: method}
+}
+
+func (r streamRequest) withFrames(frames ...protocol.Frame) streamRequest {
+	r.frames = frames
+	return r
+}
+
+func (r streamRequest) withBatchWindow(ms int) streamRequest {
+	r.batchWindowMS = ms
+	return r
+}
+
+func (r streamRequest) firstPayloadBytes() int {
+	if len(r.frames) == 0 {
+		return 0
+	}
+	return len(r.frames[0].Payload)
+}
+
 func (h *StreamHandler) OpenTCPStream(ctx context.Context, target string, method protocol.Method, localConn net.Conn) error {
 	stats.RecordTCPConnection()
-	return h.openStream(ctx, config.EndpointTCP, protocol.ProtoTCP, target, method, localConn)
+	return h.openStream(ctx, tcpStreamRequest(target, method), localConn)
 }
 
 func (h *StreamHandler) OpenICMPStream(ctx context.Context, target string, echoPayload []byte, method protocol.Method) ([]byte, error) {
-	return h.icmpStream(ctx, config.EndpointICMP, protocol.ProtoICMP, target, echoPayload, method)
+	req := icmpStreamRequest(target, method).withFrames(protocol.NewFrameDATA(echoPayload))
+	return h.icmpStream(ctx, req)
 }
 
 type bootstrapSession struct {
@@ -81,19 +126,19 @@ var (
 )
 
 // 手工拼装不经过整形器的预冲刷边界，必须自己校验额外帧的线上总长，保证明文能被 WriteRecord 接受。
-func buildBootstrapPlaintext(target string, proto protocol.Proto, method protocol.Method, extraFrames []protocol.Frame) ([]byte, error) {
+func buildBootstrapPlaintext(req streamRequest) ([]byte, error) {
 	hsFrame := protocol.NewFrameHANDSHAKE(protocol.Handshake{
 		Version: protocol.Version3,
-		Proto:   proto,
-		Method:  method,
-		Target:  target,
+		Proto:   req.proto,
+		Method:  req.method,
+		Target:  req.target,
 	})
-	frames := append([]protocol.Frame{hsFrame}, extraFrames...)
+	frames := append([]protocol.Frame{hsFrame}, req.frames...)
 
 	// 先校验填充之前的长度：额外帧放不进一条记录时填充退避也救不回来。
 	if size := encodedLen(frames); size > protocol.MaxWriteRecordPlaintext {
 		return nil, fmt.Errorf("bootstrap record plaintext %d exceeds max %d bytes (target %q, %d extra frames)",
-			size, protocol.MaxWriteRecordPlaintext, target, len(extraFrames))
+			size, protocol.MaxWriteRecordPlaintext, req.target, len(req.frames))
 	}
 
 	// 随机填充掩盖目标主机名长度：否则首条记录的密文长度会直接与 len(target) 相关。
@@ -104,8 +149,8 @@ func buildBootstrapPlaintext(target string, proto protocol.Proto, method protoco
 	return protocol.EncodeFrames(frames), nil
 }
 
-func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, proto protocol.Proto, target string, method protocol.Method, extraFrames []protocol.Frame) (*bootstrapSession, error) {
-	plaintext, err := buildBootstrapPlaintext(target, proto, method, extraFrames)
+func (h *StreamHandler) openAndBootstrap(ctx context.Context, req streamRequest) (*bootstrapSession, error) {
+	plaintext, err := buildBootstrapPlaintext(req)
 	if err != nil {
 		return nil, err
 	}
@@ -119,16 +164,16 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 		saltB64 := base64.RawURLEncoding.EncodeToString(salt)
 
 		stream, err := h.transport.Open(ctx, transport.OpenRequest{
-			Endpoint:     endpoint,
+			Endpoint:     req.endpoint,
 			Salt:         saltB64,
-			HighPriority: isInteractivePort(target),
-			Target:       target,
+			HighPriority: isInteractivePort(req.target),
+			Target:       req.target,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("transport open: %w", err)
 		}
 
-		sk, err := crypto.NewStreamKeys(h.masterKey, salt, endpoint)
+		sk, err := crypto.NewStreamKeys(h.masterKey, salt, req.endpoint)
 		if err != nil {
 			stream.Close() //nolint:errcheck
 			return nil, fmt.Errorf("stream keys: %w", err)
@@ -147,7 +192,7 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 			// 时同样不重试：取消不是判死，也不该顺手丢弃连接池。
 			if attempt < bootstrapMaxAttempts && errors.Is(err, io.ErrClosedPipe) && ctx.Err() == nil {
 				log.Debug("[STREAM] bootstrap write failed, retrying on a new connection",
-					"attempt", attempt, "target", target, "err", err)
+					"attempt", attempt, "target", req.target, "err", err)
 				settleDeadStream(stream)
 				h.transport.CloseIdle()
 				continue
@@ -165,7 +210,7 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 		if err == nil {
 			if attempt > 1 {
 				log.Info("[STREAM] bootstrap recovered on a new connection",
-					"target", target, "attempts", attempt)
+					"target", req.target, "attempts", attempt)
 			}
 			return &bootstrapSession{stream: stream, sk: sk, salt: salt}, nil
 		}
@@ -185,7 +230,7 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, endpoint string, p
 
 		if attempt < bootstrapMaxAttempts {
 			log.Debug("[STREAM] bootstrap timed out, retrying on a new connection",
-				"attempt", attempt, "target", target, "err", lastErr)
+				"attempt", attempt, "target", req.target, "err", lastErr)
 			settleDeadStream(stream)
 			h.transport.CloseIdle()
 			continue
@@ -267,15 +312,14 @@ func classifyFirstReadError(err error) error {
 	return err
 }
 
-func (h *StreamHandler) icmpStream(ctx context.Context, endpoint string, proto protocol.Proto, target string, echoPayload []byte, method protocol.Method) ([]byte, error) {
-	log.Debug("[STREAM] icmp open", "endpoint", endpoint, "target", target)
+func (h *StreamHandler) icmpStream(ctx context.Context, req streamRequest) ([]byte, error) {
+	log.Debug("[STREAM] icmp open", "endpoint", req.endpoint, "target", req.target)
 
-	s, err := h.newSession(ctx, endpoint, proto, target, method,
-		[]protocol.Frame{protocol.NewFrameDATA(echoPayload)}, 0)
+	s, err := h.newSession(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("icmp bootstrap: %w", err)
 	}
-	log.Debug("[STREAM] merged ICMP echo payload into bootstrap record", "bytes", len(echoPayload))
+	log.Debug("[STREAM] merged ICMP echo payload into bootstrap record", "bytes", req.firstPayloadBytes())
 	defer s.stream.Close() //nolint:errcheck
 	// 此路径只接收，但 tx 仍持有池化的记录缓冲区与 cover 注入器，必须关闭。声明在 stream 的
 	// defer 之后，因此先执行（LIFO），避免向已关闭的流做冲刷。
@@ -304,26 +348,26 @@ type session struct {
 	rx     *crypto.DecryptedReader
 }
 
-func (h *StreamHandler) newSession(ctx context.Context, endpoint string, proto protocol.Proto, target string, method protocol.Method, extraFrames []protocol.Frame, batchWindowMS int) (*session, error) {
-	bs, err := h.openAndBootstrap(ctx, endpoint, proto, target, method, extraFrames)
+func (h *StreamHandler) newSession(ctx context.Context, req streamRequest) (*session, error) {
+	bs, err := h.openAndBootstrap(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	stream := bs.stream
 
-	txWriter, err := bs.sk.NewWriter(stream, crypto.DirC2S, method)
+	txWriter, err := bs.sk.NewWriter(stream, crypto.DirC2S, req.method)
 	if err != nil {
 		stream.Close() //nolint:errcheck
 		return nil, fmt.Errorf("c2s session writer: %w", err)
 	}
 
 	shaperCfg := h.shaperCfg
-	if batchWindowMS > 0 {
-		shaperCfg.BatchWindowMS = batchWindowMS
+	if req.batchWindowMS > 0 {
+		shaperCfg.BatchWindowMS = req.batchWindowMS
 	}
 	tx := shaper.New(txWriter, shaperCfg)
 
-	rx, err := bs.sk.NewReader(stream, crypto.DirS2C, method)
+	rx, err := bs.sk.NewReader(stream, crypto.DirS2C, req.method)
 	if err != nil {
 		_ = tx.Close()
 		stream.Close() //nolint:errcheck
@@ -333,10 +377,9 @@ func (h *StreamHandler) newSession(ctx context.Context, endpoint string, proto p
 	return &session{stream: stream, tx: tx, rx: rx}, nil
 }
 
-func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto protocol.Proto, target string, method protocol.Method, localConn net.Conn) error {
-	log.Debug("[STREAM] opening", "endpoint", endpoint, "target", target)
+func (h *StreamHandler) openStream(ctx context.Context, req streamRequest, localConn net.Conn) error {
+	log.Debug("[STREAM] opening", "endpoint", req.endpoint, "target", req.target)
 
-	var extraFrames []protocol.Frame
 	if localConn != nil {
 		_ = localConn.SetReadDeadline(time.Now().Add(8 * time.Millisecond))
 		// 这一读只取连接建立时已到达的首批数据，因此用最小档位起步。NewFrameDATA 会复制载荷，
@@ -345,21 +388,21 @@ func (h *StreamHandler) openStream(ctx context.Context, endpoint string, proto p
 		n, rErr := localConn.Read(buf)
 		_ = localConn.SetReadDeadline(time.Time{})
 		if n > 0 {
-			extraFrames = []protocol.Frame{protocol.NewFrameDATA(buf[:n])}
+			req = req.withFrames(protocol.NewFrameDATA(buf[:n]))
 			log.Debug("[STREAM] merged first DATA into bootstrap record", "bytes", n, "read_err", rErr)
 		}
 		bytespool.MustPut(buf)
 	}
 
-	s, err := h.newSession(ctx, endpoint, proto, target, method, extraFrames, 0)
+	s, err := h.newSession(ctx, req)
 	if err != nil {
 		return fmt.Errorf("tcp bootstrap: %w", err)
 	}
 	defer s.tx.Close() //nolint:errcheck
-	log.Debug("[STREAM] handshake sent", "target", target)
+	log.Debug("[STREAM] handshake sent", "target", req.target)
 
-	err = h.relay(target, localConn, s.tx, s.rx, s.stream)
-	log.Debug("[STREAM] relay finished", "endpoint", endpoint, "target", target, "err", err)
+	err = h.relay(req.target, localConn, s.tx, s.rx, s.stream)
+	log.Debug("[STREAM] relay finished", "endpoint", req.endpoint, "target", req.target, "err", err)
 	return err
 }
 
@@ -612,12 +655,12 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 
 	// 只有合并后的明文保证能被加密层接受时才合并首个数据报（见 bootstrapMaxPayload）。过大
 	// 的首个数据报改为在握手之后立即发送，而不是让整个交换失败。
-	var extraFrames []protocol.Frame
+	req := udpStreamRequest(target, method)
 	mergeFirst := false
 	if len(firstPayload) > 0 {
 		if len(firstPayload) <= bootstrapMaxPayload(target) {
 			mergeFirst = true
-			extraFrames = []protocol.Frame{protocol.NewFrameDATAGRAM(firstPayload)}
+			req = req.withFrames(protocol.NewFrameDATAGRAM(firstPayload))
 			// 合并进引导记录的数据报不走 Send，上行记账只能在这里补，放在创建点而不是各调用方。
 			stats.RecordRawBytesSent(len(firstPayload))
 			log.Debug("[UDP_EXCHANGE] merged first DATAGRAM into bootstrap record", "bytes", len(firstPayload))
@@ -628,7 +671,7 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 
 	// UDP 用较短的 1ms 批处理窗口而非每个数据报强制冲刷：突发合并进单条记录，空闲触发的
 	// 定时器把稀疏流量的延迟限制在约 1ms。
-	s, err := h.newSession(ctx, config.EndpointUDP, protocol.ProtoUDP, target, method, extraFrames, 1)
+	s, err := h.newSession(ctx, req.withBatchWindow(1))
 	if err != nil {
 		return nil, fmt.Errorf("udp bootstrap: %w", err)
 	}
