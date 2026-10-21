@@ -108,6 +108,23 @@ func TestRunFailsFastOnHTTPPortConflict(t *testing.T) {
 	}
 }
 
+// TestRunRequiresSocksForHTTP 守住 HTTP 入口对 SOCKS5 的依赖：检查发生在绑定之前，
+// 失败时不会留下任何监听器。
+func TestRunRequiresSocksForHTTP(t *testing.T) {
+	cfg := testConfig()
+	cfg.Local.SocksPort = 0
+	cfg.Local.HTTPPort = freePort(t)
+
+	core, err := Run(cfg)
+	if core != nil {
+		core.Stop()
+		t.Fatal("expected no core when socks_port is disabled")
+	}
+	if !errors.Is(err, ErrSocksRequired) {
+		t.Fatalf("expected ErrSocksRequired, got: %v", err)
+	}
+}
+
 // TestRunFailsFastOnForwardDNSConflict 守住 forward DNS 绑定失败同样中止 Run（与
 // SOCKS5/HTTP 一样在 Run 里同步绑定）；注入回环临时端口是因为绑定 :53 需要 root。
 func TestRunFailsFastOnForwardDNSConflict(t *testing.T) {
