@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestLogOutput(t *testing.T) {
@@ -296,4 +298,16 @@ func TestCloseFileOutputIsTerminalForStaleLoggers(t *testing.T) {
 	} else if !os.IsNotExist(err) {
 		t.Fatalf("stat log file: %v", err)
 	}
+}
+
+// 固定 log.* 的键名（JSON 对象键序不属于契约）：客户端与服务端直接复用 Config，
+// file_path 之类的键名漂移会让用户配置静默失效。
+func TestConfigJSONShape(t *testing.T) {
+	data, err := json.Marshal(Config{Level: "debug", FilePath: "easyss.log"})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"level":"debug","file_path":"easyss.log"}`, string(data))
+
+	var got Config
+	require.NoError(t, json.Unmarshal([]byte(`{"level":"warn","file_path":"/tmp/easyss.log"}`), &got))
+	require.Equal(t, Config{Level: "warn", FilePath: "/tmp/easyss.log"}, got)
 }
