@@ -21,6 +21,10 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	tunConfig, err := jsonTunConfig(s.TunConfig)
+	if err != nil {
+		return nil, err
+	}
 
 	cfg := &ClientConfig{
 		ConfigVersion: 3,
@@ -42,7 +46,7 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 			EnableTun2socks:  s.EnableTun2socks,
 			EnableQUIC:       s.EnableQUIC,
 			TunMTU:           s.TunMTU,
-			TunConfig:        jsonTunConfig(s.TunConfig),
+			TunConfig:        tunConfig,
 		},
 		Routing: RoutingConfig{
 			ProxyRule:  s.ProxyRule,
@@ -161,7 +165,11 @@ func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) error
 		cfg.Local.BindAll = true
 	}
 	if s.TunConfig != "" {
-		cfg.Local.TunConfig = jsonTunConfig(s.TunConfig)
+		tunConfig, err := jsonTunConfig(s.TunConfig)
+		if err != nil {
+			return err
+		}
+		cfg.Local.TunConfig = tunConfig
 	}
 
 	// 覆盖完成后再补齐 http_port，与 applyDefaults 共用唯一实现 normalizeHTTPPort。
@@ -170,11 +178,17 @@ func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) error
 	return cfg.validateServers()
 }
 
-func jsonTunConfig(s string) json.RawMessage {
+// jsonTunConfig 把简化模式里的 tun_config 字符串转成 RawMessage。简化模式把它当字符串
+// 存、完整模式直接存 JSON 对象，两者必须过同一个形状校验。
+func jsonTunConfig(s string) (json.RawMessage, error) {
 	if s == "" {
-		return nil
+		return nil, nil
 	}
-	return json.RawMessage(s)
+	raw := json.RawMessage(s)
+	if _, err := ParseTunConfig(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 func OutboundProtoToProtocol(proto string) (string, error) {

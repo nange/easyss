@@ -241,17 +241,14 @@ func (a *App) currentConfig() *config.ClientConfig { return a.cfg.Load() }
 func (a *App) adoptConfig(cfg *config.ClientConfig) { a.cfg.Store(cfg) }
 
 // updateConfig 克隆 → 应用 fn → CAS 交换，CAS 失败说明有并发发布，带新克隆重来，
-// 因此 fn 必须可重复执行。
+// 因此 fn 必须可重复执行。Clone 是纯值拷贝，不会失败。
 func (a *App) updateConfig(fn func(*config.ClientConfig)) {
 	for {
 		cur := a.cfg.Load()
-		var next *config.ClientConfig
-		if cur == nil {
-			next = &config.ClientConfig{}
-		} else if next = cur.Clone(); next == nil {
-			// 保留旧快照：把 nil 发布出去会让所有读者解引用它。
-			log.Error("[EASYSS-V3] update config: clone failed, keeping the current snapshot")
-			return
+		next := &config.ClientConfig{}
+		// 只有零值 App（测试）才没有快照；生产路径由 newApp 的 adoptConfig 保证非 nil。
+		if cur != nil {
+			next = cur.Clone()
 		}
 		fn(next)
 		if a.cfg.CompareAndSwap(cur, next) {
