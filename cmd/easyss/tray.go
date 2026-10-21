@@ -88,6 +88,10 @@ func (a *TrayApp) buildTray() {
 
 	a.shell.show()
 
+	// 子菜单已挂上托盘，此时才能开始填充：refreshItems 会往菜单里追加条目，
+	// 与 show 里的 SetMenu 并发会同时读写 Menu.Items。
+	a.uwp.startRefresh()
+
 	// 必须在 a.Start() 之前装上界面：引擎与通知 goroutine 都在其后派发，读 a.ui 与这里有
 	// happens-before。
 	a.ui = a
@@ -323,11 +327,7 @@ func (a *TrayApp) notifyServerSwitchFailure(addr string, err error) {
 	if a.currentCore() == nil {
 		msg = fmt.Sprintf("切换到 %s 失败，且未能恢复原来的服务器：本机代理已停止，请重试或重启 Easyss。详情：%v", addr, err)
 	}
-	if !a.shell.ready() {
-		log.Warn("[SYSTRAY] notify skipped: tray not ready", "msg", msg)
-		return
-	}
-	a.shell.notify(msg)
+	a.shell.notifyIfReady(msg)
 }
 
 func (a *TrayApp) statsRefresher() {

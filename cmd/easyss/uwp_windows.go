@@ -34,7 +34,7 @@ type uwpItem struct {
 	Mu       sync.RWMutex
 }
 
-// install 由 buildTray 在菜单组装阶段调用，并异步填充列表。
+// install 由 buildTray 在菜单组装阶段调用：只挂子菜单与"刷新列表"。
 func (u *uwpMenu) install(root *systray.Menu, rebuild func()) {
 	u.menu = systray.NewMenu()
 	u.rebuild = rebuild
@@ -42,14 +42,16 @@ func (u *uwpMenu) install(root *systray.Menu, rebuild func()) {
 	root.AddSeparator()
 
 	u.menu.Add("刷新列表", func() { go u.refresh() })
-
-	// 异步填充列表；菜单此时已显示 "刷新列表"。
-	go u.refresh()
 }
+
+// startRefresh 在子菜单挂上托盘之后调用：填充列表会往菜单里追加条目，
+// 与 show 里的 SetMenu 并发会同时读写 Menu.Items。
+func (u *uwpMenu) startRefresh() { go u.refresh() }
 
 // refreshItems 按当前已安装应用重建 UWP 子菜单的列表：已存在的条目就地更新，
 // 新应用追加，已消失的应用置灰（systray 没有移除菜单项的 API）。重建安全的前提是
 // nange/systray 修复了 issue #39：菜单显示期间的重建请求排队到关闭后再应用。
+// 调用方必须持有 u.mu；测试直接调用时不存在并发。
 func (u *uwpMenu) refreshItems(apps []UWPApp) {
 	needsRebuild := false
 	appIndex := 0

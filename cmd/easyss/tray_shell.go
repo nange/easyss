@@ -18,12 +18,14 @@ const trayAppName = "Easyss"
 // 状态各自持有，它只负责“显示”本身。
 type trayShell struct {
 	// 菜单填好之前为 nil：darwin 的 systray.New 会立刻创建 NSStatusItem，
-	// 提前创建会让用户看到一个空菜单的图标。
+	// 提前创建会让用户看到一个空菜单的图标。show 之后只读，并发读者必须在
+	// show 返回之后启动。
 	tray *systray.SystemTray
 
-	root    *systray.Menu
-	built   chan struct{}
-	closing chan struct{}
+	root      *systray.Menu
+	built     chan struct{}
+	closing   chan struct{}
+	closeOnce sync.Once
 
 	// systray 保护菜单项，但不保护图标/tooltip 字段，二者必须成对串行写。
 	uiMu sync.Mutex
@@ -75,12 +77,9 @@ func (s *trayShell) ready() bool {
 	}
 }
 
-// requestExit 唤醒统计循环与信号处理协程，重复调用无副作用。
+// requestExit 广播退出信号：所有等待 closing 的循环都会醒来，重复调用无副作用。
 func (s *trayShell) requestExit() {
-	select {
-	case s.closing <- struct{}{}:
-	default:
-	}
+	s.closeOnce.Do(func() { close(s.closing) })
 }
 
 // gogpu/systray 会丢弃平台错误，日志是“通知是否交给操作系统”的唯一痕迹。
