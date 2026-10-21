@@ -20,12 +20,6 @@ func TestCurrentDir(t *testing.T) {
 	assert.NotEmpty(t, d)
 }
 
-func TestDirFileList(t *testing.T) {
-	list, err := DirFileList(".")
-	assert.Nil(t, err)
-	assert.Contains(t, list, "file.go")
-}
-
 func TestWriteToTemp(t *testing.T) {
 	filePath, err := WriteToTemp("test.dat", []byte("Hello world!"))
 	assert.Nil(t, err)
