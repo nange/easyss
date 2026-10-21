@@ -39,15 +39,14 @@ func TestStopImmediatelyAfterRun(t *testing.T) {
 	old := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(old)
 
-	for i := range 5 {
+	for range 5 {
 		cfg := testConfig()
-		cfg.Local.SocksPort = freePort(t)
 		cfg.Local.HTTPPort = 0
 
-		core, err := Run(cfg)
-		if err != nil {
-			t.Fatalf("Run #%d: %v", i, err)
-		}
+		core := startRetrying(t, func() (*Core, error) {
+			cfg.Local.SocksPort = freePort(t)
+			return Run(cfg)
+		})
 		core.Stop()
 	}
 }
@@ -76,6 +75,73 @@ func freePort(t *testing.T) int {
 	return port
 }
 
+// freePortPair 同时占住两个端口再一起释放：分两次 freePort 时第一个监听器已经
+// 关闭，内核可能把同一个端口再分回来，而 Run 要用它们分别 bind SOCKS 与 HTTP。
+func freePortPair(t *testing.T) (int, int) {
+	t.Helper()
+
+	first, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer first.Close() //nolint:errcheck
+
+	second, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer second.Close() //nolint:errcheck
+
+	return first.Addr().(*net.TCPAddr).Port, second.Addr().(*net.TCPAddr).Port
+}
+
+// listenRetries 是临时端口被同机其它测试抢走时的重试上限。
+const listenRetries = 3
+
+// isListenError 报告错误是否来自本地端点绑定（端口占用、fd 耗尽等）。
+func isListenError(err error) bool {
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "listen"
+}
+
+// startRetrying 反复用新端口启动，直到不再撞上"探测后被抢走"的临时端口：freePort
+// 只保证探测那一刻可绑定，到 Run 真正 bind 之间隔着 client.New 的初始化。启动失败
+// 返回的 Run 已自行释放监听器，因此换一组端口重试是安全的。
+func startRetrying(t *testing.T, start func() (*Core, error)) *Core {
+	t.Helper()
+
+	for attempt := 1; ; attempt++ {
+		core, err := start()
+		if err == nil {
+			return core
+		}
+		if !isListenError(err) || attempt == listenRetries {
+			t.Fatalf("Run failed after %d attempt(s): %v", attempt, err)
+		}
+	}
+}
+
+// runExpectingListenError 用于"某个端口被占住、Run 必须失败"的用例：另一个由
+// freePort 挑出的端口可能先被抢走，让 Run 报出无关的监听错误，此时换端口重试。
+// 期望的冲突一直存在，真正的回归会稳定复现。
+func runExpectingListenError(t *testing.T, want string, start func() (*Core, error)) {
+	t.Helper()
+
+	for attempt := 1; ; attempt++ {
+		core, err := start()
+		if err == nil {
+			core.Stop()
+			t.Fatalf("Run succeeded, want a listen error containing %q", want)
+		}
+		if strings.Contains(err.Error(), want) {
+			return
+		}
+		if !isListenError(err) || attempt == listenRetries {
+			t.Fatalf("Run failed with %v, want a listen error containing %q", err, want)
+		}
+	}
+}
+
 func TestRunFailsFastOnSocksPortConflict(t *testing.T) {
 	_, port := occupyTCPPort(t)
 	cfg := testConfig()
@@ -95,17 +161,12 @@ func TestRunFailsFastOnSocksPortConflict(t *testing.T) {
 func TestRunFailsFastOnHTTPPortConflict(t *testing.T) {
 	_, httpPort := occupyTCPPort(t)
 	cfg := testConfig()
-	cfg.Local.SocksPort = freePort(t)
 	cfg.Local.HTTPPort = httpPort
 
-	core, err := Run(cfg)
-	if err == nil {
-		core.Stop()
-		t.Fatal("expected error when http port is occupied")
-	}
-	if !strings.Contains(err.Error(), "http proxy server listen") {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	runExpectingListenError(t, "http proxy server listen", func() (*Core, error) {
+		cfg.Local.SocksPort = freePort(t)
+		return Run(cfg)
+	})
 }
 
 // TestRunValidatesHTTPWithoutSocksBeforeBinding 守住"先校验后绑定"：HTTP 需要 SOCKS5
@@ -168,42 +229,36 @@ func TestRunFailsFastOnForwardDNSConflict(t *testing.T) {
 	opts.forwardDNSListenAddr = addr
 
 	cfg := testConfig()
-	cfg.Local.SocksPort = freePort(t)
 	cfg.Local.HTTPPort = 0
 	cfg.Local.EnableForwardDNS = true
 
-	core, err := runWithOptions(cfg, opts)
-	if err == nil {
-		core.Stop()
-		t.Fatal("expected error when the forward dns port is occupied")
-	}
-	if !strings.Contains(err.Error(), "dns forward server listen") {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	runExpectingListenError(t, "dns forward server listen", func() (*Core, error) {
+		cfg.Local.SocksPort = freePort(t)
+		return runWithOptions(cfg, opts)
+	})
 }
 
 // TestRunServesForwardDNSOnInjectedAddr 覆盖成功路径：Run 同步绑定的 UDP
 // socket 真的被交给 ForwardServer 并开始应答，而不是绑定后无人接管。
 func TestRunServesForwardDNSOnInjectedAddr(t *testing.T) {
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen packet: %v", err)
-	}
-	addr := pc.LocalAddr().String()
-	_ = pc.Close() // 让 Run 去绑定同一个地址
-
 	opts := defaultOptions()
-	opts.forwardDNSListenAddr = addr
 
 	cfg := testConfig()
-	cfg.Local.SocksPort = freePort(t)
 	cfg.Local.HTTPPort = 0
 	cfg.Local.EnableForwardDNS = true
 
-	core, err := runWithOptions(cfg, opts)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
+	var addr string
+	core := startRetrying(t, func() (*Core, error) {
+		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen packet: %v", err)
+		}
+		addr = pc.LocalAddr().String()
+		_ = pc.Close() // 让 Run 去绑定同一个地址
+		opts.forwardDNSListenAddr = addr
+		cfg.Local.SocksPort = freePort(t)
+		return runWithOptions(cfg, opts)
+	})
 	t.Cleanup(core.Stop)
 
 	// 用一个真实 DNS 查询证明 socket 已经在服务：转发服务器最终会因上游
@@ -268,16 +323,10 @@ func TestForwardDNSListenErrorMentionsPortConflict(t *testing.T) {
 
 func TestRunOKWhenPortsAreFree(t *testing.T) {
 	cfg := testConfig()
-	cfg.Local.SocksPort = freePort(t)
-	cfg.Local.HTTPPort = freePort(t)
-
-	core, err := Run(cfg)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if core == nil {
-		t.Fatal("core is nil")
-	}
+	core := startRetrying(t, func() (*Core, error) {
+		cfg.Local.SocksPort, cfg.Local.HTTPPort = freePortPair(t)
+		return Run(cfg)
+	})
 	core.Stop()
 }
 
@@ -410,13 +459,12 @@ func TestRunDegradesWhenServerDomainUnresolved(t *testing.T) {
 
 	cfg := testConfig()
 	cfg.Servers[0].Host = "proxy.example.com"
-	cfg.Local.SocksPort = freePort(t)
 	cfg.Local.HTTPPort = 0
 
-	core, err := runWithOptions(cfg, opts)
-	if err != nil {
-		t.Fatalf("Run must not fail when the server domain is unresolved: %v", err)
-	}
+	core := startRetrying(t, func() (*Core, error) {
+		cfg.Local.SocksPort = freePort(t)
+		return runWithOptions(cfg, opts)
+	})
 	defer core.Stop()
 
 	if !errors.Is(core.StartupWarn, ErrServerDomainUnresolved) {
@@ -458,13 +506,12 @@ func TestRunServerDomainReadyImmediately(t *testing.T) {
 	}
 
 	cfg := testConfig() // Host 是字面 IP
-	cfg.Local.SocksPort = freePort(t)
 	cfg.Local.HTTPPort = 0
 
-	core, err := runWithOptions(cfg, opts)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
+	core := startRetrying(t, func() (*Core, error) {
+		cfg.Local.SocksPort = freePort(t)
+		return runWithOptions(cfg, opts)
+	})
 	defer core.Stop()
 
 	if core.StartupWarn != nil {
@@ -494,13 +541,12 @@ func TestServerDomainRetryStopsOnStop(t *testing.T) {
 
 	cfg := testConfig()
 	cfg.Servers[0].Host = "proxy.example.com"
-	cfg.Local.SocksPort = freePort(t)
 	cfg.Local.HTTPPort = 0
 
-	core, err := runWithOptions(cfg, opts)
-	if err != nil {
-		t.Fatalf("Run must not fail when the server domain is unresolved: %v", err)
-	}
+	core := startRetrying(t, func() (*Core, error) {
+		cfg.Local.SocksPort = freePort(t)
+		return runWithOptions(cfg, opts)
+	})
 
 	// 等到后台确实在重试。
 	deadline := time.Now().Add(5 * time.Second)
