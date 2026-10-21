@@ -184,7 +184,7 @@ Easyss v3 支持两种配置模式，自动识别：
 | `local.enable_tun2socks` | 否 | false | 是否启用 TUN 全局透明代理 |
 | `local.enable_quic` | 否 | false | 是否允许 QUIC（UDP 443）走代理 |
 | `local.tun_mtu` | 否 | 1500 | TUN 设备与 tun2socks 的 MTU，钳制到 [1280, 9000]（见"作为透明代理"一节） |
-| `local.tun_config` | 否 | 空 | TUN 参数覆盖（JSON 字符串），目前仅支持 `{"device": "my-tun9"}` 自定义设备名，一般无需填写 |
+| `local.tun_config` | 否 | 空 | TUN 参数覆盖，目前仅支持 `{"device": "my-tun9"}` 自定义设备名（简化模式下是包含该对象的字符串）；未知键或类型不匹配会启动报错，一般无需填写 |
 
 **routing 参数说明：**
 

@@ -364,5 +364,10 @@ func ParseConfigJSON(jsonStr string) (*ClientConfig, error) {
 	if err := cfg.validateServers(); err != nil {
 		return nil, err
 	}
+	// tun_config 是 RawMessage，形状不对不会在 Unmarshal 阶段暴露；完整模式与简化模式
+	// 必须共用 ParseTunConfig，否则同一份配置换条路径就有两种结果。
+	if _, err := ParseTunConfig(cfg.Local.TunConfig); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
 }

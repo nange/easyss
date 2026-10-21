@@ -178,16 +178,17 @@ func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) error
 	return cfg.validateServers()
 }
 
-// jsonTunConfig 把简化模式里的 tun_config 字符串转成 RawMessage。消费点只认合法 JSON，
-// 写错时会静默退回默认值（例如自定义设备名失效），因此在加载阶段就拒绝。
+// jsonTunConfig 把简化模式里的 tun_config 字符串转成 RawMessage。简化模式把它当字符串
+// 存、完整模式直接存 JSON 对象，两者必须过同一个形状校验。
 func jsonTunConfig(s string) (json.RawMessage, error) {
 	if s == "" {
 		return nil, nil
 	}
-	if !json.Valid([]byte(s)) {
-		return nil, fmt.Errorf("tun_config is not valid JSON: %q", s)
+	raw := json.RawMessage(s)
+	if _, err := ParseTunConfig(raw); err != nil {
+		return nil, err
 	}
-	return json.RawMessage(s), nil
+	return raw, nil
 }
 
 func OutboundProtoToProtocol(proto string) (string, error) {

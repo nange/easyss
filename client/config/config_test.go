@@ -91,8 +91,8 @@ func TestClone(t *testing.T) {
 	}
 }
 
-// TestCloneSharesNoMutableState 按类型遍历而不是按字段清单，因此新增 slice/map/指针字段
-// 却忘了在 Clone 里复制时，这里必然失败。
+// TestCloneSharesNoMutableState 先把所有可达的 nil 引用字段填成非 nil，再按类型遍历：
+// 新增 slice/map/指针字段却忘了在 Clone 里复制时，这里必然失败。
 func TestCloneSharesNoMutableState(t *testing.T) {
 	src := testDefaultConfig()
 	src.Servers = []*ServerProfile{
@@ -102,8 +102,56 @@ func TestCloneSharesNoMutableState(t *testing.T) {
 	src.Local.TunConfig = json.RawMessage(`{"device":"utun9"}`)
 	src.Shaper.IdleTimeout = 500
 
+	fillReferences(t, reflect.ValueOf(src).Elem(), map[uintptr]bool{})
+
 	clone := src.Clone()
 	assertNoSharedRefs(t, "ClientConfig", reflect.ValueOf(*src), reflect.ValueOf(*clone))
+}
+
+// fillReferences 把所有可达的 nil slice/map/pointer 填成非 nil：nil 与 nil 的比较永远
+// 通过，不填就等于没测新增字段（它们默认就是 nil）。
+func fillReferences(t *testing.T, v reflect.Value, seen map[uintptr]bool) {
+	t.Helper()
+	switch v.Kind() {
+	case reflect.Struct:
+		for _, f := range v.Fields() {
+			if f.CanSet() {
+				fillReferences(t, f, seen)
+			}
+		}
+	case reflect.Array:
+		for i := range v.Len() {
+			fillReferences(t, v.Index(i), seen)
+		}
+	case reflect.Slice:
+		if v.IsNil() {
+			v.Set(reflect.MakeSlice(v.Type(), 1, 1))
+		}
+		if p := v.Pointer(); p != 0 {
+			if seen[p] {
+				return
+			}
+			seen[p] = true
+		}
+		for i := range v.Len() {
+			fillReferences(t, v.Index(i), seen)
+		}
+	case reflect.Pointer:
+		if v.IsNil() {
+			v.Set(reflect.New(v.Type().Elem()))
+		}
+		if p := v.Pointer(); p != 0 {
+			if seen[p] {
+				return
+			}
+			seen[p] = true
+		}
+		fillReferences(t, v.Elem(), seen)
+	case reflect.Map:
+		if v.IsNil() {
+			v.Set(reflect.MakeMap(v.Type()))
+		}
+	}
 }
 
 // assertNoSharedRefs 报告 clone 与 src 之间仍然共享的可变引用。字符串与函数值按值语义
@@ -143,7 +191,11 @@ func assertNoSharedRefs(t *testing.T, path string, src, clone reflect.Value) {
 			return
 		}
 		if src.Pointer() == clone.Pointer() {
-			t.Errorf("%s: Clone shares the %s", path, src.Kind())
+			what := "pointer"
+			if src.Kind() == reflect.Map {
+				what = "map"
+			}
+			t.Errorf("%s: Clone shares the %s", path, what)
 			return
 		}
 		if src.Kind() == reflect.Pointer {
@@ -576,11 +628,66 @@ func TestBuildSimpleConfig(t *testing.T) {
 			t.Errorf("TunConfig = %q", v3.Local.TunConfig)
 		}
 
-		invalid := config.SimpleConfig{Server: "example.com", Password: "secret", TunConfig: `{invalid`}
-		if _, err := BuildSimpleConfig(&invalid); err == nil {
-			t.Error("expected error for malformed tun_config")
+		// 拼写错误、非对象与类型不匹配都必须在加载期失败：消费点只读 device，其余形状
+		// 会静默退回默认设备名。
+		for _, raw := range []string{`{invalid`, `{"devce":"utun9"}`, `[1,2]`, `"utun9"`, `{"device":123}`} {
+			invalid := config.SimpleConfig{Server: "example.com", Password: "secret", TunConfig: raw}
+			if _, err := BuildSimpleConfig(&invalid); err == nil {
+				t.Errorf("expected error for tun_config %s", raw)
+			}
 		}
 	})
+}
+
+// TestParseConfigJSONValidatesTunConfig 固定完整模式也走同一个形状校验：那里的
+// tun_config 是 RawMessage，形状不对不会在 Unmarshal 阶段暴露。
+func TestParseConfigJSONValidatesTunConfig(t *testing.T) {
+	const tmpl = `{"version":3,"servers":[{"host":"example.com"}],"local":{"tun_config":%s}}`
+
+	cfg, err := ParseConfigJSON(fmt.Sprintf(tmpl, `{"device":"utun9"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(cfg.Local.TunConfig) != `{"device":"utun9"}` {
+		t.Errorf("TunConfig = %q", cfg.Local.TunConfig)
+	}
+
+	for _, raw := range []string{`"utun9"`, `[1,2]`, `{"devce":"utun9"}`} {
+		if _, err := ParseConfigJSON(fmt.Sprintf(tmpl, raw)); err == nil {
+			t.Errorf("expected error for tun_config %s", raw)
+		}
+	}
+}
+
+// TestParseTunConfig 固定唯一解析入口的契约：只接受消费点认识的形状。
+func TestParseTunConfig(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{"空", "", "", false},
+		{"空对象", `{}`, "", false},
+		{"合法", `{"device":"utun9"}`, "utun9", false},
+		{"null", `null`, "", false},
+		{"未知键", `{"devce":"utun9"}`, "", true},
+		{"非对象", `[1,2]`, "", true},
+		{"字符串", `"utun9"`, "", true},
+		{"类型不匹配", `{"device":123}`, "", true},
+		{"尾随数据", `{"device":"utun9"} {}`, "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseTunConfig(json.RawMessage(tc.raw))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("ParseTunConfig(%q) err = %v, wantErr %v", tc.raw, err, tc.wantErr)
+			}
+			if got.Device != tc.want {
+				t.Errorf("Device = %q, want %q", got.Device, tc.want)
+			}
+		})
+	}
 }
 
 // TestSimpleOverridesUseHost 固定简化模式覆盖写入的是 Host（而不是旧的
@@ -614,15 +721,17 @@ func TestApplySimpleOverridesRejectsHostWithPort(t *testing.T) {
 }
 
 // TestApplySimpleOverridesRejectsInvalidTunConfig 与 tun_config 的加载路径同一条判据：
-// 非法 JSON 会在消费点静默失效，必须在覆盖阶段就报错。
+// 非法形状会在消费点静默失效，必须在覆盖阶段就报错。
 func TestApplySimpleOverridesRejectsInvalidTunConfig(t *testing.T) {
-	cfg := &ClientConfig{Servers: []*ServerProfile{{Host: "old.example", Port: 443}}}
-	err := ApplySimpleOverrides(cfg, &config.SimpleConfig{TunConfig: `{invalid`})
-	if err == nil {
-		t.Fatal("expected error for malformed tun_config")
-	}
-	if !strings.Contains(err.Error(), "tun_config") {
-		t.Errorf("error = %v, want tun_config hint", err)
+	for _, raw := range []string{`{invalid`, `{"devce":"utun9"}`} {
+		cfg := &ClientConfig{Servers: []*ServerProfile{{Host: "old.example", Port: 443}}}
+		err := ApplySimpleOverrides(cfg, &config.SimpleConfig{TunConfig: raw})
+		if err == nil {
+			t.Fatalf("expected error for tun_config %s", raw)
+		}
+		if !strings.Contains(err.Error(), "tun_config") {
+			t.Errorf("error = %v, want tun_config hint", err)
+		}
 	}
 }
 

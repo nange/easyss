@@ -103,13 +103,10 @@ func probeDialIface() (*net.Interface, error) {
 }
 
 func tunDeviceNameFromConfig(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var cfg struct {
-		Device string `json:"device"`
-	}
-	if err := json.Unmarshal(raw, &cfg); err != nil {
+	cfg, err := config.ParseTunConfig(raw)
+	if err != nil {
+		// 加载期已按同一形状校验，这里出错只可能是内存里的配置被直接改写。
+		log.Warn("[CLIENT] parse local.tun_config", "err", err)
 		return ""
 	}
 	return cfg.Device
