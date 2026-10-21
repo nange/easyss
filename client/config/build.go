@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/shaper"
 )
 
-func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
+func BuildSimpleConfig(s *config.SimpleConfig) (*ClientConfig, error) {
 	if s.Server == "" {
 		return nil, fmt.Errorf("server is required")
 	}
@@ -56,10 +56,10 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 		},
 		Transport: TransportConfig{
 			Protocol:     proto,
-			ConnCountMax: sharedconfig.DefaultConnCountMax,
+			ConnCountMax: config.DefaultConnCountMax,
 		},
 		Shaper: shaper.Config{
-			BatchWindowMS: sharedconfig.DefaultBatchWindowMS,
+			BatchWindowMS: config.DefaultBatchWindowMS,
 		},
 		Log: log.Config{
 			Level:    s.LogLevel,
@@ -69,19 +69,19 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 	}
 
 	if cfg.Servers[0].Port == 0 {
-		cfg.Servers[0].Port = sharedconfig.DefaultServerPort
+		cfg.Servers[0].Port = config.DefaultServerPort
 	}
 	if cfg.Servers[0].Method == "" {
-		cfg.Servers[0].Method = sharedconfig.DefaultMethod
+		cfg.Servers[0].Method = config.DefaultMethod
 	}
 	if cfg.Log.Level == "" {
-		cfg.Log.Level = sharedconfig.DefaultLogLevel
+		cfg.Log.Level = config.DefaultLogLevel
 	}
 	if cfg.Routing.ProxyRule == "" {
-		cfg.Routing.ProxyRule = sharedconfig.DefaultProxyRule
+		cfg.Routing.ProxyRule = config.DefaultProxyRule
 	}
 	if cfg.Routing.IPV6Rule == "" {
-		cfg.Routing.IPV6Rule = sharedconfig.DefaultIPV6Rule
+		cfg.Routing.IPV6Rule = config.DefaultIPV6Rule
 	}
 	// http_port 的推导（socks_port + DefaultHTTPPortOffset）在 applyDefaults 里，
 	// 两种模式共用同一实现；这里显式传进来的 HTTPPort 优先，不会被推导覆盖。
@@ -95,7 +95,7 @@ func BuildSimpleConfig(s *sharedconfig.SimpleConfig) (*ClientConfig, error) {
 
 // 覆盖后必须再过一次 validateServers：命令行同样可能把端口写进 host（-s example.com:443），
 // 不校验就会拼出 https://example.com:443:443 这种要等到拨号才暴露的错误。
-func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) error {
+func ApplySimpleOverrides(cfg *ClientConfig, s *config.SimpleConfig) error {
 	srv := cfg.DefaultServer()
 	if srv != nil {
 		if s.Server != "" {
@@ -137,7 +137,7 @@ func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) error
 	}
 	if s.Timeout > 0 {
 		// 命令行/简单模式覆盖同样要过归一化：它是全部派生超时的唯一旋钮。
-		cfg.Timeout = sharedconfig.NormalizeTimeout(s.Timeout)
+		cfg.Timeout = config.NormalizeTimeout(s.Timeout)
 	}
 	if s.LogLevel != "" {
 		cfg.Log.Level = s.LogLevel
@@ -159,7 +159,7 @@ func ApplySimpleOverrides(cfg *ClientConfig, s *sharedconfig.SimpleConfig) error
 	}
 	if s.TunMTU > 0 {
 		// 与上面的 timeout 同理：覆盖值也要过唯一的归一化入口。
-		cfg.Local.TunMTU = sharedconfig.NormalizeTunMTU(s.TunMTU)
+		cfg.Local.TunMTU = config.NormalizeTunMTU(s.TunMTU)
 	}
 	if s.BindAll {
 		cfg.Local.BindAll = true
@@ -194,9 +194,9 @@ func jsonTunConfig(s string) (json.RawMessage, error) {
 func OutboundProtoToProtocol(proto string) (string, error) {
 	switch proto {
 	case "", "native":
-		return sharedconfig.DefaultProtocol, nil
-	case sharedconfig.DefaultProtocol:
-		return sharedconfig.DefaultProtocol, nil
+		return config.DefaultProtocol, nil
+	case config.DefaultProtocol:
+		return config.DefaultProtocol, nil
 	default:
 		return "", fmt.Errorf("invalid outbound_proto %q: valid values are empty, native, h2", proto)
 	}

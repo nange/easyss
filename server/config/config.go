@@ -11,15 +11,15 @@ import (
 	"strconv"
 	"strings"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/util"
 )
 
-// 0 值表示"使用 sharedconfig 中的默认值"（由 applyDefaults 写回）。每条连接的并发
-// 流上限不可配，固定为 sharedconfig.HTTP2ServerMaxConcurrentStreams。
+// 0 值表示"使用根 config 包中的默认值"（由 applyDefaults 写回）。每条连接的并发
+// 流上限不可配，固定为根 config 包的 HTTP2ServerMaxConcurrentStreams。
 type TransportConfig struct {
 	// H2MaxFrameSize 是服务端愿意接收的最大帧：客户端据此决定每个 DATA 帧的大小，
 	// 调小会把一条加密记录拆成多个帧。
@@ -106,7 +106,7 @@ func (c *ServerConfig) UnmarshalJSON(data []byte) error {
 func (c *ServerConfig) ListenAddr() string {
 	port := c.Port
 	if port == 0 {
-		port = sharedconfig.DefaultServerPort
+		port = config.DefaultServerPort
 	}
 	return net.JoinHostPort(c.Bind, strconv.Itoa(port))
 }
@@ -145,7 +145,7 @@ func LoadConfig(path string) (*FileConfig, error) {
 		return nil, fmt.Errorf("unsupported config version %d (supported %d)", fc.ConfigVersion, SupportedConfigVersion)
 	}
 
-	// 默认值写回后再校验 h2_*，同时守住 sharedconfig 常量：默认值落到标准库接受
+	// 默认值写回后再校验 h2_*，同时守住根 config 包的常量：默认值落到标准库接受
 	// 区间之外时，"没配"也会被静默替换。
 	applyDefaults(&fc)
 	if err := fc.Validate(); err != nil {
@@ -214,21 +214,21 @@ const (
 // 第二份副本：shaper.* 归 shaper.Config.Normalize，allowed_methods 归 GetAllowedMethods。
 func applyDefaults(fc *FileConfig) {
 	// timeout 是全部派生超时的唯一旋钮。
-	fc.Timeout = sharedconfig.NormalizeTimeout(fc.Timeout)
+	fc.Timeout = config.NormalizeTimeout(fc.Timeout)
 	if fc.Log.Level == "" {
-		fc.Log.Level = sharedconfig.DefaultLogLevel
+		fc.Log.Level = config.DefaultLogLevel
 	}
 	if fc.Server.Port == 0 {
-		fc.Server.Port = sharedconfig.DefaultServerPort
+		fc.Server.Port = config.DefaultServerPort
 	}
 	if fc.Transport.H2MaxFrameSize == 0 {
-		fc.Transport.H2MaxFrameSize = sharedconfig.HTTP2ServerMaxReadFrameSize
+		fc.Transport.H2MaxFrameSize = config.HTTP2ServerMaxReadFrameSize
 	}
 	if fc.Transport.H2RecvBufConn == 0 {
-		fc.Transport.H2RecvBufConn = sharedconfig.HTTP2ServerReceiveBufferPerConnection
+		fc.Transport.H2RecvBufConn = config.HTTP2ServerReceiveBufferPerConnection
 	}
 	if fc.Transport.H2RecvBufStream == 0 {
-		fc.Transport.H2RecvBufStream = sharedconfig.HTTP2ServerReceiveBufferPerStream
+		fc.Transport.H2RecvBufStream = config.HTTP2ServerReceiveBufferPerStream
 	}
 }
 
@@ -241,7 +241,7 @@ func (fc *FileConfig) validateListenOrDefault() error {
 	if fc.Server.Port != 0 {
 		return fc.validateListen()
 	}
-	return validateListenEndpoint(sharedconfig.DefaultServerPort, fc.Server.Bind)
+	return validateListenEndpoint(config.DefaultServerPort, fc.Server.Bind)
 }
 
 func validateListenEndpoint(port int, bind string) error {
@@ -296,7 +296,7 @@ func ExampleConfig() FileConfig {
 			// host 是 ACME 标识符：域名或公网 IPv4 字面量。IP-only 时 Let's Encrypt 只发
 			// 短生命周期（约 160 小时）的 IP 证书，且只能用 tls-alpn-01 验证。
 			Host:           "your-domain.com",
-			Port:           sharedconfig.DefaultServerPort,
+			Port:           config.DefaultServerPort,
 			Password:       "your-password",
 			AllowedMethods: DefaultAllowedMethods(),
 		},
@@ -305,19 +305,19 @@ func ExampleConfig() FileConfig {
 			CDNDomains: []string{},
 		},
 		Shaper: shaper.Config{
-			BatchWindowMS: sharedconfig.DefaultBatchWindowMS,
-			BudgetRatio:   sharedconfig.DefaultCoverBudgetRatio,
-			BudgetCap:     sharedconfig.DefaultCoverBudgetCap,
+			BatchWindowMS: config.DefaultBatchWindowMS,
+			BudgetRatio:   config.DefaultCoverBudgetRatio,
+			BudgetCap:     config.DefaultCoverBudgetCap,
 		},
 		Transport: TransportConfig{
-			H2MaxFrameSize:  sharedconfig.HTTP2ServerMaxReadFrameSize,
-			H2RecvBufConn:   sharedconfig.HTTP2ServerReceiveBufferPerConnection,
-			H2RecvBufStream: sharedconfig.HTTP2ServerReceiveBufferPerStream,
+			H2MaxFrameSize:  config.HTTP2ServerMaxReadFrameSize,
+			H2RecvBufConn:   config.HTTP2ServerReceiveBufferPerConnection,
+			H2RecvBufStream: config.HTTP2ServerReceiveBufferPerStream,
 		},
 		Log: log.Config{
-			Level:    sharedconfig.DefaultLogLevel,
+			Level:    config.DefaultLogLevel,
 			FilePath: "easyss.log",
 		},
-		Timeout: sharedconfig.DefaultTimeout,
+		Timeout: config.DefaultTimeout,
 	}
 }

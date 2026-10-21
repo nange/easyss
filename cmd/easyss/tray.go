@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/gogpu/systray"
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/icon"
@@ -248,7 +248,7 @@ func (a *TrayApp) selectServer(idx int) {
 
 // 整段"清空勾选 → 停/起 → 勾选结果"在会话序列锁内，连点几下不会并发跑两套停/起；restart
 // 是序列体，注入的实现自身不得再取序列锁。
-func (a *TrayApp) switchServer(idx int, restart func(*config.ClientConfig) error) error {
+func (a *TrayApp) switchServer(idx int, restart func(*clientconfig.ClientConfig) error) error {
 	return a.sess.runErr(func() error {
 		// 排队期间可能已经切到目标服务器：把勾选确认回来即可，不必再停一次、起一次。
 		if a.currentCore() != nil && a.server.indexOf(a.currentConfig().DefaultServerAddr()) == idx {
@@ -302,7 +302,7 @@ func (a *TrayApp) setProxyRule(rule string) {
 	if core := a.currentCore(); core != nil && core.Client != nil {
 		core.Client.SetProxyRule(rule)
 	}
-	a.updateConfig(func(c *config.ClientConfig) { c.Routing.ProxyRule = rule })
+	a.updateConfig(func(c *clientconfig.ClientConfig) { c.Routing.ProxyRule = rule })
 	log.Info("[SYSTRAY] proxy rule changed", "rule", rule)
 }
 
@@ -350,7 +350,7 @@ func (a *TrayApp) buildLogLevelMenu() *systray.Menu {
 }
 
 func (a *TrayApp) setLogLevel(level string) {
-	a.updateConfig(func(c *config.ClientConfig) { c.Log.Level = level })
+	a.updateConfig(func(c *clientconfig.ClientConfig) { c.Log.Level = level })
 	log.Info("[SYSTRAY] log level changed", "level", level)
 
 	var slogLevel slog.Level
@@ -435,16 +435,16 @@ func (a *TrayApp) disableTun2socks() {
 
 // 参数被刻意忽略：配置由 restartServiceInSequence 以增量方式发布到当前快照上，App.Start 读到的
 // 就是它。
-func (a *TrayApp) startService(*config.ClientConfig) error { return a.Start() }
+func (a *TrayApp) startService(*clientconfig.ClientConfig) error { return a.Start() }
 
 // 只能在 session.run 内调用（见 restartServiceInSequence）。
-func (a *TrayApp) restartService(newCfg *config.ClientConfig) error {
+func (a *TrayApp) restartService(newCfg *clientconfig.ClientConfig) error {
 	return a.restartServiceInSequence(newCfg, a.startService)
 }
 
 // 整段停/起持有 session 序列锁，供不持有序列的调用方使用。序列锁不可重入：已在 session.run
 // 闭包内的调用方必须直接调用 restartServiceInSequence，否则死锁。
-func (a *TrayApp) restartServiceWith(newCfg *config.ClientConfig, start func(*config.ClientConfig) error) error {
+func (a *TrayApp) restartServiceWith(newCfg *clientconfig.ClientConfig, start func(*clientconfig.ClientConfig) error) error {
 	return a.sess.runErr(func() error {
 		return a.restartServiceInSequence(newCfg, start)
 	})

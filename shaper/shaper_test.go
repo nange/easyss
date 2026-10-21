@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	easycrypto "github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/util/bytespool"
@@ -23,14 +23,14 @@ import (
 // 防回归：整形器的默认值与边界只由 Config.Normalize 一处给出。
 func TestConfigNormalize(t *testing.T) {
 	got := Config{}.Normalize()
-	if got.BatchWindowMS != sharedconfig.DefaultBatchWindowMS {
-		t.Errorf("BatchWindowMS = %d, want %d", got.BatchWindowMS, sharedconfig.DefaultBatchWindowMS)
+	if got.BatchWindowMS != config.DefaultBatchWindowMS {
+		t.Errorf("BatchWindowMS = %d, want %d", got.BatchWindowMS, config.DefaultBatchWindowMS)
 	}
-	if got.BudgetRatio != sharedconfig.DefaultCoverBudgetRatio {
-		t.Errorf("BudgetRatio = %v, want %v", got.BudgetRatio, sharedconfig.DefaultCoverBudgetRatio)
+	if got.BudgetRatio != config.DefaultCoverBudgetRatio {
+		t.Errorf("BudgetRatio = %v, want %v", got.BudgetRatio, config.DefaultCoverBudgetRatio)
 	}
-	if got.BudgetCap != sharedconfig.DefaultCoverBudgetCap {
-		t.Errorf("BudgetCap = %d, want %d", got.BudgetCap, sharedconfig.DefaultCoverBudgetCap)
+	if got.BudgetCap != config.DefaultCoverBudgetCap {
+		t.Errorf("BudgetCap = %d, want %d", got.BudgetCap, config.DefaultCoverBudgetCap)
 	}
 	if got.IdleTimeout != defaultCoverIdleTimeoutMS {
 		t.Errorf("IdleTimeout = %d, want %d", got.IdleTimeout, defaultCoverIdleTimeoutMS)
@@ -48,10 +48,10 @@ func TestConfigNormalize(t *testing.T) {
 	if capped.BatchWindowMS != maxBatchWindowMS {
 		t.Errorf("BatchWindowMS = %d, want %d", capped.BatchWindowMS, maxBatchWindowMS)
 	}
-	if capped.BudgetRatio != sharedconfig.DefaultCoverBudgetRatio {
+	if capped.BudgetRatio != config.DefaultCoverBudgetRatio {
 		t.Errorf("BudgetRatio = %v, want the default", capped.BudgetRatio)
 	}
-	if capped.BudgetCap != sharedconfig.DefaultCoverBudgetCap {
+	if capped.BudgetCap != config.DefaultCoverBudgetCap {
 		t.Errorf("BudgetCap = %d, want the default", capped.BudgetCap)
 	}
 	if capped.IdleTimeout != defaultCoverIdleTimeoutMS {
@@ -343,7 +343,7 @@ func TestBatchShaperAcceptsNetbufReadFrames(t *testing.T) {
 	t.Cleanup(func() { _ = bs.Close() })
 
 	pushed := 0
-	for _, max := range []int{sharedconfig.TCPStreamBufferSize, sharedconfig.ServerTCPStreamBufferSize} {
+	for _, max := range []int{config.TCPStreamBufferSize, config.ServerTCPStreamBufferSize} {
 		r := netbuf.NewReader(protocol.MinRecordBufferSize, max)
 		for range 4 {
 			r.Grow()

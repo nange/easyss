@@ -5,7 +5,7 @@ import (
 	"math/rand/v2"
 	"sync"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/stats"
 )
@@ -59,17 +59,17 @@ const (
 
 func (c Config) Normalize() Config {
 	if c.BatchWindowMS <= 0 {
-		c.BatchWindowMS = sharedconfig.DefaultBatchWindowMS
+		c.BatchWindowMS = config.DefaultBatchWindowMS
 	}
 	if c.BatchWindowMS > maxBatchWindowMS {
 		c.BatchWindowMS = maxBatchWindowMS
 	}
 
 	if c.BudgetRatio <= 0 || c.BudgetRatio > 1 {
-		c.BudgetRatio = sharedconfig.DefaultCoverBudgetRatio
+		c.BudgetRatio = config.DefaultCoverBudgetRatio
 	}
 	if c.BudgetCap <= 0 {
-		c.BudgetCap = sharedconfig.DefaultCoverBudgetCap
+		c.BudgetCap = config.DefaultCoverBudgetCap
 	}
 	if c.IdleTimeout <= 0 {
 		c.IdleTimeout = defaultCoverIdleTimeoutMS

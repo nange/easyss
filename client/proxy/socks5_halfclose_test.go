@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 )
 
 // socksHalfCloseStub 是一个支持半关闭观测的 SOCKS5 服务端桩：完成无认证握手与
@@ -89,7 +89,7 @@ func TestDialSOCKS5SupportsHalfClose(t *testing.T) {
 	srv, err := NewHTTPProxyServer(HTTPProxyOptions{
 		ListenAddr: freeLoopbackAddr(t),
 		SocksAddr:  stubAddr,
-		Timeouts:   sharedconfig.Timeouts{Base: 5 * time.Second},
+		Timeouts:   config.Timeouts{Base: 5 * time.Second},
 	})
 	if err != nil {
 		t.Fatalf("NewHTTPProxyServer: %v", err)

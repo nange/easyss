@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
@@ -181,7 +181,7 @@ func newUDPSessionFixtureWithWriter(t *testing.T, targetConn net.Conn, target st
 	sk, err := crypto.NewStreamKeys(
 		[]byte("0123456789abcdef0123456789abcdef"),
 		make([]byte, 16),
-		sharedconfig.EndpointUDP,
+		config.EndpointUDP,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -200,7 +200,7 @@ func newUDPSessionFixtureWithWriter(t *testing.T, targetConn net.Conn, target st
 		t.Fatal(err)
 	}
 
-	dialTimeout := sharedconfig.DialTimeout(30 * time.Second)
+	dialTimeout := config.DialTimeout(30 * time.Second)
 	directDialer := outboundDialer(dialTimeout, 0)
 	d := newDialer(np, func(t string) bool {
 		return np != nil && np.EnableUDP() && np.ShouldProxy(t)
@@ -472,7 +472,7 @@ func newFrameReader(t *testing.T, frames []protocol.Frame) io.Reader {
 	sk, err := crypto.NewStreamKeys(
 		[]byte("0123456789abcdef0123456789abcdef"),
 		make([]byte, 16),
-		sharedconfig.EndpointUDP,
+		config.EndpointUDP,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -833,7 +833,7 @@ func TestUDPHandleDefersDNSDial(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		h := newUDPHandler(sharedconfig.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, np, defaultOutboundDeps())
+		h := newUDPHandler(config.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, np, defaultOutboundDeps())
 		if h.route == nil {
 			t.Fatal("a configured next proxy must provide a DNS router")
 		}
@@ -843,7 +843,7 @@ func TestUDPHandleDefersDNSDial(t *testing.T) {
 	})
 
 	t.Run("unconfigured next proxy leaves the router nil", func(t *testing.T) {
-		h := newUDPHandler(sharedconfig.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, nil, defaultOutboundDeps())
+		h := newUDPHandler(config.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, nil, defaultOutboundDeps())
 		if h.route != nil {
 			t.Fatal("without a next proxy every query must go direct (nil router)")
 		}
@@ -854,7 +854,7 @@ func TestUDPHandleDefersDNSDial(t *testing.T) {
 
 	t.Run("non dns target dials eagerly", func(t *testing.T) {
 		conn := newDeadlineConn()
-		h := newUDPHandler(sharedconfig.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, nil, defaultOutboundDeps())
+		h := newUDPHandler(config.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, nil, defaultOutboundDeps())
 		h.dial.direct = func(context.Context, string, string) (net.Conn, error) { return conn, nil }
 
 		got, remote, err := h.dial.dialTarget(context.Background(), "udp", "1.1.1.1:443")
@@ -1035,7 +1035,7 @@ func newClientStream(t *testing.T, body io.Reader, sink io.Writer) (*crypto.Decr
 	sk, err := crypto.NewStreamKeys(
 		[]byte("0123456789abcdef0123456789abcdef"),
 		make([]byte, 16),
-		sharedconfig.EndpointUDP,
+		config.EndpointUDP,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1057,7 +1057,7 @@ func newStreamingFrameReader(t *testing.T, frames <-chan protocol.Frame) io.Read
 	sk, err := crypto.NewStreamKeys(
 		[]byte("0123456789abcdef0123456789abcdef"),
 		make([]byte, 16),
-		sharedconfig.EndpointUDP,
+		config.EndpointUDP,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1138,7 +1138,7 @@ func readFramesUntil(t *testing.T, r io.Reader, want int, timeout time.Duration)
 	sk, err := crypto.NewStreamKeys(
 		[]byte("0123456789abcdef0123456789abcdef"),
 		make([]byte, 16),
-		sharedconfig.EndpointUDP,
+		config.EndpointUDP,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1266,7 +1266,7 @@ func TestUDPHandlerRoutesDNSQueryThroughNextProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := newUDPHandler(sharedconfig.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, np, defaultOutboundDeps())
+	h := newUDPHandler(config.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, np, defaultOutboundDeps())
 	if h.route == nil {
 		t.Fatal("a configured next proxy must provide a DNS router")
 	}

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +24,7 @@ import (
 // 拆掉、偏好回落、所有权回到默认值、界面收到真实原因。failedTunManager 的 LogLevel
 // 非法，Start 在 validateEngineKey 处早退，故全程不需要 root、不碰设备。
 func TestFaultStartFailureRollsBackTheSession(t *testing.T) {
-	a := newApp(&config.ClientConfig{}, "")
+	a := newApp(&clientconfig.ClientConfig{}, "")
 	ui := newStubAppUI()
 	a.ui = ui
 	var teardownOwners []tun.Owner
@@ -33,7 +33,7 @@ func TestFaultStartFailureRollsBackTheSession(t *testing.T) {
 		return nil
 	}
 
-	a.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = true })
+	a.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = true })
 
 	mgr := failedTunManager()
 	a.sess.tunMu.Lock()
@@ -67,7 +67,7 @@ func TestFaultStartFailureRollsBackTheSession(t *testing.T) {
 // TestFaultStopRacesWithStart 守住 tunMu 发布 manager 与派发 Start 之间的调度窗口：
 // Stop 若看到"从未启动"直接返回，Start 仍会建起隧道，而再没人持有它去停。
 func TestFaultStopRacesWithStart(t *testing.T) {
-	a := newApp(&config.ClientConfig{}, "")
+	a := newApp(&clientconfig.ClientConfig{}, "")
 	a.sess.verifyTeardown = func(tun.DeviceConfig, tun.Owner, bool) error { return nil }
 
 	const rounds = 50
@@ -118,7 +118,7 @@ func TestFaultStopRacesWithStart(t *testing.T) {
 // 默认路由仍指向没人读的设备，全机流量连同 DNS 一起黑洞（表现为"停 TUN 后断网"）。
 func TestFaultLeftoverRoutesAreRolledBack(t *testing.T) {
 	t.Run("residue is rolled back and the user is not bothered", func(t *testing.T) {
-		a := newApp(&config.ClientConfig{}, "")
+		a := newApp(&clientconfig.ClientConfig{}, "")
 		ui := newStubAppUI()
 		a.ui = ui
 
@@ -146,7 +146,7 @@ func TestFaultLeftoverRoutesAreRolledBack(t *testing.T) {
 	})
 
 	t.Run("residue that survives the rollback is reported", func(t *testing.T) {
-		a := newApp(&config.ClientConfig{}, "")
+		a := newApp(&clientconfig.ClientConfig{}, "")
 		ui := newStubAppUI()
 		a.ui = ui
 
@@ -175,7 +175,7 @@ func TestFaultHelperOwnerSkipsLocalCleanup(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("the helper path only exists on darwin/linux")
 	}
-	a := newApp(&config.ClientConfig{}, "")
+	a := newApp(&clientconfig.ClientConfig{}, "")
 	a.sess.tunSession = &tun.DeviceConfig{Device: "utun9", TunGW: "198.18.0.1"}
 	a.sess.tunOwner = tun.OwnerHelper
 

@@ -12,15 +12,15 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	easydns "github.com/nange/easyss/v3/client/dns"
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 )
 
-func testConfig() *config.ClientConfig {
+func testConfig() *clientconfig.ClientConfig {
 	// 字面 IP 让 resolveServerDomain 与 client.New 的 IPv6 解析直接跳过，测试因此
 	// 不会发出真实 DNS 查询。
-	cfg, err := config.BuildSimpleConfig(&sharedconfig.SimpleConfig{
+	cfg, err := clientconfig.BuildSimpleConfig(&config.SimpleConfig{
 		Server:   "127.0.0.1",
 		Password: "test-password",
 	})
@@ -360,9 +360,9 @@ func TestResolveServerDomain(t *testing.T) {
 	}
 
 	// 未配置 DNS 服务器：直接返回错误且不尝试。
-	oldDirect := config.DirectDNSServers
-	config.DirectDNSServers = nil
-	t.Cleanup(func() { config.DirectDNSServers = oldDirect })
+	oldDirect := clientconfig.DirectDNSServers
+	clientconfig.DirectDNSServers = nil
+	t.Cleanup(func() { clientconfig.DirectDNSServers = oldDirect })
 	attempts = 0
 	if err := newCore(opts).resolveServerDomain(cfgDomain); err == nil {
 		t.Fatal("expected error when no dns servers configured")

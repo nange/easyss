@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 )
 
 // TestTunConfigSocksAddrFollowsBindAll 固定 TUN 引擎拿到的本地 SOCKS5 端点：
@@ -31,7 +31,7 @@ func TestTunConfigSocksAddrFollowsBindAll(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := newApp(&config.ClientConfig{Local: config.LocalConfig{
+			a := newApp(&clientconfig.ClientConfig{Local: clientconfig.LocalConfig{
 				SocksPort: 4080,
 				BindAll:   tt.bindAll,
 			}}, "")

@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/util"
@@ -30,9 +30,9 @@ func TestLoadConfigAppliesDefaults(t *testing.T) {
 	fc, err := LoadConfig(writeConfig(t, `{"server":{"cert_path":"server.crt","key_path":"server.key"},"log":{"file_path":"logs/easyss.log"}}`))
 	require.NoError(t, err)
 
-	require.Equal(t, sharedconfig.DefaultTimeout, fc.Timeout)
-	require.Equal(t, sharedconfig.DefaultLogLevel, fc.Log.Level)
-	require.Equal(t, sharedconfig.DefaultServerPort, fc.Server.Port)
+	require.Equal(t, config.DefaultTimeout, fc.Timeout)
+	require.Equal(t, config.DefaultLogLevel, fc.Log.Level)
+	require.Equal(t, config.DefaultServerPort, fc.Server.Port)
 	if want := filepath.Join(util.CurrentDir(), "server.crt"); fc.Server.CertPath != want {
 		t.Errorf("CertPath = %q, want %q", fc.Server.CertPath, want)
 	}
@@ -48,10 +48,10 @@ func TestLoadConfigClampsTimeout(t *testing.T) {
 		in   int
 		want int
 	}{
-		{0, sharedconfig.DefaultTimeout},
-		{-5, sharedconfig.DefaultTimeout},
-		{sharedconfig.MinTimeout - 1, sharedconfig.MinTimeout},
-		{sharedconfig.MaxTimeout + 1, sharedconfig.MaxTimeout},
+		{0, config.DefaultTimeout},
+		{-5, config.DefaultTimeout},
+		{config.MinTimeout - 1, config.MinTimeout},
+		{config.MaxTimeout + 1, config.MaxTimeout},
 		{45, 45},
 	}
 
@@ -149,14 +149,14 @@ func TestLoadConfigRejectsOutOfRangeH2(t *testing.T) {
 }
 
 // TestLoadConfigNormalizesH2Defaults 固定"0 使用默认值"在加载期写回：加载后的
-// 配置里是 sharedconfig 的默认值，而不是 0——启动日志与 buildHTTPServer 因此
+// 配置里是根 config 包的默认值，而不是 0——启动日志与 buildHTTPServer 因此
 // 看到的是同一个生效值。
 func TestLoadConfigNormalizesH2Defaults(t *testing.T) {
 	fc, err := LoadConfig(writeConfig(t, `{"server":{"host":"example.com"}}`))
 	require.NoError(t, err)
-	require.Equal(t, sharedconfig.HTTP2ServerMaxReadFrameSize, fc.Transport.H2MaxFrameSize)
-	require.Equal(t, sharedconfig.HTTP2ServerReceiveBufferPerConnection, fc.Transport.H2RecvBufConn)
-	require.Equal(t, sharedconfig.HTTP2ServerReceiveBufferPerStream, fc.Transport.H2RecvBufStream)
+	require.Equal(t, config.HTTP2ServerMaxReadFrameSize, fc.Transport.H2MaxFrameSize)
+	require.Equal(t, config.HTTP2ServerReceiveBufferPerConnection, fc.Transport.H2RecvBufConn)
+	require.Equal(t, config.HTTP2ServerReceiveBufferPerStream, fc.Transport.H2RecvBufStream)
 }
 
 // TestLoadConfigIgnoresRemovedTransportProtocols 固定"删除 transport.protocols"
@@ -174,12 +174,12 @@ func TestLoadConfigIgnoresRemovedTransportProtocols(t *testing.T) {
 // TestApplyDefaultsIsIdempotent 守护"已归一化的配置再次归一化不变"，也固定它
 // 只覆盖没有其他 owner 的字段：显式配置的日志级别必须原样保留。
 func TestApplyDefaultsIsIdempotent(t *testing.T) {
-	fc := FileConfig{Timeout: sharedconfig.MaxTimeout + 1, Log: log.Config{Level: "debug"}}
+	fc := FileConfig{Timeout: config.MaxTimeout + 1, Log: log.Config{Level: "debug"}}
 	applyDefaults(&fc)
 
-	require.Equal(t, sharedconfig.MaxTimeout, fc.Timeout)
+	require.Equal(t, config.MaxTimeout, fc.Timeout)
 	require.Equal(t, "debug", fc.Log.Level)
-	require.Equal(t, sharedconfig.DefaultServerPort, fc.Server.Port)
+	require.Equal(t, config.DefaultServerPort, fc.Server.Port)
 
 	once := fc
 	applyDefaults(&fc)
@@ -198,7 +198,7 @@ func TestExampleConfigIsNormalized(t *testing.T) {
 	require.Equal(t, DefaultAllowedMethods(), fc.Server.AllowedMethods)
 	require.Equal(t, SupportedConfigVersion, fc.ConfigVersion)
 	require.Equal(t, "your-domain.com", fc.Server.Host)
-	require.Equal(t, sharedconfig.DefaultServerPort, fc.Server.Port)
+	require.Equal(t, config.DefaultServerPort, fc.Server.Port)
 	require.NoError(t, fc.validateListen())
 	require.NoError(t, fc.validateTransport())
 	require.NoError(t, fc.validateAllowedMethods())
@@ -404,7 +404,7 @@ func TestServerConfigListenAddr(t *testing.T) {
 func TestLoadConfigPortDefaultAndValidation(t *testing.T) {
 	fc, err := LoadConfig(writeConfig(t, `{"server":{"host":"example.com"}}`))
 	require.NoError(t, err)
-	require.Equal(t, sharedconfig.DefaultServerPort, fc.Server.Port)
+	require.Equal(t, config.DefaultServerPort, fc.Server.Port)
 	require.Equal(t, ":443", fc.Server.ListenAddr())
 
 	fc, err = LoadConfig(writeConfig(t, `{"server":{"host":"example.com","port":8443}}`))

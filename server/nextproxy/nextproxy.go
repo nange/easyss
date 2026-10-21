@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/rule"
 	xproxy "golang.org/x/net/proxy"
@@ -50,7 +50,7 @@ func New(proxyURL string, enableUDP, allHost bool) (*NextProxy, error) {
 		enableUDP: enableUDP,
 		allHost:   allHost,
 		// 默认值只有 config.NewTimeouts(0) 一个出口，生产路径随后用 SetDialTimeout 覆盖。
-		dialTimeout: sharedconfig.NewTimeouts(0).Dial,
+		dialTimeout: config.NewTimeouts(0).Dial,
 	}
 	np.rules.Store(rule.New())
 	return np, nil

@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/libp2p/go-netroute"
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/router"
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/transport"
@@ -27,7 +27,7 @@ import (
 
 type Client struct {
 	// cfg 是本会话的配置快照，client.New 之后只读：调用方用 copy-on-write 发布新快照。
-	cfg           *config.ClientConfig
+	cfg           *clientconfig.ClientConfig
 	router        *router.Router
 	transport     transport.Transport
 	masterKey     []byte
@@ -103,7 +103,7 @@ func probeDialIface() (*net.Interface, error) {
 }
 
 func tunDeviceNameFromConfig(raw json.RawMessage) string {
-	cfg, err := config.ParseTunConfig(raw)
+	cfg, err := clientconfig.ParseTunConfig(raw)
 	if err != nil {
 		// 加载期已按同一形状校验，这里出错只可能是内存里的配置被直接改写。
 		log.Warn("[CLIENT] parse local.tun_config", "err", err)
@@ -226,7 +226,7 @@ func (c *Client) startupDialIface() *net.Interface {
 // 限定"拨某个预解析字面地址"的单次尝试：地址可能已被黑洞，剩余预算要留给域名回退。
 const serverIPDialTimeout = 5 * time.Second
 
-func New(cfg *config.ClientConfig) (*Client, error) {
+func New(cfg *clientconfig.ClientConfig) (*Client, error) {
 	start := time.Now()
 
 	masterKey, err := crypto.DeriveMasterKey(cfg.DefaultServer().Password)
@@ -300,7 +300,7 @@ func New(cfg *config.ClientConfig) (*Client, error) {
 		MaxSlotCount:      cfg.Transport.ConnCountMax,
 		StreamThreshold:   cfg.Transport.StreamThreshold,
 		PrioritySlotRatio: cfg.Transport.PrioritySlotRatio,
-		Timeouts:          sharedconfig.NewTimeouts(cfg.TimeoutDuration()),
+		Timeouts:          config.NewTimeouts(cfg.TimeoutDuration()),
 		ConnMaxBytes:      cfg.Transport.ConnMaxBytes,
 		ProbeToken:        probeToken,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -525,7 +525,7 @@ func isInterfaceStaleError(err error) bool {
 	return false
 }
 
-func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
+func resolveServerIPV6(ctx context.Context, cfg *clientconfig.ClientConfig) string {
 	svr := cfg.DefaultServer()
 	if svr == nil {
 		return ""
@@ -551,7 +551,7 @@ func resolveServerIPV6(ctx context.Context, cfg *config.ClientConfig) string {
 		defer cancelBuiltin()
 
 		reachable := false
-		for _, dnsServer := range config.DirectDNSServers {
+		for _, dnsServer := range clientconfig.DirectDNSServers {
 			if builtinCtx.Err() != nil {
 				log.Warn("[CLIENT] server ipv6 resolution budget exhausted, skipping remaining builtin dns servers",
 					"server", svr.Host, "err", builtinCtx.Err())
@@ -666,7 +666,7 @@ func (c *Client) MasterKey() []byte {
 	return c.masterKey
 }
 
-func (c *Client) Config() *config.ClientConfig {
+func (c *Client) Config() *clientconfig.ClientConfig {
 	return c.cfg
 }
 

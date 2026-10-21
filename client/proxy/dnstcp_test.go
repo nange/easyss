@@ -16,7 +16,7 @@ import (
 	clientconfig "github.com/nange/easyss/v3/client/config"
 	easydns "github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/router"
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/transport"
@@ -41,7 +41,7 @@ func newTCPDNSTestServer(t *testing.T, rt *router.Router, tr transport.Transport
 		Handler:    h,
 		Router:     rt,
 		Method:     protocol.MethodAES256GCM,
-		Timeouts: sharedconfig.Timeouts{
+		Timeouts: config.Timeouts{
 			Base:       30 * time.Second,
 			Dial:       10 * time.Second,
 			StreamIdle: 30 * time.Second,
@@ -187,7 +187,7 @@ func (f *fakeEncryptedUpstream) serve(salt []byte, masterKey []byte, responder f
 		return errors.New("bootstrap record never arrived")
 	}
 
-	sk, err := crypto.NewStreamKeys(masterKey, salt, sharedconfig.EndpointUDP)
+	sk, err := crypto.NewStreamKeys(masterKey, salt, config.EndpointUDP)
 	if err != nil {
 		return err
 	}

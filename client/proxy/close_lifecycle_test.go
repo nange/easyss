@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 )
 
 // closeLifecycleBudget 把"永久挂住"变成一次快速失败；正常路径远小于该值。
@@ -42,7 +42,7 @@ func TestHTTPProxyCloseBeforeStartReleasesListener(t *testing.T) {
 	srv, err := NewHTTPProxyServer(HTTPProxyOptions{
 		ListenAddr: addr,
 		SocksAddr:  "127.0.0.1:1",
-		Timeouts:   sharedconfig.Timeouts{Base: time.Second},
+		Timeouts:   config.Timeouts{Base: time.Second},
 	})
 	if err != nil {
 		t.Fatalf("NewHTTPProxyServer: %v", err)
@@ -76,7 +76,7 @@ func TestHTTPProxyCloseIsIdempotent(t *testing.T) {
 	srv, err := NewHTTPProxyServer(HTTPProxyOptions{
 		ListenAddr: freeLoopbackAddr(t),
 		SocksAddr:  "127.0.0.1:1",
-		Timeouts:   sharedconfig.Timeouts{Base: time.Second},
+		Timeouts:   config.Timeouts{Base: time.Second},
 	})
 	if err != nil {
 		t.Fatalf("NewHTTPProxyServer: %v", err)
@@ -262,7 +262,7 @@ func TestHTTPProxyCloseReleasesReverseProxyIdleConns(t *testing.T) {
 	srv, err := NewHTTPProxyServer(HTTPProxyOptions{
 		ListenAddr: freeLoopbackAddr(t),
 		SocksAddr:  socksAddr,
-		Timeouts:   sharedconfig.Timeouts{Base: 5 * time.Second},
+		Timeouts:   config.Timeouts{Base: 5 * time.Second},
 	})
 	if err != nil {
 		t.Fatalf("NewHTTPProxyServer: %v", err)

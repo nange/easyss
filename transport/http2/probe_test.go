@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/server/handler"
 	"github.com/nange/easyss/v3/stats"
@@ -65,7 +65,7 @@ func TestSlotProberFast(t *testing.T) {
 	if verdict != probeFast {
 		t.Fatalf("verdict = %v, want probeFast (speed %v)", verdict, speed)
 	}
-	if speed < float64(sharedconfig.DegradedThroughputThreshold) {
+	if speed < float64(config.DegradedThroughputThreshold) {
 		t.Fatalf("speed %v below the degraded threshold", speed)
 	}
 	// 成功的探测必须贡献一个纯路径 RTT 样本（响应头到达 ->

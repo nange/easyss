@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	easydns "github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/router"
 	"github.com/stretchr/testify/assert"
@@ -57,13 +57,13 @@ func startLocalDNSServer(t *testing.T) (string, func()) {
 func TestResolveServerIPV6IPServer(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.ClientConfig{
-		Servers: []*config.ServerProfile{{Host: "2001:db8::1", Default: true}},
+	cfg := &clientconfig.ClientConfig{
+		Servers: []*clientconfig.ServerProfile{{Host: "2001:db8::1", Default: true}},
 	}
 	assert.Equal(t, "2001:db8::1", resolveServerIPV6(context.Background(), cfg))
 
-	cfg = &config.ClientConfig{
-		Servers: []*config.ServerProfile{{Host: "1.2.3.4", Default: true}},
+	cfg = &clientconfig.ClientConfig{
+		Servers: []*clientconfig.ServerProfile{{Host: "1.2.3.4", Default: true}},
 	}
 	assert.Equal(t, "", resolveServerIPV6(context.Background(), cfg))
 }
@@ -71,13 +71,13 @@ func TestResolveServerIPV6IPServer(t *testing.T) {
 func TestResolveServerIPV6BoundedByContext(t *testing.T) {
 	// 黑洞直连 DNS 服务器会让每次解析都失败；上下文截止时间必须约束整个解析过程，
 	// 而不是让每次查询 5 秒的超时拖慢启动。
-	old := config.DirectDNSServers
-	config.DirectDNSServers = []string{"127.0.0.1:1"}
-	defer func() { config.DirectDNSServers = old }()
+	old := clientconfig.DirectDNSServers
+	clientconfig.DirectDNSServers = []string{"127.0.0.1:1"}
+	defer func() { clientconfig.DirectDNSServers = old }()
 	easydns.MarkBuiltinDNSAvailable()
 
-	cfg := &config.ClientConfig{
-		Servers: []*config.ServerProfile{{Host: "proxy.example.com", Default: true}},
+	cfg := &clientconfig.ClientConfig{
+		Servers: []*clientconfig.ServerProfile{{Host: "proxy.example.com", Default: true}},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -92,13 +92,13 @@ func TestResolveServerIPV6WithLocalDNS(t *testing.T) {
 	addr, shutdown := startLocalDNSServer(t)
 	defer shutdown()
 
-	old := config.DirectDNSServers
-	config.DirectDNSServers = []string{addr}
-	defer func() { config.DirectDNSServers = old }()
+	old := clientconfig.DirectDNSServers
+	clientconfig.DirectDNSServers = []string{addr}
+	defer func() { clientconfig.DirectDNSServers = old }()
 	easydns.MarkBuiltinDNSAvailable()
 
-	cfg := &config.ClientConfig{
-		Servers: []*config.ServerProfile{{Host: "test.local", Default: true}},
+	cfg := &clientconfig.ClientConfig{
+		Servers: []*clientconfig.ServerProfile{{Host: "test.local", Default: true}},
 	}
 	got := resolveServerIPV6(context.Background(), cfg)
 	assert.Equal(t, net.ParseIP("::1").String(), got)
@@ -107,7 +107,7 @@ func TestResolveServerIPV6WithLocalDNS(t *testing.T) {
 // TestRefreshServerIPV6 覆盖 RefreshServerIPV6 的短路路径与"降级启动后重新
 // 解析"的正向路径：只有当前值为空、服务器是域名且 IPv6 规则未禁用时才查询。
 func TestRefreshServerIPV6(t *testing.T) {
-	newClient := func(t *testing.T, cfg *config.ClientConfig) *Client {
+	newClient := func(t *testing.T, cfg *clientconfig.ClientConfig) *Client {
 		t.Helper()
 		rt, err := router.New(router.Config{
 			ProxyRule: router.ParseProxyRule(cfg.Routing.ProxyRule),
@@ -116,10 +116,10 @@ func TestRefreshServerIPV6(t *testing.T) {
 		require.NoError(t, err)
 		return &Client{cfg: cfg, router: rt}
 	}
-	domainCfg := func(rule string) *config.ClientConfig {
-		return &config.ClientConfig{
-			Servers: []*config.ServerProfile{{Host: "proxy.example.com", Default: true}},
-			Routing: config.RoutingConfig{IPV6Rule: rule},
+	domainCfg := func(rule string) *clientconfig.ClientConfig {
+		return &clientconfig.ClientConfig{
+			Servers: []*clientconfig.ServerProfile{{Host: "proxy.example.com", Default: true}},
+			Routing: clientconfig.RoutingConfig{IPV6Rule: rule},
 		}
 	}
 
@@ -133,9 +133,9 @@ func TestRefreshServerIPV6(t *testing.T) {
 	assert.Equal(t, "2001:db8::1", c.RefreshServerIPV6())
 
 	// 服务器是字面 IPv4：无需解析。
-	c = newClient(t, &config.ClientConfig{
-		Servers: []*config.ServerProfile{{Host: "1.2.3.4", Default: true}},
-		Routing: config.RoutingConfig{IPV6Rule: "auto"},
+	c = newClient(t, &clientconfig.ClientConfig{
+		Servers: []*clientconfig.ServerProfile{{Host: "1.2.3.4", Default: true}},
+		Routing: clientconfig.RoutingConfig{IPV6Rule: "auto"},
 	})
 	assert.Equal(t, "", c.RefreshServerIPV6())
 
@@ -147,14 +147,14 @@ func TestRefreshServerIPV6(t *testing.T) {
 	addr, shutdown := startLocalDNSServer(t)
 	defer shutdown()
 
-	old := config.DirectDNSServers
-	config.DirectDNSServers = []string{addr}
-	defer func() { config.DirectDNSServers = old }()
+	old := clientconfig.DirectDNSServers
+	clientconfig.DirectDNSServers = []string{addr}
+	defer func() { clientconfig.DirectDNSServers = old }()
 	easydns.MarkBuiltinDNSAvailable()
 
-	cfg := &config.ClientConfig{
-		Servers: []*config.ServerProfile{{Host: "test.local", Default: true}},
-		Routing: config.RoutingConfig{IPV6Rule: "auto"},
+	cfg := &clientconfig.ClientConfig{
+		Servers: []*clientconfig.ServerProfile{{Host: "test.local", Default: true}},
+		Routing: clientconfig.RoutingConfig{IPV6Rule: "auto"},
 	}
 	c = newClient(t, cfg)
 	assert.Equal(t, net.ParseIP("::1").String(), c.RefreshServerIPV6())
@@ -168,9 +168,9 @@ func newDialTestClient(t *testing.T, ipv6Rule, serverAddr string) *Client {
 	rt, err := router.New(router.Config{IPV6Rule: router.ParseIPV6Rule(ipv6Rule)})
 	require.NoError(t, err)
 	return &Client{
-		cfg: &config.ClientConfig{
-			Servers: []*config.ServerProfile{{Host: serverAddr, Default: true}},
-			Routing: config.RoutingConfig{IPV6Rule: ipv6Rule},
+		cfg: &clientconfig.ClientConfig{
+			Servers: []*clientconfig.ServerProfile{{Host: serverAddr, Default: true}},
+			Routing: clientconfig.RoutingConfig{IPV6Rule: ipv6Rule},
 		},
 		router:       rt,
 		serverDomain: serverAddr,

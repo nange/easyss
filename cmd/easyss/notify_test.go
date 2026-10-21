@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/gogpu/systray"
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/runner"
@@ -226,7 +226,7 @@ func TestFriendlyTunError(t *testing.T) {
 // TestTrayTunStartFailureUnchecksTheMenu 守住失败后菜单必须回到未勾选：引擎没在跑，
 // 勾着会让用户以为它在跑。会话拆除由 session.rollbackFailedTunStart 负责，不在此用例范围。
 func TestTrayTunStartFailureUnchecksTheMenu(t *testing.T) {
-	a := &TrayApp{App: newApp(&config.ClientConfig{}, ""), shell: newTrayShell()}
+	a := &TrayApp{App: newApp(&clientconfig.ClientConfig{}, ""), shell: newTrayShell()}
 
 	item := systray.NewMenu().AddCheckbox("系统全局流量(Tun2socks)", true, nil)
 	a.object = &proxyObjectMenu{tun: item}

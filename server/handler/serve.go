@@ -8,7 +8,7 @@ import (
 	"net/netip"
 	"runtime/debug"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
@@ -162,7 +162,7 @@ const udpBatchWindowMS = 1
 // Debug，因此这条 Info 是成功流唯一能看到路由的出口。
 func (h *ProxyHandler) sessionLogAttrs(res handshakeResult, client string) []any {
 	attrs := []any{"target", res.target, "client", client}
-	if res.endpoint == sharedconfig.EndpointTCP && h.tcp != nil && h.tcp.dial.usesNextProxy(res.target) {
+	if res.endpoint == config.EndpointTCP && h.tcp != nil && h.tcp.dial.usesNextProxy(res.target) {
 		attrs = append(attrs, "via_next_proxy", true, "proxy", h.tcp.dial.nextProxy.Host())
 	}
 	return attrs
@@ -202,7 +202,7 @@ func (h *ProxyHandler) serveSession(w http.ResponseWriter, r *http.Request, res 
 	c2sReader.SetLeftoverFrames(res.first.Leftover)
 
 	s2cCfg := h.shaperCfg
-	if res.endpoint == sharedconfig.EndpointUDP {
+	if res.endpoint == config.EndpointUDP {
 		// 短窗口让数据报突发合并进单个加密记录，而不是每个数据报一个记录并强制 flush 一次。
 		s2cCfg.BatchWindowMS = udpBatchWindowMS
 	}
@@ -218,15 +218,15 @@ func (h *ProxyHandler) serveSession(w http.ResponseWriter, r *http.Request, res 
 		// 唯一能观测到的信号。
 		reqCtx := withResolvedAddrs(withPreferredFamily(r.Context(), clientPreferredFamily(r.RemoteAddr)), res.addrs)
 		switch res.endpoint {
-		case sharedconfig.EndpointTCP:
+		case config.EndpointTCP:
 			stats.RecordServerTCPStream()
 			// cancelRead 立即解除阻塞在请求体上的读取 goroutine，而不是等 net/http 关闭。
 			handleResult = h.tcp.Handle(reqCtx, c2sReader, s2cShaper, res.target, func() { _ = r.Body.Close() })
-		case sharedconfig.EndpointUDP:
+		case config.EndpointUDP:
 			stats.RecordServerUDPStream()
 			// 与 TCP 路径一致：否则帧读取器会停在请求体上，直到 ServeHTTP 返回后 net/http 关闭。
 			handleResult = h.udp.Handle(reqCtx, c2sReader, s2cShaper, res.target, func() { _ = r.Body.Close() })
-		case sharedconfig.EndpointICMP:
+		case config.EndpointICMP:
 			stats.RecordServerICMPStream()
 			// ICMP 是一次性回显交换，没有 context 也没有 cancelRead，签名不对称是刻意的。
 			handleResult = h.icmp.Handle(c2sReader, s2cShaper, res.target)

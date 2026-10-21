@@ -5,7 +5,7 @@ import (
 	"net"
 
 	"github.com/miekg/dns"
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/stats"
 )
@@ -53,7 +53,7 @@ func (d *dnsInterceptor) proxyUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery,
 
 	// 应答必须伪装成来自 req.dst（客户端配置的解析器）而不是 upstream：流按客户端目标
 	// 标识，透明 NAT（tun2socks）会丢弃源地址不匹配的数据报，查询就看起来没有应答。
-	upstream := config.ProxyDNSServer
+	upstream := clientconfig.ProxyDNSServer
 	key := clientAddr.String() + "_" + upstream
 
 	log.Info("[DNS_PROXY]", "domain", ex.plan.domain, "qtype", ex.plan.qtype,

@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/client"
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/proxy"
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/stats"
@@ -60,7 +60,7 @@ func defaultOptions() options {
 // Core 持有一次客户端会话的全部组件，并唯一负责它们的关闭顺序。Client 是传输层与
 // 路由引擎的所有者，其余服务器只借用它们，因此调用方只需 Core.Stop。
 type Core struct {
-	cfg           *config.ClientConfig
+	cfg           *clientconfig.ClientConfig
 	Client        *client.Client
 	SocksServer   *proxy.Socks5Server
 	HTTPServer    *proxy.HTTPProxyServer
@@ -91,11 +91,11 @@ type Core struct {
 	opts options
 }
 
-func Run(cfg *config.ClientConfig) (*Core, error) {
+func Run(cfg *clientconfig.ClientConfig) (*Core, error) {
 	return runWithOptions(cfg, defaultOptions())
 }
 
-func runWithOptions(cfg *config.ClientConfig, opts options) (*Core, error) {
+func runWithOptions(cfg *clientconfig.ClientConfig, opts options) (*Core, error) {
 	start := time.Now()
 
 	cli, err := client.New(cfg)
@@ -109,7 +109,7 @@ func runWithOptions(cfg *config.ClientConfig, opts options) (*Core, error) {
 		method = protocol.MethodAES256GCM
 	}
 
-	timeouts := sharedconfig.NewTimeouts(cfg.TimeoutDuration())
+	timeouts := config.NewTimeouts(cfg.TimeoutDuration())
 
 	c := &Core{
 		cfg:           cfg,
@@ -161,7 +161,7 @@ func runWithOptions(cfg *config.ClientConfig, opts options) (*Core, error) {
 }
 
 // buildLocalServers 只构造服务器，不派发 goroutine；任何构造失败都在 Run 返回前暴露。
-func (c *Core) buildLocalServers(cfg *config.ClientConfig, eps *localEndpoints, method protocol.Method, timeouts sharedconfig.Timeouts) error {
+func (c *Core) buildLocalServers(cfg *clientconfig.ClientConfig, eps *localEndpoints, method protocol.Method, timeouts config.Timeouts) error {
 	if eps.socksLn != nil {
 		serverDomain := ""
 		if svr := cfg.DefaultServer(); svr != nil && !util.IsIP(svr.Host) {
@@ -243,7 +243,7 @@ func (c *Core) serveLocal(eps *localEndpoints) {
 }
 
 // startDomainResolution 只做一次有界预解析；失败降级为启动警告并在后台按退避重试。
-func (c *Core) startDomainResolution(cfg *config.ClientConfig, opts options) {
+func (c *Core) startDomainResolution(cfg *clientconfig.ClientConfig, opts options) {
 	if err := c.resolveServerDomain(cfg); err != nil {
 		host := ""
 		if svr := cfg.DefaultServer(); svr != nil {
@@ -254,7 +254,7 @@ func (c *Core) startDomainResolution(cfg *config.ClientConfig, opts options) {
 		go c.retryServerDomain(cfg, serverDomainRetry{
 			prePopulate: opts.prePopulate,
 			reset:       opts.reset,
-			dnsServers:  config.DirectDNSServers,
+			dnsServers:  clientconfig.DirectDNSServers,
 			requireIPv4: cfg.Routing.IPV6Rule != "enable",
 			timeout:     opts.startupResolveTimeout,
 			base:        opts.retryBase,
@@ -275,7 +275,7 @@ func (c *Core) Stop() {
 
 // resolveServerDomain 通过直连 DNS 预解析服务端主机名并预填充缓存。只做一次有界
 // 尝试，是否致命由调用方决定。
-func (c *Core) resolveServerDomain(cfg *config.ClientConfig) error {
+func (c *Core) resolveServerDomain(cfg *clientconfig.ClientConfig) error {
 	svr := cfg.DefaultServer()
 	if svr == nil || util.IsIP(svr.Host) {
 		return nil
@@ -283,7 +283,7 @@ func (c *Core) resolveServerDomain(cfg *config.ClientConfig) error {
 	if c.dnsCache == nil {
 		return nil
 	}
-	if len(config.DirectDNSServers) == 0 {
+	if len(clientconfig.DirectDNSServers) == 0 {
 		return errors.New("no direct dns servers configured")
 	}
 
@@ -291,7 +291,7 @@ func (c *Core) resolveServerDomain(cfg *config.ClientConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), c.opts.startupResolveTimeout)
 	defer cancel()
 
-	err := c.opts.prePopulate(c.dnsCache, ctx, svr.Host, config.DirectDNSServers,
+	err := c.opts.prePopulate(c.dnsCache, ctx, svr.Host, clientconfig.DirectDNSServers,
 		cfg.Routing.IPV6Rule != "enable")
 	if err != nil {
 		log.Warn("[EASYSS] server domain resolution failed at startup",
@@ -343,7 +343,7 @@ type serverDomainRetry struct {
 
 // retryServerDomain 在后台按指数退避重试，直到成功或核心停止。每次尝试前调用 r.reset
 // 清除内置 DNS 熔断与系统 DNS 发现缓存，否则"网络已恢复"会被拖后数分钟。
-func (c *Core) retryServerDomain(cfg *config.ClientConfig, r serverDomainRetry) {
+func (c *Core) retryServerDomain(cfg *clientconfig.ClientConfig, r serverDomainRetry) {
 	svr := cfg.DefaultServer()
 	if svr == nil {
 		c.markServerDomainReady()

@@ -9,9 +9,9 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/router"
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/xjasonlyu/tun2socks/v2/dialer"
 )
 
@@ -94,7 +94,7 @@ func newTestClient(t *testing.T, tunEnabled bool) *Client {
 		t.Fatalf("router.New: %v", err)
 	}
 
-	c := &Client{cfg: &config.ClientConfig{}, router: rt}
+	c := &Client{cfg: &clientconfig.ClientConfig{}, router: rt}
 	c.SetTunMode(tunEnabled)
 	c.bound.Store(boundIface{name: "en0", index: 4})
 	c.dialer.Store(dialer.New())
@@ -257,7 +257,7 @@ func TestRefreshDirectDialerIgnoresTunDevice(t *testing.T) {
 	c.sys.detectIface = func() (*net.Interface, error) {
 		// TUN 激活期间，Windows/Linux 的路由探测会解析到 TUN 设备本身。
 		// 绑定到它会让每次拨号都回环进 TUN 设备。
-		return &net.Interface{Index: 10, Name: sharedconfig.DefaultTunDeviceName, Flags: net.FlagUp}, nil
+		return &net.Interface{Index: 10, Name: config.DefaultTunDeviceName, Flags: net.FlagUp}, nil
 	}
 
 	if c.refreshDirectDialer() {
@@ -310,7 +310,7 @@ func TestDialWithConfigNoRetryWhenRefreshDetectsTun(t *testing.T) {
 	// 拨号因接口过期错误失败，但探测解析到 TUN 设备（TUN 已激活）：刷新必须保留旧的绑定
 	// 且不重试，因为经由 TUN 设备重试会形成回环。
 	c.sys.detectIface = func() (*net.Interface, error) {
-		return &net.Interface{Index: 10, Name: sharedconfig.DefaultTunDeviceName, Flags: net.FlagUp}, nil
+		return &net.Interface{Index: 10, Name: config.DefaultTunDeviceName, Flags: net.FlagUp}, nil
 	}
 
 	calls := 0
@@ -338,7 +338,7 @@ func TestDialWithConfigNoRetryWhenRefreshDetectsTun(t *testing.T) {
 func TestStartupDialIface(t *testing.T) {
 	t.Parallel()
 
-	tunIface := &net.Interface{Index: 10, Name: sharedconfig.DefaultTunDeviceName, Flags: net.FlagUp}
+	tunIface := &net.Interface{Index: 10, Name: config.DefaultTunDeviceName, Flags: net.FlagUp}
 
 	t.Run("probe returns physical interface", func(t *testing.T) {
 		c := newTestClient(t, true)
@@ -357,7 +357,7 @@ func TestStartupDialIface(t *testing.T) {
 		c.sys.detectIface = func() (*net.Interface, error) { return tunIface, nil }
 		c.sys.listInterfaces = func() ([]net.Interface, error) {
 			return []net.Interface{
-				{Index: 10, Name: sharedconfig.DefaultTunDeviceName, Flags: net.FlagUp},
+				{Index: 10, Name: config.DefaultTunDeviceName, Flags: net.FlagUp},
 				{Index: 7, Name: "en0", Flags: net.FlagUp},
 			}, nil
 		}
@@ -378,7 +378,7 @@ func TestStartupDialIface(t *testing.T) {
 		c := newTestClient(t, true)
 		c.sys.detectIface = func() (*net.Interface, error) { return nil, errors.New("no route") }
 		c.sys.listInterfaces = func() ([]net.Interface, error) {
-			return []net.Interface{{Index: 10, Name: sharedconfig.DefaultTunDeviceName, Flags: net.FlagUp}}, nil
+			return []net.Interface{{Index: 10, Name: config.DefaultTunDeviceName, Flags: net.FlagUp}}, nil
 		}
 
 		if iface := c.startupDialIface(); iface != nil {

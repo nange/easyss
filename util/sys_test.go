@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -75,8 +75,8 @@ func TestIsTunIface(t *testing.T) {
 	// 基于名称的匹配是确定性的，并且会在任何 OS 地址查询之前短路。
 	// 无论测试运行在哪个平台，两个平台的默认名称都必须被识别。
 	for _, name := range []string{
-		sharedconfig.DefaultTunDeviceName,
-		sharedconfig.DefaultTunDeviceNameDarwin,
+		config.DefaultTunDeviceName,
+		config.DefaultTunDeviceNameDarwin,
 	} {
 		if !IsTunIface(&net.Interface{Name: name}) {
 			t.Fatalf("expected %s to be recognized as the TUN device", name)

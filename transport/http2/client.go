@@ -17,7 +17,7 @@ import (
 
 	utls "github.com/refraction-networking/utls"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
@@ -53,7 +53,7 @@ type Config struct {
 	PrioritySlotRatio float64
 	// Timeouts 由调用方派生：Base 派生空闲与 h2 ping，Dial 是单次 TCP 拨号上限，
 	// ConnLifetime 是轮换前的最大存活时长。零值只由 config.Timeouts.Normalize 填充。
-	Timeouts     sharedconfig.Timeouts
+	Timeouts     config.Timeouts
 	ConnMaxBytes int64 // 轮换前连接在任一方向承载的最大字节数（0 表示默认值）
 	DialContext  func(ctx context.Context, network, addr string) (net.Conn, error)
 	// ProbeToken 是 /v3/probe 的能力令牌（由主密钥派生）；为空则禁用主动探测。
@@ -70,20 +70,20 @@ func New(cfg Config) (transport.Transport, error) {
 	if maxSlots < 1 {
 		maxSlots = 6
 	}
-	if maxSlots > sharedconfig.MaxConnCountMax {
-		maxSlots = sharedconfig.MaxConnCountMax
+	if maxSlots > config.MaxConnCountMax {
+		maxSlots = config.MaxConnCountMax
 	}
 	threshold := int32(cfg.StreamThreshold)
 	if threshold < 1 {
 		threshold = 8
 	}
-	if threshold > sharedconfig.MaxStreamThreshold {
-		threshold = sharedconfig.MaxStreamThreshold
+	if threshold > config.MaxStreamThreshold {
+		threshold = config.MaxStreamThreshold
 	}
 
 	ratio := cfg.PrioritySlotRatio
 	if ratio <= 0 || ratio > 1 {
-		ratio = sharedconfig.DefaultPrioritySlotRatio
+		ratio = config.DefaultPrioritySlotRatio
 	}
 	prioritySlots := min(max(int(float64(maxSlots)*ratio), 1), maxSlots)
 
@@ -98,7 +98,7 @@ func New(cfg Config) (transport.Transport, error) {
 	connLifetime := timeouts.ConnLifetime
 	connMaxBytes := cfg.ConnMaxBytes
 	if connMaxBytes <= 0 {
-		connMaxBytes = sharedconfig.DefaultConnMaxBytes
+		connMaxBytes = config.DefaultConnMaxBytes
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -123,7 +123,7 @@ func New(cfg Config) (transport.Transport, error) {
 		prober := &slotProber{
 			serverURL:   cfg.ServerURL,
 			token:       cfg.ProbeToken,
-			payloadSize: int64(sharedconfig.ProbePayloadSize),
+			payloadSize: int64(config.ProbePayloadSize),
 			slowRTT:     slowRTT,
 		}
 		lc.probeFunc = prober.probe
@@ -169,21 +169,21 @@ func buildTransport(slot *transportSlot, gen *slotTransport, utlsCfg *utls.Confi
 
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
-			NextProtos: sharedconfig.NextProtos,
+			NextProtos: config.NextProtos,
 		},
 		Protocols: protos,
 		HTTP2: &http.HTTP2Config{
-			MaxReadFrameSize:              sharedconfig.HTTP2ClientMaxReadFrameSize,
-			MaxReceiveBufferPerConnection: sharedconfig.HTTP2ClientReceiveBufferPerConnection,
-			MaxReceiveBufferPerStream:     sharedconfig.HTTP2ClientReceiveBufferPerStream,
-			MaxDecoderHeaderTableSize:     sharedconfig.HTTP2ClientMaxDecoderHeaderTableSize,
+			MaxReadFrameSize:              config.HTTP2ClientMaxReadFrameSize,
+			MaxReceiveBufferPerConnection: config.HTTP2ClientReceiveBufferPerConnection,
+			MaxReceiveBufferPerStream:     config.HTTP2ClientReceiveBufferPerStream,
+			MaxDecoderHeaderTableSize:     config.HTTP2ClientMaxDecoderHeaderTableSize,
 			SendPingTimeout:               2 * timeout,
 			PingTimeout:                   timeout / 3,
 		},
 		ForceAttemptHTTP2:      true,
 		MaxConnsPerHost:        1,
 		IdleConnTimeout:        6 * timeout,
-		MaxResponseHeaderBytes: sharedconfig.HTTP2ClientMaxResponseHeaderBytes,
+		MaxResponseHeaderBytes: config.HTTP2ClientMaxResponseHeaderBytes,
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			// 拨号预算只包住 TCP 建连，TLS 握手由 ctx 约束。
 			dialCtx, cancel := context.WithTimeout(ctx, dialBudget)
@@ -399,7 +399,7 @@ func (t *http2Transport) reverifySlot(ctx context.Context, slot *transportSlot) 
 		return
 	}
 
-	verifyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sharedconfig.SuspendReverifyTimeout)
+	verifyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), config.SuspendReverifyTimeout)
 	defer cancel()
 	defer slot.reverify.Store(false)
 
@@ -421,13 +421,13 @@ func (t *http2Transport) reverifySlot(ctx context.Context, slot *transportSlot) 
 
 func protoOfEndpoint(endpoint string) string {
 	switch endpoint {
-	case sharedconfig.EndpointTCP:
+	case config.EndpointTCP:
 		return "tcp"
-	case sharedconfig.EndpointUDP:
+	case config.EndpointUDP:
 		return "udp"
-	case sharedconfig.EndpointICMP:
+	case config.EndpointICMP:
 		return "icmp"
-	case sharedconfig.EndpointProbe:
+	case config.EndpointProbe:
 		return "probe"
 	}
 	return endpoint

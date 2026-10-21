@@ -15,7 +15,7 @@ import (
 
 	utls "github.com/refraction-networking/utls"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
@@ -117,8 +117,8 @@ func assertSlowRTTWarn(t *testing.T, r slog.Record) map[string]string {
 	if err != nil {
 		t.Fatalf("rtt = %q, want a parseable duration (err %v)", attrs["rtt"], err)
 	}
-	if d < sharedconfig.SlowRTTWarnThreshold {
-		t.Fatalf("rtt = %v, want >= %v", d, sharedconfig.SlowRTTWarnThreshold)
+	if d < config.SlowRTTWarnThreshold {
+		t.Fatalf("rtt = %v, want >= %v", d, config.SlowRTTWarnThreshold)
 	}
 	return attrs
 }
@@ -136,7 +136,7 @@ func submitSlowSamples(lim *slowRTTLogLimiter, n int) {
 	for i := range n {
 		lim.log(600*time.Millisecond+time.Duration(i)*time.Millisecond, slowRTTSample{
 			source:   slowRTTSourceStream,
-			endpoint: sharedconfig.EndpointTCP,
+			endpoint: config.EndpointTCP,
 			target:   "example-" + strconv.Itoa(i) + ".com:443",
 			slot:     &transportSlot{idx: i},
 		})
@@ -151,7 +151,7 @@ func TestLogSlowPathRTTOnSlowStreamSample(t *testing.T) {
 	s, pr := newTestStream()
 	defer pr.Close() //nolint:errcheck
 	defer s.Close()  //nolint:errcheck
-	s.endpoint = sharedconfig.EndpointTCP
+	s.endpoint = config.EndpointTCP
 	s.target = "example.com:443"
 	slot := &transportSlot{idx: 3}
 	s.slot = slot
@@ -176,8 +176,8 @@ func TestLogSlowPathRTTOnSlowStreamSample(t *testing.T) {
 	if attrs["origin"] != slowRTTSourceStream {
 		t.Errorf("origin = %q, want %q", attrs["origin"], slowRTTSourceStream)
 	}
-	if attrs["endpoint"] != sharedconfig.EndpointTCP {
-		t.Errorf("endpoint = %q, want %q", attrs["endpoint"], sharedconfig.EndpointTCP)
+	if attrs["endpoint"] != config.EndpointTCP {
+		t.Errorf("endpoint = %q, want %q", attrs["endpoint"], config.EndpointTCP)
 	}
 	if attrs["proto"] != "tcp" {
 		t.Errorf("proto = %q, want tcp", attrs["proto"])
@@ -207,7 +207,7 @@ func TestLogSlowPathRTTSilentOnFastSample(t *testing.T) {
 	s, pr := newTestStream()
 	defer pr.Close() //nolint:errcheck
 	defer s.Close()  //nolint:errcheck
-	s.endpoint = sharedconfig.EndpointUDP
+	s.endpoint = config.EndpointUDP
 	s.target = "1.1.1.1:53"
 
 	stats.ResetCounters()
@@ -296,8 +296,8 @@ func TestLogSlowPathRTTOnSlowProbe(t *testing.T) {
 	if attrs["origin"] != slowRTTSourceProbe {
 		t.Errorf("origin = %q, want %q", attrs["origin"], slowRTTSourceProbe)
 	}
-	if attrs["endpoint"] != sharedconfig.EndpointProbe {
-		t.Errorf("endpoint = %q, want %q", attrs["endpoint"], sharedconfig.EndpointProbe)
+	if attrs["endpoint"] != config.EndpointProbe {
+		t.Errorf("endpoint = %q, want %q", attrs["endpoint"], config.EndpointProbe)
 	}
 	if attrs["proto"] != "probe" {
 		t.Errorf("proto = %q, want probe", attrs["proto"])
@@ -321,7 +321,7 @@ func TestSlowPathRTTLogLineRendersWithRealHandler(t *testing.T) {
 	s, pr := newTestStream()
 	defer pr.Close() //nolint:errcheck
 	defer s.Close()  //nolint:errcheck
-	s.endpoint = sharedconfig.EndpointTCP
+	s.endpoint = config.EndpointTCP
 	s.target = "example.com:443"
 	s.slot = &transportSlot{idx: 1}
 
@@ -377,9 +377,9 @@ func TestHTTP2Transport_SlowBootstrapLogsRequestIdentity(t *testing.T) {
 		ServerURL: srv.URL,
 		TLSConfig: &utls.Config{
 			InsecureSkipVerify: true,
-			NextProtos:         sharedconfig.NextProtos,
+			NextProtos:         config.NextProtos,
 		},
-		Timeouts: sharedconfig.Timeouts{Base: 5 * time.Second},
+		Timeouts: config.Timeouts{Base: 5 * time.Second},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -388,7 +388,7 @@ func TestHTTP2Transport_SlowBootstrapLogsRequestIdentity(t *testing.T) {
 
 	stats.ResetCounters()
 	stream, err := tr.Open(context.Background(), transport.OpenRequest{
-		Endpoint:     sharedconfig.EndpointTCP,
+		Endpoint:     config.EndpointTCP,
 		Salt:         "dGVzdHNhbHR0ZXN0c2FsdA",
 		HighPriority: true,
 		Target:       "slow.example.com:443",
@@ -413,8 +413,8 @@ func TestHTTP2Transport_SlowBootstrapLogsRequestIdentity(t *testing.T) {
 	if attrs["target"] != "slow.example.com:443" {
 		t.Errorf("target = %q, want slow.example.com:443: the record must name the request", attrs["target"])
 	}
-	if attrs["endpoint"] != sharedconfig.EndpointTCP || attrs["proto"] != "tcp" {
-		t.Errorf("endpoint/proto = %q/%q, want %s/tcp", attrs["endpoint"], attrs["proto"], sharedconfig.EndpointTCP)
+	if attrs["endpoint"] != config.EndpointTCP || attrs["proto"] != "tcp" {
+		t.Errorf("endpoint/proto = %q/%q, want %s/tcp", attrs["endpoint"], attrs["proto"], config.EndpointTCP)
 	}
 	if attrs["origin"] != slowRTTSourceStream {
 		t.Errorf("origin = %q, want %q", attrs["origin"], slowRTTSourceStream)
@@ -449,9 +449,9 @@ func TestHTTP2Transport_SlowBootstrapLogsRequestIdentity(t *testing.T) {
 			ServerURL: fastSrv.URL,
 			TLSConfig: &utls.Config{
 				InsecureSkipVerify: true,
-				NextProtos:         sharedconfig.NextProtos,
+				NextProtos:         config.NextProtos,
 			},
-			Timeouts: sharedconfig.Timeouts{Base: 5 * time.Second},
+			Timeouts: config.Timeouts{Base: 5 * time.Second},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -459,7 +459,7 @@ func TestHTTP2Transport_SlowBootstrapLogsRequestIdentity(t *testing.T) {
 		t.Cleanup(func() { _ = fastTr.Close() })
 
 		fastStream, err := fastTr.Open(context.Background(), transport.OpenRequest{
-			Endpoint:     sharedconfig.EndpointUDP,
+			Endpoint:     config.EndpointUDP,
 			Salt:         "dGVzdHNhbHR0ZXN0c2FsdA",
 			HighPriority: false,
 			Target:       "1.1.1.1:53",
@@ -491,7 +491,7 @@ func TestSlowRTTLogLimiterQuotaAndFlushSummary(t *testing.T) {
 	submitSlowSamples(lim, 5) // 600ms..604ms：前 2 条打印，后 3 条被压掉
 	lim.log(1800*time.Millisecond, slowRTTSample{
 		source:   slowRTTSourceStream,
-		endpoint: sharedconfig.EndpointTCP,
+		endpoint: config.EndpointTCP,
 		target:   "slowest.example.com:443",
 		slot:     &transportSlot{idx: 9},
 	})
@@ -519,9 +519,9 @@ func TestSlowRTTLogLimiterQuotaAndFlushSummary(t *testing.T) {
 	if attrs["worst_target"] != "slowest.example.com:443" {
 		t.Errorf("worst_target = %q, want slowest.example.com:443", attrs["worst_target"])
 	}
-	if attrs["worst_endpoint"] != sharedconfig.EndpointTCP || attrs["worst_origin"] != slowRTTSourceStream {
+	if attrs["worst_endpoint"] != config.EndpointTCP || attrs["worst_origin"] != slowRTTSourceStream {
 		t.Errorf("worst_endpoint/worst_origin = %q/%q, want %s/%s",
-			attrs["worst_endpoint"], attrs["worst_origin"], sharedconfig.EndpointTCP, slowRTTSourceStream)
+			attrs["worst_endpoint"], attrs["worst_origin"], config.EndpointTCP, slowRTTSourceStream)
 	}
 	if attrs["window"] != "1m0s" {
 		t.Errorf("window = %q, want 1m0s", attrs["window"])
@@ -546,7 +546,7 @@ func TestSlowRTTLogLimiterSummaryRidesNextWindow(t *testing.T) {
 	time.Sleep(window + 50*time.Millisecond)
 	lim.log(700*time.Millisecond, slowRTTSample{
 		source:   slowRTTSourceStream,
-		endpoint: sharedconfig.EndpointUDP,
+		endpoint: config.EndpointUDP,
 		target:   "after.example.com:443",
 		slot:     &transportSlot{idx: 1},
 	})
@@ -582,7 +582,7 @@ func TestSlowRTTLogLimiterFastSamplesDoNotSpendQuota(t *testing.T) {
 	for range 100 {
 		lim.log(5*time.Millisecond, slowRTTSample{
 			source:   slowRTTSourceStream,
-			endpoint: sharedconfig.EndpointTCP,
+			endpoint: config.EndpointTCP,
 			target:   "fast.example.com:443",
 		})
 	}

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 )
 
 // ScriptPlatform 标识一套平台脚本的位置参数布局；显式传入而非读 runtime.GOOS，是为了让
@@ -35,7 +35,7 @@ type ScriptArgs struct {
 // NewScriptArgs 构造脚本实参。MTU 要跨进程传递（helper 从 GET /tun 拿到），未配置的 0 必须
 // 落到与主进程相同的默认值。
 func NewScriptArgs(dev DeviceConfig, dns string, mtu int) ScriptArgs {
-	return ScriptArgs{Dev: dev, DNSServer: dns, MTU: sharedconfig.NormalizeTunMTU(mtu)}
+	return ScriptArgs{Dev: dev, DNSServer: dns, MTU: config.NormalizeTunMTU(mtu)}
 }
 
 func Platform() ScriptPlatform { return ScriptPlatform(runtime.GOOS) }

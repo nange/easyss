@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
 )
@@ -124,7 +124,7 @@ func TestNewProxyHandler(t *testing.T) {
 		cfg := ProxyHandlerConfig{
 			MasterKey:      []byte("test-key-32-bytes-long!!!!!!!"),
 			AllowedMethods: nil,
-			Timeouts:       sharedconfig.NewTimeouts(5 * time.Second),
+			Timeouts:       config.NewTimeouts(5 * time.Second),
 		}
 		h := NewProxyHandler(cfg)
 		if h == nil {
@@ -145,7 +145,7 @@ func TestNewProxyHandler(t *testing.T) {
 		cfg := ProxyHandlerConfig{
 			MasterKey:      []byte("test-key-32-bytes-long!!!!!!!"),
 			AllowedMethods: []string{"aes-256-gcm"},
-			Timeouts:       sharedconfig.NewTimeouts(5 * time.Second),
+			Timeouts:       config.NewTimeouts(5 * time.Second),
 		}
 		h := NewProxyHandler(cfg)
 		if len(h.allowedMethods) != 1 {
@@ -163,7 +163,7 @@ func TestNewProxyHandler(t *testing.T) {
 		cfg := ProxyHandlerConfig{
 			MasterKey:      []byte("test-key-32-bytes-long!!!!!!!"),
 			AllowedMethods: []string{"invalid-method", "aes-256-gcm"},
-			Timeouts:       sharedconfig.NewTimeouts(5 * time.Second),
+			Timeouts:       config.NewTimeouts(5 * time.Second),
 		}
 		h := NewProxyHandler(cfg)
 		if len(h.allowedMethods) != 1 {
@@ -176,7 +176,7 @@ func TestNewProxyHandler(t *testing.T) {
 		allInvalid := NewProxyHandler(ProxyHandlerConfig{
 			MasterKey:      []byte("test-key-32-bytes-long!!!!!!!"),
 			AllowedMethods: []string{"invalid-method", "also-invalid"},
-			Timeouts:       sharedconfig.NewTimeouts(5 * time.Second),
+			Timeouts:       config.NewTimeouts(5 * time.Second),
 		})
 		if len(allInvalid.allowedMethods) != 0 {
 			t.Errorf("all-invalid methods must not fall back to the defaults, got %v", allInvalid.allowedMethods)
@@ -186,17 +186,17 @@ func TestNewProxyHandler(t *testing.T) {
 	t.Run("BatchWindowMS 默认值", func(t *testing.T) {
 		cfg := ProxyHandlerConfig{
 			MasterKey: []byte("test-key-32-bytes-long!!!!!!!"),
-			Timeouts:  sharedconfig.NewTimeouts(5 * time.Second),
+			Timeouts:  config.NewTimeouts(5 * time.Second),
 		}
 		h := NewProxyHandler(cfg)
-		if h.shaperCfg.BatchWindowMS != sharedconfig.DefaultBatchWindowMS {
-			t.Errorf("BatchWindowMS = %d, want %d", h.shaperCfg.BatchWindowMS, sharedconfig.DefaultBatchWindowMS)
+		if h.shaperCfg.BatchWindowMS != config.DefaultBatchWindowMS {
+			t.Errorf("BatchWindowMS = %d, want %d", h.shaperCfg.BatchWindowMS, config.DefaultBatchWindowMS)
 		}
-		if h.shaperCfg.BudgetRatio != sharedconfig.DefaultCoverBudgetRatio {
-			t.Errorf("CoverBudgetRatio = %v, want %v", h.shaperCfg.BudgetRatio, sharedconfig.DefaultCoverBudgetRatio)
+		if h.shaperCfg.BudgetRatio != config.DefaultCoverBudgetRatio {
+			t.Errorf("CoverBudgetRatio = %v, want %v", h.shaperCfg.BudgetRatio, config.DefaultCoverBudgetRatio)
 		}
-		if h.shaperCfg.BudgetCap != sharedconfig.DefaultCoverBudgetCap {
-			t.Errorf("CoverBudgetCap = %d, want %d", h.shaperCfg.BudgetCap, sharedconfig.DefaultCoverBudgetCap)
+		if h.shaperCfg.BudgetCap != config.DefaultCoverBudgetCap {
+			t.Errorf("CoverBudgetCap = %d, want %d", h.shaperCfg.BudgetCap, config.DefaultCoverBudgetCap)
 		}
 	})
 
@@ -204,7 +204,7 @@ func TestNewProxyHandler(t *testing.T) {
 		cfg := ProxyHandlerConfig{
 			MasterKey: []byte("test-key-32-bytes-long!!!!!!!"),
 			Shaper:    shaper.Config{BatchWindowMS: 100},
-			Timeouts:  sharedconfig.NewTimeouts(5 * time.Second),
+			Timeouts:  config.NewTimeouts(5 * time.Second),
 		}
 		h := NewProxyHandler(cfg)
 		if h.shaperCfg.BatchWindowMS != 10 {
@@ -215,7 +215,7 @@ func TestNewProxyHandler(t *testing.T) {
 	t.Run("子 handler 非 nil", func(t *testing.T) {
 		cfg := ProxyHandlerConfig{
 			MasterKey: []byte("test-key-32-bytes-long!!!!!!!"),
-			Timeouts:  sharedconfig.NewTimeouts(5 * time.Second),
+			Timeouts:  config.NewTimeouts(5 * time.Second),
 		}
 		h := NewProxyHandler(cfg)
 		if h.tcp == nil {
@@ -244,7 +244,7 @@ func TestOutboundDialer(t *testing.T) {
 }
 
 func TestNewTCPHandler(t *testing.T) {
-	h := newTCPHandler(sharedconfig.Timeouts{StreamIdle: 120 * time.Second, Base: 30 * time.Second}, nil, defaultOutboundDeps())
+	h := newTCPHandler(config.Timeouts{StreamIdle: 120 * time.Second, Base: 30 * time.Second}, nil, defaultOutboundDeps())
 	if h == nil {
 		t.Fatal("newTCPHandler returned nil")
 	}
@@ -257,7 +257,7 @@ func TestNewTCPHandler(t *testing.T) {
 // 拒绝 LAN 远端地址（拨号超时与 keepalive 无法从已建立连接上观测，由 TestOutboundDialer 覆盖）。
 func TestTCPHandlerDialTarget(t *testing.T) {
 	t.Run("网络名与目标原样下传", func(t *testing.T) {
-		h := newTCPHandler(sharedconfig.Timeouts{StreamIdle: 120 * time.Second, Base: 30 * time.Second}, nil, defaultOutboundDeps())
+		h := newTCPHandler(config.Timeouts{StreamIdle: 120 * time.Second, Base: 30 * time.Second}, nil, defaultOutboundDeps())
 		var gotNetwork, gotTarget string
 		h.dialContext = func(_ context.Context, network, target string) (net.Conn, error) {
 			gotNetwork, gotTarget = network, target
@@ -273,7 +273,7 @@ func TestTCPHandlerDialTarget(t *testing.T) {
 	})
 
 	t.Run("拨号后拒绝 LAN 目标", func(t *testing.T) {
-		h := newTCPHandler(sharedconfig.Timeouts{StreamIdle: 120 * time.Second, Base: 30 * time.Second}, nil, defaultOutboundDeps())
+		h := newTCPHandler(config.Timeouts{StreamIdle: 120 * time.Second, Base: 30 * time.Second}, nil, defaultOutboundDeps())
 		stub := newStubConn(&net.TCPAddr{IP: net.ParseIP("192.168.7.7"), Port: 80})
 		h.dialContext = func(context.Context, string, string) (net.Conn, error) { return stub, nil }
 
@@ -287,7 +287,7 @@ func TestTCPHandlerDialTarget(t *testing.T) {
 }
 
 func TestNewUDPHandler(t *testing.T) {
-	h := newUDPHandler(sharedconfig.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, nil, defaultOutboundDeps())
+	h := newUDPHandler(config.Timeouts{UDPIdle: 30 * time.Second, Base: 30 * time.Second}, nil, defaultOutboundDeps())
 	if h == nil {
 		t.Fatal("newUDPHandler returned nil")
 	}
@@ -303,7 +303,7 @@ func TestNewUDPHandler(t *testing.T) {
 // （由 TestTCPHandlerDialTarget 覆盖），而真正进行 ICMP 交换需要原始套接字权限。
 // 拨号超时通过 config.DialTimeout 派生，由 config.TestDialTimeout 固定。
 func TestNewICMPHandler(t *testing.T) {
-	h := newICMPHandler(sharedconfig.Timeouts{Base: 30 * time.Second}, defaultOutboundDeps())
+	h := newICMPHandler(config.Timeouts{Base: 30 * time.Second}, defaultOutboundDeps())
 	if h == nil {
 		t.Fatal("newICMPHandler returned nil")
 	}

@@ -10,7 +10,7 @@ import (
 
 	utls "github.com/refraction-networking/utls"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/transport"
 )
 
@@ -28,7 +28,7 @@ func TestUTLSDialUsesHTTP2(t *testing.T) {
 
 	slot := newSlot(&utls.Config{
 		InsecureSkipVerify: true,
-		NextProtos:         sharedconfig.NextProtos,
+		NextProtos:         config.NextProtos,
 	}, time.Second, nil, time.Minute, time.Second/3)
 	t.Cleanup(slot.transport().CloseIdleConnections)
 
@@ -65,9 +65,9 @@ func TestHTTP2Transport_Non200StatusIsRejected(t *testing.T) {
 		ServerURL: srv.URL,
 		TLSConfig: &utls.Config{
 			InsecureSkipVerify: true,
-			NextProtos:         sharedconfig.NextProtos,
+			NextProtos:         config.NextProtos,
 		},
-		Timeouts: sharedconfig.Timeouts{Base: time.Second},
+		Timeouts: config.Timeouts{Base: time.Second},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestHTTP2Transport_Non200StatusIsRejected(t *testing.T) {
 	t.Cleanup(func() { _ = tr.Close() })
 
 	stream, err := tr.Open(context.Background(), transport.OpenRequest{
-		Endpoint:     sharedconfig.EndpointTCP,
+		Endpoint:     config.EndpointTCP,
 		Salt:         "dGVzdHNhbHR0ZXN0c2FsdA",
 		HighPriority: true,
 	})
@@ -111,9 +111,9 @@ func TestHTTP2Transport_200StatusReadsBody(t *testing.T) {
 		ServerURL: srv.URL,
 		TLSConfig: &utls.Config{
 			InsecureSkipVerify: true,
-			NextProtos:         sharedconfig.NextProtos,
+			NextProtos:         config.NextProtos,
 		},
-		Timeouts: sharedconfig.Timeouts{Base: time.Second},
+		Timeouts: config.Timeouts{Base: time.Second},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +121,7 @@ func TestHTTP2Transport_200StatusReadsBody(t *testing.T) {
 	t.Cleanup(func() { _ = tr.Close() })
 
 	stream, err := tr.Open(context.Background(), transport.OpenRequest{
-		Endpoint:     sharedconfig.EndpointTCP,
+		Endpoint:     config.EndpointTCP,
 		Salt:         "dGVzdHNhbHR0ZXN0c2FsdA",
 		HighPriority: true,
 	})
@@ -159,9 +159,9 @@ func TestHTTP2Transport_GrowEventAttribution(t *testing.T) {
 		ServerURL: srv.URL,
 		TLSConfig: &utls.Config{
 			InsecureSkipVerify: true,
-			NextProtos:         sharedconfig.NextProtos,
+			NextProtos:         config.NextProtos,
 		},
-		Timeouts: sharedconfig.Timeouts{Base: time.Second},
+		Timeouts: config.Timeouts{Base: time.Second},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -171,7 +171,7 @@ func TestHTTP2Transport_GrowEventAttribution(t *testing.T) {
 	open := func(target string) {
 		t.Helper()
 		stream, err := tr.Open(context.Background(), transport.OpenRequest{
-			Endpoint:     sharedconfig.EndpointTCP,
+			Endpoint:     config.EndpointTCP,
 			Salt:         "dGVzdHNhbHR0ZXN0c2FsdA",
 			HighPriority: true,
 			Target:       target,
@@ -196,8 +196,8 @@ func TestHTTP2Transport_GrowEventAttribution(t *testing.T) {
 	if ev.Live != 2 {
 		t.Fatalf("event live = %d, want 2 (first activation)", ev.Live)
 	}
-	if ev.Endpoint != sharedconfig.EndpointTCP {
-		t.Fatalf("event endpoint = %q, want %q", ev.Endpoint, sharedconfig.EndpointTCP)
+	if ev.Endpoint != config.EndpointTCP {
+		t.Fatalf("event endpoint = %q, want %q", ev.Endpoint, config.EndpointTCP)
 	}
 	if ev.Target != "example.com:443" {
 		t.Fatalf("event target = %q, want example.com:443", ev.Target)
@@ -217,7 +217,7 @@ func TestTrackReadMarksSlotHeavy(t *testing.T) {
 		stream := &http2Stream{slot: slot, startTime: time.Now()}
 
 		// 低于快阈值且对慢路径而言太年轻：不标记。
-		stream.trackRead(sharedconfig.HeavyStreamThresholdBytes - 1)
+		stream.trackRead(config.HeavyStreamThresholdBytes - 1)
 		if slot.heavy.Load() != 0 || stream.heavyState.Load() != heavyIdle {
 			t.Fatalf("marked heavy before threshold: slot.heavy=%d state=%d", slot.heavy.Load(), stream.heavyState.Load())
 		}
@@ -227,7 +227,7 @@ func TestTrackReadMarksSlotHeavy(t *testing.T) {
 		if slot.heavy.Load() != 1 || stream.heavyState.Load() != heavyMarked {
 			t.Fatalf("expected heavy mark after threshold: slot.heavy=%d state=%d", slot.heavy.Load(), stream.heavyState.Load())
 		}
-		if slot.bytesRecv.Load() != int64(sharedconfig.HeavyStreamThresholdBytes+1) {
+		if slot.bytesRecv.Load() != int64(config.HeavyStreamThresholdBytes+1) {
 			t.Fatalf("bytesRecv not accumulated: %d", slot.bytesRecv.Load())
 		}
 		if slot.connBytes.Load() != slot.bytesRecv.Load() {
@@ -256,11 +256,11 @@ func TestTrackReadMarksSlotHeavy(t *testing.T) {
 		slot := &transportSlot{}
 		stream := &http2Stream{
 			slot:      slot,
-			startTime: time.Now().Add(-sharedconfig.HeavyStreamMinAge - time.Second),
+			startTime: time.Now().Add(-config.HeavyStreamMinAge - time.Second),
 		}
 
 		// 低于慢阈值：无论存活多久都不标记。
-		stream.trackRead(sharedconfig.HeavyStreamSlowThresholdBytes - 1)
+		stream.trackRead(config.HeavyStreamSlowThresholdBytes - 1)
 		if slot.heavy.Load() != 0 {
 			t.Fatalf("marked heavy below slow threshold: %d", slot.heavy.Load())
 		}
@@ -277,7 +277,7 @@ func TestTrackReadMarksSlotHeavy(t *testing.T) {
 		slot := &transportSlot{}
 		stream := &http2Stream{slot: slot, startTime: time.Now()}
 
-		stream.trackRead(sharedconfig.HeavyStreamSlowThresholdBytes)
+		stream.trackRead(config.HeavyStreamSlowThresholdBytes)
 		if slot.heavy.Load() != 0 {
 			t.Fatalf("young stream marked heavy: %d", slot.heavy.Load())
 		}
@@ -286,7 +286,7 @@ func TestTrackReadMarksSlotHeavy(t *testing.T) {
 	// nil 槽位是无操作（例如测试构造的流）。
 	t.Run("nil slot no-op", func(t *testing.T) {
 		noSlot := &http2Stream{}
-		noSlot.trackRead(sharedconfig.HeavyStreamThresholdBytes)
+		noSlot.trackRead(config.HeavyStreamThresholdBytes)
 		if noSlot.heavyState.Load() != heavyIdle {
 			t.Fatal("nil slot must not be marked heavy")
 		}
@@ -298,7 +298,7 @@ func TestTrackReadMarksSlotHeavy(t *testing.T) {
 		slot := &transportSlot{}
 		stream := &http2Stream{slot: slot, startTime: time.Now()}
 		stream.releaseHeavy()
-		stream.trackRead(sharedconfig.HeavyStreamThresholdBytes)
+		stream.trackRead(config.HeavyStreamThresholdBytes)
 		if slot.heavy.Load() != 0 {
 			t.Fatalf("heavy marked after release: %d", slot.heavy.Load())
 		}

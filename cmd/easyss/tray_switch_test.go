@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/gogpu/systray"
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/runner"
 	"github.com/stretchr/testify/require"
 )
@@ -19,7 +19,7 @@ import (
 func newSwitchTestApp(t *testing.T) *TrayApp {
 	t.Helper()
 
-	cfg := &config.ClientConfig{Servers: []*config.ServerProfile{
+	cfg := &clientconfig.ClientConfig{Servers: []*clientconfig.ServerProfile{
 		{Host: "a.example", Port: 443, Default: true},
 		{Host: "b.example", Port: 443},
 	}}
@@ -39,7 +39,7 @@ func TestSwitchServerRestoresTheRunningSelectionOnFailure(t *testing.T) {
 
 	errBoom := errors.New("boom")
 	var switchedTo string
-	err := a.switchServer(1, func(cfg *config.ClientConfig) error {
+	err := a.switchServer(1, func(cfg *clientconfig.ClientConfig) error {
 		switchedTo = cfg.DefaultServerAddr()
 		return errBoom
 	})
@@ -57,7 +57,7 @@ func TestSwitchServerRestoresTheRunningSelectionOnFailure(t *testing.T) {
 func TestSwitchServerLeavesNothingCheckedWhenTheCoreIsGone(t *testing.T) {
 	a := newSwitchTestApp(t)
 
-	err := a.switchServer(1, func(*config.ClientConfig) error {
+	err := a.switchServer(1, func(*clientconfig.ClientConfig) error {
 		return errors.New("boom")
 	})
 
@@ -72,9 +72,9 @@ func TestSwitchServerMarksTheTargetOnSuccess(t *testing.T) {
 
 	// 与生产 restartService 一致：由 restart 把"目标服务器"这条增量发布出去
 	//（生产实现见 restartServiceInSequence；这里省略真正的 Start）。
-	require.NoError(t, a.switchServer(1, func(cfg *config.ClientConfig) error {
+	require.NoError(t, a.switchServer(1, func(cfg *clientconfig.ClientConfig) error {
 		targetIdx := cfg.DefaultServerIndex()
-		a.updateConfig(func(c *config.ClientConfig) { c.SetDefaultServerIndex(targetIdx) })
+		a.updateConfig(func(c *clientconfig.ClientConfig) { c.SetDefaultServerIndex(targetIdx) })
 		return nil
 	}))
 
@@ -90,7 +90,7 @@ func TestSwitchServerSkipsAServerThatIsAlreadyRunning(t *testing.T) {
 	a.sess.installCore(&runner.Core{})
 
 	called := false
-	require.NoError(t, a.switchServer(0, func(*config.ClientConfig) error {
+	require.NoError(t, a.switchServer(0, func(*clientconfig.ClientConfig) error {
 		called = true
 		return nil
 	}))
@@ -112,7 +112,7 @@ func TestSwitchServerSerializesConcurrentSwitches(t *testing.T) {
 	started := make(chan struct{}, 3)
 	release := make(chan struct{})
 
-	restart := func(*config.ClientConfig) error {
+	restart := func(*clientconfig.ClientConfig) error {
 		mu.Lock()
 		active++
 		if active > maxActive {
@@ -156,11 +156,11 @@ func TestRestartServiceRollsBackToThePreviousServer(t *testing.T) {
 	a := newSwitchTestApp(t)
 	// newSwitchTestApp 的系统代理项默认勾选，才能验证回滚之后它被恢复回来。
 	applied, reverts := stubSysProxy(a.App, nil)
-	a.updateConfig(func(c *config.ClientConfig) { c.Local.HTTPPort = 5080 })
+	a.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.HTTPPort = 5080 })
 
 	errBoom := errors.New("listen tcp 127.0.0.1:4080: bind: address already in use")
 	var started []string
-	start := func(cfg *config.ClientConfig) error {
+	start := func(cfg *clientconfig.ClientConfig) error {
 		started = append(started, cfg.DefaultServerAddr())
 		if cfg.DefaultServerAddr() == "b.example:443" {
 			return errBoom
@@ -191,7 +191,7 @@ func TestRestartServiceReportsBothFailures(t *testing.T) {
 
 	errSwitch := errors.New("switch failed")
 	errRollback := errors.New("rollback failed")
-	start := func(cfg *config.ClientConfig) error {
+	start := func(cfg *clientconfig.ClientConfig) error {
 		if cfg.DefaultServerAddr() == "b.example:443" {
 			return errSwitch
 		}
@@ -219,7 +219,7 @@ func TestRestartServiceDoesNotClobberMenuChangesFromAStaleTarget(t *testing.T) {
 	// 改动挂在那里，就精确落进了"目标配置已取好、但还没起服务"的窗口。
 	revert := a.deps.sysProxyRevert
 	a.deps.sysProxyRevert = func() error {
-		a.updateConfig(func(c *config.ClientConfig) { c.Routing.ProxyRule = "direct" })
+		a.updateConfig(func(c *clientconfig.ClientConfig) { c.Routing.ProxyRule = "direct" })
 		return revert()
 	}
 
@@ -245,10 +245,10 @@ func TestRestartServiceRollbackKeepsMenuChanges(t *testing.T) {
 
 	errBoom := errors.New("new server failed")
 	prevRunCore := a.deps.runCore
-	a.deps.runCore = func(cfg *config.ClientConfig) (*runner.Core, error) {
+	a.deps.runCore = func(cfg *clientconfig.ClientConfig) (*runner.Core, error) {
 		if cfg.DefaultServerAddr() == "b.example:443" {
 			// 新服务器起不来的这一刻，用户改了日志级别。
-			a.updateConfig(func(c *config.ClientConfig) { c.Log.Level = "debug" })
+			a.updateConfig(func(c *clientconfig.ClientConfig) { c.Log.Level = "debug" })
 			return nil, errBoom
 		}
 		return &runner.Core{}, nil
@@ -274,10 +274,10 @@ func TestSwitchServerIsRaceFreeWithStatsReads(t *testing.T) {
 	stubRunCore(a.App)
 	a.sess.installCore(&runner.Core{})
 
-	restart := func(cfg *config.ClientConfig) error {
+	restart := func(cfg *clientconfig.ClientConfig) error {
 		a.Stop()
 		targetIdx := cfg.DefaultServerIndex()
-		a.updateConfig(func(c *config.ClientConfig) { c.SetDefaultServerIndex(targetIdx) })
+		a.updateConfig(func(c *clientconfig.ClientConfig) { c.SetDefaultServerIndex(targetIdx) })
 		return a.Start()
 	}
 
@@ -324,7 +324,7 @@ func TestCloseServiceIsSerializedWithSwitches(t *testing.T) {
 
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	restart := func(*config.ClientConfig) error {
+	restart := func(*clientconfig.ClientConfig) error {
 		close(entered)
 		<-release
 		return nil

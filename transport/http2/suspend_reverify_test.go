@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
 )
@@ -41,8 +41,8 @@ func TestSuspendSamplerDetectsSleep(t *testing.T) {
 	if want := 17 * time.Minute; div != want {
 		t.Fatalf("divergence = %v, want %v (the invisible sleep)", div, want)
 	}
-	if div < sharedconfig.SuspendDivergenceThreshold {
-		t.Fatalf("divergence %v below the threshold %v", div, sharedconfig.SuspendDivergenceThreshold)
+	if div < config.SuspendDivergenceThreshold {
+		t.Fatalf("divergence %v below the threshold %v", div, config.SuspendDivergenceThreshold)
 	}
 
 	// sample 要把当前时刻换算成这个标量。跑着的时钟上相邻两次采样的离差只有读数
@@ -63,7 +63,7 @@ func TestSuspendSamplerDetectsSleep(t *testing.T) {
 func suspendIn(t *testing.T, s *suspendSampler, d time.Duration) {
 	t.Helper()
 	if div, ok := s.sampleOffset(suspendOffset(time.Now()) - int64(d)); ok &&
-		div >= sharedconfig.SuspendDivergenceThreshold {
+		div >= config.SuspendDivergenceThreshold {
 		t.Fatalf("priming the baseline reported a suspension: %v", div)
 	}
 }
@@ -440,7 +440,7 @@ func TestMaybeSuspendArmsFromTheOpenPath(t *testing.T) {
 	open := func() transport.Stream {
 		t.Helper()
 		stream, err := tr.Open(context.Background(), transport.OpenRequest{
-			Endpoint:     sharedconfig.EndpointTCP,
+			Endpoint:     config.EndpointTCP,
 			Salt:         "dGVzdHNhbHR0ZXN0c2FsdA",
 			HighPriority: true,
 		})
@@ -526,7 +526,7 @@ func TestHTTP2Transport_ReverifyKeepsLiveConnection(t *testing.T) {
 	open := func() transport.Stream {
 		t.Helper()
 		stream, err := tr.Open(context.Background(), transport.OpenRequest{
-			Endpoint:     sharedconfig.EndpointTCP,
+			Endpoint:     config.EndpointTCP,
 			Salt:         "dGVzdHNhbHR0ZXN0c2FsdA",
 			HighPriority: true,
 		})
@@ -589,7 +589,7 @@ func TestHTTP2Transport_ReverifyReplacesUnreachableConnection(t *testing.T) {
 	open := func() transport.Stream {
 		t.Helper()
 		stream, err := tr.Open(context.Background(), transport.OpenRequest{
-			Endpoint:     sharedconfig.EndpointTCP,
+			Endpoint:     config.EndpointTCP,
 			Salt:         "dGVzdHNhbHR0ZXN0c2FsdA",
 			HighPriority: true,
 		})

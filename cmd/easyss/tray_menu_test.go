@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/gogpu/systray"
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,7 +62,7 @@ func TestToggleCheckRollsBackOnFailure(t *testing.T) {
 }
 
 func TestServerMenuTracksSelection(t *testing.T) {
-	cfg := &config.ClientConfig{Servers: []*config.ServerProfile{
+	cfg := &clientconfig.ClientConfig{Servers: []*clientconfig.ServerProfile{
 		{Host: "a.example", Port: 443, Default: true},
 		{Host: "b.example", Port: 443},
 	}}

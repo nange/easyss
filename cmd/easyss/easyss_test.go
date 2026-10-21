@@ -25,7 +25,7 @@ import (
 	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/router"
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	server "github.com/nange/easyss/v3/server"
@@ -426,7 +426,7 @@ func newTestHarness(t *testing.T) *testHarness {
 
 	method := protocol.MethodFromString("aes-256-gcm")
 
-	timeouts := sharedconfig.NewTimeouts(clientCfg.TimeoutDuration())
+	timeouts := config.NewTimeouts(clientCfg.TimeoutDuration())
 	handler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), clientCfg.Shaper, timeouts)
 
 	socksServer, err := proxy.NewSocks5Server(proxy.Socks5Options{
@@ -648,10 +648,10 @@ func TestV3Integration_Router(t *testing.T) {
 
 func TestV3Integration_ConfigDefaults(t *testing.T) {
 	// 走生产加载简化配置的同一条路径：BuildSimpleConfig 负责把 0 值归一化成默认端口、规则与超时。
-	cfg, err := clientconfig.BuildSimpleConfig(&sharedconfig.SimpleConfig{
+	cfg, err := clientconfig.BuildSimpleConfig(&config.SimpleConfig{
 		Server:    "example.com",
 		Password:  "secret",
-		LocalPort: sharedconfig.DefaultSocksPort,
+		LocalPort: config.DefaultSocksPort,
 	})
 	require.NoError(t, err)
 
