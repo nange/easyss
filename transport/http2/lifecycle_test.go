@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 )
 
 func TestEvaluateSlotHealth(t *testing.T) {
-	interval := sharedconfig.HealthCheckInterval
+	interval := config.HealthCheckInterval
 	// 传统模式（probeUnsupported）：被动采样器直接标记 degraded，
 	// 与探测功能出现之前的行为一致。
 	lc := &slotLifecycle{probeUnsupported: true}
@@ -35,7 +35,7 @@ func TestEvaluateSlotHealth(t *testing.T) {
 		s := newHeavySlot()
 		// heavy 0->1 后的首个周期只重置吞吐基线，被跳过。
 		lowThroughput(s)
-		for i := range sharedconfig.DegradedPersistCycles - 1 {
+		for i := range config.DegradedPersistCycles - 1 {
 			lowThroughput(s)
 			if s.degraded.Load() {
 				t.Fatalf("degraded too early at cycle %d", i+1)
@@ -63,7 +63,7 @@ func TestEvaluateSlotHealth(t *testing.T) {
 	t.Run("clears degraded after consecutive healthy intervals", func(t *testing.T) {
 		s := newHeavySlot()
 		lowThroughput(s) // 基线重置
-		for range sharedconfig.DegradedPersistCycles {
+		for range config.DegradedPersistCycles {
 			lowThroughput(s)
 		}
 		if !s.degraded.Load() {
@@ -81,7 +81,7 @@ func TestEvaluateSlotHealth(t *testing.T) {
 
 	t.Run("slots without heavy streams never degrade", func(t *testing.T) {
 		s := slotWithPool(&http.Transport{})
-		for range sharedconfig.DegradedPersistCycles + 2 {
+		for range config.DegradedPersistCycles + 2 {
 			lowThroughput(s)
 		}
 		if s.degraded.Load() {
@@ -93,7 +93,7 @@ func TestEvaluateSlotHealth(t *testing.T) {
 		s := newHeavySlot()
 		// 基线重置发生在拥塞闸门之前。
 		lc.evaluateSlotHealth(0, s, interval, false)
-		for range sharedconfig.DegradedPersistCycles + 2 {
+		for range config.DegradedPersistCycles + 2 {
 			s.bytesRecv.Add(10 * 1024)
 			lc.evaluateSlotHealth(0, s, interval, false)
 		}
@@ -145,7 +145,7 @@ func newTestLifecycle(n int, probe func(context.Context, *transportSlot) (float6
 }
 
 func TestSuspicionInsteadOfDirectMark(t *testing.T) {
-	interval := sharedconfig.HealthCheckInterval
+	interval := config.HealthCheckInterval
 	// 探测模式：配置了探测函数，因此被动低速只产生嫌疑；
 	// degraded 标记由探测确认。（这里的假探测函数不会被调用——
 	// 只有被动采样器在运行。）
@@ -165,7 +165,7 @@ func TestSuspicionInsteadOfDirectMark(t *testing.T) {
 	}
 
 	low() // 基线重置
-	for range sharedconfig.DegradedPersistCycles {
+	for range config.DegradedPersistCycles {
 		low()
 	}
 	if s.degraded.Load() {
@@ -183,14 +183,14 @@ func TestSuspicionInsteadOfDirectMark(t *testing.T) {
 }
 
 func TestNoProbeFuncFallsBackToPassive(t *testing.T) {
-	interval := sharedconfig.HealthCheckInterval
+	interval := config.HealthCheckInterval
 	// 未配置探测函数（例如没有探测令牌）：被动采样器保持传统的直接标记。
 	lc := &slotLifecycle{}
 	s := slotWithPool(&http.Transport{})
 	s.heavy.Store(1)
 
 	lc.evaluateSlotHealth(0, s, interval, true) // 基线重置
-	for range sharedconfig.DegradedPersistCycles {
+	for range config.DegradedPersistCycles {
 		s.bytesRecv.Add(10 * 1024)
 		lc.evaluateSlotHealth(0, s, interval, true)
 	}
@@ -300,11 +300,11 @@ func TestProbeUnsupportedFallsBackToPassive(t *testing.T) {
 	}
 
 	// 被动采样器现在直接标记 degraded（传统行为）。
-	interval := sharedconfig.HealthCheckInterval
+	interval := config.HealthCheckInterval
 	s.suspected = false
 	s.heavy.Store(1)
 	lc.evaluateSlotHealth(0, s, interval, true) // 基线重置
-	for range sharedconfig.DegradedPersistCycles {
+	for range config.DegradedPersistCycles {
 		s.bytesRecv.Add(10 * 1024)
 		lc.evaluateSlotHealth(0, s, interval, true)
 	}
@@ -362,8 +362,8 @@ func TestProbeMaxPerInterval(t *testing.T) {
 
 	lc.evaluateProbes(true)
 
-	if calls != sharedconfig.ProbeMaxPerInterval {
-		t.Fatalf("probe calls = %d, want %d", calls, sharedconfig.ProbeMaxPerInterval)
+	if calls != config.ProbeMaxPerInterval {
+		t.Fatalf("probe calls = %d, want %d", calls, config.ProbeMaxPerInterval)
 	}
 	if sch.priority.slots[2].probeLowCycles != 0 {
 		t.Fatal("the third suspect must wait for the next tick")

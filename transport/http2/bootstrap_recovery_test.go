@@ -15,7 +15,7 @@ import (
 
 	utls "github.com/refraction-networking/utls"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
 )
@@ -387,9 +387,9 @@ func newRecoveryTransport(t *testing.T, serverURL, probeToken string) transport.
 	t.Helper()
 	tr, err := New(Config{
 		ServerURL:    serverURL,
-		TLSConfig:    &utls.Config{InsecureSkipVerify: true, NextProtos: sharedconfig.NextProtos},
+		TLSConfig:    &utls.Config{InsecureSkipVerify: true, NextProtos: config.NextProtos},
 		MaxSlotCount: 1,
-		Timeouts:     sharedconfig.Timeouts{Base: time.Second},
+		Timeouts:     config.Timeouts{Base: time.Second},
 		ProbeToken:   probeToken,
 	})
 	if err != nil {
@@ -408,7 +408,7 @@ func TestHTTP2Transport_InvalidateConnForcesNewConnection(t *testing.T) {
 	open := func() transport.Stream {
 		t.Helper()
 		stream, err := tr.Open(context.Background(), transport.OpenRequest{
-			Endpoint:     sharedconfig.EndpointTCP,
+			Endpoint:     config.EndpointTCP,
 			Salt:         "dGVzdHNhbHR0ZXN0c2FsdA",
 			HighPriority: true,
 		})
@@ -461,7 +461,7 @@ func TestHTTP2Transport_AwaitAndLivenessWiring(t *testing.T) {
 	tr := newRecoveryTransport(t, srv.URL, "")
 
 	stream, err := tr.Open(context.Background(), transport.OpenRequest{
-		Endpoint:     sharedconfig.EndpointTCP,
+		Endpoint:     config.EndpointTCP,
 		Salt:         "dGVzdHNhbHR0ZXN0c2FsdA",
 		HighPriority: true,
 	})
@@ -539,7 +539,7 @@ func TestHTTP2Transport_LivenessSharesInflightConnection(t *testing.T) {
 	release := make(chan struct{})
 	var once sync.Once
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == sharedconfig.EndpointProbe {
+		if r.URL.Path == config.EndpointProbe {
 			w.Header().Set("Content-Type", "application/octet-stream")
 			w.WriteHeader(http.StatusOK)
 			return
@@ -561,7 +561,7 @@ func TestHTTP2Transport_LivenessSharesInflightConnection(t *testing.T) {
 
 	tr := newRecoveryTransport(t, srv.URL, "dummy-probe-token")
 	stream, err := tr.Open(context.Background(), transport.OpenRequest{
-		Endpoint:     sharedconfig.EndpointTCP,
+		Endpoint:     config.EndpointTCP,
 		Salt:         "dGVzdHNhbHR0ZXN0c2FsdA",
 		HighPriority: true,
 	})
@@ -658,9 +658,9 @@ func TestHTTP2Transport_InvalidateConnReplacesPool(t *testing.T) {
 	var dials atomic.Int32
 	tr, err := New(Config{
 		ServerURL:    srv.URL,
-		TLSConfig:    &utls.Config{InsecureSkipVerify: true, NextProtos: sharedconfig.NextProtos},
+		TLSConfig:    &utls.Config{InsecureSkipVerify: true, NextProtos: config.NextProtos},
 		MaxSlotCount: 1,
-		Timeouts:     sharedconfig.Timeouts{Base: time.Second},
+		Timeouts:     config.Timeouts{Base: time.Second},
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			c, err := (&net.Dialer{}).DialContext(ctx, network, addr)
 			if err != nil {
@@ -678,7 +678,7 @@ func TestHTTP2Transport_InvalidateConnReplacesPool(t *testing.T) {
 	open := func() transport.Stream {
 		t.Helper()
 		stream, err := tr.Open(context.Background(), transport.OpenRequest{
-			Endpoint:     sharedconfig.EndpointTCP,
+			Endpoint:     config.EndpointTCP,
 			Salt:         bootstrapSalt,
 			HighPriority: true,
 		})
@@ -794,7 +794,7 @@ func TestHTTP2Transport_SecondConnInGenerationIsObservable(t *testing.T) {
 	open := func() transport.Stream {
 		t.Helper()
 		stream, err := tr.Open(context.Background(), transport.OpenRequest{
-			Endpoint:     sharedconfig.EndpointTCP,
+			Endpoint:     config.EndpointTCP,
 			Salt:         "dGVzdHNhbHR0ZXN0c2FsdA",
 			HighPriority: true,
 		})

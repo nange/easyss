@@ -3,7 +3,7 @@ package handler
 import (
 	"testing"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/server/nextproxy"
 )
 
@@ -18,7 +18,7 @@ func TestSessionLogAttrsIncludesNextProxy(t *testing.T) {
 
 	h := NewProxyHandler(ProxyHandlerConfig{NextProxy: np})
 	attrs := h.sessionLogAttrs(handshakeResult{
-		endpoint: sharedconfig.EndpointTCP,
+		endpoint: config.EndpointTCP,
 		target:   "example.com:443",
 	}, "client:1234")
 
@@ -41,7 +41,7 @@ func TestSessionLogAttrsOmitsRouteForDirectAndUDP(t *testing.T) {
 	h := NewProxyHandler(ProxyHandlerConfig{NextProxy: np})
 
 	udpAttrs := h.sessionLogAttrs(handshakeResult{
-		endpoint: sharedconfig.EndpointUDP,
+		endpoint: config.EndpointUDP,
 		target:   "8.8.8.8:53",
 	}, "client:1234")
 	if got := attrValue(udpAttrs, "via_next_proxy"); got != nil {
@@ -54,7 +54,7 @@ func TestSessionLogAttrsOmitsRouteForDirectAndUDP(t *testing.T) {
 	}
 	directHandler := NewProxyHandler(ProxyHandlerConfig{NextProxy: direct})
 	directAttrs := directHandler.sessionLogAttrs(handshakeResult{
-		endpoint: sharedconfig.EndpointTCP,
+		endpoint: config.EndpointTCP,
 		target:   "example.com:443",
 	}, "client:1234")
 	if got := attrValue(directAttrs, "via_next_proxy"); got != nil {

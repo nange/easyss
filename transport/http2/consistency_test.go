@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/transport"
 )
 
@@ -129,7 +129,7 @@ func TestGrowEventRingOrderAndCap(t *testing.T) {
 
 	for i := range maxGrowEvents + 4 {
 		tr.recordGrowEvent("bulk", int32(i), transport.OpenRequest{
-			Endpoint: sharedconfig.EndpointUDP,
+			Endpoint: config.EndpointUDP,
 			Target:   "8.8.8.8:53",
 		})
 	}
@@ -143,7 +143,7 @@ func TestGrowEventRingOrderAndCap(t *testing.T) {
 	if evs[0].Live != maxGrowEvents+3 {
 		t.Fatalf("head event live = %d, want %d (newest first)", evs[0].Live, maxGrowEvents+3)
 	}
-	if evs[0].Pool != "bulk" || evs[0].Endpoint != sharedconfig.EndpointUDP || evs[0].Target != "8.8.8.8:53" {
+	if evs[0].Pool != "bulk" || evs[0].Endpoint != config.EndpointUDP || evs[0].Target != "8.8.8.8:53" {
 		t.Fatalf("head event fields wrong: %+v", evs[0])
 	}
 	if evs[len(evs)-1].Live != 4 {
@@ -173,7 +173,7 @@ func TestGrowEventRingConcurrent(t *testing.T) {
 			default:
 			}
 			tr.recordGrowEvent("bulk", 3, transport.OpenRequest{
-				Endpoint: sharedconfig.EndpointTCP,
+				Endpoint: config.EndpointTCP,
 				Target:   "1.2.3.4:53",
 			})
 		}

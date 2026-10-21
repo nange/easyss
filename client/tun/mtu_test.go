@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,9 +30,9 @@ func TestNewNormalizesMTU(t *testing.T) {
 		in   int
 		want int
 	}{
-		{"未配置", 0, sharedconfig.DefaultTunMTU},
-		{"低于下界", 100, sharedconfig.MinTunMTU},
-		{"高于上界", 1 << 20, sharedconfig.MaxTunMTU},
+		{"未配置", 0, config.DefaultTunMTU},
+		{"低于下界", 100, config.MinTunMTU},
+		{"高于上界", 1 << 20, config.MaxTunMTU},
 		{"区间内的值原样保留", 8500, 8500},
 	}
 	for _, tc := range cases {
@@ -61,7 +61,7 @@ func TestEngineMTUCapsAnOutOfRangeDeviceMTU(t *testing.T) {
 
 	m := New(Config{Socks5Addr: "socks5://127.0.0.1:1", Device: "utun9", DeviceFD: 7, MTU: 1500})
 	stubIfaceMTU(m, 1<<16-1, nil)
-	require.Equal(t, sharedconfig.MaxTunMTU, m.engineMTU())
+	require.Equal(t, config.MaxTunMTU, m.engineMTU())
 }
 
 // TestEngineMTUKeepsTheConfiguredMTUWhenTheDeviceIsSmaller 固定另一个方向：

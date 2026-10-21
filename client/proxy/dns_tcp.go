@@ -7,13 +7,13 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/stats"
 )
 
 // tcpDNSSession 持有一条 TCP DNS 连接生命周期内复用的代理上游交换。只有代理分支
-// （经隧道到 config.ProxyDNSServer）使用它；直连分支每个查询独立拨号。
+// （经隧道到 clientconfig.ProxyDNSServer）使用它；直连分支每个查询独立拨号。
 type tcpDNSSession struct {
 	d   *dnsInterceptor
 	key string
@@ -27,7 +27,7 @@ type tcpDNSSession struct {
 func (d *dnsInterceptor) newTCPSession(remote net.Addr) *tcpDNSSession {
 	return &tcpDNSSession{
 		d:   d,
-		key: fmt.Sprintf("tcp_dns://%s->%s", remote, config.ProxyDNSServer),
+		key: fmt.Sprintf("tcp_dns://%s->%s", remote, clientconfig.ProxyDNSServer),
 		// %v 而非 remote.String()：remote 允许为 nil，nil 接口上调用 String 会 panic。
 		src: fmt.Sprintf("%v", remote),
 	}
@@ -70,7 +70,7 @@ func (s *tcpDNSSession) resolve(msg *dns.Msg, target string) (*dns.Msg, error) {
 	return resp, nil
 }
 
-// resolveProxy 把查询经隧道发给 config.ProxyDNSServer 并同步等待应答。刻意忽略客户端请求
+// resolveProxy 把查询经隧道发给 clientconfig.ProxyDNSServer 并同步等待应答。刻意忽略客户端请求
 // 的解析器地址：走代理就是为了让查询在隧道出口发出，避免解析器降级到 TCP 时把明文发到墙内。
 // 交换在连接内复用，每次查询都要显式发送，只有"创建时首载荷已并入引导记录"那次例外。
 func (s *tcpDNSSession) resolveProxy(msg *dns.Msg) (*dns.Msg, error) {
@@ -81,7 +81,7 @@ func (s *tcpDNSSession) resolveProxy(msg *dns.Msg) (*dns.Msg, error) {
 	}
 
 	if s.ue == nil {
-		ue, created, err := s.d.pool.acquireExchange(context.Background(), s.key, config.ProxyDNSServer, data)
+		ue, created, err := s.d.pool.acquireExchange(context.Background(), s.key, clientconfig.ProxyDNSServer, data)
 		if err != nil {
 			return nil, err
 		}

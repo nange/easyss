@@ -19,17 +19,17 @@ import (
 
 	"github.com/caddyserver/certmagic"
 	"github.com/mholt/acmez/v3/acme"
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
-	"github.com/nange/easyss/v3/server/config"
+	serverconfig "github.com/nange/easyss/v3/server/config"
 	"github.com/nange/easyss/v3/server/handler"
 	"github.com/nange/easyss/v3/server/nextproxy"
 	"github.com/nange/easyss/v3/stats"
 )
 
 type Server struct {
-	cfg        *config.FileConfig
+	cfg        *serverconfig.FileConfig
 	httpServer *http.Server
 	mux        *http.ServeMux
 	certCache  *certmagic.Cache
@@ -43,7 +43,7 @@ const acmeProfileShortLived = "shortlived"
 
 // New 自己校验一次：测试与嵌入式调用会直接手搓 FileConfig，只靠配置加载路径校验等于留一条
 // 绕过口子。Validate 是纯内存检查且幂等。
-func New(cfg *config.FileConfig) (*Server, error) {
+func New(cfg *serverconfig.FileConfig) (*Server, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -65,7 +65,7 @@ func (s *Server) initTLS() (*tls.Config, error) {
 		}
 		return &tls.Config{
 			Certificates: []tls.Certificate{cert},
-			NextProtos:   sharedconfig.NextProtos,
+			NextProtos:   config.NextProtos,
 			MinVersion:   tls.VersionTLS12,
 		}, nil
 	}
@@ -98,7 +98,7 @@ func (s *Server) initTLS() (*tls.Config, error) {
 	}
 
 	s.certCache = cache
-	tlsConfig.NextProtos = append(slices.Clone(sharedconfig.NextProtos), tlsConfig.NextProtos...)
+	tlsConfig.NextProtos = append(slices.Clone(config.NextProtos), tlsConfig.NextProtos...)
 	return tlsConfig, nil
 }
 
@@ -275,7 +275,7 @@ func (s *Server) Start() error {
 	cfg := s.cfg
 	srvCfg := cfg.Server
 	// 这里再算一次（幂等）是为了覆盖不经过配置加载的调用方，启动日志与后续派生看到同一个值。
-	timeout := sharedconfig.TimeoutDuration(cfg.Timeout)
+	timeout := config.TimeoutDuration(cfg.Timeout)
 	log.Info("[SERVER] starting", "listen", srvCfg.ListenAddr(), "host", srvCfg.Host, "timeout", int(timeout.Seconds()))
 
 	tlsConfig, err := s.initTLS()
@@ -295,7 +295,7 @@ func (s *Server) Start() error {
 		log.Info("[SERVER] TLS mode: certmagic (Let's Encrypt)", "host", srvCfg.Host, "email", srvCfg.Email)
 	}
 
-	timeouts := sharedconfig.NewTimeouts(timeout)
+	timeouts := config.NewTimeouts(timeout)
 
 	fallback, err := handler.NewFallback(handler.FallbackConfig{
 		Target:       cfg.Fallback.Target,
@@ -337,7 +337,7 @@ func (s *Server) Start() error {
 		Fallback:       fallback,
 	})
 
-	probePayload := make([]byte, sharedconfig.ProbePayloadSize)
+	probePayload := make([]byte, config.ProbePayloadSize)
 	if _, err := io.ReadFull(rand.Reader, probePayload); err != nil {
 		return fmt.Errorf("generate probe payload: %w", err)
 	}
@@ -350,17 +350,17 @@ func (s *Server) Start() error {
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fallback.Serve(w, r)
 	})
-	s.mux.Handle(sharedconfig.EndpointTCP, proxyHandler)
-	s.mux.Handle(sharedconfig.EndpointUDP, proxyHandler)
-	s.mux.Handle(sharedconfig.EndpointICMP, proxyHandler)
-	s.mux.Handle(sharedconfig.EndpointProbe, probeHandler)
+	s.mux.Handle(config.EndpointTCP, proxyHandler)
+	s.mux.Handle(config.EndpointUDP, proxyHandler)
+	s.mux.Handle(config.EndpointICMP, proxyHandler)
+	s.mux.Handle(config.EndpointProbe, probeHandler)
 
 	s.httpServer = buildHTTPServer(cfg, tlsConfig, s.mux, timeout)
 
 	// 打进生效的 HTTP/2 参数：上传速度上不去时，第一件事是确认服务端给了多大的窗口与并发流。
 	log.Info("[SERVER] listening",
 		"addr", srvCfg.ListenAddr(),
-		"routes", []string{"/", sharedconfig.EndpointTCP, sharedconfig.EndpointUDP, sharedconfig.EndpointICMP, sharedconfig.EndpointProbe},
+		"routes", []string{"/", config.EndpointTCP, config.EndpointUDP, config.EndpointICMP, config.EndpointProbe},
 		"h2_max_frame_size", s.httpServer.HTTP2.MaxReadFrameSize,
 		"h2_recv_buf_stream", s.httpServer.HTTP2.MaxReceiveBufferPerStream,
 		"h2_recv_buf_conn", s.httpServer.HTTP2.MaxReceiveBufferPerConnection,
@@ -372,12 +372,12 @@ func (s *Server) Start() error {
 
 // buildHTTPServer 的 HTTP/2 参数按上传吞吐量定尺寸：流级接收窗口决定单条上传流的在途数据量
 // （吞吐 ≈ 窗口/RTT），连接级窗口是每连接上界。这里只保留 0 值兜底。
-func buildHTTPServer(cfg *config.FileConfig, tlsConfig *tls.Config, mux *http.ServeMux, timeout time.Duration) *http.Server {
+func buildHTTPServer(cfg *serverconfig.FileConfig, tlsConfig *tls.Config, mux *http.ServeMux, timeout time.Duration) *http.Server {
 	http2Cfg := &http.HTTP2Config{
-		MaxReadFrameSize:              effectiveH2(cfg.Transport.H2MaxFrameSize, sharedconfig.HTTP2ServerMaxReadFrameSize),
-		MaxReceiveBufferPerConnection: effectiveH2(cfg.Transport.H2RecvBufConn, sharedconfig.HTTP2ServerReceiveBufferPerConnection),
-		MaxReceiveBufferPerStream:     effectiveH2(cfg.Transport.H2RecvBufStream, sharedconfig.HTTP2ServerReceiveBufferPerStream),
-		MaxConcurrentStreams:          sharedconfig.HTTP2ServerMaxConcurrentStreams,
+		MaxReadFrameSize:              effectiveH2(cfg.Transport.H2MaxFrameSize, config.HTTP2ServerMaxReadFrameSize),
+		MaxReceiveBufferPerConnection: effectiveH2(cfg.Transport.H2RecvBufConn, config.HTTP2ServerReceiveBufferPerConnection),
+		MaxReceiveBufferPerStream:     effectiveH2(cfg.Transport.H2RecvBufStream, config.HTTP2ServerReceiveBufferPerStream),
+		MaxConcurrentStreams:          config.HTTP2ServerMaxConcurrentStreams,
 	}
 
 	// 连接级窗口同时是流级窗口的硬上限：配得比流级窗口小，单条流的在途额度就由它决定，

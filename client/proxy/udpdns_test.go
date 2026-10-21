@@ -10,7 +10,7 @@ import (
 	clientconfig "github.com/nange/easyss/v3/client/config"
 	easydns "github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/router"
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/transport"
 )
@@ -171,7 +171,7 @@ func newDNSMultiplexTestServer(t *testing.T) (*Socks5Server, *mockTransport) {
 		ListenAddr: "127.0.0.1:0",
 		Handler:    newTestStreamHandler(tr),
 		Method:     protocol.MethodAES256GCM,
-		Timeouts: sharedconfig.Timeouts{
+		Timeouts: config.Timeouts{
 			Base:       30 * time.Second,
 			Dial:       10 * time.Second,
 			StreamIdle: 30 * time.Second,

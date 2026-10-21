@@ -7,7 +7,7 @@ import (
 
 	netroute "github.com/libp2p/go-netroute"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 )
 
 // easyssTunSubnet 是 easyss TUN 设备所在的子网。
@@ -27,8 +27,8 @@ func IsTunIface(iface *net.Interface) bool {
 	if iface == nil {
 		return false
 	}
-	if iface.Name == sharedconfig.DefaultTunDeviceName ||
-		iface.Name == sharedconfig.DefaultTunDeviceNameDarwin {
+	if iface.Name == config.DefaultTunDeviceName ||
+		iface.Name == config.DefaultTunDeviceNameDarwin {
 		return true
 	}
 	addrs, err := iface.Addrs()

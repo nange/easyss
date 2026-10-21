@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/client/proxy"
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util"
 	"golang.org/x/sys/unix"
@@ -65,7 +65,7 @@ func (h *tunHelper) setup(httpAddr string) (step string, err error) {
 
 	// 设备由 helper 创建，tun2socks 只设 netstack 的 MTU：两侧不一致时 netstack 会静默丢弃超过
 	// 自身 MTU 的包（UDP、ICMP 与 IP 分片），因此 0 值必须落到与主进程相同的默认值。
-	h.mtu = sharedconfig.NormalizeTunMTU(cfg.MTU)
+	h.mtu = config.NormalizeTunMTU(cfg.MTU)
 	tunFd, actualDevice, err := openTunDevice(cfg.Device)
 	if err != nil {
 		return "open tun device", err

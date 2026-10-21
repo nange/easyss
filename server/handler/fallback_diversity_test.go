@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 )
 
@@ -495,7 +495,7 @@ func TestClientRequestShapes_Always200(t *testing.T) {
 	// 带有效 x-es 的解密失败路径由 reject_test.go 覆盖（同样断言 200）。
 	h := NewProxyHandler(ProxyHandlerConfig{
 		MasterKey: masterKeyForTest(),
-		Timeouts:  sharedconfig.NewTimeouts(time.Second),
+		Timeouts:  config.NewTimeouts(time.Second),
 	})
 	for _, tt := range []struct {
 		name    string

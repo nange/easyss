@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/gogpu/systray"
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/util"
 )
 
@@ -19,7 +19,7 @@ type serverMenu struct {
 	addrs []string
 }
 
-func newServerMenu(m *systray.Menu, cfg *config.ClientConfig, onSelect func(int)) *serverMenu {
+func newServerMenu(m *systray.Menu, cfg *clientconfig.ClientConfig, onSelect func(int)) *serverMenu {
 	addrs := cfg.ServerListAddrs()
 	if len(addrs) == 0 {
 		addrs = []string{cfg.DefaultServerAddr()}
@@ -62,7 +62,7 @@ func (s *serverMenu) updateMetrics(rttMs float64, downSpeed string) {
 }
 
 // startStatsLoop 轮询本地 /stats 并刷新选中项；closing 关闭后返回。
-func (s *serverMenu) startStatsLoop(cfg *config.ClientConfig, closing <-chan struct{}) {
+func (s *serverMenu) startStatsLoop(cfg *clientconfig.ClientConfig, closing <-chan struct{}) {
 	url := fmt.Sprintf("http://%s/stats", util.LocalProxyDialAddr(cfg.Local.BindAll, cfg.Local.HTTPPort))
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()

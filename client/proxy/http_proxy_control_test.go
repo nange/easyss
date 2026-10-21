@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/shaper"
 )
 
@@ -41,7 +41,7 @@ func TestStatsEndpointStillRequiresAuth(t *testing.T) {
 
 func TestStatsEndpointServesLoopback(t *testing.T) {
 	s := &HTTPProxyServer{
-		handler: NewStreamHandler(&mockTransport{}, nil, shaper.Config{}, sharedconfig.Timeouts{}),
+		handler: NewStreamHandler(&mockTransport{}, nil, shaper.Config{}, config.Timeouts{}),
 	}
 	r := httptest.NewRequest(http.MethodGet, "/stats", nil)
 	r.RemoteAddr = "127.0.0.1:4321"

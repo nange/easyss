@@ -9,7 +9,7 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/tun"
@@ -87,18 +87,18 @@ func (s *session) tunUpViaHelper() error {
 }
 
 // preResolveHelperServer 在 helper 接管系统 DNS 之前填充服务端域名缓存，避免解析递归。
-func preResolveHelperServer(core *runner.Core, cfg *config.ClientConfig) error {
+func preResolveHelperServer(core *runner.Core, cfg *clientconfig.ClientConfig) error {
 	serverAddr := cfg.DefaultServer().Host
 	if util.IsIP(serverAddr) {
 		return nil
 	}
-	if len(config.DirectDNSServers) == 0 {
+	if len(clientconfig.DirectDNSServers) == 0 {
 		return fmt.Errorf("failed to pre-resolve server hostname %s: dns cache not available", serverAddr)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), dns.PreResolveTimeout)
 	// 缓存由核心持有（runner.Core.PrePopulateServerDomain），是 DNS pinning 与 TUN 系统 DNS 的同一来源。
-	err := core.PrePopulateServerDomain(ctx, serverAddr, config.DirectDNSServers,
+	err := core.PrePopulateServerDomain(ctx, serverAddr, clientconfig.DirectDNSServers,
 		cfg.Routing.IPV6Rule != "enable")
 	cancel()
 	if err != nil {
@@ -111,7 +111,7 @@ func preResolveHelperServer(core *runner.Core, cfg *config.ClientConfig) error {
 // newHelperTunConfig 由与直连路径相同的设备快照构造 helper 配置。必须在预解析之后调用：
 // 只有成功过的解析器才可能被记录（见 dns.PreferredSystemDNS），先取值会把已知不可达的默认值写进系统 DNS。
 // MTU 与稍后交给 netstack 的值同源：helper 写进设备、主进程设 netstack，不一致时 netstack 会静默丢弃超限包。
-func newHelperTunConfig(cfg *config.ClientConfig, dev tun.DeviceConfig) *proxy.TunConfig {
+func newHelperTunConfig(cfg *clientconfig.ClientConfig, dev tun.DeviceConfig) *proxy.TunConfig {
 	return &proxy.TunConfig{
 		Socks5Addr:     util.Socks5URI(cfg.Local.BindAll, cfg.Local.SocksPort),
 		DNSAddr:        tunDNS(),
@@ -131,7 +131,7 @@ func newHelperTunConfig(cfg *config.ClientConfig, dev tun.DeviceConfig) *proxy.T
 // spawnHelperTun 拉起提权 helper 并接收 TUN fd；失败时释放本次已建立的全部资源。
 // 生成等待上限取归一化后的基础超时；helper 经 httpAddr 取配置，地址必须与本地 HTTP 入口监听同源
 // （util.LocalProxyDialAddr），写死 127.0.0.1 会在 bind_all 且只接受 IPv6 回环时让 TUN 无法启用。
-func spawnHelperTun(cfg *config.ClientConfig) (int, io.WriteCloser, error) {
+func spawnHelperTun(cfg *clientconfig.ClientConfig) (int, io.WriteCloser, error) {
 	spawnTimeout := cfg.TimeoutDuration()
 	fdSocketPath := tunFdSocketPath()
 	httpAddr := util.LocalProxyDialAddr(cfg.Local.BindAll, cfg.Local.HTTPPort)
@@ -161,9 +161,9 @@ func spawnHelperTun(cfg *config.ClientConfig) (int, io.WriteCloser, error) {
 	return fd, fifoWriter, nil
 }
 
-func (s *session) installHelperTun(core *runner.Core, cfg *config.ClientConfig, fd int, dev tun.DeviceConfig) {
+func (s *session) installHelperTun(core *runner.Core, cfg *clientconfig.ClientConfig, fd int, dev tun.DeviceConfig) {
 	// 偏好进不可变快照，运行期状态是 core 上的显式开关（见 client.Client.SetTunMode）。
-	s.app.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = true })
+	s.app.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = true })
 	core.Client.SetTunMode(true)
 
 	mgr := tun.New(tun.Config{

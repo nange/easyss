@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
@@ -89,7 +89,7 @@ func newRejectHandlerWith(deps *outboundDeps, handshakeTimeout time.Duration) ht
 	return newProxyHandlerWithDeps(ProxyHandlerConfig{
 		MasterKey:        bytes.Repeat([]byte{0x42}, 32),
 		AllowedMethods:   []string{protocol.MethodAES256GCM.String()},
-		Timeouts:         sharedconfig.NewTimeouts(5 * time.Second),
+		Timeouts:         config.NewTimeouts(5 * time.Second),
 		HandshakeTimeout: handshakeTimeout,
 		Shaper:           shaper.Config{BatchWindowMS: 1},
 	}, deps)
@@ -106,7 +106,7 @@ func TestServeHTTP_HandshakeTimeout408(t *testing.T) {
 	pr, pw := io.Pipe()
 	defer pr.Close() //nolint:errcheck
 
-	resp, body := postBootstrap(t, tr, srv.URL+sharedconfig.EndpointTCP, saltToB64(salt), pr)
+	resp, body := postBootstrap(t, tr, srv.URL+config.EndpointTCP, saltToB64(salt), pr)
 	_ = pw.Close()
 
 	require.Equal(t, http.StatusRequestTimeout, resp.StatusCode,
@@ -122,7 +122,7 @@ func TestServeHTTP_DecryptFailureKeepsFallback(t *testing.T) {
 
 	salt, err := crypto.GenerateSalt()
 	require.NoError(t, err)
-	resp, body := postBootstrap(t, tr, srv.URL+sharedconfig.EndpointTCP,
+	resp, body := postBootstrap(t, tr, srv.URL+config.EndpointTCP,
 		saltToB64(salt), bytes.NewReader(bytes.Repeat([]byte{0xAB}, 128)))
 
 	require.Equal(t, http.StatusOK, resp.StatusCode,
@@ -140,11 +140,11 @@ func TestServeHTTP_ReplaySalt400(t *testing.T) {
 	require.NoError(t, err)
 	saltB64 := saltToB64(salt)
 
-	resp1, _ := postBootstrap(t, tr, srv.URL+sharedconfig.EndpointTCP, saltB64,
+	resp1, _ := postBootstrap(t, tr, srv.URL+config.EndpointTCP, saltB64,
 		bytes.NewReader(bytes.Repeat([]byte{0xAB}, 128)))
 	require.Equal(t, http.StatusOK, resp1.StatusCode)
 
-	resp2, body2 := postBootstrap(t, tr, srv.URL+sharedconfig.EndpointTCP, saltB64,
+	resp2, body2 := postBootstrap(t, tr, srv.URL+config.EndpointTCP, saltB64,
 		bytes.NewReader(bytes.Repeat([]byte{0xAB}, 128)))
 	require.Equal(t, http.StatusBadRequest, resp2.StatusCode,
 		"replayed salt should be rejected with 400, body: %s", body2)
@@ -157,9 +157,9 @@ func TestServeHTTP_EndpointMismatch404(t *testing.T) {
 	tr := newRejectTestClient(t)
 
 	masterKey := bytes.Repeat([]byte{0x42}, 32)
-	saltB64, body := buildBootstrapRecord(t, masterKey, sharedconfig.EndpointTCP,
+	saltB64, body := buildBootstrapRecord(t, masterKey, config.EndpointTCP,
 		protocol.ProtoUDP, protocol.MethodAES256GCM, "1.1.1.1:53")
-	resp, respBody := postBootstrap(t, tr, srv.URL+sharedconfig.EndpointTCP, saltB64, bytes.NewReader(body))
+	resp, respBody := postBootstrap(t, tr, srv.URL+config.EndpointTCP, saltB64, bytes.NewReader(body))
 	require.Equal(t, http.StatusNotFound, resp.StatusCode,
 		"endpoint mismatch should be rejected with 404, body: %s", respBody)
 }
@@ -170,9 +170,9 @@ func TestServeHTTP_MethodNotAllowed405(t *testing.T) {
 	tr := newRejectTestClient(t)
 
 	masterKey := bytes.Repeat([]byte{0x42}, 32)
-	saltB64, body := buildBootstrapRecord(t, masterKey, sharedconfig.EndpointTCP,
+	saltB64, body := buildBootstrapRecord(t, masterKey, config.EndpointTCP,
 		protocol.ProtoTCP, protocol.MethodChaCha20Poly1305, "1.1.1.1:53")
-	resp, respBody := postBootstrap(t, tr, srv.URL+sharedconfig.EndpointTCP, saltB64, bytes.NewReader(body))
+	resp, respBody := postBootstrap(t, tr, srv.URL+config.EndpointTCP, saltB64, bytes.NewReader(body))
 	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode,
 		"disallowed method should be rejected with 405, body: %s", respBody)
 }
@@ -192,9 +192,9 @@ func TestServeHTTP_LANTarget400(t *testing.T) {
 		"203.0.113.1:80",    // TEST-NET-3
 		"255.255.255.255:9", // 广播地址
 	} {
-		saltB64, body := buildBootstrapRecord(t, masterKey, sharedconfig.EndpointTCP,
+		saltB64, body := buildBootstrapRecord(t, masterKey, config.EndpointTCP,
 			protocol.ProtoTCP, protocol.MethodAES256GCM, target)
-		resp, respBody := postBootstrap(t, tr, srv.URL+sharedconfig.EndpointTCP, saltB64, bytes.NewReader(body))
+		resp, respBody := postBootstrap(t, tr, srv.URL+config.EndpointTCP, saltB64, bytes.NewReader(body))
 		require.Equal(t, http.StatusBadRequest, resp.StatusCode,
 			"non-public target %s should be rejected with 400, body: %s", target, respBody)
 	}
@@ -208,9 +208,9 @@ func TestServeHTTP_DomainResolvingToLAN400(t *testing.T) {
 	tr := newRejectTestClient(t)
 
 	masterKey := bytes.Repeat([]byte{0x42}, 32)
-	saltB64, body := buildBootstrapRecord(t, masterKey, sharedconfig.EndpointTCP,
+	saltB64, body := buildBootstrapRecord(t, masterKey, config.EndpointTCP,
 		protocol.ProtoTCP, protocol.MethodAES256GCM, "rebind.example.com:80")
-	resp, respBody := postBootstrap(t, tr, srv.URL+sharedconfig.EndpointTCP, saltB64, bytes.NewReader(body))
+	resp, respBody := postBootstrap(t, tr, srv.URL+config.EndpointTCP, saltB64, bytes.NewReader(body))
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode,
 		"a domain resolving to LAN should be rejected with 400, body: %s", respBody)
 }
@@ -223,9 +223,9 @@ func TestServeHTTP_ValidHandshakeOctetStream(t *testing.T) {
 	tr := newRejectTestClient(t)
 
 	masterKey := bytes.Repeat([]byte{0x42}, 32)
-	saltB64, body := buildBootstrapRecord(t, masterKey, sharedconfig.EndpointTCP,
+	saltB64, body := buildBootstrapRecord(t, masterKey, config.EndpointTCP,
 		protocol.ProtoTCP, protocol.MethodAES256GCM, "8.8.8.8:9")
-	resp, _ := postBootstrap(t, tr, srv.URL+sharedconfig.EndpointTCP, saltB64, bytes.NewReader(body))
+	resp, _ := postBootstrap(t, tr, srv.URL+config.EndpointTCP, saltB64, bytes.NewReader(body))
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	ct := resp.Header.Get("Content-Type")
 	if !strings.HasPrefix(ct, "application/octet-stream") {

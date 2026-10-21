@@ -13,9 +13,9 @@ import (
 	"syscall"
 	_ "time/tzdata"
 
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	easydns "github.com/nange/easyss/v3/client/dns"
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/runner"
@@ -39,7 +39,7 @@ func main() {
 	var pprofEnabled bool
 	var logFile string
 
-	sc := &sharedconfig.SimpleConfig{}
+	sc := &config.SimpleConfig{}
 
 	flag.BoolVar(&printVer, "version", false, "print version")
 	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file (full mode)")
@@ -106,10 +106,10 @@ Flags:
 
 	configFile = util.ResolvePath(configFile)
 
-	cfg, err := config.LoadConfig(configFile)
+	cfg, err := clientconfig.LoadConfig(configFile)
 	if err != nil {
 		if sc.Server != "" && sc.Password != "" {
-			cfg, err = config.BuildSimpleConfig(sc)
+			cfg, err = clientconfig.BuildSimpleConfig(sc)
 			if err != nil {
 				log.Error("[EASYSS-V3] build config from args", "err", err)
 				if !disableTray {
@@ -124,7 +124,7 @@ Flags:
 			}
 			os.Exit(1)
 		}
-	} else if err := config.ApplySimpleOverrides(cfg, sc); err != nil {
+	} else if err := clientconfig.ApplySimpleOverrides(cfg, sc); err != nil {
 
 		log.Error("[EASYSS-V3] apply simple overrides", "err", err)
 		if !disableTray {
@@ -160,7 +160,7 @@ Flags:
 		cfg.Local.EnableTun2socks = true
 	}
 	if cmdOutboundProto != "" {
-		proto, err := config.OutboundProtoToProtocol(cmdOutboundProto)
+		proto, err := clientconfig.OutboundProtoToProtocol(cmdOutboundProto)
 		if err != nil {
 			log.Error("[EASYSS-V3] invalid outbound-proto", "value", cmdOutboundProto, "err", err)
 			os.Exit(1)
@@ -205,7 +205,7 @@ type appUI interface {
 
 type App struct {
 	// 一经发布即不可变，改动一律走 updateConfig 的克隆 + CAS 交换。
-	cfg        atomic.Pointer[config.ClientConfig]
+	cfg        atomic.Pointer[clientconfig.ClientConfig]
 	configFile string
 
 	ui appUI
@@ -226,7 +226,7 @@ func (a *App) currentCore() *runner.Core { return a.sess.currentCore() }
 // 跨 goroutine 读启动警告必须走这里：写入在 session.start 的锁内。
 func (a *App) currentStartupWarn() error { return a.sess.startupWarning() }
 
-func newApp(cfg *config.ClientConfig, configFile string) *App {
+func newApp(cfg *clientconfig.ClientConfig, configFile string) *App {
 	a := &App{configFile: configFile, deps: defaultAppDeps()}
 	a.sess = newSession(a)
 	a.adoptConfig(cfg)
@@ -235,17 +235,17 @@ func newApp(cfg *config.ClientConfig, configFile string) *App {
 
 // currentConfig 返回不可变的配置快照，读者无需持锁。需要多个字段时先取一次到
 // 局部变量，避免读到两次发布之间的混合状态。
-func (a *App) currentConfig() *config.ClientConfig { return a.cfg.Load() }
+func (a *App) currentConfig() *clientconfig.ClientConfig { return a.cfg.Load() }
 
 // adoptConfig 整体发布新快照，发布后调用方不得再改写它。
-func (a *App) adoptConfig(cfg *config.ClientConfig) { a.cfg.Store(cfg) }
+func (a *App) adoptConfig(cfg *clientconfig.ClientConfig) { a.cfg.Store(cfg) }
 
 // updateConfig 克隆 → 应用 fn → CAS 交换，CAS 失败说明有并发发布，带新克隆重来，
 // 因此 fn 必须可重复执行。Clone 是纯值拷贝，不会失败。
-func (a *App) updateConfig(fn func(*config.ClientConfig)) {
+func (a *App) updateConfig(fn func(*clientconfig.ClientConfig)) {
 	for {
 		cur := a.cfg.Load()
-		next := &config.ClientConfig{}
+		next := &clientconfig.ClientConfig{}
 		// 只有零值 App（测试）才没有快照；生产路径由 newApp 的 adoptConfig 保证非 nil。
 		if cur != nil {
 			next = cur.Clone()
@@ -259,7 +259,7 @@ func (a *App) updateConfig(fn func(*config.ClientConfig)) {
 
 // appDeps 是可注入的进程级依赖：核心启动器、系统代理开关与日志查看器。
 type appDeps struct {
-	runCore        func(*config.ClientConfig) (*runner.Core, error)
+	runCore        func(*clientconfig.ClientConfig) (*runner.Core, error)
 	sysProxyApply  func(string) error
 	sysProxyRevert func() error
 	log            logOpener
@@ -357,7 +357,7 @@ func (a *App) Close() {
 
 // restartServiceInSequence 只把目标服务器下标这一条增量写回当前快照：Close 可能持续
 // 数秒，期间发布停服务前的全量快照会把用户刚改的规则/日志级别静默还原。
-func (a *App) restartServiceInSequence(newCfg *config.ClientConfig, start func(*config.ClientConfig) error) error {
+func (a *App) restartServiceInSequence(newCfg *clientconfig.ClientConfig, start func(*clientconfig.ClientConfig) error) error {
 	targetIdx := newCfg.DefaultServerIndex()
 
 	snap := a.currentConfig()
@@ -369,7 +369,7 @@ func (a *App) restartServiceInSequence(newCfg *config.ClientConfig, start func(*
 	a.Close()
 
 	// 停完之后才发布，只改两项：CAS 会把停服务期间的菜单改动合并进来。
-	a.updateConfig(func(c *config.ClientConfig) {
+	a.updateConfig(func(c *clientconfig.ClientConfig) {
 		c.SetDefaultServerIndex(targetIdx)
 		c.Local.EnableTun2socks = false
 	})
@@ -386,7 +386,7 @@ func (a *App) restartServiceInSequence(newCfg *config.ClientConfig, start func(*
 
 	if err := start(a.currentConfig()); err != nil {
 		// 回滚同样只回退这两项；也失败时两个错误一起上报，表示完全没有服务在运行。
-		a.updateConfig(func(c *config.ClientConfig) {
+		a.updateConfig(func(c *clientconfig.ClientConfig) {
 			c.SetDefaultServerIndex(prevIdx)
 			c.Local.EnableTun2socks = prevTun
 		})
@@ -499,51 +499,51 @@ func tunDNS() string {
 }
 
 func exampleV3Config() string {
-	cfg := config.ClientConfig{
+	cfg := clientconfig.ClientConfig{
 		ConfigVersion: 3,
-		Servers: []*config.ServerProfile{{
+		Servers: []*clientconfig.ServerProfile{{
 			Host:     "your-domain.com",
-			Port:     sharedconfig.DefaultServerPort,
+			Port:     config.DefaultServerPort,
 			Password: "your-password",
-			Method:   sharedconfig.DefaultMethod,
+			Method:   config.DefaultMethod,
 			SNI:      "",
 			CAPath:   "",
 			Default:  true,
 		}},
 		// 示例不走 applyDefaults，http_port 按同一规则显式给出。
-		Local: config.LocalConfig{
-			SocksPort:        sharedconfig.DefaultSocksPort,
-			HTTPPort:         sharedconfig.DefaultSocksPort + sharedconfig.DefaultHTTPPortOffset,
+		Local: clientconfig.LocalConfig{
+			SocksPort:        config.DefaultSocksPort,
+			HTTPPort:         config.DefaultSocksPort + config.DefaultHTTPPortOffset,
 			BindAll:          false,
 			DisableSysProxy:  false,
 			EnableForwardDNS: false,
 			EnableTun2socks:  false,
 			EnableQUIC:       false,
-			TunMTU:           sharedconfig.DefaultTunMTU,
+			TunMTU:           config.DefaultTunMTU,
 		},
-		Routing: config.RoutingConfig{
-			ProxyRule:  sharedconfig.DefaultProxyRule,
-			IPV6Rule:   sharedconfig.DefaultIPV6Rule,
+		Routing: clientconfig.RoutingConfig{
+			ProxyRule:  config.DefaultProxyRule,
+			IPV6Rule:   config.DefaultIPV6Rule,
 			DirectFile: "",
 			ProxyFile:  "",
 		},
-		Transport: config.TransportConfig{
-			Protocol:          sharedconfig.DefaultProtocol,
-			ConnCountMax:      sharedconfig.DefaultConnCountMax,
-			StreamThreshold:   sharedconfig.DefaultStreamThreshold,
-			PrioritySlotRatio: sharedconfig.DefaultPrioritySlotRatio,
-			ConnMaxBytes:      sharedconfig.DefaultConnMaxBytes,
+		Transport: clientconfig.TransportConfig{
+			Protocol:          config.DefaultProtocol,
+			ConnCountMax:      config.DefaultConnCountMax,
+			StreamThreshold:   config.DefaultStreamThreshold,
+			PrioritySlotRatio: config.DefaultPrioritySlotRatio,
+			ConnMaxBytes:      config.DefaultConnMaxBytes,
 		},
 		Shaper: shaper.Config{
-			BatchWindowMS: sharedconfig.DefaultBatchWindowMS,
-			BudgetRatio:   sharedconfig.DefaultCoverBudgetRatio,
-			BudgetCap:     sharedconfig.DefaultCoverBudgetCap,
+			BatchWindowMS: config.DefaultBatchWindowMS,
+			BudgetRatio:   config.DefaultCoverBudgetRatio,
+			BudgetCap:     config.DefaultCoverBudgetCap,
 		},
 		Log: log.Config{
-			Level:    sharedconfig.DefaultLogLevel,
+			Level:    config.DefaultLogLevel,
 			FilePath: "easyss.log",
 		},
-		Timeout:      sharedconfig.DefaultTimeout,
+		Timeout:      config.DefaultTimeout,
 		AuthUsername: "",
 		AuthPassword: "",
 		PprofEnabled: false,
@@ -553,19 +553,19 @@ func exampleV3Config() string {
 }
 
 func exampleSimpleConfig() string {
-	cfg := sharedconfig.SimpleConfig{
+	cfg := config.SimpleConfig{
 		Server:        "your-domain.com",
-		ServerPort:    sharedconfig.DefaultServerPort,
+		ServerPort:    config.DefaultServerPort,
 		Password:      "your-password",
-		Method:        sharedconfig.DefaultMethod,
-		LocalPort:     sharedconfig.DefaultSocksPort,
-		ProxyRule:     sharedconfig.DefaultProxyRule,
-		Timeout:       sharedconfig.DefaultTimeout,
+		Method:        config.DefaultMethod,
+		LocalPort:     config.DefaultSocksPort,
+		ProxyRule:     config.DefaultProxyRule,
+		Timeout:       config.DefaultTimeout,
 		BindAll:       false,
 		OutboundProto: "native",
 		DirectFile:    "",
 		ProxyFile:     "",
-		LogLevel:      sharedconfig.DefaultLogLevel,
+		LogLevel:      config.DefaultLogLevel,
 		LogFilePath:   "easyss.log",
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")

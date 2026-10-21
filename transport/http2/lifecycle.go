@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/stats"
 )
@@ -38,7 +38,7 @@ type slotLifecycle struct {
 }
 
 func (lc *slotLifecycle) run(ctx context.Context) {
-	interval := sharedconfig.HealthCheckInterval
+	interval := config.HealthCheckInterval
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -96,7 +96,7 @@ func (s *suspendSampler) sampleOffset(offset int64) (divergence time.Duration, o
 
 func (lc *slotLifecycle) observeSuspend(now time.Time) {
 	divergence, ok := lc.suspend.sample(now)
-	if !ok || divergence < sharedconfig.SuspendDivergenceThreshold {
+	if !ok || divergence < config.SuspendDivergenceThreshold {
 		return
 	}
 	lc.suspendEvents.Add(1)
@@ -162,7 +162,7 @@ func (lc *slotLifecycle) armSuspects() (armed int) {
 func (lc *slotLifecycle) evaluate(interval time.Duration) {
 	// 拥塞链路上每条连接都慢，标记或退役只会增加握手抖动，因此降级检测以健康的 RTT 为前提；
 	// 轮换与 RTT 无关，始终执行。
-	linkOK := stats.Collect().AvgRTT() <= sharedconfig.DegradedMaxRTT
+	linkOK := stats.Collect().AvgRTT() <= config.DegradedMaxRTT
 
 	for _, pool := range []*slotPool{lc.sched.priority, lc.sched.bulk} {
 		// shrink 和 retire 在写锁下交换删除槽位，遍历活跃区间必须持读锁。
@@ -212,12 +212,12 @@ func (lc *slotLifecycle) evaluateSlotHealth(idx int, s *transportSlot, interval 
 	throughput := (now - s.lastBytes) / perSec
 	s.lastBytes = now
 
-	if throughput >= int64(sharedconfig.DegradedThroughputThreshold) {
+	if throughput >= int64(config.DegradedThroughputThreshold) {
 		s.lowCycles = 0
 		s.suspected = false
 		if s.degraded.Load() {
 			s.recoverCycles++
-			if s.recoverCycles >= sharedconfig.DegradedRecoverCycles {
+			if s.recoverCycles >= config.DegradedRecoverCycles {
 				s.degraded.Store(false)
 				s.recoverCycles = 0
 				log.Info("[TRANSPORT] slot recovered", "slot", idx, "throughput_kb_s", throughput/1024)
@@ -228,7 +228,7 @@ func (lc *slotLifecycle) evaluateSlotHealth(idx int, s *transportSlot, interval 
 
 	s.recoverCycles = 0
 	s.lowCycles++
-	if s.lowCycles >= sharedconfig.DegradedPersistCycles && !s.degraded.Load() {
+	if s.lowCycles >= config.DegradedPersistCycles && !s.degraded.Load() {
 		s.lowCycles = 0
 		if lc.probeUnsupported || lc.probeFunc == nil {
 			s.degraded.Store(true)
@@ -254,12 +254,12 @@ func (lc *slotLifecycle) evaluateProbes(linkOK bool) {
 		copy(slots, pool.slots[:live])
 		lc.sched.mu.RUnlock()
 
-		for i := 0; i < len(slots) && probed < sharedconfig.ProbeMaxPerInterval; i++ {
+		for i := 0; i < len(slots) && probed < config.ProbeMaxPerInterval; i++ {
 			s := slots[i]
 			if !s.suspected || s.degraded.Load() {
 				continue
 			}
-			if now.Sub(s.lastProbeAt) < sharedconfig.ProbeCooldown {
+			if now.Sub(s.lastProbeAt) < config.ProbeCooldown {
 				continue
 			}
 			lc.probeSlot(i, s, now)
@@ -270,7 +270,7 @@ func (lc *slotLifecycle) evaluateProbes(linkOK bool) {
 
 // unsupported 累计两次才回退为仅被动检测：单次可能是服务端的瞬时故障。
 func (lc *slotLifecycle) probeSlot(idx int, s *transportSlot, now time.Time) {
-	ctx, cancel := context.WithTimeout(context.Background(), sharedconfig.ProbeTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), config.ProbeTimeout)
 	defer cancel()
 
 	speed, verdict := lc.probeFunc(ctx, s)
@@ -282,21 +282,21 @@ func (lc *slotLifecycle) probeSlot(idx int, s *transportSlot, now time.Time) {
 		s.probeLowCycles = 0
 		s.suspected = false
 		// 链路参考值是近期最佳吞吐量，只从 fast 探测刷新。
-		if speed > lc.linkRefSpeed || now.Sub(lc.linkRefAt) > sharedconfig.ProbeLinkRefWindow {
+		if speed > lc.linkRefSpeed || now.Sub(lc.linkRefAt) > config.ProbeLinkRefWindow {
 			lc.linkRefSpeed = speed
 			lc.linkRefAt = now
 		}
 	case probeSlow:
 		// 链路参考值低于降级阈值说明整条链路才是瓶颈，归咎槽位只会徒增抖动。
-		if now.Sub(lc.linkRefAt) <= sharedconfig.ProbeLinkRefWindow &&
-			lc.linkRefSpeed < float64(sharedconfig.DegradedThroughputThreshold) {
+		if now.Sub(lc.linkRefAt) <= config.ProbeLinkRefWindow &&
+			lc.linkRefSpeed < float64(config.DegradedThroughputThreshold) {
 			s.probeLowCycles = 0
 			s.suspected = false
 			return
 		}
 		stats.RecordSlotProbeSlow()
 		s.probeLowCycles++
-		if s.probeLowCycles >= sharedconfig.ProbeConfirmCycles {
+		if s.probeLowCycles >= config.ProbeConfirmCycles {
 			s.probeLowCycles = 0
 			s.suspected = false
 			s.degraded.Store(true)

@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/pprof"
@@ -112,7 +112,7 @@ func (s *session) start() error {
 		if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !IsRoot() {
 			log.Warn("[EASYSS-V3] tun2socks requires root; skipped (use sudo, or run with system tray for automatic elevation)")
 			// 偏好落回 false，否则菜单勾选着"已开启"而 tunMgr 是 nil。
-			s.app.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = false })
+			s.app.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = false })
 			s.app.notifyTunSkippedNoRoot()
 		} else if !domainPending {
 			// 服务端域名已预解析并写进 DNS 缓存，TUN 的 DNS 不会在它上面死锁。
@@ -120,7 +120,7 @@ func (s *session) start() error {
 		} else {
 			// 服务端域名还没解析出来：此时启用 TUN 会让平台脚本把系统 DNS 指向本机转发
 			// 服务器，而解析服务端域名又需要隧道本身。
-			s.app.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = false })
+			s.app.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = false })
 			s.tunSkippedForNetwork = true
 			log.Warn("[EASYSS-V3] server domain not resolved yet; tun2socks skipped until the network is ready")
 			s.app.notifyTunSkippedNetworkUnready()
@@ -209,7 +209,7 @@ func (s *session) tunUp() error {
 	}
 
 	// 偏好写配置快照、运行期状态写 core 上的开关，两者必须同时更新。
-	s.app.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = true })
+	s.app.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = true })
 	core.Client.SetTunMode(true)
 	mgr := tun.New(s.tunConfig())
 	s.adoptTunManager(mgr, nil, tun.OwnerLocal)
@@ -294,7 +294,7 @@ func (s *session) tunDownLocked(want *tun.Manager) {
 	if core := s.currentCore(); core != nil && core.Client != nil {
 		core.Client.SetTunMode(false)
 	}
-	s.app.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = false })
+	s.app.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = false })
 }
 
 // 启动路径与托盘开关共享的唯一 TUN 配置构造点。

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util"
 	"github.com/wzshiming/sysproxy"
@@ -13,7 +13,7 @@ import (
 // sysProxyAddr 返回系统代理与会话环境应指向的本地 HTTP 入口地址，与入口的监听地址
 // 同源（见 util.LocalProxyDialAddr）：bind_all 时入口监听 [::]，这里必须给同族回环
 // [::1]，写死 127.0.0.1 会让系统代理指向一个连不上的入口。
-func sysProxyAddr(cfg *config.ClientConfig) string {
+func sysProxyAddr(cfg *clientconfig.ClientConfig) string {
 	return util.LocalProxyDialAddr(cfg.Local.BindAll, cfg.Local.HTTPPort)
 }
 

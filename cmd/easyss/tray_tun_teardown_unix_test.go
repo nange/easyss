@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/util"
 	"github.com/stretchr/testify/require"
@@ -122,7 +122,7 @@ func TestCloseTun2socksVerifiesTheRecordedSession(t *testing.T) {
 	ops := testTunOps(t)
 
 	session := tun.DeviceConfig{Device: "utun9", TunGW: "198.18.0.1"}
-	a := &TrayApp{App: newApp(&config.ClientConfig{}, "")}
+	a := &TrayApp{App: newApp(&clientconfig.ClientConfig{}, "")}
 	a.sess.tunSession = &session
 
 	var probed []string
@@ -147,7 +147,7 @@ func TestCloseTun2socksVerifiesTheRecordedSession(t *testing.T) {
 func TestCloseTun2socksSignalsTheHelperFIFO(t *testing.T) {
 	ops := testTunOps(t)
 
-	a := &TrayApp{App: newApp(&config.ClientConfig{}, "")}
+	a := &TrayApp{App: newApp(&clientconfig.ClientConfig{}, "")}
 	a.sess.verifyTeardown = ops.teardown
 
 	rd, wr, err := os.Pipe()

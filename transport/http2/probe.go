@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/stats"
 )
 
@@ -43,7 +43,7 @@ func (p *slotProber) alive(ctx context.Context, gen *slotTransport) (alive, ok b
 		return false, false
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, p.serverURL+sharedconfig.EndpointProbe, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, p.serverURL+config.EndpointProbe, nil)
 	if err != nil {
 		return false, false
 	}
@@ -62,10 +62,10 @@ func (p *slotProber) alive(ctx context.Context, gen *slotTransport) (alive, ok b
 
 // probe 下载探测载荷并报告响应体吞吐量（不含 TTFB），结论按绝对降级阈值给出。
 func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, probeVerdict) {
-	probeCtx, cancel := context.WithTimeout(ctx, sharedconfig.ProbeTimeout)
+	probeCtx, cancel := context.WithTimeout(ctx, config.ProbeTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, p.serverURL+sharedconfig.EndpointProbe, nil)
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, p.serverURL+config.EndpointProbe, nil)
 	if err != nil {
 		return 0, probeInconclusive
 	}
@@ -108,7 +108,7 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 				stats.RecordRTT(d)
 				p.slowRTT.log(d, slowRTTSample{
 					source:   slowRTTSourceProbe,
-					endpoint: sharedconfig.EndpointProbe,
+					endpoint: config.EndpointProbe,
 					slot:     slot,
 				})
 			}
@@ -131,7 +131,7 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 			speed = maxProbeSpeed
 		}
 	}
-	if speed < float64(sharedconfig.DegradedThroughputThreshold) {
+	if speed < float64(config.DegradedThroughputThreshold) {
 		return speed, probeSlow
 	}
 	return speed, probeFast

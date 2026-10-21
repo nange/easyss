@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/stretchr/testify/require"
 )
@@ -58,7 +58,7 @@ func stubPlatformTeardown(s *session) {
 // TestStartTunEngineReportsFailureToUI 守住两个后果：失败必须到达 appUI.tunStartFailed，
 // 且半启用的会话必须被拆掉，否则下次启用会命中"已设置"保护、静默什么都不做。
 func TestStartTunEngineReportsFailureToUI(t *testing.T) {
-	a := newApp(&config.ClientConfig{}, "")
+	a := newApp(&clientconfig.ClientConfig{}, "")
 	ui := newStubAppUI()
 	a.ui = ui
 	stubPlatformTeardown(a.sess)
@@ -91,12 +91,12 @@ func TestStartTunEngineReportsFailureToUI(t *testing.T) {
 // TestStaleTunStartFailureLeavesTheCurrentSessionAlone 守住迟到的失败回调只回滚它
 // 自己那次会话：这期间用户可能已重新开启 TUN，拆错会话连提示都没有。
 func TestStaleTunStartFailureLeavesTheCurrentSessionAlone(t *testing.T) {
-	a := newApp(&config.ClientConfig{}, "")
+	a := newApp(&clientconfig.ClientConfig{}, "")
 	ui := newStubAppUI()
 	a.ui = ui
 	stubPlatformTeardown(a.sess)
 
-	a.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = true })
+	a.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = true })
 	stale, current := failedTunManager(), failedTunManager()
 	a.sess.tunMu.Lock()
 	a.sess.tunMgr = current
@@ -119,12 +119,12 @@ func TestStaleTunStartFailureLeavesTheCurrentSessionAlone(t *testing.T) {
 // TestTunStartFailureRollsBackOnlyItsOwnSession 是上一条的正向分支：属于当前会话的
 // 失败必须被拆除、偏好必须落回 false、界面必须收到原因。
 func TestTunStartFailureRollsBackOnlyItsOwnSession(t *testing.T) {
-	a := newApp(&config.ClientConfig{}, "")
+	a := newApp(&clientconfig.ClientConfig{}, "")
 	ui := newStubAppUI()
 	a.ui = ui
 	stubPlatformTeardown(a.sess)
 
-	a.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = true })
+	a.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = true })
 	mgr := failedTunManager()
 	a.sess.tunMu.Lock()
 	a.sess.tunMgr = mgr

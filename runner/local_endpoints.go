@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/util"
 )
 
@@ -22,14 +22,14 @@ type localEndpoints struct {
 }
 
 // validateLocalEndpoints 只做配置校验，必须在任何监听器绑定之前调用。
-func validateLocalEndpoints(cfg *config.ClientConfig) error {
+func validateLocalEndpoints(cfg *clientconfig.ClientConfig) error {
 	if cfg.Local.HTTPPort > 0 && cfg.Local.SocksPort <= 0 {
 		return ErrSocksRequired
 	}
 	return nil
 }
 
-func openLocalEndpoints(cfg *config.ClientConfig, opts options) (*localEndpoints, error) {
+func openLocalEndpoints(cfg *clientconfig.ClientConfig, opts options) (*localEndpoints, error) {
 	eps := &localEndpoints{}
 	if err := eps.bind(cfg, opts); err != nil {
 		eps.Close()
@@ -40,7 +40,7 @@ func openLocalEndpoints(cfg *config.ClientConfig, opts options) (*localEndpoints
 
 // bind 按 socks → http → dns 的顺序同步绑定；任一步失败时已绑定的监听器由
 // openLocalEndpoints 统一关闭。配置合法性由 validateLocalEndpoints 预先保证。
-func (e *localEndpoints) bind(cfg *config.ClientConfig, opts options) error {
+func (e *localEndpoints) bind(cfg *clientconfig.ClientConfig, opts options) error {
 	if cfg.Local.SocksPort > 0 {
 		e.socksAddr = util.LocalProxyListenAddr(cfg.Local.BindAll, cfg.Local.SocksPort)
 		e.socksDialAddr = util.LocalProxyDialAddr(cfg.Local.BindAll, cfg.Local.SocksPort)

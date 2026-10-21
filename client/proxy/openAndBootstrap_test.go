@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
@@ -374,7 +374,7 @@ func newTestStreamHandler(tr transport.Transport) *StreamHandler {
 	for i := range key {
 		key[i] = byte(i + 1)
 	}
-	return NewStreamHandler(tr, key, shaper.Config{}, sharedconfig.Timeouts{})
+	return NewStreamHandler(tr, key, shaper.Config{}, config.Timeouts{})
 }
 
 func testTCPRequest(target string) streamRequest {

@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 )
 
@@ -68,7 +68,7 @@ func (l *slowRTTLogLimiter) quotaPerWindow() int {
 // log 提交一次 RTT 样本：低于阈值丢弃，有配额就逐条打印，否则只记账。nil 接收者表示
 // 未配置限流，仍按阈值打印——限流是噪声策略，不该决定日志是否存在。
 func (l *slowRTTLogLimiter) log(d time.Duration, s slowRTTSample) {
-	if d < sharedconfig.SlowRTTWarnThreshold {
+	if d < config.SlowRTTWarnThreshold {
 		return
 	}
 	if l == nil {

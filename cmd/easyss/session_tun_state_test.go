@@ -5,7 +5,7 @@ package main
 import (
 	"testing"
 
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 )
 
 // TestNonRootTunStartClearsPreference 固定“跳过 TUN 必须落状态”：非 root 启动
@@ -16,9 +16,9 @@ func TestNonRootTunStartClearsPreference(t *testing.T) {
 		t.Skip("running as root: the non-root TUN branch is not taken")
 	}
 
-	a := newApp(&config.ClientConfig{}, "")
+	a := newApp(&clientconfig.ClientConfig{}, "")
 	stubRunCore(a)
-	a.updateConfig(func(c *config.ClientConfig) { c.Local.EnableTun2socks = true })
+	a.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = true })
 
 	if err := a.Start(); err != nil {
 		t.Fatalf("Start: %v", err)

@@ -4,7 +4,7 @@ package main
 
 import (
 	"github.com/gogpu/systray"
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 )
 
 // radioOption 是一组互斥勾选项中的一项。
@@ -46,7 +46,7 @@ type proxyObjectMenu struct {
 	tun     *systray.MenuItem
 }
 
-func newProxyObjectMenu(m *systray.Menu, cfg *config.ClientConfig, onBrowser, onTun func()) *proxyObjectMenu {
+func newProxyObjectMenu(m *systray.Menu, cfg *clientconfig.ClientConfig, onBrowser, onTun func()) *proxyObjectMenu {
 	return &proxyObjectMenu{
 		browser: m.AddCheckbox("浏览器(设置系统代理)", !cfg.Local.DisableSysProxy, onBrowser),
 		tun:     m.AddCheckbox("系统全局流量(Tun2socks)", cfg.Local.EnableTun2socks, onTun),

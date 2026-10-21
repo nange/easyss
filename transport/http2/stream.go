@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/stats"
 	"github.com/nange/easyss/v3/transport"
 )
@@ -99,9 +99,9 @@ func (s *http2Stream) accumulate(n int) {
 	if s.heavyState.Load() != heavyIdle {
 		return
 	}
-	fast := total >= sharedconfig.HeavyStreamThresholdBytes
-	slow := total >= sharedconfig.HeavyStreamSlowThresholdBytes &&
-		time.Since(s.startTime) >= sharedconfig.HeavyStreamMinAge
+	fast := total >= config.HeavyStreamThresholdBytes
+	slow := total >= config.HeavyStreamSlowThresholdBytes &&
+		time.Since(s.startTime) >= config.HeavyStreamMinAge
 	if !fast && !slow {
 		return
 	}

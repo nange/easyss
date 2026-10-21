@@ -13,7 +13,7 @@ import (
 	"github.com/nange/easyss/v3/relay"
 	"github.com/nange/easyss/v3/util/netbuf"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 )
 
 // routeAction 是一次分流判定的结果。
@@ -127,7 +127,7 @@ func logRelayResult(prefix, target string, result relay.Result) {
 // copyHalfClose 将 src 流式拷贝到 dst，每次读取发出活动信号，干净 EOF 时对 dst 执行
 // 半关闭。读缓冲按需增长（起点 protocol.MinRecordBufferSize，上限 TCPStreamBufferSize）。
 func copyHalfClose(dst, src net.Conn, signalActivity func()) error {
-	r := netbuf.NewReader(protocol.MinRecordBufferSize, sharedconfig.TCPStreamBufferSize)
+	r := netbuf.NewReader(protocol.MinRecordBufferSize, config.TCPStreamBufferSize)
 	defer r.Release()
 	for {
 		buf := r.Buf()

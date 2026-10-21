@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/server/nextproxy"
 	"github.com/nange/easyss/v3/shaper"
@@ -33,7 +33,7 @@ type ProxyHandlerConfig struct {
 	MasterKey      []byte
 	AllowedMethods []string
 	// Timeouts 与 Shaper 都由调用方根据服务器配置构建好，本结构体不再重新派生或钳制。
-	Timeouts  sharedconfig.Timeouts
+	Timeouts  config.Timeouts
 	Shaper    shaper.Config
 	NextProxy *nextproxy.NextProxy
 	// HandshakeTimeout 覆盖等待 bootstrap 记录的超时。0 表示沿用 Timeouts.Base，这是服务器

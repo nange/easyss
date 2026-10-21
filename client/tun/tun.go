@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/scripts"
 	"github.com/nange/easyss/v3/util"
@@ -121,7 +121,7 @@ type Manager struct {
 
 func New(cfg Config) *Manager {
 	// MTU 的区间与默认值统一由 config.NormalizeTunMTU 决定：同一个值还要交给设备那一侧。
-	cfg.MTU = sharedconfig.NormalizeTunMTU(cfg.MTU)
+	cfg.MTU = config.NormalizeTunMTU(cfg.MTU)
 	if cfg.UDPTimeout <= 0 {
 		cfg.UDPTimeout = 5 * time.Minute
 	}
@@ -130,9 +130,9 @@ func New(cfg Config) *Manager {
 	}
 	if cfg.Device == "" {
 		if runtime.GOOS == "darwin" {
-			cfg.Device = sharedconfig.DefaultTunDeviceNameDarwin
+			cfg.Device = config.DefaultTunDeviceNameDarwin
 		} else {
-			cfg.Device = sharedconfig.DefaultTunDeviceName
+			cfg.Device = config.DefaultTunDeviceName
 		}
 	}
 	if cfg.Interface == "" || cfg.LocalGateway == "" {
@@ -240,7 +240,7 @@ func (m *Manager) engineMTU() int {
 
 	if devMTU > m.cfg.MTU {
 		// 设备 MTU 超出可配置区间只可能是外部改动，封顶到 MaxTunMTU（netstack 的 MTU 决定每包读取缓冲）。
-		raised := min(devMTU, sharedconfig.MaxTunMTU)
+		raised := min(devMTU, config.MaxTunMTU)
 		log.Warn("[TUN] device mtu exceeds the configured netstack mtu, raising it to avoid dropping packets",
 			"device", m.cfg.Device, "device_mtu", devMTU, "configured_mtu", m.cfg.MTU, "netstack_mtu", raised)
 		return raised

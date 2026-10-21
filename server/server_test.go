@@ -19,9 +19,9 @@ import (
 
 	"github.com/caddyserver/certmagic"
 	"github.com/mholt/acmez/v3/acme"
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
-	"github.com/nange/easyss/v3/server/config"
+	serverconfig "github.com/nange/easyss/v3/server/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -78,8 +78,8 @@ func TestNewDoesNotValidateProtocols(t *testing.T) {
 // TestNewValidatesConfig 固定 server.New 也是校验入口：导出 API 会被绕过
 // config.LoadConfig 的调用方直接手搓 FileConfig，校验不能只留在配置文件路径上。
 func TestNewValidatesConfig(t *testing.T) {
-	cfg := &config.FileConfig{
-		Server: config.ServerConfig{
+	cfg := &serverconfig.FileConfig{
+		Server: serverconfig.ServerConfig{
 			Host:           "example.com",
 			AllowedMethods: []string{"aes-gcm"},
 		},
@@ -87,29 +87,29 @@ func TestNewValidatesConfig(t *testing.T) {
 	_, err := New(cfg)
 	require.ErrorContains(t, err, "server.allowed_methods")
 
-	cfg = &config.FileConfig{
-		Server:    config.ServerConfig{Host: "example.com"},
-		Transport: config.TransportConfig{H2MaxFrameSize: 10000},
+	cfg = &serverconfig.FileConfig{
+		Server:    serverconfig.ServerConfig{Host: "example.com"},
+		Transport: serverconfig.TransportConfig{H2MaxFrameSize: 10000},
 	}
 	_, err = New(cfg)
 	require.ErrorContains(t, err, "transport.h2_max_frame_size")
 
-	cfg = &config.FileConfig{
-		Server:    config.ServerConfig{Host: "example.com"},
-		Transport: config.TransportConfig{H2RecvBufConn: 1000},
+	cfg = &serverconfig.FileConfig{
+		Server:    serverconfig.ServerConfig{Host: "example.com"},
+		Transport: serverconfig.TransportConfig{H2RecvBufConn: 1000},
 	}
 	_, err = New(cfg)
 	require.ErrorContains(t, err, "transport.h2_recv_buf_conn")
 
 	// 非法端口与带端口的 bind 必须在 New 就失败，而不是留到 Start 的 net.Listen。
-	cfg = &config.FileConfig{
-		Server: config.ServerConfig{Host: "example.com", Port: 70000},
+	cfg = &serverconfig.FileConfig{
+		Server: serverconfig.ServerConfig{Host: "example.com", Port: 70000},
 	}
 	_, err = New(cfg)
 	require.ErrorContains(t, err, "server.port")
 
-	cfg = &config.FileConfig{
-		Server: config.ServerConfig{Host: "example.com", Bind: "127.0.0.1:443"},
+	cfg = &serverconfig.FileConfig{
+		Server: serverconfig.ServerConfig{Host: "example.com", Bind: "127.0.0.1:443"},
 	}
 	_, err = New(cfg)
 	require.ErrorContains(t, err, "server.bind")
@@ -117,8 +117,8 @@ func TestNewValidatesConfig(t *testing.T) {
 
 func mustNewServer(t *testing.T) error {
 	t.Helper()
-	_, err := New(&config.FileConfig{
-		Server: config.ServerConfig{Host: "example.com"},
+	_, err := New(&serverconfig.FileConfig{
+		Server: serverconfig.ServerConfig{Host: "example.com"},
 	})
 	return err
 }
@@ -250,8 +250,8 @@ func TestFindExistingACMEEmail_NoUsers(t *testing.T) {
 
 func TestResolveEmail_Configured(t *testing.T) {
 	s := &Server{
-		cfg: &config.FileConfig{
-			Server: config.ServerConfig{Email: "user@example.com"},
+		cfg: &serverconfig.FileConfig{
+			Server: serverconfig.ServerConfig{Email: "user@example.com"},
 		},
 	}
 	s.resolveEmail(t.TempDir())
@@ -267,8 +267,8 @@ func TestResolveEmail_Reuse(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(usersPath, existingEmail), 0700))
 
 	s := &Server{
-		cfg: &config.FileConfig{
-			Server: config.ServerConfig{Email: ""}, // 未配置
+		cfg: &serverconfig.FileConfig{
+			Server: serverconfig.ServerConfig{Email: ""}, // 未配置
 		},
 	}
 	s.resolveEmail(storagePath)
@@ -277,8 +277,8 @@ func TestResolveEmail_Reuse(t *testing.T) {
 
 func TestResolveEmail_Generated(t *testing.T) {
 	s := &Server{
-		cfg: &config.FileConfig{
-			Server: config.ServerConfig{Email: ""},
+		cfg: &serverconfig.FileConfig{
+			Server: serverconfig.ServerConfig{Email: ""},
 		},
 	}
 	s.resolveEmail(t.TempDir())
@@ -291,13 +291,13 @@ func TestResolveEmail_Generated(t *testing.T) {
 // TestBuildHTTPServerUsesListenAddr 固定监听地址只由 ServerConfig.ListenAddr
 // 格式化：bind 与 port 必须原样进入 http.Server.Addr。
 func TestBuildHTTPServerUsesListenAddr(t *testing.T) {
-	srv := buildHTTPServer(&config.FileConfig{
-		Server: config.ServerConfig{Bind: "127.0.0.1", Port: 8443},
+	srv := buildHTTPServer(&serverconfig.FileConfig{
+		Server: serverconfig.ServerConfig{Bind: "127.0.0.1", Port: 8443},
 	}, nil, http.NewServeMux(), 30*time.Second)
 	require.Equal(t, "127.0.0.1:8443", srv.Addr)
 
-	srv = buildHTTPServer(&config.FileConfig{
-		Server: config.ServerConfig{Port: 443},
+	srv = buildHTTPServer(&serverconfig.FileConfig{
+		Server: serverconfig.ServerConfig{Port: 443},
 	}, nil, http.NewServeMux(), 30*time.Second)
 	require.Equal(t, ":443", srv.Addr)
 }
@@ -306,7 +306,7 @@ func TestBuildHTTPServerUsesListenAddr(t *testing.T) {
 // 常量同样会让本测试失败：吞吐 ≈ 窗口/RTT，故两窗口都取 4<<20-1，即 net/http 文档
 // "小于 4MiB"允许的上界；并发流上限取主流站点的 128，而非 stdlib 默认的 250。
 func TestBuildHTTPServerUploadFlowControl(t *testing.T) {
-	srv := buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Port: 443}}, nil, http.NewServeMux(), 30*time.Second)
+	srv := buildHTTPServer(&serverconfig.FileConfig{Server: serverconfig.ServerConfig{Port: 443}}, nil, http.NewServeMux(), 30*time.Second)
 	require.NotNil(t, srv.HTTP2)
 	require.Equal(t, (4<<20)-1, srv.HTTP2.MaxReceiveBufferPerStream,
 		"per-stream upload window must be the documented upper bound (<4MiB)")
@@ -319,9 +319,9 @@ func TestBuildHTTPServerUploadFlowControl(t *testing.T) {
 // TestBuildHTTPServerH2ConfigOverrides 固定 transport.h2_* 的覆盖语义：显式正值
 // 覆盖默认值，0 表示"使用默认值"（文档化的字段语义，兜底在 buildHTTPServer）。
 func TestBuildHTTPServerH2ConfigOverrides(t *testing.T) {
-	cfg := &config.FileConfig{
-		Server: config.ServerConfig{Port: 443},
-		Transport: config.TransportConfig{
+	cfg := &serverconfig.FileConfig{
+		Server: serverconfig.ServerConfig{Port: 443},
+		Transport: serverconfig.TransportConfig{
 			H2RecvBufStream: 2 << 20,
 			H2RecvBufConn:   8 << 20,
 		},
@@ -331,11 +331,11 @@ func TestBuildHTTPServerH2ConfigOverrides(t *testing.T) {
 	require.Equal(t, 8<<20, srv.HTTP2.MaxReceiveBufferPerConnection)
 
 	// 未配置（0 值）时回到共享常量：两处默认值不会各自漂移。
-	cfg.Transport = config.TransportConfig{}
+	cfg.Transport = serverconfig.TransportConfig{}
 	srv = buildHTTPServer(cfg, nil, http.NewServeMux(), 30*time.Second)
-	require.Equal(t, sharedconfig.HTTP2ServerReceiveBufferPerStream, srv.HTTP2.MaxReceiveBufferPerStream)
-	require.Equal(t, sharedconfig.HTTP2ServerReceiveBufferPerConnection, srv.HTTP2.MaxReceiveBufferPerConnection)
-	require.Equal(t, sharedconfig.HTTP2ServerMaxConcurrentStreams, srv.HTTP2.MaxConcurrentStreams)
+	require.Equal(t, config.HTTP2ServerReceiveBufferPerStream, srv.HTTP2.MaxReceiveBufferPerStream)
+	require.Equal(t, config.HTTP2ServerReceiveBufferPerConnection, srv.HTTP2.MaxReceiveBufferPerConnection)
+	require.Equal(t, config.HTTP2ServerMaxConcurrentStreams, srv.HTTP2.MaxConcurrentStreams)
 }
 
 // TestBuildHTTPServerWarnsOnInvertedWindows 固定"连接级窗口应 ≥ 流级窗口"的可见性：
@@ -345,13 +345,13 @@ func TestBuildHTTPServerWarnsOnInvertedWindows(t *testing.T) {
 	rec := captureServerLogs(t)
 
 	// 两个窗口相等不是错误配置，不应有告警。
-	buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Port: 443}}, nil, http.NewServeMux(), 30*time.Second)
+	buildHTTPServer(&serverconfig.FileConfig{Server: serverconfig.ServerConfig{Port: 443}}, nil, http.NewServeMux(), 30*time.Second)
 	require.Empty(t, rec.warnings(), "equal windows must not warn")
 
 	// 连接窗口 < 流级窗口：必须告警，并带上两个生效值供排查。
-	cfg := &config.FileConfig{
-		Server: config.ServerConfig{Port: 443},
-		Transport: config.TransportConfig{
+	cfg := &serverconfig.FileConfig{
+		Server: serverconfig.ServerConfig{Port: 443},
+		Transport: serverconfig.TransportConfig{
 			H2RecvBufConn:   1 << 20,
 			H2RecvBufStream: 4<<20 - 1,
 		},
@@ -374,7 +374,7 @@ func TestBuildHTTPServerWarnsOnInvertedWindows(t *testing.T) {
 // TestServerUploadFlowControlWindowsOnWire 守住服务端实际宣告的窗口与配置逐字节一致：
 // 4<<20-1 一旦被 Go 校验会静默换成默认 1MB，吞吐掉回 1MB/RTT，因此必须用 Equal 而非下界。
 func TestServerUploadFlowControlWindowsOnWire(t *testing.T) {
-	built := buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Port: 443}}, nil, http.NewServeMux(), 30*time.Second)
+	built := buildHTTPServer(&serverconfig.FileConfig{Server: serverconfig.ServerConfig{Port: 443}}, nil, http.NewServeMux(), 30*time.Second)
 	// 拷一份再交给 httptest：标准库只在装配连接时读该配置不回写，但共享指针暗含
 	// 只读借用前提，复制后不再依赖它。
 	http2Cfg := *built.HTTP2
@@ -444,11 +444,11 @@ func TestServerUploadFlowControlWindowsOnWire(t *testing.T) {
 	}
 
 	// 与共享常量同源，生产配置不会各自漂移。
-	require.Equal(t, sharedconfig.HTTP2ServerReceiveBufferPerStream, streamWindow,
+	require.Equal(t, config.HTTP2ServerReceiveBufferPerStream, streamWindow,
 		"advertised per-stream upload window")
-	require.Equal(t, sharedconfig.HTTP2ServerReceiveBufferPerConnection, connWindow,
+	require.Equal(t, config.HTTP2ServerReceiveBufferPerConnection, connWindow,
 		"advertised connection upload window")
-	require.Equal(t, sharedconfig.HTTP2ServerMaxConcurrentStreams, maxStreams,
+	require.Equal(t, config.HTTP2ServerMaxConcurrentStreams, maxStreams,
 		"advertised per-connection concurrency limit")
 	// 字面量固定文档允许的上界，防止常量被整体调小。
 	require.Equal(t, (4<<20)-1, streamWindow)
@@ -459,7 +459,7 @@ func TestServerUploadFlowControlWindowsOnWire(t *testing.T) {
 // TestServerUploadFlowControlInFlightPerStream 端到端守住流级窗口真的封住请求体：handler
 // 故意不读请求体，在途字节数必须停止增长；配置取自 buildHTTPServer，字段接错会失败。
 func TestServerUploadFlowControlInFlightPerStream(t *testing.T) {
-	built := buildHTTPServer(&config.FileConfig{Server: config.ServerConfig{Port: 443}}, nil, http.NewServeMux(), 30*time.Second)
+	built := buildHTTPServer(&serverconfig.FileConfig{Server: serverconfig.ServerConfig{Port: 443}}, nil, http.NewServeMux(), 30*time.Second)
 	http2Cfg := *built.HTTP2
 
 	release := make(chan struct{})
@@ -487,7 +487,7 @@ func TestServerUploadFlowControlInFlightPerStream(t *testing.T) {
 	pr, pw := io.Pipe()
 	t.Cleanup(func() { _ = pr.CloseWithError(io.ErrClosedPipe) })
 
-	req, err := http.NewRequest(http.MethodPost, ts.URL+sharedconfig.EndpointTCP, pr)
+	req, err := http.NewRequest(http.MethodPost, ts.URL+config.EndpointTCP, pr)
 	require.NoError(t, err)
 	go func() {
 		// 结果无关紧要：handler 不读 body，请求会一直停在流控上。

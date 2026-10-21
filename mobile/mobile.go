@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/nange/easyss/v3/client/config"
-	sharedconfig "github.com/nange/easyss/v3/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/runner"
 	"github.com/nange/easyss/v3/version"
@@ -18,7 +18,7 @@ var (
 	mMu   sync.Mutex
 )
 
-func Start(cfg *sharedconfig.SimpleConfig) error {
+func Start(cfg *config.SimpleConfig) error {
 	mMu.Lock()
 	defer mMu.Unlock()
 
@@ -26,7 +26,7 @@ func Start(cfg *sharedconfig.SimpleConfig) error {
 		return fmt.Errorf("already started, call Stop first")
 	}
 
-	clientCfg, err := config.BuildSimpleConfig(cfg)
+	clientCfg, err := clientconfig.BuildSimpleConfig(cfg)
 	if err != nil {
 		return err
 	}

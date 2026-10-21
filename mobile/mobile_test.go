@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 )
 
@@ -27,10 +27,10 @@ func freePort(t *testing.T) int {
 
 // testSimpleConfig 构造可离线启动的最小配置：字面 IP 服务端 + 禁用 IPv6，启动时不发真实 DNS 查询。
 // HTTP 端口必须显式指定，否则 BuildSimpleConfig 的 socks_port+1000 默认值会撞上别的进程。
-func testSimpleConfig(t *testing.T, logFilePath, logLevel string) *sharedconfig.SimpleConfig {
+func testSimpleConfig(t *testing.T, logFilePath, logLevel string) *config.SimpleConfig {
 	t.Helper()
 
-	return &sharedconfig.SimpleConfig{
+	return &config.SimpleConfig{
 		Server:      "127.0.0.1",
 		Password:    "test-password",
 		IPV6Rule:    "disable",

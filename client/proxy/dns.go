@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/nange/easyss/v3/client/config"
+	clientconfig "github.com/nange/easyss/v3/client/config"
 	easydns "github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/client/router"
-	sharedconfig "github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/util"
@@ -43,7 +43,7 @@ type dnsOptions struct {
 	ServerDomain string
 	// Timeouts 是归一化过的派生超时：Dial 是一次直连解析的共享预算，DNSResp 是代理交换的
 	// 读空闲，UDPIdle 兼作 TCP DNS 逐条查询之间的读空闲。
-	Timeouts sharedconfig.Timeouts
+	Timeouts config.Timeouts
 }
 
 // dnsInterceptor 把一条查询分流到 Block / 缓存 / 直连 / 隧道代理四路，UDP 与 TCP 共用 plan。
@@ -176,12 +176,12 @@ func (d *dnsInterceptor) resolveDirectDNS(msg *dns.Msg, domain, reqServer string
 	var resp *dns.Msg
 	var err error
 	if d.usableDirectDNSServer(reqServer) {
-		resp, err = d.exchangeDirectDNSFromList(msg, append([]string{reqServer}, config.DirectDNSServers...))
+		resp, err = d.exchangeDirectDNSFromList(msg, append([]string{reqServer}, clientconfig.DirectDNSServers...))
 	} else {
 		// 兜底列表必须是过滤后的可用上游：QueryWithBuiltinFirst 依据它是否为空决定要不要
 		// 熔断内置服务器。
 		fallback := d.filterDNSUpstreams(easydns.SystemDNSServers())
-		resp, err = easydns.QueryWithBuiltinFirst(config.DirectDNSServers, fallback, try)
+		resp, err = easydns.QueryWithBuiltinFirst(clientconfig.DirectDNSServers, fallback, try)
 	}
 	if err != nil {
 		return nil, err
