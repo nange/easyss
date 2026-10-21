@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -112,12 +111,10 @@ func runWithOptions(cfg *config.ClientConfig, opts options) (*Core, error) {
 
 	timeouts := sharedconfig.NewTimeouts(cfg.TimeoutDuration())
 
-	streamHandler := proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), cfg.Shaper, timeouts)
-
 	c := &Core{
 		cfg:           cfg,
 		Client:        cli,
-		StreamHandler: streamHandler,
+		StreamHandler: proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), cfg.Shaper, timeouts),
 		transport:     cli.Transport(),
 		StartupWarn:   cli.StartupWarning(),
 		done:          make(chan struct{}),
@@ -125,136 +122,128 @@ func runWithOptions(cfg *config.ClientConfig, opts options) (*Core, error) {
 		opts:          opts,
 	}
 
-	// 在派发任何服务器 goroutine 之前同步绑定所有监听地址：监听失败（端口占用、
-	// fd 耗尽）因此在 Run 返回前暴露，而不是让 UI 显示"已启动"而代理实际不可用。
-	var (
-		socksAddr, socksDialAddr, httpAddr, dnsAddr string
-		socksLn                                     net.Listener
-		httpLn                                      net.Listener
-		dnsPC                                       net.PacketConn
-		listeners                                   []io.Closer
-	)
 	// 清理只有一条路径：错误返回时先关闭尚未移交的监听器，再交给 c.cleanup。
 	transferred := false
+	var eps *localEndpoints
 	defer func() {
 		if transferred {
 			return
 		}
-		for _, l := range listeners {
-			_ = l.Close()
-		}
+		eps.Close()
 		c.cleanup()
 	}()
 
-	if cfg.Local.SocksPort > 0 {
-		socksAddr = util.LocalProxyListenAddr(cfg.Local.BindAll, cfg.Local.SocksPort)
-		socksDialAddr = util.LocalProxyDialAddr(cfg.Local.BindAll, cfg.Local.SocksPort)
-		ln, err := net.Listen("tcp", socksAddr)
-		if err != nil {
-			return nil, fmt.Errorf("socks5 server listen %s: %w", socksAddr, err)
-		}
-		socksLn = ln
-		listeners = append(listeners, ln)
+	// 在派发任何服务器 goroutine 之前完成校验与监听绑定：监听失败（端口占用、
+	// fd 耗尽）因此在 Run 返回前暴露，而不是让 UI 显示"已启动"而代理实际不可用。
+	if err := validateLocalEndpoints(cfg); err != nil {
+		return nil, err
 	}
-	if cfg.Local.HTTPPort > 0 {
-		if cfg.Local.SocksPort <= 0 {
-			return nil, ErrSocksRequired
-		}
-		httpAddr = util.LocalProxyListenAddr(cfg.Local.BindAll, cfg.Local.HTTPPort)
-		ln, err := net.Listen("tcp", httpAddr)
-		if err != nil {
-			return nil, fmt.Errorf("http proxy server listen %s: %w", httpAddr, err)
-		}
-		httpLn = ln
-		listeners = append(listeners, ln)
-	}
-	if cfg.Local.EnableForwardDNS {
-		dnsAddr = opts.forwardDNSListenAddr
-		pc, err := net.ListenPacket("udp", dnsAddr)
-		if err != nil {
-			return nil, forwardDNSListenError(dnsAddr, err)
-		}
-		dnsPC = pc
-		listeners = append(listeners, pc)
+	eps, err = openLocalEndpoints(cfg, opts)
+	if err != nil {
+		return nil, err
 	}
 
-	if socksLn != nil {
+	if err := c.buildLocalServers(cfg, eps, method, timeouts); err != nil {
+		return nil, err
+	}
+
+	c.serveLocal(eps)
+	c.startDomainResolution(cfg, opts)
+
+	log.Info("[EASYSS] started successfully", "elapsed_ms", time.Since(start).Milliseconds())
+	stats.ResetStartTime()
+	stats.ResetCounters()
+	stats.StartSpeedMonitor()
+
+	// 只有走到这里才移交所有权；任何提前的错误返回都由上面的 defer 清理。
+	transferred = true
+	return c, nil
+}
+
+// buildLocalServers 只构造服务器，不派发 goroutine；任何构造失败都在 Run 返回前暴露。
+func (c *Core) buildLocalServers(cfg *config.ClientConfig, eps *localEndpoints, method protocol.Method, timeouts sharedconfig.Timeouts) error {
+	if eps.socksLn != nil {
 		serverDomain := ""
 		if svr := cfg.DefaultServer(); svr != nil && !util.IsIP(svr.Host) {
 			serverDomain = svr.Host
 		}
 		c.dnsCache = dns.NewCache(serverDomain)
 		socksServer, err := proxy.NewSocks5Server(proxy.Socks5Options{
-			ListenAddr:        socksAddr,
+			ListenAddr:        eps.socksAddr,
 			Username:          cfg.AuthUsername,
 			Password:          cfg.AuthPassword,
-			Handler:           streamHandler,
-			Router:            cli.Router(),
+			Handler:           c.StreamHandler,
+			Router:            c.Client.Router(),
 			ServerDomain:      serverDomain,
 			Method:            method,
 			DisableQUIC:       !cfg.Local.EnableQUIC,
 			Timeouts:          timeouts,
-			DirectDialContext: cli.DialContext,
+			DirectDialContext: c.Client.DialContext,
 			DNSCache:          c.dnsCache,
 		})
 		if err != nil {
-			return nil, err
+			return err
 		}
 		c.SocksServer = socksServer
 	}
 
-	if httpLn != nil {
+	if eps.httpLn != nil {
 		// SocksAddr 必须取自 util.LocalProxyDialAddr：bind_all 时它是同族回环 [::1]，
 		// 自己拼 127.0.0.1 在只接受 IPv6 的平台上连不上。
 		httpServer, err := proxy.NewHTTPProxyServer(proxy.HTTPProxyOptions{
-			ListenAddr: httpAddr,
-			SocksAddr:  socksDialAddr,
+			ListenAddr: eps.httpAddr,
+			SocksAddr:  eps.socksDialAddr,
 			Username:   cfg.AuthUsername,
 			Password:   cfg.AuthPassword,
 			Timeouts:   timeouts,
-			Handler:    streamHandler,
-			Router:     cli.Router(),
+			Handler:    c.StreamHandler,
+			Router:     c.Client.Router(),
 			Method:     method,
-			Dial:       cli.DialContext,
+			Dial:       c.Client.DialContext,
 		})
 		if err != nil {
-			return nil, err
+			return err
 		}
 		c.HTTPServer = httpServer
 	}
 
-	if dnsPC != nil {
-		c.dnsServer = dns.NewForwardServer(dnsAddr, cli.Router().ShouldIPV6Disable())
+	if eps.dnsPC != nil {
+		c.dnsServer = dns.NewForwardServer(eps.dnsAddr, c.Client.Router().ShouldIPV6Disable())
 	}
 
-	// 所有服务器构造成功后才派发 goroutine，"Run 成功"因此意味着端口确实在监听。
-	if c.SocksServer != nil {
-		log.Info("[EASYSS] starting socks5 server", "addr", socksLn.Addr().String())
+	return nil
+}
+
+// serveLocal 在所有服务器构造成功后才派发 goroutine，"Run 成功"因此意味着端口确实在监听。
+func (c *Core) serveLocal(eps *localEndpoints) {
+	if eps.socksLn != nil {
+		log.Info("[EASYSS] starting socks5 server", "addr", eps.socksLn.Addr().String())
 		go func() {
-			if err := c.SocksServer.Serve(socksLn); err != nil && !errors.Is(err, net.ErrClosed) {
+			if err := c.SocksServer.Serve(eps.socksLn); err != nil && !errors.Is(err, net.ErrClosed) {
 				log.Error("[EASYSS] socks5 server", "err", err)
 			}
 		}()
 	}
-	if c.HTTPServer != nil {
-		log.Info("[EASYSS] starting http proxy server", "addr", httpLn.Addr().String())
+	if eps.httpLn != nil {
+		log.Info("[EASYSS] starting http proxy server", "addr", eps.httpLn.Addr().String())
 		go func() {
-			if err := c.HTTPServer.Serve(httpLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err := c.HTTPServer.Serve(eps.httpLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Error("[EASYSS] http proxy server", "err", err)
 			}
 		}()
 	}
-	if c.dnsServer != nil {
-		log.Info("[EASYSS] starting dns forward server", "addr", dnsPC.LocalAddr().String())
+	if eps.dnsPC != nil {
+		log.Info("[EASYSS] starting dns forward server", "addr", eps.dnsPC.LocalAddr().String())
 		go func() {
-			if err := c.dnsServer.Serve(dnsPC); err != nil && !errors.Is(err, net.ErrClosed) {
+			if err := c.dnsServer.Serve(eps.dnsPC); err != nil && !errors.Is(err, net.ErrClosed) {
 				log.Error("[EASYSS] dns forward server", "err", err)
 			}
 		}()
 	}
+}
 
-	// 解析失败不中止启动：开机自启动时网络常常尚未就绪，此时照常监听本地端口，
-	// 后台按退避重试，网络恢复后自动补齐缓存。
+// startDomainResolution 只做一次有界预解析；失败降级为启动警告并在后台按退避重试。
+func (c *Core) startDomainResolution(cfg *config.ClientConfig, opts options) {
 	if err := c.resolveServerDomain(cfg); err != nil {
 		host := ""
 		if svr := cfg.DefaultServer(); svr != nil {
@@ -271,18 +260,9 @@ func runWithOptions(cfg *config.ClientConfig, opts options) (*Core, error) {
 			base:        opts.retryBase,
 			max:         opts.retryMax,
 		})
-	} else {
-		c.markServerDomainReady()
+		return
 	}
-
-	log.Info("[EASYSS] started successfully", "elapsed_ms", time.Since(start).Milliseconds())
-	stats.ResetStartTime()
-	stats.ResetCounters()
-	stats.StartSpeedMonitor()
-
-	// 只有走到这里才移交所有权；任何提前的错误返回都由上面的 defer 清理。
-	transferred = true
-	return c, nil
+	c.markServerDomainReady()
 }
 
 // Stop 幂等：重复拆除会让 SOCKS5 的 accept 探测白等一次并留下后台补关闭 goroutine。
