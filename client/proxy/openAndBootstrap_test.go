@@ -102,7 +102,7 @@ func TestOpenAndBootstrap_DeadlineRetriesOnFreshConnection(t *testing.T) {
 	tr := &mockTransport{streams: []transport.Stream{first, second}}
 	h := newTestStreamHandler(tr)
 
-	bs, err := h.openAndBootstrap(context.Background(), "/v3/tcp", protocol.ProtoTCP, "example.com:443", protocol.MethodAES256GCM, nil)
+	bs, err := h.openAndBootstrap(context.Background(), testTCPRequest("example.com:443"))
 	if err != nil {
 		t.Fatalf("expected success after retry, got: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestOpenAndBootstrap_LateResponseKeepsAliveConnection(t *testing.T) {
 	tr := &mockTransport{streams: []transport.Stream{first}}
 	h := newTestStreamHandler(tr)
 
-	bs, err := h.openAndBootstrap(context.Background(), "/v3/tcp", protocol.ProtoTCP, "example.com:443", protocol.MethodAES256GCM, nil)
+	bs, err := h.openAndBootstrap(context.Background(), testTCPRequest("example.com:443"))
 	if err != nil {
 		t.Fatalf("expected the alive connection to be kept, got: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestOpenAndBootstrap_TransportErrorRetriesImmediately(t *testing.T) {
 	tr := &mockTransport{streams: []transport.Stream{first, second}}
 	h := newTestStreamHandler(tr)
 
-	bs, err := h.openAndBootstrap(context.Background(), "/v3/tcp", protocol.ProtoTCP, "example.com:443", protocol.MethodAES256GCM, nil)
+	bs, err := h.openAndBootstrap(context.Background(), testTCPRequest("example.com:443"))
 	if err != nil {
 		t.Fatalf("expected success after retry, got: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestOpenAndBootstrap_ExhaustedAttemptsReportError(t *testing.T) {
 	tr := &mockTransport{streams: streams}
 	h := newTestStreamHandler(tr)
 
-	_, err := h.openAndBootstrap(context.Background(), "/v3/tcp", protocol.ProtoTCP, "example.com:443", protocol.MethodAES256GCM, nil)
+	_, err := h.openAndBootstrap(context.Background(), testTCPRequest("example.com:443"))
 	if err == nil {
 		t.Fatal("expected an error after exhausting attempts, got nil")
 	}
@@ -201,7 +201,7 @@ func TestOpenAndBootstrap_ContextCanceledNoRetry(t *testing.T) {
 	tr := &mockTransport{streams: []transport.Stream{first}}
 	h := newTestStreamHandler(tr)
 
-	_, err := h.openAndBootstrap(ctx, "/v3/tcp", protocol.ProtoTCP, "example.com:443", protocol.MethodAES256GCM, nil)
+	_, err := h.openAndBootstrap(ctx, testTCPRequest("example.com:443"))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestOpenAndBootstrap_ResponseReadyNoRetry(t *testing.T) {
 	tr := &mockTransport{streams: []transport.Stream{first}}
 	h := newTestStreamHandler(tr)
 
-	bs, err := h.openAndBootstrap(context.Background(), "/v3/tcp", protocol.ProtoTCP, "example.com:443", protocol.MethodAES256GCM, nil)
+	bs, err := h.openAndBootstrap(context.Background(), testTCPRequest("example.com:443"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestOpenAndBootstrap_SettlesBeforeDroppingIdleConnections(t *testing.T) {
 	}
 	h := newTestStreamHandler(tr)
 
-	bs, err := h.openAndBootstrap(context.Background(), "/v3/tcp", protocol.ProtoTCP, "example.com:443", protocol.MethodAES256GCM, nil)
+	bs, err := h.openAndBootstrap(context.Background(), testTCPRequest("example.com:443"))
 	if err != nil {
 		t.Fatalf("expected success after retry, got: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestOpenAndBootstrap_ResponseWindowIsBounded(t *testing.T) {
 	tr := &mockTransport{streams: streams}
 	h := newTestStreamHandler(tr)
 
-	_, err := h.openAndBootstrap(context.Background(), "/v3/tcp", protocol.ProtoTCP, "example.com:443", protocol.MethodAES256GCM, nil)
+	_, err := h.openAndBootstrap(context.Background(), testTCPRequest("example.com:443"))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context.DeadlineExceeded, got: %v", err)
 	}
@@ -377,6 +377,10 @@ func newTestStreamHandler(tr transport.Transport) *StreamHandler {
 	return NewStreamHandler(tr, key, shaper.Config{}, sharedconfig.Timeouts{})
 }
 
+func testTCPRequest(target string) streamRequest {
+	return tcpStreamRequest(target, protocol.MethodAES256GCM)
+}
+
 func TestOpenAndBootstrap_SuccessFirstTry(t *testing.T) {
 	tr := &mockTransport{
 		streams: []transport.Stream{
@@ -385,7 +389,7 @@ func TestOpenAndBootstrap_SuccessFirstTry(t *testing.T) {
 	}
 	h := newTestStreamHandler(tr)
 
-	bs, err := h.openAndBootstrap(context.Background(), "/v3/tcp", protocol.ProtoTCP, "example.com:443", protocol.MethodAES256GCM, nil)
+	bs, err := h.openAndBootstrap(context.Background(), testTCPRequest("example.com:443"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -407,7 +411,7 @@ func TestOpenAndBootstrap_RetryOnErrClosedPipe(t *testing.T) {
 	}
 	h := newTestStreamHandler(tr)
 
-	bs, err := h.openAndBootstrap(context.Background(), "/v3/tcp", protocol.ProtoTCP, "example.com:443", protocol.MethodAES256GCM, nil)
+	bs, err := h.openAndBootstrap(context.Background(), testTCPRequest("example.com:443"))
 	if err != nil {
 		t.Fatalf("expected success after retry, got: %v", err)
 	}
@@ -429,7 +433,7 @@ func TestOpenAndBootstrap_NoRetryOnNonClosedPipeErr(t *testing.T) {
 	}
 	h := newTestStreamHandler(tr)
 
-	_, err := h.openAndBootstrap(context.Background(), "/v3/tcp", protocol.ProtoTCP, "example.com:443", protocol.MethodAES256GCM, nil)
+	_, err := h.openAndBootstrap(context.Background(), testTCPRequest("example.com:443"))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -451,7 +455,7 @@ func TestOpenAndBootstrap_AllRetriesFail(t *testing.T) {
 	}
 	h := newTestStreamHandler(tr)
 
-	_, err := h.openAndBootstrap(context.Background(), "/v3/tcp", protocol.ProtoTCP, "example.com:443", protocol.MethodAES256GCM, nil)
+	_, err := h.openAndBootstrap(context.Background(), testTCPRequest("example.com:443"))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -470,7 +474,7 @@ func TestOpenAndBootstrap_OpenFailureNoRetry(t *testing.T) {
 	}
 	h := newTestStreamHandler(tr)
 
-	_, err := h.openAndBootstrap(context.Background(), "/v3/tcp", protocol.ProtoTCP, "example.com:443", protocol.MethodAES256GCM, nil)
+	_, err := h.openAndBootstrap(context.Background(), testTCPRequest("example.com:443"))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -512,7 +516,7 @@ func TestOpenAndBootstrap_FreshSaltPerAttempt(t *testing.T) {
 	wrapped := &saltCapturingTransport{inner: tr}
 	h := newTestStreamHandler(wrapped)
 
-	bs, err := h.openAndBootstrap(context.Background(), "/v3/tcp", protocol.ProtoTCP, "example.com:443", protocol.MethodAES256GCM, nil)
+	bs, err := h.openAndBootstrap(context.Background(), testTCPRequest("example.com:443"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -543,7 +547,7 @@ func TestBootstrapRecordFitsWriteLimit(t *testing.T) {
 	}
 	build := func(extra []protocol.Frame) ([]byte, error) {
 		t.Helper()
-		return buildBootstrapPlaintext(target, protocol.ProtoUDP, method, extra)
+		return buildBootstrapPlaintext(udpStreamRequest(target, method).withFrames(extra...))
 	}
 	write := func(plaintext []byte) error {
 		t.Helper()
