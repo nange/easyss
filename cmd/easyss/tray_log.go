@@ -198,25 +198,6 @@ func launcherArgv(bin string, l termLauncher, viewer []string) []string {
 	return append(argv, viewer...)
 }
 
-// easyss 以 root 运行时（pkexec/sudo 提权，例如启用 TUN）把命令交给桌面用户执行，并带上
-// 提权时丢失的会话环境——没有 XDG_RUNTIME_DIR，Wayland 终端连不上合成器。
-func sessionLaunch(argv []string) []string {
-	if runtime.GOOS != "linux" || !IsRoot() {
-		return argv
-	}
-
-	username, uid, ok := util.SessionUser()
-	if !ok {
-		log.Warn("[SYSTRAY] cannot determine the desktop user, launching as root")
-		return argv
-	}
-
-	launch := []string{"runuser", "-u", username, "--", "env"}
-	launch = append(launch, util.SessionEnv(username, uid)...)
-
-	return append(launch, argv...)
-}
-
 // 没有终端可用时的最后手段。
 func (l logOpener) openLogSnapshot(filePath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), logSnapshotTimeout)

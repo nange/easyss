@@ -1,4 +1,6 @@
-package util
+//go:build !headless && linux
+
+package main
 
 import (
 	"fmt"
@@ -6,11 +8,32 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+
+	"github.com/nange/easyss/v3/log"
 )
 
-// SessionUser 返回调用提权后 easyss 的桌面用户：
+// easyss 以 root 运行时（pkexec/sudo 提权，例如启用 TUN）把命令交给桌面用户执行，并带上
+// 提权时丢失的会话环境——没有 XDG_RUNTIME_DIR，Wayland 终端连不上合成器。
+func sessionLaunch(argv []string) []string {
+	if !IsRoot() {
+		return argv
+	}
+
+	username, uid, ok := sessionUser()
+	if !ok {
+		log.Warn("[SYSTRAY] cannot determine the desktop user, launching as root")
+		return argv
+	}
+
+	launch := []string{"runuser", "-u", username, "--", "env"}
+	launch = append(launch, sessionEnv(username, uid)...)
+
+	return append(launch, argv...)
+}
+
+// sessionUser 返回调用提权后 easyss 的桌面用户：
 // pkexec 导出 PKEXEC_UID，sudo 导出 SUDO_UID/SUDO_USER。
-func SessionUser() (username string, uid int, ok bool) {
+func sessionUser() (username string, uid int, ok bool) {
 	candidates := []struct{ uid, name string }{
 		{os.Getenv("PKEXEC_UID"), ""},
 		{os.Getenv("SUDO_UID"), os.Getenv("SUDO_USER")},
@@ -44,9 +67,9 @@ func SessionUser() (username string, uid int, ok bool) {
 	return "", 0, false
 }
 
-// SessionEnv 构建桌面会话的 KEY=VALUE 环境变量列表，对于提权进程
+// sessionEnv 构建桌面会话的 KEY=VALUE 环境变量列表，对于提权进程
 // 未继承的内容，使用 /run/user/<uid> 下的标准位置。
-func SessionEnv(username string, uid int) []string {
+func sessionEnv(username string, uid int) []string {
 	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
 	if runtimeDir == "" {
 		runtimeDir = fmt.Sprintf("/run/user/%d", uid)

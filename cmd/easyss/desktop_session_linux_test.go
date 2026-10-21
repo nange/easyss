@@ -1,19 +1,21 @@
-package util
+//go:build !headless && linux
+
+package main
 
 import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
-// maxUnixSocketPath 是 Go net 包所遵循的最短 sun_path 预算：
-// macOS/BSD 上为 104 字节（Linux 允许 108）。保持在其之下，
-// 才能让同一个 socket 测试在所有平台上通过。
+// maxUnixSocketPath 是保守的 sun_path 预算：Linux 允许 108 字节，超限时 bind 只报
+// "invalid argument"，看不出真正原因。
 const maxUnixSocketPath = 104
 
-// waylandRuntimeDir 返回一个短目录：Unix socket 的 sun_path 约限 104 字节，而 t.TempDir()
-// 会嵌入测试名，超限时 bind 只会报 "invalid argument"，看不出真正原因。
+// waylandRuntimeDir 返回一个短目录：临时根目录可能很深，而 Unix socket 的 sun_path
+// 只有约 108 字节，超限时 bind 只报 "invalid argument"。
 func waylandRuntimeDir(t *testing.T, withSocket bool) string {
 	t.Helper()
 
@@ -83,4 +85,15 @@ func TestFirstWaylandDisplay(t *testing.T) {
 	// 该辅助函数只会被传入不会失败的 GLOB 模式
 	// （目录与 "wayland-*" 的 filepath.Join），因此 ErrBadPattern
 	// 分支没有可达的输入可供测试。
+}
+
+func TestSessionLaunchPassesThroughNonRoot(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root wraps the command with runuser")
+	}
+
+	argv := []string{"xdg-open", "/tmp/easyss.log"}
+	if got := sessionLaunch(argv); !slices.Equal(got, argv) {
+		t.Fatalf("sessionLaunch = %v, want %v", got, argv)
+	}
 }
