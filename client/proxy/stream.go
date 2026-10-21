@@ -448,15 +448,15 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 // （约 1–2MB 明文）。
 const remotePrefetchFrames = 64
 
-// prefetchedFrame 的 err 非空表示读端已终止；终态与数据走同一条队列，不再需要第二组完成信号。
-type prefetchedFrame struct {
-	data []byte
-	fin  bool
-	rst  bool
-	err  error
-}
-
 func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Conn, signalActivity func(), m *stats.StreamMeter) error {
+	// err 非空表示读端已终止；终态与数据走同一条队列，不再需要第二组完成信号。
+	type prefetchedFrame struct {
+		data []byte
+		fin  bool
+		rst  bool
+		err  error
+	}
+
 	frames := make(chan prefetchedFrame, remotePrefetchFrames)
 	done := make(chan struct{})
 	defer close(done)
