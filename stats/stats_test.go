@@ -2,10 +2,14 @@ package stats
 
 import (
 	"encoding/json"
+	"maps"
 	"reflect"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nange/easyss/v3/transport"
 )
 
 func TestResetStartTime(t *testing.T) {
@@ -137,6 +141,7 @@ func walkInt64Fields(v reflect.Value, prefix string, fn func(string, uintptr)) {
 func TestCountersRoundTrip(t *testing.T) {
 	t.Cleanup(ResetCounters)
 	ResetCounters()
+	RecordRTT(100 * time.Millisecond)
 
 	for i, c := range counters {
 		c.ptr.Store(int64(i + 1))
@@ -152,6 +157,9 @@ func TestCountersRoundTrip(t *testing.T) {
 	}
 	if snap.PeakUploadSpeedHuman != "1.0 MB/s" || snap.PeakDownloadSpeedHuman != "2.0 MB/s" {
 		t.Fatalf("peak speed human strings = %q, %q", snap.PeakUploadSpeedHuman, snap.PeakDownloadSpeedHuman)
+	}
+	if want := int64(100 * time.Millisecond); snap.RTTEWMA != want {
+		t.Fatalf("RTTEWMA = %d, want %d", snap.RTTEWMA, want)
 	}
 
 	ResetCounters()
@@ -169,30 +177,105 @@ func TestCountersRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSnapshotJSONStaysFlat 守住对外契约：分段只是代码组织方式，JSON 仍然是原来的平铺键。
-func TestSnapshotJSONStaysFlat(t *testing.T) {
+// TestSnapshotJSONKeys 锁住 /stats 的对外键集合：分段只是代码组织方式，任何键名增删改
+// 都必须在这里显式更新，否则内部字段改名不会留下任何失败。
+func TestSnapshotJSONKeys(t *testing.T) {
+	t.Cleanup(ResetCounters)
 	ResetCounters()
-	b, err := json.Marshal(Collect())
+
+	// 填满带 omitempty 的段，键集合才完整。
+	RecordServerTCPStream()
+	RecordServerUDPStream()
+	RecordServerICMPStream()
+	RecordServerHandshakeError()
+	RecordServerStreamCancel()
+	RecordServerFallbackPage()
+	RecordServerProbe()
+
+	snap := Collect()
+	snap.Conns = 1
+	snap.PriorityConnsStatus = "0:1:active"
+	snap.BulkConnsStatus = "0:0:idle"
+	snap.GrowEvents = []transport.GrowEvent{{Pool: "bulk", Live: 1, Endpoint: "bulk", Target: "example.com:443"}}
+
+	raw, err := json.Marshal(snap)
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
-	var decoded map[string]any
-	if err := json.Unmarshal(b, &decoded); err != nil {
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("unmarshal snapshot: %v", err)
 	}
-	for _, key := range []string{
-		"total_streams_opened", "bytes_sent", "dns_cache_hits", "upload_speed",
-		"priority_fallback", "rtt_count", "avg_rtt_ms", "conn_rotated",
-		"suspend_detected", "uptime_seconds",
-	} {
-		if _, ok := decoded[key]; !ok {
-			t.Errorf("snapshot JSON lost the flat key %q", key)
-		}
+
+	got := slices.Sorted(maps.Keys(decoded))
+	want := []string{
+		"active_streams",
+		"avg_rtt_ms",
+		"bulk_active_streams",
+		"bulk_conns",
+		"bulk_conns_status",
+		"bulk_fallback",
+		"bulk_streams_opened",
+		"bytes_recv",
+		"bytes_sent",
+		"conn_rotated",
+		"conns",
+		"dns_cache_hits",
+		"dns_cache_misses",
+		"dns_direct_queries",
+		"dns_proxy_queries",
+		"download_speed",
+		"download_speed_human",
+		"padding_bytes",
+		"peak_download_speed_human",
+		"peak_upload_speed_human",
+		"priority_active_streams",
+		"priority_conns",
+		"priority_conns_status",
+		"priority_fallback",
+		"priority_streams_opened",
+		"raw_bytes_recv",
+		"raw_bytes_sent",
+		"records_written",
+		"recent_grow_events",
+		"rtt_count",
+		"rtt_ewma_ns",
+		"second_conn_in_generation",
+		"server_fallback_pages",
+		"server_handshake_errors",
+		"server_icmp_streams",
+		"server_probes",
+		"server_stream_cancels",
+		"server_tcp_streams",
+		"server_udp_streams",
+		"slot_degraded",
+		"slot_grown_bulk",
+		"slot_grown_priority",
+		"slot_probe_slow",
+		"slot_probe_unsupported",
+		"slot_probes",
+		"slot_retired_degraded",
+		"start_time",
+		"streams_drained",
+		"suspend_detected",
+		"suspend_reverify_alive",
+		"suspend_reverify_replaced",
+		"tcp_connections",
+		"tier_degraded_scheduled",
+		"tier_expiring_scheduled",
+		"tier_heavy_scheduled",
+		"tier_retiring_skipped",
+		"total_streams_closed",
+		"total_streams_opened",
+		"udp_associations",
+		"upload_speed",
+		"upload_speed_human",
+		"uptime_seconds",
 	}
-	for _, key := range []string{"SessionStats", "TransportHealthStats", "RTTStats"} {
-		if _, ok := decoded[key]; ok {
-			t.Errorf("snapshot JSON leaked the section %q", key)
-		}
+	slices.Sort(want)
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("snapshot JSON keys changed:\n got: %v\nwant: %v", got, want)
 	}
 }
 
