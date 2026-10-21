@@ -9,10 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"net/http"
 	"os"
-	"runtime"
-	"sync"
 	"time"
 
 	"github.com/gogpu/systray"
@@ -23,7 +20,6 @@ import (
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/runner"
 	"github.com/nange/easyss/v3/selfupdate"
-	"github.com/nange/easyss/v3/util"
 )
 
 type TrayApp struct {
@@ -32,16 +28,10 @@ type TrayApp struct {
 	shell *trayShell
 	uwp   uwpMenu
 
-	// 只保护两个菜单项指针；停/起序列归 session.run，与本锁无关。
-	mu          sync.RWMutex
-	browserMenu *systray.MenuItem
-	tunMenu     *systray.MenuItem
+	server *serverMenu
+	object *proxyObjectMenu
 
-	serverMenuItems []*systray.MenuItem
-	serverAddrs     []string
-	proxyRuleItems  map[string]*systray.MenuItem
-	logLevelItems   map[string]*systray.MenuItem
-	autoStartItem   *systray.MenuItem
+	autoStartItem *systray.MenuItem
 
 	updater *updater
 }
@@ -112,7 +102,7 @@ func (a *TrayApp) buildTray() {
 	}
 
 	a.startLocalService()
-	go a.statsRefresher()
+	go a.server.startStatsLoop(a.currentConfig(), a.shell.closing)
 	go a.updater.autoCheckUpdate()
 	a.shell.markBuilt()
 }
@@ -181,9 +171,7 @@ func (a *TrayApp) serverDomainReady(msg string) {
 // 会话已由 session 拆除，这里只碰界面。菜单必须回到未勾选：引擎没在跑，勾着会让用户以为
 // 它在跑。
 func (a *TrayApp) tunStartFailed(err error) {
-	if mi := a.TunMenu(); mi != nil {
-		mi.SetChecked(false)
-	}
+	a.object.setTunChecked(false)
 	if err == nil {
 		return
 	}
@@ -238,32 +226,16 @@ func (a *TrayApp) trayExit() {
 
 func (a *TrayApp) buildSelectServerMenu() *systray.Menu {
 	m := systray.NewMenu()
-
-	cfg := a.currentConfig()
-	addrs := cfg.ServerListAddrs()
-	if len(addrs) == 0 {
-		addrs = []string{cfg.DefaultServerAddr()}
-	}
-	a.serverAddrs = addrs
-	a.serverMenuItems = make([]*systray.MenuItem, 0, len(addrs))
-
-	for idx, addr := range addrs {
-		checked := addr == cfg.DefaultServerAddr()
-		item := m.AddCheckbox(addr, checked, func(idx int) func() {
-			return func() { a.selectServer(idx) }
-		}(idx))
-		a.serverMenuItems = append(a.serverMenuItems, item)
-	}
-
+	a.server = newServerMenu(m, a.currentConfig(), a.selectServer)
 	return m
 }
 
 func (a *TrayApp) selectServer(idx int) {
 	go func() {
-		if a.serverMenuItems[idx].IsChecked() {
+		if a.server.checked(idx) {
 			return
 		}
-		addr := a.serverAddrs[idx]
+		addr := a.server.addr(idx)
 		log.Info("[SYSTRAY] changing server to", "addr", addr)
 		if err := a.switchServer(idx, a.restartService); err != nil {
 			log.Error("[SYSTRAY] changing server to", "addr", addr, "err", err)
@@ -279,12 +251,12 @@ func (a *TrayApp) selectServer(idx int) {
 func (a *TrayApp) switchServer(idx int, restart func(*config.ClientConfig) error) error {
 	return a.sess.runErr(func() error {
 		// 排队期间可能已经切到目标服务器：把勾选确认回来即可，不必再停一次、起一次。
-		if a.currentCore() != nil && a.runningServerIndex() == idx {
-			a.setCheckedServer(idx)
+		if a.currentCore() != nil && a.server.indexOf(a.currentConfig().DefaultServerAddr()) == idx {
+			a.server.setChecked(idx)
 			return nil
 		}
 
-		a.setCheckedServer(-1)
+		a.server.setChecked(-1)
 
 		// 只把切换意图传给 restart，刻意不在停服务之前发布整份配置（见 restartServiceInSequence）。
 		clone := a.currentConfig().Clone()
@@ -293,30 +265,14 @@ func (a *TrayApp) switchServer(idx int, restart func(*config.ClientConfig) error
 			// restartService 已尽力回滚：还有 core 在运行就按当前配置勾回它；彻底没有服务在运行
 			// 时留空——菜单不能声称一个没在工作的服务器已选中。
 			if a.currentCore() != nil {
-				a.setCheckedServer(a.runningServerIndex())
+				a.server.setChecked(a.server.indexOf(a.currentConfig().DefaultServerAddr()))
 			}
 			return err
 		}
 
-		a.setCheckedServer(idx)
+		a.server.setChecked(idx)
 		return nil
 	})
-}
-
-func (a *TrayApp) runningServerIndex() int {
-	addr := a.currentConfig().DefaultServerAddr()
-	for i, candidate := range a.serverAddrs {
-		if candidate == addr {
-			return i
-		}
-	}
-	return -1
-}
-
-func (a *TrayApp) setCheckedServer(idx int) {
-	for i, item := range a.serverMenuItems {
-		item.SetChecked(i == idx)
-	}
 }
 
 // 菜单刚被清空，因此切换失败不能只写日志：用户需要知道现在跑的到底是哪个服务器。
@@ -328,82 +284,17 @@ func (a *TrayApp) notifyServerSwitchFailure(addr string, err error) {
 	a.shell.notifyIfReady(msg)
 }
 
-func (a *TrayApp) statsRefresher() {
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
-	cfg := a.currentConfig()
-	url := fmt.Sprintf("http://%s/stats", util.LocalProxyDialAddr(cfg.Local.BindAll, cfg.Local.HTTPPort))
-	httpClient := &http.Client{Timeout: 2 * time.Second}
-
-	for {
-		select {
-		case <-ticker.C:
-			rttMs, downSpeed := fetchStats(httpClient, url)
-			for i, mi := range a.serverMenuItems {
-				if mi.IsChecked() {
-					mi.SetLabel(formatTitle(a.serverAddrs[i], rttMs, downSpeed))
-					break
-				}
-			}
-		case <-a.shell.closing:
-			return
-		}
-	}
-}
-
-func fetchStats(client *http.Client, url string) (rttMs float64, downSpeed string) {
-	resp, err := client.Get(url)
-	if err != nil {
-		return 0, ""
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var snap struct {
-		AvgRTTMs           float64 `json:"avg_rtt_ms"`
-		DownloadSpeedHuman string  `json:"download_speed_human"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
-		return 0, ""
-	}
-	return snap.AvgRTTMs, snap.DownloadSpeedHuman
-}
-
 func (a *TrayApp) buildProxyRuleMenu() *systray.Menu {
 	m := systray.NewMenu()
-	a.proxyRuleItems = make(map[string]*systray.MenuItem)
-
-	proxyRule := a.currentConfig().Routing.ProxyRule
-	rules := []struct {
-		rule    string
-		label   string
-		checked bool
-	}{
-		{"auto", "自动(自定义规则+绕过大陆IP域名)", proxyRule == "auto"},
-		{"auto_block", "自动+屏蔽广告跟踪", proxyRule == "auto_block"},
-		{"reverse_auto", "反向自动(国外访问国内)", proxyRule == "reverse_auto"},
-		{"proxy", "代理全部(绕过局域网地址)", proxyRule == "proxy"},
-		{"direct", "直接连接", proxyRule == "direct"},
-	}
-
-	for _, r := range rules {
-		item := m.AddCheckbox(r.label, r.checked, func(rule string) func() {
-			return func() { go a.changeProxyRule(rule) }
-		}(r.rule))
-		a.proxyRuleItems[r.rule] = item
-	}
-
+	rule := a.currentConfig().Routing.ProxyRule
+	newRadioMenu(m, []radioOption{
+		{"auto", "自动(自定义规则+绕过大陆IP域名)", rule == "auto"},
+		{"auto_block", "自动+屏蔽广告跟踪", rule == "auto_block"},
+		{"reverse_auto", "反向自动(国外访问国内)", rule == "reverse_auto"},
+		{"proxy", "代理全部(绕过局域网地址)", rule == "proxy"},
+		{"direct", "直接连接", rule == "direct"},
+	}, a.setProxyRule)
 	return m
-}
-
-func (a *TrayApp) changeProxyRule(rule string) {
-	if a.proxyRuleItems[rule].IsChecked() {
-		return
-	}
-	a.setProxyRule(rule)
-	for r, item := range a.proxyRuleItems {
-		item.SetChecked(r == rule)
-	}
 }
 
 func (a *TrayApp) setProxyRule(rule string) {
@@ -417,80 +308,48 @@ func (a *TrayApp) setProxyRule(rule string) {
 
 func (a *TrayApp) buildProxyObjectMenu() *systray.Menu {
 	m := systray.NewMenu()
-
-	cfg := a.currentConfig()
-	browserChecked := !cfg.Local.DisableSysProxy
-	browser := m.AddCheckbox("浏览器(设置系统代理)", browserChecked, a.toggleSysProxy)
-	a.SetBrowserMenu(browser)
-
-	global := m.AddCheckbox("系统全局流量(Tun2socks)", cfg.Local.EnableTun2socks, a.toggleTun2socks)
-	a.SetTunMenu(global)
-
+	a.object = newProxyObjectMenu(m, a.currentConfig(), a.toggleSysProxy, a.toggleTun2socks)
 	return m
 }
 
 func (a *TrayApp) toggleSysProxy() {
-	go func() {
-		mi := a.BrowserMenu()
-		if mi.IsChecked() {
-			mi.SetChecked(false)
-			if err := a.setSysProxyOff(); err != nil {
-				log.Error("[SYSTRAY] set sys-proxy off", "err", err)
-				mi.SetChecked(true) // 失败时回滚
-			}
-		} else {
-			mi.SetChecked(true)
-			if err := a.setSysProxyOn(sysProxyAddr(a.currentConfig())); err != nil {
-				log.Error("[SYSTRAY] set sys-proxy on", "err", err)
-				mi.SetChecked(false) // 失败时回滚
-			}
+	go toggleCheck(a.object.browser, func(on bool) error {
+		if on {
+			return a.setSysProxyOn(sysProxyAddr(a.currentConfig()))
 		}
-	}()
+		return a.setSysProxyOff()
+	}, func(on bool, err error) {
+		log.Error("[SYSTRAY] toggle sys-proxy", "on", on, "err", err)
+	})
 }
 
 func (a *TrayApp) toggleTun2socks() {
 	go func() {
-		mi := a.TunMenu()
-		log.Info("[SYSTRAY] tun menu clicked", "checked", mi.IsChecked())
-		if mi.IsChecked() {
-			mi.SetChecked(false)
+		on := a.object.tunChecked()
+		log.Info("[SYSTRAY] tun menu clicked", "checked", on)
+		if on {
+			a.object.setTunChecked(false)
 			a.disableTun2socks()
-		} else {
-			mi.SetChecked(true)
-			a.enableTun2socks(mi)
+			return
 		}
+		a.object.setTunChecked(true)
+		a.enableTun2socks()
 	}()
 }
 
 func (a *TrayApp) buildLogLevelMenu() *systray.Menu {
 	m := systray.NewMenu()
-	a.logLevelItems = make(map[string]*systray.MenuItem)
-
-	logLevel := a.currentConfig().Log.Level
-	levels := []struct {
-		level   string
-		checked bool
-	}{
-		{"debug", logLevel == "debug"},
-		{"info", logLevel == "info" || logLevel == ""},
-		{"warn", logLevel == "warn"},
-		{"error", logLevel == "error"},
-	}
-
-	for _, l := range levels {
-		item := m.AddCheckbox(l.level, l.checked, func(level string) func() {
-			return func() { go a.changeLogLevel(level) }
-		}(l.level))
-		a.logLevelItems[l.level] = item
-	}
-
+	level := a.currentConfig().Log.Level
+	newRadioMenu(m, []radioOption{
+		{"debug", "debug", level == "debug"},
+		{"info", "info", level == "info" || level == ""},
+		{"warn", "warn", level == "warn"},
+		{"error", "error", level == "error"},
+	}, a.setLogLevel)
 	return m
 }
 
-func (a *TrayApp) changeLogLevel(level string) {
-	if a.logLevelItems[level].IsChecked() {
-		return
-	}
+func (a *TrayApp) setLogLevel(level string) {
 	a.updateConfig(func(c *config.ClientConfig) { c.Log.Level = level })
 	log.Info("[SYSTRAY] log level changed", "level", level)
 
@@ -506,10 +365,6 @@ func (a *TrayApp) changeLogLevel(level string) {
 		slogLevel = slog.LevelInfo
 	}
 	log.SetLevel(slogLevel)
-
-	for l, item := range a.logLevelItems {
-		item.SetChecked(l == level)
-	}
 }
 
 // 失败只写日志会让菜单项看起来像没反应，因此每个失败也以通知呈现。
@@ -525,23 +380,22 @@ func (a *TrayApp) catLogs() {
 }
 
 func (a *TrayApp) toggleAutoStart() {
-	go func() {
-		if a.autoStartItem.IsChecked() {
-			if err := DisableAutoStart(); err != nil {
-				log.Error("[SYSTRAY] disable auto-start", "err", err)
-				return
-			}
-			a.autoStartItem.SetChecked(false)
-			log.Info("[SYSTRAY] auto-start disabled")
-		} else {
+	go toggleCheck(a.autoStartItem, func(on bool) error {
+		if on {
 			if err := EnableAutoStart(); err != nil {
-				log.Error("[SYSTRAY] enable auto-start", "err", err)
-				return
+				return err
 			}
-			a.autoStartItem.SetChecked(true)
 			log.Info("[SYSTRAY] auto-start enabled")
+			return nil
 		}
-	}()
+		if err := DisableAutoStart(); err != nil {
+			return err
+		}
+		log.Info("[SYSTRAY] auto-start disabled")
+		return nil
+	}, func(on bool, err error) {
+		log.Error("[SYSTRAY] toggle auto-start", "on", on, "err", err)
+	})
 }
 
 func (a *TrayApp) exitApp() {
@@ -554,34 +408,22 @@ func (a *TrayApp) exitApp() {
 }
 
 // 失败必须回滚勾选并通知用户，否则核心仍在提供 SOCKS5/HTTP，而全局流量静默保持直连。
-func (a *TrayApp) enableTun2socks(menu *systray.MenuItem) {
+func (a *TrayApp) enableTun2socks() {
 	log.Info("[SYSTRAY] enableTun2socks called", "isRoot", IsRoot())
 
 	// 服务端域名未解析时必须拒绝：TUN 会把系统 DNS 指向本机转发服务器，而解析该域名又依赖隧道，
 	// 容易形成解析递归；网络未就绪时平台脚本还会因缺默认网关失败。
 	if !canStartTunNow(a.currentCore()) {
 		log.Warn("[SYSTRAY] tun2socks refused: server domain not resolved yet")
-		menu.SetChecked(false)
+		a.object.setTunChecked(false)
 		a.notify("服务端域名尚未解析成功，暂时无法开启系统全局流量；请等待网络恢复后重试")
 		return
 	}
 
-	if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !IsRoot() {
-		// 非 root 时拉起提权助手打开设备、配置路由并把 fd 传回；助手在非 unix 构建上总会失败，
-		// 但该分支由 runtime.GOOS 保证不可达。
-		if err := a.sess.tunUpViaHelper(); err != nil { //nolint:staticcheck // always fails on non-unix builds; branch unreachable
-			log.Error("[SYSTRAY] create tun2socks via helper", "err", err)
-			menu.SetChecked(false)
-			a.notify(friendlyTunError(err))
-			return
-		}
-	} else {
-		if err := a.sess.tunUp(); err != nil {
-			log.Error("[SYSTRAY] create tun2socks", "err", err)
-			menu.SetChecked(false)
-			a.notify(friendlyTunError(err))
-			return
-		}
+	if err := a.sess.tunUpAuto(); err != nil {
+		log.Error("[SYSTRAY] create tun2socks", "err", err)
+		a.object.setTunChecked(false)
+		a.notify(friendlyTunError(err))
 	}
 }
 
@@ -643,17 +485,15 @@ func (a *TrayApp) restartAfterUpdate() error {
 
 // 托盘只提供菜单状态，切换序列在 App.restartServiceInSequence。
 func (a *TrayApp) browserProxyEnabled() bool {
-	return a.BrowserMenu() != nil && a.BrowserMenu().IsChecked()
+	return a.object.browserChecked()
 }
 
 func (a *TrayApp) setTunMenuChecked(checked bool) {
-	if mi := a.TunMenu(); mi != nil {
-		mi.SetChecked(checked)
-	}
+	a.object.setTunChecked(checked)
 }
 
 func (a *TrayApp) startLocalService() {
-	if a.BrowserMenu() != nil && a.BrowserMenu().IsChecked() {
+	if a.object.browserChecked() {
 		if err := a.setSysProxyOn(sysProxyAddr(a.currentConfig())); err != nil {
 			log.Error("[SYSTRAY] start local: set sysproxy on", "err", err)
 		}
@@ -665,31 +505,5 @@ func (a *TrayApp) startLocalService() {
 
 	// 菜单在 App.Start 之前构建，勾选状态可能被启动过程改写；这里按 cfg 双向同步，避免
 	// "勾选但未运行"让用户需要点两次才能开启。
-	if a.TunMenu() != nil {
-		a.TunMenu().SetChecked(a.currentConfig().Local.EnableTun2socks)
-	}
-}
-
-func (a *TrayApp) SetBrowserMenu(m *systray.MenuItem) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.browserMenu = m
-}
-
-func (a *TrayApp) BrowserMenu() *systray.MenuItem {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.browserMenu
-}
-
-func (a *TrayApp) SetTunMenu(m *systray.MenuItem) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.tunMenu = m
-}
-
-func (a *TrayApp) TunMenu() *systray.MenuItem {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.tunMenu
+	a.object.setTunChecked(a.currentConfig().Local.EnableTun2socks)
 }

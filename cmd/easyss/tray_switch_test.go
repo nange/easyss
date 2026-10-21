@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newSwitchTestApp 构建一个只包含"选择服务器"菜单的最小 TrayApp：切换逻辑只用到
-// serverAddrs/serverMenuItems/当前配置快照/当前核心，既不需要托盘，也不需要核心或网络。
+// newSwitchTestApp 构建一个最小 TrayApp：切换逻辑只用到服务器菜单、代理对象菜单、
+// 当前配置快照与当前核心，既不需要托盘，也不需要核心或网络。
 func newSwitchTestApp(t *testing.T) *TrayApp {
 	t.Helper()
 
@@ -25,12 +25,8 @@ func newSwitchTestApp(t *testing.T) *TrayApp {
 	}}
 	a := &TrayApp{App: newApp(cfg, "")}
 	a.ui = a
-	a.serverAddrs = cfg.ServerListAddrs()
-
-	menu := systray.NewMenu()
-	for i, addr := range a.serverAddrs {
-		a.serverMenuItems = append(a.serverMenuItems, menu.AddCheckbox(addr, i == 0, nil))
-	}
+	a.server = newServerMenu(systray.NewMenu(), cfg, func(int) {})
+	a.object = newProxyObjectMenu(systray.NewMenu(), cfg, func() {}, func() {})
 	return a
 }
 
@@ -50,9 +46,9 @@ func TestSwitchServerRestoresTheRunningSelectionOnFailure(t *testing.T) {
 
 	require.ErrorIs(t, err, errBoom)
 	require.Equal(t, "b.example:443", switchedTo, "切换目标必须由下标决定")
-	require.True(t, a.serverMenuItems[0].IsChecked(),
+	require.True(t, a.server.items[0].IsChecked(),
 		"切换失败后菜单必须还原到仍在运行的服务器")
-	require.False(t, a.serverMenuItems[1].IsChecked())
+	require.False(t, a.server.items[1].IsChecked())
 }
 
 // TestSwitchServerLeavesNothingCheckedWhenTheCoreIsGone 覆盖回滚也失败的情形：
@@ -66,8 +62,8 @@ func TestSwitchServerLeavesNothingCheckedWhenTheCoreIsGone(t *testing.T) {
 	})
 
 	require.Error(t, err)
-	require.False(t, a.serverMenuItems[0].IsChecked())
-	require.False(t, a.serverMenuItems[1].IsChecked())
+	require.False(t, a.server.items[0].IsChecked())
+	require.False(t, a.server.items[1].IsChecked())
 }
 
 // TestSwitchServerMarksTheTargetOnSuccess 确认成功路径把勾选落在目标服务器上。
@@ -83,8 +79,8 @@ func TestSwitchServerMarksTheTargetOnSuccess(t *testing.T) {
 	}))
 
 	require.Equal(t, "b.example:443", a.currentConfig().DefaultServerAddr())
-	require.False(t, a.serverMenuItems[0].IsChecked())
-	require.True(t, a.serverMenuItems[1].IsChecked())
+	require.False(t, a.server.items[0].IsChecked())
+	require.True(t, a.server.items[1].IsChecked())
 }
 
 // TestSwitchServerSkipsAServerThatIsAlreadyRunning 覆盖"排队期间状态已经变了"：
@@ -100,7 +96,7 @@ func TestSwitchServerSkipsAServerThatIsAlreadyRunning(t *testing.T) {
 	}))
 
 	require.False(t, called, "已经在运行的服务器不该再重启一次")
-	require.True(t, a.serverMenuItems[0].IsChecked())
+	require.True(t, a.server.items[0].IsChecked())
 }
 
 // TestSwitchServerSerializesConcurrentSwitches 守住串行化：托盘每次点击都新起 goroutine，
@@ -158,8 +154,7 @@ func TestSwitchServerSerializesConcurrentSwitches(t *testing.T) {
 // （本地端口没人监听，系统代理还指着它），也就是"切换失败并且断网"。
 func TestRestartServiceRollsBackToThePreviousServer(t *testing.T) {
 	a := newSwitchTestApp(t)
-	// 系统代理开着，才能验证回滚之后它被恢复回来。
-	a.SetBrowserMenu(systray.NewMenu().AddCheckbox("系统代理", true, nil))
+	// newSwitchTestApp 的系统代理项默认勾选，才能验证回滚之后它被恢复回来。
 	applied, reverts := stubSysProxy(a.App, nil)
 	a.updateConfig(func(c *config.ClientConfig) { c.Local.HTTPPort = 5080 })
 
@@ -322,7 +317,7 @@ func TestSwitchServerIsRaceFreeWithStatsReads(t *testing.T) {
 }
 
 // TestCloseServiceIsSerializedWithSwitches 守住退出拆除（closeService）与切换的"停→起"
-// 不交错：互斥由会话序列锁提供，不能靠 TrayApp.mu 顺带获得。
+// 不交错：互斥只由会话序列锁提供，托盘本身不持锁。
 func TestCloseServiceIsSerializedWithSwitches(t *testing.T) {
 	a := newSwitchTestApp(t)
 	stubSysProxy(a.App, nil)

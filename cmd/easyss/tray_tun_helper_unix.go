@@ -17,6 +17,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// tunUpAuto 返回本平台的启用路径：非 root 时拉起提权 helper，root 直接创建设备。
+func (s *session) tunUpAuto() error {
+	if !IsRoot() {
+		return s.tunUpViaHelper()
+	}
+	return s.tunUp()
+}
+
 // 生成长期运行的提权 helper 打开设备、配置路由/DNS 并传回 fd；helper 靠 stdin（FIFO）感知主进程生命周期。
 func (s *session) tunUpViaHelper() error {
 	// 与 session.tunUp、session.tunDown 共用 tunMu。

@@ -229,7 +229,7 @@ func TestTrayTunStartFailureUnchecksTheMenu(t *testing.T) {
 	a := &TrayApp{App: newApp(&config.ClientConfig{}, ""), shell: newTrayShell()}
 
 	item := systray.NewMenu().AddCheckbox("系统全局流量(Tun2socks)", true, nil)
-	a.SetTunMenu(item)
+	a.object = &proxyObjectMenu{tun: item}
 
 	a.tunStartFailed(fmt.Errorf("%w: boom", tun.ErrCreateDevice))
 	require.False(t, item.IsChecked(), "失败后菜单必须回到未勾选")
