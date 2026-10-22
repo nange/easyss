@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/nange/easyss/v3/assets"
+	"github.com/nange/easyss/v3/client/assets"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/rule"
 	"github.com/nange/easyss/v3/util"

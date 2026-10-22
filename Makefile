@@ -30,6 +30,10 @@ ANDROID_ALIGN_LDFLAGS := -extldflags=-Wl,-z,max-page-size=16384
 GOMOBILE_BIND := $(GOMOBILE) bind -target=android/arm64,android/amd64 -androidapi 29 -ldflags '$(LDFLAGS) $(ANDROID_ALIGN_LDFLAGS)'
 
 BIN := bin
+# macOS 打包工具与资源路径集中在这里，避免在三个目标里重复。
+APP_BUNDLE := hack/app-bundle.sh
+ICNS := cmd/easyss/icon/Easyss.icns
+PLIST := cmd/easyss/Info.plist
 # CI / 发布产物按平台分目录：不同架构互不覆盖，打包因此与构建顺序无关。
 PLATFORM_DIRS := $(BIN)/linux-amd64 $(BIN)/linux-arm64 $(BIN)/windows-amd64 \
                  $(BIN)/windows-arm64 $(BIN)/darwin-arm64 $(BIN)/darwin-amd64
@@ -61,7 +65,7 @@ easyss-windows:
 easyss-mac-app:
 	cd cmd/easyss; \
 	GOOS=darwin $(GO_BUILD) -o ../../bin/easyss
-	bash scripts/app-bundle.sh bin/easyss icon/Easyss.icns cmd/easyss/Info.plist
+	bash $(APP_BUNDLE) bin/easyss $(ICNS) $(PLIST)
 
 easyss-headless:
 		cd cmd/easyss; \
@@ -121,13 +125,13 @@ build-darwin-arm64:
 	@mkdir -p $(BIN)/darwin-arm64
 	cd cmd/easyss && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o ../../$(BIN)/darwin-arm64/easyss
 	cd cmd/easyss-server && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o ../../$(BIN)/darwin-arm64/easyss-server
-	bash scripts/app-bundle.sh $(BIN)/darwin-arm64/easyss icon/Easyss.icns cmd/easyss/Info.plist $(BIN)/darwin-arm64
+	bash $(APP_BUNDLE) $(BIN)/darwin-arm64/easyss $(ICNS) $(PLIST) $(BIN)/darwin-arm64
 
 build-darwin-amd64:
 	@mkdir -p $(BIN)/darwin-amd64
 	cd cmd/easyss && GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o ../../$(BIN)/darwin-amd64/easyss
 	cd cmd/easyss-server && GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o ../../$(BIN)/darwin-amd64/easyss-server
-	bash scripts/app-bundle.sh $(BIN)/darwin-amd64/easyss icon/Easyss.icns cmd/easyss/Info.plist $(BIN)/darwin-amd64
+	bash $(APP_BUNDLE) $(BIN)/darwin-amd64/easyss $(ICNS) $(PLIST) $(BIN)/darwin-amd64
 
 # ---------------------------------------------------------------------------
 # 打包：资产名与 zip 内文件名是 selfupdate(<product>-<goos>-<goarch>.zip) 与

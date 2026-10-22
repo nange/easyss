@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/nange/easyss/v3/scripts"
+	"github.com/nange/easyss/v3/client/tun/scripts"
 	"github.com/stretchr/testify/require"
 )
 

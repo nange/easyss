@@ -69,7 +69,7 @@ del route-128.0.0.0/1 route delete -net 128.0.0.0/1 "$tun_gw"
 del route-198.18.0.0/15 route delete -net 198.18.0.0/15 "$tun_gw"
 
 # 创建脚本不再把本地网关路由进 TUN 设备：指向它的主机路由会吞掉内核发往
-# 网关自身存活探测的 ICMP 回复（参见 scripts/create_tun_dev.sh）。这条删除
+# 网关自身存活探测的 ICMP 回复（参见同目录的 create_tun_dev.sh）。这条删除
 # 命令仍然保留，因为 darwin 在重启后仍会保留路由表，所以它负责清理
 # 旧版本安装的路由；路由不存在时属于良性情况。
 del route-local-gateway route delete -net "$local_gateway" "$tun_gw"

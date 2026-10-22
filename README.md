@@ -253,11 +253,11 @@ Easyss 通过检测配置文件自动区分模式：
 
 保存好配置文件后，双击`easyss`，程序会自动启动，托盘会出现Easyss的图标，如下:
 
-![托盘图标](assets/img/tray.png)
+![托盘图标](docs/images/tray.png)
 
-![托盘图标](assets/img/tray2.png)
+![托盘图标](docs/images/tray2.png)
 
-![托盘图标](assets/img/tray3.png)
+![托盘图标](docs/images/tray3.png)
 
 **注意：代理对象，选择系统全局流量时，需要管理员权限。**
 
@@ -540,7 +540,7 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 
 #### 生成自定义证书
 
-可根据自己的需求，使用`openssl`等工具生成自定义证书。也可以参考： `./scripts/self_signed_certs` 目录示例，使用`cfssl`生成自定义证书。
+可根据自己的需求，使用`openssl`等工具生成自定义证书。也可以参考： `./hack/self_signed_certs` 目录示例，使用`cfssl`生成自定义证书。
 示例就是使用IP而不是域名生成自定义证书，这样就可以无域名使用Easyss了。
 
 自签证书有两个容易漏掉的地方：**证书的 SAN 里必须包含客户端要连接的那个地址**（示例脚本的

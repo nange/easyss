@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nange/easyss/v3/scripts"
+	"github.com/nange/easyss/v3/client/tun/scripts"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,7 +24,7 @@ const closeFailureMarker = "[close_tun_dev_windows]"
 // 报成成功，客户端保留一条既无地址也无 DNS 的设备的路由。真实脚本通过 cmd.exe 运行，
 // PATH 最前放存根工具让失败可复现（存根是批处理文件，脚本用 call 调用工具）。
 func TestCreateTunScriptExitCode(t *testing.T) {
-	script, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "scripts", scripts.CreateTunFilename))
+	script, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "client", "tun", "scripts", scripts.CreateTunFilename))
 	require.NoError(t, err)
 
 	comspec := os.Getenv("COMSPEC")
@@ -148,7 +148,7 @@ type closeScriptStub struct {
 // 创建脚本无法重复应用，只能由关闭脚本删除）；设备已不存在时不报失败，
 // 路由真的残留时必须以非零码退出——残留的分流默认路由会把全机 IPv4 流量送进没人读的 TUN。
 func TestCloseTunScriptCleanup(t *testing.T) {
-	script, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "scripts", scripts.CloseTunFilename))
+	script, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "client", "tun", "scripts", scripts.CloseTunFilename))
 	require.NoError(t, err)
 
 	comspec := os.Getenv("COMSPEC")
