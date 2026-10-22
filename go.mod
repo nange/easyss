@@ -1,6 +1,6 @@
 module github.com/nange/easyss/v3
 
-go 1.27.2
+go 1.27.3
 
 // nange/systray 是 gogpu/systray 的分支：修复了上游 issue #39
 //（上下文菜单打开期间 SetMenu 重建菜单会把点击派发到另一个菜单项的回调）。
