@@ -13,12 +13,12 @@ local_gateway_v6=$8
 #   - 空值表示调用方没有传 MTU（老布局），此时保留设备默认值（见下方 mtu 步骤）。
 tun_mtu=${9:-}
 
-# 退出码契约：调用方（cmd/easyss/tun_helper_linux.go，以及无 helper 路径下的
+# 退出码契约：调用方（cmd/easyss/internal/tunhelper/helper_linux.go，以及无 helper 路径下的
 # client/tun/tun.go）仅在本脚本以 0 退出时才保留已安装的 TUN 路由。所有不允许
 # 失败的命令都会把各自的步骤名记录到 FAIL 中，脚本最后以显式 exit 结束。
 #
 # 位置参数（顺序是调用方与脚本之间的契约，见 client/tun/tun.go 的 linux 分支与
-# cmd/easyss/tun_helper_linux.go 的 runCreateScript）：
+# cmd/easyss/internal/tunhelper/helper_linux.go 的 runCreateScript）：
 #   1 设备名 2 tun ip/prefix 3 tun gw 4 本地网关 5 tun ipv6/prefix
 #   6 tun gw ipv6 7 服务端 ipv6 8 本地网关 ipv6 9 MTU（空值 = 不设置）
 #
