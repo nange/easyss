@@ -384,7 +384,7 @@ sysctl -p
 * `next_proxy.enable_udp`：是否转发 UDP（需下一级代理支持 UDP ASSOCIATE）。开启前请确认，否则这些 UDP 目标会全部超时（TUN 模式下表现为所有域名都解析不出来）
 * `next_proxy.all_host`：是否对所有请求走链式代理；未指定 `next_proxy_file` 时仅按它决定
 
-指向 53 端口的 UDP 会话按**查询域名**决定路由：服务端读出 QNAME 后才拨号，命中规则则经下一级代理解析，否则直连解析器；同一条会话中路由变化会重绑出站连接（日志带 `route_changed=true`），旧连接上未回包的查询由客户端重试。
+指向 53 端口的 UDP 会话按**查询域名**决定路由：服务端读出 QNAME 后才拨号，命中规则则经下一级代理解析，否则直连解析器；同一条会话中路由变化会重绑出站连接（日志带 `route_changed=true`），旧连接上未回包的查询由客户端重试。`[UDP_DNS]` 的 `via_next_proxy` 是这条查询实际使用的出站路径，首条查询命中代理时提为 Info；`[UDP] upstream connected` 走代理记 `proxy=<下一级代理地址>`、直连记 `remote=<对端 socket>`，DNS 会话另带 `domain=<QNAME>`。
 
 ## LICENSE
 

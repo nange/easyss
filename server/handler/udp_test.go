@@ -523,12 +523,13 @@ func (f *fakeDNSRouter) dialRoute(_ context.Context, _, target, _ string, route 
 	if f.dialHook != nil {
 		f.dialHook(route)
 	}
-	pool, remote := &f.directConns, "direct"
+	// 与真实 dialVia 一致：直连返回对端地址，代理返回配置的下一级代理地址。
+	pool, remote := &f.directConns, target
 	if route.viaNextProxy() {
-		pool, remote = &f.proxyConns, "socks5://proxy.example.com:1080"
+		pool, remote = &f.proxyConns, "127.0.0.1:4080"
 	}
 	if len(*pool) == 0 {
-		return nil, "", fmt.Errorf("fake dns router: no more %s connections", remote)
+		return nil, "", fmt.Errorf("fake dns router: no more connections for route %v", route)
 	}
 	conn := (*pool)[0]
 	*pool = (*pool)[1:]
@@ -1661,5 +1662,118 @@ func TestUDPSessionIgnoresRetiredConnReadError(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("run did not return after close")
+	}
+}
+
+// infoRecordsWith 返回消息以 prefix 开头的 Info 记录，供级别与字段断言使用。
+func infoRecordsWith(rec *recordingHandler, prefix string) []slog.Record {
+	var out []slog.Record
+	for _, r := range rec.at(slog.LevelInfo) {
+		if strings.HasPrefix(r.Message, prefix) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// 防回归：代理路径的 remote 是下一级代理地址，与直连的对端地址必须分字段，DNS 会话另带
+// domain，否则一条"目标 8.8.8.8:53、remote 127.0.0.1:4080"的日志无从解释。
+// 必须串行：它替换进程级 logger，与同包并行测试同时运行会互相吞掉日志。
+func TestUDPUpstreamConnectedLogFields(t *testing.T) {
+	rec := &recordingHandler{}
+	prev := log.Logger()
+	log.SetLogger(slog.New(rec))
+	t.Cleanup(func() { log.SetLogger(prev) })
+
+	router := &fakeDNSRouter{
+		proxyDomain: "google",
+		proxyConns:  []net.Conn{newDNSTargetConn()},
+		directConns: []net.Conn{newDNSTargetConn()},
+	}
+	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
+	s.dns.router = router
+	t.Cleanup(s.close)
+
+	for _, domain := range []string{"mtalk.google.com", "api.github.com"} {
+		if _, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, domain))); err != nil {
+			t.Fatalf("observeClientFrame(%s): %v", domain, err)
+		}
+	}
+
+	records := infoRecordsWith(rec, "[UDP] upstream connected")
+	if len(records) != 2 {
+		t.Fatalf("[UDP] upstream connected records = %d, want 2", len(records))
+	}
+
+	proxied := attrsOf(records[0])
+	if proxied["domain"] != "mtalk.google.com" || proxied["via_next_proxy"] != "true" {
+		t.Fatalf("proxied attrs = %v", proxied)
+	}
+	if proxied["proxy"] != "127.0.0.1:4080" {
+		t.Fatalf("proxy = %q, want the configured next proxy", proxied["proxy"])
+	}
+	if _, ok := proxied["remote"]; ok {
+		t.Fatalf("the proxied record must not carry a socket remote: %v", proxied)
+	}
+
+	direct := attrsOf(records[1])
+	if direct["domain"] != "api.github.com" || direct["via_next_proxy"] != "false" {
+		t.Fatalf("direct attrs = %v", direct)
+	}
+	if direct["remote"] != "8.8.8.8:53" {
+		t.Fatalf("remote = %q, want the resolver peer", direct["remote"])
+	}
+	if _, ok := direct["proxy"]; ok {
+		t.Fatalf("the direct record must not carry a proxy: %v", direct)
+	}
+}
+
+// 防回归：首条查询命中代理时 [UDP_DNS] 必须是 Info——拨号失败不会有 [UDP] upstream
+// connected 说明原因；同一会话后续同路由查询留在 Debug，不随查询数增长。
+// 必须串行：它替换进程级 logger，与同包并行测试同时运行会互相吞掉日志。
+func TestDNSSessionFirstProxiedQueryLogsInfoOnce(t *testing.T) {
+	rec := &recordingHandler{}
+	prev := log.Logger()
+	log.SetLogger(slog.New(rec))
+	t.Cleanup(func() { log.SetLogger(prev) })
+
+	router := &fakeDNSRouter{
+		proxyDomain: "google",
+		proxyConns:  []net.Conn{newDNSTargetConn(), newDNSTargetConn()},
+		directConns: []net.Conn{newDNSTargetConn()},
+	}
+	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
+	s.dns.router = router
+	t.Cleanup(s.close)
+
+	for _, domain := range []string{"mtalk.google.com", "www.google.com"} {
+		if _, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, domain))); err != nil {
+			t.Fatalf("observeClientFrame(%s): %v", domain, err)
+		}
+	}
+
+	records := infoRecordsWith(rec, "[UDP_DNS]")
+	if len(records) != 1 {
+		t.Fatalf("[UDP_DNS] Info records = %d, want 1 (only the first query of a session)", len(records))
+	}
+	first := attrsOf(records[0])
+	if first["domain"] != "mtalk.google.com" || first["via_next_proxy"] != "true" {
+		t.Fatalf("first query attrs = %v", first)
+	}
+	if _, ok := first["route_changed"]; ok {
+		t.Fatalf("the first query must not claim route_changed: %v", first)
+	}
+
+	// 直连查询会触发重绑，route_changed 的 Info 不能被首查规则吞掉。
+	if _, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "api.github.com"))); err != nil {
+		t.Fatalf("observeClientFrame(api.github.com): %v", err)
+	}
+	records = infoRecordsWith(rec, "[UDP_DNS]")
+	if len(records) != 2 {
+		t.Fatalf("[UDP_DNS] Info records = %d, want 2 after a route change", len(records))
+	}
+	changed := attrsOf(records[1])
+	if changed["route_changed"] != "true" || changed["via_next_proxy"] != "false" {
+		t.Fatalf("route change attrs = %v", changed)
 	}
 }

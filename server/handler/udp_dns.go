@@ -101,7 +101,7 @@ func (s *udpSession) openUpstream(ctx context.Context, domain string, route dnsR
 		return err
 	}
 	s.installUpstream(conn, remote, route, s.readerRunning)
-	logUpstreamConnected(s.target, remote, route)
+	logUpstreamConnected(s.target, remote, domain, route)
 	return nil
 }
 
@@ -121,7 +121,7 @@ func (s *udpSession) rebindRoute(domain string, route dnsRoute) {
 	s.dns.rebindFailedAt = time.Time{}
 
 	old := s.installUpstream(conn, remote, route, true)
-	logUpstreamConnected(s.target, remote, route)
+	logUpstreamConnected(s.target, remote, domain, route)
 	if old != nil {
 		// 旧连接的 reader 退出时会看到 s.upstream() 已不是自己，不会把这次关闭当成故障。
 		old.Close() //nolint:errcheck
@@ -129,9 +129,18 @@ func (s *udpSession) rebindRoute(domain string, route dnsRoute) {
 }
 
 // 首条连接与重绑两条安装路径共用它，日志字段只有一份定义。
-func logUpstreamConnected(target, remote string, route dnsRoute) {
-	log.Info("[UDP] upstream connected", "target", target, "remote", remote,
-		"via_next_proxy", route.viaNextProxy())
+func logUpstreamConnected(target, remote, domain string, route dnsRoute) {
+	attrs := []any{"target", target}
+	if domain != "" {
+		attrs = append(attrs, "domain", domain)
+	}
+	if route.viaNextProxy() {
+		// remote 在代理路径是配置的下一级代理地址，不是目标，与直连的对端 socket 分字段记。
+		attrs = append(attrs, "via_next_proxy", true, "proxy", remote)
+	} else {
+		attrs = append(attrs, "via_next_proxy", false, "remote", remote)
+	}
+	log.Info("[UDP] upstream connected", attrs...)
 }
 
 // observeDNSFrame 在写入目标之前调用，返回时"该往哪条连接写"已经确定。
@@ -220,6 +229,12 @@ func (s *udpSession) logDNSRoute(domain string, want dnsRoute, changed bool) {
 	}
 	if changed {
 		attrs = append(attrs, "route_changed", true)
+		log.Info("[UDP_DNS]", attrs...)
+		return
+	}
+	// 首条查询就命中代理时还没有连接：拨号失败不会有 [UDP] upstream connected 说明原因，
+	// 而"解析器没变、是域名规则要求走代理"正是最需要解释的情形。成功后 !hasConn 不再成立。
+	if !hasConn && want.viaNextProxy() {
 		log.Info("[UDP_DNS]", attrs...)
 		return
 	}
