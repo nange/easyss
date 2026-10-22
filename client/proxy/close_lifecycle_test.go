@@ -92,7 +92,7 @@ func TestHTTPProxyCloseIsIdempotent(t *testing.T) {
 
 // TestSocks5CloseIsIdempotent 固定 Socks5Server.Close 的幂等性：第二次调用必须立即
 // no-op 并原样返回首次结果。更新重启失败的恢复流程会连调两次 closeService()
-// （见 cmd/easyss/tray_update.go）。
+// （见 cmd/easyss/internal/tray/update.go）。
 func TestSocks5CloseIsIdempotent(t *testing.T) {
 	srv := newTestSocks5Server(t, freeLoopbackAddr(t))
 	startDone := make(chan error, 1)

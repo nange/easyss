@@ -174,16 +174,16 @@ test:
 test-race:
 	$(GO) test -race -timeout 20m -v ./...
 
-# headless (Android/无托盘) 下只有 cmd/easyss 的文件集随该标签变化，其余包
-# 完全相同，因此测试只跑 cmd/easyss；vet 用同一标签覆盖全部包的编译（含
+# headless (Android/无托盘) 下只有 cmd/easyss 子树的文件集随该标签变化，其余包
+# 完全相同，因此测试只跑 cmd/easyss/...；vet 用同一标签覆盖全部包的编译（含
 # _test.go），「测试文件引用了托盘专属符号」这类问题由它拦住。
 test-headless:
 	$(GO) vet -tags headless ./...
-	$(GO) test -tags headless -timeout 15m -v ./cmd/easyss/
+	$(GO) test -tags headless -timeout 15m -v ./cmd/easyss/...
 
 test-race-headless:
 	$(GO) vet -tags headless ./...
-	$(GO) test -tags headless -race -timeout 20m -v ./cmd/easyss/
+	$(GO) test -tags headless -race -timeout 20m -v ./cmd/easyss/...
 
 lint:
 	go tool golangci-lint run --timeout 10m --verbose
