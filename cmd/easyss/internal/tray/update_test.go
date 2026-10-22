@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/gogpu/systray"
-	"github.com/nange/easyss/v3/icon"
+	"github.com/nange/easyss/v3/cmd/easyss/icon"
 	"github.com/nange/easyss/v3/selfupdate"
 )
 

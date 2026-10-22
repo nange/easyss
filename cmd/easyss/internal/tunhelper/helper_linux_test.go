@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nange/easyss/v3/scripts"
+	"github.com/nange/easyss/v3/client/tun/scripts"
 	"github.com/stretchr/testify/require"
 )
 
@@ -200,7 +200,7 @@ func TestCloseTunScriptFlushesRoutes(t *testing.T) {
 func tunScriptPath(t *testing.T, name string) string {
 	t.Helper()
 
-	path, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "scripts", name))
+	path, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "client", "tun", "scripts", name))
 	if err != nil {
 		t.Fatalf("resolve %s: %v", name, err)
 	}

@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nange/easyss/v3/client/tun/scripts"
 	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
-	"github.com/nange/easyss/v3/scripts"
 	"github.com/nange/easyss/v3/util"
 	"github.com/xjasonlyu/tun2socks/v2/engine"
 )

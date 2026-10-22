@@ -30,16 +30,23 @@ ANDROID_ALIGN_LDFLAGS := -extldflags=-Wl,-z,max-page-size=16384
 GOMOBILE_BIND := $(GOMOBILE) bind -target=android/arm64,android/amd64 -androidapi 29 -ldflags '$(LDFLAGS) $(ANDROID_ALIGN_LDFLAGS)'
 
 BIN := bin
+# macOS 打包的工具与资源都在 build/darwin/ 下。
+MACOS_DIR := build/darwin
+APP_BUNDLE := $(MACOS_DIR)/app-bundle.sh
+ICNS := $(MACOS_DIR)/Easyss.icns
+PLIST := $(MACOS_DIR)/Info.plist
 # CI / 发布产物按平台分目录：不同架构互不覆盖，打包因此与构建顺序无关。
 PLATFORM_DIRS := $(BIN)/linux-amd64 $(BIN)/linux-arm64 $(BIN)/windows-amd64 \
                  $(BIN)/windows-arm64 $(BIN)/darwin-arm64 $(BIN)/darwin-amd64
+# agent 的改动默认都在这个目录下的 worktree 里进行（见 AGENTS.md 的「规范约定」）。
+WORKTREE_DIR := .agents/worktrees
 
 # 注意：本行只是 .PHONY 声明。不要把 `make .PHONY` 当作目标使用——那会把下面
 # 所有目标（format/lint/test/全部构建）当成前置目标跑一遍。CI 只调用明确的
 # build / verify / dist 目标。
-.PHONY: echo format lint test test-race test-headless test-race-headless verify clean \
+.PHONY: echo format lint test test-race test-headless test-race-headless verify clean worktree-clean \
         easyss easyss-headless easyss-windows easyss-server easyss-server-windows \
-        easyss-mac-app easyss-android-aar \
+        easyss-mac-app easyss-android-aar icons syso \
         build build-linux-amd64 build-linux-arm64 build-windows-amd64 build-windows-arm64 \
         build-darwin-arm64 build-darwin-amd64 pack dist
 
@@ -61,7 +68,7 @@ easyss-windows:
 easyss-mac-app:
 	cd cmd/easyss; \
 	GOOS=darwin $(GO_BUILD) -o ../../bin/easyss
-	bash scripts/app-bundle.sh bin/easyss icon/Easyss.icns cmd/easyss/Info.plist
+	bash $(APP_BUNDLE) bin/easyss $(ICNS) $(PLIST)
 
 easyss-headless:
 		cd cmd/easyss; \
@@ -121,13 +128,13 @@ build-darwin-arm64:
 	@mkdir -p $(BIN)/darwin-arm64
 	cd cmd/easyss && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o ../../$(BIN)/darwin-arm64/easyss
 	cd cmd/easyss-server && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o ../../$(BIN)/darwin-arm64/easyss-server
-	bash scripts/app-bundle.sh $(BIN)/darwin-arm64/easyss icon/Easyss.icns cmd/easyss/Info.plist $(BIN)/darwin-arm64
+	bash $(APP_BUNDLE) $(BIN)/darwin-arm64/easyss $(ICNS) $(PLIST) $(BIN)/darwin-arm64
 
 build-darwin-amd64:
 	@mkdir -p $(BIN)/darwin-amd64
 	cd cmd/easyss && GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o ../../$(BIN)/darwin-amd64/easyss
 	cd cmd/easyss-server && GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o ../../$(BIN)/darwin-amd64/easyss-server
-	bash scripts/app-bundle.sh $(BIN)/darwin-amd64/easyss icon/Easyss.icns cmd/easyss/Info.plist $(BIN)/darwin-amd64
+	bash $(APP_BUNDLE) $(BIN)/darwin-amd64/easyss $(ICNS) $(PLIST) $(BIN)/darwin-amd64
 
 # ---------------------------------------------------------------------------
 # 打包：资产名与 zip 内文件名是 selfupdate(<product>-<goos>-<goarch>.zip) 与
@@ -160,6 +167,37 @@ verify: lint test-race
 # 只清理 CI/发布产物；本机 bin/ 根目录下的二进制、config.json、日志一概不动
 clean:
 	rm -rf $(PLATFORM_DIRS) $(BIN)/*.zip $(BIN)/libeasyss.aar
+
+# 只清理 $(WORKTREE_DIR) 下的 agent 工作树：当前工作树、其他路径的 worktree 与分支都不动。
+# 目录已不存在的条目交给 git worktree prune 回收元数据。
+worktree-clean:
+	@root="$$(git rev-parse --show-toplevel)"; \
+	list="$$(mktemp)"; \
+	git worktree list --porcelain | sed -n 's/^worktree //p' > "$$list"; \
+	while IFS= read -r wt; do \
+		case "$$wt" in \
+			"$$root/$(WORKTREE_DIR)"/*) \
+				if [ -d "$$wt" ]; then \
+					echo "Removing worktree $$wt"; \
+					git worktree remove --force "$$wt" || { rm -f "$$list"; exit 1; }; \
+				fi ;; \
+		esac; \
+	done < "$$list"; \
+	rm -f "$$list"; \
+	git worktree prune; \
+	if [ -d "$$root/$(WORKTREE_DIR)" ]; then \
+		find "$$root/$(WORKTREE_DIR)" -depth -type d -empty -delete; \
+	fi
+
+# ---------------------------------------------------------------------------
+# 构建资源：图标与 Windows 资源只在设计或清单变更时重新生成
+# ---------------------------------------------------------------------------
+
+icons:
+	bash build/icon/gen_icns.sh
+
+syso:
+	bash build/windows/gen_syso.sh
 
 # ---------------------------------------------------------------------------
 # 校验

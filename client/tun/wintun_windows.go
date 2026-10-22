@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/nange/easyss/v3/assets"
+	"github.com/nange/easyss/v3/client/assets"
 	"github.com/nange/easyss/v3/log"
 )
 

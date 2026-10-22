@@ -17,8 +17,8 @@ import (
 
 	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/tun"
+	"github.com/nange/easyss/v3/client/tun/scripts"
 	"github.com/nange/easyss/v3/log"
-	"github.com/nange/easyss/v3/scripts"
 	"golang.org/x/sys/unix"
 )
 

@@ -2,17 +2,18 @@
 # 从 1024x1024 的 PNG 源图生成 Easyss.icns。
 # 需要装有 sips 和 iconutil 的 macOS。
 #
-# 用法：bash scripts/gen_icns.sh <source_1024x1024.png>
+# 用法：bash build/icon/gen_icns.sh [source_1024x1024.png]
+#       默认源图是 build/icon/icon_1024_1024.png。
 #
-# 生成的 Easyss.icns 会放在 icon/ 目录下。
+# 生成的 Easyss.icns 会放在 build/darwin/ 目录下。
 # 仅当图标设计变更时才需要运行本脚本。
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SRC_PNG="$1"
-ICONSET="${REPO_ROOT}/icon/Easyss.iconset"
-OUT_ICNS="${REPO_ROOT}/icon/Easyss.icns"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+SRC_PNG="${1:-${REPO_ROOT}/build/icon/icon_1024_1024.png}"
+ICONSET="${REPO_ROOT}/build/darwin/Easyss.iconset"
+OUT_ICNS="${REPO_ROOT}/build/darwin/Easyss.icns"
 
 echo "Generating ${ICONSET} from ${SRC_PNG}..."
 
