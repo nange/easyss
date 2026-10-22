@@ -13,20 +13,9 @@ import (
 	"github.com/nange/easyss/v3/log"
 )
 
-func freePort(t *testing.T) int {
-	t.Helper()
-
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve port: %v", err)
-	}
-	defer l.Close() //nolint:errcheck
-
-	return l.Addr().(*net.TCPAddr).Port
-}
-
 // testSimpleConfig 构造可离线启动的最小配置：字面 IP 服务端 + 禁用 IPv6，启动时不发真实 DNS 查询。
-// HTTP 端口必须显式指定，否则 BuildSimpleConfig 的 socks_port+1000 默认值会撞上别的进程。
+// 本地代理端口留 0（不监听）：日志契约与它们无关，而"先探测端口、再让 Start 去 bind"
+// 之间隔着 client.New 的初始化，这段时间同机其它测试可能把临时端口占走。
 func testSimpleConfig(t *testing.T, logFilePath, logLevel string) *config.SimpleConfig {
 	t.Helper()
 
@@ -34,8 +23,6 @@ func testSimpleConfig(t *testing.T, logFilePath, logLevel string) *config.Simple
 		Server:      "127.0.0.1",
 		Password:    "test-password",
 		IPV6Rule:    "disable",
-		LocalPort:   freePort(t),
-		HTTPPort:    freePort(t),
 		LogFilePath: logFilePath,
 		LogLevel:    logLevel,
 	}

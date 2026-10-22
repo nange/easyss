@@ -41,15 +41,12 @@ func TestCoreStopReleasesAllListeners(t *testing.T) {
 
 	for i := range 3 {
 		cfg := testConfig()
-		socksPort := freePort(t)
-		httpPort := freePort(t)
-		cfg.Local.SocksPort = socksPort
-		cfg.Local.HTTPPort = httpPort
-
-		core, err := Run(cfg)
-		if err != nil {
-			t.Fatalf("iteration #%d: Run: %v", i, err)
-		}
+		var socksPort, httpPort int
+		core := startRetrying(t, func() (*Core, error) {
+			socksPort, httpPort = freePortPair(t)
+			cfg.Local.SocksPort, cfg.Local.HTTPPort = socksPort, httpPort
+			return Run(cfg)
+		})
 		core.Stop()
 
 		for name, port := range map[string]int{"socks5": socksPort, "http": httpPort} {
@@ -64,13 +61,12 @@ func TestCoreStopReleasesAllListeners(t *testing.T) {
 // 重复拆除会让关闭路径白等一次 accept 探测。
 func TestCoreStopIsIdempotent(t *testing.T) {
 	cfg := testConfig()
-	cfg.Local.SocksPort = freePort(t)
 	cfg.Local.HTTPPort = 0
 
-	core, err := Run(cfg)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
+	core := startRetrying(t, func() (*Core, error) {
+		cfg.Local.SocksPort = freePort(t)
+		return Run(cfg)
+	})
 	core.Stop()
 
 	start := time.Now()
@@ -85,16 +81,16 @@ func TestCoreStopIsIdempotent(t *testing.T) {
 func TestRunFailureReleasesBoundListeners(t *testing.T) {
 	t.Run("http port conflict", func(t *testing.T) {
 		_, httpPort := occupyTCPPort(t)
-		socksPort := freePort(t)
 
 		cfg := testConfig()
-		cfg.Local.SocksPort = socksPort
 		cfg.Local.HTTPPort = httpPort
 
-		if core, err := Run(cfg); err == nil {
-			core.Stop()
-			t.Fatal("expected Run to fail when the http port is occupied")
-		}
+		var socksPort int
+		runExpectingListenError(t, "http proxy server listen", func() (*Core, error) {
+			socksPort = freePort(t)
+			cfg.Local.SocksPort = socksPort
+			return Run(cfg)
+		})
 		if !waitPortBindable(socksPort) {
 			t.Fatalf("socks5 port %d leaked after a failed Run", socksPort)
 		}
@@ -111,16 +107,16 @@ func TestRunFailureReleasesBoundListeners(t *testing.T) {
 		opts := defaultOptions()
 		opts.forwardDNSListenAddr = addr
 
-		socksPort := freePort(t)
 		cfg := testConfig()
-		cfg.Local.SocksPort = socksPort
 		cfg.Local.HTTPPort = 0
 		cfg.Local.EnableForwardDNS = true
 
-		if core, err := runWithOptions(cfg, opts); err == nil {
-			core.Stop()
-			t.Fatal("expected Run to fail when the forward dns port is occupied")
-		}
+		var socksPort int
+		runExpectingListenError(t, "dns forward server listen", func() (*Core, error) {
+			socksPort = freePort(t)
+			cfg.Local.SocksPort = socksPort
+			return runWithOptions(cfg, opts)
+		})
 		if !waitPortBindable(socksPort) {
 			t.Fatalf("socks5 port %d leaked after a failed Run", socksPort)
 		}
