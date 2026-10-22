@@ -540,7 +540,7 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 
 #### 生成自定义证书
 
-可根据自己的需求，使用`openssl`等工具生成自定义证书。也可以参考： `./hack/self_signed_certs` 目录示例，使用`cfssl`生成自定义证书。
+可根据自己的需求，使用`openssl`等工具生成自定义证书。也可以参考： `./build/certs` 目录示例，使用`cfssl`生成自定义证书。
 示例就是使用IP而不是域名生成自定义证书，这样就可以无域名使用Easyss了。
 
 自签证书有两个容易漏掉的地方：**证书的 SAN 里必须包含客户端要连接的那个地址**（示例脚本的

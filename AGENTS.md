@@ -14,7 +14,7 @@ Easyss 是一款兼容 SOCKS5/HTTP 代理的安全上网工具，客户端+服�
 ```
 rule/                               规则文件解析与匹配（IP/CIDR/域名/glob/regexp），客户端路由与服务端链式代理共用
 cmd/easyss/                         客户端入口：参数解析、配置加载与子命令分发（main.go）
-cmd/easyss/icon/                    客户端托盘图标与打包图标（运行时 embed PNG/ICO、Easyss.icns、设计源图）
+cmd/easyss/icon/                    客户端托盘图标（仅 //go:embed 的运行时 PNG）
 cmd/easyss/internal/app/            客户端运行时：App/session/启动路径/托盘胶水/通知（nange/systray 分支，纯 Go 零 CGO）
 cmd/easyss/internal/tray/           systray 控件：外壳、菜单、标题、更新状态机、UWP 豁免
 cmd/easyss/internal/tunhelper/      TUN 提权 helper、fd 传递、spawn 与路由拆除复核
@@ -50,7 +50,7 @@ log/                                基于 slog 的日志，默认时区 Asia/Sh
 util/                               工具函数（网络、文件、DNS、系统命令）
 util/bytespool/                     字节缓冲池（2 的幂次分配器，最大 128KB）
 docs/                               架构与不变量（architecture.md）与 README 截图（images/）
-hack/                               开发/打包工具（macOS app bundle、icns 生成、自签证书示例）
+build/                              构建/打包资源与工具（darwin bundle/icns/plist、windows manifest/ico/syso、图标源图、证书示例）
 pprof/                              可选 pprof HTTP 服务（127.0.0.1:6060）
 version/                            构建版本信息（GitTag、BuildDate 等）
 ```
@@ -79,6 +79,10 @@ make easyss-android-aar
 
 # 无系统托盘版本 (headless/Android)
 make easyss-headless
+
+# 重新生成打包图标 / Windows 资源（仅资源变更时；需要 sips/iconutil 或 rsrc）
+make icons
+make syso
 ```
 
 ### CI / 发布（产物写在 `bin/<os>-<arch>/` 子目录）

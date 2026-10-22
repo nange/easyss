@@ -40,6 +40,7 @@ easyss.apk
 .build_android_env
 go.work*
 bin/
+build/darwin/Easyss.iconset/
 
 v3_detailed_design.md
 /easyss
