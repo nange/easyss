@@ -157,13 +157,9 @@ Easyss v3 支持两种配置模式，自动识别：
 
 **高级参数（`transport` / `shaper`）：**
 
-传输层的连接数上限、槽位比例、单连接字节上限，以及流量整形的批处理窗口、cover traffic 预算等均可配置，默认值适配绝大多数网络，完整字段与默认值见 `./easyss -show-config-example`。需要知道的几条约束：
+传输层连接数、缓冲与流量整形参数均可配置，默认值适配绝大多数网络；完整字段与默认值见 `./easyss -show-config-example`。
 
-* 客户端下载窗口固定为 6MB/流、15MB/连接（镜像 Chrome 的伪装取值），不提供配置项；稳态吞吐 ≈ 窗口 / RTT。
-* 上传方向的窗口由服务端授予，见下文服务端参数中的 `transport.h2_recv_buf_*`。
-* 每条连接的并发流上限固定为 128，不开放配置。
-
-**`timeout`（默认 30，范围 15-60）：** 基础超时，由它派生 TCP 流空闲（8×）、UDP 会话空闲（2×）、出站拨号（÷3，钳制 3-15s）、DNS 响应（÷3）、客户端连接轮换（12×）与服务端 h2 连接空闲（8×）。过小会让空闲连接被频繁误杀，过大则让半开连接长时间占用资源；连接轮换到期只影响新流，进行中的流不会被打断。
+**`timeout`（默认 30，范围 15-60）：** 基础超时，TCP/UDP 空闲、出站拨号与 DNS 响应超时都由它派生。过小会让空闲连接被频繁误杀，过大则让半开连接长时间占用资源；连接轮换到期只影响新流，进行中的流不会被打断。
 
 #### 配置模式自动识别
 
@@ -271,13 +267,13 @@ regexp:^.*\.youtube\..*$
 | `fallback.preserve_host` | 否 | false | 仅 URL 模式生效。false：转发给上游的 Host 为上游主机（适合 GitHub 等校验 Host 的站点）；true：透传客户端原始 Host（适合依赖 `server_name` 的本地 nginx） |
 | `fallback.cdn_domains` | 否 | [] | 仅 URL 模式生效。需经代理中转的 CDN 域名列表，HTML/CSP 中这些域名的绝对 URL 会被重写为 `/__cdn__/<host>/...` |
 | `pprof_enabled` | 否 | false | 是否启用 pprof 调试服务（127.0.0.1:6060） |
-| `timeout` | 否 | 30 | 基础超时时间，秒，范围 15-60，派生规则同客户端 |
+| `timeout` | 否 | 30 | 基础超时时间，秒，范围 15-60；各项空闲/拨号/DNS 超时都由它派生，语义同客户端 |
 
 > **自定义证书**：服务器在私有网络（无公网域名/IP）时可使用自签证书：配置 `server.cert_path` + `server.key_path`（必须成对）。证书 SAN 必须包含客户端要连接的地址，客户端需把 CA 证书填到 `servers[].ca_path`，`sn` 留空；`build/certs` 有 cfssl 示例。
 
 > **兼容性**：旧键 `server.domain` 等价于 `host`，`server.listen`（如 `:443`、`127.0.0.1:443`）会拆成 `port` 与可选的 `bind`；新旧键同时出现会报错。升级是单向兼容。
 
-> **窗口与调优**：服务端 HTTP/2 的 `transport.h2_max_frame_size`（最大帧大小）、`h2_recv_buf_conn` / `h2_recv_buf_stream`（连接级/流级上行窗口，默认 4MiB-1，越界启动报错）以及 `shaper.*`（流量整形）均可配置，默认值适配绝大多数网络，完整字段见 `-show-config-example`。上传速度上不去时先看上行窗口：稳态吞吐 ≈ 窗口 / RTT，流级窗口决定单条上传流的上限，**连接级窗口应 ≥ 流级窗口**；启动日志会打印实际生效值。下载窗口由客户端决定，固定不可配。正常浏览请求体远小于窗口，无需调整。
+> **窗口与调优**：服务端 HTTP/2 的 `transport.h2_max_frame_size`、`h2_recv_buf_conn` / `h2_recv_buf_stream`（连接级/流级上行窗口）与 `shaper.*`（流量整形）均可配置，默认值适配绝大多数网络，完整字段见 `-show-config-example`。上传速度上不去时可先调大上行窗口，**连接级窗口应 ≥ 流级窗口**；下载窗口由客户端决定，不可配。
 
 > **fallback 示例**：
 >
@@ -310,7 +306,7 @@ nohup ./easyss-server > easyss-server.log 2>&1    # 后台运行
 }
 ```
 
-客户端填同一个 IP 即可（完整模式 `servers[].host`、简化模式 `server`），`sn` 留空——证书里就是 IP。启动日志会出现 `[SERVER] TLS mode: certmagic (Let's Encrypt IP certificate)`。
+客户端填同一个 IP 即可（完整模式 `servers[].host`、简化模式 `server`），`sn` 留空——证书里就是 IP。
 
 Let's Encrypt 对 IP 证书的几条硬性规定：
 
@@ -353,7 +349,7 @@ Easyss v3 以 HTTP/2 作为传输层，天然兼容反向代理和 CDN 部署：
 
 若 53 端口被占用，Easyss 会启动失败，常见占用者是 `dnsmasq` 与 `systemd-resolved`，需先停用它们的 DNS 监听（如 dnsmasq 设 `port=0` 只保留 DHCP）。该转发只监听 UDP 53：LAN 客户端因截断应答改用 TCP 53 重试的查询不会被应答，受影响的环境请让客户端直连上游解析器，或用 dnsmasq 承接 TCP 查询后再转发到本服务。
 
-TUN 网卡的 MTU 由 `tun_mtu` 统一控制（默认 1500，钳制到 [1280, 9000]），同时作用于 TUN 设备与 tun2socks 用户态协议栈；调大（如 8500）可减少包数与系统调用，但会抬高本机 UDP/ICMP 报文的尺寸上限，默认值对绝大多数网络已足够。
+TUN 网卡的 MTU 由 `tun_mtu` 统一控制（默认 1500，钳制到 [1280, 9000]）；调大（如 8500）可减少包数与系统调用，但会抬高本机 UDP/ICMP 报文的尺寸上限，默认值对绝大多数网络已足够。
 
 视需要开启 IP 转发：
 
@@ -383,8 +379,6 @@ sysctl -p
 * `next_proxy.next_proxy_file`：走链式代理的 IP/CIDR/域名列表文件，格式与客户端 `direct_file`/`proxy_file` 一致；区别是无法编译的规则会让服务端**启动失败**（而不是只记告警）
 * `next_proxy.enable_udp`：是否转发 UDP（需下一级代理支持 UDP ASSOCIATE）。开启前请确认，否则这些 UDP 目标会全部超时（TUN 模式下表现为所有域名都解析不出来）
 * `next_proxy.all_host`：是否对所有请求走链式代理；未指定 `next_proxy_file` 时仅按它决定
-
-指向 53 端口的 UDP 会话按**查询域名**决定路由：服务端读出 QNAME 后才拨号，命中规则则经下一级代理解析，否则直连解析器；同一条会话中路由变化会重绑出站连接（日志带 `route_changed=true`），旧连接上未回包的查询由客户端重试。`[UDP_DNS]` 的 `via_next_proxy` 是这条查询实际使用的出站路径，首条查询命中代理时提为 Info；`[UDP] upstream connected` 走代理记 `proxy=<下一级代理地址>`、直连记 `remote=<对端 socket>`，DNS 会话另带 `domain=<QNAME>`。
 
 ## LICENSE
 
