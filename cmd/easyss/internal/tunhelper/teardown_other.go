@@ -12,5 +12,5 @@ func (ops) teardown(tun.DeviceConfig, tun.Owner, bool) error { return nil }
 
 // DefaultVerify 在无提权 helper 的平台上无事可做。
 func DefaultVerify() func(tun.DeviceConfig, tun.Owner, bool) error {
-	return func(tun.DeviceConfig, tun.Owner, bool) error { return nil }
+	return defaultOps().teardown
 }
