@@ -1,7 +1,7 @@
 # Easyss 架构与配置不变量
 
 本文件由 [AGENTS.md](../AGENTS.md) 拆出，记录读代码不易看出、写错会静默出错的跨包契约与设计取舍。
-改动传输层、协议、加密、fallback、DNS 路由、TUN 或配置之前，先读对应小节；目录结构与构建/测试命令见 AGENTS.md。
+改动传输层、协议、加密、fallback、DNS 路由或配置之前，先读对应小节；平台构建与 TUN 生命周期见 [platform.md](platform.md)，目录结构与构建/测试命令见 AGENTS.md。
 
 ## 配置相关
 
