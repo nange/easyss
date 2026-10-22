@@ -1,50 +1,109 @@
 # Easyss 架构与配置不变量
 
-本文件由 [AGENTS.md](../AGENTS.md) 拆出，记录读代码不易看出、写错会静默出错的跨包契约与设计取舍。
-改动传输层、协议、加密、fallback、DNS 路由或配置之前，先读对应小节；平台构建与 TUN 生命周期见 [platform.md](platform.md)，目录结构与构建/测试命令见 AGENTS.md。
+本文件与 [platform.md](platform.md) 只记录读代码不易看出、写错会静默出错的跨包契约；目录与构建/测试命令见 [AGENTS.md](../AGENTS.md)。改动传输、协议、加密、fallback、DNS 或配置前，读对应小节。
 
 ## 配置相关
 
-- 默认配置文件名为 `config.json`，位于二进制同目录
-- 简化模式/旧版配置在 `LoadConfig` 中通过 `BuildSimpleConfig` 转换为 v3 完整配置：**只发生在内存里，不回写配置文件，也不生成 `.bak`**。`MigrateV2Config`/`MigrateV2ToV3` 已删除；完整模式的 JSON 解析统一走 `ParseConfigJSON`（`LoadConfig` 也调用它）
-- v3 客户端配置入口：`client/config/config.go` 中的 `ClientConfig` 结构体
-- **配置线格式与运行时类型是同一份**：`shaper.Config`（`Cover` 匿名嵌入使 `cover_budget_*` 平铺）与 `log.Config` 同时是客户端/服务端的 JSON 形状，两个 `config` 包直接复用，`log.Init(Config)` 是日志配置的唯一应用入口；不要再定义同形的 `ShaperConfig`/`LogConfig`。`Cover.IdleTimeout`/`MinSize`/`MaxSize` 是伪装层固定属性，保持 `json:"-"`
-- 配置字段命名：服务端 `server.host`（ACME 标识符：域名或公网 IPv4）、`server.port`（默认 443，监听所有网卡）与可选的 `server.bind`；客户端完整模式 `servers[].host`。旧键 `server.domain` / `server.listen` / `servers[].address` 由各自的 `UnmarshalJSON` 兼容映射（`listen` 拆成 `bind`+`port`），新旧键同时出现会报错；配置版本仍为 3。`ServerConfig.ListenAddr()` 是监听地址的唯一格式化入口，且对 `Port == 0` 回退到默认 443；服务端 `server.host` 的"不含端口"约束在 `validateTLS` 的取证模式判定**之前**统一校验（手工证书模式同样适用）。客户端在 `LoadConfig`/`ParseConfigJSON`/`BuildSimpleConfig` 以及命令行覆盖（`ApplySimpleOverrides`）之后统一由 `validateServers` 拒绝空 `host` 或带端口的 `host`，地址拼装（`ServerURL`/`DefaultServerAddr`/`ServerListAddrs`）统一走 `net.JoinHostPort`，IPv6 字面量自动加方括号
-- v3 服务端配置入口：`server/config/config.go` 中的 `FileConfig`/`ServerConfig`。服务端配置的加载与归一化统一走 `config.LoadConfig`（读文件 → 版本校验 `SupportedConfigVersion` → `applyDefaults` → `FileConfig.Validate`（`validateAllowedMethods`/`validateTransport`/`validateTLS`/`validateListenOrDefault`）→ `ResolveFilePaths`），`cmd/easyss-server` 不再自己排列这些步骤；`applyDefaults` 收编没有其他 owner 的配置策略（`timeout` 写回、`log.level` 取根 config 包的 `DefaultLogLevel`、`server.port` 取根 config 包的 `DefaultServerPort`，以及 `transport.h2_max_frame_size`/`h2_recv_buf_*` 的 0 值写回），`server.allowed_methods` 的未知值在 `validateAllowedMethods` 直接报错（空列表仍由 `GetAllowedMethods` 回落到默认对），`h2_*` 的越界值在 `validateTransport` 按标准库实际接受区间拒绝（`server.New` 也会调用 `FileConfig.Validate`，绕过 `LoadConfig` 的测试/嵌入式调用同样被拒）；`buildHTTPServer` 只读归一化后的值（仅保留 `effectiveH2` 的 0 值兜底，供绕过 LoadConfig 的调用方使用），每条连接的并发流上限固定为 `HTTP2ServerMaxConcurrentStreams`=128，不可配，`shaper.*` 仍由 `shaper.Config.Normalize` 负责，以免出现第二份默认值；`transport.protocols` 已删除（它从不驱动 `buildHTTPServer`，实际协议集合恒为 h2 + 供 fallback 使用的 h1），老配置里的该键由 `json.Unmarshal` 忽略
-- **"证书从哪来"只有一个判定入口**：`server/config/tls.go` 的 `UsesManualCertificate`（手工证书 vs ACME，`initTLS` 与启动日志都读它，不再各自判断 `cert_path`/`key_path` 是否非空）、`ACMESubjectIsIP`（标识符是不是 IP 字面量，决定是否显式请求 `shortlived` profile 与打哪一行启动日志）与 `validateTLS`（配置加载阶段的校验：证书文件必须成对、ACME 模式下 `host` 必填、IP 只接受**公网 IPv4 字面量**）。`validateTLS` 的公网性判据是 `util.IsLANIP`，**故意比 certmagic 的 `SubjectQualifiesForPublicCert` 更严**（后者不含 CGNAT/TEST-NET/240/4 等段，只靠 CA 侧兜底），不要为"对齐"放宽；IPv6 与 IPv4-mapped 字面量被拒绝是因为客户端与服务端地址都是 `IP:port` 形态（见下文关键架构要点 6）
-- `-show-config-example` 的完整示例由 `server/config.ExampleConfig()` 提供（与 `FileConfig` 定义相邻，默认值全部引用根 config 包的常量，必填项用占位符），测试固定"示例本身已归一化"
-- 客户端的 `-show-config-example` / `-show-config-example-simple` 示例由 `client/config.ExampleConfig()` / `ExampleSimpleConfig()` 提供，main 只负责序列化打印
-- `timeout` 是全部派生超时（TCP/UDP 空闲、拨号、DNS 响应、连接轮换、服务端 h2 连接空闲）的唯一旋钮，取值范围 **[15, 60]** 秒：非正值取默认值 30，越界取最近的边界；归一化统一由 `config.NormalizeTimeout`/`config.TimeoutDuration` 负责（客户端 `applyDefaults`/`TimeoutDuration`、简单模式覆盖 `ApplySimpleOverrides`、服务端 `server/config.applyDefaults`（由 `LoadConfig` 调用）与 `server.Start` 都必须经过它，不要各自判断）
-- **派生超时只在一个地方填充零值**：`config.Timeouts`（`Base`/`Dial`/`StreamIdle`/`UDPIdle`/`DNSResp`/`ConnLifetime`）由 `config.NewTimeouts` 派生，`Timeouts.Normalize` 负责把**零值字段**按 `Base` 补齐（只填零值，不钳制显式给出的 `Base`）。每个公开构造器入口（`proxy.NewSocks5Server`/`NewHTTPProxyServer`/`NewStreamHandler`、`handler.NewProxyHandler` 及其三个子 handler、`http2.New`、`nextproxy.New`）调用 `Normalize` 一次，其余地方直接读字段，**不要再写 `if x <= 0 { x = DefaultX }`**。`config.Default{StreamIdle,UDPIdle,Dial,ConnLifetime}Timeout` 这四个变量已删除（它们曾与散布在 17 处构造器里的二次默认值并存）；需要默认值时用 `config.NewTimeouts(0)`。**两个入口必须拿到同一份 `Timeouts`**：HTTP 入口曾经只接收基础超时再自行派生，导致同一个直连目标在 SOCKS5 入口按 `base/3`（默认 10s）超时、在 HTTP 入口按 `base`（默认 30s）超时
-- 仍保留零值判断的两处是**语义**而非默认值，不要一并收敛：`NewProxyHandler` 的 `HandshakeTimeout <= 0`（"0 表示沿用 `Timeouts.Base`"的覆盖字段）与 `udpPool.receiveLoop` 的 `respTimeout <= 0`（"0 表示关闭读空闲"的功能开关）
-- `http_port` 未配置（0）时由 `socks_port` 推导（`config.DefaultHTTPPortOffset`，即 `+1000`）：**简单模式与完整模式语义一致**，推导只有 `client/config.normalizeHTTPPort` 一处实现（`applyDefaults` 与 `ApplySimpleOverrides` 都调用它），`socks_port` 为 0（不启动本地代理）时不推导；显式配置的 `http_port` 优先，而 `socks_port=0` + `http_port>0` 仍是启动错误（`runner.ErrSocksRequired`）
-- **本地代理端点地址只有一个来源**：`util.LocalProxyListenAddr(bindAll, port)` 给监听，`util.LocalProxyDialAddr(bindAll, port)` 给本机消费方（HTTP 入口反向代理、TUN 引擎与提权 helper、系统代理与会话环境、托盘 `/stats` 取值），`util.Socks5URI` 只是后者的 `socks5://` 包装；`bind_all` 时两者分别是 `[::]` 与同族回环 `[::1]`。任何消费方都不得再自己拼 `127.0.0.1:<port>`：监听可能只接受 IPv6 回环（不支持 IPv4-mapped 的平台），而系统代理/会话环境指向一个连不上的入口等于断网。`sysproxy.State.Enable`/`Disable` 因此接收完整地址而不是端口，地址统一由 `sysproxy.Addr(cfg)` 从配置推导
-- `tun_mtu`（完整模式 `local.tun_mtu`，简单模式同名 `tun_mtu`，默认 1500，钳制到 **[1280, 9000]**）是 TUN 设备 MTU 与 tun2socks netstack MTU 的**唯一**来源，归一化统一由 `config.NormalizeTunMTU` 负责（客户端 `applyDefaults`/`TunMTU()`、简单模式覆盖、`tun.New`、提权 helper 都必须经过它）。设备那一侧统一由各平台的**创建脚本**写入，MTU 是它们的第 9 个位置参数：linux `ip link set dev ... mtu`、darwin `ifconfig ... mtu`、Windows `netsh interface ipv4/ipv6 set subinterface ... mtu=`（wintun 适配器的 MTU 无法由 tun2socks 设置，wireguard-go 只把它记在内存里）；darwin/linux 的直连路径上 tun2socks 也会按同一个值设置一次（幂等），而脚本是 fd 路径唯一能改设备 MTU 的地方，keep-alive 重跑脚本时也会把它修回。`Manager.engineMTU` 在 fd 路径上以设备真实 MTU 为准兜底（超出配置区间时封顶到上限），`warnOnMTUMismatch` 在创建脚本之后核对设备与 netstack 的 MTU：netstack 的 MTU 小于设备 MTU 时会静默丢弃设备交上来的超限包（UDP、ICMP 与 IP 分片），而 TCP 因 MSS 由 netstack 通告而不受影响
-- 显示完整配置示例：`./easyss -show-config-example`
+- 默认配置 `config.json`，位于二进制同目录；简化模式/旧版配置由 `LoadConfig` 在内存中经 `BuildSimpleConfig` 转成 v3，不回写文件、不生成 `.bak`；完整模式 JSON 统一走 `ParseConfigJSON`。
+- 入口：客户端 `client/config.ClientConfig`，服务端 `server/config.FileConfig`/`ServerConfig`。
+- **线格式与运行时类型是同一份**：`shaper.Config` 与 `log.Config` 被客户端/服务端直接复用，`log.Init` 是日志配置唯一应用入口；不要再定义同形的 `ShaperConfig`/`LogConfig`。`Cover` 的 `IdleTimeout`/`MinSize`/`MaxSize` 是伪装层固定属性，保持 `json:"-"`。
+- 字段命名：服务端 `server.host`（ACME 标识符：域名或公网 IPv4）、`server.port`（默认 443）、可选 `server.bind`；客户端完整模式 `servers[].host`。旧键由各自 `UnmarshalJSON` 兼容映射，新旧键同时出现报错。`ServerConfig.ListenAddr()` 是监听地址唯一格式化入口（`Port == 0` 回退 443）；`host` 不含端口的校验先于证书模式判定，手工证书模式同样适用；客户端由 `validateServers` 拒绝空/带端口的 `host`，地址拼装统一走 `net.JoinHostPort`（IPv6 自动加方括号）。
+- 服务端加载与归一化统一走 `config.LoadConfig`（读文件 → 版本校验 → `applyDefaults` → `Validate` → `ResolveFilePaths`）；`applyDefaults` 负责没有其他 owner 的 0 值策略（`timeout`、`log.level`、`server.port`、`transport.h2_max_frame_size`/`h2_recv_buf_*`），`server.New` 也会调用 `FileConfig.Validate`。`buildHTTPServer` 只读归一化后的值；每连接并发流上限固定 128（`HTTP2ServerMaxConcurrentStreams`，不可配）；`shaper.*` 由 `shaper.Config.Normalize` 负责，不要出现第二份默认值。
+- **证书来源只有一个判定入口**：`UsesManualCertificate`（手工 vs ACME）、`ACMESubjectIsIP`（IP 标识符）与 `validateTLS`（证书成对、ACME 下 `host` 必填、IP 只接受公网 IPv4 字面量）。公网性用 `util.IsLANIP`，故意比 certmagic 更严，不要放宽；IPv6/IPv4-mapped 被拒是因为地址都是 `IP:port` 形态（见要点 6）。
+- `timeout` 是全部派生超时的唯一旋钮，范围 [15, 60] 秒（非正取 30，越界取最近边界），归一化只在 `config.NormalizeTimeout`/`TimeoutDuration`。
+- **派生超时只在一处填零值**：`config.Timeouts` 由 `config.NewTimeouts` 派生，`Timeouts.Normalize` 只按 `Base` 补零值字段；每个公开构造器入口调用一次，其余地方直接读字段，不要再写 `if x <= 0`。SOCKS5 与 HTTP 两个入口必须拿到同一份 `Timeouts`（否则同一目标超时不一致）。
+- 两处零值判断是语义不是默认值：`ProxyHandlerConfig.HandshakeTimeout <= 0` 表示沿用 `Timeouts.Base`；`udpPool.receiveLoop` 的 `respTimeout <= 0` 表示关闭读空闲。
+- `http_port` 未配置时由 `socks_port` 推导（`+1000`），完整/简单模式同语义，只有 `client/config.normalizeHTTPPort` 一处实现；`socks_port=0` 不推导，`socks_port=0` + `http_port>0` 仍是启动错误（`runner.ErrSocksRequired`）。
+- **本地代理端点地址只有一个来源**：监听用 `util.LocalProxyListenAddr`，本机消费方（HTTP 反向代理、TUN/helper、系统代理、托盘 `/stats`）用 `util.LocalProxyDialAddr`，`Socks5URI` 只是包装；`bind_all` 时分别是 `[::]` 与同族回环。不要再手拼 `127.0.0.1:<port>`（监听可能只接受 IPv6 回环）。`sysproxy.State.Enable`/`Disable` 接收完整地址，由 `sysproxy.Addr(cfg)` 推导。
+- `tun_mtu`（完整 `local.tun_mtu`/简单同名，默认 1500，范围 [1280, 9000]）是设备与 netstack MTU 的唯一来源，归一化只在 `config.NormalizeTunMTU`。设备侧由创建脚本写入（第 9 个位置参数）；wintun 的 MTU 无法由 tun2socks 设置，只能靠 netsh；netstack MTU 小于设备 MTU 会静默丢弃超限包（UDP/ICMP/分片，TCP 因 MSS 通告不受影响）。
 
 ## 关键架构要点
 
-1. **传输层**：基于 Go 1.26 标准库 HTTP/2（不依赖 `golang.org/x/net/http2`），初始 1 个 `http.Transport`（`MaxConnsPerHost=1`），按需懒加载扩容（活跃流达到 `stream_threshold` 阈值且仍小于 `conn_count_max` 上限时新建连接），通过 least-active 策略调度；TLS 握手使用 uTLS Chrome 指纹伪装；服务端和客户端 HTTP/2 参数（帧大小、窗口大小、HEADER TABLE SIZE）分别配置以增强伪装效果。**「判死即换连接」由换代保证**：判死只关得掉底层 `net.Conn`，而 net/http 的池没有关闭承载活跃流的连接的 API，那条 h2 `ClientConn` 何时被移出池取决于 stdlib 内部清理的调度时机，因此 `transportSlot.invalidateConn` 在关闭连接的同时把槽位换到新一代（`advanceGeneration`），下一次 `Open` 只能拨号；`CloseIdleConnections` 的异步收敛不再是这条保证的一部分（#226），池一律通过 `transportSlot.transport()` 读取。**「代 == 连接」是连接身份的唯一来源**：池与它拨出的那条连接打包成 `slotTransport{tr, conn}`；一"代"最多只有一条连接，连接一关（`trackedConn.Close`，即 net/http 回收）就整代作废（`retireGeneration` 把槽位换到新一代）。因此流在提交请求时记下的那一代（`http2Stream.gen`）就是它实际用过的那条连接——判死（`InvalidateConn` → `invalidateConn`）与判活（`ConnAlive`）都只在自己那一代里进行，写路径上不需要再"快照"一次；判死换池之后另一条流拨出的新连接，一条正在死去的流永远碰不到（#226、#229 之后仍然存在的"把新连接记成自己的身份、误杀健康连接"的窗口因此结构上不存在）。唯一例外是 net/http 会为达到服务端 `maxConcurrentStreams` 的连接在同一张池里再拨一条：`MaxConnsPerHost=1` 挡不住（它计的是 net/http 自己的 persistConn，而这条路径会主动让出计数去再拨 TCP），旧的 h2 连接也不会被关闭；该上限**固定为 128、不开放配置**（客户端用这个值判断连接是否已满，调小会让例外更早出现；它同时是 SETTINGS 里的可被动特征），配合调度器按 least-active 摊流，要上千条同时打开的流才会撞上，实际不可达。`HTTP2Config.StrictMaxConcurrentRequests` 在当前标准库实现里会卡死（排队者握着预约、等待者握着 reqHeaderMu），不能用——详见 `slotTransport` 的注释与 `config.HTTP2ServerMaxConcurrentStreams`
-2. **应用帧协议**：HTTP/2 stream 内封装 app 帧（HANDSHAKE/DATA/DATAGRAM/FIN/RST/PADDING/COVER），`cipher_len:3 + ciphertext` 作为 CryptoRecord 边界；`protocol.ReadFrame/WriteFrame` 处理帧级别的编解码
-3. **两阶段加密**：① Bootstrap 阶段：AES-256-GCM 加密初始握手帧（含目标地址和方法协商）；② Session 阶段：协商后的 AEAD（AES-256-GCM 或 ChaCha20-Poly1305），HKDF+salt 派生 C2S/S2C 方向独立密钥，每方向独立计数器 nonce
-4. **回落对抗**：服务端首个 CryptoRecord 解密/验证失败时，回落成正常 HTML 首页（伪装为普通网站）；一旦发送 octet-stream 响应头则只能 close/RST stream。fallback 由 `handler.NewFallback(FallbackConfig)` 构造出 `*Fallback` 实例，在 `server.Start()` 中一次性注入 `ProxyHandler`/`ProbeHandler` 与 `/` 路由：模式配置与部署身份在构造后只读，实例级缓存有界，因此不存在包级可变状态，也没有"必须在使用前调用"的隐式顺序契约（未注入的零值 handler 回落到包级内置实例）。伪装强度分两层：
-   - **部署级身份**（`fallback_random.go`）：每次构造用 `crypto/rand` 种子派生一套稳定身份——主题 CSS 的 `{{token}}` 由同一色相族派生、并逐项按相对亮度夹紧对比度，站点名/导航/页脚/`Last-Modified` 同样每实例随机。同一实例内所有客户端看到完全相同的页面（真实静态站的行为，也是生成页缓存的前提），不同实例之间彼此不同。
-   - **HTTP 真实性层**（`fallback_http.go`）：自动生成模式下补齐 `Content-Length`/`Last-Modified`/`ETag`/`Accept-Ranges`，条件请求返回 304；浏览器式内容请求（`Accept` 含 `text/html`）命中未知路径时返回 404。目录/自定义/反代三种 fallback 模式不受这两层影响，状态码与行为保持原样。
-5. **端点**：`POST /v3/tcp`、`POST /v3/udp`、`POST /v3/icmp`（强制 HTTP/2），其余路径返回 fallback HTML（允许 HTTP/1.1）；`GET /v3/probe` 返回启动时预生成的随机数据（需 `x-es` 携带 master key 派生的能力令牌），供客户端主动探测 slot 连接的真实下载速度
-6. **服务端**：需要 sudo 运行（443 端口 + ICMP）；TLS 证书通过 certmagic 自动管理（Let's Encrypt ACME）或手动指定证书文件。**ACME 的标识符既可以是域名，也可以是公网 IPv4 字面量**（`server.host`，IP-only 模式）：Let's Encrypt 的 IP 地址证书（RFC 8738，2026-01 GA）**必须是短生命周期证书**（约 160 小时、无 CN），因此 `manageCert` 对 IP 标识符显式请求 `shortlived` profile（常量 `acmeProfileShortLived`；LE 对 `ip` 标识符会自动选它，显式请求是为了不让"必须是短生命周期"依赖服务端自动选择，profile 名不再被 CA 承认时 acmez 会报 `unknown profile name`）；它**只能用 tls-alpn-01 验证**（dns-01 被 RFC 8738 禁止，而 `acmeCfg.DisableHTTPChallenge` 早已为 true），所以公网 443 在首次签发与每次续期时都必须可达（续期由 `certmagic.NewCache` 起的后台维护 goroutine 负责，约每 4.5 天一次）。客户端侧无需改动：`servers[].host` 是 IP 时既有的 IP 分支会跳过预解析/pinning，uTLS 对 IP 字面量不发 SNI、按 IP SAN + 系统根证书校验；但**客户端 `sn` 必须留空**（它才是校验用的名字，填了别的域名会校验失败——那正是"Cloudflare 优选 IP"那套配置，与 IP 证书模式正好相反）
-7. **SSRF 防护与 DNS pinning**：服务端在握手阶段解析 HANDSHAKE 中的 target **一次**，任一地址落在 LAN/私有/保留网段即用 400 拒绝，并把这次解析的结果随会话传给拨号路径；拨号只拨这些已校验的字面 IP，不把域名交给 `net.Dialer`，因此 SSRF 检查与实际连接用的是同一次解析，没有可供 DNS-rebinding 翻转答案的第二次解析。next proxy 路径仍把域名交给上游代理解析（被墙/仅代理侧可解析的域名依赖它），属明确接受的可信组件残余风险
-8. **流量整形**：`shaper` 包将帧分批打包为 CryptoRecord，填充至固定大小档位（128/512/1500 字节），支持按预算比例注入 cover traffic（随机 COVER 帧），批处理窗口默认 3ms
-9. **双向中继**：`relay.Bidirectional` 在 client↔server 间拷贝数据，共享空闲计时器，连接关闭时回调 exactly once；支持 stall 检测和流量统计
-10. **统计与监控**：`stats` 包维护全局原子计数器（streams、bytes、RTT、DNS 缓存命中/未命中、fallback 页面等）；通过 HTTP 代理端口的 `/stats` 端点暴露 JSON 快照（与 `/tun` 共用回环守卫，`bind_all` 时也不出网）；快照按语义分段嵌入而 JSON 保持平铺，计数器由 `stats.counters`/`stats.derivedCounters` 表统一驱动 Reset/Collect，漏登记会被 `stats` 包的测试拦住；`StreamMeter` 提供 per-stream 吞吐量监控
-11. **NextProxy 动态学习**：`server/nextproxy` 从 DNS 响应中自动提取 CNAME 目标域名和解析 IP，动态加入代理列表，无需预配置完整域名
-12. **简化模式/旧版配置转换**：`LoadConfig` 自动识别简化模式（含旧版 v2 键）并在内存中通过 `BuildSimpleConfig` 转换为 v3；不回写配置文件，也不生成 `.bak`。完整模式的 JSON 解析统一走 `ParseConfigJSON`
-13. **开机网络未就绪时的启动韧性**：`runner.Run` 里服务端域名预解析（`resolveServerDomain`，有界单次尝试）失败**不再是致命错误**——开机自启动时 WiFi 常常还没初始化完，此时进程照常启动并监听本地端口，解析失败降级为启动警告（`runner.ErrServerDomainUnresolved`，托盘给出"网络尚未就绪、已在后台重试"提示）。预解析的三层超时集中在 `client/dns/timeouts.go`：单次往返 `dnsQueryTimeout`、每个 DNS 条目 `dns.ResolveItemTimeout`（条目的 A/AAAA 并发共享它，保证黑洞服务器不会独吞预算）、一次完整预解析 `dns.PreResolveTimeout`（runner/client.New/TUN helper 三条路径共用，并预留一个条目预算给系统 DNS 兜底，见 `dns.WithSystemDNSFallbackReserve`）。后台 `retryServerDomain` 按指数退避（1s→15s，带 ±20% 抖动）持续重试直到成功或 `Core.Stop`；每次尝试前调用 `dns.ResetResolveState()` 清掉内置 DNS 熔断（3 分钟冷却）与系统 DNS 发现缓存（空结果缓存 5 分钟），否则"网络已恢复"会被这两处状态拖后数分钟。成功后关闭 `Core.ServerDomainReady()` 通道，同时把预解析到的地址交给客户端（`Core.publishServerIPs` → `client.Client.SetServerIPs`）：传输层拨服务端域名时优先拨这些字面 IP（客户端侧 DNS pinning，TLS 的 SNI/证书校验仍用原域名），单次尝试有界，失败时只把**本次**拨号回退给操作系统解析器、**不丢弃**预解析结果（一次失败可能只是瞬态——网络切换、接口绑定过期、服务端短暂抖动；丢掉它会让进程此后只能依赖系统解析器，而 pinning 存在的意义正是系统 DNS 不可靠时仍能连上。服务端真的换了 IP 时，每次拨号先花一次有界尝试再走域名回退），因此系统 DNS 坏掉/被污染（例如家用路由器返回"OPT 在 ANSWER 段"的畸形 EDNS0 应答，见 `dns.NormalizeEDNS0Answer`）也能连上。TUN 的启用以该通道为前提（`canStartTunNow`）：未就绪时不启动 TUN（避免把系统 DNS 指向本机转发服务器后陷入解析递归，或缺默认网关导致脚本失败），启动路径与托盘点击都给出提示，网络恢复后由用户手动开启；`client.RefreshServerIPV6` 在启用 TUN 前补齐降级启动期间为空的服务器 IPv6，保证 TUN 脚本安装 IPv6 默认路由。所有依赖与调参在派发 goroutine 之前捕获（`serverDomainRetry`），避免与测试替换包级变量产生数据竞争
-14. **配置快照与运行期状态分离**：`App.cfg` 是 `atomic.Pointer[ClientConfig]` 指向的**不可变快照**——菜单改动一律走 `App.updateConfig`（克隆 → 改 → CAS 交换），启动/切换用 `App.adoptConfig` 整体换装并只把快照交给新会话，因此不存在"菜单原地写、切换 Clone 或运行中核心读"的数据竞争。运行期会变的状态不放进配置：TUN 是否生效由 `client.Client.SetTunMode` 显式告知（`tunMode atomic.Bool`，直连拨号路径 `dialAddr`/`dialerRefreshLoop` 读它），配置里的 `local.enable_tun2socks` 只是"下次启动的偏好"（`mobile` 没有托盘开关路径，故 `client.New` 用该字段播种 `tunMode`，`App.Start` 在决定本会话是否真的启用 TUN 后再覆盖一次）。服务器切换的事务体在 `App.restartServiceInSequence`，托盘只通过 `appUI` 提供“系统代理是否勾选/TUN 菜单勾选”两个状态；`session.run` 仍负责把整套“停→起/回滚”串行化
-15. **挂起复核：时钟离差只产生嫌疑，判死必须由一次真实往返给出**：系统睡眠/VM 暂停会静默丢掉底层连接（NAT 表项过期，两端都还认为它活着），而 net/http 的空闲回收（`closeIfIdle` 在 `len(streams)>0` 时直接返回）与 `tooIdleLocked`（依赖只在 `streams==0` 时写入的 `lastIdle`）都只作用于**没有活跃流**的连接，因此承载常驻流（push/mtalk/DERP）的槽位会一直把这条死连接当作可用——第一个新流必然踩上去，白等引导 4s + 判活 2s 才由判死路径换连接，并把同连接的在飞流一起切断。识别手段是**墙钟推进减单调钟推进**，因为 Go 的单调时钟在挂起期间冻结（darwin 即 `mach_absolute_time`）——**用 ticker 的实到间隔测不到挂起**，定时器在自己的时间轴上并没有迟到。实现上有三条不可动摇的设计：①`suspendSampler` 只存**一个标量**（`suspendOffset` = 墙钟 UnixNano 减进程内单调读数，醒着时恒定、挂起一次跳过睡眠时长），存两个读数会在并发采样时撕裂成负离差（假阴性），而这个差值天然是一次不可分割的采样；②**健康循环与开流路径共享同一个采样器**（`slotLifecycle.suspend`，通过 `observeSuspend` 采样），CAS 既推进基线又认领这次观测，于是"一次挂起恰好一个观测者"是结构性保证——两份独立基线会让迟到的那一份把已经复核过、标记已清掉的槽位重新武装并重复记账；开流路径上的采样不可省略：实测待机回来第一个开流发生在醒来后 **0.0s（中位数）**，几乎必然早于第一个健康周期，只靠定时器那条流仍会盲踩死连接；③健康循环的吞吐采样基线重置走事件号（`suspendEvents`/`resetSamplingOnSuspend`），因为"是谁先发现的挂起"与"基线归属哪个 goroutine"无关，`lastHeavy` 始终只由健康循环写。阈值（`SuspendDivergenceThreshold`）只把承载连接的活跃槽位标记为 `reverify`，**绝不关闭连接**；判死权在开流路径上：`http2Transport.reverifySlot` 用一次 `HEAD /v3/probe`（`SuspendReverifyTimeout`）复核，活着就原样复用（假阳性只花一个 RTT），不通才按身份 CAS 失效换连接，无法判定（未配置探测令牌）时保守放行。另有三条纪律：①判活跑在剥掉调用方取消的上下文上（否则"本地连接刚关掉"就会判健康连接死刑）；②失效只针对复核开始时观测到的那一代（`transportSlot.invalidateConn`，与 `http2Stream.InvalidateConn` 共用同一代身份，任何"复核慢一步杀掉新连接"的窗口都不允许存在）；③启发式判据本身有假阳性（NTP/手动调时间向前跳、VM 快照恢复、`CLOCK_BOOTTIME`/`mach_continuous_time` 这类含睡眠的单调钟），因此它只能产生嫌疑。逐流的连带失败（net/http 的 `errClientConnForceClosed`，"force closed via ClientConn.Close"）在 `client/proxy.isTransientStreamError` 里归为瞬时错误记 Debug：它按构造只由本进程的判死产生，连接级事件已由上面的 Info 锚点覆盖
+### 1. 传输层
 
-16. **规则解析与匹配只有一份实现**：`rule` 包是"规则文件 → 匹配集合"的唯一入口，`client/router` 的自定义 `direct_file`/`proxy_file` 与 `server/nextproxy` 的 `next_proxy_file` 都用它。`rule.Set` 同时持有 IP/CIDR/域名/glob/regexp 四类条目并自带锁（`MatchHost`/`MatchHostKind`/`HasDomain`/`AddIP`/`AddDomain`），因此：① router 的 `customDirect`/`customProxy` 各只是一个 `*rule.Set`，此前 direct/proxy 两半是八个字段加四对逐行重复的匹配函数（dupl 报了 4 处），现在结构上不存在第二份；② 归一化只有三个函数：匹配侧 `rule.NormalizeHost`（去端口、去 FQDN 尾点、小写）与 `rule.canonicalIP`（IPv4-mapped 折叠为 IPv4），解析侧 `rule.normalizeDomainKey`（规则条目不可能带端口，省掉端口探测；30 万行内置列表上那两次字符串扫描是可见的启动成本）——前两者是"同一个主机在匹配时收敛成同一形态"的唯一入口，后者只用于把规则文件里的一行变成 map 键——DNS 缓存以小写为键、qname 带尾点、拨号目标是 `host:port`，三者在匹配前必须收敛成同一种形态，这是"`WWW.Example.COM.` 命中缓存却路由到不同分支"那类问题的根因；③ glob 与 `regexp:` 一律按 `(?i)` 编译，与 DNS 名本身大小写不敏感的语义对齐（内置列表实际含 8 条 `regexp:`、554 条 `full:`、其余为裸域名；`(?i)` 的代价落在噪声范围内，但**不是零**——`MatchHostRule` 实测约 +15%（机器相关，区间 12%~19%），主要来自 `NormalizeHost` 的归一化，换掉了此前大小写敏感的错误语义）；④ 解析错误**不再静默**：`rule.ParseFile` 返回带行号的 `*rule.Error` 列表，由调用方决定致命性——客户端只记启动告警（`Router.CustomFileError`，内置规则仍生效），服务端 `next_proxy_file` 直接启动失败（缺项意味着本该走代理的域名悄悄直连出网）；⑤ `rule.DomainSet`（`full:`/`regexp:`/裸域名，`Match(domain, withSub)`）承担内置 geosite 列表，`client/router.GeoSite` 只是它的类型别名。**行尾注释不支持**：`#` 在正则/glob 里可能合法，README 的示例因此把注释单独成行
+基于标准库 HTTP/2（`http.HTTP2Config`，Go 1.26+，不依赖 `golang.org/x/net/http2`）：初始 1 条连接（`MaxConnsPerHost=1`），按需懒加载到 `conn_count_max`，least-active 调度；TLS 用 uTLS Chrome 指纹。
 
-17. **DNS 路由按查询域名决定，而不是按解析器地址**：服务端 UDP 会话的目标是解析器（如 `8.8.8.8:53`），但"这条查询该直连还是走下一级代理"只有 QNAME 知道。因此目标是 53 端口的会话**推迟拨号**（`udpHandler.Handle` 里 `dnsSession=true` 时不拨，出站连接由主循环在处理第一条查询时建立）；UDP 的 DNS 部分集中在 `server/handler/udp_dns.go`（路由类型与实现、会话的 DNS 状态 `dnsState`、路由判定与重绑、应答学习），`udp.go` 只保留数据报中继本身，两者的接口只有 `isDNSPort`、`observeDNSFrame`、`dialRoute` 三处，路由判定复用 next proxy 的文件规则（`udpRouteDialer.routeForDomain` → `NextProxy.ShouldProxy`），`enable_udp=false` 时命中的域名也退回直连（UDP 无法承载）。同一条会话里路由可能变化——客户端把**同一个 socket 上的所有查询复用到同一条隧道流**（交换键是「客户端数据报来源地址 + 上游」，与域名无关，见 `client/proxy.udpPool.acquireExchange`），因此一条服务端 UDP 会话可能先后承载两个域名，而客户端的规则里没有服务端的 `next_proxy_file`，无从预判命中与否；此时 `rebindRoute` **先按新路由拨号，成功后才安装新连接并关闭旧连接**（拨号失败保留旧连接与旧路由，同一帧只拨一次；`conn` 与 `connRoute` 在 `installUpstream` 的同一个临界区里一起替换，由 `closeUpstream` 一起清空），并为新连接**补一个读取 goroutine**——连接作为参数传入（`startUpstreamReader(conn)` / `readFromTarget(conn)`），不依赖 goroutine 启动后再从会话取，因此"一条连接一个 reader"是结构性保证；新旧 reader 允许短暂并存，各自只读参数里的那条连接；`readers.WaitGroup` 的 `Add` 与 `Wait` 都只发生在主 goroutine 上；读取结果带回产生它的连接，主循环在结束会话前再核对来源，因此旧连接在快照之后才报出的错误不会误杀新连接；重绑失败后进入 `rebindCooldown`（10s），窗口内命中同一路由的查询直接复用旧连接、不再同步拨号，重绑期间在飞的查询由客户端自己重试。`[UDP_DNS]` 的 `via_next_proxy` 因此是这条查询**实际**使用的出站路径（日志在重绑之后输出、读的是当前连接的路由；重绑失败时另带 `route_changed=true` 与 `route_pending=true`）；客户端拦截到的 **DNS over TCP** 无需单独处理：它经隧道送达服务端时就是一个 UDP 数据报（`client/proxy` 的 TCP DNS 会话复用代理 UDP 交换，见 `tcpDNSSession.resolveProxy`），走的就是这条按域名路由的路径；ICMP 不受影响（原始 socket 无法由 SOCKS5 承载）
+**代 == 连接**：池与它拨出的连接打包成 `slotTransport{tr, conn}`，一代最多一条连接，连接关闭（`trackedConn.Close`）整代作废并把槽位换到新一代（`retireGeneration`/`advanceGeneration`）。因此流提交时记下的代（`http2Stream.gen`）就是它实际用过的连接——判死（`invalidateConn`）与判活（`ConnAlive`）只在自己那一代进行，不会误杀另一条流拨出的新连接。判死必须同时换池：net/http 没有关闭承载活跃流连接的 API，`CloseIdleConnections` 的收敛时机不可依赖。
 
-18. **DNS 拦截：判定与执行各一份，投递模型两份**：`client/proxy` 的 DNS 拦截分三层，边界是刻意划的。①**判定**：`dnsInterceptor.plan`（`dns.go`）把一条查询解析成 `dnsPlan`（Block / 缓存命中 / 直连 / 代理），UDP 与 TCP 共用；②**执行**：`dns_exec.go` 是"动作 → 结果"的唯一实现——`executeSync` 处理三条同步分支（Block / 缓存命中 / 直连），`prepareProxied` 负责钳制 EDNS0 并封包，`finishProxied` 是代理应答的**唯一**后处理入口（规范化畸形 EDNS0 → 按 ipv6 策略剥离 AAAA → 写代理缓存 → 记录结果 → 按自定义域名学习），`postProcessProxied` 只是它的字节流包装（UDP 前端拿到的是原始数据报，改动后必须重新 Pack）；③**投递模型**：UDP 异步（应答由 `udpPool.receiveLoop` 在任意时刻送回，前端提供 `onData`），TCP 同步（一条连接顺序使用自己的交换，`waitResponse` 阻塞等待）。**投递模型不许合并**：把 UDP 改成阻塞等待会丢掉多应答/重传语义，把 TCP 改成回调也没有收益。此前"执行"是两份（`dns_udp.go` 逐行实现、`tcpDNSSession.resolve` 再抄一遍），已经在规范化与重新封包上漂移——`dns_exec_test.go` 用"同一条查询经两条前端路径产生完全相同的缓存条目"守住这条一致性
-19. **DNS 熔断判定只有一处**：`client/dns/builtin.go` 的 `BuiltinRouteFor(hasFailover func() bool) BuiltinRoute`，返回三个互斥状态（`BuiltinRouteFirst` / `BuiltinRouteSkip` / `BuiltinRouteRetry`）。**必须是三态而不是两个布尔**：用 `try`/`armOnFailure` 两个布尔时，"熔断中但没有兜底"与"健康"在调用方看起来一样，于是"无视冷却重试"那段分支永远不可达、对应的 Warn 也永远不打印。`hasFailover` 也必须是**惰性函数值而不是 bool**：判定只有在熔断已置位时才需要知道"有没有兜底"，提前求值会让健康路径为每次预解析付一次系统 DNS 发现（darwin 的 `networksetup` 约 48ms，`TestCachePrePopulateDoesNotProbeSystemDNSWhenBuiltinWorks` 守着这条约束）。三条调用路径共享判定但**各自保留循环**——`QueryWithBuiltinFirst`（并发竞争取首个成功）、`Cache.PrePopulateWithFallback`（串行 + 每条目预算 + 系统兜底预留）、`client.resolveServerIPV6`（逐条目预算）——三者的调度与预算模型本来就不同，合并循环会破坏各自的超时语义。唯一的规则是：**只有存在系统 DNS 兜底时才熔断内置池**（无兜底时熔断会把 3 分钟冷却变成彻底中断，Android 上系统 DNS 对应用不可见正是这种情形）；反过来，熔断已置位但当前没有兜底时**无视冷却**，仍试内置池
+例外：net/http 在连接达到服务端 `maxConcurrentStreams` 时会再拨一条（`MaxConnsPerHost=1` 挡不住）。服务端该上限固定 128、不可配，客户端用同一值判断"已满"。`HTTP2Config.StrictMaxConcurrentRequests` 在当前标准库会卡死，不能用（见 `slotTransport` 注释）。
+
+### 2. 应用帧协议
+
+HTTP/2 stream 内封装 app 帧（HANDSHAKE/DATA/DATAGRAM/FIN/RST/PADDING/COVER），`cipher_len:3 + ciphertext` 构成 CryptoRecord 边界。读路径由 `crypto.DecryptedReader.ReadFrame` 切记录后用 `protocol.DecodeFrame` 解帧；写路径由 `protocol.AppendFrame`/`EncodeFrames` 编码，经 `shaper` 批量加密写出。
+
+### 3. 两阶段加密
+
+Bootstrap 用 AES-256-GCM 加密初始握手帧（含目标地址与方法协商）；Session 用协商后的 AEAD（AES-256-GCM/ChaCha20-Poly1305），HKDF+salt 派生 C2S/S2C 独立密钥，每方向独立计数器 nonce。
+
+### 4. 回落对抗
+
+首个 CryptoRecord 解密/验证失败时回落成普通 HTML 首页；一旦发出 octet-stream 响应头，只能 close/RST。fallback 由 `handler.NewFallback(FallbackConfig)` 构造，在 `server.Start()` 一次性注入 `ProxyHandler`/`ProbeHandler` 与 `/` 路由；构造后只读、实例级缓存有界，没有包级可变状态，也没有"使用前必须调用"的顺序契约（未注入时回落到内置实例）。伪装两层：
+
+- **部署级身份**（`fallback_random.go`）：每实例用 `crypto/rand` 派生稳定身份（主题色相族、站点名/导航/页脚/`Last-Modified`）；实例内所有客户端看到同一页面（静态站行为与页缓存前提），实例间互不相同。
+- **HTTP 真实性**（`fallback_http.go`）：自动生成模式补齐 `Content-Length`/`Last-Modified`/`ETag`/`Accept-Ranges`，条件请求 304，浏览器式内容请求未知路径 404；目录/自定义/反代三种模式不受影响。
+
+### 5. 端点
+
+`POST /v3/tcp`、`/v3/udp`、`/v3/icmp`（强制 HTTP/2），其余路径返回 fallback HTML（允许 HTTP/1.1）。`GET /v3/probe` 返回启动时预生成的随机数据，需 `x-es` 能力令牌（master key 派生），供客户端探测 slot 连接的真实下载速度。
+
+### 6. 服务端与证书
+
+需要 sudo（443 + ICMP）；证书用 certmagic ACME 或手动文件。ACME 标识符可以是域名或公网 IPv4：IP 证书（RFC 8738）必须短生命周期，`manageCert` 对 IP 显式请求 `shortlived` profile；它只能用 tls-alpn-01（dns-01 被禁止），因此公网 443 在签发与续期时必须可达。客户端侧 IP 分支跳过预解析/pinning，uTLS 不发 SNI、按 IP SAN 校验，**`sn` 必须留空**。
+
+### 7. SSRF 防护与 DNS pinning
+
+服务端握手阶段解析 HANDSHAKE target 一次，任一地址落在 LAN/私有/保留段即 400，并把解析结果传给拨号路径；拨号只拨这些已校验字面 IP，不再解析域名，因此 SSRF 检查与实际连接使用同一次解析，DNS-rebinding 无法翻转答案。next proxy 路径仍把域名交给上游解析（被墙域名依赖它），属已接受的残余风险。
+
+### 8. 流量整形
+
+`shaper` 把帧分批打包为 CryptoRecord，填充到固定档位（128/512/1500 字节），按预算比例注入 COVER 帧，批处理窗口默认 3ms。
+
+### 9. 双向中继
+
+`relay.Bidirectional` 共享空闲计时器，关闭时回调 exactly once；带 stall 检测与流量统计。
+
+### 10. 统计
+
+`stats` 维护全局原子计数器（streams/bytes/RTT/DNS 命中/fallback 等），经 HTTP 代理端口的 `/stats` 暴露（与 `/tun` 共用回环守卫）；计数器由 `counters`/`derivedCounters` 表驱动 Reset/Collect，漏登记会被测试拦住。
+
+### 11. NextProxy
+
+`server/nextproxy` 从 DNS 响应提取 CNAME 与解析 IP，动态加入代理列表。
+
+### 12. 开机网络未就绪时的启动韧性
+
+服务端域名预解析失败（`resolveServerDomain`）不是致命错误：进程照常启动并监听本地端口，降级为启动警告（`ErrServerDomainUnresolved`）；`retryServerDomain` 指数退避重试直到成功或 `Core.Stop`，每次重试前 `dns.ResetResolveState()` 清内置 DNS 熔断与系统 DNS 发现缓存，否则恢复要延迟数分钟。成功后关闭 `ServerDomainReady` 并把地址交给客户端（`publishServerIPs` → `SetServerIPs`）：拨服务端域名时优先拨这些 IP（TLS 仍用原域名）；单次失败只把本次拨号回退给系统解析器，不丢弃预解析结果（服务端换 IP 时先试一次再回退）。预解析的三层超时集中在 `client/dns/timeouts.go`（`dnsQueryTimeout`/`ResolveItemTimeout`/`PreResolveTimeout`，并预留 `WithSystemDNSFallbackReserve`）。TUN 以 `ServerDomainReady` 为前提（`canStartTunNow`）：未就绪不启动（避免解析递归/缺网关），网络恢复后由用户手动开启；`RefreshServerIPV6` 在启用前补齐服务器 IPv6。依赖与调参在派发 goroutine 前捕获（`serverDomainRetry`）。
+
+### 13. 配置快照与运行期状态分离
+
+`App.cfg` 是 `atomic.Pointer[ClientConfig]` 指向的不可变快照：菜单改动走 `App.updateConfig`（克隆→改→CAS），启动/切换用 `App.adoptConfig` 整体换装，只把快照交给新会话。运行期状态不进配置：TUN 是否生效由 `Client.SetTunMode`（`tunMode atomic.Bool`）告知，`local.enable_tun2socks` 只是"下次启动的偏好"（`client.New` 用它播种，`App.Start` 决定本会话后再覆盖）。服务器切换事务在 `App.restartServiceInSequence`；托盘只通过 `appUI` 读"系统代理/TUN 菜单"两个勾选状态，`session.run` 串行化"停→起/回滚"。
+
+### 14. 挂起复核：离差只产生嫌疑，判死必须一次真实往返
+
+睡眠/VM 暂停会静默丢连接（NAT 过期，两端都以为活着），而 net/http 的空闲回收只作用于无活跃流的连接，常驻流（push/mtalk/DERP）会把死连接一直当作可用。判据是**墙钟推进减单调钟推进**（Go 单调钟在挂起期间冻结；ticker 实到间隔测不到）。三条不可动摇：
+
+1. `suspendSampler` 只存一个标量 `suspendOffset`（墙钟 UnixNano − 单调读数）；存两个读数会在并发采样时撕裂成负离差。
+2. 健康循环与开流路径共享同一采样器（`slotLifecycle.suspend`/`observeSuspend`），CAS 同时推进基线并认领观测，保证"一次挂起恰好一个观测者"；开流路径的采样不可省略（实测醒来后第一个开流常在 0.0s，早于健康周期）。
+3. 吞吐基线重置走事件号（`suspendEvents`/`resetSamplingOnSuspend`），`lastHeavy` 只由健康循环写。
+
+阈值 `SuspendDivergenceThreshold` 只把活跃槽位标记 `reverify`，**绝不关连接**；判死在开流路径：`reverifySlot` 用一次 `HEAD /v3/probe`（`SuspendReverifyTimeout`）复核，活了复用，不通才按身份 CAS 失效；无法判定（无探测令牌）时保守放行。判活要剥掉调用方取消（否则本地关流会误杀健康连接）；失效只针对复核开始时的那一代；启发式本身有假阳性（NTP 跳变、VM 快照、含睡眠的单调钟），所以只能产生嫌疑。连带失败（`errClientConnForceClosed`）在 `isTransientStreamError` 归为瞬时错误记 Debug。
+
+### 15. 规则解析与匹配只有一份实现
+
+`rule` 包是"规则文件 → 匹配集合"的唯一入口，`client/router` 的 `direct_file`/`proxy_file` 与 `server/nextproxy` 的 `next_proxy_file` 都用它。`rule.Set` 同时持有 IP/CIDR/域名/glob/regexp 四类条目并自带锁（`MatchHost`/`MatchHostKind`/`HasDomain`/`AddIP`/`AddDomain`），router 的 `customDirect`/`customProxy` 各只是一个 `*rule.Set`。
+
+归一化只有三个函数：匹配侧 `NormalizeHost`（去端口/尾点/小写）与 `canonicalIP`（IPv4-mapped 折叠），解析侧 `normalizeDomainKey`。DNS 缓存以小写为键、qname 带尾点、拨号目标是 `host:port`，三者必须在匹配前收敛成同一形态，否则会"命中缓存却路由到不同分支"。glob 与 `regexp:` 一律 `(?i)`（DNS 名大小写不敏感）。解析错误不静默：`ParseFile` 返回带行号的 `*rule.Error`，客户端只记启动告警（`CustomFileError`，内置规则仍生效），服务端 `next_proxy_file` 直接启动失败。`DomainSet` 承担内置 geosite 列表，`GeoSite` 只是别名。**不支持行尾注释**（`#` 在正则/glob 里可能合法）。
+
+### 16. DNS 路由按 QNAME 决定，而不是按解析器地址
+
+服务端 UDP 会话目标是解析器，但"直连还是走下一级代理"只有 QNAME 知道：目标是 53 端口的会话**推迟拨号**（`dnsSession=true` 时不拨，出站连接在第一条查询时建立）。DNS 部分集中在 `server/handler/udp_dns.go`，`udp.go` 只保留中继，两者只通过 `isDNSPort`/`observeDNSFrame`/`dialRoute` 交互；路由判定复用 next proxy（`routeForDomain` → `ShouldProxy`），`enable_udp=false` 时命中的域名退回直连。
+
+同一会话路由可能变化：客户端把同一 socket 的所有查询复用到同一条流（交换键是"来源地址 + 上游"，与域名无关），因此一条服务端会话可能先后承载两个域名。`rebindRoute` **先按新路由拨号，成功后才替换连接**（失败保留旧连接，同一帧只拨一次；`conn`/`connRoute` 在 `installUpstream` 同一临界区替换，`closeUpstream` 一起清空），并为新连接补一个读取 goroutine（连接作为参数传入），"一条连接一个 reader"是结构性保证；旧连接之后报出的错误不会误杀新连接。重绑失败进入 `rebindCooldown`（10s），窗口内复用旧连接，在飞查询由客户端重试。`[UDP_DNS]` 的 `via_next_proxy` 是实际出站路径（重绑失败另带 `route_changed`/`route_pending`）。DNS over TCP 无需单独处理：它到服务端就是一个 UDP 数据报（`tcpDNSSession.resolveProxy` 复用代理 UDP 交换）。ICMP 不受影响。
+
+### 17. DNS 拦截：判定与执行各一份，投递模型两份
+
+`client/proxy` 的 DNS 拦截三层：①判定 `dnsInterceptor.plan` → `dnsPlan`（Block/缓存命中/直连/代理），UDP/TCP 共用；②执行 `dns_exec.go`：`executeSync` 处理三条同步分支，`prepareProxied` 钳制 EDNS0 并封包，`finishProxied` 是代理应答的唯一后处理入口（规范化 EDNS0 → 按 ipv6 策略剥离 AAAA → 写缓存 → 记录 → 学习域名），`postProcessProxied` 只是字节流包装（UDP 改动后必须重新 Pack）；③投递：UDP 异步（`udpPool.receiveLoop` + `onData`），TCP 同步（`waitResponse` 阻塞）。投递模型不许合并（UDP 阻塞会丢多应答/重传语义）。
+
+### 18. DNS 熔断判定只有一处
+
+`client/dns/builtin.go` 的 `BuiltinRouteFor(hasFailover func() bool)` 返回三个互斥状态（`BuiltinRouteFirst`/`BuiltinRouteSkip`/`BuiltinRouteRetry`）。必须是三态：两个布尔时"熔断中但无兜底"与"健康"无法区分，"无视冷却重试"分支不可达。`hasFailover` 必须是惰性函数值：提前求值会让健康路径每次预解析都付一次系统 DNS 发现（darwin `networksetup` 约 48ms）。三条调用路径（`QueryWithBuiltinFirst`、`Cache.PrePopulateWithFallback`、`client.resolveServerIPV6`）共享判定但各自保留循环，因为调度与预算模型不同。唯一规则：**只有存在系统 DNS 兜底时才熔断内置池**（无兜底时熔断等于彻底中断，Android 上系统 DNS 不可见）；熔断已置位但当前无兜底时无视冷却，仍试内置池。

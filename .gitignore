@@ -39,6 +39,7 @@ cmd/easyss-server/easyss-server*
 easyss.apk
 .build_android_env
 go.work*
+.agents/
 bin/
 build/darwin/Easyss.iconset/
 

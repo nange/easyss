@@ -38,11 +38,13 @@ PLIST := $(MACOS_DIR)/Info.plist
 # CI / 发布产物按平台分目录：不同架构互不覆盖，打包因此与构建顺序无关。
 PLATFORM_DIRS := $(BIN)/linux-amd64 $(BIN)/linux-arm64 $(BIN)/windows-amd64 \
                  $(BIN)/windows-arm64 $(BIN)/darwin-arm64 $(BIN)/darwin-amd64
+# agent 的改动默认都在这个目录下的 worktree 里进行（见 AGENTS.md 的「规范约定」）。
+WORKTREE_DIR := .agents/worktrees
 
 # 注意：本行只是 .PHONY 声明。不要把 `make .PHONY` 当作目标使用——那会把下面
 # 所有目标（format/lint/test/全部构建）当成前置目标跑一遍。CI 只调用明确的
 # build / verify / dist 目标。
-.PHONY: echo format lint test test-race test-headless test-race-headless verify clean \
+.PHONY: echo format lint test test-race test-headless test-race-headless verify clean worktree-clean \
         easyss easyss-headless easyss-windows easyss-server easyss-server-windows \
         easyss-mac-app easyss-android-aar icons syso \
         build build-linux-amd64 build-linux-arm64 build-windows-amd64 build-windows-arm64 \
@@ -165,6 +167,27 @@ verify: lint test-race
 # 只清理 CI/发布产物；本机 bin/ 根目录下的二进制、config.json、日志一概不动
 clean:
 	rm -rf $(PLATFORM_DIRS) $(BIN)/*.zip $(BIN)/libeasyss.aar
+
+# 只清理 $(WORKTREE_DIR) 下的 agent 工作树：当前工作树、其他路径的 worktree 与分支都不动。
+# 目录已不存在的条目交给 git worktree prune 回收元数据。
+worktree-clean:
+	@root="$$(git rev-parse --show-toplevel)"; \
+	list="$$(mktemp)"; \
+	git worktree list --porcelain | sed -n 's/^worktree //p' > "$$list"; \
+	while IFS= read -r wt; do \
+		case "$$wt" in \
+			"$$root/$(WORKTREE_DIR)"/*) \
+				if [ -d "$$wt" ]; then \
+					echo "Removing worktree $$wt"; \
+					git worktree remove --force "$$wt" || { rm -f "$$list"; exit 1; }; \
+				fi ;; \
+		esac; \
+	done < "$$list"; \
+	rm -f "$$list"; \
+	git worktree prune; \
+	if [ -d "$$root/$(WORKTREE_DIR)" ]; then \
+		find "$$root/$(WORKTREE_DIR)" -depth -type d -empty -delete; \
+	fi
 
 # ---------------------------------------------------------------------------
 # 构建资源：图标与 Windows 资源只在设计或清单变更时重新生成

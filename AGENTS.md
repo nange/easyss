@@ -15,7 +15,7 @@ Easyss 是一款兼容 SOCKS5/HTTP 代理的安全上网工具，客户端+服�
 rule/                               规则文件解析与匹配（IP/CIDR/域名/glob/regexp），客户端路由与服务端链式代理共用
 cmd/easyss/                         客户端入口：参数解析、配置加载与子命令分发（main.go）
 cmd/easyss/icon/                    托盘图标与更新徽章（//go:embed 运行时 PNG + badge.go）
-cmd/easyss/internal/app/            客户端运行时：App/session/启动路径/托盘胶水/通知（nange/systray 分支，纯 Go 零 CGO）
+cmd/easyss/internal/app/            客户端运行时：App/session/启动路径/托盘胶水/通知（启动路径与系统代理见 docs/platform.md）
 cmd/easyss/internal/tray/           systray 控件：外壳、菜单、标题、更新状态机、UWP 豁免
 cmd/easyss/internal/tunhelper/      TUN 提权 helper、fd 传递、spawn 与路由拆除复核
 cmd/easyss/internal/sysproxy/       系统代理与 Linux 桌面会话环境
@@ -29,9 +29,9 @@ client/                             客户端核心：Client 结构体
 client/assets/                      嵌入的 GeoIP 数据库、直连/屏蔽列表与 wintun DLL
 client/config/                      客户端配置（JSON 解析、简化模式/旧版配置转换）
 client/router/                      GeoIP + 域名列表路由引擎
-client/dns/                         DNS 转发服务器 + freecache 双缓存
+client/dns/                         DNS 转发服务器 + freecache 双缓存（DNS 契约见 docs/architecture.md）
 client/proxy/                       SOCKS5/HTTP 代理服务器 + StreamHandler
-client/tun/                         TUN2socks 虚拟网卡 + ICMP 代理
+client/tun/                         TUN2socks 虚拟网卡 + ICMP 代理（teardown/脚本约束见 docs/platform.md）
 client/tun/scripts/                 TUN 创建/关闭脚本（//go:embed，按 GOOS 自动选择）
 server/                             服务端核心：Server 结构体（TLS/certmagic）
 server/config/                      服务端配置类型
@@ -39,7 +39,7 @@ server/handler/                     TCP/UDP/ICMP 请求处理 + fallback 伪装�
 server/handler/assets/fallback/     fallback 模板/CSS/内容（//go:embed：template.html + themes.json + content.json）
 server/nextproxy/                   上游 SOCKS5 代理（动态 IP/域名学习）
 transport/                          传输层抽象：Transport/Stream 接口
-transport/http2/                    HTTP/2 传输实现（uTLS Chrome 指纹，least-active 槽位调度，懒加载扩容）
+transport/http2/                    HTTP/2 传输实现（uTLS Chrome 指纹，least-active 槽位调度，懒加载扩容；代/连接不变量见 docs/architecture.md）
 protocol/                           应用帧协议：HANDSHAKE/DATA/DATAGRAM/FIN/RST/PADDING/COVER 编解码
 crypto/                             加密层：PBKDF2 KDF + HKDF key 派生 + 计数器 nonce AEAD（两阶段）
 shaper/                             流量整形：分桶 padding + cover traffic 注入 + 批处理
@@ -68,6 +68,7 @@ make easyss-headless       # 无托盘/Android
 make easyss-android-aar    # 需要 JDK；gomobile/gobind 安装见 Makefile 注释
 make icons                 # 重新生成 macOS 图标（sips/iconutil）
 make syso                  # 重新生成 Windows 资源（rsrc）
+make worktree-clean        # 清理 .agents/worktrees 下的 agent 工作树（不删分支）
 ```
 
 ### CI / 发布（产物写在 `bin/<os>-<arch>/`）
@@ -110,23 +111,24 @@ make lint                               # golangci-lint + go fix 检查
 
 ## 深入阅读
 
-`AGENTS.md` 只保留目录、构建、测试与代码约定；改动前按子系统读对应文档：
+`AGENTS.md` 只保留目录、构建/测试命令与代码约定；改动前按子系统读对应文档，代码契约变化时同步更新（冲突以代码为准）：
 
-- [docs/architecture.md](docs/architecture.md)：关键架构要点（19 项）与配置不变量。
-- [docs/platform.md](docs/platform.md)：Windows 打包、启动路径/系统代理、TUN 脚本位置参数与 teardown 生命周期。
+- [docs/architecture.md](docs/architecture.md)：架构要点（按子系统分节：传输、协议、加密、fallback、DNS、规则）与配置不变量。
+- [docs/platform.md](docs/platform.md)：Windows 打包、启动路径/系统代理、TUN 脚本参数与 teardown 生命周期。
 
 ## 版本信息注入
 
-Makefile 通过 `-ldflags -X` 注入 `version.Name`、`GitTag`、`BuildDate`、`GitCommit`、`GitTreeState`、`Platform`、`GoVersion`；其余信息由 `runtime/debug.ReadBuildInfo()` 和 `runtime` 在 `init()` 中填充。
+Makefile 用 `-ldflags -X` 只注入 `version.Name`、`GitTag`、`BuildDate`；`GitCommit`/`GitCommitDate`/`GitTreeState` 由 `runtime/debug.ReadBuildInfo()` 收集，`GoVersion`/`Platform` 取自 `runtime`，均在 `version.init()` 中补齐。
 
-## 其他注意事项
+## 规范约定
 
 - 日志约定：服务端每条 TCP/ICMP 流只保留入口 `[SERVER] proxy` 一条 Info 与结束时的 `logHandlerResult` 一条结果日志；UDP 会话的连接/路由变化事件（`[UDP] upstream connected`、`[UDP_DNS]`）仍按原级别保留，因为一条会话可能重绑多次。客户端流内生命周期用 Debug，失败由入口（SOCKS5/HTTP）记录一次。handler 内部不要为拨号/连接/失败再打 Info/Error；需要区分失败阶段时用错误包装（`fmt.Errorf("...: %w", err)`）或 `streamResult` 携带
-- 测试注入约定：**不新增包级可变函数钩子**（`var x = func...`），一律用构造器参数、结构体字段或接口注入；测试只改自己构造的实例（`client.sysDeps`、`tun.platform`、`handler.outboundDeps`、`runner.options`、`appDeps`、`tunhelper` 的 `ops`（包内测试）、`sysproxy.State`、`dns.systemServers` 等）。生产默认值由构造器或 `defaultXxx()` 填入，**零值不回落**：新增依赖字段后忘了填是编译期就能看见的 nil 调用，而不是悄悄走生产实现。唯一例外是 `client.sysDeps` 的 nil 字段——它的 `dialBound` 默认值必须引用所属 `Client`，没法在结构体字面量里填。`t.Parallel` 已按包启用；仍需串行的只有共享进程级状态的测试（fd 号、全局 logger、`scripts.*`、`t.Setenv`、真实端口），它们在文件顶部或测试函数上注明原因
+- 测试注入约定：**不新增包级可变函数钩子**（`var x = func...`），一律用构造器参数、结构体字段或接口注入；测试只改自己构造的实例（`client.sysDeps`、`tun.platform`、`handler.outboundDeps`、`runner.options`、`appDeps`、`tunhelper` 的 `ops`（包内测试）、`sysproxy.State`、`dns.systemServers` 等）。生产默认值由构造器或 `defaultXxx()` 填入，**零值不回落**：新增依赖字段后忘了填是编译期就能看见的 nil 调用，而不是悄悄走生产实现。唯一例外是 `client.sysDeps` 的 nil 字段——它的 `dialBound` 默认值必须引用所属 `Client`，没法在结构体字面量里填。`t.Parallel` 已按包启用；仍需串行的只有共享进程级状态的测试（fd 号、全局 logger、`t.Setenv`、真实端口），它们在文件顶部或测试函数上注明原因
 - 导入别名约定：根 `config` 包（默认值、`Timeouts`、`SimpleConfig`）按包名裸导入，不写 `sharedconfig` 之类的别名；同一文件还要引入 `client/config` 或 `server/config` 时，把别名给后者（`clientconfig` / `serverconfig`），让 `config.` 在整仓恒定指向根包。同一个包内 `config.` 只能指向一个包，不得按文件各取所需
 - 注释约定：代码注释只写"读代码看不出来、写错会静默出错"的两类事实——顺序/锁/生命周期约束，以及外部系统行为或跨包契约。不写代码演进史（"过去…现在…"、"取代了某某"），不写枚举式清单（"只有这五个方法会写这个字段"）——这类表述一旦过时就成了错误文档；设计取舍与历史写在 commit message 或本文件。单个注释块不超过 3 行，函数名已经说清楚的不要再加 godoc
 - 始终使用简体中文回复我
 - git commit 信息使用英文，尽量简洁，格式参考 git log 历史记录
+- **git worktree**：代码改动默认先建 worktree 再改，目录固定为 `.agents/worktrees/<name>`（`<name>` 可用 `type/name` 分层），从当前 HEAD 或用户指定的 base 新建分支；只有用户明确指定在某个已有分支/工作树上修改时才直接改。该目录不提交，清理用 `make worktree-clean`（只删 `.agents/worktrees/` 下的工作树，不删分支）。
 - 在用户没有明确要求提交代码前，都不提交代码
 - 提交代码前，先执行`make lint`，检查代码风格，存在问题则需要先修复再提交代码
 - 当用户要求提交PR时，需要在单独的分支提交代码并推送，PR标题采用英文，PR描述使用中文
