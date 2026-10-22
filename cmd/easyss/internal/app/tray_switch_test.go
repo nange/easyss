@@ -15,16 +15,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newSwitchTestApp 构建一个最小 TrayApp：切换逻辑只用到服务器菜单、代理对象菜单、
+// newSwitchTestApp 构建一个最小 trayApp：切换逻辑只用到服务器菜单、代理对象菜单、
 // 当前配置快照与当前核心，既不需要托盘，也不需要核心或网络。
-func newSwitchTestApp(t *testing.T) *TrayApp {
+func newSwitchTestApp(t *testing.T) *trayApp {
 	t.Helper()
 
 	cfg := &clientconfig.ClientConfig{Servers: []*clientconfig.ServerProfile{
 		{Host: "a.example", Port: 443, Default: true},
 		{Host: "b.example", Port: 443},
 	}}
-	a := &TrayApp{App: New(cfg, "")}
+	a := &trayApp{App: New(cfg, "")}
 	a.ui = a
 	a.server = tray.NewServerMenu(systray.NewMenu(), cfg, func(int) {})
 	a.object = tray.NewObjectMenu(systray.NewMenu(), cfg, func() {}, func() {})

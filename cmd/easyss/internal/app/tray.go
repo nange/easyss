@@ -28,7 +28,7 @@ import (
 	"github.com/nange/easyss/v3/selfupdate"
 )
 
-type TrayApp struct {
+type trayApp struct {
 	*App
 
 	shell *tray.Shell
@@ -42,12 +42,12 @@ type TrayApp struct {
 	updater *tray.Updater
 }
 
-var _ appUI = (*TrayApp)(nil)
+var _ appUI = (*trayApp)(nil)
 
 // 保留进程存活一段时间，让操作系统显示通知；Windows 气球提示在所属进程退出时消失。
 const startupErrorNotifyDelay = 5 * time.Second
 
-func (a *TrayApp) buildTray() {
+func (a *trayApp) buildTray() {
 	root := a.shell.Root()
 
 	root.AddSubmenu("选择服务器", a.buildSelectServerMenu())
@@ -168,15 +168,15 @@ func friendlyStartupWarning(err error) string {
 }
 
 // 初始启动期间托盘尚未就绪也必须照常显示，否则"网络尚未就绪"这类开机场景会无声无息。
-func (a *TrayApp) notify(msg string) { a.shell.Notify(msg) }
+func (a *trayApp) notify(msg string) { a.shell.Notify(msg) }
 
-func (a *TrayApp) serverDomainReady(msg string) {
+func (a *trayApp) serverDomainReady(msg string) {
 	a.notify(msg)
 }
 
 // 会话已由 session 拆除，这里只碰界面。菜单必须回到未勾选：引擎没在跑，勾着会让用户以为
 // 它在跑。
-func (a *TrayApp) tunStartFailed(err error) {
+func (a *trayApp) tunStartFailed(err error) {
 	a.object.SetTunChecked(false)
 	if err == nil {
 		return
@@ -203,7 +203,7 @@ func friendlyTunError(err error) string {
 	return "Tun2socks 启动失败：系统全局流量未生效，代理（SOCKS5/HTTP）仍可正常使用，可在托盘中重试。详情：" + err.Error()
 }
 
-func (a *TrayApp) trayExit() {
+func (a *trayApp) trayExit() {
 	a.shell.RequestExit()
 	a.closeService()
 
@@ -213,13 +213,13 @@ func (a *TrayApp) trayExit() {
 	os.Exit(0)
 }
 
-func (a *TrayApp) buildSelectServerMenu() *systray.Menu {
+func (a *trayApp) buildSelectServerMenu() *systray.Menu {
 	m := systray.NewMenu()
 	a.server = tray.NewServerMenu(m, a.currentConfig(), a.selectServer)
 	return m
 }
 
-func (a *TrayApp) selectServer(idx int) {
+func (a *trayApp) selectServer(idx int) {
 	go func() {
 		if a.server.Checked(idx) {
 			return
@@ -237,7 +237,7 @@ func (a *TrayApp) selectServer(idx int) {
 
 // 整段"清空勾选 → 停/起 → 勾选结果"在会话序列锁内，连点几下不会并发跑两套停/起；restart
 // 是序列体，注入的实现自身不得再取序列锁。
-func (a *TrayApp) switchServer(idx int, restart func(*clientconfig.ClientConfig) error) error {
+func (a *trayApp) switchServer(idx int, restart func(*clientconfig.ClientConfig) error) error {
 	return a.sess.runErr(func() error {
 		// 排队期间可能已经切到目标服务器：把勾选确认回来即可，不必再停一次、起一次。
 		if a.currentCore() != nil && a.server.IndexOf(a.currentConfig().DefaultServerAddr()) == idx {
@@ -265,7 +265,7 @@ func (a *TrayApp) switchServer(idx int, restart func(*clientconfig.ClientConfig)
 }
 
 // 菜单刚被清空，因此切换失败不能只写日志：用户需要知道现在跑的到底是哪个服务器。
-func (a *TrayApp) notifyServerSwitchFailure(addr string, err error) {
+func (a *trayApp) notifyServerSwitchFailure(addr string, err error) {
 	msg := fmt.Sprintf("切换到 %s 失败，已回滚到原来的服务器。详情：%v", addr, err)
 	if a.currentCore() == nil {
 		msg = fmt.Sprintf("切换到 %s 失败，且未能恢复原来的服务器：本机代理已停止，请重试或重启 Easyss。详情：%v", addr, err)
@@ -273,7 +273,7 @@ func (a *TrayApp) notifyServerSwitchFailure(addr string, err error) {
 	a.shell.NotifyIfReady(msg)
 }
 
-func (a *TrayApp) buildProxyRuleMenu() *systray.Menu {
+func (a *trayApp) buildProxyRuleMenu() *systray.Menu {
 	m := systray.NewMenu()
 	rule := a.currentConfig().Routing.ProxyRule
 	tray.NewRadioMenu(m, []tray.RadioOption{
@@ -286,7 +286,7 @@ func (a *TrayApp) buildProxyRuleMenu() *systray.Menu {
 	return m
 }
 
-func (a *TrayApp) setProxyRule(rule string) {
+func (a *trayApp) setProxyRule(rule string) {
 	// 运行中的会话立即生效，持久化的偏好走 copy-on-write 快照。
 	if core := a.currentCore(); core != nil && core.Client != nil {
 		core.Client.SetProxyRule(rule)
@@ -295,13 +295,13 @@ func (a *TrayApp) setProxyRule(rule string) {
 	log.Info("[SYSTRAY] proxy rule changed", "rule", rule)
 }
 
-func (a *TrayApp) buildProxyObjectMenu() *systray.Menu {
+func (a *trayApp) buildProxyObjectMenu() *systray.Menu {
 	m := systray.NewMenu()
 	a.object = tray.NewObjectMenu(m, a.currentConfig(), a.toggleSysProxy, a.toggleTun2socks)
 	return m
 }
 
-func (a *TrayApp) toggleSysProxy() {
+func (a *trayApp) toggleSysProxy() {
 	go tray.ToggleCheck(a.object.BrowserItem(), func(on bool) error {
 		if on {
 			return a.setSysProxyOn(sysproxy.Addr(a.currentConfig()))
@@ -312,7 +312,7 @@ func (a *TrayApp) toggleSysProxy() {
 	})
 }
 
-func (a *TrayApp) toggleTun2socks() {
+func (a *trayApp) toggleTun2socks() {
 	go func() {
 		on := a.object.TunChecked()
 		log.Info("[SYSTRAY] tun menu clicked", "checked", on)
@@ -326,7 +326,7 @@ func (a *TrayApp) toggleTun2socks() {
 	}()
 }
 
-func (a *TrayApp) buildLogLevelMenu() *systray.Menu {
+func (a *trayApp) buildLogLevelMenu() *systray.Menu {
 	m := systray.NewMenu()
 	level := a.currentConfig().Log.Level
 	tray.NewRadioMenu(m, []tray.RadioOption{
@@ -338,7 +338,7 @@ func (a *TrayApp) buildLogLevelMenu() *systray.Menu {
 	return m
 }
 
-func (a *TrayApp) setLogLevel(level string) {
+func (a *trayApp) setLogLevel(level string) {
 	a.updateConfig(func(c *clientconfig.ClientConfig) { c.Log.Level = level })
 	log.Info("[SYSTRAY] log level changed", "level", level)
 
@@ -357,7 +357,7 @@ func (a *TrayApp) setLogLevel(level string) {
 }
 
 // 失败只写日志会让菜单项看起来像没反应，因此每个失败也以通知呈现。
-func (a *TrayApp) catLogs() {
+func (a *trayApp) catLogs() {
 	fallback, err := a.deps.log.Open(a.currentConfig().Log.FilePath)
 	switch {
 	case err != nil:
@@ -368,7 +368,7 @@ func (a *TrayApp) catLogs() {
 	}
 }
 
-func (a *TrayApp) toggleAutoStart() {
+func (a *trayApp) toggleAutoStart() {
 	go tray.ToggleCheck(a.autoStartItem, func(on bool) error {
 		if on {
 			if err := autostart.EnableAutoStart(); err != nil {
@@ -387,7 +387,7 @@ func (a *TrayApp) toggleAutoStart() {
 	})
 }
 
-func (a *TrayApp) exitApp() {
+func (a *trayApp) exitApp() {
 	go func() {
 		// 同步清除系统代理（很快、无需提权）；TUN 清理交给 trayExit()，避免在 osascript 上阻塞
 		// 菜单。
@@ -397,7 +397,7 @@ func (a *TrayApp) exitApp() {
 }
 
 // 失败必须回滚勾选并通知用户，否则核心仍在提供 SOCKS5/HTTP，而全局流量静默保持直连。
-func (a *TrayApp) enableTun2socks() {
+func (a *trayApp) enableTun2socks() {
 	log.Info("[SYSTRAY] enableTun2socks called", "isRoot", tunhelper.IsRoot())
 
 	// 服务端域名未解析时必须拒绝：TUN 会把系统 DNS 指向本机转发服务器，而解析该域名又依赖隧道，
@@ -416,7 +416,7 @@ func (a *TrayApp) enableTun2socks() {
 	}
 }
 
-func (a *TrayApp) disableTun2socks() {
+func (a *trayApp) disableTun2socks() {
 	log.Info("[SYSTRAY] disableTun2socks called")
 	// teardown 中发现的问题由 tunDown 自己记日志/通知界面，不中止退出流程。
 	a.sess.tunDown()
@@ -424,29 +424,29 @@ func (a *TrayApp) disableTun2socks() {
 
 // 参数被刻意忽略：配置由 restartServiceInSequence 以增量方式发布到当前快照上，App.Start 读到的
 // 就是它。
-func (a *TrayApp) startService(*clientconfig.ClientConfig) error { return a.Start() }
+func (a *trayApp) startService(*clientconfig.ClientConfig) error { return a.Start() }
 
 // 只能在 session.run 内调用（见 restartServiceInSequence）。
-func (a *TrayApp) restartService(newCfg *clientconfig.ClientConfig) error {
+func (a *trayApp) restartService(newCfg *clientconfig.ClientConfig) error {
 	return a.restartServiceInSequence(newCfg, a.startService)
 }
 
 // 整段停/起持有 session 序列锁，供不持有序列的调用方使用。序列锁不可重入：已在 session.run
 // 闭包内的调用方必须直接调用 restartServiceInSequence，否则死锁。
-func (a *TrayApp) restartServiceWith(newCfg *clientconfig.ClientConfig, start func(*clientconfig.ClientConfig) error) error {
+func (a *trayApp) restartServiceWith(newCfg *clientconfig.ClientConfig, start func(*clientconfig.ClientConfig) error) error {
 	return a.sess.runErr(func() error {
 		return a.restartServiceInSequence(newCfg, start)
 	})
 }
 
 // 整段在会话序列锁内，退出路径与切换/自更新重启不会交错。
-func (a *TrayApp) closeService() {
+func (a *trayApp) closeService() {
 	a.sess.run(a.Close)
 }
 
 // restartAfterUpdate 在安装完成后重启进程；失败时恢复服务并把错误交给调用方。
 // 与菜单切换服务器属同一类临界区：不共用会话序列锁会让两套停/起交错抢本地端口。
-func (a *TrayApp) restartAfterUpdate() error {
+func (a *trayApp) restartAfterUpdate() error {
 	var restartErr error
 	a.sess.run(func() {
 		a.Close()
@@ -473,15 +473,15 @@ func (a *TrayApp) restartAfterUpdate() error {
 }
 
 // 托盘只提供菜单状态，切换序列在 App.restartServiceInSequence。
-func (a *TrayApp) browserProxyEnabled() bool {
+func (a *trayApp) browserProxyEnabled() bool {
 	return a.object.BrowserChecked()
 }
 
-func (a *TrayApp) setTunMenuChecked(checked bool) {
+func (a *trayApp) setTunMenuChecked(checked bool) {
 	a.object.SetTunChecked(checked)
 }
 
-func (a *TrayApp) startLocalService() {
+func (a *trayApp) startLocalService() {
 	if a.object.BrowserChecked() {
 		if err := a.setSysProxyOn(sysproxy.Addr(a.currentConfig())); err != nil {
 			log.Error("[SYSTRAY] start local: set sysproxy on", "err", err)

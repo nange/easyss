@@ -12,45 +12,45 @@ Easyss 是一款兼容 SOCKS5/HTTP 代理的安全上网工具，客户端+服�
 ## 核心目录结构
 
 ```
-rule/               规则文件解析与匹配（IP/CIDR/域名/glob/regexp），客户端路由与服务端链式代理共用
-cmd/easyss/         客户端入口：参数解析、配置加载与子命令分发（main.go）
-cmd/easyss/internal/app/          客户端运行时：App/session/启动路径/托盘胶水/通知（nange/systray 分支，纯 Go 零 CGO）
-cmd/easyss/internal/tray/         systray 控件：外壳、菜单、标题、更新状态机、UWP 豁免
-cmd/easyss/internal/tunhelper/    TUN 提权 helper、fd 传递、spawn 与路由拆除复核
-cmd/easyss/internal/sysproxy/     系统代理与 Linux 桌面会话环境
-cmd/easyss/internal/logview/      查看日志（终端/快照）与桌面会话启动
-cmd/easyss/internal/autostart/    开机自启
-cmd/easyss/internal/singleton/    单实例锁
-cmd/easyss/internal/selfupdatecmd/ selfupdate 子命令与产品变体
-cmd/easyss-server/  服务端入口，单文件 main.go
-integration/        客户端+服务端端到端测试（原 cmd/easyss/easyss_test.go）
-client/             客户端核心：Client 结构体
-client/config/      客户端配置（JSON 解析、简化模式/旧版配置转换）
-client/router/      GeoIP + 域名列表路由引擎
-client/dns/         DNS 转发服务器 + freecache 双缓存
-client/proxy/       SOCKS5/HTTP 代理服务器 + StreamHandler
-client/tun/         TUN2socks 虚拟网卡 + ICMP 代理
-server/             服务端核心：Server 结构体（TLS/certmagic）
-server/config/      服务端配置类型
-server/handler/     TCP/UDP/ICMP 请求处理 + fallback 伪装页面
-server/handler/assets/fallback/  fallback 模板/CSS/内容（//go:embed：template.html + themes.json + content.json）
-server/nextproxy/   上游 SOCKS5 代理（动态 IP/域名学习）
-transport/          传输层抽象：Transport/Stream 接口
- transport/http2/    HTTP/2 传输实现（uTLS Chrome 指纹，least-active 槽位调度，懒加载扩容）
-protocol/           应用帧协议：HANDSHAKE/DATA/DATAGRAM/FIN/RST/PADDING/COVER 编解码
-crypto/             加密层：PBKDF2 KDF + HKDF key 派生 + 计数器 nonce AEAD（两阶段）
-shaper/             流量整形：分桶 padding + cover traffic 注入 + 批处理
-relay/              双向中继：Bidirectional(idleTimeout, src→dst, dst→src)
-stats/              全局原子计数器 + 快照（streams/bytes/RTT/DNS hits 等）
-config/             共享常量（默认端口、端点路径、buffer 大小等）
-log/                基于 slog 的日志，默认时区 Asia/Shanghai
-util/               工具函数（网络、文件、DNS、系统命令）
-util/bytespool/     字节缓冲池（2 的幂次分配器，最大 128KB）
-assets/             嵌入的 GeoIP 数据库 + 直连/屏蔽域名列表
-scripts/            各平台 TUN 设备脚本（//go:embed，按 GOOS 自动选择）
-pprof/              可选 pprof HTTP 服务（127.0.0.1:6060）
-icon/               平台特定托盘图标（darwin/linux/windows）
-version/            构建版本信息（GitTag、BuildDate 等）
+rule/                               规则文件解析与匹配（IP/CIDR/域名/glob/regexp），客户端路由与服务端链式代理共用
+cmd/easyss/                         客户端入口：参数解析、配置加载与子命令分发（main.go）
+cmd/easyss/internal/app/            客户端运行时：App/session/启动路径/托盘胶水/通知（nange/systray 分支，纯 Go 零 CGO）
+cmd/easyss/internal/tray/           systray 控件：外壳、菜单、标题、更新状态机、UWP 豁免
+cmd/easyss/internal/tunhelper/      TUN 提权 helper、fd 传递、spawn 与路由拆除复核
+cmd/easyss/internal/sysproxy/       系统代理与 Linux 桌面会话环境
+cmd/easyss/internal/logview/        查看日志（终端/快照）与桌面会话启动
+cmd/easyss/internal/autostart/      开机自启
+cmd/easyss/internal/singleton/      单实例锁
+cmd/easyss/internal/selfupdatecmd/  selfupdate 子命令与产品变体
+cmd/easyss-server/                  服务端入口，单文件 main.go
+integration/                        客户端+服务端端到端测试（原 cmd/easyss/easyss_test.go）
+client/                             客户端核心：Client 结构体
+client/config/                      客户端配置（JSON 解析、简化模式/旧版配置转换）
+client/router/                      GeoIP + 域名列表路由引擎
+client/dns/                         DNS 转发服务器 + freecache 双缓存
+client/proxy/                       SOCKS5/HTTP 代理服务器 + StreamHandler
+client/tun/                         TUN2socks 虚拟网卡 + ICMP 代理
+server/                             服务端核心：Server 结构体（TLS/certmagic）
+server/config/                      服务端配置类型
+server/handler/                     TCP/UDP/ICMP 请求处理 + fallback 伪装页面
+server/handler/assets/fallback/     fallback 模板/CSS/内容（//go:embed：template.html + themes.json + content.json）
+server/nextproxy/                   上游 SOCKS5 代理（动态 IP/域名学习）
+transport/                          传输层抽象：Transport/Stream 接口
+transport/http2/                    HTTP/2 传输实现（uTLS Chrome 指纹，least-active 槽位调度，懒加载扩容）
+protocol/                           应用帧协议：HANDSHAKE/DATA/DATAGRAM/FIN/RST/PADDING/COVER 编解码
+crypto/                             加密层：PBKDF2 KDF + HKDF key 派生 + 计数器 nonce AEAD（两阶段）
+shaper/                             流量整形：分桶 padding + cover traffic 注入 + 批处理
+relay/                              双向中继：Bidirectional(idleTimeout, src→dst, dst→src)
+stats/                              全局原子计数器 + 快照（streams/bytes/RTT/DNS hits 等）
+config/                             共享常量（默认端口、端点路径、buffer 大小等）
+log/                                基于 slog 的日志，默认时区 Asia/Shanghai
+util/                               工具函数（网络、文件、DNS、系统命令）
+util/bytespool/                     字节缓冲池（2 的幂次分配器，最大 128KB）
+assets/                             嵌入的 GeoIP 数据库 + 直连/屏蔽域名列表
+scripts/                            各平台 TUN 设备脚本（//go:embed，按 GOOS 自动选择）
+pprof/                              可选 pprof HTTP 服务（127.0.0.1:6060）
+icon/                               平台特定托盘图标（darwin/linux/windows）
+version/                            构建版本信息（GitTag、BuildDate 等）
 ```
 
 ## 构建命令

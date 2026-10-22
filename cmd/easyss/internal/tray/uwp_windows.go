@@ -34,7 +34,7 @@ type uwpItem struct {
 	Mu       sync.RWMutex
 }
 
-// install 由 buildTray 在菜单组装阶段调用：只挂子菜单与"刷新列表"。
+// Install 由 buildTray 在菜单组装阶段调用：只挂子菜单与"刷新列表"。
 func (u *UWP) Install(root *systray.Menu, rebuild func()) {
 	u.menu = systray.NewMenu()
 	u.rebuild = rebuild
@@ -44,8 +44,8 @@ func (u *UWP) Install(root *systray.Menu, rebuild func()) {
 	u.menu.Add("刷新列表", func() { go u.refresh() })
 }
 
-// startRefresh 在子菜单挂上托盘之后调用：填充列表会往菜单里追加条目，
-// 与 show 里的 SetMenu 并发会同时读写 Menu.Items。
+// StartRefresh 在子菜单挂上托盘之后调用：填充列表会往菜单里追加条目，
+// 与 Show 里的 SetMenu 并发会同时读写 Menu.Items。
 func (u *UWP) StartRefresh() { go u.refresh() }
 
 // refreshItems 按当前已安装应用重建 UWP 子菜单的列表：已存在的条目就地更新，

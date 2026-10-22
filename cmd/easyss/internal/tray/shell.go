@@ -18,8 +18,8 @@ const AppName = "Easyss"
 // 状态各自持有，它只负责“显示”本身。
 type Shell struct {
 	// 菜单填好之前为 nil：darwin 的 systray.New 会立刻创建 NSStatusItem，
-	// 提前创建会让用户看到一个空菜单的图标。show 之后只读，并发读者必须在
-	// show 返回之后启动。
+	// 提前创建会让用户看到一个空菜单的图标。Show 之后只读，并发读者必须在
+	// Show 返回之后启动。
 	tray *systray.SystemTray
 
 	root      *systray.Menu
@@ -45,7 +45,7 @@ func (s *Shell) Root() *systray.Menu { return s.root }
 // Closing 在托盘退出时关闭，供统计与更新循环感知。
 func (s *Shell) Closing() <-chan struct{} { return s.closing }
 
-// show 创建句柄并显示；必须等菜单组装完成后调用。
+// Show 创建句柄并显示；必须等菜单组装完成后调用。
 func (s *Shell) Show() {
 	s.tray = systray.New()
 	if runtime.GOOS == "darwin" {
@@ -70,7 +70,7 @@ func (s *Shell) Remove() {
 
 func (s *Shell) MarkBuilt() { close(s.built) }
 
-// waitBuilt 等 buildTray 完成，之后 remove 才有可终止的消息循环。
+// WaitBuilt 等 buildTray 完成，之后 Remove 才有可终止的消息循环。
 func (s *Shell) WaitBuilt() { <-s.built }
 
 // ready 只决定可选通知是否发送，不参与任何流程控制。
@@ -83,7 +83,7 @@ func (s *Shell) ready() bool {
 	}
 }
 
-// requestExit 广播退出信号：所有等待 closing 的循环都会醒来，重复调用无副作用。
+// RequestExit 广播退出信号：所有等待 closing 的循环都会醒来，重复调用无副作用。
 func (s *Shell) RequestExit() {
 	s.closeOnce.Do(func() { close(s.closing) })
 }
@@ -109,7 +109,7 @@ func (s *Shell) NotifyIfReady(msg string) {
 	s.Notify(msg)
 }
 
-// rebuildMenu 重新挂上整棵菜单树；systray 会把菜单打开期间的重建排队到关闭后应用。
+// RebuildMenu 重新挂上整棵菜单树；systray 会把菜单打开期间的重建排队到关闭后应用。
 func (s *Shell) RebuildMenu() {
 	if s.tray == nil {
 		return

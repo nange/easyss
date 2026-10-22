@@ -38,7 +38,7 @@ type tunHelperElevator struct {
 // spawnTunHelper 通过平台提权器启动常驻的 TUN helper：FIFO 关闭写端即通知它退出，TUN 文件
 // 描述符经 Unix socket 接收。httpAddr 是本地 HTTP 入口的拨号地址，helper 用它 GET /tun 取配置。
 func spawnTunHelper(ev tunHelperElevator, httpAddr string, fdSocketPath, logFile, logLevel string, timeout time.Duration) (io.WriteCloser, net.Listener, error) {
-	log.Info("[SYSTRAY] Spawn called",
+	log.Info("[SYSTRAY] SpawnTunHelper called",
 		"httpAddr", httpAddr, "fdSocket", fdSocketPath,
 		"logFile", logFile, "logLevel", logLevel)
 

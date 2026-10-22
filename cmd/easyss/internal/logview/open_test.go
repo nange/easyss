@@ -185,8 +185,8 @@ func TestLogViewerArgvWithoutTerminal(t *testing.T) {
 	o.lookPath = fakeLookPath()
 
 	_, err := o.logViewerArgv("/tmp/easyss.log")
-	if !errors.Is(err, ErrNoTerminalEmulator) {
-		t.Fatalf("expected ErrNoTerminalEmulator, got %v", err)
+	if !errors.Is(err, errNoTerminalEmulator) {
+		t.Fatalf("expected errNoTerminalEmulator, got %v", err)
 	}
 	// 错误消息必须说明探测了哪些程序：旧版本只报告
 	// "no supported terminal emulator found"，完全没有提示日志查看器
@@ -200,8 +200,8 @@ func TestLogViewerArgvWithoutTerminal(t *testing.T) {
 
 func TestOpenLogFileErrors(t *testing.T) {
 	for _, filePath := range []string{"", "   "} {
-		if _, err := testLogOpener().Open(filePath); !errors.Is(err, ErrLogFileNotConfigured) {
-			t.Fatalf("expected ErrLogFileNotConfigured for %q, got %v", filePath, err)
+		if _, err := testLogOpener().Open(filePath); !errors.Is(err, errLogFileNotConfigured) {
+			t.Fatalf("expected errLogFileNotConfigured for %q, got %v", filePath, err)
 		}
 	}
 
@@ -364,8 +364,8 @@ func TestFriendlyCatLogError(t *testing.T) {
 		want string
 	}{
 		{nil, ""},
-		{ErrLogFileNotConfigured, "日志文件未配置：请在 config.json 中设置 log.file_path，日志才会写入文件。"},
-		{ErrNoTerminalEmulator, "未找到可用的终端模拟器：请安装 xdg-terminal-exec、alacritty、foot 等终端，或设置 $TERMINAL 环境变量。"},
+		{errLogFileNotConfigured, "日志文件未配置：请在 config.json 中设置 log.file_path，日志才会写入文件。"},
+		{errNoTerminalEmulator, "未找到可用的终端模拟器：请安装 xdg-terminal-exec、alacritty、foot 等终端，或设置 $TERMINAL 环境变量。"},
 		{fs.ErrNotExist, "日志文件不存在：" + fs.ErrNotExist.Error()},
 		{fs.ErrPermission, "没有权限读取日志文件：" + fs.ErrPermission.Error()},
 		{errors.New("boom"), "打开日志失败：boom"},

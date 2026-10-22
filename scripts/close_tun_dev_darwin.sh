@@ -2,7 +2,7 @@
 # 关闭 TUN 会话：删除创建脚本安装的分流默认路由。
 #
 # 位置参数（顺序是调用方与脚本之间的契约，见 client/tun/tun.go 的
-# closeTunDevAndDelIPRoute 与 cmd/easyss/tun_helper_darwin.go 的 runCloseScript）：
+# closeTunDevAndDelIPRoute 与 cmd/easyss/internal/tunhelper/helper_darwin.go 的 runCloseScript）：
 #   1 设备名 2 tun gw 3 本地网关 4 tun gw ipv6 5 服务端 ipv6 6 本地网关 ipv6
 #
 # 第 1 个参数（设备名）不参与删除：这些路由是按网关安装的，而且 fd 路径下调用方

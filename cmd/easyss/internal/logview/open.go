@@ -30,8 +30,8 @@ const (
 
 // "查看日志"流程的哨兵错误，由托盘转换成面向用户的中文消息。
 var (
-	ErrLogFileNotConfigured = errors.New("log file path is empty, configure log.file_path in config.json")
-	ErrNoTerminalEmulator   = errors.New("no supported terminal emulator found")
+	errLogFileNotConfigured = errors.New("log file path is empty, configure log.file_path in config.json")
+	errNoTerminalEmulator   = errors.New("no supported terminal emulator found")
 )
 
 type termCmdStyle int
@@ -86,7 +86,7 @@ func Default() Opener {
 // fallback 报告是否走了快照路径，调用方据此告知用户日志为何不是实时更新。
 func (l Opener) Open(filePath string) (fallback bool, err error) {
 	if strings.TrimSpace(filePath) == "" {
-		return false, ErrLogFileNotConfigured
+		return false, errLogFileNotConfigured
 	}
 
 	// 尚不存在的日志文件只会让终端闪一下又关闭，因此改为报告错误。
@@ -151,7 +151,7 @@ func (l Opener) logViewerArgv(filePath string) ([]string, error) {
 		return launcherArgv(bin, entry, viewer), nil
 	}
 
-	return nil, fmt.Errorf("%w (tried $TERMINAL and %s)", ErrNoTerminalEmulator, strings.Join(checked, ", "))
+	return nil, fmt.Errorf("%w (tried $TERMINAL and %s)", errNoTerminalEmulator, strings.Join(checked, ", "))
 }
 
 // terminalFromEnv 解析 $TERMINAL。已知终端保留其表条目的参数风格（二进制名之后的额外单词
@@ -236,9 +236,9 @@ func FriendlyError(err error) string {
 	switch {
 	case err == nil:
 		return ""
-	case errors.Is(err, ErrLogFileNotConfigured):
+	case errors.Is(err, errLogFileNotConfigured):
 		return "日志文件未配置：请在 config.json 中设置 log.file_path，日志才会写入文件。"
-	case errors.Is(err, ErrNoTerminalEmulator):
+	case errors.Is(err, errNoTerminalEmulator):
 		return "未找到可用的终端模拟器：请安装 xdg-terminal-exec、alacritty、foot 等终端，或设置 $TERMINAL 环境变量。"
 	case errors.Is(err, fs.ErrNotExist):
 		return "日志文件不存在：" + err.Error()

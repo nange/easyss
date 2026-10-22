@@ -24,7 +24,7 @@ func (a *App) Run(disableTray, daemon bool) {
 	defer singleton.Release()
 
 	if !disableTray && (runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux") {
-		ta := &TrayApp{App: a, shell: tray.NewShell()}
+		ta := &trayApp{App: a, shell: tray.NewShell()}
 
 		go func() {
 			c := make(chan os.Signal, 1)

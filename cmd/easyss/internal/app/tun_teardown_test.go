@@ -16,7 +16,7 @@ import (
 // EnableTun2socks 落回 false。
 func TestCloseTun2socksVerifiesTheRecordedSession(t *testing.T) {
 	session := tun.DeviceConfig{Device: "utun9", TunGW: "198.18.0.1"}
-	a := &TrayApp{App: New(&clientconfig.ClientConfig{}, "")}
+	a := &trayApp{App: New(&clientconfig.ClientConfig{}, "")}
 	a.sess.tunSession = &session
 
 	var verified []string
@@ -36,7 +36,7 @@ func TestCloseTun2socksVerifiesTheRecordedSession(t *testing.T) {
 // TestCloseTun2socksSignalsTheHelperFIFO 确认关闭流程仍然通过关闭 FIFO 通知
 // helper 退出。
 func TestCloseTun2socksSignalsTheHelperFIFO(t *testing.T) {
-	a := &TrayApp{App: New(&clientconfig.ClientConfig{}, "")}
+	a := &trayApp{App: New(&clientconfig.ClientConfig{}, "")}
 	a.sess.verifyTeardown = func(tun.DeviceConfig, tun.Owner, bool) error { return nil }
 
 	rd, wr, err := os.Pipe()
