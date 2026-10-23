@@ -29,6 +29,8 @@ func (a dnsAction) String() string {
 		return "empty"
 	case dnsActionCacheHit:
 		return "cache-hit"
+	case dnsActionStatic:
+		return "static"
 	case dnsActionDirect:
 		return "direct"
 	default:
@@ -49,6 +51,11 @@ type dnsExchange struct {
 // 指定的解析器，只有直连分支使用。返回的应答已把 Id 改写为本次查询的 Id。
 func (d *dnsInterceptor) executeSync(ex dnsExchange, msg *dns.Msg, reqServer string) (*dns.Msg, error) {
 	switch ex.plan.action {
+	case dnsActionStatic:
+		// 静态名是访问侧的本地名字，上游 DNS 里并不存在，只能就地应答。
+		ex.plan.static.Id = msg.Id
+		return ex.plan.static, nil
+
 	case dnsActionBlock:
 		log.Info("[DNS_BLOCK] blocked", "domain", ex.plan.domain, "qtype", ex.plan.qtype,
 			"src", ex.src, "dst", ex.dst)

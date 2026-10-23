@@ -56,7 +56,8 @@ type ServerConfig struct {
 	Email          string   `json:"email"`
 	// DisableFailurePenalty 关掉解密失败的按 IP 降速。CDN 回源时所有用户共用回源地址，
 	// 惩罚会被放大成整片用户降速，这类部署必须关掉（见 README 反代部署一节）。
-	DisableFailurePenalty bool `json:"disable_failure_penalty,omitempty"`
+	DisableFailurePenalty bool      `json:"disable_failure_penalty,omitempty"`
+	VPN                   VPNConfig `json:"vpn"`
 }
 
 // UnmarshalJSON 兼容 server.domain 与 server.listen：domain 映射到 host，
@@ -141,6 +142,7 @@ func LoadConfig(path string) (*FileConfig, error) {
 	if err := json.Unmarshal(data, &fc); err != nil {
 		return nil, err
 	}
+	warnOnRemovedDERPAddr(data)
 
 	// 0 表示该字段不存在。
 	if fc.ConfigVersion != 0 && fc.ConfigVersion != SupportedConfigVersion {
@@ -171,6 +173,11 @@ func (fc *FileConfig) Validate() error {
 		return err
 	}
 	if err := fc.validateTLS(); err != nil {
+		return err
+	}
+	// VPN 的启动期契约（DERP 挂载路径的形态、对外 DERP 地址可推导）只在 vpn.enabled 时生效，
+	// 放在 Validate 里使 server.New 与配置加载路径都经过同一道校验。
+	if err := fc.validateVPN(); err != nil {
 		return err
 	}
 	return fc.validateListenOrDefault()
@@ -226,6 +233,25 @@ const (
 
 // applyDefaults 只处理没有其他 owner 的配置策略，其余默认值各有唯一出处，这里不存
 // 第二份副本：shaper.* 归 shaper.Config.Normalize，allowed_methods 归 GetAllowedMethods。
+// warnOnRemovedDERPAddr 对配置里残留的 server.vpn.derp_addr 键告警一次：该字段已被移除，
+// 对外地址只由 server.host 与 server.port 推导。残留的键不会报错（未知键被忽略），但它常
+// 正是"以为中继在别的 host:port"的原因，症状则表现为 VPN 一直连不上。
+func warnOnRemovedDERPAddr(data []byte) {
+	var legacy struct {
+		Server struct {
+			VPN struct {
+				DERPAddr string `json:"derp_addr"`
+			} `json:"vpn"`
+		} `json:"server"`
+	}
+	if err := json.Unmarshal(data, &legacy); err != nil || legacy.Server.VPN.DERPAddr == "" {
+		return
+	}
+	log.Warn("[CONFIG] server.vpn.derp_addr was removed and is ignored; "+
+		"the DERP address is derived from server.host and server.port",
+		"derp_addr", legacy.Server.VPN.DERPAddr)
+}
+
 func applyDefaults(fc *FileConfig) {
 	// timeout 是全部派生超时的唯一旋钮。
 	fc.Timeout = config.NormalizeTimeout(fc.Timeout)
@@ -281,6 +307,9 @@ func (fc *FileConfig) ResolveFilePaths() {
 	fc.Server.KeyPath = util.ResolvePath(fc.Server.KeyPath)
 	fc.NextProxy.NextProxyFile = util.ResolvePath(fc.NextProxy.NextProxyFile)
 	fc.Log.FilePath = util.ResolvePathInExeDir(fc.Log.FilePath)
+	for i := range fc.Server.VPN.MeshPeers {
+		fc.Server.VPN.MeshPeers[i].CAFile = util.ResolvePath(fc.Server.VPN.MeshPeers[i].CAFile)
+	}
 }
 
 // LoadLogConfig 只读取并归一化 log 段，供启动失败时使用：LoadConfig 出错后进程
@@ -332,6 +361,29 @@ func ExampleConfig() FileConfig {
 			Port:           config.DefaultServerPort,
 			Password:       "",
 			AllowedMethods: DefaultAllowedMethods(),
+			// DERP 的对外 host:port 没有配置项：它就是 domain + listen 的端口
+			// （ResolveDERPAddr），端口转发/反向代理那种"对外 host:port 与监听
+			// 不同"的形态明确不支持。
+			//
+			// enabled 默认给 false：内嵌 DERP 虽然只对回环来源提供服务（节点
+			// 经 easyss 隧道抵达，公网上没有任何 DERP 路径），但它会把该服务端
+			// 变成节点组网的中继，运维应当明确地打开它。
+			//
+			// mesh_key / mesh_peers 也一并列出（空值）：它们是"同一 region 下
+			// 多个中继互相转发"的开关，只在 enabled 为 true 时才允许非空，
+			// 因此示例里保持空——但字段必须出现，示例就是字段清单。
+			// mesh 是全互联，所以 mesh_peers 最多 2 条：本机 + 对端 = 同一
+			// region 最多 3 台中继（推荐 1-2 台），超过即配置错误。
+			//
+			// derp_send_queue_depth 给出的是**生效默认值**而不是 0：它是中继
+			// 路径上唯一能存住未确认数据的地方，直接决定经中继的吞吐，所以示例
+			// 应当让运维看到实际在用的深度，而不是一个还要去查文档的 0。
+			VPN: VPNConfig{
+				Enabled:            false,
+				MeshKey:            "",
+				MeshPeers:          []MeshPeer{},
+				DERPSendQueueDepth: config.DefaultDERPSendQueueDepth,
+			},
 		},
 		// 显式给出空切片：示例里 cdn_domains 应呈现为 [] 而不是 null。
 		Fallback: FallbackConfig{

@@ -19,8 +19,18 @@ func TestExampleConfigUsesHost(t *testing.T) {
 	if !strings.Contains(out, `"host"`) {
 		t.Errorf("full config example should contain host: %s", out)
 	}
-	if strings.Contains(out, `"address"`) {
-		t.Errorf("full config example must not contain address: %s", out)
+	// 只查 servers[] 这一层：vpn.peers[].address 是另一个字段，与旧键无关。
+	var decoded struct {
+		Servers []map[string]json.RawMessage `json:"servers"`
+	}
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal example config: %v", err)
+	}
+	if len(decoded.Servers) == 0 {
+		t.Fatalf("full config example has no servers: %s", out)
+	}
+	if _, ok := decoded.Servers[0]["address"]; ok {
+		t.Errorf("full config example must use host instead of the legacy address key: %s", out)
 	}
 }
 

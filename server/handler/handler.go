@@ -4,6 +4,8 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +42,45 @@ type ProxyHandler struct {
 	penaltyWarnMu       sync.Mutex
 	lastPenaltyWarn     time.Time
 	suppressedPenalties int
+	// localDERP 描述"握手目标就是本服务端自己的内嵌 DERP"这一特例；match 为空即关闭。
+	localDERP *localDERP
+}
+
+// localDERP 描述"握手目标就是本服务端自己的内嵌 DERP"这一特例。
+//
+// DERP 只接受回环来源（见 vpn.NewDERPMount），节点侧则把 DERP 连接放进 easyss 隧道，
+// 以 servers[] 里标记 derp 的那条（本服务端的 domain + listen 端口）为目标。服务端
+// 必须在这里认出来并改拨本机回环——否则那条连接会去连自己的公网入口，而那里只有伪装页。
+type localDERP struct {
+	// match 是本服务端对外通告的 DERP host:port（见 server/config.ResolveDERPAddr）。
+	match string
+	// loopback 是命中后实际拨号的地址：127.0.0.1:<listen 端口>。
+	loopback string
+}
+
+// matches 报告握手目标是否就是本服务端自己的 DERP 地址。host 忽略大小写，端口按数值
+// 比较（"443" 与 "0443" 等价），避免一处写法差异变成"VPN 连不上"。
+func (l *localDERP) matches(target string) bool {
+	if l == nil || l.match == "" || l.loopback == "" {
+		return false
+	}
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return false
+	}
+	matchHost, matchPort, err := net.SplitHostPort(l.match)
+	if err != nil {
+		return false
+	}
+	targetPort, err := strconv.Atoi(port)
+	if err != nil {
+		return false
+	}
+	wantPort, err := strconv.Atoi(matchPort)
+	if err != nil {
+		return false
+	}
+	return targetPort == wantPort && strings.EqualFold(host, matchHost)
 }
 
 type ProxyHandlerConfig struct {
@@ -59,6 +100,11 @@ type ProxyHandlerConfig struct {
 	PenaltyEligible func(remoteAddr string) bool
 	// DisableFailurePenalty 关闭解密失败的按 IP 降速。
 	DisableFailurePenalty bool
+	// LocalDERPAddr / LocalDERPLoopback 打开"目标是本服务端自己的内嵌 DERP"
+	// 这一特例：前者是要匹配的对外 host:port，后者是命中后拨号的回环地址。
+	// 两者任一为空即关闭该特例。
+	LocalDERPAddr     string
+	LocalDERPLoopback string
 }
 
 // NewProxyHandler 组装代理 handler。未知的 AllowedMethods 被保留在 map 之外，由调用方在配置
@@ -112,6 +158,10 @@ func newProxyHandlerWithDeps(cfg ProxyHandlerConfig, deps *outboundDeps) *ProxyH
 		deps:                  deps,
 		penaltyEligible:       penaltyEligible,
 		disableFailurePenalty: cfg.DisableFailurePenalty,
+		localDERP: &localDERP{
+			match:    cfg.LocalDERPAddr,
+			loopback: cfg.LocalDERPLoopback,
+		},
 	}
 }
 

@@ -31,6 +31,7 @@ func newTCPHandler(timeouts config.Timeouts, np *nextproxy.NextProxy, deps *outb
 	directDialer := outboundDialer(timeouts.Dial, timeouts.Base)
 	h := &tcpHandler{idleTimeout: timeouts.StreamIdle}
 	h.dial = newDialer(np, np.ShouldProxy, deps)
+	h.dial.dialTimeout = timeouts.Dial
 	h.dial.direct = func(ctx context.Context, network, target string) (net.Conn, error) {
 		if h.dialContext != nil {
 			return h.dialContext(ctx, network, target)

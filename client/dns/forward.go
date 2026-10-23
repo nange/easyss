@@ -27,6 +27,8 @@ type ForwardServer struct {
 	// tunActive 报告 TUN 引擎是否已开始转发，归 Client 所有（运行期状态，不读配置快照）。
 	// 不能用拨号器的 TunModeEnabled：后者在路由可能指向 TUN 时就为 true，早于引擎。
 	tunActive func() bool
+	// static 为 nil 时静态名钩子完全关闭，行为与原来完全一致。
+	static StaticNames
 
 	mu sync.Mutex
 	// pc 由 Shutdown 直接关闭：落在 dns.Server 尚未置位 started 的窗口里时端口也必须释放。
@@ -36,7 +38,9 @@ type ForwardServer struct {
 	closing bool
 }
 
-func NewForwardServer(listenAddr string, disableIPV6 bool, tunActive func() bool) *ForwardServer {
+// NewForwardServer 构造转发服务器。static 为 nil 表示没有静态名钩子（VPN 未启用
+// 或本会话没有本地静态名），此时每个查询都按原有路径转发。
+func NewForwardServer(listenAddr string, disableIPV6 bool, tunActive func() bool, static StaticNames) *ForwardServer {
 	servers := config.DirectDNSServers
 	if disableIPV6 {
 		var filtered []string
@@ -56,6 +60,7 @@ func NewForwardServer(listenAddr string, disableIPV6 bool, tunActive func() bool
 		disableIPV6: disableIPV6,
 		system:      defaultSystemDNS,
 		tunActive:   tunActive,
+		static:      static,
 	}
 }
 
@@ -127,6 +132,13 @@ func (s *ForwardServer) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	q := r.Question[0]
+
+	// 静态名先于任何上游查询就地应答：这些名字（VPN 对端）在上游 DNS 里不存在，
+	// 转发出去只会得到 NXDOMAIN。语义与代理侧共用（见 StaticReply）。
+	if reply, ok := StaticReply(s.static, r); ok {
+		_ = w.WriteMsg(reply)
+		return
+	}
 
 	// 没有 TUN 时上游查询只能从物理网卡直连解析：既是 DNS 泄漏，LAN 客户端也会拿到与代理
 	// 分流不一致的答案（被墙域名可能被污染）。宁可让它们立刻失败，也不降级成直连解析器。
