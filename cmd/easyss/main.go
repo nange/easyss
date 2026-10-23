@@ -13,6 +13,7 @@ import (
 	"github.com/nange/easyss/v3/cmd/easyss/internal/app"
 	"github.com/nange/easyss/v3/cmd/easyss/internal/selfupdatecmd"
 	"github.com/nange/easyss/v3/cmd/easyss/internal/tunhelper"
+	"github.com/nange/easyss/v3/cmd/easyss/internal/vpncmd"
 	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/selfupdate"
@@ -21,11 +22,14 @@ import (
 )
 
 func main() {
-	// "selfupdate" 与 "tun-helper" 必须在 flag 解析前分流，否则参数会与代理参数冲突。
+	// "selfupdate"、"tun-helper" 与 "vpn" 必须在 flag 解析前分流，否则参数会与代理参数冲突。
 	if selfupdatecmd.Run() {
 		return
 	}
 	if tunhelper.RunSubcommand() {
+		return
+	}
+	if vpncmd.Run() {
 		return
 	}
 
@@ -68,6 +72,7 @@ func main() {
 用法:
   %s [flags]              启动代理（托盘版默认带系统托盘，可用 --disable-tray 关闭）
   %s selfupdate [flags]   检查并升级到最新 release
+  %s vpn <subcommand>     节点组网(VPN)：打印或重新生成本机身份（详见 %s vpn -h）
   %s tun-helper [flags]   内部：以提权 TUN 助手模式运行（由主程序自动拉起）
 
 子命令:
@@ -75,12 +80,14 @@ func main() {
                 更新完成后请手动重启进程使新版本生效。支持 --check（仅检查）、
                 --version <tag>（安装指定版本，可重装当前版本或回退，tag 需与
                 release tag 完全一致）、--proxy-port（走本地代理下载）。
+  vpn           identity 打印 client nodekey 与节点地址（都要填到对端配置里），
+                regen 重新生成身份（被替换的文件备份为 <file>.bak）。
   tun-helper    内部子命令：打开 TUN 设备、配置路由/DNS 并把 fd 传回主进程，
                 由主程序在提权场景下自动拉起，请勿手动使用。支持
                 --tun-http-addr/--tun-fd-socket/--log-file/--log-level。
 
 Flags:
-`, bin, bin, bin)
+`, bin, bin, bin, bin, bin)
 		flag.PrintDefaults()
 	}
 
@@ -132,6 +139,9 @@ Flags:
 
 	// 相对路径按可执行文件目录解析，launchd 启动（cwd=/）时才找得到。
 	cfg.ResolveFilePaths()
+
+	// VPN 身份的输出与重新生成都在 "vpn" 子命令里（见 vpn_cmd.go），它在 flag 解析
+	// 之前就被分派掉了——所以这里不需要"打印完就退出"这类分支，启动路径保持单一。
 
 	if cfg.Log.FilePath != "" && !filepath.IsAbs(cfg.Log.FilePath) {
 		if dir := util.CurrentDir(); dir != "" {

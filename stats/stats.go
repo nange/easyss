@@ -83,6 +83,13 @@ type stats struct {
 	serverFallbackPages   atomic.Int64
 	serverProbes          atomic.Int64
 
+	// VPN（仅客户端侧；vpn.enabled=false 时全部为零）
+	vpnTCPStreams       atomic.Int64
+	vpnUDPFlows         atomic.Int64
+	vpnDialErrors       atomic.Int64
+	vpnDNSStaticAnswers atomic.Int64
+	vpnPeerFaceStreams  atomic.Int64
+
 	// startTime 保存单调时钟读数，使 time.Since 不受墙上时钟调整影响；nil 表示没有活跃会话。
 	startTime atomic.Pointer[time.Time]
 }
@@ -158,6 +165,23 @@ func RecordServerProbe()          { g.serverProbes.Add(1) }
 // HTTP/2 流取消、中继空闲超时）。这类结束只记 Debug，计数器使它们仍然可见而不刷日志。
 func RecordServerStreamCancel() { g.serverStreamCancels.Add(1) }
 
+// --- VPN ---
+
+// RecordVPNTCPStream 统计访问侧成功建立的一条经隧道到对端服务端口的 TCP 连接。
+func RecordVPNTCPStream() { g.vpnTCPStreams.Add(1) }
+
+// RecordVPNUDPFlow 统计访问侧成功建立的一条经隧道到对端服务端口的 UDP 流。
+func RecordVPNUDPFlow() { g.vpnUDPFlows.Add(1) }
+
+// RecordVPNDialError 统计一次失败的对端拨号（隧道建立、内层 SOCKS5 握手或对端拒绝）。
+func RecordVPNDialError() { g.vpnDialErrors.Add(1) }
+
+// RecordVPNDNSStaticAnswer 统计一次由本地静态名钩子直接应答的对端名查询。
+func RecordVPNDNSStaticAnswer() { g.vpnDNSStaticAnswers.Add(1) }
+
+// RecordVPNPeerFaceStream 统计本节点对端面接受的一条对端流（TCP 或 UDP）。
+func RecordVPNPeerFaceStream() { g.vpnPeerFaceStreams.Add(1) }
+
 func ResetStartTime() {
 	now := time.Now()
 	g.startTime.Store(&now)
@@ -232,6 +256,11 @@ var counters = []counter{
 	{&g.serverStreamCancels, func(s *Snapshot) *int64 { return &s.ServerStreamCancels }},
 	{&g.serverFallbackPages, func(s *Snapshot) *int64 { return &s.ServerFallbackPages }},
 	{&g.serverProbes, func(s *Snapshot) *int64 { return &s.ServerProbes }},
+	{&g.vpnTCPStreams, func(s *Snapshot) *int64 { return &s.VPNTCPStreams }},
+	{&g.vpnUDPFlows, func(s *Snapshot) *int64 { return &s.VPNUDPFlows }},
+	{&g.vpnDialErrors, func(s *Snapshot) *int64 { return &s.VPNDialErrors }},
+	{&g.vpnDNSStaticAnswers, func(s *Snapshot) *int64 { return &s.VPNDNSStaticAnswers }},
+	{&g.vpnPeerFaceStreams, func(s *Snapshot) *int64 { return &s.VPNPeerFaceStreams }},
 }
 
 var derivedCounters = []derivedCounter{
@@ -249,6 +278,7 @@ func ResetCounters() {
 	g.rttMu.Lock()
 	g.rttEWMA = 0
 	g.rttMu.Unlock()
+
 }
 
 // SessionStats 是会话累计量：流、原始/加密字节与连接次数。
@@ -333,6 +363,15 @@ type ServerStats struct {
 	ServerProbes          int64 `json:"server_probes,omitempty"`
 }
 
+// VPNStats 覆盖节点组网数据面的两端与名字解析（仅客户端侧）。
+type VPNStats struct {
+	VPNTCPStreams       int64 `json:"vpn_tcp_streams,omitempty"`
+	VPNUDPFlows         int64 `json:"vpn_udp_flows,omitempty"`
+	VPNDialErrors       int64 `json:"vpn_dial_errors,omitempty"`
+	VPNDNSStaticAnswers int64 `json:"vpn_dns_static_answers,omitempty"`
+	VPNPeerFaceStreams  int64 `json:"vpn_peer_face_streams,omitempty"`
+}
+
 // Snapshot 是所有计数器和派生指标的时点副本。计数器按语义分段嵌入，JSON 仍然是平铺的。
 type Snapshot struct {
 	SessionStats
@@ -342,6 +381,9 @@ type Snapshot struct {
 	RTTStats
 	TransportHealthStats
 	ServerStats
+
+	// VPN（仅客户端侧；vpn.enabled=false 时全部为零，因此带 omitempty）
+	VPNStats
 
 	// 传输层实时状态（连接数与在飞流），由调用方从 Transport 取得后填入。
 	transport.TransportStats

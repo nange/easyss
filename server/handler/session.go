@@ -122,6 +122,7 @@ type dialCtxKey int
 const (
 	ctxPreferredFamily dialCtxKey = iota
 	ctxResolvedAddrs
+	ctxLocalDERPDial
 )
 
 func withPreferredFamily(ctx context.Context, addr netip.Addr) context.Context {
@@ -149,6 +150,23 @@ func resolvedAddrs(ctx context.Context) ([]netip.Addr, bool) {
 	return addrs, ok && len(addrs) > 0
 }
 
+// withLocalDERPDial 返回携带「本机内嵌 DERP 的回环拨号地址」的 context。它只在握手目标
+// 命中本服务端自己的 DERP 地址时设置（见 serve.go 的 handshakeResult.localDERP），因此
+// 这条特例与任意目标之间没有通道：目标必须与对外通告的 DERP 地址完全一致。
+func withLocalDERPDial(ctx context.Context, addr string) context.Context {
+	if addr == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxLocalDERPDial, addr)
+}
+
+// localDERPDial 取出内嵌 DERP 的回环拨号地址，ok 为 false 表示这不是那条特例。
+func localDERPDial(ctx context.Context) (string, bool) {
+	addr, ok := ctx.Value(ctxLocalDERPDial).(string)
+	return addr, ok && addr != ""
+}
+
+// clientPreferredFamily 从客户端到服务端的远端地址推导其接入地址族。
 func clientPreferredFamily(remoteAddr string) netip.Addr {
 	ap, err := netip.ParseAddrPort(remoteAddr)
 	if err != nil {
@@ -286,7 +304,9 @@ func outboundDialer(timeout, keepAlive time.Duration) *net.Dialer {
 }
 
 type dialer struct {
-	nextProxy *nextproxy.NextProxy
+	// dialTimeout 是拨号预算（含内嵌 DERP 的回环特例）。0 表示系统默认。
+	dialTimeout time.Duration
+	nextProxy   *nextproxy.NextProxy
 	// 只要设置了 nextProxy 就必须同时设置它；ICMP 的原始 socket 无法由 SOCKS5 承载，
 	// 两个都为空。
 	shouldProxy func(target string) bool
@@ -317,6 +337,18 @@ func (d *dialer) dialTarget(ctx context.Context, network, target string) (net.Co
 
 // 出站拨号的唯一实现，viaNextProxy 由调用方决定（按目标或按域名）；name 只用于日志。
 func (d *dialer) dialVia(ctx context.Context, network, target, name string, viaNextProxy bool) (net.Conn, string, error) {
+	// 内嵌 DERP 的本机回环（见 ProxyHandlerConfig.LocalDERPAddr）：这条流在握手阶段已确认
+	// "目标就是本服务端自己的 DERP 地址"，因此直接拨回环监听并跳过下面的 SSRF 判定与
+	// next proxy——目标不是客户端选定的，而是服务端自己配置的。
+	if addr, ok := localDERPDial(ctx); ok {
+		dialer := outboundDialer(d.dialTimeout, 0)
+		conn, err := dialer.DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, "", fmt.Errorf("dial the embedded DERP on %s: %w", addr, err)
+		}
+		return conn, addr, nil
+	}
+
 	if viaNextProxy && d.nextProxy != nil {
 		// 有意保留「把域名交给上游代理解析」的语义：被墙或仅代理侧可解析的域名正是
 		// next proxy 的用途，因此这里的检查只是尽力而为的早退，解析失败也放行。

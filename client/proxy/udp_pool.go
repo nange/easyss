@@ -187,13 +187,25 @@ func (p *udpPool) directFor(key string) (*directUDPConn, bool) {
 // acquireDirect 返回 key 对应的直连会话，不存在时拨号创建；created 为 true 时调用方必须为它
 // 启动读取循环。并发创建经 singleflight 去重，否则两个数据报会各自拨号，多出的 goroutine 泄漏。
 func (p *udpPool) acquireDirect(key, dst string) (*directUDPConn, bool, error) {
+	return p.acquireDirectWith(key, dst, p.opts.Dial)
+}
+
+// udpDialFunc 打开一条 UDP socket。会话池通过它把"直连"与"经 VPN 隧道"两条
+// 路径统一起来：两者的会话形状完全一样（一个 net.Conn 加一个读循环），只有拨号
+// 目标不同，因此不值得为隧道再复制一份池。
+type udpDialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// acquireDirectWith 与 acquireDirect 相同，只是用调用方给出的拨号函数。VPN
+// 路径用它把自己的拨号器（一次性目标头 + 隧道）接进同一套会话表、空闲回收与
+// 上限驱逐。
+func (p *udpPool) acquireDirectWith(key, dst string, dial udpDialFunc) (*directUDPConn, bool, error) {
 	if dc, ok := p.directFor(key); ok {
 		return dc, false, nil
 	}
 
 	v, err, shared := p.directSF.Do(key, func() (any, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), p.opts.DialTimeout)
-		rc, err := p.opts.Dial(ctx, "udp", dst)
+		rc, err := dial(ctx, "udp", dst)
 		cancel()
 		if err != nil {
 			return nil, err

@@ -22,7 +22,9 @@ import (
 	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	serverconfig "github.com/nange/easyss/v3/server/config"
+	"github.com/nange/easyss/v3/vpn"
 	"github.com/stretchr/testify/require"
+	"tailscale.com/types/key"
 )
 
 // logRecorder 捕获包级日志器的记录。server 包的用例不并行，替换包级日志器是安全的。
@@ -63,6 +65,22 @@ func captureServerLogs(t *testing.T) *logRecorder {
 	log.SetLogger(slog.New(rec))
 	t.Cleanup(func() { log.SetLogger(prev) })
 	return rec
+}
+
+// TestShutdownClosesEmbeddedDERP 固定 Shutdown 会显式收尾内嵌 DERP 中继：DERP 的连接全部
+// 是 Hijack 走的，而 http.Server.Shutdown 明确不管也不等待被 Hijack 的连接。少了这一步，
+// 中继的收发 goroutine 会一直留在进程里（服务端收到 SIGTERM 后不退出）。
+func TestShutdownClosesEmbeddedDERP(t *testing.T) {
+	s := &Server{derp: vpn.NewDERPServer(key.NewNode(), 0)}
+
+	require.NoError(t, s.Shutdown(context.Background()))
+	require.Nil(t, s.derp, "Shutdown must release the embedded DERP server")
+}
+
+// TestShutdownWithoutVPN 守护"未启用 VPN 时 Shutdown 行为不变"。
+func TestShutdownWithoutVPN(t *testing.T) {
+	s := &Server{}
+	require.NoError(t, s.Shutdown(context.Background()))
 }
 
 func TestCertmagicStoragePathForExecutable(t *testing.T) {
@@ -536,4 +554,39 @@ func TestServerUploadFlowControlInFlightPerStream(t *testing.T) {
 		"client must be able to fill the configured per-stream window before backpressure")
 	require.LessOrEqual(t, inFlight, window+512<<10,
 		"in-flight data must be bounded by the configured per-stream window")
+}
+
+// TestLoopbackListenAddr 固定 server.listen → 内嵌 DERP 回环拨号地址的推导与拒绝
+// 规则。DERP 与代理共用同一个 HTTPS 监听，而节点侧经隧道送来的 DERP 连接会被改拨
+// 到该监听的回环地址（见 handler.dialTarget），因此"监听在回环上不可达"必须是启动
+// 错误，而不是等到节点连不上中继才暴露。
+func TestLoopbackListenAddr(t *testing.T) {
+	for _, tc := range []struct {
+		listen string
+		want   string
+	}{
+		{":443", "127.0.0.1:443"},
+		{"0.0.0.0:8443", "127.0.0.1:8443"},
+		// v6 监听（含通配）一律用 v6 回环拨号：v6 socket 一定能接受 ::1，
+		// 而 127.0.0.1 在 bindv6only=1 的机器上会被拒。
+		{"[::]:8443", "[::1]:8443"},
+		{"127.0.0.1:9443", "127.0.0.1:9443"},
+		// 只绑 v6 回环时不能拨 v4 回环：那个监听根本不接受 127.0.0.1。
+		{"[::1]:9443", "[::1]:9443"},
+	} {
+		got, err := loopbackListenAddr(tc.listen)
+		if err != nil {
+			t.Errorf("loopbackListenAddr(%q): %v", tc.listen, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("loopbackListenAddr(%q) = %q, want %q", tc.listen, got, tc.want)
+		}
+	}
+
+	for _, listen := range []string{"203.0.113.5:443", "example.com:443", "8443", ""} {
+		if got, err := loopbackListenAddr(listen); err == nil {
+			t.Errorf("loopbackListenAddr(%q) = %q, want an error: the embedded DERP could not be reached on loopback", listen, got)
+		}
+	}
 }

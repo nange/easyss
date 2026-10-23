@@ -98,6 +98,12 @@ const (
 	TCPStreamBufferSize       = 15 * 1024 // 客户端，满档 3 帧/record
 	ServerTCPStreamBufferSize = 31 * 1024 // 服务端，满档 1 帧/record
 
+	// DERPPipeBufferSize 是 runner/derpdialer 交给 tailcat 的 DERP 连接的内存缓冲大小
+	// （每个方向各一份，见 util/netpipe）。它是"经中继的单流吞吐"的关键参数：吞吐 ≈
+	// 可用缓冲 / 端到端 RTT，太小会让背压打在 magicsock 那个 32 深、满了丢最旧的写
+	// 队列上，太大则把排队延迟搬进 VPN 路径——128KB 是实测曲线上的平台，不要调大。
+	DERPPipeBufferSize = 128 << 10
+
 	// 端点路径：代理只认这四个，其余路径返回 fallback HTML。
 	EndpointTCP   = "/v3/tcp"
 	EndpointUDP   = "/v3/udp"

@@ -50,6 +50,10 @@ func (s *session) tunUpViaHelper() error {
 	if core == nil || core.Client == nil {
 		return fmt.Errorf("client not initialized")
 	}
+	// 与直接创建路径（session.tunUp）同一道门禁：relay_only=false 的 VPN 不能与 TUN 同时生效。
+	if err := core.CheckVPNTunCompat(); err != nil {
+		return err
+	}
 
 	// 用临时 manager 构建 TunConfig 以取设备默认值；配置来自共享 builder，与直连路径同源。
 	tmpCfg := s.tunConfig()
