@@ -61,6 +61,9 @@ type transportSlot struct {
 	suspected      bool
 	probeLowCycles int
 	lastProbeAt    time.Time
+	// 探测判定该槽位无责后的静默截止时间，以及连续 inconclusive 的次数（退避用）。
+	probeHoldUntil time.Time
+	probeBackoff   int
 }
 
 // resetRotation 把连接作用域的状态清回"无连接"基线。expireAt 必须清零而不是设新截止时间：

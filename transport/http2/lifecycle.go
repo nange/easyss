@@ -203,6 +203,11 @@ func (lc *slotLifecycle) evaluateSlotHealth(idx int, s *transportSlot, interval 
 		s.lastBytes = s.bytesRecv.Load()
 		return
 	}
+	if time.Now().Before(s.probeHoldUntil) {
+		// 探测刚判定这条连接无责：慢吞吐只能归因于源站，推进基线且不累计慢周期。
+		s.lastBytes = s.bytesRecv.Load()
+		return
+	}
 
 	now := s.bytesRecv.Load()
 	perSec := int64(interval / time.Second)
@@ -259,13 +264,30 @@ func (lc *slotLifecycle) evaluateProbes(linkOK bool) {
 			if !s.suspected || s.degraded.Load() {
 				continue
 			}
-			if now.Sub(s.lastProbeAt) < config.ProbeCooldown {
+			if s.connIdentity() == nil {
+				// 被怀疑的连接已不在这一代（换代或槽位被回收过）：嫌疑失去对象，一并作废。
+				s.suspected = false
+				s.probeLowCycles = 0
+				s.probeBackoff = 0
+				continue
+			}
+			if now.Sub(s.lastProbeAt) < probeCooldown(s.probeBackoff) {
 				continue
 			}
 			lc.probeSlot(i, s, now)
 			probed++
 		}
 	}
+}
+
+// probeCooldown 让得不出结论的探测按连续次数翻倍退避：非 200 与传输错误都会一直得不出
+// 结论，只有 ProbeCooldown 的话同一槽位会无限重试。
+func probeCooldown(backoff int) time.Duration {
+	d := config.ProbeCooldown
+	for range min(backoff, 32) {
+		d = min(d*2, config.ProbeMaxBackoff)
+	}
+	return d
 }
 
 // unsupported 累计两次才回退为仅被动检测：单次可能是服务端的瞬时故障。
@@ -276,11 +298,18 @@ func (lc *slotLifecycle) probeSlot(idx int, s *transportSlot, now time.Time) {
 	speed, verdict := lc.probeFunc(ctx, s)
 	s.lastProbeAt = now
 	stats.RecordSlotProbe()
+	// 退避只累计连续的"得不出结论"。
+	if verdict == probeInconclusive {
+		s.probeBackoff++
+	} else {
+		s.probeBackoff = 0
+	}
 
 	switch verdict {
 	case probeFast:
 		s.probeLowCycles = 0
 		s.suspected = false
+		s.probeHoldUntil = now.Add(config.ProbeHoldWindow)
 		// 链路参考值是近期最佳吞吐量，只从 fast 探测刷新。
 		if speed > lc.linkRefSpeed || now.Sub(lc.linkRefAt) > config.ProbeLinkRefWindow {
 			lc.linkRefSpeed = speed
@@ -292,6 +321,7 @@ func (lc *slotLifecycle) probeSlot(idx int, s *transportSlot, now time.Time) {
 			lc.linkRefSpeed < float64(config.DegradedThroughputThreshold) {
 			s.probeLowCycles = 0
 			s.suspected = false
+			s.probeHoldUntil = now.Add(config.ProbeHoldWindow)
 			return
 		}
 		stats.RecordSlotProbeSlow()

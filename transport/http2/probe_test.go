@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync/atomic"
 	"testing"
 
@@ -52,7 +53,7 @@ func newProbeSlot() *transportSlot {
 		ForceAttemptHTTP2: true,
 		MaxConnsPerHost:   1,
 	}
-	return slotWithPool(tr)
+	return probeSlotWithPool(tr)
 }
 
 func TestSlotProberFast(t *testing.T) {
@@ -93,6 +94,28 @@ func TestSlotProberSlowOnEmptyBody(t *testing.T) {
 	}
 	if speed != 0 {
 		t.Fatalf("speed = %v, want 0", speed)
+	}
+}
+
+// 载荷没送达完就不是健康证据：截断后按剩余字节算出的吞吐不可比，服务端提前结束这条流
+// （RST_STREAM）会把最快的首块当成整段载荷的速度。
+func TestSlotProberTruncatedPayloadIsSlow(t *testing.T) {
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", strconv.Itoa(testProbePayloadSize))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(make([]byte, 1024)) // 只写出前 1KB，随后结束这条流
+		_ = http.NewResponseController(w).Flush()
+	}))
+	ts.EnableHTTP2 = true
+	ts.StartTLS()
+	t.Cleanup(ts.Close)
+	prober := &slotProber{serverURL: ts.URL, token: "unused", payloadSize: testProbePayloadSize}
+
+	speed, verdict := prober.probe(context.Background(), newProbeSlot())
+
+	if verdict != probeSlow {
+		t.Fatalf("verdict = %v (speed %v), want probeSlow for a truncated payload", verdict, speed)
 	}
 }
 
@@ -138,6 +161,32 @@ func TestSlotProberInconclusiveOnDialError(t *testing.T) {
 
 	if verdict != probeInconclusive {
 		t.Fatalf("verdict = %v, want probeInconclusive", verdict)
+	}
+}
+
+// TestSlotProberWithoutConnectionCannotJudge 是 alive 那条不变量的另一半：这一代没有连接时
+// 吞吐探测同样不得白拨一条，否则结论属于另一条连接。
+func TestSlotProberWithoutConnectionCannotJudge(t *testing.T) {
+	ts, token := newProbeServer(t)
+	prober := &slotProber{serverURL: ts.URL, token: token, payloadSize: testProbePayloadSize}
+
+	var dials atomic.Int32
+	s := slotWithPool(&http.Transport{
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // 测试服务器证书
+		ForceAttemptHTTP2: true,
+		MaxConnsPerHost:   1,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dials.Add(1)
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		},
+	})
+	// gen.conn 保持为空：这一代的连接已经不在了。
+
+	if _, verdict := prober.probe(context.Background(), s); verdict != probeInconclusive {
+		t.Fatalf("verdict = %v, want probeInconclusive without a connection", verdict)
+	}
+	if got := dials.Load(); got != 0 {
+		t.Fatalf("dials = %d, want 0: a generation without a connection must not be dialed", got)
 	}
 }
 

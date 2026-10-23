@@ -73,10 +73,17 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 	req.Header.Set("Cache-Control", "no-store")
 	req.Header.Set("User-Agent", chromeUserAgent())
 
+	// 与 alive 同一条不变量：这一代已无连接时不得白拨一条——那会得出关于另一条连接的
+	// 吞吐结论，连接还会滞留在无人引用的池里。
+	gen := slot.generation()
+	if gen == nil || gen.conn.Load() == nil {
+		return 0, probeInconclusive
+	}
+
 	// 必须在发起请求之前打点：客户端读循环与 RoundTrip 是并发的，连接上还有别的流时载荷
 	// 可能已被缓冲进管道，把基准放在 RoundTrip 之后只会量到微秒级的取块时间。
 	ttfbStart := time.Now()
-	resp, err := slot.transport().RoundTrip(req)
+	resp, err := gen.tr.RoundTrip(req)
 	if err != nil {
 		return 0, probeInconclusive
 	}
@@ -114,13 +121,13 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 			}
 		}
 		if rErr != nil {
-			break // EOF、超时或连接错误：按已到达的字节数计量
+			break // EOF、超时或 RST 都算结束，是否送达完整由长度判定
 		}
 	}
 
-	if total == 0 {
-		// 探测超时内没有字节到达或被立即截断：正常链路上 128KB 首批字节远在 3 秒内
-		// 到达，因此算作慢的证据。
+	if total < p.payloadSize {
+		// 载荷没有完整送达（读超时、中途 RST 或截断）：部分字节算出的吞吐不可比，一条在
+		// 探测期间都没能传完载荷的连接也不是健康证据。
 		return 0, probeSlow
 	}
 

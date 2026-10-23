@@ -71,6 +71,13 @@ const (
 	ProbeMaxPerInterval = 2                // 每个健康周期最多探测数
 	ProbeLinkRefWindow  = 60 * time.Second // 链路参考速度有效窗口
 
+	// ProbeHoldWindow 是探测判定"该槽位无责"（连接健康，或整条链路都慢）后的静默期：
+	// 被动低速量到的是源站吞吐，慢源站会稳定复现，没有静默期同一槽位会按 ProbeCooldown
+	// 的节拍无限重探。
+	ProbeHoldWindow = 60 * time.Second
+	// ProbeMaxBackoff 是"探测得不出结论"时的最大重试间隔（按连续次数翻倍退避）。
+	ProbeMaxBackoff = 10 * time.Minute
+
 	// 挂起复核：墙上时钟推进与单调钟推进之差即挂起时长，超阈值只把槽位标记为待复核，
 	// 绝不关闭连接——判据有假阳性，判死权留给开流前的一次真实往返。
 	SuspendDivergenceThreshold = 30 * time.Second

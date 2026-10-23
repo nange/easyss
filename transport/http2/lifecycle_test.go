@@ -119,13 +119,13 @@ func TestEvaluateSlotHealth(t *testing.T) {
 	})
 }
 
-// newTestLifecycle 在 n 个存活槽位上构建生命周期，并给定探测函数
-// （nil 表示禁用探测）。全部 n 个槽位都位于 priority 池（bulk 池保持为空），
-// 因此测试以 priority.slots[i] 访问它们。
+// newTestLifecycle 在 n 个存活槽位上构建生命周期，并给定探测函数（nil 表示禁用探测）。
+// 全部 n 个槽位都位于 priority 池（bulk 池保持为空），因此测试以 priority.slots[i] 访问它们。
+// 槽位带占位连接身份（探测在这一代无连接时不拨号）；无连接的情形见 TestProbeSkippedWithoutConnection。
 func newTestLifecycle(n int, probe func(context.Context, *transportSlot) (float64, probeVerdict)) (*slotLifecycle, *slotScheduler) {
 	slots := make([]*transportSlot, n)
 	for i := range slots {
-		slots[i] = slotWithPool(&http.Transport{})
+		slots[i] = probeSlotWithPool(&http.Transport{})
 	}
 	sch := &slotScheduler{
 		priority: &slotPool{
@@ -134,7 +134,7 @@ func newTestLifecycle(n int, probe func(context.Context, *transportSlot) (float6
 			base:     8,
 		},
 		bulk: &slotPool{
-			slots:    []*transportSlot{slotWithPool(&http.Transport{})},
+			slots:    []*transportSlot{probeSlotWithPool(&http.Transport{})},
 			maxSlots: 1,
 			base:     16,
 		},
@@ -253,6 +253,50 @@ func TestProbeFastClearsSuspicion(t *testing.T) {
 	}
 }
 
+// 探测判定连接无责后，被动低速在静默期内不得再次起疑：慢源站会稳定复现，否则同一槽位会按
+// ProbeCooldown 的节拍无限重探。
+func TestProbeHoldOffResuspicion(t *testing.T) {
+	interval := config.HealthCheckInterval
+	lc, sch := newTestLifecycle(1, func(context.Context, *transportSlot) (float64, probeVerdict) {
+		return 10 * 1024 * 1024, probeFast
+	})
+	s := sch.priority.slots[0]
+	s.heavy.Store(1)
+
+	low := func() {
+		s.bytesRecv.Add(10 * 1024)
+		lc.evaluateSlotHealth(0, s, interval, true)
+	}
+
+	low() // 基线重置
+	for range config.DegradedPersistCycles {
+		low()
+	}
+	if !s.suspected {
+		t.Fatal("expected suspicion before the probe")
+	}
+
+	lc.evaluateProbes(true)
+	if s.suspected {
+		t.Fatal("fast probe must clear suspicion")
+	}
+
+	for range config.DegradedPersistCycles + 1 {
+		low()
+	}
+	if s.suspected {
+		t.Fatal("slow throughput inside the hold must not re-arm suspicion")
+	}
+
+	s.probeHoldUntil = time.Now().Add(-time.Second)
+	for range config.DegradedPersistCycles {
+		low()
+	}
+	if !s.suspected {
+		t.Fatal("expected suspicion once the hold expired")
+	}
+}
+
 func TestProbeSlowRespectsLinkReference(t *testing.T) {
 	lc, sch := newTestLifecycle(1, func(context.Context, *transportSlot) (float64, probeVerdict) {
 		return 30 * 1024, probeSlow
@@ -350,6 +394,65 @@ func TestProbeCooldown(t *testing.T) {
 	}
 }
 
+// 得不出结论的探测按连续次数退避：只有 ProbeCooldown 的话同一槽位会无限重试。
+func TestProbeInconclusiveBacksOff(t *testing.T) {
+	lc, sch := newTestLifecycle(1, func(context.Context, *transportSlot) (float64, probeVerdict) {
+		return 0, probeInconclusive
+	})
+	s := sch.priority.slots[0]
+	s.suspected = true
+
+	lc.evaluateProbes(true)
+	if s.probeBackoff != 1 {
+		t.Fatalf("probeBackoff = %d after one inconclusive probe, want 1", s.probeBackoff)
+	}
+	if !s.suspected {
+		t.Fatal("an inconclusive probe must keep suspicion")
+	}
+
+	// 退避期内即使已过 ProbeCooldown 也不得重试。
+	calls := 0
+	lc.probeFunc = func(context.Context, *transportSlot) (float64, probeVerdict) {
+		calls++
+		return 0, probeInconclusive
+	}
+	s.lastProbeAt = time.Now().Add(-config.ProbeCooldown)
+	lc.evaluateProbes(true)
+	if calls != 0 {
+		t.Fatalf("probe calls = %d inside the backoff, want 0", calls)
+	}
+
+	// 退避到期后重试，退避继续翻倍。
+	s.lastProbeAt = time.Now().Add(-2 * config.ProbeCooldown)
+	lc.evaluateProbes(true)
+	if calls != 1 || s.probeBackoff != 2 {
+		t.Fatalf("calls = %d, probeBackoff = %d, want 1/2", calls, s.probeBackoff)
+	}
+
+	// 结论性判决把退避清零。
+	lc.probeFunc = func(context.Context, *transportSlot) (float64, probeVerdict) {
+		return 10 * 1024 * 1024, probeFast
+	}
+	s.lastProbeAt = time.Time{}
+	s.suspected = true
+	lc.evaluateProbes(true)
+	if s.probeBackoff != 0 {
+		t.Fatalf("probeBackoff = %d after a conclusive verdict, want 0", s.probeBackoff)
+	}
+}
+
+func TestProbeCooldownBackoffCap(t *testing.T) {
+	if got := probeCooldown(0); got != config.ProbeCooldown {
+		t.Fatalf("probeCooldown(0) = %v, want %v", got, config.ProbeCooldown)
+	}
+	if got := probeCooldown(1); got != 2*config.ProbeCooldown {
+		t.Fatalf("probeCooldown(1) = %v, want %v", got, 2*config.ProbeCooldown)
+	}
+	if got := probeCooldown(64); got != config.ProbeMaxBackoff {
+		t.Fatalf("probeCooldown(64) = %v, want the cap %v", got, config.ProbeMaxBackoff)
+	}
+}
+
 func TestProbeMaxPerInterval(t *testing.T) {
 	calls := 0
 	lc, sch := newTestLifecycle(3, func(context.Context, *transportSlot) (float64, probeVerdict) {
@@ -367,6 +470,28 @@ func TestProbeMaxPerInterval(t *testing.T) {
 	}
 	if sch.priority.slots[2].probeLowCycles != 0 {
 		t.Fatal("the third suspect must wait for the next tick")
+	}
+}
+
+// 被怀疑的连接已不在这一代时不得探测：判据是连接作用域的，嫌疑随连接一起作废。
+func TestProbeSkippedWithoutConnection(t *testing.T) {
+	calls := 0
+	lc, sch := newTestLifecycle(1, func(context.Context, *transportSlot) (float64, probeVerdict) {
+		calls++
+		return 10 * 1024 * 1024, probeFast
+	})
+	s := sch.priority.slots[0]
+	s.generation().conn.Store(nil) // 这一代的连接已经不在了
+	s.suspected = true
+	s.probeLowCycles = 1
+
+	lc.evaluateProbes(true)
+
+	if calls != 0 {
+		t.Fatalf("probe calls = %d without a connection, want 0", calls)
+	}
+	if s.suspected || s.probeLowCycles != 0 {
+		t.Fatal("stale suspicion must be dropped together with its connection")
 	}
 }
 
