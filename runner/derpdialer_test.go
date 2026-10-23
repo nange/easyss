@@ -26,15 +26,18 @@ type fakeTransport struct {
 	peer net.Conn
 }
 
+// Open 先发布对端再发信号：测试在收到 opened 之后立刻读 peerConn，反过来会让它在
+// 两者之间看到 nil（Windows 的调度下必现）。
 func (f *fakeTransport) Open(_ context.Context, req transport.OpenRequest) (transport.Stream, error) {
-	select {
-	case f.opened <- req:
-	default:
-	}
 	local, remote := net.Pipe()
 	f.mu.Lock()
 	f.peer = remote
 	f.mu.Unlock()
+
+	select {
+	case f.opened <- req:
+	default:
+	}
 	return pipeStream{Conn: local}, nil
 }
 
