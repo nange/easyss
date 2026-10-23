@@ -1541,7 +1541,7 @@ func TestDNSSessionRebindFailureLogsActualPath(t *testing.T) {
 	defer rec.mu.Unlock()
 	var found bool
 	for _, r := range rec.records {
-		if !strings.HasPrefix(r.Message, "[UDP_DNS]") {
+		if r.Level != slog.LevelInfo || !strings.HasPrefix(r.Message, "[UDP_DNS]") {
 			continue
 		}
 		attrs := attrsOf(r)
@@ -1559,6 +1559,21 @@ func TestDNSSessionRebindFailureLogsActualPath(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no [UDP_DNS] record for the query")
+	}
+
+	// 重绑正是"同一会话出现第二个域名"的场景，Warn 必须带上触发它的 QNAME。
+	var warnFound bool
+	for _, r := range rec.records {
+		if r.Level != slog.LevelWarn || !strings.HasPrefix(r.Message, "[UDP_DNS] rebind upstream failed") {
+			continue
+		}
+		warnFound = true
+		if got := attrsOf(r)["domain"]; got != "mtalk.google.com" {
+			t.Fatalf("rebind warn domain = %q, want the query that asked for the new route", got)
+		}
+	}
+	if !warnFound {
+		t.Fatal("no rebind failure warn")
 	}
 }
 
@@ -1726,54 +1741,33 @@ func TestUDPUpstreamConnectedLogFields(t *testing.T) {
 	if _, ok := direct["proxy"]; ok {
 		t.Fatalf("the direct record must not carry a proxy: %v", direct)
 	}
+
+	// 成功路径不能再补一条"首查命中代理"的 Info：字段与连接日志重复，只有路由变化值得记录。
+	dnsRecords := infoRecordsWith(rec, "[UDP_DNS]")
+	if len(dnsRecords) != 1 {
+		t.Fatalf("[UDP_DNS] Info records = %d, want 1 (the route change only)", len(dnsRecords))
+	}
+	if attrsOf(dnsRecords[0])["route_changed"] != "true" {
+		t.Fatalf("the only [UDP_DNS] record must be the route change: %v", attrsOf(dnsRecords[0]))
+	}
 }
 
-// 防回归：首条查询命中代理时 [UDP_DNS] 必须是 Info——拨号失败不会有 [UDP] upstream
-// connected 说明原因；同一会话后续同路由查询留在 Debug，不随查询数增长。
-// 必须串行：它替换进程级 logger，与同包并行测试同时运行会互相吞掉日志。
-func TestDNSSessionFirstProxiedQueryLogsInfoOnce(t *testing.T) {
-	rec := &recordingHandler{}
-	prev := log.Logger()
-	log.SetLogger(slog.New(rec))
-	t.Cleanup(func() { log.SetLogger(prev) })
-
-	router := &fakeDNSRouter{
-		proxyDomain: "google",
-		proxyConns:  []net.Conn{newDNSTargetConn(), newDNSTargetConn()},
-		directConns: []net.Conn{newDNSTargetConn()},
-	}
+// 首拨失败没有连接日志可看，QNAME 必须随错误进入结果日志，否则只剩一条没有域名的错误。
+func TestDNSSessionFirstDialFailureCarriesDomain(t *testing.T) {
+	// 没有预置连接：命中代理的拨号必然失败。
+	router := &fakeDNSRouter{proxyDomain: "google"}
 	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
 	s.dns.router = router
 	t.Cleanup(s.close)
 
-	for _, domain := range []string{"mtalk.google.com", "www.google.com"} {
-		if _, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, domain))); err != nil {
-			t.Fatalf("observeClientFrame(%s): %v", domain, err)
-		}
+	_, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "mtalk.google.com")))
+	if err == nil {
+		t.Fatal("a failed first dial must end the session")
 	}
-
-	records := infoRecordsWith(rec, "[UDP_DNS]")
-	if len(records) != 1 {
-		t.Fatalf("[UDP_DNS] Info records = %d, want 1 (only the first query of a session)", len(records))
+	if !strings.Contains(err.Error(), "mtalk.google.com") {
+		t.Fatalf("error = %q, want the QNAME for attribution", err)
 	}
-	first := attrsOf(records[0])
-	if first["domain"] != "mtalk.google.com" || first["via_next_proxy"] != "true" {
-		t.Fatalf("first query attrs = %v", first)
-	}
-	if _, ok := first["route_changed"]; ok {
-		t.Fatalf("the first query must not claim route_changed: %v", first)
-	}
-
-	// 直连查询会触发重绑，route_changed 的 Info 不能被首查规则吞掉。
-	if _, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "api.github.com"))); err != nil {
-		t.Fatalf("observeClientFrame(api.github.com): %v", err)
-	}
-	records = infoRecordsWith(rec, "[UDP_DNS]")
-	if len(records) != 2 {
-		t.Fatalf("[UDP_DNS] Info records = %d, want 2 after a route change", len(records))
-	}
-	changed := attrsOf(records[1])
-	if changed["route_changed"] != "true" || changed["via_next_proxy"] != "false" {
-		t.Fatalf("route change attrs = %v", changed)
+	if !strings.Contains(err.Error(), "no more connections for route") {
+		t.Fatalf("error = %q, the dial error must stay wrapped and readable", err)
 	}
 }

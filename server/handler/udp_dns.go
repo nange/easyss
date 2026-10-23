@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -98,6 +99,10 @@ func (s *udpSession) dialRoute(ctx context.Context, domain string, route dnsRout
 func (s *udpSession) openUpstream(ctx context.Context, domain string, route dnsRoute) error {
 	conn, remote, err := s.dialRoute(ctx, domain, route)
 	if err != nil {
+		// 首拨失败没有连接日志可看，QNAME 只能随错误进结果日志；非 DNS 会话没有域名。
+		if domain != "" {
+			return fmt.Errorf("dns upstream dial for %q: %w", domain, err)
+		}
 		return err
 	}
 	s.installUpstream(conn, remote, route, s.readerRunning)
@@ -113,6 +118,7 @@ func (s *udpSession) rebindRoute(domain string, route dnsRoute) {
 		s.dns.rebindFailedAt = time.Now()
 		log.Warn("[UDP_DNS] rebind upstream failed, keeping the current route",
 			"target", s.target,
+			"domain", domain,
 			"want_via_next_proxy", route.viaNextProxy(),
 			"retry_after", rebindCooldown.String(),
 			"err", err)
@@ -229,12 +235,6 @@ func (s *udpSession) logDNSRoute(domain string, want dnsRoute, changed bool) {
 	}
 	if changed {
 		attrs = append(attrs, "route_changed", true)
-		log.Info("[UDP_DNS]", attrs...)
-		return
-	}
-	// 首条查询就命中代理时还没有连接：拨号失败不会有 [UDP] upstream connected 说明原因，
-	// 而"解析器没变、是域名规则要求走代理"正是最需要解释的情形。成功后 !hasConn 不再成立。
-	if !hasConn && want.viaNextProxy() {
 		log.Info("[UDP_DNS]", attrs...)
 		return
 	}
