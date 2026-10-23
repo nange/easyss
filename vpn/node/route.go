@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	tailcat "github.com/tailscale/tailcat"
 	"github.com/things-go/go-socks5/statute"
 
 	"github.com/nange/easyss/v3/config"
@@ -207,19 +208,29 @@ type targetHeaderConn struct {
 }
 
 func (c *targetHeaderConn) Write(p []byte) (int, error) {
+	// 载荷超过隧道的单包上限时对端收不到完整数据报（见 tailcat.MaxUDPPayload）；在这里
+	// 明确拒绝并记一条日志（调用方对写入错误只记 Debug，这条需要可行动），而不是交给
+	// 隧道截断或分片后由对端悄悄丢弃。
+	if len(p) > tailcat.MaxUDPPayload {
+		log.Warn("[VPN] dropping an oversized UDP datagram", "payload", len(p), "limit", tailcat.MaxUDPPayload)
+		return 0, fmt.Errorf("vpn: UDP payload of %d bytes exceeds the tunnel limit of %d", len(p), tailcat.MaxUDPPayload)
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.sent {
 		return c.Conn.Write(p)
 	}
-	c.sent = true
 
 	buf := make([]byte, 0, len(c.header)+len(p))
 	buf = append(buf, c.header...)
 	buf = append(buf, p...)
 	if _, err := c.Conn.Write(buf); err != nil {
+		// 首包失败时不能标记已发：否则这条流之后的每个数据报都不带目标头，对端会一直
+		// 拒绝，直到会话池按空闲把它回收。
 		return 0, err
 	}
+	c.sent = true
 	return len(p), nil
 }

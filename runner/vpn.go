@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"runtime"
 	"strings"
@@ -86,8 +87,8 @@ func (s *vpnStack) close() error {
 }
 
 // startVPN 建立本节点的 VPN 栈，必须由 Run 在创建本地代理入口之前调用（SOCKS5 要把返回的 route 注入分流策略）。
-// relay_only 的强制只能在这里做：magicsock 建 socket 时读进程级开关，Server/Client 起来后再改对已绑定的 socket 无效。
-// derpDialer 让 DERP 连接经 easyss 隧道送出（内嵌 DERP 只接待回环来源）；失败时自行回收已建部分。
+// relay_only 的强制只能在这里做：它落到 tailscale 的进程级开关，而 tailcat 的 Client 引擎在首次拨号时才创建，
+// 运行期再改会同时影响同进程内其它引擎且对已绑定 socket 无效；derpDialer 让 DERP 连接经 easyss 隧道送出。
 func startVPN(cfg *clientconfig.ClientConfig, timeouts config.Timeouts, paths vpnPaths, tunWanted bool,
 	derpDialer func(ctx context.Context, network, addr string) (net.Conn, error)) (*vpnStack, error) {
 	opts, err := vpnOptions(cfg)
@@ -144,12 +145,12 @@ func startVPN(cfg *clientconfig.ClientConfig, timeouts config.Timeouts, paths vp
 		peers:     len(nc.Peers),
 	}
 	if err := face.Start(context.Background()); err != nil {
-		_ = stack.close()
+		closeVPNStackWithin(stack)
 		return nil, err
 	}
 	// 地址必须在启动成功之后才发布：先写文件再启动会让"文件存在但进程起不来"看起来像部署成功。
 	if _, err := face.PublishAddr(paths.peerAddr); err != nil {
-		_ = stack.close()
+		closeVPNStackWithin(stack)
 		return nil, err
 	}
 
@@ -160,14 +161,14 @@ func startVPN(cfg *clientconfig.ClientConfig, timeouts config.Timeouts, paths vp
 		DERPOnly:   relayOnly,
 	})
 	if err != nil {
-		_ = stack.close()
+		closeVPNStackWithin(stack)
 		return nil, err
 	}
 	stack.clients = clients
 
 	overlay, err := vpnnode.Assign(nc.Overlay, nc.Peers)
 	if err != nil {
-		_ = stack.close()
+		closeVPNStackWithin(stack)
 		return nil, err
 	}
 	route, err := vpnnode.NewRoute(vpnnode.RouteOptions{
@@ -176,7 +177,7 @@ func startVPN(cfg *clientconfig.ClientConfig, timeouts config.Timeouts, paths vp
 		Timeouts: timeouts,
 	})
 	if err != nil {
-		_ = stack.close()
+		closeVPNStackWithin(stack)
 		return nil, err
 	}
 	stack.route = route
@@ -246,8 +247,29 @@ func warnOnSingleLabelPeerNames(goos string, peers []vpnnode.PeerRef) {
 // 是进程永不退出，或切换服务器无反应。它是变量，供测试缩小到毫秒级。
 var vpnCloseTimeout = 10 * time.Second
 
-// closeVPNStack 是 StopVPN 实际执行的关闭体；它是变量，供测试注入永不返回的关闭过程以验证超时路径。
+// closeVPNStack 是 vpnStack 实际执行的关闭体；它是变量，供测试注入永不返回的关闭过程以验证超时路径。
 var closeVPNStack = func(stack *vpnStack) error { return stack.close() }
+
+// closeVPNStackWithin 在 vpnCloseTimeout 内关闭 stack。关闭链可能永久阻塞（见上面的说明），
+// 因此启动失败的回收与退出/切换共用同一层兜底：调用方永远能往下走。
+func closeVPNStackWithin(stack *vpnStack) {
+	// 关闭体在派发前捕获：goroutine 不读包级变量，测试替换注入点时不必与残留 goroutine 竞争。
+	closeFn := closeVPNStack
+	done := make(chan error, 1)
+	go func() { done <- closeFn(stack) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			log.Warn("[VPN] close stack", "err", err)
+		}
+	case <-time.After(vpnCloseTimeout):
+		// 放弃等待但不放弃告知：卡住的引擎仍占着内存与 DERP 连接，切换路径上会留到用户重启。
+		log.Error("[VPN] close timed out; abandoning this vpn stack",
+			"timeout", vpnCloseTimeout,
+			"hint", "restart easyss if the vpn or server switching misbehaves")
+	}
+}
 
 // StopVPN 停止本节点的 VPN（对端面与全部隧道客户端），幂等，未启用 VPN 时是空操作。
 // 关闭在后台进行且最多等 vpnCloseTimeout：关闭卡死时不能让退出/切换序列跟着卡住。
@@ -257,23 +279,7 @@ func (c *Core) StopVPN() {
 	if stack == nil {
 		return
 	}
-
-	// 关闭体在派发前捕获：goroutine 不读包级变量，测试替换注入点时不必与残留 goroutine 竞争。
-	closeFn := closeVPNStack
-	done := make(chan error, 1)
-	go func() { done <- closeFn(stack) }()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			log.Warn("[VPN] stop", "err", err)
-		}
-	case <-time.After(vpnCloseTimeout):
-		// 放弃等待但不放弃告知：卡住的引擎仍占着内存与 DERP 连接，切换路径上会留到用户重启。
-		log.Error("[VPN] stop timed out; abandoning this vpn stack",
-			"timeout", vpnCloseTimeout,
-			"hint", "restart easyss if the vpn or server switching misbehaves")
-	}
+	closeVPNStackWithin(stack)
 }
 
 // CheckVPNTunCompat 报告当前能否为本会话启用 TUN。唯一冲突是 relay_only=false 下的节点间直连：
@@ -326,6 +332,9 @@ type VPNIdentity struct {
 	TailcatAddr string
 	// DERPNodes 是地址里内嵌的中继节点（host:port，配置顺序），不是秘密。
 	DERPNodes []string
+	// HasNodeIdentity 报告身份文件是否可读。它为 false 时地址必然不可用（AddrErr 给出原因）；
+	// 它为 true 时地址仍可能因中继列表推不出来而为空。
+	HasNodeIdentity bool
 	// AddrErr 是推导本节点地址失败的原因；此时 ClientNodeKey 仍然有效（它不依赖任何配置）。
 	AddrErr error
 }
@@ -346,7 +355,8 @@ const (
 type VPNRegenOptions struct {
 	// Kinds 要重新生成的身份。为零表示调用方没有指定，由命令行层决定"两个都换"。
 	Kinds VPNKeyKind
-	// DryRun 只推导并返回**将要**生成的身份，不写任何文件（落盘后旧身份只剩备份文件可回滚）。
+	// DryRun 只预览一份新身份，不写任何文件（落盘后旧身份只剩备份文件可回滚）。密钥是每次
+	// 调用现生成的，因此预览值不会与随后真写的身份相同，不能直接分发给对端。
 	DryRun bool
 }
 
@@ -354,7 +364,7 @@ type VPNRegenOptions struct {
 // Old* 三个字段在 DryRun 下是即将被替换的当前值，真写时是替换前的实际内容——对端配置里
 // 写的正是它。
 type VPNRegenResult struct {
-	// Identity 是生成后的身份（DryRun 下是"将要生效"的那个）。
+	// Identity 是生成后的身份（DryRun 下只是一份预览，不是将要落盘的字节）。
 	Identity *VPNIdentity
 	// OldClientNodeKey / OldTailcatAddr 是替换前的身份，不存在时为空。
 	OldClientNodeKey string
@@ -380,8 +390,29 @@ func RegenerateVPNIdentity(cfg *clientconfig.ClientConfig, opts VPNRegenOptions)
 func regenerateVPNIdentity(cfg *clientconfig.ClientConfig, paths vpnPaths, opts VPNRegenOptions) (*VPNRegenResult, error) {
 	res := &VPNRegenResult{DryRun: opts.DryRun, Backups: map[string]string{}}
 
-	// 旧值必须先读出来：LoadOrCreate* 会顺手生成缺失的文件，覆盖之后再读只能读到新值。
-	oldID, err := loadVPNIdentity(cfg, paths)
+	// 旧值按只读路径取出：LoadOrCreate* 会补建缺失的身份文件，而 --dry-run 的契约是
+	// 不写任何文件；缺失的那一半在旧值里就是空（对端配置里也还没有它）。
+	oldClientKey, err := vpn.LoadKey(paths.clientKey)
+	switch {
+	case err == nil:
+	case errors.Is(err, fs.ErrNotExist):
+		oldClientKey = key.NodePrivate{}
+	default:
+		return nil, err
+	}
+	oldNodeIdentity, err := vpnnode.LoadNodeIdentity(paths.nodeIdentity)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		// 不换身份时坏文件必须原样报出去；要换身份时它不是致命错误——重新生成正是修复它的方式。
+		if opts.Kinds&RegenNodeIdentity == 0 {
+			return nil, err
+		}
+		oldNodeIdentity = nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		oldNodeIdentity = nil
+	}
+
+	oldID, err := deriveVPNIdentity(cfg, oldClientKey, oldNodeIdentity)
 	if err != nil {
 		return nil, err
 	}
@@ -396,21 +427,30 @@ func regenerateVPNIdentity(cfg *clientconfig.ClientConfig, paths vpnPaths, opts 
 	}
 
 	// 没被换掉的那一半保留当前值参与推导（地址与 nodekey 是两个独立输入），换掉的那一半直接用
-	// 新生成的那份，使返回的身份与写进文件的字节同源。
-	clientKey, err := vpn.LoadOrCreateKey(paths.clientKey)
-	if err != nil {
-		return nil, err
-	}
-	nodeIdentity, nodeIdentityErr := vpnnode.LoadOrCreateNodeIdentityFile(paths.nodeIdentity)
-	if nodeIdentityErr != nil && newIdentity == nil {
-		// 不换身份时坏文件必须原样报出去；要换身份时它不是致命错误——重新生成正是修复它的方式。
-		return nil, nodeIdentityErr
-	}
-	if opts.Kinds&RegenClientKey != 0 {
+	// 新生成的那份，使返回的身份与写进文件的字节同源。缺失时按真写路径的语义补建：真写走
+	// LoadOrCreate 落盘，dry-run 只在内存里生成一份（写文件是 --dry-run 明确排除的副作用）。
+	clientKey := oldClientKey
+	switch {
+	case opts.Kinds&RegenClientKey != 0:
 		clientKey = newClientKey
+	case clientKey.IsZero():
+		if opts.DryRun {
+			clientKey = newClientKey
+		} else if clientKey, err = vpn.LoadOrCreateKey(paths.clientKey); err != nil {
+			return nil, err
+		}
 	}
-	if newIdentity != nil {
+
+	nodeIdentity := oldNodeIdentity
+	switch {
+	case newIdentity != nil:
 		nodeIdentity = newIdentity
+	case nodeIdentity == nil:
+		if opts.DryRun {
+			nodeIdentity = vpnnode.NewNodeIdentity()
+		} else if nodeIdentity, err = vpnnode.LoadOrCreateNodeIdentity(paths.nodeIdentity); err != nil {
+			return nil, err
+		}
 	}
 
 	id, err := deriveVPNIdentity(cfg, clientKey, nodeIdentity)
@@ -438,6 +478,11 @@ func regenerateVPNIdentity(cfg *clientconfig.ClientConfig, paths vpnPaths, opts 
 		}
 		res.recordBackup(paths.nodeIdentity, backup)
 		res.Replaced |= RegenNodeIdentity
+		// 地址文件是运维抄给对端的来源，必须与新身份一致：地址是 (身份, 中继集合) 的纯函数，
+		// 不重写就会留着一份内嵌旧 preshared key 的地址，而旧的私钥只剩 .bak。
+		if err := vpnnode.WritePeerAddr(paths.peerAddr, id.TailcatAddr); err != nil {
+			return res, err
+		}
 	}
 	return res, nil
 }
@@ -474,7 +519,11 @@ func loadVPNIdentity(cfg *clientconfig.ClientConfig, paths vpnPaths) (*VPNIdenti
 // （文件缺失或损坏）时地址不可用，nodekey 照常返回。地址是 (身份, DERP 节点列表) 的函数，与
 // peers/overlay/peer_port 无关，因此不经过 vpnnode.NewConfig、也不做"当前服务端在列表里"的门禁（见 vpnOptions）。
 func deriveVPNIdentity(cfg *clientconfig.ClientConfig, clientKey key.NodePrivate, nodeIdentity *vpnnode.NodeIdentity) (*VPNIdentity, error) {
-	id := &VPNIdentity{ClientNodeKey: clientKey.Public().String()}
+	// 零值 key 表示"没有身份文件"（--dry-run 的只读旧值路径），此时 nodekey 不可打印。
+	id := &VPNIdentity{HasNodeIdentity: nodeIdentity != nil}
+	if !clientKey.IsZero() {
+		id.ClientNodeKey = clientKey.Public().String()
+	}
 
 	derpAddrs := cfg.VPNDERPAddrs()
 	if len(derpAddrs) == 0 {

@@ -33,6 +33,28 @@ func requirePerm(t *testing.T, what, path string, want os.FileMode) {
 	}
 }
 
+// TestLoadKeyDoesNotCreate 固定只读加载的语义：文件缺失时是 fs.ErrNotExist 且不留文件，
+// 损坏时与 LoadOrCreate 报同一句 corrupt（--dry-run 依赖前者）。
+func TestLoadKeyDoesNotCreate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "client.key")
+
+	if _, err := LoadKey(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("LoadKey(missing) = %v, want fs.ErrNotExist", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal("LoadKey created the key file")
+	}
+
+	if err := os.WriteFile(path, []byte("not a key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadKey(path)
+	if err == nil || !strings.Contains(err.Error(), "corrupt") {
+		t.Fatalf("LoadKey(corrupt) = %v, want a corrupt error", err)
+	}
+}
+
 // TestLoadOrCreateKeyIsStable 固定 key 的跨重启稳定性与 0600 权限：allow_clients 白名单按它匹配。
 func TestLoadOrCreateKeyIsStable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "client.key")
