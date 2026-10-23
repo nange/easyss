@@ -241,8 +241,15 @@ regexp:^.*\.youtube\..*$
 ```json
 {
   "version": 3,
-  "server": { "host": "your-domain.com", "port": 443, "password": "your-password" },
-  "log": { "level": "info", "file_path": "easyss.log" },
+  "server": {
+    "host": "your-domain.com",
+    "port": 443,
+    "password": "your-password"
+  },
+  "log": {
+    "level": "info",
+    "file_path": "easyss.log"
+  },
   "timeout": 30
 }
 ```
@@ -302,7 +309,11 @@ nohup ./easyss-server > easyss-server.log 2>&1    # 后台运行
 ```json
 {
   "version": 3,
-  "server": { "host": "203.0.114.1", "port": 443, "password": "your-password" }
+  "server": {
+    "host": "203.0.114.1",
+    "port": 443,
+    "password": "your-password"
+  }
 }
 ```
 
