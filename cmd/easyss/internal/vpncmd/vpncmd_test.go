@@ -185,7 +185,7 @@ func TestFormatVPNRegen(t *testing.T) {
 		dry.Replaced = 0
 		dry.BackupPaths = nil
 		wantLines(t, formatVPNRegen(&dry, nil), []string{
-			"dry run：没有写任何文件，下面是「将要生效」的身份",
+			"dry run：没有写任何文件；下面是一份新身份的预览（真写时会重新生成密钥，地址会不同）",
 			"",
 			"client nodekey（填到对端的 vpn.allow_clients）:",
 			"  nodekey:new",
@@ -293,9 +293,10 @@ func TestVPNRegenOutputJSON(t *testing.T) {
 
 func TestVPNIdentityOutputJSON(t *testing.T) {
 	id := &runner.VPNIdentity{
-		ClientNodeKey: "nodekey:abc",
-		TailcatAddr:   "tcFULLADDRESS",
-		DERPNodes:     []string{"relay-a.example.com:443"},
+		ClientNodeKey:   "nodekey:abc",
+		TailcatAddr:     "tcFULLADDRESS",
+		DERPNodes:       []string{"relay-a.example.com:443"},
+		HasNodeIdentity: true,
 	}
 	b, err := json.Marshal(vpnIdentityOutput(id, errors.New("the current server is not a relay")))
 	if err != nil {
@@ -312,13 +313,31 @@ func TestVPNIdentityOutputJSON(t *testing.T) {
 		}
 	}
 
-	noAddr := &runner.VPNIdentity{ClientNodeKey: "nodekey:abc", AddrErr: errors.New("no DERP relay is declared")}
+	// 身份文件可读、只是中继列表推不出地址：has_node_identity 必须为 true，原因在 address_error。
+	noAddr := &runner.VPNIdentity{
+		ClientNodeKey:   "nodekey:abc",
+		HasNodeIdentity: true,
+		AddrErr:         errors.New("no DERP relay is declared"),
+	}
 	b, err = json.Marshal(vpnIdentityOutput(noAddr, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(string(b), `"has_node_identity":true`) {
+		t.Errorf("json %s should report the identity file is readable even without an address", b)
+	}
+	if !strings.Contains(string(b), "no DERP relay is declared") {
+		t.Errorf("json %s should explain why the address is unavailable", b)
+	}
+
+	// 身份文件缺失/损坏：has_node_identity 为 false。
+	missing := &runner.VPNIdentity{AddrErr: errors.New("cannot read the node identity")}
+	b, err = json.Marshal(vpnIdentityOutput(missing, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(string(b), `"has_node_identity":false`) {
-		t.Errorf("json %s should report that no address is available", b)
+		t.Errorf("json %s should report the missing identity file", b)
 	}
 }
 

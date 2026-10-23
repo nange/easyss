@@ -55,9 +55,19 @@ func LoadOrCreateKey(path string) (key.NodePrivate, error) {
 	return k, nil
 }
 
-// LoadOrCreate 读不到就生成，但绝不静默覆盖：文件存在却无法解析必须报错（覆盖等于换掉身份）；
-// 其它读取错误原样返回，不能伪装成"文件不存在"。新文件以 0600 原子写入。
-func LoadOrCreate(path, what string, create func() ([]byte, error), load func([]byte) error) error {
+// LoadKey 只读取 path 中的 node 私钥，不生成：不存在时返回 fs.ErrNotExist，损坏时报错。
+// 需要"读密钥但不产生副作用"的路径（--dry-run）用它，而不是 LoadOrCreateKey。
+func LoadKey(path string) (key.NodePrivate, error) {
+	var k key.NodePrivate
+	if err := Load(path, "node key", func(data []byte) error { return k.UnmarshalText(bytes.TrimSpace(data)) }); err != nil {
+		return key.NodePrivate{}, err
+	}
+	return k, nil
+}
+
+// Load 只读取并解析 path，不生成：文件不存在时返回满足 errors.Is(err, fs.ErrNotExist) 的错误，
+// 由调用方决定是否补建（见 LoadOrCreate）；损坏必须报错，那也是"绝不能静默覆盖"的一半。
+func Load(path, what string, load func([]byte) error) error {
 	data, err := os.ReadFile(path)
 	switch {
 	case err == nil:
@@ -66,8 +76,17 @@ func LoadOrCreate(path, what string, create func() ([]byte, error), load func([]
 		}
 		return nil
 	case errors.Is(err, fs.ErrNotExist):
+		return err
 	default:
 		return fmt.Errorf("vpn: read %s: %w", path, err)
+	}
+}
+
+// LoadOrCreate 读不到就生成，但绝不静默覆盖：文件存在却无法解析必须报错（覆盖等于换掉身份）；
+// 其它读取错误原样返回，不能伪装成"文件不存在"。新文件以 0600 原子写入。
+func LoadOrCreate(path, what string, create func() ([]byte, error), load func([]byte) error) error {
+	if err := Load(path, what, load); !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
 
 	content, err := create()

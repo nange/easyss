@@ -2,6 +2,8 @@ package vpnnode
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -128,6 +130,11 @@ func TestLoadOrCreateNodeIdentityRejectsIncompleteFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 另一把私钥：只换 Private 就能造出"公钥与私钥不是一对"（手工编辑或只还原了一半）。
+	otherPrivate, err := json.Marshal(tailcat.NewPrivateKey().Private)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		name   string
@@ -158,6 +165,11 @@ func TestLoadOrCreateNodeIdentityRejectsIncompleteFile(t *testing.T) {
 			},
 			want: "preshared key is missing",
 		},
+		{
+			name:   "公钥与私钥不是一对",
+			mutate: func(m map[string]json.RawMessage) { m["Private"] = otherPrivate },
+			want:   "does not match the private key",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -182,6 +194,19 @@ func TestLoadOrCreateNodeIdentityRejectsIncompleteFile(t *testing.T) {
 				t.Errorf("error %q should contain %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestLoadNodeIdentityDoesNotCreate 固定只读加载不产生副作用：`vpn regen --dry-run`
+// 依赖它，避免"预览"顺手写出两份身份文件。
+func TestLoadNodeIdentityDoesNotCreate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "node-identity.json")
+
+	if _, err := LoadNodeIdentity(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("LoadNodeIdentity(missing) = %v, want fs.ErrNotExist", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Error("LoadNodeIdentity created the identity file")
 	}
 }
 

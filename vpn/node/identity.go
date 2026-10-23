@@ -65,7 +65,30 @@ func parseNodeIdentity(data []byte) (*NodeIdentity, error) {
 	if ni.Public.PresharedKey.IsZero() {
 		return nil, errors.New("preshared key is missing")
 	}
+	// 地址里的 node 公钥与私钥必须是同一对：tailcat 服务端只用私钥（并从它重新派生公钥），
+	// 而地址通告的是 Public，两者不一致时启动与日志都正常，只有每个对端握手失败。
+	if got := ni.Private.Public(); got != ni.Public.ServerPublic.NodePublic {
+		return nil, errors.New("the server public key does not match the private key")
+	}
 	return &ni, nil
+}
+
+// LoadNodeIdentity 只读取身份文件，不生成：不存在时返回 fs.ErrNotExist，损坏时报错。
+// 只读命令与"旧值回显"用它，避免边读边补建文件。
+func LoadNodeIdentity(path string) (*NodeIdentity, error) {
+	var ni *NodeIdentity
+	err := vpn.Load(path, "node identity", func(data []byte) error {
+		parsed, err := parseNodeIdentity(data)
+		if err != nil {
+			return err
+		}
+		ni = parsed
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ni, nil
 }
 
 // LoadOrCreateNodeIdentity 读取或生成 tailcat 服务端身份。

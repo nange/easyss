@@ -179,6 +179,11 @@ const udpBatchWindowMS = 1
 // Debug，因此这条 Info 是成功流唯一能看到路由的出口。
 func (h *ProxyHandler) sessionLogAttrs(res handshakeResult, client string) []any {
 	attrs := []any{"target", res.target, "client", client}
+	// 内嵌 DERP 的流已改拨本机回环（见 localDERP），next proxy 与它无关；不早退会把这条
+	// "成功流唯一能看到路由"的日志写成 via_next_proxy。
+	if res.localDERP {
+		return append(attrs, "dial", "embedded_derp")
+	}
 	if res.endpoint == config.EndpointTCP && h.tcp != nil && h.tcp.dial.usesNextProxy(res.target) {
 		attrs = append(attrs, "via_next_proxy", true, "proxy", h.tcp.dial.nextProxy.Host())
 	}

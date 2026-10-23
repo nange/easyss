@@ -211,24 +211,33 @@ func (p *PeerFace) Stop() error {
 // 写前重新自检完整格式；目录 0700、文件 0600——地址含 preshared key，等价于接入凭据。
 func (p *PeerFace) PublishAddr(path string) (string, error) {
 	addr := p.TailcatAddr()
+	if err := WritePeerAddr(path, addr); err != nil {
+		return "", err
+	}
+	return addr, nil
+}
+
+// WritePeerAddr 把已推导出的节点地址原子写到 path（目录 0700、文件 0600）。身份重新生成后
+// 由调用方用它刷新同一份文件，否则运维照旧文件抄给对端的是内嵌上一个 preshared key 的地址。
+func WritePeerAddr(path, addr string) error {
 	if err := AssertFullAddr(addr); err != nil {
-		return "", fmt.Errorf("vpn: refusing to publish an unusable address: %w", err)
+		return fmt.Errorf("vpn: refusing to publish an unusable address: %w", err)
 	}
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return "", fmt.Errorf("vpn: create state dir %s: %w", dir, err)
+			return fmt.Errorf("vpn: create state dir %s: %w", dir, err)
 		}
 	}
 	content := []byte(addr + "\n")
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, content, 0o600); err != nil {
-		return "", fmt.Errorf("vpn: write %s: %w", tmp, err)
+		return fmt.Errorf("vpn: write %s: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
-		return "", fmt.Errorf("vpn: rename %s: %w", tmp, err)
+		return fmt.Errorf("vpn: rename %s: %w", tmp, err)
 	}
-	return addr, nil
+	return nil
 }
 
 // LoopbackDialContext 是对端面唯一的拨号器：只接受**字面** loopback 目标。

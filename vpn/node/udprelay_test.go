@@ -1,12 +1,15 @@
 package vpnnode
 
 import (
+	"bytes"
 	"errors"
 	"net"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	tailcat "github.com/tailscale/tailcat"
 )
 
 // TestUDPTargetHeaderRoundTrip 固定一次性目标头的编解码：载荷必须原样保留，
@@ -228,6 +231,38 @@ func TestUDPRelayForwardsDatagrams(t *testing.T) {
 	case <-conn.closed:
 		t.Fatal("the relay closed an active flow")
 	default:
+	}
+}
+
+// TestUDPRelayKeepsTheLargestDocumentedPayload 固定文档上限（tailcat.MaxUDPPayload）：
+// 首包把目标头与载荷放进同一条数据报，读缓冲区必须为头留出空间；否则 1232 字节的载荷
+// 会在对端被静默剪掉一个头的长度，而两端都看到成功。
+func TestUDPRelayKeepsTheLargestDocumentedPayload(t *testing.T) {
+	echoAddr, stopEcho := startUDPEchoLocal(t)
+	defer stopEcho()
+
+	_, _, access := startRelay(t, time.Minute)
+
+	header, err := EncodeUDPTarget(echoAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := bytes.Repeat([]byte("m"), tailcat.MaxUDPPayload)
+	if _, err := access.Write(append(append([]byte{}, header...), payload...)); err != nil {
+		t.Fatalf("write first datagram: %v", err)
+	}
+
+	_ = access.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, tailcat.MaxUDPPayload+1)
+	n, err := access.Read(buf)
+	if err != nil {
+		t.Fatalf("read echo: %v", err)
+	}
+	if n != len(payload) {
+		t.Fatalf("echo = %d bytes, want %d: the first datagram lost the target-header budget", n, len(payload))
+	}
+	if !bytes.Equal(buf[:n], payload) {
+		t.Fatal("echo payload differs from what was sent")
 	}
 }
 

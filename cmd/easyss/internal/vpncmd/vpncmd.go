@@ -45,7 +45,7 @@ regen:
                （对端的 vpn.peers[].address 需要更新）
     --client   重新生成 client.key：client nodekey 改变，地址不变
                （对端的 vpn.allow_clients 需要更新）
-    --dry-run  只推导将要生成的身份，不写任何文件
+    --dry-run  只预览一份新身份，不写任何文件（真写时会重新生成密钥，地址会不同）
     --json     以 JSON 输出，便于脚本或配置工具消费
 
   被替换掉的旧身份备份成 <file>.bak，每次重新生成都覆盖它，因此每个文件最多只留一份
@@ -251,7 +251,8 @@ type vpnIdentityJSON struct {
 	AddressError string `json:"address_error,omitempty"`
 	// Warning 是"VPN 在本次配置下不会工作"的说明（如当前服务端不在中继列表里）。
 	Warning string `json:"warning,omitempty"`
-	// HasNodeIdentity=false 时 address 为空，address_error 说明是缺文件还是文件损坏。
+	// HasNodeIdentity 只看身份文件是否可读：false 表示缺文件或文件损坏（此时 address 必然为空）。
+	// address 为空也可能只是中继列表推不出来，那由 AddressError 说明。
 	HasNodeIdentity bool `json:"has_node_identity"`
 }
 
@@ -260,7 +261,7 @@ func vpnIdentityOutput(id *runner.VPNIdentity, warn error) vpnIdentityJSON {
 		ClientNodeKey:   id.ClientNodeKey,
 		Address:         id.TailcatAddr,
 		DERPNodes:       id.DERPNodes,
-		HasNodeIdentity: id.TailcatAddr != "",
+		HasNodeIdentity: id.HasNodeIdentity,
 	}
 	if id.AddrErr != nil {
 		out.AddressError = id.AddrErr.Error()
@@ -382,7 +383,7 @@ func formatVPNRegenStatus(res *runner.VPNRegenResult) string {
 
 	switch {
 	case res.DryRun:
-		fmt.Fprintln(&b, "dry run：没有写任何文件，下面是「将要生效」的身份")
+		fmt.Fprintln(&b, "dry run：没有写任何文件；下面是一份新身份的预览（真写时会重新生成密钥，地址会不同）")
 	case len(res.BackupPaths) > 0:
 		fmt.Fprintln(&b, "已重新生成 VPN 身份；对端需要用下面的新值更新")
 		fmt.Fprintln(&b, "被替换掉的旧身份已备份:")

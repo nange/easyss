@@ -807,6 +807,61 @@ func TestRegenerateVPNIdentityDryRunWritesNothing(t *testing.T) {
 	}
 }
 
+// TestRegenerateVPNIdentityDryRunWritesNothingOnAFreshMachine 固定 --dry-run 在全新机器上
+// 也不写文件：旧值的读取必须走只读路径，LoadOrCreate 会顺手补建两份身份文件。
+func TestRegenerateVPNIdentityDryRunWritesNothingOnAFreshMachine(t *testing.T) {
+	paths := vpnTestPaths(t)
+
+	// 刻意不先调用 loadVPNIdentity：那会补建身份文件，正好掩盖"预览会不会写文件"。
+	res, err := regenerateVPNIdentity(vpnTestConfig(), paths, VPNRegenOptions{
+		Kinds:  RegenNodeIdentity | RegenClientKey,
+		DryRun: true,
+	})
+	if err != nil {
+		t.Fatalf("regenerateVPNIdentity: %v", err)
+	}
+	if res.Identity == nil || res.Identity.TailcatAddr == "" {
+		t.Fatalf("the preview did not derive an address: %+v", res.Identity)
+	}
+	for _, p := range []string{
+		paths.nodeIdentity, paths.clientKey, paths.peerAddr,
+		paths.nodeIdentity + vpn.BackupSuffix, paths.clientKey + vpn.BackupSuffix,
+	} {
+		if _, err := os.Stat(p); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s was written during a dry run: err = %v", p, err)
+		}
+	}
+}
+
+// TestRegenerateVPNIdentityRefreshesThePublishedAddress 固定 peer.txt 随身份一起刷新：
+// 它是运维抄给对端的来源，留旧值就等于把内嵌旧 preshared key 的地址交出去。
+func TestRegenerateVPNIdentityRefreshesThePublishedAddress(t *testing.T) {
+	paths := vpnTestPaths(t)
+	before, err := loadVPNIdentity(vpnTestConfig(), paths)
+	if err != nil {
+		t.Fatalf("loadVPNIdentity: %v", err)
+	}
+	// 模拟一次成功启动写下的地址文件。
+	if err := vpnnode.WritePeerAddr(paths.peerAddr, before.TailcatAddr); err != nil {
+		t.Fatalf("WritePeerAddr: %v", err)
+	}
+
+	res, err := regenerateVPNIdentity(vpnTestConfig(), paths, VPNRegenOptions{Kinds: RegenNodeIdentity})
+	if err != nil {
+		t.Fatalf("regenerateVPNIdentity: %v", err)
+	}
+	if res.Identity.TailcatAddr == before.TailcatAddr {
+		t.Fatal("the address did not change, so this case cannot prove the file was refreshed")
+	}
+	content, err := os.ReadFile(paths.peerAddr)
+	if err != nil {
+		t.Fatalf("read %s: %v", paths.peerAddr, err)
+	}
+	if got := strings.TrimSpace(string(content)); got != res.Identity.TailcatAddr {
+		t.Fatalf("peer.txt = %q, want the regenerated address %q", got, res.Identity.TailcatAddr)
+	}
+}
+
 // TestRegenerateVPNIdentityWithoutKindsWritesNothing 固定"没有指定任何一半"时不改写
 // 任何文件：命令行的默认值（两个都换）是命令行层的决定，不该由这里替它做主。
 func TestRegenerateVPNIdentityWithoutKindsWritesNothing(t *testing.T) {

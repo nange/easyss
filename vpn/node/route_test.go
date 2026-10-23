@@ -2,6 +2,7 @@ package vpnnode
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"slices"
@@ -374,6 +375,63 @@ type recordingConn struct {
 }
 
 func (c *recordingConn) Write(p []byte) (int, error) {
+	c.writes = append(c.writes, append([]byte(nil), p...))
+	return len(p), nil
+}
+
+// TestTargetHeaderConnRejectsOversizedDatagram 固定隧道的单包上限：超限载荷必须在这里
+// 被拒绝（调用方会记日志），而不是交给隧道截断或让对端悄悄丢弃。
+func TestTargetHeaderConnRejectsOversizedDatagram(t *testing.T) {
+	rec := &recordingConn{}
+	conn := &targetHeaderConn{Conn: rec, header: []byte{3, 'a', 'b', 'c'}}
+
+	if _, err := conn.Write(make([]byte, tailcat.MaxUDPPayload+1)); err == nil {
+		t.Fatal("Write accepted a UDP payload above tailcat.MaxUDPPayload")
+	}
+	if len(rec.writes) != 0 {
+		t.Fatalf("an oversized datagram reached the tunnel: %q", rec.writes)
+	}
+	// 文档上限本身必须仍然可用：首包会在载荷之外多带一小段目标头。
+	if _, err := conn.Write(make([]byte, tailcat.MaxUDPPayload)); err != nil {
+		t.Fatalf("Write rejected a payload at the documented limit: %v", err)
+	}
+}
+
+// TestTargetHeaderConnRetriesTheHeaderAfterAFailedFirstWrite 固定首包失败不消耗目标头：
+// 否则这条流之后每个数据报都不带目标，对端会一直拒绝，直到会话池按空闲回收。
+func TestTargetHeaderConnRetriesTheHeaderAfterAFailedFirstWrite(t *testing.T) {
+	rec := &refusingConn{err: errors.New("injected write failure")}
+	conn := &targetHeaderConn{Conn: rec, header: []byte{3, 'a', 'b', 'c'}}
+
+	if _, err := conn.Write([]byte("first")); err == nil {
+		t.Fatal("Write did not surface the injected failure")
+	}
+	n, err := conn.Write([]byte("second"))
+	if err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+	if n != len("second") {
+		t.Fatalf("second write returned %d, want %d", n, len("second"))
+	}
+	if want := "\x03abcsecond"; len(rec.writes) != 1 || string(rec.writes[0]) != want {
+		t.Fatalf("datagrams = %q, want [%q]: the header was lost with the failed first write", rec.writes, want)
+	}
+}
+
+// refusingConn 让第一条写入失败，之后照常记录。
+type refusingConn struct {
+	net.Conn //nolint:unused // 仅为满足 net.Conn
+
+	err    error
+	failed bool
+	writes [][]byte
+}
+
+func (c *refusingConn) Write(p []byte) (int, error) {
+	if !c.failed {
+		c.failed = true
+		return 0, c.err
+	}
 	c.writes = append(c.writes, append([]byte(nil), p...))
 	return len(p), nil
 }

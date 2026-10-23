@@ -65,6 +65,13 @@ func DecodeUDPTarget(pkt []byte) (target string, payload []byte, err error) {
 	return target, pkt[1+n:], nil
 }
 
+// maxUDPTargetHeader 是目标头的最大长度：1 字节长度前缀 + 最多 255 字节的目标文本。
+const maxUDPTargetHeader = 1 + 255
+
+// maxFirstDatagram 是首包的上限：目标头与首段载荷放在同一条数据报里（见 EncodeUDPTarget），
+// 因此它比单包上限多出一个目标头的空间，否则文档允许的 1232 字节载荷会被剪掉尾巴。
+const maxFirstDatagram = maxUDPTargetHeader + tailcat.MaxUDPPayload
+
 // UDPRelay 是对端面的薄 UDP 中继：把隧道里的每条 UDP 流转成到本机 loopback 的
 // 一条 UDP 套接字，两个方向都只透传原始数据报。
 // 每条隧道 UDP 流对应一个目标，由第一个数据报的目标头确定后不再改变（tailcat 按源地址:端口隔离流）。
@@ -175,10 +182,16 @@ func (r *UDPRelay) handle(tunnel net.Conn) {
 	idle := r.idleTimeout()
 	_ = tunnel.SetReadDeadline(time.Now().Add(idle))
 
-	buf := make([]byte, tailcat.MaxUDPPayload)
+	// 多读一字节用于识别截断：Read 在缓冲区处剪断数据报且不报错，n 超过上限说明这条
+	// 首包已经被剪短，转发出去就是静默的数据损坏。
+	buf := make([]byte, maxFirstDatagram+1)
 	n, err := tunnel.Read(buf)
 	if err != nil {
 		r.logf("read target header: %v", err)
+		return
+	}
+	if n > maxFirstDatagram {
+		r.logf("dropped an oversized first datagram: limit %d bytes", maxFirstDatagram)
 		return
 	}
 	target, payload, err := DecodeUDPTarget(buf[:n])
@@ -248,17 +261,24 @@ func (a *flowActivity) expired(idle time.Duration) bool {
 }
 
 // copyDatagrams 把 src 的数据报原样写到 dst，并在**整条流**空闲超时后结束。
-// 缓冲区按 tailcat 的 UDP 单包上限分配，超出部分被丢弃。
+// 缓冲区按 tailcat 的 UDP 单包上限分配，多出的一字节用于识别"读满即被截断"。
 func (r *UDPRelay) copyDatagrams(dst, src net.Conn, idle time.Duration, activity *flowActivity) {
-	buf := make([]byte, tailcat.MaxUDPPayload)
+	buf := make([]byte, tailcat.MaxUDPPayload+1)
 	poll := min(idle, udpIdleCheckInterval)
 	for {
 		_ = src.SetReadDeadline(time.Now().Add(poll))
 		n, err := src.Read(buf)
 		if n > 0 {
 			activity.touch()
-			if _, werr := dst.Write(buf[:n]); werr != nil {
-				return
+			switch {
+			case n > tailcat.MaxUDPPayload:
+				// 超出隧道的单包上限：Read 已经把数据报剪到缓冲区长度，转发剪短的载荷
+				// 比丢弃更难排查（应用会收到半截数据报且两端都认为成功）。
+				r.logf("dropped an oversized datagram: limit %d bytes", tailcat.MaxUDPPayload)
+			default:
+				if _, werr := dst.Write(buf[:n]); werr != nil {
+					return
+				}
 			}
 		}
 		if err == nil {

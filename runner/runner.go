@@ -233,6 +233,12 @@ func (c *Core) buildLocalServers(cfg *clientconfig.ClientConfig, eps *localEndpo
 			return err
 		}
 		c.HTTPServer = httpServer
+		// 系统代理指向这个入口，但它不参与 VPN 分流（见 README 的"访问对端"）：不明说的话，
+		// 用户看到的是"http://<peer>/ 能开、https://<peer>/ 打不开"，而默认配置下该入口总在运行。
+		if vpnRoute != nil {
+			log.Warn("[VPN] the HTTP proxy entry (the one the system proxy points at) does not route peer traffic; " +
+				"reach peers through the SOCKS5 port or TUN")
+		}
 	}
 
 	if eps.dnsPC != nil {

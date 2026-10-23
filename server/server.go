@@ -431,8 +431,12 @@ func loopbackListenAddr(listen string) (string, error) {
 			return "", fmt.Errorf("server.listen %q is bound to %s, so the embedded DERP cannot be reached on loopback; "+
 				"listen on a wildcard address (e.g. \":443\") or on a loopback address", listen, host)
 		}
-		// 地址族必须跟着监听走：只绑在 [::1] 上的监听不会接受 127.0.0.1 的连接。
-		if ip.Is6() {
+		switch {
+		case ip.IsLoopback():
+			// 绑在哪个回环字面量上就只能拨哪个：127.0.0.2 的监听不接 127.0.0.1 的连接。
+			loopback = ip.Unmap().String()
+		case ip.Is6():
+			// 通配 v6 监听只保证能接受 family 自己的回环：bindv6only=1 的机器上 127.0.0.1 会被拒。
 			loopback = "::1"
 		}
 	}
