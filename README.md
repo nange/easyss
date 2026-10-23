@@ -541,11 +541,15 @@ node address（填到对端的 vpn.peers[].address；属于秘密）:
 
 ```bash
 ./easyss vpn identity                 # 打印 client nodekey 与地址（--json 便于脚本消费）
-./easyss vpn regen --dry-run          # 先看看新的身份长什么样，不写任何文件
+./easyss vpn regen --dry-run          # 只预览一份新身份，不写任何文件（见下）
 ./easyss vpn regen                    # 两个都换（= --node --client）
 ./easyss vpn regen --node             # 只换 node-identity.json：地址变，client nodekey 不变
 ./easyss vpn regen --client           # 只换 client.key：client nodekey 变，地址不变
 ```
+
+`--dry-run` 的密钥是每次调用现生成的，因此它只回答"新身份长什么样"，预览出来的地址
+**不会**与随后真写的那次相同——不要把 dry-run 打印的地址分发给对端，真写完再抄。
+真写时（含 `--node`）会同步刷新 `<exe>/vpn/peer.txt`，那个文件始终是当前身份的地址。
 
 被替换掉的旧身份备份为 `<file>.bak`，**每次重新生成都覆盖它**，因此每个文件最多只留
 一份备份——它就是"上一次生效的身份"，也是回滚点：把 `.bak` 拷回原名即完成回滚。因此
