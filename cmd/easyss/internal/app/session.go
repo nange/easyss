@@ -208,6 +208,11 @@ func (s *session) tunUp() error {
 	if core == nil || core.Client == nil {
 		return fmt.Errorf("client not initialized")
 	}
+	// relay_only=false 的 VPN 不能与 TUN 同时生效，而运行期再改 tailscale 的开关对已绑定的
+	// socket 无效，因此这里只能拒绝（见 runner.Core.CheckVPNTunCompat）。
+	if err := core.CheckVPNTunCompat(); err != nil {
+		return err
+	}
 
 	// 偏好写配置快照、运行期状态写 core 上的开关，两者必须同时更新。
 	s.app.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = true })

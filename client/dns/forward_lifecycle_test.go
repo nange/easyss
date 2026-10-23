@@ -36,7 +36,7 @@ func waitForHeldSocket(s *ForwardServer) bool {
 // TestForwardServerShutdownBeforeStartRefusesLateStart 守住该时序：迟到的 Start 必须关掉
 // 刚绑定的 socket 并返回 net.ErrClosed，否则 53 端口被自己占着，runner.Run 再也绑不上。
 func TestForwardServerShutdownBeforeStartRefusesLateStart(t *testing.T) {
-	srv := NewForwardServer("127.0.0.1:0", false)
+	srv := NewForwardServer("127.0.0.1:0", false, nil)
 
 	if err := srv.Shutdown(); err != nil {
 		t.Fatalf("Shutdown before Start: %v", err)
@@ -63,7 +63,7 @@ func TestForwardServerShutdownBeforeStartRefusesLateStart(t *testing.T) {
 // 的 started 标志在绑定成功后才置位，落在这个窗口的 Shutdown 只返回 "server not started"。
 func TestForwardServerShutdownRacingStartReleasesSocket(t *testing.T) {
 	for i := range 20 {
-		srv := NewForwardServer("127.0.0.1:0", false)
+		srv := NewForwardServer("127.0.0.1:0", false, nil)
 
 		startDone := make(chan error, 1)
 		go func() { startDone <- srv.Start() }()
@@ -89,7 +89,7 @@ func TestForwardServerShutdownRacingStartReleasesSocket(t *testing.T) {
 // 再次进入优雅关闭（第二次对已停止的 dns.Server 只会返回 "server not started"），
 // 也不得 panic；socket 必须在第一次调用后就已释放。
 func TestForwardServerShutdownIsIdempotent(t *testing.T) {
-	srv := NewForwardServer("127.0.0.1:0", false)
+	srv := NewForwardServer("127.0.0.1:0", false, nil)
 
 	startDone := make(chan error, 1)
 	go func() { startDone <- srv.Start() }()

@@ -111,12 +111,16 @@ func (c socksCredentials) Valid(user, password, _ string) bool {
 type Socks5Server struct {
 	srv *thingssocks5.Server
 
-	handler           *StreamHandler
-	router            *router.Router
-	policy            *routePolicy
-	dns               *dnsInterceptor
-	method            protocol.Method
-	disableQUIC       bool
+	handler     *StreamHandler
+	router      *router.Router
+	policy      *routePolicy
+	dns         *dnsInterceptor
+	method      protocol.Method
+	disableQUIC bool
+	// disableDNSIntercept 关闭 53 端口拦截（见 Socks5Options.DisableDNSIntercept）。
+	disableDNSIntercept bool
+	// vpn 是访问侧的 VPN 注入面；nil 表示 VPN 关闭（见 Socks5Options.VPN）。
+	vpn               VPNRoute
 	directDialContext func(context.Context, string, string) (net.Conn, error)
 	dialTimeout       time.Duration
 	// streamIdleTimeout 限制直连 TCP 中继的空闲时长，与代理路径的流空闲超时同源。
@@ -158,6 +162,17 @@ type Socks5Options struct {
 	// DNSCache 是调用方（runner）持有的共享缓存；为 nil 时按 ServerDomain 自建。
 	DNSCache          *easydns.Cache
 	DirectDialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+	// DisableDNSIntercept 关闭"发往 53 端口的连接按 DNS 处理"的拦截。VPN 对端面必须
+	// 打开它：那里 53 是普通服务端口，被拦截会按查询域名重新分流，与对端面"只拨字面
+	// loopback"的契约冲突。
+	DisableDNSIntercept bool
+	// DisableUDPAssociate 关闭 UDP ASSOCIATE（一律回 RepCommandNotSupported）。
+	// VPN 对端面的 UDP 走 tailcat UDP listener + 薄中继（见 vpn/node/udprelay.go），
+	// 不能依赖"绑不上 tailcat ULA 而失败"的副作用。
+	DisableUDPAssociate bool
+	// VPN 是访问侧的 VPN 注入面；为 nil 时 VPN 分流完全关闭。非 nil 时命中对端的
+	// 目标走隧道（见 VPNRoute）。
+	VPN VPNRoute
 }
 
 func NewSocks5Server(opts Socks5Options) (*Socks5Server, error) {
@@ -175,15 +190,17 @@ func NewSocks5Server(opts Socks5Options) (*Socks5Server, error) {
 		serverDomain = ""
 	}
 	s := &Socks5Server{
-		handler:           opts.Handler,
-		router:            opts.Router,
-		method:            opts.Method,
-		disableQUIC:       opts.DisableQUIC,
-		directDialContext: directDialContext,
-		dialTimeout:       dialTimeout,
-		streamIdleTimeout: streamIdleTimeout,
-		udpIdleTimeout:    udpIdleTimeout,
-		listenAddr:        opts.ListenAddr,
+		handler:             opts.Handler,
+		router:              opts.Router,
+		method:              opts.Method,
+		disableQUIC:         opts.DisableQUIC,
+		disableDNSIntercept: opts.DisableDNSIntercept,
+		vpn:                 opts.VPN,
+		directDialContext:   directDialContext,
+		dialTimeout:         dialTimeout,
+		streamIdleTimeout:   streamIdleTimeout,
+		udpIdleTimeout:      udpIdleTimeout,
+		listenAddr:          opts.ListenAddr,
 	}
 	// dial 晚绑定到 s.directDialContext，使会话池与 DNS 拦截器只看到一个拨号函数。
 	s.udp = newUDPPool(udpPoolOptions{
@@ -200,6 +217,7 @@ func NewSocks5Server(opts Socks5Options) (*Socks5Server, error) {
 		Router:            opts.Router,
 		DialTimeout:       dialTimeout,
 		StreamIdleTimeout: streamIdleTimeout,
+		VPN:               opts.VPN,
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return s.directDialContext(ctx, network, addr)
 		},
@@ -214,6 +232,9 @@ func NewSocks5Server(opts Socks5Options) (*Socks5Server, error) {
 		Pool:         s.udp,
 		ServerDomain: serverDomain,
 		Timeouts:     timeouts,
+		// 静态名钩子只为对端名字提供本地应答：TUN 下系统解析器的查询到达的是这里，
+		// 而不是 client/dns 的转发服务器（见 dnsOptions.Static）。
+		Static: vpnStaticNames(opts.VPN),
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return s.directDialContext(ctx, network, addr)
 		},
@@ -228,12 +249,17 @@ func NewSocks5Server(opts Socks5Options) (*Socks5Server, error) {
 		}
 	}
 
+	associate := thingssocks5.Handler(s.associateHandler)
+	if opts.DisableUDPAssociate {
+		associate = thingssocks5.Handler(s.associateDisabled)
+	}
+
 	s.srv = thingssocks5.NewServer(
 		thingssocks5.WithAuthMethods(authMethods),
 		// 域名必须在业务层判定（见 passthroughResolver）。
 		thingssocks5.WithResolver(passthroughResolver{}),
 		thingssocks5.WithConnectHandle(thingssocks5.Handler(s.connectHandler)),
-		thingssocks5.WithAssociateHandle(thingssocks5.Handler(s.associateHandler)),
+		thingssocks5.WithAssociateHandle(associate),
 	)
 	return s, nil
 }
@@ -261,14 +287,32 @@ func (s *Socks5Server) connectHandler(ctx context.Context, writer io.Writer, r *
 	// 流水线客户端的首批载荷可能已落在库的 r.Reader 里，直接读裸连接会静默丢掉那些字节。
 	stream := newSocks5Stream(c, r.Reader)
 
-	// 53 端口的连接按查询域名分流，否则解析器走 TCP 时查询会按目标 IP 判直连、绕过隧道。
-	if port == "53" {
+	// VPN 对端优先于 53 拦截：对端本机监听在 53 的服务在 UDP 侧可达，TCP 侧若被本机
+	// 拦截器吞掉就不对称。VPN 对端面也会关掉下面的拦截（见 Socks5Options.DisableDNSIntercept）。
+	if s.isVPNPeer(host) {
+		return s.routeTCP(stream, target, host)
+	}
+
+	// 发往 53 端口的连接按查询域名分流，否则解析器走 TCP 时查询会按目标 IP 判直连、
+	// 从物理网卡发出而绕过隧道。
+	if port == "53" && !s.disableDNSIntercept {
 		return s.handleTCPDNS(stream, target, host)
 	}
 
 	return s.routeTCP(stream, target, host)
 }
 
+// isVPNPeer 报告 host 是否为本机配置的 VPN 对端：53 拦截与 QUIC 屏蔽都按它让路。
+func (s *Socks5Server) isVPNPeer(host string) bool {
+	if s.vpn == nil {
+		return false
+	}
+	_, ok := s.vpn.Lookup(host)
+	return ok
+}
+
+// routeTCP 对已完成 SOCKS5 CONNECT 的 TCP 连接执行 Block/Direct/Proxy 分流。
+// 正常路径与 TCP DNS 拦截的回退路径共用；判定与 HTTP 入口共用同一个 routePolicy。
 func (s *Socks5Server) routeTCP(c net.Conn, target, host string) error {
 	return s.routeTCPReplied(c, target, host, false)
 }
@@ -303,6 +347,16 @@ func (s *Socks5Server) routeTCPReplied(c net.Conn, target, host string, replied 
 		defer rc.Close() //nolint:errcheck
 		relayTCP(rc, c, s.policy.streamIdle())
 		log.Debug("[TCP] direct relay finished", "target", target)
+		return nil
+	case routeVPN:
+		rc, err := s.vpnTCPConnect(c, target, replied)
+		if err != nil {
+			log.Error("[TCP] vpn connect", "target", target, "err", err)
+			return err
+		}
+		defer rc.Close() //nolint:errcheck
+		relayTCP(rc, c, s.policy.streamIdle())
+		log.Debug("[TCP] vpn relay finished", "target", target)
 		return nil
 	default:
 		if !replied {
@@ -351,6 +405,31 @@ func (s *Socks5Server) replyError(c net.Conn, code uint8) error {
 	return writeSocksReply(c, code, nil)
 }
 
+// vpnTCPConnect 经 VPN 隧道打开到对端的连接；replied 的语义与 directTCPConnect 一致。
+// BND.ADDR 刻意回报 nil——隧道连接的 LocalAddr 是 WireGuard ULA，对客户端无意义；
+// 可达性由内层握手决定，且已在本调用返回前完成。
+func (s *Socks5Server) vpnTCPConnect(c net.Conn, target string, replied bool) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.dialTimeout)
+	defer cancel()
+
+	rc, err := s.vpn.DialTCP(ctx, target)
+	if err != nil {
+		if !replied {
+			_ = s.replyError(c, repHostUnreachable)
+		}
+		return nil, err
+	}
+
+	if replied {
+		return rc, nil
+	}
+	if err := writeSocksReply(c, repSuccess, nil); err != nil {
+		rc.Close() //nolint:errcheck
+		return nil, err
+	}
+	return rc, nil
+}
+
 // 库的默认实现会把数据报直接转发，因此自建 socket 并自持会话池；客户端地址以发起
 // ASSOCIATE 的 TCP 对端为准（RFC 1928）。
 func (s *Socks5Server) associateHandler(_ context.Context, writer io.Writer, _ *thingssocks5.Request) error {
@@ -359,6 +438,17 @@ func (s *Socks5Server) associateHandler(_ context.Context, writer io.Writer, _ *
 		return fmt.Errorf("socks5 associate: writer is %T, not net.Conn", writer)
 	}
 	return s.udpAssociate(c)
+}
+
+// associateDisabled 是 DisableUDPAssociate 的 handler：按 RFC 1928 回
+// RepCommandNotSupported，而不是断开连接——客户端会得到一个明确的"不支持该命令"。
+func (s *Socks5Server) associateDisabled(_ context.Context, writer io.Writer, _ *thingssocks5.Request) error {
+	c, ok := writer.(net.Conn)
+	if !ok {
+		return fmt.Errorf("socks5 associate: writer is %T, not net.Conn", writer)
+	}
+	log.Debug("[SOCKS5] UDP ASSOCIATE disabled on this entry")
+	return s.replyError(c, repCommandNotSupported)
 }
 
 // 循环运行到 TCP 控制连接断开，这正是 RFC 1928 的关联生命周期。

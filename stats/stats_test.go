@@ -191,6 +191,11 @@ func TestSnapshotJSONKeys(t *testing.T) {
 	RecordServerStreamCancel()
 	RecordServerFallbackPage()
 	RecordServerProbe()
+	RecordVPNTCPStream()
+	RecordVPNUDPFlow()
+	RecordVPNDialError()
+	RecordVPNDNSStaticAnswer()
+	RecordVPNPeerFaceStream()
 
 	snap := Collect()
 	snap.Conns = 1
@@ -269,6 +274,11 @@ func TestSnapshotJSONKeys(t *testing.T) {
 		"total_streams_opened",
 		"udp_associations",
 		"upload_speed",
+		"vpn_dial_errors",
+		"vpn_dns_static_answers",
+		"vpn_peer_face_streams",
+		"vpn_tcp_streams",
+		"vpn_udp_flows",
 		"upload_speed_human",
 		"uptime_seconds",
 	}

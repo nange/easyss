@@ -104,7 +104,7 @@ func (a *trayApp) buildTray() {
 
 	// 非致命启动警告只通知，不阻塞也不退出。
 	if warn := a.currentStartupWarn(); warn != nil {
-		a.shell.Notify(friendlyStartupWarning(warn))
+		a.shell.Notify(a.startupWarningText(warn))
 	}
 
 	a.startLocalService()
@@ -156,15 +156,6 @@ func friendlyStartupError(err error) string {
 		return "配置错误：启用 HTTP 代理需要先启用 SOCKS5 代理（socks_port 需大于 0）。详情：" + err.Error()
 	}
 	return "服务启动失败：" + err.Error()
-}
-
-// 服务端域名解析失败是最常见的一类（开机自启动时网络往往尚未就绪），它不中止启动。
-func friendlyStartupWarning(err error) string {
-	if errors.Is(err, runner.ErrServerDomainUnresolved) {
-		return "启动警告：网络尚未就绪（服务端域名解析失败），客户端已在后台自动重试，" +
-			"网络恢复后即可正常代理。详情：" + err.Error()
-	}
-	return "启动警告：" + err.Error()
 }
 
 // 初始启动期间托盘尚未就绪也必须照常显示，否则"网络尚未就绪"这类开机场景会无声无息。

@@ -71,6 +71,17 @@ type Core struct {
 	dnsCache  *dns.Cache
 	transport transport.Transport
 
+	// vpn 是本会话的 VPN 栈（对端面 + 隧道客户端 + 访问侧注入面），vpn.enabled 为 false
+	// 时是 nil。SOCKS5 入口借用它作为分流面，因此必须晚于代理入口关闭（见 cleanup）。
+	vpn *vpnStack
+
+	// ServerAddr 是本次会话**实际使用**的服务器（host:port），会话起点解析一次后不再回读
+	// 配置的 default 标记：托盘切换、失败回滚与自更新重启都会改写那个标记。
+	ServerAddr string
+
+	// StartupWarn 保存初始化核心时检测到的非致命警告（例如自定义规则文件
+	// 加载失败，或服务端域名暂时无法解析），调用方可以在不中断启动的情况下
+	// 将其展示给用户。
 	StartupWarn error
 
 	// 既是"核心已停止"信号也是后台域名重试的停止信号。
@@ -116,6 +127,7 @@ func runWithOptions(cfg *clientconfig.ClientConfig, opts options) (*Core, error)
 		Client:        cli,
 		StreamHandler: proxy.NewStreamHandler(cli.Transport(), cli.MasterKey(), cfg.Shaper, timeouts),
 		transport:     cli.Transport(),
+		ServerAddr:    cfg.DefaultServer().HostPort(),
 		StartupWarn:   cli.StartupWarning(),
 		done:          make(chan struct{}),
 		domainReady:   make(chan struct{}),
@@ -143,7 +155,20 @@ func runWithOptions(cfg *clientconfig.ClientConfig, opts options) (*Core, error)
 		return nil, err
 	}
 
-	if err := c.buildLocalServers(cfg, eps, method, timeouts); err != nil {
+	// VPN 栈先于本地代理入口建立：SOCKS5 要把它作为分流面注入（见 Socks5Options.VPN）。
+	// 失败只让本会话缺席 VPN，不中止启动；此后的错误返回由上面的 defer 交给 cleanup。
+	var vpnRoute proxy.VPNRoute
+	if cfg.VPN.Enabled {
+		route, err := c.startVPNSession(cfg, c.StreamHandler, method, timeouts)
+		if err != nil {
+			c.StartupWarn = errors.Join(c.StartupWarn, fmt.Errorf("vpn disabled for this session: %w", err))
+			log.Error("[VPN] disabled for this session", "err", err)
+		} else {
+			vpnRoute = route
+		}
+	}
+
+	if err := c.buildLocalServers(cfg, eps, method, timeouts, vpnRoute); err != nil {
 		return nil, err
 	}
 
@@ -161,7 +186,8 @@ func runWithOptions(cfg *clientconfig.ClientConfig, opts options) (*Core, error)
 }
 
 // buildLocalServers 只构造服务器，不派发 goroutine；任何构造失败都在 Run 返回前暴露。
-func (c *Core) buildLocalServers(cfg *clientconfig.ClientConfig, eps *localEndpoints, method protocol.Method, timeouts config.Timeouts) error {
+func (c *Core) buildLocalServers(cfg *clientconfig.ClientConfig, eps *localEndpoints, method protocol.Method,
+	timeouts config.Timeouts, vpnRoute proxy.VPNRoute) error {
 	if eps.socksLn != nil {
 		serverDomain := ""
 		if svr := cfg.DefaultServer(); svr != nil && !util.IsIP(svr.Host) {
@@ -180,6 +206,8 @@ func (c *Core) buildLocalServers(cfg *clientconfig.ClientConfig, eps *localEndpo
 			Timeouts:          timeouts,
 			DirectDialContext: c.Client.DialContext,
 			DNSCache:          c.dnsCache,
+			// nil 时 VPN 分流完全关闭（本会话没有 vpn.enabled）。
+			VPN: vpnRoute,
 		})
 		if err != nil {
 			return err
@@ -205,10 +233,21 @@ func (c *Core) buildLocalServers(cfg *clientconfig.ClientConfig, eps *localEndpo
 			return err
 		}
 		c.HTTPServer = httpServer
+		// 系统代理指向这个入口，但它不参与 VPN 分流（见 README 的"访问对端"）：不明说的话，
+		// 用户看到的是"http://<peer>/ 能开、https://<peer>/ 打不开"，而默认配置下该入口总在运行。
+		if vpnRoute != nil {
+			log.Warn("[VPN] the HTTP proxy entry (the one the system proxy points at) does not route peer traffic; " +
+				"reach peers through the SOCKS5 port or TUN")
+		}
 	}
 
 	if eps.dnsPC != nil {
-		c.dnsServer = dns.NewForwardServer(eps.dnsAddr, c.Client.Router().ShouldIPV6Disable())
+		// 静态名钩子只在 VPN 启用时存在：它把对端名字解析成 overlay IPv4，nil 时行为不变。
+		var staticNames dns.StaticNames
+		if c.vpn != nil {
+			staticNames = c.vpn.route
+		}
+		c.dnsServer = dns.NewForwardServer(eps.dnsAddr, c.Client.Router().ShouldIPV6Disable(), staticNames)
 	}
 
 	return nil
@@ -479,6 +518,9 @@ func (c *Core) cleanup() {
 	if c.SocksServer != nil {
 		_ = c.SocksServer.Close()
 	}
+	// VPN 在代理入口之后关闭：Socks5Server 借用它作为分流面，反过来会让在飞的
+	// 隧道拨号打到一个已关闭的客户端集合（见 vpnStack.close）。
+	c.StopVPN()
 	if c.Client != nil {
 		_ = c.Client.Close()
 	}

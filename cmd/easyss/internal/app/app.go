@@ -233,6 +233,9 @@ func (a *App) restartServiceInSequence(newCfg *clientconfig.ClientConfig, start 
 	// 与那次 Start 分属不同 goroutine，必须走访问器读启动警告。
 	if warn := a.currentStartupWarn(); warn != nil {
 		log.Warn("[EASYSS-V3] restart service: startup warning", "err", warn)
+		// 用户刚点了另一台服务器，他看到的现象是"VPN 里连不上对端"，因此这条配置事实
+		// 必须弹通知（文案点名的是新会话实际使用的那台，见 startupWarningText）。
+		a.notifyStartupWarning(warn)
 	}
 
 	restoreSysProxy()

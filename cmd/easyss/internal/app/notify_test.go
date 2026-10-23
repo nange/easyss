@@ -98,6 +98,80 @@ func TestFriendlyStartupWarning(t *testing.T) {
 	}
 }
 
+// vpnRefusalWarning 构造托盘实际会读到的那种启动警告：门禁失败已被 runner.Run 包成
+// "vpn disabled for this session"，并可与 errors.Join 的其它警告并存。
+func vpnRefusalWarning(others ...error) error {
+	return errors.Join(append(others,
+		fmt.Errorf("vpn disabled for this session: %w", clientconfig.ErrCurrentServerNotDERPRelay))...)
+}
+
+// TestStartupWarningNotice 固定"哪些启动警告值得打断用户"：只有 VPN 那条。
+// 其余仍只写日志——启动路径已经在弹它们，网络未就绪的恢复提示另有 watchServerDomainReady 负责。
+func TestStartupWarningNotice(t *testing.T) {
+	if startupWarningNotice(nil) {
+		t.Error("nil must not notify")
+	}
+	if startupWarningNotice(errors.New("load custom rule file: boom")) {
+		t.Error("a generic startup warning must stay in the log")
+	}
+	if startupWarningNotice(fmt.Errorf("%w: proxy.example.com", runner.ErrServerDomainUnresolved)) {
+		t.Error("the server-domain warning must stay in the log")
+	}
+	if !startupWarningNotice(vpnRefusalWarning()) {
+		t.Error("the relay refusal must notify")
+	}
+	if !startupWarningNotice(vpnRefusalWarning(
+		fmt.Errorf("%w: proxy.example.com", runner.ErrServerDomainUnresolved))) {
+		t.Error("the relay refusal must notify even when other warnings are joined with it")
+	}
+}
+
+// TestVPNRefusalText 固定通知文案：说清"VPN 功能不生效"、点名是哪台服务器、给出修法，
+// 并保留原始错误作为详情（两条修法都在里面）。
+func TestVPNRefusalText(t *testing.T) {
+	err := vpnRefusalWarning()
+	msg := vpnRefusalText("b.example.com:443", err)
+	for _, want := range []string{
+		"VPN 功能不生效",
+		"b.example.com:443",
+		"中继(DERP)列表",
+		"\"derp\": true",
+		"代理（SOCKS5/HTTP）仍可正常使用",
+		err.Error(),
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("notification %q is missing %q", msg, want)
+		}
+	}
+
+	// 没有会话（或没有服务器条目）时也要能渲染：宁可少一句主语，也不能弹一条空通知。
+	if msg := vpnRefusalText("", err); !strings.Contains(msg, "VPN 功能不生效") {
+		t.Errorf("notification without a server name is unusable: %q", msg)
+	}
+}
+
+// TestStartupWarningTextUsesTheRunningSessionServer 固定判据与文案都跟着运行中会话的
+// 服务器走，而不是 App 快照的 default 标记：切换、失败回滚与自更新重启都会替换快照，
+// 而会话仍停在它启动时选中的那台上。
+func TestStartupWarningTextUsesTheRunningSessionServer(t *testing.T) {
+	a := newSwitchTestApp(t) // 初始 default 是 a.example:443
+	// 让 App 快照的 default 指向 b：会话还跑在 a 上（先发布下标、新会话还没起来的窗口，
+	// 或一次回滚）。文案必须点名 a。
+	a.updateConfig(func(c *clientconfig.ClientConfig) { c.SetDefaultServerIndex(1) })
+	a.sess.installCore(&runner.Core{ServerAddr: "a.example:443"})
+
+	msg := a.startupWarningText(vpnRefusalWarning())
+	if !strings.Contains(msg, "a.example:443") {
+		t.Errorf("notification %q must name the server the session is running on", msg)
+	}
+	if strings.Contains(msg, "b.example:443") {
+		t.Errorf("notification %q must not name the App snapshot's default server", msg)
+	}
+	if !strings.Contains(msg, "VPN 功能不生效") {
+		t.Errorf("notification %q must say the vpn is not in effect", msg)
+	}
+}
+
 func TestCanStartTunNow(t *testing.T) {
 	if !canStartTunNow(nil) {
 		t.Fatal("nil core must be treated as ready")

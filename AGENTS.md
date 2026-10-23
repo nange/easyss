@@ -23,6 +23,7 @@ cmd/easyss/internal/logview/        查看日志（终端/快照）与桌面会�
 cmd/easyss/internal/autostart/      开机自启
 cmd/easyss/internal/singleton/      单实例锁
 cmd/easyss/internal/selfupdatecmd/  selfupdate 子命令与产品变体
+cmd/easyss/internal/vpncmd/         vpn 子命令（identity/regen，见 docs/architecture.md 要点 19）
 cmd/easyss-server/                  服务端入口，单文件 main.go
 integration/                        客户端+服务端端到端测试（原 cmd/easyss/easyss_test.go）
 client/                             客户端核心：Client 结构体
@@ -33,7 +34,9 @@ client/dns/                         DNS 转发服务器 + freecache 双缓存（
 client/proxy/                       SOCKS5/HTTP 代理服务器 + StreamHandler
 client/tun/                         TUN2socks 虚拟网卡 + ICMP 代理（teardown/脚本约束见 docs/platform.md）
 client/tun/scripts/                 TUN 创建/关闭脚本（//go:embed，按 GOOS 自动选择）
-server/                             服务端核心：Server 结构体（TLS/certmagic）
+vpn/                                节点组网共享原语（**不引用 tailcat**，服务端只依赖它）：内嵌 DERP 中继、region、mesh、状态目录与密钥持久化
+vpn/node/                           节点自身的 VPN 栈（**引用 tailcat**）：身份、overlay、对端面、访问侧、pathcheck
+server/                             服务端核心：Server 结构体（TLS/certmagic）+ 内嵌 DERP/mesh
 server/config/                      服务端配置类型
 server/handler/                     TCP/UDP/ICMP 请求处理 + fallback 伪装页面
 server/handler/assets/fallback/     fallback 模板/CSS/内容（//go:embed：template.html + themes.json + content.json）
@@ -49,6 +52,7 @@ config/                             共享常量（默认端口、端点路径�
 log/                                基于 slog 的日志，默认时区 Asia/Shanghai
 util/                               工具函数（网络、文件、DNS、系统命令）
 util/bytespool/                     字节缓冲池（2 的幂次分配器，最大 128KB）
+util/netpipe/                       带缓冲的 net.Pipe 替代品（DERP 连接适配，见 docs/architecture.md 要点 19）
 docs/                               架构/配置不变量（architecture.md）、平台与 TUN 约束（platform.md）、README 截图（images/）
 build/                              构建/打包资源与工具（darwin bundle/icns/plist、windows manifest/ico/syso、图标源图、证书示例）
 pprof/                              可选 pprof HTTP 服务（127.0.0.1:6060）
@@ -108,6 +112,7 @@ make lint                               # golangci-lint + go fix 检查
 
 - 显示完整配置示例：`./easyss -show-config-example`
 - 配置加载、字段语义与归一化不变量以 [docs/architecture.md](docs/architecture.md) 的「配置相关」一节为准。
+- 节点组网的 `vpn.*`（客户端）与 `server.vpn.*`（服务端）字段语义、DERP 派生规则与 CLI 面（`./easyss vpn identity|regen`，实现在 `cmd/easyss/internal/vpncmd`）见 docs/architecture.md 要点 19；运维步骤见 [README.md](README.md) 的「节点组网(VPN)」。
 
 ## 深入阅读
 

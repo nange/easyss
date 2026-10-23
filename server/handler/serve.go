@@ -31,6 +31,9 @@ type handshakeResult struct {
 	// addrs 是握手阶段解析并校验过的目标地址（解析失败时为空）。拨号路径复用它，一次流
 	// 因此只解析一次，SSRF 检查与实际连接用的是同一批地址。
 	addrs []netip.Addr
+	// localDERP 表示目标就是本服务端自己的内嵌 DERP（见 localDERP.matches）：
+	// 这条流改拨本机回环监听，跳过 DNS 解析、SSRF 判定与 next proxy。
+	localDERP bool
 }
 
 func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -131,6 +134,20 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 
 	target := first.Handshake.Target
 
+	// 内嵌 DERP 目标（见 localDERP）：映射到本机回环监听，因此 DERP 不必暴露在公网入口上。
+	// 判定必须在下面的 SSRF 之前——那条路径会把回环目标直接拒绝。
+	if h.localDERP.matches(target) {
+		log.Info("[SERVER] embedded DERP target: mapping to the loopback listener", "target", target, "remote", r.RemoteAddr)
+		return handshakeResult{
+			sk:        sk,
+			first:     first,
+			endpoint:  endpoint,
+			target:    target,
+			method:    first.Handshake.Method,
+			localDERP: true,
+		}, true
+	}
+
 	// 拒绝 LAN/私网目标以防 SSRF，且必须在响应提交之前完成。解析出的地址一路传给拨号路径，拨号
 	// 只拨这些字面地址，DNS-rebinding 没有可翻转的第二次解析。解析失败不拒绝，拨号层会重新解析校验。
 	addrs, err := h.deps.resolve(r.Context(), target)
@@ -162,6 +179,11 @@ const udpBatchWindowMS = 1
 // Debug，因此这条 Info 是成功流唯一能看到路由的出口。
 func (h *ProxyHandler) sessionLogAttrs(res handshakeResult, client string) []any {
 	attrs := []any{"target", res.target, "client", client}
+	// 内嵌 DERP 的流已改拨本机回环（见 localDERP），next proxy 与它无关；不早退会把这条
+	// "成功流唯一能看到路由"的日志写成 via_next_proxy。
+	if res.localDERP {
+		return append(attrs, "dial", "embedded_derp")
+	}
 	if res.endpoint == config.EndpointTCP && h.tcp != nil && h.tcp.dial.usesNextProxy(res.target) {
 		attrs = append(attrs, "via_next_proxy", true, "proxy", h.tcp.dial.nextProxy.Host())
 	}
@@ -217,6 +239,10 @@ func (h *ProxyHandler) serveSession(w http.ResponseWriter, r *http.Request, res 
 		// 出站优先用客户端接入所用的地址族，不依赖操作系统的双栈排序；客户端连接的族是这里
 		// 唯一能观测到的信号。
 		reqCtx := withResolvedAddrs(withPreferredFamily(r.Context(), clientPreferredFamily(r.RemoteAddr)), res.addrs)
+		if res.localDERP {
+			// 内嵌 DERP：拨本机回环监听（见 dialTarget 与该分支的注释）。
+			reqCtx = withLocalDERPDial(reqCtx, h.localDERP.loopback)
+		}
 		switch res.endpoint {
 		case config.EndpointTCP:
 			stats.RecordServerTCPStream()

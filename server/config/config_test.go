@@ -209,12 +209,18 @@ func TestExampleConfigIsNormalized(t *testing.T) {
 	data, err := json.Marshal(fc)
 	require.NoError(t, err)
 	require.Contains(t, string(data), `"cdn_domains":[]`)
+	require.Contains(t, string(data), `"mesh_peers":[]`)
+	// 已移除的 server.vpn.derp_addr 不该再出现在示例里：DERP 的对外地址由
+	// domain 与 listen 推导，示例里没有任何可写的字段。
+	require.NotContains(t, string(data), `"derp_addr"`)
 	for _, key := range []string{
 		`"server"`, `"fallback"`, `"shaper"`, `"transport"`,
 		`"next_proxy"`, `"log"`, `"pprof_enabled"`, `"timeout"`,
 		`"host"`, `"port"`,
 		// HTTP/2 上行参数必须在示例里可见：用户排查上传速度时就是照这些键调。
 		`"h2_max_frame_size"`, `"h2_recv_buf_conn"`, `"h2_recv_buf_stream"`,
+		// 节点组网的键同样要在示例里可见：缺了它们运维只能去翻代码。
+		`"vpn"`, `"mesh_key"`, `"mesh_peers"`, `"derp_send_queue_depth"`,
 	} {
 		require.Contains(t, string(data), key)
 	}

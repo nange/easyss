@@ -143,6 +143,25 @@ func New(cfg Config) (*Router, error) {
 	return r, nil
 }
 
+// NewDirectOnly 返回把所有目标都判为直连的 Router，供 VPN 对端面使用：对端面只把
+// 隧道里的连接拨到本机 loopback。ipv6Rule 必须为 enable，否则字面 IPv6 目标会被
+// 拦成 Block。
+func NewDirectOnly() *Router {
+	r := &Router{}
+	r.proxyRule.Store(int32(ProxyRuleDirect))
+	r.ipv6Rule.Store(int32(IPV6RuleEnable))
+	return r
+}
+
+// NewProxyOnly 返回把所有目标都判为走代理的 Router，供内嵌 DERP 入口使用：DERP 的
+// 唯一出口是 easyss 隧道，被判成直连就会绕过隧道并连不上。
+func NewProxyOnly() *Router {
+	r := &Router{}
+	r.proxyRule.Store(int32(ProxyRuleProxy))
+	r.ipv6Rule.Store(int32(IPV6RuleEnable))
+	return r
+}
+
 func (r *Router) CustomFileError() error {
 	return r.customFileErr
 }
@@ -256,6 +275,12 @@ func (r *Router) hostAtCN(host string) bool {
 }
 
 func (r *Router) ipAtCN(ip string) bool {
+	// NewDirectOnly 构造的路由器刻意不加载 geoIP 数据库：恒为 ProxyRuleDirect 时
+	// 根本走不到这里。这个判空是纵深防御——万一有人对那样的路由器调用
+	// SetProxyRule 切到 auto，这里也不会空指针崩溃，只是永远判不出 CN。
+	if r.geoIPDB == nil {
+		return false
+	}
 	_ip := net.ParseIP(ip)
 	if _ip == nil {
 		return false

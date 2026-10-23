@@ -176,7 +176,7 @@ func TestForwardQueryFallsBackToSystemDNS(t *testing.T) {
 	})
 	t.Cleanup(resetBuiltinDNSCircuit)
 
-	fs := NewForwardServer("127.0.0.1:0", false)
+	fs := NewForwardServer("127.0.0.1:0", false, nil)
 	fs.system = sysServers
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	// 不可达的本地地址强制走回退路径
@@ -206,7 +206,7 @@ func TestForwardQueryAllServersUnavailable(t *testing.T) {
 	})
 	t.Cleanup(resetBuiltinDNSCircuit)
 
-	fs := NewForwardServer("127.0.0.1:0", false)
+	fs := NewForwardServer("127.0.0.1:0", false, nil)
 	fs.system = sysServers
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	fs.dnsServers = []string{"127.0.0.1:1"}
@@ -232,7 +232,7 @@ func TestForwardQuerySkipsSelfAsUpstream(t *testing.T) {
 	})
 	t.Cleanup(resetBuiltinDNSCircuit)
 
-	fs := NewForwardServer(":53", false)
+	fs := NewForwardServer(":53", false, nil)
 	fs.system = sysServers
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	fs.dnsServers = []string{"127.0.0.1:1"} // 内置服务器全部不可达
