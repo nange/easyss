@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -98,10 +99,14 @@ func (s *udpSession) dialRoute(ctx context.Context, domain string, route dnsRout
 func (s *udpSession) openUpstream(ctx context.Context, domain string, route dnsRoute) error {
 	conn, remote, err := s.dialRoute(ctx, domain, route)
 	if err != nil {
+		// 首拨失败没有连接日志可看，QNAME 只能随错误进结果日志；非 DNS 会话没有域名。
+		if domain != "" {
+			return fmt.Errorf("dns upstream dial for %q: %w", domain, err)
+		}
 		return err
 	}
 	s.installUpstream(conn, remote, route, s.readerRunning)
-	logUpstreamConnected(s.target, remote, route)
+	logUpstreamConnected(s.target, remote, domain, route)
 	return nil
 }
 
@@ -113,6 +118,7 @@ func (s *udpSession) rebindRoute(domain string, route dnsRoute) {
 		s.dns.rebindFailedAt = time.Now()
 		log.Warn("[UDP_DNS] rebind upstream failed, keeping the current route",
 			"target", s.target,
+			"domain", domain,
 			"want_via_next_proxy", route.viaNextProxy(),
 			"retry_after", rebindCooldown.String(),
 			"err", err)
@@ -121,7 +127,7 @@ func (s *udpSession) rebindRoute(domain string, route dnsRoute) {
 	s.dns.rebindFailedAt = time.Time{}
 
 	old := s.installUpstream(conn, remote, route, true)
-	logUpstreamConnected(s.target, remote, route)
+	logUpstreamConnected(s.target, remote, domain, route)
 	if old != nil {
 		// 旧连接的 reader 退出时会看到 s.upstream() 已不是自己，不会把这次关闭当成故障。
 		old.Close() //nolint:errcheck
@@ -129,9 +135,18 @@ func (s *udpSession) rebindRoute(domain string, route dnsRoute) {
 }
 
 // 首条连接与重绑两条安装路径共用它，日志字段只有一份定义。
-func logUpstreamConnected(target, remote string, route dnsRoute) {
-	log.Info("[UDP] upstream connected", "target", target, "remote", remote,
-		"via_next_proxy", route.viaNextProxy())
+func logUpstreamConnected(target, remote, domain string, route dnsRoute) {
+	attrs := []any{"target", target}
+	if domain != "" {
+		attrs = append(attrs, "domain", domain)
+	}
+	if route.viaNextProxy() {
+		// remote 在代理路径是配置的下一级代理地址，不是目标，与直连的对端 socket 分字段记。
+		attrs = append(attrs, "via_next_proxy", true, "proxy", remote)
+	} else {
+		attrs = append(attrs, "via_next_proxy", false, "remote", remote)
+	}
+	log.Info("[UDP] upstream connected", attrs...)
 }
 
 // observeDNSFrame 在写入目标之前调用，返回时"该往哪条连接写"已经确定。

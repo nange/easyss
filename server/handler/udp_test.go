@@ -523,12 +523,13 @@ func (f *fakeDNSRouter) dialRoute(_ context.Context, _, target, _ string, route 
 	if f.dialHook != nil {
 		f.dialHook(route)
 	}
-	pool, remote := &f.directConns, "direct"
+	// 与真实 dialVia 一致：直连返回对端地址，代理返回配置的下一级代理地址。
+	pool, remote := &f.directConns, target
 	if route.viaNextProxy() {
-		pool, remote = &f.proxyConns, "socks5://proxy.example.com:1080"
+		pool, remote = &f.proxyConns, "127.0.0.1:4080"
 	}
 	if len(*pool) == 0 {
-		return nil, "", fmt.Errorf("fake dns router: no more %s connections", remote)
+		return nil, "", fmt.Errorf("fake dns router: no more connections for route %v", route)
 	}
 	conn := (*pool)[0]
 	*pool = (*pool)[1:]
@@ -1540,7 +1541,7 @@ func TestDNSSessionRebindFailureLogsActualPath(t *testing.T) {
 	defer rec.mu.Unlock()
 	var found bool
 	for _, r := range rec.records {
-		if !strings.HasPrefix(r.Message, "[UDP_DNS]") {
+		if r.Level != slog.LevelInfo || !strings.HasPrefix(r.Message, "[UDP_DNS]") {
 			continue
 		}
 		attrs := attrsOf(r)
@@ -1558,6 +1559,21 @@ func TestDNSSessionRebindFailureLogsActualPath(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no [UDP_DNS] record for the query")
+	}
+
+	// 重绑正是"同一会话出现第二个域名"的场景，Warn 必须带上触发它的 QNAME。
+	var warnFound bool
+	for _, r := range rec.records {
+		if r.Level != slog.LevelWarn || !strings.HasPrefix(r.Message, "[UDP_DNS] rebind upstream failed") {
+			continue
+		}
+		warnFound = true
+		if got := attrsOf(r)["domain"]; got != "mtalk.google.com" {
+			t.Fatalf("rebind warn domain = %q, want the query that asked for the new route", got)
+		}
+	}
+	if !warnFound {
+		t.Fatal("no rebind failure warn")
 	}
 }
 
@@ -1661,5 +1677,97 @@ func TestUDPSessionIgnoresRetiredConnReadError(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("run did not return after close")
+	}
+}
+
+// infoRecordsWith 返回消息以 prefix 开头的 Info 记录，供级别与字段断言使用。
+func infoRecordsWith(rec *recordingHandler, prefix string) []slog.Record {
+	var out []slog.Record
+	for _, r := range rec.at(slog.LevelInfo) {
+		if strings.HasPrefix(r.Message, prefix) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// 防回归：代理路径的 remote 是下一级代理地址，与直连的对端地址必须分字段，DNS 会话另带
+// domain，否则一条"目标 8.8.8.8:53、remote 127.0.0.1:4080"的日志无从解释。
+// 必须串行：它替换进程级 logger，与同包并行测试同时运行会互相吞掉日志。
+func TestUDPUpstreamConnectedLogFields(t *testing.T) {
+	rec := &recordingHandler{}
+	prev := log.Logger()
+	log.SetLogger(slog.New(rec))
+	t.Cleanup(func() { log.SetLogger(prev) })
+
+	router := &fakeDNSRouter{
+		proxyDomain: "google",
+		proxyConns:  []net.Conn{newDNSTargetConn()},
+		directConns: []net.Conn{newDNSTargetConn()},
+	}
+	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
+	s.dns.router = router
+	t.Cleanup(s.close)
+
+	for _, domain := range []string{"mtalk.google.com", "api.github.com"} {
+		if _, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, domain))); err != nil {
+			t.Fatalf("observeClientFrame(%s): %v", domain, err)
+		}
+	}
+
+	records := infoRecordsWith(rec, "[UDP] upstream connected")
+	if len(records) != 2 {
+		t.Fatalf("[UDP] upstream connected records = %d, want 2", len(records))
+	}
+
+	proxied := attrsOf(records[0])
+	if proxied["domain"] != "mtalk.google.com" || proxied["via_next_proxy"] != "true" {
+		t.Fatalf("proxied attrs = %v", proxied)
+	}
+	if proxied["proxy"] != "127.0.0.1:4080" {
+		t.Fatalf("proxy = %q, want the configured next proxy", proxied["proxy"])
+	}
+	if _, ok := proxied["remote"]; ok {
+		t.Fatalf("the proxied record must not carry a socket remote: %v", proxied)
+	}
+
+	direct := attrsOf(records[1])
+	if direct["domain"] != "api.github.com" || direct["via_next_proxy"] != "false" {
+		t.Fatalf("direct attrs = %v", direct)
+	}
+	if direct["remote"] != "8.8.8.8:53" {
+		t.Fatalf("remote = %q, want the resolver peer", direct["remote"])
+	}
+	if _, ok := direct["proxy"]; ok {
+		t.Fatalf("the direct record must not carry a proxy: %v", direct)
+	}
+
+	// 成功路径不能再补一条"首查命中代理"的 Info：字段与连接日志重复，只有路由变化值得记录。
+	dnsRecords := infoRecordsWith(rec, "[UDP_DNS]")
+	if len(dnsRecords) != 1 {
+		t.Fatalf("[UDP_DNS] Info records = %d, want 1 (the route change only)", len(dnsRecords))
+	}
+	if attrsOf(dnsRecords[0])["route_changed"] != "true" {
+		t.Fatalf("the only [UDP_DNS] record must be the route change: %v", attrsOf(dnsRecords[0]))
+	}
+}
+
+// 首拨失败没有连接日志可看，QNAME 必须随错误进入结果日志，否则只剩一条没有域名的错误。
+func TestDNSSessionFirstDialFailureCarriesDomain(t *testing.T) {
+	// 没有预置连接：命中代理的拨号必然失败。
+	router := &fakeDNSRouter{proxyDomain: "google"}
+	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
+	s.dns.router = router
+	t.Cleanup(s.close)
+
+	_, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(packDNSQuery(t, "mtalk.google.com")))
+	if err == nil {
+		t.Fatal("a failed first dial must end the session")
+	}
+	if !strings.Contains(err.Error(), "mtalk.google.com") {
+		t.Fatalf("error = %q, want the QNAME for attribution", err)
+	}
+	if !strings.Contains(err.Error(), "no more connections for route") {
+		t.Fatalf("error = %q, the dial error must stay wrapped and readable", err)
 	}
 }
