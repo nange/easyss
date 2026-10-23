@@ -24,9 +24,8 @@ func newConnInfo(regions []*tailcfg.DERPRegion, regionID tailcfg.DERPRegionID, w
 	return &ci
 }
 
-// fullAddr 构造一个完整展开格式的地址，其 region 由本包的 vpn.BuildRegion 生成——
-// 也就是说这是对端面真实会打印出来的那种地址。多个 derpAddr 就是同一 region 下的
-// 多个中继节点。
+// fullAddr 用 vpn.BuildRegion 构造对端面真实会打印出来的完整展开地址；
+// 多个 derpAddr 是同一 region 下的多个中继节点。
 func fullAddr(t *testing.T, derpAddrs ...string) string {
 	t.Helper()
 	region, err := vpn.BuildRegion(derpAddrs...)
@@ -36,10 +35,8 @@ func fullAddr(t *testing.T, derpAddrs ...string) string {
 	return string(newConnInfo([]*tailcfg.DERPRegion{region}, 0, true).Addr())
 }
 
-// TestAssertPeersShareDERPSet 固定"双方必须声明同一组中继"这条启动期校验：它是
-// DERP 私有化的直接推论（内嵌 DERP 只接待经本服务端隧道送达的连接，所以只有集合
-// 相等才保证"无论隧道落在哪台服务端，地址里都有它"）。顺序与书写差异不算不一致，
-// 缺一个/多一个都必须在启动时被点名拒绝。
+// TestAssertPeersShareDERPSet 钉住启动期校验"双方必须声明同一组中继"：顺序与书写
+// 差异不算不一致，缺一个/多一个都必须在启动时被点名拒绝。
 func TestAssertPeersShareDERPSet(t *testing.T) {
 	own := []string{"relay-a.example.com:443", "relay-b.example.com:8443"}
 
@@ -96,8 +93,7 @@ func TestAssertPeersShareDERPSet(t *testing.T) {
 		if err := assertPeersShareDERPSet(own, nil); err != nil {
 			t.Errorf("assertPeersShareDERPSet(own, nil) = %v, want nil", err)
 		}
-		// 空列表本身由 NewConfig 更早地拒绝（"没有任何中继被声明"），这里没有对端
-		// 就无从比较，因此不算错误。
+		// 空列表由 NewConfig 更早拒绝；这里没有对端就无从比较。
 		if err := assertPeersShareDERPSet(nil, nil); err != nil {
 			t.Errorf("assertPeersShareDERPSet(nil, nil) = %v, want nil", err)
 		}
@@ -109,10 +105,8 @@ func TestAssertPeersShareDERPSet(t *testing.T) {
 	})
 }
 
-// TestBuildRegionRoundTripsThroughAddr 是"零控制面"的核心断言：由 vpn.BuildRegion
-// 构造的 region 序列化进 tailcat 地址、再解析出来之后，对端需要的一切（DERP
-// 主机与端口）都还在地址里，且 region 非空——也就是客户端不需要查询任何
-// DERPMap。
+// TestBuildRegionRoundTripsThroughAddr 是"零控制面"的核心断言：region 序列化进
+// tailcat 地址再解析出来之后，对端需要的一切仍在地址里，客户端不需要查询任何 DERPMap。
 func TestBuildRegionRoundTripsThroughAddr(t *testing.T) {
 	addr := fullAddr(t, "relay.example.com:8443")
 
@@ -137,8 +131,8 @@ func TestBuildRegionRoundTripsThroughAddr(t *testing.T) {
 	}
 }
 
-// TestAssertFullAddr 固定 4.7 的硬契约：完整展开格式被接受，短格式（只带
-// region ID）必须被拒且错误信息指向官方 DERPMap，其余不完整形态也一并被拒。
+// TestAssertFullAddr 钉住完整展开格式契约：完整格式被接受，短格式（只带 region ID）
+// 被拒且错误指向官方 DERPMap，其余不完整形态也一并被拒。
 func TestAssertFullAddr(t *testing.T) {
 	t.Run("接受完整展开格式", func(t *testing.T) {
 		if err := AssertFullAddr(fullAddr(t, "relay.example.com:8443")); err != nil {

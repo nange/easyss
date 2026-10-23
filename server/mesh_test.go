@@ -31,9 +31,8 @@ import (
 	"github.com/nange/easyss/v3/vpn"
 )
 
-// startFakeSOCKS5 起一个最小的 SOCKS5 代理：它按 RFC 1928 完成握手，记录 CONNECT
-// 的目标，再把连接接到该目标上。用它来断言"mesh 连接确实经 SOCKS5 出网"，而不必
-// 依赖一个真实的 easyss-headless。
+// startFakeSOCKS5 起一个最小的 SOCKS5 代理（RFC 1928）：记录 CONNECT 目标并把连接接到该目标，
+// 用来断言"mesh 连接确实经 SOCKS5 出网"而不依赖真实的 easyss-headless。
 func startFakeSOCKS5(t *testing.T) (addr string, targets <-chan string) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -154,9 +153,8 @@ func writeMeshCAFile(t *testing.T, certPEM []byte) string {
 	return path
 }
 
-// meshTestFileConfig 造一份启用了 VPN 与 mesh 的服务端配置（DERP 的对外地址由
-// domain 与 listen 推导，即 a.example.com:443；startDERPMesh 只用到这个字符串，
-// 不拨它）。
+// meshTestFileConfig 造一份启用了 VPN 与 mesh 的服务端配置：DERP 对外地址由 domain 与 listen
+// 推导为 a.example.com:443，startDERPMesh 只用到这个字符串、不拨它。
 func meshTestFileConfig(peerAddr, peerProxy, meshKey string) *config.FileConfig {
 	return &config.FileConfig{
 		Server: config.ServerConfig{
@@ -174,9 +172,8 @@ func meshTestFileConfig(peerAddr, peerProxy, meshKey string) *config.FileConfig 
 	}
 }
 
-// TestMeshDialersFor 固定"每个对端一条经隧道的出网路径"这条翻译规则：对端自带
-// proxy 时用它，否则复用顶层 next_proxy 的实例；两者都没有必须报错（内嵌 DERP 只
-// 接待回环来源，直连对端公网端口不可能成功）。
+// TestMeshDialersFor 固定"每个对端一条经隧道的出网路径"：自带 proxy 用它，否则复用顶层
+// next_proxy；两者都没有必须报错（内嵌 DERP 只接待回环来源，直连对端公网端口不可能成功）。
 func TestMeshDialersFor(t *testing.T) {
 	const timeout = 5 * time.Second
 
@@ -361,8 +358,7 @@ func TestStartDERPMeshAndShutdown(t *testing.T) {
 	}
 }
 
-// TestMeshDisabledLeavesNoState 守护"未配置 mesh 时与既有版本一致"：没有 mesh_key
-// 就不构造 Mesh，Shutdown 也不会去碰它。
+// TestMeshDisabledLeavesNoState 守护"没有 mesh_key 就不构造 Mesh"：Shutdown 也不会去碰它。
 func TestMeshDisabledLeavesNoState(t *testing.T) {
 	s := &Server{}
 	if s.mesh != nil || s.meshCancel != nil {

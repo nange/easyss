@@ -6,10 +6,8 @@ import (
 	"testing"
 )
 
-// TestNormalizeVPNPeerPort 固定 vpn.peer_port 归一化的唯一入口：非正值表示
-// "未配置"（从 socks_port 派生），无法派生或派生结果越界时回退默认端口。
-// 它与 http_port = socks_port + 1000 的既有惯例同源，因此偏移量的变化也必须
-// 在这里被观察到。
+// TestNormalizeVPNPeerPort 固定 vpn.peer_port 归一化的唯一入口：非正值表示未配置
+// （从 socks_port 派生），无法派生或越界时回退默认端口。
 func TestNormalizeVPNPeerPort(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -49,11 +47,8 @@ func TestNormalizeVPNPeerPortIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestParseVPNOverlayCIDR 固定 overlay 段的校验与归一化：空值取默认段，非法值
-// 必须报错（而不是静默回退），合法值归一化为网络地址。
-//
-// 入参只剩 DefaultVPNOverlayCIDR 一个来源，所以这一层现在守的是"常量被改坏"：
-// 区间边界（/16 与 /30）只有在这里被固定下来，改坏常量才不会一路走到运行期才炸。
+// TestParseVPNOverlayCIDR 固定 overlay 段的校验：空值取默认，非法值报错而不是静默回退。
+// 入参只剩常量一个来源，因此这一层守的是"常量被改坏"（区间边界 /16 与 /30）。
 func TestParseVPNOverlayCIDR(t *testing.T) {
 	t.Run("空值取默认段", func(t *testing.T) {
 		got, err := parseVPNOverlayCIDR("")
@@ -217,12 +212,8 @@ func TestParseVPNMeshKey(t *testing.T) {
 	})
 }
 
-// TestNormalizeDERPSendQueueDepth 固定内嵌中继队列深度的唯一归一化入口：
-// 非正值表示"未配置"（取默认值），越界钳到最近的边界——与 timeout/tun_mtu 同语义。
-//
-// 它是"经中继的单流吞吐 ≈ 深度 × 每帧约 1.4KB / RTT"里唯一的可配置因子，
-// 因此默认值本身也要在这里被钉住：把它改回 tailscale 的 32 等于把中继吞吐
-// 打回原形，必须是一次有意识的改动，而不是顺手改常量。
+// TestNormalizeDERPSendQueueDepth 固定中继队列深度的唯一归一化入口：非正值取默认、
+// 越界钳到最近的边界。默认值必须被钉住——它是经中继单流吞吐的唯一可配置因子。
 func TestNormalizeDERPSendQueueDepth(t *testing.T) {
 	cases := []struct {
 		name string

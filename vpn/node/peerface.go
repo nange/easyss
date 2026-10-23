@@ -24,14 +24,10 @@ import (
 )
 
 // PeerFacePath 返回对端面地址文件（<exe>/vpn/peer.txt）的路径。
-//
-// 该文件里只允许出现**完整展开格式**的地址：拿到它的运维会把它复制到每个访问侧
-// 的 vpn.peers[].address，因此它必须自包含（见 AssertFullAddr）。
+// 内容必须是完整展开格式（见 AssertFullAddr）：运维会把它原样抄进访问侧的 vpn.peers[].address。
 func PeerFacePath() string { return filepath.Join(vpn.StateDir(), "peer.txt") }
 
-// PeerFaceOptions 是构造对端面所需的输入。
 type PeerFaceOptions struct {
-	// Identity 是本节点的 tailcat 服务端身份（node 私钥 + preshared key）。
 	Identity *NodeIdentity
 	// Region 是要内嵌进地址的 DERP region（见 BuildRegion）。
 	Region *tailcfg.DERPRegion
@@ -39,7 +35,7 @@ type PeerFaceOptions struct {
 	PeerPort int
 	// AllowClients 是允许接入的对端 node key；为空表示不限制。
 	AllowClients []key.NodePublic
-	// Timeouts 提供拨号与空闲超时（复用客户端既有的一套派生值）。
+	// Timeouts 提供拨号与空闲超时。
 	Timeouts config.Timeouts
 	// DERPDialer 是 tailcat 到 DERP 的拨号器（见 runner/derpdialer.go）：内嵌
 	// DERP 只接待来自服务端回环的连接，因此这条连接必须由调用方指定怎么走。
@@ -50,18 +46,9 @@ type PeerFaceOptions struct {
 	DERPOnly bool
 }
 
-// PeerFace 是本节点的对端面：让别人能通过 tailcat 隧道访问本机的服务端口。
-//
-// 它的形状由两条实测约束决定：
-//
-//   - tailcat 客户端完全不接受入站连接，因此"被别人拨进来"只能靠一个
-//     tailcat **Server**；
-//   - 隧道内的 TCP 与 UDP 各自需要一个入口，而 Server 只有 Listen 没有拨号 API，
-//     因此两条路径都在**本机**终止：TCP 桥到一个只接受字面 loopback 目标的
-//     Socks5Server，UDP 桥到一个同样只接受字面 loopback 目标的薄中继。
-//
-// 两条路径共用同一条安全边界：对端面只可能拨自己的 loopback，绝不可能成为内网
-// 跳板（内层 CONNECT 契约）。
+// PeerFace 是本节点的对端面：对端经 tailcat 隧道访问本机的服务端口。
+// 入站只能靠 tailcat Server（tailcat 客户端不接受入站）；TCP 与 UDP 都在本机
+// 终止于只接受字面 loopback 目标的路径，因此不可能成为内网跳板。
 type PeerFace struct {
 	opts  PeerFaceOptions
 	srv   *tailcat.Server
@@ -76,10 +63,8 @@ type PeerFace struct {
 	wg       sync.WaitGroup
 }
 
-// NewPeerFace 构造对端面，并在构造期就把地址自检做掉。
-//
-// 自检放在这里而不是 Start：地址要交给运维去复制到每个访问侧，一个"启动成功但
-// 地址是短格式"的节点会让所有对端在第一次访问时才失败（且失败表现得像网络问题）。
+// NewPeerFace 构造对端面，并在构造期自检地址（见 AssertFullAddr）。
+// 必须在 Start 之前拦下不可用的地址：否则问题要到对端第一次访问时才暴露，且看起来像网络故障。
 func NewPeerFace(opts PeerFaceOptions) (*PeerFace, error) {
 	if opts.Identity == nil {
 		return nil, errors.New("vpn: peer face requires a node identity")
@@ -110,9 +95,7 @@ func (p *PeerFace) NodeKey() key.NodePublic {
 }
 
 // Start 启动对端面：tailcat Server 与隧道内的 TCP/UDP 监听器。
-//
-// ctx 只约束 tailcat 的启动工作（它不联网——region 已经内嵌，见 BuildRegion）。
-// 返回后 ctx 不再影响对端面，生命周期交给 Stop。
+// ctx 只约束启动工作（region 已内嵌，不联网）；返回后生命周期交给 Stop。
 func (p *PeerFace) Start(ctx context.Context) error {
 	if p.srv != nil {
 		return errors.New("vpn: peer face already started")
@@ -153,8 +136,7 @@ func (p *PeerFace) Start(ctx context.Context) error {
 		// systemd-resolved），而不是"按查询域名重新分流"的 DNS。
 		DisableDNSIntercept: true,
 		// 关闭 UDP ASSOCIATE：对端面的 UDP 走 tailcat 的 UDP listener + 薄中继
-		// （见 udprelay.go），而不是 SOCKS5 的 ASSOCIATE。这里必须是显式关闭：
-		// 该路径此前只是"碰巧"因为绑不上 tailcat ULA 而失败。
+		// （见 udprelay.go）。ASSOCIATE 会绑对端没有的 tailcat ULA，必须显式关闭。
 		DisableUDPAssociate: true,
 		// 唯一的跨节点协议契约：只拨字面 loopback 目标。域名与其他一切目标被拒。
 		DirectDialContext: LoopbackDialContext,
@@ -195,11 +177,8 @@ func (p *PeerFace) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop 关闭对端面。顺序是刻意的：先关两个监听器（不再接受新流），再收 UDP 中继
-// （等在飞流结束），最后关 tailcat Server（断开隧道会话）。反过来做会让已经在飞
-// 的连接在隧道消失后才被拆除，表现为对端面的日志里出现无关的转发错误。
-//
-// 幂等；未 Start 时调用是空操作。
+// Stop 关闭对端面：先关监听器，再收 UDP 在飞流，最后关 tailcat Server。
+// 顺序反了会让在飞连接在隧道消失后才拆除；幂等，未 Start 时是空操作。
 func (p *PeerFace) Stop() error {
 	p.stopOnce.Do(func() {
 		if p.tcpLn != nil {
@@ -229,10 +208,7 @@ func (p *PeerFace) Stop() error {
 }
 
 // PublishAddr 把本节点的 tailcat 地址写到 path（见 PeerFacePath），并返回该地址。
-//
-// 写之前重新做一次完整格式自检：这是运维看到地址的最后一道关口，写出去一份短格式
-// 地址等于把"每个对端都会去拉官方 DERPMap"这个隐患发给了所有人。目录 0700、文件
-// 0600——地址里含 preshared key，等价于对端面的接入凭据。
+// 写前重新自检完整格式；目录 0700、文件 0600——地址含 preshared key，等价于接入凭据。
 func (p *PeerFace) PublishAddr(path string) (string, error) {
 	addr := p.TailcatAddr()
 	if err := AssertFullAddr(addr); err != nil {
@@ -256,11 +232,8 @@ func (p *PeerFace) PublishAddr(path string) (string, error) {
 }
 
 // LoopbackDialContext 是对端面唯一的拨号器：只接受**字面** loopback 目标。
-//
-// 这是整个 VPN 的安全边界：对端面不解析任何名字，
-// 因此"只可能拨自己的 loopback"不依赖 DNS 是否可信，也不可能成为内网跳板。域名
-// （包括 "localhost"）与其他一切目标一律被拒——即便访问侧本该把目标归一化成字面
-// 127.0.0.1，这里也不假设它会那么做。
+// 这是整个 VPN 的安全边界：不做名字解析，域名（含 "localhost"）与其他目标一律拒绝，
+// 因此不依赖 DNS 是否可信，也不可能成为内网跳板。
 func LoopbackDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -278,11 +251,8 @@ func LoopbackDialContext(ctx context.Context, network, addr string) (net.Conn, e
 	return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(ip.String(), strconv.Itoa(portNum)))
 }
 
-// countingListener 统计对端面接受的 TCP 流。
-//
-// 对端面的 TCP 服务复用的是 proxy.Socks5Server，它没有"接受了一条流"的回调，
-// 因此在监听器这一层计数——这正是对端面自己拥有的对象。计数点放在 Accept 成功
-// 之后：被拒绝的连接（例如调用方已停止监听）不算一条流。
+// countingListener 在监听器层统计对端面接受的 TCP 流。
+// 只在 Accept 成功后计数：Socks5Server 没有接受回调，而失败的 Accept 不算一条流。
 type countingListener struct{ net.Listener }
 
 func (l countingListener) Accept() (net.Conn, error) {

@@ -12,7 +12,7 @@ import (
 )
 
 // vpnDialOnlyRoute 只实现 VPNRoute（没有 ResolveStatic），用于断言可选能力缺席时
-// 静态应答整体关闭（DNS 路径行为与引入该能力之前一致）。
+// 静态应答整体关闭。
 type vpnDialOnlyRoute struct{}
 
 func (vpnDialOnlyRoute) Lookup(string) (string, bool) { return "", false }
@@ -32,13 +32,9 @@ func staticTestVPN(peer string, addr netip.Addr) *fakeVPNRoute {
 	}
 }
 
-// TestDNSInterceptorAnswersPeerNamesLocally 是 TUN 模式透明访问的 DNS 前提：
-// 系统解析器在 TUN 下指向的是公网 DNS（见 client/tun 的 splitDNS 步骤），那些
-// 查询经 tun2socks 到达本拦截器，因此对端名字必须在这里被就地应答——而不是在
-// client/dns 的转发服务器里（那个只服务 enable_forward_dns 的 LAN 部署）。
-//
-// 它同时固定 5.4 的两条契约：A 给 overlay 地址、AAAA 给 NOERROR 空应答。上游与
-// 直连都没有被碰到（见 newVPNTestServer 的直连拨号器会直接报错）。
+// TestDNSInterceptorAnswersPeerNamesLocally 是 TUN 模式透明访问的 DNS 前提：TUN 下系统
+// 解析器指向公网 DNS（见 client/tun 的 splitDNS 步骤），查询经 tun2socks 到达本拦截器，
+// 对端名字必须在这里就地应答；A 给 overlay 地址、AAAA 给 NOERROR 空应答。
 func TestDNSInterceptorAnswersPeerNamesLocally(t *testing.T) {
 	srv := newVPNTestServer(t, staticTestVPN("b.", netip.MustParseAddr("198.19.0.15")), nil)
 
@@ -185,9 +181,8 @@ func TestDNSStaticAnswerSurvivesTheTCPFrontend(t *testing.T) {
 	}
 }
 
-// TestDNSInterceptorLeavesOtherNamesAndTypesAlone 固定钩子的边界：非对端名与其他
-// qtype 都必须回到原有分流路径（这里断言动作不是 dnsActionStatic，具体的转发行为
-// 由既有的 DNS 用例覆盖）。
+// TestDNSInterceptorLeavesOtherNamesAndTypesAlone 固定钩子的边界：非对端名与其他 qtype
+// 都必须回到原有分流路径（这里断言动作不是 dnsActionStatic，具体转发行为由 DNS 用例覆盖）。
 func TestDNSInterceptorLeavesOtherNamesAndTypesAlone(t *testing.T) {
 	srv := newVPNTestServer(t, staticTestVPN("b.", netip.MustParseAddr("198.19.0.15")), nil)
 

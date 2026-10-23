@@ -13,13 +13,9 @@ import (
 	"github.com/nange/easyss/v3/config"
 )
 
-// TestDERPServers 固定"谁提供内嵌 DERP"的选择规则：所有被 derp 标记的条目都进
-// 列表（配置顺序，它们共同构成同一 region 的多个中继）；没有任何条目标记时回退
-// **当前连接的服务端**（default 标记，其次 servers[0]），不再固定取 servers[0]。
-//
-// 回退到当前服务端是必要的：内嵌 DERP 只接待经本服务端隧道送达的连接，所以节点
-// 实际能用的中继永远是它此刻连的那台；固定取 servers[0] 会在默认 server 不是第一
-// 条时派生出一个永远连不上的中继。
+// TestDERPServers 固定"谁提供内嵌 DERP"的选择规则：所有被 derp 标记的条目都进列表
+// （配置顺序，它们共同构成同一 region 的多个中继）；没有标记时回退**当前连接的服务端**
+// （default 标记，其次 servers[0]）——内嵌 DERP 只接待经本服务端隧道送达的连接。
 func TestDERPServers(t *testing.T) {
 	t.Run("被标记的条目按配置顺序全部返回", func(t *testing.T) {
 		cfg := &ClientConfig{Servers: []*ServerProfile{
@@ -31,7 +27,7 @@ func TestDERPServers(t *testing.T) {
 		if len(got) != 2 || got[0].Host != "b.example.com" || got[1].Host != "c.example.com" {
 			t.Fatalf("DERPServers() = %v, want [b.example.com c.example.com] in config order", got)
 		}
-		// 单节点视图 = 列表第一个（既有调用点与日志用）。
+		// 单节点视图 = 列表第一个（日志与单节点调用方用）。
 		if first := cfg.DERPServer(); first == nil || first.Host != "b.example.com" {
 			t.Fatalf("DERPServer() = %v, want b.example.com", first)
 		}
@@ -69,12 +65,9 @@ func TestDERPServers(t *testing.T) {
 	})
 }
 
-// TestVPNDERPAddrs 固定通告列表的派生：由全部 `derp: true` 标记条目派生（一条
-// 都没有时是当前连接的服务端）；返回值必须是 host:port（IPv6 带方括号）、规范化
-// 去重且保持配置顺序（对端会按这个顺序尝试中继节点）。
-//
-// 没有"显式覆盖"的入口是有意的：地址里内嵌的位置必须与服务端的对外地址逐字
-// 一致，多节点只能靠多标记几条 `derp: true`。
+// TestVPNDERPAddrs 固定通告列表的派生：由全部 `derp: true` 标记条目派生（一条都没有时
+// 是当前连接的服务端）；返回值必须是 host:port（IPv6 带方括号）、规范化去重且保持配置
+// 顺序（对端按这个顺序尝试中继节点）。
 func TestVPNDERPAddrs(t *testing.T) {
 	t.Run("多标记派生多个节点并保持顺序", func(t *testing.T) {
 		cfg := &ClientConfig{
@@ -145,12 +138,9 @@ func TestVPNDERPAddrs(t *testing.T) {
 	})
 }
 
-// TestValidateDERPServerAddr 固定"当前在运行的服务端必须是声明的中继之一"这条不变量：
-// 内嵌 DERP 只接待经本服务端隧道送达的连接，声明列表里没有它时中继永远连不上，因此
-// VPN 必须在启动阶段拒绝（见 runner.vpnOptions）而不是让用户看到"连不上"。
-//
-// 判据的入参是显式的：正在跑的会话可能停在旧的那台上，而 default 标记早已被托盘切换
-// 改写，所以判定绝不能隐式取 DefaultServer（见下面"只看传进来的服务器"那条）。
+// TestValidateDERPServerAddr 固定"当前在运行的服务端必须是声明的中继之一"：内嵌 DERP 只
+// 接待经本服务端隧道送达的连接，列表里没有它时中继永远连不上，必须在启动阶段拒绝。
+// 判据入参显式传入——会话可能停在旧服务器上，而 default 标记早已被托盘切换改写。
 func TestValidateDERPServerAddr(t *testing.T) {
 	t.Run("当前服务端在列表里", func(t *testing.T) {
 		cfg := &ClientConfig{Servers: []*ServerProfile{
@@ -252,13 +242,9 @@ func TestValidateDERPServerAddr(t *testing.T) {
 	})
 }
 
-// TestValidateDERPRelays 固定"同一 region 最多 3 台中继（推荐 1-2 台）"这条规模上限
-// （见 config.MaxVPNRelays）：mesh 是全互联，而节点地址里内嵌的正是这一组中继，
-// 所以越限的配置没有可工作的形态——第 4 台既进不了地址，也没法与其余中继互通。因此
-// 它必须在启动阶段（LoadConfig）就被拒绝，而不是降级成"VPN 连不上"。
-//
-// 计数口径与 VPNDERPAddrs 一致（规范化去重），且只在 vpn.enabled 时生效：未启用的
-// VPN 不参与运行期，derp 标记此时没有任何效果。
+// TestValidateDERPRelays 固定"同一 region 最多 3 台中继"这条上限（config.MaxVPNRelays）：
+// mesh 全互联，第 4 台既进不了地址也没法与其余中继互通，必须在 LoadConfig 就拒绝。
+// 计数口径与 VPNDERPAddrs 一致（规范化去重），且只在 vpn.enabled 时生效。
 func TestValidateDERPRelays(t *testing.T) {
 	// relays 造一份"1 条当前服务端 + n 条 derp 标记"的 servers[]。
 	relays := func(n int) []*ServerProfile {
@@ -409,11 +395,9 @@ func TestVPNPeerPortDerivation(t *testing.T) {
 	}
 }
 
-// TestLoadConfigWarnsOnRemovedOverlayCIDR 固定已移除字段的降级行为：overlay 段
-// 现在是访问侧本地的实现常量（config.DefaultVPNOverlayCIDR），没有任何配置项指向它。
-// 配置里残留的 vpn.overlay_cidr 是未知键（json.Unmarshal 直接忽略），既不影响
-// 加载，也不会让启动失败，但必须在启动日志里说清楚——它可能正是运维"已经把这段
-// 改成别的"的原因，而那段现在是死配置，实际生效的仍是常量。
+// TestLoadConfigWarnsOnRemovedOverlayCIDR 固定已移除字段的降级行为：配置里残留的
+// vpn.overlay_cidr 现在是未知键（json.Unmarshal 忽略），不影响加载也不会让启动失败，
+// 但必须在启动日志里说清楚——实际生效的仍是常量 config.DefaultVPNOverlayCIDR。
 func TestLoadConfigWarnsOnRemovedOverlayCIDR(t *testing.T) {
 	logs := captureLogs(t)
 
@@ -529,11 +513,8 @@ func TestVPNConfigJSONRoundTrip(t *testing.T) {
 	})
 }
 
-// TestVPNConfigParsesFromJSON 固定配置文件里的 vpn 键能完整解析（字段名与
-// README 一致），并守住 servers[].derp 的解析。
-//
-// JSON 里刻意不含 overlay_cidr：overlay 段没有配置项，这个测试同时也在证明
-// "README 里列出的字段"就是可配置的全部。
+// TestVPNConfigParsesFromJSON 固定配置文件里的 vpn 键能完整解析，并守住 servers[].derp。
+// JSON 里刻意不含 overlay_cidr：overlay 段没有配置项，README 里列出的字段就是可配置的全部。
 func TestVPNConfigParsesFromJSON(t *testing.T) {
 	cfg, err := ParseConfigJSON(`{
 		"version": 3,
@@ -578,8 +559,8 @@ func TestVPNConfigParsesFromJSON(t *testing.T) {
 	}
 }
 
-// TestVPNDisabledHasNoEffect 守护"vpn 关闭时对既有配置零影响"：一份不含 vpn 键
-// 的旧配置加载后行为与今天完全一致，且 VPN 相关的访问器都回落到安全的默认值。
+// TestVPNDisabledHasNoEffect 守护"vpn 关闭时对配置零影响"：不含 vpn 键的配置加载后行为
+// 与没有这个功能时一致，且 VPN 访问器都回落到安全的默认值。
 func TestVPNDisabledHasNoEffect(t *testing.T) {
 	cfg, err := ParseConfigJSON(`{
 		"version": 3,

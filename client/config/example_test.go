@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// TestExampleConfigUsesHost 固定 -show-config-example 的完整模式示例输出
-// 新键 host；旧键 address 不应再出现在示例里。
+// TestExampleConfigUsesHost 固定 -show-config-example 的 servers[] 用 host 键表达对外地址，
+// 不能出现 address 键（vpn.peers[] 用的是另一个字段，不在本检查范围）。
 func TestExampleConfigUsesHost(t *testing.T) {
 	t.Parallel()
 
@@ -19,7 +19,7 @@ func TestExampleConfigUsesHost(t *testing.T) {
 	if !strings.Contains(out, `"host"`) {
 		t.Errorf("full config example should contain host: %s", out)
 	}
-	// 只查 servers[] 这一层：vpn.peers[].address 是另一个字段，与旧键无关。
+	// 只查 servers[] 这一层：vpn.peers[].address 是另一个字段，与 host 键无关。
 	var decoded struct {
 		Servers []map[string]json.RawMessage `json:"servers"`
 	}

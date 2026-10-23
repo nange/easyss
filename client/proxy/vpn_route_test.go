@@ -122,7 +122,7 @@ func TestDecidePrefersVPNPeerOverRouter(t *testing.T) {
 	if got := policy.decide("example.com").Action; got != routeDirect {
 		t.Fatalf("decide(example.com) = %s, want direct (the router must still be consulted)", got)
 	}
-	// VPN 关闭（nil）时行为必须与既有版本完全一致。
+	// VPN 关闭（nil）时行为必须与没有 VPN 时完全一致。
 	plain := newRoutePolicy(routePolicyOptions{Router: router.NewDirectOnly()})
 	if got := plain.decide("b").Action; got != routeDirect {
 		t.Fatalf("decide(b) without a vpn route = %s, want direct", got)

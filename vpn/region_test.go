@@ -6,9 +6,8 @@ import (
 	"github.com/nange/easyss/v3/config"
 )
 
-// TestBuildRegion 固定内嵌 region 的形态：region 编号非零（tailcat 会把 0 当成
-// "未设置"），节点带上 DERP 地址拆出的 HostName 与 DERPPort（对端据此直连，
-// 不做任何 DERPMap 查询）。
+// TestBuildRegion 固定 region 形态：编号非零，节点带上地址拆出的 HostName 与 DERPPort，
+// 对端据此直连、不做 DERPMap 查询。
 func TestBuildRegion(t *testing.T) {
 	region, err := BuildRegion("relay.example.com:8443")
 	if err != nil {
@@ -43,9 +42,8 @@ func TestBuildRegion(t *testing.T) {
 	})
 }
 
-// TestBuildRegionMultipleNodes 固定"同一 region 下的多个中继节点"这一形态：节点
-// 按传入顺序排列（tailcat 按 `reg.Nodes` 顺序尝试，第一个连上的胜出），每个节点
-// 带自己的 HostName/DERPPort，节点名唯一（编码进地址时会被抹掉，仅供本机排障）。
+// TestBuildRegionMultipleNodes 固定同一 region 多节点：顺序即 tailcat 的尝试顺序（第一个连上
+// 的胜出），每个节点自带地址，节点名唯一且仅供本机排障。
 func TestBuildRegionMultipleNodes(t *testing.T) {
 	region, err := BuildRegion("relay-a.example.com:443", "relay-b.example.com:8443", "[2001:db8::1]:9443")
 	if err != nil {
@@ -101,7 +99,7 @@ func TestBuildRegionMultipleNodes(t *testing.T) {
 	})
 }
 
-// TestRegionIDIsNotZero 约束 region 编号常量本身可用。
+// TestRegionIDIsNotZero 固定 RegionID 非零且等于 config.DefaultVPNRegionID。
 func TestRegionIDIsNotZero(t *testing.T) {
 	if RegionID == 0 {
 		t.Fatal("RegionID must be non-zero: tailcat.Server.Start rejects RegionID 0")

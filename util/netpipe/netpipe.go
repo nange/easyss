@@ -1,30 +1,6 @@
-// Package netpipe 提供 net.Pipe 的**带缓冲**替代品：写入立即进入环形缓冲并返回，
-// 因此写方不必等对端把数据读走。它是 runner/derpdialer.go 把 tailcat 的 DERP
-// 连接送进 easyss 隧道时用的那一层缓冲。
-//
-// 为什么需要它：DERP 连接是 tailscale 数据面的一部分，而 tailscale 假设"DERP 连接
-// 是真实 TCP 套接字、有几 MB 内核缓冲"。换成 net.Pipe 之后这个假设不成立——每个包
-// 的写入都必须等中继 goroutine 读走，而中继 goroutine 会在隧道写阻塞时停住，于是
-// 背压直接打在 magicsock 那个 32 深、满了丢最旧的写队列上。实测（单程 60ms、
-// 内层 RTT 240ms、中继队列 1024 帧）：DERP 连接是普通 TCP 套接字时 2929 KB/s，
-// 换成无缓冲 net.Pipe 只剩 175 KB/s——两个数量级不是来自带宽，而是来自"没有缓冲"。
-//
-// 为什么不用 github.com/smallnest/ringbuffer 自带的阻塞模式：它的超时是**每次等待
-// 的预算**（WithReadTimeout/WithWriteTimeout），在 waitRead/waitWrite 里被定时器
-// 引用一次就固定，因此已经阻塞的调用无法被后设的 deadline 打断；而且默认"超时即
-// 关闭缓冲区"，一个 set-and-forget 的 deadline 就能把连接永久废掉。net.Conn 的契约
-// 是"deadline 是绝对时间、可随时改写、改写对阻塞中的操作立即生效"（标准库的
-// net/http 就靠"把 deadline 设成过去"来取消请求），所以本包只用它做**存储**：
-// 读写走非阻塞 API（Read/Write 在非阻塞模式下返回 ErrIsEmpty/ErrIsFull），等待与
-// deadline 由本包自己的 select 循环实现。
-//
-// 与 net.Pipe 的语义差异（刻意的）：
-//
-//   - 写不阻塞到对端读走，而是阻塞到缓冲区满（异步、带缓冲）——这正是本包存在的理由；
-//   - 超时返回 os.ErrDeadlineExceeded（满足 net.Error 且 errors.Is 可用），而不是
-//     库的 context.DeadlineExceeded 或自定义 error；
-//   - 对端 Close 后：本端 Read 返回 io.EOF、Write 返回 io.ErrClosedPipe（与 net.Pipe
-//     一致）；本端 Close 后：本端读写都返回 net.ErrClosed 或 io.ErrClosedPipe。
+// Package netpipe 提供 net.Pipe 的带缓冲替代品：写入进入缓冲后立即返回。tailcat
+// 假设 DERP 连接是有内核缓冲的真实 TCP，无缓冲的 net.Pipe 会把背压直接打在
+// magicsock 32 深、丢最旧的写队列上。DERP 拨号器传入 config.DERPPipeBufferSize。
 package netpipe
 
 import (
@@ -39,11 +15,9 @@ import (
 	"github.com/smallnest/ringbuffer"
 )
 
-// Pipe 返回一对互为对端的 net.Conn：一端写入的数据可以从另一端读出，每个方向各有
-// size 字节缓冲。size <= 0 时取 defaultSize。
-//
-// 两个端各自只允许一个并发读者与一个并发写者（net.Conn 的常规约定）；Close 与
-// Set*Deadline 可以来自任意 goroutine。
+// Pipe 返回一对互为对端的 net.Conn，每个方向各有 size 字节缓冲（size <= 0 取
+// defaultSize）。每端只允许一个并发读者与一个并发写者；Close 与 Set*Deadline 可
+// 来自任意 goroutine。
 func Pipe(size int) (net.Conn, net.Conn) {
 	if size <= 0 {
 		size = defaultSize
@@ -54,22 +28,14 @@ func Pipe(size int) (net.Conn, net.Conn) {
 		&conn{rd: ab, wr: ba, closedCh: make(chan struct{})}
 }
 
-// defaultSize 是未指定缓冲大小时的默认值：256KB/方向。它与"经中继的单流吞吐 ≈
-// 缓冲 / RTT"这条关系直接相关（DERP 路径的墙上窗口就是各段缓冲之和），因此不能太小；
-// 又因为它是每个 DERP 连接各一份（每对端一条连接）、且在链路饱和时会贡献排队延迟，
-// 所以也不宜无脑放大。调用方（runner/derpdialer.go）用的是共享配置里的常量。
+// defaultSize 是未指定缓冲大小时的默认值（256KB/方向）。经中继的单流吞吐 ≈ 缓冲 /
+// RTT，但它每个 DERP 连接各一份且饱和时贡献排队延迟；生产路径传入
+// config.DERPPipeBufferSize，不要另调。
 const defaultSize = 256 << 10
 
-// buffer 是一个单向缓冲：一端写、另一端读。
-//
-// data/space 是本包自己的"状态可能变了"信号（容量 1、可合并），用来在没有库内
-// 条件变量可用的情况下唤醒等待者：
-//
-//   - data：写方通知读方（有数据了，或写侧已关闭）；
-//   - space：读方通知写方（腾出空间了，或读侧已关闭）。
-//
-// 两个方向分成两个通道是有意的：只有一个通道时，读者可能把本该唤醒写者的信号消费掉，
-// 于是写者在缓冲区明明有空间的情况下一直睡着（丢唤醒）。
+// buffer 是一个单向缓冲：一端写、另一端读。data/space 是容量 1、可合并的"状态可能
+// 变了"信号，data 由写方唤醒读方、space 由读方唤醒写方；两个方向必须分开，否则读者
+// 可能消费掉本该唤醒写者的信号而丢唤醒。
 type buffer struct {
 	rb    *ringbuffer.RingBuffer
 	data  chan struct{}
@@ -134,9 +100,8 @@ func (c *conn) Read(p []byte) (int, error) {
 }
 
 func (c *conn) Write(p []byte) (int, error) {
-	// 库拒绝"单次写入大于整个缓冲区"的调用（ErrTooMuchDataToWrite），因此这里必须
-	// 自己按容量切片：net.Conn 的写入不限制大小（TLS 记录、中继那侧 31KB 的读都会
-	// 走这里），分片之后每一次尝试要么写入、要么在 ErrIsFull 上等空间。
+	// 库拒绝单次写入大于整个缓冲区的调用（ErrTooMuchDataToWrite），因此必须按容量
+	// 切片：net.Conn 的写入不限制大小，TLS 记录等可能远大于缓冲。
 	capacity := c.wr.rb.Capacity()
 
 	total := 0
@@ -158,9 +123,8 @@ func (c *conn) Write(p []byte) (int, error) {
 		case errors.Is(err, ringbuffer.ErrIsFull),
 			errors.Is(err, ringbuffer.ErrTooMuchDataToWrite),
 			err == nil:
-			// 空间不足。库有两个不同的错误：缓冲已满时报 ErrIsFull，而"剩余空间
-			// 小于这次写入"时报 ErrTooMuchDataToWrite（同时已经写进去一部分）。
-			// 两者对调用方是同一件事：等对端读走再继续。
+			// 缓冲满报 ErrIsFull，"剩余空间小于这次写入"报 ErrTooMuchDataToWrite
+			// （已写入一部分）：对调用方是同一件事，等对端读走再继续。
 			if werr := c.wait(c.wr.space, c.writeDeadline); werr != nil {
 				return total, werr
 			}
@@ -195,6 +159,8 @@ func (c *conn) Close() error {
 func (c *conn) LocalAddr() net.Addr  { return pipeAddr{} }
 func (c *conn) RemoteAddr() net.Addr { return pipeAddr{} }
 
+// deadline 是绝对时间、可随时改写且对阻塞中的操作立即生效；超时返回
+// os.ErrDeadlineExceeded（满足 net.Error），不毒化连接。
 func (c *conn) SetDeadline(t time.Time) error {
 	_ = c.SetReadDeadline(t)
 	return c.SetWriteDeadline(t)
@@ -228,10 +194,7 @@ func (c *conn) writeDeadline() time.Time {
 	return c.wdl
 }
 
-// signalDeadlineChanged 唤醒所有正在等待的读写方，使其重新计算 deadline。
-//
-// 这是"把 deadline 设成过去"能当场打断阻塞中的操作的原因；库自带的阻塞模式做不到
-// 这一点（它的超时在等待开始时就被定时器引用固定了）。
+// 等待中的读写方必须被此调用唤醒，否则 deadline 改写不会生效。
 func (c *conn) signalDeadlineChanged() {
 	c.dlOnce.Do(func() { c.dlChanged = make(chan struct{}, 1) })
 	signal(c.dlChanged)
@@ -293,9 +256,8 @@ func stopTimer(t *time.Timer) {
 	}
 }
 
-// pipeAddr 是本包连接上报的地址。它不是 host:port，因此依赖地址解析的调用方
-// （例如 derphttp 把 LocalAddr 解析成 netip.AddrPort）会得到"解析失败"这一既有行为，
-// 与 net.Pipe 的 "pipe" 相同。
+// pipeAddr 不是 host:port：依赖地址解析的调用方（如 derphttp 把 LocalAddr 解析成
+// netip.AddrPort）会得到解析失败，与 net.Pipe 的 "pipe" 行为相同。
 type pipeAddr struct{}
 
 func (pipeAddr) Network() string { return "netpipe" }

@@ -21,11 +21,8 @@ import (
 )
 
 // recordingDERPMapCache 记录对 tailcat DERP map 缓存的任何访问。
-//
-// 它是"零官方 DERPMap 请求"的判据：peer 地址是完整展开格式时，`ConnInfo.Expand`
-// 直接返回，**根本不会走到 DERP map 来源**；一旦地址退化成短格式，Expand 会先查
-// 缓存（再回退到 `https://tailcat.dev/derpmap.json`）——这一次查询就是我们要拦住的
-// 信号。官方 URL 是常量（无法在测试里替换），因此缓存访问是等价的、可观测的证据。
+// 这是"零官方 DERPMap 请求"的判据：地址若是短格式，Expand 会先查缓存再回退到官方
+// URL（常量、无法替换），因此缓存访问就是等价证据。
 type recordingDERPMapCache struct {
 	mu   sync.Mutex
 	gets int
@@ -90,7 +87,6 @@ func newAccessSideWith(t *testing.T, face *PeerFace, clientKey key.NodePrivate,
 	return route, clients
 }
 
-// dialEchoTCP 经访问侧打开一条到对端本机 echo 服务的连接并做一次往返。
 func dialEchoTCP(t *testing.T, route *Route, port string) {
 	t.Helper()
 
@@ -117,11 +113,8 @@ func dialEchoTCP(t *testing.T, route *Route, port string) {
 	}
 }
 
-// TestVPNNodeEndToEndNeverFetchesTheOfficialDERPMap 是阶段 5 的端到端验收：进程内
-// DERP 中继 + 真实 tailcat 隧道 + 对端面 + 访问侧，全部按生产路径组装。
-//
-// 同时断言"零官方 DERPMap 请求"（见 recordingDERPMapCache）与 `allow_clients`
-// 白名单可用（对端面只接受 ClientSet 从 `<exe>/vpn/client.key` 读出来的那把 key）。
+// TestVPNNodeEndToEndNeverFetchesTheOfficialDERPMap 按生产路径组装对端面与访问侧，
+// 钉住"零官方 DERPMap 请求"与 allow_clients 白名单（只接受 client.key 里那把 key）。
 func TestVPNNodeEndToEndNeverFetchesTheOfficialDERPMap(t *testing.T) {
 	echoAddr, stopEcho := startTCPEchoLocal(t)
 	defer stopEcho()
@@ -170,12 +163,9 @@ func TestVPNNodeEndToEndNeverFetchesTheOfficialDERPMap(t *testing.T) {
 	}
 }
 
-// TestVPNNodeRelayOnlyUsesTheRelay 固定 relay_only 的行为后果：隧道仍然可用，但
-// **没有任何直连路径**。
-//
-// "无直连"正是这个开关的定义（magicsock 绑 newBlockForeverConn，完全不创建 UDP
-// socket）。这里用 DiscoPing 观测：它会主动触发一次直连
-// 路径发现，因此如果 UDP 出口存在，Endpoint 有机会被填上；开了开关则必然为空。
+// TestVPNNodeRelayOnlyUsesTheRelay 钉住 relay_only 的后果：隧道仍可用，但没有直连路径
+// （magicsock 绑 newBlockForeverConn，不创建 UDP socket）。
+// 用 PathStatus 观测：UDP 出口存在时 Endpoint 会被填上，开了开关则必然为空。
 func TestVPNNodeRelayOnlyUsesTheRelay(t *testing.T) {
 	// 只在 tailcat 创建引擎时生效，因此必须在 Start/首次拨号之前落位。
 	t.Cleanup(func() { envknob.Setenv(derpOnlyEnvKnob, "false") })
@@ -237,15 +227,9 @@ func TestVPNNodeRelayOnlyUsesTheRelay(t *testing.T) {
 	}
 }
 
-// TestPeerAddressRegionNumberIsRewritten 固定 tailcat 地址往返的一个易被误读的细节：
-// 编码时 region 编号、region code 与节点名都会被剥掉，解析时按**序号**补回
-// （第一个 region 补成 1，code 补成 "1"）。
-//
-// 因此访问侧看到的 region 永远是 1/"1"，而本节点自己（tailcat.Server.Region）用的是
-// vpn.RegionID=901。这不影响中继的选择：一份地址只带一个 region，两端各自在自己的
-// DERPMap 里解析对端与 HomeDERP，并且都连到地址里内嵌的**同一个 host:port**——真正
-// 决定位置的是 HostName/DERPPort，它们原样保留（本用例正是断言这一点）。它也解释了
-// PathStatus 的日志里会看到 `via DERP(1)`。
+// TestPeerAddressRegionNumberIsRewritten 钉住 tailcat 地址往返的易误读细节：编码时
+// region 编号/code/节点名被剥掉，解析时按**序号**补回（1/"1"），HostName/DERPPort 原样保留。
+// 访问侧看到的 region 因此恒为 1，本节点自己用 vpn.RegionID；中继选择不受影响。
 func TestPeerAddressRegionNumberIsRewritten(t *testing.T) {
 	region := startTestDERP(t)
 	face := newTestPeerFace(t, region)
@@ -272,8 +256,7 @@ func TestPeerAddressRegionNumberIsRewritten(t *testing.T) {
 }
 
 // derpOnlyEnvKnob 是 tailcat 的 DERPOnly 写进去的那个 tailscale 开关，用于断言
-// "会话的 relay_only 真的落到了数据面"。显式写 true 与 false 由 tailcat 自己的
-// 测试固定（它现在拥有这个机制）。
+// "relay_only 真的落到了数据面"；true/false 的写入由 tailcat 自己的测试固定。
 const derpOnlyEnvKnob = "TS_DEBUG_ALWAYS_USE_DERP"
 
 // TestClientSetNeverFetchesWithoutPeers 是上面那条断言的阴性对照：没有对端时
@@ -291,8 +274,7 @@ func TestClientSetNeverFetchesWithoutPeers(t *testing.T) {
 	}
 }
 
-// TestPathStatusReportsDerpForUnknownRegion 固定 Path 的字符串形态：日志里要能一眼
-// 看出"走的是中继还是直连"。
+// 钉住 Path 的字符串形态：日志里要能一眼看出走的是中继还是直连。
 func TestPathString(t *testing.T) {
 	if got := (Path{Endpoint: "1.2.3.4:41641", Direct: true}).String(); got != "direct 1.2.3.4:41641" {
 		t.Fatalf("direct path string = %q", got)
@@ -302,13 +284,9 @@ func TestPathString(t *testing.T) {
 	}
 }
 
-// TestVPNNodeUsesTheInjectedDERPDialer 是本项目对 tailcat DERPDialer 选项的验收：
-// 一条真实隧道（进程内 DERP + 对端面 + 访问侧）里，双方的 DERP 连接都必须经过调用方
-// 给出的拨号器。
-//
-// 这条断言是 DERP 私有化的地基：easyss 正是靠这个拨号器把 DERP 连接放进自己的隧道
-// （见 runner/derpdialer.go），而 tailcat 的默认拨号器会直连——那在私有化之后是连不
-// 上的。因此这里不仅要"隧道可用"，还要"用了我们的拨号器"。
+// TestVPNNodeUsesTheInjectedDERPDialer 钉住跨包契约：真实隧道里双方的 DERP 连接都
+// 必须经过调用方注入的 DERPDialer。
+// 私有 DERP 只接待回环来源，tailcat 的默认拨号器直连必然失败（见 runner/derpdialer.go）。
 func TestVPNNodeUsesTheInjectedDERPDialer(t *testing.T) {
 	echoAddr, stopEcho := startTCPEchoLocal(t)
 	defer stopEcho()

@@ -151,10 +151,9 @@ func TestSwitchServerSerializesConcurrentSwitches(t *testing.T) {
 	wg.Wait()
 }
 
-// TestSwitchServerNotifiesWhenTheNewServerIsNotADERPRelay 固定切换服务器路径上的通知
-// 契约：新会话的服务器不在 vpn 声明的 DERP 中继列表里时，VPN 本会话缺席（会话已记
-// ERROR，见 runner）——用户必须**当场**知道这件事，否则他看到的现象只是"VPN 里连不上
-// 对端"。文案点名的是新会话实际使用的那台服务器，因此注入的 ServerAddr 就是断言对象。
+// TestSwitchServerNotifiesWhenTheNewServerIsNotADERPRelay 固定切换路径的通知契约：新会话
+// 的服务器不在声明的 DERP 列表里时，VPN 本会话缺席（见 runner），用户必须当场知道，否则
+// 现象只是"VPN 里连不上对端"。文案点名的是新会话实际使用的那台服务器。
 func TestSwitchServerNotifiesWhenTheNewServerIsNotADERPRelay(t *testing.T) {
 	a := newSwitchTestApp(t)
 	stubSysProxy(a.App, nil)
@@ -185,8 +184,8 @@ func TestSwitchServerNotifiesWhenTheNewServerIsNotADERPRelay(t *testing.T) {
 		"勾选的必须正是通知里点名的那台（运行中的服务器）")
 }
 
-// TestSwitchServerKeepsOtherStartupWarningsLogOnly 守护"不打扰用户"的边界：切换后的
-// 启动警告只有 VPN 那条弹通知，其余（例如新服务器的域名还没解析出来）仍只写日志。
+// TestSwitchServerKeepsOtherStartupWarningsLogOnly 守护"不打扰用户"的边界：切换后的启动
+// 警告只有 VPN 那条弹通知，其余（例如新服务器域名还没解析出来）仍只写日志。
 func TestSwitchServerKeepsOtherStartupWarningsLogOnly(t *testing.T) {
 	a := newSwitchTestApp(t)
 	stubSysProxy(a.App, nil)

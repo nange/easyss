@@ -56,12 +56,9 @@ func TestLocalDERPMatches(t *testing.T) {
 	})
 }
 
-// TestServeHTTP_LocalDERPDialsTheLoopbackListener 是 DERP 私有化的服务端一侧
-// 端到端断言：握手目标等于本服务端自己通告的 DERP 地址时，这条流被改拨到本机
-// 回环监听，而不是去解析并连接自己的公网地址（后者只会拿到伪装页面）。
-//
-// 断言落在"回环监听器真的收到了一条连接"上：这是从外部可观测、且无法由伪装
-// 页面或 4xx 伪造的事实。
+// TestServeHTTP_LocalDERPDialsTheLoopbackListener 断言 DERP 私有化的服务端一侧：握手目标等于
+// 本服务端通告的 DERP 地址时，流被改拨到本机回环监听，而不是解析自己的公网地址（只有伪装页）。
+// 断言落在"回环监听器真的收到连接"上，那是伪装页或 4xx 无法伪造的事实。
 func TestServeHTTP_LocalDERPDialsTheLoopbackListener(t *testing.T) {
 	const (
 		masterKey = "0123456789abcdef0123456789abcdef"

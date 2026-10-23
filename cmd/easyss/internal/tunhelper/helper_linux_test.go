@@ -481,10 +481,9 @@ func parseRouteBlocks(t *testing.T, script []byte, verbs []string) []routeBlock 
 			}
 			appendStaticBlock(t, &blocks, args[0])
 		case "route":
-			// windows：route add 1.0.0.0 mask 254.0.0.0 %tun_gw% metric 5
-			// darwin： route add -net 1.0.0.0/8 "$tun_gw"
-			//          route add -host "$ip" -gateway "$local_gateway"（VPN 绕行，
-			//          目标是 shell 变量，appendStaticBlock 会跳过它）
+			// windows：route add 1.0.0.0 mask 254.0.0.0 %tun_gw% metric 5；darwin：
+			// route add -net 1.0.0.0/8 "$tun_gw" 或 route add -host "$ip" -gateway
+			// "$local_gateway"；目标是 shell 变量时 appendStaticBlock 会跳过。
 			args, ok := routeArgs(fields[1:], verbs)
 			if !ok {
 				continue
@@ -502,14 +501,9 @@ func parseRouteBlocks(t *testing.T, script []byte, verbs []string) []routeBlock 
 	return blocks
 }
 
-// gatewayIsDestination 报告一行路由命令是否把本地网关安装成**目标**（而不是把它
-// 用作下一跳）。
-//
-// 判据必须落在目标上：网关完全可以在一条路由里充当**下一跳**
-// （如 `ip route replace <net> via "$local_gateway"`），那是正确用法。被禁止的
-// 只有"把网关**本身**装成一条经由 TUN 的主机路由"——它会压过物理接口对局域网的
-// 直连路由，吞掉内核发给网关的存活探测（见本文件开头的注释与 create_tun_dev.sh
-// 里的说明）。
+// gatewayIsDestination 报告一行路由命令是否把本地网关安装成**目标**（而不是下一跳）。
+// 网关充当下一跳（如 `ip route replace <net> via "$local_gateway"`）是正确用法；被禁止的
+// 只有把网关**本身**装成经由 TUN 的主机路由——它会压过 LAN 直连路由、吞掉存活探测。
 func gatewayIsDestination(line string) bool {
 	fields := unwrapScriptHelper(strings.Fields(line))
 	idx := slices.IndexFunc(fields, func(f string) bool { return slices.Contains(createRouteVerbs, f) })

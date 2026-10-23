@@ -12,9 +12,6 @@ import (
 )
 
 // peerDERPAddrs 返回一个 tailcat 地址里内嵌的全部 DERP host:port。
-//
-// 地址自带 DERP 位置正是"零控制面"的来源，而 DERP 私有化要求双方通告同一组中继，
-// 因此启动时要把这些内嵌位置读出来与本节点的比较（见 assertPeersShareDERPSet）。
 // DERPPort 为 0 时按 derphttp 的行为取 443。
 func peerDERPAddrs(addr string) ([]string, error) {
 	ci, err := tailcat.ParseAddr(tailcat.Addr(addr))
@@ -38,13 +35,8 @@ func peerDERPAddrs(addr string) ([]string, error) {
 }
 
 // assertPeersShareDERPSet 断言每个对端通告的 DERP 节点集合与本节点相同（顺序无关）。
-//
-// 为什么必须是"集合相等"而不是"有交集"：内嵌 DERP 只接待经**本服务端**隧道送达的
-// 连接（服务端把握手目标完全匹配到自己的对外 DERP 地址后改拨回环），所以节点实际能连上
-// 的中继只能是它此刻隧道所落的那台服务端。于是"本节点能不能连上中继"取决于本节点
-// 当前服务端是否在本节点集合里，"对端通过本节点地址能不能连上"取决于对端当前服务端
-// 是否在本节点集合里。少一个节点就会让某一侧在耗尽列表后彻底连不上，多一个节点则
-// 让对端先浪费一次尝试——两者都以"VPN 时好时坏"的形式出现，因此宁可启动即拒绝。
+// 内嵌 DERP 只接待经本服务端隧道送达的连接，少一个中继就会让某一侧连不上，多一个
+// 只会让对端先浪费一次尝试；差异因此必须作为启动错误暴露（见 docs/architecture.md 要点 19）。
 func assertPeersShareDERPSet(ownAddrs []string, peers []PeerRef) error {
 	own, err := canonicalDERPSet(ownAddrs)
 	if err != nil {
@@ -76,8 +68,7 @@ func assertPeersShareDERPSet(ownAddrs []string, peers []PeerRef) error {
 	return nil
 }
 
-// canonicalDERPSet 把一组 host:port 规范化成"比较用"的集合（保持首次出现的顺序）：
-// 同一个中继的不同书写（大小写、IPv6 括号形态）只算一个。
+// canonicalDERPSet 规范化 host:port 并去重：同一中继的不同书写（大小写、IPv6 括号）只算一个。
 func canonicalDERPSet(addrs []string) ([]string, error) {
 	out := make([]string, 0, len(addrs))
 	seen := make(map[string]struct{}, len(addrs))
@@ -118,17 +109,9 @@ func diffDERPSets(a, b []string) (missing, extra []string) {
 	return missing, extra
 }
 
-// AssertFullAddr 断言一个 tailcat 地址是**完整展开格式**，即它的 DERP region
-// 详情已内嵌在地址里。这是本设计的硬契约。
-//
-// 反例是"短格式"：只携带一个 region ID 的地址。tailcat 解析它之后会去拉
-// https://tailcat.dev/derpmap.json 才能知道该连哪台中继——那既依赖 Tailscale
-// 官方的服务，也让"零控制面"不再成立。短格式一旦进入配置就会在最不方便的时刻
-// （第一次访问对端时）才以网络错误的形式暴露，因此这里宁可当场拒绝。
-//
-// 除了 region 非空，还要求至少有一个带 HostName 的节点，以及地址里带有独立的
-// disco 公钥：tailcat 客户端会拒绝缺少 disco 公钥的旧地址
-// （tailcat.Client.initLocked），提前报错比在隧道启动时才失败清晰得多。
+// AssertFullAddr 断言一个 tailcat 地址是完整展开格式（DERP region 详情内嵌在地址里）。
+// 短格式只带 region ID，解析时要去拉 tailcat.DefaultDERPMapURL，零控制面因此不成立；
+// 缺 disco 公钥的地址会被 tailcat 客户端拒绝（Client.initLocked）。两者都必须当场报错。
 func AssertFullAddr(addr string) error {
 	if addr == "" {
 		return fmt.Errorf("tailcat address is empty")

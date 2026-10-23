@@ -25,8 +25,7 @@ import (
 	"github.com/nange/easyss/v3/log"
 )
 
-// meshTestRelay 是测试用的进程内中继：真实的 derpserver 挂在真实 TLS 监听上，
-// 与生产装配（vpn.NewDERPServer + derpserver.Handler）一致，因此测到的是真实协议。
+// meshTestRelay 是真实 derpserver 挂在真实 TLS 监听上的进程内中继，因此测到的是真实协议。
 type meshTestRelay struct {
 	t     *testing.T
 	srv   *DERPServer
@@ -65,17 +64,16 @@ func newMeshTestRelay(t *testing.T) *meshTestRelay {
 	}
 }
 
-// tlsConfig 返回能校验测试自签证书的客户端配置。
+// tlsConfig 返回信任测试自签证书的客户端配置（每个 relay 有自己的根池）。
 func (r *meshTestRelay) tlsConfig() *tls.Config { return &tls.Config{RootCAs: r.roots} }
 
-// dial 建立到该中继的真实 TCP 连接（mesh 客户端注入的拨号器用它）。
+// dial 是真实 TCP 拨号，供 mesh 客户端注入。
 func (r *meshTestRelay) dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	var d net.Dialer
 	return d.DialContext(ctx, network, addr)
 }
 
-// recordingDialer 包一层拨号器并记录被拨的地址，用来断言 mesh 连接确实走了调用方
-// 提供的出网路径（生产上是 SOCKS5 → easyss 隧道）。
+// recordingDialer 记录被拨的地址，用来断言 mesh 连接确实走了调用方提供的出网路径。
 type recordingDialer struct {
 	inner func(ctx context.Context, network, addr string) (net.Conn, error)
 
@@ -96,13 +94,12 @@ func (d *recordingDialer) addrs() []string {
 	return append([]string(nil), d.dialed...)
 }
 
-// peerTo 构造指向 target 的 mesh 对端：拨号走测试内的直连，TLS 信任 target 自己
-// 的测试证书（每个 httptest 服务器有自己的自签证书与根池，因此必须按对端取）。
+// peerTo 构造指向 target 的 mesh 对端：拨号直连，TLS 信任 target 自己的测试根池；
+// 每个 httptest 服务器各有一份，因此必须按对端取。
 func peerTo(target *meshTestRelay, dial func(ctx context.Context, network, addr string) (net.Conn, error)) MeshPeer {
 	return MeshPeer{Addr: target.addr, Dial: dial, TLSConfig: target.tlsConfig()}
 }
 
-// startMesh 启动一个中继的 mesh 客户端。
 func startMesh(t *testing.T, relay *meshTestRelay, meshKey string, peers ...MeshPeer) *Mesh {
 	t.Helper()
 	m, err := NewMesh(relay.srv, MeshOptions{MeshKey: meshKey, Peers: peers})
@@ -158,9 +155,8 @@ func newMeshTestClient(t *testing.T, relay *meshTestRelay) *meshTestClient {
 	return c
 }
 
-// sendUntilDelivered 反复发送直到对端收到（或超时）。mesh 是异步建立的：订阅循环
-// 要先连上、拿到 PeerPresent，本机才会登记转发映射，因此测试必须容忍这个窗口，
-// 而不是在第一次 Send 之后就断言。
+// sendUntilDelivered 反复发送直到送达：mesh 异步建立，要先连上并收到 PeerPresent 才登记转发
+// 映射，因此不能在第一次 Send 后就断言。
 func sendUntilDelivered(t *testing.T, from *meshTestClient, to *meshTestClient, payload []byte) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
@@ -184,9 +180,8 @@ func sendUntilDelivered(t *testing.T, from *meshTestClient, to *meshTestClient, 
 	t.Fatalf("the packet was not delivered through the mesh within the deadline (last send error: %v)", lastErr)
 }
 
-// TestMeshForwardsPacketsBetweenTwoRelays 是需求 3 的核心断言：两个中继各自挂一个
-// 客户端，客户端 A 发往客户端 B 的数据包在本机中继上找不到 B，于是沿 mesh 连接转发
-// 给另一台中继，由它投递给本地的 B。
+// TestMeshForwardsPacketsBetweenTwoRelays 固定跨中继转发：A 的包在本机找不到 B，沿 mesh 到
+// 另一台中继后投递给本地的 B。
 func TestMeshForwardsPacketsBetweenTwoRelays(t *testing.T) {
 	relayA := newMeshTestRelay(t)
 	relayB := newMeshTestRelay(t)
@@ -200,19 +195,15 @@ func TestMeshForwardsPacketsBetweenTwoRelays(t *testing.T) {
 
 	sendUntilDelivered(t, clientA, clientB, []byte("hello from A"))
 
-	// 拨号器必须被以对端声明的 host:port 调用：这正是"mesh 连接经调用方出网路径"
-	// 的可观测证据（生产上它是 SOCKS5 → easyss 隧道，而不是直连对端公网端口）。
+	// 拨号器必须被以对端声明的 host:port 调用：这是"mesh 经调用方出网路径"的证据。
 	if addrs := dialToB.addrs(); !slices.Contains(addrs, relayB.addr) {
 		t.Errorf("the injected dialer was called with %v, want it to include %q", addrs, relayB.addr)
 	}
 }
 
-// TestMeshWithoutMatchingKeyDoesNotForward 固定 key 的重要性：mesh key 不一致时
-// 对端只被当成普通 DERP 客户端，订阅连接变化被拒（上游返回 insufficient
-// permissions），于是没有任何转发映射，包只会被丢弃。
-//
-// 它同时确认失败是**可见**的（一条 WARN 指出哪个对端不可用），而不是静默地
-// "VPN 时好时坏"。
+// TestMeshWithoutMatchingKeyDoesNotForward 固定 key 不一致的后果：对端只被当成普通客户端，
+// 订阅被拒（upstream: insufficient permissions）、没有转发映射、包被丢弃；首次失败必须以
+// WARN 点名该对端。
 func TestMeshWithoutMatchingKeyDoesNotForward(t *testing.T) {
 	var logs logBuffer
 	restore := captureLogs(t, &logs)
@@ -222,13 +213,11 @@ func TestMeshWithoutMatchingKeyDoesNotForward(t *testing.T) {
 	relayB := newMeshTestRelay(t)
 
 	startMesh(t, relayA, "key-of-a", peerTo(relayB, relayB.dial))
-	// B 侧用另一个密钥加入 mesh：对端因此不被当成可信中继。
 	startMesh(t, relayB, "key-of-b", peerTo(relayA, relayA.dial))
 
 	clientA := newMeshTestClient(t, relayA)
 	clientB := newMeshTestClient(t, relayB)
 
-	// 反复发一小段时间：这里期望的是"始终收不到"。
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		_ = clientA.dc.Send(clientB.key.Public(), []byte("should not arrive"))
@@ -248,8 +237,7 @@ func TestMeshWithoutMatchingKeyDoesNotForward(t *testing.T) {
 	}
 }
 
-// TestMeshCloseStopsForwarding 固定拆除语义：Close 之后不再有新登记/保留的转发
-// 映射，且重复 Close 是幂等的（退出路径与切换路径可能各调一次）。
+// TestMeshCloseStopsForwarding 固定拆除语义：Close 后不再登记或保留转发映射，重复 Close 幂等。
 func TestMeshCloseStopsForwarding(t *testing.T) {
 	relayA := newMeshTestRelay(t)
 	relayB := newMeshTestRelay(t)
@@ -268,8 +256,7 @@ func TestMeshCloseStopsForwarding(t *testing.T) {
 		t.Fatalf("Mesh.Close (second call): %v", err)
 	}
 
-	// 转发映射已经随订阅循环的退出被移除：A 侧再发包只会被丢弃（B 侧仍连着，因此
-	// 这不是"连接断了"造成的假阴性）。
+	// 转发映射随订阅循环退出被移除：B 侧仍连着，因此排除了"连接断了"造成的假阴性。
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		_ = clientA.dc.Send(clientB.key.Public(), []byte("after close"))
@@ -281,8 +268,8 @@ func TestMeshCloseStopsForwarding(t *testing.T) {
 	}
 }
 
-// TestNewMeshValidation 固定构造期校验：没有中继、没有密钥、没有拨号器、地址非法
-// 或重复都必须在启动前失败——这些错误如果漏到运行期，表现都是"包被静默丢弃"。
+// TestNewMeshValidation 固定构造期校验：没有中继/密钥/拨号器、地址非法或重复都必须在启动前
+// 失败——漏到运行期都表现为"包被静默丢弃"。
 func TestNewMeshValidation(t *testing.T) {
 	relay := newMeshTestRelay(t)
 	ok := MeshPeer{Addr: "relay-b.example.com:443", Dial: relay.dial}
@@ -328,8 +315,8 @@ func TestNewMeshValidation(t *testing.T) {
 	})
 }
 
-// TestMeshStartIsSingleShot 固定生命周期契约：重复 Start 报错，Close 之后不能再
-// Start，而 Close 本身幂等且 nil 安全。
+// TestMeshStartIsSingleShot 固定生命周期：重复 Start、Close 后再 Start 都报错；Close 幂等且
+// nil 安全。
 func TestMeshStartIsSingleShot(t *testing.T) {
 	relay := newMeshTestRelay(t)
 	m, err := NewMesh(relay.srv, MeshOptions{MeshKey: "k", Peers: []MeshPeer{{Addr: "relay-b.example.com:443", Dial: relay.dial}}})
@@ -353,8 +340,7 @@ func TestMeshStartIsSingleShot(t *testing.T) {
 	}
 }
 
-// TestMeshCloseOnUnstartedMesh 固定"从未启动的 Mesh 不需要清理"：Start 之前
-// Close 必须直接返回，而不会去碰还不存在的客户端。
+// TestMeshCloseOnUnstartedMesh 固定 Start 之前 Close 直接返回，不碰还不存在的客户端。
 func TestMeshCloseOnUnstartedMesh(t *testing.T) {
 	relay := newMeshTestRelay(t)
 	m, err := NewMesh(relay.srv, MeshOptions{MeshKey: "k", Peers: []MeshPeer{{Addr: "relay-b.example.com:443", Dial: relay.dial}}})
@@ -366,16 +352,14 @@ func TestMeshCloseOnUnstartedMesh(t *testing.T) {
 	}
 }
 
-// TestMeshSelfConnectIsWarned 固定"代理落到了本机自己的中继"这一误配的可见性：
-// 此时 TLS 未必失败（同一个域名/证书），但 mesh 边根本不存在（上游检测到自连后
-// 直接放弃该 host），因此必须有一条点名对端的警告。
+// TestMeshSelfConnectIsWarned 固定自连的可见性：TLS 与协议都可能成功，只有"连到的是自己"
+// 这一条线索，因此必须有一条点名对端的警告。
 func TestMeshSelfConnectIsWarned(t *testing.T) {
 	var logs logBuffer
 	restore := captureLogs(t, &logs)
 	defer restore()
 
 	relay := newMeshTestRelay(t)
-	// 对端地址故意指向本机自己：TLS 与协议都会成功，只有"连到的是自己"这一条线索。
 	startMesh(t, relay, "shared-mesh-passphrase", peerTo(relay, relay.dial))
 
 	deadline := time.Now().Add(10 * time.Second)
@@ -410,10 +394,8 @@ func (l *logBuffer) String() string {
 
 func (l *logBuffer) contains(s string) bool { return strings.Contains(l.String(), s) }
 
-// captureLogs 把 easyss 的日志器换成写入 buf 的 slog，返回恢复函数。
-//
-// mesh 的日志来自多个 goroutine（每个对端一个订阅循环 + 首连观测），因此断言不能
-// 只依赖返回值，必须盯住"用户最终能看到什么"。
+// captureLogs 把日志器换成写入 buf 的 slog 并返回恢复函数：mesh 的日志来自多个 goroutine，
+// 断言只能盯"用户最终看到什么"。
 func captureLogs(t *testing.T, buf *logBuffer) func() {
 	t.Helper()
 	prev := log.Logger()
@@ -421,6 +403,5 @@ func captureLogs(t *testing.T, buf *logBuffer) func() {
 	return func() { log.SetLogger(prev) }
 }
 
-// 编译期断言：derpserver 的 PacketForwarder 由 *derphttp.Client 实现（mesh 把
-// 客户端本身登记为转发器）。
+// 编译期断言：mesh 把 *derphttp.Client 本身登记为 derpserver 的转发器。
 var _ derpserver.PacketForwarder = (*derphttp.Client)(nil)

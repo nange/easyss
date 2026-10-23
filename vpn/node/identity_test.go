@@ -23,11 +23,8 @@ func filePerm(t *testing.T, path string) os.FileMode {
 	return st.Mode().Perm()
 }
 
-// requirePerm 断言 path 的权限位。
-//
-// Windows 没有 POSIX 权限位：Go 报告的 Perm() 是从"只读"属性合成的（可写文件
-// 一律 0666、目录 0666），因此那里既不可能满足 0600/0700、断言也不代表任何真实
-// 约束。跳过而不是放宽取值，否则这条用例在 Windows 上会退化成一句同义反复。
+// requirePerm 断言 path 的权限位。Windows 没有 POSIX 权限位：Go 的 Perm() 由"只读"
+// 属性合成，断言那里不代表任何真实约束，因此跳过而不是放宽取值。
 func requirePerm(t *testing.T, what, path string, want os.FileMode) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -53,11 +50,8 @@ func dropKey(t *testing.T, raw json.RawMessage, key string) json.RawMessage {
 	return out
 }
 
-// TestLoadOrCreateNodeIdentityIsStable 固定"密钥持久化后地址稳定"：这是整个零控制
-// 面设计的前提——对端配置里粘的是本节点的地址，换一次身份就要所有对端重配。
-//
-// 同时固定落盘权限（目录 0700、文件 0600），因为身份文件里含 preshared key，
-// 等价于对端面的接入凭据。
+// TestLoadOrCreateNodeIdentityIsStable 钉住"密钥持久化后地址稳定"（零控制面的前提：
+// 换身份就要所有对端重配），以及落盘权限（目录 0700、文件 0600，文件含 preshared key）。
 func TestLoadOrCreateNodeIdentityIsStable(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state", "node-identity.json")
@@ -126,9 +120,8 @@ func TestLoadOrCreateNodeIdentityRejectsCorruptFile(t *testing.T) {
 	}
 }
 
-// TestLoadOrCreateNodeIdentityRejectsIncompleteFile 固定缺字段的报错发生在读取
-// 阶段：这些字段缺失时 tailcat 会在启动或首次访问对端时才失败，而那时的错误
-// 不会指向密钥文件。
+// TestLoadOrCreateNodeIdentityRejectsIncompleteFile 钉住缺字段在读取阶段就报错：
+// 否则 tailcat 要到启动或首次访问对端时才失败，且错误不指向密钥文件。
 func TestLoadOrCreateNodeIdentityRejectsIncompleteFile(t *testing.T) {
 	// 基线是一份**完整**的身份：逐项删字段才说明得了"缺失被检出"。
 	full, err := json.Marshal(NodeIdentity{PrivateKey: *tailcat.NewPrivateKey()})
@@ -192,12 +185,9 @@ func TestLoadOrCreateNodeIdentityRejectsIncompleteFile(t *testing.T) {
 	}
 }
 
-// TestRegenerateNodeIdentity 固定"重新生成身份"的三条契约：
-//
-//   - 新身份与旧身份不同（否则命令没有意义）；
-//   - 旧身份被完整备份到 <path>.bak（地址里内嵌的 preshared key 只存在于这个文件，
-//     备份是回滚的唯一凭据）；
-//   - 生成出来的文件能被真实读回（缺字段的身份比没有文件更难排查）。
+// TestRegenerateNodeIdentity 钉住 regen 的三条契约：新身份与旧身份不同、旧身份完整
+// 备份到 <path>.bak、生成出来的文件能被真实读回。备份是回滚的唯一凭据——地址里内嵌
+// 的 preshared key 只存在于该文件。
 func TestRegenerateNodeIdentity(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "node-identity.json")
@@ -287,9 +277,8 @@ func TestLoadOrCreateNodeIdentityFileReportsInsteadOfGenerating(t *testing.T) {
 	}
 }
 
-// TestRegenerateNodeIdentityFileRejectsIncompleteIdentity 固定"落盘前的自查"：一份缺字段的
-// 身份比没有文件更难排查（tailcat 会在启动或首次访问对端时才失败，且错误信息不指向密钥
-// 文件），因此宁可拒绝写入，也不能把它写进文件。
+// TestRegenerateNodeIdentityFileRejectsIncompleteIdentity 钉住落盘前的自查：缺字段的
+// 身份比没有文件更难排查，宁可拒绝写入。
 func TestRegenerateNodeIdentityFileRejectsIncompleteIdentity(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "node-identity.json")
