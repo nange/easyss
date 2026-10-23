@@ -150,9 +150,8 @@ func resolvedAddrs(ctx context.Context) ([]netip.Addr, bool) {
 	return addrs, ok && len(addrs) > 0
 }
 
-// withLocalDERPDial 返回携带「本机内嵌 DERP 的回环拨号地址」的 context。它只在握手目标
-// 命中本服务端自己的 DERP 地址时设置（见 serve.go 的 handshakeResult.localDERP），因此
-// 这条特例与任意目标之间没有通道：目标必须与对外通告的 DERP 地址完全一致。
+// withLocalDERPDial 携带内嵌 DERP 的回环拨号地址，只在握手目标与对外通告的 DERP 地址完全一致时
+// 设置（见 serve.go 的 handshakeResult.localDERP），因此这条特例与任意目标之间没有通道。
 func withLocalDERPDial(ctx context.Context, addr string) context.Context {
 	if addr == "" {
 		return ctx
@@ -337,9 +336,8 @@ func (d *dialer) dialTarget(ctx context.Context, network, target string) (net.Co
 
 // 出站拨号的唯一实现，viaNextProxy 由调用方决定（按目标或按域名）；name 只用于日志。
 func (d *dialer) dialVia(ctx context.Context, network, target, name string, viaNextProxy bool) (net.Conn, string, error) {
-	// 内嵌 DERP 的本机回环（见 ProxyHandlerConfig.LocalDERPAddr）：这条流在握手阶段已确认
-	// "目标就是本服务端自己的 DERP 地址"，因此直接拨回环监听并跳过下面的 SSRF 判定与
-	// next proxy——目标不是客户端选定的，而是服务端自己配置的。
+	// 内嵌 DERP 的本机回环（见 ProxyHandlerConfig.LocalDERPAddr）：握手阶段已确认目标就是本服务端
+	// 自己的 DERP 地址，因此直接拨回环监听并跳过 SSRF 判定与 next proxy。
 	if addr, ok := localDERPDial(ctx); ok {
 		dialer := outboundDialer(d.dialTimeout, 0)
 		conn, err := dialer.DialContext(ctx, network, addr)

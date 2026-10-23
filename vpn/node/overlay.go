@@ -12,14 +12,9 @@ import (
 	"tailscale.com/types/key"
 )
 
-// Overlay 把对端映射到 overlay 段内的虚拟 IPv4。
-//
-// 这些地址是**访问侧本地的概念**：TUN 模式下用来回答对端名字的 DNS 查询，以及
-// 让 tun2socks 有一条可路由的目标 IP；它们不进隧道、对端永远看不到。
-// 因此不同节点上的 overlay 段不需要一致。
-//
-// 分配是**确定性**的：同一个对端在任何一次启动、任何一台机器上都得到同一个地址
-// （只由它的 tailcat 公钥决定），因为"地址变化"会让 DNS 缓存与用户笔记同时失效。
+// Overlay 把对端映射到 overlay 段内的虚拟 IPv4。地址是访问侧本地的概念（DNS 应答与
+// tun2socks 的目标 IP），不进隧道，因此不同节点的 overlay 段不需要一致。
+// 分配只由对端公钥决定，跨启动、跨机器稳定。
 type Overlay struct {
 	prefix netip.Prefix
 	// byName 的键是 host_name 的小写形式：DNS 名字本身不区分大小写。
@@ -33,14 +28,9 @@ type peerOverlay struct {
 	addr netip.Addr
 }
 
-// Assign 在 prefix 内为每个对端分配一个确定的 overlay 地址。
-//
-// 分配规则：按对端公钥排序（使结果与配置里的书写顺序无关），再以公钥的 FNV-1a
-// 哈希对可用地址数取模得到首选槽位，冲突时线性探测下一个槽位。这样即使两个
-// 公钥的值相近，结果也只取决于 peers 这个集合本身。
-//
-// 要求每个对端都是完整展开格式的 tailcat 地址——公钥是分配的唯一输入，因此传入
-// 的 peers 应当已经过 NewConfig 的校验。
+// Assign 在 prefix 内为每个对端分配一个确定的 overlay 地址：按公钥排序后以公钥的
+// FNV-1a 哈希取模、冲突时线性探测，因此结果与 peers 的书写顺序无关。
+// 公钥是唯一输入，传入的 peers 须是完整展开格式（已经过 NewConfig 校验）。
 func Assign(prefix netip.Prefix, peers []PeerRef) (*Overlay, error) {
 	capacity, base, err := overlayRange(prefix)
 	if err != nil {
@@ -63,8 +53,6 @@ func Assign(prefix netip.Prefix, peers []PeerRef) (*Overlay, error) {
 			return nil, fmt.Errorf("vpn: peer %q: tailcat address carries no server public key", p.HostName)
 		}
 		h := fnv.New64a()
-		// 用 AppendTo（32 字节原始值）而不是已废弃的 Raw32：前者是上游推荐的
-		// 取原始字节的方式，也不需要额外的临时数组。
 		_, _ = h.Write(pub.AppendTo(nil))
 		entries = append(entries, entry{peer: p, pub: pub, hash: h.Sum64()})
 	}
@@ -88,8 +76,7 @@ func Assign(prefix netip.Prefix, peers []PeerRef) (*Overlay, error) {
 
 	used := make([]bool, capacity)
 	for i, e := range entries {
-		// 排序后公钥相同的条目必然相邻：两个 host_name 指向同一个节点时，
-		// 给它们两个 overlay 地址只会让用户以为那是两台机器。
+		// 排序后公钥相同的条目必然相邻；两个 host_name 指向同一个节点是配置错误。
 		if i > 0 && !entries[i-1].pub.Less(e.pub) {
 			return nil, fmt.Errorf("vpn: peers %q and %q point at the same node (identical tailcat public key); "+
 				"give each peer a distinct address", entries[i-1].peer.HostName, e.peer.HostName)
@@ -107,10 +94,8 @@ func Assign(prefix netip.Prefix, peers []PeerRef) (*Overlay, error) {
 	return o, nil
 }
 
-// Prefix 返回 overlay 段。
 func (o *Overlay) Prefix() netip.Prefix { return o.prefix }
 
-// Addr 返回对端的 overlay 地址。
 func (o *Overlay) Addr(hostName string) (netip.Addr, bool) {
 	po, ok := o.byName[strings.ToLower(hostName)]
 	if !ok {
@@ -119,14 +104,9 @@ func (o *Overlay) Addr(hostName string) (netip.Addr, bool) {
 	return po.addr, true
 }
 
-// Lookup 按 host_name（不区分大小写）或 overlay 字面 IP 查找对端。
-//
-// 这两条路径正是访问侧的全部入口：应用书写的名字（ssh user@b）经本地 DNS 解析
-// 成 overlay IP，TUN 模式下则直接以 overlay IP 到达 SOCKS5，因此两处都必须命中。
+// Lookup 按 host_name（忽略大小写与末尾根点）或 overlay 字面 IP 查找对端：名字经
+// 本地 DNS 变成 overlay IP，TUN 下则直接以 IP 到达 SOCKS5，两条路径都必须命中。
 func (o *Overlay) Lookup(host string) (PeerRef, bool) {
-	// 名字按 DNS 的写法比较：不区分大小写，并去掉末尾的根点（"b." 与 "b" 是同一个
-	// 名字）。配置侧的 host_name 已在 normalizePeers 里归一化，这里再兜一层是为了
-	// 覆盖"应用直接写 FQDN"的情形。
 	if po, ok := o.byName[strings.ToLower(trimDNSRoot(host))]; ok {
 		return po.ref, true
 	}
@@ -153,11 +133,8 @@ func (o *Overlay) Peers() []PeerRef {
 	return refs
 }
 
-// overlayRange 校验 overlay 段并返回可用地址数与其网络地址。
-//
-// 可用的宿主地址排除网络地址与广播地址：overlay 地址不会真的出现在任何链路层上，
-// 因此"广播"在技术上无害，但把它们排除掉能让 198.19.0.0 与 198.19.0.255 这两个
-// 容易被误读的地址永远不出现。
+// overlayRange 校验 overlay 段并返回可用地址数与其网络地址；可用宿主地址排除网络
+// 与广播地址，因此 .0 与 .255 永远分不出去。
 func overlayRange(prefix netip.Prefix) (capacity int, base uint32, err error) {
 	if !prefix.IsValid() || !prefix.Addr().Is4() {
 		return 0, 0, fmt.Errorf("vpn: invalid IPv4 overlay prefix %v", prefix)

@@ -40,9 +40,9 @@ func (a routeAction) String() string {
 	}
 }
 
-// VPNRoute 是访问侧 VPN 的注入面：把「目标是不是本机配置的对端」与「两条经隧道的
-// 拨号路径」暴露给代理层，nil 表示功能关闭。接口定义在消费方（本包）而不是
-// vpn/node——对端面复用的正是本包的 Socks5Server，反过来依赖会形成导入环。
+// VPNRoute 是访问侧 VPN 的注入面：Lookup 判定目标是否为本机配置的对端，两条 Dial
+// 走隧道，nil 表示功能关闭。接口定义在消费方，因为 vpn/node 的对端面复用本包
+// Socks5Server，反向依赖会形成导入环。
 type VPNRoute interface {
 	// Lookup 判断 host（对端名或 overlay 字面 IP）是否为本机配置的对端，并返回它的
 	// 规范名（host_name）。规范名用于会话键：两种书写形式必须落在同一条流上。
@@ -54,9 +54,8 @@ type VPNRoute interface {
 	DialUDP(ctx context.Context, target string) (net.Conn, error)
 }
 
-// VPNStaticNames 是 VPNRoute 的**可选**扩展：实现它的访问侧能为对端名字就地应答 DNS。
-// 做成可选能力而不是第二个注入字段，是因为注入的本来就是同一个对象（vpn/node.Route
-// 同时实现两者），不实现它的注入面只是让对端名字回到普通转发路径。
+// VPNStaticNames 是 VPNRoute 的可选扩展：实现它的访问侧能为对端名字就地应答 DNS，
+// 未实现时对端名字回到普通转发路径。
 type VPNStaticNames interface {
 	// ResolveStatic 报告 name（DNS 问题名，末尾带根点）是否为本机配置的对端名。
 	ResolveStatic(name string) (netip.Addr, bool)
@@ -74,7 +73,7 @@ type routePolicyOptions struct {
 	Dial              func(ctx context.Context, network, addr string) (net.Conn, error)
 	DialTimeout       time.Duration
 	StreamIdleTimeout time.Duration
-	// VPN 为 nil 时 VPN 分流完全关闭，行为与既有版本一致。
+	// VPN 为 nil 时 VPN 分流完全关闭。
 	VPN VPNRoute
 }
 
@@ -97,10 +96,9 @@ func newRoutePolicy(opts routePolicyOptions) *routePolicy {
 	}
 }
 
-// decide 判定目标主机的分流动作。router 为 nil 时 ClassifyHost 自身会回落到 Proxy。
-//
-// VPN 对端必须在 router 之前判定：host_name 与 overlay IP 只有本机认识，交给
-// GeoIP/域名列表只会得到"未知 → 走代理"，目标被送进服务端后表现为一次 DNS 失败。
+// decide 判定目标主机的分流动作（router 为 nil 时 ClassifyHost 回落到 Proxy）。
+// VPN 对端必须在 router 之前判定：host_name 与 overlay IP 只有本机认识，否则会被
+// 判成"未知 → 走代理"。
 func (p *routePolicy) decide(host string) routeDecision {
 	if p.vpn != nil {
 		if _, ok := p.vpn.Lookup(host); ok {

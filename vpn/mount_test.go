@@ -23,16 +23,8 @@ func (s *stubDERP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusSwitchingProtocols)
 }
 
-// TestDERPMountRouting 固定 /derp 的路由契约。两条核心性质：
-//
-//   - **来源必须是回环**：DERP 私有化之后，只有经 easyss 隧道抵达、由服务端改拨
-//     127.0.0.1 的连接才配得上中继。公网上带着
-//     `Upgrade: derp` 的请求同样只看到伪装页；
-//   - **不带 DERP Upgrade 头的 /derp 必须回伪装页面**：derpserver.Handler 对这类
-//     请求会返回带 "DERP requires connection upgrade" 的 426 —— 一眼可辨的指纹。
-//
-// 因此下面的用例都从回环发起（req.RemoteAddr），来源检查单独在
-// TestDERPMountRejectsNonLoopbackSources 里固定。
+// TestDERPMountRouting 固定 /derp 的路由契约：来源必须是回环，且不带 DERP Upgrade 的 /derp
+// 必须回伪装页（derpserver 会回带 "DERP requires connection upgrade" 的 426，一眼可辨）。
 func TestDERPMountRouting(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -149,8 +141,7 @@ func TestDERPMountRouting(t *testing.T) {
 	}
 }
 
-// TestDERPMountNeverLeaksDERPAttributes 守护伪装面：无论请求长什么样，非 DERP
-// 流量都不应该看到 426 或任何来自 derpserver 的响应。
+// TestDERPMountNeverLeaksDERPAttributes 固定伪装面：非 DERP 流量看不到 426 或任何 derpserver 响应。
 func TestDERPMountNeverLeaksDERPAttributes(t *testing.T) {
 	fallback := &stubFallback{}
 	// 真实的 derpserver.Handler 会对无 Upgrade 的 /derp 回 426。
@@ -173,9 +164,8 @@ func TestDERPMountNeverLeaksDERPAttributes(t *testing.T) {
 	}
 }
 
-// TestDERPMountRejectsNonLoopbackSources 是 DERP 私有化的核心断言：来自任何非回环
-// 地址的请求——哪怕它带着正确的 Upgrade 头、路径也完全正确——都只能看到伪装页。
-// 这条性质让 /derp 在公网上不再是中继入口，也不再是一个可被扫描到的协议端点。
+// TestDERPMountRejectsNonLoopbackSources 固定 DERP 私有化：任何非回环来源，哪怕路径与
+// Upgrade 都正确，也只能看到伪装页。
 func TestDERPMountRejectsNonLoopbackSources(t *testing.T) {
 	for _, remote := range []string{"203.0.113.7:44321", "[2001:db8::1]:44321", "198.51.100.9:1", ""} {
 		t.Run("remote="+remote, func(t *testing.T) {
@@ -199,9 +189,8 @@ func TestDERPMountRejectsNonLoopbackSources(t *testing.T) {
 	}
 }
 
-// TestDERPMountProbeOnlyAcceptsGET 固定探测端点的方法门控：derpserver 的
-// ProbeHandler 对非 GET/HEAD 会回一行 "bogus probe method"
-// （derp/derpserver/handler.go），那正是本函数要挡住的指纹来源。
+// TestDERPMountProbeOnlyAcceptsGET 固定探测端点的方法门控：非 GET/HEAD 会拿到 derpserver
+// 的 "bogus probe method"，那是只有 DERP 中继才会产生的指纹。
 func TestDERPMountProbeOnlyAcceptsGET(t *testing.T) {
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		t.Run(method, func(t *testing.T) {

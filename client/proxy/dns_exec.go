@@ -11,7 +11,7 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-// 本文件是 DNS 拦截的执行器：把 dnsPlan 的四种动作变成具体结果，供 UDP 与 TCP 两个前端
+// 本文件是 DNS 拦截的执行器：把 dnsPlan 的动作变成具体结果，供 UDP 与 TCP 两个前端
 // 共用。前端只负责封帧与投递模型——UDP 异步（应答由 receiveLoop 送回），TCP 同步（阻塞等
 // 自己的交换）。投递模型不合并：把 UDP 改成阻塞等待会丢掉多应答/重传语义。
 
@@ -44,9 +44,8 @@ type dnsExchange struct {
 	dst  string
 }
 
-// executeSync 执行不需要等待隧道往返的三条分支：Block、缓存命中、直连解析。调用方必须
-// 只用非 proxy 的动作调用它，代理分支的投递模型由各前端自理。reqServer 是客户端显式
-// 指定的解析器，只有直连分支使用。返回的应答已把 Id 改写为本次查询的 Id。
+// executeSync 执行所有不需要等待隧道往返的动作；调用方不得传 proxy 动作，代理分支的
+// 投递模型由各前端自理。reqServer 只有直连分支使用；返回的应答已把 Id 改写为本次查询的 Id。
 func (d *dnsInterceptor) executeSync(ex dnsExchange, msg *dns.Msg, reqServer string) (*dns.Msg, error) {
 	switch ex.plan.action {
 	case dnsActionStatic:

@@ -38,9 +38,8 @@ type Server struct {
 	mux        *http.ServeMux
 	certCache  *certmagic.Cache
 	derp       *vpn.DERPServer
-	// mesh 是同 region 内其他内嵌 DERP 的互联（server.vpn.mesh_*）。未配置时为
-	// nil，此时服务端与既有版本逐字节一致。meshCtx/meshCancel 约束它的生命周期：
-	// Shutdown 先取消再关闭，确保不会再登记新的转发映射。
+	// mesh 是同 region 内其他内嵌 DERP 的互联（server.vpn.mesh_*），未配置时为 nil。
+	// Shutdown 先取消 meshCtx 再关闭它，确保收尾过程中不会再登记新的转发映射。
 	mesh       *vpn.Mesh
 	meshCtx    context.Context
 	meshCancel context.CancelFunc
@@ -339,10 +338,8 @@ func (s *Server) Start() error {
 		log.Info("[SERVER] next proxy configured", "url", cfg.NextProxy.URL, "udp", cfg.NextProxy.EnableUDP, "all_host", cfg.NextProxy.AllHost)
 	}
 
-	// 内嵌 DERP：它只对来自回环的请求提供服务（见 vpn.NewDERPMount），而节点的
-	// DERP 连接经 easyss 隧道到达这里，握手目标正是本服务端对外通告的 DERP 地址。
-	// 因此要先把该地址与它的回环映射算出来，交给 proxyHandler（见
-	// handler.ProxyHandlerConfig.LocalDERPAddr 与 dialTarget）。
+	// 内嵌 DERP 只对回环来源提供服务（见 vpn.NewDERPMount），节点的 DERP 连接经 easyss 隧道
+	// 到达这里、握手目标正是本服务端对外通告的地址，因此要先把该地址及其回环映射交给 proxyHandler。
 	var derpAddr, derpLoopback string
 	if srvCfg.VPN.Enabled {
 		if derpAddr, err = cfg.ResolveDERPAddr(); err != nil {
@@ -373,9 +370,8 @@ func (s *Server) Start() error {
 		return fmt.Errorf("probe handler: %w", err)
 	}
 
-	// 顶层处理器：启用 VPN 时把真正的 DERP 流量分流给内嵌中继，其余路径一律走
-	// 伪装页面。分流的理由、以及为什么必须在 `/` 的兜底处理器内部做，见
-	// vpn.NewDERPMount。
+	// 顶层处理器：启用 VPN 时把真正的 DERP 流量分流给内嵌中继，其余路径走伪装页面
+	// （为什么必须在 `/` 的兜底处理器内部做，见 vpn.NewDERPMount）。
 	var root http.Handler = http.HandlerFunc(fallback.Serve)
 	if srvCfg.VPN.Enabled {
 		derpSrv, err := s.startDERP(derpAddr, srvCfg.VPN.DERPSendQueueDepth)
@@ -385,9 +381,8 @@ func (s *Server) Start() error {
 		s.derp = derpSrv
 		root = vpn.NewDERPMount(derpSrv.Handler(), fallback)
 
-		// mesh 必须在 DERP 开始服务之前落位（derpserver 要求 SetMeshKey 早于服务），
-		// 而 mesh 客户端本身是异步拨号 + 重试的，因此这里的顺序只影响"第一个同伴
-		// 何时被认出来"，不影响正确性。
+		// mesh 必须在 DERP 开始服务之前落位（derpserver 要求 SetMeshKey 早于服务）；mesh 客户端
+		// 本身异步拨号 + 重试，因此这里只影响第一个同伴何时被认出来。
 		if srvCfg.VPN.MeshKey != "" {
 			s.meshCtx, s.meshCancel = context.WithCancel(context.Background())
 			if err := s.startDERPMesh(cfg, derpSrv, np, timeouts.Dial); err != nil {
@@ -422,12 +417,8 @@ func (s *Server) Start() error {
 	return s.httpServer.ListenAndServeTLS("", "")
 }
 
-// loopbackListenAddr 由 server.listen 推导内嵌 DERP 的本机回环拨号地址
-// （127.0.0.1:<listen 端口>）。
-//
-// DERP 与代理共用同一个 HTTPS 监听，节点经 easyss 隧道送来的 DERP 连接会在这里被改拨
-// 回环（见 handler.dialTarget）。该监听在回环上必须可达：只绑了某一个非回环地址时它是
-// 配置错误，必须在启动时明确拒绝，而不是等到节点连不上才暴露。
+// loopbackListenAddr 由 server.listen 推导内嵌 DERP 的本机回环拨号地址。DERP 与代理共用同一个
+// HTTPS 监听，只绑某一个非回环地址时回环改拨不可达，因此必须在启动时拒绝。
 func loopbackListenAddr(listen string) (string, error) {
 	host, _, err := net.SplitHostPort(listen)
 	if err != nil {
@@ -452,9 +443,8 @@ func loopbackListenAddr(listen string) (string, error) {
 	return net.JoinHostPort(loopback, strconv.Itoa(port)), nil
 }
 
-// startDERP 装载内嵌 DERP 中继，返回可直接挂到根处理器上的实例。addr 是它对外通告的
-// host:port（由 ResolveDERPAddr 推导）。sendQueueDepth 来自 server.vpn.derp_send_queue_depth，
-// 归一化与默认值只在 config.NormalizeDERPSendQueueDepth 里定义一次。
+// startDERP 装载内嵌 DERP 中继，返回可直接挂到根处理器上的实例。addr 是它对外通告的 host:port；
+// sendQueueDepth 的归一化与默认值只在 config.NormalizeDERPSendQueueDepth 定义一次。
 func (s *Server) startDERP(addr string, sendQueueDepth int) (*vpn.DERPServer, error) {
 	derpKey, err := vpn.LoadOrCreateKey(vpn.DERPKeyPath())
 	if err != nil {
@@ -527,8 +517,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 
 	var err error
-	// 先停 mesh 再停 HTTP：mesh 的订阅循环会往中继里登记转发映射，先取消它就不会
-	// 在收尾过程中出现新的映射（关闭顺序与 DERP 本身的收尾一致，见下）。
+	// 先停 mesh 再停 HTTP：mesh 的订阅循环会往中继里登记转发映射，先取消才不会有新映射。
 	if s.meshCancel != nil {
 		s.meshCancel()
 		s.meshCancel = nil
@@ -542,9 +531,8 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.httpServer != nil {
 		err = s.httpServer.Shutdown(ctx)
 	}
-	// 先停 HTTP 再收中继：Shutdown 不会等待已被 Hijack 的连接（DERP 的连接都
-	// 是 Hijack 走的），因此这里必须显式收尾，否则中继的收发 goroutine 会一直
-	// 留在进程里。
+	// 先停 HTTP 再收中继：http.Server.Shutdown 不管也不等待 Hijack 走的连接（DERP 都是），
+	// 不显式收尾中继的收发 goroutine 会留在进程里。
 	if s.derp != nil {
 		if cerr := s.derp.Close(); cerr != nil && err == nil {
 			err = cerr

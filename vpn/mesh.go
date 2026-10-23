@@ -20,55 +20,33 @@ import (
 	"github.com/nange/easyss/v3/log"
 )
 
-// 本文件实现"同一 region 下多个内嵌 DERP 之间的 mesh"——数据面的一跳转发。
-//
-// 上游的 derpserver 已经具备全部机制：mesh 同伴（握手时带正确的 MeshKey）可以订阅
-// 客户端的上下线（PeerPresent/PeerGone），并代替其他客户端转发数据包
-// （ForwardPacket，源公钥保持不变）。缺的只是"谁来当这个 mesh 客户端"：每个中继
-// 都要主动连上同 region 的其他中继，把自己看到的那部分客户端名单交给对方。
-//
-// 三个约束决定了这里的形状：
-//
-//   - **必须经 easyss 隧道**：内嵌 DERP 只接待回环来源（见 NewDERPMount），而对端
-//     的公网 host:port 前面站着伪装页面。因此每条 mesh 连接都交给调用方提供的
-//     拨号器（生产上是 nextproxy → 本机 easyss-headless 的 SOCKS5 → 对端服务端），
-//     而服务端在握手阶段把"目标就是我的对外 DERP 地址"改拨回环后，它看到的来源正是
-//     回环。直连（不经隧道）在协议上不可能成功，所以 Dial 是必填项。
-//   - **只能连到对端自己的服务端**：localDERP 是完全匹配，落到别台服务端会被当成
-//     普通代理请求直连出去。TLS 证书校验（SNI = 对端 DERP 地址的 host）是这条
-//     约束的守门人；连到本机自己的中继则由下面的"首连观测"报出来。
-//   - **一跳、不跨 region**：只与地址明确列在 mesh_peers 里的对端互联，
-//     derpserver 也不会二次转发已经转发过的包。
+// mesh 让同 region 的中继互为 derpserver 的 mesh 同伴：订阅对端客户端的上下线，并把包转发
+// 一跳。连接必须经调用方的拨号器走 easyss 隧道（内嵌 DERP 只接待回环来源），TLS 校验保证
+// 落到对端自己的服务端；只连 mesh_peers 里明确列出的对端。见 docs/architecture.md 要点 19。
 type MeshPeer struct {
-	// Addr 是对端自己的 DERP 对外地址（host:port，即对端的 domain 与 listen
-	// 端口）。它同时是 TLS SNI 与请求路径的 host，因此必须与对端的配置逐字一致
-	// （比较在配置层完成）。
+	// Addr 是对端自己的 DERP 对外地址（domain + listen 端口），同时是 TLS SNI 与请求路径的
+	// host，必须与对端配置逐字一致（比较在配置层完成）。
 	Addr string
 
-	// Dial 建立到 Addr 的 TCP 连接，必填：生产上是"经 SOCKS5 → easyss 隧道"，
-	// 测试里是直连。签名与 netx.DialFunc 一致。
+	// Dial 建立到 Addr 的 TCP 连接，必填；生产上经 SOCKS5 → easyss 隧道，签名同 netx.DialFunc。
 	Dial netx.DialFunc
 
-	// TLSConfig 可选：对端使用私有/自签证书时用来提供根证书；nil 表示系统根证书
-	// （certmagic 的 Let's Encrypt 证书就是这种情形）。
+	// TLSConfig 可选：对端用私有/自签证书时提供根证书，nil 用系统根证书。
 	TLSConfig *tls.Config
 }
 
-// MeshOptions 是构造 Mesh 的输入。
 type MeshOptions struct {
-	// MeshKey 是同一 region 内共享的预共享密钥（明文口令或 64 位 hex，见
-	// config.ParseVPNMeshKey）。它只交给 derpserver 与 mesh 客户端，绝不写日志。
+	// MeshKey 是同 region 共享的预共享密钥（口令或 64 位 hex，见 config.ParseVPNMeshKey），
+	// 只交给 derpserver 与 mesh 客户端，绝不写日志。
 	MeshKey string
 
-	// Peers 是要互联的其他中继。空列表表示不互联（这不是错误：单节点 region 不需要
-	// mesh），但一旦给出就必须完整——只连一部分对端会让数据包在缺失的那一跳上被丢弃。
+	// Peers 是要互联的其他中继：一旦给出就必须完整，只连一部分会让包在被漏掉的那跳丢弃。
 	Peers []MeshPeer
 
-	// Logf 是第三方库（derphttp）的日志出口，nil 表示 vpn.Logf。
+	// Logf 是 derphttp 的日志出口，nil 用 vpn.Logf。
 	Logf logger.Logf
 }
 
-// Mesh 是一组 mesh 客户端：每个对端一个 derphttp 客户端与一个常驻的订阅循环。
 type Mesh struct {
 	srv  *derpserver.Server
 	logf logger.Logf
@@ -83,35 +61,27 @@ type Mesh struct {
 	wg      sync.WaitGroup
 }
 
-// meshPeerState 是一个对端的运行期状态。
 type meshPeerState struct {
 	addr string
 	opts MeshPeer
 
-	// dc 在 Start 里创建（NewMesh 保持"纯校验、零副作用"）。
+	// dc 在 Start 里创建：NewMesh 只校验、不做 I/O。
 	dc *derphttp.Client
 
-	// errOnce 让"这个对端不可用"只报一次警告：上游循环每 5 秒重试一次，逐次告警
-	// 会把日志刷满，而故障原因（密钥不一致、代理落错节点、对端没开 mesh）通常不会
-	// 自己变化。
+	// errOnce 让"该对端不可用"只告警一次：上游每 5 秒重试，而故障原因通常不会变化。
 	errOnce sync.Once
 }
 
 const (
-	// meshFirstConnectPollInterval 是"首连观测"的轮询间隔。derphttp 没有"连接成功"
-	// 的回调，而这个观测（连上了谁、是不是自己）对排障很重要，因此按固定间隔读一次
-	// 原子的公钥快照。
+	// meshFirstConnectPollInterval 是首连观测的轮询间隔：derphttp 没有连接成功回调，只能定时
+	// 读一次原子的公钥快照。
 	meshFirstConnectPollInterval = 500 * time.Millisecond
 
-	// meshCloseTimeout 是等待订阅循环退出的上限。与 runner 的 VPN 拆除一致：上游的
-	// 关闭链上存在会永久阻塞的分支，退出路径不能被它拖住（超时只告警，不阻塞）。
+	// meshCloseTimeout 是等待订阅循环退出的上限：上游关闭链有会永久阻塞的分支，超时只告警。
 	meshCloseTimeout = 5 * time.Second
 )
 
-// NewMesh 校验 mesh 配置并返回一个未启动的 Mesh。
-//
-// 它不做任何 I/O：创建客户端、设置 mesh key、拉起订阅循环都在 Start 里，因此一个
-// 从未启动的 Mesh 不需要任何清理。
+// NewMesh 只做校验，所有 I/O 都在 Start，因此未启动的 Mesh 无需清理。
 func NewMesh(derpSrv *DERPServer, opts MeshOptions) (*Mesh, error) {
 	if derpSrv == nil || derpSrv.srv == nil {
 		return nil, errors.New("vpn: mesh requires the embedded DERP server")
@@ -154,11 +124,9 @@ func NewMesh(derpSrv *DERPServer, opts MeshOptions) (*Mesh, error) {
 	}, nil
 }
 
-// Start 设置 mesh key 并为每个对端起一个订阅循环。它必须在 DERP 中继开始服务之前
-// 调用（derpserver 要求 SetMeshKey 早于服务），这也是 server.Start 的顺序。
-//
-// ctx 只约束订阅循环的生命周期；Close 会同时取消 ctx 并关闭客户端（上游文档：
-// 两者都做才能让循环尽快返回）。
+// Start 必须在 DERP 中继开始服务之前调用（derpserver 要求 SetMeshKey 早于服务），这也是
+// server.Start 的顺序。ctx 只约束订阅循环；Close 同时取消 ctx 与关闭客户端，两者都做才能
+// 让循环尽快返回。
 func (m *Mesh) Start(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -174,7 +142,7 @@ func (m *Mesh) Start(ctx context.Context) error {
 
 	permitted, err := key.ParseDERPMesh(m.meshKey)
 	if err != nil {
-		// ParseVPNMeshKey 已经保证是 64 位 hex，这里只是不让签名漂移变成静默失效。
+		// ParseVPNMeshKey 已保证是 64 位 hex；这里不让签名漂移变成静默失效。
 		return fmt.Errorf("vpn: parse the DERP mesh key: %w", err)
 	}
 
@@ -210,20 +178,18 @@ func (m *Mesh) Start(ctx context.Context) error {
 	return nil
 }
 
-// watch 是一个对端的订阅循环。它对端的客户端必须已经创建（见 Start）。
+// watch 是单个对端的订阅循环，调用前该对端的客户端必须已创建（见 Start）。
 func (m *Mesh) watch(ctx context.Context, p *meshPeerState) {
 	defer m.wg.Done()
 
-	// 首连观测与订阅循环并行：它只读原子的公钥快照，用来把"连上了谁"和"是不是连到
-	// 了自己"变成一行日志——否则代理落错节点时用户只能看到一条 TLS 错误。
+	// 首连观测与订阅循环并行：它只读原子的公钥快照，把"连到谁、是不是自己"变成一行日志。
 	go m.watchFirstConnect(ctx, p)
 
 	p.dc.RunWatchConnectionLoop(ctx, m.srv.PublicKey(), m.logf,
 		func(msg derp.PeerPresentMessage) { m.srv.AddPacketForwarder(msg.Key, p.dc) },
 		func(msg derp.PeerGoneMessage) { m.srv.RemovePacketForwarder(msg.Peer, p.dc) },
 		func(err error) {
-			// 关闭时循环必然会报一次 "client closed"：那是我们自己关的，不是故障，
-			// 不能以 WARN 形式出现在退出路径上。
+			// 关闭时循环必然报一次 "client closed"：那是自己关的，不能以 WARN 出现在退出路径上。
 			if m.isClosed() || errors.Is(err, derphttp.ErrClientClosed) {
 				log.Debug("[VPN] derp mesh peer stopped", "peer", p.addr, "err", err)
 				return
@@ -237,12 +203,11 @@ func (m *Mesh) watch(ctx context.Context, p *meshPeerState) {
 		})
 }
 
-// meshAppName 是 mesh 客户端对 DERP 服务端通告的应用名（纯统计/排障用途；对端
-// disallow_app_names 对 mesh 同伴本来就不生效）。
+// meshAppName 是 mesh 客户端对 DERP 服务端通告的应用名（统计用；对端的 disallow_app_names
+// 本来就不作用于 mesh 同伴）。
 const meshAppName = "easyss-derp-mesh"
 
-// watchFirstConnect 在对端首次连上时打一行日志：连到本机自己的中继（说明代理没有
-// 把连接送进对端的隧道）是警告，其余是普通信息。
+// watchFirstConnect 在对端首次连上时记一行：连到本机自己的中继是警告，其余是信息。
 func (m *Mesh) watchFirstConnect(ctx context.Context, p *meshPeerState) {
 	ticker := time.NewTicker(meshFirstConnectPollInterval)
 	defer ticker.Stop()
@@ -267,16 +232,13 @@ func (m *Mesh) watchFirstConnect(ctx context.Context, p *meshPeerState) {
 	}
 }
 
-// isClosed 报告 Close 是否已经开始。
 func (m *Mesh) isClosed() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.closed
 }
 
-// Close 取消订阅循环并关闭全部 mesh 客户端。幂等，nil 安全。
-//
-// 等待是有界的（见 meshCloseTimeout）：退出路径上不能被上游的关闭链拖住。
+// Close 取消订阅循环并关闭全部客户端，幂等且 nil 安全；等待有界（见 meshCloseTimeout）。
 func (m *Mesh) Close() error {
 	if m == nil {
 		return nil

@@ -39,12 +39,8 @@ func echoOnce(t *testing.T, socksAddr, target, payload string) string {
 }
 
 // TestServeBorrowedKeepsCallerListener 固定 ServeBorrowed 的所有权契约：它在调用方提供的
-// listener 上服务，并且**不**持有它。
-//
-// 这是 VPN 对端面的前提——对端面用的监听器来自 tailcat 的 gVisor netstack，那种监听器
-// 不属于宿主，也绝不能由 Socks5Server.Close 关闭（关闭它会连带拆掉隧道的服务端口）。
-// 因此：Close 之后调用方的 listener 必须仍然可用；调用方关闭 listener 之后，Serve 必须
-// 正常返回而不是报错。
+// listener 上服务且**不**持有它——对端面用的是 tailcat gVisor netstack 的监听器，Close 它
+// 等于拆掉隧道的服务端口；Close 之后调用方的 listener 必须仍然可用。
 func TestServeBorrowedKeepsCallerListener(t *testing.T) {
 	echoAddr, stopEcho := startTCPEcho(t)
 	defer stopEcho()
@@ -133,11 +129,9 @@ func TestServeTakesListenerOwnership(t *testing.T) {
 	_ = reln.Close()
 }
 
-// TestNewDirectOnlyRoutesEverythingDirectly 固定对端面所用路由器的语义：任何目标
-// （域名、IPv4、IPv6、内网地址）都判为直连，且不会被 IPv6 策略门拦下。
-//
-// 这条不变量是"对端面只可能拨本机 loopback"的实现基础：对端面不做任何分流判定，
-// 唯一的门槛是拨号器自己。
+// TestNewDirectOnlyRoutesEverythingDirectly 固定对端面所用路由器的语义：任何目标（域名、
+// IPv4、IPv6、内网地址）都判直连，且不会被 IPv6 策略门拦下。
+// 这是"对端面只可能拨本机 loopback"的实现基础：对端面不做分流判定，唯一门槛是拨号器。
 func TestNewDirectOnlyRoutesEverythingDirectly(t *testing.T) {
 	rt := router.NewDirectOnly()
 	for _, host := range []string{

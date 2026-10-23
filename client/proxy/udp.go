@@ -24,10 +24,9 @@ func (s *Socks5Server) handleUDP(relay *udpRelay, d *socks5Frame, data []byte) e
 		return nil
 	}
 
-	// VPN 对端优先于后面所有"公网路径"的门禁（QUIC 屏蔽、IPv6 策略门、链路本地
-	// 丢弃、53 拦截）：对端名与 overlay IP 都不是公网目标，这些策略与它们无关。
-	// 顺序在这里是有实际后果的——`disable_quic` 会静默吞掉发往 443 的数据报，
-	// 53 拦截会按"查询域名"把发往对端 53 的查询重新分流。
+	// VPN 对端优先于后面所有公网路径的门禁：对端名与 overlay IP 都不是公网目标，
+	// 顺序写在后面会让 disable_quic 静默吞掉发往 443 的数据报，或让 53 拦截把发往
+	// 对端 53 的查询重新分流。
 	if s.vpn != nil {
 		if name, ok := s.vpn.Lookup(host); ok {
 			return s.vpnUDPRelay(relay, dst, name, data)
@@ -134,22 +133,12 @@ func (s *Socks5Server) handleRegularUDP(relay *udpRelay, d *socks5Frame, dst str
 	return nil
 }
 
-// vpnUDPRelay 把一条发往 VPN 对端的数据报送进隧道。它复用直连 UDP 的会话表与读
-// 循环（见 udp_pool.go 的 acquireDirectWith），只替换拨号器——两边的会话形状完全
-// 一样：一个 socket、一个读循环、一个活动时间戳。
-//
-// 会话键带 `vpn_` 前缀，因此它与同一目标上的直连会话、代理交换三者在池中互不
-// 干扰；键里用对端的**规范名**而不是 dst，使"按名字访问"与"按 overlay IP 访问"
-// 落在同一条流上。
-//
-// 键里必须带端口：一条 UDP ASSOCIATE 允许向任意目标发数据报（RFC 1928），而对端
-// 在首个数据报里就把目标端口固化了（见 vpn/node 的目标头），因此"同一对端的两个
-// 端口"必须是两条流——否则第二个端口的数据报会被投递到第一个端口上。
-//
-// dst 仍然是访问侧的原始目标：应答组帧必须用它（tun2socks 以客户端请求的目标地址
-// 为 UDP 流建键，换个源地址的数据报会被丢弃，见 sendToClient）。
-// udpTargetPort 取出 "host:port" 的端口部分，用于会话键。解析失败时回退到整个
-// 目标串：宁可少一次合并，也不能让两条不同的目标共用一个键。
+// vpnUDPRelay 把发往 VPN 对端的数据报送进隧道：复用直连会话表与读循环，只替换拨号器。
+// 会话键带 vpn_ 前缀与对端规范名（名字与 overlay IP 落同一条流），并且必须带端口——
+// 对端在首个数据报里固化目标端口，否则第二个端口的数据报会被投递到第一个端口上。
+
+// udpTargetPort 取出 "host:port" 的端口部分用于会话键；解析失败时回退整个目标串，
+// 宁可少一次合并，也不能让两个不同目标共用一个键。
 func udpTargetPort(target string) string {
 	if _, port, err := net.SplitHostPort(target); err == nil {
 		return port

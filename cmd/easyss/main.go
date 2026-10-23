@@ -140,9 +140,6 @@ Flags:
 	// 相对路径按可执行文件目录解析，launchd 启动（cwd=/）时才找得到。
 	cfg.ResolveFilePaths()
 
-	// VPN 身份的输出与重新生成都在 "vpn" 子命令里（见 vpn_cmd.go），它在 flag 解析
-	// 之前就被分派掉了——所以这里不需要"打印完就退出"这类分支，启动路径保持单一。
-
 	if cfg.Log.FilePath != "" && !filepath.IsAbs(cfg.Log.FilePath) {
 		if dir := util.CurrentDir(); dir != "" {
 			cfg.Log.FilePath = filepath.Join(dir, cfg.Log.FilePath)

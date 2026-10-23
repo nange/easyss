@@ -29,15 +29,13 @@ type ProxyHandler struct {
 	// deps 与三个子 handler 共用同一个实例：握手期 SSRF 校验与拨号必须是同一个解析器，
 	// 否则构造后改一项就会让两者看到不同的答案。
 	deps *outboundDeps
-	// localDERP 描述"握手目标就是本服务端自己的内嵌 DERP"这一特例；match 为空即关闭。
+	// localDERP 在 match 或 loopback 为空时关闭该特例（两者都来自 ProxyHandlerConfig）。
 	localDERP *localDERP
 }
 
-// localDERP 描述"握手目标就是本服务端自己的内嵌 DERP"这一特例。
-//
-// DERP 只接受回环来源（见 vpn.NewDERPMount），节点侧则把 DERP 连接放进 easyss 隧道，
-// 以 servers[] 里标记 derp 的那条（本服务端的 domain + listen 端口）为目标。服务端
-// 必须在这里认出来并改拨本机回环——否则那条连接会去连自己的公网入口，而那里只有伪装页。
+// localDERP 描述"握手目标就是本服务端自己的内嵌 DERP"这一特例：DERP 只接受回环来源
+// （见 vpn.NewDERPMount），节点把 DERP 连接放进 easyss 隧道并以本服务端对外通告的地址为目标，
+// 服务端必须认出来并改拨本机回环，否则那条连接会去连自己的公网入口（那里只有伪装页）。
 type localDERP struct {
 	// match 是本服务端对外通告的 DERP host:port（见 server/config.ResolveDERPAddr）。
 	match string
@@ -45,8 +43,7 @@ type localDERP struct {
 	loopback string
 }
 
-// matches 报告握手目标是否就是本服务端自己的 DERP 地址。host 忽略大小写，端口按数值
-// 比较（"443" 与 "0443" 等价），避免一处写法差异变成"VPN 连不上"。
+// matches 忽略 host 大小写、按数值比较端口：一处写法差异就会变成"VPN 连不上"。
 func (l *localDERP) matches(target string) bool {
 	if l == nil || l.match == "" || l.loopback == "" {
 		return false
@@ -82,9 +79,8 @@ type ProxyHandlerConfig struct {
 	HandshakeTimeout time.Duration
 	// Fallback 是服务非代理请求（伪装页面）的实例。nil 表示使用包级内置实例。
 	Fallback *Fallback
-	// LocalDERPAddr / LocalDERPLoopback 打开"目标是本服务端自己的内嵌 DERP"
-	// 这一特例：前者是要匹配的对外 host:port，后者是命中后拨号的回环地址。
-	// 两者任一为空即关闭该特例。
+	// LocalDERPAddr / LocalDERPLoopback 打开"目标是本服务端自己的内嵌 DERP"这一特例：
+	// 前者是要匹配的对外 host:port，后者是命中后拨号的回环地址；任一为空即关闭。
 	LocalDERPAddr     string
 	LocalDERPLoopback string
 }

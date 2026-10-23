@@ -98,18 +98,15 @@ func TestFriendlyStartupWarning(t *testing.T) {
 	}
 }
 
-// vpnRefusalWarning 构造托盘实际会读到的那种启动警告：会话起点的门禁失败已经由
-// runner.Run 包成"vpn disabled for this session"，并可能与被 errors.Join 起来的其它
-// 警告并存（例如服务端域名尚未解析成功）。
+// vpnRefusalWarning 构造托盘实际会读到的那种启动警告：门禁失败已被 runner.Run 包成
+// "vpn disabled for this session"，并可与 errors.Join 的其它警告并存。
 func vpnRefusalWarning(others ...error) error {
 	return errors.Join(append(others,
 		fmt.Errorf("vpn disabled for this session: %w", clientconfig.ErrCurrentServerNotDERPRelay))...)
 }
 
 // TestStartupWarningNotice 固定"哪些启动警告值得打断用户"：只有 VPN 那条。
-//
-// 其余警告在切换服务器之后仍然只写日志——启动路径已经在弹它们，网络未就绪的恢复提示
-// 另有 watchServerDomainReady 负责，重复弹窗只会变成噪音。
+// 其余仍只写日志——启动路径已经在弹它们，网络未就绪的恢复提示另有 watchServerDomainReady 负责。
 func TestStartupWarningNotice(t *testing.T) {
 	if startupWarningNotice(nil) {
 		t.Error("nil must not notify")
@@ -153,10 +150,9 @@ func TestVPNRefusalText(t *testing.T) {
 	}
 }
 
-// TestStartupWarningTextUsesTheRunningSessionServer 固定"文案说的是运行中会话实际
-// 使用的那台服务器"这条契约，也就是本次修正的核心：判据与文案都不能跟着 App 快照的
-// default 标记走——托盘切换、失败回滚与自更新重启都会替换那份快照，而正在跑的会话仍
-// 停在它启动时选中的那台上。
+// TestStartupWarningTextUsesTheRunningSessionServer 固定判据与文案都跟着运行中会话的
+// 服务器走，而不是 App 快照的 default 标记：切换、失败回滚与自更新重启都会替换快照，
+// 而会话仍停在它启动时选中的那台上。
 func TestStartupWarningTextUsesTheRunningSessionServer(t *testing.T) {
 	a := newSwitchTestApp(t) // 初始 default 是 a.example:443
 	// 让 App 快照的 default 指向 b：会话还跑在 a 上（先发布下标、新会话还没起来的窗口，

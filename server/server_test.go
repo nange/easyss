@@ -67,9 +67,8 @@ func captureServerLogs(t *testing.T) *logRecorder {
 	return rec
 }
 
-// TestShutdownClosesEmbeddedDERP 固定 Shutdown 会显式收尾内嵌 DERP 中继：DERP 的连接全部
-// 是 Hijack 走的，而 http.Server.Shutdown 明确不管也不等待被 Hijack 的连接。少了这一步，
-// 中继的收发 goroutine 会一直留在进程里（服务端收到 SIGTERM 后不退出）。
+// TestShutdownClosesEmbeddedDERP 固定 Shutdown 会显式收尾内嵌 DERP：它的连接全部是 Hijack 走的，
+// http.Server.Shutdown 不管也不等待这类连接，少了这一步中继的收发 goroutine 会留在进程里。
 func TestShutdownClosesEmbeddedDERP(t *testing.T) {
 	s := &Server{derp: vpn.NewDERPServer(key.NewNode(), 0)}
 
@@ -77,7 +76,7 @@ func TestShutdownClosesEmbeddedDERP(t *testing.T) {
 	require.Nil(t, s.derp, "Shutdown must release the embedded DERP server")
 }
 
-// TestShutdownWithoutVPN 守护"未启用 VPN 时 Shutdown 行为不变"。
+// TestShutdownWithoutVPN 守护未启用 VPN 时 Shutdown 是空操作。
 func TestShutdownWithoutVPN(t *testing.T) {
 	s := &Server{}
 	require.NoError(t, s.Shutdown(context.Background()))
@@ -556,10 +555,8 @@ func TestServerUploadFlowControlInFlightPerStream(t *testing.T) {
 		"in-flight data must be bounded by the configured per-stream window")
 }
 
-// TestLoopbackListenAddr 固定 server.listen → 内嵌 DERP 回环拨号地址的推导与拒绝
-// 规则。DERP 与代理共用同一个 HTTPS 监听，而节点侧经隧道送来的 DERP 连接会被改拨
-// 到该监听的回环地址（见 handler.dialTarget），因此"监听在回环上不可达"必须是启动
-// 错误，而不是等到节点连不上中继才暴露。
+// TestLoopbackListenAddr 固定 server.listen → 内嵌 DERP 回环拨号地址的推导与拒绝规则：DERP 与
+// 代理共用同一个 HTTPS 监听，因此"监听在回环上不可达"必须是启动错误，而不是等到节点连不上中继。
 func TestLoopbackListenAddr(t *testing.T) {
 	for _, tc := range []struct {
 		listen string

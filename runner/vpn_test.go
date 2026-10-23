@@ -37,18 +37,12 @@ func vpnTestPaths(t *testing.T) vpnPaths {
 
 // vpnTestDERPAddrs 是测试配置里本节点通告、且所有对端也必须通告的 DERP 节点集合
 // （DERP 私有化要求双方声明同一组中继，见 vpnnode.assertPeersShareDERPSet）。
-//
-// 用 127.0.0.1:9 / 127.0.0.2:9 而不是域名：startVPN 的构造与拆卸都是惰性的
-// （tailcat 到 DERP 的连接在后台按退避重试），因此用例既不需要网络也不会等超时，
-// 同时避免在测试里做真实 DNS 查询。
+// 用回环地址而不是域名：构造与拆卸都是惰性的，用例既不碰网络也不做真实 DNS 查询。
 var vpnTestDERPAddrs = []string{"127.0.0.1:9", "127.0.0.2:9"}
 
-// vpnTestConfig 返回一份启用了 VPN 的客户端配置：两条服务端条目都标记了 derp，
-// 因此本节点地址里是两个中继节点（同 region 多节点形态），它们的地址都指向本机
-// 没人监听的端口（构造与拨号都是惰性的）。
-//
-// default 标记落在第一条上：需求 4 要求"当前服务端必须在声明的中继列表里"，
-// 否则 VPN 会在启动时被拒绝。
+// vpnTestConfig 返回一份启用了 VPN 的客户端配置：两条服务端条目都标记了 derp，地址里
+// 因此是两个中继（同 region 多节点形态），但都指向本机没人监听的端口（构造与拨号惰性）。
+// default 落在第一条：当前服务端必须在声明的中继列表里，否则 VPN 会在启动时被拒绝。
 func vpnTestConfig() *clientconfig.ClientConfig {
 	return &clientconfig.ClientConfig{
 		Servers: []*clientconfig.ServerProfile{
@@ -214,11 +208,8 @@ func TestLoadVPNIdentity(t *testing.T) {
 	}
 }
 
-// lockedLogBuffer 是并发安全的日志缓冲。
-//
-// 断言发生在测试 goroutine 上，而 VPN 栈一启动就有后台 goroutine 在写日志（对端面的
-// SOCKS5 的 "serving"、tailcat 的 DERP 重试等）：用裸 bytes.Buffer 会被 -race 判成
-// 数据竞争——Windows CI 上已经实测命中过一次。
+// lockedLogBuffer 是并发安全的日志缓冲：断言发生在测试 goroutine 上，而 VPN 栈一启动
+// 就有后台 goroutine 在写日志，裸 bytes.Buffer 会被 -race 判成数据竞争。
 type lockedLogBuffer struct {
 	mu sync.Mutex
 	b  bytes.Buffer
@@ -248,11 +239,9 @@ func captureLogs(t *testing.T) *lockedLogBuffer {
 	return buf
 }
 
-// TestStartVPNDoesNotLogTheAddress 是"地址令牌不进日志"的守门测试。
-//
-// tailcat 地址内嵌 preshared key，等价于对端面的接入凭据，而日志文件长期留存、
-// 经常被整体打包带走。启动路径因此只记录 address_file（文件路径）与不含秘密的
-// 中继列表，地址本身只经 `easyss vpn identity` 与本地文件交付。
+// TestStartVPNDoesNotLogTheAddress 是"地址令牌不进日志"的守门测试：地址内嵌 preshared key，
+// 等价于对端面的接入凭据，而日志文件长期留存、经常被整体打包带走。
+// 启动路径只记录 address_file 与不含秘密的中继列表，地址本身只经文件与 CLI 交付。
 func TestStartVPNDoesNotLogTheAddress(t *testing.T) {
 	logs := captureLogs(t)
 
@@ -315,10 +304,9 @@ func TestLoadVPNIdentityWithoutDERPAddr(t *testing.T) {
 	}
 }
 
-// TestLoadVPNIdentityIgnoresTheCurrentServerCheck 固定 `easyss vpn identity` 的
-// 定位：它是排障工具，**不**执行"当前服务端必须在声明的中继列表里"这道 VPN 启动
-// 门禁（否则运维在最需要地址的时候反而拿不到地址）。该问题由调用方作为一行 warning
-// 打给用户，而 VPN 是否启动由 vpnOptions 决定。
+// TestLoadVPNIdentityIgnoresTheCurrentServerCheck 固定 `easyss vpn identity` 是排障工具：
+// 它**不**执行"当前服务端必须在声明的中继列表里"这道启动门禁（否则运维在最需要地址时
+// 反而拿不到），该问题由调用方作为一行 warning 输出，VPN 是否启动由 vpnOptions 决定。
 func TestLoadVPNIdentityIgnoresTheCurrentServerCheck(t *testing.T) {
 	cfg := vpnTestConfig()
 	// 当前服务端换成一条没有被 derp 标记的条目：VPN 会拒绝启动，但地址仍然要能拿到。
@@ -348,11 +336,9 @@ func TestLoadVPNIdentityIgnoresTheCurrentServerCheck(t *testing.T) {
 	}
 }
 
-// TestVPNOptionsRequiresDERPAddr 固定严格失败：一个启用了 VPN 却没有可推导 DERP
-// 位置的配置必须在启动阶段报错，而不是让节点带着一个错的地址跑起来。
-//
-// 它同时守护"错误身份不滥用"：这条失败不是"当前服务端不在中继列表里"（那需要先有
-// 列表），托盘因此不会为它弹"VPN 功能不生效"的专用提示。
+// TestVPNOptionsRequiresDERPAddr 固定严格失败：启用了 VPN 却推不出 DERP 位置的配置必须在
+// 启动阶段报错，而不是让节点带着一个错的地址跑起来；它也不能被报成"当前服务端不在中继
+// 列表里"（那需要先有列表），否则托盘会为它弹那条专用提示。
 func TestVPNOptionsRequiresDERPAddr(t *testing.T) {
 	_, err := vpnOptions(&clientconfig.ClientConfig{VPN: clientconfig.VPNConfig{Enabled: true}})
 	if err == nil {
@@ -363,10 +349,9 @@ func TestVPNOptionsRequiresDERPAddr(t *testing.T) {
 	}
 }
 
-// TestVPNOptionsRejectsUndeclaredCurrentServer 固定需求 4 的门禁：当前服务端不在
-// 声明的中继列表里时，VPN 必须在启动阶段被拒绝（由 runCore 记 ERROR、并入
-// StartupWarn），而不是等到第一次访问对端时以"隧道拨号超时"的形式暴露——内嵌
-// DERP 只接待经本服务端隧道送达的连接，声明列表里没有它时中继永远连不上。
+// TestVPNOptionsRejectsUndeclaredCurrentServer 固定门禁：当前服务端不在声明的中继列表里
+// 时 VPN 必须在启动阶段被拒绝（runCore 记 ERROR 并并入 StartupWarn），而不是等第一次访问
+// 对端时以"隧道拨号超时"暴露——内嵌 DERP 只接待经本服务端隧道送达的连接。
 func TestVPNOptionsRejectsUndeclaredCurrentServer(t *testing.T) {
 	cfg := vpnTestConfig()
 	cfg.Servers = append(cfg.Servers, &clientconfig.ServerProfile{
@@ -434,11 +419,9 @@ func vpnTestPeer(t *testing.T, derpAddrs ...string) clientconfig.VPNPeer {
 // 数据面开关"一致，而不是只改前者。
 const derpOnlyEnvKnob = "TS_DEBUG_ALWAYS_USE_DERP"
 
-// TestStartVPNForcesRelayOnlyUnderTun 固定 8.1 的强制：TUN 打开时 relay_only=false
-// 的配置必须在本会话强制为 true，而且必须发生在 tailcat 创建引擎**之前**。
-//
-// 这是唯一真正生效的时机：tailscale 的开关是 magicsock 建 socket 时读的，之后
-// 再置 true 对已绑好的 UDP socket 没有作用（见 tailcat 的 DERPOnly 选项）。
+// TestStartVPNForcesRelayOnlyUnderTun 固定：TUN 打开且配置了对端时，relay_only=false 必须
+// 在本会话强制为 true，且发生在 tailcat 创建引擎**之前**——tailscale 的开关是 magicsock 建
+// socket 时读的，之后再置 true 对已绑定的 UDP socket 没有作用。
 func TestStartVPNForcesRelayOnlyUnderTun(t *testing.T) {
 	t.Cleanup(func() { envknob.Setenv(derpOnlyEnvKnob, "false") })
 
@@ -534,11 +517,9 @@ func TestDotlessHostNames(t *testing.T) {
 	}
 }
 
-// TestWarnOnSingleLabelPeerNames 固定平台门控：Windows 上必须为无点的对端名打一条
-// 警告（否则用户只看到"名字解析不了"，而日志里连一条 DNS 查询都没有），其他平台上
-// 一条都不打——Linux/macOS 的解析器会把单标签名交给 DNS。
-//
-// 同时固定警告里点名的是**无点的那些**名字：一条笼统的警告对排障没有价值。
+// TestWarnOnSingleLabelPeerNames 固定平台门控：Windows 上必须为无点的对端名打一条 WARN
+// （它的解析器不把单标签名字发给 DNS，日志里连一条查询都不会有），其他平台一条都不打。
+// 警告里点名的是**无点的那些**名字，笼统的一句话对排障没有价值。
 func TestWarnOnSingleLabelPeerNames(t *testing.T) {
 	peers := []vpnnode.PeerRef{{HostName: "easyss-mac"}, {HostName: "b.lan"}, {HostName: "NAS"}}
 
@@ -585,12 +566,9 @@ func TestWarnOnSingleLabelPeerNames(t *testing.T) {
 	}
 }
 
-// TestStopVPNAbandonsAStuckStack 固定"关闭卡死时 StopVPN 也必须按时返回"。
-//
-// 这是退出路径（托盘"退出"）与服务器切换路径共用的拆除入口，而 tailcat →
-// wireguard-go → magicsock 的关闭链上存在会永久阻塞的分支：无界等待的表现就是
-// 托盘图标消失了、进程却永远不退出。这里注入一个永不返回的关闭过程，断言调用方
-// 在 vpnCloseTimeout 之后仍能继续往下走（真实卡死现场见 vpnCloseTimeout 的注释）。
+// TestStopVPNAbandonsAStuckStack 固定"关闭卡死时 StopVPN 也必须按时返回"：tailcat →
+// wireguard-go → magicsock 的关闭链上存在会永久阻塞的分支，而无界等待的表现就是托盘图标
+// 消失、进程永远不退出。这里注入永不返回的关闭过程，断言 vpnCloseTimeout 之后仍能往下走。
 func TestStopVPNAbandonsAStuckStack(t *testing.T) {
 	origClose, origTimeout := closeVPNStack, vpnCloseTimeout
 	t.Cleanup(func() {
@@ -625,13 +603,9 @@ func TestStopVPNAbandonsAStuckStack(t *testing.T) {
 	}
 }
 
-// TestRunDegradesWhenVPNFailsToStart 固定"VPN 是可选功能"这条运行期契约：VPN 配置
-// 写错（这里是对端地址非法）时基础代理必须照常起来，并把原因作为启动警告交给调用方
-// （托盘据此提示），而不是把整个客户端拖死。
-//
-// 它同时守护两条"身份"契约：这条失败**不**带 ErrCurrentServerNotDERPRelay（它不是
-// "当前服务器不在中继列表里"，托盘因此不会弹那条专用提示），而 Core.ServerAddr 无论
-// VPN 起没起来都被记录（界面层说的是会话实际使用的那台服务器）。
+// TestRunDegradesWhenVPNFailsToStart 固定"VPN 是可选功能"：VPN 配置写错（这里是对端地址
+// 非法）时基础代理必须照常起来，原因作为启动警告交给调用方，且不带
+// ErrCurrentServerNotDERPRelay（托盘不弹专用提示）；ServerAddr 仍记录会话实际使用的服务器。
 func TestRunDegradesWhenVPNFailsToStart(t *testing.T) {
 	cfg := testConfig()
 	cfg.Local.SocksPort = freePort(t)
@@ -665,9 +639,9 @@ func TestRunDegradesWhenVPNFailsToStart(t *testing.T) {
 	}
 }
 
-// TestRunDegradesWhenTheCurrentServerIsNotADERPRelay 固定需求 4 在运行期的表现：
-// 当前服务端不在声明的中继列表里时，日志里必须有一条 ERROR，VPN 本会话缺席，而
-// 基础代理照常可用（与"VPN 是可选功能"的既有契约一致）。
+// TestRunDegradesWhenTheCurrentServerIsNotADERPRelay 固定运行期表现：当前服务端不在声明的
+// 中继列表里时，日志里必须有一条 ERROR，VPN 本会话缺席，而基础代理照常可用（VPN 是可选
+// 功能）。
 func TestRunDegradesWhenTheCurrentServerIsNotADERPRelay(t *testing.T) {
 	logs := captureLogs(t)
 
@@ -713,13 +687,9 @@ func TestRunDegradesWhenTheCurrentServerIsNotADERPRelay(t *testing.T) {
 	}
 }
 
-// TestRegenerateVPNIdentity 固定"重新生成"的两半语义，因为它们的收件人不同：
-//
-//   - --client 换掉 nodekey（对端的 vpn.allow_clients 失效），地址不变；
-//   - --node 换掉地址（对端的 vpn.peers[].address 失效），nodekey 不变。
-//
-// 两半都不该动到对方，否则"只换一半"这个选择本身就没有意义：运维会不得不同时更新
-// 两类配置。
+// TestRegenerateVPNIdentity 固定"重新生成"的两半语义，因为收件人不同：--client 换 nodekey
+// （对端的 vpn.allow_clients 失效）而地址不变；--node 换地址（vpn.peers[].address 失效）
+// 而 nodekey 不变。两半都不能动到对方，否则"只换一半"这个选择本身就没有意义。
 func TestRegenerateVPNIdentity(t *testing.T) {
 	paths := vpnTestPaths(t)
 	before, err := loadVPNIdentity(vpnTestConfig(), paths)
@@ -784,12 +754,9 @@ func TestRegenerateVPNIdentity(t *testing.T) {
 	})
 }
 
-// TestRegenerateVPNIdentityDryRunWritesNothing 固定 --dry-run 的契约：它必须能回答
-// "新地址会长什么样"，同时不替换任何身份——旧身份一旦被替换就只剩备份可回滚，而重新
-// 生成要给每个对端改配置。
-//
-// （节点上还没有密钥文件时，读取"当前身份"这一步会顺手生成它们。这与 LoadVPNIdentity
-// 的既有语义一致：那不改变任何已生效的身份，而预览必须有一份当前身份才能对比。）
+// TestRegenerateVPNIdentityDryRunWritesNothing 固定 --dry-run 的契约：它能回答"新地址会长
+// 什么样"，但绝不为替换身份而写文件——旧身份一旦被替换就只剩备份可回滚，而重新生成要给
+// 每个对端改配置。
 func TestRegenerateVPNIdentityDryRunWritesNothing(t *testing.T) {
 	paths := vpnTestPaths(t)
 	before, err := loadVPNIdentity(vpnTestConfig(), paths)
@@ -897,12 +864,9 @@ func TestRegenerateVPNIdentityKeepsTheOldAddressOnFailure(t *testing.T) {
 	}
 }
 
-// TestRegenerateVPNIdentityReportsPartialReplacement 固定"哪一半真的落盘了"这条报告：
-// 重新生成是两个独立的文件替换，前一个成功、后一个失败时（这里让身份文件指向一个不存在
-// 的目录）返回的结果必须说清 client key 已经换了。
-//
-// 这不是理论情形：调用方就是在出错路径上靠它告诉运维"现在该去改哪些对端"——只说一句
-// "失败"会让一台 client key 已换、nodekey 还没换的节点处于无人知晓的中间态。
+// TestRegenerateVPNIdentityReportsPartialReplacement 固定"哪一半真的落盘了"这条报告：重新
+// 生成是两个独立的文件替换，前一个成功、后一个失败时结果必须说清 client key 已经换了——
+// 调用方在出错路径上靠它告诉运维现在该去改哪些对端。
 func TestRegenerateVPNIdentityReportsPartialReplacement(t *testing.T) {
 	paths := vpnTestPaths(t)
 	if _, err := loadVPNIdentity(vpnTestConfig(), paths); err != nil {

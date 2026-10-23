@@ -143,11 +143,9 @@ func New(cfg Config) (*Router, error) {
 	return r, nil
 }
 
-// NewDirectOnly 返回一个把所有目标都判为直连的 Router，供 VPN 对端面使用。
-//
-// 对端面只把隧道里收到的连接拨到本机 loopback，没有任何"该不该走代理"的判定：
-// proxyRule 恒为 direct（MatchHostRule 短路），ipv6Rule 恒为 enable（否则字面 IPv6
-// 目标会被拦成 Block）；也刻意不加载 GeoIP 与规则文件，那是主 Router 的一份。
+// NewDirectOnly 返回把所有目标都判为直连的 Router，供 VPN 对端面使用：对端面只把
+// 隧道里的连接拨到本机 loopback。ipv6Rule 必须为 enable，否则字面 IPv6 目标会被
+// 拦成 Block。
 func NewDirectOnly() *Router {
 	r := &Router{}
 	r.proxyRule.Store(int32(ProxyRuleDirect))
@@ -155,10 +153,8 @@ func NewDirectOnly() *Router {
 	return r
 }
 
-// NewProxyOnly 返回一个把所有目标都判为走代理的 Router，供内嵌 DERP 的入口使用。
-//
-// 它是 NewDirectOnly 的镜像。这一点是必需的：DERP 私有化后 tailcat 唯一的出口就是
-// 这条隧道，若让用户的规则把它判成直连，DERP 就会绕过隧道并因此连不上。
+// NewProxyOnly 返回把所有目标都判为走代理的 Router，供内嵌 DERP 入口使用：DERP 的
+// 唯一出口是 easyss 隧道，被判成直连就会绕过隧道并连不上。
 func NewProxyOnly() *Router {
 	r := &Router{}
 	r.proxyRule.Store(int32(ProxyRuleProxy))

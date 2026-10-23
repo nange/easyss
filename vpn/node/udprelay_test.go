@@ -161,7 +161,6 @@ func udpPair(t *testing.T) (tunnelSide, accessSide net.Conn) {
 		&connectedUDP{UDPConn: b, peer: a.LocalAddr().(*net.UDPAddr)}
 }
 
-// startRelay 让中继在给定的"隧道"连接上服务一条流，返回该连接与中继。
 func startRelay(t *testing.T, idle time.Duration) (*UDPRelay, *closeSignalConn, net.Conn) {
 	t.Helper()
 	tunnelSide, accessSide := udpPair(t)
@@ -280,9 +279,8 @@ func TestUDPRelayIdleTimeout(t *testing.T) {
 	}
 }
 
-// TestUDPRelayCloseIsPromptWithActiveFlow 是一条回归测试：曾经 Serve 在监听器关闭
-// 时自己等待在飞流，而关掉那些流的 Close 要等 Serve 返回之后才被调用——于是 Stop
-// 会一直卡到空闲超时（实测 2 分钟）。正确行为是毫秒级返回。
+// TestUDPRelayCloseIsPromptWithActiveFlow 钉住关闭顺序：Close 先关在飞流的套接字再
+// 等待，且 Serve 不等待，否则 Stop 会卡到空闲超时（这里把 idle 设为 10 分钟）。
 func TestUDPRelayCloseIsPromptWithActiveFlow(t *testing.T) {
 	echoAddr, stopEcho := startUDPEchoLocal(t)
 	defer stopEcho()

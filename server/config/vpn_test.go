@@ -43,15 +43,8 @@ func captureLogs(t *testing.T) *lockedLogBuffer {
 	return buf
 }
 
-// TestResolveDERPAddr 固定服务端 DERP 地址的唯一来源与推导规则。
-//
-// 服务端没有 servers[]，地址只能自己推导：host 取 server.host，port 取 server.port
-// （DERP 就挂在这个 HTTPS 监听上）。推导不出来时必须报错，绝不退回猜测值——一个
-// 猜错的中继地址会让每个节点都连不上。
-//
-// 这里刻意没有"显式覆盖"的配置项：内嵌 DERP 的对外地址必须与它实际监听的
-// host:port 一致（服务端靠完全匹配把它认成"来访问我的 DERP"并改拨回环），端口
-// 转发/反向代理那类形态因此明确不支持。
+// TestResolveDERPAddr 固定服务端 DERP 地址的唯一来源：host + port，推导不出来必须报错
+// 而不是猜——猜错的中继地址会让每个节点都连不上；也没有"显式覆盖"的配置项。
 func TestResolveDERPAddr(t *testing.T) {
 	t.Run("从 host 与 port 推导", func(t *testing.T) {
 		cases := []struct {
@@ -79,10 +72,8 @@ func TestResolveDERPAddr(t *testing.T) {
 	})
 }
 
-// TestLoadConfigWarnsOnRemovedDERPAddr 固定已移除字段的降级行为：配置里残留的
-// server.vpn.derp_addr 既不影响推导结果（它是未知键，被忽略），也不会让启动失败，
-// 但必须在启动日志里说清楚——"以为中继在别的 host:port"正是那种启动成功、VPN 却
-// 一直连不上的配置。
+// TestLoadConfigWarnsOnRemovedDERPAddr 固定降级行为：残留的 server.vpn.derp_addr 被忽略、
+// 不影响推导，但必须留下日志——那种配置启动成功而 VPN 一直连不上。
 func TestLoadConfigWarnsOnRemovedDERPAddr(t *testing.T) {
 	logs := captureLogs(t)
 
@@ -146,10 +137,8 @@ func TestLoadConfigValidatesVPN(t *testing.T) {
 	})
 }
 
-// TestLoadConfigValidatesVPNMesh 固定 server.vpn 的 mesh 校验矩阵：mesh_key 与
-// mesh_peers 必须成对出现、对端不能是自己也不能重复、每个对端都必须有一条经
-// easyss 隧道的出网路径（自带 proxy 或全局 next_proxy.url）——内嵌 DERP 只在回环
-// 上被服务，直连对端公网端口只会拿到伪装页，因此"没有代理"不是一种可工作的配置。
+// TestLoadConfigValidatesVPNMesh 固定 server.vpn 的 mesh 校验矩阵：key/peers 成对、对端
+// 不能是自己也不能重复、每个对端都要有经隧道出网的路径（内嵌 DERP 只服务回环来源）。
 func TestLoadConfigValidatesVPNMesh(t *testing.T) {
 	base := func(mesh string) string {
 		return `{
@@ -282,10 +271,8 @@ func TestLoadConfigValidatesVPNMesh(t *testing.T) {
 	})
 }
 
-// TestResolveDERPAddrIsUsableDownstream 守护"推导结果本身就是一个合法的
-// host:port"：调用方拿到它之后要交给 net.SplitHostPort 拆成 DERPMap 的 HostName
-// 与 DERPPort（见 vpn.BuildRegion），而且它是纯推导——同样的输入必须给出同样的
-// 结果。
+// TestResolveDERPAddrIsUsableDownstream 守护推导结果本身是合法的 host:port：调用方要把它
+// 交给 net.SplitHostPort 拆成 DERPMap 的 HostName 与 DERPPort（见 vpn.BuildRegion）。
 func TestResolveDERPAddrIsUsableDownstream(t *testing.T) {
 	fc := &FileConfig{Server: ServerConfig{Host: "example.com", Port: 8443}}
 	addr, err := fc.ResolveDERPAddr()
@@ -301,12 +288,8 @@ func TestResolveDERPAddrIsUsableDownstream(t *testing.T) {
 	require.Equal(t, addr, again)
 }
 
-// TestExampleConfigVPNIsResolvable 守护示例里的 VPN 配置本身可用：示例给出的
-// 默认值不会与运行期的推导规则漂移。
-//
-// enabled 在示例里是 false（内嵌 DERP 会把该服务端变成节点组网的中继，运维应当
-// 自己打开它——见 ExampleConfig 的注释），而 DERP 地址就由示例的 domain 与
-// listen 推导，因此"照抄示例后只把 enabled 改成 true"必须能直接启动。
+// TestExampleConfigVPNIsResolvable 守护"照抄示例、只把 enabled 改成 true 就能启动"：
+// 示例的默认值不能与运行期的推导规则漂移。
 func TestExampleConfigVPNIsResolvable(t *testing.T) {
 	fc := ExampleConfig()
 	require.False(t, fc.Server.VPN.Enabled, "the example must not enable the relay by default")

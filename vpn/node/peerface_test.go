@@ -29,19 +29,16 @@ func (stubFallback) Serve(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotFound)
 }
 
-// startTestDERP 启动一个**进程内**的 DERP 中继：真实的 derpserver 挂在真实 TLS
-// 服务器上，走我们的 vpn.NewDERPMount 分流器。
-//
-// 它让对端面与访问侧的测试完全不依赖外部网络，同时仍然跑真实的 DERP 协议
-// （HTTP/1.1 Upgrade over TLS）——被替换掉的只有"证书"与"公网主机名"。
+// startTestDERP 启动一个**进程内**的 DERP 中继：真实的 derpserver + 真实 TLS，
+// 走 vpn.NewDERPMount 分流器。
+// 只替换证书与主机名，DERP 协议（HTTP/1.1 Upgrade over TLS）仍然是真的。
 func startTestDERP(t *testing.T) *tailcfg.DERPRegion {
 	t.Helper()
 	return startTestDERPWithDepth(t, 0)
 }
 
-// startTestDERPWithDepth 与 startTestDERP 相同，但可以指定内嵌中继的每客户端待发
-// 队列深度（0 表示用共享配置的默认值）。吞吐基准用它做 A/B：队列深度是那条路径上
-// 唯一能存住未确认数据的地方，直接决定经中继的单流吞吐。
+// startTestDERPWithDepth 与 startTestDERP 相同，但可指定内嵌中继的每客户端待发
+// 队列深度（0 用共享配置的默认值）；深度直接决定经中继的单流吞吐。
 func startTestDERPWithDepth(t *testing.T, depth int) *tailcfg.DERPRegion {
 	t.Helper()
 
@@ -77,7 +74,6 @@ func startTestDERPWithDepth(t *testing.T, depth int) *tailcfg.DERPRegion {
 	}
 }
 
-// newTestPeerFace 用一份临时身份与给定的 region 构造对端面。
 func newTestPeerFace(t *testing.T, region *tailcfg.DERPRegion, allow ...key.NodePublic) *PeerFace {
 	t.Helper()
 	identity, err := LoadOrCreateNodeIdentity(peerTestPath(t, "node-identity.json"))
@@ -106,7 +102,6 @@ func newTestPeerFaceWithOptions(t *testing.T, opts PeerFaceOptions) *PeerFace {
 	return face
 }
 
-// peerTestPath 返回临时目录下的一个状态文件路径。
 func peerTestPath(t *testing.T, name string) string {
 	t.Helper()
 	return t.TempDir() + "/" + name
@@ -119,7 +114,6 @@ func peerTestPort(t *testing.T) int {
 	return config.DefaultVPNPeerPort
 }
 
-// startTCPEchoLocal 启动一个把收到的数据原样回送的 TCP 服务。
 func startTCPEchoLocal(t *testing.T) (string, func()) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -141,7 +135,6 @@ func startTCPEchoLocal(t *testing.T) (string, func()) {
 	return ln.Addr().String(), func() { ln.Close() } //nolint:errcheck
 }
 
-// startUDPEchoLocal 启动一个把收到的数据原样回送的 UDP 服务。
 func startUDPEchoLocal(t *testing.T) (string, func()) {
 	t.Helper()
 	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -244,12 +237,8 @@ func dialPeerFace(t *testing.T, face *PeerFace, clientKey key.NodePrivate) net.C
 	return conn
 }
 
-// TestPeerFaceEndToEndOverTunnel 是阶段 3 的核心验收：真实 tailcat 隧道 + 内嵌
-// DERP，从客户端拨进对端面，再经对端面的 SOCKS5 访问**对端本机**的一个服务。
-//
-// 它同时固定了 5.1 的内层 CONNECT 契约：目标必须是字面 loopback。用域名
-// （这里就是 "localhost"，最容易被误当成等价物）会被对端面拒绝，因此访问侧无论如何
-// 都必须把目标归一化成字面 127.0.0.1。
+// TestPeerFaceEndToEndOverTunnel 钉住内层 CONNECT 契约：经真实 tailcat 隧道与内嵌
+// DERP 拨进对端面后，目标必须是字面 loopback，域名（这里用 "localhost"）会被拒绝。
 func TestPeerFaceEndToEndOverTunnel(t *testing.T) {
 	echoAddr, stopEcho := startTCPEchoLocal(t)
 	defer stopEcho()
@@ -513,7 +502,6 @@ func TestPeerFaceCustomPeerPort(t *testing.T) {
 	}
 }
 
-// readFileTrimmed 读文件并去掉尾部空白。
 func readFileTrimmed(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -522,12 +510,9 @@ func readFileTrimmed(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-// TestPeerFaceAllowClients 固定可选的接入白名单（vpn.allow_clients）：名单内的
-// client key 能连上，名单外的一律连不上。
-//
-// 这是"地址即凭据"之外的第二道防线：tailcat 地址本身含 preshared key，拿到地址就
-// 能接入；白名单让运维可以在此之上再限制到具体的 client key。前提是访问侧的 client
-// key 跨重启稳定（见 ClientKeyPath），否则白名单每次重启都会失效。
+// TestPeerFaceAllowClients 钉住接入白名单（vpn.allow_clients）：名单外一律连不上。
+// 地址本身含 preshared key，白名单是第二道防线；前提是访问侧 client key 跨重启稳定
+// （见 ClientKeyPath），否则每次重启白名单都会失效。
 func TestPeerFaceAllowClients(t *testing.T) {
 	region := startTestDERP(t)
 	allowed := key.NewNode()

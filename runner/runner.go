@@ -71,16 +71,12 @@ type Core struct {
 	dnsCache  *dns.Cache
 	transport transport.Transport
 
-	// vpn 是本节点的 VPN 栈（对端面 + 隧道客户端 + 访问侧注入面）；vpn.enabled
-	// 为 false 时是 nil，此时整条 VPN 路径不存在：不监听、不启 goroutine。
-	// 它由 SOCKS5 入口借用（作为分流面），因此必须在关闭代理入口之后才能关闭，
-	// 见 cleanup 与 vpnStack.close。
+	// vpn 是本会话的 VPN 栈（对端面 + 隧道客户端 + 访问侧注入面），vpn.enabled 为 false
+	// 时是 nil。SOCKS5 入口借用它作为分流面，因此必须晚于代理入口关闭（见 cleanup）。
 	vpn *vpnStack
 
-	// ServerAddr 是本次会话**实际使用**的服务器（host:port）。会话起点从它那份
-	// 不可变快照里解析一次并记录下来，此后界面层与日志都用这个事实，不再回读配置里的
-	// default 标记——托盘切换、失败回滚与自更新重启都会改写那个标记，而正在跑的会话
-	// 仍停在它启动时选中的那台上（见 vpnOptions 的门禁）。
+	// ServerAddr 是本次会话**实际使用**的服务器（host:port），会话起点解析一次后不再回读
+	// 配置的 default 标记：托盘切换、失败回滚与自更新重启都会改写那个标记。
 	ServerAddr string
 
 	// StartupWarn 保存初始化核心时检测到的非致命警告（例如自定义规则文件

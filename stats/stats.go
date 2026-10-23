@@ -167,19 +167,17 @@ func RecordServerStreamCancel() { g.serverStreamCancels.Add(1) }
 
 // --- VPN ---
 
-// RecordVPNTCPStream 统计访问侧成功建立的一条经隧道到对端服务端口的 TCP 连接。
+// 访问侧的流计数器只在隧道建立成功后自增；拨号阶段的失败计入 DialErrors。
 func RecordVPNTCPStream() { g.vpnTCPStreams.Add(1) }
 
-// RecordVPNUDPFlow 统计访问侧成功建立的一条经隧道到对端服务端口的 UDP 流。
 func RecordVPNUDPFlow() { g.vpnUDPFlows.Add(1) }
 
-// RecordVPNDialError 统计一次失败的对端拨号（隧道建立、内层 SOCKS5 握手或对端拒绝）。
 func RecordVPNDialError() { g.vpnDialErrors.Add(1) }
 
-// RecordVPNDNSStaticAnswer 统计一次由本地静态名钩子直接应答的对端名查询。
+// 本地静态名钩子直接应答，不经隧道，也不计入流。
 func RecordVPNDNSStaticAnswer() { g.vpnDNSStaticAnswers.Add(1) }
 
-// RecordVPNPeerFaceStream 统计本节点对端面接受的一条对端流（TCP 或 UDP）。
+// 对端面接受的一条对端流，计在本节点而不是访问侧。
 func RecordVPNPeerFaceStream() { g.vpnPeerFaceStreams.Add(1) }
 
 func ResetStartTime() {

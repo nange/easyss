@@ -134,9 +134,8 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 
 	target := first.Handshake.Target
 
-	// 目标就是本服务端自己的内嵌 DERP（见 localDERP）：这条连接只可能来自持有 master key
-	// 的节点经 easyss 隧道发起，服务端在这里把它映射到本机回环监听，DERP 因此不必、也不再
-	// 暴露在公网入口上。判定必须在下面的 SSRF 之前：那条路径会把回环目标直接拒绝。
+	// 内嵌 DERP 目标（见 localDERP）：映射到本机回环监听，因此 DERP 不必暴露在公网入口上。
+	// 判定必须在下面的 SSRF 之前——那条路径会把回环目标直接拒绝。
 	if h.localDERP.matches(target) {
 		log.Info("[SERVER] embedded DERP target: mapping to the loopback listener", "target", target, "remote", r.RemoteAddr)
 		return handshakeResult{

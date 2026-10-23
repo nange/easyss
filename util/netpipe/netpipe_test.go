@@ -13,8 +13,7 @@ import (
 
 const testTimeout = 3 * time.Second
 
-// TestWriteIsBuffered 是本包存在的理由：对端不读时，写入必须立刻进入缓冲并返回。
-// net.Pipe 在这里会一直阻塞（它没有缓冲）。
+// TestWriteIsBuffered 固定对端不读时写入立刻进入缓冲并返回（net.Pipe 会一直阻塞）。
 func TestWriteIsBuffered(t *testing.T) {
 	a, b := Pipe(256 << 10)
 	defer a.Close() //nolint:errcheck
@@ -45,8 +44,8 @@ func TestWriteIsBuffered(t *testing.T) {
 	}
 }
 
-// TestWriteLargerThanBufferCompletes 固定"写入大于缓冲"时的行为：等待空间并写完，
-// 而不是报错（net.Conn 的语义；v2 的 netpipe 在这里返回 ErrExceedMaxSize）。
+// TestWriteLargerThanBufferCompletes 固定写入大于缓冲时等待空间并写完，而不是报错
+// （net.Conn 语义：单次写入不限制大小）。
 func TestWriteLargerThanBufferCompletes(t *testing.T) {
 	const size = 4 << 10
 	a, b := Pipe(size)
@@ -82,9 +81,8 @@ func TestWriteLargerThanBufferCompletes(t *testing.T) {
 	}
 }
 
-// TestReadDeadlineErrorAndReuse 固定超时的错误类型与"超时后连接仍可用"：
-// 错误必须是 os.ErrDeadlineExceeded（同时满足 net.Error.Timeout()），而不是
-// 库的 context.DeadlineExceeded 或自定义 error——标准库与我们的中继都按前者判断。
+// TestReadDeadlineErrorAndReuse 固定超时返回 os.ErrDeadlineExceeded（且满足
+// net.Error.Timeout()）以及超时后连接仍可用：标准库与中继都按前者判断。
 func TestReadDeadlineErrorAndReuse(t *testing.T) {
 	a, b := Pipe(4096)
 	defer a.Close() //nolint:errcheck
@@ -117,9 +115,8 @@ func TestReadDeadlineErrorAndReuse(t *testing.T) {
 	}
 }
 
-// TestPastDeadlineInterruptsBlockedRead 固定 net.Conn 的标准取消手法：把一个已经
-// 阻塞的 Read 用"设成过去的 deadline"立刻打断。库自带的阻塞模式做不到这一点
-// （它的超时在等待开始时就被固定了），这正是本包自己写等待循环的原因。
+// TestPastDeadlineInterruptsBlockedRead 固定 net.Conn 的标准取消手法：用"设成过去
+// 的 deadline"立刻打断已经阻塞的 Read。
 func TestPastDeadlineInterruptsBlockedRead(t *testing.T) {
 	a, b := Pipe(4096)
 	defer a.Close() //nolint:errcheck

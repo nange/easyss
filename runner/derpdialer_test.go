@@ -117,10 +117,7 @@ func TestDERPDialerRejectsNonTCP(t *testing.T) {
 
 // TestDERPDialerBuffersBeforeTheTunnelReads 固定这一层的**缓冲**语义：隧道侧不读时，
 // tailcat 侧写入必须立刻返回，而不是阻塞在"等中继把数据搬走"上。
-//
-// 这正是修复前 net.Pipe 的行为缺陷：DERP 客户端每写一个包都要等中继 goroutine 读走，
-// 而中继 goroutine 会在隧道写阻塞时停住，于是背压直接打在 magicsock 那个 32 深、
-// 满了丢最旧的写队列上（内层 TCP 的拥塞窗口随之崩掉）。这条用例是那件事的钉子。
+// 无缓冲的 net.Pipe 会把背压直接打在 magicsock 那个 32 深、满了丢最旧的写队列上。
 func TestDERPDialerBuffersBeforeTheTunnelReads(t *testing.T) {
 	const target = "derp.example.com:443"
 

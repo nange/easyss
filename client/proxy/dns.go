@@ -41,9 +41,8 @@ type dnsOptions struct {
 	Pool         *udpPool
 	Dial         func(ctx context.Context, network, addr string) (net.Conn, error)
 	ServerDomain string
-	// Static 是本地静态名来源（VPN 对端名字），nil 表示没有。它是 TUN 下对端名字
-	// 唯一能被解析的位置：查询经 tun2socks 到达本拦截器，而不是 client/dns 的转发
-	// 服务器（那个只服务 enable_forward_dns 的 LAN 部署）。
+	// Static 是本地静态名来源（TUN 下对端名字唯一能被解析的位置），nil 表示没有：
+	// 查询经 tun2socks 到达本拦截器，而不是只服务 LAN 的 client/dns 转发服务器。
 	Static easydns.StaticNames
 	// Timeouts 是归一化过的派生超时：Dial 是一次直连解析的共享预算，DNSResp 是代理交换的
 	// 读空闲，UDPIdle 兼作 TCP DNS 逐条查询之间的读空闲。
@@ -83,7 +82,7 @@ func (d *dnsInterceptor) isServerDomain(domain string) bool {
 }
 
 // vpnStaticNames 把注入的访问侧升级成静态名解析器（VPNRoute 的可选扩展，见
-// VPNStaticNames）。nil 或未实现时返回 nil，DNS 拦截行为与引入 VPN 之前一致。
+// VPNStaticNames）；nil 或未实现时返回 nil，DNS 拦截按普通查询处理。
 func vpnStaticNames(vpn VPNRoute) easydns.StaticNames {
 	s, _ := vpn.(VPNStaticNames)
 	return s

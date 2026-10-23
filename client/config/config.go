@@ -48,16 +48,9 @@ type ServerProfile struct {
 	CAPath   string `json:"ca_path"`
 	Default  bool   `json:"default"`
 
-	// DERP 标记"用这条服务端的 address:port 作为内嵌 DERP 中继的主机与端口"。
-	// 它同时是访问侧拨号的目标与自身地址里通告的 DERP 位置（见
-	// ClientConfig.VPNDERPAddrs）。可以同时标记多条：它们共同构成同一个 region
-	// 下的多个中继节点（互为冗余），但**总数不能超过 config.MaxVPNRelays**
-	// （3 台，推荐 1-2 台）——超过时客户端在配置加载阶段就报错拒绝启动（见
-	// ClientConfig.ValidateDERPRelays）。没有任何条目被标记时回退**当前连接的服务端**。
-	//
-	// 这是声明中继的唯一方式（没有 vpn.derp_addr 那样的显式覆盖项）：标记的值
-	// 必须与服务端自己的 domain + listen 端口一致，否则服务端认不出那条 DERP
-	// 连接（它靠完全匹配自己的对外地址把该连接改拨到回环）。
+	// DERP 标记这条服务端的 host:port 就是本节点通告的中继位置，也是访问侧拨号的目标。
+	// 可以标记多条（同一 region 内互为冗余），规范化去重后不能超过 config.MaxVPNRelays；
+	// 一条都没标记时回退当前连接的服务端。标记值必须与服务端自己的对外地址完全一致。
 	DERP bool `json:"derp,omitempty"`
 }
 
@@ -261,13 +254,8 @@ func normalizeHTTPPort(c *ClientConfig) {
 	}
 }
 
-// warnOnRemovedDERPAddr 对配置里残留的 vpn.derp_addr 键告警一次。
-//
-// 该字段已被移除：本节点通告的中继只从 servers[] 里带 `derp: true` 的条目派生
-// （见 ClientConfig.VPNDERPAddrs），没有任何标记时回退当前连接的服务端。残留的键
-// 不会被 json.Unmarshal 报错（未知键一律忽略），但它可能正是运维"以为中继在别的
-// host:port"的原因——那种情况下 VPN 会按派生结果去连，症状是"一直连不上"而不是
-// 一条配置错误。因此这里把它说出来。
+// warnOnRemovedDERPAddr 对残留的 vpn.derp_addr 键告警一次：中继只从 servers[] 的 derp
+// 标记派生，而残留键会让运维以为中继在别处——症状是"一直连不上"而不是一条配置错误。
 func warnOnRemovedDERPAddr(legacyAddr string) {
 	if legacyAddr == "" {
 		return
@@ -277,16 +265,8 @@ func warnOnRemovedDERPAddr(legacyAddr string) {
 		"derp_addr", legacyAddr)
 }
 
-// warnOnRemovedVPNOverlayCIDR 对配置里残留的 vpn.overlay_cidr 键告警一次。
-//
-// 该字段已被移除：overlay 段是**访问侧本地**给对端分配虚拟 IPv4 用的，不进隧道、
-// 对端看不到，因此它是实现常量而不是配置项（见 config.DefaultVPNOverlayCIDR）。
-// 残留的键不会被 json.Unmarshal 报错（未知键一律忽略），但它可能正是运维"已经把
-// 这段改成别的"的原因——那段现在是死配置，实际生效的仍是常量，所以必须说出来，
-// 否则"我明明改过还是冲突"会变成一个查不出来的现象。
-//
-// 与原值一并提示"为什么现在不能改"：这个段的唯一出路是换默认常量（一次发版所有
-// 人受益），而不是每个部署各自配置。
+// warnOnRemovedVPNOverlayCIDR 对残留的 vpn.overlay_cidr 键告警一次：overlay 只决定本机
+// 给对端分配的虚拟 IPv4、不进隧道，因此唯一来源是 config.DefaultVPNOverlayCIDR 常量。
 func warnOnRemovedVPNOverlayCIDR(legacyCIDR string) {
 	if legacyCIDR == "" {
 		return

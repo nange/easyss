@@ -13,11 +13,8 @@ import (
 	"github.com/nange/easyss/v3/vpn"
 )
 
-// wantLines 断言输出的**逐行结构**，包括空行位置。
-//
-// 空行本身没有语义，但它是这几个命令可读性的全部来源（身份值、附注、旧值三块不能糊在
-// 一起），因此必须逐行固定下来：字符级 Contains 断言看不见空行，而"挤成一堆"正是这条
-// 输出被改掉的原因。失败时把每一行加引号打印，让"空行少了一个"这种差异一眼可见。
+// wantLines 断言输出的**逐行结构**，包括空行位置：空行是这三个命令可读性的全部来源，
+// 字符级 Contains 断言看不见它，而"挤成一堆"正是这条输出被改掉的方式。
 func wantLines(t *testing.T, out string, want ...string) {
 	t.Helper()
 	got := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
@@ -31,10 +28,8 @@ func wantLines(t *testing.T, out string, want ...string) {
 	t.Errorf("output lines differ from the contract:\n%s", b.String())
 }
 
-// hints 展开状态块里的提示行："去改对端的哪个字段"一行 + "不改会怎样"两行（缩进对齐）。
-//
-// 期望值取自 vpn 包的同一对函数而不是把文案抄一份到测试里：措辞调整不会让测试失效，而
-// "按**实际换掉**的那一半选文案"这条契约仍然被固定——传错 key kind 就会对不上。
+// hints 展开状态块里的提示行；期望值取自 vpn 包的同一对函数，因此比的是"按实际换掉的
+// 那一半选文案"这条契约，而不是文案本身。
 func hints(replaced runner.VPNKeyKind) []string {
 	lines := []string{vpn.PeerUpdateHint(replaced)}
 	for _, line := range vpn.ConsequenceHint(replaced) {
@@ -43,17 +38,9 @@ func hints(replaced runner.VPNKeyKind) []string {
 	return lines
 }
 
-// TestFormatVPNIdentity 固定 `easyss vpn identity` 的输出契约：
-//
-//   - 文案是中文（本项目 CLI 文案一律中文，见 vpnUsage），但配置字段名、命令名、flag 名
-//     保持原文——运维要拿它们去配置里搜索，翻译过的字段名是搜不到的；
-//   - client nodekey、中继列表、节点地址各自成块，并说明该填到对端的哪个字段；
-//   - 中继列表紧跟地址之前（它是"地址里到底有几个中继"的唯一可读来源，地址本身是不可读
-//     的 base64）；
-//   - 块与块之间有空行——这些值都要人手复制，挤在一起时很容易把中继列表当成地址的一部分
-//     复制走；
-//   - "当前服务端不在声明的中继列表里"与 regen 提示各自独立成块：地址本身仍然是对的，
-//     运维正需要它去配对端，而 VPN 能否工作由启动路径决定（见 runner.vpnOptions）。
+// TestFormatVPNIdentity 固定 `easyss vpn identity` 的输出契约：身份、中继列表、地址各成块
+// 且块间空行（这些值要人手复制，粘连时会把中继列表一起复制走）；附注独立成块，不影响地址
+// 本身可用。文案是中文，但配置字段名、命令名与 flag 保持原文（运维要拿它们去搜配置）。
 func TestFormatVPNIdentity(t *testing.T) {
 	id := &runner.VPNIdentity{
 		ClientNodeKey: "nodekey:abc",
@@ -116,14 +103,9 @@ func newVPNIdentity() *runner.VPNIdentity {
 	}
 }
 
-// TestFormatVPNRegen 固定 `easyss vpn regen` 的输出契约：
-//
-//   - 状态块在最前：动了哪些文件、要不要去改对端；
-//   - 新身份**必须**再打印一遍（命令结束之后新地址就只存在于身份文件里，而运维要拿它
-//     去改每个对端）；
-//   - 备份的真实路径要打出来（取自结果而不是拼 ".bak"，避免将来改名后指错文件）；
-//   - 旧值单独成块，且只含**确实被换掉**的那一半——`--client` 时把逐字节没变的地址也
-//     回显成"previous"，只会让"到底哪一半需要去对端改"变成一道判断题。
+// TestFormatVPNRegen 固定 `easyss vpn regen` 的输出契约：状态块在最前；新身份必须再打印
+// 一遍（结束后新地址只存在于身份文件里）；旧值单独成块，且只含**确实被换掉**的那一半——
+// 把没变的地址回显成"previous"会让"哪一半要改"变成一道判断题。
 func TestFormatVPNRegen(t *testing.T) {
 	replaced := &runner.VPNRegenResult{
 		Identity:         newVPNIdentity(),
@@ -309,7 +291,6 @@ func TestVPNRegenOutputJSON(t *testing.T) {
 	}
 }
 
-// TestVPNIdentityOutputJSON 固定 `easyss vpn identity --json` 的字段。
 func TestVPNIdentityOutputJSON(t *testing.T) {
 	id := &runner.VPNIdentity{
 		ClientNodeKey: "nodekey:abc",
@@ -341,8 +322,8 @@ func TestVPNIdentityOutputJSON(t *testing.T) {
 	}
 }
 
-// TestVPNSubcommandUsage 固定三件事：帮助只有一个来源、用法错误被拒绝、且这些判定都发生在
-// 加载配置之前（一个写错的参数不该先撞上"文件不存在"）。
+// TestVPNSubcommandUsage 固定用法错误被拒绝，且判定发生在加载配置之前：一个写错的参数
+// 不该先撞上"文件不存在"。
 func TestVPNSubcommandUsage(t *testing.T) {
 	t.Run("没有子命令时给出用法并失败", func(t *testing.T) {
 		var out, errOut strings.Builder

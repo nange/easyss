@@ -6,23 +6,9 @@ import (
 	"testing"
 )
 
-// TestPackageDoesNotDependOnTailcat 是本包最重要的**体积不变量**：vpn 包（以及它
-// 依赖的包）绝不能引入 github.com/tailscale/tailcat。
-//
-// 原因是可量化的：服务端二进制只需要本包的 DERP 中继（derpserver + types/key），
-// 而任何对 tailcat 的引用都会把整个 WireGuard 引擎与 gVisor netstack 拖进服务端。
-// 实测（darwin/arm64，-s -w）：
-//
-//	只引用 derpserver 的二进制   6.46 MiB
-//	只引用 tailcat 的二进制     16.15 MiB
-//	easyss-server 引入 tailcat 后 13.03 MiB → 27.19 MiB（+109%）
-//
-// 因此依赖 tailcat 的代码（节点身份、地址自检、对端面、薄中继、访问侧）全部放在
-// vpn/node。这条测试用 go list 检查**传递**依赖，而不是只看本文件的 import，因为
-// 后者挡不住"经由某个共享包间接引入"的情况。
-//
-// 注意是 "."（只查本包）而不是 "./..."：后者会连 vpn/node 一起算进来，而
-// vpn/node 本来就该依赖 tailcat。
+// TestPackageDoesNotDependOnTailcat 钉住体积不变量：本包（含传递依赖）不能引入 tailcat，
+// 否则 WireGuard 引擎与 gVisor netstack 会进入只需要 DERP 中继的服务端二进制。用
+// go list -deps "." 查传递依赖，而非 "./..."（vpn/node 本来就该依赖 tailcat）；实测见 docs/architecture.md 要点 19。
 func TestPackageDoesNotDependOnTailcat(t *testing.T) {
 	out, err := exec.Command("go", "list", "-deps", ".").Output()
 	if err != nil {

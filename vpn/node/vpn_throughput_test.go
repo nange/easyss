@@ -18,49 +18,10 @@ import (
 	vpn "github.com/nange/easyss/v3/vpn"
 )
 
-// 本文件是"经中继的 VPN 单流吞吐"的可复现基准，也是本次吞吐优化每一步的度量工具。
-//
-// 它默认跳过（见 TestVPNRelayThroughputBaseline 的开关）：吞吐断言在任何 CI 机器上
-// 都是易碎的，而它要度量的差异（数倍到数十倍）远大于机器间差异，因此做成按需运行。
-//
-// # 用法：一个进程只测一个配置
-//
-// 同一进程内连续测多个配置会互相干扰（被放弃的 tailcat 引擎、进程级的 DERPOnly 开关），
-// 实测同一配置在同进程内重复测量会漂移到原来的 1/10。因此本基准由环境变量选择**一个**
-// 配置，需要对比时就用多个进程分别跑：
-//
-//	EASYSS_VPN_THROUGHPUT_TEST=1 EASYSS_VPN_TPUT_SHAPE=bufpipe \
-//	  go test ./vpn/node/ -run TestVPNRelayThroughputBaseline -v -timeout 300s
-//
-//	EASYSS_VPN_TPUT_SHAPE: direct | tcp | netpipe | bufpipe（默认 bufpipe，即生产形态）
-//	EASYSS_VPN_TPUT_OW_MS: 模拟的单程传播延迟，默认 60（内层 RTT ≈ 4×单程）
-//	EASYSS_VPN_TPUT_DEPTH: 中继队列深度，缺省 = 共享配置的默认值
-//
-// # 实测基线（darwin/arm64，Go 1.27，单程 60ms → 内层 RTT ≈ 240ms）
-//
-// 指标是"连续 5 次、每次新建一条内层连接、各传 1MB"的**中位数**（见 measureTransfers）。
-// 必须用这个指标：这条路径会随机进入内层 TCP 的 RTO 退避（每秒稳定在 3.4 KB/s，12 秒
-// 不恢复），把一条长连接的"总字节 / 总时长"当作吞吐，量到的主要是"这次有没有踩到停顿"，
-// 同一配置在多次运行间能差三个数量级——早先基于那种样本得出的"无缓冲 net.Pipe 慢 17 倍"
-// 是错的（它是停顿样本，不是稳态）。
-//
-//	形态 \ 中继队列深度        32 帧        256 帧      1024 帧（默认）
-//	直连（不经中继）            —           —          59834 KB/s
-//	DERP 连接 = 普通 TCP 套接字  593         —          695 KB/s
-//	DERP 连接 = netpipe 128KB   127         695         696 KB/s（生产形态）
-//	DERP 连接 = 无缓冲 net.Pipe  594         —          696 KB/s（修复前）
-//
-// 三条结论（都可复现）：
-//
-//  1. 默认队列深度下，三种连接形态**收敛到同一个数**（约 696 KB/s）：DERP 连接的缓冲
-//     在这个档位上不再是限制因素，下一个限制在别处（本基准没有定位它，因此也**不能**
-//     用来为"抬高 magicsock 那个 32 深写队列"背书——它在这个档位上不是瓶颈）。
-//  2. 队列深度确实是决定性旋钮，但只在"上游缓冲很小"这一侧：netpipe 形态下
-//     32 帧 → 127 KB/s、256 帧 → 695 KB/s（5.5 倍）。这正是修复前拥塞窗口被钉死的区间。
-//  3. **上游缓冲不能超过瓶颈队列**：队列 32 帧（约 45KB）时，128KB 的管道缓冲反而把
-//     吞吐从 594 压到 127 KB/s——多出来的缓冲被换成了丢包（队列满则丢最旧），而不是
-//     吞吐。因此"给 DERP 连接加缓冲"与"加深中继队列"必须匹配着看，不能只做一半。
-//
+// 本文件是"经中继的 VPN 单流吞吐"的可复现基准，默认跳过（EASYSS_VPN_THROUGHPUT_TEST=1
+// 才运行）；同进程内连续测多个配置会互相干扰，因此一个进程只测一个配置。
+// 实测数字与设计取舍见 docs/architecture.md 要点 19。
+
 // startSource 启动一个尽可能快地写出数据的 TCP 服务（模拟"对端本机的文件服务"）。
 func startSource(t *testing.T) (string, func()) {
 	t.Helper()
@@ -88,7 +49,6 @@ func startSource(t *testing.T) (string, func()) {
 	return ln.Addr().String(), func() { _ = ln.Close() }
 }
 
-// wanItem 是一个带投递时刻的链路分片。
 type wanItem struct {
 	due time.Time
 	b   []byte
@@ -196,7 +156,6 @@ func (w *wanConn) Read(p []byte) (int, error) {
 	}
 }
 
-// dialerFunc 给 DERP 连接造一条"节点到中继"的链路。
 type dialerFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
 // wanDialer 让 DERP 连接经过普通 TCP 套接字 + 模拟延迟：内核套接字缓冲是这条路径的
@@ -212,9 +171,8 @@ func wanDialer(d time.Duration) dialerFunc {
 	}
 }
 
-// netPipeDialer 在生产形态上多一层**无缓冲** net.Pipe：它就是优化前
-// runner/derpdialer.go 交给 tailcat 的连接（写方必须等中继 goroutine 读走，
-// 而中继 goroutine 会在隧道写阻塞时停住）。
+// netPipeDialer 让 DERP 连接多一层**无缓冲** net.Pipe：写方必须等中继 goroutine
+// 读走，而中继 goroutine 会在隧道写阻塞时停住。
 func netPipeDialer(d time.Duration) dialerFunc {
 	inner := wanDialer(d)
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -235,8 +193,8 @@ func netPipeDialer(d time.Duration) dialerFunc {
 	}
 }
 
-// netpipeDialer 是**修复后**的生产形态：DERP 连接的两端是 util/netpipe 的带缓冲
-// 内存管道（见 runner/derpdialer.go），缓冲大小取共享配置里的 DERPPipeBufferSize。
+// netpipeDialer 是生产形态：DERP 连接两端是 util/netpipe 的带缓冲内存管道，
+// 缓冲取 config.DERPPipeBufferSize（见 runner/derpdialer.go）。
 func netpipeDialer(d time.Duration) dialerFunc {
 	inner := wanDialer(d)
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -310,12 +268,9 @@ func newVPNFixtureWithDepth(t *testing.T, oneWay time.Duration, derpOnly bool, t
 	}
 }
 
-// stopFaceBounded 有界地拆除对端面。
-//
-// 不能直接 face.Stop()：tailcat → wireguard-go → magicsock 的关闭路径上有会永久阻塞
-// 的分支（见 runner/vpn.go 的 vpnCloseTimeout 注释——生产路径因此也是超时即放弃）。
-// 基准里放弃等待的代价只是本进程内留一个卡住的 goroutine，而同步等待会让整个测试
-// 超时失败。
+// stopFaceBounded 有界地拆除对端面：tailcat → wireguard-go → magicsock 的关闭路径
+// 有会永久阻塞的分支，生产路径也是超时即放弃（见 runner/vpn.go 的 vpnCloseTimeout）。
+// 基准里放弃等待只留一个卡住的 goroutine，同步等待会让整个测试超时。
 func stopFaceBounded(t *testing.T, face *PeerFace) {
 	t.Helper()
 	done := make(chan struct{})
@@ -346,12 +301,8 @@ func (f *vpnFixture) dial(t *testing.T, n int) []net.Conn {
 }
 
 // measureTransfers 连续建立 n 条**新的**内层连接，每条在 deadline 内尽量读 limit
-// 字节，返回每次速率的**中位数**（KB/s）与最慢一次。
-//
-// 为什么不用一条长连接测稳态：这条路径会随机进入内层 TCP 的 RTO 退避（实测每秒
-// 稳定在 3.4 KB/s ≈ 每 ~400ms 重传一个段，且 12 秒内不恢复），于是"总字节 / 总时长"
-// 主要反映的是"这次有没有踩到停顿"，同一配置在多次运行间能差三个数量级。多次短传输
-// 取中位数回答的是"正常情况下一次传输能有多快"，停顿仍在最慢一次里可见。
+// 字节，返回每次速率的中位数（KB/s）与最慢一次。
+// 不用长连接测稳态：该路径会随机进入 RTO 退避，长连接样本主要反映停顿（见 docs/architecture.md 要点 19）。
 func measureTransfers(t *testing.T, f *vpnFixture, n int, limit int, deadline time.Duration) (medianKBps, worstKBps float64) {
 	t.Helper()
 	rates := make([]float64, 0, n)
@@ -399,12 +350,8 @@ func measureTransfers(t *testing.T, f *vpnFixture, n int, limit int, deadline ti
 const vpnThroughputTestEnv = "EASYSS_VPN_THROUGHPUT_TEST"
 
 // TestVPNRelayThroughputBaseline 度量经中继的单流吞吐，并给出保守下限。
-//
-// 下限取得远低于实测（生产形态实测 881 KB/s，这里只要求 400 KB/s）：它的作用是抓住
-// **量级回退**——把缓冲换回无缓冲 net.Pipe（实测 175 KB/s）、或把队列深度调回 32
-// （实测 139 KB/s）都会当场失败，而不是替代基线数字本身。
-//
-// 一次只跑一个配置，理由见文件头。
+// 下限远低于实测，只用于抓**量级回退**（换回无缓冲 net.Pipe 或把队列深度调回 32
+// 都会当场失败）；实测数字见 docs/architecture.md 要点 19。
 func TestVPNRelayThroughputBaseline(t *testing.T) {
 	if os.Getenv(vpnThroughputTestEnv) == "" {
 		t.Skipf("set %s=1 to run the relayed-throughput baseline (see this file's header)", vpnThroughputTestEnv)
@@ -440,7 +387,7 @@ func TestVPNRelayThroughputBaseline(t *testing.T) {
 		"direct": {wanDialer, false, 5_000},
 		// tailscale 设计时假设的形态：DERP 连接是真实 TCP 套接字（有内核缓冲）。
 		"tcp": {wanDialer, true, 200},
-		// 修复前的生产形态（保留用于 A/B）：无缓冲 net.Pipe。
+		// 无缓冲 net.Pipe 形态，仅用于 A/B 对照。
 		"netpipe": {netPipeDialer, true, 100},
 		// 生产形态：util/netpipe 的带缓冲内存管道 + 共享配置里的固定缓冲。
 		"bufpipe": {netpipeDialer, true, 200},
@@ -449,8 +396,7 @@ func TestVPNRelayThroughputBaseline(t *testing.T) {
 	if !ok {
 		t.Fatalf("unknown EASYSS_VPN_TPUT_SHAPE %q (want direct, tcp, netpipe or bufpipe)", shape)
 	}
-	// 下限随队列深度缩放：显式配一个很小的队列本来就会把吞吐压下来（实测 bufpipe 在
-	// 32 帧下只有 127 KB/s），那不是回归，不该让基准报错。
+	// 下限随队列深度缩放：显式配一个很小的队列本来就会压低吞吐，那不是回归。
 	floor := tc.floorKBps
 	if depth > 0 && depth < 8*config.MinDERPSendQueueDepth {
 		floor = min(floor, 80)

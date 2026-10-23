@@ -148,9 +148,8 @@ func TestAssignLookup(t *testing.T) {
 	if _, ok := o.Lookup("unknown-node"); ok {
 		t.Error("Lookup of an unknown name hit")
 	}
-	// 段内但未分配，以及段外地址都不该命中。段内那个地址必须由分配结果推导：
-	// 槽位来自公钥哈希，任何写死的段内地址都可能恰好被本次分配占用（这正是
-	// 这个测试曾经的偶发失败来源）。
+	// 段内但未分配与段外地址都不该命中；段内地址必须由分配结果推导，写死的地址
+	// 可能恰好被本次分配占用。
 	for _, host := range []string{overlayFreeAddr(t, o), "10.0.0.1", "not-an-ip"} {
 		if _, ok := o.Lookup(host); ok {
 			t.Errorf("Lookup(%q) hit, want miss", host)
@@ -158,11 +157,8 @@ func TestAssignLookup(t *testing.T) {
 	}
 }
 
-// overlayFreeAddr 返回 o 的段内一个确定未被分配的宿主地址，用于固定"未分配的
-// overlay 地址不该命中 Lookup"。遍历从网络地址之后开始，跳过广播地址。
-//
-// 段内为空（满段）时无从取未分配地址，直接判失败而不是返回零值——调用方都是
-// 小规模分配，这种情况只可能来自 Assign 自身的缺陷。
+// overlayFreeAddr 返回段内一个确定未被分配的宿主地址（从网络地址之后开始、
+// 跳过广播地址），用于固定"未分配的 overlay 地址不该命中 Lookup"。
 func overlayFreeAddr(t *testing.T, o *Overlay) string {
 	t.Helper()
 	taken := make(map[netip.Addr]bool, len(o.Peers()))

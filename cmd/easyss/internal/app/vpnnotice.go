@@ -7,14 +7,12 @@ import (
 	"github.com/nange/easyss/v3/runner"
 )
 
-// 本文件是"VPN 本会话缺席"这条启动警告的文案与呈现规则。它属于 App 而不是托盘：
-// restartServiceInSequence（切换服务器、自更新重启）在 app.go 里，两条启动路径都要
-// 用同一份文案，而 headless 构建只是没有界面（a.ui 为 nil）。
+// 本文件是"VPN 本会话缺席"这条启动警告的文案与呈现规则；放在 App 而不是托盘，是因为
+// 切换服务器与自更新重启两条路径都要用它，headless 下 a.ui 为 nil。
 
 // runningServerAddr 返回运行中会话**实际使用**的服务器（host:port）；空表示没有会话。
-//
-// 读的是会话起点冻结下来的事实（Core.ServerAddr），而不是配置快照里的 default 标记：
-// 那个标记表示"用户想用哪台"，切换回滚与自更新重启都会改写它。
+// 读的是会话起点冻结的 Core.ServerAddr，而不是配置快照的 default 标记——后者会被切换与
+// 自更新重启改写。
 func (a *App) runningServerAddr() string {
 	core := a.currentCore()
 	if core == nil {
@@ -23,10 +21,8 @@ func (a *App) runningServerAddr() string {
 	return core.ServerAddr
 }
 
-// startupWarningNotice 报告该启动警告是否需要立刻以系统通知呈现（false = 只写日志）。
-//
-// 目前只有一类命中：VPN 本会话缺席，原因是运行中的服务器不在声明的 DERP 中继列表里。
-// 其余启动警告保持仅日志：启动路径上已经有通知，网络未就绪的恢复提示另有
+// startupWarningNotice 报告该启动警告是否要立刻系统通知（false = 只写日志）：只有 VPN
+// 本会话缺席那类命中。其余警告保持仅日志——启动路径已经弹过，网络未就绪的恢复提示另有
 // watchServerDomainReady 负责，重复弹窗只会变成噪音。
 func startupWarningNotice(warn error) bool {
 	return warn != nil && errors.Is(warn, clientconfig.ErrCurrentServerNotDERPRelay)

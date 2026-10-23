@@ -217,11 +217,8 @@ const (
 	h2MinRecvBufStream = 1
 )
 
-// applyDefaults 只处理没有其他 owner 的配置策略，其余默认值各有唯一出处，这里不存
-// 第二份副本：shaper.* 归 shaper.Config.Normalize，allowed_methods 归 GetAllowedMethods。
-// warnOnRemovedDERPAddr 对配置里残留的 server.vpn.derp_addr 键告警一次：该字段已被移除，
-// 对外地址只由 server.host 与 server.port 推导。残留的键不会报错（未知键被忽略），但它常
-// 正是"以为中继在别的 host:port"的原因，症状则表现为 VPN 一直连不上。
+// warnOnRemovedDERPAddr 对残留的 server.vpn.derp_addr 键告警一次：对外地址只由
+// server.host/port 推导，而残留键常是"以为中继在别处、VPN 却一直连不上"的原因。
 func warnOnRemovedDERPAddr(data []byte) {
 	var legacy struct {
 		Server struct {
@@ -238,6 +235,8 @@ func warnOnRemovedDERPAddr(data []byte) {
 		"derp_addr", legacy.Server.VPN.DERPAddr)
 }
 
+// applyDefaults 只处理没有其他 owner 的配置策略，其余默认值各有唯一出处，这里不存
+// 第二份副本：shaper.* 归 shaper.Config.Normalize，allowed_methods 归 GetAllowedMethods。
 func applyDefaults(fc *FileConfig) {
 	// timeout 是全部派生超时的唯一旋钮。
 	fc.Timeout = config.NormalizeTimeout(fc.Timeout)
@@ -328,23 +327,9 @@ func ExampleConfig() FileConfig {
 			Port:           config.DefaultServerPort,
 			Password:       "your-password",
 			AllowedMethods: DefaultAllowedMethods(),
-			// DERP 的对外 host:port 没有配置项：它就是 domain + listen 的端口
-			// （ResolveDERPAddr），端口转发/反向代理那种"对外 host:port 与监听
-			// 不同"的形态明确不支持。
-			//
-			// enabled 默认给 false：内嵌 DERP 虽然只对回环来源提供服务（节点
-			// 经 easyss 隧道抵达，公网上没有任何 DERP 路径），但它会把该服务端
-			// 变成节点组网的中继，运维应当明确地打开它。
-			//
-			// mesh_key / mesh_peers 也一并列出（空值）：它们是"同一 region 下
-			// 多个中继互相转发"的开关，只在 enabled 为 true 时才允许非空，
-			// 因此示例里保持空——但字段必须出现，示例就是字段清单。
-			// mesh 是全互联，所以 mesh_peers 最多 2 条：本机 + 对端 = 同一
-			// region 最多 3 台中继（推荐 1-2 台），超过即配置错误。
-			//
-			// derp_send_queue_depth 给出的是**生效默认值**而不是 0：它是中继
-			// 路径上唯一能存住未确认数据的地方，直接决定经中继的吞吐，所以示例
-			// 应当让运维看到实际在用的深度，而不是一个还要去查文档的 0。
+			// DERP 的对外 host:port 没有配置项：它就是 host + port（见 ResolveDERPAddr）。
+			// enabled 默认 false；mesh_key/mesh_peers 只在 enabled 时允许非空，mesh 全互联
+			// （本机 + 至多 2 个对端）；derp_send_queue_depth 给生效默认值而不是 0。
 			VPN: VPNConfig{
 				Enabled:            false,
 				MeshKey:            "",

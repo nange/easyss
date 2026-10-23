@@ -78,8 +78,8 @@ func TestStaticNameAnswersAWithoutUpstream(t *testing.T) {
 	}
 }
 
-// TestStaticNameAnswersEmptyAAAA 固定 5.4 的 AAAA 契约：NOERROR 且无记录
-// （不是 NXDOMAIN），使客户端立刻回退到 A 记录。
+// TestStaticNameAnswersEmptyAAAA 固定 AAAA 契约：NOERROR 且无记录（不是 NXDOMAIN），
+// 使客户端立刻回退到 A 记录。
 func TestStaticNameAnswersEmptyAAAA(t *testing.T) {
 	fs := NewForwardServer("127.0.0.1:0", false, staticNames{
 		"b.": netip.MustParseAddr("198.19.0.15"),
@@ -103,8 +103,8 @@ func TestStaticNameAnswersEmptyAAAA(t *testing.T) {
 	}
 }
 
-// TestStaticNameLeavesOtherNamesAndTypesAlone 验证钩子的边界：非静态名与其他
-// 查询类型都必须原样走既有转发路径（这里用一个真实的上游来证明它确实被转发）。
+// TestStaticNameLeavesOtherNamesAndTypesAlone 固定钩子的边界：非静态名与其他查询类型都
+// 必须原样走转发路径（这里用一个真实的上游来证明它确实被转发）。
 func TestStaticNameLeavesOtherNamesAndTypesAlone(t *testing.T) {
 	upstream := startTestDNSServer(t, false)
 	fs := NewForwardServer("127.0.0.1:0", false, staticNames{
@@ -135,8 +135,8 @@ func TestStaticNameLeavesOtherNamesAndTypesAlone(t *testing.T) {
 	}
 }
 
-// TestNoStaticNamesKeepsForwarding 验证 nil 钩子下行为不变：任何名字都转发，
-// 且没有任何本地应答。
+// TestNoStaticNamesKeepsForwarding 固定 nil 钩子的行为：任何名字都转发，且没有任何
+// 本地应答。
 func TestNoStaticNamesKeepsForwarding(t *testing.T) {
 	upstream := startTestDNSServer(t, false)
 	fs := NewForwardServer("127.0.0.1:0", false, nil)

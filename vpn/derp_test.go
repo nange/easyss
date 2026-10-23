@@ -18,8 +18,7 @@ import (
 	"github.com/nange/easyss/v3/config"
 )
 
-// TestNewDERPServer 固定内嵌中继的最小契约：能构造、能给出稳定的公钥、能重复
-// 关闭（服务端 Shutdown 与会话切换都可能各自调一次）。
+// TestNewDERPServer 固定构造、公钥稳定与重复 Close（Shutdown 与会话切换可能各调一次）。
 func TestNewDERPServer(t *testing.T) {
 	priv := key.NewNode()
 	srv := NewDERPServer(priv, 0)
@@ -40,8 +39,7 @@ func TestNewDERPServer(t *testing.T) {
 	}
 }
 
-// TestDERPServerHandlerIsMountable 固定中继处理器能被挂到我们的分流器上，且
-// 不带 Upgrade 的探测路径仍然由 derpserver 自己回答（探测端点必须保持可用）。
+// TestDERPServerHandlerIsMountable 固定处理器可挂到分流器上，探测路径仍由 derpserver 回答。
 func TestDERPServerHandlerIsMountable(t *testing.T) {
 	srv := NewDERPServer(key.NewNode(), 0)
 	defer func() { _ = srv.Close() }()
@@ -65,8 +63,7 @@ func TestDERPServerHandlerIsMountable(t *testing.T) {
 	}
 }
 
-// TestDERPServerNilClose 守护空值安全：会话切换路径可能在从未启用 VPN 的情况下
-// 调用 Close。
+// TestDERPServerNilClose 固定空值安全：会话切换可能在从未启用 VPN 时调 Close。
 func TestDERPServerNilClose(t *testing.T) {
 	var srv *DERPServer
 	if err := srv.Close(); err != nil {
@@ -74,13 +71,8 @@ func TestDERPServerNilClose(t *testing.T) {
 	}
 }
 
-// TestDERPServerUpgradeOverTLS 是本阶段最强的一条证据：把内嵌中继挂到真实
-// 的 TLS HTTP 服务器上，再用**与 derphttp 完全相同**的最小握手请求（GET /derp +
-// Upgrade: DERP）打一次，期望拿到 101 与 Derp-Public-Key。
-//
-// 它同时覆盖了三件事：vpn.NewDERPMount 会把真实 DERP 请求放行、http.Server 的
-// Hijack 路径在我们的 TLS 配置下可用、以及中继确实由我们自己的进程提供（而不是
-// 回落到伪装页）。
+// TestDERPServerUpgradeOverTLS 用与 derphttp 相同的握手打真实 TLS 监听：固定 NewDERPMount
+// 放行、TLS 下 Hijack 可用，以及响应来自本进程中继（Derp-Public-Key、不是伪装页）。
 func TestDERPServerUpgradeOverTLS(t *testing.T) {
 	priv := key.NewNode()
 	srv := NewDERPServer(priv, 0)
@@ -91,7 +83,6 @@ func TestDERPServerUpgradeOverTLS(t *testing.T) {
 	defer ts.Close()
 
 	conn, err := tls.Dial("tcp", ts.Listener.Addr().String(), &tls.Config{
-		// 测试服务器用的是自签证书；DERP 客户端在 InsecureForTests 下同样跳过校验。
 		InsecureSkipVerify: true,
 	})
 	if err != nil {
@@ -99,7 +90,7 @@ func TestDERPServerUpgradeOverTLS(t *testing.T) {
 	}
 	defer func() { _ = conn.Close() }()
 
-	// 逐字照抄 derphttp 的握手请求（derphttp_client.go 的 connect）。
+	// 与 derphttp 的握手请求逐字一致（derphttp_client.go 的 connect）。
 	host := ts.Listener.Addr().String()
 	if _, err := fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: DERP\r\nConnection: Upgrade\r\n\r\n",
 		config.DefaultVPNDERPPath, host); err != nil {
@@ -127,12 +118,8 @@ func TestDERPServerUpgradeOverTLS(t *testing.T) {
 	}
 }
 
-// TestDERPServerAppliesSendQueueDepth 固定"配置值确实被交给了 derpserver"。
-//
-// 深度只能经进程环境落位（fork 在 derpserver.New 里读一次那个开关，没有构造参数），
-// 因此这条测试用 newDERPServer 注入点在**构造那一刻**读一次环境：那正是 fork 看到的
-// 值。同时钉住两件事：归一化后的值落位、以及构造之后进程环境被还原——进程环境里预先
-// 存在的同名值既不生效（配置是唯一旋钮），也不会被我们改动。
+// TestDERPServerAppliesSendQueueDepth 固定归一化后的深度在 derpserver.New 那一刻确实进了进程
+// 环境，且构造后还原：运维预先设置的同名值既不生效也不被改动。
 func TestDERPServerAppliesSendQueueDepth(t *testing.T) {
 	cases := []struct {
 		name string
@@ -147,7 +134,6 @@ func TestDERPServerAppliesSendQueueDepth(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// 模拟"运维自己在进程环境里设过这个变量"：它既不该生效，也不该被改动。
 			const operatorValue = "777"
 			t.Setenv(derpSendQueueDepthEnv, operatorValue)
 
@@ -181,8 +167,7 @@ func TestDERPServerAppliesSendQueueDepth(t *testing.T) {
 	}
 }
 
-// TestDERPServerLeavesNoEnvironmentVariableBehind 是上一条的另一半：进程环境里本来
-// 没有这个变量时，构造之后也不该留下它——留下会让人以为那是一个受支持的配置入口。
+// TestDERPServerLeavesNoEnvironmentVariableBehind 固定构造后不残留该环境变量。
 func TestDERPServerLeavesNoEnvironmentVariableBehind(t *testing.T) {
 	orig, had := os.LookupEnv(derpSendQueueDepthEnv)
 	if err := os.Unsetenv(derpSendQueueDepthEnv); err != nil {

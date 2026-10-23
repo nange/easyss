@@ -162,24 +162,16 @@ type Socks5Options struct {
 	// DNSCache 是调用方（runner）持有的共享缓存；为 nil 时按 ServerDomain 自建。
 	DNSCache          *easydns.Cache
 	DirectDialContext func(ctx context.Context, network, addr string) (net.Conn, error)
-	// DisableDNSIntercept 关闭"发往 53 端口的连接按 DNS 处理"的拦截。
-	//
-	// 默认关闭该开关（即保持既有行为：53 端口按 DNS over TCP 分流）。VPN 对端面
-	// 需要打开它：对端面上 53 是一个普通的服务端口，若仍被 DNS 拦截，对端本机
-	// 监听在 53 的服务（如 systemd-resolved）就无法通过 VPN 访问，而且被拦截的
-	// 流量会按"查询域名"重新分流，与对端面"只拨字面 loopback"的契约相冲突。
+	// DisableDNSIntercept 关闭"发往 53 端口的连接按 DNS 处理"的拦截。VPN 对端面必须
+	// 打开它：那里 53 是普通服务端口，被拦截会按查询域名重新分流，与对端面"只拨字面
+	// loopback"的契约冲突。
 	DisableDNSIntercept bool
-	// DisableUDPAssociate 关闭 UDP ASSOCIATE：该命令一律回
-	// RepCommandNotSupported（RFC 1928 定义的应答），这个入口只剩 CONNECT。
-	//
-	// 两个内部入口需要它：VPN 对端面的 UDP 走 tailcat 的 UDP listener + 薄中继
-	// （见 vpn/node/udprelay.go），SOCKS5 的 ASSOCIATE 在那里只是"碰巧因为绑不上
-	// tailcat ULA 而失败"；内嵌 DERP 的连接由 runner 的 DERP 拨号器直接给出
-	// （见 runner/derpdialer.go），根本不经过 SOCKS5。把设计约束写成显式开关，
-	// 而不是依赖某个 bind 失败的副作用。
+	// DisableUDPAssociate 关闭 UDP ASSOCIATE（一律回 RepCommandNotSupported）。
+	// VPN 对端面的 UDP 走 tailcat UDP listener + 薄中继（见 vpn/node/udprelay.go），
+	// 不能依赖"绑不上 tailcat ULA 而失败"的副作用。
 	DisableUDPAssociate bool
-	// VPN 是访问侧的 VPN 注入面；为 nil 时 VPN 分流完全关闭，本类型的行为与
-	// 引入 VPN 之前逐字节一致。非 nil 时命中对端的目标走隧道（见 VPNRoute）。
+	// VPN 是访问侧的 VPN 注入面；为 nil 时 VPN 分流完全关闭。非 nil 时命中对端的
+	// 目标走隧道（见 VPNRoute）。
 	VPN VPNRoute
 }
 
@@ -413,10 +405,9 @@ func (s *Socks5Server) replyError(c net.Conn, code uint8) error {
 	return writeSocksReply(c, code, nil)
 }
 
-// vpnTCPConnect 经 VPN 隧道打开到对端的连接。replied 的语义与 directTCPConnect 一致。
-//
-// BND.ADDR 刻意回报 nil（不是隧道连接的 LocalAddr——那是 WireGuard 的 ULA，对客户端
-// 毫无意义）：真实可达性由内层握手是否成功决定，而它已在本调用返回前完成。
+// vpnTCPConnect 经 VPN 隧道打开到对端的连接；replied 的语义与 directTCPConnect 一致。
+// BND.ADDR 刻意回报 nil——隧道连接的 LocalAddr 是 WireGuard ULA，对客户端无意义；
+// 可达性由内层握手决定，且已在本调用返回前完成。
 func (s *Socks5Server) vpnTCPConnect(c net.Conn, target string, replied bool) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.dialTimeout)
 	defer cancel()

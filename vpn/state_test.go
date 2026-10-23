@@ -12,7 +12,6 @@ import (
 	"tailscale.com/types/key"
 )
 
-// filePerm 返回文件权限位。
 func filePerm(t *testing.T, path string) os.FileMode {
 	t.Helper()
 	st, err := os.Stat(path)
@@ -22,11 +21,8 @@ func filePerm(t *testing.T, path string) os.FileMode {
 	return st.Mode().Perm()
 }
 
-// requirePerm 断言 path 的权限位。
-//
-// Windows 没有 POSIX 权限位：Go 报告的 Perm() 是从"只读"属性合成的（可写文件
-// 一律 0666），因此那里既不可能满足 0600、断言也不代表任何真实约束。跳过而不是
-// 放宽取值，否则这条用例在 Windows 上会退化成一句同义反复。
+// requirePerm 断言权限位，Windows 跳过：那里的 Perm() 由只读属性合成（可写文件一律 0666），
+// 断言没有意义，放宽取值只会变成同义反复。
 func requirePerm(t *testing.T, what, path string, want os.FileMode) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -37,8 +33,7 @@ func requirePerm(t *testing.T, what, path string, want os.FileMode) {
 	}
 }
 
-// TestLoadOrCreateKeyIsStable 固定 client key 与 DERP key 的稳定性与权限。
-// client key 跨重启稳定是 vpn.allow_clients 白名单可用的前提。
+// TestLoadOrCreateKeyIsStable 固定 key 的跨重启稳定性与 0600 权限：allow_clients 白名单按它匹配。
 func TestLoadOrCreateKeyIsStable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "client.key")
 
@@ -63,7 +58,7 @@ func TestLoadOrCreateKeyIsStable(t *testing.T) {
 	}
 }
 
-// TestLoadOrCreateKeyRejectsCorruptFile 与身份文件同一条契约。
+// TestLoadOrCreateKeyRejectsCorruptFile 固定坏文件必须报 corrupt，不能静默换身份。
 func TestLoadOrCreateKeyRejectsCorruptFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "derp.key")
 	if err := os.WriteFile(path, []byte("not-a-key"), 0o600); err != nil {
@@ -78,8 +73,7 @@ func TestLoadOrCreateKeyRejectsCorruptFile(t *testing.T) {
 	}
 }
 
-// TestStatePaths 固定三份状态文件的路径形态：它们都在同一个目录下（备份一个
-// 节点只需带走一个目录），且文件名互不冲突。
+// TestStatePaths 固定三份状态文件同在一个目录（备份一个节点只需带走它）且路径互不冲突。
 func TestStatePaths(t *testing.T) {
 	paths := map[string]string{
 		"node identity": NodeIdentityPath(),
@@ -104,7 +98,6 @@ func TestStatePaths(t *testing.T) {
 	}
 }
 
-// keyContent 是 RegenerateFile 测试用的"身份内容"：一把真 key 的落盘文本。
 func keyContent(t *testing.T) []byte {
 	t.Helper()
 	b, err := key.NewNode().MarshalText()
@@ -114,14 +107,12 @@ func keyContent(t *testing.T) []byte {
 	return b
 }
 
-// TestRegenerateFile 固定"显式重新生成"这条路径与 LoadOrCreate 相反的那一半契约：
-// 旧内容必须先被备份成 .bak，新内容才落到原路径上——备份是唯一的回滚凭据，而
-// 地址里内嵌的 preshared key 只存在于那个文件里。
+// TestRegenerateFile 固定"先备份旧内容、再落新内容"：备份是唯一回滚凭据，旧地址里内嵌的
+// preshared key 只存在于那个文件。
 func TestRegenerateFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "client.key")
 
-	// 1. 还没有文件时直接生成，不产生备份：那是一个新节点，没有东西可替换。
 	backup, err := RegenerateFile(path, "client key", func() ([]byte, error) { return keyContent(t), nil })
 	if err != nil {
 		t.Fatalf("RegenerateFile on a missing file: %v", err)
@@ -131,7 +122,6 @@ func TestRegenerateFile(t *testing.T) {
 	}
 	requirePerm(t, "regenerated file", path, 0o600)
 
-	// 2. 有文件时：备份内容 == 旧内容，且原路径上是新内容。
 	old, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -156,11 +146,8 @@ func TestRegenerateFile(t *testing.T) {
 	}
 }
 
-// TestRegenerateFileKeepsExactlyOneBackup 固定"最多只留一份备份"这条策略：第二次重新
-// 生成会用**本次的旧身份**覆盖那份备份，因此目录里始终只有一个 `.bak`。
-//
-// 这条断言是策略本身（而不是实现细节）：备份就是"上一次生效的身份"，它同时充当回滚点
-// 与新旧对照物；保留更早的历史身份没有用途，却会让状态目录随时间稳定增长。
+// TestRegenerateFileKeepsExactlyOneBackup 固定"最多一份备份"：第二次重新生成会用本次的旧身份
+// 覆盖它，因此目录里始终只有一个 .bak。
 func TestRegenerateFileKeepsExactlyOneBackup(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "node-identity.json")
@@ -210,8 +197,7 @@ func TestRegenerateFileKeepsExactlyOneBackup(t *testing.T) {
 	}
 }
 
-// TestRegenerateFileReportsCreateError 固定"生成失败就什么都不写"：一个算不出新身份
-// 的节点必须保持原样，而不是丢掉身份又拿不到新的。
+// TestRegenerateFileReportsCreateError 固定生成失败就什么都不写：节点保持原样，不丢身份。
 func TestRegenerateFileReportsCreateError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "client.key")
@@ -233,11 +219,8 @@ func TestRegenerateFileReportsCreateError(t *testing.T) {
 	}
 }
 
-// TestIdentityRegenPending 固定"该不该提醒运维手上的地址还是旧的"这条判据。
-//
-// 它的三种"不提醒"同样重要：还没重新生成过（没有备份）、当前身份与备份一致（刚回滚完）、
-// 以及身份文件缺失（那时命令本来就拿不到地址）。误报会让这行提示变成噪音，而它要提示的
-// 恰恰是"对端连不上但两侧日志都没有明显错误"这种最难查的状态。
+// TestIdentityRegenPending 固定"该不该提醒"的判据：没有备份、刚回滚、身份文件缺失都不提醒。
+// 误报会让提示变成噪音，而它针对的正是"对端连不上但两侧日志都正常"这种最难查的状态。
 func TestIdentityRegenPending(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "node-identity.json")
@@ -276,9 +259,7 @@ func TestIdentityRegenPending(t *testing.T) {
 	})
 }
 
-// TestPeerUpdateHint 固定"该去对端改哪个字段"这句话必须按**实际换掉**的那一半选。
-//
-// 提示说错字段的代价不是一行废话：运维照着改完仍然连不上，而他会以为是自己哪一步做错了。
+// TestPeerUpdateHint 固定提示只提真正换掉的那一半：说错字段会让运维照改完仍然连不上。
 func TestPeerUpdateHint(t *testing.T) {
 	cases := []struct {
 		replaced KeyKind

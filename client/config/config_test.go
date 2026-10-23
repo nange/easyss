@@ -1417,10 +1417,8 @@ func captureLogs(t *testing.T) *lockedLogBuffer {
 	return buf
 }
 
-// TestLoadConfigWarnsOnRemovedDERPAddr 固定已移除字段的降级行为：配置里残留的
-// vpn.derp_addr 是未知键（json.Unmarshal 直接忽略），既不影响节点通告的中继列表，
-// 也不会让加载失败，但必须在启动日志里说清楚——"以为中继在别的 host:port"正是
-// 那种配置照常加载、VPN 却一直连不上的情形。
+// TestLoadConfigWarnsOnRemovedDERPAddr 固定降级行为：残留的 vpn.derp_addr 是未知键，
+// 不影响加载、也不影响中继列表，但必须留下日志——那种配置加载成功而 VPN 一直连不上。
 func TestLoadConfigWarnsOnRemovedDERPAddr(t *testing.T) {
 	logs := captureLogs(t)
 

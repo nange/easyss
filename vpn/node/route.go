@@ -18,36 +18,26 @@ import (
 )
 
 // innerTargetHost 是访问侧写进隧道内 CONNECT 的目标主机，恒为字面 127.0.0.1。
-//
-// 隧道里的"目标"表达的是**对端的哪个服务端口**，而不是对端的网络位置——位置由
-// tailcat 地址本身决定。用 127.0.0.1 而不是对端的 host_name 或 overlay IP 有两条
-// 好处：对端面的拨号器只接受字面 loopback（安全边界因此可证，见
-// LoopbackDialContext），且隧道里不会出现任何只在访问侧才有意义的名字。
-// 这是两端唯一的跨节点协议契约。
+// 目标表达的是"对端的哪个服务端口"而不是位置；对端面只接受字面 loopback，因此这是
+// 两端唯一的跨节点协议契约。
 const innerTargetHost = "127.0.0.1"
 
-// RouteOptions 是构造访问侧所需的输入。
 type RouteOptions struct {
 	// Overlay 提供「host_name / overlay 字面 IP → 对端」的映射。
 	Overlay *Overlay
-	// Clients 提供经隧道的拨号能力。
 	Clients *ClientSet
-	// Timeouts 提供拨号与内层握手超时（复用客户端既有的一套派生值）。
+	// Timeouts 提供拨号与内层握手超时；Dial 零值由 Timeouts.Normalize 补齐。
 	Timeouts config.Timeouts
 }
 
 // Route 是访问侧：把"对端 + 对端端口"变成一条可用的连接。
-//
-// 它实现 client/proxy 的 VPNRoute 接口（接口定义在消费方，因为 vpn/node 已经
-// 依赖 client/proxy——对端面复用的正是那个 Socks5Server）。因此代理层只需要知道
-// "是不是对端"与"给我一条连接"，隧道、内层握手与目标归一化全部留在这里。
+// 实现 client/proxy 的 VPNRoute（接口定义在消费方，否则与 vpn/node 形成导入环）。
 type Route struct {
 	overlay     *Overlay
 	clients     *ClientSet
 	dialTimeout time.Duration
 }
 
-// NewRoute 构造访问侧。
 func NewRoute(opts RouteOptions) (*Route, error) {
 	if opts.Overlay == nil {
 		return nil, errors.New("vpn: route requires an overlay")
@@ -141,9 +131,7 @@ func (r *Route) DialUDP(ctx context.Context, target string) (net.Conn, error) {
 }
 
 // peerFor 把访问侧看到的目标（host:port）解析成对端与对端上的端口。
-//
-// host 必须是已配置的对端名或它的 overlay IP；port 是对端本机的服务端口。这两者
-// 都不进隧道——隧道里只有 innerTargetHost 与 port。
+// host 必须是已配置的对端名或 overlay IP，port 是对端本机的服务端口；两者都不进隧道。
 func (r *Route) peerFor(target string) (PeerRef, int, error) {
 	host, portStr, err := net.SplitHostPort(target)
 	if err != nil {
@@ -165,12 +153,8 @@ func (r *Route) peerFor(target string) (PeerRef, int, error) {
 	return ref, port, nil
 }
 
-// socks5Connect 在一条隧道内的连接上完成 SOCKS5 握手与 CONNECT，目标为
-// <innerTargetHost>:port。它就是"访问侧是客户端、对端面是服务端"的那一半契约。
-//
-// 只用无认证方式：对端面是本进程按固定参数构造的（见 PeerFace.Start 不设置
-// Username/Password），因此一个要求认证的应答意味着对端不是我们的对端面，报错
-// 比假装成功更有用。
+// socks5Connect 在隧道内连接上完成 SOCKS5 握手与 CONNECT，目标为 <innerTargetHost>:port。
+// 只用无认证方式：对端面固定不设 Username/Password，要求认证的应答说明对端不是我们的对端面。
 func socks5Connect(conn net.Conn, port int) error {
 	greeting := statute.NewMethodRequest(statute.VersionSocks5, []byte{statute.MethodNoAuth})
 	if _, err := conn.Write(greeting.Bytes()); err != nil {
@@ -208,17 +192,14 @@ func socks5Connect(conn net.Conn, port int) error {
 }
 
 // targetHeaderConn 在首次写入前把一次性目标头插进**同一条数据报**。
-//
-// 头必须与首个载荷合在一起：对端面按"每条隧道 UDP 流一个目标"处理，目标由流的
-// 第一个数据报解出（见 DecodeUDPTarget）。分开写会让目标确定与首个载荷各占一条
-// 数据报，多条一次无谓的往返，且一旦那条只有头的数据报丢失，该流就永远停在
-// "没有目标"的状态。
+// 对端面按"每条隧道 UDP 流一个目标"处理，目标只从第一个数据报解出（见 DecodeUDPTarget）；
+// 头单独发一条数据报会让该流在该包丢失后永远没有目标。
 type targetHeaderConn struct {
 	net.Conn
 
 	header []byte
 
-	// mu 使"只插一次"在并发写入下也成立。SOCKS5 UDP 中继目前是单 goroutine 调用
+	// mu 使"只插一次"在并发写入下也成立。SOCKS5 UDP 中继是单 goroutine 调用
 	// Write，但这条连接的写入方不受本类型控制，一次重复插入就会把目标头当载荷
 	// 发给对端。
 	mu   sync.Mutex

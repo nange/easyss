@@ -22,12 +22,9 @@ import (
 	vpn "github.com/nange/easyss/v3/vpn"
 )
 
-// recordingPeer 是一个"看得见内层目标"的对端：真实的 tailcat Server 加一个最小的
-// SOCKS5 服务端，把每条 CONNECT 请求里的目标记下来后把数据原样回送。
-//
-// 为什么不用 PeerFace：它的拨号器只拒绝非 loopback，无法区分 127.0.0.1 与
-// 127.0.0.2，因此"访问侧把目标归一化成字面 127.0.0.1"这条契约只能在更靠里的位置
-// 断言。这里读到的就是隧道里真实传输的 CONNECT 请求。
+// recordingPeer 是一个"看得见内层目标"的对端：真实 tailcat Server 加最小 SOCKS5
+// 服务端，记录每条 CONNECT 的目标后把数据原样回送。
+// PeerFace 的拨号器不区分 127.0.0.1 与 127.0.0.2，归一化契约只能在这里断言。
 type recordingPeer struct {
 	addr string
 	port int
@@ -142,11 +139,8 @@ func newTestRoute(t *testing.T, peers ...PeerRef) (*Route, *Overlay) {
 	return route, overlay
 }
 
-// TestRouteInnerTargetIsLiteralLoopback 是阶段 4 的核心验收：无论应用写的是对端名
-// 还是 overlay IP，隧道里传输的 CONNECT 目标**恒为字面 127.0.0.1:<port>**。
-//
-// 这条契约是访问侧与对端面之间唯一的跨节点协议，也是"对端不需要知道访问侧的任何
-// 配置"这一结论的全部依据。
+// TestRouteInnerTargetIsLiteralLoopback 钉住唯一的跨节点协议契约：无论应用写对端名
+// 还是 overlay IP，隧道里的 CONNECT 目标恒为字面 127.0.0.1:<port>。
 func TestRouteInnerTargetIsLiteralLoopback(t *testing.T) {
 	echoAddr, stopEcho := startTCPEchoLocal(t)
 	defer stopEcho()

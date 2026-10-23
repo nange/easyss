@@ -14,30 +14,20 @@ import (
 	"github.com/nange/easyss/v3/vpn"
 )
 
-// 本文件把 server.vpn.mesh_* 配置翻译成 vpn.Mesh 的输入：为每个对端准备一条
-// **经 easyss 隧道**的出网路径（见 vpn.MeshPeer.Dial 的注释）。
-//
-// 生产上的路径是：
-//
-//	本机内嵌 DERP → SOCKS5（本机上指向该对端的 easyss-headless）→ easyss 隧道 →
-//	对端 easyss 服务端（握手目标 == 它自己的 DERP 对外地址）→ 对端回环上的内嵌 DERP
-//
-// 所以每个对端的代理不是一个"可选优化"，而是这条连接唯一可能成功的形态：内嵌
-// DERP 只接待回环来源，直连对端公网 host:port 只会拿到伪装页。配置层已经要求
-// "自带 proxy 或全局 next_proxy.url"，这里只负责把它实例化。
+// 本文件把 server.vpn.mesh_* 配置翻译成 vpn.Mesh 的输入：为每个对端准备一条经 easyss 隧道
+// （本机指向该对端的 SOCKS5）的出网路径。代理不是可选优化而是唯一能成功的形态：内嵌 DERP
+// 只接待回环来源，直连对端公网 host:port 只会拿到伪装页。
 
 // meshDialersFor 为 cfg 里的每个 mesh 对端构造拨号器与（可选的）TLS 配置。
-//
-// shared 是已经按顶层 next_proxy 配置构造好的实例（可能为 nil）；对端自带 proxy
-// 时各自新建一个 NextProxy（只用于 mesh，不参与常规出站分流），否则复用 shared。
+// shared 是按顶层 next_proxy 构造的实例（可能为 nil）：对端自带 proxy 时新建一个只用于 mesh 的
+// NextProxy，否则复用它。
 func meshDialersFor(cfg *serverconfig.FileConfig, shared *nextproxy.NextProxy, dialTimeout time.Duration) ([]vpn.MeshPeer, error) {
 	peers := make([]vpn.MeshPeer, 0, len(cfg.Server.VPN.MeshPeers))
 	for i, p := range cfg.Server.VPN.MeshPeers {
 		np := shared
 		if p.Proxy != "" {
-			// enable_udp 与 all_host 对 mesh 无意义（这条连接只用 TCP CONNECT，
-			// 且不经过 ShouldProxy 判定），因此固定为 false/true——与
-			// handler 路径复用同一个构造入口，避免出现第二套 SOCKS5 拨号实现。
+			// enable_udp/all_host 对 mesh 无意义（只用 TCP CONNECT，不经过 ShouldProxy），固定为
+			// false/true，与 handler 路径复用同一个构造入口。
 			created, err := nextproxy.New(p.Proxy, false, true)
 			if err != nil {
 				return nil, fmt.Errorf("server.vpn.mesh_peers[%d] (%s): proxy: %w", i, p.Addr, err)
@@ -46,8 +36,7 @@ func meshDialersFor(cfg *serverconfig.FileConfig, shared *nextproxy.NextProxy, d
 			np = created
 		}
 		if np == nil {
-			// 配置层已经挡下这种情况；这里再兜一次是为了让"绕过 LoadConfig 直接
-			// 手搓 FileConfig"的调用方（测试、嵌入式）也拿到明确错误。
+			// 配置层已挡下；这里兜住绕过 LoadConfig 直接手搓 FileConfig 的调用方。
 			return nil, fmt.Errorf("server.vpn.mesh_peers[%d] (%s) has no proxy and next_proxy.url is empty", i, p.Addr)
 		}
 
@@ -64,9 +53,7 @@ func meshDialersFor(cfg *serverconfig.FileConfig, shared *nextproxy.NextProxy, d
 	return peers, nil
 }
 
-// meshTLSConfig 返回该对端的 TLS 配置：配了 ca_file 时用它作为根证书（对端是手工
-// 证书/私有 CA 的部署），否则返回 nil 表示用系统根证书（certmagic 的 Let's Encrypt
-// 证书就是这种情形）。
+// meshTLSConfig 返回该对端的 TLS 配置：配了 ca_file 时用它作根证书，否则返回 nil 用系统根证书。
 func meshTLSConfig(p serverconfig.MeshPeer) (*tls.Config, error) {
 	if p.CAFile == "" {
 		return nil, nil
