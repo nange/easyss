@@ -122,13 +122,13 @@ Makefile 用 `-ldflags -X` 只注入 `version.Name`、`GitTag`、`BuildDate`；`
 
 ## 规范约定
 
-- 日志约定：服务端每条 TCP/ICMP 流只保留入口 `[SERVER] proxy` 一条 Info 与结束时的 `logHandlerResult` 一条结果日志；UDP 会话的连接/路由变化事件（`[UDP] upstream connected`、`[UDP_DNS]`）仍按原级别保留，因为一条会话可能重绑多次。客户端流内生命周期用 Debug，失败由入口（SOCKS5/HTTP）记录一次。handler 内部不要为拨号/连接/失败再打 Info/Error；需要区分失败阶段时用错误包装（`fmt.Errorf("...: %w", err)`）或 `streamResult` 携带
 - 测试注入约定：**不新增包级可变函数钩子**（`var x = func...`），一律用构造器参数、结构体字段或接口注入；测试只改自己构造的实例（`client.sysDeps`、`tun.platform`、`handler.outboundDeps`、`runner.options`、`appDeps`、`tunhelper` 的 `ops`（包内测试）、`sysproxy.State`、`dns.systemServers` 等）。生产默认值由构造器或 `defaultXxx()` 填入，**零值不回落**：新增依赖字段后忘了填是编译期就能看见的 nil 调用，而不是悄悄走生产实现。唯一例外是 `client.sysDeps` 的 nil 字段——它的 `dialBound` 默认值必须引用所属 `Client`，没法在结构体字面量里填。`t.Parallel` 已按包启用；仍需串行的只有共享进程级状态的测试（fd 号、全局 logger、`t.Setenv`、真实端口），它们在文件顶部或测试函数上注明原因
 - 导入别名约定：根 `config` 包（默认值、`Timeouts`、`SimpleConfig`）按包名裸导入，不写 `sharedconfig` 之类的别名；同一文件还要引入 `client/config` 或 `server/config` 时，把别名给后者（`clientconfig` / `serverconfig`），让 `config.` 在整仓恒定指向根包。同一个包内 `config.` 只能指向一个包，不得按文件各取所需
 - 注释约定：代码注释只写"读代码看不出来、写错会静默出错"的两类事实——顺序/锁/生命周期约束，以及外部系统行为或跨包契约。不写代码演进史（"过去…现在…"、"取代了某某"），不写枚举式清单（"只有这五个方法会写这个字段"）——这类表述一旦过时就成了错误文档；设计取舍与历史写在 commit message 或本文件。单个注释块不超过 3 行，函数名已经说清楚的不要再加 godoc
 - 始终使用简体中文回复我
 - git commit 信息使用英文，尽量简洁，格式参考 git log 历史记录
-- **git worktree**：代码改动默认先建 worktree 再改，目录固定为 `.agents/worktrees/<name>`（`<name>` 可用 `type/name` 分层），从当前 HEAD 或用户指定的 base 新建分支；只有用户明确指定在某个已有分支/工作树上修改时才直接改。该目录不提交，清理用 `make worktree-clean`（只删 `.agents/worktrees/` 下的工作树，不删分支）。
+- **git worktree**：仅当当前处于 `master` 分支时，代码改动才先建 worktree 再改，目录固定为 `.agents/worktrees/<name>`（`<name>` 可用 `type/name` 分层），从当前 HEAD 或用户指定的 base 新建分支；已经在功能分支或用户指定分支/工作树上时直接改。该目录不提交，清理用 `make worktree-clean`（只删 `.agents/worktrees/` 下的工作树，不删分支）。
 - 在用户没有明确要求提交代码前，都不提交代码
 - 提交代码前，先执行`make lint`，检查代码风格，存在问题则需要先修复再提交代码
+- **review PR**：目标是简洁高效——先确认代码是否已在本地（`git worktree list`、`.agents/worktrees/`、`git branch -r`、`git log --all` 里的 head 提交），命中就直接在该工作树/分支评审（需要最新提交只 `git fetch`），本地确实没有才 clone 或下载补丁；评审从 PR 描述与改动范围入手，只输出影响正确性、跨包契约或明显维护成本的问题，结论先行并给出文件/行号与依据，不逐段复述 diff、不凑格式性建议
 - 当用户要求提交PR时，需要在单独的分支提交代码并推送，PR标题采用英文，PR描述使用中文
