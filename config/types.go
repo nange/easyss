@@ -69,7 +69,13 @@ const (
 	ProbeConfirmCycles  = 2                // 连续慢探测次数 → 标记 degraded
 	ProbeCooldown       = 15 * time.Second // 同一 slot 两次探测最小间隔
 	ProbeMaxPerInterval = 2                // 每个健康周期最多探测数
-	ProbeLinkRefWindow  = 60 * time.Second // 链路参考速度有效窗口
+
+	// ProbeHoldWindow 是探测判定"该槽位无责"（连接健康）后的静默期：慢源站会稳定复现，
+	// 没有它会按 ProbeCooldown 的节拍无限重探；代价是真实劣化最多晚一个静默期才进入探测。
+	// 取 4 个被动起疑周期，与 HealthCheckInterval 一起缩放。
+	ProbeHoldWindow = 4 * DegradedPersistCycles * HealthCheckInterval
+	// ProbeMaxBackoff 是"探测得不出结论"时的最大重试间隔（按连续次数翻倍退避）。
+	ProbeMaxBackoff = 10 * time.Minute
 
 	// 挂起复核：墙上时钟推进与单调钟推进之差即挂起时长，超阈值只把槽位标记为待复核，
 	// 绝不关闭连接——判据有假阳性，判死权留给开流前的一次真实往返。

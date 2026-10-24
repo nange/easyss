@@ -32,3 +32,12 @@ func attachConn(s *transportSlot, c net.Conn) *slotConn {
 	s.generation().conn.Store(sc)
 	return sc
 }
+
+// probeSlotWithPool 返回一个"这一代有连接身份"的池已就绪槽位：探测在这一代没有连接时
+// 拒绝白拨一条新连接（见 slotProber.probe），测试用占位身份满足它，真实连接由 net/http
+// 拨出。"无连接不拨号"由 probe_test 用 slotWithPool 直接覆盖。
+func probeSlotWithPool(t *http.Transport) *transportSlot {
+	s := slotWithPool(t)
+	attachConn(s, &countingConn{})
+	return s
+}

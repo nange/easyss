@@ -6,8 +6,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
@@ -52,7 +54,7 @@ func newProbeSlot() *transportSlot {
 		ForceAttemptHTTP2: true,
 		MaxConnsPerHost:   1,
 	}
-	return slotWithPool(tr)
+	return probeSlotWithPool(tr)
 }
 
 func TestSlotProberFast(t *testing.T) {
@@ -93,6 +95,66 @@ func TestSlotProberSlowOnEmptyBody(t *testing.T) {
 	}
 	if speed != 0 {
 		t.Fatalf("speed = %v, want 0", speed)
+	}
+}
+
+// 服务端提前结束这条流（RST_STREAM）时，按已到达字节算出的吞吐不可比：最快的首块不能
+// 当成整段载荷的速度。
+func TestSlotProberTruncatedPayloadIsSlow(t *testing.T) {
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", strconv.Itoa(testProbePayloadSize))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(make([]byte, 1024)) // 只写出前 1KB，随后结束这条流
+		_ = http.NewResponseController(w).Flush()
+	}))
+	ts.EnableHTTP2 = true
+	ts.StartTLS()
+	t.Cleanup(ts.Close)
+	prober := &slotProber{serverURL: ts.URL, token: "unused", payloadSize: testProbePayloadSize}
+
+	speed, verdict := prober.probe(context.Background(), newProbeSlot())
+
+	if verdict != probeSlow {
+		t.Fatalf("verdict = %v (speed %v), want probeSlow for a truncated payload", verdict, speed)
+	}
+}
+
+// 探测自身超时不是"慢"的证据：超时只说明预算用完，不代表服务端截断了载荷。先跑一次完整
+// 探测预热连接，让调用方的截止时间只覆盖载荷读取（拨号 + TLS + h2 握手在高负载 CI 上可能
+// 超过这个预算）。
+func TestSlotProberTimeoutUsesDeliveredRate(t *testing.T) {
+	const payloadSize = 256 * 1024
+	var requests atomic.Int32
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", strconv.Itoa(payloadSize))
+		w.WriteHeader(http.StatusOK)
+		if requests.Add(1) == 1 {
+			_, _ = w.Write(make([]byte, payloadSize)) // 预热请求：送完整载荷
+			return
+		}
+		_, _ = w.Write(make([]byte, payloadSize*3/4)) // 送出 192KB 后保持流打开
+		_ = http.NewResponseController(w).Flush()
+		<-r.Context().Done()
+	}))
+	ts.EnableHTTP2 = true
+	ts.StartTLS()
+	t.Cleanup(ts.Close)
+	prober := &slotProber{serverURL: ts.URL, token: "unused", payloadSize: payloadSize}
+	slot := newProbeSlot()
+
+	if _, verdict := prober.probe(context.Background(), slot); verdict != probeFast {
+		t.Fatalf("warm-up verdict = %v, want probeFast", verdict)
+	}
+
+	// 调用方的截止时间比 ProbeTimeout 早：载荷送不完是预算不足，不是服务端截断。
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	speed, verdict := prober.probe(ctx, slot)
+
+	if verdict != probeFast {
+		t.Fatalf("verdict = %v (speed %v), want probeFast: a deadline is not a slow verdict", verdict, speed)
 	}
 }
 
@@ -138,6 +200,32 @@ func TestSlotProberInconclusiveOnDialError(t *testing.T) {
 
 	if verdict != probeInconclusive {
 		t.Fatalf("verdict = %v, want probeInconclusive", verdict)
+	}
+}
+
+// TestSlotProberWithoutConnectionCannotJudge 是 alive 那条不变量的另一半：这一代没有连接时
+// 吞吐探测同样不得白拨一条，否则结论属于另一条连接。
+func TestSlotProberWithoutConnectionCannotJudge(t *testing.T) {
+	ts, token := newProbeServer(t)
+	prober := &slotProber{serverURL: ts.URL, token: token, payloadSize: testProbePayloadSize}
+
+	var dials atomic.Int32
+	s := slotWithPool(&http.Transport{
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // 测试服务器证书
+		ForceAttemptHTTP2: true,
+		MaxConnsPerHost:   1,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dials.Add(1)
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		},
+	})
+	// gen.conn 保持为空：这一代的连接已经不在了。
+
+	if _, verdict := prober.probe(context.Background(), s); verdict != probeInconclusive {
+		t.Fatalf("verdict = %v, want probeInconclusive without a connection", verdict)
+	}
+	if got := dials.Load(); got != 0 {
+		t.Fatalf("dials = %d, want 0: a generation without a connection must not be dialed", got)
 	}
 }
 

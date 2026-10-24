@@ -23,10 +23,8 @@ type slotLifecycle struct {
 	slowRTT *slowRTTLogLimiter
 
 	// 探测状态，仅由健康循环 goroutine 访问。
-	probeUnsupported bool    // 服务端不提供 /v3/probe：回退为仅被动检测
-	unsupportedCount int     // 已观察到的 unsupported 结论次数
-	linkRefSpeed     float64 // 近期最佳探测速度（字节/秒）
-	linkRefAt        time.Time
+	probeUnsupported bool // 服务端不提供 /v3/probe：回退为仅被动检测
+	unsupportedCount int  // 已观察到的 unsupported 结论次数
 
 	// suspend 由健康循环与开流路径共享，只经 observeSuspend 访问："一次挂起只记账一次"
 	// 因此是结构性保证，第二个采样者量到的区间里没有挂起。
@@ -184,10 +182,34 @@ func (lc *slotLifecycle) evaluate(interval time.Duration) {
 	lc.evaluateProbes(linkOK)
 }
 
+// probeStateStale 报告探测状态是否属于已经不在的那条连接。
+func (s *transportSlot) probeStateStale() bool {
+	return s.probeConn != nil && s.probeConn != s.connIdentity()
+}
+
+// resetProbeState 作废探测状态：嫌疑、退避与静默期都只对被探测的那条连接成立。
+func (s *transportSlot) resetProbeState() {
+	s.probeConn = nil
+	s.suspected = false
+	s.clearProbeProgress()
+	s.probeHoldUntil = time.Time{}
+	s.lastProbeAt = time.Time{}
+}
+
+// clearProbeProgress 清零"连续慢探测/inconclusive"的计数：空闲与恢复都不属于该序列。
+func (s *transportSlot) clearProbeProgress() {
+	s.probeLowCycles = 0
+	s.probeBackoff = 0
+}
+
 func (lc *slotLifecycle) evaluateSlotHealth(idx int, s *transportSlot, interval time.Duration, linkOK bool) {
+	if s.probeStateStale() {
+		s.resetProbeState()
+	}
 	if s.heavy.Load() == 0 {
 		s.lastHeavy = 0
 		s.suspected = false
+		s.clearProbeProgress()
 		return
 	}
 	if s.lastHeavy == 0 {
@@ -203,6 +225,11 @@ func (lc *slotLifecycle) evaluateSlotHealth(idx int, s *transportSlot, interval 
 		s.lastBytes = s.bytesRecv.Load()
 		return
 	}
+	if time.Now().Before(s.probeHoldUntil) {
+		// 探测刚判定这条连接无责：慢吞吐只能归因于源站，推进基线且不累计慢周期。
+		s.lastBytes = s.bytesRecv.Load()
+		return
+	}
 
 	now := s.bytesRecv.Load()
 	perSec := int64(interval / time.Second)
@@ -215,6 +242,7 @@ func (lc *slotLifecycle) evaluateSlotHealth(idx int, s *transportSlot, interval 
 	if throughput >= int64(config.DegradedThroughputThreshold) {
 		s.lowCycles = 0
 		s.suspected = false
+		s.clearProbeProgress()
 		if s.degraded.Load() {
 			s.recoverCycles++
 			if s.recoverCycles >= config.DegradedRecoverCycles {
@@ -236,6 +264,7 @@ func (lc *slotLifecycle) evaluateSlotHealth(idx int, s *transportSlot, interval 
 			log.Info("[TRANSPORT] slot degraded", "slot", idx, "throughput_kb_s", throughput/1024)
 		} else {
 			s.suspected = true
+			s.probeConn = s.connIdentity()
 		}
 	}
 }
@@ -256,10 +285,18 @@ func (lc *slotLifecycle) evaluateProbes(linkOK bool) {
 
 		for i := 0; i < len(slots) && probed < config.ProbeMaxPerInterval; i++ {
 			s := slots[i]
+			if s.probeStateStale() {
+				s.resetProbeState()
+			}
 			if !s.suspected || s.degraded.Load() {
 				continue
 			}
-			if now.Sub(s.lastProbeAt) < config.ProbeCooldown {
+			if s.connIdentity() == nil {
+				// 被怀疑的连接已不在这一代：嫌疑失去对象，一并作废。
+				s.resetProbeState()
+				continue
+			}
+			if now.Sub(s.lastProbeAt) < probeCooldown(s.probeBackoff) {
 				continue
 			}
 			lc.probeSlot(i, s, now)
@@ -268,32 +305,50 @@ func (lc *slotLifecycle) evaluateProbes(linkOK bool) {
 	}
 }
 
+// probeCooldown 让得不出结论的探测按连续次数翻倍退避：非 200 与传输错误都会一直得不出
+// 结论，只有 ProbeCooldown 的话同一槽位会无限重试。上限的代价是瞬时非 200 最多换来 10
+// 分钟的确认延迟；inconclusive 本身不会触发降级，因此只是检测延迟。
+func probeCooldown(backoff int) time.Duration {
+	d := config.ProbeCooldown
+	for i := 0; i < backoff && d < config.ProbeMaxBackoff; i++ {
+		d *= 2
+	}
+	return min(d, config.ProbeMaxBackoff)
+}
+
 // unsupported 累计两次才回退为仅被动检测：单次可能是服务端的瞬时故障。
 func (lc *slotLifecycle) probeSlot(idx int, s *transportSlot, now time.Time) {
+	conn := s.connIdentity()
+	if conn == nil {
+		s.resetProbeState()
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), config.ProbeTimeout)
 	defer cancel()
 
 	speed, verdict := lc.probeFunc(ctx, s)
-	s.lastProbeAt = now
 	stats.RecordSlotProbe()
+	if s.connIdentity() != conn {
+		// 探测期间换了连接：结论属于旧连接，不能记到新连接头上。
+		s.resetProbeState()
+		return
+	}
+	s.probeConn = conn
+	s.lastProbeAt = now
+	// 退避只累计连续的"得不出结论"。
+	if verdict == probeInconclusive {
+		s.probeBackoff++
+	} else {
+		s.probeBackoff = 0
+	}
 
 	switch verdict {
 	case probeFast:
 		s.probeLowCycles = 0
 		s.suspected = false
-		// 链路参考值是近期最佳吞吐量，只从 fast 探测刷新。
-		if speed > lc.linkRefSpeed || now.Sub(lc.linkRefAt) > config.ProbeLinkRefWindow {
-			lc.linkRefSpeed = speed
-			lc.linkRefAt = now
-		}
+		s.probeHoldUntil = now.Add(config.ProbeHoldWindow)
 	case probeSlow:
-		// 链路参考值低于降级阈值说明整条链路才是瓶颈，归咎槽位只会徒增抖动。
-		if now.Sub(lc.linkRefAt) <= config.ProbeLinkRefWindow &&
-			lc.linkRefSpeed < float64(config.DegradedThroughputThreshold) {
-			s.probeLowCycles = 0
-			s.suspected = false
-			return
-		}
 		stats.RecordSlotProbeSlow()
 		s.probeLowCycles++
 		if s.probeLowCycles >= config.ProbeConfirmCycles {

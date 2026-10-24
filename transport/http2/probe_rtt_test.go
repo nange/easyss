@@ -50,7 +50,7 @@ func TestProbeRTTCountsRequestToFirstBodyByte(t *testing.T) {
 		MaxConnsPerHost:   1,
 	}
 	t.Cleanup(tr.CloseIdleConnections)
-	slot := slotWithPool(tr)
+	slot := probeSlotWithPool(tr)
 
 	stats.ResetCounters()
 	prober := &slotProber{serverURL: ts.URL, token: token, payloadSize: testProbePayloadSize}
