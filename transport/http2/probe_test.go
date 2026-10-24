@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
@@ -97,8 +98,8 @@ func TestSlotProberSlowOnEmptyBody(t *testing.T) {
 	}
 }
 
-// 载荷没送达完就不是健康证据：截断后按剩余字节算出的吞吐不可比，服务端提前结束这条流
-// （RST_STREAM）会把最快的首块当成整段载荷的速度。
+// 服务端提前结束这条流（RST_STREAM）时，按已到达字节算出的吞吐不可比：最快的首块不能
+// 当成整段载荷的速度。
 func TestSlotProberTruncatedPayloadIsSlow(t *testing.T) {
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
@@ -116,6 +117,32 @@ func TestSlotProberTruncatedPayloadIsSlow(t *testing.T) {
 
 	if verdict != probeSlow {
 		t.Fatalf("verdict = %v (speed %v), want probeSlow for a truncated payload", verdict, speed)
+	}
+}
+
+// 探测自身超时不是"慢"的证据：首字节慢导致载荷没读完时，按已到达字节算出的速度仍然有效。
+func TestSlotProberTimeoutUsesDeliveredRate(t *testing.T) {
+	const payloadSize = 64 * 1024
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", strconv.Itoa(payloadSize))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(make([]byte, payloadSize*3/4)) // 先送 48KB，远高于降级阈值
+		_ = http.NewResponseController(w).Flush()
+		<-r.Context().Done() // 保持这条流打开，直到调用方的截止时间把探测打断
+	}))
+	ts.EnableHTTP2 = true
+	ts.StartTLS()
+	t.Cleanup(ts.Close)
+	prober := &slotProber{serverURL: ts.URL, token: "unused", payloadSize: payloadSize}
+
+	// 调用方的截止时间比 ProbeTimeout 早，用来触发"超时时载荷未送达完"。
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	speed, verdict := prober.probe(ctx, newProbeSlot())
+
+	if verdict != probeFast {
+		t.Fatalf("verdict = %v (speed %v), want probeFast: a deadline is not a slow verdict", verdict, speed)
 	}
 }
 

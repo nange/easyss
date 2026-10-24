@@ -17,7 +17,7 @@ const (
 	probeInconclusive probeVerdict = iota
 	// probeFast：载荷以不低于降级吞吐量阈值的速度送达。
 	probeFast
-	// probeSlow：探测超时内没有字节到达，或响应体吞吐量低于降级阈值。
+	// probeSlow：探测超时内没有字节到达、服务端提前截断载荷，或响应体吞吐量低于降级阈值。
 	probeSlow
 	// probeUnsupported：服务端返回 200 但不是探测载荷，即不提供 /v3/probe。
 	probeUnsupported
@@ -125,9 +125,8 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 		}
 	}
 
-	if total < p.payloadSize {
-		// 载荷没有完整送达（读超时、中途 RST 或截断）：部分字节算出的吞吐不可比，一条在
-		// 探测期间都没能传完载荷的连接也不是健康证据。
+	if total < p.payloadSize && probeCtx.Err() == nil {
+		// 服务端提前结束这条流（截断/RST）：按已到达字节算出的吞吐不可比，一律记慢。
 		return 0, probeSlow
 	}
 
