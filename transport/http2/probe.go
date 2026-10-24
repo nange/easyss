@@ -23,7 +23,8 @@ const (
 	probeUnsupported
 )
 
-// maxProbeSpeed 限制测量值，使单次瞬时（elapsed==0）探测无法把参考速度锁到荒谬的值。
+// maxProbeSpeed 是单次探测回报速度的上限：首块与流结束几乎同时时，微秒级 elapsed 会算出
+// 荒谬的大数。
 const maxProbeSpeed = 1 << 30 // 1GB/s
 
 // slotProber 下载服务端预生成的随机载荷测量吞吐量。MaxConnsPerHost=1 把池固定在那一条
