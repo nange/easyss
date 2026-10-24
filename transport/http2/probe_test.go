@@ -120,26 +120,38 @@ func TestSlotProberTruncatedPayloadIsSlow(t *testing.T) {
 	}
 }
 
-// 探测自身超时不是"慢"的证据：首字节慢导致载荷没读完时，按已到达字节算出的速度仍然有效。
+// 探测自身超时不是"慢"的证据：超时只说明预算用完，不代表服务端截断了载荷。先跑一次完整
+// 探测预热连接，让调用方的截止时间只覆盖载荷读取（拨号 + TLS + h2 握手在高负载 CI 上可能
+// 超过这个预算）。
 func TestSlotProberTimeoutUsesDeliveredRate(t *testing.T) {
-	const payloadSize = 64 * 1024
+	const payloadSize = 256 * 1024
+	var requests atomic.Int32
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", strconv.Itoa(payloadSize))
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(make([]byte, payloadSize*3/4)) // 先送 48KB，远高于降级阈值
+		if requests.Add(1) == 1 {
+			_, _ = w.Write(make([]byte, payloadSize)) // 预热请求：送完整载荷
+			return
+		}
+		_, _ = w.Write(make([]byte, payloadSize*3/4)) // 送出 192KB 后保持流打开
 		_ = http.NewResponseController(w).Flush()
-		<-r.Context().Done() // 保持这条流打开，直到调用方的截止时间把探测打断
+		<-r.Context().Done()
 	}))
 	ts.EnableHTTP2 = true
 	ts.StartTLS()
 	t.Cleanup(ts.Close)
 	prober := &slotProber{serverURL: ts.URL, token: "unused", payloadSize: payloadSize}
+	slot := newProbeSlot()
 
-	// 调用方的截止时间比 ProbeTimeout 早，用来触发"超时时载荷未送达完"。
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	if _, verdict := prober.probe(context.Background(), slot); verdict != probeFast {
+		t.Fatalf("warm-up verdict = %v, want probeFast", verdict)
+	}
+
+	// 调用方的截止时间比 ProbeTimeout 早：载荷送不完是预算不足，不是服务端截断。
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	speed, verdict := prober.probe(ctx, newProbeSlot())
+	speed, verdict := prober.probe(ctx, slot)
 
 	if verdict != probeFast {
 		t.Fatalf("verdict = %v (speed %v), want probeFast: a deadline is not a slow verdict", verdict, speed)
