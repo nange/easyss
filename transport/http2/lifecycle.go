@@ -308,13 +308,14 @@ func (lc *slotLifecycle) evaluateProbes(linkOK bool) {
 }
 
 // probeCooldown 让得不出结论的探测按连续次数翻倍退避：非 200 与传输错误都会一直得不出
-// 结论，只有 ProbeCooldown 的话同一槽位会无限重试。
+// 结论，只有 ProbeCooldown 的话同一槽位会无限重试。上限的代价是瞬时非 200 最多换来 10
+// 分钟的确认延迟；inconclusive 本身不会触发降级，因此只是检测延迟。
 func probeCooldown(backoff int) time.Duration {
 	d := config.ProbeCooldown
-	for range min(backoff, 32) {
-		d = min(d*2, config.ProbeMaxBackoff)
+	for i := 0; i < backoff && d < config.ProbeMaxBackoff; i++ {
+		d *= 2
 	}
-	return d
+	return min(d, config.ProbeMaxBackoff)
 }
 
 // unsupported 累计两次才回退为仅被动检测：单次可能是服务端的瞬时故障。
