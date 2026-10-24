@@ -73,8 +73,8 @@ const (
 
 	// ProbeHoldWindow 是探测判定"该槽位无责"（连接健康，或整条链路都慢）后的静默期：
 	// 被动低速量到的是源站吞吐，慢源站会稳定复现，没有静默期同一槽位会按 ProbeCooldown
-	// 的节拍无限重探。
-	ProbeHoldWindow = 60 * time.Second
+	// 的节拍无限重探。取 4 个被动起疑周期，与 HealthCheckInterval 一起缩放。
+	ProbeHoldWindow = 4 * DegradedPersistCycles * HealthCheckInterval
 	// ProbeMaxBackoff 是"探测得不出结论"时的最大重试间隔（按连续次数翻倍退避）。
 	ProbeMaxBackoff = 10 * time.Minute
 
