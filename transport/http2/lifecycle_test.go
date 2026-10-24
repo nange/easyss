@@ -297,6 +297,51 @@ func TestProbeHoldOffResuspicion(t *testing.T) {
 	}
 }
 
+// 探测状态属于某一条连接：连接在两次健康周期之间被换掉并立刻重拨时，健康循环看不到
+// "这一代无连接"的窗口，旧连接的嫌疑、退避与静默期都不得作用到新连接。
+func TestProbeStateDroppedOnConnectionReplacement(t *testing.T) {
+	interval := config.HealthCheckInterval
+	calls := 0
+	lc, sch := newTestLifecycle(1, func(context.Context, *transportSlot) (float64, probeVerdict) {
+		calls++
+		return 10 * 1024 * 1024, probeFast
+	})
+	s := sch.priority.slots[0]
+	s.heavy.Store(1)
+	s.suspected = true
+	s.probeConn = s.connIdentity()
+	s.probeBackoff = 6
+	s.probeHoldUntil = time.Now().Add(config.ProbeHoldWindow)
+	s.lastProbeAt = time.Now()
+
+	// 旧连接被回收（换代），下一个开流立刻重拨。
+	s.gen.Store(&slotTransport{slot: s, tr: &http.Transport{}})
+	attachConn(s, &countingConn{})
+
+	lc.evaluateSlotHealth(0, s, interval, true)
+	lc.evaluateProbes(true)
+	if s.suspected || s.probeBackoff != 0 || !s.probeHoldUntil.IsZero() || calls != 0 {
+		t.Fatalf("stale probe state survived the replacement: suspected=%v backoff=%d hold=%v calls=%d",
+			s.suspected, s.probeBackoff, s.probeHoldUntil, calls)
+	}
+
+	// 新连接重新积累低速周期后必须从基础冷却开始，而不是继承旧连接的退避。
+	low := func() {
+		s.bytesRecv.Add(10 * 1024)
+		lc.evaluateSlotHealth(0, s, interval, true)
+	}
+	for range config.DegradedPersistCycles {
+		low()
+	}
+	if !s.suspected {
+		t.Fatal("expected suspicion to re-arm on the replacement connection")
+	}
+	lc.evaluateProbes(true)
+	if calls != 1 {
+		t.Fatalf("probe calls = %d, want 1: the replacement must not inherit the old cooldown", calls)
+	}
+}
+
 func TestProbeSlowRespectsLinkReference(t *testing.T) {
 	lc, sch := newTestLifecycle(1, func(context.Context, *transportSlot) (float64, probeVerdict) {
 		return 30 * 1024, probeSlow
@@ -438,6 +483,39 @@ func TestProbeInconclusiveBacksOff(t *testing.T) {
 	lc.evaluateProbes(true)
 	if s.probeBackoff != 0 {
 		t.Fatalf("probeBackoff = %d after a conclusive verdict, want 0", s.probeBackoff)
+	}
+}
+
+// 空闲与恢复都不属于"连续 inconclusive"的判定序列：退避必须清零，否则零散的探测会把
+// 冷却一路顶到 ProbeMaxBackoff。
+func TestProbeProgressResetOnRecoveryAndIdle(t *testing.T) {
+	interval := config.HealthCheckInterval
+	lc, sch := newTestLifecycle(1, nil)
+	s := sch.priority.slots[0]
+	s.heavy.Store(1)
+	s.suspected = true
+	s.probeConn = s.connIdentity()
+	s.probeBackoff = 6
+	s.probeLowCycles = 1
+
+	// 恢复：吞吐回到阈值以上。
+	lc.evaluateSlotHealth(0, s, interval, true) // 基线
+	s.bytesRecv.Add(int64(config.DegradedThroughputThreshold) * int64(interval/time.Second))
+	lc.evaluateSlotHealth(0, s, interval, true)
+	if s.suspected || s.probeBackoff != 0 || s.probeLowCycles != 0 {
+		t.Fatalf("after recovery: suspected=%v backoff=%d lowCycles=%d, want false/0/0",
+			s.suspected, s.probeBackoff, s.probeLowCycles)
+	}
+
+	// 空闲：重流结束。
+	s.suspected = true
+	s.probeBackoff = 6
+	s.probeLowCycles = 1
+	s.heavy.Store(0)
+	lc.evaluateSlotHealth(0, s, interval, true)
+	if s.suspected || s.probeBackoff != 0 || s.probeLowCycles != 0 {
+		t.Fatalf("after idle: suspected=%v backoff=%d lowCycles=%d, want false/0/0",
+			s.suspected, s.probeBackoff, s.probeLowCycles)
 	}
 }
 

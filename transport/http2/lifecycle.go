@@ -184,10 +184,34 @@ func (lc *slotLifecycle) evaluate(interval time.Duration) {
 	lc.evaluateProbes(linkOK)
 }
 
+// probeStateStale 报告探测状态是否属于已经不在的那条连接。
+func (s *transportSlot) probeStateStale() bool {
+	return s.probeConn != nil && s.probeConn != s.connIdentity()
+}
+
+// resetProbeState 作废探测状态：嫌疑、退避与静默期都只对被探测的那条连接成立。
+func (s *transportSlot) resetProbeState() {
+	s.probeConn = nil
+	s.suspected = false
+	s.clearProbeProgress()
+	s.probeHoldUntil = time.Time{}
+	s.lastProbeAt = time.Time{}
+}
+
+// clearProbeProgress 清零"连续慢探测/inconclusive"的计数：空闲与恢复都不属于该序列。
+func (s *transportSlot) clearProbeProgress() {
+	s.probeLowCycles = 0
+	s.probeBackoff = 0
+}
+
 func (lc *slotLifecycle) evaluateSlotHealth(idx int, s *transportSlot, interval time.Duration, linkOK bool) {
+	if s.probeStateStale() {
+		s.resetProbeState()
+	}
 	if s.heavy.Load() == 0 {
 		s.lastHeavy = 0
 		s.suspected = false
+		s.clearProbeProgress()
 		return
 	}
 	if s.lastHeavy == 0 {
@@ -220,6 +244,7 @@ func (lc *slotLifecycle) evaluateSlotHealth(idx int, s *transportSlot, interval 
 	if throughput >= int64(config.DegradedThroughputThreshold) {
 		s.lowCycles = 0
 		s.suspected = false
+		s.clearProbeProgress()
 		if s.degraded.Load() {
 			s.recoverCycles++
 			if s.recoverCycles >= config.DegradedRecoverCycles {
@@ -241,6 +266,7 @@ func (lc *slotLifecycle) evaluateSlotHealth(idx int, s *transportSlot, interval 
 			log.Info("[TRANSPORT] slot degraded", "slot", idx, "throughput_kb_s", throughput/1024)
 		} else {
 			s.suspected = true
+			s.probeConn = s.connIdentity()
 		}
 	}
 }
@@ -261,14 +287,15 @@ func (lc *slotLifecycle) evaluateProbes(linkOK bool) {
 
 		for i := 0; i < len(slots) && probed < config.ProbeMaxPerInterval; i++ {
 			s := slots[i]
+			if s.probeStateStale() {
+				s.resetProbeState()
+			}
 			if !s.suspected || s.degraded.Load() {
 				continue
 			}
 			if s.connIdentity() == nil {
-				// 被怀疑的连接已不在这一代（换代或槽位被回收过）：嫌疑失去对象，一并作废。
-				s.suspected = false
-				s.probeLowCycles = 0
-				s.probeBackoff = 0
+				// 被怀疑的连接已不在这一代：嫌疑失去对象，一并作废。
+				s.resetProbeState()
 				continue
 			}
 			if now.Sub(s.lastProbeAt) < probeCooldown(s.probeBackoff) {
@@ -292,12 +319,24 @@ func probeCooldown(backoff int) time.Duration {
 
 // unsupported 累计两次才回退为仅被动检测：单次可能是服务端的瞬时故障。
 func (lc *slotLifecycle) probeSlot(idx int, s *transportSlot, now time.Time) {
+	conn := s.connIdentity()
+	if conn == nil {
+		s.resetProbeState()
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), config.ProbeTimeout)
 	defer cancel()
 
 	speed, verdict := lc.probeFunc(ctx, s)
-	s.lastProbeAt = now
 	stats.RecordSlotProbe()
+	if s.connIdentity() != conn {
+		// 探测期间换了连接：结论属于旧连接，不能记到新连接头上。
+		s.resetProbeState()
+		return
+	}
+	s.probeConn = conn
+	s.lastProbeAt = now
 	// 退避只累计连续的"得不出结论"。
 	if verdict == probeInconclusive {
 		s.probeBackoff++

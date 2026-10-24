@@ -64,6 +64,9 @@ type transportSlot struct {
 	// 探测判定该槽位无责后的静默截止时间，以及连续 inconclusive 的次数（退避用）。
 	probeHoldUntil time.Time
 	probeBackoff   int
+	// 上述探测状态所属的连接身份。换代后通常立刻重拨，健康周期看不到"这一代无连接"的
+	// 窗口，只能靠身份比对作废旧连接上的结论。
+	probeConn *slotConn
 }
 
 // resetRotation 把连接作用域的状态清回"无连接"基线。expireAt 必须清零而不是设新截止时间：
