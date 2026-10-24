@@ -248,8 +248,26 @@ func TestProbeFastClearsSuspicion(t *testing.T) {
 	if s.degraded.Load() {
 		t.Fatal("fast probe must not mark degraded")
 	}
-	if lc.linkRefSpeed != fastSpeed {
-		t.Fatalf("linkRefSpeed = %v, want %v", lc.linkRefSpeed, fastSpeed)
+}
+
+// 探测进行中换代：结论属于旧连接，必须丢弃，不能把旧连接的快判决记到新连接头上。
+func TestProbeResultDroppedWhenConnectionChangesDuringProbe(t *testing.T) {
+	lc, sch := newTestLifecycle(1, nil)
+	s := sch.priority.slots[0]
+	lc.probeFunc = func(context.Context, *transportSlot) (float64, probeVerdict) {
+		s.gen.Store(&slotTransport{slot: s, tr: &http.Transport{}})
+		attachConn(s, &countingConn{})
+		return 10 * 1024 * 1024, probeFast
+	}
+	s.suspected = true
+	s.probeBackoff = 2
+
+	lc.evaluateProbes(true)
+
+	if s.suspected || s.probeBackoff != 0 || s.probeConn != nil ||
+		!s.probeHoldUntil.IsZero() || !s.lastProbeAt.IsZero() {
+		t.Fatalf("verdict applied across a connection swap: suspected=%v backoff=%d hold=%v lastProbe=%v",
+			s.suspected, s.probeBackoff, s.probeHoldUntil, s.lastProbeAt)
 	}
 }
 
@@ -339,35 +357,6 @@ func TestProbeStateDroppedOnConnectionReplacement(t *testing.T) {
 	lc.evaluateProbes(true)
 	if calls != 1 {
 		t.Fatalf("probe calls = %d, want 1: the replacement must not inherit the old cooldown", calls)
-	}
-}
-
-func TestProbeSlowRespectsLinkReference(t *testing.T) {
-	lc, sch := newTestLifecycle(1, func(context.Context, *transportSlot) (float64, probeVerdict) {
-		return 30 * 1024, probeSlow
-	})
-	s := sch.priority.slots[0]
-
-	// 新的链路参考速度低于 degraded 阈值，说明整条链路才是瓶颈：
-	// 慢探测不得归咎于该槽位。
-	lc.linkRefSpeed = 32 * 1024
-	lc.linkRefAt = time.Now()
-	s.suspected = true
-	lc.evaluateProbes(true)
-	if s.degraded.Load() || s.probeLowCycles != 0 || s.suspected {
-		t.Fatal("must not mark or keep suspicion while the link itself is slow")
-	}
-
-	// 链路参考健康：该槽位的连接才是问题所在。
-	lc.linkRefSpeed = 1024 * 1024
-	lc.linkRefAt = time.Now()
-	s.suspected = true
-	s.lastProbeAt = time.Time{}
-	lc.evaluateProbes(true)
-	s.lastProbeAt = time.Time{}
-	lc.evaluateProbes(true)
-	if !s.degraded.Load() {
-		t.Fatal("expected degraded with a healthy link reference")
 	}
 }
 

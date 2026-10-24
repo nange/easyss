@@ -23,10 +23,8 @@ type slotLifecycle struct {
 	slowRTT *slowRTTLogLimiter
 
 	// 探测状态，仅由健康循环 goroutine 访问。
-	probeUnsupported bool    // 服务端不提供 /v3/probe：回退为仅被动检测
-	unsupportedCount int     // 已观察到的 unsupported 结论次数
-	linkRefSpeed     float64 // 近期最佳探测速度（字节/秒）
-	linkRefAt        time.Time
+	probeUnsupported bool // 服务端不提供 /v3/probe：回退为仅被动检测
+	unsupportedCount int  // 已观察到的 unsupported 结论次数
 
 	// suspend 由健康循环与开流路径共享，只经 observeSuspend 访问："一次挂起只记账一次"
 	// 因此是结构性保证，第二个采样者量到的区间里没有挂起。
@@ -350,20 +348,7 @@ func (lc *slotLifecycle) probeSlot(idx int, s *transportSlot, now time.Time) {
 		s.probeLowCycles = 0
 		s.suspected = false
 		s.probeHoldUntil = now.Add(config.ProbeHoldWindow)
-		// 链路参考值是近期最佳吞吐量，只从 fast 探测刷新。
-		if speed > lc.linkRefSpeed || now.Sub(lc.linkRefAt) > config.ProbeLinkRefWindow {
-			lc.linkRefSpeed = speed
-			lc.linkRefAt = now
-		}
 	case probeSlow:
-		// 链路参考值低于降级阈值说明整条链路才是瓶颈，归咎槽位只会徒增抖动。
-		if now.Sub(lc.linkRefAt) <= config.ProbeLinkRefWindow &&
-			lc.linkRefSpeed < float64(config.DegradedThroughputThreshold) {
-			s.probeLowCycles = 0
-			s.suspected = false
-			s.probeHoldUntil = now.Add(config.ProbeHoldWindow)
-			return
-		}
 		stats.RecordSlotProbeSlow()
 		s.probeLowCycles++
 		if s.probeLowCycles >= config.ProbeConfirmCycles {
