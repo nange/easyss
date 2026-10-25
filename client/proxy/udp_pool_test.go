@@ -11,31 +11,91 @@ import (
 	"time"
 )
 
-// 初始 exchangeFor 与 flight 之间已有别的调用者完成登记时，必须复用旧交换并关闭新
-// 创建的值；覆盖登记会让旧交换脱离池的回收范围。
-func TestAcquireExchangeKeepsExistingRegistration(t *testing.T) {
+// 模拟外层 exchangeFor 与 flight 之间的窗口内已有条目：进入 flight 后必须重查并直接
+// 复用，不能再跑 OpenExchange——首载荷会写进一条马上被丢弃的引导记录，调用方随后还会
+// 在复用的交换上再发一次。
+func TestCreateExchangeReusesRegisteredEntry(t *testing.T) {
+	existingStream := newBlockingStream()
+	existing := &UDPExchange{stream: existingStream}
+	var opens atomic.Int32
+	p := newUDPPool(udpPoolOptions{
+		OpenExchange: func(context.Context, string, []byte) (*UDPExchange, error) {
+			opens.Add(1)
+			return &UDPExchange{stream: newBlockingStream()}, nil
+		},
+	})
+	p.exchanges["client_target"] = existing
+
+	creation, err := p.createExchange(context.Background(), "client_target", "target:53", []byte("q"), new(int))
+	if err != nil {
+		t.Fatalf("createExchange: %v", err)
+	}
+	if creation.ue != existing {
+		t.Fatalf("returned %p, want the already registered exchange %p", creation.ue, existing)
+	}
+	if creation.created {
+		t.Fatal("reusing an existing exchange must not report created")
+	}
+	if got := opens.Load(); got != 0 {
+		t.Fatalf("OpenExchange calls = %d, want 0", got)
+	}
+	if existingStream.isClosed() {
+		t.Fatal("the reused exchange must stay open")
+	}
+}
+
+// flight 内重查命中的复用者与本次创建者持有同一个 token；经 flight 路径覆盖
+// (created=false, owner==token)。若归属判定只看 owner，调用方会跳过 Send 并多起一个
+// receiveLoop。入口快路径会遮蔽复用分支，所以这里直接走 acquireExchangeFlight。
+func TestAcquireExchangeFlightReuseIsNotCreated(t *testing.T) {
+	existingStream := newBlockingStream()
+	existing := &UDPExchange{stream: existingStream}
+	var opens atomic.Int32
+	p := newUDPPool(udpPoolOptions{
+		OpenExchange: func(context.Context, string, []byte) (*UDPExchange, error) {
+			opens.Add(1)
+			return &UDPExchange{stream: newBlockingStream()}, nil
+		},
+	})
+	p.exchanges["client_target"] = existing
+
+	ue, created, err := p.acquireExchangeFlight(context.Background(), "client_target", "target:53", []byte("q"))
+	if err != nil {
+		t.Fatalf("acquireExchangeFlight: %v", err)
+	}
+	if ue != existing {
+		t.Fatalf("returned %p, want the already registered exchange %p", ue, existing)
+	}
+	if created {
+		t.Fatal("a caller reusing a registered exchange must not report created")
+	}
+	if got := opens.Load(); got != 0 {
+		t.Fatalf("OpenExchange calls = %d, want 0", got)
+	}
+	if existingStream.isClosed() {
+		t.Fatal("the reused exchange must stay open")
+	}
+}
+
+// 入口重查之后同 key 的 flight 串行，正常流程不会再插入条目；这里防御的是将来新增的
+// 写点。若真的出现条目，覆盖会让旧交换失去回收者，复用则意味着首个载荷已经在即将
+// 丢弃的流上发过一遍；两者都不能做，关掉新交换并报错。
+func TestCreateExchangeRefusesRegistrationDuringFlight(t *testing.T) {
 	existingStream := newBlockingStream()
 	existing := &UDPExchange{stream: existingStream}
 	freshStream := newBlockingStream()
 
 	p := newUDPPool(udpPoolOptions{})
 	p.opts.OpenExchange = func(context.Context, string, []byte) (*UDPExchange, error) {
-		// 模拟另一个调用者在本次 flight 返回前完成登记。
 		p.mu.Lock()
 		p.exchanges["client_target"] = existing
 		p.mu.Unlock()
 		return &UDPExchange{stream: freshStream}, nil
 	}
 
-	ue, created, err := p.acquireExchange(context.Background(), "client_target", "target:53", []byte("q"))
-	if err != nil {
-		t.Fatalf("acquireExchange: %v", err)
-	}
-	if ue != existing {
-		t.Fatalf("returned %p, want the already registered exchange %p", ue, existing)
-	}
-	if created {
-		t.Fatal("reusing an existing exchange must not report created")
+	_, err := p.createExchange(context.Background(), "client_target", "target:53", []byte("q"), new(int))
+	if err == nil {
+		t.Fatal("createExchange must refuse a registration that appeared during OpenExchange")
 	}
 	if got := p.exchanges["client_target"]; got != existing {
 		t.Fatalf("registered exchange = %p, want %p", got, existing)
@@ -44,7 +104,7 @@ func TestAcquireExchangeKeepsExistingRegistration(t *testing.T) {
 		t.Fatal("the freshly opened duplicate must be closed")
 	}
 	if existingStream.isClosed() {
-		t.Fatal("the reused exchange must stay open")
+		t.Fatal("the already registered exchange must stay open")
 	}
 }
 

@@ -56,7 +56,7 @@ func (s *Socks5Server) Close() error {
 
 		s.closeUDPRelays()
 		// 关闭全部 UDP 会话；正在创建中的交换由创建者自己回收——OpenExchange 返回后
-		// 它会检查关闭标志并关闭交换（参见 udpPool.acquireExchange）。
+		// 它会检查关闭标志并关闭交换（参见 udpPool.createExchange）。
 		if s.udp != nil {
 			s.udp.close()
 		}
