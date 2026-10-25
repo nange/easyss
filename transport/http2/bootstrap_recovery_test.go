@@ -322,6 +322,65 @@ func TestTrackedConnCloseRetiresGeneration(t *testing.T) {
 	}
 }
 
+// blockingCloseConn 的 Close 阻塞到 unblock，把"关闭还没完成"的窗口稳定留在测试里。
+type blockingCloseConn struct {
+	net.Conn
+	closeStarted chan struct{}
+	release      chan struct{}
+	startOnce    sync.Once
+	releaseOnce  sync.Once
+}
+
+func newBlockingCloseConn() *blockingCloseConn {
+	return &blockingCloseConn{closeStarted: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (c *blockingCloseConn) Close() error {
+	c.startOnce.Do(func() { close(c.closeStarted) })
+	<-c.release
+	return nil
+}
+
+func (c *blockingCloseConn) unblock() { c.releaseOnce.Do(func() { close(c.release) }) }
+
+// 关闭一条连接时必须先作废这一代再关底层连接：uTLS 的 Close 会先发 close_notify，对端不响应
+// 时最坏要等到写截止时间（5s）；这段时间里迟到的拨号只要还看得到旧身份，就会在同一代里再拨
+// 一条（second_conn_in_generation）。
+func TestTrackedConnCloseRetiresBeforeClosing(t *testing.T) {
+	conn := newBlockingCloseConn()
+	t.Cleanup(conn.unblock)
+
+	slot := slotWithGenFactory()
+	gen := slot.generation()
+	sc := attachConn(slot, conn)
+
+	closed := make(chan struct{})
+	go func() {
+		_ = (&trackedConn{Conn: conn, gen: gen, self: sc}).Close()
+		close(closed)
+	}()
+
+	select {
+	case <-conn.closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("the underlying connection was never closed")
+	}
+
+	if slot.generation() == gen {
+		t.Fatal("the generation must be retired before the connection is closed")
+	}
+	if prev := gen.conn.Swap(&slotConn{c: &countingConn{}}); prev != nil {
+		t.Fatal("a dial completing during Close would still see the retired connection")
+	}
+
+	conn.unblock()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not return after the connection was released")
+	}
+}
+
 // stale 连接被回收时只作废自己那一代，既不清新连接的身份，也不把新池顶掉。
 func TestTrackedConnCloseKeepsNewerGeneration(t *testing.T) {
 	old := &countingConn{}

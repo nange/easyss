@@ -244,9 +244,10 @@ type trackedConn struct {
 }
 
 func (c *trackedConn) Close() error {
-	err := c.Conn.Close()
+	// 先换届再关：uTLS 的 Close 会先发 close_notify，对端不响应时最坏要等到写截止时间
+	// （5s）。这期间旧身份若还在，迟到的拨号会在同一代里再拨一条（second_conn_in_generation）。
 	c.gen.slot.retireGeneration(c.gen, c.self)
-	return err
+	return c.Conn.Close()
 }
 
 func defaultDialContext(ctx context.Context, network, addr string) (net.Conn, error) {

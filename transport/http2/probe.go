@@ -40,7 +40,11 @@ type slotProber struct {
 // alive 在指定那一代连接上发起 HEAD /v3/probe，用一个 RTT 回答这条连接还能不能往返。拿到任何
 // 响应（含 429、fallback 页面）都算活着，只有 RoundTrip 报错才判死；这一代已无连接时返回 ok=false。
 func (p *slotProber) alive(ctx context.Context, gen *slotTransport) (alive, ok bool) {
-	if gen == nil || gen.conn.Load() == nil {
+	if gen == nil {
+		return false, false
+	}
+	conn := gen.conn.Load()
+	if conn == nil {
 		return false, false
 	}
 
@@ -54,10 +58,14 @@ func (p *slotProber) alive(ctx context.Context, gen *slotTransport) (alive, ok b
 
 	resp, err := gen.tr.RoundTrip(req)
 	if err != nil {
-		// MaxConnsPerHost=1 使探测排在这一代占用的连接之后，而不是偷偷拨一条新连接。
 		return false, true
 	}
 	_ = resp.Body.Close()
+	// 这一代的连接已不可用时，net/http 会在同一张池里再拨一条（ErrNoCachedConn 路径，
+	// MaxConnsPerHost=1 挡不住）：响应来自新连接而不是被探测的那条，不能据此判活。
+	if gen.conn.Load() != conn {
+		return false, true
+	}
 	return true, true
 }
 
