@@ -9,13 +9,20 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nange/easyss/v3/config"
 )
+
+// newTestResolveCache 固定测试用的 TTL；需要断言过期的用例再覆写 c.ttl。
+func newTestResolveCache(resolve func(context.Context, string) ([]netip.Addr, error)) *resolveCache {
+	return newResolveCache(resolve, time.Minute)
+}
 
 func TestResolveCacheReusesResult(t *testing.T) {
 	t.Parallel()
 
 	var calls atomic.Int64
-	c := newResolveCache(func(context.Context, string) ([]netip.Addr, error) {
+	c := newTestResolveCache(func(context.Context, string) ([]netip.Addr, error) {
 		calls.Add(1)
 		return []netip.Addr{netip.MustParseAddr("1.1.1.1")}, nil
 	})
@@ -38,7 +45,7 @@ func TestResolveCacheExpires(t *testing.T) {
 	t.Parallel()
 
 	var calls atomic.Int64
-	c := newResolveCache(func(context.Context, string) ([]netip.Addr, error) {
+	c := newTestResolveCache(func(context.Context, string) ([]netip.Addr, error) {
 		calls.Add(1)
 		return []netip.Addr{netip.MustParseAddr("1.1.1.1")}, nil
 	})
@@ -60,7 +67,7 @@ func TestResolveCacheSkipsLiteralIP(t *testing.T) {
 	t.Parallel()
 
 	var calls atomic.Int64
-	c := newResolveCache(func(context.Context, string) ([]netip.Addr, error) {
+	c := newTestResolveCache(func(context.Context, string) ([]netip.Addr, error) {
 		calls.Add(1)
 		return []netip.Addr{netip.MustParseAddr("1.1.1.1")}, nil
 	})
@@ -85,7 +92,7 @@ func TestResolveCacheDoesNotCacheErrors(t *testing.T) {
 
 	wantErr := errors.New("resolve failed")
 	var calls atomic.Int64
-	c := newResolveCache(func(context.Context, string) ([]netip.Addr, error) {
+	c := newTestResolveCache(func(context.Context, string) ([]netip.Addr, error) {
 		if calls.Add(1) == 1 {
 			return nil, wantErr
 		}
@@ -111,7 +118,7 @@ func TestResolveCacheCoalescesConcurrentMisses(t *testing.T) {
 	t.Parallel()
 
 	var calls atomic.Int64
-	c := newResolveCache(func(context.Context, string) ([]netip.Addr, error) {
+	c := newTestResolveCache(func(context.Context, string) ([]netip.Addr, error) {
 		calls.Add(1)
 		time.Sleep(30 * time.Millisecond)
 		return []netip.Addr{netip.MustParseAddr("1.1.1.1")}, nil
@@ -135,7 +142,7 @@ func TestResolveCacheCoalescesConcurrentMisses(t *testing.T) {
 func TestResolveCacheBoundsEntries(t *testing.T) {
 	t.Parallel()
 
-	c := newResolveCache(func(context.Context, string) ([]netip.Addr, error) {
+	c := newTestResolveCache(func(context.Context, string) ([]netip.Addr, error) {
 		return []netip.Addr{netip.MustParseAddr("1.1.1.1")}, nil
 	})
 	c.max = 4
@@ -174,5 +181,33 @@ func TestResolveCacheKey(t *testing.T) {
 		if key != tt.key || ok != tt.ok {
 			t.Errorf("resolveCacheKey(%q) = (%q, %v), want (%q, %v)", tt.target, key, ok, tt.key, tt.ok)
 		}
+	}
+}
+
+// TestNewProxyHandlerResolveCacheTTL 固定缓存时长跟随服务端配置的基础超时（2×base），
+// 未配置时用默认超时，而不是某个写死的秒数。
+func TestNewProxyHandlerResolveCacheTTL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		base time.Duration
+		want time.Duration
+	}{
+		{"显式基础超时", 7 * time.Second, 14 * time.Second},
+		{"未配置用默认超时", 0, 2 * time.Duration(config.DefaultTimeout) * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := NewProxyHandler(ProxyHandlerConfig{Timeouts: config.Timeouts{Base: tt.base}})
+			if h.deps.resolveCache == nil {
+				t.Fatal("expected a resolve cache")
+			}
+			if got := h.deps.resolveCache.ttl; got != tt.want {
+				t.Errorf("resolve cache TTL = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

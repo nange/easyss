@@ -46,7 +46,7 @@ type ProxyHandlerConfig struct {
 // NewProxyHandler 组装代理 handler。未知的 AllowedMethods 被保留在 map 之外，由调用方在配置
 // 加载阶段拒绝（见 server/config.validateAllowedMethods），这里不做"全部非法就放行"的兜底。
 func NewProxyHandler(cfg ProxyHandlerConfig) *ProxyHandler {
-	return newProxyHandlerWithDeps(cfg, defaultOutboundDeps())
+	return newProxyHandlerWithDeps(cfg, newOutboundDeps(cfg.Timeouts))
 }
 
 func newProxyHandlerWithDeps(cfg ProxyHandlerConfig, deps *outboundDeps) *ProxyHandler {

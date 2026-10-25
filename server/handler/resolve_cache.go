@@ -10,15 +10,12 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// 服务端解析结果的缓存窗口。握手期 SSRF 校验与拨号取的是同一批地址，缓存不改变
-// DNS-rebinding 的判定依据（校验与连接仍用同一次解析），只把重复解析从 TTFB 上拿掉。
-const (
-	resolveCacheTTL = 30 * time.Second
-	resolveCacheMax = 1024
-)
+// resolveCacheMax 是条目上限：代理面对的目标集合无界，这里只保证内存有界。
+const resolveCacheMax = 1024
 
 // resolveCache 缓存 host→addrs，键用 host 而非 host:port：同一主机的不同端口共享一次解析。
-// 返回的切片只读，调用方不得改写。
+// TTL 由调用方给出（服务端取 2×基础超时）。握手期 SSRF 校验与拨号取的是同一批地址，
+// 缓存不改变 DNS-rebinding 的判定依据；返回的切片只读，调用方不得改写。
 type resolveCache struct {
 	resolve func(context.Context, string) ([]netip.Addr, error)
 	ttl     time.Duration
@@ -34,10 +31,10 @@ type resolveEntry struct {
 	expires time.Time
 }
 
-func newResolveCache(resolve func(context.Context, string) ([]netip.Addr, error)) *resolveCache {
+func newResolveCache(resolve func(context.Context, string) ([]netip.Addr, error), ttl time.Duration) *resolveCache {
 	return &resolveCache{
 		resolve: resolve,
-		ttl:     resolveCacheTTL,
+		ttl:     ttl,
 		max:     resolveCacheMax,
 		entries: make(map[string]resolveEntry),
 	}
