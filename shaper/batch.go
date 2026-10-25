@@ -21,6 +21,9 @@ import (
 // ErrClosed 表示 Shaper 已开始关闭流程，帧没有被接受。
 var ErrClosed = errors.New("shaper: closed")
 
+// errRecordDropped 表示记录排到写锁时 Close 已经走完，记录被丢弃；对外统一表现为 ErrClosed。
+var errRecordDropped = errors.New("shaper: record dropped after close")
+
 type batchShaper struct {
 	writer    *crypto.RecordWriter
 	plaintext []byte
@@ -38,7 +41,6 @@ type batchShaper struct {
 	recordCeiling  int
 	flushThreshold int
 	window         time.Duration
-	timerStarted   bool
 	closing        atomic.Bool
 	writeClosed    atomic.Bool // 在 Close 的 flush 之后置位，防止 handler 返回后继续写入
 	err            error
@@ -110,6 +112,14 @@ func (bs *batchShaper) appendFrameLocked(ftype protocol.FrameType, payload []byt
 			}
 			return err
 		}
+		// 预冲刷在 bs.mu 外做 I/O，期间 Close 可能已完成（closing 先于 writeClosed 置位）：
+		// 继续追加只会分配一块再没人回收的缓冲。
+		if bs.closing.Load() {
+			if putPayload {
+				bs.putPooledPayload(payload)
+			}
+			return ErrClosed
+		}
 	}
 
 	bs.ensureCapacity(len(bs.plaintext) + frameSize)
@@ -124,7 +134,6 @@ func (bs *batchShaper) appendFrameLocked(ftype protocol.FrameType, payload []byt
 		return bs.flushAndWrite(false)
 	}
 
-	bs.timerStarted = true
 	bs.timer.Reset(bs.window)
 	return nil
 }
@@ -187,17 +196,14 @@ func (bs *batchShaper) Close() error {
 	if bs.cover != nil {
 		bs.cover.stop()
 	}
-	bs.timerStarted = false
 	bs.timer.Stop()
 	bs.mu.Unlock()
 
 	err := bs.flush(true)
 
-	// 必须先排空已分配的序号再置 writeClosed：定时器可能早已换出缓冲、分配好
-	// seq 并等在 writeCond 上，直接置位会让那条记录走丢弃分支。
-	//
-	// writeSeq 的写方在 bs.mu 内，这里用同一把锁取快照：closing 已置位，所有 append
-	// 路径都在 bs.mu 下提前返回，快照之后不会再有携带数据的新 seq。
+	// 先排空已分配的序号再置 writeClosed：定时器可能已换出缓冲、分配 seq 并等在
+	// writeCond 上。快照之后才分配的 seq 不等：它们要么在 bs.mu 内被 closing 拒绝，
+	// 要么在 writeClosed 后丢弃并回报 ErrClosed，不会静默成功。
 	bs.mu.Lock()
 	pending := bs.writeSeq
 	bs.mu.Unlock()
@@ -226,7 +232,6 @@ func (bs *batchShaper) flushLocked() []byte {
 		return nil
 	}
 
-	bs.timerStarted = false
 	bs.timer.Stop()
 
 	// 先按记录上限生成填充帧再增长，避免 AppendFrame 自行 realloc 漏出池外。
@@ -257,6 +262,10 @@ func (bs *batchShaper) flushAndWrite(forceFlush bool) error {
 	bytespool.MustPut(data[:cap(data)])
 
 	bs.mu.Lock()
+	if errors.Is(err, errRecordDropped) {
+		// Close 已经走完，这条记录没有写出去：调用方不能把它当作已接受。
+		return ErrClosed
+	}
 	if err != nil {
 		bs.err = err
 	}
@@ -273,7 +282,7 @@ func (bs *batchShaper) writeRecordInOrder(seq uint64, data []byte, forceFlush bo
 		bs.writeNext++
 		bs.writeCond.Broadcast()
 		bs.writeMu.Unlock()
-		return nil
+		return errRecordDropped
 	}
 	err := bs.writer.WriteRecord(data)
 	if err == nil && forceFlush {
@@ -296,9 +305,6 @@ func (bs *batchShaper) onTimer() {
 	if bs.closing.Load() {
 		return
 	}
-	bs.mu.Lock()
-	bs.timerStarted = false
-	bs.mu.Unlock()
 	if err := bs.flush(true); err != nil {
 		if isClosedStreamError(err) {
 			log.Debug("[SHAPER] timer flush aborted, stream closed", "err", err)
@@ -312,7 +318,7 @@ func isClosedStreamError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+	if errors.Is(err, ErrClosed) || errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
 		return true
 	}
 	// "http2: stream closed" 是标准库未导出的哨兵错误，只能字符串匹配。
