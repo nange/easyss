@@ -115,9 +115,9 @@ func defaultOutboundDeps() *outboundDeps {
 	return newOutboundDeps(config.Timeouts{})
 }
 
-// newOutboundDeps 按基础超时构造依赖：解析缓存取 2×base，与 UDP 会话空闲同一量级。
+// newOutboundDeps 按基础超时构造依赖：解析缓存取 4×base，比 UDP 会话空闲再宽一档。
 func newOutboundDeps(timeouts config.Timeouts) *outboundDeps {
-	cache := newResolveCache(util.ResolveHostIPs, 2*timeouts.Normalize().Base)
+	cache := newResolveCache(util.ResolveHostIPs, 4*timeouts.Normalize().Base)
 	return &outboundDeps{
 		resolve:      cache.lookup,
 		resolveCache: cache,

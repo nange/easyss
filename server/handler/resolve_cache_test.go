@@ -243,7 +243,7 @@ func TestResolveCacheKey(t *testing.T) {
 	}
 }
 
-// TestNewProxyHandlerResolveCacheTTL 固定缓存时长跟随服务端配置的基础超时（2×base），
+// TestNewProxyHandlerResolveCacheTTL 固定缓存时长跟随服务端配置的基础超时（4×base），
 // 未配置时用默认超时，而不是某个写死的秒数。
 func TestNewProxyHandlerResolveCacheTTL(t *testing.T) {
 	t.Parallel()
@@ -253,8 +253,8 @@ func TestNewProxyHandlerResolveCacheTTL(t *testing.T) {
 		base time.Duration
 		want time.Duration
 	}{
-		{"显式基础超时", 7 * time.Second, 14 * time.Second},
-		{"未配置用默认超时", 0, 2 * time.Duration(config.DefaultTimeout) * time.Second},
+		{"显式基础超时", 7 * time.Second, 28 * time.Second},
+		{"未配置用默认超时", 0, 4 * time.Duration(config.DefaultTimeout) * time.Second},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

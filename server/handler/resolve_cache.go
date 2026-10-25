@@ -14,7 +14,7 @@ import (
 const resolveCacheMax = 1024
 
 // resolveCache 缓存 host→addrs，键用 host 而非 host:port：同一主机的不同端口共享一次解析。
-// TTL 由调用方给出（服务端取 2×基础超时）。握手期 SSRF 校验与拨号取的是同一批地址，
+// TTL 由调用方给出（服务端取 4×基础超时）。握手期 SSRF 校验与拨号取的是同一批地址，
 // 缓存不改变 DNS-rebinding 的判定依据；返回的切片只读，调用方不得改写。
 type resolveCache struct {
 	resolve func(context.Context, string) ([]netip.Addr, error)
