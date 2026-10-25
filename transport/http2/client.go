@@ -304,20 +304,16 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	parentCtx := ctx
 	ctx, cancel := context.WithCancel(parentCtx)
 
-	go func() {
-		select {
-		case <-t.ctx.Done():
-			cancel()
-		case <-parentCtx.Done():
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
+	// AfterFunc 只注册回调，不像每流一个 goroutine 那样常驻；流的 done 会 stop 它们。
+	stopTransportCancel := context.AfterFunc(t.ctx, cancel)
+	stopParentCancel := context.AfterFunc(parentCtx, cancel)
 
 	pr, pw := io.Pipe()
 	url := t.serverURL + req.Endpoint
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, pr)
 	if err != nil {
+		stopTransportCancel()
+		stopParentCancel()
 		pw.Close() //nolint:errcheck
 		cancel()
 		slot.active.Add(-1)
@@ -333,6 +329,8 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 
 	var stream *http2Stream
 	doneOnce := sync.OnceFunc(func() {
+		stopTransportCancel()
+		stopParentCancel()
 		stream.releaseHeavy()
 		slot.active.Add(-1)
 		stats.RecordStreamClosed()

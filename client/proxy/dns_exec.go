@@ -11,7 +11,7 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-// 本文件是 DNS 拦截的执行器：把 dnsPlan 的四种动作变成具体结果，供 UDP 与 TCP 两个前端
+// 本文件是 DNS 拦截的执行器：把 dnsPlan 的五种动作变成具体结果，供 UDP 与 TCP 两个前端
 // 共用。前端只负责封帧与投递模型——UDP 异步（应答由 receiveLoop 送回），TCP 同步（阻塞等
 // 自己的交换）。投递模型不合并：把 UDP 改成阻塞等待会丢掉多应答/重传语义。
 
@@ -25,6 +25,8 @@ func (a dnsAction) String() string {
 	switch a {
 	case dnsActionBlock:
 		return "block"
+	case dnsActionEmpty:
+		return "empty"
 	case dnsActionCacheHit:
 		return "cache-hit"
 	case dnsActionDirect:
@@ -42,7 +44,7 @@ type dnsExchange struct {
 	dst  string
 }
 
-// executeSync 执行不需要等待隧道往返的三条分支：Block、缓存命中、直连解析。调用方必须
+// executeSync 执行不需要等待隧道往返的四条分支：Block、IPv6 禁用空应答、缓存命中、直连解析。调用方必须
 // 只用非 proxy 的动作调用它，代理分支的投递模型由各前端自理。reqServer 是客户端显式
 // 指定的解析器，只有直连分支使用。返回的应答已把 Id 改写为本次查询的 Id。
 func (d *dnsInterceptor) executeSync(ex dnsExchange, msg *dns.Msg, reqServer string) (*dns.Msg, error) {
@@ -52,11 +54,16 @@ func (d *dnsInterceptor) executeSync(ex dnsExchange, msg *dns.Msg, reqServer str
 			"src", ex.src, "dst", ex.dst)
 		return blockedDNSReply(msg), nil
 
+	case dnsActionEmpty:
+		log.Debug("[DNS_IPV6_DISABLED] empty AAAA answer", "domain", ex.plan.domain,
+			"src", ex.src, "dst", ex.dst)
+		return emptyDNSReply(msg), nil
+
 	case dnsActionCacheHit:
 		return ex.plan.cached, nil
 
 	case dnsActionDirect:
-		log.Info("[DNS_DIRECT]", "domain", ex.plan.domain, "qtype", ex.plan.qtype,
+		log.Debug("[DNS_DIRECT]", "domain", ex.plan.domain, "qtype", ex.plan.qtype,
 			"src", ex.src, "dst", ex.dst)
 		stats.RecordDNSDirectQuery()
 		resp, err := d.resolveDirectDNS(msg, ex.plan.domain, reqServer)
@@ -65,7 +72,7 @@ func (d *dnsInterceptor) executeSync(ex dnsExchange, msg *dns.Msg, reqServer str
 				"src", ex.src, "dst", ex.dst)
 			return nil, err
 		}
-		log.Info("[DNS_DIRECT] result", "domain", ex.plan.domain, "qtype", ex.plan.qtype,
+		log.Debug("[DNS_DIRECT] result", "domain", ex.plan.domain, "qtype", ex.plan.qtype,
 			"answers", util.DNSAnswerStrings(resp), "src", ex.src, "dst", ex.dst)
 		resp.Id = msg.Id
 		return resp, nil
@@ -107,7 +114,7 @@ func (d *dnsInterceptor) finishProxied(msg *dns.Msg, domain, src, dst string) bo
 	}
 	_ = d.cache.Set(msg, false)
 
-	log.Info("[DNS_PROXY] result", "domain", domain, "qtype", dns.TypeToString[qtype],
+	log.Debug("[DNS_PROXY] result", "domain", domain, "qtype", dns.TypeToString[qtype],
 		"answers", util.DNSAnswerStrings(msg), "src", src, "dst", dst)
 
 	d.learnDNSAnswers(msg, domain, false)

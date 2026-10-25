@@ -113,7 +113,7 @@ func TestHandleUDPInterceptsNonAddressQtype(t *testing.T) {
 	// 而本用例需要应答器监听可绑定的高位端口（CI 上无法绑定 53）。
 	requested := responder
 	frame, _ := buildUDPFrame(t, requested, data)
-	if err := srv.handleDNS(srv.registerTestUDPRelay(sock, clientAddr), frame, query, data); err != nil {
+	if err := srv.handleDNS(srv.registerTestUDPRelay(sock, clientAddr), frame, query, data, clientAddr, clientAddr.String()); err != nil {
 		t.Fatalf("handleDNS: %v", err)
 	}
 

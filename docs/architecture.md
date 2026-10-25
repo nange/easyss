@@ -96,13 +96,13 @@ Bootstrap 用 AES-256-GCM 加密初始握手帧（含目标地址与方法协商
 
 ### 16. DNS 路由按 QNAME 决定，而不是按解析器地址
 
-服务端 UDP 会话目标是解析器，但"直连还是走下一级代理"只有 QNAME 知道：目标是 53 端口的会话**推迟拨号**（`dnsSession=true` 时不拨，出站连接在第一条查询时建立）。DNS 部分集中在 `server/handler/udp_dns.go`，`udp.go` 只保留中继，两者只通过 `isDNSPort`/`observeDNSFrame`/`dialRoute` 交互；路由判定复用 next proxy（`routeForDomain` → `ShouldProxy`），`enable_udp=false` 时命中的域名退回直连。
+服务端 UDP 会话目标是解析器，但"直连还是走下一级代理"只有 QNAME 知道：目标是 53 端口的会话**推迟拨号**（`dnsSession=true` 时不拨，出站连接在第一条查询时建立）。DNS 部分集中在 `server/handler/udp_dns.go`，`udp.go` 只保留中继，两者只通过 `isDNSPort`/`observeDNSFrame`/`dialRoute` 交互；路由判定复用 next proxy（`routeForDomain` → `ShouldProxy`），`enable_udp=false` 时命中的域名退回直连。判定"是查询"不看 qtype（HTTPS/SVCB 等现代查询同样参与路由），A/AAAA 限制只用于缓存与答案学习；否则只发 HTTPS 记录的域名会绕过 next proxy。
 
 同一会话路由可能变化：客户端把同一 socket 的所有查询复用到同一条流（交换键是"来源地址 + 上游"，与域名无关），因此一条服务端会话可能先后承载两个域名。`rebindRoute` **先按新路由拨号，成功后才替换连接**（失败保留旧连接，同一帧只拨一次；`conn`/`connRoute` 在 `installUpstream` 同一临界区替换，`closeUpstream` 一起清空），并为新连接补一个读取 goroutine（连接作为参数传入），"一条连接一个 reader"是结构性保证；旧连接之后报出的错误不会误杀新连接。重绑失败进入 `rebindCooldown`（10s），窗口内复用旧连接，在飞查询由客户端重试。`[UDP_DNS]` 的 `via_next_proxy` 是实际出站路径（重绑失败另带 `route_changed`/`route_pending`）；首拨失败没有连接日志，QNAME 由错误包装带进结果日志，重绑失败的 Warn 自带 `domain`。`[UDP] upstream connected` 按路由分字段：代理地址记 `proxy`、直连对端记 `remote`，DNS 会话带 `domain`。DNS over TCP 无需单独处理：它到服务端就是一个 UDP 数据报（`tcpDNSSession.resolveProxy` 复用代理 UDP 交换）。ICMP 不受影响。
 
 ### 17. DNS 拦截：判定与执行各一份，投递模型两份
 
-`client/proxy` 的 DNS 拦截三层：①判定 `dnsInterceptor.plan` → `dnsPlan`（Block/缓存命中/直连/代理），UDP/TCP 共用；②执行 `dns_exec.go`：`executeSync` 处理三条同步分支，`prepareProxied` 钳制 EDNS0 并封包，`finishProxied` 是代理应答的唯一后处理入口（规范化 EDNS0 → 按 ipv6 策略剥离 AAAA → 写缓存 → 记录 → 学习域名），`postProcessProxied` 只是字节流包装（UDP 改动后必须重新 Pack）；③投递：UDP 异步（`udpPool.receiveLoop` + `onData`），TCP 同步（`waitResponse` 阻塞）。投递模型不许合并（UDP 阻塞会丢多应答/重传语义）。
+`client/proxy` 的 DNS 拦截三层：①判定 `dnsInterceptor.plan` → `dnsPlan`（Block/IPv6 空应答/缓存命中/直连/代理），UDP/TCP 共用；②执行 `dns_exec.go`：`executeSync` 处理四条同步分支，`prepareProxied` 钳制 EDNS0 并封包，`finishProxied` 是代理应答的唯一后处理入口（规范化 EDNS0 → 按 ipv6 策略剥离 AAAA → 写缓存 → 记录 → 学习域名），`postProcessProxied` 只是字节流包装（UDP 改动后必须重新 Pack）；③投递：UDP 异步（`udpPool.receiveLoop` + `onData`），TCP 同步（`waitResponse` 阻塞）。投递模型不许合并（UDP 阻塞会丢多应答/重传语义）。缓存只接受 A/AAAA：Answer 里出现与 Question 同类型的 RR 才算正应答并按最小 TTL 加抖动；NODATA/NXDOMAIN 按 RFC 2308 取权威段 SOA 的 `min(TTL, MINIMUM)` 并封顶 5 分钟，无 SOA、其它 Rcode 或 TC=1 的截断应答不缓存，避免把临时无记录、CNAME-only NODATA 或截断结果变成负缓存。IPv6 被禁用（含 auto 尚无 IPv6）时，AAAA 查询在本地直接返回 NOERROR/NODATA，不走上游也不写缓存。
 
 ### 18. DNS 熔断判定只有一处
 

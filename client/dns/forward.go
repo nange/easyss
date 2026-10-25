@@ -138,7 +138,7 @@ func (s *ForwardServer) forwardQuery(msg *dns.Msg) (*dns.Msg, error) {
 	try := func(servers []string) (*dns.Msg, error) {
 		return s.exchangeWithServers(servers, msg)
 	}
-	return QueryWithBuiltinFirst(s.dnsServers, s.systemDNSServers(), try)
+	return QueryWithBuiltinFirst(s.dnsServers, s.systemDNSServers, try)
 }
 
 func (s *ForwardServer) exchangeWithServers(servers []string, msg *dns.Msg) (*dns.Msg, error) {
@@ -158,7 +158,7 @@ func (s *ForwardServer) exchangeWithServers(servers []string, msg *dns.Msg) (*dn
 	ch := make(chan result, len(servers))
 	for _, server := range servers {
 		go func(server string) {
-			reply, _, err := s.client.Exchange(msg, server)
+			reply, err := s.exchangeOne(ctx, msg, server)
 			ch <- result{reply: reply, err: err}
 		}(server)
 	}
@@ -189,6 +189,28 @@ func (s *ForwardServer) exchangeWithServers(servers []string, msg *dns.Msg) (*dn
 		lastErr = errors.New("no dns server available")
 	}
 	return nil, lastErr
+}
+
+// exchangeOne 用 ctx 可取消的连接完成一次查询：首个上游成功后 cancel 其余分支时必须
+// 立即关闭 socket，否则它们会一直阻塞到 dns.Client.Timeout。
+func (s *ForwardServer) exchangeOne(ctx context.Context, msg *dns.Msg, server string) (*dns.Msg, error) {
+	conn, err := s.client.DialContext(ctx, server)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close() //nolint:errcheck
+
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+
+	reply, _, err := s.client.ExchangeWithConnContext(ctx, msg, conn)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, err
+	}
+	return reply, nil
 }
 
 // 回退上游里必须过滤掉会打回本转发服务器的条目：监听通配地址时"自环"还包括本机所有网卡

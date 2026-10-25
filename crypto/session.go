@@ -220,6 +220,10 @@ func (dr *DecryptedReader) ReadFrame() (protocol.Frame, error) {
 	if len(frames) == 0 {
 		return protocol.Frame{}, io.ErrUnexpectedEOF
 	}
+	// 记录内帧数超过初始 cap 时 append 会换新数组；不写回 frameBuf 会让每条大记录
+	// 重新扩容。ReadFrame 只在 dr.frames 消费完后才复用后备数组，写回安全；帧的
+	// payload 别名自 plaintext，不依赖这个数组。
+	dr.frameBuf = frames[:0]
 	dr.frames = frames[1:]
 	return frames[0], nil
 }

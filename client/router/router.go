@@ -103,6 +103,10 @@ type Router struct {
 	ipv6Networking atomic.Bool
 	serverIPV6     atomic.Pointer[string]
 
+	// ruleGeneration 在路由相关状态变化时递增，供按目标缓存分类结果的调用方失效缓存。
+	// 只增不减，比较相等即可判断缓存是否属于当前规则。
+	ruleGeneration atomic.Uint64
+
 	geoIPDB       *geoip2.Reader
 	geoSiteDirect *GeoSite
 	geoSiteBlock  *GeoSite
@@ -210,11 +214,11 @@ func (r *Router) MatchHostRule(host string) HostRule {
 	}
 	// 命中日志只在这里打一次：两个集合的匹配各自只返回布尔值，匹配逻辑不必知道日志格式。
 	if match, kind := r.hostMatchCustom(r.customDirect, host); match {
-		log.Info("[ROUTER] custom direct matched", "host", host, "rule", kind)
+		log.Debug("[ROUTER] custom direct matched", "host", host, "rule", kind)
 		return HostRuleDirect
 	}
 	if match, kind := r.hostMatchCustom(r.customProxy, host); match {
-		log.Info("[ROUTER] custom proxy matched", "host", host, "rule", kind)
+		log.Debug("[ROUTER] custom proxy matched", "host", host, "rule", kind)
 		return HostRuleProxy
 	}
 	if mode == ProxyRuleAutoBlock && !util.IsIP(host) {
@@ -276,19 +280,35 @@ func (r *Router) isLANHost(host string) bool {
 }
 
 func (r *Router) AddDirectIP(ip string) {
-	r.customDirect.AddIP(ip)
+	if r.customDirect.AddIP(ip) {
+		r.ruleGeneration.Add(1)
+	}
 }
 
 func (r *Router) AddProxyIP(ip string) {
-	r.customProxy.AddIP(ip)
+	if r.customProxy.AddIP(ip) {
+		r.ruleGeneration.Add(1)
+	}
 }
 
 func (r *Router) AddDirectDomain(domain string) {
-	r.customDirect.AddDomain(domain)
+	if r.customDirect.AddDomain(domain) {
+		r.ruleGeneration.Add(1)
+	}
 }
 
 func (r *Router) AddProxyDomain(domain string) {
-	r.customProxy.AddDomain(domain)
+	if r.customProxy.AddDomain(domain) {
+		r.ruleGeneration.Add(1)
+	}
+}
+
+// RuleGeneration 返回路由相关状态的版本号；数字变化后按目标缓存的分类结果必须丢弃。
+func (r *Router) RuleGeneration() uint64 {
+	if r == nil {
+		return 0
+	}
+	return r.ruleGeneration.Load()
 }
 
 func (r *Router) IsCustomDirectDomain(domain string) bool {
@@ -324,11 +344,13 @@ func (r *Router) ProxyRule() ProxyRule {
 
 func (r *Router) SetProxyRule(rule ProxyRule) {
 	r.proxyRule.Store(int32(rule))
+	r.ruleGeneration.Add(1)
 }
 
 func (r *Router) SetIPV6Info(networking bool, serverIPV6 string) {
 	r.ipv6Networking.Store(networking)
 	r.serverIPV6.Store(&serverIPV6)
+	r.ruleGeneration.Add(1)
 }
 
 func (r *Router) ServerIPV6() string {

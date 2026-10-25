@@ -137,6 +137,165 @@ func TestCache_Set_NonARecord(t *testing.T) {
 	}
 }
 
+func TestCache_SetNegativeResponse(t *testing.T) {
+	t.Parallel()
+
+	newSOA := func(ttl, minttl uint32) *dns.SOA {
+		rr, err := dns.NewRR("example.com. 600 IN SOA ns.example.com. host.example.com. 2024010101 3600 600 86400 60")
+		if err != nil {
+			t.Fatal(err)
+		}
+		soa := rr.(*dns.SOA)
+		soa.Hdr.Ttl = ttl
+		soa.Minttl = minttl
+		return soa
+	}
+	newMsg := func(rcode int) *dns.Msg {
+		msg := &dns.Msg{}
+		msg.SetQuestion("example.com.", dns.TypeA)
+		msg.Response = true
+		msg.Rcode = rcode
+		return msg
+	}
+
+	tests := []struct {
+		name      string
+		rcode     int
+		soa       *dns.SOA
+		truncated bool
+		wantTTL   int
+		wantHit   bool
+	}{
+		{"NODATA with SOA", dns.RcodeSuccess, newSOA(600, 60), false, 60, true},
+		{"NODATA without SOA", dns.RcodeSuccess, nil, false, 0, false},
+		{"NXDOMAIN with SOA", dns.RcodeNameError, newSOA(600, 120), false, 120, true},
+		{"NXDOMAIN without SOA", dns.RcodeNameError, nil, false, 0, false},
+		{"SERVFAIL with SOA", dns.RcodeServerFailure, newSOA(600, 60), false, 0, false},
+		{"NODATA SOA over cap", dns.RcodeSuccess, newSOA(86400, 86400), false, maxNegativeCacheTTL, true},
+		{"NODATA SOA minimum zero", dns.RcodeSuccess, newSOA(600, 0), false, 0, false},
+		{"truncated NODATA with SOA", dns.RcodeSuccess, newSOA(600, 60), true, 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			msg := newMsg(tt.rcode)
+			msg.Truncated = tt.truncated
+			if tt.soa != nil {
+				msg.Ns = append(msg.Ns, tt.soa)
+			}
+			ttl, ok := cacheTTL(msg, "")
+			if ok != tt.wantHit {
+				t.Fatalf("cacheTTL ok = %v, want %v", ok, tt.wantHit)
+			}
+			if ok && ttl != tt.wantTTL {
+				t.Fatalf("cacheTTL = %d, want %d", ttl, tt.wantTTL)
+			}
+
+			c := NewCache("")
+			if err := c.Set(msg, false); err != nil {
+				t.Fatalf("Set: %v", err)
+			}
+			got := c.Get("example.com.", "A", false)
+			if !tt.wantHit {
+				if got != nil {
+					t.Fatalf("negative response was cached: %v", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("negative response was not cached")
+			}
+			if got.Rcode != tt.rcode {
+				t.Fatalf("cached Rcode = %d, want %d", got.Rcode, tt.rcode)
+			}
+		})
+	}
+}
+
+func TestCache_SetSkipsTruncatedPositiveAnswer(t *testing.T) {
+	t.Parallel()
+
+	msg := &dns.Msg{}
+	msg.SetQuestion("example.com.", dns.TypeA)
+	msg.Response = true
+	msg.Truncated = true
+	rr, err := dns.NewRR("example.com. 3600 IN A 1.2.3.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg.Answer = append(msg.Answer, rr)
+
+	if ttl, ok := cacheTTL(msg, ""); ok {
+		t.Fatalf("cacheTTL = %d, true; truncated answer must not be cached", ttl)
+	}
+	c := NewCache("")
+	if err := c.Set(msg, false); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if got := c.Get("example.com.", "A", false); got != nil {
+		t.Fatalf("truncated answer was cached: %v", got)
+	}
+}
+
+func TestCache_CNAMEOnlyNODATAUsesSOATTL(t *testing.T) {
+	t.Parallel()
+
+	soaRR, err := dns.NewRR("baidu.com. 600 IN SOA ns.baidu.com. host.baidu.com. 2024010101 3600 600 86400 60")
+	if err != nil {
+		t.Fatal(err)
+	}
+	soa := soaRR.(*dns.SOA)
+	soa.Hdr.Ttl = 600
+	soa.Minttl = 60
+	cnameRR, err := dns.NewRR("www.baidu.com. 4335 IN CNAME www.a.shifen.com.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aRR, err := dns.NewRR("www.a.shifen.com. 60 IN A 1.2.3.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newMsg := func(answer ...dns.RR) *dns.Msg {
+		msg := &dns.Msg{}
+		msg.SetQuestion("www.baidu.com.", dns.TypeAAAA)
+		msg.Response = true
+		msg.Answer = answer
+		msg.Ns = []dns.RR{soa}
+		return msg
+	}
+
+	// 别名目标没有 AAAA：Answer 里只有 CNAME，必须按 SOA 做短否定缓存，
+	// 不能被 CNAME 的 4335s TTL 抬成正缓存。
+	msg := newMsg(cnameRR)
+	ttl, ok := cacheTTL(msg, "")
+	if !ok || ttl != 60 {
+		t.Fatalf("cacheTTL(CNAME-only NODATA) = %d, %v; want 60, true", ttl, ok)
+	}
+	c := NewCache("")
+	if err := c.Set(msg, false); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	got := c.Get("www.baidu.com.", "AAAA", false)
+	if got == nil {
+		t.Fatal("CNAME-only NODATA was not cached")
+	}
+	if hasAnswerType(got, dns.TypeAAAA) {
+		t.Fatal("cached NODATA unexpectedly contains an AAAA record")
+	}
+
+	// 同一 CNAME 后面真的跟着 AAAA 时仍走正缓存。
+	aaaaRR, err := dns.NewRR("www.a.shifen.com. 60 IN AAAA 2001:db8::1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ttl, ok = cacheTTL(newMsg(cnameRR, aRR, aaaaRR), "")
+	if !ok || ttl < minCacheTTL {
+		t.Fatalf("cacheTTL(CNAME + AAAA) = %d, %v; want a positive TTL", ttl, ok)
+	}
+}
+
 func TestCache_Get_UnpackError(t *testing.T) {
 	t.Parallel()
 

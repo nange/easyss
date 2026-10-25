@@ -75,15 +75,28 @@ func BuiltinRouteFor(hasFailover func() bool) BuiltinRoute {
 	return BuiltinRouteRetry
 }
 
-// system 必须是调用方过滤后的可用上游：拨不通的条目（自环地址、禁用 IPv6 时的 IPv6 地址）
-// 不能算兜底，否则熔断后会静默失去唯一的上游。
-func QueryWithBuiltinFirst(builtin, system []string, try func(servers []string) (*dns.Msg, error)) (*dns.Msg, error) {
-	if len(builtin) == 0 {
-		return try(system)
+// system 必须是惰性求值且过滤后的可用上游：拨不通的条目（自环地址、禁用 IPv6 时的 IPv6
+// 地址）不能算兜底，否则熔断后会静默失去唯一的上游。健康路径不该为一次查询付系统 DNS
+// 发现与自环过滤的代价，因此用函数而不是切片。
+func QueryWithBuiltinFirst(builtin []string, system func() []string, try func(servers []string) (*dns.Msg, error)) (*dns.Msg, error) {
+	if system == nil {
+		system = func() []string { return nil }
 	}
-	route := BuiltinRouteFor(func() bool { return len(system) > 0 })
+	var (
+		once    sync.Once
+		servers []string
+	)
+	loadSystem := func() []string {
+		once.Do(func() { servers = system() })
+		return servers
+	}
+
+	if len(builtin) == 0 {
+		return try(loadSystem())
+	}
+	route := BuiltinRouteFor(func() bool { return len(loadSystem()) > 0 })
 	if route == BuiltinRouteSkip {
-		return try(system)
+		return try(loadSystem())
 	}
 	if route == BuiltinRouteRetry {
 		// 必须是 Debug：本函数每条查询都会走到，Warn 会按查询刷屏。
@@ -95,11 +108,12 @@ func QueryWithBuiltinFirst(builtin, system []string, try func(servers []string) 
 		return reply, nil
 	}
 	// 只有存在系统兜底时才置位：无兜底时熔断会让冷却期变成彻底中断。
-	if len(system) > 0 {
+	fallback := loadSystem()
+	if len(fallback) > 0 {
 		MarkBuiltinDNSUnavailable()
 		log.Warn("[DNS] all builtin dns servers failed, fallback to system dns", "err", err)
 	} else {
 		log.Debug("[DNS] all builtin dns servers failed and no system dns is available", "err", err)
 	}
-	return try(system)
+	return try(fallback)
 }

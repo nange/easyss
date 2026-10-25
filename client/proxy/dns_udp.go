@@ -2,11 +2,13 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"net"
 
 	"github.com/miekg/dns"
 	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/stats"
 )
 
@@ -56,7 +58,7 @@ func (d *dnsInterceptor) proxyUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery,
 	upstream := clientconfig.ProxyDNSServer
 	key := clientAddr.String() + "_" + upstream
 
-	log.Info("[DNS_PROXY]", "domain", ex.plan.domain, "qtype", ex.plan.qtype,
+	log.Debug("[DNS_PROXY]", "domain", ex.plan.domain, "qtype", ex.plan.qtype,
 		"src", ex.src, "dst", ex.dst)
 	stats.RecordDNSProxyQuery()
 
@@ -76,6 +78,11 @@ func (d *dnsInterceptor) proxyUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery,
 	}
 
 	if err := ue.Send(payload); err != nil {
+		if errors.Is(err, shaper.ErrClosed) {
+			log.Debug("[DNS_PROXY] send on closed exchange", "domain", ex.plan.domain)
+			d.pool.removeExchange(key, ue)
+			return nil
+		}
 		log.Error("[UDP_PROXY] send", "err", err)
 		d.pool.removeExchange(key, ue)
 		return err

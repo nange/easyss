@@ -61,7 +61,7 @@ func TestExchangeDirectDNSNormalizesEDNS0Answer(t *testing.T) {
 			var nd net.Dialer
 			return nd.DialContext(ctx, network, addr)
 		},
-		dialTimeout: time.Second,
+		respTimeout: time.Second,
 	}
 	query := new(dns.Msg)
 	query.SetQuestion("example.com.", dns.TypeA)

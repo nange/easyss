@@ -380,3 +380,47 @@ func TestRecordTamperDetection(t *testing.T) {
 	_, err = r.ReadRecord()
 	require.Error(t, err, "tampered data should fail decryption")
 }
+
+func TestDecryptedReaderReusesFrameBufAcrossRecords(t *testing.T) {
+	masterKey, _ := DeriveMasterKey("frame-buf-reuse-key")
+	salt, _ := GenerateSalt()
+	endpoint := "/v3/tcp"
+
+	sk, err := NewStreamKeys(masterKey, salt, endpoint)
+	require.NoError(t, err)
+
+	enc, ctr, err := sk.newEncryptor(sessionPhase, DirC2S, protocol.MethodAES256GCM)
+	require.NoError(t, err)
+	aad := buildAAD(endpoint, salt, "c2s", "session", protocol.MethodAES256GCM)
+
+	const framesPerRecord = 12
+	makeFrames := func() []protocol.Frame {
+		frames := make([]protocol.Frame, 0, framesPerRecord)
+		for i := range framesPerRecord {
+			frames = append(frames, protocol.NewFrameDATA([]byte{byte(i)}))
+		}
+		return frames
+	}
+
+	var buf bytes.Buffer
+	w := NewRecordWriter(&buf, enc, ctr, aad)
+	require.NoError(t, w.WriteRecord(protocol.EncodeFrames(makeFrames())))
+	require.NoError(t, w.WriteRecord(protocol.EncodeFrames(makeFrames())))
+
+	decEnc, decCtr, err := sk.newEncryptor(sessionPhase, DirC2S, protocol.MethodAES256GCM)
+	require.NoError(t, err)
+	dr := NewDecryptedReader(&buf, aad, decEnc, decCtr)
+
+	for range framesPerRecord {
+		_, err := dr.ReadFrame()
+		require.NoError(t, err)
+	}
+	require.GreaterOrEqual(t, cap(dr.frameBuf), framesPerRecord)
+
+	backing := &dr.frameBuf[:1][0]
+	for range framesPerRecord {
+		_, err := dr.ReadFrame()
+		require.NoError(t, err)
+	}
+	require.Same(t, backing, &dr.frameBuf[:1][0])
+}

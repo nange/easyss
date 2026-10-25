@@ -28,18 +28,21 @@ import (
 // deadlineConn 把 SetReadDeadline 当作截止已到，用于断言 close 主动提前截止时间、
 // 而不是等满一个空闲超时。
 type deadlineConn struct {
-	closed   chan struct{}
-	once     sync.Once
-	mu       sync.Mutex
-	deadline time.Time
-	woke     bool
+	closed      chan struct{}
+	started     chan struct{}
+	once        sync.Once
+	startedOnce sync.Once
+	mu          sync.Mutex
+	deadline    time.Time
+	woke        bool
 }
 
 func newDeadlineConn() *deadlineConn {
-	return &deadlineConn{closed: make(chan struct{})}
+	return &deadlineConn{closed: make(chan struct{}), started: make(chan struct{})}
 }
 
 func (c *deadlineConn) Read([]byte) (int, error) {
+	c.startedOnce.Do(func() { close(c.started) })
 	<-c.closed
 	return 0, net.ErrClosed
 }
@@ -73,6 +76,91 @@ func (c *deadlineConn) RemoteAddr() net.Addr {
 }
 func (c *deadlineConn) SetDeadline(t time.Time) error    { return c.SetReadDeadline(t) }
 func (c *deadlineConn) SetWriteDeadline(time.Time) error { return nil }
+
+// noReadDeadlineConn 只在 Close 后返回，并记录 SetReadDeadline 次数，用于证明正常读取
+// 路径不再依赖周期性 deadline。
+type noReadDeadlineConn struct {
+	closed chan struct{}
+	once   sync.Once
+	mu     sync.Mutex
+	calls  int
+}
+
+func newNoReadDeadlineConn() *noReadDeadlineConn {
+	return &noReadDeadlineConn{closed: make(chan struct{})}
+}
+
+func (c *noReadDeadlineConn) Read([]byte) (int, error) {
+	<-c.closed
+	return 0, net.ErrClosed
+}
+
+func (c *noReadDeadlineConn) Write(p []byte) (int, error) { return len(p), nil }
+
+func (c *noReadDeadlineConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return nil
+}
+
+func (c *noReadDeadlineConn) SetReadDeadline(time.Time) error {
+	c.mu.Lock()
+	c.calls++
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *noReadDeadlineConn) deadlineCalls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
+func (c *noReadDeadlineConn) LocalAddr() net.Addr { return &net.UDPAddr{IP: net.IPv4zero, Port: 1} }
+func (c *noReadDeadlineConn) RemoteAddr() net.Addr {
+	return &net.UDPAddr{IP: net.IPv4(8, 8, 8, 8), Port: 53}
+}
+func (c *noReadDeadlineConn) SetDeadline(time.Time) error      { return nil }
+func (c *noReadDeadlineConn) SetWriteDeadline(time.Time) error { return nil }
+
+// periodicPayloadConn 按固定间隔返回同一载荷，模拟目标持续下行。
+type periodicPayloadConn struct {
+	closed   chan struct{}
+	once     sync.Once
+	interval time.Duration
+	payload  []byte
+}
+
+func newPeriodicPayloadConn(interval time.Duration, payload []byte) *periodicPayloadConn {
+	return &periodicPayloadConn{closed: make(chan struct{}), interval: interval, payload: payload}
+}
+
+func (c *periodicPayloadConn) Read(p []byte) (int, error) {
+	timer := time.NewTimer(c.interval)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return copy(p, c.payload), nil
+	case <-c.closed:
+		return 0, net.ErrClosed
+	}
+}
+
+func (c *periodicPayloadConn) Write(p []byte) (int, error) { return len(p), nil }
+
+func (c *periodicPayloadConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return nil
+}
+
+func (c *periodicPayloadConn) LocalAddr() net.Addr { return &net.UDPAddr{IP: net.IPv4zero, Port: 1} }
+func (c *periodicPayloadConn) RemoteAddr() net.Addr {
+	return &net.UDPAddr{IP: net.IPv4(1, 1, 1, 1), Port: 443}
+}
+func (c *periodicPayloadConn) SetDeadline(time.Time) error {
+	return nil
+}
+func (c *periodicPayloadConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *periodicPayloadConn) SetWriteDeadline(time.Time) error { return nil }
 
 // blockingConn 的 Read 只在 Close 后返回，让客户端帧读取真的卡在 ReadFrame 上。
 type blockingConn struct {
@@ -260,7 +348,13 @@ func TestUDPSessionCloseExitsReaderGoroutines(t *testing.T) {
 	runDone := make(chan streamResult, 1)
 	go func() { runDone <- s.run() }()
 
-	time.Sleep(50 * time.Millisecond)
+	// 等读取 goroutine 真正开始（说明 readers.Add 已完成），再测 close 的唤醒；
+	// 否则 Wait 会与 Add 竞争，测到的是测试自己的竞态而不是关闭路径。
+	select {
+	case <-conn.started:
+	case <-time.After(time.Second):
+		t.Fatal("target reader did not start")
+	}
 
 	start := time.Now()
 	s.close()
@@ -314,6 +408,55 @@ func TestUDPSessionIdleTimeoutEndsStream(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("the idle timeout took %v", elapsed)
+	}
+}
+
+// 正常读取路径不能设置周期性读 deadline：目标沉默不等于会话空闲，纯上行流会被拆掉。
+func TestUDPSessionTargetReadHasNoIdleDeadline(t *testing.T) {
+	conn := newNoReadDeadlineConn()
+	s, _ := newUDPSessionFixture(t, conn, "8.8.8.8:53", time.Second, nil, newBlockingConn())
+
+	done := make(chan struct{})
+	go func() {
+		s.readFromTarget(conn)
+		close(done)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	if got := conn.deadlineCalls(); got != 0 {
+		t.Fatalf("readFromTarget set %d read deadlines, want 0 before close", got)
+	}
+
+	s.close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("readFromTarget did not return after close")
+	}
+}
+
+// 下行动作也必须刷新空闲计时器：目标持续推送而客户端沉默的会话是活的。
+func TestUDPSessionDownlinkActivityRefreshesIdle(t *testing.T) {
+	conn := newPeriodicPayloadConn(15*time.Millisecond, []byte("x"))
+	s, _ := newUDPSessionFixture(t, conn, "example.com:443", 60*time.Millisecond, nil, newBlockingConn())
+
+	runDone := make(chan streamResult, 1)
+	go func() { runDone <- s.run() }()
+
+	select {
+	case res := <-runDone:
+		t.Fatalf("session ended during continuous downlink: %+v", res)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	s.close()
+	select {
+	case res := <-runDone:
+		if res.TimedOut {
+			t.Fatalf("session reported idle after close: %+v", res)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("run did not return after close")
 	}
 }
 
@@ -639,13 +782,45 @@ func connRoute(s *udpSession) dnsRoute {
 
 func packDNSQuery(t *testing.T, domain string) []byte {
 	t.Helper()
+	return packDNSQueryType(t, domain, dns.TypeA)
+}
+
+func packDNSQueryType(t *testing.T, domain string, qtype uint16) []byte {
+	t.Helper()
 	q := &dns.Msg{}
-	q.SetQuestion(dns.Fqdn(domain), dns.TypeA)
+	q.SetQuestion(dns.Fqdn(domain), qtype)
 	b, err := q.Pack()
 	if err != nil {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// 路由必须识别任意 qtype：浏览器只发 HTTPS/SVCB 时也要命中 next proxy。
+func TestDNSSessionRoutesNonAddressQueryByDomain(t *testing.T) {
+	local0, local1 := newDNSTargetConn(), newDNSTargetConn()
+
+	router := &fakeDNSRouter{proxyDomain: "google", proxyConns: []net.Conn{local0}, directConns: []net.Conn{local1}}
+	s, _ := newUDPSessionFixture(t, nil, "8.8.8.8:53", time.Second, nil, newBlockingConn())
+	s.dns.router = router
+
+	alive, err := s.observeClientFrame(protocol.NewFrameDATAGRAM(
+		packDNSQueryType(t, "mtalk.google.com", dns.TypeHTTPS)))
+	if err != nil {
+		t.Fatalf("observeClientFrame: %v", err)
+	}
+	if !alive {
+		t.Fatal("a datagram frame must keep the session alive")
+	}
+	if len(router.dials) != 1 || router.dials[0].route != dnsRouteNextProxy {
+		t.Fatalf("dials = %+v, want one next-proxy dial for an HTTPS query", router.dials)
+	}
+	if s.upstream() != local0 {
+		t.Fatal("the HTTPS query must use the next-proxy connection")
+	}
+	if s.dns.routeSel != dnsRouteNextProxy {
+		t.Fatalf("routeSel = %v, want dnsRouteNextProxy", s.dns.routeSel)
+	}
 }
 
 // 防回归：53 端口在首条查询到达前不拨号，之后按域名定路由，路由变了才重绑。

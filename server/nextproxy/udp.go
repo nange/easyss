@@ -258,8 +258,9 @@ func (c *udpAssociateConn) Read(b []byte) (int, error) {
 		}
 		_, payload, err := socks5.DecodeUDPPacket(buf[:n])
 		if err != nil {
-			// 按 0 字节读取丢弃，不把一条坏数据报当成会话故障（RFC 1928 允许整条丢弃）。
-			return 0, nil
+			// 坏数据报整条丢弃（RFC 1928 允许），不能返回 0,nil：上层会把 0 字节读取
+			// 当成合法空数据报转发给客户端应用。
+			continue
 		}
 		// 档位之下的整包仍可能解析出超过预算的载荷，超过就丢弃，避免记录缓冲跨出 16KB 档位。
 		if len(payload) > udpBufSize {
