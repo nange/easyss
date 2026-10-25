@@ -132,10 +132,12 @@ func TestIsDNSRequest(t *testing.T) {
 	}{
 		{"A 查询", makeMsg(dns.TypeA, false), true},
 		{"AAAA 查询", makeMsg(dns.TypeAAAA, false), true},
-		{"MX 查询", makeMsg(dns.TypeMX, false), false},
+		{"MX 查询", makeMsg(dns.TypeMX, false), true},
+		{"HTTPS 查询", makeMsg(dns.TypeHTTPS, false), true},
 		{"A 响应", makeMsg(dns.TypeA, true), false},
 		{"AAAA 响应", makeMsg(dns.TypeAAAA, true), false},
 		{"无 Question", &dns.Msg{}, false},
+		{"nil", nil, false},
 	}
 
 	for _, tt := range tests {

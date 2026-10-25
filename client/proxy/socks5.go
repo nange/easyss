@@ -125,6 +125,7 @@ type Socks5Server struct {
 	// udp 管理两类 UDP 会话（隧道交换与直连 socket）及其空闲回收，中继与 DNS 拦截共用。
 	udp            *udpPool
 	udpIdleTimeout time.Duration
+	udpRoutes      *udpRouteCache
 
 	listenAddr string
 
@@ -183,6 +184,7 @@ func NewSocks5Server(opts Socks5Options) (*Socks5Server, error) {
 		dialTimeout:       dialTimeout,
 		streamIdleTimeout: streamIdleTimeout,
 		udpIdleTimeout:    udpIdleTimeout,
+		udpRoutes:         newUDPRouteCache(),
 		listenAddr:        opts.ListenAddr,
 	}
 	// dial 晚绑定到 s.directDialContext，使会话池与 DNS 拦截器只看到一个拨号函数。

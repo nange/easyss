@@ -84,8 +84,15 @@ func TestProxiedPostProcessingIsShared(t *testing.T) {
 				t.Errorf("tcp answers = %d, want %d", len(tcpMsg.Answer), tt.wantAnswerCount)
 			}
 
-			// 两条路径写入的缓存条目必须一致，且都反映剥离后的结果。
+			// 正应答必须缓存且反映剥离后的结果；AAAA 被策略剥离后 Answer 为空，
+			// 属于 NODATA，没有 SOA 时按否定缓存策略不写入（否则会留下数小时的负条目）。
 			cached := d.cache.Get("example.com.", dns.TypeToString[tt.qtype], false)
+			if tt.wantAnswerCount == 0 {
+				if cached != nil {
+					t.Errorf("stripped AAAA answer should not be cached, got %d answers", len(cached.Answer))
+				}
+				return
+			}
 			if cached == nil {
 				t.Fatal("answer was not cached")
 			}
@@ -205,7 +212,7 @@ func TestDirectBranchIsShared(t *testing.T) {
 			var nd net.Dialer
 			return nd.Dial(network, addr)
 		},
-		dialTimeout: 2 * time.Second,
+		respTimeout: 2 * time.Second,
 	}
 
 	query := new(dns.Msg)

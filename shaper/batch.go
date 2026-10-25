@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/rand/v2"
 	"net"
 	"strings"
 	"sync"
@@ -16,6 +17,9 @@ import (
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/util/bytespool"
 )
+
+// ErrClosed 表示 Shaper 已开始关闭流程，帧没有被接受。
+var ErrClosed = errors.New("shaper: closed")
 
 type batchShaper struct {
 	writer    *crypto.RecordWriter
@@ -39,6 +43,8 @@ type batchShaper struct {
 	writeClosed    atomic.Bool // 在 Close 的 flush 之后置位，防止 handler 返回后继续写入
 	err            error
 	cover          *coverInjector
+	// paddingRNG 归本实例所有，在 bs.mu 下使用，避免所有流共用一把全局锁。
+	paddingRNG *rand.ChaCha8
 }
 
 func New(writer *crypto.RecordWriter, cfg Config) Shaper {
@@ -50,6 +56,7 @@ func New(writer *crypto.RecordWriter, cfg Config) Shaper {
 		recordCeiling:  protocol.MaxWriteRecordPlaintext,
 		flushThreshold: protocol.MaxWriteRecordPlaintext * 9 / 10,
 		window:         time.Duration(cfg.BatchWindowMS) * time.Millisecond,
+		paddingRNG:     newSeededChaCha8(),
 	}
 	bs.writeCond = sync.NewCond(&bs.writeMu)
 	bs.timer = time.AfterFunc(bs.window, bs.onTimer)
@@ -127,7 +134,7 @@ func (bs *batchShaper) PushData(data []byte) error {
 	defer bs.mu.Unlock()
 
 	if bs.closing.Load() {
-		return nil
+		return ErrClosed
 	}
 	if bs.err != nil {
 		return bs.err
@@ -144,7 +151,7 @@ func (bs *batchShaper) PushFrame(f protocol.Frame) error {
 	defer bs.mu.Unlock()
 
 	if bs.closing.Load() {
-		return nil
+		return ErrClosed
 	}
 	if bs.err != nil {
 		return bs.err
@@ -188,8 +195,15 @@ func (bs *batchShaper) Close() error {
 
 	// 必须先排空已分配的序号再置 writeClosed：定时器可能早已换出缓冲、分配好
 	// seq 并等在 writeCond 上，直接置位会让那条记录走丢弃分支。
+	//
+	// writeSeq 的写方在 bs.mu 内，这里用同一把锁取快照：closing 已置位，所有 append
+	// 路径都在 bs.mu 下提前返回，快照之后不会再有携带数据的新 seq。
+	bs.mu.Lock()
+	pending := bs.writeSeq
+	bs.mu.Unlock()
+
 	bs.writeMu.Lock()
-	for bs.writeNext < bs.writeSeq {
+	for bs.writeNext < pending {
 		bs.writeCond.Wait()
 	}
 	// 此后拿到 writeMu 的 flushAndWrite 看到 writeClosed 就丢弃，不再写已结束的 handler。
@@ -216,18 +230,13 @@ func (bs *batchShaper) flushLocked() []byte {
 	bs.timer.Stop()
 
 	// 先按记录上限生成填充帧再增长，避免 AppendFrame 自行 realloc 漏出池外。
-	if padFrame, ok := BuildPaddingFrame(len(bs.plaintext), bs.recordCeiling); ok {
+	if padFrame, ok := buildPaddingFrame(bs.paddingRNG, len(bs.plaintext), bs.recordCeiling); ok {
 		bs.ensureCapacity(len(bs.plaintext) + protocol.FrameHeaderSize + len(padFrame.Payload))
 		bs.plaintext = protocol.AppendFrame(bs.plaintext, padFrame)
 	}
 
 	// 流侧绝不能继续指向即将归还的 data，否则后续 append 会写进已入池的缓冲。
 	data := bs.plaintext
-	if cap(bs.plaintext) > minRecordBufferSize {
-		bs.plaintext = bytespool.Get(minRecordBufferSize)[:0]
-		return data
-	}
-
 	bs.plaintext = bytespool.Get(minRecordBufferSize)[:0]
 	return data
 }

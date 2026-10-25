@@ -221,8 +221,16 @@ func (s *udpSession) run() (out streamResult) {
 	idle := time.NewTimer(s.idleTimeout)
 	defer idle.Stop()
 
-	// 空闲计时器只触发一次且触发分支直接返回，收尾无需排空 timer.C。
-	idleC := idle.C
+	// 会话空闲由双向活动共同判定：只有上行或只有下行的纯单向流都不能被拆掉。
+	refreshIdle := func() {
+		if !idle.Stop() {
+			select {
+			case <-idle.C:
+			default:
+			}
+		}
+		idle.Reset(s.idleTimeout)
+	}
 
 	for {
 		select {
@@ -247,6 +255,7 @@ func (s *udpSession) run() (out streamResult) {
 			if err := s.s2c.PushFrame(protocol.NewFrameWithPayload(protocol.FrameDATAGRAM, res.payload)); err != nil {
 				return streamResult{Err: err}
 			}
+			refreshIdle()
 		case res := <-frameCh:
 			if res.err != nil {
 				return streamResult{Err: res.err}
@@ -258,15 +267,8 @@ func (s *udpSession) run() (out streamResult) {
 			if !alive {
 				return streamResult{}
 			}
-			if !idle.Stop() {
-				select {
-				case <-idle.C:
-				default:
-				}
-			}
-			idle.Reset(s.idleTimeout)
-			idleC = idle.C
-		case <-idleC:
+			refreshIdle()
+		case <-idle.C:
 			return streamResult{TimedOut: true}
 		}
 	}
@@ -331,8 +333,9 @@ func (s *udpSession) readFromTarget(conn net.Conn) {
 	// 读满整个池档位才能判断数据报是否被截断。
 	readBuf := buf[:cap(buf)]
 
+	// 不设周期性读 deadline：目标侧长时间不回包不等于会话空闲（纯上行流合法），
+	// 会话空闲由主循环的双向计时器判定；close 会主动把 deadline 拉到 now 唤醒这里。
 	for {
-		_ = conn.SetReadDeadline(time.Now().Add(s.idleTimeout))
 		n, err := conn.Read(readBuf)
 		if err != nil {
 			if conn != s.upstream() {
@@ -349,6 +352,10 @@ func (s *udpSession) readFromTarget(conn net.Conn) {
 		if n > udpBufSize {
 			log.Warn("[UDP] dropping oversized datagram", "n", n,
 				"limit", udpBufSize, "truncated", n == len(readBuf))
+			continue
+		}
+		if n == 0 {
+			// 0 字节读取不承载信息；转发会在客户端生成一个空 UDP 数据报。
 			continue
 		}
 		payload := append([]byte(nil), readBuf[:n]...)

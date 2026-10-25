@@ -15,7 +15,9 @@ import (
 )
 
 func (s *Socks5Server) handleUDP(relay *udpRelay, d *socks5Frame, data []byte) error {
-	src := relay.datagramSource().String()
+	// 每个数据报只做一次 String()：它既是直连/代理池的键，也是 DNS 日志的 src。
+	clientAddr := relay.datagramSource()
+	src := clientAddr.String()
 	dst := d.target
 
 	host, port, err := net.SplitHostPort(dst)
@@ -42,11 +44,11 @@ func (s *Socks5Server) handleUDP(relay *udpRelay, d *socks5Frame, data []byte) e
 	if port == "53" {
 		msg := &dns.Msg{}
 		if err := msg.Unpack(data); err == nil && isDNSQueryMsg(msg) {
-			return s.handleDNS(relay, d, msg, data)
+			return s.handleDNS(relay, d, msg, data, clientAddr, src)
 		}
 	}
 
-	return s.handleRegularUDP(relay, d, dst, data)
+	return s.handleRegularUDP(relay, d, dst, data, src)
 }
 
 // 这些目的地只能由本机在物理接口上发出：已连接 socket 收不到响应者单播回来的应答，未绑定的
@@ -61,12 +63,11 @@ func isNonRelayableUDPTarget(host string) bool {
 
 // 两条应答通道：同步分支用 msg，异步的代理分支用 raw。都按客户端请求的目标地址组帧，
 // tun2socks 以它建 UDP 流键。
-func (s *Socks5Server) handleDNS(relay *udpRelay, d *socks5Frame, msg *dns.Msg, data []byte) error {
-	clientAddr := relay.datagramSource()
+func (s *Socks5Server) handleDNS(relay *udpRelay, d *socks5Frame, msg *dns.Msg, data []byte, clientAddr *net.UDPAddr, src string) error {
 	return s.dns.handleUDPQuery(clientAddr, udpDNSQuery{
 		raw: data,
 		msg: msg,
-		src: clientAddr.String(),
+		src: src,
 		dst: d.target,
 		reply: udpReply{
 			msg: func(m *dns.Msg) error {
@@ -102,28 +103,34 @@ func (s *Socks5Server) sendToClient(relay *udpRelay, data []byte, target string)
 	}
 }
 
-func (s *Socks5Server) handleRegularUDP(relay *udpRelay, d *socks5Frame, dst string, data []byte) error {
+func (s *Socks5Server) handleRegularUDP(relay *udpRelay, d *socks5Frame, dst string, data []byte, src string) error {
 	host, _, err := net.SplitHostPort(dst)
 	if err != nil {
 		return err
 	}
 
-	switch s.router.ClassifyHost(host).Rule {
+	var cls router.HostClassification
+	if s.udpRoutes == nil {
+		cls = s.router.ClassifyHost(host)
+	} else {
+		cls = s.udpRoutes.classify(s.router, host)
+	}
+	switch cls.Rule {
 	case router.HostRuleBlock:
-		log.Info("[UDP_BLOCK] blocked", "host", host, "target", dst)
+		log.Debug("[UDP_BLOCK] blocked", "host", host, "target", dst, "src", src)
 		return nil
 	case router.HostRuleDirect:
-		log.Info("[UDP_DIRECT]", "target", dst)
-		return s.directUDPRelay(relay, dst, data)
+		log.Debug("[UDP_DIRECT]", "target", dst)
+		return s.directUDPRelay(relay, dst, data, src)
 	case router.HostRuleProxy:
-		log.Info("[UDP_PROXY]", "target", dst)
-		return s.proxyUDPRelay(relay, dst, data)
+		log.Debug("[UDP_PROXY]", "target", dst)
+		return s.proxyUDPRelay(relay, dst, data, src)
 	}
 	return nil
 }
 
-func (s *Socks5Server) directUDPRelay(relay *udpRelay, dst string, data []byte) error {
-	key := "direct_" + relay.datagramSource().String() + "_" + dst
+func (s *Socks5Server) directUDPRelay(relay *udpRelay, dst string, data []byte, src string) error {
+	key := "direct_" + src + "_" + dst
 
 	dc, ok := s.udp.directFor(key)
 	if !ok {
@@ -155,8 +162,9 @@ func (s *Socks5Server) directUDPReadLoop(relay *udpRelay, dst, key string, dc *d
 	// 读满整个池档位：n == len(readBuf) 说明被截断或恰好等于，都超过 MaxUDPDataSize，
 	// 丢弃比把截断内容转发给应用更安全。
 	readBuf := buf[:cap(buf)]
+	// 不设读 deadline：目标长期不回应不代表会话空闲，纯上行流合法。回收由 cleanupLoop
+	// 按 lastSeen 判定，close 该 socket 会唤醒阻塞中的 Read。
 	for {
-		_ = rc.SetReadDeadline(time.Now().Add(s.udpIdleTimeout))
 		n, err := rc.Read(readBuf)
 		if err != nil {
 			if protocol.IsUDPMessageTooLong(err) {
@@ -175,8 +183,8 @@ func (s *Socks5Server) directUDPReadLoop(relay *udpRelay, dst, key string, dc *d
 	}
 }
 
-func (s *Socks5Server) proxyUDPRelay(relay *udpRelay, dst string, data []byte) error {
-	key := relay.datagramSource().String() + "_" + dst
+func (s *Socks5Server) proxyUDPRelay(relay *udpRelay, dst string, data []byte, src string) error {
+	key := src + "_" + dst
 
 	ue, created, err := s.udp.acquireExchange(context.Background(), key, dst, data)
 	if err != nil {

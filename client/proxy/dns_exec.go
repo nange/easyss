@@ -56,7 +56,7 @@ func (d *dnsInterceptor) executeSync(ex dnsExchange, msg *dns.Msg, reqServer str
 		return ex.plan.cached, nil
 
 	case dnsActionDirect:
-		log.Info("[DNS_DIRECT]", "domain", ex.plan.domain, "qtype", ex.plan.qtype,
+		log.Debug("[DNS_DIRECT]", "domain", ex.plan.domain, "qtype", ex.plan.qtype,
 			"src", ex.src, "dst", ex.dst)
 		stats.RecordDNSDirectQuery()
 		resp, err := d.resolveDirectDNS(msg, ex.plan.domain, reqServer)
@@ -65,7 +65,7 @@ func (d *dnsInterceptor) executeSync(ex dnsExchange, msg *dns.Msg, reqServer str
 				"src", ex.src, "dst", ex.dst)
 			return nil, err
 		}
-		log.Info("[DNS_DIRECT] result", "domain", ex.plan.domain, "qtype", ex.plan.qtype,
+		log.Debug("[DNS_DIRECT] result", "domain", ex.plan.domain, "qtype", ex.plan.qtype,
 			"answers", util.DNSAnswerStrings(resp), "src", ex.src, "dst", ex.dst)
 		resp.Id = msg.Id
 		return resp, nil
@@ -107,7 +107,7 @@ func (d *dnsInterceptor) finishProxied(msg *dns.Msg, domain, src, dst string) bo
 	}
 	_ = d.cache.Set(msg, false)
 
-	log.Info("[DNS_PROXY] result", "domain", domain, "qtype", dns.TypeToString[qtype],
+	log.Debug("[DNS_PROXY] result", "domain", domain, "qtype", dns.TypeToString[qtype],
 		"answers", util.DNSAnswerStrings(msg), "src", src, "dst", dst)
 
 	d.learnDNSAnswers(msg, domain, false)

@@ -91,7 +91,7 @@ func TestDirectUDPRelayConcurrentDial(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 2 {
 		wg.Go(func() {
-			if err := srv.directUDPRelay(newDisposableUDPRelay(t, srv, clientAddr), dst, []byte{1}); err != nil {
+			if err := srv.directUDPRelay(newDisposableUDPRelay(t, srv, clientAddr), dst, []byte{1}, clientAddr.String()); err != nil {
 				t.Errorf("directUDPRelay: %v", err)
 			}
 		})
@@ -120,7 +120,7 @@ func TestDirectUDPRelayStaleReadLoopKeepsLiveEntry(t *testing.T) {
 	clientAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 43211}
 	key := "direct_" + clientAddr.String() + "_" + dst
 
-	if err := srv.directUDPRelay(newDisposableUDPRelay(t, srv, clientAddr), dst, []byte{1}); err != nil {
+	if err := srv.directUDPRelay(newDisposableUDPRelay(t, srv, clientAddr), dst, []byte{1}, clientAddr.String()); err != nil {
 		t.Fatalf("directUDPRelay: %v", err)
 	}
 	live, ok := srv.udp.directFor(key)

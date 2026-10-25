@@ -1,6 +1,7 @@
 package shaper
 
 import (
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -9,14 +10,11 @@ import (
 	"github.com/nange/easyss/v3/util/bytespool"
 )
 
-var (
-	coverRNG   = newSeededChaCha8()
-	coverRNGMu sync.Mutex
-)
-
 type coverInjector struct {
-	cfg              Cover
-	mu               sync.Mutex
+	cfg Cover
+	mu  sync.Mutex
+	// rng 归本 injector 所有，在 ci.mu 下使用，避免所有流共用一把全局锁。
+	rng              *rand.ChaCha8
 	budget           float64
 	timer            *time.Timer
 	inject           func(f protocol.Frame) error
@@ -36,6 +34,7 @@ func newCoverInjector(cfg Cover, inject func(protocol.Frame) error, isClosing fu
 
 	ci := &coverInjector{
 		cfg:              cfg,
+		rng:              newSeededChaCha8(),
 		inject:           inject,
 		isClosing:        isClosing,
 		minResetInterval: time.Duration(cfg.IdleTimeout) * time.Millisecond / 2,
@@ -115,11 +114,10 @@ func (ci *coverInjector) onIdle() {
 	ci.mu.Unlock()
 
 	payload := bytespool.Get(frameSize)[:frameSize]
-	// 包级 RNG 在多个流之间共享；math/rand/v2 的随机源不适合并发使用，
-	// 因此用互斥锁保护填充操作。
-	coverRNGMu.Lock()
-	_, _ = coverRNG.Read(payload)
-	coverRNGMu.Unlock()
+	// onIdle 可能在上一次回调的 unlock 之后再次触发，RNG 仍须串行化。
+	ci.mu.Lock()
+	_, _ = ci.rng.Read(payload)
+	ci.mu.Unlock()
 	// NewFrameWithPayload 直接包装池化缓冲区而不复制：整形器在追加该帧后
 	// 会将这个缓冲区原样归还池。
 	frame := protocol.NewFrameWithPayload(protocol.FrameCOVER, payload)

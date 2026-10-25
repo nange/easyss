@@ -41,8 +41,8 @@ type dnsOptions struct {
 	Pool         *udpPool
 	Dial         func(ctx context.Context, network, addr string) (net.Conn, error)
 	ServerDomain string
-	// Timeouts 是归一化过的派生超时：Dial 是一次直连解析的共享预算，DNSResp 是代理交换的
-	// 读空闲，UDPIdle 兼作 TCP DNS 逐条查询之间的读空闲。
+	// Timeouts 是归一化过的派生超时：DNSResp 是一次直连解析的共享预算兼代理交换的读空闲，
+	// UDPIdle 兼作 TCP DNS 逐条查询之间的读空闲。
 	Timeouts config.Timeouts
 }
 
@@ -53,7 +53,6 @@ type dnsInterceptor struct {
 	pool         *udpPool
 	dial         func(ctx context.Context, network, addr string) (net.Conn, error)
 	serverDomain string
-	dialTimeout  time.Duration
 	respTimeout  time.Duration
 	queryIdle    time.Duration
 }
@@ -66,7 +65,6 @@ func newDNSInterceptor(opts dnsOptions) *dnsInterceptor {
 		pool:         opts.Pool,
 		dial:         opts.Dial,
 		serverDomain: opts.ServerDomain,
-		dialTimeout:  timeouts.Dial,
 		respTimeout:  timeouts.DNSResp,
 		queryIdle:    timeouts.UDPIdle,
 	}
@@ -116,7 +114,7 @@ func (d *dnsInterceptor) plan(msg *dns.Msg) dnsPlan {
 	plan.direct = isServerDomain || rule == router.HostRuleDirect
 
 	if cached := d.cache.Get(q.Name, plan.qtype, plan.direct); cached != nil {
-		log.Info("[DNS_CACHE] hit", "domain", plan.domain, "qtype", plan.qtype, "direct", plan.direct)
+		log.Debug("[DNS_CACHE] hit", "domain", plan.domain, "qtype", plan.qtype, "direct", plan.direct)
 		if d.router.ShouldIPV6Disable() && q.Qtype == dns.TypeAAAA {
 			cached.Answer = nil
 		}
@@ -180,7 +178,7 @@ func (d *dnsInterceptor) resolveDirectDNS(msg *dns.Msg, domain, reqServer string
 	} else {
 		// 兜底列表必须是过滤后的可用上游：QueryWithBuiltinFirst 依据它是否为空决定要不要
 		// 熔断内置服务器。
-		fallback := d.filterDNSUpstreams(easydns.SystemDNSServers())
+		fallback := func() []string { return d.filterDNSUpstreams(easydns.SystemDNSServers()) }
 		resp, err = easydns.QueryWithBuiltinFirst(clientconfig.DirectDNSServers, fallback, try)
 	}
 	if err != nil {
@@ -239,7 +237,7 @@ func (d *dnsInterceptor) exchangeDirectDNSFromList(msg *dns.Msg, servers []strin
 	candidates = dedupeDNSUpstreams(candidates)
 
 	// 并发查询每个上游：串行时一个卡住的上游会把每个数据报的处理 goroutine 阻塞到超时。
-	ctx, cancel := context.WithTimeout(context.Background(), d.dialTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), d.respTimeout)
 	defer cancel()
 
 	type result struct {
@@ -290,19 +288,31 @@ func (d *dnsInterceptor) exchangeDirectDNS(ctx context.Context, msg *dns.Msg, ad
 	}
 	defer conn.Close() //nolint:errcheck
 
-	_ = conn.SetDeadline(time.Now().Add(d.dialTimeout))
+	// ctx 取消（首个上游已成功）时立即关闭 conn，ReadMsg 不会一直等到 deadline。
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+
+	_ = conn.SetDeadline(time.Now().Add(d.respTimeout))
 	dnsConn := &dns.Conn{Conn: conn, UDPSize: 8192}
 	if err := dnsConn.WriteMsg(msg); err != nil {
-		return nil, err
+		return nil, directDNSError(ctx, err)
 	}
 	resp, err := dnsConn.ReadMsg()
 	if err != nil {
-		return nil, err
+		return nil, directDNSError(ctx, err)
 	}
 	// 部分家用路由器把 OPT 放进 ANSWER 段，真正的 A/AAAA 被挤到 ADDITIONAL。不规范化就写进
 	// 缓存，后续几小时的查询都会回放这条坏应答。
 	easydns.NormalizeEDNS0Answer(resp)
 	return resp, nil
+}
+
+// ctx 取消是并发查询的预期结果，返回 ctx.Err() 让调用方与上游故障区分开。
+func directDNSError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
 }
 
 // blockedDNSReply 把 msg 原地改造成屏蔽应答。Rcode 刻意保持原值：换成 REFUSED 会让部分 stub

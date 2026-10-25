@@ -22,6 +22,9 @@ const (
 	zeroTTLCacheTTL = 30 * 60
 	// 抖动在 clamp 之后施加，实际窗口为 2~4 小时。
 	maxCacheTTL = 2 * 60 * 60
+	// 否定应答（NODATA/NXDOMAIN）按 RFC 2308 取 SOA 的 min(TTL, MINIMUM)，再限制在这个
+	// 上限内：新域名或临时故障不能像正应答一样被缓存数小时。
+	maxNegativeCacheTTL = 5 * 60
 )
 
 type Cache struct {
@@ -63,25 +66,70 @@ func (c *Cache) Get(name, qtype string, isDirect bool) *dns.Msg {
 	return msg
 }
 
-// 只缓存 A 与 AAAA 记录，有效时长是基础 TTL 加上随机抖动。
+// 只缓存 A 与 AAAA 记录；正应答叠加随机抖动，否定应答只按 SOA 取短 TTL。
 func (c *Cache) Set(msg *dns.Msg, isDirect bool) error {
 	if msg == nil || len(msg.Question) == 0 {
 		return nil
 	}
 	q := msg.Question[0]
 	if q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA {
+		ttl, ok := cacheTTL(msg, c.serverDomain)
+		if !ok {
+			return nil
+		}
 		v, err := msg.Pack()
 		if err != nil {
 			return err
 		}
 		key := []byte(strings.ToLower(q.Name) + dns.TypeToString[q.Qtype])
-		ttl := jitterTTL(dnsCacheTTL(msg, c.serverDomain))
 		if isDirect {
 			return c.direct.Set(key, v, ttl)
 		}
 		return c.proxied.Set(key, v, ttl)
 	}
 	return nil
+}
+
+// cacheTTL 返回写入缓存的秒数；ok=false 表示该应答不应进入缓存。
+func cacheTTL(msg *dns.Msg, serverDomain string) (int, bool) {
+	switch msg.Rcode {
+	case dns.RcodeSuccess:
+		// Answer 为空即 NODATA：没有可供正缓存使用的 TTL，按 SOA 做否定缓存。
+		if len(msg.Answer) == 0 {
+			return negativeCacheTTL(msg)
+		}
+		return jitterTTL(dnsCacheTTL(msg, serverDomain)), true
+	case dns.RcodeNameError:
+		// NXDOMAIN 只做短否定缓存；上限比正应答低一个数量级，避免新上线域名长期失败。
+		return negativeCacheTTL(msg)
+	default:
+		return 0, false
+	}
+}
+
+// negativeCacheTTL 按 RFC 2308 取权威段 SOA 的 min(SOA TTL, MINIMUM)；没有 SOA 时不缓存，
+// 因为无法区分"暂时无记录"和"长期不存在"。
+func negativeCacheTTL(msg *dns.Msg) (int, bool) {
+	var ttl uint32
+	found := false
+	for _, rr := range msg.Ns {
+		soa, ok := rr.(*dns.SOA)
+		if !ok {
+			continue
+		}
+		t := min(soa.Hdr.Ttl, soa.Minttl)
+		if !found || t < ttl {
+			ttl = t
+			found = true
+		}
+	}
+	if !found || ttl == 0 {
+		return 0, false
+	}
+	if ttl > maxNegativeCacheTTL {
+		ttl = maxNegativeCacheTTL
+	}
+	return int(ttl), true
 }
 
 // 代理服务器自身域名返回 0（freecache 中表示永不过期），其余按应答中最小 TTL 限制在

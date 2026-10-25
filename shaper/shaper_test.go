@@ -1302,3 +1302,27 @@ func TestCloseFlushesEveryAllocatedSequence(t *testing.T) {
 		})
 	}
 }
+
+// 关闭后必须返回可区分的错误：调用方（如 UDPExchange.Send）不能把"帧被丢弃"
+// 当成发送成功。
+func TestClosedShaperRejectsFrames(t *testing.T) {
+	masterKey, err := easycrypto.DeriveMasterKey("closed-shaper-rejects-frames")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, err := easycrypto.NewStreamKeys(masterKey, []byte("1234567890123456"), "/v3/udp")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bs := New(newTestWriter(t, sk, &lockedBuffer{}), Config{})
+	if err := bs.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := bs.PushData([]byte("x")); !errors.Is(err, ErrClosed) {
+		t.Fatalf("PushData after Close = %v, want ErrClosed", err)
+	}
+	if err := bs.PushFrame(protocol.NewFrameDATAGRAM([]byte("x"))); !errors.Is(err, ErrClosed) {
+		t.Fatalf("PushFrame after Close = %v, want ErrClosed", err)
+	}
+}

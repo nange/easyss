@@ -786,15 +786,22 @@ func TestUDPAssociateConnDropsMalformedDatagram(t *testing.T) {
 	if _, err := sender.Write(fragmented); err != nil {
 		t.Fatalf("write fragmented datagram: %v", err)
 	}
+	valid, err := socks5.EncodeUDPPacket(socks5.ParseAddrString("127.0.0.1:53"), []byte("ok"))
+	if err != nil {
+		t.Fatalf("encode valid datagram: %v", err)
+	}
+	if _, err := sender.Write(valid); err != nil {
+		t.Fatalf("write valid datagram: %v", err)
+	}
 
 	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	buf := make([]byte, 64)
 	n, err := conn.Read(buf)
 	if err != nil {
-		t.Fatalf("Read after a malformed datagram = %v, want a 0-byte read", err)
+		t.Fatalf("Read after a malformed datagram = %v", err)
 	}
-	if n != 0 {
-		t.Errorf("Read = %d bytes, want 0 (the malformed datagram must be dropped)", n)
+	if got := string(buf[:n]); got != "ok" {
+		t.Fatalf("Read = %q, want the datagram following the malformed one", got)
 	}
 }
 

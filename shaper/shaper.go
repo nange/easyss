@@ -99,6 +99,28 @@ func (c Config) Normalize() Config {
 // budget 是这条记录可用的总空间（含帧头），≤0 按线上格式上限计算；
 // 超出 budget 或无需填充时返回 false。
 func BuildPaddingFrame(totalSize, budget int) (protocol.Frame, bool) {
+	frame, ok := newPaddingFrame(totalSize, budget)
+	if !ok {
+		return protocol.Frame{}, false
+	}
+	// 包级 RNG 只服务无法从 Shaper 拿到实例的调用方；高吞吐的 batchShaper 用自己的 RNG。
+	paddingRNGMu.Lock()
+	_, _ = paddingRNG.Read(frame.Payload)
+	paddingRNGMu.Unlock()
+	return frame, true
+}
+
+// buildPaddingFrame 用调用方传入的 RNG 填充；batchShaper 在 bs.mu 下调用，无需再加锁。
+func buildPaddingFrame(rng *rand.ChaCha8, totalSize, budget int) (protocol.Frame, bool) {
+	frame, ok := newPaddingFrame(totalSize, budget)
+	if !ok {
+		return protocol.Frame{}, false
+	}
+	_, _ = rng.Read(frame.Payload)
+	return frame, true
+}
+
+func newPaddingFrame(totalSize, budget int) (protocol.Frame, bool) {
 	if budget <= 0 || budget > protocol.MaxReadRecordPlaintext {
 		budget = protocol.MaxReadRecordPlaintext
 	}
@@ -111,12 +133,7 @@ func BuildPaddingFrame(totalSize, budget int) (protocol.Frame, bool) {
 	}
 
 	stats.RecordPaddingBytes(padSize)
-	frame := protocol.NewFramePADDING(uint16(padSize))
-	// math/rand/v2 的随机源不适合并发使用，包级 RNG 由互斥锁保护。
-	paddingRNGMu.Lock()
-	_, _ = paddingRNG.Read(frame.Payload)
-	paddingRNGMu.Unlock()
-	return frame, true
+	return protocol.NewFramePADDING(uint16(padSize)), true
 }
 
 func computePadPayloadSize(totalSize int) int {

@@ -188,13 +188,13 @@ func TestUDPProxyRelayCountsRawBytes(t *testing.T) {
 	reply := []byte("server-datagram-reply")
 
 	before := stats.Collect()
-	if err := srv.proxyUDPRelay(relay, target, first); err != nil {
+	if err := srv.proxyUDPRelay(relay, target, first, relay.datagramSource().String()); err != nil {
 		t.Fatalf("proxyUDPRelay(first): %v", err)
 	}
 	if _, ok := srv.udp.exchangeFor(relay.datagramSource().String() + "_" + target); !ok {
 		t.Fatal("exchange was not registered")
 	}
-	if err := srv.proxyUDPRelay(relay, target, follow); err != nil {
+	if err := srv.proxyUDPRelay(relay, target, follow, relay.datagramSource().String()); err != nil {
 		t.Fatalf("proxyUDPRelay(follow): %v", err)
 	}
 
@@ -225,7 +225,7 @@ func TestUDPProxyRelayTunnelsEachPayloadOnce(t *testing.T) {
 	target := "142.250.0.2:443"
 	payloads := [][]byte{[]byte("one"), []byte("two"), []byte("three")}
 	for _, p := range payloads {
-		if err := srv.proxyUDPRelay(relay, target, p); err != nil {
+		if err := srv.proxyUDPRelay(relay, target, p, relay.datagramSource().String()); err != nil {
 			t.Fatalf("proxyUDPRelay(%q): %v", p, err)
 		}
 	}

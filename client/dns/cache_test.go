@@ -137,6 +137,79 @@ func TestCache_Set_NonARecord(t *testing.T) {
 	}
 }
 
+func TestCache_SetNegativeResponse(t *testing.T) {
+	t.Parallel()
+
+	newSOA := func(ttl, minttl uint32) *dns.SOA {
+		rr, err := dns.NewRR("example.com. 600 IN SOA ns.example.com. host.example.com. 2024010101 3600 600 86400 60")
+		if err != nil {
+			t.Fatal(err)
+		}
+		soa := rr.(*dns.SOA)
+		soa.Hdr.Ttl = ttl
+		soa.Minttl = minttl
+		return soa
+	}
+	newMsg := func(rcode int) *dns.Msg {
+		msg := &dns.Msg{}
+		msg.SetQuestion("example.com.", dns.TypeA)
+		msg.Response = true
+		msg.Rcode = rcode
+		return msg
+	}
+
+	tests := []struct {
+		name    string
+		rcode   int
+		soa     *dns.SOA
+		wantTTL int
+		wantHit bool
+	}{
+		{"NODATA with SOA", dns.RcodeSuccess, newSOA(600, 60), 60, true},
+		{"NODATA without SOA", dns.RcodeSuccess, nil, 0, false},
+		{"NXDOMAIN with SOA", dns.RcodeNameError, newSOA(600, 120), 120, true},
+		{"NXDOMAIN without SOA", dns.RcodeNameError, nil, 0, false},
+		{"SERVFAIL with SOA", dns.RcodeServerFailure, newSOA(600, 60), 0, false},
+		{"NODATA SOA over cap", dns.RcodeSuccess, newSOA(86400, 86400), maxNegativeCacheTTL, true},
+		{"NODATA SOA minimum zero", dns.RcodeSuccess, newSOA(600, 0), 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			msg := newMsg(tt.rcode)
+			if tt.soa != nil {
+				msg.Ns = append(msg.Ns, tt.soa)
+			}
+			ttl, ok := cacheTTL(msg, "")
+			if ok != tt.wantHit {
+				t.Fatalf("cacheTTL ok = %v, want %v", ok, tt.wantHit)
+			}
+			if ok && ttl != tt.wantTTL {
+				t.Fatalf("cacheTTL = %d, want %d", ttl, tt.wantTTL)
+			}
+
+			c := NewCache("")
+			if err := c.Set(msg, false); err != nil {
+				t.Fatalf("Set: %v", err)
+			}
+			got := c.Get("example.com.", "A", false)
+			if !tt.wantHit {
+				if got != nil {
+					t.Fatalf("negative response was cached: %v", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("negative response was not cached")
+			}
+			if got.Rcode != tt.rcode {
+				t.Fatalf("cached Rcode = %d, want %d", got.Rcode, tt.rcode)
+			}
+		})
+	}
+}
+
 func TestCache_Get_UnpackError(t *testing.T) {
 	t.Parallel()
 

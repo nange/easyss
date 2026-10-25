@@ -6,12 +6,10 @@ import (
 	"github.com/miekg/dns"
 )
 
+// IsDNSRequest 报告 msg 是否为 DNS 查询，不限制 qtype：服务端按 QNAME 路由时必须识别
+// HTTPS/SVCB 等现代查询。只处理 A/AAAA 的缓存与学习路径应自行检查 Question[0].Qtype。
 func IsDNSRequest(msg *dns.Msg) bool {
-	if len(msg.Question) == 0 {
-		return false
-	}
-	q := msg.Question[0]
-	return (q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA) && !msg.Response
+	return msg != nil && len(msg.Question) > 0 && !msg.Response
 }
 
 func IsDNSResponse(msg *dns.Msg) bool {

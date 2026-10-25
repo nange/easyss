@@ -93,6 +93,15 @@ func (p *udpPool) exchangeFor(key string) (*UDPExchange, bool) {
 	return ue, ok
 }
 
+// exchangeCreation 是一次 singleflight 的创建结果。owner 用来区分"执行创建的回调"
+// 与共享结果的等待者：singleflight 的 shared 对执行者也可能为 true，不能拿它判断谁
+// 该启动 receiveLoop。
+type exchangeCreation struct {
+	ue      *UDPExchange
+	created bool
+	owner   *int
+}
+
 // acquireExchange 返回 key 对应的交换，不存在时用 firstPayload 创建（省去一次 RTT）。
 // created 为 true 时调用方不能再为第一个载荷调用 ue.Send。
 func (p *udpPool) acquireExchange(ctx context.Context, key, dst string, firstPayload []byte) (ue *UDPExchange, created bool, err error) {
@@ -100,17 +109,8 @@ func (p *udpPool) acquireExchange(ctx context.Context, key, dst string, firstPay
 		return existing, false, nil
 	}
 
-	var evicted *UDPExchange
-	p.mu.Lock()
-	if len(p.exchanges)+int(p.inflight.Load()) >= maxUDPExchanges {
-		evicted = p.evictOldestExchangeLocked()
-	}
-	p.mu.Unlock()
-	if evicted != nil {
-		evicted.Close() //nolint:errcheck
-	}
-
-	v, err, shared := p.exchangeSF.Do(key, func() (any, error) {
+	token := new(int)
+	v, err, _ := p.exchangeSF.Do(key, func() (any, error) {
 		p.inflight.Add(1)
 		defer p.inflight.Add(-1)
 
@@ -118,29 +118,48 @@ func (p *udpPool) acquireExchange(ctx context.Context, key, dst string, firstPay
 		if err != nil {
 			return nil, err
 		}
-		// 创建期间服务器已关闭：立即关闭，否则流及其 receiveLoop 会泄漏到关闭之后。
+
+		var evicted []*UDPExchange
+		p.mu.Lock()
+		// 与 close 的扫描同锁：closed 先置位、后扫描，这里看到 false 时登记的条目
+		// 一定会被那轮扫描回收。
 		if p.closed.Load() {
+			p.mu.Unlock()
 			ue.Close() //nolint:errcheck
 			return nil, errSocksServerClosed
 		}
-		return ue, nil
+		// 初始 exchangeFor 与 flight 之间可能已有别的调用者完成登记：不能覆盖，
+		// 否则被覆盖的交换既不在池里也没有读超时，流会泄漏。
+		if existing, ok := p.exchanges[key]; ok {
+			p.mu.Unlock()
+			ue.Close() //nolint:errcheck
+			return exchangeCreation{ue: existing, owner: token}, nil
+		}
+		// 容量检查与登记同锁，inflight 计入尚未登记的创建；被驱逐的交换在锁外关闭。
+		for len(p.exchanges)+int(p.inflight.Load()) > maxUDPExchanges {
+			old := p.evictOldestExchangeLocked()
+			if old == nil {
+				break
+			}
+			evicted = append(evicted, old)
+		}
+		p.exchanges[key] = ue
+		p.mu.Unlock()
+
+		for _, old := range evicted {
+			old.Close() //nolint:errcheck
+		}
+		return exchangeCreation{ue: ue, created: true, owner: token}, nil
 	})
 	if err != nil {
 		return nil, false, err
 	}
-	ue = v.(*UDPExchange)
+	result := v.(exchangeCreation)
 	if p.closed.Load() {
-		// 服务器在 flight 结束之后、交换登记之前被关闭。创建者拥有该交换并必须关闭它
-		// （它尚未在 map 中，close 的扫描回收不到）；等待者只报错。
-		if !shared {
-			ue.Close() //nolint:errcheck
-		}
+		// 登记成功的条目已由 close 的扫描回收；这里只报错，不再重复关闭。
 		return nil, false, errSocksServerClosed
 	}
-	p.mu.Lock()
-	p.exchanges[key] = ue
-	p.mu.Unlock()
-	return ue, !shared, nil
+	return result.ue, result.created && result.owner == token, nil
 }
 
 // removeExchange 在条目仍指向 ue 时删除并关闭它。必须校验身份：旧 receiveLoop 的 defer
