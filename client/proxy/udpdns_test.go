@@ -208,8 +208,8 @@ func newDNSProxyTestServer(t *testing.T) (*Socks5Server, *mockTransport, *net.UD
 }
 
 // TestProxyDNSQueriesShareOneTunnelExchange 守住同一个 socket、同一个解析器上的查询
-// （键是来源地址 + 应答目标，与域名无关）只开一条隧道流——这是服务端"一条会话里可能
-// 看到不同域名"的前提。
+// （键是来源地址 + 上游 + 应答目标，与域名无关）只开一条隧道流——这是服务端"一条会话
+// 里可能看到不同域名"的前提。
 func TestProxyDNSQueriesShareOneTunnelExchange(t *testing.T) {
 	srv, tr, clientAddr := newDNSProxyTestServer(t)
 

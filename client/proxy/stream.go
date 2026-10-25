@@ -244,8 +244,9 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, req streamRequest)
 		if attempt < bootstrapMaxAttempts {
 			log.Debug("[STREAM] bootstrap timed out, retrying on a new connection",
 				"attempt", attempt, "target", req.target, "err", lastErr)
-			// 按代失效已经保证下一次 Open 换连接；只有不支持它的传输层才退回全局回收，
-			// 那需要先等本流 RoundTrip 收敛，否则空闲扫描仍会漏掉正在死的连接。
+			// 按代失效已经保证下一次 Open 换连接；其余槽位的死连接由各自的判死/健康路径
+			// 回收，这里故意不再全局丢空闲连接。只有不支持按代失效的传输层才退回全局回收，
+			// 且必须先等本流 RoundTrip 收敛，否则空闲扫描会漏掉这条正在死的连接。
 			if !invalidated {
 				settleDeadStream(stream)
 				h.transport.CloseIdle()

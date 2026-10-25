@@ -98,7 +98,7 @@ Bootstrap 用 AES-256-GCM 加密初始握手帧（含目标地址与方法协商
 
 服务端 UDP 会话目标是解析器，但"直连还是走下一级代理"只有 QNAME 知道：目标是 53 端口的会话**推迟拨号**（`dnsSession=true` 时不拨，出站连接在第一条查询时建立）。DNS 部分集中在 `server/handler/udp_dns.go`，`udp.go` 只保留中继，两者只通过 `isDNSPort`/`observeDNSFrame`/`dialRoute` 交互；路由判定复用 next proxy（`routeForDomain` → `ShouldProxy`），`enable_udp=false` 时命中的域名退回直连。判定"是查询"不看 qtype（HTTPS/SVCB 等现代查询同样参与路由），A/AAAA 限制只用于缓存与答案学习；否则只发 HTTPS 记录的域名会绕过 next proxy。
 
-同一会话路由可能变化：客户端把同一 socket 的所有查询复用到同一条流（交换键是"来源地址 + 上游"，与域名无关），因此一条服务端会话可能先后承载两个域名。`rebindRoute` **先按新路由拨号，成功后才替换连接**（失败保留旧连接，同一帧只拨一次；`conn`/`connRoute` 在 `installUpstream` 同一临界区替换，`closeUpstream` 一起清空），并为新连接补一个读取 goroutine（连接作为参数传入），"一条连接一个 reader"是结构性保证；旧连接之后报出的错误不会误杀新连接。重绑失败进入 `rebindCooldown`（10s），窗口内复用旧连接，在飞查询由客户端重试。`[UDP_DNS]` 的 `via_next_proxy` 是实际出站路径（重绑失败另带 `route_changed`/`route_pending`）；首拨失败没有连接日志，QNAME 由错误包装带进结果日志，重绑失败的 Warn 自带 `domain`。`[UDP] upstream connected` 按路由分字段：代理地址记 `proxy`、直连对端记 `remote`，DNS 会话带 `domain`。DNS over TCP 无需单独处理：它到服务端就是一个 UDP 数据报（`tcpDNSSession.resolveProxy` 复用代理 UDP 交换）。ICMP 不受影响。
+同一会话路由可能变化：客户端把同一 socket 发往同一解析器的查询复用到同一条流（交换键是"来源地址 + 上游 + 应答目标"，与域名无关），因此一条服务端会话可能先后承载两个域名。`rebindRoute` **先按新路由拨号，成功后才替换连接**（失败保留旧连接，同一帧只拨一次；`conn`/`connRoute` 在 `installUpstream` 同一临界区替换，`closeUpstream` 一起清空），并为新连接补一个读取 goroutine（连接作为参数传入），"一条连接一个 reader"是结构性保证；旧连接之后报出的错误不会误杀新连接。重绑失败进入 `rebindCooldown`（10s），窗口内复用旧连接，在飞查询由客户端重试。`[UDP_DNS]` 的 `via_next_proxy` 是实际出站路径（重绑失败另带 `route_changed`/`route_pending`）；首拨失败没有连接日志，QNAME 由错误包装带进结果日志，重绑失败的 Warn 自带 `domain`。`[UDP] upstream connected` 按路由分字段：代理地址记 `proxy`、直连对端记 `remote`，DNS 会话带 `domain`。DNS over TCP 无需单独处理：它到服务端就是一个 UDP 数据报（`tcpDNSSession.resolveProxy` 复用代理 UDP 交换）。ICMP 不受影响。
 
 ### 17. DNS 拦截：判定与执行各一份，投递模型两份
 
