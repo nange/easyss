@@ -238,6 +238,64 @@ func TestCache_SetSkipsTruncatedPositiveAnswer(t *testing.T) {
 	}
 }
 
+func TestCache_CNAMEOnlyNODATAUsesSOATTL(t *testing.T) {
+	t.Parallel()
+
+	soaRR, err := dns.NewRR("baidu.com. 600 IN SOA ns.baidu.com. host.baidu.com. 2024010101 3600 600 86400 60")
+	if err != nil {
+		t.Fatal(err)
+	}
+	soa := soaRR.(*dns.SOA)
+	soa.Hdr.Ttl = 600
+	soa.Minttl = 60
+	cnameRR, err := dns.NewRR("www.baidu.com. 4335 IN CNAME www.a.shifen.com.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aRR, err := dns.NewRR("www.a.shifen.com. 60 IN A 1.2.3.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newMsg := func(answer ...dns.RR) *dns.Msg {
+		msg := &dns.Msg{}
+		msg.SetQuestion("www.baidu.com.", dns.TypeAAAA)
+		msg.Response = true
+		msg.Answer = answer
+		msg.Ns = []dns.RR{soa}
+		return msg
+	}
+
+	// 别名目标没有 AAAA：Answer 里只有 CNAME，必须按 SOA 做短否定缓存，
+	// 不能被 CNAME 的 4335s TTL 抬成正缓存。
+	msg := newMsg(cnameRR)
+	ttl, ok := cacheTTL(msg, "")
+	if !ok || ttl != 60 {
+		t.Fatalf("cacheTTL(CNAME-only NODATA) = %d, %v; want 60, true", ttl, ok)
+	}
+	c := NewCache("")
+	if err := c.Set(msg, false); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	got := c.Get("www.baidu.com.", "AAAA", false)
+	if got == nil {
+		t.Fatal("CNAME-only NODATA was not cached")
+	}
+	if hasAnswerType(got, dns.TypeAAAA) {
+		t.Fatal("cached NODATA unexpectedly contains an AAAA record")
+	}
+
+	// 同一 CNAME 后面真的跟着 AAAA 时仍走正缓存。
+	aaaaRR, err := dns.NewRR("www.a.shifen.com. 60 IN AAAA 2001:db8::1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ttl, ok = cacheTTL(newMsg(cnameRR, aRR, aaaaRR), "")
+	if !ok || ttl < minCacheTTL {
+		t.Fatalf("cacheTTL(CNAME + AAAA) = %d, %v; want a positive TTL", ttl, ok)
+	}
+}
+
 func TestCache_Get_UnpackError(t *testing.T) {
 	t.Parallel()
 

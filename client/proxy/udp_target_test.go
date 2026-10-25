@@ -9,6 +9,7 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/client/router"
+	"github.com/nange/easyss/v3/util"
 )
 
 // nbnsQName 把 NetBIOS 名字编码成 NBNS 查询里的 QNAME：15 字节名字（空格补齐）
@@ -87,7 +88,7 @@ func TestHandleUDPDNSInterceptionRequiresPort53(t *testing.T) {
 	if err := probe.Unpack(payload); err != nil {
 		t.Fatalf("unpack nbns payload: %v", err)
 	}
-	if !isDNSQueryMsg(probe) {
+	if !util.IsDNSRequest(probe) {
 		t.Fatal("nbns payload must parse as a dns query, otherwise this case proves nothing")
 	}
 	if got := dns.TypeToString[probe.Question[0].Qtype]; got != "NIMLOC" {

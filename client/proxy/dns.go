@@ -18,12 +18,6 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-// isDNSQueryMsg 报告 msg 是否为待拦截的 DNS 查询：任意 qtype、必须带 Question 且不是响应。
-// UDP 与 TCP 必须共用同一判定，否则同一域名的 MX/TXT 查询会在两条路径上分叉。
-func isDNSQueryMsg(msg *dns.Msg) bool {
-	return msg != nil && len(msg.Question) > 0 && !msg.Response
-}
-
 // clampDNSEDNS0 把查询宣告的 EDNS0 尺寸钳到隧道 UDP 数据报预算内，否则上游会发出超过服务端
 // 读缓冲的应答。返回 false 表示无需重新打包。
 func clampDNSEDNS0(msg *dns.Msg) bool {

@@ -45,7 +45,7 @@ func (s *Socks5Server) handleUDP(relay *udpRelay, d *socks5Frame, data []byte) e
 	// NBNS 查询在线格式里就是单标签、QTYPE=32，会被当成 DNS 经隧道送出，泄漏局域网主机名。
 	if port == "53" {
 		msg := &dns.Msg{}
-		if err := msg.Unpack(data); err == nil && isDNSQueryMsg(msg) {
+		if err := msg.Unpack(data); err == nil && util.IsDNSRequest(msg) {
 			return s.handleDNS(relay, d, msg, data, clientAddr, src)
 		}
 	}

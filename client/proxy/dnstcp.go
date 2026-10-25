@@ -11,6 +11,7 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/util"
 )
 
 // 长度字段是 uint16（上限 65535），这里再收紧一档以拒绝明显非 DNS 的畸形长度。
@@ -110,7 +111,7 @@ func (s *Socks5Server) handleTCPDNS(c net.Conn, target, host string) error {
 		log.Debug("[TCP_DNS] first message unreadable, fallback to relay", "target", target, "err", err)
 		return s.fallbackTCPDNS(c, br, consumed, target, host)
 	}
-	if !isDNSQueryMsg(first) {
+	if !util.IsDNSRequest(first) {
 		log.Debug("[TCP_DNS] first message is not a dns query, fallback to relay", "target", target)
 		return s.fallbackTCPDNS(c, br, consumed, target, host)
 	}
@@ -141,7 +142,7 @@ func (s *Socks5Server) handleTCPDNS(c net.Conn, target, host string) error {
 		if err != nil {
 			return nil
 		}
-		if !isDNSQueryMsg(msg) {
+		if !util.IsDNSRequest(msg) {
 			return nil
 		}
 	}

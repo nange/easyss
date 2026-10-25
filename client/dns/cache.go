@@ -92,6 +92,9 @@ func (c *Cache) Set(msg *dns.Msg, isDirect bool) error {
 
 // cacheTTL 返回写入缓存的秒数；ok=false 表示该应答不应进入缓存。
 func cacheTTL(msg *dns.Msg, serverDomain string) (int, bool) {
+	if len(msg.Question) == 0 {
+		return 0, false
+	}
 	// TC=1 的应答不完整，UDP 客户端会改走 TCP 重试；缓存它（尤其是其中的 SOA）会让
 	// 重试读到截断结果而不是完整应答。
 	if msg.Truncated {
@@ -99,8 +102,9 @@ func cacheTTL(msg *dns.Msg, serverDomain string) (int, bool) {
 	}
 	switch msg.Rcode {
 	case dns.RcodeSuccess:
-		// Answer 为空即 NODATA：没有可供正缓存使用的 TTL，按 SOA 做否定缓存。
-		if len(msg.Answer) == 0 {
+		// NODATA 的 Answer 可能只有 CNAME（别名目标没有所查类型），不能按 Answer 非空
+		// 走正缓存；只有出现与 Question 同类型的 RR 才算正应答。
+		if !hasAnswerType(msg, msg.Question[0].Qtype) {
 			return negativeCacheTTL(msg)
 		}
 		return jitterTTL(dnsCacheTTL(msg, serverDomain)), true
@@ -110,6 +114,15 @@ func cacheTTL(msg *dns.Msg, serverDomain string) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func hasAnswerType(msg *dns.Msg, qtype uint16) bool {
+	for _, rr := range msg.Answer {
+		if rr != nil && rr.Header() != nil && rr.Header().Rrtype == qtype {
+			return true
+		}
+	}
+	return false
 }
 
 // negativeCacheTTL 按 RFC 2308 取权威段 SOA 的 min(SOA TTL, MINIMUM)；没有 SOA 时不缓存，
