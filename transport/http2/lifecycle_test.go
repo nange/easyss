@@ -271,6 +271,28 @@ func TestProbeResultDroppedWhenConnectionChangesDuringProbe(t *testing.T) {
 	}
 }
 
+// 已知例外（服务端流上限时 net/http 在同一代再拨一条）同样只是换了连接身份：快判决不能记到
+// 新连接头上，否则可能用新连接的快清掉旧连接的嫌疑。
+func TestProbeResultDroppedWhenSecondConnDialedIntoGeneration(t *testing.T) {
+	lc, sch := newTestLifecycle(1, nil)
+	s := sch.priority.slots[0]
+	lc.probeFunc = func(context.Context, *transportSlot) (float64, probeVerdict) {
+		// 代不变，只把同一代的连接身份换成新拨的那条（ErrNoCachedConn 路径）。
+		attachConn(s, &countingConn{})
+		return 10 * 1024 * 1024, probeFast
+	}
+	s.suspected = true
+	s.probeBackoff = 2
+
+	lc.evaluateProbes(true)
+
+	if s.suspected || s.probeBackoff != 0 || s.probeConn != nil ||
+		!s.probeHoldUntil.IsZero() || !s.lastProbeAt.IsZero() {
+		t.Fatalf("verdict applied across a same-generation dial: suspected=%v backoff=%d hold=%v lastProbe=%v",
+			s.suspected, s.probeBackoff, s.probeHoldUntil, s.lastProbeAt)
+	}
+}
+
 // 探测判定连接无责后，被动低速在静默期内不得再次起疑：慢源站会稳定复现，否则同一槽位会按
 // ProbeCooldown 的节拍无限重探。
 func TestProbeHoldOffResuspicion(t *testing.T) {
