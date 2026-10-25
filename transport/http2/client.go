@@ -121,10 +121,9 @@ func New(cfg Config) (transport.Transport, error) {
 	var liveness func(ctx context.Context, gen *slotTransport) (alive, ok bool)
 	if cfg.ProbeToken != "" {
 		prober := &slotProber{
-			serverURL:   cfg.ServerURL,
-			token:       cfg.ProbeToken,
-			payloadSize: int64(config.ProbePayloadSize),
-			slowRTT:     slowRTT,
+			serverURL: cfg.ServerURL,
+			token:     cfg.ProbeToken,
+			slowRTT:   slowRTT,
 		}
 		lc.probeFunc = prober.probe
 		// 同一端点也用于判活：HEAD 只花一个 RTT。

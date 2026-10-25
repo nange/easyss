@@ -53,7 +53,7 @@ func TestProbeRTTCountsRequestToFirstBodyByte(t *testing.T) {
 	slot := probeSlotWithPool(tr)
 
 	stats.ResetCounters()
-	prober := &slotProber{serverURL: ts.URL, token: token, payloadSize: testProbePayloadSize}
+	prober := &slotProber{serverURL: ts.URL, token: token}
 	speed, verdict := prober.probe(t.Context(), slot)
 	if verdict != probeFast {
 		t.Fatalf("verdict = %v, want probeFast (speed=%v)", verdict, speed)

@@ -44,7 +44,7 @@ Bootstrap 用 AES-256-GCM 加密初始握手帧（含目标地址与方法协商
 
 ### 5. 端点
 
-`POST /v3/tcp`、`/v3/udp`、`/v3/icmp`（强制 HTTP/2），其余路径返回 fallback HTML（允许 HTTP/1.1）。`GET /v3/probe` 返回启动时预生成的随机数据，需 `x-es` 能力令牌（master key 派生），供客户端探测 slot 连接的真实下载速度。
+`POST /v3/tcp`、`/v3/udp`、`/v3/icmp`（强制 HTTP/2），其余路径返回 fallback HTML（允许 HTTP/1.1）。`GET /v3/probe` 返回启动时预生成的随机数据，需 `x-es` 能力令牌（master key 派生），供客户端探测 slot 连接的真实下载速度。载荷长度由服务端单独决定（默认 128KB，按「载荷/降级阈值 ≈ 1.6s ≪ 探测超时」定尺寸），客户端只校验长度落在合理范围并按响应声明的长度计量，因此调整尺寸不需要客户端同步发版。
 
 ### 6. 服务端与证书
 

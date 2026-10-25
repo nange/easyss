@@ -19,7 +19,7 @@ const (
 	probeFast
 	// probeSlow：探测超时内没有字节到达、服务端提前截断载荷，或响应体吞吐量低于降级阈值。
 	probeSlow
-	// probeUnsupported：服务端返回 200 但不是探测载荷，即不提供 /v3/probe。
+	// probeUnsupported：服务端返回 200 但不是探测载荷：不提供 /v3/probe，或长度越界。
 	probeUnsupported
 )
 
@@ -27,12 +27,18 @@ const (
 // 荒谬的大数。
 const maxProbeSpeed = 1 << 30 // 1GB/s
 
+const (
+	// 载荷长度由服务端决定，客户端只校验范围而不锁定具体值，调整 ProbePayloadSize 因此
+	// 不需要客户端同步发版；越界视为不是载荷（回落到 octet-stream 的其他响应）。
+	probeMinBodySize = 1 << 10 // 1KB
+	probeMaxBodySize = 1 << 20 // 1MB
+)
+
 // slotProber 下载服务端预生成的随机载荷测量吞吐量。MaxConnsPerHost=1 把池固定在那一条
 // 连接上，因此探测字节恰好经过被测连接。
 type slotProber struct {
-	serverURL   string
-	token       string
-	payloadSize int64
+	serverURL string
+	token     string
 	// slowRTT 是所属传输层的慢路径 RTT 日志限流器，nil 表示不限流。
 	slowRTT *slowRTTLogLimiter
 }
@@ -102,7 +108,8 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 	if resp.StatusCode != http.StatusOK {
 		return 0, probeInconclusive
 	}
-	if resp.ContentLength != p.payloadSize ||
+	want := resp.ContentLength
+	if want < probeMinBodySize || want > probeMaxBodySize ||
 		resp.Header.Get("Content-Type") != "application/octet-stream" {
 		// 200 但不是探测载荷（例如回落到 fallback HTML 页面）。
 		return 0, probeUnsupported
@@ -135,7 +142,7 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 		}
 	}
 
-	if total < p.payloadSize && probeCtx.Err() == nil {
+	if total < want && probeCtx.Err() == nil {
 		// 服务端提前结束这条流（截断/RST）：按已到达字节算出的吞吐不可比，一律记慢。
 		return 0, probeSlow
 	}

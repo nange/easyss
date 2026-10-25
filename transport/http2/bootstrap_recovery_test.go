@@ -76,8 +76,8 @@ func TestHTTP2Stream_AwaitResponse(t *testing.T) {
 // "拿到任何响应"即活，只有不可往返才判死；没有探测令牌时报告"无法判定"。
 func TestHTTP2Stream_ConnAlive(t *testing.T) {
 	t.Run("probe payload counts as alive", func(t *testing.T) {
-		ts, token := newProbeServer(t)
-		prober := &slotProber{serverURL: ts.URL, token: token, payloadSize: testProbePayloadSize}
+		ts, token := newProbeServer(t, testProbePayloadSize)
+		prober := &slotProber{serverURL: ts.URL, token: token}
 		s := livenessStream(newProbeSlot(), prober.alive)
 
 		alive, ok := s.ConnAlive(context.Background())
@@ -91,7 +91,7 @@ func TestHTTP2Stream_ConnAlive(t *testing.T) {
 			http.Error(w, "rate limited", http.StatusTooManyRequests)
 		}))
 		t.Cleanup(ts.Close)
-		prober := &slotProber{serverURL: ts.URL, token: "unused", payloadSize: testProbePayloadSize}
+		prober := &slotProber{serverURL: ts.URL, token: "unused"}
 		s := livenessStream(newProbeSlot(), prober.alive)
 
 		alive, ok := s.ConnAlive(context.Background())
@@ -106,7 +106,7 @@ func TestHTTP2Stream_ConnAlive(t *testing.T) {
 			_, _ = w.Write([]byte("<html><body>fallback</body></html>"))
 		}))
 		t.Cleanup(ts.Close)
-		prober := &slotProber{serverURL: ts.URL, token: "unused", payloadSize: testProbePayloadSize}
+		prober := &slotProber{serverURL: ts.URL, token: "unused"}
 		s := livenessStream(newProbeSlot(), prober.alive)
 
 		alive, ok := s.ConnAlive(context.Background())
@@ -116,10 +116,10 @@ func TestHTTP2Stream_ConnAlive(t *testing.T) {
 	})
 
 	t.Run("unreachable server is dead", func(t *testing.T) {
-		ts, token := newProbeServer(t)
+		ts, token := newProbeServer(t, testProbePayloadSize)
 		deadURL := ts.URL
 		ts.Close()
-		prober := &slotProber{serverURL: deadURL, token: token, payloadSize: testProbePayloadSize}
+		prober := &slotProber{serverURL: deadURL, token: token}
 		s := livenessStream(newProbeSlot(), prober.alive)
 
 		alive, ok := s.ConnAlive(context.Background())
@@ -137,7 +137,7 @@ func TestHTTP2Stream_ConnAlive(t *testing.T) {
 			close(release)
 			ts.Close()
 		})
-		prober := &slotProber{serverURL: ts.URL, token: "unused", payloadSize: testProbePayloadSize}
+		prober := &slotProber{serverURL: ts.URL, token: "unused"}
 		s := livenessStream(newProbeSlot(), prober.alive)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -162,7 +162,7 @@ func TestHTTP2Stream_ConnAlive(t *testing.T) {
 	t.Run("stream not submitted yet cannot judge", func(t *testing.T) {
 		// 流还没提交到任何一代池上，没有对象可探测，只能如实报告"无法判定"。
 		slot := newProbeSlot()
-		prober := &slotProber{serverURL: "https://127.0.0.1:1", token: "unused", payloadSize: testProbePayloadSize}
+		prober := &slotProber{serverURL: "https://127.0.0.1:1", token: "unused"}
 		s := &http2Stream{slot: slot, liveness: prober.alive}
 		if alive, ok := s.ConnAlive(context.Background()); ok || alive {
 			t.Fatalf("ConnAlive = (%v, %v), want (false, false) before the request is submitted", alive, ok)

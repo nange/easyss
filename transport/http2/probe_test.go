@@ -19,8 +19,8 @@ import (
 
 const testProbePayloadSize = 4096
 
-// newProbeServer 启动一个提供探测端点的真实 TLS 服务器。
-func newProbeServer(t *testing.T) (*httptest.Server, string) {
+// newProbeServer 启动一个提供探测端点的真实 TLS 服务器，载荷长度由调用方指定。
+func newProbeServer(t *testing.T, payloadSize int) (*httptest.Server, string) {
 	t.Helper()
 	masterKey, err := crypto.DeriveMasterKey("test-password")
 	if err != nil {
@@ -30,7 +30,7 @@ func newProbeServer(t *testing.T) (*httptest.Server, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := make([]byte, testProbePayloadSize)
+	payload := make([]byte, payloadSize)
 	for i := range payload {
 		payload[i] = byte(i)
 	}
@@ -58,8 +58,8 @@ func newProbeSlot() *transportSlot {
 }
 
 func TestSlotProberFast(t *testing.T) {
-	ts, token := newProbeServer(t)
-	prober := &slotProber{serverURL: ts.URL, token: token, payloadSize: testProbePayloadSize}
+	ts, token := newProbeServer(t, testProbePayloadSize)
+	prober := &slotProber{serverURL: ts.URL, token: token}
 
 	stats.ResetCounters()
 	speed, verdict := prober.probe(context.Background(), newProbeSlot())
@@ -77,6 +77,37 @@ func TestSlotProberFast(t *testing.T) {
 	}
 }
 
+// 载荷长度是服务端侧的可调参数：客户端接受服务端声明的任意合理长度，否则调整
+// ProbePayloadSize 会让旧客户端把探测判成 unsupported 并永久退回被动检测。
+func TestSlotProberAcceptsAnyServerPayloadSize(t *testing.T) {
+	for _, size := range []int{1024, 64 * 1024, config.ProbePayloadSize} {
+		ts, token := newProbeServer(t, size)
+		prober := &slotProber{serverURL: ts.URL, token: token}
+
+		if _, verdict := prober.probe(context.Background(), newProbeSlot()); verdict != probeFast {
+			t.Fatalf("payload size %d: verdict = %v, want probeFast", size, verdict)
+		}
+	}
+}
+
+// 长度越界的 octet-stream 响应不能当成探测载荷，否则凭 200 + 空体就能换到"快"的结论。
+func TestSlotProberUnsupportedOnImplausibleSize(t *testing.T) {
+	for _, size := range []int{probeMinBodySize - 1, probeMaxBodySize + 1} {
+		ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set("Content-Length", strconv.Itoa(size))
+			w.WriteHeader(http.StatusOK)
+			_ = http.NewResponseController(w).Flush()
+		}))
+		t.Cleanup(ts.Close)
+		prober := &slotProber{serverURL: ts.URL, token: "unused"}
+
+		if _, verdict := prober.probe(context.Background(), newProbeSlot()); verdict != probeUnsupported {
+			t.Fatalf("declared size %d: verdict = %v, want probeUnsupported", size, verdict)
+		}
+	}
+}
+
 func TestSlotProberSlowOnEmptyBody(t *testing.T) {
 	// 探测超时内不投递任何内容的 200 octet-stream 响应计为慢速证据。
 	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +117,7 @@ func TestSlotProberSlowOnEmptyBody(t *testing.T) {
 		_ = http.NewResponseController(w).Flush()
 	}))
 	t.Cleanup(ts.Close)
-	prober := &slotProber{serverURL: ts.URL, token: "unused", payloadSize: testProbePayloadSize}
+	prober := &slotProber{serverURL: ts.URL, token: "unused"}
 
 	speed, verdict := prober.probe(context.Background(), newProbeSlot())
 
@@ -111,7 +142,7 @@ func TestSlotProberTruncatedPayloadIsSlow(t *testing.T) {
 	ts.EnableHTTP2 = true
 	ts.StartTLS()
 	t.Cleanup(ts.Close)
-	prober := &slotProber{serverURL: ts.URL, token: "unused", payloadSize: testProbePayloadSize}
+	prober := &slotProber{serverURL: ts.URL, token: "unused"}
 
 	speed, verdict := prober.probe(context.Background(), newProbeSlot())
 
@@ -141,7 +172,7 @@ func TestSlotProberTimeoutUsesDeliveredRate(t *testing.T) {
 	ts.EnableHTTP2 = true
 	ts.StartTLS()
 	t.Cleanup(ts.Close)
-	prober := &slotProber{serverURL: ts.URL, token: "unused", payloadSize: payloadSize}
+	prober := &slotProber{serverURL: ts.URL, token: "unused"}
 	slot := newProbeSlot()
 
 	if _, verdict := prober.probe(context.Background(), slot); verdict != probeFast {
@@ -166,7 +197,7 @@ func TestSlotProberUnsupportedOnHTML(t *testing.T) {
 		_, _ = w.Write([]byte("<html><body>fallback</body></html>"))
 	}))
 	t.Cleanup(ts.Close)
-	prober := &slotProber{serverURL: ts.URL, token: "unused", payloadSize: testProbePayloadSize}
+	prober := &slotProber{serverURL: ts.URL, token: "unused"}
 
 	_, verdict := prober.probe(context.Background(), newProbeSlot())
 
@@ -180,7 +211,7 @@ func TestSlotProberInconclusiveOnErrorStatus(t *testing.T) {
 		http.Error(w, "rate limited", http.StatusTooManyRequests)
 	}))
 	t.Cleanup(ts.Close)
-	prober := &slotProber{serverURL: ts.URL, token: "unused", payloadSize: testProbePayloadSize}
+	prober := &slotProber{serverURL: ts.URL, token: "unused"}
 
 	_, verdict := prober.probe(context.Background(), newProbeSlot())
 
@@ -190,11 +221,11 @@ func TestSlotProberInconclusiveOnErrorStatus(t *testing.T) {
 }
 
 func TestSlotProberInconclusiveOnDialError(t *testing.T) {
-	ts, _ := newProbeServer(t)
+	ts, _ := newProbeServer(t, testProbePayloadSize)
 	deadURL := ts.URL
 	ts.Close() // 从此连接被拒绝
 
-	prober := &slotProber{serverURL: deadURL, token: "unused", payloadSize: testProbePayloadSize}
+	prober := &slotProber{serverURL: deadURL, token: "unused"}
 
 	_, verdict := prober.probe(context.Background(), newProbeSlot())
 
@@ -206,8 +237,8 @@ func TestSlotProberInconclusiveOnDialError(t *testing.T) {
 // TestSlotProberWithoutConnectionCannotJudge 是 alive 那条不变量的另一半：这一代没有连接时
 // 吞吐探测同样不得白拨一条，否则结论属于另一条连接。
 func TestSlotProberWithoutConnectionCannotJudge(t *testing.T) {
-	ts, token := newProbeServer(t)
-	prober := &slotProber{serverURL: ts.URL, token: token, payloadSize: testProbePayloadSize}
+	ts, token := newProbeServer(t, testProbePayloadSize)
+	prober := &slotProber{serverURL: ts.URL, token: token}
 
 	var dials atomic.Int32
 	s := slotWithPool(&http.Transport{
@@ -233,8 +264,8 @@ func TestSlotProberWithoutConnectionCannotJudge(t *testing.T) {
 // 一代的连接已被关闭或回收时必须报"无法判定"，不能白拨一条新连接——那会给出
 // 关于另一条连接的 alive 结论，还会在无人引用的池里滞留到空闲超时。
 func TestSlotProberAliveWithoutConnectionCannotJudge(t *testing.T) {
-	ts, token := newProbeServer(t)
-	prober := &slotProber{serverURL: ts.URL, token: token, payloadSize: testProbePayloadSize}
+	ts, token := newProbeServer(t, testProbePayloadSize)
+	prober := &slotProber{serverURL: ts.URL, token: token}
 
 	var dials atomic.Int32
 	gen := &slotTransport{tr: &http.Transport{
@@ -265,8 +296,8 @@ func TestSlotProberAliveWithoutConnectionCannotJudge(t *testing.T) {
 // 判活只能相信被探测的那条连接：这一代的连接已不可用时，net/http 会让同一张池再拨一条
 // （ErrNoCachedConn 路径，MaxConnsPerHost=1 挡不住），HEAD 由新连接应答时必须报"不通"。
 func TestSlotProberAliveRejectsResponseFromAnotherConnection(t *testing.T) {
-	ts, token := newProbeServer(t)
-	prober := &slotProber{serverURL: ts.URL, token: token, payloadSize: testProbePayloadSize}
+	ts, token := newProbeServer(t, testProbePayloadSize)
+	prober := &slotProber{serverURL: ts.URL, token: token}
 
 	var dials atomic.Int32
 	gen := &slotTransport{}
