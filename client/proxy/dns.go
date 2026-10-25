@@ -102,7 +102,7 @@ func (d *dnsInterceptor) plan(msg *dns.Msg) dnsPlan {
 	}
 
 	// IPv6 已禁用时 AAAA 没有可返回的记录：直接给 NODATA，省掉一次没有意义的上游/隧道查询。
-	if q.Qtype == dns.TypeAAAA && d.router != nil && d.router.ShouldIPV6Disable() {
+	if q.Qtype == dns.TypeAAAA && d.router.ShouldIPV6Disable() {
 		plan.action = dnsActionEmpty
 		return plan
 	}
