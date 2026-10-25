@@ -108,8 +108,10 @@ type outboundDeps struct {
 const defaultDialAttemptMinBudget = 2 * time.Second
 
 func defaultOutboundDeps() *outboundDeps {
+	// 一个 handler 一个缓存实例：握手期校验与拨号共用，同一主机的重复解析只付一次。
+	cache := newResolveCache(util.ResolveHostIPs)
 	return &outboundDeps{
-		resolve: util.ResolveHostIPs,
+		resolve: cache.lookup,
 		attempt: func(d *net.Dialer, ctx context.Context, network, addr string) (net.Conn, error) {
 			return d.DialContext(ctx, network, addr)
 		},
