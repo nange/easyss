@@ -86,13 +86,29 @@ func (c *resolveCache) store(key string, addrs []netip.Addr) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.entries) >= c.max {
-		// 满了随机淘汰一条：这里只要内存有界，不值得为命中率引入 LRU。
-		for k := range c.entries {
-			delete(c.entries, k)
-			break
-		}
+		c.evictLocked()
 	}
 	c.entries[key] = resolveEntry{addrs: addrs, expires: time.Now().Add(c.ttl)}
+}
+
+// evictLocked 先清掉过期条目，仍满时淘汰最早到期的一条：过期结果不该把还能用的挤掉，
+// 也不需要为命中率引入 LRU 或后台清扫 goroutine。
+func (c *resolveCache) evictLocked() {
+	now := time.Now()
+	var oldestKey string
+	var oldest time.Time
+	for k, entry := range c.entries {
+		if now.After(entry.expires) {
+			delete(c.entries, k)
+			continue
+		}
+		if oldestKey == "" || entry.expires.Before(oldest) {
+			oldestKey, oldest = k, entry.expires
+		}
+	}
+	if len(c.entries) >= c.max && oldestKey != "" {
+		delete(c.entries, oldestKey)
+	}
 }
 
 // 字面 IP 不进缓存：它没有解析成本，而且 TUN 模式下目标多是 IP，会把域名条目挤掉。

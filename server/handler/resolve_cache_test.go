@@ -160,6 +160,65 @@ func TestResolveCacheBoundsEntries(t *testing.T) {
 	}
 }
 
+// TestResolveCacheEvictsExpiredFirst 固定容量满时先清过期条目：过期的解析结果不该把
+// 仍在生效的条目挤掉。
+func TestResolveCacheEvictsExpiredFirst(t *testing.T) {
+	t.Parallel()
+
+	c := newTestResolveCache(func(context.Context, string) ([]netip.Addr, error) {
+		return nil, errors.New("unexpected resolve")
+	})
+	c.max = 2
+	past := time.Now().Add(-time.Minute)
+	c.mu.Lock()
+	c.entries["a.example.com"] = resolveEntry{expires: past}
+	c.entries["b.example.com"] = resolveEntry{expires: past}
+	c.mu.Unlock()
+
+	c.store("c.example.com", []netip.Addr{netip.MustParseAddr("1.1.1.1")})
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.entries) != 1 {
+		t.Fatalf("entries = %d, want 1 (expired entries purged)", len(c.entries))
+	}
+	if _, ok := c.entries["c.example.com"]; !ok {
+		t.Error("new entry was not stored")
+	}
+}
+
+// TestResolveCacheEvictsSoonestExpiring 固定无过期条目时淘汰最早到期的一条：满容量下
+// 先放弃最没有价值的结果，而不是随机删掉一个还在生效的。
+func TestResolveCacheEvictsSoonestExpiring(t *testing.T) {
+	t.Parallel()
+
+	c := newTestResolveCache(func(context.Context, string) ([]netip.Addr, error) {
+		return nil, errors.New("unexpected resolve")
+	})
+	c.max = 2
+	now := time.Now()
+	c.mu.Lock()
+	c.entries["a.example.com"] = resolveEntry{expires: now.Add(time.Minute)}
+	c.entries["b.example.com"] = resolveEntry{expires: now.Add(2 * time.Minute)}
+	c.mu.Unlock()
+
+	c.store("c.example.com", []netip.Addr{netip.MustParseAddr("1.1.1.1")})
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.entries) != 2 {
+		t.Fatalf("entries = %d, want 2", len(c.entries))
+	}
+	if _, ok := c.entries["a.example.com"]; ok {
+		t.Error("the soonest-expiring entry must be evicted")
+	}
+	for _, key := range []string{"b.example.com", "c.example.com"} {
+		if _, ok := c.entries[key]; !ok {
+			t.Errorf("entry %q was evicted", key)
+		}
+	}
+}
+
 func TestResolveCacheKey(t *testing.T) {
 	t.Parallel()
 
