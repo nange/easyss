@@ -133,8 +133,9 @@ func (s *transportSlot) takeConn(gen *slotTransport, expect *slotConn) *slotConn
 	return expect
 }
 
-// retireGeneration 让一代作废：它的连接已关闭（net/http 回收时经 trackedConn.Close 调用）。
-// 只有赢得连接身份 CAS 的调用者会执行，因此同一条连接不会作废两代。
+// retireGeneration 让一代作废：它的连接正在关闭（net/http 回收时经 trackedConn.Close 调用，
+// 换代先于实际关闭，使 close_notify 阻塞期间迟到的拨号看不到旧身份）。只有赢得连接身份 CAS
+// 的调用者会执行，因此同一条连接不会作废两代。
 func (s *transportSlot) retireGeneration(gen *slotTransport, conn *slotConn) {
 	if s.takeConn(gen, conn) != nil {
 		s.advanceGeneration(gen)

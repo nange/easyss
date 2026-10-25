@@ -261,3 +261,36 @@ func TestSlotProberAliveWithoutConnectionCannotJudge(t *testing.T) {
 		t.Fatalf("alive = (%v, %v), want (false, false) without a generation", alive, ok)
 	}
 }
+
+// 判活只能相信被探测的那条连接：这一代的连接已不可用时，net/http 会让同一张池再拨一条
+// （ErrNoCachedConn 路径，MaxConnsPerHost=1 挡不住），HEAD 由新连接应答时必须报"不通"。
+func TestSlotProberAliveRejectsResponseFromAnotherConnection(t *testing.T) {
+	ts, token := newProbeServer(t)
+	prober := &slotProber{serverURL: ts.URL, token: token, payloadSize: testProbePayloadSize}
+
+	var dials atomic.Int32
+	gen := &slotTransport{}
+	gen.tr = &http.Transport{
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // 测试服务器证书
+		ForceAttemptHTTP2: true,
+		MaxConnsPerHost:   1,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dials.Add(1)
+			c, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+			if err == nil {
+				// 生产里 DialTLSContext 会登记新连接的身份：这里模拟同一代被换上了另一条连接。
+				gen.conn.Store(&slotConn{c: c})
+			}
+			return c, err
+		},
+	}
+	gen.conn.Store(&slotConn{c: &countingConn{}})
+
+	alive, ok := prober.alive(context.Background(), gen)
+	if !ok || alive {
+		t.Fatalf("alive = (%v, %v), want (false, true) when another connection answered", alive, ok)
+	}
+	if got := dials.Load(); got != 1 {
+		t.Fatalf("dials = %d, want 1", got)
+	}
+}
