@@ -32,7 +32,7 @@ func (s *mockStream) CloseWrite() error { return nil }
 func (s *mockStream) Close() error      { return nil }
 
 // awaitableStream 实现 ResponseAwaiter/ConnLiveness/ConnInvalidator 三个可选接口，
-// 用来驱动引导状态机：判死重试、判活后继续等、以及"失效连接先于关闭流"的顺序。
+// 用来驱动引导状态机：判死重试、判活后继续等、以及取消时不失效连接。
 type awaitableStream struct {
 	mockStream
 
@@ -95,7 +95,7 @@ var (
 func alwaysDeadline(context.Context) error { return context.DeadlineExceeded }
 
 // TestOpenAndBootstrap_DeadlineRetriesOnFreshConnection 验证判死重试：窗口到点且无法
-// 判活时，失效并关闭本流所在连接、丢弃其余空闲连接，再在新连接上重试。
+// 判活时，按代失效并关闭本流所在连接，直接在新连接上重试，不再动全局空闲连接。
 func TestOpenAndBootstrap_DeadlineRetriesOnFreshConnection(t *testing.T) {
 	first := &awaitableStream{await: alwaysDeadline}
 	second := &awaitableStream{}
@@ -111,11 +111,12 @@ func TestOpenAndBootstrap_DeadlineRetriesOnFreshConnection(t *testing.T) {
 	if tr.openCalls() != 2 {
 		t.Errorf("expected 2 Open calls, got %d", tr.openCalls())
 	}
-	if _, alive, invalidates, closes := first.counters(); invalidates != 1 || closes != 1 || alive != 1 {
-		t.Errorf("first stream: invalidates=%d closes=%d alive=%d, want 1/1/1 (probed then judged dead)", invalidates, closes, alive)
+	if await, alive, invalidates, closes := first.counters(); await != 1 || alive != 1 || invalidates != 1 || closes != 1 {
+		t.Errorf("first stream: await=%d alive=%d invalidates=%d closes=%d, want 1/1/1/1 (no settle wait with per-generation invalidation)",
+			await, alive, invalidates, closes)
 	}
-	if tr.closeIdleCalls() != 1 {
-		t.Errorf("expected 1 CloseIdle call after judging the connection dead, got %d", tr.closeIdleCalls())
+	if got := tr.closeIdleCalls(); got != 0 {
+		t.Errorf("CloseIdle calls = %d, want 0 (per-generation invalidation is enough)", got)
 	}
 }
 
@@ -166,7 +167,7 @@ func TestOpenAndBootstrap_TransportErrorRetriesImmediately(t *testing.T) {
 }
 
 // TestOpenAndBootstrap_ExhaustedAttemptsReportError 验证次数耗尽后把最后一次失败交给
-// 应用，且每次放弃都丢弃其余空闲连接——否则后续请求会逐个再踩一遍旧网络的死连接。
+// 应用，且每次判死都按代失效——否则后续请求会逐个再踩一遍旧网络的死连接。
 func TestOpenAndBootstrap_ExhaustedAttemptsReportError(t *testing.T) {
 	streams := make([]transport.Stream, 0, bootstrapMaxAttempts)
 	for range bootstrapMaxAttempts {
@@ -185,13 +186,19 @@ func TestOpenAndBootstrap_ExhaustedAttemptsReportError(t *testing.T) {
 	if tr.openCalls() != bootstrapMaxAttempts {
 		t.Errorf("expected %d Open calls, got %d", bootstrapMaxAttempts, tr.openCalls())
 	}
-	if got, want := tr.closeIdleCalls(), bootstrapMaxAttempts-1; got != want {
-		t.Errorf("CloseIdle calls = %d, want %d (one per retry)", got, want)
+	if got := tr.closeIdleCalls(); got != 0 {
+		t.Errorf("CloseIdle calls = %d, want 0 (per-generation invalidation is enough)", got)
+	}
+	for i, stream := range streams {
+		first := stream.(*awaitableStream)
+		if _, _, invalidates, _ := first.counters(); invalidates != 1 {
+			t.Errorf("stream %d invalidates = %d, want 1", i, invalidates)
+		}
 	}
 }
 
-// TestOpenAndBootstrap_ContextCanceledNoRetry 验证上层取消（核心停止、本地连接已断）
-// 时立即上报 ctx 错误，不重试也不丢弃连接池。
+// TestOpenAndBootstrap_ContextCanceledNoRetry 验证上层取消时立即上报 ctx 错误，
+// 不重试也不丢弃连接池。
 func TestOpenAndBootstrap_ContextCanceledNoRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	first := &awaitableStream{await: func(context.Context) error {
@@ -238,23 +245,35 @@ func TestOpenAndBootstrap_ResponseReadyNoRetry(t *testing.T) {
 	}
 }
 
-// TestOpenAndBootstrap_SettlesBeforeDroppingIdleConnections 验证判死路径的顺序：
-// 失效连接 → 关闭流 → 等本流 RoundTrip 收敛 → CloseIdle()。CloseIdle 提前会漏掉这条
-// 仍被在飞流占用的连接，重试的 Open 再次拿到它，白费一次尝试。
-func TestOpenAndBootstrap_SettlesBeforeDroppingIdleConnections(t *testing.T) {
-	settledAfterClose := false
-	first := &awaitableStream{}
-	first.await = func(context.Context) error {
-		if _, _, _, closes := first.counters(); closes == 1 {
-			settledAfterClose = true
-		}
-		return context.DeadlineExceeded
-	}
+// awaiterStream 只实现 ResponseAwaiter：没有按代失效能力时，判死重试必须退回
+// "等本流收敛 → 全局 CloseIdle" 的老路径，否则重试可能再次拿到正在死的连接。
+type awaiterStream struct {
+	mockStream
+
+	mu         sync.Mutex
+	awaitCalls int
+}
+
+func (s *awaiterStream) AwaitResponse(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.awaitCalls++
+	return context.DeadlineExceeded
+}
+
+func (s *awaiterStream) awaits() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.awaitCalls
+}
+
+func TestOpenAndBootstrap_FallsBackToCloseIdleWithoutInvalidator(t *testing.T) {
+	first := &awaiterStream{}
 	second := &awaitableStream{}
 	tr := &mockTransport{streams: []transport.Stream{first, second}}
 	tr.onCloseIdle = func() {
-		if await, _, _, _ := first.counters(); await < 2 {
-			t.Error("CloseIdle must run after the dead stream settled")
+		if got := first.awaits(); got < 2 {
+			t.Errorf("CloseIdle ran before the dead stream settled (awaits=%d)", got)
 		}
 	}
 	h := newTestStreamHandler(tr)
@@ -265,11 +284,11 @@ func TestOpenAndBootstrap_SettlesBeforeDroppingIdleConnections(t *testing.T) {
 	}
 	defer bs.stream.Close() //nolint:errcheck
 
-	if !settledAfterClose {
-		t.Error("the dead stream must be closed before the settle wait")
+	if got := tr.closeIdleCalls(); got != 1 {
+		t.Errorf("CloseIdle calls = %d, want 1 (fallback for a transport without invalidation)", got)
 	}
-	if _, _, invalidates, closes := first.counters(); invalidates != 1 || closes != 1 {
-		t.Errorf("first stream: invalidates=%d closes=%d, want 1/1", invalidates, closes)
+	if got := first.awaits(); got != 2 {
+		t.Errorf("first stream awaits = %d, want 2 (window + settle)", got)
 	}
 }
 
@@ -325,7 +344,7 @@ type mockTransport struct {
 	closeIdleCount int
 	streams        []transport.Stream
 	openErrs       []error
-	// onCloseIdle 在计数递增后回调，供用例断言判死路径的动作顺序。
+	// onCloseIdle 在计数递增后回调，供用例断言无按代失效时的回退顺序。
 	onCloseIdle func()
 }
 
