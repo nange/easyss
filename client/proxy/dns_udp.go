@@ -43,6 +43,13 @@ func (d *dnsInterceptor) handleUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery
 	return d.proxyUDPQuery(clientAddr, req, ex)
 }
 
+// 下行帧的目标取自查询自己的 dst，交换键因此必须含它：同一源端口向两个解析器查询时，
+// 共用交换会把第二条的应答封成第一条的目标，tun2socks 按五元组丢弃。上游只用于与普通
+// UDP 交换区分命名空间。
+func dnsExchangeKey(src net.Addr, dst string) string {
+	return src.String() + "_" + clientconfig.ProxyDNSServer + "_" + dst
+}
+
 // 首载荷合并进引导记录，不需要额外发送；后续查询复用现有交换，应答由 receiveLoop 异步送回。
 func (d *dnsInterceptor) proxyUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery, ex dnsExchange) error {
 	// 上游解析器依据查询里的 EDNS0 尺寸决定应答上限；钳制与重新封包由执行器
@@ -56,7 +63,7 @@ func (d *dnsInterceptor) proxyUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery,
 	// 应答必须伪装成来自 req.dst（客户端配置的解析器）而不是 upstream：流按客户端目标
 	// 标识，透明 NAT（tun2socks）会丢弃源地址不匹配的数据报，查询就看起来没有应答。
 	upstream := clientconfig.ProxyDNSServer
-	key := clientAddr.String() + "_" + upstream
+	key := dnsExchangeKey(clientAddr, req.dst)
 
 	log.Debug("[DNS_PROXY]", "domain", ex.plan.domain, "qtype", ex.plan.qtype,
 		"src", ex.src, "dst", ex.dst)
