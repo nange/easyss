@@ -109,7 +109,12 @@ func (p *udpPool) acquireExchange(ctx context.Context, key, dst string, firstPay
 	if existing, ok := p.exchangeFor(key); ok {
 		return existing, false, nil
 	}
+	return p.acquireExchangeFlight(ctx, key, dst, firstPayload)
+}
 
+// acquireExchangeFlight 串行化同 key 的创建。flight 内重查命中的复用者与本次创建者
+// 持有同一个 token，所以 created 必须与 owner 一起判，不能只看 owner。
+func (p *udpPool) acquireExchangeFlight(ctx context.Context, key, dst string, firstPayload []byte) (ue *UDPExchange, created bool, err error) {
 	token := new(int)
 	v, err, _ := p.exchangeSF.Do(key, func() (any, error) {
 		creation, err := p.createExchange(ctx, key, dst, firstPayload, token)
@@ -151,8 +156,9 @@ func (p *udpPool) createExchange(ctx context.Context, key, dst string, firstPayl
 		ue.Close() //nolint:errcheck
 		return exchangeCreation{}, errSocksServerClosed
 	}
-	// 回调入口已重查，同 key 的 flight 又串行；再出现条目说明这个前提被破坏。不能
-	// 覆盖（旧交换失去回收者），也不能复用（首载荷已在即将丢弃的流上发过）。
+	// 入口重查之后同 key 的 flight 串行，正常流程不会再插入条目；这里是为将来新增
+	// 写点留的防御。不能覆盖（旧交换失去回收者），也不能复用（首载荷已在即将丢弃的
+	// 流上发过）。
 	if _, ok := p.exchanges[key]; ok {
 		p.mu.Unlock()
 		ue.Close() //nolint:errcheck

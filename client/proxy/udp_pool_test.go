@@ -44,9 +44,42 @@ func TestCreateExchangeReusesRegisteredEntry(t *testing.T) {
 	}
 }
 
-// 回调入口重查之后，同 key 的 flight 串行保证不会再有插入。OpenExchange 期间出现条目
-// 只能说明这个前提被破坏：覆盖会让旧交换失去回收者，复用则意味着首个载荷已经在即将
-// 丢弃的流上发过一遍。两者都不能做，关掉新交换并报错。
+// flight 内重查命中的复用者与本次创建者持有同一个 token；经 flight 路径覆盖
+// (created=false, owner==token)。若归属判定只看 owner，调用方会跳过 Send 并多起一个
+// receiveLoop。入口快路径会遮蔽复用分支，所以这里直接走 acquireExchangeFlight。
+func TestAcquireExchangeFlightReuseIsNotCreated(t *testing.T) {
+	existingStream := newBlockingStream()
+	existing := &UDPExchange{stream: existingStream}
+	var opens atomic.Int32
+	p := newUDPPool(udpPoolOptions{
+		OpenExchange: func(context.Context, string, []byte) (*UDPExchange, error) {
+			opens.Add(1)
+			return &UDPExchange{stream: newBlockingStream()}, nil
+		},
+	})
+	p.exchanges["client_target"] = existing
+
+	ue, created, err := p.acquireExchangeFlight(context.Background(), "client_target", "target:53", []byte("q"))
+	if err != nil {
+		t.Fatalf("acquireExchangeFlight: %v", err)
+	}
+	if ue != existing {
+		t.Fatalf("returned %p, want the already registered exchange %p", ue, existing)
+	}
+	if created {
+		t.Fatal("a caller reusing a registered exchange must not report created")
+	}
+	if got := opens.Load(); got != 0 {
+		t.Fatalf("OpenExchange calls = %d, want 0", got)
+	}
+	if existingStream.isClosed() {
+		t.Fatal("the reused exchange must stay open")
+	}
+}
+
+// 入口重查之后同 key 的 flight 串行，正常流程不会再插入条目；这里防御的是将来新增的
+// 写点。若真的出现条目，覆盖会让旧交换失去回收者，复用则意味着首个载荷已经在即将
+// 丢弃的流上发过一遍；两者都不能做，关掉新交换并报错。
 func TestCreateExchangeRefusesRegistrationDuringFlight(t *testing.T) {
 	existingStream := newBlockingStream()
 	existing := &UDPExchange{stream: existingStream}
