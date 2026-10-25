@@ -159,25 +159,28 @@ func TestCache_SetNegativeResponse(t *testing.T) {
 	}
 
 	tests := []struct {
-		name    string
-		rcode   int
-		soa     *dns.SOA
-		wantTTL int
-		wantHit bool
+		name      string
+		rcode     int
+		soa       *dns.SOA
+		truncated bool
+		wantTTL   int
+		wantHit   bool
 	}{
-		{"NODATA with SOA", dns.RcodeSuccess, newSOA(600, 60), 60, true},
-		{"NODATA without SOA", dns.RcodeSuccess, nil, 0, false},
-		{"NXDOMAIN with SOA", dns.RcodeNameError, newSOA(600, 120), 120, true},
-		{"NXDOMAIN without SOA", dns.RcodeNameError, nil, 0, false},
-		{"SERVFAIL with SOA", dns.RcodeServerFailure, newSOA(600, 60), 0, false},
-		{"NODATA SOA over cap", dns.RcodeSuccess, newSOA(86400, 86400), maxNegativeCacheTTL, true},
-		{"NODATA SOA minimum zero", dns.RcodeSuccess, newSOA(600, 0), 0, false},
+		{"NODATA with SOA", dns.RcodeSuccess, newSOA(600, 60), false, 60, true},
+		{"NODATA without SOA", dns.RcodeSuccess, nil, false, 0, false},
+		{"NXDOMAIN with SOA", dns.RcodeNameError, newSOA(600, 120), false, 120, true},
+		{"NXDOMAIN without SOA", dns.RcodeNameError, nil, false, 0, false},
+		{"SERVFAIL with SOA", dns.RcodeServerFailure, newSOA(600, 60), false, 0, false},
+		{"NODATA SOA over cap", dns.RcodeSuccess, newSOA(86400, 86400), false, maxNegativeCacheTTL, true},
+		{"NODATA SOA minimum zero", dns.RcodeSuccess, newSOA(600, 0), false, 0, false},
+		{"truncated NODATA with SOA", dns.RcodeSuccess, newSOA(600, 60), true, 0, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
 			msg := newMsg(tt.rcode)
+			msg.Truncated = tt.truncated
 			if tt.soa != nil {
 				msg.Ns = append(msg.Ns, tt.soa)
 			}
@@ -207,6 +210,31 @@ func TestCache_SetNegativeResponse(t *testing.T) {
 				t.Fatalf("cached Rcode = %d, want %d", got.Rcode, tt.rcode)
 			}
 		})
+	}
+}
+
+func TestCache_SetSkipsTruncatedPositiveAnswer(t *testing.T) {
+	t.Parallel()
+
+	msg := &dns.Msg{}
+	msg.SetQuestion("example.com.", dns.TypeA)
+	msg.Response = true
+	msg.Truncated = true
+	rr, err := dns.NewRR("example.com. 3600 IN A 1.2.3.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg.Answer = append(msg.Answer, rr)
+
+	if ttl, ok := cacheTTL(msg, ""); ok {
+		t.Fatalf("cacheTTL = %d, true; truncated answer must not be cached", ttl)
+	}
+	c := NewCache("")
+	if err := c.Set(msg, false); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if got := c.Get("example.com.", "A", false); got != nil {
+		t.Fatalf("truncated answer was cached: %v", got)
 	}
 }
 

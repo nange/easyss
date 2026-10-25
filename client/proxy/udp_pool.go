@@ -203,6 +203,14 @@ func (p *udpPool) directFor(key string) (*directUDPConn, bool) {
 	return dc, ok
 }
 
+// directCreation 与 exchangeCreation 同构：owner 用来区分真正完成登记的调用者与共享
+// singleflight 结果的等待者，后者不能重复启动直连读循环。
+type directCreation struct {
+	dc      *directUDPConn
+	created bool
+	owner   *int
+}
+
 // acquireDirect 返回 key 对应的直连会话，不存在时拨号创建；created 为 true 时调用方必须为它
 // 启动读取循环。并发创建经 singleflight 去重，否则两个数据报会各自拨号，多出的 goroutine 泄漏。
 func (p *udpPool) acquireDirect(key, dst string) (*directUDPConn, bool, error) {
@@ -210,7 +218,8 @@ func (p *udpPool) acquireDirect(key, dst string) (*directUDPConn, bool, error) {
 		return dc, false, nil
 	}
 
-	v, err, shared := p.directSF.Do(key, func() (any, error) {
+	token := new(int)
+	v, err, _ := p.directSF.Do(key, func() (any, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), p.opts.DialTimeout)
 		rc, err := p.opts.Dial(ctx, "udp", dst)
 		cancel()
@@ -226,6 +235,7 @@ func (p *udpPool) acquireDirect(key, dst string) (*directUDPConn, bool, error) {
 		dc := &directUDPConn{conn: rc}
 		dc.lastSeen.Store(time.Now().UnixNano())
 
+		var evicted *directUDPConn
 		p.mu.Lock()
 		if p.closed.Load() {
 			// 在与登记相同的锁下重新检查：与拨号竞争的 close 已执行过扫描，之后再插入
@@ -234,7 +244,13 @@ func (p *udpPool) acquireDirect(key, dst string) (*directUDPConn, bool, error) {
 			rc.Close() //nolint:errcheck
 			return nil, errSocksServerClosed
 		}
-		var evicted *directUDPConn
+		// 初始 directFor 与 flight 之间可能已有别的调用者完成登记：不能覆盖。被覆盖的
+		// socket 不在池里，读循环又没有 deadline，会一直泄漏到进程退出。
+		if existing, ok := p.direct[key]; ok {
+			p.mu.Unlock()
+			rc.Close() //nolint:errcheck
+			return directCreation{dc: existing, owner: token}, nil
+		}
 		if len(p.direct) >= maxUDPExchanges {
 			evicted = p.evictOldestDirectUDPLocked()
 		}
@@ -245,16 +261,16 @@ func (p *udpPool) acquireDirect(key, dst string) (*directUDPConn, bool, error) {
 			evicted.conn.Close() //nolint:errcheck
 		}
 
-		return dc, nil
+		return directCreation{dc: dc, created: true, owner: token}, nil
 	})
 	if err != nil {
 		return nil, false, err
 	}
-	dc := v.(*directUDPConn)
+	result := v.(directCreation)
 	if p.closed.Load() {
 		return nil, false, errSocksServerClosed
 	}
-	return dc, !shared, nil
+	return result.dc, result.created && result.owner == token, nil
 }
 
 func (p *udpPool) removeDirect(key string, dc *directUDPConn) {

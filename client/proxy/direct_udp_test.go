@@ -53,6 +53,7 @@ func newDirectUDPTestServer(t *testing.T, dial func(context.Context, string, str
 	if err != nil {
 		t.Fatalf("NewSocks5Server: %v", err)
 	}
+	t.Cleanup(func() { srv.udp.close() })
 	return srv
 }
 

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"net"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/nange/easyss/v3/client/router"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
+	"github.com/nange/easyss/v3/shaper"
 	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/util/bytespool"
 	"github.com/things-go/go-socks5/statute"
@@ -109,12 +111,7 @@ func (s *Socks5Server) handleRegularUDP(relay *udpRelay, d *socks5Frame, dst str
 		return err
 	}
 
-	var cls router.HostClassification
-	if s.udpRoutes == nil {
-		cls = s.router.ClassifyHost(host)
-	} else {
-		cls = s.udpRoutes.classify(s.router, host)
-	}
+	cls := s.udpRoutes.classify(s.router, host)
 	switch cls.Rule {
 	case router.HostRuleBlock:
 		log.Debug("[UDP_BLOCK] blocked", "host", host, "target", dst, "src", src)
@@ -198,6 +195,12 @@ func (s *Socks5Server) proxyUDPRelay(relay *udpRelay, dst string, data []byte, s
 	}
 
 	if err := ue.Send(data); err != nil {
+		// 快路径取到交换后，回收/驱逐/DNS 超时可能已把它关闭；这是正常收尾竞态，不是发送故障。
+		if errors.Is(err, shaper.ErrClosed) {
+			log.Debug("[UDP_PROXY] send on closed exchange", "dst", dst)
+			s.udp.removeExchange(key, ue)
+			return nil
+		}
 		log.Error("[UDP_PROXY] send", "err", err)
 		s.udp.removeExchange(key, ue)
 		return err

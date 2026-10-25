@@ -92,6 +92,11 @@ func (c *Cache) Set(msg *dns.Msg, isDirect bool) error {
 
 // cacheTTL 返回写入缓存的秒数；ok=false 表示该应答不应进入缓存。
 func cacheTTL(msg *dns.Msg, serverDomain string) (int, bool) {
+	// TC=1 的应答不完整，UDP 客户端会改走 TCP 重试；缓存它（尤其是其中的 SOA）会让
+	// 重试读到截断结果而不是完整应答。
+	if msg.Truncated {
+		return 0, false
+	}
 	switch msg.Rcode {
 	case dns.RcodeSuccess:
 		// Answer 为空即 NODATA：没有可供正缓存使用的 TTL，按 SOA 做否定缓存。

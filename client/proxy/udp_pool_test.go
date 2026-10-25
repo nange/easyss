@@ -3,16 +3,14 @@ package proxy
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// TestRemoveExchangeKeepsReplacement 固定"过期的 receiveLoop 收尾不得删掉
-// 新交换"：驱逐/空闲清理摘除旧交换后，同一 key 可能已经登记了替代者；旧
-// receiveLoop 的 defer 若无条件 delete，会把替代者从池里抹掉，留下一个无人
-// 回收的交换（非 DNS 的 UDP 交换没有读空闲定时器）。
 // 初始 exchangeFor 与 flight 之间已有别的调用者完成登记时，必须复用旧交换并关闭新
 // 创建的值；覆盖登记会让旧交换脱离池的回收范围。
 func TestAcquireExchangeKeepsExistingRegistration(t *testing.T) {
@@ -121,6 +119,114 @@ func TestAcquireExchangeRefusesAfterClose(t *testing.T) {
 	}
 }
 
+// trackedConn 只用于断言池是否关闭了某条 socket。
+type trackedConn struct{ closed atomic.Bool }
+
+func (c *trackedConn) Read([]byte) (int, error)    { return 0, io.EOF }
+func (c *trackedConn) Write(p []byte) (int, error) { return len(p), nil }
+func (c *trackedConn) Close() error {
+	c.closed.Store(true)
+	return nil
+}
+func (c *trackedConn) LocalAddr() net.Addr              { return &net.UDPAddr{} }
+func (c *trackedConn) RemoteAddr() net.Addr             { return &net.UDPAddr{} }
+func (c *trackedConn) SetDeadline(time.Time) error      { return nil }
+func (c *trackedConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *trackedConn) SetWriteDeadline(time.Time) error { return nil }
+
+// 直连路径与 exchange 路径有同一个登记窗口：后到的 flight 不能覆盖已登记的 socket，
+// 否则旧 socket 的读循环（现已无 deadline）会永久泄漏。
+func TestAcquireDirectKeepsExistingRegistration(t *testing.T) {
+	existingStream := &trackedConn{}
+	existing := &directUDPConn{conn: existingStream}
+	freshStream := &trackedConn{}
+
+	p := newUDPPool(udpPoolOptions{})
+	p.opts.Dial = func(context.Context, string, string) (net.Conn, error) {
+		p.mu.Lock()
+		p.direct["direct_key"] = existing
+		p.mu.Unlock()
+		return freshStream, nil
+	}
+
+	dc, created, err := p.acquireDirect("direct_key", "target:53")
+	if err != nil {
+		t.Fatalf("acquireDirect: %v", err)
+	}
+	if dc != existing {
+		t.Fatalf("returned %p, want the already registered direct conn %p", dc, existing)
+	}
+	if created {
+		t.Fatal("reusing an existing direct conn must not report created")
+	}
+	if got := p.direct["direct_key"]; got != existing {
+		t.Fatalf("registered direct conn = %p, want %p", got, existing)
+	}
+	if !freshStream.closed.Load() {
+		t.Fatal("the freshly dialed duplicate socket must be closed")
+	}
+	if existingStream.closed.Load() {
+		t.Fatal("the reused direct conn must stay open")
+	}
+}
+
+// singleflight 合并时只能有一个调用者拿到 created=true（由它启动读循环）。
+func TestAcquireDirectSharedFlightCreatesOnce(t *testing.T) {
+	var dials atomic.Int32
+	p := newUDPPool(udpPoolOptions{
+		Dial: func(context.Context, string, string) (net.Conn, error) {
+			dials.Add(1)
+			time.Sleep(100 * time.Millisecond)
+			return &trackedConn{}, nil
+		},
+	})
+
+	const callers = 16
+	start := make(chan struct{})
+	results := make(chan *directUDPConn, callers)
+	var createdCount atomic.Int32
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Go(func() {
+			<-start
+			dc, created, err := p.acquireDirect("direct_key", "target:53")
+			if err != nil {
+				t.Errorf("acquireDirect: %v", err)
+				return
+			}
+			if created {
+				createdCount.Add(1)
+			}
+			results <- dc
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	if got := dials.Load(); got != 1 {
+		t.Fatalf("Dial calls = %d, want 1", got)
+	}
+	if got := createdCount.Load(); got != 1 {
+		t.Fatalf("created callers = %d, want exactly 1", got)
+	}
+	var first *directUDPConn
+	for dc := range results {
+		if first == nil {
+			first = dc
+			continue
+		}
+		if dc != first {
+			t.Fatalf("callers got different direct conns: %p and %p", dc, first)
+		}
+	}
+	p.close()
+}
+
+// TestRemoveExchangeKeepsReplacement 固定"过期的 receiveLoop 收尾不得删掉
+// 新交换"：驱逐/空闲清理摘除旧交换后，同一 key 可能已经登记了替代者；旧
+// receiveLoop 的 defer 若无条件 delete，会把替代者从池里抹掉，留下一个无人
+// 回收的交换（非 DNS 的 UDP 交换没有读空闲定时器）。
 func TestRemoveExchangeKeepsReplacement(t *testing.T) {
 	p := newUDPPool(udpPoolOptions{})
 
