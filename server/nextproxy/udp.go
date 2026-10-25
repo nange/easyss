@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"sync"
@@ -268,7 +269,11 @@ func (c *udpAssociateConn) Read(b []byte) (int, error) {
 				"payload", len(payload), "limit", udpBufSize)
 			continue
 		}
-		// payload 别名 buf，但它返回前就被拷进调用方的 b，buf 可以立即归还。
+		// 短读且 err == nil 会让调用方把截断内容当成完整数据报；net.Conn 的 datagram 语义
+		// 要求这时报错。payload 别名 buf，但它返回前就被拷进调用方的 b，buf 可以立即归还。
+		if len(payload) > len(b) {
+			return 0, io.ErrShortBuffer
+		}
 		return copy(b, payload), nil
 	}
 }

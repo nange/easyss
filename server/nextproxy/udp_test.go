@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"runtime"
@@ -654,6 +655,38 @@ func TestUDPAssociateConnReadVerbatimDatagram(t *testing.T) {
 	}
 	if got := buf[:n]; !bytes.Equal(got, payload) {
 		t.Errorf("Read payload = %q, want %q (read %d bytes)", got, payload, n)
+	}
+}
+
+// 调用方缓冲装不下时必须报错：短读且 err == nil 会让上层把截断内容当成完整数据报。
+func TestUDPAssociateConnReadShortBuffer(t *testing.T) {
+	relay, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen relay: %v", err)
+	}
+	defer relay.Close() //nolint:errcheck
+
+	server, client := net.Pipe()
+	defer server.Close() //nolint:errcheck
+	defer client.Close() //nolint:errcheck
+
+	conn := &udpAssociateConn{control: server, relay: relay, dst: socks5.ParseAddrString("8.8.8.8:53")}
+	defer conn.Close() //nolint:errcheck
+
+	payload := []byte("dns-answer-that-does-not-fit")
+	datagram := []byte{0x00, 0x00, 0x00, 0x01, 8, 8, 8, 8, 0x00, 0x35}
+	datagram = append(datagram, payload...)
+	if _, err := relay.WriteToUDP(datagram, relay.LocalAddr().(*net.UDPAddr)); err != nil {
+		t.Fatalf("write datagram: %v", err)
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	n, err := conn.Read(make([]byte, 4))
+	if !errors.Is(err, io.ErrShortBuffer) {
+		t.Fatalf("Read error = %v, want io.ErrShortBuffer", err)
+	}
+	if n != 0 {
+		t.Errorf("Read n = %d, want 0 on a short buffer", n)
 	}
 }
 
