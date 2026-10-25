@@ -1089,6 +1089,81 @@ func TestBatchShaperNoWriteAfterClose(t *testing.T) {
 	}
 }
 
+// TestBatchShaperPushDuringClosePreflush 固定"Push 返回 nil 即已接受"：预冲刷在 bs.mu
+// 外做 I/O 时 Close 可能已经走完，此时追加的帧必须回报 ErrClosed，不能静默丢弃。
+func TestBatchShaperPushDuringClosePreflush(t *testing.T) {
+	masterKey, err := easycrypto.DeriveMasterKey("push-during-close")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, err := easycrypto.NewStreamKeys(masterKey, []byte("1234567890123456"), "/v3/tcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bw := newBlockingWriter()
+	bs := New(newTestWriter(t, sk, bw), Config{BatchWindowMS: 10000})
+	impl := bs.(*batchShaper)
+
+	// 首帧压在批处理阈值下方，使下一帧只能靠预冲刷（len+frameSize > ceiling）进入 I/O。
+	filler := make([]byte, impl.flushThreshold-protocol.FrameHeaderSize-100)
+	if err := bs.PushData(filler); err != nil {
+		t.Fatalf("PushData(filler): %v", err)
+	}
+
+	// 7KB 帧让 len(plaintext)+frameSize 跨过 recordCeiling，预冲刷随后阻塞在写锁上。
+	pushes := make(chan error, 1)
+	go func() {
+		pushes <- bs.PushData(make([]byte, 7000))
+	}()
+
+	select {
+	case <-bw.blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for the preflush to reach the writer")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- bs.Close()
+	}()
+
+	// 等 Close 置位 closing：预冲刷返回后必须据此拒绝追加，而不是继续分配缓冲。
+	deadline := time.Now().Add(5 * time.Second)
+	for !impl.closing.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for Close to mark the shaper closing")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	close(bw.release)
+
+	select {
+	case err := <-pushes:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("PushData during Close = %v, want ErrClosed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for PushData to return")
+	}
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for Close to complete")
+	}
+
+	impl.mu.Lock()
+	defer impl.mu.Unlock()
+	if impl.plaintext != nil {
+		t.Fatalf("plaintext buffer still held after Close: len=%d", len(impl.plaintext))
+	}
+}
+
 func TestIsClosedStreamError(t *testing.T) {
 	tests := []struct {
 		name string

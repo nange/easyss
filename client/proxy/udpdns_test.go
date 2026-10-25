@@ -184,16 +184,14 @@ func newDNSMultiplexTestServer(t *testing.T) (*Socks5Server, *mockTransport) {
 	return srv, tr
 }
 
-// TestProxyDNSQueriesShareOneTunnelExchange 守住同一个 socket 上的查询（键是来源地址 +
-// 上游，与域名无关）只开一条隧道流——这是服务端"一条会话里可能看到不同域名"的前提。
-func TestProxyDNSQueriesShareOneTunnelExchange(t *testing.T) {
-	// 内置直连列表指向拨不通的地址：第二个域名必须走代理分支，而不是被判为直连后
-	// 在本地解析（那不会打开任何流，见下一条用例）。
+// newDNSProxyTestServer 建一个只走代理分支的服务与一个客户端源地址：直连列表指向
+// 拨不通的地址，proxy_rule=proxy 把域名都判为走代理。
+func newDNSProxyTestServer(t *testing.T) (*Socks5Server, *mockTransport, *net.UDPAddr) {
+	t.Helper()
 	oldDNS := clientconfig.DirectDNSServers
 	clientconfig.DirectDNSServers = []string{"127.0.0.1:1"}
 	t.Cleanup(func() { clientconfig.DirectDNSServers = oldDNS })
 
-	// proxy_rule=proxy：客户端规则把两个域名都判为走代理，隔离掉 GeoIP 的影响。
 	rt, err := router.New(router.Config{ProxyRule: router.ProxyRuleProxy, IPV6Rule: router.IPV6RuleDisable})
 	if err != nil {
 		t.Fatalf("router.New: %v", err)
@@ -206,7 +204,14 @@ func TestProxyDNSQueriesShareOneTunnelExchange(t *testing.T) {
 		t.Fatalf("listen udp socket: %v", err)
 	}
 	t.Cleanup(func() { sock.Close() }) //nolint:errcheck
-	clientAddr := sock.LocalAddr().(*net.UDPAddr)
+	return srv, tr, sock.LocalAddr().(*net.UDPAddr)
+}
+
+// TestProxyDNSQueriesShareOneTunnelExchange 守住同一个 socket、同一个解析器上的查询
+// （键是来源地址 + 上游 + 应答目标，与域名无关）只开一条隧道流——这是服务端"一条会话
+// 里可能看到不同域名"的前提。
+func TestProxyDNSQueriesShareOneTunnelExchange(t *testing.T) {
+	srv, tr, clientAddr := newDNSProxyTestServer(t)
 
 	for _, domain := range []string{"mtalk.google.com", "www.example.com"} {
 		msg := mustUnpackDNS(t, mustPackDNSQuery(t, domain))
@@ -227,9 +232,45 @@ func TestProxyDNSQueriesShareOneTunnelExchange(t *testing.T) {
 	if opens != 1 {
 		t.Fatalf("transport opens = %d, want 1 (both domains must share one tunnel stream)", opens)
 	}
-	key := clientAddr.String() + "_" + clientconfig.ProxyDNSServer
+	key := dnsExchangeKey(clientAddr, clientconfig.ProxyDNSServer)
 	if _, ok := srv.udp.exchangeFor(key); !ok {
 		t.Fatalf("the shared exchange must be registered under %q", key)
+	}
+}
+
+// TestProxyDNSDifferentResolversUseSeparateExchanges 固定交换键含应答目标：同一源端口
+// 向两个解析器查询时若共用交换，第二条的应答会被封成第一条的目标并被 tun2socks 丢弃。
+func TestProxyDNSDifferentResolversUseSeparateExchanges(t *testing.T) {
+	srv, tr, clientAddr := newDNSProxyTestServer(t)
+
+	queries := []struct{ domain, dst string }{
+		{"one.example.com", clientconfig.ProxyDNSServer},
+		{"two.example.com", "223.5.5.5:53"},
+	}
+	for _, q := range queries {
+		msg := mustUnpackDNS(t, mustPackDNSQuery(t, q.domain))
+		if err := srv.dns.handleUDPQuery(clientAddr, udpDNSQuery{
+			raw:   mustPackDNSQuery(t, q.domain),
+			msg:   msg,
+			src:   clientAddr.String(),
+			dst:   q.dst,
+			reply: udpReply{msg: func(*dns.Msg) error { return nil }, raw: func([]byte) {}},
+		}); err != nil {
+			t.Fatalf("handleUDPQuery(%s): %v", q.domain, err)
+		}
+	}
+
+	tr.mu.Lock()
+	opens := tr.openCount
+	tr.mu.Unlock()
+	if opens != len(queries) {
+		t.Fatalf("transport opens = %d, want %d (one exchange per resolver)", opens, len(queries))
+	}
+	for _, q := range queries {
+		key := dnsExchangeKey(clientAddr, q.dst)
+		if _, ok := srv.udp.exchangeFor(key); !ok {
+			t.Errorf("missing exchange for resolver %s", q.dst)
+		}
 	}
 }
 

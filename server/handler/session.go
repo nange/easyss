@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
@@ -102,14 +103,24 @@ func rejectLANConn(conn net.Conn) error {
 type outboundDeps struct {
 	resolve func(ctx context.Context, host string) ([]netip.Addr, error)
 	attempt func(d *net.Dialer, ctx context.Context, network, addr string) (net.Conn, error)
+	// resolveCache 是包裹 resolve 的缓存实例；nil 表示未启用缓存。
+	resolveCache *resolveCache
 }
 
 // 对应 net.Dialer 内部 partialDeadline 的 2s 下限，低于它就不值得再切分。
 const defaultDialAttemptMinBudget = 2 * time.Second
 
+// defaultOutboundDeps 用默认基础超时构造，供直接持有依赖的调用方使用。
 func defaultOutboundDeps() *outboundDeps {
+	return newOutboundDeps(config.Timeouts{})
+}
+
+// newOutboundDeps 按基础超时构造依赖：解析缓存取 4×base，比 UDP 会话空闲再宽一档。
+func newOutboundDeps(timeouts config.Timeouts) *outboundDeps {
+	cache := newResolveCache(util.ResolveHostIPs, 4*timeouts.Normalize().Base)
 	return &outboundDeps{
-		resolve: util.ResolveHostIPs,
+		resolve:      cache.lookup,
+		resolveCache: cache,
 		attempt: func(d *net.Dialer, ctx context.Context, network, addr string) (net.Conn, error) {
 			return d.DialContext(ctx, network, addr)
 		},

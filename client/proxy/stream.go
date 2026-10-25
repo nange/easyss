@@ -204,6 +204,8 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, req streamRequest)
 			if attempt < bootstrapMaxAttempts && errors.Is(err, io.ErrClosedPipe) && ctx.Err() == nil {
 				log.Debug("[STREAM] bootstrap write failed, retrying on a new connection",
 					"attempt", attempt, "target", req.target, "err", err)
+				// 写失败不能断言是连接坏了（也可能是流级 RST），没有按代失效可用：只能等
+				// RoundTrip 收敛后靠全局回收丢掉这条正在死的连接，否则重试会再拿到它。
 				settleDeadStream(stream)
 				h.transport.CloseIdle()
 				continue
@@ -227,8 +229,8 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, req streamRequest)
 		}
 		lastErr = err
 
-		// 上层取消（核心停止、本地连接已断）：只关闭本流，不得失效连接——取消不是判死，
-		// 这条连接可能健康且被同槽位的其他在飞流共享。
+		// 上层取消：只关闭本流，不得失效连接——取消不是判死，这条连接可能健康且被同槽位
+		// 的其他在飞流共享。
 		if ctx.Err() != nil {
 			_ = stream.Close()
 			return nil, ctx.Err()
@@ -236,14 +238,19 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, req streamRequest)
 
 		// 判死：失效本流所在的那条连接（CloseIdleConnections 关不掉承载活跃流的连接），
 		// 只作用于本次请求自己的连接，不会误杀刚重试建立的新连接。
-		invalidateDeadStream(stream)
+		invalidated := invalidateDeadStream(stream)
 		_ = stream.Close()
 
 		if attempt < bootstrapMaxAttempts {
 			log.Debug("[STREAM] bootstrap timed out, retrying on a new connection",
 				"attempt", attempt, "target", req.target, "err", lastErr)
-			settleDeadStream(stream)
-			h.transport.CloseIdle()
+			// 按代失效已经保证下一次 Open 换连接；其余槽位的死连接由各自的判死/健康路径
+			// 回收，这里故意不再全局丢空闲连接。只有不支持按代失效的传输层才退回全局回收，
+			// 且必须先等本流 RoundTrip 收敛，否则空闲扫描会漏掉这条正在死的连接。
+			if !invalidated {
+				settleDeadStream(stream)
+				h.transport.CloseIdle()
+			}
 			continue
 		}
 		return nil, lastErr
@@ -288,14 +295,19 @@ func (h *StreamHandler) awaitBootstrapResponse(ctx context.Context, stream trans
 	return err
 }
 
-// 判死重试必须换连接，而 CloseIdleConnections 关不掉承载活跃流的连接。
-func invalidateDeadStream(stream transport.Stream) {
-	if inv, ok := stream.(transport.ConnInvalidator); ok {
-		inv.InvalidateConn()
+// 判死重试必须换连接，而 CloseIdleConnections 关不掉承载活跃流的连接。返回 false 表示
+// 传输层不支持按代失效，调用方只能退回全局 CloseIdle。
+func invalidateDeadStream(stream transport.Stream) bool {
+	inv, ok := stream.(transport.ConnInvalidator)
+	if !ok {
+		return false
 	}
+	inv.InvalidateConn()
+	return true
 }
 
-// 等已关闭的流的 RoundTrip 收敛，随后的 CloseIdle 才能丢掉其余槽位的空闲连接。
+// 等已关闭的流的 RoundTrip 收敛：没有按代失效能力时，只有这时 CloseIdle 才能丢掉这条
+// 正在死的连接。
 func settleDeadStream(stream transport.Stream) {
 	ra, ok := stream.(transport.ResponseAwaiter)
 	if !ok {
@@ -469,7 +481,8 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 			stats.RecordRawBytesSent(n)
 			if pErr := tx.PushData(buf[:n]); pErr != nil {
 				_ = tx.Flush()
-				if errors.Is(pErr, io.ErrClosedPipe) {
+				// 整形器已进入关闭流程时 Push 返回 ErrClosed，与写端关闭一样属于收尾常态。
+				if errors.Is(pErr, io.ErrClosedPipe) || errors.Is(pErr, shaper.ErrClosed) {
 					return nil
 				}
 				return pErr
