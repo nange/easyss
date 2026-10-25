@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -111,45 +112,8 @@ func (p *udpPool) acquireExchange(ctx context.Context, key, dst string, firstPay
 
 	token := new(int)
 	v, err, _ := p.exchangeSF.Do(key, func() (any, error) {
-		p.inflight.Add(1)
-		defer p.inflight.Add(-1)
-
-		ue, err := p.opts.OpenExchange(ctx, dst, firstPayload)
-		if err != nil {
-			return nil, err
-		}
-
-		var evicted []*UDPExchange
-		p.mu.Lock()
-		// 与 close 的扫描同锁：closed 先置位、后扫描，这里看到 false 时登记的条目
-		// 一定会被那轮扫描回收。
-		if p.closed.Load() {
-			p.mu.Unlock()
-			ue.Close() //nolint:errcheck
-			return nil, errSocksServerClosed
-		}
-		// 初始 exchangeFor 与 flight 之间可能已有别的调用者完成登记：不能覆盖，
-		// 否则被覆盖的交换既不在池里也没有读超时，流会泄漏。
-		if existing, ok := p.exchanges[key]; ok {
-			p.mu.Unlock()
-			ue.Close() //nolint:errcheck
-			return exchangeCreation{ue: existing, owner: token}, nil
-		}
-		// 容量检查与登记同锁，inflight 计入尚未登记的创建；被驱逐的交换在锁外关闭。
-		for len(p.exchanges)+int(p.inflight.Load()) > maxUDPExchanges {
-			old := p.evictOldestExchangeLocked()
-			if old == nil {
-				break
-			}
-			evicted = append(evicted, old)
-		}
-		p.exchanges[key] = ue
-		p.mu.Unlock()
-
-		for _, old := range evicted {
-			old.Close() //nolint:errcheck
-		}
-		return exchangeCreation{ue: ue, created: true, owner: token}, nil
+		creation, err := p.createExchange(ctx, key, dst, firstPayload, token)
+		return creation, err
 	})
 	if err != nil {
 		return nil, false, err
@@ -160,6 +124,55 @@ func (p *udpPool) acquireExchange(ctx context.Context, key, dst string, firstPay
 		return nil, false, errSocksServerClosed
 	}
 	return result.ue, result.created && result.owner == token, nil
+}
+
+// createExchange 是 singleflight 的执行体：同 key 的 flight 串行，进入后重查一次就能
+// 确定是否已登记。重查必须在 OpenExchange 之前——首载荷会并入引导记录，等它返回再
+// 发现冲突时载荷已经发过一遍。
+func (p *udpPool) createExchange(ctx context.Context, key, dst string, firstPayload []byte, token *int) (exchangeCreation, error) {
+	if existing, ok := p.exchangeFor(key); ok {
+		return exchangeCreation{ue: existing, owner: token}, nil
+	}
+
+	p.inflight.Add(1)
+	defer p.inflight.Add(-1)
+
+	ue, err := p.opts.OpenExchange(ctx, dst, firstPayload)
+	if err != nil {
+		return exchangeCreation{}, err
+	}
+
+	var evicted []*UDPExchange
+	p.mu.Lock()
+	// 与 close 的扫描同锁：closed 先置位、后扫描，这里看到 false 时登记的条目
+	// 一定会被那轮扫描回收。
+	if p.closed.Load() {
+		p.mu.Unlock()
+		ue.Close() //nolint:errcheck
+		return exchangeCreation{}, errSocksServerClosed
+	}
+	// 回调入口已重查，同 key 的 flight 又串行；再出现条目说明这个前提被破坏。不能
+	// 覆盖（旧交换失去回收者），也不能复用（首载荷已在即将丢弃的流上发过）。
+	if _, ok := p.exchanges[key]; ok {
+		p.mu.Unlock()
+		ue.Close() //nolint:errcheck
+		return exchangeCreation{}, fmt.Errorf("udp pool: exchange %q registered during flight", key)
+	}
+	// 容量检查与登记同锁，inflight 计入尚未登记的创建；被驱逐的交换在锁外关闭。
+	for len(p.exchanges)+int(p.inflight.Load()) > maxUDPExchanges {
+		old := p.evictOldestExchangeLocked()
+		if old == nil {
+			break
+		}
+		evicted = append(evicted, old)
+	}
+	p.exchanges[key] = ue
+	p.mu.Unlock()
+
+	for _, old := range evicted {
+		old.Close() //nolint:errcheck
+	}
+	return exchangeCreation{ue: ue, created: true, owner: token}, nil
 }
 
 // removeExchange 在条目仍指向 ue 时删除并关闭它。必须校验身份：旧 receiveLoop 的 defer
