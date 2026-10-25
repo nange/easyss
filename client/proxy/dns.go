@@ -72,6 +72,7 @@ type dnsAction uint8
 
 const (
 	dnsActionBlock dnsAction = iota
+	dnsActionEmpty
 	dnsActionCacheHit
 	dnsActionDirect
 	dnsActionProxy
@@ -85,7 +86,8 @@ type dnsPlan struct {
 	qtype  string
 }
 
-// plan 判定一条查询的分流动作，缓存命中的应答已改写为本条查询的 Id，AAAA 剥离也在此完成。
+// plan 判定一条查询的分流动作，缓存命中的应答已改写为本条查询的 Id。IPv6 被禁用时
+// AAAA 查询直接产生本地空应答，不再走上游。
 func (d *dnsInterceptor) plan(msg *dns.Msg) dnsPlan {
 	q := msg.Question[0]
 	plan := dnsPlan{
@@ -96,6 +98,12 @@ func (d *dnsInterceptor) plan(msg *dns.Msg) dnsPlan {
 	rule := d.router.MatchHostRule(plan.domain)
 	if rule == router.HostRuleBlock {
 		plan.action = dnsActionBlock
+		return plan
+	}
+
+	// IPv6 已禁用时 AAAA 没有可返回的记录：直接给 NODATA，省掉一次没有意义的上游/隧道查询。
+	if q.Qtype == dns.TypeAAAA && d.router != nil && d.router.ShouldIPV6Disable() {
+		plan.action = dnsActionEmpty
 		return plan
 	}
 
@@ -307,6 +315,13 @@ func directDNSError(ctx context.Context, err error) error {
 		return ctxErr
 	}
 	return err
+}
+
+// emptyDNSReply 构造本地 NOERROR/NODATA 应答，Id 与 Question 来自原查询。
+func emptyDNSReply(msg *dns.Msg) *dns.Msg {
+	reply := new(dns.Msg)
+	reply.SetReply(msg)
+	return reply
 }
 
 // blockedDNSReply 把 msg 原地改造成屏蔽应答。Rcode 刻意保持原值：换成 REFUSED 会让部分 stub

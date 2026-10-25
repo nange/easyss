@@ -102,7 +102,7 @@ Bootstrap 用 AES-256-GCM 加密初始握手帧（含目标地址与方法协商
 
 ### 17. DNS 拦截：判定与执行各一份，投递模型两份
 
-`client/proxy` 的 DNS 拦截三层：①判定 `dnsInterceptor.plan` → `dnsPlan`（Block/缓存命中/直连/代理），UDP/TCP 共用；②执行 `dns_exec.go`：`executeSync` 处理三条同步分支，`prepareProxied` 钳制 EDNS0 并封包，`finishProxied` 是代理应答的唯一后处理入口（规范化 EDNS0 → 按 ipv6 策略剥离 AAAA → 写缓存 → 记录 → 学习域名），`postProcessProxied` 只是字节流包装（UDP 改动后必须重新 Pack）；③投递：UDP 异步（`udpPool.receiveLoop` + `onData`），TCP 同步（`waitResponse` 阻塞）。投递模型不许合并（UDP 阻塞会丢多应答/重传语义）。缓存只接受 A/AAAA：Answer 里出现与 Question 同类型的 RR 才算正应答并按最小 TTL 加抖动；NODATA/NXDOMAIN 按 RFC 2308 取权威段 SOA 的 `min(TTL, MINIMUM)` 并封顶 5 分钟，无 SOA、其它 Rcode 或 TC=1 的截断应答不缓存，避免把临时无记录、CNAME-only NODATA 或截断结果变成负缓存。
+`client/proxy` 的 DNS 拦截三层：①判定 `dnsInterceptor.plan` → `dnsPlan`（Block/IPv6 空应答/缓存命中/直连/代理），UDP/TCP 共用；②执行 `dns_exec.go`：`executeSync` 处理四条同步分支，`prepareProxied` 钳制 EDNS0 并封包，`finishProxied` 是代理应答的唯一后处理入口（规范化 EDNS0 → 按 ipv6 策略剥离 AAAA → 写缓存 → 记录 → 学习域名），`postProcessProxied` 只是字节流包装（UDP 改动后必须重新 Pack）；③投递：UDP 异步（`udpPool.receiveLoop` + `onData`），TCP 同步（`waitResponse` 阻塞）。投递模型不许合并（UDP 阻塞会丢多应答/重传语义）。缓存只接受 A/AAAA：Answer 里出现与 Question 同类型的 RR 才算正应答并按最小 TTL 加抖动；NODATA/NXDOMAIN 按 RFC 2308 取权威段 SOA 的 `min(TTL, MINIMUM)` 并封顶 5 分钟，无 SOA、其它 Rcode 或 TC=1 的截断应答不缓存，避免把临时无记录、CNAME-only NODATA 或截断结果变成负缓存。IPv6 被禁用（含 auto 尚无 IPv6）时，AAAA 查询在本地直接返回 NOERROR/NODATA，不走上游也不写缓存。
 
 ### 18. DNS 熔断判定只有一处
 
