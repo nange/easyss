@@ -166,11 +166,28 @@ func TestSuspendRetiresIdleConnPastH2Timeout(t *testing.T) {
 		if s.generation() == gen {
 			t.Fatal("an idle connection past the h2 idle timeout must be retired")
 		}
-		if got := conn.closes.Load(); got != 1 {
-			t.Fatalf("connection closed %d times, want 1", got)
+		if gen.conn.Load() != nil {
+			t.Fatal("the retired generation must not keep a connection identity")
+		}
+		if got := conn.closes.Load(); got != 0 {
+			t.Fatalf("connection hard-closed %d times, want 0: a racing stream must not be broken", got)
 		}
 		if s.reverify.Load() {
 			t.Fatal("a retired slot must not be armed for reverify")
+		}
+	})
+
+	t.Run("stream that just started is not retired", func(t *testing.T) {
+		lc, s, gen, conn := newIdleSlot(t, 2*time.Minute)
+		s.active.Store(1)
+
+		lc.reportSuspend(2 * time.Minute)
+
+		if s.generation() != gen || conn.closes.Load() != 0 {
+			t.Fatal("a connection with an active stream must not be retired")
+		}
+		if !s.reverify.Load() {
+			t.Fatal("the suspect slot must be armed for reverify")
 		}
 	})
 

@@ -160,18 +160,9 @@ func (s *transportSlot) retireGeneration(gen *slotTransport, conn *slotConn) {
 // invalidateConn 按身份关闭一代的连接并换到新一代，使下一次 Open 必定拨号。换代必须先于
 // 关闭，否则并发的开流会从旧池拿到刚关掉的连接。
 func (s *transportSlot) invalidateConn(gen *slotTransport, reason string) bool {
-	sc := s.takeConn(gen, nil)
-	if sc == nil {
+	sc, ok := s.retireConn(gen)
+	if !ok {
 		return false
-	}
-	// 只有这一代仍是当前一代时才清状态并换代：否则当前池属于更新的一代，不能连带抛弃它。
-	if s.gen.Load() == gen {
-		s.resetRotation()
-		if s.advanceGeneration(gen) {
-			// 不能放进 advanceGeneration：自然回收那条路径可能正跑在 h2 的空闲回收里，
-			// 对同一张池重入 CloseIdleConnections 会重复加同一把锁。
-			gen.tr.CloseIdleConnections()
-		}
 	}
 	_ = sc.c.Close()
 	log.Info("[TRANSPORT] connection invalidated",
@@ -179,4 +170,37 @@ func (s *transportSlot) invalidateConn(gen *slotTransport, reason string) bool {
 		"active_streams", s.active.Load(),
 		"reason", reason)
 	return true
+}
+
+// retireIdleConn 退役一条已不可能再被复用的空闲连接：摘身份、换代，但不硬关底层连接。
+// 扫掠与 Open 的 active+1 之间没有互斥，硬关会打断一条刚起步、尚未在 h2 登记的流；
+// CloseIdleConnections 只关真正空闲的连接，其余的由 h2 在自己的空闲超时后关闭。
+func (s *transportSlot) retireIdleConn(gen *slotTransport, reason string) bool {
+	if _, ok := s.retireConn(gen); !ok {
+		return false
+	}
+	log.Info("[TRANSPORT] idle connection retired",
+		"slot", s.idx,
+		"active_streams", s.active.Load(),
+		"reason", reason)
+	return true
+}
+
+// retireConn 认领这一代的连接身份并换到新一代，返回赢得 CAS 的连接。只关池里的空闲连接：
+// 是否硬关底层连接由调用方按判死结论决定。
+func (s *transportSlot) retireConn(gen *slotTransport) (*slotConn, bool) {
+	sc := s.takeConn(gen, nil)
+	if sc == nil {
+		return nil, false
+	}
+	// 只有这一代仍是当前一代时才清状态并换代：否则当前池属于更新的一代，不能连带抛弃它。
+	if s.gen.Load() == gen {
+		s.resetRotation()
+		if s.advanceGeneration(gen) {
+			// 不能放进 advanceGeneration：trackedConn.Close 那条路径可能正跑在 h2 的
+			// 空闲回收里，对同一张池重入 CloseIdleConnections 会重复加同一把锁。
+			gen.tr.CloseIdleConnections()
+		}
+	}
+	return sc, true
 }

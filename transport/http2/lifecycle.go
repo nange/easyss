@@ -166,7 +166,7 @@ func (lc *slotLifecycle) retireIdlePastH2Timeout(now time.Time) (retired int) {
 			if gen == nil || s.active.Load() != 0 || s.idleFor(now) <= lc.idleTimeout {
 				continue
 			}
-			if s.invalidateConn(gen, "suspend outlived h2 idle timeout") {
+			if s.retireIdleConn(gen, "suspend outlived h2 idle timeout") {
 				retired++
 			}
 		}
