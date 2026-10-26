@@ -17,7 +17,7 @@ import (
 	"github.com/nange/easyss/v3/stats"
 )
 
-const testProbePayloadSize = 4096
+const testProbePayloadSize = 64 * 1024
 
 // newProbeServer 启动一个提供探测端点的真实 TLS 服务器，载荷长度由调用方指定。
 func newProbeServer(t *testing.T, payloadSize int) (*httptest.Server, string) {
@@ -77,10 +77,10 @@ func TestSlotProberFast(t *testing.T) {
 	}
 }
 
-// 载荷长度是服务端侧的可调参数：客户端接受服务端声明的任意合理长度，否则调整
+// 载荷长度是服务端侧的可调参数：客户端接受服务端声明的任意可测长度，否则调整
 // ProbePayloadSize 会让旧客户端把探测判成 unsupported 并永久退回被动检测。
 func TestSlotProberAcceptsAnyServerPayloadSize(t *testing.T) {
-	for _, size := range []int{1024, 64 * 1024, config.ProbePayloadSize} {
+	for _, size := range []int{probeMinBodySize, config.ProbePayloadSize, 512 * 1024} {
 		ts, token := newProbeServer(t, size)
 		prober := &slotProber{serverURL: ts.URL, token: token}
 
@@ -90,21 +90,38 @@ func TestSlotProberAcceptsAnyServerPayloadSize(t *testing.T) {
 	}
 }
 
-// 长度越界的 octet-stream 响应不能当成探测载荷，否则凭 200 + 空体就能换到"快"的结论。
-func TestSlotProberUnsupportedOnImplausibleSize(t *testing.T) {
-	for _, size := range []int{probeMinBodySize - 1, probeMaxBodySize + 1} {
-		ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// 长度不可测只说明这次拿不到可测载荷，不能像"端点不存在"那样永久关掉主动探测：
+// 流式响应（无 Content-Length）与窗口外尺寸都必须只退避。
+func TestSlotProberInconclusiveOnUnmeasurableLength(t *testing.T) {
+	cases := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{"streamed without content length", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/octet-stream")
-			w.Header().Set("Content-Length", strconv.Itoa(size))
-			w.WriteHeader(http.StatusOK)
 			_ = http.NewResponseController(w).Flush()
-		}))
-		t.Cleanup(ts.Close)
-		prober := &slotProber{serverURL: ts.URL, token: "unused"}
+		}},
+		{"below the measurable window", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set("Content-Length", strconv.Itoa(probeMinBodySize-1))
+			w.WriteHeader(http.StatusOK)
+		}},
+		{"above the measurable window", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set("Content-Length", strconv.Itoa(probeMaxBodySize+1))
+			w.WriteHeader(http.StatusOK)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewTLSServer(tc.handler)
+			t.Cleanup(ts.Close)
+			prober := &slotProber{serverURL: ts.URL, token: "unused"}
 
-		if _, verdict := prober.probe(context.Background(), newProbeSlot()); verdict != probeUnsupported {
-			t.Fatalf("declared size %d: verdict = %v, want probeUnsupported", size, verdict)
-		}
+			if _, verdict := prober.probe(context.Background(), newProbeSlot()); verdict != probeInconclusive {
+				t.Fatalf("verdict = %v, want probeInconclusive", verdict)
+			}
+		})
 	}
 }
 
@@ -112,7 +129,7 @@ func TestSlotProberSlowOnEmptyBody(t *testing.T) {
 	// 探测超时内不投递任何内容的 200 octet-stream 响应计为慢速证据。
 	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Length", "4096")
+		w.Header().Set("Content-Length", strconv.Itoa(testProbePayloadSize))
 		w.WriteHeader(http.StatusOK)
 		_ = http.NewResponseController(w).Flush()
 	}))

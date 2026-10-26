@@ -13,13 +13,14 @@ import (
 type probeVerdict int
 
 const (
-	// probeInconclusive：首个响应体字节前失败（RoundTrip 错误或非 200），不产生结论。
+	// probeInconclusive：首个响应体字节前失败（RoundTrip 错误或非 200），或载荷长度不可测；
+	// 不产生结论，只退避重试。
 	probeInconclusive probeVerdict = iota
 	// probeFast：载荷以不低于降级吞吐量阈值的速度送达。
 	probeFast
 	// probeSlow：探测超时内没有字节到达、服务端提前截断载荷，或响应体吞吐量低于降级阈值。
 	probeSlow
-	// probeUnsupported：服务端返回 200 但不是探测载荷：不提供 /v3/probe，或长度越界。
+	// probeUnsupported：服务端返回 200 但不是探测载荷类型，即不提供 /v3/probe。
 	probeUnsupported
 )
 
@@ -29,9 +30,10 @@ const maxProbeSpeed = 1 << 30 // 1GB/s
 
 const (
 	// 载荷长度由服务端决定，客户端只校验范围而不锁定具体值，调整 ProbePayloadSize 因此
-	// 不需要客户端同步发版；越界视为不是载荷（回落到 octet-stream 的其他响应）。
-	probeMinBodySize = 1 << 10 // 1KB
-	probeMaxBodySize = 1 << 20 // 1MB
+	// 不需要客户端同步发版。下界取两倍读缓冲：更短的载荷会被单次投递间隔主导，算出的
+	// 速率与带宽无关。
+	probeMinBodySize = 64 << 10 // 64KB，2×读取块
+	probeMaxBodySize = 1 << 20  // 1MB
 )
 
 // slotProber 下载服务端预生成的随机载荷测量吞吐量。MaxConnsPerHost=1 把池固定在那一条
@@ -108,11 +110,15 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 	if resp.StatusCode != http.StatusOK {
 		return 0, probeInconclusive
 	}
-	want := resp.ContentLength
-	if want < probeMinBodySize || want > probeMaxBodySize ||
-		resp.Header.Get("Content-Type") != "application/octet-stream" {
-		// 200 但不是探测载荷（例如回落到 fallback HTML 页面）。
+	if resp.Header.Get("Content-Type") != "application/octet-stream" {
+		// 200 但不是探测载荷类型（例如回落到 fallback HTML 页面）：端点不存在。
 		return 0, probeUnsupported
+	}
+	// 长度不可用或越界只说明这次拿不到可测载荷（流式响应、服务端换过尺寸），不足以断定
+	// 端点不存在：unsupported 是永久的，会把尺寸变化重新变成静默退回被动检测。
+	want := resp.ContentLength
+	if want < probeMinBodySize || want > probeMaxBodySize {
+		return 0, probeInconclusive
 	}
 
 	buf := make([]byte, 32*1024)
