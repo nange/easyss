@@ -335,15 +335,7 @@ func (p *udpPool) receiveLoop(ue *UDPExchange, key string, respTimeout time.Dura
 	)
 	if respTimeout > 0 {
 		lastRecv.Store(time.Now().UnixNano())
-		timer = time.AfterFunc(respTimeout, func() {
-			// AfterFunc 的回调一旦开始执行，Reset 无法取消它：先回看最近一次收到数据的
-			// 时间，否则会把刚收到应答的交换关掉（后续 Send 只会得到 ErrClosed）。
-			if time.Since(time.Unix(0, lastRecv.Load())) < respTimeout {
-				return
-			}
-			log.Debug("[UDP_PROXY] dns response timeout, closing exchange", "key", key)
-			ue.Close() //nolint:errcheck // closeOnce 使其与并发的 Close 之间保持安全
-		})
+		timer = time.AfterFunc(respTimeout, newUDPResponseTimeout(ue, key, respTimeout, &lastRecv))
 		defer timer.Stop()
 	}
 	defer func() {
@@ -366,6 +358,19 @@ func (p *udpPool) receiveLoop(ue *UDPExchange, key string, respTimeout time.Dura
 		if onData != nil {
 			onData(data)
 		}
+	}
+}
+
+// newUDPResponseTimeout 返回代理 DNS 交换的应答读空闲回调。AfterFunc 的回调一旦开始执行，
+// Reset 无法取消它，因此必须回看最近一次收到数据的时间，只在确实空闲满 timeout 时关闭；
+// 否则会把刚收到应答的交换关掉，后续 Send 只得 ErrClosed、查询被静默丢弃。
+func newUDPResponseTimeout(ue *UDPExchange, key string, timeout time.Duration, lastRecv *atomic.Int64) func() {
+	return func() {
+		if time.Since(time.Unix(0, lastRecv.Load())) < timeout {
+			return
+		}
+		log.Debug("[UDP_PROXY] dns response timeout, closing exchange", "key", key)
+		ue.Close() //nolint:errcheck // closeOnce 使其与并发的 Close 之间保持安全
 	}
 }
 
