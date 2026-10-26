@@ -316,6 +316,14 @@ func TestBuildHTTPServerUploadFlowControl(t *testing.T) {
 		"per-connection stream limit should match mainstream servers, not Go's 250")
 }
 
+// TestBuildHTTPServerWriteStallBound 固定响应写的上界：写记录在 shaper 的写锁内做
+// 网络写，没有这个超时，一条卡死的连接会拖住 handler 收尾和整条连接。
+func TestBuildHTTPServerWriteStallBound(t *testing.T) {
+	srv := buildHTTPServer(&serverconfig.FileConfig{Server: serverconfig.ServerConfig{Port: 443}}, nil, http.NewServeMux(), 30*time.Second)
+	require.NotNil(t, srv.HTTP2)
+	require.Equal(t, 30*time.Second, srv.HTTP2.WriteByteTimeout)
+}
+
 // TestBuildHTTPServerH2ConfigOverrides 固定 transport.h2_* 的覆盖语义：显式正值
 // 覆盖默认值，0 表示"使用默认值"（文档化的字段语义，兜底在 buildHTTPServer）。
 func TestBuildHTTPServerH2ConfigOverrides(t *testing.T) {

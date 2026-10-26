@@ -663,9 +663,16 @@ type UDPExchange struct {
 	target    string
 	lastSeen  atomic.Int64 // UnixNano，由 Send/Receive 写入，由 LastSeen 读取
 	firstRead atomic.Bool  // 在首次 ReadFrame 时置位，启用拒绝分类
+	closed    atomic.Bool  // 在 Close 开始时置位，使并发的 Send 快速失败
 	mu        sync.Mutex
 	closeOnce sync.Once
 }
+
+// udpCloseGrace 是 UDP 交换优雅收尾的预算：FIN/Flush/tx.Close 可能排在该流 shaper 的
+// 写锁后面，而 shaper 的写最终排进同一条 HTTP/2 连接的唯一写循环。预算耗尽后直接发起
+// 关流（取消请求），阻塞的写随即失败；连接级停写由 WriteByteTimeout 兜底，因此 FIN
+// 只是尽力而为，服务端在客户端关流时同样会立即回收关联。
+const udpCloseGrace = time.Second
 
 // 手工拼装不经过整形器的预冲刷边界，可用载荷必须自己算：明文上限减去 target 与帧头
 // 9 字节（3+3+3）。
@@ -723,6 +730,10 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 func (ue *UDPExchange) Send(data []byte) error {
 	ue.mu.Lock()
 	defer ue.mu.Unlock()
+	// 检查必须在锁内：Close 先置位再抢同一把锁，已进入的 Send 仍排在 FIN 之前。
+	if ue.closed.Load() {
+		return shaper.ErrClosed
+	}
 	ue.lastSeen.Store(time.Now().UnixNano())
 	// 用 NewFrameWithPayload 而非 NewFrameDATAGRAM：后者会复制一份载荷，而整形器在 PushFrame
 	// 内就会拷贝。载荷所有权不变（putPayload 为 false）。
@@ -758,17 +769,35 @@ func (ue *UDPExchange) Receive() ([]byte, error) {
 	}
 }
 
-// FIN 必须在 tx.Close 之前推入：shaper 一旦开始关闭，PushFrame 就会丢弃帧。
+// FIN 必须在 tx.Close 之前推入：shaper 一旦开始关闭，PushFrame 就会丢弃帧。收尾放在
+// 后台并在 udpCloseGrace 后直接发起关流：Send 可能正卡在网络写上并持有 ue.mu，同步等锁
+// 会让关闭被传输层背压拖到没有上界。关流本身也可能阻塞在连接写锁上，所以超时后不再等它。
 func (ue *UDPExchange) Close() error {
 	ue.closeOnce.Do(func() {
-		ue.mu.Lock()
-		defer ue.mu.Unlock()
-		if ue.tx != nil {
-			_ = ue.tx.PushFrame(protocol.NewFrameFIN())
-			_ = ue.tx.Flush()
-			_ = ue.tx.Close()
+		ue.closed.Store(true)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			ue.mu.Lock()
+			if ue.tx != nil {
+				_ = ue.tx.PushFrame(protocol.NewFrameFIN())
+				_ = ue.tx.Flush()
+				_ = ue.tx.Close()
+			}
+			ue.mu.Unlock()
+			_ = ue.stream.Close()
+		}()
+
+		timer := time.NewTimer(udpCloseGrace)
+		defer timer.Stop()
+		select {
+		case <-done:
+		case <-timer.C:
+			// 关闭带未读响应体的 HTTP/2 流要拿连接写锁（标准库自己也标注这里可能
+			// 无限等待），不能让它把 Close 拖出预算；连接级停写由 WriteByteTimeout
+			// 兜底，这里只发起关闭。
+			go func() { _ = ue.stream.Close() }()
 		}
-		_ = ue.stream.Close()
 	})
 	return nil
 }

@@ -64,8 +64,8 @@ func (p *udpPool) start() {
 	go p.cleanupLoop()
 }
 
-// close 先把两张表从 map 摘除，再在锁外关闭。Close 会冲刷 FIN 并可能因传输层背压阻塞，
-// 持有 p.mu 会冻结所有 UDP 处理。
+// close 先把两张表从 map 摘除，再在锁外并发关闭。Close 会冲刷 FIN 并可能因传输层背压
+// 阻塞，持有 p.mu 会冻结所有 UDP 处理；串行关闭则让一次停摆把整轮收尾拖成 N 个预算。
 func (p *udpPool) close() {
 	p.closed.Store(true)
 	p.closeOnce.Do(func() { close(p.quit) })
@@ -82,9 +82,11 @@ func (p *udpPool) close() {
 	}
 	p.mu.Unlock()
 
+	var wg sync.WaitGroup
 	for _, ue := range exchanges {
-		ue.Close() //nolint:errcheck
+		wg.Go(func() { _ = ue.Close() })
 	}
+	wg.Wait()
 }
 
 func (p *udpPool) exchangeFor(key string) (*UDPExchange, bool) {
@@ -175,9 +177,13 @@ func (p *udpPool) createExchange(ctx context.Context, key, dst string, firstPayl
 	p.exchanges[key] = ue
 	p.mu.Unlock()
 
+	// 与 close/cleanupLoop 同一模式：被驱逐的可能不止一条，串行关闭会让一次停摆
+	// 拖住该 key 的新包。
+	var wg sync.WaitGroup
 	for _, old := range evicted {
-		old.Close() //nolint:errcheck
+		wg.Go(func() { _ = old.Close() })
 	}
+	wg.Wait()
 	return exchangeCreation{ue: ue, created: true, owner: token}, nil
 }
 
@@ -375,10 +381,13 @@ func (p *udpPool) cleanupLoop() {
 				}
 			}
 			p.mu.Unlock()
-			// 在锁外关闭：Close 可能因传输层背压阻塞，持有 p.mu 会冻结所有 UDP 处理。
+			// 在锁外并发关闭：Close 可能因传输层背压阻塞，持有 p.mu 会冻结所有 UDP
+			// 处理，串行关闭会让一条停摆的交换拖住整轮清理。
+			var wg sync.WaitGroup
 			for _, ue := range stale {
-				ue.Close() //nolint:errcheck
+				wg.Go(func() { _ = ue.Close() })
 			}
+			wg.Wait()
 		case <-p.quit:
 			return
 		}

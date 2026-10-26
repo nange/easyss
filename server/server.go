@@ -400,6 +400,9 @@ func buildHTTPServer(cfg *serverconfig.FileConfig, tlsConfig *tls.Config, mux *h
 		MaxReceiveBufferPerConnection: effectiveH2(cfg.Transport.H2RecvBufConn, config.HTTP2ServerReceiveBufferPerConnection),
 		MaxReceiveBufferPerStream:     effectiveH2(cfg.Transport.H2RecvBufStream, config.HTTP2ServerReceiveBufferPerStream),
 		MaxConcurrentStreams:          config.HTTP2ServerMaxConcurrentStreams,
+		// 响应写最终都排进这条连接唯一的写循环；没有上界的网络写会让一个停住的
+		// 对端拖住整条连接上的 handler 收尾。
+		WriteByteTimeout: timeout,
 	}
 
 	// 连接级窗口同时是流级窗口的硬上限：配得比流级窗口小，单条流的在途额度就由它决定，
