@@ -3,6 +3,8 @@ package router
 import (
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/nange/easyss/v3/rule"
@@ -291,7 +293,7 @@ func TestRouter_SetIPV6Info(t *testing.T) {
 	r := &Router{}
 	r.SetIPV6Info(true, "2001:db8::1")
 
-	if !r.ipv6Networking.Load() {
+	if info := r.ipv6.Load(); info == nil || !info.networking {
 		t.Error("ipv6Networking should be true")
 	}
 	if r.ServerIPV6() != "2001:db8::1" {
@@ -307,6 +309,40 @@ func TestRouter_SetIPV6Info(t *testing.T) {
 	if !r.ShouldIPV6Disable() {
 		t.Error("IPV6RuleAuto without a server ipv6 should disable ipv6")
 	}
+}
+
+// TestRouter_SetIPV6InfoPublishesOneSnapshot 固定"两个字段同一个快照"：读者永远看到
+// (false,"") 或 (true,"2001:db8::1")，看不到只有一项更新过的中间态。分类与 DNS 策略
+// 门在任意 goroutine 上读，撕裂就会瞬时误拒 IPv6 目标。
+func TestRouter_SetIPV6InfoPublishesOneSnapshot(t *testing.T) {
+	r := &Router{}
+	var done atomic.Bool
+	var wg sync.WaitGroup
+
+	wg.Go(func() {
+		defer done.Store(true)
+		for i := range 10000 {
+			if i%2 == 0 {
+				r.SetIPV6Info(false, "")
+			} else {
+				r.SetIPV6Info(true, "2001:db8::1")
+			}
+		}
+	})
+	wg.Go(func() {
+		for !done.Load() {
+			info := r.ipv6.Load()
+			if info == nil {
+				continue
+			}
+			// 两种合法组合都满足 networking == (server != "")。
+			if info.networking != (info.server != "") {
+				t.Errorf("torn ipv6 snapshot: networking=%v server=%q", info.networking, info.server)
+				return
+			}
+		}
+	})
+	wg.Wait()
 }
 
 func TestRouter_isLANHost(t *testing.T) {

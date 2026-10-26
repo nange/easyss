@@ -99,9 +99,9 @@ type Router struct {
 	ipv6Rule  atomic.Int32
 
 	// IPv6 可用性在构造之后（client.New）才解析、并在每个请求时读取，因此与规则一样
-	// 以原子方式存储而不是放进 cfg——cfg 的字段会产生数据竞争。
-	ipv6Networking atomic.Bool
-	serverIPV6     atomic.Pointer[string]
+	// 以原子方式存储而不是放进 cfg——cfg 的字段会产生数据竞争。两个字段必须同一个
+	// 快照发布：分别读会得到 "networking=true + 旧 server ipv6" 的半成品。
+	ipv6 atomic.Pointer[ipv6Info]
 
 	// ruleGeneration 在路由相关状态变化时递增，供按目标缓存分类结果的调用方失效缓存。
 	// 只增不减，比较相等即可判断缓存是否属于当前规则。
@@ -331,7 +331,8 @@ func (r *Router) ShouldIPV6Disable() bool {
 	case IPV6RuleEnable:
 		return false
 	case IPV6RuleAuto:
-		if r.ipv6Networking.Load() && r.ServerIPV6() != "" {
+		info := r.ipv6.Load()
+		if info != nil && info.networking && info.server != "" {
 			return false
 		}
 	}
@@ -347,15 +348,19 @@ func (r *Router) SetProxyRule(rule ProxyRule) {
 	r.ruleGeneration.Add(1)
 }
 
+type ipv6Info struct {
+	networking bool
+	server     string
+}
+
 func (r *Router) SetIPV6Info(networking bool, serverIPV6 string) {
-	r.ipv6Networking.Store(networking)
-	r.serverIPV6.Store(&serverIPV6)
+	r.ipv6.Store(&ipv6Info{networking: networking, server: serverIPV6})
 	r.ruleGeneration.Add(1)
 }
 
 func (r *Router) ServerIPV6() string {
-	if p := r.serverIPV6.Load(); p != nil {
-		return *p
+	if info := r.ipv6.Load(); info != nil {
+		return info.server
 	}
 	return ""
 }
