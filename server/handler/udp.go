@@ -59,7 +59,7 @@ func (h *udpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 		var err error
 		conn, remote, err = h.dial.dialTarget(ctx, "udp", target)
 		if err != nil {
-			return streamResult{Err: err}
+			return streamResult{Err: err, DialFailed: true}
 		}
 	}
 

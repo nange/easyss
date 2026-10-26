@@ -241,8 +241,9 @@ func (h *ProxyHandler) serveSession(w http.ResponseWriter, r *http.Request, res 
 // 流控等待，到点必须复位该流，handler goroutine 才不会跟着不读响应的客户端滞留。
 const responseTeardownGrace = time.Second
 
-// teardownSession 收尾一条流。正常收尾不设 deadline，只有超出预算才复位流，因此慢速但
-// 仍在推进的尾部不会被截断。
+// teardownSession 收尾一条流。预算内完成不设 deadline；超预算立即复位流，因此超预算时
+// 仍在慢速推进的尾部同样会被截断。正常完成路径的数据已由处理循环冲刷，收尾通常只剩不足
+// 一条记录的残余，拦住无限滞留优先。
 func (h *ProxyHandler) teardownSession(rc *http.ResponseController, s2c shaper.Shaper, result streamResult) {
 	// 收尾结束前必须等这个回调退出：它会在 handler 返回后触碰已经失效的 responseWriter。
 	fired := make(chan struct{})

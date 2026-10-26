@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -14,12 +15,13 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/crypto"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
 )
 
 // deadlineRecorder 记录 ResponseController 设置的写截止时间，用来断言收尾只在超预算时
-// 才复位流：正常收尾设置 deadline 会让慢速但仍在推进的尾部被截断。
+// 才复位流：正常收尾设置 deadline 会截断尚未送达的尾部。
 type deadlineRecorder struct {
 	*httptest.ResponseRecorder
 	deadlines chan time.Time
@@ -234,5 +236,65 @@ func TestServeHTTP_HandlerExitsWhenResponseIsNotRead(t *testing.T) {
 	}
 	if target.read.Load() == 0 {
 		t.Fatal("the target was never read: the handler did not reach the relay")
+	}
+}
+
+// TestDialFailureWithEOFStillRequestsRST 守住拨号失败的帧语义：上游 SOCKS5 在握手阶段
+// 直接关连接时，x/net 的 ReadFull 返回裸 io.EOF；拨号失败没有可用的目标连接，必须发
+// RST，不能被 needsRST 的 EOF 例外吞掉。
+func TestDialFailureWithEOFStillRequestsRST(t *testing.T) {
+	masterKey := []byte("0123456789abcdef0123456789abcdef")
+
+	t.Run("tcp", func(t *testing.T) {
+		sk, err := crypto.NewStreamKeys(masterKey, make([]byte, 16), config.EndpointTCP)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pr, pw := io.Pipe()
+		t.Cleanup(func() { _ = pw.Close() }) //nolint:errcheck
+		dr, err := sk.NewReader(pr, crypto.DirC2S, protocol.MethodAES256GCM)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s2cWriter, err := sk.NewWriter(io.Discard, crypto.DirS2C, protocol.MethodAES256GCM)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		h := newTCPHandler(config.Timeouts{Base: time.Second, StreamIdle: time.Second}, nil, defaultOutboundDeps())
+		h.dialContext = func(context.Context, string, string) (net.Conn, error) { return nil, io.EOF }
+
+		res := h.Handle(t.Context(), dr, shaper.New(s2cWriter, shaper.Config{}), testPublicV4+":443", func() {})
+		assertDialFailureWantsRST(t, res)
+	})
+
+	t.Run("udp", func(t *testing.T) {
+		h := newUDPHandler(config.Timeouts{Base: time.Second, UDPIdle: time.Second}, nil, defaultOutboundDeps())
+		h.dial.direct = func(context.Context, string, string) (net.Conn, error) { return nil, io.EOF }
+		dr, s2c := newClientStream(t, bytes.NewReader(nil), io.Discard)
+
+		res := h.Handle(t.Context(), dr, s2c, testPublicV4+":443", func() {})
+		assertDialFailureWantsRST(t, res)
+	})
+}
+
+func assertDialFailureWantsRST(t *testing.T, res streamResult) {
+	t.Helper()
+	if !errors.Is(res.Err, io.EOF) {
+		t.Fatalf("result error = %v, want the raw dial EOF", res.Err)
+	}
+	if !res.DialFailed {
+		t.Fatal("a dial failure must be marked DialFailed")
+	}
+	if !res.needsRST() {
+		t.Fatal("a dial failure must request RST even when the underlying error is io.EOF")
+	}
+}
+
+// TestNeedsRSTTreatsReadEOFAsClean 固定 EOF 例外只服务读方向：中继读到 EOF 是正常结束，
+// 不能被拨号失败的标记顺带改成 RST。
+func TestNeedsRSTTreatsReadEOFAsClean(t *testing.T) {
+	if (streamResult{Err: io.EOF}).needsRST() {
+		t.Fatal("a read-direction EOF must stay a clean end")
 	}
 }
