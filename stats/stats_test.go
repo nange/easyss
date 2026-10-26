@@ -177,6 +177,21 @@ func TestCountersRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSlotProbeCountersSplitByMethod(t *testing.T) {
+	t.Cleanup(ResetCounters)
+	ResetCounters()
+
+	RecordSlotProbeGet()
+	RecordSlotProbeGet()
+	RecordSlotProbeHead()
+
+	snap := Collect()
+	if snap.SlotProbes != 3 || snap.SlotProbeGet != 2 || snap.SlotProbeHead != 1 {
+		t.Fatalf("slot probes total/get/head = %d/%d/%d, want 3/2/1",
+			snap.SlotProbes, snap.SlotProbeGet, snap.SlotProbeHead)
+	}
+}
+
 // TestSnapshotJSONKeys 锁住 /stats 的对外键集合：分段只是代码组织方式，任何键名增删改
 // 都必须在这里显式更新，否则内部字段改名不会留下任何失败。
 func TestSnapshotJSONKeys(t *testing.T) {
@@ -251,6 +266,8 @@ func TestSnapshotJSONKeys(t *testing.T) {
 		"slot_degraded",
 		"slot_grown_bulk",
 		"slot_grown_priority",
+		"slot_probe_get",
+		"slot_probe_head",
 		"slot_probe_slow",
 		"slot_probe_unsupported",
 		"slot_probes",

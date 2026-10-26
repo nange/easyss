@@ -78,6 +78,28 @@ func TestSlotProberFast(t *testing.T) {
 	}
 }
 
+func TestSlotProberCountsHeadProbes(t *testing.T) {
+	ts, token := newProbeServer(t, testProbePayloadSize)
+	prober := &slotProber{serverURL: ts.URL, token: token}
+
+	stats.ResetCounters()
+	t.Cleanup(stats.ResetCounters)
+
+	slot := newProbeSlot()
+	for range 2 {
+		alive, ok := prober.alive(context.Background(), slot.generation())
+		if !ok || !alive {
+			t.Fatalf("alive = (%v, %v), want (true, true)", alive, ok)
+		}
+	}
+
+	snap := stats.Collect()
+	if snap.SlotProbes != 2 || snap.SlotProbeHead != 2 || snap.SlotProbeGet != 0 {
+		t.Fatalf("slot probes total/get/head = %d/%d/%d, want 2/0/2",
+			snap.SlotProbes, snap.SlotProbeGet, snap.SlotProbeHead)
+	}
+}
+
 // 载荷长度是服务端侧的可调参数：客户端接受服务端声明的任意可测长度，否则调整
 // ProbePayloadSize 会让旧客户端把探测判成 unsupported 并永久退回被动检测。
 func TestSlotProberAcceptsAnyServerPayloadSize(t *testing.T) {
