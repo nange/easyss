@@ -702,6 +702,7 @@ func (c *Client) SetProxyRule(rule string) {
 }
 
 // 直连拨号器据此决定是否走绑定接口的拨号路径；必须在引擎真正建立/拆除之后调用。
+// 桌面端由 session 在 tunMu 内按实际安装的引擎发布，不要再从配置快照读偏好覆盖它。
 func (c *Client) SetTunMode(on bool) {
 	c.tunMode.Store(on)
 }

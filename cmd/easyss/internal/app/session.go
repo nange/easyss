@@ -128,10 +128,11 @@ func (s *session) start() error {
 		}
 	}
 
-	// 重读 currentConfig() 而不复用 sessionCfg：这次启动可能与一次 TUN 开关并发。
-	if core.Client != nil {
-		core.Client.SetTunMode(s.app.currentConfig().Local.EnableTun2socks)
-	}
+	// TUN 开关是运行期状态：必须在 tunMu 内按本会话实际安装的引擎发布。读配置偏好再写会
+	// 与启动途中的托盘 tunUp/tunDown 互相覆盖（锁外读到旧值后把新值写回）。
+	s.tunMu.Lock()
+	s.syncTunModeLocked()
+	s.tunMu.Unlock()
 
 	if s.statsCloser != nil {
 		close(s.statsCloser)
@@ -160,11 +161,9 @@ func (s *session) stop() {
 	}
 
 	s.tunMu.Lock()
-	// 通常为 nil（App.Stop 已先调 tunDown 取走）；这里只停引擎，完整拆除只走 App.Stop/tunDown。
-	if mgr := s.tunMgr; mgr != nil {
-		s.tunMgr = nil
-		mgr.Stop()
-	}
+	// 排队在 tunMu 上的托盘 tunUp 可能插进 App.Stop 的 tunDown 与这里之间：只停引擎会漏掉
+	// tunSession/tunOwner/helper FIFO，helper 会继续持路由与系统 DNS。
+	s.tunDownLocked(nil)
 	core := s.core.Swap(nil)
 	s.tunMu.Unlock()
 
@@ -186,6 +185,11 @@ func (s *session) startTunEngineAtStartup() {
 	// 与 tunUp 共用 tunMu：两者写同一个 tunMgr，而菜单在 start 之前就已可见。
 	s.tunMu.Lock()
 	defer s.tunMu.Unlock()
+
+	// 托盘可能在核心发布之后、这里拿到锁之前就装好了 TUN：覆盖会让旧引擎失去回收者。
+	if s.tunMgr != nil {
+		return
+	}
 
 	mgr := tun.New(s.tunConfig())
 	s.adoptTunManager(mgr, nil, tun.OwnerLocal)
@@ -211,7 +215,6 @@ func (s *session) tunUp() error {
 
 	// 偏好写配置快照、运行期状态写 core 上的开关，两者必须同时更新。
 	s.app.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = true })
-	core.Client.SetTunMode(true)
 	mgr := tun.New(s.tunConfig())
 	s.adoptTunManager(mgr, nil, tun.OwnerLocal)
 
@@ -230,6 +233,17 @@ func (s *session) adoptTunManager(mgr *tun.Manager, dev *tun.DeviceConfig, owner
 	s.tunMgr = mgr
 	s.tunSession = dev
 	s.tunOwner = owner
+	s.syncTunModeLocked()
+}
+
+// syncTunModeLocked 把 client 的运行期开关对齐到本会话实际安装的引擎。必须在 tunMu 内
+// 调用：tunUp/tunDown 在同一个临界区里改 tunMgr，锁外读配置再写会被并发开关覆盖。
+func (s *session) syncTunModeLocked() {
+	core := s.currentCore()
+	if core == nil || core.Client == nil {
+		return
+	}
+	core.Client.SetTunMode(s.tunMgr != nil)
 }
 
 func (s *session) buildICMPHandler(core *runner.Core) {
@@ -292,9 +306,7 @@ func (s *session) tunDownLocked(want *tun.Manager) {
 		core.HTTPServer.ClearTunConfig()
 	}
 
-	if core := s.currentCore(); core != nil && core.Client != nil {
-		core.Client.SetTunMode(false)
-	}
+	s.syncTunModeLocked()
 	s.app.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = false })
 }
 
