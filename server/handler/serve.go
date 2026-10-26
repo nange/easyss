@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/netip"
 	"runtime/debug"
+	"time"
 
 	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
@@ -209,11 +210,11 @@ func (h *ProxyHandler) serveSession(w http.ResponseWriter, r *http.Request, res 
 	s2cShaper := shaper.New(s2cWriter, s2cCfg)
 
 	// 包成一次函数调用，这个 defer 才能既保证结果日志是该流的最后一个动作，又在 handler
-	// panic 时（外层 recover 之前）照常关闭 shaper。
+	// panic 时（外层 recover 之前）照常收尾。
 	func() {
-		defer s2cShaper.Close() //nolint:errcheck
-
 		var handleResult streamResult
+		defer func() { h.teardownSession(rc, s2cShaper, handleResult) }()
+
 		// 出站优先用客户端接入所用的地址族，不依赖操作系统的双栈排序；客户端连接的族是这里
 		// 唯一能观测到的信号。
 		reqCtx := withResolvedAddrs(withPreferredFamily(r.Context(), clientPreferredFamily(r.RemoteAddr)), res.addrs)
@@ -233,4 +234,30 @@ func (h *ProxyHandler) serveSession(w http.ResponseWriter, r *http.Request, res 
 		}
 		logHandlerResult(handleResult, res.target, res.endpoint, r.RemoteAddr)
 	}()
+}
+
+// responseTeardownGrace 是响应收尾的预算。中继/会话结束后的 RST 与 shaper Close 都排在
+// 可能卡住的响应写后面：WriteByteTimeout 只覆盖真正落到 socket 的写，覆盖不到 h2
+// 流控等待，到点必须复位该流，handler goroutine 才不会跟着不读响应的客户端滞留。
+const responseTeardownGrace = time.Second
+
+// teardownSession 收尾一条流。预算内完成不设 deadline；超预算立即复位流，因此超预算时
+// 仍在慢速推进的尾部同样会被截断。正常完成路径的数据已由处理循环冲刷，收尾通常只剩不足
+// 一条记录的残余，拦住无限滞留优先。
+func (h *ProxyHandler) teardownSession(rc *http.ResponseController, s2c shaper.Shaper, result streamResult) {
+	// 收尾结束前必须等这个回调退出：它会在 handler 返回后触碰已经失效的 responseWriter。
+	fired := make(chan struct{})
+	timer := time.AfterFunc(h.teardownGrace, func() {
+		defer close(fired)
+		log.Debug("[SERVER] response teardown exceeded its budget, resetting the stream")
+		_ = rc.SetWriteDeadline(time.Now())
+	})
+
+	if result.needsRST() {
+		sendRST(s2c)
+	}
+	_ = s2c.Close()
+	if !timer.Stop() {
+		<-fired
+	}
 }

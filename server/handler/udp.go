@@ -59,8 +59,7 @@ func (h *udpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 		var err error
 		conn, remote, err = h.dial.dialTarget(ctx, "udp", target)
 		if err != nil {
-			sendRST(s2c)
-			return streamResult{Err: err}
+			return streamResult{Err: err, DialFailed: true}
 		}
 	}
 
@@ -78,11 +77,7 @@ func (h *udpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 		route:       h.route,
 		dial:        h.dial,
 	})
-	result := s.run()
-	if result.needsRST() {
-		sendRST(s2c)
-	}
-	return result
+	return s.run()
 }
 
 type udpSession struct {
