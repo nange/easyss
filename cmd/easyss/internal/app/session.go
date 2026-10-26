@@ -108,6 +108,8 @@ func (s *session) start() error {
 	gen := coreGen.Add(1)
 	domainPending := !canStartTunNow(core)
 
+	// 偏好只是进入条件：runCore 可能耗时数秒，期间托盘可以关掉 TUN。
+	// 安装前 startTunEngineAtStartup 会在 tunMu 内用当前偏好复核。
 	if sessionCfg.Local.EnableTun2socks {
 		// 非 root 拿不到 TUN，用户却以为全局流量已代理，必须说明原因。
 		if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !tunhelper.IsRoot() {
@@ -186,8 +188,7 @@ func (s *session) startTunEngineAtStartup() {
 	s.tunMu.Lock()
 	defer s.tunMu.Unlock()
 
-	// 托盘可能在核心发布之后、这里拿到锁之前就装好了 TUN：覆盖会让旧引擎失去回收者。
-	if s.tunMgr != nil {
+	if !s.startupTunWantedLocked() {
 		return
 	}
 
@@ -195,6 +196,12 @@ func (s *session) startTunEngineAtStartup() {
 	s.adoptTunManager(mgr, nil, tun.OwnerLocal)
 	s.buildICMPHandler(core)
 	s.startTunEngine(mgr, "device")
+}
+
+// startupTunWantedLocked 报告启动路径是否仍应安装 TUN。runCore 期间托盘可能已经装好
+// 引擎，也可能把偏好改成 false（用户点了关闭）；两者都不能再装。必须在 tunMu 内调用。
+func (s *session) startupTunWantedLocked() bool {
+	return s.tunMgr == nil && s.app.currentConfig().Local.EnableTun2socks
 }
 
 // 直接创建设备（Windows，或 darwin/linux 上的 root）；全程持有 tunMu，托盘会并发开关。
