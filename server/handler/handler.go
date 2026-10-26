@@ -24,6 +24,8 @@ type ProxyHandler struct {
 	saltCache        *saltCache
 	ipLimiter        *ipRateLimiter
 	fallback         *Fallback
+	// teardownGrace 是响应收尾预算，默认 responseTeardownGrace；测试可以缩小它。
+	teardownGrace time.Duration
 	// deps 与三个子 handler 共用同一个实例：握手期 SSRF 校验与拨号必须是同一个解析器，
 	// 否则构造后改一项就会让两者看到不同的答案。
 	deps *outboundDeps
@@ -85,6 +87,7 @@ func newProxyHandlerWithDeps(cfg ProxyHandlerConfig, deps *outboundDeps) *ProxyH
 		saltCache:        newSaltCache(),
 		ipLimiter:        newIPRateLimiter(),
 		fallback:         cfg.Fallback,
+		teardownGrace:    responseTeardownGrace,
 		deps:             deps,
 	}
 }

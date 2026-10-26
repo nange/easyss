@@ -45,7 +45,6 @@ func newTCPHandler(timeouts config.Timeouts, np *nextproxy.NextProxy, deps *outb
 func (h *tcpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c shaper.Shaper, target string, cancelRead func()) (out streamResult) {
 	targetConn, remote, err := h.dial.dialTarget(ctx, "tcp", target)
 	if err != nil {
-		sendRST(s2c)
 		return streamResult{Err: err}
 	}
 	defer targetConn.Close() //nolint:errcheck
@@ -71,9 +70,6 @@ func (h *tcpHandler) Handle(ctx context.Context, dr *crypto.DecryptedReader, s2c
 		out.Err = fmt.Errorf("%w after %v", errStreamIdleTimeout, h.idleTimeout)
 	} else {
 		out.Err = result.Err
-	}
-	if out.needsRST() {
-		sendRST(s2c)
 	}
 	return out
 }

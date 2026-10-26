@@ -69,11 +69,7 @@ func (h *icmpHandler) Handle(dr *crypto.DecryptedReader, s2c shaper.Shaper, targ
 
 	replyPayload, remote, err := h.icmpExchange(target, frame.Payload)
 	if err != nil {
-		result := streamResult{Err: err}
-		if result.needsRST() {
-			sendRST(s2c)
-		}
-		return result
+		return streamResult{Err: err}
 	}
 
 	dataFrame := protocol.NewFrameDATA(replyPayload)
