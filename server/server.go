@@ -361,6 +361,7 @@ func (s *Server) Start() error {
 	log.Info("[SERVER] listening",
 		"addr", srvCfg.ListenAddr(),
 		"routes", []string{"/", config.EndpointTCP, config.EndpointUDP, config.EndpointICMP, config.EndpointProbe},
+		"probe_payload_bytes", len(probePayload),
 		"h2_max_frame_size", s.httpServer.HTTP2.MaxReadFrameSize,
 		"h2_recv_buf_stream", s.httpServer.HTTP2.MaxReceiveBufferPerStream,
 		"h2_recv_buf_conn", s.httpServer.HTTP2.MaxReceiveBufferPerConnection,
