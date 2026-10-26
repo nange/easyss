@@ -968,3 +968,46 @@ func TestHandleTCPDNSRejectedAfterReplyCloses(t *testing.T) {
 		t.Fatalf("read error = %v, want EOF (the connection must be closed, not left hanging)", err)
 	}
 }
+
+// TestHandleTCPDNSProxyTimeoutInvalidatesExchange 覆盖超时后的交换作废：等待应答
+// 的 goroutine 必须持有交换快照，不能在 invalidate 置空会话字段后重读。
+func TestHandleTCPDNSProxyTimeoutInvalidatesExchange(t *testing.T) {
+	const queries = 3
+
+	rt, err := router.New(router.Config{ProxyRule: router.ProxyRuleAuto, IPV6Rule: router.IPV6RuleDisable})
+	if err != nil {
+		t.Fatalf("router.New: %v", err)
+	}
+	rt.AddProxyDomain("proxy.example.com")
+
+	streams := make([]transport.Stream, queries)
+	for i := range streams {
+		streams[i] = newBlockingStream()
+	}
+	tr := &mockTransport{streams: streams}
+	srv := newTCPDNSTestServer(t, rt, tr)
+	srv.dns.respTimeout = 50 * time.Millisecond
+
+	client, br := serveTCPDNSHandler(t, srv, "223.5.5.5:53")
+	awaitSocks5Reply(t, client, br)
+
+	for i := range queries {
+		q := new(dns.Msg)
+		q.SetQuestion("proxy.example.com.", dns.TypeA)
+		q.Id = uint16(0x3300 + i)
+		if err := writeTCPDNSMessage(client, q); err != nil {
+			t.Fatalf("query #%d: write: %v", i, err)
+		}
+		resp, err := readTCPDNSMessage(br, nil)
+		if err != nil {
+			t.Fatalf("query #%d: read response: %v", i, err)
+		}
+		if resp.Rcode != dns.RcodeServerFailure {
+			t.Errorf("query #%d: rcode = %d, want SERVFAIL", i, resp.Rcode)
+		}
+	}
+
+	if got := tr.openCalls(); got != queries {
+		t.Errorf("transport open calls = %d, want %d (every timeout must invalidate the exchange)", got, queries)
+	}
+}

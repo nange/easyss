@@ -29,12 +29,15 @@ import (
 )
 
 type Server struct {
-	cfg        *serverconfig.FileConfig
+	cfg *serverconfig.FileConfig
+	mux *http.ServeMux
+
+	// mu 串行化启动发布与关闭：Shutdown 可能与 Start 并发。
+	mu         sync.Mutex
 	httpServer *http.Server
-	mux        *http.ServeMux
 	certCache  *certmagic.Cache
 	statsDone  chan struct{}
-	statsOnce  sync.Once
+	stopped    bool
 }
 
 // acmeProfileShortLived 只为 IP 标识符而设：LE 的 IP 地址证书必须是短生命周期证书，
@@ -54,28 +57,28 @@ func New(cfg *serverconfig.FileConfig) (*Server, error) {
 	return s, nil
 }
 
-func (s *Server) initTLS() (*tls.Config, error) {
+func (s *Server) initTLS() (*tls.Config, *certmagic.Cache, error) {
 	cfg := s.cfg
 	srvCfg := cfg.Server
 
 	if cfg.UsesManualCertificate() {
 		cert, err := tls.LoadX509KeyPair(srvCfg.CertPath, srvCfg.KeyPath)
 		if err != nil {
-			return nil, fmt.Errorf("load cert: %w", err)
+			return nil, nil, fmt.Errorf("load cert: %w", err)
 		}
 		return &tls.Config{
 			Certificates: []tls.Certificate{cert},
 			NextProtos:   config.NextProtos,
 			MinVersion:   tls.VersionTLS12,
-		}, nil
+		}, nil, nil
 	}
 
 	storagePath, err := certmagicStoragePath()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := os.MkdirAll(storagePath, 0700); err != nil {
-		return nil, fmt.Errorf("create certmagic storage: %w", err)
+		return nil, nil, fmt.Errorf("create certmagic storage: %w", err)
 	}
 
 	s.resolveEmail(storagePath)
@@ -94,12 +97,11 @@ func (s *Server) initTLS() (*tls.Config, error) {
 		if cache != nil {
 			cache.Stop()
 		}
-		return nil, fmt.Errorf("certmagic: %w", err)
+		return nil, nil, fmt.Errorf("certmagic: %w", err)
 	}
 
-	s.certCache = cache
 	tlsConfig.NextProtos = append(slices.Clone(config.NextProtos), tlsConfig.NextProtos...)
-	return tlsConfig, nil
+	return tlsConfig, cache, nil
 }
 
 func (s *Server) manageCert(storage certmagic.Storage, disableARI bool) (*tls.Config, *certmagic.Cache, error) {
@@ -147,7 +149,7 @@ func (s *Server) resolveEmail(storagePath string) {
 	log.Info("[SERVER] generated random ACME email", "email", s.cfg.Server.Email)
 }
 
-func (s *Server) statsLoop() {
+func (s *Server) statsLoop(done <-chan struct{}) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -168,7 +170,7 @@ func (s *Server) statsLoop() {
 				"padding", stats.HumanBytes(snap.PaddingBytes),
 				"records", snap.RecordsWritten,
 			)
-		case <-s.statsDone:
+		case <-done:
 			return
 		}
 	}
@@ -278,11 +280,18 @@ func (s *Server) Start() error {
 	timeout := config.TimeoutDuration(cfg.Timeout)
 	log.Info("[SERVER] starting", "listen", srvCfg.ListenAddr(), "host", srvCfg.Host, "timeout", int(timeout.Seconds()))
 
-	tlsConfig, err := s.initTLS()
+	tlsConfig, certCache, err := s.initTLS()
 	if err != nil {
 		log.Error("[SERVER] init TLS failed", "err", err)
 		return err
 	}
+	// 提交前缓存还不归 Server 所有：启动失败或 Shutdown 先到时由这里回收。
+	committed := false
+	defer func() {
+		if !committed && certCache != nil {
+			certCache.Stop()
+		}
+	}()
 	if cfg.UsesManualCertificate() {
 		log.Info("[SERVER] TLS mode: cert files", "cert", srvCfg.CertPath, "key", srvCfg.KeyPath)
 	} else if cfg.ACMESubjectIsIP() {
@@ -355,20 +364,32 @@ func (s *Server) Start() error {
 	s.mux.Handle(config.EndpointICMP, proxyHandler)
 	s.mux.Handle(config.EndpointProbe, probeHandler)
 
-	s.httpServer = buildHTTPServer(cfg, tlsConfig, s.mux, timeout)
+	srv := buildHTTPServer(cfg, tlsConfig, s.mux, timeout)
+
+	statsDone := make(chan struct{})
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return http.ErrServerClosed
+	}
+	s.httpServer = srv
+	s.certCache = certCache
+	s.statsDone = statsDone
+	committed = true
+	s.mu.Unlock()
 
 	// 打进生效的 HTTP/2 参数：上传速度上不去时，第一件事是确认服务端给了多大的窗口与并发流。
 	log.Info("[SERVER] listening",
 		"addr", srvCfg.ListenAddr(),
 		"routes", []string{"/", config.EndpointTCP, config.EndpointUDP, config.EndpointICMP, config.EndpointProbe},
 		"probe_payload_bytes", len(probePayload),
-		"h2_max_frame_size", s.httpServer.HTTP2.MaxReadFrameSize,
-		"h2_recv_buf_stream", s.httpServer.HTTP2.MaxReceiveBufferPerStream,
-		"h2_recv_buf_conn", s.httpServer.HTTP2.MaxReceiveBufferPerConnection,
-		"h2_max_concurrent_streams", s.httpServer.HTTP2.MaxConcurrentStreams)
-	s.statsDone = make(chan struct{})
-	go s.statsLoop()
-	return s.httpServer.ListenAndServeTLS("", "")
+		"h2_max_frame_size", srv.HTTP2.MaxReadFrameSize,
+		"h2_recv_buf_stream", srv.HTTP2.MaxReceiveBufferPerStream,
+		"h2_recv_buf_conn", srv.HTTP2.MaxReceiveBufferPerConnection,
+		"h2_max_concurrent_streams", srv.HTTP2.MaxConcurrentStreams)
+
+	go s.statsLoop(statsDone)
+	return srv.ListenAndServeTLS("", "")
 }
 
 // buildHTTPServer 的 HTTP/2 参数按上传吞吐量定尺寸：流级接收窗口决定单条上传流的在途数据量
@@ -415,18 +436,24 @@ func effectiveH2(v, def int) int {
 func (s *Server) Shutdown(ctx context.Context) error {
 	log.Info("[SERVER] shutting down")
 
-	s.statsOnce.Do(func() {
-		if s.statsDone != nil {
-			close(s.statsDone)
-		}
-	})
-
-	if s.certCache != nil {
-		s.certCache.Stop()
-		s.certCache = nil
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return nil
 	}
-	if s.httpServer != nil {
-		return s.httpServer.Shutdown(ctx)
+	s.stopped = true
+	httpServer, certCache, statsDone := s.httpServer, s.certCache, s.statsDone
+	s.httpServer, s.certCache, s.statsDone = nil, nil, nil
+	s.mu.Unlock()
+
+	if statsDone != nil {
+		close(statsDone)
+	}
+	if certCache != nil {
+		certCache.Stop()
+	}
+	if httpServer != nil {
+		return httpServer.Shutdown(ctx)
 	}
 	return nil
 }

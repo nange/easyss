@@ -80,11 +80,13 @@ func (s *tcpDNSSession) resolveProxy(msg *dns.Msg) (*dns.Msg, error) {
 		return nil, err
 	}
 
-	if s.ue == nil {
-		ue, created, err := s.d.pool.acquireExchange(context.Background(), s.key, clientconfig.ProxyDNSServer, data)
+	ue := s.ue
+	if ue == nil {
+		acquired, created, err := s.d.pool.acquireExchange(context.Background(), s.key, clientconfig.ProxyDNSServer, data)
 		if err != nil {
 			return nil, err
 		}
+		ue = acquired
 		s.ue = ue
 		if !created {
 			// 交换已存在：首载荷未被合并，需显式发送。
@@ -93,12 +95,12 @@ func (s *tcpDNSSession) resolveProxy(msg *dns.Msg) (*dns.Msg, error) {
 				return nil, err
 			}
 		}
-	} else if err := s.ue.Send(data); err != nil {
+	} else if err := ue.Send(data); err != nil {
 		s.invalidate()
 		return nil, err
 	}
 
-	resp, err := s.waitResponse()
+	resp, err := s.waitResponse(ue)
 	if err != nil {
 		// 交换疑似失效（超时/流错误）：必须从会话池移除并关闭，否则残留的已关闭交换
 		// 会被 acquireExchange 直接命中，该连接后续代理查询永久 SERVFAIL。
@@ -108,16 +110,16 @@ func (s *tcpDNSSession) resolveProxy(msg *dns.Msg) (*dns.Msg, error) {
 }
 
 // waitResponse 同步等待应答，超时后关闭交换使阻塞的 Receive 退出（调用方随后会作废它）。
-// respTimeout 由构造期归一化保证为正（见 newDNSInterceptor）：这里是同步等待的上限，
-// 而不是 UDP 路径上那个"<= 0 即关闭读空闲"的功能开关。
-func (s *tcpDNSSession) waitResponse() (*dns.Msg, error) {
+// ue 由调用方快照传入：等待期间不能让 Receive goroutine 读会被 invalidate 置空的会话字段。
+// respTimeout 由构造期归一化保证为正，这里是同步等待上限，不是 UDP 路径的读空闲开关。
+func (s *tcpDNSSession) waitResponse(ue *UDPExchange) (*dns.Msg, error) {
 	type result struct {
 		data []byte
 		err  error
 	}
 	ch := make(chan result, 1)
 	go func() {
-		data, err := s.ue.Receive()
+		data, err := ue.Receive()
 		ch <- result{data: data, err: err}
 	}()
 
@@ -135,7 +137,7 @@ func (s *tcpDNSSession) waitResponse() (*dns.Msg, error) {
 		}
 		return msg, nil
 	case <-timer.C:
-		s.ue.Close() //nolint:errcheck
+		ue.Close() //nolint:errcheck
 		return nil, errDNSResponseTimeout
 	}
 }
