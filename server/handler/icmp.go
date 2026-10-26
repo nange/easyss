@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/nange/easyss/v3/config"
@@ -34,6 +35,15 @@ const (
 	// IPv4 头（解析前剥掉），IPv4 头最长 60 字节。
 	icmpIPHeaderReserve = 64
 )
+
+// icmpEchoID 给每条服务端 ICMP 交换分配唯一的回显 ID。原始 socket 的应答由内核按目标
+// 地址投递，客户端自选的 (ID, Seq) 在同目标并发时可能重复；服务端改写 ID 并在应答里
+// 还原，交换之间才不会错投载荷。
+var icmpEchoID atomic.Uint32
+
+func nextICMPEchoID() int {
+	return int(uint16(icmpEchoID.Add(1)))
+}
 
 // icmpFirstReadBufSize 是纯函数，"小请求只借小缓冲"这条内存契约才能被直接单测：
 // 真实 ICMP 交换需要 root 与外部可达目标，不适合做断言基础。
@@ -113,11 +123,12 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) (reply []byte,
 
 	sentID := int(binary.BigEndian.Uint16(payload[:2]))
 	sentSeq := int(binary.BigEndian.Uint16(payload[2:4]))
+	echoID := nextICMPEchoID()
 	msg := icmp.Message{
 		Type: echoType,
 		Code: 0,
 		Body: &icmp.Echo{
-			ID:   sentID,
+			ID:   echoID,
 			Seq:  sentSeq,
 			Data: payload[4:],
 		},
@@ -138,8 +149,8 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) (reply []byte,
 	rb := bytespool.Get(icmpFirstReadBufSize(payload))
 	defer func() { bytespool.MustPut(rb) }()
 
-	// 原始 ICMP socket 会收到送达本机的所有 ICMP 报文，并发流的应答 ID/Seq 会串台，
-	// 因此持续读到截止时间并只认自己那一对；ICMP 错误报文永远不匹配，表现为超时。
+	// 原始 ICMP socket 会收到送达本机的所有 ICMP 报文；服务端唯一化的 ID 让同目标并发
+	// 交换不会互相认领，ICMP 错误报文永远不匹配，表现为超时。
 	for {
 		n, err := conn.Read(rb)
 		if err != nil {
@@ -182,12 +193,13 @@ func (h *icmpHandler) icmpExchange(target string, payload []byte) (reply []byte,
 		}
 
 		body, ok := rm.Body.(*icmp.Echo)
-		if !ok || body.ID != sentID || body.Seq != sentSeq {
+		if !ok || body.ID != echoID || body.Seq != sentSeq {
 			continue
 		}
 		result := make([]byte, 4+len(body.Data))
-		binary.BigEndian.PutUint16(result[:2], uint16(body.ID))
-		binary.BigEndian.PutUint16(result[2:4], uint16(body.Seq))
+		// 还原客户端自己的 ID：本地 ping 用它匹配应答。
+		binary.BigEndian.PutUint16(result[:2], uint16(sentID))
+		binary.BigEndian.PutUint16(result[2:4], uint16(sentSeq))
 		copy(result[4:], body.Data)
 		return result, connRemote, nil
 	}

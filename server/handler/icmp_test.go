@@ -1,9 +1,15 @@
 package handler
 
 import (
+	"context"
+	"encoding/binary"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/nange/easyss/v3/util"
+	"golang.org/x/net/icmp"
+	"golang.org/x/net/ipv4"
 )
 
 func TestLanHostOf(t *testing.T) {
@@ -69,5 +75,97 @@ func TestICMPFirstReadBufSize(t *testing.T) {
 				t.Fatalf("size %d 超出 [%d, %d]", got, icmpMinReadBufSize, icmpMaxReadBufSize)
 			}
 		})
+	}
+}
+
+// TestICMPExchangeRewritesEchoID 固定服务端对回显 ID 的唯一化：原始 socket 的应答由
+// 内核按目标地址投递，客户端自选的 (ID, Seq) 在同目标并发时可能重复。服务端必须用自己
+// 分配的 ID 匹配应答，再把客户端 ID 还原，否则同目标的两条会话会互相认领载荷。
+func TestICMPExchangeRewritesEchoID(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() {
+		clientConn.Close() //nolint:errcheck
+		serverConn.Close() //nolint:errcheck
+	})
+
+	h := &icmpHandler{}
+	h.dial.direct = func(context.Context, string, string) (net.Conn, error) {
+		return clientConn, nil
+	}
+
+	const (
+		sentID  = 0xFFFE // 计数器从 1 开始，本测试进程不会分配到它
+		sentSeq = 7
+	)
+	payload := make([]byte, 4+len("client-payload"))
+	binary.BigEndian.PutUint16(payload[0:2], sentID)
+	binary.BigEndian.PutUint16(payload[2:4], sentSeq)
+	copy(payload[4:], "client-payload")
+
+	type outcome struct {
+		reply []byte
+		err   error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		reply, _, err := h.icmpExchange("1.1.1.1", payload)
+		done <- outcome{reply: reply, err: err}
+	}()
+
+	reqBuf := make([]byte, 1500)
+	n, err := serverConn.Read(reqBuf)
+	if err != nil {
+		t.Fatalf("read echo request: %v", err)
+	}
+	reqMsg, err := icmp.ParseMessage(1, reqBuf[:n])
+	if err != nil {
+		t.Fatalf("parse echo request: %v", err)
+	}
+	reqEcho, ok := reqMsg.Body.(*icmp.Echo)
+	if !ok {
+		t.Fatalf("echo request body = %T", reqMsg.Body)
+	}
+	if reqEcho.ID == sentID {
+		t.Fatalf("server must rewrite the client-chosen echo id %#x", sentID)
+	}
+	if reqEcho.Seq != sentSeq {
+		t.Fatalf("seq = %d, want %d", reqEcho.Seq, sentSeq)
+	}
+
+	writeReply := func(id int, data string) {
+		t.Helper()
+		reply, merr := (&icmp.Message{
+			Type: ipv4.ICMPTypeEchoReply,
+			Body: &icmp.Echo{ID: id, Seq: sentSeq, Data: []byte(data)},
+		}).Marshal(nil)
+		if merr != nil {
+			t.Fatalf("marshal echo reply: %v", merr)
+		}
+		if _, werr := serverConn.Write(reply); werr != nil {
+			t.Fatalf("write echo reply: %v", werr)
+		}
+	}
+
+	// 同目标的另一条会话（客户端自选 ID 恰好相同）的应答先到，本会话不得认领。
+	writeReply(sentID, "other-session")
+	// 本会话的应答随后到达。
+	writeReply(reqEcho.ID, "client-payload")
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("icmpExchange: %v", got.err)
+		}
+		if id := binary.BigEndian.Uint16(got.reply[0:2]); id != sentID {
+			t.Fatalf("reply id = %#x, want the client id %#x", id, sentID)
+		}
+		if seq := binary.BigEndian.Uint16(got.reply[2:4]); seq != sentSeq {
+			t.Fatalf("reply seq = %d, want %d", seq, sentSeq)
+		}
+		if data := string(got.reply[4:]); data != "client-payload" {
+			t.Fatalf("reply payload = %q: another session's reply was accepted", data)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("icmpExchange did not return")
 	}
 }
