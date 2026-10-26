@@ -78,7 +78,7 @@ Bootstrap 用 AES-256-GCM 加密初始握手帧（含目标地址与方法协商
 
 `App.cfg` 是 `atomic.Pointer[ClientConfig]` 指向的不可变快照：菜单改动走 `App.updateConfig`（克隆→改→CAS），启动/切换用 `App.adoptConfig` 整体换装，只把快照交给新会话。运行期状态不进配置：TUN 是否生效由 `Client.SetTunMode`（`tunMode atomic.Bool`）告知，`local.enable_tun2socks` 只是"下次启动的偏好"（`client.New` 用它播种，`App.Start` 决定本会话后再覆盖）。服务器切换事务在 `App.restartServiceInSequence`；托盘只通过 `appUI` 读"系统代理/TUN 菜单"两个勾选状态，`session.run` 串行化"停→起/回滚"。
 
-### 14. 挂起复核：离差只产生嫌疑，判死必须一次真实往返
+### 14. 挂起复核：离差只产生嫌疑，在飞连接的判死必须一次真实往返
 
 睡眠/VM 暂停会静默丢连接（NAT 过期，两端都以为活着），而 net/http 的空闲回收只作用于无活跃流的连接，常驻流（push/mtalk/DERP）会把死连接一直当作可用。判据是**墙钟推进减单调钟推进**（Go 单调钟在挂起期间冻结；ticker 实到间隔测不到）。三条不可动摇：
 
