@@ -3,6 +3,7 @@ package http2
 import (
 	"context"
 	"crypto/tls"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -87,6 +88,35 @@ func TestSlotProberAcceptsAnyServerPayloadSize(t *testing.T) {
 		if _, verdict := prober.probe(context.Background(), newProbeSlot()); verdict != probeFast {
 			t.Fatalf("payload size %d: verdict = %v, want probeFast", size, verdict)
 		}
+	}
+}
+
+// 首块在计时起点之前到达，不能计入分子：否则 128KB 载荷的速率会被抬高到 4/3，
+// 名义 80KB/s 实际只判到 60KB/s。
+func TestProbeSpeed(t *testing.T) {
+	const kib = 1024
+	cases := []struct {
+		name    string
+		total   int64
+		first   int64
+		elapsed time.Duration
+		want    float64
+	}{
+		{"first chunk excluded", 128 * kib, 32 * kib, 1200 * time.Millisecond, 80 * kib},
+		{"first chunk excluded can cross the threshold", 128 * kib, 32 * kib, 2400 * time.Millisecond, 40 * kib},
+		{"whole payload timed", 128 * kib, 0, 1600 * time.Millisecond, 80 * kib},
+		{"nothing delivered", 0, 0, time.Second, 0},
+		{"no measurable window", 128 * kib, 128 * kib, 0, maxProbeSpeed},
+		{"clamped to the cap", 128 * kib, 32 * kib, time.Microsecond, maxProbeSpeed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := probeSpeed(tc.total, tc.first, tc.elapsed)
+			if math.Abs(got-tc.want) > 1 {
+				t.Fatalf("probeSpeed(%d, %d, %v) = %v, want %v",
+					tc.total, tc.first, tc.elapsed, got, tc.want)
+			}
+		})
 	}
 }
 
