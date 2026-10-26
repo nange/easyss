@@ -89,6 +89,7 @@ func New(cfg Config) (transport.Transport, error) {
 
 	timeouts := cfg.Timeouts.Normalize()
 	timeout := timeouts.Base
+	idleTimeout := h2IdleConnTimeout(timeout)
 
 	dialCtx := cfg.DialContext
 	if dialCtx == nil {
@@ -116,6 +117,7 @@ func New(cfg Config) (transport.Transport, error) {
 		sched:        sched,
 		connLifetime: connLifetime,
 		connMaxBytes: connMaxBytes,
+		idleTimeout:  idleTimeout,
 		slowRTT:      slowRTT,
 	}
 	var liveness func(ctx context.Context, gen *slotTransport) (alive, ok bool)
@@ -182,7 +184,7 @@ func buildTransport(slot *transportSlot, gen *slotTransport, utlsCfg *utls.Confi
 		},
 		ForceAttemptHTTP2:      true,
 		MaxConnsPerHost:        1,
-		IdleConnTimeout:        6 * timeout,
+		IdleConnTimeout:        h2IdleConnTimeout(timeout),
 		MaxResponseHeaderBytes: config.HTTP2ClientMaxResponseHeaderBytes,
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			// 拨号预算只包住 TCP 建连，TLS 握手由 ctx 约束。
@@ -234,6 +236,10 @@ func buildTransport(slot *transportSlot, gen *slotTransport, utlsCfg *utls.Confi
 	}
 	return tr
 }
+
+// h2IdleConnTimeout 是 net/http 判定连接空闲过久的阈值。h2 用墙钟计算它，睡眠造成的墙钟
+// 跳变会让休眠前就空闲的连接立刻越过阈值并被拒绝复用（见 slotLifecycle.reportSuspend）。
+func h2IdleConnTimeout(base time.Duration) time.Duration { return 6 * base }
 
 // trackedConn 是 DialTLSContext 返回给 net/http 的连接，转发关闭是它的契约。关闭即整代
 // 作废；清身份与换代走 CAS，因为 net/http 关闭的可能是一条早已被轮换掉的连接。
@@ -288,7 +294,9 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 
 	t.sched.mu.RLock()
 	slot := t.sched.pick(req.HighPriority)
-	slot.active.Add(1)
+	if slot.active.Add(1) == 1 {
+		slot.idleSince.Store(0)
+	}
 	if req.HighPriority {
 		stats.RecordStreamOpenedPriority()
 	} else {
@@ -316,7 +324,9 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 		stopParentCancel()
 		pw.Close() //nolint:errcheck
 		cancel()
-		slot.active.Add(-1)
+		if slot.active.Add(-1) == 0 {
+			slot.idleSince.Store(time.Now().UnixNano())
+		}
 		stats.RecordStreamClosed()
 		return nil, err
 	}
@@ -332,7 +342,9 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 		stopTransportCancel()
 		stopParentCancel()
 		stream.releaseHeavy()
-		slot.active.Add(-1)
+		if slot.active.Add(-1) == 0 {
+			slot.idleSince.Store(time.Now().UnixNano())
+		}
 		stats.RecordStreamClosed()
 		cancel()
 	})

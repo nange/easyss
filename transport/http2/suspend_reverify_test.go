@@ -2,6 +2,7 @@ package http2
 
 import (
 	"context"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -137,6 +138,101 @@ func TestObserveSuspendCountsOncePerSuspension(t *testing.T) {
 			t.Fatalf("suspend_detected = %d, want 2 (one per suspension)", got)
 		}
 	})
+}
+
+// 挂起跳变越过 h2 的空闲阈值后，空闲连接必须直接退役：net/http 会用墙钟判 tooIdle 并
+// 拒绝复用，留到开流时只会在同一代里再拨一条（second_conn_in_generation）。
+func TestSuspendRetiresIdleConnPastH2Timeout(t *testing.T) {
+	probe := func(context.Context, *transportSlot) (float64, probeVerdict) { return 0, probeInconclusive }
+
+	newIdleSlot := func(t *testing.T, idleFor time.Duration) (*slotLifecycle, *transportSlot, *slotTransport, *countingConn) {
+		t.Helper()
+		lc, sch := newTestLifecycle(1, probe)
+		s := sch.priority.slots[0]
+		s.newGen = func() *slotTransport { return &slotTransport{slot: s, tr: &http.Transport{}} }
+		gen := s.generation()
+		conn := &countingConn{}
+		attachConn(s, conn)
+		lc.idleTimeout = time.Minute
+		s.idleSince.Store(time.Now().Add(-idleFor).UnixNano())
+		return lc, s, gen, conn
+	}
+
+	t.Run("idle past the threshold is retired", func(t *testing.T) {
+		lc, s, gen, conn := newIdleSlot(t, 2*time.Minute)
+
+		lc.reportSuspend(2 * time.Minute)
+
+		if s.generation() == gen {
+			t.Fatal("an idle connection past the h2 idle timeout must be retired")
+		}
+		if got := conn.closes.Load(); got != 1 {
+			t.Fatalf("connection closed %d times, want 1", got)
+		}
+		if s.reverify.Load() {
+			t.Fatal("a retired slot must not be armed for reverify")
+		}
+	})
+
+	t.Run("recently idle connection stays for reverify", func(t *testing.T) {
+		lc, s, gen, conn := newIdleSlot(t, time.Second)
+
+		lc.reportSuspend(time.Minute)
+
+		if s.generation() != gen || conn.closes.Load() != 0 {
+			t.Fatal("a recently idle connection must not be retired")
+		}
+		if !s.reverify.Load() {
+			t.Fatal("the suspect slot must be armed for reverify")
+		}
+	})
+
+	t.Run("retires without a probe token", func(t *testing.T) {
+		lc, s, gen, _ := newIdleSlot(t, 2*time.Minute)
+		lc.probeFunc = nil
+
+		lc.reportSuspend(2 * time.Minute)
+
+		if s.generation() == gen {
+			t.Fatal("the idle sweep must not depend on a probe token")
+		}
+	})
+}
+
+// idleSince 跟随流的开合：开流清零（连接在用），最后一个流结束记下墙钟时刻。
+func TestSlotIdleSinceTracksStreams(t *testing.T) {
+	srv, _ := newH2Server(t)
+	tr := newRecoveryTransport(t, srv.URL, "")
+	htr, ok := tr.(*http2Transport)
+	if !ok {
+		t.Fatalf("transport type = %T, want *http2Transport", tr)
+	}
+	slot := htr.sched.priority.slots[0]
+
+	stream, err := tr.Open(context.Background(), transport.OpenRequest{
+		Endpoint:     config.EndpointTCP,
+		Salt:         "dGVzdHNhbHR0ZXN0c2FsdA",
+		HighPriority: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := slot.idleSince.Load(); got != 0 {
+		t.Fatalf("idleSince = %d while a stream is active, want 0", got)
+	}
+	if _, err := stream.Write([]byte("abcd")); err != nil {
+		t.Fatalf("write bootstrap record: %v", err)
+	}
+	awaitResponse(t, stream, 2*time.Second)
+	if err := stream.Close(); err != nil {
+		t.Fatalf("close stream: %v", err)
+	}
+	if got := slot.active.Load(); got != 0 {
+		t.Fatalf("active streams = %d after close, want 0", got)
+	}
+	if slot.idleSince.Load() == 0 {
+		t.Fatal("the connection must record when it became idle")
+	}
 }
 
 // suspectLifecycle 构建一个带连接的槽位集合：priority 池 n 个、bulk 池 1 个，

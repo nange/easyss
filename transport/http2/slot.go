@@ -38,6 +38,10 @@ type transportSlot struct {
 	active atomic.Int32
 	heavy  atomic.Int32 // 活跃 heavy 流数量
 
+	// 连接进入空闲（active==0）的墙钟时刻（unix 纳秒；0 表示有活跃流或尚未登记）。
+	// h2 的 tooIdle 同样按墙钟判断，睡眠跳变会让空闲连接立刻越过空闲阈值。
+	idleSince atomic.Int64
+
 	// 所有流累计下载字节数，健康循环采样它估算近期吞吐量。
 	bytesRecv atomic.Int64
 	degraded  atomic.Bool
@@ -83,6 +87,17 @@ func (s *transportSlot) resetRotation() {
 func (s *transportSlot) resetConn(connLifetime time.Duration) {
 	s.resetRotation()
 	s.expireAt.Store(time.Now().Add(rotationLifetime(connLifetime)).UnixNano())
+	s.idleSince.Store(time.Now().UnixNano())
+}
+
+// idleFor 返回当前连接已空闲的墙钟时长；0 表示有活跃流或尚未登记连接。用墙钟而不是单调钟：
+// h2 的 tooIdle 就是这样计算的，睡眠期间的墙钟跳变必须体现在这里。
+func (s *transportSlot) idleFor(now time.Time) time.Duration {
+	since := s.idleSince.Load()
+	if since == 0 {
+		return 0
+	}
+	return now.Sub(time.Unix(0, since))
 }
 
 // generation 返回槽位当前的连接池"代"。
