@@ -273,10 +273,9 @@ func TestLogSlowPathRTTOnSlowProbe(t *testing.T) {
 
 	lim := &slowRTTLogLimiter{window: time.Minute, quota: 3}
 	prober := &slotProber{
-		serverURL:   newSlowProbeServer(t, 600*time.Millisecond),
-		token:       "unused",
-		payloadSize: testProbePayloadSize,
-		slowRTT:     lim,
+		serverURL: newSlowProbeServer(t, 600*time.Millisecond),
+		token:     "unused",
+		slowRTT:   lim,
 	}
 
 	stats.ResetCounters()

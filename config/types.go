@@ -63,7 +63,8 @@ const (
 	SlowRTTWarnThreshold = 500 * time.Millisecond
 
 	// 被怀疑降级的槽位通过在自身连接上下载预生成的随机负载确认，因此只测客户端到服务端的
-	// 路径，慢源站或停滞的流不会引发误判。
+	// 路径，慢源站或停滞的流不会引发误判。取值按"载荷/阈值 ≈ 1.6s ≪ ProbeTimeout"，改阈值
+	// 或超时需重算；客户端只把 64KB–1MB 当身份护栏，载荷大到必然超时时，截断判定让位于超时。
 	ProbePayloadSize    = 128 * 1024       // 128KB，服务端启动时预生成
 	ProbeTimeout        = 3 * time.Second  // 单次探测超时（含透明重拨）
 	ProbeConfirmCycles  = 2                // 连续慢探测次数 → 标记 degraded
