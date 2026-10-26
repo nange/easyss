@@ -18,6 +18,7 @@ func TestTimeoutsNormalizeFillsDefaults(t *testing.T) {
 		"StreamIdle":   want.StreamIdle,
 		"UDPIdle":      want.UDPIdle,
 		"DNSResp":      want.DNSResp,
+		"IdleConn":     want.IdleConn,
 		"ConnLifetime": want.ConnLifetime,
 	} {
 		if d <= 0 {
@@ -35,6 +36,7 @@ func TestTimeoutsNormalizeKeepsExplicitValues(t *testing.T) {
 		StreamIdle:   3 * time.Second,
 		UDPIdle:      4 * time.Second,
 		DNSResp:      200 * time.Millisecond,
+		IdleConn:     5 * time.Second,
 		ConnLifetime: 6 * time.Second,
 	}
 	if got := in.Normalize(); got != in {
@@ -57,6 +59,9 @@ func TestTimeoutsNormalizePartial(t *testing.T) {
 	}
 	if got.DNSResp != 5*time.Second/3 {
 		t.Errorf("DNSResp = %v, want %v", got.DNSResp, 5*time.Second/3)
+	}
+	if got.IdleConn != IdleConnTimeout(5*time.Second) {
+		t.Errorf("IdleConn = %v, want %v", got.IdleConn, IdleConnTimeout(5*time.Second))
 	}
 	if got.ConnLifetime != ConnLifetime(5*time.Second) {
 		t.Errorf("ConnLifetime = %v, want %v", got.ConnLifetime, ConnLifetime(5*time.Second))
@@ -130,6 +135,26 @@ func TestStreamIdleTimeout(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := StreamIdleTimeout(tt.timeout); got != tt.want {
 				t.Errorf("StreamIdleTimeout(%v) = %v, want %v", tt.timeout, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIdleConnTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout time.Duration
+		want    time.Duration
+	}{
+		{"默认值 30s", 30 * time.Second, 3 * time.Minute},
+		{"0s", 0, 0},
+		{"小值 5s", 5 * time.Second, 30 * time.Second},
+		{"大值 120s", 120 * time.Second, 12 * time.Minute},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IdleConnTimeout(tt.timeout); got != tt.want {
+				t.Errorf("IdleConnTimeout(%v) = %v, want %v", tt.timeout, got, tt.want)
 			}
 		})
 	}
