@@ -124,17 +124,26 @@ func (c *noReadDeadlineConn) SetWriteDeadline(time.Time) error { return nil }
 
 // periodicPayloadConn 按固定间隔返回同一载荷，模拟目标持续下行。
 type periodicPayloadConn struct {
-	closed   chan struct{}
-	once     sync.Once
-	interval time.Duration
-	payload  []byte
+	closed chan struct{}
+	once   sync.Once
+	// started 在首次 Read 进入时关闭，测试据此确认 readers.Add 已完成后再调用 close。
+	started   chan struct{}
+	startOnce sync.Once
+	interval  time.Duration
+	payload   []byte
 }
 
 func newPeriodicPayloadConn(interval time.Duration, payload []byte) *periodicPayloadConn {
-	return &periodicPayloadConn{closed: make(chan struct{}), interval: interval, payload: payload}
+	return &periodicPayloadConn{
+		closed:   make(chan struct{}),
+		started:  make(chan struct{}),
+		interval: interval,
+		payload:  payload,
+	}
 }
 
 func (c *periodicPayloadConn) Read(p []byte) (int, error) {
+	c.startOnce.Do(func() { close(c.started) })
 	timer := time.NewTimer(c.interval)
 	defer timer.Stop()
 	select {
@@ -442,6 +451,14 @@ func TestUDPSessionDownlinkActivityRefreshesIdle(t *testing.T) {
 
 	runDone := make(chan streamResult, 1)
 	go func() { runDone <- s.run() }()
+
+	// 等读取 goroutine 真正开始（说明 readers.Add 已完成）再计时：否则 close 的 Wait
+	// 会和首次 Add 竞争，测到的是测试自己的 WaitGroup 误用。
+	select {
+	case <-conn.started:
+	case <-time.After(time.Second):
+		t.Fatal("target reader did not start")
+	}
 
 	select {
 	case res := <-runDone:
@@ -1834,12 +1851,21 @@ func TestUDPTargetReadErrorCarriesSource(t *testing.T) {
 // 防回归：读取侧快照之后主 goroutine 可能完成重绑，旧连接的错误不得结束新连接健康的会话。
 func TestUDPSessionIgnoresRetiredConnReadError(t *testing.T) {
 	current := newDNSTargetConn()
+	current.reading = make(chan struct{}, 1)
 	s, _ := newUDPSessionFixture(t, current, "8.8.8.8:53", time.Second, nil, newBlockingConn())
 	retired := newDNSTargetConn()
 	s.resultCh <- udpDatagram{conn: retired, err: errors.New("retired read failed")}
 
 	done := make(chan streamResult, 1)
 	go func() { done <- s.run() }()
+
+	// 等读取 goroutine 真正开始（说明 readers.Add 已完成）再计时，避免 close 的 Wait
+	// 与首次 Add 竞争。
+	select {
+	case <-current.reading:
+	case <-time.After(time.Second):
+		t.Fatal("target reader did not start")
+	}
 
 	select {
 	case res := <-done:
