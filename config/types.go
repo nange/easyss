@@ -77,9 +77,9 @@ const (
 	// ProbeMaxBackoff 是"探测得不出结论"时的最大重试间隔（按连续次数翻倍退避）。
 	ProbeMaxBackoff = 10 * time.Minute
 
-	// 挂起复核：墙上时钟推进与单调钟推进之差即挂起时长。超阈值只标记待复核，不判死在飞
-	// 连接；空闲且已越过 net/http 空闲阈值的连接直接退役（h2 的墙钟 tooIdle 不会再复用）。
-	// 判据有假阳性，判死权留给开流前的一次真实往返。
+	// 挂起复核：墙上时钟推进与单调钟推进之差即挂起时长。超阈值对在飞连接只标记待复核；
+	// 空闲且已越过 net/http 空闲阈值的连接直接退役（h2 的墙钟 tooIdle 不会再复用）。
+	// 判据有假阳性，在飞连接的判死权留给开流前的一次真实往返。
 	SuspendDivergenceThreshold = 30 * time.Second
 	SuspendReverifyTimeout     = 2 * time.Second
 
