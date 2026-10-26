@@ -36,6 +36,23 @@ const (
 	probeMaxBodySize = 1 << 20  // 1MB
 )
 
+// probeSpeed 只用首块之后到达的字节折算速率：首块在计时起点之前就已到达，留在分子里会
+// 把速率抬高到 载荷/(载荷-首块)，128KB 载荷、32KB 首块时最多高估 4/3。载荷被一次读完时
+// 没有可计时的窗口，退回总量估计。
+func probeSpeed(total, first int64, elapsed time.Duration) float64 {
+	if total <= 0 {
+		return 0
+	}
+	if elapsed <= 0 {
+		return maxProbeSpeed
+	}
+	measured := total - first
+	if measured <= 0 {
+		measured = total
+	}
+	return min(float64(measured)/elapsed.Seconds(), maxProbeSpeed)
+}
+
 // slotProber 下载服务端预生成的随机载荷测量吞吐量。MaxConnsPerHost=1 把池固定在那一条
 // 连接上，因此探测字节恰好经过被测连接。
 type slotProber struct {
@@ -122,7 +139,7 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 	}
 
 	buf := make([]byte, 32*1024)
-	var total int64
+	var total, first int64
 	var start time.Time
 	timed := false
 	for {
@@ -131,6 +148,7 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 			total += int64(n)
 			if !timed {
 				timed = true
+				first = int64(n)
 				start = time.Now()
 				// 服务端在拨号源端之前就已提交响应，因此这是纯路径 RTT。越界样本
 				// 标上与请求不同的来源，否则会与真正慢的请求混为一谈。
@@ -152,14 +170,12 @@ func (p *slotProber) probe(ctx context.Context, slot *transportSlot) (float64, p
 		// 服务端提前结束这条流（截断/RST）：按已到达字节算出的吞吐不可比，一律记慢。
 		return 0, probeSlow
 	}
-
-	var speed float64 = maxProbeSpeed
-	if elapsed := time.Since(start); elapsed > 0 {
-		speed = float64(total) / elapsed.Seconds()
-		if speed > maxProbeSpeed {
-			speed = maxProbeSpeed
-		}
+	if !timed {
+		// 超时前一个字节都没到：没有可测的速率。
+		return 0, probeSlow
 	}
+
+	speed := probeSpeed(total, first, time.Since(start))
 	if speed < float64(config.DegradedThroughputThreshold) {
 		return speed, probeSlow
 	}
