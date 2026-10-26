@@ -323,3 +323,26 @@ func TestIsSelfUpstreamAddr(t *testing.T) {
 		t.Error("isSelfUpstreamAddr(127.0.0.1:53, 127.0.0.1:53) = false, want true")
 	}
 }
+
+// TestForwardQuerySharesNoMsgAcrossUpstreams 固定每个并发上游拿到独立的 *dns.Msg：
+// Pack 会写 OPT 的 TTL（SetExtendedRcode），共享同一个 msg 时任一 EDNS0 查询都会
+// 在上游数 >= 2 时触发数据竞争（-race 必红）。
+func TestForwardQuerySharesNoMsgAcrossUpstreams(t *testing.T) {
+	t.Cleanup(resetBuiltinDNSCircuit)
+
+	first := startTestDNSServer(t, false)
+	second := startTestDNSServer(t, false)
+
+	fs := NewForwardServer("127.0.0.1:0", false)
+	fs.dnsServers = []string{first, second}
+	fs.client = &dns.Client{Timeout: time.Second}
+
+	for range 10 {
+		msg := new(dns.Msg)
+		msg.SetQuestion("example.com.", dns.TypeA)
+		msg.SetEdns0(1232, false)
+		if _, err := fs.forwardQuery(msg); err != nil {
+			t.Fatalf("forwardQuery: %v", err)
+		}
+	}
+}

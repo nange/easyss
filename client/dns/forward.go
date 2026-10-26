@@ -158,7 +158,8 @@ func (s *ForwardServer) exchangeWithServers(servers []string, msg *dns.Msg) (*dn
 	ch := make(chan result, len(servers))
 	for _, server := range servers {
 		go func(server string) {
-			reply, err := s.exchangeOne(ctx, msg, server)
+			// Pack 会写 OPT 的 TTL（扩展 RCODE），共享 msg 会让并发分支竞争同一字段。
+			reply, err := s.exchangeOne(ctx, msg.Copy(), server)
 			ch <- result{reply: reply, err: err}
 		}(server)
 	}

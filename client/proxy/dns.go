@@ -249,7 +249,8 @@ func (d *dnsInterceptor) exchangeDirectDNSFromList(msg *dns.Msg, servers []strin
 	ch := make(chan result, len(candidates))
 	for _, addr := range candidates {
 		go func(addr string) {
-			resp, err := d.exchangeDirectDNS(ctx, msg, addr)
+			// Pack 会写 OPT 的 TTL（扩展 RCODE），共享 msg 会让并发分支竞争同一字段。
+			resp, err := d.exchangeDirectDNS(ctx, msg.Copy(), addr)
 			ch <- result{resp: resp, err: err}
 		}(addr)
 	}

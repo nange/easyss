@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/nange/easyss/v3/client/router"
 )
 
 // TestExchangeDirectDNSNormalizesEDNS0Answer 固定直连 DNS 拦截路径也会规范化
@@ -82,5 +83,36 @@ func TestExchangeDirectDNSNormalizesEDNS0Answer(t *testing.T) {
 	}
 	if len(resp.Extra) != 0 {
 		t.Fatalf("additional section = %v, want empty", resp.Extra)
+	}
+}
+
+// TestExchangeDirectDNSFromListSharesNoMsgAcrossUpstreams 固定直连分支的并发上游
+// 各自拿到独立的 *dns.Msg：Pack 会写 OPT 的 TTL（SetExtendedRcode），共享同一个
+// msg 时任一 EDNS0 查询都会在上游数 >= 2 时触发数据竞争（-race 必红）。
+func TestExchangeDirectDNSFromListSharesNoMsgAcrossUpstreams(t *testing.T) {
+	rt, err := router.New(router.Config{ProxyRule: router.ProxyRuleAuto, IPV6Rule: router.IPV6RuleDisable})
+	if err != nil {
+		t.Fatalf("router.New: %v", err)
+	}
+	d := &dnsInterceptor{
+		router: rt,
+		dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			var nd net.Dialer
+			return nd.DialContext(ctx, network, addr)
+		},
+		respTimeout: time.Second,
+	}
+
+	servers := []string{
+		startUDPDNSResponderAny(t, "1.2.3.4"),
+		startUDPDNSResponderAny(t, "5.6.7.8"),
+	}
+	for range 10 {
+		msg := new(dns.Msg)
+		msg.SetQuestion("example.com.", dns.TypeA)
+		msg.SetEdns0(1232, false)
+		if _, err := d.exchangeDirectDNSFromList(msg, servers); err != nil {
+			t.Fatalf("exchangeDirectDNSFromList: %v", err)
+		}
 	}
 }
