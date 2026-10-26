@@ -110,7 +110,8 @@ type udpSession struct {
 	// read deadline exceeded 或 closed network connection，不能按故障记录。
 	closed    chan struct{}
 	closeOnce sync.Once
-	// close 会等这些读取 goroutine 退出后才返回；Add 与 Wait 都只在主 goroutine 上。
+	// close 会等这些读取 goroutine 退出后才返回。Wait 只能在首个 reader 注册之后调用：
+	// counter 为 0 时 Wait 与 Add 并发是 WaitGroup 误用，race detector 会报数据竞争。
 	readers       sync.WaitGroup
 	readerRunning bool
 	resultCh      chan udpDatagram
