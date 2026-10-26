@@ -663,9 +663,15 @@ type UDPExchange struct {
 	target    string
 	lastSeen  atomic.Int64 // UnixNano，由 Send/Receive 写入，由 LastSeen 读取
 	firstRead atomic.Bool  // 在首次 ReadFrame 时置位，启用拒绝分类
+	closed    atomic.Bool  // 在 Close 开始时置位，使并发的 Send 快速失败
 	mu        sync.Mutex
 	closeOnce sync.Once
 }
+
+// udpCloseGrace 是 UDP 交换优雅收尾的等待上限：FIN/Flush/Close 要么排在 shaper 的写锁
+// 后面，要么正被传输层背压占住。超过预算直接关流（取消请求），阻塞的写随即失败；FIN
+// 因此退化为尽力而为，服务端在客户端关流时同样会立即回收关联。
+const udpCloseGrace = time.Second
 
 // 手工拼装不经过整形器的预冲刷边界，可用载荷必须自己算：明文上限减去 target 与帧头
 // 9 字节（3+3+3）。
@@ -723,6 +729,10 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 func (ue *UDPExchange) Send(data []byte) error {
 	ue.mu.Lock()
 	defer ue.mu.Unlock()
+	// 检查必须在锁内：Close 先置位再抢同一把锁，已进入的 Send 仍排在 FIN 之前。
+	if ue.closed.Load() {
+		return shaper.ErrClosed
+	}
 	ue.lastSeen.Store(time.Now().UnixNano())
 	// 用 NewFrameWithPayload 而非 NewFrameDATAGRAM：后者会复制一份载荷，而整形器在 PushFrame
 	// 内就会拷贝。载荷所有权不变（putPayload 为 false）。
@@ -758,16 +768,31 @@ func (ue *UDPExchange) Receive() ([]byte, error) {
 	}
 }
 
-// FIN 必须在 tx.Close 之前推入：shaper 一旦开始关闭，PushFrame 就会丢弃帧。
+// FIN 必须在 tx.Close 之前推入：shaper 一旦开始关闭，PushFrame 就会丢弃帧。收尾放在
+// 后台并在 udpCloseGrace 后强制关流：Send 可能正卡在网络写上并持有 ue.mu，同步等锁
+// 会让关闭被传输层背压拖到没有上界。
 func (ue *UDPExchange) Close() error {
 	ue.closeOnce.Do(func() {
-		ue.mu.Lock()
-		defer ue.mu.Unlock()
-		if ue.tx != nil {
-			_ = ue.tx.PushFrame(protocol.NewFrameFIN())
-			_ = ue.tx.Flush()
-			_ = ue.tx.Close()
+		ue.closed.Store(true)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			ue.mu.Lock()
+			defer ue.mu.Unlock()
+			if ue.tx != nil {
+				_ = ue.tx.PushFrame(protocol.NewFrameFIN())
+				_ = ue.tx.Flush()
+				_ = ue.tx.Close()
+			}
+		}()
+
+		timer := time.NewTimer(udpCloseGrace)
+		defer timer.Stop()
+		select {
+		case <-done:
+		case <-timer.C:
 		}
+		// 关流取消请求并关闭请求体管道，阻塞在写锁上的记录写会立刻失败。
 		_ = ue.stream.Close()
 	})
 	return nil
