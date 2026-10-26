@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nange/easyss/v3/config"
+	"github.com/nange/easyss/v3/stats"
 )
 
 func TestEvaluateSlotHealth(t *testing.T) {
@@ -247,6 +248,25 @@ func TestProbeFastClearsSuspicion(t *testing.T) {
 	}
 	if s.degraded.Load() {
 		t.Fatal("fast probe must not mark degraded")
+	}
+}
+
+func TestProbeSlotCountsGetProbe(t *testing.T) {
+	stats.ResetCounters()
+	t.Cleanup(stats.ResetCounters)
+
+	lc, sch := newTestLifecycle(1, func(context.Context, *transportSlot) (float64, probeVerdict) {
+		return 10 * 1024 * 1024, probeFast
+	})
+	s := sch.priority.slots[0]
+	s.suspected = true
+
+	lc.evaluateProbes(true)
+
+	snap := stats.Collect()
+	if snap.SlotProbes != 1 || snap.SlotProbeGet != 1 || snap.SlotProbeHead != 0 {
+		t.Fatalf("slot probes total/get/head = %d/%d/%d, want 1/1/0",
+			snap.SlotProbes, snap.SlotProbeGet, snap.SlotProbeHead)
 	}
 }
 

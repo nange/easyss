@@ -82,6 +82,7 @@ func (p *slotProber) alive(ctx context.Context, gen *slotTransport) (alive, ok b
 	req.Header.Set("Cache-Control", "no-store")
 	req.Header.Set("User-Agent", chromeUserAgent())
 
+	stats.RecordSlotProbeHead()
 	resp, err := gen.tr.RoundTrip(req)
 	if err != nil {
 		return false, true

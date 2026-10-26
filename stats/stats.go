@@ -51,6 +51,8 @@ type stats struct {
 	slotRetiredDegraded  atomic.Int64
 	connRotated          atomic.Int64
 	slotProbes           atomic.Int64
+	slotProbeGet         atomic.Int64
+	slotProbeHead        atomic.Int64
 	slotProbeSlow        atomic.Int64
 	slotProbeUnsupported atomic.Int64
 	// slotGrownPriority/slotGrownBulk 统计每个池的槽位扩容次数（由懒加载扩容调度器激活的新存活连接）。
@@ -117,8 +119,19 @@ func RecordTierRetiringSkipped()  { g.tierRetiringSkipped.Add(1) }
 func RecordSlotDegraded()        { g.slotDegraded.Add(1) }
 func RecordSlotRetiredDegraded() { g.slotRetiredDegraded.Add(1) }
 func RecordConnRotated()         { g.connRotated.Add(1) }
-func RecordSlotProbe()           { g.slotProbes.Add(1) }
-func RecordSlotProbeSlow()       { g.slotProbeSlow.Add(1) }
+
+// 槽位探测按 HTTP 方法分别计数，slotProbes 始终是两者之和。
+func RecordSlotProbeGet() {
+	g.slotProbes.Add(1)
+	g.slotProbeGet.Add(1)
+}
+
+func RecordSlotProbeHead() {
+	g.slotProbes.Add(1)
+	g.slotProbeHead.Add(1)
+}
+
+func RecordSlotProbeSlow() { g.slotProbeSlow.Add(1) }
 func RecordSlotProbeUnsupported() {
 	g.slotProbeUnsupported.Add(1)
 }
@@ -216,6 +229,8 @@ var counters = []counter{
 	{&g.connRotated, func(s *Snapshot) *int64 { return &s.ConnRotated }},
 	{&g.secondConnInGeneration, func(s *Snapshot) *int64 { return &s.SecondConnInGeneration }},
 	{&g.slotProbes, func(s *Snapshot) *int64 { return &s.SlotProbes }},
+	{&g.slotProbeGet, func(s *Snapshot) *int64 { return &s.SlotProbeGet }},
+	{&g.slotProbeHead, func(s *Snapshot) *int64 { return &s.SlotProbeHead }},
 	{&g.slotProbeSlow, func(s *Snapshot) *int64 { return &s.SlotProbeSlow }},
 	{&g.slotProbeUnsupported, func(s *Snapshot) *int64 { return &s.SlotProbeUnsupported }},
 	{&g.slotGrownPriority, func(s *Snapshot) *int64 { return &s.SlotGrownPriority }},
@@ -311,6 +326,8 @@ type TransportHealthStats struct {
 	ConnRotated            int64 `json:"conn_rotated"`
 	SecondConnInGeneration int64 `json:"second_conn_in_generation"`
 	SlotProbes             int64 `json:"slot_probes"`
+	SlotProbeGet           int64 `json:"slot_probe_get"`
+	SlotProbeHead          int64 `json:"slot_probe_head"`
 	SlotProbeSlow          int64 `json:"slot_probe_slow"`
 	SlotProbeUnsupported   int64 `json:"slot_probe_unsupported"`
 	SlotGrownPriority      int64 `json:"slot_grown_priority"`

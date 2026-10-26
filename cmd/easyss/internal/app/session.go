@@ -405,6 +405,8 @@ func (s *session) logStatsOnce() {
 		"slot_degraded", snap.SlotDegraded,
 		"slot_retired_degraded", snap.SlotRetiredDegraded,
 		"slot_probes", snap.SlotProbes,
+		"slot_probe_get", snap.SlotProbeGet,
+		"slot_probe_head", snap.SlotProbeHead,
 		"slot_probe_slow", snap.SlotProbeSlow,
 		"slot_grown_priority", snap.SlotGrownPriority,
 		"slot_grown_bulk", snap.SlotGrownBulk,

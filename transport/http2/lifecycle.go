@@ -366,7 +366,7 @@ func (lc *slotLifecycle) probeSlot(idx int, s *transportSlot, now time.Time) {
 	defer cancel()
 
 	speed, verdict := lc.probeFunc(ctx, s)
-	stats.RecordSlotProbe()
+	stats.RecordSlotProbeGet()
 	if s.connIdentity() != conn {
 		// 探测期间换了连接：结论属于旧连接，不能记到新连接头上。
 		s.resetProbeState()
