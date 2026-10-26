@@ -400,8 +400,8 @@ func buildHTTPServer(cfg *serverconfig.FileConfig, tlsConfig *tls.Config, mux *h
 		MaxReceiveBufferPerConnection: effectiveH2(cfg.Transport.H2RecvBufConn, config.HTTP2ServerReceiveBufferPerConnection),
 		MaxReceiveBufferPerStream:     effectiveH2(cfg.Transport.H2RecvBufStream, config.HTTP2ServerReceiveBufferPerStream),
 		MaxConcurrentStreams:          config.HTTP2ServerMaxConcurrentStreams,
-		// 响应写同样在 shaper 的写锁内进行；没有上界的网络写会让一条背压流拖住
-		// handler 收尾与整条连接。
+		// 响应写最终都排进这条连接唯一的写循环；没有上界的网络写会让一个停住的
+		// 对端拖住整条连接上的 handler 收尾。
 		WriteByteTimeout: timeout,
 	}
 

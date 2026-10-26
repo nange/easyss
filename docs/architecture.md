@@ -27,7 +27,7 @@
 
 例外：net/http 在连接达到服务端 `maxConcurrentStreams` 时会再拨一条（`MaxConnsPerHost=1` 挡不住）。服务端该上限固定 128、不可配，客户端用同一值判断"已满"。`HTTP2Config.StrictMaxConcurrentRequests` 在当前标准库会卡死，不能用（见 `slotTransport` 注释）。
 
-**写必须有上界**：`HTTP2Config.WriteByteTimeout` 在客户端取 `Timeouts.Base`、服务端取配置的 `timeout`，连接上任一次写连续该时长无进展即关闭连接。shaper 在写锁内做网络写，同一条连接上的所有流都要排这把锁；没有写超时，一个停住的对端会把连接和关闭路径一起钉住。
+**写必须有上界**：`HTTP2Config.WriteByteTimeout` 在客户端取 `Timeouts.Base`、服务端取配置的 `timeout`，连接上任一次写连续该时长无进展即关闭连接。shaper 每条流一个，写记录先按流攒批，最终都排进该连接唯一的 HTTP/2 写循环；一个停住的对端会把整条连接上的所有流和收尾路径一起钉住，所以连接级停写必须有超时。
 
 ### 2. 应用帧协议
 

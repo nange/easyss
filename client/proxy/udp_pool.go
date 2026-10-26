@@ -177,9 +177,13 @@ func (p *udpPool) createExchange(ctx context.Context, key, dst string, firstPayl
 	p.exchanges[key] = ue
 	p.mu.Unlock()
 
+	// 与 close/cleanupLoop 同一模式：被驱逐的可能不止一条，串行关闭会让一次停摆
+	// 拖住该 key 的新包。
+	var wg sync.WaitGroup
 	for _, old := range evicted {
-		old.Close() //nolint:errcheck
+		wg.Go(func() { _ = old.Close() })
 	}
+	wg.Wait()
 	return exchangeCreation{ue: ue, created: true, owner: token}, nil
 }
 

@@ -178,8 +178,8 @@ func buildTransport(slot *transportSlot, gen *slotTransport, utlsCfg *utls.Confi
 			MaxDecoderHeaderTableSize:     config.HTTP2ClientMaxDecoderHeaderTableSize,
 			SendPingTimeout:               2 * timeouts.Base,
 			PingTimeout:                   timeouts.Base / 3,
-			// 写记录在 shaper 的写锁内进行，同一条连接上的所有流都要排队；没有上界的
-			// 网络写会让卡住的流把连接和关闭路径一起钉住。
+			// 每条流的 shaper 写最终都排进这条连接唯一的写循环；没有上界的网络写
+			// 会让一个停住的对端把整条连接上的流和收尾路径一起钉住。
 			WriteByteTimeout: timeouts.Base,
 		},
 		ForceAttemptHTTP2:      true,

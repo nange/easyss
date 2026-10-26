@@ -23,10 +23,15 @@ type stallingStream struct {
 	writeOnce sync.Once
 	writing   chan struct{}
 	release   chan struct{}
+	closedCh  chan struct{}
 }
 
 func newStallingStream() *stallingStream {
-	return &stallingStream{writing: make(chan struct{}), release: make(chan struct{})}
+	return &stallingStream{
+		writing:  make(chan struct{}),
+		release:  make(chan struct{}),
+		closedCh: make(chan struct{}),
+	}
 }
 
 func (s *stallingStream) Read([]byte) (int, error) { return 0, io.EOF }
@@ -45,14 +50,9 @@ func (s *stallingStream) Close() error {
 	if !s.closed {
 		s.closed = true
 		close(s.release)
+		close(s.closedCh)
 	}
 	return nil
-}
-
-func (s *stallingStream) isClosed() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.closed
 }
 
 var _ transport.Stream = (*stallingStream)(nil)
@@ -111,8 +111,8 @@ func newTestUDPExchange(t *testing.T, stream transport.Stream) (*UDPExchange, *c
 	}, sk
 }
 
-// 传输层背压时写记录会占住 shaper 的写锁，Close 若同步等它就永远回不来；
-// 关闭必须把阻塞的写解开，并让 Close 在有限时间内返回。
+// 传输层背压时写记录会占住 shaper 的写锁；Close 不能等它排空，且关流本身也可能
+// 阻塞在连接写锁上，所以必须把阻塞的写解开并在预算内返回。
 func TestUDPExchangeCloseReturnsWhenWriteIsBlocked(t *testing.T) {
 	stream := newStallingStream()
 	ue, _ := newTestUDPExchange(t, stream)
@@ -145,8 +145,10 @@ func TestUDPExchangeCloseReturnsWhenWriteIsBlocked(t *testing.T) {
 		t.Fatal("Close blocked behind the shaper write lock")
 	}
 
-	if !stream.isClosed() {
-		t.Fatal("Close must close the stream even when the shaper write is blocked")
+	select {
+	case <-stream.closedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream was not closed after Close returned")
 	}
 
 	select {

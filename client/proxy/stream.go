@@ -668,9 +668,10 @@ type UDPExchange struct {
 	closeOnce sync.Once
 }
 
-// udpCloseGrace 是 UDP 交换优雅收尾的等待上限：FIN/Flush/Close 要么排在 shaper 的写锁
-// 后面，要么正被传输层背压占住。超过预算直接关流（取消请求），阻塞的写随即失败；FIN
-// 因此退化为尽力而为，服务端在客户端关流时同样会立即回收关联。
+// udpCloseGrace 是 UDP 交换优雅收尾的预算：FIN/Flush/tx.Close 可能排在该流 shaper 的
+// 写锁后面，而 shaper 的写最终排进同一条 HTTP/2 连接的唯一写循环。预算耗尽后直接发起
+// 关流（取消请求），阻塞的写随即失败；连接级停写由 WriteByteTimeout 兜底，因此 FIN
+// 只是尽力而为，服务端在客户端关流时同样会立即回收关联。
 const udpCloseGrace = time.Second
 
 // 手工拼装不经过整形器的预冲刷边界，可用载荷必须自己算：明文上限减去 target 与帧头
@@ -769,8 +770,8 @@ func (ue *UDPExchange) Receive() ([]byte, error) {
 }
 
 // FIN 必须在 tx.Close 之前推入：shaper 一旦开始关闭，PushFrame 就会丢弃帧。收尾放在
-// 后台并在 udpCloseGrace 后强制关流：Send 可能正卡在网络写上并持有 ue.mu，同步等锁
-// 会让关闭被传输层背压拖到没有上界。
+// 后台并在 udpCloseGrace 后直接发起关流：Send 可能正卡在网络写上并持有 ue.mu，同步等锁
+// 会让关闭被传输层背压拖到没有上界。关流本身也可能阻塞在连接写锁上，所以超时后不再等它。
 func (ue *UDPExchange) Close() error {
 	ue.closeOnce.Do(func() {
 		ue.closed.Store(true)
@@ -778,12 +779,13 @@ func (ue *UDPExchange) Close() error {
 		go func() {
 			defer close(done)
 			ue.mu.Lock()
-			defer ue.mu.Unlock()
 			if ue.tx != nil {
 				_ = ue.tx.PushFrame(protocol.NewFrameFIN())
 				_ = ue.tx.Flush()
 				_ = ue.tx.Close()
 			}
+			ue.mu.Unlock()
+			_ = ue.stream.Close()
 		}()
 
 		timer := time.NewTimer(udpCloseGrace)
@@ -791,9 +793,11 @@ func (ue *UDPExchange) Close() error {
 		select {
 		case <-done:
 		case <-timer.C:
+			// 关闭带未读响应体的 HTTP/2 流要拿连接写锁（标准库自己也标注这里可能
+			// 无限等待），不能让它把 Close 拖出预算；连接级停写由 WriteByteTimeout
+			// 兜底，这里只发起关闭。
+			go func() { _ = ue.stream.Close() }()
 		}
-		// 关流取消请求并关闭请求体管道，阻塞在写锁上的记录写会立刻失败。
-		_ = ue.stream.Close()
 	})
 	return nil
 }
