@@ -52,7 +52,8 @@ type Config struct {
 	StreamThreshold   int
 	PrioritySlotRatio float64
 	// Timeouts 由调用方派生：Base 派生空闲与 h2 ping，Dial 是单次 TCP 拨号上限，
-	// ConnLifetime 是轮换前的最大存活时长。零值只由 config.Timeouts.Normalize 填充。
+	// IdleConn 是 net/http 的空闲连接阈值，ConnLifetime 是轮换前的最大存活时长。
+	// 零值只由 config.Timeouts.Normalize 填充。
 	Timeouts     config.Timeouts
 	ConnMaxBytes int64 // 轮换前连接在任一方向承载的最大字节数（0 表示默认值）
 	DialContext  func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -88,14 +89,12 @@ func New(cfg Config) (transport.Transport, error) {
 	prioritySlots := min(max(int(float64(maxSlots)*ratio), 1), maxSlots)
 
 	timeouts := cfg.Timeouts.Normalize()
-	timeout := timeouts.Base
 
 	dialCtx := cfg.DialContext
 	if dialCtx == nil {
 		dialCtx = defaultDialContext
 	}
 
-	connLifetime := timeouts.ConnLifetime
 	connMaxBytes := cfg.ConnMaxBytes
 	if connMaxBytes <= 0 {
 		connMaxBytes = config.DefaultConnMaxBytes
@@ -105,7 +104,7 @@ func New(cfg Config) (transport.Transport, error) {
 
 	slots := make([]*transportSlot, maxSlots)
 	for i := range slots {
-		slots[i] = newSlot(cfg.TLSConfig, timeout, dialCtx, connLifetime, timeouts.Dial)
+		slots[i] = newSlot(cfg.TLSConfig, timeouts, dialCtx)
 	}
 
 	sched := newScheduler(maxSlots, slots, threshold, prioritySlots)
@@ -114,8 +113,9 @@ func New(cfg Config) (transport.Transport, error) {
 
 	lc := &slotLifecycle{
 		sched:        sched,
-		connLifetime: connLifetime,
+		connLifetime: timeouts.ConnLifetime,
 		connMaxBytes: connMaxBytes,
+		idleTimeout:  timeouts.IdleConn,
 		slowRTT:      slowRTT,
 	}
 	var liveness func(ctx context.Context, gen *slotTransport) (alive, ok bool)
@@ -144,7 +144,7 @@ func New(cfg Config) (transport.Transport, error) {
 	return tr, nil
 }
 
-func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error), connLifetime, dialBudget time.Duration) *transportSlot {
+func newSlot(utlsCfg *utls.Config, timeouts config.Timeouts, dialContext func(context.Context, string, string) (net.Conn, error)) *transportSlot {
 	if dialContext == nil {
 		dialContext = defaultDialContext
 	}
@@ -153,7 +153,7 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 	// 工厂使判死与回收能换上配置相同的空池。
 	slot.newGen = func() *slotTransport {
 		gen := &slotTransport{slot: slot}
-		gen.tr = buildTransport(slot, gen, utlsCfg, timeout, dialContext, connLifetime, dialBudget)
+		gen.tr = buildTransport(slot, gen, utlsCfg, timeouts, dialContext)
 		return gen
 	}
 	slot.gen.Store(slot.newGen())
@@ -162,7 +162,7 @@ func newSlot(utlsCfg *utls.Config, timeout time.Duration, dialContext func(conte
 
 // buildTransport 构建一代连接池（MaxConnsPerHost=1）及其拨号路径，并把连接写进
 // gen.conn 使身份与池同源。判死会重建一代，因此这里必须是纯配置。
-func buildTransport(slot *transportSlot, gen *slotTransport, utlsCfg *utls.Config, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error), connLifetime, dialBudget time.Duration) *http.Transport {
+func buildTransport(slot *transportSlot, gen *slotTransport, utlsCfg *utls.Config, timeouts config.Timeouts, dialContext func(context.Context, string, string) (net.Conn, error)) *http.Transport {
 	protos := &http.Protocols{}
 	protos.SetHTTP2(true)
 	protos.SetUnencryptedHTTP2(true)
@@ -177,16 +177,16 @@ func buildTransport(slot *transportSlot, gen *slotTransport, utlsCfg *utls.Confi
 			MaxReceiveBufferPerConnection: config.HTTP2ClientReceiveBufferPerConnection,
 			MaxReceiveBufferPerStream:     config.HTTP2ClientReceiveBufferPerStream,
 			MaxDecoderHeaderTableSize:     config.HTTP2ClientMaxDecoderHeaderTableSize,
-			SendPingTimeout:               2 * timeout,
-			PingTimeout:                   timeout / 3,
+			SendPingTimeout:               2 * timeouts.Base,
+			PingTimeout:                   timeouts.Base / 3,
 		},
 		ForceAttemptHTTP2:      true,
 		MaxConnsPerHost:        1,
-		IdleConnTimeout:        6 * timeout,
+		IdleConnTimeout:        timeouts.IdleConn,
 		MaxResponseHeaderBytes: config.HTTP2ClientMaxResponseHeaderBytes,
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			// 拨号预算只包住 TCP 建连，TLS 握手由 ctx 约束。
-			dialCtx, cancel := context.WithTimeout(ctx, dialBudget)
+			dialCtx, cancel := context.WithTimeout(ctx, timeouts.Dial)
 			defer cancel()
 
 			tcpConn, err := dialContext(dialCtx, network, addr)
@@ -213,7 +213,7 @@ func buildTransport(slot *transportSlot, gen *slotTransport, utlsCfg *utls.Confi
 			}
 			// 只有仍是当前一代时才重置轮换状态：新一代的轮换状态不能被迟到的拨号抹掉。
 			if slot.generation() == gen {
-				slot.resetConn(connLifetime)
+				slot.resetConn(timeouts.ConnLifetime)
 			} else {
 				// 落在已回收的一代上，不参与健康循环与轮换，直到自身空闲超时。
 				log.Debug("[TRANSPORT] dial landed on a retired generation",
@@ -288,7 +288,9 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 
 	t.sched.mu.RLock()
 	slot := t.sched.pick(req.HighPriority)
-	slot.active.Add(1)
+	if slot.active.Add(1) == 1 {
+		slot.idleSince.Store(0)
+	}
 	if req.HighPriority {
 		stats.RecordStreamOpenedPriority()
 	} else {
@@ -316,7 +318,9 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 		stopParentCancel()
 		pw.Close() //nolint:errcheck
 		cancel()
-		slot.active.Add(-1)
+		if slot.active.Add(-1) == 0 {
+			slot.idleSince.Store(time.Now().UnixNano())
+		}
 		stats.RecordStreamClosed()
 		return nil, err
 	}
@@ -332,7 +336,9 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 		stopTransportCancel()
 		stopParentCancel()
 		stream.releaseHeavy()
-		slot.active.Add(-1)
+		if slot.active.Add(-1) == 0 {
+			slot.idleSince.Store(time.Now().UnixNano())
+		}
 		stats.RecordStreamClosed()
 		cancel()
 	})

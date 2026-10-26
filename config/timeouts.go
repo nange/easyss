@@ -20,6 +20,12 @@ func StreamIdleTimeout(base time.Duration) time.Duration {
 	return 8 * base
 }
 
+// net/http 空闲连接超时（6 倍 base）：客户端在服务端 h2 空闲回收（默认 8 倍）与连接
+// 轮换（12 倍）之前收起空闲连接，避免对端先发 GOAWAY。
+func IdleConnTimeout(base time.Duration) time.Duration {
+	return 6 * base
+}
+
 // 连接被轮换前的最大存活时长（12 倍 base）。到期后槽位停收新流而进行中的流不被打断，
 // 因此不必严格大于 StreamIdleTimeout。
 func ConnLifetime(base time.Duration) time.Duration {
@@ -45,6 +51,7 @@ type Timeouts struct {
 	StreamIdle   time.Duration // TCP 流空闲（8 倍 base）
 	UDPIdle      time.Duration // UDP 会话空闲（2 倍 base）
 	DNSResp      time.Duration // DNS 响应读取空闲（base/3，不限制）
+	IdleConn     time.Duration // net/http 空闲连接（6 倍 base）
 	ConnLifetime time.Duration // 传输层连接轮换前的最大存活时长（12 倍 base）
 }
 
@@ -58,6 +65,7 @@ func NewTimeouts(base time.Duration) Timeouts {
 		StreamIdle:   StreamIdleTimeout(base),
 		UDPIdle:      UDPIdleTimeout(base),
 		DNSResp:      base / 3,
+		IdleConn:     IdleConnTimeout(base),
 		ConnLifetime: ConnLifetime(base),
 	}
 }
@@ -80,6 +88,9 @@ func (t Timeouts) Normalize() Timeouts {
 	}
 	if normalized.DNSResp <= 0 {
 		normalized.DNSResp = normalized.Base / 3
+	}
+	if normalized.IdleConn <= 0 {
+		normalized.IdleConn = IdleConnTimeout(normalized.Base)
 	}
 	if normalized.ConnLifetime <= 0 {
 		normalized.ConnLifetime = ConnLifetime(normalized.Base)

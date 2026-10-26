@@ -67,7 +67,7 @@ func newTwoPoolScheduler(pSpecs, bSpecs [][2]int32) *slotScheduler {
 // 而不是索引空槽位数组。
 func TestSchedulerSingleSlot(t *testing.T) {
 	slots := make([]*transportSlot, 1)
-	slots[0] = newSlot(nil, time.Second, nil, time.Minute, time.Second/3)
+	slots[0] = slotWithPool(&http.Transport{})
 	sch := newScheduler(1, slots, 4, 1)
 
 	if sch.bulk.maxSlots != 0 || len(sch.bulk.slots) != 0 {

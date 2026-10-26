@@ -16,6 +16,9 @@ type slotLifecycle struct {
 	sched        *slotScheduler
 	connLifetime time.Duration
 	connMaxBytes int64
+	// net/http 的空闲连接阈值（墙钟口径）：挂起跳变后，空闲超过它的连接会被 h2 判成
+	// tooIdle 拒绝复用，留着只会让下一个请求在同一代里再拨一条。
+	idleTimeout time.Duration
 
 	// 为 nil 时禁用主动探测（未配置令牌）。
 	probeFunc func(ctx context.Context, slot *transportSlot) (speedBps float64, verdict probeVerdict)
@@ -67,7 +70,8 @@ func suspendOffset(now time.Time) int64 {
 const suspendBaselineUnset = 0
 
 // suspendSampler 用"墙钟推进 − 单调钟推进"的离差识别挂起：Go 的单调钟在系统睡眠、VM 暂停
-// 时冻结，墙钟照走；用 ticker 的实到间隔测不到。判据有假阳性，调用方绝不能据此关闭连接。
+// 时冻结，墙钟照走；用 ticker 的实到间隔测不到。判据有假阳性，调用方绝不能据此判死在飞流，
+// 只能退役已越过 h2 空闲阈值、不可能再被复用的空闲连接。
 type suspendSampler struct {
 	baseline atomic.Int64
 }
@@ -122,21 +126,55 @@ func (lc *slotLifecycle) resetSamplingOnSuspend() {
 	}
 }
 
-// 未配置探测令牌时不标记：没有复核手段却留下嫌疑，等于按嫌疑判死。
 func (lc *slotLifecycle) reportSuspend(divergence time.Duration) {
 	stats.RecordSuspendDetected()
 
+	retired := lc.retireIdlePastH2Timeout(time.Now())
 	armed := lc.armSuspects()
-	if armed == 0 {
-		log.Debug("[TRANSPORT] suspend detected, no slot armed",
-			"divergence", divergence.Round(time.Second))
+	if armed > 0 {
+		log.Info("[TRANSPORT] suspend detected, slots marked for reverify",
+			"divergence", divergence.Round(time.Second),
+			"suspects", armed,
+			"retired_idle", retired)
 		return
 	}
-	log.Info("[TRANSPORT] suspend detected, slots marked for reverify",
-		"divergence", divergence.Round(time.Second),
-		"suspects", armed)
+	if retired > 0 {
+		log.Info("[TRANSPORT] suspend detected, idle connections retired",
+			"divergence", divergence.Round(time.Second),
+			"retired_idle", retired)
+		return
+	}
+	log.Debug("[TRANSPORT] suspend detected, no slot armed",
+		"divergence", divergence.Round(time.Second))
 }
 
+// retireIdlePastH2Timeout 退役"h2 已经不会复用"的空闲连接：net/http 用墙钟算 tooIdle，
+// 睡眠跳变会让休眠前就空闲的连接越过阈值。留到开流时，它只会让同一代里再拨一条。
+func (lc *slotLifecycle) retireIdlePastH2Timeout(now time.Time) (retired int) {
+	if lc.idleTimeout <= 0 {
+		return 0
+	}
+	for _, pool := range []*slotPool{lc.sched.priority, lc.sched.bulk} {
+		lc.sched.mu.RLock()
+		live := int(pool.liveCount.Load())
+		slots := make([]*transportSlot, live)
+		copy(slots, pool.slots[:live])
+		lc.sched.mu.RUnlock()
+
+		for _, s := range slots {
+			gen := s.generation()
+			if gen == nil || s.active.Load() != 0 || s.idleFor(now) <= lc.idleTimeout {
+				continue
+			}
+			if s.retireIdleConn(gen, "suspend outlived h2 idle timeout") {
+				retired++
+			}
+		}
+	}
+	return retired
+}
+
+// 未配置探测令牌时不标记：没有复核手段却留下嫌疑，等于按嫌疑判死。
 func (lc *slotLifecycle) armSuspects() (armed int) {
 	if lc.probeFunc == nil {
 		return 0

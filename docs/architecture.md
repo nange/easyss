@@ -78,7 +78,7 @@ Bootstrap 用 AES-256-GCM 加密初始握手帧（含目标地址与方法协商
 
 `App.cfg` 是 `atomic.Pointer[ClientConfig]` 指向的不可变快照：菜单改动走 `App.updateConfig`（克隆→改→CAS），启动/切换用 `App.adoptConfig` 整体换装，只把快照交给新会话。运行期状态不进配置：TUN 是否生效由 `Client.SetTunMode`（`tunMode atomic.Bool`）告知，`local.enable_tun2socks` 只是"下次启动的偏好"（`client.New` 用它播种，`App.Start` 决定本会话后再覆盖）。服务器切换事务在 `App.restartServiceInSequence`；托盘只通过 `appUI` 读"系统代理/TUN 菜单"两个勾选状态，`session.run` 串行化"停→起/回滚"。
 
-### 14. 挂起复核：离差只产生嫌疑，判死必须一次真实往返
+### 14. 挂起复核：离差只产生嫌疑，在飞连接的判死必须一次真实往返
 
 睡眠/VM 暂停会静默丢连接（NAT 过期，两端都以为活着），而 net/http 的空闲回收只作用于无活跃流的连接，常驻流（push/mtalk/DERP）会把死连接一直当作可用。判据是**墙钟推进减单调钟推进**（Go 单调钟在挂起期间冻结；ticker 实到间隔测不到）。三条不可动摇：
 
@@ -86,7 +86,7 @@ Bootstrap 用 AES-256-GCM 加密初始握手帧（含目标地址与方法协商
 2. 健康循环与开流路径共享同一采样器（`slotLifecycle.suspend`/`observeSuspend`），CAS 同时推进基线并认领观测，保证"一次挂起恰好一个观测者"；开流路径的采样不可省略（实测醒来后第一个开流常在 0.0s，早于健康周期）。
 3. 吞吐基线重置走事件号（`suspendEvents`/`resetSamplingOnSuspend`），`lastHeavy` 只由健康循环写。
 
-阈值 `SuspendDivergenceThreshold` 只把活跃槽位标记 `reverify`，**绝不关连接**；判死在开流路径：`reverifySlot` 用一次 `HEAD /v3/probe`（`SuspendReverifyTimeout`）复核，活了复用，不通才按身份 CAS 失效；无法判定（无探测令牌）时保守放行。判活要剥掉调用方取消（否则本地关流会误杀健康连接）；失效只针对复核开始时的那一代；启发式本身有假阳性（NTP 跳变、VM 快照、含睡眠的单调钟），所以只能产生嫌疑。连带失败（`errClientConnForceClosed`）在 `isTransientStreamError` 归为瞬时错误记 Debug。
+阈值 `SuspendDivergenceThreshold` 不判死在飞连接：空闲且已越过 net/http 空闲阈值（`IdleConnTimeout`）的连接直接退役——h2 用墙钟判 `tooIdle`，睡眠跳变后它们不可能再被复用，留着只会让下一次开流在同一代里再拨一条；其余有连接的槽位标记 `reverify`，判死在开流路径：`reverifySlot` 用一次 `HEAD /v3/probe`（`SuspendReverifyTimeout`）复核，活了复用，不通才按身份 CAS 失效；无法判定（无探测令牌）时保守放行。判活要剥掉调用方取消（否则本地关流会误杀健康连接）；失效只针对复核开始时的那一代；启发式本身有假阳性（NTP 跳变、VM 快照、含睡眠的单调钟），所以只能产生嫌疑。连带失败（`errClientConnForceClosed`）在 `isTransientStreamError` 归为瞬时错误记 Debug。
 
 ### 15. 规则解析与匹配只有一份实现
 
