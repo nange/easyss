@@ -163,9 +163,8 @@ func spawnHelperTun(cfg *clientconfig.ClientConfig) (int, io.WriteCloser, error)
 }
 
 func (s *session) installHelperTun(core *runner.Core, cfg *clientconfig.ClientConfig, fd int, dev tun.DeviceConfig) {
-	// 偏好进不可变快照，运行期状态是 core 上的显式开关（见 client.Client.SetTunMode）。
+	// 偏好进不可变快照，运行期状态由 adoptTunManager 在同一临界区里发布。
 	s.app.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = true })
-	core.Client.SetTunMode(true)
 
 	mgr := tun.New(tun.Config{
 		Socks5Addr: util.Socks5URI(cfg.Local.BindAll, cfg.Local.SocksPort),

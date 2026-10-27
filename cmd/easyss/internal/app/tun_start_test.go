@@ -5,8 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nange/easyss/v3/client"
 	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/tun"
+	"github.com/nange/easyss/v3/runner"
 	"github.com/stretchr/testify/require"
 )
 
@@ -173,4 +175,39 @@ func TestNotifyWithoutUIIsLogOnly(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 	close(ready)
+}
+
+// TestStartupTunHonorsLatestPreference 钉住启动路径安装前的复核：sessionCfg 只是
+// runCore 之前的旧快照，托盘可能在这期间把 EnableTun2socks 改成 false（用户点了关闭），
+// 也可能已经装好引擎。两种情况下都不能再按旧快照安装，否则 TUN 会在用户关闭后又跑起来，
+// 而菜单随后按配置同步成"关"。
+func TestStartupTunHonorsLatestPreference(t *testing.T) {
+	a := New(&clientconfig.ClientConfig{}, "")
+	// 只提供非 nil 的 Client 让入口通过；用例必须在触到 tunConfig 之前返回。
+	a.sess.installCore(&runner.Core{Client: &client.Client{}})
+	t.Cleanup(func() { a.sess.core.Store(nil) })
+
+	t.Run("preference turned off while starting", func(t *testing.T) {
+		a.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = false })
+
+		a.sess.startTunEngineAtStartup()
+
+		a.sess.tunMu.Lock()
+		defer a.sess.tunMu.Unlock()
+		require.Nil(t, a.sess.tunMgr, "偏好已变 false 时不得按旧快照安装引擎")
+	})
+
+	t.Run("manager installed by the tray", func(t *testing.T) {
+		existing := failedTunManager()
+		a.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = true })
+		a.sess.tunMu.Lock()
+		a.sess.tunMgr = existing
+		a.sess.tunMu.Unlock()
+
+		a.sess.startTunEngineAtStartup()
+
+		a.sess.tunMu.Lock()
+		defer a.sess.tunMu.Unlock()
+		require.Same(t, existing, a.sess.tunMgr, "托盘已装好引擎时不得覆盖")
+	})
 }
