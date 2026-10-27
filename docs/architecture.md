@@ -74,7 +74,7 @@ Bootstrap 用 AES-256-GCM 加密初始握手帧（含目标地址与方法协商
 
 ### 12. 开机网络未就绪时的启动韧性
 
-服务端域名预解析失败（`resolveServerDomain`）不是致命错误：进程照常启动并监听本地端口，降级为启动警告（`ErrServerDomainUnresolved`）；`retryServerDomain` 指数退避重试直到成功或 `Core.Stop`，每次重试前 `dns.ResetResolveState()` 清内置 DNS 熔断与系统 DNS 发现缓存，否则恢复要延迟数分钟。成功后关闭 `ServerDomainReady` 并把地址交给客户端（`publishServerIPs` → `SetServerIPs`）：拨服务端域名时优先拨这些 IP（TLS 仍用原域名）；单次失败只把本次拨号回退给系统解析器，不丢弃预解析结果（服务端换 IP 时先试一次再回退）。预解析的三层超时集中在 `client/dns/timeouts.go`（`dnsQueryTimeout`/`ResolveItemTimeout`/`PreResolveTimeout`，并预留 `WithSystemDNSFallbackReserve`）。TUN 以 `ServerDomainReady` 为前提（`canStartTunNow`）：未就绪不启动（避免解析递归/缺网关），网络恢复后由用户手动开启；`RefreshServerIPV6` 在启用前补齐服务器 IPv6。依赖与调参在派发 goroutine 前捕获（`serverDomainRetry`）。
+服务端域名预解析失败（`resolveServerDomain`）不是致命错误：进程照常启动并监听本地端口，降级为启动警告（`ErrServerDomainUnresolved`）；`retryServerDomain` 指数退避重试直到成功或 `Core.Stop`，每次重试前 `dns.ResetResolveState()` 清内置 DNS 熔断与系统 DNS 发现缓存，否则恢复要延迟数分钟。成功后关闭 `ServerDomainReady` 并把地址交给客户端（`publishServerIPs` → `SetServerIPs`）：拨服务端域名时优先拨这些 IP（TLS 仍用原域名）；单次失败只把本次拨号回退给系统解析器，不丢弃预解析结果（服务端换 IP 时先试一次再回退）。预解析的三层超时集中在 `client/dns/timeouts.go`（`dnsQueryTimeout`/`ResolveItemTimeout`/`PreResolveTimeout`，并预留 `WithSystemDNSFallbackReserve`）。TUN 以 `ServerDomainReady` 为前提（`canStartTunNow`）：未就绪不启动（避免解析递归/缺网关），网络恢复后由用户手动开启；`RefreshServerIPV6` 在启用前补齐服务器 IPv6。helper 路径在预解析之前先 `dns.ResetResolveState()`：上一次网络里"成功过"的解析器在当前网络可能不可达，而 `PreferredSystemDNS` 按首次成功顺序取值，不作废就会把死地址写进 TUN 的系统 DNS（直连/Windows 路径不预解析，也没有这次作废）。依赖与调参在派发 goroutine 前捕获（`serverDomainRetry`）。
 
 ### 13. 配置快照与运行期状态分离
 
