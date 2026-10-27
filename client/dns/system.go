@@ -10,12 +10,18 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-const systemDNSCacheTTL = 5 * time.Minute
+const (
+	systemDNSCacheTTL = 5 * time.Minute
+	// 整份列表都失败后重新发现的最短间隔：网络真断时不能每条查询都 spawn 一次
+	// ipconfig/networksetup，但换 WAN 后必须能在几秒内换到新地址。
+	systemDNSRediscoverInterval = 5 * time.Second
+)
 
 // systemServers 给出去重后的系统 DNS 兜底地址（host:port）。生产实现是 *systemDNS，
-// 测试用静态列表替换。
+// 测试用静态列表替换。Invalidate 只允许在整份列表都失败后调用，实现自带节流。
 type systemServers interface {
 	Servers() []string
+	Invalidate()
 }
 
 // systemDNS 发现并缓存系统 DNS 服务器。缓存属于实例：测试构造独立实例即可避免
@@ -26,6 +32,9 @@ type systemDNS struct {
 	mu     sync.Mutex
 	cached []string
 	at     time.Time
+	// invalidatedAt 是上次生效的作废时间。节流锚在这里而不是 at：缓存刚过期时换 WAN，
+	// 发现与失败落在同一次查询里，锚在发现时间会把最该生效的那次作废吞掉。
+	invalidatedAt time.Time
 }
 
 func newSystemDNS(discover func() ([]string, error)) *systemDNS {
@@ -62,7 +71,26 @@ func (s *systemDNS) reset() {
 	s.mu.Lock()
 	s.cached = nil
 	s.at = time.Time{}
+	s.invalidatedAt = time.Time{}
 	s.mu.Unlock()
+}
+
+// Invalidate 在整份列表都不可达后丢弃缓存：缓存可能来自上一个网络。首次作废总是生效，
+// 之后按 systemDNSRediscoverInterval 节流，热路径上每条查询都调也只会在窗口外重发现一次。
+func (s *systemDNS) Invalidate() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if time.Since(s.invalidatedAt) < systemDNSRediscoverInterval {
+		return
+	}
+	s.cached = nil
+	s.at = time.Time{}
+	s.invalidatedAt = time.Now()
+}
+
+// InvalidateSystemDNS 作废进程级的系统 DNS 发现缓存，供 proxy 等跨包调用方使用。
+func InvalidateSystemDNS() {
+	defaultSystemDNS.Invalidate()
 }
 
 // defaultSystemDNS 是进程的唯一系统 DNS 发现器；ResetResolveState 清的就是它的缓存。

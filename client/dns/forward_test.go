@@ -169,6 +169,17 @@ func startNODATADNSServer(t *testing.T) string {
 	}))
 }
 
+// startNXDOMAINDNSServer 返回一个对所有查询都回 NXDOMAIN 的健康解析器。
+func startNXDOMAINDNSServer(t *testing.T) string {
+	t.Helper()
+	return startTestDNSHandler(t, dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+		m := new(dns.Msg)
+		m.SetReply(r)
+		m.Rcode = dns.RcodeNameError
+		_ = w.WriteMsg(m)
+	}))
+}
+
 func TestForwardQueryFallsBackToSystemDNS(t *testing.T) {
 	sysAddr := startTestDNSServer(t, false)
 	sysServers := systemServersFunc(func() []string {
@@ -219,6 +230,152 @@ func TestForwardQueryAllServersUnavailable(t *testing.T) {
 	}
 	if reply != nil {
 		t.Fatalf("expected nil reply, got %v", reply)
+	}
+}
+
+// TestForwardQueryInvalidatesStaleSystemDNS 守住换 WAN 后的恢复路径：缓存的系统 DNS
+// 整份不可达时必须被作废，否则路由器上整个 LAN 的解析要等 5 分钟缓存过期。
+func TestForwardQueryInvalidatesStaleSystemDNS(t *testing.T) {
+	t.Cleanup(resetBuiltinDNSCircuit)
+
+	liveAddr := startTestDNSServer(t, false)
+	sys := &switchingSystemServers{servers: []string{"127.0.0.1:1"}} // 换网前的旧解析器
+
+	fs := NewForwardServer("127.0.0.1:0", false)
+	fs.system = sys
+	fs.client = &dns.Client{Timeout: 100 * time.Millisecond}
+	fs.dnsServers = []string{"127.0.0.1:1"}
+
+	msg := new(dns.Msg)
+	msg.SetQuestion("example.com.", dns.TypeA)
+	if _, err := fs.forwardQuery(msg); err == nil {
+		t.Fatal("expected the stale system dns to fail")
+	}
+	if sys.invalidated != 1 {
+		t.Fatalf("a fully failed system dns list must be invalidated once, got %d", sys.invalidated)
+	}
+
+	// 作废后重新发现到的列表生效：下一条查询走新地址。
+	sys.servers = []string{liveAddr}
+	reply, err := fs.forwardQuery(msg)
+	if err != nil {
+		t.Fatalf("forwardQuery after invalidation: %v", err)
+	}
+	if len(reply.Answer) != 1 {
+		t.Fatalf("expected 1 answer, got %d", len(reply.Answer))
+	}
+}
+
+type switchingSystemServers struct {
+	servers     []string
+	invalidated int
+}
+
+func (s *switchingSystemServers) Servers() []string { return s.servers }
+
+func (s *switchingSystemServers) Invalidate() { s.invalidated++ }
+
+// TestForwardQueryPassesThroughNXDOMAIN 守住失效判据：健康的解析器回 NXDOMAIN 是正常应答，
+// 不是"整份兜底列表都没答"。判错会让 LAN 里每个不存在的域名都作废一次系统 DNS 缓存，而
+// 作废后要 spawn 一次 ipconfig/networksetup 并持有 systemDNS 的锁。
+func TestForwardQueryPassesThroughNXDOMAIN(t *testing.T) {
+	t.Cleanup(resetBuiltinDNSCircuit)
+	resetBuiltinDNSCircuit()
+
+	sys := &switchingSystemServers{servers: []string{startNXDOMAINDNSServer(t)}}
+	fs := NewForwardServer("127.0.0.1:0", false)
+	fs.system = sys
+	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
+	fs.dnsServers = []string{"127.0.0.1:1"}
+
+	msg := new(dns.Msg)
+	msg.SetQuestion("nope.example.com.", dns.TypeA)
+	reply, err := fs.forwardQuery(msg)
+	if err != nil {
+		t.Fatalf("forwardQuery: %v, want the NXDOMAIN reply", err)
+	}
+	if reply.Rcode != dns.RcodeNameError {
+		t.Fatalf("rcode = %s, want NXDOMAIN", dns.RcodeToString[reply.Rcode])
+	}
+	if sys.invalidated != 0 {
+		t.Fatalf("a served negative answer must not invalidate the system dns cache, got %d", sys.invalidated)
+	}
+}
+
+// TestForwardQueryInvalidatesOnAllServfail 守住失效判据的另一半：整份列表只回 SERVFAIL 说明
+// 它给不出结果（换 WAN 后旧解析器的典型表现），仍要作废缓存让下一条查询重新发现。
+func TestForwardQueryInvalidatesOnAllServfail(t *testing.T) {
+	t.Cleanup(resetBuiltinDNSCircuit)
+	resetBuiltinDNSCircuit()
+
+	sys := &switchingSystemServers{servers: []string{startTestDNSServer(t, true)}}
+	fs := NewForwardServer("127.0.0.1:0", false)
+	fs.system = sys
+	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
+	fs.dnsServers = []string{"127.0.0.1:1"}
+
+	msg := new(dns.Msg)
+	msg.SetQuestion("example.com.", dns.TypeA)
+	if _, err := fs.forwardQuery(msg); err == nil {
+		t.Fatal("expected an error when every upstream answers SERVFAIL")
+	}
+	if sys.invalidated != 1 {
+		t.Fatalf("a SERVFAIL-only list must be invalidated once, got %d", sys.invalidated)
+	}
+}
+
+// TestForwardQueryPrefersPositiveAnswerOverNXDOMAIN 守住"否定应答要等正应答"：并行竞速下先到
+// 的 NXDOMAIN 不能把另一台解析器的正确结果挤掉（分域解析里两台服务器结论不同很常见）。
+func TestForwardQueryPrefersPositiveAnswerOverNXDOMAIN(t *testing.T) {
+	t.Cleanup(resetBuiltinDNSCircuit)
+	resetBuiltinDNSCircuit()
+
+	nxAddr := startNXDOMAINDNSServer(t)
+	slowAddr := startSlowTestDNSServer(t, 50*time.Millisecond)
+
+	fs := NewForwardServer("127.0.0.1:0", false)
+	fs.system = systemServersFunc(func() []string { return []string{nxAddr, slowAddr} })
+	fs.client = &dns.Client{Timeout: time.Second}
+	fs.dnsServers = []string{"127.0.0.1:1"}
+
+	msg := new(dns.Msg)
+	msg.SetQuestion("split.example.com.", dns.TypeA)
+	reply, err := fs.forwardQuery(msg)
+	if err != nil {
+		t.Fatalf("forwardQuery: %v", err)
+	}
+	if reply.Rcode != dns.RcodeSuccess || len(reply.Answer) != 1 {
+		t.Fatalf("want the positive answer, got rcode=%s answers=%d",
+			dns.RcodeToString[reply.Rcode], len(reply.Answer))
+	}
+}
+
+// TestForwardServerServesNXDOMAIN 走真实 socket 守住负应答透传：handleDNS 里的 SetReply 会把
+// Rcode 重置成 NOERROR，不在写回前保存，LAN 客户端就会把"域名不存在"当成解析成功。
+func TestForwardServerServesNXDOMAIN(t *testing.T) {
+	t.Cleanup(resetBuiltinDNSCircuit)
+	resetBuiltinDNSCircuit()
+
+	fs := NewForwardServer("127.0.0.1:0", false)
+	fs.system = systemServersFunc(func() []string { return []string{startNXDOMAINDNSServer(t)} })
+	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
+	fs.dnsServers = []string{"127.0.0.1:1"}
+
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = fs.Serve(pc) }()
+	t.Cleanup(func() { _ = fs.Shutdown() })
+
+	msg := new(dns.Msg)
+	msg.SetQuestion("nope.example.com.", dns.TypeA)
+	reply, _, err := (&dns.Client{Timeout: time.Second}).Exchange(msg, pc.LocalAddr().String())
+	if err != nil {
+		t.Fatalf("exchange: %v", err)
+	}
+	if reply.Rcode != dns.RcodeNameError {
+		t.Fatalf("rcode = %s, want NXDOMAIN", dns.RcodeToString[reply.Rcode])
 	}
 }
 

@@ -181,7 +181,7 @@ func (d *dnsInterceptor) resolveDirectDNS(msg *dns.Msg, domain, reqServer string
 		// 兜底列表必须是过滤后的可用上游：QueryWithBuiltinFirst 依据它是否为空决定要不要
 		// 熔断内置服务器。
 		fallback := func() []string { return d.filterDNSUpstreams(easydns.SystemDNSServers()) }
-		resp, err = easydns.QueryWithBuiltinFirst(clientconfig.DirectDNSServers, fallback, try)
+		resp, err = easydns.QueryWithBuiltinFirst(clientconfig.DirectDNSServers, fallback, easydns.InvalidateSystemDNS, try)
 	}
 	if err != nil {
 		return nil, err
