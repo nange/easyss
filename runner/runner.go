@@ -25,6 +25,11 @@ import (
 // ErrSocksRequired 表示启用了 HTTP 代理却没有启用 SOCKS5 入口。托盘用 errors.Is 识别它。
 var ErrSocksRequired = errors.New("http proxy requires socks_port to be enabled")
 
+// ErrForwardDNSRequiresSocks 表示 forward DNS 缺本地 SOCKS5 入口：转发器的上游查询要靠 TUN
+// 回到本机 socks5 的 DNS 拦截分流。TUN 是否生效由运行期闸门判断，不在这里校验（托盘重启核心
+// 时会临时把 enable_tun2socks 置 false）。托盘用 errors.Is 识别它。
+var ErrForwardDNSRequiresSocks = errors.New("forward dns requires socks_port to be enabled")
+
 // ErrServerDomainUnresolved 标记启动时服务端域名未能解析的非致命警告，调用方用
 // errors.Is 识别并提示"网络可能尚未就绪"。
 var ErrServerDomainUnresolved = errors.New("server domain unresolved")
@@ -39,7 +44,7 @@ type options struct {
 	retryMax              time.Duration
 	prePopulate           func(cache *dns.Cache, ctx context.Context, domain string, dnsServers []string, requireIPv4 bool) error
 	reset                 func()
-	// forwardDNSListenAddr 刻意监听所有网卡的 53 端口：该功能面向"把 easyss 部署在
+	// forwardDNSListenAddr 刻意监听所有网卡的 53 端口：该功能只服务"把 easyss 部署在
 	// 路由器上、LAN 设备的 DNS 指向它"的场景，只监听回环时 LAN 设备够不到。
 	forwardDNSListenAddr string
 }
@@ -208,7 +213,8 @@ func (c *Core) buildLocalServers(cfg *clientconfig.ClientConfig, eps *localEndpo
 	}
 
 	if eps.dnsPC != nil {
-		c.dnsServer = dns.NewForwardServer(eps.dnsAddr, c.Client.Router().ShouldIPV6Disable())
+		// 必须读运行期状态而不是配置：监听器在 TUN 之前绑定，托盘随时可能把它关掉。
+		c.dnsServer = dns.NewForwardServer(eps.dnsAddr, c.Client.Router().ShouldIPV6Disable(), c.Client.TunForwardingEnabled)
 	}
 
 	return nil

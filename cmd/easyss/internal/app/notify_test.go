@@ -71,6 +71,12 @@ func TestFriendlyStartupError(t *testing.T) {
 		t.Fatalf("socks-required error should get the config hint: %q", msg)
 	}
 
+	// forward DNS 缺本地 socks5 入口（runner.ErrForwardDNSRequiresSocks）。
+	forwardDNSErr := fmt.Errorf("runner: %w", runner.ErrForwardDNSRequiresSocks)
+	if msg := friendlyStartupError(forwardDNSErr); !strings.Contains(msg, "socks_port 需大于 0") {
+		t.Fatalf("forward-dns error should get the config hint: %q", msg)
+	}
+
 	other := errors.New("boom")
 	if msg := friendlyStartupError(other); msg != "服务启动失败：boom" {
 		t.Fatalf("unexpected generic startup message: %q", msg)

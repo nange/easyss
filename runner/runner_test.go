@@ -215,6 +215,38 @@ func TestRunValidatesHTTPWithoutSocksBeforeBinding(t *testing.T) {
 	})
 }
 
+// TestRunRejectsForwardDNSWithoutSocks 守住启动前提：forward DNS 的上游查询要靠 TUN 回到
+// 本机 socks5 的 DNS 拦截分流，缺本地入口就没有这条路，必须拒绝启动而不是降级。
+// 占住 forward DNS 端口，校验若被挪到绑定之后会变成绑定错误。
+//
+// 刻意不校验 enable_tun2socks：托盘重启核心时会临时把它置 false（见 App.restartServiceInSequence），
+// 按它校验会把正常重启打成配置错误；TUN 未生效由 ForwardServer 逐条查询拒答。
+func TestRunRejectsForwardDNSWithoutSocks(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen packet: %v", err)
+	}
+	defer pc.Close() //nolint:errcheck
+
+	opts := defaultOptions()
+	opts.forwardDNSListenAddr = pc.LocalAddr().String()
+
+	cfg := testConfig()
+	cfg.Local.HTTPPort = 0
+	cfg.Local.EnableForwardDNS = true
+	cfg.Local.SocksPort = 0
+	cfg.Local.EnableTun2socks = true // 即使 TUN 开着，没有 socks5 入口也不能启动
+
+	core, err := runWithOptions(cfg, opts)
+	if core != nil {
+		core.Stop()
+		t.Fatal("expected no core when the local socks5 endpoint is missing")
+	}
+	if !errors.Is(err, ErrForwardDNSRequiresSocks) {
+		t.Fatalf("expected ErrForwardDNSRequiresSocks before binding, got: %v", err)
+	}
+}
+
 // TestRunFailsFastOnForwardDNSConflict 守住 forward DNS 绑定失败同样中止 Run（与
 // SOCKS5/HTTP 一样在 Run 里同步绑定）；注入回环临时端口是因为绑定 :53 需要 root。
 func TestRunFailsFastOnForwardDNSConflict(t *testing.T) {
@@ -239,7 +271,8 @@ func TestRunFailsFastOnForwardDNSConflict(t *testing.T) {
 }
 
 // TestRunServesForwardDNSOnInjectedAddr 覆盖成功路径：Run 同步绑定的 UDP
-// socket 真的被交给 ForwardServer 并开始应答，而不是绑定后无人接管。
+// socket 真的被交给 ForwardServer 并开始应答，而不是绑定后无人接管。用例不启用
+// TUN，因此应答必须是闸门的 REFUSED——顺带钉住 runner 把运行期状态注入了转发器。
 func TestRunServesForwardDNSOnInjectedAddr(t *testing.T) {
 	opts := defaultOptions()
 
@@ -261,8 +294,6 @@ func TestRunServesForwardDNSOnInjectedAddr(t *testing.T) {
 	})
 	t.Cleanup(core.Stop)
 
-	// 用一个真实 DNS 查询证明 socket 已经在服务：转发服务器最终会因上游
-	// 不可达而回 SERVFAIL，但"收到应答"本身就说明 Serve 已接管该 socket。
 	msg := new(dns.Msg)
 	msg.SetQuestion("example.com.", dns.TypeA)
 	client := &dns.Client{Timeout: 2 * time.Second}
@@ -271,6 +302,10 @@ func TestRunServesForwardDNSOnInjectedAddr(t *testing.T) {
 	for time.Now().Before(deadline) {
 		resp, _, err := client.Exchange(msg, addr)
 		if err == nil && resp != nil {
+			if resp.Rcode != dns.RcodeRefused {
+				t.Fatalf("rcode = %s, want REFUSED while the tun is inactive",
+					dns.RcodeToString[resp.Rcode])
+			}
 			return
 		}
 		lastErr = err

@@ -130,3 +130,28 @@ func TestStartFailureReleasesFileOutput(t *testing.T) {
 		t.Errorf("failed Start left %d open descriptor(s) on the log file", n)
 	}
 }
+
+// TestStartRejectsForwardDNS 固定移动端不支持 forward DNS：闸门要桌面会话在 TUN 起来后发布
+// 运行期状态，mobile 直接调用 runner.Run 没有这一层，放行只会得到一个永远拒答的 :53。
+func TestStartRejectsForwardDNS(t *testing.T) {
+	// 占住 SOCKS 端口：去掉入口拒绝后 Start 会先因端口占用失败，错误里不会有下面的关键字，
+	// 用例因此不会"因为别的原因失败"而假通过。
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("occupy port: %v", err)
+	}
+	defer occupied.Close() //nolint:errcheck
+
+	cfg := testSimpleConfig(t, "", "info")
+	cfg.LocalPort = occupied.Addr().(*net.TCPAddr).Port
+	cfg.EnableForwardDNS = true
+
+	err = Start(cfg)
+	if err == nil {
+		Stop()
+		t.Fatal("Start accepted enable_forward_dns, which is unsupported on mobile")
+	}
+	if !strings.Contains(err.Error(), "enable_forward_dns") {
+		t.Fatalf("Start failed for another reason, got: %v", err)
+	}
+}

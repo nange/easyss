@@ -14,6 +14,9 @@ import (
 	"github.com/nange/easyss/v3/log"
 )
 
+// ForwardServer 只用于"装在路由器上做透明代理"的部署：发给路由器自身的查询不会进 TUN，
+// 由这里再发一次，让上游地址落在 TUN 路由内重新进入 TUN、交给 SOCKS5 的 DNS 拦截分流。
+// 所以它自己不屏蔽/缓存，且 TUN 未生效时拒答——否则只剩物理网卡直连解析（DNS 泄漏）。
 type ForwardServer struct {
 	listenAddr  string
 	client      *dns.Client
@@ -21,6 +24,9 @@ type ForwardServer struct {
 	disableIPV6 bool
 	// system 是系统 DNS 兜底列表的来源，归实例所有以便测试注入。
 	system systemServers
+	// tunActive 报告 TUN 引擎是否已开始转发，归 Client 所有（运行期状态，不读配置快照）。
+	// 不能用拨号器的 TunModeEnabled：后者在路由可能指向 TUN 时就为 true，早于引擎。
+	tunActive func() bool
 
 	mu sync.Mutex
 	// pc 由 Shutdown 直接关闭：落在 dns.Server 尚未置位 started 的窗口里时端口也必须释放。
@@ -30,7 +36,7 @@ type ForwardServer struct {
 	closing bool
 }
 
-func NewForwardServer(listenAddr string, disableIPV6 bool) *ForwardServer {
+func NewForwardServer(listenAddr string, disableIPV6 bool, tunActive func() bool) *ForwardServer {
 	servers := config.DirectDNSServers
 	if disableIPV6 {
 		var filtered []string
@@ -49,6 +55,7 @@ func NewForwardServer(listenAddr string, disableIPV6 bool) *ForwardServer {
 		dnsServers:  servers,
 		disableIPV6: disableIPV6,
 		system:      defaultSystemDNS,
+		tunActive:   tunActive,
 	}
 }
 
@@ -120,6 +127,16 @@ func (s *ForwardServer) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	q := r.Question[0]
+
+	// 没有 TUN 时上游查询只能从物理网卡直连解析：既是 DNS 泄漏，LAN 客户端也会拿到与代理
+	// 分流不一致的答案（被墙域名可能被污染）。宁可让它们立刻失败，也不降级成直连解析器。
+	if !s.tunActive() {
+		log.Debug("[DNS-FORWARD] tun is not active, refusing query", "name", q.Name)
+		m := new(dns.Msg)
+		m.SetRcode(r, dns.RcodeRefused)
+		_ = w.WriteMsg(m)
+		return
+	}
 
 	reply, err := s.forwardQuery(r)
 	if err != nil {

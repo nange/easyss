@@ -201,6 +201,28 @@ func TestSetTunModeControlsTheBoundDialPath(t *testing.T) {
 	}
 }
 
+// TestTunModeAndTunForwardingAreIndependent 固定两个状态不能互相代偿：拨号器的绑定与 forward DNS
+// 的放行各有各的边，合并会把其中一方推向不安全的一侧。
+func TestTunModeAndTunForwardingAreIndependent(t *testing.T) {
+	t.Parallel()
+
+	c := newTestClient(t, false)
+
+	c.SetTunForwarding(true)
+	if c.TunModeEnabled() {
+		t.Fatal("publishing the forwarding state must not bind the direct dialer")
+	}
+	if !c.TunForwardingEnabled() {
+		t.Fatal("SetTunForwarding(true) was not published")
+	}
+
+	c.SetTunForwarding(false)
+	c.SetTunMode(true)
+	if c.TunForwardingEnabled() {
+		t.Fatal("binding the direct dialer must not open the forward DNS gate")
+	}
+}
+
 func TestDialWithConfigNoRefreshWhenBindingUnchanged(t *testing.T) {
 	t.Parallel()
 

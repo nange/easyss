@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nange/easyss/v3/client"
 	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/runner"
@@ -192,6 +193,83 @@ func TestAppStopTakesTheTunManager(t *testing.T) {
 	a.sess.tunMu.Lock()
 	defer a.sess.tunMu.Unlock()
 	require.Nil(t, a.sess.tunMgr, "Stop 必须停掉并清空 TUN manager")
+}
+
+// TestAdoptTunManagerBindsDialerBeforeForwarding 守住两个 TUN 状态的不同边：adopt 时引擎还没
+// 转发（forward DNS 必须拒答），但路由可能已经装好，直连拨号必须已绑定物理接口，否则会回环。
+func TestAdoptTunManagerBindsDialerBeforeForwarding(t *testing.T) {
+	core := &runner.Core{Client: &client.Client{}}
+	a := New(&clientconfig.ClientConfig{}, "")
+	a.sess.installCore(core)
+
+	a.sess.tunMu.Lock()
+	a.sess.adoptTunManager(&tun.Manager{}, nil, tun.OwnerLocal)
+	a.sess.tunMu.Unlock()
+
+	require.False(t, core.Client.TunForwardingEnabled(), "引擎起来之前 forward DNS 必须拒答")
+	require.True(t, core.Client.TunModeEnabled(), "adopt 之后直连拨号必须保持绑定")
+}
+
+// TestTunDownKeepsDialerBoundUntilRoutesAreGone 守住拆除期的两条边：forward DNS 在拆除一开始
+// 就拒答，拨号器一直绑定到 tunMgr 清空（关闭脚本删完路由）之后，否则新建直连会跌进隧道。
+func TestTunDownKeepsDialerBoundUntilRoutesAreGone(t *testing.T) {
+	core := &runner.Core{Client: &client.Client{}}
+	a := New(&clientconfig.ClientConfig{}, "")
+	a.sess.installCore(core)
+
+	dev := tun.DeviceConfig{}
+	a.sess.tunMu.Lock()
+	a.sess.tunMgr = &tun.Manager{}
+	a.sess.tunSession = &dev
+	a.sess.tunActive = true
+	a.sess.syncTunStateLocked()
+	a.sess.tunMu.Unlock()
+	require.True(t, core.Client.TunForwardingEnabled())
+	require.True(t, core.Client.TunModeEnabled())
+
+	// verifyTeardown 在 mgr.Stop() 之后运行：那一刻 forward DNS 必须已拒答，拨号器还不能解绑。
+	checked, forwardingAtTeardown, boundAtTeardown := false, true, false
+	a.sess.verifyTeardown = func(tun.DeviceConfig, tun.Owner, bool) error {
+		checked = true
+		forwardingAtTeardown = core.Client.TunForwardingEnabled()
+		boundAtTeardown = core.Client.TunModeEnabled()
+		return nil
+	}
+
+	a.sess.tunDown()
+
+	require.True(t, checked)
+	require.False(t, forwardingAtTeardown, "拆除开始前 forward DNS 必须已经拒答")
+	require.True(t, boundAtTeardown, "路由删完前直连拨号必须保持绑定")
+	require.False(t, core.Client.TunForwardingEnabled())
+	require.False(t, core.Client.TunModeEnabled())
+}
+
+// TestMarkTunEngineUpOpensForwarding 守住唯一的开闸点：只有 Manager.Start 成功且 manager 仍是
+// 当前会话时才放行 forward DNS；被替换掉的会话迟到的成功回调不得开闸。
+func TestMarkTunEngineUpOpensForwarding(t *testing.T) {
+	core := &runner.Core{Client: &client.Client{}}
+	a := New(&clientconfig.ClientConfig{}, "")
+	a.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableForwardDNS = true })
+	a.sess.installCore(core)
+
+	mgr := &tun.Manager{}
+	a.sess.tunMu.Lock()
+	a.sess.adoptTunManager(mgr, nil, tun.OwnerLocal)
+	a.sess.tunMu.Unlock()
+	require.False(t, core.Client.TunForwardingEnabled(), "adopt 本身不得开闸")
+
+	a.sess.markTunEngineUp(mgr)
+	require.True(t, core.Client.TunForwardingEnabled(), "Manager.Start 成功后必须放行 forward DNS")
+	require.True(t, core.Client.TunModeEnabled(), "开闸不得解绑直连拨号器")
+
+	// 用户关掉又重开 TUN：旧 manager 迟到的成功回调不能给新会话开闸。
+	next := &tun.Manager{}
+	a.sess.tunMu.Lock()
+	a.sess.adoptTunManager(next, nil, tun.OwnerLocal)
+	a.sess.tunMu.Unlock()
+	a.sess.markTunEngineUp(mgr)
+	require.False(t, core.Client.TunForwardingEnabled(), "过期 manager 不得开闸")
 }
 
 // TestAppStopAndTunToggleAreRaceFree 固定 tunMgr 的锁契约：托盘的 TUN 开关、启动期的

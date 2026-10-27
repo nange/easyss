@@ -26,6 +26,12 @@ func validateLocalEndpoints(cfg *clientconfig.ClientConfig) error {
 	if cfg.Local.HTTPPort > 0 && cfg.Local.SocksPort <= 0 {
 		return ErrSocksRequired
 	}
+	// forward DNS 的上游查询要靠 TUN 回到本机 socks5 的 DNS 拦截分流，缺本地入口就没有这条路。
+	// TUN 是否生效不在这里校验：托盘重启核心时会临时把 enable_tun2socks 置 false，由转发器
+	// 每条查询现读运行期状态拒答。
+	if cfg.Local.EnableForwardDNS && cfg.Local.SocksPort <= 0 {
+		return ErrForwardDNSRequiresSocks
+	}
 	return nil
 }
 
