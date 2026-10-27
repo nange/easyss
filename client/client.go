@@ -707,8 +707,8 @@ func (c *Client) SetTunMode(on bool) {
 	c.tunMode.Store(on)
 }
 
-// TunModeEnabled 报告本会话的 TUN 是否生效。forward DNS 也读它：没有 TUN 时它的上游查询
-// 只能从物理网卡直连解析（DNS 泄漏），因此必须拒答而不是降级。
+// TunModeEnabled 报告本会话的 TUN 引擎是否已开始转发（不是配置里的开关）。forward DNS 也读它：
+// 没有 TUN 时它的上游查询只能从物理网卡直连解析（DNS 泄漏），因此必须拒答而不是降级。
 func (c *Client) TunModeEnabled() bool {
 	return c.tunMode.Load()
 }

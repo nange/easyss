@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nange/easyss/v3/client"
 	clientconfig "github.com/nange/easyss/v3/client/config"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/runner"
@@ -192,6 +193,52 @@ func TestAppStopTakesTheTunManager(t *testing.T) {
 	a.sess.tunMu.Lock()
 	defer a.sess.tunMu.Unlock()
 	require.Nil(t, a.sess.tunMgr, "Stop 必须停掉并清空 TUN manager")
+}
+
+// TestAdoptTunManagerDoesNotEnableTunMode 守住"adopt 不等于 TUN 已生效"：设备、路由与引擎
+// 都还没起时置位，forward DNS 会在启动窗口里把上游查询从物理网卡直连出去（DNS 泄漏）。
+func TestAdoptTunManagerDoesNotEnableTunMode(t *testing.T) {
+	core := &runner.Core{Client: &client.Client{}}
+	a := New(&clientconfig.ClientConfig{}, "")
+	a.sess.installCore(core)
+	core.Client.SetTunMode(true) // client.New 按配置初值播种的状态
+
+	a.sess.tunMu.Lock()
+	a.sess.adoptTunManager(&tun.Manager{}, nil, tun.OwnerLocal)
+	a.sess.tunMu.Unlock()
+
+	require.False(t, core.Client.TunModeEnabled())
+}
+
+// TestTunDownClearsTunModeBeforeTeardown 守住运行期状态的撤除时机：拆除一开始就得置 false，
+// 否则关闭脚本删掉路由之后、tunDown 返回之前，forward DNS 仍会认为上游查询会进入隧道。
+func TestTunDownClearsTunModeBeforeTeardown(t *testing.T) {
+	core := &runner.Core{Client: &client.Client{}}
+	a := New(&clientconfig.ClientConfig{}, "")
+	a.sess.installCore(core)
+
+	dev := tun.DeviceConfig{}
+	a.sess.tunMu.Lock()
+	a.sess.tunMgr = &tun.Manager{}
+	a.sess.tunSession = &dev
+	a.sess.tunActive = true
+	a.sess.syncTunModeLocked()
+	a.sess.tunMu.Unlock()
+	require.True(t, core.Client.TunModeEnabled())
+
+	// verifyTeardown 在 mgr.Stop() 之后运行：那一刻状态必须已经是 false。
+	checked, activeAtTeardown := false, true
+	a.sess.verifyTeardown = func(tun.DeviceConfig, tun.Owner, bool) error {
+		checked = true
+		activeAtTeardown = core.Client.TunModeEnabled()
+		return nil
+	}
+
+	a.sess.tunDown()
+
+	require.True(t, checked)
+	require.False(t, activeAtTeardown, "拆除开始前必须已经撤销运行期状态")
+	require.False(t, core.Client.TunModeEnabled())
 }
 
 // TestAppStopAndTunToggleAreRaceFree 固定 tunMgr 的锁契约：托盘的 TUN 开关、启动期的

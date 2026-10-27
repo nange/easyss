@@ -71,9 +71,9 @@ func TestFriendlyStartupError(t *testing.T) {
 		t.Fatalf("socks-required error should get the config hint: %q", msg)
 	}
 
-	// forward DNS 缺 TUN 或本地 socks5 入口（runner.ErrForwardDNSRequiresTun）。
-	forwardDNSErr := fmt.Errorf("runner: %w", runner.ErrForwardDNSRequiresTun)
-	if msg := friendlyStartupError(forwardDNSErr); !strings.Contains(msg, "enable_tun2socks") {
+	// forward DNS 缺本地 socks5 入口（runner.ErrForwardDNSRequiresSocks）。
+	forwardDNSErr := fmt.Errorf("runner: %w", runner.ErrForwardDNSRequiresSocks)
+	if msg := friendlyStartupError(forwardDNSErr); !strings.Contains(msg, "socks_port 需大于 0") {
 		t.Fatalf("forward-dns error should get the config hint: %q", msg)
 	}
 

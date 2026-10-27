@@ -14,7 +14,7 @@
 - **派生超时只在一处填零值**：`config.Timeouts` 由 `config.NewTimeouts` 派生，`Timeouts.Normalize` 只按 `Base` 补零值字段；每个公开构造器入口调用一次，其余地方直接读字段，不要再写 `if x <= 0`。SOCKS5 与 HTTP 两个入口必须拿到同一份 `Timeouts`（否则同一目标超时不一致）。
 - 两处零值判断是语义不是默认值：`ProxyHandlerConfig.HandshakeTimeout <= 0` 表示沿用 `Timeouts.Base`；`udpPool.receiveLoop` 的 `respTimeout <= 0` 表示关闭读空闲。
 - `http_port` 未配置时由 `socks_port` 推导（`+1000`），完整/简单模式同语义，只有 `client/config.normalizeHTTPPort` 一处实现；`socks_port=0` 不推导，`socks_port=0` + `http_port>0` 仍是启动错误（`runner.ErrSocksRequired`）。
-- `local.enable_forward_dns` 只服务路由器透明代理部署，必须与 `local.enable_tun2socks` 和 `socks_port>0` 同开：它的上游查询靠 TUN 路由重新进入隧道，缺任何一环都只剩直连解析，启动直接失败（`runner.ErrForwardDNSRequiresTun`，见「关键架构要点」第 19 节）。
+- `local.enable_forward_dns` 只服务路由器透明代理部署：启动期要求 `socks_port>0`（`runner.ErrForwardDNSRequiresSocks`），TUN 不参与启动校验（托盘重启核心会临时把 `enable_tun2socks` 置 false），未生效时由 `dns.ForwardServer` 读 `client.Client.TunModeEnabled` 在运行期拒答，见「关键架构要点」第 19 节。
 - **本地代理端点地址只有一个来源**：监听用 `util.LocalProxyListenAddr`，本机消费方（HTTP 反向代理、TUN/helper、系统代理、托盘 `/stats`）用 `util.LocalProxyDialAddr`，`Socks5URI` 只是包装；`bind_all` 时分别是 `[::]` 与同族回环。不要再手拼 `127.0.0.1:<port>`（监听可能只接受 IPv6 回环）。`sysproxy.State.Enable`/`Disable` 接收完整地址，由 `sysproxy.Addr(cfg)` 推导。
 - `tun_mtu`（完整 `local.tun_mtu`/简单同名，默认 1500，范围 [1280, 9000]）是设备与 netstack MTU 的唯一来源，归一化只在 `config.NormalizeTunMTU`。设备侧由创建脚本写入（第 9 个位置参数）；wintun 的 MTU 无法由 tun2socks 设置，只能靠 netsh；netstack MTU 小于设备 MTU 会静默丢弃超限包（UDP/ICMP/分片，TCP 因 MSS 通告不受影响）。
 
@@ -117,6 +117,6 @@ Bootstrap 用 AES-256-GCM 加密初始握手帧（含目标地址与方法协商
 
 `local.enable_forward_dns` 唯一的适用场景是"easyss 装在路由器上做透明代理"：LAN 设备把网关与 DNS 都指向这台主机，但发给路由器自身的查询由内核本地投递，永远不会进 TUN。`client/dns.ForwardServer` 因此在本机所有网卡（UDP 53）上接住这些查询、向上游再发一次——上游取 `config.DirectDNSServers`（全部失败时回退系统 DNS）；内置池是公网解析器，地址落在 TUN 的默认路由内，查询于是**重新进入 TUN**，经 tun2socks 到本机 SOCKS5，再由 `client/proxy` 的 DNS 拦截按 QNAME 分流（屏蔽/缓存/直连/代理）。转发器自己不做屏蔽与缓存，那些语义只属于拦截层：它只是"把 LAN 的查询送回隧道"的那一跳。
 
-所以 TUN 是硬前提而不是优化项：没有 TUN 时同样的查询只能从物理网卡直连解析（DNS 泄漏），LAN 还会拿到与被代理流量不一致的答案。两层各自把关——`runner.validateLocalEndpoints` 在任何监听器绑定之前拒绝"`enable_forward_dns` 缺 `enable_tun2socks` 或缺 `socks_port > 0`"的配置（`runner.ErrForwardDNSRequiresTun`，托盘有对应提示）；`dns.ForwardServer` 每条查询现读 `client.Client.TunModeEnabled`，TUN 未生效时回 REFUSED 而不是降级。运行期这一层不可省：监听器在 TUN 之前绑定，托盘又能在运行中关掉 TUN，启动期校验覆盖不到之后的状态。
+所以 TUN 是硬前提而不是优化项：没有 TUN 时同样的查询只能从物理网卡直连解析（DNS 泄漏），LAN 还会拿到与被代理流量不一致的答案。启动期只校验结构性前提：`runner.validateLocalEndpoints` 在任何监听器绑定之前拒绝 `enable_forward_dns` 缺本地 SOCKS5 入口（`socks_port <= 0`）的配置（`runner.ErrForwardDNSRequiresSocks`，托盘有对应提示）。`enable_tun2socks` 刻意不参与该校验——托盘切换服务器/重启核心时会先把它临时置 false（`App.restartServiceInSequence`），按配置项校验会把正常重启打成配置错误。TUN 只由运行期闸门把关：`dns.ForwardServer` 每条查询现读 `client.Client.TunModeEnabled`，TUN 未生效时回 REFUSED 而不是降级。该开关由 `session.tunActive` 发布：`Manager.Start()` 成功（设备、路由、引擎都已就位）后才置位，`tunDownLocked` 一开始就清除，因此启动窗口与拆除窗口都不会再把查询放出去。监听器在 TUN 之前绑定、托盘又能在运行中关掉 TUN，运行期这一层不可省。
 
 监听地址固定 `:53` 全网卡（`runner.defaultOptions`），回环会让 LAN 设备够不到；绑定在 `runner.Run` 里同步完成，端口被 dnsmasq/systemd-resolved 占用时直接启动失败。只有 UDP：LAN 客户端因截断应答改用 TCP 53 重试的查询无人应答（需要时让 dnsmasq 承接 TCP 再转发）。系统 DNS 兜底必须过滤掉会打回自己的条目（环回、本机网卡地址 + 同端口），否则查询递归回自身。

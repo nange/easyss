@@ -110,7 +110,6 @@ func TestRunFailureReleasesBoundListeners(t *testing.T) {
 		cfg := testConfig()
 		cfg.Local.HTTPPort = 0
 		cfg.Local.EnableForwardDNS = true
-		cfg.Local.EnableTun2socks = true
 
 		var socksPort int
 		runExpectingListenError(t, "dns forward server listen", func() (*Core, error) {

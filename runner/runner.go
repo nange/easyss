@@ -25,10 +25,10 @@ import (
 // ErrSocksRequired 表示启用了 HTTP 代理却没有启用 SOCKS5 入口。托盘用 errors.Is 识别它。
 var ErrSocksRequired = errors.New("http proxy requires socks_port to be enabled")
 
-// ErrForwardDNSRequiresTun 表示 forward DNS 缺了它依赖的透明代理前提：TUN 与本地 SOCKS5
-// 入口。转发靠 TUN 路由把上游查询重新送进隧道，再由 socks5 的 DNS 拦截分流；缺任何一环都只是
-// 直连解析（DNS 泄漏）。托盘用 errors.Is 识别它。
-var ErrForwardDNSRequiresTun = errors.New("forward dns requires tun2socks (and socks_port > 0) to be enabled")
+// ErrForwardDNSRequiresSocks 表示 forward DNS 缺本地 SOCKS5 入口：转发器的上游查询要靠 TUN
+// 回到本机 socks5 的 DNS 拦截分流。TUN 是否生效由运行期闸门判断，不在这里校验（托盘重启核心
+// 时会临时把 enable_tun2socks 置 false）。托盘用 errors.Is 识别它。
+var ErrForwardDNSRequiresSocks = errors.New("forward dns requires socks_port to be enabled")
 
 // ErrServerDomainUnresolved 标记启动时服务端域名未能解析的非致命警告，调用方用
 // errors.Is 识别并提示"网络可能尚未就绪"。

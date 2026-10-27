@@ -128,7 +128,7 @@ Easyss v3 支持两种配置模式，自动识别：
 | `local.http_port` | 否 | `socks_port + 1000` | 本地 HTTP 代理监听端口；未配置时由 `socks_port` 推导，显式配置优先。`socks_port` 为 0 时它也是 0；它非 0 而 `socks_port` 为 0 时启动会报错 |
 | `local.bind_all` | 否 | false | 是否将监听端口绑定到所有本地 IP；开启时监听 `[::]`，系统代理与 TUN 等本机自用端点改用同族回环 `[::1]` 访问本地代理 |
 | `local.disable_sys_proxy` | 否 | false | 是否不设置系统代理（headless 版默认会设置） |
-| `local.enable_forward_dns` | 否 | false | 是否在本机所有网卡的 53 端口提供 DNS 转发（供 LAN 设备使用）。仅路由器透明代理场景，必须与 `enable_tun2socks` 同开，否则启动失败 |
+| `local.enable_forward_dns` | 否 | false | 是否在本机所有网卡的 53 端口提供 DNS 转发（供 LAN 设备使用）。仅路由器透明代理场景，需 `socks_port > 0` 才能启动；运行中 TUN 未生效时转发器对所有查询回 REFUSED |
 | `local.enable_tun2socks` | 否 | false | 是否启用 TUN 全局透明代理 |
 | `local.enable_quic` | 否 | false | 是否允许 QUIC（UDP 443）走代理 |
 | `local.tun_mtu` | 否 | 1500 | TUN 设备与 tun2socks 的 MTU，钳制到 [1280, 9000] |
@@ -348,12 +348,12 @@ Easyss v3 以 HTTP/2 作为传输层，天然兼容反向代理和 CDN 部署：
 
 将 Easyss 部署在路由器/软路由上，可让家里或公司网络自动透明代理，无需在终端设备安装客户端。简化模式设置 `enable_tun2socks: true` 和 `enable_forward_dns: true`，完整模式设置 `local.enable_tun2socks` 与 `local.enable_forward_dns`。
 
-两个开关缺一不可，且 `socks_port` 必须有效：
+两个开关缺一不可，且 `socks_port` 必须有效（`enable_forward_dns` 的查询要靠 TUN 回到本机 SOCKS5 再按域名分流；缺 `socks_port` 时启动直接失败）：
 
 * `enable_tun2socks`：在本机建立全局透明代理（TUN 网卡 + 路由表），让经过这台主机的流量按域名/GeoIP 分流后走代理。
 * `enable_forward_dns`：在本机所有网卡的 53 端口提供 DNS 转发（UDP、双栈），供 LAN 设备当解析器使用。
 
-**`enable_forward_dns` 只为"路由器透明代理"存在，必须与 TUN 同开。** LAN 设备发给路由器自身的 DNS 查询在内核里本地投递，不会进 TUN，所以由这个转发器接住再向上游发一次：上游是公网解析器，地址落在 TUN 的默认路由内，查询因此重新进入 TUN，经代理侧的 DNS 拦截按域名分流（该屏蔽的屏蔽、该直连的直连）。转发器自身不屏蔽、不缓存。缺少 TUN（或缺本地 SOCKS5 入口）时 Easyss 直接启动失败而不是降级——那种情况下的转发只是从物理网卡直连解析（DNS 泄漏）；运行中关掉 TUN 时转发器会对 LAN 查询回 REFUSED。
+**`enable_forward_dns` 只为"路由器透明代理"存在，运行时必须保持 TUN 开启。** LAN 设备发给路由器自身的 DNS 查询在内核里本地投递，不会进 TUN，所以由这个转发器接住再向上游发一次：上游是公网解析器，地址落在 TUN 的默认路由内，查询因此重新进入 TUN，经代理侧的 DNS 拦截按域名分流（该屏蔽的屏蔽、该直连的直连）。转发器自身不屏蔽、不缓存。转发器逐条读运行期 TUN 状态：TUN 未生效（没开、启动失败、被托盘关掉）时对所有 LAN 查询回 REFUSED，而不是降级成物理网卡上的直连解析（DNS 泄漏）。启动期只校验 `socks_port > 0`；TUN 由运行期闸门把关，因为托盘切换服务器/重启时会先把 TUN 偏好临时置 false 再起核心。
 
 还需在路由器上完成两件事：
 
