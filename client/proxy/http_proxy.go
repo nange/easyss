@@ -185,19 +185,23 @@ func (s *HTTPProxyServer) Serve(listener net.Listener) error {
 }
 
 func (s *HTTPProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// 控制端点（/tun、/stats）即使代理监听所有接口也只从本机可达。
-	if r.URL.Host == "" && (r.URL.Path == "/tun" || r.URL.Path == "/stats") && !isLoopbackRequest(r) {
+	// 控制端点（/tun、/stats、/icmp/*）即使代理监听所有接口也只从本机可达。
+	if r.URL.Host == "" && isControlPath(r.URL.Path) && !isLoopbackRequest(r) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 
-	// /tun 在认证之前提供（提权的 TUN 辅助程序没有凭据）。
+	// /tun 与 /icmp/* 在认证之前提供（提权的 TUN 辅助程序没有凭据）。
 	if r.URL.Host == "" && r.URL.Path == "/tun" {
 		if r.Method == http.MethodGet {
 			s.handleTunGET(w)
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
+		return
+	}
+	if r.URL.Host == "" && (r.URL.Path == "/icmp/classify" || r.URL.Path == "/icmp/proxy") {
+		s.handleICMPControl(w, r)
 		return
 	}
 
@@ -262,6 +266,102 @@ func (s *HTTPProxyServer) handleTunGET(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(cfg); err != nil {
 		log.Warn("[HTTP-PROXY] encode tun config", "err", err)
+	}
+}
+
+func isControlPath(path string) bool {
+	switch path {
+	case "/tun", "/stats", "/icmp/classify", "/icmp/proxy":
+		return true
+	default:
+		return false
+	}
+}
+
+// 提权 helper 的 ICMP 分类与代理请求：分类复用 TCP/UDP 的同一套 routePolicy，
+// 代理复用同一份 StreamHandler，保证 ping 与 SOCKS5/HTTP 的分流结果一致。
+type icmpClassifyRequest struct {
+	Dst string `json:"dst"`
+}
+
+type icmpClassifyResponse struct {
+	Action string `json:"action"`
+}
+
+type icmpProxyRequest struct {
+	Dst     string `json:"dst"`
+	Payload []byte `json:"payload"`
+}
+
+type icmpProxyResponse struct {
+	Payload []byte `json:"payload"`
+}
+
+func (s *HTTPProxyServer) handleICMPControl(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	switch r.URL.Path {
+	case "/icmp/classify":
+		s.handleICMPClassify(w, r)
+	case "/icmp/proxy":
+		s.handleICMPProxy(w, r)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (s *HTTPProxyServer) handleICMPClassify(w http.ResponseWriter, r *http.Request) {
+	var req icmpClassifyRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&req); err != nil || req.Dst == "" {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	action := "proxy"
+	if s.policy != nil {
+		decision := s.policy.decide(req.Dst)
+		switch {
+		case decision.IPV6Rejected || decision.Action == routeBlock:
+			action = "block"
+		case decision.Action == routeDirect:
+			action = "direct"
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(icmpClassifyResponse{Action: action}); err != nil {
+		log.Warn("[HTTP-PROXY] encode icmp classify", "err", err)
+	}
+}
+
+func (s *HTTPProxyServer) handleICMPProxy(w http.ResponseWriter, r *http.Request) {
+	var req icmpProxyRequest
+	// 上限按 base64 膨胀后的 ICMP 报文留足空间（设备 MTU 内的最大 echo）。
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10)).Decode(&req); err != nil || req.Dst == "" {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if s.handler == nil {
+		http.Error(w, "handler not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	reply, err := s.handler.OpenICMPStream(ctx, req.Dst, req.Payload, s.method)
+	if err != nil {
+		log.Debug("[HTTP-PROXY] proxy icmp", "dst", req.Dst, "err", err)
+		http.Error(w, "icmp proxy failed", http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(icmpProxyResponse{Payload: reply}); err != nil {
+		log.Warn("[HTTP-PROXY] encode icmp proxy", "err", err)
 	}
 }
 

@@ -1,4 +1,4 @@
-//go:build !darwin && !linux && !headless
+//go:build !darwin && !linux && !windows && !headless
 
 package app
 

@@ -1,4 +1,4 @@
-//go:build !darwin && !linux
+//go:build !darwin && !linux && !windows
 
 package tunhelper
 
@@ -7,9 +7,9 @@ import (
 	"os"
 )
 
-// runTunHelper 在非 darwin/linux 平台上不支持 TUN 辅助进程：
+// runTunHelper 在既没有 unix 提权流程、也没有 Windows helper 的平台上不支持 TUN 辅助进程：
 // 打印错误信息到 stderr 并返回退出码 1。
-func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
-	fmt.Fprintln(os.Stderr, "tun helper is only supported on darwin/linux")
+func runTunHelper(helperOptions) int {
+	fmt.Fprintln(os.Stderr, "tun helper is only supported on darwin/linux/windows")
 	return 1
 }

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -53,12 +52,28 @@ type session struct {
 	tunSession     *tun.DeviceConfig
 	tunHelperStdin io.WriteCloser
 
+	// tunRemote 表示 TUN 由外部提权 helper 承载（Windows）：本进程没有 tunMgr/引擎，
+	// 只持有控制连接与等待函数。tunActive 仍表示"引擎真的开始转发"。
+	tunRemote     bool
+	tunHelperWait func(time.Duration) error
+
 	// tunActive 是"引擎已开始转发"：adopt 时还不算，拆除一开始就清掉。forward DNS 读它。
 	tunActive bool
 
 	// 系统改动归谁回收（见 tun.Owner），必须在建立会话时写入。
 	tunOwner tun.Owner
 }
+
+// tunRemoteHelper 是 Windows 提权 helper 的父进程句柄；接口放在这里让 session 的
+// 远程 TUN 状态能在非 Windows 测试里用假实现覆盖。
+type tunRemoteHelper interface {
+	Control() io.WriteCloser
+	Wait(timeout time.Duration) error
+}
+
+// 关闭控制连接后，helper 还要停引擎、跑关闭脚本、恢复 DNS；超过这个时间就不再阻塞
+// 托盘切换，交由路由复核报告残留。
+const tunHelperWaitTimeout = 10 * time.Second
 
 func newSession(app *App) *session {
 	return &session{app: app, verifyTeardown: tunhelper.DefaultVerify()}
@@ -120,9 +135,10 @@ func (s *session) start() error {
 	// 偏好只是进入条件：runCore 可能耗时数秒，期间托盘可以关掉 TUN。
 	// 安装前 startTunEngineAtStartup 会在 tunMu 内用当前偏好复核。
 	if sessionCfg.Local.EnableTun2socks {
-		// 非 root 拿不到 TUN，用户却以为全局流量已代理，必须说明原因。
-		if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !tunhelper.IsRoot() {
-			log.Warn("[EASYSS-V3] tun2socks requires root; skipped (use sudo, or run with system tray for automatic elevation)")
+		// 启动路径不能弹提权框：macOS/Linux 需要 root，Windows 的 Run 键登录启动更会被
+		// 登录路径直接阻止。非提权启动时先跳过，由用户在托盘主动开启并授权。
+		if !tunhelper.IsRoot() {
+			log.Warn("[EASYSS-V3] tun2socks requires administrator/root; skipped at startup (enable it from the tray to authorize)")
 			// 偏好落回 false，否则菜单勾选着"已开启"而 tunMgr 是 nil。
 			s.app.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = false })
 			s.app.notifyTunSkippedNoRoot()
@@ -204,7 +220,7 @@ func (s *session) startTunEngineAtStartup() {
 // startupTunWantedLocked 报告启动路径是否仍应安装 TUN。runCore 期间托盘可能已经装好
 // 引擎，也可能把偏好改成 false（用户点了关闭）；两者都不能再装。必须在 tunMu 内调用。
 func (s *session) startupTunWantedLocked() bool {
-	return s.tunMgr == nil && s.app.currentConfig().Local.EnableTun2socks
+	return s.tunMgr == nil && !s.tunRemote && s.app.currentConfig().Local.EnableTun2socks
 }
 
 // 直接创建设备（Windows，或 darwin/linux 上的 root）；全程持有 tunMu，托盘会并发开关。
@@ -212,7 +228,7 @@ func (s *session) tunUp() error {
 	s.tunMu.Lock()
 	defer s.tunMu.Unlock()
 
-	if s.tunMgr != nil {
+	if s.tunMgr != nil || s.tunRemote {
 		return nil
 	}
 
@@ -242,8 +258,45 @@ func (s *session) adoptTunManager(mgr *tun.Manager, dev *tun.DeviceConfig, owner
 		dev = &snapshot
 	}
 	s.tunMgr = mgr
+	s.tunRemote = false
+	s.tunHelperWait = nil
 	s.tunSession = dev
 	s.tunOwner = owner
+	s.tunActive = false
+	s.syncTunStateLocked()
+}
+
+// beginRemoteTun 在 spawn 之前发布"即将由外部 helper 接管"的状态。helper 的 Start 会在
+// 返回 READY 之前装好分流路由，直连拨号器必须提前绑定物理接口，否则这段窗口里的直连流量
+// 会被新路由送回 TUN。调用方必须持有 tunMu。
+func (s *session) beginRemoteTun(dev tun.DeviceConfig) {
+	s.tunMgr = nil
+	s.tunRemote = true
+	s.tunSession = &dev
+	s.tunOwner = tun.OwnerHelper
+	s.tunActive = false
+	s.tunHelperWait = nil
+	s.syncTunStateLocked()
+}
+
+// adoptRemoteTun 在 helper 报告 READY 后发布控制句柄，并放行 forward DNS。调用方必须持有 tunMu。
+func (s *session) adoptRemoteTun(h tunRemoteHelper) {
+	s.tunRemote = true
+	s.tunHelperStdin = h.Control()
+	s.tunHelperWait = h.Wait
+	s.tunActive = true
+	s.app.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = true })
+	s.syncTunStateLocked()
+}
+
+// cancelRemoteTun 回滚 beginRemoteTun 发布但尚未 adopt 的状态（UAC 取消、helper 启动失败）。
+// 调用方必须持有 tunMu。
+func (s *session) cancelRemoteTun() {
+	s.tunRemote = false
+	s.tunSession = nil
+	s.tunOwner = tun.OwnerLocal
+	s.tunHelperStdin = nil
+	s.tunHelperWait = nil
 	s.tunActive = false
 	s.syncTunStateLocked()
 }
@@ -256,7 +309,7 @@ func (s *session) syncTunStateLocked() {
 		return
 	}
 	wasForwarding := core.Client.TunForwardingEnabled()
-	core.Client.SetTunMode(s.tunMgr != nil)
+	core.Client.SetTunMode(s.tunMgr != nil || s.tunRemote)
 	core.Client.SetTunForwarding(s.tunActive)
 
 	// 拒答本身每查询只记 Debug（默认 info 级看不见），启停时补一行：路由器上 LAN DNS
@@ -271,6 +324,9 @@ func (s *session) syncTunStateLocked() {
 }
 
 func (s *session) buildICMPHandler(core *runner.Core) {
+	if s.tunMgr == nil {
+		return
+	}
 	icmpHandler := tun.NewICMPHandler(core.Client.Router())
 	icmpHandler.SetProxy(core.StreamHandler, s.app.methodFromServer())
 	s.tunMgr.SetICMPHandler(icmpHandler)
@@ -306,20 +362,27 @@ func (s *session) tunDownLocked(want *tun.Manager) {
 	owner := s.tunOwner
 
 	// 先停引擎：它会关闭 helper 传进来的 TUN fd，而 iproute2 删不掉仍附着在 fd 上的设备
-	// （device or resource busy）。
+	// （device or resource busy）。Windows 的远程 helper 没有本地引擎，直接关控制连接。
 	if s.tunMgr != nil {
 		log.Info("[EASYSS-V3] tunDown: stopping tun2socks engine", "owner", owner.String())
 		s.tunMgr.Stop()
 		s.tunMgr = nil
 	}
+	s.tunRemote = false
 
-	// 关闭 FIFO 通知 helper：它读到 stdin EOF 后自己清理路由/DNS。
+	// 关闭控制连接通知 helper：它读到 EOF 后停引擎并自己清理路由/DNS。
 	helperSignalled := false
 	if s.tunHelperStdin != nil {
-		log.Info("[EASYSS-V3] tunDown: closing helper FIFO")
+		log.Info("[EASYSS-V3] tunDown: closing helper control channel")
 		s.tunHelperStdin.Close() //nolint:errcheck
 		s.tunHelperStdin = nil
 		helperSignalled = true
+	}
+	if s.tunHelperWait != nil {
+		if err := s.tunHelperWait(tunHelperWaitTimeout); err != nil {
+			log.Warn("[EASYSS-V3] tunDown: waiting for tun helper", "err", err)
+		}
+		s.tunHelperWait = nil
 	}
 	s.tunOwner = tun.OwnerLocal
 
@@ -335,7 +398,7 @@ func (s *session) tunDownLocked(want *tun.Manager) {
 		core.HTTPServer.ClearTunConfig()
 	}
 
-	// tunMgr 已清空：本进程（或 helper）不再有指向 TUN 的路由要承接，拨号器才解除绑定。
+	// tunMgr/tunRemote 已清空：本进程（或 helper）不再有指向 TUN 的路由要承接，拨号器才解除绑定。
 	s.syncTunStateLocked()
 	s.app.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = false })
 }

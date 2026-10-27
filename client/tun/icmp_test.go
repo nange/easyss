@@ -225,6 +225,34 @@ func TestHandlePacketLogsOnlyEchoRequests(t *testing.T) {
 	}
 }
 
+// TestICMPHandlerWithClassifier 固定 Windows helper 使用的分类注入路径：
+// 分类来源可以是主进程的 HTTP 端点，block/proxy/direct 的返回语义必须与本地
+// router 版本完全一致。
+func TestICMPHandlerWithClassifier(t *testing.T) {
+	pkt := newPacket(t, ipv4.ProtocolNumber, header.IPv4MinimumSize, icmpv4Msg(header.ICMPv4Echo))
+	pkt.id = stack.TransportEndpointID{LocalAddress: proxiedAddr}
+
+	block := NewICMPHandlerWithClassifier(func(string) (ICMPAction, error) { return ICMPActionBlock, nil })
+	if !block.HandlePacket(pkt) {
+		t.Fatal("block action must consume the packet")
+	}
+
+	direct := NewICMPHandlerWithClassifier(func(string) (ICMPAction, error) { return ICMPActionDirect, nil })
+	if direct.HandlePacket(pkt) {
+		t.Fatal("direct action must leave the packet to the default forwarder")
+	}
+
+	proxy := NewICMPHandlerWithClassifier(func(string) (ICMPAction, error) { return ICMPActionProxy, nil })
+	if proxy.HandlePacket(pkt) {
+		t.Fatal("proxy without a configured proxy must leave the packet to the default forwarder")
+	}
+
+	classifyErr := NewICMPHandlerWithClassifier(func(string) (ICMPAction, error) { return ICMPActionBlock, context.Canceled })
+	if classifyErr.HandlePacket(pkt) {
+		t.Fatal("a classifier error must fall back to the default forwarder")
+	}
+}
+
 // recordingHandler 捕获 log 包发出的每一条记录，使测试可以断言某条代码路径
 // 在哪些级别上记录日志。
 type recordingHandler struct {

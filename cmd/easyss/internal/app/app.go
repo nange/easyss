@@ -224,6 +224,8 @@ func (a *App) restartServiceInSequence(newCfg *clientconfig.ClientConfig, start 
 		if rollbackErr := start(a.currentConfig()); rollbackErr != nil {
 			return errors.Join(err, fmt.Errorf("rollback to %s: %w", prevAddr, rollbackErr))
 		}
+		// 非提权/网络未就绪时 start 会把 TUN 偏好落回 false；菜单必须以落回后的值为准。
+		a.setTunMenuChecked(a.currentConfig().Local.EnableTun2socks)
 		log.Warn("[EASYSS-V3] restart service: rolled back to the previous server",
 			"addr", prevAddr, "err", err)
 		restoreSysProxy()
@@ -250,7 +252,7 @@ func (a *App) setTunMenuChecked(checked bool) {
 }
 
 func (a *App) notifyTunSkippedNoRoot() {
-	a.notifyTunSkipped("Tun2socks 未启用：需要管理员权限，请以 root 运行或使用系统托盘授权")
+	a.notifyTunSkipped("Tun2socks 未启用：需要管理员/root 权限，请在托盘菜单中开启并完成授权")
 }
 
 func (a *App) notifyTunSkippedNetworkUnready() {

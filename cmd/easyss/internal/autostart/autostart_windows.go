@@ -3,7 +3,9 @@
 package autostart
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/nange/easyss/v3/util"
 	"golang.org/x/sys/windows/registry"
@@ -20,13 +22,16 @@ func enableAutoStart() error {
 		return fmt.Errorf("resolve executable path: %w", err)
 	}
 
-	key, err := registry.OpenKey(registry.CURRENT_USER, autoStartRunKey, registry.SET_VALUE)
+	// CreateKey 在 Run 键被清理工具删掉时也能恢复；OpenKey 会直接失败。
+	key, _, err := registry.CreateKey(registry.CURRENT_USER, autoStartRunKey, registry.SET_VALUE|registry.QUERY_VALUE)
 	if err != nil {
 		return fmt.Errorf("open registry key: %w", err)
 	}
 	defer func() { _ = key.Close() }()
 
-	if err := key.SetStringValue(autoStartValName, exe); err != nil {
+	// 必须加引号：未加引号的带空格路径交给 CreateProcess 时存在解析歧义（"C:\Program.exe"
+	// 之类的中间可执行文件会被优先尝试），也可能被路径劫持。
+	if err := key.SetStringValue(autoStartValName, runValue(exe)); err != nil {
 		return fmt.Errorf("set registry value: %w", err)
 	}
 
@@ -35,12 +40,15 @@ func enableAutoStart() error {
 
 func disableAutoStart() error {
 	key, err := registry.OpenKey(registry.CURRENT_USER, autoStartRunKey, registry.SET_VALUE)
+	if errors.Is(err, registry.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("open registry key: %w", err)
 	}
 	defer func() { _ = key.Close() }()
 
-	if err := key.DeleteValue(autoStartValName); err != nil {
+	if err := key.DeleteValue(autoStartValName); err != nil && !errors.Is(err, registry.ErrNotExist) {
 		return fmt.Errorf("delete registry value: %w", err)
 	}
 
@@ -64,5 +72,11 @@ func isAutoStartEnabled() bool {
 		return false
 	}
 
-	return val == exe
+	// 兼容旧版本写入的未加引号路径：升级后复选框不应假装从未启用过。
+	return strings.Trim(val, `"`) == exe
+}
+
+// runValue 是 Run 键的 command line；路径本身不可能包含双引号，因此只需整体包一层。
+func runValue(exe string) string {
+	return `"` + exe + `"`
 }

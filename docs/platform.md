@@ -6,6 +6,10 @@
 
 - 客户端用纯 Go 托盘库 `github.com/gogpu/systray`（零 CGO）；go.mod 用 `replace` 指向 `nange/systray v0.3.0-easyss.1`，该分支修复了菜单打开期间 `SetMenu` 重建把点击派发到别的菜单项的问题，因此运行时重建菜单树是安全的。服务端禁用 CGO。
 - `-H windowsgui` 隐藏控制台窗口。
+- **清单是 `asInvoker`**（`build/windows/manifest.xml`，由 `rsrc` 编进 `.syso`）：主程序与开机自启都以普通用户运行。不要再改回 `requireAdministrator`——Windows 会阻止提权程序从 HKCU/HKLM Run 与启动文件夹启动，普通用户还会因为 UAC 凭据提示拿不到自己的 HKCU。
+- 普通权限模式只影响 TUN：系统代理写 HKCU，SOCKS5/HTTP、托盘、自更新都不需要管理员。TUN 由 `ShellExecuteEx("runas")` 拉起的常驻 helper 承载，日志与 `wintun.dll` 仍放在 exe 目录（helper 已提权，可写）。
+- 开机自启写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，值必须是带引号的 exe 路径；读取时兼容旧版未加引号的值。不要改 HKLM：per-machine Run 同样在登录路径阻止提权程序的范围内。
+- UWP 回环豁免（`CheckNetIsolation LoopbackExempt -a/-d`）仍需要管理员：普通权限下该菜单项会失败，需要时以管理员身份运行 Easyss；TUN 不受影响。
 
 ## 启动路径与系统代理
 
@@ -24,3 +28,11 @@
 - **Manager 会话状态在 `New` 里建好，`Start` 只认领**：`Start` 在调用方派发的 goroutine 里执行，启用路径返回到真正进入 `Start` 之间有调度窗口，托盘点击可在此期间到达 `Stop`。若 `ctx`/`cancel` 只在 `Start` 创建，`Stop` 会看到"未启动"直接返回，而 `Start` 随后把引擎/路由/DNS 全建起来且再无人持有——界面显示已关、流量仍在隧道里。因此 `Stop` 无条件 `cancel()`，只在 `started` 时等 `done`（两者在 `mu` 下快照），同一 manager 只允许 `Start` 一次。回归测试 `TestManagerStopBeforeStartGoroutineRuns`、`TestFaultStopRacesWithStart`。
 - **退出路径的 `session.stop` 也执行完整拆除（`tunDownLocked`）**：托盘 `tunUp` 不持会话序列锁，可能插进 `App.Stop` 的 `tunDown` 与 `stop` 之间。只 `Stop()` 引擎会漏掉 `tunSession`/`tunOwner`/helper FIFO，helper 会继续持 flock、路由与系统 DNS。回归测试 `TestStopReclaimsTunInstalledAfterTunDown`。
 - **启动路径安装 TUN 前要按当前偏好复核**：`sessionCfg` 是 `runCore` 之前的快照，托盘可以在这期间关掉 TUN。`startTunEngineAtStartup` 在 `tunMu` 内用 `currentConfig()` 复查（`startupTunWantedLocked`），否则用户已关闭的 TUN 又会被装上，而菜单随后按配置同步成"关"。回归测试 `TestStartupTunHonorsLatestPreference`。
+
+## Windows 提权 TUN helper
+
+- `tunhelper.IsRoot()` 在 Windows 上判断 UAC 提升后的令牌，不是 Unix 的 euid。非提权时 `session.tunUpAuto` 走 `tunUpViaHelper`，由 `spawn_windows.go` 用 `ShellExecuteExW("runas")` 启动同一个 exe 的 `tun-helper` 子命令；主进程不持有 wintun 适配器句柄，helper 自己运行 tun2socks。
+- 控制通道是 loopback TCP + 一次性 token：helper 先报 token，父进程回 `go`，helper 才允许装路由，最后以 `READY`/`ERROR` 报告结果。父进程关闭控制连接即通知 helper 停引擎并执行关闭脚本；`tunDownLocked` 先关连接、再等进程退出，最后用 `route print -4` 复核分流路由，父进程没有权限回滚，残留只通知用户。
+- `beginRemoteTun` 必须在 spawn 之前发布 TUN mode：helper 在 `mgr.Start` 里就会装分流路由，直连拨号器要提前绑定物理接口，否则窗口内的直连流量会被送回 TUN。`READY` 后才置 `tunActive` 放行 forward DNS。
+- helper 的 ICMP 分类与代理回环到主进程的 `/icmp/classify`、`/icmp/proxy`（仅本机可达、认证之前提供）：helper 没有主进程的 router/StreamHandler，不能用默认 forwarder，否则所有 IPv4 ping 都会被伪造 echo reply。
+- 登录启动是普通权限，`session.start` 在非提权时跳过 TUN 并提示从托盘授权；需要登录即启用 TUN 的用户只能用计划任务等外部方式以管理员启动，产品不代做。

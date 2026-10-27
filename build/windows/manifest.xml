@@ -14,7 +14,8 @@
     <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
         <security>
             <requestedPrivileges>
-                <requestedExecutionLevel level="requireAdministrator" />
+                <!-- 主程序以普通用户运行：开机自启走 HKCU Run，TUN 需要时再通过 ShellExecuteEx runas 拉起提权 helper。 -->
+                <requestedExecutionLevel level="asInvoker" />
             </requestedPrivileges>
         </security>
     </trustInfo>

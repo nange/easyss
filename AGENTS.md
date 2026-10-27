@@ -17,7 +17,7 @@ cmd/easyss/                         客户端入口：参数解析、配置加�
 cmd/easyss/icon/                    托盘图标与更新徽章（//go:embed 运行时 PNG + badge.go）
 cmd/easyss/internal/app/            客户端运行时：App/session/启动路径/托盘胶水/通知（启动路径与系统代理见 docs/platform.md）
 cmd/easyss/internal/tray/           systray 控件：外壳、菜单、标题、更新状态机、UWP 豁免
-cmd/easyss/internal/tunhelper/      TUN 提权 helper、fd 传递、spawn 与路由拆除复核
+cmd/easyss/internal/tunhelper/      TUN 提权 helper（unix fd 传递 / Windows 引擎）、spawn 与路由拆除复核
 cmd/easyss/internal/sysproxy/       系统代理与 Linux 桌面会话环境
 cmd/easyss/internal/logview/        查看日志（终端/快照）与桌面会话启动
 cmd/easyss/internal/autostart/      开机自启

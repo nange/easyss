@@ -3,12 +3,9 @@
 package tunhelper
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
@@ -66,8 +63,8 @@ const (
 )
 
 // 长期运行的提权 helper 入口：stdin 读到 EOF（主进程关闭 FIFO 或崩溃）即清理并退出。
-func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
-	if httpAddr == "" || fdSocketPath == "" {
+func runTunHelper(opts helperOptions) int {
+	if opts.httpAddr == "" || opts.fdSocketPath == "" {
 		fmt.Fprintf(os.Stderr, "[TUN-HELPER] missing required flags\n")
 		return 1
 	}
@@ -77,14 +74,14 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	h := &tunHelper{fd: -1}
 	defer func() {
 		if !h.fdSent {
-			notifyStartFailure(fdSocketPath, h.failure)
+			notifyStartFailure(opts.fdSocketPath, h.failure)
 		}
 	}()
 
 	// 尽早初始化日志器，错误才会进日志文件，而不是经由 stderr 丢到 /dev/null。
-	log.Init(log.Config{FilePath: logFilePath, Level: logLevel})
+	log.Init(log.Config{FilePath: opts.logFile, Level: opts.logLevel})
 
-	step, err := h.setup(httpAddr)
+	step, err := h.setup(opts.httpAddr)
 	if err != nil {
 		return h.fail(step, err)
 	}
@@ -93,7 +90,7 @@ func runTunHelper(httpAddr, fdSocketPath, logFilePath, logLevel string) int {
 	if err := h.configure(); err != nil {
 		return h.fail("run create script", err)
 	}
-	if err := h.sendFD(fdSocketPath); err != nil {
+	if err := h.sendFD(opts.fdSocketPath); err != nil {
 		return h.fail("send fd to parent", err)
 	}
 
@@ -234,52 +231,6 @@ func routeFieldsContain(out, key, value string) bool {
 	return false
 }
 
-// 带退避重试最长约 10 秒，防 HTTP 服务器尚未就绪。
-func fetchTunConfig(httpAddr string) (*proxy.TunConfig, error) {
-	url := fmt.Sprintf("http://%s/tun", httpAddr)
-
-	var lastErr error
-	for i := range 10 {
-		if i > 0 {
-			time.Sleep(time.Duration(i) * 200 * time.Millisecond)
-		}
-
-		resp, err := http.Get(url) //nolint:gosec
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		// 每次迭代都关闭 body：改用 defer 的话，之前十次响应的 body 会一直开到函数返回。
-		if resp.StatusCode == http.StatusServiceUnavailable {
-			_ = resp.Body.Close()
-			lastErr = fmt.Errorf("tun not configured yet (503)")
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-			_ = resp.Body.Close()
-			lastErr = fmt.Errorf("GET /tun returned %d: %s", resp.StatusCode, string(body))
-			continue
-		}
-
-		var cfg proxy.TunConfig
-		decodeErr := json.NewDecoder(resp.Body).Decode(&cfg)
-		_ = resp.Body.Close()
-		if decodeErr != nil {
-			lastErr = fmt.Errorf("decode tun config: %w", decodeErr)
-			continue
-		}
-
-		return &cfg, nil
-	}
-
-	// 错误只说明重试本身，失败步骤由调用方命名。
-	return nil, fmt.Errorf("after retries: %w", lastErr)
-}
-
-// 它会出现在桌面通知里，而平台脚本失败时可能产生大段引用的命令输出。
-const maxHelperFailureReason = 512
-
 // 连接套接字本身就是信号（父进程接受后发现没有 fd），原因作为这条连接的载荷传递，托盘因此
 // 能直接说出失败的步骤。尽力而为：父进程已不在就无人可告知。
 func notifyStartFailure(socketPath string, reason error) {
@@ -295,21 +246,6 @@ func notifyStartFailure(socketPath string, reason error) {
 	if payload := failurePayload(reason); len(payload) > 0 {
 		_, _ = conn.Write(payload)
 	}
-}
-
-// 桌面通知渲染不了换行，而这个套接字只承载一条消息。超限文本保留两端：开头是失败的步骤，
-// 结尾是脚本的 "failed near:" 摘要。
-func failurePayload(reason error) []byte {
-	if reason == nil {
-		return nil
-	}
-	msg := strings.Join(strings.Fields(reason.Error()), " ")
-	if len(msg) > maxHelperFailureReason {
-		const ellipsis = " ... "
-		keep := maxHelperFailureReason - len(ellipsis)
-		msg = msg[:keep/2] + ellipsis + msg[len(msg)-(keep-keep/2):]
-	}
-	return []byte(msg)
 }
 
 // util.Command 把整条命令行和该输出的转义副本打包进错误，不适合展示给用户；unix create 脚本

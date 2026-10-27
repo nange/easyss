@@ -22,14 +22,59 @@ type ICMPProxy interface {
 	OpenICMPStream(ctx context.Context, target string, echoPayload []byte, method protocol.Method) (replyPayload []byte, err error)
 }
 
+// ICMPAction 是一次 ICMP echo 的分流动作。Windows helper 没有主进程的 router，分类
+// 通过主进程的 /icmp/classify 端点完成，但后续动作与本进程内完全一致。
+type ICMPAction uint8
+
+const (
+	ICMPActionDirect ICMPAction = iota
+	ICMPActionBlock
+	ICMPActionProxy
+	ICMPActionDrop
+)
+
+// ICMPClassifier 返回目标地址的分流动作；icmpType 只用于日志。
+type ICMPClassifier func(dst string, icmpType uint8) (ICMPAction, error)
+
 type ICMPHandler struct {
-	router *router.Router
-	proxy  ICMPProxy
-	method protocol.Method
+	classify ICMPClassifier
+	proxy    ICMPProxy
+	method   protocol.Method
 }
 
 func NewICMPHandler(rt *router.Router) *ICMPHandler {
-	return &ICMPHandler{router: rt}
+	if rt == nil {
+		return &ICMPHandler{}
+	}
+	return &ICMPHandler{classify: ICMPClassifier(func(dst string, _ uint8) (ICMPAction, error) {
+		// IPv6 策略门禁属于共享分类的一部分：当 ipv6_rule 禁用 IPv6 时，发往
+		// 字面 IPv6 地址的 ICMP echo 必须以与 SOCKS5/HTTP 路径相同的条件被拒绝。
+		cls := rt.ClassifyHost(dst)
+		if cls.IPV6Rejected {
+			return ICMPActionBlock, nil
+		}
+		switch cls.Rule {
+		case router.HostRuleDirect:
+			return ICMPActionDirect, nil
+		case router.HostRuleBlock:
+			return ICMPActionBlock, nil
+		case router.HostRuleProxy:
+			return ICMPActionProxy, nil
+		default:
+			return ICMPActionDrop, nil
+		}
+	})}
+}
+
+// NewICMPHandlerWithClassifier 供提权 helper 使用：分类来自主进程，代理仍由本进程的
+// proxy 实现完成。proxy 用 SetProxy 注入，保持与 NewICMPHandler 相同的调用顺序。
+func NewICMPHandlerWithClassifier(classify func(dst string) (ICMPAction, error)) *ICMPHandler {
+	if classify == nil {
+		return &ICMPHandler{}
+	}
+	return &ICMPHandler{classify: ICMPClassifier(func(dst string, _ uint8) (ICMPAction, error) {
+		return classify(dst)
+	})}
 }
 
 func (h *ICMPHandler) SetProxy(proxy ICMPProxy, method protocol.Method) {
@@ -38,7 +83,7 @@ func (h *ICMPHandler) SetProxy(proxy ICMPProxy, method protocol.Method) {
 }
 
 func (h *ICMPHandler) HandlePacket(pkt adapter.Packet) bool {
-	if h.router == nil {
+	if h.classify == nil {
 		return false
 	}
 
@@ -53,22 +98,20 @@ func (h *ICMPHandler) HandlePacket(pkt adapter.Packet) bool {
 		return false
 	}
 
-	// IPv6 策略门禁属于共享分类的一部分：当 ipv6_rule 禁用 IPv6 时，发往
-	// 字面 IPv6 地址的 ICMP echo 必须以与 SOCKS5/HTTP 路径相同的条件被拒绝。
-	cls := h.router.ClassifyHost(dstAddr)
-	if cls.IPV6Rejected {
-		log.Info("[ICMP_BLOCK] ipv6 target rejected, ipv6 disabled", "dst", dstAddr, "type", icmpType)
-		return true
+	action, err := h.classify(dstAddr, icmpType)
+	if err != nil {
+		log.Debug("[ICMP_DROP]", "dst", dstAddr, "type", icmpType, "reason", "classify", "err", err)
+		return false
 	}
 
-	switch cls.Rule {
-	case router.HostRuleDirect:
+	switch action {
+	case ICMPActionDirect:
 		log.Info("[ICMP_DIRECT]", "dst", dstAddr, "type", icmpType)
 		return false
-	case router.HostRuleBlock:
-		log.Info("[ICMP_BLOCK] blocked", "dst", dstAddr, "type", icmpType)
+	case ICMPActionBlock:
+		log.Info("[ICMP_BLOCK]", "dst", dstAddr, "type", icmpType)
 		return true
-	case router.HostRuleProxy:
+	case ICMPActionProxy:
 		log.Info("[ICMP_PROXY]", "dst", dstAddr, "type", icmpType)
 		return h.handleProxyICMP(pkt)
 	default:
