@@ -78,7 +78,7 @@ func BuiltinRouteFor(hasFailover func() bool) BuiltinRoute {
 // system 必须是惰性求值且过滤后的可用上游：拨不通的条目（自环地址、禁用 IPv6 时的 IPv6
 // 地址）不能算兜底，否则熔断后会静默失去唯一的上游。健康路径不该为一次查询付系统 DNS
 // 发现与自环过滤的代价，因此用函数而不是切片。
-func QueryWithBuiltinFirst(builtin []string, system func() []string, try func(servers []string) (*dns.Msg, error)) (*dns.Msg, error) {
+func QueryWithBuiltinFirst(builtin []string, system func() []string, invalidate func(), try func(servers []string) (*dns.Msg, error)) (*dns.Msg, error) {
 	if system == nil {
 		system = func() []string { return nil }
 	}
@@ -90,13 +90,23 @@ func QueryWithBuiltinFirst(builtin []string, system func() []string, try func(se
 		once.Do(func() { servers = system() })
 		return servers
 	}
+	// 失效判据集中在这里：trySystem 返回错误即整份兜底列表没给出可用应答。什么算"答过"
+	// 由各调用方的 try 定义——转发路径要求权威 rcode（NOERROR/NXDOMAIN 才算答过），代理
+	// 直连路径任何应答都算，所以 proxy 侧只有传输层失败才会作废。
+	trySystem := func(upstreams []string) (*dns.Msg, error) {
+		reply, err := try(upstreams)
+		if err != nil && invalidate != nil {
+			invalidate()
+		}
+		return reply, err
+	}
 
 	if len(builtin) == 0 {
-		return try(loadSystem())
+		return trySystem(loadSystem())
 	}
 	route := BuiltinRouteFor(func() bool { return len(loadSystem()) > 0 })
 	if route == BuiltinRouteSkip {
-		return try(loadSystem())
+		return trySystem(loadSystem())
 	}
 	if route == BuiltinRouteRetry {
 		// 必须是 Debug：本函数每条查询都会走到，Warn 会按查询刷屏。
@@ -115,5 +125,5 @@ func QueryWithBuiltinFirst(builtin []string, system func() []string, try func(se
 	} else {
 		log.Debug("[DNS] all builtin dns servers failed and no system dns is available", "err", err)
 	}
-	return try(fallback)
+	return trySystem(fallback)
 }

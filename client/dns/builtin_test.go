@@ -73,7 +73,7 @@ func TestQueryWithBuiltinFirst(t *testing.T) {
 	}
 
 	// 内置服务器查询失败，回退到系统 DNS 并标记熔断器
-	got, err := QueryWithBuiltinFirst([]string{"builtin"}, fixedSystem([]string{"system"}), try)
+	got, err := QueryWithBuiltinFirst([]string{"builtin"}, fixedSystem([]string{"system"}), nil, try)
 	if err != nil || got != reply {
 		t.Fatalf("expected system reply, got %v, %v", got, err)
 	}
@@ -82,12 +82,49 @@ func TestQueryWithBuiltinFirst(t *testing.T) {
 	}
 
 	// 冷却期内完全跳过内置服务器
-	got, err = QueryWithBuiltinFirst([]string{"builtin"}, fixedSystem([]string{"system"}), try)
+	got, err = QueryWithBuiltinFirst([]string{"builtin"}, fixedSystem([]string{"system"}), nil, try)
 	if err != nil || got != reply {
 		t.Fatalf("expected system reply, got %v, %v", got, err)
 	}
 	if builtinCalls != 1 || systemCalls != 2 {
 		t.Fatalf("builtin should be skipped during cool-down: builtin=%d system=%d", builtinCalls, systemCalls)
+	}
+}
+
+// TestQueryWithBuiltinFirstInvalidatesOnlyWhenSystemFails 守住失效判据的接线：只有系统分支
+// 真正失败才作废一次。内置池失败但兜底答了不能作废——封 53 的网络上断路器长期置位，作废
+// 会让每条查询都 spawn 一次系统 DNS 发现。
+func TestQueryWithBuiltinFirstInvalidatesOnlyWhenSystemFails(t *testing.T) {
+	resetBuiltinDNSCircuit()
+	t.Cleanup(resetBuiltinDNSCircuit)
+
+	var invalidated int
+	invalidate := func() { invalidated++ }
+	failure := errors.New("unreachable")
+	reply := new(dns.Msg)
+	systemAnswers := func(upstreams []string) (*dns.Msg, error) {
+		if len(upstreams) == 1 && upstreams[0] == "system" {
+			return reply, nil
+		}
+		return nil, failure
+	}
+
+	got, err := QueryWithBuiltinFirst([]string{"builtin"}, fixedSystem([]string{"system"}), invalidate, systemAnswers)
+	if err != nil || got != reply {
+		t.Fatalf("expected the system reply, got %v, %v", got, err)
+	}
+	if invalidated != 0 {
+		t.Fatalf("a successful fallback must not invalidate, got %d", invalidated)
+	}
+
+	resetBuiltinDNSCircuit()
+	_, err = QueryWithBuiltinFirst([]string{"builtin"}, fixedSystem([]string{"system"}), invalidate,
+		func([]string) (*dns.Msg, error) { return nil, failure })
+	if err == nil {
+		t.Fatal("expected an error when both lists fail")
+	}
+	if invalidated != 1 {
+		t.Fatalf("a fully failed fallback must invalidate exactly once, got %d", invalidated)
 	}
 }
 
@@ -102,7 +139,7 @@ func TestQueryWithBuiltinFirstRecoversAfterCoolDown(t *testing.T) {
 	try := func(servers []string) (*dns.Msg, error) {
 		return reply, nil
 	}
-	got, err := QueryWithBuiltinFirst([]string{"builtin"}, fixedSystem([]string{"system"}), try)
+	got, err := QueryWithBuiltinFirst([]string{"builtin"}, fixedSystem([]string{"system"}), nil, try)
 	if err != nil || got != reply {
 		t.Fatalf("expected reply, got %v, %v", got, err)
 	}
@@ -119,7 +156,7 @@ func TestQueryWithBuiltinFirstEmptyBuiltin(t *testing.T) {
 		systemCalls++
 		return reply, nil
 	}
-	got, err := QueryWithBuiltinFirst(nil, fixedSystem([]string{"system"}), try)
+	got, err := QueryWithBuiltinFirst(nil, fixedSystem([]string{"system"}), nil, try)
 	if err != nil || got != reply {
 		t.Fatalf("expected system reply, got %v, %v", got, err)
 	}
@@ -141,7 +178,7 @@ func TestQueryWithBuiltinFirstNoSystemFallback(t *testing.T) {
 		return nil, errors.New("all dns servers down")
 	}
 
-	if _, err := QueryWithBuiltinFirst([]string{"builtin"}, fixedSystem(nil), try); err == nil {
+	if _, err := QueryWithBuiltinFirst([]string{"builtin"}, fixedSystem(nil), nil, try); err == nil {
 		t.Fatal("expected error when every upstream fails")
 	}
 	if !BuiltinDNSAvailable() {
@@ -149,7 +186,7 @@ func TestQueryWithBuiltinFirstNoSystemFallback(t *testing.T) {
 	}
 
 	// 内置服务器必须继续被尝试，而不是在冷却期内被跳过
-	if _, err := QueryWithBuiltinFirst([]string{"builtin"}, fixedSystem(nil), try); err == nil {
+	if _, err := QueryWithBuiltinFirst([]string{"builtin"}, fixedSystem(nil), nil, try); err == nil {
 		t.Fatal("expected error when every upstream fails")
 	}
 	if builtinCalls != 2 {
@@ -177,7 +214,7 @@ func TestQueryWithBuiltinFirstArmedBreakerWithoutFallback(t *testing.T) {
 		return nil, errors.New("system dns must not be consulted without a fallback")
 	}
 
-	got, err := QueryWithBuiltinFirst([]string{"builtin"}, fixedSystem(nil), try)
+	got, err := QueryWithBuiltinFirst([]string{"builtin"}, fixedSystem(nil), nil, try)
 	if err != nil || got != reply {
 		t.Fatalf("expected the builtin reply, got %v, %v", got, err)
 	}
@@ -262,6 +299,7 @@ func TestQueryWithBuiltinFirstRetryDoesNotWarn(t *testing.T) {
 		_, err := QueryWithBuiltinFirst(
 			[]string{"192.0.2.1:53"},
 			fixedSystem(nil), // 没有系统兜底 → BuiltinRouteRetry
+			nil,
 			func([]string) (*dns.Msg, error) { return nil, failure },
 		)
 		if !errors.Is(err, failure) {
@@ -294,7 +332,7 @@ func TestQueryWithBuiltinFirstLazySystem(t *testing.T) {
 		return []string{"system"}
 	}
 
-	got, err := QueryWithBuiltinFirst([]string{"builtin"}, system, func(servers []string) (*dns.Msg, error) {
+	got, err := QueryWithBuiltinFirst([]string{"builtin"}, system, nil, func(servers []string) (*dns.Msg, error) {
 		if len(servers) != 1 || servers[0] != "builtin" {
 			t.Fatalf("unexpected upstream list %v", servers)
 		}
@@ -309,7 +347,7 @@ func TestQueryWithBuiltinFirstLazySystem(t *testing.T) {
 
 	// 内置失败后只求值一次，判定有兜底与真正回退复用同一份列表。
 	systemCalls = 0
-	got, err = QueryWithBuiltinFirst([]string{"builtin"}, system, func(servers []string) (*dns.Msg, error) {
+	got, err = QueryWithBuiltinFirst([]string{"builtin"}, system, nil, func(servers []string) (*dns.Msg, error) {
 		if len(servers) == 1 && servers[0] == "builtin" {
 			return nil, errors.New("builtin down")
 		}

@@ -130,7 +130,11 @@ func (s *ForwardServer) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
+	// SetReply 会把 Rcode 重置成 NOERROR，上游的 NXDOMAIN 必须先存再写回：把"域名不存在"
+	// 改写成 NOERROR 会让 LAN 客户端把否定应答当成解析成功。
+	rcode := reply.Rcode
 	reply.SetReply(r)
+	reply.Rcode = rcode
 	_ = w.WriteMsg(reply)
 }
 
@@ -138,7 +142,7 @@ func (s *ForwardServer) forwardQuery(msg *dns.Msg) (*dns.Msg, error) {
 	try := func(servers []string) (*dns.Msg, error) {
 		return s.exchangeWithServers(servers, msg)
 	}
-	return QueryWithBuiltinFirst(s.dnsServers, s.systemDNSServers, try)
+	return QueryWithBuiltinFirst(s.dnsServers, s.systemDNSServers, s.system.Invalidate, try)
 }
 
 func (s *ForwardServer) exchangeWithServers(servers []string, msg *dns.Msg) (*dns.Msg, error) {
@@ -146,8 +150,9 @@ func (s *ForwardServer) exchangeWithServers(servers []string, msg *dns.Msg) (*dn
 		return nil, errors.New("no dns server available")
 	}
 
-	// 并发查询全部上游并取第一个成功结果，整个查询共享一个超时预算：串行扫描会让一个
-	// 挂起的上游吃掉客户端整个读超时。
+	// 并发查询全部上游并取第一个权威应答，整个查询共享一个超时预算：串行扫描会让一个
+	// 挂起的上游吃掉客户端整个读超时。只有没有任何上游给出权威应答（NOERROR/NXDOMAIN）
+	// 时才返回 error——它同时是"整份列表不可达、缓存可能属于上一个网络"的判据。
 	ctx, cancel := context.WithTimeout(context.Background(), s.client.Timeout)
 	defer cancel()
 
@@ -164,28 +169,43 @@ func (s *ForwardServer) exchangeWithServers(servers []string, msg *dns.Msg) (*dn
 		}(server)
 	}
 
-	var lastErr error
+	var (
+		lastErr error
+		// NXDOMAIN 要等正应答：并行竞速下先到的否定应答会把另一台解析器的正确结果挤掉。
+		negative *dns.Msg
+	)
 	for range servers {
 		select {
 		case r := <-ch:
-			if r.err == nil && r.reply != nil && r.reply.Rcode == dns.RcodeSuccess {
+			switch {
+			case r.err != nil:
+				lastErr = r.err
+			case r.reply == nil:
+				lastErr = errors.New("dns: empty reply")
+			case r.reply.Rcode == dns.RcodeSuccess:
 				// 上游可能返回"OPT 在 ANSWER 段"的畸形 EDNS0 应答：不规范化则严格解析器判畸形、
 				// 宽松解析器拿不到地址。
 				NormalizeEDNS0Answer(r.reply)
 				return r.reply, nil
-			}
-			if r.err != nil {
-				lastErr = r.err
-			} else if r.reply == nil {
-				lastErr = errors.New("dns: empty reply")
-			} else {
+			case r.reply.Rcode == dns.RcodeNameError:
+				if negative == nil {
+					NormalizeEDNS0Answer(r.reply)
+					negative = r.reply
+				}
+			default:
 				lastErr = fmt.Errorf("dns: server returned %s", dns.RcodeToString[r.reply.Rcode])
 			}
 		case <-ctx.Done():
+			if negative != nil {
+				return negative, nil
+			}
 			return nil, ctx.Err()
 		}
 	}
 
+	if negative != nil {
+		return negative, nil
+	}
 	if lastErr == nil {
 		lastErr = errors.New("no dns server available")
 	}
