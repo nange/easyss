@@ -407,7 +407,7 @@ func (c *Client) dialServerIPs(ctx context.Context, network string, ips []string
 }
 
 func (c *Client) dialAddr(ctx context.Context, network, addr string) (net.Conn, error) {
-	if c.tunModeEnabled() && c.dialer.Load() != nil {
+	if c.TunModeEnabled() && c.dialer.Load() != nil {
 		// 必须强制具体的 IP 版本，直连拨号器的 socket 绑定（IP_BOUND_IF）才生效：
 		// 它只处理 "tcp4"/"udp4"/"tcp6"/"udp6"，不处理双栈的 "tcp"/"udp"。
 		host, _, err := net.SplitHostPort(addr)
@@ -498,7 +498,7 @@ func (c *Client) dialerRefreshLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			if c.tunModeEnabled() {
+			if c.TunModeEnabled() {
 				c.refreshDirectDialer()
 			}
 		case <-c.closeIdleDone:
@@ -707,6 +707,8 @@ func (c *Client) SetTunMode(on bool) {
 	c.tunMode.Store(on)
 }
 
-func (c *Client) tunModeEnabled() bool {
+// TunModeEnabled 报告本会话的 TUN 是否生效。forward DNS 也读它：没有 TUN 时它的上游查询
+// 只能从物理网卡直连解析（DNS 泄漏），因此必须拒答而不是降级。
+func (c *Client) TunModeEnabled() bool {
 	return c.tunMode.Load()
 }

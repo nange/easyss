@@ -14,6 +14,7 @@
 - **派生超时只在一处填零值**：`config.Timeouts` 由 `config.NewTimeouts` 派生，`Timeouts.Normalize` 只按 `Base` 补零值字段；每个公开构造器入口调用一次，其余地方直接读字段，不要再写 `if x <= 0`。SOCKS5 与 HTTP 两个入口必须拿到同一份 `Timeouts`（否则同一目标超时不一致）。
 - 两处零值判断是语义不是默认值：`ProxyHandlerConfig.HandshakeTimeout <= 0` 表示沿用 `Timeouts.Base`；`udpPool.receiveLoop` 的 `respTimeout <= 0` 表示关闭读空闲。
 - `http_port` 未配置时由 `socks_port` 推导（`+1000`），完整/简单模式同语义，只有 `client/config.normalizeHTTPPort` 一处实现；`socks_port=0` 不推导，`socks_port=0` + `http_port>0` 仍是启动错误（`runner.ErrSocksRequired`）。
+- `local.enable_forward_dns` 只服务路由器透明代理部署，必须与 `local.enable_tun2socks` 和 `socks_port>0` 同开：它的上游查询靠 TUN 路由重新进入隧道，缺任何一环都只剩直连解析，启动直接失败（`runner.ErrForwardDNSRequiresTun`，见「关键架构要点」第 19 节）。
 - **本地代理端点地址只有一个来源**：监听用 `util.LocalProxyListenAddr`，本机消费方（HTTP 反向代理、TUN/helper、系统代理、托盘 `/stats`）用 `util.LocalProxyDialAddr`，`Socks5URI` 只是包装；`bind_all` 时分别是 `[::]` 与同族回环。不要再手拼 `127.0.0.1:<port>`（监听可能只接受 IPv6 回环）。`sysproxy.State.Enable`/`Disable` 接收完整地址，由 `sysproxy.Addr(cfg)` 推导。
 - `tun_mtu`（完整 `local.tun_mtu`/简单同名，默认 1500，范围 [1280, 9000]）是设备与 netstack MTU 的唯一来源，归一化只在 `config.NormalizeTunMTU`。设备侧由创建脚本写入（第 9 个位置参数）；wintun 的 MTU 无法由 tun2socks 设置，只能靠 netsh；netstack MTU 小于设备 MTU 会静默丢弃超限包（UDP/ICMP/分片，TCP 因 MSS 通告不受影响）。
 
@@ -111,3 +112,11 @@ Bootstrap 用 AES-256-GCM 加密初始握手帧（含目标地址与方法协商
 `client/dns/builtin.go` 的 `BuiltinRouteFor(hasFailover func() bool)` 返回三个互斥状态（`BuiltinRouteFirst`/`BuiltinRouteSkip`/`BuiltinRouteRetry`）。必须是三态：两个布尔时"熔断中但无兜底"与"健康"无法区分，"无视冷却重试"分支不可达。`hasFailover` 必须是惰性函数值：提前求值会让健康路径每次预解析都付一次系统 DNS 发现（darwin `networksetup` 约 48ms）。三条调用路径（`QueryWithBuiltinFirst`、`Cache.PrePopulateWithFallback`、`client.resolveServerIPV6`）共享判定但各自保留循环，因为调度与预算模型不同。唯一规则：**只有存在系统 DNS 兜底时才熔断内置池**（无兜底时熔断等于彻底中断，Android 上系统 DNS 不可见）；熔断已置位但当前无兜底时无视冷却，仍试内置池。
 
 系统 DNS 发现缓存（`client/dns/system.go`，TTL 5 分钟，失败结果同样缓存）由失败驱动失效，判据只放在 `QueryWithBuiltinFirst`：`try` 的系统分支返回错误时调用一次 `invalidate`，按 5 秒节流丢弃缓存、重新发现。节流锚在**上次作废**而不是发现时间——缓存刚过期时换 WAN，发现与失败落在同一次查询里，锚在发现时间会把最该生效的那次作废吞掉。什么算"答过"由各调用方的 `try` 定义：转发路径要求权威 rcode（`NOERROR`/`NXDOMAIN` 才算），代理直连路径任何应答都算（它只在 `reqServer` 不可用时才走到这条兜底，`SERVFAIL` 不会触发失效）。转发路径的判据必须是"没有权威应答"而不是"没有正应答"——上游回 NXDOMAIN 是正常应答，既不能改写（`handleDNS` 的 `SetReply` 会把 Rcode 重置成 NOERROR，必须先存后写回），也不能当换网信号，否则 LAN 里每个不存在的域名都会作废一次缓存、spawn 一次发现并持有 `systemDNS` 的锁。这是换 WAN 后唯一的失效信号——缓存里可能仍是上一个网络的解析器，没有它就要等满 5 分钟；作废只清列表，不动熔断冷却，否则封 53 的网络上每条查询都会先超时探一遍内置池。另两条共享判定的路径（`Cache.PrePopulateWithFallback`、`client.resolveServerIPV6`）不做失效，由启动与启用 TUN 前的 `ResetResolveState` 覆盖。
+
+### 19. forward DNS 只服务路由器透明代理，且必须与 TUN 同开
+
+`local.enable_forward_dns` 唯一的适用场景是"easyss 装在路由器上做透明代理"：LAN 设备把网关与 DNS 都指向这台主机，但发给路由器自身的查询由内核本地投递，永远不会进 TUN。`client/dns.ForwardServer` 因此在本机所有网卡（UDP 53）上接住这些查询、向上游再发一次——上游取 `config.DirectDNSServers`（全部失败时回退系统 DNS）；内置池是公网解析器，地址落在 TUN 的默认路由内，查询于是**重新进入 TUN**，经 tun2socks 到本机 SOCKS5，再由 `client/proxy` 的 DNS 拦截按 QNAME 分流（屏蔽/缓存/直连/代理）。转发器自己不做屏蔽与缓存，那些语义只属于拦截层：它只是"把 LAN 的查询送回隧道"的那一跳。
+
+所以 TUN 是硬前提而不是优化项：没有 TUN 时同样的查询只能从物理网卡直连解析（DNS 泄漏），LAN 还会拿到与被代理流量不一致的答案。两层各自把关——`runner.validateLocalEndpoints` 在任何监听器绑定之前拒绝"`enable_forward_dns` 缺 `enable_tun2socks` 或缺 `socks_port > 0`"的配置（`runner.ErrForwardDNSRequiresTun`，托盘有对应提示）；`dns.ForwardServer` 每条查询现读 `client.Client.TunModeEnabled`，TUN 未生效时回 REFUSED 而不是降级。运行期这一层不可省：监听器在 TUN 之前绑定，托盘又能在运行中关掉 TUN，启动期校验覆盖不到之后的状态。
+
+监听地址固定 `:53` 全网卡（`runner.defaultOptions`），回环会让 LAN 设备够不到；绑定在 `runner.Run` 里同步完成，端口被 dnsmasq/systemd-resolved 占用时直接启动失败。只有 UDP：LAN 客户端因截断应答改用 TCP 53 重试的查询无人应答（需要时让 dnsmasq 承接 TCP 再转发）。系统 DNS 兜底必须过滤掉会打回自己的条目（环回、本机网卡地址 + 同端口），否则查询递归回自身。

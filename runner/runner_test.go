@@ -215,6 +215,48 @@ func TestRunValidatesHTTPWithoutSocksBeforeBinding(t *testing.T) {
 	})
 }
 
+// TestRunRejectsForwardDNSWithoutTun 守住启动前提：forward DNS 只用于路由器透明代理，
+// LAN 查询要靠 TUN 重新进入隧道，缺 TUN 或本地 socks5 入口时只剩直连解析（DNS 泄漏），
+// 必须拒绝启动而不是降级。占住 forward DNS 端口，校验若被挪到绑定之后会变成绑定错误。
+func TestRunRejectsForwardDNSWithoutTun(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen packet: %v", err)
+	}
+	defer pc.Close() //nolint:errcheck
+
+	opts := defaultOptions()
+	opts.forwardDNSListenAddr = pc.LocalAddr().String()
+
+	// 两个前提分别缺一：tun2socks 关着，或 socks_port 关着（没有本地 socks5 入口）。
+	cases := []struct {
+		name      string
+		socksPort int
+		enableTun bool
+	}{
+		{name: "tun disabled", socksPort: freePort(t), enableTun: false},
+		{name: "socks disabled", socksPort: 0, enableTun: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.Local.HTTPPort = 0
+			cfg.Local.EnableForwardDNS = true
+			cfg.Local.SocksPort = tc.socksPort
+			cfg.Local.EnableTun2socks = tc.enableTun
+
+			core, err := runWithOptions(cfg, opts)
+			if core != nil {
+				core.Stop()
+				t.Fatal("expected no core when forward dns prerequisites are missing")
+			}
+			if !errors.Is(err, ErrForwardDNSRequiresTun) {
+				t.Fatalf("expected ErrForwardDNSRequiresTun before binding, got: %v", err)
+			}
+		})
+	}
+}
+
 // TestRunFailsFastOnForwardDNSConflict 守住 forward DNS 绑定失败同样中止 Run（与
 // SOCKS5/HTTP 一样在 Run 里同步绑定）；注入回环临时端口是因为绑定 :53 需要 root。
 func TestRunFailsFastOnForwardDNSConflict(t *testing.T) {
@@ -231,6 +273,7 @@ func TestRunFailsFastOnForwardDNSConflict(t *testing.T) {
 	cfg := testConfig()
 	cfg.Local.HTTPPort = 0
 	cfg.Local.EnableForwardDNS = true
+	cfg.Local.EnableTun2socks = true
 
 	runExpectingListenError(t, "dns forward server listen", func() (*Core, error) {
 		cfg.Local.SocksPort = freePort(t)
@@ -246,6 +289,7 @@ func TestRunServesForwardDNSOnInjectedAddr(t *testing.T) {
 	cfg := testConfig()
 	cfg.Local.HTTPPort = 0
 	cfg.Local.EnableForwardDNS = true
+	cfg.Local.EnableTun2socks = true
 
 	var addr string
 	core := startRetrying(t, func() (*Core, error) {

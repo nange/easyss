@@ -25,11 +25,12 @@ cmd/easyss/internal/singleton/      单实例锁
 cmd/easyss/internal/selfupdatecmd/  selfupdate 子命令与产品变体
 cmd/easyss-server/                  服务端入口，单文件 main.go
 integration/                        客户端+服务端端到端测试（原 cmd/easyss/easyss_test.go）
+runner/                             客户端启动与本地端点绑定（SOCKS5/HTTP/forward DNS :53）、服务端域名预解析
 client/                             客户端核心：Client 结构体
 client/assets/                      嵌入的 GeoIP 数据库、直连/屏蔽列表与 wintun DLL
 client/config/                      客户端配置（JSON 解析、简化模式/旧版配置转换）
 client/router/                      GeoIP + 域名列表路由引擎
-client/dns/                         DNS 转发服务器 + freecache 双缓存（DNS 契约见 docs/architecture.md）
+client/dns/                         DNS 转发服务器（仅路由器透明代理 + TUN）+ freecache 双缓存（DNS 契约见 docs/architecture.md）
 client/proxy/                       SOCKS5/HTTP 代理服务器 + StreamHandler
 client/tun/                         TUN2socks 虚拟网卡 + ICMP 代理（teardown/脚本约束见 docs/platform.md）
 client/tun/scripts/                 TUN 创建/关闭脚本（//go:embed，按 GOOS 自动选择）

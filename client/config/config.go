@@ -76,6 +76,8 @@ func (s *ServerProfile) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// LocalConfig 是本地入口配置。EnableForwardDNS 只服务路由器透明代理部署，必须与
+// EnableTun2socks 同开（否则 runner 拒绝启动）——没有 TUN 的转发只剩直连解析。
 type LocalConfig struct {
 	SocksPort        int             `json:"socks_port"`
 	HTTPPort         int             `json:"http_port"`

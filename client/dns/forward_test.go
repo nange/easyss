@@ -3,11 +3,16 @@ package dns
 import (
 	"net"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/miekg/dns"
 )
+
+// alwaysTunActive 让不关心 TUN 前提的用例照常解析；TUN 未生效时的拒答由
+// TestForwardServerRefusesWithoutTun 单独覆盖。
+func alwaysTunActive() bool { return true }
 
 // startTestDNSServer 在随机端口上启动一个本地 UDP DNS 服务器。当 fail 为
 // true 时，它对每个查询都回复 SERVFAIL；否则正常应答 A/AAAA 记录。返回
@@ -187,7 +192,7 @@ func TestForwardQueryFallsBackToSystemDNS(t *testing.T) {
 	})
 	t.Cleanup(resetBuiltinDNSCircuit)
 
-	fs := NewForwardServer("127.0.0.1:0", false)
+	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive)
 	fs.system = sysServers
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	// 不可达的本地地址强制走回退路径
@@ -217,7 +222,7 @@ func TestForwardQueryAllServersUnavailable(t *testing.T) {
 	})
 	t.Cleanup(resetBuiltinDNSCircuit)
 
-	fs := NewForwardServer("127.0.0.1:0", false)
+	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive)
 	fs.system = sysServers
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	fs.dnsServers = []string{"127.0.0.1:1"}
@@ -241,7 +246,7 @@ func TestForwardQueryInvalidatesStaleSystemDNS(t *testing.T) {
 	liveAddr := startTestDNSServer(t, false)
 	sys := &switchingSystemServers{servers: []string{"127.0.0.1:1"}} // 换网前的旧解析器
 
-	fs := NewForwardServer("127.0.0.1:0", false)
+	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive)
 	fs.system = sys
 	fs.client = &dns.Client{Timeout: 100 * time.Millisecond}
 	fs.dnsServers = []string{"127.0.0.1:1"}
@@ -283,7 +288,7 @@ func TestForwardQueryPassesThroughNXDOMAIN(t *testing.T) {
 	resetBuiltinDNSCircuit()
 
 	sys := &switchingSystemServers{servers: []string{startNXDOMAINDNSServer(t)}}
-	fs := NewForwardServer("127.0.0.1:0", false)
+	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive)
 	fs.system = sys
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	fs.dnsServers = []string{"127.0.0.1:1"}
@@ -309,7 +314,7 @@ func TestForwardQueryInvalidatesOnAllServfail(t *testing.T) {
 	resetBuiltinDNSCircuit()
 
 	sys := &switchingSystemServers{servers: []string{startTestDNSServer(t, true)}}
-	fs := NewForwardServer("127.0.0.1:0", false)
+	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive)
 	fs.system = sys
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	fs.dnsServers = []string{"127.0.0.1:1"}
@@ -333,7 +338,7 @@ func TestForwardQueryPrefersPositiveAnswerOverNXDOMAIN(t *testing.T) {
 	nxAddr := startNXDOMAINDNSServer(t)
 	slowAddr := startSlowTestDNSServer(t, 50*time.Millisecond)
 
-	fs := NewForwardServer("127.0.0.1:0", false)
+	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive)
 	fs.system = systemServersFunc(func() []string { return []string{nxAddr, slowAddr} })
 	fs.client = &dns.Client{Timeout: time.Second}
 	fs.dnsServers = []string{"127.0.0.1:1"}
@@ -356,7 +361,7 @@ func TestForwardServerServesNXDOMAIN(t *testing.T) {
 	t.Cleanup(resetBuiltinDNSCircuit)
 	resetBuiltinDNSCircuit()
 
-	fs := NewForwardServer("127.0.0.1:0", false)
+	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive)
 	fs.system = systemServersFunc(func() []string { return []string{startNXDOMAINDNSServer(t)} })
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	fs.dnsServers = []string{"127.0.0.1:1"}
@@ -379,6 +384,49 @@ func TestForwardServerServesNXDOMAIN(t *testing.T) {
 	}
 }
 
+// TestForwardServerRefusesWithoutTun 守住 fail-closed：TUN 未生效时上游查询只能从物理网卡
+// 直连解析（DNS 泄漏），必须回 REFUSED，不能降级成直连解析器。
+func TestForwardServerRefusesWithoutTun(t *testing.T) {
+	t.Cleanup(resetBuiltinDNSCircuit)
+
+	upstream := startTestDNSServer(t, false)
+	var tunActive atomic.Bool
+	fs := NewForwardServer("127.0.0.1:0", false, tunActive.Load)
+	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
+	fs.dnsServers = []string{upstream}
+
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = fs.Serve(pc) }()
+	t.Cleanup(func() { _ = fs.Shutdown() })
+
+	msg := new(dns.Msg)
+	msg.SetQuestion("example.com.", dns.TypeA)
+	reply, _, err := (&dns.Client{Timeout: time.Second}).Exchange(msg, pc.LocalAddr().String())
+	if err != nil {
+		t.Fatalf("exchange: %v", err)
+	}
+	if reply.Rcode != dns.RcodeRefused {
+		t.Fatalf("rcode = %s, want REFUSED while the tun is inactive", dns.RcodeToString[reply.Rcode])
+	}
+	if len(reply.Answer) != 0 {
+		t.Fatalf("a refused query must carry no answer, got %d records", len(reply.Answer))
+	}
+
+	// 判据是每次查询现读运行期状态：TUN 起来后同一条服务器必须恢复解析。
+	tunActive.Store(true)
+	reply, _, err = (&dns.Client{Timeout: time.Second}).Exchange(msg, pc.LocalAddr().String())
+	if err != nil {
+		t.Fatalf("exchange after tun activation: %v", err)
+	}
+	if reply.Rcode != dns.RcodeSuccess || len(reply.Answer) != 1 {
+		t.Fatalf("want the forwarded answer once the tun is active, got rcode=%s answers=%d",
+			dns.RcodeToString[reply.Rcode], len(reply.Answer))
+	}
+}
+
 // TestForwardQuerySkipsSelfAsUpstream 守住自身地址过滤：漏掉它会递归进自身堆积 goroutine
 // 与 socket。必须用生产监听地址 ":53" 构造，用 127.0.0.1:53 的测试会"通过但空转"。
 func TestForwardQuerySkipsSelfAsUpstream(t *testing.T) {
@@ -389,7 +437,7 @@ func TestForwardQuerySkipsSelfAsUpstream(t *testing.T) {
 	})
 	t.Cleanup(resetBuiltinDNSCircuit)
 
-	fs := NewForwardServer(":53", false)
+	fs := NewForwardServer(":53", false, alwaysTunActive)
 	fs.system = sysServers
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	fs.dnsServers = []string{"127.0.0.1:1"} // 内置服务器全部不可达
@@ -490,7 +538,7 @@ func TestForwardQuerySharesNoMsgAcrossUpstreams(t *testing.T) {
 	first := startTestDNSServer(t, false)
 	second := startTestDNSServer(t, false)
 
-	fs := NewForwardServer("127.0.0.1:0", false)
+	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive)
 	fs.dnsServers = []string{first, second}
 	fs.client = &dns.Client{Timeout: time.Second}
 

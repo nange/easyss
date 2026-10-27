@@ -155,6 +155,10 @@ func friendlyStartupError(err error) string {
 	if errors.Is(err, runner.ErrSocksRequired) {
 		return "配置错误：启用 HTTP 代理需要先启用 SOCKS5 代理（socks_port 需大于 0）。详情：" + err.Error()
 	}
+	if errors.Is(err, runner.ErrForwardDNSRequiresTun) {
+		return "配置错误：enable_forward_dns 只用于路由器上的透明代理转发，必须同时开启 enable_tun2socks" +
+			"（且 socks_port 需大于 0）：LAN 查询要被 TUN 抓回隧道后再由代理分流。详情：" + err.Error()
+	}
 	return "服务启动失败：" + err.Error()
 }
 
