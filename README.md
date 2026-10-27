@@ -128,7 +128,7 @@ Easyss v3 支持两种配置模式，自动识别：
 | `local.http_port` | 否 | `socks_port + 1000` | 本地 HTTP 代理监听端口；未配置时由 `socks_port` 推导，显式配置优先。`socks_port` 为 0 时它也是 0；它非 0 而 `socks_port` 为 0 时启动会报错 |
 | `local.bind_all` | 否 | false | 是否将监听端口绑定到所有本地 IP；开启时监听 `[::]`，系统代理与 TUN 等本机自用端点改用同族回环 `[::1]` 访问本地代理 |
 | `local.disable_sys_proxy` | 否 | false | 是否不设置系统代理（headless 版默认会设置） |
-| `local.enable_forward_dns` | 否 | false | 是否在本机所有网卡的 53 端口提供 DNS 转发（供 LAN 设备使用）。仅路由器透明代理场景，需 `socks_port > 0` 才能启动；运行中 TUN 未生效时转发器对所有查询回 REFUSED |
+| `local.enable_forward_dns` | 否 | false | 是否在本机所有网卡的 53 端口提供 DNS 转发（供 LAN 设备使用）。仅路由器透明代理场景，需 `socks_port > 0` 才能启动；运行中 TUN 未生效时转发器对所有查询回 REFUSED；移动端（gomobile 绑定）不支持，配置后 `mobile.Start` 直接报错 |
 | `local.enable_tun2socks` | 否 | false | 是否启用 TUN 全局透明代理 |
 | `local.enable_quic` | 否 | false | 是否允许 QUIC（UDP 443）走代理 |
 | `local.tun_mtu` | 否 | 1500 | TUN 设备与 tun2socks 的 MTU，钳制到 [1280, 9000] |

@@ -255,8 +255,19 @@ func (s *session) syncTunStateLocked() {
 	if core == nil || core.Client == nil {
 		return
 	}
+	wasForwarding := core.Client.TunForwardingEnabled()
 	core.Client.SetTunMode(s.tunMgr != nil)
 	core.Client.SetTunForwarding(s.tunActive)
+
+	// 拒答本身每查询只记 Debug（默认 info 级看不见），启停时补一行：路由器上 LAN DNS
+	// 静默失效，运维只需看这一条就能对上时间。
+	if wasForwarding != s.tunActive && s.app.currentConfig().Local.EnableForwardDNS {
+		if s.tunActive {
+			log.Info("[EASYSS-V3] forward dns active: tun engine is forwarding")
+		} else {
+			log.Warn("[EASYSS-V3] forward dns paused: tun is not forwarding, lan queries are refused")
+		}
+	}
 }
 
 func (s *session) buildICMPHandler(core *runner.Core) {

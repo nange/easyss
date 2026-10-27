@@ -245,6 +245,33 @@ func TestTunDownKeepsDialerBoundUntilRoutesAreGone(t *testing.T) {
 	require.False(t, core.Client.TunModeEnabled())
 }
 
+// TestMarkTunEngineUpOpensForwarding 守住唯一的开闸点：只有 Manager.Start 成功且 manager 仍是
+// 当前会话时才放行 forward DNS；被替换掉的会话迟到的成功回调不得开闸。
+func TestMarkTunEngineUpOpensForwarding(t *testing.T) {
+	core := &runner.Core{Client: &client.Client{}}
+	a := New(&clientconfig.ClientConfig{}, "")
+	a.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableForwardDNS = true })
+	a.sess.installCore(core)
+
+	mgr := &tun.Manager{}
+	a.sess.tunMu.Lock()
+	a.sess.adoptTunManager(mgr, nil, tun.OwnerLocal)
+	a.sess.tunMu.Unlock()
+	require.False(t, core.Client.TunForwardingEnabled(), "adopt 本身不得开闸")
+
+	a.sess.markTunEngineUp(mgr)
+	require.True(t, core.Client.TunForwardingEnabled(), "Manager.Start 成功后必须放行 forward DNS")
+	require.True(t, core.Client.TunModeEnabled(), "开闸不得解绑直连拨号器")
+
+	// 用户关掉又重开 TUN：旧 manager 迟到的成功回调不能给新会话开闸。
+	next := &tun.Manager{}
+	a.sess.tunMu.Lock()
+	a.sess.adoptTunManager(next, nil, tun.OwnerLocal)
+	a.sess.tunMu.Unlock()
+	a.sess.markTunEngineUp(mgr)
+	require.False(t, core.Client.TunForwardingEnabled(), "过期 manager 不得开闸")
+}
+
 // TestAppStopAndTunToggleAreRaceFree 固定 tunMgr 的锁契约：托盘的 TUN 开关、启动期的
 // startTunEngineAtStartup 与停止期的 stop 必须共用 session.tunMu 读写 tunMgr，任一方脱锁 -race 即暴露。
 func TestAppStopAndTunToggleAreRaceFree(t *testing.T) {

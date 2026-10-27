@@ -78,6 +78,7 @@ func (s *ServerProfile) UnmarshalJSON(data []byte) error {
 
 // LocalConfig 是本地入口配置。EnableForwardDNS 只服务路由器透明代理部署：需要 socks_port > 0
 // （否则 runner 拒绝启动），TUN 未生效时由转发器逐条拒答——没有 TUN 的转发只剩直连解析。
+// 移动端没有发布 TUN 运行期状态的会话，mobile.Start 直接拒绝该配置。
 type LocalConfig struct {
 	SocksPort        int             `json:"socks_port"`
 	HTTPPort         int             `json:"http_port"`

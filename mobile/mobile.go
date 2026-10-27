@@ -31,6 +31,12 @@ func Start(cfg *config.SimpleConfig) error {
 		return err
 	}
 
+	// forward DNS 的闸门由桌面会话在 TUN 起来后发布（client.Client.TunForwardingEnabled），
+	// mobile 直接调用 runner.Run、没有这一层：放行只会得到一个永远拒答的 :53。
+	if clientCfg.Local.EnableForwardDNS {
+		return fmt.Errorf("enable_forward_dns is not supported on mobile")
+	}
+
 	// 必须在 runner.Run 之前用 log.Init 装配：默认 logger 的处理器持有静态 LevelInfo，
 	// 只调 log.SetLevel 改不动它；输出仍写 stdout，给了文件路径时额外落一份文件。
 	log.Init(clientCfg.Log)
