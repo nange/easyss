@@ -100,8 +100,10 @@ func (h *ICMPHandler) HandlePacket(pkt adapter.Packet) bool {
 
 	action, err := h.classify(dstAddr, icmpType)
 	if err != nil {
-		log.Debug("[ICMP_DROP]", "dst", dstAddr, "type", icmpType, "reason", "classify", "err", err)
-		return false
+		// 不能落到 tun2socks 的默认 forwarder：它会给 IPv4 echo 伪造 echo reply，一次
+		// 根本没发出去的 ping 会显示成功。分类失败一律消费掉，并留 Warn（默认级别可见）。
+		log.Warn("[ICMP_DROP]", "dst", dstAddr, "type", icmpType, "reason", "classify", "err", err)
+		return true
 	}
 
 	switch action {

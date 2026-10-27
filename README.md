@@ -170,7 +170,7 @@ Easyss v3 支持两种配置模式，自动识别：
 
 ![托盘图标](docs/images/tray.png)
 
-**注意：代理对象选择"系统全局流量"（Tun2socks）时，Linux/macOS 需要 root 授权，Windows 会弹出 UAC 提权确认；SOCKS5/HTTP 与系统代理本身不需要管理员权限。**
+**注意：代理对象选择"系统全局流量"（Tun2socks）时，Linux/macOS 需要 root 授权，Windows 会弹出 UAC 提权确认；当前账户不是管理员或 UAC 被关闭时会明确提示需要管理员权限（不会静默失败）。SOCKS5/HTTP 与系统代理本身不需要管理员权限。**
 
 **Windows 开机自启：** 客户端以普通权限写入当前用户的 `Run` 键，登录时不再弹 UAC；Windows 不允许提权程序从登录路径启动，因此 TUN 不会在登录时自动安装。需要全局流量时，请在托盘菜单中开启"系统全局流量"并在 UAC 提示中确认，本次会话会由提权 helper 承载 TUN。若希望登录即启用 TUN，需要自行用任务计划程序以管理员身份启动 Easyss。
 

@@ -35,6 +35,9 @@ func runTunHelper(opts helperOptions) int {
 
 	// 尽早初始化日志器，错误才会进日志文件，而不是经由 stderr 丢到 windowsgui 的虚空。
 	log.Init(log.Config{FilePath: opts.logFile, Level: opts.logLevel})
+	// 提权状态必须落日志：runas 在 UAC 关闭或账户无管理员权限时会静默降级，这条是
+	// 托盘报错时唯一能证明 helper 令牌状态的记录。
+	log.Info("[TUN-HELPER] starting", "pid", os.Getpid(), "elevated", IsRoot())
 
 	conn, err := net.DialTimeout("tcp", opts.controlAddr, tunControlDialTimeout)
 	if err != nil {
@@ -50,6 +53,14 @@ func runTunHelper(opts helperOptions) int {
 	// 父进程确认 token 后才继续：超时/EOF 说明父进程已放弃等待，此时绝不能再去装路由。
 	if err := readControlAck(conn); err != nil {
 		log.Error("[TUN-HELPER] wait for control ack", "err", err)
+		return 1
+	}
+
+	// wintun 适配器只能由管理员创建。未提权时继续，失败会被推成 wintun 的
+	// "Access is denied"，用户与日志都看不出真实原因，因此在这里就把它变成可识别的报告。
+	if !IsRoot() {
+		_ = writeControlLine(conn, "ERROR "+elevationRequiredStatus+": ShellExecuteEx runas 未提权（当前账户不是管理员或 UAC 已关闭）")
+		log.Error("[TUN-HELPER] not elevated, refusing to create the tun adapter")
 		return 1
 	}
 

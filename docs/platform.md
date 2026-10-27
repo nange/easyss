@@ -32,7 +32,9 @@
 ## Windows 提权 TUN helper
 
 - `tunhelper.IsRoot()` 在 Windows 上判断 UAC 提升后的令牌，不是 Unix 的 euid。非提权时 `session.tunUpAuto` 走 `tunUpViaHelper`，由 `spawn_windows.go` 用 `ShellExecuteExW("runas")` 启动同一个 exe 的 `tun-helper` 子命令；主进程不持有 wintun 适配器句柄，helper 自己运行 tun2socks。
+- **`runas` 返回成功不等于已提权**：UAC 关闭或账户不在管理员组时它会静默降级为普通启动，此时 wintun 只会报 `Access is denied`。helper 在控制握手后自检 `IsRoot()`，未提权回 `ERROR ELEVATION-REQUIRED`（父进程映射为 `tunhelper.ErrElevationRequired`，同时满足 `fs.ErrPermission`，托盘提示需要管理员权限）；helper 第一条日志记录自身提权状态。
 - 控制通道是 loopback TCP + 一次性 token：helper 先报 token，父进程回 `go`，helper 才允许装路由，最后以 `READY`/`ERROR` 报告结果。父进程关闭控制连接即通知 helper 停引擎并执行关闭脚本；`tunDownLocked` 先关连接、再等进程退出，最后用 `route print -4` 复核分流路由，父进程没有权限回滚，残留只通知用户。
 - `beginRemoteTun` 必须在 spawn 之前发布 TUN mode：helper 在 `mgr.Start` 里就会装分流路由，直连拨号器要提前绑定物理接口，否则窗口内的直连流量会被送回 TUN。`READY` 后才置 `tunActive` 放行 forward DNS。
-- helper 的 ICMP 分类与代理回环到主进程的 `/icmp/classify`、`/icmp/proxy`（仅本机可达、认证之前提供）：helper 没有主进程的 router/StreamHandler，不能用默认 forwarder，否则所有 IPv4 ping 都会被伪造 echo reply。
+- **helper 进程要被监视**：`adoptRemoteTun` 起一个 goroutine 等 `Helper.Done()`；非主动退出（被杀/崩溃）时按 `tunRemoteGen` 判定归属后执行完整拆除、取消托盘勾选并通知，否则界面显示全局流量已开启而实际已直连。
+- helper 的 ICMP 分类与代理回环到主进程的 `/icmp/classify`、`/icmp/proxy`（仅本机可达、认证之前提供）：helper 没有主进程的 router/StreamHandler，不能用默认 forwarder，否则所有 IPv4 ping 都会被伪造 echo reply。分类失败必须消费报文（丢弃），不能落到伪造 reply 的默认 forwarder。
 - 登录启动是普通权限，`session.start` 在非提权时跳过 TUN 并提示从托盘授权；需要登录即启用 TUN 的用户只能用计划任务等外部方式以管理员启动，产品不代做。

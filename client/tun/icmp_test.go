@@ -248,8 +248,8 @@ func TestICMPHandlerWithClassifier(t *testing.T) {
 	}
 
 	classifyErr := NewICMPHandlerWithClassifier(func(string) (ICMPAction, error) { return ICMPActionBlock, context.Canceled })
-	if classifyErr.HandlePacket(pkt) {
-		t.Fatal("a classifier error must fall back to the default forwarder")
+	if !classifyErr.HandlePacket(pkt) {
+		t.Fatal("a classifier error must drop the packet instead of reaching the fake-reply forwarder")
 	}
 }
 

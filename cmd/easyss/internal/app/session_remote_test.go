@@ -1,7 +1,9 @@
 package app
 
 import (
+	"errors"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,14 +17,28 @@ import (
 type fakeRemoteHelper struct {
 	control io.WriteCloser
 	waited  chan struct{}
+	done    chan struct{}
+	once    sync.Once
 	waitErr error
 }
 
 func (f *fakeRemoteHelper) Control() io.WriteCloser { return f.control }
 
+func (f *fakeRemoteHelper) Done() <-chan struct{} { return f.done }
+
+func (f *fakeRemoteHelper) Err() error { return f.waitErr }
+
 func (f *fakeRemoteHelper) Wait(time.Duration) error {
-	close(f.waited)
+	f.exit()
 	return f.waitErr
+}
+
+// exit 模拟 helper 进程退出：正常拆除由 Wait 触发，外部结束（被杀/崩溃）直接调它。
+func (f *fakeRemoteHelper) exit() {
+	f.once.Do(func() {
+		close(f.waited)
+		close(f.done)
+	})
 }
 
 func newRemoteTestSession(t *testing.T) (*App, *runner.Core, *fakeRemoteHelper, tun.DeviceConfig) {
@@ -34,7 +50,7 @@ func newRemoteTestSession(t *testing.T) (*App, *runner.Core, *fakeRemoteHelper, 
 	a.sess.verifyTeardown = func(tun.DeviceConfig, tun.Owner, bool) error { return nil }
 
 	_, w := io.Pipe()
-	h := &fakeRemoteHelper{control: w, waited: make(chan struct{})}
+	h := &fakeRemoteHelper{control: w, waited: make(chan struct{}), done: make(chan struct{})}
 	dev := tun.DeviceConfig{Device: "easyss", TunGW: "198.18.0.1"}
 	return a, core, h, dev
 }
@@ -75,6 +91,30 @@ func TestCancelRemoteTunRollsBackPendingState(t *testing.T) {
 	a.sess.beginRemoteTun(dev)
 	a.sess.cancelRemoteTun()
 	a.sess.tunMu.Unlock()
+
+	require.False(t, core.Client.TunModeEnabled())
+	require.False(t, core.Client.TunForwardingEnabled())
+	require.False(t, a.currentConfig().Local.EnableTun2socks)
+}
+
+// TestRemoteHelperExitRollsBackTunState 守住 helper 非主动退出：适配器与分流路由随进程
+// 消失，主进程必须撤销 TUN 状态并取消托盘勾选，否则界面说全局流量开着、实际已直连。
+func TestRemoteHelperExitRollsBackTunState(t *testing.T) {
+	a, core, h, dev := newRemoteTestSession(t)
+
+	a.sess.tunMu.Lock()
+	a.sess.beginRemoteTun(dev)
+	a.sess.adoptRemoteTun(h)
+	a.sess.tunMu.Unlock()
+
+	h.waitErr = errors.New("exit code 1")
+	h.exit()
+
+	require.Eventually(t, func() bool {
+		a.sess.tunMu.Lock()
+		defer a.sess.tunMu.Unlock()
+		return !a.sess.tunRemote && !a.sess.tunActive
+	}, 2*time.Second, 10*time.Millisecond)
 
 	require.False(t, core.Client.TunModeEnabled())
 	require.False(t, core.Client.TunForwardingEnabled())

@@ -214,6 +214,12 @@ func TestFriendlyTunError(t *testing.T) {
 		t.Fatalf("an fs.ErrPermission failure should get the elevation hint: %q", msg)
 	}
 
+	// helper 未提权（runas 静默降级）同样走权限提示：这是环境问题，重试没有意义。
+	elev := fmt.Errorf("spawn tun helper: %w: runas 未提权", tunhelper.ErrElevationRequired)
+	if msg := friendlyTunError(elev); !strings.Contains(msg, "需要管理员权限") {
+		t.Fatalf("an elevation failure should get the elevation hint: %q", msg)
+	}
+
 	// 创建脚本失败（非权限原因）走 typed sentinel，文案说明已回滚。
 	createErr := fmt.Errorf("%w: exit status 1", tun.ErrCreateDevice)
 	if msg := friendlyTunError(createErr); !strings.Contains(msg, "已回滚") {

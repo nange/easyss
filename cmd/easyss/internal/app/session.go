@@ -56,6 +56,9 @@ type session struct {
 	// 只持有控制连接与等待函数。tunActive 仍表示"引擎真的开始转发"。
 	tunRemote     bool
 	tunHelperWait func(time.Duration) error
+	// tunRemoteGen 在每个 helper 会话边界自增：监视线程据此认出自己那一代会话已被正常
+	// 拆除或新的 spawn 接管，从而不做重复回滚。
+	tunRemoteGen uint64
 
 	// tunActive 是"引擎已开始转发"：adopt 时还不算，拆除一开始就清掉。forward DNS 读它。
 	tunActive bool
@@ -68,6 +71,8 @@ type session struct {
 // 远程 TUN 状态能在非 Windows 测试里用假实现覆盖。
 type tunRemoteHelper interface {
 	Control() io.WriteCloser
+	Done() <-chan struct{}
+	Err() error
 	Wait(timeout time.Duration) error
 }
 
@@ -270,6 +275,7 @@ func (s *session) adoptTunManager(mgr *tun.Manager, dev *tun.DeviceConfig, owner
 // 返回 READY 之前装好分流路由，直连拨号器必须提前绑定物理接口，否则这段窗口里的直连流量
 // 会被新路由送回 TUN。调用方必须持有 tunMu。
 func (s *session) beginRemoteTun(dev tun.DeviceConfig) {
+	s.tunRemoteGen++
 	s.tunMgr = nil
 	s.tunRemote = true
 	s.tunSession = &dev
@@ -285,13 +291,18 @@ func (s *session) adoptRemoteTun(h tunRemoteHelper) {
 	s.tunHelperStdin = h.Control()
 	s.tunHelperWait = h.Wait
 	s.tunActive = true
+	s.tunRemoteGen++
+	gen := s.tunRemoteGen
+
 	s.app.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = true })
 	s.syncTunStateLocked()
+	go s.watchRemoteHelper(gen, h)
 }
 
 // cancelRemoteTun 回滚 beginRemoteTun 发布但尚未 adopt 的状态（UAC 取消、helper 启动失败）。
 // 调用方必须持有 tunMu。
 func (s *session) cancelRemoteTun() {
+	s.tunRemoteGen++
 	s.tunRemote = false
 	s.tunSession = nil
 	s.tunOwner = tun.OwnerLocal
@@ -299,6 +310,26 @@ func (s *session) cancelRemoteTun() {
 	s.tunHelperWait = nil
 	s.tunActive = false
 	s.syncTunStateLocked()
+}
+
+// watchRemoteHelper 处理 helper 的非主动退出：适配器与分流路由随进程消失，但父进程仍
+// 以为 TUN 在转发——托盘勾选着、forward DNS 放行，而全局流量其实已经直连。gen 让正常
+// 拆除路径（tunDownLocked）的唤醒变成 no-op。
+func (s *session) watchRemoteHelper(gen uint64, h tunRemoteHelper) {
+	<-h.Done()
+
+	s.tunMu.Lock()
+	if gen != s.tunRemoteGen || !s.tunRemote {
+		s.tunMu.Unlock()
+		return
+	}
+	err := h.Err()
+	log.Error("[EASYSS-V3] tun helper exited unexpectedly, rolling back tun state", "err", err)
+	s.tunDownLocked(nil)
+	s.tunMu.Unlock()
+
+	s.app.setTunMenuChecked(false)
+	s.app.notifyTunStoppedUnexpectedly(err)
 }
 
 // syncTunStateLocked 把两个 TUN 运行期状态发布给 client，必须在 tunMu 内调用。两者安全方向
@@ -344,6 +375,8 @@ func (s *session) tunDownLocked(want *tun.Manager) {
 	if want != nil && s.tunMgr != want {
 		return
 	}
+	// 任何拆除都作废当前的 helper 监视代：正常停止时监视线程不应当成"意外退出"再拆一次。
+	s.tunRemoteGen++
 
 	// forward DNS 从这里起必须拒答：关闭脚本删掉路由之后、本函数返回之前，放行就会直连解析。
 	// 拨号器的绑定不动——路由可能还在，提前解绑会把直连拨回隧道里。

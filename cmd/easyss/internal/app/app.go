@@ -266,6 +266,20 @@ func (a *App) notifyTunSkipped(msg string) {
 	a.ui.notify(msg)
 }
 
+// notifyTunStoppedUnexpectedly 说明全局流量已回退直连：helper 退出后分流路由随适配器消失，
+// 托盘若仍勾选会让用户以为还在代理。
+func (a *App) notifyTunStoppedUnexpectedly(reason error) {
+	detail := "TUN 后台进程已退出"
+	if reason != nil {
+		detail = reason.Error()
+	}
+	if a.ui == nil {
+		log.Warn("[EASYSS-V3] tun helper exited unexpectedly", "reason", detail)
+		return
+	}
+	a.ui.notify("系统全局流量(Tun2socks)已停止：TUN 后台进程意外退出，流量已回退直连；可在托盘中重新开启。详情：" + detail)
+}
+
 // 残留的分流默认路由会把全机流量黑洞掉，这种状态必须让用户知道。
 func (a *App) notifyTunTeardownProblem(msg string) {
 	if a.ui == nil {

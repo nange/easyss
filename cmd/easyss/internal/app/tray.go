@@ -198,7 +198,7 @@ func friendlyTunError(err error) string {
 		return ""
 	}
 	if errors.Is(err, fs.ErrPermission) {
-		return "Tun2socks 启动失败：需要管理员权限，请以 root/管理员身份运行或重试授权。详情：" + err.Error()
+		return "Tun2socks 启动失败：需要管理员权限，请以 root/管理员身份运行或使用具备管理员权限的账户。详情：" + err.Error()
 	}
 	// 这类失败会由 Start() 先回滚已写入的路由，文案要说明流量没有被接管。
 	if errors.Is(err, tun.ErrCreateDevice) {

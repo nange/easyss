@@ -27,23 +27,36 @@ func IsRoot() bool {
 	return windows.GetCurrentProcessToken().IsElevated()
 }
 
+// elevationRequiredStatus 是 helper 自检未提权时回给父进程的状态前缀。runas 在 UAC 关闭
+// 或账户不在管理员组时会静默降级成普通启动，父进程只能靠这条报告区分"提权失败"与
+// "wintun 真的报错"。
+const elevationRequiredStatus = "ELEVATION-REQUIRED"
+
 // Helper 是一次提权 TUN helper 会话的父进程句柄：关闭 Control 即通知 helper 退出，
 // Wait 等 helper 完成路由/DNS 清理后返回。
 type Helper struct {
 	control net.Conn
-	done    <-chan error
+	// exited 在 helper 进程退出后关闭；waitErr 先写入再关闭，读取方以关闭为同步点。
+	exited  chan struct{}
+	waitErr error
 }
 
 // Control 的写端关闭后，helper 读到 EOF 会停止引擎并执行关闭脚本。
 func (h *Helper) Control() io.WriteCloser { return h.control }
 
+// Done 在 helper 进程退出后关闭；退出结果用 Err 取。主进程据此发现 helper 被外部结束。
+func (h *Helper) Done() <-chan struct{} { return h.exited }
+
+// Err 返回 helper 的退出结果，只能在 Done 关闭后调用。
+func (h *Helper) Err() error { return h.waitErr }
+
 func (h *Helper) Wait(timeout time.Duration) error {
-	if h == nil || h.done == nil {
+	if h == nil {
 		return nil
 	}
 	select {
-	case err := <-h.done:
-		return err
+	case <-h.exited:
+		return h.waitErr
 	case <-time.After(timeout):
 		return fmt.Errorf("tun helper did not exit within %s", timeout)
 	}
@@ -83,15 +96,22 @@ func Spawn(httpAddr string, timeout time.Duration, logFile, logLevel string) (*H
 		args = append(args, "--log-level", logLevel)
 	}
 
-	log.Info("[SYSTRAY] spawning elevated tun helper", "exe", exe, "httpAddr", httpAddr)
+	log.Info("[SYSTRAY] spawning tun helper via runas", "exe", exe, "httpAddr", httpAddr)
 	proc, err := shellExecuteRunAs(exe, args)
 	if err != nil {
 		return nil, err
 	}
 
-	// 进程句柄只归这个 goroutine 所有：Wait 通过 done 取结果，避免在清理路径上重复关闭句柄。
+	// 进程句柄只归这个 goroutine 所有：Wait/监视路径都通过 exited 取结果，避免在清理
+	// 路径上重复关闭句柄。runas 成功不等于已提权（UAC 关闭时会静默降级），提权由 helper
+	// 自己用 elevationRequiredStatus 报告。
+	helper := &Helper{exited: make(chan struct{})}
 	done := make(chan error, 1)
-	go func() { done <- waitProcess(proc) }()
+	go func() {
+		helper.waitErr = waitProcess(proc)
+		close(helper.exited)
+		done <- helper.waitErr
+	}()
 
 	conn, err := acceptHelperControl(listener, token, done, timeout)
 	if err != nil {
@@ -107,16 +127,28 @@ func Spawn(httpAddr string, timeout time.Duration, logFile, logLevel string) (*H
 		return nil, fmt.Errorf("read tun helper status: %w", err)
 	}
 
-	switch status = strings.TrimSpace(status); {
+	if err := helperStatusError(strings.TrimSpace(status)); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	helper.control = conn
+	return helper, nil
+}
+
+// helperStatusError 把 helper 的状态行映射成父进程可 errors.Is 的错误；READY 返回 nil。
+// 未提权必须映射到 ErrElevationRequired，托盘才知道这是权限问题而不是可重试的引擎失败。
+func helperStatusError(status string) error {
+	switch {
 	case status == "READY":
-		return &Helper{control: conn, done: done}, nil
+		return nil
 	case strings.HasPrefix(status, "ERROR "):
 		reason := strings.TrimSpace(strings.TrimPrefix(status, "ERROR "))
-		_ = conn.Close()
-		return nil, fmt.Errorf("tun helper: %s", reason)
+		if detail, ok := strings.CutPrefix(reason, elevationRequiredStatus+": "); ok {
+			return fmt.Errorf("%w: %s", ErrElevationRequired, detail)
+		}
+		return fmt.Errorf("tun helper: %s", reason)
 	default:
-		_ = conn.Close()
-		return nil, fmt.Errorf("unexpected tun helper status %q", status)
+		return fmt.Errorf("unexpected tun helper status %q", status)
 	}
 }
 
