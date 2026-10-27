@@ -24,7 +24,8 @@ type ForwardServer struct {
 	disableIPV6 bool
 	// system 是系统 DNS 兜底列表的来源，归实例所有以便测试注入。
 	system systemServers
-	// tunActive 报告本会话 TUN 是否生效，归 Client 所有（运行期状态，不读配置快照）。
+	// tunActive 报告 TUN 引擎是否已开始转发，归 Client 所有（运行期状态，不读配置快照）。
+	// 不能用拨号器的 TunModeEnabled：后者在路由可能指向 TUN 时就为 true，早于引擎。
 	tunActive func() bool
 
 	mu sync.Mutex

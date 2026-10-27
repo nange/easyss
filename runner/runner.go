@@ -213,8 +213,8 @@ func (c *Core) buildLocalServers(cfg *clientconfig.ClientConfig, eps *localEndpo
 	}
 
 	if eps.dnsPC != nil {
-		// TUN 状态必须读运行期开关：监听器在 TUN 之前绑定，托盘随时可能把它关掉。
-		c.dnsServer = dns.NewForwardServer(eps.dnsAddr, c.Client.Router().ShouldIPV6Disable(), c.Client.TunModeEnabled)
+		// 必须读运行期状态而不是配置：监听器在 TUN 之前绑定，托盘随时可能把它关掉。
+		c.dnsServer = dns.NewForwardServer(eps.dnsAddr, c.Client.Router().ShouldIPV6Disable(), c.Client.TunForwardingEnabled)
 	}
 
 	return nil

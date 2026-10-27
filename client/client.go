@@ -37,8 +37,13 @@ type Client struct {
 	closeOnce     sync.Once
 	closed        atomic.Bool
 
-	// tunMode 是"本会话的 TUN 是否生效"：直连拨号路径会反复读它，不能放进配置快照。
+	// tunMode 是"路由表可能指向 TUN"：直连拨号据此绑定物理接口，未绑定就会回环进隧道。
+	// 它从 adopt 起为 true、拆除删完路由才清，比"引擎已开始转发"宽一个启停窗口。
 	tunMode atomic.Bool
+
+	// tunForwarding 是"引擎已开始转发"：forward DNS 只在它成立时放行上游查询，
+	// 否则查询只能从物理网卡直连解析。与 tunMode 的安全方向相反，不能合并。
+	tunForwarding atomic.Bool
 
 	// serverDomain 是服务端域名（字面 IP 时为空）；serverIPs 是 runner 预解析后注入的地址，
 	// dialWithConfig 优先拨它们，系统 DNS 坏掉或被污染时也能连上。
@@ -284,7 +289,8 @@ func New(cfg *clientconfig.ClientConfig) (*Client, error) {
 		closeIdleDone: make(chan struct{}),
 	}
 	client.bound.Store(boundIface{})
-	// 用配置初值播种 TUN 状态：mobile 直接调用 runner.Run，没有托盘开关调 SetTunMode。
+	// 播种直连拨号器的 TUN 状态：mobile 直接调用 runner.Run，没有托盘开关调 SetTunMode。
+	// tunForwarding 刻意不播种：没有会话发布"引擎已转发"时，forward DNS 必须保持拒答。
 	client.SetTunMode(cfg.Local.EnableTun2socks)
 
 	directIface := client.initDirectDialer()
@@ -701,14 +707,24 @@ func (c *Client) SetProxyRule(rule string) {
 	c.router.SetProxyRule(pr)
 }
 
-// 直连拨号器据此决定是否走绑定接口的拨号路径；必须在引擎真正建立/拆除之后调用。
+// SetTunMode 发布"路由表可能指向 TUN"：引擎建立之前就要置位，拆除删完路由之后才清。
 // 桌面端由 session 在 tunMu 内按实际安装的引擎发布，不要再从配置快照读偏好覆盖它。
 func (c *Client) SetTunMode(on bool) {
 	c.tunMode.Store(on)
 }
 
-// TunModeEnabled 报告本会话的 TUN 引擎是否已开始转发（不是配置里的开关）。forward DNS 也读它：
-// 没有 TUN 时它的上游查询只能从物理网卡直连解析（DNS 泄漏），因此必须拒答而不是降级。
+// TunModeEnabled 报告直连拨号是否必须绑定物理接口（不是引擎状态，也不是配置开关）。
 func (c *Client) TunModeEnabled() bool {
 	return c.tunMode.Load()
+}
+
+// SetTunForwarding 发布"引擎已开始转发"；只有 session 在 Manager.Start 成功后才置位。
+func (c *Client) SetTunForwarding(on bool) {
+	c.tunForwarding.Store(on)
+}
+
+// TunForwardingEnabled 报告 TUN 是否真的在承载流量。forward DNS 读它：不成立时上游查询
+// 只能从物理网卡直连解析（DNS 泄漏），必须拒答而不是降级。
+func (c *Client) TunForwardingEnabled() bool {
+	return c.tunForwarding.Load()
 }

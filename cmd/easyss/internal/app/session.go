@@ -53,8 +53,7 @@ type session struct {
 	tunSession     *tun.DeviceConfig
 	tunHelperStdin io.WriteCloser
 
-	// tunActive 是 TUN 引擎已开始转发的运行期状态：adopt 时还不算，拆除一开始就清掉。
-	// forward DNS 据此判断上游查询是否还会进入隧道（没有 TUN 就只能直连解析）。
+	// tunActive 是"引擎已开始转发"：adopt 时还不算，拆除一开始就清掉。forward DNS 读它。
 	tunActive bool
 
 	// 系统改动归谁回收（见 tun.Owner），必须在建立会话时写入。
@@ -112,10 +111,10 @@ func (s *session) start() error {
 	gen := coreGen.Add(1)
 	domainPending := !canStartTunNow(core)
 
-	// client.New 已按配置初值播种 TUN 状态（mobile 依赖它），但本会话的引擎此刻还没开始
-	// 转发：先按未生效发布，mgr.Start() 成功后才由 markTunEngineUp 置位。
+	// client.New 已按配置初值播种拨号器的 TUN 状态（mobile 依赖它），但本会话的引擎此刻还
+	// 没开始转发：先按未生效发布，mgr.Start() 成功后才由 markTunEngineUp 置位。
 	s.tunMu.Lock()
-	s.syncTunModeLocked()
+	s.syncTunStateLocked()
 	s.tunMu.Unlock()
 
 	// 偏好只是进入条件：runCore 可能耗时数秒，期间托盘可以关掉 TUN。
@@ -236,7 +235,7 @@ func (s *session) tunUp() error {
 }
 
 // adoptTunManager 一次发布 manager、设备快照与 owner：拆除路径不应看到三者的混合状态。
-// adopt 只代表引擎已排队启动，设备与路由可能都还没装好，因此运行期状态在这里落回 false。
+// adopt 时引擎还没开始转发（tunActive 落回 false），但拨号器从这里起就必须绑定物理接口。
 func (s *session) adoptTunManager(mgr *tun.Manager, dev *tun.DeviceConfig, owner tun.Owner) {
 	if dev == nil {
 		snapshot := mgr.DeviceConfig()
@@ -246,17 +245,18 @@ func (s *session) adoptTunManager(mgr *tun.Manager, dev *tun.DeviceConfig, owner
 	s.tunSession = dev
 	s.tunOwner = owner
 	s.tunActive = false
-	s.syncTunModeLocked()
+	s.syncTunStateLocked()
 }
 
-// syncTunModeLocked 把 client 的运行期开关对齐到 TUN 引擎的实际状态。必须在 tunMu 内
-// 调用：tunUp/tunDown 在同一个临界区里改 tunActive，锁外读配置再写会被并发开关覆盖。
-func (s *session) syncTunModeLocked() {
+// syncTunStateLocked 把两个 TUN 运行期状态发布给 client，必须在 tunMu 内调用。两者安全方向
+// 相反：拨号器在路由删完前必须保持绑定，forward DNS 在引擎开始转发前必须保持拒答。
+func (s *session) syncTunStateLocked() {
 	core := s.currentCore()
 	if core == nil || core.Client == nil {
 		return
 	}
-	core.Client.SetTunMode(s.tunActive)
+	core.Client.SetTunMode(s.tunMgr != nil)
+	core.Client.SetTunForwarding(s.tunActive)
 }
 
 func (s *session) buildICMPHandler(core *runner.Core) {
@@ -278,10 +278,10 @@ func (s *session) tunDownLocked(want *tun.Manager) {
 		return
 	}
 
-	// 从这里起 TUN 不再承载流量：必须先撤掉运行期状态，否则关闭脚本删掉路由之后、
-	// 本函数返回之前，forward DNS 仍会把上游查询从物理网卡直连出去。
+	// forward DNS 从这里起必须拒答：关闭脚本删掉路由之后、本函数返回之前，放行就会直连解析。
+	// 拨号器的绑定不动——路由可能还在，提前解绑会把直连拨回隧道里。
 	s.tunActive = false
-	s.syncTunModeLocked()
+	s.syncTunStateLocked()
 
 	// 会话配置必须在清空 tunMgr 之前取下来：它既用于校验，也用于兜底回滚。
 	dev := s.tunSession
@@ -324,6 +324,8 @@ func (s *session) tunDownLocked(want *tun.Manager) {
 		core.HTTPServer.ClearTunConfig()
 	}
 
+	// tunMgr 已清空：本进程（或 helper）不再有指向 TUN 的路由要承接，拨号器才解除绑定。
+	s.syncTunStateLocked()
 	s.app.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = false })
 }
 
@@ -365,8 +367,8 @@ func (s *session) startTunEngine(mgr *tun.Manager, mode string) {
 	}()
 }
 
-// 成功返回意味着设备、路由与引擎都已就位，此时才能放行 forward DNS 的上游查询。
-// 与拆除共用 tunMu：Start 与 tunDown 交错时按 manager 身份判定，不覆盖新会话的状态。
+// 成功返回意味着引擎开始转发，此时才能放行 forward DNS 的上游查询；拨号器的绑定在 adopt
+// 时已发布，这里不再改。与拆除共用 tunMu：Start 与 tunDown 交错时按 manager 身份判定。
 func (s *session) markTunEngineUp(mgr *tun.Manager) {
 	s.tunMu.Lock()
 	defer s.tunMu.Unlock()
@@ -375,7 +377,7 @@ func (s *session) markTunEngineUp(mgr *tun.Manager) {
 		return
 	}
 	s.tunActive = true
-	s.syncTunModeLocked()
+	s.syncTunStateLocked()
 }
 
 // "核对身份 → 拆除"必须在同一个 tunMu 临界区里完成：这期间用户可能已重新打开 TUN，
