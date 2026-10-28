@@ -2,9 +2,9 @@
 
 package tray
 
-// 托盘菜单 label 的文本宽度度量。项目不使用 CGO，因此不调系统字体 API，而是用一张按
-// macOS 13pt 菜单字体（.AppleSystemUIFont）逐字符实测的宽度表估算；"逐字符累加 vs
-// 整串排版"的系统性偏差（kerning、亚像素取整）由 textEstimateScale 压掉。
+// 托盘菜单 label 的文本宽度度量。项目不使用 CGO，不调系统字体 API，而是用一张按
+// macOS 13pt 菜单字体逐字符实测的宽度表估算，"逐字符累加 vs 整串排版"的系统性偏差
+// 由 textEstimateScale 压掉。Windows 上它只决定标签截断：指标列由菜单的加速键列排版。
 
 const (
 	// menuFontSpaceWidth 是实测的 U+0020 宽度（pt）。

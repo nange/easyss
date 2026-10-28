@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/gogpu/systray"
@@ -13,12 +15,23 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-// ServerMenu 是"选择服务器"子菜单。items/addrs/labels 按下标对齐：addrs 是服务器身份，
-// 切换与匹配默认服务器都用它；labels 只用于菜单展示（配置了 name 时即 name）。
+// ServerMenu 是"选择服务器"子菜单。items/addrs/labels/shown/rendered 按下标对齐：addrs 是
+// 服务器身份，切换与匹配默认服务器都用它；labels 是配置里的名字（通知文案要用），shown 是它
+// 截断到显示上限后的菜单标签。
 type ServerMenu struct {
-	items  []*systray.MenuItem
-	addrs  []string
-	labels []string
+	// mu 保护 metrics 与标题写入，持有期间会做平台的同步写入（darwin 是主线程 waitUntilDone
+	// 往返），因此调用方不得是托盘回调/UI 线程。
+	mu sync.Mutex
+	// setLabel 是条目标题的下发路径，单独成字段便于测试统计重写次数。
+	setLabel func(*systray.MenuItem, string)
+	items    []*systray.MenuItem
+	addrs    []string
+	labels   []string
+	shown    []string
+	// rendered 是上一轮下发的标题：没变化的条目不再重写，每轮只推真正变化的行。
+	rendered []string
+	column   float64
+	metrics  string
 }
 
 func NewServerMenu(m *systray.Menu, cfg *clientconfig.ClientConfig, onSelect func(int)) *ServerMenu {
@@ -29,9 +42,23 @@ func NewServerMenu(m *systray.Menu, cfg *clientconfig.ClientConfig, onSelect fun
 		labels = addrs
 	}
 	def := cfg.DefaultServerAddr()
-	s := &ServerMenu{addrs: addrs, labels: labels, items: make([]*systray.MenuItem, 0, len(addrs))}
+	// 每一行都要截断：菜单宽度由最宽的行决定，Windows 的加速键列（指标）跟着菜单右边缘走，
+	// 只要有一行超长，选中行的指标就会被它推到很右边。
+	shown := make([]string, len(labels))
+	for i, label := range labels {
+		shown[i] = truncateLabel(label)
+	}
+	s := &ServerMenu{
+		addrs:    addrs,
+		labels:   labels,
+		shown:    shown,
+		rendered: slices.Clone(shown),
+		column:   metricsColumn(labels),
+		setLabel: (*systray.MenuItem).SetLabel,
+		items:    make([]*systray.MenuItem, 0, len(addrs)),
+	}
 	for idx, addr := range addrs {
-		s.items = append(s.items, m.AddCheckbox(labels[idx], addr == def, func() { onSelect(idx) }))
+		s.items = append(s.items, m.AddCheckbox(shown[idx], addr == def, func() { onSelect(idx) }))
 	}
 	return s
 }
@@ -59,19 +86,60 @@ func (s *ServerMenu) IndexOf(addr string) int {
 }
 
 func (s *ServerMenu) SetChecked(idx int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	prev := s.checkedLocked()
 	for i, item := range s.items {
-		item.SetChecked(i == idx)
+		// 一次切换会两次进入这里，逐项同步写是每项一次主线程往返，没变的就别写。
+		if want := i == idx; item.IsChecked() != want {
+			item.SetChecked(want)
+		}
+	}
+	if prev != idx {
+		// 指标属于当前连接：换服务器后旧数据已经失效，等下一轮统计再填。
+		s.metrics = ""
+	}
+	s.refreshLocked()
+}
+
+// updateMetrics 用最近一次统计刷新标题：只有勾选中的服务器带指标。
+func (s *ServerMenu) updateMetrics(rttMs float64, downSpeed string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.metrics = metricsText(rttMs, downSpeed)
+	s.refreshLocked()
+}
+
+// refreshLocked 只把标题变了的条目下发到原生菜单：统计循环每 2s 跑一轮，全量重写会让
+// darwin 每轮做 N 次主线程同步往返（setTitle: 的 waitUntilDone:YES）。
+func (s *ServerMenu) refreshLocked() {
+	for i, item := range s.items {
+		title := s.titleLocked(i)
+		if s.rendered[i] == title {
+			continue
+		}
+		s.setLabel(item, title)
+		s.rendered[i] = title
 	}
 }
 
-// updateMetrics 只刷新当前选中的服务器项。
-func (s *ServerMenu) updateMetrics(rttMs float64, downSpeed string) {
+// titleLocked 返回条目应显示的标题：只有勾选中的条目带指标。
+func (s *ServerMenu) titleLocked(idx int) string {
+	if s.metrics == "" || !s.items[idx].IsChecked() {
+		return s.shown[idx]
+	}
+	return formatTitle(s.shown[idx], s.metrics, s.column)
+}
+
+func (s *ServerMenu) checkedLocked() int {
 	for i, item := range s.items {
 		if item.IsChecked() {
-			item.SetLabel(formatTitle(s.labels[i], rttMs, downSpeed))
-			return
+			return i
 		}
 	}
+	return -1
 }
 
 // startStatsLoop 轮询本地 /stats 并刷新选中项；closing 关闭后返回。
