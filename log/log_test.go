@@ -28,6 +28,22 @@ func TestLogOutput(t *testing.T) {
 	}
 }
 
+func TestAt(t *testing.T) {
+	var buf bytes.Buffer
+	handler := TextHandler(&buf, slog.LevelDebug)
+	SetLogger(slog.New(handler))
+
+	At(slog.LevelWarn, "at message")
+
+	output := buf.String()
+	if !strings.Contains(output, "level=WARN") || !strings.Contains(output, "at message") {
+		t.Errorf("At should log at the given level, output: %s", output)
+	}
+	if !strings.Contains(output, "log_test.go") {
+		t.Errorf("At should attribute the source to its caller, output: %s", output)
+	}
+}
+
 func TestLogLevels(t *testing.T) {
 	tests := []struct {
 		name  string
