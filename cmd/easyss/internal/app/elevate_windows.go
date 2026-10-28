@@ -41,8 +41,8 @@ type shellExecuteInfo struct {
 	hProcess     windows.Handle
 }
 
-// elevateRestart 以管理员权限重启自身：新进程带 -elevated-restart 接管单实例、带
-// -enable-tun2socks 在启动路径安装 TUN。用户取消 UAC 时返回 errElevationCancelled。
+// elevateRestart 以管理员权限重启自身：新进程带 -elevated-restart=<载荷> 接管单实例、
+// 带 -enable-tun2socks 在启动路径安装 TUN。用户取消 UAC 时返回 errElevationCancelled。
 func elevateRestart(a *App) error {
 	exe, err := util.ExecutablePath()
 	if err != nil {
@@ -57,7 +57,7 @@ func elevateRestart(a *App) error {
 	if err != nil {
 		return fmt.Errorf("encode executable path: %w", err)
 	}
-	params, err := windows.UTF16PtrFromString(restartArgs(a.configFile))
+	params, err := windows.UTF16PtrFromString(restartArgs(a.configFile, newRestartState(a)))
 	if err != nil {
 		return fmt.Errorf("encode arguments: %w", err)
 	}
@@ -79,12 +79,31 @@ func elevateRestart(a *App) error {
 	return shellExecuteEx(&sei)
 }
 
-// 参数与 main 的 flag 对齐。配置路径必须加引号：用户目录常带空格，裸拼会被拆成多个参数。
-func restartArgs(configFile string) string {
-	if configFile == "" {
-		return "-enable-tun2socks -elevated-restart"
+// newRestartState 抓取"重启后必须保持不变"的运行期选择：服务器、浏览器代理开关、规则与
+// 日志级别都只活在内存快照/菜单里，新实例从配置文件读不到。
+func newRestartState(a *App) RestartState {
+	snap := a.currentConfig()
+	st := RestartState{
+		enabled:     true,
+		serverIndex: snap.DefaultServerIndex(),
+		sysProxy:    "off",
+		proxyRule:   snap.Routing.ProxyRule,
+		logLevel:    snap.Log.Level,
 	}
-	return `-c "` + configFile + `" -enable-tun2socks -elevated-restart`
+	if a.browserProxyEnabled() {
+		st.sysProxy = "on"
+	}
+	return st
+}
+
+// 参数与 main 的 flag 对齐。-elevated-restart 必须用等号形式带载荷（原因见
+// RestartState.IsBoolFlag）；引号交给 ComposeCommandLine，配置路径常带空格。
+func restartArgs(configFile string, st RestartState) string {
+	args := []string{"-elevated-restart=" + st.encode(), "-enable-tun2socks"}
+	if configFile != "" {
+		args = append(args, "-c", configFile)
+	}
+	return windows.ComposeCommandLine(args)
 }
 
 func shellExecuteEx(sei *shellExecuteInfo) error {
