@@ -30,6 +30,7 @@ func main() {
 	}
 
 	var printVer, showConfigExample, showConfigExampleSimple, daemon, disableTray, enableTun2socks bool
+	var elevatedRestart bool
 	var configFile, cmdOutboundProto string
 	var pprofEnabled bool
 	var logFile string
@@ -55,6 +56,7 @@ func main() {
 	flag.BoolVar(&daemon, "daemon", runtime.GOOS != "windows", "run app as daemon")
 	flag.BoolVar(&disableTray, "disable-tray", false, "disable system tray (windows/mac only)")
 	flag.BoolVar(&enableTun2socks, "enable-tun2socks", false, "enable tun2socks model")
+	flag.BoolVar(&elevatedRestart, "elevated-restart", false, "internal: take the running instance over as administrator (windows)")
 	flag.StringVar(&sc.IPV6Rule, "ipv6-rule", "", "set the ipv6 rule(auto, enable, disable), default: auto")
 	flag.StringVar(&sc.DirectFile, "direct-file", "", "custom direct file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
 	flag.StringVar(&sc.ProxyFile, "proxy-file", "", "custom proxy file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
@@ -182,5 +184,5 @@ Flags:
 	)
 
 	application := app.New(cfg, configFile)
-	application.Run(disableTray, daemon)
+	application.Run(disableTray, daemon, elevatedRestart)
 }

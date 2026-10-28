@@ -7,6 +7,16 @@
 - 客户端用纯 Go 托盘库 `github.com/gogpu/systray`（零 CGO）；go.mod 用 `replace` 指向 `nange/systray v0.3.0-easyss.1`，该分支修复了菜单打开期间 `SetMenu` 重建把点击派发到别的菜单项的问题，因此运行时重建菜单树是安全的。服务端禁用 CGO。
 - `-H windowsgui` 隐藏控制台窗口。
 
+## Windows 提权与开机自启
+
+- **manifest 是 `asInvoker`**（`build/windows/manifest.xml`，改动后必须 `make syso`）：`requireAdministrator` 会让非管理员账户每次启动都要输管理员密码，登录路径也起不来。进程默认是普通权限，只有用户授权提权（或账户已提权）才有管理员令牌。
+- **开机自启只写 `HKCU\...\Run`**：普通权限可写，因此自启能注册成功；登录后进程也是普通权限，配置里 `enable_tun2socks` 为真时启动路径会跳过 TUN 并提示（`session.start` 的 `!tunhelper.IsRoot()` 分支）。值必须整体加引号，否则带空格路径会被 ShellExecute 拆分。
+- **开 TUN 的提权路径是"以管理员权限重启"**：托盘 `requestTunElevation` → `ShellExecuteExW("runas")` 重启自身，参数 `-c <abs config> -enable-tun2socks -elevated-restart`。新实例先 `RequestRestart` 唤醒旧实例，再轮询互斥量（上限 20s）；旧实例收到命名事件后走与"退出"相同的收尾（撤系统代理 → 拆 TUN → 停核心），进程退出即释放互斥量。UAC 被取消时 `ShellExecuteExW` 返回 `ERROR_CANCELLED`，勾选必须回滚。
+- **单实例互斥量必须在 `Local\` 命名空间**：创建 `Global\` 对象要 `SeCreateGlobalPrivilege`，非提权进程（包括管理员组的普通令牌）会拿到 `ACCESS_DENIED`，而 `Acquire` 把它当致命错误 `os.Exit(1)`——`-H windowsgui` 下表现为"勾了开机启动，登录后托盘不出现"。
+- **UWP 回环豁免（`CheckNetIsolation`）要管理员权限**：普通权限下子菜单只显示一条说明，不列出可点击的应用程序。
+- 标准用户输入管理员凭据提权时（over-the-shoulder），进程的 `HKCU` 是那个管理员账户：TUN 不受影响（改的是机器级路由/DNS），但系统代理会写进管理员账户的 Internet Settings，当前用户的浏览器不会走代理。这是 Windows 的账户边界，托盘已在提权后重启，无法规避。
+- 已知限制：登录自启是普通权限，TUN 不会在登录时自动开启；需要"登录即全局代理"的账户可用任务计划程序以最高权限启动，本仓库尚未内置该注册。
+
 ## 启动路径与系统代理
 
 - 系统代理不是托盘专属：三条启动路径共用 `App.setupSysProxy`/`teardownSysProxy`，是否应用由 `App.sysProxyApplied` 记录。两个退出入口都按"撤销系统代理 → 拆 TUN → 停核心"执行：`Stop` 只撤销本进程应用过的代理，`Close` 无条件清理（托盘退出/切换，清掉上一次运行或异步开关留下的代理）。headless 在核心启动成功后设置、退出时由 `Stop` 撤销；`disable_sys_proxy` 是统一开关，设置失败只记警告（root/systemd 下 gsettings 与会话总线常不可达）。

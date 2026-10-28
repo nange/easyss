@@ -14,7 +14,9 @@
     <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
         <security>
             <requestedPrivileges>
-                <requestedExecutionLevel level="requireAdministrator" />
+                <!-- 主程序以普通用户运行：非管理员账户无法授权 requireAdministrator 的程序，
+                     开机自启会卡在 UAC。TUN 需要管理员时由托盘以管理员权限重启自身（见 docs/platform.md）。 -->
+                <requestedExecutionLevel level="asInvoker" />
             </requestedPrivileges>
         </security>
     </trustInfo>

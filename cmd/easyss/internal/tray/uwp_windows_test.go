@@ -163,3 +163,25 @@ func TestUWPItems_RebuildOnlyWhenItemsGrow(t *testing.T) {
 	rebuildUWPItems(u, makeFakeUWPApps(4, 1))
 	require.Equal(t, 2, rebuilds, "追加条目后必须重建菜单")
 }
+
+// TestUWPInstallWithoutElevationOnlyExplainsWhy 固定普通权限下的子菜单：豁免的增删要管理员
+// 权限，列出可点击的条目只会让每次点击都静默失败（只留一行日志）。
+func TestUWPInstallWithoutElevationOnlyExplainsWhy(t *testing.T) {
+	u := &UWP{}
+	u.install(systray.NewMenu(), func() { t.Error("普通权限下不应重建菜单") }, false)
+
+	require.False(t, u.elevated)
+	require.Empty(t, u.items)
+
+	u.StartRefresh()
+	require.Empty(t, u.items, "普通权限下不得启动 UWP 列表刷新")
+}
+
+// TestUWPInstallKeepsTheRefreshEntryWhenElevated 确认提权进程仍有完整的子菜单入口。
+func TestUWPInstallKeepsTheRefreshEntryWhenElevated(t *testing.T) {
+	u := &UWP{}
+	u.install(systray.NewMenu(), nil, true)
+
+	require.True(t, u.elevated)
+	require.NotNil(t, u.menu)
+}

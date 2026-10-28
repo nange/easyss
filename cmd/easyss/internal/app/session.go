@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -120,9 +119,9 @@ func (s *session) start() error {
 	// 偏好只是进入条件：runCore 可能耗时数秒，期间托盘可以关掉 TUN。
 	// 安装前 startTunEngineAtStartup 会在 tunMu 内用当前偏好复核。
 	if sessionCfg.Local.EnableTun2socks {
-		// 非 root 拿不到 TUN，用户却以为全局流量已代理，必须说明原因。
-		if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !tunhelper.IsRoot() {
-			log.Warn("[EASYSS-V3] tun2socks requires root; skipped (use sudo, or run with system tray for automatic elevation)")
+		// 非提权进程建不了 TUN，用户却以为全局流量已代理，必须说明原因。
+		if !tunhelper.IsRoot() {
+			log.Warn("[EASYSS-V3] tun2socks requires administrator privileges; skipped (run as root/administrator, or enable it from the tray to authorize)")
 			// 偏好落回 false，否则菜单勾选着"已开启"而 tunMgr 是 nil。
 			s.app.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = false })
 			s.app.notifyTunSkippedNoRoot()

@@ -1,4 +1,4 @@
-//go:build !darwin && !linux
+//go:build !darwin && !linux && !windows
 
 package tunhelper
 
@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// IsRoot 报告进程是否以管理员权限运行。在没有 unix 提权流程的平台上，
+// IsRoot 报告进程是否以管理员权限运行。这些平台既没有 unix 提权流程，也没有 UAC，
 // 该检查被绕过（返回 true），从而使用直接的 TUN 路径。
 func IsRoot() bool {
 	return true
