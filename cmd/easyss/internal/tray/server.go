@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -18,12 +19,16 @@ import (
 // 切换与匹配默认服务器都用它；labels 只用于菜单展示（配置了 name 时即 name）。
 type ServerMenu struct {
 	// mu 保护 metrics 与标题写入：统计循环和切换流程会并发刷新同一批条目。
-	mu      sync.Mutex
-	items   []*systray.MenuItem
-	addrs   []string
-	labels  []string
-	column  float64
-	metrics string
+	mu sync.Mutex
+	// setLabel 是条目标题的下发路径，单独成字段便于测试统计重写次数。
+	setLabel func(*systray.MenuItem, string)
+	items    []*systray.MenuItem
+	addrs    []string
+	labels   []string
+	// rendered 是上一轮下发的标题：没变化的条目不再重写，每轮只推真正变化的行。
+	rendered []string
+	column   float64
+	metrics  string
 }
 
 func NewServerMenu(m *systray.Menu, cfg *clientconfig.ClientConfig, onSelect func(int)) *ServerMenu {
@@ -34,7 +39,14 @@ func NewServerMenu(m *systray.Menu, cfg *clientconfig.ClientConfig, onSelect fun
 		labels = addrs
 	}
 	def := cfg.DefaultServerAddr()
-	s := &ServerMenu{addrs: addrs, labels: labels, column: metricsColumn(labels), items: make([]*systray.MenuItem, 0, len(addrs))}
+	s := &ServerMenu{
+		addrs:    addrs,
+		labels:   labels,
+		rendered: slices.Clone(labels),
+		column:   metricsColumn(labels),
+		setLabel: (*systray.MenuItem).SetLabel,
+		items:    make([]*systray.MenuItem, 0, len(addrs)),
+	}
 	for idx, addr := range addrs {
 		s.items = append(s.items, m.AddCheckbox(labels[idx], addr == def, func() { onSelect(idx) }))
 	}
@@ -87,11 +99,16 @@ func (s *ServerMenu) updateMetrics(rttMs float64, downSpeed string) {
 	s.refreshLocked()
 }
 
-// refreshLocked 按当前选择重写所有条目标题。统计循环与切换流程会并发调到这里，
-// 交错写会留下"两行都带指标"的中间态，所以锁要盖住整轮写入。
+// refreshLocked 只把标题变了的条目下发到原生菜单：统计循环每 2s 跑一轮，全量重写会让
+// darwin 每轮做 N 次主线程同步往返（setTitle: 的 waitUntilDone:YES）。
 func (s *ServerMenu) refreshLocked() {
 	for i, item := range s.items {
-		item.SetLabel(s.titleLocked(i))
+		title := s.titleLocked(i)
+		if s.rendered[i] == title {
+			continue
+		}
+		s.setLabel(item, title)
+		s.rendered[i] = title
 	}
 }
 

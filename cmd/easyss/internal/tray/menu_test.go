@@ -121,6 +121,37 @@ func TestServerMenuKeepsMetricsOnSelectedServer(t *testing.T) {
 	require.Contains(t, titleAt(s, 1), "30ms")
 }
 
+// TestServerMenuRewritesOnlyChangedTitles 固化"每轮只下发变化的行"：全量重写在 darwin 上
+// 是每项一次主线程同步往返，而统计循环每 2s 就有一轮。
+func TestServerMenuRewritesOnlyChangedTitles(t *testing.T) {
+	cfg := &clientconfig.ClientConfig{Servers: []*clientconfig.ServerProfile{
+		{Host: "a.example", Port: 443, Default: true},
+		{Host: "b.example", Port: 443},
+	}}
+	s := NewServerMenu(systray.NewMenu(), cfg, func(int) {})
+
+	writes := 0
+	s.setLabel = func(item *systray.MenuItem, label string) {
+		writes++
+		item.SetLabel(label)
+	}
+
+	s.updateMetrics(60, "649 B/s")
+	require.Equal(t, 1, writes, "只有选中行的标题会变")
+
+	s.updateMetrics(60, "649 B/s")
+	require.Equal(t, 1, writes, "标题没变就不该再下发")
+
+	s.SetChecked(1)
+	require.Equal(t, 2, writes, "切换只回写旧行，新行等下一轮统计")
+
+	s.SetChecked(1)
+	require.Equal(t, 2, writes, "重复确认同一选择不产生写入")
+
+	s.updateMetrics(30, "1.2 KB/s")
+	require.Equal(t, 3, writes, "新选中行拿到指标后只写一次")
+}
+
 // titleAt 读条目当前应显示的标题：systray 不暴露 MenuItem 的 label，走同一份推导。
 func titleAt(s *ServerMenu, idx int) string {
 	s.mu.Lock()
