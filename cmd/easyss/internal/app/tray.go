@@ -388,6 +388,7 @@ func (a *trayApp) toggleAutoStart() {
 		return nil
 	}, func(on bool, err error) {
 		log.Error("[SYSTRAY] toggle auto-start", "on", on, "err", err)
+		a.shell.NotifyIfReady("设置开机启动失败：" + err.Error())
 	})
 }
 
@@ -402,14 +403,21 @@ func (a *trayApp) exitApp() {
 
 // 失败必须回滚勾选并通知用户，否则核心仍在提供 SOCKS5/HTTP，而全局流量静默保持直连。
 func (a *trayApp) enableTun2socks() {
-	log.Info("[SYSTRAY] enableTun2socks called", "isRoot", tunhelper.IsRoot())
+	log.Info("[SYSTRAY] enableTun2socks called", "elevated", a.deps.isElevated())
 
 	// 服务端域名未解析时必须拒绝：TUN 会把系统 DNS 指向本机转发服务器，而解析该域名又依赖隧道，
 	// 容易形成解析递归；网络未就绪时平台脚本还会因缺默认网关失败。
+	// 必须在提权之前判断：否则用户先过一遍 UAC、整个进程重启，新实例随后在启动路径里
+	// 跳过 TUN 并把偏好清回 false，等于"授权了却没开"。
 	if !canStartTunNow(a.currentCore()) {
 		log.Warn("[SYSTRAY] tun2socks refused: server domain not resolved yet")
 		a.object.SetTunChecked(false)
 		a.notify("服务端域名尚未解析成功，暂时无法开启系统全局流量；请等待网络恢复后重试")
+		return
+	}
+
+	// 非提权进程建不了 TUN：请求提权，由接管本次点击的管理员实例去装（Windows 重启自身）。
+	if !a.deps.isElevated() && a.requestTunElevation() {
 		return
 	}
 
@@ -424,6 +432,32 @@ func (a *trayApp) disableTun2socks() {
 	log.Info("[SYSTRAY] disableTun2socks called")
 	// teardown 中发现的问题由 tunDown 自己记日志/通知界面，不中止退出流程。
 	a.sess.tunDown()
+}
+
+// requestTunElevation 把"开启 TUN"交给一个管理员权限的实例，返回 true 表示这次点击已被
+// 接管：调用方不得再在原地建 TUN。darwin/linux 返回 false，由 tunUpAuto 走 pkexec/osascript。
+func (a *trayApp) requestTunElevation() bool {
+	err := a.deps.requestElevation(a.App)
+	if errors.Is(err, errElevationUnsupported) {
+		return false
+	}
+
+	// 本进程不再负责 TUN：勾选留给接管的新实例按 -enable-tun2socks 重新建立。
+	a.object.SetTunChecked(false)
+	switch {
+	case errors.Is(err, errElevationCancelled):
+		log.Warn("[SYSTRAY] elevation cancelled by the user")
+		a.notify("已取消管理员授权，系统全局流量未开启")
+	case err != nil:
+		log.Error("[SYSTRAY] request elevation for tun2socks", "err", err)
+		a.notify("请求管理员权限失败，系统全局流量未开启。详情：" + err.Error())
+	default:
+		// 新实例已经在等单实例锁：本进程按正常退出流程撤系统代理、拆 TUN、停核心后退出，
+		// 锁随进程退出释放（见 exitApp）。
+		log.Info("[SYSTRAY] restarting as administrator for tun2socks")
+		a.exitApp()
+	}
+	return true
 }
 
 // 参数被刻意忽略：配置由 restartServiceInSequence 以增量方式发布到当前快照上，App.Start 读到的

@@ -11,6 +11,7 @@ import (
 	"github.com/gogpu/systray"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/util"
+	"golang.org/x/sys/windows"
 )
 
 type UWPApp struct {
@@ -21,10 +22,11 @@ type UWPApp struct {
 
 // UWP 是 Windows 专属的 UWP 豁免子菜单；非 Windows 的定义为空实现。
 type UWP struct {
-	mu      sync.Mutex
-	menu    *systray.Menu
-	items   []*uwpItem
-	rebuild func() // 由托盘外壳注入：条目增长后重建整棵菜单树
+	mu       sync.Mutex
+	menu     *systray.Menu
+	items    []*uwpItem
+	elevated bool
+	rebuild  func() // 由托盘外壳注入：条目增长后重建整棵菜单树
 }
 
 // App 由刷新与点击两个 goroutine 共同读写，故单独加锁。
@@ -36,17 +38,33 @@ type uwpItem struct {
 
 // Install 由 buildTray 在菜单组装阶段调用：只挂子菜单与"刷新列表"。
 func (u *UWP) Install(root *systray.Menu, rebuild func()) {
+	u.install(root, rebuild, windows.GetCurrentProcessToken().IsElevated())
+}
+
+// 判定可注入：CheckNetIsolation 的豁免增删要管理员权限，普通权限下只挂一条说明，
+// 否则用户点了复选框只会得到一行日志。
+func (u *UWP) install(root *systray.Menu, rebuild func(), elevated bool) {
 	u.menu = systray.NewMenu()
+	u.elevated = elevated
 	u.rebuild = rebuild
 	root.AddSubmenu("Windows UWP应用豁免", u.menu)
 	root.AddSeparator()
 
+	if !elevated {
+		u.menu.Add("需要管理员权限后可用", func() {}).SetDisabled(true)
+		return
+	}
 	u.menu.Add("刷新列表", func() { go u.refresh() })
 }
 
 // StartRefresh 在子菜单挂上托盘之后调用：填充列表会往菜单里追加条目，
 // 与 Show 里的 SetMenu 并发会同时读写 Menu.Items。
-func (u *UWP) StartRefresh() { go u.refresh() }
+func (u *UWP) StartRefresh() {
+	if !u.elevated {
+		return
+	}
+	go u.refresh()
+}
 
 // refreshItems 按当前已安装应用重建 UWP 子菜单的列表：已存在的条目就地更新，
 // 新应用追加，已消失的应用置灰（systray 没有移除菜单项的 API）。重建安全的前提是

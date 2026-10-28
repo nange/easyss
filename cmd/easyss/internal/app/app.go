@@ -12,6 +12,7 @@ import (
 	easydns "github.com/nange/easyss/v3/client/dns"
 	"github.com/nange/easyss/v3/cmd/easyss/internal/logview"
 	"github.com/nange/easyss/v3/cmd/easyss/internal/sysproxy"
+	"github.com/nange/easyss/v3/cmd/easyss/internal/tunhelper"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/runner"
@@ -86,22 +87,36 @@ func (a *App) updateConfig(fn func(*clientconfig.ClientConfig)) {
 	}
 }
 
-// appDeps 是可注入的进程级依赖：核心启动器、系统代理开关与日志查看器。
+// 提权相关的哨兵错误：requestElevation 的实现用它区分"用户取消"与"该平台不支持"，
+// 前者要告知用户，后者要回落到原地提权。
+var (
+	errElevationCancelled   = errors.New("elevation cancelled by the user")
+	errElevationUnsupported = errors.New("on-demand elevation is not supported on this platform")
+)
+
+// appDeps 是可注入的进程级依赖：核心启动器、系统代理开关、日志查看器与提权能力。
 type appDeps struct {
 	runCore        func(*clientconfig.ClientConfig) (*runner.Core, error)
 	sysProxyApply  func(string) error
 	sysProxyRevert func() error
 	log            logview.Opener
+	// isElevated 是"本进程能不能建 TUN 设备"的唯一判据：Windows 只看管理员令牌，
+	// darwin/linux 看 root；只有 tunUpAuto 的原地提权路径依赖它。
+	isElevated func() bool
+	// requestElevation 以管理员权限接管当前实例（Windows 会重启进程，其余平台不支持）。
+	requestElevation func(*App) error
 }
 
 // env 记录本 App 对桌面会话环境的改动，撤销系统代理时据此恢复发布前的值。
 func defaultAppDeps() appDeps {
 	env := sysproxy.New()
 	return appDeps{
-		runCore:        runner.Run,
-		sysProxyApply:  env.Enable,
-		sysProxyRevert: env.Disable,
-		log:            logview.Default(),
+		runCore:          runner.Run,
+		sysProxyApply:    env.Enable,
+		sysProxyRevert:   env.Disable,
+		log:              logview.Default(),
+		isElevated:       tunhelper.IsRoot,
+		requestElevation: elevateRestart,
 	}
 }
 
@@ -250,7 +265,7 @@ func (a *App) setTunMenuChecked(checked bool) {
 }
 
 func (a *App) notifyTunSkippedNoRoot() {
-	a.notifyTunSkipped("Tun2socks 未启用：需要管理员权限，请以 root 运行或使用系统托盘授权")
+	a.notifyTunSkipped("Tun2socks 未启用：需要管理员权限；请在托盘菜单「代理对象 → 系统全局流量」中开启，届时会请求管理员授权")
 }
 
 func (a *App) notifyTunSkippedNetworkUnready() {

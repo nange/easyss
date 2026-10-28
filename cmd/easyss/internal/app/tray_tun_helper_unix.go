@@ -22,7 +22,8 @@ import (
 
 // tunUpAuto 返回本平台的启用路径：非 root 时拉起提权 helper，root 直接创建设备。
 func (s *session) tunUpAuto() error {
-	if !tunhelper.IsRoot() {
+	// 与托盘、启动路径共用 App.deps.isElevated：三处各判一次会让"进程有没有权限"出现分歧。
+	if !s.app.deps.isElevated() {
 		return s.tunUpViaHelper()
 	}
 	return s.tunUp()

@@ -13,14 +13,14 @@ import (
 	"github.com/nange/easyss/v3/log"
 )
 
-func (a *App) Run(disableTray, daemon bool) {
+func (a *App) Run(disableTray, daemon, elevatedRestart bool) {
 	// 在 macOS 和 Linux 上，先守护化（daemonize）再获取单例锁，
 	// 这样关闭终端不会终止进程。锁必须由子进程获取，而不是父进程。
 	if daemon && runtime.GOOS != "windows" {
 		runDaemon()
 	}
 
-	singleton.Acquire()
+	acquireInstance(elevatedRestart)
 	defer singleton.Release()
 
 	if !disableTray && (runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux") {

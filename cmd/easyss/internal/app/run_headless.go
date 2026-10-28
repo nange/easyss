@@ -9,8 +9,10 @@ import (
 	"github.com/nange/easyss/v3/log"
 )
 
-func (a *App) Run(disableTray, daemon bool) {
+func (a *App) Run(disableTray, daemon, elevatedRestart bool) {
 	_ = disableTray
+	// headless 没有托盘，也就没有"以管理员权限重启"的入口。
+	_ = elevatedRestart
 
 	if daemon && runtime.GOOS != "windows" {
 		runDaemon()
