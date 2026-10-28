@@ -58,7 +58,7 @@ func (s *tcpDNSSession) resolve(msg *dns.Msg, target string) (*dns.Msg, error) {
 		return d.executeSync(ex, msg, target)
 	}
 
-	log.Debug("[DNS_PROXY]", "domain", plan.domain, "qtype", plan.qtype,
+	log.At(dnsLogLevel(plan.first), "[DNS_PROXY]", "domain", plan.domain, "qtype", plan.qtype,
 		"src", s.src, "dst", target)
 	stats.RecordDNSProxyQuery()
 	resp, err := s.resolveProxy(msg)

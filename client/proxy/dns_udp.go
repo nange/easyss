@@ -65,7 +65,7 @@ func (d *dnsInterceptor) proxyUDPQuery(clientAddr *net.UDPAddr, req udpDNSQuery,
 	upstream := clientconfig.ProxyDNSServer
 	key := dnsExchangeKey(clientAddr, req.dst)
 
-	log.Debug("[DNS_PROXY]", "domain", ex.plan.domain, "qtype", ex.plan.qtype,
+	log.At(dnsLogLevel(ex.plan.first), "[DNS_PROXY]", "domain", ex.plan.domain, "qtype", ex.plan.qtype,
 		"src", ex.src, "dst", ex.dst)
 	stats.RecordDNSProxyQuery()
 

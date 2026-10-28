@@ -75,6 +75,12 @@ func Error(msg string, args ...any) {
 	log(slog.LevelError, msg, args...)
 }
 
+// At 以给定级别写日志，供调用点按运行期条件选择级别（如首次/重复）。source 与固定级别
+// 的包装函数一样归属到调用点。
+func At(level slog.Level, msg string, args ...any) {
+	log(level, msg, args...)
+}
+
 func log(level slog.Level, msg string, args ...any) {
 	l := logger.Load()
 	if !l.Enabled(context.Background(), level) {

@@ -49,6 +49,9 @@ type dnsInterceptor struct {
 	serverDomain string
 	respTimeout  time.Duration
 	queryIdle    time.Duration
+	// queryLog/answerLog 决定 Info 级别下哪些查询/结果留痕，见 dns_log.go。
+	queryLog  dnsLogOnce
+	answerLog dnsLogOnce
 }
 
 func newDNSInterceptor(opts dnsOptions) *dnsInterceptor {
@@ -84,6 +87,8 @@ type dnsPlan struct {
 	cached *dns.Msg
 	domain string
 	qtype  string
+	// first 表示本进程第一次见到这个 (domain, qtype)，查询日志据此决定 Info/Debug。
+	first bool
 }
 
 // plan 判定一条查询的分流动作，缓存命中的应答已改写为本条查询的 Id。IPv6 被禁用时
@@ -92,8 +97,11 @@ func (d *dnsInterceptor) plan(msg *dns.Msg) dnsPlan {
 	q := msg.Question[0]
 	plan := dnsPlan{
 		domain: strings.TrimSuffix(q.Name, "."),
-		qtype:  dns.TypeToString[q.Qtype],
+		// Type.String() 对未收录类型返回 TYPE<n>；TypeToString 返回空串，不同未知 qtype
+		// 会在日志去重键上撞在一起。
+		qtype: dns.Type(q.Qtype).String(),
 	}
+	plan.first = d.queryLog.mark(dnsLogKey(plan.domain, plan.qtype))
 
 	rule := d.router.MatchHostRule(plan.domain)
 	if rule == router.HostRuleBlock {
@@ -116,7 +124,7 @@ func (d *dnsInterceptor) plan(msg *dns.Msg) dnsPlan {
 	plan.direct = isServerDomain || rule == router.HostRuleDirect
 
 	if cached := d.cache.Get(q.Name, plan.qtype, plan.direct); cached != nil {
-		log.Debug("[DNS_CACHE] hit", "domain", plan.domain, "qtype", plan.qtype, "direct", plan.direct)
+		d.logCacheHit(plan, cached)
 		if d.router.ShouldIPV6Disable() && q.Qtype == dns.TypeAAAA {
 			cached.Answer = nil
 		}
