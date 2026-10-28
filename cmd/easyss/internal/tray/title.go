@@ -10,20 +10,20 @@ import (
 )
 
 // 服务器菜单项"指标列"（RTT/下载速度）的对齐参数。不用 "\t" 分隔：AppKit 在未设 tab
-// stop 时按 28pt 默认间隔把光标推到下一个倍数，间隔随地址长度在 0~28pt 之间乱跳。
+// stop 时按 28pt 默认间隔把光标推到下一个倍数，间隔随标签长度在 0~28pt 之间乱跳。
 const (
 	// serverColumnWidth 是"指标列"的起始位置（pt），大于常见 IP 字面量宽度（"[2001:db8::1]:443"
 	// ≈ 108pt）而小于常见域名（≈ 149pt）。
 	serverColumnWidth = 168.0
 
-	// minMetricsGap 是地址本身已超出 serverColumnWidth 时保证的最小间隔（pt）。
+	// minMetricsGap 是标签本身已超出 serverColumnWidth 时保证的最小间隔（pt）。
 	minMetricsGap = 16.0
 
-	// maxAddressWidth 是地址的显示上限（pt）：再长就截断加省略号，避免超长主机名把指标挤出菜单。
-	maxAddressWidth = 200.0
+	// maxLabelWidth 是标签的显示上限（pt）：再长就截断加省略号，避免超长主机名或 name 把指标挤出菜单。
+	maxLabelWidth = 200.0
 
-	// columnStep 是地址超过 serverColumnWidth 之后指标列的量化步长：列位置取
-	// serverColumnWidth + n*columnStep，让宽度相近的地址仍共用一列、互相对齐。
+	// columnStep 是标签超过 serverColumnWidth 之后指标列的量化步长：列位置取
+	// serverColumnWidth + n*columnStep，让宽度相近的标签仍共用一列、互相对齐。
 	columnStep = 16.0
 )
 
@@ -31,8 +31,9 @@ const (
 // 最细一级是 hair space（U+200A ≈ 0.84pt），列位置的残差因此不超过 0.5pt。
 var titlePadSpaces = []string{"\u2003", "\u2002", " ", "\u200a"}
 
-// formatTitle 生成选择服务器菜单项的标题：地址在左，指标从固定列开始，不依赖各平台对 "\t" 的展开规则。
-func formatTitle(addr string, rttMs float64, downSpeed string) string {
+// formatTitle 生成选择服务器菜单项的标题：标签（name 或地址）在左，指标从固定列开始，
+// 不依赖各平台对 "\t" 的展开规则。
+func formatTitle(label string, rttMs float64, downSpeed string) string {
 	var metrics string
 	if rttMs > 0 {
 		metrics = fmt.Sprintf("%dms", int64(rttMs))
@@ -44,23 +45,23 @@ func formatTitle(addr string, rttMs float64, downSpeed string) string {
 		metrics += "↓" + downSpeed
 	}
 	if metrics == "" {
-		return addr
+		return label
 	}
-	return padToMetricsColumn(addr) + metrics
+	return padToMetricsColumn(label) + metrics
 }
 
-// padToMetricsColumn 把地址补到指标列，地址过长时先截断再补，指标列不会被推出菜单可见范围。
-func padToMetricsColumn(addr string) string {
-	addr = truncateToWidth(addr, maxAddressWidth, "…")
-	width := measureTextWidth(addr)
-	// metricsColumnStart 保证列位置至少比地址宽 minMetricsGap，这里的填充宽度恒 ≥ minMetricsGap。
-	return addr + titlePad(metricsColumnStart(width)-width)
+// padToMetricsColumn 把标签补到指标列，标签过长时先截断再补，指标列不会被推出菜单可见范围。
+func padToMetricsColumn(label string) string {
+	label = truncateToWidth(label, maxLabelWidth, "…")
+	width := measureTextWidth(label)
+	// metricsColumnStart 保证列位置至少比标签宽 minMetricsGap，这里的填充宽度恒 ≥ minMetricsGap。
+	return label + titlePad(metricsColumnStart(width)-width)
 }
 
-// metricsColumnStart 返回指标列的起始位置：默认是 serverColumnWidth；地址已贴到该列
-// 时按 columnStep 量化右移。返回值恒 ≥ addrWidth+minMetricsGap。
-func metricsColumnStart(addrWidth float64) float64 {
-	minStart := addrWidth + minMetricsGap
+// metricsColumnStart 返回指标列的起始位置：默认是 serverColumnWidth；标签已贴到该列
+// 时按 columnStep 量化右移。返回值恒 ≥ labelWidth+minMetricsGap。
+func metricsColumnStart(labelWidth float64) float64 {
+	minStart := labelWidth + minMetricsGap
 	if minStart <= serverColumnWidth {
 		return serverColumnWidth
 	}

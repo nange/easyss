@@ -108,7 +108,7 @@ func TestMetricsColumnStartKeepsMinimalGap(t *testing.T) {
 }
 
 // TestFormatTitlePadsLongAddressWithMinimalGap 覆盖地址本身就超过目标列的情况：
-// 地址先被截断（保证不超 maxAddressWidth），列位置随之右移，但地址与指标之间的
+// 地址先被截断（保证不超 maxLabelWidth），列位置随之右移，但地址与指标之间的
 // 可见间隔不得小于 minMetricsGap（不允许指标贴着地址）。
 func TestFormatTitlePadsLongAddressWithMinimalGap(t *testing.T) {
 	t.Parallel()
@@ -122,7 +122,7 @@ func TestFormatTitlePadsLongAddressWithMinimalGap(t *testing.T) {
 	// 去掉填充后剩下的就是真正显示的（被截断的）地址。
 	truncated := strings.TrimRight(title[:strings.Index(title, "60ms")], "\u2003\u2002\u200a ")
 	require.True(t, strings.HasSuffix(truncated, "…"), "截断地址需要省略号: %q", truncated)
-	require.LessOrEqual(t, titleWidthForTest(truncated), maxAddressWidth+0.5,
+	require.LessOrEqual(t, titleWidthForTest(truncated), maxLabelWidth+0.5,
 		"地址必须被截到显示上限内: %q", truncated)
 
 	gap := column - titleWidthForTest(truncated)
@@ -185,9 +185,9 @@ func TestMeasureTextWidthEstimatesIDNAsFullWidth(t *testing.T) {
 	require.Greater(t, cjk, 1.5*measureTextWidth("a"), "全角字形应明显宽于半角字母")
 
 	long := strings.Repeat("例", 30) + ":443"
-	require.Greater(t, measureTextWidth(long), maxAddressWidth,
+	require.Greater(t, measureTextWidth(long), maxLabelWidth,
 		"用例前提：这个 IDN 超出显示上限")
-	require.True(t, strings.HasSuffix(truncateToWidth(long, maxAddressWidth, "…"), "…"),
+	require.True(t, strings.HasSuffix(truncateToWidth(long, maxLabelWidth, "…"), "…"),
 		"超长 IDN 也要触发截断")
 }
 
@@ -196,11 +196,11 @@ func TestTruncateToWidthKeepsEllipsis(t *testing.T) {
 	t.Parallel()
 
 	addr := "a.very.long.hostname.for.a.branch.office.example.com:443"
-	got := truncateToWidth(addr, maxAddressWidth, "…")
+	got := truncateToWidth(addr, maxLabelWidth, "…")
 	require.True(t, strings.HasSuffix(got, "…"), "截断结果需要省略号: %q", got)
-	require.LessOrEqual(t, measureTextWidth(got), maxAddressWidth)
+	require.LessOrEqual(t, measureTextWidth(got), maxLabelWidth)
 	require.True(t, strings.HasPrefix(addr, strings.TrimSuffix(got, "…")), "必须保留地址前缀: %q", got)
-	require.Equal(t, "short.example:443", truncateToWidth("short.example:443", maxAddressWidth, "…"))
+	require.Equal(t, "short.example:443", truncateToWidth("short.example:443", maxLabelWidth, "…"))
 }
 
 // TestTitlePadNeverOvershoots 填充只允许为了更接近目标宽度而略微超过（最多半个
