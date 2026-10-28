@@ -121,6 +121,30 @@ func TestServerMenuKeepsMetricsOnSelectedServer(t *testing.T) {
 	require.Contains(t, titleAt(s, 1), "30ms")
 }
 
+// TestServerMenuTruncatesEveryRow 固化"菜单里没有超长行"：菜单宽度由最宽的行决定，Windows
+// 的加速键列（指标）跟着菜单右边缘走，一行超长就会把选中行的指标推到很右边。通知文案不受影响。
+func TestServerMenuTruncatesEveryRow(t *testing.T) {
+	cfg := &clientconfig.ClientConfig{Servers: []*clientconfig.ServerProfile{
+		{Host: "a.example", Port: 443, Default: true},
+		{Host: "very-long-branch-office-hostname.for.the-hongkong-region.example.com", Port: 443},
+	}}
+	s := NewServerMenu(systray.NewMenu(), cfg, func(int) {})
+
+	require.Equal(t, cfg.ServerListNames(), s.labels, "通知文案要继续用完整名字")
+	require.NotEqual(t, s.labels[1], s.shown[1], "长标签必须截断")
+	for idx := range cfg.Servers {
+		require.Equal(t, s.shown[idx], s.rendered[idx], "初始标题必须与截断标签一致")
+		require.LessOrEqual(t, measureTextWidth(s.shown[idx]), maxLabelWidth, "第 %d 行超宽", idx)
+	}
+
+	// 从长标签行切走时，旧行回写的是纯标签，也必须是截断后的那份。
+	s.SetChecked(1)
+	s.updateMetrics(60, "649 B/s")
+	s.SetChecked(0)
+	require.Equal(t, s.shown[1], s.rendered[1], "旧行回写必须是截断后的标签")
+	require.LessOrEqual(t, measureTextWidth(s.rendered[1]), maxLabelWidth, "旧行回写超宽")
+}
+
 // TestServerMenuRewritesOnlyChangedTitles 固化"每轮只下发变化的行"：全量重写在 darwin 上
 // 是每项一次主线程同步往返，而统计循环每 2s 就有一轮。
 func TestServerMenuRewritesOnlyChangedTitles(t *testing.T) {
