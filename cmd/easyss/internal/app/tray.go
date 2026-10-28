@@ -111,7 +111,6 @@ func (a *trayApp) buildTray() {
 	go a.server.StartStatsLoop(a.currentConfig(), a.shell.Closing())
 	go a.updater.AutoCheckUpdate()
 	a.shell.MarkBuilt()
-	a.watchRestartRequest()
 }
 
 // 用临时托盘呈现配置加载失败（真正的托盘尚未构建）。刻意不调用 Run()：没有 GUI 会话时进程
@@ -406,17 +405,19 @@ func (a *trayApp) exitApp() {
 func (a *trayApp) enableTun2socks() {
 	log.Info("[SYSTRAY] enableTun2socks called", "elevated", a.deps.isElevated())
 
-	// 非提权进程建不了 TUN：先请求提权，由接管本次点击的管理员实例去装（Windows 重启自身）。
-	if !a.deps.isElevated() && a.requestTunElevation() {
-		return
-	}
-
 	// 服务端域名未解析时必须拒绝：TUN 会把系统 DNS 指向本机转发服务器，而解析该域名又依赖隧道，
 	// 容易形成解析递归；网络未就绪时平台脚本还会因缺默认网关失败。
+	// 必须在提权之前判断：否则用户先过一遍 UAC、整个进程重启，新实例随后在启动路径里
+	// 跳过 TUN 并把偏好清回 false，等于"授权了却没开"。
 	if !canStartTunNow(a.currentCore()) {
 		log.Warn("[SYSTRAY] tun2socks refused: server domain not resolved yet")
 		a.object.SetTunChecked(false)
 		a.notify("服务端域名尚未解析成功，暂时无法开启系统全局流量；请等待网络恢复后重试")
+		return
+	}
+
+	// 非提权进程建不了 TUN：请求提权，由接管本次点击的管理员实例去装（Windows 重启自身）。
+	if !a.deps.isElevated() && a.requestTunElevation() {
 		return
 	}
 
@@ -451,8 +452,10 @@ func (a *trayApp) requestTunElevation() bool {
 		log.Error("[SYSTRAY] request elevation for tun2socks", "err", err)
 		a.notify("请求管理员权限失败，系统全局流量未开启。详情：" + err.Error())
 	default:
-		log.Info("[SYSTRAY] handing tun2socks over to an elevated instance")
-		a.notify("正在以管理员权限重启并开启系统全局流量…")
+		// 新实例已经在等单实例锁：本进程按正常退出流程撤系统代理、拆 TUN、停核心后退出，
+		// 锁随进程退出释放（见 exitApp）。
+		log.Info("[SYSTRAY] restarting as administrator for tun2socks")
+		a.exitApp()
 	}
 	return true
 }

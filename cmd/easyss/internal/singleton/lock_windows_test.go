@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,95 +14,88 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// handoffHelperEnv 让同一个测试二进制以"旧实例"身份重入：持锁、等交接事件、退出。
-const handoffHelperEnv = "EASYSS_SINGLETON_HANDOFF_HELPER"
+// 用例一律用独立的对象名：开发机上跑着 Easyss 时，生产名会让用例把真实实例当成
+// "另一个实例"，go test 时好时坏。
+const (
+	handoffHelperEnv  = "EASYSS_SINGLETON_HANDOFF_HELPER"
+	handoffHelperName = "EASYSS_SINGLETON_HANDOFF_NAME"
+)
 
-// 这些用例共享进程级的命名互斥量与事件，必须串行：并行会互相抢锁或消费对方的信号。
-func TestTryAcquireRejectsTheSecondInstance(t *testing.T) {
-	Release()
-	require.NoError(t, TryAcquire())
-	t.Cleanup(Release)
+func newTestLock(t *testing.T) *instanceLock {
+	t.Helper()
+	name := `Local\Easyss_Test_` + strings.NewReplacer("/", "_", `\`, "_").Replace(t.Name())
+	l := &instanceLock{name: name}
+	t.Cleanup(l.release)
+	return l
+}
 
-	require.ErrorIs(t, TryAcquire(), ErrAnotherInstance, "同一会话的第二个实例必须被拒绝")
+func TestTryAcquireRejectsTheSecondLock(t *testing.T) {
+	first := newTestLock(t)
+	require.NoError(t, first.tryAcquire())
+
+	second := newTestLock(t)
+	require.ErrorIs(t, second.tryAcquire(), ErrAnotherInstance, "同名锁的第二个持有者必须被拒绝")
 }
 
 func TestReleaseLetsAnotherInstanceIn(t *testing.T) {
-	Release()
-	require.NoError(t, TryAcquire())
+	first := newTestLock(t)
+	require.NoError(t, first.tryAcquire())
 
-	Release()
+	first.release()
 
-	require.NoError(t, TryAcquire(), "释放后新实例必须能拿到锁")
-	t.Cleanup(Release)
+	second := newTestLock(t)
+	require.NoError(t, second.tryAcquire(), "释放后新实例必须能拿到锁")
 }
 
-// TestRequestRestartWakesTheRunningInstance 钉住交接协议：旧实例阻塞在
-// WaitRestartRequest 上，新实例 RequestRestart 之后它必须被唤醒，否则提权重启会一直
-// 等到超时、最终两个实例都没有起来。
-func TestRequestRestartWakesTheRunningInstance(t *testing.T) {
-	// 先建出命名事件并持有句柄：两侧都是"打开同名对象"，对象不能在等待方打开前消失。
-	holder, err := createRestartEvent()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = windows.CloseHandle(holder) })
-
-	woke := make(chan bool, 1)
-	go func() { woke <- WaitRestartRequest() }()
-
-	require.NoError(t, RequestRestart())
-
-	select {
-	case ok := <-woke:
-		require.True(t, ok, "等待方必须被唤醒")
-	case <-time.After(5 * time.Second):
-		t.Fatal("WaitRestartRequest was not woken up by RequestRestart")
-	}
+// TestLockHeldElsewhere 固定"等待 ≠ 失败"的分类：OTS 提权后新进程属于另一个账户，
+// 打不开旧实例按默认 DACL 创建的互斥量（ACCESS_DENIED），只能等旧实例退出；
+// 其它错误才是真的起不来。
+func TestLockHeldElsewhere(t *testing.T) {
+	require.True(t, lockHeldElsewhere(ErrAnotherInstance))
+	require.True(t, lockHeldElsewhere(windows.ERROR_ACCESS_DENIED))
+	require.False(t, lockHeldElsewhere(errors.New("boom")))
 }
 
 // TestAcquireAfterRestartWithoutAnotherInstance 固定"没有旧实例时直接拿到锁"：用户手动
 // 双击或上一次交接已完成后，新进程不该为此空等一个超时。
 func TestAcquireAfterRestartWithoutAnotherInstance(t *testing.T) {
-	Release()
-	require.NoError(t, AcquireAfterRestart(time.Second))
-	t.Cleanup(Release)
+	l := newTestLock(t)
+	require.NoError(t, l.acquireAfterRestart(time.Second))
 }
 
-// TestHandoffTakesTheLockFromAnotherProcess 跨进程跑一遍完整交接：命名对象在会话命名空间里
-// 必须对另一个进程可见，否则提权重启后新进程会以为没有旧实例（两个实例并存）或永远拿不到锁。
-func TestHandoffTakesTheLockFromAnotherProcess(t *testing.T) {
+// TestAcquireAfterRestartWaitsForAnotherProcess 跨进程跑一遍接管：旧实例持锁、随后按自己的
+// 退出流程释放，新实例必须等它退完再拿到锁。提权重启依赖的正是这段等待——抢锁失败就退出
+// 会让用户"点了 UAC 之后什么都没有"。
+func TestAcquireAfterRestartWaitsForAnotherProcess(t *testing.T) {
 	if os.Getenv(handoffHelperEnv) == "1" {
-		// 旧实例：持锁 → 阻塞等交接 → 直接退出（生产路径由托盘退出流程做同样的收尾）。
-		if err := TryAcquire(); err != nil {
+		// 旧实例：持锁一段时间后自行退出，模拟托盘退出流程（撤代理 → 拆 TUN → 停核心）。
+		l := &instanceLock{name: os.Getenv(handoffHelperName)}
+		if err := l.tryAcquire(); err != nil {
 			os.Exit(3)
 		}
-		if !WaitRestartRequest() {
-			os.Exit(4)
-		}
+		time.Sleep(300 * time.Millisecond)
 		os.Exit(0)
 	}
 
-	Release()
-
-	child := exec.Command(os.Args[0], "-test.run=TestHandoffTakesTheLockFromAnotherProcess")
-	child.Env = append(os.Environ(), handoffHelperEnv+"=1")
+	lock := newTestLock(t)
+	child := exec.Command(os.Args[0], "-test.run=TestAcquireAfterRestartWaitsForAnotherProcess")
+	child.Env = append(os.Environ(), handoffHelperEnv+"=1", handoffHelperName+"="+lock.name)
 	require.NoError(t, child.Start())
 	t.Cleanup(func() {
 		_ = child.Process.Kill()
 		_ = child.Wait()
 	})
 
-	// 子进程拿锁与它会退出都是异步的：先确认锁确实被另一个进程持有。自己抢到锁时
-	// 必须立刻放掉，否则接下去的等待对象就变成了自己。
+	// 等子进程真正拿住锁；自己抢到时立刻放掉，否则接下去的等待对象就成了自己。
 	require.Eventually(t, func() bool {
-		err := TryAcquire()
+		err := lock.tryAcquire()
 		if err == nil {
-			Release()
+			lock.release()
 			return false
 		}
 		return errors.Is(err, ErrAnotherInstance)
 	}, 10*time.Second, 20*time.Millisecond, "子进程必须持有同一把会话级互斥量")
 
-	require.NoError(t, AcquireAfterRestart(10*time.Second), "交接失败说明新实例永远起不来")
-	t.Cleanup(Release)
-
-	require.NoError(t, child.Wait(), "旧实例必须按交接请求正常退出")
+	require.NoError(t, lock.acquireAfterRestart(10*time.Second), "接管失败说明提权重启永远起不来")
+	require.NoError(t, child.Wait(), "旧实例必须正常退出")
 }

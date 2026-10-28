@@ -12,7 +12,8 @@ import (
 )
 
 // newElevationTestApp 构建只带"代理对象"菜单的最小 trayApp：提权分支只用到配置快照、
-// 菜单勾选与注入的 requestElevation，不需要托盘、核心或网络。
+// 菜单勾选与注入的 requestElevation，不需要托盘、核心或网络。系统代理改注入实现：
+// 授权成功后本进程会走 exitApp 收尾，绝不能碰测试机上的真实代理设置。
 func newElevationTestApp(t *testing.T, request func(*App) error) *trayApp {
 	t.Helper()
 
@@ -22,6 +23,8 @@ func newElevationTestApp(t *testing.T, request func(*App) error) *trayApp {
 	a.object = tray.NewObjectMenu(systray.NewMenu(), cfg, func() {}, func() {})
 	a.deps.requestElevation = request
 	a.deps.isElevated = func() bool { return false }
+	a.deps.sysProxyApply = func(string) error { return nil }
+	a.deps.sysProxyRevert = func() error { return nil }
 	return a
 }
 

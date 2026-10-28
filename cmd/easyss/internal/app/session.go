@@ -120,7 +120,7 @@ func (s *session) start() error {
 	// 安装前 startTunEngineAtStartup 会在 tunMu 内用当前偏好复核。
 	if sessionCfg.Local.EnableTun2socks {
 		// 非提权进程建不了 TUN，用户却以为全局流量已代理，必须说明原因。
-		if !tunhelper.IsRoot() {
+		if !s.app.deps.isElevated() {
 			log.Warn("[EASYSS-V3] tun2socks requires administrator privileges; skipped (run as root/administrator, or enable it from the tray to authorize)")
 			// 偏好落回 false，否则菜单勾选着"已开启"而 tunMgr 是 nil。
 			s.app.updateConfig(func(c *clientconfig.ClientConfig) { c.Local.EnableTun2socks = false })
