@@ -69,6 +69,9 @@ func TestServerMenuShowsConfiguredName(t *testing.T) {
 	s := NewServerMenu(systray.NewMenu(), cfg, func(int) {})
 
 	require.Equal(t, []string{"香港节点", "b.example:443"}, s.labels)
+	// 通知文案同时给出展示名与身份，未配 name 时不重复地址。
+	require.Equal(t, "香港节点 (a.example:443)", s.DisplayName(0))
+	require.Equal(t, "b.example:443", s.DisplayName(1))
 	// name 只影响展示：勾选与切换仍按地址匹配。
 	require.Equal(t, 0, s.IndexOf("a.example:443"))
 	require.Equal(t, "a.example:443", s.Addr(0))

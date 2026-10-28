@@ -8,7 +8,7 @@
 - 入口：客户端 `client/config.ClientConfig`，服务端 `server/config.FileConfig`/`ServerConfig`。
 - **线格式与运行时类型是同一份**：`shaper.Config` 与 `log.Config` 被客户端/服务端直接复用，`log.Init` 是日志配置唯一应用入口；不要再定义同形的 `ShaperConfig`/`LogConfig`。`Cover` 的 `IdleTimeout`/`MinSize`/`MaxSize` 是伪装层固定属性，保持 `json:"-"`。
 - 字段命名：服务端 `server.host`（ACME 标识符：域名或公网 IPv4）、`server.port`（默认 443）、可选 `server.bind`；客户端完整模式 `servers[].host`。旧键由各自 `UnmarshalJSON` 兼容映射，新旧键同时出现报错。`ServerConfig.ListenAddr()` 是监听地址唯一格式化入口（`Port == 0` 回退 443）；`host` 不含端口的校验先于证书模式判定，手工证书模式同样适用；客户端由 `validateServers` 拒绝空/带端口的 `host`，地址拼装统一走 `net.JoinHostPort`（IPv6 自动加方括号）。
-- `servers[].name` 只作托盘菜单展示名（空白回退 `host:port`，见 `ClientConfig.ServerListNames`）；服务器身份与切换匹配始终是地址，`ServerMenu.IndexOf`/`DefaultServerAddr` 都不读 name，不要让展示名参与寻址。
+- `servers[].name` 只作托盘菜单与切换失败通知里的展示名（空白回退 `host:port`，见 `ClientConfig.ServerListNames`）；服务器身份与切换匹配始终是地址，`ServerMenu.IndexOf`/`DefaultServerAddr` 都不读 name，不要让展示名参与寻址。
 - 服务端加载与归一化统一走 `config.LoadConfig`（读文件 → 版本校验 → `applyDefaults` → `Validate` → `ResolveFilePaths`）；`applyDefaults` 负责没有其他 owner 的 0 值策略（`timeout`、`log.level`、`server.port`、`transport.h2_max_frame_size`/`h2_recv_buf_*`），`server.New` 也会调用 `FileConfig.Validate`。`buildHTTPServer` 只读归一化后的值；每连接并发流上限固定 128（`HTTP2ServerMaxConcurrentStreams`，不可配）；`shaper.*` 由 `shaper.Config.Normalize` 负责，不要出现第二份默认值。
 - **证书来源只有一个判定入口**：`UsesManualCertificate`（手工 vs ACME）、`ACMESubjectIsIP`（IP 标识符）与 `validateTLS`（证书成对、ACME 下 `host` 必填、IP 只接受公网 IPv4 字面量）。公网性用 `util.IsLANIP`，故意比 certmagic 更严，不要放宽；IPv6/IPv4-mapped 被拒是因为地址都是 `IP:port` 形态（见要点 6）。
 - `timeout` 是全部派生超时的唯一旋钮，范围 [15, 60] 秒（非正取 30，越界取最近边界），归一化只在 `config.NormalizeTimeout`/`TimeoutDuration`。

@@ -40,6 +40,15 @@ func (s *ServerMenu) Checked(idx int) bool { return s.items[idx].IsChecked() }
 
 func (s *ServerMenu) Addr(idx int) string { return s.addrs[idx] }
 
+// DisplayName 返回通知与错误文案里的服务器标识：配置了 name 时为 "name (host:port)"，
+// 否则就是地址；两者相同时只显示一次。
+func (s *ServerMenu) DisplayName(idx int) string {
+	if label := s.labels[idx]; label != s.addrs[idx] {
+		return label + " (" + s.addrs[idx] + ")"
+	}
+	return s.addrs[idx]
+}
+
 func (s *ServerMenu) IndexOf(addr string) int {
 	for i, candidate := range s.addrs {
 		if candidate == addr {

@@ -37,8 +37,8 @@ const ProxyDNSServer = "8.8.8.8:53"
 // 项。TUN 启动时优先用 dns.PreferredSystemDNS()，都没有记录时才回退到这里。
 const DefaultSystemDNS = "223.5.5.5"
 
-// ServerProfile 描述一个服务端端点。Host 是主机名或 IP 字面量，不含端口；Name 只决定
-// 托盘菜单的展示名，服务器身份始终是 host:port。
+// ServerProfile 描述一个服务端端点。Host 是主机名或 IP 字面量，不含端口；Name 是托盘
+// 菜单的展示名（切换失败通知也会带上），服务器身份始终是 host:port。
 type ServerProfile struct {
 	Host     string `json:"host"`
 	Port     int    `json:"port"`

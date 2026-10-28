@@ -111,7 +111,7 @@ Easyss v3 支持两种配置模式，自动识别：
 | 参数 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `servers[].host` | 是 | - | 服务器主机名或 IP 字面量（不含端口；IPv6 字面量无需方括号，客户端会自动补上） |
-| `servers[].name` | 否 | 空 | 托盘"选择服务器"菜单中的显示名称；留空或全空白时显示 `host:port`。只影响展示，不参与连接与切换 |
+| `servers[].name` | 否 | 空 | 托盘"选择服务器"菜单的显示名称（切换失败通知中同时显示 name 与 `host:port`）；留空或全空白时显示 `host:port`。只影响展示，不参与连接与切换 |
 | `servers[].port` | 否 | 443 | 服务器端口 |
 | `servers[].password` | 是 | - | 通信加密密钥 |
 | `servers[].method` | 否 | aes-256-gcm | 加密方式，可选: `aes-256-gcm`, `chacha20-poly1305`；必须在服务端 `allowed_methods` 允许的列表内 |
