@@ -94,3 +94,36 @@ func TestServerMenuTracksSelection(t *testing.T) {
 	require.True(t, s.Checked(1))
 	require.Equal(t, "b.example:443", s.Addr(1))
 }
+
+// TestServerMenuKeepsMetricsOnSelectedServer 固化"指标只属于当前选中项"：切换后旧行
+// 必须回到纯标签（两行都带 ms/速度会让人以为两个服务器都在跑），新行等下一轮统计再填。
+func TestServerMenuKeepsMetricsOnSelectedServer(t *testing.T) {
+	cfg := &clientconfig.ClientConfig{Servers: []*clientconfig.ServerProfile{
+		{Host: "a.example", Port: 443, Default: true},
+		{Host: "b.example", Port: 443},
+	}}
+	s := NewServerMenu(systray.NewMenu(), cfg, func(int) {})
+
+	s.updateMetrics(60, "649 B/s")
+	require.Contains(t, titleAt(s, 0), "60ms")
+	require.Equal(t, "b.example:443", titleAt(s, 1))
+
+	s.SetChecked(1)
+	require.Equal(t, "a.example:443", titleAt(s, 0), "旧服务器不能再带指标")
+	require.Equal(t, "b.example:443", titleAt(s, 1), "新服务器等下一轮统计")
+
+	s.updateMetrics(30, "1.2 KB/s")
+	require.Equal(t, "a.example:443", titleAt(s, 0))
+	require.Contains(t, titleAt(s, 1), "30ms")
+
+	// 重复确认同一个选择不算切换：指标要保留，不能闪成纯标签。
+	s.SetChecked(1)
+	require.Contains(t, titleAt(s, 1), "30ms")
+}
+
+// titleAt 读条目当前应显示的标题：systray 不暴露 MenuItem 的 label，走同一份推导。
+func titleAt(s *ServerMenu, idx int) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.titleLocked(idx)
+}

@@ -55,7 +55,7 @@ func TestFormatTitleAlignsMetricsColumn(t *testing.T) {
 	column := metricsColumn(labels)
 
 	for _, label := range labels {
-		title := formatTitle(label, 60, "649 B/s", column)
+		title := formatTitle(label, "60ms  ↓649 B/s", column)
 		require.NotContains(t, title, "\t", "不再依赖 tab 展开: %q", title)
 		require.True(t, strings.HasPrefix(title, label), "标题必须以标签开头: %q", title)
 		require.Contains(t, title, "↓649 B/s", "指标不能丢: %q", title)
@@ -94,7 +94,7 @@ func TestFormatTitleKeepsMinimalGapForWidestLabel(t *testing.T) {
 	column := metricsColumn(labels)
 	widest := labels[1]
 
-	title := formatTitle(widest, 60, "649 B/s", column)
+	title := formatTitle(widest, "60ms  ↓649 B/s", column)
 	gap := metricsColumnForTest(t, title) - titleWidthForTest(widest)
 	require.GreaterOrEqual(t, gap, minMetricsGap-0.5, "不能小于最小间隔")
 	require.LessOrEqual(t, gap, minMetricsGap+0.5, "最宽标签的间隔应正好是最小间隔")

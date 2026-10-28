@@ -14,7 +14,7 @@ import (
 func TestFormatTitleUsesAcceleratorColumn(t *testing.T) {
 	t.Parallel()
 
-	title := formatTitle("香港DV", 60, "649 B/s", 0)
+	title := formatTitle("香港DV", "60ms  ↓649 B/s", 0)
 	require.Equal(t, "香港DV\t60ms  ↓649 B/s", title)
 	require.NotContains(t, title, "\u2003", "Windows 上不该再补空格")
 }
@@ -25,7 +25,7 @@ func TestFormatTitleTabColumnKeepsLongLabelBounded(t *testing.T) {
 	t.Parallel()
 
 	label := "very.long.hostname.for.a.branch.office.example.com:443"
-	title := formatTitle(label, 60, "649 B/s", 0)
+	title := formatTitle(label, "60ms  ↓649 B/s", 0)
 
 	text, metrics, ok := strings.Cut(title, "\t")
 	require.True(t, ok, "长标签也要保留加速键列: %q", title)

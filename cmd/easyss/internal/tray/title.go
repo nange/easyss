@@ -14,8 +14,7 @@ const (
 
 // formatTitle 生成选择服务器菜单项的标题：标签（name 或地址）在左，指标从 column 列开始。
 // 列按本菜单的标签算出（见 metricsColumn），不依赖固定列宽；Windows 上 column 不参与布局。
-func formatTitle(label string, rttMs float64, downSpeed string, column float64) string {
-	metrics := metricsText(rttMs, downSpeed)
+func formatTitle(label, metrics string, column float64) string {
 	if metrics == "" {
 		return label
 	}
