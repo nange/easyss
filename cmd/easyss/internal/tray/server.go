@@ -19,6 +19,7 @@ type ServerMenu struct {
 	items  []*systray.MenuItem
 	addrs  []string
 	labels []string
+	column float64
 }
 
 func NewServerMenu(m *systray.Menu, cfg *clientconfig.ClientConfig, onSelect func(int)) *ServerMenu {
@@ -29,7 +30,7 @@ func NewServerMenu(m *systray.Menu, cfg *clientconfig.ClientConfig, onSelect fun
 		labels = addrs
 	}
 	def := cfg.DefaultServerAddr()
-	s := &ServerMenu{addrs: addrs, labels: labels, items: make([]*systray.MenuItem, 0, len(addrs))}
+	s := &ServerMenu{addrs: addrs, labels: labels, column: metricsColumn(labels), items: make([]*systray.MenuItem, 0, len(addrs))}
 	for idx, addr := range addrs {
 		s.items = append(s.items, m.AddCheckbox(labels[idx], addr == def, func() { onSelect(idx) }))
 	}
@@ -68,7 +69,7 @@ func (s *ServerMenu) SetChecked(idx int) {
 func (s *ServerMenu) updateMetrics(rttMs float64, downSpeed string) {
 	for i, item := range s.items {
 		if item.IsChecked() {
-			item.SetLabel(formatTitle(s.labels[i], rttMs, downSpeed))
+			item.SetLabel(formatTitle(s.labels[i], rttMs, downSpeed, s.column))
 			return
 		}
 	}
