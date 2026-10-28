@@ -2,12 +2,18 @@ package proxy
 
 import (
 	"log/slog"
+	"strings"
 	"sync"
+
+	"github.com/miekg/dns"
+	"github.com/nange/easyss/v3/log"
+	"github.com/nange/easyss/v3/util"
 )
 
-// dnsLogKey 是日志去重键：同一域名的 A/AAAA 是两次独立解析，各自算"首次"。
+// dnsLogKey 是日志去重键：同一域名的 A/AAAA 是两次独立解析，各自算"首次"。DNS 名不区分
+// 大小写，键必须像缓存与规则匹配那样归一，否则混合大小写查询会各自算首次。
 func dnsLogKey(domain, qtype string) string {
-	return domain + "\x00" + qtype
+	return strings.ToLower(domain) + "\x00" + qtype
 }
 
 // dnsLogOnce 记住已经以 Info 级别记录过的键，使 info 级别下每个域名只留一条查询和一条
@@ -49,4 +55,16 @@ func dnsLogLevel(first bool) slog.Level {
 		return slog.LevelInfo
 	}
 	return slog.LevelDebug
+}
+
+// logCacheHit 记录缓存命中。命中就是这条查询的应答：首次命中把应答写进 Info 行并消费首答，
+// 否则缓存过期后的第一次真实解析会留下没有 query 行配对的 result 行。
+func (d *dnsInterceptor) logCacheHit(plan dnsPlan, cached *dns.Msg) {
+	if plan.first {
+		d.answerLog.mark(dnsLogKey(plan.domain, plan.qtype))
+		log.Info("[DNS_CACHE] hit", "domain", plan.domain, "qtype", plan.qtype,
+			"direct", plan.direct, "answers", util.DNSAnswerStrings(cached))
+		return
+	}
+	log.Debug("[DNS_CACHE] hit", "domain", plan.domain, "qtype", plan.qtype, "direct", plan.direct)
 }

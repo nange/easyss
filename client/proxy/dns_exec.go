@@ -115,7 +115,7 @@ func (d *dnsInterceptor) finishProxied(msg *dns.Msg, domain, src, dst string) bo
 	}
 	_ = d.cache.Set(msg, false)
 
-	qtypeName := dns.TypeToString[qtype]
+	qtypeName := dns.Type(qtype).String()
 	log.At(dnsLogLevel(d.answerLog.mark(dnsLogKey(domain, qtypeName))),
 		"[DNS_PROXY] result", "domain", domain, "qtype", qtypeName,
 		"answers", util.DNSAnswerStrings(msg), "src", src, "dst", dst)

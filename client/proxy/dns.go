@@ -97,7 +97,9 @@ func (d *dnsInterceptor) plan(msg *dns.Msg) dnsPlan {
 	q := msg.Question[0]
 	plan := dnsPlan{
 		domain: strings.TrimSuffix(q.Name, "."),
-		qtype:  dns.TypeToString[q.Qtype],
+		// Type.String() 对未收录类型返回 TYPE<n>；TypeToString 返回空串，不同未知 qtype
+		// 会在日志去重键上撞在一起。
+		qtype: dns.Type(q.Qtype).String(),
 	}
 	plan.first = d.queryLog.mark(dnsLogKey(plan.domain, plan.qtype))
 
@@ -122,8 +124,7 @@ func (d *dnsInterceptor) plan(msg *dns.Msg) dnsPlan {
 	plan.direct = isServerDomain || rule == router.HostRuleDirect
 
 	if cached := d.cache.Get(q.Name, plan.qtype, plan.direct); cached != nil {
-		log.At(dnsLogLevel(plan.first), "[DNS_CACHE] hit",
-			"domain", plan.domain, "qtype", plan.qtype, "direct", plan.direct)
+		d.logCacheHit(plan, cached)
 		if d.router.ShouldIPV6Disable() && q.Qtype == dns.TypeAAAA {
 			cached.Answer = nil
 		}
