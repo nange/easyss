@@ -232,7 +232,7 @@ func (a *trayApp) selectServer(idx int) {
 		log.Info("[SYSTRAY] changing server to", "addr", addr)
 		if err := a.switchServer(idx, a.restartService); err != nil {
 			log.Error("[SYSTRAY] changing server to", "addr", addr, "err", err)
-			a.notifyServerSwitchFailure(addr, err)
+			a.notifyServerSwitchFailure(a.server.DisplayName(idx), err)
 			return
 		}
 		log.Info("[SYSTRAY] changes server success to", "addr", addr)
@@ -269,10 +269,10 @@ func (a *trayApp) switchServer(idx int, restart func(*clientconfig.ClientConfig)
 }
 
 // 菜单刚被清空，因此切换失败不能只写日志：用户需要知道现在跑的到底是哪个服务器。
-func (a *trayApp) notifyServerSwitchFailure(addr string, err error) {
-	msg := fmt.Sprintf("切换到 %s 失败，已回滚到原来的服务器。详情：%v", addr, err)
+func (a *trayApp) notifyServerSwitchFailure(target string, err error) {
+	msg := fmt.Sprintf("切换到 %s 失败，已回滚到原来的服务器。详情：%v", target, err)
 	if a.currentCore() == nil {
-		msg = fmt.Sprintf("切换到 %s 失败，且未能恢复原来的服务器：本机代理已停止，请重试或重启 Easyss。详情：%v", addr, err)
+		msg = fmt.Sprintf("切换到 %s 失败，且未能恢复原来的服务器：本机代理已停止，请重试或重启 Easyss。详情：%v", target, err)
 	}
 	a.shell.NotifyIfReady(msg)
 }

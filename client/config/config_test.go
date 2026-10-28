@@ -393,6 +393,41 @@ func TestSetDefaultServerIndex(t *testing.T) {
 	}
 }
 
+func TestServerListNames(t *testing.T) {
+	cfg := &ClientConfig{
+		Servers: []*ServerProfile{
+			{Host: "s1.example.com", Port: 443, Name: "香港节点"},
+			{Host: "s2.example.com", Port: 8443},
+			{Host: "s3.example.com", Port: 443, Name: "  "},
+			{Host: "2001:db8::1", Port: 443, Name: "  IPv6 节点  "},
+		},
+	}
+	want := []string{"香港节点", "s2.example.com:8443", "s3.example.com:443", "IPv6 节点"}
+	names := cfg.ServerListNames()
+	if len(names) != len(want) {
+		t.Fatalf("len = %d, want %d: %v", len(names), len(want), names)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Errorf("names[%d] = %q, want %q", i, names[i], want[i])
+		}
+	}
+}
+
+// name 是纯展示字段：JSON 解析不能丢，也不能改变默认服务器地址。
+func TestServerListNamesFromJSON(t *testing.T) {
+	cfg, err := ParseConfigJSON(`{"version":3,"servers":[{"host":"example.com","name":"香港节点","default":true}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := cfg.ServerListNames(); len(names) != 1 || names[0] != "香港节点" {
+		t.Errorf("names = %v, want [香港节点]", names)
+	}
+	if addr := cfg.DefaultServerAddr(); addr != "example.com:443" {
+		t.Errorf("default server = %q, want example.com:443", addr)
+	}
+}
+
 func TestServerListAddrs(t *testing.T) {
 	t.Run("多服务器", func(t *testing.T) {
 		cfg := &ClientConfig{

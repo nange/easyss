@@ -37,7 +37,8 @@ const ProxyDNSServer = "8.8.8.8:53"
 // 项。TUN 启动时优先用 dns.PreferredSystemDNS()，都没有记录时才回退到这里。
 const DefaultSystemDNS = "223.5.5.5"
 
-// ServerProfile 描述一个服务端端点。Host 是主机名或 IP 字面量，不含端口。
+// ServerProfile 描述一个服务端端点。Host 是主机名或 IP 字面量，不含端口；Name 是托盘
+// 菜单的展示名（切换失败通知也会带上），服务器身份始终是 host:port。
 type ServerProfile struct {
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
@@ -46,6 +47,7 @@ type ServerProfile struct {
 	SNI      string `json:"sn"`
 	CAPath   string `json:"ca_path"`
 	Default  bool   `json:"default"`
+	Name     string `json:"name"`
 }
 
 // UnmarshalJSON 兼容旧版完整模式配置里的 servers[].address（等价于 host）。新旧键同时出现
@@ -333,6 +335,20 @@ func (c *ClientConfig) ServerListAddrs() []string {
 		addrs = append(addrs, serverAddr(s))
 	}
 	return addrs
+}
+
+// ServerListNames 返回与 ServerListAddrs 一一对应的菜单展示名：配置了 name 就用它，
+// 否则回退为 host:port。
+func (c *ClientConfig) ServerListNames() []string {
+	var names []string
+	for _, s := range c.Servers {
+		if name := strings.TrimSpace(s.Name); name != "" {
+			names = append(names, name)
+			continue
+		}
+		names = append(names, serverAddr(s))
+	}
+	return names
 }
 
 func (c *ClientConfig) DefaultServerAddr() string {
