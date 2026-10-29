@@ -25,7 +25,7 @@
 
 基于标准库 HTTP/2（`http.HTTP2Config`，Go 1.26+，不依赖 `golang.org/x/net/http2`）：初始 1 条连接（`MaxConnsPerHost=1`），按需懒加载到 `conn_count_max`，least-active 调度；TLS 用 uTLS Chrome 指纹。
 
-**代 == 连接**：池与它拨出的连接打包成 `slotTransport{tr, conn}`，一代最多一条连接，连接关闭（`trackedConn.Close`）整代作废并把槽位换到新一代（`retireGeneration`/`advanceGeneration`）。因此流提交时记下的代（`http2Stream.gen`）就是它实际用过的连接——判死（`invalidateConn`）与判活（`ConnAlive`）只在自己那一代进行，不会误杀另一条流拨出的新连接。判死必须同时换池：net/http 没有关闭承载活跃流连接的 API，`CloseIdleConnections` 的收敛时机不可依赖。
+**代 + 连接身份**：池与它拨出的连接打包成 `slotTransport{tr, conn}`，一代最多一条连接，连接关闭（`trackedConn.Close`）整代作废并把槽位换到新一代（`retireGeneration`/`advanceGeneration`）。但一代之内的身份会被顶替（见下条例外），所以流除了提交时的那一代（`http2Stream.gen`），还记录自己实际落在哪条连接上：`httptrace.GotConn` 在写出请求前回报，存进 `http2Stream.conn`。判死（`invalidateConnIf`）要求代与连接身份同时命中——按"这一代的当前身份"关，会把同代重拨出来的新连接一起关掉；没有身份（拨号阶段就失败、GotConn 没触发）则不失效。判活（`ConnAlive`）以代为粒度，探测无法指定连接。判死必须同时换池：net/http 没有关闭承载活跃流连接的 API，`CloseIdleConnections` 的收敛时机不可依赖。
 
 例外：net/http 在连接达到服务端 `maxConcurrentStreams` 时会再拨一条（`MaxConnsPerHost=1` 挡不住）。服务端该上限固定 128、不可配，客户端用同一值判断"已满"。`HTTP2Config.StrictMaxConcurrentRequests` 在当前标准库会卡死，不能用（见 `slotTransport` 注释）。另一处是池里的连接不可再预约（流数到限见上句；以及挂起后 h2 按墙钟判 `tooIdle`、收到 GOAWAY 后 `MarkDead`、已关闭但尚未 `Close`）时，net/http 会在同一张池里重拨一条；新连接成为这一代的新身份（计 `second_conn_in_generation`），旧连接随后关闭时 `trackedConn.Close` 的身份 CAS 失败、不再换代，槽位绑定的是最近一次拨号登记的那条连接。
 
@@ -90,7 +90,7 @@ Bootstrap 用 AES-256-GCM 加密初始握手帧（含目标地址与方法协商
 2. 健康循环与开流路径共享同一采样器（`slotLifecycle.suspend`/`observeSuspend`），CAS 同时推进基线并认领观测，保证"一次挂起恰好一个观测者"；开流路径的采样不可省略（实测醒来后第一个开流常在 0.0s，早于健康周期）。
 3. 吞吐基线重置走事件号（`suspendEvents`/`resetSamplingOnSuspend`），`lastHeavy` 只由健康循环写。
 
-阈值 `SuspendDivergenceThreshold` 不判死在飞连接：空闲且已越过 net/http 空闲阈值（`IdleConnTimeout`）的连接直接退役——h2 用墙钟判 `tooIdle`，睡眠跳变后它们不可能再被复用，留着只会让下一次开流在同一代里再拨一条；其余有连接的槽位标记 `reverify`，判死在开流路径：`reverifySlot` 用一次 `HEAD /v3/probe`（`SuspendReverifyTimeout`）复核，活了复用，不通才按身份 CAS 失效；无法判定（无探测令牌）时保守放行。复核期间 net/http 若在同一代里换了新连接（池里拿不到能再预约一条流的连接就会重拨：流数到限、`tooIdle`、GOAWAY 后 `MarkDead` 都会），失效的 CAS 落空，而新连接刚应答了这次 HEAD，槽位已自愈，保留直接放行。判活要剥掉调用方取消（否则本地关流会误杀健康连接）；失效只针对复核开始时的那一代；启发式本身有假阳性（NTP 跳变、VM 快照、含睡眠的单调钟），所以只能产生嫌疑。连带失败（`errClientConnForceClosed`）在 `isTransientStreamError` 归为瞬时错误记 Debug。
+阈值 `SuspendDivergenceThreshold` 不判死在飞连接：空闲且已越过 net/http 空闲阈值（`IdleConnTimeout`）的连接直接退役——h2 用墙钟判 `tooIdle`，睡眠跳变后它们不可能再被复用，留着只会让下一次开流在同一代里再拨一条；其余有连接的槽位标记 `reverify`，判死在开流路径：`reverifySlot` 用一次 `HEAD /v3/probe`（`SuspendReverifyTimeout`）复核，活了复用，不通才按身份 CAS 失效；无法判定（无探测令牌）时保守放行。复核期间 net/http 若在同一代里换了新连接（池里拿不到能再预约一条流的连接就会重拨：流数到限、`tooIdle`、GOAWAY 后 `MarkDead` 都会），失效的 CAS 落空，而这次 HEAD 通常正是由新连接应答的（同代本来就有两条连接时，它可能落在旧的那条上，`probe.alive` 的前后比对看不出，属已知限制），槽位已自愈，保留直接放行。判活要剥掉调用方取消（否则本地关流会误杀健康连接）；失效只针对复核开始时的那一代；启发式本身有假阳性（NTP 跳变、VM 快照、含睡眠的单调钟），所以只能产生嫌疑。连带失败（`errClientConnForceClosed`）在 `isTransientStreamError` 归为瞬时错误记 Debug。
 
 ### 15. 规则解析与匹配只有一份实现
 

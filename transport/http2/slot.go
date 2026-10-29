@@ -15,8 +15,9 @@ type slotConn struct {
 	c net.Conn
 }
 
-// slotTransport 是连接池的一"代"：一个 net/http 池加它拨出的那一条连接。
-// 一代至多一条连接、连接一关即换代，因此代本身就是连接身份。
+// slotTransport 是连接池的一"代"：一个 net/http 池加它拨出的连接。通常一代一条连接、
+// 连接一关即换代；但同代内可能重拨并顶替身份（见 docs/architecture.md 的例外），所以代
+// 不单独等于连接身份，流要自己记 GotConn 回报的那一条。
 type slotTransport struct {
 	slot *transportSlot
 	// 使用方必须持有这一代本身，而不是反复读槽位当前一代。
@@ -157,16 +158,14 @@ func (s *transportSlot) retireGeneration(gen *slotTransport, conn *slotConn) {
 	}
 }
 
-// invalidateConn 按身份关闭一代的连接并换到新一代，使下一次 Open 必定拨号。换代必须先于
-// 关闭，否则并发的开流会从旧池拿到刚关掉的连接。
-func (s *transportSlot) invalidateConn(gen *slotTransport, reason string) bool {
-	return s.invalidateConnIf(gen, nil, reason)
-}
-
-// invalidateConnIf 只在这一代仍持有 expect 时失效：expect 为 nil 表示认领当前身份；expect
-// 非 nil 而身份已被替换（net/http 同池重拨）时什么都不关。判死方必须传自己实际探测过的
-// 连接，否则会把对方刚拨出来、还没参与判定的好连接关掉。
+// invalidateConnIf 只在这一代仍持有 expect 时失效：身份已被替换（net/http 同池重拨）时
+// 什么都不关。判死方必须传自己实际用过的那条连接——按"这一代的当前身份"关，会把对方刚
+// 拨出来、还没参与判定的好连接一起关掉。换代先于关闭，否则并发的开流会拿到刚关掉的连接。
 func (s *transportSlot) invalidateConnIf(gen *slotTransport, expect *slotConn, reason string) bool {
+	// 认领当前身份只留给 retireIdleConn（它直接走 retireConn）：判死必须有确切身份。
+	if expect == nil {
+		return false
+	}
 	sc, ok := s.retireConn(gen, expect)
 	if !ok {
 		return false

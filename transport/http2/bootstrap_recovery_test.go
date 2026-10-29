@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -198,7 +199,7 @@ func livenessStream(slot *transportSlot, liveness func(context.Context, *slotTra
 
 func TestHTTP2Stream_InvalidateConnClosesExactlyOnce(t *testing.T) {
 	conn := &countingConn{}
-	slot, _ := newCountingSlot(conn)
+	slot, sc := newCountingSlot(conn)
 	gen := slot.generation()
 
 	const streams = 8
@@ -206,6 +207,7 @@ func TestHTTP2Stream_InvalidateConnClosesExactlyOnce(t *testing.T) {
 	for range streams {
 		s := &http2Stream{slot: slot}
 		s.gen.Store(gen)
+		s.conn.Store(sc)
 		streamsOnConn = append(streamsOnConn, s)
 	}
 
@@ -231,8 +233,8 @@ func TestHTTP2Stream_InvalidateConnDoesNotKillNewConnection(t *testing.T) {
 
 	slot := slotWithGenFactory()
 	oldGen := slot.generation()
-	attachConn(slot, stale)
-	if !slot.invalidateConn(oldGen, "other stream") {
+	staleSC := attachConn(slot, stale)
+	if !slot.invalidateConnIf(oldGen, staleSC, "other stream") {
 		t.Fatal("the first invalidation must win")
 	}
 	newGen := slot.generation()
@@ -243,6 +245,7 @@ func TestHTTP2Stream_InvalidateConnDoesNotKillNewConnection(t *testing.T) {
 
 	s := &http2Stream{slot: slot}
 	s.gen.Store(oldGen)
+	s.conn.Store(staleSC)
 	s.InvalidateConn()
 
 	if got := stale.closes.Load(); got != 1 {
@@ -259,9 +262,91 @@ func TestHTTP2Stream_InvalidateConnDoesNotKillNewConnection(t *testing.T) {
 	}
 }
 
-func TestHTTP2Stream_InvalidateConnWithoutGenerationIsNoOp(t *testing.T) {
+// net/http 在连接满流或 GOAWAY 后会于同一代里再拨一条并顶替身份。流记的是 GotConn 报给
+// 它的那条，失效必须落空：否则关掉的正是同代刚拨出来的新连接。
+func TestHTTP2Stream_InvalidateConnDoesNotKillSameGenerationReplacement(t *testing.T) {
+	slot := slotWithGenFactory()
+	gen := slot.generation()
+	dead := &countingConn{}
+	deadID := attachConn(slot, dead)
+
+	s := &http2Stream{slot: slot}
+	s.gen.Store(gen)
+	s.conn.Store(deadID)
+
+	replacement := &countingConn{}
+	replacementID := attachConn(slot, replacement)
+
+	s.InvalidateConn()
+
+	if got := replacement.closes.Load(); got != 0 {
+		t.Fatalf("the replacement connection was closed %d times, want 0", got)
+	}
+	if got := dead.closes.Load(); got != 0 {
+		t.Fatalf("the dropped connection was closed %d times, want 0: net/http already let it go", got)
+	}
+	if slot.generation() != gen {
+		t.Fatal("a failed identity CAS must keep the generation")
+	}
+	if gen.conn.Load() != replacementID {
+		t.Fatal("the replacement must stay the generation's connection identity")
+	}
+}
+
+// 一次 RoundTrip 可能因 errClientConnUnusable 带未读 body 重试并再次触发 GotConn：记最后
+// 一条，失效才对着这条流真正承载的那条连接；非 *trackedConn 或 self 为空的回报不覆盖已有身份。
+func TestHTTP2Stream_NoteConnKeepsTheLastConnection(t *testing.T) {
+	first := &slotConn{}
+	second := &slotConn{}
+
+	s := &http2Stream{}
+	s.noteConn(httptrace.GotConnInfo{Conn: &trackedConn{self: first}})
+	s.noteConn(httptrace.GotConnInfo{Conn: &trackedConn{self: second}})
+	if got := s.conn.Load(); got != second {
+		t.Fatalf("identity = %p, want the connection of the last GotConn %p", got, second)
+	}
+
+	s.noteConn(httptrace.GotConnInfo{Conn: &countingConn{}})
+	s.noteConn(httptrace.GotConnInfo{Conn: &trackedConn{}})
+	if got := s.conn.Load(); got != second {
+		t.Fatal("an unusable report must not overwrite the recorded identity")
+	}
+}
+
+// 本流自己的 RoundTrip 从 A 重试到 B 后，B 就是它实际使用的那条连接：判死关 B。A 已被
+// net/http 从这一代换掉，不再由我们关。
+func TestHTTP2Stream_InvalidateConnClosesRetriedConnection(t *testing.T) {
+	slot := slotWithGenFactory()
+	gen := slot.generation()
+	first := &countingConn{}
+	firstID := attachConn(slot, first)
+	retried := &countingConn{}
+	retriedID := attachConn(slot, retried)
+
+	s := &http2Stream{slot: slot}
+	s.gen.Store(gen)
+	s.noteConn(httptrace.GotConnInfo{Conn: &trackedConn{self: firstID}})
+	s.noteConn(httptrace.GotConnInfo{Conn: &trackedConn{self: retriedID}})
+
+	s.InvalidateConn()
+
+	if got := retried.closes.Load(); got != 1 {
+		t.Fatalf("the retried connection closed %d times, want 1", got)
+	}
+	if got := first.closes.Load(); got != 0 {
+		t.Fatalf("the first connection closed %d times, want 0: net/http already replaced it", got)
+	}
+	if slot.generation() == gen {
+		t.Fatal("invalidating the stream's connection must replace the generation")
+	}
+}
+
+// 身份只来自 GotConn：没有它就不失效，绝不退回"这一代的当前连接"。未提交（gen 为 nil）
+// 与提交了但没拿到连接（拨号阶段失败，h2 不触发 GotConn）都不能动别人的连接。
+func TestHTTP2Stream_InvalidateConnWithoutIdentityIsNoOp(t *testing.T) {
 	conn := &countingConn{}
 	slot, sc := newCountingSlot(conn)
+	gen := slot.generation()
 
 	s := &http2Stream{slot: slot} // gen 为 nil：请求还没提交
 	s.InvalidateConn()
@@ -272,13 +357,14 @@ func TestHTTP2Stream_InvalidateConnWithoutGenerationIsNoOp(t *testing.T) {
 		t.Fatal("the connection identity must be untouched")
 	}
 
-	empty := slotWithGenFactory()
-	emptyGen := empty.generation()
-	noConn := &http2Stream{slot: empty}
-	noConn.gen.Store(emptyGen)
+	noConn := &http2Stream{slot: slot}
+	noConn.gen.Store(gen)
 	noConn.InvalidateConn()
-	if empty.generation() != emptyGen {
-		t.Fatal("invalidating a generation without a connection must not replace the pool")
+	if conn.closes.Load() != 0 {
+		t.Fatal("a stream that never got a connection must not close the generation's connection")
+	}
+	if slot.generation() != gen || slot.connIdentity() != sc {
+		t.Fatal("the generation and its connection must be untouched")
 	}
 
 	noSlot := &http2Stream{}

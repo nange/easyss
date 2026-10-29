@@ -343,10 +343,11 @@ func TestSuspendWithoutProbeTokenDoesNotMark(t *testing.T) {
 func TestSlotInvalidateConnIdentity(t *testing.T) {
 	t.Run("matching identity is closed exactly once", func(t *testing.T) {
 		conn := &countingConn{}
-		slot, _ := newCountingSlot(conn)
+		slot, sc := newCountingSlot(conn)
+		gen := slot.generation()
 		slot.expiring.Store(true)
 
-		if !slot.invalidateConn(slot.generation(), "test") {
+		if !slot.invalidateConnIf(gen, sc, "test") {
 			t.Fatal("expected this call to be the closer")
 		}
 		if got := conn.closes.Load(); got != 1 {
@@ -358,7 +359,7 @@ func TestSlotInvalidateConnIdentity(t *testing.T) {
 		if slot.expiring.Load() {
 			t.Fatal("connection-scoped marks must be cleared with the connection")
 		}
-		if slot.invalidateConn(slot.generation(), "test") {
+		if slot.invalidateConnIf(gen, sc, "test") {
 			t.Fatal("a second invalidation of the same identity must be a no-op")
 		}
 		if got := conn.closes.Load(); got != 1 {
@@ -372,16 +373,16 @@ func TestSlotInvalidateConnIdentity(t *testing.T) {
 
 		slot := slotWithGenFactory()
 		oldGen := slot.generation()
-		attachConn(slot, oldConn)
+		oldID := attachConn(slot, oldConn)
 		// 另一条流判死：旧连接被关掉，槽位换到新一代，新一代拨出了自己的连接。
-		if !slot.invalidateConn(oldGen, "test") {
+		if !slot.invalidateConnIf(oldGen, oldID, "test") {
 			t.Fatal("the first invalidation must win")
 		}
 		newGen := slot.generation()
 		newSC := attachConn(slot, newConn)
 
 		// 复核/判死慢了一步：手里拿的还是旧一代（已换代）的身份。
-		if slot.invalidateConn(oldGen, "test") {
+		if slot.invalidateConnIf(oldGen, oldID, "test") {
 			t.Fatal("a retired identity must not win its CAS twice")
 		}
 		if got := oldConn.closes.Load(); got != 1 {
@@ -424,13 +425,22 @@ func TestSlotInvalidateConnIdentity(t *testing.T) {
 		}
 	})
 
-	t.Run("nil identity is a no-op", func(t *testing.T) {
-		slot := &transportSlot{}
-		if slot.invalidateConn(nil, "test") {
+	t.Run("nil identity never claims the current one", func(t *testing.T) {
+		conn := &countingConn{}
+		slot, sc := newCountingSlot(conn)
+		gen := slot.generation()
+
+		if slot.invalidateConnIf(gen, nil, "test") {
 			t.Fatal("nil identity must not be reported as closed")
 		}
-		if slot.invalidateConn(slot.generation(), "test") {
-			t.Fatal("a generation without a connection must not be reported as closed")
+		if got := conn.closes.Load(); got != 0 {
+			t.Fatalf("the current connection was closed %d times, want 0", got)
+		}
+		if slot.generation() != gen || slot.connIdentity() != sc {
+			t.Fatal("a nil identity must leave the generation and its connection untouched")
+		}
+		if slot.invalidateConnIf(nil, nil, "test") {
+			t.Fatal("a nil generation must not be reported as closed")
 		}
 	})
 }

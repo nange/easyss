@@ -236,8 +236,8 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, req streamRequest)
 			return nil, ctx.Err()
 		}
 
-		// 判死：失效本流所在的那条连接（CloseIdleConnections 关不掉承载活跃流的连接），
-		// 只作用于本次请求自己的连接，不会误杀刚重试建立的新连接。
+		// 判死：失效本流实际使用的那条连接（CloseIdleConnections 关不掉承载活跃流的连接）。
+		// 每条流各有自己的身份，下一次尝试新开的流不会被这次失效波及。
 		invalidated := invalidateDeadStream(stream)
 		_ = stream.Close()
 

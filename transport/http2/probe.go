@@ -90,6 +90,7 @@ func (p *slotProber) alive(ctx context.Context, gen *slotTransport) (alive, ok b
 	_ = resp.Body.Close()
 	// 这一代的连接已不可用时，net/http 会在同一张池里再拨一条（ErrNoCachedConn 路径，
 	// MaxConnsPerHost=1 挡不住）：响应来自新连接而不是被探测的那条，不能据此判活。
+	// 已知限制：同代本来就有两条连接时，这个前后比对看不出 HEAD 落到了哪一条。
 	if gen.conn.Load() != conn {
 		return false, true
 	}

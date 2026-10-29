@@ -139,6 +139,73 @@ func TestHTTP2Transport_200StatusReadsBody(t *testing.T) {
 	}
 }
 
+// GotConn 是流的连接身份来源：它必须在本传输上触发，回报的 self 就是这一代登记的身份，
+// 复用同一连接的流拿到同一个身份。标准库若不再把 DialTLSContext 的返回值原样交回，
+// 这条测试会先失败，而不是让失效静默退化成空操作。
+func TestHTTP2Stream_ConnIdentityComesFromGotConn(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("hello"))
+	}))
+	srv.EnableHTTP2 = true
+	srv.Config.Protocols = &http.Protocols{}
+	srv.Config.Protocols.SetHTTP2(true)
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	tr, err := New(Config{
+		ServerURL:    srv.URL,
+		TLSConfig:    &utls.Config{InsecureSkipVerify: true, NextProtos: config.NextProtos},
+		MaxSlotCount: 1,
+		Timeouts:     config.Timeouts{Base: time.Second},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tr.Close() })
+
+	open := func() *http2Stream {
+		s, err := tr.Open(context.Background(), transport.OpenRequest{
+			Endpoint:     config.EndpointTCP,
+			Salt:         "dGVzdHNhbHR0ZXN0c2FsdA",
+			HighPriority: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.ReadFull(s, make([]byte, 5)); err != nil {
+			t.Fatal(err)
+		}
+		stream, ok := s.(*http2Stream)
+		if !ok {
+			t.Fatalf("Open returned %T, want *http2Stream", s)
+		}
+		t.Cleanup(func() { _ = stream.Close() })
+		return stream
+	}
+
+	first := open()
+	firstID := first.conn.Load()
+	if firstID == nil {
+		t.Fatal("the first stream must record the connection reported by GotConn")
+	}
+	firstGen := first.gen.Load()
+	if firstGen == nil {
+		t.Fatal("the stream must record the generation it was submitted on")
+	}
+	if got := firstGen.conn.Load(); got != firstID {
+		t.Fatalf("stream identity %p is not the generation's registered connection %p", firstID, got)
+	}
+
+	second := open()
+	if got := second.gen.Load(); got != firstGen {
+		t.Fatal("the second stream must reuse the same generation")
+	}
+	if got := second.conn.Load(); got != firstID {
+		t.Fatalf("reused stream identity = %p, want the same connection %p", got, firstID)
+	}
+}
+
 // TestHTTP2Transport_GrowEventAttribution 验证槽位扩容归因于触发它的请求：
 // 全新 transport 上的首次 Open 激活 priority 池（首次激活 2 个槽位），
 // 并恰好记录一条携带该请求 endpoint 与 target 的 GrowEvent；

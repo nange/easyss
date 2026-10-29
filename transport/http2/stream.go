@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,9 +39,14 @@ type http2Stream struct {
 	// 拨号源端之前就应答，因此到响应到达的差值就是纯路径 RTT，不含源端耗时。
 	bootstrapSentAt atomic.Int64
 
-	// gen 是本流提交请求时所用的那一代连接。一代至多一条连接且一关即作废，因此它同时是
-	// 实际用过的那条连接的身份，由发起 RoundTrip 的 goroutine 在提交前写入。
+	// gen 是本流提交请求时所用的那一代连接，由发起 RoundTrip 的 goroutine 在提交前写入。
 	gen atomic.Pointer[slotTransport]
+
+	// trace 由本流独占。h2 在写出请求之前触发 GotConn，因此这条流实际落在哪条连接上不靠
+	// 猜：同一代里 net/http 可能重拨并换掉身份，失效必须按它。
+	trace httptrace.ClientTrace
+	// conn 是 trace 记录的身份；nil 表示这条流从未拿到连接（拨号阶段就失败了）。
+	conn atomic.Pointer[slotConn]
 
 	// liveness 为 nil 时 ConnAlive 报无法判定。
 	liveness func(ctx context.Context, gen *slotTransport) (alive, ok bool)
@@ -264,8 +270,8 @@ func (s *http2Stream) AwaitResponse(ctx context.Context) error {
 	}
 }
 
-// ok=false 表示无法判定（未配置探测令牌或尚未提交）。必须探测本流自己那一代：否则仍绑在
-// 旧连接上的流会被新连接的健康状况顶替成"活着"，继续等一条已经死掉的连接。
+// ok=false 表示无法判定（未配置探测令牌或尚未提交）。探测以代为粒度：HEAD 可能落到同代
+// 的另一条连接（重拨出来的，或本来就在池里的旧连接），结论不一定对这条流的那条成立。
 func (s *http2Stream) ConnAlive(ctx context.Context) (alive, ok bool) {
 	if s.liveness == nil {
 		return false, false
@@ -277,13 +283,23 @@ func (s *http2Stream) ConnAlive(ctx context.Context) (alive, ok bool) {
 	return s.liveness(ctx, gen)
 }
 
-// 身份是本流提交时的那一代：这一代已被换掉时是无操作，绝不会碰换代后新建的连接。
+// GotConn 在写出请求前触发。一次 RoundTrip 可能因 errClientConnUnusable 带未读 body 重试并
+// 再次触发，记最后一条：那才是这条流实际承载在的那条连接。
+func (s *http2Stream) noteConn(info httptrace.GotConnInfo) {
+	if tc, ok := info.Conn.(*trackedConn); ok && tc.self != nil {
+		s.conn.Store(tc.self)
+	}
+}
+
+// 身份来自 GotConn，是本流最后一次尝试落到的连接：本流自己重试换到的连接会被关（那正是
+// 实际承载它的那条），其他流拨出的替代者不受影响。没有身份说明这条流从未拿到连接。
 func (s *http2Stream) InvalidateConn() {
 	gen := s.gen.Load()
-	if s.slot == nil || gen == nil {
+	conn := s.conn.Load()
+	if s.slot == nil || gen == nil || conn == nil {
 		return
 	}
-	s.slot.invalidateConn(gen, "stream dead")
+	s.slot.invalidateConnIf(gen, conn, "stream dead")
 }
 
 func (s *http2Stream) CloseWrite() error {
