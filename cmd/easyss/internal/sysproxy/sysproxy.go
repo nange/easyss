@@ -50,11 +50,9 @@ func (s *State) Enable(addr string) error {
 	envApplied, envErr := s.set(addr)
 
 	if settingsErr != nil && !envApplied {
-		// http/https 是两次独立读改写：只有一边成功会留下退出时不会被撤销的代理，先自行撤销。
-		if httpErr == nil || httpsErr == nil {
-			if revertErr := s.revertSettings(); revertErr != nil {
-				return fmt.Errorf("%w: %w", ErrResidual, errors.Join(settingsErr, envErr, revertErr))
-			}
+		// 只撤销写入成功的那一侧：失败侧可能发生在写入之前，撤销会清掉用户原有的代理配置。
+		if revertErr := s.revertApplied(httpErr, httpsErr); revertErr != nil {
+			return fmt.Errorf("%w: %w", ErrResidual, errors.Join(settingsErr, envErr, revertErr))
 		}
 		return errors.Join(settingsErr, envErr)
 	}
@@ -87,12 +85,24 @@ func (s *State) Disable() error {
 	return nil
 }
 
-// revertSettings 撤销桌面代理设置；Enable 的部分写入补偿与 Disable 共用它。
+// revertSettings 无条件撤销桌面代理设置，只给确认应用过的 Disable 使用。
 func (s *State) revertSettings() error {
 	return errors.Join(
 		wrapProxyErr("unset http proxy", s.desktop.offHTTP()),
 		wrapProxyErr("unset https proxy", s.desktop.offHTTPS()),
 	)
+}
+
+// revertApplied 只撤销确实写入成功的协议；两边都失败时什么也没写，返回 nil。
+func (s *State) revertApplied(httpErr, httpsErr error) error {
+	var errs []error
+	if httpErr == nil {
+		errs = append(errs, wrapProxyErr("unset http proxy", s.desktop.offHTTP()))
+	}
+	if httpsErr == nil {
+		errs = append(errs, wrapProxyErr("unset https proxy", s.desktop.offHTTPS()))
+	}
+	return errors.Join(errs...)
 }
 
 // wrapProxyErr 给错误加上标签，但不会把 nil 错误变成非 nil，这样每一步都成功时
