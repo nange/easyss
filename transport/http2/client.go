@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"runtime"
 	"slices"
 	"strconv"
@@ -313,25 +314,6 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 	stopParentCancel := context.AfterFunc(parentCtx, cancel)
 
 	pr, pw := io.Pipe()
-	url := t.serverURL + req.Endpoint
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, pr)
-	if err != nil {
-		stopTransportCancel()
-		stopParentCancel()
-		pw.Close() //nolint:errcheck
-		cancel()
-		if slot.active.Add(-1) == 0 {
-			slot.idleSince.Store(time.Now().UnixNano())
-		}
-		stats.RecordStreamClosed()
-		return nil, err
-	}
-	httpReq.Header.Set("User-Agent", chromeUserAgent())
-	httpReq.Header.Set("Content-Type", "application/octet-stream")
-	httpReq.Header.Set("Cache-Control", "no-store")
-	if req.Salt != "" {
-		httpReq.Header.Set("x-es", req.Salt)
-	}
 
 	var stream *http2Stream
 	doneOnce := sync.OnceFunc(func() {
@@ -358,9 +340,33 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 		endpoint: req.Endpoint,
 		target:   req.Target,
 	}
+	// 身份由 h2 在写出请求前经 GotConn 回报；没有它，失效只能按"这一代的当前连接"猜，
+	// 同代重拨出的新连接会被连带关掉。
+	stream.trace.GotConn = stream.noteConn
+
+	url := t.serverURL + req.Endpoint
+	httpReq, err := http.NewRequestWithContext(
+		httptrace.WithClientTrace(ctx, &stream.trace), "POST", url, pr)
+	if err != nil {
+		stopTransportCancel()
+		stopParentCancel()
+		pw.Close() //nolint:errcheck
+		cancel()
+		if slot.active.Add(-1) == 0 {
+			slot.idleSince.Store(time.Now().UnixNano())
+		}
+		stats.RecordStreamClosed()
+		return nil, err
+	}
+	httpReq.Header.Set("User-Agent", chromeUserAgent())
+	httpReq.Header.Set("Content-Type", "application/octet-stream")
+	httpReq.Header.Set("Cache-Control", "no-store")
+	if req.Salt != "" {
+		httpReq.Header.Set("x-es", req.Salt)
+	}
 
 	go func() {
-		// 池在提交这一刻取用，本流的连接身份就锚定在这一代上。
+		// 池在提交这一刻取用；这条流落在哪条连接上由 trace 的 GotConn 单独记录。
 		gen := slot.generation()
 		stream.gen.Store(gen)
 		resp, err := gen.tr.RoundTrip(httpReq)
