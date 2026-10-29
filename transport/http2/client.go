@@ -403,7 +403,7 @@ func (t *http2Transport) reverifySlot(ctx context.Context, slot *transportSlot) 
 		slot.reverify.Store(false)
 		return
 	}
-	// 只认这条被探测的连接：复核期间 net/http 可能把这一代换成新连接，失效必须按它的身份 CAS。
+	// 按开始复核时的身份 CAS 失效；HEAD 未必跑在它上面（同代可能已有两条连接，见 probe.alive）。
 	probed := gen.conn.Load()
 	if probed == nil {
 		slot.reverify.Store(false)

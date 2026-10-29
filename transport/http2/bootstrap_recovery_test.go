@@ -313,6 +313,34 @@ func TestHTTP2Stream_NoteConnKeepsTheLastConnection(t *testing.T) {
 	}
 }
 
+// 本流自己的 RoundTrip 从 A 重试到 B 后，B 就是它实际使用的那条连接：判死关 B。A 已被
+// net/http 从这一代换掉，不再由我们关。
+func TestHTTP2Stream_InvalidateConnClosesRetriedConnection(t *testing.T) {
+	slot := slotWithGenFactory()
+	gen := slot.generation()
+	first := &countingConn{}
+	firstID := attachConn(slot, first)
+	retried := &countingConn{}
+	retriedID := attachConn(slot, retried)
+
+	s := &http2Stream{slot: slot}
+	s.gen.Store(gen)
+	s.noteConn(httptrace.GotConnInfo{Conn: &trackedConn{self: firstID}})
+	s.noteConn(httptrace.GotConnInfo{Conn: &trackedConn{self: retriedID}})
+
+	s.InvalidateConn()
+
+	if got := retried.closes.Load(); got != 1 {
+		t.Fatalf("the retried connection closed %d times, want 1", got)
+	}
+	if got := first.closes.Load(); got != 0 {
+		t.Fatalf("the first connection closed %d times, want 0: net/http already replaced it", got)
+	}
+	if slot.generation() == gen {
+		t.Fatal("invalidating the stream's connection must replace the generation")
+	}
+}
+
 // 身份只来自 GotConn：没有它就不失效，绝不退回"这一代的当前连接"。未提交（gen 为 nil）
 // 与提交了但没拿到连接（拨号阶段失败，h2 不触发 GotConn）都不能动别人的连接。
 func TestHTTP2Stream_InvalidateConnWithoutIdentityIsNoOp(t *testing.T) {

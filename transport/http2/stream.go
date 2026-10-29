@@ -270,8 +270,8 @@ func (s *http2Stream) AwaitResponse(ctx context.Context) error {
 	}
 }
 
-// ok=false 表示无法判定（未配置探测令牌或尚未提交）。探测以代为粒度：同代可能重拨并顶替
-// 身份，HEAD 会由新连接应答，结论对新连接成立、对本流原来那条不成立。
+// ok=false 表示无法判定（未配置探测令牌或尚未提交）。探测以代为粒度：HEAD 可能落到同代
+// 的另一条连接（重拨出来的，或本来就在池里的旧连接），结论不一定对这条流的那条成立。
 func (s *http2Stream) ConnAlive(ctx context.Context) (alive, ok bool) {
 	if s.liveness == nil {
 		return false, false
@@ -291,8 +291,8 @@ func (s *http2Stream) noteConn(info httptrace.GotConnInfo) {
 	}
 }
 
-// 身份来自 GotConn：只失效本流实际用过的那条连接，同代重拨出的新连接不会被连带关掉。
-// 没有身份说明这条流从未拿到连接，没有可关的对象。
+// 身份来自 GotConn，是本流最后一次尝试落到的连接：本流自己重试换到的连接会被关（那正是
+// 实际承载它的那条），其他流拨出的替代者不受影响。没有身份说明这条流从未拿到连接。
 func (s *http2Stream) InvalidateConn() {
 	gen := s.gen.Load()
 	conn := s.conn.Load()
