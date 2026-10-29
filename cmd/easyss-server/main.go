@@ -34,10 +34,10 @@ func main() {
 	var configFile string
 	var pprofEnabled bool
 
-	flag.BoolVar(&printVer, "version", false, "print version")
-	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file")
-	flag.StringVar(&configFile, "c", "config.json", "specify config file")
-	flag.BoolVar(&pprofEnabled, "pprof", false, "enable pprof debug server on :6060")
+	flag.BoolVar(&printVer, "version", false, "打印版本信息")
+	flag.BoolVar(&showConfigExample, "show-config-example", false, "显示配置示例")
+	flag.StringVar(&configFile, "c", "config.json", "指定配置文件")
+	flag.BoolVar(&pprofEnabled, "pprof", false, "在 :6060 启动 pprof 调试服务")
 
 	// 自定义 usage，使 --help/-h 也能介绍 "selfupdate" 子命令；
 	// 该子命令在解析 flag 之前处理，否则在帮助里根本看不到。
@@ -56,7 +56,7 @@ func main() {
                 --version <tag>（安装指定版本，可重装当前版本或回退，tag 需与
                 release tag 完全一致）、--proxy-port（走本地代理下载）。
 
-Flags:
+参数:
 `, bin, bin)
 		flag.PrintDefaults()
 	}

@@ -37,30 +37,30 @@ func main() {
 
 	sc := &config.SimpleConfig{}
 
-	flag.BoolVar(&printVer, "version", false, "print version")
-	flag.BoolVar(&showConfigExample, "show-config-example", false, "show a example of config file (full mode)")
-	flag.BoolVar(&showConfigExampleSimple, "show-config-example-simple", false, "show a example of config file (simple mode)")
-	flag.StringVar(&sc.Server, "s", "", "server host (domain or IP, without port)")
-	flag.IntVar(&sc.ServerPort, "p", 0, "server port")
-	flag.StringVar(&sc.Password, "k", "", "password")
-	flag.StringVar(&sc.Method, "m", "", "encryption method (aes-256-gcm, chacha20-poly1305)")
-	flag.StringVar(&sc.ProxyRule, "proxy-rule", "", "proxy rule (auto, reverse_auto, proxy, direct, auto_block)")
-	flag.StringVar(&cmdOutboundProto, "outbound-proto", "", "outbound protocol (native, h2)")
-	flag.IntVar(&sc.LocalPort, "l", 0, "local socks5 port")
-	flag.IntVar(&sc.Timeout, "t", 0, "timeout in seconds (clamped to 15-60, the base of all derived timeouts)")
-	flag.StringVar(&sc.LogLevel, "log-level", "", "log level (debug, info, warn, error)")
-	flag.StringVar(&logFile, "log-file", "", "log file path")
-	flag.BoolVar(&sc.EnableQUIC, "enable-quic", false, "enable QUIC protocol")
-	flag.StringVar(&sc.SN, "sn", "", "TLS SNI override")
-	flag.StringVar(&configFile, "c", "config.json", "specify config file")
-	flag.BoolVar(&daemon, "daemon", runtime.GOOS != "windows", "run app as daemon")
-	flag.BoolVar(&disableTray, "disable-tray", false, "disable system tray (windows/mac only)")
-	flag.BoolVar(&enableTun2socks, "enable-tun2socks", false, "enable tun2socks model")
-	flag.Var(&restart, "elevated-restart", "internal: take the running instance over as administrator")
-	flag.StringVar(&sc.IPV6Rule, "ipv6-rule", "", "set the ipv6 rule(auto, enable, disable), default: auto")
-	flag.StringVar(&sc.DirectFile, "direct-file", "", "custom direct file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
-	flag.StringVar(&sc.ProxyFile, "proxy-file", "", "custom proxy file (IPs/CIDRs/domains/regexps mixed, one per line; supports regexp: prefix and * glob)")
-	flag.BoolVar(&pprofEnabled, "pprof", false, "enable pprof debug server on :6060")
+	flag.BoolVar(&printVer, "version", false, "打印版本信息")
+	flag.BoolVar(&showConfigExample, "show-config-example", false, "显示配置示例（完整模式）")
+	flag.BoolVar(&showConfigExampleSimple, "show-config-example-simple", false, "显示配置示例（简化模式）")
+	flag.StringVar(&sc.Server, "s", "", "服务端地址（域名或 IP，不含端口）")
+	flag.IntVar(&sc.ServerPort, "p", 0, "服务端端口")
+	flag.StringVar(&sc.Password, "k", "", "密码")
+	flag.StringVar(&sc.Method, "m", "", "加密方式（aes-256-gcm、chacha20-poly1305）")
+	flag.StringVar(&sc.ProxyRule, "proxy-rule", "", "代理规则（auto、reverse_auto、proxy、direct、auto_block）")
+	flag.StringVar(&cmdOutboundProto, "outbound-proto", "", "出站协议（native、h2）")
+	flag.IntVar(&sc.LocalPort, "l", 0, "本地 SOCKS5 端口")
+	flag.IntVar(&sc.Timeout, "t", 0, "超时秒数（限制在 15-60，所有派生超时的基准）")
+	flag.StringVar(&sc.LogLevel, "log-level", "", "日志级别（debug、info、warn、error）")
+	flag.StringVar(&logFile, "log-file", "", "日志文件路径")
+	flag.BoolVar(&sc.EnableQUIC, "enable-quic", false, "启用 QUIC 协议")
+	flag.StringVar(&sc.SN, "sn", "", "覆盖 TLS SNI")
+	flag.StringVar(&configFile, "c", "config.json", "指定配置文件")
+	flag.BoolVar(&daemon, "daemon", runtime.GOOS != "windows", "以守护进程方式运行")
+	flag.BoolVar(&disableTray, "disable-tray", false, "禁用系统托盘（仅 Windows/macOS）")
+	flag.BoolVar(&enableTun2socks, "enable-tun2socks", false, "启用 tun2socks 模式")
+	flag.Var(&restart, "elevated-restart", "内部参数：以管理员身份接管正在运行的实例")
+	flag.StringVar(&sc.IPV6Rule, "ipv6-rule", "", "设置 IPv6 规则（auto、enable、disable），默认 auto")
+	flag.StringVar(&sc.DirectFile, "direct-file", "", "自定义直连文件（IP/CIDR/域名/正则混合，每行一条；支持 regexp: 前缀和 * 通配）")
+	flag.StringVar(&sc.ProxyFile, "proxy-file", "", "自定义代理文件（IP/CIDR/域名/正则混合，每行一条；支持 regexp: 前缀和 * 通配）")
+	flag.BoolVar(&pprofEnabled, "pprof", false, "在 :6060 启动 pprof 调试服务")
 
 	flag.Usage = func() {
 		bin := filepath.Base(os.Args[0])
@@ -81,7 +81,7 @@ func main() {
                 由主程序在提权场景下自动拉起，请勿手动使用。支持
                 --tun-http-addr/--tun-fd-socket/--log-file/--log-level。
 
-Flags:
+参数:
 `, bin, bin, bin)
 		flag.PrintDefaults()
 	}

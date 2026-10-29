@@ -15,10 +15,10 @@ func RunSubcommand() bool {
 
 	fs := flag.NewFlagSet("tun-helper", flag.ExitOnError)
 	var tunHTTPAddr, tunFDSocket, logFile, logLevel string
-	fs.StringVar(&tunHTTPAddr, "tun-http-addr", "", "HTTP address of the parent process to fetch config from")
-	fs.StringVar(&tunFDSocket, "tun-fd-socket", "", "Unix socket path for fd passing to parent")
-	fs.StringVar(&logFile, "log-file", "", "log file path")
-	fs.StringVar(&logLevel, "log-level", "", "log level (debug, info, warn, error)")
+	fs.StringVar(&tunHTTPAddr, "tun-http-addr", "", "父进程的 HTTP 地址，用于拉取配置")
+	fs.StringVar(&tunFDSocket, "tun-fd-socket", "", "向父进程传递 fd 的 Unix socket 路径")
+	fs.StringVar(&logFile, "log-file", "", "日志文件路径")
+	fs.StringVar(&logLevel, "log-level", "", "日志级别（debug、info、warn、error）")
 	_ = fs.Parse(os.Args[2:])
 
 	os.Exit(runTunHelper(tunHTTPAddr, tunFDSocket, logFile, logLevel))
