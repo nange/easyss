@@ -410,6 +410,7 @@ func (t *http2Transport) reverifySlot(ctx context.Context, slot *transportSlot) 
 	defer cancel()
 	defer slot.reverify.Store(false)
 
+	probed := gen.conn.Load()
 	alive, known := t.liveness(verifyCtx, gen)
 	if !known {
 		return
@@ -417,6 +418,14 @@ func (t *http2Transport) reverifySlot(ctx context.Context, slot *transportSlot) 
 	if alive {
 		stats.RecordSuspendReverifyAlive()
 		log.Debug("[TRANSPORT] suspend reverify: connection still usable",
+			"slot", slot.idx,
+			"active_streams", slot.active.Load())
+		return
+	}
+	// 复核期间 net/http 在同一代里换了新连接：它只在池里没有可复用连接时才重拨，而新连接
+	// 刚应答过这次 HEAD，槽位已经自愈。此时换代只会把这条好连接关掉。
+	if cur := gen.conn.Load(); cur != nil && cur != probed {
+		log.Info("[TRANSPORT] suspend reverify: connection replaced during the probe",
 			"slot", slot.idx,
 			"active_streams", slot.active.Load())
 		return

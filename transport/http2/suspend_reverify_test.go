@@ -474,6 +474,45 @@ func TestReverifySlotDecisions(t *testing.T) {
 	}
 }
 
+// TestReverifySlotKeepsConnectionReplacedDuringProbe 固定"复核期间 net/http 自己换了连接"的
+// 结局：池里没有可复用的连接它才会重拨，而新连接刚应答了这次 HEAD，槽位已经自愈。此时再按
+// 复核失败换代，关掉的恰好是刚拨出来的好连接。
+func TestReverifySlotKeepsConnectionReplacedDuringProbe(t *testing.T) {
+	oldConn := &countingConn{}
+	slot, _ := newCountingSlot(oldConn)
+	slot.reverify.Store(true)
+	gen := slot.generation()
+
+	replacement := &countingConn{}
+	var replacementID *slotConn
+	tr := &http2Transport{liveness: func(_ context.Context, g *slotTransport) (bool, bool) {
+		if g != gen {
+			t.Fatalf("liveness probed %p, want the generation reverifySlot captured", g)
+		}
+		// 模拟 DialTLSContext 的 Swap：旧连接被判不可复用，新连接应答了这次 HEAD。
+		replacementID = attachConn(slot, replacement)
+		return false, true
+	}}
+
+	tr.reverifySlot(context.Background(), slot)
+
+	if got := oldConn.closes.Load(); got != 0 {
+		t.Fatalf("old connection closed %d times, want 0: net/http already dropped it", got)
+	}
+	if got := replacement.closes.Load(); got != 0 {
+		t.Fatalf("replacement connection closed %d times, want 0", got)
+	}
+	if slot.generation() != gen {
+		t.Fatal("the slot must keep its generation: the replacement already made it usable")
+	}
+	if gen.conn.Load() != replacementID {
+		t.Fatal("the replacement must stay the generation's connection identity")
+	}
+	if slot.reverify.Load() {
+		t.Fatal("the suspicion must be cleared")
+	}
+}
+
 // TestReverifySlotCanceledCallerKeepsSuspicion 固定"调用方取消不是连接的结论"：
 // 本地连接刚被关掉就触发复核时，绝不能因此把一条健康连接判死；嫌疑保留给
 // 下一次开流。
