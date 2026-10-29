@@ -2,10 +2,13 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	clientconfig "github.com/nange/easyss/v3/client/config"
+	"github.com/nange/easyss/v3/cmd/easyss/internal/sysproxy"
 )
 
 // stubSysProxy 替换系统代理的设置/撤销钩子，记录被设置的地址与撤销次数，
@@ -144,5 +147,91 @@ func TestAppCloseRevertsEvenWhenNotApplied(t *testing.T) {
 	}
 	if app.sysProxyApplied.Load() {
 		t.Fatal("Close must leave sysProxyApplied false")
+	}
+}
+
+// 设置失败必须让用户看到原因：托盘的"浏览器(设置系统代理)"仍显示勾选，
+// 静默失败会让用户以为代理已经生效。
+func TestSetupSysProxyFailureNotifiesUI(t *testing.T) {
+	app := testApp(clientconfig.LocalConfig{HTTPPort: 5080})
+	ui := newStubAppUI()
+	app.ui = ui
+	_, _ = stubSysProxy(app, errors.New("gsettings: command not found"))
+
+	if app.setupSysProxy() {
+		t.Fatal("setupSysProxy = true, want false when applying fails")
+	}
+
+	select {
+	case msg := <-ui.notices:
+		for _, want := range []string{"设置系统代理失败", "127.0.0.1:5080", "gsettings: command not found"} {
+			if !strings.Contains(msg, want) {
+				t.Fatalf("notification %q missing %q", msg, want)
+			}
+		}
+	default:
+		t.Fatal("a failed apply must notify the user")
+	}
+}
+
+func TestSetupSysProxySuccessDoesNotNotify(t *testing.T) {
+	app := testApp(clientconfig.LocalConfig{HTTPPort: 5080})
+	ui := newStubAppUI()
+	app.ui = ui
+	_, _ = stubSysProxy(app, nil)
+
+	if !app.setupSysProxy() {
+		t.Fatal("setupSysProxy = false, want true")
+	}
+	select {
+	case msg := <-ui.notices:
+		t.Fatalf("unexpected notification %q", msg)
+	default:
+	}
+}
+
+// 部分写入且补偿失败时系统代理可能仍指向本地端口：必须记为"已改动"，
+// 退出时才会再撤销一次。
+func TestSetSysProxyOnKeepsResidualApplied(t *testing.T) {
+	app := testApp(clientconfig.LocalConfig{HTTPPort: 5080})
+	_, _ = stubSysProxy(app, fmt.Errorf("%w: registry locked", sysproxy.ErrResidual))
+
+	if err := app.setSysProxyOn("127.0.0.1:5080"); !errors.Is(err, sysproxy.ErrResidual) {
+		t.Fatalf("setSysProxyOn = %v, want ErrResidual", err)
+	}
+	if !app.sysProxyApplied.Load() {
+		t.Fatal("a residual system proxy must be recorded as applied")
+	}
+}
+
+func TestSetSysProxyOnFailureWithoutResidualIsNotApplied(t *testing.T) {
+	app := testApp(clientconfig.LocalConfig{HTTPPort: 5080})
+	_, _ = stubSysProxy(app, errors.New("gsettings: command not found"))
+
+	if err := app.setSysProxyOn("127.0.0.1:5080"); err == nil {
+		t.Fatal("setSysProxyOn = nil, want an error")
+	}
+	if app.sysProxyApplied.Load() {
+		t.Fatal("a failed apply without residual must not be recorded as applied")
+	}
+}
+
+// 开启失败与关闭失败要给用户不同的动作；残留时还要提醒用户自己确认。
+func TestSysProxyErrorMessages(t *testing.T) {
+	const addr = "127.0.0.1:5080"
+
+	on := sysProxyErrorMessage(addr, true, errors.New("boom"))
+	if !strings.Contains(on, "手动把 HTTP/HTTPS 代理设为 "+addr) {
+		t.Fatalf("enable failure message %q must tell the user which address to set", on)
+	}
+
+	off := sysProxyErrorMessage(addr, false, errors.New("boom"))
+	if !strings.Contains(off, "手动关闭") {
+		t.Fatalf("disable failure message %q must tell the user to turn the proxy off", off)
+	}
+
+	residual := sysProxyErrorMessage(addr, true, fmt.Errorf("%w: boom", sysproxy.ErrResidual))
+	if !strings.Contains(residual, "确认代理已关闭") {
+		t.Fatalf("residual message %q must warn that the revert failed", residual)
 	}
 }

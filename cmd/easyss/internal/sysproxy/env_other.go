@@ -2,9 +2,11 @@
 
 package sysproxy
 
-// State 在 Linux 之外是空操作：macOS 和 Windows 有真正的系统级代理配置，
-// wzshiming/sysproxy 包已经会更新它，而且那里的浏览器确实会遵守它。
-type State struct{}
+// State 在 Linux 之外不管理会话环境（set/unset 是空操作）；系统级代理由 desktop
+// 字段读写，Windows/macOS 的浏览器确实遵守 wzshiming/sysproxy 写入的设置。
+type State struct {
+	desktop desktopProxy
+}
 
 func (*State) set(string) (bool, error) { return false, nil }
 

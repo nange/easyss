@@ -288,15 +288,37 @@ func (a *App) notifyTunTeardownProblem(msg string) {
 	a.ui.notify(msg)
 }
 
-// setupSysProxy 按配置把系统代理指向本地 HTTP 代理，返回是否改动。设置失败只记警告、
-// 不使启动失败：root/systemd 下 gsettings 与用户会话总线常常不可达。
+// 设置/还原系统代理失败不能只留在日志里：托盘的"浏览器(设置系统代理)"仍显示勾选，
+// 用户会以为代理已经生效。没有界面时调用方已经记过日志，这里直接返回。
+func (a *App) notifySysProxyError(addr string, on bool, err error) {
+	if err == nil || a.ui == nil {
+		return
+	}
+	a.ui.notify(sysProxyErrorMessage(addr, on, err))
+}
+
+func sysProxyErrorMessage(addr string, on bool, err error) string {
+	if !on {
+		return "关闭系统代理失败：系统代理可能仍指向 " + addr + "，请在系统设置中手动关闭。详情：" + err.Error()
+	}
+	msg := "设置系统代理失败：系统代理未更新，浏览器可能无法上网；可手动把 HTTP/HTTPS 代理设为 " + addr + "。详情：" + err.Error()
+	if errors.Is(err, sysproxy.ErrResidual) {
+		msg += "；自动撤销也未成功，请在系统设置中确认代理已关闭"
+	}
+	return msg
+}
+
+// setupSysProxy 按配置把系统代理指向本地 HTTP 代理，返回是否改动。设置失败不使启动
+// 失败：root/systemd 下 gsettings 与用户会话总线常常不可达。
 func (a *App) setupSysProxy() bool {
 	cfg := a.currentConfig()
 	if cfg.Local.DisableSysProxy || cfg.Local.HTTPPort <= 0 {
 		return false
 	}
-	if err := a.setSysProxyOn(sysproxy.Addr(cfg)); err != nil {
+	addr := sysproxy.Addr(cfg)
+	if err := a.setSysProxyOn(addr); err != nil {
 		log.Warn("[EASYSS-V3] set system proxy failed, you may need to configure it manually", "err", err)
+		a.notifySysProxyError(addr, true, err)
 		return false
 	}
 	return true
@@ -315,6 +337,11 @@ func (a *App) teardownSysProxy() {
 func (a *App) setSysProxyOn(addr string) error {
 	err := a.deps.sysProxyApply(addr)
 	if err == nil {
+		a.sysProxyApplied.Store(true)
+		return nil
+	}
+	// 部分写入且补偿失败时代理可能仍指向本地端口，退出路径要再撤销一次。
+	if errors.Is(err, sysproxy.ErrResidual) {
 		a.sysProxyApplied.Store(true)
 	}
 	return err

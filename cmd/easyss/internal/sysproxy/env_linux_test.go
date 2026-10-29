@@ -50,6 +50,15 @@ func stubProxyEnvExec(t *testing.T, dump string, fail bool) (*State, *[]recorded
 	})
 }
 
+// newTestState 返回只注入桌面代理设置的 State：会话环境的命令一律失败，
+// 测试不会触碰运行机器的 systemd/D-Bus 环境。
+func newTestState(t *testing.T) *State {
+	t.Helper()
+
+	state, _ := stubProxyEnvExec(t, sysProxyEnvDump, true)
+	return state
+}
+
 // stubFailingCommand 只让 failName 失败，以便测试回退到另一个环境存储的逻辑。
 func stubFailingCommand(t *testing.T, failName string) (*State, *[]recordedProxyEnvCmd) {
 	t.Helper()

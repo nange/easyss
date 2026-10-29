@@ -17,20 +17,45 @@ func Addr(cfg *clientconfig.ClientConfig) string {
 	return util.LocalProxyDialAddr(cfg.Local.BindAll, cfg.Local.HTTPPort)
 }
 
-// New 返回平台实现的会话环境状态；仅 Linux 有真实字段。
-func New() *State { return &State{} }
+// ErrResidual 表示设置系统代理时只有部分协议写入成功、补偿撤销也失败：系统代理可能
+// 仍指向本地入口。调用方必须把它当作"已改动系统代理"，在退出时再撤销一次。
+var ErrResidual = errors.New("system proxy may still point to the local entry")
+
+// desktopProxy 是系统级代理设置的读写入口；测试替换它，避免改动运行测试的机器的真实
+// 系统代理设置。
+type desktopProxy struct {
+	onHTTP   func(addr string) error
+	onHTTPS  func(addr string) error
+	offHTTP  func() error
+	offHTTPS func() error
+}
+
+// New 返回平台实现的会话环境状态。
+func New() *State {
+	return &State{desktop: desktopProxy{
+		onHTTP:   wsysproxy.OnHTTP,
+		onHTTPS:  wsysproxy.OnHTTPS,
+		offHTTP:  wsysproxy.OffHTTP,
+		offHTTPS: wsysproxy.OffHTTPS,
+	}}
+}
 
 // Enable 通过桌面代理设置（gsettings/kioslaverc/注册表/networksetup）与 Linux 的
 // 会话环境两种机制指向本地 HTTP 代理——Chromium 在无法识别的桌面（含 Hyprland）上忽略
 // gsettings。任一机制生效即返回 nil，调用方可以依赖 Disable 再次撤销它。
 func (s *State) Enable(addr string) error {
-	settingsErr := errors.Join(
-		wrapProxyErr("set http proxy", wsysproxy.OnHTTP(addr)),
-		wrapProxyErr("set https proxy", wsysproxy.OnHTTPS(addr)),
-	)
+	httpErr := wrapProxyErr("set http proxy", s.desktop.onHTTP(addr))
+	httpsErr := wrapProxyErr("set https proxy", s.desktop.onHTTPS(addr))
+	settingsErr := errors.Join(httpErr, httpsErr)
 	envApplied, envErr := s.set(addr)
 
 	if settingsErr != nil && !envApplied {
+		// http/https 是两次独立读改写：只有一边成功会留下退出时不会被撤销的代理，先自行撤销。
+		if httpErr == nil || httpsErr == nil {
+			if revertErr := s.revertSettings(); revertErr != nil {
+				return fmt.Errorf("%w: %w", ErrResidual, errors.Join(settingsErr, envErr, revertErr))
+			}
+		}
 		return errors.Join(settingsErr, envErr)
 	}
 	if settingsErr != nil {
@@ -45,10 +70,7 @@ func (s *State) Enable(addr string) error {
 }
 
 func (s *State) Disable() error {
-	settingsErr := errors.Join(
-		wrapProxyErr("unset http proxy", wsysproxy.OffHTTP()),
-		wrapProxyErr("unset https proxy", wsysproxy.OffHTTPS()),
-	)
+	settingsErr := s.revertSettings()
 	envApplied, envErr := s.unset()
 
 	if settingsErr != nil && !envApplied {
@@ -63,6 +85,14 @@ func (s *State) Disable() error {
 
 	log.Info("[SYSPROXY] proxy disabled")
 	return nil
+}
+
+// revertSettings 撤销桌面代理设置；Enable 的部分写入补偿与 Disable 共用它。
+func (s *State) revertSettings() error {
+	return errors.Join(
+		wrapProxyErr("unset http proxy", s.desktop.offHTTP()),
+		wrapProxyErr("unset https proxy", s.desktop.offHTTPS()),
+	)
 }
 
 // wrapProxyErr 给错误加上标签，但不会把 nil 错误变成非 nil，这样每一步都成功时
