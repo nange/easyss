@@ -127,10 +127,11 @@ func TestRefreshServerIPV6(t *testing.T) {
 	var nilClient *Client
 	assert.Equal(t, "", nilClient.RefreshServerIPV6())
 
-	// 已有解析结果：直接返回，不重新查询。
+	// 已有解析结果：不重新查询，但仍刷新本机 IPv6 出口。
 	c := newClient(t, domainCfg("auto"))
 	c.router.SetIPV6Info(false, "2001:db8::1")
 	assert.Equal(t, "2001:db8::1", c.RefreshServerIPV6())
+	assert.Equal(t, "2001:db8::1", c.router.ServerIPV6())
 
 	// 服务器是字面 IPv4：无需解析。
 	c = newClient(t, &clientconfig.ClientConfig{
@@ -159,6 +160,33 @@ func TestRefreshServerIPV6(t *testing.T) {
 	c = newClient(t, cfg)
 	assert.Equal(t, net.ParseIP("::1").String(), c.RefreshServerIPV6())
 	assert.Equal(t, net.ParseIP("::1").String(), c.router.ServerIPV6())
+}
+
+// TestRefreshServerIPV6ReprobesNetworking 固定"开 TUN 前重测本机 IPv6 出口"：networking 是
+// 启动快照，换网后再开 TUN 若不刷新，auto 策略与 TUN 的 IPv6 接管会继续沿用旧网络。
+func TestRefreshServerIPV6ReprobesNetworking(t *testing.T) {
+	t.Parallel()
+
+	rt, err := router.New(router.Config{IPV6Rule: router.IPV6RuleAuto})
+	require.NoError(t, err)
+	rt.SetIPV6Info(false, "2001:db8::1")
+	require.True(t, rt.ShouldIPV6Disable())
+
+	c := &Client{
+		cfg: &clientconfig.ClientConfig{
+			Servers: []*clientconfig.ServerProfile{{Host: "proxy.example.com", Default: true}},
+			Routing: clientconfig.RoutingConfig{IPV6Rule: "auto"},
+		},
+		router: rt,
+	}
+
+	c.sys.ipv6Networking = func() bool { return true }
+	assert.Equal(t, "2001:db8::1", c.RefreshServerIPV6())
+	assert.False(t, rt.ShouldIPV6Disable())
+
+	c.sys.ipv6Networking = func() bool { return false }
+	assert.Equal(t, "2001:db8::1", c.RefreshServerIPV6())
+	assert.True(t, rt.ShouldIPV6Disable())
 }
 
 // newDialTestClient 构造一个用于拨号测试的客户端：TUN 关闭（走普通 net.Dialer），

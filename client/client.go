@@ -130,13 +130,14 @@ func (c *Client) isTunIface(iface *net.Interface) bool {
 	return name != "" && iface.Name == name
 }
 
-// sysDeps 是直连拨号的系统依赖：接口探测、地址读取与绑定拨号。字段为 nil 时回落到
-// 生产实现，零值 Client 因此也可用；测试只覆盖自己需要的那几项。
+// sysDeps 是直连拨号与 IPv6 探测的系统依赖：接口探测、地址读取、IPv6 出口判断与绑定拨号。
+// 字段为 nil 时回落到生产实现，零值 Client 因此也可用；测试只覆盖自己需要的那几项。
 type sysDeps struct {
 	detectIface     func() (*net.Interface, error)
 	listInterfaces  func() ([]net.Interface, error)
 	ifaceAddrs      func(*net.Interface) ([]net.Addr, error)
 	bindUnsupported func() bool
+	ipv6Networking  func() bool
 	dialBound       func(*Client, context.Context, string, string) (net.Conn, error)
 }
 
@@ -166,6 +167,13 @@ func (s sysDeps) unbindable() bool {
 		return util.SysDirectIfaceBindUnsupported()
 	}
 	return s.bindUnsupported()
+}
+
+func (s sysDeps) hasIPV6() bool {
+	if s.ipv6Networking == nil {
+		return detectIPV6Networking()
+	}
+	return s.ipv6Networking()
 }
 
 func (s sysDeps) dial(c *Client, ctx context.Context, network, addr string) (net.Conn, error) {
@@ -621,18 +629,23 @@ func detectIPV6Networking() bool {
 	return err == nil
 }
 
-// 降级启动后启用 TUN 时若为空，平台脚本不会安装 IPv6 默认路由，IPv6 流量就会绕过隧道。
+// 降级启动后启用 TUN 时补齐服务端 IPv6，并重测本机 IPv6 出口：networking 是启动快照，
+// 换网后 TUN 是否接管 IPv6（以及 auto 策略）都会失真。探测只是一次本地路由表查询。
 func (c *Client) RefreshServerIPV6() string {
 	if c == nil {
 		return ""
 	}
-	if ipv6 := c.router.ServerIPV6(); ipv6 != "" {
-		return ipv6
-	}
 	if router.ParseIPV6Rule(c.cfg.Routing.IPV6Rule) == router.IPV6RuleDisable {
 		return ""
 	}
+
+	ipv6Networking := c.sys.hasIPV6()
+	if ipv6 := c.router.ServerIPV6(); ipv6 != "" {
+		c.router.SetIPV6Info(ipv6Networking, ipv6)
+		return ipv6
+	}
 	if svr := c.cfg.DefaultServer(); svr == nil || net.ParseIP(svr.Host) != nil {
+		c.router.SetIPV6Info(ipv6Networking, "")
 		return ""
 	}
 
@@ -640,7 +653,6 @@ func (c *Client) RefreshServerIPV6() string {
 	defer cancel()
 
 	serverIPV6 := resolveServerIPV6(ctx, c.cfg)
-	ipv6Networking := detectIPV6Networking()
 	c.router.SetIPV6Info(ipv6Networking, serverIPV6)
 
 	log.Info("[CLIENT] server ipv6 refreshed",

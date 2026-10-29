@@ -9,6 +9,7 @@ import (
 	"time"
 
 	clientconfig "github.com/nange/easyss/v3/client/config"
+	"github.com/nange/easyss/v3/client/router"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/cmd/easyss/internal/tunhelper"
 	"github.com/nange/easyss/v3/log"
@@ -343,8 +344,8 @@ func (s *session) tunDownLocked(want *tun.Manager) {
 func (s *session) tunConfig() tun.Config {
 	core := s.currentCore()
 	if core != nil && core.Client != nil {
-		// 降级启动时启动期的 IPv6 解析是空值，这里补一次有界解析，否则 TUN 脚本不装 IPv6
-		// 默认路由，IPv6 流量会绕过隧道。必须在 tunDNS 之前：它可能顺带发现可达的解析器。
+		// 降级启动时启动期的 IPv6 解析是空值，这里补一次有界解析并重测本机 IPv6 出口（换网后
+		// 启动快照会失真）。必须在 tunDNS 之前：它可能顺带发现可达的解析器。
 		core.Client.RefreshServerIPV6()
 	}
 
@@ -358,11 +359,19 @@ func (s *session) tunConfig() tun.Config {
 		MTU: snap.TunMTU(),
 	}
 	if core != nil && core.Client != nil {
-		if ipv6 := core.Client.Router().ServerIPV6(); ipv6 != "" {
-			cfg.ServerIPV6 = ipv6
-		}
+		cfg.ServerIPV6 = tunServerIPV6(core.Client.Router())
 	}
 	return cfg
+}
+
+// tunServerIPV6 与 ShouldIPV6Disable 用同一判据：TUN 接管 IPv6 必须意味着代理层会接受
+// IPv6 目标。接管了却在策略门拒绝时，连接会在 TUN 里被接受、再被拒绝，应用看到的是握手
+// 超时而不是连接失败（不会回退到可用的 IPv4 地址）。
+func tunServerIPV6(rt *router.Router) string {
+	if rt == nil || rt.ShouldIPV6Disable() {
+		return ""
+	}
+	return rt.ServerIPV6()
 }
 
 // Manager.Start 会阻塞到平台路由脚本完成，必须允许 Stop() 在启动途中取消它。
