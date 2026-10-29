@@ -43,6 +43,8 @@ type proxyEnvCmd struct {
 // State 是本进程对桌面会话环境所做的改动：发布前的值、实际写入的存储与执行
 // 外部命令的方式。外部状态本身是进程级的，实例归 App 所有，测试构造自己的实例。
 type State struct {
+	desktop desktopProxy
+
 	mu sync.Mutex
 	// previous 保存 easyss 修改会话环境前的值，缺失的键表示该变量未被设置过。
 	previous map[string]string

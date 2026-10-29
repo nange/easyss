@@ -306,13 +306,15 @@ func (a *trayApp) buildProxyObjectMenu() *systray.Menu {
 }
 
 func (a *trayApp) toggleSysProxy() {
+	addr := sysproxy.Addr(a.currentConfig())
 	go tray.ToggleCheck(a.object.BrowserItem(), func(on bool) error {
 		if on {
-			return a.setSysProxyOn(sysproxy.Addr(a.currentConfig()))
+			return a.setSysProxyOn(addr)
 		}
 		return a.setSysProxyOff()
 	}, func(on bool, err error) {
 		log.Error("[SYSTRAY] toggle sys-proxy", "on", on, "err", err)
+		a.notifySysProxyError(addr, on, err)
 	})
 }
 
@@ -520,11 +522,14 @@ func (a *trayApp) setTunMenuChecked(checked bool) {
 }
 
 func (a *trayApp) startLocalService() {
+	addr := sysproxy.Addr(a.currentConfig())
 	if a.object.BrowserChecked() {
-		if err := a.setSysProxyOn(sysproxy.Addr(a.currentConfig())); err != nil {
+		if err := a.setSysProxyOn(addr); err != nil {
 			log.Error("[SYSTRAY] start local: set sysproxy on", "err", err)
+			a.notifySysProxyError(addr, true, err)
 		}
 	} else {
+		// 只记日志：本地入口已监听，残留代理仍指向可用端口；退出时 Close 还会再撤一次。
 		if err := a.setSysProxyOff(); err != nil {
 			log.Error("[SYSTRAY] start local: set sysproxy off", "err", err)
 		}

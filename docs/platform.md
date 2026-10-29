@@ -19,7 +19,7 @@
 
 ## 启动路径与系统代理
 
-- 系统代理不是托盘专属：三条启动路径共用 `App.setupSysProxy`/`teardownSysProxy`，是否应用由 `App.sysProxyApplied` 记录。两个退出入口都按"撤销系统代理 → 拆 TUN → 停核心"执行：`Stop` 只撤销本进程应用过的代理，`Close` 无条件清理（托盘退出/切换，清掉上一次运行或异步开关留下的代理）。headless 在核心启动成功后设置、退出时由 `Stop` 撤销；`disable_sys_proxy` 是统一开关，设置失败只记警告（root/systemd 下 gsettings 与会话总线常不可达）。
+- 系统代理不是托盘专属：三条启动路径都经 `App.setSysProxyOn`/`teardownSysProxy` 改动系统代理（托盘启动走 `startLocalService`），是否应用由 `App.sysProxyApplied` 记录。两个退出入口都按"撤销系统代理 → 拆 TUN → 停核心"执行：`Stop` 只撤销本进程应用过的代理，`Close` 无条件清理（托盘退出/切换，清掉上一次运行或异步开关留下的代理）。headless 在核心启动成功后设置、退出时由 `Stop` 撤销；`disable_sys_proxy` 是统一开关，设置失败不中止启动（root/systemd 下 gsettings 与会话总线常不可达），有界面时通知用户该手动设置的地址。http/https 是两次独立写入，只成功一次时 `sysproxy.Enable` 只撤销成功的那一侧（失败侧可能没写过，撤销会清掉用户原有配置），撤销也失败才返回 `sysproxy.ErrResidual`，App 仍记 `sysProxyApplied`，退出时再撤一次。
 
 ## TUN 平台脚本
 
