@@ -61,7 +61,8 @@ type stats struct {
 	// streamsDrained 统计被 relay 排空机制提前关闭的流数：待驱逐槽位上的空闲流在完整空闲超时前被关闭。
 	streamsDrained atomic.Int64
 	// secondConnInGeneration 统计 net/http 在同一代连接池里再拨一条连接的次数（达到服务端并发流
-	// 上限时它会让出 MaxConnsPerHost 计数）。正常恒为 0，非 0 说明"代 == 连接"被破坏过。
+	// 上限时它会让出 MaxConnsPerHost 计数）。非 0 表示这一代发生过身份顶替，判死必须按流记下的
+	// GotConn 身份而不是这一代的当前身份（见 docs/architecture.md）。
 	secondConnInGeneration atomic.Int64
 	// 挂起复核：识别只把槽位标记为待复核，结论由开流前的一次往返判活给出。
 	suspendDetected         atomic.Int64
@@ -314,7 +315,7 @@ type RTTStats struct {
 }
 
 // TransportHealthStats 是客户端传输层启发式的内部仪表盘（tier 选择、槽位探测/退役、轮换、
-// 挂起复核与"代 == 连接"不变量）。它们只描述本进程的判断过程，字段名不承诺兼容。
+// 挂起复核与同代重拨）。它们只描述本进程的判断过程，字段名不承诺兼容。
 type TransportHealthStats struct {
 	TierExpiringScheduled int64 `json:"tier_expiring_scheduled"`
 	TierHeavyScheduled    int64 `json:"tier_heavy_scheduled"`

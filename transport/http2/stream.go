@@ -270,8 +270,8 @@ func (s *http2Stream) AwaitResponse(ctx context.Context) error {
 	}
 }
 
-// ok=false 表示无法判定（未配置探测令牌或尚未提交）。必须探测本流自己那一代：否则仍绑在
-// 旧连接上的流会被新连接的健康状况顶替成"活着"，继续等一条已经死掉的连接。
+// ok=false 表示无法判定（未配置探测令牌或尚未提交）。探测以代为粒度：同代可能重拨并顶替
+// 身份，HEAD 会由新连接应答，结论对新连接成立、对本流原来那条不成立。
 func (s *http2Stream) ConnAlive(ctx context.Context) (alive, ok bool) {
 	if s.liveness == nil {
 		return false, false
@@ -283,10 +283,11 @@ func (s *http2Stream) ConnAlive(ctx context.Context) (alive, ok bool) {
 	return s.liveness(ctx, gen)
 }
 
-// GotConn 在请求写出前触发；只认第一条，传输层万一重试也不会覆盖成后来的连接。
+// GotConn 在写出请求前触发。一次 RoundTrip 可能因 errClientConnUnusable 带未读 body 重试并
+// 再次触发，记最后一条：那才是这条流实际承载在的那条连接。
 func (s *http2Stream) noteConn(info httptrace.GotConnInfo) {
 	if tc, ok := info.Conn.(*trackedConn); ok && tc.self != nil {
-		s.conn.CompareAndSwap(nil, tc.self)
+		s.conn.Store(tc.self)
 	}
 }
 

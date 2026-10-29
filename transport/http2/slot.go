@@ -15,8 +15,9 @@ type slotConn struct {
 	c net.Conn
 }
 
-// slotTransport 是连接池的一"代"：一个 net/http 池加它拨出的那一条连接。
-// 一代至多一条连接、连接一关即换代，因此代本身就是连接身份。
+// slotTransport 是连接池的一"代"：一个 net/http 池加它拨出的连接。通常一代一条连接、
+// 连接一关即换代；但同代内可能重拨并顶替身份（见 docs/architecture.md 的例外），所以代
+// 不单独等于连接身份，流要自己记 GotConn 回报的那一条。
 type slotTransport struct {
 	slot *transportSlot
 	// 使用方必须持有这一代本身，而不是反复读槽位当前一代。
@@ -161,6 +162,10 @@ func (s *transportSlot) retireGeneration(gen *slotTransport, conn *slotConn) {
 // 什么都不关。判死方必须传自己实际用过的那条连接——按"这一代的当前身份"关，会把对方刚
 // 拨出来、还没参与判定的好连接一起关掉。换代先于关闭，否则并发的开流会拿到刚关掉的连接。
 func (s *transportSlot) invalidateConnIf(gen *slotTransport, expect *slotConn, reason string) bool {
+	// 认领当前身份只留给 retireIdleConn（它直接走 retireConn）：判死必须有确切身份。
+	if expect == nil {
+		return false
+	}
 	sc, ok := s.retireConn(gen, expect)
 	if !ok {
 		return false

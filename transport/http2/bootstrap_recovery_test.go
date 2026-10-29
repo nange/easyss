@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -289,6 +290,26 @@ func TestHTTP2Stream_InvalidateConnDoesNotKillSameGenerationReplacement(t *testi
 	}
 	if gen.conn.Load() != replacementID {
 		t.Fatal("the replacement must stay the generation's connection identity")
+	}
+}
+
+// 一次 RoundTrip 可能因 errClientConnUnusable 带未读 body 重试并再次触发 GotConn：记最后
+// 一条，失效才对着这条流真正承载的那条连接；非 *trackedConn 或 self 为空的回报不覆盖已有身份。
+func TestHTTP2Stream_NoteConnKeepsTheLastConnection(t *testing.T) {
+	first := &slotConn{}
+	second := &slotConn{}
+
+	s := &http2Stream{}
+	s.noteConn(httptrace.GotConnInfo{Conn: &trackedConn{self: first}})
+	s.noteConn(httptrace.GotConnInfo{Conn: &trackedConn{self: second}})
+	if got := s.conn.Load(); got != second {
+		t.Fatalf("identity = %p, want the connection of the last GotConn %p", got, second)
+	}
+
+	s.noteConn(httptrace.GotConnInfo{Conn: &countingConn{}})
+	s.noteConn(httptrace.GotConnInfo{Conn: &trackedConn{}})
+	if got := s.conn.Load(); got != second {
+		t.Fatal("an unusable report must not overwrite the recorded identity")
 	}
 }
 

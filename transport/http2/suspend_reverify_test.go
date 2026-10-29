@@ -425,14 +425,22 @@ func TestSlotInvalidateConnIdentity(t *testing.T) {
 		}
 	})
 
-	t.Run("nil identity is a no-op", func(t *testing.T) {
-		slot := &transportSlot{}
-		if slot.invalidateConnIf(nil, nil, "test") {
+	t.Run("nil identity never claims the current one", func(t *testing.T) {
+		conn := &countingConn{}
+		slot, sc := newCountingSlot(conn)
+		gen := slot.generation()
+
+		if slot.invalidateConnIf(gen, nil, "test") {
 			t.Fatal("nil identity must not be reported as closed")
 		}
-		empty := slotWithGenFactory()
-		if empty.invalidateConnIf(empty.generation(), nil, "test") {
-			t.Fatal("a generation without a connection must not be reported as closed")
+		if got := conn.closes.Load(); got != 0 {
+			t.Fatalf("the current connection was closed %d times, want 0", got)
+		}
+		if slot.generation() != gen || slot.connIdentity() != sc {
+			t.Fatal("a nil identity must leave the generation and its connection untouched")
+		}
+		if slot.invalidateConnIf(nil, nil, "test") {
+			t.Fatal("a nil generation must not be reported as closed")
 		}
 	})
 }
