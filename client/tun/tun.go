@@ -38,7 +38,8 @@ type platform struct {
 	engineStart func() error
 	engineStop  func(string)
 	settle      func()
-	ifaceMTU    func(string) (int, error)
+	// ifaceMTU 返回接口实际生效的 MTU；Windows 上 net.Interface.MTU 并不是它（见 ifacemtu_windows.go）。
+	ifaceMTU func(string) (int, error)
 }
 
 func defaultPlatform() platform {
@@ -50,13 +51,7 @@ func defaultPlatform() platform {
 		engineStart: func() error { return engine.Start() },
 		engineStop:  func(reason string) { stopEngine(reason) },
 		settle:      func() { time.Sleep(500 * time.Millisecond) },
-		ifaceMTU: func(name string) (int, error) {
-			iface, err := net.InterfaceByName(name)
-			if err != nil {
-				return 0, err
-			}
-			return iface.MTU, nil
-		},
+		ifaceMTU:    interfaceMTU,
 	}
 }
 

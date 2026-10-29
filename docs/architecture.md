@@ -17,7 +17,7 @@
 - `http_port` 未配置时由 `socks_port` 推导（`+1000`），完整/简单模式同语义，只有 `client/config.normalizeHTTPPort` 一处实现；`socks_port=0` 不推导，`socks_port=0` + `http_port>0` 仍是启动错误（`runner.ErrSocksRequired`）。
 - `local.enable_forward_dns` 只服务路由器透明代理部署：启动期要求 `socks_port>0`（`runner.ErrForwardDNSRequiresSocks`），TUN 不参与启动校验（托盘重启核心会临时把 `enable_tun2socks` 置 false），引擎未开始转发时由 `dns.ForwardServer` 读 `client.Client.TunForwardingEnabled` 在运行期拒答（与拨号器用的 `TunModeEnabled` 是两个状态），见「关键架构要点」第 19 节。
 - **本地代理端点地址只有一个来源**：监听用 `util.LocalProxyListenAddr`，本机消费方（HTTP 反向代理、TUN/helper、系统代理、托盘 `/stats`）用 `util.LocalProxyDialAddr`，`Socks5URI` 只是包装；`bind_all` 时分别是 `[::]` 与同族回环。不要再手拼 `127.0.0.1:<port>`（监听可能只接受 IPv6 回环）。`sysproxy.State.Enable`/`Disable` 接收完整地址，由 `sysproxy.Addr(cfg)` 推导。
-- `tun_mtu`（完整 `local.tun_mtu`/简单同名，默认 1500，范围 [1280, 9000]）是设备与 netstack MTU 的唯一来源，归一化只在 `config.NormalizeTunMTU`。设备侧由创建脚本写入（第 9 个位置参数）；wintun 的 MTU 无法由 tun2socks 设置，只能靠 netsh；netstack MTU 小于设备 MTU 会静默丢弃超限包（UDP/ICMP/分片，TCP 因 MSS 通告不受影响）。
+- `tun_mtu`（完整 `local.tun_mtu`/简单同名，默认 1500，范围 [1280, 9000]）是设备与 netstack MTU 的唯一来源，归一化只在 `config.NormalizeTunMTU`。设备侧由创建脚本写入（第 9 个位置参数）；wintun 的 MTU 无法由 tun2socks 设置，只能靠 netsh；netstack MTU 小于设备 MTU 会静默丢弃超限包（UDP/ICMP/分片，TCP 因 MSS 通告不受影响）。Windows 上 `net.Interface.MTU` 取自 `IP_ADAPTER_ADDRESSES.Mtu`，跟的是 IPv6 接口的 NlMtu；未接管 IPv6 时脚本只设置 IPv4 的 NlMtu，wintun 适配器的 IPv6 NlMtu 停在驱动默认的 65535，所以核对 MTU 必须走 `client/tun.interfaceMTU`（读 IPv4 的 NlMtu），否则每次启动都会误报不一致。
 
 ## 关键架构要点
 
