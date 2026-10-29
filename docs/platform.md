@@ -25,6 +25,7 @@
 
 - **唯一落盘入口 `client/tun.WriteScriptToTemp`**（内部 `normalizeScriptEOL`）：`client/tun/scripts` 与 tunhelper 的脚本都必须走它，`.bat` 统一 CRLF、`.sh` 原样。cmd.exe 按 OEM 代码页逐行读批处理，LF 会让中文注释与换行错位、注释被当命令执行；`go:embed` 取的是工作区原始字节（Raw 下载/编辑器/镜像都不经过 `.gitattributes`）。`.sh` 绝不能 CRLF（bash 会报 `\r: command not found`）。
 - **位置参数唯一构造点 `client/tun.ScriptArgs`**（`script_args.go`）：三套布局不同——windows 第 4 位是掩码、第 8 位是适配器 DNS；linux/darwin 第 4 位是本地网关、第 8 位是网关 v6；darwin 第 5 位必须是裸 IPv6（脚本自己补 `/64`），linux 第 2 位是"地址/掩码"。`ipSub`/`bareV6Addr`/MTU 归一化都收在里面，调用方只填 `DeviceConfig`/DNS/MTU，用 `Create`/`Close`（或 `CreateFor`/`CloseFor`）渲染。生产代码与测试共用它，不得手写位置参数切片（抄错只会在运行时由脚本 "failed near" 暴露）。helper 侧唯一转换点 `scriptArgsFor` 必须带 `TunMask`，否则 fd 路径装成 `/32`、直连装成 `/16`（都能上网，不报错），见 `TestHelperAndDirectPathsShareTheScriptArgs`。
+- **TUN 是否接管 IPv6 跟随 `ipv6_rule`**：`session.tunConfig` 只在服务端有 IPv6 且本机有 IPv6 出口（或 `ipv6_rule=enable`）时把地址交给脚本，判据在 `tunServerIPV6`。接管了却发不出去时，发往 IPv6 的连接会在 TUN 里被接受、再被策略门拒绝，应用看到的是 TLS 握手超时而不是连接失败（不会回退到可用的 IPv4）。`ipv6_rule=disable` 且本机有出口时仍接管，防止 IPv6 绕过隧道直连。
 
 ## TUN 生命周期
 

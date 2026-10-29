@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	clientconfig "github.com/nange/easyss/v3/client/config"
+	"github.com/nange/easyss/v3/client/router"
 )
 
 // TestTunConfigSocksAddrFollowsBindAll 固定 TUN 引擎拿到的本地 SOCKS5 端点：
@@ -40,5 +41,77 @@ func TestTunConfigSocksAddrFollowsBindAll(t *testing.T) {
 				t.Fatalf("tunConfig().Socks5Addr = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestTunServerIPV6FollowsTheIPV6Policy 固定"TUN 是否接管 IPv6"的判据：只有服务端有
+// IPv6 且本机有出口（或规则强制启用）时接管。接管了却发不出去时，连接会在 TUN 里被接受、
+// 再被策略门拒绝，TLS 握手永远等不到回应，应用不会回退到可用的 IPv4 地址。
+func TestTunServerIPV6FollowsTheIPV6Policy(t *testing.T) {
+	t.Parallel()
+
+	const serverIPV6 = "2001:db8::1"
+	tests := []struct {
+		name       string
+		rule       router.IPV6Rule
+		networking bool
+		server     string
+		want       string
+	}{
+		{
+			name:   "auto 且本机没有 IPv6 出口时不接管",
+			rule:   router.IPV6RuleAuto,
+			server: serverIPV6,
+		},
+		{
+			name:       "auto 且本机有 IPv6 出口时接管",
+			rule:       router.IPV6RuleAuto,
+			networking: true,
+			server:     serverIPV6,
+			want:       serverIPV6,
+		},
+		{
+			name:   "enable 在本机没有 IPv6 出口时也强制接管",
+			rule:   router.IPV6RuleEnable,
+			server: serverIPV6,
+			want:   serverIPV6,
+		},
+		{
+			name:       "disable 但本机有 IPv6 出口时仍接管，避免绕过隧道",
+			rule:       router.IPV6RuleDisable,
+			networking: true,
+			server:     serverIPV6,
+			want:       serverIPV6,
+		},
+		{
+			name:   "disable 且本机没有 IPv6 出口时不接管",
+			rule:   router.IPV6RuleDisable,
+			server: serverIPV6,
+		},
+		{
+			name:       "服务端没有 IPv6 时不接管",
+			rule:       router.IPV6RuleEnable,
+			networking: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rt, err := router.New(router.Config{IPV6Rule: tt.rule})
+			if err != nil {
+				t.Fatalf("router.New: %v", err)
+			}
+			rt.SetIPV6Info(tt.networking, tt.server)
+
+			if got := tunServerIPV6(rt); got != tt.want {
+				t.Fatalf("tunServerIPV6() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+
+	if got := tunServerIPV6(nil); got != "" {
+		t.Fatalf("tunServerIPV6(nil) = %q, want empty", got)
 	}
 }
