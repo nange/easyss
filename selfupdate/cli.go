@@ -47,15 +47,15 @@ func RunCLICommand(args []string, product Product) int {
 	var proxyPort int
 	var checkOnly bool
 	var wantTag string
-	fs.IntVar(&proxyPort, "proxy-port", 0, "route fetches through the local easyss HTTP proxy at 127.0.0.1:<port>")
-	fs.BoolVar(&checkOnly, "check", false, "only check whether a new version is available, do not download")
+	fs.IntVar(&proxyPort, "proxy-port", 0, "通过 127.0.0.1:<port> 上的本地 easyss HTTP 代理下载")
+	fs.BoolVar(&checkOnly, "check", false, "仅检查是否有新版本，不下载")
 	fs.StringVar(&wantTag, "version", "",
-		"install a specific release tag (e.g. v3.0.0) instead of the latest release; the tag must match exactly")
+		"安装指定的 release tag（如 v3.0.0）而非最新版本；tag 需完全一致")
 	fs.Usage = func() {
 		out := fs.Output()
 		_, _ = fmt.Fprintf(out, "用法: %s selfupdate [flags]\n\n", filepath.Base(os.Args[0]))
 		_, _ = fmt.Fprintf(out, "从 GitHub 检查 %s 的最新 release；默认下载对应平台的发布包并原地替换当前二进制\n", product)
-		_, _ = fmt.Fprintf(out, "（不自动重启）。更新完成后请手动重启进程（或由 systemd/supervisor 自动拉起）\n使新版本生效。\n\n--version <tag> 指定具体版本（tag 需与 release tag 完全一致），此时不与本地版本\n比较，因此可以重装当前版本或回退到旧版本。\n\nFlags:\n")
+		_, _ = fmt.Fprintf(out, "（不自动重启）。更新完成后请手动重启进程（或由 systemd/supervisor 自动拉起）\n使新版本生效。\n\n--version <tag> 指定具体版本（tag 需与 release tag 完全一致），此时不与本地版本\n比较，因此可以重装当前版本或回退到旧版本。\n\n参数:\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
