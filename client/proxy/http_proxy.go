@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -391,6 +392,7 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 		remote, err := s.policy.dialDirect(target)
 		if err != nil {
 			log.Warn("[HTTP-PROXY] direct CONNECT", "target", target, "err", err)
+			writeConnectFailure(hijConn)
 			return
 		}
 		defer remote.Close() //nolint:errcheck
@@ -406,6 +408,7 @@ func (s *HTTPProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) 
 		remote, err := s.dialSOCKS5(target)
 		if err != nil {
 			log.Warn("[HTTP-PROXY] socks5 CONNECT", "target", target, "err", err)
+			writeConnectFailure(hijConn)
 			return
 		}
 		defer remote.Close() //nolint:errcheck
@@ -434,6 +437,12 @@ func writeConnectEstablished(conn net.Conn, target string) error {
 		return err
 	}
 	return nil
+}
+
+// writeConnectFailure 在隧道建立前失败时回写 502：连接已被 hijack，http.Error 不再生效，
+// 只关闭连接会让客户端看到空应答而不是一个可重试的错误状态。
+func writeConnectFailure(conn net.Conn) {
+	_, _ = io.WriteString(conn, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
 }
 
 func (s *HTTPProxyServer) dialSOCKS5(target string) (net.Conn, error) {
