@@ -98,9 +98,7 @@ func (l Opener) Open(filePath string) (fallback bool, err error) {
 	case "linux":
 		return l.openLogFileLinux(filePath)
 	case "windows":
-		argv := []string{"cmd", "/c", "start", "powershell", "-NoExit", "-Command",
-			fmt.Sprintf("Get-Content -Wait -Tail 100 '%s'", filePath)}
-		return false, util.StartDetached(argv)
+		return false, util.StartDetached(windowsLogViewerArgv(filePath))
 	case "darwin":
 		argv := []string{"osascript",
 			"-e", fmt.Sprintf(`tell application "Terminal" to do script "tail -f \"%s\""`, filePath),
@@ -109,6 +107,15 @@ func (l Opener) Open(filePath string) (fallback bool, err error) {
 	default:
 		return false, fmt.Errorf("unsupported os: %s", runtime.GOOS)
 	}
+}
+
+// windowsLogViewerArgv 用 PowerShell 跟踪日志。日志是不带 BOM 的 UTF-8，而 PowerShell 5.1
+// 的 Get-Content 默认按系统 ANSI 代码页解码，中文会变成乱码，必须显式指定 UTF8。路径走
+// -LiteralPath（日志名里的方括号不是通配符），单引号按 PowerShell 规则双写。
+func windowsLogViewerArgv(filePath string) []string {
+	script := fmt.Sprintf("Get-Content -LiteralPath '%s' -Wait -Tail 100 -Encoding UTF8",
+		strings.ReplaceAll(filePath, "'", "''"))
+	return []string{"cmd", "/c", "start", "powershell", "-NoExit", "-Command", script}
 }
 
 // openLogFileLinux 在终端中实时跟踪日志，找不到任何终端时回退到快照查看器，这样在最小化
