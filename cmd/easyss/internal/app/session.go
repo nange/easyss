@@ -344,8 +344,8 @@ func (s *session) tunDownLocked(want *tun.Manager) {
 func (s *session) tunConfig() tun.Config {
 	core := s.currentCore()
 	if core != nil && core.Client != nil {
-		// 降级启动时启动期的 IPv6 解析是空值，这里补一次有界解析：本机有 IPv6 出口或规则
-		// 强制启用时，TUN 依赖它决定是否接管 IPv6。必须在 tunDNS 之前：它可能顺带发现可达的解析器。
+		// 降级启动时启动期的 IPv6 解析是空值，这里补一次有界解析并重测本机 IPv6 出口（换网后
+		// 启动快照会失真）。必须在 tunDNS 之前：它可能顺带发现可达的解析器。
 		core.Client.RefreshServerIPV6()
 	}
 
@@ -364,14 +364,11 @@ func (s *session) tunConfig() tun.Config {
 	return cfg
 }
 
-// tunServerIPV6 决定本次 TUN 会话是否接管 IPv6。本机没有 IPv6 出口且规则没有强制启用时
-// 不接管：接管了却发不出去，连接会在 TUN 里被接受、再被策略门拒绝，应用看到的是握手超时
-// 而不是连接失败（不会回退 IPv4）。本机有出口时即使 ipv6_rule=disable 也接管，防止绕过隧道。
+// tunServerIPV6 与 ShouldIPV6Disable 用同一判据：TUN 接管 IPv6 必须意味着代理层会接受
+// IPv6 目标。接管了却在策略门拒绝时，连接会在 TUN 里被接受、再被拒绝，应用看到的是握手
+// 超时而不是连接失败（不会回退到可用的 IPv4 地址）。
 func tunServerIPV6(rt *router.Router) string {
-	if rt == nil {
-		return ""
-	}
-	if rt.IPV6Rule() != router.IPV6RuleEnable && !rt.IPV6Networking() {
+	if rt == nil || rt.ShouldIPV6Disable() {
 		return ""
 	}
 	return rt.ServerIPV6()

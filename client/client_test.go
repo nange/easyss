@@ -127,10 +127,11 @@ func TestRefreshServerIPV6(t *testing.T) {
 	var nilClient *Client
 	assert.Equal(t, "", nilClient.RefreshServerIPV6())
 
-	// 已有解析结果：直接返回，不重新查询。
+	// 已有解析结果：不重新查询，但仍刷新本机 IPv6 出口。
 	c := newClient(t, domainCfg("auto"))
 	c.router.SetIPV6Info(false, "2001:db8::1")
 	assert.Equal(t, "2001:db8::1", c.RefreshServerIPV6())
+	assert.Equal(t, "2001:db8::1", c.router.ServerIPV6())
 
 	// 服务器是字面 IPv4：无需解析。
 	c = newClient(t, &clientconfig.ClientConfig{

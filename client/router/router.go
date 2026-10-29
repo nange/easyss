@@ -339,16 +339,6 @@ func (r *Router) ShouldIPV6Disable() bool {
 	return true
 }
 
-func (r *Router) IPV6Rule() IPV6Rule {
-	return IPV6Rule(r.ipv6Rule.Load())
-}
-
-// IPV6Networking 报告启动时探测到的本机 IPv6 出口；TUN 是否接管 IPv6 依赖它。
-func (r *Router) IPV6Networking() bool {
-	info := r.ipv6.Load()
-	return info != nil && info.networking
-}
-
 func (r *Router) ProxyRule() ProxyRule {
 	return ProxyRule(r.proxyRule.Load())
 }

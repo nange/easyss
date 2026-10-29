@@ -621,18 +621,23 @@ func detectIPV6Networking() bool {
 	return err == nil
 }
 
-// 降级启动后启用 TUN 时若为空，平台脚本不会安装 IPv6 默认路由，IPv6 流量就会绕过隧道。
+// 降级启动后启用 TUN 时补齐服务端 IPv6，并重测本机 IPv6 出口：networking 是启动快照，
+// 换网后 TUN 是否接管 IPv6（以及 auto 策略）都会失真。探测只是一次本地路由表查询。
 func (c *Client) RefreshServerIPV6() string {
 	if c == nil {
 		return ""
 	}
-	if ipv6 := c.router.ServerIPV6(); ipv6 != "" {
-		return ipv6
-	}
 	if router.ParseIPV6Rule(c.cfg.Routing.IPV6Rule) == router.IPV6RuleDisable {
 		return ""
 	}
+
+	ipv6Networking := detectIPV6Networking()
+	if ipv6 := c.router.ServerIPV6(); ipv6 != "" {
+		c.router.SetIPV6Info(ipv6Networking, ipv6)
+		return ipv6
+	}
 	if svr := c.cfg.DefaultServer(); svr == nil || net.ParseIP(svr.Host) != nil {
+		c.router.SetIPV6Info(ipv6Networking, "")
 		return ""
 	}
 
@@ -640,7 +645,6 @@ func (c *Client) RefreshServerIPV6() string {
 	defer cancel()
 
 	serverIPV6 := resolveServerIPV6(ctx, c.cfg)
-	ipv6Networking := detectIPV6Networking()
 	c.router.SetIPV6Info(ipv6Networking, serverIPV6)
 
 	log.Info("[CLIENT] server ipv6 refreshed",

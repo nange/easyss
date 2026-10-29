@@ -44,10 +44,10 @@ func TestTunConfigSocksAddrFollowsBindAll(t *testing.T) {
 	}
 }
 
-// TestTunServerIPV6FollowsTheIPV6Policy 固定"TUN 是否接管 IPv6"的判据：只有服务端有
-// IPv6 且本机有出口（或规则强制启用）时接管。接管了却发不出去时，连接会在 TUN 里被接受、
-// 再被策略门拒绝，TLS 握手永远等不到回应，应用不会回退到可用的 IPv4 地址。
-func TestTunServerIPV6FollowsTheIPV6Policy(t *testing.T) {
+// TestTunServerIPV6MatchesTheIPV6Policy 固定"TUN 接管 IPv6 ⇒ 代理层接受 IPv6 目标"：
+// 判据与 ShouldIPV6Disable 完全一致。接管了却在策略门拒绝时，连接会在 TUN 里被接受、
+// 再被拒绝，TLS 握手永远等不到回应，应用不会回退到可用的 IPv4 地址。
+func TestTunServerIPV6MatchesTheIPV6Policy(t *testing.T) {
 	t.Parallel()
 
 	const serverIPV6 = "2001:db8::1"
@@ -71,27 +71,25 @@ func TestTunServerIPV6FollowsTheIPV6Policy(t *testing.T) {
 			want:       serverIPV6,
 		},
 		{
+			name:       "auto 且服务端没有 IPv6 时不接管",
+			rule:       router.IPV6RuleAuto,
+			networking: true,
+		},
+		{
 			name:   "enable 在本机没有 IPv6 出口时也强制接管",
 			rule:   router.IPV6RuleEnable,
 			server: serverIPV6,
 			want:   serverIPV6,
 		},
 		{
-			name:       "disable 但本机有 IPv6 出口时仍接管，避免绕过隧道",
+			name: "enable 但服务端没有 IPv6 时不接管",
+			rule: router.IPV6RuleEnable,
+		},
+		{
+			name:       "disable 时一律不接管：策略门会拒绝 IPv6 目标",
 			rule:       router.IPV6RuleDisable,
 			networking: true,
 			server:     serverIPV6,
-			want:       serverIPV6,
-		},
-		{
-			name:   "disable 且本机没有 IPv6 出口时不接管",
-			rule:   router.IPV6RuleDisable,
-			server: serverIPV6,
-		},
-		{
-			name:       "服务端没有 IPv6 时不接管",
-			rule:       router.IPV6RuleEnable,
-			networking: true,
 		},
 	}
 
