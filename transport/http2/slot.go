@@ -160,7 +160,14 @@ func (s *transportSlot) retireGeneration(gen *slotTransport, conn *slotConn) {
 // invalidateConn 按身份关闭一代的连接并换到新一代，使下一次 Open 必定拨号。换代必须先于
 // 关闭，否则并发的开流会从旧池拿到刚关掉的连接。
 func (s *transportSlot) invalidateConn(gen *slotTransport, reason string) bool {
-	sc, ok := s.retireConn(gen)
+	return s.invalidateConnIf(gen, nil, reason)
+}
+
+// invalidateConnIf 只在这一代仍持有 expect 时失效：expect 为 nil 表示认领当前身份；expect
+// 非 nil 而身份已被替换（net/http 同池重拨）时什么都不关。判死方必须传自己实际探测过的
+// 连接，否则会把对方刚拨出来、还没参与判定的好连接关掉。
+func (s *transportSlot) invalidateConnIf(gen *slotTransport, expect *slotConn, reason string) bool {
+	sc, ok := s.retireConn(gen, expect)
 	if !ok {
 		return false
 	}
@@ -176,7 +183,7 @@ func (s *transportSlot) invalidateConn(gen *slotTransport, reason string) bool {
 // 扫掠与 Open 的 active+1 之间没有互斥，硬关会打断一条刚起步、尚未在 h2 登记的流；
 // CloseIdleConnections 只关真正空闲的连接，其余的由 h2 在自己的空闲超时后关闭。
 func (s *transportSlot) retireIdleConn(gen *slotTransport, reason string) bool {
-	if _, ok := s.retireConn(gen); !ok {
+	if _, ok := s.retireConn(gen, nil); !ok {
 		return false
 	}
 	log.Info("[TRANSPORT] idle connection retired",
@@ -186,10 +193,10 @@ func (s *transportSlot) retireIdleConn(gen *slotTransport, reason string) bool {
 	return true
 }
 
-// retireConn 认领这一代的连接身份并换到新一代，返回赢得 CAS 的连接。只关池里的空闲连接：
-// 是否硬关底层连接由调用方按判死结论决定。
-func (s *transportSlot) retireConn(gen *slotTransport) (*slotConn, bool) {
-	sc := s.takeConn(gen, nil)
+// retireConn 认领这一代的连接身份并换到新一代，返回赢得 CAS 的连接。expect 非 nil 时只在
+// 身份仍是它时才认领。只关池里的空闲连接：是否硬关底层连接由调用方按判死结论决定。
+func (s *transportSlot) retireConn(gen *slotTransport, expect *slotConn) (*slotConn, bool) {
+	sc := s.takeConn(gen, expect)
 	if sc == nil {
 		return nil, false
 	}

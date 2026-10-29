@@ -398,6 +398,32 @@ func TestSlotInvalidateConnIdentity(t *testing.T) {
 		}
 	})
 
+	t.Run("a stale expected identity never kills the replacement", func(t *testing.T) {
+		slot := slotWithGenFactory()
+		gen := slot.generation()
+		oldConn := &countingConn{}
+		oldID := attachConn(slot, oldConn)
+		// 探测期间 net/http 在同一代里重拨了一条：身份已被顶替，但调用方手里还是旧身份。
+		replacementConn := &countingConn{}
+		replacementID := attachConn(slot, replacementConn)
+
+		if slot.invalidateConnIf(gen, oldID, "test") {
+			t.Fatal("a stale expected identity must not win the CAS")
+		}
+		if got := oldConn.closes.Load(); got != 0 {
+			t.Fatalf("old connection closed %d times, want 0: it was already dropped by net/http", got)
+		}
+		if got := replacementConn.closes.Load(); got != 0 {
+			t.Fatalf("replacement connection closed %d times, want 0", got)
+		}
+		if slot.generation() != gen {
+			t.Fatal("a failed identity CAS must keep the generation")
+		}
+		if gen.conn.Load() != replacementID {
+			t.Fatal("the replacement must stay the generation's connection identity")
+		}
+	})
+
 	t.Run("nil identity is a no-op", func(t *testing.T) {
 		slot := &transportSlot{}
 		if slot.invalidateConn(nil, "test") {

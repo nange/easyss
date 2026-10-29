@@ -90,7 +90,7 @@ Bootstrap 用 AES-256-GCM 加密初始握手帧（含目标地址与方法协商
 2. 健康循环与开流路径共享同一采样器（`slotLifecycle.suspend`/`observeSuspend`），CAS 同时推进基线并认领观测，保证"一次挂起恰好一个观测者"；开流路径的采样不可省略（实测醒来后第一个开流常在 0.0s，早于健康周期）。
 3. 吞吐基线重置走事件号（`suspendEvents`/`resetSamplingOnSuspend`），`lastHeavy` 只由健康循环写。
 
-阈值 `SuspendDivergenceThreshold` 不判死在飞连接：空闲且已越过 net/http 空闲阈值（`IdleConnTimeout`）的连接直接退役——h2 用墙钟判 `tooIdle`，睡眠跳变后它们不可能再被复用，留着只会让下一次开流在同一代里再拨一条；其余有连接的槽位标记 `reverify`，判死在开流路径：`reverifySlot` 用一次 `HEAD /v3/probe`（`SuspendReverifyTimeout`）复核，活了复用，不通才按身份 CAS 失效；无法判定（无探测令牌）时保守放行。复核期间 net/http 若在同一代里换了新连接（`gen.conn` 身份变了），说明旧连接已被它判掉、新连接刚应答了这次 HEAD，槽位已自愈，保留直接放行。判活要剥掉调用方取消（否则本地关流会误杀健康连接）；失效只针对复核开始时的那一代；启发式本身有假阳性（NTP 跳变、VM 快照、含睡眠的单调钟），所以只能产生嫌疑。连带失败（`errClientConnForceClosed`）在 `isTransientStreamError` 归为瞬时错误记 Debug。
+阈值 `SuspendDivergenceThreshold` 不判死在飞连接：空闲且已越过 net/http 空闲阈值（`IdleConnTimeout`）的连接直接退役——h2 用墙钟判 `tooIdle`，睡眠跳变后它们不可能再被复用，留着只会让下一次开流在同一代里再拨一条；其余有连接的槽位标记 `reverify`，判死在开流路径：`reverifySlot` 用一次 `HEAD /v3/probe`（`SuspendReverifyTimeout`）复核，活了复用，不通才按身份 CAS 失效；无法判定（无探测令牌）时保守放行。复核期间 net/http 若在同一代里换了新连接，失效的 CAS 落空（旧连接已被它判掉、新连接刚应答了这次 HEAD），槽位已自愈，保留直接放行。判活要剥掉调用方取消（否则本地关流会误杀健康连接）；失效只针对复核开始时的那一代；启发式本身有假阳性（NTP 跳变、VM 快照、含睡眠的单调钟），所以只能产生嫌疑。连带失败（`errClientConnForceClosed`）在 `isTransientStreamError` 归为瞬时错误记 Debug。
 
 ### 15. 规则解析与匹配只有一份实现
 
