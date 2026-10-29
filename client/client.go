@@ -130,13 +130,14 @@ func (c *Client) isTunIface(iface *net.Interface) bool {
 	return name != "" && iface.Name == name
 }
 
-// sysDeps 是直连拨号的系统依赖：接口探测、地址读取与绑定拨号。字段为 nil 时回落到
-// 生产实现，零值 Client 因此也可用；测试只覆盖自己需要的那几项。
+// sysDeps 是直连拨号与 IPv6 探测的系统依赖：接口探测、地址读取、IPv6 出口判断与绑定拨号。
+// 字段为 nil 时回落到生产实现，零值 Client 因此也可用；测试只覆盖自己需要的那几项。
 type sysDeps struct {
 	detectIface     func() (*net.Interface, error)
 	listInterfaces  func() ([]net.Interface, error)
 	ifaceAddrs      func(*net.Interface) ([]net.Addr, error)
 	bindUnsupported func() bool
+	ipv6Networking  func() bool
 	dialBound       func(*Client, context.Context, string, string) (net.Conn, error)
 }
 
@@ -166,6 +167,13 @@ func (s sysDeps) unbindable() bool {
 		return util.SysDirectIfaceBindUnsupported()
 	}
 	return s.bindUnsupported()
+}
+
+func (s sysDeps) hasIPV6() bool {
+	if s.ipv6Networking == nil {
+		return detectIPV6Networking()
+	}
+	return s.ipv6Networking()
 }
 
 func (s sysDeps) dial(c *Client, ctx context.Context, network, addr string) (net.Conn, error) {
@@ -631,7 +639,7 @@ func (c *Client) RefreshServerIPV6() string {
 		return ""
 	}
 
-	ipv6Networking := detectIPV6Networking()
+	ipv6Networking := c.sys.hasIPV6()
 	if ipv6 := c.router.ServerIPV6(); ipv6 != "" {
 		c.router.SetIPV6Info(ipv6Networking, ipv6)
 		return ipv6
