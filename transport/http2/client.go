@@ -397,7 +397,9 @@ func (t *http2Transport) reverifySlot(ctx context.Context, slot *transportSlot) 
 		slot.reverify.Store(false)
 		return
 	}
-	if gen.conn.Load() == nil {
+	// 只认这条被探测的连接：复核期间 net/http 可能把这一代换成新连接，失效必须按它的身份 CAS。
+	probed := gen.conn.Load()
+	if probed == nil {
 		slot.reverify.Store(false)
 		return
 	}
@@ -421,8 +423,17 @@ func (t *http2Transport) reverifySlot(ctx context.Context, slot *transportSlot) 
 			"active_streams", slot.active.Load())
 		return
 	}
-	if slot.invalidateConn(gen, "suspend reverify failed") {
+	if slot.invalidateConnIf(gen, probed, "suspend reverify failed") {
 		stats.RecordSuspendReverifyReplaced()
+		return
+	}
+	// 失效落空说明这一代已经不持有被探测的连接：池里拿不到能再预约一条流的连接时 net/http
+	// 就会重拨（流数到限、tooIdle、GOAWAY 后 MarkDead 都算，旧连接未必已死），新连接顶替了
+	// 身份并应答了这次 HEAD，槽位已经自愈，换代只会把这条好连接关掉。
+	if cur := gen.conn.Load(); cur != nil && cur != probed {
+		log.Info("[TRANSPORT] suspend reverify: connection replaced during the probe",
+			"slot", slot.idx,
+			"active_streams", slot.active.Load())
 	}
 }
 

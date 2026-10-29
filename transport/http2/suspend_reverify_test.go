@@ -398,6 +398,32 @@ func TestSlotInvalidateConnIdentity(t *testing.T) {
 		}
 	})
 
+	t.Run("a stale expected identity never kills the replacement", func(t *testing.T) {
+		slot := slotWithGenFactory()
+		gen := slot.generation()
+		oldConn := &countingConn{}
+		oldID := attachConn(slot, oldConn)
+		// 探测期间 net/http 在同一代里重拨了一条：身份已被顶替，但调用方手里还是旧身份。
+		replacementConn := &countingConn{}
+		replacementID := attachConn(slot, replacementConn)
+
+		if slot.invalidateConnIf(gen, oldID, "test") {
+			t.Fatal("a stale expected identity must not win the CAS")
+		}
+		if got := oldConn.closes.Load(); got != 0 {
+			t.Fatalf("old connection closed %d times, want 0: it was already dropped by net/http", got)
+		}
+		if got := replacementConn.closes.Load(); got != 0 {
+			t.Fatalf("replacement connection closed %d times, want 0", got)
+		}
+		if slot.generation() != gen {
+			t.Fatal("a failed identity CAS must keep the generation")
+		}
+		if gen.conn.Load() != replacementID {
+			t.Fatal("the replacement must stay the generation's connection identity")
+		}
+	})
+
 	t.Run("nil identity is a no-op", func(t *testing.T) {
 		slot := &transportSlot{}
 		if slot.invalidateConn(nil, "test") {
@@ -471,6 +497,45 @@ func TestReverifySlotDecisions(t *testing.T) {
 				t.Fatal("the suspicion must be cleared once the verdict is in")
 			}
 		})
+	}
+}
+
+// TestReverifySlotKeepsConnectionReplacedDuringProbe 固定"复核期间 net/http 自己换了连接"的
+// 结局：池里没有可复用的连接它才会重拨，而新连接刚应答了这次 HEAD，槽位已经自愈。此时再按
+// 复核失败换代，关掉的恰好是刚拨出来的好连接。
+func TestReverifySlotKeepsConnectionReplacedDuringProbe(t *testing.T) {
+	oldConn := &countingConn{}
+	slot, _ := newCountingSlot(oldConn)
+	slot.reverify.Store(true)
+	gen := slot.generation()
+
+	replacement := &countingConn{}
+	var replacementID *slotConn
+	tr := &http2Transport{liveness: func(_ context.Context, g *slotTransport) (bool, bool) {
+		if g != gen {
+			t.Fatalf("liveness probed %p, want the generation reverifySlot captured", g)
+		}
+		// 模拟 DialTLSContext 的 Swap：旧连接被判不可复用，新连接应答了这次 HEAD。
+		replacementID = attachConn(slot, replacement)
+		return false, true
+	}}
+
+	tr.reverifySlot(context.Background(), slot)
+
+	if got := oldConn.closes.Load(); got != 0 {
+		t.Fatalf("old connection closed %d times, want 0: net/http already dropped it", got)
+	}
+	if got := replacement.closes.Load(); got != 0 {
+		t.Fatalf("replacement connection closed %d times, want 0", got)
+	}
+	if slot.generation() != gen {
+		t.Fatal("the slot must keep its generation: the replacement already made it usable")
+	}
+	if gen.conn.Load() != replacementID {
+		t.Fatal("the replacement must stay the generation's connection identity")
+	}
+	if slot.reverify.Load() {
+		t.Fatal("the suspicion must be cleared")
 	}
 }
 
