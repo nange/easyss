@@ -44,6 +44,44 @@ func fakeLookPath(installed ...string) func(string) (string, error) {
 	}
 }
 
+// 日志是不带 BOM 的 UTF-8：Windows PowerShell 5.1 的 Get-Content 默认按 ANSI 代码页解码，
+// 少了 -Encoding UTF8 中文就是乱码；路径必须按字面量传入并转义单引号。
+func TestWindowsLogViewerArgv(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "plain path",
+			path: `C:\Users\nange\Easyss\easyss.log`,
+			want: `Get-Content -LiteralPath 'C:\Users\nange\Easyss\easyss.log' -Wait -Tail 100 -Encoding UTF8`,
+		},
+		{
+			name: "wildcard characters stay literal",
+			path: `C:\logs [old]\easyss.log`,
+			want: `Get-Content -LiteralPath 'C:\logs [old]\easyss.log' -Wait -Tail 100 -Encoding UTF8`,
+		},
+		{
+			name: "single quote is doubled",
+			path: `C:\Users\o'neil\easyss.log`,
+			want: `Get-Content -LiteralPath 'C:\Users\o''neil\easyss.log' -Wait -Tail 100 -Encoding UTF8`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			argv := windowsLogViewerArgv(tc.path)
+			if got := strings.Join(argv[:4], " "); got != "cmd /c start powershell" {
+				t.Fatalf("launcher = %q, want cmd /c start powershell", got)
+			}
+			if got := argv[len(argv)-1]; got != tc.want {
+				t.Fatalf("script = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBinName(t *testing.T) {
 	// fake 必须在每个平台上解析出相同的可执行文件，因此这里直接断言分隔符
 	// 的处理，而不是依赖 filepath——它的 Windows 版本同样接受反斜杠。
