@@ -427,8 +427,9 @@ func (t *http2Transport) reverifySlot(ctx context.Context, slot *transportSlot) 
 		stats.RecordSuspendReverifyReplaced()
 		return
 	}
-	// 失效落空说明这一代已经不持有被探测的连接：net/http 只在池里没有可复用连接时才重拨，
-	// 新连接又刚应答过这次 HEAD，槽位已经自愈，换代只会把这条好连接关掉。
+	// 失效落空说明这一代已经不持有被探测的连接：池里拿不到能再预约一条流的连接时 net/http
+	// 就会重拨（流数到限、tooIdle、GOAWAY 后 MarkDead 都算，旧连接未必已死），新连接顶替了
+	// 身份并应答了这次 HEAD，槽位已经自愈，换代只会把这条好连接关掉。
 	if cur := gen.conn.Load(); cur != nil && cur != probed {
 		log.Info("[TRANSPORT] suspend reverify: connection replaced during the probe",
 			"slot", slot.idx,
