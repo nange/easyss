@@ -309,16 +309,15 @@ func sysProxyErrorMessage(addr string, on bool, err error) string {
 }
 
 // setupSysProxy 按配置把系统代理指向本地 HTTP 代理，返回是否改动。设置失败不使启动
-// 失败：root/systemd 下 gsettings 与用户会话总线常常不可达。
+// 失败：root/systemd 下 gsettings 与用户会话总线常常不可达。只有无界面路径调用它，
+// 失败只记日志（托盘启动走 startLocalService，能通知）。
 func (a *App) setupSysProxy() bool {
 	cfg := a.currentConfig()
 	if cfg.Local.DisableSysProxy || cfg.Local.HTTPPort <= 0 {
 		return false
 	}
-	addr := sysproxy.Addr(cfg)
-	if err := a.setSysProxyOn(addr); err != nil {
+	if err := a.setSysProxyOn(sysproxy.Addr(cfg)); err != nil {
 		log.Warn("[EASYSS-V3] set system proxy failed, you may need to configure it manually", "err", err)
-		a.notifySysProxyError(addr, true, err)
 		return false
 	}
 	return true

@@ -150,46 +150,6 @@ func TestAppCloseRevertsEvenWhenNotApplied(t *testing.T) {
 	}
 }
 
-// 设置失败必须让用户看到原因：托盘的"浏览器(设置系统代理)"仍显示勾选，
-// 静默失败会让用户以为代理已经生效。
-func TestSetupSysProxyFailureNotifiesUI(t *testing.T) {
-	app := testApp(clientconfig.LocalConfig{HTTPPort: 5080})
-	ui := newStubAppUI()
-	app.ui = ui
-	_, _ = stubSysProxy(app, errors.New("gsettings: command not found"))
-
-	if app.setupSysProxy() {
-		t.Fatal("setupSysProxy = true, want false when applying fails")
-	}
-
-	select {
-	case msg := <-ui.notices:
-		for _, want := range []string{"设置系统代理失败", "127.0.0.1:5080", "gsettings: command not found"} {
-			if !strings.Contains(msg, want) {
-				t.Fatalf("notification %q missing %q", msg, want)
-			}
-		}
-	default:
-		t.Fatal("a failed apply must notify the user")
-	}
-}
-
-func TestSetupSysProxySuccessDoesNotNotify(t *testing.T) {
-	app := testApp(clientconfig.LocalConfig{HTTPPort: 5080})
-	ui := newStubAppUI()
-	app.ui = ui
-	_, _ = stubSysProxy(app, nil)
-
-	if !app.setupSysProxy() {
-		t.Fatal("setupSysProxy = false, want true")
-	}
-	select {
-	case msg := <-ui.notices:
-		t.Fatalf("unexpected notification %q", msg)
-	default:
-	}
-}
-
 // 部分写入且补偿失败时系统代理可能仍指向本地端口：必须记为"已改动"，
 // 退出时才会再撤销一次。
 func TestSetSysProxyOnKeepsResidualApplied(t *testing.T) {

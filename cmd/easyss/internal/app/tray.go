@@ -529,6 +529,7 @@ func (a *trayApp) startLocalService() {
 			a.notifySysProxyError(addr, true, err)
 		}
 	} else {
+		// 只记日志：本地入口已监听，残留代理仍指向可用端口；退出时 Close 还会再撤一次。
 		if err := a.setSysProxyOff(); err != nil {
 			log.Error("[SYSTRAY] start local: set sysproxy off", "err", err)
 		}
