@@ -19,16 +19,6 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
-      - name: Cache go module
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-
       - name: Set up Java
         uses: actions/setup-java@v6
         with:
