@@ -65,8 +65,11 @@ func TestForwardServerShutdownRacingStartReleasesSocket(t *testing.T) {
 	for i := range 20 {
 		srv := NewForwardServer("127.0.0.1:0", false, alwaysTunActive)
 
-		startDone := make(chan error, 1)
-		go func() { startDone <- srv.Start() }()
+		startDone := make(chan struct{}, 1)
+		go func() {
+			_ = srv.Start()
+			startDone <- struct{}{}
+		}()
 
 		if err := srv.Shutdown(); err != nil {
 			t.Fatalf("iteration #%d: Shutdown: %v", i, err)
@@ -117,7 +120,9 @@ func TestForwardServerShutdownIsIdempotent(t *testing.T) {
 	}
 
 	select {
-	case <-startDone:
+	case err := <-startDone:
+		// 只固定"有界返回"：Shutdown 先到还是 serve 循环先起，决定 Start 返回 nil 还是 net.ErrClosed。
+		_ = err
 	case <-time.After(forwardLifecycleBudget):
 		t.Fatal("Start did not return after Shutdown")
 	}

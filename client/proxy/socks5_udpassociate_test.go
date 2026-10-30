@@ -25,8 +25,11 @@ func TestSocks5UDPAssociateRelaysDatagram(t *testing.T) {
 	}
 
 	srv := newTestSocks5ServerWithRouter(t, freeLoopbackAddr(t), rt)
-	startDone := make(chan error, 1)
-	go func() { startDone <- srv.Start() }()
+	startDone := make(chan struct{}, 1)
+	go func() {
+		_ = srv.Start()
+		startDone <- struct{}{}
+	}()
 	t.Cleanup(func() {
 		_ = srv.Close()
 		select {
@@ -193,8 +196,11 @@ func TestSocks5UDPAssociateDropsFragmentedDatagram(t *testing.T) {
 		t.Fatalf("router.New: %v", err)
 	}
 	srv := newTestSocks5ServerWithRouter(t, freeLoopbackAddr(t), rt)
-	startDone := make(chan error, 1)
-	go func() { startDone <- srv.Start() }()
+	startDone := make(chan struct{}, 1)
+	go func() {
+		_ = srv.Start()
+		startDone <- struct{}{}
+	}()
 	t.Cleanup(func() {
 		_ = srv.Close()
 		select {
@@ -244,8 +250,11 @@ func TestSocks5UDPAssociateConcurrent(t *testing.T) {
 		t.Fatalf("router.New: %v", err)
 	}
 	srv := newTestSocks5ServerWithRouter(t, freeLoopbackAddr(t), rt)
-	startDone := make(chan error, 1)
-	go func() { startDone <- srv.Start() }()
+	startDone := make(chan struct{}, 1)
+	go func() {
+		_ = srv.Start()
+		startDone <- struct{}{}
+	}()
 	t.Cleanup(func() {
 		_ = srv.Close()
 		select {
@@ -327,8 +336,11 @@ func TestSocks5PipelinedConnectPayload(t *testing.T) {
 		t.Fatalf("router.New: %v", err)
 	}
 	srv := newTestSocks5ServerWithRouter(t, freeLoopbackAddr(t), rt)
-	startDone := make(chan error, 1)
-	go func() { startDone <- srv.Start() }()
+	startDone := make(chan struct{}, 1)
+	go func() {
+		_ = srv.Start()
+		startDone <- struct{}{}
+	}()
 	t.Cleanup(func() {
 		_ = srv.Close()
 		select {
@@ -442,8 +454,11 @@ func TestSocks5UDPAssociateSurvivesOtherAssociations(t *testing.T) {
 		t.Fatalf("router.New: %v", err)
 	}
 	srv := newTestSocks5ServerWithRouter(t, freeLoopbackAddr(t), rt)
-	startDone := make(chan error, 1)
-	go func() { startDone <- srv.Start() }()
+	startDone := make(chan struct{}, 1)
+	go func() {
+		_ = srv.Start()
+		startDone <- struct{}{}
+	}()
 	t.Cleanup(func() {
 		_ = srv.Close()
 		select {
@@ -554,8 +569,11 @@ func TestTCPHalfClosePropagatesToClient(t *testing.T) {
 		t.Fatalf("router.New: %v", err)
 	}
 	srv := newTestSocks5ServerWithRouter(t, freeLoopbackAddr(t), rt)
-	startDone := make(chan error, 1)
-	go func() { startDone <- srv.Start() }()
+	startDone := make(chan struct{}, 1)
+	go func() {
+		_ = srv.Start()
+		startDone <- struct{}{}
+	}()
 	t.Cleanup(func() {
 		_ = srv.Close()
 		select {

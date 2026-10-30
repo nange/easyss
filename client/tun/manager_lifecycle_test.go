@@ -78,8 +78,11 @@ func TestManagerStopWhileStarting(t *testing.T) {
 		return nil
 	}
 
-	startDone := make(chan error, 1)
-	go func() { startDone <- m.Start() }()
+	startDone := make(chan struct{}, 1)
+	go func() {
+		_ = m.Start()
+		startDone <- struct{}{}
+	}()
 
 	select {
 	case <-inStart:

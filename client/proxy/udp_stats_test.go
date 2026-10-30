@@ -266,8 +266,11 @@ func TestUDPDirectRelayExcludedFromSpeedCounters(t *testing.T) {
 		t.Fatalf("router.New: %v", err)
 	}
 	srv := newTestSocks5ServerWithRouter(t, freeLoopbackAddr(t), rt)
-	startDone := make(chan error, 1)
-	go func() { startDone <- srv.Start() }()
+	startDone := make(chan struct{}, 1)
+	go func() {
+		_ = srv.Start()
+		startDone <- struct{}{}
+	}()
 	t.Cleanup(func() {
 		_ = srv.Close()
 		select {
