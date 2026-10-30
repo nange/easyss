@@ -1,0 +1,28 @@
+version: 2
+
+updates:
+  # GitHub Actions：dev/release/nightly/codeql 里所有 uses: 的版本
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # go.mod / go.sum：含 tool 块里的 golangci-lint、gomobile、gobind
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+    groups:
+      go-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      go-major:
+        patterns: ["*"]
+        update-types: ["major"]

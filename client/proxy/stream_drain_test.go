@@ -142,7 +142,8 @@ func TestStreamRelayKeepsIdleStreamOnHealthySlot(t *testing.T) {
 	// 关闭流以干净地结束中继。
 	_ = stream.Close()
 	select {
-	case <-done:
+	case err := <-done:
+		_ = err
 	case <-time.After(2 * time.Second):
 		t.Fatal("relay did not end after the stream was closed")
 	}
