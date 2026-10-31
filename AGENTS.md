@@ -69,7 +69,7 @@ make easyss-headless       # 无托盘/Android
 make easyss-android-aar    # 需要 JDK；gomobile/gobind 安装见 Makefile 注释
 make icons                 # 重新生成 macOS 图标（sips/iconutil）
 make syso                  # 重新生成 Windows 资源（rsrc）
-make worktree-clean        # 清理 .agents/worktrees 下的 agent 工作树（不删分支）
+make worktree-clean        # 清理 .agents/worktrees 下的 agent 工作树并删除其分支
 ```
 
 ### CI / 发布（产物写在 `bin/<os>-<arch>/`）
@@ -128,7 +128,7 @@ Makefile 用 `-ldflags -X` 只注入 `version.Name`、`GitTag`、`BuildDate`；`
 - 注释约定：代码注释只写"读代码看不出来、写错会静默出错"的两类事实——顺序/锁/生命周期约束，以及外部系统行为或跨包契约。不写代码演进史（"过去…现在…"、"取代了某某"），不写枚举式清单（"只有这五个方法会写这个字段"）——这类表述一旦过时就成了错误文档；设计取舍与历史写在 commit message 或本文件。单个注释块不超过 3 行，函数名已经说清楚的不要再加 godoc
 - 始终使用简体中文回复我
 - git commit 信息使用英文，尽量简洁，格式参考 git log 历史记录
-- **git worktree**：仅当当前处于 `master` 分支时，代码改动才先建 worktree 再改，目录固定为 `.agents/worktrees/<name>`（`<name>` 可用 `type/name` 分层），从当前 HEAD 或用户指定的 base 新建分支；已经在功能分支或用户指定分支/工作树上时直接改。该目录不提交，清理用 `make worktree-clean`（只删 `.agents/worktrees/` 下的工作树，不删分支）。
+- **git worktree**：仅当当前处于 `master` 分支时，代码改动才先建 worktree 再改，目录固定为 `.agents/worktrees/<name>`（`<name>` 可用 `type/name` 分层），从当前 HEAD 或用户指定的 base 新建分支；已经在功能分支或用户指定分支/工作树上时直接改。该目录不提交，清理用 `make worktree-clean`（删除 `.agents/worktrees/` 下的工作树及其检出的分支，分支强制删除）。
 - 在用户没有明确要求提交代码前，都不提交代码
 - 提交代码前，先执行`make lint`，检查代码风格，存在问题则需要先修复再提交代码
 - **review PR**：目标是简洁高效——先确认代码是否已在本地（`git worktree list`、`.agents/worktrees/`、`git branch -r`、`git log --all` 里的 head 提交），命中就直接在该工作树/分支评审（需要最新提交只 `git fetch`），本地确实没有才 clone 或下载补丁；评审从 PR 描述与改动范围入手，只输出影响正确性、跨包契约或明显维护成本的问题，结论先行并给出文件/行号与依据，不逐段复述 diff、不凑格式性建议

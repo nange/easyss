@@ -168,23 +168,31 @@ verify: lint test-race
 clean:
 	rm -rf $(PLATFORM_DIRS) $(BIN)/*.zip $(BIN)/libeasyss.aar
 
-# 只清理 $(WORKTREE_DIR) 下的 agent 工作树：当前工作树、其他路径的 worktree 与分支都不动。
-# 目录已不存在的条目交给 git worktree prune 回收元数据。
+# 只清理 $(WORKTREE_DIR) 下的 agent 工作树，连同它们检出的分支一起删除：当前工作树、
+# 其他路径的 worktree 与分支都不动。目录已不存在的条目由 git worktree prune 回收元数据，
+# 其分支同样按记录删除。
 worktree-clean:
 	@root="$$(git rev-parse --show-toplevel)"; \
+	prefix="$$root/$(WORKTREE_DIR)/"; \
 	list="$$(mktemp)"; \
-	git worktree list --porcelain | sed -n 's/^worktree //p' > "$$list"; \
-	while IFS= read -r wt; do \
-		case "$$wt" in \
-			"$$root/$(WORKTREE_DIR)"/*) \
-				if [ -d "$$wt" ]; then \
-					echo "Removing worktree $$wt"; \
-					git worktree remove --force "$$wt" || { rm -f "$$list"; exit 1; }; \
-				fi ;; \
-		esac; \
+	git worktree list --porcelain | awk -v p="$$prefix" ' \
+		/^worktree / { wt = substr($$0, 10); br = "" } \
+		/^branch /   { br = $$0; sub(/^branch refs\/heads\//, "", br) } \
+		/^$$/        { if (substr(wt, 1, length(p)) == p) { print wt; print br } } \
+	' > "$$list"; \
+	while IFS= read -r wt && IFS= read -r br; do \
+		if [ -d "$$wt" ]; then \
+			echo "Removing worktree $$wt"; \
+			git worktree remove --force "$$wt" || { rm -f "$$list"; exit 1; }; \
+		fi; \
+	done < "$$list"; \
+	git worktree prune; \
+	while IFS= read -r wt && IFS= read -r br; do \
+		if [ -n "$$br" ]; then \
+			git branch -D "$$br" || { rm -f "$$list"; exit 1; }; \
+		fi; \
 	done < "$$list"; \
 	rm -f "$$list"; \
-	git worktree prune; \
 	if [ -d "$$root/$(WORKTREE_DIR)" ]; then \
 		find "$$root/$(WORKTREE_DIR)" -depth -type d -empty -delete; \
 	fi
