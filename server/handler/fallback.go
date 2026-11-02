@@ -261,10 +261,9 @@ func resolveFooter(dep *deployment, footer string) string {
 
 // 内容只含本包生成的十六进制标记，以 template.HTML 注入是安全的。
 func headExtras(dep *deployment) template.HTML {
-	token := hexToken(dep.seed, "asset")
 	return template.HTML(fmt.Sprintf(
-		`<link rel="icon" href="/favicon-%s.ico">%s<meta name="generator" content="%s">`,
-		token, "\n    ", pickBuildTag(dep.seed)))
+		`<link rel="icon" href="%s">%s<meta name="generator" content="%s">`,
+		dep.faviconPath, "\n    ", pickBuildTag(dep.seed)))
 }
 
 func bodyClass(pageType string) string {
@@ -530,6 +529,12 @@ func (fb *Fallback) Serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 页面头部声明过的图标必须真的存在，否则引用本身就是"本站没有静态资源"的证据。
+	if path == fb.dep.faviconPath || path == "/favicon.ico" {
+		fb.serveFavicon(w, r)
+		return
+	}
+
 	// 自动生成页走完整的 HTTP 真实性层：未知路径返回 404，并补齐 ETag/Last-Modified/条件请求。
 	fb.serveGeneratedPage(w, r, path)
 }
@@ -544,10 +549,26 @@ func writeRawFallback(w http.ResponseWriter, content []byte) {
 
 // 补齐真实静态站点会有的响应头与条件请求语义。
 func (fb *Fallback) serveGeneratedPage(w http.ResponseWriter, r *http.Request, path string) {
-	body := fb.getOrRenderHTML(path)
-	lastModified := fb.dep.lastModified
+	res := fallbackResource{
+		body:         fb.getOrRenderHTML(path),
+		contentType:  "text/html; charset=utf-8",
+		lastModified: fb.dep.lastModified,
+		status:       generatedStatus(r, path),
+	}
+	if body := serveFallbackResource(w, r, res); body != nil {
+		w.Write(body) //nolint:errcheck
+	}
+}
 
-	if prepareFallbackResponse(w, r, body, lastModified, generatedStatus(r, path)) {
+// 图标与页面共用同一层 HTTP 语义，只有内容类型不同。
+func (fb *Fallback) serveFavicon(w http.ResponseWriter, r *http.Request) {
+	res := fallbackResource{
+		body:         fb.dep.favicon,
+		contentType:  "image/x-icon",
+		lastModified: fb.dep.lastModified,
+		status:       http.StatusOK,
+	}
+	if body := serveFallbackResource(w, r, res); body != nil {
 		w.Write(body) //nolint:errcheck
 	}
 }

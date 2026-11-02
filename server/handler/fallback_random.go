@@ -25,6 +25,9 @@ type deployment struct {
 	tagline      string
 	lastModified time.Time
 	footerNotice string
+	// 页面头部引用的图标与其字节都取自同一部署身份，两者不能各算各的。
+	faviconPath string
+	favicon     []byte
 }
 
 // fallbackVariant 生产路径用零值（crypto/rand 生成种子），测试用固定值得到可复现输出。
@@ -36,7 +39,8 @@ type fallbackVariant struct {
 func newDeployment(v fallbackVariant) *deployment {
 	seed := initialSeed(v.Seed)
 	theme := pickTheme(seed, v.Theme)
-	theme.CSS = template.CSS(substituteTokens(string(theme.CSS), themePalette(seed, theme)))
+	palette := themePalette(seed, theme)
+	theme.CSS = template.CSS(substituteTokens(string(theme.CSS), palette))
 
 	d := &deployment{
 		seed:         seed,
@@ -46,6 +50,8 @@ func newDeployment(v fallbackVariant) *deployment {
 		tagline:      pickTagline(seed),
 		lastModified: newLastModified(seed),
 		footerNotice: newFooterNotice(seed),
+		faviconPath:  "/favicon-" + hexToken(seed, "asset") + ".ico",
+		favicon:      newFavicon(seed, palette),
 	}
 	log.Debug("[SERVER] fallback deployment identity",
 		"theme", theme.Name, "site", d.site.Name,

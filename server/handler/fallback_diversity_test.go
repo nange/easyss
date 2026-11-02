@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -133,8 +134,8 @@ func TestInitFallback_DeploymentSpace(t *testing.T) {
 	homes := make(map[string]int)
 	for i := range 50 {
 		fb := withDeployment(t, seedOf(100+i), "")
-		palettes[strongETag([]byte(fb.dep.theme.CSS))]++
-		homes[strongETag(fb.renderPage("/"))]++
+		palettes[string(fb.dep.theme.CSS)]++
+		homes[string(fb.renderPage("/"))]++
 	}
 
 	if distinct := len(palettes); distinct < 45 {
@@ -673,18 +674,180 @@ func TestServeFallback_Head(t *testing.T) {
 	}
 }
 
-func TestServeFallback_ETagStablePerDeployment(t *testing.T) {
+// ETag 必须是 nginx 对静态文件的 "<十六进制 mtime>-<十六进制长度>" 形态且稳定可复现：
+// 十六进制内容摘要的形态是构建工具/框架的特征，与静态站身份不符。
+func TestServeFallback_ETagShape(t *testing.T) {
 	fb := withDeployment(t, seedOf(804), "")
-	first := doFallback(fb, "/about", nil, http.MethodGet).Header().Get("ETag")
-	second := doFallback(fb, "/about", nil, http.MethodGet).Header().Get("ETag")
-	if first != second {
-		t.Errorf("ETag changed within a deployment: %q -> %q", first, second)
+
+	first := doFallback(fb, "/about", nil, http.MethodGet)
+	want := fmt.Sprintf(`"%x-%x"`, fb.dep.lastModified.Unix(), first.Body.Len())
+	if got := first.Header().Get("ETag"); got != want {
+		t.Errorf("ETag = %q, want %q", got, want)
+	}
+	// ETag 的 mtime 与 Last-Modified 必须同源，否则两个验证器互相矛盾。
+	lm, err := http.ParseTime(first.Header().Get("Last-Modified"))
+	if err != nil {
+		t.Fatalf("parse Last-Modified: %v", err)
+	}
+	if lm.Unix() != fb.dep.lastModified.Unix() {
+		t.Errorf("Last-Modified = %v, want %v", lm, fb.dep.lastModified)
 	}
 
-	other := withDeployment(t, seedOf(805), "")
-	otherETag := doFallback(other, "/about", nil, http.MethodGet).Header().Get("ETag")
-	if otherETag == first {
-		t.Error("ETag identical across deployments")
+	second := doFallback(fb, "/about", nil, http.MethodGet).Header().Get("ETag")
+	if second != first.Header().Get("ETag") {
+		t.Errorf("ETag changed within a deployment: %q -> %q", first.Header().Get("ETag"), second)
+	}
+}
+
+// 声明了 Accept-Ranges: bytes 就必须真的实现 Range：对 10 字节区间回整份 200 是最容易
+// 复现的"不是真实静态服务器"证据，越界区间则必须是 416 而不是整份内容。
+func TestServeFallback_Range(t *testing.T) {
+	fb := withDeployment(t, seedOf(807), "")
+	full := doFallback(fb, "/about", nil, http.MethodGet)
+	size := full.Body.Len()
+
+	tests := []struct {
+		name       string
+		spec       string
+		wantStatus int
+		wantLen    int
+		wantRange  string
+	}{
+		{"前缀区间", "bytes=0-9", http.StatusPartialContent, 10, fmt.Sprintf("bytes 0-9/%d", size)},
+		{"开区间", "bytes=10-", http.StatusPartialContent, size - 10, fmt.Sprintf("bytes 10-%d/%d", size-1, size)},
+		{"后缀区间", "bytes=-10", http.StatusPartialContent, 10, fmt.Sprintf("bytes %d-%d/%d", size-10, size-1, size)},
+		{"末尾越界按长度截断", fmt.Sprintf("bytes=%d-", size-3), http.StatusPartialContent, 3,
+			fmt.Sprintf("bytes %d-%d/%d", size-3, size-1, size)},
+		{"完全越界", fmt.Sprintf("bytes=%d-", size), http.StatusRequestedRangeNotSatisfiable, 0,
+			fmt.Sprintf("bytes */%d", size)},
+		{"多区间按允许的忽略处理", "bytes=0-1,3-4", http.StatusOK, size, ""},
+		{"非 bytes 单位忽略", "items=0-1", http.StatusOK, size, ""},
+		{"start 大于 end 忽略", "bytes=9-3", http.StatusOK, size, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := doFallback(fb, "/about", map[string]string{"Range": tt.spec}, http.MethodGet)
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if rec.Body.Len() != tt.wantLen {
+				t.Errorf("body = %d bytes, want %d", rec.Body.Len(), tt.wantLen)
+			}
+			if got := rec.Header().Get("Content-Range"); got != tt.wantRange {
+				t.Errorf("Content-Range = %q, want %q", got, tt.wantRange)
+			}
+			if tt.wantStatus == http.StatusPartialContent &&
+				!bytes.Contains(full.Body.Bytes(), rec.Body.Bytes()) {
+				t.Error("partial body is not a slice of the full page")
+			}
+		})
+	}
+
+	// 前缀区间逐字节核对，避免上面只比较长度。
+	prefix := doFallback(fb, "/about", map[string]string{"Range": "bytes=0-9"}, http.MethodGet)
+	if !bytes.Equal(prefix.Body.Bytes(), full.Body.Bytes()[:10]) {
+		t.Error("range body does not match the page prefix")
+	}
+
+	// If-Range 不匹配时回整份内容；匹配当前验证器时仍按区间处理（RFC 9110 §13.1.5）。
+	stale := doFallback(fb, "/about", map[string]string{
+		"Range": "bytes=0-9", "If-Range": `"stale"`,
+	}, http.MethodGet)
+	if stale.Code != http.StatusOK || stale.Body.Len() != size {
+		t.Errorf("stale If-Range: status = %d, body = %d, want 200 and %d bytes",
+			stale.Code, stale.Body.Len(), size)
+	}
+	weak := doFallback(fb, "/about", map[string]string{
+		"Range": "bytes=0-9", "If-Range": "W/" + full.Header().Get("ETag"),
+	}, http.MethodGet)
+	if weak.Code != http.StatusOK {
+		t.Errorf("weak If-Range: status = %d, want 200", weak.Code)
+	}
+	fresh := doFallback(fb, "/about", map[string]string{
+		"Range": "bytes=0-9", "If-Range": full.Header().Get("ETag"),
+	}, http.MethodGet)
+	if fresh.Code != http.StatusPartialContent {
+		t.Errorf("matching If-Range: status = %d, want 206", fresh.Code)
+	}
+}
+
+// 页面头部声明的图标必须是一张合法 ICO（而不是回退页），并且与 /favicon.ico 同一份内容：
+// 被引用却不存在的静态资源是最直白的"本站没有资源目录"证据。
+func TestServeFallback_Favicon(t *testing.T) {
+	fb := withDeployment(t, seedOf(808), "")
+
+	home := doFallback(fb, "/", nil, http.MethodGet).Body.String()
+	if !strings.Contains(home, `href="`+fb.dep.faviconPath+`"`) {
+		t.Fatalf("home page does not reference %q", fb.dep.faviconPath)
+	}
+
+	icon := doFallback(fb, fb.dep.faviconPath, nil, http.MethodGet)
+	if icon.Code != http.StatusOK {
+		t.Fatalf("favicon status = %d, want 200", icon.Code)
+	}
+	if got := icon.Header().Get("Content-Type"); got != "image/x-icon" {
+		t.Errorf("Content-Type = %q, want image/x-icon", got)
+	}
+	for _, header := range []string{"ETag", "Last-Modified", "Content-Length"} {
+		if icon.Header().Get(header) == "" {
+			t.Errorf("missing %s header", header)
+		}
+	}
+
+	body := icon.Body.Bytes()
+	if len(body) < faviconHeaderLen {
+		t.Fatalf("icon is %d bytes, too short for an ICO header", len(body))
+	}
+	if got := binary.LittleEndian.Uint16(body[2:]); got != 1 {
+		t.Errorf("ICO type = %d, want 1", got)
+	}
+	if got := binary.LittleEndian.Uint16(body[4:]); got != 1 {
+		t.Errorf("ICO image count = %d, want 1", got)
+	}
+	if body[6] != faviconSize || body[7] != faviconSize {
+		t.Errorf("ICO size = %dx%d, want %dx%d", body[6], body[7], faviconSize, faviconSize)
+	}
+	if got := binary.LittleEndian.Uint16(body[12:]); got != 32 {
+		t.Errorf("ICO bit depth = %d, want 32", got)
+	}
+	imageLen := binary.LittleEndian.Uint32(body[14:])
+	imageOff := binary.LittleEndian.Uint32(body[18:])
+	if int(imageOff) != faviconHeaderLen || int(imageOff)+int(imageLen) != len(body) {
+		t.Errorf("ICO image segment = offset %d len %d, want offset %d and total %d",
+			imageOff, imageLen, faviconHeaderLen, len(body))
+	}
+	// BMP 图像段：BITMAPINFOHEADER + 16×16×4 的 BGRA 像素 + 每行 4 字节对齐的 AND 掩码。
+	wantImageLen := faviconBitmapInfoLen + faviconSize*faviconSize*4 + faviconSize*4
+	if int(imageLen) != wantImageLen {
+		t.Errorf("ICO image length = %d, want %d", imageLen, wantImageLen)
+	}
+
+	// 浏览器直接请求的 /favicon.ico 必须是同一张图。
+	direct := doFallback(fb, "/favicon.ico", nil, http.MethodGet)
+	if !bytes.Equal(direct.Body.Bytes(), body) {
+		t.Error("/favicon.ico differs from the declared icon")
+	}
+
+	// 图标与页面共用同一层 HTTP 语义：条件请求回 304。
+	notModified := doFallback(fb, fb.dep.faviconPath,
+		map[string]string{"If-None-Match": icon.Header().Get("ETag")}, http.MethodGet)
+	if notModified.Code != http.StatusNotModified {
+		t.Errorf("conditional favicon status = %d, want 304", notModified.Code)
+	}
+}
+
+// 图标按部署种子生成：不同部署的内容与配色不同，同一部署内稳定可复现。
+func TestFavicon_PerDeployment(t *testing.T) {
+	first := withDeployment(t, seedOf(809), "").dep.favicon
+	again := withDeployment(t, seedOf(809), "").dep.favicon
+	if !bytes.Equal(first, again) {
+		t.Error("favicon is not reproducible for the same seed")
+	}
+
+	other := withDeployment(t, seedOf(810), "").dep.favicon
+	if bytes.Equal(first, other) {
+		t.Error("favicon identical across deployments")
 	}
 }
 

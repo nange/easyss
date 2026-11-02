@@ -18,7 +18,9 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-// 这些请求已经证明持有主密钥（或被限流、等待握手记录超时），真实状态码才是可信的。
+// 真实状态码只用于已有证据的失败：请求已被证明持有主密钥（端点/方法/目标不匹配），或是
+// nginx 对同类请求同样会给出的应答（停滞的请求体 408、持续超限后的 429）。其余失败一律
+// 返回伪装页，否则"同一请求第二次得到 400"本身就足以识别服务端实现。
 func serveReject(w http.ResponseWriter, code int) {
 	w.WriteHeader(code)
 }
@@ -86,10 +88,12 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 	}
 
 	// 见过的 salt 意味着记录正在被重放：接受它会重新拨号目标并重新投递第一个数据包。
+	// 走到这里还没有任何证据表明请求者持有密钥（扫描器发的随机 salt 也会被记下），因此
+	// 拒绝必须与"没有密钥"给出完全相同的响应，两个相同请求之间不能有状态机差异。
 	if h.saltCache.MarkSeen(r.URL.Path, salt) {
 		log.Debug("[SERVER] replayed salt", "remote", r.RemoteAddr, "endpoint", r.URL.Path)
 		stats.RecordServerHandshakeError()
-		serveReject(w, http.StatusBadRequest)
+		h.serveFallback(w, r)
 		return handshakeResult{}, false
 	}
 
