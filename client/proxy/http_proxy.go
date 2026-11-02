@@ -104,8 +104,10 @@ func NewHTTPProxyServer(opts HTTPProxyOptions) (*HTTPProxyServer, error) {
 		dial = defaultDirectDialContext
 	}
 
+	// 拨本地 SOCKS5 的 URL 必须与入口的鉴权判据同源：只配一项时入口并未启用鉴权，
+	// 这里塞 userinfo 会让反代链路带上无人认领的凭据。
 	socksURL := &url.URL{Scheme: "socks5", Host: socksAddr}
-	if opts.Username != "" || opts.Password != "" {
+	if AuthEnabled(opts.Username, opts.Password) {
 		socksURL.User = url.UserPassword(opts.Username, opts.Password)
 	}
 
@@ -482,8 +484,9 @@ func writeConnectFailure(conn net.Conn) {
 }
 
 func (s *HTTPProxyServer) dialSOCKS5(target string) (net.Conn, error) {
+	// 与 authOK 同一个判据：只配一项等同未启用，否则这里会带着空的一半去协商。
 	var auth *xproxy.Auth
-	if s.username != "" || s.password != "" {
+	if AuthEnabled(s.username, s.password) {
 		auth = &xproxy.Auth{User: s.username, Password: s.password}
 	}
 

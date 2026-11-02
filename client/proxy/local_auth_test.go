@@ -148,6 +148,42 @@ func TestHTTPProxyAuthOK(t *testing.T) {
 	}
 }
 
+// TestHTTPProxySocksURLFollowsAuthPredicate 固定拨本地 SOCKS5 的凭据判据与入口同源：
+// 只配一项时入口并未启用鉴权，反代链路的 socks5 URL 也不能带 userinfo。
+func TestHTTPProxySocksURLFollowsAuthPredicate(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		username string
+		password string
+		wantUser bool
+	}{
+		{"未配置", "", "", false},
+		{"只配用户名", "user", "", false},
+		{"只配密码", "", "pass", false},
+		{"同时配置", "user", "pass", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s, err := NewHTTPProxyServer(HTTPProxyOptions{
+				ListenAddr: "127.0.0.1:5080",
+				SocksAddr:  "127.0.0.1:4080",
+				Username:   tc.username,
+				Password:   tc.password,
+			})
+			if err != nil {
+				t.Fatalf("NewHTTPProxyServer: %v", err)
+			}
+			if got := s.socksURL.User != nil; got != tc.wantUser {
+				t.Errorf("socksURL.User set = %v, want %v (user=%q pass=%q)",
+					got, tc.wantUser, tc.username, tc.password)
+			}
+		})
+	}
+}
+
 // TestSocks5LoopbackSkipsAuth 端到端固定协商行为：鉴权开启后，回环客户端只声明 no-auth
 // 仍被接受；同时声明两种方法时服务端必须选 UserPass（顺序契约）。
 func TestSocks5LoopbackSkipsAuth(t *testing.T) {
