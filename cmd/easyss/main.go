@@ -187,6 +187,15 @@ func main() {
 		"proxy_file", cfg.Routing.ProxyFile,
 	)
 
+	// 客户端只告警不拒绝：真正的闸门在服务端（serverconfig.validatePassword），
+	// 这里让用户在自己的日志里看到口令弱到什么程度。
+	if srv := cfg.DefaultServer(); srv != nil && config.PasswordWeak(srv.Password) {
+		log.Warn("[EASYSS-V3] server password is shorter than the recommended length",
+			"server", cfg.DefaultServerAddr(),
+			"recommended_min", config.WarnPasswordLen,
+			"hint", "generate one with: openssl rand -hex 24")
+	}
+
 	application := app.New(cfg, configFile)
 	application.Run(disableTray, daemon, restart.Enabled())
 }

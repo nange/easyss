@@ -159,6 +159,9 @@ func LoadConfig(path string) (*FileConfig, error) {
 // Validate 由 LoadConfig 与 server.New 共用：测试与嵌入式调用会直接手搓 FileConfig，
 // 不能只依赖配置文件路径上的校验。
 func (fc *FileConfig) Validate() error {
+	if err := fc.validatePassword(); err != nil {
+		return err
+	}
 	if err := fc.validateAllowedMethods(); err != nil {
 		return err
 	}
@@ -169,6 +172,15 @@ func (fc *FileConfig) Validate() error {
 		return err
 	}
 	return fc.validateListenOrDefault()
+}
+
+// 服务端是在线猜测的唯一目标，猜中即拿到全部出入流量，短口令只能在这里拒绝启动。
+// 空口令（0 字符）放行给 DeriveMasterKey 的 ErrPasswordEmpty，两者都是启动期失败。
+func (fc *FileConfig) validatePassword() error {
+	if err := config.CheckPassword(fc.Server.Password); err != nil {
+		return fmt.Errorf("server.password: %w", err)
+	}
+	return nil
 }
 
 // validateAllowedMethods 不能依赖运行期过滤：MethodFromString 对无法识别的值返回 0，

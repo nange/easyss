@@ -14,11 +14,12 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/pprof"
 	"github.com/nange/easyss/v3/selfupdate"
 	"github.com/nange/easyss/v3/server"
-	"github.com/nange/easyss/v3/server/config"
+	serverconfig "github.com/nange/easyss/v3/server/config"
 	"github.com/nange/easyss/v3/util"
 	"github.com/nange/easyss/v3/version"
 )
@@ -78,7 +79,7 @@ func main() {
 
 	// 版本校验、默认值（timeout/log.level）与相对文件路径（证书、代理列表、
 	// 日志文件）解析都在 config.LoadConfig 内完成（见 server/config/config.go）。
-	fileCfg, err := config.LoadConfig(configFile)
+	fileCfg, err := serverconfig.LoadConfig(configFile)
 	if err != nil {
 		log.Error("[EASYSS-SERVER-V3] load config", "err", err, "file", configFile)
 		os.Exit(1)
@@ -102,6 +103,14 @@ func main() {
 		"cert", fileCfg.Server.CertPath,
 		"key", fileCfg.Server.KeyPath,
 	)
+
+	// 口令强度只在服务端校验（见 serverconfig.validatePassword）；这里把 8-15 字符的
+	// 存量口令变成每次启动都能看到的告警。
+	if config.PasswordWeak(fileCfg.Server.Password) {
+		log.Warn("[EASYSS-SERVER-V3] server.password is shorter than the recommended length; online guessing is limited only by the rate limiter",
+			"recommended_min", config.WarnPasswordLen,
+			"hint", "generate one with: openssl rand -hex 24")
+	}
 
 	var pprofSrv *http.Server
 	if fileCfg.PprofEnabled {
@@ -144,6 +153,6 @@ func main() {
 }
 
 func exampleV3ServerConfig() string {
-	b, _ := json.MarshalIndent(config.ExampleConfig(), "", "  ")
+	b, _ := json.MarshalIndent(serverconfig.ExampleConfig(), "", "  ")
 	return string(b)
 }

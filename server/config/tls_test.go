@@ -98,18 +98,18 @@ func TestValidateTLS(t *testing.T) {
 // 一份注定签不下证书的 IP-only 配置必须在进程启动前就被拒绝。
 func TestLoadConfigValidatesTLS(t *testing.T) {
 	t.Run("公网 IPv4 通过", func(t *testing.T) {
-		fc, err := LoadConfig(writeConfig(t, `{"server":{"host":"1.2.3.4","port":443,"password":"p"}}`))
+		fc, err := LoadConfig(writeConfig(t, `{"server":{"host":"1.2.3.4","port":443,"password":"test-pass"}}`))
 		require.NoError(t, err)
 		require.Equal(t, "1.2.3.4", fc.Server.Host)
 	})
 
 	t.Run("私有地址启动失败", func(t *testing.T) {
-		_, err := LoadConfig(writeConfig(t, `{"server":{"host":"192.168.1.10","port":443,"password":"p"}}`))
+		_, err := LoadConfig(writeConfig(t, `{"server":{"host":"192.168.1.10","port":443,"password":"test-pass"}}`))
 		require.ErrorContains(t, err, "private or reserved")
 	})
 
 	t.Run("IPv6 字面量启动失败", func(t *testing.T) {
-		_, err := LoadConfig(writeConfig(t, `{"server":{"host":"2001:db8::1","port":443,"password":"p"}}`))
+		_, err := LoadConfig(writeConfig(t, `{"server":{"host":"2001:db8::1","port":443,"password":"test-pass"}}`))
 		require.ErrorContains(t, err, "IPv4")
 	})
 
@@ -119,12 +119,12 @@ func TestLoadConfigValidatesTLS(t *testing.T) {
 	})
 
 	t.Run("host 带端口启动失败", func(t *testing.T) {
-		_, err := LoadConfig(writeConfig(t, `{"server":{"host":"example.com:443","port":443,"password":"p"}}`))
+		_, err := LoadConfig(writeConfig(t, `{"server":{"host":"example.com:443","port":443,"password":"test-pass"}}`))
 		require.ErrorContains(t, err, "must not include a port")
 	})
 
 	t.Run("手工证书模式下 host 带端口同样失败", func(t *testing.T) {
-		_, err := LoadConfig(writeConfig(t, `{"server":{"host":"example.com:443","port":443,"cert_path":"c.pem","key_path":"k.pem","password":"p"}}`))
+		_, err := LoadConfig(writeConfig(t, `{"server":{"host":"example.com:443","port":443,"cert_path":"c.pem","key_path":"k.pem","password":"test-pass"}}`))
 		require.ErrorContains(t, err, "must not include a port")
 	})
 }
