@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gogpu/systray"
@@ -162,13 +163,29 @@ func friendlyStartupError(err error) string {
 	return "服务启动失败：" + err.Error()
 }
 
-// 服务端域名解析失败是最常见的一类（开机自启动时网络往往尚未就绪），它不中止启动。
+// 服务端域名解析失败是最常见的一类（开机自启动时网络往往尚未就绪），它不中止启动；
+// bind_all 无鉴权是安全暴露，两类警告可能同时存在，逐条列出。详情只在单条警告时追加：
+// 通知正文的平台上限很小（Windows 的 szInfo 只有 255 个 UTF-16 单位），多条警告各带
+// 一份完整错误会把后一条挤出可见区域，全量错误始终在日志里。
 func friendlyStartupWarning(err error) string {
-	if errors.Is(err, runner.ErrServerDomainUnresolved) {
-		return "启动警告：网络尚未就绪（服务端域名解析失败），客户端已在后台自动重试，" +
-			"网络恢复后即可正常代理。详情：" + err.Error()
+	var msgs []string
+	if errors.Is(err, runner.ErrProxyExposedWithoutAuth) {
+		msgs = append(msgs, "安全警告：本地代理已暴露到局域网（bind_all）却没有启用鉴权；"+
+			"局域网内任何设备都能把它当作开放代理访问本机与内网，请在配置中同时设置 "+
+			"auth_username 与 auth_password 后重启。")
 	}
-	return "启动警告：" + err.Error()
+	if errors.Is(err, runner.ErrServerDomainUnresolved) {
+		msgs = append(msgs, "启动警告：网络尚未就绪（服务端域名解析失败），客户端已在后台自动重试，"+
+			"网络恢复后即可正常代理。")
+	}
+	if len(msgs) == 0 {
+		return "启动警告：" + err.Error()
+	}
+	msg := strings.Join(msgs, "\n")
+	if len(msgs) > 1 {
+		return msg
+	}
+	return msg + "\n详情：" + err.Error()
 }
 
 // 初始启动期间托盘尚未就绪也必须照常显示，否则"网络尚未就绪"这类开机场景会无声无息。

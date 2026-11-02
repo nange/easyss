@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	"github.com/gogpu/systray"
 	clientconfig "github.com/nange/easyss/v3/client/config"
@@ -101,6 +102,43 @@ func TestFriendlyStartupWarning(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("server-domain warning %q is missing %q", msg, want)
 		}
+	}
+
+	// bind_all 无鉴权（runner.ErrProxyExposedWithoutAuth）要提示配置项，并与域名警告
+	// 同时出现时逐条列出，不能只显示其中一条。
+	exposureErr := fmt.Errorf("%w: socks5=[::]:1080", runner.ErrProxyExposedWithoutAuth)
+	msg = friendlyStartupWarning(exposureErr)
+	for _, want := range []string{"安全警告", "bind_all", "auth_username", "auth_password", exposureErr.Error()} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("exposure warning %q is missing %q", msg, want)
+		}
+	}
+	msg = friendlyStartupWarning(errors.Join(exposureErr, resolveErr))
+	for _, want := range []string{"安全警告", "网络尚未就绪"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("joined warning %q is missing %q", msg, want)
+		}
+	}
+}
+
+// TestFriendlyStartupWarningJoinedFitsNotification 固定多警告的总长与去重：通知正文在
+// Windows 上只有 255 个 UTF-16 单位（systray 的 szInfo），两条警告各带一份完整详情会
+// 把后一条挤出可见区域；详情只保留在日志里。
+func TestFriendlyStartupWarningJoinedFitsNotification(t *testing.T) {
+	exposure := fmt.Errorf("%w: socks5=[::]:1080, http=[::]:2080", runner.ErrProxyExposedWithoutAuth)
+	domain := fmt.Errorf("%w: proxy.example.com: %v", runner.ErrServerDomainUnresolved, errors.New("dns boom"))
+	msg := friendlyStartupWarning(errors.Join(exposure, domain))
+
+	for _, want := range []string{"安全警告", "网络尚未就绪"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("joined warning %q is missing %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, exposure.Error()) || strings.Contains(msg, domain.Error()) {
+		t.Fatalf("detail must not be repeated per warning: %q", msg)
+	}
+	if n := len(utf16.Encode([]rune(msg))); n > 255 {
+		t.Fatalf("joined warning is %d UTF-16 units, want <= 255: %q", n, msg)
 	}
 }
 

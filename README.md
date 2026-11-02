@@ -65,7 +65,9 @@ Easyss v3 支持两种配置模式，自动识别：
 | `method` | 否 | aes-256-gcm | 加密方式，可选: `aes-256-gcm`, `chacha20-poly1305` |
 | `proxy_rule` | 否 | auto | 代理规则，可选: `auto`, `reverse_auto`, `proxy`, `direct`, `auto_block` |
 | `timeout` | 否 | 30 | 基础超时时间，单位秒，取值范围 15-60（越界取边界值）；TCP/UDP 空闲、拨号、DNS 响应与连接轮换均由它派生（见下文） |
-| `bind_all` | 否 | false | 是否将监听端口绑定到所有本地 IP；开启时监听 `[::]`，系统代理与 TUN 等本机自用端点改用同族回环 `[::1]` 访问本地代理 |
+| `bind_all` | 否 | false | 是否将监听端口绑定到所有本地 IP；开启时监听 `[::]`，系统代理与 TUN 等本机自用端点改用同族回环 `[::1]` 访问本地代理。**开启后请同时设置 `auth_username` 与 `auth_password`**：未启用鉴权时会打印安全警告（托盘版还会弹出系统通知），此时局域网内任何设备都能经它访问本机与内网服务 |
+| `auth_username` | 否 | 空 | 本地代理认证的用户名；与 `auth_password` 同时非空才启用，且只对非回环来源生效（同机自用路径免认证）。开启 `bind_all` 时局域网客户端需在代理软件里填写这组凭据 |
+| `auth_password` | 否 | 空 | 本地代理认证的密码；与 `auth_username` 需成对配置 |
 | `outbound_proto` | 否 | native | 出口协议，可选: `native`, `h2`（效果相同，均为 HTTP/2） |
 | `log_level` | 否 | info | 日志级别，可选: `debug`, `info`, `warn`, `error` |
 | `log_file_path` | 否 | 空 | 日志文件路径，为空则输出到标准输出 |
@@ -127,7 +129,7 @@ Easyss v3 支持两种配置模式，自动识别：
 | --- | --- | --- | --- |
 | `local.socks_port` | 否 | - | 本地 SOCKS5 监听端口（如 4080）；为 0 时不启动本地代理服务器，通常需要填写 |
 | `local.http_port` | 否 | `socks_port + 1000` | 本地 HTTP 代理监听端口；未配置时由 `socks_port` 推导，显式配置优先。`socks_port` 为 0 时它也是 0；它非 0 而 `socks_port` 为 0 时启动会报错 |
-| `local.bind_all` | 否 | false | 是否将监听端口绑定到所有本地 IP；开启时监听 `[::]`，系统代理与 TUN 等本机自用端点改用同族回环 `[::1]` 访问本地代理 |
+| `local.bind_all` | 否 | false | 是否将监听端口绑定到所有本地 IP；开启时监听 `[::]`，系统代理与 TUN 等本机自用端点改用同族回环 `[::1]` 访问本地代理。**开启后请同时设置 `auth_username` 与 `auth_password`**：未启用鉴权时会打印安全警告（托盘版还会弹出系统通知），此时局域网内任何设备都能经它访问本机与内网服务 |
 | `local.disable_sys_proxy` | 否 | false | 是否不设置系统代理（headless 版默认会设置） |
 | `local.enable_forward_dns` | 否 | false | 是否在本机所有网卡的 53 端口提供 DNS 转发（供 LAN 设备使用）。仅路由器透明代理场景，需 `socks_port > 0` 才能启动；运行中 TUN 未生效时转发器对所有查询回 REFUSED；移动端（gomobile 绑定）不支持，配置后 `mobile.Start` 直接报错 |
 | `local.enable_tun2socks` | 否 | false | 是否启用 TUN 全局透明代理 |
@@ -152,8 +154,8 @@ Easyss v3 支持两种配置模式，自动识别：
 | `log.level` | 否 | info | 日志级别，可选: `debug`, `info`, `warn`, `error` |
 | `log.file_path` | 否 | 空 | 日志文件路径，为空则输出到标准输出 |
 | `timeout` | 否 | 30 | 基础超时时间，单位秒，取值范围 15-60（越界取边界值）；TCP/UDP 空闲、拨号、DNS 响应与连接轮换均由它派生（见下文） |
-| `auth_username` | 否 | 空 | 本地代理的用户名（SOCKS5/HTTP 代理认证），留空表示不校验 |
-| `auth_password` | 否 | 空 | 本地代理的密码 |
+| `auth_username` | 否 | 空 | 本地代理的用户名（SOCKS5/HTTP 代理认证）；与 `auth_password` 同时非空才启用鉴权（两个入口同一判据），且只对非回环来源生效（同机自用路径免认证） |
+| `auth_password` | 否 | 空 | 本地代理的密码；与 `auth_username` 需成对配置，只配一项时两个入口都不校验 |
 | `pprof_enabled` | 否 | false | 是否启用 pprof 调试服务（127.0.0.1:6060） |
 
 **高级参数（`transport` / `shaper`）：**

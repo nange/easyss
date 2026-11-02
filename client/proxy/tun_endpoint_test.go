@@ -15,7 +15,8 @@ import (
 func newTunTestServer(t *testing.T) *HTTPProxyServer {
 	t.Helper()
 	s, err := NewHTTPProxyServer(HTTPProxyOptions{
-		ListenAddr: "127.0.0.1:0",
+		// 控制端点的 Host 校验按端口比对，这里必须是与请求 Host 同端口的确定地址。
+		ListenAddr: "127.0.0.1:5555",
 		SocksAddr:  "127.0.0.1:4080",
 		Username:   "user",
 		Password:   "pass",
@@ -48,6 +49,7 @@ func TestTunEndpointServedWithoutProxyAuth(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/tun", nil)
 	req.RemoteAddr = "127.0.0.1:5555"
+	req.Host = "127.0.0.1:5555"
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
 
@@ -86,6 +88,7 @@ func TestTunEndpointNotConfiguredReturns503(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/tun", nil)
 	req.RemoteAddr = "127.0.0.1:5555"
+	req.Host = "127.0.0.1:5555"
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
 
@@ -94,13 +97,13 @@ func TestTunEndpointNotConfiguredReturns503(t *testing.T) {
 	}
 }
 
-// TestProxyAuthStillRequiredForProxyRequests 验证认证豁免仅限 /tun：
-// 普通的代理请求仍然需要凭据。
-func TestProxyAuthStillRequiredForProxyRequests(t *testing.T) {
+// TestProxyAuthRequiredForNonLoopbackRequests 固定鉴权只作用于非回环来源：
+// 回环来源（含 /tun 助手、系统代理）免认证，来自局域网的普通代理请求仍需要凭据。
+func TestProxyAuthRequiredForNonLoopbackRequests(t *testing.T) {
 	s := newTunTestServer(t)
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
-	req.RemoteAddr = "127.0.0.1:5555"
+	req.RemoteAddr = "192.168.1.100:5555"
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
 

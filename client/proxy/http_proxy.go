@@ -95,14 +95,19 @@ func NewHTTPProxyServer(opts HTTPProxyOptions) (*HTTPProxyServer, error) {
 	if socksAddr == "" {
 		return nil, fmt.Errorf("http proxy requires a local socks5 address")
 	}
+	if err := validateListenAddr(listenAddr); err != nil {
+		return nil, err
+	}
 	timeouts := opts.Timeouts.Normalize()
 	dial := opts.Dial
 	if dial == nil {
 		dial = defaultDirectDialContext
 	}
 
+	// 拨本地 SOCKS5 的 URL 必须与入口的鉴权判据同源：只配一项时入口并未启用鉴权，
+	// 这里塞 userinfo 会让反代链路带上无人认领的凭据。
 	socksURL := &url.URL{Scheme: "socks5", Host: socksAddr}
-	if opts.Username != "" || opts.Password != "" {
+	if AuthEnabled(opts.Username, opts.Password) {
 		socksURL.User = url.UserPassword(opts.Username, opts.Password)
 	}
 
@@ -187,7 +192,8 @@ func (s *HTTPProxyServer) Serve(listener net.Listener) error {
 
 func (s *HTTPProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 控制端点（/tun、/stats）即使代理监听所有接口也只从本机可达。
-	if r.URL.Host == "" && (r.URL.Path == "/tun" || r.URL.Path == "/stats") && !isLoopbackRequest(r) {
+	if r.URL.Host == "" && (r.URL.Path == "/tun" || r.URL.Path == "/stats") &&
+		(!isLoopbackRequest(r) || !s.isControlEndpointHost(r)) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
@@ -299,12 +305,39 @@ func (s *HTTPProxyServer) isSelfTarget(r *http.Request) bool {
 
 // isLoopbackRequest 保护控制端点（如 GET /tun）：即使代理监听所有接口，它们也只能从本机访问。
 func isLoopbackRequest(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	return isLoopbackAddr(r.RemoteAddr)
+}
+
+// isControlEndpointHost 要求控制端点的 Host 是回环 IP 字面量，且端口与监听端口一致。
+// DNS rebinding 页面能让 RemoteAddr 变成回环，但改不了 Host——那里始终是攻击者的域名，
+// 所以它是这条路径上唯一可信的信号。监听地址不可用时一律拒绝：安全校验不能因为字段
+// 缺失（零值构造、临时端口）退化成"任意回环 Host 都放行"。
+func (s *HTTPProxyServer) isControlEndpointHost(r *http.Request) bool {
+	host, port, err := net.SplitHostPort(r.Host)
 	if err != nil {
 		return false
 	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+		return false
+	}
+	_, listenPort, err := net.SplitHostPort(s.listenAddr)
+	if err != nil || listenPort == "0" || listenPort == "" {
+		return false
+	}
+	return port == listenPort
+}
+
+// validateListenAddr 要求监听地址是 host:port：控制端点的 Host 校验按端口比对，缺端口的
+// 零值会让校验无从判定（见 isControlEndpointHost）。
+func validateListenAddr(addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("http proxy requires a host:port listen address, got %q: %w", addr, err)
+	}
+	if host == "" || port == "" {
+		return fmt.Errorf("http proxy requires a host:port listen address, got %q", addr)
+	}
+	return nil
 }
 
 const localIPsCacheTTL = 60 * time.Second
@@ -349,8 +382,13 @@ func localIPSet() map[string]struct{} {
 	return set
 }
 
+// 回环来源免认证（见 isLoopbackAddr）：系统代理与托盘 /stats 都拿不到凭据。
+// 鉴权判据与 SOCKS5 入口共用 AuthEnabled：只配一项等同未启用，两个入口不会各说各话。
 func (s *HTTPProxyServer) authOK(r *http.Request) bool {
-	if s.username == "" && s.password == "" {
+	if isLoopbackAddr(r.RemoteAddr) {
+		return true
+	}
+	if !AuthEnabled(s.username, s.password) {
 		return true
 	}
 	username, password, ok := basicAuth(r)
@@ -446,8 +484,9 @@ func writeConnectFailure(conn net.Conn) {
 }
 
 func (s *HTTPProxyServer) dialSOCKS5(target string) (net.Conn, error) {
+	// 与 authOK 同一个判据：只配一项等同未启用，否则这里会带着空的一半去协商。
 	var auth *xproxy.Auth
-	if s.username != "" || s.password != "" {
+	if AuthEnabled(s.username, s.password) {
 		auth = &xproxy.Auth{User: s.username, Password: s.password}
 	}
 

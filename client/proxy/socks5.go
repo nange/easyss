@@ -219,17 +219,8 @@ func NewSocks5Server(opts Socks5Options) (*Socks5Server, error) {
 		},
 	})
 
-	authMethods := []thingssocks5.Authenticator{thingssocks5.NoAuthAuthenticator{}}
-	if opts.Username != "" && opts.Password != "" {
-		authMethods = []thingssocks5.Authenticator{
-			thingssocks5.UserPassAuthenticator{
-				Credentials: socksCredentials{user: opts.Username, password: opts.Password},
-			},
-		}
-	}
-
 	s.srv = thingssocks5.NewServer(
-		thingssocks5.WithAuthMethods(authMethods),
+		thingssocks5.WithAuthMethods(socks5AuthMethods(opts.Username, opts.Password)),
 		// 域名必须在业务层判定（见 passthroughResolver）。
 		thingssocks5.WithResolver(passthroughResolver{}),
 		thingssocks5.WithConnectHandle(thingssocks5.Handler(s.connectHandler)),

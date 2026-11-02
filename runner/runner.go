@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +34,29 @@ var ErrForwardDNSRequiresSocks = errors.New("forward dns requires socks_port to 
 // ErrServerDomainUnresolved 标记启动时服务端域名未能解析的非致命警告，调用方用
 // errors.Is 识别并提示"网络可能尚未就绪"。
 var ErrServerDomainUnresolved = errors.New("server domain unresolved")
+
+// ErrProxyExposedWithoutAuth 标记"监听所有网卡但没有本地代理鉴权"的暴露风险：不中止启动，
+// 调用方用 errors.Is 识别并向用户告警。
+var ErrProxyExposedWithoutAuth = errors.New("bind_all is enabled without local proxy auth")
+
+// localProxyExposureWarning 报告 bind_all 下的开放代理风险。鉴权判据与两个入口共用
+// proxy.AuthEnabled，避免警告与实际是否开放漂移。
+func localProxyExposureWarning(cfg *clientconfig.ClientConfig) error {
+	if !cfg.Local.BindAll || proxy.AuthEnabled(cfg.AuthUsername, cfg.AuthPassword) {
+		return nil
+	}
+	var listeners []string
+	if cfg.Local.SocksPort > 0 {
+		listeners = append(listeners, "socks5="+util.LocalProxyListenAddr(true, cfg.Local.SocksPort))
+	}
+	if cfg.Local.HTTPPort > 0 {
+		listeners = append(listeners, "http="+util.LocalProxyListenAddr(true, cfg.Local.HTTPPort))
+	}
+	if len(listeners) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %s", ErrProxyExposedWithoutAuth, strings.Join(listeners, ", "))
+}
 
 // options 是一次 Run 的可注入依赖：解析策略、退避窗口与 forward DNS 监听地址。
 // 生产路径用 defaultOptions，测试构造自己的实例即可，无需改动包级状态。
@@ -150,6 +174,13 @@ func runWithOptions(cfg *clientconfig.ClientConfig, opts options) (*Core, error)
 
 	if err := c.buildLocalServers(cfg, eps, method, timeouts); err != nil {
 		return nil, err
+	}
+
+	// 监听器已绑定，此刻的暴露是既成事实；警告只走 StartupWarn，不中止启动。
+	if warn := localProxyExposureWarning(cfg); warn != nil {
+		log.Warn("[EASYSS] local proxy listens on all interfaces without auth; "+
+			"any device that reaches these ports can use it as an open proxy", "err", warn)
+		c.StartupWarn = errors.Join(c.StartupWarn, warn)
 	}
 
 	c.serveLocal(eps)

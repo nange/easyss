@@ -8,14 +8,17 @@ type SimpleConfig struct {
 	SN         string `json:"sn"`
 	CAPath     string `json:"ca_path"`
 
-	LocalPort        int  `json:"local_port"`
-	HTTPPort         int  `json:"http_port"`
-	BindAll          bool `json:"bind_all"`
-	DisableSysProxy  bool `json:"disable_sys_proxy"`
-	EnableForwardDNS bool `json:"enable_forward_dns"`
-	EnableTun2socks  bool `json:"enable_tun2socks"`
-	EnableQUIC       bool `json:"enable_quic"`
-	TunMTU           int  `json:"tun_mtu,omitempty"`
+	LocalPort int  `json:"local_port"`
+	HTTPPort  int  `json:"http_port"`
+	BindAll   bool `json:"bind_all"`
+	// 与 AuthPassword 同时非空才启用本地代理鉴权；bind_all 下未启用会在启动时告警。
+	AuthUsername     string `json:"auth_username"`
+	AuthPassword     string `json:"auth_password"`
+	DisableSysProxy  bool   `json:"disable_sys_proxy"`
+	EnableForwardDNS bool   `json:"enable_forward_dns"`
+	EnableTun2socks  bool   `json:"enable_tun2socks"`
+	EnableQUIC       bool   `json:"enable_quic"`
+	TunMTU           int    `json:"tun_mtu,omitempty"`
 
 	ProxyRule  string `json:"proxy_rule"`
 	IPV6Rule   string `json:"ipv6_rule"`
