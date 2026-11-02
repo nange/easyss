@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	"github.com/gogpu/systray"
 	clientconfig "github.com/nange/easyss/v3/client/config"
@@ -117,6 +118,27 @@ func TestFriendlyStartupWarning(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("joined warning %q is missing %q", msg, want)
 		}
+	}
+}
+
+// TestFriendlyStartupWarningJoinedFitsNotification 固定多警告的总长与去重：通知正文在
+// Windows 上只有 255 个 UTF-16 单位（systray 的 szInfo），两条警告各带一份完整详情会
+// 把后一条挤出可见区域；详情只保留在日志里。
+func TestFriendlyStartupWarningJoinedFitsNotification(t *testing.T) {
+	exposure := fmt.Errorf("%w: socks5=[::]:1080, http=[::]:2080", runner.ErrProxyExposedWithoutAuth)
+	domain := fmt.Errorf("%w: proxy.example.com: %v", runner.ErrServerDomainUnresolved, errors.New("dns boom"))
+	msg := friendlyStartupWarning(errors.Join(exposure, domain))
+
+	for _, want := range []string{"安全警告", "网络尚未就绪"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("joined warning %q is missing %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, exposure.Error()) || strings.Contains(msg, domain.Error()) {
+		t.Fatalf("detail must not be repeated per warning: %q", msg)
+	}
+	if n := len(utf16.Encode([]rune(msg))); n > 255 {
+		t.Fatalf("joined warning is %d UTF-16 units, want <= 255: %q", n, msg)
 	}
 }
 

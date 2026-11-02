@@ -66,7 +66,7 @@ Easyss v3 支持两种配置模式，自动识别：
 | `proxy_rule` | 否 | auto | 代理规则，可选: `auto`, `reverse_auto`, `proxy`, `direct`, `auto_block` |
 | `timeout` | 否 | 30 | 基础超时时间，单位秒，取值范围 15-60（越界取边界值）；TCP/UDP 空闲、拨号、DNS 响应与连接轮换均由它派生（见下文） |
 | `bind_all` | 否 | false | 是否将监听端口绑定到所有本地 IP；开启时监听 `[::]`，系统代理与 TUN 等本机自用端点改用同族回环 `[::1]` 访问本地代理。**开启后请同时设置 `auth_username` 与 `auth_password`**：未启用鉴权时会打印安全警告（托盘版还会弹出系统通知），此时局域网内任何设备都能经它访问本机与内网服务 |
-| `auth_username` | 否 | 空 | 本地代理认证的用户名；与 `auth_password` 同时非空才启用，且只对非回环来源生效（同机自用路径免认证，见下文）。开启 `bind_all` 时局域网客户端需在代理软件里填写这组凭据 |
+| `auth_username` | 否 | 空 | 本地代理认证的用户名；与 `auth_password` 同时非空才启用，且只对非回环来源生效（同机自用路径免认证）。开启 `bind_all` 时局域网客户端需在代理软件里填写这组凭据 |
 | `auth_password` | 否 | 空 | 本地代理认证的密码；与 `auth_username` 需成对配置 |
 | `outbound_proto` | 否 | native | 出口协议，可选: `native`, `h2`（效果相同，均为 HTTP/2） |
 | `log_level` | 否 | info | 日志级别，可选: `debug`, `info`, `warn`, `error` |
@@ -154,8 +154,8 @@ Easyss v3 支持两种配置模式，自动识别：
 | `log.level` | 否 | info | 日志级别，可选: `debug`, `info`, `warn`, `error` |
 | `log.file_path` | 否 | 空 | 日志文件路径，为空则输出到标准输出 |
 | `timeout` | 否 | 30 | 基础超时时间，单位秒，取值范围 15-60（越界取边界值）；TCP/UDP 空闲、拨号、DNS 响应与连接轮换均由它派生（见下文） |
-| `auth_username` | 否 | 空 | 本地代理的用户名（SOCKS5/HTTP 代理认证）；与 `auth_password` 同时非空才启用 SOCKS5 鉴权，且只对非回环来源生效（同机自用路径免认证） |
-| `auth_password` | 否 | 空 | 本地代理的密码；与 `auth_username` 需成对配置，只配一项时 SOCKS5 入口不校验 |
+| `auth_username` | 否 | 空 | 本地代理的用户名（SOCKS5/HTTP 代理认证）；与 `auth_password` 同时非空才启用鉴权（两个入口同一判据），且只对非回环来源生效（同机自用路径免认证） |
+| `auth_password` | 否 | 空 | 本地代理的密码；与 `auth_username` 需成对配置，只配一项时两个入口都不校验 |
 | `pprof_enabled` | 否 | false | 是否启用 pprof 调试服务（127.0.0.1:6060） |
 
 **高级参数（`transport` / `shaper`）：**

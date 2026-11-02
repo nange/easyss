@@ -15,7 +15,8 @@ import (
 func newTunTestServer(t *testing.T) *HTTPProxyServer {
 	t.Helper()
 	s, err := NewHTTPProxyServer(HTTPProxyOptions{
-		ListenAddr: "127.0.0.1:0",
+		// 控制端点的 Host 校验按端口比对，这里必须是与请求 Host 同端口的确定地址。
+		ListenAddr: "127.0.0.1:5555",
 		SocksAddr:  "127.0.0.1:4080",
 		Username:   "user",
 		Password:   "pass",

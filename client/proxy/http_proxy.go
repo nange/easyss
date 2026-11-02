@@ -95,6 +95,9 @@ func NewHTTPProxyServer(opts HTTPProxyOptions) (*HTTPProxyServer, error) {
 	if socksAddr == "" {
 		return nil, fmt.Errorf("http proxy requires a local socks5 address")
 	}
+	if err := validateListenAddr(listenAddr); err != nil {
+		return nil, err
+	}
 	timeouts := opts.Timeouts.Normalize()
 	dial := opts.Dial
 	if dial == nil {
@@ -303,9 +306,10 @@ func isLoopbackRequest(r *http.Request) bool {
 	return isLoopbackAddr(r.RemoteAddr)
 }
 
-// isControlEndpointHost 要求控制端点的 Host 是回环 IP 字面量（端口须与监听端口一致，
-// 监听端口为 0 时无从比对）。DNS rebinding 页面能让 RemoteAddr 变成回环，但改不了 Host
-// ——那里始终是攻击者的域名，所以它是这条路径上唯一可信的信号。
+// isControlEndpointHost 要求控制端点的 Host 是回环 IP 字面量，且端口与监听端口一致。
+// DNS rebinding 页面能让 RemoteAddr 变成回环，但改不了 Host——那里始终是攻击者的域名，
+// 所以它是这条路径上唯一可信的信号。监听地址不可用时一律拒绝：安全校验不能因为字段
+// 缺失（零值构造、临时端口）退化成"任意回环 Host 都放行"。
 func (s *HTTPProxyServer) isControlEndpointHost(r *http.Request) bool {
 	host, port, err := net.SplitHostPort(r.Host)
 	if err != nil {
@@ -315,10 +319,23 @@ func (s *HTTPProxyServer) isControlEndpointHost(r *http.Request) bool {
 		return false
 	}
 	_, listenPort, err := net.SplitHostPort(s.listenAddr)
-	if err != nil || listenPort == "0" {
-		return true
+	if err != nil || listenPort == "0" || listenPort == "" {
+		return false
 	}
 	return port == listenPort
+}
+
+// validateListenAddr 要求监听地址是 host:port：控制端点的 Host 校验按端口比对，缺端口的
+// 零值会让校验无从判定（见 isControlEndpointHost）。
+func validateListenAddr(addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("http proxy requires a host:port listen address, got %q: %w", addr, err)
+	}
+	if host == "" || port == "" {
+		return fmt.Errorf("http proxy requires a host:port listen address, got %q", addr)
+	}
+	return nil
 }
 
 const localIPsCacheTTL = 60 * time.Second
@@ -364,11 +381,12 @@ func localIPSet() map[string]struct{} {
 }
 
 // 回环来源免认证（见 isLoopbackAddr）：系统代理与托盘 /stats 都拿不到凭据。
+// 鉴权判据与 SOCKS5 入口共用 AuthEnabled：只配一项等同未启用，两个入口不会各说各话。
 func (s *HTTPProxyServer) authOK(r *http.Request) bool {
 	if isLoopbackAddr(r.RemoteAddr) {
 		return true
 	}
-	if s.username == "" && s.password == "" {
+	if !AuthEnabled(s.username, s.password) {
 		return true
 	}
 	username, password, ok := basicAuth(r)

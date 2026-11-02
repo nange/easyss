@@ -110,34 +110,39 @@ func TestLoopbackNoAuthAuthenticator(t *testing.T) {
 }
 
 // TestHTTPProxyAuthOK 固定 HTTP 入口的同一判据：回环来源免认证（系统代理、/stats 都
-// 不带凭据），非回环来源按配置的用户名密码校验。
+// 不带凭据），非回环来源按配置的用户名密码校验；只配一项等同未启用（与 SOCKS5 一致）。
 func TestHTTPProxyAuthOK(t *testing.T) {
 	t.Parallel()
 
-	s := &HTTPProxyServer{username: "user", password: "pass"}
 	tests := []struct {
 		name      string
+		username  string
+		password  string
 		remote    string
 		withCreds bool
 		want      bool
 	}{
-		{"回环无凭据", "127.0.0.1:5555", false, true},
-		{"回环有凭据", "[::1]:5555", true, true},
-		{"远程无凭据", "192.168.1.10:5555", false, false},
-		{"远程有凭据", "192.168.1.10:5555", true, true},
+		{"回环无凭据", "user", "pass", "127.0.0.1:5555", false, true},
+		{"回环有凭据", "user", "pass", "[::1]:5555", true, true},
+		{"远程无凭据", "user", "pass", "192.168.1.10:5555", false, false},
+		{"远程有凭据", "user", "pass", "192.168.1.10:5555", true, true},
+		{"远程·只配用户名视为未启用", "user", "", "192.168.1.10:5555", false, true},
+		{"远程·只配密码视为未启用", "", "pass", "192.168.1.10:5555", false, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
+			s := &HTTPProxyServer{username: tt.username, password: tt.password}
 			req := httptest.NewRequest("GET", "http://example.com/", nil)
 			req.RemoteAddr = tt.remote
 			if tt.withCreds {
 				req.Header.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user:pass")))
 			}
 			if got := s.authOK(req); got != tt.want {
-				t.Errorf("authOK(%s, creds=%v) = %v, want %v", tt.remote, tt.withCreds, got, tt.want)
+				t.Errorf("authOK(user=%q, pass=%q, remote=%s, creds=%v) = %v, want %v",
+					tt.username, tt.password, tt.remote, tt.withCreds, got, tt.want)
 			}
 		})
 	}

@@ -28,9 +28,10 @@ func TestControlEndpointsRejectNonLoopback(t *testing.T) {
 // 回环来源免认证：托盘 /stats 与系统代理都拿不到凭据，配了鉴权也必须能读到指标。
 func TestStatsEndpointServedWithoutAuthFromLoopback(t *testing.T) {
 	s := &HTTPProxyServer{
-		username: "u",
-		password: "p",
-		handler:  NewStreamHandler(&mockTransport{}, nil, shaper.Config{}, config.Timeouts{}),
+		listenAddr: "[::]:4321",
+		username:   "u",
+		password:   "p",
+		handler:    NewStreamHandler(&mockTransport{}, nil, shaper.Config{}, config.Timeouts{}),
 	}
 	r := httptest.NewRequest(http.MethodGet, "/stats", nil)
 	r.RemoteAddr = "[::1]:4321"
@@ -46,7 +47,8 @@ func TestStatsEndpointServedWithoutAuthFromLoopback(t *testing.T) {
 
 func TestStatsEndpointServesLoopback(t *testing.T) {
 	s := &HTTPProxyServer{
-		handler: NewStreamHandler(&mockTransport{}, nil, shaper.Config{}, config.Timeouts{}),
+		listenAddr: "127.0.0.1:4321",
+		handler:    NewStreamHandler(&mockTransport{}, nil, shaper.Config{}, config.Timeouts{}),
 	}
 	r := httptest.NewRequest(http.MethodGet, "/stats", nil)
 	r.RemoteAddr = "127.0.0.1:4321"
@@ -125,5 +127,54 @@ func TestControlEndpointsAcceptLoopbackHost(t *testing.T) {
 				t.Fatalf("%s with Host %q = %d, want %d", tc.path, tc.host, w.Code, tc.want)
 			}
 		})
+	}
+}
+
+// TestControlEndpointsFailClosedWithoutListenAddr 固定失败方向：监听地址不可用
+// （零值构造、端口未知）时必须拒绝，而不是退化成"任意回环 Host 都放行"。
+func TestControlEndpointsFailClosedWithoutListenAddr(t *testing.T) {
+	t.Parallel()
+
+	for _, listenAddr := range []string{"", "127.0.0.1:0", "127.0.0.1"} {
+		t.Run(listenAddr, func(t *testing.T) {
+			t.Parallel()
+
+			s := &HTTPProxyServer{
+				listenAddr: listenAddr,
+				handler:    NewStreamHandler(&mockTransport{}, nil, shaper.Config{}, config.Timeouts{}),
+			}
+			r := httptest.NewRequest(http.MethodGet, "/stats", nil)
+			r.RemoteAddr = "127.0.0.1:4321"
+			r.Host = "127.0.0.1:4321"
+			w := httptest.NewRecorder()
+
+			s.ServeHTTP(w, r)
+
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("listenAddr %q = %d, want %d", listenAddr, w.Code, http.StatusForbidden)
+			}
+		})
+	}
+}
+
+// TestNewHTTPProxyServerRequiresListenAddr 固定构造器契约：监听地址必须是 host:port，
+// 否则控制端点的端口比对无从进行（生产路径由 runner 保证，这里挡住零值/半截地址）。
+func TestNewHTTPProxyServerRequiresListenAddr(t *testing.T) {
+	t.Parallel()
+
+	for _, listenAddr := range []string{"", "127.0.0.1", ":5080", "::1"} {
+		if _, err := NewHTTPProxyServer(HTTPProxyOptions{
+			ListenAddr: listenAddr,
+			SocksAddr:  "127.0.0.1:4080",
+		}); err == nil {
+			t.Errorf("NewHTTPProxyServer(ListenAddr=%q) succeeded, want error", listenAddr)
+		}
+	}
+
+	if _, err := NewHTTPProxyServer(HTTPProxyOptions{
+		ListenAddr: "127.0.0.1:5080",
+		SocksAddr:  "127.0.0.1:4080",
+	}); err != nil {
+		t.Fatalf("NewHTTPProxyServer with a concrete address: %v", err)
 	}
 }
