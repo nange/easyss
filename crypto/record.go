@@ -16,6 +16,10 @@ const (
 	MaxCipherRecordSize = protocol.MaxReadRecordPlaintext + 16 // 最大明文 + AEAD 认证标签
 )
 
+// ErrRecordAuthFailed 表示记录无法通过认证：对端没有主密钥（口令不符）或记录被篡改。
+// 服务端据此把"解密失败"与超时/帧格式错误区分开，只有前者能证明有人在猜口令。
+var ErrRecordAuthFailed = errors.New("crypto: record authentication failed")
+
 type RecordWriter struct {
 	w        io.Writer
 	enc      Encryptor
@@ -142,7 +146,9 @@ func (rr *RecordReader) ReadRecord() ([]byte, error) {
 	plaintext, err := rr.enc.Decrypt(ciphertext, rr.aad, nonce[:])
 	bytespool.MustPut(ciphertext)
 	if err != nil {
-		return nil, fmt.Errorf("crypto: decrypt record: %w", err)
+		// 只把 AEAD 失败标成 sentinel：调用方（服务端）据此区分"对方没有主密钥"与
+		// 超时/帧格式错误，前者才说明有人在线猜口令。
+		return nil, fmt.Errorf("crypto: decrypt record: %w", fmt.Errorf("%w: %v", ErrRecordAuthFailed, err))
 	}
 
 	stats.RecordBytesRecv(protocol.MaxCipherLenSize + cipherLen)
