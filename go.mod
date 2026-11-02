@@ -2,6 +2,10 @@ module github.com/nange/easyss/v3
 
 go 1.27.3
 
+// Go 1.24+ 默认给 listen socket 打开 MPTCP；本模块的监听器一律关闭（服务端另有
+// 显式的 SetMultipathTCP(false)，见 server.Start）。
+godebug multipathtcp=0
+
 // nange/systray 是 gogpu/systray 的分支：修复了上游 issue #39
 //（上下文菜单打开期间 SetMenu 重建菜单会把点击派发到另一个菜单项的回调）。
 // 详见 https://github.com/gogpu/systray/issues/39。
