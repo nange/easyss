@@ -90,6 +90,11 @@ const (
 	HTTP2ServerReceiveBufferPerConnection = 4<<20 - 1 // 4MiB-1，连接级上行窗口
 	HTTP2ServerReceiveBufferPerStream     = 4<<20 - 1 // 4MiB-1，流级上行窗口
 
+	// ServerMaxHeaderBytes 同时是 HTTP/1 头缓冲上限与 HTTP/2 的 SETTINGS_MAX_HEADER_LIST_SIZE
+	// （net/http 由 MaxHeaderBytes 派生）：取 nginx 默认 large_client_header_buffers 4 8k 的合计
+	// 32KB；握手只需 22B 的 x-es，浏览器常规请求头 < 8KB。
+	ServerMaxHeaderBytes = 32 << 10
+
 	// HTTP2ServerMaxConcurrentStreams 不开放配置：它是 SETTINGS 里可被动的指纹，而客户端用
 	// 该值判断连接是否已满，调小会让客户端在池内再拨一条连接，破坏"一个槽位一条连接"。
 	HTTP2ServerMaxConcurrentStreams = 128
