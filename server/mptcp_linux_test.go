@@ -8,9 +8,6 @@ import (
 	"testing"
 )
 
-// SO_PROTOCOL 不在 syscall 包里，取值来自 linux/socket.h。
-const soProtocol = 0x26
-
 // TestListenTCPDisablesMPTCP 钉住监听面不开 MPTCP：去掉 go.mod 的
 // godebug multipathtcp=0 或 listenTCP 的 SetMultipathTCP(false)，
 // 内核建出来的就是 IPPROTO_MPTCP socket（可被内核 TCP 漏洞利用）。
@@ -35,7 +32,7 @@ func TestListenTCPDisablesMPTCP(t *testing.T) {
 	var sockErr error
 	var proto int
 	if err := sc.Control(func(fd uintptr) {
-		proto, sockErr = syscall.GetsockoptInt(int(fd), syscall.SOL_SOCKET, soProtocol)
+		proto, sockErr = syscall.GetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_PROTOCOL)
 	}); err != nil {
 		t.Fatalf("control: %v", err)
 	}
