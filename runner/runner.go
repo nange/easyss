@@ -39,11 +39,10 @@ var ErrServerDomainUnresolved = errors.New("server domain unresolved")
 // 调用方用 errors.Is 识别并向用户告警。
 var ErrProxyExposedWithoutAuth = errors.New("bind_all is enabled without local proxy auth")
 
-// localProxyExposureWarning 报告 bind_all 下的开放代理风险。鉴权判据与 SOCKS5 入口一致
-// （用户名与密码同时非空，见 proxy.NewSocks5Server），两处必须同步，否则警告会与实际
-// 是否开放不符。
+// localProxyExposureWarning 报告 bind_all 下的开放代理风险。鉴权判据与两个入口共用
+// proxy.AuthEnabled，避免警告与实际是否开放漂移。
 func localProxyExposureWarning(cfg *clientconfig.ClientConfig) error {
-	if !cfg.Local.BindAll || (cfg.AuthUsername != "" && cfg.AuthPassword != "") {
+	if !cfg.Local.BindAll || proxy.AuthEnabled(cfg.AuthUsername, cfg.AuthPassword) {
 		return nil
 	}
 	var listeners []string

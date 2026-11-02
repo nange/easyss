@@ -25,17 +25,21 @@ func TestControlEndpointsRejectNonLoopback(t *testing.T) {
 	}
 }
 
-// 回环来源仍要经过认证；这条路径不触碰快照，因此不需要构造 handler。
-func TestStatsEndpointStillRequiresAuth(t *testing.T) {
-	s := &HTTPProxyServer{username: "u", password: "p"}
+// 回环来源免认证：托盘 /stats 与系统代理都拿不到凭据，配了鉴权也必须能读到指标。
+func TestStatsEndpointServedWithoutAuthFromLoopback(t *testing.T) {
+	s := &HTTPProxyServer{
+		username: "u",
+		password: "p",
+		handler:  NewStreamHandler(&mockTransport{}, nil, shaper.Config{}, config.Timeouts{}),
+	}
 	r := httptest.NewRequest(http.MethodGet, "/stats", nil)
 	r.RemoteAddr = "[::1]:4321"
 	w := httptest.NewRecorder()
 
 	s.ServeHTTP(w, r)
 
-	if w.Code != http.StatusProxyAuthRequired {
-		t.Fatalf("loopback /stats without credentials = %d, want %d", w.Code, http.StatusProxyAuthRequired)
+	if w.Code != http.StatusOK {
+		t.Fatalf("loopback /stats without credentials = %d, want %d", w.Code, http.StatusOK)
 	}
 }
 

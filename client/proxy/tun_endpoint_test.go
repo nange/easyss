@@ -94,13 +94,13 @@ func TestTunEndpointNotConfiguredReturns503(t *testing.T) {
 	}
 }
 
-// TestProxyAuthStillRequiredForProxyRequests 验证认证豁免仅限 /tun：
-// 普通的代理请求仍然需要凭据。
-func TestProxyAuthStillRequiredForProxyRequests(t *testing.T) {
+// TestProxyAuthRequiredForNonLoopbackRequests 固定鉴权只作用于非回环来源：
+// 回环来源（含 /tun 助手、系统代理）免认证，来自局域网的普通代理请求仍需要凭据。
+func TestProxyAuthRequiredForNonLoopbackRequests(t *testing.T) {
 	s := newTunTestServer(t)
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
-	req.RemoteAddr = "127.0.0.1:5555"
+	req.RemoteAddr = "192.168.1.100:5555"
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
 

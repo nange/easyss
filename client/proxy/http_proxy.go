@@ -299,12 +299,7 @@ func (s *HTTPProxyServer) isSelfTarget(r *http.Request) bool {
 
 // isLoopbackRequest 保护控制端点（如 GET /tun）：即使代理监听所有接口，它们也只能从本机访问。
 func isLoopbackRequest(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return false
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return isLoopbackAddr(r.RemoteAddr)
 }
 
 const localIPsCacheTTL = 60 * time.Second
@@ -349,7 +344,11 @@ func localIPSet() map[string]struct{} {
 	return set
 }
 
+// 回环来源免认证（见 isLoopbackAddr）：系统代理与托盘 /stats 都拿不到凭据。
 func (s *HTTPProxyServer) authOK(r *http.Request) bool {
+	if isLoopbackAddr(r.RemoteAddr) {
+		return true
+	}
 	if s.username == "" && s.password == "" {
 		return true
 	}
