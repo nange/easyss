@@ -48,7 +48,7 @@ Easyss v3 支持两种配置模式，自动识别：
 {
   "server": "your-domain.com",
   "server_port": 443,
-  "password": "your-password",
+  "password": "",
   "local_port": 4080,
   "log_file_path": "easyss.log"
 }
@@ -60,7 +60,7 @@ Easyss v3 支持两种配置模式，自动识别：
 | --- | --- | --- | --- |
 | `server` | 是 | - | 服务器地址（域名或 IP，不含端口） |
 | `server_port` | 是 | - | 服务器端口 |
-| `password` | 是 | - | 通信加密密钥 |
+| `password` | 是 | - | 通信加密密钥，必须与该服务端一致；至少 8 字符（服务端低于 8 字符拒绝启动，8–15 字符仅告警），建议 16 字符以上，如 `openssl rand -hex 24` |
 | `local_port` | 否 | 4080 | 本地 SOCKS5 监听端口。`http_port` 自动设为 `local_port + 1000` |
 | `method` | 否 | aes-256-gcm | 加密方式，可选: `aes-256-gcm`, `chacha20-poly1305` |
 | `proxy_rule` | 否 | auto | 代理规则，可选: `auto`, `reverse_auto`, `proxy`, `direct`, `auto_block` |
@@ -78,6 +78,8 @@ Easyss v3 支持两种配置模式，自动识别：
 
 执行 `./easyss -show-config-example-simple` 可查看简化模式示例。
 
+> **口令（`password`）**：示例里故意留空——它是客户端与服务端唯一的共享凭据，照抄公开示例等于把部署口令公开。长度至少 8 字符（服务端低于 8 字符会拒绝启动，8–15 字符只打印告警），建议 16 字符以上，用 `openssl rand -hex 24` 生成；客户端与该服务端的 `password` 必须完全一致，改口令需要两端同时更新。
+
 #### 完整模式
 
 支持所有 v3 高级功能（多服务器、流量整形、传输层调参等），最简配置示例：
@@ -89,7 +91,7 @@ Easyss v3 支持两种配置模式，自动识别：
     {
       "host": "your-domain.com",
       "port": 443,
-      "password": "your-password"
+      "password": ""
     }
   ],
   "local": {
@@ -115,7 +117,7 @@ Easyss v3 支持两种配置模式，自动识别：
 | `servers[].host` | 是 | - | 服务器主机名或 IP 字面量（不含端口；IPv6 字面量无需方括号，客户端会自动补上） |
 | `servers[].name` | 否 | 空 | 托盘"选择服务器"菜单的显示名称（切换失败通知中同时显示 name 与 `host:port`）；留空或全空白时显示 `host:port`。只影响展示，不参与连接与切换 |
 | `servers[].port` | 否 | 443 | 服务器端口 |
-| `servers[].password` | 是 | - | 通信加密密钥 |
+| `servers[].password` | 是 | - | 通信加密密钥，必须与该服务端一致；至少 8 字符（服务端低于 8 字符拒绝启动，8–15 字符仅告警），建议 16 字符以上 |
 | `servers[].method` | 否 | aes-256-gcm | 加密方式，可选: `aes-256-gcm`, `chacha20-poly1305`；必须在服务端 `allowed_methods` 允许的列表内 |
 | `servers[].sn` | 否 | 空 | TLS SNI 覆盖，留空则使用 `host`。服务端用 IP 证书（IP-only 模式）时必须留空；Cloudflare 优选 IP 场景填对应域名（见"配置 Cloudflare 优选 IP"） |
 | `servers[].ca_path` | 否 | 空 | 自定义 CA 证书路径（服务端使用自签证书时填写） |
@@ -247,7 +249,7 @@ regexp:^.*\.youtube\..*$
   "server": {
     "host": "your-domain.com",
     "port": 443,
-    "password": "your-password"
+    "password": ""
   },
   "log": {
     "level": "info",
@@ -259,6 +261,8 @@ regexp:^.*\.youtube\..*$
 
 > **注意**：`server.host` 填**你自己的真实域名**（需已解析到本服务器 IP），或**公网 IPv4 字面量**（即"不用域名"的 IP-only 模式，见下文）；除非同时配置了自定义证书（`cert_path` + `key_path`），否则此项**必填**。留空、填私有/保留地址或 IPv6 字面量都会在启动时报错。
 
+> **口令**：示例里故意留空，启动前必须填写——低于 8 字符会直接拒绝启动并报 `server.password: password is too short`，8–15 字符只打印告警；建议用 `openssl rand -hex 24` 生成，并与客户端保持一致。
+
 其余字段（fallback、shaper、transport、next_proxy、pprof 等）均有默认值，按需配置；`./easyss-server -show-config-example` 可查看完整示例。
 
 **参数说明：**
@@ -268,7 +272,7 @@ regexp:^.*\.youtube\..*$
 | `server.host` | 条件必填 | - | 服务器域名或公网 IPv4 字面量，即自动申请证书时提交给 Let's Encrypt 的标识符：域名需已解析到本机 IP，公网 IP 走 IP-only 模式。留空需同时配置 `cert_path` 与 `key_path`；私有/保留地址或 IPv6 字面量会报错 |
 | `server.port` | 否 | 443 | 监听端口，默认所有网卡 |
 | `server.bind` | 否 | 空 | 可选监听网卡地址（主机名或 IP，不含端口）；旧键 `server.listen` 的主机部分会自动映射到这里 |
-| `server.password` | 是 | - | 通信加密密钥 |
+| `server.password` | 是 | - | 通信加密密钥，必须与客户端一致；至少 8 字符（低于 8 字符拒绝启动，8–15 字符仅告警），建议 16 字符以上，如 `openssl rand -hex 24` |
 | `server.allowed_methods` | 否 | aes-256-gcm, chacha20-poly1305 | 允许的加密方式列表 |
 | `server.cert_path` | 否 | - | 自定义证书路径，**必须与 `key_path` 成对配置**，只配一个会报错 |
 | `server.key_path` | 否 | - | 自定义证书密钥路径，**必须与 `cert_path` 成对配置** |
@@ -315,7 +319,7 @@ nohup ./easyss-server > easyss-server.log 2>&1    # 后台运行
   "server": {
     "host": "203.0.114.1",
     "port": 443,
-    "password": "your-password"
+    "password": ""
   }
 }
 ```
@@ -332,7 +336,7 @@ Let's Encrypt 对 IP 证书的几条硬性规定：
 #### Docker 部署
 
 ```sh
-docker run -d --name easyss --network host nange/docker-easyss:latest -p yourport -k yourpassword -s yourdomain.com
+docker run -d --name easyss --network host nange/docker-easyss:latest -p yourport -k "<服务端口令>" -s yourdomain.com
 ```
 
 ## 高级用法

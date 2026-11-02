@@ -309,7 +309,7 @@ func ExampleConfig() FileConfig {
 			// 短生命周期（约 160 小时）的 IP 证书，且只能用 tls-alpn-01 验证。
 			Host:           "your-domain.com",
 			Port:           config.DefaultServerPort,
-			Password:       "your-password",
+			Password:       "",
 			AllowedMethods: DefaultAllowedMethods(),
 		},
 		// 显式给出空切片：示例里 cdn_domains 应呈现为 [] 而不是 null。

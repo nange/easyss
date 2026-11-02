@@ -1,7 +1,7 @@
 # easyss server
 # usage:
 #
-# docker run -it -d --name easyss --network host nange/docker-easyss:latest -p 9999 -k yourpassword -s yourdomain.com
+# docker run -it -d --name easyss --network host nange/docker-easyss:latest -p 9999 -k "<服务端口令>" -s yourdomain.com
 #
 FROM ubuntu:latest
 

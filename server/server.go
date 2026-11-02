@@ -321,6 +321,9 @@ func (s *Server) Start() error {
 
 	masterKey, err := crypto.DeriveMasterKey(srvCfg.Password)
 	if err != nil {
+		if errors.Is(err, crypto.ErrPasswordEmpty) {
+			return fmt.Errorf("derive master key: %w (set server.password to a random string of at least %d characters, e.g. openssl rand -hex 24)", err, config.MinPasswordLen)
+		}
 		return fmt.Errorf("derive master key: %w", err)
 	}
 

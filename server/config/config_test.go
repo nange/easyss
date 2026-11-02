@@ -199,6 +199,8 @@ func TestExampleConfigIsNormalized(t *testing.T) {
 	require.Equal(t, SupportedConfigVersion, fc.ConfigVersion)
 	require.Equal(t, "your-domain.com", fc.Server.Host)
 	require.Equal(t, config.DefaultServerPort, fc.Server.Port)
+	// 示例不内置口令：它会被照抄成整个部署的共享凭据，只能由用户自己生成。
+	require.Empty(t, fc.Server.Password)
 	require.NoError(t, fc.validateListen())
 	require.NoError(t, fc.validateTransport())
 	require.NoError(t, fc.validateAllowedMethods())
