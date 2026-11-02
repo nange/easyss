@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	stdlog "log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -378,9 +379,15 @@ func (s *Server) Start() error {
 	committed = true
 	s.mu.Unlock()
 
+	ln, err := listenTCP(srvCfg.ListenAddr())
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", srvCfg.ListenAddr(), err)
+	}
+
 	// 打进生效的 HTTP/2 参数：上传速度上不去时，第一件事是确认服务端给了多大的窗口与并发流。
 	log.Info("[SERVER] listening",
-		"addr", srvCfg.ListenAddr(),
+		"addr", ln.Addr().String(),
+		"mptcp", false,
 		"routes", []string{"/", config.EndpointTCP, config.EndpointUDP, config.EndpointICMP, config.EndpointProbe},
 		"probe_payload_bytes", len(probePayload),
 		"h2_max_frame_size", srv.HTTP2.MaxReadFrameSize,
@@ -389,7 +396,16 @@ func (s *Server) Start() error {
 		"h2_max_concurrent_streams", srv.HTTP2.MaxConcurrentStreams)
 
 	go s.statsLoop(statsDone)
-	return srv.ListenAndServeTLS("", "")
+	return srv.ServeTLS(ln, "", "")
+}
+
+// listenTCP 绑定监听地址并显式关闭 MPTCP：Go 1.24+ 默认给 listen socket 打开 MPTCP
+// （见 go.mod 的 godebug multipathtcp=0），而 MPTCP 监听面是内核 TCP 漏洞的利用入口，
+// 本服务端也没有 MPTCP 客户端。
+func listenTCP(addr string) (net.Listener, error) {
+	lc := net.ListenConfig{}
+	lc.SetMultipathTCP(false)
+	return lc.Listen(context.Background(), "tcp", addr)
 }
 
 // buildHTTPServer 的 HTTP/2 参数按上传吞吐量定尺寸：流级接收窗口决定单条上传流的在途数据量

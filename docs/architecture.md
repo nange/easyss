@@ -60,6 +60,8 @@ Bootstrap 用 AES-256-GCM 加密初始握手帧（含目标地址与方法协商
 
 需要 sudo（443 + ICMP）；证书用 certmagic ACME 或手动文件。ACME 标识符可以是域名或公网 IPv4：IP 证书（RFC 8738）必须短生命周期，`manageCert` 对 IP 显式请求 `shortlived` profile；它只能用 tls-alpn-01（dns-01 被禁止），因此公网 443 在签发与续期时必须可达。客户端侧 IP 分支跳过预解析/pinning，uTLS 不发 SNI、按 IP SAN 校验，**`sn` 必须留空**。
 
+监听 socket 固定不开 MPTCP：`server.listenTCP` 显式 `SetMultipathTCP(false)`，`go.mod` 的 `godebug multipathtcp=0` 兜住其余监听器（pprof、客户端本地端口）。Go 1.24+ 默认给 listen socket 开 MPTCP，而 MPTCP 监听面是内核 TCP 漏洞（如 CVE-2026-98432）的利用入口，本服务端也没有 MPTCP 客户端；**不要**为了提高吞吐去掉这两处。
+
 ### 7. SSRF 防护与 DNS pinning
 
 服务端握手阶段解析 HANDSHAKE target（host→地址带 4×基础超时的短缓存，默认 120s；同一主机的并发流合并成一次解析），任一地址落在 LAN/私有/保留段即 400，并把解析结果传给拨号路径；拨号只拨这些已校验字面 IP，不再解析域名，因此 SSRF 检查与实际连接使用同一次解析，DNS-rebinding 无法翻转答案。next proxy 路径仍把域名交给上游解析（被墙域名依赖它），属已接受的残余风险。
