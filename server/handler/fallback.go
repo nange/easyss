@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/nange/easyss/v3/stats"
 )
@@ -261,10 +262,9 @@ func resolveFooter(dep *deployment, footer string) string {
 
 // 内容只含本包生成的十六进制标记，以 template.HTML 注入是安全的。
 func headExtras(dep *deployment) template.HTML {
-	token := hexToken(dep.seed, "asset")
 	return template.HTML(fmt.Sprintf(
-		`<link rel="icon" href="/favicon-%s.ico">%s<meta name="generator" content="%s">`,
-		token, "\n    ", pickBuildTag(dep.seed)))
+		`<link rel="icon" href="%s">%s<meta name="generator" content="%s">`,
+		dep.faviconPath, "\n    ", pickBuildTag(dep.seed)))
 }
 
 func bodyClass(pageType string) string {
@@ -294,8 +294,8 @@ const (
 	ctxOrigAcceptEncoding
 )
 
-// 模式配置与部署级身份在构造完成后只读，可以并发服务请求；运行期唯一的可变状态是
-// 有界的生成页缓存（cacheMu 保护）。
+// 模式配置与部署级身份在构造完成后只读，可以并发服务请求；运行期可变状态是有界的生成页
+// 缓存（cacheMu 保护）与多区间响应的分隔串编号。
 type Fallback struct {
 	dep *deployment
 
@@ -309,6 +309,9 @@ type Fallback struct {
 	cacheMu    sync.Mutex
 	cache      map[string][]byte
 	cacheCount int
+
+	// boundary 是多区间响应的分隔串编号：nginx 的临时编号只在 multipart 应答里递增。
+	boundary atomic.Uint64
 }
 
 // PreserveHost 与 CDNDomains 只在反向代理模式下生效。
@@ -530,6 +533,18 @@ func (fb *Fallback) Serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 自动生成模式只像一台静态站：GET/HEAD/POST 之外统一 405，与路径无关，任何端点都不会显得特殊。
+	if m := r.Method; m != http.MethodGet && m != http.MethodHead && m != http.MethodPost {
+		serveReject(w, http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 页面头部声明过的图标必须真的存在，否则引用本身就是"本站没有静态资源"的证据。
+	if path == fb.dep.faviconPath || path == "/favicon.ico" {
+		fb.serveFavicon(w, r)
+		return
+	}
+
 	// 自动生成页走完整的 HTTP 真实性层：未知路径返回 404，并补齐 ETag/Last-Modified/条件请求。
 	fb.serveGeneratedPage(w, r, path)
 }
@@ -544,10 +559,28 @@ func writeRawFallback(w http.ResponseWriter, content []byte) {
 
 // 补齐真实静态站点会有的响应头与条件请求语义。
 func (fb *Fallback) serveGeneratedPage(w http.ResponseWriter, r *http.Request, path string) {
-	body := fb.getOrRenderHTML(path)
-	lastModified := fb.dep.lastModified
+	res := fallbackResource{
+		body:         fb.getOrRenderHTML(path),
+		contentType:  "text/html; charset=utf-8",
+		lastModified: fb.dep.lastModified,
+		status:       generatedStatus(r, path),
+		boundary:     &fb.boundary,
+	}
+	if body := serveFallbackResource(w, r, res); body != nil {
+		w.Write(body) //nolint:errcheck
+	}
+}
 
-	if prepareFallbackResponse(w, r, body, lastModified, generatedStatus(r, path)) {
+// 图标与页面共用同一层 HTTP 语义，只有内容类型不同。
+func (fb *Fallback) serveFavicon(w http.ResponseWriter, r *http.Request) {
+	res := fallbackResource{
+		body:         fb.dep.favicon,
+		contentType:  "image/x-icon",
+		lastModified: fb.dep.lastModified,
+		status:       http.StatusOK,
+		boundary:     &fb.boundary,
+	}
+	if body := serveFallbackResource(w, r, res); body != nil {
 		w.Write(body) //nolint:errcheck
 	}
 }

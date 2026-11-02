@@ -16,8 +16,9 @@ const (
 	saltCacheTTL = 24 * time.Hour
 )
 
-// saltCache 记录已被服务器接受的 bootstrap salt：每条流都用全新的随机 salt，重放的记录必然
-// 携带已见过的 salt。键把 salt 绑定到 endpoint，同一 salt 出现在不同 endpoint 上不会误判为重放。
+// saltCache 记录已证明持有主密钥的 bootstrap salt（首个记录解出后才写入）：每条流都用全新的
+// 随机 salt，重放的记录必然携带已见过的 salt。键把 salt 绑定到 endpoint，同一 salt 出现在不同
+// endpoint 上不会误判为重放。
 type saltCache struct {
 	mu    sync.Mutex
 	cache *freecache.Cache

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/netip"
 	"runtime/debug"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nange/easyss/v3/config"
@@ -18,9 +20,35 @@ import (
 	"github.com/nange/easyss/v3/util"
 )
 
-// 这些请求已经证明持有主密钥（或被限流、等待握手记录超时），真实状态码才是可信的。
+// 真实状态码只用于已有证据的失败：请求已被证明持有主密钥（端点/方法/目标不匹配），或是
+// nginx 对同类请求同样会给出的应答（停滞的请求体 408、持续超限后的 429）。其余失败一律
+// 返回伪装页，否则"同一请求第二次得到 400"本身就足以识别服务端实现。
 func serveReject(w http.ResponseWriter, code int) {
+	body := nginxErrorPage(code)
+	w.Header().Set("Server", "nginx")
+	w.Header().Set("Content-Type", "text/html")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(code)
+	w.Write(body) //nolint:errcheck
+}
+
+// nginxErrorPage 复刻 nginx 默认错误页：空 body 加缺 Server 头是与任何 nginx 都不符的组合。
+// 405/408 的状态行与 http.StatusText 不同，标题必须逐字一致。
+func nginxErrorPage(code int) []byte {
+	title := fmt.Sprintf("%d %s", code, http.StatusText(code))
+	switch code {
+	case http.StatusMethodNotAllowed:
+		title = "405 Not Allowed"
+	case http.StatusRequestTimeout:
+		title = "408 Request Time-out"
+	}
+	var b strings.Builder
+	b.WriteString("<html>\r\n<head><title>")
+	b.WriteString(title)
+	b.WriteString("</title></head>\r\n<body>\r\n<center><h1>")
+	b.WriteString(title)
+	b.WriteString("</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n")
+	return []byte(b.String())
 }
 
 // x-es 头固定是 16 字节 salt 或能力令牌的 base64url（22 字符，与 crypto.saltSize 同源）。
@@ -96,14 +124,6 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 		return handshakeResult{}, false
 	}
 
-	// 见过的 salt 意味着记录正在被重放：接受它会重新拨号目标并重新投递第一个数据包。
-	if h.saltCache.MarkSeen(r.URL.Path, salt) {
-		log.Debug("[SERVER] replayed salt", "remote", r.RemoteAddr, "endpoint", r.URL.Path)
-		stats.RecordServerHandshakeError()
-		serveReject(w, http.StatusBadRequest)
-		return handshakeResult{}, false
-	}
-
 	endpoint := r.URL.Path
 	sk, err := crypto.NewStreamKeys(h.masterKey, salt, endpoint)
 	if err != nil {
@@ -123,6 +143,15 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 		// 用 Debug 而非 Error：任何带随机 x-es 头的请求都会走到这里。保持伪装首页，服务器对
 		// 无密钥请求才与真实网站无法区分。
 		log.Debug("[SERVER] read first record failed", "remote", r.RemoteAddr, "endpoint", endpoint, "err", err)
+		h.serveFallback(w, r)
+		return handshakeResult{}, false
+	}
+
+	// 首个记录解出才证明持有主密钥：salt 必须记在这之后，否则停滞请求体留下的 408 会让同一
+	// salt 的第二次请求变成回退页。任何 S2C 字节都在此之后写出，并发重放仍只有一个能过。
+	if h.saltCache.MarkSeen(endpoint, salt) {
+		log.Debug("[SERVER] replayed salt", "remote", r.RemoteAddr, "endpoint", endpoint)
+		stats.RecordServerHandshakeError()
 		h.serveFallback(w, r)
 		return handshakeResult{}, false
 	}

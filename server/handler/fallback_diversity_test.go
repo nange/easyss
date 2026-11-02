@@ -3,10 +3,12 @@ package handler
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -133,8 +135,8 @@ func TestInitFallback_DeploymentSpace(t *testing.T) {
 	homes := make(map[string]int)
 	for i := range 50 {
 		fb := withDeployment(t, seedOf(100+i), "")
-		palettes[strongETag([]byte(fb.dep.theme.CSS))]++
-		homes[strongETag(fb.renderPage("/"))]++
+		palettes[string(fb.dep.theme.CSS)]++
+		homes[string(fb.renderPage("/"))]++
 	}
 
 	if distinct := len(palettes); distinct < 45 {
@@ -673,18 +675,369 @@ func TestServeFallback_Head(t *testing.T) {
 	}
 }
 
-func TestServeFallback_ETagStablePerDeployment(t *testing.T) {
+// ETag 必须是 nginx 对静态文件的 "<十六进制 mtime>-<十六进制长度>" 形态且稳定可复现：
+// 十六进制内容摘要的形态是构建工具/框架的特征，与静态站身份不符。
+func TestServeFallback_ETagShape(t *testing.T) {
 	fb := withDeployment(t, seedOf(804), "")
-	first := doFallback(fb, "/about", nil, http.MethodGet).Header().Get("ETag")
-	second := doFallback(fb, "/about", nil, http.MethodGet).Header().Get("ETag")
-	if first != second {
-		t.Errorf("ETag changed within a deployment: %q -> %q", first, second)
+
+	first := doFallback(fb, "/about", nil, http.MethodGet)
+	want := fmt.Sprintf(`"%x-%x"`, fb.dep.lastModified.Unix(), first.Body.Len())
+	if got := first.Header().Get("ETag"); got != want {
+		t.Errorf("ETag = %q, want %q", got, want)
+	}
+	// ETag 的 mtime 与 Last-Modified 必须同源，否则两个验证器互相矛盾。
+	lm, err := http.ParseTime(first.Header().Get("Last-Modified"))
+	if err != nil {
+		t.Fatalf("parse Last-Modified: %v", err)
+	}
+	if lm.Unix() != fb.dep.lastModified.Unix() {
+		t.Errorf("Last-Modified = %v, want %v", lm, fb.dep.lastModified)
 	}
 
-	other := withDeployment(t, seedOf(805), "")
-	otherETag := doFallback(other, "/about", nil, http.MethodGet).Header().Get("ETag")
-	if otherETag == first {
-		t.Error("ETag identical across deployments")
+	second := doFallback(fb, "/about", nil, http.MethodGet).Header().Get("ETag")
+	if second != first.Header().Get("ETag") {
+		t.Errorf("ETag changed within a deployment: %q -> %q", first.Header().Get("ETag"), second)
+	}
+
+	// 304 必须同时回 ETag 与 Last-Modified：nginx 的静态 304 两者都带，单独回 ETag 与 mtime 不同源。
+	notModified := doFallback(fb, "/about",
+		map[string]string{"If-None-Match": first.Header().Get("ETag")}, http.MethodGet)
+	if notModified.Code != http.StatusNotModified {
+		t.Fatalf("status = %d, want 304", notModified.Code)
+	}
+	if got := notModified.Header().Get("Last-Modified"); got != first.Header().Get("Last-Modified") {
+		t.Errorf("304 Last-Modified = %q, want %q", got, first.Header().Get("Last-Modified"))
+	}
+}
+
+// 声明了 Accept-Ranges: bytes 就必须真的实现 Range：对 10 字节区间回整份 200 是最容易
+// 复现的"不是真实静态服务器"证据，越界区间则必须是 416 而不是整份内容。
+func TestServeFallback_Range(t *testing.T) {
+	fb := withDeployment(t, seedOf(807), "")
+	full := doFallback(fb, "/about", nil, http.MethodGet)
+	size := full.Body.Len()
+
+	tests := []struct {
+		name       string
+		spec       string
+		wantStatus int
+		wantLen    int
+		wantRange  string
+	}{
+		{"前缀区间", "bytes=0-9", http.StatusPartialContent, 10, fmt.Sprintf("bytes 0-9/%d", size)},
+		{"开区间", "bytes=10-", http.StatusPartialContent, size - 10, fmt.Sprintf("bytes 10-%d/%d", size-1, size)},
+		{"后缀区间", "bytes=-10", http.StatusPartialContent, 10, fmt.Sprintf("bytes %d-%d/%d", size-10, size-1, size)},
+		{"末尾越界按长度截断", fmt.Sprintf("bytes=%d-", size-3), http.StatusPartialContent, 3,
+			fmt.Sprintf("bytes %d-%d/%d", size-3, size-1, size)},
+		{"完全越界", fmt.Sprintf("bytes=%d-", size), http.StatusRequestedRangeNotSatisfiable, -1,
+			fmt.Sprintf("bytes */%d", size)},
+		{"非 bytes 单位忽略", "items=0-1", http.StatusOK, size, ""},
+		// nginx 的解析器对单位大小写不敏感，start > end 与语法错误都回 416 而不是忽略。
+		{"大写单位", "BYTES=0-9", http.StatusPartialContent, 10, fmt.Sprintf("bytes 0-9/%d", size)},
+		{"start 大于 end", "bytes=9-3", http.StatusRequestedRangeNotSatisfiable, -1,
+			fmt.Sprintf("bytes */%d", size)},
+		{"缺少短横线", "bytes=0", http.StatusRequestedRangeNotSatisfiable, -1,
+			fmt.Sprintf("bytes */%d", size)},
+		{"非数字语法错误", "bytes=abc-1", http.StatusRequestedRangeNotSatisfiable, -1,
+			fmt.Sprintf("bytes */%d", size)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := doFallback(fb, "/about", map[string]string{"Range": tt.spec}, http.MethodGet)
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if tt.wantLen >= 0 && rec.Body.Len() != tt.wantLen {
+				t.Errorf("body = %d bytes, want %d", rec.Body.Len(), tt.wantLen)
+			}
+			if got := rec.Header().Get("Content-Range"); got != tt.wantRange {
+				t.Errorf("Content-Range = %q, want %q", got, tt.wantRange)
+			}
+			// nginx 的 206 走区间过滤器提前返回，不带 Accept-Ranges（它只出现在忽略 Range 的 200 上）。
+			if rec.Code == http.StatusPartialContent && rec.Header().Get("Accept-Ranges") != "" {
+				t.Error("206 must not carry Accept-Ranges, nginx does not send it")
+			}
+			if tt.wantStatus == http.StatusPartialContent &&
+				!bytes.Contains(full.Body.Bytes(), rec.Body.Bytes()) {
+				t.Error("partial body is not a slice of the full page")
+			}
+		})
+	}
+
+	// 416 与 nginx 默认错误页同形：空 body、缺 Server/Content-Type 本身就是可观测特征。
+	out := doFallback(fb, "/about", map[string]string{"Range": fmt.Sprintf("bytes=%d-", size)}, http.MethodGet)
+	if !bytes.Contains(out.Body.Bytes(), []byte("416 Requested Range Not Satisfiable")) {
+		t.Errorf("416 body = %q, want the nginx error page", out.Body.String())
+	}
+	if got := out.Header().Get("Server"); got != "nginx" {
+		t.Errorf("416 Server = %q, want nginx", got)
+	}
+	if got := out.Header().Get("Content-Type"); got != "text/html" {
+		t.Errorf("416 Content-Type = %q, want text/html", got)
+	}
+
+	// 前缀区间逐字节核对，避免上面只比较长度。
+	prefix := doFallback(fb, "/about", map[string]string{"Range": "bytes=0-9"}, http.MethodGet)
+	if !bytes.Equal(prefix.Body.Bytes(), full.Body.Bytes()[:10]) {
+		t.Error("range body does not match the page prefix")
+	}
+
+	// If-Range 不匹配时回整份内容；匹配当前验证器时仍按区间处理（RFC 9110 §13.1.5）。
+	stale := doFallback(fb, "/about", map[string]string{
+		"Range": "bytes=0-9", "If-Range": `"stale"`,
+	}, http.MethodGet)
+	if stale.Code != http.StatusOK || stale.Body.Len() != size {
+		t.Errorf("stale If-Range: status = %d, body = %d, want 200 and %d bytes",
+			stale.Code, stale.Body.Len(), size)
+	}
+	weak := doFallback(fb, "/about", map[string]string{
+		"Range": "bytes=0-9", "If-Range": "W/" + full.Header().Get("ETag"),
+	}, http.MethodGet)
+	if weak.Code != http.StatusOK {
+		t.Errorf("weak If-Range: status = %d, want 200", weak.Code)
+	}
+	fresh := doFallback(fb, "/about", map[string]string{
+		"Range": "bytes=0-9", "If-Range": full.Header().Get("ETag"),
+	}, http.MethodGet)
+	if fresh.Code != http.StatusPartialContent {
+		t.Errorf("matching If-Range: status = %d, want 206", fresh.Code)
+	}
+
+	// 日期验证器必须与 Last-Modified 精确相等：nginx 直接比较 if_range_time != last_modified_time，
+	// 比 RFC 允许的"晚于即视为未修改"更严格。
+	later := doFallback(fb, "/about", map[string]string{
+		"Range":    "bytes=0-9",
+		"If-Range": time.Now().Add(24 * time.Hour).UTC().Format(http.TimeFormat),
+	}, http.MethodGet)
+	if later.Code != http.StatusOK || later.Body.Len() != size {
+		t.Errorf("future If-Range: status = %d, body = %d, want 200 and %d bytes",
+			later.Code, later.Body.Len(), size)
+	}
+	exact := doFallback(fb, "/about", map[string]string{
+		"Range": "bytes=0-9", "If-Range": full.Header().Get("Last-Modified"),
+	}, http.MethodGet)
+	if exact.Code != http.StatusPartialContent {
+		t.Errorf("exact If-Range date: status = %d, want 206", exact.Code)
+	}
+}
+
+// 多区间必须回 nginx 的 multipart/byteranges：默认配置下 nginx 收集全部区间后走 multipart 头，
+// 回 200 整页是单请求即可区分的偏差。分隔串复刻 nginx 的递增临时编号。
+func TestServeFallback_MultiRange(t *testing.T) {
+	fb := withDeployment(t, seedOf(813), "")
+	full := doFallback(fb, "/about", nil, http.MethodGet)
+	page := full.Body.Bytes()
+
+	rec := doFallback(fb, "/about", map[string]string{"Range": "bytes=0-1, 3-4"}, http.MethodGet)
+	if rec.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want 206", rec.Code)
+	}
+	const boundaryPrefix = "multipart/byteranges; boundary="
+	ct := rec.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, boundaryPrefix) {
+		t.Fatalf("Content-Type = %q, want %q...", ct, boundaryPrefix)
+	}
+	boundary := strings.TrimPrefix(ct, boundaryPrefix)
+	if len(boundary) < 11 {
+		t.Errorf("boundary = %q, want at least 11 digits", boundary)
+	}
+	for _, c := range boundary {
+		if c < '0' || c > '9' {
+			t.Errorf("boundary = %q, want digits only", boundary)
+			break
+		}
+	}
+	if rec.Header().Get("Accept-Ranges") != "" {
+		t.Error("multipart 206 must not carry Accept-Ranges")
+	}
+	if got := rec.Header().Get("Content-Length"); got != strconv.Itoa(rec.Body.Len()) {
+		t.Errorf("Content-Length = %s, want %d", got, rec.Body.Len())
+	}
+
+	want := new(bytes.Buffer)
+	for _, rg := range []struct{ start, end int }{{0, 1}, {3, 4}} {
+		fmt.Fprintf(want, "\r\n--%s\r\nContent-Type: text/html; charset=utf-8\r\nContent-Range: bytes %d-%d/%d\r\n\r\n",
+			boundary, rg.start, rg.end, len(page))
+		want.Write(page[rg.start : rg.end+1])
+	}
+	fmt.Fprintf(want, "\r\n--%s--\r\n", boundary)
+	if !bytes.Equal(rec.Body.Bytes(), want.Bytes()) {
+		t.Errorf("multipart body = %q, want %q", rec.Body.String(), want.String())
+	}
+
+	// 分隔串每次响应递增，与 nginx 的临时编号一致：相同请求不能复用同一个分隔串。
+	again := doFallback(fb, "/about", map[string]string{"Range": "bytes=0-1,3-4"}, http.MethodGet)
+	if again.Header().Get("Content-Type") == ct {
+		t.Error("boundary must change between responses, as nginx's temp number does")
+	}
+
+	// 区间总量超过整份内容 + 4KB 时 nginx 退回整份内容而不是拼 multipart。
+	many := make([]string, 0, 64)
+	for range 64 {
+		many = append(many, "0-1")
+	}
+	if got := doFallback(fb, "/about", map[string]string{"Range": "bytes=" + strings.Join(many, ",")}, http.MethodGet); got.Code != http.StatusOK {
+		t.Errorf("oversized multi-range status = %d, want 200 (nginx declines)", got.Code)
+	}
+}
+
+// 条件请求与 Range 只对 GET/HEAD 且会得到 200 的请求生效：对 POST 回 304/206 既违反 RFC 9110
+// §15.4.5，也是真实静态站不会给出的应答，属于"两个请求即可识别"的同类特征。
+func TestServeFallback_ConditionalAndRangeScope(t *testing.T) {
+	fb := withDeployment(t, seedOf(811), "")
+	page := doFallback(fb, "/about", nil, http.MethodGet)
+	etag, size := page.Header().Get("ETag"), page.Body.Len()
+
+	tests := []struct {
+		name    string
+		method  string
+		headers map[string]string
+		want    int
+	}{
+		{"GET 条件请求命中", http.MethodGet, map[string]string{"If-None-Match": etag}, http.StatusNotModified},
+		{"HEAD 条件请求命中", http.MethodHead, map[string]string{"If-None-Match": etag}, http.StatusNotModified},
+		{"POST 不得回 304", http.MethodPost, map[string]string{"If-None-Match": etag}, http.StatusOK},
+		{"POST 不得回 206", http.MethodPost, map[string]string{"Range": "bytes=0-9"}, http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := doFallback(fb, "/about", tt.headers, tt.method)
+			if rec.Code != tt.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.want)
+			}
+			if tt.method == http.MethodPost && rec.Body.Len() != size {
+				t.Errorf("body = %d bytes, want the full %d", rec.Body.Len(), size)
+			}
+		})
+	}
+
+	// 304 只在请求会得到 200 时才有意义：未知路径的 404 不能因为条件请求变成 304。
+	miss := doFallback(fb, "/missing-page", map[string]string{"Accept": "text/html"}, http.MethodGet)
+	if miss.Code != http.StatusNotFound {
+		t.Fatalf("unknown path status = %d, want 404", miss.Code)
+	}
+	// nginx 的 range/条件过滤器对非 200 直接返回：404 没有实体头，只带错误页自己的头。
+	for _, header := range []string{"ETag", "Last-Modified", "Accept-Ranges"} {
+		if got := miss.Header().Get(header); got != "" {
+			t.Errorf("404 %s = %q, want none", header, got)
+		}
+	}
+	again := doFallback(fb, "/missing-page", map[string]string{
+		"Accept":        "text/html",
+		"If-None-Match": etag,
+	}, http.MethodGet)
+	if again.Code != http.StatusNotFound {
+		t.Errorf("conditional 404 status = %d, want 404", again.Code)
+	}
+}
+
+// GET/HEAD/POST 之外的方法对静态站一律 405：所有方法都回整页是最短的单请求特征之一，
+// 统一处理不会让任何端点显得特殊。
+func TestServeFallback_OtherMethods405(t *testing.T) {
+	fb := withDeployment(t, seedOf(812), "")
+
+	for _, method := range []string{
+		http.MethodPut, http.MethodDelete, http.MethodOptions, http.MethodPatch, http.MethodTrace,
+	} {
+		t.Run(method, func(t *testing.T) {
+			rec := doFallback(fb, "/", nil, method)
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("status = %d, want 405", rec.Code)
+			}
+			if got := rec.Header().Get("Server"); got != "nginx" {
+				t.Errorf("Server = %q, want nginx", got)
+			}
+			if !strings.Contains(rec.Body.String(), "405 Not Allowed") {
+				t.Errorf("body = %q, want the nginx error page", rec.Body.String())
+			}
+		})
+	}
+
+	// 协议只用 POST，GET/HEAD 是静态站的基本方法，三者必须继续返回页面。
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost} {
+		if rec := doFallback(fb, "/", nil, method); rec.Code != http.StatusOK {
+			t.Errorf("%s /: status = %d, want 200", method, rec.Code)
+		}
+	}
+}
+
+// 页面头部声明的图标必须是一张合法 ICO（而不是回退页），并且与 /favicon.ico 同一份内容：
+// 被引用却不存在的静态资源是最直白的"本站没有资源目录"证据。
+func TestServeFallback_Favicon(t *testing.T) {
+	fb := withDeployment(t, seedOf(808), "")
+
+	home := doFallback(fb, "/", nil, http.MethodGet).Body.String()
+	if !strings.Contains(home, `href="`+fb.dep.faviconPath+`"`) {
+		t.Fatalf("home page does not reference %q", fb.dep.faviconPath)
+	}
+
+	icon := doFallback(fb, fb.dep.faviconPath, nil, http.MethodGet)
+	if icon.Code != http.StatusOK {
+		t.Fatalf("favicon status = %d, want 200", icon.Code)
+	}
+	if got := icon.Header().Get("Content-Type"); got != "image/x-icon" {
+		t.Errorf("Content-Type = %q, want image/x-icon", got)
+	}
+	for _, header := range []string{"ETag", "Last-Modified", "Content-Length"} {
+		if icon.Header().Get(header) == "" {
+			t.Errorf("missing %s header", header)
+		}
+	}
+
+	body := icon.Body.Bytes()
+	if len(body) < faviconHeaderLen {
+		t.Fatalf("icon is %d bytes, too short for an ICO header", len(body))
+	}
+	if got := binary.LittleEndian.Uint16(body[2:]); got != 1 {
+		t.Errorf("ICO type = %d, want 1", got)
+	}
+	if got := binary.LittleEndian.Uint16(body[4:]); got != 1 {
+		t.Errorf("ICO image count = %d, want 1", got)
+	}
+	if body[6] != faviconSize || body[7] != faviconSize {
+		t.Errorf("ICO size = %dx%d, want %dx%d", body[6], body[7], faviconSize, faviconSize)
+	}
+	if got := binary.LittleEndian.Uint16(body[12:]); got != 32 {
+		t.Errorf("ICO bit depth = %d, want 32", got)
+	}
+	imageLen := binary.LittleEndian.Uint32(body[14:])
+	imageOff := binary.LittleEndian.Uint32(body[18:])
+	if int(imageOff) != faviconHeaderLen || int(imageOff)+int(imageLen) != len(body) {
+		t.Errorf("ICO image segment = offset %d len %d, want offset %d and total %d",
+			imageOff, imageLen, faviconHeaderLen, len(body))
+	}
+	// BMP 图像段：BITMAPINFOHEADER + 16×16×4 的 BGRA 像素 + 每行 4 字节对齐的 AND 掩码。
+	wantImageLen := faviconBitmapInfoLen + faviconSize*faviconSize*4 + faviconSize*4
+	if int(imageLen) != wantImageLen {
+		t.Errorf("ICO image length = %d, want %d", imageLen, wantImageLen)
+	}
+
+	// 浏览器直接请求的 /favicon.ico 必须是同一张图。
+	direct := doFallback(fb, "/favicon.ico", nil, http.MethodGet)
+	if !bytes.Equal(direct.Body.Bytes(), body) {
+		t.Error("/favicon.ico differs from the declared icon")
+	}
+
+	// 图标与页面共用同一层 HTTP 语义：条件请求回 304。
+	notModified := doFallback(fb, fb.dep.faviconPath,
+		map[string]string{"If-None-Match": icon.Header().Get("ETag")}, http.MethodGet)
+	if notModified.Code != http.StatusNotModified {
+		t.Errorf("conditional favicon status = %d, want 304", notModified.Code)
+	}
+}
+
+// 图标按部署种子生成：不同部署的内容与配色不同，同一部署内稳定可复现。
+func TestFavicon_PerDeployment(t *testing.T) {
+	first := withDeployment(t, seedOf(809), "").dep.favicon
+	again := withDeployment(t, seedOf(809), "").dep.favicon
+	if !bytes.Equal(first, again) {
+		t.Error("favicon is not reproducible for the same seed")
+	}
+
+	other := withDeployment(t, seedOf(810), "").dep.favicon
+	if bytes.Equal(first, other) {
+		t.Error("favicon identical across deployments")
 	}
 }
 
