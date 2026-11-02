@@ -23,8 +23,8 @@ func serveReject(w http.ResponseWriter, code int) {
 	w.WriteHeader(code)
 }
 
-// x-es 头固定是 16 字节 salt 或能力令牌的 base64url（22 字符）。头值来自对端，
-// 先按长度拒绝再解码，解码缓冲才不会随对端给出的长度增长。
+// x-es 头固定是 16 字节 salt 或能力令牌的 base64url（22 字符，与 crypto.saltSize 同源）。
+// 头值来自对端：先按长度拒绝再解码，解码缓冲才不会随对端给出的长度增长。
 const xesSaltB64Len = 22
 
 var errXESHeader = errors.New("handler: malformed x-es header")
