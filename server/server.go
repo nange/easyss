@@ -422,6 +422,7 @@ func buildHTTPServer(cfg *serverconfig.FileConfig, tlsConfig *tls.Config, mux *h
 		HTTP2:             http2Cfg,
 		IdleTimeout:       8 * timeout,
 		ReadHeaderTimeout: min(timeout/2, 10*time.Second),
+		MaxHeaderBytes:    config.ServerMaxHeaderBytes,
 	}
 	srv.Protocols.SetHTTP1(true)
 	srv.Protocols.SetHTTP2(true)

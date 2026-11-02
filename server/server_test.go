@@ -324,6 +324,14 @@ func TestBuildHTTPServerWriteStallBound(t *testing.T) {
 	require.Equal(t, 30*time.Second, srv.HTTP2.WriteByteTimeout)
 }
 
+// TestBuildHTTPServerHeaderBound 固定请求头上限：取 nginx 默认的 32KB（4×8k）；默认的 1MB 既是
+// 每连接头缓冲，也是 fallback 路径长度的上界（缓存按 path 做 key）。h2 的
+// SETTINGS_MAX_HEADER_LIST_SIZE 由同一字段派生。
+func TestBuildHTTPServerHeaderBound(t *testing.T) {
+	srv := buildHTTPServer(&serverconfig.FileConfig{Server: serverconfig.ServerConfig{Port: 443}}, nil, http.NewServeMux(), 30*time.Second)
+	require.Equal(t, 32<<10, srv.MaxHeaderBytes)
+}
+
 // TestBuildHTTPServerH2ConfigOverrides 固定 transport.h2_* 的覆盖语义：显式正值
 // 覆盖默认值，0 表示"使用默认值"（文档化的字段语义，兜底在 buildHTTPServer）。
 func TestBuildHTTPServerH2ConfigOverrides(t *testing.T) {

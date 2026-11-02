@@ -383,6 +383,10 @@ const (
 	// 达到上限后新路径直接渲染而不缓存，缓存因此不会无限增长。
 	maxCachedFallbackPages = 320
 
+	// 生成页缓存以路径为 key，而未认证请求的路径最长可达 http.Server.MaxHeaderBytes；真实站点
+	// 路径远短于此，256B 足够覆盖生成页与目录模式页面。
+	maxFallbackPathLen = 256
+
 	// 之后的路径形如 <host>/<path>，直接拼成 https://<host>/<path> 代理出去。
 	cdnPathPrefix = "/__cdn__/"
 )
@@ -581,7 +585,13 @@ func (fb *Fallback) getOrRenderHTML(path string) []byte {
 	return html
 }
 
+// 超长路径先截断到 maxFallbackPathLen：缓存 key 与渲染种子都取自返回值，未认证客户端不能
+// 用唯一长路径放大常驻内存。生成页内容不来自路径，截断不改变响应形状与 detectPageType 判定。
 func cleanPath(p string) string {
+	if len(p) > maxFallbackPathLen {
+		// 必须克隆：切片不复制，key 会经底层数组让整条请求行一直存活。
+		p = strings.Clone(p[:maxFallbackPathLen])
+	}
 	if p == "" || p == "/" {
 		return "/"
 	}
