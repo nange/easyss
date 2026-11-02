@@ -23,6 +23,23 @@ func serveReject(w http.ResponseWriter, code int) {
 	w.WriteHeader(code)
 }
 
+// x-es 头固定是 16 字节 salt 或能力令牌的 base64url（22 字符，与 crypto.saltSize 同源）。
+// 头值来自对端：先按长度拒绝再解码，解码缓冲才不会随对端给出的长度增长。
+const xesSaltB64Len = 22
+
+var errXESHeader = errors.New("handler: malformed x-es header")
+
+func decodeXES(s string) ([]byte, error) {
+	if len(s) != xesSaltB64Len {
+		return nil, errXESHeader
+	}
+	b, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return nil, errXESHeader
+	}
+	return b, nil
+}
+
 type handshakeResult struct {
 	sk       *crypto.StreamKeys
 	first    crypto.FirstRecord
@@ -63,13 +80,7 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 		return handshakeResult{}, false
 	}
 
-	saltB64 := r.Header.Get("x-es")
-	if saltB64 == "" {
-		h.serveFallback(w, r)
-		return handshakeResult{}, false
-	}
-
-	salt, err := base64.RawURLEncoding.DecodeString(saltB64)
+	salt, err := decodeXES(r.Header.Get("x-es"))
 	if err != nil || len(salt) != 16 {
 		h.serveFallback(w, r)
 		return handshakeResult{}, false

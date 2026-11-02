@@ -61,12 +61,7 @@ func (h *ProbeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokenB64 := r.Header.Get("x-es")
-	if tokenB64 == "" {
-		h.serveFallback(w, r)
-		return
-	}
-	token, err := base64.RawURLEncoding.DecodeString(tokenB64)
+	token, err := decodeXES(r.Header.Get("x-es"))
 	if err != nil || len(token) != len(h.token) ||
 		subtle.ConstantTimeCompare(token, h.token) != 1 {
 		h.serveFallback(w, r)
