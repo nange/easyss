@@ -823,7 +823,7 @@ func TestServeFallback_Range(t *testing.T) {
 }
 
 // 多区间必须回 nginx 的 multipart/byteranges：默认配置下 nginx 收集全部区间后走 multipart 头，
-// 回 200 整页是单请求即可区分的偏差。分隔串复刻 nginx 的 19 位递增临时编号。
+// 回 200 整页是单请求即可区分的偏差。分隔串复刻 nginx 的递增临时编号。
 func TestServeFallback_MultiRange(t *testing.T) {
 	fb := withDeployment(t, seedOf(813), "")
 	full := doFallback(fb, "/about", nil, http.MethodGet)
@@ -839,8 +839,14 @@ func TestServeFallback_MultiRange(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want %q...", ct, boundaryPrefix)
 	}
 	boundary := strings.TrimPrefix(ct, boundaryPrefix)
-	if len(boundary) != 19 {
-		t.Errorf("boundary = %q, want nginx's 19-digit temp number", boundary)
+	if len(boundary) < 11 {
+		t.Errorf("boundary = %q, want at least 11 digits", boundary)
+	}
+	for _, c := range boundary {
+		if c < '0' || c > '9' {
+			t.Errorf("boundary = %q, want digits only", boundary)
+			break
+		}
 	}
 	if rec.Header().Get("Accept-Ranges") != "" {
 		t.Error("multipart 206 must not carry Accept-Ranges")

@@ -70,7 +70,7 @@ func serveFallbackResource(w http.ResponseWriter, r *http.Request, res fallbackR
 
 	w.Header().Set("Content-Type", res.contentType)
 	w.Header().Set("Server", "nginx")
-	// nginx 只在忽略 Range 的 200 上补 Accept-Ranges：206 走区间过滤器提前返回，不带这个头。
+	// Accept-Ranges 只出现在 200 上（没有 Range 或 Range 被忽略）：206 走区间过滤器提前返回，不带这个头。
 	if res.status == http.StatusOK && status == http.StatusOK {
 		w.Header().Set("Accept-Ranges", "bytes")
 	}
@@ -88,9 +88,10 @@ func serveFallbackResource(w http.ResponseWriter, r *http.Request, res fallbackR
 }
 
 // serveMultipartRanges 按 nginx 的 multipart/byteranges 形状写出多个区间：每段以 CRLF 开头，
-// 末段是闭合分隔串。Content-Length 必须覆盖全部分隔串，客户端才能按长度读完。
+// 末段是闭合分隔串；分隔串复刻 nginx 的零填充临时编号（64 位平台 20 位）。Content-Length 必须
+// 覆盖全部分隔串，客户端才能按长度读完。
 func serveMultipartRanges(w http.ResponseWriter, res fallbackResource, lastModified time.Time, etag string, ranges []byteRange) {
-	boundary := fmt.Sprintf("%019d", res.boundary.Add(1))
+	boundary := fmt.Sprintf("%020d", res.boundary.Add(1))
 	var buf bytes.Buffer
 	for _, rg := range ranges {
 		fmt.Fprintf(&buf, "\r\n--%s\r\nContent-Type: %s\r\nContent-Range: bytes %d-%d/%d\r\n\r\n",
