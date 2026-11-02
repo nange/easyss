@@ -48,6 +48,8 @@ func BuildSimpleConfig(s *config.SimpleConfig) (*ClientConfig, error) {
 			TunMTU:           s.TunMTU,
 			TunConfig:        tunConfig,
 		},
+		AuthUsername: s.AuthUsername,
+		AuthPassword: s.AuthPassword,
 		Routing: RoutingConfig{
 			ProxyRule:  s.ProxyRule,
 			IPV6Rule:   s.IPV6Rule,
@@ -122,6 +124,12 @@ func ApplySimpleOverrides(cfg *ClientConfig, s *config.SimpleConfig) error {
 	}
 	if s.HTTPPort > 0 {
 		cfg.Local.HTTPPort = s.HTTPPort
+	}
+	if s.AuthUsername != "" {
+		cfg.AuthUsername = s.AuthUsername
+	}
+	if s.AuthPassword != "" {
+		cfg.AuthPassword = s.AuthPassword
 	}
 	if s.ProxyRule != "" {
 		cfg.Routing.ProxyRule = s.ProxyRule

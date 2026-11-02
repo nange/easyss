@@ -542,6 +542,8 @@ func TestBuildSimpleConfig(t *testing.T) {
 			LocalPort:        1080,
 			HTTPPort:         2080,
 			BindAll:          true,
+			AuthUsername:     "user",
+			AuthPassword:     "pass",
 			DisableSysProxy:  true,
 			EnableForwardDNS: true,
 			ProxyRule:        "proxy",
@@ -576,6 +578,9 @@ func TestBuildSimpleConfig(t *testing.T) {
 		}
 		if !v3.Local.BindAll {
 			t.Error("BindAll should be true")
+		}
+		if v3.AuthUsername != "user" || v3.AuthPassword != "pass" {
+			t.Errorf("auth = %q/%q, want user/pass", v3.AuthUsername, v3.AuthPassword)
 		}
 		if v3.Transport.Protocol != "h2" {
 			t.Errorf("Protocol = %q", v3.Transport.Protocol)
@@ -739,6 +744,25 @@ func TestSimpleOverridesUseHost(t *testing.T) {
 	}
 	if cfg.Servers[0].Port != 8443 {
 		t.Errorf("Port = %d, want 8443", cfg.Servers[0].Port)
+	}
+}
+
+// TestApplySimpleOverridesAuth 固定简化模式也能覆盖本地代理鉴权，且未给出的字段
+// 保持原值：命令行只传密码时不能把用户名清掉。
+func TestApplySimpleOverridesAuth(t *testing.T) {
+	cfg := &ClientConfig{
+		Servers:      []*ServerProfile{{Host: "old.example", Port: 443}},
+		AuthUsername: "keep",
+		AuthPassword: "oldpass",
+	}
+	if err := ApplySimpleOverrides(cfg, &config.SimpleConfig{AuthPassword: "newpass"}); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AuthPassword != "newpass" {
+		t.Errorf("AuthPassword = %q, want newpass", cfg.AuthPassword)
+	}
+	if cfg.AuthUsername != "keep" {
+		t.Errorf("AuthUsername = %q, want keep", cfg.AuthUsername)
 	}
 }
 
@@ -1006,6 +1030,9 @@ func TestLoadConfig(t *testing.T) {
 			"server_port": 8443,
 			"password": "secret",
 			"local_port": 1080,
+			"bind_all": true,
+			"auth_username": "user",
+			"auth_password": "pass",
 			"proxy_rule": "auto"
 		}`
 		if err := os.WriteFile(path, []byte(v2JSON), 0644); err != nil {
@@ -1024,6 +1051,9 @@ func TestLoadConfig(t *testing.T) {
 		}
 		if cfg.Servers[0].Port != 8443 {
 			t.Errorf("Port = %d", cfg.Servers[0].Port)
+		}
+		if cfg.AuthUsername != "user" || cfg.AuthPassword != "pass" {
+			t.Errorf("auth = %q/%q, want user/pass", cfg.AuthUsername, cfg.AuthPassword)
 		}
 	})
 
