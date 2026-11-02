@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -46,6 +48,41 @@ func TestServeFallback_SamePathSameContent(t *testing.T) {
 
 	if rec1.Body.String() != rec2.Body.String() {
 		t.Error("same path returned different content")
+	}
+}
+
+// 未认证客户端可以用任意唯一路径填充生成页缓存：路径不设上限时，320 条请求行上限（32KB）
+// 量级的 key 仍能让进程常驻约 10MB。
+func TestServeFallback_LongPathDoesNotAmplifyCache(t *testing.T) {
+	fb := newTestFallback(t)
+	filler := strings.Repeat("z", 8192)
+	for i := range maxCachedFallbackPages {
+		path := "/" + strconv.Itoa(i) + filler
+		fb.Serve(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
+	}
+
+	fb.cacheMu.Lock()
+	defer fb.cacheMu.Unlock()
+	if len(fb.cache) != maxCachedFallbackPages {
+		t.Fatalf("cache entries = %d, want %d", len(fb.cache), maxCachedFallbackPages)
+	}
+	for path := range fb.cache {
+		if len(path) > maxFallbackPathLen {
+			t.Fatalf("cache key len = %d, want <= %d", len(path), maxFallbackPathLen)
+		}
+	}
+}
+
+// 截断必须另起分配：只切片不复制时，key 会经底层数组让整条请求行一直存活。
+func TestCleanPathTruncationDoesNotAlias(t *testing.T) {
+	long := "/" + strings.Repeat("z", 4096)
+	path := cleanPath(long)
+
+	if len(path) != maxFallbackPathLen || !strings.HasPrefix(long, path) {
+		t.Fatalf("cleanPath 长度 = %d，want %d 且为原路径前缀", len(path), maxFallbackPathLen)
+	}
+	if reflect.ValueOf(path).Pointer() == reflect.ValueOf(long).Pointer() {
+		t.Fatal("截断后仍与原路径共享底层数组")
 	}
 }
 

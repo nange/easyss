@@ -43,7 +43,7 @@ Bootstrap 用 AES-256-GCM 加密初始握手帧（含目标地址与方法协商
 
 ### 4. 回落对抗
 
-首个 CryptoRecord 解密/验证失败时回落成普通 HTML 首页；一旦发出 octet-stream 响应头，只能 close/RST。fallback 由 `handler.NewFallback(FallbackConfig)` 构造，在 `server.Start()` 一次性注入 `ProxyHandler`/`ProbeHandler` 与 `/` 路由；构造后只读、实例级缓存有界，没有包级可变状态，也没有"使用前必须调用"的顺序契约（未注入时回落到内置实例）。伪装两层：
+首个 CryptoRecord 解密/验证失败时回落成普通 HTML 首页；一旦发出 octet-stream 响应头，只能 close/RST。fallback 由 `handler.NewFallback(FallbackConfig)` 构造，在 `server.Start()` 一次性注入 `ProxyHandler`/`ProbeHandler` 与 `/` 路由；构造后只读、实例级缓存有界（条数 + 路径 key 长度上限 256B，未认证请求无法放大常驻内存），没有包级可变状态，也没有"使用前必须调用"的顺序契约（未注入时回落到内置实例）。伪装两层：
 
 - **部署级身份**（`fallback_random.go`）：每实例用 `crypto/rand` 派生稳定身份（主题色相族、站点名/导航/页脚/`Last-Modified`）；实例内所有客户端看到同一页面（静态站行为与页缓存前提），实例间互不相同。
 - **HTTP 真实性**（`fallback_http.go`）：自动生成模式补齐 `Content-Length`/`Last-Modified`/`ETag`/`Accept-Ranges`，条件请求 304，浏览器式内容请求未知路径 404；目录/自定义/反代三种模式不受影响。

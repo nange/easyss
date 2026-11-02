@@ -426,6 +426,11 @@ func TestServeFallback_UnknownPathStatus(t *testing.T) {
 	if rec := doFallback(fb, "/x9f2ab", nil, http.MethodGet); rec.Code != http.StatusOK {
 		t.Errorf("unknown path without Accept: status = %d, want 200", rec.Code)
 	}
+	// 超长路径按普通未知路径处理：长度上限不得引入可探测的状态码差异。
+	long := "/" + strings.Repeat("a", 4096)
+	if rec := doFallback(fb, long, browser, http.MethodGet); rec.Code != http.StatusNotFound {
+		t.Errorf("over-long path with Accept: text/html: status = %d, want 404", rec.Code)
+	}
 }
 
 // 客户端打开的流不带 Accept 头，服务端的 404 判定只看 Accept 是否含 text/html，
