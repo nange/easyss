@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/base64"
 	"math/rand"
 	"testing"
 	"time"
@@ -10,7 +9,7 @@ import (
 func TestSaltCache_MarkSeen(t *testing.T) {
 	c := newSaltCache()
 
-	salt := base64.RawURLEncoding.EncodeToString(make([]byte, 16))
+	salt := make([]byte, 16)
 	const endpoint = "/v3/tcp"
 
 	if c.MarkSeen(endpoint, salt) {
@@ -26,7 +25,10 @@ func TestSaltCache_MarkSeen(t *testing.T) {
 		t.Fatal("the same salt on a different endpoint should report not-seen")
 	}
 
-	other := base64.RawURLEncoding.EncodeToString(append([]byte(nil), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16))
+	other := make([]byte, 16)
+	for i := range other {
+		other[i] = byte(i + 1)
+	}
 	if c.MarkSeen(endpoint, other) {
 		t.Fatal("a different salt should report not-seen")
 	}
@@ -38,9 +40,8 @@ func TestSaltCache_DistinctSalts(t *testing.T) {
 	for range 1000 {
 		buf := make([]byte, 16)
 		_, _ = rng.Read(buf)
-		salt := base64.RawURLEncoding.EncodeToString(buf)
-		if c.MarkSeen("/v3/tcp", salt) {
-			t.Fatalf("salt %q reported as seen on first use", salt)
+		if c.MarkSeen("/v3/tcp", buf) {
+			t.Fatalf("salt %x reported as seen on first use", buf)
 		}
 	}
 }
@@ -50,7 +51,7 @@ func TestSaltCache_DistinctSalts(t *testing.T) {
 // （针对 Get/Set TOCTOU 的回归测试）。
 func TestSaltCache_ConcurrentMarkSeen(t *testing.T) {
 	c := newSaltCache()
-	salt := base64.RawURLEncoding.EncodeToString(make([]byte, 16))
+	salt := make([]byte, 16)
 	const goroutines = 32
 
 	start := make(chan struct{})

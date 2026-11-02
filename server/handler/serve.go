@@ -86,7 +86,7 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 	}
 
 	// 见过的 salt 意味着记录正在被重放：接受它会重新拨号目标并重新投递第一个数据包。
-	if h.saltCache.MarkSeen(r.URL.Path, saltB64) {
+	if h.saltCache.MarkSeen(r.URL.Path, salt) {
 		log.Debug("[SERVER] replayed salt", "remote", r.RemoteAddr, "endpoint", r.URL.Path)
 		stats.RecordServerHandshakeError()
 		serveReject(w, http.StatusBadRequest)
