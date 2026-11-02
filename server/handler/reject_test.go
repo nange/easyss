@@ -151,6 +151,48 @@ func TestServeHTTP_ReplaySalt400(t *testing.T) {
 	require.Empty(t, body2)
 }
 
+// nonCanonicalSalt 返回同一 salt 的另一种写法：16 字节 salt 编码成 22 个字符，最后一个
+// 字符只有 2 位有效，另外 4 位取任意值都解码出同样的 16 字节。
+func nonCanonicalSalt(t *testing.T, saltB64 string) string {
+	t.Helper()
+	want, err := base64.RawURLEncoding.DecodeString(saltB64)
+	require.NoError(t, err)
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	head := saltB64[:len(saltB64)-1]
+	for _, c := range alphabet {
+		cand := head + string(c)
+		if cand == saltB64 {
+			continue
+		}
+		if got, err := base64.RawURLEncoding.DecodeString(cand); err == nil && bytes.Equal(got, want) {
+			return cand
+		}
+	}
+	t.Fatalf("no non-canonical encoding found for %q", saltB64)
+	return ""
+}
+
+// TestServeHTTP_ReplaySaltNonCanonical400 验证重放判定以解码后的 salt 为准：同一 salt 换
+// 一种写法仍是重放，否则一条被捕获的握手可被重放多次，复用同一套会话密钥与 nonce。
+func TestServeHTTP_ReplaySaltNonCanonical400(t *testing.T) {
+	srv := newRejectTestServer(t, newRejectHandler(time.Second))
+	tr := newRejectTestClient(t)
+
+	salt, err := crypto.GenerateSalt()
+	require.NoError(t, err)
+	saltB64 := saltToB64(salt)
+
+	resp1, _ := postBootstrap(t, tr, srv.URL+config.EndpointTCP, saltB64,
+		bytes.NewReader(bytes.Repeat([]byte{0xAB}, 128)))
+	require.Equal(t, http.StatusOK, resp1.StatusCode)
+
+	resp2, body2 := postBootstrap(t, tr, srv.URL+config.EndpointTCP, nonCanonicalSalt(t, saltB64),
+		bytes.NewReader(bytes.Repeat([]byte{0xAB}, 128)))
+	require.Equal(t, http.StatusBadRequest, resp2.StatusCode,
+		"the same salt in another encoding should be rejected as replay, body: %s", body2)
+	require.Empty(t, body2)
+}
+
 // TestServeHTTP_EndpointMismatch404 验证 proto 与请求的端点路径不匹配的合法握手会被 404 拒绝。
 func TestServeHTTP_EndpointMismatch404(t *testing.T) {
 	srv := newRejectTestServer(t, newRejectHandler(time.Second))

@@ -27,10 +27,13 @@ func newSaltCache() *saltCache {
 	return &saltCache{cache: freecache.NewCache(saltCacheSize)}
 }
 
-// MarkSeen 记录 endpoint+saltB64，返回 true 表示重放、必须拒绝。
+// MarkSeen 记录 endpoint+salt，返回 true 表示重放、必须拒绝。键必须用解码后的 salt：同一 16
+// 字节 salt 有 16 种合法 base64url 写法，用原始 header 做键会让它被接受 16 次、复用同一套密钥。
 // 锁保证检查-设置原子：freecache 的 Get/Set 各自线程安全，但并发重复请求可能都通过 Get。
-func (c *saltCache) MarkSeen(endpoint, saltB64 string) bool {
-	key := []byte(endpoint + saltB64)
+func (c *saltCache) MarkSeen(endpoint string, salt []byte) bool {
+	key := make([]byte, 0, len(endpoint)+len(salt))
+	key = append(key, endpoint...)
+	key = append(key, salt...)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, err := c.cache.Get(key); err == nil {
