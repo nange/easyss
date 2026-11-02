@@ -187,7 +187,8 @@ func (s *HTTPProxyServer) Serve(listener net.Listener) error {
 
 func (s *HTTPProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 控制端点（/tun、/stats）即使代理监听所有接口也只从本机可达。
-	if r.URL.Host == "" && (r.URL.Path == "/tun" || r.URL.Path == "/stats") && !isLoopbackRequest(r) {
+	if r.URL.Host == "" && (r.URL.Path == "/tun" || r.URL.Path == "/stats") &&
+		(!isLoopbackRequest(r) || !s.isControlEndpointHost(r)) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
@@ -300,6 +301,24 @@ func (s *HTTPProxyServer) isSelfTarget(r *http.Request) bool {
 // isLoopbackRequest 保护控制端点（如 GET /tun）：即使代理监听所有接口，它们也只能从本机访问。
 func isLoopbackRequest(r *http.Request) bool {
 	return isLoopbackAddr(r.RemoteAddr)
+}
+
+// isControlEndpointHost 要求控制端点的 Host 是回环 IP 字面量（端口须与监听端口一致，
+// 监听端口为 0 时无从比对）。DNS rebinding 页面能让 RemoteAddr 变成回环，但改不了 Host
+// ——那里始终是攻击者的域名，所以它是这条路径上唯一可信的信号。
+func (s *HTTPProxyServer) isControlEndpointHost(r *http.Request) bool {
+	host, port, err := net.SplitHostPort(r.Host)
+	if err != nil {
+		return false
+	}
+	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+		return false
+	}
+	_, listenPort, err := net.SplitHostPort(s.listenAddr)
+	if err != nil || listenPort == "0" {
+		return true
+	}
+	return port == listenPort
 }
 
 const localIPsCacheTTL = 60 * time.Second

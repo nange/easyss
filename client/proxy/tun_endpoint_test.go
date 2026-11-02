@@ -48,6 +48,7 @@ func TestTunEndpointServedWithoutProxyAuth(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/tun", nil)
 	req.RemoteAddr = "127.0.0.1:5555"
+	req.Host = "127.0.0.1:5555"
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
 
@@ -86,6 +87,7 @@ func TestTunEndpointNotConfiguredReturns503(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/tun", nil)
 	req.RemoteAddr = "127.0.0.1:5555"
+	req.Host = "127.0.0.1:5555"
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
 
