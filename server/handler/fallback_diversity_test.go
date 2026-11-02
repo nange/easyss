@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -730,9 +731,15 @@ func TestServeFallback_Range(t *testing.T) {
 			fmt.Sprintf("bytes %d-%d/%d", size-3, size-1, size)},
 		{"完全越界", fmt.Sprintf("bytes=%d-", size), http.StatusRequestedRangeNotSatisfiable, -1,
 			fmt.Sprintf("bytes */%d", size)},
-		{"多区间按允许的忽略处理", "bytes=0-1,3-4", http.StatusOK, size, ""},
 		{"非 bytes 单位忽略", "items=0-1", http.StatusOK, size, ""},
-		{"start 大于 end 忽略", "bytes=9-3", http.StatusOK, size, ""},
+		// nginx 的解析器对单位大小写不敏感，start > end 与语法错误都回 416 而不是忽略。
+		{"大写单位", "BYTES=0-9", http.StatusPartialContent, 10, fmt.Sprintf("bytes 0-9/%d", size)},
+		{"start 大于 end", "bytes=9-3", http.StatusRequestedRangeNotSatisfiable, -1,
+			fmt.Sprintf("bytes */%d", size)},
+		{"缺少短横线", "bytes=0", http.StatusRequestedRangeNotSatisfiable, -1,
+			fmt.Sprintf("bytes */%d", size)},
+		{"非数字语法错误", "bytes=abc-1", http.StatusRequestedRangeNotSatisfiable, -1,
+			fmt.Sprintf("bytes */%d", size)},
 	}
 
 	for _, tt := range tests {
@@ -746,6 +753,10 @@ func TestServeFallback_Range(t *testing.T) {
 			}
 			if got := rec.Header().Get("Content-Range"); got != tt.wantRange {
 				t.Errorf("Content-Range = %q, want %q", got, tt.wantRange)
+			}
+			// nginx 的 206 走区间过滤器提前返回，不带 Accept-Ranges（它只出现在忽略 Range 的 200 上）。
+			if rec.Code == http.StatusPartialContent && rec.Header().Get("Accept-Ranges") != "" {
+				t.Error("206 must not carry Accept-Ranges, nginx does not send it")
 			}
 			if tt.wantStatus == http.StatusPartialContent &&
 				!bytes.Contains(full.Body.Bytes(), rec.Body.Bytes()) {
@@ -792,6 +803,77 @@ func TestServeFallback_Range(t *testing.T) {
 	if fresh.Code != http.StatusPartialContent {
 		t.Errorf("matching If-Range: status = %d, want 206", fresh.Code)
 	}
+
+	// 日期验证器必须与 Last-Modified 精确相等：nginx 直接比较 if_range_time != last_modified_time，
+	// 比 RFC 允许的"晚于即视为未修改"更严格。
+	later := doFallback(fb, "/about", map[string]string{
+		"Range":    "bytes=0-9",
+		"If-Range": time.Now().Add(24 * time.Hour).UTC().Format(http.TimeFormat),
+	}, http.MethodGet)
+	if later.Code != http.StatusOK || later.Body.Len() != size {
+		t.Errorf("future If-Range: status = %d, body = %d, want 200 and %d bytes",
+			later.Code, later.Body.Len(), size)
+	}
+	exact := doFallback(fb, "/about", map[string]string{
+		"Range": "bytes=0-9", "If-Range": full.Header().Get("Last-Modified"),
+	}, http.MethodGet)
+	if exact.Code != http.StatusPartialContent {
+		t.Errorf("exact If-Range date: status = %d, want 206", exact.Code)
+	}
+}
+
+// 多区间必须回 nginx 的 multipart/byteranges：默认配置下 nginx 收集全部区间后走 multipart 头，
+// 回 200 整页是单请求即可区分的偏差。分隔串复刻 nginx 的 19 位递增临时编号。
+func TestServeFallback_MultiRange(t *testing.T) {
+	fb := withDeployment(t, seedOf(813), "")
+	full := doFallback(fb, "/about", nil, http.MethodGet)
+	page := full.Body.Bytes()
+
+	rec := doFallback(fb, "/about", map[string]string{"Range": "bytes=0-1, 3-4"}, http.MethodGet)
+	if rec.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want 206", rec.Code)
+	}
+	const boundaryPrefix = "multipart/byteranges; boundary="
+	ct := rec.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, boundaryPrefix) {
+		t.Fatalf("Content-Type = %q, want %q...", ct, boundaryPrefix)
+	}
+	boundary := strings.TrimPrefix(ct, boundaryPrefix)
+	if len(boundary) != 19 {
+		t.Errorf("boundary = %q, want nginx's 19-digit temp number", boundary)
+	}
+	if rec.Header().Get("Accept-Ranges") != "" {
+		t.Error("multipart 206 must not carry Accept-Ranges")
+	}
+	if got := rec.Header().Get("Content-Length"); got != strconv.Itoa(rec.Body.Len()) {
+		t.Errorf("Content-Length = %s, want %d", got, rec.Body.Len())
+	}
+
+	want := new(bytes.Buffer)
+	for _, rg := range []struct{ start, end int }{{0, 1}, {3, 4}} {
+		fmt.Fprintf(want, "\r\n--%s\r\nContent-Type: text/html; charset=utf-8\r\nContent-Range: bytes %d-%d/%d\r\n\r\n",
+			boundary, rg.start, rg.end, len(page))
+		want.Write(page[rg.start : rg.end+1])
+	}
+	fmt.Fprintf(want, "\r\n--%s--\r\n", boundary)
+	if !bytes.Equal(rec.Body.Bytes(), want.Bytes()) {
+		t.Errorf("multipart body = %q, want %q", rec.Body.String(), want.String())
+	}
+
+	// 分隔串每次响应递增，与 nginx 的临时编号一致：相同请求不能复用同一个分隔串。
+	again := doFallback(fb, "/about", map[string]string{"Range": "bytes=0-1,3-4"}, http.MethodGet)
+	if again.Header().Get("Content-Type") == ct {
+		t.Error("boundary must change between responses, as nginx's temp number does")
+	}
+
+	// 区间总量超过整份内容 + 4KB 时 nginx 退回整份内容而不是拼 multipart。
+	many := make([]string, 0, 64)
+	for range 64 {
+		many = append(many, "0-1")
+	}
+	if got := doFallback(fb, "/about", map[string]string{"Range": "bytes=" + strings.Join(many, ",")}, http.MethodGet); got.Code != http.StatusOK {
+		t.Errorf("oversized multi-range status = %d, want 200 (nginx declines)", got.Code)
+	}
 }
 
 // 条件请求与 Range 只对 GET/HEAD 且会得到 200 的请求生效：对 POST 回 304/206 既违反 RFC 9110
@@ -829,9 +911,15 @@ func TestServeFallback_ConditionalAndRangeScope(t *testing.T) {
 	if miss.Code != http.StatusNotFound {
 		t.Fatalf("unknown path status = %d, want 404", miss.Code)
 	}
+	// nginx 的 range/条件过滤器对非 200 直接返回：404 没有实体头，只带错误页自己的头。
+	for _, header := range []string{"ETag", "Last-Modified", "Accept-Ranges"} {
+		if got := miss.Header().Get(header); got != "" {
+			t.Errorf("404 %s = %q, want none", header, got)
+		}
+	}
 	again := doFallback(fb, "/missing-page", map[string]string{
 		"Accept":        "text/html",
-		"If-None-Match": miss.Header().Get("ETag"),
+		"If-None-Match": etag,
 	}, http.MethodGet)
 	if again.Code != http.StatusNotFound {
 		t.Errorf("conditional 404 status = %d, want 404", again.Code)

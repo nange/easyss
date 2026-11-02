@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -19,6 +21,8 @@ type fallbackResource struct {
 	contentType  string
 	lastModified time.Time
 	status       int
+	// boundary 是多区间响应的分隔串编号：只有真正写 multipart 时才递增。
+	boundary *atomic.Uint64
 }
 
 var (
@@ -27,7 +31,7 @@ var (
 )
 
 // serveFallbackResource 按条件请求与 Range 头写出资源，返回调用方还要写出的 body。
-// 返回 nil 表示响应已经写出（304/416），调用方必须立即返回。
+// 返回 nil 表示响应已经写出（304/416/multipart），调用方必须立即返回。
 func serveFallbackResource(w http.ResponseWriter, r *http.Request, res fallbackResource) []byte {
 	lastModified := res.lastModified.UTC().Truncate(time.Second)
 	etag := staticETag(lastModified, len(res.body))
@@ -47,24 +51,35 @@ func serveFallbackResource(w http.ResponseWriter, r *http.Request, res fallbackR
 
 	body, status := res.body, res.status
 	if spec := r.Header.Get("Range"); spec != "" && getOrHead && status == http.StatusOK && ifRangeAllows(r, etag, lastModified) {
-		start, length, err := parseByteRange(spec, int64(len(body)))
+		ranges, err := parseByteRanges(spec, int64(len(body)))
 		switch {
 		case errors.Is(err, errRangeUnsatisfiable):
-			// 声明了 Accept-Ranges 就必须真的拒绝越界区间，而不是回整份内容；错误页与 nginx 同形。
+			// nginx 对语法错误与全区间越界一律 416，错误页与默认错误页同形。
 			w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", len(body)))
 			serveReject(w, http.StatusRequestedRangeNotSatisfiable)
 			return nil
+		case err == nil && len(ranges) > 1:
+			serveMultipartRanges(w, res, lastModified, etag, ranges)
+			return nil
 		case err == nil:
-			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, start+length-1, len(body)))
-			body, status = body[start:start+length], http.StatusPartialContent
+			rg := ranges[0]
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", rg.start, rg.start+rg.length-1, len(body)))
+			body, status = body[rg.start:rg.start+rg.length], http.StatusPartialContent
 		}
 	}
 
 	w.Header().Set("Content-Type", res.contentType)
 	w.Header().Set("Server", "nginx")
-	w.Header().Set("Accept-Ranges", "bytes")
-	w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
-	w.Header().Set("ETag", etag)
+	// nginx 只在忽略 Range 的 200 上补 Accept-Ranges：206 走区间过滤器提前返回，不带这个头。
+	if res.status == http.StatusOK && status == http.StatusOK {
+		w.Header().Set("Accept-Ranges", "bytes")
+	}
+	// 实体头只随文件响应发出：nginx 的 header 过滤器对非 200/206/304 丢弃 Last-Modified，
+	// 错误页也没有 ETag。
+	if res.status == http.StatusOK {
+		w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
+		w.Header().Set("ETag", etag)
+	}
 	// 显式设置 Content-Length：否则 HTTP/1.1 会退化为 chunked，而真实 nginx 对静态资源
 	// 总是给出长度。
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
@@ -72,8 +87,29 @@ func serveFallbackResource(w http.ResponseWriter, r *http.Request, res fallbackR
 	return body
 }
 
+// serveMultipartRanges 按 nginx 的 multipart/byteranges 形状写出多个区间：每段以 CRLF 开头，
+// 末段是闭合分隔串。Content-Length 必须覆盖全部分隔串，客户端才能按长度读完。
+func serveMultipartRanges(w http.ResponseWriter, res fallbackResource, lastModified time.Time, etag string, ranges []byteRange) {
+	boundary := fmt.Sprintf("%019d", res.boundary.Add(1))
+	var buf bytes.Buffer
+	for _, rg := range ranges {
+		fmt.Fprintf(&buf, "\r\n--%s\r\nContent-Type: %s\r\nContent-Range: bytes %d-%d/%d\r\n\r\n",
+			boundary, res.contentType, rg.start, rg.start+rg.length-1, len(res.body))
+		buf.Write(res.body[rg.start : rg.start+rg.length])
+	}
+	fmt.Fprintf(&buf, "\r\n--%s--\r\n", boundary)
+
+	w.Header().Set("Server", "nginx")
+	w.Header().Set("Content-Type", "multipart/byteranges; boundary="+boundary)
+	w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	w.WriteHeader(http.StatusPartialContent)
+	w.Write(buf.Bytes()) //nolint:errcheck
+}
+
 // ifRangeAllows 判断条件 Range 请求是否仍可按区间处理（RFC 9110 §13.1.5）：验证器不匹配时
-// 服务器必须回整份响应。If-Range 的比较是强比较，弱验证器不匹配任何内容。
+// 服务器必须回整份响应。nginx 对日期验证器要求与 Last-Modified 精确相等，弱验证器不匹配任何内容。
 func ifRangeAllows(r *http.Request, etag string, lastModified time.Time) bool {
 	spec := strings.TrimSpace(r.Header.Get("If-Range"))
 	switch {
@@ -85,53 +121,128 @@ func ifRangeAllows(r *http.Request, etag string, lastModified time.Time) bool {
 		return spec == etag
 	}
 	t, err := http.ParseTime(spec)
-	return err == nil && !lastModified.After(t)
+	return err == nil && t.Unix() == lastModified.Unix()
 }
 
-// parseByteRange 解析单个 bytes 区间，返回起始偏移与长度。多区间与语法错误按
-// errRangeIgnored 处理（RFC 9110 §14.2 允许服务器忽略 Range）；语法正确但越界返回
-// errRangeUnsatisfiable，由调用方回 416。
-func parseByteRange(spec string, size int64) (start, length int64, err error) {
-	rest, ok := strings.CutPrefix(spec, "bytes=")
-	if !ok {
-		return 0, 0, errRangeIgnored
-	}
-	rest = strings.TrimSpace(rest)
-	// 多区间需要 multipart/byteranges 响应；浏览器不会发，这里按允许的"忽略"处理。
-	if strings.Contains(rest, ",") {
-		return 0, 0, errRangeIgnored
-	}
-	first, last, ok := strings.Cut(rest, "-")
-	if !ok {
-		return 0, 0, errRangeIgnored
+// byteRange 是解析后的单个区间：start 为起始偏移，length 为字节数。
+type byteRange struct{ start, length int64 }
+
+// parseByteRanges 复刻 ngx_http_range_parse：单位大小写不敏感，空白只出现在 nginx 接受的位置，
+// 语法错误与全区间越界返回 errRangeUnsatisfiable（nginx 一律 416），多区间交给调用方写 multipart。
+func parseByteRanges(spec string, size int64) ([]byteRange, error) {
+	// 短于 7 字节或不是 bytes 单位的 Range 被 nginx 整体忽略，其余解析错误才是 416。
+	if len(spec) < 7 || !strings.EqualFold(spec[:6], "bytes=") {
+		return nil, errRangeIgnored
 	}
 
-	if first == "" {
-		// 后缀区间 -N：取最后 N 个字节。
-		n, convErr := strconv.ParseInt(last, 10, 64)
-		if convErr != nil || n < 0 {
-			return 0, 0, errRangeIgnored
+	rest := spec[6:]
+	var ranges []byteRange
+	var total int64
+	for {
+		rest = strings.TrimLeft(rest, " ")
+		if rest == "" {
+			return nil, errRangeUnsatisfiable
 		}
-		if n == 0 || size == 0 {
-			return 0, 0, errRangeUnsatisfiable
+
+		start, end, suffix, after, ok := parseRangeSpec(rest, size)
+		if !ok {
+			return nil, errRangeUnsatisfiable
 		}
-		return max(size-n, 0), min(n, size), nil
+		rest = after
+
+		if suffix {
+			start = max(size-end, 0)
+			end = size - 1
+		}
+		if end >= size {
+			end = size
+		} else {
+			end++
+		}
+
+		switch {
+		case start < end:
+			ranges = append(ranges, byteRange{start: start, length: end - start})
+			total += end - start
+		case start == 0:
+			// nginx 对起点为 0 的空区间退回整份内容（例如空文件上的 bytes=0-）。
+			return nil, errRangeIgnored
+		}
+
+		if rest == "" {
+			break
+		}
+		if rest[0] != ',' {
+			return nil, errRangeUnsatisfiable
+		}
+		rest = rest[1:]
 	}
 
-	from, convErr := strconv.ParseInt(first, 10, 64)
-	if convErr != nil || from < 0 {
-		return 0, 0, errRangeIgnored
+	switch {
+	case len(ranges) == 0:
+		return nil, errRangeUnsatisfiable
+	case len(ranges) == 1:
+		return ranges, nil
+	// nginx 拒绝为多区间付出超过整份内容 + 4KB 的代价（重叠/过多区间），此时退回整份内容。
+	case total > size, total+int64(len(ranges))*256 > size+4096:
+		return nil, errRangeIgnored
 	}
-	to := size - 1
-	if last != "" {
-		if to, convErr = strconv.ParseInt(last, 10, 64); convErr != nil || to < from {
-			return 0, 0, errRangeIgnored
+	return ranges, nil
+}
+
+// parseRangeSpec 解析单个 range-spec。end 在开区间时是 size、后缀区间时是后缀长度，由调用方
+// 换算；rest 指向 ',' 或空串。
+func parseRangeSpec(s string, size int64) (start, end int64, suffix bool, rest string, ok bool) {
+	if s[0] == '-' {
+		end, rest, ok = scanRangeNumber(s[1:])
+		if !ok {
+			return 0, 0, false, "", false
 		}
+		rest = strings.TrimLeft(rest, " ")
+		if rest != "" && rest[0] != ',' {
+			return 0, 0, false, "", false
+		}
+		return 0, end, true, rest, true
 	}
-	if from >= size {
-		return 0, 0, errRangeUnsatisfiable
+
+	start, rest, ok = scanRangeNumber(s)
+	if !ok {
+		return 0, 0, false, "", false
 	}
-	return from, min(to, size-1) - from + 1, nil
+	rest = strings.TrimLeft(rest, " ")
+	if rest == "" || rest[0] != '-' {
+		return 0, 0, false, "", false
+	}
+	rest = strings.TrimLeft(rest[1:], " ")
+	if rest == "" || rest[0] == ',' {
+		return start, size, false, rest, true
+	}
+
+	end, rest, ok = scanRangeNumber(rest)
+	if !ok {
+		return 0, 0, false, "", false
+	}
+	rest = strings.TrimLeft(rest, " ")
+	if rest != "" && rest[0] != ',' {
+		return 0, 0, false, "", false
+	}
+	return start, end, false, rest, true
+}
+
+// scanRangeNumber 读一段十进制数字；缺失或溢出都按语法错误处理（nginx 同样回 416）。
+func scanRangeNumber(s string) (int64, string, bool) {
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	if i == 0 {
+		return 0, "", false
+	}
+	n, err := strconv.ParseInt(s[:i], 10, 64)
+	if err != nil {
+		return 0, "", false
+	}
+	return n, s[i:], true
 }
 
 // isNotModified 按 RFC 7232 判断条件请求：If-None-Match 优先于 If-Modified-Since。

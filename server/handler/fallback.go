@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/nange/easyss/v3/stats"
 )
@@ -293,8 +294,8 @@ const (
 	ctxOrigAcceptEncoding
 )
 
-// 模式配置与部署级身份在构造完成后只读，可以并发服务请求；运行期唯一的可变状态是
-// 有界的生成页缓存（cacheMu 保护）。
+// 模式配置与部署级身份在构造完成后只读，可以并发服务请求；运行期可变状态是有界的生成页
+// 缓存（cacheMu 保护）与多区间响应的分隔串编号。
 type Fallback struct {
 	dep *deployment
 
@@ -308,6 +309,9 @@ type Fallback struct {
 	cacheMu    sync.Mutex
 	cache      map[string][]byte
 	cacheCount int
+
+	// boundary 是多区间响应的分隔串编号：nginx 的临时编号只在 multipart 应答里递增。
+	boundary atomic.Uint64
 }
 
 // PreserveHost 与 CDNDomains 只在反向代理模式下生效。
@@ -560,6 +564,7 @@ func (fb *Fallback) serveGeneratedPage(w http.ResponseWriter, r *http.Request, p
 		contentType:  "text/html; charset=utf-8",
 		lastModified: fb.dep.lastModified,
 		status:       generatedStatus(r, path),
+		boundary:     &fb.boundary,
 	}
 	if body := serveFallbackResource(w, r, res); body != nil {
 		w.Write(body) //nolint:errcheck
@@ -573,6 +578,7 @@ func (fb *Fallback) serveFavicon(w http.ResponseWriter, r *http.Request) {
 		contentType:  "image/x-icon",
 		lastModified: fb.dep.lastModified,
 		status:       http.StatusOK,
+		boundary:     &fb.boundary,
 	}
 	if body := serveFallbackResource(w, r, res); body != nil {
 		w.Write(body) //nolint:errcheck
