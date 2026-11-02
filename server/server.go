@@ -281,6 +281,16 @@ func (s *Server) Start() error {
 	timeout := config.TimeoutDuration(cfg.Timeout)
 	log.Info("[SERVER] starting", "listen", srvCfg.ListenAddr(), "host", srvCfg.Host, "timeout", int(timeout.Seconds()))
 
+	// 口令是纯配置，必须在任何网络动作之前校验：漏填口令时不能先去碰 ACME，
+	// 那会白白消耗一次签发尝试（示例配置里 password 故意留空）。
+	masterKey, err := crypto.DeriveMasterKey(srvCfg.Password)
+	if err != nil {
+		if errors.Is(err, crypto.ErrPasswordEmpty) {
+			return fmt.Errorf("derive master key: %w (set server.password to a random string of at least %d characters, e.g. openssl rand -hex 24)", err, config.MinPasswordLen)
+		}
+		return fmt.Errorf("derive master key: %w", err)
+	}
+
 	tlsConfig, certCache, err := s.initTLS()
 	if err != nil {
 		log.Error("[SERVER] init TLS failed", "err", err)
@@ -317,14 +327,6 @@ func (s *Server) Start() error {
 	}
 	if cfg.Fallback.Target != "" {
 		log.Info("[SERVER] fallback target configured", "target", cfg.Fallback.Target, "preserve_host", cfg.Fallback.PreserveHost, "cdn_domains", cfg.Fallback.CDNDomains)
-	}
-
-	masterKey, err := crypto.DeriveMasterKey(srvCfg.Password)
-	if err != nil {
-		if errors.Is(err, crypto.ErrPasswordEmpty) {
-			return fmt.Errorf("derive master key: %w (set server.password to a random string of at least %d characters, e.g. openssl rand -hex 24)", err, config.MinPasswordLen)
-		}
-		return fmt.Errorf("derive master key: %w", err)
 	}
 
 	np, err := nextproxy.New(cfg.NextProxy.URL, cfg.NextProxy.EnableUDP, cfg.NextProxy.AllHost)
