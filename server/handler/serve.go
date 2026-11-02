@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/netip"
 	"runtime/debug"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nange/easyss/v3/config"
@@ -22,7 +24,31 @@ import (
 // nginx 对同类请求同样会给出的应答（停滞的请求体 408、持续超限后的 429）。其余失败一律
 // 返回伪装页，否则"同一请求第二次得到 400"本身就足以识别服务端实现。
 func serveReject(w http.ResponseWriter, code int) {
+	body := nginxErrorPage(code)
+	w.Header().Set("Server", "nginx")
+	w.Header().Set("Content-Type", "text/html")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(code)
+	w.Write(body) //nolint:errcheck
+}
+
+// nginxErrorPage 复刻 nginx 默认错误页：空 body 加缺 Server 头是与任何 nginx 都不符的组合。
+// 405/408 的状态行与 http.StatusText 不同，标题必须逐字一致。
+func nginxErrorPage(code int) []byte {
+	title := fmt.Sprintf("%d %s", code, http.StatusText(code))
+	switch code {
+	case http.StatusMethodNotAllowed:
+		title = "405 Not Allowed"
+	case http.StatusRequestTimeout:
+		title = "408 Request Time-out"
+	}
+	var b strings.Builder
+	b.WriteString("<html>\r\n<head><title>")
+	b.WriteString(title)
+	b.WriteString("</title></head>\r\n<body>\r\n<center><h1>")
+	b.WriteString(title)
+	b.WriteString("</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n")
+	return []byte(b.String())
 }
 
 type handshakeResult struct {

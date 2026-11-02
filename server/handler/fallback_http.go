@@ -37,9 +37,10 @@ func serveFallbackResource(w http.ResponseWriter, r *http.Request, res fallbackR
 	getOrHead := r.Method == http.MethodGet || r.Method == http.MethodHead
 
 	if getOrHead && res.status == http.StatusOK && isNotModified(r, etag, lastModified) {
-		// 304 不得携带消息体，也不应重复整套实体头；只回验证器即可。
+		// 304 不得携带消息体；nginx 对静态文件的 304 同样带 Last-Modified，与 ETag 同源才自洽。
 		w.Header().Set("Server", "nginx")
 		w.Header().Set("ETag", etag)
+		w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
 		w.WriteHeader(http.StatusNotModified)
 		return nil
 	}
@@ -49,10 +50,9 @@ func serveFallbackResource(w http.ResponseWriter, r *http.Request, res fallbackR
 		start, length, err := parseByteRange(spec, int64(len(body)))
 		switch {
 		case errors.Is(err, errRangeUnsatisfiable):
-			// 声明了 Accept-Ranges 就必须真的拒绝越界区间，而不是回整份内容。
-			w.Header().Set("Server", "nginx")
+			// 声明了 Accept-Ranges 就必须真的拒绝越界区间，而不是回整份内容；错误页与 nginx 同形。
 			w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", len(body)))
-			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			serveReject(w, http.StatusRequestedRangeNotSatisfiable)
 			return nil
 		case err == nil:
 			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, start+length-1, len(body)))

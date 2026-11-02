@@ -529,6 +529,12 @@ func (fb *Fallback) Serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 自动生成模式只像一台静态站：GET/HEAD/POST 之外统一 405，与路径无关，任何端点都不会显得特殊。
+	if m := r.Method; m != http.MethodGet && m != http.MethodHead && m != http.MethodPost {
+		serveReject(w, http.StatusMethodNotAllowed)
+		return
+	}
+
 	// 页面头部声明过的图标必须真的存在，否则引用本身就是"本站没有静态资源"的证据。
 	if path == fb.dep.faviconPath || path == "/favicon.ico" {
 		fb.serveFavicon(w, r)

@@ -697,6 +697,16 @@ func TestServeFallback_ETagShape(t *testing.T) {
 	if second != first.Header().Get("ETag") {
 		t.Errorf("ETag changed within a deployment: %q -> %q", first.Header().Get("ETag"), second)
 	}
+
+	// 304 必须同时回 ETag 与 Last-Modified：nginx 的静态 304 两者都带，单独回 ETag 与 mtime 不同源。
+	notModified := doFallback(fb, "/about",
+		map[string]string{"If-None-Match": first.Header().Get("ETag")}, http.MethodGet)
+	if notModified.Code != http.StatusNotModified {
+		t.Fatalf("status = %d, want 304", notModified.Code)
+	}
+	if got := notModified.Header().Get("Last-Modified"); got != first.Header().Get("Last-Modified") {
+		t.Errorf("304 Last-Modified = %q, want %q", got, first.Header().Get("Last-Modified"))
+	}
 }
 
 // 声明了 Accept-Ranges: bytes 就必须真的实现 Range：对 10 字节区间回整份 200 是最容易
@@ -718,7 +728,7 @@ func TestServeFallback_Range(t *testing.T) {
 		{"后缀区间", "bytes=-10", http.StatusPartialContent, 10, fmt.Sprintf("bytes %d-%d/%d", size-10, size-1, size)},
 		{"末尾越界按长度截断", fmt.Sprintf("bytes=%d-", size-3), http.StatusPartialContent, 3,
 			fmt.Sprintf("bytes %d-%d/%d", size-3, size-1, size)},
-		{"完全越界", fmt.Sprintf("bytes=%d-", size), http.StatusRequestedRangeNotSatisfiable, 0,
+		{"完全越界", fmt.Sprintf("bytes=%d-", size), http.StatusRequestedRangeNotSatisfiable, -1,
 			fmt.Sprintf("bytes */%d", size)},
 		{"多区间按允许的忽略处理", "bytes=0-1,3-4", http.StatusOK, size, ""},
 		{"非 bytes 单位忽略", "items=0-1", http.StatusOK, size, ""},
@@ -731,7 +741,7 @@ func TestServeFallback_Range(t *testing.T) {
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
 			}
-			if rec.Body.Len() != tt.wantLen {
+			if tt.wantLen >= 0 && rec.Body.Len() != tt.wantLen {
 				t.Errorf("body = %d bytes, want %d", rec.Body.Len(), tt.wantLen)
 			}
 			if got := rec.Header().Get("Content-Range"); got != tt.wantRange {
@@ -742,6 +752,18 @@ func TestServeFallback_Range(t *testing.T) {
 				t.Error("partial body is not a slice of the full page")
 			}
 		})
+	}
+
+	// 416 与 nginx 默认错误页同形：空 body、缺 Server/Content-Type 本身就是可观测特征。
+	out := doFallback(fb, "/about", map[string]string{"Range": fmt.Sprintf("bytes=%d-", size)}, http.MethodGet)
+	if !bytes.Contains(out.Body.Bytes(), []byte("416 Requested Range Not Satisfiable")) {
+		t.Errorf("416 body = %q, want the nginx error page", out.Body.String())
+	}
+	if got := out.Header().Get("Server"); got != "nginx" {
+		t.Errorf("416 Server = %q, want nginx", got)
+	}
+	if got := out.Header().Get("Content-Type"); got != "text/html" {
+		t.Errorf("416 Content-Type = %q, want text/html", got)
 	}
 
 	// 前缀区间逐字节核对，避免上面只比较长度。
@@ -813,6 +835,36 @@ func TestServeFallback_ConditionalAndRangeScope(t *testing.T) {
 	}, http.MethodGet)
 	if again.Code != http.StatusNotFound {
 		t.Errorf("conditional 404 status = %d, want 404", again.Code)
+	}
+}
+
+// GET/HEAD/POST 之外的方法对静态站一律 405：所有方法都回整页是最短的单请求特征之一，
+// 统一处理不会让任何端点显得特殊。
+func TestServeFallback_OtherMethods405(t *testing.T) {
+	fb := withDeployment(t, seedOf(812), "")
+
+	for _, method := range []string{
+		http.MethodPut, http.MethodDelete, http.MethodOptions, http.MethodPatch, http.MethodTrace,
+	} {
+		t.Run(method, func(t *testing.T) {
+			rec := doFallback(fb, "/", nil, method)
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("status = %d, want 405", rec.Code)
+			}
+			if got := rec.Header().Get("Server"); got != "nginx" {
+				t.Errorf("Server = %q, want nginx", got)
+			}
+			if !strings.Contains(rec.Body.String(), "405 Not Allowed") {
+				t.Errorf("body = %q, want the nginx error page", rec.Body.String())
+			}
+		})
+	}
+
+	// 协议只用 POST，GET/HEAD 是静态站的基本方法，三者必须继续返回页面。
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost} {
+		if rec := doFallback(fb, "/", nil, method); rec.Code != http.StatusOK {
+			t.Errorf("%s /: status = %d, want 200", method, rec.Code)
+		}
 	}
 }
 

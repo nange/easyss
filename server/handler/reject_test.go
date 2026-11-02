@@ -128,7 +128,9 @@ func TestServeHTTP_HandshakeTimeout408(t *testing.T) {
 
 	require.Equal(t, http.StatusRequestTimeout, resp.StatusCode,
 		"timed-out handshake should be answered with 408, body: %s", body)
-	require.Empty(t, body)
+	require.Equal(t, "nginx", resp.Header.Get("Server"), "reject responses must carry the nginx Server header")
+	require.Equal(t, "text/html", resp.Header.Get("Content-Type"))
+	require.Contains(t, string(body), "408 Request Time-out", "expected the nginx error page, got: %s", body)
 }
 
 // TestServeHTTP_DecryptFailureKeepsFallback 验证无密钥请求（bootstrap 解密失败）

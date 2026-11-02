@@ -144,4 +144,11 @@ func TestProbeHandlerRateLimit(t *testing.T) {
 	if rr.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429", rr.Code)
 	}
+	// 空 body、缺 Server 头是与任何 nginx 都不符的组合，单请求即可识别。
+	if got := rr.Header().Get("Server"); got != "nginx" {
+		t.Errorf("Server = %q, want nginx", got)
+	}
+	if !strings.Contains(rr.Body.String(), "429 Too Many Requests") {
+		t.Errorf("body = %q, want the nginx error page", rr.Body.String())
+	}
 }
