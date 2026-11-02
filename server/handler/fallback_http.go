@@ -32,7 +32,11 @@ func serveFallbackResource(w http.ResponseWriter, r *http.Request, res fallbackR
 	lastModified := res.lastModified.UTC().Truncate(time.Second)
 	etag := staticETag(lastModified, len(res.body))
 
-	if isNotModified(r, etag, lastModified) {
+	// 条件请求与 Range 只对 GET/HEAD 且会得到 200 的请求成立：对 POST 回 304/206 是 RFC 9110
+	// §15.4.5 禁止、nginx 也不会给出的应答，扫描器凭"先 GET 取 ETag，再 POST 同一路径"即可识别。
+	getOrHead := r.Method == http.MethodGet || r.Method == http.MethodHead
+
+	if getOrHead && res.status == http.StatusOK && isNotModified(r, etag, lastModified) {
 		// 304 不得携带消息体，也不应重复整套实体头；只回验证器即可。
 		w.Header().Set("Server", "nginx")
 		w.Header().Set("ETag", etag)
@@ -41,7 +45,7 @@ func serveFallbackResource(w http.ResponseWriter, r *http.Request, res fallbackR
 	}
 
 	body, status := res.body, res.status
-	if spec := r.Header.Get("Range"); spec != "" && status == http.StatusOK && ifRangeAllows(r, etag, lastModified) {
+	if spec := r.Header.Get("Range"); spec != "" && getOrHead && status == http.StatusOK && ifRangeAllows(r, etag, lastModified) {
 		start, length, err := parseByteRange(spec, int64(len(body)))
 		switch {
 		case errors.Is(err, errRangeUnsatisfiable):

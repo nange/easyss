@@ -772,6 +772,50 @@ func TestServeFallback_Range(t *testing.T) {
 	}
 }
 
+// 条件请求与 Range 只对 GET/HEAD 且会得到 200 的请求生效：对 POST 回 304/206 既违反 RFC 9110
+// §15.4.5，也是真实静态站不会给出的应答，属于"两个请求即可识别"的同类特征。
+func TestServeFallback_ConditionalAndRangeScope(t *testing.T) {
+	fb := withDeployment(t, seedOf(811), "")
+	page := doFallback(fb, "/about", nil, http.MethodGet)
+	etag, size := page.Header().Get("ETag"), page.Body.Len()
+
+	tests := []struct {
+		name    string
+		method  string
+		headers map[string]string
+		want    int
+	}{
+		{"GET 条件请求命中", http.MethodGet, map[string]string{"If-None-Match": etag}, http.StatusNotModified},
+		{"HEAD 条件请求命中", http.MethodHead, map[string]string{"If-None-Match": etag}, http.StatusNotModified},
+		{"POST 不得回 304", http.MethodPost, map[string]string{"If-None-Match": etag}, http.StatusOK},
+		{"POST 不得回 206", http.MethodPost, map[string]string{"Range": "bytes=0-9"}, http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := doFallback(fb, "/about", tt.headers, tt.method)
+			if rec.Code != tt.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.want)
+			}
+			if tt.method == http.MethodPost && rec.Body.Len() != size {
+				t.Errorf("body = %d bytes, want the full %d", rec.Body.Len(), size)
+			}
+		})
+	}
+
+	// 304 只在请求会得到 200 时才有意义：未知路径的 404 不能因为条件请求变成 304。
+	miss := doFallback(fb, "/missing-page", map[string]string{"Accept": "text/html"}, http.MethodGet)
+	if miss.Code != http.StatusNotFound {
+		t.Fatalf("unknown path status = %d, want 404", miss.Code)
+	}
+	again := doFallback(fb, "/missing-page", map[string]string{
+		"Accept":        "text/html",
+		"If-None-Match": miss.Header().Get("ETag"),
+	}, http.MethodGet)
+	if again.Code != http.StatusNotFound {
+		t.Errorf("conditional 404 status = %d, want 404", again.Code)
+	}
+}
+
 // 页面头部声明的图标必须是一张合法 ICO（而不是回退页），并且与 /favicon.ico 同一份内容：
 // 被引用却不存在的静态资源是最直白的"本站没有资源目录"证据。
 func TestServeFallback_Favicon(t *testing.T) {

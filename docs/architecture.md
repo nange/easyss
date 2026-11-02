@@ -46,9 +46,9 @@ Bootstrap 用 AES-256-GCM 加密初始握手帧（含目标地址与方法协商
 首个 CryptoRecord 解密/验证失败时回落成普通 HTML 首页；一旦发出 octet-stream 响应头，只能 close/RST。fallback 由 `handler.NewFallback(FallbackConfig)` 构造，在 `server.Start()` 一次性注入 `ProxyHandler`/`ProbeHandler` 与 `/` 路由；构造后只读、实例级缓存有界（条数 + 路径 key 长度上限 256B，未认证请求无法放大常驻内存），没有包级可变状态，也没有"使用前必须调用"的顺序契约（未注入时回落到内置实例）。伪装两层：
 
 - **部署级身份**（`fallback_random.go`）：每实例用 `crypto/rand` 派生稳定身份（主题色相族、站点名/导航/页脚/`Last-Modified`）；实例内所有客户端看到同一页面（静态站行为与页缓存前提），实例间互不相同。
-- **HTTP 真实性**（`fallback_http.go`、`fallback_icon.go`）：自动生成模式补齐 `Content-Length`/`Last-Modified`/`ETag`（nginx 的 `"<hex mtime>-<hex size>"` 形态）/`Accept-Ranges`，条件请求 304，单区间 Range 回 206、越界回 416；页面头部声明的 `/favicon-<token>.ico` 由部署种子生成真实 ICO（`/favicon.ico` 同图）。目录/自定义/反代三种模式不受影响。
+- **HTTP 真实性**（`fallback_http.go`、`fallback_icon.go`）：自动生成模式补齐 `Content-Length`/`Last-Modified`/`ETag`（nginx 的 `"<hex mtime>-<hex size>"` 形态）/`Accept-Ranges`，条件请求 304，单区间 Range 回 206、越界回 416；条件请求与 Range 都只对 GET/HEAD 且会得到 200 的请求生效（对 POST 回 304/206 既违反 RFC 9110 §15.4.5，也是真实静态站不会有的应答）。页面头部声明的 `/favicon-<token>.ico` 由部署种子生成真实 ICO（`/favicon.ico` 同图）。目录/自定义/反代三种模式不受影响。
 
-**未认证失败必须共用同一张回退页**：缺 `x-es`、格式错误、首记录解密失败与 salt 重放都返回这张页面（重放因此与"没有密钥"逐字节一致），只有已被证明持有主密钥的拒绝（端点/方法/目标不匹配，404/405/400）或 nginx 对同类请求同样会给出的应答（停滞请求体 408、持续超限 429）才用真实状态码。任何"同一请求第一次 200、第二次 400"式的状态机差异都能在两个请求内识别出服务端实现。
+**未认证失败必须共用同一张回退页**：缺 `x-es`、格式错误、首记录解密失败与 salt 重放都返回这张页面（重放因此与"没有密钥"逐字节一致），只有已被证明持有主密钥的拒绝（端点/方法/目标不匹配，404/405/400）或 nginx 对同类请求同样会给出的应答（停滞请求体 408、持续超限 429）才用真实状态码。salt 记录必须在首记录解出之后才写入，否则停滞请求体得到的 408 会让同一 salt 的第二次请求变成回退页。任何"同一请求第一次 200、第二次 400"式的状态机差异都能在两个请求内识别出服务端实现。
 
 自动生成模式对未知路径的 200/404 选择仍按 `Accept` 区分：客户端探测依赖"200 + 非 octet-stream"得出"服务端不支持探测"的永久结论，改成一律 404 需要同步改客户端（`transport/http2/probe.go`）。
 

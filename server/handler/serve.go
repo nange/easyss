@@ -87,16 +87,6 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 		return handshakeResult{}, false
 	}
 
-	// 见过的 salt 意味着记录正在被重放：接受它会重新拨号目标并重新投递第一个数据包。
-	// 走到这里还没有任何证据表明请求者持有密钥（扫描器发的随机 salt 也会被记下），因此
-	// 拒绝必须与"没有密钥"给出完全相同的响应，两个相同请求之间不能有状态机差异。
-	if h.saltCache.MarkSeen(r.URL.Path, salt) {
-		log.Debug("[SERVER] replayed salt", "remote", r.RemoteAddr, "endpoint", r.URL.Path)
-		stats.RecordServerHandshakeError()
-		h.serveFallback(w, r)
-		return handshakeResult{}, false
-	}
-
 	endpoint := r.URL.Path
 	sk, err := crypto.NewStreamKeys(h.masterKey, salt, endpoint)
 	if err != nil {
@@ -116,6 +106,15 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 		// 用 Debug 而非 Error：任何带随机 x-es 头的请求都会走到这里。保持伪装首页，服务器对
 		// 无密钥请求才与真实网站无法区分。
 		log.Debug("[SERVER] read first record failed", "remote", r.RemoteAddr, "endpoint", endpoint, "err", err)
+		h.serveFallback(w, r)
+		return handshakeResult{}, false
+	}
+
+	// 首个记录解出才证明持有主密钥：salt 必须记在这之后，否则停滞请求体留下的 408 会让同一
+	// salt 的第二次请求变成回退页。任何 S2C 字节都在此之后写出，并发重放仍只有一个能过。
+	if h.saltCache.MarkSeen(endpoint, salt) {
+		log.Debug("[SERVER] replayed salt", "remote", r.RemoteAddr, "endpoint", endpoint)
+		stats.RecordServerHandshakeError()
 		h.serveFallback(w, r)
 		return handshakeResult{}, false
 	}

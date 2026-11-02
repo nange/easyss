@@ -149,8 +149,8 @@ func TestServeHTTP_DecryptFailureKeepsFallback(t *testing.T) {
 }
 
 // TestServeHTTP_ReplaySaltIsRejected 验证重放的 salt 不会被接受，但响应降级成与"没有密钥"
-// 相同的回退页：扫描器发的随机 salt 同样会被记入缓存，可区分的状态码（第二次 400）本身就是
-// 两个请求就能完成的探测特征。这里用真实握手区分两条分支：第一次 octet-stream，第二次 HTML。
+// 相同的回退页：可区分的状态码（第二次 400）本身就是两个请求就能完成的探测特征。这里用真实
+// 握手区分两条分支：第一次 octet-stream，第二次 HTML。
 func TestServeHTTP_ReplaySaltIsRejected(t *testing.T) {
 	srv := newRejectTestServer(t, newRejectHandlerWith(newStubbedDeps(), time.Second))
 	tr := newRejectTestClient(t)
@@ -168,6 +168,33 @@ func TestServeHTTP_ReplaySaltIsRejected(t *testing.T) {
 		"a replayed salt must not answer differently from a request without the key")
 	require.True(t, bytes.Contains(body2, []byte("<!DOCTYPE html>")),
 		"expected the fallback page, got: %s", body2)
+}
+
+// TestServeHTTP_StalledBodyThenReplayIsIndistinguishable 固定 salt 记录的写入时机：只等到 408 的
+// 请求没有证明持有密钥，不能留下 salt 记录，否则同一请求的第二次会变成回退页，两个请求即可识别。
+func TestServeHTTP_StalledBodyThenReplayIsIndistinguishable(t *testing.T) {
+	srv := newRejectTestServer(t, newRejectHandler(150*time.Millisecond))
+	tr := newRejectTestClient(t)
+
+	salt, err := crypto.GenerateSalt()
+	require.NoError(t, err)
+
+	stalled := func() (int, []byte) {
+		// 声明了请求体却不写任何字节：服务端只能等到握手超时。
+		pr, pw := io.Pipe()
+		defer pr.Close() //nolint:errcheck
+		resp, body := postBootstrap(t, tr, srv.URL+config.EndpointTCP, saltToB64(salt), pr)
+		_ = pw.Close()
+		return resp.StatusCode, body
+	}
+
+	firstCode, firstBody := stalled()
+	secondCode, secondBody := stalled()
+
+	require.Equal(t, http.StatusRequestTimeout, firstCode)
+	require.Equal(t, firstCode, secondCode,
+		"a timed-out request must not leave a salt record: replaying it would turn 408 into the fallback page")
+	require.Equal(t, firstBody, secondBody)
 }
 
 // nonCanonicalSalt 返回同一 salt 的另一种写法：16 字节 salt 编码成 22 个字符，最后一个
