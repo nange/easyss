@@ -45,8 +45,16 @@ func TestExampleConfigRoundTrips(t *testing.T) {
 		t.Errorf("http port = %d, want %d", got, want)
 	}
 
+	// 示例故意不填口令：照抄公开示例等于把部署口令公开，而口令是客户端与服务端
+	// 唯一的共享凭据，只能由用户自己生成后两边都填。
+	if example.Servers[0].Password != "" {
+		t.Errorf("full example must not carry a password, got %q", example.Servers[0].Password)
+	}
 	simple := ExampleSimpleConfig()
-	if _, err := BuildSimpleConfig(&simple); err != nil {
-		t.Fatalf("simple example must build: %v", err)
+	if simple.Password != "" {
+		t.Errorf("simple example must not carry a password, got %q", simple.Password)
+	}
+	if _, err := BuildSimpleConfig(&simple); err == nil {
+		t.Fatal("simple example must not build before the password is filled in")
 	}
 }

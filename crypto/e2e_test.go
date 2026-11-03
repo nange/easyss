@@ -378,7 +378,7 @@ func TestRecordTamperDetection(t *testing.T) {
 
 	r := NewRecordReader(bytes.NewReader(raw), decEnc, decCtr, decAAD)
 	_, err = r.ReadRecord()
-	require.Error(t, err, "tampered data should fail decryption")
+	require.ErrorIs(t, err, ErrRecordAuthFailed, "tampered data should fail decryption")
 }
 
 func TestDecryptedReaderReusesFrameBufAcrossRecords(t *testing.T) {

@@ -16,6 +16,23 @@ const (
 	// handshakeBurst 是令牌桶的初始容量（允许的突发大小）。
 	handshakeBurst = 100
 
+	// 解密失败才说明对端没有主密钥，惩罚期把该 IP 降到每秒 5 次。合法客户端从不解密
+	// 失败，因此感知不到；成功握手会立即解除惩罚（见 RecordSuccess），改对口令后
+	// 第一次握手就能过——最坏只是等一个令牌（200ms）。
+	//
+	// 降速幅度刻意不拉到 1/s：反向代理/CDN 后面整片用户共用回源 IP，只有 burst 3 加
+	// 1/s 的档位会把一次页面加载的并发流直接打回 429（见 defaultPenaltyEligible 与
+	// server.disable_failure_penalty）。
+	penaltyRate  = 5.0
+	penaltyBurst = 10
+
+	// 惩罚窗口。继续失败会把窗口往后推，攻击者无法靠等待躲过去。
+	penaltyWindow = 5 * time.Minute
+
+	// 连续失败到这么多次才开始惩罚：客户端一次请求最多重试 3 次，正好在它的重试
+	// 风暴之后才降速，避免把单次瞬断也算成攻击。
+	failureThreshold = 3
+
 	// map 增长到这么多源 IP 时触发一次空闲条目清理。
 	ipCleanupThreshold = 4096
 
@@ -44,6 +61,9 @@ type ipRateLimiter struct {
 type ipRateEntry struct {
 	lim      *rate.Limiter
 	lastSeen time.Time
+	failures int
+	// 非零表示该 IP 处于失败惩罚期：Allow 用降速桶，成功握手会立即清零（同一把锁）。
+	penaltyUntil time.Time
 }
 
 func newIPRateLimiter() *ipRateLimiter {
@@ -80,7 +100,56 @@ func (l *ipRateLimiter) Allow(ip string) bool {
 		l.entries[ip] = e
 	}
 	e.lastSeen = now
+	// 惩罚到期立刻恢复：不能等下一次失败或成功来改写状态，否则空闲过的 IP 会带着
+	// 降速桶继续跑。
+	if !e.penaltyUntil.IsZero() && !now.Before(e.penaltyUntil) {
+		e.penaltyUntil = time.Time{}
+		e.failures = 0
+		e.lim = rate.NewLimiter(rate.Limit(handshakeRate), handshakeBurst)
+	}
 	return e.lim.AllowN(now, 1)
+}
+
+// Penalize 记录一次解密失败。同一 IP 连续失败到阈值后降速到 penaltyRate，窗口内的
+// 每次失败都会续期；成功握手由 RecordSuccess 立刻解除。
+func (l *ipRateLimiter) Penalize(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := l.now()
+	e, ok := l.entries[ip]
+	if !ok {
+		// Allow 在 ipHardCap 处故意 fail open 且不建条目，这里绝不能补建，否则
+		// 上限就成了摆设，攻击者每换一个源 IP 就能多占一条。
+		return
+	}
+	e.lastSeen = now
+	e.failures++
+	if e.failures < failureThreshold {
+		return
+	}
+	if e.penaltyUntil.IsZero() {
+		e.lim = rate.NewLimiter(rate.Limit(penaltyRate), penaltyBurst)
+	}
+	e.penaltyUntil = now.Add(penaltyWindow)
+}
+
+// RecordSuccess 记录一次认证成功的握手。口令正确就没有继续猜的必要：失败计数无条件
+// 清零（阈值是"连续失败"而不是累计），惩罚也立即解除，用户改对口令后不必等窗口走完。
+func (l *ipRateLimiter) RecordSuccess(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	e, ok := l.entries[ip]
+	if !ok {
+		return
+	}
+	e.failures = 0
+	if e.penaltyUntil.IsZero() {
+		return
+	}
+	e.penaltyUntil = time.Time{}
+	e.lim = rate.NewLimiter(rate.Limit(handshakeRate), handshakeBurst)
 }
 
 // cleanupLocked 删除空闲达到 ipCleanupTTL 的条目，防止 map 无界增长。调用方必须持有 l.mu。

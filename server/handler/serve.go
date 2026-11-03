@@ -134,6 +134,11 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 	first, err := sk.ReadFirstRecordWithTimeout(r.Context(), r.Body, h.handshakeTimeout)
 	if err != nil {
 		stats.RecordServerHandshakeError()
+		// 只有认证失败能证明对端在猜口令：超时与帧格式错误在没有密钥时同样会出现，
+		// 拿它们做惩罚会把网络抖动也算成攻击。来源判定见 defaultPenaltyEligible。
+		if peer := clientIP(r); errors.Is(err, crypto.ErrRecordAuthFailed) && h.shouldPenalize(peer) {
+			h.ipLimiter.Penalize(peer)
+		}
 		if errors.Is(err, crypto.ErrHandshakeTimeout) {
 			log.Warn("[SERVER] read first record timed out", "remote", r.RemoteAddr, "endpoint", endpoint, "err", err)
 			// 这里若返回伪装首页，会把 HTML 混入合法客户端的记录流，客户端会把它误解析为记录。
@@ -146,6 +151,9 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 		h.serveFallback(w, r)
 		return handshakeResult{}, false
 	}
+
+	// 首记录解出即证明持有主密钥，失败惩罚立即解除：用户改对口令后不该再等惩罚窗口。
+	h.ipLimiter.RecordSuccess(clientIP(r))
 
 	// 首个记录解出才证明持有主密钥：salt 必须记在这之后，否则停滞请求体留下的 408 会让同一
 	// salt 的第二次请求变成回退页。任何 S2C 字节都在此之后写出，并发重放仍只有一个能过。

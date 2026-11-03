@@ -13,7 +13,7 @@ func ExampleConfig() ClientConfig {
 		Servers: []*ServerProfile{{
 			Host:     "your-domain.com",
 			Port:     config.DefaultServerPort,
-			Password: "your-password",
+			Password: "",
 			Method:   config.DefaultMethod,
 			SNI:      "",
 			CAPath:   "",
@@ -64,7 +64,7 @@ func ExampleSimpleConfig() config.SimpleConfig {
 	return config.SimpleConfig{
 		Server:        "your-domain.com",
 		ServerPort:    config.DefaultServerPort,
-		Password:      "your-password",
+		Password:      "",
 		Method:        config.DefaultMethod,
 		LocalPort:     config.DefaultSocksPort,
 		ProxyRule:     config.DefaultProxyRule,

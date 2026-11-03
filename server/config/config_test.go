@@ -199,6 +199,8 @@ func TestExampleConfigIsNormalized(t *testing.T) {
 	require.Equal(t, SupportedConfigVersion, fc.ConfigVersion)
 	require.Equal(t, "your-domain.com", fc.Server.Host)
 	require.Equal(t, config.DefaultServerPort, fc.Server.Port)
+	// 示例不内置口令：它会被照抄成整个部署的共享凭据，只能由用户自己生成。
+	require.Empty(t, fc.Server.Password)
 	require.NoError(t, fc.validateListen())
 	require.NoError(t, fc.validateTransport())
 	require.NoError(t, fc.validateAllowedMethods())
@@ -432,9 +434,29 @@ func TestValidateTreatsZeroPortAsDefault(t *testing.T) {
 	require.ErrorContains(t, fc.Validate(), "server.bind")
 }
 
+// TestValidatePasswordTiers 固定分档：<8 字符拒绝启动，8-15 字符放行（启动日志告警），
+// 空口令不在这里拒绝，留给 DeriveMasterKey 的 ErrPasswordEmpty。
+func TestValidatePasswordTiers(t *testing.T) {
+	t.Parallel()
+
+	fc := &FileConfig{Server: ServerConfig{Host: "example.com"}}
+	require.NoError(t, fc.Validate())
+
+	fc.Server.Password = "short"
+	require.ErrorContains(t, fc.Validate(), "server.password")
+
+	fc.Server.Password = "eightchr"
+	require.NoError(t, fc.Validate())
+	require.True(t, config.PasswordWeak(fc.Server.Password))
+
+	fc.Server.Password = "sixteen-chars-ok"
+	require.NoError(t, fc.Validate())
+	require.False(t, config.PasswordWeak(fc.Server.Password))
+}
+
 // TestLoadConfigLegacyListen 固定旧配置能完整加载并保留绑定地址。
 func TestLoadConfigLegacyListen(t *testing.T) {
-	fc, err := LoadConfig(writeConfig(t, `{"server":{"listen":"127.0.0.1:8443","domain":"example.com","password":"p"}}`))
+	fc, err := LoadConfig(writeConfig(t, `{"server":{"listen":"127.0.0.1:8443","domain":"example.com","password":"test-pass"}}`))
 	require.NoError(t, err)
 	require.Equal(t, "example.com", fc.Server.Host)
 	require.Equal(t, 8443, fc.Server.Port)
@@ -523,4 +545,14 @@ func TestResolveFilePathsResolvedInPlace(t *testing.T) {
 	if fc.Timeout != 30 {
 		t.Errorf("Timeout = %d, want 30", fc.Timeout)
 	}
+}
+
+// TestServerConfigDisableFailurePenalty 固定开关能被配置读到：CDN 回源等共用公网
+// 源地址的部署靠它关掉按 IP 的失败降速。
+func TestServerConfigDisableFailurePenalty(t *testing.T) {
+	t.Parallel()
+
+	fc, err := LoadConfig(writeConfig(t, `{"server":{"host":"example.com","disable_failure_penalty":true}}`))
+	require.NoError(t, err)
+	require.True(t, fc.Server.DisableFailurePenalty)
 }
