@@ -1271,6 +1271,7 @@ func TestTimeoutClampedOnEveryEntry(t *testing.T) {
 func TestResolveFilePaths(t *testing.T) {
 	relDirect := "direct.txt"
 	relCA := "ca.pem"
+	relLog := filepath.Join("logs", "easyss.log")
 	abs, err := filepath.Abs("proxy.txt")
 	if err != nil {
 		t.Fatal(err)
@@ -1286,6 +1287,7 @@ func TestResolveFilePaths(t *testing.T) {
 			{CAPath: ""},
 		},
 	}
+	cfg.Log.FilePath = relLog
 
 	cfg.ResolveFilePaths()
 
@@ -1300,6 +1302,9 @@ func TestResolveFilePaths(t *testing.T) {
 	}
 	if cfg.Servers[1].CAPath != "" {
 		t.Errorf("Servers[1].CAPath = %q, want empty (unchanged)", cfg.Servers[1].CAPath)
+	}
+	if want := filepath.Join(util.CurrentDir(), relLog); cfg.Log.FilePath != want {
+		t.Errorf("Log.FilePath = %q, want %q", cfg.Log.FilePath, want)
 	}
 }
 

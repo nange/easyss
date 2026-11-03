@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -281,7 +280,7 @@ func (fc *FileConfig) ResolveFilePaths() {
 	fc.Server.CertPath = util.ResolvePath(fc.Server.CertPath)
 	fc.Server.KeyPath = util.ResolvePath(fc.Server.KeyPath)
 	fc.NextProxy.NextProxyFile = util.ResolvePath(fc.NextProxy.NextProxyFile)
-	fc.Log.FilePath = resolveLogFilePath(fc.Log.FilePath)
+	fc.Log.FilePath = util.ResolvePathInExeDir(fc.Log.FilePath)
 }
 
 // LoadLogConfig 只读取并归一化 log 段，供启动失败时使用：LoadConfig 出错后进程
@@ -300,7 +299,7 @@ func LoadLogConfig(path string) log.Config {
 	}
 	return log.Config{
 		Level:    normalizeLogLevel(fc.Log.Level),
-		FilePath: resolveLogFilePath(fc.Log.FilePath),
+		FilePath: util.ResolvePathInExeDir(fc.Log.FilePath),
 	}
 }
 
@@ -309,18 +308,6 @@ func normalizeLogLevel(level string) string {
 		return config.DefaultLogLevel
 	}
 	return level
-}
-
-// 日志路径基于可执行文件目录绝对化，否则 launchd（cwd=/）会把日志写到根目录。
-// 故意不用 util.ResolvePath：相对路径即使当前目录存在，也要以可执行文件目录为准。
-func resolveLogFilePath(p string) string {
-	if p == "" || filepath.IsAbs(p) {
-		return p
-	}
-	if dir := util.CurrentDir(); dir != "" {
-		return filepath.Join(dir, p)
-	}
-	return p
 }
 
 func DefaultAllowedMethods() []string {
