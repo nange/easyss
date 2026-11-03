@@ -3,12 +3,14 @@ package handler
 import (
 	"bytes"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/crypto"
+	"github.com/nange/easyss/v3/log"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/shaper"
 	"github.com/stretchr/testify/require"
@@ -345,4 +347,65 @@ func TestServeHTTP_DisableFailurePenalty(t *testing.T) {
 	penalized := e != nil && !e.penaltyUntil.IsZero()
 	h.ipLimiter.mu.Unlock()
 	require.False(t, penalized, "disable_failure_penalty must turn the penalty off")
+}
+
+// TestIPRateLimiter_PenalizeReportsEntry 固定 entered 只在连续失败跨过阈值的那一次
+// 为真：调用方据此打"进入惩罚期"告警，而不是每次失败都打一遍。
+func TestIPRateLimiter_PenalizeReportsEntry(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	l := newIPRateLimiter()
+	l.now = func() time.Time { return now }
+	primeTracked(t, l, &now, "1.2.3.4")
+
+	for i := 1; i < failureThreshold; i++ {
+		if l.Penalize("1.2.3.4") {
+			t.Fatalf("failure %d reported entry before the threshold", i)
+		}
+	}
+	if !l.Penalize("1.2.3.4") {
+		t.Fatal("the threshold failure must report entry")
+	}
+	if l.Penalize("1.2.3.4") {
+		t.Fatal("another failure inside the penalty window must only renew it")
+	}
+
+	// 成功握手清零失败计数后，下一次跨阈值是一次新的进入。
+	l.RecordSuccess("1.2.3.4")
+	for range failureThreshold - 1 {
+		l.Penalize("1.2.3.4")
+	}
+	if !l.Penalize("1.2.3.4") {
+		t.Fatal("crossing the threshold again after a success must report entry")
+	}
+}
+
+// 全局 logger 是进程级状态，本用例不能并行。
+func TestLogPenaltyEnteredRateLimitsByWindow(t *testing.T) {
+	rec := &recordingHandler{}
+	prev := log.Logger()
+	log.SetLogger(slog.New(rec))
+	t.Cleanup(func() { log.SetLogger(prev) })
+
+	h := &ProxyHandler{}
+	for range 3 {
+		h.logPenaltyEntered("1.2.3.4", config.EndpointTCP)
+	}
+	if got := len(rec.at(slog.LevelWarn)); got != 1 {
+		t.Fatalf("got %d Warn records in the window, want 1", got)
+	}
+	if h.suppressedPenalties != 2 {
+		t.Fatalf("suppressedPenalties = %d, want 2", h.suppressedPenalties)
+	}
+
+	// 把上次告警时间推到窗口之前：下一条必须带出被折叠的源数量。
+	h.penaltyWarnMu.Lock()
+	h.lastPenaltyWarn = time.Now().Add(-2 * penaltyWarnInterval)
+	h.penaltyWarnMu.Unlock()
+	h.logPenaltyEntered("5.6.7.8", config.EndpointTCP)
+
+	warns := rec.at(slog.LevelWarn)
+	require.Len(t, warns, 2)
+	if got := attrsOf(warns[1])["suppressed"]; got != "2" {
+		t.Fatalf("suppressed = %q, want 2", got)
+	}
 }

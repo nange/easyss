@@ -9,6 +9,7 @@ import (
 	"time"
 
 	clientconfig "github.com/nange/easyss/v3/client/config"
+	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/router"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/cmd/easyss/internal/tunhelper"
@@ -95,6 +96,10 @@ func (s *session) start() error {
 	// 上一轮的残留会抑制新一轮的记录，必须在这里重置。
 	s.startupWarn = nil
 	s.tunSkippedForNetwork = false
+	// 上一会话的握手告警随会话失效：重启后要么恢复，要么在新核心上重新判定。
+	if ui := s.app.ui; ui != nil {
+		ui.handshakeRecovered()
+	}
 
 	// 配置快照一经发布即不可变，可以安全地交给核心长期持有。
 	sessionCfg := s.app.currentConfig()
@@ -104,6 +109,14 @@ func (s *session) start() error {
 		return err
 	}
 	s.installCore(core)
+	// 口令/地址配错时每条流都会失败，默认只有 Debug 日志；首次失败通知托盘一次，
+	// 任意流成功解密后由代理层清除。回调跑在流的 goroutine 上，只做通知与 tooltip。
+	if ui := s.app.ui; ui != nil && core.StreamHandler != nil {
+		core.StreamHandler.SetRejectObserver(
+			func(r proxy.HandshakeReject) { ui.handshakeRejected(string(r.Kind)) },
+			ui.handshakeRecovered,
+		)
+	}
 	if core.StartupWarn != nil {
 		s.startupWarn = core.StartupWarn
 		log.Warn("[EASYSS-V3] startup warning", "err", core.StartupWarn)
@@ -173,6 +186,10 @@ func (s *session) stop() {
 	s.tunMu.Unlock()
 
 	if core != nil {
+		// 先摘掉观察者再停核心：拆流产生的迟到失败不得弹在下一轮会话的界面上。
+		if core.StreamHandler != nil {
+			core.StreamHandler.SetRejectObserver(nil, nil)
+		}
 		core.Stop()
 	}
 	if srv := s.pprofSrv; srv != nil {

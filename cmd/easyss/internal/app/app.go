@@ -29,6 +29,10 @@ type appUI interface {
 	tunStartFailed(err error)
 	notify(msg string)
 	serverDomainReady(msg string)
+	// handshakeRejected 在配置类握手失败首次出现时调用一次，kind 是 proxy 包的
+	// HandshakeRejectKind 字符串；handshakeRecovered 在任一流量新解密成功后调用。
+	handshakeRejected(kind string)
+	handshakeRecovered()
 	browserProxyEnabled() bool
 	setTunMenuChecked(checked bool)
 }

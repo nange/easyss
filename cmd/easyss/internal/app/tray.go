@@ -15,6 +15,7 @@ import (
 
 	"github.com/gogpu/systray"
 	clientconfig "github.com/nange/easyss/v3/client/config"
+	"github.com/nange/easyss/v3/client/proxy"
 	"github.com/nange/easyss/v3/client/tun"
 	"github.com/nange/easyss/v3/cmd/easyss/icon"
 	"github.com/nange/easyss/v3/cmd/easyss/internal/autostart"
@@ -193,6 +194,49 @@ func (a *trayApp) notify(msg string) { a.shell.Notify(msg) }
 
 func (a *trayApp) serverDomainReady(msg string) {
 	a.notify(msg)
+}
+
+// 握手被拒只在首次出现与恢复时各回调一次（见 proxy.handshakeRejector），这里不会
+// 被每条失败的流重复触发。恢复时不发通知，只撤掉 tooltip，避免用户被"虚惊一场"打扰。
+func (a *trayApp) handshakeRejected(kind string) {
+	if a.shell == nil {
+		return
+	}
+	msg := friendlyHandshakeReject(proxy.HandshakeRejectKind(kind))
+	a.shell.Notify(msg)
+	a.shell.SetWarning(msg)
+}
+
+func (a *trayApp) handshakeRecovered() {
+	if a.shell == nil {
+		return
+	}
+	a.shell.SetWarning("")
+}
+
+// 通知正文在 Windows 上只有 255 个 UTF-16 单位，一条说明加排查方向即可；细节在日志。
+func friendlyHandshakeReject(kind proxy.HandshakeRejectKind) string {
+	switch kind {
+	case proxy.RejectNotTunnel:
+		return "服务端拒绝握手：返回的是网页而不是隧道，多因客户端 password 与服务端不一致，" +
+			"或服务器地址/端口不对。详见日志。"
+	case proxy.RejectEndpointMismatch:
+		return "服务端拒绝握手：端点不匹配，可能是客户端与服务端版本不一致，" +
+			"或该地址不是 Easyss 服务端。详见日志。"
+	case proxy.RejectMethodNotAllowed:
+		return "服务端拒绝握手：服务端不允许客户端使用的加密方法，" +
+			"请检查 server.allowed_methods 与客户端 method。详见日志。"
+	case proxy.RejectRateLimited:
+		return "握手被限流：同一出口 IP 失败次数过多（共享出口或口令反复错误），稍后会自动恢复。详见日志。"
+	case proxy.RejectTimeout:
+		return "握手超时：服务端未及时收到首记录，请检查网络链路。详见日志。"
+	case proxy.RejectBadRequest:
+		return "服务端拒绝握手请求：请检查服务端配置与目标地址。详见日志。"
+	case proxy.RejectServerError:
+		return "服务端建立会话失败：请查看服务端日志。"
+	default:
+		return "服务端拒绝握手：请检查客户端口令与服务器配置。详见日志。"
+	}
 }
 
 // 会话已由 session 拆除，这里只碰界面。菜单必须回到未勾选：引擎没在跑，勾着会让用户以为

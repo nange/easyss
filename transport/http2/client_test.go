@@ -139,6 +139,71 @@ func TestHTTP2Transport_200StatusReadsBody(t *testing.T) {
 	}
 }
 
+// TestHTTP2Transport_200PageIsRejected 验证 200 + 网页在响应头阶段就被识别：口令不匹配
+// 时服务端回落的正是伪装首页，不能让记录读取器把 HTML 误解析成密文。
+func TestHTTP2Transport_200PageIsRejected(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("<html><body>fallback</body></html>"))
+	}))
+	srv.EnableHTTP2 = true
+	srv.Config.Protocols = &http.Protocols{}
+	srv.Config.Protocols.SetHTTP2(true)
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	tr, err := New(Config{
+		ServerURL: srv.URL,
+		TLSConfig: &utls.Config{
+			InsecureSkipVerify: true,
+			NextProtos:         config.NextProtos,
+		},
+		Timeouts: config.Timeouts{Base: time.Second},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tr.Close() })
+
+	stream, err := tr.Open(context.Background(), transport.OpenRequest{
+		Endpoint:     config.EndpointTCP,
+		Salt:         "dGVzdHNhbHR0ZXN0c2FsdA",
+		HighPriority: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close() //nolint:errcheck
+
+	_, err = stream.Read(make([]byte, 16))
+	if !transport.IsServerAnsweredWithPage(err) {
+		t.Fatalf("expected ServerAnsweredWithPageError, got: %v", err)
+	}
+}
+
+func TestIsWebPageResponse(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		ct   string
+		want bool
+	}{
+		{ct: "", want: false},
+		{ct: "application/octet-stream", want: false},
+		{ct: "text/plain; charset=utf-8", want: false},
+		{ct: "application/json", want: false},
+		{ct: "text/html", want: true},
+		{ct: "text/html; charset=utf-8", want: true},
+		{ct: "application/xhtml+xml", want: true},
+	}
+	for _, tt := range tests {
+		if got := isWebPageResponse(tt.ct); got != tt.want {
+			t.Errorf("isWebPageResponse(%q) = %v, want %v", tt.ct, got, tt.want)
+		}
+	}
+}
+
 // GotConn 是流的连接身份来源：它必须在本传输上触发，回报的 self 就是这一代登记的身份，
 // 复用同一连接的流拿到同一个身份。标准库若不再把 DialTLSContext 的返回值原样交回，
 // 这条测试会先失败，而不是让失效静默退化成空操作。

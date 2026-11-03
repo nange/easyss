@@ -74,7 +74,7 @@ func TestCopyRemoteToLocal(t *testing.T) {
 
 		result := make(chan error, 1)
 		go func() {
-			result <- (&StreamHandler{}).copyRemoteToLocal(rx, conn, func() {}, m)
+			result <- (&StreamHandler{}).copyRemoteToLocal("test:80", rx, conn, func() {}, m)
 		}()
 
 		select {
@@ -153,7 +153,7 @@ func runRemoteCopy(t *testing.T, rx *crypto.DecryptedReader) (string, error) {
 	m := stats.NewStreamMeter("client", "test")
 	defer m.Close()
 
-	err := (&StreamHandler{}).copyRemoteToLocal(rx, local, func() {}, m)
+	err := (&StreamHandler{}).copyRemoteToLocal("test:80", rx, local, func() {}, m)
 	_ = local.Close() // 让 io.Copy 退出。
 	<-drained
 
