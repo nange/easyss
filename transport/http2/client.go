@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/http/httptrace"
@@ -45,6 +46,24 @@ type http2Transport struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 }
+
+// 只有明确的网页类型才判定为"200 但不是隧道流"：Easyss 的伪装首页固定 text/html。
+// 其余类型（包括缺失头与 text/plain）保持原路径——旧版本或中间设备可能不转发该头，
+// 误杀正常连接的代价远高于少一条提示。
+func isWebPageResponse(ct string) bool {
+	mediaType, _, err := mime.ParseMediaType(ct)
+	if err != nil {
+		return false
+	}
+	switch mediaType {
+	case "text/html", "application/xhtml+xml":
+		return true
+	}
+	return false
+}
+
+// ServerAddr 实现 transport.ServerAddrDescriber：握手失败日志据此归因到具体服务器。
+func (t *http2Transport) ServerAddr() string { return t.serverURL }
 
 type Config struct {
 	ServerURL         string
@@ -380,6 +399,15 @@ func (t *http2Transport) Open(ctx context.Context, req transport.OpenRequest) (t
 			_ = resp.Body.Close()
 			resp = nil
 			err = rejectErr
+			_ = pw.CloseWithError(err)
+		}
+		// 200 也不一定是隧道流：首记录解不开时服务端回落的正是伪装首页。按响应头
+		// 提前判定，错误里才能带上"收到的是网页"这一事实。
+		if err == nil && isWebPageResponse(resp.Header.Get("Content-Type")) {
+			pageErr := &transport.ServerAnsweredWithPageError{ContentType: resp.Header.Get("Content-Type")}
+			_ = resp.Body.Close()
+			resp = nil
+			err = pageErr
 			_ = pw.CloseWithError(err)
 		}
 		stream.deliver(roundTripResult{resp: resp, err: err})

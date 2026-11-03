@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/nange/easyss/v3/config"
@@ -35,6 +36,10 @@ type ProxyHandler struct {
 	penaltyEligible func(remoteAddr string) bool
 	// disableFailurePenalty 关闭解密失败降速（server.disable_failure_penalty）。
 	disableFailurePenalty bool
+	// 惩罚期告警的限频状态，见 logPenaltyEntered。
+	penaltyWarnMu       sync.Mutex
+	lastPenaltyWarn     time.Time
+	suppressedPenalties int
 }
 
 type ProxyHandlerConfig struct {

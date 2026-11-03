@@ -110,9 +110,10 @@ func (l *ipRateLimiter) Allow(ip string) bool {
 	return e.lim.AllowN(now, 1)
 }
 
-// Penalize 记录一次解密失败。同一 IP 连续失败到阈值后降速到 penaltyRate，窗口内的
-// 每次失败都会续期；成功握手由 RecordSuccess 立刻解除。
-func (l *ipRateLimiter) Penalize(ip string) {
+// Penalize 记录一次解密失败，返回该来源是否刚刚从"未惩罚"进入惩罚期。同一 IP 连续
+// 失败到阈值后降速到 penaltyRate，窗口内的每次失败都会续期；成功握手由 RecordSuccess
+// 立刻解除。
+func (l *ipRateLimiter) Penalize(ip string) (entered bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -121,17 +122,20 @@ func (l *ipRateLimiter) Penalize(ip string) {
 	if !ok {
 		// Allow 在 ipHardCap 处故意 fail open 且不建条目，这里绝不能补建，否则
 		// 上限就成了摆设，攻击者每换一个源 IP 就能多占一条。
-		return
+		return false
 	}
 	e.lastSeen = now
 	e.failures++
 	if e.failures < failureThreshold {
-		return
+		return false
 	}
-	if e.penaltyUntil.IsZero() {
+	// 阈值是"连续失败"，到点才会第一次看到非零窗口；之后的每次失败只是续期。
+	entered = e.penaltyUntil.IsZero()
+	if entered {
 		e.lim = rate.NewLimiter(rate.Limit(penaltyRate), penaltyBurst)
 	}
 	e.penaltyUntil = now.Add(penaltyWindow)
+	return entered
 }
 
 // RecordSuccess 记录一次认证成功的握手。口令正确就没有继续猜的必要：失败计数无条件

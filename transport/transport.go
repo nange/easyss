@@ -28,6 +28,29 @@ func IsHandshakeRejected(err error) bool {
 	return errors.As(err, &e)
 }
 
+// ServerAnsweredWithPageError 表示服务端用 HTTP 200 返回了网页而不是隧道流：首记录在
+// HTTP 层"成功"，内容却不是加密记录。服务端在口令不匹配时会回落成伪装首页，因此这
+// 一条比"密文解析失败"更早、更准确。
+type ServerAnsweredWithPageError struct {
+	ContentType string
+}
+
+func (e *ServerAnsweredWithPageError) Error() string {
+	return fmt.Sprintf("handshake rejected: server answered with %q instead of a tunnel stream", e.ContentType)
+}
+
+// IsServerAnsweredWithPage 报告 err 是否为"200 但返回网页"。
+func IsServerAnsweredWithPage(err error) bool {
+	var e *ServerAnsweredWithPageError
+	return errors.As(err, &e)
+}
+
+// ServerAddrDescriber 由能报出所配置服务端地址的传输层实现，客户端据此把握手失败
+// 归因到具体服务器（多服务器配置时日志才有用）。
+type ServerAddrDescriber interface {
+	ServerAddr() string
+}
+
 // ErrConnRetired 表示流所属的连接代已作废。代理层据此把"连接被换掉"与真正的目标错误区分开，
 // 不必匹配 stdlib 的错误文本。
 var ErrConnRetired = errors.New("transport: connection retired")
@@ -52,7 +75,8 @@ type BootstrapSentMarker interface {
 }
 
 // ResponseAwaiter 由能在不消费响应体的情况下等待响应就绪的流实现。响应已就绪（含以非 200
-// 拒绝握手，已转成 HandshakeRejectedError）返回 nil，传输层错误返回该错误，ctx 结束返回 ctx.Err()。
+// 拒绝握手，已转成 HandshakeRejectedError）返回 nil；"200 但返回网页"
+// （ServerAnsweredWithPageError）与其余传输层错误一样返回该错误，调用方据此快速失败。
 type ResponseAwaiter interface {
 	AwaitResponse(ctx context.Context) error
 }

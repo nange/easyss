@@ -41,6 +41,8 @@ type StreamHandler struct {
 	streamIdleTimeout time.Duration
 	// drainIdle 限制一条流在即将被驱逐的 slot 上可保持空闲的时长，0 用默认值。
 	drainIdle time.Duration
+	// rejector 把配置类握手失败折叠成限频日志，并在首次失败/恢复时通知观察者。
+	rejector handshakeRejector
 }
 
 func NewStreamHandler(tr transport.Transport, masterKey []byte, shaperCfg shaper.Config, timeouts config.Timeouts) *StreamHandler {
@@ -229,6 +231,14 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, req streamRequest)
 		}
 		lastErr = err
 
+		// 服务端已明确拒绝（200 但返回网页而非隧道流）：换连接与重试都不会改变
+		// 结论，还会把健康连接判死并放大成连接池抖动。非 200 由传输层当成"结果
+		// 已就绪"返回 nil，仍在首读分类时上报。
+		if transport.IsServerAnsweredWithPage(err) {
+			_ = stream.Close()
+			return nil, err
+		}
+
 		// 上层取消：只关闭本流，不得失效连接——取消不是判死，这条连接可能健康且被同槽位
 		// 的其他在飞流共享。
 		if ctx.Err() != nil {
@@ -323,7 +333,7 @@ func classifyFirstReadError(err error) error {
 	if err == nil || errors.Is(err, ErrServerRejectedHandshake) {
 		return err
 	}
-	if transport.IsHandshakeRejected(err) {
+	if transport.IsHandshakeRejected(err) || transport.IsServerAnsweredWithPage(err) {
 		return err
 	}
 	msg := err.Error()
@@ -349,7 +359,7 @@ func (h *StreamHandler) icmpStream(ctx context.Context, req streamRequest) ([]by
 	defer s.tx.Close() //nolint:errcheck
 
 	frame, err := s.rx.ReadFrame()
-	err = classifyFirstReadError(err)
+	err = h.rejector.classify(req.target, h.serverAddr(), err)
 	if err != nil {
 		return nil, fmt.Errorf("read first reply frame: %w", err)
 	}
@@ -374,6 +384,9 @@ type session struct {
 func (h *StreamHandler) newSession(ctx context.Context, req streamRequest) (*session, error) {
 	bs, err := h.openAndBootstrap(ctx, req)
 	if err != nil {
+		// 引导阶段就能确定的配置类拒绝（200 返回网页）在这里留痕；非 200 拒绝在
+		// 首读分类时上报。网络错误不会被归类，也就不会误报。
+		h.rejector.report(req.target, h.serverAddr(), err)
 		return nil, err
 	}
 	stream := bs.stream
@@ -448,7 +461,7 @@ func (h *StreamHandler) relay(target string, localConn net.Conn, tx shaper.Shape
 
 	result := relay.BidirectionalWithDrain(h.streamIdleTimeout, drainWhen, drainIdle, closeAll,
 		func(signal func()) error { return h.copyLocalToRemote(localConn, tx, signal) },
-		func(signal func()) error { return h.copyRemoteToLocal(rx, localConn, signal, m) },
+		func(signal func()) error { return h.copyRemoteToLocal(target, rx, localConn, signal, m) },
 	)
 
 	if result.Drained {
@@ -515,7 +528,7 @@ func (h *StreamHandler) copyLocalToRemote(src net.Conn, tx shaper.Shaper, signal
 // （约 1–2MB 明文）。
 const remotePrefetchFrames = 64
 
-func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Conn, signalActivity func(), m *stats.StreamMeter) error {
+func (h *StreamHandler) copyRemoteToLocal(target string, rx *crypto.DecryptedReader, dst net.Conn, signalActivity func(), m *stats.StreamMeter) error {
 	// err 非空表示读端已终止；终态与数据走同一条队列，不再需要第二组完成信号。
 	type prefetchedFrame struct {
 		data []byte
@@ -542,7 +555,7 @@ func (h *StreamHandler) copyRemoteToLocal(rx *crypto.DecryptedReader, dst net.Co
 			frame, err := rx.ReadFrame()
 			if first {
 				first = false
-				err = classifyFirstReadError(err)
+				err = h.rejector.classify(target, h.serverAddr(), err)
 			}
 			if err != nil {
 				if !errors.Is(err, io.EOF) {
@@ -614,7 +627,8 @@ func isTransientStreamError(err error) bool {
 	if errors.Is(err, ErrStreamIdleTimeout) || errors.Is(err, ErrStreamReset) {
 		return true
 	}
-	if errors.Is(err, ErrServerRejectedHandshake) || transport.IsHandshakeRejected(err) {
+	if errors.Is(err, ErrServerRejectedHandshake) || transport.IsHandshakeRejected(err) ||
+		transport.IsServerAnsweredWithPage(err) {
 		return true
 	}
 	if errors.Is(err, transport.ErrConnRetired) {
@@ -657,10 +671,14 @@ func encodedLen(frames []protocol.Frame) int {
 }
 
 type UDPExchange struct {
-	stream    transport.Stream
-	tx        shaper.Shaper
-	reader    *crypto.DecryptedReader
-	target    string
+	stream transport.Stream
+	tx     shaper.Shaper
+	reader *crypto.DecryptedReader
+	target string
+	// rejector 与 StreamHandler 共用同一个实例：UDP 首读失败也必须走同一套限频告警。
+	// nil（测试直接构造交换）时跳过报告。
+	rejector  *handshakeRejector
+	server    string
 	lastSeen  atomic.Int64 // UnixNano，由 Send/Receive 写入，由 LastSeen 读取
 	firstRead atomic.Bool  // 在首次 ReadFrame 时置位，启用拒绝分类
 	closed    atomic.Bool  // 在 Close 开始时置位，使并发的 Send 快速失败
@@ -709,10 +727,12 @@ func (h *StreamHandler) OpenUDPExchange(ctx context.Context, target string, meth
 
 	log.Debug("[UDP_EXCHANGE] opened", "target", target)
 	ue := &UDPExchange{
-		stream: s.stream,
-		tx:     s.tx,
-		reader: s.rx,
-		target: target,
+		stream:   s.stream,
+		tx:       s.tx,
+		reader:   s.rx,
+		target:   target,
+		rejector: &h.rejector,
+		server:   h.serverAddr(),
 	}
 	ue.lastSeen.Store(time.Now().UnixNano())
 
@@ -746,7 +766,7 @@ func (ue *UDPExchange) Receive() ([]byte, error) {
 	for {
 		frame, err := ue.reader.ReadFrame()
 		if ue.firstRead.CompareAndSwap(false, true) {
-			err = classifyFirstReadError(err)
+			err = ue.rejector.classify(ue.target, ue.server, err)
 		}
 		if err != nil {
 			return nil, err

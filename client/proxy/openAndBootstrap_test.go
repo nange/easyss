@@ -245,6 +245,27 @@ func TestOpenAndBootstrap_ResponseReadyNoRetry(t *testing.T) {
 	}
 }
 
+// TestOpenAndBootstrap_ServerPageFailsWithoutRetry 固定"200 返回网页"的快速失败：
+// 配置类拒绝不会因为换连接而改变，重试只会白费三次握手并把健康连接判死。
+func TestOpenAndBootstrap_ServerPageFailsWithoutRetry(t *testing.T) {
+	first := &awaitableStream{await: func(context.Context) error {
+		return &transport.ServerAnsweredWithPageError{ContentType: "text/html"}
+	}}
+	tr := &mockTransport{streams: []transport.Stream{first}}
+	h := newTestStreamHandler(tr)
+
+	_, err := h.openAndBootstrap(context.Background(), testTCPRequest("example.com:443"))
+	if !transport.IsServerAnsweredWithPage(err) {
+		t.Fatalf("expected ServerAnsweredWithPageError, got: %v", err)
+	}
+	if got := tr.openCalls(); got != 1 {
+		t.Errorf("Open calls = %d, want 1 (a page response is not a network failure)", got)
+	}
+	if _, _, invalidates, closes := first.counters(); invalidates != 0 || closes != 1 {
+		t.Errorf("first stream: invalidates=%d closes=%d, want 0/1", invalidates, closes)
+	}
+}
+
 // awaiterStream 只实现 ResponseAwaiter：没有按代失效能力时，判死重试必须退回
 // "等本流收敛 → 全局 CloseIdle" 的老路径，否则重试可能再次拿到正在死的连接。
 type awaiterStream struct {

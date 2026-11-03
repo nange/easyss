@@ -28,7 +28,11 @@ type Shell struct {
 	closeOnce sync.Once
 
 	// systray 保护菜单项，但不保护图标/tooltip 字段，二者必须成对串行写。
-	uiMu sync.Mutex
+	// uiMu 同时保护下面的 tooltip 组成：更新徽标与配置告警来自不同 goroutine，
+	// tray.SetTooltip 只保留最后一次写入，必须合成后再写。
+	uiMu    sync.Mutex
+	baseTip string // 更新徽标/默认提示
+	warnTip string // 配置告警，优先级更高
 }
 
 func NewShell() *Shell {
@@ -54,6 +58,9 @@ func (s *Shell) Show() {
 	} else {
 		s.tray.SetIcon(icon.TrayData)
 	}
+	s.uiMu.Lock()
+	s.baseTip = AppName
+	s.uiMu.Unlock()
 	s.tray.SetTooltip(AppName)
 	s.tray.SetMenu(s.root)
 	s.tray.Show()
@@ -122,14 +129,42 @@ func (s *Shell) SetIconAndTooltip(png []byte, tooltip string) {
 	s.uiMu.Lock()
 	defer s.uiMu.Unlock()
 	s.setIconLocked(png)
-	s.tray.SetTooltip(tooltip)
+	s.baseTip = tooltip
+	s.tray.SetTooltip(s.tooltipLocked())
 }
 
 // 缺图标渲染支持时降级为仅刷新 tooltip。
 func (s *Shell) SetTooltip(text string) {
 	s.uiMu.Lock()
 	defer s.uiMu.Unlock()
-	s.tray.SetTooltip(text)
+	s.baseTip = text
+	s.tray.SetTooltip(s.tooltipLocked())
+}
+
+// SetWarning 写入配置告警提示，空串表示清除。告警优先于更新提示显示：更新检查
+// 写回的 tooltip 不能把用户此刻更需要的排查提示覆盖掉。退出流程开始后不再写：
+// Remove 可能已经在另一个 goroutine 上执行，此时 systray 句柄不可再触碰。
+func (s *Shell) SetWarning(text string) {
+	select {
+	case <-s.closing:
+		return
+	default:
+	}
+
+	s.uiMu.Lock()
+	defer s.uiMu.Unlock()
+	s.warnTip = text
+	s.tray.SetTooltip(s.tooltipLocked())
+}
+
+func (s *Shell) tooltipLocked() string {
+	if s.warnTip != "" {
+		return s.warnTip
+	}
+	if s.baseTip != "" {
+		return s.baseTip
+	}
+	return AppName
 }
 
 // 必须同时设置暗色模式图标槽位，否则 Windows 主题切换会用无徽标的图标覆盖徽标

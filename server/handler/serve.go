@@ -68,6 +68,29 @@ func decodeXES(s string) ([]byte, error) {
 	return b, nil
 }
 
+// penaltyWarnInterval 是"某个来源进入惩罚期"告警的最小间隔。轮换源 IP 的猜测流量会
+// 让每个 IP 各触发一次，日志只保留窗口内首条并把其余折叠成计数。
+const penaltyWarnInterval = time.Minute
+
+// logPenaltyEntered 在来源刚进入惩罚期时留一条告警：这是服务端日志里唯一能看出
+// "某客户端可能在反复用错口令"的时刻，逐 IP 逐次记录会被轮换 IP 刷爆。
+func (h *ProxyHandler) logPenaltyEntered(remote, endpoint string) {
+	h.penaltyWarnMu.Lock()
+	now := time.Now()
+	if !h.lastPenaltyWarn.IsZero() && now.Sub(h.lastPenaltyWarn) < penaltyWarnInterval {
+		h.suppressedPenalties++
+		h.penaltyWarnMu.Unlock()
+		return
+	}
+	suppressed := h.suppressedPenalties
+	h.suppressedPenalties = 0
+	h.lastPenaltyWarn = now
+	h.penaltyWarnMu.Unlock()
+
+	log.Warn("[SERVER] repeated handshake authentication failures, a client may have a wrong password",
+		"remote", remote, "endpoint", endpoint, "threshold", failureThreshold, "suppressed", suppressed)
+}
+
 type handshakeResult struct {
 	sk       *crypto.StreamKeys
 	first    crypto.FirstRecord
@@ -137,7 +160,9 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 		// 只有认证失败能证明对端在猜口令：超时与帧格式错误在没有密钥时同样会出现，
 		// 拿它们做惩罚会把网络抖动也算成攻击。来源判定见 defaultPenaltyEligible。
 		if peer := clientIP(r); errors.Is(err, crypto.ErrRecordAuthFailed) && h.shouldPenalize(peer) {
-			h.ipLimiter.Penalize(peer)
+			if h.ipLimiter.Penalize(peer) {
+				h.logPenaltyEntered(peer, endpoint)
+			}
 		}
 		if errors.Is(err, crypto.ErrHandshakeTimeout) {
 			log.Warn("[SERVER] read first record timed out", "remote", r.RemoteAddr, "endpoint", endpoint, "err", err)
