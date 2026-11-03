@@ -16,11 +16,15 @@ const (
 	// handshakeBurst 是令牌桶的初始容量（允许的突发大小）。
 	handshakeBurst = 100
 
-	// 解密失败才说明对端没有主密钥，惩罚期把该 IP 降到每秒一次。合法客户端从不解密
+	// 解密失败才说明对端没有主密钥，惩罚期把该 IP 降到每秒 5 次。合法客户端从不解密
 	// 失败，因此感知不到；成功握手会立即解除惩罚（见 RecordSuccess），改对口令后
-	// 第一次握手就能过——最坏只是等一个令牌（1 秒）。
-	penaltyRate  = 1.0
-	penaltyBurst = 3
+	// 第一次握手就能过——最坏只是等一个令牌（200ms）。
+	//
+	// 降速幅度刻意不拉到 1/s：反向代理/CDN 后面整片用户共用回源 IP，只有 burst 3 加
+	// 1/s 的档位会把一次页面加载的并发流直接打回 429（见 defaultPenaltyEligible 与
+	// server.disable_failure_penalty）。
+	penaltyRate  = 5.0
+	penaltyBurst = 10
 
 	// 惩罚窗口。继续失败会把窗口往后推，攻击者无法靠等待躲过去。
 	penaltyWindow = 5 * time.Minute
@@ -115,9 +119,9 @@ func (l *ipRateLimiter) Penalize(ip string) {
 	now := l.now()
 	e, ok := l.entries[ip]
 	if !ok {
-		// 正常路径上 Allow 先建过条目；补建是为了让惩罚与限流看到同一份状态。
-		e = &ipRateEntry{lim: rate.NewLimiter(rate.Limit(handshakeRate), handshakeBurst), lastSeen: now}
-		l.entries[ip] = e
+		// Allow 在 ipHardCap 处故意 fail open 且不建条目，这里绝不能补建，否则
+		// 上限就成了摆设，攻击者每换一个源 IP 就能多占一条。
+		return
 	}
 	e.lastSeen = now
 	e.failures++
@@ -130,18 +134,21 @@ func (l *ipRateLimiter) Penalize(ip string) {
 	e.penaltyUntil = now.Add(penaltyWindow)
 }
 
-// RecordSuccess 解除该 IP 的失败惩罚。口令正确就没有继续猜的必要，用户改对口令后
-// 也不必等窗口走完。
+// RecordSuccess 记录一次认证成功的握手。口令正确就没有继续猜的必要：失败计数无条件
+// 清零（阈值是"连续失败"而不是累计），惩罚也立即解除，用户改对口令后不必等窗口走完。
 func (l *ipRateLimiter) RecordSuccess(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	e, ok := l.entries[ip]
-	if !ok || e.penaltyUntil.IsZero() {
+	if !ok {
+		return
+	}
+	e.failures = 0
+	if e.penaltyUntil.IsZero() {
 		return
 	}
 	e.penaltyUntil = time.Time{}
-	e.failures = 0
 	e.lim = rate.NewLimiter(rate.Limit(handshakeRate), handshakeBurst)
 }
 

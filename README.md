@@ -274,6 +274,7 @@ regexp:^.*\.youtube\..*$
 | `server.bind` | 否 | 空 | 可选监听网卡地址（主机名或 IP，不含端口）；旧键 `server.listen` 的主机部分会自动映射到这里 |
 | `server.password` | 是 | - | 通信加密密钥，必须与客户端一致；至少 8 字符（低于 8 字符拒绝启动，8–15 字符仅告警），建议 16 字符以上，如 `openssl rand -hex 24` |
 | `server.allowed_methods` | 否 | aes-256-gcm, chacha20-poly1305 | 允许的加密方式列表 |
+| `server.disable_failure_penalty` | 否 | false | 关闭按源 IP 的「解密失败降速」。CDN 回源等所有请求共用公网源地址的部署应开启；反向代理在本机或私网时无需配置 |
 | `server.cert_path` | 否 | - | 自定义证书路径，**必须与 `key_path` 成对配置**，只配一个会报错 |
 | `server.key_path` | 否 | - | 自定义证书密钥路径，**必须与 `cert_path` 成对配置** |
 | `server.email` | 否 | 随机生成 | 自动申请证书用的邮箱 |
@@ -344,6 +345,8 @@ docker run -d --name easyss --network host nange/docker-easyss:latest -p yourpor
 ### 服务器部署在反向代理（或 CDN）之后
 
 Easyss v3 以 HTTP/2 作为传输层，天然兼容反向代理和 CDN 部署：把 Nginx、Cloudflare 等反向代理的流量转发到 `easyss-server` 的监听端口，客户端填反向代理的地址和端口即可，无需额外设置。
+
+> **失败降速**：服务端对「解密失败」按源 IP 降速（连续 3 次后降到 5 次/秒，成功握手立即恢复）。同机/私网反向代理（回环、私网、CGNAT 来源）已自动排除；**CDN 的回源地址是公网地址**，这类部署请设 `"disable_failure_penalty": true`，否则一个陌生人的错误握手会让共用该回源地址的用户一起被降速。
 
 ### 配置 Cloudflare 优选 IP
 

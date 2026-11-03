@@ -344,12 +344,13 @@ func (s *Server) Start() error {
 	}
 
 	proxyHandler := handler.NewProxyHandler(handler.ProxyHandlerConfig{
-		MasterKey:      masterKey,
-		AllowedMethods: srvCfg.GetAllowedMethods(),
-		Timeouts:       timeouts,
-		Shaper:         cfg.Shaper,
-		NextProxy:      np,
-		Fallback:       fallback,
+		MasterKey:             masterKey,
+		AllowedMethods:        srvCfg.GetAllowedMethods(),
+		Timeouts:              timeouts,
+		Shaper:                cfg.Shaper,
+		NextProxy:             np,
+		Fallback:              fallback,
+		DisableFailurePenalty: srvCfg.DisableFailurePenalty,
 	})
 
 	probePayload := make([]byte, config.ProbePayloadSize)

@@ -3,12 +3,14 @@ package handler
 import (
 	"net"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/nange/easyss/v3/config"
 	"github.com/nange/easyss/v3/protocol"
 	"github.com/nange/easyss/v3/server/nextproxy"
 	"github.com/nange/easyss/v3/shaper"
+	"github.com/nange/easyss/v3/util"
 )
 
 // 三个会话 handler 各自持有其路由所用的代理，因此路由只有一个所有者；
@@ -29,6 +31,10 @@ type ProxyHandler struct {
 	// deps 与三个子 handler 共用同一个实例：握手期 SSRF 校验与拨号必须是同一个解析器，
 	// 否则构造后改一项就会让两者看到不同的答案。
 	deps *outboundDeps
+	// penaltyEligible 判断来源能否代表单个客户端；nil 视为不惩罚（零值 ProxyHandler 不崩）。
+	penaltyEligible func(remoteAddr string) bool
+	// disableFailurePenalty 关闭解密失败降速（server.disable_failure_penalty）。
+	disableFailurePenalty bool
 }
 
 type ProxyHandlerConfig struct {
@@ -43,6 +49,11 @@ type ProxyHandlerConfig struct {
 	HandshakeTimeout time.Duration
 	// Fallback 是服务非代理请求（伪装页面）的实例。nil 表示使用包级内置实例。
 	Fallback *Fallback
+	// PenaltyEligible 覆盖"该来源能否代表单个客户端"的判定；nil 用 defaultPenaltyEligible。
+	// 测试必须在 httptest 的回环来源上注入 true，否则覆盖不到惩罚路径。
+	PenaltyEligible func(remoteAddr string) bool
+	// DisableFailurePenalty 关闭解密失败的按 IP 降速。
+	DisableFailurePenalty bool
 }
 
 // NewProxyHandler 组装代理 handler。未知的 AllowedMethods 被保留在 map 之外，由调用方在配置
@@ -76,19 +87,26 @@ func newProxyHandlerWithDeps(cfg ProxyHandlerConfig, deps *outboundDeps) *ProxyH
 	}
 	handshakeTimeout = min(handshakeTimeout, maxHandshakeTimeout)
 
+	penaltyEligible := cfg.PenaltyEligible
+	if penaltyEligible == nil {
+		penaltyEligible = defaultPenaltyEligible
+	}
+
 	return &ProxyHandler{
-		masterKey:        cfg.MasterKey,
-		allowedMethods:   allowed,
-		handshakeTimeout: handshakeTimeout,
-		shaperCfg:        shaperCfg,
-		tcp:              newTCPHandler(timeouts, cfg.NextProxy, deps),
-		udp:              newUDPHandler(timeouts, cfg.NextProxy, deps),
-		icmp:             newICMPHandler(timeouts, deps),
-		saltCache:        newSaltCache(),
-		ipLimiter:        newIPRateLimiter(),
-		fallback:         cfg.Fallback,
-		teardownGrace:    responseTeardownGrace,
-		deps:             deps,
+		masterKey:             cfg.MasterKey,
+		allowedMethods:        allowed,
+		handshakeTimeout:      handshakeTimeout,
+		shaperCfg:             shaperCfg,
+		tcp:                   newTCPHandler(timeouts, cfg.NextProxy, deps),
+		udp:                   newUDPHandler(timeouts, cfg.NextProxy, deps),
+		icmp:                  newICMPHandler(timeouts, deps),
+		saltCache:             newSaltCache(),
+		ipLimiter:             newIPRateLimiter(),
+		fallback:              cfg.Fallback,
+		teardownGrace:         responseTeardownGrace,
+		deps:                  deps,
+		penaltyEligible:       penaltyEligible,
+		disableFailurePenalty: cfg.DisableFailurePenalty,
 	}
 }
 
@@ -114,4 +132,23 @@ func clientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// defaultPenaltyEligible 只惩罚能代表单个客户端的公网来源：回环、私网与 CGNAT 后面
+// 通常是同机反向代理、局域网或运营商 NAT，整片用户共用一个源 IP，按 IP 降速会放大成
+// 整站不可用。CDN 回源地址是公网地址，这种部署用 server.disable_failure_penalty 关掉。
+func defaultPenaltyEligible(remoteAddr string) bool {
+	if _, err := netip.ParseAddr(remoteAddr); err != nil {
+		return false
+	}
+	return !util.IsLANIP(remoteAddr)
+}
+
+// shouldPenalize 报告这次解密失败该不该记到来源 IP 上。零值 handler（penaltyEligible
+// 为 nil）不惩罚，避免"没配置"变成 panic。
+func (h *ProxyHandler) shouldPenalize(remoteAddr string) bool {
+	if h.disableFailurePenalty || h.penaltyEligible == nil {
+		return false
+	}
+	return h.penaltyEligible(remoteAddr)
 }

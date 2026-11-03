@@ -55,6 +55,9 @@ type ServerConfig struct {
 	CertPath       string   `json:"cert_path"`
 	KeyPath        string   `json:"key_path"`
 	Email          string   `json:"email"`
+	// DisableFailurePenalty 关掉解密失败的按 IP 降速。CDN 回源时所有用户共用回源地址，
+	// 惩罚会被放大成整片用户降速，这类部署必须关掉（见 README 反代部署一节）。
+	DisableFailurePenalty bool `json:"disable_failure_penalty,omitempty"`
 }
 
 // UnmarshalJSON 兼容 server.domain 与 server.listen：domain 映射到 host，

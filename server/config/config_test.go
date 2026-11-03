@@ -546,3 +546,13 @@ func TestResolveFilePathsResolvedInPlace(t *testing.T) {
 		t.Errorf("Timeout = %d, want 30", fc.Timeout)
 	}
 }
+
+// TestServerConfigDisableFailurePenalty 固定开关能被配置读到：CDN 回源等共用公网
+// 源地址的部署靠它关掉按 IP 的失败降速。
+func TestServerConfigDisableFailurePenalty(t *testing.T) {
+	t.Parallel()
+
+	fc, err := LoadConfig(writeConfig(t, `{"server":{"host":"example.com","disable_failure_penalty":true}}`))
+	require.NoError(t, err)
+	require.True(t, fc.Server.DisableFailurePenalty)
+}

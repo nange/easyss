@@ -135,9 +135,9 @@ func (h *ProxyHandler) preflight(w http.ResponseWriter, r *http.Request) (handsh
 	if err != nil {
 		stats.RecordServerHandshakeError()
 		// 只有认证失败能证明对端在猜口令：超时与帧格式错误在没有密钥时同样会出现，
-		// 拿它们做惩罚会把网络抖动也算成攻击。
-		if errors.Is(err, crypto.ErrRecordAuthFailed) {
-			h.ipLimiter.Penalize(clientIP(r))
+		// 拿它们做惩罚会把网络抖动也算成攻击。来源判定见 defaultPenaltyEligible。
+		if peer := clientIP(r); errors.Is(err, crypto.ErrRecordAuthFailed) && h.shouldPenalize(peer) {
+			h.ipLimiter.Penalize(peer)
 		}
 		if errors.Is(err, crypto.ErrHandshakeTimeout) {
 			log.Warn("[SERVER] read first record timed out", "remote", r.RemoteAddr, "endpoint", endpoint, "err", err)
