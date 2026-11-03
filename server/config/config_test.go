@@ -454,6 +454,34 @@ func TestValidatePasswordTiers(t *testing.T) {
 	require.False(t, config.PasswordWeak(fc.Server.Password))
 }
 
+// TestLoadLogConfig 固定启动失败路径的降级契约：能读出 log 段时按 LoadConfig 的
+// 规则归一化（默认级别、相对路径按可执行文件目录解析），读不出来时返回零值，
+// 由 log.Init 回落到只写 stdout。
+func TestLoadLogConfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("normalizes", func(t *testing.T) {
+		t.Parallel()
+		got := LoadLogConfig(writeConfig(t, `{"log":{"file_path":"logs/easyss.log"}}`))
+		require.Equal(t, config.DefaultLogLevel, got.Level)
+		require.Equal(t, filepath.Join(util.CurrentDir(), "logs", "easyss.log"), got.FilePath)
+	})
+
+	t.Run("keeps explicit values", func(t *testing.T) {
+		t.Parallel()
+		abs := filepath.ToSlash(filepath.Join(t.TempDir(), "easyss.log"))
+		got := LoadLogConfig(writeConfig(t, fmt.Sprintf(`{"log":{"level":"debug","file_path":%q}}`, abs)))
+		require.Equal(t, "debug", got.Level)
+		require.Equal(t, abs, got.FilePath)
+	})
+
+	t.Run("falls back to stdout", func(t *testing.T) {
+		t.Parallel()
+		require.Equal(t, log.Config{}, LoadLogConfig(filepath.Join(t.TempDir(), "missing.json")))
+		require.Equal(t, log.Config{}, LoadLogConfig(writeConfig(t, `{"log":`)))
+	})
+}
+
 // TestLoadConfigLegacyListen 固定旧配置能完整加载并保留绑定地址。
 func TestLoadConfigLegacyListen(t *testing.T) {
 	fc, err := LoadConfig(writeConfig(t, `{"server":{"listen":"127.0.0.1:8443","domain":"example.com","password":"test-pass"}}`))

@@ -230,9 +230,7 @@ const (
 func applyDefaults(fc *FileConfig) {
 	// timeout 是全部派生超时的唯一旋钮。
 	fc.Timeout = config.NormalizeTimeout(fc.Timeout)
-	if fc.Log.Level == "" {
-		fc.Log.Level = config.DefaultLogLevel
-	}
+	fc.Log.Level = normalizeLogLevel(fc.Log.Level)
 	if fc.Server.Port == 0 {
 		fc.Server.Port = config.DefaultServerPort
 	}
@@ -283,13 +281,46 @@ func (fc *FileConfig) ResolveFilePaths() {
 	fc.Server.CertPath = util.ResolvePath(fc.Server.CertPath)
 	fc.Server.KeyPath = util.ResolvePath(fc.Server.KeyPath)
 	fc.NextProxy.NextProxyFile = util.ResolvePath(fc.NextProxy.NextProxyFile)
+	fc.Log.FilePath = resolveLogFilePath(fc.Log.FilePath)
+}
 
-	// 日志路径基于可执行文件目录绝对化，否则 launchd（cwd=/）会把日志写到根目录。
-	if fc.Log.FilePath != "" && !filepath.IsAbs(fc.Log.FilePath) {
-		if dir := util.CurrentDir(); dir != "" {
-			fc.Log.FilePath = filepath.Join(dir, fc.Log.FilePath)
-		}
+// LoadLogConfig 只读取并归一化 log 段，供启动失败时使用：LoadConfig 出错后进程
+// 立即退出，此时日志器还没按配置初始化，错误只会写 stdout，以服务方式启动时无从
+// 查看。配置文件读不出或不是合法 JSON 时返回零值，由 log.Init 回落到只写 stdout。
+func LoadLogConfig(path string) log.Config {
+	var fc struct {
+		Log log.Config `json:"log"`
 	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return log.Config{}
+	}
+	if err := json.Unmarshal(data, &fc); err != nil {
+		return log.Config{}
+	}
+	return log.Config{
+		Level:    normalizeLogLevel(fc.Log.Level),
+		FilePath: resolveLogFilePath(fc.Log.FilePath),
+	}
+}
+
+func normalizeLogLevel(level string) string {
+	if level == "" {
+		return config.DefaultLogLevel
+	}
+	return level
+}
+
+// 日志路径基于可执行文件目录绝对化，否则 launchd（cwd=/）会把日志写到根目录。
+// 故意不用 util.ResolvePath：相对路径即使当前目录存在，也要以可执行文件目录为准。
+func resolveLogFilePath(p string) string {
+	if p == "" || filepath.IsAbs(p) {
+		return p
+	}
+	if dir := util.CurrentDir(); dir != "" {
+		return filepath.Join(dir, p)
+	}
+	return p
 }
 
 func DefaultAllowedMethods() []string {
