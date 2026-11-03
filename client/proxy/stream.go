@@ -231,9 +231,10 @@ func (h *StreamHandler) openAndBootstrap(ctx context.Context, req streamRequest)
 		}
 		lastErr = err
 
-		// 服务端已明确拒绝（非 200，或 200 但返回网页而非隧道流）：换连接与重试都
-		// 不会改变结论，还会把健康连接判死并放大成连接池抖动。
-		if transport.IsHandshakeRejected(err) || transport.IsServerAnsweredWithPage(err) {
+		// 服务端已明确拒绝（200 但返回网页而非隧道流）：换连接与重试都不会改变
+		// 结论，还会把健康连接判死并放大成连接池抖动。非 200 由传输层当成"结果
+		// 已就绪"返回 nil，仍在首读分类时上报。
+		if transport.IsServerAnsweredWithPage(err) {
 			_ = stream.Close()
 			return nil, err
 		}
@@ -383,8 +384,8 @@ type session struct {
 func (h *StreamHandler) newSession(ctx context.Context, req streamRequest) (*session, error) {
 	bs, err := h.openAndBootstrap(ctx, req)
 	if err != nil {
-		// 引导阶段就能确定的配置类拒绝（200 返回网页、非 200）在这里留痕，重试决策
-		// 已在 openAndBootstrap 内做过：网络错误不会被归类，也就不会误报。
+		// 引导阶段就能确定的配置类拒绝（200 返回网页）在这里留痕；非 200 拒绝在
+		// 首读分类时上报。网络错误不会被归类，也就不会误报。
 		h.rejector.report(req.target, h.serverAddr(), err)
 		return nil, err
 	}

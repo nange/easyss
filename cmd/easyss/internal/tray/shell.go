@@ -142,8 +142,15 @@ func (s *Shell) SetTooltip(text string) {
 }
 
 // SetWarning 写入配置告警提示，空串表示清除。告警优先于更新提示显示：更新检查
-// 写回的 tooltip 不能把用户此刻更需要的排查提示覆盖掉。
+// 写回的 tooltip 不能把用户此刻更需要的排查提示覆盖掉。退出流程开始后不再写：
+// Remove 可能已经在另一个 goroutine 上执行，此时 systray 句柄不可再触碰。
 func (s *Shell) SetWarning(text string) {
+	select {
+	case <-s.closing:
+		return
+	default:
+	}
+
 	s.uiMu.Lock()
 	defer s.uiMu.Unlock()
 	s.warnTip = text

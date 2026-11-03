@@ -192,6 +192,10 @@ func (s *session) stop() {
 		}
 		core.Stop()
 	}
+	// 核心已停，握手告警不再描述当前状态；托盘仍在运行时不能把它留在 tooltip 上。
+	if ui := s.app.ui; ui != nil {
+		ui.handshakeRecovered()
+	}
 	if srv := s.pprofSrv; srv != nil {
 		s.pprofSrv = nil
 		pprof.StopPprof(srv)

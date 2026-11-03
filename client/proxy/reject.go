@@ -176,7 +176,9 @@ func (r *handshakeRejector) report(target, server string, err error) {
 	log.Warn("[STREAM] handshake rejected",
 		"kind", kind, "hint", kind.logHint(), "target", target, "server", server,
 		"suppressed", suppressed, "err", err)
-	if observer != nil {
+	// 通知只挂在 episode 起点：窗口到期与原因变化仍要写日志，但同一次失败持续期间
+	// 反复弹系统通知就变成骚扰了。
+	if first && observer != nil {
 		observer(HandshakeReject{Kind: kind, Target: target, Server: server, Err: err})
 	}
 }

@@ -177,6 +177,13 @@ func TestHandshakeRejectorNotifiesOnlyOnTransitions(t *testing.T) {
 		t.Fatalf("kind = %q, want %q", rejected[0].Kind, RejectNotTunnel)
 	}
 
+	// 窗口到期只影响日志：同一次失败 episode 内不得重新弹通知。
+	now = now.Add(rejectLogWindow)
+	r.report("example.com:443", "https://1.2.3.4:443", pageErr)
+	if len(rejected) != 1 {
+		t.Fatalf("window expiry re-notified the observer (%d calls), want 1", len(rejected))
+	}
+
 	r.recovered()
 	r.recovered()
 	if recovered != 1 {
