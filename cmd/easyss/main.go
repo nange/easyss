@@ -139,12 +139,6 @@ func main() {
 	// 相对路径按可执行文件目录解析，launchd 启动（cwd=/）时才找得到。
 	cfg.ResolveFilePaths()
 
-	if cfg.Log.FilePath != "" && !filepath.IsAbs(cfg.Log.FilePath) {
-		if dir := util.CurrentDir(); dir != "" {
-			cfg.Log.FilePath = filepath.Join(dir, cfg.Log.FilePath)
-		}
-	}
-
 	log.Info("[EASYSS-V3] set log-level", "level", cfg.Log.Level)
 	log.Init(cfg.Log)
 	log.Info("[EASYSS-V3] " + version.String())

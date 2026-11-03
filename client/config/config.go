@@ -296,13 +296,15 @@ func applyDefaults(c *ClientConfig) {
 }
 
 // ResolveFilePaths 把相对路径解析为相对可执行文件目录（前提是当前工作目录找不到）。macOS
-// 上应用常由 Finder/launchd 以 cwd=/ 启动，相对路径即使与二进制同目录也找不到。
+// 上应用常由 Finder/launchd 以 cwd=/ 启动，相对路径即使与二进制同目录也找不到。日志文件
+// 例外：一律按可执行文件目录解析（见 util.ResolvePathInExeDir）。
 func (c *ClientConfig) ResolveFilePaths() {
 	c.Routing.DirectFile = util.ResolvePath(c.Routing.DirectFile)
 	c.Routing.ProxyFile = util.ResolvePath(c.Routing.ProxyFile)
 	for _, srv := range c.Servers {
 		srv.CAPath = util.ResolvePath(srv.CAPath)
 	}
+	c.Log.FilePath = util.ResolvePathInExeDir(c.Log.FilePath)
 }
 
 // Clone 返回深拷贝。值拷贝覆盖标量与 json:"-" 字段，引用类型必须逐个复制；新增引用

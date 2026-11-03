@@ -81,6 +81,9 @@ func main() {
 	// 日志文件）解析都在 config.LoadConfig 内完成（见 server/config/config.go）。
 	fileCfg, err := serverconfig.LoadConfig(configFile)
 	if err != nil {
+		// 校验失败时进程立刻退出，此刻日志器还没按配置初始化：先尽力读出 log 段，
+		// 否则这条唯一的失败原因只落在 stdout，以服务方式启动时哪里都看不到。
+		log.Init(serverconfig.LoadLogConfig(configFile))
 		log.Error("[EASYSS-SERVER-V3] load config", "err", err, "file", configFile)
 		os.Exit(1)
 	}

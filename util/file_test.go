@@ -60,3 +60,18 @@ func TestResolvePath(t *testing.T) {
 	want := filepath.Join(CurrentDir(), relMissing)
 	assert.Equal(t, want, ResolvePath(relMissing))
 }
+
+func TestResolvePathInExeDir(t *testing.T) {
+	// 空字符串与绝对路径原样返回。
+	assert.Equal(t, "", ResolvePathInExeDir(""))
+	abs, err := filepath.Abs("direct.txt")
+	assert.Nil(t, err)
+	assert.Equal(t, abs, ResolvePathInExeDir(abs))
+
+	// 与 ResolvePath 不同：当前工作目录存在同名文件时也按可执行文件目录解析。
+	existing := "file.go"
+	e, err := FileExists(existing)
+	assert.Nil(t, err)
+	assert.True(t, e)
+	assert.Equal(t, filepath.Join(CurrentDir(), existing), ResolvePathInExeDir(existing))
+}

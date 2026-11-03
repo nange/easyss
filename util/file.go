@@ -39,6 +39,18 @@ func ResolvePath(p string) string {
 	return p
 }
 
+// ResolvePathInExeDir 与 ResolvePath 的区别是不先看当前工作目录：相对路径一律按
+// 可执行文件目录解析。日志文件必须如此，cwd 里恰好有同名文件时不能把日志写别处。
+func ResolvePathInExeDir(p string) string {
+	if p == "" || filepath.IsAbs(p) {
+		return p
+	}
+	if dir := CurrentDir(); dir != "" {
+		return filepath.Join(dir, p)
+	}
+	return p
+}
+
 func CurrentDir() string {
 	path, err := ExecutablePath()
 	if err != nil {
