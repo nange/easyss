@@ -138,7 +138,10 @@ func clientIP(r *http.Request) string {
 // 通常是同机反向代理、局域网或运营商 NAT，整片用户共用一个源 IP，按 IP 降速会放大成
 // 整站不可用。CDN 回源地址是公网地址，这种部署用 server.disable_failure_penalty 关掉。
 func defaultPenaltyEligible(remoteAddr string) bool {
-	if _, err := netip.ParseAddr(remoteAddr); err != nil {
+	addr, err := netip.ParseAddr(remoteAddr)
+	// 带 zone 的地址只可能是链路本地；util.IsLANIP 走 net.ParseIP，不认识 zone，
+	// 直接交给它会把这个来源误判成公网。
+	if err != nil || addr.Zone() != "" {
 		return false
 	}
 	return !util.IsLANIP(remoteAddr)

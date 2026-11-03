@@ -219,6 +219,7 @@ func TestDefaultPenaltyEligible(t *testing.T) {
 		{"172.16.0.1", false},
 		{"100.64.1.2", false}, // CGNAT
 		{"::1", false},
+		{"fe80::1%en0", false}, // 链路本地带 zone
 		{"fd00::1", false},
 		{"0.0.0.0", false},
 		{"8.8.8.8", true},
