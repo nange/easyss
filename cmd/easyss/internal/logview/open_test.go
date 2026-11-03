@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -82,6 +83,21 @@ func TestWindowsLogViewerArgv(t *testing.T) {
 	}
 }
 
+// 托盘在 macOS 上用 Terminal.app 跟踪日志，启动时必须先展示最近 logTailLines 行。
+func TestDarwinLogViewerArgv(t *testing.T) {
+	argv := darwinLogViewerArgv("/Users/nange/Easyss/easyss.log")
+	if len(argv) != 5 || argv[0] != "osascript" {
+		t.Fatalf("argv = %q, want osascript with two -e scripts", argv)
+	}
+	script := argv[2]
+	if want := fmt.Sprintf("tail -n %d -f", logTailLines); !strings.Contains(script, want) {
+		t.Fatalf("script = %q, want it to contain %q", script, want)
+	}
+	if !strings.Contains(script, "/Users/nange/Easyss/easyss.log") {
+		t.Fatalf("script = %q, want it to tail the given log file", script)
+	}
+}
+
 func TestBinName(t *testing.T) {
 	// fake 必须在每个平台上解析出相同的可执行文件，因此这里直接断言分隔符
 	// 的处理，而不是依赖 filepath——它的 Windows 版本同样接受反斜杠。
@@ -105,7 +121,7 @@ func testLogOpener() Opener { return Default() }
 
 func TestLogViewerArgv(t *testing.T) {
 	const logPath = "/home/nange/Easyss/easyss.log"
-	tailArgv := []string{"tail", "-n", "50", "-f", logPath}
+	tailArgv := []string{"tail", "-n", strconv.Itoa(logTailLines), "-f", logPath}
 
 	cases := []struct {
 		name      string
@@ -179,7 +195,7 @@ func TestLogViewerArgv(t *testing.T) {
 			// 只接受单个 shell 字符串的终端，其命令会被拼接并加引号。
 			name:      "xfce4-terminal takes a shell string",
 			installed: []string{"xfce4-terminal"},
-			want:      []string{fakeBin("xfce4-terminal"), "--command", "tail -n 50 -f " + logPath},
+			want:      []string{fakeBin("xfce4-terminal"), "--command", fmt.Sprintf("tail -n %d -f %s", logTailLines, logPath)},
 		},
 	}
 
@@ -211,7 +227,7 @@ func TestLogViewerArgvQuotesPathsInShellStrings(t *testing.T) {
 		t.Fatalf("logViewerArgv returned an error: %v", err)
 	}
 
-	want := []string{fakeBin("xfce4-terminal"), "--command", `tail -n 50 -f '/home/nange/Easyss dir/it'\''s.log'`}
+	want := []string{fakeBin("xfce4-terminal"), "--command", fmt.Sprintf(`tail -n %d -f '/home/nange/Easyss dir/it'\''s.log'`, logTailLines)}
 	if !slices.Equal(got, want) {
 		t.Fatalf("unexpected argv:\n got: %q\nwant: %q", got, want)
 	}
@@ -386,7 +402,7 @@ func TestLogViewerArgvOnHost(t *testing.T) {
 	}
 
 	joined := strings.Join(argv, " ")
-	if !strings.Contains(joined, "tail -n 50 -f") || !strings.Contains(joined, logPath) {
+	if !strings.Contains(joined, fmt.Sprintf("tail -n %d -f", logTailLines)) || !strings.Contains(joined, logPath) {
 		t.Fatalf("argv %q does not tail %s", argv, logPath)
 	}
 	if _, err := os.Stat(argv[0]); err != nil {
