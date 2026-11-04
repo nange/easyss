@@ -108,10 +108,21 @@ func (l Opener) Open(filePath string) (fallback bool, err error) {
 }
 
 // darwinLogViewerArgv 在 Terminal.app 里跟踪日志，启动时先展示最近的 logTailLines 行。
+// 路径经 ShellJoin 交给 shell 引用，再整体转成 AppleScript 字符串字面量：AppleScript 会先
+// 吃掉自己的转义，剩下的才是 shell 看到的命令。
 func darwinLogViewerArgv(filePath string) []string {
+	shellCmd := util.ShellJoin([]string{"tail", "-n", strconv.Itoa(logTailLines), "-f", filePath})
 	return []string{"osascript",
-		"-e", fmt.Sprintf(`tell application "Terminal" to do script "tail -n %d -f \"%s\""`, logTailLines, filePath),
+		"-e", fmt.Sprintf(`tell application "Terminal" to do script %s`, appleScriptString(shellCmd)),
 		"-e", `tell application "Terminal" to activate`}
+}
+
+// appleScriptString 先转义反斜杠再转义双引号：顺序反过来会把刚生成的反斜杠再转义一次。
+func appleScriptString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+
+	return `"` + s + `"`
 }
 
 // windowsLogViewerArgv 用 PowerShell 跟踪日志。日志是不带 BOM 的 UTF-8，而 PowerShell 5.1

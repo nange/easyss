@@ -84,17 +84,88 @@ func TestWindowsLogViewerArgv(t *testing.T) {
 }
 
 // 托盘在 macOS 上用 Terminal.app 跟踪日志，启动时必须先展示最近 logTailLines 行。
+// 路径要过 AppleScript 和 shell 两层引用，下面逐项固定住转义后的脚本。
 func TestDarwinLogViewerArgv(t *testing.T) {
-	argv := darwinLogViewerArgv("/Users/nange/Easyss/easyss.log")
-	if len(argv) != 5 || argv[0] != "osascript" {
-		t.Fatalf("argv = %q, want osascript with two -e scripts", argv)
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "plain path",
+			path: "/Users/nange/Easyss/easyss.log",
+			want: `tell application "Terminal" to do script "tail -n {lines} -f /Users/nange/Easyss/easyss.log"`,
+		},
+		{
+			name: "spaces",
+			path: "/Users/nange/Easyss dir/easyss.log",
+			want: `tell application "Terminal" to do script "tail -n {lines} -f '/Users/nange/Easyss dir/easyss.log'"`,
+		},
+		{
+			name: "double quote",
+			path: `/tmp/a"b.log`,
+			want: `tell application "Terminal" to do script "tail -n {lines} -f '/tmp/a\"b.log'"`,
+		},
+		{
+			name: "backslash",
+			path: `/tmp/a\b.log`,
+			want: `tell application "Terminal" to do script "tail -n {lines} -f '/tmp/a\\b.log'"`,
+		},
+		{
+			name: "single quote",
+			path: "/tmp/it's.log",
+			want: `tell application "Terminal" to do script "tail -n {lines} -f '/tmp/it'\\''s.log'"`,
+		},
+		{
+			// 路径被单引号包住，$ 和反引号不会在 shell 里展开。
+			name: "shell metacharacters",
+			path: "/tmp/$HOME`whoami`.log",
+			want: "tell application \"Terminal\" to do script \"tail -n {lines} -f '/tmp/$HOME`whoami`.log'\"",
+		},
 	}
-	script := argv[2]
-	if want := fmt.Sprintf("tail -n %d -f", logTailLines); !strings.Contains(script, want) {
-		t.Fatalf("script = %q, want it to contain %q", script, want)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			argv := darwinLogViewerArgv(tc.path)
+			if len(argv) != 5 || argv[0] != "osascript" || argv[1] != "-e" || argv[3] != "-e" {
+				t.Fatalf("argv = %q, want osascript with two -e scripts", argv)
+			}
+			if want := strings.ReplaceAll(tc.want, "{lines}", strconv.Itoa(logTailLines)); argv[2] != want {
+				t.Fatalf("script = %q, want %q", argv[2], want)
+			}
+			if want := `tell application "Terminal" to activate`; argv[4] != want {
+				t.Fatalf("activate script = %q, want %q", argv[4], want)
+			}
+		})
 	}
-	if !strings.Contains(script, "/Users/nange/Easyss/easyss.log") {
-		t.Fatalf("script = %q, want it to tail the given log file", script)
+}
+
+// TestDarwinLogViewerArgvCompiles 用 osacompile 校验脚本语法：漏转义时 osascript 只在
+// 运行时才报语法错误，而 StartDetached 丢弃退出码，用户只会看到「点了没反应」。
+func TestDarwinLogViewerArgvCompiles(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("osacompile is available on macOS only")
+	}
+	osa, err := exec.LookPath("osacompile")
+	if err != nil {
+		t.Skipf("osacompile not found: %v", err)
+	}
+
+	paths := []string{
+		"/tmp/plain.log",
+		"/tmp/a dir/easyss.log",
+		`/tmp/a"b.log`,
+		`/tmp/a\b.log`,
+		"/tmp/it's.log",
+		"/tmp/$HOME" + "`whoami`.log",
+	}
+	for _, path := range paths {
+		argv := darwinLogViewerArgv(path)
+		out := filepath.Join(t.TempDir(), "viewer.scpt")
+		cmd := exec.Command(osa, "-o", out, "-e", argv[2], "-e", argv[4])
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("osacompile rejected the script for %q: %v\n%s", path, err, output)
+		}
 	}
 }
 
