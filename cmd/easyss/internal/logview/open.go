@@ -20,7 +20,8 @@ import (
 )
 
 const (
-	logTailLines = 50
+	// logTailLines 是各桌面平台打开日志时至少展示的历史行数。
+	logTailLines = 100
 
 	// logSnapshotLines 是快照的行数上限，让巨大的日志文件不会整份进入 GUI 编辑器。
 	logSnapshotLines = 500
@@ -37,7 +38,7 @@ var (
 type termCmdStyle int
 
 const (
-	// termStyleArgs 以独立参数形式追加命令，如 `alacritty -e tail -n 50 -f path`。
+	// termStyleArgs 以独立参数形式追加命令，如 `alacritty -e tail -n 100 -f path`。
 	termStyleArgs termCmdStyle = iota
 	// termStyleString 以单个 shell 字符串形式追加命令，如 `xfce4-terminal --command "tail ..."`。
 	termStyleString
@@ -100,21 +101,36 @@ func (l Opener) Open(filePath string) (fallback bool, err error) {
 	case "windows":
 		return false, util.StartDetached(windowsLogViewerArgv(filePath))
 	case "darwin":
-		argv := []string{"osascript",
-			"-e", fmt.Sprintf(`tell application "Terminal" to do script "tail -f \"%s\""`, filePath),
-			"-e", `tell application "Terminal" to activate`}
-		return false, util.StartDetached(argv)
+		return false, util.StartDetached(darwinLogViewerArgv(filePath))
 	default:
 		return false, fmt.Errorf("unsupported os: %s", runtime.GOOS)
 	}
+}
+
+// darwinLogViewerArgv 在 Terminal.app 里跟踪日志，启动时先展示最近的 logTailLines 行。
+// 路径经 ShellJoin 交给 shell 引用，再整体转成 AppleScript 字符串字面量：AppleScript 会先
+// 吃掉自己的转义，剩下的才是 shell 看到的命令。
+func darwinLogViewerArgv(filePath string) []string {
+	shellCmd := util.ShellJoin([]string{"tail", "-n", strconv.Itoa(logTailLines), "-f", filePath})
+	return []string{"osascript",
+		"-e", fmt.Sprintf(`tell application "Terminal" to do script %s`, appleScriptString(shellCmd)),
+		"-e", `tell application "Terminal" to activate`}
+}
+
+// appleScriptString 先转义反斜杠再转义双引号：顺序反过来会把刚生成的反斜杠再转义一次。
+func appleScriptString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+
+	return `"` + s + `"`
 }
 
 // windowsLogViewerArgv 用 PowerShell 跟踪日志。日志是不带 BOM 的 UTF-8，而 PowerShell 5.1
 // 的 Get-Content 默认按系统 ANSI 代码页解码，中文会变成乱码，必须显式指定 UTF8。路径走
 // -LiteralPath（日志名里的方括号不是通配符），单引号按 PowerShell 规则双写。
 func windowsLogViewerArgv(filePath string) []string {
-	script := fmt.Sprintf("Get-Content -LiteralPath '%s' -Wait -Tail 100 -Encoding UTF8",
-		strings.ReplaceAll(filePath, "'", "''"))
+	script := fmt.Sprintf("Get-Content -LiteralPath '%s' -Wait -Tail %d -Encoding UTF8",
+		strings.ReplaceAll(filePath, "'", "''"), logTailLines)
 	return []string{"cmd", "/c", "start", "powershell", "-NoExit", "-Command", script}
 }
 
