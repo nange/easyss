@@ -47,13 +47,14 @@ func (u *UWP) install(root *systray.Menu, rebuild func(), elevated bool) {
 	u.menu = systray.NewMenu()
 	u.elevated = elevated
 	u.rebuild = rebuild
-	root.AddSubmenu("Windows UWP应用豁免", u.menu)
+	root.AddSubmenu("商店应用代理", u.menu)
 	root.AddSeparator()
 
 	if !elevated {
-		u.menu.Add("需要管理员权限后可用", func() {}).SetDisabled(true)
+		u.menu.Add("需以管理员身份运行 Easyss 后可勾选", func() {}).SetDisabled(true)
 		return
 	}
+	u.menu.Add("勾选的应用可连接本地代理，解决开代理后商店应用无网络", func() {}).SetDisabled(true)
 	u.menu.Add("刷新列表", func() { go u.refresh() })
 }
 
