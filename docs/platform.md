@@ -7,6 +7,10 @@
 - 客户端用纯 Go 托盘库 `github.com/gogpu/systray`（零 CGO）；go.mod 用 `replace` 指向 `nange/systray v0.3.0-easyss.1`，该分支修复了菜单打开期间 `SetMenu` 重建把点击派发到别的菜单项的问题，因此运行时重建菜单树是安全的。服务端禁用 CGO。
 - `-H windowsgui` 隐藏控制台窗口。
 
+## 托盘标题排版
+
+- **指标在菜单里的排版方式按平台不同，都依赖宿主的排版能力**：Windows 用 `\t` 交给 Win32 加速键列（`title_windows.go`），macOS 用 pt 级空格把指标补到同一列（`title_pad.go`），Linux 只做拼接（`title_linux.go`）。Linux 的面板用自己的等宽字体原样渲染 label、弹窗宽度固定（Omarchy 232px，扣掉内边距与左边距约 163px ≈ 24.8 格）：用 U+200A 这类空格做对齐会拿到整整一个字符宽（实测 6.6px）、把指标顶出弹窗；而按预算裁指标又会让"速度"无声消失。所以 Linux 只收紧写法（`327ms ↓11.8KB/s`、不留单位空格），超宽时交给宿主在行尾加省略号——省略号本身就是"这行太长"的信号。
+
 ## Windows 提权与开机自启
 
 - **manifest 是 `asInvoker`**（`build/windows/manifest.xml`，改动后必须 `make syso`）：`requireAdministrator` 会让非管理员账户每次启动都要输管理员密码，登录路径也起不来。进程默认是普通权限，只有用户授权提权（或账户已提权）才有管理员令牌。

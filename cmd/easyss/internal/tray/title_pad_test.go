@@ -1,4 +1,4 @@
-//go:build !headless && !windows
+//go:build !headless && !windows && !linux
 
 package tray
 

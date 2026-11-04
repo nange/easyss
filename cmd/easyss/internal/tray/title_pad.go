@@ -1,4 +1,4 @@
-//go:build !headless && !windows
+//go:build !headless && !windows && !linux
 
 package tray
 
@@ -10,6 +10,12 @@ var titlePadSpaces = []string{"\u2003", "\u2002", " ", "\u200a"}
 
 // minMetricsGap 是菜单里最宽的标签与指标列之间保证的间隔（pt）。
 const minMetricsGap = 16.0
+
+// metricsSep 分隔 RTT 与下载速度：这里的排版靠 pt 级填充，间隔可以宽一点。
+const metricsSep = "  "
+
+// speedLabel 是下载速度在菜单里的写法。
+func speedLabel(human string) string { return "↓" + human }
 
 // metricsColumn 返回本菜单指标列的起始位置：最宽标签加 minMetricsGap。列随标签实际宽度走，
 // 短标签（配置了 name 的服务器）不会像固定列那样留下大段空白，所有标签仍共用一列。
