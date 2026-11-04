@@ -191,13 +191,21 @@ Easyss v3 支持两种配置模式，自动识别：
 简化模式：
 
 ```json
-{ "direct_file": "direct.txt", "proxy_file": "proxy.txt" }
+{
+  "direct_file": "direct.txt",
+  "proxy_file": "proxy.txt"
+}
 ```
 
-完整模式：
+完整模式（放进 `routing`）：
 
 ```json
-"routing": { "direct_file": "direct.txt", "proxy_file": "proxy.txt" }
+{
+  "routing": {
+    "direct_file": "direct.txt",
+    "proxy_file": "proxy.txt"
+  }
+}
 ```
 
 > 配置中的相对路径（`direct_file`、`proxy_file`、`ca_path` 等）会先按当前工作目录查找，找不到时自动回退到 `easyss` 可执行文件所在目录（macOS 下为 `.app` 旁），因此从 Finder 双击、开机自启等方式启动也能正常读取。
@@ -293,11 +301,18 @@ regexp:^.*\.youtube\..*$
 > **fallback 示例**：
 >
 > ```json
-> "fallback": { "target": "" }                                              // 内置主题页面（默认）
-> "fallback": { "target": "http://127.0.0.1:8080", "preserve_host": true }  // 反代到本地 nginx
-> "fallback": { "target": "https://github.com", "cdn_domains": ["githubassets.com"] } // 反代到公网站点
-> "fallback": { "target": "/var/www/fallback/" }                            // 目录：/about → about.html，未匹配 → 404.html
+> {
+>   "fallback": {
+>     "target": "https://github.com",
+>     "cdn_domains": ["githubassets.com"]
+>   }
+> }
 > ```
+>
+> * `target` 为空：内置主题页面（默认）
+> * `target` 为 URL（如 `http://127.0.0.1:8080`）：反代到上游 HTTP 服务；`preserve_host: true` 时透传客户端原始 Host（本地 nginx 依赖 `server_name` 时用）
+> * `target` 为公网站点 URL（如 `https://github.com`）：反代到公网站点，`cdn_domains` 列出需经代理中转的 CDN 域名
+> * `target` 为目录（如 `/var/www/fallback/`）：按 URL path 匹配 HTML，`/about` → `about.html`，未匹配 → `404.html`
 >
 > URL 模式会自动处理上游 Host 头、`Location`/HTML/CSP 中的绝对 URL、`Set-Cookie` 的 `Domain`、`Origin`/`Referer`，以及 `Accept-Encoding` 协商与 gzip 重写，无需额外配置。目录模式优先级：反向代理 > 目录 > 单文件 > 内置主题。
 
