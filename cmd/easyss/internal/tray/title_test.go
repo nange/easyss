@@ -10,12 +10,14 @@ import (
 )
 
 // TestMetricsText 固定指标串的拼法：只有 RTT、只有下载速度、两者都有、都没有。
+// 分隔符与速度写法按平台不同，同一份契约用平台的 metricsSep/speedLabel 表达。
 func TestMetricsText(t *testing.T) {
 	t.Parallel()
 
+	speed := speedLabel("27 B/s")
 	require.Equal(t, "436ms", metricsText(436, ""))
-	require.Equal(t, "↓27 B/s", metricsText(0, "27 B/s"))
-	require.Equal(t, "60ms  ↓649 B/s", metricsText(60, "649 B/s"))
+	require.Equal(t, speed, metricsText(0, "27 B/s"))
+	require.Equal(t, "60ms"+metricsSep+speed, metricsText(60, "27 B/s"))
 	require.Empty(t, metricsText(0, ""))
 	require.Empty(t, metricsText(-1, ""))
 }
