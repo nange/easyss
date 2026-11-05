@@ -4,6 +4,8 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +42,42 @@ type ProxyHandler struct {
 	penaltyWarnMu       sync.Mutex
 	lastPenaltyWarn     time.Time
 	suppressedPenalties int
+	// localDERP 在 match 或 loopback 为空时关闭该特例（两者都来自 ProxyHandlerConfig）。
+	localDERP *localDERP
+}
+
+// localDERP 描述"握手目标就是本服务端自己的内嵌 DERP"这一特例：DERP 只接受回环来源
+// （见 vpn.NewDERPMount），节点把 DERP 连接放进 easyss 隧道并以本服务端对外通告的地址为目标，
+// 服务端必须认出来并改拨本机回环，否则那条连接会去连自己的公网入口（那里只有伪装页）。
+type localDERP struct {
+	// match 是本服务端对外通告的 DERP host:port（见 server/config.ResolveDERPAddr）。
+	match string
+	// loopback 是命中后实际拨号的地址：127.0.0.1:<listen 端口>。
+	loopback string
+}
+
+// matches 忽略 host 大小写、按数值比较端口：一处写法差异就会变成"VPN 连不上"。
+func (l *localDERP) matches(target string) bool {
+	if l == nil || l.match == "" || l.loopback == "" {
+		return false
+	}
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return false
+	}
+	matchHost, matchPort, err := net.SplitHostPort(l.match)
+	if err != nil {
+		return false
+	}
+	targetPort, err := strconv.Atoi(port)
+	if err != nil {
+		return false
+	}
+	wantPort, err := strconv.Atoi(matchPort)
+	if err != nil {
+		return false
+	}
+	return targetPort == wantPort && strings.EqualFold(host, matchHost)
 }
 
 type ProxyHandlerConfig struct {
@@ -59,6 +97,10 @@ type ProxyHandlerConfig struct {
 	PenaltyEligible func(remoteAddr string) bool
 	// DisableFailurePenalty 关闭解密失败的按 IP 降速。
 	DisableFailurePenalty bool
+	// LocalDERPAddr / LocalDERPLoopback 打开"目标是本服务端自己的内嵌 DERP"这一特例：
+	// 前者是要匹配的对外 host:port，后者是命中后拨号的回环地址；任一为空即关闭。
+	LocalDERPAddr     string
+	LocalDERPLoopback string
 }
 
 // NewProxyHandler 组装代理 handler。未知的 AllowedMethods 被保留在 map 之外，由调用方在配置
@@ -112,6 +154,10 @@ func newProxyHandlerWithDeps(cfg ProxyHandlerConfig, deps *outboundDeps) *ProxyH
 		deps:                  deps,
 		penaltyEligible:       penaltyEligible,
 		disableFailurePenalty: cfg.DisableFailurePenalty,
+		localDERP: &localDERP{
+			match:    cfg.LocalDERPAddr,
+			loopback: cfg.LocalDERPLoopback,
+		},
 	}
 }
 

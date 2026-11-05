@@ -56,7 +56,8 @@ type ServerConfig struct {
 	Email          string   `json:"email"`
 	// DisableFailurePenalty 关掉解密失败的按 IP 降速。CDN 回源时所有用户共用回源地址，
 	// 惩罚会被放大成整片用户降速，这类部署必须关掉（见 README 反代部署一节）。
-	DisableFailurePenalty bool `json:"disable_failure_penalty,omitempty"`
+	DisableFailurePenalty bool      `json:"disable_failure_penalty,omitempty"`
+	VPN                   VPNConfig `json:"vpn"`
 }
 
 // UnmarshalJSON 兼容 server.domain 与 server.listen：domain 映射到 host，
@@ -141,6 +142,7 @@ func LoadConfig(path string) (*FileConfig, error) {
 	if err := json.Unmarshal(data, &fc); err != nil {
 		return nil, err
 	}
+	warnOnRemovedDERPAddr(data)
 
 	// 0 表示该字段不存在。
 	if fc.ConfigVersion != 0 && fc.ConfigVersion != SupportedConfigVersion {
@@ -171,6 +173,11 @@ func (fc *FileConfig) Validate() error {
 		return err
 	}
 	if err := fc.validateTLS(); err != nil {
+		return err
+	}
+	// VPN 的启动期契约（DERP 挂载路径的形态、对外 DERP 地址可推导）只在 vpn.enabled 时生效，
+	// 放在 Validate 里使 server.New 与配置加载路径都经过同一道校验。
+	if err := fc.validateVPN(); err != nil {
 		return err
 	}
 	return fc.validateListenOrDefault()
@@ -223,6 +230,24 @@ const (
 	h2MinRecvBufConn   = 1<<16 - 1 // 65535，即 HTTP/2 初始窗口
 	h2MinRecvBufStream = 1
 )
+
+// warnOnRemovedDERPAddr 对残留的 server.vpn.derp_addr 键告警一次：对外地址只由
+// server.host/port 推导，而残留键常是"以为中继在别处、VPN 却一直连不上"的原因。
+func warnOnRemovedDERPAddr(data []byte) {
+	var legacy struct {
+		Server struct {
+			VPN struct {
+				DERPAddr string `json:"derp_addr"`
+			} `json:"vpn"`
+		} `json:"server"`
+	}
+	if err := json.Unmarshal(data, &legacy); err != nil || legacy.Server.VPN.DERPAddr == "" {
+		return
+	}
+	log.Warn("[CONFIG] server.vpn.derp_addr was removed and is ignored; "+
+		"the DERP address is derived from server.host and server.port",
+		"derp_addr", legacy.Server.VPN.DERPAddr)
+}
 
 // applyDefaults 只处理没有其他 owner 的配置策略，其余默认值各有唯一出处，这里不存
 // 第二份副本：shaper.* 归 shaper.Config.Normalize，allowed_methods 归 GetAllowedMethods。
@@ -281,6 +306,9 @@ func (fc *FileConfig) ResolveFilePaths() {
 	fc.Server.KeyPath = util.ResolvePath(fc.Server.KeyPath)
 	fc.NextProxy.NextProxyFile = util.ResolvePath(fc.NextProxy.NextProxyFile)
 	fc.Log.FilePath = util.ResolvePathInExeDir(fc.Log.FilePath)
+	for i := range fc.Server.VPN.MeshPeers {
+		fc.Server.VPN.MeshPeers[i].CAFile = util.ResolvePath(fc.Server.VPN.MeshPeers[i].CAFile)
+	}
 }
 
 // LoadLogConfig 只读取并归一化 log 段，供启动失败时使用：LoadConfig 出错后进程
@@ -332,6 +360,15 @@ func ExampleConfig() FileConfig {
 			Port:           config.DefaultServerPort,
 			Password:       "",
 			AllowedMethods: DefaultAllowedMethods(),
+			// DERP 的对外 host:port 没有配置项：它就是 host + port（见 ResolveDERPAddr）。
+			// enabled 默认 false；mesh_key/mesh_peers 只在 enabled 时允许非空，mesh 全互联
+			// （本机 + 至多 2 个对端）；derp_send_queue_depth 给生效默认值而不是 0。
+			VPN: VPNConfig{
+				Enabled:            false,
+				MeshKey:            "",
+				MeshPeers:          []MeshPeer{},
+				DERPSendQueueDepth: config.DefaultDERPSendQueueDepth,
+			},
 		},
 		// 显式给出空切片：示例里 cdn_domains 应呈现为 [] 而不是 null。
 		Fallback: FallbackConfig{
