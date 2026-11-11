@@ -5,6 +5,7 @@ package autostart
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -30,7 +31,7 @@ func enableAutoStart() error {
 	}
 	defer func() { _ = key.Close() }()
 
-	if err := key.SetStringValue(autoStartValName, runValue(exe)); err != nil {
+	if err := key.SetStringValue(autoStartValName, runValue(canonicalRunExe(exe))); err != nil {
 		return fmt.Errorf("set registry value: %w", err)
 	}
 
@@ -70,14 +71,14 @@ func isAutoStartEnabled() bool {
 	if err != nil {
 		return false
 	}
-	if !sameExecutable(val, exe) {
+	want := canonicalRunExe(exe)
+	if !sameExecutable(val, want) {
 		return false
 	}
 
-	// 值指向的还是本程序、但字面路径已过时（换了构建产物或改了安装目录）时改写，
-	// 否则旧文件被删掉以后登录自启会静默失效。
-	if val != runValue(exe) {
-		rewriteRunValue(exe)
+	// 只改写"值就是一个路径"的情况：替换整个值会静默丢掉用户追加的参数（-c 之类）。
+	if isBarePathValue(val) && val != runValue(want) {
+		rewriteRunValue(want)
 	}
 
 	return true
@@ -112,16 +113,29 @@ func runExe(value string) string {
 	return v[1:]
 }
 
-// sameExecutable 除大小写外还忽略扩展名：`make easyss` 的产物 bin/easyss 没有
-// 扩展名，os.Executable 返回的路径也就不带 .exe，而登录时系统会解析到同名 .exe。
+// sameExecutable 做规范化后比较：大小写、无扩展名产物与同名 .exe 的差异都不影响判断
+// （`make easyss` 的 bin/easyss 只有交给 ShellExecute 才会落到 .exe 上）。
 func sameExecutable(stored, exe string) bool {
-	stored, exe = filepath.Clean(runExe(stored)), filepath.Clean(exe)
-	return strings.EqualFold(stored, exe) || strings.EqualFold(trimExe(stored), trimExe(exe))
+	return strings.EqualFold(
+		canonicalRunExe(filepath.Clean(runExe(stored))),
+		canonicalRunExe(filepath.Clean(exe)),
+	)
 }
 
-func trimExe(path string) string {
-	if len(path) > 4 && strings.EqualFold(path[len(path)-4:], ".exe") {
-		return path[:len(path)-4]
+// canonicalRunExe 优先返回真实存在的同名 .exe：无扩展名的路径要靠 ShellExecute 按
+// PATHEXT 解析，同目录的 .com/.bat 会被优先匹配，.exe 才是精确路径。
+func canonicalRunExe(path string) string {
+	if strings.EqualFold(filepath.Ext(path), ".exe") {
+		return path
+	}
+	if info, err := os.Stat(path + ".exe"); err == nil && !info.IsDir() {
+		return path + ".exe"
 	}
 	return path
+}
+
+// isBarePathValue 判断 Run 值是否只有一个路径：带参数的值由用户维护，整体替换会丢参数。
+func isBarePathValue(value string) bool {
+	v := strings.TrimSpace(value)
+	return strings.EqualFold(v, runValue(runExe(v)))
 }
