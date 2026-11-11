@@ -1,6 +1,6 @@
 module github.com/nange/easyss/v3
 
-go 1.27.3
+go 1.27.4
 
 // Go 1.24+ 默认给 listen socket 打开 MPTCP；本模块的监听器一律关闭（服务端另有
 // 显式的 SetMultipathTCP(false)，见 server.Start）。
