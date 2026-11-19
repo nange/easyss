@@ -192,7 +192,7 @@ func TestForwardQueryFallsBackToSystemDNS(t *testing.T) {
 	})
 	t.Cleanup(resetBuiltinDNSCircuit)
 
-	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive)
+	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive, nil)
 	fs.system = sysServers
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	// 不可达的本地地址强制走回退路径
@@ -222,7 +222,7 @@ func TestForwardQueryAllServersUnavailable(t *testing.T) {
 	})
 	t.Cleanup(resetBuiltinDNSCircuit)
 
-	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive)
+	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive, nil)
 	fs.system = sysServers
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	fs.dnsServers = []string{"127.0.0.1:1"}
@@ -246,7 +246,7 @@ func TestForwardQueryInvalidatesStaleSystemDNS(t *testing.T) {
 	liveAddr := startTestDNSServer(t, false)
 	sys := &switchingSystemServers{servers: []string{"127.0.0.1:1"}} // 换网前的旧解析器
 
-	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive)
+	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive, nil)
 	fs.system = sys
 	fs.client = &dns.Client{Timeout: 100 * time.Millisecond}
 	fs.dnsServers = []string{"127.0.0.1:1"}
@@ -288,7 +288,7 @@ func TestForwardQueryPassesThroughNXDOMAIN(t *testing.T) {
 	resetBuiltinDNSCircuit()
 
 	sys := &switchingSystemServers{servers: []string{startNXDOMAINDNSServer(t)}}
-	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive)
+	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive, nil)
 	fs.system = sys
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	fs.dnsServers = []string{"127.0.0.1:1"}
@@ -314,7 +314,7 @@ func TestForwardQueryInvalidatesOnAllServfail(t *testing.T) {
 	resetBuiltinDNSCircuit()
 
 	sys := &switchingSystemServers{servers: []string{startTestDNSServer(t, true)}}
-	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive)
+	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive, nil)
 	fs.system = sys
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	fs.dnsServers = []string{"127.0.0.1:1"}
@@ -338,7 +338,7 @@ func TestForwardQueryPrefersPositiveAnswerOverNXDOMAIN(t *testing.T) {
 	nxAddr := startNXDOMAINDNSServer(t)
 	slowAddr := startSlowTestDNSServer(t, 50*time.Millisecond)
 
-	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive)
+	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive, nil)
 	fs.system = systemServersFunc(func() []string { return []string{nxAddr, slowAddr} })
 	fs.client = &dns.Client{Timeout: time.Second}
 	fs.dnsServers = []string{"127.0.0.1:1"}
@@ -361,7 +361,7 @@ func TestForwardServerServesNXDOMAIN(t *testing.T) {
 	t.Cleanup(resetBuiltinDNSCircuit)
 	resetBuiltinDNSCircuit()
 
-	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive)
+	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive, nil)
 	fs.system = systemServersFunc(func() []string { return []string{startNXDOMAINDNSServer(t)} })
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	fs.dnsServers = []string{"127.0.0.1:1"}
@@ -391,7 +391,7 @@ func TestForwardServerRefusesWithoutTun(t *testing.T) {
 
 	upstream := startTestDNSServer(t, false)
 	var tunActive atomic.Bool
-	fs := NewForwardServer("127.0.0.1:0", false, tunActive.Load)
+	fs := NewForwardServer("127.0.0.1:0", false, tunActive.Load, nil)
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	fs.dnsServers = []string{upstream}
 
@@ -437,7 +437,7 @@ func TestForwardQuerySkipsSelfAsUpstream(t *testing.T) {
 	})
 	t.Cleanup(resetBuiltinDNSCircuit)
 
-	fs := NewForwardServer(":53", false, alwaysTunActive)
+	fs := NewForwardServer(":53", false, alwaysTunActive, nil)
 	fs.system = sysServers
 	fs.client = &dns.Client{Timeout: 200 * time.Millisecond}
 	fs.dnsServers = []string{"127.0.0.1:1"} // 内置服务器全部不可达
@@ -538,7 +538,7 @@ func TestForwardQuerySharesNoMsgAcrossUpstreams(t *testing.T) {
 	first := startTestDNSServer(t, false)
 	second := startTestDNSServer(t, false)
 
-	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive)
+	fs := NewForwardServer("127.0.0.1:0", false, alwaysTunActive, nil)
 	fs.dnsServers = []string{first, second}
 	fs.client = &dns.Client{Timeout: time.Second}
 

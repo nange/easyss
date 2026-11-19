@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"time"
 
 	"github.com/nange/easyss/v3/client/router"
@@ -23,6 +24,7 @@ const (
 	routeBlock routeAction = iota
 	routeDirect
 	routeProxy
+	routeVPN
 )
 
 func (a routeAction) String() string {
@@ -31,12 +33,36 @@ func (a routeAction) String() string {
 		return "block"
 	case routeDirect:
 		return "direct"
+	case routeVPN:
+		return "vpn"
 	default:
 		return "proxy"
 	}
 }
 
-// routeDecision 是一次分流判定。IPV6Rejected 与 Block 同义，但需要单独提示用户原因。
+// VPNRoute 是访问侧 VPN 的注入面：Lookup 判定目标是否为本机配置的对端，两条 Dial
+// 走隧道，nil 表示功能关闭。接口定义在消费方，因为 vpn/node 的对端面复用本包
+// Socks5Server，反向依赖会形成导入环。
+type VPNRoute interface {
+	// Lookup 判断 host（对端名或 overlay 字面 IP）是否为本机配置的对端，并返回它的
+	// 规范名（host_name）。规范名用于会话键：两种书写形式必须落在同一条流上。
+	Lookup(host string) (canonical string, ok bool)
+	// DialTCP 打开一条经隧道到对端服务端口的连接。target 是访问侧看到的原始目标。
+	DialTCP(ctx context.Context, target string) (net.Conn, error)
+	// DialUDP 打开一条经隧道到对端服务端口的 UDP 流；返回的连接在首次写入时自动
+	// 补上一次性目标头（见 vpn/node/udprelay.go 的 EncodeUDPTarget）。
+	DialUDP(ctx context.Context, target string) (net.Conn, error)
+}
+
+// VPNStaticNames 是 VPNRoute 的可选扩展：实现它的访问侧能为对端名字就地应答 DNS，
+// 未实现时对端名字回到普通转发路径。
+type VPNStaticNames interface {
+	// ResolveStatic 报告 name（DNS 问题名，末尾带根点）是否为本机配置的对端名。
+	ResolveStatic(name string) (netip.Addr, bool)
+}
+
+// routeDecision 是一次分流判定：动作，以及目标是否被 ipv6 策略门拒绝
+// （后者与 Block 同义，但需要单独提示用户原因）。
 type routeDecision struct {
 	Action       routeAction
 	IPV6Rejected bool
@@ -47,6 +73,8 @@ type routePolicyOptions struct {
 	Dial              func(ctx context.Context, network, addr string) (net.Conn, error)
 	DialTimeout       time.Duration
 	StreamIdleTimeout time.Duration
+	// VPN 为 nil 时 VPN 分流完全关闭。
+	VPN VPNRoute
 }
 
 // routePolicy 是两个入口共用的分流策略。
@@ -55,6 +83,7 @@ type routePolicy struct {
 	dial              func(ctx context.Context, network, addr string) (net.Conn, error)
 	dialTimeout       time.Duration
 	streamIdleTimeout time.Duration
+	vpn               VPNRoute
 }
 
 func newRoutePolicy(opts routePolicyOptions) *routePolicy {
@@ -63,11 +92,19 @@ func newRoutePolicy(opts routePolicyOptions) *routePolicy {
 		dial:              opts.Dial,
 		dialTimeout:       opts.DialTimeout,
 		streamIdleTimeout: opts.StreamIdleTimeout,
+		vpn:               opts.VPN,
 	}
 }
 
-// decide 判定目标主机的分流动作。router 为 nil 时 ClassifyHost 自身会回落到 Proxy。
+// decide 判定目标主机的分流动作（router 为 nil 时 ClassifyHost 回落到 Proxy）。
+// VPN 对端必须在 router 之前判定：host_name 与 overlay IP 只有本机认识，否则会被
+// 判成"未知 → 走代理"。
 func (p *routePolicy) decide(host string) routeDecision {
+	if p.vpn != nil {
+		if _, ok := p.vpn.Lookup(host); ok {
+			return routeDecision{Action: routeVPN}
+		}
+	}
 	cls := p.router.ClassifyHost(host)
 	decision := routeDecision{IPV6Rejected: cls.IPV6Rejected}
 	switch cls.Rule {

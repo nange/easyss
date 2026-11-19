@@ -4,6 +4,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -148,6 +149,66 @@ func TestSwitchServerSerializesConcurrentSwitches(t *testing.T) {
 
 	close(release)
 	wg.Wait()
+}
+
+// TestSwitchServerNotifiesWhenTheNewServerIsNotADERPRelay 固定切换路径的通知契约：新会话
+// 的服务器不在声明的 DERP 列表里时，VPN 本会话缺席（见 runner），用户必须当场知道，否则
+// 现象只是"VPN 里连不上对端"。文案点名的是新会话实际使用的那台服务器。
+func TestSwitchServerNotifiesWhenTheNewServerIsNotADERPRelay(t *testing.T) {
+	a := newSwitchTestApp(t)
+	stubSysProxy(a.App, nil)
+	ui := newStubAppUI()
+	a.ui = ui
+	t.Cleanup(a.Stop)
+
+	prevRunCore := a.deps.runCore
+	a.deps.runCore = func(*clientconfig.ClientConfig) (*runner.Core, error) {
+		return &runner.Core{
+			ServerAddr:  "b.example:443",
+			StartupWarn: fmt.Errorf("vpn disabled for this session: %w", clientconfig.ErrCurrentServerNotDERPRelay),
+		}, nil
+	}
+	t.Cleanup(func() { a.deps.runCore = prevRunCore })
+
+	require.NoError(t, a.switchServer(1, a.restartService))
+
+	select {
+	case msg := <-ui.notices:
+		for _, want := range []string{"VPN 功能不生效", "b.example:443", "中继(DERP)列表"} {
+			require.Contains(t, msg, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("切换到不在中继列表里的服务器后，必须用系统通知告知 VPN 不生效")
+	}
+	require.True(t, a.server.Checked(1),
+		"勾选的必须正是通知里点名的那台（运行中的服务器）")
+}
+
+// TestSwitchServerKeepsOtherStartupWarningsLogOnly 守护"不打扰用户"的边界：切换后的启动
+// 警告只有 VPN 那条弹通知，其余（例如新服务器域名还没解析出来）仍只写日志。
+func TestSwitchServerKeepsOtherStartupWarningsLogOnly(t *testing.T) {
+	a := newSwitchTestApp(t)
+	stubSysProxy(a.App, nil)
+	ui := newStubAppUI()
+	a.ui = ui
+	t.Cleanup(a.Stop)
+
+	prevRunCore := a.deps.runCore
+	a.deps.runCore = func(*clientconfig.ClientConfig) (*runner.Core, error) {
+		return &runner.Core{
+			ServerAddr:  "b.example:443",
+			StartupWarn: fmt.Errorf("%w: b.example: dns boom", runner.ErrServerDomainUnresolved),
+		}, nil
+	}
+	t.Cleanup(func() { a.deps.runCore = prevRunCore })
+
+	require.NoError(t, a.switchServer(1, a.restartService))
+
+	select {
+	case msg := <-ui.notices:
+		t.Fatalf("a non-VPN startup warning must not notify, got %q", msg)
+	case <-time.After(100 * time.Millisecond):
+	}
 }
 
 // TestRestartServiceRollsBackToThePreviousServer 固定"新服务器起不来就退回旧

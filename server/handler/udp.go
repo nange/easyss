@@ -35,11 +35,10 @@ func newUDPHandler(timeouts config.Timeouts, np *nextproxy.NextProxy, deps *outb
 	h.dial = newDialer(np, func(target string) bool {
 		return np != nil && np.EnableUDP() && np.ShouldProxy(target)
 	}, deps)
+	h.dial.dialTimeout = timeouts.Dial
 	h.dial.direct = func(ctx context.Context, network, target string) (net.Conn, error) {
 		return h.dial.outbound(ctx, directDialer, network, target)
 	}
-	// 只在 np 非 nil 时赋值：把 (*nextproxy.NextProxy)(nil) 塞进接口会让 h.route != nil
-	// 成立，掩盖"未配置下一级代理"与"配置了但没命中"的区别。
 	if np != nil {
 		h.route = udpRouteDialer{dialer: h.dial, nextProxy: np}
 	}
