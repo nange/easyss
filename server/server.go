@@ -113,10 +113,7 @@ func (s *Server) manageCert(storage certmagic.Storage, disableARI bool) (*tls.Co
 		},
 	})
 
-	cmCfg = certmagic.New(cache, certmagic.Config{
-		Storage:    storage,
-		DisableARI: disableARI,
-	})
+	cmCfg = s.newCertmagicConfig(cache, storage, disableARI)
 
 	acmeCfg := certmagic.DefaultACME
 	acmeCfg.Agreed = true
@@ -135,6 +132,19 @@ func (s *Server) manageCert(storage certmagic.Storage, disableARI bool) (*tls.Co
 		return nil, cache, err
 	}
 	return tlsConfig, cache, nil
+}
+
+// newCertmagicConfig 决定握手期的证书配置：IP-only 模式必须设 DefaultServerName，客户端按
+// RFC 6066 连 IP 时不发 SNI，而 NAT 部署的本地地址（如 10.0.4.3）不是证书里的公网 IP。
+func (s *Server) newCertmagicConfig(cache *certmagic.Cache, storage certmagic.Storage, disableARI bool) *certmagic.Config {
+	cmCfg := certmagic.New(cache, certmagic.Config{
+		Storage:    storage,
+		DisableARI: disableARI,
+	})
+	if s.cfg.ACMESubjectIsIP() {
+		cmCfg.DefaultServerName = s.cfg.Server.Host
+	}
+	return cmCfg
 }
 
 func (s *Server) resolveEmail(storagePath string) {
