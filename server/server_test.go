@@ -2,11 +2,18 @@ package server
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -151,6 +158,83 @@ func TestShouldRetryFreshCertificate(t *testing.T) {
 		Type:   acme.ProblemTypeRateLimited,
 		Status: http.StatusTooManyRequests,
 	}))
+}
+
+// TestCertmagicIPModeServesCertWithoutSNI 守住 IP-only 模式的握手契约：RFC 6066 规定客户端连
+// IP 时不发 SNI，而 NAT 部署连进来的本地地址（如 10.0.4.3）不是证书里的公网 IP，没有
+// DefaultServerName 兜底就会以 "no certificate available" 拒绝全部握手。
+func TestCertmagicIPModeServesCertWithoutSNI(t *testing.T) {
+	t.Parallel()
+
+	srv := &Server{cfg: &serverconfig.FileConfig{Server: serverconfig.ServerConfig{Host: "203.0.113.9"}}}
+	var cmCfg *certmagic.Config
+	cache := certmagic.NewCache(certmagic.CacheOptions{
+		GetConfigForCert: func(certmagic.Certificate) (*certmagic.Config, error) { return cmCfg, nil },
+	})
+	t.Cleanup(cache.Stop)
+
+	cmCfg = srv.newCertmagicConfig(cache, &certmagic.FileStorage{Path: t.TempDir()}, false)
+	require.Equal(t, "203.0.113.9", cmCfg.DefaultServerName)
+
+	_, err := cmCfg.CacheUnmanagedTLSCertificate(context.Background(), selfSignedIPCert(t, "203.0.113.9"), nil)
+	require.NoError(t, err)
+
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", cmCfg.TLSConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	serverErr := make(chan error, 1)
+	go func() {
+		conn, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			serverErr <- acceptErr
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		serverErr <- conn.(*tls.Conn).Handshake()
+	}()
+
+	// 与 easyss 客户端一致：host 是 IP 时 utls 的 hostnameInSNI 会丢弃 IP 字面量，ClientHello 不带 SNI。
+	conn, err := tls.Dial("tcp", ln.Addr().String(), &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec // 测试专用的自签名证书
+	})
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	require.NoError(t, <-serverErr)
+}
+
+// TestCertmagicDomainModeKeepsDefaultServerNameEmpty 守住另一半契约：域名模式按 SNI 选证书，
+// 不能被 IP-only 的空 SNI 兜底规则波及，否则默认证书会悄悄改变域名模式的行为。
+func TestCertmagicDomainModeKeepsDefaultServerNameEmpty(t *testing.T) {
+	t.Parallel()
+
+	srv := &Server{cfg: &serverconfig.FileConfig{Server: serverconfig.ServerConfig{Host: "example.com"}}}
+	var cmCfg *certmagic.Config
+	cache := certmagic.NewCache(certmagic.CacheOptions{
+		GetConfigForCert: func(certmagic.Certificate) (*certmagic.Config, error) { return cmCfg, nil },
+	})
+	t.Cleanup(cache.Stop)
+
+	cmCfg = srv.newCertmagicConfig(cache, &certmagic.FileStorage{Path: t.TempDir()}, false)
+	require.Empty(t, cmCfg.DefaultServerName)
+}
+
+func selfSignedIPCert(t *testing.T, ip string) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: ip},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(7 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP(ip)},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }
 
 func TestCleanCertmagicDomainAssets(t *testing.T) {
